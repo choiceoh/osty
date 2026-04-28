@@ -158,7 +158,7 @@ func runMonoLowerPipeline(t *testing.T, src, sourcePath string) string {
 		SourcePath:  sourcePath,
 	})
 	if err != nil {
-		t.Fatalf("GenerateModule error: %v\n--- source ---\n%s", err, src)
+		t.Fatalf("GenerateModule error: %v\n--- ir ---\n%s\n--- source ---\n%s", err, ir.Print(monoMod), src)
 	}
 	return string(out)
 }

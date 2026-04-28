@@ -3998,6 +3998,12 @@ pub fn llvmRuntimeAbiBuiltinType(name: String) -> String {
 }
 
 pub fn llvmEnumPayloadBuiltinType(name: String) -> String {
+    if name == "String" {
+        return "ptr"
+    }
+    if name == "Bytes" || name == "Error" {
+        return ""
+    }
     if llvmBuiltinType(name) != "" {
         return llvmBuiltinType(name)
     }

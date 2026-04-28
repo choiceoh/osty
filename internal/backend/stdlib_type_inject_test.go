@@ -78,6 +78,13 @@ fn main() {}
 					t.Errorf("injected Map template missing method %q", want)
 				}
 			}
+			for _, skipped := range []string{"find"} {
+				for _, m := range sd.Methods {
+					if m != nil && m.Name == skipped {
+						t.Errorf("injected Map template should temporarily skip unsupported method %q", skipped)
+					}
+				}
+			}
 		}
 	}
 	if !foundMap {

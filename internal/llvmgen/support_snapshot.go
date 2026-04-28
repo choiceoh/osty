@@ -3620,6 +3620,12 @@ func llvmRuntimeAbiBuiltinType(name string) string {
 
 // Osty: toolchain/llvmgen.osty:2970:5
 func llvmEnumPayloadBuiltinType(name string) string {
+	if name == "String" {
+		return "ptr"
+	}
+	if name == "Bytes" || name == "Error" {
+		return ""
+	}
 	// Osty: toolchain/llvmgen.osty:2971:5
 	if llvmBuiltinType(name) != "" {
 		// Osty: toolchain/llvmgen.osty:2972:9

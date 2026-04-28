@@ -1561,11 +1561,11 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 	}
 	if sig.ret == "void" {
 		if err := g.emitBlock(sig.decl.Body.Stmts); err != nil {
-			return "", err
+			return "", fmt.Errorf("function %s: %w", sig.name, err)
 		}
 		if g.currentReachable {
 			if err := g.emitAllPendingDefers(); err != nil {
-				return "", err
+				return "", fmt.Errorf("function %s: %w", sig.name, err)
 			}
 		}
 		if g.currentReachable {
@@ -1576,7 +1576,7 @@ func (g *generator) emitUserFunction(sig *fnSig) (string, error) {
 		}
 	} else {
 		if err := g.emitReturningBlock(sig.decl.Body.Stmts, sig.ret, sig.returnSourceType, sig.retListElemTyp, sig.retListString, sig.retMapKeyTyp, sig.retMapValueTyp, sig.retMapKeyString, sig.retSetElemTyp, sig.retSetElemString); err != nil {
-			return "", err
+			return "", fmt.Errorf("function %s: %w", sig.name, err)
 		}
 	}
 	return g.renderFunction(sig.ret, sig.irName, sig.params), nil

@@ -1356,7 +1356,7 @@ fn requireName(profile: Profile?) -> String? {
 	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_optional_question_struct.osty"}
 	nativeMod, ok := nativeModuleFromIR(mod, opts)
 	if !ok {
-		t.Fatal("nativeModuleFromIR returned unsupported for optional struct question batch")
+		t.Fatalf("nativeModuleFromIR returned unsupported for optional struct question batch\n--- ir ---\n%s", ostyir.Print(mod))
 	}
 	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{
@@ -1390,7 +1390,7 @@ fn maybeName(profile: Profile?) -> String? {
 	opts := Options{PackageName: "main", SourcePath: "/tmp/native_entry_optional_field.osty"}
 	nativeMod, ok := nativeModuleFromIR(mod, opts)
 	if !ok {
-		t.Fatal("nativeModuleFromIR returned unsupported for optional field batch")
+		t.Fatalf("nativeModuleFromIR returned unsupported for optional field batch\n--- ir ---\n%s", ostyir.Print(mod))
 	}
 	direct := renderNativeOwnedModuleText(nativeMod)
 	for _, want := range []string{

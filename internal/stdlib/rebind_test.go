@@ -1,6 +1,7 @@
 package stdlib
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/osty/osty/internal/resolve"
@@ -21,6 +22,9 @@ func TestPreludeBuiltinRebindings(t *testing.T) {
 		if mod == nil || mod.Package == nil {
 			t.Fatalf("std.%s not loaded", tc.module)
 		}
+		if mod.Package.PkgScope == nil {
+			t.Fatalf("std.%s loaded without package scope; registry diagnostics:\n%s", tc.module, stdlibRebindDiagSummary(reg))
+		}
 		for _, name := range tc.names {
 			sym := mod.Package.PkgScope.LookupLocal(name)
 			if sym == nil {
@@ -40,6 +44,12 @@ func TestPreludeBuiltinRebindings(t *testing.T) {
 		{"result", []string{"Ok", "Err"}},
 	} {
 		mod := reg.Modules[tc.module]
+		if mod == nil || mod.Package == nil {
+			t.Fatalf("std.%s not loaded", tc.module)
+		}
+		if mod.Package.PkgScope == nil {
+			t.Fatalf("std.%s loaded without package scope; registry diagnostics:\n%s", tc.module, stdlibRebindDiagSummary(reg))
+		}
 		for _, name := range tc.names {
 			sym := mod.Package.PkgScope.LookupLocal(name)
 			if sym == nil {
@@ -50,4 +60,28 @@ func TestPreludeBuiltinRebindings(t *testing.T) {
 			}
 		}
 	}
+}
+
+func stdlibRebindDiagSummary(reg *Registry) string {
+	if reg == nil || len(reg.Diags) == 0 {
+		return "<none>"
+	}
+	var b strings.Builder
+	for _, d := range reg.Diags {
+		if d == nil {
+			continue
+		}
+		if b.Len() > 0 {
+			b.WriteByte('\n')
+		}
+		if d.File != "" {
+			b.WriteString(d.File)
+			b.WriteString(": ")
+		}
+		b.WriteString(d.Message)
+	}
+	if b.Len() == 0 {
+		return "<none>"
+	}
+	return b.String()
 }

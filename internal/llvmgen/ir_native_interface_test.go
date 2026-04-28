@@ -3,6 +3,8 @@ package llvmgen
 import (
 	"strings"
 	"testing"
+
+	ostyir "github.com/osty/osty/internal/ir"
 )
 
 // TestTryGenerateNativeOwnedModuleCoversInterfaceVtableSurface locks
@@ -134,7 +136,7 @@ fn main() {
 		t.Fatalf("TryGenerateNativeOwnedModule errored: %v", err)
 	}
 	if !ok {
-		t.Fatal("TryGenerateNativeOwnedModule reported uncovered for Sized/Vec boxing + dispatch")
+		t.Fatalf("TryGenerateNativeOwnedModule reported uncovered for Sized/Vec boxing + dispatch\n--- ir ---\n%s", ostyir.Print(mod))
 	}
 	got := string(out)
 	for _, want := range []string{
@@ -213,7 +215,7 @@ fn main() {
 		t.Fatalf("TryGenerateNativeOwnedModule errored: %v", err)
 	}
 	if !ok {
-		t.Fatal("TryGenerateNativeOwnedModule reported uncovered for Combine/Thing dispatch-with-args")
+		t.Fatalf("TryGenerateNativeOwnedModule reported uncovered for Combine/Thing dispatch-with-args\n--- ir ---\n%s", ostyir.Print(mod))
 	}
 	got := string(out)
 	if !strings.Contains(got, ", i64 4)") {
