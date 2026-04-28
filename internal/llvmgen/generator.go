@@ -814,50 +814,18 @@ func (g *generator) renderFunction(ret, name string, params []paramInfo) string 
 // A11 `#[noalias]` rules carry the LLVM `noalias` parameter attribute.
 // Non-pointer params and non-matching names are passed through
 // unchanged. The rewrite only touches the signature line — every
-// subsequent body line with parens is left alone.
+// subsequent body line with parens is left alone. Delegates to the
+// Osty-sourced `mirSpliceNoaliasParams` (`toolchain/mir_generator.osty`)
+// after un-tupling `[]paramInfo` into the parallel `paramTypes` /
+// `paramNames` arrays the Osty function consumes.
 func spliceNoaliasParams(rendered string, params []paramInfo, all bool, names []string) string {
-	nameSet := map[string]bool{}
-	for _, n := range names {
-		nameSet[n] = true
+	paramTypes := make([]string, len(params))
+	paramNames := make([]string, len(params))
+	for i, p := range params {
+		paramTypes[i] = p.typ
+		paramNames[i] = p.name
 	}
-	lineEnd := strings.IndexByte(rendered, '\n')
-	if lineEnd < 0 {
-		return rendered
-	}
-	line := rendered[:lineEnd]
-	rest := rendered[lineEnd:]
-	openParen := strings.IndexByte(line, '(')
-	closeParen := strings.LastIndexByte(line, ')')
-	if openParen < 0 || closeParen < 0 || closeParen <= openParen {
-		return rendered
-	}
-	prefix := line[:openParen+1]
-	suffix := line[closeParen:]
-	inner := line[openParen+1 : closeParen]
-	if inner == "" {
-		return rendered
-	}
-	pieces := strings.Split(inner, ", ")
-	for i, piece := range pieces {
-		if i >= len(params) {
-			break
-		}
-		if params[i].typ != "ptr" {
-			continue
-		}
-		if !all && !nameSet[params[i].name] {
-			continue
-		}
-		// `piece` looks like "ptr %name" — insert `noalias` between
-		// the type and the register name. Defensive: if the shape is
-		// unexpected we leave the piece intact.
-		parts := strings.SplitN(piece, " ", 2)
-		if len(parts) != 2 || parts[0] != "ptr" {
-			continue
-		}
-		pieces[i] = "ptr noalias " + parts[1]
-	}
-	return prefix + strings.Join(pieces, ", ") + suffix + rest
+	return mirSpliceNoaliasParams(rendered, paramTypes, paramNames, all, names)
 }
 
 // formatFnAttrs assembles the function-level LLVM attribute string
@@ -900,17 +868,10 @@ func (g *generator) formatFnAttrs() string {
 // closing paren and the opening brace. Leaves every other line
 // untouched. Used only when the HIR emitter has one or more v0.6 fn
 // attributes to emit — otherwise the renderer's output is byte-
-// identical to the pre-attribute shape.
+// identical to the pre-attribute shape. Delegates to the Osty-sourced
+// `mirSpliceFnAttrs` (`toolchain/mir_generator.osty`).
 func spliceFnAttrs(rendered, attrs string) string {
-	const needle = ") {"
-	// Only touch the first occurrence — a function body may contain
-	// other `) {` sequences in landing-pad blocks or nested
-	// structures, and we must not mis-attach attributes there.
-	idx := strings.Index(rendered, needle)
-	if idx < 0 {
-		return rendered
-	}
-	return rendered[:idx] + ") " + attrs + " {" + rendered[idx+len(needle):]
+	return mirSpliceFnAttrs(rendered, attrs)
 }
 
 // tagParallelAccessesLines is the `[]string` twin of the MIR path's
@@ -918,20 +879,11 @@ func spliceFnAttrs(rendered, attrs string) string {
 // `, !llvm.access.group !N` to load/store lines that do not already
 // carry that attachment. The HIR emitter accumulates the body in a
 // `[]string`, so we operate on the slice directly rather than on a
-// single joined string. The line predicate is shared with the MIR side
-// via `mirIsMemoryAccessLine` (Osty-mirrored in
-// `toolchain/mir_generator.osty`).
+// single joined string. Delegates to the Osty-sourced
+// `mirTagParallelAccessesLines` (`toolchain/mir_generator.osty`); the
+// line predicate is shared with the MIR side via `mirIsMemoryAccessLine`.
 func tagParallelAccessesLines(body []string, groupRef string) []string {
-	suffix := ", !llvm.access.group " + groupRef
-	out := make([]string, len(body))
-	for i, line := range body {
-		if mirIsMemoryAccessLine(line) && !strings.Contains(line, "!llvm.access.group") {
-			out[i] = line + suffix
-			continue
-		}
-		out[i] = line
-	}
-	return out
+	return mirTagParallelAccessesLines(body, groupRef)
 }
 
 func (g *generator) typeEnv() typeEnv {

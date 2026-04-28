@@ -300,7 +300,7 @@ type constValue struct {
 }
 
 func (c constValue) typedInit() string {
-	return fmt.Sprintf("%s %s", c.typ, c.init)
+	return mirConstTypedInitText(c.typ, c.init)
 }
 
 type builtinResultType struct {
@@ -1261,7 +1261,7 @@ func signatureOf(fn *ast.FnDecl, ownerName string, env typeEnv) (*fnSig, error) 
 		paramName := p.Name
 		if p.Pattern != nil {
 			if paramName == "" {
-				paramName = fmt.Sprintf("__arg%d", i)
+				paramName = mirSyntheticArgName(strconv.Itoa(i))
 			}
 		} else if paramName == "" {
 			diag := llvmFunctionParamDiagnostic(fn.Name, p.Name, true, false, true, "")
@@ -1611,11 +1611,12 @@ func (g *generator) emitGlobalLets(globals []*globalLetInfo) error {
 				listElemTyp = elemTyp
 			}
 		}
-		kind := "constant"
-		if info.mutable {
-			kind = "global"
-		}
-		g.globalDefs = append(g.globalDefs, fmt.Sprintf("%s = internal %s %s %s", info.irName, kind, typ, cv.init))
+		// Trailing newline is intentionally omitted: callers join the
+		// global-def slice with `\n` later. The Osty `Line` form already
+		// appends `\n`, so we trim it here to match the legacy shape.
+		def := mirInternalGlobalDefForKind(info.irName, info.mutable, typ, cv.init)
+		def = def[:len(def)-1]
+		g.globalDefs = append(g.globalDefs, def)
 		g.globals[info.name] = value{
 			typ:         typ,
 			ref:         info.irName,
@@ -1835,7 +1836,7 @@ func (g *generator) constStructLit(lit *ast.StructLit) (constValue, error) {
 		}
 		parts = append(parts, cv.typedInit())
 	}
-	return constValue{typ: info.typ, init: fmt.Sprintf("{ %s }", strings.Join(parts, ", "))}, nil
+	return constValue{typ: info.typ, init: mirConstStructInitText(strings.Join(parts, ", "))}, nil
 }
 
 func (g *generator) constEnumVariantIdent(name string) (constValue, bool, error) {
@@ -1866,7 +1867,7 @@ func (g *generator) constEnumVariant(info *enumInfo, variant variantInfo, payloa
 		}
 		return constValue{
 			typ:  info.typ,
-			init: fmt.Sprintf("{ i64 %d, %s }", variant.tag, payloadValue.typedInit()),
+			init: mirConstEnumVariantInitText(strconv.Itoa(variant.tag), payloadValue.typedInit()),
 		}, nil
 	}
 	if payload != nil {
@@ -1958,37 +1959,29 @@ func constBoolCompare[T comparable](op token.Kind, left, right T) (constValue, e
 	return constValue{typ: "i1", init: strconv.FormatBool(value), kind: constKindBool, boolValue: value}, nil
 }
 
+// constIntBinary applies a binary operator to two i64 operands at
+// compile time. Delegates to the Osty-sourced `mirConstIntBinary` for
+// the value channel and `mirConstIntBinaryStatus` for the error
+// channel; status `0` is success, `1` div0, `2` mod0, `3` unsupported.
+//
+// The token codes are bundled into a single `tokenCodes` value once and
+// then passed by spread to both helpers — this keeps the binary→token
+// mapping in one place even though the multi-return Osty bridge
+// requires the codes to flow through every call.
 func constIntBinary(op token.Kind, left, right int64) (int64, error) {
-	switch op {
-	case token.PLUS:
-		return left + right, nil
-	case token.MINUS:
-		return left - right, nil
-	case token.STAR:
-		return left * right, nil
-	case token.SLASH:
-		if right == 0 {
-			return 0, unsupported("expression", "constant Int division by zero")
-		}
-		return left / right, nil
-	case token.PERCENT:
-		if right == 0 {
-			return 0, unsupported("expression", "constant Int modulo by zero")
-		}
-		return left % right, nil
-	case token.BITAND:
-		return left & right, nil
-	case token.BITOR:
-		return left | right, nil
-	case token.BITXOR:
-		return left ^ right, nil
-	case token.SHL:
-		return left << uint(right), nil
-	case token.SHR:
-		return left >> uint(right), nil
-	default:
+	plus, minus, star := int(token.PLUS), int(token.MINUS), int(token.STAR)
+	slash, percent := int(token.SLASH), int(token.PERCENT)
+	bitAnd, bitOr, bitXor := int(token.BITAND), int(token.BITOR), int(token.BITXOR)
+	shl, shr := int(token.SHL), int(token.SHR)
+	switch mirConstIntBinaryStatus(int(op), right, plus, minus, star, slash, percent, bitAnd, bitOr, bitXor, shl, shr) {
+	case 1:
+		return 0, unsupported("expression", "constant Int division by zero")
+	case 2:
+		return 0, unsupported("expression", "constant Int modulo by zero")
+	case 3:
 		return 0, unsupportedf("expression", "binary operator %q", op)
 	}
+	return mirConstIntBinary(int(op), left, right, plus, minus, star, slash, percent, bitAnd, bitOr, bitXor, shl, shr), nil
 }
 
 func constFloatBinary(op token.Kind, left, right float64) (float64, error) {
@@ -2015,13 +2008,19 @@ func constFloatBinary(op token.Kind, left, right float64) (float64, error) {
 	}
 }
 
+// llvmFloatConstLiteral renders a Float64 as an LLVM constant. NaN and
+// Inf go to the IEEE-754 bit-pattern form (`0x<16-hex>`); everything
+// else uses Go's `strconv.FormatFloat` with the conventional `'e' ,
+// 16, 64` parameters that match LLVM's textual float syntax. The
+// host-side path here computes `math.Float64bits(value)` because Osty
+// has no equivalent today; the `0x...` prefix and the fixed-width
+// uppercase hex form come from the Osty-sourced
+// `mirLlvmFloat64HexLiteral` (`toolchain/mir_generator.osty`).
 func llvmFloatConstLiteral(value float64) string {
-	switch {
-	case math.IsNaN(value), math.IsInf(value, 0):
-		return fmt.Sprintf("0x%016X", math.Float64bits(value))
-	default:
-		return strconv.FormatFloat(value, 'e', 16, 64)
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return mirLlvmFloat64HexLiteral(fmt.Sprintf("%016X", math.Float64bits(value)))
 	}
+	return strconv.FormatFloat(value, 'e', 16, 64)
 }
 
 // llvmGlobalIRName composes the LLVM IR symbol used for an Osty
