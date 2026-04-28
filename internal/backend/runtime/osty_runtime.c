@@ -815,6 +815,13 @@ static const osty_gc_kind_descriptor osty_gc_kind_table[] = {
         .trace = osty_rt_list_trace,
         .destroy = osty_rt_list_destroy,
         .young_eligible = true,
+        /* Phase 0i: list_trace ACQUIRE-loads `data` + `len`, and
+         * the grow path defers the old backing buffer's free until
+         * cycle end. Together that lets a concurrent marker iterate
+         * either the old or new buffer safely; either way both
+         * buffers stay alive for the duration of any in-flight
+         * trace. */
+        .trace_lockfree_safe = true,
         .cleanup_young_dead = osty_gc_cleanup_young_dead_list,
         .remap = osty_gc_remap_list_payload,
     },
@@ -2026,6 +2033,88 @@ static size_t osty_gc_forwarding_hash(void *payload) {
 static int osty_gc_index_grow_pending = 0;
 static int64_t osty_gc_index_grow_deferred_total = 0;
 static int64_t osty_gc_index_pregrow_total = 0;
+
+/* Phase 0i: deferred-free queue for container backing storage that
+ * was reallocated mid-cycle. The bg marker may still be reading the
+ * old buffer via `list->data` / `map->keys` etc.; freeing it
+ * immediately would race the trace. We queue here lock-free via a
+ * Treiber stack and drain under `osty_gc_lock` at the end of
+ * `finish_locked`, when no marker can be active.
+ *
+ * State check is a fast path: when the cycle is IDLE, no marker
+ * exists and the buffer can be freed inline. The window between
+ * "read state == IDLE" and "free" is safe because cycle start
+ * (state := MARK_INCREMENTAL) goes under `osty_gc_lock`, and the
+ * mutator's `list->data` update RELEASE-stores BEFORE the
+ * defer_or_free call — any marker that subsequently sees the new
+ * `list->data` won't try to dereference the old buffer. */
+typedef struct osty_gc_deferred_free_node {
+    void *buffer;
+    struct osty_gc_deferred_free_node *next;
+} osty_gc_deferred_free_node;
+
+static uintptr_t osty_gc_deferred_free_head_atomic = 0;
+static int64_t osty_gc_deferred_free_immediate_total = 0;
+static int64_t osty_gc_deferred_free_queued_total = 0;
+static int64_t osty_gc_deferred_free_drained_total = 0;
+
+static void osty_gc_defer_or_free(void *buffer) {
+    if (buffer == NULL) {
+        return;
+    }
+    /* Fast path: no cycle in flight, free inline. The relaxed load
+     * is safe — if a cycle starts after our read but before the
+     * `free`, the cycle's seed_roots hasn't yet observed the list
+     * (its trace happens through the new `list->data` published by
+     * the caller's RELEASE). */
+    if (__atomic_load_n(&osty_gc_state, __ATOMIC_ACQUIRE) ==
+        OSTY_GC_STATE_IDLE) {
+        free(buffer);
+        (void)__atomic_add_fetch(&osty_gc_deferred_free_immediate_total,
+                                 1, __ATOMIC_RELAXED);
+        return;
+    }
+    osty_gc_deferred_free_node *node =
+        (osty_gc_deferred_free_node *)malloc(sizeof(*node));
+    if (node == NULL) {
+        osty_rt_abort("deferred_free: out of memory for queue node");
+    }
+    node->buffer = buffer;
+    /* Treiber-style lock-free push. Multiple mutators (including
+     * scheduler workers) may queue concurrently; the CAS loop wins
+     * one publish per push. */
+    uintptr_t old_head;
+    do {
+        old_head = __atomic_load_n(&osty_gc_deferred_free_head_atomic,
+                                   __ATOMIC_ACQUIRE);
+        node->next = (osty_gc_deferred_free_node *)old_head;
+    } while (!__atomic_compare_exchange_n(
+        &osty_gc_deferred_free_head_atomic, &old_head, (uintptr_t)node,
+        false /* strong */, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE));
+    (void)__atomic_add_fetch(&osty_gc_deferred_free_queued_total,
+                             1, __ATOMIC_RELAXED);
+}
+
+/* Drain the queue. Caller holds `osty_gc_lock` at the end of
+ * `finish_locked`, so no marker is active. Atomic exchange grabs
+ * the whole list in one shot; the walk below is single-threaded. */
+static void osty_gc_drain_deferred_frees(void) {
+    uintptr_t head = __atomic_exchange_n(
+        &osty_gc_deferred_free_head_atomic, 0, __ATOMIC_ACQ_REL);
+    osty_gc_deferred_free_node *node = (osty_gc_deferred_free_node *)head;
+    int64_t drained = 0;
+    while (node != NULL) {
+        osty_gc_deferred_free_node *next = node->next;
+        free(node->buffer);
+        free(node);
+        node = next;
+        drained += 1;
+    }
+    if (drained > 0) {
+        (void)__atomic_add_fetch(&osty_gc_deferred_free_drained_total,
+                                 drained, __ATOMIC_RELAXED);
+    }
+}
 
 static void osty_gc_index_grow(int64_t new_capacity) {
     void **old_keys = osty_gc_index_keys;
@@ -4809,12 +4898,28 @@ static void osty_rt_list_trace(void *payload) {
     int64_t i;
     int64_t j;
 
-    if (list == NULL || list->data == NULL) {
+    if (list == NULL) {
+        return;
+    }
+    /* Phase 0i: ACQUIRE-load `data` and `len` once at trace entry so
+     * a concurrent push that grows the backing buffer mid-trace
+     * doesn't tear our view. The pair pairs with the RELEASE store
+     * in `osty_rt_list_reserve`, which guarantees the new buffer is
+     * memcpy'd before we see the new pointer. The old buffer is
+     * deferred-freed (Phase 0i) so it stays alive long enough for
+     * us to finish iterating it.
+     *
+     * `elem_size`, `trace_elem`, `gc_offsets`, and `gc_offset_count`
+     * are immutable after list creation, so a plain load is fine. */
+    unsigned char *data = (unsigned char *)__atomic_load_n(
+        (void **)&list->data, __ATOMIC_ACQUIRE);
+    int64_t len = __atomic_load_n(&list->len, __ATOMIC_ACQUIRE);
+    if (data == NULL || len <= 0) {
         return;
     }
     if (list->trace_elem != NULL) {
-        for (i = 0; i < list->len; i++) {
-            list->trace_elem((void *)(list->data + ((size_t)i * list->elem_size)));
+        for (i = 0; i < len; i++) {
+            list->trace_elem((void *)(data + ((size_t)i * list->elem_size)));
         }
         return;
     }
@@ -4824,8 +4929,8 @@ static void osty_rt_list_trace(void *payload) {
     /* Pass slot addresses to mark_slot_v1 so cheney can forward
      * young children + rewrite the slot. mark_payload would only
      * mark via the headerful path — broken under CHENEY mode. */
-    for (i = 0; i < list->len; i++) {
-        unsigned char *elem = list->data + ((size_t)i * list->elem_size);
+    for (i = 0; i < len; i++) {
+        unsigned char *elem = data + ((size_t)i * list->elem_size);
         for (j = 0; j < list->gc_offset_count; j++) {
             osty_gc_mark_slot_v1((void *)(elem + (size_t)list->gc_offsets[j]));
         }
@@ -5383,21 +5488,25 @@ static void osty_gc_mark_stack_push(osty_gc_header *header) {
          * confirm the local cap is sized right for the workload. */
         (void)__atomic_add_fetch(&osty_gc_local_mark_overflow_total, 1,
                                  __ATOMIC_RELAXED);
-        /* Phase 0h safety: a lockfree-safe tracer is currently
-         * mid-dispatch with `osty_gc_lock` released. Pushing to the
-         * central stack here would race with mutator-side SATB
-         * pushes (which take `osty_gc_lock`). Abort with a clear
-         * message so the issue is visible — this is a design bound
-         * (closure captures cap at 64, generic enum ptr pushes 1),
-         * so realistic workloads can't hit it. If a future kind
-         * lifts the bound, the kind's `trace_lockfree_safe` flag
-         * needs to flip to false. */
+        /* Phase 0i: list/map/set tracers can push hundreds of children
+         * per call, well above the 256-slot local TLS cap. When that
+         * happens during a lockfree dispatch (Phase 0h), the marker
+         * has released `osty_gc_lock` and a direct push to the
+         * central stack would race mutator-side SATB pushes that
+         * still take the lock. Re-acquire briefly, flush the entire
+         * local stack into central, push the new header, then
+         * release. The cost is one lock cycle per ~256 children
+         * — amortised vs. iteration cost — and keeps the safety
+         * invariant: central pushes always happen under gc_lock. */
         if (osty_gc_in_lockfree_trace) {
-            osty_rt_abort(
-                "lockfree trace: local mark stack overflow without "
-                "gc_lock held — bound the kind's trace push count "
-                "below OSTY_GC_LOCAL_MARK_STACK_CAP or set "
-                "trace_lockfree_safe=false in the kind descriptor");
+            osty_gc_acquire();
+            while (osty_gc_local_mark_stack_top > 0) {
+                osty_gc_mark_stack_push_central(
+                    osty_gc_local_mark_stack[--osty_gc_local_mark_stack_top]);
+            }
+            osty_gc_mark_stack_push_central(header);
+            osty_gc_release();
+            return;
         }
     }
     osty_gc_mark_stack_push_central(header);
@@ -7006,6 +7115,12 @@ static void osty_gc_collect_incremental_finish_locked(
     if (osty_gc_index_grow_pending) {
         osty_gc_index_grow(osty_gc_index_capacity * 2);
     }
+    /* Phase 0i: drain any container backing buffers retired during
+     * this cycle. State is now IDLE so no marker can be reading;
+     * `osty_gc_lock` keeps mutator-side defer_or_free pushes from
+     * landing in the queue mid-drain (they'd see state IDLE on the
+     * fast path and free inline instead). */
+    osty_gc_drain_deferred_frees();
 }
 
 void osty_gc_collect_incremental_finish(void) {
@@ -7424,25 +7539,36 @@ static OSTY_HOT_INLINE void osty_rt_list_reserve(osty_rt_list *list, int64_t min
         osty_rt_abort("list allocation overflow");
     }
     /* Spill from inline → heap: malloc + memcpy the inline contents.
-     * Subsequent calls hit the regular realloc path because `data`
-     * now points outside the inline region. */
-    if (list->data == list->inline_storage) {
-        next_data = malloc(want_bytes);
-        if (next_data == NULL) {
-            osty_rt_abort("out of memory");
-        }
-        if (list->len > 0) {
-            memcpy(next_data, list->inline_storage,
-                   (size_t)list->len * list->elem_size);
-        }
-    } else {
-        next_data = realloc(list->data, want_bytes);
-        if (next_data == NULL) {
-            osty_rt_abort("out of memory");
+     * Subsequent calls used to hit `realloc` here, but Phase 0i
+     * lock-free trace requires the OLD buffer stay alive for the
+     * duration of any concurrent marker read. We therefore always
+     * malloc + memcpy + defer-free instead — same as the inline-spill
+     * branch — and let `osty_gc_defer_or_free` route the old buffer
+     * to the deferred queue when a cycle is in flight, or free it
+     * inline when state is IDLE. The extra alloc + copy on every
+     * grow is bounded by capacity-doubling so amortised cost stays
+     * O(1) per push. */
+    next_data = malloc(want_bytes);
+    if (next_data == NULL) {
+        osty_rt_abort("out of memory");
+    }
+    if (list->len > 0) {
+        size_t copy_bytes = (size_t)list->len * list->elem_size;
+        if (list->data != NULL) {
+            memcpy(next_data, list->data, copy_bytes);
         }
     }
-    list->data = (unsigned char *)next_data;
+    void *old_data = list->data;
+    bool old_was_inline = (old_data == list->inline_storage);
+    /* RELEASE store on `list->data` so a concurrent marker that
+     * sees the new pointer also sees the populated contents
+     * memcpy'd above. ACQUIRE on the marker side (in
+     * `osty_rt_list_trace`) pairs with this. */
+    __atomic_store_n((void **)&list->data, next_data, __ATOMIC_RELEASE);
     list->cap = next_cap;
+    if (!old_was_inline && old_data != NULL) {
+        osty_gc_defer_or_free(old_data);
+    }
 }
 
 static void osty_rt_list_emit_copied_write_barriers(void *raw_list, osty_rt_list *list, int64_t count) {
@@ -14648,6 +14774,27 @@ int64_t osty_gc_debug_lockfree_trace_total(void) {
 
 int64_t osty_gc_debug_locked_trace_total(void) {
     return __atomic_load_n(&osty_gc_locked_trace_total,
+                           __ATOMIC_ACQUIRE);
+}
+
+/* Phase 0i deferred-free queue accessors. `immediate_total` is the
+ * count of `defer_or_free` calls that found state IDLE and freed
+ * inline; `queued_total` is the count that pushed onto the deferred
+ * queue (cycle in flight); `drained_total` is the count flushed at
+ * `finish_locked` end. Steady-state invariant: `queued_total ==
+ * drained_total + still_in_queue`. */
+int64_t osty_gc_debug_deferred_free_immediate_total(void) {
+    return __atomic_load_n(&osty_gc_deferred_free_immediate_total,
+                           __ATOMIC_ACQUIRE);
+}
+
+int64_t osty_gc_debug_deferred_free_queued_total(void) {
+    return __atomic_load_n(&osty_gc_deferred_free_queued_total,
+                           __ATOMIC_ACQUIRE);
+}
+
+int64_t osty_gc_debug_deferred_free_drained_total(void) {
+    return __atomic_load_n(&osty_gc_deferred_free_drained_total,
                            __ATOMIC_ACQUIRE);
 }
 

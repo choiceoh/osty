@@ -93,7 +93,7 @@ int main(void) {
 		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
 	}
 
-	buildOutput, err := exec.Command("clang", "-std=c11", runtimePath, harnessPath, "-o", binaryPath).CombinedOutput()
+	buildOutput, err := exec.Command("clang", "-std=c11", "-lz", runtimePath, harnessPath, "-o", binaryPath).CombinedOutput()
 	if err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
