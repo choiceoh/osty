@@ -1,0 +1,412 @@
+// std.grid -- rectangular grid helpers for turn-based games and tools.
+//
+// The module intentionally stays pure Osty. It provides the small spatial
+// vocabulary that terminal UIs, roguelikes, board games, and pathfinding
+// examples all tend to rebuild: points, sizes, rectangles, directions, and a
+// row-major Grid<T>.
+
+pub struct Point {
+    pub x: Int,
+    pub y: Int,
+
+    pub fn add(self, other: Point) -> Point {
+        Point { x: self.x + other.x, y: self.y + other.y }
+    }
+
+    pub fn sub(self, other: Point) -> Point {
+        Point { x: self.x - other.x, y: self.y - other.y }
+    }
+
+    pub fn step(self, direction: Direction) -> Point {
+        Point { x: self.x + direction.dx(), y: self.y + direction.dy() }
+    }
+
+    pub fn manhattan(self, other: Point) -> Int {
+        absInt(self.x - other.x) + absInt(self.y - other.y)
+    }
+
+    pub fn neighbors4(self) -> List<Point> {
+        [
+            self.step(Direction.Up),
+            self.step(Direction.Right),
+            self.step(Direction.Down),
+            self.step(Direction.Left),
+        ]
+    }
+
+    pub fn neighbors8(self) -> List<Point> {
+        [
+            self.step(Direction.Up),
+            self.step(Direction.UpRight),
+            self.step(Direction.Right),
+            self.step(Direction.DownRight),
+            self.step(Direction.Down),
+            self.step(Direction.DownLeft),
+            self.step(Direction.Left),
+            self.step(Direction.UpLeft),
+        ]
+    }
+}
+
+pub struct Size {
+    pub width: Int,
+    pub height: Int,
+
+    pub fn area(self) -> Int {
+        if self.width <= 0 || self.height <= 0 {
+            return 0
+        }
+        self.width * self.height
+    }
+
+    pub fn isEmpty(self) -> Bool {
+        self.area() == 0
+    }
+
+    pub fn contains(self, point: Point) -> Bool {
+        point.x >= 0 && point.y >= 0 && point.x < self.width && point.y < self.height
+    }
+
+    pub fn rect(self) -> Rect {
+        Rect { origin: Point { x: 0, y: 0 }, size: self }
+    }
+}
+
+pub struct Rect {
+    pub origin: Point,
+    pub size: Size,
+
+    pub fn minX(self) -> Int {
+        self.origin.x
+    }
+
+    pub fn minY(self) -> Int {
+        self.origin.y
+    }
+
+    pub fn maxX(self) -> Int {
+        self.origin.x + self.size.width
+    }
+
+    pub fn maxY(self) -> Int {
+        self.origin.y + self.size.height
+    }
+
+    pub fn isEmpty(self) -> Bool {
+        self.size.isEmpty()
+    }
+
+    pub fn contains(self, point: Point) -> Bool {
+        point.x >= self.minX() &&
+        point.y >= self.minY() &&
+        point.x < self.maxX() &&
+        point.y < self.maxY()
+    }
+
+    pub fn intersects(self, other: Rect) -> Bool {
+        !self.isEmpty() &&
+        !other.isEmpty() &&
+        self.minX() < other.maxX() &&
+        self.maxX() > other.minX() &&
+        self.minY() < other.maxY() &&
+        self.maxY() > other.minY()
+    }
+
+    pub fn intersection(self, other: Rect) -> Rect? {
+        if !self.intersects(other) {
+            return None
+        }
+        let x1 = maxInt(self.minX(), other.minX())
+        let y1 = maxInt(self.minY(), other.minY())
+        let x2 = minInt(self.maxX(), other.maxX())
+        let y2 = minInt(self.maxY(), other.maxY())
+        Some(rect(x1, y1, x2 - x1, y2 - y1))
+    }
+
+    pub fn translate(self, delta: Point) -> Rect {
+        Rect { origin: self.origin.add(delta), size: self.size }
+    }
+
+    pub fn clamp(self, point: Point) -> Point {
+        if self.isEmpty() {
+            return self.origin
+        }
+        Point {
+            x: clampInt(point.x, self.minX(), self.maxX() - 1),
+            y: clampInt(point.y, self.minY(), self.maxY() - 1),
+        }
+    }
+
+    pub fn points(self) -> List<Point> {
+        let mut out: List<Point> = []
+        let mut y = self.minY()
+        for y < self.maxY() {
+            let mut x = self.minX()
+            for x < self.maxX() {
+                out.push(Point { x: x, y: y })
+                x = x + 1
+            }
+            y = y + 1
+        }
+        out
+    }
+}
+
+pub enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
+    UpLeft,
+    UpRight,
+    DownLeft,
+    DownRight,
+    Wait,
+
+    pub fn dx(self) -> Int {
+        match self {
+            Left | UpLeft | DownLeft -> -1,
+            Right | UpRight | DownRight -> 1,
+            _ -> 0,
+        }
+    }
+
+    pub fn dy(self) -> Int {
+        match self {
+            Up | UpLeft | UpRight -> -1,
+            Down | DownLeft | DownRight -> 1,
+            _ -> 0,
+        }
+    }
+
+    pub fn isDiagonal(self) -> Bool {
+        match self {
+            UpLeft | UpRight | DownLeft | DownRight -> true,
+            _ -> false,
+        }
+    }
+
+    pub fn opposite(self) -> Direction {
+        match self {
+            Up -> Direction.Down,
+            Down -> Direction.Up,
+            Left -> Direction.Right,
+            Right -> Direction.Left,
+            UpLeft -> Direction.DownRight,
+            UpRight -> Direction.DownLeft,
+            DownLeft -> Direction.UpRight,
+            DownRight -> Direction.UpLeft,
+            Wait -> Direction.Wait,
+        }
+    }
+
+    pub fn toPoint(self) -> Point {
+        Point { x: self.dx(), y: self.dy() }
+    }
+}
+
+pub struct Grid<T> {
+    pub width: Int,
+    pub height: Int,
+    cells: List<T>,
+
+    pub fn size(self) -> Size {
+        Size { width: self.width, height: self.height }
+    }
+
+    pub fn bounds(self) -> Rect {
+        self.size().rect()
+    }
+
+    pub fn len(self) -> Int {
+        self.cells.len()
+    }
+
+    pub fn isEmpty(self) -> Bool {
+        self.len() == 0
+    }
+
+    pub fn contains(self, point: Point) -> Bool {
+        self.size().contains(point)
+    }
+
+    pub fn index(self, point: Point) -> Int? {
+        if !self.contains(point) {
+            return None
+        }
+        Some(point.y * self.width + point.x)
+    }
+
+    pub fn pointAt(self, index: Int) -> Point? {
+        if index < 0 || index >= self.len() || self.width <= 0 {
+            return None
+        }
+        Some(Point { x: index % self.width, y: index / self.width })
+    }
+
+    pub fn get(self, point: Point) -> T? {
+        match self.index(point) {
+            Some(i) -> {
+                return Some(self.cells[i])
+            },
+            None -> {},
+        }
+        None
+    }
+
+    pub fn set(mut self, point: Point, value: T) -> Bool {
+        match self.index(point) {
+            Some(i) -> {
+                self.cells[i] = value
+                true
+            },
+            None -> false,
+        }
+    }
+
+    pub fn fill(mut self, value: T) {
+        let mut i = 0
+        for i < self.cells.len() {
+            self.cells[i] = value
+            i = i + 1
+        }
+    }
+
+    pub fn points(self) -> List<Point> {
+        self.bounds().points()
+    }
+
+    pub fn neighbors4(self, point: Point) -> List<Point> {
+        boundedNeighbors(self, point, cardinals())
+    }
+
+    pub fn neighbors8(self, point: Point) -> List<Point> {
+        boundedNeighbors(self, point, directions8())
+    }
+
+    pub fn map<U>(self, f: fn(Point, T) -> U) -> Grid<U> {
+        let mut out: List<U> = []
+        let mut i = 0
+        for i < self.cells.len() {
+            let point = self.pointAt(i).unwrap()
+            out.push(f(point, self.cells[i]))
+            i = i + 1
+        }
+        Grid { width: self.width, height: self.height, cells: out }
+    }
+}
+
+pub fn point(x: Int, y: Int) -> Point {
+    Point { x: x, y: y }
+}
+
+pub fn size(width: Int, height: Int) -> Size {
+    Size { width: width, height: height }
+}
+
+pub fn rect(x: Int, y: Int, width: Int, height: Int) -> Rect {
+    Rect { origin: point(x, y), size: size(width, height) }
+}
+
+pub fn grid<T>(width: Int, height: Int, fill: T) -> Grid<T> {
+    let mut cells: List<T> = []
+    let total = size(width, height).area()
+    let mut i = 0
+    for i < total {
+        cells.push(fill)
+        i = i + 1
+    }
+    Grid { width: width, height: height, cells: cells }
+}
+
+pub fn fromRows<T>(rows: List<List<T>>) -> Grid<T>? {
+    if rows.isEmpty() {
+        return None
+    }
+    let height = rows.len()
+    let width = rows[0].len()
+    let mut cells: List<T> = []
+    for row in rows {
+        if row.len() != width {
+            return None
+        }
+        for item in row {
+            cells.push(item)
+        }
+    }
+    let result: Grid<T> = Grid { width: width, height: height, cells: cells }
+    Some(result)
+}
+
+pub fn cardinals() -> List<Direction> {
+    [Direction.Up, Direction.Right, Direction.Down, Direction.Left]
+}
+
+pub fn diagonals() -> List<Direction> {
+    [Direction.UpLeft, Direction.UpRight, Direction.DownRight, Direction.DownLeft]
+}
+
+pub fn directions8() -> List<Direction> {
+    [
+        Direction.Up,
+        Direction.UpRight,
+        Direction.Right,
+        Direction.DownRight,
+        Direction.Down,
+        Direction.DownLeft,
+        Direction.Left,
+        Direction.UpLeft,
+    ]
+}
+
+pub fn directionFromDelta(dx: Int, dy: Int) -> Direction? {
+    let nx = clampInt(dx, -1, 1)
+    let ny = clampInt(dy, -1, 1)
+    match (nx, ny) {
+        (0, -1) -> Some(Direction.Up),
+        (1, -1) -> Some(Direction.UpRight),
+        (1, 0) -> Some(Direction.Right),
+        (1, 1) -> Some(Direction.DownRight),
+        (0, 1) -> Some(Direction.Down),
+        (-1, 1) -> Some(Direction.DownLeft),
+        (-1, 0) -> Some(Direction.Left),
+        (-1, -1) -> Some(Direction.UpLeft),
+        (0, 0) -> Some(Direction.Wait),
+        _ -> {
+            return None
+        },
+    }
+}
+
+fn boundedNeighbors<T>(grid: Grid<T>, point: Point, directions: List<Direction>) -> List<Point> {
+    let mut out: List<Point> = []
+    for direction in directions {
+        let next = point.step(direction)
+        if grid.contains(next) {
+            out.push(next)
+        }
+    }
+    out
+}
+
+fn absInt(n: Int) -> Int {
+    if n < 0 { 0 - n } else { n }
+}
+
+fn minInt(a: Int, b: Int) -> Int {
+    if a < b { a } else { b }
+}
+
+fn maxInt(a: Int, b: Int) -> Int {
+    if a > b { a } else { b }
+}
+
+fn clampInt(n: Int, lo: Int, hi: Int) -> Int {
+    if n < lo {
+        return lo
+    }
+    if n > hi {
+        return hi
+    }
+    n
+}

@@ -20,3 +20,7 @@
 - `std.math` — mathematical functions and constants
 - `std.csv` — CSV read/write
 - `std.compress` — gzip compression
+- `std.term` — terminal mode, ANSI control, size, and key input
+- `std.tui` — retained terminal frame buffers and diff rendering
+- `std.grid` — `Point`, `Size`, `Rect`, `Direction`, and `Grid<T>` for
+  board, map, and turn-based layouts

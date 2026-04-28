@@ -115,6 +115,7 @@
 #    define WIN32_LEAN_AND_MEAN
 #  endif
 #  include <windows.h>
+#  include <io.h>
 #  include <process.h>
 #  include <signal.h>         /* sig_atomic_t for SIGURG TLS flag */
 #  define OSTY_RT_TLS __declspec(thread)
@@ -136,6 +137,8 @@ typedef INIT_ONCE          osty_rt_once_t;
 #  include <netinet/in.h>
 #  include <netinet/tcp.h>
 #  include <sys/socket.h>
+#  include <sys/ioctl.h>
+#  include <termios.h>
 #  include <sys/time.h>
 #  if defined(__APPLE__)
 #    include <crt_externs.h>
@@ -19084,6 +19087,248 @@ void *osty_rt_io_read_line(void) {
     free(buf);
     return out;
 }
+
+/* std.term low-level terminal surface.
+ *
+ * The LLVM shim builds public Result values around these small C helpers:
+ * - size() always succeeds, using the TTY size when available and
+ *   COLUMNS/LINES or 80x24 as a deterministic fallback.
+ * - write(), flush(), and setRawMode() return NULL on success or a managed
+ *   String containing a human-readable error message on failure. */
+static void *osty_rt_term_error_message(const char *prefix, const char *detail, const char *site) {
+    const char *lhs = prefix == NULL ? "terminal error" : prefix;
+    const char *rhs = (detail != NULL && detail[0] != '\0') ? detail : "unknown error";
+    size_t lhs_len = strlen(lhs);
+    size_t rhs_len = strlen(rhs);
+    size_t total = lhs_len + 2 + rhs_len;
+    char *buf = (char *)osty_rt_xmalloc(total + 1, site);
+    memcpy(buf, lhs, lhs_len);
+    buf[lhs_len] = ':';
+    buf[lhs_len + 1] = ' ';
+    memcpy(buf + lhs_len + 2, rhs, rhs_len);
+    buf[total] = '\0';
+    void *out = osty_rt_string_dup_site(buf, total, site);
+    free(buf);
+    return out;
+}
+
+static void *osty_rt_term_errno_error(const char *prefix, const char *site) {
+    if (errno == 0) {
+        return osty_rt_term_error_message(prefix, "unknown error", site);
+    }
+    return osty_rt_term_error_message(prefix, strerror(errno), site);
+}
+
+static int64_t osty_rt_term_env_dimension(const char *name, int64_t fallback) {
+    const char *raw = getenv(name);
+    char *end = NULL;
+    long parsed;
+    if (raw == NULL || raw[0] == '\0') {
+        return fallback;
+    }
+    errno = 0;
+    parsed = strtol(raw, &end, 10);
+    if (errno != 0 || end == raw || parsed <= 0) {
+        return fallback;
+    }
+    return (int64_t)parsed;
+}
+
+bool osty_rt_term_is_terminal(void) {
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    return _isatty(_fileno(stdout)) != 0;
+#else
+    return isatty(STDOUT_FILENO) != 0;
+#endif
+}
+
+static bool osty_rt_term_stdout_size(int64_t *width, int64_t *height) {
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    CONSOLE_SCREEN_BUFFER_INFO info;
+    if (handle == INVALID_HANDLE_VALUE || handle == NULL) {
+        return false;
+    }
+    if (!GetConsoleScreenBufferInfo(handle, &info)) {
+        return false;
+    }
+    int64_t w = (int64_t)(info.srWindow.Right - info.srWindow.Left + 1);
+    int64_t h = (int64_t)(info.srWindow.Bottom - info.srWindow.Top + 1);
+    if (w <= 0 || h <= 0) {
+        return false;
+    }
+    *width = w;
+    *height = h;
+    return true;
+#else
+    struct winsize ws;
+    if (!isatty(STDOUT_FILENO)) {
+        return false;
+    }
+    memset(&ws, 0, sizeof(ws));
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) != 0) {
+        return false;
+    }
+    if (ws.ws_col <= 0 || ws.ws_row <= 0) {
+        return false;
+    }
+    *width = (int64_t)ws.ws_col;
+    *height = (int64_t)ws.ws_row;
+    return true;
+#endif
+}
+
+int64_t osty_rt_term_width(void) {
+    int64_t width = 0;
+    int64_t height = 0;
+    if (osty_rt_term_stdout_size(&width, &height)) {
+        return width;
+    }
+    return osty_rt_term_env_dimension("COLUMNS", 80);
+}
+
+int64_t osty_rt_term_height(void) {
+    int64_t width = 0;
+    int64_t height = 0;
+    if (osty_rt_term_stdout_size(&width, &height)) {
+        return height;
+    }
+    return osty_rt_term_env_dimension("LINES", 24);
+}
+
+void *osty_rt_term_write(const char *text) {
+    const char *safe = text != NULL ? text : "";
+    char inline_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    osty_rt_string_decode_to_buf_if_inline(&safe, inline_buf);
+    errno = 0;
+    if (fputs(safe, stdout) == EOF) {
+        return osty_rt_term_errno_error("failed to write terminal", "runtime.term.write.error");
+    }
+    if (fflush(stdout) != 0) {
+        return osty_rt_term_errno_error("failed to flush terminal", "runtime.term.write.flush_error");
+    }
+    return NULL;
+}
+
+void *osty_rt_term_flush(void) {
+    errno = 0;
+    if (fflush(stdout) != 0) {
+        return osty_rt_term_errno_error("failed to flush terminal", "runtime.term.flush.error");
+    }
+    return NULL;
+}
+
+#if defined(OSTY_RT_PLATFORM_WIN32)
+#ifndef ENABLE_VIRTUAL_TERMINAL_INPUT
+#define ENABLE_VIRTUAL_TERMINAL_INPUT 0x0200
+#endif
+static DWORD osty_rt_term_saved_input_mode = 0;
+static bool osty_rt_term_saved_input_mode_valid = false;
+static bool osty_rt_term_raw_mode_active = false;
+
+static void osty_rt_term_restore_raw_at_exit(void) {
+    if (!osty_rt_term_raw_mode_active || !osty_rt_term_saved_input_mode_valid) {
+        return;
+    }
+    HANDLE handle = GetStdHandle(STD_INPUT_HANDLE);
+    if (handle != INVALID_HANDLE_VALUE && handle != NULL) {
+        SetConsoleMode(handle, osty_rt_term_saved_input_mode);
+    }
+    osty_rt_term_raw_mode_active = false;
+}
+
+void *osty_rt_term_set_raw_mode(bool enabled) {
+    static bool restore_registered = false;
+    HANDLE handle = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode;
+    if (!enabled && !osty_rt_term_raw_mode_active) {
+        return NULL;
+    }
+    if (handle == INVALID_HANDLE_VALUE || handle == NULL) {
+        return osty_rt_term_error_message("failed to configure raw terminal mode", "stdin is not a console", "runtime.term.raw.error");
+    }
+    if (!GetConsoleMode(handle, &mode)) {
+        return osty_rt_term_error_message("failed to configure raw terminal mode", "GetConsoleMode failed", "runtime.term.raw.error");
+    }
+    if (!enabled) {
+        if (osty_rt_term_saved_input_mode_valid && !SetConsoleMode(handle, osty_rt_term_saved_input_mode)) {
+            return osty_rt_term_error_message("failed to restore terminal mode", "SetConsoleMode failed", "runtime.term.raw.restore_error");
+        }
+        osty_rt_term_raw_mode_active = false;
+        return NULL;
+    }
+    if (!osty_rt_term_saved_input_mode_valid) {
+        osty_rt_term_saved_input_mode = mode;
+        osty_rt_term_saved_input_mode_valid = true;
+    }
+    if (!restore_registered) {
+        atexit(osty_rt_term_restore_raw_at_exit);
+        restore_registered = true;
+    }
+    mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
+    mode |= ENABLE_VIRTUAL_TERMINAL_INPUT;
+    if (!SetConsoleMode(handle, mode)) {
+        return osty_rt_term_error_message("failed to configure raw terminal mode", "SetConsoleMode failed", "runtime.term.raw.error");
+    }
+    osty_rt_term_raw_mode_active = true;
+    return NULL;
+}
+#else
+static struct termios osty_rt_term_saved_input_mode;
+static bool osty_rt_term_saved_input_mode_valid = false;
+static bool osty_rt_term_raw_mode_active = false;
+
+static void osty_rt_term_restore_raw_at_exit(void) {
+    if (!osty_rt_term_raw_mode_active || !osty_rt_term_saved_input_mode_valid) {
+        return;
+    }
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &osty_rt_term_saved_input_mode);
+    osty_rt_term_raw_mode_active = false;
+}
+
+void *osty_rt_term_set_raw_mode(bool enabled) {
+    static bool restore_registered = false;
+    struct termios raw;
+    if (!enabled && !osty_rt_term_raw_mode_active) {
+        return NULL;
+    }
+    if (!isatty(STDIN_FILENO)) {
+        return osty_rt_term_error_message("failed to configure raw terminal mode", "stdin is not a terminal", "runtime.term.raw.error");
+    }
+    if (!enabled) {
+        errno = 0;
+        if (osty_rt_term_saved_input_mode_valid &&
+            tcsetattr(STDIN_FILENO, TCSAFLUSH, &osty_rt_term_saved_input_mode) != 0) {
+            return osty_rt_term_errno_error("failed to restore terminal mode", "runtime.term.raw.restore_error");
+        }
+        osty_rt_term_raw_mode_active = false;
+        return NULL;
+    }
+    errno = 0;
+    if (!osty_rt_term_saved_input_mode_valid &&
+        tcgetattr(STDIN_FILENO, &osty_rt_term_saved_input_mode) != 0) {
+        return osty_rt_term_errno_error("failed to read terminal mode", "runtime.term.raw.read_error");
+    }
+    osty_rt_term_saved_input_mode_valid = true;
+    if (!restore_registered) {
+        atexit(osty_rt_term_restore_raw_at_exit);
+        restore_registered = true;
+    }
+    raw = osty_rt_term_saved_input_mode;
+    raw.c_iflag &= (tcflag_t) ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+    raw.c_oflag &= (tcflag_t) ~(OPOST);
+    raw.c_cflag |= (tcflag_t)CS8;
+    raw.c_lflag &= (tcflag_t) ~(ECHO | ICANON | IEXTEN | ISIG);
+    raw.c_cc[VMIN] = 1;
+    raw.c_cc[VTIME] = 0;
+    errno = 0;
+    if (tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw) != 0) {
+        return osty_rt_term_errno_error("failed to configure raw terminal mode", "runtime.term.raw.error");
+    }
+    osty_rt_term_raw_mode_active = true;
+    return NULL;
+}
+#endif
 
 /* std.net TCP/DNS surface.
  *
