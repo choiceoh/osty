@@ -8018,6 +8018,208 @@ const char *osty_rt_int_to_string(int64_t value) {
     return osty_rt_string_dup_site(buffer, (size_t)written, "runtime.int.to_string");
 }
 
+/* List<T>.toString runtime entries. One per element ABI lane; each
+ * walks the list once, formats each element with the per-kind
+ * stringifier, and joins with ", " inside "[" / "]" brackets.
+ *
+ * `osty_rt_list_to_string_buf` is the shared body — caller passes a
+ * `format_one` callback that emits one element's text into the
+ * growing buffer. Buffer growth uses the standard size + len pattern
+ * (start at 64 bytes, double on overflow); the result is materialised
+ * into a GC-managed String via `osty_rt_string_dup_site` and the
+ * temporary heap buffer freed.
+ *
+ * The element stringifications match the canonical primitive
+ * formatters: Int via "%lld", Float via the same NaN/Inf-aware path
+ * `osty_rt_float_to_string` already uses, Bool as "true"/"false",
+ * String quoted with `"…"`, Char quoted with `'…'`. Nested
+ * collections are NOT recursed today — `List<List<Int>>.toString()`
+ * still trips a backend gap because there's no list_to_string_ptr
+ * lane registered. Per-list-element `toString` callbacks for
+ * struct / enum payloads land in a follow-up. */
+typedef void (*osty_rt_list_format_one_fn)(char **buf_inout, size_t *cap_inout, size_t *len_inout, const unsigned char *elem);
+
+static void osty_rt_list_to_string_grow(char **buf_inout, size_t *cap_inout, size_t needed) {
+    if (*cap_inout >= needed) {
+        return;
+    }
+    size_t cap = *cap_inout;
+    while (cap < needed) {
+        cap *= 2;
+    }
+    char *next = (char *)realloc(*buf_inout, cap);
+    if (next == NULL) {
+        osty_rt_abort("runtime.list.to_string: out of memory");
+    }
+    *buf_inout = next;
+    *cap_inout = cap;
+}
+
+static void osty_rt_list_to_string_append(char **buf_inout, size_t *cap_inout, size_t *len_inout, const char *src, size_t n) {
+    osty_rt_list_to_string_grow(buf_inout, cap_inout, *len_inout + n + 1);
+    memcpy(*buf_inout + *len_inout, src, n);
+    *len_inout += n;
+}
+
+static const char *osty_rt_list_to_string_finish(osty_rt_list *list, size_t elem_size, osty_rt_list_format_one_fn format_one) {
+    if (list == NULL || list->len == 0) {
+        return osty_rt_string_dup_site("[]", 2, "runtime.list.to_string");
+    }
+    size_t cap = 64;
+    size_t len = 0;
+    char *buf = (char *)malloc(cap);
+    if (buf == NULL) {
+        osty_rt_abort("runtime.list.to_string: out of memory");
+    }
+    buf[len++] = '[';
+    for (int64_t i = 0; i < list->len; i++) {
+        if (i > 0) {
+            osty_rt_list_to_string_append(&buf, &cap, &len, ", ", 2);
+        }
+        const unsigned char *elem = list->data + (size_t)i * elem_size;
+        format_one(&buf, &cap, &len, elem);
+    }
+    osty_rt_list_to_string_grow(&buf, &cap, len + 2);
+    buf[len++] = ']';
+    const char *out = osty_rt_string_dup_site(buf, len, "runtime.list.to_string");
+    free(buf);
+    return out;
+}
+
+static void osty_rt_list_format_i64(char **buf, size_t *cap, size_t *len, const unsigned char *elem) {
+    int64_t v;
+    memcpy(&v, elem, sizeof(v));
+    char tmp[32];
+    int n = snprintf(tmp, sizeof(tmp), "%lld", (long long)v);
+    if (n < 0) {
+        osty_rt_abort("runtime.list.to_string.i64: snprintf failed");
+    }
+    osty_rt_list_to_string_append(buf, cap, len, tmp, (size_t)n);
+}
+
+static void osty_rt_list_format_f64(char **buf, size_t *cap, size_t *len, const unsigned char *elem) {
+    double v;
+    memcpy(&v, elem, sizeof(v));
+    /* Mirror osty_rt_float_to_string's NaN/Inf strings so per-list
+     * formatting matches `f.toString()` byte-for-byte. */
+    if (v != v) {
+        osty_rt_list_to_string_append(buf, cap, len, "NaN", 3);
+        return;
+    }
+    if (v == (double)(1.0 / 0.0)) {
+        osty_rt_list_to_string_append(buf, cap, len, "+Inf", 4);
+        return;
+    }
+    if (v == (double)(-1.0 / 0.0)) {
+        osty_rt_list_to_string_append(buf, cap, len, "-Inf", 4);
+        return;
+    }
+    char tmp[64];
+    int n = snprintf(tmp, sizeof(tmp), "%f", v);
+    if (n < 0) {
+        osty_rt_abort("runtime.list.to_string.f64: snprintf failed");
+    }
+    osty_rt_list_to_string_append(buf, cap, len, tmp, (size_t)n);
+}
+
+static void osty_rt_list_format_i1(char **buf, size_t *cap, size_t *len, const unsigned char *elem) {
+    bool v;
+    memcpy(&v, elem, sizeof(v));
+    if (v) {
+        osty_rt_list_to_string_append(buf, cap, len, "true", 4);
+    } else {
+        osty_rt_list_to_string_append(buf, cap, len, "false", 5);
+    }
+}
+
+static void osty_rt_list_format_string(char **buf, size_t *cap, size_t *len, const unsigned char *elem) {
+    const char *s = NULL;
+    memcpy(&s, elem, sizeof(s));
+    s = (const char *)osty_gc_load_v1((void *)s);
+    osty_rt_list_to_string_append(buf, cap, len, "\"", 1);
+    if (s != NULL) {
+        char decoded[OSTY_RT_SSO_DECODE_BUF_BYTES];
+        const char *src = s;
+        osty_rt_string_decode_to_buf_if_inline(&src, decoded);
+        size_t n = osty_rt_string_len(s);
+        osty_rt_list_to_string_append(buf, cap, len, src, n);
+    }
+    osty_rt_list_to_string_append(buf, cap, len, "\"", 1);
+}
+
+static void osty_rt_list_format_char(char **buf, size_t *cap, size_t *len, const unsigned char *elem) {
+    int32_t cp_signed;
+    memcpy(&cp_signed, elem, sizeof(cp_signed));
+    uint32_t cp = (uint32_t)cp_signed;
+    /* Mirror the UTF-8 layout in `osty_rt_char_to_string`. Inlined
+     * because the existing function returns a heap String and we
+     * just need the raw bytes here. */
+    unsigned char encoded[4];
+    size_t n;
+    if (cp < 0x80U) {
+        encoded[0] = (unsigned char)cp;
+        n = 1;
+    } else if (cp < 0x800U) {
+        encoded[0] = (unsigned char)(0xC0U | (cp >> 6));
+        encoded[1] = (unsigned char)(0x80U | (cp & 0x3FU));
+        n = 2;
+    } else if (cp < 0x10000U) {
+        encoded[0] = (unsigned char)(0xE0U | (cp >> 12));
+        encoded[1] = (unsigned char)(0x80U | ((cp >> 6) & 0x3FU));
+        encoded[2] = (unsigned char)(0x80U | (cp & 0x3FU));
+        n = 3;
+    } else {
+        encoded[0] = (unsigned char)(0xF0U | (cp >> 18));
+        encoded[1] = (unsigned char)(0x80U | ((cp >> 12) & 0x3FU));
+        encoded[2] = (unsigned char)(0x80U | ((cp >> 6) & 0x3FU));
+        encoded[3] = (unsigned char)(0x80U | (cp & 0x3FU));
+        n = 4;
+    }
+    osty_rt_list_to_string_append(buf, cap, len, "'", 1);
+    osty_rt_list_to_string_append(buf, cap, len, (const char *)encoded, n);
+    osty_rt_list_to_string_append(buf, cap, len, "'", 1);
+}
+
+static void osty_rt_list_format_byte(char **buf, size_t *cap, size_t *len, const unsigned char *elem) {
+    int64_t v = (int64_t)*elem;
+    char tmp[8];
+    int n = snprintf(tmp, sizeof(tmp), "%lld", (long long)v);
+    if (n < 0) {
+        osty_rt_abort("runtime.list.to_string.byte: snprintf failed");
+    }
+    osty_rt_list_to_string_append(buf, cap, len, tmp, (size_t)n);
+}
+
+const char *osty_rt_list_to_string_i64(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    return osty_rt_list_to_string_finish(list, sizeof(int64_t), osty_rt_list_format_i64);
+}
+
+const char *osty_rt_list_to_string_f64(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    return osty_rt_list_to_string_finish(list, sizeof(double), osty_rt_list_format_f64);
+}
+
+const char *osty_rt_list_to_string_i1(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    return osty_rt_list_to_string_finish(list, sizeof(bool), osty_rt_list_format_i1);
+}
+
+const char *osty_rt_list_to_string_string(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    return osty_rt_list_to_string_finish(list, sizeof(void *), osty_rt_list_format_string);
+}
+
+const char *osty_rt_list_to_string_char(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    return osty_rt_list_to_string_finish(list, sizeof(int32_t), osty_rt_list_format_char);
+}
+
+const char *osty_rt_list_to_string_byte(void *raw_list) {
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    return osty_rt_list_to_string_finish(list, sizeof(uint8_t), osty_rt_list_format_byte);
+}
+
 /* Monotonic-clock sample in nanoseconds, exported for the benchmark
  * harness (`testing.benchmark(N, || { ... })`). Signed int64 so it
  * round-trips through Osty's `Int` without truncation surprises when

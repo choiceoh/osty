@@ -1168,7 +1168,8 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet,
 		mir.IntrinsicListPop, mir.IntrinsicListFirst, mir.IntrinsicListLast,
 		mir.IntrinsicListRemoveAt, mir.IntrinsicListReverse, mir.IntrinsicListReversed,
-		mir.IntrinsicListIndexOf, mir.IntrinsicListContains, mir.IntrinsicListSlice:
+		mir.IntrinsicListIndexOf, mir.IntrinsicListContains, mir.IntrinsicListSlice,
+		mir.IntrinsicListToString:
 		return true
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapGetOr,
 		mir.IntrinsicMapSet, mir.IntrinsicMapContains, mir.IntrinsicMapLen,
@@ -4046,7 +4047,8 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet,
 		mir.IntrinsicListPop, mir.IntrinsicListFirst, mir.IntrinsicListLast,
 		mir.IntrinsicListRemoveAt, mir.IntrinsicListReverse, mir.IntrinsicListReversed,
-		mir.IntrinsicListIndexOf, mir.IntrinsicListContains, mir.IntrinsicListSlice:
+		mir.IntrinsicListIndexOf, mir.IntrinsicListContains, mir.IntrinsicListSlice,
+		mir.IntrinsicListToString:
 		return g.emitListIntrinsic(i)
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapGetOr,
 		mir.IntrinsicMapSet, mir.IntrinsicMapContains, mir.IntrinsicMapLen,
@@ -4415,6 +4417,45 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		// across the allocation because the source list stays
 		// reachable through the caller's local.
 		sym := mirRtListReversedSymbol()
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: listReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicListToString:
+		// `[a, b, c]`-style stringification. The runtime ships one
+		// formatter per element ABI lane; pick by the receiver's
+		// element type. Lists of struct/enum/composite ptr values
+		// don't have a per-list formatter today and surface as
+		// unsupported until a callback-driven runtime entry lands.
+		var sym string
+		switch elemLLVM {
+		case "i64":
+			sym = "osty_rt_list_to_string_i64"
+		case "double":
+			sym = "osty_rt_list_to_string_f64"
+		case "i1":
+			sym = "osty_rt_list_to_string_i1"
+		case "i32":
+			// Char (i32) — the byte-pattern for UTF-8 codepoints. No
+			// other i32-shaped element types exist in the current
+			// surface (Int32 is encoded as i32 too, but List<Int32>
+			// doesn't reach this lowering today; if it ever does we
+			// add a separate suffix).
+			sym = "osty_rt_list_to_string_char"
+		case "i8":
+			sym = "osty_rt_list_to_string_byte"
+		case "ptr":
+			// Only String elements supported; other ptr-shaped
+			// elements (List, Map, Set, struct/enum payloads) need a
+			// per-kind callback the runtime doesn't expose yet.
+			if elemT != mir.TString {
+				return unsupported("mir-mvp", fmt.Sprintf("list_to_string on composite element type %s", mirTypeString(elemT)))
+			}
+			sym = "osty_rt_list_to_string_string"
+		default:
+			return unsupported("mir-mvp", fmt.Sprintf("list_to_string on element type %s", elemLLVM))
+		}
 		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: listReg}})

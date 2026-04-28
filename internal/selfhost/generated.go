@@ -36526,6 +36526,12 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "reverse", owner: "List", receiverTy: tListT, retTy: tUnit(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16404:5
 	checkRegisterFn(env, &CheckFnSig{name: "sort", owner: "List", receiverTy: tListT, retTy: tUnit(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// `[a, b, c]`-style stringification. Backend dispatches on
+	// element ABI lane to one of `osty_rt_list_to_string_*`. Element
+	// types beyond the primitive widths + String surface as
+	// "code generation is not implemented yet" until the runtime
+	// gains a callback-driven entry.
+	checkRegisterFn(env, &CheckFnSig{name: "toString", owner: "List", receiverTy: tListT, retTy: tString(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16411:5
 	checkRegisterFn(env, &CheckFnSig{name: "insert", owner: "Map", receiverTy: tMapKV, retTy: tUnit(tys), paramNames: []string{"key", "value"}, paramTys: []int{tK, tV}, generics: []string{"K", "V"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16416:5

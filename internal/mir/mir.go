@@ -493,6 +493,11 @@ const (
 	// IntrinsicListReversed returns a freshly allocated copy of the list
 	// with elements in reverse order. Args: [list]. Dest is List<T>.
 	IntrinsicListReversed
+	// IntrinsicListToString returns a `[a, b, c]`-shaped String. Args:
+	// [list]. Dest is String. Backend dispatches to one of
+	// `osty_rt_list_to_string_{i64,f64,i1,string,char,byte}` based on
+	// the receiver's element ABI lane.
+	IntrinsicListToString
 
 	// ---- stdlib collections: Map<K, V> ----
 
