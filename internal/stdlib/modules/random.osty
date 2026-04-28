@@ -1,8 +1,7 @@
 // std.random — non-cryptographic pseudorandom numbers (spec §10.14).
 //
-// Primitive methods and constructors are body-less; the backend lowers
-// them to the runtime RNG bridge. `choice` is a derived helper with a
-// real Osty body that composes over the primitive surface.
+// Constructors and primitive methods are runtime-backed. `choice`
+// stays as the canonical derived helper over the primitive surface.
 
 pub struct Rng {
     pub fn int(self, min: Int, max: Int) -> Int
