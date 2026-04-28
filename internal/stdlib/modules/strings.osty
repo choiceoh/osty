@@ -1033,6 +1033,10 @@ pub fn lastIndexOf(s: String, substr: String) -> Int? {
     }
 }
 
+pub fn LastIndex(s: String, substr: String) -> Int {
+    lastIndexOfChars(s.chars(), substr.chars())
+}
+
 pub fn count(s: String, substr: String) -> Int {
     let chars = s.chars()
     let needle = substr.chars()

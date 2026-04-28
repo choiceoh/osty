@@ -3172,7 +3172,7 @@ fn srCheckDuplicateVariantJSONTags(
             continue
         }
         let tagOpt = srJsonVariantTag(file, memberIdx)
-        if tagOpt == None {
+        if tagOpt.isNone() {
             continue
         }
         let tag = match tagOpt { Some(t) -> t, None -> "" }

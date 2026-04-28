@@ -11921,7 +11921,6 @@ func mirLshrTypedLine(dst, typ, a, b string) string {
 	return "  " + dst + " = lshr " + typ + " " + a + ", " + b + "\n"
 }
 
-
 // Osty: mirFCmpOEqLine
 func mirFCmpOEqLine(dst, typ, a, b string) string {
 	return "  " + dst + " = fcmp oeq " + typ + " " + a + ", " + b + "\n"

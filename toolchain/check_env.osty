@@ -2317,7 +2317,7 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
     // String are wired today, composite element types still surface
     // as "not implemented yet".
     checkRegisterFn(env, CheckFnSig {
-        name: "toString", owner: "List", receiverTy: tListT, hasReceiver: true, retTy: tString_,
+        name: "toString", owner: "List", receiverTy: tListT, hasReceiver: true, retTy: tString(tys),
         paramNames: [], paramTys: [],
         generics: ["T"], genericBounds: [],
     })
@@ -2373,7 +2373,7 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
     // `key_kind` / `value_kind` to pick per-element formatters.
     // Composite K/V types abort inside the runtime today.
     checkRegisterFn(env, CheckFnSig {
-        name: "toString", owner: "Map", receiverTy: tMapKV, hasReceiver: true, retTy: tString_,
+        name: "toString", owner: "Map", receiverTy: tMapKV, hasReceiver: true, retTy: tString(tys),
         paramNames: [], paramTys: [],
         generics: ["K", "V"], genericBounds: [],
     })
@@ -2521,7 +2521,7 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
     // to pick a per-element formatter. Composite element types
     // abort inside the runtime today.
     checkRegisterFn(env, CheckFnSig {
-        name: "toString", owner: "Set", receiverTy: tSetT, hasReceiver: true, retTy: tString_,
+        name: "toString", owner: "Set", receiverTy: tSetT, hasReceiver: true, retTy: tString(tys),
         paramNames: [], paramTys: [],
         generics: ["T"], genericBounds: [],
     })
