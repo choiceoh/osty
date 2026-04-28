@@ -1,15 +1,29 @@
-// std.fs — filesystem access (minimal subset per spec §10.1).
+// std.fs — practical filesystem access.
 //
-// The Tier 1 surface is intentionally narrow: read the whole file,
-// write the whole file, check existence, remove. Streaming I/O, file
-// handles, and directory iteration live in higher-tier modules. The
-// runtime implementation is provided by the generator's std.fs bridge.
+// The Tier 1 surface stays intentionally whole-file oriented: read and
+// write files, probe existence, create/remove/rename paths, and create
+// directories. Streaming handles remain a higher-tier concern. The
+// concrete behavior is provided by the backend/runtime bridge.
 // `readToString` returns Err when the file bytes are not valid UTF-8.
 
+pub fn read(path: String) -> Result<Bytes, Error>
+
 pub fn readToString(path: String) -> Result<String, Error>
+
+pub fn write(path: String, contents: Bytes) -> Result<(), Error>
 
 pub fn writeString(path: String, contents: String) -> Result<(), Error>
 
 pub fn exists(path: String) -> Bool
 
+pub fn create(path: String) -> Result<(), Error>
+
 pub fn remove(path: String) -> Result<(), Error>
+
+pub fn rename(from: String, to: String) -> Result<(), Error>
+
+pub fn copy(from: String, to: String) -> Result<(), Error>
+
+pub fn mkdir(path: String) -> Result<(), Error>
+
+pub fn mkdirAll(path: String) -> Result<(), Error>

@@ -378,13 +378,10 @@ exits.
 
 ```osty
 fn process(path: String) -> Result<(), Error> {
-    let f = fs.open(path)?
-    defer f.close()
-
     let conn = net.connect("api.com")?
     defer conn.close()
 
-    let data = f.read()?
+    let data = fs.read(path)?
     let result = conn.send(data)?
     Ok(())
 }
@@ -394,9 +391,11 @@ Inside a loop, `defer` runs at the end of each iteration:
 
 ```osty
 for path in paths {
-    let f = fs.open(path)?
-    defer f.close()
-    process(f)?
+    let tmp = path + ".tmp"
+    defer {
+        ignoreError(fs.remove(tmp))
+    }
+    process(path)?
 }
 ```
 
