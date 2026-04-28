@@ -22,6 +22,19 @@ func TestToolchainCheckerBundleIsToolchainOnly(t *testing.T) {
 	}
 }
 
+func TestToolchainCheckerBundleExcludesBootstrapOnlyAdapters(t *testing.T) {
+	root := filepath.Join("..", "..", "..")
+	for _, rel := range ToolchainCheckerFiles() {
+		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatalf("read %s: %v", rel, err)
+		}
+		if hasBootstrapOnlyUse(data) {
+			t.Fatalf("toolchain checker bundle includes bootstrap-only adapter %q", rel)
+		}
+	}
+}
+
 func TestMergeFilesPrependsPreludeAndNormalizesStringsUsage(t *testing.T) {
 	root := t.TempDir()
 	writeBundleFile(t, root, "go_strings.osty", `use go "strings" as strings {
@@ -129,6 +142,20 @@ func writeBundleFile(t *testing.T, root, rel, contents string) {
 func contains(items []string, want string) bool {
 	for _, item := range items {
 		if item == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hasBootstrapOnlyUse(src []byte) bool {
+	for _, line := range strings.Split(string(src), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, `use go "`) ||
+			strings.HasPrefix(trimmed, "use runtime.golegacy.") {
 			return true
 		}
 	}

@@ -19,13 +19,17 @@ Today the public entrypoints are:
 The exact merged Osty inputs live in
 [`internal/selfhost/bundle/bundle.go`](./bundle/bundle.go):
 
-- `ToolchainCheckerFiles()` feeds the native checker binary
+- `ToolchainCheckerFiles()` is the native-checker-ready toolchain core; it
+  deliberately excludes bootstrap-only Go bridge adapters.
 
 Notable inputs currently include:
 
 - `toolchain/{semver,semver_parse,frontend,lexer,parser,formatter_ast,check_bridge,diagnostic,check_diag,diag_manifest,diag_examples,ty,core,check_env,solve,elab,check,resolve,lint}.osty`
 - `toolchain/lsp.osty`
-- `internal/selfhost/ast_lower.osty`
+
+`internal/selfhost/ast_lower.osty` remains as the public-AST compatibility
+adapter used by legacy Go callers, but it is not part of the native checker
+bundle because it imports the Go `astbridge` surface.
 
 `internal/selfhost/generated.go` and `internal/selfhost/astbridge/generated.go`
 are committed seed artifacts — the Osty→Go bootstrap transpiler that produced

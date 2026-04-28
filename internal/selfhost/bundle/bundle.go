@@ -33,7 +33,6 @@ var toolchainCheckerFiles = []string{
 	"toolchain/inspect.osty",
 	"toolchain/inspect_hint.osty",
 	"toolchain/toml.osty",
-	"internal/selfhost/ast_lower.osty",
 }
 
 const stringsPrelude = `use runtime.strings as strings {

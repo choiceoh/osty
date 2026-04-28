@@ -10,7 +10,12 @@ Today they pull from:
 
 - `toolchain/*.osty` for the front-end/checker/backend-facing logic
 - including `toolchain/lsp.osty` for the self-hosted LSP pure-policy surface
-- `internal/selfhost/ast_lower.osty` for the Go-bridge lowering step
+
+The native checker bundle deliberately excludes
+`internal/selfhost/ast_lower.osty`. That file is still present under
+`internal/selfhost/` as a public-AST compatibility adapter for legacy Go
+callers, but it imports the Go `astbridge` surface and must not be part of the
+native-selfhost checker input set.
 
 Mainstream Go packages should call `internal/lexer`, `internal/parser`, and
 `internal/check`. `internal/lexer` and `internal/parser` are thin facades over
