@@ -965,12 +965,17 @@ static inline void osty_gc_dispatch_trace(osty_gc_header *header) {
         osty_gc_kind_descriptor_lookup(header->object_kind);
     osty_gc_trace_fn fn;
     if (desc != NULL) {
-        osty_gc_dispatch_via_descriptor_total += 1;
+        /* Phase 0M: atomic add — multiple bg markers race on this
+         * counter when Phase 0c spawns N>=2 workers. RELAXED is
+         * fine for monotonic diagnostic counters. */
+        (void)__atomic_add_fetch(&osty_gc_dispatch_via_descriptor_total,
+                                 1, __ATOMIC_RELAXED);
         fn = desc->trace;
     } else {
         /* GENERIC fallback: pattern lookup replaces the per-header
          * fn-pointer field that Phase 4 dropped. */
-        osty_gc_dispatch_via_header_total += 1;
+        (void)__atomic_add_fetch(&osty_gc_dispatch_via_header_total,
+                                 1, __ATOMIC_RELAXED);
         fn = osty_gc_generic_patterns[header->generic_pattern].trace;
     }
     if (fn != NULL) {
@@ -983,10 +988,12 @@ static inline void osty_gc_dispatch_destroy(osty_gc_header *header) {
         osty_gc_kind_descriptor_lookup(header->object_kind);
     osty_gc_destroy_fn fn;
     if (desc != NULL) {
-        osty_gc_dispatch_via_descriptor_total += 1;
+        (void)__atomic_add_fetch(&osty_gc_dispatch_via_descriptor_total,
+                                 1, __ATOMIC_RELAXED);
         fn = desc->destroy;
     } else {
-        osty_gc_dispatch_via_header_total += 1;
+        (void)__atomic_add_fetch(&osty_gc_dispatch_via_header_total,
+                                 1, __ATOMIC_RELAXED);
         fn = osty_gc_generic_patterns[header->generic_pattern].destroy;
     }
     if (fn != NULL) {
@@ -4558,7 +4565,12 @@ static osty_gc_header *osty_gc_find_header(void *payload) {
      * a misaligned interior pointer falsely matching some object's
      * header. The linked list `osty_gc_objects` is purely iteration
      * order for mark seeding / sweep / validate; it isn't probed here. */
-    osty_gc_index_find_ops_total += 1;
+    /* Phase 0M: atomic add — `find_header` runs concurrently from
+     * mutator paths (post_write, alloc lookup) and the bg marker's
+     * trace, so plain increment races. RELAXED is enough for a
+     * monotonic counter. */
+    (void)__atomic_add_fetch(&osty_gc_index_find_ops_total, 1,
+                             __ATOMIC_RELAXED);
     if (osty_rt_string_is_inline((const char *)payload)) {
         return NULL;
     }
@@ -5479,7 +5491,15 @@ static int64_t osty_gc_local_mark_overflow_total = 0;
 static OSTY_RT_TLS bool osty_gc_in_lockfree_trace = false;
 
 static void osty_gc_mark_stack_push_central(osty_gc_header *header) {
-    if (osty_gc_mark_stack_count == osty_gc_mark_stack_cap) {
+    /* Phase 0M: atomic load. Even though every push_central call
+     * runs under `osty_gc_lock`, TSAN doesn't reliably track the
+     * recursive pthread mutex used here, so we make the reads and
+     * writes explicit atomics to give the analyzer a clean
+     * happens-before chain. RELAXED is correct because the lock
+     * itself sequences the store/load pairs across threads. */
+    int64_t cur_count = __atomic_load_n(&osty_gc_mark_stack_count,
+                                        __ATOMIC_RELAXED);
+    if (cur_count == osty_gc_mark_stack_cap) {
         int64_t new_cap;
         osty_gc_header **new_buf;
         new_cap = osty_gc_mark_stack_cap == 0 ? 64 : osty_gc_mark_stack_cap * 2;
@@ -5491,7 +5511,9 @@ static void osty_gc_mark_stack_push_central(osty_gc_header *header) {
         osty_gc_mark_stack = new_buf;
         osty_gc_mark_stack_cap = new_cap;
     }
-    osty_gc_mark_stack[osty_gc_mark_stack_count++] = header;
+    osty_gc_mark_stack[cur_count] = header;
+    int64_t new_count = cur_count + 1;
+    __atomic_store_n(&osty_gc_mark_stack_count, new_count, __ATOMIC_RELAXED);
     /* Phase 0e': effective queue depth includes the calling thread's
      * TLS local stack — important when the local cap is hit and
      * subsequent pushes spill here. Without folding `local_mark_top`
@@ -5499,9 +5521,19 @@ static void osty_gc_mark_stack_push_central(osty_gc_header *header) {
      * `osty_gc_mark_stack_count` tops out around (graph_size - cap)
      * instead of the actual queue size. */
     int64_t effective =
-        (int64_t)osty_gc_local_mark_stack_top + osty_gc_mark_stack_count;
-    if (effective > osty_gc_mark_stack_max_depth) {
-        osty_gc_mark_stack_max_depth = effective;
+        (int64_t)osty_gc_local_mark_stack_top + new_count;
+    /* Phase 0M: atomic max via CAS loop. Multiple bg markers may
+     * push concurrently and each may bump the watermark; the loop
+     * re-reads the current value on contention so the final
+     * watermark is always max-of-all-pushes. */
+    int64_t prev_max = __atomic_load_n(&osty_gc_mark_stack_max_depth,
+                                       __ATOMIC_RELAXED);
+    while (effective > prev_max &&
+           !__atomic_compare_exchange_n(&osty_gc_mark_stack_max_depth,
+                                        &prev_max, effective,
+                                        false, __ATOMIC_RELAXED,
+                                        __ATOMIC_RELAXED)) {
+        /* prev_max reloaded by CAS-failure; loop re-checks. */
     }
 }
 
@@ -5518,9 +5550,16 @@ static void osty_gc_mark_stack_push(osty_gc_header *header) {
          * here so the watermark stays meaningful. */
         int64_t effective =
             (int64_t)osty_gc_local_mark_stack_top +
-            osty_gc_mark_stack_count;
-        if (effective > osty_gc_mark_stack_max_depth) {
-            osty_gc_mark_stack_max_depth = effective;
+            __atomic_load_n(&osty_gc_mark_stack_count, __ATOMIC_RELAXED);
+        /* Phase 0M: atomic max via CAS loop (same pattern as
+         * push_central). */
+        int64_t prev_max = __atomic_load_n(&osty_gc_mark_stack_max_depth,
+                                           __ATOMIC_RELAXED);
+        while (effective > prev_max &&
+               !__atomic_compare_exchange_n(&osty_gc_mark_stack_max_depth,
+                                            &prev_max, effective,
+                                            false, __ATOMIC_RELAXED,
+                                            __ATOMIC_RELAXED)) {
         }
         return;
     }
@@ -5594,13 +5633,15 @@ static void osty_gc_mark_header(osty_gc_header *header) {
         return;
     }
     uint8_t expected = OSTY_GC_COLOR_WHITE;
-    osty_gc_mark_cas_attempts_total += 1;
+    (void)__atomic_add_fetch(&osty_gc_mark_cas_attempts_total, 1,
+                             __ATOMIC_RELAXED);
     if (!__atomic_compare_exchange_n(&header->color, &expected,
                                      OSTY_GC_COLOR_GREY,
                                      false /* strong */,
                                      __ATOMIC_ACQ_REL,
                                      __ATOMIC_ACQUIRE)) {
-        osty_gc_mark_cas_failures_total += 1;
+        (void)__atomic_add_fetch(&osty_gc_mark_cas_failures_total, 1,
+                                 __ATOMIC_RELAXED);
         return;
     }
     __atomic_store_n(&header->marked, true, __ATOMIC_RELAXED);
@@ -5630,13 +5671,20 @@ static int64_t osty_gc_mark_drain_budget(int64_t budget) {
     osty_gc_local_mark_active = true;
 
     while ((osty_gc_local_mark_stack_top > 0 ||
-            osty_gc_mark_stack_count > 0) &&
+            __atomic_load_n(&osty_gc_mark_stack_count,
+                            __ATOMIC_RELAXED) > 0) &&
            (unlimited || done < budget)) {
         osty_gc_header *header;
         if (osty_gc_local_mark_stack_top > 0) {
             header = osty_gc_local_mark_stack[--osty_gc_local_mark_stack_top];
         } else {
-            header = osty_gc_mark_stack[--osty_gc_mark_stack_count];
+            /* Atomic decrement under gc_lock — caller holds the lock,
+             * so the read-modify-write is exclusive. The atomic just
+             * gives TSAN explicit happens-before tracking that the
+             * recursive pthread mutex doesn't reliably provide. */
+            int64_t idx = __atomic_sub_fetch(&osty_gc_mark_stack_count,
+                                             1, __ATOMIC_RELAXED);
+            header = osty_gc_mark_stack[idx];
         }
         /* Phase 0g: atomic store. The pop above already serialised
          * "this header is exclusively ours to trace", so we don't need
@@ -5698,9 +5746,19 @@ static void osty_gc_mark_root_slot(void *slot_addr) {
     if (payload == NULL) {
         return;
     }
-    payload = osty_gc_forward_payload(payload);
-    memcpy(slot_addr, &payload, sizeof(payload));
-    osty_gc_mark_payload(payload);
+    /* Phase 0M: skip the write-back when forwarding doesn't move
+     * the payload. The unconditional `memcpy(slot_addr, &payload)`
+     * was always racing with concurrent mutator reads of the slot
+     * (set_find_index, list_get, map_find — every container probe
+     * reads slot bytes), even though the value was identical. The
+     * conditional write keeps forwarding semantics for rare
+     * compaction cycles while letting the common no-forward case
+     * stay race-free against a mutator reader. */
+    void *forwarded = osty_gc_forward_payload(payload);
+    if (forwarded != payload) {
+        memcpy(slot_addr, &forwarded, sizeof(forwarded));
+    }
+    osty_gc_mark_payload(forwarded);
 }
 
 static void osty_gc_trace_slot_with_mode(osty_rt_trace_slot_fn trace,
@@ -7276,7 +7334,8 @@ static void *osty_gc_bg_marker_main(void *arg) {
      * 4× is heuristic — small enough that N=4 workers get multiple
      * turns on a few-hundred-item graph, large enough to amortise the
      * per-batch acquire/release cycle. */
-    int n = osty_gc_bg_marker_worker_count;
+    int n = __atomic_load_n(&osty_gc_bg_marker_worker_count,
+                             __ATOMIC_ACQUIRE);
     int64_t per_iter = budget;
     if (n >= 2) {
         per_iter = budget / 4;
@@ -7315,7 +7374,8 @@ static void *osty_gc_bg_marker_main(void *arg) {
                     osty_gc_bg_marker_per_worker_drained
                         [osty_gc_bg_marker_worker_id] += done;
                 }
-                int64_t remaining = osty_gc_mark_stack_count;
+                int64_t remaining = __atomic_load_n(
+                    &osty_gc_mark_stack_count, __ATOMIC_RELAXED);
                 /* Phase 0e: when the mark queue empties under our lock,
                  * transition the cycle to SWEEPING and seed the cursor
                  * so the very next iteration picks up sweep work. The
@@ -7401,6 +7461,21 @@ static void osty_gc_bg_marker_ensure_started(void) {
     if (n > OSTY_GC_BG_MARKER_MAX_WORKERS) {
         n = OSTY_GC_BG_MARKER_MAX_WORKERS;
     }
+    /* Phase 0M: prime every env-var loader the bg marker reads
+     * BEFORE pthread_create. The loaders use a non-atomic
+     * `_loaded` flag for caching, so two markers calling them
+     * simultaneously on first start would race. Calling them here
+     * (single-threaded, under `osty_gc_lock` via the kick path)
+     * makes every subsequent call a clean memoised read. */
+    (void)osty_gc_bg_marker_budget_now();
+    /* Publish the worker count BEFORE spawning the threads so each
+     * marker's `osty_gc_bg_marker_main` reads the final value via
+     * pthread_create's happens-before edge. The atomic store pairs
+     * with the atomic load at the top of the marker function — TSAN
+     * reports a data race on plain accesses even though pthread_create
+     * itself synchronises, because the load happens on every cycle
+     * (not just startup) once the marker keeps running. */
+    __atomic_store_n(&osty_gc_bg_marker_worker_count, n, __ATOMIC_RELEASE);
     for (int i = 0; i < n; i++) {
         if (osty_rt_thread_start(&osty_gc_bg_marker_threads[i],
                                  osty_gc_bg_marker_main,
@@ -7408,7 +7483,6 @@ static void osty_gc_bg_marker_ensure_started(void) {
             osty_rt_abort("bg marker: thread start failed");
         }
     }
-    osty_gc_bg_marker_worker_count = n;
     osty_gc_bg_marker_started = 1;
     osty_rt_enable_concurrency_runtime();
 }
@@ -7672,9 +7746,14 @@ static void osty_rt_list_copy_initialized(void *raw_list, osty_rt_list *list, co
 static OSTY_HOT_INLINE void osty_rt_list_push_raw(void *raw_list, const void *value, size_t elem_size, osty_rt_trace_slot_fn trace_elem) {
     osty_rt_list *list = osty_rt_list_cast(raw_list);
     osty_rt_list_ensure_layout(list, elem_size, trace_elem);
-    osty_rt_list_reserve(list, list->len + 1);
-    memcpy(list->data + ((size_t)list->len * list->elem_size), value, elem_size);
-    list->len += 1;
+    int64_t old_len = list->len;
+    osty_rt_list_reserve(list, old_len + 1);
+    memcpy(list->data + ((size_t)old_len * list->elem_size), value, elem_size);
+    /* Phase 0M: RELEASE-store paired with `osty_rt_list_trace`'s
+     * ACQUIRE-load. Publishing the new len after the memcpy lets a
+     * concurrent marker observe both the longer length AND the
+     * populated slot atomically. */
+    __atomic_store_n(&list->len, old_len + 1, __ATOMIC_RELEASE);
 }
 
 static void *osty_rt_list_get_raw(void *raw_list, int64_t index, size_t elem_size, osty_rt_trace_slot_fn trace_elem) {
@@ -10465,11 +10544,18 @@ static OSTY_HOT_INLINE void osty_rt_map_insert_raw(void *raw_map, const void *ke
     if (index < 0) {
         osty_rt_map_reserve(map, map->len + 1);
         index = map->len;
-        map->len += 1;
         inserted = true;
     }
     memcpy(osty_rt_map_key_slot(map, index), key, key_size);
     memcpy(osty_rt_map_value_slot(map, index), value, map->value_size);
+    if (inserted) {
+        /* Phase 0M: RELEASE-store len AFTER the slot's key/value
+         * are fully written so a concurrent marker that observes
+         * the new len sees the populated slot. The previous
+         * `map->len += 1` ahead of memcpy left a window where the
+         * marker could read the new len + stale slot bytes. */
+        __atomic_store_n(&map->len, index + 1, __ATOMIC_RELEASE);
+    }
     /* Phase E follow-up: post-write barrier for managed keys/values.
      * Without this `Map<String, _>` writes go untracked — cheney_minor
      * has to walk every pinned OLD owner and re-trace its full payload
@@ -11150,8 +11236,14 @@ bool osty_rt_set_insert_##suffix(void *raw_set, ctype item) { \
     if (osty_rt_set_find_index(set, &item) >= 0) { return false; } \
     elem_size = osty_rt_kind_size(set->elem_kind); \
     osty_rt_set_reserve(set, set->len + 1); \
-    memcpy(set->items + ((size_t)set->len * elem_size), &item, elem_size); \
-    set->len += 1; \
+    { \
+        int64_t _old_len = set->len; \
+        memcpy(set->items + ((size_t)_old_len * elem_size), &item, elem_size); \
+        /* Phase 0M: RELEASE-store after slot populated so a \
+         * concurrent marker observing the new len also sees the \
+         * new item bytes. */ \
+        __atomic_store_n(&set->len, _old_len + 1, __ATOMIC_RELEASE); \
+    } \
     /* Phase E follow-up: post-write barrier for managed elements. \
      * Same rationale as Map.insert — without this cheney has to walk \
      * every pinned Set's full payload looking for OLD→YOUNG edges, \
@@ -13994,7 +14086,8 @@ void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) {
          * idempotent and ensures exactly one push per WHITE→GREY
          * transition. */
         uint8_t expected = OSTY_GC_COLOR_WHITE;
-        osty_gc_mark_cas_attempts_total += 1;
+        (void)__atomic_add_fetch(&osty_gc_mark_cas_attempts_total, 1,
+                                 __ATOMIC_RELAXED);
         if (__atomic_compare_exchange_n(&old_header->color, &expected,
                                         OSTY_GC_COLOR_GREY,
                                         false /* strong */,
@@ -14002,9 +14095,11 @@ void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) {
                                         __ATOMIC_ACQUIRE)) {
             __atomic_store_n(&old_header->marked, true, __ATOMIC_RELAXED);
             osty_gc_mark_stack_push(old_header);
-            osty_gc_satb_barrier_greyed_total += 1;
+            (void)__atomic_add_fetch(&osty_gc_satb_barrier_greyed_total,
+                                     1, __ATOMIC_RELAXED);
         } else {
-            osty_gc_mark_cas_failures_total += 1;
+            (void)__atomic_add_fetch(&osty_gc_mark_cas_failures_total, 1,
+                                     __ATOMIC_RELAXED);
         }
     }
     owner_header = osty_gc_find_header_or_forwarded(owner);

@@ -2528,3 +2528,169 @@ int main(void) {
 		t.Fatalf("runtime map-lock harness stdout = %q, want %q", got, want)
 	}
 }
+
+// TestBundledRuntimeTsanConcurrentGcRaceFree exercises the concurrent-GC
+// surface (Phase 0a–0jk) under ThreadSanitizer. The harness drives a
+// bg marker thread + multiple parallel workers (Phase 0c) while the
+// main mutator pushes / inserts / reads list, map, set, and
+// closure_env payloads — i.e., every kind whose tracer is now
+// lockfree-safe (Phase 0h, 0i, 0j, 0k) plus the deferred-free buffer
+// queue. TSAN catches data races at runtime; the test asserts the
+// binary exits cleanly with no `WARNING: ThreadSanitizer` output.
+//
+// Skipped when TSAN isn't available on the platform / clang build.
+func TestBundledRuntimeTsanConcurrentGcRaceFree(t *testing.T) {
+	if testing.Short() {
+		t.Skip("tsan sweep skipped in -short")
+	}
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_gc_tsan_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_gc_tsan_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+
+#if defined(__APPLE__)
+#define OSTY_GC_SYMBOL(name) "_" name
+#else
+#define OSTY_GC_SYMBOL(name) name
+#endif
+
+#define OSTY_RT_ABI_PTR 4
+
+void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
+void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.pre_write_v1"));
+void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.post_write_v1"));
+void osty_gc_root_bind_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_bind_v1"));
+void osty_gc_root_release_v1(void *root) __asm__(OSTY_GC_SYMBOL("osty.gc.root_release_v1"));
+void *osty_rt_closure_env_alloc_v2(int64_t capture_count, const char *site, uint64_t pointer_bitmap) __asm__(OSTY_GC_SYMBOL("osty.rt.closure_env_alloc_v2"));
+
+void *osty_rt_list_new(void);
+void osty_rt_list_push_ptr(void *list, void *value);
+
+void *osty_rt_map_new(int64_t key_kind, int64_t value_kind, int64_t value_size, void *value_trace);
+void osty_rt_map_insert_ptr(void *raw_map, void *key, const void *value);
+
+void *osty_rt_set_new(int64_t elem_kind);
+int osty_rt_set_insert_ptr(void *raw_set, void *item);
+
+void osty_gc_collect_incremental_start_with_stack_roots(void *const *root_slots, int64_t root_slot_count);
+void osty_gc_collect_incremental_finish(void);
+void osty_rt_thread_sleep(int64_t nanos);
+
+int64_t osty_gc_debug_state(void);
+int64_t osty_gc_debug_live_count(void);
+
+int main(void) {
+    /* Hold an instance of every lockfree-safe kind that has a
+     * non-trivial tracer + grow path. The bg marker traces all of
+     * them concurrently with the loop's mutations below; TSAN
+     * watches every load/store along the way. */
+    void *list = osty_rt_list_new();
+    osty_gc_root_bind_v1(list);
+    void *map = osty_rt_map_new(OSTY_RT_ABI_PTR, OSTY_RT_ABI_PTR,
+                                (int64_t)sizeof(void *), NULL);
+    osty_gc_root_bind_v1(map);
+    void *set = osty_rt_set_new(OSTY_RT_ABI_PTR);
+    osty_gc_root_bind_v1(set);
+    void *env = osty_rt_closure_env_alloc_v2(4, "env", 0xF);
+    osty_gc_root_bind_v1(env);
+
+    /* Pre-seed each container so the first mid-cycle insert hits
+     * the heap-backed grow path (rather than the inline path). */
+    enum { PRE = 24 };
+    for (int i = 0; i < PRE; i++) {
+        void *child = osty_gc_alloc_v1(7, 16, "pre");
+        osty_gc_pre_write_v1(list, NULL, 0);
+        osty_rt_list_push_ptr(list, child);
+        osty_gc_post_write_v1(list, child, 0);
+
+        void *k = osty_gc_alloc_v1(7, 16, "pk");
+        void *v = osty_gc_alloc_v1(7, 16, "pv");
+        osty_rt_map_insert_ptr(map, k, &v);
+
+        void *s = osty_gc_alloc_v1(7, 16, "ps");
+        osty_rt_set_insert_ptr(set, s);
+    }
+
+    /* Drive multiple cycles. Each iteration:
+     *   1. Start a cycle (bg marker kicks).
+     *   2. Mutator continues to insert / push / alloc — exercises
+     *      every Phase 0i/0j/0k deferred-free + atomic-snapshot
+     *      path concurrently with the bg marker's trace.
+     *   3. Sleep briefly to let the bg marker make progress.
+     *   4. Finish the cycle.
+     *
+     * If any of the lockfree paths has a data race, TSAN prints
+     * a WARNING:ThreadSanitizer line and (with halt_on_error=1)
+     * exits non-zero — the Go driver greps for that string. */
+    enum { CYCLES = 5, INSERTS_PER = 40 };
+    for (int c = 0; c < CYCLES; c++) {
+        osty_gc_collect_incremental_start_with_stack_roots(NULL, 0);
+        for (int i = 0; i < INSERTS_PER; i++) {
+            void *child = osty_gc_alloc_v1(7, 16, "mid");
+            osty_gc_pre_write_v1(list, NULL, 0);
+            osty_rt_list_push_ptr(list, child);
+            osty_gc_post_write_v1(list, child, 0);
+
+            void *k = osty_gc_alloc_v1(7, 16, "mk");
+            void *v = osty_gc_alloc_v1(7, 16, "mv");
+            osty_rt_map_insert_ptr(map, k, &v);
+
+            void *s = osty_gc_alloc_v1(7, 16, "ms");
+            osty_rt_set_insert_ptr(set, s);
+        }
+        /* 5ms — bg marker has a real chance to drain mark + sweep
+         * concurrently with our mutations above. */
+        osty_rt_thread_sleep(5LL * 1000LL * 1000LL);
+        osty_gc_collect_incremental_finish();
+    }
+
+    long long state = (long long)osty_gc_debug_state();
+    long long live  = (long long)osty_gc_debug_live_count();
+    printf("state=%lld live=%lld\n", state, live);
+
+    osty_gc_root_release_v1(env);
+    osty_gc_root_release_v1(set);
+    osty_gc_root_release_v1(map);
+    osty_gc_root_release_v1(list);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+	cmd := runtimeClangCommand("-fsanitize=thread", "-O1", "-g",
+		"-std=c11", "-pthread", runtimePath, harnessPath, "-o", binaryPath)
+	buildOut, err := cmd.CombinedOutput()
+	if err != nil {
+		/* TSAN unavailable on some platforms (Windows is the
+		 * obvious one). Skip rather than fail. */
+		t.Skipf("clang -fsanitize=thread unavailable on this platform: %v\n%s",
+			err, buildOut)
+	}
+	runCmd := exec.Command(binaryPath)
+	runCmd.Env = append(os.Environ(),
+		"OSTY_GC_BG_MARKER=1",
+		"OSTY_GC_BG_WORKERS=2",
+		"OSTY_GC_ASSIST_BYTES_PER_UNIT=0",
+		/* halt_on_error so the binary exits non-zero on the first
+		 * race, making this test a hard regression gate. */
+		"TSAN_OPTIONS=halt_on_error=1",
+	)
+	runOut, err := runCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("tsan harness reported a race or runtime error:\n%s", runOut)
+	}
+	if strings.Contains(string(runOut), "WARNING: ThreadSanitizer") {
+		t.Fatalf("tsan flagged a race in the concurrent-GC surface:\n%s", runOut)
+	}
+	t.Logf("tsan output: %s", strings.TrimSpace(string(runOut)))
+}
