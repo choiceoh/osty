@@ -40,14 +40,16 @@ func (l *Lexer) Comments() []token.Comment {
 	return l.comments
 }
 
-// IsIdentStart reports whether b is a valid first byte of an Osty identifier
-// (ASCII letter or underscore).
+// IsIdentStart reports whether b is accepted by the compatibility helper
+// retained from the former Go lexer. The self-hosted lexer semantics live in
+// toolchain/frontend.osty.
 func IsIdentStart(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || b == '_'
 }
 
-// IsIdentCont reports whether b is a valid continuation byte of an Osty
-// identifier (IsIdentStart ∪ ASCII digit).
+// IsIdentCont reports whether b is accepted by the compatibility helper
+// retained from the former Go lexer. The self-hosted lexer semantics live in
+// toolchain/frontend.osty.
 func IsIdentCont(b byte) bool {
 	return IsIdentStart(b) || (b >= '0' && b <= '9')
 }

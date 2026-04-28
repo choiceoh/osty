@@ -594,6 +594,7 @@ pub fn losslessDiagCodeName(code: FrontLexDiagnosticCode) -> String {
         FrontDiagEmptyByte -> "E0009",
         FrontDiagIllegalCharacter -> "E0005",
         FrontDiagBadNumericSeparator -> "E0008",
+        FrontDiagFatArrowRemoved -> "E0007",
     }
 }
 
@@ -617,6 +618,7 @@ pub fn losslessDiagMessage(
         FrontDiagEmptyByte -> losslessCharMessage(units, d.start.offset, true),
         FrontDiagIllegalCharacter -> "illegal character",
         FrontDiagBadNumericSeparator -> "numeric separator `_` must appear between two digits",
+        FrontDiagFatArrowRemoved -> "`=>` is not valid Osty syntax; use `->`",
     }
 }
 
@@ -655,6 +657,7 @@ pub fn losslessDiagHint(code: FrontLexDiagnosticCode) -> String {
         FrontDiagEmptyChar -> "",
         FrontDiagEmptyByte -> "",
         FrontDiagBadNumericSeparator -> "place `_` only between two digits",
+        FrontDiagFatArrowRemoved -> "replace `=>` with `->`",
     }
 }
 
@@ -680,43 +683,6 @@ fn losslessBuildDiagnostics(
                 endColumn: d.end.column,
             },
         )
-    }
-    // Synthesize E0007 for fat arrows: the inner scanner emits
-    // `FrontDiagIllegalCharacter` for `=` `>`, but we want a
-    // dedicated message with a fix-it.
-    let fats = losslessFatArrowDiagnostics(units)
-    for f in fats {
-        out.push(f)
-    }
-    out
-}
-
-fn losslessFatArrowDiagnostics(units: List<String>) -> List<LosslessDiag> {
-    let mut out: List<LosslessDiag> = []
-    let unitCount = losslessUnitCountOfList(units)
-    if unitCount < 2 {
-        return out
-    }
-    let gt = ">"
-    for idx in 0..(unitCount - 1) {
-        if losslessUnitAt(units, idx) == "=" && losslessUnitAt(units, idx + 1) == ">" {
-            let start = frontPositionAt(units, idx)
-            let end = frontPositionAt(units, idx + 2)
-            out.push(
-                LosslessDiag {
-                    code: FrontDiagIllegalCharacter,
-                    diagCode: "E0007",
-                    message: "`={gt}` is not valid Osty syntax; use `->`",
-                    hint: "replace `={gt}` with `->`",
-                    offset: start.offset,
-                    endOffset: end.offset,
-                    line: start.line,
-                    column: start.column,
-                    endLine: end.line,
-                    endColumn: end.column,
-                },
-            )
-        }
     }
     out
 }
