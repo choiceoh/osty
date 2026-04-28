@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 37 모듈. 분류 기준:
+총 41 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (32 / 37 = 86%)
+### ⭐⭐⭐⭐⭐ Production (38 / 41 = 93%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -40,6 +40,11 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | result | 357 | — | composition (map / mapErr / and / or / collect) |
 | option | 356 | — | flatten / transpose / traverse / map2 / map3 |
 | csv | 351 | — | options-driven, header-aware decode |
+| xml | 391 | pure Osty | escape / unescape / tag builder / tokenizer |
+| encoding | 329 | pure Osty + bytes | Base64 / Base64Url / Hex / URL percent-encoding 구현 |
+| cli | 260 | pure Osty + env | flag / option spec, parse / parseEnv / usage |
+| template | 148 | pure Osty | escaped/raw `{{name}}` 렌더링 + HTML escape / stripTags |
+| i18n | 136 | pure Osty | Locale / MessageCatalog / fallbackTags / pluralCategory / placeholder format |
 | char | 219 | — | Unicode / ASCII methods |
 | iter | 118 | — | iteration 프로토콜 |
 | bytes | 113 | bytes 29 runtime | byte 슬라이스 조작 |
@@ -63,18 +68,24 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (4 / 37 = 11%)
+### ⭐⭐⭐⭐ Production-adjacent (2 / 41 = 5%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
 | compress | 11 | gzip 만 (zstd / deflate 추가 가능). Phase A shim 199 |
-| encoding | 41 | Base64 / Base64Url / Hex / UrlEncoding 4 표준. struct method 직접 확인 필요 |
-| testing_gen | 168 | property-based testing generator. testing 의 helper |
-| (process) | (위 Production 에 분류) | 이름 함정 — OS process spawn 은 `os.exec` 에 있음 |
+| testing_gen | 168 | property runner 는 int/intRange/asciiString/pair/triple/oneOf/constant subset 실행. bool/float/char/byte/list/listOfSize/option/result/oneOfGens/map/filter 는 아직 실행 subset 밖 |
 
-### 🚧 미확인 / 갭
+### 🚧 실제 미구현 / 갭
 
-기존 37 모듈 중 *진짜 stub* 은 없음. 모든 모듈이 *의도된 범위 안에서 production* 또는 *production-adjacent*.
+기존 모듈 안에도 declaration-only surface 가 많다. 이 중 `fs/env/math/crypto/io/thread/time/term/os/random/uuid` 처럼
+runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않는다. 하지만 아래는 실제 갭이다:
+
+| 구분 | 갭 |
+|---|---|
+| 없는 모듈 | `db/sql`, `email/smtp`, `websocket`, `tar/zip`, `image`, `graphql` |
+| 부분 구현 | `compress` 는 gzip 만 있음. deflate/zstd/zip/tar 계열 없음 |
+| 부분 실행 | `testing_gen` 의 일부 조합자는 표면만 있고 property runner 실행 subset 밖 |
+| 문서/코드 드리프트 | 일부 README/매트릭스 문구가 과거 G18 stub 정책을 아직 과장해서 남김 |
 
 ## 2. 카테고리별 데모 가능성
 
@@ -92,23 +103,22 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | Property-based testing | ✅ 가능 | testing (Gen<T> / property / propertySeeded) |
 | Structured logging | ✅ 가능 | log (Handler / TextHandler / JsonHandler) |
 | 동시성 (구조적) | ✅ 가능 | thread (spawn / race / chan / select / cancel) |
+| HTML 템플릿 | ✅ 가능 | template (escaped/raw placeholder render) |
+| XML 처리 | ✅ 가능 | xml (escape / tag build / tokenize) |
+| 다국어 메시지 | ✅ 가능 | i18n (locale / catalog / placeholder / plural category) |
 
 ## 3. 진짜 약점 (없는 모듈)
 
-기존 모듈은 production-ready. 진짜 갭은 *없는 모듈*들:
+기존 모듈 대부분은 production-ready 또는 runtime-backed. 진짜 큰 갭은 *없는 모듈*들:
 
 | 없는 모듈 | 영향 | 우선순위 |
 |---|---|---|
 | db / sql | DB 작업 (sqlite / postgres wrap 필요) | 높음 (실용 어플리케이션 핵심) |
 | email / smtp | 메일 발송 | 중간 |
-| template (HTML) | 웹 템플릿 | 중간 (http 와 페어) |
 | websocket | WS 통신 | 중간 (http 와 페어) |
-| cli (argparse-like) | CLI flag 파싱 (현재 env.args 만) | 중간 |
 | tar / zip | 아카이브 (compress 는 gzip 만) | 낮음 |
 | image | 이미지 디코딩 | 낮음 |
-| xml | XML 파싱 | 낮음 |
 | graphql | GraphQL 클라이언트 / 서버 | 낮음 |
-| i18n / l10n | 다국어 | 낮음 |
 
 ## 4. Phase A / B 분리 패턴
 
@@ -127,9 +137,9 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 14 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, net, fmt, json, url, io, collections, result, option, csv, char, iter, bytes)
+- 18 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, net, fmt, json, url, io, collections, result, option, csv, xml, encoding, template, i18n, char, iter, bytes)
 - 6 모듈은 Phase A 충실 + Phase B declaration-only (fs, env, random, os, crypto, compress)
-- 나머지는 의도된 범위에서 surface 만으로 완성 (math, cmp, hint, debug, ref, process, log, time, error, sync, thread, regex, testing, encoding, uuid)
+- 나머지는 의도된 범위에서 surface 만으로 완성 (cli, math, cmp, hint, debug, ref, process, log, time, error, sync, thread, regex, testing, uuid)
 
 ## 5. 평가 함정: `.osty` 줄 수 모델의 한계
 
@@ -196,7 +206,7 @@ stdlib audit 중 발견된 *진짜 자랑할 만한* 디자인 패턴:
 
 stdlib 자체는 거의 production. 다음 우선순위:
 
-1. **새 모듈 추가** (db / template / cli / websocket) — *없는 모듈* 카테고리 채우기
-2. **compress / encoding 깊이** — zstd / deflate / Base32 등 추가 표준
+1. **새 모듈 추가** (db / websocket / email) — *없는 모듈* 카테고리 채우기
+2. **compress 깊이 / encoding 확장** — zstd / deflate, Base32 등 추가 표준
 3. **Phase B surface 부풀리기** — random / crypto / compress 는 Phase A 풍부한데 Phase B helper 가 declaration 위주. user-friendly wrapper (예: `crypto.sha256Hex(data)`, `random.shuffle(list)`) 추가
 4. **스펙 문서 동기화** — `LANG_SPEC_v0.5/10-standard-library/*.md` 가 24 시간 sprint 진척 따라잡았는지 확인

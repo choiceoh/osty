@@ -1,41 +1,329 @@
 // std.encoding — binary-to-text encodings (spec §10.11).
 //
-// Body-less signature stubs: the backend lowers each call to the real
-// codec runtime. A pure-Osty implementation is no longer blocked on
-// the selfhost `Bytes.len/get/from` surface — those intrinsics are now
-// registered in `toolchain/check_env.osty`. The remaining blockers
-// are downstream:
-//   1. Struct-method body injection. Today
-//      `injectReachableStdlibBodies` only walks top-level `fn` decls,
-//      so even if the methods below grew Osty bodies the LLVM backend
-//      would not pick them up. Methods need to be added to the
-//      injection set (or this surface refactored to free helpers that
-//      the methods delegate to).
-//   2. `Bytes.from(List<Byte>)` LLVM codegen. Required by the
-//      decoders to construct the result bytes; the encoder side is
-//      read-only and unblocked.
+// Base64, hex, and URL component percent-encoding are implemented in
+// Osty. The only primitive dependency here is construction of `Bytes`
+// from `List<Byte>`, which belongs to the core Bytes surface.
+
+use std.bytes
+use std.char as ascii
+use std.error
 
 pub struct Base64Url {
-    pub fn encode(self, data: Bytes) -> String
-    pub fn decode(self, text: String) -> Result<Bytes, Error>
+    pub fn encode(self, data: Bytes) -> String {
+        base64Encode(data, base64UrlAlphabet(), false)
+    }
+
+    pub fn decode(self, text: String) -> Result<Bytes, Error> {
+        base64Decode(text, base64UrlAlphabet())
+    }
 }
 
 pub struct Base64 {
     pub url: Base64Url
-    pub fn encode(self, data: Bytes) -> String
-    pub fn decode(self, text: String) -> Result<Bytes, Error>
+
+    pub fn encode(self, data: Bytes) -> String {
+        base64Encode(data, base64Alphabet(), true)
+    }
+
+    pub fn decode(self, text: String) -> Result<Bytes, Error> {
+        base64Decode(text, base64Alphabet())
+    }
 }
 
 pub struct Hex {
-    pub fn encode(self, data: Bytes) -> String
-    pub fn decode(self, text: String) -> Result<Bytes, Error>
+    pub fn encode(self, data: Bytes) -> String {
+        hexEncode(data)
+    }
+
+    pub fn decode(self, text: String) -> Result<Bytes, Error> {
+        hexDecode(text)
+    }
 }
 
 pub struct UrlEncoding {
-    pub fn encode(self, text: String) -> String
-    pub fn decode(self, text: String) -> Result<String, Error>
+    pub fn encode(self, text: String) -> String {
+        urlEncode(text)
+    }
+
+    pub fn decode(self, text: String) -> Result<String, Error> {
+        urlDecode(text)
+    }
 }
 
 pub let base64: Base64 = Base64 { url: Base64Url {} }
 pub let hex: Hex = Hex {}
 pub let url: UrlEncoding = UrlEncoding {}
+
+fn base64Alphabet() -> String {
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+}
+
+fn base64UrlAlphabet() -> String {
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+}
+
+fn base64Encode(data: Bytes, alphabet: String, padded: Bool) -> String {
+    let mut out = ""
+    let mut i = 0
+    let n = data.len()
+    for i < n {
+        let b0 = data.get(i).unwrap().toInt()
+        let has1 = i + 1 < n
+        let has2 = i + 2 < n
+        let b1 = if has1 { data.get(i + 1).unwrap().toInt() } else { 0 }
+        let b2 = if has2 { data.get(i + 2).unwrap().toInt() } else { 0 }
+        let chunk = (b0 << 16) | (b1 << 8) | b2
+
+        out = "{out}{alphabet[(chunk >> 18) & 0x3F]}"
+        out = "{out}{alphabet[(chunk >> 12) & 0x3F]}"
+        if has1 {
+            out = "{out}{alphabet[(chunk >> 6) & 0x3F]}"
+        } else if padded {
+            out = "{out}="
+        }
+        if has2 {
+            out = "{out}{alphabet[chunk & 0x3F]}"
+        } else if padded {
+            out = "{out}="
+        }
+        i = i + 3
+    }
+    out
+}
+
+fn base64Decode(text: String, alphabet: String) -> Result<Bytes, Error> {
+    let mut values: List<Int> = []
+    let mut sawPadding = false
+    for c in text.chars() {
+        if isAsciiSpace(c) {
+            continue
+        }
+        if c == '=' {
+            sawPadding = true
+            values.push(-1)
+            continue
+        }
+        if sawPadding {
+            return Err(encodingError("base64: data after padding"))
+        }
+        let v = indexInAlphabet(alphabet, c)
+        if v < 0 {
+            return Err(encodingError("base64: invalid character {c}"))
+        }
+        values.push(v)
+    }
+
+    let mut out: List<Byte> = []
+    if values.len() == 0 {
+        return Ok(bytes.from(out))
+    }
+    if values.len() % 4 == 1 {
+        return Err(encodingError("base64: invalid length"))
+    }
+
+    let mut i = 0
+    for i < values.len() {
+        let remain = values.len() - i
+        let groupLen = if remain >= 4 { 4 } else { remain }
+        if groupLen == 1 {
+            return Err(encodingError("base64: invalid final quantum"))
+        }
+
+        let v0 = values[i]
+        let v1 = values[i + 1]
+        if v0 < 0 || v1 < 0 {
+            return Err(encodingError("base64: invalid padding"))
+        }
+
+        if groupLen == 2 {
+            if (v1 & 0x0F) != 0 {
+                return Err(encodingError("base64: non-zero trailing bits"))
+            }
+            pushByte(out, (v0 << 2) | (v1 >> 4))
+            i = i + 2
+            continue
+        }
+
+        let v2 = values[i + 2]
+        if groupLen == 3 {
+            if v2 < 0 {
+                return Err(encodingError("base64: invalid padding"))
+            }
+            if (v2 & 0x03) != 0 {
+                return Err(encodingError("base64: non-zero trailing bits"))
+            }
+            pushByte(out, (v0 << 2) | (v1 >> 4))
+            pushByte(out, ((v1 & 0x0F) << 4) | (v2 >> 2))
+            i = i + 3
+            continue
+        }
+
+        let v3 = values[i + 3]
+        let pad2 = v2 < 0
+        let pad3 = v3 < 0
+        if pad2 {
+            if !pad3 {
+                return Err(encodingError("base64: invalid padding"))
+            }
+            if (v1 & 0x0F) != 0 {
+                return Err(encodingError("base64: non-zero trailing bits"))
+            }
+            pushByte(out, (v0 << 2) | (v1 >> 4))
+            if i + 4 != values.len() {
+                return Err(encodingError("base64: data after padding"))
+            }
+        } else if pad3 {
+            if (v2 & 0x03) != 0 {
+                return Err(encodingError("base64: non-zero trailing bits"))
+            }
+            pushByte(out, (v0 << 2) | (v1 >> 4))
+            pushByte(out, ((v1 & 0x0F) << 4) | (v2 >> 2))
+            if i + 4 != values.len() {
+                return Err(encodingError("base64: data after padding"))
+            }
+        } else {
+            pushByte(out, (v0 << 2) | (v1 >> 4))
+            pushByte(out, ((v1 & 0x0F) << 4) | (v2 >> 2))
+            pushByte(out, ((v2 & 0x03) << 6) | v3)
+        }
+        i = i + 4
+    }
+
+    Ok(bytes.from(out))
+}
+
+fn indexInAlphabet(alphabet: String, c: Char) -> Int {
+    let chars = alphabet.chars()
+    let mut i = 0
+    for i < chars.len() {
+        if chars[i] == c {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn hexEncode(data: Bytes) -> String {
+    let mut out = ""
+    let mut i = 0
+    for i < data.len() {
+        let n = data.get(i).unwrap().toInt()
+        out = "{out}{lowerHexDigit((n >> 4) & 0x0F)}{lowerHexDigit(n & 0x0F)}"
+        i = i + 1
+    }
+    out
+}
+
+fn hexDecode(text: String) -> Result<Bytes, Error> {
+    let chars = text.chars()
+    if chars.len() % 2 != 0 {
+        return Err(encodingError("hex: odd length"))
+    }
+    let mut out: List<Byte> = []
+    let mut i = 0
+    for i < chars.len() {
+        let hi = hexValueChar(chars[i])
+        let lo = hexValueChar(chars[i + 1])
+        if hi < 0 || lo < 0 {
+            return Err(encodingError("hex: invalid digit"))
+        }
+        pushByte(out, (hi << 4) | lo)
+        i = i + 2
+    }
+    Ok(bytes.from(out))
+}
+
+fn urlEncode(text: String) -> String {
+    let mut out = ""
+    for b in text.bytes() {
+        let n = b.toInt()
+        if isUrlUnreserved(n) {
+            out = "{out}{n.toChar()}"
+        } else {
+            out = "{out}%{upperHexDigit((n >> 4) & 0x0F)}{upperHexDigit(n & 0x0F)}"
+        }
+    }
+    out
+}
+
+fn urlDecode(text: String) -> Result<String, Error> {
+    let input = text.bytes()
+    let mut out: List<Byte> = []
+    let mut i = 0
+    for i < input.len() {
+        let b = input[i]
+        if b.toInt() == 0x25 {
+            if i + 2 >= input.len() {
+                return Err(encodingError("url: incomplete percent escape"))
+            }
+            let hi = hexValueByte(input[i + 1])
+            let lo = hexValueByte(input[i + 2])
+            if hi < 0 || lo < 0 {
+                return Err(encodingError("url: invalid percent escape"))
+            }
+            pushByte(out, (hi << 4) | lo)
+            i = i + 3
+        } else {
+            out.push(b)
+            i = i + 1
+        }
+    }
+    bytes.toString(bytes.from(out))
+}
+
+fn pushByte(buf: List<Byte>, n: Int) {
+    buf.push(n.toByte())
+}
+
+fn lowerHexDigit(n: Int) -> Char {
+    if n < 10 {
+        return ('0'.toInt() + n).toChar()
+    }
+    ('a'.toInt() + n - 10).toChar()
+}
+
+fn upperHexDigit(n: Int) -> Char {
+    if n < 10 {
+        return ('0'.toInt() + n).toChar()
+    }
+    ('A'.toInt() + n - 10).toChar()
+}
+
+fn hexValueChar(c: Char) -> Int {
+    match ascii.hexDigitValue(c) {
+        Some(v) -> v,
+        None    -> -1,
+    }
+}
+
+fn hexValueByte(b: Byte) -> Int {
+    let n = b.toInt()
+    let mut v = -1
+    if n >= 0x30 && n <= 0x39 {
+        v = n - 0x30
+    } else if n >= 0x61 && n <= 0x66 {
+        v = n - 0x61 + 10
+    } else if n >= 0x41 && n <= 0x46 {
+        v = n - 0x41 + 10
+    }
+    v
+}
+
+fn isUrlUnreserved(n: Int) -> Bool {
+    (n >= 0x41 && n <= 0x5A) ||
+    (n >= 0x61 && n <= 0x7A) ||
+    (n >= 0x30 && n <= 0x39) ||
+    n == 0x2D ||
+    n == 0x2E ||
+    n == 0x5F ||
+    n == 0x7E
+}
+
+fn isAsciiSpace(c: Char) -> Bool {
+    c == ' ' || c == '\t' || c == '\n' || c == '\r'
+}
+
+fn encodingError(message: String) -> Error {
+    error.new("encoding: {message}")
+}

@@ -173,6 +173,81 @@ func TestRewriteStdlibMethodCallsitesRewritesMatch(t *testing.T) {
 	}
 }
 
+func TestRewriteStdlibMethodCallsitesRewritesSingletonMethod(t *testing.T) {
+	receiver := &ir.FieldExpr{X: &ir.Ident{Name: "encoding"}, Name: "base64"}
+	call := &ir.CallExpr{
+		Callee: &ir.FieldExpr{X: receiver, Name: "encode"},
+		Args:   []ir.Arg{{Value: &ir.Ident{Name: "data"}}},
+		T:      ir.TString,
+	}
+	mod := &ir.Module{
+		Package: "main",
+		Script:  []ir.Stmt{&ir.ExprStmt{X: call}},
+	}
+	reached := []ReachableStdlibMethod{
+		{Module: "encoding", Type: "Base64", Method: "encode", Fn: &ast.FnDecl{Name: "encode"}, ValuePath: "base64"},
+	}
+	got := RewriteStdlibMethodCallsites(mod, reached)
+	if got != 1 {
+		t.Fatalf("rewrite count = %d, want 1", got)
+	}
+	ident, ok := call.Callee.(*ir.Ident)
+	if !ok {
+		t.Fatalf("callee = %T, want *ir.Ident after rewrite", call.Callee)
+	}
+	if ident.Name != "osty_std_encoding__Base64__encode" {
+		t.Fatalf("callee name = %q, want osty_std_encoding__Base64__encode", ident.Name)
+	}
+	if len(call.Args) != 2 {
+		t.Fatalf("args len = %d, want 2 (receiver + original)", len(call.Args))
+	}
+	if call.Args[0].Value != receiver {
+		t.Fatalf("args[0] = %v, want original receiver pointer", call.Args[0].Value)
+	}
+}
+
+func TestRewriteStdlibMethodCallsitesRewritesSingletonMethodCall(t *testing.T) {
+	receiver := &ir.FieldExpr{X: &ir.Ident{Name: "encoding"}, Name: "base64"}
+	mc := &ir.MethodCall{
+		Receiver: receiver,
+		Name:     "encode",
+		Args:     []ir.Arg{{Value: &ir.Ident{Name: "data"}}},
+		T:        ir.TString,
+	}
+	stmt := &ir.ExprStmt{X: mc}
+	mod := &ir.Module{
+		Package: "main",
+		Script:  []ir.Stmt{stmt},
+	}
+	reached := []ReachableStdlibMethod{
+		{Module: "encoding", Type: "Base64", Method: "encode", Fn: &ast.FnDecl{Name: "encode"}, ValuePath: "base64"},
+	}
+	got := RewriteStdlibMethodCallsites(mod, reached)
+	if got != 1 {
+		t.Fatalf("rewrite count = %d, want 1", got)
+	}
+	call, ok := stmt.X.(*ir.CallExpr)
+	if !ok {
+		t.Fatalf("stmt.X = %T, want *ir.CallExpr after rewrite", stmt.X)
+	}
+	ident, ok := call.Callee.(*ir.Ident)
+	if !ok {
+		t.Fatalf("callee = %T, want *ir.Ident after rewrite", call.Callee)
+	}
+	if ident.Name != "osty_std_encoding__Base64__encode" {
+		t.Fatalf("callee name = %q, want osty_std_encoding__Base64__encode", ident.Name)
+	}
+	if len(call.Args) != 2 {
+		t.Fatalf("args len = %d, want 2 (receiver + original)", len(call.Args))
+	}
+	if call.Args[0].Value != receiver {
+		t.Fatalf("args[0] = %v, want original receiver pointer", call.Args[0].Value)
+	}
+	if call.T != ir.TString {
+		t.Fatalf("call return T = %v, want String", call.T)
+	}
+}
+
 func TestRewriteStdlibMethodCallsitesSkipsUserType(t *testing.T) {
 	userT := &ir.NamedType{Package: "", Name: "MyStruct"}
 	mc := &ir.MethodCall{

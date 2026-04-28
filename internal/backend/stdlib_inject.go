@@ -79,7 +79,14 @@ type ReachableStdlibMethod struct {
 	// Fn is the method declaration as held in the registry. Callers
 	// must not mutate it — the registry owns a shared immutable copy.
 	Fn *ast.FnDecl
+	// ValuePath is set for calls through exported stdlib singleton
+	// values such as `encoding.base64.encode(...)` or
+	// `encoding.base64.url.encode(...)`. It is empty for ordinary typed
+	// receiver calls like `h.encode(...)`.
+	ValuePath string
 }
+
+type stdlibMethodReachKey struct{ module, typeName, method string }
 
 // ReachableStdlibMethods returns the stdlib struct/enum methods
 // referenced from mod via typed method calls, in deterministic
@@ -101,11 +108,10 @@ func ReachableStdlibMethods(mod *ir.Module, reg *stdlib.Registry) []ReachableStd
 	if mod == nil || reg == nil {
 		return nil
 	}
-	type key struct{ module, typeName, method string }
-	seen := map[key]struct{}{}
+	seen := map[stdlibMethodReachKey]struct{}{}
 	var found []ReachableStdlibMethod
 	for ref := range ir.ReachMethods(mod) {
-		k := key{module: ref.Module, typeName: ref.Type, method: ref.Method}
+		k := stdlibMethodReachKey{module: ref.Module, typeName: ref.Type, method: ref.Method}
 		if _, dup := seen[k]; dup {
 			continue
 		}
@@ -121,6 +127,34 @@ func ReachableStdlibMethods(mod *ir.Module, reg *stdlib.Registry) []ReachableStd
 			Fn:     fn,
 		})
 	}
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		var (
+			receiver ir.Expr
+			method   string
+		)
+		switch call := n.(type) {
+		case *ir.CallExpr:
+			if call == nil {
+				return true
+			}
+			field, ok := call.Callee.(*ir.FieldExpr)
+			if !ok || field == nil || field.Name == "" {
+				return true
+			}
+			receiver = field.X
+			method = field.Name
+		case *ir.MethodCall:
+			if call == nil || call.Receiver == nil || call.Name == "" {
+				return true
+			}
+			receiver = call.Receiver
+			method = call.Name
+		default:
+			return true
+		}
+		addStdlibValuePathMethod(reg, &found, seen, receiver, method)
+		return true
+	}), mod)
 	sort.Slice(found, func(i, j int) bool {
 		if found[i].Module != found[j].Module {
 			return found[i].Module < found[j].Module
@@ -131,6 +165,114 @@ func ReachableStdlibMethods(mod *ir.Module, reg *stdlib.Registry) []ReachableStd
 		return found[i].Method < found[j].Method
 	})
 	return found
+}
+
+func addStdlibValuePathMethod(
+	reg *stdlib.Registry,
+	found *[]ReachableStdlibMethod,
+	seen map[stdlibMethodReachKey]struct{},
+	receiver ir.Expr,
+	method string,
+) {
+	module, path, ok := stdlibFieldPath(receiver)
+	if !ok || module == "" || len(path) == 0 || method == "" {
+		return
+	}
+	typeName, ok := stdlibValuePathTypeName(reg, module, path)
+	if !ok || typeName == "" {
+		return
+	}
+	valuePath := stdlibJoinFieldPath(path)
+	k := stdlibMethodReachKey{module: module, typeName: typeName, method: method}
+	if _, dup := seen[k]; dup {
+		for i := range *found {
+			entry := &(*found)[i]
+			if entry.Module == module && entry.Type == typeName && entry.Method == method && entry.ValuePath == "" {
+				entry.ValuePath = valuePath
+				return
+			}
+		}
+		return
+	}
+	fn := reg.LookupMethodDecl(module, typeName, method)
+	if fn == nil {
+		return
+	}
+	seen[k] = struct{}{}
+	*found = append(*found, ReachableStdlibMethod{
+		Module:    module,
+		Type:      typeName,
+		Method:    method,
+		Fn:        fn,
+		ValuePath: valuePath,
+	})
+}
+
+func stdlibValuePathTypeName(reg *stdlib.Registry, module string, path []string) (string, bool) {
+	if reg == nil || module == "" || len(path) == 0 {
+		return "", false
+	}
+	mod := reg.Modules[module]
+	if mod == nil || mod.Package == nil {
+		return "", false
+	}
+	typeName, ok := stdlibTopLevelLetTypeName(mod, path[0])
+	if !ok {
+		return "", false
+	}
+	for _, field := range path[1:] {
+		typeName, ok = stdlibStructFieldTypeName(mod, typeName, field)
+		if !ok {
+			return "", false
+		}
+	}
+	return typeName, true
+}
+
+func stdlibTopLevelLetTypeName(mod *stdlib.Module, name string) (string, bool) {
+	if mod == nil || mod.Package == nil || mod.Package.PkgScope == nil || name == "" {
+		return "", false
+	}
+	sym := mod.Package.PkgScope.LookupLocal(name)
+	if sym == nil {
+		return "", false
+	}
+	decl, ok := sym.Decl.(*ast.LetDecl)
+	if !ok || decl == nil {
+		return "", false
+	}
+	return stdlibNamedTypeName(decl.Type)
+}
+
+func stdlibStructFieldTypeName(mod *stdlib.Module, owner, fieldName string) (string, bool) {
+	if mod == nil || mod.Package == nil || owner == "" || fieldName == "" {
+		return "", false
+	}
+	for _, pf := range mod.Package.Files {
+		if pf == nil || pf.File == nil {
+			continue
+		}
+		for _, decl := range pf.File.Decls {
+			st, ok := decl.(*ast.StructDecl)
+			if !ok || st == nil || st.Name != owner {
+				continue
+			}
+			for _, field := range st.Fields {
+				if field != nil && field.Name == fieldName {
+					return stdlibNamedTypeName(field.Type)
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+func stdlibNamedTypeName(t ast.Type) (string, bool) {
+	named, ok := t.(*ast.NamedType)
+	if !ok || named == nil || len(named.Path) == 0 {
+		return "", false
+	}
+	return named.Path[len(named.Path)-1], true
 }
 
 // injectReachableStdlibBodies lowers every reachable stdlib function in
