@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/selfhost"
 )
 
@@ -193,5 +194,99 @@ func TestNativeDiagnosticsSingleFile(t *testing.T) {
 	}
 	if pos := got.PrimaryPos(); pos.Line != 2 || pos.Column != 5 {
 		t.Fatalf("primary pos = %v, want 2:5", pos)
+	}
+}
+
+func TestResolveFileDefaultDefinesStdlibPackageAlias(t *testing.T) {
+	src := []byte(`use std.fs
+
+fn main() {
+    let _ = fs.readToString("demo.txt")
+}
+`)
+	file, diags := parser.ParseDiagnostics(src)
+	if len(diags) != 0 {
+		t.Fatalf("parse diagnostics = %#v, want none", diags)
+	}
+	pkgScope := NewScope(NewPrelude(), "package:std.fs")
+	pkgScope.DefineForce(&Symbol{Name: "readToString", Kind: SymFn, Pub: true})
+	reg := stubStdlibProvider{
+		"std.fs": &Package{Name: "fs", PkgScope: pkgScope},
+	}
+	res := ResolveFileSourceDefault(src, file, reg)
+	if res.FileScope == nil {
+		t.Fatal("FileScope = nil, want populated scope")
+	}
+	sym := res.FileScope.Lookup("fs")
+	if sym == nil {
+		t.Fatal("FileScope.Lookup(\"fs\") = nil, want package alias")
+	}
+	if sym.Kind != SymPackage {
+		t.Fatalf("fs kind = %v, want SymPackage", sym.Kind)
+	}
+	if sym.Package == nil || sym.Package.PkgScope == nil {
+		t.Fatalf("fs package = %#v, want resolved stdlib package", sym.Package)
+	}
+}
+
+type stubStdlibProvider map[string]*Package
+
+func (s stubStdlibProvider) LookupPackage(dotPath string) *Package {
+	return s[dotPath]
+}
+
+func TestWorkspaceResolveAllDefinesPackageAliases(t *testing.T) {
+	root := t.TempDir()
+	alphaDir := filepath.Join(root, "alpha")
+	betaDir := filepath.Join(root, "beta")
+	if err := os.MkdirAll(alphaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(betaDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alphaFile := filepath.Join(alphaDir, "lib.osty")
+	betaFile := filepath.Join(betaDir, "lib.osty")
+	if err := os.WriteFile(alphaFile, []byte(`pub fn helper() -> Int { 1 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(betaFile, []byte(`use alpha
+
+fn main() {
+    let _ = alpha.helper()
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	for _, path := range WorkspacePackagePaths(root) {
+		if _, err := ws.LoadPackage(path); err != nil {
+			t.Fatalf("LoadPackage %s: %v", path, err)
+		}
+	}
+	results := ws.ResolveAll()
+	beta := ws.Packages["beta"]
+	if beta == nil || len(beta.Files) == 0 {
+		t.Fatalf("beta package = %#v, want loaded package with files", beta)
+	}
+	if got := results["beta"]; got == nil || len(got.Diags) != 0 {
+		t.Fatalf("beta diagnostics = %#v, want none", got)
+	}
+	sym := beta.Files[0].FileScope.Lookup("alpha")
+	if sym == nil {
+		t.Fatal("FileScope.Lookup(\"alpha\") = nil, want imported package symbol")
+	}
+	if sym.Kind != SymPackage {
+		t.Fatalf("alpha kind = %v, want SymPackage", sym.Kind)
+	}
+	if sym.Package == nil || sym.Package.PkgScope == nil {
+		t.Fatalf("alpha package = %#v, want linked package scope", sym.Package)
+	}
+	if helper := sym.Package.PkgScope.LookupLocal("helper"); helper == nil || !helper.Pub {
+		t.Fatalf("alpha helper = %#v, want exported function in target scope", helper)
 	}
 }

@@ -91,7 +91,7 @@ func selfhostPackageImportSurfaces(pkg *resolve.Package, ws *resolve.Workspace, 
 				continue
 			}
 			seen[use.Alias] = key
-			out = append(out, selfhost.PackageImportSurface(use.Alias, runsForPackage(target)))
+			out = append(out, selfhost.PackageImportSurface(use.Path, use.Alias, runsForPackage(target)))
 		}
 	}
 	return out
@@ -121,7 +121,7 @@ func selfhostUsesImportSurfaces(uses []*ast.UseDecl, ws *resolve.Workspace, stdl
 			continue
 		}
 		seen[alias] = key
-		out = append(out, selfhost.PackageImportSurface(alias, runsForPackage(target)))
+		out = append(out, selfhost.PackageImportSurface(key, alias, runsForPackage(target)))
 	}
 	return out
 }

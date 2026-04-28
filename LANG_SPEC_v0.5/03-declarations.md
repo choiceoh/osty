@@ -389,7 +389,7 @@ packages (`Color.Red`).
 ```osty
 pub interface Writer {
     fn write(self, data: Bytes) -> Result<Int, Error>
-    fn close(self) -> Result<(), Error>
+    fn flush(self) -> Result<(), Error>
 }
 ```
 

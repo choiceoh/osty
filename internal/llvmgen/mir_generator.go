@@ -592,7 +592,7 @@ func localDefiningSiteHint(fn *mir.Function, id mir.LocalID) string {
 			switch x := inst.(type) {
 			case *mir.AssignInstr:
 				if placeReferencesLocal(x.Dest, id) {
-					return fmt.Sprintf("written by assign at %d:%d (src=%s)", x.SpanV.Start.Line, x.SpanV.Start.Column, mirRValueDebugString(x.Src))
+					return mirAssignWrittenByText(strconv.Itoa(x.SpanV.Start.Line), strconv.Itoa(x.SpanV.Start.Column), mirRValueDebugString(x.Src))
 				}
 			case *mir.CallInstr:
 				if x.Dest != nil && placeReferencesLocal(*x.Dest, id) {
@@ -600,11 +600,11 @@ func localDefiningSiteHint(fn *mir.Function, id mir.LocalID) string {
 					if x.Callee != nil {
 						callee = mirCalleeDebugString(x.Callee)
 					}
-					return fmt.Sprintf("written by call `%s` at %d:%d", callee, x.SpanV.Start.Line, x.SpanV.Start.Column)
+					return mirCallWrittenByText(callee, strconv.Itoa(x.SpanV.Start.Line), strconv.Itoa(x.SpanV.Start.Column))
 				}
 			case *mir.IntrinsicInstr:
 				if x.Dest != nil && placeReferencesLocal(*x.Dest, id) {
-					return fmt.Sprintf("written by intrinsic kind=%d at %d:%d", int(x.Kind), x.SpanV.Start.Line, x.SpanV.Start.Column)
+					return mirIntrinsicWrittenByText(strconv.Itoa(int(x.Kind)), strconv.Itoa(x.SpanV.Start.Line), strconv.Itoa(x.SpanV.Start.Column))
 				}
 			}
 		}
@@ -622,16 +622,16 @@ func mirRValueDebugString(r mir.RValue) string {
 	}
 	switch v := r.(type) {
 	case *mir.BinaryRV:
-		return fmt.Sprintf("BinaryRV(op=%d, T=%s)", int(v.Op), mirTypeString(v.T))
+		return mirRValueBinaryDebugText(strconv.Itoa(int(v.Op)), mirTypeString(v.T))
 	case *mir.UnaryRV:
-		return fmt.Sprintf("UnaryRV(op=%d, T=%s)", int(v.Op), mirTypeString(v.T))
+		return mirRValueUnaryDebugText(strconv.Itoa(int(v.Op)), mirTypeString(v.T))
 	case *mir.AggregateRV:
-		return fmt.Sprintf("AggregateRV(kind=%d, T=%s)", int(v.Kind), mirTypeString(v.T))
+		return mirRValueAggregateDebugText(strconv.Itoa(int(v.Kind)), mirTypeString(v.T))
 	case *mir.UseRV:
 		_ = v
 		return "UseRV"
 	case *mir.CastRV:
-		return fmt.Sprintf("CastRV(kind=%d, To=%s)", int(v.Kind), mirTypeString(v.To))
+		return mirRValueCastDebugText(strconv.Itoa(int(v.Kind)), mirTypeString(v.To))
 	}
 	return fmt.Sprintf("%T", r)
 }
@@ -933,13 +933,14 @@ func mirFunctionHasBackedge(fn *mir.Function) bool {
 	return false
 }
 
+// mirIntrinsicSafeForVectorListFastPath reports whether a MIR intrinsic
+// kind is safe to invoke against a vector-List local that has been
+// hoisted to a single fast-path snapshot. Delegates to the Osty-sourced
+// `mirIntrinsicVectorListFastPathSafe` (renamed there to avoid
+// package-private name collision with this host-side wrapper).
 func mirIntrinsicSafeForVectorListFastPath(k mir.IntrinsicKind) bool {
-	switch k {
-	case mir.IntrinsicListLen, mir.IntrinsicListIsEmpty:
-		return true
-	default:
-		return false
-	}
+	return mirIntrinsicVectorListFastPathSafe(int(k),
+		int(mir.IntrinsicListLen), int(mir.IntrinsicListIsEmpty))
 }
 
 // planVectorListHoists identifies non-param scalar-List locals whose
@@ -1168,15 +1169,16 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet,
 		mir.IntrinsicListPop, mir.IntrinsicListFirst, mir.IntrinsicListLast,
 		mir.IntrinsicListRemoveAt, mir.IntrinsicListReverse, mir.IntrinsicListReversed,
-		mir.IntrinsicListIndexOf, mir.IntrinsicListContains, mir.IntrinsicListSlice:
+		mir.IntrinsicListIndexOf, mir.IntrinsicListContains, mir.IntrinsicListSlice,
+		mir.IntrinsicListToString:
 		return true
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapGetOr,
 		mir.IntrinsicMapSet, mir.IntrinsicMapContains, mir.IntrinsicMapLen,
 		mir.IntrinsicMapKeys, mir.IntrinsicMapRemove, mir.IntrinsicMapKeysSorted,
-		mir.IntrinsicMapIncr:
+		mir.IntrinsicMapIncr, mir.IntrinsicMapToString:
 		return true
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
-		mir.IntrinsicSetToList, mir.IntrinsicSetRemove:
+		mir.IntrinsicSetToList, mir.IntrinsicSetRemove, mir.IntrinsicSetToString:
 		return true
 	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty, mir.IntrinsicBytesGet, mir.IntrinsicBytesContains, mir.IntrinsicBytesStartsWith, mir.IntrinsicBytesEndsWith, mir.IntrinsicBytesIndexOf, mir.IntrinsicBytesLastIndexOf, mir.IntrinsicBytesSplit, mir.IntrinsicBytesJoin, mir.IntrinsicBytesConcat, mir.IntrinsicBytesRepeat, mir.IntrinsicBytesReplace, mir.IntrinsicBytesReplaceAll, mir.IntrinsicBytesTrimLeft, mir.IntrinsicBytesTrimRight, mir.IntrinsicBytesTrim, mir.IntrinsicBytesTrimSpace, mir.IntrinsicBytesToUpper, mir.IntrinsicBytesToLower, mir.IntrinsicBytesToHex, mir.IntrinsicBytesSlice:
 		return true
@@ -1235,7 +1237,7 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 // families, so the fallback is the same `fmt.Sprintf("kind=%d", int(k))`
 // the original implementation used for unrecognised codes.
 func mirIntrinsicLabel(k mir.IntrinsicKind) string {
-	fallback := fmt.Sprintf("kind=%d", int(k))
+	fallback := mirIntrinsicLabelKindFallback(strconv.Itoa(int(k)))
 	return mirIntrinsicKindLabelFull(int(k), fallback)
 }
 
@@ -1629,14 +1631,14 @@ func (g *mirGen) emitAllocaPreamble(fn *mir.Function) {
 			// them. The alloca is named after the param index so it
 			// doesn't clash with the %argN register holding the
 			// incoming value.
-			slot := fmt.Sprintf("%%p%d", loc.ID)
+			slot := mirParamSlotName(strconv.Itoa(int(loc.ID)))
 			g.localSlots[loc.ID] = slot
 			if !isUnitType(loc.Type) {
 				g.fnBuf.WriteString(mirAllocaLine(slot, g.llvmType(loc.Type)))
 			}
 			continue
 		}
-		slot := fmt.Sprintf("%%l%d", loc.ID)
+		slot := mirLocalSlotName(strconv.Itoa(int(loc.ID)))
 		g.localSlots[loc.ID] = slot
 		if isUnitType(loc.Type) {
 			// Unit has no storage.
@@ -3281,7 +3283,7 @@ func (g *mirGen) emitTestingAbortString(message *LlvmValue, nextLabel string) {
 }
 
 func (g *mirGen) testingFailureMessage(line int, method string) string {
-	return fmt.Sprintf("testing.%s failed at %s", method, g.testingSourceLineLabel(line, "<test>"))
+	return mirTestingFailureMessage(method, g.testingSourceLineLabel(line, "<test>"))
 }
 
 func (g *mirGen) testingSourceLineLabel(line int, fallback string) string {
@@ -3291,7 +3293,7 @@ func (g *mirGen) testingSourceLineLabel(line int, fallback string) string {
 	} else if abs, err := filepath.Abs(source); err == nil {
 		source = filepath.ToSlash(abs)
 	}
-	return fmt.Sprintf("%s:%d", source, line)
+	return mirSourceLineLabelText(source, strconv.Itoa(line))
 }
 
 func (g *mirGen) operandSourceText(op mir.Operand) string {
@@ -3371,7 +3373,7 @@ func (g *mirGen) buildAssertCondMessageMIR(line int, method, exprText string) *L
 	if method == "expectOk" || method == "expectError" {
 		label = "expr"
 	}
-	return g.testingStringLiteral(fmt.Sprintf("%s: %s=`%s`", base, label, exprText))
+	return g.testingStringLiteral(mirAssertExprFragmentText(base, label, exprText))
 }
 
 func (g *mirGen) buildAssertCompareMessageMIR(line int, method, leftText, rightText, leftReg string, leftT mir.Type, rightReg string, rightT mir.Type) (*LlvmValue, error) {
@@ -3388,11 +3390,11 @@ func (g *mirGen) buildAssertCompareMessageMIR(line int, method, leftText, rightT
 	if leftText == "" && rightText == "" && !leftHas && !rightHas {
 		return g.testingStringLiteral(base), nil
 	}
-	parts = append(parts, g.testingStringLiteral(fmt.Sprintf("%s: left=`%s`", base, leftText)))
+	parts = append(parts, g.testingStringLiteral(mirAssertExprLeftFragmentText(base, leftText)))
 	if leftHas {
 		parts = append(parts, g.testingStringLiteral(" = "), leftStr)
 	}
-	parts = append(parts, g.testingStringLiteral(fmt.Sprintf(" right=`%s`", rightText)))
+	parts = append(parts, g.testingStringLiteral(mirAssertExprRightFragmentText(rightText)))
 	if rightHas {
 		parts = append(parts, g.testingStringLiteral(" = "), rightStr)
 	}
@@ -4046,15 +4048,16 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet,
 		mir.IntrinsicListPop, mir.IntrinsicListFirst, mir.IntrinsicListLast,
 		mir.IntrinsicListRemoveAt, mir.IntrinsicListReverse, mir.IntrinsicListReversed,
-		mir.IntrinsicListIndexOf, mir.IntrinsicListContains, mir.IntrinsicListSlice:
+		mir.IntrinsicListIndexOf, mir.IntrinsicListContains, mir.IntrinsicListSlice,
+		mir.IntrinsicListToString:
 		return g.emitListIntrinsic(i)
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapGetOr,
 		mir.IntrinsicMapSet, mir.IntrinsicMapContains, mir.IntrinsicMapLen,
 		mir.IntrinsicMapKeys, mir.IntrinsicMapRemove, mir.IntrinsicMapKeysSorted,
-		mir.IntrinsicMapIncr:
+		mir.IntrinsicMapIncr, mir.IntrinsicMapToString:
 		return g.emitMapIntrinsic(i)
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
-		mir.IntrinsicSetToList, mir.IntrinsicSetRemove:
+		mir.IntrinsicSetToList, mir.IntrinsicSetRemove, mir.IntrinsicSetToString:
 		return g.emitSetIntrinsic(i)
 	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty, mir.IntrinsicBytesGet, mir.IntrinsicBytesContains, mir.IntrinsicBytesStartsWith, mir.IntrinsicBytesEndsWith, mir.IntrinsicBytesIndexOf, mir.IntrinsicBytesLastIndexOf, mir.IntrinsicBytesSplit, mir.IntrinsicBytesJoin, mir.IntrinsicBytesConcat, mir.IntrinsicBytesRepeat, mir.IntrinsicBytesReplace, mir.IntrinsicBytesReplaceAll, mir.IntrinsicBytesTrimLeft, mir.IntrinsicBytesTrimRight, mir.IntrinsicBytesTrim, mir.IntrinsicBytesTrimSpace, mir.IntrinsicBytesToUpper, mir.IntrinsicBytesToLower, mir.IntrinsicBytesToHex, mir.IntrinsicBytesSlice:
 		return g.emitBytesIntrinsic(i)
@@ -4415,6 +4418,45 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		// across the allocation because the source list stays
 		// reachable through the caller's local.
 		sym := mirRtListReversedSymbol()
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: listReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicListToString:
+		// `[a, b, c]`-style stringification. The runtime ships one
+		// formatter per element ABI lane; pick by the receiver's
+		// element type. Lists of struct/enum/composite ptr values
+		// don't have a per-list formatter today and surface as
+		// unsupported until a callback-driven runtime entry lands.
+		var sym string
+		switch elemLLVM {
+		case "i64":
+			sym = "osty_rt_list_to_string_i64"
+		case "double":
+			sym = "osty_rt_list_to_string_f64"
+		case "i1":
+			sym = "osty_rt_list_to_string_i1"
+		case "i32":
+			// Char (i32) — the byte-pattern for UTF-8 codepoints. No
+			// other i32-shaped element types exist in the current
+			// surface (Int32 is encoded as i32 too, but List<Int32>
+			// doesn't reach this lowering today; if it ever does we
+			// add a separate suffix).
+			sym = "osty_rt_list_to_string_char"
+		case "i8":
+			sym = "osty_rt_list_to_string_byte"
+		case "ptr":
+			// Only String elements supported; other ptr-shaped
+			// elements (List, Map, Set, struct/enum payloads) need a
+			// per-kind callback the runtime doesn't expose yet.
+			if elemT != mir.TString {
+				return unsupported("mir-mvp", fmt.Sprintf("list_to_string on composite element type %s", mirTypeString(elemT)))
+			}
+			sym = "osty_rt_list_to_string_string"
+		default:
+			return unsupported("mir-mvp", fmt.Sprintf("list_to_string on element type %s", elemLLVM))
+		}
 		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
 		em := g.ostyEmitter()
 		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: listReg}})
@@ -4986,6 +5028,18 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 			g.fnBuf.WriteString(mirStorePtrLine(tmp, g.localSlots[i.Dest.Local]))
 		}
 		return nil
+	case mir.IntrinsicMapToString:
+		// `{k: v, k: v}`-shaped stringification. One runtime entry —
+		// the Map struct already carries `key_kind` / `value_kind` set
+		// at allocation time, so dispatch happens inside C; lowering
+		// just emits the call. Composite key/value types (struct,
+		// enum, nested collection) abort inside the runtime today.
+		sym := mirRtMapToStringSymbol()
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: mapReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("map intrinsic kind %d", i.Kind))
 }
@@ -5134,6 +5188,18 @@ func (g *mirGen) emitSetIntrinsic(i *mir.IntrinsicInstr) error {
 			&LlvmValue{typ: "ptr", name: setReg},
 			&LlvmValue{typ: elemLLVM, name: vReg},
 			elemString)
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicSetToString:
+		// `{a, b, c}`-shaped stringification. One runtime entry —
+		// the Set struct carries `elem_kind` set at allocation time,
+		// so the per-kind formatter is picked inside C; lowering just
+		// emits the call. Composite element types abort inside the
+		// runtime today.
+		sym := mirRtSetToStringSymbol()
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: setReg}})
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
 	}
@@ -8047,7 +8113,7 @@ func isHeapEqualityType(t mir.Type) bool {
 // stay byte-stable.
 func (g *mirGen) emitHeapEquality(op mir.BinaryOp, left, right string) (string, error) {
 	sym := llvmStringRuntimeEqualSymbol()
-	g.declareRuntime(sym, fmt.Sprintf("declare i1 @%s(ptr, ptr)", sym))
+	g.declareRuntime(sym, mirRuntimeDeclareI1FromTwoPtrText(sym))
 	eq := g.fresh()
 	g.fnBuf.WriteString(mirCallI1FromTwoPtrLine(eq, sym, left, right))
 	if op == mir.BinEq {
@@ -8146,7 +8212,7 @@ func isStringOrderingBinOp(op mir.BinaryOp) bool {
 // results for content ordering.
 func (g *mirGen) emitStringOrdering(op mir.BinaryOp, left, right string) (string, error) {
 	sym := llvmStringRuntimeCompareSymbol()
-	g.declareRuntime(sym, fmt.Sprintf("declare i64 @%s(ptr, ptr)", sym))
+	g.declareRuntime(sym, mirRuntimeDeclareI64FromTwoPtrText(sym))
 	cmp := g.fresh()
 	g.fnBuf.WriteString(mirCallI64FromTwoPtrLine(cmp, sym, left, right))
 	pred := stringOrderingPredicate(op)
@@ -8522,15 +8588,14 @@ func mirTypeString(t mir.Type) string {
 	return t.String()
 }
 
+// formatFloat renders a Float64 in a form LLVM's text-IR parser
+// recognises as a float (i.e. with a `.` / `e` / `E` somewhere). The
+// fractional-or-exponent guard runs in the Osty-sourced
+// `mirFormatFloatEnsureDot` (`toolchain/mir_generator.osty`) — only
+// the host-side `strconv.FormatFloat` step stays Go because Osty has
+// no equivalent yet.
 func formatFloat(v float64) string {
-	// Use enough precision so the result round-trips in LLVM's
-	// text-IR float parser. LLVM accepts both decimal and hex-float
-	// literals; decimal is fine for our test corpus.
-	s := strconv.FormatFloat(v, 'g', -1, 64)
-	if !strings.ContainsAny(s, ".eE") {
-		s += ".0"
-	}
-	return s
+	return mirFormatFloatEnsureDot(strconv.FormatFloat(v, 'g', -1, 64))
 }
 
 // Sentinel so goimports doesn't prune sort.

@@ -2866,7 +2866,7 @@ func (g *generator) emitAggregateRootOffsets(emitter *LlvmEmitter, typ string) (
 	if len(paths) == 0 {
 		return value{typ: "ptr", ref: "null"}, 0, nil
 	}
-	arrayTyp := fmt.Sprintf("[%d x i64]", len(paths))
+	arrayTyp := mirArrayI64TypeText(strconv.Itoa(len(paths)))
 	arrayPtr := llvmNextTemp(emitter)
 	emitter.body = append(emitter.body, mirAllocaText(arrayPtr, arrayTyp))
 	for i, path := range paths {
@@ -6783,7 +6783,7 @@ func (g *generator) emitOptionUnwrap(base value, optType *ast.OptionalType, call
 	g.enterBlock(noneLabel)
 
 	emitter = g.toOstyEmitter()
-	msg := fmt.Sprintf("unwrap on None at %s", g.sourceLineLabel(call.Pos().Line, "<unwrap>"))
+	msg := mirOptionUnwrapNoneMessage(g.sourceLineLabel(call.Pos().Line, "<unwrap>"))
 	msgPtr := llvmStringLiteral(emitter, msg)
 	llvmPrintlnString(emitter, msgPtr)
 	g.declareRuntimeSymbol("exit", "void", []paramInfo{{typ: "i32"}})
@@ -7304,6 +7304,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitStdNetCall(call); found || err != nil {
 		return v, err
 	}
+	if v, found, err := g.emitStdCryptoCall(call); found || err != nil {
+		return v, err
+	}
 	if v, found, err := g.emitStdIoCall(call); found || err != nil {
 		return v, err
 	}
@@ -7451,13 +7454,13 @@ func debugPatternShape(pattern ast.Pattern) string {
 	case nil:
 		return "<nil>"
 	case *ast.IdentPat:
-		return fmt.Sprintf("ident %q", p.Name)
+		return mirDebugIdentText(strconv.Quote(p.Name))
 	case *ast.VariantPat:
 		path := strings.Join(p.Path, ".")
 		if len(p.Args) == 0 {
-			return fmt.Sprintf("variant %s (no args)", path)
+			return mirDebugVariantNoArgsText(path)
 		}
-		return fmt.Sprintf("variant %s with %d arg(s)", path, len(p.Args))
+		return mirDebugVariantWithArgsText(path, strconv.Itoa(len(p.Args)))
 	case *ast.WildcardPat:
 		return "wildcard"
 	case *ast.LiteralPat:
@@ -7469,9 +7472,9 @@ func debugPatternShape(pattern ast.Pattern) string {
 	case *ast.BindingPat:
 		return "binding"
 	case *ast.TuplePat:
-		return fmt.Sprintf("tuple of %d", len(p.Elems))
+		return mirDebugTupleText(strconv.Itoa(len(p.Elems)))
 	case *ast.StructPat:
-		return fmt.Sprintf("struct %s", strings.Join(p.Type, "."))
+		return mirDebugStructText(strings.Join(p.Type, "."))
 	default:
 		return fmt.Sprintf("%T", pattern)
 	}
@@ -8034,9 +8037,9 @@ func (g *generator) emitInterfaceMethodCall(call *ast.CallExpr) (value, bool, er
 	emitter.body = append(emitter.body, mirGEPArrayElementText(fnPtrSlot, strconv.Itoa(len(iface.methods)), vtable, strconv.Itoa(slot)))
 	fnPtr := llvmNextTemp(emitter)
 	emitter.body = append(emitter.body, mirLoadPtrText(fnPtr, fnPtrSlot))
-	callArgList := fmt.Sprintf("ptr %s", dataPtr)
+	callArgList := mirCallArgsPtrPrefix(dataPtr)
 	for _, p := range argPairs {
-		callArgList += fmt.Sprintf(", %s %s", p[0], p[1])
+		callArgList = mirAppendArgWithComma(callArgList, p[0], p[1])
 	}
 	ret := llvmNextTemp(emitter)
 	emitter.body = append(emitter.body, mirCallTypedFnPtrText(ret, retTyp, fnPtr, callArgList))
