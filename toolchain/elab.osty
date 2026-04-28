@@ -2070,6 +2070,7 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
         if !(tyIsBad(cx.env.tys, expected)) {
             let _ = checkExpectAssignable(cx.env, expected, retTy, callNode.start, callNode.end)
         }
+        elabRecordMethodCalleeType(cx, callNode, fieldNode, methodName, sig.paramTys, retTy)
         let mcall = coreMethodCall(
             cx.core,
             recv.node,
@@ -2114,6 +2115,17 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
         checkRecordInstantiation(cx.env, -1, "{ownerName}.{sig.name}", typeArgsConcrete, retTy, callNode.start, callNode.end)
     }
 
+    // Substitute the method's parameter types against the solved
+    // type-var assignments so the synthetic callee record carries the
+    // same concrete params the bidirectional loop just checked each
+    // arg against. Emitted BEFORE `coreMethodCall` so the field node
+    // owns its own typed-expr record independent of the call.
+    let mut paramTysSubstituted: List<Int> = []
+    for pt in sig.paramTys {
+        paramTysSubstituted.push(instZonk(cx, inst, instSubstitute(cx, inst, pt)))
+    }
+    elabRecordMethodCalleeType(cx, callNode, fieldNode, methodName, paramTysSubstituted, retTy)
+
     let mcall = coreMethodCall(
         cx.core,
         recv.node,
@@ -2126,6 +2138,45 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
         callNode.end,
     )
     ElabResult { node: mcall, ty: retTy }
+}
+
+/// Record a synthetic typed-expr record for a method call's callee
+/// `AstNField` node. The self-host's `elabInferMethodCall` dispatches
+/// directly off the AST without calling `elabInfer` on the field
+/// callee, which means no `FrontCheckedNode` gets emitted for the
+/// method-name slot and consumers like `inspect.osty` lose the
+/// signal they'd need to propagate per-arg hints.
+///
+/// The Go reference's checker types the callee naturally (fieldExpr
+/// resolution produces an `fn(Ps) -> R` type), so `inspect`'s
+/// `argHints` can just read `exprType(n.Fn)`. We mimic that here by
+/// constructing the same `fn(Ps) -> R` as a `tyFn` and attaching it
+/// via `coreField` with `originAst = fieldNode`'s arena index.
+/// `serializeCheckResult` (the sole consumer of `cx.core.nodes`) then
+/// emits a `FrontCheckedNode{kind: "AstNField", typeName: "fn(...) -> R"}`
+/// just like the Go reference would.
+fn elabRecordMethodCalleeType(
+    cx: ElabCx,
+    callNode: AstNode,
+    fieldNode: AstNode,
+    methodName: String,
+    paramTys: List<Int>,
+    retTy: Int,
+) {
+    if callNode.left < 0 {
+        return
+    }
+    if tyIsBad(cx.env.tys, retTy) {
+        return
+    }
+    for pt in paramTys {
+        if tyIsBad(cx.env.tys, pt) {
+            return
+        }
+    }
+    let calleeFnTy = tyFn(cx.env.tys, paramTys, retTy)
+    let calleeCore = coreField(cx.core, -1, methodName, calleeFnTy, fieldNode.start, fieldNode.end)
+    coreSetOrigin(cx.core, calleeCore, callNode.left)
 }
 
 /// elabInferFnValueCall is the fallback when the callee is a

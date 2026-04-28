@@ -85,8 +85,10 @@ pub fn inspectFromCheckResult(checked: FrontCheckResult) -> List<InspectRecord> 
 ///     idents (see `astLetPatternSet`),
 ///   - populate `hintName` on expression records by looking at the
 ///     parent's recorded type (via `inspectBuildHintsByNode`). Covers
-///     the List / Tuple / Call shapes today; nested chains (Block,
-///     If, Paren, Closure) are deferred to a follow-up walker slice,
+///     the List / Tuple / Map / Call / For-iter shapes as direct-
+///     parent hints; identity-like containers (Block, If, Paren,
+///     Closure, Match arm) are threaded top-down via
+///     `inspectThreadHintsThroughContainers`,
 ///   - widen postfix expression spans (Call / Field / Index / Question /
 ///     Turbofish) from the operator-only token range stamped by the
 ///     parser to the full receiver-to-operator range Go's `ast.Node.Pos`
@@ -210,11 +212,17 @@ fn inspectHintForNode(hintsByNode: List<String>, nodeIdx: Int) -> String {
 ///   - `Map<K, V>` → each entry's key child gets `K`, value child gets `V`
 ///   - `CallExpr` → each arg gets its positional param type from the
 ///     callee's recorded `fn(Ps) -> R` type
+///   - `ForStmt` (`for <pat> in <iter>`) → the iter expression is
+///     back-hinted as `List<T>` when the loop pattern is a bare ident
+///     with a known binding type `T`. The Go reference walker passes
+///     `nil` on this edge; the self-host surfaces the inferred shape
+///     because the binding is already typed by the checker and the
+///     rendered hint helps IDE observers understand the loop's shape.
 ///
-/// Nested / identity-like parents (Block, If, Paren, Closure) and
-/// hints from declared annotations (LetStmt / FnDecl return type) are
-/// deferred to a later walker slice that threads hints top-down through
-/// the AST rather than looking only at direct parents.
+/// Nested / identity-like parents (Block, If, Paren, Closure, Match
+/// arm) and hints from declared annotations (LetStmt / FnDecl return
+/// type) are handled by `inspectThreadHintsThroughContainers`, which
+/// threads hints top-down through the AST.
 fn inspectBuildHintsByNode(arena: AstArena, checked: FrontCheckResult) -> List<String> {
     let n = arena.nodes.len()
     let mut hints: List<String> = []
@@ -225,20 +233,33 @@ fn inspectBuildHintsByNode(arena: AstArena, checked: FrontCheckResult) -> List<S
         return hints
     }
     let typeByNode = inspectTypeNameByNode(arena, checked)
+    let bindingTypeByPattern = inspectBindingTypeByPattern(checked)
     for i in 0..n {
         let parent = arena.nodes[i]
         let parentType = typeByNode[i]
-        if parentType == "" {
-            continue
-        }
         if parent.kind == AstNList {
-            inspectSpreadListHints(hints, parent, parentType, n)
+            if parentType != "" {
+                inspectSpreadListHints(hints, parent, parentType, n)
+            }
         } else if parent.kind == AstNTuple {
-            inspectSpreadTupleHints(hints, parent, parentType, n)
+            if parentType != "" {
+                inspectSpreadTupleHints(hints, parent, parentType, n)
+            }
         } else if parent.kind == AstNMap {
-            inspectSpreadMapHints(hints, arena, parent, parentType, n)
+            if parentType != "" {
+                inspectSpreadMapHints(hints, arena, parent, parentType, n)
+            }
         } else if parent.kind == AstNCall {
-            inspectSpreadCallHints(hints, parent, typeByNode, n)
+            if parentType != "" {
+                inspectSpreadCallHints(hints, parent, typeByNode, n)
+            }
+        } else if parent.kind == AstNFor && parent.text == "forin" {
+            // For loops don't carry a checker-recorded type (they eval
+            // to Unit), so the direct-parent-type gate above would have
+            // skipped them. The iter hint comes from the pattern
+            // binding, not from the ForStmt's own type — fall through
+            // independent of `parentType`.
+            inspectSpreadForInHints(hints, arena, parent, bindingTypeByPattern, n)
         }
     }
     hints
@@ -337,6 +358,47 @@ fn inspectSpreadCallHints(
             hints[argIdx] = sig.params[k]
         }
         k = k + 1
+    }
+}
+
+/// Back-hint the iter expression of a `for <pat> in <iter>` loop with
+/// `List<T>` when the pattern is a bare ident bound to a known type
+/// `T`. Parser layout (see `opParseForStmt`): children[0] = pattern
+/// idx, children[1] = iter idx. Compound patterns (tuple, struct,
+/// variant) are skipped — the self-host checker records bindings on
+/// the leaf idents, and reconstructing the element type from those
+/// leaves would double-compute what the checker already knows. The
+/// binding table covers the ident case cleanly; the compound cases
+/// would need recursive pattern→type reconstruction that isn't worth
+/// the code for a hint-only signal.
+fn inspectSpreadForInHints(
+    hints: List<String>,
+    arena: AstArena,
+    parent: AstNode,
+    bindingTypeByPattern: List<InspectBindingEntry>,
+    n: Int,
+) {
+    if parent.children.len() < 2 {
+        return
+    }
+    let patIdx = parent.children[0]
+    let iterIdx = parent.children[1]
+    if iterIdx < 0 || iterIdx >= n {
+        return
+    }
+    if patIdx < 0 || patIdx >= n {
+        return
+    }
+    let pat = arena.nodes[patIdx]
+    if pat.kind != AstNPattern || pat.extra != astPatternIdentKind() {
+        return
+    }
+    let elemTy = inspectLookupBindingType(bindingTypeByPattern, patIdx)
+    if elemTy == "" {
+        return
+    }
+    if hints[iterIdx] == "" {
+        hints[iterIdx] = "List<" + elemTy + ">"
     }
 }
 

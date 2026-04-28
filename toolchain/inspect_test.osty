@@ -494,6 +494,96 @@ fn testInspectHintThreadsThroughParen() {
     testing.assert(sawHint)
 }
 
+fn testInspectHintsForInIter() {
+    let recs = inspectSource(
+        r"""
+            fn main() {
+                let xs: List<Int> = [1, 2, 3]
+                for x in xs {
+                    let _ = x
+                }
+            }
+            """,
+    )
+
+    let mut sawListIntHint = false
+    for rec in recs {
+        // The iter expression (`xs`) is an identifier; the for-loop
+        // back-hint propagates `List<Int>` to it because the loop
+        // pattern `x` is bound to `Int`.
+        if rec.rule == "VAR" && rec.hintName == "List<Int>" {
+            sawListIntHint = true
+        }
+    }
+    testing.assert(sawListIntHint)
+}
+
+fn testInspectHintsThroughMethodCallArg() {
+    let recs = inspectSource(
+        r"""
+            fn main() {
+                let mut xs: List<Int> = []
+                xs.push(42)
+            }
+            """,
+    )
+
+    let mut sawArgHint = false
+    for rec in recs {
+        if rec.rule == "LIT-INT" && rec.hintName == "Int" {
+            sawArgHint = true
+        }
+    }
+    testing.assert(sawArgHint)
+}
+
+fn testInspectEmitsMethodCalleeFieldRecord() {
+    let recs = inspectSource(
+        r"""
+            fn main() {
+                let mut xs: List<Int> = []
+                xs.push(1)
+            }
+            """,
+    )
+
+    let mut sawMethodField = false
+    for rec in recs {
+        if rec.rule == "FIELD" && rec.typeName.startsWith("fn(") {
+            sawMethodField = true
+        }
+    }
+    testing.assert(sawMethodField)
+}
+
+fn testInspectFieldChainHintFromFnReturn() {
+    let recs = inspectSource(
+        r"""
+            pub struct User { pub age: Int }
+
+            fn main() {
+                let u: User = User { age: 42 }
+                let _ = ageOf(u)
+            }
+
+            fn ageOf(u: User) -> Int {
+                u.age
+            }
+            """,
+    )
+
+    let mut sawFieldHint = false
+    for rec in recs {
+        // The tail `u.age` inside `fn ageOf -> Int` is a FieldExpr
+        // threaded through the function body block, so it inherits
+        // the fn's return-type hint.
+        if rec.rule == "FIELD" && rec.hintName == "Int" {
+            sawFieldHint = true
+        }
+    }
+    testing.assert(sawFieldHint)
+}
+
 fn testInspectRecordFieldsStable() {
     let recs = inspectSource(
         r"""
