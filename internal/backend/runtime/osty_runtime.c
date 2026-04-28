@@ -4532,8 +4532,15 @@ static void *osty_gc_allocate_managed_headerful(size_t byte_size,
      * referenced from a register or a not-yet-published slot. */
     if (osty_gc_state == OSTY_GC_STATE_MARK_INCREMENTAL ||
         osty_gc_state == OSTY_GC_STATE_SWEEPING) {
-        header->color = OSTY_GC_COLOR_BLACK;
-        header->marked = true;
+        /* Phase 0g: atomic store. Today the alloc path holds the GC
+         * lock so concurrent readers can't observe a torn color, but
+         * once Phase 0h lets the tracer run lock-free this RELEASE
+         * pairs with the tracer's ACQUIRE in `mark_header` so a
+         * tracer that finds this header via index probe sees BLACK
+         * (and skips it) consistently with the marker_count store. */
+        __atomic_store_n(&header->color, OSTY_GC_COLOR_BLACK,
+                         __ATOMIC_RELEASE);
+        __atomic_store_n(&header->marked, true, __ATOMIC_RELAXED);
     }
     /* Phase C3 mutator assist: if an incremental major is active,
      * borrow a proportional amount of mark work from the allocator
@@ -5287,12 +5294,26 @@ static void osty_gc_mark_stack_push(osty_gc_header *header) {
     osty_gc_mark_stack_push_central(header);
 }
 
+/* Phase 0g: counters for atomic color transitions. CAS failures
+ * (another thread already moved this header out of WHITE) are
+ * harmless — they just mean the racer pushed first — but tracking
+ * them is the only way to observe contention while the lock around
+ * `dispatch_trace` is still in place. With the lock dropped (Phase
+ * 0h) these counters become the contention signal. */
+static int64_t osty_gc_mark_cas_attempts_total = 0;
+static int64_t osty_gc_mark_cas_failures_total = 0;
+
 static void osty_gc_mark_header(osty_gc_header *header) {
     /* Enqueue only — the actual trace happens in `osty_gc_mark_drain`.
      * Phase C: the tri-colour check `color != WHITE` short-circuits
      * both already-enqueued (GREY) and already-traced (BLACK) cases
-     * so repeated reach via different edges pushes at most once. */
-    if (header == NULL || header->color != OSTY_GC_COLOR_WHITE) {
+     * so repeated reach via different edges pushes at most once.
+     *
+     * Phase 0g: the CAS makes WHITE→GREY atomic so two markers (or
+     * a marker + SATB barrier) racing on the same header don't both
+     * push it onto the mark stack. The reload-on-failure path is a
+     * no-op — whoever lost the CAS leaves the push to the winner. */
+    if (header == NULL) {
         return;
     }
     /* Phase B: during a minor collection, OLD headers are treated as
@@ -5301,11 +5322,22 @@ static void osty_gc_mark_header(osty_gc_header *header) {
      * `osty_gc_collect_minor_with_stack_roots`. Without this filter the
      * minor pass would sweep through tenured objects unnecessarily,
      * collapsing back to major semantics. */
-    if (osty_gc_minor_in_progress && header->generation == OSTY_GC_GEN_OLD) {
+    if (osty_gc_minor_in_progress &&
+        __atomic_load_n(&header->generation, __ATOMIC_RELAXED) ==
+            OSTY_GC_GEN_OLD) {
         return;
     }
-    header->color = OSTY_GC_COLOR_GREY;
-    header->marked = true;
+    uint8_t expected = OSTY_GC_COLOR_WHITE;
+    osty_gc_mark_cas_attempts_total += 1;
+    if (!__atomic_compare_exchange_n(&header->color, &expected,
+                                     OSTY_GC_COLOR_GREY,
+                                     false /* strong */,
+                                     __ATOMIC_ACQ_REL,
+                                     __ATOMIC_ACQUIRE)) {
+        osty_gc_mark_cas_failures_total += 1;
+        return;
+    }
+    __atomic_store_n(&header->marked, true, __ATOMIC_RELAXED);
     osty_gc_mark_stack_push(header);
 }
 
@@ -5340,7 +5372,13 @@ static int64_t osty_gc_mark_drain_budget(int64_t budget) {
         } else {
             header = osty_gc_mark_stack[--osty_gc_mark_stack_count];
         }
-        header->color = OSTY_GC_COLOR_BLACK;
+        /* Phase 0g: atomic store. The pop above already serialised
+         * "this header is exclusively ours to trace", so we don't need
+         * a CAS — but the RELEASE pairs with the ACQUIRE in
+         * `mark_header` so other threads that subsequently see BLACK
+         * also see the trace's full effects (children pushed). */
+        __atomic_store_n(&header->color, OSTY_GC_COLOR_BLACK,
+                         __ATOMIC_RELEASE);
         /* Trace callbacks re-enter `osty_gc_mark_*` for children,
          * which push more GREY work — into TLS via mark_stack_push's
          * routing. The C call stack stays bounded regardless of
@@ -5838,15 +5876,22 @@ static int64_t osty_gc_compact_major_with_stack_roots(
     header = osty_gc_objects;
     while (header != NULL) {
         next = header->next;
-        if (header->color == OSTY_GC_COLOR_WHITE) {
+        /* Phase 0g: atomic load + atomic reset for the BLACK→WHITE
+         * survivor recolour. Compact_major runs inside the STW
+         * finish handshake, so no concurrent reader touches color
+         * during this walk — the atomics are for invariant
+         * consistency with the rest of the lock-free-ready paths. */
+        uint8_t color = __atomic_load_n(&header->color, __ATOMIC_ACQUIRE);
+        if (color == OSTY_GC_COLOR_WHITE) {
             osty_gc_swept_count_total += 1;
             osty_gc_swept_bytes_total += header->byte_size;
             osty_gc_dispatch_destroy(header);
             osty_gc_unlink(header);
             osty_gc_reclaim_swept_header(header);
         } else {
-            header->color = OSTY_GC_COLOR_WHITE;
-            header->marked = false;
+            __atomic_store_n(&header->color, OSTY_GC_COLOR_WHITE,
+                             __ATOMIC_RELEASE);
+            __atomic_store_n(&header->marked, false, __ATOMIC_RELAXED);
             header->card_dirty = 0;
             if (osty_gc_header_is_movable(header)) {
                 osty_gc_header *clone = osty_gc_clone_header(header);
@@ -6627,7 +6672,13 @@ static int64_t osty_gc_incremental_sweep_step(int64_t budget) {
     header = osty_gc_sweep_cursor;
     while (header != NULL && (unlimited || done < budget)) {
         next = header->next;
-        if (header->color == OSTY_GC_COLOR_WHITE) {
+        /* Phase 0g: atomic load to pair with mark/SATB releases. The
+         * sweep itself runs under `osty_gc_lock` so the value won't
+         * change mid-iteration, but the ACQUIRE makes the colour
+         * read happen-before any subsequent header field access (e.g.
+         * `byte_size`, `dispatch_destroy`) that the WHITE branch does. */
+        uint8_t color = __atomic_load_n(&header->color, __ATOMIC_ACQUIRE);
+        if (color == OSTY_GC_COLOR_WHITE) {
             osty_gc_swept_count_total += 1;
             osty_gc_swept_bytes_total += header->byte_size;
             osty_gc_dispatch_destroy(header);
@@ -6651,9 +6702,11 @@ static int64_t osty_gc_incremental_sweep_step(int64_t budget) {
 static void osty_gc_reset_survivors_walk(void) {
     osty_gc_header *header = osty_gc_objects;
     while (header != NULL) {
-        if (header->color != OSTY_GC_COLOR_WHITE) {
-            header->color = OSTY_GC_COLOR_WHITE;
-            header->marked = false;
+        uint8_t color = __atomic_load_n(&header->color, __ATOMIC_ACQUIRE);
+        if (color != OSTY_GC_COLOR_WHITE) {
+            __atomic_store_n(&header->color, OSTY_GC_COLOR_WHITE,
+                             __ATOMIC_RELEASE);
+            __atomic_store_n(&header->marked, false, __ATOMIC_RELAXED);
             header->card_dirty = 0;
         }
         header = header->next;
@@ -11466,12 +11519,28 @@ void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) {
      * end, even if the mutator rewrites the slot mid-cycle. Outside
      * MARK_INCREMENTAL the barrier is a no-op (STW cycles don't need
      * SATB). */
-    if (osty_gc_state == OSTY_GC_STATE_MARK_INCREMENTAL &&
-        old_header->color == OSTY_GC_COLOR_WHITE) {
-        old_header->color = OSTY_GC_COLOR_GREY;
-        old_header->marked = true;
-        osty_gc_mark_stack_push(old_header);
-        osty_gc_satb_barrier_greyed_total += 1;
+    if (osty_gc_state == OSTY_GC_STATE_MARK_INCREMENTAL) {
+        /* Phase 0g: same WHITE→GREY CAS as `mark_header`. The barrier
+         * runs under `osty_gc_lock`, so today it can't lose the race
+         * to a concurrent tracer — but once the lock drops around
+         * `dispatch_trace` (Phase 0h) two paths grey the same header:
+         * SATB on a slot overwrite, and the tracer that just popped
+         * this header off the mark stack. CAS keeps either path
+         * idempotent and ensures exactly one push per WHITE→GREY
+         * transition. */
+        uint8_t expected = OSTY_GC_COLOR_WHITE;
+        osty_gc_mark_cas_attempts_total += 1;
+        if (__atomic_compare_exchange_n(&old_header->color, &expected,
+                                        OSTY_GC_COLOR_GREY,
+                                        false /* strong */,
+                                        __ATOMIC_ACQ_REL,
+                                        __ATOMIC_ACQUIRE)) {
+            __atomic_store_n(&old_header->marked, true, __ATOMIC_RELAXED);
+            osty_gc_mark_stack_push(old_header);
+            osty_gc_satb_barrier_greyed_total += 1;
+        } else {
+            osty_gc_mark_cas_failures_total += 1;
+        }
     }
     owner_header = osty_gc_find_header_or_forwarded(owner);
     if (owner_header != NULL && osty_gc_header_is_pinned(owner_header)) {
@@ -12242,6 +12311,21 @@ int64_t osty_gc_debug_index_pregrow_total(void) {
 
 int64_t osty_gc_debug_index_grow_deferred_total(void) {
     return osty_gc_index_grow_deferred_total;
+}
+
+/* Phase 0g atomic-color CAS counters. `attempts` increments on
+ * every WHITE→GREY transition site (mark_header + SATB pre_write),
+ * `failures` only when another thread won the race. With the
+ * trace lock still in place (Phase 0g) failures stay at 0; once
+ * Phase 0h drops the lock around dispatch_trace, contention shows
+ * up here and the ratio (failures/attempts) becomes the lock-free
+ * trace overhead signal. */
+int64_t osty_gc_debug_mark_cas_attempts_total(void) {
+    return osty_gc_mark_cas_attempts_total;
+}
+
+int64_t osty_gc_debug_mark_cas_failures_total(void) {
+    return osty_gc_mark_cas_failures_total;
 }
 
 int64_t osty_gc_debug_color_of(void *payload) {
