@@ -7301,6 +7301,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitStdEnvCall(call); found || err != nil {
 		return v, err
 	}
+	if v, found, err := g.emitStdCryptoCall(call); found || err != nil {
+		return v, err
+	}
 	if v, found, err := g.emitStdIoCall(call); found || err != nil {
 		return v, err
 	}
