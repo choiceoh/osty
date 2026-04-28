@@ -10,8 +10,8 @@ import (
 	"github.com/osty/osty/internal/selfhost"
 )
 
-// TestBuildRoundTripCorpus is the Phase 4 round-trip: the Green tree produced
-// by BuildFromParsed, when walked and concatenated, reconstructs the
+// TestBuildRoundTripCorpus is the CST round-trip: the Green tree produced
+// by ParseCST, when walked and concatenated, reconstructs the
 // normalized source byte-for-byte for every corpus file.
 func TestBuildRoundTripCorpus(t *testing.T) {
 	root := filepath.Join("..", "..")
@@ -24,14 +24,11 @@ func TestBuildRoundTripCorpus(t *testing.T) {
 				return
 			}
 			src := cst.Normalize(raw)
-			toks, _, _ := selfhost.Lex(src)
-			trivias := cst.Extract(src, toks)
-			file, _ := selfhost.Parse(src)
-			if file == nil {
-				t.Skip("parser returned nil file")
+			tree, _ := selfhost.ParseCST(src)
+			if tree == nil {
+				t.Skip("parser returned nil CST")
 				return
 			}
-			tree := cst.BuildFromParsed(src, file, toks, trivias)
 			got := emitTreeBytes(tree)
 			if string(got) != string(src) {
 				diff := firstDiff(src, got)
@@ -50,10 +47,7 @@ func TestBuildTopLevelStructuring(t *testing.T) {
 }
 `
 	src := cst.Normalize([]byte(source))
-	toks, _, _ := selfhost.Lex(src)
-	trivias := cst.Extract(src, toks)
-	file, _ := selfhost.Parse(src)
-	tree := cst.BuildFromParsed(src, file, toks, trivias)
+	tree, _ := selfhost.ParseCST(src)
 
 	var found bool
 	tree.Root().Walk(func(r cst.Red) bool {
@@ -80,10 +74,7 @@ use std.strings as strings
 pub fn main() {}
 `
 	src := cst.Normalize([]byte(source))
-	toks, _, _ := selfhost.Lex(src)
-	trivias := cst.Extract(src, toks)
-	file, _ := selfhost.Parse(src)
-	tree := cst.BuildFromParsed(src, file, toks, trivias)
+	tree, _ := selfhost.ParseCST(src)
 
 	useCount := 0
 	tree.Root().Walk(func(r cst.Red) bool {
@@ -104,10 +95,7 @@ func TestBuildLeadingTriviaAttachment(t *testing.T) {
 pub fn main() {}
 `
 	src := cst.Normalize([]byte(source))
-	toks, _, _ := selfhost.Lex(src)
-	trivias := cst.Extract(src, toks)
-	file, _ := selfhost.Parse(src)
-	tree := cst.BuildFromParsed(src, file, toks, trivias)
+	tree, _ := selfhost.ParseCST(src)
 
 	first, ok := tree.Root().FirstToken()
 	if !ok {

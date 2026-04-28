@@ -1,6 +1,9 @@
 package selfhost
 
-import "github.com/osty/osty/internal/ast"
+import (
+	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/token"
+)
 
 // LowerPublicFileFromRun lowers a FrontendRun's semantic arena to the public
 // *ast.File surface without bumping AstbridgeLowerCount. Use this explicit
@@ -14,7 +17,12 @@ func LowerPublicFileFromRun(run *FrontendRun) *ast.File {
 	if semantic := run.semanticAstFile(); semantic != nil && semantic.arena != nil {
 		arena = semantic.arena
 	}
-	file := astLowerPublicFile(arena, run.Tokens())
+	return lowerPublicFileFromArena(arena, run.Tokens())
+}
+
+func lowerPublicFileFromArena(arena *AstArena, toks []token.Token) *ast.File {
+	file := astLowerPublicFile(arena, toks)
+	assignPublicStableIDs(file, arena, toks)
 	ast.AssignIDs(file)
 	return file
 }

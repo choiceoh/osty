@@ -18513,6 +18513,16 @@ type AstParseError struct {
 	code       string
 }
 
+type AstStableAlias struct {
+	alias       string
+	canonical   string
+	kind        string
+	sourceHabit string
+	detail      string
+	start       int
+	end         int
+}
+
 // Osty: /tmp/selfhost_merged.osty:6943:5
 type AstArena struct {
 	nodes  []*AstNode
@@ -18722,6 +18732,7 @@ type OstyParser struct {
 	count         int
 	pos           int
 	arena         *AstArena
+	stableAliases []*AstStableAlias
 	noStructLit   bool
 	inLoop        bool
 	typeGtDebt    int
@@ -18730,7 +18741,7 @@ type OstyParser struct {
 
 // Osty: /tmp/selfhost_merged.osty:7043:5
 func newOstyParser(tokens []*FrontToken) *OstyParser {
-	return &OstyParser{tokens: tokens, count: frontTokenListCount(tokens), pos: 0, arena: emptyAstArena(), noStructLit: false, inLoop: false, typeGtDebt: 0, pendingAssign: false}
+	return &OstyParser{tokens: tokens, count: frontTokenListCount(tokens), pos: 0, arena: emptyAstArena(), stableAliases: make([]*AstStableAlias, 0, 1), noStructLit: false, inLoop: false, typeGtDebt: 0, pendingAssign: false}
 }
 
 // Osty: /tmp/selfhost_merged.osty:7055:1
@@ -18863,6 +18874,35 @@ func opAt(p *OstyParser, kind FrontTokenKind) bool {
 // Osty: /tmp/selfhost_merged.osty:7100:1
 func opIsStableAlias(tok *FrontToken, text string) bool {
 	return ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && tok.text == text
+}
+
+func opRecordStableAlias(p *OstyParser, tok *FrontToken) {
+	if !ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
+		return
+	}
+	if tok.text == "func" {
+		opRecordStableAliasSpec(p, tok, "fn", "stable_function_keyword", "foreign_function_keyword", "accept `func` as a stable parser alias for `fn`")
+	} else if tok.text == "def" {
+		opRecordStableAliasSpec(p, tok, "fn", "stable_function_keyword", "foreign_function_keyword", "accept `def` as a stable parser alias for `fn`")
+	} else if tok.text == "function" {
+		opRecordStableAliasSpec(p, tok, "fn", "stable_function_keyword", "foreign_function_keyword", "accept `function` as a stable parser alias for `fn`")
+	} else if tok.text == "import" {
+		opRecordStableAliasSpec(p, tok, "use", "stable_use_keyword", "import_keyword", "accept `import` as a stable parser alias for `use`")
+	} else if tok.text == "while" {
+		opRecordStableAliasSpec(p, tok, "for", "stable_while_keyword", "while_condition_loop", "accept `while` as a stable parser alias for `for` loops")
+	}
+}
+
+func opRecordStableAliasSpec(p *OstyParser, tok *FrontToken, canonical string, kind string, sourceHabit string, detail string) {
+	p.stableAliases = append(p.stableAliases, &AstStableAlias{
+		alias:       tok.text,
+		canonical:   canonical,
+		kind:        kind,
+		sourceHabit: sourceHabit,
+		detail:      detail,
+		start:       p.pos,
+		end:         p.pos + 1,
+	})
 }
 
 // Osty: /tmp/selfhost_merged.osty:7104:1
@@ -21919,6 +21959,7 @@ func opParseForStmt(p *OstyParser, labelIdx int) int {
 	// Osty: /tmp/selfhost_merged.osty:8373:5
 	start := p.pos
 	_ = start
+	opRecordStableAlias(p, opPeek(p))
 	// Osty: /tmp/selfhost_merged.osty:8374:5
 	_ = opAdvance(p)
 	// Osty: /tmp/selfhost_merged.osty:8375:5
@@ -22699,6 +22740,7 @@ func opParseFnType(p *OstyParser) int {
 	// Osty: /tmp/selfhost_merged.osty:8739:5
 	start := p.pos
 	_ = start
+	opRecordStableAlias(p, opPeek(p))
 	// Osty: /tmp/selfhost_merged.osty:8740:5
 	opAdvance(p)
 	// Osty: /tmp/selfhost_merged.osty:8741:5
@@ -23098,6 +23140,7 @@ func opParseFnDecl(p *OstyParser, isPub bool, anns []int) int {
 	// Osty: /tmp/selfhost_merged.osty:8930:5
 	start := p.pos
 	_ = start
+	opRecordStableAlias(p, opPeek(p))
 	// Osty: /tmp/selfhost_merged.osty:8931:5
 	opAdvance(p)
 	// Osty: /tmp/selfhost_merged.osty:8932:5
@@ -23549,6 +23592,7 @@ func opParseUseDecl(p *OstyParser, isPub bool) int {
 	// Osty: /tmp/selfhost_merged.osty:9125:5
 	start := p.pos
 	_ = start
+	opRecordStableAlias(p, opPeek(p))
 	// Osty: /tmp/selfhost_merged.osty:9126:5
 	_ = opAdvance(p)
 	// Osty: /tmp/selfhost_merged.osty:9127:5

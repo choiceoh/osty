@@ -78,6 +78,29 @@ func TestAssignIDsIdempotent(t *testing.T) {
 	}
 }
 
+func TestAssignIDsStartsAfterExistingStableIDs(t *testing.T) {
+	file := &File{
+		ID: 42,
+		Decls: []Decl{
+			&LetDecl{
+				PosV:  token.Pos{Line: 1, Column: 1},
+				EndV:  token.Pos{Line: 1, Column: 10},
+				Name:  "x",
+				Value: &IntLit{PosV: token.Pos{Line: 1, Column: 9}, Text: "1"},
+			},
+		},
+	}
+
+	AssignIDs(file)
+
+	if got := file.Decls[0].(*LetDecl).ID; got <= file.ID {
+		t.Fatalf("LetDecl ID = %d, want greater than preserved File ID %d", got, file.ID)
+	}
+	if got := file.Decls[0].(*LetDecl).Value.(*IntLit).ID; got <= file.Decls[0].(*LetDecl).ID {
+		t.Fatalf("IntLit ID = %d, want greater than LetDecl ID %d", got, file.Decls[0].(*LetDecl).ID)
+	}
+}
+
 func TestAssignIDsNilSafe(t *testing.T) {
 	AssignIDs(nil)
 	var f *File

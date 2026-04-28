@@ -3,11 +3,11 @@
 // every source byte is reachable from either a token or a trivia run.
 //
 // Architecture decision: the lossless parser contract is Red/Green. The
-// current BuildFromParsed adapter may still project from the semantic public
-// AST while the selfhost generator cannot ingest a native lossless event
-// stream, but formatter/repair/LSP consumers should target Tree/Red/Green
-// APIs rather than an AstArena side table. The temporary adapter is therefore
-// a compatibility boundary, not the long-term CST architecture.
+// current adapter still builds top-level structure from parser spans while the
+// selfhost generator cannot ingest a native lossless event stream, but
+// formatter/repair/LSP consumers should target Tree/Red/Green APIs rather than
+// an AstArena side table. The temporary adapter is therefore a compatibility
+// boundary, not the long-term CST architecture.
 //
 // Byte-coverage invariant: for any source src and tokens := selfhost.Lex(src),
 // Extract(src, tokens) returns []Trivia such that:

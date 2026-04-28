@@ -5,7 +5,8 @@ import "reflect"
 // AssignIDs walks root in pre-order and assigns sequential NodeIDs to
 // every Node that carries an `ID NodeID` field. Existing nonzero IDs
 // are preserved so repeated calls are idempotent after the first pass.
-// The first assigned ID is 1; 0 remains the "unassigned" sentinel.
+// New IDs start after the largest existing ID; 0 remains the "unassigned"
+// sentinel.
 //
 // Uses reflection to avoid a hand-written switch over every Node type;
 // parse-time cost is negligible relative to I/O and selfhost lowering.
@@ -13,7 +14,39 @@ func AssignIDs(root Node) {
 	if root == nil {
 		return
 	}
-	next := NodeID(1)
+	var max NodeID
+	var scan func(v reflect.Value)
+	scan = func(v reflect.Value) {
+		switch v.Kind() {
+		case reflect.Interface, reflect.Ptr:
+			if v.IsNil() {
+				return
+			}
+			scan(v.Elem())
+			return
+		case reflect.Slice:
+			for i := 0; i < v.Len(); i++ {
+				scan(v.Index(i))
+			}
+			return
+		case reflect.Struct:
+			// ok — fall through
+		default:
+			return
+		}
+		if idField := v.FieldByName("ID"); idField.IsValid() &&
+			idField.Type() == nodeIDType {
+			if id := NodeID(idField.Uint()); id > max {
+				max = id
+			}
+		}
+		for i := 0; i < v.NumField(); i++ {
+			scan(v.Field(i))
+		}
+	}
+	scan(reflect.ValueOf(root))
+
+	next := max + 1
 	var walk func(v reflect.Value)
 	walk = func(v reflect.Value) {
 		switch v.Kind() {

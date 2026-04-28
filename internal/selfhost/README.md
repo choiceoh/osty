@@ -6,8 +6,9 @@ front end plus the adapters that let the rest of the Go codebase talk to it.
 Today the public entrypoints are:
 
 - `internal/lexer` — thin Go facade over selfhost tokenization
-- `internal/parser` — thin Go facade over selfhost parsing plus Go-side
-  compatibility lowerings
+- `internal/parser` — thin Go facade over selfhost parsing; parser meaning
+  and stable alias provenance are owned by the selfhost parser, with Go kept
+  to surface adapters
 - `internal/selfhost` — `FormatSource` / `FormatCheck` plus
   `ResolveSourceStructured` / `ResolvePackageStructured` expose stable Go
   adapters over the seed pure-Osty formatter and resolver for parity tests
