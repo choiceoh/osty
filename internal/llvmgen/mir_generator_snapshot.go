@@ -5782,9 +5782,9 @@ func mirRtMapMergeWithSymbol() string { return mirRtMapSymbol("merge_with") }
 func mirRtMapToStringSymbol() string  { return mirRtMapSymbol("to_string") }
 
 // Osty: mirRtSet* fixed-symbols
-func mirRtSetClearSymbol() string   { return mirRtSetSymbol("clear") }
-func mirRtSetLenSymbolName() string { return mirRtSetSymbol("len") }
-func mirRtSetToListSymbol() string  { return mirRtSetSymbol("to_list") }
+func mirRtSetClearSymbol() string    { return mirRtSetSymbol("clear") }
+func mirRtSetLenSymbolName() string  { return mirRtSetSymbol("len") }
+func mirRtSetToListSymbol() string   { return mirRtSetSymbol("to_list") }
 func mirRtSetToStringSymbol() string { return mirRtSetSymbol("to_string") }
 
 // Osty: mirRtBytes* fixed-symbols

@@ -1,6 +1,7 @@
 package selfhost
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -179,6 +180,23 @@ fn main() {
 				t.Fatalf("CheckStructuredFromRun diverges from CheckSourceStructured\nlegacy=%#v\nfresh=%#v", legacy, fresh)
 			}
 		})
+	}
+}
+
+func TestCheckSourceStructuredAcceptsStdNamespaceValues(t *testing.T) {
+	src := []byte(`use std.compress as compress
+use std.encoding as encoding
+
+fn main() {
+    let _ = compress.gzip
+    let _ = encoding.base64
+    let _ = encoding.hex
+    let _ = encoding.url
+}
+`)
+	result := CheckSourceStructured(src)
+	if result.Summary.Errors != 0 {
+		t.Fatalf("errors = %d, want 0\nresult=%s", result.Summary.Errors, fmt.Sprintf("%#v", result))
 	}
 }
 

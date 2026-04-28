@@ -28,11 +28,16 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <errno.h>
+#include <limits.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+#if !defined(_WIN32)
+#include <zlib.h>
+#endif
 
 #if !defined(_WIN32)
 #include <sys/mman.h>
@@ -4771,6 +4776,8 @@ bool osty_rt_bytes_is_valid_utf8(void *raw_bytes);
 const char *osty_rt_bytes_to_string(void *raw_bytes);
 uint8_t osty_rt_bytes_get(void *raw_bytes, int64_t index);
 void *osty_rt_bytes_slice(void *raw_bytes, int64_t start, int64_t end);
+void *osty_rt_compress_gzip_encode(void *raw_bytes);
+void *osty_rt_compress_gzip_decode(void *raw_bytes);
 void *osty_rt_crypto_sha256(void *raw_data);
 void *osty_rt_crypto_sha512(void *raw_data);
 void *osty_rt_crypto_sha1(void *raw_data);
@@ -10820,6 +10827,214 @@ static void *osty_rt_bytes_dup_site(const unsigned char *start, size_t len, cons
         memcpy(data, start, len);
     }
     return out;
+}
+
+static unsigned char *osty_rt_compress_grow_buffer(unsigned char *buf, size_t *cap, size_t min_cap, const char *site) {
+    unsigned char *grown;
+    size_t next = (*cap == 0) ? 256 : *cap;
+
+    if (min_cap <= *cap) {
+        return buf;
+    }
+    while (next < min_cap) {
+        if (next > SIZE_MAX / 2) {
+            next = min_cap;
+            break;
+        }
+        next *= 2;
+    }
+    grown = (unsigned char *)realloc(buf, next);
+    if (grown == NULL) {
+        free(buf);
+        osty_rt_abort(site);
+    }
+    *cap = next;
+    return grown;
+}
+
+static bool osty_rt_compress_all_zero(const unsigned char *data, size_t len) {
+    size_t i;
+
+    for (i = 0; i < len; i++) {
+        if (data[i] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void *osty_rt_compress_gzip_encode(void *raw_bytes) {
+#if defined(_WIN32)
+    (void)raw_bytes;
+    osty_rt_abort("runtime.compress.gzip.encode: zlib unavailable on windows");
+    return NULL;
+#else
+    osty_rt_bytes *input = (osty_rt_bytes *)raw_bytes;
+    const unsigned char *input_data = NULL;
+    size_t input_len = 0;
+    size_t input_off = 0;
+    unsigned char *out = NULL;
+    size_t out_cap = 0;
+    z_stream stream;
+    int rc;
+
+    if (input != NULL) {
+        if (input->len < 0) {
+            osty_rt_abort("runtime.compress.gzip.encode: negative length");
+        }
+        input_data = input->data;
+        input_len = (size_t)input->len;
+    }
+
+    memset(&stream, 0, sizeof(stream));
+    rc = deflateInit2(&stream, Z_DEFAULT_COMPRESSION, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY);
+    if (rc != Z_OK) {
+        osty_rt_abort("runtime.compress.gzip.encode: deflateInit2 failed");
+    }
+
+    out = osty_rt_compress_grow_buffer(NULL, &out_cap, 256, "runtime.compress.gzip.encode: out of memory");
+    stream.next_out = out;
+    stream.avail_out = (uInt)((out_cap > (size_t)UINT_MAX) ? (size_t)UINT_MAX : out_cap);
+
+    for (;;) {
+        if (stream.avail_in == 0 && input_off < input_len) {
+            size_t chunk = input_len - input_off;
+            if (chunk > (size_t)UINT_MAX) {
+                chunk = (size_t)UINT_MAX;
+            }
+            stream.next_in = (Bytef *)(input_data + input_off);
+            stream.avail_in = (uInt)chunk;
+            input_off += chunk;
+        }
+
+        rc = deflate(&stream, (input_off == input_len && stream.avail_in == 0) ? Z_FINISH : Z_NO_FLUSH);
+        if (rc == Z_STREAM_END) {
+            size_t produced = (size_t)(stream.next_out - out);
+            void *managed = osty_rt_bytes_dup_site(produced == 0 ? NULL : out, produced, "runtime.compress.gzip.encode");
+            free(out);
+            deflateEnd(&stream);
+            return managed;
+        }
+        if (rc != Z_OK) {
+            free(out);
+            deflateEnd(&stream);
+            osty_rt_abort("runtime.compress.gzip.encode: deflate failed");
+        }
+        if (stream.avail_out == 0) {
+            size_t produced = (size_t)(stream.next_out - out);
+            size_t min_cap = out_cap + ((out_cap < 4096) ? out_cap : 4096);
+            if (min_cap <= out_cap) {
+                min_cap = out_cap + 1;
+            }
+            out = osty_rt_compress_grow_buffer(out, &out_cap, min_cap, "runtime.compress.gzip.encode: out of memory");
+            stream.next_out = out + produced;
+            stream.avail_out = (uInt)(((out_cap - produced) > (size_t)UINT_MAX) ? (size_t)UINT_MAX : (out_cap - produced));
+        }
+    }
+#endif
+}
+
+void *osty_rt_compress_gzip_decode(void *raw_bytes) {
+#if defined(_WIN32)
+    (void)raw_bytes;
+    return NULL;
+#else
+    osty_rt_bytes *input = (osty_rt_bytes *)raw_bytes;
+    const unsigned char *input_data = NULL;
+    size_t input_len = 0;
+    size_t input_off = 0;
+    unsigned char *out = NULL;
+    size_t out_cap = 0;
+    z_stream stream;
+    int rc;
+
+    if (input != NULL) {
+        if (input->len < 0) {
+            osty_rt_abort("runtime.compress.gzip.decode: negative length");
+        }
+        input_data = input->data;
+        input_len = (size_t)input->len;
+    }
+    if (input_len == 0) {
+        return NULL;
+    }
+
+    memset(&stream, 0, sizeof(stream));
+    rc = inflateInit2(&stream, 15 + 16);
+    if (rc != Z_OK) {
+        osty_rt_abort("runtime.compress.gzip.decode: inflateInit2 failed");
+    }
+
+    out = osty_rt_compress_grow_buffer(NULL, &out_cap, 256, "runtime.compress.gzip.decode: out of memory");
+    stream.next_out = out;
+    stream.avail_out = (uInt)((out_cap > (size_t)UINT_MAX) ? (size_t)UINT_MAX : out_cap);
+
+    for (;;) {
+        if (stream.avail_in == 0 && input_off < input_len) {
+            size_t chunk = input_len - input_off;
+            if (chunk > (size_t)UINT_MAX) {
+                chunk = (size_t)UINT_MAX;
+            }
+            stream.next_in = (Bytef *)(input_data + input_off);
+            stream.avail_in = (uInt)chunk;
+            input_off += chunk;
+        }
+
+        rc = inflate(&stream, Z_NO_FLUSH);
+        if (rc == Z_STREAM_END) {
+            size_t consumed = input_off - (size_t)stream.avail_in;
+            size_t remaining = input_len - consumed;
+
+            if (remaining == 0 || osty_rt_compress_all_zero(input_data + consumed, remaining)) {
+                size_t produced = (size_t)(stream.next_out - out);
+                void *managed = osty_rt_bytes_dup_site(produced == 0 ? NULL : out, produced, "runtime.compress.gzip.decode");
+                free(out);
+                inflateEnd(&stream);
+                return managed;
+            }
+            rc = inflateReset(&stream);
+            if (rc != Z_OK) {
+                free(out);
+                inflateEnd(&stream);
+                return NULL;
+            }
+            continue;
+        }
+        if (rc == Z_BUF_ERROR) {
+            if (stream.avail_out == 0) {
+                size_t produced = (size_t)(stream.next_out - out);
+                size_t min_cap = out_cap + ((out_cap < 4096) ? out_cap : 4096);
+                if (min_cap <= out_cap) {
+                    min_cap = out_cap + 1;
+                }
+                out = osty_rt_compress_grow_buffer(out, &out_cap, min_cap, "runtime.compress.gzip.decode: out of memory");
+                stream.next_out = out + produced;
+                stream.avail_out = (uInt)(((out_cap - produced) > (size_t)UINT_MAX) ? (size_t)UINT_MAX : (out_cap - produced));
+                continue;
+            }
+            if (stream.avail_in == 0 && input_off == input_len) {
+                free(out);
+                inflateEnd(&stream);
+                return NULL;
+            }
+        } else if (rc != Z_OK) {
+            free(out);
+            inflateEnd(&stream);
+            return NULL;
+        }
+
+        if (stream.avail_out == 0) {
+            size_t produced = (size_t)(stream.next_out - out);
+            size_t min_cap = out_cap + ((out_cap < 4096) ? out_cap : 4096);
+            if (min_cap <= out_cap) {
+                min_cap = out_cap + 1;
+            }
+            out = osty_rt_compress_grow_buffer(out, &out_cap, min_cap, "runtime.compress.gzip.decode: out of memory");
+            stream.next_out = out + produced;
+            stream.avail_out = (uInt)(((out_cap - produced) > (size_t)UINT_MAX) ? (size_t)UINT_MAX : (out_cap - produced));
+        }
+    }
+#endif
 }
 
 void *osty_rt_bytes_from_list(void *raw_list) {
