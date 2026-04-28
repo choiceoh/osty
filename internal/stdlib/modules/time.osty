@@ -12,7 +12,24 @@ pub let RFC_2822: String = "Mon, 02 Jan 2006 15:04:05 -0700"
 pub struct Duration {
     pub nanoseconds: Int64,
 
-    pub fn abs(self) -> Duration
+    pub fn abs(self) -> Duration {
+        Duration { nanoseconds: self.nanoseconds.abs() }
+    }
+
+    pub fn micros(self) -> Int {
+        let nanosPerMicro: Int64 = 1000
+        self.nanoseconds / nanosPerMicro
+    }
+
+    pub fn millis(self) -> Int {
+        let nanosPerMilli: Int64 = 1000000
+        self.nanoseconds / nanosPerMilli
+    }
+
+    pub fn seconds(self) -> Int {
+        let nanosPerSecond: Int64 = 1000000000
+        self.nanoseconds / nanosPerSecond
+    }
 
     pub fn toString(self) -> String
 }
@@ -26,6 +43,10 @@ pub struct Instant {
 
     pub fn sub(self, other: Instant) -> Duration {
         Duration { nanoseconds: self.unixNanos - other.unixNanos }
+    }
+
+    pub fn since(self, earlier: Instant) -> Duration {
+        self.sub(earlier)
     }
 
     pub fn format(self, layout: String) -> String

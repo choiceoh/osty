@@ -79,6 +79,16 @@ Duration.toString(self) -> String
 // Adaptive output: "1.23s", "15ms", "120µs", "2m30s", "1h05m".
 ```
 
+Whole-unit conversion helpers return truncated integer counts:
+
+```osty
+Duration.abs(self) -> Duration
+Duration.micros(self) -> Int
+Duration.millis(self) -> Int
+Duration.seconds(self) -> Int
+Instant.since(self, earlier: Instant) -> Duration
+```
+
 `Duration` is `Equal`, `Ordered`, `Hashable`. It supports `+`, `-`,
 `*` (by `Int`), `/` (by `Int`).
 
