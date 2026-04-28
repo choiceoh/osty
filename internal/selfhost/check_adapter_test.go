@@ -257,11 +257,9 @@ func TestCheckStructuredFromRunIsAstbridgeFree(t *testing.T) {
 }
 
 // TestCheckSourceStructuredIsAstbridgeFree extends the zero-astbridge
-// guarantee to CheckSourceStructured: after porting the gate adapter
-// (selfhostAppendIntrinsicBodyGateForSource) to the AstArena walker,
-// the full source-based check path — lex, parse, native check, gate —
-// runs without triggering astLowerPublicFile. Regression net against
-// the gate adapter silently falling back to *ast.File.
+// guarantee to CheckSourceStructured: the full source-based check path
+// runs the generated checker and its internal gates without triggering
+// astLowerPublicFile.
 func TestCheckSourceStructuredIsAstbridgeFree(t *testing.T) {
 	src := []byte(`#[intrinsic]
 fn bad() -> Int {
@@ -332,9 +330,9 @@ func TestCheckFromSourceMatchesRunDiagnosticsAndStructuredResult(t *testing.T) {
 }
 
 // TestCheckPackageStructuredIsAstbridgeFree is the multi-file analogue.
-// The gate adapter re-parses each file's source into a fresh arena
-// (selfhostAppendIntrinsicBodyGateForPackage uses Run per file), so
-// no *ast.File lowering happens even with the Direct-path input.
+// The package adapter merges parser arenas and lets the generated checker
+// run its internal gates, so no *ast.File lowering happens even with the
+// Direct-path input.
 func TestCheckPackageStructuredIsAstbridgeFree(t *testing.T) {
 	aSrc := []byte(`pub fn helper() -> Int { 1 }
 `)

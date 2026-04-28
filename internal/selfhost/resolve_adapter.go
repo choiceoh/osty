@@ -399,7 +399,7 @@ func adaptResolveResult(resolved *SelfResolveResult, file *AstFile, offsets func
 			Node:   sym.node,
 			Name:   sym.name,
 			Kind:   sym.kind,
-			Type:   parseTypeRepr(sym.typeName),
+			Type:   typeReprFromRenderedName(sym.typeName),
 			Arity:  sym.arity,
 			Depth:  sym.depth,
 			Start:  start,

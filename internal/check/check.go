@@ -8,6 +8,7 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
 )
@@ -46,6 +47,13 @@ type Result struct {
 	// entry points. Consumed by `osty check --dump-native-diags`; nil when
 	// the native checker was unavailable or reported no errors.
 	NativeCheckerTelemetry *NativeCheckerTelemetry
+
+	// NativeCheckResult is the authoritative structured checker result returned
+	// by the self-host/native boundary. The legacy maps above are still filled
+	// for existing backends and tools, but new consumers should prefer this
+	// stable selfhost-node-id structured surface over span-rematching through
+	// the Go AST.
+	NativeCheckResult *api.CheckResult
 }
 
 // NativeCheckerTelemetry bundles the counters the bootstrapped native checker
@@ -81,6 +89,15 @@ func (r *Result) LookupType(e ast.Expr) types.Type {
 		return nil
 	}
 	return r.Types[e]
+}
+
+// NativeResult returns the authoritative structured checker result, if the
+// self-host/native boundary ran successfully.
+func (r *Result) NativeResult() *api.CheckResult {
+	if r == nil {
+		return nil
+	}
+	return r.NativeCheckResult
 }
 
 // Opts bundles optional inputs to File / Package / Workspace.

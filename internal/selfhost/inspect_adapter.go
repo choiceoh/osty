@@ -43,7 +43,7 @@ func adaptInspectRecords(recs []*InspectRecord, rt runeTable, stream *FrontLexSt
 			End:      end,
 			NodeKind: r.nodeKind,
 			Rule:     r.rule,
-			Type:     parseTypeRepr(r.typeName),
+			Type:     typeReprFromRenderedName(r.typeName),
 			HintName: r.hintName,
 			Notes:    append([]string(nil), r.notes...),
 		})

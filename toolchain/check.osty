@@ -313,9 +313,12 @@ fn collectUseDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
         }
 
         // `use std.strings as X` (no body) — pull the std.strings surface
-        // under the alias. Toolchain code routinely spells this as
+        // under the alias only when the package input did not already install
+        // an import surface for it. Toolchain code routinely spells this as
         // `strings`, `ciStrings`, `pkgStrings`, `llvmStrings`, etc.
-        if node.text == "std.strings" {
+        if checkHasImportAlias(env, alias) {
+            let _ = env
+        } else if node.text == "std.strings" {
             registerStdStringsAliasFns(env, alias)
         } else if node.text == "std.testing" {
             // `use std.testing` (examples use this without an explicit alias,

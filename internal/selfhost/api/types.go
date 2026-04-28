@@ -169,16 +169,21 @@ type CheckInstantiation struct {
 // bootstrapped Osty checker (see toolchain/check_diag.osty). The host
 // bridge lifts each record into a `*diag.Diagnostic` so policy gates
 // authored in Osty surface through the ordinary `check.Result.Diags`
-// channel. Start/End are token indices; the Go bridge converts to byte
-// offsets via the lex stream.
+// channel. Start/End are byte offsets in the source shape the native checker
+// consumed. StartLine/StartColumn/EndLine/EndColumn, when present, are the
+// checker-owned display positions for that span.
 type CheckDiagnosticRecord struct {
-	Code     string   `json:"code"`
-	Severity string   `json:"severity"`
-	Message  string   `json:"message"`
-	Start    int      `json:"start"`
-	End      int      `json:"end"`
-	File     string   `json:"file,omitempty"`
-	Notes    []string `json:"notes,omitempty"`
+	Code        string   `json:"code"`
+	Severity    string   `json:"severity"`
+	Message     string   `json:"message"`
+	Start       int      `json:"start"`
+	End         int      `json:"end"`
+	StartLine   int      `json:"startLine,omitempty"`
+	StartColumn int      `json:"startColumn,omitempty"`
+	EndLine     int      `json:"endLine,omitempty"`
+	EndColumn   int      `json:"endColumn,omitempty"`
+	File        string   `json:"file,omitempty"`
+	Notes       []string `json:"notes,omitempty"`
 }
 
 // CheckResult is the structured Go-facing surface for the bootstrapped checker.

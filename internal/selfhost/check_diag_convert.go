@@ -10,8 +10,9 @@ import (
 
 // CheckDiagnosticsAsDiag converts every CheckDiagnosticRecord in
 // result into a *diag.Diagnostic using src to recover 1-based
-// line/column positions from the byte offsets the native checker
-// produced. Records with empty code AND empty message are dropped
+// line/column positions from checker-owned display fields when present,
+// falling back to byte offsets for older records. Records with empty code
+// AND empty message are dropped
 // (they are signal-only placeholders). Severity, code, file, notes,
 // and the primary span are preserved verbatim so downstream renderers
 // and policy gates see the same shape whether they consumed the
@@ -35,12 +36,10 @@ func CheckDiagnosticsAsDiag(src []byte, records []CheckDiagnosticRecord) []*diag
 // Returns nil when both Code and Message are empty (so the caller's
 // filtered slice stays compact without a dedicated skip branch).
 //
-// Byte offsets outside src are clamped to the valid range — the
-// native checker occasionally reports a past-EOF end when the
-// originating token is the trailing EOF marker, and we'd rather emit
-// a clamped span than drop the diagnostic. Line/column come from a
-// lightweight line-start index over src (no rune table needed; the
-// native checker's offsets are already byte-accurate).
+// Byte offsets outside src are clamped to the valid range on the fallback
+// path — the native checker occasionally reports a past-EOF end when the
+// originating token is the trailing EOF marker, and we'd rather emit a
+// clamped span than drop the diagnostic.
 func CheckDiagnosticRecordAsDiag(src []byte, rec CheckDiagnosticRecord) *diag.Diagnostic {
 	return checkDiagnosticRecordAsDiagWithIndex(src, newDiagLineIndex(src), rec)
 }
@@ -61,7 +60,7 @@ func checkDiagnosticRecordAsDiagWithIndex(src []byte, index diagLineIndex, rec C
 	if rec.File != "" {
 		b = b.File(rec.File)
 	}
-	b = b.Primary(index.byteRangeSpan(rec.Start, rec.End), "")
+	b = b.Primary(diagnosticRecordSpan(index, rec), "")
 	for _, note := range rec.Notes {
 		if strings.TrimSpace(note) == "" {
 			continue
@@ -69,6 +68,24 @@ func checkDiagnosticRecordAsDiagWithIndex(src []byte, index diagLineIndex, rec C
 		b = b.Note(note)
 	}
 	return b.Build()
+}
+
+func diagnosticRecordSpan(index diagLineIndex, rec CheckDiagnosticRecord) diag.Span {
+	if rec.StartLine > 0 && rec.StartColumn > 0 {
+		endLine := rec.EndLine
+		endColumn := rec.EndColumn
+		if endLine <= 0 {
+			endLine = rec.StartLine
+		}
+		if endColumn <= 0 {
+			endColumn = rec.StartColumn
+		}
+		return diag.Span{
+			Start: token.Pos{Line: rec.StartLine, Column: rec.StartColumn, Offset: rec.Start},
+			End:   token.Pos{Line: endLine, Column: endColumn, Offset: rec.End},
+		}
+	}
+	return index.byteRangeSpan(rec.Start, rec.End)
 }
 
 type diagLineIndex struct {

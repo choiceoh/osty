@@ -83,6 +83,9 @@ func TestNativeBoundaryPrefersStructuredPackageCheckerForFileMode(t *testing.T) 
 	if got := chk.LetTypes[letStmt]; got == nil || got.String() != "untyped-int" {
 		t.Fatalf("binding type = %v, want untyped-int", got)
 	}
+	if got := chk.NativeResult(); got == nil || len(got.Bindings) != 1 || got.Bindings[0].Name != "value" {
+		t.Fatalf("native result = %#v, want preserved structured binding", got)
+	}
 }
 
 func TestNativeBoundaryBuildsImportSurfacesForStructuredFileMode(t *testing.T) {
@@ -231,6 +234,22 @@ fn main() {
 	if got := chk.InstantiationsByID[call.ID]; len(got) != 1 || got[0].String() != "Int" {
 		t.Fatalf("call instantiation = %#v, want [Int]", got)
 	}
+	native := chk.NativeResult()
+	if native == nil {
+		t.Fatal("NativeResult() = nil, want authoritative structured result")
+	}
+	if got := len(native.TypedNodes); got != 2 {
+		t.Fatalf("native typed nodes = %d, want 2", got)
+	}
+	if got := native.TypedNodes[0].Type.String(); got != "Int" {
+		t.Fatalf("native typed node type = %q, want Int", got)
+	}
+	if got := len(native.Instantiations); got != 1 {
+		t.Fatalf("native instantiations = %d, want 1", got)
+	}
+	if got := native.Instantiations[0].TypeArgs[0].String(); got != "Int" {
+		t.Fatalf("native instantiation arg = %q, want Int", got)
+	}
 }
 
 // Regression: FnDecl.Body is nil for interface-declared methods without a
@@ -279,6 +298,9 @@ func TestNativeBoundaryReportsMissingExecutable(t *testing.T) {
 	}
 	if notes := strings.Join(chk.Diags[0].Notes, "\n"); !strings.Contains(notes, "no Osty-native checker executable is configured") || !strings.Contains(notes, "missing test native checker") {
 		t.Fatalf("notes = %q, want native checker configuration details", notes)
+	}
+	if got := chk.NativeResult(); got != nil {
+		t.Fatalf("NativeResult() = %#v, want nil when checker did not run", got)
 	}
 }
 
@@ -337,6 +359,30 @@ func TestConvertNativeDiagPreservesFile(t *testing.T) {
 	}
 	if got.File != "/tmp/bad.osty" {
 		t.Fatalf("diag.File = %q, want /tmp/bad.osty", got.File)
+	}
+}
+
+func TestConvertNativeDiagPrefersStructuredPositions(t *testing.T) {
+	got := convertNativeDiag([]byte("one-line fallback\n"), api.CheckDiagnosticRecord{
+		Code:        diag.CodeIntrinsicNonEmptyBody,
+		Severity:    "error",
+		Message:     "`#[intrinsic]` function `violator` must have an empty body",
+		Start:       99,
+		End:         104,
+		StartLine:   5,
+		StartColumn: 7,
+		EndLine:     5,
+		EndColumn:   12,
+	})
+	if got == nil {
+		t.Fatal("convertNativeDiag returned nil")
+	}
+	span := got.Spans[0].Span
+	if span.Start.Line != 5 || span.Start.Column != 7 {
+		t.Fatalf("diag start = %d:%d, want 5:7", span.Start.Line, span.Start.Column)
+	}
+	if span.End.Line != 5 || span.End.Column != 12 {
+		t.Fatalf("diag end = %d:%d, want 5:12", span.End.Line, span.End.Column)
 	}
 }
 
