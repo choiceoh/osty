@@ -38947,6 +38947,9 @@ func elabInferBinary(cx *ElabCx, node *AstNode) *ElabResult {
 		// Osty: /tmp/selfhost_merged.osty:18143:9
 		return elabCoalesce(cx, node)
 	}
+	if ostyEqual(node.op, FrontTokenKind(&FrontTokenKind_FrontMinus{})) && astIsIfWithEscapingThenNoElse(cx.ast, node.left) {
+		return elabInferEarlyReturnMinusTail(cx, node)
+	}
 	// Osty: /tmp/selfhost_merged.osty:18145:5
 	left := elabInfer(cx, node.left)
 	_ = left
@@ -38966,6 +38969,36 @@ func elabInferBinary(cx *ElabCx, node *AstNode) *ElabResult {
 	coreIdx := coreBinary(cx.core, op, left.node, right.node, ty, node.start, node.end)
 	_ = coreIdx
 	return &ElabResult{node: coreIdx, ty: ty}
+}
+
+func elabInferEarlyReturnMinusTail(cx *ElabCx, node *AstNode) *ElabResult {
+	stmts := []int{}
+	ifStmt := elabStmt(cx, node.left)
+	if ifStmt >= 0 {
+		stmts = append(stmts, ifStmt)
+	}
+
+	right := elabInfer(cx, node.right)
+	rightTy := checkResolveAliasDeep(cx.env, right.ty)
+	ty := unOpResultType(cx.env, UnOp(&UnOp_UoNeg{}), rightTy, node.start, node.end)
+	tail := coreUnary(cx.core, UnOp(&UnOp_UoNeg{}), right.node, ty, node.start, node.end)
+	coreIdx := coreBlock(cx.core, stmts, tail, ty, node.start, node.end)
+	return &ElabResult{node: coreIdx, ty: ty}
+}
+
+func astIsIfWithEscapingThenNoElse(ast *AstFile, idx int) bool {
+	if idx < 0 {
+		return false
+	}
+	node := astArenaNodeAt(ast.arena, idx)
+	if !ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNIf{})) {
+		return false
+	}
+	elseIdx := checkIntListAt(node.children, 0)
+	if elseIdx >= 0 {
+		return false
+	}
+	return astBlockEscapesMatchResult(ast, astArenaNodeAt(ast.arena, node.right))
 }
 
 // Osty: /tmp/selfhost_merged.osty:18154:1

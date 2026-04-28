@@ -462,6 +462,9 @@ fn elabInferBinary(cx: ElabCx, node: AstNode) -> ElabResult {
     if binOpIsCoalesce(op) {
         return elabCoalesce(cx, node)
     }
+    if node.op == FrontMinus && astIsIfWithEscapingThenNoElse(cx.ast, node.left) {
+        return elabInferEarlyReturnMinusTail(cx, node)
+    }
     let left = elabInfer(cx, node.left)
     let right = elabInfer(cx, node.right)
     let leftTy = checkResolveAliasDeep(cx.env, left.ty)
@@ -469,6 +472,36 @@ fn elabInferBinary(cx: ElabCx, node: AstNode) -> ElabResult {
     let ty = binOpResultType(cx.env, op, leftTy, rightTy, node.start, node.end)
     let coreIdx = coreBinary(cx.core, op, left.node, right.node, ty, node.start, node.end)
     ElabResult { node: coreIdx, ty }
+}
+
+fn elabInferEarlyReturnMinusTail(cx: ElabCx, node: AstNode) -> ElabResult {
+    let mut stmts: List<Int> = []
+    let ifStmt = elabStmt(cx, node.left)
+    if ifStmt >= 0 {
+        stmts.push(ifStmt)
+    }
+
+    let right = elabInfer(cx, node.right)
+    let rightTy = checkResolveAliasDeep(cx.env, right.ty)
+    let ty = unOpResultType(cx.env, UoNeg, rightTy, node.start, node.end)
+    let tail = coreUnary(cx.core, UoNeg, right.node, ty, node.start, node.end)
+    let coreIdx = coreBlock(cx.core, stmts, tail, ty, node.start, node.end)
+    ElabResult { node: coreIdx, ty }
+}
+
+fn astIsIfWithEscapingThenNoElse(ast: AstFile, idx: Int) -> Bool {
+    if idx < 0 {
+        return false
+    }
+    let node = astArenaNodeAt(ast.arena, idx)
+    if node.kind != AstNIf {
+        return false
+    }
+    let elseIdx = checkIntListAt(node.children, 0)
+    if elseIdx >= 0 {
+        return false
+    }
+    astBlockEscapesMatchResult(ast, astArenaNodeAt(ast.arena, node.right))
 }
 
 fn binOpResultType(env: CheckEnv, op: BinOp, left: Int, right: Int, start: Int, end: Int) -> Int {
