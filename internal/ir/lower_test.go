@@ -98,6 +98,188 @@ func TestLowerPreludeVariantCallBecomesVariantLit(t *testing.T) {
 	}
 }
 
+func TestLowerBareVariantIdentRecoversEnumType(t *testing.T) {
+	variant := &ast.Variant{Name: "HirSwitchUnknown"}
+	enum := &ast.EnumDecl{
+		Name:     "HirSwitchKind",
+		Variants: []*ast.Variant{variant},
+	}
+	ref := &ast.Ident{ID: 1, Name: "HirSwitchUnknown"}
+	file := &ast.File{
+		Decls: []ast.Decl{enum},
+		Stmts: []ast.Stmt{&ast.LetStmt{
+			Pattern: &ast.IdentPat{Name: "kind"},
+			Value:   ref,
+		}},
+	}
+	res := &resolve.Result{
+		RefsByID: map[ast.NodeID]*resolve.Symbol{
+			ref.ID: {Name: "HirSwitchUnknown", Kind: resolve.SymVariant, Decl: variant},
+		},
+		RefIdents: []*ast.Ident{ref},
+	}
+
+	mod, issues := Lower("main", file, res, nil)
+	if len(issues) != 0 {
+		t.Fatalf("Lower() issues = %v, want none", issues)
+	}
+	let, ok := mod.Script[0].(*LetStmt)
+	if !ok {
+		t.Fatalf("script[0] = %T, want *LetStmt", mod.Script[0])
+	}
+	named, ok := let.Type.(*NamedType)
+	if !ok || named.Name != "HirSwitchKind" {
+		t.Fatalf("let type = %#v, want HirSwitchKind", let.Type)
+	}
+	id, ok := let.Value.(*Ident)
+	if !ok {
+		t.Fatalf("let value = %T, want *Ident", let.Value)
+	}
+	named, ok = id.T.(*NamedType)
+	if !ok || named.Name != "HirSwitchKind" {
+		t.Fatalf("ident type = %#v, want HirSwitchKind", id.T)
+	}
+}
+
+func TestLowerIfExprRecoversSyntacticBranchType(t *testing.T) {
+	pointLit := func() *ast.StructLit {
+		return &ast.StructLit{Type: &ast.Ident{Name: "Point"}}
+	}
+	ifExpr := &ast.IfExpr{
+		Cond: &ast.BoolLit{Value: true},
+		Then: &ast.Block{Stmts: []ast.Stmt{
+			&ast.ExprStmt{X: pointLit()},
+		}},
+		Else: &ast.Block{Stmts: []ast.Stmt{
+			&ast.ExprStmt{X: pointLit()},
+		}},
+	}
+	file := &ast.File{
+		Decls: []ast.Decl{&ast.StructDecl{Name: "Point"}},
+		Stmts: []ast.Stmt{&ast.LetStmt{
+			Pattern: &ast.IdentPat{Name: "p"},
+			Value:   ifExpr,
+		}},
+	}
+
+	mod, issues := Lower("main", file, nil, nil)
+	if len(issues) != 0 {
+		t.Fatalf("Lower() issues = %v, want none", issues)
+	}
+	let, ok := mod.Script[0].(*LetStmt)
+	if !ok {
+		t.Fatalf("script[0] = %T, want *LetStmt", mod.Script[0])
+	}
+	named, ok := let.Type.(*NamedType)
+	if !ok || named.Name != "Point" {
+		t.Fatalf("let type = %#v, want Point", let.Type)
+	}
+}
+
+func TestLowerFieldExprRecoversTypeFromRecordedBinding(t *testing.T) {
+	binding := &ast.IdentPat{Name: "p"}
+	pRef := &ast.Ident{ID: 1, Name: "p"}
+	file := &ast.File{
+		Decls: []ast.Decl{&ast.StructDecl{
+			Name: "Point",
+			Fields: []*ast.Field{{
+				Name: "x",
+				Type: &ast.NamedType{Path: []string{"Int"}},
+			}},
+		}},
+		Stmts: []ast.Stmt{
+			&ast.LetStmt{
+				Pattern: binding,
+				Value: &ast.StructLit{
+					Type: &ast.Ident{Name: "Point"},
+					Fields: []*ast.StructLitField{{
+						Name:  "x",
+						Value: &ast.IntLit{Text: "1"},
+					}},
+				},
+			},
+			&ast.LetStmt{
+				Pattern: &ast.IdentPat{Name: "x"},
+				Value:   &ast.FieldExpr{X: pRef, Name: "x"},
+			},
+		},
+	}
+	res := &resolve.Result{
+		RefsByID: map[ast.NodeID]*resolve.Symbol{
+			pRef.ID: {Name: "p", Kind: resolve.SymLet, Decl: binding},
+		},
+		RefIdents: []*ast.Ident{pRef},
+	}
+
+	mod, issues := Lower("main", file, res, nil)
+	if len(issues) != 0 {
+		t.Fatalf("Lower() issues = %v, want none", issues)
+	}
+	let, ok := mod.Script[1].(*LetStmt)
+	if !ok {
+		t.Fatalf("script[1] = %T, want *LetStmt", mod.Script[1])
+	}
+	if let.Type != TInt {
+		t.Fatalf("field let type = %#v, want TInt", let.Type)
+	}
+	field, ok := let.Value.(*FieldExpr)
+	if !ok {
+		t.Fatalf("field let value = %T, want *FieldExpr", let.Value)
+	}
+	if field.T != TInt {
+		t.Fatalf("field expr type = %#v, want TInt", field.T)
+	}
+}
+
+func TestLowerIndexExprRecoversTypeFromRecordedBinding(t *testing.T) {
+	binding := &ast.IdentPat{Name: "xs"}
+	xsRef := &ast.Ident{ID: 1, Name: "xs"}
+	file := &ast.File{
+		Stmts: []ast.Stmt{
+			&ast.LetStmt{
+				Pattern: binding,
+				Type: &ast.NamedType{
+					Path: []string{"List"},
+					Args: []ast.Type{&ast.NamedType{Path: []string{"Int"}}},
+				},
+				Value: &ast.ListExpr{Elems: []ast.Expr{&ast.IntLit{Text: "1"}}},
+			},
+			&ast.LetStmt{
+				Pattern: &ast.IdentPat{Name: "first"},
+				Value: &ast.IndexExpr{
+					X:     xsRef,
+					Index: &ast.IntLit{Text: "0"},
+				},
+			},
+		},
+	}
+	res := &resolve.Result{
+		RefsByID: map[ast.NodeID]*resolve.Symbol{
+			xsRef.ID: {Name: "xs", Kind: resolve.SymLet, Decl: binding},
+		},
+		RefIdents: []*ast.Ident{xsRef},
+	}
+
+	mod, issues := Lower("main", file, res, nil)
+	if len(issues) != 0 {
+		t.Fatalf("Lower() issues = %v, want none", issues)
+	}
+	let, ok := mod.Script[1].(*LetStmt)
+	if !ok {
+		t.Fatalf("script[1] = %T, want *LetStmt", mod.Script[1])
+	}
+	if let.Type != TInt {
+		t.Fatalf("index let type = %#v, want TInt", let.Type)
+	}
+	idx, ok := let.Value.(*IndexExpr)
+	if !ok {
+		t.Fatalf("index let value = %T, want *IndexExpr", let.Value)
+	}
+	if idx.T != TInt {
+		t.Fatalf("index expr type = %#v, want TInt", idx.T)
+	}
+}
+
 func TestLowerStatementIfBecomesIfStmt(t *testing.T) {
 	cond := &ast.BoolLit{Value: true}
 	ifExpr := &ast.IfExpr{

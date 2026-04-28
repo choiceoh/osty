@@ -932,6 +932,9 @@ func (l *lowerer) expressionYieldsValue(e ast.Expr) bool {
 		// non-error literal shapes still promote when the checker
 		// didn't infer them.
 	}
+	if t := l.bindingTypeFromAST(e); expressionTypeYieldsValue(t) {
+		return true
+	}
 	// Syntactic fallback: the embedded selfhost checker doesn't
 	// always populate `Types[e]` for expressions in tail-of-block
 	// position (notably `StructLit` interior surfaces). For shapes
@@ -950,6 +953,16 @@ func (l *lowerer) expressionYieldsValue(e ast.Expr) bool {
 		return true
 	}
 	return false
+}
+
+func expressionTypeYieldsValue(t Type) bool {
+	if !usableRecoveredType(t) {
+		return false
+	}
+	if isPrim(t, PrimUnit) || isPrim(t, PrimNever) {
+		return false
+	}
+	return true
 }
 
 func (l *lowerer) lowerStmt(s ast.Stmt) Stmt {
@@ -1031,7 +1044,7 @@ func (l *lowerer) lowerLetStmt(s *ast.LetStmt) Stmt {
 	if ip, ok := s.Pattern.(*ast.IdentPat); ok && ip != nil {
 		recorded := out.Type
 		if recorded == nil || recorded == ErrTypeVal {
-			recorded = bindingTypeFromAST(s.Value)
+			recorded = l.bindingTypeFromAST(s.Value)
 		}
 		if recorded != nil && recorded != ErrTypeVal {
 			if l.bindingPatTypes == nil {
@@ -1043,13 +1056,29 @@ func (l *lowerer) lowerLetStmt(s *ast.LetStmt) Stmt {
 	return out
 }
 
-// bindingTypeFromAST derives a syntactic IR Type from a let RHS
-// expression when the checker hasn't populated the per-node Types
-// map. Conservative: only handles shapes whose syntactic head names
-// the type unambiguously (StructLit, Type-named call). Returns nil
-// for anything else.
-func bindingTypeFromAST(e ast.Expr) Type {
+// bindingTypeFromAST derives an IR Type from a value expression when
+// the checker hasn't populated the per-node Types map. It intentionally
+// stays on shapes whose type is recoverable from syntax plus resolver
+// anchors: named literals, declared fn returns, branch tails, field
+// declarations, and collection index element types.
+func (l *lowerer) bindingTypeFromAST(e ast.Expr) Type {
 	switch n := e.(type) {
+	case nil:
+		return nil
+	case *ast.IntLit:
+		return TInt
+	case *ast.FloatLit:
+		return TFloat
+	case *ast.BoolLit:
+		return TBool
+	case *ast.CharLit:
+		return TChar
+	case *ast.ByteLit:
+		return TByte
+	case *ast.StringLit:
+		return TString
+	case *ast.Ident:
+		return l.bindingIdentType(n)
 	case *ast.StructLit:
 		if n == nil {
 			return nil
@@ -1064,10 +1093,186 @@ func bindingTypeFromAST(e ast.Expr) Type {
 				return &NamedType{Name: h.Name}
 			}
 		}
+	case *ast.CallExpr:
+		if t := l.callReturnTypeFromAST(n); usableRecoveredType(t) {
+			return t
+		}
+	case *ast.ListExpr:
+		if n == nil || len(n.Elems) == 0 {
+			return nil
+		}
+		if elem := l.bindingTypeFromAST(n.Elems[0]); usableRecoveredType(elem) {
+			return &NamedType{Name: "List", Args: []Type{elem}, Builtin: true}
+		}
+	case *ast.IfExpr:
+		if t := l.ifTypeFromAST(n); usableRecoveredType(t) {
+			return t
+		}
+	case *ast.FieldExpr:
+		if t := l.fieldTypeFromAST(n); usableRecoveredType(t) {
+			return t
+		}
+	case *ast.IndexExpr:
+		if t := l.indexTypeFromAST(n); usableRecoveredType(t) {
+			return t
+		}
 	case *ast.ParenExpr:
-		return bindingTypeFromAST(n.X)
+		return l.bindingTypeFromAST(n.X)
 	}
 	return nil
+}
+
+func (l *lowerer) bindingIdentType(id *ast.Ident) Type {
+	if id == nil {
+		return nil
+	}
+	if t := l.exprType(id); usableRecoveredType(t) {
+		return t
+	}
+	sym := l.symbol(id)
+	if sym == nil {
+		return nil
+	}
+	if l.chk != nil {
+		if st := l.chk.SymTypes[sym]; st != nil {
+			if t := l.fromCheckerType(st); usableRecoveredType(t) {
+				return t
+			}
+		}
+	}
+	if t := l.identTypeFromDecl(sym.Decl); usableRecoveredType(t) {
+		return t
+	}
+	if l.bindingPatTypes != nil {
+		if ip, ok := sym.Decl.(*ast.IdentPat); ok {
+			if t := l.bindingPatTypes[ip]; usableRecoveredType(t) {
+				return t
+			}
+		}
+	}
+	return nil
+}
+
+func (l *lowerer) callReturnTypeFromAST(e *ast.CallExpr) Type {
+	if e == nil {
+		return nil
+	}
+	fn := e.Fn
+	if tf, ok := fn.(*ast.TurbofishExpr); ok {
+		fn = tf.Base
+	}
+	switch f := fn.(type) {
+	case *ast.Ident:
+		if sym := l.symbol(f); sym != nil {
+			if sym.Kind == resolve.SymVariant {
+				return l.variantOwnerTypeFromSymbol(sym)
+			}
+			if sym.Kind == resolve.SymBuiltin && isPreludeVariantName(sym.Name) {
+				return l.preludeVariantTypeFromCall(sym.Name, e)
+			}
+		}
+		return l.recoverFnDeclReturnType(f)
+	case *ast.FieldExpr:
+		if t := l.variantTypeFromQualifiedField(f); usableRecoveredType(t) {
+			return t
+		}
+		receiverType := l.exprType(f.X)
+		if !usableRecoveredType(receiverType) {
+			receiverType = l.bindingTypeFromAST(f.X)
+		}
+		return recoverMethodReturnTypeFromType(f.Name, receiverType)
+	}
+	return nil
+}
+
+func (l *lowerer) preludeVariantTypeFromCall(name string, e *ast.CallExpr) Type {
+	switch name {
+	case "Some":
+		if arg := firstArgTypeFromAST(l, e); usableRecoveredType(arg) {
+			return &NamedType{Name: "Option", Args: []Type{arg}, Builtin: true}
+		}
+	case "Ok":
+		if arg := firstArgTypeFromAST(l, e); usableRecoveredType(arg) {
+			return &NamedType{Name: "Result", Args: []Type{arg, &NamedType{Name: "Error", Builtin: true}}, Builtin: true}
+		}
+	case "Err":
+		if arg := firstArgTypeFromAST(l, e); usableRecoveredType(arg) {
+			return &NamedType{Name: "Result", Args: []Type{ErrTypeVal, arg}, Builtin: true}
+		}
+	}
+	return nil
+}
+
+func firstArgTypeFromAST(l *lowerer, e *ast.CallExpr) Type {
+	if l == nil || e == nil || len(e.Args) == 0 || e.Args[0] == nil {
+		return nil
+	}
+	return l.bindingTypeFromAST(e.Args[0].Value)
+}
+
+func (l *lowerer) ifTypeFromAST(e *ast.IfExpr) Type {
+	if e == nil {
+		return nil
+	}
+	thenType := l.blockTypeFromAST(e.Then)
+	elseType := l.elseTypeFromAST(e.Else)
+	if usableRecoveredType(thenType) {
+		return thenType
+	}
+	if usableRecoveredType(elseType) {
+		return elseType
+	}
+	return nil
+}
+
+func (l *lowerer) blockTypeFromAST(b *ast.Block) Type {
+	if b == nil || len(b.Stmts) == 0 {
+		return nil
+	}
+	if es, ok := b.Stmts[len(b.Stmts)-1].(*ast.ExprStmt); ok && es != nil {
+		return l.bindingTypeFromAST(es.X)
+	}
+	return nil
+}
+
+func (l *lowerer) elseTypeFromAST(e ast.Expr) Type {
+	switch alt := e.(type) {
+	case nil:
+		return nil
+	case *ast.Block:
+		return l.blockTypeFromAST(alt)
+	default:
+		return l.bindingTypeFromAST(alt)
+	}
+}
+
+func (l *lowerer) fieldTypeFromAST(e *ast.FieldExpr) Type {
+	if e == nil {
+		return nil
+	}
+	if t := l.variantTypeFromQualifiedField(e); usableRecoveredType(t) {
+		return t
+	}
+	receiverType := l.exprType(e.X)
+	if !usableRecoveredType(receiverType) {
+		receiverType = l.bindingTypeFromAST(e.X)
+	}
+	return l.recoverFieldType(receiverType, e.Name)
+}
+
+func (l *lowerer) indexTypeFromAST(e *ast.IndexExpr) Type {
+	if e == nil {
+		return nil
+	}
+	baseType := l.exprType(e.X)
+	if !usableRecoveredType(baseType) {
+		baseType = l.bindingTypeFromAST(e.X)
+	}
+	return recoverIndexTypeFromType(baseType)
+}
+
+func usableRecoveredType(t Type) bool {
+	return t != nil && t != ErrTypeVal && !hasPoisonedTypeArg(t)
 }
 
 // simpleBindName returns (name, true) when the pattern is just a bare
@@ -1264,8 +1469,13 @@ func (l *lowerer) lowerExpr(e ast.Expr) Expr {
 		loweredX := l.lowerExpr(e.X)
 		loweredIndex := l.lowerExpr(e.Index)
 		t := l.exprType(e)
-		if t == ErrTypeVal {
+		if t == ErrTypeVal || t == nil {
 			if rec := recoverIndexType(loweredX); rec != ErrTypeVal {
+				t = rec
+			}
+		}
+		if !usableRecoveredType(t) {
+			if rec := l.bindingTypeFromAST(e); usableRecoveredType(rec) {
 				t = rec
 			}
 		}
@@ -1367,44 +1577,42 @@ func (l *lowerer) lowerIdent(id *ast.Ident) Expr {
 	// Types map nor the SymTypes map covers this ident (the native
 	// checker skips expressions nested inside string interpolation
 	// parts, for instance), pull the declared type straight off the
-	// resolved symbol's declaration node. Today's callers only need
-	// the param / local-let shapes — the anchors that feed an
-	// IndexExpr inside a `"{xs[i]}"` interpolation — so we keep the
-	// match narrow and bail to ErrTypeVal for anything else, which
-	// preserves the pre-recovery cascade behaviour for unfamiliar
-	// decl forms.
+	// resolved symbol's declaration node. This now also covers bare
+	// enum variants (`let k = HirSwitchUnknown`) by recovering the
+	// variant's containing enum.
 	if (out.T == nil || out.T == ErrTypeVal) && sym != nil {
-		if t := identTypeFromDecl(sym.Decl); t != nil {
-			out.T = l.lowerType(t)
+		if t := l.identTypeFromDecl(sym.Decl); t != nil {
+			out.T = t
 		}
 	}
 	return out
 }
 
-// identTypeFromDecl extracts the declared AST type from a symbol's
+// identTypeFromDecl extracts the declared type from a symbol's
 // introducing declaration. Handles the subset of decl shapes that a
 // plain ident can resolve to: function / closure param (with or
-// without destructuring pattern), and an immutable / mutable `let`
-// binding carrying an explicit type annotation. Returns nil for
-// every other kind — the caller treats that as "no recovery
-// available" and leaves Ident.T at its prior value.
-func identTypeFromDecl(decl ast.Node) ast.Type {
+// without destructuring pattern), an immutable / mutable `let`
+// binding carrying an explicit type annotation, and enum variants
+// whose owner enum can be found from the current file.
+func (l *lowerer) identTypeFromDecl(decl ast.Node) Type {
 	switch d := decl.(type) {
 	case *ast.Param:
 		if d == nil {
 			return nil
 		}
-		return d.Type
+		return l.lowerType(d.Type)
 	case *ast.LetStmt:
 		if d == nil {
 			return nil
 		}
-		return d.Type
+		return l.lowerType(d.Type)
 	case *ast.LetDecl:
 		if d == nil {
 			return nil
 		}
-		return d.Type
+		return l.lowerType(d.Type)
+	case *ast.Variant:
+		return l.enumTypeForVariantDecl(d)
 	}
 	return nil
 }
@@ -1565,7 +1773,10 @@ func recoverIndexType(base Expr) Type {
 	if base == nil {
 		return ErrTypeVal
 	}
-	bt := base.Type()
+	return recoverIndexTypeFromType(base.Type())
+}
+
+func recoverIndexTypeFromType(bt Type) Type {
 	if bt == nil || bt == ErrTypeVal {
 		return ErrTypeVal
 	}
@@ -1780,6 +1991,11 @@ func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
 				if rec := l.recoverFnDeclReturnType(id); rec != nil && rec != ErrTypeVal && !hasPoisonedTypeArg(rec) {
 					t = rec
 				}
+			}
+		}
+		if t == nil || t == ErrTypeVal || hasPoisonedTypeArg(t) {
+			if rec := l.bindingTypeFromAST(e); usableRecoveredType(rec) {
+				t = rec
 			}
 		}
 	}
@@ -2225,6 +2441,84 @@ func (l *lowerer) isVariantOfEnum(sym *resolve.Symbol, variantName string) bool 
 	return false
 }
 
+func (l *lowerer) variantTypeFromQualifiedField(fx *ast.FieldExpr) Type {
+	if fx == nil {
+		return nil
+	}
+	id, ok := fx.X.(*ast.Ident)
+	if !ok {
+		return nil
+	}
+	sym := l.symbol(id)
+	if sym == nil || sym.Kind != resolve.SymEnum || !l.isVariantOfEnum(sym, fx.Name) {
+		return nil
+	}
+	return l.enumTypeFromSymbol(sym)
+}
+
+func (l *lowerer) variantOwnerTypeFromSymbol(sym *resolve.Symbol) Type {
+	if sym == nil {
+		return nil
+	}
+	if v, ok := sym.Decl.(*ast.Variant); ok {
+		return l.enumTypeForVariantDecl(v)
+	}
+	return nil
+}
+
+func (l *lowerer) enumTypeFromSymbol(sym *resolve.Symbol) Type {
+	if sym == nil || sym.Kind != resolve.SymEnum {
+		return nil
+	}
+	if ed, ok := sym.Decl.(*ast.EnumDecl); ok && ed != nil {
+		return enumDeclType(ed)
+	}
+	if sym.Name == "" {
+		return nil
+	}
+	return &NamedType{Name: sym.Name}
+}
+
+func (l *lowerer) enumTypeForVariantDecl(v *ast.Variant) Type {
+	ed := l.enumDeclForVariant(v)
+	if ed == nil {
+		return nil
+	}
+	return enumDeclType(ed)
+}
+
+func enumDeclType(ed *ast.EnumDecl) Type {
+	if ed == nil || ed.Name == "" {
+		return nil
+	}
+	args := make([]Type, 0, len(ed.Generics))
+	for _, gp := range ed.Generics {
+		if gp == nil || gp.Name == "" {
+			continue
+		}
+		args = append(args, &TypeVar{Name: gp.Name})
+	}
+	return &NamedType{Name: ed.Name, Args: args}
+}
+
+func (l *lowerer) enumDeclForVariant(v *ast.Variant) *ast.EnumDecl {
+	if v == nil || l.file == nil {
+		return nil
+	}
+	for _, decl := range l.file.Decls {
+		ed, ok := decl.(*ast.EnumDecl)
+		if !ok || ed == nil {
+			continue
+		}
+		for _, variant := range ed.Variants {
+			if variant == v || (variant != nil && variant.Name == v.Name) {
+				return ed
+			}
+		}
+	}
+	return nil
+}
+
 // lowerMethodCall lowers `receiver.name(args)` into an IR MethodCall,
 // preserving turbofish type arguments.
 // lowerQualifiedCall lowers `module.fn(args)` — where `module` resolves
@@ -2383,7 +2677,10 @@ func recoverMethodReturnType(name string, recv Expr) Type {
 	if recv == nil {
 		return nil
 	}
-	rt := recv.Type()
+	return recoverMethodReturnTypeFromType(name, recv.Type())
+}
+
+func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 	if rt == nil || rt == ErrTypeVal {
 		return nil
 	}
@@ -2479,10 +2776,16 @@ func isBuiltinContainer(t Type) bool {
 // variant symbol (`Some(42)`) or an enum-qualified variant
 // (`Color.Red(255)`).
 func (l *lowerer) lowerVariantCall(e *ast.CallExpr, enum, variant string) Expr {
+	t := l.exprType(e)
+	if !usableRecoveredType(t) {
+		if rec := l.bindingTypeFromAST(e); usableRecoveredType(rec) {
+			t = rec
+		}
+	}
 	out := &VariantLit{
 		Enum:    enum,
 		Variant: variant,
-		T:       l.exprType(e),
+		T:       t,
 		SpanV:   nodeSpan(e),
 	}
 	for _, a := range e.Args {
@@ -2534,7 +2837,7 @@ func (l *lowerer) lowerList(e *ast.ListExpr) Expr {
 	// common case — the literal's head ident names the struct
 	// without going through the per-node Types map.
 	if (out.Elem == nil || out.Elem == ErrTypeVal) && len(e.Elems) > 0 {
-		if t := bindingTypeFromAST(e.Elems[0]); t != nil {
+		if t := l.bindingTypeFromAST(e.Elems[0]); t != nil {
 			out.Elem = t
 		}
 	}
@@ -2550,6 +2853,11 @@ func (l *lowerer) lowerIfExpr(e *ast.IfExpr) Expr {
 	elseBlk := l.lowerElse(e.Else)
 	if t == ErrTypeVal {
 		t = recoverBlockType(thenBlk, elseBlk)
+	}
+	if !usableRecoveredType(t) {
+		if rec := l.bindingTypeFromAST(e); usableRecoveredType(rec) {
+			t = rec
+		}
 	}
 	if e.IsIfLet {
 		return &IfLetExpr{
@@ -2712,6 +3020,11 @@ func (l *lowerer) lowerFieldExpr(e *ast.FieldExpr) Expr {
 		if recovered := l.recoverFieldType(x.Type(), e.Name); recovered != nil {
 			t = recovered
 		}
+		if !usableRecoveredType(t) {
+			if recovered := l.bindingTypeFromAST(e); usableRecoveredType(recovered) {
+				t = recovered
+			}
+		}
 	}
 	return &FieldExpr{
 		X:        x,
@@ -2828,6 +3141,11 @@ func (l *lowerer) lowerStructLit(s *ast.StructLit) Expr {
 		TypeName: name,
 		T:        l.exprType(s),
 		SpanV:    nodeSpan(s),
+	}
+	if !usableRecoveredType(out.T) {
+		if t := l.bindingTypeFromAST(s); usableRecoveredType(t) {
+			out.T = t
+		}
 	}
 	explicit := map[string]bool{}
 	for _, f := range s.Fields {
