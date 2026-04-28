@@ -433,6 +433,9 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 		if src, ok := g.staticStdBytesCallSourceType(e); ok {
 			return src, true
 		}
+		if src, ok := g.staticStdCompressCallSourceType(e); ok {
+			return src, true
+		}
 		if src, ok := g.staticStdStringsCallSourceType(e); ok {
 			return src, true
 		}
@@ -446,6 +449,9 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 			return src, true
 		}
 		if src, ok := g.staticStdCryptoCallSourceType(e); ok {
+			return src, true
+		}
+		if src, ok := g.staticStdOsCallSourceType(e); ok {
 			return src, true
 		}
 		if src, ok := g.staticPtrBackedErrorCallSourceType(e); ok {
@@ -931,6 +937,9 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 		if out, ok := g.stdBytesCallStaticResult(e); ok {
 			return out, true
 		}
+		if out, ok := g.stdCompressCallStaticResult(e); ok {
+			return out, true
+		}
 		if out, ok := g.stdStringsCallStaticResult(e); ok {
 			return out, true
 		}
@@ -944,6 +953,9 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 			return out, true
 		}
 		if out, ok := g.stdCryptoCallStaticResult(e); ok {
+			return out, true
+		}
+		if out, ok := g.stdOsCallStaticResult(e); ok {
 			return out, true
 		}
 	case *ast.FieldExpr:

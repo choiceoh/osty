@@ -329,6 +329,10 @@ fn collectUseDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
             registerStdThreadAliasFns(env, alias)
         } else if node.text == "std.io" {
             registerStdIoAliasFns(env, alias)
+        } else if node.text == "std.compress" {
+            registerStdCompressAliasFields(env, alias)
+        } else if node.text == "std.encoding" {
+            registerStdEncodingAliasFields(env, alias)
         } else {
             let _ = env
         }
@@ -756,6 +760,56 @@ fn registerStdIoAliasFns(env: CheckEnv, alias: String) {
         name: "readLine", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tString_,
         paramNames: [], paramTys: [],
         generics: [], genericBounds: [],
+    })
+}
+
+fn registerStdCompressAliasFields(env: CheckEnv, alias: String) {
+    let tys = env.tys
+    let tGzip = tyNamed(tys, "Gzip", [])
+    let tBytes_ = tBytes(tys)
+    let tResultBytesError = tyNamed(tys, "Result", [tBytes_, tyNamed(tys, "Error", [])])
+    checkRegisterField(env, CheckFieldSig {
+        owner: alias,
+        name: "gzip",
+        ty: tGzip,
+        exported: true,
+        hasDefault: false,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "encode", owner: "Gzip", receiverTy: tGzip, hasReceiver: true,
+        retTy: tBytes_,
+        paramNames: ["data"], paramTys: [tBytes_],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "decode", owner: "Gzip", receiverTy: tGzip, hasReceiver: true,
+        retTy: tResultBytesError,
+        paramNames: ["data"], paramTys: [tBytes_],
+        generics: [], genericBounds: [],
+    })
+}
+
+fn registerStdEncodingAliasFields(env: CheckEnv, alias: String) {
+    checkRegisterField(env, CheckFieldSig {
+        owner: alias,
+        name: "base64",
+        ty: tyNamed(env.tys, "Base64", []),
+        exported: true,
+        hasDefault: false,
+    })
+    checkRegisterField(env, CheckFieldSig {
+        owner: alias,
+        name: "hex",
+        ty: tyNamed(env.tys, "Hex", []),
+        exported: true,
+        hasDefault: false,
+    })
+    checkRegisterField(env, CheckFieldSig {
+        owner: alias,
+        name: "url",
+        ty: tyNamed(env.tys, "UrlEncoding", []),
+        exported: true,
+        hasDefault: false,
     })
 }
 

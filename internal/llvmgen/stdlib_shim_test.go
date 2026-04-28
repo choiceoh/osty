@@ -64,6 +64,18 @@ fn main() {
 	}
 }
 
+func TestStdNetAliasCollectorRespectsRename(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.net as network
+
+fn main() {}
+`)
+
+	aliases := collectStdNetAliases(file)
+	if !aliases["network"] {
+		t.Fatalf("collectStdNetAliases missing renamed alias: %#v", aliases)
+	}
+}
+
 func TestStdStringsAliasRespectsRename(t *testing.T) {
 	file := parseLLVMGenFile(t, `use std.strings as s
 

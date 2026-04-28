@@ -1659,6 +1659,8 @@ func llvmClangLinkBinaryArgs(target string, objectPaths []string, binaryPath str
 	if !llvmStrings.Contains(target, "windows") {
 		// Osty: toolchain/llvmgen.osty:1205:9
 		func() struct{} { args = append(args, "-pthread"); return struct{}{} }()
+		// Osty: toolchain/llvmgen.osty:1209:9
+		func() struct{} { args = append(args, "-lz"); return struct{}{} }()
 	}
 	// Osty: toolchain/llvmgen.osty:1207:5
 	func() struct{} { args = append(args, "-o"); return struct{}{} }()

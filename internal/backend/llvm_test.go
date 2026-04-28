@@ -1085,6 +1085,35 @@ fn main() {
 	}
 }
 
+func TestLLVMBackendBinaryStdCompressGzipRoundTrip(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `use std.compress as compress
+
+fn main() {
+    let payload = Bytes.from("hello".bytes())
+    let encoded = compress.gzip.encode(payload)
+    match compress.gzip.decode(encoded) {
+        Ok(decoded) -> println(decoded.len()),
+        Err(_) -> println(0),
+    }
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	output, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "5\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
 func TestLLVMBackendBinaryStdEnvGetReadsProcessEnv(t *testing.T) {
 	parallelClangBackendTest(t)
 

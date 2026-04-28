@@ -1276,6 +1276,9 @@ func (g *generator) emitExprStmt(expr ast.Expr) error {
 	if emitted, err := g.emitStdRandomCallStmt(call); emitted || err != nil {
 		return err
 	}
+	if emitted, err := g.emitStdOsCallStmt(call); emitted || err != nil {
+		return err
+	}
 	if emitted, err := g.emitOptionalUserCallStmt(call); emitted || err != nil {
 		return err
 	}
@@ -1289,6 +1292,14 @@ func (g *generator) emitExprStmt(expr ast.Expr) error {
 		return g.emitPrintln(call)
 	}
 	return g.emitPrintln(call)
+}
+
+func (g *generator) emitStdOsCallStmt(call *ast.CallExpr) (bool, error) {
+	if _, ok := g.stdOsCallField(call); !ok {
+		return false, nil
+	}
+	_, _, err := g.emitStdOsCall(call)
+	return true, err
 }
 
 func (g *generator) emitTestingCallStmt(call *ast.CallExpr) (bool, error) {
