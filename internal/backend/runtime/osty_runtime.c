@@ -4330,11 +4330,13 @@ static void *osty_gc_allocate_managed_headerful(size_t byte_size,
      *
      * Phase B intent: every new allocation enters the nursery.
      * Promotion to OLD happens inside a minor collection after
-     * `osty_gc_promote_age` survivals. Phase C intent: header starts
-     * WHITE; an incremental major in progress will NOT retroactively
-     * colour this allocation — it was born after the mark snapshot
-     * and stays white until the cycle ends, at which point sweep
-     * reclaims it if still unrooted. */
+     * `osty_gc_promote_age` survivals. Phase 0e: when a concurrent
+     * cycle is in flight (MARK_INCREMENTAL or SWEEPING), the new
+     * header is coloured BLACK so neither concurrent mark nor
+     * concurrent sweep reclaims it before the mutator's store
+     * publishes it to a stack/global slot. The next cycle starts
+     * with this header reset to WHITE — sweep flips BLACK→WHITE on
+     * every survivor at the end of the current cycle. */
     if (!single_threaded) osty_gc_acquire();
     if (humongous) {
         osty_gc_humongous_alloc_count_total += 1;
@@ -4343,6 +4345,17 @@ static void *osty_gc_allocate_managed_headerful(size_t byte_size,
     header->stable_id = osty_gc_allocate_stable_id();
     osty_gc_link(header);
     osty_gc_note_allocation(payload_size);
+    /* Phase 0e: alloc-as-BLACK during a cycle. SATB + concurrent
+     * mark/sweep need this to keep just-allocated objects safe in
+     * the window between alloc-return and the mutator's first
+     * store-then-safepoint sequence. Without it, the bg marker /
+     * sweep could free a header whose payload is currently only
+     * referenced from a register or a not-yet-published slot. */
+    if (osty_gc_state == OSTY_GC_STATE_MARK_INCREMENTAL ||
+        osty_gc_state == OSTY_GC_STATE_SWEEPING) {
+        header->color = OSTY_GC_COLOR_BLACK;
+        header->marked = true;
+    }
     /* Phase C3 mutator assist: if an incremental major is active,
      * borrow a proportional amount of mark work from the allocator
      * so the mutator literally pays for its allocation pressure. */
@@ -5011,7 +5024,36 @@ static void osty_rt_set_destroy(void *payload) {
     }
 }
 
-static void osty_gc_mark_stack_push(osty_gc_header *header) {
+/* Phase 0e': TLS local mark stack. While a marker thread is in
+ * `osty_gc_mark_drain_budget`, the tracer's reentrant pushes route
+ * here instead of the central stack. Benefits, even though the
+ * caller still holds `osty_gc_lock` during the drain:
+ *
+ *   1. The central stack (`osty_gc_mark_stack`) doesn't grow with
+ *      every recursive push — its high-water capacity is bounded by
+ *      the cycle's seed roots + per-marker overflow spills, not the
+ *      full transitive object graph. fewer realloc events and a
+ *      smaller persistent buffer.
+ *
+ *   2. The hot-path push is a plain TLS array write — no capacity
+ *      check, no max-depth bookkeeping, no central-stack indirection.
+ *      Tracer-heavy workloads see a measurable drop in
+ *      `osty_gc_mark_stack_push` cost.
+ *
+ *   3. Sets up the lock-split groundwork: when a future PR makes
+ *      the tracer safe to run without `osty_gc_lock` (lock-free hash
+ *      index, snapshot-based dispatch, etc.), the TLS stack is
+ *      already the right home for trace-time push without per-push
+ *      synchronisation. */
+#define OSTY_GC_LOCAL_MARK_STACK_CAP 256
+static OSTY_RT_TLS osty_gc_header *osty_gc_local_mark_stack[OSTY_GC_LOCAL_MARK_STACK_CAP];
+static OSTY_RT_TLS int osty_gc_local_mark_stack_top = 0;
+static OSTY_RT_TLS bool osty_gc_local_mark_active = false;
+
+static int64_t osty_gc_local_mark_pushes_total = 0;
+static int64_t osty_gc_local_mark_overflow_total = 0;
+
+static void osty_gc_mark_stack_push_central(osty_gc_header *header) {
     if (osty_gc_mark_stack_count == osty_gc_mark_stack_cap) {
         int64_t new_cap;
         osty_gc_header **new_buf;
@@ -5025,9 +5067,45 @@ static void osty_gc_mark_stack_push(osty_gc_header *header) {
         osty_gc_mark_stack_cap = new_cap;
     }
     osty_gc_mark_stack[osty_gc_mark_stack_count++] = header;
-    if (osty_gc_mark_stack_count > osty_gc_mark_stack_max_depth) {
-        osty_gc_mark_stack_max_depth = osty_gc_mark_stack_count;
+    /* Phase 0e': effective queue depth includes the calling thread's
+     * TLS local stack — important when the local cap is hit and
+     * subsequent pushes spill here. Without folding `local_mark_top`
+     * in, deep-graph regression tests miss the watermark because
+     * `osty_gc_mark_stack_count` tops out around (graph_size - cap)
+     * instead of the actual queue size. */
+    int64_t effective =
+        (int64_t)osty_gc_local_mark_stack_top + osty_gc_mark_stack_count;
+    if (effective > osty_gc_mark_stack_max_depth) {
+        osty_gc_mark_stack_max_depth = effective;
     }
+}
+
+static void osty_gc_mark_stack_push(osty_gc_header *header) {
+    if (osty_gc_local_mark_active &&
+        osty_gc_local_mark_stack_top < OSTY_GC_LOCAL_MARK_STACK_CAP) {
+        osty_gc_local_mark_stack[osty_gc_local_mark_stack_top++] = header;
+        (void)__atomic_add_fetch(&osty_gc_local_mark_pushes_total, 1,
+                                 __ATOMIC_RELAXED);
+        /* `mark_stack_max_depth` is the cycle-wide work-queue
+         * watermark — used by deep-graph tests to assert the queue
+         * survived recursive trace re-entry. With Phase 0e' the
+         * effective queue is local + central, so report the sum
+         * here so the watermark stays meaningful. */
+        int64_t effective =
+            (int64_t)osty_gc_local_mark_stack_top +
+            osty_gc_mark_stack_count;
+        if (effective > osty_gc_mark_stack_max_depth) {
+            osty_gc_mark_stack_max_depth = effective;
+        }
+        return;
+    }
+    if (osty_gc_local_mark_active) {
+        /* Local full — overflow to central. Counted so tests can
+         * confirm the local cap is sized right for the workload. */
+        (void)__atomic_add_fetch(&osty_gc_local_mark_overflow_total, 1,
+                                 __ATOMIC_RELAXED);
+    }
+    osty_gc_mark_stack_push_central(header);
 }
 
 static void osty_gc_mark_header(osty_gc_header *header) {
@@ -5059,19 +5137,48 @@ static void osty_gc_mark_payload(void *payload) {
 /* Phase C: drain up to `budget` grey headers. Budget of 0 or negative
  * means "drain everything" (the pre-Phase-C semantics, still used by
  * STW major/minor). Returns the number of headers actually traced so
- * the incremental scheduler can pace future steps. */
+ * the incremental scheduler can pace future steps.
+ *
+ * Phase 0e': during the drain, tracer-emitted pushes route to the TLS
+ * `osty_gc_local_mark_stack` instead of growing the central stack.
+ * The local stack is then drained LIFO before the next central pop —
+ * effectively a depth-first traversal that keeps hot trace data in
+ * cache and bounds central-stack size. The local stack flushes back
+ * to central at drain exit so any future drain (this thread or
+ * another) sees the unfinished work. */
 static int64_t osty_gc_mark_drain_budget(int64_t budget) {
     int64_t done = 0;
     bool unlimited = budget <= 0;
-    while (osty_gc_mark_stack_count > 0 && (unlimited || done < budget)) {
-        osty_gc_header *header = osty_gc_mark_stack[--osty_gc_mark_stack_count];
+    bool was_active = osty_gc_local_mark_active;
+    osty_gc_local_mark_active = true;
+
+    while ((osty_gc_local_mark_stack_top > 0 ||
+            osty_gc_mark_stack_count > 0) &&
+           (unlimited || done < budget)) {
+        osty_gc_header *header;
+        if (osty_gc_local_mark_stack_top > 0) {
+            header = osty_gc_local_mark_stack[--osty_gc_local_mark_stack_top];
+        } else {
+            header = osty_gc_mark_stack[--osty_gc_mark_stack_count];
+        }
         header->color = OSTY_GC_COLOR_BLACK;
         /* Trace callbacks re-enter `osty_gc_mark_*` for children,
-         * which push more GREY work onto this stack — the C call
-         * stack stays bounded regardless of object graph depth. */
+         * which push more GREY work — into TLS via mark_stack_push's
+         * routing. The C call stack stays bounded regardless of
+         * object graph depth. */
         osty_gc_dispatch_trace(header);
         done += 1;
     }
+
+    /* Flush whatever's left in the local stack back to central so
+     * the next drain (possibly on another thread) sees the work.
+     * Order doesn't matter: any item left here is unprocessed grey,
+     * central stack treats them identically to direct pushes. */
+    while (osty_gc_local_mark_stack_top > 0) {
+        osty_gc_mark_stack_push_central(
+            osty_gc_local_mark_stack[--osty_gc_local_mark_stack_top]);
+    }
+    osty_gc_local_mark_active = was_active;
     return done;
 }
 
@@ -6263,11 +6370,42 @@ static void osty_gc_incremental_seed_roots(void *const *root_slots, int64_t root
     }
 }
 
-static void osty_gc_incremental_sweep(void) {
+/* Phase 0e: cursor-based incremental sweep. The bg marker advances
+ * `osty_gc_sweep_cursor` in batches once the mark queue empties so
+ * the heap walk overlaps with mutator execution; finish_locked picks
+ * up whatever the bg thread left to do (typically nothing) before
+ * running compaction or transitioning to IDLE. The cursor reads
+ * `next` BEFORE reclaim so a swept header's freed memory is never
+ * dereferenced.
+ *
+ * `osty_gc_sweep_reclaim_done` distinguishes "cursor is NULL because
+ * sweep finished" from "cursor is NULL because we haven't started"
+ * — important when finish_locked decides whether to seed the cursor
+ * and re-walk vs go straight to the survivor reset. */
+static osty_gc_header *osty_gc_sweep_cursor = NULL;
+static bool osty_gc_sweep_reclaim_done = false;
+static int64_t osty_gc_sweep_steps_total = 0;
+static int64_t osty_gc_bg_marker_swept_total = 0;
+
+/* Reclaim-only sweep step: WHITEs are destroyed + reclaimed; survivors
+ * (BLACK) are left untouched. The BLACK→WHITE reset for the next
+ * cycle is owned by the caller — `compact_major_with_stack_roots`
+ * does it as part of its fused sweep+clone walk; the non-compact
+ * finish path calls `osty_gc_reset_survivors_walk` after the sweep
+ * cursor reaches NULL. Splitting reset out of the per-step body
+ * matters for Phase 0e because the bg marker can start sweeping
+ * concurrently with the mutator — if we reset BLACK→WHITE inline,
+ * `compact_major` (which expects BLACK survivors) would later see an
+ * all-WHITE heap and free everything. Returns the number of headers
+ * processed this step. Caller checks `osty_gc_sweep_cursor != NULL`
+ * to decide whether more work remains. */
+static int64_t osty_gc_incremental_sweep_step(int64_t budget) {
     osty_gc_header *header;
     osty_gc_header *next;
-    header = osty_gc_objects;
-    while (header != NULL) {
+    int64_t done = 0;
+    bool unlimited = budget <= 0;
+    header = osty_gc_sweep_cursor;
+    while (header != NULL && (unlimited || done < budget)) {
         next = header->next;
         if (header->color == OSTY_GC_COLOR_WHITE) {
             osty_gc_swept_count_total += 1;
@@ -6275,12 +6413,49 @@ static void osty_gc_incremental_sweep(void) {
             osty_gc_dispatch_destroy(header);
             osty_gc_unlink(header);
             osty_gc_reclaim_swept_header(header);
-        } else {
+        }
+        /* Survivors (BLACK) are left as-is — caller resets them. */
+        header = next;
+        done += 1;
+    }
+    osty_gc_sweep_cursor = header;
+    osty_gc_sweep_steps_total += 1;
+    return done;
+}
+
+/* Walk the heap once and reset every survivor's color to WHITE so the
+ * next cycle starts from the standard baseline. Used by the
+ * non-compact finish path after sweep_step has reclaimed all WHITEs.
+ * compact_major's fused walk does its own BLACK→WHITE reset, so this
+ * helper isn't needed on the compaction path. */
+static void osty_gc_reset_survivors_walk(void) {
+    osty_gc_header *header = osty_gc_objects;
+    while (header != NULL) {
+        if (header->color != OSTY_GC_COLOR_WHITE) {
             header->color = OSTY_GC_COLOR_WHITE;
             header->marked = false;
         }
-        header = next;
+        header = header->next;
     }
+}
+
+static void osty_gc_incremental_sweep(void) {
+    /* Synchronous fallback. Three states matter on entry:
+     *   - cursor != NULL:  sweep already in progress (bg started, did
+     *                       not finish). Continue from the cursor.
+     *   - cursor == NULL && reclaim_done: bg finished sweep already.
+     *                       Skip the reclaim walk; only the survivor
+     *                       reset is needed.
+     *   - cursor == NULL && !reclaim_done: nothing started — seed and
+     *                       run a full sweep + survivor reset. */
+    if (!osty_gc_sweep_reclaim_done && osty_gc_sweep_cursor == NULL) {
+        osty_gc_sweep_cursor = osty_gc_objects;
+    }
+    while (osty_gc_sweep_cursor != NULL) {
+        (void)osty_gc_incremental_sweep_step(0);
+    }
+    osty_gc_sweep_reclaim_done = true;
+    osty_gc_reset_survivors_walk();
 }
 
 /* Public incremental entry points. The `_with_stack_roots` variant is
@@ -6371,23 +6546,35 @@ static void osty_gc_collect_incremental_finish_locked(
      * colouring. The incremental barrier (SATB pre_write) could have
      * dropped new greys on us between the last step and this call. */
     (void)osty_gc_mark_drain_budget(0);
-    osty_gc_state = OSTY_GC_STATE_SWEEPING;
+    /* Phase 0e: bg marker may have already transitioned to SWEEPING
+     * and made progress (or finished) on the heap walk. Take the
+     * union of "wherever the cycle currently is" and "what finish
+     * needs to do" so we don't restart sweep from scratch when bg
+     * already did some of it. */
+    if (osty_gc_state == OSTY_GC_STATE_MARK_INCREMENTAL) {
+        osty_gc_state = OSTY_GC_STATE_SWEEPING;
+        osty_gc_sweep_cursor = osty_gc_objects;
+        osty_gc_sweep_reclaim_done = false;
+    }
     if (compact) {
         /* Phase D: incremental major matches STW major — evacuate
          * movable survivors and remap every slot the STW path would
          * remap. Safety: SWEEPING state plus the lock, no mutator
          * barrier mid-flight, compact_major never re-enters the
-         * mark queue. compact_major's first walk fuses the sweep, so
-         * no separate sweep call is needed on this branch. */
+         * mark queue. compact_major's first walk fuses the sweep
+         * (any unfinished WHITEs left by bg) and the BLACK→WHITE
+         * survivor reset + clone evacuation. */
         (void)osty_gc_compact_major_with_stack_roots(
             root_slots, root_slot_count);
     } else {
         /* No-stack-roots / concurrent finish path: compaction is
          * unsafe (parked-thread frames not visible). Run the
-         * standalone sweep so WHITEs still get destroyed and reclaimed
-         * even though no evacuation happens this cycle. */
+         * standalone sweep, which finishes whatever bg started and
+         * then resets surviving BLACKs to WHITE for the next cycle. */
         osty_gc_incremental_sweep();
     }
+    osty_gc_sweep_cursor = NULL;
+    osty_gc_sweep_reclaim_done = false;
     osty_gc_collection_count += 1;
     osty_gc_major_count += 1;
     osty_gc_allocated_since_collect = 0;
@@ -6532,37 +6719,77 @@ static void *osty_gc_bg_marker_main(void *arg) {
                 break;
             }
             osty_gc_acquire();
-            if (osty_gc_state != OSTY_GC_STATE_MARK_INCREMENTAL) {
-                osty_gc_release();
-                break;
-            }
-            int64_t done = osty_gc_mark_drain_budget(per_iter);
-            /* Atomic adds — N>=2 workers race here. The per-worker
-             * slot is single-writer so a relaxed add suffices; the
-             * aggregate counter aggregates across writers so it
-             * needs RELAXED + ACQ_REL semantics on test reads (we
-             * use ACQUIRE on the reader side). */
-            (void)__atomic_add_fetch(&osty_gc_bg_marker_drained_total,
-                                     done, __ATOMIC_RELAXED);
-            (void)__atomic_add_fetch(&osty_gc_bg_marker_loops_total,
-                                     1, __ATOMIC_RELAXED);
-            if (osty_gc_bg_marker_worker_id >= 0 &&
-                osty_gc_bg_marker_worker_id <
-                    OSTY_GC_BG_MARKER_MAX_WORKERS) {
-                osty_gc_bg_marker_per_worker_drained
-                    [osty_gc_bg_marker_worker_id] += done;
-            }
-            int64_t remaining = osty_gc_mark_stack_count;
-            osty_gc_release();
-            if (remaining == 0) {
-                /* Queue empty — nap and re-check. SATB barriers may
-                 * push more before finish runs. */
-                (void)__atomic_add_fetch(&osty_gc_bg_marker_naps_total,
+            if (osty_gc_state == OSTY_GC_STATE_MARK_INCREMENTAL) {
+                int64_t done = osty_gc_mark_drain_budget(per_iter);
+                /* Atomic adds — N>=2 workers race here. The per-worker
+                 * slot is single-writer so a relaxed add suffices; the
+                 * aggregate counter aggregates across writers so it
+                 * needs RELAXED + ACQ_REL semantics on test reads (we
+                 * use ACQUIRE on the reader side). */
+                (void)__atomic_add_fetch(&osty_gc_bg_marker_drained_total,
+                                         done, __ATOMIC_RELAXED);
+                (void)__atomic_add_fetch(&osty_gc_bg_marker_loops_total,
                                          1, __ATOMIC_RELAXED);
-                osty_rt_sleep_ns(OSTY_GC_BG_MARKER_IDLE_NAP_NS);
-            } else {
+                if (osty_gc_bg_marker_worker_id >= 0 &&
+                    osty_gc_bg_marker_worker_id <
+                        OSTY_GC_BG_MARKER_MAX_WORKERS) {
+                    osty_gc_bg_marker_per_worker_drained
+                        [osty_gc_bg_marker_worker_id] += done;
+                }
+                int64_t remaining = osty_gc_mark_stack_count;
+                /* Phase 0e: when the mark queue empties under our lock,
+                 * transition the cycle to SWEEPING and seed the cursor
+                 * so the very next iteration picks up sweep work. The
+                 * transition is one-way and one-shot per cycle —
+                 * subsequent workers landing here see state=SWEEPING
+                 * and skip mark, going straight to the sweep branch. */
+                if (remaining == 0) {
+                    osty_gc_state = OSTY_GC_STATE_SWEEPING;
+                    osty_gc_sweep_cursor = osty_gc_objects;
+                    osty_gc_release();
+                    /* No nap — keep going so we hit the sweep branch
+                     * on the next iteration without a 200µs delay. */
+                    osty_rt_plat_yield();
+                    continue;
+                }
+                osty_gc_release();
                 osty_rt_plat_yield();
+                continue;
             }
+            if (osty_gc_state == OSTY_GC_STATE_SWEEPING) {
+                /* Phase 0e: concurrent sweep. Bg marker advances the
+                 * cursor in batches; finish_locked picks up whatever's
+                 * left (typically nothing) under its STW handshake.
+                 * When the cursor reaches NULL we set the
+                 * `reclaim_done` flag and leave the cycle in SWEEPING
+                 * — finish_locked handles the post-cycle bookkeeping
+                 * + IDLE transition under STW so generation counters,
+                 * barrier-log clear, and survivor reset happen in one
+                 * consistent step. */
+                int64_t done = osty_gc_incremental_sweep_step(per_iter);
+                (void)__atomic_add_fetch(&osty_gc_bg_marker_swept_total,
+                                         done, __ATOMIC_RELAXED);
+                (void)__atomic_add_fetch(&osty_gc_bg_marker_loops_total,
+                                         1, __ATOMIC_RELAXED);
+                bool more = osty_gc_sweep_cursor != NULL;
+                if (!more) {
+                    osty_gc_sweep_reclaim_done = true;
+                }
+                osty_gc_release();
+                if (!more) {
+                    /* Sweep reclaim done — nap so finish_locked can
+                     * run the survivor reset + IDLE transition. */
+                    (void)__atomic_add_fetch(&osty_gc_bg_marker_naps_total,
+                                             1, __ATOMIC_RELAXED);
+                    osty_rt_sleep_ns(OSTY_GC_BG_MARKER_IDLE_NAP_NS);
+                } else {
+                    osty_rt_plat_yield();
+                }
+                continue;
+            }
+            /* IDLE or some unexpected state — nothing to do, exit drain. */
+            osty_gc_release();
+            break;
         }
     }
 }
@@ -11683,6 +11910,42 @@ int64_t osty_gc_debug_bg_marker_per_worker_drained(int64_t worker_id) {
         return -1;
     }
     return osty_gc_bg_marker_per_worker_drained[(int)worker_id];
+}
+
+/* Phase 0e concurrent-sweep accessors. `swept_total` is what the bg
+ * thread reclaimed (atomic add); `sweep_steps_total` counts every
+ * `_sweep_step` call (bg + finish-side); `sweep_reclaim_done` mirrors
+ * the flag the bg thread sets when its cursor hits NULL — tests use
+ * it to assert sweep finished concurrently with the mutator rather
+ * than during the finish handshake. */
+int64_t osty_gc_debug_bg_marker_swept_total(void) {
+    return __atomic_load_n(&osty_gc_bg_marker_swept_total,
+                           __ATOMIC_ACQUIRE);
+}
+
+int64_t osty_gc_debug_sweep_steps_total(void) {
+    return osty_gc_sweep_steps_total;
+}
+
+int64_t osty_gc_debug_sweep_reclaim_done(void) {
+    return osty_gc_sweep_reclaim_done ? 1 : 0;
+}
+
+/* Phase 0e' TLS local mark stack accessors. `local_mark_pushes_total`
+ * is the count of tracer pushes that landed in the TLS buffer (vs.
+ * the central stack). `local_mark_overflow_total` is the count that
+ * spilled to central because the local cap was hit — non-zero on
+ * deep object graphs where the trace recursion outruns the local
+ * 256-slot buffer. Tests use the ratio to confirm Phase 0e' is
+ * actually routing work to the local path. */
+int64_t osty_gc_debug_local_mark_pushes_total(void) {
+    return __atomic_load_n(&osty_gc_local_mark_pushes_total,
+                           __ATOMIC_ACQUIRE);
+}
+
+int64_t osty_gc_debug_local_mark_overflow_total(void) {
+    return __atomic_load_n(&osty_gc_local_mark_overflow_total,
+                           __ATOMIC_ACQUIRE);
 }
 
 int64_t osty_gc_debug_color_of(void *payload) {
