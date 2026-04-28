@@ -3562,6 +3562,14 @@ func frontEscapeScan(units []string, start int, limit int) *FrontEscapeScan {
 		// Osty: /tmp/docgen_merged.osty:1851:9
 		return &FrontEscapeScan{consumed: 1, ok: true}
 	}
+	if unit == "x" {
+		if start+2 >= limit {
+			return &FrontEscapeScan{consumed: limit - start, ok: false}
+		}
+		hi := frontHexValue(frontUnitAt(units, start+1))
+		lo := frontHexValue(frontUnitAt(units, start+2))
+		return &FrontEscapeScan{consumed: 3, ok: hi >= 0 && lo >= 0}
+	}
 	// Osty: /tmp/docgen_merged.osty:1853:5
 	if unit == "u" {
 		// Osty: /tmp/docgen_merged.osty:1854:9
@@ -4075,6 +4083,10 @@ func frontInterpolationScan(units []string, start int, limit int, ownerPart int)
 					return _p342 + _rhs343
 				}()
 				// Osty: /tmp/docgen_merged.osty:1989:17
+				nestedString := frontInterpolationStringDiagnostics(units, idx, limit, tokenScan)
+				for _, diag := range nestedString.diagnostics {
+					out.diagnostics = append(out.diagnostics, diag)
+				}
 				if tokenScan.uppercaseBasePrefix {
 					// Osty: /tmp/docgen_merged.osty:1990:21
 					func() struct{} {
@@ -4154,6 +4166,28 @@ func frontInterpolationScan(units []string, start int, limit int, ownerPart int)
 		out.diagnostics = append(out.diagnostics, frontLexDiagnostic(FrontLexDiagnosticCode(&FrontLexDiagnosticCode_FrontDiagUnterminatedInterpolation{}), frontPositionAt(units, start), frontPositionAt(units, limit)))
 		return struct{}{}
 	}()
+	return out
+}
+
+func frontInterpolationStringDiagnostics(units []string, start int, limit int, tokenScan *FrontScanResult) *FrontStringStructureScan {
+	if !ostyEqual(tokenScan.kind, FrontTokenKind(&FrontTokenKind_FrontString{})) &&
+		!ostyEqual(tokenScan.kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) &&
+		!ostyEqual(tokenScan.kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) &&
+		!ostyEqual(tokenScan.kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) {
+		return emptyFrontStringStructureScan()
+	}
+	out := emptyFrontStringStructureScan()
+	facts := frontStringStructureScan(units, start, limit, tokenScan.kind, -1, 0, 0, tokenScan)
+	for _, diag := range facts.diagnostics {
+		out.diagnostics = append(out.diagnostics, diag)
+	}
+	if tokenScan.errors > 0 {
+		out.diagnostics = append(out.diagnostics, frontLexDiagnostic(
+			frontStringDiagnosticCode(units, start, limit, tokenScan.kind, tokenScan),
+			frontPositionAt(units, start),
+			frontPositionAt(units, start+tokenScan.consumed),
+		))
+	}
 	return out
 }
 
@@ -8088,10 +8122,12 @@ type OstyLexStringPart struct {
 
 // Osty: /tmp/docgen_merged.osty:6076:5
 type OstyLexFacts struct {
-	errors      []*OstyLexError
-	comments    []*OstyLexComment
-	stringParts []*OstyLexStringPart
-	leadingDocs []string
+	errors                  []*OstyLexError
+	comments                []*OstyLexComment
+	stringParts             []*OstyLexStringPart
+	leadingDocs             []string
+	tokenTexts              []string
+	interpolationTokenTexts []string
 }
 
 // Osty: /tmp/docgen_merged.osty:6085:5
@@ -8146,7 +8182,7 @@ func ostyLex(source string) *OstyLexResult {
 		lexTok := frontLexTokenAt(stream, tokenIdx)
 		_ = lexTok
 		// Osty: /tmp/docgen_merged.osty:6134:9
-		text := frontLexemeFromUnits(units, lexTok.start.offset, lexTok.length)
+		text := ostyStringAt(facts.tokenTexts, tokenIdx)
 		_ = text
 		// Osty: /tmp/docgen_merged.osty:6136:9
 		rt := &OstyRichToken{kind: lexTok.kind, text: text, startOffset: lexTok.start.offset, startLine: lexTok.start.line, startCol: lexTok.start.column, endOffset: lexTok.end.offset, endLine: lexTok.end.line, endCol: lexTok.end.column, leadingDoc: ostyStringAt(facts.leadingDocs, tokenIdx), triple: lexTok.triple, partCount: lexTok.interpolations}
@@ -8174,6 +8210,21 @@ func ostyLexFactsFromStream(source string, stream *FrontLexStream) *OstyLexFacts
 	// Osty: /tmp/docgen_merged.osty:6165:5
 	units := strings.Split(source, "")
 	_ = units
+	tokenCount := frontLexTokenCount(stream)
+	_ = tokenCount
+	var tokenTexts []string = make([]string, 0, tokenCount)
+	for textIdx := 0; textIdx < tokenCount; textIdx++ {
+		tok := frontLexTokenAt(stream, textIdx)
+		raw := frontLexemeFromUnits(units, tok.start.offset, tok.length)
+		tokenTexts = append(tokenTexts, ostyPublicTokenText(tok, raw))
+	}
+	interpolationTokenCount := frontInterpolationTokenCount(stream)
+	var interpolationTokenTexts []string = make([]string, 0, interpolationTokenCount)
+	for interpolationTextIdx := 0; interpolationTextIdx < interpolationTokenCount; interpolationTextIdx++ {
+		tok := frontInterpolationTokenAt(stream, interpolationTextIdx).token
+		raw := frontLexemeFromUnits(units, tok.start.offset, tok.length)
+		interpolationTokenTexts = append(interpolationTokenTexts, ostyPublicTokenText(tok, raw))
+	}
 	// Osty: /tmp/docgen_merged.osty:6167:5
 	var errors []*OstyLexError = make([]*OstyLexError, 0, 1)
 	_ = errors
@@ -8236,8 +8287,6 @@ func ostyLexFactsFromStream(source string, stream *FrontLexStream) *OstyLexFacts
 	var stringParts []*OstyLexStringPart = make([]*OstyLexStringPart, 0, 1)
 	_ = stringParts
 	// Osty: /tmp/docgen_merged.osty:6187:5
-	tokenCount := frontLexTokenCount(stream)
-	_ = tokenCount
 	// Osty: /tmp/docgen_merged.osty:6188:5
 	ti := 0
 	_ = ti
@@ -8331,7 +8380,7 @@ func ostyLexFactsFromStream(source string, stream *FrontLexStream) *OstyLexFacts
 			li = _cur1637 + _rhs1638
 		}()
 	}
-	return &OstyLexFacts{errors: errors, comments: comments, stringParts: stringParts, leadingDocs: leadingDocs}
+	return &OstyLexFacts{errors: errors, comments: comments, stringParts: stringParts, leadingDocs: leadingDocs, tokenTexts: tokenTexts, interpolationTokenTexts: interpolationTokenTexts}
 }
 
 // Osty: /tmp/docgen_merged.osty:6223:5
@@ -8715,7 +8764,7 @@ func ostyLexStringPartFromFront(units []string, tok *FrontLexToken, part *FrontS
 		return _p1677 - _rhs1678
 	}())
 	_ = text
-	text = ostyPublicStringText(tok, text)
+	text = ostyPublicStringPartText(units, tok, text)
 	return &OstyLexStringPart{ownerToken: part.ownerToken, kindCode: 0, text: text, exprTokenStart: 0, exprTokenCount: 0}
 }
 
@@ -8724,7 +8773,7 @@ func ostyDefaultStringPart(units []string, tok *FrontLexToken, owner int) *OstyL
 	// Osty: /tmp/docgen_merged.osty:6411:5
 	text := ostyStringContentRaw(units, tok)
 	_ = text
-	text = ostyPublicStringText(tok, text)
+	text = ostyPublicStringPartText(units, tok, text)
 	return &OstyLexStringPart{ownerToken: owner, kindCode: 0, text: text, exprTokenStart: 0, exprTokenCount: 0}
 }
 
@@ -8737,6 +8786,27 @@ func ostyPublicStringText(tok *FrontLexToken, raw string) string {
 		return ostyDecodeEscapes(text)
 	}
 	return text
+}
+
+func ostyPublicStringPartText(units []string, tok *FrontLexToken, raw string) string {
+	text := raw
+	if tok.triple {
+		text = ostyNormalizeTripleSegmentWithIndent(text, ostyTripleClosingIndentFromToken(units, tok))
+	}
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontString{})) {
+		return ostyDecodeEscapes(text)
+	}
+	return text
+}
+
+func ostyPublicTokenText(tok *FrontLexToken, raw string) string {
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) {
+		return ostyDecodeCharLiteralValue(raw)
+	}
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) {
+		return ostyDecodeByteLiteralValue(raw)
+	}
+	return raw
 }
 
 func ostyDecodeEscapes(s string) string {
@@ -8786,7 +8856,11 @@ func ostyDecodeEscapes(s string) string {
 				if end := strings.IndexByte(s[i+3:], '}'); end >= 0 {
 					hex := s[i+3 : i+3+end]
 					if v, err := strconv.ParseInt(hex, 16, 32); err == nil {
-						b.WriteRune(rune(v))
+						r := rune(v)
+						if r > utf8.MaxRune || (r >= 0xD800 && r <= 0xDFFF) {
+							r = utf8.RuneError
+						}
+						b.WriteRune(r)
 						i += 4 + end
 						continue
 					}
@@ -8981,86 +9055,74 @@ func ostyStringContentRaw(units []string, tok *FrontLexToken) string {
 
 // Osty: /tmp/docgen_merged.osty:6443:1
 func ostyNormalizeTripleSegment(text string) string {
-	// Osty: /tmp/docgen_merged.osty:6444:5
-	trimIndent := strings.HasPrefix(text, "\n")
-	_ = trimIndent
-	// Osty: /tmp/docgen_merged.osty:6445:5
 	body := text
-	_ = body
-	// Osty: /tmp/docgen_merged.osty:6446:5
 	if strings.HasPrefix(body, "\n") {
-		// Osty: /tmp/docgen_merged.osty:6447:9
 		body = ostyDropPrefixUnits(body, 1)
 	}
-	// Osty: /tmp/docgen_merged.osty:6449:5
-	if strings.HasSuffix(body, "\n") {
-		// Osty: /tmp/docgen_merged.osty:6450:9
-		body = ostyDropSuffixUnits(body, 1)
-	}
-	// Osty: /tmp/docgen_merged.osty:6452:5
 	lines := strings.Split(body, "\n")
-	_ = lines
-	// Osty: /tmp/docgen_merged.osty:6453:5
-	indent := ostyFirstNonBlankIndent(lines)
-	_ = indent
-	// Osty: /tmp/docgen_merged.osty:6454:5
-	var normalized []string = make([]string, 0, 1)
-	_ = normalized
-	// Osty: /tmp/docgen_merged.osty:6455:5
-	for _, line := range lines {
-		// Osty: /tmp/docgen_merged.osty:6456:9
-		if trimIndent && indent != "" {
-			// Osty: /tmp/docgen_merged.osty:6457:13
-			func() struct{} { normalized = append(normalized, strings.TrimPrefix(line, indent)); return struct{}{} }()
+	hasClosingIndent := ostyTripleHasClosingIndentLine(lines)
+	indent := ""
+	if hasClosingIndent {
+		indent = ostyStringAt(lines, len(lines)-1)
+	}
+	return ostyNormalizeTripleSegmentWithIndent(text, indent)
+}
+
+func ostyNormalizeTripleSegmentWithIndent(text string, indent string) string {
+	body := text
+	if strings.HasPrefix(body, "\n") {
+		body = ostyDropPrefixUnits(body, 1)
+	}
+	lines := strings.Split(body, "\n")
+	hasClosingIndent := ostyTripleHasClosingIndentLineWithIndent(lines, indent)
+	lineLimit := len(lines)
+	if hasClosingIndent {
+		lineLimit--
+	}
+	normalized := make([]string, 0, lineLimit)
+	for idx, line := range lines {
+		if idx >= lineLimit {
+			break
+		}
+		if indent != "" {
+			normalized = append(normalized, strings.TrimPrefix(line, indent))
 		} else {
-			// Osty: /tmp/docgen_merged.osty:6459:13
-			func() struct{} { normalized = append(normalized, line); return struct{}{} }()
+			normalized = append(normalized, line)
 		}
 	}
 	return strings.Join(ostyTrimBlankTail(normalized), "\n")
 }
 
-// Osty: /tmp/docgen_merged.osty:6465:1
-func ostyFirstNonBlankIndent(lines []string) string {
-	// Osty: /tmp/docgen_merged.osty:6466:5
-	for _, line := range lines {
-		// Osty: /tmp/docgen_merged.osty:6467:9
-		if strings.TrimSpace(line) != "" {
-			// Osty: /tmp/docgen_merged.osty:6468:13
-			units := strings.Split(line, "")
-			_ = units
-			// Osty: /tmp/docgen_merged.osty:6469:13
-			idx := 0
-			_ = idx
-			// Osty: /tmp/docgen_merged.osty:6470:13
-			count := ostyStringListCount(units)
-			_ = count
-			// Osty: /tmp/docgen_merged.osty:6471:13
-			for idx < count {
-				// Osty: /tmp/docgen_merged.osty:6472:17
-				unit := frontUnitAt(units, idx)
-				_ = unit
-				// Osty: /tmp/docgen_merged.osty:6473:17
-				if unit != " " && unit != "\t" {
-					// Osty: /tmp/docgen_merged.osty:6474:21
-					return frontLexemeFromUnits(units, 0, idx)
-				}
-				// Osty: /tmp/docgen_merged.osty:6476:17
-				func() {
-					var _cur1703 int = idx
-					var _rhs1704 int = 1
-					if _rhs1704 > 0 && _cur1703 > math.MaxInt-_rhs1704 {
-						panic("integer overflow")
-					}
-					if _rhs1704 < 0 && _cur1703 < math.MinInt-_rhs1704 {
-						panic("integer overflow")
-					}
-					idx = _cur1703 + _rhs1704
-				}()
-			}
-			// Osty: /tmp/docgen_merged.osty:6478:13
-			return line
-		}
+func ostyTripleHasClosingIndentLine(lines []string) bool {
+	if len(lines) == 0 {
+		return false
+	}
+	return strings.TrimSpace(ostyStringAt(lines, len(lines)-1)) == ""
+}
+
+func ostyTripleHasClosingIndentLineWithIndent(lines []string, indent string) bool {
+	if len(lines) == 0 {
+		return false
+	}
+	last := ostyStringAt(lines, len(lines)-1)
+	return strings.TrimSpace(last) == "" && (indent == "" || last == indent)
+}
+
+func ostyTripleClosingIndentFromToken(units []string, tok *FrontLexToken) string {
+	if !tok.triple {
+		return ""
+	}
+	body := ostyStringContentRaw(units, tok)
+	if strings.HasPrefix(body, "\n") {
+		body = ostyDropPrefixUnits(body, 1)
+	}
+	lines := strings.Split(body, "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	last := ostyStringAt(lines, len(lines)-1)
+	if strings.TrimSpace(last) == "" {
+		return last
 	}
 	return ""
 }
@@ -9191,6 +9253,20 @@ func ostyLexStringPartCount(parts []*OstyLexStringPart) int {
 		}()
 	}
 	return count
+}
+
+func frontInterpolationTokenCount(stream *FrontLexStream) int {
+	if stream == nil {
+		return 0
+	}
+	return len(stream.interpolationTokens)
+}
+
+func frontInterpolationTokenAt(stream *FrontLexStream, target int) *FrontInterpolationToken {
+	if stream == nil || target < 0 || target >= len(stream.interpolationTokens) {
+		return &FrontInterpolationToken{ownerPart: -1, token: emptyFrontLexToken()}
+	}
+	return stream.interpolationTokens[target]
 }
 
 // Osty: /tmp/docgen_merged.osty:6523:1

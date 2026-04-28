@@ -54,9 +54,156 @@ func firstTokenOfKind(t *testing.T, toks []token.Token, kind token.Kind) *token.
 	return nil
 }
 
+func firstDiagnosticWithCode(t *testing.T, diags []*Error, code string) *Error {
+	t.Helper()
+	for _, d := range diags {
+		if d.Code == code {
+			return d
+		}
+	}
+	t.Fatalf("missing diagnostic %s in %+v", code, diags)
+	return nil
+}
+
+func sourceLineColAt(src string, offset int) (int, int) {
+	line, col := 1, 1
+	for idx, r := range src {
+		if idx >= offset {
+			break
+		}
+		if r == '\n' {
+			line, col = line+1, 1
+		} else {
+			col++
+		}
+	}
+	return line, col
+}
+
 func TestLexUnterminatedString(t *testing.T) {
 	expectCode(t, "let s = \"hello", "E0001")
 	expectCode(t, "let s = \"hello\n", "E0001")
+}
+
+func TestLexDiagnosticContracts(t *testing.T) {
+	tests := []struct {
+		name        string
+		src         string
+		code        string
+		message     string
+		hint        string
+		startNeedle string
+		spanWidth   int
+	}{
+		{
+			name:        "unterminated string",
+			src:         `let s = "abc`,
+			code:        "E0001",
+			message:     "unterminated string literal",
+			startNeedle: `"`,
+			spanWidth:   len(`"abc`),
+		},
+		{
+			name:        "uppercase base prefix",
+			src:         "let n = 0X1",
+			code:        "E0002",
+			message:     "uppercase base prefix is not allowed",
+			hint:        "use lowercase base prefixes: `0x`, `0b`, or `0o`",
+			startNeedle: "0X",
+			spanWidth:   len("0X"),
+		},
+		{
+			name:        "unknown escape",
+			src:         `let s = "bad\q"`,
+			code:        "E0003",
+			message:     "unknown escape sequence",
+			startNeedle: `\q`,
+			spanWidth:   len(`\q`),
+		},
+		{
+			name:        "unterminated block comment",
+			src:         "/* never closes",
+			code:        "E0004",
+			message:     "unterminated block comment",
+			startNeedle: "/*",
+			spanWidth:   len("/* never closes"),
+		},
+		{
+			name:        "illegal character",
+			src:         "let x = ⚡",
+			code:        "E0005",
+			message:     "illegal character",
+			startNeedle: "⚡",
+			spanWidth:   len("⚡"),
+		},
+		{
+			name:        "bad triple shape",
+			src:         `let s = """oops"""`,
+			code:        "E0006",
+			message:     "invalid triple-quoted string",
+			startNeedle: `"""`,
+			spanWidth:   len(`"""oops"""`),
+		},
+		{
+			name:        "fat arrow removed",
+			src:         "let x = 0 => 1",
+			code:        "E0007",
+			message:     "`=>` is not valid Osty syntax; use `->`",
+			startNeedle: "=>",
+			spanWidth:   len("=>"),
+		},
+		{
+			name:        "bad numeric separator",
+			src:         "let a = 1_",
+			code:        "E0008",
+			message:     "numeric separator `_` must appear between two digits",
+			hint:        "place `_` only between two digits",
+			startNeedle: "1_",
+			spanWidth:   len("1_"),
+		},
+		{
+			name:        "empty char",
+			src:         "let a = ''",
+			code:        "E0009",
+			message:     "empty char literal",
+			startNeedle: "''",
+			spanWidth:   len("''"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			l := New([]byte(tt.src))
+			_ = l.Lex()
+			d := firstDiagnosticWithCode(t, l.Errors(), tt.code)
+			if d.Message != tt.message {
+				t.Fatalf("message = %q; want %q", d.Message, tt.message)
+			}
+			if d.Hint != tt.hint {
+				t.Fatalf("hint = %q; want %q", d.Hint, tt.hint)
+			}
+			if len(d.Spans) == 0 {
+				t.Fatalf("missing span: %+v", d)
+			}
+			start := strings.Index(tt.src, tt.startNeedle)
+			if start < 0 {
+				t.Fatalf("test bug: missing start needle %q", tt.startNeedle)
+			}
+			end := start + tt.spanWidth
+			got := d.Spans[0].Span
+			if got.Start.Offset != start || got.End.Offset != end {
+				t.Fatalf("span offsets = [%d,%d); want [%d,%d)", got.Start.Offset, got.End.Offset, start, end)
+			}
+			startLine, startCol := sourceLineColAt(tt.src, start)
+			endLine, endCol := sourceLineColAt(tt.src, end)
+			if got.Start.Line != startLine || got.Start.Column != startCol ||
+				got.End.Line != endLine || got.End.Column != endCol {
+				t.Fatalf("span line/col = [%d:%d,%d:%d); want [%d:%d,%d:%d)",
+					got.Start.Line, got.Start.Column, got.End.Line, got.End.Column,
+					startLine, startCol, endLine, endCol)
+			}
+		})
+	}
 }
 
 func TestLexUppercaseBasePrefix(t *testing.T) {
@@ -137,6 +284,48 @@ func TestLexStringPartsAlreadyDecodedBySelfhost(t *testing.T) {
 	want := "line\n😀{ok}\""
 	if got.Parts[0].Text != want {
 		t.Fatalf("string part text = %q; want %q", got.Parts[0].Text, want)
+	}
+}
+
+func TestLexHexEscapesDecodedBySelfhost(t *testing.T) {
+	src := `let s = "\x41"
+let c = '\x42'
+let b = b'\x43'`
+	l := New([]byte(src))
+	toks := l.Lex()
+	if errs := l.Errors(); len(errs) != 0 {
+		t.Fatalf("unexpected lex errors: %v", errs)
+	}
+	str := firstTokenOfKind(t, toks, token.STRING)
+	if len(str.Parts) != 1 || str.Parts[0].Text != "A" {
+		t.Fatalf("string parts = %+v; want decoded A", str.Parts)
+	}
+	ch := firstTokenOfKind(t, toks, token.CHAR)
+	if ch.Value != "B" {
+		t.Fatalf("char value = %q; want B", ch.Value)
+	}
+	bt := firstTokenOfKind(t, toks, token.BYTE)
+	if bt.Value != "C" {
+		t.Fatalf("byte value = %q; want C", bt.Value)
+	}
+}
+
+func TestLexInvalidUnicodeScalarsDecodeReplacement(t *testing.T) {
+	src := `let surrogate = '\u{D800}'
+let tooBig = '\u{110000}'`
+	l := New([]byte(src))
+	toks := l.Lex()
+	if got := len(l.Errors()); got != 2 {
+		t.Fatalf("lex error count = %d; want 2 (%+v)", got, l.Errors())
+	}
+	var values []string
+	for _, tk := range toks {
+		if tk.Kind == token.CHAR {
+			values = append(values, tk.Value)
+		}
+	}
+	if len(values) != 2 || values[0] != "\uFFFD" || values[1] != "\uFFFD" {
+		t.Fatalf("char values = %q; want two replacement characters", values)
 	}
 }
 
@@ -312,6 +501,15 @@ func TestLexInterpolationNestedStringOk(t *testing.T) {
 	expectNoLexErrors(t, `let s = "got.{std.strings.join(xs, ".")}"`)
 }
 
+func TestLexInterpolationNestedStringEscapeDiagnostics(t *testing.T) {
+	expectNoLexErrors(t, `let s = "outer {f("ok\n")}"`)
+	expectCode(t, `let s = "outer {f("bad\q")}"`, "E0003")
+}
+
+func TestLexInterpolationBackslashQuoteIsNotOuterEscape(t *testing.T) {
+	expectCode(t, `let s = "outer {f(\"x\")}"`, "E0001")
+}
+
 // A `\"` inside the interpolation expression is treated as a 2-unit
 // passthrough by the outer scanner — it must not let the `"` be confused
 // with the outer string's close. The *outer* string's span must therefore
@@ -415,6 +613,23 @@ func TestLexTripleStringStripsIndent(t *testing.T) {
 	// Per §1.6.3: common indent stripped, trailing newline before the
 	// closing `"""` removed.
 	want := "line1\nline2"
+	if got.Parts[0].Text != want {
+		t.Fatalf("triple body = %q; want %q", got.Parts[0].Text, want)
+	}
+}
+
+func TestLexTripleStringUsesClosingIndent(t *testing.T) {
+	src := "let s = \"\"\"\n      keeps two spaces\n    \"\"\""
+	l := New([]byte(src))
+	toks := l.Lex()
+	if errs := l.Errors(); len(errs) != 0 {
+		t.Fatalf("unexpected lex errors: %v", errs)
+	}
+	got := firstTokenOfKind(t, toks, token.STRING)
+	if len(got.Parts) != 1 || got.Parts[0].Kind != token.PartText {
+		t.Fatalf("expected one PartText, got parts=%+v", got.Parts)
+	}
+	want := "  keeps two spaces"
 	if got.Parts[0].Text != want {
 		t.Fatalf("triple body = %q; want %q", got.Parts[0].Text, want)
 	}

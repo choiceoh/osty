@@ -8,9 +8,10 @@ import (
 // Lex runs the bootstrapped pure-Osty lexer and adapts its stream to the
 // compiler's public token surface.
 func Lex(src []byte) ([]token.Token, []*diag.Diagnostic, []token.Comment) {
-	text := string(src)
+	lexed := ostyLexSource(string(src))
+	text := lexed.source
 	rt := newRuneTable(text)
-	stream := frontendLexStream(text)
+	stream := lexed.stream
 	return adaptLexStream(rt, stream, ostyLexFactsFromStream(text, stream))
 }
 
@@ -37,9 +38,10 @@ func Run(src []byte) *FrontendRun {
 }
 
 func runFrontend(src []byte, adaptTokens bool) *FrontendRun {
-	text := string(src)
+	lexed := ostyLexSource(string(src))
+	text := lexed.source
 	rt := newRuneTable(text)
-	stream := frontendLexStream(text)
+	stream := lexed.stream
 	frontToks := frontTokensFromSource(text, stream)
 	p := newOstyParser(frontToks)
 	opParseFile(p)
@@ -91,17 +93,15 @@ func (r *FrontendRun) ensureLexAdapted() {
 func adaptLexStream(rt runeTable, stream *FrontLexStream, facts *OstyLexFacts) ([]token.Token, []*diag.Diagnostic, []token.Comment) {
 	toks := make([]token.Token, 0, len(stream.tokens))
 	for _, ft := range stream.tokens {
-		startRune := ft.start.offset
-		endRune := ft.start.offset + ft.length
 		tok := token.Token{
 			Kind:       mapTokenKind(ft.kind),
 			Pos:        rt.pos(ft.start),
 			End:        rt.pos(ft.end),
-			Value:      rt.slice(startRune, endRune),
+			Value:      stringAt(facts.tokenTexts, len(toks)),
 			Triple:     ft.triple,
 			LeadingDoc: stringAt(facts.leadingDocs, len(toks)),
 		}
-		fillLiteralParts(&tok, rt, stream, facts.stringParts, len(toks))
+		fillLiteralParts(&tok, rt, stream, facts, len(toks))
 		toks = append(toks, tok)
 	}
 
@@ -355,30 +355,26 @@ func mapTokenKind(k FrontTokenKind) token.Kind {
 	return token.ILLEGAL
 }
 
-func fillLiteralParts(tok *token.Token, rt runeTable, stream *FrontLexStream, parts []*OstyLexStringPart, owner int) {
+func fillLiteralParts(tok *token.Token, rt runeTable, stream *FrontLexStream, facts *OstyLexFacts, owner int) {
 	switch tok.Kind {
 	case token.STRING, token.RAWSTRING:
-		for _, p := range parts {
+		for _, p := range facts.stringParts {
 			if p.ownerToken != owner {
 				continue
 			}
 			if p.kindCode == int(token.PartExpr) {
 				tok.Parts = append(tok.Parts, token.StringPart{
 					Kind: token.PartExpr,
-					Expr: interpolationTokens(stream, p.exprTokenStart, p.exprTokenCount, rt),
+					Expr: interpolationTokens(stream, p.exprTokenStart, p.exprTokenCount, rt, facts.interpolationTokenTexts),
 				})
 				continue
 			}
 			tok.Parts = append(tok.Parts, token.StringPart{Kind: token.PartText, Text: p.text})
 		}
-	case token.CHAR:
-		tok.Value = ostyDecodeCharLiteralValue(tok.Value)
-	case token.BYTE:
-		tok.Value = ostyDecodeByteLiteralValue(tok.Value)
 	}
 }
 
-func interpolationTokens(stream *FrontLexStream, start, count int, rt runeTable) []token.Token {
+func interpolationTokens(stream *FrontLexStream, start, count int, rt runeTable, tokenTexts []string) []token.Token {
 	out := make([]token.Token, 0, count)
 	end := start + count
 	if start < 0 {
@@ -397,7 +393,7 @@ func interpolationTokens(stream *FrontLexStream, start, count int, rt runeTable)
 			Kind:  mapTokenKind(ft.kind),
 			Pos:   rt.pos(ft.start),
 			End:   rt.pos(ft.end),
-			Value: rt.slice(ft.start.offset, ft.start.offset+ft.length),
+			Value: stringAt(tokenTexts, i),
 		}
 		out = append(out, tok)
 	}

@@ -56,8 +56,8 @@ pub struct OstyLexComment {
 }
 
 /// OstyLexStringPart is the Go adapter-ready string part shape. `text` is the
-/// final public token text; escape decoding belongs to this self-hosted layer,
-/// not to the Go adapter.
+/// final public string-part text; escape decoding belongs to this self-hosted
+/// layer, not to the Go adapter.
 pub struct OstyLexStringPart {
     pub ownerToken: Int,
     pub kindCode: Int,
@@ -66,12 +66,17 @@ pub struct OstyLexStringPart {
     pub exprTokenCount: Int,
 }
 
-/// OstyLexFacts holds the non-token side tables in Go adapter-ready form.
+/// OstyLexFacts holds adapter-ready side tables. `tokenTexts` is the canonical
+/// public token Value: raw lexeme for ordinary tokens, decoded value for char
+/// and byte literals. `interpolationTokenTexts` applies the same rule to
+/// expression tokens nested inside string interpolation parts.
 pub struct OstyLexFacts {
     pub errors: List<OstyLexError>,
     pub comments: List<OstyLexComment>,
     pub stringParts: List<OstyLexStringPart>,
     pub leadingDocs: List<String>,
+    pub tokenTexts: List<String>,
+    pub interpolationTokenTexts: List<String>,
 }
 
 /// OstyLexResult is the full lexer output, equivalent to what the Go
@@ -115,7 +120,6 @@ pub fn ostyLexSource(source: String) -> OstyLexedSource {
 ///   comments := l.Comments()
 pub fn ostyLex(source: String) -> OstyLexResult {
     let lexed = ostyLexSource(source)
-    let units = strings.split(lexed.source, "")
     let stream = lexed.stream
     let facts = ostyLexFactsFromStream(lexed.source, stream)
 
@@ -125,7 +129,7 @@ pub fn ostyLex(source: String) -> OstyLexResult {
 
     for tokenIdx < tokenCount {
         let lexTok = frontLexTokenAt(stream, tokenIdx)
-        let text = frontLexemeFromUnits(units, lexTok.start.offset, lexTok.length)
+        let text = ostyStringAt(facts.tokenTexts, tokenIdx)
 
         let mut rt = OstyRichToken {
             kind: lexTok.kind,
@@ -159,6 +163,25 @@ pub fn ostyLex(source: String) -> OstyLexResult {
 /// already-scanned facts and assembles comments/string parts.
 pub fn ostyLexFactsFromStream(source: String, stream: FrontLexStream) -> OstyLexFacts {
     let units = strings.split(source, "")
+    let tokenCount = frontLexTokenCount(stream)
+
+    let mut tokenTexts: List<String> = []
+    let mut textIdx = 0
+    for textIdx < tokenCount {
+        let tok = frontLexTokenAt(stream, textIdx)
+        let raw = frontLexemeFromUnits(units, tok.start.offset, tok.length)
+        tokenTexts.push(ostyPublicTokenText(tok, raw))
+        textIdx = textIdx + 1
+    }
+    let mut interpolationTokenTexts: List<String> = []
+    let interpolationTokenCount = frontInterpolationTokenCount(stream)
+    let mut interpolationTextIdx = 0
+    for interpolationTextIdx < interpolationTokenCount {
+        let tok = frontInterpolationTokenAt(stream, interpolationTextIdx).token
+        let raw = frontLexemeFromUnits(units, tok.start.offset, tok.length)
+        interpolationTokenTexts.push(ostyPublicTokenText(tok, raw))
+        interpolationTextIdx = interpolationTextIdx + 1
+    }
 
     let mut errors: List<OstyLexError> = []
     let diagCount = frontLexDiagnosticCount(stream)
@@ -177,7 +200,6 @@ pub fn ostyLexFactsFromStream(source: String, stream: FrontLexStream) -> OstyLex
     }
 
     let mut stringParts: List<OstyLexStringPart> = []
-    let tokenCount = frontLexTokenCount(stream)
     let mut ti = 0
     for ti < tokenCount {
         let tok = frontLexTokenAt(stream, ti)
@@ -206,7 +228,7 @@ pub fn ostyLexFactsFromStream(source: String, stream: FrontLexStream) -> OstyLex
         li = li + 1
     }
 
-    OstyLexFacts { errors, comments, stringParts, leadingDocs }
+    OstyLexFacts { errors, comments, stringParts, leadingDocs, tokenTexts, interpolationTokenTexts }
 }
 
 /// ostyLexTokens is a convenience that returns just the parser-compatible
@@ -362,7 +384,8 @@ fn ostyLexStringPartFromFront(
             exprTokenCount: part.exprTokenCount,
         }
     }
-    let text = ostyPublicStringText(
+    let text = ostyPublicStringPartText(
+        units,
         tok,
         frontLexemeFromUnits(units, part.start.offset, part.end.offset - part.start.offset),
     )
@@ -376,7 +399,7 @@ fn ostyLexStringPartFromFront(
 }
 
 fn ostyDefaultStringPart(units: List<String>, tok: FrontLexToken, owner: Int) -> OstyLexStringPart {
-    let text = ostyPublicStringText(tok, ostyStringContentRaw(units, tok))
+    let text = ostyPublicStringPartText(units, tok, ostyStringContentRaw(units, tok))
     OstyLexStringPart {
         ownerToken: owner,
         kindCode: 0,
@@ -384,6 +407,16 @@ fn ostyDefaultStringPart(units: List<String>, tok: FrontLexToken, owner: Int) ->
         exprTokenStart: 0,
         exprTokenCount: 0,
     }
+}
+
+fn ostyPublicTokenText(tok: FrontLexToken, raw: String) -> String {
+    if tok.kind == FrontChar {
+        return ostyDecodeCharLiteralValue(raw)
+    }
+    if tok.kind == FrontByte {
+        return ostyDecodeByteLiteralValue(raw)
+    }
+    raw
 }
 
 fn ostyStringContentRaw(units: List<String>, tok: FrontLexToken) -> String {
@@ -408,6 +441,17 @@ fn ostyPublicStringText(tok: FrontLexToken, raw: String) -> String {
     let mut text = raw
     if tok.triple {
         text = ostyNormalizeTripleSegment(text)
+    }
+    if tok.kind == FrontString {
+        return ostyDecodeEscapes(text)
+    }
+    text
+}
+
+fn ostyPublicStringPartText(units: List<String>, tok: FrontLexToken, raw: String) -> String {
+    let mut text = raw
+    if tok.triple {
+        text = ostyNormalizeTripleSegmentWithIndent(text, ostyTripleClosingIndentFromToken(units, tok))
     }
     if tok.kind == FrontString {
         return ostyDecodeEscapes(text)
@@ -582,42 +626,69 @@ fn ostyCharLiteralBody(text: String) -> String {
 }
 
 fn ostyNormalizeTripleSegment(text: String) -> String {
-    let trimIndent = strings.hasPrefix(text, "\n")
     let mut body = text
     if strings.hasPrefix(body, "\n") {
         body = ostyDropPrefixUnits(body, 1)
     }
-    if strings.hasSuffix(body, "\n") {
-        body = ostyDropSuffixUnits(body, 1)
+    let lines = strings.split(body, "\n")
+    let hasClosingIndent = ostyTripleHasClosingIndentLine(lines)
+    let indent = if hasClosingIndent { ostyStringAt(lines, lines.len() - 1) } else { "" }
+    ostyNormalizeTripleSegmentWithIndent(text, indent)
+}
+
+fn ostyNormalizeTripleSegmentWithIndent(text: String, indent: String) -> String {
+    let mut body = text
+    if strings.hasPrefix(body, "\n") {
+        body = ostyDropPrefixUnits(body, 1)
     }
-    let mut lines = strings.split(body, "\n")
-    let indent = ostyFirstNonBlankIndent(lines)
+    let lines = strings.split(body, "\n")
+    let hasClosingIndent = ostyTripleHasClosingIndentLineWithIndent(lines, indent)
+    let lineLimit = if hasClosingIndent { lines.len() - 1 } else { lines.len() }
     let mut normalized: List<String> = []
+    let mut idx = 0
     for line in lines {
-        if trimIndent && indent != "" {
-            normalized.push(strings.trimPrefix(line, indent))
-        } else {
-            normalized.push(line)
+        if idx < lineLimit {
+            if indent != "" {
+                normalized.push(strings.trimPrefix(line, indent))
+            } else {
+                normalized.push(line)
+            }
         }
+        idx = idx + 1
     }
     strings.join(ostyTrimBlankTail(normalized), "\n")
 }
 
-fn ostyFirstNonBlankIndent(lines: List<String>) -> String {
-    for line in lines {
-        if strings.trimSpace(line) != "" {
-            let units = strings.split(line, "")
-            let mut idx = 0
-            let count = ostyStringListCount(units)
-            for idx < count {
-                let unit = frontUnitAt(units, idx)
-                if unit != " " && unit != "\t" {
-                    return frontLexemeFromUnits(units, 0, idx)
-                }
-                idx = idx + 1
-            }
-            return line
-        }
+fn ostyTripleHasClosingIndentLine(lines: List<String>) -> Bool {
+    if lines.len() == 0 {
+        return false
+    }
+    strings.trimSpace(ostyStringAt(lines, lines.len() - 1)) == ""
+}
+
+fn ostyTripleHasClosingIndentLineWithIndent(lines: List<String>, indent: String) -> Bool {
+    if lines.len() == 0 {
+        return false
+    }
+    let last = ostyStringAt(lines, lines.len() - 1)
+    strings.trimSpace(last) == "" && (indent == "" || last == indent)
+}
+
+fn ostyTripleClosingIndentFromToken(units: List<String>, tok: FrontLexToken) -> String {
+    if !(tok.triple) {
+        return ""
+    }
+    let mut body = ostyStringContentRaw(units, tok)
+    if strings.hasPrefix(body, "\n") {
+        body = ostyDropPrefixUnits(body, 1)
+    }
+    let lines = strings.split(body, "\n")
+    if lines.len() == 0 {
+        return ""
+    }
+    let last = ostyStringAt(lines, lines.len() - 1)
+    if strings.trimSpace(last) == "" {
+        return last
     }
     ""
 }

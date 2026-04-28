@@ -17,6 +17,14 @@ func parseInterpolatedExpr(toks []token.Token) ast.Expr {
 	if len(toks) == 0 {
 		return nil
 	}
+	// Char and byte token values are canonical decoded values. Rebuilding
+	// source text from those values would turn `'\x41'` into `A`, so lower
+	// directly from the token stream when these tokens appear.
+	if containsDecodedScalarLiteral(toks) {
+		if expr := astLowerInterpolatedTokensToExpr(toks); !astbridge.IsNilExpr(expr) {
+			return expr
+		}
+	}
 	src := interpolatedTokensSource(toks)
 	if src == "" {
 		return nil
@@ -34,6 +42,15 @@ func parseInterpolatedExpr(toks []token.Token) ast.Expr {
 		return &ast.Ident{PosV: toks[0].Pos, EndV: toks[len(toks)-1].End, Name: "__interp"}
 	}
 	return nil
+}
+
+func containsDecodedScalarLiteral(toks []token.Token) bool {
+	for _, tk := range toks {
+		if tk.Kind == token.CHAR || tk.Kind == token.BYTE {
+			return true
+		}
+	}
+	return false
 }
 
 func hasDiagnosticError(diags []*diag.Diagnostic) bool {
