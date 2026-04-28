@@ -23,8 +23,18 @@ func TestToolchainCheckerBundleIsToolchainOnly(t *testing.T) {
 }
 
 func TestToolchainCheckerBundleExcludesBootstrapOnlyAdapters(t *testing.T) {
+	toolchain := ToolchainCheckerFiles()
+	for _, rel := range []string{
+		"internal/selfhost/ast_lower.osty",
+		"toolchain/ci.osty",
+	} {
+		if contains(toolchain, rel) {
+			t.Fatalf("toolchain checker bundle includes known bootstrap-only adapter %q", rel)
+		}
+	}
+
 	root := filepath.Join("..", "..", "..")
-	for _, rel := range ToolchainCheckerFiles() {
+	for _, rel := range toolchain {
 		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
 		if err != nil {
 			t.Fatalf("read %s: %v", rel, err)
@@ -32,6 +42,48 @@ func TestToolchainCheckerBundleExcludesBootstrapOnlyAdapters(t *testing.T) {
 		if hasBootstrapOnlyUse(data) {
 			t.Fatalf("toolchain checker bundle includes bootstrap-only adapter %q", rel)
 		}
+	}
+}
+
+func TestToolchainCheckerBootstrapOnlyUseDetection(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{
+			name: "use go",
+			src:  "use go \"strings\" as strings {\n    fn TrimSpace(s: String) -> String\n}\n",
+			want: true,
+		},
+		{
+			name: "runtime golegacy",
+			src:  "use runtime.golegacy.astbridge as astbridge {\n    fn File() -> Bool\n}\n",
+			want: true,
+		},
+		{
+			name: "runtime cihost",
+			src:  "use runtime.cihost as host {\n    fn KeepAlive() -> Bool\n}\n",
+			want: true,
+		},
+		{
+			name: "comment only",
+			src:  "// use go \"strings\"\n// use runtime.golegacy.astbridge\n// use runtime.cihost as host\npub fn keep() -> Int { 1 }\n",
+			want: false,
+		},
+		{
+			name: "native runtime strings",
+			src:  "use runtime.strings as strings {\n    fn Split(s: String, sep: String) -> List<String>\n}\n",
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hasBootstrapOnlyUse([]byte(tt.src)); got != tt.want {
+				t.Fatalf("hasBootstrapOnlyUse() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -155,7 +207,8 @@ func hasBootstrapOnlyUse(src []byte) bool {
 			continue
 		}
 		if strings.HasPrefix(trimmed, `use go "`) ||
-			strings.HasPrefix(trimmed, "use runtime.golegacy.") {
+			strings.HasPrefix(trimmed, "use runtime.golegacy.") ||
+			strings.HasPrefix(trimmed, "use runtime.cihost") {
 			return true
 		}
 	}

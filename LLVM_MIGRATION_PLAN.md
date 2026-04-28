@@ -1,6 +1,6 @@
 # LLVM Migration Plan
 
-> **Status (2026-04-28): Historical with current sync notes.** 공개 백엔드는 이미 LLVM 하나뿐이며,
+> **Status (2026-04-29): Historical with current sync notes.** 공개 백엔드는 이미 LLVM 하나뿐이며,
 > 기존 Osty→Go 부트스트랩 트랜스파일러는 제거되었다 — `internal/selfhost/generated.go`
 > 는 커밋된 시드 산출물로 동결되어 있다. 이 문서는 이주 과정의 기록이며, phase
 > 설명은 당시 시점의 기준이다. 현재 pass/fail 상태는 바로 아래 동기화 노트가
@@ -11,10 +11,14 @@
 제거하는 것이 아니라, front-end 안정성을 유지한 채 LLVM 백엔드를 병렬로
 도입하고 충분한 parity가 확보된 뒤 기본 경로를 전환하는 것이다.
 
-## 현재 동기화 상태 (2026-04-28)
+## 현재 동기화 상태 (2026-04-29)
 
 - 공개 실행 백엔드는 LLVM만 남았다. 이전 Osty→Go transpiler 경로는 제거됐고,
   `internal/selfhost/generated.go`는 재생성 대상이 아니라 frozen seed다.
+- native checker bundle은 `internal/selfhost/bundle.ToolchainCheckerFiles()`에
+  고정되어 있고, `internal/selfhost/ast_lower.osty`를 포함하지 않는다. 해당
+  파일은 `FrontendRun.File` / `Parse` / `EnsureFile` 기반 legacy public-AST
+  소비자용 호환 어댑터로만 남아 있다.
 - `osty check`, `osty typecheck`, `osty resolve`의 happy path는 self-host arena
   구조체를 직접 소비한다. 현재 기준 `just front`, `just spec`,
   `just verify-selfhost`, `go run ./cmd/osty check toolchain`은 통과한다.
@@ -27,7 +31,7 @@
 - 아래 phase 설명은 migration history로 보존한다. 새 작업 우선순위는 이
   동기화 노트와 다음 critical-path 표를 기준으로 판단한다.
 
-## 셀프호스팅 critical path (2026-04-28 재동기화)
+## 셀프호스팅 critical path (2026-04-29 재동기화)
 
 기존 phase 번호(0~73)는 feature-slice 중심으로 쌓아왔다. 현재는 프론트엔드
 toolchain check가 통과하므로, blocker 순서는 native LLVM 경로가 실제로 아직
@@ -712,7 +716,7 @@ match 분해)를 추가한다.
 2. `toolchain/docgen.osty` — `use go "strings"` → `use std.strings as strings` 치환. 순수 문자열 조작은 전부 Osty-native.
 3. `toolchain/manifest_validation.osty` — 동상. `strings.fields` 백엔드 shim (`osty_rt_strings_Fields` 런타임 + `stdStringsCallStaticResult`/`staticStdStringsCallSourceType` 엔트리) 추가 후 `for part in strings.fields(text)` iteration 이 AST 제너레이터에서 `List<String>` element type 을 정적으로 회수 가능.
 
-실제 Go-bridge 는 여전히 `internal/selfhost/ast_lower.osty` + `internal/selfhost/astbridge/` 경로이며, 이쪽은 CLI 재배선 완료 전까지 남아 있다 (아래 § astbridge 제거 경로 참고).
+실제 Go-bridge 는 여전히 `internal/selfhost/ast_lower.osty` + `internal/selfhost/astbridge/` 경로에 남아 있지만, native checker bundle 밖의 legacy public-AST 호환 경로다 (아래 § astbridge 제거 경로 참고).
 
 ### 1개 bootstrap-only 파일
 
@@ -749,7 +753,7 @@ nested binding pattern, `Map.update` locked lowering이 움직이는지로 측�
 
 ### astbridge 제거 경로
 
-astbridge는 한 방에 제거하지 않고 `*ast.File` 소비자들이 AstArena / structured result 로 이동하면 자동 dead code 가 되는 구조다. `toolchain/ast_lower.osty`는 2026-04-22 시점에 dead duplicate로 제거됐지만, 실제 bridge인 `internal/selfhost/ast_lower.osty`는 아직 bundle.go 경로에서 참조되므로 다음 단계가 남아있다:
+astbridge는 한 방에 제거하지 않고 `*ast.File` 소비자들이 AstArena / structured result 로 이동하면 자동 dead code 가 되는 구조다. `toolchain/ast_lower.osty`는 2026-04-22 시점에 dead duplicate로 제거됐고, 실제 bridge인 `internal/selfhost/ast_lower.osty`도 더 이상 `ToolchainCheckerFiles()` 입력이 아니다. 다만 legacy public-AST 소비자 경로에는 다음 단계가 남아있다:
 
 1. **현재 상태**: `check` / `typecheck` / `resolve` CLI happy path 는 self-host arena 구조체를 직접 소비하고 astbridge bump 0 을 유지한다. 그러나 lint / formatter / LSP 일부 / bootstrap-gen / legacy AST backend helpers 는 여전히 `internal/selfhost/parse.go:Parse` 또는 `PackageFile.EnsureFile` 을 통해 `*ast.File` 을 요구할 수 있다.
 2. **목표 상태**: Go CLI → Osty-native `check.osty`/`llvmgen.osty`/`resolve.osty` 직접 호출 → 이들은 이미 parser.osty `AstArena` + `AstNodeKind`를 네이티브 소비. `internal/selfhost/ast_lower.osty`와 `internal/selfhost/astbridge/` 둘 다 unused → 삭제.
