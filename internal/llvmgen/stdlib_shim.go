@@ -584,7 +584,8 @@ func (g *generator) emitStdStringsCall(call *ast.CallExpr) (value, bool, error) 
 	if !ok || !g.stdStringsAliases[alias.Name] {
 		return value{}, false, nil
 	}
-	switch field.Name {
+	name := canonicalStdStringsCallName(field.Name)
+	switch name {
 	case "compare":
 		v, err := g.emitStdStringsBinary(call, "compare", "i64", llvmStringRuntimeCompareSymbol())
 		return v, true, err
@@ -593,6 +594,15 @@ func (g *generator) emitStdStringsCall(call *ast.CallExpr) (value, bool, error) 
 		return v, true, err
 	case "indexOf":
 		v, err := g.emitStdStringsIndexOf(call)
+		return v, true, err
+	case "Index":
+		v, err := g.emitStdStringsRawIndex(call, "Index", llvmStringRuntimeIndexOfSymbol())
+		return v, true, err
+	case "lastIndexOf":
+		v, err := g.emitStdStringsLastIndexOf(call)
+		return v, true, err
+	case "LastIndex":
+		v, err := g.emitStdStringsRawIndex(call, "LastIndex", mirRtStringLastIndexOfSymbol())
 		return v, true, err
 	case "concat":
 		v, err := g.emitStdStringsBinaryString(call, "concat", llvmStringRuntimeConcatSymbol())
@@ -652,7 +662,7 @@ func (g *generator) emitStdStringsCall(call *ast.CallExpr) (value, bool, error) 
 		v, err := g.emitStdStringsUnary(call, "trimEnd", llvmStringRuntimeTrimEndSymbol())
 		return v, true, err
 	case "trim", "trimSpace":
-		v, err := g.emitStdStringsUnary(call, field.Name, llvmStringRuntimeTrimSpaceSymbol())
+		v, err := g.emitStdStringsUnary(call, name, llvmStringRuntimeTrimSpaceSymbol())
 		return v, true, err
 	case "toUpper":
 		v, err := g.emitStdStringsUnary(call, "toUpper", llvmStringRuntimeToUpperSymbol())
@@ -662,6 +672,69 @@ func (g *generator) emitStdStringsCall(call *ast.CallExpr) (value, bool, error) 
 		return v, true, err
 	}
 	return value{}, false, nil
+}
+
+func canonicalStdStringsCallName(name string) string {
+	switch name {
+	case "Compare":
+		return "compare"
+	case "Count":
+		return "count"
+	case "Index":
+		return "Index"
+	case "LastIndex":
+		return "LastIndex"
+	case "Concat":
+		return "concat"
+	case "Contains":
+		return "contains"
+	case "HasPrefix", "StartsWith", "startsWith":
+		return "hasPrefix"
+	case "HasSuffix", "EndsWith", "endsWith":
+		return "hasSuffix"
+	case "Join":
+		return "join"
+	case "Repeat":
+		return "repeat"
+	case "Replace":
+		return "replace"
+	case "ReplaceAll":
+		return "replaceAll"
+	case "Split":
+		return "split"
+	case "SplitN":
+		return "splitN"
+	case "Fields":
+		return "fields"
+	case "Slice":
+		return "slice"
+	case "ToInt":
+		return "toInt"
+	case "ToFloat":
+		return "toFloat"
+	case "ToBytes":
+		return "toBytes"
+	case "TrimPrefix":
+		return "trimPrefix"
+	case "TrimSuffix":
+		return "trimSuffix"
+	case "TrimStart":
+		return "trimStart"
+	case "TrimEnd":
+		return "trimEnd"
+	case "Trim":
+		return "trim"
+	case "TrimSpace":
+		return "trimSpace"
+	case "ToUpper":
+		return "toUpper"
+	case "ToLower":
+		return "toLower"
+	case "lastIndexOf":
+		return "lastIndexOf"
+	default:
+		return name
+	}
 }
 
 // stdStringsCallStaticResult mirrors runtimeFFICallTarget for the std.strings
@@ -681,12 +754,17 @@ func (g *generator) stdStringsCallStaticResult(call *ast.CallExpr) (value, bool)
 	if !ok || !g.stdStringsAliases[alias.Name] {
 		return value{}, false
 	}
-	switch field.Name {
+	stringT := &ast.NamedType{Path: []string{"String"}}
+	listStringT := &ast.NamedType{Path: []string{"List"}, Args: []ast.Type{stringT}}
+	name := canonicalStdStringsCallName(field.Name)
+	switch name {
 	case "compare":
 		return value{typ: "i64"}, true
 	case "count":
 		return value{typ: "i64"}, true
-	case "indexOf":
+	case "Index", "LastIndex":
+		return value{typ: "i64", sourceType: &ast.NamedType{Path: []string{"Int"}}}, true
+	case "indexOf", "lastIndexOf":
 		return value{
 			typ:       "ptr",
 			gcManaged: true,
@@ -709,9 +787,9 @@ func (g *generator) stdStringsCallStaticResult(call *ast.CallExpr) (value, bool)
 	case "toBytes":
 		return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"Bytes"}}}, true
 	case "concat", "join", "repeat", "replace", "replaceAll", "slice", "trim", "trimSpace", "trimStart", "trimEnd", "trimPrefix", "trimSuffix", "toUpper", "toLower":
-		return value{typ: "ptr", gcManaged: true}, true
+		return value{typ: "ptr", gcManaged: true, sourceType: stringT}, true
 	case "split", "splitN", "fields":
-		return value{typ: "ptr", gcManaged: true, listElemTyp: "ptr", listElemString: true}, true
+		return value{typ: "ptr", gcManaged: true, listElemTyp: "ptr", listElemString: true, sourceType: listStringT}, true
 	}
 	return value{}, false
 }
@@ -964,6 +1042,48 @@ func (g *generator) emitStdStringsIndexOf(call *ast.CallExpr) (value, error) {
 		return value{}, err
 	}
 	return g.emitStringIndexOfRuntime(s, substr)
+}
+
+func (g *generator) emitStdStringsLastIndexOf(call *ast.CallExpr) (value, error) {
+	if len(call.Args) != 2 {
+		return value{}, unsupportedf("call", "strings.lastIndexOf expects 2 arguments, got %d", len(call.Args))
+	}
+	s, err := g.emitStdStringsArg(call.Args[0], "lastIndexOf", 0)
+	if err != nil {
+		return value{}, err
+	}
+	substr, err := g.emitStdStringsArg(call.Args[1], "lastIndexOf", 1)
+	if err != nil {
+		return value{}, err
+	}
+	index, err := g.emitStdStringsRawIndexValue(s, substr, mirRtStringLastIndexOfSymbol())
+	if err != nil {
+		return value{}, err
+	}
+	return g.emitOptionalBoxedI64(index, "string.last_index_of.int")
+}
+
+func (g *generator) emitStdStringsRawIndex(call *ast.CallExpr, name, symbol string) (value, error) {
+	if len(call.Args) != 2 {
+		return value{}, unsupportedf("call", "strings.%s expects 2 arguments, got %d", name, len(call.Args))
+	}
+	s, err := g.emitStdStringsArg(call.Args[0], name, 0)
+	if err != nil {
+		return value{}, err
+	}
+	substr, err := g.emitStdStringsArg(call.Args[1], name, 1)
+	if err != nil {
+		return value{}, err
+	}
+	return g.emitStdStringsRawIndexValue(s, substr, symbol)
+}
+
+func (g *generator) emitStdStringsRawIndexValue(s, substr value, symbol string) (value, error) {
+	g.declareRuntimeSymbol(symbol, "i64", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "i64", symbol, []*LlvmValue{toOstyValue(s), toOstyValue(substr)})
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), nil
 }
 
 func (g *generator) emitStdStringsReplace(call *ast.CallExpr) (value, error) {

@@ -1122,6 +1122,42 @@ func TestGenerateStringBytesIterationUsesBytesV1(t *testing.T) {
 	}
 }
 
+func TestGenerateListGetAggregateValueBoxesOption(t *testing.T) {
+	file := parseLLVMGenFile(t, `struct TomlValue {
+    kind: Int
+    text: String
+}
+
+fn first(xs: List<TomlValue>) -> TomlValue? {
+    xs.get(0)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/list_get_aggregate.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call i64 @osty_rt_list_len(",
+		"call void @osty_rt_list_get_bytes_v1(",
+		"alloca %TomlValue",
+		"call ptr @osty.gc.alloc_v1(i64 1, i64 ",
+		"store %TomlValue ",
+		"= phi ptr [",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "call ptr @osty_rt_list_get_ptr(") ||
+		strings.Contains(got, "call i64 @osty_rt_list_get_i64(") {
+		t.Fatalf("aggregate list.get should use bytes_v1, not typed get helpers:\n%s", got)
+	}
+}
+
 // Phase 2: a struct field whose declared type is fn(...) becomes
 // the callee via `obj.field(args)`. The field value is loaded as a
 // ptr env and dispatched through the same indirect-call ABI.
@@ -1434,6 +1470,41 @@ func TestGenerateMapGetScalarValueBoxLowering(t *testing.T) {
 	}
 }
 
+func TestGenerateMapGetAggregateValueBoxesOption(t *testing.T) {
+	file := parseLLVMGenFile(t, `struct TomlValue {
+    kind: Int
+    text: String
+}
+
+fn lookup(m: Map<String, TomlValue>, k: String) -> TomlValue? {
+    m.get(k)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/map_get_aggregate.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)",
+		"alloca %TomlValue",
+		"call i1 @osty_rt_map_get_string(",
+		"call ptr @osty.gc.alloc_v1(i64 1, i64 ",
+		"store %TomlValue ",
+		"= phi ptr [",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "osty_rt_map_get_or_abort_string") {
+		t.Fatalf("aggregate map.get regressed to abort runtime:\n%s", got)
+	}
+}
+
 // TestGenerateMapGetOrScalarValueUsesDirectLookup verifies Map.getOr
 // for scalar V uses the bool-returning map_get runtime directly: a
 // stack slot receives the payload on hit, the hit branch loads it, and
@@ -1469,6 +1540,40 @@ func TestGenerateMapGetOrScalarValueUnwrapsBox(t *testing.T) {
 	if strings.Contains(got, "osty_rt_map_contains_string") ||
 		strings.Contains(got, "osty_rt_map_get_or_abort_string") {
 		t.Fatalf("scalar getOr still routes through legacy helpers:\n%s", got)
+	}
+}
+
+func TestGenerateMapGetOrAggregateValueUsesDirectLookup(t *testing.T) {
+	file := parseLLVMGenFile(t, `struct TomlValue {
+    kind: Int
+    text: String
+}
+
+fn lookup(m: Map<String, TomlValue>, k: String, fallback: TomlValue) -> TomlValue {
+    m.getOr(k, fallback)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/map_getor_aggregate.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call i1 @osty_rt_map_get_string(",
+		"alloca %TomlValue",
+		"load %TomlValue, ptr",
+		"= phi %TomlValue [",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "call ptr @osty.gc.alloc_v1") ||
+		strings.Contains(got, "osty_rt_map_get_or_abort_string") {
+		t.Fatalf("aggregate getOr should use direct lookup without Option boxing/abort:\n%s", got)
 	}
 }
 
@@ -1513,6 +1618,46 @@ fn tally(m: Map<String, Int>, k: String) {
 	}
 }
 
+func TestGenerateMapUpdateAggregateValueComposesOnBoxedOption(t *testing.T) {
+	file := parseLLVMGenFile(t, `struct TomlValue {
+    kind: Int
+    text: String
+}
+
+fn replace(old: TomlValue?) -> TomlValue {
+    TomlValue { kind: 1, text: "seen" }
+}
+
+fn apply(m: Map<String, TomlValue>, k: String) {
+    m.update(k, replace)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/map_update_aggregate.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call void @osty_rt_map_lock(",
+		"call i1 @osty_rt_map_get_string(",
+		"call ptr @osty.gc.alloc_v1(i64 1, i64 ",
+		"define private %TomlValue @__osty_closure_thunk_replace(ptr %env, ptr %arg0)",
+		"= call %TomlValue (ptr, ptr)",
+		"call void @osty_rt_map_insert_string(",
+		"call void @osty_rt_map_unlock(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "osty_rt_map_get_or_abort_string") {
+		t.Fatalf("aggregate update regressed to abort runtime:\n%s", got)
+	}
+}
+
 func TestGenerateMapGetOrInsertLocksLookupAndInsert(t *testing.T) {
 	file := parseLLVMGenFile(t, `fn upsert(m: Map<String, Int>, k: String) -> Int {
     m.getOrInsert(k, 7)
@@ -1541,6 +1686,42 @@ func TestGenerateMapGetOrInsertLocksLookupAndInsert(t *testing.T) {
 	}
 	if strings.Contains(got, "osty_rt_map_get_or_abort_string") {
 		t.Fatalf("getOrInsert wrongly routed through legacy get_or_abort:\n%s", got)
+	}
+}
+
+func TestGenerateMapGetOrInsertAggregateValue(t *testing.T) {
+	file := parseLLVMGenFile(t, `struct TomlValue {
+    kind: Int
+    text: String
+}
+
+fn upsert(m: Map<String, TomlValue>, k: String, fallback: TomlValue) -> TomlValue {
+    m.getOrInsert(k, fallback)
+}
+`)
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/map_get_or_insert_aggregate.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"call void @osty_rt_map_lock(",
+		"call i1 @osty_rt_map_get_string(",
+		"alloca %TomlValue",
+		"load %TomlValue, ptr",
+		"call void @osty_rt_map_insert_string(",
+		"call void @osty_rt_map_unlock(",
+		"= phi %TomlValue [",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "osty_rt_map_get_or_abort_string") {
+		t.Fatalf("aggregate getOrInsert regressed to abort runtime:\n%s", got)
 	}
 }
 

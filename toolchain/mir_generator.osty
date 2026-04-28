@@ -13995,7 +13995,8 @@ pub fn mirListGetBoxByteSize(elemTyp: String) -> Int {
 /// the unsupported diagnostic instead of allocating an ill-sized box.
 pub fn mirMapScalarValueByteSize(valTyp: String) -> Int {
     if valTyp == "i64" || valTyp == "double" { return 8 }
-    if valTyp == "i1" { return 1 }
+    if valTyp == "i32" { return 4 }
+    if valTyp == "i8" || valTyp == "i1" { return 1 }
     0
 }
 
@@ -14334,7 +14335,7 @@ pub fn mirCallVoidThreePtrText(sym: String, a: String, b: String, c: String) -> 
 /// returns `{i64 ok, i64 payload}` packed in a single SSA value; the
 /// emitter spills that into the destination slot in one shot.
 pub fn mirStoreI64I64StructText(val: String, slot: String) -> String {
-    "  store { i64, i64 } " + val + ", ptr " + slot
+    "  store \{ i64, i64 \} " + val + ", ptr " + slot
 }
 
 /// mirAllocaRootFrameStructLine renders the GC root-frame alloca:
@@ -14344,7 +14345,7 @@ pub fn mirStoreI64I64StructText(val: String, slot: String) -> String {
 /// register name (see the existing inline call site in
 /// `internal/llvmgen/mir_generator.go`).
 pub fn mirAllocaRootFrameStructLine(reg: String) -> String {
-    reg + " = alloca { ptr, ptr, i64 }\n"
+    reg + " = alloca \{ ptr, ptr, i64 \}\n"
 }
 
 /// mirRootFrameEnterLine renders the call to push a root frame onto the
@@ -15009,46 +15010,46 @@ pub fn mirIsTupleAggregateName(name: String) -> Bool {
 /// inside `%osty.Option_<T> = type { i1, <T> }`. The first field is
 /// the discriminator, the second the payload. Pure layout helper.
 pub fn mirOptionalSomeStructLayout(elemTyp: String) -> String {
-    "{ i1, " + elemTyp + " }"
+    "\{ i1, " + elemTyp + " \}"
 }
 
 /// mirResultStructLayout returns the struct-layout fragment for
 /// `%osty.Result_<Ok>_<Err> = type { i1, <Ok>, <Err> }`. Discriminator
 /// + Ok payload + Err payload, in that order.
 pub fn mirResultStructLayout(okTyp: String, errTyp: String) -> String {
-    "{ i1, " + okTyp + ", " + errTyp + " }"
+    "\{ i1, " + okTyp + ", " + errTyp + " \}"
 }
 
 /// mirRangeStructLayout returns the struct-layout fragment for
 /// `%osty.Range_<T> = type { <T>, <T>, i1 }`. Start, end, exclusive
 /// flag.
 pub fn mirRangeStructLayout(elemTyp: String) -> String {
-    "{ " + elemTyp + ", " + elemTyp + ", i1 }"
+    "\{ " + elemTyp + ", " + elemTyp + ", i1 \}"
 }
 
 /// mirHandleStructLayout returns the layout `{ ptr, ptr }` for
 /// `Handle<T>` — group ptr + closure env ptr.
 pub fn mirHandleStructLayout() -> String {
-    "{ ptr, ptr }"
+    "\{ ptr, ptr \}"
 }
 
 /// mirChannelStructLayout returns `{ ptr }` — channel handle wraps a
 /// runtime-allocated state ptr.
 pub fn mirChannelStructLayout() -> String {
-    "{ ptr }"
+    "\{ ptr \}"
 }
 
 /// mirIfaceStructLayout returns the canonical interface fat-pointer
 /// layout `{ ptr, ptr }` (data ptr + vtable ptr). Used by interface
 /// dispatch and boxing sites.
 pub fn mirIfaceStructLayout() -> String {
-    "{ ptr, ptr }"
+    "\{ ptr, ptr \}"
 }
 
 /// mirRootFrameStructLayout returns the GC root-frame struct layout
 /// `{ ptr, ptr, i64 }` — prev frame ptr + slots ptr + count.
 pub fn mirRootFrameStructLayout() -> String {
-    "{ ptr, ptr, i64 }"
+    "\{ ptr, ptr, i64 \}"
 }
 
 /// mirSpliceFnAttrs rewrites the first `define ... (<params>) {` line of
@@ -18315,4 +18316,3 @@ pub fn mirCoerceVoidArmStatus(aType: String, bType: String) -> Int {
 pub fn mirClosureMakerName(idDigits: String) -> String {
     "__osty_make_closure_" + idDigits
 }
-

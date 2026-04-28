@@ -95,11 +95,11 @@ func (g *generator) emitValueToString(v value) (value, bool, error) {
 // bare `ptr` at the LLVM level and can't be distinguished from String
 // by `v.typ` alone.
 func optionalSourceType(v value) (*ast.OptionalType, bool) {
-	opt, ok := v.sourceType.(*ast.OptionalType)
-	if !ok {
+	inner, ok := unwrapOptionalSourceType(v.sourceType)
+	if !ok || inner == nil {
 		return nil, false
 	}
-	return opt, true
+	return &ast.OptionalType{Inner: inner}, true
 }
 
 // emitOptionToString lowers `opt.toString()` for a ptr-backed

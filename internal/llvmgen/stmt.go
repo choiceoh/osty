@@ -965,12 +965,12 @@ func (g *generator) emitFor(stmt *ast.ForStmt) error {
 			return g.emitMapFor(stmt, kName, vName, iterInfo.mapKeyTyp, iterInfo.mapValueTyp, iterInfo.mapKeyString)
 		}
 	}
+	if iterInfo, ok := g.staticExprInfo(stmt.Iter); ok && iterInfo.typ == "ptr" && iterInfo.listElemTyp != "" {
+		return g.emitListFor(stmt, iterInfo.listElemTyp)
+	}
 	iterName, err := identPatternName(stmt.Pattern)
 	if err != nil {
 		return err
-	}
-	if iterInfo, ok := g.staticExprInfo(stmt.Iter); ok && iterInfo.typ == "ptr" && iterInfo.listElemTyp != "" {
-		return g.emitListFor(stmt, iterName, iterInfo.listElemTyp)
 	}
 	// `for x in set` — snapshot the Set<T> into a List<T> via
 	// `osty_rt_set_to_list` and iterate that list. Matches Map's
@@ -2378,8 +2378,8 @@ func (g *generator) emitMatchStmt(expr *ast.MatchExpr) error {
 	if sourceType, ok := g.staticExprSourceType(expr.Scrutinee); ok {
 		resolved, resolveErr := llvmResolveAliasType(sourceType, g.typeEnv(), map[string]bool{})
 		if resolveErr == nil {
-			if opt, ok := resolved.(*ast.OptionalType); ok && scrutinee.typ == "ptr" {
-				return g.emitOptionalMatchStmt(scrutinee, opt.Inner, expr.Arms)
+			if inner, ok := unwrapOptionalSourceType(resolved); ok && scrutinee.typ == "ptr" {
+				return g.emitOptionalMatchStmt(scrutinee, inner, expr.Arms)
 			}
 			// `match result { Ok(v) -> …, Err(_) -> … }` as a
 			// statement — either when the scrutinee is already the
@@ -2397,10 +2397,26 @@ func (g *generator) emitMatchStmt(expr *ast.MatchExpr) error {
 					return g.emitResultMatchStmt(scrutinee, info, expr.Arms)
 				}
 			}
+			if enumTyp, enumErr := llvmType(resolved, g.typeEnv()); enumErr == nil {
+				if info := g.enumsByType[enumTyp]; info != nil && info.hasPayload {
+					if scrutinee.typ == "ptr" {
+						emitter := g.toOstyEmitter()
+						loaded := llvmLoad(emitter, &LlvmValue{typ: info.typ, name: scrutinee.ref, pointer: true})
+						g.takeOstyEmitter(emitter)
+						scrutinee = value{typ: info.typ, ref: loaded.name}
+					}
+					if scrutinee.typ == info.typ {
+						return g.emitPayloadEnumMatchStmt(scrutinee, info, expr.Arms)
+					}
+				}
+			}
 		}
 	}
 	if info, ok := g.resultTypes[scrutinee.typ]; ok {
 		return g.emitResultMatchStmt(scrutinee, info, expr.Arms)
+	}
+	if info := g.enumsByType[scrutinee.typ]; info != nil && info.hasPayload {
+		return g.emitPayloadEnumMatchStmt(scrutinee, info, expr.Arms)
 	}
 	if isPrimitiveLiteralMatchScrutineeType(scrutinee.typ) && isPrimitiveLiteralMatchArms(expr.Arms) {
 		return g.emitPrimitiveLiteralMatchStmt(scrutinee, expr.Arms)
@@ -2409,6 +2425,94 @@ func (g *generator) emitMatchStmt(expr *ast.MatchExpr) error {
 		return unsupportedf("statement", "match statement scrutinee type %s (only tag-enum i64 supported as statement for now)", scrutinee.typ)
 	}
 	return g.emitTagEnumMatchStmt(scrutinee, expr.Arms)
+}
+
+func (g *generator) emitPayloadEnumMatchStmt(scrutinee value, info *enumInfo, arms []*ast.MatchArm) error {
+	if info == nil || len(arms) == 0 {
+		return unsupported("statement", "payload enum match requires at least one arm")
+	}
+	emitter := g.toOstyEmitter()
+	tag := llvmExtractValue(emitter, toOstyValue(scrutinee), "i64", 0)
+	endLabel := llvmNextLabel(emitter, "match.end")
+	g.takeOstyEmitter(emitter)
+
+	anyReached := false
+	for i, arm := range arms {
+		if arm == nil {
+			return unsupported("statement", "nil match arm")
+		}
+		_, isWildcard := arm.Pattern.(*ast.WildcardPat)
+		isLast := i == len(arms)-1
+
+		if isWildcard {
+			if !isLast {
+				return unsupported("statement", "wildcard match arm must be last")
+			}
+			baseState := g.captureScopeState()
+			if err := g.emitMatchArmGuard(arm, endLabel); err != nil {
+				return err
+			}
+			if err := g.emitMatchArmBodyAsStmt(arm.Body); err != nil {
+				return err
+			}
+			if g.currentReachable {
+				g.branchTo(endLabel)
+				anyReached = true
+			}
+			g.restoreScopeState(baseState)
+			continue
+		}
+
+		pattern, ok, err := g.matchPayloadEnumPattern(info, arm.Pattern)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return unsupportedf("statement", "match statement arm must be an enum %q variant or wildcard, got %T", info.name, arm.Pattern)
+		}
+
+		emitter := g.toOstyEmitter()
+		cond := llvmCompare(emitter, "eq", tag, toOstyValue(value{typ: "i64", ref: strconv.Itoa(pattern.variant.tag)}))
+		armLabel := llvmNextLabel(emitter, "match.arm")
+		nextLabel := llvmNextLabel(emitter, "match.next")
+		emitter.body = append(emitter.body, mirBrCondText(cond.name, armLabel, nextLabel))
+		emitter.body = append(emitter.body, mirLabelText(armLabel))
+		g.takeOstyEmitter(emitter)
+		g.enterBlock(armLabel)
+
+		baseState := g.captureScopeState()
+		if err := g.bindPayloadEnumPattern(scrutinee, pattern); err != nil {
+			return err
+		}
+		if err := g.emitMatchArmGuard(arm, nextLabel); err != nil {
+			return err
+		}
+		if err := g.emitMatchArmBodyAsStmt(arm.Body); err != nil {
+			return err
+		}
+		if g.currentReachable {
+			g.branchTo(endLabel)
+			anyReached = true
+		}
+		g.restoreScopeState(baseState)
+
+		emitter = g.toOstyEmitter()
+		emitter.body = append(emitter.body, mirLabelText(nextLabel))
+		g.takeOstyEmitter(emitter)
+		g.enterBlock(nextLabel)
+	}
+
+	if g.currentReachable {
+		g.branchTo(endLabel)
+		anyReached = true
+	}
+
+	emitter = g.toOstyEmitter()
+	emitter.body = append(emitter.body, mirLabelText(endLabel))
+	g.takeOstyEmitter(emitter)
+	g.enterBlock(endLabel)
+	g.currentReachable = anyReached
+	return nil
 }
 
 // emitResultMatchStmt lowers a two-arm `match result { Ok(v) -> …,
@@ -3508,7 +3612,14 @@ func (g *generator) emitMapFor(stmt *ast.ForStmt, kName, vName, keyTyp, valTyp s
 	return nil
 }
 
-func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) error {
+func forPatternLabelName(pattern ast.Pattern) string {
+	if id, ok := pattern.(*ast.IdentPat); ok && id != nil && llvmIsIdent(id.Name) {
+		return id.Name
+	}
+	return "item"
+}
+
+func (g *generator) emitListFor(stmt *ast.ForStmt, elemTyp string) error {
 	g.pushScope()
 	defer g.popScope()
 	iterable, err := g.emitExpr(stmt.Iter)
@@ -3528,7 +3639,7 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 	emitter := g.toOstyEmitter()
 	loopSafepointSlot := g.allocLoopSafepointCounter(emitter)
 	lenValue := llvmCall(emitter, "i64", listRuntimeLenSymbol(), []*LlvmValue{toOstyValue(iterableValue)})
-	loop := llvmRangeStart(emitter, iterName+"_idx", llvmIntLiteral(0), lenValue, false)
+	loop := llvmRangeStart(emitter, forPatternLabelName(stmt.Pattern)+"_idx", llvmIntLiteral(0), lenValue, false)
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(loop.bodyLabel)
 	continueLabel := g.nextNamedLabel("for.cont")
@@ -3560,7 +3671,10 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 			g.popScope()
 			return err
 		}
-		g.bindLocal(iterName, item)
+		if err := g.bindLetPattern(stmt.Pattern, item, false); err != nil {
+			g.popScope()
+			return err
+		}
 	} else if listUsesTypedRuntime(elemTyp) {
 		getSymbol := listRuntimeGetSymbol(elemTyp)
 		g.declareRuntimeSymbol(getSymbol, elemTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
@@ -3575,7 +3689,10 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 			g.popScope()
 			return err
 		}
-		g.bindLocal(iterName, loaded)
+		if err := g.bindLetPattern(stmt.Pattern, loaded, false); err != nil {
+			g.popScope()
+			return err
+		}
 	} else {
 		traceSymbol := g.traceCallbackSymbol(elemTyp, g.rootPathsForType(elemTyp))
 		emitter = g.toOstyEmitter()
@@ -3597,7 +3714,10 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, iterName, elemTyp string) err
 			g.popScope()
 			return err
 		}
-		g.bindLocal(iterName, loaded)
+		if err := g.bindLetPattern(stmt.Pattern, loaded, false); err != nil {
+			g.popScope()
+			return err
+		}
 	}
 	if err := g.emitBlock(stmt.Body.Stmts); err != nil {
 		if len(g.locals) > scopeDepth {

@@ -142,6 +142,121 @@ func TestMatchStmtOptionalFromMapGet(t *testing.T) {
 	}
 }
 
+func TestMatchStmtOptionLongFormStructField(t *testing.T) {
+	file := parseLLVMGenFile(t, `struct Child {
+    name: String
+}
+
+struct Holder {
+    child: Option<Child>
+}
+
+fn render(h: Holder) -> String {
+    let mut out: String = ""
+    match h.child {
+        Some(c) -> { out = c.name },
+        None -> { out = "none" },
+    }
+    out
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/match_stmt_option_long_struct.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"define ptr @render(%Holder %h)",
+		"icmp eq ptr",
+		"load %Child, ptr",
+		"match.end",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestMatchStmtPayloadEnumFieldBindsPayloads(t *testing.T) {
+	file := parseLLVMGenFile(t, `enum Kind {
+    Text(String),
+    Count(Int),
+    Done,
+}
+
+struct Value {
+    kind: Kind
+    line: Int
+}
+
+fn classify(v: Value) -> Int {
+    let mut out = 0
+    match v.kind {
+        Kind.Text(s) -> { out = s.len() },
+        Kind.Count(n) -> { out = n },
+        Kind.Done -> { out = -1 },
+    }
+    out
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/match_stmt_payload_enum_field.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"define i64 @classify(%Value %v)",
+		"extractvalue %Kind",
+		"icmp eq i64",
+		"load ptr, ptr",
+		"load i64, ptr",
+		"match.end",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "only tag-enum i64 supported") {
+		t.Fatalf("payload enum statement match regressed to tag-only diagnostic:\n%s", got)
+	}
+}
+
+func TestMatchStmtPayloadEnumNonBoxedBindsInlinePayloads(t *testing.T) {
+	file := parseLLVMGenFile(t, `enum Step {
+    Add(Int),
+    Sub(Int),
+    Stop,
+}
+
+fn apply(s: Step) -> Int {
+    let mut out = 0
+    match s {
+        Step.Add(n) -> { out = n + 1 },
+        Step.Sub(n) -> { out = n - 1 },
+        _ -> { out = 0 },
+    }
+    out
+}
+`)
+	ir, err := generateFromAST(file, Options{PackageName: "main", SourcePath: "/tmp/match_stmt_payload_enum_inline.osty"})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	got := string(ir)
+	for _, want := range []string{
+		"define i64 @apply(%Step %s)",
+		"extractvalue %Step",
+		"icmp eq i64",
+		"add i64",
+		"sub i64",
+		"match.end",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // Guarded arms in statement position for bare tag enum matches.
 // Guard evaluates after the tag compare succeeds; failure falls through
 // to the next arm label.
