@@ -833,6 +833,13 @@ static const osty_gc_kind_descriptor osty_gc_kind_table[] = {
         .trace = osty_rt_map_trace,
         .destroy = osty_rt_map_destroy,
         .young_eligible = true,
+        /* Phase 0j: map_trace ACQUIRE-loads keys/values/len, and
+         * map_reserve defers the old keys/values arrays through
+         * `osty_gc_defer_or_free` so the marker iterates a stable
+         * buffer for the duration of its trace. Index_slots and
+         * index_hashes are auxiliary lookup data not consulted
+         * during trace, so their realloc path stays as-is. */
+        .trace_lockfree_safe = true,
         .cleanup_young_dead = osty_gc_cleanup_young_dead_map,
         .remap = osty_gc_remap_map_payload,
     },
@@ -840,6 +847,11 @@ static const osty_gc_kind_descriptor osty_gc_kind_table[] = {
         .trace = osty_rt_set_trace,
         .destroy = osty_rt_set_destroy,
         .young_eligible = true,
+        /* Phase 0k: set_trace ACQUIRE-loads items/len, and
+         * set_reserve defers the old items array through
+         * `osty_gc_defer_or_free` so the marker iterates a stable
+         * buffer for the duration of its trace. */
+        .trace_lockfree_safe = true,
         .cleanup_young_dead = osty_gc_cleanup_young_dead_set,
         .remap = osty_gc_remap_set_payload,
     },
@@ -5350,9 +5362,25 @@ static void osty_rt_map_trace(void *payload) {
     if (map == NULL) {
         return;
     }
-    for (i = 0; i < map->len; i++) {
-        unsigned char *key_slot = map->keys + ((size_t)i * osty_rt_kind_size(map->key_kind));
-        unsigned char *value_slot = map->values + ((size_t)i * map->value_size);
+    /* Phase 0j: ACQUIRE-load `keys`, `values`, and `len` once at
+     * trace entry so a concurrent insert that grows the backing
+     * arrays mid-trace doesn't tear our view. Pairs with the
+     * RELEASE store in `osty_rt_map_reserve`. The old buffers stay
+     * alive via the deferred-free queue. `key_kind`, `value_kind`,
+     * `value_size`, `value_trace` are immutable after map creation
+     * so plain loads are fine. */
+    unsigned char *keys = (unsigned char *)__atomic_load_n(
+        (void **)&map->keys, __ATOMIC_ACQUIRE);
+    unsigned char *values = (unsigned char *)__atomic_load_n(
+        (void **)&map->values, __ATOMIC_ACQUIRE);
+    int64_t len = __atomic_load_n(&map->len, __ATOMIC_ACQUIRE);
+    if (keys == NULL || values == NULL || len <= 0) {
+        return;
+    }
+    size_t key_size = osty_rt_kind_size(map->key_kind);
+    for (i = 0; i < len; i++) {
+        unsigned char *key_slot = keys + ((size_t)i * key_size);
+        unsigned char *value_slot = values + ((size_t)i * map->value_size);
         if (map->key_kind == OSTY_RT_ABI_STRING || map->key_kind == OSTY_RT_ABI_PTR) {
             osty_gc_mark_slot_v1((void *)key_slot);
         }
@@ -5390,9 +5418,19 @@ static void osty_rt_set_trace(void *payload) {
     if (set == NULL || (set->elem_kind != OSTY_RT_ABI_STRING && set->elem_kind != OSTY_RT_ABI_PTR)) {
         return;
     }
+    /* Phase 0k: ACQUIRE-load `items` and `len` once at trace entry.
+     * Pairs with the RELEASE store in `osty_rt_set_reserve`. The
+     * old buffer stays alive via the deferred-free queue.
+     * `elem_kind` is immutable after set creation. */
+    unsigned char *items = (unsigned char *)__atomic_load_n(
+        (void **)&set->items, __ATOMIC_ACQUIRE);
+    int64_t len = __atomic_load_n(&set->len, __ATOMIC_ACQUIRE);
+    if (items == NULL || len <= 0) {
+        return;
+    }
     elem_size = osty_rt_kind_size(set->elem_kind);
-    for (i = 0; i < set->len; i++) {
-        osty_gc_mark_slot_v1((void *)(set->items + ((size_t)i * elem_size)));
+    for (i = 0; i < len; i++) {
+        osty_gc_mark_slot_v1((void *)(items + ((size_t)i * elem_size)));
     }
 }
 
@@ -10240,12 +10278,39 @@ static void osty_rt_map_reserve(osty_rt_map *map, int64_t min_cap) {
     }
     key_bytes = (size_t)next_cap * osty_rt_kind_size(map->key_kind);
     value_bytes = (size_t)next_cap * map->value_size;
-    map->keys = (unsigned char *)realloc(map->keys, key_bytes);
-    map->values = (unsigned char *)realloc(map->values, value_bytes);
-    if (map->keys == NULL || map->values == NULL) {
+    /* Phase 0j: malloc+memcpy+defer-free instead of realloc so a
+     * concurrent marker reading the old keys/values arrays sees a
+     * stable buffer for the duration of its trace. The old buffer
+     * lands in the deferred-free queue (drained at finish_locked
+     * end). RELEASE-store on the field so the marker's ACQUIRE-load
+     * either observes the old pointer (still alive in queue) or the
+     * new pointer (with all old contents memcpy'd in). */
+    unsigned char *new_keys = (unsigned char *)malloc(key_bytes);
+    unsigned char *new_values = (unsigned char *)malloc(value_bytes);
+    if (new_keys == NULL || new_values == NULL) {
         osty_rt_abort("out of memory");
     }
+    if (map->len > 0) {
+        if (map->keys != NULL) {
+            memcpy(new_keys, map->keys,
+                   (size_t)map->len * osty_rt_kind_size(map->key_kind));
+        }
+        if (map->values != NULL) {
+            memcpy(new_values, map->values,
+                   (size_t)map->len * map->value_size);
+        }
+    }
+    unsigned char *old_keys = map->keys;
+    unsigned char *old_values = map->values;
+    __atomic_store_n((void **)&map->keys, new_keys, __ATOMIC_RELEASE);
+    __atomic_store_n((void **)&map->values, new_values, __ATOMIC_RELEASE);
     map->cap = next_cap;
+    if (old_keys != NULL) {
+        osty_gc_defer_or_free(old_keys);
+    }
+    if (old_values != NULL) {
+        osty_gc_defer_or_free(old_values);
+    }
 }
 
 static OSTY_HOT_INLINE int64_t osty_rt_map_find_index_linear(osty_rt_map *map, const void *key) {
@@ -10851,11 +10916,26 @@ static void osty_rt_set_reserve(osty_rt_set *set, int64_t min_cap) {
         next_cap *= 2;
     }
     bytes = (size_t)next_cap * osty_rt_kind_size(set->elem_kind);
-    set->items = (unsigned char *)realloc(set->items, bytes);
-    if (set->items == NULL) {
+    /* Phase 0k: malloc + memcpy + defer-free instead of realloc so
+     * a concurrent marker reading the old `items` array sees a
+     * stable buffer for the duration of its trace. RELEASE-store on
+     * the field so the marker's ACQUIRE-load either observes the
+     * old pointer (still alive in queue) or the new pointer (with
+     * old contents memcpy'd in). */
+    unsigned char *new_items = (unsigned char *)malloc(bytes);
+    if (new_items == NULL) {
         osty_rt_abort("out of memory");
     }
+    if (set->len > 0 && set->items != NULL) {
+        memcpy(new_items, set->items,
+               (size_t)set->len * osty_rt_kind_size(set->elem_kind));
+    }
+    unsigned char *old_items = set->items;
+    __atomic_store_n((void **)&set->items, new_items, __ATOMIC_RELEASE);
     set->cap = next_cap;
+    if (old_items != NULL) {
+        osty_gc_defer_or_free(old_items);
+    }
 }
 
 static int64_t osty_rt_set_find_index(osty_rt_set *set, const void *item) {
