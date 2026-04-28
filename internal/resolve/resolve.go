@@ -89,21 +89,26 @@ func newStdlibOnlyWorkspace(stdlib StdlibProvider) *Workspace {
 // Existing parser diagnostics on each file are also merged into the
 // returned Diags list.
 //
-// This is a convenience wrapper that performs both the declaration pass
-// and the body pass in sequence. Workspace.ResolveAll runs the two
-// passes across every package separately so that cross-package member
-// lookups succeed regardless of iteration order.
+// The authoritative execution path is the selfhost resolver
+// (`toolchain/resolve.osty`) projected back onto Go's PackageResult /
+// Scope / Symbol shapes. A Go-native fallback remains only for callers
+// that provide an AST without source bytes (see ResolveFileDefault).
 func ResolvePackage(pkg *Package, prelude *Scope) *PackageResult {
-	if canResolveViaNative(pkg) {
-		return resolvePackageViaNative(pkg, prelude)
+	if pkg == nil {
+		return &PackageResult{}
 	}
-	r := newPkgResolver(pkg, prelude)
-	r.declarePass(pkg)
-	r.bodyPass(pkg)
-	return &PackageResult{
-		PackageScope: pkg.PkgScope,
-		Diags:        r.diags,
+	if !canResolveViaNative(pkg) {
+		r := newPkgResolver(pkg, prelude)
+		r.declarePass(pkg)
+		r.bodyPass(pkg)
+		return &PackageResult{
+			PackageScope: pkg.PkgScope,
+			Diags:        r.diags,
+		}
 	}
+	pkg.EnsureFiles()
+	pkg.MaterializeCanonicalSources()
+	return resolvePackageViaNative(pkg, prelude)
 }
 
 func canResolveViaNative(pkg *Package) bool {
@@ -2329,8 +2334,38 @@ func ResolvePackageDefault(pkg *Package) *PackageResult {
 }
 
 // ResolveFileDefault runs single-file name resolution using the
-// standard prelude and the given stdlib provider. It is the
-// one-call replacement for FileWithStdlib(file, NewPrelude(), stdlib).
+// standard prelude and the given stdlib provider. This AST-only API keeps the
+// legacy Go fallback for callers that no longer have source bytes; new
+// single-file entry points should prefer ResolveFileSourceDefault so the
+// selfhost resolver remains authoritative.
 func ResolveFileDefault(file *ast.File, stdlib StdlibProvider) *Result {
 	return fileWithStdlib(file, NewPrelude(), stdlib)
+}
+
+// ResolveFileSourceDefault runs single-file resolution from source bytes and the
+// already-parsed AST, using the selfhost resolver as the source of truth while
+// still projecting refs and scopes back onto the Go AST.
+func ResolveFileSourceDefault(src []byte, file *ast.File, stdlib StdlibProvider) *Result {
+	pkg := &Package{
+		Name: "<file>",
+		Files: []*PackageFile{{
+			Path:            "<input>",
+			Source:          append([]byte(nil), src...),
+			CanonicalSource: append([]byte(nil), src...),
+			File:            file,
+		}},
+	}
+	if stdlib != nil {
+		pkg.workspace = newStdlibOnlyWorkspace(stdlib)
+	}
+	pr := ResolvePackage(pkg, NewPrelude())
+	pf := pkg.Files[0]
+	return &Result{
+		RefsByID:      pf.RefsByID,
+		TypeRefsByID:  pf.TypeRefsByID,
+		RefIdents:     pf.RefIdents,
+		TypeRefIdents: pf.TypeRefIdents,
+		FileScope:     pf.FileScope,
+		Diags:         pr.Diags,
+	}
 }

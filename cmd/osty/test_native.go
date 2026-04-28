@@ -698,7 +698,7 @@ func prepareNativeTestBackendEntry(sourcePath string, pkg *resolve.Package) (bac
 	if err != nil {
 		return backend.Entry{}, err
 	}
-	res := resolveFile(file)
+	res := resolveFile(src, file)
 	chk := check.SelfhostFile(file, res, checkOptsForSource(src))
 	entry, err := backend.PrepareEntry("main", sourcePath, file, res, chk)
 	if err != nil {
