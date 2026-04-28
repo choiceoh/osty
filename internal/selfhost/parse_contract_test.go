@@ -133,3 +133,44 @@ func TestParseGrammarContracts(t *testing.T) {
 		}
 	})
 }
+
+func TestLowerPublicFileUsesSelfhostStableNodeIDs(t *testing.T) {
+	run := Run([]byte("fn main() {\n    let x = len([1])\n}\n"))
+	if diags := run.Diagnostics(); len(diags) != 0 {
+		t.Fatalf("Diagnostics = %#v, want none", diags)
+	}
+
+	file := LowerPublicFileFromRun(run)
+	if file == nil || len(file.Decls) != 1 {
+		t.Fatalf("public file shape = %#v, want one decl", file)
+	}
+	if file.ID != 1 {
+		t.Fatalf("file ID = %d, want stable public root ID 1", file.ID)
+	}
+
+	arena := run.parser.arena
+	fnIdx := arena.decls[0]
+	fnNode := arenaNodeForTest(t, arena, fnIdx)
+	bodyNode := arenaNodeForTest(t, arena, fnNode.right)
+	letIdx := bodyNode.children[0]
+	letNode := arenaNodeForTest(t, arena, letIdx)
+	callIdx := letNode.right
+
+	fn := file.Decls[0].(*ast.FnDecl)
+	if got, want := fn.ID, ast.NodeID(fnIdx+2); got != want {
+		t.Fatalf("fn ID = %d, want selfhost arena stable ID %d", got, want)
+	}
+	stmt := fn.Body.Stmts[0].(*ast.LetStmt)
+	if got, want := stmt.ID, ast.NodeID(letIdx+2); got != want {
+		t.Fatalf("let stmt ID = %d, want selfhost arena stable ID %d", got, want)
+	}
+	if got, want := stmt.Value.(*ast.CallExpr).ID, ast.NodeID(callIdx+2); got != want {
+		t.Fatalf("call ID = %d, want selfhost arena stable ID %d", got, want)
+	}
+
+	fromRunFile := run.File()
+	fromRunFn := fromRunFile.Decls[0].(*ast.FnDecl)
+	if fromRunFn.ID != fn.ID {
+		t.Fatalf("run.File fn ID = %d, want same stable ID %d", fromRunFn.ID, fn.ID)
+	}
+}

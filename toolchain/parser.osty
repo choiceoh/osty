@@ -83,6 +83,16 @@ pub struct AstParseError {
     pub code: String,
 }
 
+pub struct AstStableAlias {
+    pub alias: String,
+    pub canonical: String,
+    pub kind: String,
+    pub sourceHabit: String,
+    pub detail: String,
+    pub start: Int,
+    pub end: Int,
+}
+
 pub struct AstArena {
     pub nodes: List<AstNode>,
     pub decls: List<Int>,
@@ -185,6 +195,7 @@ pub struct OstyParser {
     pub count: Int,
     pub pos: Int,
     pub arena: AstArena,
+    pub stableAliases: List<AstStableAlias>,
     pub noStructLit: Bool,
     pub inLoop: Bool,
     pub typeGtDebt: Int,
@@ -194,7 +205,7 @@ pub struct OstyParser {
 pub fn newOstyParser(tokens: List<FrontToken>) -> OstyParser {
     OstyParser {
         tokens, count: frontTokenListCount(tokens), pos: 0,
-        arena: emptyAstArena(), noStructLit: false, inLoop: false,
+        arena: emptyAstArena(), stableAliases: [], noStructLit: false, inLoop: false,
         typeGtDebt: 0, pendingAssign: false,
     }
 }
@@ -250,6 +261,35 @@ fn opAt(p: OstyParser, kind: FrontTokenKind) -> Bool { opPeek(p).kind == kind }
 
 fn opIsStableAlias(tok: FrontToken, text: String) -> Bool {
     tok.kind == FrontIdent && tok.text == text
+}
+
+fn opRecordStableAlias(p: OstyParser, tok: FrontToken) {
+    if tok.kind != FrontIdent {
+        return
+    }
+    if tok.text == "func" {
+        opRecordStableAliasSpec(p, tok, "fn", "stable_function_keyword", "foreign_function_keyword", "accept `func` as a stable parser alias for `fn`")
+    } else if tok.text == "def" {
+        opRecordStableAliasSpec(p, tok, "fn", "stable_function_keyword", "foreign_function_keyword", "accept `def` as a stable parser alias for `fn`")
+    } else if tok.text == "function" {
+        opRecordStableAliasSpec(p, tok, "fn", "stable_function_keyword", "foreign_function_keyword", "accept `function` as a stable parser alias for `fn`")
+    } else if tok.text == "import" {
+        opRecordStableAliasSpec(p, tok, "use", "stable_use_keyword", "import_keyword", "accept `import` as a stable parser alias for `use`")
+    } else if tok.text == "while" {
+        opRecordStableAliasSpec(p, tok, "for", "stable_while_keyword", "while_condition_loop", "accept `while` as a stable parser alias for `for` loops")
+    }
+}
+
+fn opRecordStableAliasSpec(p: OstyParser, tok: FrontToken, canonical: String, kind: String, sourceHabit: String, detail: String) {
+    p.stableAliases.push(AstStableAlias {
+        alias: tok.text,
+        canonical,
+        kind,
+        sourceHabit,
+        detail,
+        start: p.pos,
+        end: p.pos + 1,
+    })
 }
 
 fn opIsFnHead(tok: FrontToken) -> Bool {
@@ -1839,6 +1879,7 @@ fn opExprToForPattern(p: OstyParser, exprIdx: Int) -> Int {
 
 fn opParseForStmt(p: OstyParser, labelIdx: Int) -> Int {
     let start = p.pos
+    opRecordStableAlias(p, opPeek(p))
     let _ = opAdvance(p)
     let prevInLoop = p.inLoop
     p.inLoop = true
@@ -2205,6 +2246,7 @@ fn opExpectTypeGT(p: OstyParser) {
 
 fn opParseFnType(p: OstyParser) -> Int {
     let start = p.pos
+    opRecordStableAlias(p, opPeek(p))
     opAdvance(p)
     opExpect(p, FrontLParen)
     let mut params: List<Int> = []
@@ -2396,6 +2438,7 @@ fn opParseDecl(p: OstyParser) -> Int {
 
 fn opParseFnDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
     let start = p.pos
+    opRecordStableAlias(p, opPeek(p))
     opAdvance(p)
     let name = opExpect(p, FrontIdent).text
     let genericParams = opParseGenericParams(p)
@@ -2591,6 +2634,7 @@ fn opParseTypeAliasDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
 
 fn opParseUseDecl(p: OstyParser, isPub: Bool) -> Int {
     let start = p.pos
+    opRecordStableAlias(p, opPeek(p))
     let _ = opAdvance(p)
     let mut rawPath = ""
     let mut isGo = false

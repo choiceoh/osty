@@ -168,8 +168,7 @@ func (r *FrontendRun) File() *ast.File {
 	if semantic := r.semanticAstFile(); semantic != nil && semantic.arena != nil {
 		arena = semantic.arena
 	}
-	r.file = astLowerPublicFile(arena, r.Tokens())
-	ast.AssignIDs(r.file)
+	r.file = lowerPublicFileFromArena(arena, r.Tokens())
 	return r.file
 }
 

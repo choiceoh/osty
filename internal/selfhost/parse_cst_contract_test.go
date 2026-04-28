@@ -22,8 +22,8 @@ func TestParseCSTLosslessOnMalformedSource(t *testing.T) {
 	}
 }
 
-func TestParseCSTUsesExplicitPublicASTCompatibilityAdapter(t *testing.T) {
-	src := []byte("fn main() {\n    let items = [1]\n    let count = len(items)\n}\n")
+func TestParseCSTUsesSelfhostArenaEntitySpans(t *testing.T) {
+	src := []byte("use std::{fs, io as io}\nfn main() {\n    let items = [1]\n    let count = len(items)\n}\n")
 	ResetAstbridgeLowerCount()
 	tree, diags := ParseCST(src)
 	if len(diags) != 0 {
@@ -34,6 +34,9 @@ func TestParseCSTUsesExplicitPublicASTCompatibilityAdapter(t *testing.T) {
 	}
 	if got := AstbridgeLowerCount(); got != 0 {
 		t.Fatalf("ParseCST FrontendRun.File count = %d, want 0", got)
+	}
+	if got := countCSTKind(tree, cst.GkUseDecl); got != 2 {
+		t.Fatalf("CST grouped use decl count = %d, want 2", got)
 	}
 }
 

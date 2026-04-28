@@ -3,12 +3,20 @@ package cst
 import (
 	"sort"
 
-	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/token"
 )
 
-// BuildFromParsed lifts an already-parsed *ast.File plus its token stream
-// into a Green tree wrapped in a Red Tree. The resulting tree carries:
+// EntitySpan is the top-level syntax envelope a caller wants represented as a
+// structural Green node. Start and End are byte offsets in the normalized
+// source; End is exclusive.
+type EntitySpan struct {
+	Start int
+	End   int
+	Kind  GreenKind
+}
+
+// BuildFromEntitySpans lifts top-level syntax spans plus a token stream into a
+// Green tree wrapped in a Red Tree. The resulting tree carries:
 //
 //  1. Structural Green nodes for the file and every top-level entity
 //     (GkFile, GkFnDecl, GkStructDecl, …). Nested declarations inside
@@ -28,7 +36,7 @@ import (
 // This builder is the adapter path while toolchain/lossless_lex.osty and a
 // native Green parser remain blocked on the self-host generator. A native
 // parser can replace this call without changing Red consumers.
-func BuildFromParsed(src []byte, file *ast.File, toks []token.Token, trivias []Trivia) *Tree {
+func BuildFromEntitySpans(src []byte, entities []EntitySpan, toks []token.Token, trivias []Trivia) *Tree {
 	b := NewBuilder(nil)
 	arena := b.Arena()
 
@@ -37,21 +45,26 @@ func BuildFromParsed(src []byte, file *ast.File, toks []token.Token, trivias []T
 		triviaIDs[i] = arena.AddTrivia(tr)
 	}
 	leading, trailing, tailTrivia := pairTriviaToTokens(toks, trivias)
-
-	entities := collectEntities(file)
+	entities = append([]EntitySpan(nil), entities...)
+	sort.SliceStable(entities, func(i, j int) bool {
+		if entities[i].Start == entities[j].Start {
+			return entities[i].End < entities[j].End
+		}
+		return entities[i].Start < entities[j].Start
+	})
 
 	b.StartNode(GkFile)
 	tokIdx := 0
 	for _, ent := range entities {
-		startOff := ent.node.Pos().Offset
-		endOff := ent.node.End().Offset
+		startOff := ent.Start
+		endOff := ent.End
 
 		// Orphan tokens before the entity attach to the file root.
 		for tokIdx < len(toks) && !isEOF(toks[tokIdx]) && toks[tokIdx].Pos.Offset < startOff {
 			emitToken(b, toks[tokIdx], src, leading[tokIdx], trailing[tokIdx], triviaIDs)
 			tokIdx++
 		}
-		b.StartNode(ent.kind)
+		b.StartNode(ent.Kind)
 		for tokIdx < len(toks) && !isEOF(toks[tokIdx]) && toks[tokIdx].Pos.Offset < endOff {
 			emitToken(b, toks[tokIdx], src, leading[tokIdx], trailing[tokIdx], triviaIDs)
 			tokIdx++
@@ -78,82 +91,6 @@ func BuildFromParsed(src []byte, file *ast.File, toks []token.Token, trivias []T
 	b.FinishNode() // GkFile
 	_, root := b.Finish()
 	return NewTreeFromSource(arena, root, src)
-}
-
-// entity pairs an AST node with the Green kind it should lift into.
-type entity struct {
-	node ast.Node
-	kind GreenKind
-}
-
-func collectEntities(file *ast.File) []entity {
-	list := make([]entity, 0, len(file.Uses)+len(file.Decls)+len(file.Stmts))
-	for _, u := range file.Uses {
-		list = append(list, entity{u, GkUseDecl})
-	}
-	for _, d := range file.Decls {
-		list = append(list, entity{d, declKind(d)})
-	}
-	for _, s := range file.Stmts {
-		list = append(list, entity{s, stmtKind(s)})
-	}
-	sort.SliceStable(list, func(i, j int) bool {
-		return list[i].node.Pos().Offset < list[j].node.Pos().Offset
-	})
-	return list
-}
-
-// declKind maps a top-level Decl to its Green kind. Unknown shapes fall back
-// to GkError so the structural level stays honest — an unmapped decl is a
-// signal to extend the table, not a silent ok.
-func declKind(d ast.Decl) GreenKind {
-	switch d.(type) {
-	case *ast.FnDecl:
-		return GkFnDecl
-	case *ast.StructDecl:
-		return GkStructDecl
-	case *ast.EnumDecl:
-		return GkEnumDecl
-	case *ast.InterfaceDecl:
-		return GkInterfaceDecl
-	case *ast.TypeAliasDecl:
-		return GkTypeAlias
-	case *ast.LetDecl:
-		return GkLetDecl
-	case *ast.UseDecl:
-		return GkUseDecl
-	}
-	// Script-file FreeStmt etc. are Decl AND Stmt; route to the Stmt kind.
-	if st, ok := d.(ast.Stmt); ok {
-		return stmtKind(st)
-	}
-	return GkError
-}
-
-func stmtKind(s ast.Stmt) GreenKind {
-	switch s.(type) {
-	case *ast.LetStmt:
-		return GkLetStmt
-	case *ast.ReturnStmt:
-		return GkReturnStmt
-	case *ast.BreakStmt:
-		return GkBreakStmt
-	case *ast.ContinueStmt:
-		return GkContinueStmt
-	case *ast.DeferStmt:
-		return GkDeferStmt
-	case *ast.ForStmt:
-		return GkForStmt
-	case *ast.AssignStmt:
-		return GkAssignStmt
-	case *ast.ChanSendStmt:
-		return GkChanSendStmt
-	case *ast.ExprStmt:
-		return GkExprStmt
-	case *ast.Block:
-		return GkBlock
-	}
-	return GkError
 }
 
 func isEOF(tk token.Token) bool { return tk.Kind == token.EOF }
