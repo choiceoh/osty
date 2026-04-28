@@ -467,7 +467,23 @@ func UseDeclNode(pos, end Pos, raw string, path []string, isGo bool, alias strin
 // (G30 re-export). The shorter UseDeclNode helper remains so older
 // generated callers can keep defaulting isPub to false.
 func UseDeclNodeFull(pos, end Pos, raw string, path []string, isGo, isPub bool, alias string, body []Decl) Decl {
-	u := &ast.UseDecl{PosV: pos, EndV: end, Path: compactStrings(path), RawPath: raw, Alias: alias, IsPub: isPub, IsGoFFI: isGo, GoBody: compactDecls(body)}
+	return UseDeclNodeScoped(pos, end, raw, path, isGo, isPub, false, nil, "", alias, body)
+}
+
+func UseDeclNodeScoped(pos, end Pos, raw string, path []string, isGo, isPub, isScoped bool, scopedBase []string, scopedMember, alias string, body []Decl) Decl {
+	u := &ast.UseDecl{
+		PosV:         pos,
+		EndV:         end,
+		Path:         compactStrings(path),
+		RawPath:      raw,
+		Alias:        alias,
+		IsPub:        isPub,
+		IsScoped:     isScoped,
+		ScopedBase:   compactStrings(scopedBase),
+		ScopedMember: scopedMember,
+		IsGoFFI:      isGo,
+		GoBody:       compactDecls(body),
+	}
 	if isGo {
 		u.GoPath = raw
 	} else if useDeclIsRuntimeFFI(u) {

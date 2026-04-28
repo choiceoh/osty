@@ -18607,6 +18607,11 @@ func astUseDeclGroupMarker() int {
 	return 1
 }
 
+// Osty: /tmp/selfhost_merged.osty:6976:5
+func astUseDeclScopedMarker() int {
+	return 2
+}
+
 // Osty: /tmp/selfhost_merged.osty:6977:1
 func astUseDeclFlags(isGo bool, isPub bool) int {
 	// Osty: /tmp/selfhost_merged.osty:6978:5
@@ -18685,6 +18690,14 @@ func astUseDeclIsGroup(n *AstNode) bool {
 		return false
 	}
 	return n.extra == astUseDeclGroupMarker()
+}
+
+// Osty: /tmp/selfhost_merged.osty:7011:5
+func astUseDeclIsScoped(n *AstNode) bool {
+	if !ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNUseDecl{})) {
+		return false
+	}
+	return n.extra == astUseDeclScopedMarker()
 }
 
 // Osty: /tmp/selfhost_merged.osty:7011:5
@@ -23430,8 +23443,18 @@ func opParseScopedUseDecl(p *OstyParser, start int, basePath string, isPub bool)
 			alias = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})).text
 		}
 		// Osty: /tmp/selfhost_merged.osty:9227:9
+		childIdx := opBuildUseDecl(p, start, p.pos, fmt.Sprintf("%s.%s", ostyToString(basePath), ostyToString(itemName)), false, isPub, alias, aliasStart, make([]int, 0, 1))
+		_ = childIdx
+		// Osty: /tmp/selfhost_merged.osty:9228:9
+		childNode := astArenaNodeAt(p.arena, childIdx)
+		_ = childNode
+		// Osty: /tmp/selfhost_merged.osty:9229:9
+		childNode.extra = astUseDeclScopedMarker()
+		// Osty: /tmp/selfhost_merged.osty:9230:9
+		p.arena.nodes[childIdx] = childNode
+		// Osty: /tmp/selfhost_merged.osty:9231:9
 		func() struct{} {
-			items = append(items, opBuildUseDecl(p, start, p.pos, fmt.Sprintf("%s.%s", ostyToString(basePath), ostyToString(itemName)), false, isPub, alias, aliasStart, make([]int, 0, 1)))
+			items = append(items, childIdx)
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:9228:9
@@ -51241,13 +51264,19 @@ func srAstCollectDecl(file *AstFile, idx int, cfg *SelfResolveCfgEnv, result *Se
 	}
 	// Osty: /tmp/selfhost_merged.osty:26304:5
 	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNUseDecl{})) {
+		if astUseDeclIsGroup(node) {
+			for _, childIdx := range node.children {
+				out = srAstCollectDecl(file, childIdx, cfg, out)
+			}
+			return out
+		}
 		// Osty: /tmp/selfhost_merged.osty:26305:9
 		alias := srAstUseAlias(file, node)
 		_ = alias
 		// Osty: /tmp/selfhost_merged.osty:26306:9
 		if alias != "" {
 			// Osty: /tmp/selfhost_merged.osty:26307:13
-			out = srAddSymbol(out, selfSymbolAtNode(alias, "package", "", 0, 0, node.start, node.end, true, idx))
+			out = srAddUseSymbol(out, selfSymbolAtNode(alias, "package", "", 0, 0, node.start, node.end, astUseDeclIsPub(node), idx))
 		}
 	} else if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
 		// Osty: /tmp/selfhost_merged.osty:26313:9
@@ -53639,6 +53668,16 @@ func srAddSymbol(result *SelfResolveResult, sym *SelfSymbol) *SelfResolveResult 
 	return out
 }
 
+func srAddUseSymbol(result *SelfResolveResult, sym *SelfSymbol) *SelfResolveResult {
+	out := result
+	if srSymbolExistsAtDepth(out.symbols, sym.name, sym.depth) {
+		out = srDuplicateUseAtNode(out, sym.name, sym.start, sym.end, sym.node)
+	} else if !(srIsDiscardName(sym.name)) {
+		func() struct{} { out.symbols = append(out.symbols, sym); return struct{}{} }()
+	}
+	return out
+}
+
 // Osty: /tmp/selfhost_merged.osty:27970:1
 func srDuplicate(result *SelfResolveResult, name string, start int, end int) *SelfResolveResult {
 	return srDuplicateAtNode(result, name, start, end, -1)
@@ -53664,6 +53703,26 @@ func srDuplicateAtNode(result *SelfResolveResult, name string, start int, end in
 	// Osty: /tmp/selfhost_merged.osty:27983:5
 	func() struct{} {
 		out.diagnostics = append(out.diagnostics, selfResolveDiagnosticAtNode("E0501", "duplicate declaration", name, start, end, node))
+		return struct{}{}
+	}()
+	return out
+}
+
+func srDuplicateUseAtNode(result *SelfResolveResult, name string, start int, end int, node int) *SelfResolveResult {
+	out := result
+	out.duplicates = func() int {
+		var _p int = out.duplicates
+		var _rhs int = 1
+		if _rhs > 0 && _p > math.MaxInt-_rhs {
+			panic("integer overflow")
+		}
+		if _rhs < 0 && _p < math.MinInt-_rhs {
+			panic("integer overflow")
+		}
+		return _p + _rhs
+	}()
+	func() struct{} {
+		out.diagnostics = append(out.diagnostics, selfResolveDiagnosticHintAtNode("E0554", "duplicate import name", name, start, end, node, "remove the duplicate import or rename one side with `as`"))
 		return struct{}{}
 	}()
 	return out
@@ -67631,7 +67690,34 @@ func astLowerUseDecl(arena *AstArena, toks []astbridge.Token, n *AstNode) astbri
 		// Osty: /tmp/selfhost_merged.osty:36405:9
 		path = astLowerSplitPath(raw)
 	}
-	return astbridge.UseDeclNodeFull(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), raw, path, astUseDeclIsGo(n), astUseDeclIsPub(n), alias, body)
+	scoped := astUseDeclIsScoped(n)
+	_ = scoped
+	var scopedBase []string = make([]string, 0, 1)
+	_ = scopedBase
+	scopedMember := ""
+	_ = scopedMember
+	if scoped {
+		scopedBase = astLowerUseScopedBase(raw)
+		scopedMember = astLowerUseScopedMember(raw)
+	}
+	return astbridge.UseDeclNodeScoped(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), raw, path, astUseDeclIsGo(n), astUseDeclIsPub(n), scoped, scopedBase, scopedMember, alias, body)
+}
+
+func astLowerUseScopedBase(raw string) []string {
+	parts := astLowerSplitPath(raw)
+	out := make([]string, 0, len(parts))
+	for i := 0; i < len(parts)-1; i++ {
+		out = append(out, parts[i])
+	}
+	return out
+}
+
+func astLowerUseScopedMember(raw string) string {
+	parts := astLowerSplitPath(raw)
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[len(parts)-1]
 }
 
 // Osty: /tmp/selfhost_merged.osty:36419:1

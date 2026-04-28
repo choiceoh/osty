@@ -12,9 +12,12 @@ import (
 // trailing segment of Path; empty for stanzas that have no natural alias
 // (e.g. `use go ...` / `use c ...` foreign bodies).
 type PackageUseRef struct {
-	Path  string
-	Alias string
-	IsGo  bool
+	Path         string
+	Alias        string
+	IsGo         bool
+	IsScoped     bool
+	ScopedBase   string
+	ScopedMember string
 }
 
 // PackageUsesFromRun walks run's AstArena and returns one PackageUseRef
@@ -64,9 +67,13 @@ func appendArenaUseRefs(out []PackageUseRef, arena *AstArena, n *AstNode) []Pack
 		return out
 	}
 	ref := PackageUseRef{
-		Path:  arenaStringUnquote(n.text),
-		IsGo:  arenaUseDeclIsGo(n),
-		Alias: arenaUseDeclAlias(arena, n),
+		Path:     arenaStringUnquote(n.text),
+		IsGo:     arenaUseDeclIsGo(n),
+		Alias:    arenaUseDeclAlias(arena, n),
+		IsScoped: arenaUseDeclIsScoped(n),
+	}
+	if ref.IsScoped {
+		ref.ScopedBase, ref.ScopedMember, _ = arenaSplitScopedUsePath(ref.Path)
 	}
 	if ref.Path == "" {
 		return out
@@ -94,6 +101,21 @@ func arenaUseDeclIsGroup(n *AstNode) bool {
 		return false
 	}
 	return n.extra == 1
+}
+
+func arenaUseDeclIsScoped(n *AstNode) bool {
+	if n == nil {
+		return false
+	}
+	return n.extra == 2
+}
+
+func arenaSplitScopedUsePath(path string) (string, string, bool) {
+	i := strings.LastIndex(path, ".")
+	if i <= 0 || i == len(path)-1 {
+		return "", "", false
+	}
+	return path[:i], path[i+1:], true
 }
 
 func arenaUseDeclAlias(arena *AstArena, n *AstNode) string {

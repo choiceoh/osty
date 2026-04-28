@@ -21,6 +21,12 @@ fn main() -> Int { 0 }
 		if u.RawPath != want[i] {
 			t.Errorf("use[%d]: got path %q, want %q", i, u.RawPath, want[i])
 		}
+		if !u.IsScoped {
+			t.Errorf("use[%d]: IsScoped=false, want true", i)
+		}
+		if got := joinPath(u.ScopedBase); got != "std.fs" {
+			t.Errorf("use[%d]: scoped base got %q, want std.fs", i, got)
+		}
 	}
 }
 
@@ -48,6 +54,9 @@ func TestScopedImportWithAlias(t *testing.T) {
 		}
 		if file.Uses[i].Alias != c.alias {
 			t.Errorf("use[%d]: alias got %q, want %q", i, file.Uses[i].Alias, c.alias)
+		}
+		if file.Uses[i].ScopedMember == "" {
+			t.Errorf("use[%d]: ScopedMember empty, want preserved member", i)
 		}
 	}
 }
@@ -116,7 +125,21 @@ func TestParseCanonicalScopedImport(t *testing.T) {
 	if file.Uses[0].RawPath != "std.fs.open" {
 		t.Fatalf("use[0]: got %q, want std.fs.open", file.Uses[0].RawPath)
 	}
+	if !file.Uses[0].IsScoped || joinPath(file.Uses[0].ScopedBase) != "std.fs" || file.Uses[0].ScopedMember != "open" {
+		t.Fatalf("use[0] scoped metadata = base %v member %q IsScoped %v", file.Uses[0].ScopedBase, file.Uses[0].ScopedMember, file.Uses[0].IsScoped)
+	}
 	if file.Uses[1].RawPath != "std.fs.exists" {
 		t.Fatalf("use[1]: got %q, want std.fs.exists", file.Uses[1].RawPath)
 	}
+}
+
+func joinPath(parts []string) string {
+	out := ""
+	for i, part := range parts {
+		if i > 0 {
+			out += "."
+		}
+		out += part
+	}
+	return out
 }

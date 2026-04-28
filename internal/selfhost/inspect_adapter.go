@@ -14,6 +14,9 @@ func InspectFromSource(src []byte) []api.InspectRecord {
 	if len(src) == 0 {
 		return nil
 	}
+	selfhostCheckMu.Lock()
+	defer selfhostCheckMu.Unlock()
+
 	lexed := ostyLexSource(string(src))
 	if lexed == nil {
 		return nil

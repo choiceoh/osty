@@ -28,6 +28,9 @@ type (
 // env, and runs the typed checker. Source text is the sole AST ingress
 // point — no *ast.File round-trip, no astbridge bumps.
 func CheckPackageStructured(input PackageCheckInput) (CheckResult, error) {
+	selfhostCheckMu.Lock()
+	defer selfhostCheckMu.Unlock()
+
 	file, layout, err := selfhostBuildPackageAst(input.Files)
 	if err != nil {
 		return CheckResult{}, err

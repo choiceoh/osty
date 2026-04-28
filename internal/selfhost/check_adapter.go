@@ -31,6 +31,9 @@ func CheckSource(src []byte) CheckSummary {
 // CheckSourceStructured runs the bootstrapped Osty checker and returns the
 // structured result consumed by the Go check.Result bridge.
 func CheckSourceStructured(src []byte) CheckResult {
+	selfhostCheckMu.Lock()
+	defer selfhostCheckMu.Unlock()
+
 	lexed := ostyLexSource(string(src))
 	if lexed == nil {
 		return CheckResult{}
@@ -79,6 +82,9 @@ func CheckStructuredFromRun(run *FrontendRun) CheckResult {
 	if run == nil {
 		return CheckResult{}
 	}
+	selfhostCheckMu.Lock()
+	defer selfhostCheckMu.Unlock()
+
 	file := run.semanticAstFile()
 	if file == nil {
 		return CheckResult{}

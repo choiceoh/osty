@@ -88,6 +88,7 @@ use go "github.com/osty/osty/internal/selfhost/astbridge" as astbridge {
     fn TypeAliasDeclNode(pos: Pos, end: Pos, isPub: Bool, name: String, generics: List<GenericParam>, target: Type, doc: String, anns: List<Annotation>) -> Decl
     fn UseDeclNode(pos: Pos, end: Pos, raw: String, path: List<String>, isGo: Bool, alias: String, body: List<Decl>) -> Decl
     fn UseDeclNodeFull(pos: Pos, end: Pos, raw: String, path: List<String>, isGo: Bool, isPub: Bool, alias: String, body: List<Decl>) -> Decl
+    fn UseDeclNodeScoped(pos: Pos, end: Pos, raw: String, path: List<String>, isGo: Bool, isPub: Bool, isScoped: Bool, scopedBase: List<String>, scopedMember: String, alias: String, body: List<Decl>) -> Decl
     fn LetDeclNode(pos: Pos, end: Pos, isPub: Bool, isMut: Bool, mutPos: Pos, name: String, typ: Type, value: Expr, doc: String, anns: List<Annotation>) -> Decl
     fn FieldNode(pos: Pos, end: Pos, isPub: Bool, name: String, typ: Type, def: Expr, doc: String, anns: List<Annotation>) -> Field
     fn VariantNode(pos: Pos, end: Pos, name: String, fields: List<Type>, anns: List<Annotation>, doc: String) -> Variant
@@ -1007,16 +1008,49 @@ fn astLowerUseDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> 
     if !(astUseDeclIsGo(n)) {
         path = astLowerSplitPath(raw)
     }
-    astbridge.UseDeclNodeFull(
+    let scoped = astUseDeclIsScoped(n)
+    let scopedBase = if scoped {
+        astLowerUseScopedBase(raw)
+    } else {
+        []
+    }
+    let scopedMember = if scoped {
+        astLowerUseScopedMember(raw)
+    } else {
+        ""
+    }
+    astbridge.UseDeclNodeScoped(
         astLowerNodePos(toks, n),
         astLowerNodeEnd(toks, n),
         raw,
         path,
         astUseDeclIsGo(n),
         astUseDeclIsPub(n),
+        scoped,
+        scopedBase,
+        scopedMember,
         alias,
         body,
     )
+}
+
+fn astLowerUseScopedBase(raw: String) -> List<String> {
+    let parts = astLowerSplitPath(raw)
+    let mut out: List<String> = []
+    let mut i = 0
+    for i < parts.len() - 1 {
+        out.push(parts[i])
+        i = i + 1
+    }
+    out
+}
+
+fn astLowerUseScopedMember(raw: String) -> String {
+    let parts = astLowerSplitPath(raw)
+    if parts.len() == 0 {
+        return ""
+    }
+    parts[parts.len() - 1]
 }
 
 fn astLowerUseRawPath(toks: List<astbridge.Token>, n: AstNode) -> String {

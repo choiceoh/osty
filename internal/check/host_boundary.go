@@ -1835,6 +1835,9 @@ func writeSelfhostImports(b *bytes.Buffer, ws *resolve.Workspace, stdlib resolve
 	seen := map[string]bool{}
 	for _, use := range uses {
 		dotPath := strings.Join(use.Path, ".")
+		if use.IsScoped {
+			dotPath = strings.Join(use.ScopedBase, ".")
+		}
 		target := (*resolve.Package)(nil)
 		if ws != nil {
 			target = ws.Packages[dotPath]
@@ -1849,7 +1852,9 @@ func writeSelfhostImports(b *bytes.Buffer, ws *resolve.Workspace, stdlib resolve
 			continue
 		}
 		alias := use.Alias
-		if alias == "" && len(use.Path) > 0 {
+		if use.IsScoped {
+			alias = lastPathSegment(dotPath)
+		} else if alias == "" && len(use.Path) > 0 {
 			alias = use.Path[len(use.Path)-1]
 		}
 		if alias == "" || seen[alias] {
@@ -1858,6 +1863,16 @@ func writeSelfhostImports(b *bytes.Buffer, ws *resolve.Workspace, stdlib resolve
 		seen[alias] = true
 		writeSelfhostPackageImport(b, alias, target)
 	}
+}
+
+func lastPathSegment(path string) string {
+	if path == "" {
+		return ""
+	}
+	if i := strings.LastIndex(path, "."); i >= 0 {
+		return path[i+1:]
+	}
+	return path
 }
 
 func fileUses(file *ast.File) []*ast.UseDecl {
