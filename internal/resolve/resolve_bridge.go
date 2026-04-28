@@ -24,12 +24,14 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 
 	pkgScope := NewScope(prelude, "package:"+pkg.Name)
 	diags := nativeParseDiagnostics(pkg)
+	declIndexes := make(map[string]map[int]ast.Node, len(pkg.Files))
 	for _, pf := range pkg.Files {
 		if pf.File == nil || len(pf.Source) == 0 && len(pf.CanonicalSource) == 0 {
 			continue
 		}
 		fi := nativeResolveFileInfoFor(files, pf.Path)
 		declIdx := buildDeclIndex(pf.File)
+		declIndexes[pf.Path] = declIdx
 		defineTopLevelSymbols(pkgScope, result.Symbols, fi, declIdx)
 	}
 
@@ -40,11 +42,15 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 		fi := nativeResolveFileInfoFor(files, pf.Path)
 		identIdx := buildIdentIndex(pf.File)
 		typeIdx := buildNamedTypeIndex(pf.File)
-		declIdx := buildDeclIndex(pf.File)
+		declIdx := declIndexes[pf.Path]
+		if declIdx == nil {
+			declIdx = buildDeclIndex(pf.File)
+			declIndexes[pf.Path] = declIdx
+		}
 		fileScope := NewScope(pkgScope, "file:"+pf.Path)
 		nativeDeclareUses(fileScope, pkgScope, pkg, pf, &diags)
 
-		refsByID, refIdents := bridgeRefs(result.Refs, fi, identIdx, declIdx, fileScope)
+		refsByID, refIdents := bridgeRefs(result.Refs, result.Symbols, files, fi, identIdx, declIndexes, fileScope)
 		refsByID, refIdents = supplementUseAliasRefs(pf.File, fileScope, refsByID, refIdents)
 		pf.RefsByID = refsByID
 		pf.RefIdents = refIdents
@@ -103,12 +109,15 @@ func nativeDeclareUses(fileScope, pkgScope *Scope, pkg *Package, pf *PackageFile
 			}
 			if u.IsPub && sym.Pub && pkgScope != nil && pkgScope != fileScope {
 				pkgSym := &Symbol{
-					Name:    sym.Name,
-					Kind:    sym.Kind,
-					Pos:     sym.Pos,
-					Decl:    sym.Decl,
-					Pub:     sym.Pub,
-					Package: sym.Package,
+					StableID:  sym.StableID,
+					PackageID: sym.PackageID,
+					DeclID:    sym.DeclID,
+					Name:      sym.Name,
+					Kind:      sym.Kind,
+					Pos:       sym.Pos,
+					Decl:      sym.Decl,
+					Pub:       sym.Pub,
+					Package:   sym.Package,
 				}
 				pkgScope.Define(pkgSym)
 			}
@@ -120,12 +129,15 @@ func nativeDeclareUses(fileScope, pkgScope *Scope, pkg *Package, pf *PackageFile
 		}
 		if u.IsPub && sym.Pub && pkgScope != nil && pkgScope != fileScope {
 			pkgSym := &Symbol{
-				Name:    sym.Name,
-				Kind:    sym.Kind,
-				Pos:     sym.Pos,
-				Decl:    sym.Decl,
-				Pub:     sym.Pub,
-				Package: sym.Package,
+				StableID:  sym.StableID,
+				PackageID: sym.PackageID,
+				DeclID:    sym.DeclID,
+				Name:      sym.Name,
+				Kind:      sym.Kind,
+				Pos:       sym.Pos,
+				Decl:      sym.Decl,
+				Pub:       sym.Pub,
+				Package:   sym.Package,
 			}
 			pkgScope.Define(pkgSym)
 		}
@@ -321,14 +333,17 @@ func walkReflect(v reflect.Value, onIdent identVisitor, onType typeVisitor) {
 
 func bridgeRefs(
 	refs []selfhost.ResolvedRef,
+	symbols []selfhost.ResolvedSymbol,
+	files []nativeResolveFileInfo,
 	fi nativeResolveFileInfo,
 	identIdx map[int]*ast.Ident,
-	declIdx map[int]ast.Node,
+	declIndexes map[string]map[int]ast.Node,
 	fileScope *Scope,
 ) (map[ast.NodeID]*Symbol, []*ast.Ident) {
 	refsByID := make(map[ast.NodeID]*Symbol, len(refs))
 	refIdents := make([]*ast.Ident, 0, len(refs))
-	symCache := make(map[int]*Symbol)
+	symCache := make(map[nativeSymbolTarget]*Symbol)
+	symByTarget := nativeSymbolByTarget(symbols)
 
 	for _, ref := range refs {
 		if ref.File != "" {
@@ -341,15 +356,55 @@ func bridgeRefs(
 		if !ok {
 			continue
 		}
-		ident := identIdx[origOff]
+		origEnd, ok := nativeToOriginalOffset(fi, ref.End)
+		if !ok {
+			origEnd = origOff
+		}
+		ident := findIdentForResolvedRef(identIdx, ref.Name, origOff, origEnd)
 		if ident == nil {
 			continue
 		}
-		sym := findOrCreateSymbol(symCache, ref.Name, ref.TargetStart, ref.TargetEnd, fi, declIdx, fileScope)
+		sym := findOrCreateSymbol(symCache, ref, symByTarget, files, fi, declIndexes, fileScope)
 		refsByID[ident.ID] = sym
 		refIdents = append(refIdents, ident)
 	}
 	return refsByID, refIdents
+}
+
+func findIdentForResolvedRef(identIdx map[int]*ast.Ident, name string, start, end int) *ast.Ident {
+	if ident := identIdx[start]; ident != nil && ident.Name == name {
+		return ident
+	}
+	if end < start {
+		end = start
+	}
+	var best *ast.Ident
+	bestDistance := int(^uint(0) >> 1)
+	for _, ident := range identIdx {
+		if ident == nil || ident.Name != name {
+			continue
+		}
+		idStart := ident.Pos().Offset
+		idEnd := ident.End().Offset
+		if idEnd < idStart {
+			idEnd = idStart
+		}
+		distance := 0
+		switch {
+		case idEnd < start:
+			distance = start - idEnd
+		case idStart > end:
+			distance = idStart - end
+		}
+		if distance < bestDistance {
+			bestDistance = distance
+			best = ident
+		}
+	}
+	if bestDistance > 8 {
+		return nil
+	}
+	return best
 }
 
 func supplementUseAliasRefs(
@@ -424,40 +479,81 @@ func bridgeTypeRefs(
 }
 
 func findOrCreateSymbol(
-	cache map[int]*Symbol,
-	name string,
-	targetStart, targetEnd int,
+	cache map[nativeSymbolTarget]*Symbol,
+	ref selfhost.ResolvedRef,
+	symByTarget map[nativeSymbolTarget]selfhost.ResolvedSymbol,
+	files []nativeResolveFileInfo,
 	fi nativeResolveFileInfo,
-	declIdx map[int]ast.Node,
+	declIndexes map[string]map[int]ast.Node,
 	fileScope *Scope,
 ) *Symbol {
-	targetOrigOff, ok := nativeToOriginalOffset(fi, targetStart)
-	if !ok {
-		return &Symbol{Name: name, Kind: SymBuiltin, Pub: true}
-	}
-	if sym, ok := cache[targetOrigOff]; ok {
+	key := nativeSymbolTarget{file: ref.TargetFile, node: ref.TargetNode, start: ref.TargetStart, end: ref.TargetEnd}
+	if sym, ok := cache[key]; ok {
 		return sym
 	}
+	nativeSym := symByTarget[key]
+	targetFI := nativeResolveFileInfoFor(files, ref.TargetFile)
+	if targetFI.path == "" && ref.TargetFile == "" {
+		targetFI = fi
+	}
+	targetOrigOff, ok := nativeToOriginalOffset(targetFI, ref.TargetStart)
+	if !ok {
+		return &Symbol{StableID: ref.TargetSymbolID, PackageID: ref.PackageID, Name: ref.Name, Kind: SymBuiltin, Pub: true}
+	}
+	declIdx := declIndexes[ref.TargetFile]
 	decl := findNearestDecl(declIdx, targetOrigOff)
-	if _, isUse := decl.(*ast.UseDecl); isUse && fileScope != nil {
-		if sym := fileScope.LookupLocal(name); sym != nil {
-			cache[targetOrigOff] = sym
+	if _, isUse := decl.(*ast.UseDecl); isUse && fileScope != nil && ref.TargetFile == fi.path {
+		if sym := fileScope.LookupLocal(ref.Name); sym != nil {
+			fillSymbolIDsFromRef(sym, ref)
+			cache[key] = sym
 			return sym
 		}
 	}
 	sym := &Symbol{
-		Name: name,
-		Kind: SymUnknown,
-		Pub:  true,
-		Decl: decl,
+		StableID:  ref.TargetSymbolID,
+		PackageID: ref.PackageID,
+		DeclID:    nativeSym.DeclID,
+		Name:      ref.Name,
+		Kind:      nativeKindToSymbolKind(nativeSym.Kind),
+		Pub:       true,
+		Decl:      decl,
+	}
+	if sym.Kind == SymUnknown && nativeSym.Kind == "" {
+		sym.Kind = SymUnknown
 	}
 	if decl != nil {
 		sym.Pos = decl.Pos()
 	} else {
 		sym.Pos = token.Pos{Offset: targetOrigOff}
 	}
-	cache[targetOrigOff] = sym
+	cache[key] = sym
 	return sym
+}
+
+func fillSymbolIDsFromRef(sym *Symbol, ref selfhost.ResolvedRef) {
+	if sym == nil {
+		return
+	}
+	if sym.StableID == "" {
+		sym.StableID = ref.TargetSymbolID
+	}
+	if sym.PackageID == "" {
+		sym.PackageID = ref.PackageID
+	}
+}
+
+type nativeSymbolTarget struct {
+	file       string
+	node       int
+	start, end int
+}
+
+func nativeSymbolByTarget(symbols []selfhost.ResolvedSymbol) map[nativeSymbolTarget]selfhost.ResolvedSymbol {
+	out := make(map[nativeSymbolTarget]selfhost.ResolvedSymbol, len(symbols))
+	for _, sym := range symbols {
+		out[nativeSymbolTarget{file: sym.File, node: sym.Node, start: sym.Start, end: sym.End}] = sym
+	}
+	return out
 }
 
 func findNearestDecl(declIdx map[int]ast.Node, targetOff int) ast.Node {
@@ -494,10 +590,13 @@ func defineTopLevelSymbols(
 		}
 		decl := findNearestDecl(declIdx, origOff)
 		goSym := &Symbol{
-			Name: sym.Name,
-			Kind: nativeKindToSymbolKind(sym.Kind),
-			Pub:  sym.Public,
-			Decl: decl,
+			StableID:  sym.ID,
+			PackageID: sym.PackageID,
+			DeclID:    sym.DeclID,
+			Name:      sym.Name,
+			Kind:      nativeKindToSymbolKind(sym.Kind),
+			Pub:       sym.Public,
+			Decl:      decl,
 		}
 		if decl != nil {
 			goSym.Pos = decl.Pos()

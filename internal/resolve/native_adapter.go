@@ -107,9 +107,10 @@ func nativeCfgEnvFor(pkg *Package) *selfhost.CfgEnv {
 
 func nativeResolveInput(pkg *Package) (selfhost.PackageResolveInput, []nativeResolveFileInfo, error) {
 	input := selfhost.PackageResolveInput{
-		Files:   make([]selfhost.PackageResolveFile, 0, len(pkg.Files)),
-		Imports: nativeResolveImportSurfaces(pkg),
-		Cfg:     nativeCfgEnvFor(pkg),
+		Files:       make([]selfhost.PackageResolveFile, 0, len(pkg.Files)),
+		Imports:     PackageImportSurfaces(pkg, pkg.workspace, nil),
+		PackagePath: nativeResolvePackagePath(pkg),
+		Cfg:         nativeCfgEnvFor(pkg),
 	}
 	files := make([]nativeResolveFileInfo, 0, len(pkg.Files))
 	base := 0
@@ -145,81 +146,21 @@ func nativeResolveInput(pkg *Package) (selfhost.PackageResolveInput, []nativeRes
 	return input, files, nil
 }
 
-func nativeResolveImportSurfaces(pkg *Package) []selfhost.PackageCheckImport {
-	if pkg == nil || pkg.workspace == nil {
-		return nil
-	}
-	seen := map[string]bool{}
-	var out []selfhost.PackageCheckImport
-	for _, pf := range pkg.Files {
-		if pf == nil || pf.File == nil {
-			continue
-		}
-		for _, u := range pf.File.Uses {
-			if u == nil || u.IsFFI() {
-				continue
-			}
-			targetPath := UseKey(u)
-			importAlias := nativeUseAlias(u)
-			if u.IsScoped {
-				targetPath = scopedUseBaseKey(u)
-				importAlias = lastDotSeg(targetPath)
-			}
-			if targetPath == "" || importAlias == "" {
-				continue
-			}
-			key := targetPath + "\x00" + importAlias
-			if seen[key] {
-				continue
-			}
-			target := nativeResolveSurfacePackage(pkg.workspace, targetPath)
-			if target == nil {
-				continue
-			}
-			seen[key] = true
-			out = append(out, selfhost.PackageImportSurface(targetPath, importAlias, nativeResolveRunsForPackage(target)))
-		}
-	}
-	return out
-}
-
-func nativeResolveSurfacePackage(w *Workspace, dotPath string) *Package {
-	if w == nil || dotPath == "" {
-		return nil
-	}
-	if pkg := w.Packages[dotPath]; pkg != nil {
-		return pkg
-	}
-	if w.Stdlib != nil {
-		if pkg := w.Stdlib.LookupPackage(dotPath); pkg != nil {
-			return pkg
-		}
-	}
-	pkg, err := w.LoadPackage(dotPath)
-	if err != nil {
-		return nil
-	}
-	return pkg
-}
-
-func nativeResolveRunsForPackage(pkg *Package) []*selfhost.FrontendRun {
+func nativeResolvePackagePath(pkg *Package) string {
 	if pkg == nil {
-		return nil
+		return ""
 	}
-	runs := make([]*selfhost.FrontendRun, 0, len(pkg.Files))
-	for _, pf := range pkg.Files {
-		if pf == nil {
-			continue
-		}
-		if pf.Run != nil {
-			runs = append(runs, pf.Run)
-			continue
-		}
-		if len(pf.Source) > 0 {
-			runs = append(runs, selfhost.Run(pf.Source))
+	if pkg.workspace != nil {
+		for path, candidate := range pkg.workspace.Packages {
+			if candidate == pkg {
+				return path
+			}
 		}
 	}
-	return runs
+	if pkg.Dir != "" {
+		return pkg.Dir
+	}
+	return pkg.Name
 }
 
 func nativeResolveSourceForFile(pf *PackageFile) ([]byte, error) {
