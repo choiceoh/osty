@@ -36804,6 +36804,7 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "contains", owner: "Result", receiverTy: tResTE, retTy: tBool(tys), paramNames: []string{"item"}, paramTys: []int{tT}, generics: []string{"T", "E"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16801:5
 	checkRegisterFn(env, &CheckFnSig{name: "containsErr", owner: "Result", receiverTy: tResTE, retTy: tBool(tys), paramNames: []string{"err"}, paramTys: []int{tE}, generics: []string{"T", "E"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "count", owner: "Result", receiverTy: tResTE, retTy: tInt(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: []string{"T", "E"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16806:5
 	checkRegisterFn(env, &CheckFnSig{name: "expect", owner: "Result", receiverTy: tResTE, retTy: tT, paramNames: []string{"msg"}, paramTys: []int{tStringResult}, generics: []string{"T", "E"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16811:5
@@ -36828,6 +36829,7 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "inspect", owner: "Result", receiverTy: tResTE, retTy: tResTE, paramNames: []string{"f"}, paramTys: []int{tyFn(tys, []int{tT}, tUnit(tys))}, generics: []string{"T", "E"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16861:5
 	checkRegisterFn(env, &CheckFnSig{name: "inspectErr", owner: "Result", receiverTy: tResTE, retTy: tResTE, paramNames: []string{"f"}, paramTys: []int{tyFn(tys, []int{tE}, tUnit(tys))}, generics: []string{"T", "E"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "forEach", owner: "Result", receiverTy: tResTE, retTy: tUnit(tys), paramNames: []string{"f"}, paramTys: []int{tyFn(tys, []int{tT}, tUnit(tys))}, generics: []string{"T", "E"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16866:5
 	checkRegisterFn(env, &CheckFnSig{name: "map", owner: "Result", receiverTy: tResTE, retTy: tResUE, paramNames: []string{"f"}, paramTys: []int{tyFn(tys, []int{tT}, tU)}, generics: []string{"T", "E", "U"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16871:5
@@ -36836,6 +36838,9 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "mapOr", owner: "Result", receiverTy: tResTE, retTy: tU, paramNames: []string{"fallback", "f"}, paramTys: []int{tU, tyFn(tys, []int{tT}, tU)}, generics: []string{"T", "E", "U"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16881:5
 	checkRegisterFn(env, &CheckFnSig{name: "mapOrElse", owner: "Result", receiverTy: tResTE, retTy: tU, paramNames: []string{"fallback", "f"}, paramTys: []int{tyFn(tys, []int{tE}, tU), tyFn(tys, []int{tT}, tU)}, generics: []string{"T", "E", "U"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "zip", owner: "Result", receiverTy: tResTE, retTy: tyNamed(tys, "Result", []int{tyTuple(tys, []int{tT, tU}), tE}), paramNames: []string{"other"}, paramTys: []int{tResUE}, generics: []string{"T", "E", "U"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "zipWith", owner: "Result", receiverTy: tResTE, retTy: tyNamed(tys, "Result", []int{tR, tE}), paramNames: []string{"other", "f"}, paramTys: []int{tResUE, tyFn(tys, []int{tT, tU}, tR)}, generics: []string{"T", "E", "U", "R"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "toList", owner: "Result", receiverTy: tResTE, retTy: tListT, paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: []string{"T", "E"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16886:5
 	checkRegisterFn(env, &CheckFnSig{name: "toString", owner: "Result", receiverTy: tResTE, retTy: tStringResult, paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: []string{"T", "E"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16891:5
@@ -36853,6 +36858,7 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "isNoneOr", owner: "Option", receiverTy: tOptTAlias, retTy: tBool(tys), paramNames: []string{"pred"}, paramTys: []int{tyFn(tys, []int{tT}, tBool(tys))}, generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16917:5
 	checkRegisterFn(env, &CheckFnSig{name: "contains", owner: "Option", receiverTy: tOptTAlias, retTy: tBool(tys), paramNames: []string{"item"}, paramTys: []int{tT}, generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "count", owner: "Option", receiverTy: tOptTAlias, retTy: tInt(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16922:5
 	checkRegisterFn(env, &CheckFnSig{name: "take", owner: "Option", receiverTy: tOptTAlias, retTy: tOptTAlias, paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16927:5
@@ -36880,6 +36886,7 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "filter", owner: "Option", receiverTy: tOptTAlias, retTy: tOptTAlias, paramNames: []string{"pred"}, paramTys: []int{tyFn(tys, []int{tT}, tBool(tys))}, generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16978:5
 	checkRegisterFn(env, &CheckFnSig{name: "inspect", owner: "Option", receiverTy: tOptTAlias, retTy: tOptTAlias, paramNames: []string{"f"}, paramTys: []int{tyFn(tys, []int{tT}, tUnit(tys))}, generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "forEach", owner: "Option", receiverTy: tOptTAlias, retTy: tUnit(tys), paramNames: []string{"f"}, paramTys: []int{tyFn(tys, []int{tT}, tUnit(tys))}, generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16983:5
 	checkRegisterFn(env, &CheckFnSig{name: "map", owner: "Option", receiverTy: tOptTAlias, retTy: tOptU, paramNames: []string{"f"}, paramTys: []int{tyFn(tys, []int{tT}, tU)}, generics: []string{"T", "U"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16988:5
@@ -36888,6 +36895,8 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "mapOrElse", owner: "Option", receiverTy: tOptTAlias, retTy: tU, paramNames: []string{"fallback", "f"}, paramTys: []int{tyFn(tys, make([]int, 0, 1), tU), tyFn(tys, []int{tT}, tU)}, generics: []string{"T", "U"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16998:5
 	checkRegisterFn(env, &CheckFnSig{name: "zip", owner: "Option", receiverTy: tOptTAlias, retTy: tyOptional(tys, tyTuple(tys, []int{tT, tU})), paramNames: []string{"other"}, paramTys: []int{tOptU}, generics: []string{"T", "U"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "zipWith", owner: "Option", receiverTy: tOptTAlias, retTy: tyOptional(tys, tR), paramNames: []string{"other", "f"}, paramTys: []int{tOptU, tyFn(tys, []int{tT, tU}, tR)}, generics: []string{"T", "U", "R"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "reduce", owner: "Option", receiverTy: tOptTAlias, retTy: tOptTAlias, paramNames: []string{"other", "f"}, paramTys: []int{tOptTAlias, tyFn(tys, []int{tT, tT}, tT)}, generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:17003:5
 	tResTError := tyNamed(tys, "Result", []int{tT, tyNamed(tys, "Error", make([]int, 0, 1))})
 	_ = tResTError
@@ -36897,6 +36906,7 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "okOr", owner: "Option", receiverTy: tOptTAlias, retTy: tResTError, paramNames: []string{"msg"}, paramTys: []int{tStringResult}, generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:17014:5
 	checkRegisterFn(env, &CheckFnSig{name: "okOrElse", owner: "Option", receiverTy: tOptTAlias, retTy: tResTE, paramNames: []string{"err"}, paramTys: []int{tyFn(tys, make([]int, 0, 1), tE)}, generics: []string{"T", "E"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "toList", owner: "Option", receiverTy: tOptTAlias, retTy: tListT, paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:17019:5
 	checkRegisterFn(env, &CheckFnSig{name: "toString", owner: "Option", receiverTy: tOptTAlias, retTy: tStringResult, paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:17026:5

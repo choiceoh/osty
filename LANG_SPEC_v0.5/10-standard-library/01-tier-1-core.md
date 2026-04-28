@@ -6,8 +6,16 @@
 - `std.fs` — file I/O
 - `std.strings` — string manipulation
 - `std.collections` — `List`, `Map`, `Set`
-- `std.option` — `Option`, `Some`, `None` (auto-imported)
-- `std.result` — `Result`, `Ok`, `Err` (auto-imported)
+- `std.option` — `Option`, `Some`, `None` (auto-imported), plus rich
+  combinators (`count`, `forEach`, `toList`, `zipWith`, `reduce`) and
+  nested-shape, composition, and batch helpers `flatten`, `transpose`,
+  `unzip`, `values`, `any`, `all`, `traverse`, `filterMap`, `findMap`,
+  `map2`, `map3`
+- `std.result` — `Result`, `Ok`, `Err` (auto-imported), plus rich
+  combinators (`count`, `forEach`, `toList`, `zip`, `zipWith`) and
+  nested-shape, composition, and batch helpers `flatten`, `transpose`,
+  `values`, `errors`, `partition`, `all`, `traverse`, `map2`, `map3`,
+  `allErrors`, `traverseErrors`
 - `std.error` — `Error`, `BasicError`, `Error.new` (auto-imported)
 - `std.cmp` — `Equal`, `Ordered`, `Hashable` (auto-imported)
 - `std.ref` — `same(a, b)`

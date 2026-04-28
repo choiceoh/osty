@@ -144,13 +144,16 @@ func arenaStringUnquote(s string) string {
 // typically obtain runs from resolve.PackageFile.Run (populated by
 // LoadPackageForNative) or by calling selfhost.Run(pf.Source) when Run
 // is not yet available.
-func PackageImportSurface(alias string, runs []*FrontendRun) PackageCheckImport {
+func PackageImportSurface(importPath, alias string, runs []*FrontendRun) PackageCheckImport {
 	surface := PackageCheckImport{Alias: alias}
 	if alias == "" || len(runs) == 0 {
 		return surface
 	}
-	localTypes := arenaLocalTypeNames(alias, runs)
+	localTypes := arenaLocalTypeNames(importPath, alias, runs)
 	for _, qualified := range arenaSortedMapValues(localTypes) {
+		if arenaStdlibBuiltinTypeName(importPath, arenaLocalTypeName(qualified)) != "" {
+			continue
+		}
 		surface.Fields = append(surface.Fields, PackageCheckField{
 			Owner:      alias,
 			Name:       arenaLocalTypeName(qualified),
@@ -195,18 +198,30 @@ func PackageImportSurface(alias string, runs []*FrontendRun) PackageCheckImport 
 					HasDefault: true,
 				})
 			case *AstNodeKind_AstNStructDecl:
+				if arenaStdlibBuiltinTypeName(importPath, n.text) != "" {
+					continue
+				}
 				if n.flags == 1 {
 					arenaAppendImportedStruct(&surface, arena, alias, localTypes, n)
 				}
 			case *AstNodeKind_AstNEnumDecl:
+				if arenaStdlibBuiltinTypeName(importPath, n.text) != "" {
+					continue
+				}
 				if n.flags == 1 {
 					arenaAppendImportedEnum(&surface, arena, alias, localTypes, n)
 				}
 			case *AstNodeKind_AstNInterfaceDecl:
+				if arenaStdlibBuiltinTypeName(importPath, n.text) != "" {
+					continue
+				}
 				if n.flags == 1 {
 					arenaAppendImportedInterface(&surface, arena, alias, localTypes, n)
 				}
 			case *AstNodeKind_AstNTypeAlias:
+				if arenaStdlibBuiltinTypeName(importPath, n.text) != "" {
+					continue
+				}
 				if n.flags == 1 {
 					arenaAppendImportedAlias(&surface, arena, alias, localTypes, n)
 				}
@@ -268,7 +283,7 @@ func arenaFnDeclHasReceiver(arena *AstArena, n *AstNode) bool {
 	return child.text == "self"
 }
 
-func arenaLocalTypeNames(alias string, runs []*FrontendRun) map[string]string {
+func arenaLocalTypeNames(importPath, alias string, runs []*FrontendRun) map[string]string {
 	out := map[string]string{}
 	for _, run := range runs {
 		if run == nil || run.parser == nil || run.parser.arena == nil {
@@ -289,11 +304,38 @@ func arenaLocalTypeNames(alias string, runs []*FrontendRun) map[string]string {
 				if n.text == "" {
 					continue
 				}
+				if rebound := arenaStdlibBuiltinTypeName(importPath, n.text); rebound != "" {
+					out[n.text] = rebound
+					continue
+				}
 				out[n.text] = alias + "." + n.text
 			}
 		}
 	}
 	return out
+}
+
+func arenaStdlibBuiltinTypeName(importPath, name string) string {
+	switch importPath {
+	case "std.collections":
+		switch name {
+		case "List", "Map", "Set":
+			return name
+		}
+	case "std.error":
+		if name == "Error" {
+			return name
+		}
+	case "std.option":
+		if name == "Option" {
+			return name
+		}
+	case "std.result":
+		if name == "Result" {
+			return name
+		}
+	}
+	return ""
 }
 
 func arenaLocalTypeName(qualified string) string {
