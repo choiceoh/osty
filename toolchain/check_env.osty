@@ -2435,6 +2435,15 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         paramNames: [], paramTys: [],
         generics: ["T"], genericBounds: [],
     })
+    // `{a, b, c}`-shaped stringification. Single runtime entry —
+    // `osty_rt_set_to_string` dispatches on the Set's `elem_kind`
+    // to pick a per-element formatter. Composite element types
+    // abort inside the runtime today.
+    checkRegisterFn(env, CheckFnSig {
+        name: "toString", owner: "Set", receiverTy: tSetT, hasReceiver: true, retTy: tString_,
+        paramNames: [], paramTys: [],
+        generics: ["T"], genericBounds: [],
+    })
     // Pure-Osty Set helpers (collections.osty §B.9.1).
     checkRegisterFn(env, CheckFnSig {
         name: "union", owner: "Set", receiverTy: tSetT, hasReceiver: true, retTy: tSetT,

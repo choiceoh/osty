@@ -548,6 +548,13 @@ const (
 	IntrinsicSetToList
 	// IntrinsicSetRemove deletes an element. Args: [set, elem]. Dest nil.
 	IntrinsicSetRemove
+	// IntrinsicSetToString returns a `{a, b, c}`-shaped String. Args:
+	// [set]. Dest is String. The runtime entry inspects the Set's
+	// stored `elem_kind` to pick a per-element formatter; the
+	// lowering side just emits the call. Braces match the
+	// set-equivalent surface (Map uses braces too); composite element
+	// types abort inside the runtime today.
+	IntrinsicSetToString
 
 	// ---- stdlib: String ----
 
@@ -1645,6 +1652,8 @@ func (k IntrinsicKind) String() string {
 		return "set_to_list"
 	case IntrinsicSetRemove:
 		return "set_remove"
+	case IntrinsicSetToString:
+		return "set_to_string"
 	case IntrinsicStringLen:
 		return "string_len"
 	case IntrinsicStringIsEmpty:
