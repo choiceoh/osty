@@ -1937,6 +1937,7 @@ func TestLowerStdlibMapMethods(t *testing.T) {
 	mapType := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, ir.TInt}, Builtin: true}
 	optInt := &ir.OptionalType{Inner: ir.TInt}
 	listKey := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	listValue := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
 	cases := []stdlibMethodTest{
 		{
 			name: "get", receiverT: mapType, method: "get", retT: optInt,
@@ -1957,12 +1958,25 @@ func TestLowerStdlibMapMethods(t *testing.T) {
 			want: `intrinsic map_contains(_1, const "k")`,
 		},
 		{
+			name: "remove", receiverT: mapType, method: "remove", retT: optInt,
+			args: []ir.Arg{{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "k"}}}}},
+			want: `intrinsic map_remove(_1, const "k")`,
+		},
+		{
 			name: "len", receiverT: mapType, method: "len", retT: ir.TInt,
 			want: "intrinsic map_len(_1)",
 		},
 		{
 			name: "keys", receiverT: mapType, method: "keys", retT: listKey,
 			want: "intrinsic map_keys(_1)",
+		},
+		{
+			name: "values", receiverT: mapType, method: "values", retT: listValue,
+			want: "intrinsic map_values(_1)",
+		},
+		{
+			name: "clear", receiverT: mapType, method: "clear", retT: ir.TUnit,
+			want: "intrinsic map_clear(_1)",
 		},
 	}
 	for _, c := range cases {

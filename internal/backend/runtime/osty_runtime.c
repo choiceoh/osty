@@ -10906,6 +10906,56 @@ void *osty_rt_map_keys(void *raw_map) {
     return out;
 }
 
+void *osty_rt_map_values(void *raw_map) {
+    if (raw_map == NULL) {
+        osty_rt_abort("map is null");
+    }
+    /* Same young-map safety rule as osty_rt_map_keys: bind before
+     * casting so a promoted map/list is followed through the GC
+     * forwarding slot before we read payload arrays. */
+    osty_gc_root_bind_v1(raw_map);
+    void *out = osty_rt_list_new();
+    osty_gc_root_bind_v1(out);
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
+    if (map == NULL) {
+        osty_rt_abort("map is null");
+    }
+    osty_rt_list *values = osty_rt_list_cast(out);
+    int64_t count = 0;
+    osty_rt_map_lock(raw_map);
+    switch (map->value_kind) {
+    case OSTY_RT_ABI_I64:
+        osty_rt_list_ensure_layout(values, sizeof(int64_t), NULL);
+        break;
+    case OSTY_RT_ABI_I1:
+        osty_rt_list_ensure_layout(values, sizeof(bool), NULL);
+        break;
+    case OSTY_RT_ABI_F64:
+        osty_rt_list_ensure_layout(values, sizeof(double), NULL);
+        break;
+    case OSTY_RT_ABI_PTR:
+    case OSTY_RT_ABI_STRING:
+        osty_rt_list_ensure_layout(values, sizeof(void *), osty_gc_mark_slot_v1);
+        break;
+    case OSTY_RT_ABI_INLINE:
+        osty_rt_list_ensure_layout(values, (size_t)map->value_size, map->value_trace);
+        break;
+    default:
+        osty_rt_map_unlock(raw_map);
+        osty_rt_abort("unsupported map value list kind");
+    }
+    count = map->len;
+    if (count > 0) {
+        osty_rt_list_copy_initialized(out, values, map->values, count);
+    } else {
+        values->len = 0;
+    }
+    osty_rt_map_unlock(raw_map);
+    osty_gc_root_release_v1(out);
+    osty_gc_root_release_v1(raw_map);
+    return out;
+}
+
 /* osty_rt_map_keys_sorted_<suffix> — `map.keys()` + `list.sorted()`
  * fused into one allocation. The unfused sequence creates the keys
  * list, then allocates a *second* list inside sorted() and copies
@@ -11213,6 +11263,14 @@ int64_t osty_rt_set_len(void *raw_set) {
         osty_rt_abort("set is null");
     }
     return set->len;
+}
+
+void osty_rt_set_clear(void *raw_set) {
+    osty_rt_set *set = osty_rt_set_cast(raw_set);
+    if (set == NULL) {
+        osty_rt_abort("set.clear on nil receiver");
+    }
+    __atomic_store_n(&set->len, 0, __ATOMIC_RELEASE);
 }
 
 /* Set<T>.toString — `{a, b, c}`-shaped (braces match Map's set-style

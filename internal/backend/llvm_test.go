@@ -168,7 +168,10 @@ func TestLLVMBackendEmitBinaryBuildsBundledRuntime(t *testing.T) {
 	for _, want := range []string{
 		"osty_rt_list_new",
 		"osty_rt_map_new",
+		"osty_rt_map_clear",
+		"osty_rt_map_values",
 		"osty_rt_set_new",
+		"osty_rt_set_clear",
 		"osty_rt_list_push_bytes_v1",
 		"osty_rt_list_push_bytes_roots_v1",
 		"osty_rt_list_get_bytes_v1",
@@ -1795,6 +1798,17 @@ fn main() {
     let keys = pairs.keys().sorted()
     println(keys[0])
 
+    let pairValues = pairs.values()
+    let firstPair = pairValues[0]
+    println(firstPair.left + firstPair.right)
+
+    match pairs.remove(1) {
+        Some(old) -> println(old.left + old.right),
+        None -> println(0),
+    }
+    println(pairs.len())
+    pairs.insert(1, Pair { left: 2, right: 3 })
+
     let mut values: List<Pair> = []
     values.push(Pair { left: 4, right: 6 })
     let value = values[0]
@@ -1811,6 +1825,11 @@ fn main() {
     println(seen.len())
     let ids = seen.toList()
     println(ids[0])
+
+    seen.clear()
+    println(seen.len())
+    pairs.clear()
+    println(pairs.len())
 }
 `)
 
@@ -1823,7 +1842,7 @@ fn main() {
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
 	}
-	if got, want := string(output), "1\n5\n1\n10\n9\n1\n7\n"; got != want {
+	if got, want := string(output), "1\n5\n1\n5\n5\n0\n10\n9\n1\n7\n0\n0\n"; got != want {
 		t.Fatalf("binary stdout = %q, want %q", got, want)
 	}
 }

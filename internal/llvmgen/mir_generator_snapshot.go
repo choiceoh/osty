@@ -8840,7 +8840,7 @@ func mirPrependRootIndex(index int, paths [][]int) [][]int {
 // Osty: mirIntrinsicKindLabelFull
 //
 // Slice 11 extension: covers every IntrinsicKind iota value from
-// IntrinsicPrint (1) through IntrinsicListClear (135). Diagnostics that
+// IntrinsicPrint (1) through IntrinsicSetClear (137). Diagnostics that
 // formerly rendered "kind=NN" now produce a symbolic label —
 // "list.push", "map.get_or", "select.recv" — making the failure mode
 // substantially easier to read at a glance. The label table is kept on
@@ -9118,6 +9118,10 @@ func mirIntrinsicKindLabelFull(kind int, kindFallback string) string {
 		return "list.insert"
 	case 135:
 		return "list.clear"
+	case 136:
+		return "map.clear"
+	case 137:
+		return "set.clear"
 	}
 	return kindFallback
 }

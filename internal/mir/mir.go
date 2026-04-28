@@ -517,7 +517,8 @@ const (
 	IntrinsicMapKeys
 	// IntrinsicMapValues returns List<V>. Args: [map].
 	IntrinsicMapValues
-	// IntrinsicMapRemove deletes a key. Args: [map, key]. Dest nil.
+	// IntrinsicMapRemove deletes a key. Args: [map, key]. Dest optional
+	// and, when present, receives the removed value as Option<V>.
 	IntrinsicMapRemove
 	// IntrinsicMapKeysSorted fuses `map.keys().sorted()` into a single
 	// runtime call, saving the intermediate unsorted-keys-list
@@ -825,6 +826,14 @@ const (
 	// IntrinsicListClear truncates the list to length 0. Args:
 	// [list]. Dest nil.
 	IntrinsicListClear
+	// IntrinsicMapClear truncates the map to length 0. Args: [map].
+	// Dest nil. Appended at the tail to preserve historical enum
+	// values for every previously-emitted intrinsic.
+	IntrinsicMapClear
+	// IntrinsicSetClear truncates the set to length 0. Args: [set].
+	// Dest nil. Appended at the tail to preserve historical enum
+	// values for every previously-emitted intrinsic.
+	IntrinsicSetClear
 )
 
 // StorageLiveInstr marks a local as alive. Optional; backends that do
@@ -1857,6 +1866,10 @@ func (k IntrinsicKind) String() string {
 		return "list_insert"
 	case IntrinsicListClear:
 		return "list_clear"
+	case IntrinsicMapClear:
+		return "map_clear"
+	case IntrinsicSetClear:
+		return "set_clear"
 	}
 	return "invalid"
 }

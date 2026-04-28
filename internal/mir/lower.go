@@ -4598,6 +4598,8 @@ func stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
 			return IntrinsicMapKeys
 		case "values":
 			return IntrinsicMapValues
+		case "clear":
+			return IntrinsicMapClear
 		case "remove":
 			return IntrinsicMapRemove
 		case "toString":
@@ -4615,6 +4617,8 @@ func stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
 			return IntrinsicSetToList
 		case "remove":
 			return IntrinsicSetRemove
+		case "clear":
+			return IntrinsicSetClear
 		case "toString":
 			return IntrinsicSetToString
 		}
@@ -4649,8 +4653,8 @@ func stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
 // expression position doesn't carry a stale dest.
 func isVoidStdlibIntrinsic(kind IntrinsicKind) bool {
 	switch kind {
-	case IntrinsicListPush, IntrinsicListInsert, IntrinsicListClear, IntrinsicMapSet, IntrinsicMapRemove,
-		IntrinsicSetInsert:
+	case IntrinsicListPush, IntrinsicListInsert, IntrinsicListClear, IntrinsicMapSet, IntrinsicMapClear,
+		IntrinsicSetInsert, IntrinsicSetClear:
 		return true
 	}
 	return false

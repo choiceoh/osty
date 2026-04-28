@@ -14213,7 +14213,7 @@ pub fn mirPrependRootIndex(index: Int, paths: List<List<Int>>) -> List<List<Int>
 /// `mirIntrinsicLabel` in `internal/llvmgen/mir_generator.go`.
 ///
 /// Slice 11 extension: every kind from `IntrinsicPrint` (1) through
-/// `IntrinsicListClear` (135) now has a canonical label. Diagnostic
+/// `IntrinsicSetClear` (137) now has a canonical label. Diagnostic
 /// strings ("intrinsic %s not yet supported", "%s without operand",
 /// etc.) become substantially more useful when the kind code that
 /// reaches an LLVM-side error path is rendered as the symbolic name
@@ -14370,6 +14370,8 @@ pub fn mirIntrinsicKindLabelFull(kind: Int, kindFallback: String) -> String {
     if kind == 133 { return "char_to_byte" }
     if kind == 134 { return "list.insert" }
     if kind == 135 { return "list.clear" }
+    if kind == 136 { return "map.clear" }
+    if kind == 137 { return "set.clear" }
     kindFallback
 }
 

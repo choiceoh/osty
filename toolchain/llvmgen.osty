@@ -2701,8 +2701,16 @@ pub fn llvmMapRuntimeKeysSymbol() -> String {
     "osty_rt_map_keys"
 }
 
+pub fn llvmMapRuntimeValuesSymbol() -> String {
+    "osty_rt_map_values"
+}
+
 pub fn llvmMapRuntimeLenSymbol() -> String {
     "osty_rt_map_len"
+}
+
+pub fn llvmMapRuntimeClearSymbol() -> String {
+    "osty_rt_map_clear"
 }
 
 /// Encode a Map key LLVM type into the runtime symbol suffix. String
@@ -2754,6 +2762,10 @@ pub fn llvmSetRuntimeLenSymbol() -> String {
 
 pub fn llvmSetRuntimeToListSymbol() -> String {
     "osty_rt_set_to_list"
+}
+
+pub fn llvmSetRuntimeClearSymbol() -> String {
+    "osty_rt_set_clear"
 }
 
 /// Set element suffix follows the same policy as Map keys: scalar types
@@ -2967,14 +2979,16 @@ pub fn llvmListSetPtr(emitter: LlvmEmitter, list: LlvmValue, index: LlvmValue, v
 /// LLVM forward declarations for the `osty_rt_map_*` C runtime surface.
 /// Map values cross the ABI through caller-allocated out-slots (`ptr`),
 /// so only the 5 key variants (`i64`/`i1`/`f64`/`ptr`/`string`) shape
-/// the declaration set. `osty_rt_map_new` is declared 0-arg to match
-/// the shape the current native backend emits; a typed-constructor
-/// migration is tracked separately.
+/// the declaration set. `osty_rt_map_new` takes the runtime ABI tuple
+/// `(key_kind, value_kind, value_size, trace)`; the fixed smoke helper
+/// below uses the `Map<Int, Int>` tuple.
 pub fn llvmMapRuntimeDeclarations() -> List<String> {
     [
-        "declare ptr @osty_rt_map_new()",
+        "declare ptr @osty_rt_map_new(i64, i64, i64, ptr)",
         "declare i64 @osty_rt_map_len(ptr)",
         "declare ptr @osty_rt_map_keys(ptr)",
+        "declare ptr @osty_rt_map_values(ptr)",
+        "declare void @osty_rt_map_clear(ptr)",
         "declare i1 @osty_rt_map_contains_i64(ptr, i64)",
         "declare i1 @osty_rt_map_contains_i1(ptr, i1)",
         "declare i1 @osty_rt_map_contains_f64(ptr, double)",
@@ -2999,7 +3013,12 @@ pub fn llvmMapRuntimeDeclarations() -> List<String> {
 }
 
 pub fn llvmMapNew(emitter: LlvmEmitter) -> LlvmValue {
-    llvmCall(emitter, "ptr", "osty_rt_map_new", [])
+    llvmCall(emitter, "ptr", "osty_rt_map_new", [
+        llvmIntLiteral(1),
+        llvmIntLiteral(1),
+        llvmIntLiteral(8),
+        LlvmValue { typ: "ptr", name: "null", pointer: false },
+    ])
 }
 
 pub fn llvmMapLen(emitter: LlvmEmitter, map: LlvmValue) -> LlvmValue {
@@ -3162,6 +3181,7 @@ pub fn llvmSetRuntimeDeclarations() -> List<String> {
         "declare ptr @osty_rt_set_new(i64)",
         "declare i64 @osty_rt_set_len(ptr)",
         "declare ptr @osty_rt_set_to_list(ptr)",
+        "declare void @osty_rt_set_clear(ptr)",
         "declare i1 @osty_rt_set_contains_i64(ptr, i64)",
         "declare i1 @osty_rt_set_contains_i1(ptr, i1)",
         "declare i1 @osty_rt_set_contains_f64(ptr, double)",
