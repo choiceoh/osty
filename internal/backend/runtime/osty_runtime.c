@@ -73,8 +73,10 @@
 #  include <direct.h>
 #  define OSTY_RT_MKDIR_ONE(path) _mkdir(path)
 #else
+#  include <fcntl.h>
 #  include <sys/stat.h>
 #  include <sys/types.h>
+#  include <sys/wait.h>
 #  include <unistd.h>
 #  define OSTY_RT_MKDIR_ONE(path) mkdir((path), 0755)
 #endif
@@ -16903,4 +16905,669 @@ void *osty_rt_env_set_current_dir(const char *path) {
     }
     return osty_rt_env_error_message("failed to set current directory", strerror(err), "runtime.env.set_current_dir.error");
 #endif
+}
+
+/* std.os process-control surface.
+ *
+ * `std.os.exec` / `execShell` lower to `osty_rt_os_exec(cmd, args, shell)`.
+ * The helper returns a by-value aggregate so the emitter can distinguish
+ * launch/runtime failures from ordinary non-zero child exit codes without
+ * re-running the process:
+ *
+ *   tag = 0 -> success, exit_code/stdout/stderr populated, error_text NULL
+ *   tag = 1 -> failure, error_text populated, output fields zeroed
+ *
+ * `std.os.hostname()` follows the same pattern with a narrower
+ * `{tag, value, error}` result. `pid()` and `exit(code)` are direct
+ * runtime calls. `onSignal` is intentionally not implemented here. */
+typedef struct osty_rt_os_exec_result {
+    int64_t tag;
+    int64_t exit_code;
+    void *stdout_text;
+    void *stderr_text;
+    void *error_text;
+} osty_rt_os_exec_result;
+
+typedef struct osty_rt_os_string_result {
+    int64_t tag;
+    void *value_text;
+    void *error_text;
+} osty_rt_os_string_result;
+
+static void *osty_rt_os_error_message(const char *prefix, const char *detail, const char *site) {
+    const char *lhs = prefix == NULL ? "process error" : prefix;
+    const char *rhs = (detail != NULL && detail[0] != '\0') ? detail : "unknown error";
+    size_t lhs_len = strlen(lhs);
+    size_t rhs_len = strlen(rhs);
+    size_t total = lhs_len + 2 + rhs_len;
+    char *buf = (char *)osty_rt_xmalloc(total + 1, site);
+    memcpy(buf, lhs, lhs_len);
+    buf[lhs_len] = ':';
+    buf[lhs_len + 1] = ' ';
+    memcpy(buf + lhs_len + 2, rhs, rhs_len);
+    buf[total] = '\0';
+    void *out = osty_rt_string_dup_site(buf, total, site);
+    free(buf);
+    return out;
+}
+
+static void *osty_rt_os_empty_string(const char *site) {
+    return osty_rt_string_dup_site("", 0, site);
+}
+
+static void *osty_rt_os_read_file_to_string(const char *path, const char *site) {
+    FILE *fp;
+    long size;
+    size_t read_n;
+    char *buf;
+    void *out;
+    if (path == NULL) {
+        errno = EINVAL;
+        return NULL;
+    }
+    fp = fopen(path, "rb");
+    if (fp == NULL) {
+        return NULL;
+    }
+    if (fseek(fp, 0, SEEK_END) != 0) {
+        fclose(fp);
+        return NULL;
+    }
+    size = ftell(fp);
+    if (size < 0) {
+        fclose(fp);
+        return NULL;
+    }
+    if (fseek(fp, 0, SEEK_SET) != 0) {
+        fclose(fp);
+        return NULL;
+    }
+    buf = (char *)osty_rt_xmalloc((size_t)size + 1, site);
+    read_n = fread(buf, 1, (size_t)size, fp);
+    if (read_n != (size_t)size) {
+        free(buf);
+        fclose(fp);
+        return NULL;
+    }
+    buf[size] = '\0';
+    out = osty_rt_string_dup_site(buf, (size_t)size, site);
+    free(buf);
+    fclose(fp);
+    return out;
+}
+
+static osty_rt_os_exec_result *osty_rt_os_exec_error_result(const char *prefix, const char *detail, const char *site) {
+    osty_rt_os_exec_result *out =
+        (osty_rt_os_exec_result *)osty_rt_xmalloc(sizeof(*out), site);
+    out->tag = 1;
+    out->exit_code = 0;
+    out->stdout_text = NULL;
+    out->stderr_text = NULL;
+    out->error_text = osty_rt_os_error_message(prefix, detail, site);
+    return out;
+}
+
+static osty_rt_os_string_result *osty_rt_os_string_error_result(const char *prefix, const char *detail, const char *site) {
+    osty_rt_os_string_result *out =
+        (osty_rt_os_string_result *)osty_rt_xmalloc(sizeof(*out), site);
+    out->tag = 1;
+    out->value_text = NULL;
+    out->error_text = osty_rt_os_error_message(prefix, detail, site);
+    return out;
+}
+
+#if defined(_WIN32)
+static char *osty_rt_os_win_strdup(const char *text, const char *site) {
+    size_t n = text == NULL ? 0 : strlen(text);
+    char *out = (char *)osty_rt_xmalloc(n + 1, site);
+    if (n != 0) {
+        memcpy(out, text, n);
+    }
+    out[n] = '\0';
+    return out;
+}
+
+static bool osty_rt_os_open_tempfile_win(char **out_path, HANDLE *out_handle) {
+    char dir[MAX_PATH + 1];
+    char name[MAX_PATH + 1];
+    SECURITY_ATTRIBUTES sa;
+    DWORD dir_len;
+    if (out_path == NULL || out_handle == NULL) {
+        return false;
+    }
+    dir_len = GetTempPathA((DWORD)sizeof(dir), dir);
+    if (dir_len == 0 || dir_len >= sizeof(dir)) {
+        return false;
+    }
+    if (GetTempFileNameA(dir, "ost", 0, name) == 0) {
+        return false;
+    }
+    sa.nLength = sizeof(sa);
+    sa.lpSecurityDescriptor = NULL;
+    sa.bInheritHandle = TRUE;
+    *out_handle = CreateFileA(
+        name,
+        GENERIC_READ | GENERIC_WRITE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        &sa,
+        OPEN_EXISTING,
+        FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_SEQUENTIAL_SCAN,
+        NULL
+    );
+    if (*out_handle == INVALID_HANDLE_VALUE) {
+        DeleteFileA(name);
+        return false;
+    }
+    *out_path = osty_rt_os_win_strdup(name, "runtime.os.tempfile.path");
+    return true;
+}
+
+static size_t osty_rt_os_win_quoted_len(const char *arg) {
+    size_t n = 0;
+    size_t backslashes = 0;
+    bool needs_quotes = false;
+    const unsigned char *p = (const unsigned char *)(arg == NULL ? "" : arg);
+    if (*p == '\0') {
+        return 2;
+    }
+    for (; *p != '\0'; p++) {
+        if (*p == ' ' || *p == '\t' || *p == '"') {
+            needs_quotes = true;
+        }
+    }
+    if (!needs_quotes) {
+        return strlen(arg);
+    }
+    n = 2;
+    p = (const unsigned char *)(arg == NULL ? "" : arg);
+    for (; *p != '\0'; p++) {
+        if (*p == '\\') {
+            backslashes++;
+            continue;
+        }
+        if (*p == '"') {
+            n += backslashes * 2 + 2;
+            backslashes = 0;
+            continue;
+        }
+        n += backslashes + 1;
+        backslashes = 0;
+    }
+    n += backslashes * 2;
+    return n;
+}
+
+static char *osty_rt_os_win_append_quoted(char *dst, const char *arg) {
+    size_t backslashes = 0;
+    bool needs_quotes = false;
+    const unsigned char *p = (const unsigned char *)(arg == NULL ? "" : arg);
+    if (*p == '\0') {
+        *dst++ = '"';
+        *dst++ = '"';
+        return dst;
+    }
+    for (; *p != '\0'; p++) {
+        if (*p == ' ' || *p == '\t' || *p == '"') {
+            needs_quotes = true;
+        }
+    }
+    if (!needs_quotes) {
+        size_t n = strlen(arg);
+        memcpy(dst, arg, n);
+        return dst + n;
+    }
+    *dst++ = '"';
+    p = (const unsigned char *)(arg == NULL ? "" : arg);
+    for (; *p != '\0'; p++) {
+        if (*p == '\\') {
+            backslashes++;
+            continue;
+        }
+        if (*p == '"') {
+            while (backslashes-- > 0) {
+                *dst++ = '\\';
+                *dst++ = '\\';
+            }
+            backslashes = 0;
+            *dst++ = '\\';
+            *dst++ = '"';
+            continue;
+        }
+        while (backslashes-- > 0) {
+            *dst++ = '\\';
+        }
+        backslashes = 0;
+        *dst++ = (char)(*p);
+    }
+    while (backslashes-- > 0) {
+        *dst++ = '\\';
+        *dst++ = '\\';
+    }
+    *dst++ = '"';
+    return dst;
+}
+
+static char *osty_rt_os_build_windows_command_line(const char *cmd, void *args, bool shell) {
+    int64_t arg_count = args != NULL ? osty_rt_list_len(args) : 0;
+    size_t total = 1;
+    char *buf;
+    char *cursor;
+    int64_t i;
+    if (shell) {
+        total += osty_rt_os_win_quoted_len("cmd.exe") + 1;
+        total += osty_rt_os_win_quoted_len("/d") + 1;
+        total += osty_rt_os_win_quoted_len("/s") + 1;
+        total += osty_rt_os_win_quoted_len("/c") + 1;
+        total += osty_rt_os_win_quoted_len(cmd == NULL ? "" : cmd);
+    } else {
+        total += osty_rt_os_win_quoted_len(cmd == NULL ? "" : cmd);
+        for (i = 0; i < arg_count; i++) {
+            const char *arg = (const char *)osty_rt_list_get_ptr(args, i);
+            total += 1 + osty_rt_os_win_quoted_len(arg == NULL ? "" : arg);
+        }
+    }
+    buf = (char *)osty_rt_xmalloc(total, "runtime.os.exec.win.cmdline");
+    cursor = buf;
+    if (shell) {
+        cursor = osty_rt_os_win_append_quoted(cursor, "cmd.exe");
+        *cursor++ = ' ';
+        cursor = osty_rt_os_win_append_quoted(cursor, "/d");
+        *cursor++ = ' ';
+        cursor = osty_rt_os_win_append_quoted(cursor, "/s");
+        *cursor++ = ' ';
+        cursor = osty_rt_os_win_append_quoted(cursor, "/c");
+        *cursor++ = ' ';
+        cursor = osty_rt_os_win_append_quoted(cursor, cmd == NULL ? "" : cmd);
+    } else {
+        cursor = osty_rt_os_win_append_quoted(cursor, cmd == NULL ? "" : cmd);
+        for (i = 0; i < arg_count; i++) {
+            const char *arg = (const char *)osty_rt_list_get_ptr(args, i);
+            *cursor++ = ' ';
+            cursor = osty_rt_os_win_append_quoted(cursor, arg == NULL ? "" : arg);
+        }
+    }
+    *cursor = '\0';
+    return buf;
+}
+
+static osty_rt_os_exec_result *osty_rt_os_exec_windows(const char *cmd, void *args, bool shell) {
+    char *stdout_path = NULL;
+    char *stderr_path = NULL;
+    char *cmdline = NULL;
+    void *stdout_text = NULL;
+    void *stderr_text = NULL;
+    HANDLE stdout_handle = INVALID_HANDLE_VALUE;
+    HANDLE stderr_handle = INVALID_HANDLE_VALUE;
+    HANDLE stdin_handle = INVALID_HANDLE_VALUE;
+    PROCESS_INFORMATION pi;
+    STARTUPINFOA si;
+    DWORD exit_code = 0;
+    osty_rt_os_exec_result *out;
+    if (cmd == NULL || cmd[0] == '\0') {
+        return osty_rt_os_exec_error_result("failed to launch process", "command is empty", "runtime.os.exec.error");
+    }
+    if (!osty_rt_os_open_tempfile_win(&stdout_path, &stdout_handle)) {
+        return osty_rt_os_exec_error_result("failed to launch process", "could not create stdout temp file", "runtime.os.exec.error");
+    }
+    if (!osty_rt_os_open_tempfile_win(&stderr_path, &stderr_handle)) {
+        CloseHandle(stdout_handle);
+        DeleteFileA(stdout_path);
+        free(stdout_path);
+        return osty_rt_os_exec_error_result("failed to launch process", "could not create stderr temp file", "runtime.os.exec.error");
+    }
+    {
+        SECURITY_ATTRIBUTES sa;
+        sa.nLength = sizeof(sa);
+        sa.lpSecurityDescriptor = NULL;
+        sa.bInheritHandle = TRUE;
+        stdin_handle = CreateFileA("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &sa, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (stdin_handle == INVALID_HANDLE_VALUE) {
+            CloseHandle(stdout_handle);
+            CloseHandle(stderr_handle);
+            DeleteFileA(stdout_path);
+            DeleteFileA(stderr_path);
+            free(stdout_path);
+            free(stderr_path);
+            return osty_rt_os_exec_error_result("failed to launch process", "could not open NUL for stdin", "runtime.os.exec.error");
+        }
+    }
+    cmdline = osty_rt_os_build_windows_command_line(cmd, args, shell);
+    ZeroMemory(&pi, sizeof(pi));
+    ZeroMemory(&si, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESTDHANDLES;
+    si.hStdInput = stdin_handle;
+    si.hStdOutput = stdout_handle;
+    si.hStdError = stderr_handle;
+    if (!CreateProcessA(NULL, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
+        DWORD code = GetLastError();
+        char buf[96];
+        int written = snprintf(buf, sizeof(buf), "win32 error %lu", (unsigned long)code);
+        CloseHandle(stdin_handle);
+        CloseHandle(stdout_handle);
+        CloseHandle(stderr_handle);
+        DeleteFileA(stdout_path);
+        DeleteFileA(stderr_path);
+        free(stdout_path);
+        free(stderr_path);
+        free(cmdline);
+        if (written < 0) {
+            return osty_rt_os_exec_error_result("failed to launch process", "CreateProcessA failed", "runtime.os.exec.error");
+        }
+        return osty_rt_os_exec_error_result("failed to launch process", buf, "runtime.os.exec.error");
+    }
+    CloseHandle(stdin_handle);
+    CloseHandle(stdout_handle);
+    CloseHandle(stderr_handle);
+    free(cmdline);
+    WaitForSingleObject(pi.hProcess, INFINITE);
+    if (!GetExitCodeProcess(pi.hProcess, &exit_code)) {
+        DWORD code = GetLastError();
+        char buf[96];
+        int written = snprintf(buf, sizeof(buf), "win32 error %lu", (unsigned long)code);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        DeleteFileA(stdout_path);
+        DeleteFileA(stderr_path);
+        free(stdout_path);
+        free(stderr_path);
+        if (written < 0) {
+            return osty_rt_os_exec_error_result("failed to inspect process exit code", "GetExitCodeProcess failed", "runtime.os.exec.error");
+        }
+        return osty_rt_os_exec_error_result("failed to inspect process exit code", buf, "runtime.os.exec.error");
+    }
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+    stdout_text = osty_rt_os_read_file_to_string(stdout_path, "runtime.os.exec.stdout");
+    stderr_text = osty_rt_os_read_file_to_string(stderr_path, "runtime.os.exec.stderr");
+    DeleteFileA(stdout_path);
+    DeleteFileA(stderr_path);
+    free(stdout_path);
+    free(stderr_path);
+    if (stdout_text == NULL) {
+        return osty_rt_os_exec_error_result("failed to read process stdout", strerror(errno), "runtime.os.exec.error");
+    }
+    if (stderr_text == NULL) {
+        return osty_rt_os_exec_error_result("failed to read process stderr", strerror(errno), "runtime.os.exec.error");
+    }
+    out = (osty_rt_os_exec_result *)osty_rt_xmalloc(sizeof(*out), "runtime.os.exec.result");
+    out->tag = 0;
+    out->exit_code = (int64_t)exit_code;
+    out->stdout_text = stdout_text;
+    out->stderr_text = stderr_text;
+    out->error_text = NULL;
+    return out;
+}
+#else
+static char **osty_rt_os_build_posix_argv(const char *cmd, void *args, bool shell) {
+    int64_t arg_count = args != NULL ? osty_rt_list_len(args) : 0;
+    char **argv;
+    int64_t i;
+    if (shell) {
+        argv = (char **)osty_rt_xmalloc(sizeof(char *) * 4, "runtime.os.exec.argv");
+        argv[0] = (char *)"/bin/sh";
+        argv[1] = (char *)"-c";
+        argv[2] = (char *)(cmd == NULL ? "" : cmd);
+        argv[3] = NULL;
+        return argv;
+    }
+    argv = (char **)osty_rt_xmalloc(sizeof(char *) * (size_t)(arg_count + 2), "runtime.os.exec.argv");
+    argv[0] = (char *)(cmd == NULL ? "" : cmd);
+    for (i = 0; i < arg_count; i++) {
+        char *arg = (char *)osty_rt_list_get_ptr(args, i);
+        argv[i + 1] = arg == NULL ? (char *)"" : arg;
+    }
+    argv[arg_count + 1] = NULL;
+    return argv;
+}
+
+static int osty_rt_os_open_tempfile_posix(const char *prefix, char **out_path) {
+    const char *tmp = getenv("TMPDIR");
+    size_t tmp_len;
+    size_t total;
+    char *path;
+    int fd;
+    if (out_path == NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (tmp == NULL || tmp[0] == '\0') {
+        tmp = "/tmp";
+    }
+    tmp_len = strlen(tmp);
+    total = tmp_len + 1 + strlen(prefix) + 6 + 1;
+    path = (char *)osty_rt_xmalloc(total, "runtime.os.exec.tmp.path");
+    snprintf(path, total, "%s/%sXXXXXX", tmp, prefix);
+    fd = mkstemp(path);
+    if (fd < 0) {
+        free(path);
+        return -1;
+    }
+    *out_path = path;
+    return fd;
+}
+
+static osty_rt_os_exec_result *osty_rt_os_exec_posix(const char *cmd, void *args, bool shell) {
+    char *stdout_path = NULL;
+    char *stderr_path = NULL;
+    int stdout_fd = -1;
+    int stderr_fd = -1;
+    int exec_pipe[2] = {-1, -1};
+    char **argv = NULL;
+    pid_t pid;
+    int status = 0;
+    int exec_errno = 0;
+    ssize_t exec_read;
+    pid_t waited;
+    void *stdout_text = NULL;
+    void *stderr_text = NULL;
+    osty_rt_os_exec_result *out;
+    sigset_t sigurg_mask;
+    sigset_t old_mask;
+    int sigmask_set = 0;
+    struct sigaction old_sigchld;
+    struct sigaction default_sigchld;
+    int sigchld_reset = 0;
+    if (cmd == NULL || cmd[0] == '\0') {
+        return osty_rt_os_exec_error_result("failed to launch process", "command is empty", "runtime.os.exec.error");
+    }
+    stdout_fd = osty_rt_os_open_tempfile_posix("osty-out.", &stdout_path);
+    if (stdout_fd < 0) {
+        return osty_rt_os_exec_error_result("failed to launch process", strerror(errno), "runtime.os.exec.error");
+    }
+    stderr_fd = osty_rt_os_open_tempfile_posix("osty-err.", &stderr_path);
+    if (stderr_fd < 0) {
+        close(stdout_fd);
+        unlink(stdout_path);
+        free(stdout_path);
+        return osty_rt_os_exec_error_result("failed to launch process", strerror(errno), "runtime.os.exec.error");
+    }
+    if (pipe(exec_pipe) != 0) {
+        close(stdout_fd);
+        close(stderr_fd);
+        unlink(stdout_path);
+        unlink(stderr_path);
+        free(stdout_path);
+        free(stderr_path);
+        return osty_rt_os_exec_error_result("failed to launch process", strerror(errno), "runtime.os.exec.error");
+    }
+    (void)fcntl(exec_pipe[1], F_SETFD, FD_CLOEXEC);
+    argv = osty_rt_os_build_posix_argv(cmd, args, shell);
+    if (sigaction(SIGCHLD, NULL, &old_sigchld) == 0 && old_sigchld.sa_handler == SIG_IGN) {
+        memset(&default_sigchld, 0, sizeof(default_sigchld));
+        default_sigchld.sa_handler = SIG_DFL;
+        sigemptyset(&default_sigchld.sa_mask);
+        if (sigaction(SIGCHLD, &default_sigchld, NULL) == 0) {
+            sigchld_reset = 1;
+        }
+    }
+    pid = fork();
+    if (pid < 0) {
+        int err = errno;
+        if (sigchld_reset) {
+            (void)sigaction(SIGCHLD, &old_sigchld, NULL);
+        }
+        close(stdout_fd);
+        close(stderr_fd);
+        close(exec_pipe[0]);
+        close(exec_pipe[1]);
+        unlink(stdout_path);
+        unlink(stderr_path);
+        free(stdout_path);
+        free(stderr_path);
+        free(argv);
+        return osty_rt_os_exec_error_result("failed to launch process", strerror(err), "runtime.os.exec.error");
+    }
+    if (pid == 0) {
+        close(exec_pipe[0]);
+        if (dup2(stdout_fd, STDOUT_FILENO) < 0 || dup2(stderr_fd, STDERR_FILENO) < 0) {
+            int err = errno;
+            (void)write(exec_pipe[1], &err, sizeof(err));
+            _exit(127);
+        }
+        close(stdout_fd);
+        close(stderr_fd);
+        if (shell) {
+            execv("/bin/sh", argv);
+        } else {
+            execvp(cmd, argv);
+        }
+        {
+            int err = errno;
+            (void)write(exec_pipe[1], &err, sizeof(err));
+        }
+        _exit(127);
+    }
+    close(stdout_fd);
+    close(stderr_fd);
+    close(exec_pipe[1]);
+    sigemptyset(&sigurg_mask);
+    sigaddset(&sigurg_mask, SIGURG);
+    if (sigprocmask(SIG_BLOCK, &sigurg_mask, &old_mask) == 0) {
+        sigmask_set = 1;
+    }
+    do {
+        waited = waitpid(pid, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    do {
+        exec_read = read(exec_pipe[0], &exec_errno, sizeof(exec_errno));
+    } while (exec_read < 0 && errno == EINTR);
+    close(exec_pipe[0]);
+    if (sigmask_set) {
+        (void)sigprocmask(SIG_SETMASK, &old_mask, NULL);
+    }
+    if (sigchld_reset) {
+        (void)sigaction(SIGCHLD, &old_sigchld, NULL);
+    }
+    free(argv);
+    if (waited < 0) {
+        unlink(stdout_path);
+        unlink(stderr_path);
+        free(stdout_path);
+        free(stderr_path);
+        return osty_rt_os_exec_error_result("failed to wait for process", strerror(errno), "runtime.os.exec.error");
+    }
+    if (exec_read > 0) {
+        unlink(stdout_path);
+        unlink(stderr_path);
+        free(stdout_path);
+        free(stderr_path);
+        return osty_rt_os_exec_error_result("failed to launch process", strerror(exec_errno), "runtime.os.exec.error");
+    }
+    stdout_text = osty_rt_os_read_file_to_string(stdout_path, "runtime.os.exec.stdout");
+    stderr_text = osty_rt_os_read_file_to_string(stderr_path, "runtime.os.exec.stderr");
+    unlink(stdout_path);
+    unlink(stderr_path);
+    free(stdout_path);
+    free(stderr_path);
+    if (stdout_text == NULL) {
+        return osty_rt_os_exec_error_result("failed to read process stdout", strerror(errno), "runtime.os.exec.error");
+    }
+    if (stderr_text == NULL) {
+        return osty_rt_os_exec_error_result("failed to read process stderr", strerror(errno), "runtime.os.exec.error");
+    }
+    out = (osty_rt_os_exec_result *)osty_rt_xmalloc(sizeof(*out), "runtime.os.exec.result");
+    out->tag = 0;
+    if (WIFEXITED(status)) {
+        out->exit_code = (int64_t)WEXITSTATUS(status);
+    } else if (WIFSIGNALED(status)) {
+        out->exit_code = 128 + (int64_t)WTERMSIG(status);
+    } else {
+        out->exit_code = 1;
+    }
+    out->stdout_text = stdout_text;
+    out->stderr_text = stderr_text;
+    out->error_text = NULL;
+    return out;
+}
+#endif
+
+osty_rt_os_exec_result *osty_rt_os_exec(const char *cmd, void *args, bool shell) {
+#if defined(_WIN32)
+    return osty_rt_os_exec_windows(cmd, args, shell);
+#else
+    return osty_rt_os_exec_posix(cmd, args, shell);
+#endif
+}
+
+osty_rt_os_string_result *osty_rt_os_hostname(void) {
+#if defined(_WIN32)
+    char buf[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD size = (DWORD)sizeof(buf);
+    if (!GetComputerNameA(buf, &size)) {
+        DWORD code = GetLastError();
+        char errbuf[96];
+        int written = snprintf(errbuf, sizeof(errbuf), "win32 error %lu", (unsigned long)code);
+        if (written < 0) {
+            return osty_rt_os_string_error_result("failed to get hostname", "GetComputerNameA failed", "runtime.os.hostname.error");
+        }
+        return osty_rt_os_string_error_result("failed to get hostname", errbuf, "runtime.os.hostname.error");
+    }
+    {
+        osty_rt_os_string_result *out =
+            (osty_rt_os_string_result *)osty_rt_xmalloc(sizeof(*out), "runtime.os.hostname.result");
+        out->tag = 0;
+        out->value_text = osty_rt_string_dup_site(buf, (size_t)size, "runtime.os.hostname");
+        out->error_text = NULL;
+        return out;
+    }
+#else
+    char buf[256];
+    if (gethostname(buf, sizeof(buf)) != 0) {
+        int err = errno;
+        if (err == 0) {
+            return osty_rt_os_string_error_result("failed to get hostname", "gethostname failed", "runtime.os.hostname.error");
+        }
+        return osty_rt_os_string_error_result("failed to get hostname", strerror(err), "runtime.os.hostname.error");
+    }
+    buf[sizeof(buf) - 1] = '\0';
+    {
+        osty_rt_os_string_result *out =
+            (osty_rt_os_string_result *)osty_rt_xmalloc(sizeof(*out), "runtime.os.hostname.result");
+        out->tag = 0;
+        out->value_text = osty_rt_string_dup_site(buf, strlen(buf), "runtime.os.hostname");
+        out->error_text = NULL;
+        return out;
+    }
+#endif
+}
+
+void osty_rt_os_exec_result_free(osty_rt_os_exec_result *result) {
+    free(result);
+}
+
+void osty_rt_os_string_result_free(osty_rt_os_string_result *result) {
+    free(result);
+}
+
+int64_t osty_rt_os_pid(void) {
+#if defined(_WIN32)
+    return (int64_t)GetCurrentProcessId();
+#else
+    return (int64_t)getpid();
+#endif
+}
+
+void osty_rt_os_exit(int32_t code) {
+    exit((int)code);
 }

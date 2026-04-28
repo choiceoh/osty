@@ -54,6 +54,7 @@ type generator struct {
 	stdBytesAliases      map[string]bool
 	stdStringsAliases    map[string]bool
 	stdEnvAliases        map[string]bool
+	stdOsAliases         map[string]bool
 	runtimeDecls         map[string]runtimeDecl
 	runtimeDeclOrder     []string
 	traceHelpers         map[string]string
