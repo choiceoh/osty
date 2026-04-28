@@ -54,6 +54,12 @@ type Result struct {
 	// stable selfhost-node-id structured surface over span-rematching through
 	// the Go AST.
 	NativeCheckResult *api.CheckResult
+
+	// inspectSource is the single-file source used to preserve the legacy
+	// Inspect(file, result) helper without reintroducing Go-side inference
+	// replay. Package/workspace callers should use the native package inspect
+	// path directly.
+	inspectSource []byte
 }
 
 // NativeCheckerTelemetry bundles the counters the bootstrapped native checker

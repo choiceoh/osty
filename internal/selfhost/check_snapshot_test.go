@@ -99,20 +99,20 @@ func dumpCheckSnapshot(r CheckResult) string {
 
 	b.WriteString("typedNodes\n")
 	for _, node := range r.TypedNodes {
-		fmt.Fprintf(&b, "  node=%d nodeId=%d typeId=%d kind=%s span=%d:%d type=%s\n",
-			node.Node, node.NodeID, node.TypeID, node.Kind, node.Start, node.End, checkSnapshotTypeString(node.Type))
+		fmt.Fprintf(&b, "  id=%s nodeKey=%s typeKey=%s node=%d nodeId=%d typeId=%d kind=%s span=%d:%d type=%s\n",
+			shortCheckID(node.ID), shortCheckID(node.NodeKey), shortCheckID(node.TypeKey), node.Node, node.NodeID, node.TypeID, node.Kind, node.Start, node.End, checkSnapshotTypeString(node.Type))
 	}
 
 	b.WriteString("bindings\n")
 	for _, binding := range r.Bindings {
-		fmt.Fprintf(&b, "  bindingId=%d node=%d nodeId=%d name=%s mutable=%t typeId=%d span=%d:%d type=%s\n",
-			binding.BindingID, binding.Node, binding.NodeID, binding.Name, binding.Mutable, binding.TypeID, binding.Start, binding.End, checkSnapshotTypeString(binding.Type))
+		fmt.Fprintf(&b, "  id=%s nodeKey=%s typeKey=%s bindingId=%d node=%d nodeId=%d name=%s mutable=%t typeId=%d span=%d:%d type=%s\n",
+			shortCheckID(binding.ID), shortCheckID(binding.NodeKey), shortCheckID(binding.TypeKey), binding.BindingID, binding.Node, binding.NodeID, binding.Name, binding.Mutable, binding.TypeID, binding.Start, binding.End, checkSnapshotTypeString(binding.Type))
 	}
 
 	b.WriteString("symbols\n")
 	for _, symbol := range r.Symbols {
-		fmt.Fprintf(&b, "  symbolId=%d node=%d nodeId=%d kind=%s name=%s owner=%s typeId=%d span=%d:%d type=%s\n",
-			symbol.SymbolID, symbol.Node, symbol.NodeID, symbol.Kind, symbol.Name, symbol.Owner, symbol.TypeID, symbol.Start, symbol.End, checkSnapshotTypeString(symbol.Type))
+		fmt.Fprintf(&b, "  id=%s nodeKey=%s typeKey=%s symbolId=%d node=%d nodeId=%d kind=%s name=%s owner=%s typeId=%d span=%d:%d type=%s\n",
+			shortCheckID(symbol.ID), shortCheckID(symbol.NodeKey), shortCheckID(symbol.TypeKey), symbol.SymbolID, symbol.Node, symbol.NodeID, symbol.Kind, symbol.Name, symbol.Owner, symbol.TypeID, symbol.Start, symbol.End, checkSnapshotTypeString(symbol.Type))
 	}
 
 	b.WriteString("instantiations\n")
@@ -121,8 +121,8 @@ func dumpCheckSnapshot(r CheckResult) string {
 		for i := range inst.TypeArgs {
 			typeArgs = append(typeArgs, inst.TypeArgs[i].String())
 		}
-		fmt.Fprintf(&b, "  instantiationId=%d node=%d nodeId=%d callee=%s span=%d:%d typeArgIds=%v typeArgs=[%s] resultTypeId=%d resultType=%s\n",
-			inst.InstantiationID, inst.Node, inst.NodeID, inst.Callee, inst.Start, inst.End, inst.TypeArgIDs, strings.Join(typeArgs, ", "), inst.ResultTypeID, checkSnapshotTypeString(inst.ResultType))
+		fmt.Fprintf(&b, "  id=%s nodeKey=%s resultTypeKey=%s instantiationId=%d node=%d nodeId=%d callee=%s span=%d:%d typeArgIds=%v typeArgKeys=%v typeArgs=[%s] resultTypeId=%d resultType=%s\n",
+			shortCheckID(inst.ID), shortCheckID(inst.NodeKey), shortCheckID(inst.ResultTypeKey), inst.InstantiationID, inst.Node, inst.NodeID, inst.Callee, inst.Start, inst.End, inst.TypeArgIDs, shortCheckIDs(inst.TypeArgKeys), strings.Join(typeArgs, ", "), inst.ResultTypeID, checkSnapshotTypeString(inst.ResultType))
 	}
 
 	b.WriteString("diagnostics\n")
@@ -170,4 +170,19 @@ func checkSnapshotTypeString(typ *TypeRepr) string {
 		return ""
 	}
 	return typ.String()
+}
+
+func shortCheckIDs(ids []string) []string {
+	out := make([]string, len(ids))
+	for i, id := range ids {
+		out[i] = shortCheckID(id)
+	}
+	return out
+}
+
+func shortCheckID(id string) string {
+	if len(id) <= 20 {
+		return id
+	}
+	return id[:20]
 }

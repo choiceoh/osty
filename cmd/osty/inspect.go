@@ -1,49 +1,67 @@
 package main
 
-// Helpers for the `osty check --inspect` flag. The inspector itself
-// lives in internal/check/inspect.go; this file only wires it to the
-// CLI: it picks the output format (text vs NDJSON) based on --json and
-// prefixes output with file paths when more than one file is involved.
-//
-// Algorithm reference: LANG_SPEC_v0.5/02a-type-inference.md.
+// Helpers for the `osty check --inspect` flag. The inference observations come
+// from the selfhost inspect pass; this file only buckets package records by
+// owning file and chooses the output format.
 
 import (
 	"fmt"
 	"os"
 
-	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
-	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/selfhost/api"
 )
 
-// runInspect emits inspector records for a single file to stdout.
-// Chooses NDJSON when the global --json flag is set, otherwise the
-// tab-separated text form.
-func runInspect(file *ast.File, chk *check.Result, flags cliFlags) {
-	if file == nil || chk == nil {
-		return
+func runInspectSource(path string, src []byte, flags cliFlags) {
+	if !flags.jsonOutput {
+		fmt.Printf("# %s\n", path)
 	}
-	recs := check.Inspect(file, chk)
-	writeInspect(recs, flags)
+	writeInspect(check.InspectSource(src, nil), flags)
 }
 
-// runInspectPackage emits inspector records for every file in pkg,
-// prefixing each file's section with its path so merged output remains
-// readable. The chk Result is shared across the package's files, so we
-// call Inspect once per file using the same Result.
-func runInspectPackage(pkg *resolve.Package, chk *check.Result, flags cliFlags) {
-	if pkg == nil || chk == nil {
+func runInspectPackageInput(input selfhost.PackageCheckInput, onlyPath string, flags cliFlags) {
+	recs, err := selfhost.InspectPackageStructured(input)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty check --inspect: %v\n", err)
 		return
 	}
-	for _, pf := range pkg.Files {
-		if pf == nil || pf.File == nil {
+	if len(recs) == 0 {
+		return
+	}
+	buckets := make(map[int][]api.InspectRecord, len(input.Files))
+	for _, rec := range recs {
+		idx := findOwningFile(input.Files, rec.Start)
+		if idx < 0 {
+			continue
+		}
+		rel := rec
+		rel.Start -= input.Files[idx].Base
+		rel.End -= input.Files[idx].Base
+		if rel.Start < 0 {
+			rel.Start = 0
+		}
+		if rel.End < rel.Start {
+			rel.End = rel.Start
+		}
+		buckets[idx] = append(buckets[idx], rel)
+	}
+	for i, f := range input.Files {
+		if onlyPath != "" && f.Path != onlyPath {
+			continue
+		}
+		bucket := buckets[i]
+		if len(bucket) == 0 {
 			continue
 		}
 		if !flags.jsonOutput {
-			fmt.Printf("# %s\n", pf.Path)
+			label := f.Path
+			if label == "" {
+				label = f.Name
+			}
+			fmt.Printf("# %s\n", label)
 		}
-		recs := check.Inspect(pf.File, chk)
-		writeInspect(recs, flags)
+		writeInspect(check.InspectRecordsFromSelfhost(f.Source, bucket), flags)
 	}
 }
 

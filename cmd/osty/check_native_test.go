@@ -60,28 +60,25 @@ fn bad() -> Int {
 	}
 }
 
-// TestCheckCLINativeRejectsInspectFlag pins the remaining flag
-// compatibility contract. --inspect still probes the Go check.Result
-// shape, which --native never materializes, so combining them is
-// explicitly rejected at the dispatch site with exit code 2.
-func TestCheckCLINativeRejectsInspectFlag(t *testing.T) {
+// TestCheckCLINativeInspectFlagUsesSelfhost pins that --inspect is served by
+// the selfhost inspect pass on the native check path, not by the retired Go
+// check.Result replay.
+func TestCheckCLINativeInspectFlagUsesSelfhost(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.osty")
-	if err := os.WriteFile(path, []byte(`fn main() {}
+	if err := os.WriteFile(path, []byte(`fn main() {
+    let x = 1
+    x
+}
 `), 0o644); err != nil {
 		t.Fatalf("write source: %v", err)
 	}
-	// --inspect is declared as a global flag in parseFlags(), so Go's
-	// flag package only recognizes it
-	// before the subcommand. Pre-subcommand placement is the normal
-	// user ergonomic for those flags; combining them with --native
-	// must still be rejected at the dispatch site.
 	got := runOstyCLI(t, "--inspect", "check", "--native", path)
-	if got.exit != 2 {
-		t.Fatalf("exit = %d, want 2 (flag-incompatibility rejection)\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	if got.exit != 0 {
+		t.Fatalf("exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
 	}
-	if !strings.Contains(got.stderr, "not supported") {
-		t.Fatalf("stderr missing `not supported` explanation:\n%s", got.stderr)
+	if !strings.Contains(got.stdout, "BIND") || !strings.Contains(got.stdout, "Int") {
+		t.Fatalf("stdout missing selfhost inspect rows:\n%s", got.stdout)
 	}
 }
 

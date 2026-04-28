@@ -2,17 +2,17 @@ summary assignments=1 accepted=1 errors=1
 errorsByContext E0702=1
 errorDetails E0702 no field `age` on type `User` @L4:C19=1
 typedNodes
-  node=5 nodeId=5 typeId=17 kind=StringLit span=69:74 type=String
-  node=7 nodeId=7 typeId=118 kind=StructLit span=61:76 type=User
-  node=10 nodeId=10 typeId=118 kind=Ident span=91:95 type=User
-  node=13 nodeId=13 typeId=19 kind=Block span=39:101 type=()
+  id=typed-node:b78cfb3ed nodeKey=node:53b25d7ecdff87a typeKey=type:27afd946bb3613d node=5 nodeId=5 typeId=17 kind=StringLit span=69:74 type=String
+  id=typed-node:8cf4577ad nodeKey=node:376e28592af0dc9 typeKey=type:addc461d1f10d07 node=7 nodeId=7 typeId=118 kind=StructLit span=61:76 type=User
+  id=typed-node:b56e41f63 nodeKey=node:ab31c47955150d2 typeKey=type:addc461d1f10d07 node=10 nodeId=10 typeId=118 kind=Ident span=91:95 type=User
+  id=typed-node:fc919e5a0 nodeKey=node:4c84bd6cefe7767 typeKey=type:520c4bf26e2fabc node=13 nodeId=13 typeId=19 kind=Block span=39:101 type=()
 bindings
-  bindingId=0 node=3 nodeId=3 name=user mutable=false typeId=118 span=49:53 type=User
-  bindingId=1 node=9 nodeId=9 name=age mutable=false typeId=1 span=85:88 type=Poison
+  id=binding:bce7801e15e8 nodeKey=node:b0049a2b702e748 typeKey=type:addc461d1f10d07 bindingId=0 node=3 nodeId=3 name=user mutable=false typeId=118 span=49:53 type=User
+  id=binding:cf88212b883f nodeKey=node:12aeb24100020eb typeKey=type:50eaecf185276b1 bindingId=1 node=9 nodeId=9 name=age mutable=false typeId=1 span=85:88 type=Poison
 symbols
-  symbolId=0 node=2 nodeId=2 kind=struct name=User owner= typeId=118 span=0:28 type=User
-  symbolId=1 node=1 nodeId=1 kind=field name=name owner=User typeId=17 span=14:26 type=String
-  symbolId=2 node=14 nodeId=14 kind=fn name=main owner= typeId=119 span=29:101 type=fn() -> ()
+  id=symbol:83a3a2ff347d8 nodeKey=node:95d51a212c26d2d typeKey=type:addc461d1f10d07 symbolId=0 node=2 nodeId=2 kind=struct name=User owner= typeId=118 span=0:28 type=User
+  id=symbol:fa3a474531148 nodeKey=node:400970a6a9853d2 typeKey=type:27afd946bb3613d symbolId=1 node=1 nodeId=1 kind=field name=name owner=User typeId=17 span=14:26 type=String
+  id=symbol:09e0892a953e6 nodeKey=node:3932e8355a8e183 typeKey=type:b4f942e1ed0777f symbolId=2 node=14 nodeId=14 kind=fn name=main owner= typeId=119 span=29:101 type=fn() -> ()
 instantiations
 diagnostics
   code=E0702 severity=error span=95:99 line=4:19-4:23 message=no field `age` on type `User`

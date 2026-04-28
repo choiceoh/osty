@@ -10,7 +10,12 @@ import "github.com/osty/osty/internal/selfhost/api"
 // self-host pass emits token-indexed spans which this adapter converts
 // via the lex stream, matching the semantics adaptCheckResult applies
 // to structured CheckedNode records.
-func InspectFromSource(src []byte) []api.InspectRecord {
+func InspectFromSource(src []byte) (records []api.InspectRecord) {
+	defer func() {
+		if recover() != nil {
+			records = nil
+		}
+	}()
 	if len(src) == 0 {
 		return nil
 	}
@@ -38,6 +43,29 @@ func adaptInspectRecords(recs []*InspectRecord, rt runeTable, stream *FrontLexSt
 			continue
 		}
 		start, end := checkNodeOffsets(rt, stream, r.start, r.end)
+		out = append(out, api.InspectRecord{
+			Start:    start,
+			End:      end,
+			NodeKind: r.nodeKind,
+			Rule:     r.rule,
+			Type:     frontTypeReprToAPI(r.typeRepr),
+			HintName: r.hintName,
+			Notes:    append([]string(nil), r.notes...),
+		})
+	}
+	return out
+}
+
+func adaptInspectRecordsWithTokenLayout(recs []*InspectRecord, layout *selfhostPackageTokenLayout) []api.InspectRecord {
+	if len(recs) == 0 {
+		return nil
+	}
+	out := make([]api.InspectRecord, 0, len(recs))
+	for _, r := range recs {
+		if r == nil {
+			continue
+		}
+		start, end := checkNodeOffsetsWithTokenLayout(layout, r.start, r.end)
 		out = append(out, api.InspectRecord{
 			Start:    start,
 			End:      end,

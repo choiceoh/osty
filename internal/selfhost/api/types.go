@@ -7,6 +7,12 @@
 // compile unchanged.
 package api
 
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"strconv"
+)
+
 // CheckSummary is the exported Go shape for the bootstrapped Osty checker.
 //
 // The self-hosted checker is authoritative for mainstream checker diagnostics
@@ -127,23 +133,29 @@ func joinTypeReprStrings(ss []string, sep string) string {
 
 // CheckedNode records a checked expression node and its inferred type.
 type CheckedNode struct {
-	Node   int       `json:"node"`   // legacy alias for NodeID
-	NodeID int       `json:"nodeId"` // stable selfhost AST node id
-	Kind   string    `json:"kind"`
-	Type   *TypeRepr `json:"type"`
-	TypeID int       `json:"typeId"`
-	Start  int       `json:"start"`
-	End    int       `json:"end"`
+	ID      string    `json:"id,omitempty"`      // stable record identity
+	NodeKey string    `json:"nodeKey,omitempty"` // stable node identity
+	Node    int       `json:"node"`              // legacy alias for NodeID
+	NodeID  int       `json:"nodeId"`            // selfhost arena id, stable only within one check run
+	Kind    string    `json:"kind"`
+	Type    *TypeRepr `json:"type"`
+	TypeID  int       `json:"typeId"`            // legacy checker-arena type id
+	TypeKey string    `json:"typeKey,omitempty"` // stable structured type identity
+	Start   int       `json:"start"`
+	End     int       `json:"end"`
 }
 
 // CheckedBinding records a local binding that the bootstrapped checker typed.
 type CheckedBinding struct {
+	ID        string    `json:"id,omitempty"`
+	NodeKey   string    `json:"nodeKey,omitempty"`
 	Node      int       `json:"node"` // legacy alias for NodeID
 	NodeID    int       `json:"nodeId"`
-	BindingID int       `json:"bindingId"`
+	BindingID int       `json:"bindingId"` // legacy sequential id
 	Name      string    `json:"name"`
 	Type      *TypeRepr `json:"type"`
-	TypeID    int       `json:"typeId"`
+	TypeID    int       `json:"typeId"` // legacy checker-arena type id
+	TypeKey   string    `json:"typeKey,omitempty"`
 	Mutable   bool      `json:"mutable"`
 	Start     int       `json:"start"`
 	End       int       `json:"end"`
@@ -151,28 +163,35 @@ type CheckedBinding struct {
 
 // CheckedSymbol records a declaration collected by the bootstrapped checker.
 type CheckedSymbol struct {
+	ID       string    `json:"id,omitempty"`
+	NodeKey  string    `json:"nodeKey,omitempty"`
 	Node     int       `json:"node"` // legacy alias for NodeID
 	NodeID   int       `json:"nodeId"`
-	SymbolID int       `json:"symbolId"`
+	SymbolID int       `json:"symbolId"` // legacy sequential id
 	Kind     string    `json:"kind"`
 	Name     string    `json:"name"`
 	Owner    string    `json:"owner"`
 	Type     *TypeRepr `json:"type"`
-	TypeID   int       `json:"typeId"`
+	TypeID   int       `json:"typeId"` // legacy checker-arena type id
+	TypeKey  string    `json:"typeKey,omitempty"`
 	Start    int       `json:"start"`
 	End      int       `json:"end"`
 }
 
 // CheckInstantiation records a generic function or method instantiation.
 type CheckInstantiation struct {
+	ID              string     `json:"id,omitempty"`
+	NodeKey         string     `json:"nodeKey,omitempty"`
 	Node            int        `json:"node"` // legacy alias for NodeID
 	NodeID          int        `json:"nodeId"`
-	InstantiationID int        `json:"instantiationId"`
+	InstantiationID int        `json:"instantiationId"` // legacy sequential id
 	Callee          string     `json:"callee"`
 	TypeArgs        []TypeRepr `json:"typeArgs"`
-	TypeArgIDs      []int      `json:"typeArgIds,omitempty"`
+	TypeArgIDs      []int      `json:"typeArgIds,omitempty"` // legacy checker-arena type ids
+	TypeArgKeys     []string   `json:"typeArgKeys,omitempty"`
 	ResultType      *TypeRepr  `json:"resultType,omitempty"`
-	ResultTypeID    int        `json:"resultTypeId"`
+	ResultTypeID    int        `json:"resultTypeId"` // legacy checker-arena type id
+	ResultTypeKey   string     `json:"resultTypeKey,omitempty"`
 	Start           int        `json:"start"`
 	End             int        `json:"end"`
 }
@@ -212,13 +231,64 @@ type CheckResult struct {
 // serialized; callers build it from an authoritative CheckResult when they
 // want to consume checker facts without span/name rematching.
 type CheckResultIndex struct {
-	TypedNodesByNodeID     map[int]*CheckedNode
-	BindingsByID           map[int]*CheckedBinding
-	BindingsByNodeID       map[int][]*CheckedBinding
-	SymbolsByID            map[int]*CheckedSymbol
-	SymbolsByNodeID        map[int][]*CheckedSymbol
-	InstantiationsByID     map[int]*CheckInstantiation
-	InstantiationsByNodeID map[int][]*CheckInstantiation
+	TypedNodesByStableID     map[string]*CheckedNode
+	TypedNodesByNodeID       map[int]*CheckedNode
+	TypedNodesByNodeKey      map[string]*CheckedNode
+	BindingsByStableID       map[string]*CheckedBinding
+	BindingsByID             map[int]*CheckedBinding
+	BindingsByNodeID         map[int][]*CheckedBinding
+	BindingsByNodeKey        map[string][]*CheckedBinding
+	SymbolsByStableID        map[string]*CheckedSymbol
+	SymbolsByID              map[int]*CheckedSymbol
+	SymbolsByNodeID          map[int][]*CheckedSymbol
+	SymbolsByNodeKey         map[string][]*CheckedSymbol
+	InstantiationsByStableID map[string]*CheckInstantiation
+	InstantiationsByID       map[int]*CheckInstantiation
+	InstantiationsByNodeID   map[int][]*CheckInstantiation
+	InstantiationsByNodeKey  map[string][]*CheckInstantiation
+}
+
+// EnsureStableIDs fills the content-derived identities for every checker
+// record. The integer NodeID / TypeID / BindingID / SymbolID fields remain for
+// legacy consumers, but new consumers should prefer the string IDs and keys:
+// they are derived from source span, record kind, names, and structured type
+// shapes instead of checker arena allocation order.
+func (r *CheckResult) EnsureStableIDs() {
+	if r == nil {
+		return
+	}
+	for i := range r.TypedNodes {
+		rec := &r.TypedNodes[i]
+		rec.NodeKey = stableNodeKey(rec.NodeKey, rec.Kind, rec.Start, rec.End)
+		rec.TypeKey = stableTypeKeyOrExisting(rec.TypeKey, rec.Type)
+		rec.ID = stableRecordID(rec.ID, "typed-node", rec.NodeKey, rec.Kind, rec.TypeKey)
+	}
+	for i := range r.Bindings {
+		rec := &r.Bindings[i]
+		rec.NodeKey = stableNodeKey(rec.NodeKey, "binding:"+rec.Name, rec.Start, rec.End)
+		rec.TypeKey = stableTypeKeyOrExisting(rec.TypeKey, rec.Type)
+		rec.ID = stableRecordID(rec.ID, "binding", rec.NodeKey, rec.Name, strconv.FormatBool(rec.Mutable), rec.TypeKey)
+	}
+	for i := range r.Symbols {
+		rec := &r.Symbols[i]
+		rec.NodeKey = stableNodeKey(rec.NodeKey, "symbol:"+rec.Kind+":"+rec.Owner+":"+rec.Name, rec.Start, rec.End)
+		rec.TypeKey = stableTypeKeyOrExisting(rec.TypeKey, rec.Type)
+		rec.ID = stableRecordID(rec.ID, "symbol", rec.NodeKey, rec.Kind, rec.Owner, rec.Name, rec.TypeKey)
+	}
+	for i := range r.Instantiations {
+		rec := &r.Instantiations[i]
+		rec.NodeKey = stableNodeKey(rec.NodeKey, "instantiation:"+rec.Callee, rec.Start, rec.End)
+		if len(rec.TypeArgKeys) != len(rec.TypeArgs) {
+			rec.TypeArgKeys = make([]string, len(rec.TypeArgs))
+		}
+		for j := range rec.TypeArgs {
+			rec.TypeArgKeys[j] = stableTypeKeyOrExisting(rec.TypeArgKeys[j], &rec.TypeArgs[j])
+		}
+		rec.ResultTypeKey = stableTypeKeyOrExisting(rec.ResultTypeKey, rec.ResultType)
+		parts := []string{rec.NodeKey, rec.Callee, rec.ResultTypeKey}
+		parts = append(parts, rec.TypeArgKeys...)
+		rec.ID = stableRecordID(rec.ID, "instantiation", parts...)
+	}
 }
 
 // Index builds a stable-id lookup table for r. Pointer values refer to records
@@ -226,43 +296,83 @@ type CheckResultIndex struct {
 func (r *CheckResult) Index() CheckResultIndex {
 	if r == nil {
 		return CheckResultIndex{
-			TypedNodesByNodeID:     map[int]*CheckedNode{},
-			BindingsByID:           map[int]*CheckedBinding{},
-			BindingsByNodeID:       map[int][]*CheckedBinding{},
-			SymbolsByID:            map[int]*CheckedSymbol{},
-			SymbolsByNodeID:        map[int][]*CheckedSymbol{},
-			InstantiationsByID:     map[int]*CheckInstantiation{},
-			InstantiationsByNodeID: map[int][]*CheckInstantiation{},
+			TypedNodesByStableID:     map[string]*CheckedNode{},
+			TypedNodesByNodeID:       map[int]*CheckedNode{},
+			TypedNodesByNodeKey:      map[string]*CheckedNode{},
+			BindingsByStableID:       map[string]*CheckedBinding{},
+			BindingsByID:             map[int]*CheckedBinding{},
+			BindingsByNodeID:         map[int][]*CheckedBinding{},
+			BindingsByNodeKey:        map[string][]*CheckedBinding{},
+			SymbolsByStableID:        map[string]*CheckedSymbol{},
+			SymbolsByID:              map[int]*CheckedSymbol{},
+			SymbolsByNodeID:          map[int][]*CheckedSymbol{},
+			SymbolsByNodeKey:         map[string][]*CheckedSymbol{},
+			InstantiationsByStableID: map[string]*CheckInstantiation{},
+			InstantiationsByID:       map[int]*CheckInstantiation{},
+			InstantiationsByNodeID:   map[int][]*CheckInstantiation{},
+			InstantiationsByNodeKey:  map[string][]*CheckInstantiation{},
 		}
 	}
 	idx := CheckResultIndex{
-		TypedNodesByNodeID:     make(map[int]*CheckedNode, len(r.TypedNodes)),
-		BindingsByID:           make(map[int]*CheckedBinding, len(r.Bindings)),
-		BindingsByNodeID:       make(map[int][]*CheckedBinding),
-		SymbolsByID:            make(map[int]*CheckedSymbol, len(r.Symbols)),
-		SymbolsByNodeID:        make(map[int][]*CheckedSymbol),
-		InstantiationsByID:     make(map[int]*CheckInstantiation, len(r.Instantiations)),
-		InstantiationsByNodeID: make(map[int][]*CheckInstantiation),
+		TypedNodesByStableID:     make(map[string]*CheckedNode, len(r.TypedNodes)),
+		TypedNodesByNodeID:       make(map[int]*CheckedNode, len(r.TypedNodes)),
+		TypedNodesByNodeKey:      make(map[string]*CheckedNode, len(r.TypedNodes)),
+		BindingsByStableID:       make(map[string]*CheckedBinding, len(r.Bindings)),
+		BindingsByID:             make(map[int]*CheckedBinding, len(r.Bindings)),
+		BindingsByNodeID:         make(map[int][]*CheckedBinding),
+		BindingsByNodeKey:        make(map[string][]*CheckedBinding),
+		SymbolsByStableID:        make(map[string]*CheckedSymbol, len(r.Symbols)),
+		SymbolsByID:              make(map[int]*CheckedSymbol, len(r.Symbols)),
+		SymbolsByNodeID:          make(map[int][]*CheckedSymbol),
+		SymbolsByNodeKey:         make(map[string][]*CheckedSymbol),
+		InstantiationsByStableID: make(map[string]*CheckInstantiation, len(r.Instantiations)),
+		InstantiationsByID:       make(map[int]*CheckInstantiation, len(r.Instantiations)),
+		InstantiationsByNodeID:   make(map[int][]*CheckInstantiation),
+		InstantiationsByNodeKey:  make(map[string][]*CheckInstantiation),
 	}
 	for i := range r.TypedNodes {
 		rec := &r.TypedNodes[i]
+		if id := stableCheckedNodeID(rec); id != "" {
+			idx.TypedNodesByStableID[id] = rec
+		}
+		if key := stableCheckedNodeKey(rec); key != "" {
+			idx.TypedNodesByNodeKey[key] = rec
+		}
 		idx.TypedNodesByNodeID[checkRecordNodeID(rec.NodeID, rec.Node)] = rec
 	}
 	for i := range r.Bindings {
 		rec := &r.Bindings[i]
 		nodeID := checkRecordNodeID(rec.NodeID, rec.Node)
+		if id := stableCheckedBindingID(rec); id != "" {
+			idx.BindingsByStableID[id] = rec
+		}
+		if key := stableCheckedBindingNodeKey(rec); key != "" {
+			idx.BindingsByNodeKey[key] = append(idx.BindingsByNodeKey[key], rec)
+		}
 		idx.BindingsByID[rec.BindingID] = rec
 		idx.BindingsByNodeID[nodeID] = append(idx.BindingsByNodeID[nodeID], rec)
 	}
 	for i := range r.Symbols {
 		rec := &r.Symbols[i]
 		nodeID := checkRecordNodeID(rec.NodeID, rec.Node)
+		if id := stableCheckedSymbolID(rec); id != "" {
+			idx.SymbolsByStableID[id] = rec
+		}
+		if key := stableCheckedSymbolNodeKey(rec); key != "" {
+			idx.SymbolsByNodeKey[key] = append(idx.SymbolsByNodeKey[key], rec)
+		}
 		idx.SymbolsByID[rec.SymbolID] = rec
 		idx.SymbolsByNodeID[nodeID] = append(idx.SymbolsByNodeID[nodeID], rec)
 	}
 	for i := range r.Instantiations {
 		rec := &r.Instantiations[i]
 		nodeID := checkRecordNodeID(rec.NodeID, rec.Node)
+		if id := stableCheckInstantiationID(rec); id != "" {
+			idx.InstantiationsByStableID[id] = rec
+		}
+		if key := stableCheckInstantiationNodeKey(rec); key != "" {
+			idx.InstantiationsByNodeKey[key] = append(idx.InstantiationsByNodeKey[key], rec)
+		}
 		idx.InstantiationsByID[rec.InstantiationID] = rec
 		idx.InstantiationsByNodeID[nodeID] = append(idx.InstantiationsByNodeID[nodeID], rec)
 	}
@@ -274,6 +384,129 @@ func checkRecordNodeID(nodeID, legacyNode int) int {
 		return nodeID
 	}
 	return legacyNode
+}
+
+func stableCheckedNodeID(rec *CheckedNode) string {
+	if rec == nil {
+		return ""
+	}
+	return stableRecordID(rec.ID, "typed-node", stableCheckedNodeKey(rec), rec.Kind, stableTypeKeyOrExisting(rec.TypeKey, rec.Type))
+}
+
+func stableCheckedNodeKey(rec *CheckedNode) string {
+	if rec == nil {
+		return ""
+	}
+	return stableNodeKey(rec.NodeKey, rec.Kind, rec.Start, rec.End)
+}
+
+func stableCheckedBindingID(rec *CheckedBinding) string {
+	if rec == nil {
+		return ""
+	}
+	return stableRecordID(rec.ID, "binding", stableCheckedBindingNodeKey(rec), rec.Name, strconv.FormatBool(rec.Mutable), stableTypeKeyOrExisting(rec.TypeKey, rec.Type))
+}
+
+func stableCheckedBindingNodeKey(rec *CheckedBinding) string {
+	if rec == nil {
+		return ""
+	}
+	return stableNodeKey(rec.NodeKey, "binding:"+rec.Name, rec.Start, rec.End)
+}
+
+func stableCheckedSymbolID(rec *CheckedSymbol) string {
+	if rec == nil {
+		return ""
+	}
+	return stableRecordID(rec.ID, "symbol", stableCheckedSymbolNodeKey(rec), rec.Kind, rec.Owner, rec.Name, stableTypeKeyOrExisting(rec.TypeKey, rec.Type))
+}
+
+func stableCheckedSymbolNodeKey(rec *CheckedSymbol) string {
+	if rec == nil {
+		return ""
+	}
+	return stableNodeKey(rec.NodeKey, "symbol:"+rec.Kind+":"+rec.Owner+":"+rec.Name, rec.Start, rec.End)
+}
+
+func stableCheckInstantiationID(rec *CheckInstantiation) string {
+	if rec == nil {
+		return ""
+	}
+	typeArgKeys := stableTypeKeys(rec.TypeArgKeys, rec.TypeArgs)
+	parts := []string{stableCheckInstantiationNodeKey(rec), rec.Callee, stableTypeKeyOrExisting(rec.ResultTypeKey, rec.ResultType)}
+	parts = append(parts, typeArgKeys...)
+	return stableRecordID(rec.ID, "instantiation", parts...)
+}
+
+func stableCheckInstantiationNodeKey(rec *CheckInstantiation) string {
+	if rec == nil {
+		return ""
+	}
+	return stableNodeKey(rec.NodeKey, "instantiation:"+rec.Callee, rec.Start, rec.End)
+}
+
+func stableTypeKeys(existing []string, reprs []TypeRepr) []string {
+	if len(existing) == len(reprs) {
+		out := append([]string(nil), existing...)
+		for i := range out {
+			out[i] = stableTypeKeyOrExisting(out[i], &reprs[i])
+		}
+		return out
+	}
+	out := make([]string, len(reprs))
+	for i := range reprs {
+		out[i] = stableTypeKeyOrExisting("", &reprs[i])
+	}
+	return out
+}
+
+func stableNodeKey(existing, kind string, start, end int) string {
+	if existing != "" {
+		return existing
+	}
+	return stableID("node", kind, strconv.Itoa(start), strconv.Itoa(end))
+}
+
+func stableTypeKeyOrExisting(existing string, tr *TypeRepr) string {
+	if existing != "" {
+		return existing
+	}
+	return StableTypeKey(tr)
+}
+
+// StableTypeKey returns the content-derived identity for a structured type.
+// It ignores transient checker arena TypeID integers.
+func StableTypeKey(tr *TypeRepr) string {
+	if tr == nil {
+		return ""
+	}
+	parts := []string{tr.Kind, tr.Name, tr.Path}
+	for i := range tr.Args {
+		parts = append(parts, StableTypeKey(&tr.Args[i]))
+	}
+	if tr.Return != nil {
+		parts = append(parts, "return", StableTypeKey(tr.Return))
+	}
+	return stableID("type", parts...)
+}
+
+func stableRecordID(existing, prefix string, parts ...string) string {
+	if existing != "" {
+		return existing
+	}
+	return stableID(prefix, parts...)
+}
+
+func stableID(prefix string, parts ...string) string {
+	h := sha256.New()
+	h.Write([]byte(prefix))
+	h.Write([]byte{0})
+	for _, part := range parts {
+		h.Write([]byte(part))
+		h.Write([]byte{0})
+	}
+	sum := h.Sum(nil)
+	return prefix + ":" + hex.EncodeToString(sum[:12])
 }
 
 // CheckRequest is the wire shape consumed by the cmd/osty-native-checker

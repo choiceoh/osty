@@ -2,10 +2,10 @@ summary assignments=0 accepted=0 errors=1
 errorsByContext E0745=1
 errorDetails E0745 cannot find `missing` in this scope @L2:C5=1
 typedNodes
-  node=2 nodeId=2 typeId=19 kind=Block span=10:25 type=()
+  id=typed-node:ec3886d99 nodeKey=node:c936a377e1a93a2 typeKey=type:520c4bf26e2fabc node=2 nodeId=2 typeId=19 kind=Block span=10:25 type=()
 bindings
 symbols
-  symbolId=0 node=3 nodeId=3 kind=fn name=main owner= typeId=118 span=0:25 type=fn() -> ()
+  id=symbol:a5aa59b65ce7c nodeKey=node:0669292999162b9 typeKey=type:b4f942e1ed0777f symbolId=0 node=3 nodeId=3 kind=fn name=main owner= typeId=118 span=0:25 type=fn() -> ()
 instantiations
 diagnostics
   code=E0745 severity=error span=16:23 line=2:5-2:12 message=cannot find `missing` in this scope

@@ -376,10 +376,6 @@ func main() {
 			runLintPackage(path, flags)
 			return
 		case "typecheck":
-			if flags.inspect {
-				fmt.Fprintf(os.Stderr, "osty: --inspect is not supported on the self-host typecheck path\n")
-				os.Exit(2)
-			}
 			if root, ok, abort := nativeWorkspaceRoot(path, flags); abort {
 				os.Exit(2)
 			} else if ok {
@@ -414,10 +410,7 @@ func main() {
 				diags := append(append([]*diag.Diagnostic{}, selected.res.Diags...), selected.chk.Diags...)
 				printPackageDiags(selected.pkg, diags, flags)
 				if flags.inspect && selected.file != nil && selected.file.File != nil {
-					if !flags.jsonOutput {
-						fmt.Printf("# %s\n", selected.file.Path)
-					}
-					runInspect(selected.file.File, selected.chk, flags)
+					runInspectPackageInput(nativePackageCheckInput(selected.pkg, nil), selected.file.Path, flags)
 				}
 				if flags.dumpNativeDiags {
 					dumpNativeDiagsFor(path, selected.chk)
@@ -503,18 +496,10 @@ func main() {
 			os.Exit(1)
 		}
 	case "check":
-		if flags.inspect {
-			fmt.Fprintf(os.Stderr, "osty: --inspect is not supported on the self-host check path\n")
-			os.Exit(2)
-		}
 		if runCheckFileNative(path, src, formatter, flags) != 0 {
 			os.Exit(1)
 		}
 	case "typecheck":
-		if flags.inspect {
-			fmt.Fprintf(os.Stderr, "osty: --inspect is not supported on the self-host typecheck path\n")
-			os.Exit(2)
-		}
 		if runTypecheckFileNative(path, src, formatter, flags) != 0 {
 			os.Exit(1)
 		}
