@@ -98,17 +98,29 @@ func ResolvePackage(pkg *Package, prelude *Scope) *PackageResult {
 		return &PackageResult{}
 	}
 	if !canResolveViaNative(pkg) {
-		r := newPkgResolver(pkg, prelude)
-		r.declarePass(pkg)
-		r.bodyPass(pkg)
-		return &PackageResult{
-			PackageScope: pkg.PkgScope,
-			Diags:        r.diags,
-		}
+		return ResolvePackageFromAST(pkg, prelude)
 	}
 	pkg.EnsureFiles()
 	pkg.MaterializeCanonicalSources()
 	return resolvePackageViaNative(pkg, prelude)
+}
+
+// ResolvePackageFromAST runs the Go AST-backed resolver even when pkg also
+// carries source bytes. This is reserved for bootstrap inputs that have already
+// been parsed by the host parser but are not yet accepted by the self-host
+// resolver/parser bridge.
+func ResolvePackageFromAST(pkg *Package, prelude *Scope) *PackageResult {
+	if pkg == nil {
+		return &PackageResult{}
+	}
+	pkg.EnsureFiles()
+	r := newPkgResolver(pkg, prelude)
+	r.declarePass(pkg)
+	r.bodyPass(pkg)
+	return &PackageResult{
+		PackageScope: pkg.PkgScope,
+		Diags:        r.diags,
+	}
 }
 
 func canResolveViaNative(pkg *Package) bool {

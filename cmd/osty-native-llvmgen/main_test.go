@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+
+	ostyir "github.com/osty/osty/internal/ir"
 )
 
 func runLLVMGenSource(t *testing.T, path string, source string) llvmgenResponse {
@@ -174,7 +176,7 @@ func TestRunUsesNativeOwnedExportAndCABIShape(t *testing.T) {
 }
 
 func TestRunCoversRuntimeStringsSplitAndListToSet(t *testing.T) {
-	resp := runLLVMGenSource(t, "main.osty", `use runtime.strings as strings {
+	source := `use runtime.strings as strings {
     fn Split(s: String, sep: String) -> List<String>
 }
 
@@ -183,9 +185,14 @@ fn main() {
     let seen = items.toSet()
     println(seen.contains("pear"))
 }
-`)
+`
+	resp := runLLVMGenSource(t, "main.osty", source)
 	if !resp.Covered {
-		t.Fatalf("covered = false, want true")
+		entry, err := prepareSourceEntry(llvmgenRequest{Path: "main.osty", Source: source})
+		if err != nil {
+			t.Fatalf("covered = false, want true; prepareSourceEntry error: %v", err)
+		}
+		t.Fatalf("covered = false, want true\n%s", ostyir.Print(entry.IR))
 	}
 	for _, want := range []string{
 		"declare ptr @osty_rt_strings_Split(ptr, ptr)",

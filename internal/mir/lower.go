@@ -2086,8 +2086,8 @@ func (bs *bodyState) lowerExprAsOperand(e ir.Expr) Operand {
 	// the return type off the module's own fn signature table (preferred)
 	// or the callee's FnType (fallback) so every downstream temp has a
 	// concrete width.
-	if isPoisonType(t) {
-		if rt := bs.recoverOperandType(e); rt != nil && !isPoisonType(rt) {
+	if isPoisonType(t) || irHasPoisonedTypeArg(t) {
+		if rt := bs.recoverOperandType(e); rt != nil && !isPoisonType(rt) && !irHasPoisonedTypeArg(rt) {
 			t = rt
 		}
 	}
@@ -2097,6 +2097,13 @@ func (bs *bodyState) lowerExprAsOperand(e ir.Expr) Operand {
 }
 
 func (bs *bodyState) lowerExprAsOperandHint(e ir.Expr, hint Type) Operand {
+	if _, ok := e.(*ir.Closure); ok {
+		if _, ok := hint.(*ir.FnType); ok {
+			tmp := bs.freshTemp(hint, exprSpan(e))
+			bs.lowerExprInto(e, tmp, hint)
+			return &CopyOp{Place: Place{Local: tmp}, T: hint}
+		}
+	}
 	if !shouldPreferHintType(e.Type(), hint) {
 		return bs.lowerExprAsOperand(e)
 	}
@@ -2110,6 +2117,23 @@ func (bs *bodyState) lowerExprAsOperandHint(e ir.Expr, hint Type) Operand {
 			})
 			return &CopyOp{Place: Place{Local: tmp}, T: hint}
 		}
+		if id.Kind != ir.IdentLocal && id.Kind != ir.IdentParam {
+			if idx, ok := bs.l.variantIndexInType(hint, id.Name); ok {
+				tmp := bs.freshTemp(hint, id.SpanV)
+				bs.emit(&AssignInstr{
+					Dest: Place{Local: tmp},
+					Src: &AggregateRV{
+						Kind:       AggEnumVariant,
+						Fields:     nil,
+						T:          hint,
+						VariantIdx: idx,
+						VariantTag: id.Name,
+					},
+					SpanV: id.SpanV,
+				})
+				return &CopyOp{Place: Place{Local: tmp}, T: hint}
+			}
+		}
 	}
 	return bs.lowerExprAsOperand(e)
 }
@@ -2122,10 +2146,10 @@ func (bs *bodyState) lowerExprAsOperandHint(e ir.Expr, hint Type) Operand {
 // `f(x).field` where the checker dropped the call's return type.
 func (bs *bodyState) recoveredTypeOf(e ir.Expr) ir.Type {
 	t := e.Type()
-	if !isPoisonType(t) {
+	if !isPoisonType(t) && !irHasPoisonedTypeArg(t) {
 		return t
 	}
-	if rt := bs.recoverOperandType(e); rt != nil && !isPoisonType(rt) {
+	if rt := bs.recoverOperandType(e); rt != nil && !isPoisonType(rt) && !irHasPoisonedTypeArg(rt) {
 		return rt
 	}
 	return t
@@ -2447,6 +2471,30 @@ func stdlibFreeFnReturnType(qualifier, name string) ir.Type {
 		return &ir.NamedType{Name: "List", Args: []ir.Type{ir.TChar}, Builtin: true}
 	case "bytes":
 		return &ir.NamedType{Name: "List", Args: []ir.Type{ir.TByte}, Builtin: true}
+	}
+	return nil
+}
+
+func stdlibFreeFnParamTypes(qualifier, name string) []ir.Type {
+	if qualifier != "std.testing" {
+		return nil
+	}
+	switch name {
+	case "benchmark":
+		return []ir.Type{
+			TInt,
+			&ir.FnType{
+				Params: nil,
+				Return: &ir.NamedType{
+					Name: "Result",
+					Args: []ir.Type{
+						TUnit,
+						&ir.NamedType{Name: "Error", Builtin: true},
+					},
+					Builtin: true,
+				},
+			},
+		}
 	}
 	return nil
 }
@@ -3122,8 +3170,8 @@ func (bs *bodyState) lowerCoalesceInto(c *ir.CoalesceExpr, dest Place, destT Typ
 func (bs *bodyState) lowerQuestionInto(q *ir.QuestionExpr, dest Place, destT Type) {
 	bs.pushScope()
 	xT := q.X.Type()
-	if isPoisonType(xT) {
-		if rt := bs.recoverOperandType(q.X); rt != nil && !isPoisonType(rt) {
+	if isPoisonType(xT) || irHasPoisonedTypeArg(xT) {
+		if rt := bs.recoverOperandType(q.X); rt != nil && !isPoisonType(rt) && !irHasPoisonedTypeArg(rt) {
 			xT = rt
 		}
 	}
@@ -3374,6 +3422,9 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 			}
 		}
 	}
+	if bs.lowerBuiltinVariantCallInto(c, dest, destT) {
+		return
+	}
 	args, callee := bs.resolveCall(c)
 	if callee == nil {
 		bs.l.noteIssue("unsupported call: callee %T", c.Callee)
@@ -3383,6 +3434,59 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 		dest = nil
 	}
 	bs.emit(&CallInstr{Dest: dest, Callee: callee, Args: args, SpanV: c.SpanV})
+}
+
+func (bs *bodyState) lowerBuiltinVariantCallInto(c *ir.CallExpr, dest *Place, destT Type) bool {
+	if c == nil || dest == nil {
+		return false
+	}
+	id, ok := c.Callee.(*ir.Ident)
+	if !ok {
+		return false
+	}
+	idx, payloadHint, ok := builtinVariantCallShape(destT, id.Name, len(c.Args))
+	if !ok {
+		return false
+	}
+	fields := make([]Operand, 0, len(c.Args))
+	for _, arg := range c.Args {
+		fields = append(fields, bs.lowerExprAsOperandHint(arg.Value, payloadHint))
+	}
+	bs.emit(&AssignInstr{
+		Dest: *dest,
+		Src: &AggregateRV{
+			Kind:       AggEnumVariant,
+			Fields:     fields,
+			T:          destT,
+			VariantIdx: idx,
+			VariantTag: id.Name,
+		},
+		SpanV: c.SpanV,
+	})
+	return true
+}
+
+func builtinVariantCallShape(t Type, name string, argc int) (int, Type, bool) {
+	if argc != 1 {
+		return 0, nil, false
+	}
+	switch name {
+	case "Some":
+		if ot, ok := t.(*ir.OptionalType); ok {
+			return 1, ot.Inner, true
+		}
+		if nt, ok := t.(*ir.NamedType); ok && (nt.Name == "Option" || nt.Name == "Maybe") && len(nt.Args) >= 1 {
+			return 1, nt.Args[0], true
+		}
+	case "Ok", "Err":
+		if nt, ok := t.(*ir.NamedType); ok && nt.Name == "Result" && len(nt.Args) >= 2 {
+			if name == "Ok" {
+				return 1, nt.Args[0], true
+			}
+			return 0, nt.Args[1], true
+		}
+	}
+	return 0, nil, false
 }
 
 // emitConcurrencyIntrinsic lowers args in source order and emits a
@@ -3510,10 +3614,7 @@ func (bs *bodyState) resolveCall(c *ir.CallExpr) ([]Operand, Callee) {
 // encodes the qualifier, and the argument list does NOT include a
 // synthetic receiver.
 func (bs *bodyState) resolveQualifiedCall(use *ir.UseDecl, name string, t Type, args []ir.Arg) ([]Operand, Callee) {
-	out := make([]Operand, len(args))
-	for i, a := range args {
-		out[i] = bs.lowerExprAsOperand(a.Value)
-	}
+	out := bs.orderArgsByTypes(args, stdlibFreeFnParamTypes(pathQualifier(use), name))
 	return out, &FnRef{Symbol: qualifiedSymbol(use, name), Type: t}
 }
 
@@ -3668,10 +3769,7 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 			bs.emitStringFreeFnIntrinsic(kind, mc.Args, &dest, destT, mc.SpanV)
 			return
 		}
-		args := make([]Operand, len(mc.Args))
-		for i, a := range mc.Args {
-			args[i] = bs.lowerExprAsOperand(a.Value)
-		}
+		args := bs.orderArgsByTypes(mc.Args, stdlibFreeFnParamTypes(pathQualifier(use), mc.Name))
 		destPtr := &dest
 		if isUnit(destT) {
 			destPtr = nil
@@ -4573,6 +4671,7 @@ func (bs *bodyState) lowerClosure(cl *ir.Closure, hint Type) RValue {
 	if retT == nil {
 		retT = TUnit
 	}
+	captures := bs.closureCaptures(cl)
 
 	// Build the lifted function. First param is the env ptr; user
 	// params follow. Captures are NOT params — the entry block loads
@@ -4607,9 +4706,9 @@ func (bs *bodyState) lowerClosure(cl *ir.Closure, hint Type) RValue {
 
 	// Env struct layout: `(ptr fn, cap0_type, cap1_type, ...)`. Slot 0
 	// holds the fn pointer at runtime; slots 1..N hold captures.
-	envStructElems := make([]ir.Type, 0, 1+len(cl.Captures))
+	envStructElems := make([]ir.Type, 0, 1+len(captures))
 	envStructElems = append(envStructElems, closureEnvType) // ptr for fn slot
-	for _, cap := range cl.Captures {
+	for _, cap := range captures {
 		ct := cap.T
 		if ct == nil {
 			ct = ir.ErrTypeVal
@@ -4622,7 +4721,7 @@ func (bs *bodyState) lowerClosure(cl *ir.Closure, hint Type) RValue {
 	// capture gets a dedicated local bound to its HIR-level name so
 	// the rest of the body lowers unchanged — reads of the capture
 	// resolve through the regular locals lookup.
-	for i, cap := range cl.Captures {
+	for i, cap := range captures {
 		ct := cap.T
 		if ct == nil {
 			ct = ir.ErrTypeVal
@@ -4672,9 +4771,9 @@ func (bs *bodyState) lowerClosure(cl *ir.Closure, hint Type) RValue {
 	for _, p := range cl.Params {
 		fnType.Params = append(fnType.Params, p.Type)
 	}
-	fields := make([]Operand, 0, 1+len(cl.Captures))
+	fields := make([]Operand, 0, 1+len(captures))
 	fields = append(fields, &ConstOp{Const: &FnConst{Symbol: symbol, T: fnType}, T: fnType})
-	for _, cap := range cl.Captures {
+	for _, cap := range captures {
 		fields = append(fields, bs.captureOperand(cap))
 	}
 	return &AggregateRV{
@@ -4682,6 +4781,63 @@ func (bs *bodyState) lowerClosure(cl *ir.Closure, hint Type) RValue {
 		Fields: fields,
 		T:      closureT,
 	}
+}
+
+func (bs *bodyState) closureCaptures(cl *ir.Closure) []*ir.Capture {
+	if cl == nil {
+		return nil
+	}
+	out := append([]*ir.Capture(nil), cl.Captures...)
+	seen := map[string]bool{}
+	for _, cap := range out {
+		if cap != nil && cap.Name != "" {
+			seen[cap.Name] = true
+		}
+	}
+	bound := map[string]bool{}
+	for _, p := range cl.Params {
+		if p != nil && p.Name != "" {
+			bound[p.Name] = true
+		}
+	}
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		if nested, ok := n.(*ir.Closure); ok && nested != cl {
+			return false
+		}
+		id, ok := n.(*ir.Ident)
+		if !ok || id.Name == "" || seen[id.Name] || bound[id.Name] {
+			return true
+		}
+		localID, ok := bs.lookup(id.Name)
+		if !ok {
+			return true
+		}
+		loc := bs.fn.Local(localID)
+		if loc == nil || loc.IsReturn {
+			return true
+		}
+		kind := ir.CaptureLocal
+		if loc.IsParam {
+			kind = ir.CaptureParam
+		}
+		t := loc.Type
+		if t == nil {
+			t = id.T
+		}
+		if t == nil {
+			t = ir.ErrTypeVal
+		}
+		seen[id.Name] = true
+		out = append(out, &ir.Capture{
+			Name:  id.Name,
+			Kind:  kind,
+			T:     t,
+			Mut:   loc.Mut,
+			SpanV: id.SpanV,
+		})
+		return true
+	}), cl.Body)
+	return out
 }
 
 // captureOperand produces an Operand that reads a single capture from
@@ -4893,6 +5049,23 @@ func (l *lowerer) enumForVariant(name string) string {
 		}
 	}
 	return ""
+}
+
+func (l *lowerer) variantIndexInType(t ir.Type, name string) (int, bool) {
+	nt, ok := t.(*ir.NamedType)
+	if !ok || nt.Name == "" {
+		return 0, false
+	}
+	e := l.enums[nt.Name]
+	if e == nil {
+		return 0, false
+	}
+	for i, v := range e.Variants {
+		if v.Name == name {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 func (l *lowerer) variantIndexByName(t ir.Type, name string) int {

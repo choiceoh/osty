@@ -3,6 +3,8 @@ package llvmgen
 import (
 	"strings"
 	"testing"
+
+	ostyir "github.com/osty/osty/internal/ir"
 )
 
 // TestTryGenerateNativeOwnedModuleCoversLetStructDestructureShorthand
@@ -141,7 +143,7 @@ fn main() {
 		t.Fatalf("TryGenerateNativeOwnedModule errored: %v", err)
 	}
 	if !ok {
-		t.Fatal("TryGenerateNativeOwnedModule reported uncovered for nested struct destructure + binding")
+		t.Fatalf("TryGenerateNativeOwnedModule reported uncovered for nested struct destructure + binding\n%s", ostyir.Print(mod))
 	}
 	got := string(out)
 	for _, want := range []string{

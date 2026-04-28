@@ -151,7 +151,10 @@ func loadRegistry() *Registry {
 				File:   file,
 			}},
 		}
-		result := resolve.ResolvePackage(pkg, prelude)
+		// Keep stdlib stub resolution on the AST-backed resolver for now:
+		// several generated stubs are accepted by the Go parser but still trip
+		// the self-host parser used by the native resolve bridge.
+		result := resolve.ResolvePackageFromAST(pkg, prelude)
 		r.Diags = append(r.Diags, result.Diags...)
 
 		// Primitive stubs fan their methods out into the primitive-kind

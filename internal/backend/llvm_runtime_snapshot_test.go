@@ -78,7 +78,7 @@ int main(int argc, char **argv) {
 		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
 	}
 
-	buildOutput, err := exec.Command("clang", "-std=c11", "-lz", runtimePath, harnessPath, "-o", binaryPath).CombinedOutput()
+	buildOutput, err := runtimeClangCommand("-std=c11", runtimePath, harnessPath, "-o", binaryPath).CombinedOutput()
 	if err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
@@ -249,7 +249,7 @@ int main(int argc, char **argv) {
 	if err := os.WriteFile(harnessPath, []byte(harness), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
 	}
-	if out, err := exec.Command("clang", "-std=c11", "-lz", runtimePath, harnessPath, "-o", binaryPath).CombinedOutput(); err != nil {
+	if out, err := runtimeClangCommand("-std=c11", runtimePath, harnessPath, "-o", binaryPath).CombinedOutput(); err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, out)
 	}
 
@@ -313,7 +313,7 @@ int main(int argc, char **argv) {
 	if err := os.WriteFile(harnessPath, []byte(harness), 0o644); err != nil {
 		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
 	}
-	if out, err := exec.Command("clang", "-std=c11", "-lz", runtimePath, harnessPath, "-o", binaryPath).CombinedOutput(); err != nil {
+	if out, err := runtimeClangCommand("-std=c11", runtimePath, harnessPath, "-o", binaryPath).CombinedOutput(); err != nil {
 		t.Fatalf("clang failed: %v\n%s", err, out)
 	}
 

@@ -1382,7 +1382,7 @@ func (s *monoState) scanStmt(st Stmt) {
 			s.seedVariantTypeFromContext(st.Type, st.Value)
 			s.scanExpr(st.Value)
 			if isUnresolvedType(st.Type) || containsTypeVar(st.Type) {
-				st.Type = cloneResolvedType(st.Value.Type())
+				st.Type = cloneResolvedType(s.resolvedExprType(st.Value))
 			}
 		}
 		if st.Name != "" && !isUnresolvedType(st.Type) {
@@ -1707,6 +1707,10 @@ func (s *monoState) resolvedExprType(e Expr) Type {
 	case *Ident:
 		if inferred, ok := s.lookupLocalType(x.Name); ok {
 			return inferred
+		}
+	case *StructLit:
+		if x.TypeName != "" {
+			return &NamedType{Name: x.TypeName}
 		}
 	case *VariantLit:
 		if inferred := s.inferVariantLiteralType(x); inferred != nil {

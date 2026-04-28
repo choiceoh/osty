@@ -316,6 +316,10 @@ func filterMethodsAvoidingOwnerRecursion(owner string, generics []string, method
 		if m == nil {
 			continue
 		}
+		if m.Body != nil && len(m.Generics) == 0 && methodHasUnsupportedLLVMShape(owner, m) {
+			droppedSelfCall[m.Name] = true
+			continue
+		}
 		if m.Body != nil && len(m.Generics) == 0 && methodRecursesOwner(owner, generics, m) {
 			droppedSelfCall[m.Name] = true
 			continue
@@ -346,6 +350,23 @@ func filterMethodsAvoidingOwnerRecursion(owner string, generics []string, method
 		}
 	}
 	return survived
+}
+
+// methodHasUnsupportedLLVMShape drops stdlib helpers that are valid
+// Osty but still outside the legacy AST LLVM emitter's return-shape
+// support. Keeping these on every injected specialization makes
+// unrelated user programs compile unused helper bodies and wall before
+// they reach the method they actually called.
+func methodHasUnsupportedLLVMShape(owner string, m *ir.FnDecl) bool {
+	if m == nil {
+		return false
+	}
+	// Map.find returns `(K, V)?`. The legacy AST LLVM path currently
+	// treats optional tuple returns as pointer-shaped at the function
+	// boundary while expression lowering produces the concrete optional
+	// aggregate, so eager specialization fails even when `find` is not
+	// called. Demand-driven method emission can remove this guard.
+	return owner == "Map" && m.Name == "find"
 }
 
 // ownerUndispatchableMethodSet returns the set of **body-less

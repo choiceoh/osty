@@ -98,7 +98,7 @@ fn parseReference(text: String, requireScheme: Bool) -> Result<UrlParts, Error> 
     } else {
         sliceChars(chars, 0, hash)
     }
-    let fragment = if hash < 0 {
+    let fragment: String? = if hash < 0 {
         None
     } else {
         Some(sliceChars(chars, hash + 1, chars.len()))
