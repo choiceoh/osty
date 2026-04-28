@@ -2073,7 +2073,7 @@ func (bs *bodyState) lowerExprAsOperand(e ir.Expr) Operand {
 		return bs.lowerIdent(x)
 	}
 	// For anything else: allocate a temp and lower into it.
-	t := e.Type()
+	t := bs.recoveredTypeOf(e)
 	if t == nil {
 		t = ir.ErrTypeVal
 	}
@@ -2145,6 +2145,17 @@ func (bs *bodyState) lowerExprAsOperandHint(e ir.Expr, hint Type) Operand {
 // paths use this to patch the receiver temp for chained access like
 // `f(x).field` where the checker dropped the call's return type.
 func (bs *bodyState) recoveredTypeOf(e ir.Expr) ir.Type {
+	if id, ok := e.(*ir.Ident); ok {
+		if lt := bs.recoveredIdentStorageType(id); lt != nil && !isPoisonType(lt) && !irHasPoisonedTypeArg(lt) {
+			return lt
+		}
+	}
+	switch e.(type) {
+	case *ir.FieldExpr, *ir.IndexExpr, *ir.TupleAccess:
+		if rt := bs.recoverOperandType(e); rt != nil && !isPoisonType(rt) && !irHasPoisonedTypeArg(rt) {
+			return rt
+		}
+	}
 	t := e.Type()
 	if !isPoisonType(t) && !irHasPoisonedTypeArg(t) {
 		return t
@@ -2153,6 +2164,26 @@ func (bs *bodyState) recoveredTypeOf(e ir.Expr) ir.Type {
 		return rt
 	}
 	return t
+}
+
+func (bs *bodyState) recoveredIdentStorageType(id *ir.Ident) ir.Type {
+	if id == nil {
+		return nil
+	}
+	switch id.Kind {
+	case ir.IdentLocal, ir.IdentParam:
+	default:
+		return nil
+	}
+	local, ok := bs.lookup(id.Name)
+	if !ok {
+		return nil
+	}
+	loc := bs.fn.Local(local)
+	if loc == nil {
+		return nil
+	}
+	return loc.Type
 }
 
 // recoverOperandType patches the subset of expression shapes that reach
@@ -2175,6 +2206,9 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 		// type off the IR FnDecl, which survives even when per-node
 		// checker annotations are missing.
 		if id, ok := x.Callee.(*ir.Ident); ok {
+			if rt := bs.builtinFreeCallReturnType(id.Name, x.Args); rt != nil {
+				return rt
+			}
 			if sig := bs.l.signatureForFn(id.Name); sig != nil && !isPoisonType(sig.retType) {
 				return sig.retType
 			}
@@ -2236,7 +2270,7 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 				return rt
 			}
 		}
-		recvT := x.Receiver.Type()
+		recvT := bs.recoveredTypeOf(x.Receiver)
 		if rt := builtinMethodReturnType(recvT, x.Name); rt != nil {
 			return rt
 		}
@@ -2314,10 +2348,8 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 		// MIR local we've already created (common after lowerLet's
 		// own valueType recovery), surface the local's type instead
 		// of the poisoned annotation on the IR node.
-		if id, ok := bs.lookup(x.Name); ok {
-			if loc := bs.fn.Local(id); loc != nil && !isPoisonType(loc.Type) {
-				return loc.Type
-			}
+		if lt := bs.recoveredIdentStorageType(x); lt != nil && !isPoisonType(lt) {
+			return lt
 		}
 	case *ir.IfExpr:
 		// `let x = if ... { a } else { b }` with a poisoned IfExpr
@@ -2386,6 +2418,51 @@ func builtinMethodReturnType(recvT ir.Type, method string) ir.Type {
 			return &ir.NamedType{Name: "List", Args: []ir.Type{ir.TByte}, Builtin: true}
 		}
 	}
+	if isBytesReceiver(recvT) {
+		switch method {
+		case "len":
+			return ir.TInt
+		case "isEmpty", "contains", "startsWith", "endsWith":
+			return ir.TBool
+		case "indexOf", "lastIndexOf":
+			return &ir.OptionalType{Inner: ir.TInt}
+		case "get":
+			return &ir.OptionalType{Inner: ir.TByte}
+		case "split":
+			return &ir.NamedType{Name: "List", Args: []ir.Type{ir.TBytes}, Builtin: true}
+		case "join", "concat", "repeat", "replace", "replaceAll", "trimLeft", "trimRight", "trim", "trimSpace", "toUpper", "toLower", "slice":
+			return ir.TBytes
+		case "toHex":
+			return ir.TString
+		case "toString":
+			return builtinResultType(ir.TString, builtinErrorType())
+		}
+	}
+	if pt, ok := recvT.(*ir.PrimType); ok {
+		switch pt.Kind {
+		case ir.PrimInt:
+			switch method {
+			case "toByte":
+				return ir.TByte
+			case "toChar":
+				return ir.TChar
+			}
+		case ir.PrimByte:
+			switch method {
+			case "toInt":
+				return ir.TInt
+			case "toChar":
+				return ir.TChar
+			}
+		case ir.PrimChar:
+			switch method {
+			case "toInt":
+				return ir.TInt
+			case "toByte":
+				return ir.TByte
+			}
+		}
+	}
 	// List<T>.* method returns — we only need the ones that appear
 	// inside `"{...}"` interpolations in the toolchain, which is the
 	// `.len()` / `.isEmpty()` pair. Element-typed returns (pop, first,
@@ -2414,6 +2491,28 @@ func isStringReceiver(t ir.Type) bool {
 		return nt.Name == "String"
 	}
 	return false
+}
+
+func isBytesReceiver(t ir.Type) bool {
+	if t == ir.TBytes {
+		return true
+	}
+	if nt, ok := t.(*ir.NamedType); ok {
+		return nt.Name == "Bytes"
+	}
+	return false
+}
+
+func builtinErrorType() ir.Type {
+	return &ir.NamedType{Name: "Error", Builtin: true}
+}
+
+func builtinResultType(okT, errT ir.Type) ir.Type {
+	return &ir.NamedType{
+		Name:    "Result",
+		Args:    []ir.Type{okT, errT},
+		Builtin: true,
+	}
 }
 
 // flattenStringConcatChain walks left-deep into a `String + String +
@@ -2449,28 +2548,51 @@ func pathQualifier(use *ir.UseDecl) string {
 }
 
 // stdlibFreeFnReturnType reports the declared return type for the
-// subset of `std.strings.*` free-function calls that the MIR emitter
-// dispatches through an intrinsic. Used as the last-resort fallback in
+// subset of stdlib free-function calls that the MIR emitter dispatches
+// through an intrinsic. Used as the last-resort fallback in
 // recoverOperandType when the checker/native-checker pair has dropped
 // the call site's per-node type and neither the UseDecl body nor the
 // resolved package surface carries the fn signature.
 func stdlibFreeFnReturnType(qualifier, name string) ir.Type {
-	if qualifier != "std.strings" {
-		return nil
+	if qualifier == "std.strings" || qualifier == "strings" {
+		switch name {
+		case "len", "compare", "Compare", "indexOf", "Index", "LastIndex", "count", "Count":
+			return ir.TInt
+		case "lastIndexOf":
+			return &ir.OptionalType{Inner: ir.TInt}
+		case "isEmpty", "contains", "Contains", "hasPrefix", "HasPrefix", "startsWith", "hasSuffix", "HasSuffix", "endsWith":
+			return ir.TBool
+		case "join", "concat", "substring", "slice", "trim", "trimSpace", "trimStart", "trimEnd", "trimPrefix", "trimSuffix", "toUpper", "toLower", "replace", "replaceAll", "repeat":
+			return ir.TString
+		case "split", "splitN", "fields":
+			return &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+		case "chars":
+			return &ir.NamedType{Name: "List", Args: []ir.Type{ir.TChar}, Builtin: true}
+		case "bytes":
+			return &ir.NamedType{Name: "List", Args: []ir.Type{ir.TByte}, Builtin: true}
+		}
 	}
-	switch name {
-	case "len", "indexOf", "Index":
-		return ir.TInt
-	case "isEmpty", "contains", "Contains", "hasPrefix", "HasPrefix", "startsWith", "hasSuffix", "HasSuffix", "endsWith":
-		return ir.TBool
-	case "join", "substring", "slice", "trim", "toUpper", "toLower", "replace":
-		return ir.TString
-	case "split":
-		return &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
-	case "chars":
-		return &ir.NamedType{Name: "List", Args: []ir.Type{ir.TChar}, Builtin: true}
-	case "bytes":
-		return &ir.NamedType{Name: "List", Args: []ir.Type{ir.TByte}, Builtin: true}
+	if qualifier == "std.bytes" || qualifier == "bytes" {
+		switch name {
+		case "len":
+			return ir.TInt
+		case "isEmpty", "contains", "startsWith", "endsWith", "equal":
+			return ir.TBool
+		case "indexOf", "lastIndexOf":
+			return &ir.OptionalType{Inner: ir.TInt}
+		case "get":
+			return &ir.OptionalType{Inner: ir.TByte}
+		case "split":
+			return &ir.NamedType{Name: "List", Args: []ir.Type{ir.TBytes}, Builtin: true}
+		case "from", "fromString", "join", "concat", "repeat", "replace", "replaceAll", "trimLeft", "trimRight", "trim", "trimSpace", "toUpper", "toLower", "slice":
+			return ir.TBytes
+		case "toHex":
+			return ir.TString
+		case "toString":
+			return builtinResultType(ir.TString, builtinErrorType())
+		case "fromHex":
+			return builtinResultType(ir.TBytes, builtinErrorType())
+		}
 	}
 	return nil
 }
@@ -2495,6 +2617,28 @@ func stdlibFreeFnParamTypes(qualifier, name string) []ir.Type {
 				},
 			},
 		}
+	}
+	return nil
+}
+
+// builtinFreeCallReturnType recognises prelude-shaped free calls that
+// the frontend may synthesize from method syntax in suppressed type
+// contexts (notably string interpolation). `p.items.len()` can reach
+// MIR as `len(p.items)`; recovering the return type here prevents the
+// temp from poisoning the backend while lowerCallExprInto emits the
+// matching collection intrinsic.
+func (bs *bodyState) builtinFreeCallReturnType(name string, args []ir.Arg) ir.Type {
+	if len(args) == 0 || args[0].Value == nil {
+		return nil
+	}
+	if kind := bs.builtinFreeCallIntrinsic(name, args); kind == IntrinsicInvalid {
+		return nil
+	}
+	switch name {
+	case "len":
+		return ir.TInt
+	case "isEmpty":
+		return ir.TBool
 	}
 	return nil
 }
@@ -2598,12 +2742,13 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 		// shape by pulling start/end operands straight out of the
 		// RangeLit's Start/End exprs and emitting a proper intrinsic.
 		if rng, ok := x.Index.(*ir.RangeLit); ok {
+			baseT := bs.recoveredTypeOf(x.X)
 			switch {
-			case isStringReceiverType(x.X.Type()):
+			case isStringReceiverType(baseT):
 				if rv, handled := bs.lowerStringSliceRValue(x, rng); handled {
 					return rv
 				}
-			case isListType(x.X.Type()):
+			case isListType(baseT):
 				if rv, handled := bs.lowerListSliceRValue(x, rng); handled {
 					return rv
 				}
@@ -2725,9 +2870,17 @@ func (bs *bodyState) lowerIdent(id *ir.Ident) Operand {
 		})
 		return &CopyOp{Place: Place{Local: tmp}, T: t}
 	}
+	if localID, ok := bs.lookup(id.Name); ok {
+		loc := bs.fn.Local(localID)
+		t := id.T
+		if loc != nil && loc.Type != nil {
+			t = loc.Type
+		}
+		return &CopyOp{Place: Place{Local: localID}, T: t}
+	}
 	switch id.Kind {
 	case ir.IdentFn:
-		fnType := id.T
+		fnType := bs.fnValueType(id.Name, id.T)
 		return &ConstOp{Const: &FnConst{Symbol: id.Name, T: fnType}, T: fnType}
 	case ir.IdentGlobal:
 		// Materialise a fresh local holding the current global value
@@ -2778,24 +2931,41 @@ func (bs *bodyState) lowerIdent(id *ir.Ident) Operand {
 		})
 		return &CopyOp{Place: Place{Local: tmp}, T: t}
 	}
-	if localID, ok := bs.lookup(id.Name); ok {
-		loc := bs.fn.Local(localID)
-		t := id.T
-		if loc != nil && loc.Type != nil {
-			t = loc.Type
-		}
-		return &CopyOp{Place: Place{Local: localID}, T: t}
-	}
 	// Unknown identifier — possibly a top-level fn not captured in our
 	// signature table; fall back to FnConst.
 	if id.Name != "" {
-		t := id.T
-		if t == nil {
-			t = ir.ErrTypeVal
-		}
+		t := bs.fnValueType(id.Name, id.T)
 		return &ConstOp{Const: &FnConst{Symbol: id.Name, T: t}, T: t}
 	}
 	return &ConstOp{Const: &UnitConst{}, T: TUnit}
+}
+
+func (bs *bodyState) fnValueType(name string, annotated Type) Type {
+	if sig := bs.l.signatureForFn(name); sig != nil {
+		return fnTypeFromSignature(sig)
+	}
+	if annotated != nil {
+		return annotated
+	}
+	return ir.ErrTypeVal
+}
+
+func fnTypeFromSignature(sig *fnSignature) *ir.FnType {
+	if sig == nil {
+		return &ir.FnType{Return: ir.ErrTypeVal}
+	}
+	out := &ir.FnType{Return: sig.retType}
+	for _, p := range sig.params {
+		if p == nil || p.Type == nil {
+			out.Params = append(out.Params, ir.ErrTypeVal)
+			continue
+		}
+		out.Params = append(out.Params, p.Type)
+	}
+	if out.Return == nil {
+		out.Return = ir.ErrTypeVal
+	}
+	return out
 }
 
 // lowerStringLit returns an operand for a StringLit.
@@ -3396,6 +3566,10 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 			bs.emitConcurrencyIntrinsic(kind, c.Args, dest, destT, c.SpanV)
 			return
 		}
+		if kind := bs.builtinFreeCallIntrinsic(id.Name, c.Args); kind != IntrinsicInvalid {
+			bs.emitBuiltinFreeCallIntrinsic(kind, c.Args, dest, destT, c.SpanV)
+			return
+		}
 	}
 	if fx, ok := c.Callee.(*ir.FieldExpr); ok {
 		if use := bs.l.useAliasFor(fx.X); use != nil {
@@ -3418,6 +3592,18 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 			// `strings.split(s, sep)`.
 			if kind := stdlibStringFreeFnToIntrinsic(qualifierOf(use), fx.Name); kind != IntrinsicInvalid {
 				bs.emitStringFreeFnIntrinsic(kind, c.Args, dest, destT, c.SpanV)
+				return
+			}
+			if kind := stdlibStringFreeFnToIntrinsic(pathQualifier(use), fx.Name); kind != IntrinsicInvalid {
+				bs.emitStringFreeFnIntrinsic(kind, c.Args, dest, destT, c.SpanV)
+				return
+			}
+			if kind := stdlibBytesFreeFnToIntrinsic(qualifierOf(use), fx.Name); kind != IntrinsicInvalid {
+				bs.emitBytesFreeFnIntrinsic(kind, c.Args, dest, destT, c.SpanV)
+				return
+			}
+			if kind := stdlibBytesFreeFnToIntrinsic(pathQualifier(use), fx.Name); kind != IntrinsicInvalid {
+				bs.emitBytesFreeFnIntrinsic(kind, c.Args, dest, destT, c.SpanV)
 				return
 			}
 		}
@@ -3514,6 +3700,68 @@ func (bs *bodyState) emitConcurrencyIntrinsic(kind IntrinsicKind, args []ir.Arg,
 // branch when they land; today every supported runtime intrinsic
 // returns a value, so the unit-check above suffices.
 func (bs *bodyState) emitRuntimeIntrinsic(kind IntrinsicKind, args []ir.Arg, dest *Place, destT Type, sp Span) {
+	out := make([]Operand, len(args))
+	for i, a := range args {
+		out[i] = bs.lowerExprAsOperand(a.Value)
+	}
+	destPtr := dest
+	if destPtr != nil && isUnit(destT) {
+		destPtr = nil
+	}
+	bs.emit(&IntrinsicInstr{Dest: destPtr, Kind: kind, Args: out, SpanV: sp})
+}
+
+func (bs *bodyState) builtinFreeCallIntrinsic(name string, args []ir.Arg) IntrinsicKind {
+	if len(args) != 1 || args[0].Value == nil {
+		return IntrinsicInvalid
+	}
+	return builtinFreeCallIntrinsicForReceiver(bs.recoveredTypeOf(args[0].Value), name)
+}
+
+func builtinFreeCallIntrinsicForReceiver(receiverType Type, name string) IntrinsicKind {
+	if receiverType == nil {
+		return IntrinsicInvalid
+	}
+	if pt, ok := receiverType.(*ir.PrimType); ok {
+		switch pt.Kind {
+		case ir.PrimString:
+			if name == "len" {
+				return IntrinsicStringLen
+			}
+			if name == "isEmpty" {
+				return IntrinsicStringIsEmpty
+			}
+		case ir.PrimBytes:
+			if name == "len" {
+				return IntrinsicBytesLen
+			}
+			if name == "isEmpty" {
+				return IntrinsicBytesIsEmpty
+			}
+		}
+		return IntrinsicInvalid
+	}
+	switch typeNameOf(receiverType) {
+	case "List":
+		if name == "len" {
+			return IntrinsicListLen
+		}
+		if name == "isEmpty" {
+			return IntrinsicListIsEmpty
+		}
+	case "Map":
+		if name == "len" {
+			return IntrinsicMapLen
+		}
+	case "Set":
+		if name == "len" {
+			return IntrinsicSetLen
+		}
+	}
+	return IntrinsicInvalid
+}
+
+func (bs *bodyState) emitBuiltinFreeCallIntrinsic(kind IntrinsicKind, args []ir.Arg, dest *Place, destT Type, sp Span) {
 	out := make([]Operand, len(args))
 	for i, a := range args {
 		out[i] = bs.lowerExprAsOperand(a.Value)
@@ -3740,6 +3988,7 @@ func (bs *bodyState) orderArgs(args []ir.Arg, sig *fnSignature) []Operand {
 }
 
 func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Type) {
+	recvType := bs.recoveredTypeOf(mc.Receiver)
 	// Package/FFI-qualified calls land here when HIR lowered `pkg.fn()`
 	// into MethodCall{Receiver: Ident(pkg), Name: fn}. The receiver is
 	// a use alias, not a value — fast-path to a concurrency intrinsic
@@ -3769,6 +4018,14 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 			bs.emitStringFreeFnIntrinsic(kind, mc.Args, &dest, destT, mc.SpanV)
 			return
 		}
+		if kind := stdlibBytesFreeFnToIntrinsic(qualifierOf(use), mc.Name); kind != IntrinsicInvalid {
+			bs.emitBytesFreeFnIntrinsic(kind, mc.Args, &dest, destT, mc.SpanV)
+			return
+		}
+		if kind := stdlibBytesFreeFnToIntrinsic(pathQualifier(use), mc.Name); kind != IntrinsicInvalid {
+			bs.emitBytesFreeFnIntrinsic(kind, mc.Args, &dest, destT, mc.SpanV)
+			return
+		}
 		args := bs.orderArgsByTypes(mc.Args, stdlibFreeFnParamTypes(pathQualifier(use), mc.Name))
 		destPtr := &dest
 		if isUnit(destT) {
@@ -3788,7 +4045,7 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 	// `g.spawn(f)`, `g.cancel()`, `g.isCancelled()`. The receiver
 	// becomes the first intrinsic arg; user args follow in source
 	// order.
-	if kind := concurrencyIntrinsicForMethod(mc.Receiver.Type(), mc.Name); kind != IntrinsicInvalid {
+	if kind := concurrencyIntrinsicForMethod(recvType, mc.Name); kind != IntrinsicInvalid {
 		recv := bs.lowerExprAsOperand(mc.Receiver)
 		args := []Operand{recv}
 		for _, a := range mc.Args {
@@ -3823,7 +4080,7 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 	if mc.Name == "sorted" && len(mc.Args) == 0 {
 		if inner, ok := mc.Receiver.(*ir.MethodCall); ok &&
 			inner.Name == "keys" && len(inner.Args) == 0 {
-			if kT, _ := mapKVFromMapType(inner.Receiver.Type()); kT != nil && mapKeyHasRuntimeSort(kT) {
+			if kT, _ := mapKVFromMapType(bs.recoveredTypeOf(inner.Receiver)); kT != nil && mapKeyHasRuntimeSort(kT) {
 				mapOp := bs.lowerExprAsOperand(inner.Receiver)
 				destPtr := &dest
 				if isUnit(destT) {
@@ -3844,7 +4101,7 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 	// Option / Result methods. Matches the concurrency path above but
 	// for the primitive types whose method bodies in stdlib just
 	// return default values — the runtime handles the real work.
-	if kind := stdlibIntrinsicForMethod(mc.Receiver.Type(), mc.Name); kind != IntrinsicInvalid {
+	if kind := stdlibIntrinsicForMethod(recvType, mc.Name); kind != IntrinsicInvalid {
 		recv := bs.lowerExprAsOperand(mc.Receiver)
 		args := []Operand{recv}
 		for _, a := range mc.Args {
@@ -3867,7 +4124,7 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 	}
 
 	recv := bs.lowerExprAsOperand(mc.Receiver)
-	typeName := typeNameOf(mc.Receiver.Type())
+	typeName := typeNameOf(recvType)
 	sig := bs.l.signatureForMethod(typeName, mc.Name)
 	symbol := mc.Name
 	if sig != nil {
@@ -4263,9 +4520,22 @@ func stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
 			if name == "toInt" {
 				return IntrinsicByteToInt
 			}
+			if name == "toChar" {
+				return IntrinsicByteToChar
+			}
 		case ir.PrimChar:
 			if name == "toInt" {
 				return IntrinsicCharToInt
+			}
+			if name == "toByte" {
+				return IntrinsicCharToByte
+			}
+		case ir.PrimInt:
+			if name == "toByte" {
+				return IntrinsicIntToByte
+			}
+			if name == "toChar" {
+				return IntrinsicIntToChar
 			}
 		}
 		return IntrinsicInvalid
@@ -4275,6 +4545,10 @@ func stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
 		switch name {
 		case "push":
 			return IntrinsicListPush
+		case "insert":
+			return IntrinsicListInsert
+		case "clear":
+			return IntrinsicListClear
 		case "pop":
 			return IntrinsicListPop
 		case "len":
@@ -4375,7 +4649,7 @@ func stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
 // expression position doesn't carry a stale dest.
 func isVoidStdlibIntrinsic(kind IntrinsicKind) bool {
 	switch kind {
-	case IntrinsicListPush, IntrinsicMapSet, IntrinsicMapRemove,
+	case IntrinsicListPush, IntrinsicListInsert, IntrinsicListClear, IntrinsicMapSet, IntrinsicMapRemove,
 		IntrinsicSetInsert:
 		return true
 	}
@@ -4393,20 +4667,36 @@ func stringIntrinsicForMethod(name string) IntrinsicKind {
 		return IntrinsicStringIsEmpty
 	case "contains":
 		return IntrinsicStringContains
+	case "count":
+		return IntrinsicStringCount
 	case "startsWith":
 		return IntrinsicStringStartsWith
 	case "endsWith":
 		return IntrinsicStringEndsWith
 	case "indexOf":
 		return IntrinsicStringIndexOf
+	case "lastIndexOf":
+		return IntrinsicStringLastIndexOf
 	case "split":
 		return IntrinsicStringSplit
+	case "splitN":
+		return IntrinsicStringSplitN
+	case "fields":
+		return IntrinsicStringFields
 	case "join":
 		return IntrinsicStringJoin
 	case "substring", "slice":
 		return IntrinsicStringSubstring
-	case "trim":
+	case "trim", "trimSpace":
 		return IntrinsicStringTrim
+	case "trimStart":
+		return IntrinsicStringTrimStart
+	case "trimEnd":
+		return IntrinsicStringTrimEnd
+	case "trimPrefix":
+		return IntrinsicStringTrimPrefix
+	case "trimSuffix":
+		return IntrinsicStringTrimSuffix
 	case "toUpper":
 		return IntrinsicStringToUpper
 	case "toLower":
@@ -4417,6 +4707,10 @@ func stringIntrinsicForMethod(name string) IntrinsicKind {
 		return IntrinsicStringToFloat
 	case "replace":
 		return IntrinsicStringReplace
+	case "replaceAll":
+		return IntrinsicStringReplaceAll
+	case "repeat":
+		return IntrinsicStringRepeat
 	case "chars":
 		return IntrinsicStringChars
 	case "bytes":
@@ -4473,8 +4767,31 @@ func bytesIntrinsicForMethod(name string) IntrinsicKind {
 		return IntrinsicBytesToHex
 	case "slice":
 		return IntrinsicBytesSlice
+	case "toString":
+		return IntrinsicBytesToString
 	}
 	return IntrinsicInvalid
+}
+
+// stdlibBytesFreeFnToIntrinsic maps `std.bytes.Y(...)` calls to the
+// same intrinsic family used by Bytes receiver methods. Most functions
+// already use receiver-first argument order; `join(parts, sep)` is
+// reordered in emitBytesFreeFnIntrinsic below.
+func stdlibBytesFreeFnToIntrinsic(qualifier, name string) IntrinsicKind {
+	if qualifier != "std.bytes" && qualifier != "bytes" {
+		return IntrinsicInvalid
+	}
+	switch name {
+	case "from":
+		return IntrinsicBytesFromList
+	case "fromString":
+		return IntrinsicBytesFromString
+	case "fromHex":
+		return IntrinsicBytesFromHex
+	case "toString":
+		return IntrinsicBytesToString
+	}
+	return bytesIntrinsicForMethod(name)
 }
 
 // stdlibStringFreeFnToIntrinsic maps `std.strings.Y` free-function
@@ -4485,7 +4802,7 @@ func bytesIntrinsicForMethod(name string) IntrinsicKind {
 // MIR probe (which skips stdlib body injection) and by anyone else
 // calling stdlib strings helpers through the module qualifier.
 func stdlibStringFreeFnToIntrinsic(qualifier, name string) IntrinsicKind {
-	if qualifier != "std.strings" {
+	if qualifier != "std.strings" && qualifier != "strings" {
 		return IntrinsicInvalid
 	}
 	switch name {
@@ -4501,14 +4818,32 @@ func stdlibStringFreeFnToIntrinsic(qualifier, name string) IntrinsicKind {
 		return IntrinsicStringEndsWith
 	case "indexOf", "Index":
 		return IntrinsicStringIndexOf
+	case "lastIndexOf", "LastIndex":
+		return IntrinsicStringLastIndexOf
+	case "count", "Count":
+		return IntrinsicStringCount
 	case "split":
 		return IntrinsicStringSplit
+	case "splitN", "SplitN":
+		return IntrinsicStringSplitN
+	case "fields", "Fields":
+		return IntrinsicStringFields
 	case "join":
 		return IntrinsicStringJoin
+	case "concat":
+		return IntrinsicStringConcat
 	case "substring", "slice":
 		return IntrinsicStringSubstring
-	case "trim":
+	case "trim", "trimSpace":
 		return IntrinsicStringTrim
+	case "trimStart", "TrimStart":
+		return IntrinsicStringTrimStart
+	case "trimEnd", "TrimEnd":
+		return IntrinsicStringTrimEnd
+	case "trimPrefix", "TrimPrefix":
+		return IntrinsicStringTrimPrefix
+	case "trimSuffix", "TrimSuffix":
+		return IntrinsicStringTrimSuffix
 	case "toUpper":
 		return IntrinsicStringToUpper
 	case "toLower":
@@ -4519,6 +4854,10 @@ func stdlibStringFreeFnToIntrinsic(qualifier, name string) IntrinsicKind {
 		return IntrinsicStringBytes
 	case "replace":
 		return IntrinsicStringReplace
+	case "replaceAll", "ReplaceAll":
+		return IntrinsicStringReplaceAll
+	case "repeat":
+		return IntrinsicStringRepeat
 	}
 	return IntrinsicInvalid
 }
@@ -4589,7 +4928,7 @@ func (bs *bodyState) lowerListSliceRValue(x *ir.IndexExpr, rng *ir.RangeLit) (RV
 		})
 		endOp = &CopyOp{Place: Place{Local: endTmp}, T: TInt}
 	}
-	listT := x.X.Type()
+	listT := bs.recoveredTypeOf(x.X)
 	tmp := bs.freshTemp(listT, exprSpan(x))
 	bs.emit(&IntrinsicInstr{
 		Dest:  &Place{Local: tmp},
@@ -4610,6 +4949,28 @@ func (bs *bodyState) emitStringFreeFnIntrinsic(kind IntrinsicKind, args []ir.Arg
 	out := make([]Operand, len(args))
 	for i, a := range args {
 		out[i] = bs.lowerExprAsOperand(a.Value)
+	}
+	destPtr := dest
+	if destPtr != nil && isUnit(destT) {
+		destPtr = nil
+	}
+	bs.emit(&IntrinsicInstr{Dest: destPtr, Kind: kind, Args: out, SpanV: sp})
+}
+
+// emitBytesFreeFnIntrinsic lowers `std.bytes.NAME(...)` free
+// functions into the receiver-family Bytes intrinsic ABI. Most stdlib
+// bytes functions are already receiver-first (`len(b)`, `split(b, sep)`);
+// `join(parts, sep)` is the one public helper whose source order is
+// intentionally friendlier than the method/runtime order.
+func (bs *bodyState) emitBytesFreeFnIntrinsic(kind IntrinsicKind, args []ir.Arg, dest *Place, destT Type, sp Span) {
+	out := make([]Operand, 0, len(args))
+	if kind == IntrinsicBytesJoin && len(args) == 2 {
+		out = append(out, bs.lowerExprAsOperand(args[1].Value))
+		out = append(out, bs.lowerExprAsOperand(args[0].Value))
+	} else {
+		for _, a := range args {
+			out = append(out, bs.lowerExprAsOperand(a.Value))
+		}
 	}
 	destPtr := dest
 	if destPtr != nil && isUnit(destT) {
@@ -5399,15 +5760,12 @@ func (bs *bodyState) fieldExprType(x *ir.FieldExpr) Type {
 	if x == nil {
 		return ir.ErrTypeVal
 	}
+	info := bs.fieldExprInfo(x)
+	if ft := bs.l.fieldType(info, x.Name); ft != nil && !isPoisonType(ft) {
+		return ft
+	}
 	if !isPoisonType(x.T) {
 		return x.T
-	}
-	info := bs.fieldExprInfo(x)
-	if info == nil {
-		return x.T
-	}
-	if ft := bs.l.fieldType(info, x.Name); ft != nil {
-		return ft
 	}
 	return x.T
 }
@@ -5432,16 +5790,25 @@ func (bs *bodyState) indexExprType(x *ir.IndexExpr) Type {
 	if x == nil {
 		return ir.ErrTypeVal
 	}
-	if !isPoisonType(x.T) {
-		return x.T
-	}
 	if x.X == nil {
 		return x.T
+	}
+	if _, ok := x.Index.(*ir.RangeLit); ok {
+		baseT := bs.recoveredTypeOf(x.X)
+		if isStringReceiverType(baseT) {
+			return ir.TString
+		}
+		if isListType(baseT) {
+			return baseT
+		}
 	}
 	for _, baseT := range []Type{bs.recoveredTypeOf(x.X), bs.recoverOperandType(x.X)} {
 		if elemT := indexElementType(baseT); !isPoisonType(elemT) {
 			return elemT
 		}
+	}
+	if !isPoisonType(x.T) {
+		return x.T
 	}
 	return x.T
 }

@@ -774,6 +774,57 @@ const (
 	// log-aggregator). Result type matches the map's value type
 	// (always Int for now).
 	IntrinsicMapIncr
+
+	// IntrinsicStringRepeat returns `s` repeated `n` times. Args:
+	// [string, n]. Appended at the tail to preserve historical enum
+	// values for every previously-emitted intrinsic.
+	IntrinsicStringRepeat
+	// IntrinsicStringTrimPrefix returns String with prefix removed when
+	// present. Args: [string, prefix].
+	IntrinsicStringTrimPrefix
+	// IntrinsicStringTrimSuffix returns String with suffix removed when
+	// present. Args: [string, suffix].
+	IntrinsicStringTrimSuffix
+	// IntrinsicStringTrimStart trims leading whitespace. Args: [string].
+	IntrinsicStringTrimStart
+	// IntrinsicStringTrimEnd trims trailing whitespace. Args: [string].
+	IntrinsicStringTrimEnd
+	// IntrinsicStringReplaceAll returns String with all occurrences
+	// replaced. Args: [string, old, new].
+	IntrinsicStringReplaceAll
+	// IntrinsicStringSplitN returns List<String>. Args: [string, sep, n].
+	IntrinsicStringSplitN
+	// IntrinsicStringFields returns whitespace-separated List<String>.
+	// Args: [string].
+	IntrinsicStringFields
+	// IntrinsicStringLastIndexOf returns Int? or Int depending on the
+	// destination type chosen by the std.strings surface. Args:
+	// [string, needle].
+	IntrinsicStringLastIndexOf
+	// IntrinsicBytesFromList returns Bytes. Args: [List<Byte>].
+	IntrinsicBytesFromList
+	// IntrinsicBytesFromString returns Bytes. Args: [String].
+	IntrinsicBytesFromString
+	// IntrinsicBytesToString returns Result<String, Error>. Args:
+	// [bytes].
+	IntrinsicBytesToString
+	// IntrinsicBytesFromHex returns Result<Bytes, Error>. Args:
+	// [String].
+	IntrinsicBytesFromHex
+	// IntrinsicIntToByte truncates Int to Byte. Args: [int].
+	IntrinsicIntToByte
+	// IntrinsicIntToChar truncates Int to Char. Args: [int].
+	IntrinsicIntToChar
+	// IntrinsicByteToChar widens Byte to Char. Args: [byte].
+	IntrinsicByteToChar
+	// IntrinsicCharToByte truncates Char to Byte. Args: [char].
+	IntrinsicCharToByte
+	// IntrinsicListInsert inserts an element at index, shifting later
+	// elements right. Args: [list, idx, elem]. Dest nil.
+	IntrinsicListInsert
+	// IntrinsicListClear truncates the list to length 0. Args:
+	// [list]. Dest nil.
+	IntrinsicListClear
 )
 
 // StorageLiveInstr marks a local as alive. Optional; backends that do
@@ -1768,6 +1819,44 @@ func (k IntrinsicKind) String() string {
 		return "string_nth_segment"
 	case IntrinsicMapIncr:
 		return "map_incr"
+	case IntrinsicStringRepeat:
+		return "string_repeat"
+	case IntrinsicStringTrimPrefix:
+		return "string_trim_prefix"
+	case IntrinsicStringTrimSuffix:
+		return "string_trim_suffix"
+	case IntrinsicStringTrimStart:
+		return "string_trim_start"
+	case IntrinsicStringTrimEnd:
+		return "string_trim_end"
+	case IntrinsicStringReplaceAll:
+		return "string_replace_all"
+	case IntrinsicStringSplitN:
+		return "string_split_n"
+	case IntrinsicStringFields:
+		return "string_fields"
+	case IntrinsicStringLastIndexOf:
+		return "string_last_index_of"
+	case IntrinsicBytesFromList:
+		return "bytes_from_list"
+	case IntrinsicBytesFromString:
+		return "bytes_from_string"
+	case IntrinsicBytesToString:
+		return "bytes_to_string"
+	case IntrinsicBytesFromHex:
+		return "bytes_from_hex"
+	case IntrinsicIntToByte:
+		return "int_to_byte"
+	case IntrinsicIntToChar:
+		return "int_to_char"
+	case IntrinsicByteToChar:
+		return "byte_to_char"
+	case IntrinsicCharToByte:
+		return "char_to_byte"
+	case IntrinsicListInsert:
+		return "list_insert"
+	case IntrinsicListClear:
+		return "list_clear"
 	}
 	return "invalid"
 }

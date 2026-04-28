@@ -1038,6 +1038,11 @@ func mirMapValueSizeBytes(llvmTyp string) int {
 	return 0
 }
 
+// Osty: toolchain/mir_generator.osty (mirMapValueNeedsDynamicSize)
+func mirMapValueNeedsDynamicSize(llvmTyp string) bool {
+	return len(llvmTyp) > 0 && llvmTyp[0] == '%'
+}
+
 // Osty: toolchain/mir_generator.osty (mirIntLLVMBits)
 func mirIntLLVMBits(t string) int {
 	if t == "i1" {
@@ -5614,8 +5619,8 @@ func mirElementKindStruct() string { return "7" }
 // Osty: mirDiscriminant{None,Some,Ok,Err}
 func mirDiscriminantNone() string { return "0" }
 func mirDiscriminantSome() string { return "1" }
-func mirDiscriminantOk() string   { return "0" }
-func mirDiscriminantErr() string  { return "1" }
+func mirDiscriminantOk() string   { return "1" }
+func mirDiscriminantErr() string  { return "0" }
 
 // §6 boolean-literal tokens.
 
@@ -5883,6 +5888,18 @@ func mirResultDiscProbeLine(reg, aggReg string) string {
 }
 func mirResultPayloadProbeLine(reg, aggReg string) string {
 	return mirOptionPayloadProbeLine(reg, aggReg)
+}
+func mirResultDiscProbeTypedLine(reg, resultLLVM, aggReg string) string {
+	return mirExtractValueLine(reg, resultLLVM, aggReg, "0")
+}
+func mirResultPayloadProbeTypedLine(reg, resultLLVM, aggReg string) string {
+	return mirExtractValueLine(reg, resultLLVM, aggReg, "1")
+}
+func mirResultIsOkFromDiscLine(isOkReg, discReg string) string {
+	return mirICmpI64EqLine(isOkReg, discReg, mirDiscriminantOk())
+}
+func mirResultIsErrFromDiscLine(isErrReg, discReg string) string {
+	return mirICmpI64EqLine(isErrReg, discReg, mirDiscriminantErr())
 }
 
 // §7 LLVM-text Option / Result aggregate-construction shapes.
@@ -6350,10 +6367,11 @@ func mirLabelResultErr() string      { return "result.err" }
 
 // §10 expanded fixed-symbol composers — Bytes runtime long-tail.
 
-// Osty: mirRtBytes{IndexOf,LastIndexOf,Split,Join,Concat,Repeat,Replace,ReplaceAll,
+// Osty: mirRtBytes{FromList,IndexOf,LastIndexOf,Split,Join,Concat,Repeat,Replace,ReplaceAll,
 //
-//	TrimLeft,TrimRight,Trim,TrimSpace,ToUpper,ToLower,ToHex,Slice,Contains,
-//	StartsWith,EndsWith}Symbol
+//	TrimLeft,TrimRight,Trim,TrimSpace,ToUpper,ToLower,ToHex,FromHex,IsValidHex,
+//	Slice,ToString,IsValidUTF8,Contains,StartsWith,EndsWith}Symbol
+func mirRtBytesFromListSymbol() string    { return mirRtBytesSymbol("from_list") }
 func mirRtBytesIndexOfSymbol() string     { return mirRtBytesSymbol("index_of") }
 func mirRtBytesLastIndexOfSymbol() string { return mirRtBytesSymbol("last_index_of") }
 func mirRtBytesSplitSymbol() string       { return mirRtBytesSymbol("split") }
@@ -6369,7 +6387,11 @@ func mirRtBytesTrimSpaceSymbol() string   { return mirRtBytesSymbol("trim_space"
 func mirRtBytesToUpperSymbol() string     { return mirRtBytesSymbol("to_upper") }
 func mirRtBytesToLowerSymbol() string     { return mirRtBytesSymbol("to_lower") }
 func mirRtBytesToHexSymbol() string       { return mirRtBytesSymbol("to_hex") }
+func mirRtBytesFromHexSymbol() string     { return mirRtBytesSymbol("from_hex") }
+func mirRtBytesIsValidHexSymbol() string  { return mirRtBytesSymbol("is_valid_hex") }
 func mirRtBytesSliceSymbol() string       { return mirRtBytesSymbol("slice") }
+func mirRtBytesToStringSymbol() string    { return mirRtBytesSymbol("to_string") }
+func mirRtBytesIsValidUTF8Symbol() string { return mirRtBytesSymbol("is_valid_utf8") }
 func mirRtBytesContainsSymbol() string    { return mirRtBytesSymbol("contains") }
 func mirRtBytesStartsWithSymbol() string  { return mirRtBytesSymbol("starts_with") }
 func mirRtBytesEndsWithSymbol() string    { return mirRtBytesSymbol("ends_with") }
@@ -6383,6 +6405,7 @@ func mirRtBytesEndsWithSymbol() string    { return mirRtBytesSymbol("ends_with")
 //	Repeat,Hash,IsEmpty,Len}Symbol
 func mirRtStringCharsSymbol() string        { return mirRtStringSymbol("Chars") }
 func mirRtStringBytesSymbol() string        { return mirRtStringSymbol("Bytes") }
+func mirRtStringToBytesSymbol() string      { return mirRtStringSymbol("ToBytes") }
 func mirRtStringByteLenSymbol() string      { return mirRtStringSymbol("ByteLen") }
 func mirRtStringToUpperSymbol() string      { return mirRtStringSymbol("ToUpper") }
 func mirRtStringToLowerSymbol() string      { return mirRtStringSymbol("ToLower") }
@@ -8817,7 +8840,7 @@ func mirPrependRootIndex(index int, paths [][]int) [][]int {
 // Osty: mirIntrinsicKindLabelFull
 //
 // Slice 11 extension: covers every IntrinsicKind iota value from
-// IntrinsicPrint (1) through IntrinsicMapIncr (113). Diagnostics that
+// IntrinsicPrint (1) through IntrinsicListClear (135). Diagnostics that
 // formerly rendered "kind=NN" now produce a symbolic label —
 // "list.push", "map.get_or", "select.recv" — making the failure mode
 // substantially easier to read at a glance. The label table is kept on
@@ -8908,149 +8931,193 @@ func mirIntrinsicKindLabelFull(kind int, kindFallback string) string {
 	case 41:
 		return "list.reversed"
 	case 42:
-		return "map.new"
+		return "list.to_string"
 	case 43:
-		return "map.get"
+		return "map.new"
 	case 44:
-		return "map.set"
+		return "map.get"
 	case 45:
-		return "map.contains"
+		return "map.set"
 	case 46:
-		return "map.len"
+		return "map.contains"
 	case 47:
-		return "map.keys"
+		return "map.len"
 	case 48:
-		return "map.values"
+		return "map.keys"
 	case 49:
-		return "map.remove"
+		return "map.values"
 	case 50:
-		return "map.keys_sorted"
+		return "map.remove"
 	case 51:
-		return "set.new"
+		return "map.keys_sorted"
 	case 52:
-		return "set.insert"
+		return "map.to_string"
 	case 53:
-		return "set.contains"
+		return "set.new"
 	case 54:
-		return "set.len"
+		return "set.insert"
 	case 55:
-		return "set.to_list"
+		return "set.contains"
 	case 56:
-		return "set.remove"
+		return "set.len"
 	case 57:
-		return "string_len"
+		return "set.to_list"
 	case 58:
-		return "string_is_empty"
+		return "set.remove"
 	case 59:
-		return "string_contains"
+		return "set.to_string"
 	case 60:
-		return "string_count"
+		return "string_len"
 	case 61:
-		return "string_starts_with"
+		return "string_is_empty"
 	case 62:
-		return "string_ends_with"
+		return "string_contains"
 	case 63:
-		return "string_index_of"
+		return "string_count"
 	case 64:
-		return "string_split"
+		return "string_starts_with"
 	case 65:
-		return "string_trim"
+		return "string_ends_with"
 	case 66:
-		return "string_to_upper"
+		return "string_index_of"
 	case 67:
-		return "string_to_lower"
+		return "string_split"
 	case 68:
-		return "string_to_int"
+		return "string_trim"
 	case 69:
-		return "string_to_float"
+		return "string_to_upper"
 	case 70:
-		return "string_replace"
+		return "string_to_lower"
 	case 71:
-		return "string_chars"
+		return "string_to_int"
 	case 72:
-		return "string_bytes"
+		return "string_to_float"
 	case 73:
-		return "bytes.len"
+		return "string_replace"
 	case 74:
-		return "bytes.is_empty"
+		return "string_chars"
 	case 75:
-		return "bytes.get"
+		return "string_bytes"
 	case 76:
-		return "bytes.contains"
+		return "bytes.len"
 	case 77:
-		return "bytes.starts_with"
+		return "bytes.is_empty"
 	case 78:
-		return "bytes.ends_with"
+		return "bytes.get"
 	case 79:
-		return "bytes.index_of"
+		return "bytes.contains"
 	case 80:
-		return "bytes.last_index_of"
+		return "bytes.starts_with"
 	case 81:
-		return "bytes.split"
+		return "bytes.ends_with"
 	case 82:
-		return "bytes.join"
+		return "bytes.index_of"
 	case 83:
-		return "bytes.concat"
+		return "bytes.last_index_of"
 	case 84:
-		return "bytes.repeat"
+		return "bytes.split"
 	case 85:
-		return "bytes.replace"
+		return "bytes.join"
 	case 86:
-		return "bytes.replace_all"
+		return "bytes.concat"
 	case 87:
-		return "bytes.trim_left"
+		return "bytes.repeat"
 	case 88:
-		return "bytes.trim_right"
+		return "bytes.replace"
 	case 89:
-		return "bytes.trim"
+		return "bytes.replace_all"
 	case 90:
-		return "bytes.trim_space"
+		return "bytes.trim_left"
 	case 91:
-		return "bytes.to_upper"
+		return "bytes.trim_right"
 	case 92:
-		return "bytes.to_lower"
+		return "bytes.trim"
 	case 93:
-		return "bytes.to_hex"
+		return "bytes.trim_space"
 	case 94:
-		return "bytes.slice"
+		return "bytes.to_upper"
 	case 95:
-		return "option.is_some"
+		return "bytes.to_lower"
 	case 96:
-		return "option.is_none"
+		return "bytes.to_hex"
 	case 97:
-		return "option.unwrap"
+		return "bytes.slice"
 	case 98:
-		return "option.unwrap_or"
+		return "option.is_some"
 	case 99:
-		return "result.is_ok"
+		return "option.is_none"
 	case 100:
-		return "result.is_err"
+		return "option.unwrap"
 	case 101:
-		return "result.unwrap"
+		return "option.unwrap_or"
 	case 102:
-		return "result.unwrap_or"
+		return "result.is_ok"
 	case 103:
-		return "raw.null"
+		return "result.is_err"
 	case 104:
-		return "string_join"
+		return "result.unwrap"
 	case 105:
-		return "list.pop"
+		return "result.unwrap_or"
 	case 106:
-		return "string_substring"
+		return "raw.null"
 	case 107:
-		return "byte.to_int"
+		return "string_join"
 	case 108:
-		return "char.to_int"
+		return "list.pop"
 	case 109:
-		return "list.slice"
+		return "string_substring"
 	case 110:
-		return "map.get_or"
+		return "byte.to_int"
 	case 111:
-		return "string_split_into"
+		return "char.to_int"
 	case 112:
-		return "string_nth_segment"
+		return "list.slice"
 	case 113:
+		return "map.get_or"
+	case 114:
+		return "string_split_into"
+	case 115:
+		return "string_nth_segment"
+	case 116:
 		return "map.incr"
+	case 117:
+		return "string_repeat"
+	case 118:
+		return "string_trim_prefix"
+	case 119:
+		return "string_trim_suffix"
+	case 120:
+		return "string_trim_start"
+	case 121:
+		return "string_trim_end"
+	case 122:
+		return "string_replace_all"
+	case 123:
+		return "string_split_n"
+	case 124:
+		return "string_fields"
+	case 125:
+		return "string_last_index_of"
+	case 126:
+		return "bytes_from_list"
+	case 127:
+		return "bytes_from_string"
+	case 128:
+		return "bytes_to_string"
+	case 129:
+		return "bytes_from_hex"
+	case 130:
+		return "int_to_byte"
+	case 131:
+		return "int_to_char"
+	case 132:
+		return "byte_to_char"
+	case 133:
+		return "char_to_byte"
+	case 134:
+		return "list.insert"
+	case 135:
+		return "list.clear"
 	}
 	return kindFallback
 }

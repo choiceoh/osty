@@ -1170,7 +1170,7 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		mir.IntrinsicListPop, mir.IntrinsicListFirst, mir.IntrinsicListLast,
 		mir.IntrinsicListRemoveAt, mir.IntrinsicListReverse, mir.IntrinsicListReversed,
 		mir.IntrinsicListIndexOf, mir.IntrinsicListContains, mir.IntrinsicListSlice,
-		mir.IntrinsicListToString:
+		mir.IntrinsicListToString, mir.IntrinsicListInsert, mir.IntrinsicListClear:
 		return true
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapGetOr,
 		mir.IntrinsicMapSet, mir.IntrinsicMapContains, mir.IntrinsicMapLen,
@@ -1180,7 +1180,7 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
 		mir.IntrinsicSetToList, mir.IntrinsicSetRemove, mir.IntrinsicSetToString:
 		return true
-	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty, mir.IntrinsicBytesGet, mir.IntrinsicBytesContains, mir.IntrinsicBytesStartsWith, mir.IntrinsicBytesEndsWith, mir.IntrinsicBytesIndexOf, mir.IntrinsicBytesLastIndexOf, mir.IntrinsicBytesSplit, mir.IntrinsicBytesJoin, mir.IntrinsicBytesConcat, mir.IntrinsicBytesRepeat, mir.IntrinsicBytesReplace, mir.IntrinsicBytesReplaceAll, mir.IntrinsicBytesTrimLeft, mir.IntrinsicBytesTrimRight, mir.IntrinsicBytesTrim, mir.IntrinsicBytesTrimSpace, mir.IntrinsicBytesToUpper, mir.IntrinsicBytesToLower, mir.IntrinsicBytesToHex, mir.IntrinsicBytesSlice:
+	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty, mir.IntrinsicBytesGet, mir.IntrinsicBytesContains, mir.IntrinsicBytesStartsWith, mir.IntrinsicBytesEndsWith, mir.IntrinsicBytesIndexOf, mir.IntrinsicBytesLastIndexOf, mir.IntrinsicBytesSplit, mir.IntrinsicBytesJoin, mir.IntrinsicBytesConcat, mir.IntrinsicBytesRepeat, mir.IntrinsicBytesReplace, mir.IntrinsicBytesReplaceAll, mir.IntrinsicBytesTrimLeft, mir.IntrinsicBytesTrimRight, mir.IntrinsicBytesTrim, mir.IntrinsicBytesTrimSpace, mir.IntrinsicBytesToUpper, mir.IntrinsicBytesToLower, mir.IntrinsicBytesToHex, mir.IntrinsicBytesSlice, mir.IntrinsicBytesFromList, mir.IntrinsicBytesFromString, mir.IntrinsicBytesToString, mir.IntrinsicBytesFromHex:
 		return true
 	// Stage 5 prep — string → List<Char> / List<Byte> expansions that
 	// the legacy emitter routes through `osty_rt_strings_*`. Accepting
@@ -1194,7 +1194,11 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
 		mir.IntrinsicStringEndsWith, mir.IntrinsicStringIndexOf, mir.IntrinsicStringSplit,
 		mir.IntrinsicStringSplitInto, mir.IntrinsicStringNthSegment,
-		mir.IntrinsicStringCount,
+		mir.IntrinsicStringCount, mir.IntrinsicStringRepeat,
+		mir.IntrinsicStringTrimPrefix, mir.IntrinsicStringTrimSuffix,
+		mir.IntrinsicStringTrimStart, mir.IntrinsicStringTrimEnd,
+		mir.IntrinsicStringReplaceAll, mir.IntrinsicStringSplitN,
+		mir.IntrinsicStringFields, mir.IntrinsicStringLastIndexOf,
 		mir.IntrinsicStringJoin, mir.IntrinsicStringSubstring:
 		return true
 	// Concurrency — channels / tasks / select / cancellation / helpers.
@@ -1217,13 +1221,18 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		return true
 	// Numeric widening from sub-word primitives to Int. Lowered as
 	// LLVM zext — no runtime call needed.
-	case mir.IntrinsicByteToInt, mir.IntrinsicCharToInt:
+	case mir.IntrinsicByteToInt, mir.IntrinsicCharToInt,
+		mir.IntrinsicIntToByte, mir.IntrinsicIntToChar,
+		mir.IntrinsicByteToChar, mir.IntrinsicCharToByte:
 		return true
 	// Option<T> method lowering — disc/payload extract on %Option.<T>
 	// (emitOptionIntrinsic). Unwrap None branches to
 	// osty_rt_option_unwrap_none() + unreachable.
 	case mir.IntrinsicOptionIsSome, mir.IntrinsicOptionIsNone,
 		mir.IntrinsicOptionUnwrap, mir.IntrinsicOptionUnwrapOr:
+		return true
+	case mir.IntrinsicResultIsOk, mir.IntrinsicResultIsErr,
+		mir.IntrinsicResultUnwrap, mir.IntrinsicResultUnwrapOr:
 		return true
 	}
 	return false
@@ -2564,6 +2573,18 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 	if handled, err := g.emitPrimitiveMethodCall(c, fnRef); handled {
 		return err
 	}
+	// Runtime FFI imports lower to MIR FnRef symbols shaped as
+	// `runtime.<path>.<name>`. They are not ordinary Osty functions,
+	// so route them to the same osty_rt_* ABI mapping used by the
+	// legacy AST emitter before consulting the user-function table.
+	if handled, err := g.emitRuntimeFFICall(c, fnRef); handled {
+		return err
+	}
+	if strings.HasPrefix(fnRef.Symbol, "std.strings.") {
+		if handled, err := g.emitStdStringsCall(c, fnRef); handled {
+			return err
+		}
+	}
 	// Intercept stdlib `std.testing.*` helpers. The legacy AST emitter
 	// inlines these (see stmt.go:emitTestingCallStmt); the MIR path
 	// mirrors that dispatch in-place instead of trying to resolve the
@@ -2614,6 +2635,86 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 		argStrs = append(argStrs, g.llvmType(paramT)+" "+val)
 	}
 	return g.emitCallSiteByName(c, fnRef.Symbol, sig.retLLVM, argStrs)
+}
+
+func (g *mirGen) emitRuntimeFFICall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
+	if fnRef == nil || !strings.HasPrefix(fnRef.Symbol, "runtime.") {
+		return false, nil
+	}
+	path, name, ok := splitRuntimeFFICallee(fnRef.Symbol)
+	if !ok || !llvmIsKnownRuntimeFfiPath(path) {
+		return false, nil
+	}
+	fnT, _ := fnRef.Type.(*ir.FnType)
+	retLLVM := "void"
+	if c.Dest != nil {
+		destLoc := g.fn.Local(c.Dest.Local)
+		if destLoc == nil {
+			return true, fmt.Errorf("mir-mvp: runtime FFI call dest into unknown local %d", c.Dest.Local)
+		}
+		if !isUnitType(destLoc.Type) {
+			retLLVM = g.llvmType(destLoc.Type)
+		}
+	} else if fnT != nil && fnT.Return != nil && !isUnitType(fnT.Return) {
+		retLLVM = g.llvmType(fnT.Return)
+	}
+
+	argStrs := make([]string, 0, len(c.Args))
+	paramLLVMs := make([]string, 0, len(c.Args))
+	for i, op := range c.Args {
+		paramT := op.Type()
+		if fnT != nil && i < len(fnT.Params) && fnT.Params[i] != nil {
+			paramT = fnT.Params[i]
+		}
+		val, err := g.evalOperand(op, paramT)
+		if err != nil {
+			return true, err
+		}
+		llvmT := g.llvmType(paramT)
+		argStrs = append(argStrs, llvmT+" "+val)
+		paramLLVMs = append(paramLLVMs, llvmT)
+	}
+
+	sym := runtimeFFISymbol(path, name)
+	g.declareRuntime(sym, mirRuntimeDeclareLine(retLLVM, sym, strings.Join(paramLLVMs, ", ")))
+	return true, g.emitCallSiteByName(c, sym, retLLVM, argStrs)
+}
+
+func splitRuntimeFFICallee(symbol string) (path string, name string, ok bool) {
+	idx := strings.LastIndex(symbol, ".")
+	if idx <= len("runtime") || idx == len(symbol)-1 {
+		return "", "", false
+	}
+	return symbol[:idx], symbol[idx+1:], true
+}
+
+func (g *mirGen) emitStdStringsCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
+	name := strings.TrimPrefix(fnRef.Symbol, "std.strings.")
+	switch name {
+	case "compare", "Compare":
+		return true, g.emitStdStringsRuntimeCall(c, llvmStringRuntimeCompareSymbol(), "i64", []mir.Type{ir.TString, ir.TString})
+	}
+	return false, nil
+}
+
+func (g *mirGen) emitStdStringsRuntimeCall(c *mir.CallInstr, symbol, retLLVM string, params []mir.Type) error {
+	if len(c.Args) != len(params) {
+		return unsupported("mir-mvp", fmt.Sprintf("std.strings runtime call %s arity", symbol))
+	}
+	argStrs := make([]string, 0, len(c.Args))
+	paramLLVMs := make([]string, 0, len(params))
+	for i, op := range c.Args {
+		paramT := params[i]
+		val, err := g.evalOperand(op, paramT)
+		if err != nil {
+			return err
+		}
+		llvmT := g.llvmType(paramT)
+		argStrs = append(argStrs, llvmT+" "+val)
+		paramLLVMs = append(paramLLVMs, llvmT)
+	}
+	g.declareRuntime(symbol, mirRuntimeDeclareLine(retLLVM, symbol, strings.Join(paramLLVMs, ", ")))
+	return g.emitCallSiteByName(c, symbol, retLLVM, argStrs)
 }
 
 // emitPrimitiveMethodCall intercepts `#[intrinsic_methods]` integer
@@ -4064,7 +4165,7 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		mir.IntrinsicListPop, mir.IntrinsicListFirst, mir.IntrinsicListLast,
 		mir.IntrinsicListRemoveAt, mir.IntrinsicListReverse, mir.IntrinsicListReversed,
 		mir.IntrinsicListIndexOf, mir.IntrinsicListContains, mir.IntrinsicListSlice,
-		mir.IntrinsicListToString:
+		mir.IntrinsicListToString, mir.IntrinsicListInsert, mir.IntrinsicListClear:
 		return g.emitListIntrinsic(i)
 	case mir.IntrinsicMapNew, mir.IntrinsicMapGet, mir.IntrinsicMapGetOr,
 		mir.IntrinsicMapSet, mir.IntrinsicMapContains, mir.IntrinsicMapLen,
@@ -4074,7 +4175,7 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetContains, mir.IntrinsicSetLen,
 		mir.IntrinsicSetToList, mir.IntrinsicSetRemove, mir.IntrinsicSetToString:
 		return g.emitSetIntrinsic(i)
-	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty, mir.IntrinsicBytesGet, mir.IntrinsicBytesContains, mir.IntrinsicBytesStartsWith, mir.IntrinsicBytesEndsWith, mir.IntrinsicBytesIndexOf, mir.IntrinsicBytesLastIndexOf, mir.IntrinsicBytesSplit, mir.IntrinsicBytesJoin, mir.IntrinsicBytesConcat, mir.IntrinsicBytesRepeat, mir.IntrinsicBytesReplace, mir.IntrinsicBytesReplaceAll, mir.IntrinsicBytesTrimLeft, mir.IntrinsicBytesTrimRight, mir.IntrinsicBytesTrim, mir.IntrinsicBytesTrimSpace, mir.IntrinsicBytesToUpper, mir.IntrinsicBytesToLower, mir.IntrinsicBytesToHex, mir.IntrinsicBytesSlice:
+	case mir.IntrinsicBytesLen, mir.IntrinsicBytesIsEmpty, mir.IntrinsicBytesGet, mir.IntrinsicBytesContains, mir.IntrinsicBytesStartsWith, mir.IntrinsicBytesEndsWith, mir.IntrinsicBytesIndexOf, mir.IntrinsicBytesLastIndexOf, mir.IntrinsicBytesSplit, mir.IntrinsicBytesJoin, mir.IntrinsicBytesConcat, mir.IntrinsicBytesRepeat, mir.IntrinsicBytesReplace, mir.IntrinsicBytesReplaceAll, mir.IntrinsicBytesTrimLeft, mir.IntrinsicBytesTrimRight, mir.IntrinsicBytesTrim, mir.IntrinsicBytesTrimSpace, mir.IntrinsicBytesToUpper, mir.IntrinsicBytesToLower, mir.IntrinsicBytesToHex, mir.IntrinsicBytesSlice, mir.IntrinsicBytesFromList, mir.IntrinsicBytesFromString, mir.IntrinsicBytesToString, mir.IntrinsicBytesFromHex:
 		return g.emitBytesIntrinsic(i)
 	case mir.IntrinsicStringConcat, mir.IntrinsicStringChars, mir.IntrinsicStringBytes,
 		mir.IntrinsicStringLen, mir.IntrinsicStringIsEmpty,
@@ -4084,7 +4185,11 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		mir.IntrinsicStringContains, mir.IntrinsicStringStartsWith,
 		mir.IntrinsicStringEndsWith, mir.IntrinsicStringIndexOf, mir.IntrinsicStringSplit,
 		mir.IntrinsicStringSplitInto, mir.IntrinsicStringNthSegment,
-		mir.IntrinsicStringCount,
+		mir.IntrinsicStringCount, mir.IntrinsicStringRepeat,
+		mir.IntrinsicStringTrimPrefix, mir.IntrinsicStringTrimSuffix,
+		mir.IntrinsicStringTrimStart, mir.IntrinsicStringTrimEnd,
+		mir.IntrinsicStringReplaceAll, mir.IntrinsicStringSplitN,
+		mir.IntrinsicStringFields, mir.IntrinsicStringLastIndexOf,
 		mir.IntrinsicStringJoin, mir.IntrinsicStringSubstring:
 		return g.emitStringIntrinsic(i)
 	case mir.IntrinsicChanMake, mir.IntrinsicChanSend, mir.IntrinsicChanRecv,
@@ -4107,9 +4212,20 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitIntegerWidenIntrinsic(i, "i8", "i64")
 	case mir.IntrinsicCharToInt:
 		return g.emitIntegerWidenIntrinsic(i, "i32", "i64")
+	case mir.IntrinsicIntToByte:
+		return g.emitIntegerCastIntrinsic(i, "i64", "i8", "trunc")
+	case mir.IntrinsicIntToChar:
+		return g.emitIntegerCastIntrinsic(i, "i64", "i32", "trunc")
+	case mir.IntrinsicByteToChar:
+		return g.emitIntegerCastIntrinsic(i, "i8", "i32", "zext")
+	case mir.IntrinsicCharToByte:
+		return g.emitIntegerCastIntrinsic(i, "i32", "i8", "trunc")
 	case mir.IntrinsicOptionIsSome, mir.IntrinsicOptionIsNone,
 		mir.IntrinsicOptionUnwrap, mir.IntrinsicOptionUnwrapOr:
 		return g.emitOptionIntrinsic(i)
+	case mir.IntrinsicResultIsOk, mir.IntrinsicResultIsErr,
+		mir.IntrinsicResultUnwrap, mir.IntrinsicResultUnwrapOr:
+		return g.emitResultIntrinsic(i)
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("intrinsic %s", mirIntrinsicLabel(i.Kind)))
 }
@@ -4220,6 +4336,114 @@ func (g *mirGen) emitOptionIntrinsic(i *mir.IntrinsicInstr) error {
 	return unsupported("mir-mvp", fmt.Sprintf("option intrinsic kind %d", i.Kind))
 }
 
+// emitResultIntrinsic lowers Result<T, E> method intrinsics with the
+// same two-word enum layout used by the MIR lowerer: Err has
+// discriminant 0 and Ok has discriminant 1. Payloads live in the i64
+// slot, with fromI64Slot handling scalar narrowing and aggregate
+// unboxing for the Ok value.
+func (g *mirGen) emitResultIntrinsic(i *mir.IntrinsicInstr) error {
+	if len(i.Args) < 1 {
+		return unsupported("mir-mvp", fmt.Sprintf("%s without operand", mirIntrinsicLabel(i.Kind)))
+	}
+	resultT, ok := i.Args[0].Type().(*ir.NamedType)
+	if !ok || resultT.Name != "Result" || len(resultT.Args) < 2 {
+		return unsupported("mir-mvp", fmt.Sprintf("%s operand is not Result<T, E>", mirIntrinsicLabel(i.Kind)))
+	}
+	resultLLVM := g.llvmType(resultT)
+	resultVal, err := g.evalOperand(i.Args[0], resultT)
+	if err != nil {
+		return err
+	}
+	discReg := g.fresh()
+	g.fnBuf.WriteString(mirResultDiscProbeTypedLine(discReg, resultLLVM, resultVal))
+
+	switch i.Kind {
+	case mir.IntrinsicResultIsOk:
+		isOk := g.fresh()
+		g.fnBuf.WriteString(mirResultIsOkFromDiscLine(isOk, discReg))
+		return g.storeIntrinsicResult(i, &LlvmValue{typ: "i1", name: isOk})
+	case mir.IntrinsicResultIsErr:
+		isErr := g.fresh()
+		g.fnBuf.WriteString(mirResultIsErrFromDiscLine(isErr, discReg))
+		return g.storeIntrinsicResult(i, &LlvmValue{typ: "i1", name: isErr})
+	case mir.IntrinsicResultUnwrap:
+		if i.Dest == nil {
+			return unsupported("mir-mvp", "result_unwrap without destination")
+		}
+		destLoc := g.fn.Local(i.Dest.Local)
+		if destLoc == nil {
+			return unsupported("mir-mvp", "result_unwrap dest into unknown local")
+		}
+		isErr := g.fresh()
+		g.fnBuf.WriteString(mirResultIsErrFromDiscLine(isErr, discReg))
+		errLabel := g.freshLabel("result.unwrap.err")
+		okLabel := g.freshLabel("result.unwrap.ok")
+		g.fnBuf.WriteString(mirBrCondLine(isErr, errLabel, okLabel))
+		g.fnBuf.WriteString(mirLabelLine(errLabel))
+		abortSym := mirRtResultUnwrapErrSymbol()
+		g.declareRuntime(abortSym, mirRuntimeDeclareNoReturn("void", abortSym, "", false))
+		g.fnBuf.WriteString(mirCallResultUnwrapErrLine())
+		g.fnBuf.WriteString(mirUnreachableLine())
+		g.fnBuf.WriteString(mirLabelLine(okLabel))
+		if isUnitType(destLoc.Type) {
+			return nil
+		}
+		payload := g.fresh()
+		g.fnBuf.WriteString(mirResultPayloadProbeTypedLine(payload, resultLLVM, resultVal))
+		narrowed, err := g.fromI64Slot(payload, destLoc.Type)
+		if err != nil {
+			return err
+		}
+		g.fnBuf.WriteString(mirStoreLine(g.llvmType(destLoc.Type), narrowed, g.localSlots[i.Dest.Local]))
+		return nil
+	case mir.IntrinsicResultUnwrapOr:
+		if len(i.Args) != 2 {
+			return unsupported("mir-mvp", "result_unwrapOr needs [result, fallback]")
+		}
+		if i.Dest == nil {
+			return unsupported("mir-mvp", "result_unwrapOr without destination")
+		}
+		destLoc := g.fn.Local(i.Dest.Local)
+		if destLoc == nil {
+			return unsupported("mir-mvp", "result_unwrapOr dest into unknown local")
+		}
+		isOk := g.fresh()
+		g.fnBuf.WriteString(mirResultIsOkFromDiscLine(isOk, discReg))
+		okLabel := g.freshLabel("result.unwrapor.ok")
+		errLabel := g.freshLabel("result.unwrapor.err")
+		endLabel := g.freshLabel("result.unwrapor.end")
+		g.fnBuf.WriteString(mirBrCondLine(isOk, okLabel, errLabel))
+		g.fnBuf.WriteString(mirLabelLine(okLabel))
+		if isUnitType(destLoc.Type) {
+			g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+			g.fnBuf.WriteString(mirLabelLine(errLabel))
+			g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+			g.fnBuf.WriteString(mirLabelLine(endLabel))
+			return nil
+		}
+		payload := g.fresh()
+		g.fnBuf.WriteString(mirResultPayloadProbeTypedLine(payload, resultLLVM, resultVal))
+		okValue, err := g.fromI64Slot(payload, destLoc.Type)
+		if err != nil {
+			return err
+		}
+		g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+		g.fnBuf.WriteString(mirLabelLine(errLabel))
+		fallback, err := g.evalOperand(i.Args[1], destLoc.Type)
+		if err != nil {
+			return err
+		}
+		g.fnBuf.WriteString(mirBrUncondLine(endLabel))
+		g.fnBuf.WriteString(mirLabelLine(endLabel))
+		merged := g.fresh()
+		destLLVM := g.llvmType(destLoc.Type)
+		g.fnBuf.WriteString(mirPhiTwoLine(merged, destLLVM, okValue, okLabel, fallback, errLabel))
+		g.fnBuf.WriteString(mirStoreLine(destLLVM, merged, g.localSlots[i.Dest.Local]))
+		return nil
+	}
+	return unsupported("mir-mvp", fmt.Sprintf("result intrinsic kind %d", i.Kind))
+}
+
 // narrowOptionPayload is the inverse of the i64-widen map the Option /
 // Maybe constructors use at insertvalue time (see emitListIntrinsic's
 // IntrinsicListFirst/Last arm). Payload is always stored as i64; on
@@ -4264,6 +4488,29 @@ func (g *mirGen) emitIntegerWidenIntrinsic(i *mir.IntrinsicInstr, fromLLVM, toLL
 	return g.storeIntrinsicResult(i, &LlvmValue{typ: toLLVM, name: next})
 }
 
+func (g *mirGen) emitIntegerCastIntrinsic(i *mir.IntrinsicInstr, fromLLVM, toLLVM, op string) error {
+	if len(i.Args) < 1 {
+		return unsupported("mir-mvp", fmt.Sprintf("%s with no arg", mirIntrinsicLabel(i.Kind)))
+	}
+	arg := i.Args[0]
+	reg, err := g.evalOperand(arg, arg.Type())
+	if err != nil {
+		return err
+	}
+	next := g.fresh()
+	switch op {
+	case "trunc":
+		g.fnBuf.WriteString(mirTruncLine(next, fromLLVM, reg, toLLVM))
+	case "zext":
+		g.fnBuf.WriteString(mirZExtLine(next, fromLLVM, reg, toLLVM))
+	case "sext":
+		g.fnBuf.WriteString(mirSExtLine(next, fromLLVM, reg, toLLVM))
+	default:
+		return unsupported("mir-mvp", "integer cast op "+op)
+	}
+	return g.storeIntrinsicResult(i, &LlvmValue{typ: toLLVM, name: next})
+}
+
 // ==== list / map / set intrinsics ====
 
 // emitListIntrinsic dispatches each list intrinsic to its runtime
@@ -4290,6 +4537,24 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 			return unsupported("mir-mvp", "list_push arity")
 		}
 		return g.emitListPushOperand(listReg, i.Args[1], elemT)
+	case mir.IntrinsicListInsert:
+		if len(i.Args) != 3 {
+			return unsupported("mir-mvp", "list_insert arity")
+		}
+		idxOp := i.Args[1]
+		idxReg, err := g.evalOperand(idxOp, idxOp.Type())
+		if err != nil {
+			return err
+		}
+		return g.emitListInsertOperand(listReg, idxReg, i.Args[2], elemT)
+	case mir.IntrinsicListClear:
+		if len(i.Args) != 1 {
+			return unsupported("mir-mvp", "list_clear arity")
+		}
+		sym := mirRtListClearSymbol()
+		g.declareRuntime(sym, mirRuntimeDeclareVoidFromPtrLine(sym))
+		g.fnBuf.WriteString(mirCallListClearLine(listReg))
+		return nil
 	case mir.IntrinsicListLen:
 		if local, ok := mirOperandRootLocal(listOp); ok {
 			if g.snapshotValidInCurBlock(local) {
@@ -4786,7 +5051,12 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		keyKind := containerAbiKind(keyLLVM, isStringLLVMType(keyT))
 		valKind := containerAbiKind(valLLVM, isStringLLVMType(valT))
 		valueSize := mapValueSizeBytes(valLLVM)
-		if valueSize <= 0 {
+		var valueSizeArg string
+		if valueSize > 0 {
+			valueSizeArg = strconv.Itoa(valueSize)
+		} else if mirMapValueNeedsDynamicSize(valLLVM) {
+			valueSizeArg = g.emitSizeOf(valLLVM)
+		} else {
 			return unsupported("mir-mvp", fmt.Sprintf("map_new unsupported value type %s", valLLVM))
 		}
 		sym := mirRtMapNewSymbol()
@@ -4794,7 +5064,7 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		args := []string{
 			mirIntLiteralI64(strconv.Itoa(keyKind)),
 			mirIntLiteralI64(strconv.Itoa(valKind)),
-			mirIntLiteralI64(strconv.Itoa(valueSize)),
+			mirArgSlotI64(valueSizeArg),
 			mirPtrNullLiteral(),
 		}
 		return g.emitSimpleCall(i, sym, "ptr", args)
@@ -4883,7 +5153,7 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		g.fnBuf.WriteString(mirLabelLine(someLabel))
 		loaded := g.fresh()
 		g.fnBuf.WriteString(mirLoadLine(loaded, vLLVM, slot))
-		payloadI64, err := g.listOptionalPayloadToI64(loaded, vLLVM, valT)
+		payloadI64, err := g.toI64Slot(loaded, valT)
 		if err != nil {
 			return unsupportedf("mir-mvp", "map_get payload widen unsupported for %s", vLLVM)
 		}
@@ -5235,6 +5505,36 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 		return err
 	}
 	switch i.Kind {
+	case mir.IntrinsicBytesFromList:
+		if len(i.Args) != 1 {
+			return unsupported("mir-mvp", "bytes_from_list arity")
+		}
+		sym := mirRtBytesFromListSymbol()
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: bytesReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicBytesFromString:
+		if len(i.Args) != 1 {
+			return unsupported("mir-mvp", "bytes_from_string arity")
+		}
+		sym := mirRtStringToBytesSymbol()
+		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
+		em := g.ostyEmitter()
+		result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: bytesReg}})
+		g.flushOstyEmitter(em)
+		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicBytesToString:
+		if len(i.Args) != 1 {
+			return unsupported("mir-mvp", "bytes_to_string arity")
+		}
+		return g.emitBytesValidatedResult(i, bytesReg, mirRtBytesIsValidUTF8Symbol(), mirRtBytesToStringSymbol())
+	case mir.IntrinsicBytesFromHex:
+		if len(i.Args) != 1 {
+			return unsupported("mir-mvp", "bytes_from_hex arity")
+		}
+		return g.emitBytesValidatedResult(i, bytesReg, mirRtBytesIsValidHexSymbol(), mirRtBytesFromHexSymbol())
 	case mir.IntrinsicBytesLen:
 		sym := mirRtBytesLenSymbolName()
 		g.declareRuntime(sym, mirRuntimeDeclareI64FromPtrLine(sym))
@@ -5715,6 +6015,60 @@ func (g *mirGen) emitBytesIntrinsic(i *mir.IntrinsicInstr) error {
 	return unsupported("mir-mvp", fmt.Sprintf("bytes intrinsic kind %d", i.Kind))
 }
 
+func (g *mirGen) emitBytesValidatedResult(i *mir.IntrinsicInstr, inputReg, validateSym, successSym string) error {
+	if i.Dest == nil {
+		return nil
+	}
+	destLoc := g.fn.Local(i.Dest.Local)
+	if destLoc == nil {
+		return fmt.Errorf("mir-mvp: %s dest %d", mirIntrinsicLabel(i.Kind), i.Dest.Local)
+	}
+	resultT, ok := destLoc.Type.(*ir.NamedType)
+	if !ok || resultT.Name != "Result" || len(resultT.Args) < 2 {
+		return unsupported("mir-mvp", fmt.Sprintf("%s dest is not Result<T, E>", mirIntrinsicLabel(i.Kind)))
+	}
+	resultLLVM := g.llvmType(destLoc.Type)
+	okT := resultT.Args[0]
+	g.declareRuntime(validateSym, mirRuntimeDeclareI1FromPtrLine(validateSym))
+	g.declareRuntime(successSym, mirRuntimeDeclarePtrFromPtrLine(successSym))
+
+	em := g.ostyEmitter()
+	valid := llvmCall(em, "i1", validateSym, []*LlvmValue{{typ: "ptr", name: inputReg}})
+	g.flushOstyEmitter(em)
+
+	okLabel := g.freshLabel("bytes.result.ok")
+	errLabel := g.freshLabel("bytes.result.err")
+	mergeLabel := g.freshLabel("bytes.result.merge")
+	g.fnBuf.WriteString(mirBrCondLine(valid.name, okLabel, errLabel))
+
+	g.fnBuf.WriteString(mirLabelLine(okLabel))
+	em = g.ostyEmitter()
+	success := llvmCall(em, "ptr", successSym, []*LlvmValue{{typ: "ptr", name: inputReg}})
+	g.flushOstyEmitter(em)
+	okPayload, err := g.toI64Slot(success.name, okT)
+	if err != nil {
+		return err
+	}
+	okStep := g.fresh()
+	okValue := g.fresh()
+	g.fnBuf.WriteString(mirInsertValueI64Line(okStep, resultLLVM, "undef", mirDiscriminantOk(), "0"))
+	g.fnBuf.WriteString(mirInsertValueI64Line(okValue, resultLLVM, okStep, okPayload, "1"))
+	g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
+
+	g.fnBuf.WriteString(mirLabelLine(errLabel))
+	errStep := g.fresh()
+	errValue := g.fresh()
+	g.fnBuf.WriteString(mirInsertValueI64Line(errStep, resultLLVM, "undef", mirDiscriminantErr(), "0"))
+	g.fnBuf.WriteString(mirInsertValueI64Line(errValue, resultLLVM, errStep, "0", "1"))
+	g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
+
+	g.fnBuf.WriteString(mirLabelLine(mergeLabel))
+	merged := g.fresh()
+	g.fnBuf.WriteString(mirPhiTwoLine(merged, resultLLVM, okValue, okLabel, errValue, errLabel))
+	g.fnBuf.WriteString(mirStoreLine(resultLLVM, merged, g.localSlots[i.Dest.Local]))
+	return nil
+}
+
 // emitStringIntrinsic dispatches String receiver intrinsics that the
 // MIR lowerer emits for stdlib method calls (`.chars()`, `.bytes()`,
 // `.len()`, `.isEmpty()`, `.toUpper()`, `.toLower()`). Each maps to a
@@ -5827,6 +6181,14 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 		result := llvmStringRuntimeTrimSpace(em, &LlvmValue{typ: "ptr", name: strReg})
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
+	case mir.IntrinsicStringTrimStart:
+		return g.emitStringUnaryPtrIntrinsic(i, strReg, llvmStringRuntimeTrimStartSymbol())
+	case mir.IntrinsicStringTrimEnd:
+		return g.emitStringUnaryPtrIntrinsic(i, strReg, llvmStringRuntimeTrimEndSymbol())
+	case mir.IntrinsicStringTrimPrefix:
+		return g.emitStringBinaryPtrIntrinsic(i, strReg, llvmStringRuntimeTrimPrefixSymbol(), "string_trim_prefix")
+	case mir.IntrinsicStringTrimSuffix:
+		return g.emitStringBinaryPtrIntrinsic(i, strReg, llvmStringRuntimeTrimSuffixSymbol(), "string_trim_suffix")
 	case mir.IntrinsicStringToUpper:
 		sym := mirRtStringToUpperSymbol()
 		g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
@@ -5853,10 +6215,18 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitStringBinaryBoolIntrinsic(i, strReg, llvmStringRuntimeContainsSymbol())
 	case mir.IntrinsicStringCount:
 		return g.emitStringCount(i, strReg)
+	case mir.IntrinsicStringRepeat:
+		return g.emitStringRepeat(i, strReg)
 	case mir.IntrinsicStringIndexOf:
 		return g.emitStringIndexOf(i, strReg)
+	case mir.IntrinsicStringLastIndexOf:
+		return g.emitStringLastIndexOf(i, strReg)
 	case mir.IntrinsicStringSplit:
 		return g.emitStringSplit(i, strReg)
+	case mir.IntrinsicStringSplitN:
+		return g.emitStringSplitN(i, strReg)
+	case mir.IntrinsicStringFields:
+		return g.emitStringFields(i, strReg)
 	case mir.IntrinsicStringJoin:
 		// `strReg` was evaluated above as Args[0] — for join this is
 		// the List<String> parts pointer, not a String. Both map to
@@ -5866,8 +6236,79 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitStringJoin(i, strReg)
 	case mir.IntrinsicStringSubstring:
 		return g.emitStringSubstring(i, strReg)
+	case mir.IntrinsicStringReplace:
+		return g.emitStringReplaceLike(i, strReg, llvmStringRuntimeReplaceSymbol(), "string_replace")
+	case mir.IntrinsicStringReplaceAll:
+		return g.emitStringReplaceLike(i, strReg, llvmStringRuntimeReplaceAllSymbol(), "string_replace_all")
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("string intrinsic kind %d", i.Kind))
+}
+
+func (g *mirGen) emitStringUnaryPtrIntrinsic(i *mir.IntrinsicInstr, strReg, sym string) error {
+	if len(i.Args) != 1 {
+		return unsupported("mir-mvp", fmt.Sprintf("%s arity", mirIntrinsicLabel(i.Kind)))
+	}
+	g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
+	em := g.ostyEmitter()
+	result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: strReg}})
+	g.flushOstyEmitter(em)
+	return g.storeIntrinsicResult(i, result)
+}
+
+func (g *mirGen) emitStringBinaryPtrIntrinsic(i *mir.IntrinsicInstr, strReg, sym, label string) error {
+	if len(i.Args) != 2 {
+		return unsupported("mir-mvp", label+" arity")
+	}
+	argReg, err := g.evalOperand(i.Args[1], i.Args[1].Type())
+	if err != nil {
+		return err
+	}
+	g.declareRuntime(sym, mirRuntimeDeclarePtrFromTwoPtrLine(sym))
+	em := g.ostyEmitter()
+	result := llvmCall(em, "ptr", sym, []*LlvmValue{
+		{typ: "ptr", name: strReg},
+		{typ: "ptr", name: argReg},
+	})
+	g.flushOstyEmitter(em)
+	return g.storeIntrinsicResult(i, result)
+}
+
+func (g *mirGen) emitStringRepeat(i *mir.IntrinsicInstr, strReg string) error {
+	if len(i.Args) != 2 {
+		return unsupported("mir-mvp", "string_repeat arity")
+	}
+	countReg, err := g.evalOperand(i.Args[1], mir.TInt)
+	if err != nil {
+		return err
+	}
+	sym := mirRtStringRepeatSymbol()
+	g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrI64Line(sym))
+	tmp := g.fresh()
+	g.fnBuf.WriteString(mirCallStringRepeatLine(tmp, strReg, countReg))
+	return g.storeIntrinsicResult(i, &LlvmValue{typ: "ptr", name: tmp})
+}
+
+func (g *mirGen) emitStringReplaceLike(i *mir.IntrinsicInstr, strReg, sym, label string) error {
+	if len(i.Args) != 3 {
+		return unsupported("mir-mvp", label+" arity")
+	}
+	oldReg, err := g.evalOperand(i.Args[1], i.Args[1].Type())
+	if err != nil {
+		return err
+	}
+	newReg, err := g.evalOperand(i.Args[2], i.Args[2].Type())
+	if err != nil {
+		return err
+	}
+	g.declareRuntime(sym, mirRuntimeDeclarePtrFromThreePtrLine(sym))
+	em := g.ostyEmitter()
+	result := llvmCall(em, "ptr", sym, []*LlvmValue{
+		{typ: "ptr", name: strReg},
+		{typ: "ptr", name: oldReg},
+		{typ: "ptr", name: newReg},
+	})
+	g.flushOstyEmitter(em)
+	return g.storeIntrinsicResult(i, result)
 }
 
 func (g *mirGen) emitStringIndexOf(i *mir.IntrinsicInstr, strReg string) error {
@@ -5897,6 +6338,31 @@ func (g *mirGen) emitStringIndexOf(i *mir.IntrinsicInstr, strReg string) error {
 		return g.storeOptionalIntFromNegativeOneIndex(i, optT, index.name, "string.index_of")
 	}
 	return g.storeIntrinsicResult(i, index)
+}
+
+func (g *mirGen) emitStringLastIndexOf(i *mir.IntrinsicInstr, strReg string) error {
+	if len(i.Args) != 2 {
+		return unsupported("mir-mvp", "string_last_index_of arity")
+	}
+	needleReg, err := g.evalOperand(i.Args[1], i.Args[1].Type())
+	if err != nil {
+		return err
+	}
+	sym := mirRtStringLastIndexOfSymbol()
+	g.declareRuntime(sym, mirRuntimeDeclareI64FromTwoPtrLine(sym))
+	tmp := g.fresh()
+	g.fnBuf.WriteString(mirCallValueStringLastIndexOfLine(tmp, strReg, needleReg))
+	if i.Dest == nil {
+		return nil
+	}
+	destLoc := g.fn.Local(i.Dest.Local)
+	if destLoc == nil {
+		return fmt.Errorf("mir-mvp: string_last_index_of dest %d", i.Dest.Local)
+	}
+	if optT, ok := destLoc.Type.(*ir.OptionalType); ok {
+		return g.storeOptionalIntFromNegativeOneIndex(i, optT, tmp, "string.last_index_of")
+	}
+	return g.storeIntrinsicResult(i, &LlvmValue{typ: "i64", name: tmp})
 }
 
 // emitStringCount lowers `IntrinsicStringCount(value, needle)` to a
@@ -6036,6 +6502,9 @@ func (g *mirGen) emitStringConcatBoxed(op mir.Operand) (*LlvmValue, error) {
 	}
 	prim, ok := t.(*ir.PrimType)
 	if !ok {
+		if out, handled, err := g.emitEnumStringConcatBoxed(op, t); handled || err != nil {
+			return out, err
+		}
 		return nil, nil
 	}
 	switch prim.Kind {
@@ -6099,6 +6568,91 @@ func (g *mirGen) emitStringConcatBoxed(op mir.Operand) (*LlvmValue, error) {
 	return nil, nil
 }
 
+func (g *mirGen) emitEnumStringConcatBoxed(op mir.Operand, t mir.Type) (*LlvmValue, bool, error) {
+	nt, ok := t.(*ir.NamedType)
+	if !ok || nt.Name == "" || g.mod == nil || g.mod.Layouts == nil {
+		return nil, false, nil
+	}
+	layout := g.mod.Layouts.Enums[nt.Name]
+	if layout == nil || len(layout.Variants) == 0 {
+		return nil, false, nil
+	}
+	enumVal, err := g.evalOperand(op, t)
+	if err != nil {
+		return nil, true, err
+	}
+	enumLLVM := g.llvmType(t)
+	disc := g.fresh()
+	g.fnBuf.WriteString(mirExtractValueLine(disc, enumLLVM, enumVal, "0"))
+	defaultLabel := g.freshLabel("enumstr.default")
+	mergeLabel := g.freshLabel("enumstr.merge")
+	cases := make([]MirGenSwitchCase, 0, len(layout.Variants))
+	labels := make([]string, len(layout.Variants))
+	values := make([]string, len(layout.Variants))
+	for idx, v := range layout.Variants {
+		label := g.freshLabel("enumstr." + sanitizeLabelFragment(v.Name))
+		labels[idx] = label
+		cases = append(cases, MirGenSwitchCase{
+			ValueText:   strconv.Itoa(v.Index),
+			TargetLabel: label,
+		})
+		values[idx] = g.stringLiteral(v.Name)
+	}
+	g.fnBuf.WriteString(mirTerminatorSwitchInt("i64", disc, defaultLabel, cases))
+	for _, label := range labels {
+		g.fnBuf.WriteString(mirLabelLine(label))
+		g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
+	}
+	unknown := g.stringLiteral(nt.Name + ".<unknown>")
+	g.fnBuf.WriteString(mirLabelLine(defaultLabel))
+	g.fnBuf.WriteString(mirBrUncondLine(mergeLabel))
+	g.fnBuf.WriteString(mirLabelLine(mergeLabel))
+	out := g.fresh()
+	var b strings.Builder
+	b.WriteString("  ")
+	b.WriteString(out)
+	b.WriteString(" = phi ptr ")
+	for idx, label := range labels {
+		if idx > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString("[ ")
+		b.WriteString(values[idx])
+		b.WriteString(", %")
+		b.WriteString(label)
+		b.WriteString(" ]")
+	}
+	if len(labels) > 0 {
+		b.WriteString(", ")
+	}
+	b.WriteString("[ ")
+	b.WriteString(unknown)
+	b.WriteString(", %")
+	b.WriteString(defaultLabel)
+	b.WriteString(" ]\n")
+	g.fnBuf.WriteString(b.String())
+	return &LlvmValue{typ: "ptr", name: out}, true, nil
+}
+
+func sanitizeLabelFragment(s string) string {
+	if s == "" {
+		return "variant"
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "variant"
+	}
+	return b.String()
+}
+
 // emitStringSplit emits `.split(sep)` as a call to the runtime
 // `osty_rt_strings_Split(ptr, ptr) -> ptr` helper. The runtime
 // returns a List<String> pointer; the MIR dest local has that same
@@ -6119,6 +6673,42 @@ func (g *mirGen) emitStringSplit(i *mir.IntrinsicInstr, strReg string) error {
 	g.declareRuntime(sym, mirRuntimeDeclarePtrFromTwoPtrLine(sym))
 	em := g.ostyEmitter()
 	result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: strReg}, {typ: "ptr", name: sepReg}})
+	g.flushOstyEmitter(em)
+	return g.storeIntrinsicResult(i, result)
+}
+
+func (g *mirGen) emitStringSplitN(i *mir.IntrinsicInstr, strReg string) error {
+	if len(i.Args) != 3 {
+		return unsupported("mir-mvp", "string_split_n arity")
+	}
+	sepReg, err := g.evalOperand(i.Args[1], i.Args[1].Type())
+	if err != nil {
+		return err
+	}
+	nReg, err := g.evalOperand(i.Args[2], mir.TInt)
+	if err != nil {
+		return err
+	}
+	sym := llvmStringRuntimeSplitNSymbol()
+	g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrPtrI64Line(sym))
+	em := g.ostyEmitter()
+	result := llvmCall(em, "ptr", sym, []*LlvmValue{
+		{typ: "ptr", name: strReg},
+		{typ: "ptr", name: sepReg},
+		{typ: "i64", name: nReg},
+	})
+	g.flushOstyEmitter(em)
+	return g.storeIntrinsicResult(i, result)
+}
+
+func (g *mirGen) emitStringFields(i *mir.IntrinsicInstr, strReg string) error {
+	if len(i.Args) != 1 {
+		return unsupported("mir-mvp", "string_fields arity")
+	}
+	sym := mirRtStringSymbol("Fields")
+	g.declareRuntime(sym, mirRuntimeDeclarePtrFromPtrLine(sym))
+	em := g.ostyEmitter()
+	result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: strReg}})
 	g.flushOstyEmitter(em)
 	return g.storeIntrinsicResult(i, result)
 }
@@ -6784,15 +7374,10 @@ func mapKeyValueTypes(t mir.Type) (mir.Type, mir.Type) {
 	return nt.Args[0], nt.Args[1]
 }
 
-// mapValueSizeBytes returns the slot width `osty_rt_map_new` expects
-// for a value of the given LLVM type, matching the legacy AST
-// emitter's emitTypeSize bookkeeping for the scalar slots the MIR
-// path currently produces map values in. Aggregates (structs / unions)
-// return 0 so callers can bail out with a diagnostic instead of
-// quietly lowering an ill-sized slot.
 // mapValueSizeBytes maps an LLVM value type to the byte width used when
-// memcpy-ing map values into out-slots. Delegates to the Osty-sourced
-// `mirMapValueSizeBytes` (`toolchain/mir_generator.osty`).
+// memcpy-ing map values into out-slots. Named aggregates return 0 from
+// this helper and are handled by `mirMapValueNeedsDynamicSize` plus
+// `emitSizeOf`, matching the AST emitter's dynamic size path.
 func mapValueSizeBytes(llvmTyp string) int {
 	return mirMapValueSizeBytes(llvmTyp)
 }
@@ -6856,7 +7441,14 @@ func (g *mirGen) emitPrintlnLike(op mir.Operand, newline bool) error {
 		case ir.PrimChar:
 			format, llvmT = "%d", "i32"
 		case ir.PrimString:
-			format, llvmT = "%s", "ptr"
+			val, err := g.evalOperand(op, argT)
+			if err != nil {
+				return err
+			}
+			g.declareRuntime(ostyRtIOWriteSymbol, mirRuntimeDeclareLine("void", ostyRtIOWriteSymbol, "ptr, i1, i1"))
+			g.fnBuf.WriteString(mirCallVoidLine(ostyRtIOWriteSymbol,
+				mirArgSlotPtr(val)+", "+mirArgSlotI1(llvmStdIoI1Text(newline))+", "+mirArgSlotI1(llvmStdIoI1Text(false))))
+			return nil
 		default:
 			return unsupported("mir-mvp", "println: unsupported primitive kind")
 		}
@@ -7545,6 +8137,31 @@ func (g *mirGen) emitListPushOperand(listReg string, op mir.Operand, elemT mir.T
 		size,
 	})
 	g.flushOstyEmitter(em)
+	return nil
+}
+
+// emitListInsertOperand inserts one value into a list by runtime ABI
+// convention — typed insert for scalar/pointer element types, bytes
+// fallback for composite ones.
+func (g *mirGen) emitListInsertOperand(listReg, idxReg string, op mir.Operand, elemT mir.Type) error {
+	val, err := g.evalOperand(op, elemT)
+	if err != nil {
+		return err
+	}
+	elemLLVM := g.llvmType(elemT)
+	if listUsesTypedRuntime(elemLLVM) {
+		sym := listRuntimeInsertSymbol(elemLLVM)
+		g.declareRuntime(sym, mirRuntimeDeclareLine("void", sym, "ptr, i64, "+elemLLVM))
+		g.fnBuf.WriteString(mirCallVoidListPtrI64ValueLine(sym, listReg, idxReg, elemLLVM, val))
+		return nil
+	}
+	sym := listRuntimeInsertBytesV1Symbol()
+	g.declareRuntime(sym, mirRuntimeDeclareBytesV1GetLine(sym))
+	em := g.ostyEmitter()
+	slot := llvmSpillToSlot(em, &LlvmValue{typ: elemLLVM, name: val})
+	size := llvmSizeOf(em, elemLLVM)
+	g.flushOstyEmitter(em)
+	g.fnBuf.WriteString(mirCallVoidListBytesV1SetLine(sym, listReg, idxReg, slot.name, size.name))
 	return nil
 }
 
