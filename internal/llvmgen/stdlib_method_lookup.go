@@ -131,6 +131,7 @@ var ListCanonicalHelperNames = []string{
 	"windowed",
 	"partition",
 	"flatMap",
+	"reverse",
 }
 
 // LookupStructMethod returns the bodied AST method `methodName` on the
