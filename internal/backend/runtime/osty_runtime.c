@@ -716,6 +716,15 @@ typedef struct osty_gc_kind_descriptor {
     /* Whether the no-header young arena can carry this kind. Toggle
      * at the table row, not in `osty_gc_young_eligible`. */
     bool young_eligible;
+    /* Phase 0h: whether the trace function is safe to invoke without
+     * `osty_gc_lock` held. False for kinds whose payload backing
+     * storage can be reallocated mid-trace by the mutator (list,
+     * map, set, channel) — those would need deferred-realloc or
+     * hazard-pointer reclamation, which is its own piece of work.
+     * True for kinds whose tracer reads either fixed-layout fields
+     * (closure_env captures, generic enum payloads) or single
+     * pointer slots that cannot move. */
+    bool trace_lockfree_safe;
     /* Per-kind cleanup for UNFORWARDED young objects swept by
      * `cheney_destroy_dead_from_space`. NULL when the payload has
      * no external buffers. */
@@ -749,18 +758,26 @@ enum {
 
 static const osty_gc_kind_descriptor osty_gc_generic_patterns[] = {
     /* NONE — opaque payload, cheney handles it as raw bytes. */
-    [OSTY_GC_GENERIC_NONE] = {.young_eligible = true},
+    [OSTY_GC_GENERIC_NONE] = {
+        .young_eligible = true,
+        /* Phase 0h: NONE has no trace fn, so the lockfree flag is
+         * moot. Setting true keeps the predicate result consistent
+         * (no trace = nothing to race on). */
+        .trace_lockfree_safe = true,
+    },
     /* ENUM_PTR routes through `OSTY_GC_KIND_GENERIC_ENUM_PTR`'s row
      * in the kind table; this row is only consulted on the headerful
      * fallback dispatch, so the young flag stays false. */
     [OSTY_GC_GENERIC_ENUM_PTR] = {
         .trace = osty_rt_enum_ptr_payload_trace,
+        .trace_lockfree_safe = true,
     },
     /* Same shape as ENUM_PTR — TASK_HANDLE now routes through
      * `OSTY_GC_KIND_GENERIC_TASK_HANDLE`'s row in the kind table.
      * This row is parity-only for the headerful fallback dispatch. */
     [OSTY_GC_GENERIC_TASK_HANDLE] = {
         .destroy = osty_rt_task_handle_destroy,
+        .trace_lockfree_safe = true,
     },
 };
 
@@ -809,6 +826,10 @@ static const osty_gc_kind_descriptor osty_gc_kind_table[] = {
     [OSTY_GC_KIND_CLOSURE_ENV - OSTY_GC_KIND_LIST] = {
         .trace = osty_rt_closure_env_trace,
         .young_eligible = true,
+        /* Phase 0h: captures populated synchronously at creation, never
+         * mutated, fixed-length array — safe to trace without the GC
+         * lock once the rest of the lock-free invariants are in place. */
+        .trace_lockfree_safe = true,
         .remap = osty_gc_remap_closure_env_payload,
     },
     /* CHANNEL young-safe through the same handoff pattern as Map:
@@ -821,12 +842,21 @@ static const osty_gc_kind_descriptor osty_gc_kind_table[] = {
         .trace = osty_rt_chan_trace,
         .destroy = osty_rt_chan_destroy,
         .young_eligible = true,
+        /* Phase 0h: NOT lockfree-safe — the channel slot ring uses a
+         * mutex+cond and the head/tail counters mutate on send/recv;
+         * even reading the slots while a sender is mid-update could
+         * race the slot allocation. Future lock-free path needs a
+         * snapshot or hazard pointer. */
         .cleanup_young_dead = osty_gc_cleanup_young_dead_chan,
         .remap = osty_gc_remap_chan_payload,
     },
     [OSTY_GC_KIND_GENERIC_ENUM_PTR - OSTY_GC_KIND_LIST] = {
         .trace = osty_rt_enum_ptr_payload_trace,
         .young_eligible = true,
+        /* Phase 0h: payload is a single managed pointer slot — read
+         * is atomic on aligned platforms and the slot itself doesn't
+         * move. SATB barrier on slot writes preserves the invariant. */
+        .trace_lockfree_safe = true,
         .remap = osty_gc_remap_slot,
     },
     /* TASK_HANDLE young-safe through `osty_gc_task_handle_safe_handoff`
@@ -835,6 +865,10 @@ static const osty_gc_kind_descriptor osty_gc_kind_table[] = {
     [OSTY_GC_KIND_GENERIC_TASK_HANDLE - OSTY_GC_KIND_LIST] = {
         .destroy = osty_rt_task_handle_destroy,
         .young_eligible = true,
+        /* Phase 0h: no trace fn at all (no managed pointer payload),
+         * so the lockfree flag is moot — but mark it true so a future
+         * trace fn addition would have to opt out explicitly. */
+        .trace_lockfree_safe = true,
         .cleanup_young_dead = osty_gc_cleanup_young_dead_task_handle,
     },
 };
@@ -852,6 +886,26 @@ static inline const osty_gc_kind_descriptor *osty_gc_kind_descriptor_lookup(
         return NULL;
     }
     return &osty_gc_kind_table[kind - OSTY_GC_KIND_LIST];
+}
+
+/* Phase 0h: predicate that decides whether `mark_drain_budget` may
+ * release `osty_gc_lock` around the tracer call for this header.
+ * GENERIC kinds fall through to their generic_pattern row, which
+ * defaults to NOT-safe except for the patterns marked above —
+ * conservative because GENERIC users that add a trace fn need to
+ * audit it explicitly before flipping the flag. */
+static inline bool osty_gc_trace_lockfree_safe(osty_gc_header *header) {
+    const osty_gc_kind_descriptor *desc =
+        osty_gc_kind_descriptor_lookup(header->object_kind);
+    if (desc != NULL) {
+        return desc->trace_lockfree_safe;
+    }
+    /* GENERIC fallback. Look at the pattern row. */
+    uint8_t pat = header->generic_pattern;
+    if (pat >= OSTY_GC_GENERIC_PATTERN_COUNT) {
+        return false;
+    }
+    return osty_gc_generic_patterns[pat].trace_lockfree_safe;
 }
 
 /* Phase 2 dispatch (RUNTIME_GC_DELTA tiny-tag young plan).
@@ -5251,6 +5305,14 @@ static OSTY_RT_TLS bool osty_gc_local_mark_active = false;
 static int64_t osty_gc_local_mark_pushes_total = 0;
 static int64_t osty_gc_local_mark_overflow_total = 0;
 
+/* Phase 0h: TLS flag set while a marker thread is mid-dispatch on a
+ * lockfree-safe kind. `mark_stack_push` consults it to abort with a
+ * clear message if the local TLS stack overflows during such a
+ * dispatch — central pushes without `osty_gc_lock` would race
+ * mutator-side SATB pushes. Defined ahead of `mark_stack_push` so
+ * the reference resolves in single-pass C compilation. */
+static OSTY_RT_TLS bool osty_gc_in_lockfree_trace = false;
+
 static void osty_gc_mark_stack_push_central(osty_gc_header *header) {
     if (osty_gc_mark_stack_count == osty_gc_mark_stack_cap) {
         int64_t new_cap;
@@ -5302,6 +5364,22 @@ static void osty_gc_mark_stack_push(osty_gc_header *header) {
          * confirm the local cap is sized right for the workload. */
         (void)__atomic_add_fetch(&osty_gc_local_mark_overflow_total, 1,
                                  __ATOMIC_RELAXED);
+        /* Phase 0h safety: a lockfree-safe tracer is currently
+         * mid-dispatch with `osty_gc_lock` released. Pushing to the
+         * central stack here would race with mutator-side SATB
+         * pushes (which take `osty_gc_lock`). Abort with a clear
+         * message so the issue is visible — this is a design bound
+         * (closure captures cap at 64, generic enum ptr pushes 1),
+         * so realistic workloads can't hit it. If a future kind
+         * lifts the bound, the kind's `trace_lockfree_safe` flag
+         * needs to flip to false. */
+        if (osty_gc_in_lockfree_trace) {
+            osty_rt_abort(
+                "lockfree trace: local mark stack overflow without "
+                "gc_lock held — bound the kind's trace push count "
+                "below OSTY_GC_LOCAL_MARK_STACK_CAP or set "
+                "trace_lockfree_safe=false in the kind descriptor");
+        }
     }
     osty_gc_mark_stack_push_central(header);
 }
@@ -5314,6 +5392,13 @@ static void osty_gc_mark_stack_push(osty_gc_header *header) {
  * 0h) these counters become the contention signal. */
 static int64_t osty_gc_mark_cas_attempts_total = 0;
 static int64_t osty_gc_mark_cas_failures_total = 0;
+
+/* Phase 0h: counters for trace-dispatch lock state. Each call to
+ * `dispatch_trace` either ran with `osty_gc_lock` released
+ * (`lockfree_total`) or held (`locked_total`). The TLS flag itself
+ * is defined ahead of `mark_stack_push` for forward-reference. */
+static int64_t osty_gc_lockfree_trace_total = 0;
+static int64_t osty_gc_locked_trace_total = 0;
 
 static void osty_gc_mark_header(osty_gc_header *header) {
     /* Enqueue only — the actual trace happens in `osty_gc_mark_drain`.
@@ -5391,11 +5476,30 @@ static int64_t osty_gc_mark_drain_budget(int64_t budget) {
          * also see the trace's full effects (children pushed). */
         __atomic_store_n(&header->color, OSTY_GC_COLOR_BLACK,
                          __ATOMIC_RELEASE);
-        /* Trace callbacks re-enter `osty_gc_mark_*` for children,
-         * which push more GREY work — into TLS via mark_stack_push's
-         * routing. The C call stack stays bounded regardless of
-         * object graph depth. */
-        osty_gc_dispatch_trace(header);
+        /* Phase 0h: per-kind decision on whether the tracer can run
+         * with `osty_gc_lock` released. closure_env / generic enum
+         * payloads are safe (fixed-layout reads, bounded push count
+         * within local TLS cap); list / map / set / channel still
+         * need the lock because their backing storage can be
+         * reallocated by a concurrent mutator. */
+        bool lockfree = osty_gc_trace_lockfree_safe(header);
+        if (lockfree) {
+            (void)__atomic_add_fetch(&osty_gc_lockfree_trace_total, 1,
+                                     __ATOMIC_RELAXED);
+            osty_gc_in_lockfree_trace = true;
+            osty_gc_release();
+            osty_gc_dispatch_trace(header);
+            osty_gc_acquire();
+            osty_gc_in_lockfree_trace = false;
+        } else {
+            (void)__atomic_add_fetch(&osty_gc_locked_trace_total, 1,
+                                     __ATOMIC_RELAXED);
+            /* Trace callbacks re-enter `osty_gc_mark_*` for children,
+             * which push more GREY work — into TLS via mark_stack_push's
+             * routing. The C call stack stays bounded regardless of
+             * object graph depth. */
+            osty_gc_dispatch_trace(header);
+        }
         done += 1;
     }
 
@@ -13789,6 +13893,22 @@ int64_t osty_gc_debug_mark_cas_attempts_total(void) {
 
 int64_t osty_gc_debug_mark_cas_failures_total(void) {
     return osty_gc_mark_cas_failures_total;
+}
+
+/* Phase 0h trace-dispatch counters. `lockfree_trace_total` is the
+ * count of `dispatch_trace` calls that ran with `osty_gc_lock`
+ * released (closure_env, generic enum); `locked_trace_total` is the
+ * count that kept the lock (list/map/set/channel). The ratio is the
+ * fraction of trace work newly able to run concurrently with
+ * mutator activity. */
+int64_t osty_gc_debug_lockfree_trace_total(void) {
+    return __atomic_load_n(&osty_gc_lockfree_trace_total,
+                           __ATOMIC_ACQUIRE);
+}
+
+int64_t osty_gc_debug_locked_trace_total(void) {
+    return __atomic_load_n(&osty_gc_locked_trace_total,
+                           __ATOMIC_ACQUIRE);
 }
 
 int64_t osty_gc_debug_color_of(void *payload) {
