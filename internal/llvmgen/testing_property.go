@@ -1,8 +1,6 @@
 package llvmgen
 
 import (
-	"fmt"
-
 	"github.com/osty/osty/internal/ast"
 )
 
@@ -91,7 +89,7 @@ func (g *generator) emitTestingProperty(call *ast.CallExpr, method string) error
 		g.branchTo(continueLabel)
 	}
 	emitter = g.toOstyEmitter()
-	emitter.body = append(emitter.body, fmt.Sprintf("%s:", continueLabel))
+	emitter.body = append(emitter.body, mirLabelText(continueLabel))
 	g.emitGCSafepointKind(emitter, safepointKindLoop)
 	llvmRangeEnd(emitter, loop)
 	g.takeOstyEmitter(emitter)
@@ -371,7 +369,7 @@ func (g *generator) emitTestingPropertyOneOfCall(call *ast.CallExpr, seed value)
 	}
 	index, err := g.emitTestingPropertyIntRange(
 		value{typ: "i64", ref: "0"},
-		value{typ: "i64", ref: fmt.Sprintf("%d", len(listExpr.Elems))},
+		value{typ: "i64", ref: mirGenIntToString(len(listExpr.Elems))},
 		seed,
 	)
 	if err != nil {
@@ -396,7 +394,7 @@ func unwrapParenExpr(expr ast.Expr) ast.Expr {
 }
 
 func (g *generator) emitTestingPropertySeedOffset(seed value, delta int64) (value, error) {
-	return g.emitTestingPropertyAddI64(seed, value{typ: "i64", ref: fmt.Sprintf("%d", delta)})
+	return g.emitTestingPropertyAddI64(seed, value{typ: "i64", ref: mirGenIntToString(int(delta))})
 }
 
 func (g *generator) emitTestingPropertyAddI64(left, right value) (value, error) {
@@ -405,7 +403,7 @@ func (g *generator) emitTestingPropertyAddI64(left, right value) (value, error) 
 	}
 	emitter := g.toOstyEmitter()
 	name := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, fmt.Sprintf("  %s = add i64 %s, %s", name, left.ref, right.ref))
+	emitter.body = append(emitter.body, mirAddI64Text(name, left.ref, right.ref))
 	g.takeOstyEmitter(emitter)
 	return value{typ: "i64", ref: name}, nil
 }
