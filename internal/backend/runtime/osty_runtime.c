@@ -1940,6 +1940,18 @@ static size_t osty_gc_forwarding_hash(void *payload) {
     return osty_gc_index_hash(payload);
 }
 
+/* Phase 0f: cycle-deferred grow flag. While the collector is in
+ * MARK_INCREMENTAL or SWEEPING, growing the index would free the
+ * old buffer that a concurrent (lock-free) prober could still be
+ * reading. Insert sites that hit the load-factor threshold during
+ * a cycle just set this flag instead of growing; finish_locked
+ * picks it up and grows under STW after the cycle has fully
+ * settled. The pre-grow at incremental_start sizes the table so
+ * typical workloads don't trip this during the cycle. */
+static int osty_gc_index_grow_pending = 0;
+static int64_t osty_gc_index_grow_deferred_total = 0;
+static int64_t osty_gc_index_pregrow_total = 0;
+
 static void osty_gc_index_grow(int64_t new_capacity) {
     void **old_keys = osty_gc_index_keys;
     osty_gc_header **old_values = osty_gc_index_values;
@@ -1963,6 +1975,35 @@ static void osty_gc_index_grow(int64_t new_capacity) {
         }
         free(old_keys);
         free(old_values);
+    }
+    osty_gc_index_grow_pending = 0;
+}
+
+/* Pre-grow the index before a cycle if its post-cycle high-water
+ * mark would otherwise force an in-cycle grow. Caller holds the GC
+ * lock and is responsible for ensuring the cycle hasn't started yet
+ * (state == IDLE) so no concurrent prober can trip on the buffer
+ * swap. The "2× current count" target is heuristic — generous enough
+ * to absorb the typical mutator-assist + barrier-greying load without
+ * tripping the 0.75 threshold mid-cycle. */
+static void osty_gc_index_pregrow_for_cycle(void) {
+    if (osty_gc_index_capacity == 0) {
+        osty_gc_index_grow(128);
+        osty_gc_index_pregrow_total += 1;
+        return;
+    }
+    int64_t projected = (osty_gc_index_count + osty_gc_index_tombstones) * 4;
+    int64_t want = projected;
+    /* Match the insert-side trigger: load factor ≤ 0.75 means
+     * (count + tombs) * 4 < cap * 3, so headroom ≥ count * 1.33×. */
+    if (want >= osty_gc_index_capacity * 3 / 2) {
+        int64_t new_cap = osty_gc_index_capacity * 2;
+        if (new_cap < projected) new_cap = projected;
+        /* Round up to power of two — index hash mask requires it. */
+        int64_t cap = 128;
+        while (cap < new_cap) cap *= 2;
+        osty_gc_index_grow(cap);
+        osty_gc_index_pregrow_total += 1;
     }
 }
 
@@ -1991,8 +2032,23 @@ static OSTY_HOT_INLINE void osty_gc_index_insert_new(void *payload, osty_gc_head
     if (__builtin_expect(osty_gc_index_keys == NULL ||
                          (osty_gc_index_count + osty_gc_index_tombstones + 1) * 4 >=
                              osty_gc_index_capacity * 3, 0)) {
-        int64_t new_cap = osty_gc_index_capacity == 0 ? 128 : osty_gc_index_capacity * 2;
-        osty_gc_index_grow(new_cap);
+        /* Phase 0f: defer grow during a cycle so concurrent probers
+         * don't see a buffer swap mid-walk. The pre-grow at
+         * incremental_start sizes the table so this branch rarely
+         * fires inside a cycle. If it does, the next finish runs
+         * the grow under STW. */
+        if (osty_gc_state != OSTY_GC_STATE_IDLE &&
+            osty_gc_index_keys != NULL &&
+            osty_gc_index_count + osty_gc_index_tombstones + 1 <
+                osty_gc_index_capacity) {
+            if (!osty_gc_index_grow_pending) {
+                osty_gc_index_grow_deferred_total += 1;
+            }
+            osty_gc_index_grow_pending = 1;
+        } else {
+            int64_t new_cap = osty_gc_index_capacity == 0 ? 128 : osty_gc_index_capacity * 2;
+            osty_gc_index_grow(new_cap);
+        }
     }
     mask = (size_t)(osty_gc_index_capacity - 1);
     idx = osty_gc_index_hash(payload) & mask;
@@ -2002,19 +2058,28 @@ static OSTY_HOT_INLINE void osty_gc_index_insert_new(void *payload, osty_gc_head
      * with the surrounding header-init work gives the load a chance to
      * overlap with that work instead of stalling the probe. */
     __builtin_prefetch(&osty_gc_index_keys[idx], 1 /* write */, 1 /* moderate locality */);
-    /* Walk past live entries. The first tombstone we hit is reusable;
-     * since the caller guarantees `payload` is fresh, we don't need
-     * to keep walking to confirm absence — we can short-circuit on
-     * the first tombstone. */
-    while (osty_gc_index_keys[idx] != NULL &&
-           osty_gc_index_keys[idx] != OSTY_GC_INDEX_TOMBSTONE) {
+    /* Phase 0f: atomic loads on the probe walk. Concurrent readers in
+     * `osty_gc_index_lookup` (e.g. a future lock-free tracer) need
+     * torn-free observation of slot pointers; ACQUIRE here so a
+     * subsequent value load sees the corresponding insert's value
+     * write. Walk past live entries. The first tombstone we hit is
+     * reusable; since the caller guarantees `payload` is fresh, we
+     * don't need to keep walking to confirm absence — we can
+     * short-circuit on the first tombstone. */
+    void *slot;
+    while ((slot = __atomic_load_n(&osty_gc_index_keys[idx],
+                                   __ATOMIC_ACQUIRE)) != NULL &&
+           slot != OSTY_GC_INDEX_TOMBSTONE) {
         idx = (idx + 1) & mask;
     }
-    if (osty_gc_index_keys[idx] == OSTY_GC_INDEX_TOMBSTONE) {
+    if (slot == OSTY_GC_INDEX_TOMBSTONE) {
         osty_gc_index_tombstones -= 1;
     }
-    osty_gc_index_keys[idx] = payload;
-    osty_gc_index_values[idx] = header;
+    /* Phase 0f: ordered stores so a concurrent reader that sees the
+     * key set will also see the matching value. Value first (RELAXED
+     * — only valid once key publishes), then key with RELEASE. */
+    __atomic_store_n(&osty_gc_index_values[idx], header, __ATOMIC_RELAXED);
+    __atomic_store_n(&osty_gc_index_keys[idx], payload, __ATOMIC_RELEASE);
     osty_gc_index_count += 1;
 }
 
@@ -2025,18 +2090,31 @@ static void osty_gc_index_insert(void *payload, osty_gc_header *header) {
     if (osty_gc_index_keys == NULL ||
         (osty_gc_index_count + osty_gc_index_tombstones + 1) * 4 >=
             osty_gc_index_capacity * 3) {
-        int64_t new_cap = osty_gc_index_capacity == 0 ? 128 : osty_gc_index_capacity * 2;
-        osty_gc_index_grow(new_cap);
+        if (osty_gc_state != OSTY_GC_STATE_IDLE &&
+            osty_gc_index_keys != NULL &&
+            osty_gc_index_count + osty_gc_index_tombstones + 1 <
+                osty_gc_index_capacity) {
+            if (!osty_gc_index_grow_pending) {
+                osty_gc_index_grow_deferred_total += 1;
+            }
+            osty_gc_index_grow_pending = 1;
+        } else {
+            int64_t new_cap = osty_gc_index_capacity == 0 ? 128 : osty_gc_index_capacity * 2;
+            osty_gc_index_grow(new_cap);
+        }
     }
     mask = (size_t)(osty_gc_index_capacity - 1);
     idx = osty_gc_index_hash(payload) & mask;
-    while (osty_gc_index_keys[idx] != NULL) {
-        if (osty_gc_index_keys[idx] == OSTY_GC_INDEX_TOMBSTONE) {
+    void *slot;
+    while ((slot = __atomic_load_n(&osty_gc_index_keys[idx],
+                                   __ATOMIC_ACQUIRE)) != NULL) {
+        if (slot == OSTY_GC_INDEX_TOMBSTONE) {
             if (first_tombstone == SIZE_MAX) {
                 first_tombstone = idx;
             }
-        } else if (osty_gc_index_keys[idx] == payload) {
-            osty_gc_index_values[idx] = header;
+        } else if (slot == payload) {
+            __atomic_store_n(&osty_gc_index_values[idx], header,
+                             __ATOMIC_RELEASE);
             return;
         }
         idx = (idx + 1) & mask;
@@ -2045,8 +2123,9 @@ static void osty_gc_index_insert(void *payload, osty_gc_header *header) {
         idx = first_tombstone;
         osty_gc_index_tombstones -= 1;
     }
-    osty_gc_index_keys[idx] = payload;
-    osty_gc_index_values[idx] = header;
+    /* Phase 0f: same value-then-key publish ordering as `_insert_new`. */
+    __atomic_store_n(&osty_gc_index_values[idx], header, __ATOMIC_RELAXED);
+    __atomic_store_n(&osty_gc_index_keys[idx], payload, __ATOMIC_RELEASE);
     osty_gc_index_count += 1;
 }
 
@@ -2063,9 +2142,18 @@ static osty_gc_header *osty_gc_index_lookup(void *payload) {
      * caller is about to compare to payload, then maybe load a
      * subsequent slot if there's a collision. */
     __builtin_prefetch(&osty_gc_index_keys[idx], 0 /* read */, 1);
-    while (osty_gc_index_keys[idx] != NULL) {
-        if (osty_gc_index_keys[idx] == payload) {
-            return osty_gc_index_values[idx];
+    /* Phase 0f: atomic ACQUIRE loads pair with the inserter's RELEASE
+     * stores so a reader either sees the slot empty or a fully-published
+     * (key, value) pair — never a key without its value. This makes
+     * the probe safe to call without `osty_gc_lock` once the rest of
+     * the tracer's invariants land (cycle-deferred grow, atomic color
+     * writes — Phase 0g). */
+    void *slot;
+    while ((slot = __atomic_load_n(&osty_gc_index_keys[idx],
+                                   __ATOMIC_ACQUIRE)) != NULL) {
+        if (slot == payload) {
+            return __atomic_load_n(&osty_gc_index_values[idx],
+                                   __ATOMIC_ACQUIRE);
         }
         idx = (idx + 1) & mask;
     }
@@ -2081,10 +2169,21 @@ static void osty_gc_index_remove(void *payload) {
     }
     mask = (size_t)(osty_gc_index_capacity - 1);
     idx = osty_gc_index_hash(payload) & mask;
-    while (osty_gc_index_keys[idx] != NULL) {
-        if (osty_gc_index_keys[idx] == payload) {
-            osty_gc_index_keys[idx] = OSTY_GC_INDEX_TOMBSTONE;
-            osty_gc_index_values[idx] = NULL;
+    void *slot;
+    while ((slot = __atomic_load_n(&osty_gc_index_keys[idx],
+                                   __ATOMIC_ACQUIRE)) != NULL) {
+        if (slot == payload) {
+            /* Atomic store the tombstone so a concurrent prober either
+             * still sees the key (and returns the now-stale value) or
+             * sees the tombstone (and probes past). The stale-value
+             * window is bounded — caller of remove holds the GC lock,
+             * and stale lookups during cycle are caught by the SATB
+             * write barrier on the dead pointer. */
+            __atomic_store_n(&osty_gc_index_values[idx], NULL,
+                             __ATOMIC_RELAXED);
+            __atomic_store_n(&osty_gc_index_keys[idx],
+                             OSTY_GC_INDEX_TOMBSTONE,
+                             __ATOMIC_RELEASE);
             osty_gc_index_count -= 1;
             osty_gc_index_tombstones += 1;
             return;
@@ -6339,6 +6438,12 @@ static void osty_gc_incremental_sweep(void);
 static void osty_gc_auto_drive_incremental(void *const *root_slots, int64_t root_slot_count) {
     /* Caller holds `osty_gc_lock`. */
     if (osty_gc_state == OSTY_GC_STATE_IDLE) {
+        /* Phase 0f: pre-grow the index before transitioning to
+         * MARK_INCREMENTAL so concurrent probers in a future
+         * lock-free tracer don't witness the buffer swap that grow
+         * would otherwise do mid-cycle. Defer-grow logic in insert
+         * relies on this giving enough headroom. */
+        osty_gc_index_pregrow_for_cycle();
         /* Start a fresh cycle. */
         osty_gc_state = OSTY_GC_STATE_MARK_INCREMENTAL;
         osty_gc_incremental_seed_roots(root_slots, root_slot_count);
@@ -6369,6 +6474,14 @@ static void osty_gc_auto_drive_incremental(void *const *root_slots, int64_t root
             osty_gc_collection_requested_major = false;
             osty_gc_barrier_logs_clear();
             osty_gc_state = OSTY_GC_STATE_IDLE;
+            /* Phase 0f: drain any deferred grow now that the cycle
+             * has fully settled. compact_major reseeds the index
+             * via its remap pass, so by this point insert pressure
+             * should have subsided — but if the flag is still set,
+             * grow now to keep the next cycle's load factor sane. */
+            if (osty_gc_index_grow_pending) {
+                osty_gc_index_grow(osty_gc_index_capacity * 2);
+            }
         }
     }
 }
@@ -6596,6 +6709,11 @@ void osty_gc_collect_incremental_start_with_stack_roots(void *const *root_slots,
         }
         osty_rt_abort("incremental start called while collection already in progress");
     }
+    /* Phase 0f: pre-grow the index now (state still IDLE, no
+     * concurrent prober). After the state transition, in-cycle
+     * inserts that hit the load threshold defer to the
+     * grow_pending flag instead of swapping the buffer. */
+    osty_gc_index_pregrow_for_cycle();
     osty_gc_state = OSTY_GC_STATE_MARK_INCREMENTAL;
     osty_gc_incremental_seed_roots(seed_roots, seed_count);
     /* Phase 0a: kick the background marker after seeding so it has
@@ -6692,6 +6810,14 @@ static void osty_gc_collect_incremental_finish_locked(
     osty_gc_collection_requested_major = false;
     osty_gc_barrier_logs_clear();
     osty_gc_state = OSTY_GC_STATE_IDLE;
+    /* Phase 0f: drain any deferred grow now that no concurrent
+     * prober can be looking at the old buffer. The pre-grow at
+     * cycle start usually keeps the load factor in check, so the
+     * flag is rarely set; when it is, alloc-heavy workloads still
+     * reach a healthy capacity within a cycle or two. */
+    if (osty_gc_index_grow_pending) {
+        osty_gc_index_grow(osty_gc_index_capacity * 2);
+    }
 }
 
 void osty_gc_collect_incremental_finish(void) {
@@ -12102,6 +12228,20 @@ int64_t osty_gc_debug_local_mark_pushes_total(void) {
 int64_t osty_gc_debug_local_mark_overflow_total(void) {
     return __atomic_load_n(&osty_gc_local_mark_overflow_total,
                            __ATOMIC_ACQUIRE);
+}
+
+/* Phase 0f index-resize accessors. `pregrow_total` counts cycle
+ * starts that proactively grew the table; `grow_deferred_total`
+ * counts insert sites that hit the load threshold inside a cycle
+ * and set the pending flag instead of growing. A test that
+ * exercises heavy in-cycle alloc can assert both move (pre-grow
+ * fired at start, defer absorbed mid-cycle pressure). */
+int64_t osty_gc_debug_index_pregrow_total(void) {
+    return osty_gc_index_pregrow_total;
+}
+
+int64_t osty_gc_debug_index_grow_deferred_total(void) {
+    return osty_gc_index_grow_deferred_total;
 }
 
 int64_t osty_gc_debug_color_of(void *payload) {
