@@ -1,6 +1,8 @@
 package selfhost
 
 import (
+	"fmt"
+
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/selfhost/api"
 )
@@ -30,7 +32,8 @@ func CheckSource(src []byte) CheckSummary {
 
 // CheckSourceStructured runs the bootstrapped Osty checker and returns the
 // structured result consumed by the Go check.Result bridge.
-func CheckSourceStructured(src []byte) CheckResult {
+func CheckSourceStructured(src []byte) (result CheckResult) {
+	defer recoverCheckResult(&result, "source")
 	selfhostCheckMu.Lock()
 	defer selfhostCheckMu.Unlock()
 
@@ -46,7 +49,7 @@ func CheckSourceStructured(src []byte) CheckResult {
 	if checked == nil {
 		return CheckResult{}
 	}
-	result := adaptCheckResult(checked, lexed)
+	result = adaptCheckResult(checked, lexed)
 	return result
 }
 
@@ -56,7 +59,8 @@ func CheckSourceStructured(src []byte) CheckResult {
 // their CLI layer should prefer this entry point: it keeps the
 // FrontendRun internal so cmd/osty does not need the selfhost type to
 // cross its call boundary.
-func CheckFromSource(src []byte) ([]*diag.Diagnostic, CheckResult) {
+func CheckFromSource(src []byte) (parseDiags []*diag.Diagnostic, result CheckResult) {
+	defer recoverCheckResult(&result, "source")
 	run := Run(src)
 	if run == nil {
 		return nil, CheckResult{}
@@ -73,7 +77,8 @@ func CheckFromSource(src []byte) ([]*diag.Diagnostic, CheckResult) {
 // Output matches CheckSourceStructured(src) byte-for-byte. The
 // generated checker path owns the post-elaboration policy gates, so
 // this path stays astbridge-free.
-func CheckStructuredFromRun(run *FrontendRun) CheckResult {
+func CheckStructuredFromRun(run *FrontendRun) (result CheckResult) {
+	defer recoverCheckResult(&result, "run")
 	if run == nil {
 		return CheckResult{}
 	}
@@ -88,7 +93,38 @@ func CheckStructuredFromRun(run *FrontendRun) CheckResult {
 	if checked == nil {
 		return CheckResult{}
 	}
-	result := adaptCheckResultFromRuneStream(checked, run.rt, run.stream)
+	result = adaptCheckResultFromRuneStream(checked, run.rt, run.stream)
+	return result
+}
+
+func recoverCheckResult(result *CheckResult, scope string) {
+	if recovered := recover(); recovered != nil {
+		*result = recoveredCheckerResult(scope, recovered)
+	}
+}
+
+func recoveredCheckerResult(scope string, recovered any) CheckResult {
+	result := CheckResult{
+		Summary: CheckSummary{
+			Errors:          1,
+			ErrorsByContext: map[string]int{"E0700": 1},
+			ErrorDetails: map[string]map[string]int{
+				"E0700": {"internal checker recovery": 1},
+			},
+		},
+		Diagnostics: []CheckDiagnosticRecord{{
+			Code:        "E0700",
+			Severity:    "error",
+			Message:     fmt.Sprintf("type checker recovered from internal panic in %s check: %v", scope, recovered),
+			Start:       0,
+			End:         0,
+			StartLine:   1,
+			StartColumn: 1,
+			EndLine:     1,
+			EndColumn:   1,
+		}},
+	}
+	result.EnsureStableIDs()
 	return result
 }
 
@@ -271,6 +307,7 @@ func adaptCheckResultWithTokenMapper(checked *FrontCheckResult, mapper checkResu
 			Notes:       append([]string(nil), d.notes...),
 		})
 	}
+	result.EnsureStableIDs()
 	return result
 }
 

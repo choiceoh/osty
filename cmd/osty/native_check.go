@@ -32,10 +32,6 @@ import (
 // with each file's own formatter so source snippets point at the right
 // lines even when spanning packages.
 func runCheckPackage(dir string, flags cliFlags) {
-	if flags.inspect {
-		fmt.Fprintf(os.Stderr, "osty: --inspect is not supported on the self-host check path\n")
-		os.Exit(2)
-	}
 	if root, ok, abort := nativeWorkspaceRoot(dir, flags); abort {
 		os.Exit(2)
 	} else if ok {
@@ -163,6 +159,9 @@ func runTypecheckPackageNative(dir string, flags cliFlags) int {
 	diags = append(diags, nativePackageCheckDiags(checked.Diagnostics, input.Files)...)
 	printPackageDiags(pkg, diags, flags)
 	printNativePackageTypes(checked, input.Files)
+	if flags.inspect {
+		runInspectPackageInput(input, "", flags)
+	}
 	if flags.dumpNativeDiags {
 		dumpNativeDiagsForSummary(dir, checked.Summary)
 	}
@@ -236,6 +235,9 @@ func runCheckPackageNative(dir string, flags cliFlags) int {
 	diags := packageParseDiags(pkg)
 	diags = append(diags, nativePackageCheckDiags(checked.Diagnostics, input.Files)...)
 	printPackageDiags(pkg, diags, flags)
+	if flags.inspect {
+		runInspectPackageInput(input, "", flags)
+	}
 	if flags.dumpNativeDiags {
 		dumpNativeDiagsForSummary(dir, checked.Summary)
 	}
@@ -270,6 +272,9 @@ func runNativeWorkspaceCheck(dir, mode string, flags cliFlags, emitTypes bool) i
 		printPackageDiags(pkg, diags, flags)
 		if emitTypes {
 			printNativePackageTypes(checked, input.Files)
+		}
+		if flags.inspect {
+			runInspectPackageInput(input, "", flags)
 		}
 		if flags.dumpNativeDiags {
 			dumpNativeDiagsForSummary(path, checked.Summary)
@@ -425,6 +430,9 @@ func runTypecheckFileNative(path string, src []byte, formatter *diag.Formatter, 
 	all = append(all, checkDiags...)
 	printDiags(formatter, all, flags)
 	printNativeTypes(src, checked)
+	if flags.inspect {
+		runInspectSource(path, src, flags)
+	}
 	if flags.dumpNativeDiags {
 		dumpNativeDiagsForSummary(path, checked.Summary)
 	}
@@ -511,6 +519,9 @@ func runCheckFileNative(path string, src []byte, formatter *diag.Formatter, flag
 	all := append([]*diag.Diagnostic{}, parseDiags...)
 	all = append(all, checkDiags...)
 	printDiags(formatter, all, flags)
+	if flags.inspect {
+		runInspectSource(path, src, flags)
+	}
 	if flags.dumpNativeDiags {
 		dumpNativeDiagsForSummary(path, checked.Summary)
 	}

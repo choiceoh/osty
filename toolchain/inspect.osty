@@ -2,11 +2,9 @@ use std.strings as strings
 
 // inspect.osty — per-node type-inference observations.
 //
-// The Go reference implementation (`internal/check/inspect.go`) walks the
-// parser AST top-down and emits one `InspectRecord` per expression/decl it
-// visits, labelling each record with the bidirectional-inference rule that
-// produced the node's type (see `LANG_SPEC_v0.5/02a-type-inference.md`
-// §2a.4 / §2a.5).
+// This module is the reference implementation for inspector records. The Go
+// host adapter (`internal/check/inspect.go`) only converts these records to the
+// legacy display shape, so rule and hint policy stay selfhost-owned.
 //
 // This module implements a **v1.5 self-host port**. v1 iterated the
 // already-computed `FrontCheckResult.typedNodes` list for expression-

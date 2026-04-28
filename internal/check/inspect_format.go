@@ -48,11 +48,15 @@ func formatInspectTextLine(r InspectRecord) string {
 		rule = "-"
 	}
 	typeStr := "<?>"
-	if r.Type != nil {
+	if r.TypeName != "" {
+		typeStr = r.TypeName
+	} else if r.Type != nil {
 		typeStr = r.Type.String()
 	}
 	cols := []string{pos, rule, r.NodeKind, typeStr}
-	if r.Hint != nil {
+	if r.HintName != "" {
+		cols = append(cols, "hint="+r.HintName)
+	} else if r.Hint != nil {
 		cols = append(cols, "hint="+r.Hint.String())
 	} else {
 		cols = append(cols, "")
@@ -78,14 +82,28 @@ func FormatInspectJSON(w io.Writer, recs []InspectRecord) error {
 			EndColumn: r.End.Column,
 			NodeKind:  r.NodeKind,
 			Rule:      r.Rule,
-			Type:      typeString(r.Type),
-			Hint:      typeString(r.Hint),
+			Type:      inspectTypeString(r),
+			Hint:      inspectHintString(r),
 			Notes:     r.Notes,
 		}); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func inspectTypeString(r InspectRecord) string {
+	if r.TypeName != "" {
+		return r.TypeName
+	}
+	return typeString(r.Type)
+}
+
+func inspectHintString(r InspectRecord) string {
+	if r.HintName != "" {
+		return r.HintName
+	}
+	return typeString(r.Hint)
 }
 
 // inspectRecordJSON is the on-the-wire shape of a record. Kept separate

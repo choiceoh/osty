@@ -2,17 +2,17 @@ summary assignments=1 accepted=1 errors=1
 errorsByContext E0727=1
 errorDetails E0727 `id` requires 1 type argument(s) but 2 were supplied @L2:C28=1
 typedNodes
-  node=4 nodeId=4 typeId=25 kind=Ident span=26:31 type=T
-  node=6 nodeId=6 typeId=25 kind=Block span=24:33 type=T
-  node=13 nodeId=13 typeId=21 kind=IntLit span=77:78 type=UntypedInt
-  node=14 nodeId=14 typeId=21 kind=Call span=76:79 type=UntypedInt
-  node=16 nodeId=16 typeId=19 kind=Block span=44:81 type=()
+  id=typed-node:9614d550a nodeKey=node:03659ce7f2ea7f4 typeKey=type:2cd1fe7afffe1ac node=4 nodeId=4 typeId=25 kind=Ident span=26:31 type=T
+  id=typed-node:746ba9163 nodeKey=node:6bd91ca9a7ee7d3 typeKey=type:2cd1fe7afffe1ac node=6 nodeId=6 typeId=25 kind=Block span=24:33 type=T
+  id=typed-node:97d06312a nodeKey=node:75f4a7394aa932a typeKey=type:819354aa58f2166 node=13 nodeId=13 typeId=21 kind=IntLit span=77:78 type=UntypedInt
+  id=typed-node:3530bc6f1 nodeKey=node:5d35234adab89ca typeKey=type:819354aa58f2166 node=14 nodeId=14 typeId=21 kind=Call span=76:79 type=UntypedInt
+  id=typed-node:8f2af9078 nodeKey=node:2f5dabb0b8da532 typeKey=type:520c4bf26e2fabc node=16 nodeId=16 typeId=19 kind=Block span=44:81 type=()
 bindings
-  bindingId=0 node=8 nodeId=8 name=answer mutable=false typeId=21 span=50:56 type=UntypedInt
+  id=binding:36a65d5fffc6 nodeKey=node:943860bfc5f7e91 typeKey=type:819354aa58f2166 bindingId=0 node=8 nodeId=8 name=answer mutable=false typeId=21 span=50:56 type=UntypedInt
 symbols
-  symbolId=0 node=7 nodeId=7 kind=fn name=id owner= typeId=108 span=0:33 type=fn(T) -> T
-  symbolId=1 node=17 nodeId=17 kind=fn name=main owner= typeId=118 span=34:81 type=fn() -> ()
+  id=symbol:5f62d6da7a4ee nodeKey=node:5c0b26c77174404 typeKey=type:9addffd32952554 symbolId=0 node=7 nodeId=7 kind=fn name=id owner= typeId=108 span=0:33 type=fn(T) -> T
+  id=symbol:ccd3fe9f277c8 nodeKey=node:2a72dc672708fa9 typeKey=type:b4f942e1ed0777f symbolId=1 node=17 nodeId=17 kind=fn name=main owner= typeId=118 span=34:81 type=fn() -> ()
 instantiations
-  instantiationId=0 node=14 nodeId=14 callee=id span=76:79 typeArgIds=[21] typeArgs=[UntypedInt] resultTypeId=21 resultType=UntypedInt
+  id=instantiation:0e805f nodeKey=node:c75801d39c9edaa resultTypeKey=type:819354aa58f2166 instantiationId=0 node=14 nodeId=14 callee=id span=76:79 typeArgIds=[21] typeArgKeys=[type:819354aa58f2166] typeArgs=[UntypedInt] resultTypeId=21 resultType=UntypedInt
 diagnostics
   code=E0727 severity=error span=61:76 line=2:28-2:43 message=`id` requires 1 type argument(s) but 2 were supplied

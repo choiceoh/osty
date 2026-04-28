@@ -27,7 +27,8 @@ type (
 // arena, installs imported package surfaces directly into the checker
 // env, and runs the typed checker. Source text is the sole AST ingress
 // point — no *ast.File round-trip, no astbridge bumps.
-func CheckPackageStructured(input PackageCheckInput) (CheckResult, error) {
+func CheckPackageStructured(input PackageCheckInput) (result CheckResult, err error) {
+	defer recoverCheckResult(&result, "package")
 	selfhostCheckMu.Lock()
 	defer selfhostCheckMu.Unlock()
 
@@ -41,8 +42,38 @@ func CheckPackageStructured(input PackageCheckInput) (CheckResult, error) {
 	cx := newElabCx(file, emptyTyArena())
 	selfhostInstallImportSurfaces(cx.env, input.Imports)
 	elabFile(cx)
-	result := adaptCheckResultWithTokenLayout(serializeCheckResult(cx), layout)
+	result = adaptCheckResultWithTokenLayout(serializeCheckResult(cx), layout)
 	return result, nil
+}
+
+// InspectPackageStructured runs the same selfhost package check as
+// CheckPackageStructured, then asks the selfhost inspect pass to derive
+// per-node observations from that authoritative check result. The Go host only
+// adapts token spans to byte offsets; inference rule and hint policy stay in
+// toolchain/inspect.osty.
+func InspectPackageStructured(input PackageCheckInput) (records []api.InspectRecord, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			records = nil
+			err = fmt.Errorf("selfhost inspect recovered from panic: %v", recovered)
+		}
+	}()
+	selfhostCheckMu.Lock()
+	defer selfhostCheckMu.Unlock()
+
+	file, layout, err := selfhostBuildPackageAst(input.Files)
+	if err != nil {
+		return nil, err
+	}
+	if file == nil {
+		return nil, nil
+	}
+	cx := newElabCx(file, emptyTyArena())
+	selfhostInstallImportSurfaces(cx.env, input.Imports)
+	elabFile(cx)
+	checked := serializeCheckResult(cx)
+	recs := inspectFromAstAndCheck(file, checked)
+	return adaptInspectRecordsWithTokenLayout(recs, layout), nil
 }
 
 type selfhostPackageTokenLayout struct {

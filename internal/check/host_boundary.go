@@ -74,6 +74,7 @@ func (e nativeCheckerExec) run(req api.CheckRequest) (api.CheckResult, error) {
 	if err := json.Unmarshal(out, &checked); err != nil {
 		return api.CheckResult{}, fmt.Errorf("decode native checker response: %w", err)
 	}
+	checked.EnsureStableIDs()
 	return checked, nil
 }
 
@@ -292,6 +293,7 @@ func (c cachedNativeChecker) read(key string) (api.CheckResult, bool) {
 	if err := json.Unmarshal(data, &res); err != nil {
 		return api.CheckResult{}, false
 	}
+	res.EnsureStableIDs()
 	return res, true
 }
 
@@ -362,6 +364,7 @@ func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result,
 	if result == nil {
 		return
 	}
+	result.inspectSource = append(result.inspectSource[:0], src...)
 	if len(src) == 0 {
 		result.Diags = append(result.Diags, checkerUnavailableDiag(
 			"file",
@@ -612,6 +615,7 @@ func runSelfhostPackageResultLocked(result *Result, pkg *resolve.Package, ws *re
 }
 
 func cloneNativeCheckResult(checked api.CheckResult) *api.CheckResult {
+	checked.EnsureStableIDs()
 	out := checked
 	out.Summary.ErrorsByContext = cloneStringIntMap(checked.Summary.ErrorsByContext)
 	out.Summary.ErrorDetails = cloneErrorDetailMap(checked.Summary.ErrorDetails)
@@ -983,6 +987,7 @@ func overlaySelfhostResult(result *Result, src selfhostCheckedSource, checked ap
 	if result == nil {
 		return
 	}
+	checked.EnsureStableIDs()
 	idx := buildSelfhostSpanIndex(src)
 	for _, node := range checked.TypedNodes {
 		key := selfhostSpanKey{start: node.Start, end: node.End}

@@ -81,3 +81,41 @@ fn pair(a: Int, b: Int) -> (Int, Int) { (a, b) }
 		}
 	}
 }
+
+func TestInspectPackageStructuredUsesPackageImportSurface(t *testing.T) {
+	src := []byte(`use strings
+
+fn main() {
+    let value = strings.len("abc")
+    value
+}
+`)
+	recs, err := InspectPackageStructured(PackageCheckInput{
+		Files: []PackageCheckFile{{Source: src, Base: 0, Name: "main.osty"}},
+		Imports: []PackageCheckImport{{
+			Alias: "strings",
+			Functions: []PackageCheckFn{{
+				Name:           "len",
+				ReturnTypeRepr: &api.TypeRepr{Kind: "primitive", Name: "Int"},
+				ParamTypeReprs: []api.TypeRepr{{Kind: "primitive", Name: "String"}},
+				ParamNames:     []string{"s"},
+			}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("InspectPackageStructured: %v", err)
+	}
+	if len(recs) == 0 {
+		t.Fatal("expected inspect records")
+	}
+	foundBinding := false
+	for _, rec := range recs {
+		if rec.Rule == "BIND" && rec.Type != nil {
+			foundBinding = true
+			break
+		}
+	}
+	if !foundBinding {
+		t.Fatalf("records missing typed BIND from package inspect: %#v", recs)
+	}
+}
