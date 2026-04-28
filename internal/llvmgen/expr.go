@@ -7351,6 +7351,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitStdOsCall(call); found || err != nil {
 		return v, err
 	}
+	if v, found, err := g.emitStdTermCall(call); found || err != nil {
+		return v, err
+	}
 	if v, found, err := g.emitStdMathCall(call); found || err != nil {
 		return v, err
 	}

@@ -1,0 +1,320 @@
+// std.term -- terminal control primitives for text UIs.
+//
+// Terminal mode, size, and key input are host-backed. ANSI sequence builders
+// are pure Osty so libraries can render deterministic output in tests and in
+// simple stdout-only programs.
+
+use std.error
+use std.io
+
+pub struct Size {
+    pub width: Int,
+    pub height: Int,
+
+    pub fn isEmpty(self) -> Bool {
+        self.width <= 0 || self.height <= 0
+    }
+}
+
+pub struct Position {
+    pub x: Int,
+    pub y: Int,
+}
+
+pub enum Color {
+    DefaultColor,
+    Black,
+    Red,
+    Green,
+    Yellow,
+    Blue,
+    Magenta,
+    Cyan,
+    White,
+    BrightBlack,
+    BrightRed,
+    BrightGreen,
+    BrightYellow,
+    BrightBlue,
+    BrightMagenta,
+    BrightCyan,
+    BrightWhite,
+    Ansi(Int),
+    Rgb(Int, Int, Int),
+}
+
+pub enum Attribute {
+    Bold,
+    Dim,
+    Italic,
+    Underline,
+    Blink,
+    Reverse,
+    Hidden,
+    Strike,
+}
+
+pub struct Style {
+    pub fg: Color,
+    pub bg: Color,
+    pub attrs: List<Attribute>,
+
+    pub fn isDefault(self) -> Bool {
+        self.fg == Color.DefaultColor && self.bg == Color.DefaultColor && self.attrs.isEmpty()
+    }
+}
+
+pub enum Key {
+    Char(String),
+    Enter,
+    EscapeKey,
+    Backspace,
+    Tab,
+    BackTab,
+    Up,
+    Down,
+    Left,
+    Right,
+    Home,
+    End,
+    PageUp,
+    PageDown,
+    Insert,
+    Delete,
+    Function(Int),
+    Unknown(String),
+}
+
+pub enum Event {
+    KeyEvent(Key),
+    Resize(Size),
+}
+
+pub struct Terminal {
+    raw: Bool,
+    altScreen: Bool,
+    cursorVisible: Bool,
+
+    pub fn size(self) -> Result<Size, Error> {
+        size()
+    }
+
+    pub fn readKey(self) -> Result<Key, Error> {
+        readKey()
+    }
+
+    pub fn pollKey(self, timeoutMillis: Int) -> Result<Key?, Error> {
+        pollKey(timeoutMillis)
+    }
+
+    pub fn setRawMode(mut self, enabled: Bool) -> Result<(), Error> {
+        setRawMode(enabled)?
+        self.raw = enabled
+        Ok(())
+    }
+
+    pub fn enterAltScreen(mut self) -> Result<(), Error> {
+        write(enterAltScreenSeq())?
+        self.altScreen = true
+        Ok(())
+    }
+
+    pub fn exitAltScreen(mut self) -> Result<(), Error> {
+        write(exitAltScreenSeq())?
+        self.altScreen = false
+        Ok(())
+    }
+
+    pub fn clear(self) -> Result<(), Error> {
+        write(clearScreenSeq())
+    }
+
+    pub fn clearLine(self) -> Result<(), Error> {
+        write(clearLineSeq())
+    }
+
+    pub fn moveTo(self, position: Position) -> Result<(), Error> {
+        write(moveToSeq(position))
+    }
+
+    pub fn hideCursor(mut self) -> Result<(), Error> {
+        write(hideCursorSeq())?
+        self.cursorVisible = false
+        Ok(())
+    }
+
+    pub fn showCursor(mut self) -> Result<(), Error> {
+        write(showCursorSeq())?
+        self.cursorVisible = true
+        Ok(())
+    }
+
+    pub fn restore(mut self) -> Result<(), Error> {
+        if !self.cursorVisible {
+            self.showCursor()?
+        }
+        if self.altScreen {
+            self.exitAltScreen()?
+        }
+        if self.raw {
+            self.setRawMode(false)?
+        }
+        Ok(())
+    }
+}
+
+pub fn open() -> Result<Terminal, Error> {
+    Ok(Terminal { raw: false, altScreen: false, cursorVisible: true })
+}
+
+pub fn isTerminal() -> Bool
+
+pub fn size() -> Result<Size, Error>
+
+pub fn setRawMode(enabled: Bool) -> Result<(), Error>
+
+pub fn readKey() -> Result<Key, Error>
+
+pub fn pollKey(timeoutMillis: Int) -> Result<Key?, Error>
+
+pub fn readEvent() -> Result<Event, Error>
+
+pub fn write(text: String) -> Result<(), Error> {
+    io.print(text)
+    Ok(())
+}
+
+pub fn flush() -> Result<(), Error>
+
+pub fn position(x: Int, y: Int) -> Position {
+    Position { x: x, y: y }
+}
+
+pub fn defaultStyle() -> Style {
+    Style { fg: Color.DefaultColor, bg: Color.DefaultColor, attrs: [] }
+}
+
+pub fn style(fg: Color, bg: Color, attrs: List<Attribute>) -> Style {
+    Style { fg: fg, bg: bg, attrs: attrs }
+}
+
+pub fn resetSeq() -> String {
+    "\u{1B}[0m"
+}
+
+pub fn clearScreenSeq() -> String {
+    "\u{1B}[2J\u{1B}[H"
+}
+
+pub fn clearLineSeq() -> String {
+    "\u{1B}[2K"
+}
+
+pub fn moveToSeq(position: Position) -> String {
+    let row = position.y + 1
+    let col = position.x + 1
+    "\u{1B}[{row};{col}H"
+}
+
+pub fn hideCursorSeq() -> String {
+    "\u{1B}[?25l"
+}
+
+pub fn showCursorSeq() -> String {
+    "\u{1B}[?25h"
+}
+
+pub fn enterAltScreenSeq() -> String {
+    "\u{1B}[?1049h"
+}
+
+pub fn exitAltScreenSeq() -> String {
+    "\u{1B}[?1049l"
+}
+
+pub fn styleSeq(style: Style) -> String {
+    if style.isDefault() {
+        return ""
+    }
+    let mut out = ""
+    for attr in style.attrs {
+        out = "{out}{attributeSeq(attr)}"
+    }
+    out = "{out}{fgSeq(style.fg)}{bgSeq(style.bg)}"
+    out
+}
+
+pub fn styled(text: String, style: Style) -> String {
+    "{styleSeq(style)}{text}{resetSeq()}"
+}
+
+pub fn fgSeq(color: Color) -> String {
+    match color {
+        DefaultColor -> "\u{1B}[39m",
+        Black -> "\u{1B}[30m",
+        Red -> "\u{1B}[31m",
+        Green -> "\u{1B}[32m",
+        Yellow -> "\u{1B}[33m",
+        Blue -> "\u{1B}[34m",
+        Magenta -> "\u{1B}[35m",
+        Cyan -> "\u{1B}[36m",
+        White -> "\u{1B}[37m",
+        BrightBlack -> "\u{1B}[90m",
+        BrightRed -> "\u{1B}[91m",
+        BrightGreen -> "\u{1B}[92m",
+        BrightYellow -> "\u{1B}[93m",
+        BrightBlue -> "\u{1B}[94m",
+        BrightMagenta -> "\u{1B}[95m",
+        BrightCyan -> "\u{1B}[96m",
+        BrightWhite -> "\u{1B}[97m",
+        Ansi(n) -> "\u{1B}[38;5;{clampColor(n)}m",
+        Rgb(r, g, b) -> "\u{1B}[38;2;{clampColor(r)};{clampColor(g)};{clampColor(b)}m",
+    }
+}
+
+pub fn bgSeq(color: Color) -> String {
+    match color {
+        DefaultColor -> "\u{1B}[49m",
+        Black -> "\u{1B}[40m",
+        Red -> "\u{1B}[41m",
+        Green -> "\u{1B}[42m",
+        Yellow -> "\u{1B}[43m",
+        Blue -> "\u{1B}[44m",
+        Magenta -> "\u{1B}[45m",
+        Cyan -> "\u{1B}[46m",
+        White -> "\u{1B}[47m",
+        BrightBlack -> "\u{1B}[100m",
+        BrightRed -> "\u{1B}[101m",
+        BrightGreen -> "\u{1B}[102m",
+        BrightYellow -> "\u{1B}[103m",
+        BrightBlue -> "\u{1B}[104m",
+        BrightMagenta -> "\u{1B}[105m",
+        BrightCyan -> "\u{1B}[106m",
+        BrightWhite -> "\u{1B}[107m",
+        Ansi(n) -> "\u{1B}[48;5;{clampColor(n)}m",
+        Rgb(r, g, b) -> "\u{1B}[48;2;{clampColor(r)};{clampColor(g)};{clampColor(b)}m",
+    }
+}
+
+pub fn attributeSeq(attr: Attribute) -> String {
+    match attr {
+        Bold -> "\u{1B}[1m",
+        Dim -> "\u{1B}[2m",
+        Italic -> "\u{1B}[3m",
+        Underline -> "\u{1B}[4m",
+        Blink -> "\u{1B}[5m",
+        Reverse -> "\u{1B}[7m",
+        Hidden -> "\u{1B}[8m",
+        Strike -> "\u{1B}[9m",
+    }
+}
+
+fn clampColor(n: Int) -> Int {
+    if n < 0 {
+        return 0
+    }
+    if n > 255 {
+        return 255
+    }
+    n
+}

@@ -1,0 +1,383 @@
+// std.tui -- retained frame buffers for terminal UIs.
+//
+// The core renderer is ANSI-string based: callers can use `renderAnsi` for a
+// full frame or `diffAnsi` to emit only cells that changed since a previous
+// frame. Host I/O stays in std.term.
+
+use std.grid
+use std.term
+
+pub enum Color {
+    DefaultColor,
+    Black,
+    Red,
+    Green,
+    Yellow,
+    Blue,
+    Magenta,
+    Cyan,
+    White,
+    BrightBlack,
+    BrightRed,
+    BrightGreen,
+    BrightYellow,
+    BrightBlue,
+    BrightMagenta,
+    BrightCyan,
+    BrightWhite,
+    Ansi(Int),
+    Rgb(Int, Int, Int),
+}
+
+pub enum Attribute {
+    Bold,
+    Dim,
+    Italic,
+    Underline,
+    Blink,
+    Reverse,
+    Hidden,
+    Strike,
+}
+
+pub struct Style {
+    pub fg: Color,
+    pub bg: Color,
+    pub attrs: List<Attribute>,
+
+    pub fn isDefault(self) -> Bool {
+        self.fg == Color.DefaultColor && self.bg == Color.DefaultColor && self.attrs.isEmpty()
+    }
+}
+
+pub struct Cell {
+    pub text: String,
+    pub style: Style,
+}
+
+pub struct Frame {
+    pub size: grid.Size,
+    cells: List<Cell>,
+
+    pub fn bounds(self) -> grid.Rect {
+        self.size.rect()
+    }
+
+    pub fn len(self) -> Int {
+        self.cells.len()
+    }
+
+    pub fn contains(self, point: grid.Point) -> Bool {
+        self.size.contains(point)
+    }
+
+    pub fn index(self, point: grid.Point) -> Int? {
+        if !self.contains(point) {
+            return None
+        }
+        Some(point.y * self.size.width + point.x)
+    }
+
+    pub fn get(self, point: grid.Point) -> Cell? {
+        match self.index(point) {
+            Some(i) -> {
+                return Some(self.cells[i])
+            },
+            None -> {},
+        }
+        None
+    }
+
+    pub fn putCell(mut self, point: grid.Point, cell: Cell) -> Bool {
+        match self.index(point) {
+            Some(i) -> {
+                self.cells[i] = cell
+                true
+            },
+            None -> false,
+        }
+    }
+
+    pub fn put(mut self, point: grid.Point, text: String, style: Style) -> Bool {
+        self.putCell(point, Cell { text: text, style: style })
+    }
+
+    pub fn clear(mut self) {
+        self.fill(blankCell())
+    }
+
+    pub fn fill(mut self, cell: Cell) {
+        let mut i = 0
+        for i < self.cells.len() {
+            self.cells[i] = cell
+            i = i + 1
+        }
+    }
+
+    pub fn drawText(mut self, point: grid.Point, text: String, style: Style) -> Int {
+        let chars = text.chars()
+        let mut written = 0
+        let mut i = 0
+        for i < chars.len() {
+            let p = grid.point(point.x + i, point.y)
+            if self.put(p, chars[i].toString(), style) {
+                written = written + 1
+            }
+            i = i + 1
+        }
+        written
+    }
+
+    pub fn drawHLine(mut self, y: Int, x1: Int, x2: Int, text: String, style: Style) -> Int {
+        let lo = minInt(x1, x2)
+        let hi = maxInt(x1, x2)
+        let mut written = 0
+        let mut x = lo
+        for x <= hi {
+            if self.put(grid.point(x, y), text, style) {
+                written = written + 1
+            }
+            x = x + 1
+        }
+        written
+    }
+
+    pub fn drawVLine(mut self, x: Int, y1: Int, y2: Int, text: String, style: Style) -> Int {
+        let lo = minInt(y1, y2)
+        let hi = maxInt(y1, y2)
+        let mut written = 0
+        let mut y = lo
+        for y <= hi {
+            if self.put(grid.point(x, y), text, style) {
+                written = written + 1
+            }
+            y = y + 1
+        }
+        written
+    }
+
+    pub fn drawRect(mut self, rect: grid.Rect, glyph: String, style: Style) {
+        if rect.isEmpty() {
+            return
+        }
+        let left = rect.minX()
+        let right = rect.maxX() - 1
+        let top = rect.minY()
+        let bottom = rect.maxY() - 1
+        self.drawHLine(top, left, right, glyph, style)
+        self.drawHLine(bottom, left, right, glyph, style)
+        self.drawVLine(left, top, bottom, glyph, style)
+        self.drawVLine(right, top, bottom, glyph, style)
+    }
+
+    pub fn renderAnsi(self) -> String {
+        let mut out = ""
+        let mut y = 0
+        for y < self.size.height {
+            out = "{out}{moveToSeq(grid.point(0, y))}"
+            let mut x = 0
+            for x < self.size.width {
+                let cell = self.cells[y * self.size.width + x]
+                out = "{out}{styleSeq(cell.style)}{cell.text}"
+                x = x + 1
+            }
+            out = "{out}{resetSeq()}"
+            y = y + 1
+        }
+        out
+    }
+
+    pub fn diffAnsi(self, previous: Frame?) -> String {
+        if previous.isNone() {
+            return "{term.clearScreenSeq()}{self.renderAnsi()}"
+        }
+        self.diffFrom(previous.unwrap())
+    }
+
+    fn diffFrom(self, previous: Frame) -> String {
+        if self.size.width != previous.size.width || self.size.height != previous.size.height {
+            return "{term.clearScreenSeq()}{self.renderAnsi()}"
+        }
+        let mut out = ""
+        let mut i = 0
+        for i < self.cells.len() {
+            let current = self.cells[i]
+            let old = previous.cells[i]
+            if !sameCell(current, old) {
+                let point = grid.point(i % self.size.width, i / self.size.width)
+                out = "{out}{moveToSeq(point)}{styleSeq(current.style)}{current.text}{resetSeq()}"
+            }
+            i = i + 1
+        }
+        out
+    }
+}
+
+pub struct Screen {
+    pub size: grid.Size,
+    previous: Frame?,
+
+    pub fn next(mut self, frame: Frame) -> String {
+        let out = frame.diffAnsi(self.previous)
+        self.size = frame.size
+        self.previous = Some(frame)
+        out
+    }
+
+    pub fn present(mut self, frame: Frame) -> Result<(), Error> {
+        term.write(self.next(frame))?
+        Ok(())
+    }
+
+    pub fn reset(mut self) {
+        self.previous = None
+    }
+}
+
+pub fn style(fg: Color, bg: Color, attrs: List<Attribute>) -> Style {
+    Style { fg: fg, bg: bg, attrs: attrs }
+}
+
+pub fn defaultStyle() -> Style {
+    style(Color.DefaultColor, Color.DefaultColor, [])
+}
+
+pub fn cell(text: String, style: Style) -> Cell {
+    Cell { text: text, style: style }
+}
+
+pub fn blankCell() -> Cell {
+    cell(" ", defaultStyle())
+}
+
+pub fn frame(size: grid.Size) -> Frame {
+    Frame { size: size, cells: blankCells(size) }
+}
+
+pub fn sized(width: Int, height: Int) -> Frame {
+    frame(grid.size(width, height))
+}
+
+pub fn screen(size: grid.Size) -> Screen {
+    Screen { size: size, previous: None }
+}
+
+pub fn resetSeq() -> String {
+    "\u{1B}[0m"
+}
+
+pub fn moveToSeq(point: grid.Point) -> String {
+    let row = point.y + 1
+    let col = point.x + 1
+    "\u{1B}[{row};{col}H"
+}
+
+pub fn styleSeq(style: Style) -> String {
+    if style.isDefault() {
+        return ""
+    }
+    let mut out = ""
+    for attr in style.attrs {
+        out = "{out}{attributeSeq(attr)}"
+    }
+    out = "{out}{fgSeq(style.fg)}{bgSeq(style.bg)}"
+    out
+}
+
+pub fn fgSeq(color: Color) -> String {
+    match color {
+        DefaultColor -> "\u{1B}[39m",
+        Black -> "\u{1B}[30m",
+        Red -> "\u{1B}[31m",
+        Green -> "\u{1B}[32m",
+        Yellow -> "\u{1B}[33m",
+        Blue -> "\u{1B}[34m",
+        Magenta -> "\u{1B}[35m",
+        Cyan -> "\u{1B}[36m",
+        White -> "\u{1B}[37m",
+        BrightBlack -> "\u{1B}[90m",
+        BrightRed -> "\u{1B}[91m",
+        BrightGreen -> "\u{1B}[92m",
+        BrightYellow -> "\u{1B}[93m",
+        BrightBlue -> "\u{1B}[94m",
+        BrightMagenta -> "\u{1B}[95m",
+        BrightCyan -> "\u{1B}[96m",
+        BrightWhite -> "\u{1B}[97m",
+        Ansi(n) -> "\u{1B}[38;5;{clampColor(n)}m",
+        Rgb(r, g, b) -> "\u{1B}[38;2;{clampColor(r)};{clampColor(g)};{clampColor(b)}m",
+    }
+}
+
+pub fn bgSeq(color: Color) -> String {
+    match color {
+        DefaultColor -> "\u{1B}[49m",
+        Black -> "\u{1B}[40m",
+        Red -> "\u{1B}[41m",
+        Green -> "\u{1B}[42m",
+        Yellow -> "\u{1B}[43m",
+        Blue -> "\u{1B}[44m",
+        Magenta -> "\u{1B}[45m",
+        Cyan -> "\u{1B}[46m",
+        White -> "\u{1B}[47m",
+        BrightBlack -> "\u{1B}[100m",
+        BrightRed -> "\u{1B}[101m",
+        BrightGreen -> "\u{1B}[102m",
+        BrightYellow -> "\u{1B}[103m",
+        BrightBlue -> "\u{1B}[104m",
+        BrightMagenta -> "\u{1B}[105m",
+        BrightCyan -> "\u{1B}[106m",
+        BrightWhite -> "\u{1B}[107m",
+        Ansi(n) -> "\u{1B}[48;5;{clampColor(n)}m",
+        Rgb(r, g, b) -> "\u{1B}[48;2;{clampColor(r)};{clampColor(g)};{clampColor(b)}m",
+    }
+}
+
+pub fn attributeSeq(attr: Attribute) -> String {
+    match attr {
+        Bold -> "\u{1B}[1m",
+        Dim -> "\u{1B}[2m",
+        Italic -> "\u{1B}[3m",
+        Underline -> "\u{1B}[4m",
+        Blink -> "\u{1B}[5m",
+        Reverse -> "\u{1B}[7m",
+        Hidden -> "\u{1B}[8m",
+        Strike -> "\u{1B}[9m",
+    }
+}
+
+fn blankCells(size: grid.Size) -> List<Cell> {
+    let mut out: List<Cell> = []
+    let total = size.area()
+    let mut i = 0
+    for i < total {
+        out.push(blankCell())
+        i = i + 1
+    }
+    out
+}
+
+fn sameCell(a: Cell, b: Cell) -> Bool {
+    a.text == b.text && sameStyle(a.style, b.style)
+}
+
+fn sameStyle(a: Style, b: Style) -> Bool {
+    a.fg == b.fg && a.bg == b.bg && a.attrs == b.attrs
+}
+
+fn minInt(a: Int, b: Int) -> Int {
+    if a < b { a } else { b }
+}
+
+fn maxInt(a: Int, b: Int) -> Int {
+    if a > b { a } else { b }
+}
+
+fn clampColor(n: Int) -> Int {
+    if n < 0 {
+        return 0
+    }
+    if n > 255 {
+        return 255
+    }
+    n
+}

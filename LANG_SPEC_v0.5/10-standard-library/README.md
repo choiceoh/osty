@@ -37,3 +37,6 @@ lowering remains implementation backlog.
 - [§10.22 Formatting (`std.fmt`)](./22-fmt.md)
 - [§10.23 Network (`std.net`)](./23-net.md)
 - [§10.24 HTTP (`std.http`)](./24-http.md)
+- [§10.25 Terminal (`std.term`)](./25-term.md)
+- [§10.26 Text UI (`std.tui`)](./26-tui.md)
+- [§10.27 Grid (`std.grid`)](./27-grid.md)

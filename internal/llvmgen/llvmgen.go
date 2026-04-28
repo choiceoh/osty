@@ -281,6 +281,7 @@ func generateASTFile(file *ast.File, opts Options) ([]byte, error) {
 		g.stdNetAliases = collectStdNetAliases(file)
 		g.stdCryptoAliases = collectStdCryptoAliases(file)
 		g.stdOsAliases = collectStdOsAliases(file)
+		g.stdTermAliases = collectStdTermAliases(file)
 		mainIR, err := g.emitScriptMain(file.Stmts)
 		if err != nil {
 			return nil, err
@@ -321,6 +322,7 @@ func generateASTFile(file *ast.File, opts Options) ([]byte, error) {
 	g.stdNetAliases = collectStdNetAliases(file)
 	g.stdCryptoAliases = collectStdCryptoAliases(file)
 	g.stdOsAliases = collectStdOsAliases(file)
+	g.stdTermAliases = collectStdTermAliases(file)
 	if err := g.emitGlobalLets(decls.globalsOrdered); err != nil {
 		return nil, err
 	}
