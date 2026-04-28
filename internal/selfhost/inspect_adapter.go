@@ -6,17 +6,26 @@ import "github.com/osty/osty/internal/selfhost/api"
 // inspect pass (toolchain/inspect.osty) on src, returning one record
 // per observed AST node in source order.
 //
-// Records keep the self-host's raw form (byte offsets, rendered type
-// strings) rather than the structured form used by
-// internal/check.InspectRecord. See api.InspectRecord for the shape.
+// Records carry byte offsets (start-inclusive, end-exclusive) — the
+// self-host pass emits token-indexed spans which this adapter converts
+// via the lex stream, matching the semantics adaptCheckResult applies
+// to structured CheckedNode records.
 func InspectFromSource(src []byte) []api.InspectRecord {
 	if len(src) == 0 {
 		return nil
 	}
-	return adaptInspectRecords(inspectSource(string(src)))
+	lexed := ostyLexSource(string(src))
+	if lexed == nil {
+		return nil
+	}
+	file := astParseLexedSource(lexed)
+	checked := frontendCheckAstStructured(file)
+	recs := inspectFromAstAndCheck(file, checked)
+	rt := newRuneTable(lexed.source)
+	return adaptInspectRecords(recs, rt, lexed.stream)
 }
 
-func adaptInspectRecords(recs []*InspectRecord) []api.InspectRecord {
+func adaptInspectRecords(recs []*InspectRecord, rt runeTable, stream *FrontLexStream) []api.InspectRecord {
 	if len(recs) == 0 {
 		return nil
 	}
@@ -25,9 +34,10 @@ func adaptInspectRecords(recs []*InspectRecord) []api.InspectRecord {
 		if r == nil {
 			continue
 		}
+		start, end := checkNodeOffsets(rt, stream, r.start, r.end)
 		out = append(out, api.InspectRecord{
-			Start:    r.start,
-			End:      r.end,
+			Start:    start,
+			End:      end,
 			NodeKind: r.nodeKind,
 			Rule:     r.rule,
 			Type:     parseTypeRepr(r.typeName),
