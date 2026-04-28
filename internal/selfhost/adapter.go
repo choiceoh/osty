@@ -1,7 +1,6 @@
 package selfhost
 
 import (
-	"strings"
 	"sync/atomic"
 	"unicode/utf8"
 
@@ -142,43 +141,6 @@ func matchTextUnits(units []string, start int, text string) bool {
 	return true
 }
 
-func collectLeadingDocs(units []string, stream *FrontLexStream) []string {
-	leadingDocs := make([]string, 0, len(stream.tokens))
-	commentIdx := 0
-	commentCount := len(stream.comments)
-
-	for _, tok := range stream.tokens {
-		for commentIdx < commentCount && stream.comments[commentIdx].end.line < tok.start.line {
-			commentIdx++
-		}
-		if tok.leadingDocLines <= 0 {
-			leadingDocs = append(leadingDocs, "")
-			continue
-		}
-
-		docStartLine := tok.start.line - tok.leadingDocLines
-		docIdx := commentIdx
-		for docIdx > 0 && stream.comments[docIdx-1].end.line >= docStartLine {
-			docIdx--
-		}
-
-		var doc strings.Builder
-		for idx := docIdx; idx < commentIdx; idx++ {
-			c := stream.comments[idx]
-			if !ostyEqual(c.kind, FrontCommentKind(&FrontCommentKind_FrontCommentDoc{})) {
-				continue
-			}
-			if doc.Len() > 0 {
-				doc.WriteByte('\n')
-			}
-			doc.WriteString(strings.TrimSpace(ostyCommentText(units, c)))
-		}
-		leadingDocs = append(leadingDocs, doc.String())
-	}
-
-	return leadingDocs
-}
-
 // Tokens returns the public token stream, including EOF.
 func (r *FrontendRun) Tokens() []token.Token {
 	r.ensureLexAdapted()
@@ -267,7 +229,7 @@ func adaptLexStream(rt runeTable, stream *FrontLexStream, facts *OstyLexFacts) (
 			Triple:     ft.triple,
 			LeadingDoc: adapterStringAt(facts.leadingDocs, len(toks)),
 		}
-		fillLiteralParts(&tok, rt, stream, facts, len(toks))
+		fillLiteralParts(&tok, rt, stream, facts, ft.id)
 		toks = append(toks, tok)
 	}
 	comments := make([]token.Comment, 0, len(facts.comments))
@@ -529,11 +491,11 @@ func mapTokenKind(k FrontTokenKind) token.Kind {
 	return token.ILLEGAL
 }
 
-func fillLiteralParts(tok *token.Token, rt runeTable, stream *FrontLexStream, facts *OstyLexFacts, owner int) {
+func fillLiteralParts(tok *token.Token, rt runeTable, stream *FrontLexStream, facts *OstyLexFacts, ownerID int) {
 	switch tok.Kind {
 	case token.STRING, token.RAWSTRING:
 		for _, p := range facts.stringParts {
-			if p.ownerToken != owner {
+			if p.ownerTokenID != ownerID {
 				continue
 			}
 			if p.kindCode == int(token.PartExpr) {

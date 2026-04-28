@@ -136,6 +136,7 @@ pub struct FrontPos {
 /// FrontLexToken is the self-hosting token shape. It stores normalized
 /// source positions and literal metadata without copying lexeme text.
 pub struct FrontLexToken {
+    pub id: Int,
     pub kind: FrontTokenKind,
     pub start: FrontPos,
     pub end: FrontPos,
@@ -474,6 +475,7 @@ pub fn frontLexToken(
     baseLiteral: Bool,
 ) -> FrontLexToken {
     FrontLexToken {
+        id: frontStableTokenID(kind, start, end, length),
         kind,
         start,
         end,
@@ -487,6 +489,107 @@ pub fn frontLexToken(
 
 pub fn emptyFrontLexToken() -> FrontLexToken {
     frontLexToken(FrontEOF, emptyFrontPos(), emptyFrontPos(), 0, 0, false, 0, false)
+}
+
+/// frontStableTokenID is a deterministic identity for a lexed token in a
+/// normalized source buffer. It deliberately avoids slice indexes so side
+/// tables can keep referring to the same token even if callers filter or copy
+/// the token list at legacy boundaries.
+pub fn frontStableTokenID(
+    kind: FrontTokenKind,
+    start: FrontPos,
+    end: FrontPos,
+    length: Int,
+) -> Int {
+    let _ = end
+    let _ = length
+    (start.offset + 1) * 257 + frontTokenKindStableCode(kind)
+}
+
+pub fn frontTokenKindStableCode(kind: FrontTokenKind) -> Int {
+    match kind {
+        FrontEOF -> 0,
+        FrontIllegal -> 1,
+        FrontNewline -> 2,
+        FrontIdent -> 3,
+        FrontLabel -> 4,
+        FrontInt -> 5,
+        FrontFloat -> 6,
+        FrontChar -> 7,
+        FrontByte -> 8,
+        FrontString -> 9,
+        FrontRawString -> 10,
+        FrontFn -> 11,
+        FrontStruct -> 12,
+        FrontEnum -> 13,
+        FrontInterface -> 14,
+        FrontType -> 15,
+        FrontLet -> 16,
+        FrontMut -> 17,
+        FrontPub -> 18,
+        FrontUse -> 19,
+        FrontIf -> 20,
+        FrontElse -> 21,
+        FrontMatch -> 22,
+        FrontFor -> 23,
+        FrontReturn -> 24,
+        FrontBreak -> 25,
+        FrontContinue -> 26,
+        FrontDefer -> 27,
+        FrontLParen -> 28,
+        FrontRParen -> 29,
+        FrontLBrace -> 30,
+        FrontRBrace -> 31,
+        FrontLBracket -> 32,
+        FrontRBracket -> 33,
+        FrontComma -> 34,
+        FrontColon -> 35,
+        FrontSemicolon -> 36,
+        FrontDot -> 37,
+        FrontPlus -> 38,
+        FrontMinus -> 39,
+        FrontStar -> 40,
+        FrontSlash -> 41,
+        FrontPercent -> 42,
+        FrontEq -> 43,
+        FrontNeq -> 44,
+        FrontLt -> 45,
+        FrontGt -> 46,
+        FrontLeq -> 47,
+        FrontGeq -> 48,
+        FrontAnd -> 49,
+        FrontOr -> 50,
+        FrontNot -> 51,
+        FrontBitAnd -> 52,
+        FrontBitOr -> 53,
+        FrontBitXor -> 54,
+        FrontBitNot -> 55,
+        FrontShl -> 56,
+        FrontShr -> 57,
+        FrontAssign -> 58,
+        FrontPlusEq -> 59,
+        FrontMinusEq -> 60,
+        FrontStarEq -> 61,
+        FrontSlashEq -> 62,
+        FrontPercentEq -> 63,
+        FrontBitAndEq -> 64,
+        FrontBitOrEq -> 65,
+        FrontBitXorEq -> 66,
+        FrontShlEq -> 67,
+        FrontShrEq -> 68,
+        FrontArrow -> 69,
+        FrontChanArrow -> 70,
+        FrontQuestion -> 71,
+        FrontAsQuestion -> 72,
+        FrontQDot -> 73,
+        FrontQQ -> 74,
+        FrontDotDot -> 75,
+        FrontDotDotEq -> 76,
+        FrontColonColon -> 77,
+        FrontUnderscore -> 78,
+        FrontAt -> 79,
+        FrontHash -> 80,
+    }
 }
 
 pub fn frontLexDiagnostic(

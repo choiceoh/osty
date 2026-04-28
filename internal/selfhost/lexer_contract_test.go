@@ -54,6 +54,48 @@ func TestLexAdapterCopiesCanonicalFacts(t *testing.T) {
 	}
 }
 
+func TestLexResultStableTokenIDs(t *testing.T) {
+	src := `/// doc
+fn main() {
+    let s = "hi {name}"
+    let raw = r"raw"
+}
+`
+
+	lexed, facts, _ := canonicalLexFacts(src)
+	result := ostyLex(src)
+	if got, want := ostyLexResultTokenCount(result), frontLexTokenCount(lexed.stream); got != want {
+		t.Fatalf("rich token count = %d; want %d", got, want)
+	}
+
+	seen := map[int]bool{}
+	for i := 0; i < frontLexTokenCount(lexed.stream); i++ {
+		front := frontLexTokenAt(lexed.stream, i)
+		rich := ostyLexResultTokenAt(result, i)
+		if front.id <= 0 {
+			t.Fatalf("front token %d has non-stable id %d", i, front.id)
+		}
+		if seen[front.id] {
+			t.Fatalf("duplicate token id %d at token %d", front.id, i)
+		}
+		seen[front.id] = true
+		if rich.id != front.id {
+			t.Fatalf("rich token %d id = %d; want front token id %d", i, rich.id, front.id)
+		}
+	}
+
+	str := firstFrontTokenKind(t, lexed.stream, FrontTokenKind(&FrontTokenKind_FrontString{}))
+	parts := canonicalPartsForOwnerID(facts.stringParts, str.id)
+	if len(parts) == 0 {
+		t.Fatalf("missing string parts for stable owner id %d", str.id)
+	}
+	for _, part := range parts {
+		if part.ownerTokenID != str.id {
+			t.Fatalf("part ownerTokenID = %d; want %d", part.ownerTokenID, str.id)
+		}
+	}
+}
+
 func TestLexAdapterDiagnosticsCopyCanonicalFacts(t *testing.T) {
 	src := strings.Join([]string{
 		`let s = "bad\q"`,
@@ -131,7 +173,8 @@ func assertTokensMatchCanonicalFacts(t *testing.T, toks []token.Token, stream *F
 
 func assertTokenPartsMatchCanonicalFacts(t *testing.T, tok token.Token, owner int, stream *FrontLexStream, facts *OstyLexFacts, rt runeTable) {
 	t.Helper()
-	wantParts := canonicalPartsForOwner(facts.stringParts, owner)
+	front := frontLexTokenAt(stream, owner)
+	wantParts := canonicalPartsForOwnerID(facts.stringParts, front.id)
 	if len(tok.Parts) != len(wantParts) {
 		t.Fatalf("token %d parts = %d; want %d (%+v)", owner, len(tok.Parts), len(wantParts), tok.Parts)
 	}
@@ -162,14 +205,26 @@ func assertTokenPartsMatchCanonicalFacts(t *testing.T, tok token.Token, owner in
 	}
 }
 
-func canonicalPartsForOwner(parts []*OstyLexStringPart, owner int) []*OstyLexStringPart {
+func canonicalPartsForOwnerID(parts []*OstyLexStringPart, ownerID int) []*OstyLexStringPart {
 	var out []*OstyLexStringPart
 	for _, part := range parts {
-		if part.ownerToken == owner {
+		if part.ownerTokenID == ownerID {
 			out = append(out, part)
 		}
 	}
 	return out
+}
+
+func firstFrontTokenKind(t *testing.T, stream *FrontLexStream, kind FrontTokenKind) *FrontLexToken {
+	t.Helper()
+	for i := 0; i < frontLexTokenCount(stream); i++ {
+		tok := frontLexTokenAt(stream, i)
+		if ostyEqual(tok.kind, kind) {
+			return tok
+		}
+	}
+	t.Fatalf("missing front token kind %s", frontTokenKindName(kind))
+	return nil
 }
 
 func assertCommentsMatchCanonicalFacts(t *testing.T, comments []token.Comment, facts *OstyLexFacts, rt runeTable) {

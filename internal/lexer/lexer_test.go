@@ -1,6 +1,7 @@
 package lexer
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -83,6 +84,68 @@ func sourceLineColAt(src string, offset int) (int, int) {
 func TestLexUnterminatedString(t *testing.T) {
 	expectCode(t, "let s = \"hello", "E0001")
 	expectCode(t, "let s = \"hello\n", "E0001")
+}
+
+func TestLexSnapshot(t *testing.T) {
+	src := strings.Join([]string{
+		"/// doc",
+		"fn main() {",
+		`    let s = "hi\n{who}"`,
+		"    // keep",
+		`    let bad = "oops\q"`,
+		"}",
+		"",
+	}, "\n")
+	l := New([]byte(src))
+	got := lexSnapshot(l.Lex(), l.Errors(), l.Comments())
+	const want = `TOKENS
+fn "fn" 2:1-2:3 doc="doc"
+IDENT "main" 2:4-2:8
+( "(" 2:8-2:9
+) ")" 2:9-2:10
+{ "{" 2:11-2:12
+let "let" 3:5-3:8
+IDENT "s" 3:9-3:10
+= "=" 3:11-3:12
+STRING "\"hi\\n{who}\"" 3:13-3:24 parts=[text:"hi\n",expr:IDENT("who")]
+NEWLINE "\n" 3:24-4:1
+let "let" 5:5-5:8
+IDENT "bad" 5:9-5:12
+= "=" 5:13-5:14
+STRING "\"oops\\q\"" 5:15-5:23 parts=[text:"oopsq"]
+} "}" 6:1-6:2
+NEWLINE "\n" 6:2-7:1
+EOF "" 7:1-7:1
+DIAGNOSTICS
+E0003 unknown escape sequence 5:20-5:22
+COMMENTS
+2 1:1-1 text=" doc"
+0 4:5-4 text=" keep"
+`
+	if got != want {
+		t.Fatalf("lexer snapshot drift\nwant:\n%s\ngot:\n%s", want, got)
+	}
+}
+
+func TestLexRecoversAfterMalformedLiteral(t *testing.T) {
+	src := strings.Join([]string{
+		`let broken = "bad\q"`,
+		"fn after() { return 1 }",
+		"",
+	}, "\n")
+	l := New([]byte(src))
+	toks := l.Lex()
+	expectCode(t, src, "E0003")
+	var sawAfter bool
+	for i := range toks {
+		if toks[i].Kind == token.IDENT && toks[i].Value == "after" {
+			sawAfter = true
+			break
+		}
+	}
+	if !sawAfter {
+		t.Fatalf("lexer did not recover to the following declaration; tokens=%v", toks)
+	}
 }
 
 func TestLexDiagnosticContracts(t *testing.T) {
@@ -204,6 +267,48 @@ func TestLexDiagnosticContracts(t *testing.T) {
 			}
 		})
 	}
+}
+
+func lexSnapshot(toks []token.Token, errs []*Error, comments []token.Comment) string {
+	var b strings.Builder
+	b.WriteString("TOKENS\n")
+	for _, tk := range toks {
+		fmt.Fprintf(&b, "%s %q %s-%s", tk.Kind, tk.Value, tk.Pos, tk.End)
+		if tk.LeadingDoc != "" {
+			fmt.Fprintf(&b, " doc=%q", tk.LeadingDoc)
+		}
+		if len(tk.Parts) > 0 {
+			b.WriteString(" parts=[")
+			for i, part := range tk.Parts {
+				if i > 0 {
+					b.WriteByte(',')
+				}
+				if part.Kind == token.PartText {
+					fmt.Fprintf(&b, "text:%q", part.Text)
+					continue
+				}
+				b.WriteString("expr:")
+				for j, expr := range part.Expr {
+					if j > 0 {
+						b.WriteByte(' ')
+					}
+					fmt.Fprintf(&b, "%s(%q)", expr.Kind, expr.Value)
+				}
+			}
+			b.WriteByte(']')
+		}
+		b.WriteByte('\n')
+	}
+	b.WriteString("DIAGNOSTICS\n")
+	for _, d := range errs {
+		span := d.Spans[0].Span
+		fmt.Fprintf(&b, "%s %s %s-%s\n", d.Code, d.Message, span.Start, span.End)
+	}
+	b.WriteString("COMMENTS\n")
+	for _, c := range comments {
+		fmt.Fprintf(&b, "%d %s-%d text=%q\n", c.Kind, c.Pos, c.EndLine, c.Text)
+	}
+	return b.String()
 }
 
 func TestLexUppercaseBasePrefix(t *testing.T) {

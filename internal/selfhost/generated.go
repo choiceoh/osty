@@ -1418,6 +1418,7 @@ type FrontPos struct {
 
 // Osty: /tmp/selfhost_merged.osty:644:5
 type FrontLexToken struct {
+	id              int
 	kind            FrontTokenKind
 	start           *FrontPos
 	end             *FrontPos
@@ -1948,7 +1949,181 @@ func emptyFrontPos() *FrontPos {
 
 // Osty: /tmp/selfhost_merged.osty:972:5
 func frontLexToken(kind FrontTokenKind, start *FrontPos, end *FrontPos, length int, leadingDocLines int, triple bool, interpolations int, baseLiteral bool) *FrontLexToken {
-	return &FrontLexToken{kind: kind, start: start, end: end, length: length, leadingDocLines: leadingDocLines, triple: triple, interpolations: interpolations, baseLiteral: baseLiteral}
+	return &FrontLexToken{id: frontStableTokenID(kind, start, end, length), kind: kind, start: start, end: end, length: length, leadingDocLines: leadingDocLines, triple: triple, interpolations: interpolations, baseLiteral: baseLiteral}
+}
+
+func frontStableTokenID(kind FrontTokenKind, start *FrontPos, end *FrontPos, length int) int {
+	_ = end
+	_ = length
+	return (start.offset+1)*257 + frontTokenKindStableCode(kind)
+}
+
+func frontTokenKindStableCode(kind FrontTokenKind) int {
+	switch kind.(type) {
+	case *FrontTokenKind_FrontEOF:
+		return 0
+	case *FrontTokenKind_FrontIllegal:
+		return 1
+	case *FrontTokenKind_FrontNewline:
+		return 2
+	case *FrontTokenKind_FrontIdent:
+		return 3
+	case *FrontTokenKind_FrontLabel:
+		return 4
+	case *FrontTokenKind_FrontInt:
+		return 5
+	case *FrontTokenKind_FrontFloat:
+		return 6
+	case *FrontTokenKind_FrontChar:
+		return 7
+	case *FrontTokenKind_FrontByte:
+		return 8
+	case *FrontTokenKind_FrontString:
+		return 9
+	case *FrontTokenKind_FrontRawString:
+		return 10
+	case *FrontTokenKind_FrontFn:
+		return 11
+	case *FrontTokenKind_FrontStruct:
+		return 12
+	case *FrontTokenKind_FrontEnum:
+		return 13
+	case *FrontTokenKind_FrontInterface:
+		return 14
+	case *FrontTokenKind_FrontType:
+		return 15
+	case *FrontTokenKind_FrontLet:
+		return 16
+	case *FrontTokenKind_FrontMut:
+		return 17
+	case *FrontTokenKind_FrontPub:
+		return 18
+	case *FrontTokenKind_FrontUse:
+		return 19
+	case *FrontTokenKind_FrontIf:
+		return 20
+	case *FrontTokenKind_FrontElse:
+		return 21
+	case *FrontTokenKind_FrontMatch:
+		return 22
+	case *FrontTokenKind_FrontFor:
+		return 23
+	case *FrontTokenKind_FrontReturn:
+		return 24
+	case *FrontTokenKind_FrontBreak:
+		return 25
+	case *FrontTokenKind_FrontContinue:
+		return 26
+	case *FrontTokenKind_FrontDefer:
+		return 27
+	case *FrontTokenKind_FrontLParen:
+		return 28
+	case *FrontTokenKind_FrontRParen:
+		return 29
+	case *FrontTokenKind_FrontLBrace:
+		return 30
+	case *FrontTokenKind_FrontRBrace:
+		return 31
+	case *FrontTokenKind_FrontLBracket:
+		return 32
+	case *FrontTokenKind_FrontRBracket:
+		return 33
+	case *FrontTokenKind_FrontComma:
+		return 34
+	case *FrontTokenKind_FrontColon:
+		return 35
+	case *FrontTokenKind_FrontSemicolon:
+		return 36
+	case *FrontTokenKind_FrontDot:
+		return 37
+	case *FrontTokenKind_FrontPlus:
+		return 38
+	case *FrontTokenKind_FrontMinus:
+		return 39
+	case *FrontTokenKind_FrontStar:
+		return 40
+	case *FrontTokenKind_FrontSlash:
+		return 41
+	case *FrontTokenKind_FrontPercent:
+		return 42
+	case *FrontTokenKind_FrontEq:
+		return 43
+	case *FrontTokenKind_FrontNeq:
+		return 44
+	case *FrontTokenKind_FrontLt:
+		return 45
+	case *FrontTokenKind_FrontGt:
+		return 46
+	case *FrontTokenKind_FrontLeq:
+		return 47
+	case *FrontTokenKind_FrontGeq:
+		return 48
+	case *FrontTokenKind_FrontAnd:
+		return 49
+	case *FrontTokenKind_FrontOr:
+		return 50
+	case *FrontTokenKind_FrontNot:
+		return 51
+	case *FrontTokenKind_FrontBitAnd:
+		return 52
+	case *FrontTokenKind_FrontBitOr:
+		return 53
+	case *FrontTokenKind_FrontBitXor:
+		return 54
+	case *FrontTokenKind_FrontBitNot:
+		return 55
+	case *FrontTokenKind_FrontShl:
+		return 56
+	case *FrontTokenKind_FrontShr:
+		return 57
+	case *FrontTokenKind_FrontAssign:
+		return 58
+	case *FrontTokenKind_FrontPlusEq:
+		return 59
+	case *FrontTokenKind_FrontMinusEq:
+		return 60
+	case *FrontTokenKind_FrontStarEq:
+		return 61
+	case *FrontTokenKind_FrontSlashEq:
+		return 62
+	case *FrontTokenKind_FrontPercentEq:
+		return 63
+	case *FrontTokenKind_FrontBitAndEq:
+		return 64
+	case *FrontTokenKind_FrontBitOrEq:
+		return 65
+	case *FrontTokenKind_FrontBitXorEq:
+		return 66
+	case *FrontTokenKind_FrontShlEq:
+		return 67
+	case *FrontTokenKind_FrontShrEq:
+		return 68
+	case *FrontTokenKind_FrontArrow:
+		return 69
+	case *FrontTokenKind_FrontChanArrow:
+		return 70
+	case *FrontTokenKind_FrontQuestion:
+		return 71
+	case *FrontTokenKind_FrontAsQuestion:
+		return 72
+	case *FrontTokenKind_FrontQDot:
+		return 73
+	case *FrontTokenKind_FrontQQ:
+		return 74
+	case *FrontTokenKind_FrontDotDot:
+		return 75
+	case *FrontTokenKind_FrontDotDotEq:
+		return 76
+	case *FrontTokenKind_FrontColonColon:
+		return 77
+	case *FrontTokenKind_FrontUnderscore:
+		return 78
+	case *FrontTokenKind_FrontAt:
+		return 79
+	case *FrontTokenKind_FrontHash:
+		return 80
+	}
+	return 1
 }
 
 // Osty: /tmp/selfhost_merged.osty:994:5
@@ -16959,6 +17134,7 @@ func ostyFormatCheck(source string) *OstyFormatCheckResult {
 
 // Osty: /tmp/selfhost_merged.osty:6230:5
 type OstyRichToken struct {
+	id          int
 	kind        FrontTokenKind
 	text        string
 	startOffset int
@@ -17003,6 +17179,7 @@ type OstyLexComment struct {
 // Osty: /tmp/selfhost_merged.osty:6273:5
 type OstyLexStringPart struct {
 	ownerToken     int
+	ownerTokenID   int
 	kindCode       int
 	text           string
 	exprTokenStart int
@@ -17074,7 +17251,7 @@ func ostyLex(source string) *OstyLexResult {
 		text := ostyStringAt(facts.tokenTexts, tokenIdx)
 		_ = text
 		// Osty: /tmp/selfhost_merged.osty:6343:9
-		rt := &OstyRichToken{kind: lexTok.kind, text: text, startOffset: lexTok.start.offset, startLine: lexTok.start.line, startCol: lexTok.start.column, endOffset: lexTok.end.offset, endLine: lexTok.end.line, endCol: lexTok.end.column, leadingDoc: ostyStringAt(facts.leadingDocs, tokenIdx), triple: lexTok.triple, partCount: lexTok.interpolations}
+		rt := &OstyRichToken{id: lexTok.id, kind: lexTok.kind, text: text, startOffset: lexTok.start.offset, startLine: lexTok.start.line, startCol: lexTok.start.column, endOffset: lexTok.end.offset, endLine: lexTok.end.line, endCol: lexTok.end.column, leadingDoc: ostyStringAt(facts.leadingDocs, tokenIdx), triple: lexTok.triple, partCount: lexTok.interpolations}
 		_ = rt
 		// Osty: /tmp/selfhost_merged.osty:6356:9
 		func() struct{} { tokens = append(tokens, rt); return struct{}{} }()
@@ -17246,9 +17423,12 @@ func ostyLexFactsFromStream(source string, stream *FrontLexStream) *OstyLexFacts
 			ti = _cur1655 + _rhs1656
 		}()
 	}
-	// Osty: /tmp/selfhost_merged.osty:6370:5
-	leadingDocs := collectLeadingDocs(units, stream)
-	_ = leadingDocs
+	var leadingDocs []string = make([]string, 0, tokenCount)
+	li := 0
+	for li < tokenCount {
+		leadingDocs = append(leadingDocs, ostyJoinDocLines(units, stream, frontLexTokenAt(stream, li)))
+		li = li + 1
+	}
 	return &OstyLexFacts{errors: errors, comments: comments, stringParts: stringParts, leadingDocs: leadingDocs, tokenTexts: tokenTexts, interpolationTokenTexts: interpolationTokenTexts}
 }
 
@@ -17625,7 +17805,7 @@ func ostyLexStringPartFromFront(units []string, tok *FrontLexToken, part *FrontS
 	// Osty: /tmp/selfhost_merged.osty:6596:5
 	if ostyEqual(part.kind, FrontStringPartKind(&FrontStringPartKind_FrontStringInterpolation{})) {
 		// Osty: /tmp/selfhost_merged.osty:6597:9
-		return &OstyLexStringPart{ownerToken: part.ownerToken, kindCode: 1, text: "", exprTokenStart: part.exprTokenStart, exprTokenCount: part.exprTokenCount}
+		return &OstyLexStringPart{ownerToken: part.ownerToken, ownerTokenID: tok.id, kindCode: 1, text: "", exprTokenStart: part.exprTokenStart, exprTokenCount: part.exprTokenCount}
 	}
 	// Osty: /tmp/selfhost_merged.osty:6606:5
 	text := frontLexemeFromUnits(units, part.start.offset, func() int {
@@ -17641,7 +17821,7 @@ func ostyLexStringPartFromFront(units []string, tok *FrontLexToken, part *FrontS
 	}())
 	_ = text
 	text = ostyPublicStringPartText(units, tok, text)
-	return &OstyLexStringPart{ownerToken: part.ownerToken, kindCode: 0, text: text, exprTokenStart: 0, exprTokenCount: 0}
+	return &OstyLexStringPart{ownerToken: part.ownerToken, ownerTokenID: tok.id, kindCode: 0, text: text, exprTokenStart: 0, exprTokenCount: 0}
 }
 
 // Osty: /tmp/selfhost_merged.osty:6620:1
@@ -17650,7 +17830,7 @@ func ostyDefaultStringPart(units []string, tok *FrontLexToken, owner int) *OstyL
 	text := ostyStringContentRaw(units, tok)
 	_ = text
 	text = ostyPublicStringPartText(units, tok, text)
-	return &OstyLexStringPart{ownerToken: owner, kindCode: 0, text: text, exprTokenStart: 0, exprTokenCount: 0}
+	return &OstyLexStringPart{ownerToken: owner, ownerTokenID: tok.id, kindCode: 0, text: text, exprTokenStart: 0, exprTokenCount: 0}
 }
 
 func ostyPublicStringText(tok *FrontLexToken, raw string) string {
@@ -18208,7 +18388,7 @@ func ostyLexResultCommentCount(result *OstyLexResult) int {
 // Osty: /tmp/selfhost_merged.osty:6786:5
 func ostyLexResultTokenAt(result *OstyLexResult, idx int) *OstyRichToken {
 	if idx < 0 || idx >= len(result.tokens) {
-		return &OstyRichToken{kind: FrontTokenKind(&FrontTokenKind_FrontEOF{}), text: "", startOffset: 0, startLine: 0, startCol: 0, endOffset: 0, endLine: 0, endCol: 0, leadingDoc: "", triple: false, partCount: 0}
+		return &OstyRichToken{id: 0, kind: FrontTokenKind(&FrontTokenKind_FrontEOF{}), text: "", startOffset: 0, startLine: 0, startCol: 0, endOffset: 0, endLine: 0, endCol: 0, leadingDoc: "", triple: false, partCount: 0}
 	}
 	return result.tokens[idx]
 }
