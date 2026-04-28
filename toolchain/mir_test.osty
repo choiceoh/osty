@@ -134,6 +134,78 @@ fn testMirIntrinsicInstrShape() {
     testing.assertEq(mirIntrinsicName(i.intrinsic), "println")
 }
 
+// ==== MIR lowerer variant values ===================================
+
+fn mirTestHasVariantAssign(func: MirFunction, tag: String, fieldCount: Int) -> Bool {
+    for block in func.blocks {
+        for instr in block.instrs {
+            if instr.kind == MirInstrAssign
+                && instr.src.kind == MirRVAggregate
+                && instr.src.aggKind == MirAggEnumVariant
+                && instr.src.aggVariantTag == tag
+                && instr.src.aggFields.len() == fieldCount {
+                return true
+            }
+        }
+    }
+    false
+}
+
+fn testMirLowerBareVariantIdentMaterializesAggregate() {
+    let span = hirNoSpan()
+    let colorT = hirTypeNamed("Color", [])
+
+    let color = hirEnumDecl("Color", span)
+    color.variants.push(hirVariant("Red", span))
+    color.variants.push(hirVariant("Green", span))
+
+    let pick = hirFnDecl("pick", colorT, span)
+    hirBlockSetResult(
+        pick.body,
+        // Force the MIR lowerer to recover the enum owner from the
+        // variant layout table, matching the selfhost checker gaps.
+        hirIdent("Red", HirIdentVariant, hirTypeErr(), span),
+    )
+
+    let m = hirModule("main")
+    m.enums.push(color)
+    m.fns.push(pick)
+
+    let l = mirLowerer(m)
+    mirLowerRun(l)
+    testing.assertEq(l.issues.len(), 0)
+
+    let idx = mirModuleLookupFunction(l.out, "pick")
+    testing.assert(idx >= 0)
+    testing.assert(mirTestHasVariantAssign(l.out.functions[idx], "Red", 0))
+}
+
+fn testMirLowerVariantCtorCallMaterializesAggregate() {
+    let span = hirNoSpan()
+    let optT = hirTypeOptional(hirTInt())
+    let some = hirIdent("Some", HirIdentBuiltin, hirTypeErr(), span)
+    let call = hirCall(
+        some,
+        [hirArg(hirIntLit("7", hirTInt(), span), span)],
+        optT,
+        span,
+    )
+
+    let pick = hirFnDecl("pickSome", optT, span)
+    hirBlockSetResult(pick.body, call)
+
+    let m = hirModule("main")
+    m.fns.push(pick)
+
+    let l = mirLowerer(m)
+    mirLowerRun(l)
+    testing.assertEq(l.issues.len(), 0)
+
+    let idx = mirModuleLookupFunction(l.out, "pickSome")
+    testing.assert(idx >= 0)
+    testing.assert(mirTestHasVariantAssign(l.out.functions[idx], "Some", 1))
+}
+
 // ==== Terminator + CFG tests ========================================
 
 fn testMirGotoSuccessors() {
