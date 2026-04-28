@@ -75,7 +75,11 @@
 #else
 #  include <sys/stat.h>
 #  include <sys/types.h>
+#  include <fcntl.h>
 #  include <unistd.h>
+#  if defined(__linux__)
+#    include <sys/random.h>
+#  endif
 #  define OSTY_RT_MKDIR_ONE(path) mkdir((path), 0755)
 #endif
 
@@ -4713,6 +4717,14 @@ bool osty_rt_bytes_is_valid_utf8(void *raw_bytes);
 const char *osty_rt_bytes_to_string(void *raw_bytes);
 uint8_t osty_rt_bytes_get(void *raw_bytes, int64_t index);
 void *osty_rt_bytes_slice(void *raw_bytes, int64_t start, int64_t end);
+void *osty_rt_crypto_sha256(void *raw_data);
+void *osty_rt_crypto_sha512(void *raw_data);
+void *osty_rt_crypto_sha1(void *raw_data);
+void *osty_rt_crypto_md5(void *raw_data);
+void *osty_rt_crypto_hmac_sha256(void *raw_key, void *raw_message);
+void *osty_rt_crypto_hmac_sha512(void *raw_key, void *raw_message);
+void *osty_rt_crypto_random_bytes(int64_t n);
+bool osty_rt_crypto_constant_time_eq(void *raw_a, void *raw_b);
 bool osty_rt_set_insert_i64(void *raw_set, int64_t item);
 bool osty_rt_set_insert_i1(void *raw_set, bool item);
 bool osty_rt_set_insert_f64(void *raw_set, double item);
@@ -11599,6 +11611,1057 @@ void *osty_rt_bytes_slice(void *raw_bytes, int64_t start, int64_t end) {
         memcpy(data, b->data + (size_t)start, slice_len);
     }
     return out;
+}
+
+static inline uint32_t osty_rt_crypto_rotr32(uint32_t x, unsigned n) {
+    return (x >> n) | (x << (32U - n));
+}
+
+static inline uint64_t osty_rt_crypto_rotr64(uint64_t x, unsigned n) {
+    return (x >> n) | (x << (64U - n));
+}
+
+static inline uint32_t osty_rt_crypto_rotl32(uint32_t x, unsigned n) {
+    return (x << n) | (x >> (32U - n));
+}
+
+static inline uint32_t osty_rt_crypto_load_be32(const unsigned char *p) {
+    return ((uint32_t)p[0] << 24) |
+           ((uint32_t)p[1] << 16) |
+           ((uint32_t)p[2] << 8) |
+           (uint32_t)p[3];
+}
+
+static inline uint64_t osty_rt_crypto_load_be64(const unsigned char *p) {
+    return ((uint64_t)p[0] << 56) |
+           ((uint64_t)p[1] << 48) |
+           ((uint64_t)p[2] << 40) |
+           ((uint64_t)p[3] << 32) |
+           ((uint64_t)p[4] << 24) |
+           ((uint64_t)p[5] << 16) |
+           ((uint64_t)p[6] << 8) |
+           (uint64_t)p[7];
+}
+
+static inline uint32_t osty_rt_crypto_load_le32(const unsigned char *p) {
+    return (uint32_t)p[0] |
+           ((uint32_t)p[1] << 8) |
+           ((uint32_t)p[2] << 16) |
+           ((uint32_t)p[3] << 24);
+}
+
+static inline void osty_rt_crypto_store_be32(unsigned char *p, uint32_t x) {
+    p[0] = (unsigned char)(x >> 24);
+    p[1] = (unsigned char)(x >> 16);
+    p[2] = (unsigned char)(x >> 8);
+    p[3] = (unsigned char)x;
+}
+
+static inline void osty_rt_crypto_store_be64(unsigned char *p, uint64_t x) {
+    p[0] = (unsigned char)(x >> 56);
+    p[1] = (unsigned char)(x >> 48);
+    p[2] = (unsigned char)(x >> 40);
+    p[3] = (unsigned char)(x >> 32);
+    p[4] = (unsigned char)(x >> 24);
+    p[5] = (unsigned char)(x >> 16);
+    p[6] = (unsigned char)(x >> 8);
+    p[7] = (unsigned char)x;
+}
+
+static inline void osty_rt_crypto_store_le32(unsigned char *p, uint32_t x) {
+    p[0] = (unsigned char)x;
+    p[1] = (unsigned char)(x >> 8);
+    p[2] = (unsigned char)(x >> 16);
+    p[3] = (unsigned char)(x >> 24);
+}
+
+static void osty_rt_crypto_bytes_view(void *raw_bytes,
+                                      const unsigned char **data,
+                                      size_t *len,
+                                      const char *op) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    *data = NULL;
+    *len = 0;
+    if (b == NULL) {
+        return;
+    }
+    if (b->len < 0) {
+        osty_rt_abort(op);
+    }
+    *len = (size_t)b->len;
+    if (*len != 0 && b->data == NULL) {
+        osty_rt_abort(op);
+    }
+    *data = b->data;
+}
+
+static osty_rt_bytes *osty_rt_crypto_alloc_bytes(size_t len, const char *site) {
+    size_t total;
+    osty_rt_bytes *out;
+    unsigned char *data;
+
+    if (len > SIZE_MAX - sizeof(osty_rt_bytes)) {
+        osty_rt_abort("runtime.crypto.alloc_bytes: size overflow");
+    }
+    total = sizeof(osty_rt_bytes) + len;
+    out = (osty_rt_bytes *)osty_gc_allocate_managed(total, OSTY_GC_KIND_BYTES, site, NULL, NULL);
+    data = (unsigned char *)(out + 1);
+    out->data = data;
+    out->len = (int64_t)len;
+    return out;
+}
+
+static void osty_rt_crypto_secure_zero(void *ptr, size_t len) {
+    volatile unsigned char *p = (volatile unsigned char *)ptr;
+    while (len-- != 0) {
+        *p++ = 0U;
+    }
+}
+
+static bool osty_rt_crypto_digest_matches_hex(const unsigned char *digest,
+                                              size_t digest_len,
+                                              const char *hex) {
+    size_t i;
+    if (hex == NULL) {
+        return false;
+    }
+    if (strlen(hex) != digest_len * 2U) {
+        return false;
+    }
+    for (i = 0; i < digest_len; i++) {
+        int hi = osty_rt_hex_nibble((unsigned char)hex[i * 2U]);
+        int lo = osty_rt_hex_nibble((unsigned char)hex[i * 2U + 1U]);
+        if (hi < 0 || lo < 0) {
+            return false;
+        }
+        if (digest[i] != (unsigned char)((hi << 4) | lo)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+static const uint32_t osty_rt_crypto_sha256_k[64] = {
+    0x428a2f98U, 0x71374491U, 0xb5c0fbcfU, 0xe9b5dba5U,
+    0x3956c25bU, 0x59f111f1U, 0x923f82a4U, 0xab1c5ed5U,
+    0xd807aa98U, 0x12835b01U, 0x243185beU, 0x550c7dc3U,
+    0x72be5d74U, 0x80deb1feU, 0x9bdc06a7U, 0xc19bf174U,
+    0xe49b69c1U, 0xefbe4786U, 0x0fc19dc6U, 0x240ca1ccU,
+    0x2de92c6fU, 0x4a7484aaU, 0x5cb0a9dcU, 0x76f988daU,
+    0x983e5152U, 0xa831c66dU, 0xb00327c8U, 0xbf597fc7U,
+    0xc6e00bf3U, 0xd5a79147U, 0x06ca6351U, 0x14292967U,
+    0x27b70a85U, 0x2e1b2138U, 0x4d2c6dfcU, 0x53380d13U,
+    0x650a7354U, 0x766a0abbU, 0x81c2c92eU, 0x92722c85U,
+    0xa2bfe8a1U, 0xa81a664bU, 0xc24b8b70U, 0xc76c51a3U,
+    0xd192e819U, 0xd6990624U, 0xf40e3585U, 0x106aa070U,
+    0x19a4c116U, 0x1e376c08U, 0x2748774cU, 0x34b0bcb5U,
+    0x391c0cb3U, 0x4ed8aa4aU, 0x5b9cca4fU, 0x682e6ff3U,
+    0x748f82eeU, 0x78a5636fU, 0x84c87814U, 0x8cc70208U,
+    0x90befffaU, 0xa4506cebU, 0xbef9a3f7U, 0xc67178f2U,
+};
+
+static const uint64_t osty_rt_crypto_sha512_k[80] = {
+    0x428a2f98d728ae22ULL, 0x7137449123ef65cdULL,
+    0xb5c0fbcfec4d3b2fULL, 0xe9b5dba58189dbbcULL,
+    0x3956c25bf348b538ULL, 0x59f111f1b605d019ULL,
+    0x923f82a4af194f9bULL, 0xab1c5ed5da6d8118ULL,
+    0xd807aa98a3030242ULL, 0x12835b0145706fbeULL,
+    0x243185be4ee4b28cULL, 0x550c7dc3d5ffb4e2ULL,
+    0x72be5d74f27b896fULL, 0x80deb1fe3b1696b1ULL,
+    0x9bdc06a725c71235ULL, 0xc19bf174cf692694ULL,
+    0xe49b69c19ef14ad2ULL, 0xefbe4786384f25e3ULL,
+    0x0fc19dc68b8cd5b5ULL, 0x240ca1cc77ac9c65ULL,
+    0x2de92c6f592b0275ULL, 0x4a7484aa6ea6e483ULL,
+    0x5cb0a9dcbd41fbd4ULL, 0x76f988da831153b5ULL,
+    0x983e5152ee66dfabULL, 0xa831c66d2db43210ULL,
+    0xb00327c898fb213fULL, 0xbf597fc7beef0ee4ULL,
+    0xc6e00bf33da88fc2ULL, 0xd5a79147930aa725ULL,
+    0x06ca6351e003826fULL, 0x142929670a0e6e70ULL,
+    0x27b70a8546d22ffcULL, 0x2e1b21385c26c926ULL,
+    0x4d2c6dfc5ac42aedULL, 0x53380d139d95b3dfULL,
+    0x650a73548baf63deULL, 0x766a0abb3c77b2a8ULL,
+    0x81c2c92e47edaee6ULL, 0x92722c851482353bULL,
+    0xa2bfe8a14cf10364ULL, 0xa81a664bbc423001ULL,
+    0xc24b8b70d0f89791ULL, 0xc76c51a30654be30ULL,
+    0xd192e819d6ef5218ULL, 0xd69906245565a910ULL,
+    0xf40e35855771202aULL, 0x106aa07032bbd1b8ULL,
+    0x19a4c116b8d2d0c8ULL, 0x1e376c085141ab53ULL,
+    0x2748774cdf8eeb99ULL, 0x34b0bcb5e19b48a8ULL,
+    0x391c0cb3c5c95a63ULL, 0x4ed8aa4ae3418acbULL,
+    0x5b9cca4f7763e373ULL, 0x682e6ff3d6b2b8a3ULL,
+    0x748f82ee5defb2fcULL, 0x78a5636f43172f60ULL,
+    0x84c87814a1f0ab72ULL, 0x8cc702081a6439ecULL,
+    0x90befffa23631e28ULL, 0xa4506cebde82bde9ULL,
+    0xbef9a3f7b2c67915ULL, 0xc67178f2e372532bULL,
+    0xca273eceea26619cULL, 0xd186b8c721c0c207ULL,
+    0xeada7dd6cde0eb1eULL, 0xf57d4f7fee6ed178ULL,
+    0x06f067aa72176fbaULL, 0x0a637dc5a2c898a6ULL,
+    0x113f9804bef90daeULL, 0x1b710b35131c471bULL,
+    0x28db77f523047d84ULL, 0x32caab7b40c72493ULL,
+    0x3c9ebe0a15c9bebcULL, 0x431d67c49c100d4cULL,
+    0x4cc5d4becb3e42b6ULL, 0x597f299cfc657e2aULL,
+    0x5fcb6fab3ad6faecULL, 0x6c44198c4a475817ULL,
+};
+
+static const uint32_t osty_rt_crypto_md5_k[64] = {
+    0xd76aa478U, 0xe8c7b756U, 0x242070dbU, 0xc1bdceeeU,
+    0xf57c0fafU, 0x4787c62aU, 0xa8304613U, 0xfd469501U,
+    0x698098d8U, 0x8b44f7afU, 0xffff5bb1U, 0x895cd7beU,
+    0x6b901122U, 0xfd987193U, 0xa679438eU, 0x49b40821U,
+    0xf61e2562U, 0xc040b340U, 0x265e5a51U, 0xe9b6c7aaU,
+    0xd62f105dU, 0x02441453U, 0xd8a1e681U, 0xe7d3fbc8U,
+    0x21e1cde6U, 0xc33707d6U, 0xf4d50d87U, 0x455a14edU,
+    0xa9e3e905U, 0xfcefa3f8U, 0x676f02d9U, 0x8d2a4c8aU,
+    0xfffa3942U, 0x8771f681U, 0x6d9d6122U, 0xfde5380cU,
+    0xa4beea44U, 0x4bdecfa9U, 0xf6bb4b60U, 0xbebfbc70U,
+    0x289b7ec6U, 0xeaa127faU, 0xd4ef3085U, 0x04881d05U,
+    0xd9d4d039U, 0xe6db99e5U, 0x1fa27cf8U, 0xc4ac5665U,
+    0xf4292244U, 0x432aff97U, 0xab9423a7U, 0xfc93a039U,
+    0x655b59c3U, 0x8f0ccc92U, 0xffeff47dU, 0x85845dd1U,
+    0x6fa87e4fU, 0xfe2ce6e0U, 0xa3014314U, 0x4e0811a1U,
+    0xf7537e82U, 0xbd3af235U, 0x2ad7d2bbU, 0xeb86d391U,
+};
+
+static const uint32_t osty_rt_crypto_md5_s[64] = {
+    7U, 12U, 17U, 22U, 7U, 12U, 17U, 22U,
+    7U, 12U, 17U, 22U, 7U, 12U, 17U, 22U,
+    5U, 9U, 14U, 20U, 5U, 9U, 14U, 20U,
+    5U, 9U, 14U, 20U, 5U, 9U, 14U, 20U,
+    4U, 11U, 16U, 23U, 4U, 11U, 16U, 23U,
+    4U, 11U, 16U, 23U, 4U, 11U, 16U, 23U,
+    6U, 10U, 15U, 21U, 6U, 10U, 15U, 21U,
+    6U, 10U, 15U, 21U, 6U, 10U, 15U, 21U,
+};
+
+static void osty_rt_crypto_sha256_compress(uint32_t state[8], const unsigned char block[64]) {
+    uint32_t w[64];
+    uint32_t a, b, c, d, e, f, g, h;
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        w[i] = osty_rt_crypto_load_be32(block + ((size_t)i * 4U));
+    }
+    for (i = 16; i < 64; i++) {
+        uint32_t s0 = osty_rt_crypto_rotr32(w[i - 15], 7) ^
+                      osty_rt_crypto_rotr32(w[i - 15], 18) ^
+                      (w[i - 15] >> 3);
+        uint32_t s1 = osty_rt_crypto_rotr32(w[i - 2], 17) ^
+                      osty_rt_crypto_rotr32(w[i - 2], 19) ^
+                      (w[i - 2] >> 10);
+        w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+
+    a = state[0];
+    b = state[1];
+    c = state[2];
+    d = state[3];
+    e = state[4];
+    f = state[5];
+    g = state[6];
+    h = state[7];
+
+    for (i = 0; i < 64; i++) {
+        uint32_t s1 = osty_rt_crypto_rotr32(e, 6) ^
+                      osty_rt_crypto_rotr32(e, 11) ^
+                      osty_rt_crypto_rotr32(e, 25);
+        uint32_t ch = (e & f) ^ ((~e) & g);
+        uint32_t temp1 = h + s1 + ch + osty_rt_crypto_sha256_k[i] + w[i];
+        uint32_t s0 = osty_rt_crypto_rotr32(a, 2) ^
+                      osty_rt_crypto_rotr32(a, 13) ^
+                      osty_rt_crypto_rotr32(a, 22);
+        uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+        uint32_t temp2 = s0 + maj;
+
+        h = g;
+        g = f;
+        f = e;
+        e = d + temp1;
+        d = c;
+        c = b;
+        b = a;
+        a = temp1 + temp2;
+    }
+
+    state[0] += a;
+    state[1] += b;
+    state[2] += c;
+    state[3] += d;
+    state[4] += e;
+    state[5] += f;
+    state[6] += g;
+    state[7] += h;
+}
+
+typedef struct osty_rt_crypto_sha256_ctx {
+    uint32_t state[8];
+    uint64_t total_len;
+    size_t block_len;
+    unsigned char block[64];
+} osty_rt_crypto_sha256_ctx;
+
+static void osty_rt_crypto_sha256_init(osty_rt_crypto_sha256_ctx *ctx) {
+    ctx->state[0] = 0x6a09e667U;
+    ctx->state[1] = 0xbb67ae85U;
+    ctx->state[2] = 0x3c6ef372U;
+    ctx->state[3] = 0xa54ff53aU;
+    ctx->state[4] = 0x510e527fU;
+    ctx->state[5] = 0x9b05688cU;
+    ctx->state[6] = 0x1f83d9abU;
+    ctx->state[7] = 0x5be0cd19U;
+    ctx->total_len = 0;
+    ctx->block_len = 0;
+}
+
+static void osty_rt_crypto_sha256_update(osty_rt_crypto_sha256_ctx *ctx,
+                                         const unsigned char *data,
+                                         size_t len) {
+    if (len == 0) {
+        return;
+    }
+    if (ctx->total_len > UINT64_MAX - (uint64_t)len) {
+        osty_rt_abort("runtime.crypto.sha256: input too large");
+    }
+    ctx->total_len += (uint64_t)len;
+    if (ctx->block_len != 0) {
+        size_t want = 64U - ctx->block_len;
+        if (want > len) {
+            want = len;
+        }
+        memcpy(ctx->block + ctx->block_len, data, want);
+        ctx->block_len += want;
+        data += want;
+        len -= want;
+        if (ctx->block_len == 64U) {
+            osty_rt_crypto_sha256_compress(ctx->state, ctx->block);
+            ctx->block_len = 0;
+        }
+    }
+    while (len >= 64U) {
+        osty_rt_crypto_sha256_compress(ctx->state, data);
+        data += 64U;
+        len -= 64U;
+    }
+    if (len != 0) {
+        memcpy(ctx->block, data, len);
+        ctx->block_len = len;
+    }
+}
+
+static void osty_rt_crypto_sha256_final(osty_rt_crypto_sha256_ctx *ctx,
+                                        unsigned char out[32]) {
+    unsigned char final[128];
+    uint64_t bit_len;
+    size_t padded;
+    int i;
+
+    if (ctx->total_len > (UINT64_MAX >> 3)) {
+        osty_rt_abort("runtime.crypto.sha256: input too large");
+    }
+    bit_len = ctx->total_len * 8ULL;
+    memset(final, 0, sizeof(final));
+    if (ctx->block_len != 0) {
+        memcpy(final, ctx->block, ctx->block_len);
+    }
+    final[ctx->block_len] = 0x80U;
+    padded = (ctx->block_len + 1U + 8U <= 64U) ? 64U : 128U;
+    osty_rt_crypto_store_be64(final + padded - 8U, bit_len);
+    osty_rt_crypto_sha256_compress(ctx->state, final);
+    if (padded == 128U) {
+        osty_rt_crypto_sha256_compress(ctx->state, final + 64U);
+    }
+    for (i = 0; i < 8; i++) {
+        osty_rt_crypto_store_be32(out + ((size_t)i * 4U), ctx->state[i]);
+    }
+    osty_rt_crypto_secure_zero(final, sizeof(final));
+    osty_rt_crypto_secure_zero(ctx, sizeof(*ctx));
+}
+
+static void osty_rt_crypto_sha256_digest(const unsigned char *data, size_t len, unsigned char out[32]) {
+    osty_rt_crypto_sha256_ctx ctx;
+    osty_rt_crypto_sha256_init(&ctx);
+    osty_rt_crypto_sha256_update(&ctx, data, len);
+    osty_rt_crypto_sha256_final(&ctx, out);
+}
+
+static void osty_rt_crypto_sha512_compress(uint64_t state[8], const unsigned char block[128]) {
+    uint64_t w[80];
+    uint64_t a, b, c, d, e, f, g, h;
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        w[i] = osty_rt_crypto_load_be64(block + ((size_t)i * 8U));
+    }
+    for (i = 16; i < 80; i++) {
+        uint64_t s0 = osty_rt_crypto_rotr64(w[i - 15], 1) ^
+                      osty_rt_crypto_rotr64(w[i - 15], 8) ^
+                      (w[i - 15] >> 7);
+        uint64_t s1 = osty_rt_crypto_rotr64(w[i - 2], 19) ^
+                      osty_rt_crypto_rotr64(w[i - 2], 61) ^
+                      (w[i - 2] >> 6);
+        w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+    }
+
+    a = state[0];
+    b = state[1];
+    c = state[2];
+    d = state[3];
+    e = state[4];
+    f = state[5];
+    g = state[6];
+    h = state[7];
+
+    for (i = 0; i < 80; i++) {
+        uint64_t s1 = osty_rt_crypto_rotr64(e, 14) ^
+                      osty_rt_crypto_rotr64(e, 18) ^
+                      osty_rt_crypto_rotr64(e, 41);
+        uint64_t ch = (e & f) ^ ((~e) & g);
+        uint64_t temp1 = h + s1 + ch + osty_rt_crypto_sha512_k[i] + w[i];
+        uint64_t s0 = osty_rt_crypto_rotr64(a, 28) ^
+                      osty_rt_crypto_rotr64(a, 34) ^
+                      osty_rt_crypto_rotr64(a, 39);
+        uint64_t maj = (a & b) ^ (a & c) ^ (b & c);
+        uint64_t temp2 = s0 + maj;
+
+        h = g;
+        g = f;
+        f = e;
+        e = d + temp1;
+        d = c;
+        c = b;
+        b = a;
+        a = temp1 + temp2;
+    }
+
+    state[0] += a;
+    state[1] += b;
+    state[2] += c;
+    state[3] += d;
+    state[4] += e;
+    state[5] += f;
+    state[6] += g;
+    state[7] += h;
+}
+
+typedef struct osty_rt_crypto_sha512_ctx {
+    uint64_t state[8];
+    uint64_t total_lo;
+    uint64_t total_hi;
+    size_t block_len;
+    unsigned char block[128];
+} osty_rt_crypto_sha512_ctx;
+
+static void osty_rt_crypto_sha512_init(osty_rt_crypto_sha512_ctx *ctx) {
+    ctx->state[0] = 0x6a09e667f3bcc908ULL;
+    ctx->state[1] = 0xbb67ae8584caa73bULL;
+    ctx->state[2] = 0x3c6ef372fe94f82bULL;
+    ctx->state[3] = 0xa54ff53a5f1d36f1ULL;
+    ctx->state[4] = 0x510e527fade682d1ULL;
+    ctx->state[5] = 0x9b05688c2b3e6c1fULL;
+    ctx->state[6] = 0x1f83d9abfb41bd6bULL;
+    ctx->state[7] = 0x5be0cd19137e2179ULL;
+    ctx->total_lo = 0;
+    ctx->total_hi = 0;
+    ctx->block_len = 0;
+}
+
+static void osty_rt_crypto_sha512_add_bytes(osty_rt_crypto_sha512_ctx *ctx,
+                                            size_t len) {
+    uint64_t add = (uint64_t)len;
+    uint64_t prev = ctx->total_lo;
+    ctx->total_lo += add;
+    if (ctx->total_lo < prev) {
+        if (ctx->total_hi == UINT64_MAX) {
+            osty_rt_abort("runtime.crypto.sha512: input too large");
+        }
+        ctx->total_hi += 1U;
+    }
+}
+
+static void osty_rt_crypto_sha512_update(osty_rt_crypto_sha512_ctx *ctx,
+                                         const unsigned char *data,
+                                         size_t len) {
+    if (len == 0) {
+        return;
+    }
+    osty_rt_crypto_sha512_add_bytes(ctx, len);
+    if (ctx->block_len != 0) {
+        size_t want = 128U - ctx->block_len;
+        if (want > len) {
+            want = len;
+        }
+        memcpy(ctx->block + ctx->block_len, data, want);
+        ctx->block_len += want;
+        data += want;
+        len -= want;
+        if (ctx->block_len == 128U) {
+            osty_rt_crypto_sha512_compress(ctx->state, ctx->block);
+            ctx->block_len = 0;
+        }
+    }
+    while (len >= 128U) {
+        osty_rt_crypto_sha512_compress(ctx->state, data);
+        data += 128U;
+        len -= 128U;
+    }
+    if (len != 0) {
+        memcpy(ctx->block, data, len);
+        ctx->block_len = len;
+    }
+}
+
+static void osty_rt_crypto_sha512_final(osty_rt_crypto_sha512_ctx *ctx,
+                                        unsigned char out[64]) {
+    unsigned char final[256];
+    uint64_t bit_hi = (ctx->total_hi << 3) | (ctx->total_lo >> 61);
+    uint64_t bit_lo = ctx->total_lo << 3;
+    size_t padded;
+    int i;
+
+    memset(final, 0, sizeof(final));
+    if (ctx->block_len != 0) {
+        memcpy(final, ctx->block, ctx->block_len);
+    }
+    final[ctx->block_len] = 0x80U;
+    padded = (ctx->block_len + 1U + 16U <= 128U) ? 128U : 256U;
+    osty_rt_crypto_store_be64(final + padded - 16U, bit_hi);
+    osty_rt_crypto_store_be64(final + padded - 8U, bit_lo);
+    osty_rt_crypto_sha512_compress(ctx->state, final);
+    if (padded == 256U) {
+        osty_rt_crypto_sha512_compress(ctx->state, final + 128U);
+    }
+    for (i = 0; i < 8; i++) {
+        osty_rt_crypto_store_be64(out + ((size_t)i * 8U), ctx->state[i]);
+    }
+    osty_rt_crypto_secure_zero(final, sizeof(final));
+    osty_rt_crypto_secure_zero(ctx, sizeof(*ctx));
+}
+
+static void osty_rt_crypto_sha512_digest(const unsigned char *data, size_t len, unsigned char out[64]) {
+    osty_rt_crypto_sha512_ctx ctx;
+    osty_rt_crypto_sha512_init(&ctx);
+    osty_rt_crypto_sha512_update(&ctx, data, len);
+    osty_rt_crypto_sha512_final(&ctx, out);
+}
+
+static void osty_rt_crypto_sha1_compress(uint32_t state[5], const unsigned char block[64]) {
+    uint32_t w[80];
+    uint32_t a, b, c, d, e;
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        w[i] = osty_rt_crypto_load_be32(block + ((size_t)i * 4U));
+    }
+    for (i = 16; i < 80; i++) {
+        w[i] = osty_rt_crypto_rotl32(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+    }
+
+    a = state[0];
+    b = state[1];
+    c = state[2];
+    d = state[3];
+    e = state[4];
+
+    for (i = 0; i < 80; i++) {
+        uint32_t f;
+        uint32_t k;
+        uint32_t temp;
+        if (i < 20) {
+            f = (b & c) | ((~b) & d);
+            k = 0x5a827999U;
+        } else if (i < 40) {
+            f = b ^ c ^ d;
+            k = 0x6ed9eba1U;
+        } else if (i < 60) {
+            f = (b & c) | (b & d) | (c & d);
+            k = 0x8f1bbcdcU;
+        } else {
+            f = b ^ c ^ d;
+            k = 0xca62c1d6U;
+        }
+        temp = osty_rt_crypto_rotl32(a, 5) + f + e + k + w[i];
+        e = d;
+        d = c;
+        c = osty_rt_crypto_rotl32(b, 30);
+        b = a;
+        a = temp;
+    }
+
+    state[0] += a;
+    state[1] += b;
+    state[2] += c;
+    state[3] += d;
+    state[4] += e;
+}
+
+static void osty_rt_crypto_sha1_digest(const unsigned char *data, size_t len, unsigned char out[20]) {
+    uint32_t state[5] = {
+        0x67452301U, 0xefcdab89U, 0x98badcfeU, 0x10325476U, 0xc3d2e1f0U,
+    };
+    unsigned char final[128];
+    uint64_t bit_len;
+    size_t rem;
+    size_t padded;
+    int i;
+
+    if (len > (size_t)(UINT64_MAX >> 3)) {
+        osty_rt_abort("runtime.crypto.sha1: input too large");
+    }
+    bit_len = (uint64_t)len * 8ULL;
+
+    while (len >= 64U) {
+        osty_rt_crypto_sha1_compress(state, data);
+        data += 64U;
+        len -= 64U;
+    }
+
+    rem = len;
+    memset(final, 0, sizeof(final));
+    if (rem != 0) {
+        memcpy(final, data, rem);
+    }
+    final[rem] = 0x80U;
+    padded = (rem + 1U + 8U <= 64U) ? 64U : 128U;
+    osty_rt_crypto_store_be64(final + padded - 8U, bit_len);
+    osty_rt_crypto_sha1_compress(state, final);
+    if (padded == 128U) {
+        osty_rt_crypto_sha1_compress(state, final + 64U);
+    }
+
+    for (i = 0; i < 5; i++) {
+        osty_rt_crypto_store_be32(out + ((size_t)i * 4U), state[i]);
+    }
+    osty_rt_crypto_secure_zero(final, sizeof(final));
+    osty_rt_crypto_secure_zero(state, sizeof(state));
+}
+
+static void osty_rt_crypto_md5_compress(uint32_t state[4], const unsigned char block[64]) {
+    uint32_t m[16];
+    uint32_t a, b, c, d;
+    int i;
+
+    for (i = 0; i < 16; i++) {
+        m[i] = osty_rt_crypto_load_le32(block + ((size_t)i * 4U));
+    }
+
+    a = state[0];
+    b = state[1];
+    c = state[2];
+    d = state[3];
+
+    for (i = 0; i < 64; i++) {
+        uint32_t f;
+        uint32_t g;
+        uint32_t temp;
+        if (i < 16) {
+            f = (b & c) | ((~b) & d);
+            g = (uint32_t)i;
+        } else if (i < 32) {
+            f = (d & b) | ((~d) & c);
+            g = (uint32_t)((5 * i + 1) & 15);
+        } else if (i < 48) {
+            f = b ^ c ^ d;
+            g = (uint32_t)((3 * i + 5) & 15);
+        } else {
+            f = c ^ (b | (~d));
+            g = (uint32_t)((7 * i) & 15);
+        }
+        temp = d;
+        d = c;
+        c = b;
+        b = b + osty_rt_crypto_rotl32(a + f + osty_rt_crypto_md5_k[i] + m[g], osty_rt_crypto_md5_s[i]);
+        a = temp;
+    }
+
+    state[0] += a;
+    state[1] += b;
+    state[2] += c;
+    state[3] += d;
+}
+
+static void osty_rt_crypto_md5_digest(const unsigned char *data, size_t len, unsigned char out[16]) {
+    uint32_t state[4] = {
+        0x67452301U, 0xefcdab89U, 0x98badcfeU, 0x10325476U,
+    };
+    unsigned char final[128];
+    uint64_t bit_len;
+    size_t rem;
+    size_t padded;
+    int i;
+
+    if (len > (size_t)(UINT64_MAX >> 3)) {
+        osty_rt_abort("runtime.crypto.md5: input too large");
+    }
+    bit_len = (uint64_t)len * 8ULL;
+
+    while (len >= 64U) {
+        osty_rt_crypto_md5_compress(state, data);
+        data += 64U;
+        len -= 64U;
+    }
+
+    rem = len;
+    memset(final, 0, sizeof(final));
+    if (rem != 0) {
+        memcpy(final, data, rem);
+    }
+    final[rem] = 0x80U;
+    padded = (rem + 1U + 8U <= 64U) ? 64U : 128U;
+    osty_rt_crypto_store_le32(final + padded - 8U, (uint32_t)bit_len);
+    osty_rt_crypto_store_le32(final + padded - 4U, (uint32_t)(bit_len >> 32));
+    osty_rt_crypto_md5_compress(state, final);
+    if (padded == 128U) {
+        osty_rt_crypto_md5_compress(state, final + 64U);
+    }
+
+    for (i = 0; i < 4; i++) {
+        osty_rt_crypto_store_le32(out + ((size_t)i * 4U), state[i]);
+    }
+    osty_rt_crypto_secure_zero(final, sizeof(final));
+    osty_rt_crypto_secure_zero(state, sizeof(state));
+}
+
+static void osty_rt_crypto_hmac_sha256_digest(const unsigned char *key,
+                                              size_t key_len,
+                                              const unsigned char *message,
+                                              size_t message_len,
+                                              unsigned char out[32]) {
+    unsigned char key_block[64];
+    unsigned char pad[64];
+    unsigned char inner_digest[32];
+    osty_rt_crypto_sha256_ctx ctx;
+    size_t i;
+
+    memset(key_block, 0, sizeof(key_block));
+    if (key_len > sizeof(key_block)) {
+        osty_rt_crypto_sha256_digest(key, key_len, key_block);
+    } else if (key_len != 0) {
+        memcpy(key_block, key, key_len);
+    }
+
+    for (i = 0; i < sizeof(key_block); i++) {
+        pad[i] = (unsigned char)(key_block[i] ^ 0x36U);
+    }
+    osty_rt_crypto_sha256_init(&ctx);
+    osty_rt_crypto_sha256_update(&ctx, pad, sizeof(pad));
+    osty_rt_crypto_sha256_update(&ctx, message, message_len);
+    osty_rt_crypto_sha256_final(&ctx, inner_digest);
+
+    for (i = 0; i < sizeof(key_block); i++) {
+        pad[i] = (unsigned char)(key_block[i] ^ 0x5cU);
+    }
+    osty_rt_crypto_sha256_init(&ctx);
+    osty_rt_crypto_sha256_update(&ctx, pad, sizeof(pad));
+    osty_rt_crypto_sha256_update(&ctx, inner_digest, sizeof(inner_digest));
+    osty_rt_crypto_sha256_final(&ctx, out);
+
+    osty_rt_crypto_secure_zero(key_block, sizeof(key_block));
+    osty_rt_crypto_secure_zero(pad, sizeof(pad));
+    osty_rt_crypto_secure_zero(inner_digest, sizeof(inner_digest));
+}
+
+static void osty_rt_crypto_hmac_sha512_digest(const unsigned char *key,
+                                              size_t key_len,
+                                              const unsigned char *message,
+                                              size_t message_len,
+                                              unsigned char out[64]) {
+    unsigned char key_block[128];
+    unsigned char pad[128];
+    unsigned char inner_digest[64];
+    osty_rt_crypto_sha512_ctx ctx;
+    size_t i;
+
+    memset(key_block, 0, sizeof(key_block));
+    if (key_len > sizeof(key_block)) {
+        osty_rt_crypto_sha512_digest(key, key_len, key_block);
+    } else if (key_len != 0) {
+        memcpy(key_block, key, key_len);
+    }
+
+    for (i = 0; i < sizeof(key_block); i++) {
+        pad[i] = (unsigned char)(key_block[i] ^ 0x36U);
+    }
+    osty_rt_crypto_sha512_init(&ctx);
+    osty_rt_crypto_sha512_update(&ctx, pad, sizeof(pad));
+    osty_rt_crypto_sha512_update(&ctx, message, message_len);
+    osty_rt_crypto_sha512_final(&ctx, inner_digest);
+
+    for (i = 0; i < sizeof(key_block); i++) {
+        pad[i] = (unsigned char)(key_block[i] ^ 0x5cU);
+    }
+    osty_rt_crypto_sha512_init(&ctx);
+    osty_rt_crypto_sha512_update(&ctx, pad, sizeof(pad));
+    osty_rt_crypto_sha512_update(&ctx, inner_digest, sizeof(inner_digest));
+    osty_rt_crypto_sha512_final(&ctx, out);
+
+    osty_rt_crypto_secure_zero(key_block, sizeof(key_block));
+    osty_rt_crypto_secure_zero(pad, sizeof(pad));
+    osty_rt_crypto_secure_zero(inner_digest, sizeof(inner_digest));
+}
+
+static osty_rt_once_t osty_rt_crypto_selftest_once = OSTY_RT_ONCE_INIT;
+
+static void osty_rt_crypto_selftest(void) {
+    static const unsigned char abc[] = {'a', 'b', 'c'};
+    static const unsigned char quick_msg[] = "The quick brown fox jumps over the lazy dog";
+    static const unsigned char quick_key[] = "key";
+    unsigned char long_key[200];
+    unsigned char long_msg_local[3000];
+    unsigned char digest[64];
+    size_t i;
+
+    memset(long_key, 'a', sizeof(long_key));
+    for (i = 0; i < sizeof(long_msg_local); i += 3U) {
+        long_msg_local[i] = 'a';
+        long_msg_local[i + 1U] = 'b';
+        long_msg_local[i + 2U] = 'c';
+    }
+
+    osty_rt_crypto_sha256_digest(abc, sizeof(abc), digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 32U, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")) {
+        osty_rt_abort("runtime.crypto.selftest: sha256 failed");
+    }
+    osty_rt_crypto_sha512_digest(abc, sizeof(abc), digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 64U, "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f")) {
+        osty_rt_abort("runtime.crypto.selftest: sha512 failed");
+    }
+    osty_rt_crypto_sha1_digest(abc, sizeof(abc), digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 20U, "a9993e364706816aba3e25717850c26c9cd0d89d")) {
+        osty_rt_abort("runtime.crypto.selftest: sha1 failed");
+    }
+    osty_rt_crypto_md5_digest(abc, sizeof(abc), digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 16U, "900150983cd24fb0d6963f7d28e17f72")) {
+        osty_rt_abort("runtime.crypto.selftest: md5 failed");
+    }
+    osty_rt_crypto_hmac_sha256_digest(
+        quick_key, sizeof(quick_key) - 1U,
+        quick_msg, sizeof(quick_msg) - 1U,
+        digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 32U, "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8")) {
+        osty_rt_abort("runtime.crypto.selftest: hmac-sha256 failed");
+    }
+    osty_rt_crypto_hmac_sha512_digest(
+        quick_key, sizeof(quick_key) - 1U,
+        quick_msg, sizeof(quick_msg) - 1U,
+        digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 64U, "b42af09057bac1e2d41708e48a902e09b5ff7f12ab428a4fe86653c73dd248fb82f948a549f7b791a5b41915ee4d1ec3935357e4e2317250d0372afa2ebeeb3a")) {
+        osty_rt_abort("runtime.crypto.selftest: hmac-sha512 failed");
+    }
+    osty_rt_crypto_sha256_digest(long_msg_local, sizeof(long_msg_local), digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 32U, "328de8f1895f8bb09f6e6b4c2012ef2b2a6f067cd002794b750aa040a6f6d8bd")) {
+        osty_rt_abort("runtime.crypto.selftest: long sha256 failed");
+    }
+    osty_rt_crypto_sha512_digest(long_msg_local, sizeof(long_msg_local), digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 64U, "14e615e6e7d4cf8cc75df5f408c558ddc98ad6eace44cabff9b4dcc9c8a4c22c0d772680f0267eb2595847c4dae7ecae06fc374d37f9f65db8502b0b7c048db1")) {
+        osty_rt_abort("runtime.crypto.selftest: long sha512 failed");
+    }
+    osty_rt_crypto_hmac_sha256_digest(long_key, sizeof(long_key), long_msg_local, sizeof(long_msg_local), digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 32U, "7068ec7fdc9547b40e98e4bd5f7213d3c31088b993dfe87067c7636c786fc8b7")) {
+        osty_rt_abort("runtime.crypto.selftest: long hmac-sha256 failed");
+    }
+    osty_rt_crypto_hmac_sha512_digest(long_key, sizeof(long_key), long_msg_local, sizeof(long_msg_local), digest);
+    if (!osty_rt_crypto_digest_matches_hex(digest, 64U, "c1d9c61a8a67c829edae908bd74acf67d556379eabb0fa52d63cde5fa016dc339e8f323bb3d11c699a6feeb6189370744f7ef33565b180ae0395d574497fdd5b")) {
+        osty_rt_abort("runtime.crypto.selftest: long hmac-sha512 failed");
+    }
+    osty_rt_crypto_secure_zero(digest, sizeof(digest));
+    osty_rt_crypto_secure_zero(long_key, sizeof(long_key));
+    osty_rt_crypto_secure_zero(long_msg_local, sizeof(long_msg_local));
+}
+
+static void osty_rt_crypto_require_selftest(void) {
+    osty_rt_once(&osty_rt_crypto_selftest_once, osty_rt_crypto_selftest);
+}
+
+static void osty_rt_crypto_fill_random(unsigned char *out, size_t len) {
+    size_t offset = 0;
+
+    if (len == 0) {
+        return;
+    }
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    while (offset < len) {
+        unsigned int word = 0;
+        size_t chunk = len - offset;
+        if (rand_s(&word) != 0) {
+            osty_rt_abort("runtime.crypto.random_bytes: rand_s failed");
+        }
+        if (chunk > sizeof(word)) {
+            chunk = sizeof(word);
+        }
+        memcpy(out + offset, &word, chunk);
+        offset += chunk;
+    }
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+    arc4random_buf(out, len);
+#else
+#  if defined(__linux__)
+    while (offset < len) {
+        ssize_t n = getrandom(out + offset, len - offset, 0);
+        if (n < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            if (errno == ENOSYS) {
+                break;
+            }
+            osty_rt_abort("runtime.crypto.random_bytes: getrandom failed");
+        }
+        offset += (size_t)n;
+    }
+    if (offset == len) {
+        return;
+    }
+#  endif
+    {
+        int fd = open("/dev/urandom", O_RDONLY);
+        if (fd < 0) {
+            osty_rt_abort("runtime.crypto.random_bytes: open /dev/urandom failed");
+        }
+        while (offset < len) {
+            ssize_t n = read(fd, out + offset, len - offset);
+            if (n < 0) {
+                if (errno == EINTR) {
+                    continue;
+                }
+                close(fd);
+                osty_rt_abort("runtime.crypto.random_bytes: read /dev/urandom failed");
+            }
+            if (n == 0) {
+                close(fd);
+                osty_rt_abort("runtime.crypto.random_bytes: short read from /dev/urandom");
+            }
+            offset += (size_t)n;
+        }
+        close(fd);
+    }
+#endif
+}
+
+void *osty_rt_crypto_sha256(void *raw_data) {
+    const unsigned char *data;
+    size_t len;
+    unsigned char digest[32];
+    void *out;
+
+    osty_rt_crypto_require_selftest();
+    osty_rt_crypto_bytes_view(raw_data, &data, &len, "runtime.crypto.sha256: invalid bytes");
+    osty_rt_crypto_sha256_digest(data, len, digest);
+    out = osty_rt_bytes_dup_site(digest, sizeof(digest), "runtime.crypto.sha256");
+    osty_rt_crypto_secure_zero(digest, sizeof(digest));
+    return out;
+}
+
+void *osty_rt_crypto_sha512(void *raw_data) {
+    const unsigned char *data;
+    size_t len;
+    unsigned char digest[64];
+    void *out;
+
+    osty_rt_crypto_require_selftest();
+    osty_rt_crypto_bytes_view(raw_data, &data, &len, "runtime.crypto.sha512: invalid bytes");
+    osty_rt_crypto_sha512_digest(data, len, digest);
+    out = osty_rt_bytes_dup_site(digest, sizeof(digest), "runtime.crypto.sha512");
+    osty_rt_crypto_secure_zero(digest, sizeof(digest));
+    return out;
+}
+
+void *osty_rt_crypto_sha1(void *raw_data) {
+    const unsigned char *data;
+    size_t len;
+    unsigned char digest[20];
+    void *out;
+
+    osty_rt_crypto_require_selftest();
+    osty_rt_crypto_bytes_view(raw_data, &data, &len, "runtime.crypto.sha1: invalid bytes");
+    osty_rt_crypto_sha1_digest(data, len, digest);
+    out = osty_rt_bytes_dup_site(digest, sizeof(digest), "runtime.crypto.sha1");
+    osty_rt_crypto_secure_zero(digest, sizeof(digest));
+    return out;
+}
+
+void *osty_rt_crypto_md5(void *raw_data) {
+    const unsigned char *data;
+    size_t len;
+    unsigned char digest[16];
+    void *out;
+
+    osty_rt_crypto_require_selftest();
+    osty_rt_crypto_bytes_view(raw_data, &data, &len, "runtime.crypto.md5: invalid bytes");
+    osty_rt_crypto_md5_digest(data, len, digest);
+    out = osty_rt_bytes_dup_site(digest, sizeof(digest), "runtime.crypto.md5");
+    osty_rt_crypto_secure_zero(digest, sizeof(digest));
+    return out;
+}
+
+void *osty_rt_crypto_hmac_sha256(void *raw_key, void *raw_message) {
+    const unsigned char *key;
+    const unsigned char *message;
+    size_t key_len;
+    size_t message_len;
+    unsigned char digest[32];
+    void *out;
+
+    osty_rt_crypto_require_selftest();
+    osty_rt_crypto_bytes_view(raw_key, &key, &key_len, "runtime.crypto.hmac_sha256: invalid key");
+    osty_rt_crypto_bytes_view(raw_message, &message, &message_len, "runtime.crypto.hmac_sha256: invalid message");
+    osty_rt_crypto_hmac_sha256_digest(key, key_len, message, message_len, digest);
+    out = osty_rt_bytes_dup_site(digest, sizeof(digest), "runtime.crypto.hmac_sha256");
+    osty_rt_crypto_secure_zero(digest, sizeof(digest));
+    return out;
+}
+
+void *osty_rt_crypto_hmac_sha512(void *raw_key, void *raw_message) {
+    const unsigned char *key;
+    const unsigned char *message;
+    size_t key_len;
+    size_t message_len;
+    unsigned char digest[64];
+    void *out;
+
+    osty_rt_crypto_require_selftest();
+    osty_rt_crypto_bytes_view(raw_key, &key, &key_len, "runtime.crypto.hmac_sha512: invalid key");
+    osty_rt_crypto_bytes_view(raw_message, &message, &message_len, "runtime.crypto.hmac_sha512: invalid message");
+    osty_rt_crypto_hmac_sha512_digest(key, key_len, message, message_len, digest);
+    out = osty_rt_bytes_dup_site(digest, sizeof(digest), "runtime.crypto.hmac_sha512");
+    osty_rt_crypto_secure_zero(digest, sizeof(digest));
+    return out;
+}
+
+void *osty_rt_crypto_random_bytes(int64_t n) {
+    size_t len;
+    osty_rt_bytes *out;
+
+    osty_rt_crypto_require_selftest();
+    if (n < 0) {
+        osty_rt_abort("runtime.crypto.random_bytes: negative length");
+    }
+    len = (size_t)n;
+    out = osty_rt_crypto_alloc_bytes(len, len == 0 ? "runtime.crypto.random_bytes.empty" : "runtime.crypto.random_bytes");
+    if (len != 0) {
+        osty_rt_crypto_fill_random(out->data, len);
+    }
+    return out;
+}
+
+bool osty_rt_crypto_constant_time_eq(void *raw_a, void *raw_b) {
+    const unsigned char *a;
+    const unsigned char *b;
+    size_t a_len;
+    size_t b_len;
+    size_t max_len;
+    size_t i;
+    size_t diff;
+
+    osty_rt_crypto_require_selftest();
+    osty_rt_crypto_bytes_view(raw_a, &a, &a_len, "runtime.crypto.constant_time_eq: invalid left bytes");
+    osty_rt_crypto_bytes_view(raw_b, &b, &b_len, "runtime.crypto.constant_time_eq: invalid right bytes");
+    max_len = a_len > b_len ? a_len : b_len;
+    diff = a_len ^ b_len;
+    for (i = 0; i < max_len; i++) {
+        unsigned char av = i < a_len ? a[i] : 0U;
+        unsigned char bv = i < b_len ? b[i] : 0U;
+        diff |= (size_t)(av ^ bv);
+    }
+    return diff == 0;
 }
 
 void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
