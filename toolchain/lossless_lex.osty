@@ -72,6 +72,7 @@ pub struct LosslessTrivia {
 /// LosslessToken pairs a raw `FrontLexToken` with its trivia slices
 /// and a state snapshot for incremental re-lex.
 pub struct LosslessToken {
+    pub id: Int,
     pub kind: FrontTokenKind,
     pub offset: Int,
     pub length: Int,
@@ -467,6 +468,7 @@ fn losslessBuildTokens(
 
         out.push(
             LosslessToken {
+                id: tok.id,
                 kind: tok.kind,
                 offset: tok.start.offset,
                 length: tok.length,
@@ -992,6 +994,7 @@ pub fn losslessTokenAt(stream: LosslessStream, target: Int) -> LosslessToken {
         idx = idx + 1
     }
     LosslessToken {
+        id: 0,
         kind: FrontEOF,
         offset: stream.unitCount,
         length: 0,

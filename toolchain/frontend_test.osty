@@ -113,6 +113,19 @@ fn testFrontendLexerEmitsRichTokenStream() {
     testing.assertEq(doc.start.line, 1)
 }
 
+fn testFrontendLexerAssignsStableTokenIDs() {
+    let stream = frontendLexStream("x")
+    let again = frontendLexStream("x")
+
+    let ident = frontLexTokenAt(stream, 0)
+    let virtualNewline = frontLexTokenAt(stream, 1)
+    let eof = frontLexTokenAt(stream, 2)
+
+    testing.assert(ident.id > 0)
+    testing.assertEq(ident.id, frontLexTokenAt(again, 0).id)
+    testing.assert(virtualNewline.id != eof.id)
+}
+
 fn testFrontendLexerEmitsStructuredDiagnostics() {
     let stream = frontendLexStream("0B101\n\"oops\n/* nope")
 

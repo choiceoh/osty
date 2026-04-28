@@ -14,6 +14,7 @@ use std.strings as strings
 /// the Go token.Token does: kind, position, text, doc comment, triple
 /// flag, and string parts (for interpolation).
 pub struct OstyRichToken {
+    pub id: Int,
     pub kind: FrontTokenKind,
     pub text: String,
     pub startOffset: Int,
@@ -60,6 +61,7 @@ pub struct OstyLexComment {
 /// layer, not to the Go adapter.
 pub struct OstyLexStringPart {
     pub ownerToken: Int,
+    pub ownerTokenID: Int,
     pub kindCode: Int,
     pub text: String,
     pub exprTokenStart: Int,
@@ -132,6 +134,7 @@ pub fn ostyLex(source: String) -> OstyLexResult {
         let text = ostyStringAt(facts.tokenTexts, tokenIdx)
 
         let mut rt = OstyRichToken {
+            id: lexTok.id,
             kind: lexTok.kind,
             text,
             startOffset: lexTok.start.offset,
@@ -378,6 +381,7 @@ fn ostyLexStringPartFromFront(
     if part.kind == FrontStringInterpolation {
         return OstyLexStringPart {
             ownerToken: part.ownerToken,
+            ownerTokenID: tok.id,
             kindCode: 1,
             text: "",
             exprTokenStart: part.exprTokenStart,
@@ -391,6 +395,7 @@ fn ostyLexStringPartFromFront(
     )
     OstyLexStringPart {
         ownerToken: part.ownerToken,
+        ownerTokenID: tok.id,
         kindCode: 0,
         text,
         exprTokenStart: 0,
@@ -402,6 +407,7 @@ fn ostyDefaultStringPart(units: List<String>, tok: FrontLexToken, owner: Int) ->
     let text = ostyPublicStringPartText(units, tok, ostyStringContentRaw(units, tok))
     OstyLexStringPart {
         ownerToken: owner,
+        ownerTokenID: tok.id,
         kindCode: 0,
         text,
         exprTokenStart: 0,
@@ -788,7 +794,7 @@ pub fn ostyLexResultCommentCount(result: OstyLexResult) -> Int {
 pub fn ostyLexResultTokenAt(result: OstyLexResult, idx: Int) -> OstyRichToken {
     if idx < 0 || idx >= result.tokens.len() {
         return OstyRichToken {
-            kind: FrontEOF, text: "", startOffset: 0, startLine: 0, startCol: 0,
+            id: 0, kind: FrontEOF, text: "", startOffset: 0, startLine: 0, startCol: 0,
             endOffset: 0, endLine: 0, endCol: 0, leadingDoc: "", triple: false, partCount: 0,
         }
     }

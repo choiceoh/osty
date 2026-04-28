@@ -373,6 +373,18 @@ fn testCompatBridgeTokenKinds() {
     testing.assertEq(losslessCount, fronts.len())
 }
 
+fn testLosslessTokensCarryStableIDsAcrossLegacyBridge() {
+    let src = "x"
+    let stream = losslessLex(src)
+    let first = losslessTokenAt(stream, 0)
+    let inner = frontLexTokenAt(stream.inner, 0)
+    let fronts = losslessToFrontTokens(stream)
+
+    testing.assert(first.id > 0)
+    testing.assertEq(first.id, inner.id)
+    testing.assertEq(fronts[0].text, "x")
+}
+
 // -------------------------------------------------------------------
 // ACCESSORS
 // -------------------------------------------------------------------
