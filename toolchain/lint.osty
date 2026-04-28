@@ -2493,19 +2493,31 @@ fn selfLintAstCheckMissingDocsDecl(
     let node = selfLintAstNode(file, idx)
     let mut out = report
     if node.kind == AstNFnDecl {
-        out = selfLintAstEmitMissingDoc(out, stream, node, idx, "public function has no doc comment")
+        out = selfLintAstEmitMissingDoc(out, stream, node, selfLintAstDeclName(file, node), idx, "public function has no doc comment")
     } else if node.kind == AstNStructDecl {
-        out = selfLintAstEmitMissingDoc(out, stream, node, idx, "public struct has no doc comment")
+        out = selfLintAstEmitMissingDoc(out, stream, node, selfLintAstDeclName(file, node), idx, "public struct has no doc comment")
         out = selfLintAstCheckMissingDocsMembers(file, stream, node.children, out)
     } else if node.kind == AstNEnumDecl {
-        out = selfLintAstEmitMissingDoc(out, stream, node, idx, "public enum has no doc comment")
+        out = selfLintAstEmitMissingDoc(out, stream, node, selfLintAstDeclName(file, node), idx, "public enum has no doc comment")
         out = selfLintAstCheckMissingDocsMembers(file, stream, node.children, out)
     } else if node.kind == AstNInterfaceDecl {
-        out = selfLintAstEmitMissingDoc(out, stream, node, idx, "public interface has no doc comment")
+        out = selfLintAstEmitMissingDoc(out, stream, node, selfLintAstDeclName(file, node), idx, "public interface has no doc comment")
     } else if node.kind == AstNTypeAlias {
-        out = selfLintAstEmitMissingDoc(out, stream, node, idx, "public type alias has no doc comment")
+        out = selfLintAstEmitMissingDoc(out, stream, node, selfLintAstDeclName(file, node), idx, "public type alias has no doc comment")
+    } else if node.kind == AstNLet || node.kind == AstNLetDecl {
+        out = selfLintAstEmitMissingDoc(out, stream, node, selfLintAstDeclName(file, node), idx, "public binding has no doc comment")
     }
     out
+}
+
+fn selfLintAstDeclName(file: AstFile, node: AstNode) -> String {
+    if node.kind == AstNLet || node.kind == AstNLetDecl {
+        let pattern = selfLintAstNode(file, node.left)
+        if selfLintAstPatternIsIdent(pattern) {
+            return selfLintAstPatternName(pattern.text, "ident:")
+        }
+    }
+    node.text
 }
 
 fn selfLintAstCheckMissingDocsMembers(
@@ -2518,7 +2530,7 @@ fn selfLintAstCheckMissingDocsMembers(
     for memberIdx in members {
         let member = selfLintAstNode(file, memberIdx)
         if member.kind == AstNFnDecl {
-            out = selfLintAstEmitMissingDoc(out, stream, member, memberIdx, "public method has no doc comment")
+            out = selfLintAstEmitMissingDoc(out, stream, member, member.text, memberIdx, "public method has no doc comment")
         }
     }
     out
@@ -2528,16 +2540,28 @@ fn selfLintAstEmitMissingDoc(
     report: SelfLintReport,
     stream: FrontLexStream,
     node: AstNode,
+    name: String,
     idx: Int,
     message: String,
 ) -> SelfLintReport {
-    if node.flags != 1 {
+    if !(selfLintAstIsPublicDecl(stream, node)) {
         return report
     }
     if selfLintDeclHasLeadingDoc(stream, node.start) {
         return report
     }
-    selfLintEmitAtNode(report, "L0070", message, node.text, node.start, node.start + 1, idx)
+    selfLintEmitAtNode(report, "L0070", message, name, node.start, node.start + 1, idx)
+}
+
+fn selfLintAstIsPublicDecl(stream: FrontLexStream, node: AstNode) -> Bool {
+    if node.kind == AstNLet || node.kind == AstNLetDecl {
+        let pubIdx = node.start - 1
+        if pubIdx < 0 || pubIdx >= frontLexTokenCount(stream) {
+            return false
+        }
+        return frontLexTokenAt(stream, pubIdx).kind == FrontPub
+    }
+    node.flags == 1
 }
 
 /// selfLintDeclHasLeadingDoc reports whether any `///` doc comment is

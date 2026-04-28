@@ -59926,25 +59926,37 @@ func selfLintAstCheckMissingDocsDecl(file *AstFile, stream *FrontLexStream, idx 
 	// Osty: /tmp/selfhost_merged.osty:31806:5
 	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
 		// Osty: /tmp/selfhost_merged.osty:31807:9
-		out = selfLintAstEmitMissingDoc(out, stream, node, idx, "public function has no doc comment")
+		out = selfLintAstEmitMissingDoc(out, stream, node, selfLintAstDeclName(file, node), idx, "public function has no doc comment")
 	} else if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNStructDecl{})) {
 		// Osty: /tmp/selfhost_merged.osty:31809:9
-		out = selfLintAstEmitMissingDoc(out, stream, node, idx, "public struct has no doc comment")
+		out = selfLintAstEmitMissingDoc(out, stream, node, selfLintAstDeclName(file, node), idx, "public struct has no doc comment")
 		// Osty: /tmp/selfhost_merged.osty:31810:9
 		out = selfLintAstCheckMissingDocsMembers(file, stream, node.children, out)
 	} else if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNEnumDecl{})) {
 		// Osty: /tmp/selfhost_merged.osty:31812:9
-		out = selfLintAstEmitMissingDoc(out, stream, node, idx, "public enum has no doc comment")
+		out = selfLintAstEmitMissingDoc(out, stream, node, selfLintAstDeclName(file, node), idx, "public enum has no doc comment")
 		// Osty: /tmp/selfhost_merged.osty:31813:9
 		out = selfLintAstCheckMissingDocsMembers(file, stream, node.children, out)
 	} else if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNInterfaceDecl{})) {
 		// Osty: /tmp/selfhost_merged.osty:31815:9
-		out = selfLintAstEmitMissingDoc(out, stream, node, idx, "public interface has no doc comment")
+		out = selfLintAstEmitMissingDoc(out, stream, node, selfLintAstDeclName(file, node), idx, "public interface has no doc comment")
 	} else if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNTypeAlias{})) {
 		// Osty: /tmp/selfhost_merged.osty:31817:9
-		out = selfLintAstEmitMissingDoc(out, stream, node, idx, "public type alias has no doc comment")
+		out = selfLintAstEmitMissingDoc(out, stream, node, selfLintAstDeclName(file, node), idx, "public type alias has no doc comment")
+	} else if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNLet{})) || ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNLetDecl{})) {
+		out = selfLintAstEmitMissingDoc(out, stream, node, selfLintAstDeclName(file, node), idx, "public binding has no doc comment")
 	}
 	return out
+}
+
+func selfLintAstDeclName(file *AstFile, node *AstNode) string {
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNLet{})) || ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNLetDecl{})) {
+		pattern := selfLintAstNode(file, node.left)
+		if selfLintAstPatternIsIdent(pattern) {
+			return selfLintAstPatternName(pattern.text, "ident:")
+		}
+	}
+	return node.text
 }
 
 // Osty: /tmp/selfhost_merged.osty:31822:1
@@ -59960,16 +59972,16 @@ func selfLintAstCheckMissingDocsMembers(file *AstFile, stream *FrontLexStream, m
 		// Osty: /tmp/selfhost_merged.osty:31831:9
 		if ostyEqual(member.kind, AstNodeKind(&AstNodeKind_AstNFnDecl{})) {
 			// Osty: /tmp/selfhost_merged.osty:31832:13
-			out = selfLintAstEmitMissingDoc(out, stream, member, memberIdx, "public method has no doc comment")
+			out = selfLintAstEmitMissingDoc(out, stream, member, member.text, memberIdx, "public method has no doc comment")
 		}
 	}
 	return out
 }
 
 // Osty: /tmp/selfhost_merged.osty:31838:1
-func selfLintAstEmitMissingDoc(report *SelfLintReport, stream *FrontLexStream, node *AstNode, idx int, message string) *SelfLintReport {
+func selfLintAstEmitMissingDoc(report *SelfLintReport, stream *FrontLexStream, node *AstNode, name string, idx int, message string) *SelfLintReport {
 	// Osty: /tmp/selfhost_merged.osty:31845:5
-	if node.flags != 1 {
+	if !(selfLintAstIsPublicDecl(stream, node)) {
 		// Osty: /tmp/selfhost_merged.osty:31846:9
 		return report
 	}
@@ -59978,7 +59990,7 @@ func selfLintAstEmitMissingDoc(report *SelfLintReport, stream *FrontLexStream, n
 		// Osty: /tmp/selfhost_merged.osty:31849:9
 		return report
 	}
-	return selfLintEmitAtNode(report, "L0070", message, node.text, node.start, func() int {
+	return selfLintEmitAtNode(report, "L0070", message, name, node.start, func() int {
 		var _p2546 int = node.start
 		var _rhs2547 int = 1
 		if _rhs2547 > 0 && _p2546 > math.MaxInt-_rhs2547 {
@@ -59989,6 +60001,17 @@ func selfLintAstEmitMissingDoc(report *SelfLintReport, stream *FrontLexStream, n
 		}
 		return _p2546 + _rhs2547
 	}(), idx)
+}
+
+func selfLintAstIsPublicDecl(stream *FrontLexStream, node *AstNode) bool {
+	if ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNLet{})) || ostyEqual(node.kind, AstNodeKind(&AstNodeKind_AstNLetDecl{})) {
+		pubIdx := node.start - 1
+		if pubIdx < 0 || pubIdx >= frontLexTokenCount(stream) {
+			return false
+		}
+		return ostyEqual(frontLexTokenAt(stream, pubIdx).kind, FrontTokenKind(&FrontTokenKind_FrontPub{}))
+	}
+	return node.flags == 1
 }
 
 // Osty: /tmp/selfhost_merged.osty:31859:1

@@ -53,6 +53,8 @@ fn testSelfLintFindsMissingDocOnPubDecls() {
 
             pub type UserId = Int
 
+            pub let apiVersion = 1
+
             pub fn greet(u: User) -> String {
                 u.name
             }
@@ -62,7 +64,7 @@ fn testSelfLintFindsMissingDocOnPubDecls() {
     )
 
     testing.assertEq(report.parseErrors, 0)
-    testing.assertEq(selfLintCodeCount(report, "L0070"), 5)
+    testing.assertEq(selfLintCodeCount(report, "L0070"), 6)
 }
 
 fn testSelfLintSkipsMissingDocWhenDocCommentPresent() {
@@ -79,6 +81,9 @@ fn testSelfLintSkipsMissingDocWhenDocCommentPresent() {
 
             /// Stable identifier.
             pub type UserId = Int
+
+            /// API version.
+            pub let apiVersion = 1
 
             /// Greet the user.
             pub fn greet(u: User) -> String {
