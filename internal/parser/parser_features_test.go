@@ -160,9 +160,13 @@ func TestParseAcceptsStableAliases(t *testing.T) {
 func TestParseCanonicalAcceptsStableAliases(t *testing.T) {
 	src := []byte("import std.testing as t\nfunc main() {\n    while false {\n        break\n    }\n}\n")
 
+	selfhost.ResetAstbridgeLowerCount()
 	file, diags := ParseCanonical(src)
 	if len(diags) > 0 {
 		t.Fatalf("ParseCanonical returned %d diagnostics: %v", len(diags), diags[0])
+	}
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("ParseCanonical astbridge count = %d, want 0", got)
 	}
 	if file == nil || len(file.Uses) != 1 || len(file.Decls) != 1 {
 		t.Fatalf("parsed file = %#v, want one use and one decl", file)
@@ -197,6 +201,22 @@ func TestParseStableAliasesPreservedAsIdentifiers(t *testing.T) {
 	}
 	if result.Provenance != nil && len(result.Provenance.Aliases) != 0 {
 		t.Fatalf("alias provenance = %#v, want no rewrites for param names", result.Provenance.Aliases)
+	}
+}
+
+func TestParseDetailedUsesExplicitPublicCompatibilityAdapter(t *testing.T) {
+	src := []byte("fn main() {\n    let items = [1]\n    let count = len(items)\n}\n")
+
+	selfhost.ResetAstbridgeLowerCount()
+	result := ParseDetailed(src)
+	if len(result.Diagnostics) > 0 {
+		t.Fatalf("ParseDetailed returned %d diagnostics: %v", len(result.Diagnostics), result.Diagnostics[0])
+	}
+	if result.File == nil {
+		t.Fatal("ParseDetailed returned nil file")
+	}
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("ParseDetailed astbridge count = %d, want 0", got)
 	}
 }
 

@@ -29,14 +29,11 @@ func TestAnalyzePackageContainingUsesNativeCompatibilityPath(t *testing.T) {
 	if a == nil {
 		t.Fatal("analyzePackageContaining returned nil")
 	}
-	// The engine-based package path routes through parser.ParseDetailed,
-	// which calls run.File() once per file. With 2 .osty files in this
-	// package the count is 2. The legacy path (LowerPublicFileFromRun)
-	// was astbridge-free; the engine path trades that for incremental
-	// caching. Assert an upper bound to catch regressions without
-	// pinning the exact count.
-	if got := selfhost.AstbridgeLowerCount(); got > 4 {
-		t.Fatalf("AstbridgeLowerCount after package analyze = %d, want <= 4", got)
+	// The engine-based package path may still materialize public ASTs for
+	// compatibility consumers, but parser.ParseDetailed must use the explicit
+	// adapter rather than FrontendRun.File's legacy astbridge entry point.
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("AstbridgeLowerCount after package analyze = %d, want 0", got)
 	}
 	if len(a.packages) != 1 {
 		t.Fatalf("packages = %d, want 1", len(a.packages))
@@ -55,14 +52,10 @@ func TestAnalyzeSingleFileUsesNativeCompatibilityPath(t *testing.T) {
 	if a == nil {
 		t.Fatal("analyzeSingleFileViaEngine returned nil")
 	}
-	// Phase 1c.4 retired the Go-legacy \`analyzeSingleFile\` this test
-	// originally pinned to zero astbridge lowerings. The engine path
-	// reuses selfhost.LowerPublicFileFromRun for public-AST lift and
-	// still routes through a single astbridge step for the linter's
-	// diagnostic-stamping pass, so the invariant relaxed to "at most
-	// one" — the public-AST surface itself stays astbridge-free.
-	if got := selfhost.AstbridgeLowerCount(); got > 1 {
-		t.Fatalf("AstbridgeLowerCount after single-file analyze = %d, want <= 1", got)
+	// The public-AST compatibility surface stays explicit; no LSP single-file
+	// analysis path should call FrontendRun.File.
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("AstbridgeLowerCount after single-file analyze = %d, want 0", got)
 	}
 	if got := lspFirstFnName(a.file); got != "fresh" {
 		t.Fatalf("first function = %q, want %q", got, "fresh")
@@ -97,13 +90,10 @@ func TestAnalyzeWorkspaceUsesNativeCompatibilityPath(t *testing.T) {
 	if a == nil {
 		t.Fatal("analyzePackageContaining returned nil")
 	}
-	// The engine-based workspace path routes through parser.ParseDetailed,
-	// which calls run.File() once per file. With 2 .osty files across
-	// the workspace the count is 2. The legacy path was astbridge-free;
-	// the engine path trades that for incremental caching. Assert an
-	// upper bound to catch regressions without pinning the exact count.
-	if got := selfhost.AstbridgeLowerCount(); got > 6 {
-		t.Fatalf("AstbridgeLowerCount after workspace analyze = %d, want <= 6", got)
+	// Workspace analysis can still expose public ASTs to compatibility
+	// consumers, but it must not use FrontendRun.File as the authority path.
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("AstbridgeLowerCount after workspace analyze = %d, want 0", got)
 	}
 	if len(a.packages) != 2 {
 		t.Fatalf("packages = %d, want 2", len(a.packages))

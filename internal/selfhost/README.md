@@ -16,6 +16,15 @@ Today the public entrypoints are:
 - `internal/check` — prefers the external native checker binary and uses the
   embedded selfhost bridge as the fallback / adaptation boundary
 
+Authority rule:
+
+- Production front-end paths must treat `FrontendRun` / arena / structured
+  results as the source of truth. Public `*ast.File` values are compatibility
+  output only.
+- `FrontendRun.File()` is deprecated for production code. If a legacy consumer
+  still needs public AST shape, use `LowerPublicFileFromRun()` at that explicit
+  boundary so the compatibility hop is visible and searchable.
+
 The exact merged Osty inputs live in
 [`internal/selfhost/bundle/bundle.go`](./bundle/bundle.go):
 

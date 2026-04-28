@@ -6,8 +6,9 @@ import (
 )
 
 // Parse runs the bootstrapped pure-Osty lexer and parser, then lowers the
-// self-hosted arena into the compiler's public AST.
+// self-hosted arena into the compiler's public AST through the explicit
+// compatibility adapter.
 func Parse(src []byte) (*ast.File, []*diag.Diagnostic) {
 	run := Run(src)
-	return run.File(), run.Diagnostics()
+	return LowerPublicFileFromRun(run), run.Diagnostics()
 }
