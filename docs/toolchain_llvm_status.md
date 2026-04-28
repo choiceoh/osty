@@ -1,5 +1,20 @@
 # Toolchain × LLVM compilability — status report
 
+## 2026-04-29 sync update — checker bundle bridge excluded
+
+`internal/selfhost/ast_lower.osty` is no longer a checker-bundle input. It
+remains only as the public-AST compatibility adapter for legacy Go callers that
+still request `*ast.File` through `FrontendRun.File`, `Parse`, or
+`PackageFile.EnsureFile`. The native checker input set is pinned in
+`internal/selfhost/bundle.ToolchainCheckerFiles()` and rejects bootstrap-only
+host adapters, including `use runtime.cihost`.
+
+For the current toolchain probe set, the only bootstrap-only `toolchain/*.osty`
+source is `toolchain/ci.osty` via `use runtime.cihost as host`. Older text below
+that says `ci.osty` uses `use go "github.com/osty/osty/internal/cihost"` or
+that `internal/selfhost/ast_lower.osty` is still referenced by the checker
+bundle should be read as historical.
+
 ## 2026-04-22 policy update — AST merged-probe gate retired
 
 `TestNativeToolchainMergedIsClean` (formerly at
@@ -11,14 +26,13 @@ are deprecating, and any file migrating off `use go "..."` toward
 self-host critical path (static type propagation gaps in the AST
 emitter's local `staticExprInfo`, not backend capability).
 
-The **real** self-host measurement is
-`TestProbeNativeToolchainMergedMIR` — parse → resolve → check →
-`ir.Lower` → `Monomorphize` → `mir.Lower` → `GenerateFromMIR`.
-Promoting that probe to authoritative + closing its first wall
-(`LLVM000 unsupported-source: unsupported local type <error> in
-checkHashKey`) is the next A-path deliverable. Historical language
-below still says "AST-merged CLEAN" because that was accurate at
-2026-04-21 snapshot time; treat it as archive, not current gate state.
+The **real** self-host measurement is now the MIR-first pipeline:
+`TestNativeToolchainMergedMIRPipelineIsClean` is the authoritative gate, while
+`TestProbeNativeToolchainMergedMIR` remains info-only for first-wall debugging.
+Both follow parse → resolve → check → `ir.Lower` → `Monomorphize` →
+`mir.Lower` → `GenerateFromMIR`. Historical language below still says
+"AST-merged CLEAN" because that was accurate at 2026-04-21 snapshot time; treat
+it as archive, not current gate state.
 
 ---
 
@@ -125,9 +139,10 @@ As of 2026-04-21:
   field chain like `cx.env.returnTy = sig.retTy` — inside-out extractvalue
   descent + innermost-first `llvmInsertValue` rebuild in
   `stmt.go:emitFieldAssign`)
-- the current `osty check --airepair=false toolchain` surface is an
+- the 2026-04-21 `osty check --airepair=false toolchain` sample was an
   aggregate native-checker summary of `949 error(s)` with
-  `26811 / 27501` assignment/return/call checks accepted
+  `26811 / 27501` assignment/return/call checks accepted; the 2026-04-29
+  current tree checks cleanly via `go run ./cmd/osty check toolchain`
 - code-path inspection shows the remaining gap is no longer best described as
   "no collections / no Result / no closures": list/map literals and some
   methods, `Result<T, E>` `?`, runtime-backed `std.strings` shims, and MIR
@@ -142,26 +157,27 @@ Current-tree observations from the code re-audit:
 | Layer | Where | What blocks |
 |---|---|---|
 | CLI wiring | universal LLVM entry wedge | **resolved** — hello-world `osty gen --backend=llvm` exits 0 and writes `.ll` output |
-| Bootstrap bridge | merged whole-toolchain probe | first wall is `LLVM001 foreign-ffi` on `ci.osty`'s `use go "github.com/osty/osty/internal/cihost"`. `toolchain/ast_lower.osty` (dead duplicate of `internal/selfhost/ast_lower.osty`, 1672 LOC) was deleted 2026-04-22, and `toolchain/docgen.osty` + `toolchain/manifest_validation.osty` were ported from `use go "strings"` to `use std.strings as strings` on the same day (including a new `strings.fields` backend shim — runtime `osty_rt_strings_Fields` + `stdStringsCallStaticResult`/`staticStdStringsCallSourceType` entries — to close the AST-emitter static-type gap that was blocking `for part in strings.fields(text)` iteration). Only `ci.osty` remains with `use go "..."`; it must be ported to `runtime.cabi.*` / `runtime.<surface>` bindings (LANG_SPEC_v0.5 §12.8) before the whole probe reports CLEAN |
-| Native backend surface | merged native-only probe | **CLEAN** after skipping 1 bootstrap-only file (`#486`, verified 2026-04-21 via `TestNativeToolchainMergedIsClean` + `TestProbeNativeToolchainMerged`). Most recently closed: `LLVM015 [method_call_field]` on `buf.clear()` in `ty.osty` — `List<T>.clear()` now dispatches through `osty_rt_list_clear` in `emitListMethodCallStmt`, with the symbol added to `listMethodInfo`'s whitelist. Preceding `String.bytes()`/`String.chars()` intrinsic gap also closed (lowers to `osty_rt_strings_Chars` / `osty_rt_strings_Bytes` with `listElemTyp` tagged `i32` / `i8`). Earlier closed walls (in order): `LLVM011 [fn_param_struct_type]` Char on `lspUtf16UnitsForChar`; `LLVM012 *ast.MatchExpr is not a call` (match-as-statement lowering); `LLVM012 field assignment base *ast.FieldExpr` (nested `a.b.c = x` via `llvmInsertValue` rebuild chain); parser precedence `(!x).y` / `!(x.y)` hoisted at stable-AST lowering; `LLVM011 [list_mixed_ptr]` source-type propagation (stdlib strings alias calls, bare `""` literals, if-expr phi branches — `staticStdStringsCallSourceType` + literal sourceType tagging + mergeContainerMetadata sameSourceType); `LLVM011 [string_non_ascii]` multi-byte UTF-8 literals (BOM / Unit Separator / Korean / emoji) now byte-escaped via `\HH` in `llvmCStringEscape`, with `llvmCString` counting UTF-8 bytes instead of runes; `LLVM013 match arm must be a payload-free enum variant` was a source inconsistency (missing `FrontDiagBadNumericSeparator` enum variant) + a latent return-path gap (hardcoded `listElemString=false` in `emitReturningBlock` / `emitReturn`). List / Map / Set `isEmpty`, nested `IndexExpr`, and `list.pop()` discard sites also closed |
+| Bootstrap boundary | merged whole-toolchain probe / checker bundle | the current toolchain host adapter is `toolchain/ci.osty` with `use runtime.cihost as host`. `toolchain/ast_lower.osty` (dead duplicate of `internal/selfhost/ast_lower.osty`, 1672 LOC) was deleted 2026-04-22, and `internal/selfhost/ast_lower.osty` is now deliberately outside `ToolchainCheckerFiles()` as a legacy public-AST adapter for `FrontendRun.File` / `Parse` / `EnsureFile` consumers. `toolchain/docgen.osty` + `toolchain/manifest_validation.osty` were ported from `use go "strings"` to `use std.strings as strings` on the same day. |
+| Native backend surface | merged native-only probe | the old AST merged probe is info-only; the authoritative current gate is `TestNativeToolchainMergedMIRPipelineIsClean`, which mirrors production MIR-first dispatch and legacy fallback. Bootstrap-only sources are filtered by FFI stanza (`use runtime.cihost`, `use runtime.golegacy.*`, or `use go "..."`). Historical 2026-04-21 notes about `TestNativeToolchainMergedIsClean` describe the retired AST gate, not the current pass/fail surface. |
 | Public runtime scheduler | `osty_rt_*` task/thread/select | `#496` complete. Select-send arm landed as typed entry points `osty_rt_select_send_{i64,i1,f64,ptr,bytes_v1}` (scalar packing into channel ring slot, bytes via GC-managed copy). The public LLVM runtime now has zero `osty_sched_unimplemented` call sites — concurrency spec §8 (taskGroup / spawn / join / cancel / chan / select / parallel / race / collectAll) is fully covered. See RUNTIME_SCHEDULER.md |
 | MIR Osty port | `toolchain/mir.osty` | `#503` — MIR core (intrinsic kinds, printer, operand/instr shapes) now has an Osty-native mirror in `toolchain/mir.osty`; Go remains authoritative while the Osty side participates in the spec corpus |
 | Checker boundary | `internal/check` / `internal/toolchain` | host still manages an external `osty-native-checker` artifact and falls back to the embedded selfhost checker when it cannot be prepared |
-| Toolchain package health | `osty check --airepair=false toolchain` | current CLI surface is still an aggregate `E0700` summary (`949 error(s)`, `26811 / 27501` accepted) rather than a clean self-compile pass |
+| Toolchain package health | `go run ./cmd/osty check toolchain` | current CLI surface checks cleanly on the 2026-04-29 sync. Treat any reintroduced toolchain checker diagnostic as a front-end regression first, then decide whether it is checker typing drift or real source drift. |
 | Stdlib / string surface | `internal/llvmgen/stdlib_shim.go`, `expr.go` | a subset of `std.strings` is shimmed through runtime helpers. `Char` and `Byte` parameters/returns, literals, comparisons, and width conversions lower; `String.chars` / `String.bytes` lower to `osty_rt_strings_Chars` / `osty_rt_strings_Bytes` producing GC-managed lists with `listElemTyp` tagged `i32` / `i8`, and downstream iteration takes the `_bytes_v1` ABI. What remains is retiring the runtime-backed `std.strings` shim in favor of pure-Osty bodies built on those primitives |
 
 The MIR-direct emitter itself (Stages 3.1–3.11) covers a growing subset of the
 language shapes toolchain uses. The late 2026-04-21 refresh narrows the
 story further: backend entry is no longer the first blocker, the
-native-only merged probe is CLEAN (`#486`, guarded by
-`TestNativeToolchainMergedIsClean`), and the public runtime has no
+native-only merged probe was CLEAN (`#486`, then guarded by the now-retired
+`TestNativeToolchainMergedIsClean` AST gate), and the public runtime has no
 unimplemented scheduler paths left (`#496`, select-send arm landed —
 zero `osty_sched_unimplemented` call sites). What remains between here
-and "fully self-hosted native binary" is (a) the bootstrap-only bridge
-`runtime.golegacy.astbridge` on the whole-toolchain merged probe, and
-(b) the aggregate native-checker summary (`949 error(s)`,
-`26811 / 27501 accepted`) on `osty check --airepair=false toolchain` —
-neither of which is a backend wall anymore.
+and "fully self-hosted native binary" is (a) the remaining host adapter
+surface such as `toolchain/ci.osty`'s `runtime.cihost` binding plus legacy
+public-AST consumers that still keep `internal/selfhost/ast_lower.osty` alive
+outside the checker bundle, and (b) the native LLVM/backend source-shape tail
+tracked by the MIR-first gates. Neither is the old "any CLI use of LLVM crashes
+before backend emission" wall anymore.
 
 ## How the probe was run
 
@@ -342,13 +358,11 @@ native checker reported type errors: 1700 error(s)
 note: native checker accepted 26191 of 26850 assignment/return/call checks
 ```
 
-On the current tree the visible summary is `949` errors with
-`26811 / 27501` accepted, so the old `1700` figure should now be treated as a
-historical snapshot only. The error count dropped substantially as the native
-checker coverage grew; large summary counts still hide a much smaller set of
-root-cause wedges, and the whole/native probe results suggest
-`List<String>` / ptr-backed collection lowering and bootstrap-only host
-boundaries are now higher-priority roots than the old parser alias bug.
+The later 2026-04-21 visible summary was `949` errors with `26811 / 27501`
+accepted, so the old `1700` figure should be treated as a historical snapshot
+only. As of the 2026-04-29 sync, `go run ./cmd/osty check toolchain` checks
+cleanly; remaining work should be tracked through MIR/backend gates and the
+host-adapter boundary rather than those older aggregate checker counts.
 
 ## Layer 3 — MIR-direct backend coverage (for context)
 
@@ -369,21 +383,17 @@ rewire the remaining Go-hosted boundaries."
 
 ## Recommended fix order (smallest → largest unlock)
 
-1. **Keep the native-merged clean gate authoritative.**
-   `TestNativeToolchainMergedIsClean` now locks the "no wall" state as a
-   fail-fast regression gate (native-only merged probe CLEAN per `#486`).
-   Future changes that re-introduce a wall surface here immediately
-   (e.g. adding a new method or literal shape the statement-form
-   dispatcher doesn't recognize yet). When a new wall appears, treat it
+1. **Keep the MIR-first native pipeline gate authoritative.**
+   `TestNativeToolchainMergedMIRPipelineIsClean` now locks the production-like
+   path: MIR-first dispatch with legacy fallback. Future changes that
+   re-introduce a hard wall surface there immediately. When a new wall appears, treat it
    as Tier A: resolve in a follow-up PR and reference this gate.
 
-2. **Shrink the aggregate checker summary on the current tree.**
-   Re-profile the `949`-error native-checker summary into a current
-   histogram before making more claims from the 2026-04-18 sample —
-   the drop from the earlier `1700` / `3846` figures already suggests
-   the root-cause set has shifted. With the native probe CLEAN and the
-   scheduler (`#496`) complete, this is now the primary unlock for
-   "self-compile clean."
+2. **Keep `osty check toolchain` green.**
+   Treat any reintroduced toolchain checker diagnostic as a front-end
+   regression first, then decide whether it is a checker typing issue or a real
+   source drift. The old `949` / `1700` aggregate summaries are historical
+   samples, not current backlog counters.
 
 3. **Retire the runtime-backed `std.strings` shim.**
    Now that `String.chars()` / `String.bytes()` lower to real
@@ -409,15 +419,15 @@ rewire the remaining Go-hosted boundaries."
    `staticStdStringsCallSourceType` entries in
    `internal/llvmgen/{stdlib_shim.go,type.go}`). The remaining
    bootstrap-only file is `toolchain/ci.osty`, whose
-   `use go "github.com/osty/osty/internal/cihost"` must be ported to
+   `use runtime.cihost as host` binding must be replaced by
    `runtime.cabi.<lib>` / `runtime.<surface>` with matching `osty_rt_*`
    runtime ABI helpers (real host I/O — FS / process — can't fold
    into `std.strings`). With the native-only probe CLEAN, this is
-   the last backend-adjacent wedge on the merged surface. Also
-   outstanding: the Go CLI is still wired through
+   the last toolchain-level host-adapter wedge on the merged surface. Also
+   outstanding: legacy public-AST consumers still keep
    `internal/selfhost/ast_lower.osty` + `internal/selfhost/astbridge/`
-   — both become dead code once `cmd/osty` consumes
-   `parser.osty`'s `AstArena` directly.
+   reachable outside the checker bundle; both become dead code once those
+   consumers move to `parser.osty`'s `AstArena` directly.
 
 6. **Then re-run `osty check toolchain` and per-file `osty gen
    --backend=llvm` probes.** Once the checker summary, stdlib-body,
