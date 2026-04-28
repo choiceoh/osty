@@ -36,8 +36,18 @@ Regex.capturesAll(text: String) -> List<Captures>
 Regex.replace(text: String, replacement: String) -> String
 Regex.replaceAll(text: String, replacement: String) -> String
 Regex.split(text: String) -> List<String>
+
+regex.matches(text: String, pattern: String) -> Result<Bool, RegexError>
+regex.find(text: String, pattern: String) -> Result<Match?, RegexError>
+regex.findAll(text: String, pattern: String) -> Result<List<Match>, RegexError>
+regex.captures(text: String, pattern: String) -> Result<Captures?, RegexError>
+regex.capturesAll(text: String, pattern: String) -> Result<List<Captures>, RegexError>
+regex.replace(text: String, pattern: String, replacement: String) -> Result<String, RegexError>
+regex.replaceAll(text: String, pattern: String, replacement: String) -> Result<String, RegexError>
+regex.split(text: String, pattern: String) -> Result<List<String>, RegexError>
 ```
 
 `Match` provides `.text: String`, `.start: Int`, `.end: Int`.
 `Captures` provides `.get(i: Int) -> String?` and
 `.named(name: String) -> String?` for named groups `(?P<name>...)`.
+`RegexError` provides `.message: String` and `.message() -> String`.

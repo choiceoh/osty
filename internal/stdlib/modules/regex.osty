@@ -1,6 +1,6 @@
 // std.regex — RE2 regular expressions (spec §10.9).
 //
-// Match / find / replace / split primitives are body-less — the backend
+// Match / find / capture / replace / split primitives are body-less — the backend
 // lowers each call to the RE2 runtime. One-shot free functions at the
 // bottom are real Osty wrappers that compile + apply in one call.
 
@@ -24,6 +24,10 @@ pub struct Regex {
 
 pub struct RegexError {
     pub message: String
+
+    pub fn message(self) -> String {
+        self.message
+    }
 }
 
 pub struct Match {
@@ -56,6 +60,16 @@ pub fn find(text: String, pattern: String) -> Result<Match?, RegexError> {
 pub fn findAll(text: String, pattern: String) -> Result<List<Match>, RegexError> {
     let re = compile(pattern)?
     Ok(re.findAll(text))
+}
+
+pub fn captures(text: String, pattern: String) -> Result<Captures?, RegexError> {
+    let re = compile(pattern)?
+    Ok(re.captures(text))
+}
+
+pub fn capturesAll(text: String, pattern: String) -> Result<List<Captures>, RegexError> {
+    let re = compile(pattern)?
+    Ok(re.capturesAll(text))
 }
 
 pub fn replace(text: String, pattern: String, replacement: String) -> Result<String, RegexError> {
