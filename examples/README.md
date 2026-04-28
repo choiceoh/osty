@@ -14,6 +14,9 @@ the compiler evolves.
   see [`../RUNTIME_GC.md`](../RUNTIME_GC.md).
 - `concurrency`: runnable example covering channels, `spawn`,
   `parallel`, and `taskGroup`.
+- `url-health`: concurrent URL health checker — enum with methods,
+  `Result`/`?` propagation, range patterns, `taskGroup`, `Map.update`,
+  and property-based testing.
 - `stdlib-tour`: front-end checked package that demonstrates Tier 1
   standard-library imports and Result-style error flow.
 - `workspace`: virtual workspace with two member packages and a

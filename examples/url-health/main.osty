@@ -1,0 +1,228 @@
+// url_health.osty — concurrent URL health checker
+//
+// Demonstrates: structured concurrency (taskGroup), Result/? propagation,
+// pattern matching with guards + or-patterns + range bindings,
+// enum with payload + methods, string interpolation, defer × ?,
+// Map.update combinator, property-based testing.
+
+use std.http
+use std.thread
+use std.fmt
+use std.env
+use std.time
+use std.collections
+use std.testing
+use std.log
+
+// ─── Status ────────────────────────────────────────────────────────
+
+/// Health check classification for a single URL.
+pub enum Status {
+    Up(Int),                   // 200-299
+    Redirect(Int, String),     // 300-399 + Location
+    ClientError(Int),          // 400-499
+    ServerError(Int),          // 500-599
+    Unreachable(String),       // network / DNS error
+    Slow(Int, Int),            // status + latency (above threshold)
+
+    pub fn label(self) -> String {
+        match self {
+            Up(_)            -> "ok",
+            Redirect(_, _)   -> "redirect",
+            ClientError(_)   -> "client-error",
+            ServerError(_)   -> "server-error",
+            Unreachable(_)   -> "unreachable",
+            Slow(_, _)       -> "slow",
+        }
+    }
+
+    pub fn isHealthy(self) -> Bool {
+        match self {
+            Up(_) | Redirect(_, _) -> true,
+            _                      -> false,
+        }
+    }
+}
+
+// ─── CheckResult ───────────────────────────────────────────────────
+
+/// Single check result: URL + status + measured latency.
+pub struct CheckResult {
+    pub url: String,
+    pub status: Status,
+    pub latencyMs: Int,
+    pub at: Instant,
+}
+
+// ─── Report ────────────────────────────────────────────────────────
+
+/// Aggregate report over many checks.
+pub struct Report {
+    pub total: Int,
+    pub healthy: Int,
+    pub byLabel: Map<String, Int>,
+    pub slowest: CheckResult?,
+
+    pub fn healthyRate(self) -> Float {
+        if self.total == 0 { 0.0 }
+        else { self.healthy.toFloat64() / self.total.toFloat64() }
+    }
+
+    pub fn render(self) -> String {
+        let pct = (self.healthyRate() * 100.0).toFixed(1)
+        let mut lines = ["Total: {self.total}, healthy: {self.healthy} ({pct}%)"]
+
+        for (label, count) in self.byLabel.entries() {
+            lines.push("  {label}: {count}")
+        }
+
+        match self.slowest {
+            Some(r) -> lines.push("Slowest: {r.url} @ {r.latencyMs}ms"),
+            None    -> {},
+        }
+
+        lines.join("\n")
+    }
+}
+
+// ─── Core logic ────────────────────────────────────────────────────
+
+/// Check a single URL with a latency threshold.
+/// Network-level errors are captured as Unreachable (not propagated).
+fn checkOne(url: String, slowMs: Int) -> CheckResult {
+    let started = time.now()
+
+    let status = match fetchStatus(url, slowMs) {
+        Ok(s)  -> s,
+        Err(e) -> Status.Unreachable(e.message()),
+    }
+
+    let elapsed = time.now().since(started).millis()
+    CheckResult { url, status, latencyMs: elapsed, at: started }
+}
+
+/// Inner fetch — separated so the ? chain stays clean.
+fn fetchStatus(url: String, slowMs: Int) -> Result<Status, Error> {
+    let started = time.now()
+    let resp = http.get(url)?
+    let elapsed = time.now().since(started).millis()
+    let code = resp.status
+
+    let base = match code {
+        200..=299       -> Status.Up(code),
+        c @ 300..=399   -> {
+            let loc = resp.header("Location") ?? ""
+            Status.Redirect(c, loc)
+        },
+        c @ 400..=499   -> Status.ClientError(c),
+        c @ 500..=599   -> Status.ServerError(c),
+        _               -> Status.Unreachable("unexpected code: {code}"),
+    }
+
+    if elapsed > slowMs && base.isHealthy() {
+        Ok(Status.Slow(code, elapsed))
+    } else {
+        Ok(base)
+    }
+}
+
+/// Run checks concurrently.
+/// taskGroup enforces that handles cannot escape scope (E0743)
+/// — every spawned task is joined here.
+pub fn checkAll(urls: List<String>, slowMs: Int = 1000) -> List<CheckResult> {
+    taskGroup(|g| {
+        let handles = urls.map(|u| g.spawn(|| checkOne(u, slowMs)))
+        handles.map(|h| h.join())
+    })
+}
+
+/// Aggregate results into a single Report.
+pub fn aggregate(results: List<CheckResult>) -> Report {
+    let mut byLabel: Map<String, Int> = {:}
+    let mut healthy = 0
+    let mut slowest: CheckResult? = None
+
+    for r in results {
+        // canonical Map.update — avoids the get → ?? → insert 3-call dance
+        byLabel.update(r.status.label(), |n| (n ?? 0) + 1)
+
+        if r.status.isHealthy() { healthy += 1 }
+
+        slowest = match (slowest, r) {
+            (None, cur)                      -> Some(cur),
+            (Some(prev), cur) if cur.latencyMs > prev.latencyMs -> Some(cur),
+            (keep, _)                        -> keep,
+        }
+    }
+
+    Report { total: results.len(), healthy, byLabel, slowest }
+}
+
+// ─── CLI entry point ───────────────────────────────────────────────
+
+/// defer runs even when ? propagates an error.
+pub fn main() -> Result<(), Error> {
+    defer log.info("url-health: done")
+
+    let args = env.args()
+    let urls = args.drop(1)
+
+    if urls.isEmpty() {
+        eprintln("usage: url-health <url> [<url> ...]")
+        return Err(Error.new("no URLs provided"))
+    }
+
+    println("Checking {urls.len()} URL(s)...")
+
+    let results = checkAll(urls)
+    let report  = aggregate(results)
+
+    println(report.render())
+
+    if report.healthy < report.total {
+        let bad = report.total - report.healthy
+        return Err(Error.new("{bad} unhealthy"))
+    }
+
+    Ok(())
+}
+
+// ─── Tests ─────────────────────────────────────────────────────────
+// osty test url_health.osty discovers test_* automatically.
+
+fn test_status_label() {
+    testing.assertEq(Status.Up(200).label(), "ok")
+    testing.assertEq(Status.Redirect(301, "/").label(), "redirect")
+    testing.assertEq(Status.ServerError(503).label(), "server-error")
+    testing.assertEq(Status.Slow(200, 5000).label(), "slow")
+}
+
+fn test_aggregate_render() {
+    let results = [
+        CheckResult { url: "http://a", status: Status.Up(200),
+                      latencyMs: 50,  at: time.now() },
+        CheckResult { url: "http://b", status: Status.ServerError(503),
+                      latencyMs: 800, at: time.now() },
+    ]
+
+    let report = aggregate(results)
+
+    testing.assertEq(report.total, 2)
+    testing.assertEq(report.healthy, 1)
+
+    let rendered = report.render()
+    testing.assert(rendered.contains("50.0%"))
+    testing.assert(rendered.contains("Slowest: http://b @ 800ms"))
+}
+
+/// Property: healthyRate is always in [0.0, 1.0].
+fn test_healthy_rate_property() {
+    let g = testing.Gen.intRange(0, 100)
+    testing.property("rate stays in [0,1]", g, |n| {
+        let report = Report {
+            total: 100, healthy: n, byLabel: {:}, slowest: None,
+        }
+        let rate = report.healthyRate()
+        rate >= 0.0 && rate <= 1.0
+    })
+}
