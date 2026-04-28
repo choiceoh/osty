@@ -1,10 +1,21 @@
-package parser
+package selfhost
 
 import (
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
 )
+
+// StableAliasProvenance records a stable keyword alias accepted by the
+// self-hosted parser. Alias parsing lives in toolchain/parser.osty; this Go
+// surface only exposes the provenance event to callers that want to report it.
+type StableAliasProvenance struct {
+	Alias       string
+	Canonical   string
+	Kind        string
+	SourceHabit string
+	Detail      string
+	Span        diag.Span
+}
 
 type stableAliasSpec struct {
 	alias       string
@@ -52,10 +63,18 @@ var stableAliasSpecs = map[string]stableAliasSpec{
 	},
 }
 
-func collectStableAliasProvenance(src []byte) []ProvenanceStep {
-	toks, _, _ := selfhost.Lex(src)
-	var steps []ProvenanceStep
+// StableAliases returns stable keyword aliases accepted by this front-end run.
+// Calling it does not materialize the public *ast.File.
+func (r *FrontendRun) StableAliases() []StableAliasProvenance {
+	if r == nil {
+		return nil
+	}
+	r.ensureLexAdapted()
+	return collectStableAliasProvenanceFromTokens(r.toks)
+}
 
+func collectStableAliasProvenanceFromTokens(toks []token.Token) []StableAliasProvenance {
+	var steps []StableAliasProvenance
 	for i, tok := range toks {
 		if tok.Kind != token.IDENT {
 			continue
@@ -64,53 +83,31 @@ func collectStableAliasProvenance(src []byte) []ProvenanceStep {
 		if !ok {
 			continue
 		}
-		// Preserve the identifier when it sits in `name : type` position
-		// (parameter, struct field, keyword argument, struct-literal field,
-		// map entry). Keyword aliases never legitimately appear there.
 		if i+1 < len(toks) && toks[i+1].Kind == token.COLON {
 			continue
 		}
-		// Preserve the identifier when context makes it clear we're in
-		// expression / binding position rather than at a statement head.
-		// Without this, code like `let mut def = ...` (with `def` as a
-		// variable name) gets rewritten to `let mut fn = ...` and the
-		// parser promptly explodes.
-		//
-		// The rule is stricter than "any expression position" because
-		// some alias source habits (e.g. `while cond { ... }`) appear
-		// in statement position where prev is TERMINATOR or LBRACE.
-		// What we care about is: does the token immediately before /
-		// after make keyword interpretation impossible?
 		if isAliasInExpressionPosition(toks, i) {
 			continue
 		}
-		steps = append(steps, ProvenanceStep{
+		steps = append(steps, StableAliasProvenance{
+			Alias:       spec.alias,
+			Canonical:   spec.canonical,
 			Kind:        spec.kind,
 			SourceHabit: spec.sourceHabit,
+			Detail:      spec.detail,
 			Span: diag.Span{
 				Start: tok.Pos,
 				End:   tok.End,
 			},
-			Detail: spec.detail,
 		})
 	}
 	return steps
 }
 
-// isAliasInExpressionPosition reports whether the identifier at
-// toks[i] is clearly used as a value / binding target / member access
-// rather than a statement-head keyword. When true, stable-alias provenance
-// must be suppressed to avoid flagging user identifiers that happen
-// to share a spelling with a stable-alias source habit (common for
-// `def`, `func`, `while`, etc. used as variable names in toolchain
-// code).
-//
-// The rule set targets the concrete patterns observed in the
-// toolchain source; it is intentionally conservative — false
-// positives here only degrade alias convenience, never miscompile.
+// isAliasInExpressionPosition reports whether toks[i] is clearly used as a
+// value, binding target, or member access rather than a statement-head keyword.
+// False positives only hide provenance; they do not change parsing.
 func isAliasInExpressionPosition(toks []token.Token, i int) bool {
-	// Next token: if it's an assignment, this is the LHS of `let [mut]
-	// NAME = ...` or `NAME = ...` — never a keyword.
 	if i+1 < len(toks) {
 		next := toks[i+1].Kind
 		switch next {
@@ -119,19 +116,12 @@ func isAliasInExpressionPosition(toks []token.Token, i int) bool {
 			token.BITXOREQ, token.SHLEQ, token.SHREQ:
 			return true
 		}
-		// `NAME.field` / `NAME?.field` / `NAME,` / `NAME)` / `NAME]` —
-		// expression use, never a keyword.
 		switch next {
 		case token.DOT, token.QDOT, token.COMMA, token.RPAREN,
 			token.RBRACKET, token.RBRACE:
 			return true
 		}
 	}
-	// Previous token indicates expression / binding context:
-	//   let / let mut NAME   — LET or MUT precedes
-	//   fn foo(..., NAME)    — COMMA or LPAREN precedes
-	//   expr.NAME / expr?.NAME — DOT / QDOT precedes
-	//   return NAME / -> NAME — RETURN / ARROW precedes
 	if i > 0 {
 		prev := toks[i-1].Kind
 		switch prev {
@@ -143,7 +133,6 @@ func isAliasInExpressionPosition(toks []token.Token, i int) bool {
 			token.RETURN, token.ARROW, token.CHANARROW:
 			return true
 		}
-		// Binary operators place us in RHS expression territory.
 		switch prev {
 		case token.PLUS, token.MINUS, token.STAR, token.SLASH,
 			token.PERCENT, token.BITAND, token.BITOR, token.BITXOR,

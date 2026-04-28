@@ -2,19 +2,35 @@ package selfhost
 
 import "fmt"
 
+// StableLowering records one parser-owned compatibility lowering applied while
+// building the semantic arena. Start and End are parser token indices; End is
+// exclusive, matching AstNode.end.
+type StableLowering struct {
+	Kind        string
+	SourceHabit string
+	Detail      string
+	Start       int
+	End         int
+}
+
 // selfhostSemanticAstFile clones the raw parser arena and applies the
 // parser-owned helper lowerings that the arena-native check/resolve path
-// still needs for parity with internal/parser's stableLowerer.
+// consumes as its canonical semantic shape.
 func selfhostSemanticAstFile(file *AstFile) *AstFile {
+	semantic, _ := selfhostSemanticAstFileWithLowerings(file)
+	return semantic
+}
+
+func selfhostSemanticAstFileWithLowerings(file *AstFile) (*AstFile, []StableLowering) {
 	if file == nil || file.arena == nil {
-		return file
+		return file, nil
 	}
 	cloned := &AstFile{arena: selfhostCloneAstArena(file.arena)}
 	l := &selfhostStableLowerer{arena: cloned.arena}
 	for i, idx := range cloned.arena.decls {
 		cloned.arena.decls[i] = l.lowerDecl(idx)
 	}
-	return cloned
+	return cloned, l.lowerings
 }
 
 func selfhostCloneAstArena(src *AstArena) *AstArena {
@@ -49,8 +65,19 @@ func selfhostCloneAstArena(src *AstArena) *AstArena {
 }
 
 type selfhostStableLowerer struct {
-	arena   *AstArena
-	counter int
+	arena     *AstArena
+	counter   int
+	lowerings []StableLowering
+}
+
+func (l *selfhostStableLowerer) emit(kind, habit, detail string, start, end int) {
+	l.lowerings = append(l.lowerings, StableLowering{
+		Kind:        kind,
+		SourceHabit: habit,
+		Detail:      detail,
+		Start:       start,
+		End:         end,
+	})
 }
 
 func (l *selfhostStableLowerer) nextTemp(prefix string) string {
@@ -247,6 +274,7 @@ func (l *selfhostStableLowerer) lowerBuiltinLenCall(call *AstNode) bool {
 		return false
 	}
 	target := call.children[0]
+	l.emit("builtin_len_call", "foreign_len_helper", "lower `len(...)` into `.len()`", call.start, call.end)
 	field := emptyAstNode(AstNodeKind(&AstNodeKind_AstNField{}))
 	field.left = target
 	field.text = "len"
@@ -273,6 +301,7 @@ func (l *selfhostStableLowerer) lowerAppendAssignStmt(assign *AstNode) bool {
 	if !ok || baseName != targetName {
 		return false
 	}
+	l.emit("builtin_append_call", "foreign_append_helper", "lower `append(x, y)` assignment into `x.push(y)`", assign.start, assign.end)
 	assign.kind = AstNodeKind(&AstNodeKind_AstNExprStmt{})
 	assign.left = l.pushCallExpr(base, item, assign.start, assign.end)
 	assign.right = -1
@@ -291,6 +320,7 @@ func (l *selfhostStableLowerer) lowerAppendExprStmt(stmt *AstNode) bool {
 	if _, ok := l.identName(base); !ok {
 		return false
 	}
+	l.emit("builtin_append_call", "foreign_append_helper", "lower statement-form `append(x, y)` into `x.push(y)`", stmt.start, stmt.end)
 	stmt.left = l.pushCallExpr(base, item, stmt.start, stmt.end)
 	return true
 }
@@ -311,6 +341,7 @@ func (l *selfhostStableLowerer) lowerAppendLetStmt(stmt *AstNode) (int, bool) {
 	if !ok || baseName == name {
 		return 0, false
 	}
+	l.emit("builtin_append_call", "foreign_append_helper", "lower `let x = append(y, z)` into `let mut x = y` plus `x.push(z)`", stmt.start, stmt.end)
 	stmt.flags = 1
 	stmt.right = base
 	return l.pushExprStmt(base, item, stmt.start, stmt.end), true
@@ -383,6 +414,7 @@ func (l *selfhostStableLowerer) lowerEnumerateForStmt(loop *AstNode) (int, bool)
 	rangeIdx := astArenaAdd(l.arena, rangeNode)
 
 	loop.children = []int{loopPattern, rangeIdx}
+	l.emit("enumerate_index_loop", "python_enumerate_loop", "lower enumerate iteration into an index-based Osty loop", loop.start, loop.end)
 	return tempIdx, true
 }
 

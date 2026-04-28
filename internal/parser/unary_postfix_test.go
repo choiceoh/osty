@@ -36,14 +36,12 @@ func parseExprInMain(t *testing.T, src string) ast.Expr {
 	return nil
 }
 
-// TestUnaryPostfixHoistingField is the canonical regression for the
-// `!pmOut.exhaustive` wall. Per grammar UnaryExpr sits above
-// PostfixExpr, so the parsed tree must be `Unary{!, Field{pmOut,
-// exhaustive}}` not `Field{Unary{!, pmOut}, exhaustive}`. The
-// self-hosted front-end emits the second shape; lower.go's
-// `hoistUnaryOverPostfix` fixes it up during the stable-AST lowering
-// pass.
-func TestUnaryPostfixHoistingField(t *testing.T) {
+// TestUnaryPostfixBindsField is the canonical regression for the
+// `!pmOut.exhaustive` wall. Per grammar UnaryExpr sits above PostfixExpr, so
+// the parsed tree must be `Unary{!, Field{pmOut, exhaustive}}` rather than
+// `Field{Unary{!, pmOut}, exhaustive}`. The self-hosted parser now emits this
+// shape directly; public AST lowering must not need a Go-side fixup.
+func TestUnaryPostfixBindsField(t *testing.T) {
 	expr := parseExprInMain(t, "!foo.bar")
 	u, ok := expr.(*ast.UnaryExpr)
 	if !ok {
@@ -64,7 +62,7 @@ func TestUnaryPostfixHoistingField(t *testing.T) {
 	}
 }
 
-func TestUnaryPostfixHoistingIndex(t *testing.T) {
+func TestUnaryPostfixBindsIndex(t *testing.T) {
 	expr := parseExprInMain(t, "!items[0]")
 	u, ok := expr.(*ast.UnaryExpr)
 	if !ok {
@@ -75,7 +73,7 @@ func TestUnaryPostfixHoistingIndex(t *testing.T) {
 	}
 }
 
-func TestUnaryPostfixHoistingCall(t *testing.T) {
+func TestUnaryPostfixBindsCall(t *testing.T) {
 	expr := parseExprInMain(t, "!check()")
 	u, ok := expr.(*ast.UnaryExpr)
 	if !ok {
@@ -86,12 +84,21 @@ func TestUnaryPostfixHoistingCall(t *testing.T) {
 	}
 }
 
-// TestUnaryPostfixHoistingFieldMethodCall covers the compound shape
-// `!obj.method()` — the front-end first builds
-// `Call{Field{Unary{!, obj}, method}}`; hoisting fires twice (once for
-// the Field, once for the Call) to produce `Unary{!, Call{Field{obj,
-// method}}}`.
-func TestUnaryPostfixHoistingFieldMethodCall(t *testing.T) {
+func TestUnaryPostfixBindsQuestion(t *testing.T) {
+	expr := parseExprInMain(t, "!maybe?")
+	u, ok := expr.(*ast.UnaryExpr)
+	if !ok {
+		t.Fatalf("root type = %T, want *ast.UnaryExpr", expr)
+	}
+	if _, ok := u.X.(*ast.QuestionExpr); !ok {
+		t.Fatalf("inner type = %T, want *ast.QuestionExpr", u.X)
+	}
+}
+
+// TestUnaryPostfixBindsFieldMethodCall covers the compound shape
+// `!obj.method()`, which should parse directly as
+// `Unary{!, Call{Field{obj, method}}}`.
+func TestUnaryPostfixBindsFieldMethodCall(t *testing.T) {
 	expr := parseExprInMain(t, "!outcome.isEmpty()")
 	u, ok := expr.(*ast.UnaryExpr)
 	if !ok {
@@ -113,10 +120,10 @@ func TestUnaryPostfixHoistingFieldMethodCall(t *testing.T) {
 	}
 }
 
-// TestUnaryPostfixHoistingMinus and TestUnaryPostfixHoistingBitNot pin
-// the same behaviour for the other prefix operators so future regressions
-// in `-x.y` / `~x.y` surface immediately.
-func TestUnaryPostfixHoistingMinus(t *testing.T) {
+// TestUnaryPostfixBindsMinus and TestUnaryPostfixBindsBitNot pin the same
+// behaviour for the other prefix operators so future regressions in `-x.y` /
+// `~x.y` surface immediately.
+func TestUnaryPostfixBindsMinus(t *testing.T) {
 	expr := parseExprInMain(t, "-point.x")
 	u, ok := expr.(*ast.UnaryExpr)
 	if !ok {
@@ -130,7 +137,7 @@ func TestUnaryPostfixHoistingMinus(t *testing.T) {
 	}
 }
 
-func TestUnaryPostfixHoistingBitNot(t *testing.T) {
+func TestUnaryPostfixBindsBitNot(t *testing.T) {
 	expr := parseExprInMain(t, "~mask.bits")
 	u, ok := expr.(*ast.UnaryExpr)
 	if !ok {

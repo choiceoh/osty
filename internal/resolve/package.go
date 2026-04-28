@@ -116,11 +116,10 @@ func (pf *PackageFile) CheckerSource() []byte {
 	return pf.Source
 }
 
-// EnsureFile materializes the *ast.File for this PackageFile. Packages
-// loaded via LoadPackageForNative populate Run but leave File nil to
-// skip the astbridge-based lowering; calling EnsureFile triggers that
-// lowering on demand (exactly one astLowerPublicFile per file, cached
-// thereafter). Returns the File, or nil if neither File nor Run is set.
+// EnsureFile materializes the *ast.File for this PackageFile. Packages loaded
+// via LoadPackageForNative populate Run but leave File nil; calling EnsureFile
+// uses the explicit public-AST compatibility adapter on demand. Returns the
+// File, or nil if neither File nor Run is set.
 func (pf *PackageFile) EnsureFile() *ast.File {
 	if pf == nil {
 		return nil
@@ -129,7 +128,7 @@ func (pf *PackageFile) EnsureFile() *ast.File {
 		return pf.File
 	}
 	if pf.Run != nil {
-		pf.File = pf.Run.File()
+		pf.File = selfhost.LowerPublicFileFromRun(pf.Run)
 	}
 	return pf.File
 }

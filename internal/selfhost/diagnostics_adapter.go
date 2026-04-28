@@ -21,22 +21,68 @@ func (r *FrontendRun) Diagnostics() []*diag.Diagnostic {
 
 func dedupeDiagnostics(in []*diag.Diagnostic) []*diag.Diagnostic {
 	out := in[:0]
-	seen := map[token.Pos]bool{}
+	seen := map[diagnosticDedupeKey]bool{}
 	for _, d := range in {
 		if d == nil {
 			continue
 		}
-		pos := d.PrimaryPos()
-		if seen[pos] {
+		key := diagnosticKey(d)
+		if seen[key] {
 			continue
 		}
-		seen[pos] = true
+		seen[key] = true
 		out = append(out, d)
 	}
 	return out
 }
 
+type diagnosticDedupeKey struct {
+	severity diag.Severity
+	code     string
+	message  string
+	hint     string
+	notes    string
+	start    token.Pos
+	end      token.Pos
+}
+
+func diagnosticKey(d *diag.Diagnostic) diagnosticDedupeKey {
+	span := diag.Span{}
+	for _, s := range d.Spans {
+		if s.Primary {
+			span = s.Span
+			break
+		}
+	}
+	if span.Start == (token.Pos{}) && len(d.Spans) > 0 {
+		span = d.Spans[0].Span
+	}
+	return diagnosticDedupeKey{
+		severity: d.Severity,
+		code:     d.Code,
+		message:  d.Message,
+		hint:     d.Hint,
+		notes:    diagnosticNotesKey(d.Notes),
+		start:    span.Start,
+		end:      span.End,
+	}
+}
+
+func diagnosticNotesKey(notes []string) string {
+	if len(notes) == 0 {
+		return ""
+	}
+	out := notes[0]
+	for _, note := range notes[1:] {
+		out += "\x00" + note
+	}
+	return out
+}
+
 func parseDiagnosticsFromArena(arena *AstArena, stream *FrontLexStream, rt runeTable) []*diag.Diagnostic {
+	if arena == nil {
+		return nil
+	}
 	out := make([]*diag.Diagnostic, 0, len(arena.errors))
 	for _, e := range arena.errors {
 		b := diag.New(diag.Error, e.message).Primary(parseErrorSpan(e, stream, rt), "")
@@ -56,7 +102,7 @@ func parseDiagnosticsFromArena(arena *AstArena, stream *FrontLexStream, rt runeT
 
 func parseErrorSpan(e *AstParseError, stream *FrontLexStream, rt runeTable) diag.Span {
 	pos := token.Pos{Line: 1, Column: 1}
-	if e == nil || e.tokenIndex < 0 || e.tokenIndex >= len(stream.tokens) {
+	if e == nil || stream == nil || e.tokenIndex < 0 || e.tokenIndex >= len(stream.tokens) {
 		return diag.Span{Start: pos, End: pos}
 	}
 	tok := stream.tokens[e.tokenIndex]

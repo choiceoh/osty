@@ -5,9 +5,14 @@ error E0001 "newline in string literal" ^[8:18-8:24]
 error E0002 "uppercase base prefix is not allowed" ^[13:18-13:20] hint="use lowercase base prefixes: `0x`, `0b`, or `0o`"
 error E0003 "unknown escape sequence" ^[17:19-17:27]
 error E0005 "illegal character" ^[21:20-21:21]
+error E0204 "unexpected ILLEGAL in expression" ^[21:20-21:21] hint="an expression starts with a literal, identifier, `(`, `[`, `if`, `match`, or a closure"
 error E0006 "invalid triple-quoted string" ^[25:18-25:28]
 error E0007 "`=>` is not valid Osty syntax; use `->`" ^[29:29-29:31]
+error E0204 "expected ->, got =" ^[29:29-29:30]
+error E0204 "unexpected = in expression" ^[29:29-29:30] hint="an expression starts with a literal, identifier, `(`, `[`, `if`, `match`, or a closure"
 error E0007 "`=>` is not valid Osty syntax; use `->`" ^[29:37-29:39]
+error E0204 "expected ->, got =" ^[29:37-29:38]
+error E0204 "unexpected = in expression" ^[29:37-29:38] hint="an expression starts with a literal, identifier, `(`, `[`, `if`, `match`, or a closure"
 error E0008 "numeric separator `_` must appear between two digits" ^[33:18-33:20] hint="place `_` only between two digits"
 error E0204 "unexpected ; in expression" ^[33:20-33:21] hint="an expression starts with a literal, identifier, `(`, `[`, `if`, `match`, or a closure"
 error E0008 "numeric separator `_` must appear between two digits" ^[33:30-33:35] hint="place `_` only between two digits"

@@ -5,6 +5,7 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/selfhost"
 )
 
 func TestParseSlashSeparatedUsePath(t *testing.T) {
@@ -264,5 +265,37 @@ func TestParseDetailedLowersSemanticHelpers(t *testing.T) {
 	}
 	if result.Provenance == nil || len(result.Provenance.Lowerings) < 2 {
 		t.Fatalf("lowering provenance = %#v, want helper lowerings", result.Provenance)
+	}
+}
+
+func TestParseRunKeepsPublicASTLoweringLazy(t *testing.T) {
+	src := []byte("fn main() {\n    let items = [1]\n    let count = len(items)\n}\n")
+
+	selfhost.ResetAstbridgeLowerCount()
+	run := ParseRun(src)
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("ParseRun astbridge count = %d, want 0", got)
+	}
+	lowerings := run.StableLowerings()
+	if got, want := len(lowerings), 1; got != want {
+		t.Fatalf("StableLowerings len = %d, want %d (%#v)", got, want, lowerings)
+	}
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("StableLowerings materialized public AST: astbridge count = %d, want 0", got)
+	}
+
+	file := run.File()
+	if got := selfhost.AstbridgeLowerCount(); got != 1 {
+		t.Fatalf("run.File astbridge count = %d, want 1", got)
+	}
+	fn := file.Decls[0].(*ast.FnDecl)
+	countLet := fn.Body.Stmts[1].(*ast.LetStmt)
+	call, ok := countLet.Value.(*ast.CallExpr)
+	if !ok {
+		t.Fatalf("count value type = %T, want *ast.CallExpr", countLet.Value)
+	}
+	field, ok := call.Fn.(*ast.FieldExpr)
+	if !ok || field.Name != "len" {
+		t.Fatalf("count callee = %T %#v, want .len field call", call.Fn, call.Fn)
 	}
 }
