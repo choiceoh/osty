@@ -41,6 +41,9 @@
 
 #if !defined(_WIN32)
 #include <sys/mman.h>
+#if defined(__linux__)
+#include <sys/random.h>
+#endif
 /* `MAP_ANON` is the BSD/macOS spelling; `MAP_ANONYMOUS` is the GNU
  * spelling. Both flags are bit-equal aliases on every supported target.
  * Pick whichever is exposed at runtime-build time (macOS requires
@@ -12190,6 +12193,268 @@ void *osty_rt_bytes_slice(void *raw_bytes, int64_t start, int64_t end) {
         memcpy(data, b->data + (size_t)start, slice_len);
     }
     return out;
+}
+
+typedef struct osty_rt_random_state {
+    uint64_t s[4];
+} osty_rt_random_state;
+
+static uint64_t osty_rt_random_rotl(uint64_t x, int k) {
+    return (x << k) | (x >> (64 - k));
+}
+
+static uint64_t osty_rt_random_splitmix64_step(uint64_t *state) {
+    uint64_t x = *state + 0x9E3779B97F4A7C15ULL;
+    *state = x;
+    x ^= x >> 30;
+    x *= 0xBF58476D1CE4E5B9ULL;
+    x ^= x >> 27;
+    x *= 0x94D049BB133111EBULL;
+    x ^= x >> 31;
+    return x;
+}
+
+static void osty_rt_random_seed_words(osty_rt_random_state *state,
+                                      uint64_t material) {
+    int i;
+    int all_zero = 1;
+    uint64_t x = material;
+
+    if (state == NULL) {
+        osty_rt_abort("runtime.random: nil state");
+    }
+    for (i = 0; i < 4; i++) {
+        state->s[i] = osty_rt_random_splitmix64_step(&x);
+        if (state->s[i] != 0) {
+            all_zero = 0;
+        }
+    }
+    if (all_zero) {
+        x ^= 0xD1B54A32D192ED03ULL;
+        state->s[0] = osty_rt_random_splitmix64_step(&x);
+    }
+}
+
+static int osty_rt_random_fill_entropy(unsigned char *dst, size_t len) {
+    size_t off = 0;
+    FILE *f;
+
+    if (dst == NULL) {
+        return 0;
+    }
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    while (off < len) {
+        unsigned int word = 0;
+        size_t take;
+        if (rand_s(&word) != 0) {
+            break;
+        }
+        take = len - off;
+        if (take > sizeof(word)) {
+            take = sizeof(word);
+        }
+        memcpy(dst + off, &word, take);
+        off += take;
+    }
+    if (off == len) {
+        return 1;
+    }
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
+    arc4random_buf(dst, len);
+    return 1;
+#elif defined(__linux__)
+    while (off < len) {
+        ssize_t got = getrandom(dst + off, len - off, 0);
+        if (got > 0) {
+            off += (size_t)got;
+            continue;
+        }
+        if (got < 0 && errno == EINTR) {
+            continue;
+        }
+        break;
+    }
+    if (off == len) {
+        return 1;
+    }
+#endif
+    f = fopen("/dev/urandom", "rb");
+    if (f == NULL) {
+        return 0;
+    }
+    off = fread(dst, 1, len, f);
+    fclose(f);
+    return off == len;
+}
+
+static osty_rt_random_state *osty_rt_random_new(const char *site) {
+    return (osty_rt_random_state *)osty_gc_allocate_managed(
+        sizeof(osty_rt_random_state), OSTY_GC_KIND_GENERIC, site, NULL, NULL);
+}
+
+static void osty_rt_random_seed_default_state(osty_rt_random_state *state) {
+    unsigned char seed_bytes[32];
+    uint64_t material = 0;
+
+    if (osty_rt_random_fill_entropy(seed_bytes, sizeof(seed_bytes))) {
+        memcpy(state->s, seed_bytes, sizeof(seed_bytes));
+        if (state->s[0] == 0 && state->s[1] == 0 && state->s[2] == 0 &&
+            state->s[3] == 0) {
+            memcpy(&material, seed_bytes, sizeof(material));
+            osty_rt_random_seed_words(state, material ^ 0xA0761D6478BD642FULL);
+        }
+        return;
+    }
+    material = ((uint64_t)(uintptr_t)state << 17) ^
+               ((uint64_t)time(NULL) << 1) ^
+               0xA0761D6478BD642FULL;
+    osty_rt_random_seed_words(state, material);
+}
+
+static uint64_t osty_rt_random_next_u64(osty_rt_random_state *state) {
+    uint64_t result;
+    uint64_t t;
+
+    if (state == NULL) {
+        osty_rt_abort("runtime.random: nil state");
+    }
+    result = osty_rt_random_rotl(state->s[0] + state->s[3], 23) + state->s[0];
+    t = state->s[1] << 17;
+    state->s[2] ^= state->s[0];
+    state->s[3] ^= state->s[1];
+    state->s[1] ^= state->s[2];
+    state->s[0] ^= state->s[3];
+    state->s[2] ^= t;
+    state->s[3] = osty_rt_random_rotl(state->s[3], 45);
+    return result;
+}
+
+static uint64_t osty_rt_random_sample_below(osty_rt_random_state *state,
+                                            uint64_t bound) {
+    uint64_t x;
+    uint64_t limit;
+
+    if (bound == 0) {
+        osty_rt_abort("runtime.random: zero bound");
+    }
+    limit = UINT64_MAX - (UINT64_MAX % bound);
+    do {
+        x = osty_rt_random_next_u64(state);
+    } while (x >= limit);
+    return x % bound;
+}
+
+void *osty_rt_random_default(void) {
+    osty_rt_random_state *state = osty_rt_random_new("runtime.random.default");
+    osty_rt_random_seed_default_state(state);
+    return state;
+}
+
+void *osty_rt_random_seeded(int64_t seed) {
+    osty_rt_random_state *state = osty_rt_random_new("runtime.random.seeded");
+    osty_rt_random_seed_words(state, (uint64_t)seed ^ 0x9E3779B97F4A7C15ULL);
+    return state;
+}
+
+int64_t osty_rt_random_int(void *raw_state, int64_t min, int64_t max) {
+    osty_rt_random_state *state = (osty_rt_random_state *)raw_state;
+    uint64_t span;
+    uint64_t offset;
+
+    if (max <= min) {
+        osty_rt_abort("runtime.random.int: invalid bounds");
+    }
+    span = (uint64_t)max - (uint64_t)min;
+    offset = osty_rt_random_sample_below(state, span);
+    return (int64_t)((uint64_t)min + offset);
+}
+
+int64_t osty_rt_random_int_inclusive(void *raw_state, int64_t min,
+                                     int64_t max) {
+    osty_rt_random_state *state = (osty_rt_random_state *)raw_state;
+    uint64_t span;
+    uint64_t offset;
+
+    if (max < min) {
+        osty_rt_abort("runtime.random.int_inclusive: invalid bounds");
+    }
+    span = (uint64_t)max - (uint64_t)min;
+    if (span == UINT64_MAX) {
+        return (int64_t)osty_rt_random_next_u64(state);
+    }
+    offset = osty_rt_random_sample_below(state, span + 1);
+    return (int64_t)((uint64_t)min + offset);
+}
+
+double osty_rt_random_float(void *raw_state) {
+    osty_rt_random_state *state = (osty_rt_random_state *)raw_state;
+    uint64_t x = osty_rt_random_next_u64(state);
+    return (double)(x >> 11) * (1.0 / 9007199254740992.0);
+}
+
+bool osty_rt_random_bool(void *raw_state) {
+    osty_rt_random_state *state = (osty_rt_random_state *)raw_state;
+    return (osty_rt_random_next_u64(state) & 1ULL) != 0;
+}
+
+void *osty_rt_random_bytes(void *raw_state, int64_t n) {
+    osty_rt_random_state *state = (osty_rt_random_state *)raw_state;
+    osty_rt_bytes *out;
+    size_t len;
+    size_t total;
+    size_t i;
+
+    if (n < 0) {
+        osty_rt_abort("runtime.random.bytes: negative length");
+    }
+    len = (size_t)n;
+    if (len > SIZE_MAX - sizeof(osty_rt_bytes)) {
+        osty_rt_abort("runtime.random.bytes: size overflow");
+    }
+    total = sizeof(osty_rt_bytes) + len;
+    out = (osty_rt_bytes *)osty_gc_allocate_managed(
+        total, OSTY_GC_KIND_BYTES,
+        len == 0 ? "runtime.random.bytes.empty" : "runtime.random.bytes", NULL,
+        NULL);
+    out->data = (unsigned char *)(out + 1);
+    out->len = (int64_t)len;
+    i = 0;
+    while (i < len) {
+        uint64_t chunk = osty_rt_random_next_u64(state);
+        size_t take = len - i;
+        if (take > sizeof(chunk)) {
+            take = sizeof(chunk);
+        }
+        memcpy(out->data + i, &chunk, take);
+        i += take;
+    }
+    return out;
+}
+
+void osty_rt_random_shuffle(void *raw_state, void *raw_list) {
+    osty_rt_random_state *state = (osty_rt_random_state *)raw_state;
+    osty_rt_list *list = osty_rt_list_cast(raw_list);
+    int64_t i;
+
+    if (list == NULL || list->len <= 1 || list->elem_size <= 0) {
+        return;
+    }
+    for (i = list->len - 1; i > 0; i--) {
+        int64_t j =
+            (int64_t)osty_rt_random_sample_below(state, (uint64_t)i + 1ULL);
+        if (i != j) {
+            unsigned char *base = (unsigned char *)list->data;
+            size_t elem_size = (size_t)list->elem_size;
+            size_t a = (size_t)i * elem_size;
+            size_t b = (size_t)j * elem_size;
+            size_t k;
+            for (k = 0; k < elem_size; k++) {
+                unsigned char tmp = base[a + k];
+                base[a + k] = base[b + k];
+                base[b + k] = tmp;
+            }
+        }
+    }
 }
 
 static inline uint32_t osty_rt_crypto_rotr32(uint32_t x, unsigned n) {

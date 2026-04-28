@@ -7,8 +7,7 @@
 //   - produce deterministic query-string output even though `query` is a Map
 //   - resolve dot-segments per RFC 3986 when merging relative references
 
-use std.bytes
-use std.char
+use std.char as ascii
 use std.error
 use std.strings
 
@@ -102,7 +101,7 @@ fn parseReference(text: String, requireScheme: Bool) -> Result<UrlParts, Error> 
     let fragment = if hash < 0 {
         None
     } else {
-        Some(decodePercentComponent(sliceChars(chars, hash + 1, chars.len()), "fragment")?)
+        Some(sliceChars(chars, hash + 1, chars.len()))
     }
 
     let beforeChars = beforeFragment.chars()
@@ -167,7 +166,6 @@ fn parseSchemeAndRest(text: String, requireScheme: Bool) -> Result<(String, Stri
 
 fn parseAuthorityAndPath(rest: String) -> Result<(Bool, String, Int?, String), Error> {
     if !strings.startsWith(rest, "//") {
-        validatePercentEncoding(rest, "path")?
         return Ok((false, "", None, rest))
     }
     let chars = rest.chars()
@@ -184,7 +182,6 @@ fn parseAuthorityAndPath(rest: String) -> Result<(Bool, String, Int?, String), E
     } else {
         sliceChars(afterChars, slash, afterChars.len())
     }
-    validatePercentEncoding(path, "path")?
     let (host, port) = parseAuthority(authority)?
     Ok((true, host, port, path))
 }
@@ -238,14 +235,16 @@ fn parsePort(s: String) -> Result<Int, Error> {
     }
     let mut n = 0
     for c in s.chars() {
-        match char.digitValue(c) {
+        match ascii.digitValue(c) {
             Some(d) -> {
                 n = n * 10 + d
                 if n > 65535 {
                     return Err(urlError("url: port out of range: {s}"))
                 }
             },
-            None -> return Err(urlError("url: invalid port {s}")),
+            None -> {
+                return Err(urlError("url: invalid port {s}"))
+            },
         }
     }
     Ok(n)
@@ -261,9 +260,9 @@ fn parseQuery(s: String) -> Result<Map<String, String>, Error> {
             continue
         }
         let kv = strings.splitN(pair, "=", 2)
-        let key = decodePercentComponent(kv[0], "query key")?
+        let key = kv[0]
         let value = if kv.len() == 2 {
-            decodePercentComponent(kv[1], "query value")?
+            kv[1]
         } else {
             ""
         }
@@ -445,20 +444,16 @@ fn hostNeedsBrackets(host: String) -> Bool {
 }
 
 fn encodePath(path: String) -> String {
-    encodeComponent(path, pathMode)
+    encodeComponent(path, 0)
 }
 
 fn encodeQueryComponent(text: String) -> String {
-    encodeComponent(text, queryMode)
+    encodeComponent(text, 1)
 }
 
 fn encodeFragment(text: String) -> String {
-    encodeComponent(text, fragmentMode)
+    encodeComponent(text, 2)
 }
-
-let pathMode = 0
-let queryMode = 1
-let fragmentMode = 2
 
 fn encodeComponent(text: String, mode: Int) -> String {
     let chars = text.chars()
@@ -466,8 +461,11 @@ fn encodeComponent(text: String, mode: Int) -> String {
     let mut i = 0
     for i < chars.len() {
         let c = chars[i]
-        if c == '%' && isHexTriplet(chars, i) {
-            out = "{out}%{char.toAsciiUpper(chars[i + 1])}{char.toAsciiUpper(chars[i + 2])}"
+        if c.toInt() == 0x25 &&
+            i + 2 < chars.len() &&
+            ascii.isAsciiHexDigit(chars[i + 1]) &&
+            ascii.isAsciiHexDigit(chars[i + 2]) {
+            out = "{out}%{ascii.toAsciiUpper(chars[i + 1])}{ascii.toAsciiUpper(chars[i + 2])}"
             i = i + 3
             continue
         }
@@ -485,20 +483,20 @@ fn componentAllows(c: Char, mode: Int) -> Bool {
     if isUnreserved(c) {
         return true
     }
-    if mode == queryMode {
+    if mode == 1 {
         return false
     }
     if isSubdelim(c) || c == ':' || c == '@' {
         return true
     }
-    if mode == pathMode {
+    if mode == 0 {
         return c == '/'
     }
     c == '/' || c == '?'
 }
 
 fn isUnreserved(c: Char) -> Bool {
-    char.isAsciiAlphanumeric(c) || c == '-' || c == '.' || c == '_' || c == '~'
+    ascii.isAsciiAlphanumeric(c) || c == '-' || c == '.' || c == '_' || c == '~'
 }
 
 fn isSubdelim(c: Char) -> Bool {
@@ -510,67 +508,22 @@ fn percentEncodeChar(c: Char) -> String {
     let mut out = ""
     for b in c.toString().bytes() {
         let n = b.toInt()
-        let hi = char.toAsciiUpper(char.fromDigit((n >> 4) & 0x0F, 16).unwrap())
-        let lo = char.toAsciiUpper(char.fromDigit(n & 0x0F, 16).unwrap())
+        let hi = ascii.toAsciiUpper(ascii.fromDigit((n >> 4) & 0x0F, 16).unwrap())
+        let lo = ascii.toAsciiUpper(ascii.fromDigit(n & 0x0F, 16).unwrap())
         out = "{out}%{hi}{lo}"
     }
     out
 }
 
-fn decodePercentComponent(text: String, kind: String) -> Result<String, Error> {
-    let chars = text.chars()
-    let mut out: List<Byte> = []
-    let mut i = 0
-    for i < chars.len() {
-        if chars[i] == '%' {
-            if !isHexTriplet(chars, i) {
-                return Err(urlError("url: invalid percent-escape in {kind}: {text}"))
-            }
-            let hi = char.hexDigitValue(chars[i + 1]).unwrap()
-            let lo = char.hexDigitValue(chars[i + 2]).unwrap()
-            out.push(((hi << 4) | lo).toByte().unwrap())
-            i = i + 3
-            continue
-        }
-        for b in chars[i].toString().bytes() {
-            out.push(b)
-        }
-        i = i + 1
-    }
-    bytes.from(out).toString()
-}
-
-fn validatePercentEncoding(text: String, kind: String) -> Result<(), Error> {
-    let chars = text.chars()
-    let mut i = 0
-    for i < chars.len() {
-        if chars[i] == '%' && !isHexTriplet(chars, i) {
-            return Err(urlError("url: invalid percent-escape in {kind}: {text}"))
-        }
-        if chars[i] == '%' {
-            i = i + 3
-        } else {
-            i = i + 1
-        }
-    }
-    Ok(())
-}
-
-fn isHexTriplet(chars: List<Char>, at: Int) -> Bool {
-    at + 2 < chars.len() &&
-    char.isAsciiHexDigit(chars[at + 1]) &&
-    char.isAsciiHexDigit(chars[at + 2])
-}
-
 fn isValidScheme(s: String) -> Bool {
     let chars = s.chars()
-    if chars.len() == 0 || !char.isAsciiAlpha(chars[0]) {
+    if chars.len() == 0 || !ascii.isAsciiAlpha(chars[0]) {
         return false
     }
     let mut i = 1
     for i < chars.len() {
         let c = chars[i]
-        if !char.isAsciiAlphanumeric(c) && c != '+' && c != '-' && c != '.' {
+        if !ascii.isAsciiAlphanumeric(c) && c != '+' && c != '-' && c != '.' {
             return false
         }
         i = i + 1
@@ -581,7 +534,7 @@ fn isValidScheme(s: String) -> Bool {
 fn asciiLowerString(s: String) -> String {
     let mut out = ""
     for c in s.chars() {
-        out = "{out}{char.toAsciiLower(c)}"
+        out = "{out}{ascii.toAsciiLower(c)}"
     }
     out
 }
