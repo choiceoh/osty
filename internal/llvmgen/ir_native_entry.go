@@ -2653,6 +2653,12 @@ func nativeStmtFromIR(ctx *nativeProjectionCtx, stmt ostyir.Stmt, fnReturnType s
 		// value is discarded. Treat as an expression statement so
 		// the emitter doesn't try to bind an empty-name slot.
 		if _, isWild := s.Pattern.(*ostyir.WildPat); isWild {
+			if discard, ok := nativeMapRemoveDiscardExpr(ctx, s.Value); ok {
+				return &llvmNativeStmt{
+					kind:       llvmNativeStmtExpr,
+					childExprs: []*llvmNativeExpr{discard},
+				}, true
+			}
 			value, ok := nativeExprFromIR(ctx, s.Value)
 			if !ok {
 				return nil, false
@@ -2664,6 +2670,14 @@ func nativeStmtFromIR(ctx *nativeProjectionCtx, stmt ostyir.Stmt, fnReturnType s
 		}
 		if s.Pattern != nil {
 			return nil, false
+		}
+		if s.Name == "" || s.Name == "_" {
+			if discard, ok := nativeMapRemoveDiscardExpr(ctx, s.Value); ok {
+				return &llvmNativeStmt{
+					kind:       llvmNativeStmtExpr,
+					childExprs: []*llvmNativeExpr{discard},
+				}, true
+			}
 		}
 		value, ok := nativeExprFromIR(ctx, s.Value)
 		if !ok {
@@ -2726,6 +2740,12 @@ func nativeStmtFromIR(ctx *nativeProjectionCtx, stmt ostyir.Stmt, fnReturnType s
 			if stmt, ok := nativeIfLetVariantStmt(ctx, ifLet, fnReturnType); ok {
 				return stmt, true
 			}
+		}
+		if discard, ok := nativeMapRemoveDiscardExpr(ctx, s.X); ok {
+			return &llvmNativeStmt{
+				kind:       llvmNativeStmtExpr,
+				childExprs: []*llvmNativeExpr{discard},
+			}, true
 		}
 		expr, ok := nativeExprFromIR(ctx, s.X)
 		if !ok {
@@ -5269,13 +5289,25 @@ func nativeMapMethodExprFromIR(ctx *nativeProjectionCtx, e *ostyir.MethodCall) (
 		}
 		ctx.needsMapRT = true
 		return nativeRuntimeCallExpr("ptr", llvmMapRuntimeKeysSymbol(), receiver), true
-	case "remove":
-		arg, ok := nativeSinglePositionalArgExprWithHint(ctx, e.Args, keyType)
-		if !ok {
+	case "values":
+		if len(e.Args) != 0 {
 			return nil, false
 		}
 		ctx.needsMapRT = true
-		return nativeRuntimeCallExpr("i1", llvmMapRuntimeRemoveSymbol(keyType, keyString), receiver, arg), true
+		return nativeRuntimeCallExpr("ptr", llvmMapRuntimeValuesSymbol(), receiver), true
+	case "clear":
+		if len(e.Args) != 0 {
+			return nil, false
+		}
+		ctx.needsMapRT = true
+		return nativeRuntimeCallExpr("void", llvmMapRuntimeClearSymbol(), receiver), true
+	case "remove":
+		// Map.remove returns V?. The native-owned expression slice uses the
+		// legacy boxed optional ABI, so value-producing remove calls stay on
+		// the mature generator path. Discard-only calls are handled by
+		// nativeMapRemoveDiscardExpr and still lower to the cheap runtime
+		// remove.
+		return nil, false
 	case "insert":
 		args, ok := nativePositionalArgsFromIRWithHints(ctx, e.Args, []string{keyType, receiverInfo.mapValueType})
 		if !ok {
@@ -5292,6 +5324,31 @@ func nativeMapMethodExprFromIR(ctx *nativeProjectionCtx, e *ostyir.MethodCall) (
 	default:
 		return nil, false
 	}
+}
+
+func nativeMapRemoveDiscardExpr(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeExpr, bool) {
+	e, ok := expr.(*ostyir.MethodCall)
+	if !ok || e == nil || e.Name != "remove" {
+		return nil, false
+	}
+	receiverInfo, ok := nativeExprTypeInfo(ctx, e.Receiver)
+	if !ok || receiverInfo.kind != nativeExprInfoMap {
+		return nil, false
+	}
+	keyType, keyString := receiverInfo.mapKeyType, receiverInfo.mapKeyString
+	if !nativeMapSetKeySupported(keyType, keyString) {
+		return nil, false
+	}
+	receiver, ok := nativeExprFromIR(ctx, e.Receiver)
+	if !ok {
+		return nil, false
+	}
+	arg, ok := nativeSinglePositionalArgExprWithHint(ctx, e.Args, keyType)
+	if !ok {
+		return nil, false
+	}
+	ctx.needsMapRT = true
+	return nativeRuntimeCallExpr("i1", llvmMapRuntimeRemoveSymbol(keyType, keyString), receiver, arg), true
 }
 
 func nativeSetMethodExprFromIR(ctx *nativeProjectionCtx, e *ostyir.MethodCall) (*llvmNativeExpr, bool) {
@@ -5347,6 +5404,12 @@ func nativeSetMethodExprFromIR(ctx *nativeProjectionCtx, e *ostyir.MethodCall) (
 		}
 		ctx.needsSetRT = true
 		return nativeRuntimeCallExpr("ptr", llvmSetRuntimeToListSymbol(), receiver), true
+	case "clear":
+		if len(e.Args) != 0 {
+			return nil, false
+		}
+		ctx.needsSetRT = true
+		return nativeRuntimeCallExpr("void", llvmSetRuntimeClearSymbol(), receiver), true
 	default:
 		return nil, false
 	}

@@ -310,6 +310,8 @@ pub enum MirIntrinsicKind {
     MirIntrinsicCharToByte,
     MirIntrinsicListInsert,
     MirIntrinsicListClear,
+    MirIntrinsicMapClear,
+    MirIntrinsicSetClear,
 }
 
 // ====================================================================
@@ -1892,6 +1894,8 @@ pub fn mirIntrinsicName(k: MirIntrinsicKind) -> String {
         MirIntrinsicCharToByte -> "char_to_byte",
         MirIntrinsicListInsert -> "list_insert",
         MirIntrinsicListClear -> "list_clear",
+        MirIntrinsicMapClear -> "map_clear",
+        MirIntrinsicSetClear -> "set_clear",
         _ -> "invalid",
     }
 }

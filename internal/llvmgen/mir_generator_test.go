@@ -1790,6 +1790,57 @@ func TestGenerateFromMIRMapGetMethod(t *testing.T) {
 	}
 }
 
+func TestGenerateFromMIRMapRemoveReturnsOption(t *testing.T) {
+	// fn pop(m: Map<String, Int>, k: String) -> Int? {
+	//     m.remove(k)
+	// }
+	mapT := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, ir.TInt}, Builtin: true}
+	optIntT := &ir.OptionalType{Inner: ir.TInt}
+	fn := &ir.FnDecl{
+		Name:   "pop",
+		Return: optIntT,
+		Params: []*ir.Param{
+			{Name: "m", Type: mapT},
+			{Name: "k", Type: ir.TString},
+		},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "m", Kind: ir.IdentParam, T: mapT},
+				Name:     "remove",
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "k", Kind: ir.IdentParam, T: ir.TString}},
+				},
+				T: optIntT,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/map_remove_method.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)",
+		"declare i1 @osty_rt_map_remove_string(ptr, ptr)",
+		"call i1 @osty_rt_map_get_string(",
+		"call i1 @osty_rt_map_remove_string(",
+		"map.remove.some",
+		"map.remove.none",
+		"map.remove.end",
+		"insertvalue %Option.i64 undef, i64 1, 0",
+		"store %Option.i64 zeroinitializer, ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "osty_rt_map_get_or_abort_") {
+		t.Fatalf("map.remove regressed to abort runtime:\n%s", got)
+	}
+}
+
 func TestGenerateFromMIRMapGetStructValueBoxesOption(t *testing.T) {
 	// struct Point { x: Int, y: Int }
 	// fn lookup(m: Map<String, Point>, k: String) -> Point? { m.get(k) }
@@ -1904,6 +1955,147 @@ func TestGenerateFromMIRMapGetOr(t *testing.T) {
 	// of the MIR path is to keep the value on the stack.
 	if strings.Contains(got, "osty.gc.alloc_v1") {
 		t.Fatalf("getOr allocated a GC box (stack path regressed):\n%s", got)
+	}
+}
+
+func TestGenerateFromMIRMapValuesPrimitive(t *testing.T) {
+	mapT := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, ir.TInt}, Builtin: true}
+	listIntT := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "valuesOf",
+		Return: listIntT,
+		Params: []*ir.Param{{Name: "m", Type: mapT}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "m", Kind: ir.IdentParam, T: mapT},
+				Name:     "values",
+				T:        listIntT,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/map_values_primitive.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"define ptr @valuesOf(",
+		"declare ptr @osty_rt_map_values(ptr)",
+		"call ptr @osty_rt_map_values(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRMapValuesStruct(t *testing.T) {
+	pointT := &ir.NamedType{Name: "Point"}
+	pointDecl := &ir.StructDecl{
+		Name: "Point",
+		Fields: []*ir.Field{
+			{Name: "x", Type: ir.TInt, Exported: true},
+			{Name: "y", Type: ir.TInt, Exported: true},
+		},
+	}
+	mapT := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, pointT}, Builtin: true}
+	listPointT := &ir.NamedType{Name: "List", Args: []ir.Type{pointT}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "valuesOf",
+		Return: listPointT,
+		Params: []*ir.Param{{Name: "m", Type: mapT}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "m", Kind: ir.IdentParam, T: mapT},
+				Name:     "values",
+				T:        listPointT,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{pointDecl, fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/map_values_struct.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"%Point = type { i64, i64 }",
+		"define ptr @valuesOf(",
+		"declare ptr @osty_rt_map_values(ptr)",
+		"call ptr @osty_rt_map_values(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRMapClear(t *testing.T) {
+	mapT := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "clear",
+		Return: ir.TUnit,
+		Params: []*ir.Param{{Name: "m", Type: mapT}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.ExprStmt{X: &ir.MethodCall{
+					Receiver: &ir.Ident{Name: "m", Kind: ir.IdentParam, T: mapT},
+					Name:     "clear",
+					T:        ir.TUnit,
+				}},
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/map_clear_mir.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare void @osty_rt_map_clear(ptr)",
+		"call void @osty_rt_map_clear(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRSetClear(t *testing.T) {
+	setT := &ir.NamedType{Name: "Set", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "clear",
+		Return: ir.TUnit,
+		Params: []*ir.Param{{Name: "s", Type: setT}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.ExprStmt{X: &ir.MethodCall{
+					Receiver: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: setT},
+					Name:     "clear",
+					T:        ir.TUnit,
+				}},
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/set_clear_mir.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare void @osty_rt_set_clear(ptr)",
+		"call void @osty_rt_set_clear(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
 	}
 }
 

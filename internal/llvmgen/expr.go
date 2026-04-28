@@ -6127,7 +6127,7 @@ func (g *generator) emitOptionPayloadBox(emitter *LlvmEmitter, payload value, si
 }
 
 func (g *generator) emitMapMethodCall(call *ast.CallExpr) (value, bool, error) {
-	field, keyTyp, _, keyString, found := g.mapMethodInfo(call)
+	field, keyTyp, valTyp, keyString, found := g.mapMethodInfo(call)
 	if !found {
 		return value{}, false, nil
 	}
@@ -6208,6 +6208,25 @@ func (g *generator) emitMapMethodCall(call *ast.CallExpr) (value, bool, error) {
 		v.listElemTyp = keyTyp
 		v.listElemString = keyString
 		return v, true, nil
+	case "values":
+		if len(call.Args) != 0 {
+			return value{}, true, unsupported("call", "map.values requires no arguments")
+		}
+		g.declareRuntimeSymbol(mapRuntimeValuesSymbol(), "ptr", []paramInfo{{typ: "ptr"}})
+		emitter := g.toOstyEmitter()
+		out := llvmCall(emitter, "ptr", mapRuntimeValuesSymbol(), []*LlvmValue{toOstyValue(base)})
+		g.takeOstyEmitter(emitter)
+		v := fromOstyValue(out)
+		v.gcManaged = true
+		v.listElemTyp = valTyp
+		if _, valueSource, ok := g.iterableMapSourceTypes(field.X); ok {
+			v.sourceType = &ast.NamedType{Path: []string{"List"}, Args: []ast.Type{valueSource}}
+			if resolved, err := llvmResolveAliasType(valueSource, g.typeEnv(), map[string]bool{}); err == nil {
+				v.listElemString = llvmNamedTypeIsString(resolved)
+			}
+		}
+		v.rootPaths = g.rootPathsForType("ptr")
+		return v, true, nil
 	case "remove":
 		if len(call.Args) != 1 || call.Args[0].Name != "" || call.Args[0].Value == nil {
 			return value{}, true, unsupported("call", "map.remove requires one positional argument")
@@ -6224,12 +6243,16 @@ func (g *generator) emitMapMethodCall(call *ast.CallExpr) (value, bool, error) {
 		if err != nil {
 			return value{}, true, err
 		}
+		out, err := g.emitMapGetCore(base, loaded, keyTyp, keyString)
+		if err != nil {
+			return value{}, true, err
+		}
 		symbol := mapRuntimeRemoveSymbol(keyTyp, keyString)
 		g.declareRuntimeSymbol(symbol, "i1", []paramInfo{{typ: "ptr"}, {typ: keyTyp}})
 		emitter := g.toOstyEmitter()
 		llvmCall(emitter, "i1", symbol, []*LlvmValue{toOstyValue(base), toOstyValue(loaded)})
 		g.takeOstyEmitter(emitter)
-		return value{typ: "ptr", ref: "null"}, true, nil
+		return out, true, nil
 	default:
 		return value{}, false, nil
 	}

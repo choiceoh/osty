@@ -714,12 +714,16 @@ func mapRuntimeKeysSymbol() string {
 	return llvmMapRuntimeKeysSymbol()
 }
 
+func mapRuntimeValuesSymbol() string {
+	return llvmMapRuntimeValuesSymbol()
+}
+
 func mapRuntimeLenSymbol() string {
 	return llvmMapRuntimeLenSymbol()
 }
 
 func mapRuntimeClearSymbol() string {
-	return mirRtMapClearSymbol()
+	return llvmMapRuntimeClearSymbol()
 }
 
 func setRuntimeNewSymbol() string {
@@ -744,6 +748,10 @@ func setRuntimeRemoveSymbol(elemTyp string, elemString bool) string {
 
 func setRuntimeToListSymbol() string {
 	return llvmSetRuntimeToListSymbol()
+}
+
+func setRuntimeClearSymbol() string {
+	return llvmSetRuntimeClearSymbol()
 }
 
 func containerAbiKind(typ string, isString bool) int {
