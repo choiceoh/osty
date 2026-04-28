@@ -241,8 +241,107 @@ func ResolvePackageStructured(input PackageResolveInput) (ResolveResult, error) 
 			return checkNodeOffsetsWithTokenLayout(layout, start, end)
 		},
 	)
+	selfhostApplyResolveImportSurfaces(&result, file, input.Imports, func(start, end int) (int, int) {
+		return checkNodeOffsetsWithTokenLayout(layout, start, end)
+	})
 	selfhostAnnotateResolveFiles(&result, input.Files)
 	return result, nil
+}
+
+func selfhostApplyResolveImportSurfaces(result *ResolveResult, file *AstFile, imports []PackageCheckImport, offsets func(start, end int) (int, int)) {
+	if result == nil || file == nil || file.arena == nil || len(imports) == 0 {
+		return
+	}
+	byAlias := map[string]PackageCheckImport{}
+	for _, imp := range imports {
+		if imp.Alias == "" {
+			continue
+		}
+		byAlias[imp.Alias] = imp
+	}
+	for _, declIdx := range file.arena.decls {
+		if declIdx < 0 || declIdx >= len(file.arena.nodes) {
+			continue
+		}
+		selfhostApplyResolveUseImportSurface(result, file.arena, declIdx, byAlias, offsets)
+	}
+}
+
+func selfhostApplyResolveUseImportSurface(result *ResolveResult, arena *AstArena, idx int, imports map[string]PackageCheckImport, offsets func(start, end int) (int, int)) {
+	if idx < 0 || idx >= len(arena.nodes) {
+		return
+	}
+	n := arena.nodes[idx]
+	if n == nil {
+		return
+	}
+	if _, ok := n.kind.(*AstNodeKind_AstNUseDecl); !ok {
+		return
+	}
+	if arenaUseDeclIsGroup(n) {
+		for _, childIdx := range n.children {
+			selfhostApplyResolveUseImportSurface(result, arena, childIdx, imports, offsets)
+		}
+		return
+	}
+	if !arenaUseDeclIsScoped(n) {
+		return
+	}
+	raw := arenaStringUnquote(n.text)
+	base, member, ok := arenaSplitScopedUsePath(raw)
+	if !ok {
+		return
+	}
+	imp := imports[arenaUsePathLastSegment(base)]
+	if imp.Alias == "" {
+		return
+	}
+	kind, ok := selfhostResolveImportMemberKind(imp, member)
+	if !ok {
+		return
+	}
+	name := arenaUseDeclAlias(arena, n)
+	if name == "" {
+		name = member
+	}
+	start, end := offsets(n.start, n.end)
+	for i := range result.Symbols {
+		sym := &result.Symbols[i]
+		if sym.Name != name || sym.Start != start || sym.End != end {
+			continue
+		}
+		sym.Kind = kind
+		return
+	}
+}
+
+func selfhostResolveImportMemberKind(imp PackageCheckImport, member string) (string, bool) {
+	for _, fn := range imp.Functions {
+		if fn.Owner == "" && fn.Name == member {
+			return "fn", true
+		}
+	}
+	for _, typ := range imp.TypeDecls {
+		if typ.Name == member || arenaLocalTypeName(typ.Name) == member {
+			return "type", true
+		}
+	}
+	for _, alias := range imp.Aliases {
+		if alias.Name == member || arenaLocalTypeName(alias.Name) == member {
+			return "type", true
+		}
+	}
+	for _, variant := range imp.Variants {
+		if variant.Name == member {
+			return "variant", true
+		}
+	}
+	for _, field := range imp.Fields {
+		if field.Owner == imp.Alias && field.Name == member {
+			return "value", true
+		}
+	}
+	return "", false
 }
 
 func adaptResolveSummary(resolved *SelfResolveResult) ResolveSummary {

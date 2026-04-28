@@ -384,23 +384,21 @@ func (r *resolver) declareUse(u *ast.UseDecl) {
 	// (`pkg.Name`) can navigate to it. FFI imports stay opaque — they
 	// never point at an on-disk Osty package.
 	if !u.IsFFI() && r.pkgScope != nil && r.pkg() != nil && r.pkg().workspace != nil {
-		targetPath := UseKey(u)
-		pkg, d := r.pkg().workspace.ResolveUseTarget(targetPath, u.PosV)
+		resolved, d := resolveUseBinding(r.pkg().workspace, u, name, r.filePath)
 		if d != nil {
 			r.emit(d)
 		}
-		if pkg != nil && !pkg.isCycleMarker {
-			sym.Package = pkg
-		}
+		sym = resolved
 	}
 	if prev, ok := r.current.Define(sym); !ok {
-		r.duplicate(u.PosV, name, prev)
+		r.emit(duplicateUseDiag(u.PosV, name, prev, r.filePath))
+		return
 	}
 	// `pub use` also lives in the package scope so other packages can
 	// reach the re-export through ordinary dotted lookup. The file
 	// scope definition above still serves the lexical lookup inside
 	// this file.
-	if u.IsPub && r.pkgScope != nil && r.pkgScope != r.current {
+	if u.IsPub && sym.Pub && r.pkgScope != nil && r.pkgScope != r.current {
 		// Fresh Symbol instead of `*sym` copy so package- and file-scope
 		// symbols don't alias identity — and so sync.Once (idOnce) isn't
 		// byte-copied (vet's copylocks check).
@@ -412,15 +410,8 @@ func (r *resolver) declareUse(u *ast.UseDecl) {
 			Pub:     sym.Pub,
 			Package: sym.Package,
 		}
-		if _, ok := r.pkgScope.Define(pkgSym); !ok {
-			// Collision against an already-declared pkg-scope symbol
-			// is a re-export-over-existing conflict. Surface via the
-			// duplicate reporter using the existing symbol's location.
-			// Intentionally silent here for v0.5 MVP — the duplicate
-			// path only flags the file-scope conflict above, and
-			// refining the re-export-specific message (E0553) is
-			// Phase 2.2+ follow-up when the full cycle / visibility
-			// checker lands.
+		if prev, ok := r.pkgScope.Define(pkgSym); !ok {
+			r.emit(duplicateUseDiag(u.PosV, name, prev, r.filePath))
 		}
 	}
 }

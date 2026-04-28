@@ -79,19 +79,25 @@ func selfhostPackageImportSurfaces(pkg *resolve.Package, ws *resolve.Workspace, 
 			if use.IsGo || use.Alias == "" {
 				continue
 			}
-			target := selfhostLookupPackageImportByPath(use.Path, ws, stdlib)
+			targetPath := use.Path
+			importAlias := use.Alias
+			if use.IsScoped {
+				targetPath = use.ScopedBase
+				importAlias = lastPathSegment(targetPath)
+			}
+			target := selfhostLookupPackageImportByPath(targetPath, ws, stdlib)
 			if target == nil {
 				continue
 			}
-			key := use.Path
-			if prev, ok := seen[use.Alias]; ok {
+			key := targetPath
+			if prev, ok := seen[importAlias]; ok {
 				if prev == key {
 					continue
 				}
 				continue
 			}
-			seen[use.Alias] = key
-			out = append(out, selfhost.PackageImportSurface(use.Path, use.Alias, runsForPackage(target)))
+			seen[importAlias] = key
+			out = append(out, selfhost.PackageImportSurface(targetPath, importAlias, runsForPackage(target)))
 		}
 	}
 	return out
@@ -105,23 +111,28 @@ func selfhostUsesImportSurfaces(uses []*ast.UseDecl, ws *resolve.Workspace, stdl
 	seen := map[string]string{}
 	var out []selfhost.PackageCheckImport
 	for _, use := range uses {
-		target := selfhostLookupPackageImport(use, ws, stdlib)
+		targetPath := strings.Join(use.Path, ".")
+		importAlias := selfhostUseAlias(use)
+		if use.IsScoped {
+			targetPath = strings.Join(use.ScopedBase, ".")
+			importAlias = lastPathSegment(targetPath)
+		}
+		target := selfhostLookupPackageImportByPath(targetPath, ws, stdlib)
 		if target == nil {
 			continue
 		}
-		alias := selfhostUseAlias(use)
-		if alias == "" {
+		if importAlias == "" {
 			continue
 		}
-		key := strings.Join(use.Path, ".")
-		if prev, ok := seen[alias]; ok {
+		key := targetPath
+		if prev, ok := seen[importAlias]; ok {
 			if prev == key {
 				continue
 			}
 			continue
 		}
-		seen[alias] = key
-		out = append(out, selfhost.PackageImportSurface(key, alias, runsForPackage(target)))
+		seen[importAlias] = key
+		out = append(out, selfhost.PackageImportSurface(key, importAlias, runsForPackage(target)))
 	}
 	return out
 }

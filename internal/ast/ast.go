@@ -334,6 +334,9 @@ type UseDecl struct {
 	RawPath      string   // e.g. "github.com/user/lib" as written
 	Alias        string   // optional `as alias`
 	IsPub        bool     // v0.5 (G30) §5 — `pub use path` re-export
+	IsScoped     bool     // v0.5 (G28) §5 — expanded from `use base::{member}`
+	ScopedBase   []string // base package path for scoped imports
+	ScopedMember string   // imported member name for scoped imports
 	IsGoFFI      bool     // legacy bootstrap-only `use go "..."`
 	IsRuntimeFFI bool     // `use runtime.* { ... }`
 	GoPath       string   // legacy go import path

@@ -111,7 +111,8 @@ type PackageResolveFile = PackageCheckFile
 // synthetic package so the self-host resolver can see one shared
 // top-level namespace.
 type PackageResolveInput struct {
-	Files []PackageResolveFile `json:"files,omitempty"`
+	Files   []PackageResolveFile `json:"files,omitempty"`
+	Imports []PackageCheckImport `json:"imports,omitempty"`
 	// Cfg, when non-nil, activates the `#[cfg(key = "value")]`
 	// pre-resolve filter per LANG_SPEC v0.5 §5 / G29. A nil Cfg leaves
 	// every decl alive (cfg shape validation still emits E0405/E0739

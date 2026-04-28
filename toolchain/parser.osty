@@ -116,6 +116,7 @@ pub fn astPatternErrorKind() -> Int { 11 }
 pub fn astUseDeclFlagGo() -> Int { 1 }
 pub fn astUseDeclFlagPub() -> Int { 2 }
 pub fn astUseDeclGroupMarker() -> Int { 1 }
+pub fn astUseDeclScopedMarker() -> Int { 2 }
 
 fn astUseDeclFlags(isGo: Bool, isPub: Bool) -> Int {
     if isGo && isPub {
@@ -149,6 +150,13 @@ pub fn astUseDeclIsGroup(n: AstNode) -> Bool {
         return false
     }
     n.extra == astUseDeclGroupMarker()
+}
+
+pub fn astUseDeclIsScoped(n: AstNode) -> Bool {
+    if n.kind != AstNUseDecl {
+        return false
+    }
+    n.extra == astUseDeclScopedMarker()
 }
 
 pub fn astArenaAdd(arena: AstArena, node: AstNode) -> Int {
@@ -2374,7 +2382,11 @@ fn opParseScopedUseDecl(p: OstyParser, start: Int, basePath: String, isPub: Bool
             aliasStart = p.pos
             alias = opExpect(p, FrontIdent).text
         }
-        items.push(opBuildUseDecl(p, start, p.pos, "{basePath}.{itemName}", false, isPub, alias, aliasStart, []))
+        let childIdx = opBuildUseDecl(p, start, p.pos, "{basePath}.{itemName}", false, isPub, alias, aliasStart, [])
+        let mut childNode = astArenaNodeAt(p.arena, childIdx)
+        childNode.extra = astUseDeclScopedMarker()
+        p.arena.nodes[childIdx] = childNode
+        items.push(childIdx)
         if !(opEat(p, FrontComma)) {
             break
         }

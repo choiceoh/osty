@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/selfhost"
 )
 
@@ -66,17 +67,7 @@ func (w *Workspace) LoadPackageNative(dotPath string) (*Package, error) {
 			if u.IsFFI() {
 				continue
 			}
-			target := UseKey(u)
-			if target == "" {
-				continue
-			}
-			if w.loading[target] {
-				continue
-			}
-			if _, alreadyLoaded := w.Packages[target]; alreadyLoaded {
-				continue
-			}
-			_, _ = w.LoadPackageNative(target)
+			w.loadUseDependencyNative(u)
 		}
 	}
 	return pkg, nil
@@ -113,17 +104,33 @@ func (w *Workspace) loadFromExternalDirNative(key, dir string) (*Package, error)
 			if u.IsFFI() {
 				continue
 			}
-			target := UseKey(u)
-			if target == "" || w.loading[target] {
-				continue
-			}
-			if _, alreadyLoaded := w.Packages[target]; alreadyLoaded {
-				continue
-			}
-			_, _ = w.LoadPackageNative(target)
+			w.loadUseDependencyNative(u)
 		}
 	}
 	return pkg, nil
+}
+
+func (w *Workspace) loadUseDependencyNative(u *ast.UseDecl) {
+	target := useDependencyKey(u)
+	if target == "" || w.loading[target] {
+		return
+	}
+	if _, alreadyLoaded := w.Packages[target]; alreadyLoaded {
+		return
+	}
+	if _, err := w.LoadPackageNative(target); err == nil {
+		return
+	}
+}
+
+func useDependencyKey(u *ast.UseDecl) string {
+	if u == nil || u.IsFFI() {
+		return ""
+	}
+	if u.IsScoped {
+		return scopedUseBaseKey(u)
+	}
+	return UseKey(u)
 }
 
 func nativeMaterializePackageFiles(pkg *Package) {

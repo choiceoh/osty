@@ -76,6 +76,62 @@ pub fn world() -> Int { 1 }
 	}
 }
 
+func TestWorkspaceDetectsReexportCycleTwoPackage(t *testing.T) {
+	root := t.TempDir()
+	pkgA := filepath.Join(root, "alpha")
+	pkgB := filepath.Join(root, "beta")
+	if err := os.MkdirAll(pkgA, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(pkgB, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgA, "lib.osty"), []byte(`pub use beta
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(pkgB, "lib.osty"), []byte(`pub use alpha
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	for _, p := range WorkspacePackagePaths(root) {
+		if _, err := ws.LoadPackageArenaFirst(p); err != nil {
+			t.Fatalf("LoadPackage %s: %v", p, err)
+		}
+	}
+	results := ws.ResolveAll()
+
+	var reexportDiag *diag.Diagnostic
+	for _, pr := range results {
+		if pr == nil {
+			continue
+		}
+		for _, d := range pr.Diags {
+			if d.Code == diag.CodeReexportCycle {
+				reexportDiag = d
+				break
+			}
+		}
+		if reexportDiag != nil {
+			break
+		}
+	}
+	if reexportDiag == nil {
+		t.Fatalf("expected %s for alpha↔beta pub-use cycle", diag.CodeReexportCycle)
+	}
+	if !strings.Contains(reexportDiag.Message, "re-export cycle") {
+		t.Errorf("expected re-export-cycle wording, got %q", reexportDiag.Message)
+	}
+	if len(reexportDiag.Spans) == 0 || reexportDiag.Spans[0].Span.Start.Line == 0 {
+		t.Errorf("expected diag span to carry source position, got %#v", reexportDiag.Spans)
+	}
+}
+
 // Three-package cycle: alpha → beta → gamma → alpha. Exactly one
 // back-edge should emit E0506 (the gamma → alpha edge closes the cycle
 // during DFS starting from alpha).

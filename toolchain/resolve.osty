@@ -697,11 +697,17 @@ fn srAstCollectDecl(
         return out
     }
     if node.kind == AstNUseDecl {
+        if astUseDeclIsGroup(node) {
+            for childIdx in node.children {
+                out = srAstCollectDecl(file, childIdx, cfg, out)
+            }
+            return out
+        }
         let alias = srAstUseAlias(file, node)
         if alias != "" {
-            out = srAddSymbol(
+            out = srAddUseSymbol(
                 out,
-                selfSymbolAtNode(alias, "package", "", 0, 0, node.start, node.end, true, idx),
+                selfSymbolAtNode(alias, "package", "", 0, 0, node.start, node.end, astUseDeclIsPub(node), idx),
             )
         }
     } else if node.kind == AstNFnDecl {
@@ -2363,6 +2369,16 @@ fn srAddSymbol(result: SelfResolveResult, sym: SelfSymbol) -> SelfResolveResult 
     out
 }
 
+fn srAddUseSymbol(result: SelfResolveResult, sym: SelfSymbol) -> SelfResolveResult {
+    let mut out = result
+    if srSymbolExistsAtDepth(out.symbols, sym.name, sym.depth) {
+        out = srDuplicateUseAtNode(out, sym.name, sym.start, sym.end, sym.node)
+    } else if !(srIsDiscardName(sym.name)) {
+        out.symbols.push(sym)
+    }
+    out
+}
+
 fn srDuplicate(result: SelfResolveResult, name: String, start: Int, end: Int) -> SelfResolveResult {
     srDuplicateAtNode(result, name, start, end, -1)
 }
@@ -2378,6 +2394,29 @@ fn srDuplicateAtNode(
     out.duplicates = out.duplicates + 1
     out.diagnostics.push(
         selfResolveDiagnosticAtNode("E0501", "duplicate declaration", name, start, end, node),
+    )
+    out
+}
+
+fn srDuplicateUseAtNode(
+    result: SelfResolveResult,
+    name: String,
+    start: Int,
+    end: Int,
+    node: Int,
+) -> SelfResolveResult {
+    let mut out = result
+    out.duplicates = out.duplicates + 1
+    out.diagnostics.push(
+        selfResolveDiagnosticHintAtNode(
+            "E0554",
+            "duplicate import name",
+            name,
+            start,
+            end,
+            node,
+            "remove the duplicate import or rename one side with `as`",
+        ),
     )
     out
 }

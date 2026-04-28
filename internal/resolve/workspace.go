@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
@@ -222,14 +223,7 @@ func (w *Workspace) loadFromExternalDir(key, dir string) (*Package, error) {
 			if u.IsFFI() {
 				continue
 			}
-			target := UseKey(u)
-			if target == "" || w.loading[target] {
-				continue
-			}
-			if _, alreadyLoaded := w.Packages[target]; alreadyLoaded {
-				continue
-			}
-			_, _ = w.LoadPackage(target)
+			w.loadUseDependencyNative(u)
 		}
 	}
 	return pkg, nil
@@ -311,6 +305,12 @@ type importCycleDiag struct {
 	diag     *diag.Diagnostic
 }
 
+type importGraphEdge struct {
+	target string
+	pos    token.Pos
+	pub    bool
+}
+
 // detectCycles walks the import graph induced by every loaded package's
 // `use` declarations and returns one diagnostic per edge that completes
 // a cycle. Stub/cycle-marker packages contribute no edges. The DFS
@@ -324,11 +324,7 @@ func (w *Workspace) detectCycles() []importCycleDiag {
 	// algorithm round-trips pos as an offset only; keeping the
 	// token.Pos here lets us restore Line/Column when rendering
 	// the diagnostic.
-	type edge struct {
-		target string
-		pos    token.Pos
-	}
-	adj := map[string][]edge{}
+	adj := map[string][]importGraphEdge{}
 	for path, pkg := range w.Packages {
 		if pkg.isStub || pkg.isCycleMarker {
 			continue
@@ -338,14 +334,15 @@ func (w *Workspace) detectCycles() []importCycleDiag {
 				if u.IsFFI() {
 					continue
 				}
-				target := UseKey(u)
+				target := w.useGraphTarget(u)
 				if target == "" {
 					continue
 				}
-				adj[path] = append(adj[path], edge{target: target, pos: u.PosV})
+				adj[path] = append(adj[path], importGraphEdge{target: target, pos: u.PosV, pub: u.IsPub})
 			}
 		}
 	}
+	pubReexportClosers := reexportCycleClosers(adj)
 	// Stable iteration for deterministic diagnostic order — mirrors
 	// the previous in-process DFS, which sorted adj keys before DFS.
 	keys := make([]string, 0, len(adj))
@@ -383,17 +380,80 @@ func (w *Workspace) detectCycles() []importCycleDiag {
 				break
 			}
 		}
+		code := diag.CodeCyclicImport
+		message := cd.Message
+		primary := "completes an import cycle"
+		note := "v0.2 §5.4: package imports must form a DAG"
+		hint := "break the cycle by extracting the shared names into a third package that both sides import"
+		if pubReexportClosers[cycleEdgeKey{importer: cd.Importer, target: cd.Target, pos: cd.Pos}] {
+			code = diag.CodeReexportCycle
+			message = fmt.Sprintf("re-export cycle: `%s` pub-uses `%s`", cd.Importer, cd.Target)
+			primary = "completes a re-export cycle"
+			note = "v0.5 §5: `pub use` re-export chains must be acyclic"
+			hint = "break the cycle by importing the original package from one side instead of re-exporting through it"
+		}
 		out = append(out, importCycleDiag{
 			importer: cd.Importer,
-			diag: diag.New(diag.Error, cd.Message).
-				Code(diag.CodeCyclicImport).
-				PrimaryPos(pos, "completes an import cycle").
-				Note("v0.2 §5.4: package imports must form a DAG").
-				Hint("break the cycle by extracting the shared names into a third package that both sides import").
+			diag: diag.New(diag.Error, message).
+				Code(code).
+				PrimaryPos(pos, primary).
+				Note(note).
+				Hint(hint).
 				Build(),
 		})
 	}
 	return out
+}
+
+func (w *Workspace) useGraphTarget(u *ast.UseDecl) string {
+	target := useDependencyKey(u)
+	if target == "" {
+		return ""
+	}
+	if _, ok := w.Packages[target]; ok {
+		return target
+	}
+	return target
+}
+
+type cycleEdgeKey struct {
+	importer string
+	target   string
+	pos      int
+}
+
+func reexportCycleClosers(adj map[string][]importGraphEdge) map[cycleEdgeKey]bool {
+	out := map[cycleEdgeKey]bool{}
+	for importer, edges := range adj {
+		for _, e := range edges {
+			if !e.pub {
+				continue
+			}
+			if pubPathExists(adj, e.target, importer, map[string]bool{}) {
+				out[cycleEdgeKey{importer: importer, target: e.target, pos: e.pos.Offset}] = true
+			}
+		}
+	}
+	return out
+}
+
+func pubPathExists(adj map[string][]importGraphEdge, from, target string, seen map[string]bool) bool {
+	if from == target {
+		return true
+	}
+	if seen[from] {
+		return false
+	}
+	seen[from] = true
+	for _, e := range adj[from] {
+		if !e.pub {
+			continue
+		}
+		if pubPathExists(adj, e.target, target, seen) {
+			return true
+		}
+	}
+	return false
 }
 
 // cycleMarker returns a sentinel Package used when LoadPackage detects

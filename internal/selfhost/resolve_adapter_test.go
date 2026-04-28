@@ -583,6 +583,68 @@ fn bad() -> Int { 1 }
 	}
 }
 
+func TestResolveSourceStructuredUseVisibilityMatchesPubUse(t *testing.T) {
+	plain := selfhost.ResolveSourceStructured([]byte("use std.fs\n"))
+	plainSym := findResolvedSymbol(plain, "fs", "package")
+	if plainSym == nil {
+		t.Fatalf("plain use did not produce package symbol: %#v", plain.Symbols)
+	}
+	if plainSym.Public {
+		t.Fatalf("plain use symbol Public = true, want false")
+	}
+
+	exported := selfhost.ResolveSourceStructured([]byte("pub use std.fs\n"))
+	pubSym := findResolvedSymbol(exported, "fs", "package")
+	if pubSym == nil {
+		t.Fatalf("pub use did not produce package symbol: %#v", exported.Symbols)
+	}
+	if !pubSym.Public {
+		t.Fatalf("pub use symbol Public = false, want true")
+	}
+}
+
+func TestResolveSourceStructuredDuplicateUseEmitsE0554(t *testing.T) {
+	resolved := selfhost.ResolveSourceStructured([]byte(`use std.fs
+use std.io as fs
+`))
+	got := findResolveDiagnostic(resolved, "E0554")
+	if got == nil {
+		t.Fatalf("expected E0554 for duplicate import name, got %#v", resolved.Diagnostics)
+	}
+	if got.Hint == "" {
+		t.Fatalf("E0554 should carry a rename/remove hint: %#v", got)
+	}
+}
+
+func TestResolvePackageStructuredScopedImportUsesImportSurface(t *testing.T) {
+	alphaRun := selfhost.Run([]byte(`pub fn helper() -> Int { 1 }
+pub struct Widget {}
+`))
+	resolved, err := selfhost.ResolvePackageStructured(selfhost.PackageResolveInput{
+		Files: []selfhost.PackageResolveFile{{
+			Source: []byte(`use alpha::{helper as callHelper, Widget}
+
+fn main() {
+    let _ = callHelper()
+}
+`),
+			Path: "beta.osty",
+		}},
+		Imports: []selfhost.PackageCheckImport{
+			selfhost.PackageImportSurface("alpha", "alpha", []*selfhost.FrontendRun{alphaRun}),
+		},
+	})
+	if err != nil {
+		t.Fatalf("ResolvePackageStructured: %v", err)
+	}
+	if got := findResolvedSymbol(resolved, "callHelper", "fn"); got == nil {
+		t.Fatalf("expected scoped function import to resolve as fn, got %#v", resolved.Symbols)
+	}
+	if got := findResolvedSymbol(resolved, "Widget", "type"); got == nil {
+		t.Fatalf("expected scoped type import to resolve as type, got %#v", resolved.Symbols)
+	}
+}
+
 func findResolvedSymbol(result selfhost.ResolveResult, name string, kind string) *selfhost.ResolvedSymbol {
 	for i := range result.Symbols {
 		if result.Symbols[i].Name == name && result.Symbols[i].Kind == kind {

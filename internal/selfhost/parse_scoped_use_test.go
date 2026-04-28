@@ -16,10 +16,10 @@ func TestParseScopedUseLowersToFlatUses(t *testing.T) {
 		t.Fatalf("expected 2 use decls, got %d", len(file.Uses))
 	}
 
-	if got := file.Uses[0]; got.RawPath != "std.fs.open" || got.Alias != "" || !got.IsPub {
-		t.Fatalf("use[0] = %+v, want RawPath=std.fs.open Alias=\"\" IsPub=true", got)
+	if got := file.Uses[0]; got.RawPath != "std.fs.open" || got.Alias != "" || !got.IsPub || !got.IsScoped || got.ScopedMember != "open" {
+		t.Fatalf("use[0] = %+v, want RawPath=std.fs.open Alias=\"\" IsPub=true IsScoped=true ScopedMember=open", got)
 	}
-	if got := file.Uses[1]; got.RawPath != "std.fs.exists" || got.Alias != "has" || !got.IsPub {
-		t.Fatalf("use[1] = %+v, want RawPath=std.fs.exists Alias=has IsPub=true", got)
+	if got := file.Uses[1]; got.RawPath != "std.fs.exists" || got.Alias != "has" || !got.IsPub || !got.IsScoped || got.ScopedMember != "exists" {
+		t.Fatalf("use[1] = %+v, want RawPath=std.fs.exists Alias=has IsPub=true IsScoped=true ScopedMember=exists", got)
 	}
 }

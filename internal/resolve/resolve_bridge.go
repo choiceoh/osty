@@ -44,7 +44,8 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 		fileScope := NewScope(pkgScope, "file:"+pf.Path)
 		nativeDeclareUses(fileScope, pkgScope, pkg, pf, &diags)
 
-		refsByID, refIdents := bridgeRefs(result.Refs, fi, identIdx, declIdx)
+		refsByID, refIdents := bridgeRefs(result.Refs, fi, identIdx, declIdx, fileScope)
+		refsByID, refIdents = supplementUseAliasRefs(pf.File, fileScope, refsByID, refIdents)
 		pf.RefsByID = refsByID
 		pf.RefIdents = refIdents
 
@@ -92,30 +93,32 @@ func nativeDeclareUses(fileScope, pkgScope *Scope, pkg *Package, pf *PackageFile
 		if name == "" {
 			continue
 		}
-		sym := &Symbol{
-			Name: name,
-			Kind: SymPackage,
-			Pos:  u.PosV,
-			Decl: u,
-			Pub:  u.IsPub,
-		}
 		if !u.IsFFI() && pkg != nil && pkg.workspace != nil {
-			targetPath := UseKey(u)
-			target, d := pkg.workspace.ResolveUseTarget(targetPath, u.PosV)
+			sym, d := resolveUseBinding(pkg.workspace, u, name, pf.Path)
 			if d != nil && diags != nil {
 				*diags = append(*diags, d)
 			}
-			if target != nil && !target.isCycleMarker {
-				sym.Package = target
+			if _, ok := fileScope.Define(sym); !ok {
+				continue
 			}
-		}
-		if prev, ok := fileScope.Define(sym); !ok {
-			if diags != nil {
-				*diags = append(*diags, duplicateSymbolDiag(u.PosV, name, prev, pf.Path))
+			if u.IsPub && sym.Pub && pkgScope != nil && pkgScope != fileScope {
+				pkgSym := &Symbol{
+					Name:    sym.Name,
+					Kind:    sym.Kind,
+					Pos:     sym.Pos,
+					Decl:    sym.Decl,
+					Pub:     sym.Pub,
+					Package: sym.Package,
+				}
+				pkgScope.Define(pkgSym)
 			}
 			continue
 		}
-		if u.IsPub && pkgScope != nil && pkgScope != fileScope {
+		sym := placeholderUseSymbol(u, name, SymPackage, u.IsPub)
+		if _, ok := fileScope.Define(sym); !ok {
+			continue
+		}
+		if u.IsPub && sym.Pub && pkgScope != nil && pkgScope != fileScope {
 			pkgSym := &Symbol{
 				Name:    sym.Name,
 				Kind:    sym.Kind,
@@ -124,10 +127,7 @@ func nativeDeclareUses(fileScope, pkgScope *Scope, pkg *Package, pf *PackageFile
 				Pub:     sym.Pub,
 				Package: sym.Package,
 			}
-			if _, ok := pkgScope.Define(pkgSym); !ok {
-				// Re-export collisions remain intentionally silent until the
-				// workspace-level E0553 pass lands.
-			}
+			pkgScope.Define(pkgSym)
 		}
 	}
 }
@@ -168,6 +168,21 @@ func duplicateSymbolDiag(pos token.Pos, name string, prev *Symbol, file string) 
 		}
 	}
 	d.Hint("rename one of the declarations or remove the duplicate")
+	out := d.Build()
+	if out.File == "" {
+		out.File = file
+	}
+	return out
+}
+
+func duplicateUseDiag(pos token.Pos, name string, prev *Symbol, file string) *diag.Diagnostic {
+	d := diag.New(diag.Error, fmt.Sprintf("import name `%s` is already in scope", name)).
+		Code(diag.CodeUseDuplicateName).
+		PrimaryPos(pos, "duplicate import name").
+		Hint("remove the duplicate import or rename one side with `as`")
+	if prev != nil && prev.Pos.Line > 0 {
+		d.Secondary(diag.Span{Start: prev.Pos, End: prev.Pos}, "previous binding here")
+	}
 	out := d.Build()
 	if out.File == "" {
 		out.File = file
@@ -226,6 +241,11 @@ func buildNamedTypeIndex(file *ast.File) map[int]*ast.NamedType {
 
 func buildDeclIndex(file *ast.File) map[int]ast.Node {
 	idx := make(map[int]ast.Node, 32)
+	for _, u := range file.Uses {
+		if u != nil {
+			idx[u.Pos().Offset] = u
+		}
+	}
 	for _, d := range file.Decls {
 		if n, ok := d.(ast.Node); ok {
 			idx[n.Pos().Offset] = n
@@ -304,6 +324,7 @@ func bridgeRefs(
 	fi nativeResolveFileInfo,
 	identIdx map[int]*ast.Ident,
 	declIdx map[int]ast.Node,
+	fileScope *Scope,
 ) (map[ast.NodeID]*Symbol, []*ast.Ident) {
 	refsByID := make(map[ast.NodeID]*Symbol, len(refs))
 	refIdents := make([]*ast.Ident, 0, len(refs))
@@ -324,10 +345,52 @@ func bridgeRefs(
 		if ident == nil {
 			continue
 		}
-		sym := findOrCreateSymbol(symCache, ref.Name, ref.TargetStart, ref.TargetEnd, fi, declIdx)
+		sym := findOrCreateSymbol(symCache, ref.Name, ref.TargetStart, ref.TargetEnd, fi, declIdx, fileScope)
 		refsByID[ident.ID] = sym
 		refIdents = append(refIdents, ident)
 	}
+	return refsByID, refIdents
+}
+
+func supplementUseAliasRefs(
+	file *ast.File,
+	fileScope *Scope,
+	refsByID map[ast.NodeID]*Symbol,
+	refIdents []*ast.Ident,
+) (map[ast.NodeID]*Symbol, []*ast.Ident) {
+	if file == nil || fileScope == nil {
+		return refsByID, refIdents
+	}
+	aliases := map[string]*Symbol{}
+	for _, u := range file.Uses {
+		name := nativeUseAlias(u)
+		if name == "" {
+			continue
+		}
+		if sym := fileScope.LookupLocal(name); sym != nil {
+			aliases[name] = sym
+		}
+	}
+	if len(aliases) == 0 {
+		return refsByID, refIdents
+	}
+	if refsByID == nil {
+		refsByID = map[ast.NodeID]*Symbol{}
+	}
+	walkReflect(reflect.ValueOf(file), func(id *ast.Ident) {
+		if id == nil || id.ID == 0 {
+			return
+		}
+		if _, exists := refsByID[id.ID]; exists {
+			return
+		}
+		sym := aliases[id.Name]
+		if sym == nil {
+			return
+		}
+		refsByID[id.ID] = sym
+		refIdents = append(refIdents, id)
+	}, nil)
 	return refsByID, refIdents
 }
 
@@ -366,6 +429,7 @@ func findOrCreateSymbol(
 	targetStart, targetEnd int,
 	fi nativeResolveFileInfo,
 	declIdx map[int]ast.Node,
+	fileScope *Scope,
 ) *Symbol {
 	targetOrigOff, ok := nativeToOriginalOffset(fi, targetStart)
 	if !ok {
@@ -375,6 +439,12 @@ func findOrCreateSymbol(
 		return sym
 	}
 	decl := findNearestDecl(declIdx, targetOrigOff)
+	if _, isUse := decl.(*ast.UseDecl); isUse && fileScope != nil {
+		if sym := fileScope.LookupLocal(name); sym != nil {
+			cache[targetOrigOff] = sym
+			return sym
+		}
+	}
 	sym := &Symbol{
 		Name: name,
 		Kind: SymUnknown,
@@ -413,6 +483,9 @@ func defineTopLevelSymbols(
 ) {
 	for _, sym := range symbols {
 		if sym.Depth != 0 {
+			continue
+		}
+		if sym.Kind == "package" {
 			continue
 		}
 		origOff, ok := nativeToOriginalOffset(fi, sym.Start)
