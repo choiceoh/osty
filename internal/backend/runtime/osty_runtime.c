@@ -11285,6 +11285,20 @@ static OSTY_HOT_INLINE void osty_gc_dirty_old_push(osty_gc_header *header) {
     osty_gc_dirty_old_headers[osty_gc_dirty_old_count++] = header;
 }
 
+/* Phase F barrier helper: flip `card_dirty` 0→1 once per major cycle
+ * and push the owner onto the dirty list. The bit doubles as the
+ * membership flag, so subsequent stores from the same owner short-
+ * circuit on the `if (!card_dirty)` test without re-pushing. Inlined
+ * at every call site so the hot path stays branch-free post-codegen. */
+static OSTY_HOT_INLINE void osty_gc_card_dirty_set(
+    osty_gc_header *owner_header) {
+    if (!owner_header->card_dirty) {
+        owner_header->card_dirty = 1;
+        osty_gc_dirty_old_push(owner_header);
+        osty_gc_cards_dirtied_total += 1;
+    }
+}
+
 static bool osty_gc_remembered_edges_contains(void *owner, void *value) {
     int64_t i;
     for (i = 0; i < osty_gc_remembered_edge_count; i++) {
@@ -11421,20 +11435,51 @@ void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) {
             !osty_gc_header_is_pinned(owner_header)) {
             return;
         }
+        if (osty_gc_card_marking_now()) {
+            /* Cards-on young-arena fast path. Most cross-gen edges
+             * target a value in the young arena (the headerful YOUNG
+             * route only handles humongous allocations); the same 4-
+             * compare range check that owner-side already uses confirms
+             * managed + YOUNG without a hash probe. Skipping
+             * `forward_payload` + `find_header` here lets the cards
+             * barrier collapse to "range-check value, set bit, push"
+             * for every Map.insert / List.push into a long-lived
+             * collection — exactly the pattern the lru-sim and
+             * dedup-stress wins ride. */
+            if (osty_gc_arena_is_young_page(value)) {
+                osty_gc_post_write_managed_count += 1;
+                osty_gc_card_dirty_set(owner_header);
+                if (osty_gc_header_is_pinned(owner_header)) {
+                    osty_gc_collection_requested = true;
+                }
+                return;
+            }
+            /* Slow fallback: humongous YOUNG, OLD, or unmanaged value.
+             * Filter OLD→OLD eagerly — the legacy edge log relied on
+             * `compact_after_minor` to drop them post-cycle, but the
+             * dirty list has no equivalent compaction so the only way
+             * to keep the next minor focused on real cross-gen work is
+             * to never insert OLD→OLD entries. */
+            value = osty_gc_forward_payload(value);
+            osty_gc_header *value_header = osty_gc_find_header(value);
+            if (value_header == NULL) {
+                return;
+            }
+            osty_gc_post_write_managed_count += 1;
+            if (value_header->generation == OSTY_GC_GEN_YOUNG) {
+                osty_gc_card_dirty_set(owner_header);
+            }
+            if (osty_gc_header_is_pinned(owner_header)) {
+                osty_gc_collection_requested = true;
+            }
+            return;
+        }
         value = osty_gc_forward_payload(value);
         if (osty_gc_find_header(value) == NULL) {
             return;
         }
         osty_gc_post_write_managed_count += 1;
-        if (osty_gc_card_marking_now()) {
-            if (!owner_header->card_dirty) {
-                owner_header->card_dirty = 1;
-                osty_gc_dirty_old_push(owner_header);
-                osty_gc_cards_dirtied_total += 1;
-            }
-        } else {
-            osty_gc_remembered_edges_append(owner_header->payload, value);
-        }
+        osty_gc_remembered_edges_append(owner_header->payload, value);
         if (osty_gc_header_is_pinned(owner_header)) {
             osty_gc_collection_requested = true;
         }
@@ -11454,21 +11499,41 @@ locked_path:
         osty_gc_release();
         return;
     }
+    if (osty_gc_card_marking_now()) {
+        if (osty_gc_arena_is_young_page(value)) {
+            osty_gc_post_write_managed_count += 1;
+            osty_gc_card_dirty_set(owner_header);
+            if (osty_gc_header_is_pinned(owner_header)) {
+                osty_gc_collection_requested = true;
+            }
+            osty_gc_release();
+            return;
+        }
+        value = osty_gc_forward_payload(value);
+        {
+            osty_gc_header *value_header = osty_gc_find_header(value);
+            if (value_header == NULL) {
+                osty_gc_release();
+                return;
+            }
+            osty_gc_post_write_managed_count += 1;
+            if (value_header->generation == OSTY_GC_GEN_YOUNG) {
+                osty_gc_card_dirty_set(owner_header);
+            }
+        }
+        if (osty_gc_header_is_pinned(owner_header)) {
+            osty_gc_collection_requested = true;
+        }
+        osty_gc_release();
+        return;
+    }
     value = osty_gc_forward_payload(value);
     if (osty_gc_find_header(value) == NULL) {
         osty_gc_release();
         return;
     }
     osty_gc_post_write_managed_count += 1;
-    if (osty_gc_card_marking_now()) {
-        if (!owner_header->card_dirty) {
-            owner_header->card_dirty = 1;
-            osty_gc_dirty_old_push(owner_header);
-            osty_gc_cards_dirtied_total += 1;
-        }
-    } else {
-        osty_gc_remembered_edges_append(owner_header->payload, value);
-    }
+    osty_gc_remembered_edges_append(owner_header->payload, value);
     if (osty_gc_header_is_pinned(owner_header)) {
         osty_gc_collection_requested = true;
     }
