@@ -15,6 +15,16 @@ that says `ci.osty` uses `use go "github.com/osty/osty/internal/cihost"` or
 that `internal/selfhost/ast_lower.osty` is still referenced by the checker
 bundle should be read as historical.
 
+## 2026-04-29 test cleanup update
+
+The broad Go front-end/mid-end test surface was trimmed in favor of
+Osty-authored fixtures and narrow host-boundary checks. Use `just osty`,
+`just front`, and `just short` as the current verification entry points;
+`just osty` includes the currently executable Osty scalar/control-flow, `Int`
+method, and `Int` aggregate test fixtures. Backend, LLVM, stdlib, and runtime
+Go regression tests remain in place; older `go test ./internal/llvmgen -run ...`
+commands below are archive evidence, not the primary way to add new coverage.
+
 ## 2026-04-22 policy update — AST merged-probe gate retired
 
 `TestNativeToolchainMergedIsClean` (formerly at
@@ -184,8 +194,9 @@ before backend emission" wall anymore.
 ```
 go build -o /tmp/osty ./cmd/osty
 /tmp/osty gen   --backend=llvm   /tmp/hello.osty      >/tmp/hello.ll
-go test ./internal/llvmgen -run 'TestGenerateModuleInterfaceVtableEmitted|TestGenerateSafepointKeepsImmutableManagedLocalsAndAggregateFields|TestGenerateManagedAggregateListsTraceNestedRoots|TestGenerateModulePtrBackedListToSetAndBoolPrint' -count=1
-go test ./internal/llvmgen -run 'TestProbeWholeToolchainMerged|TestProbeNativeToolchainMerged' -count=1 -v
+just osty
+just front
+just short
 /tmp/osty check --airepair=false toolchain > /tmp/tc.log 2>&1
 /tmp/osty build --backend=llvm   examples/calc        2>&1
 ```
@@ -243,13 +254,9 @@ $ echo $?
 0
 ```
 
-The same refresh also re-ran the four `internal/llvmgen` tests that were named
-as evidence for the panic and they now pass:
-
-- `TestGenerateModuleInterfaceVtableEmitted`
-- `TestGenerateSafepointKeepsImmutableManagedLocalsAndAggregateFields`
-- `TestGenerateManagedAggregateListsTraceNestedRoots`
-- `TestGenerateModulePtrBackedListToSetAndBoolPrint`
+The four `internal/llvmgen` Go tests named here remain historical evidence.
+Prefer new `.osty` fixtures or narrow host-boundary tests when the MIR-first
+backend work needs more coverage for those shapes.
 
 So the current remaining work should no longer be framed as "LLVM CLI path is
 broken before backend reachability." The backend entry path is alive again; the
@@ -386,8 +393,9 @@ rewire the remaining Go-hosted boundaries."
 1. **Keep the MIR-first native pipeline gate authoritative.**
    `TestNativeToolchainMergedMIRPipelineIsClean` now locks the production-like
    path: MIR-first dispatch with legacy fallback. Future changes that
-   re-introduce a hard wall surface there immediately. When a new wall appears, treat it
-   as Tier A: resolve in a follow-up PR and reference this gate.
+   re-introduce a hard wall surface there immediately. When a new wall appears,
+   capture it through the MIR-first probe, `.osty` fixtures, or a narrow
+   host-boundary test that exercises the remaining Go/Osty handoff.
 
 2. **Keep `osty check toolchain` green.**
    Treat any reintroduced toolchain checker diagnostic as a front-end

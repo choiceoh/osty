@@ -1,0 +1,272 @@
+// int_struct_e2e — executable Osty tests for aggregate lowering with
+// Int fields. This complements the scalar control tests without pulling
+// in String/List/Map paths that are still backend-gated.
+
+use std.testing
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+struct Bounds {
+    lo: Int,
+    hi: Int,
+}
+
+struct Rect {
+    origin: Point,
+    size: Point,
+}
+
+struct Triple {
+    a: Int,
+    b: Int,
+    c: Int,
+}
+
+struct Segment {
+    start: Point,
+    end: Point,
+}
+
+// ─── Struct literals / field reads ────────────────────────────────
+
+fn testStructLiteralReadsFields() {
+    let p = Point { x: 3, y: 7 }
+    testing.assertEq(p.x, 3)
+    testing.assertEq(p.y, 7)
+}
+
+fn testStructFieldsFeedArithmetic() {
+    let p = Point { x: 4, y: 9 }
+    testing.assertEq(p.x * p.y, 36)
+}
+
+fn testNestedStructFieldReads() {
+    let r = Rect { origin: Point { x: 2, y: 3 }, size: Point { x: 5, y: 7 } }
+    testing.assertEq(r.origin.x + r.size.x, 7)
+    testing.assertEq(r.origin.y + r.size.y, 10)
+}
+
+fn testStructFieldComparison() {
+    let b = Bounds { lo: -3, hi: 8 }
+    testing.assertTrue(b.lo < b.hi)
+    testing.assertFalse(b.hi < b.lo)
+}
+
+fn testStructFieldClamp() {
+    let b = Bounds { lo: -10, hi: 10 }
+    let n: Int = 42
+    testing.assertEq(n.clamp(b.lo, b.hi), 10)
+}
+
+// ─── Mutable structs / field assignment ───────────────────────────
+
+fn testMutableStructFieldAssignment() {
+    let mut p = Point { x: 1, y: 2 }
+    p.x = 10
+    p.y = 20
+    testing.assertEq(p.x + p.y, 30)
+}
+
+fn testMutableStructFieldAccumulation() {
+    let mut p = Point { x: 0, y: 1 }
+    for i in 0..4 {
+        p.x = p.x + i
+        p.y = p.y * 2
+    }
+    testing.assertEq(p.x, 6)
+    testing.assertEq(p.y, 16)
+}
+
+fn testNestedMutableStructFieldAssignment() {
+    let mut r = Rect { origin: Point { x: 0, y: 0 }, size: Point { x: 3, y: 4 } }
+    r.origin.x = 5
+    r.origin.y = 6
+    testing.assertEq(r.origin.x * r.size.x, 15)
+    testing.assertEq(r.origin.y * r.size.y, 24)
+}
+
+fn testStructValuesAcrossBranches() {
+    let b = Bounds { lo: 2, hi: 9 }
+    let n: Int = 11
+    let mut out: Int = 0
+    if n > b.hi {
+        out = b.hi
+    } else {
+        out = n
+    }
+    testing.assertEq(out, 9)
+}
+
+fn testStructValuesAcrossLoops() {
+    let mut p = Point { x: 1, y: 1 }
+    for i in 1..5 {
+        p.x = p.x + i
+        p.y = p.y * i
+    }
+    testing.assertEq(p.x, 11)
+    testing.assertEq(p.y, 24)
+}
+
+// ─── Wider aggregate surface ──────────────────────────────────────
+
+fn testTripleFieldReads() {
+    let t = Triple { a: 2, b: 3, c: 5 }
+    testing.assertEq(t.a + t.b + t.c, 10)
+}
+
+fn testTripleFieldArithmetic() {
+    let t = Triple { a: 4, b: 6, c: 8 }
+    testing.assertEq(t.a * t.c - t.b, 26)
+}
+
+fn testTripleFieldComparison() {
+    let t = Triple { a: -1, b: 0, c: 1 }
+    testing.assertTrue(t.a < t.b)
+    testing.assertTrue(t.c > t.b)
+}
+
+fn testMutableTripleFieldAssignment() {
+    let mut t = Triple { a: 1, b: 2, c: 3 }
+    t.a = 10
+    t.b = t.a + t.c
+    testing.assertEq(t.b, 13)
+}
+
+fn testMutableTripleLoopAccumulation() {
+    let mut t = Triple { a: 0, b: 1, c: 2 }
+    for i in 0..4 {
+        t.a = t.a + i
+        t.b = t.b * 2
+        t.c = t.c + t.b
+    }
+    testing.assertEq(t.a, 6)
+    testing.assertEq(t.b, 16)
+    testing.assertEq(t.c, 32)
+}
+
+fn testSegmentDeltaX() {
+    let s = Segment { start: Point { x: 3, y: 4 }, end: Point { x: 10, y: 9 } }
+    testing.assertEq(s.end.x - s.start.x, 7)
+}
+
+fn testSegmentDeltaY() {
+    let s = Segment { start: Point { x: 3, y: 4 }, end: Point { x: 10, y: 9 } }
+    testing.assertEq(s.end.y - s.start.y, 5)
+}
+
+fn testSegmentManhattanLength() {
+    let s = Segment { start: Point { x: 3, y: 4 }, end: Point { x: 10, y: 9 } }
+    testing.assertEq((s.end.x - s.start.x).abs() + (s.end.y - s.start.y).abs(), 12)
+}
+
+fn testMutableSegmentEndpoint() {
+    let mut s = Segment { start: Point { x: 0, y: 0 }, end: Point { x: 1, y: 1 } }
+    s.end.x = s.end.x + 4
+    s.end.y = s.end.y + 5
+    testing.assertEq(s.end.x, 5)
+    testing.assertEq(s.end.y, 6)
+}
+
+fn testNestedSegmentBranch() {
+    let s = Segment { start: Point { x: 7, y: 2 }, end: Point { x: 4, y: 9 } }
+    let mut dx: Int = 0
+    if s.end.x > s.start.x {
+        dx = s.end.x - s.start.x
+    } else {
+        dx = s.start.x - s.end.x
+    }
+    testing.assertEq(dx, 3)
+}
+
+fn testRectAreaFromFields() {
+    let r = Rect { origin: Point { x: 0, y: 0 }, size: Point { x: 6, y: 7 } }
+    testing.assertEq(r.size.x * r.size.y, 42)
+}
+
+fn testRectTranslatedOrigin() {
+    let mut r = Rect { origin: Point { x: 1, y: 2 }, size: Point { x: 3, y: 4 } }
+    r.origin.x = r.origin.x + 10
+    r.origin.y = r.origin.y + 20
+    testing.assertEq(r.origin.x, 11)
+    testing.assertEq(r.origin.y, 22)
+}
+
+fn testRectLoopGrowsSize() {
+    let mut r = Rect { origin: Point { x: 0, y: 0 }, size: Point { x: 1, y: 1 } }
+    for i in 1..5 {
+        r.size.x = r.size.x + i
+        r.size.y = r.size.y * 2
+    }
+    testing.assertEq(r.size.x, 11)
+    testing.assertEq(r.size.y, 16)
+}
+
+fn testBoundsClampLowWithFields() {
+    let b = Bounds { lo: 3, hi: 9 }
+    let n: Int = -2
+    testing.assertEq(n.clamp(b.lo, b.hi), 3)
+}
+
+fn testBoundsClampHighWithFields() {
+    let b = Bounds { lo: 3, hi: 9 }
+    let n: Int = 12
+    testing.assertEq(n.clamp(b.lo, b.hi), 9)
+}
+
+fn testBoundsClampInsideWithFields() {
+    let b = Bounds { lo: 3, hi: 9 }
+    let n: Int = 7
+    testing.assertEq(n.clamp(b.lo, b.hi), 7)
+}
+
+fn testBoundsMutatedBeforeClamp() {
+    let mut b = Bounds { lo: 0, hi: 10 }
+    b.lo = b.lo + 2
+    b.hi = b.hi - 3
+    let n: Int = 9
+    testing.assertEq(n.clamp(b.lo, b.hi), 7)
+}
+
+fn testStructCopiesKeepOriginalValues() {
+    let p = Point { x: 4, y: 5 }
+    let q = p
+    testing.assertEq(q.x + q.y, 9)
+}
+
+fn testStructCopyThenMutateCopy() {
+    let p = Point { x: 4, y: 5 }
+    let mut q = p
+    q.x = 40
+    testing.assertEq(q.x + q.y, 45)
+}
+
+fn testNestedStructValuesAcrossDoubleLoop() {
+    let mut r = Rect { origin: Point { x: 0, y: 0 }, size: Point { x: 0, y: 0 } }
+    for i in 0..3 {
+        for j in 0..3 {
+            r.origin.x = r.origin.x + i
+            r.origin.y = r.origin.y + j
+        }
+    }
+    testing.assertEq(r.origin.x, 9)
+    testing.assertEq(r.origin.y, 9)
+}
+
+fn testStructFieldSignum() {
+    let p = Point { x: -9, y: 4 }
+    testing.assertEq((p.x + p.y).signum(), -1)
+}
+
+fn testStructFieldAbs() {
+    let p = Point { x: -9, y: 4 }
+    testing.assertEq((p.x + p.y).abs(), 5)
+}
+
+fn testStructFieldMinMax() {
+    let p = Point { x: -9, y: 4 }
+    testing.assertEq(p.x.min(p.y), -9)
+    testing.assertEq(p.x.max(p.y), 4)
+}
