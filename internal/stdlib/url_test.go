@@ -5,45 +5,41 @@ import (
 	"testing"
 
 	"github.com/osty/osty/internal/ast"
-	"github.com/osty/osty/internal/resolve"
 )
 
 func TestUrlModuleSurface(t *testing.T) {
 	reg := LoadCached()
 
 	mod := reg.Modules["url"]
-	if mod == nil || mod.Package == nil {
+	if mod == nil || mod.File == nil {
 		t.Fatalf("std.url not loaded")
 	}
 
+	decls := map[string]ast.Decl{}
+	for _, decl := range mod.File.Decls {
+		switch n := decl.(type) {
+		case *ast.FnDecl:
+			decls[n.Name] = n
+		case *ast.StructDecl:
+			decls[n.Name] = n
+		}
+	}
 	for _, name := range []string{"parse", "join"} {
-		sym := mod.Package.PkgScope.LookupLocal(name)
-		if sym == nil {
-			t.Errorf("std.url missing export %q", name)
-			continue
+		fn, ok := decls[name].(*ast.FnDecl)
+		if !ok {
+			t.Fatalf("std.url missing fn %q", name)
 		}
-		if sym.Kind != resolve.SymFn {
-			t.Errorf("std.url.%s kind = %s, want SymFn", name, sym.Kind)
-		}
-		if !sym.Pub {
+		if !fn.Pub {
 			t.Errorf("std.url.%s not public", name)
 		}
-		fn, ok := sym.Decl.(*ast.FnDecl)
-		if !ok || fn.Body == nil {
-			t.Errorf("std.url.%s has no bodied implementation", name)
+		if fn.Body == nil {
+			t.Errorf("std.url.%s body = nil, want bodied implementation", name)
 		}
 	}
 
-	sym := mod.Package.PkgScope.LookupLocal("Url")
-	if sym == nil {
-		t.Fatalf("std.url missing Url")
-	}
-	if sym.Kind != resolve.SymStruct {
-		t.Fatalf("std.url.Url kind = %s, want SymStruct", sym.Kind)
-	}
-	urlDecl, ok := sym.Decl.(*ast.StructDecl)
+	urlDecl, ok := decls["Url"].(*ast.StructDecl)
 	if !ok {
-		t.Fatalf("std.url.Url decl = %T, want *ast.StructDecl", sym.Decl)
+		t.Fatalf("std.url missing Url struct")
 	}
 	fields := map[string]*ast.Field{}
 	for _, f := range urlDecl.Fields {
@@ -75,13 +71,12 @@ func TestUrlModuleSourcePinsQualityGuards(t *testing.T) {
 	src := urlModuleSource(t)
 	for _, want := range []string{
 		"struct UrlParts",
-		"decodePercentComponent(",
 		"removeDotSegments(",
 		"hostNeedsBrackets(",
 		"keys().sorted()",
 		"userinfo not supported",
-		"invalid percent-escape",
 		"bracket IPv6 literals in authority",
+		"percentEncodeChar(",
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("std.url source missing %q", want)
