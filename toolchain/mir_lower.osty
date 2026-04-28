@@ -913,12 +913,13 @@ pub fn hirTypeIsSet(t: HirType) -> Bool {
     }
 }
 
-/// hirTypeIsChannel reports whether `t` is a channel (`thread.Chan<_>`).
-/// Stage 4e tightens this once concurrency lowering lands.
+/// hirTypeIsChannel reports whether `t` is a channel. Historical
+/// sources used `Chan<T>` while the current stdlib/checker surface
+/// yields `Channel<T>`, so accept both spellings at the MIR seam.
 pub fn hirTypeIsChannel(t: HirType) -> Bool {
     match t.kind {
         HirTypeNamed -> {
-            if t.namedName == "Chan" {
+            if t.namedName == "Chan" || t.namedName == "Channel" {
                 true
             } else {
                 false
@@ -1543,6 +1544,88 @@ fn mirLowerExprAsOperandFallback(bs: MirLowerBodyState, e: HirExpr) -> MirOperan
     mirOperandCopy(mirPlace(tmp), hirTypeString(t))
 }
 
+fn mirLowerExprAsOperandHint(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    hint: HirType,
+) -> MirOperand {
+    if !mirLowerShouldPreferHintType(e.typ, hint) {
+        return mirLowerExprAsOperand(bs, e)
+    }
+    if e.kind == HirExprIdent && e.identName == "None"
+        && e.identKind != HirIdentLocal && e.identKind != HirIdentParam {
+        return mirLowerNoneOperandHint(bs, e, hint)
+    }
+    let span = mirSpanFromHir(e.span)
+    let tmp = mirLowerFreshTemp(bs, hint, span)
+    mirLowerExprInto(bs, e, tmp, hint)
+    mirOperandCopy(mirPlace(tmp), hirTypeString(hint))
+}
+
+fn mirLowerNoneOperandHint(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    hint: HirType,
+) -> MirOperand {
+    let span = mirSpanFromHir(e.span)
+    let tmp = mirLowerFreshTemp(bs, hint, span)
+    let rv = mirRVNullary(MirNullaryNone, hirTypeString(hint))
+    mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(tmp), rv, span))
+    mirOperandCopy(mirPlace(tmp), hirTypeString(hint))
+}
+
+fn mirLowerShouldPreferHintType(actual: HirType, hint: HirType) -> Bool {
+    if !hirTypeIsValid(hint) || hirTypeIsErr(hint) {
+        return false
+    }
+    if !hirTypeIsValid(actual) || hirTypeIsErr(actual) {
+        return true
+    }
+    hirTypeContainsVar(actual) && !hirTypeContainsVar(hint)
+}
+
+fn hirTypeContainsVar(t: HirType) -> Bool {
+    match t.kind {
+        HirTypeVar -> true,
+        HirTypeNamed -> {
+            for a in t.namedArgs {
+                if hirTypeContainsVar(a) {
+                    return true
+                }
+            }
+            false
+        },
+        HirTypeOptional -> {
+            if t.optionalInner.len() > 0 {
+                hirTypeContainsVar(t.optionalInner[0])
+            } else {
+                false
+            }
+        },
+        HirTypeTuple -> {
+            for elem in t.tupleElems {
+                if hirTypeContainsVar(elem) {
+                    return true
+                }
+            }
+            false
+        },
+        HirTypeFn -> {
+            for p in t.fnParams {
+                if hirTypeContainsVar(p) {
+                    return true
+                }
+            }
+            if t.fnReturn.len() > 0 {
+                hirTypeContainsVar(t.fnReturn[0])
+            } else {
+                false
+            }
+        },
+        _ -> false,
+    }
+}
+
 /// mirLowerExprInto lowers `e` and stores the produced value into
 /// `dest` (a bare local). Thin wrapper that forwards to
 /// mirLowerExprIntoPlaceImpl — kept separate so Stage 4b's scope
@@ -1769,11 +1852,17 @@ pub fn mirLowerLetStmt(bs: MirLowerBodyState, s: HirStmt) {
     }
     let span = mirSpanFromHir(s.span)
     if s.letHasPattern {
-        mirLowerNoteIssue(
-            bs.l,
-            "mir_lower Stage 4c TODO: destructuring let — pattern kind "
-                + hirPatternKindName(s.letPattern.kind),
-        )
+        if !s.letHasValue {
+            mirLowerNoteIssue(
+                bs.l,
+                "mir_lower: destructuring let without initializer",
+            )
+            return
+        }
+        let scratch = mirLowerNewLocal(bs, "_pat", t, false, span)
+        mirLowerEmitInstr(bs, mirStorageLiveInstr(scratch, span))
+        mirLowerExprInto(bs, s.letValue, scratch, t)
+        mirLowerBindPattern(bs, s.letPattern, mirPlace(scratch), t, span)
         return
     }
     if s.letName == "" {
@@ -2214,11 +2303,11 @@ fn mirLowerForRange(bs: MirLowerBodyState, s: HirStmt) {
     bs.cur = exit
 }
 
-/// mirLowerForIn lowers a `for var in iter` loop. Full iteration
-/// requires real expression lowering to know the iterable's element
-/// type and List / Channel shape (Stage 4d/4e); Stage 4c emits a
-/// minimal shell (header ⇄ body ⇄ exit) so break / continue resolve
-/// correctly and notes an issue for the backend-visible gap.
+/// mirLowerForIn lowers `for pat in iter` over List<T> and Channel<T>.
+/// List iteration emits a counted loop over LenRV + IndexProj. Channel
+/// iteration emits a chan_recv intrinsic, switches on Some/None, and
+/// exits when the channel is closed/drained. Other iterable shapes
+/// still report an issue instead of fabricating a partial loop.
 fn mirLowerForIn(bs: MirLowerBodyState, s: HirStmt) {
     let span = mirSpanFromHir(s.span)
     let iterT = if s.forHasIter {
@@ -2226,39 +2315,239 @@ fn mirLowerForIn(bs: MirLowerBodyState, s: HirStmt) {
     } else {
         hirTypeInvalid()
     }
-
-    // Materialise the iterable via the expr stub so any side effects
-    // (function calls in the iterable expression) at least emit a
-    // placeholder Assign. Real iteration lowering lands in Stage 4d.
-    if s.forHasIter {
-        let iterLocal = mirLowerNewLocal(bs, "_iter", iterT, false, span)
-        mirLowerEmitInstr(bs, mirStorageLiveInstr(iterLocal, span))
-        mirLowerExprInto(bs, s.forIter, iterLocal, iterT)
+    if !s.forHasIter {
+        mirLowerNoteIssue(bs.l, "mir_lower: for-in without iterable")
+        return
     }
-
+    if hirTypeIsChannel(iterT) {
+        mirLowerForInChannel(bs, s, iterT, span)
+        return
+    }
+    if hirTypeIsList(iterT) {
+        mirLowerForInList(bs, s, iterT, span)
+        return
+    }
+    // Keep iterable side effects even for unsupported shapes.
+    let iterLocal = mirLowerNewLocal(bs, "_iter", iterT, false, span)
+    mirLowerEmitInstr(bs, mirStorageLiveInstr(iterLocal, span))
+    mirLowerExprInto(bs, s.forIter, iterLocal, iterT)
     mirLowerNoteIssue(
         bs.l,
-        "mir_lower Stage 4d TODO: for-in iteration over "
+        "mir_lower: for-in over non-List/Channel iterable "
             + hirTypeString(iterT)
-            + " — emitted shell only",
+            + " is not lowered to MIR yet",
+    )
+}
+
+fn mirLowerForInList(
+    bs: MirLowerBodyState,
+    s: HirStmt,
+    iterT: HirType,
+    span: MirSpan,
+) {
+    let elemT = hirTypeFirstArg(iterT)
+    if !hirTypeIsValid(elemT) || hirTypeIsErr(elemT) {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower: for-in over List with unresolved element type is not lowered to MIR yet",
+        )
+        return
+    }
+
+    // Capture iterable once so len/index reads are stable across the loop.
+    let iterLocal = mirLowerNewLocal(bs, "_iter", iterT, false, span)
+    mirLowerEmitInstr(bs, mirStorageLiveInstr(iterLocal, span))
+    mirLowerExprInto(bs, s.forIter, iterLocal, iterT)
+
+    let lenLocal = mirLowerNewLocal(bs, "_len", hirTInt(), false, span)
+    mirLowerEmitInstr(
+        bs,
+        mirAssignInstr(mirPlace(lenLocal), mirRVLen(mirPlace(iterLocal), "Int"), span),
+    )
+
+    let idx = mirLowerNewLocal(bs, "_idx", hirTInt(), true, span)
+    mirLowerEmitInstr(
+        bs,
+        mirAssignInstr(
+            mirPlace(idx),
+            mirRVUse(mirOperandConst(mirConstInt(0, "Int"))),
+            span,
+        ),
     )
 
     let header = mirLowerNewBlock(bs, span)
     let body = mirLowerNewBlock(bs, span)
+    let step = mirLowerNewBlock(bs, span)
     let exit = mirLowerNewBlock(bs, span)
 
     mirLowerTerminate(bs, mirGotoTerm(header, span))
+
     bs.cur = header
-    // Stage 4d wires real iteration; for now a plain goto to the body
-    // plus an Unreachable termination in the exit block keeps the
-    // CFG validator happy without fabricating a termination condition.
-    mirLowerTerminate(bs, mirGotoTerm(body, span))
+    let cmp = mirLowerFreshTemp(bs, hirTBool(), span)
+    let cmpRV = mirRVBinary(
+        MirBinLt,
+        mirOperandCopy(mirPlace(idx), "Int"),
+        mirOperandCopy(mirPlace(lenLocal), "Int"),
+        "Bool",
+    )
+    mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(cmp), cmpRV, span))
+    mirLowerTerminate(
+        bs,
+        mirBranchTerm(mirOperandCopy(mirPlace(cmp), "Bool"), body, exit, span),
+    )
 
     bs.cur = body
-    mirLowerForBodyWithFrames(bs, s.forBody, header, exit)
+    mirLowerPushScope(bs)
+    mirLowerPushDeferScope(bs)
+    bs.loopStack.push(mirLowerLoopFrame(
+        exit,
+        step,
+        mirLowerCurrentDeferDepth(bs) - 1,
+        mirLowerCurrentScopeDepth(bs),
+    ))
+
+    let elemLocal = mirLowerNewLocal(bs, "_elem", elemT, false, span)
+    let elemTypeText = hirTypeString(elemT)
+    let elemPlace = mirPlaceProject(
+        mirPlace(iterLocal),
+        mirIndexProjLocal(idx, elemTypeText),
+    )
+    mirLowerEmitInstr(
+        bs,
+        mirAssignInstr(
+            mirPlace(elemLocal),
+            mirRVUse(mirOperandCopy(elemPlace, elemTypeText)),
+            span,
+        ),
+    )
+    mirLowerBindForElement(bs, s, elemLocal, elemT, span)
+    mirLowerForBodyAlreadyFramed(bs, s.forBody, span)
+    mirLowerTerminate(bs, mirGotoTerm(step, span))
+
+    bs.cur = step
+    let stepRV = mirRVBinary(
+        MirBinAdd,
+        mirOperandCopy(mirPlace(idx), "Int"),
+        mirOperandConst(mirConstInt(1, "Int")),
+        "Int",
+    )
+    mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(idx), stepRV, span))
     mirLowerTerminate(bs, mirGotoTerm(header, span))
 
     bs.cur = exit
+}
+
+fn mirLowerForInChannel(
+    bs: MirLowerBodyState,
+    s: HirStmt,
+    iterT: HirType,
+    span: MirSpan,
+) {
+    let elemT = hirTypeFirstArg(iterT)
+    if !hirTypeIsValid(elemT) || hirTypeIsErr(elemT) {
+        mirLowerNoteIssue(
+            bs.l,
+            "mir_lower: for-in over Channel with unresolved element type is not lowered to MIR yet",
+        )
+        return
+    }
+    let optT = hirTypeOptional(elemT)
+
+    let chanLocal = mirLowerNewLocal(bs, "_chan", iterT, false, span)
+    mirLowerEmitInstr(bs, mirStorageLiveInstr(chanLocal, span))
+    mirLowerExprInto(bs, s.forIter, chanLocal, iterT)
+
+    let header = mirLowerNewBlock(bs, span)
+    let body = mirLowerNewBlock(bs, span)
+    let step = mirLowerNewBlock(bs, span)
+    let exit = mirLowerNewBlock(bs, span)
+
+    mirLowerTerminate(bs, mirGotoTerm(header, span))
+
+    bs.cur = header
+    let recvLocal = mirLowerNewLocal(bs, "_recv", optT, false, span)
+    let mut recvArgs: List<MirOperand> = []
+    recvArgs.push(mirOperandCopy(mirPlace(chanLocal), hirTypeString(iterT)))
+    mirLowerEmitInstr(
+        bs,
+        mirIntrinsicInstr(true, mirPlace(recvLocal), MirIntrinsicChanRecv, recvArgs, span),
+    )
+
+    let disc = mirLowerFreshTemp(bs, hirTInt(), span)
+    mirLowerEmitInstr(
+        bs,
+        mirAssignInstr(
+            mirPlace(disc),
+            mirRVDiscriminant(mirPlace(recvLocal), "Int"),
+            span,
+        ),
+    )
+    let mut cases: List<MirSwitchCase> = []
+    cases.push(mirSwitchCase(mirLowerSomeTagOf(optT), body, "Some"))
+    mirLowerTerminate(
+        bs,
+        mirSwitchIntTerm(mirOperandCopy(mirPlace(disc), "Int"), cases, exit, span),
+    )
+
+    bs.cur = body
+    mirLowerPushScope(bs)
+    mirLowerPushDeferScope(bs)
+    bs.loopStack.push(mirLowerLoopFrame(
+        exit,
+        step,
+        mirLowerCurrentDeferDepth(bs) - 1,
+        mirLowerCurrentScopeDepth(bs),
+    ))
+
+    let elemLocal = mirLowerNewLocal(bs, "_elem", elemT, false, span)
+    let elemTypeText = hirTypeString(elemT)
+    let payload = mirPlaceProject(
+        mirPlace(recvLocal),
+        mirVariantProj(mirLowerSomeTagOf(optT), "Some", 0, elemTypeText),
+    )
+    mirLowerEmitInstr(
+        bs,
+        mirAssignInstr(
+            mirPlace(elemLocal),
+            mirRVUse(mirOperandCopy(payload, elemTypeText)),
+            span,
+        ),
+    )
+    mirLowerBindForElement(bs, s, elemLocal, elemT, span)
+    mirLowerForBodyAlreadyFramed(bs, s.forBody, span)
+    mirLowerTerminate(bs, mirGotoTerm(step, span))
+
+    bs.cur = step
+    mirLowerTerminate(bs, mirGotoTerm(header, span))
+    bs.cur = exit
+}
+
+fn mirLowerBindForElement(
+    bs: MirLowerBodyState,
+    s: HirStmt,
+    elemLocal: Int,
+    elemT: HirType,
+    span: MirSpan,
+) {
+    if s.forHasPattern {
+        mirLowerBindPattern(bs, s.forPattern, mirPlace(elemLocal), elemT, span)
+    } else if s.forVar != "" {
+        mirLowerBindName(bs, s.forVar, elemLocal)
+    }
+}
+
+fn mirLowerForBodyAlreadyFramed(bs: MirLowerBodyState, body: HirBlock, span: MirSpan) {
+    for st in body.stmts {
+        mirLowerStmt(bs, st)
+    }
+    if body.hasResult {
+        let _ = mirLowerExprAsOperand(bs, body.result)
+    }
+    mirLowerReplayTopFrame(bs, mirSpanFromHir(body.span))
+    mirLowerPopLoopFrame(bs)
+    mirLowerPopDeferScope(bs)
+    mirLowerPopScope(bs)
+    let _ = span
 }
 
 /// mirLowerForBodyWithFrames lowers the body of a for loop, pushing
@@ -2301,6 +2590,171 @@ fn mirLowerForBodyWithFramesStep(
     breakBlock: Int,
 ) {
     mirLowerForBodyWithFrames(bs, body, stepBlock, breakBlock)
+}
+
+// ---- Irrefutable pattern binding ----------------------------------
+
+/// mirLowerBindPattern destructures a value that is already known to
+/// match `pat` and introduces any bindings into the current scope.
+/// Used by destructuring let, for-in heads, and variant payload
+/// branches. Refutable-only pattern forms (literal/range/or) are
+/// intentionally diagnosed rather than treated as a runtime test;
+/// decision-tree lowering owns those tests.
+fn mirLowerBindPattern(
+    bs: MirLowerBodyState,
+    pat: HirPattern,
+    scrutinee: MirPlace,
+    scrutT: HirType,
+    span: MirSpan,
+) {
+    match pat.kind {
+        HirPatInvalid -> {},
+        HirPatWild -> {},
+        HirPatIdent -> mirLowerBindPatternName(
+            bs,
+            pat.identName,
+            pat.identMut,
+            scrutinee,
+            scrutT,
+            span,
+        ),
+        HirPatBinding -> {
+            mirLowerBindPatternName(
+                bs,
+                pat.bindingName,
+                false,
+                scrutinee,
+                scrutT,
+                span,
+            )
+            if pat.bindingChild.len() > 0 {
+                mirLowerBindPattern(bs, pat.bindingChild[0], scrutinee, scrutT, span)
+            }
+        },
+        HirPatTuple -> mirLowerBindTuplePattern(bs, pat, scrutinee, scrutT, span),
+        HirPatStruct -> mirLowerBindStructPattern(bs, pat, scrutinee, scrutT, span),
+        HirPatVariant -> mirLowerBindVariantPattern(bs, pat, scrutinee, scrutT, span),
+        HirPatError -> mirLowerNoteIssue(
+            bs.l,
+            "mir_lower: error pattern reached MIR: " + pat.errorNote,
+        ),
+        _ -> mirLowerNoteIssue(
+            bs.l,
+            "mir_lower: refutable pattern kind "
+                + hirPatternKindName(pat.kind)
+                + " cannot bind without a decision tree",
+        ),
+    }
+}
+
+fn mirLowerBindPatternName(
+    bs: MirLowerBodyState,
+    name: String,
+    mutable: Bool,
+    scrutinee: MirPlace,
+    scrutT: HirType,
+    span: MirSpan,
+) {
+    if name == "" {
+        return
+    }
+    let id = mirLowerNewLocal(bs, name, scrutT, mutable, span)
+    mirLowerEmitInstr(bs, mirStorageLiveInstr(id, span))
+    let srcOp = mirOperandCopy(scrutinee, hirTypeString(scrutT))
+    mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(id), mirRVUse(srcOp), span))
+    mirLowerBindName(bs, name, id)
+}
+
+fn mirLowerBindTuplePattern(
+    bs: MirLowerBodyState,
+    pat: HirPattern,
+    scrutinee: MirPlace,
+    scrutT: HirType,
+    span: MirSpan,
+) {
+    let mut i = 0
+    for elem in pat.tupleElems {
+        let elemT = mirLowerTupleElementTypeAt(scrutT, i)
+        let elemPlace = mirPlaceProject(
+            scrutinee,
+            mirTupleProj(i, hirTypeString(elemT)),
+        )
+        mirLowerBindPattern(bs, elem, elemPlace, elemT, span)
+        i = i + 1
+    }
+}
+
+fn mirLowerBindStructPattern(
+    bs: MirLowerBodyState,
+    pat: HirPattern,
+    scrutinee: MirPlace,
+    scrutT: HirType,
+    span: MirSpan,
+) {
+    let typeName = if pat.structTypeName != "" {
+        pat.structTypeName
+    } else {
+        hirTypeNameOf(scrutT)
+    }
+    for f in pat.structFields {
+        let fieldT = mirLowerStructFieldType(bs.l, typeName, f.name)
+        let fieldIdx = mirLowerStructFieldIndex(bs.l, typeName, f.name)
+        let child = mirPlaceProject(
+            scrutinee,
+            mirFieldProj(fieldIdx, f.name, hirTypeString(fieldT)),
+        )
+        if f.hasPattern {
+            mirLowerBindPattern(bs, f.pattern, child, fieldT, span)
+        } else {
+            mirLowerBindPatternName(bs, f.name, false, child, fieldT, span)
+        }
+    }
+}
+
+fn mirLowerBindVariantPattern(
+    bs: MirLowerBodyState,
+    pat: HirPattern,
+    scrutinee: MirPlace,
+    scrutT: HirType,
+    span: MirSpan,
+) {
+    let enumName = if pat.variantEnum != "" {
+        pat.variantEnum
+    } else {
+        hirTypeNameOf(scrutT)
+    }
+    let variantIdx = if enumName != "" {
+        let found = mirLowerFindVariantIndex(bs.l, enumName, pat.variantName)
+        if found >= 0 {
+            found
+        } else {
+            mirLowerVariantIndexByName(bs.l, scrutT, pat.variantName)
+        }
+    } else {
+        mirLowerVariantIndexByName(bs.l, scrutT, pat.variantName)
+    }
+    let safeVariantIdx = if variantIdx >= 0 { variantIdx } else { 0 }
+    let mut i = 0
+    for arg in pat.variantArgs {
+        let payloadT = mirLowerVariantPayloadTypeForScrut(
+            bs.l,
+            scrutT,
+            enumName,
+            pat.variantName,
+            i,
+        )
+        let child = mirPlaceProject(
+            scrutinee,
+            mirVariantProj(
+                safeVariantIdx,
+                pat.variantName,
+                i,
+                hirTypeString(payloadT),
+            ),
+        )
+        mirLowerBindPattern(bs, arg, child, payloadT, span)
+        i = i + 1
+    }
 }
 
 fn mirLowerPopLoopFrame(bs: MirLowerBodyState) {
@@ -2874,8 +3328,9 @@ pub fn mirLowerCoalesceExprInto(
 ///     against an operand holding the callable value
 ///   - Bare Ident callee with IdentVariant → route to variant lit
 ///     (Call-as-variant-ctor syntax)
-///   - Keyword / default / use-alias-qualified / method-via-field
-///     calls → Stage 4e-2 TODO (record issue, emit placeholder)
+///   - Keyword / default args are ordered from the signature table
+///     when the callee is known; indirect calls preserve source order
+///     while still threading positional type hints from FnType.
 ///
 /// Concurrency / runtime / stdlib intrinsic dispatch is left for
 /// Stage 4e-2 / 4g to keep this PR focused on the call shape itself.
@@ -3015,9 +3470,9 @@ fn mirLowerCallIdent(
     }
 }
 
-/// mirLowerDirectFnCall emits `CallInstr` with a FnRef callee. Only
-/// positional args are supported at Stage 4e-1 — keyword / default
-/// args record a Stage 4e-2 TODO.
+/// mirLowerDirectFnCall emits `CallInstr` with a FnRef callee. When
+/// pass 1 collected the function signature, keyword args are mapped to
+/// parameter slots and omitted params lower from their default values.
 fn mirLowerDirectFnCall(
     bs: MirLowerBodyState,
     e: HirExpr,
@@ -3026,13 +3481,12 @@ fn mirLowerDirectFnCall(
     destT: HirType,
     span: MirSpan,
 ) {
-    if mirLowerCallArgsHaveKeyword(e.callArgs) {
-        mirLowerNoteIssue(
-            bs.l,
-            "mir_lower Stage 4e-2 TODO: keyword args in call to \"" + callee.identName + "\"",
-        )
+    let sigIdx = mirLowerSignatureForFn(bs.l, callee.identName)
+    let operands = if sigIdx >= 0 {
+        mirLowerOrderCallArgs(bs, e.callArgs, bs.l.fnSigs[sigIdx])
+    } else {
+        mirLowerLowerCallArgs(bs, e.callArgs)
     }
-    let operands = mirLowerLowerCallArgs(bs, e.callArgs)
     let calleeTypeText = hirTypeString(callee.typ)
     let hasDest = !hirTypeIsUnit(destT)
     let instr = mirCallInstr(
@@ -3057,11 +3511,15 @@ fn mirLowerIndirectCall(
     if mirLowerCallArgsHaveKeyword(e.callArgs) {
         mirLowerNoteIssue(
             bs.l,
-            "mir_lower Stage 4e-2 TODO: keyword args in indirect call",
+            "mir_lower: keyword args in indirect call cannot be resolved without a signature",
         )
     }
     let calleeOp = mirLowerExprAsOperand(bs, callee)
-    let operands = mirLowerLowerCallArgs(bs, e.callArgs)
+    let operands = mirLowerLowerCallArgsByTypes(
+        bs,
+        e.callArgs,
+        mirLowerParamTypesOf(callee.typ),
+    )
     let hasDest = !hirTypeIsUnit(destT)
     let instr = mirIndirectCallInstr(
         hasDest,
@@ -3109,6 +3567,116 @@ fn mirLowerLowerCallArgs(bs: MirLowerBodyState, args: List<HirArg>) -> List<MirO
     out
 }
 
+fn mirLowerLowerCallArgsByTypes(
+    bs: MirLowerBodyState,
+    args: List<HirArg>,
+    paramTypes: List<HirType>,
+) -> List<MirOperand> {
+    if paramTypes.len() == 0 {
+        return mirLowerLowerCallArgs(bs, args)
+    }
+    let mut out: List<MirOperand> = []
+    let mut i = 0
+    for a in args {
+        if !hirArgIsKeyword(a) && i < paramTypes.len() {
+            out.push(mirLowerExprAsOperandHint(bs, a.value, paramTypes[i]))
+        } else {
+            out.push(mirLowerExprAsOperand(bs, a.value))
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn mirLowerOrderCallArgs(
+    bs: MirLowerBodyState,
+    args: List<HirArg>,
+    sig: MirLowerFnSignature,
+) -> List<MirOperand> {
+    if sig.params.len() == 0 {
+        if args.len() > 0 {
+            mirLowerNoteIssue(
+                bs.l,
+                "mir_lower: call \"" + sig.symbol + "\" received args but has no params",
+            )
+        }
+        let mut out: List<MirOperand> = []
+        for a in args {
+            let _ = mirLowerExprAsOperand(bs, a.value)
+        }
+        return out
+    }
+    let mut out: List<MirOperand> = []
+    let mut filled: List<Bool> = []
+    for p in sig.params {
+        out.push(mirOperandConst(mirConstUnit()))
+        filled.push(false)
+    }
+
+    let mut pos = 0
+    for a in args {
+        if hirArgIsKeyword(a) {
+            let idx = mirLowerParamIndex(sig, a.name)
+            if idx < 0 {
+                mirLowerNoteIssue(
+                    bs.l,
+                    "mir_lower: call \"" + sig.symbol + "\" unknown keyword \"" + a.name + "\"",
+                )
+                let _ = mirLowerExprAsOperand(bs, a.value)
+            } else {
+                out[idx] = mirLowerExprAsOperandHint(bs, a.value, sig.params[idx].typ)
+                filled[idx] = true
+            }
+        } else {
+            if pos < sig.params.len() {
+                out[pos] = mirLowerExprAsOperandHint(bs, a.value, sig.params[pos].typ)
+                filled[pos] = true
+            } else {
+                mirLowerNoteIssue(
+                    bs.l,
+                    "mir_lower: call \"" + sig.symbol + "\" has extra positional arg",
+                )
+                let _ = mirLowerExprAsOperand(bs, a.value)
+            }
+            pos = pos + 1
+        }
+    }
+
+    let mut i = 0
+    for p in sig.params {
+        if !filled[i] {
+            if p.hasDefault {
+                out[i] = mirLowerExprAsOperandHint(bs, p.defaultValue, p.typ)
+            } else {
+                mirLowerNoteIssue(
+                    bs.l,
+                    "mir_lower: call \"" + sig.symbol + "\" missing param \"" + p.name + "\"",
+                )
+            }
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn mirLowerParamIndex(sig: MirLowerFnSignature, name: String) -> Int {
+    let mut i = 0
+    for p in sig.params {
+        if p.name == name {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn mirLowerParamTypesOf(t: HirType) -> List<HirType> {
+    match t.kind {
+        HirTypeFn -> t.fnParams,
+        _ -> [],
+    }
+}
+
 /// mirLowerIntrinsicCallInto lowers an `IntrinsicCall` HIR node into
 /// a MIR `IntrinsicInstr`. HIR's IntrinsicKind enum only covers the
 /// print family (print / println / eprint / eprintln); extend this
@@ -3153,12 +3721,11 @@ fn hirIntrinsicToMir(k: HirIntrinsicKind) -> MirIntrinsicKind {
 // Stage 4e-1: StructLit / VariantLit / RangeLit
 // ====================================================================
 
-/// mirLowerStructLitInto lowers `Type { field: value, ... }`. Stage
-/// 4e-1 supports the exact-fields form; `..spread` adds a Stage 4e-2
-/// TODO (the spread base is still lowered as a side effect). Field
-/// ordering follows the declared struct layout from pass 1b; missing
-/// fields record an issue but do not short-circuit (so we still
-/// produce a structural Aggregate RV).
+/// mirLowerStructLitInto lowers `Type { field: value, ..base }`.
+/// Field ordering follows the declared struct layout from pass 1b.
+/// Explicit fields win; omitted fields copy from the spread base when
+/// present; remaining holes record an issue but still produce a
+/// structural Aggregate RV.
 pub fn mirLowerStructLitInto(
     bs: MirLowerBodyState,
     e: HirExpr,
@@ -3166,12 +3733,6 @@ pub fn mirLowerStructLitInto(
     destT: HirType,
 ) {
     let span = mirSpanFromHir(e.span)
-    if e.structHasSpread {
-        mirLowerNoteIssue(
-            bs.l,
-            "mir_lower Stage 4e-2 TODO: struct literal spread — omitting spread base",
-        )
-    }
     let typeName = if e.structTypeName != "" {
         e.structTypeName
     } else {
@@ -3190,8 +3751,8 @@ fn mirLowerBuildStructLitFields(
 ) -> List<MirOperand> {
     // Walk the layout's declared field order. For each layout field,
     // find the matching HirStructLitField and lower it. Missing
-    // fields fall back to a unit-const placeholder (defer default /
-    // spread resolution to 4e-2).
+    // fields copy from the spread base when available, otherwise fall
+    // back to a unit-const placeholder.
     let layoutIdx = mirLowerFindStructLayoutIndex(bs.l, typeName)
     if layoutIdx < 0 {
         mirLowerNoteIssue(
@@ -3210,15 +3771,21 @@ fn mirLowerBuildStructLitFields(
         return out
     }
     let layout = bs.l.out.layouts.structs[layoutIdx]
+    let spreadPlace = mirLowerStructSpreadPlace(bs, e)
+    let hasSpread = mirLowerPlaceIsValid(spreadPlace)
     let mut out: List<MirOperand> = []
     for fld in layout.fields {
         let src = mirLowerFindStructLitField(e.structFields, fld.name)
         if src.name == "" {
-            mirLowerNoteIssue(
-                bs.l,
-                "mir_lower Stage 4e-2 TODO: struct literal missing field \"" + fld.name + "\" (defaults / spread not resolved)",
-            )
-            out.push(mirOperandConst(mirConstUnit()))
+            if hasSpread {
+                out.push(mirLowerStructSpreadFieldOperand(spreadPlace, fld))
+            } else {
+                mirLowerNoteIssue(
+                    bs.l,
+                    "mir_lower: struct literal missing field \"" + fld.name + "\"",
+                )
+                out.push(mirOperandConst(mirConstUnit()))
+            }
         } else if src.hasValue {
             out.push(mirLowerExprAsOperand(bs, src.value))
         } else {
@@ -3226,6 +3793,21 @@ fn mirLowerBuildStructLitFields(
         }
     }
     out
+}
+
+fn mirLowerStructSpreadPlace(bs: MirLowerBodyState, e: HirExpr) -> MirPlace {
+    if !e.structHasSpread || e.structSpread.len() == 0 {
+        return mirPlace(-1)
+    }
+    mirLowerReceiverPlace(bs, e.structSpread[0])
+}
+
+fn mirLowerStructSpreadFieldOperand(spreadPlace: MirPlace, fld: MirFieldLayout) -> MirOperand {
+    let child = mirPlaceProject(
+        spreadPlace,
+        mirFieldProj(fld.index, fld.name, fld.typ),
+    )
+    mirOperandCopy(child, fld.typ)
 }
 
 fn mirLowerShorthandFieldOperand(
@@ -3289,12 +3871,22 @@ pub fn mirLowerVariantLitInto(
     for a in e.variantArgs {
         fieldOps.push(mirLowerExprAsOperand(bs, a.value))
     }
+    let variantT = mirLowerChooseVariantType(e.typ, destT)
     let enumName = if e.variantEnum != "" {
         e.variantEnum
     } else {
-        hirTypeNameOf(e.typ)
+        hirTypeNameOf(variantT)
     }
-    let variantIdx = mirLowerFindVariantIndex(bs.l, enumName, e.variantName)
+    let variantIdx = if enumName != "" {
+        let found = mirLowerFindVariantIndex(bs.l, enumName, e.variantName)
+        if found >= 0 {
+            found
+        } else {
+            mirLowerVariantIndexByName(bs.l, variantT, e.variantName)
+        }
+    } else {
+        mirLowerVariantIndexByName(bs.l, variantT, e.variantName)
+    }
     if variantIdx < 0 && enumName != "" {
         mirLowerNoteIssue(
             bs.l,
@@ -3305,10 +3897,66 @@ pub fn mirLowerVariantLitInto(
         variantIdx,
         e.variantName,
         fieldOps,
-        hirTypeString(e.typ),
+        hirTypeString(variantT),
     )
     mirLowerEmitInstr(bs, mirAssignInstr(dest, rv, span))
-    let _ = destT
+}
+
+fn mirLowerChooseVariantType(ownT: HirType, hintT: HirType) -> HirType {
+    if !hirTypeIsValid(ownT) || hirTypeIsErr(ownT) {
+        if hirTypeIsValid(hintT) && !hirTypeIsErr(hintT) {
+            return hintT
+        }
+        return ownT
+    }
+    if hirTypeHasErrArg(ownT) && hirTypeIsValid(hintT) && !hirTypeHasErrArg(hintT) {
+        return hintT
+    }
+    ownT
+}
+
+fn hirTypeHasErrArg(t: HirType) -> Bool {
+    if hirTypeIsErr(t) {
+        return true
+    }
+    match t.kind {
+        HirTypeNamed -> {
+            for a in t.namedArgs {
+                if hirTypeHasErrArg(a) {
+                    return true
+                }
+            }
+            false
+        },
+        HirTypeOptional -> {
+            if t.optionalInner.len() > 0 {
+                hirTypeHasErrArg(t.optionalInner[0])
+            } else {
+                false
+            }
+        },
+        HirTypeTuple -> {
+            for elem in t.tupleElems {
+                if hirTypeHasErrArg(elem) {
+                    return true
+                }
+            }
+            false
+        },
+        HirTypeFn -> {
+            for p in t.fnParams {
+                if hirTypeHasErrArg(p) {
+                    return true
+                }
+            }
+            if t.fnReturn.len() > 0 {
+                hirTypeHasErrArg(t.fnReturn[0])
+            } else {
+                false
+            }
+        },
+        _ -> false,
+    }
 }
 
 fn mirLowerFindVariantIndex(l: MirLowerer, enumName: String, variant: String) -> Int {
@@ -3778,10 +4426,9 @@ pub fn mirLowerRebuildErrorIntoReturn(
 // ---- IfLet variant destructure ------------------------------------
 
 /// mirLowerIfLetExprInto handles `if let pat = scrut { then } else
-/// { else }`. Stage 4e-2 supports variant patterns (the only
-/// refutable shape the lowerer currently handles via a discriminant
-/// switch); non-variant patterns record a Stage 4f TODO issue and
-/// always take the else branch.
+/// { else }`. Variant patterns flow through a discriminant switch.
+/// Irrefutable patterns bind the scrutinee and always execute the
+/// then body. Other refutable shapes conservatively execute else.
 pub fn mirLowerIfLetExprInto(
     bs: MirLowerBodyState,
     e: HirExpr,
@@ -3803,11 +4450,9 @@ pub fn mirLowerIfLetExprInto(
         mirLowerExprInto(bs, e.ifLetScrutinee[0], scrutLocal, scrutT)
     }
 
-    // Only variant patterns flow through the discriminant-switch path;
-    // other shapes always fall to the else branch with a TODO note.
     match e.ifLetPattern.kind {
         HirPatVariant -> mirLowerIfLetVariant(bs, e, scrutLocal, scrutT, dest, destT, span),
-        _ -> mirLowerIfLetUnsupported(bs, e, dest, destT, span),
+        _ -> mirLowerIfLetNonVariant(bs, e, scrutLocal, scrutT, dest, destT, span),
     }
 
     mirLowerPopScope(bs)
@@ -3828,7 +4473,16 @@ fn mirLowerIfLetVariant(
     } else {
         hirTypeNameOf(scrutT)
     }
-    let varIdx = mirLowerFindVariantIndex(bs.l, enumName, pat.variantName)
+    let varIdx = if enumName != "" {
+        let found = mirLowerFindVariantIndex(bs.l, enumName, pat.variantName)
+        if found >= 0 {
+            found
+        } else {
+            mirLowerVariantIndexByName(bs.l, scrutT, pat.variantName)
+        }
+    } else {
+        mirLowerVariantIndexByName(bs.l, scrutT, pat.variantName)
+    }
 
     // Discriminant + SwitchInt.
     let disc = mirLowerFreshTemp(bs, hirTInt(), span)
@@ -3855,7 +4509,7 @@ fn mirLowerIfLetVariant(
     bs.cur = thenBB
     mirLowerPushScope(bs)
     mirLowerPushDeferScope(bs)
-    mirLowerBindVariantPayload(bs, pat, scrutLocal, span)
+    mirLowerBindVariantPayload(bs, pat, mirPlace(scrutLocal), scrutT, span)
     if e.ifLetThen.len() > 0 {
         let body = e.ifLetThen[0]
         for s in body.stmts {
@@ -3891,17 +4545,37 @@ fn mirLowerIfLetVariant(
     bs.cur = merge
 }
 
-fn mirLowerIfLetUnsupported(
+fn mirLowerIfLetNonVariant(
     bs: MirLowerBodyState,
     e: HirExpr,
+    scrutLocal: Int,
+    scrutT: HirType,
     dest: MirPlace,
     destT: HirType,
     span: MirSpan,
 ) {
+    if mirLowerPatternIsIrrefutable(e.ifLetPattern) {
+        mirLowerPushScope(bs)
+        mirLowerPushDeferScope(bs)
+        mirLowerBindPattern(bs, e.ifLetPattern, mirPlace(scrutLocal), scrutT, span)
+        if e.ifLetThen.len() > 0 {
+            let body = e.ifLetThen[0]
+            for s in body.stmts {
+                mirLowerStmt(bs, s)
+            }
+            if body.hasResult {
+                mirLowerExprIntoPlace(bs, body.result, dest, destT)
+            }
+            mirLowerReplayTopFrame(bs, mirSpanFromHir(body.span))
+        }
+        mirLowerPopDeferScope(bs)
+        mirLowerPopScope(bs)
+        return
+    }
     mirLowerNoteIssue(
         bs.l,
-        "mir_lower Stage 4f TODO: if-let with non-variant pattern ("
-            + hirPatternKindName(e.ifLetPattern.kind) + ") — always taking else",
+        "mir_lower: if-let with refutable non-variant pattern ("
+            + hirPatternKindName(e.ifLetPattern.kind) + ") — taking else",
     )
     // Emit the else body (if any) unconditionally; otherwise a
     // unit-const Assign keeps `dest` well-formed.
@@ -3927,61 +4601,84 @@ fn mirLowerIfLetUnsupported(
     let _ = destT
 }
 
-/// mirLowerBindVariantPayload binds the positional args of a
-/// VariantPat to fresh locals after a successful discriminant check.
-/// Only handles the "flat" shape (payload positions are IdentPat /
-/// WildPat) — nested patterns route through a Stage 4f TODO note so
-/// the shape at least lands.
-fn mirLowerBindVariantPayload(
-    bs: MirLowerBodyState,
-    pat: HirPattern,
-    scrutLocal: Int,
-    span: MirSpan,
-) {
-    let varIdx = mirLowerFindVariantIndex(bs.l, pat.variantEnum, pat.variantName)
-    let mut i = 0
-    for arg in pat.variantArgs {
-        let payloadT = mirLowerVariantPayloadType(bs.l, pat.variantEnum, pat.variantName, i)
-        let payloadTypeText = hirTypeString(payloadT)
-        let proj = mirVariantProj(
-            if varIdx >= 0 { varIdx } else { 0 },
-            pat.variantName,
-            i,
-            payloadTypeText,
-        )
-        let childPlace = mirPlaceProject(mirPlace(scrutLocal), proj)
-        mirLowerBindIrrefutable(bs, arg, childPlace, payloadT, span)
-        i = i + 1
+fn mirLowerPatternIsIrrefutable(p: HirPattern) -> Bool {
+    match p.kind {
+        HirPatWild -> true,
+        HirPatIdent -> true,
+        HirPatBinding -> {
+            if p.bindingChild.len() > 0 {
+                mirLowerPatternIsIrrefutable(p.bindingChild[0])
+            } else {
+                true
+            }
+        },
+        HirPatTuple -> {
+            for elem in p.tupleElems {
+                if !mirLowerPatternIsIrrefutable(elem) {
+                    return false
+                }
+            }
+            true
+        },
+        HirPatStruct -> {
+            for f in p.structFields {
+                if f.hasPattern && !mirLowerPatternIsIrrefutable(f.pattern) {
+                    return false
+                }
+            }
+            true
+        },
+        _ -> false,
     }
 }
 
-/// mirLowerBindIrrefutable binds an irrefutable sub-pattern (IdentPat /
-/// WildPat) reachable after a successful discriminant branch. Nested
-/// refutable patterns record a TODO issue.
-fn mirLowerBindIrrefutable(
+/// mirLowerBindVariantPayload binds the positional args of a
+/// VariantPat to fresh locals after a successful discriminant check.
+/// Payload args reuse the general irrefutable binder, so nested tuple
+/// / struct / binding shapes are preserved once the variant tag has
+/// already selected the arm.
+fn mirLowerBindVariantPayload(
     bs: MirLowerBodyState,
     pat: HirPattern,
     scrutinee: MirPlace,
     scrutT: HirType,
     span: MirSpan,
 ) {
-    match pat.kind {
-        HirPatWild -> {},
-        HirPatIdent -> {
-            let id = mirLowerNewLocal(bs, pat.identName, scrutT, pat.identMut, span)
-            mirLowerEmitInstr(bs, mirStorageLiveInstr(id, span))
-            let srcOp = mirOperandCopy(scrutinee, hirTypeString(scrutT))
-            mirLowerEmitInstr(
-                bs,
-                mirAssignInstr(mirPlace(id), mirRVUse(srcOp), span),
-            )
-            mirLowerBindName(bs, pat.identName, id)
-        },
-        _ -> mirLowerNoteIssue(
+    let enumName = if pat.variantEnum != "" {
+        pat.variantEnum
+    } else {
+        hirTypeNameOf(scrutT)
+    }
+    let varIdx = if enumName != "" {
+        let found = mirLowerFindVariantIndex(bs.l, enumName, pat.variantName)
+        if found >= 0 {
+            found
+        } else {
+            mirLowerVariantIndexByName(bs.l, scrutT, pat.variantName)
+        }
+    } else {
+        mirLowerVariantIndexByName(bs.l, scrutT, pat.variantName)
+    }
+    let safeVarIdx = if varIdx >= 0 { varIdx } else { 0 }
+    let mut i = 0
+    for arg in pat.variantArgs {
+        let payloadT = mirLowerVariantPayloadTypeForScrut(
             bs.l,
-            "mir_lower Stage 4f TODO: nested pattern kind "
-                + hirPatternKindName(pat.kind) + " in variant payload binding",
-        ),
+            scrutT,
+            enumName,
+            pat.variantName,
+            i,
+        )
+        let payloadTypeText = hirTypeString(payloadT)
+        let proj = mirVariantProj(
+            safeVarIdx,
+            pat.variantName,
+            i,
+            payloadTypeText,
+        )
+        let childPlace = mirPlaceProject(scrutinee, proj)
+        mirLowerBindPattern(bs, arg, childPlace, payloadT, span)
+        i = i + 1
     }
 }
 
@@ -4012,6 +4709,45 @@ pub fn mirLowerVariantPayloadType(
         }
     }
     hirTypeErr()
+}
+
+fn mirLowerVariantPayloadTypeForScrut(
+    l: MirLowerer,
+    scrutT: HirType,
+    enumName: String,
+    variant: String,
+    idx: Int,
+) -> HirType {
+    if idx == 0 {
+        if variant == "Some" {
+            return mirLowerOptionInnerType(scrutT)
+        }
+        if variant == "Ok" {
+            return mirLowerResultOkType(scrutT)
+        }
+        if variant == "Err" {
+            return mirLowerResultErrType(scrutT)
+        }
+    }
+    let payloadT = mirLowerVariantPayloadType(l, enumName, variant, idx)
+    if hirTypeIsErr(payloadT) && enumName == "" {
+        mirLowerVariantPayloadType(l, hirTypeNameOf(scrutT), variant, idx)
+    } else {
+        payloadT
+    }
+}
+
+fn mirLowerResultOkType(t: HirType) -> HirType {
+    match t.kind {
+        HirTypeNamed -> {
+            if t.namedName == "Result" && t.namedArgs.len() >= 1 {
+                t.namedArgs[0]
+            } else {
+                hirTypeErr()
+            }
+        },
+        _ -> hirTypeErr(),
+    }
 }
 
 // ====================================================================
@@ -4209,12 +4945,6 @@ fn mirLowerMethodCallUser(
     destT: HirType,
     span: MirSpan,
 ) {
-    if mirLowerCallArgsHaveKeyword(e.methodArgs) {
-        mirLowerNoteIssue(
-            bs.l,
-            "mir_lower Stage 4e-4 TODO: keyword args in method call \"" + e.methodName + "\"",
-        )
-    }
     let recvOp = mirLowerExprAsOperand(bs, recv)
     let typeName = hirTypeNameOf(recv.typ)
     let sigIdx = if typeName != "" {
@@ -4238,8 +4968,16 @@ fn mirLowerMethodCallUser(
     }
     let mut operands: List<MirOperand> = []
     operands.push(recvOp)
-    for a in e.methodArgs {
-        operands.push(mirLowerExprAsOperand(bs, a.value))
+    if sigIdx >= 0 {
+        let tailSig = mirLowerSignatureDropReceiver(bs.l.methodSigs[sigIdx])
+        let tailArgs = mirLowerOrderCallArgs(bs, e.methodArgs, tailSig)
+        for op in tailArgs {
+            operands.push(op)
+        }
+    } else {
+        for a in e.methodArgs {
+            operands.push(mirLowerExprAsOperand(bs, a.value))
+        }
     }
     let hasDest = !hirTypeIsUnit(destT)
     let calleeTypeText = hirTypeString(e.typ)
