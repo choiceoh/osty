@@ -6,6 +6,8 @@
 // semantics match `List<T>` methods but live behind the documented
 // fluent API so user code written against the spec works today.
 
+use std.process
+
 pub struct Iter<T> {
     items: List<T>,
 
@@ -27,6 +29,49 @@ pub struct Iter<T> {
         Iter { items: out }
     }
 
+    pub fn inspect(self, f: fn(T) -> ()) -> Iter<T> {
+        let mut out: List<T> = []
+        for item in self.items {
+            f(item)
+            out.push(item)
+        }
+        Iter { items: out }
+    }
+
+    pub fn filterMap<U>(self, f: fn(T) -> U?) -> Iter<U> {
+        let mut out: List<U> = []
+        for item in self.items {
+            match f(item) {
+                Some(value) -> out.push(value),
+                None -> {},
+            }
+        }
+        Iter { items: out }
+    }
+
+    pub fn mapWhile<U>(self, f: fn(T) -> U?) -> Iter<U> {
+        let mut out: List<U> = []
+        for item in self.items {
+            let mapped = f(item)
+            if mapped.isNone() {
+                break
+            }
+            out.push(mapped.unwrap())
+        }
+        Iter { items: out }
+    }
+
+    pub fn flatMap<U>(self, f: fn(T) -> Iter<U>) -> Iter<U> {
+        let mut out: List<U> = []
+        for item in self.items {
+            let mapped = f(item)
+            for value in mapped.items {
+                out.push(value)
+            }
+        }
+        Iter { items: out }
+    }
+
     pub fn take(self, n: Int) -> Iter<T> {
         let mut out: List<T> = []
         let mut i = 0
@@ -35,6 +80,18 @@ pub struct Iter<T> {
                 break
             }
             out.push(item)
+            i = i + 1
+        }
+        Iter { items: out }
+    }
+
+    pub fn takeLast(self, n: Int) -> Iter<T> {
+        let len = self.items.len()
+        let start = if n <= 0 { len } else if n >= len { 0 } else { len - n }
+        let mut out: List<T> = []
+        let mut i = start
+        for i < len {
+            out.push(self.items[i])
             i = i + 1
         }
         Iter { items: out }
@@ -64,6 +121,47 @@ pub struct Iter<T> {
         Iter { items: out }
     }
 
+    pub fn skipLast(self, n: Int) -> Iter<T> {
+        let len = self.items.len()
+        let limit = if n <= 0 { len } else if n >= len { 0 } else { len - n }
+        let mut out: List<T> = []
+        let mut i = 0
+        for i < limit {
+            out.push(self.items[i])
+            i = i + 1
+        }
+        Iter { items: out }
+    }
+
+    pub fn skipWhile(self, f: fn(T) -> Bool) -> Iter<T> {
+        let mut out: List<T> = []
+        let mut dropping = true
+        for item in self.items {
+            if dropping && !f(item) {
+                dropping = false
+            }
+            if !dropping {
+                out.push(item)
+            }
+        }
+        Iter { items: out }
+    }
+
+    pub fn stepBy(self, step: Int) -> Iter<T> {
+        if step <= 0 {
+            process.abort("Iter.stepBy: step must be positive, got {step}")
+        }
+        let mut out: List<T> = []
+        let mut i = 0
+        for item in self.items {
+            if i % step == 0 {
+                out.push(item)
+            }
+            i = i + 1
+        }
+        Iter { items: out }
+    }
+
     pub fn chain(self, other: Iter<T>) -> Iter<T> {
         let mut out: List<T> = []
         for item in self.items {
@@ -75,12 +173,238 @@ pub struct Iter<T> {
         Iter { items: out }
     }
 
+    pub fn intersperse(self, separator: T) -> Iter<T> {
+        let mut out: List<T> = []
+        let mut first = true
+        for item in self.items {
+            if first {
+                first = false
+            } else {
+                out.push(separator)
+            }
+            out.push(item)
+        }
+        Iter { items: out }
+    }
+
+    pub fn reversed(self) -> Iter<T> {
+        let mut out: List<T> = []
+        let mut i = self.items.len()
+        for i > 0 {
+            i = i - 1
+            out.push(self.items[i])
+        }
+        Iter { items: out }
+    }
+
+    pub fn rev(self) -> Iter<T> {
+        self.reversed()
+    }
+
+    pub fn enumerate(self) -> Iter<(Int, T)> {
+        let mut out: List<(Int, T)> = []
+        let mut i = 0
+        for item in self.items {
+            out.push((i, item))
+            i = i + 1
+        }
+        Iter { items: out }
+    }
+
+    pub fn zip<U>(self, other: Iter<U>) -> Iter<(T, U)> {
+        let mut out: List<(T, U)> = []
+        let limit = if self.items.len() < other.items.len() { self.items.len() } else { other.items.len() }
+        for i in 0..limit {
+            out.push((self.items[i], other.items[i]))
+        }
+        Iter { items: out }
+    }
+
+    pub fn zip3<U, V>(self, other1: Iter<U>, other2: Iter<V>) -> Iter<(T, U, V)> {
+        let mut limit = self.items.len()
+        if other1.items.len() < limit {
+            limit = other1.items.len()
+        }
+        if other2.items.len() < limit {
+            limit = other2.items.len()
+        }
+        let mut out: List<(T, U, V)> = []
+        for i in 0..limit {
+            out.push((self.items[i], other1.items[i], other2.items[i]))
+        }
+        Iter { items: out }
+    }
+
+    pub fn chunked(self, size: Int) -> Iter<List<T>> {
+        if size <= 0 {
+            process.abort("Iter.chunked: size must be positive, got {size}")
+        }
+        let mut out: List<List<T>> = []
+        let mut bucket: List<T> = []
+        for item in self.items {
+            bucket.push(item)
+            if bucket.len() >= size {
+                out.push(bucket)
+                bucket = []
+            }
+        }
+        if !bucket.isEmpty() {
+            out.push(bucket)
+        }
+        Iter { items: out }
+    }
+
+    pub fn chunks(self, size: Int) -> Iter<List<T>> {
+        self.chunked(size)
+    }
+
+    pub fn windowed(self, size: Int, step: Int) -> Iter<List<T>> {
+        if size <= 0 {
+            process.abort("Iter.windowed: size must be positive, got {size}")
+        }
+        if step <= 0 {
+            process.abort("Iter.windowed: step must be positive, got {step}")
+        }
+        let mut out: List<List<T>> = []
+        let len = self.items.len()
+        if size > len {
+            return Iter { items: out }
+        }
+        let mut start = 0
+        for start + size <= len {
+            out.push(self.items.drop(start).take(size))
+            start = start + step
+        }
+        Iter { items: out }
+    }
+
+    pub fn windows(self, size: Int, step: Int) -> Iter<List<T>> {
+        self.windowed(size, step)
+    }
+
     pub fn toList(self) -> List<T> {
         self.items
     }
 
+    pub fn collect(self) -> List<T> {
+        self.toList()
+    }
+
     pub fn count(self) -> Int {
         self.items.len()
+    }
+
+    pub fn countWhere(self, f: fn(T) -> Bool) -> Int {
+        let mut n = 0
+        for item in self.items {
+            if f(item) {
+                n = n + 1
+            }
+        }
+        n
+    }
+
+    pub fn isEmpty(self) -> Bool {
+        self.items.isEmpty()
+    }
+
+    pub fn first(self) -> T? {
+        self.items.first()
+    }
+
+    pub fn last(self) -> T? {
+        self.items.last()
+    }
+
+    pub fn single(self) -> T? {
+        if self.items.len() == 1 {
+            return self.items.first()
+        }
+        None
+    }
+
+    pub fn nth(self, n: Int) -> T? {
+        if n < 0 {
+            return None
+        }
+        self.items.get(n)
+    }
+
+    pub fn contains(self, item: T) -> Bool {
+        self.items.contains(item)
+    }
+
+    pub fn find(self, f: fn(T) -> Bool) -> T? {
+        for item in self.items {
+            if f(item) {
+                return Some(item)
+            }
+        }
+        None
+    }
+
+    pub fn lastWhere(self, f: fn(T) -> Bool) -> T? {
+        let mut i = self.items.len()
+        for i > 0 {
+            i = i - 1
+            let item = self.items[i]
+            if f(item) {
+                return Some(item)
+            }
+        }
+        None
+    }
+
+    pub fn findMap<U>(self, f: fn(T) -> U?) -> U? {
+        for item in self.items {
+            match f(item) {
+                Some(value) -> {
+                    return Some(value)
+                },
+                None -> {},
+            }
+        }
+        None
+    }
+
+    pub fn indexWhere(self, f: fn(T) -> Bool) -> Int? {
+        let mut i = 0
+        for item in self.items {
+            if f(item) {
+                return Some(i)
+            }
+            i = i + 1
+        }
+        None
+    }
+
+    pub fn lastIndexWhere(self, f: fn(T) -> Bool) -> Int? {
+        let mut i = self.items.len()
+        for i > 0 {
+            i = i - 1
+            if f(self.items[i]) {
+                return Some(i)
+            }
+        }
+        None
+    }
+
+    pub fn any(self, f: fn(T) -> Bool) -> Bool {
+        for item in self.items {
+            if f(item) {
+                return true
+            }
+        }
+        false
+    }
+
+    pub fn all(self, f: fn(T) -> Bool) -> Bool {
+        for item in self.items {
+            if !f(item) {
+                return false
+            }
+        }
+        true
     }
 
     pub fn forEach(self, f: fn(T) -> ()) {
@@ -95,6 +419,52 @@ pub struct Iter<T> {
             acc = f(acc, item)
         }
         acc
+    }
+
+    pub fn reduce(self, f: fn(T, T) -> T) -> T? {
+        if self.items.isEmpty() {
+            return None
+        }
+        let mut first: T? = None
+        let mut tail: List<T> = []
+        let mut seenFirst = false
+        for item in self.items {
+            if !seenFirst {
+                first = Some(item)
+                seenFirst = true
+            } else {
+                tail.push(item)
+            }
+        }
+        let acc = first.unwrap()
+        let mut out = acc
+        for item in tail {
+            out = f(out, item)
+        }
+        Some(out)
+    }
+
+    pub fn scan<U>(self, init: U, f: fn(U, T) -> U) -> Iter<U> {
+        let mut out: List<U> = [init]
+        let mut acc = init
+        for item in self.items {
+            acc = f(acc, item)
+            out.push(acc)
+        }
+        Iter { items: out }
+    }
+
+    pub fn partition(self, f: fn(T) -> Bool) -> (List<T>, List<T>) {
+        let mut yes: List<T> = []
+        let mut no: List<T> = []
+        for item in self.items {
+            if f(item) {
+                yes.push(item)
+            } else {
+                no.push(item)
+            }
+        }
+        (yes, no)
     }
 }
 
