@@ -612,7 +612,14 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_THRESHOLD_BYTES=1")
+	/* Phase F: this harness asserts on `osty_gc_debug_remembered_edge_count`
+	 * before/after every barrier call and on `_remembered_edge_contains`,
+	 * neither of which has a meaning under card marking (the dirty-bit
+	 * scheme has no per-edge log). Pin to the legacy edge-log path. */
+	runCmd.Env = append(os.Environ(),
+		"OSTY_GC_THRESHOLD_BYTES=1",
+		"OSTY_GC_CARD_MARKING=0",
+	)
 	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
@@ -2133,12 +2140,22 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_PROMOTE_AGE=1")
+	/* Phase F: this harness exercises the per-edge log explicitly via
+	 * `osty_gc_debug_remembered_edge_count()` and a synthetic owner kind
+	 * (kind=7) that has no trace function. Card marking replaces the
+	 * edge log with a dirty-bit walk over the OLD list, which calls each
+	 * owner's trace function — kind=7 has none, so the card path can't
+	 * find the child. Pin this test to the legacy edge-log path; the
+	 * card-marking semantics are exercised by their own harness. */
+	runCmd.Env = append(os.Environ(),
+		"OSTY_GC_PROMOTE_AGE=1",
+		"OSTY_GC_CARD_MARKING=0",
+	)
 	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
-	/* Expected:
+	/* Expected (edge-log mode):
 	 *  1           — owner is OLD after first minor
 	 *  0 1         — child starts YOUNG; remembered edge count is 1
 	 *  2 2         — live before minor = 2 (owner+child); after = 2 (both survived)
@@ -2508,12 +2525,18 @@ int main(void) {
 		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
 	}
 	runCmd := exec.Command(binaryPath)
-	runCmd.Env = append(os.Environ(), "OSTY_GC_PROMOTE_AGE=1")
+	/* Phase F: same rationale as the headline harness — this test reads
+	 * `osty_gc_debug_remembered_edge_count()` and uses synthetic kinds
+	 * without trace functions. Pin to the legacy edge-log path. */
+	runCmd.Env = append(os.Environ(),
+		"OSTY_GC_PROMOTE_AGE=1",
+		"OSTY_GC_CARD_MARKING=0",
+	)
 	runOutput, err := runCmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
 	}
-	/* Expected:
+	/* Expected (edge-log mode):
 	 *  1 1      — both a and b now OLD after first minor
 	 *  1 0      — OLD→OLD edge filtered out at compact time (from 1 to 0)
 	 *  5 5      — live before/after case-2 minor (a,b,c1,c2,c3 all survive)
