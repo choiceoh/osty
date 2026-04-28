@@ -1,14 +1,25 @@
-// std.http — minimal HTTP client/server signature surface.
+// std.http — production-grade HTTP ergonomics on top of three
+// runtime-owned transport primitives: `request`, `get`, and `serve`.
 //
-// Transport primitives (`request`, `get`, `serve`) are body-less — the
-// backend routes each to the HTTP runtime. `post`, `Response.text`,
-// and `Response.json` keep real bodies since they derive from the
-// primitives.
+// The primitives stay backend-owned. Everything else here is pure Osty:
+// header normalization, request/response builders, query/form codecs,
+// auth and cookie helpers, content-type parsing, problem responses, and
+// a small router with path parameters.
 
+use std.bytes
+use std.encoding
+use std.error
 use std.json
+use std.process
+use std.strings
 
 pub type Headers = Map<String, String>
+pub type QueryValues = Map<String, List<String>>
+pub type FormValues = QueryValues
+pub type CookieJar = Map<String, String>
+pub type Params = Map<String, String>
 pub type Handler = fn(Request) -> Result<Response, Error>
+pub type RouteHandler = fn(Request, Params) -> Result<Response, Error>
 
 pub enum Method {
     Get,
@@ -18,6 +29,137 @@ pub enum Method {
     Delete,
     Head,
     Options,
+    Trace,
+    Connect,
+
+    pub fn toString(self) -> String {
+        match self {
+            Get     -> "GET",
+            Post    -> "POST",
+            Put     -> "PUT",
+            Patch   -> "PATCH",
+            Delete  -> "DELETE",
+            Head    -> "HEAD",
+            Options -> "OPTIONS",
+            Trace   -> "TRACE",
+            Connect -> "CONNECT",
+        }
+    }
+
+    pub fn isSafe(self) -> Bool {
+        match self {
+            Get | Head | Options | Trace -> true,
+            _                            -> false,
+        }
+    }
+
+    pub fn isIdempotent(self) -> Bool {
+        match self {
+            Get | Put | Delete | Head | Options | Trace -> true,
+            _                                           -> false,
+        }
+    }
+
+    pub fn allowsRequestBody(self) -> Bool {
+        match self {
+            Post | Put | Patch | Delete -> true,
+            _                           -> false,
+        }
+    }
+}
+
+pub enum SameSite {
+    Strict,
+    Lax,
+    NoneSite,
+
+    pub fn toString(self) -> String {
+        match self {
+            Strict   -> "Strict",
+            Lax      -> "Lax",
+            NoneSite -> "None",
+        }
+    }
+}
+
+pub struct MediaType {
+    pub value: String,
+    pub params: Map<String, String> = {:},
+
+    pub fn toString(self) -> String {
+        let mut out = self.value
+        let keys = self.params.keys().sorted()
+        for key in keys {
+            let value = self.params.get(key).unwrap()
+            out = "{out}; {key}={value}"
+        }
+        out
+    }
+
+    pub fn parameter(self, name: String) -> String? {
+        self.params.get(strings.toLower(strings.trimSpace(name)))
+    }
+
+    pub fn is(self, value: String) -> Bool {
+        self.value == strings.toLower(strings.trimSpace(value))
+    }
+}
+
+pub struct BasicAuth {
+    pub username: String,
+    pub password: String,
+
+    pub fn toHeaderValue(self) -> String {
+        let encoded = encoding.base64.encode(bytes.fromString("{self.username}:{self.password}"))
+        "Basic {encoded}"
+    }
+}
+
+pub struct Cookie {
+    pub name: String,
+    pub value: String,
+    pub path: String = "",
+    pub domain: String = "",
+    pub maxAge: Int = -1,
+    pub secure: Bool = false,
+    pub httpOnly: Bool = false,
+    pub sameSite: SameSite?,
+
+    pub fn toString(self) -> String {
+        let mut out = "{self.name}={self.value}"
+        if !self.path.isEmpty() {
+            out = "{out}; Path={self.path}"
+        }
+        if !self.domain.isEmpty() {
+            out = "{out}; Domain={self.domain}"
+        }
+        if self.maxAge >= 0 {
+            out = "{out}; Max-Age={self.maxAge}"
+        }
+        if self.secure {
+            out = "{out}; Secure"
+        }
+        if self.httpOnly {
+            out = "{out}; HttpOnly"
+        }
+        match self.sameSite {
+            Some(policy) -> out = "{out}; SameSite={policy}",
+            None         -> {},
+        }
+        out
+    }
+}
+
+pub struct Problem {
+    pub type: String = "about:blank",
+    pub title: String,
+    pub status: Int,
+    pub detail: String = "",
+    pub instance: String = "",
+
+    pub fn toResponse(self, headers: Headers = {:}) -> Response {
+        jsonResponse(self.status, self, withHeaderValue(headers, "Content-Type", "application/problem+json"))
+    }
 }
 
 pub struct Request {
@@ -25,12 +167,73 @@ pub struct Request {
     pub url: String,
     pub headers: Headers = {:},
     pub body: Bytes,
-}
 
-pub struct Response {
-    pub status: Int,
-    pub headers: Headers = {:},
-    pub body: Bytes,
+    pub fn header(self, name: String) -> String? {
+        lookupHeader(self.headers, name)
+    }
+
+    pub fn headerOr(self, name: String, fallback: String) -> String {
+        self.header(name) ?? fallback
+    }
+
+    pub fn hasHeader(self, name: String) -> Bool {
+        self.header(name).isSome()
+    }
+
+    pub fn contentType(self) -> String? {
+        self.header("Content-Type")
+    }
+
+    pub fn mediaType(self) -> MediaType? {
+        match self.contentType() {
+            Some(value) -> parseMediaType(value),
+            None        -> None,
+        }
+    }
+
+    pub fn contentTypeIs(self, value: String) -> Bool {
+        match self.mediaType() {
+            Some(mediaType) -> mediaType.is(value),
+            None            -> false,
+        }
+    }
+
+    pub fn accepts(self, value: String) -> Bool {
+        match self.header("Accept") {
+            Some(header) -> acceptHeaderMatches(header, value),
+            None         -> false,
+        }
+    }
+
+    pub fn contentLength(self) -> Int {
+        self.body.len()
+    }
+
+    pub fn path(self) -> String {
+        urlPath(self.url)
+    }
+
+    pub fn queryString(self) -> String? {
+        urlQueryString(self.url)
+    }
+
+    pub fn fragment(self) -> String? {
+        urlFragment(self.url)
+    }
+
+    pub fn query(self) -> Result<QueryValues, Error> {
+        parseQuery(self.queryString() ?? "")
+    }
+
+    pub fn queryValue(self, key: String) -> Result<String?, Error> {
+        let values = self.query()?
+        Ok(firstValue(values.get(key) ?? []))
+    }
+
+    pub fn queryValues(self, key: String) -> Result<List<String>, Error> {
+        let values = self.query()?
+        Ok(values.get(key) ?? [])
+    }
 
     pub fn text(self) -> Result<String, Error> {
         self.body.toString()
@@ -39,19 +242,1227 @@ pub struct Response {
     pub fn json<T>(self) -> Result<T, Error> {
         json.decode::<T>(self.text()?)
     }
+
+    pub fn form(self) -> Result<FormValues, Error> {
+        if bytes.isEmpty(self.body) {
+            return Ok({:})
+        }
+        if self.contentType().isNone() || self.contentTypeIs("application/x-www-form-urlencoded") {
+            return parseForm(self.text()?)
+        }
+        Err(error.new("http: body is not application/x-www-form-urlencoded"))
+    }
+
+    pub fn cookies(self) -> CookieJar {
+        match self.header("Cookie") {
+            Some(header) -> parseCookieJar(header),
+            None         -> {:},
+        }
+    }
+
+    pub fn cookie(self, name: String) -> String? {
+        self.cookies().get(name)
+    }
+
+    pub fn bearerToken(self) -> String? {
+        authTokenFor(self.header("Authorization"), "Bearer")
+    }
+
+    pub fn basicAuth(self) -> Result<BasicAuth?, Error> {
+        match authTokenFor(self.header("Authorization"), "Basic") {
+            Some(token) -> parseBasicAuthToken(token),
+            None        -> Ok(None),
+        }
+    }
+
+    pub fn withMethod(mut self, method: Method) -> Request {
+        self.method = method
+        self
+    }
+
+    pub fn withHeader(mut self, name: String, value: String) -> Request {
+        self.headers = withHeaderValue(self.headers, name, value)
+        self
+    }
+
+    pub fn withoutHeader(mut self, name: String) -> Request {
+        self.headers = removeHeader(self.headers, name)
+        self
+    }
+
+    pub fn withHeaders(mut self, headers: Headers) -> Request {
+        self.headers = mergeHeaders(self.headers, headers)
+        self
+    }
+
+    pub fn withBody(mut self, body: Bytes) -> Request {
+        self.body = body
+        self
+    }
+
+    pub fn withContentType(mut self, value: String) -> Request {
+        self.headers = withHeaderValue(self.headers, "Content-Type", value)
+        self
+    }
+
+    pub fn withText(mut self, body: String) -> Request {
+        self.body = bytes.fromString(body)
+        self.headers = withDefaultHeader(self.headers, "Content-Type", "text/plain; charset=utf-8")
+        self
+    }
+
+    pub fn withJson<T>(mut self, value: T) -> Request {
+        self.body = bytes.fromString(json.encode(value))
+        self.headers = withDefaultHeader(self.headers, "Content-Type", "application/json")
+        self
+    }
+
+    pub fn withForm(mut self, values: FormValues) -> Request {
+        self.body = bytes.fromString(formatForm(values))
+        self.headers = withDefaultHeader(self.headers, "Content-Type", "application/x-www-form-urlencoded")
+        self
+    }
+
+    pub fn withQueryValue(mut self, name: String, value: String) -> Request {
+        self.url = appendUrlQuery(self.url, encodePair(name, value, false))
+        self
+    }
+
+    pub fn withQuery(mut self, values: QueryValues) -> Request {
+        self.url = setUrlQuery(self.url, formatQuery(values))
+        self
+    }
+
+    pub fn withCookie(mut self, name: String, value: String) -> Request {
+        let mut jar = self.cookies()
+        jar.insert(name, value)
+        self.headers = withHeaderValue(self.headers, "Cookie", formatCookieHeader(jar))
+        self
+    }
+
+    pub fn withCookies(mut self, cookies: CookieJar) -> Request {
+        let mut jar = self.cookies()
+        for (name, value) in cookies {
+            jar.insert(name, value)
+        }
+        self.headers = withHeaderValue(self.headers, "Cookie", formatCookieHeader(jar))
+        self
+    }
+
+    pub fn withBearerToken(mut self, token: String) -> Request {
+        self.headers = withHeaderValue(self.headers, "Authorization", "Bearer {token}")
+        self
+    }
+
+    pub fn withBasicAuth(mut self, username: String, password: String) -> Request {
+        let auth = BasicAuth { username, password }
+        self.headers = withHeaderValue(self.headers, "Authorization", auth.toHeaderValue())
+        self
+    }
+
+    pub fn withAccept(mut self, value: String) -> Request {
+        self.headers = withHeaderValue(self.headers, "Accept", value)
+        self
+    }
+
+    pub fn withUserAgent(mut self, value: String) -> Request {
+        self.headers = withHeaderValue(self.headers, "User-Agent", value)
+        self
+    }
+}
+
+pub struct Response {
+    pub status: Int,
+    pub headers: Headers = {:},
+    pub body: Bytes,
+
+    pub fn header(self, name: String) -> String? {
+        lookupHeader(self.headers, name)
+    }
+
+    pub fn headerOr(self, name: String, fallback: String) -> String {
+        self.header(name) ?? fallback
+    }
+
+    pub fn hasHeader(self, name: String) -> Bool {
+        self.header(name).isSome()
+    }
+
+    pub fn contentType(self) -> String? {
+        self.header("Content-Type")
+    }
+
+    pub fn mediaType(self) -> MediaType? {
+        match self.contentType() {
+            Some(value) -> parseMediaType(value),
+            None        -> None,
+        }
+    }
+
+    pub fn contentTypeIs(self, value: String) -> Bool {
+        match self.mediaType() {
+            Some(mediaType) -> mediaType.is(value),
+            None            -> false,
+        }
+    }
+
+    pub fn isJson(self) -> Bool {
+        self.contentTypeIs("application/json") || self.contentTypeIs("application/problem+json")
+    }
+
+    pub fn contentLength(self) -> Int {
+        self.body.len()
+    }
+
+    pub fn statusText(self) -> String {
+        statusText(self.status)
+    }
+
+    pub fn isInformational(self) -> Bool {
+        self.status >= 100 && self.status < 200
+    }
+
+    pub fn isSuccess(self) -> Bool {
+        self.status >= 200 && self.status < 300
+    }
+
+    pub fn isRedirect(self) -> Bool {
+        self.status >= 300 && self.status < 400
+    }
+
+    pub fn isClientError(self) -> Bool {
+        self.status >= 400 && self.status < 500
+    }
+
+    pub fn isServerError(self) -> Bool {
+        self.status >= 500 && self.status < 600
+    }
+
+    pub fn isError(self) -> Bool {
+        self.status >= 400
+    }
+
+    pub fn location(self) -> String? {
+        self.header("Location")
+    }
+
+    pub fn etag(self) -> String? {
+        self.header("ETag")
+    }
+
+    pub fn setCookie(self) -> Result<Cookie?, Error> {
+        match self.header("Set-Cookie") {
+            Some(value) -> Ok(Some(parseSetCookie(value)?)),
+            None        -> Ok(None),
+        }
+    }
+
+    pub fn requireSuccess(self) -> Result<Response, Error> {
+        if !self.isSuccess() {
+            return Err(error.new("http: unexpected status {self.status} {statusText(self.status)}"))
+        }
+        Ok(self)
+    }
+
+    pub fn requireStatus(self, status: Int) -> Result<Response, Error> {
+        if self.status != status {
+            return Err(error.new("http: expected status {status} but got {self.status} {statusText(self.status)}"))
+        }
+        Ok(self)
+    }
+
+    pub fn text(self) -> Result<String, Error> {
+        self.body.toString()
+    }
+
+    pub fn json<T>(self) -> Result<T, Error> {
+        json.decode::<T>(self.text()?)
+    }
+
+    pub fn withStatus(mut self, status: Int) -> Response {
+        self.status = status
+        self
+    }
+
+    pub fn withHeader(mut self, name: String, value: String) -> Response {
+        self.headers = withHeaderValue(self.headers, name, value)
+        self
+    }
+
+    pub fn withoutHeader(mut self, name: String) -> Response {
+        self.headers = removeHeader(self.headers, name)
+        self
+    }
+
+    pub fn withHeaders(mut self, headers: Headers) -> Response {
+        self.headers = mergeHeaders(self.headers, headers)
+        self
+    }
+
+    pub fn withBody(mut self, body: Bytes) -> Response {
+        self.body = body
+        self
+    }
+
+    pub fn withContentType(mut self, value: String) -> Response {
+        self.headers = withHeaderValue(self.headers, "Content-Type", value)
+        self
+    }
+
+    pub fn withText(mut self, body: String) -> Response {
+        self.body = bytes.fromString(body)
+        self.headers = withDefaultHeader(self.headers, "Content-Type", "text/plain; charset=utf-8")
+        self
+    }
+
+    pub fn withJson<T>(mut self, value: T) -> Response {
+        self.body = bytes.fromString(json.encode(value))
+        self.headers = withDefaultHeader(self.headers, "Content-Type", "application/json")
+        self
+    }
+
+    pub fn withCookie(mut self, cookie: Cookie) -> Response {
+        self.headers = withHeaderValue(self.headers, "Set-Cookie", cookie.toString())
+        self
+    }
+
+    pub fn withLocation(mut self, location: String) -> Response {
+        self.headers = withHeaderValue(self.headers, "Location", location)
+        self
+    }
+
+    pub fn withEtag(mut self, etag: String) -> Response {
+        self.headers = withHeaderValue(self.headers, "ETag", etag)
+        self
+    }
+}
+
+pub struct Route {
+    pub methods: List<Method>,
+    pub pattern: String,
+    pub handler: RouteHandler,
+}
+
+pub struct RouteMatch {
+    pub route: Route,
+    pub params: Params,
+}
+
+pub struct Router {
+    pub routes: List<Route>,
+
+    pub fn route(mut self, methods: List<Method>, pattern: String, handler: RouteHandler) {
+        self.routes.push(Route {
+            methods: uniqueMethods(methods),
+            pattern: normalizeRoutePattern(pattern),
+            handler: handler,
+        })
+    }
+
+    pub fn handle(mut self, method: Method, pattern: String, handler: RouteHandler) {
+        self.route([method], pattern, handler)
+    }
+
+    pub fn handleAny(mut self, pattern: String, handler: RouteHandler) {
+        self.route(allMethods(), pattern, handler)
+    }
+
+    pub fn get(mut self, pattern: String, handler: RouteHandler) {
+        self.handle(Get, pattern, handler)
+    }
+
+    pub fn post(mut self, pattern: String, handler: RouteHandler) {
+        self.handle(Post, pattern, handler)
+    }
+
+    pub fn put(mut self, pattern: String, handler: RouteHandler) {
+        self.handle(Put, pattern, handler)
+    }
+
+    pub fn patch(mut self, pattern: String, handler: RouteHandler) {
+        self.handle(Patch, pattern, handler)
+    }
+
+    pub fn delete(mut self, pattern: String, handler: RouteHandler) {
+        self.handle(Delete, pattern, handler)
+    }
+
+    pub fn head(mut self, pattern: String, handler: RouteHandler) {
+        self.handle(Head, pattern, handler)
+    }
+
+    pub fn options(mut self, pattern: String, handler: RouteHandler) {
+        self.handle(Options, pattern, handler)
+    }
+
+    pub fn trace(mut self, pattern: String, handler: RouteHandler) {
+        self.handle(Trace, pattern, handler)
+    }
+
+    pub fn connect(mut self, pattern: String, handler: RouteHandler) {
+        self.handle(Connect, pattern, handler)
+    }
+
+    pub fn find(self, req: Request) -> RouteMatch? {
+        let path = req.path()
+        for route in self.routes {
+            if !routeAllowsMethod(route.methods, req.method) {
+                continue
+            }
+            match matchRoutePattern(route.pattern, path) {
+                Some(params) -> return Some(RouteMatch { route: route, params: params }),
+                None         -> {},
+            }
+        }
+        None
+    }
+
+}
+
+pub fn parseMethod(text: String) -> Result<Method, Error> {
+    match strings.toUpper(strings.trimSpace(text)) {
+        "GET"     -> Ok(Get),
+        "POST"    -> Ok(Post),
+        "PUT"     -> Ok(Put),
+        "PATCH"   -> Ok(Patch),
+        "DELETE"  -> Ok(Delete),
+        "HEAD"    -> Ok(Head),
+        "OPTIONS" -> Ok(Options),
+        "TRACE"   -> Ok(Trace),
+        "CONNECT" -> Ok(Connect),
+        _         -> Err(error.new("http: unsupported method: {text}")),
+    }
+}
+
+pub fn parseSameSite(text: String) -> Result<SameSite, Error> {
+    match strings.toUpper(strings.trimSpace(text)) {
+        "STRICT" -> Ok(Strict),
+        "LAX"    -> Ok(Lax),
+        "NONE"   -> Ok(NoneSite),
+        _        -> Err(error.new("http: unsupported SameSite policy: {text}")),
+    }
+}
+
+pub fn parseMediaType(text: String) -> MediaType? {
+    let trimmed = strings.trimSpace(text)
+    if trimmed.isEmpty() {
+        return None
+    }
+    let parts = strings.split(trimmed, ";")
+    let value = strings.toLower(strings.trimSpace(parts[0]))
+    if value.isEmpty() {
+        return None
+    }
+    let mut params: Map<String, String> = {:}
+    for part in parts.drop(1) {
+        let trimmedPart = strings.trimSpace(part)
+        if trimmedPart.isEmpty() {
+            continue
+        }
+        let kv = strings.splitN(trimmedPart, "=", 2)
+        let name = strings.toLower(strings.trimSpace(kv[0]))
+        if name.isEmpty() {
+            continue
+        }
+        let value = if kv.len() == 2 { strings.trimSpace(kv[1]) } else { "" }
+        params.insert(name, value)
+    }
+    Some(MediaType { value: value, params: params })
+}
+
+pub fn statusText(status: Int) -> String {
+    match status {
+        100 -> "Continue",
+        101 -> "Switching Protocols",
+        102 -> "Processing",
+        200 -> "OK",
+        201 -> "Created",
+        202 -> "Accepted",
+        204 -> "No Content",
+        206 -> "Partial Content",
+        300 -> "Multiple Choices",
+        301 -> "Moved Permanently",
+        302 -> "Found",
+        303 -> "See Other",
+        304 -> "Not Modified",
+        307 -> "Temporary Redirect",
+        308 -> "Permanent Redirect",
+        400 -> "Bad Request",
+        401 -> "Unauthorized",
+        403 -> "Forbidden",
+        404 -> "Not Found",
+        405 -> "Method Not Allowed",
+        408 -> "Request Timeout",
+        409 -> "Conflict",
+        410 -> "Gone",
+        413 -> "Content Too Large",
+        415 -> "Unsupported Media Type",
+        422 -> "Unprocessable Content",
+        429 -> "Too Many Requests",
+        500 -> "Internal Server Error",
+        501 -> "Not Implemented",
+        502 -> "Bad Gateway",
+        503 -> "Service Unavailable",
+        504 -> "Gateway Timeout",
+        _   -> "Unknown Status",
+    }
+}
+
+pub fn allMethods() -> List<Method> {
+    [Get, Post, Put, Patch, Delete, Head, Options, Trace, Connect]
+}
+
+pub fn newRequest(method: Method, url: String) -> Request {
+    Request {
+        method: method,
+        url: url,
+        body: b"",
+    }
+}
+
+pub fn newRouter() -> Router {
+    Router { routes: [] }
+}
+
+pub fn dispatch(router: Router, req: Request) -> Result<Response, Error> {
+    let path = req.path()
+    let mut allowed: List<Method> = []
+    for route in router.routes {
+        match matchRoutePattern(route.pattern, path) {
+            Some(params) -> {
+                if routeAllowsMethod(route.methods, req.method) {
+                    return route.handler(req, params)
+                }
+                for method in route.methods {
+                    if !methodListContains(allowed, method) {
+                        allowed.push(method)
+                    }
+                }
+            },
+            None -> {},
+        }
+    }
+    if allowed.isEmpty() {
+        return Ok(notFound())
+    }
+    Ok(methodNotAllowed(allowed))
+}
+
+pub fn cookie(name: String, value: String) -> Cookie {
+    Cookie {
+        name: name,
+        value: value,
+        sameSite: None,
+    }
+}
+
+pub fn parseQuery(text: String) -> Result<QueryValues, Error> {
+    parsePairs(text, false)
+}
+
+pub fn formatQuery(values: QueryValues) -> String {
+    formatPairs(values, false)
+}
+
+pub fn parseForm(text: String) -> Result<FormValues, Error> {
+    parsePairs(text, true)
+}
+
+pub fn formatForm(values: FormValues) -> String {
+    formatPairs(values, true)
+}
+
+pub fn parseSetCookie(text: String) -> Result<Cookie, Error> {
+    let parts = strings.split(text, ";")
+    if parts.isEmpty() {
+        return Err(error.new("http: invalid Set-Cookie header"))
+    }
+    let first = strings.trimSpace(parts[0])
+    let cookie = parseNameValuePair(first)?
+    let mut out = Cookie {
+        name: cookie.0,
+        value: cookie.1,
+        sameSite: None,
+    }
+    for part in parts.drop(1) {
+        let attr = strings.trimSpace(part)
+        if attr.isEmpty() {
+            continue
+        }
+        let kv = strings.splitN(attr, "=", 2)
+        let name = strings.toLower(strings.trimSpace(kv[0]))
+        let value = if kv.len() == 2 { strings.trimSpace(kv[1]) } else { "" }
+        match name {
+            "path"     -> out.path = value,
+            "domain"   -> out.domain = value,
+            "max-age"  -> out.maxAge = value.toInt()?,
+            "secure"   -> out.secure = true,
+            "httponly" -> out.httpOnly = true,
+            "samesite" -> out.sameSite = Some(parseSameSite(value)?),
+            _          -> {},
+        }
+    }
+    Ok(out)
 }
 
 pub fn request(req: Request) -> Result<Response, Error>
 
-pub fn get(url: String, headers: Headers = {:}) -> Result<Response, Error>
-
-pub fn post(url: String, body: Bytes, headers: Headers = {:}) -> Result<Response, Error> {
+pub fn send(method: Method, url: String, body: Bytes, headers: Headers = {:}) -> Result<Response, Error> {
     request(Request {
-        method: Post,
+        method: method,
         url: url,
         headers: headers,
         body: body,
     })
 }
 
+pub fn get(url: String, headers: Headers = {:}) -> Result<Response, Error>
+
+pub fn head(url: String, headers: Headers = {:}) -> Result<Response, Error> {
+    send(Head, url, b"", headers)
+}
+
+pub fn post(url: String, body: Bytes, headers: Headers = {:}) -> Result<Response, Error> {
+    send(Post, url, body, headers)
+}
+
+pub fn put(url: String, body: Bytes, headers: Headers = {:}) -> Result<Response, Error> {
+    send(Put, url, body, headers)
+}
+
+pub fn patch(url: String, body: Bytes, headers: Headers = {:}) -> Result<Response, Error> {
+    send(Patch, url, body, headers)
+}
+
+pub fn delete(url: String, headers: Headers = {:}) -> Result<Response, Error> {
+    send(Delete, url, b"", headers)
+}
+
+pub fn options(url: String, headers: Headers = {:}) -> Result<Response, Error> {
+    send(Options, url, b"", headers)
+}
+
+pub fn trace(url: String, headers: Headers = {:}) -> Result<Response, Error> {
+    send(Trace, url, b"", headers)
+}
+
+pub fn connect(url: String, headers: Headers = {:}) -> Result<Response, Error> {
+    send(Connect, url, b"", headers)
+}
+
+pub fn sendText(method: Method, url: String, body: String, headers: Headers = {:}) -> Result<Response, Error> {
+    send(method, url, bytes.fromString(body), withDefaultHeader(headers, "Content-Type", "text/plain; charset=utf-8"))
+}
+
+pub fn sendJson<T>(method: Method, url: String, value: T, headers: Headers = {:}) -> Result<Response, Error> {
+    send(method, url, bytes.fromString(json.encode(value)), withDefaultHeader(headers, "Content-Type", "application/json"))
+}
+
+pub fn sendForm(method: Method, url: String, values: FormValues, headers: Headers = {:}) -> Result<Response, Error> {
+    send(method, url, bytes.fromString(formatForm(values)), withDefaultHeader(headers, "Content-Type", "application/x-www-form-urlencoded"))
+}
+
+pub fn postText(url: String, body: String, headers: Headers = {:}) -> Result<Response, Error> {
+    sendText(Post, url, body, headers)
+}
+
+pub fn putText(url: String, body: String, headers: Headers = {:}) -> Result<Response, Error> {
+    sendText(Put, url, body, headers)
+}
+
+pub fn patchText(url: String, body: String, headers: Headers = {:}) -> Result<Response, Error> {
+    sendText(Patch, url, body, headers)
+}
+
+pub fn postJson<T>(url: String, value: T, headers: Headers = {:}) -> Result<Response, Error> {
+    sendJson(Post, url, value, headers)
+}
+
+pub fn putJson<T>(url: String, value: T, headers: Headers = {:}) -> Result<Response, Error> {
+    sendJson(Put, url, value, headers)
+}
+
+pub fn patchJson<T>(url: String, value: T, headers: Headers = {:}) -> Result<Response, Error> {
+    sendJson(Patch, url, value, headers)
+}
+
+pub fn postForm(url: String, values: FormValues, headers: Headers = {:}) -> Result<Response, Error> {
+    sendForm(Post, url, values, headers)
+}
+
+pub fn putForm(url: String, values: FormValues, headers: Headers = {:}) -> Result<Response, Error> {
+    sendForm(Put, url, values, headers)
+}
+
+pub fn patchForm(url: String, values: FormValues, headers: Headers = {:}) -> Result<Response, Error> {
+    sendForm(Patch, url, values, headers)
+}
+
+pub fn response(status: Int, body: Bytes, headers: Headers = {:}) -> Response {
+    Response { status, headers, body }
+}
+
+pub fn textResponse(status: Int, body: String, headers: Headers = {:}) -> Response {
+    response(status, bytes.fromString(body), withDefaultHeader(headers, "Content-Type", "text/plain; charset=utf-8"))
+}
+
+pub fn jsonResponse<T>(status: Int, value: T, headers: Headers = {:}) -> Response {
+    response(status, bytes.fromString(json.encode(value)), withDefaultHeader(headers, "Content-Type", "application/json"))
+}
+
+pub fn problem(status: Int, title: String, detail: String = "", headers: Headers = {:}) -> Response {
+    let item = Problem {
+        title: title,
+        status: status,
+        detail: detail,
+    }
+    item.toResponse(headers)
+}
+
+pub fn ok(body: Bytes, headers: Headers = {:}) -> Response {
+    response(200, body, headers)
+}
+
+pub fn okText(body: String, headers: Headers = {:}) -> Response {
+    textResponse(200, body, headers)
+}
+
+pub fn okJson<T>(value: T, headers: Headers = {:}) -> Response {
+    jsonResponse(200, value, headers)
+}
+
+pub fn created(body: Bytes, headers: Headers = {:}) -> Response {
+    response(201, body, headers)
+}
+
+pub fn createdAt(location: String, body: Bytes, headers: Headers = {:}) -> Response {
+    response(201, body, withHeaderValue(headers, "Location", location))
+}
+
+pub fn accepted(body: Bytes, headers: Headers = {:}) -> Response {
+    response(202, body, headers)
+}
+
+pub fn noContent(headers: Headers = {:}) -> Response {
+    response(204, b"", headers)
+}
+
+pub fn badRequest(message: String = "bad request", headers: Headers = {:}) -> Response {
+    textResponse(400, message, headers)
+}
+
+pub fn unauthorized(message: String = "unauthorized", challenge: String = "", headers: Headers = {:}) -> Response {
+    let withChallenge = if challenge.isEmpty() { headers } else { withHeaderValue(headers, "WWW-Authenticate", challenge) }
+    textResponse(401, message, withChallenge)
+}
+
+pub fn forbidden(message: String = "forbidden", headers: Headers = {:}) -> Response {
+    textResponse(403, message, headers)
+}
+
+pub fn notFound(message: String = "not found", headers: Headers = {:}) -> Response {
+    textResponse(404, message, headers)
+}
+
+pub fn methodNotAllowed(allowed: List<Method>, message: String = "method not allowed", headers: Headers = {:}) -> Response {
+    let withAllow = withHeaderValue(headers, "Allow", formatMethodList(allowed))
+    textResponse(405, message, withAllow)
+}
+
+pub fn conflict(message: String = "conflict", headers: Headers = {:}) -> Response {
+    textResponse(409, message, headers)
+}
+
+pub fn gone(message: String = "gone", headers: Headers = {:}) -> Response {
+    textResponse(410, message, headers)
+}
+
+pub fn unprocessableContent(message: String = "unprocessable content", headers: Headers = {:}) -> Response {
+    textResponse(422, message, headers)
+}
+
+pub fn tooManyRequests(message: String = "too many requests", retryAfter: String = "", headers: Headers = {:}) -> Response {
+    let withRetry = if retryAfter.isEmpty() { headers } else { withHeaderValue(headers, "Retry-After", retryAfter) }
+    textResponse(429, message, withRetry)
+}
+
+pub fn internalServerError(message: String = "internal server error", headers: Headers = {:}) -> Response {
+    textResponse(500, message, headers)
+}
+
+pub fn serviceUnavailable(message: String = "service unavailable", retryAfter: String = "", headers: Headers = {:}) -> Response {
+    let withRetry = if retryAfter.isEmpty() { headers } else { withHeaderValue(headers, "Retry-After", retryAfter) }
+    textResponse(503, message, withRetry)
+}
+
+pub fn redirect(location: String, status: Int = 302, headers: Headers = {:}) -> Response {
+    response(status, b"", withHeaderValue(headers, "Location", location))
+}
+
+pub fn movedPermanently(location: String, headers: Headers = {:}) -> Response {
+    redirect(location, 301, headers)
+}
+
+pub fn found(location: String, headers: Headers = {:}) -> Response {
+    redirect(location, 302, headers)
+}
+
+pub fn seeOther(location: String, headers: Headers = {:}) -> Response {
+    redirect(location, 303, headers)
+}
+
+pub fn temporaryRedirect(location: String, headers: Headers = {:}) -> Response {
+    redirect(location, 307, headers)
+}
+
+pub fn permanentRedirect(location: String, headers: Headers = {:}) -> Response {
+    redirect(location, 308, headers)
+}
+
 pub fn serve(addr: String, handler: Handler) -> Result<(), Error>
+
+fn firstValue(values: List<String>) -> String? {
+    if values.isEmpty() {
+        None
+    } else {
+        Some(values[0])
+    }
+}
+
+fn authTokenFor(header: String?, scheme: String) -> String? {
+    match header {
+        Some(value) -> {
+            let trimmed = strings.trimSpace(value)
+            let parts = strings.splitN(trimmed, " ", 2)
+            if parts.len() != 2 {
+                return None
+            }
+            if strings.toUpper(parts[0]) != strings.toUpper(strings.trimSpace(scheme)) {
+                return None
+            }
+            let token = strings.trimSpace(parts[1])
+            if token.isEmpty() {
+                None
+            } else {
+                Some(token)
+            }
+        },
+        None -> None,
+    }
+}
+
+fn parseBasicAuthToken(token: String) -> Result<BasicAuth?, Error> {
+    let decoded = encoding.base64.decode(token)?
+    let text = decoded.toString()?
+    match strings.indexOf(text, ":") {
+        Some(at) -> Ok(Some(BasicAuth {
+            username: text[0..at],
+            password: text[at + 1..],
+        })),
+        None -> Err(error.new("http: invalid basic authorization payload")),
+    }
+}
+
+fn parsePairs(text: String, plusIsSpace: Bool) -> Result<QueryValues, Error> {
+    let mut out: QueryValues = {:}
+    if text.isEmpty() {
+        return Ok(out)
+    }
+    for pair in strings.split(text, "&") {
+        if pair.isEmpty() {
+            continue
+        }
+        let kv = strings.splitN(pair, "=", 2)
+        let key = decodeComponent(kv[0], plusIsSpace)?
+        let value = if kv.len() == 2 {
+            decodeComponent(kv[1], plusIsSpace)?
+        } else {
+            ""
+        }
+        out.update(key, |existing| {
+            let mut items = existing ?? []
+            items.push(value)
+            items
+        })
+    }
+    Ok(out)
+}
+
+fn formatPairs(values: QueryValues, plusForSpace: Bool) -> String {
+    let keys = values.keys().sorted()
+    let mut parts: List<String> = []
+    for key in keys {
+        let encodedKey = encodeComponent(key, plusForSpace)
+        let items = values.get(key) ?? []
+        if items.isEmpty() {
+            parts.push("{encodedKey}=")
+            continue
+        }
+        for value in items {
+            parts.push("{encodedKey}={encodeComponent(value, plusForSpace)}")
+        }
+    }
+    strings.join(parts, "&")
+}
+
+fn encodePair(name: String, value: String, plusForSpace: Bool) -> String {
+    "{encodeComponent(name, plusForSpace)}={encodeComponent(value, plusForSpace)}"
+}
+
+fn decodeComponent(text: String, plusIsSpace: Bool) -> Result<String, Error> {
+    let input = if plusIsSpace { strings.replaceAll(text, "+", "%20") } else { text }
+    encoding.url.decode(input)
+}
+
+fn encodeComponent(text: String, plusForSpace: Bool) -> String {
+    let encoded = encoding.url.encode(text)
+    if plusForSpace {
+        strings.replaceAll(encoded, "%20", "+")
+    } else {
+        encoded
+    }
+}
+
+fn parseCookieJar(header: String) -> CookieJar {
+    let mut out: CookieJar = {:}
+    for part in strings.split(header, ";") {
+        let item = strings.trimSpace(part)
+        if item.isEmpty() {
+            continue
+        }
+        let kv = strings.splitN(item, "=", 2)
+        let name = strings.trimSpace(kv[0])
+        if name.isEmpty() {
+            continue
+        }
+        let value = if kv.len() == 2 { strings.trimSpace(kv[1]) } else { "" }
+        out.insert(name, value)
+    }
+    out
+}
+
+fn formatCookieHeader(cookies: CookieJar) -> String {
+    let keys = cookies.keys().sorted()
+    let mut parts: List<String> = []
+    for key in keys {
+        parts.push("{key}={cookies.get(key).unwrap()}")
+    }
+    strings.join(parts, "; ")
+}
+
+fn parseNameValuePair(text: String) -> Result<(String, String), Error> {
+    let kv = strings.splitN(text, "=", 2)
+    let name = strings.trimSpace(kv[0])
+    if name.isEmpty() {
+        return Err(error.new("http: expected name=value pair"))
+    }
+    let value = if kv.len() == 2 { strings.trimSpace(kv[1]) } else { "" }
+    Ok((name, value))
+}
+
+fn acceptHeaderMatches(header: String, wanted: String) -> Bool {
+    let want = strings.toLower(strings.trimSpace(wanted))
+    let wantParts = strings.splitN(want, "/", 2)
+    for raw in strings.split(header, ",") {
+        match parseMediaType(raw) {
+            Some(mediaType) -> {
+                if mediaType.value == "*/*" || mediaType.value == want {
+                    return true
+                }
+                let parts = strings.splitN(mediaType.value, "/", 2)
+                if parts.len() == 2 && wantParts.len() == 2 && parts[1] == "*" && parts[0] == wantParts[0] {
+                    return true
+                }
+            },
+            None -> {},
+        }
+    }
+    false
+}
+
+fn lookupHeader(headers: Headers, name: String) -> String? {
+    let canonical = canonicalHeaderName(name)
+    match headers.get(canonical) {
+        Some(value) -> Some(value),
+        None        -> {
+            for (key, value) in headers {
+                if canonicalHeaderName(key) == canonical {
+                    return Some(value)
+                }
+            }
+            None
+        },
+    }
+}
+
+fn mergeHeaders(base: Headers, extra: Headers) -> Headers {
+    let mut out = base
+    for (key, value) in extra {
+        out = withHeaderValue(out, key, value)
+    }
+    out
+}
+
+fn withDefaultHeader(headers: Headers, name: String, value: String) -> Headers {
+    if lookupHeader(headers, name).isSome() {
+        return headers
+    }
+    withHeaderValue(headers, name, value)
+}
+
+fn withHeaderValue(headers: Headers, name: String, value: String) -> Headers {
+    let canonical = canonicalHeaderName(name)
+    if canonical.isEmpty() {
+        process.abort("http: header name must not be empty")
+    }
+    let mut out = headers
+    let mut victims: List<String> = []
+    for (key, unusedValue) in out {
+        if canonicalHeaderName(key) == canonical && key != canonical {
+            victims.push(key)
+        }
+    }
+    for key in victims {
+        out.remove(key)
+    }
+    out.insert(canonical, value)
+    out
+}
+
+fn removeHeader(headers: Headers, name: String) -> Headers {
+    let canonical = canonicalHeaderName(name)
+    if canonical.isEmpty() {
+        return headers
+    }
+    let mut out = headers
+    let mut victims: List<String> = []
+    for (key, unusedValue) in out {
+        if canonicalHeaderName(key) == canonical {
+            victims.push(key)
+        }
+    }
+    for key in victims {
+        out.remove(key)
+    }
+    out
+}
+
+fn canonicalHeaderName(name: String) -> String {
+    let trimmed = strings.trimSpace(name)
+    if trimmed.isEmpty() {
+        return ""
+    }
+    let mut parts: List<String> = []
+    for part in strings.split(strings.toLower(trimmed), "-") {
+        parts.push(canonicalHeaderPart(part))
+    }
+    strings.join(parts, "-")
+}
+
+fn canonicalHeaderPart(part: String) -> String {
+    if part.isEmpty() {
+        return ""
+    }
+    let chars = part.chars()
+    let mut out = ""
+    let mut i = 0
+    for i < chars.len() {
+        let c = chars[i]
+        if i == 0 {
+            out = "{out}{c.toUpper()}"
+        } else {
+            out = "{out}{c}"
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn splitFragment(text: String) -> (String, String?) {
+    let parts = strings.splitN(text, "#", 2)
+    if parts.len() == 2 {
+        (parts[0], Some(parts[1]))
+    } else {
+        (text, None)
+    }
+}
+
+fn appendFragment(text: String, fragment: String?) -> String {
+    match fragment {
+        Some(value) -> "{text}#{value}",
+        None        -> text,
+    }
+}
+
+fn urlPath(rawUrl: String) -> String {
+    let withoutFragment = splitFragment(rawUrl).0
+    let beforeQuery = strings.splitN(withoutFragment, "?", 2)[0]
+    if strings.contains(beforeQuery, "://") {
+        let parts = strings.splitN(beforeQuery, "://", 2)
+        let rest = parts[1]
+        let slash = findChar(rest, '/')
+        if slash == -1 {
+            return "/"
+        }
+        return normalizeRequestPath(rest[slash..])
+    }
+    normalizeRequestPath(beforeQuery)
+}
+
+fn urlQueryString(rawUrl: String) -> String? {
+    let withoutFragment = splitFragment(rawUrl).0
+    let parts = strings.splitN(withoutFragment, "?", 2)
+    if parts.len() == 2 {
+        Some(parts[1])
+    } else {
+        None
+    }
+}
+
+fn urlFragment(rawUrl: String) -> String? {
+    splitFragment(rawUrl).1
+}
+
+fn setUrlQuery(rawUrl: String, query: String) -> String {
+    let (withoutFragment, fragment) = splitFragment(rawUrl)
+    let base = strings.splitN(withoutFragment, "?", 2)[0]
+    let next = if query.isEmpty() { base } else { "{base}?{query}" }
+    appendFragment(next, fragment)
+}
+
+fn appendUrlQuery(rawUrl: String, encodedPair: String) -> String {
+    if encodedPair.isEmpty() {
+        return rawUrl
+    }
+    let (withoutFragment, fragment) = splitFragment(rawUrl)
+    let next = if strings.contains(withoutFragment, "?") {
+        "{withoutFragment}&{encodedPair}"
+    } else {
+        "{withoutFragment}?{encodedPair}"
+    }
+    appendFragment(next, fragment)
+}
+
+fn normalizeRequestPath(path: String) -> String {
+    if path.isEmpty() {
+        return "/"
+    }
+    let chars = path.chars()
+    if chars[0] == '/' {
+        return path
+    }
+    if strings.contains(path, ":") {
+        return path
+    }
+    "/{path}"
+}
+
+fn formatMethodList(methods: List<Method>) -> String {
+    let unique = uniqueMethods(methods)
+    let mut parts: List<String> = []
+    for method in unique {
+        parts.push(method.toString())
+    }
+    strings.join(parts, ", ")
+}
+
+fn uniqueMethods(methods: List<Method>) -> List<Method> {
+    let mut out: List<Method> = []
+    for method in methods {
+        if !methodListContains(out, method) {
+            out.push(method)
+        }
+    }
+    out
+}
+
+fn routeAllowsMethod(methods: List<Method>, method: Method) -> Bool {
+    methodListContains(methods, method)
+}
+
+fn methodListContains(methods: List<Method>, method: Method) -> Bool {
+    for item in methods {
+        if item == method {
+            return true
+        }
+    }
+    false
+}
+
+fn normalizeRoutePattern(pattern: String) -> String {
+    let trimmed = strings.trimSpace(pattern)
+    if trimmed.isEmpty() || trimmed == "/" {
+        return "/"
+    }
+    let withSlash = if strings.startsWith(trimmed, "/") { trimmed } else { "/{trimmed}" }
+    if withSlash != "/" && strings.endsWith(withSlash, "/") {
+        return strings.trimSuffix(withSlash, "/")
+    }
+    withSlash
+}
+
+fn splitRouteSegments(path: String) -> List<String> {
+    let normalized = normalizeRoutePattern(path)
+    if normalized == "/" {
+        return []
+    }
+    let trimmed = strings.trimSuffix(strings.trimPrefix(normalized, "/"), "/")
+    let mut out: List<String> = []
+    for segment in strings.split(trimmed, "/") {
+        if !segment.isEmpty() {
+            out.push(segment)
+        }
+    }
+    out
+}
+
+fn matchRoutePattern(pattern: String, path: String) -> Params? {
+    let patternSegments = splitRouteSegments(pattern)
+    let pathSegments = splitRouteSegments(path)
+    let mut params: Params = {:}
+    let mut pi = 0
+    let mut si = 0
+
+    for pi < patternSegments.len() {
+        let patternSegment = patternSegments[pi]
+        if strings.startsWith(patternSegment, "*") {
+            let name = patternSegment[1..]
+            if name.isEmpty() {
+                return None
+            }
+            params.insert(name, strings.join(pathSegments.drop(si), "/"))
+            return Some(params)
+        }
+        if si >= pathSegments.len() {
+            return None
+        }
+        if strings.startsWith(patternSegment, ":") {
+            let name = patternSegment[1..]
+            if name.isEmpty() {
+                return None
+            }
+            params.insert(name, pathSegments[si])
+        } else if patternSegment != pathSegments[si] {
+            return None
+        }
+        pi = pi + 1
+        si = si + 1
+    }
+
+    if si != pathSegments.len() {
+        return None
+    }
+    Some(params)
+}
+
+fn findChar(s: String, target: Char) -> Int {
+    let chars = s.chars()
+    let mut i = 0
+    for i < chars.len() {
+        if chars[i] == target {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
