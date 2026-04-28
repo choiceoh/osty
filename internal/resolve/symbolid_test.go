@@ -1,6 +1,7 @@
 package resolve
 
 import (
+	"encoding/hex"
 	"testing"
 
 	"github.com/osty/osty/internal/token"
@@ -87,6 +88,31 @@ func TestSymbolIDNilSafe(t *testing.T) {
 	var s *Symbol
 	if got := s.ID(); got != (SymbolID{}) {
 		t.Fatalf("nil Symbol.ID() should be zero value, got %x", got)
+	}
+}
+
+func TestSymbolIDPrefersSelfhostStableID(t *testing.T) {
+	stable := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	s := mkSym("Foo", SymStruct, 42, true, "/pkg")
+	s.StableID = stable
+	got := s.ID()
+	wantBytes, err := hex.DecodeString(stable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want SymbolID
+	copy(want[:], wantBytes)
+	if got != want {
+		t.Fatalf("Symbol.ID() = %x, want decoded stable id %x", got, want)
+	}
+}
+
+func TestSymbolIDFallsBackWhenStableIDInvalid(t *testing.T) {
+	a := mkSym("Foo", SymStruct, 42, true, "/pkg")
+	b := mkSym("Foo", SymStruct, 42, true, "/pkg")
+	a.StableID = "not-a-sha256"
+	if a.ID() != b.ID() {
+		t.Fatalf("invalid StableID should fall back to content hash; got %x vs %x", a.ID(), b.ID())
 	}
 }
 

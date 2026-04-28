@@ -3,6 +3,7 @@ package resolve
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 )
 
 // SymbolID is a content-addressable identity for a [Symbol]. Two
@@ -41,6 +42,15 @@ func (s *Symbol) ID() SymbolID {
 }
 
 func computeSymbolID(s *Symbol) SymbolID {
+	if s.StableID != "" {
+		if decoded, err := hex.DecodeString(s.StableID); err == nil {
+			var out SymbolID
+			if len(decoded) == len(out) {
+				copy(out[:], decoded)
+				return out
+			}
+		}
+	}
 	h := sha256.New()
 	writeLenBytes(h, []byte(s.Name))
 	h.Write([]byte{byte(s.Kind)})

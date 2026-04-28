@@ -42,14 +42,20 @@ func TestResolvePackageStructuredHandlesCrossFileRefsASTNative(t *testing.T) {
 	helperPath := filepath.Join(dir, "helper.osty")
 	mainPath := filepath.Join(dir, "main.osty")
 
-	helper := canonicalSelfhostInput(t, []byte(`pub fn helper() -> Int {
+	helper := canonicalSelfhostInput(t, []byte(`pub struct Box { value: Int }
+
+pub fn helper() -> Int {
     41
 }
 `), 0)
 	helper.Name = "helper.osty"
 	helper.Path = helperPath
 
-	main := canonicalSelfhostInput(t, []byte(`fn main() {
+	main := canonicalSelfhostInput(t, []byte(`fn useBox(x: Box) -> Int {
+    helper()
+}
+
+fn main() {
     let value = helper()
 }
 `), len(helper.Source)+1)
@@ -89,14 +95,20 @@ func TestResolvePackageStructuredAssignsStableIDs(t *testing.T) {
 	helperPath := filepath.Join(dir, "helper.osty")
 	mainPath := filepath.Join(dir, "main.osty")
 
-	helper := canonicalSelfhostInput(t, []byte(`pub fn helper() -> Int {
+	helper := canonicalSelfhostInput(t, []byte(`pub struct Box { value: Int }
+
+pub fn helper() -> Int {
     41
 }
 `), 0)
 	helper.Name = "helper.osty"
 	helper.Path = helperPath
 
-	main := canonicalSelfhostInput(t, []byte(`fn main() {
+	main := canonicalSelfhostInput(t, []byte(`fn useBox(x: Box) -> Int {
+    helper()
+}
+
+fn main() {
     let value = helper()
 }
 `), len(helper.Source)+1)
@@ -114,9 +126,17 @@ func TestResolvePackageStructuredAssignsStableIDs(t *testing.T) {
 	if helperSym == nil {
 		t.Fatalf("missing helper symbol in %#v", resolved.Symbols)
 	}
+	boxSym := findResolvedSymbol(resolved, "Box", "type")
+	if boxSym == nil {
+		t.Fatalf("missing Box symbol in %#v", resolved.Symbols)
+	}
 	ref := findResolvedRef(resolved, "helper")
 	if ref == nil {
 		t.Fatalf("missing helper ref in %#v", resolved.Refs)
+	}
+	boxTypeRef := findResolvedTypeRef(resolved, "Box", mainPath)
+	if boxTypeRef == nil {
+		t.Fatalf("missing Box type ref in %#v", resolved.TypeRefs)
 	}
 	if resolved.PackageID == "" || helperSym.ID == "" || helperSym.PackageID == "" || helperSym.DeclID == "" {
 		t.Fatalf("stable symbol ids missing: package=%q helper=%#v", resolved.PackageID, helperSym)
@@ -130,14 +150,23 @@ func TestResolvePackageStructuredAssignsStableIDs(t *testing.T) {
 	if ref.TargetSymbolID != helperSym.ID {
 		t.Fatalf("ref target symbol id = %q, want helper symbol id %q", ref.TargetSymbolID, helperSym.ID)
 	}
+	if boxTypeRef.ID == "" || boxTypeRef.TargetSymbolID == "" || boxTypeRef.PackageID == "" {
+		t.Fatalf("stable type-ref ids missing: %#v", boxTypeRef)
+	}
+	if boxTypeRef.TargetSymbolID != boxSym.ID {
+		t.Fatalf("type-ref target symbol id = %q, want Box symbol id %q", boxTypeRef.TargetSymbolID, boxSym.ID)
+	}
+	if boxTypeRef.TargetFile != helperPath {
+		t.Fatalf("type-ref target file = %q, want %q", boxTypeRef.TargetFile, helperPath)
+	}
 
 	surface := selfhost.ResolveSurfaceFromResult(resolved)
 	if surface.PackageID != resolved.PackageID {
 		t.Fatalf("surface package id = %q, want %q", surface.PackageID, resolved.PackageID)
 	}
-	if len(surface.Symbols) != len(resolved.Symbols) || len(surface.Refs) != len(resolved.Refs) {
-		t.Fatalf("surface sizes = symbols:%d refs:%d, want symbols:%d refs:%d",
-			len(surface.Symbols), len(surface.Refs), len(resolved.Symbols), len(resolved.Refs))
+	if len(surface.Symbols) != len(resolved.Symbols) || len(surface.Refs) != len(resolved.Refs) || len(surface.TypeRefs) != len(resolved.TypeRefs) {
+		t.Fatalf("surface sizes = symbols:%d refs:%d typeRefs:%d, want symbols:%d refs:%d typeRefs:%d",
+			len(surface.Symbols), len(surface.Refs), len(surface.TypeRefs), len(resolved.Symbols), len(resolved.Refs), len(resolved.TypeRefs))
 	}
 	foundSurfaceRef := false
 	for _, r := range surface.Refs {
@@ -148,6 +177,16 @@ func TestResolvePackageStructuredAssignsStableIDs(t *testing.T) {
 	}
 	if !foundSurfaceRef {
 		t.Fatalf("surface missing helper ref with stable ids: %#v", surface.Refs)
+	}
+	foundSurfaceTypeRef := false
+	for _, r := range surface.TypeRefs {
+		if r.Name == "Box" && r.TargetSymbolID == boxSym.ID && r.TargetFile == helperPath {
+			foundSurfaceTypeRef = true
+			break
+		}
+	}
+	if !foundSurfaceTypeRef {
+		t.Fatalf("surface missing Box type ref with stable ids: %#v", surface.TypeRefs)
 	}
 }
 
@@ -169,8 +208,8 @@ refs
   <source> x 31:32 -> <source> 10:16 target=3c1090f85cd3 binding=3b74ed8bdf62
   <source> helper 64:70 -> <source> 0:34 target=acd850f616a7 binding=d165f3eb124f
 typeRefs
-  <source> Int 13:16 id=0c33e363e987
-  <source> Int 21:24 id=a14d0d87d94d
+  <source> Int 13:16 -> <source> -1:-1 target= id=8c42640e43d0
+  <source> Int 21:24 -> <source> -1:-1 target= id=3935b86a3bbb
 diagnostics
 `
 	if got != want {
@@ -752,6 +791,15 @@ func findResolvedRef(result selfhost.ResolveResult, name string) *selfhost.Resol
 	for i := range result.Refs {
 		if result.Refs[i].Name == name {
 			return &result.Refs[i]
+		}
+	}
+	return nil
+}
+
+func findResolvedTypeRef(result selfhost.ResolveResult, name string, file string) *selfhost.ResolvedTypeRef {
+	for i := range result.TypeRefs {
+		if result.TypeRefs[i].Name == name && (file == "" || result.TypeRefs[i].File == file) {
+			return &result.TypeRefs[i]
 		}
 	}
 	return nil

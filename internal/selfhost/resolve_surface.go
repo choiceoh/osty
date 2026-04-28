@@ -41,12 +41,16 @@ type ResolveReferenceSurfaceRecord struct {
 }
 
 type ResolveTypeReferenceSurfaceRecord struct {
-	TypeRefID string
-	PackageID string
-	Name      string
-	File      string
-	Start     int
-	End       int
+	TypeRefID      string
+	PackageID      string
+	TargetSymbolID string
+	Name           string
+	File           string
+	Start          int
+	End            int
+	TargetFile     string
+	TargetStart    int
+	TargetEnd      int
 }
 
 type ResolveDiagnosticSurfaceRecord struct {
@@ -98,12 +102,16 @@ func ResolveSurfaceFromResult(result ResolveResult) ResolveSurface {
 	}
 	for _, ref := range result.TypeRefs {
 		surface.TypeRefs = append(surface.TypeRefs, ResolveTypeReferenceSurfaceRecord{
-			TypeRefID: ref.ID,
-			PackageID: ref.PackageID,
-			Name:      ref.Name,
-			File:      ref.File,
-			Start:     ref.Start,
-			End:       ref.End,
+			TypeRefID:      ref.ID,
+			PackageID:      ref.PackageID,
+			TargetSymbolID: ref.TargetSymbolID,
+			Name:           ref.Name,
+			File:           ref.File,
+			Start:          ref.Start,
+			End:            ref.End,
+			TargetFile:     ref.TargetFile,
+			TargetStart:    ref.TargetStart,
+			TargetEnd:      ref.TargetEnd,
 		})
 	}
 	for _, d := range result.Diagnostics {
@@ -142,7 +150,7 @@ func resolveSurfaceRefKey(r ResolveReferenceSurfaceRecord) string {
 }
 
 func resolveSurfaceTypeRefKey(r ResolveTypeReferenceSurfaceRecord) string {
-	return resolveSnapshotKey(r.File, r.Start, r.End, r.Name)
+	return resolveSnapshotKey(r.File, r.Start, r.End, r.Name, r.TargetFile, r.TargetStart, r.TargetEnd)
 }
 
 func resolveSurfaceDiagnosticKey(d ResolveDiagnosticSurfaceRecord) string {

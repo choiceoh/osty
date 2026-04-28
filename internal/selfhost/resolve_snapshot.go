@@ -38,12 +38,14 @@ func ResolveSnapshot(result ResolveResult) string {
 
 	typeRefs := append([]ResolvedTypeRef(nil), result.TypeRefs...)
 	sort.Slice(typeRefs, func(i, j int) bool {
-		return resolveSnapshotKey(typeRefs[i].File, typeRefs[i].Start, typeRefs[i].End, typeRefs[i].Name) <
-			resolveSnapshotKey(typeRefs[j].File, typeRefs[j].Start, typeRefs[j].End, typeRefs[j].Name)
+		return resolveSnapshotKey(typeRefs[i].File, typeRefs[i].Start, typeRefs[i].End, typeRefs[i].Name, typeRefs[i].TargetFile, typeRefs[i].TargetStart, typeRefs[i].TargetEnd) <
+			resolveSnapshotKey(typeRefs[j].File, typeRefs[j].Start, typeRefs[j].End, typeRefs[j].Name, typeRefs[j].TargetFile, typeRefs[j].TargetStart, typeRefs[j].TargetEnd)
 	})
 	b.WriteString("typeRefs\n")
 	for _, ref := range typeRefs {
-		fmt.Fprintf(&b, "  %s %s %d:%d id=%s\n", resolveSnapshotFile(ref.File), ref.Name, ref.Start, ref.End, shortResolveID(ref.ID))
+		fmt.Fprintf(&b, "  %s %s %d:%d -> %s %d:%d target=%s id=%s\n",
+			resolveSnapshotFile(ref.File), ref.Name, ref.Start, ref.End, resolveSnapshotFile(ref.TargetFile), ref.TargetStart, ref.TargetEnd,
+			shortResolveID(ref.TargetSymbolID), shortResolveID(ref.ID))
 	}
 
 	diags := append([]ResolveDiagnosticRecord(nil), result.Diagnostics...)

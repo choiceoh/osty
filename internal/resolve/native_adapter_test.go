@@ -5,9 +5,11 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/token"
 )
 
 // TestLoadPackageForNativeMultiFileIsAstbridgeFree pins the PR6 wedge:
@@ -179,6 +181,99 @@ func TestNativeStructuredCrossFileRefCarriesStableTargetID(t *testing.T) {
 	}
 	if !foundRef {
 		t.Fatalf("missing native helper ref with target symbol id %q: %#v", helperSym.ID, structured.Refs)
+	}
+}
+
+func TestNativeBridgeTypeRefCarriesStableTargetID(t *testing.T) {
+	dir := t.TempDir()
+	aPath := filepath.Join(dir, "a.osty")
+	bPath := filepath.Join(dir, "b.osty")
+	if err := os.WriteFile(aPath, []byte(`pub struct Box { value: Int }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bPath, []byte(`fn useBox(x: Box) -> Int {
+    1
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pkg, err := LoadPackageArenaFirst(dir)
+	if err != nil {
+		t.Fatalf("LoadPackageArenaFirst: %v", err)
+	}
+	result := ResolvePackage(pkg, NewPrelude())
+	if len(result.Diags) != 0 {
+		t.Fatalf("diagnostics = %#v, want none", result.Diags)
+	}
+	structured, err := NativeStructuredResult(pkg)
+	if err != nil {
+		t.Fatalf("NativeStructuredResult: %v", err)
+	}
+	var boxSym *selfhost.ResolvedSymbol
+	for i := range structured.Symbols {
+		if structured.Symbols[i].Name == "Box" && structured.Symbols[i].File == aPath {
+			boxSym = &structured.Symbols[i]
+			break
+		}
+	}
+	if boxSym == nil || boxSym.ID == "" {
+		t.Fatalf("missing native Box symbol id: %#v", structured.Symbols)
+	}
+	var boxTypeRef *selfhost.ResolvedTypeRef
+	for i := range structured.TypeRefs {
+		if structured.TypeRefs[i].Name == "Box" && structured.TypeRefs[i].File == bPath {
+			boxTypeRef = &structured.TypeRefs[i]
+			break
+		}
+	}
+	if boxTypeRef == nil || boxTypeRef.TargetSymbolID != boxSym.ID {
+		t.Fatalf("Box type ref target = %#v, want symbol id %q", boxTypeRef, boxSym.ID)
+	}
+
+	resolved, files, err := nativeResolveArtifacts(pkg)
+	if err != nil {
+		t.Fatalf("nativeResolveArtifacts: %v", err)
+	}
+	fi := nativeResolveFileInfoFor(files, bPath)
+	origOff, ok := nativeToOriginalOffset(fi, boxTypeRef.Start)
+	if !ok {
+		t.Fatalf("could not remap Box type ref offset %d through %#v", boxTypeRef.Start, fi)
+	}
+	nt := &ast.NamedType{
+		ID:   ast.NodeID(1),
+		PosV: token.Pos{Offset: origOff},
+		EndV: token.Pos{Offset: origOff + len("Box")},
+		Path: []string{"Box"},
+	}
+	declIndexes := make(map[string]map[int]ast.Node, len(pkg.Files))
+	for _, pf := range pkg.Files {
+		if pf.File != nil {
+			declIndexes[pf.Path] = buildDeclIndex(pf.File)
+		}
+	}
+	typeRefsByID, typeRefIdents := bridgeTypeRefs(
+		resolved.TypeRefs,
+		resolved.Symbols,
+		files,
+		fi,
+		map[int]*ast.NamedType{origOff: nt},
+		declIndexes,
+		nil,
+	)
+	if len(typeRefIdents) != 1 || typeRefIdents[0] != nt {
+		t.Fatalf("typeRefIdents = %#v, want synthetic Box NamedType", typeRefIdents)
+	}
+	sym := typeRefsByID[nt.ID]
+	if sym == nil {
+		t.Fatalf("Box NamedType has no bridged symbol")
+	}
+	if sym.StableID != boxSym.ID {
+		t.Fatalf("Box bridged stable id = %q, want %q", sym.StableID, boxSym.ID)
+	}
+	if sym.ID() != (&Symbol{StableID: boxSym.ID}).ID() {
+		t.Fatalf("Box bridged Symbol.ID() did not decode stable id: got %x, want stable %s", sym.ID(), boxSym.ID)
 	}
 }
 

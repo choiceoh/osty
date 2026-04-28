@@ -55,7 +55,7 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 		pf.RefsByID = refsByID
 		pf.RefIdents = refIdents
 
-		typeRefsByID, typeRefIdents := bridgeTypeRefs(result.TypeRefs, fi, typeIdx, fileScope)
+		typeRefsByID, typeRefIdents := bridgeTypeRefs(result.TypeRefs, result.Symbols, files, fi, typeIdx, declIndexes, fileScope)
 		pf.TypeRefsByID = typeRefsByID
 		pf.TypeRefIdents = typeRefIdents
 
@@ -451,12 +451,17 @@ func supplementUseAliasRefs(
 
 func bridgeTypeRefs(
 	typeRefs []selfhost.ResolvedTypeRef,
+	symbols []selfhost.ResolvedSymbol,
+	files []nativeResolveFileInfo,
 	fi nativeResolveFileInfo,
 	typeIdx map[int]*ast.NamedType,
-	scope *Scope,
+	declIndexes map[string]map[int]ast.Node,
+	fileScope *Scope,
 ) (map[ast.NodeID]*Symbol, []*ast.NamedType) {
 	typeRefsByID := make(map[ast.NodeID]*Symbol, len(typeRefs))
 	typeRefIdents := make([]*ast.NamedType, 0, len(typeRefs))
+	symCache := make(map[nativeSymbolTarget]*Symbol)
+	symByTarget := nativeSymbolByTarget(symbols)
 
 	for _, ref := range typeRefs {
 		origOff, ok := nativeToOriginalOffset(fi, ref.Start)
@@ -467,15 +472,70 @@ func bridgeTypeRefs(
 		if nt == nil {
 			continue
 		}
-		// Look up the target by name in the scope chain.
-		sym := scope.LookupType(ref.Name)
-		if sym == nil {
-			sym = &Symbol{Name: ref.Name, Kind: SymBuiltin, Pub: true}
-		}
+		sym := findOrCreateTypeSymbol(symCache, ref, symByTarget, files, fi, declIndexes, fileScope)
 		typeRefsByID[nt.ID] = sym
 		typeRefIdents = append(typeRefIdents, nt)
 	}
 	return typeRefsByID, typeRefIdents
+}
+
+func findOrCreateTypeSymbol(
+	cache map[nativeSymbolTarget]*Symbol,
+	ref selfhost.ResolvedTypeRef,
+	symByTarget map[nativeSymbolTarget]selfhost.ResolvedSymbol,
+	files []nativeResolveFileInfo,
+	fi nativeResolveFileInfo,
+	declIndexes map[string]map[int]ast.Node,
+	fileScope *Scope,
+) *Symbol {
+	key := nativeSymbolTarget{file: ref.TargetFile, node: ref.TargetNode, start: ref.TargetStart, end: ref.TargetEnd}
+	if sym, ok := cache[key]; ok {
+		return sym
+	}
+	if ref.TargetNode < 0 {
+		return &Symbol{StableID: ref.TargetSymbolID, PackageID: ref.PackageID, Name: ref.Name, Kind: SymBuiltin, Pub: true}
+	}
+	nativeSym := symByTarget[key]
+	targetFI := nativeResolveFileInfoFor(files, ref.TargetFile)
+	if targetFI.path == "" && ref.TargetFile == "" {
+		targetFI = fi
+	}
+	targetOrigOff, ok := nativeToOriginalOffset(targetFI, ref.TargetStart)
+	if !ok {
+		return &Symbol{StableID: ref.TargetSymbolID, PackageID: ref.PackageID, Name: ref.Name, Kind: SymBuiltin, Pub: true}
+	}
+	declIdx := declIndexes[ref.TargetFile]
+	decl := findNearestDecl(declIdx, targetOrigOff)
+	if _, isUse := decl.(*ast.UseDecl); isUse && fileScope != nil && ref.TargetFile == fi.path {
+		if sym := fileScope.LookupLocal(ref.Name); sym != nil {
+			fillSymbolIDsFromTypeRef(sym, ref)
+			cache[key] = sym
+			return sym
+		}
+	}
+	name := ref.Name
+	if nativeSym.Name != "" {
+		name = nativeSym.Name
+	}
+	sym := &Symbol{
+		StableID:  ref.TargetSymbolID,
+		PackageID: ref.PackageID,
+		DeclID:    nativeSym.DeclID,
+		Name:      name,
+		Kind:      nativeKindToSymbolKind(nativeSym.Kind),
+		Pub:       true,
+		Decl:      decl,
+	}
+	if sym.Kind == SymUnknown && nativeSym.Kind == "" {
+		sym.Kind = SymUnknown
+	}
+	if decl != nil {
+		sym.Pos = decl.Pos()
+	} else {
+		sym.Pos = token.Pos{Offset: targetOrigOff}
+	}
+	cache[key] = sym
+	return sym
 }
 
 func findOrCreateSymbol(
@@ -531,6 +591,18 @@ func findOrCreateSymbol(
 }
 
 func fillSymbolIDsFromRef(sym *Symbol, ref selfhost.ResolvedRef) {
+	if sym == nil {
+		return
+	}
+	if sym.StableID == "" {
+		sym.StableID = ref.TargetSymbolID
+	}
+	if sym.PackageID == "" {
+		sym.PackageID = ref.PackageID
+	}
+}
+
+func fillSymbolIDsFromTypeRef(sym *Symbol, ref selfhost.ResolvedTypeRef) {
 	if sym == nil {
 		return
 	}

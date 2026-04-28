@@ -51158,8 +51158,11 @@ type SelfResolvedRef struct {
 
 // Osty: /tmp/selfhost_merged.osty:25674:5
 type SelfResolvedTypeRef struct {
-	name string
-	node int
+	name        string
+	node        int
+	target      int
+	targetStart int
+	targetEnd   int
 }
 
 // Osty: /tmp/selfhost_merged.osty:25681:5
@@ -52841,12 +52844,12 @@ func srResolveOneAstType(name string, start int, end int, node int, scope *SelfR
 			return srSelfTypeOutsideAtNode(out, start, end, node)
 		}
 		// Osty: /tmp/selfhost_merged.osty:27095:9
-		return srRecordTypeRef(out, name, node)
+		return srRecordTypeRef(out, name, node, srScopeLookup(scope, head))
 	}
 	// Osty: /tmp/selfhost_merged.osty:27097:5
 	if srIsBuiltinTypeName(head) {
 		// Osty: /tmp/selfhost_merged.osty:27098:9
-		return srRecordTypeRef(out, name, node)
+		return srRecordTypeRef(out, name, node, srEmptySymbol())
 	}
 	// Osty: /tmp/selfhost_merged.osty:27100:5
 	sym := srScopeLookup(scope, head)
@@ -52883,7 +52886,7 @@ func srResolveOneAstType(name string, start int, end int, node int, scope *SelfR
 		// Osty: /tmp/selfhost_merged.osty:27108:9
 		return out
 	}
-	return srRecordTypeRef(out, name, node)
+	return srRecordTypeRef(out, name, node, sym)
 }
 
 // Osty: /tmp/selfhost_merged.osty:27113:1
@@ -52968,7 +52971,7 @@ func srRecordBareRef(result *SelfResolveResult, name string, node int) *SelfReso
 }
 
 // Osty: /tmp/selfhost_merged.osty:27178:1
-func srRecordTypeRef(result *SelfResolveResult, name string, node int) *SelfResolveResult {
+func srRecordTypeRef(result *SelfResolveResult, name string, node int, target *SelfSymbol) *SelfResolveResult {
 	// Osty: /tmp/selfhost_merged.osty:27179:5
 	out := result
 	_ = out
@@ -52986,7 +52989,7 @@ func srRecordTypeRef(result *SelfResolveResult, name string, node int) *SelfReso
 	}()
 	// Osty: /tmp/selfhost_merged.osty:27181:5
 	func() struct{} {
-		out.typeRefList = append(out.typeRefList, &SelfResolvedTypeRef{name: name, node: node})
+		out.typeRefList = append(out.typeRefList, &SelfResolvedTypeRef{name: name, node: node, target: target.node, targetStart: target.start, targetEnd: target.end})
 		return struct{}{}
 	}()
 	return out
@@ -53423,9 +53426,11 @@ func srResolvePatternTypePath(path string, start int, end int, node int, scope *
 	// Osty: /tmp/selfhost_merged.osty:27476:5
 	if head == "Self" {
 		// Osty: /tmp/selfhost_merged.osty:27477:9
-		if srScopeHas(scope, head) {
+		selfSym := srScopeLookup(scope, head)
+		_ = selfSym
+		if selfSym.name != "" {
 			// Osty: /tmp/selfhost_merged.osty:27478:13
-			return srRecordTypeRef(out, head, node)
+			return srRecordTypeRef(out, head, node, selfSym)
 		}
 		// Osty: /tmp/selfhost_merged.osty:27480:9
 		return srSelfTypeOutsideAtNode(out, start, end, node)
@@ -53433,7 +53438,7 @@ func srResolvePatternTypePath(path string, start int, end int, node int, scope *
 	// Osty: /tmp/selfhost_merged.osty:27482:5
 	if srIsBuiltinTypeName(head) {
 		// Osty: /tmp/selfhost_merged.osty:27483:9
-		return srRecordTypeRef(out, head, node)
+		return srRecordTypeRef(out, head, node, srEmptySymbol())
 	}
 	// Osty: /tmp/selfhost_merged.osty:27485:5
 	sym := srScopeLookup(scope, head)
@@ -53470,7 +53475,7 @@ func srResolvePatternTypePath(path string, start int, end int, node int, scope *
 		// Osty: /tmp/selfhost_merged.osty:27493:9
 		return out
 	}
-	return srRecordTypeRef(out, head, node)
+	return srRecordTypeRef(out, head, node, sym)
 }
 
 // Osty: /tmp/selfhost_merged.osty:27498:1
@@ -53537,7 +53542,7 @@ func srResolvePatternVariantPath(path string, start int, end int, node int, scop
 	// Osty: /tmp/selfhost_merged.osty:27528:5
 	if srIsBuiltinTypeName(head) {
 		// Osty: /tmp/selfhost_merged.osty:27529:9
-		return srRecordTypeRef(out, head, node)
+		return srRecordTypeRef(out, head, node, srEmptySymbol())
 	}
 	// Osty: /tmp/selfhost_merged.osty:27531:5
 	sym := srScopeLookup(scope, head)
@@ -53567,7 +53572,7 @@ func srResolvePatternVariantPath(path string, start int, end int, node int, scop
 	// Osty: /tmp/selfhost_merged.osty:27537:5
 	if srSymbolCanBeType(sym) {
 		// Osty: /tmp/selfhost_merged.osty:27538:9
-		return srRecordTypeRef(out, head, node)
+		return srRecordTypeRef(out, head, node, sym)
 	}
 	// Osty: /tmp/selfhost_merged.osty:27540:5
 	if sym.kind == "variant" {
