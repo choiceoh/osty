@@ -1884,6 +1884,18 @@ func TestLowerStdlibListMethods(t *testing.T) {
 			want: "intrinsic list_push(_1, const 42 Int)",
 		},
 		{
+			name: "insert", receiverT: listInt, method: "insert", retT: ir.TUnit,
+			args: []ir.Arg{
+				{Value: &ir.IntLit{Text: "1", T: ir.TInt}},
+				{Value: &ir.IntLit{Text: "42", T: ir.TInt}},
+			},
+			want: "intrinsic list_insert(_1, const 1 Int, const 42 Int)",
+		},
+		{
+			name: "clear", receiverT: listInt, method: "clear", retT: ir.TUnit,
+			want: "intrinsic list_clear(_1)",
+		},
+		{
 			name: "get", receiverT: listInt, method: "get", retT: ir.TInt,
 			args: []ir.Arg{{Value: &ir.IntLit{Text: "0", T: ir.TInt}}},
 			want: "intrinsic list_get(_1, const 0 Int)",
@@ -1988,6 +2000,613 @@ func TestLowerStdlibSetMethods(t *testing.T) {
 	}
 }
 
+func TestLowerStdlibMethodRecoversPoisonedLocalReceiverType(t *testing.T) {
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "lenAfterPoison",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "xs", Type: listInt}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name:  "tmp",
+					Type:  listInt,
+					Value: &ir.Ident{Name: "xs", Kind: ir.IdentParam, T: listInt},
+				},
+			},
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "tmp", Kind: ir.IdentLocal, T: ir.ErrTypeVal},
+				Name:     "len",
+				T:        ir.ErrTypeVal,
+			},
+		},
+	}
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if !strings.Contains(text, "intrinsic list_len(") {
+		t.Fatalf("poisoned local receiver should still lower through list_len:\n%s", text)
+	}
+	if strings.Contains(text, "call len(") {
+		t.Fatalf("poisoned local receiver fell back to unresolved len call:\n%s", text)
+	}
+}
+
+func TestLowerStdlibFreeLenRecoversPoisonedNestedFieldReceiverType(t *testing.T) {
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	arenaT := &ir.NamedType{Name: "Arena"}
+	parserT := &ir.NamedType{Name: "Parser"}
+	arenaDecl := &ir.StructDecl{
+		Name:   "Arena",
+		Fields: []*ir.Field{{Name: "nodes", Type: listInt, Exported: true}},
+	}
+	parserDecl := &ir.StructDecl{
+		Name:   "Parser",
+		Fields: []*ir.Field{{Name: "arena", Type: arenaT, Exported: true}},
+	}
+	nodes := &ir.FieldExpr{
+		X: &ir.FieldExpr{
+			X:    &ir.Ident{Name: "p", Kind: ir.IdentParam, T: parserT},
+			Name: "arena",
+			T:    ir.ErrTypeVal,
+		},
+		Name: "nodes",
+		T:    ir.ErrTypeVal,
+	}
+	fn := &ir.FnDecl{
+		Name:   "nodeCount",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "p", Type: parserT}},
+		Body: &ir.Block{
+			Result: &ir.CallExpr{
+				Callee: &ir.Ident{Name: "len", Kind: ir.IdentBuiltin, T: ir.ErrTypeVal},
+				Args:   []ir.Arg{{Value: nodes}},
+				T:      ir.ErrTypeVal,
+			},
+		},
+	}
+	out := Lower(&ir.Module{Package: "main", Decls: []ir.Decl{arenaDecl, parserDecl, fn}})
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	if !strings.Contains(text, "intrinsic list_len(") {
+		t.Fatalf("free len over poisoned nested field should lower through list_len:\n%s", text)
+	}
+	if strings.Contains(text, "call len(") || strings.Contains(text, "<error>") {
+		t.Fatalf("free len leaked unresolved call or ErrType:\n%s", text)
+	}
+}
+
+func TestLowerStdlibMethodRecoversStaleIdentStorageType(t *testing.T) {
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	arenaT := &ir.NamedType{Name: "Arena"}
+	parserT := &ir.NamedType{Name: "Parser"}
+	staleT := &ir.NamedType{Name: "SelfDocField"}
+	arenaDecl := &ir.StructDecl{
+		Name:   "Arena",
+		Fields: []*ir.Field{{Name: "nodes", Type: listInt, Exported: true}},
+	}
+	parserDecl := &ir.StructDecl{
+		Name:   "Parser",
+		Fields: []*ir.Field{{Name: "arena", Type: arenaT, Exported: true}},
+	}
+	nodes := &ir.FieldExpr{
+		X: &ir.FieldExpr{
+			X:    &ir.Ident{Name: "p", Kind: ir.IdentParam, T: staleT},
+			Name: "arena",
+			T:    ir.ErrTypeVal,
+		},
+		Name: "nodes",
+		T:    ir.ErrTypeVal,
+	}
+	fn := &ir.FnDecl{
+		Name:   "nodeCountMethod",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "p", Type: parserT}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: nodes,
+				Name:     "len",
+				T:        ir.ErrTypeVal,
+			},
+		},
+	}
+	out := Lower(&ir.Module{Package: "main", Decls: []ir.Decl{arenaDecl, parserDecl, fn}})
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	if !strings.Contains(text, "intrinsic list_len(") {
+		t.Fatalf("method len over stale param annotation should lower through list_len:\n%s", text)
+	}
+	if strings.Contains(text, "call len(") || strings.Contains(text, "<error>") {
+		t.Fatalf("method len leaked unresolved call or ErrType:\n%s", text)
+	}
+}
+
+func TestLowerStdlibFreeCollectionCalls(t *testing.T) {
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	mapStrInt := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, ir.TInt}, Builtin: true}
+	setInt := &ir.NamedType{Name: "Set", Args: []ir.Type{ir.TInt}, Builtin: true}
+	cases := []struct {
+		name      string
+		receiverT ir.Type
+		callName  string
+		retT      ir.Type
+		want      string
+	}{
+		{name: "list_len", receiverT: listInt, callName: "len", retT: ir.TInt, want: "intrinsic list_len(_1)"},
+		{name: "list_is_empty", receiverT: listInt, callName: "isEmpty", retT: ir.TBool, want: "intrinsic list_is_empty(_1)"},
+		{name: "map_len", receiverT: mapStrInt, callName: "len", retT: ir.TInt, want: "intrinsic map_len(_1)"},
+		{name: "set_len", receiverT: setInt, callName: "len", retT: ir.TInt, want: "intrinsic set_len(_1)"},
+		{name: "string_len", receiverT: ir.TString, callName: "len", retT: ir.TInt, want: "intrinsic string_len(_1)"},
+		{name: "string_is_empty", receiverT: ir.TString, callName: "isEmpty", retT: ir.TBool, want: "intrinsic string_is_empty(_1)"},
+		{name: "bytes_len", receiverT: ir.TBytes, callName: "len", retT: ir.TInt, want: "intrinsic bytes_len(_1)"},
+		{name: "bytes_is_empty", receiverT: ir.TBytes, callName: "isEmpty", retT: ir.TBool, want: "intrinsic bytes_is_empty(_1)"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			fn := &ir.FnDecl{
+				Name:   "call",
+				Return: tc.retT,
+				Params: []*ir.Param{{Name: "r", Type: tc.receiverT}},
+				Body: &ir.Block{
+					Result: &ir.CallExpr{
+						Callee: &ir.Ident{Name: tc.callName, Kind: ir.IdentBuiltin, T: ir.ErrTypeVal},
+						Args:   []ir.Arg{{Value: &ir.Ident{Name: "r", Kind: ir.IdentParam, T: tc.receiverT}}},
+						T:      ir.ErrTypeVal,
+					},
+				},
+			}
+			mod := lowerHIR(t, fn)
+			text := Print(mod)
+			if !strings.Contains(text, tc.want) {
+				t.Fatalf("[%s] expected %q in:\n%s", tc.name, tc.want, text)
+			}
+			if strings.Contains(text, "call "+tc.callName+"(") {
+				t.Fatalf("[%s] free call should not remain unresolved:\n%s", tc.name, text)
+			}
+		})
+	}
+}
+
+func TestLowerFnConstRecoversSignatureWhenIdentTypeStale(t *testing.T) {
+	fnT := &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TString}
+	callee := &ir.FnDecl{
+		Name:   "render",
+		Return: ir.TString,
+		Params: []*ir.Param{{Name: "n", Type: ir.TInt}},
+		Body: &ir.Block{
+			Result: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "ok"}}},
+		},
+	}
+	caller := &ir.FnDecl{
+		Name:   "caller",
+		Return: ir.TString,
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{&ir.LetStmt{
+				Name: "f",
+				Type: fnT,
+				Value: &ir.Ident{
+					Name: "render",
+					Kind: ir.IdentFn,
+					T:    ir.TString,
+				},
+			}},
+			Result: &ir.CallExpr{
+				Callee: &ir.Ident{Name: "f", Kind: ir.IdentLocal, T: fnT},
+				Args:   []ir.Arg{{Value: &ir.IntLit{Text: "1", T: ir.TInt}}},
+				T:      ir.TString,
+			},
+		},
+	}
+	out := Lower(&ir.Module{Package: "main", Decls: []ir.Decl{callee, caller}})
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	var saw bool
+	for _, fn := range out.Functions {
+		if fn.Name != "caller" {
+			continue
+		}
+		for _, bb := range fn.Blocks {
+			for _, instr := range bb.Instrs {
+				assign, ok := instr.(*AssignInstr)
+				if !ok {
+					continue
+				}
+				use, ok := assign.Src.(*UseRV)
+				if !ok {
+					continue
+				}
+				cop, ok := use.Op.(*ConstOp)
+				if !ok {
+					continue
+				}
+				fc, ok := cop.Const.(*FnConst)
+				if !ok || fc.Symbol != "render" {
+					continue
+				}
+				saw = true
+				if _, ok := cop.Type().(*ir.FnType); !ok {
+					t.Fatalf("ConstOp for function value kept stale type %T/%v:\n%s", cop.Type(), cop.Type(), PrintFunction(fn))
+				}
+				if _, ok := fc.Type().(*ir.FnType); !ok {
+					t.Fatalf("FnConst kept stale type %T/%v:\n%s", fc.Type(), fc.Type(), PrintFunction(fn))
+				}
+			}
+		}
+	}
+	if !saw {
+		t.Fatalf("did not find render FnConst:\n%s", Print(out))
+	}
+}
+
+func TestLowerStringInterpolationRecoversStaleListIndexType(t *testing.T) {
+	listStr := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "renderIndexed",
+		Return: ir.TString,
+		Params: []*ir.Param{
+			{Name: "xs", Type: listStr},
+			{Name: "i", Type: ir.TInt},
+		},
+		Body: &ir.Block{
+			Result: &ir.StringLit{Parts: []ir.StringPart{{
+				Expr: &ir.IndexExpr{
+					X:     &ir.Ident{Name: "xs", Kind: ir.IdentParam, T: ir.TString},
+					Index: &ir.Ident{Name: "i", Kind: ir.IdentParam, T: ir.TInt},
+					T:     ir.TChar,
+				},
+			}}},
+		},
+	}
+	out := lowerHIR(t, fn)
+	mirFn := out.LookupFunction("renderIndexed")
+	if mirFn == nil {
+		t.Fatal("missing renderIndexed")
+	}
+	for _, bb := range mirFn.Blocks {
+		for _, instr := range bb.Instrs {
+			in, ok := instr.(*IntrinsicInstr)
+			if !ok || in.Kind != IntrinsicStringConcat {
+				continue
+			}
+			if len(in.Args) != 1 {
+				t.Fatalf("expected one interpolation arg:\n%s", PrintFunction(mirFn))
+			}
+			if in.Args[0].Type() != ir.TString {
+				t.Fatalf("list index interpolation kept stale type %T/%v:\n%s", in.Args[0].Type(), in.Args[0].Type(), PrintFunction(mirFn))
+			}
+			return
+		}
+	}
+	t.Fatalf("missing string_concat:\n%s", PrintFunction(mirFn))
+}
+
+func TestLowerStringSliceRecoversStaleRangeIndexType(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "sliceThenTrim",
+		Return: ir.TString,
+		Params: []*ir.Param{
+			{Name: "s", Type: ir.TString},
+			{Name: "n", Type: ir.TInt},
+		},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.IndexExpr{
+					X: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString},
+					Index: &ir.RangeLit{
+						Start: &ir.IntLit{Text: "1", T: ir.TInt},
+						End:   &ir.Ident{Name: "n", Kind: ir.IdentParam, T: ir.TInt},
+						T:     &ir.NamedType{Name: "Range", Args: []ir.Type{ir.TInt}, Builtin: true},
+					},
+					T: ir.TChar,
+				},
+				Name: "trim",
+				T:    ir.TString,
+			},
+		},
+	}
+	out := lowerHIR(t, fn)
+	mirFn := out.LookupFunction("sliceThenTrim")
+	if mirFn == nil {
+		t.Fatal("missing sliceThenTrim")
+	}
+	text := PrintFunction(mirFn)
+	if !strings.Contains(text, "intrinsic string_substring(_1, const 1 Int, _2)") {
+		t.Fatalf("string range index did not lower through substring:\n%s", text)
+	}
+	if !strings.Contains(text, "intrinsic string_trim(") {
+		t.Fatalf("trim receiver did not remain String after range index recovery:\n%s", text)
+	}
+	if strings.Contains(text, "call Char__trim") {
+		t.Fatalf("stale Char receiver leaked into method call:\n%s", text)
+	}
+}
+
+func TestLowerStdlibStringsTrimSpaceFreeFn(t *testing.T) {
+	useDecl := &ir.UseDecl{
+		Path:    []string{"std", "strings"},
+		RawPath: "std.strings",
+		Alias:   "strings",
+	}
+	fn := &ir.FnDecl{
+		Name:   "trimmed",
+		Return: ir.TString,
+		Params: []*ir.Param{{Name: "s", Type: ir.TString}},
+		Body: &ir.Block{
+			Result: &ir.CallExpr{
+				Callee: &ir.FieldExpr{
+					X:    &ir.Ident{Name: "strings"},
+					Name: "trimSpace",
+					T:    ir.ErrTypeVal,
+				},
+				Args: []ir.Arg{{Value: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString}}},
+				T:    ir.ErrTypeVal,
+			},
+		},
+	}
+	out := Lower(&ir.Module{Package: "main", Decls: []ir.Decl{useDecl, fn}})
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	if !strings.Contains(text, "intrinsic string_trim(_1)") {
+		t.Fatalf("strings.trimSpace should lower through string_trim intrinsic:\n%s", text)
+	}
+	if strings.Contains(text, "call std.strings.trimSpace") {
+		t.Fatalf("strings.trimSpace remained unresolved:\n%s", text)
+	}
+}
+
+func TestLowerStdlibStringsRepeatFreeFn(t *testing.T) {
+	useDecl := &ir.UseDecl{
+		Path:    []string{"std", "strings"},
+		RawPath: "std.strings",
+		Alias:   "strings",
+	}
+	fn := &ir.FnDecl{
+		Name:   "repeated",
+		Return: ir.TString,
+		Params: []*ir.Param{{Name: "s", Type: ir.TString}},
+		Body: &ir.Block{
+			Result: &ir.CallExpr{
+				Callee: &ir.FieldExpr{
+					X:    &ir.Ident{Name: "strings"},
+					Name: "repeat",
+					T:    ir.ErrTypeVal,
+				},
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString}},
+					{Value: &ir.IntLit{Text: "3", T: ir.TInt}},
+				},
+				T: ir.ErrTypeVal,
+			},
+		},
+	}
+	out := Lower(&ir.Module{Package: "main", Decls: []ir.Decl{useDecl, fn}})
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	if !strings.Contains(text, "intrinsic string_repeat(_1, const 3 Int)") {
+		t.Fatalf("strings.repeat should lower through string_repeat intrinsic:\n%s", text)
+	}
+	if strings.Contains(text, "call std.strings.repeat") {
+		t.Fatalf("strings.repeat remained unresolved:\n%s", text)
+	}
+}
+
+func TestLowerStdlibBytesFreeFns(t *testing.T) {
+	useDecl := &ir.UseDecl{
+		Path:    []string{"std", "bytes"},
+		RawPath: "std.bytes",
+		Alias:   "bytes",
+	}
+	listByte := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TByte}, Builtin: true}
+	listBytes := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TBytes}, Builtin: true}
+	resultString := &ir.NamedType{Name: "Result", Args: []ir.Type{ir.TString, &ir.NamedType{Name: "Error", Builtin: true}}, Builtin: true}
+	resultBytes := &ir.NamedType{Name: "Result", Args: []ir.Type{ir.TBytes, &ir.NamedType{Name: "Error", Builtin: true}}, Builtin: true}
+	cases := []struct {
+		name string
+		ret  ir.Type
+		args []*ir.Param
+		call []ir.Arg
+		want string
+	}{
+		{
+			name: "from", ret: ir.TBytes,
+			args: []*ir.Param{{Name: "buf", Type: listByte}},
+			call: []ir.Arg{{Value: &ir.Ident{Name: "buf", Kind: ir.IdentParam, T: listByte}}},
+			want: "intrinsic bytes_from_list(_1)",
+		},
+		{
+			name: "fromString", ret: ir.TBytes,
+			args: []*ir.Param{{Name: "s", Type: ir.TString}},
+			call: []ir.Arg{{Value: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString}}},
+			want: "intrinsic bytes_from_string(_1)",
+		},
+		{
+			name: "toString", ret: resultString,
+			args: []*ir.Param{{Name: "b", Type: ir.TBytes}},
+			call: []ir.Arg{{Value: &ir.Ident{Name: "b", Kind: ir.IdentParam, T: ir.TBytes}}},
+			want: "intrinsic bytes_to_string(_1)",
+		},
+		{
+			name: "fromHex", ret: resultBytes,
+			args: []*ir.Param{{Name: "s", Type: ir.TString}},
+			call: []ir.Arg{{Value: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString}}},
+			want: "intrinsic bytes_from_hex(_1)",
+		},
+		{
+			name: "join", ret: ir.TBytes,
+			args: []*ir.Param{{Name: "parts", Type: listBytes}, {Name: "sep", Type: ir.TBytes}},
+			call: []ir.Arg{
+				{Value: &ir.Ident{Name: "parts", Kind: ir.IdentParam, T: listBytes}},
+				{Value: &ir.Ident{Name: "sep", Kind: ir.IdentParam, T: ir.TBytes}},
+			},
+			want: "intrinsic bytes_join(_2, _1)",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := &ir.FnDecl{
+				Name:   "bytes" + strings.Title(tc.name),
+				Return: tc.ret,
+				Params: tc.args,
+				Body: &ir.Block{
+					Result: &ir.CallExpr{
+						Callee: &ir.FieldExpr{
+							X:    &ir.Ident{Name: "bytes"},
+							Name: tc.name,
+							T:    ir.ErrTypeVal,
+						},
+						Args: tc.call,
+						T:    ir.ErrTypeVal,
+					},
+				},
+			}
+			out := Lower(&ir.Module{Package: "main", Decls: []ir.Decl{useDecl, fn}})
+			if errs := Validate(out); len(errs) > 0 {
+				t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+			}
+			text := Print(out)
+			if !strings.Contains(text, tc.want) {
+				t.Fatalf("bytes.%s should lower through %q:\n%s", tc.name, tc.want, text)
+			}
+			if strings.Contains(text, "call std.bytes."+tc.name) {
+				t.Fatalf("bytes.%s remained unresolved:\n%s", tc.name, text)
+			}
+		})
+	}
+}
+
+func TestLowerPrimitiveScalarConversionIntrinsics(t *testing.T) {
+	cases := []struct {
+		name   string
+		recvT  ir.Type
+		retT   ir.Type
+		method string
+		want   string
+	}{
+		{name: "intToByte", recvT: ir.TInt, retT: ir.TByte, method: "toByte", want: "intrinsic int_to_byte(_1)"},
+		{name: "intToChar", recvT: ir.TInt, retT: ir.TChar, method: "toChar", want: "intrinsic int_to_char(_1)"},
+		{name: "byteToChar", recvT: ir.TByte, retT: ir.TChar, method: "toChar", want: "intrinsic byte_to_char(_1)"},
+		{name: "charToByte", recvT: ir.TChar, retT: ir.TByte, method: "toByte", want: "intrinsic char_to_byte(_1)"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := &ir.FnDecl{
+				Name:   tc.name,
+				Return: tc.retT,
+				Params: []*ir.Param{{Name: "x", Type: tc.recvT}},
+				Body: &ir.Block{
+					Result: &ir.MethodCall{
+						Receiver: &ir.Ident{Name: "x", Kind: ir.IdentParam, T: tc.recvT},
+						Name:     tc.method,
+						T:        tc.retT,
+					},
+				},
+			}
+			out := lowerHIR(t, fn)
+			text := Print(out)
+			if !strings.Contains(text, tc.want) {
+				t.Fatalf("%s should lower through %q:\n%s", tc.name, tc.want, text)
+			}
+			if strings.Contains(text, "__"+tc.method) {
+				t.Fatalf("%s leaked into direct primitive call:\n%s", tc.name, text)
+			}
+		})
+	}
+}
+
+func TestLowerStdlibStringsExpandedFreeFns(t *testing.T) {
+	useDecl := &ir.UseDecl{
+		Path:    []string{"std", "strings"},
+		RawPath: "std.strings",
+		Alias:   "strings",
+	}
+	listStr := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	cases := []struct {
+		name string
+		ret  ir.Type
+		args []ir.Arg
+		want string
+	}{
+		{
+			name: "trimPrefix", ret: ir.TString,
+			args: []ir.Arg{
+				{Value: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString}},
+				{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "pre"}}}},
+			},
+			want: `intrinsic string_trim_prefix(_1, const "pre")`,
+		},
+		{
+			name: "replaceAll", ret: ir.TString,
+			args: []ir.Arg{
+				{Value: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString}},
+				{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "_"}}}},
+				{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "-"}}}},
+			},
+			want: `intrinsic string_replace_all(_1, const "_", const "-")`,
+		},
+		{
+			name: "splitN", ret: listStr,
+			args: []ir.Arg{
+				{Value: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString}},
+				{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: ","}}}},
+				{Value: &ir.IntLit{Text: "2", T: ir.TInt}},
+			},
+			want: `intrinsic string_split_n(_1, const ",", const 2 Int)`,
+		},
+		{
+			name: "fields", ret: listStr,
+			args: []ir.Arg{{Value: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString}}},
+			want: `intrinsic string_fields(_1)`,
+		},
+		{
+			name: "concat", ret: ir.TString,
+			args: []ir.Arg{
+				{Value: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString}},
+				{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "!"}}}},
+			},
+			want: `intrinsic string_concat(_1, const "!")`,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			fn := &ir.FnDecl{
+				Name:   "expanded_" + tc.name,
+				Return: tc.ret,
+				Params: []*ir.Param{{Name: "s", Type: ir.TString}},
+				Body: &ir.Block{Result: &ir.CallExpr{
+					Callee: &ir.FieldExpr{
+						X:    &ir.Ident{Name: "strings"},
+						Name: tc.name,
+						T:    ir.ErrTypeVal,
+					},
+					Args: tc.args,
+					T:    ir.ErrTypeVal,
+				}},
+			}
+			out := Lower(&ir.Module{Package: "main", Decls: []ir.Decl{useDecl, fn}})
+			if errs := Validate(out); len(errs) > 0 {
+				t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+			}
+			text := Print(out)
+			if !strings.Contains(text, tc.want) {
+				t.Fatalf("strings.%s should lower through %q:\n%s", tc.name, tc.want, text)
+			}
+			if strings.Contains(text, "call std.strings."+tc.name) {
+				t.Fatalf("strings.%s remained unresolved:\n%s", tc.name, text)
+			}
+		})
+	}
+}
+
 func TestLowerStdlibStringMethods(t *testing.T) {
 	listStr := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
 	listChar := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TChar}, Builtin: true}
@@ -2020,17 +2639,54 @@ func TestLowerStdlibStringMethods(t *testing.T) {
 			want: `intrinsic string_index_of(_1, const ",")`,
 		},
 		{
+			name: "lastIndexOf", receiverT: ir.TString, method: "lastIndexOf", retT: optInt,
+			args: []ir.Arg{{Value: sep}},
+			want: `intrinsic string_last_index_of(_1, const ",")`,
+		},
+		{
 			name: "split", receiverT: ir.TString, method: "split", retT: listStr,
 			args: []ir.Arg{{Value: sep}},
 			want: `intrinsic string_split(_1, const ",")`,
+		},
+		{
+			name: "splitN", receiverT: ir.TString, method: "splitN", retT: listStr,
+			args: []ir.Arg{{Value: sep}, {Value: &ir.IntLit{Text: "2", T: ir.TInt}}},
+			want: `intrinsic string_split_n(_1, const ",", const 2 Int)`,
+		},
+		{
+			name: "fields", receiverT: ir.TString, method: "fields", retT: listStr,
+			want: "intrinsic string_fields(_1)",
 		},
 		{
 			name: "trim", receiverT: ir.TString, method: "trim", retT: ir.TString,
 			want: "intrinsic string_trim(_1)",
 		},
 		{
+			name: "trimPrefix", receiverT: ir.TString, method: "trimPrefix", retT: ir.TString,
+			args: []ir.Arg{{Value: sep}},
+			want: `intrinsic string_trim_prefix(_1, const ",")`,
+		},
+		{
+			name: "trimSuffix", receiverT: ir.TString, method: "trimSuffix", retT: ir.TString,
+			args: []ir.Arg{{Value: sep}},
+			want: `intrinsic string_trim_suffix(_1, const ",")`,
+		},
+		{
+			name: "trimStart", receiverT: ir.TString, method: "trimStart", retT: ir.TString,
+			want: "intrinsic string_trim_start(_1)",
+		},
+		{
+			name: "trimEnd", receiverT: ir.TString, method: "trimEnd", retT: ir.TString,
+			want: "intrinsic string_trim_end(_1)",
+		},
+		{
 			name: "toUpper", receiverT: ir.TString, method: "toUpper", retT: ir.TString,
 			want: "intrinsic string_to_upper(_1)",
+		},
+		{
+			name: "replaceAll", receiverT: ir.TString, method: "replaceAll", retT: ir.TString,
+			args: []ir.Arg{{Value: sep}, {Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "-"}}}}},
+			want: `intrinsic string_replace_all(_1, const ",", const "-")`,
 		},
 		{
 			name: "chars", receiverT: ir.TString, method: "chars", retT: listChar,

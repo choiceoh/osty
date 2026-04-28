@@ -67,6 +67,47 @@ fn main() {
 	}
 }
 
+func TestGenerateRuntimeFilepathFFIUsesRuntimeABI(t *testing.T) {
+	file := parseLLVMGenFile(t, `use runtime.path.filepath as filepath {
+    fn Base(path: String) -> String
+    fn Ext(path: String) -> String
+}
+
+fn classify(path: String) -> String {
+    filepath.Ext(filepath.Base(path))
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/runtime_filepath.osty",
+		Target:      "x86_64-unknown-linux-gnu",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_path_filepath_Base(ptr)",
+		"declare ptr @osty_rt_path_filepath_Ext(ptr)",
+		"call ptr @osty_rt_path_filepath_Base",
+		"call ptr @osty_rt_path_filepath_Ext",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+	for _, forbidden := range []string{
+		"LLVM002",
+		"Osty LLVM backend skeleton",
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("generated IR still looks unsupported; found %q in:\n%s", forbidden, got)
+		}
+	}
+}
+
 func TestGenerateRuntimeStringsDeclaredAliasesUseCanonicalRuntimeABI(t *testing.T) {
 	file := parseLLVMGenFile(t, `use runtime.strings as strings {
     fn len(s: String) -> Int

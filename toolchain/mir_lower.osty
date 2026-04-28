@@ -679,6 +679,19 @@ pub fn mirLowerFunctionBody(
     span: MirSpan,
 ) {
     let bs = mirLowerBodyState(l, out, retT)
+    let mut params = decl.params
+    if asMethod {
+        let selfParam = hirParam("self", hirTypeNamed(mirLowerSelfOwnerName(decl), []), decl.span)
+        let mut withSelf: List<HirParam> = []
+        withSelf.push(selfParam)
+        for p in decl.params {
+            withSelf.push(p)
+        }
+        params = withSelf
+    }
+    for p in params {
+        bs.paramTypes.push(p.typ)
+    }
     if asMethod && bs.paramLocals.len() > 0 {
         bs.self.hasOwner = true
         bs.self.typeName = mirLowerSelfOwnerName(decl)
@@ -1118,6 +1131,7 @@ pub struct MirLowerBodyState {
 
     // Quick access to parameter locals by positional index.
     pub paramLocals: List<Int>,
+    pub paramTypes: List<HirType>,
 
     // Method receiver context. `hasOwner` is false for free fns.
     pub self: MirLowerOwnerContext,
@@ -1145,6 +1159,7 @@ pub fn mirLowerBodyState(
         cur: out.entry,
         scopes: [],
         paramLocals: [],
+        paramTypes: [],
         self: mirLowerOwnerNone(),
         loopStack: [],
         deferFrames: [],
@@ -1532,8 +1547,11 @@ pub fn mirLowerExprAsOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
 /// type, dispatch via `mirLowerExprInto`, and return a Copy of the
 /// temp. Matches Go's `lowerExprAsOperand` default branch.
 fn mirLowerExprAsOperandFallback(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
-    let t = if hirTypeIsValid(e.typ) {
+    let recoveredT = mirLowerRecoveredExprType(bs, e)
+    let t = if hirTypeIsValid(e.typ) && !hirTypeIsErr(e.typ) {
         e.typ
+    } else if hirTypeIsValid(recoveredT) && !hirTypeIsErr(recoveredT) {
+        recoveredT
     } else {
         hirTypeErr()
     }
@@ -1542,6 +1560,146 @@ fn mirLowerExprAsOperandFallback(bs: MirLowerBodyState, e: HirExpr) -> MirOperan
     mirLowerEmitInstr(bs, mirStorageLiveInstr(tmp, span))
     mirLowerExprInto(bs, e, tmp, t)
     mirOperandCopy(mirPlace(tmp), hirTypeString(t))
+}
+
+/// mirLowerRecoveredExprType patches the small set of expression
+/// shapes that commonly reach MIR with HirTypeErr after checker
+/// suppression. It mirrors Go's recoveredTypeOf/recoverOperandType
+/// enough for collection builtin calls and nested field chains.
+pub fn mirLowerRecoveredExprType(bs: MirLowerBodyState, e: HirExpr) -> HirType {
+    if e.kind == HirExprIdent {
+        let identT = mirLowerIdentRecoveredType(bs, e)
+        if hirTypeIsValid(identT) && !hirTypeIsErr(identT) {
+            return identT
+        }
+    }
+    if e.kind == HirExprField {
+        let fieldT = mirLowerFieldExprRecoveredType(bs, e)
+        if hirTypeIsValid(fieldT) && !hirTypeIsErr(fieldT) {
+            return fieldT
+        }
+    }
+    if e.kind == HirExprIndex {
+        let indexT = mirLowerIndexExprRecoveredType(bs, e)
+        if hirTypeIsValid(indexT) && !hirTypeIsErr(indexT) {
+            return indexT
+        }
+    }
+    if hirTypeIsValid(e.typ) && !hirTypeIsErr(e.typ) {
+        return e.typ
+    }
+    match e.kind {
+        HirExprCall -> mirLowerCallExprRecoveredType(bs, e),
+        _ -> e.typ,
+    }
+}
+
+fn mirLowerIdentRecoveredType(bs: MirLowerBodyState, e: HirExpr) -> HirType {
+    if e.kind != HirExprIdent {
+        return hirTypeInvalid()
+    }
+    let id = mirLowerLookupName(bs, e.identName)
+    if id < 0 {
+        return hirTypeInvalid()
+    }
+    let mut i = 0
+    for pid in bs.paramLocals {
+        if pid == id {
+            if i < bs.paramTypes.len() {
+                return bs.paramTypes[i]
+            }
+            return hirTypeInvalid()
+        }
+        i = i + 1
+    }
+    hirTypeInvalid()
+}
+
+fn mirLowerFieldExprRecoveredType(bs: MirLowerBodyState, e: HirExpr) -> HirType {
+    if e.fieldTarget.len() == 0 {
+        return e.typ
+    }
+    let recvT = mirLowerRecoveredExprType(bs, e.fieldTarget[0])
+    let structName = hirTypeNameOf(recvT)
+    let fieldT = mirLowerStructFieldType(bs.l, structName, e.fieldName)
+    if hirTypeIsValid(fieldT) && !hirTypeIsErr(fieldT) {
+        return fieldT
+    }
+    e.typ
+}
+
+fn mirLowerIndexExprRecoveredType(bs: MirLowerBodyState, e: HirExpr) -> HirType {
+    if e.indexTarget.len() == 0 {
+        return e.typ
+    }
+    let recvT = mirLowerRecoveredExprType(bs, e.indexTarget[0])
+    if e.indexIndex.len() > 0 && e.indexIndex[0].kind == HirExprRange {
+        if recvT.kind == HirTypePrim && recvT.primKind == HirPrimString {
+            return hirTString()
+        }
+        if recvT.kind == HirTypeNamed && recvT.namedName == "List" {
+            return recvT
+        }
+    }
+    match recvT.kind {
+        HirTypeNamed -> {
+            if recvT.namedName == "List" && recvT.namedArgs.len() > 0 {
+                return recvT.namedArgs[0]
+            }
+            if recvT.namedName == "Map" && recvT.namedArgs.len() >= 2 {
+                return recvT.namedArgs[1]
+            }
+        },
+        HirTypePrim -> {
+            if recvT.primKind == HirPrimString {
+                return hirTChar()
+            }
+            if recvT.primKind == HirPrimBytes {
+                return hirTByte()
+            }
+        },
+        _ -> {},
+    }
+    e.typ
+}
+
+fn mirLowerCallExprRecoveredType(bs: MirLowerBodyState, e: HirExpr) -> HirType {
+    if e.callCallee.len() == 0 {
+        return e.typ
+    }
+    let callee = e.callCallee[0]
+    if callee.kind == HirExprIdent {
+        let kind = mirLowerBuiltinFreeCallIntrinsic(bs, callee.identName, e.callArgs)
+        match kind {
+            MirIntrinsicInvalid -> {},
+            _ -> {
+                if callee.identName == "len" { return hirTInt() }
+                if callee.identName == "isEmpty" { return hirTBool() }
+            },
+        }
+    }
+    if callee.kind == HirExprField && callee.fieldTarget.len() > 0 {
+        let recv = callee.fieldTarget[0]
+        let useIdx = mirLowerUseAliasIndexForReceiver(bs.l, recv)
+        if useIdx >= 0 {
+            let use_ = bs.l.useAliases[useIdx]
+            let rt = mirLowerStdlibStringFreeFnReturnType(
+                mirLowerUseQualifier(use_),
+                callee.fieldName,
+            )
+            if hirTypeIsValid(rt) && !hirTypeIsErr(rt) {
+                return rt
+            }
+            let brt = mirLowerStdlibBytesFreeFnReturnType(
+                mirLowerUseQualifier(use_),
+                callee.fieldName,
+            )
+            if hirTypeIsValid(brt) && !hirTypeIsErr(brt) {
+                return brt
+            }
+        }
+    }
+    e.typ
 }
 
 fn mirLowerExprAsOperandHint(
@@ -1698,16 +1856,57 @@ fn mirLowerIdentOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
     if e.identName == "None" && e.identKind != HirIdentLocal && e.identKind != HirIdentParam {
         return mirLowerNoneOperandHint(bs, e, mirLowerVariantValueType(bs.l, "None", e.typ))
     }
+    let localId = mirLowerLookupName(bs, e.identName)
+    if localId >= 0 {
+        let recovered = mirLowerIdentRecoveredType(bs, e)
+        let localTypeText = if hirTypeIsValid(recovered) && !hirTypeIsErr(recovered) {
+            hirTypeString(recovered)
+        } else {
+            typeText
+        }
+        return mirOperandCopy(mirPlace(localId), localTypeText)
+    }
     match e.identKind {
         HirIdentLocal -> mirLowerIdentLocalOperand(bs, e, typeText),
         HirIdentParam -> mirLowerIdentLocalOperand(bs, e, typeText),
-        HirIdentFn -> mirOperandConst(mirConstFn(e.identName, typeText)),
+        HirIdentFn -> mirOperandConst(mirConstFn(
+            e.identName,
+            hirTypeString(mirLowerFnValueType(bs.l, e.identName, e.typ)),
+        )),
         HirIdentGlobal -> mirLowerIdentGlobalOperand(bs, e, typeText),
         HirIdentVariant -> mirLowerIdentVariantOperand(bs, e),
         HirIdentTypeName -> mirLowerIdentUnsupported(bs, e, "type-name"),
         HirIdentBuiltin -> mirLowerIdentUnsupported(bs, e, "builtin"),
         HirIdentUnknown -> mirLowerIdentUnsupported(bs, e, "unresolved"),
     }
+}
+
+fn mirLowerFnValueType(l: MirLowerer, name: String, annotated: HirType) -> HirType {
+    let sigIdx = mirLowerSignatureForFn(l, name)
+    if sigIdx >= 0 {
+        return mirLowerFnTypeFromSignature(l.fnSigs[sigIdx])
+    }
+    if hirTypeIsValid(annotated) {
+        return annotated
+    }
+    hirTypeErr()
+}
+
+fn mirLowerFnTypeFromSignature(sig: MirLowerFnSignature) -> HirType {
+    let mut params: List<HirType> = []
+    for p in sig.params {
+        if hirTypeIsValid(p.typ) {
+            params.push(p.typ)
+        } else {
+            params.push(hirTypeErr())
+        }
+    }
+    let ret = if hirTypeIsValid(sig.retType) {
+        sig.retType
+    } else {
+        hirTypeErr()
+    }
+    hirTypeFn(params, ret)
 }
 
 fn mirLowerIdentLocalOperand(bs: MirLowerBodyState, e: HirExpr, typeText: String) -> MirOperand {
@@ -1805,7 +2004,7 @@ fn mirLowerFieldExprOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
     if !mirLowerPlaceIsValid(place) {
         return mirOperandConst(mirConstUnit())
     }
-    mirOperandCopy(place, hirTypeString(e.typ))
+    mirOperandCopy(place, hirTypeString(mirLowerRecoveredExprType(bs, e)))
 }
 
 fn mirLowerTupleAccessOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
@@ -1821,7 +2020,7 @@ fn mirLowerIndexExprOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
     if !mirLowerPlaceIsValid(place) {
         return mirOperandConst(mirConstUnit())
     }
-    mirOperandCopy(place, hirTypeString(e.typ))
+    mirOperandCopy(place, hirTypeString(mirLowerRecoveredExprType(bs, e)))
 }
 
 // ====================================================================
@@ -1998,6 +2197,10 @@ pub fn mirLowerExprToPlace(bs: MirLowerBodyState, e: HirExpr) -> MirPlace {
 }
 
 fn mirLowerIdentPlace(bs: MirLowerBodyState, e: HirExpr) -> MirPlace {
+    let localId = mirLowerLookupName(bs, e.identName)
+    if localId >= 0 {
+        return mirPlace(localId)
+    }
     match e.identKind {
         HirIdentLocal -> {
             let id = mirLowerLookupName(bs, e.identName)
@@ -2039,9 +2242,13 @@ pub fn mirLowerFieldExprPlace(bs: MirLowerBodyState, e: HirExpr) -> MirPlace {
     if !mirLowerPlaceIsValid(base) {
         return mirPlace(-1)
     }
-    let structName = hirTypeNameOf(recv.typ)
+    let structName = hirTypeNameOf(mirLowerRecoveredExprType(bs, recv))
     let fieldIdx = mirLowerStructFieldIndex(bs.l, structName, e.fieldName)
-    let proj = mirFieldProj(fieldIdx, e.fieldName, hirTypeString(e.typ))
+    let proj = mirFieldProj(
+        fieldIdx,
+        e.fieldName,
+        hirTypeString(mirLowerRecoveredExprType(bs, e)),
+    )
     mirPlaceProject(base, proj)
 }
 
@@ -2078,7 +2285,7 @@ pub fn mirLowerIndexExprPlace(bs: MirLowerBodyState, e: HirExpr) -> MirPlace {
     // The index projection on MirPlace takes a local id when available,
     // otherwise a constant index. We spill the operand into a temp so
     // the MIR builder has a local id to carry on the projection.
-    let elemTypeText = hirTypeString(e.typ)
+    let elemTypeText = hirTypeString(mirLowerRecoveredExprType(bs, e))
     let proj = mirLowerMakeIndexProj(bs, idxOp, idxExpr.typ, elemTypeText, mirSpanFromHir(e.span))
     mirPlaceProject(base, proj)
 }
@@ -3084,7 +3291,42 @@ fn mirLowerTupleAccessRValue(bs: MirLowerBodyState, e: HirExpr) -> MirRValue {
 }
 
 fn mirLowerIndexRValue(bs: MirLowerBodyState, e: HirExpr) -> MirRValue {
+    if e.indexTarget.len() > 0 && e.indexIndex.len() > 0 {
+        let idx = e.indexIndex[0]
+        if idx.kind == HirExprRange {
+            let recvT = mirLowerRecoveredExprType(bs, e.indexTarget[0])
+            if recvT.kind == HirTypePrim && recvT.primKind == HirPrimString {
+                let op = mirLowerStringSliceOperand(bs, e, idx)
+                if op.kind != MirOpInvalid {
+                    return mirRVUse(op)
+                }
+            }
+        }
+    }
     mirRVUse(mirLowerIndexExprOperand(bs, e))
+}
+
+fn mirLowerStringSliceOperand(bs: MirLowerBodyState, e: HirExpr, rng: HirExpr) -> MirOperand {
+    if rng.rangeStart.len() == 0 || rng.rangeEnd.len() == 0 || rng.rangeInclusive {
+        return mirOperandInvalid()
+    }
+    if e.indexTarget.len() == 0 {
+        return mirOperandInvalid()
+    }
+    let span = mirSpanFromHir(e.span)
+    let recvOp = mirLowerExprAsOperand(bs, e.indexTarget[0])
+    let startOp = mirLowerExprAsOperand(bs, rng.rangeStart[0])
+    let endOp = mirLowerExprAsOperand(bs, rng.rangeEnd[0])
+    let tmp = mirLowerFreshTemp(bs, hirTString(), span)
+    let mut args: List<MirOperand> = []
+    args.push(recvOp)
+    args.push(startOp)
+    args.push(endOp)
+    mirLowerEmitInstr(
+        bs,
+        mirIntrinsicInstr(true, mirPlace(tmp), MirIntrinsicStringSubstring, args, span),
+    )
+    mirOperandCopy(mirPlace(tmp), "String")
 }
 
 fn mirLowerTupleLitRValue(bs: MirLowerBodyState, e: HirExpr) -> MirRValue {
@@ -3396,6 +3638,14 @@ pub fn mirLowerCallExprInto(
                 return
             },
         }
+        let bk = mirLowerBuiltinFreeCallIntrinsic(bs, callee.identName, e.callArgs)
+        match bk {
+            MirIntrinsicInvalid -> {},
+            _ -> {
+                mirLowerEmitBuiltinFreeCallIntrinsic(bs, bk, e.callArgs, dest, destT, span)
+                return
+            },
+        }
     }
     // 2. Use-alias qualified call: `thread.spawn(f)`, `std.runtime.raw.null()`,
     //    `strings.split(s, ",")`. Only triggers on FieldExpr callees
@@ -3460,6 +3710,14 @@ fn mirLowerCallExprQualifiedIntrinsic(
         MirIntrinsicInvalid -> {},
         _ -> {
             mirLowerEmitStringFreeFnIntrinsic(bs, sk, e.callArgs, dest, destT, span)
+            return true
+        },
+    }
+    let bk = mirLowerStdlibBytesFreeFnToIntrinsic(qualifier, name)
+    match bk {
+        MirIntrinsicInvalid -> {},
+        _ -> {
+            mirLowerEmitBytesFreeFnIntrinsic(bs, bk, e.callArgs, dest, destT, span)
             return true
         },
     }
@@ -4933,12 +5191,21 @@ pub fn mirLowerMethodCallInto(
                 return
             },
         }
+        let bk = mirLowerStdlibBytesFreeFnToIntrinsic(qualifier, e.methodName)
+        match bk {
+            MirIntrinsicInvalid -> {},
+            _ -> {
+                mirLowerEmitBytesFreeFnIntrinsic(bs, bk, e.methodArgs, dest, destT, span)
+                return
+            },
+        }
         mirLowerMethodCallQualified(bs, e, use_, dest, destT, span)
         return
     }
+    let recvT = mirLowerRecoveredExprType(bs, recv)
     // 2. Concurrency method intrinsic (ch.recv() / h.join() /
     //    g.spawn(f) etc.) on runtime-owned receiver types.
-    let concKind = mirLowerConcurrencyIntrinsicForMethod(recv.typ, e.methodName)
+    let concKind = mirLowerConcurrencyIntrinsicForMethod(recvT, e.methodName)
     match concKind {
         MirIntrinsicInvalid -> {},
         _ -> {
@@ -4958,7 +5225,7 @@ pub fn mirLowerMethodCallInto(
     // 3. Stdlib method intrinsic (List/Map/Set/String/Bytes/Option/
     //    Result). Runs after concurrency so primitive-name collisions
     //    (`close`, etc.) stay unambiguous.
-    let stdKind = mirLowerStdlibIntrinsicForMethod(recv.typ, e.methodName)
+    let stdKind = mirLowerStdlibIntrinsicForMethod(recvT, e.methodName)
     match stdKind {
         MirIntrinsicInvalid -> {},
         _ -> {
@@ -5306,6 +5573,18 @@ pub fn mirLowerStdlibIntrinsicForMethod(
         if receiverT.primKind == HirPrimBytes {
             return mirLowerBytesIntrinsicForMethod(name)
         }
+        if receiverT.primKind == HirPrimInt {
+            if name == "toByte" { return MirIntrinsicIntToByte }
+            if name == "toChar" { return MirIntrinsicIntToChar }
+        }
+        if receiverT.primKind == HirPrimByte {
+            if name == "toInt" { return MirIntrinsicByteToInt }
+            if name == "toChar" { return MirIntrinsicByteToChar }
+        }
+        if receiverT.primKind == HirPrimChar {
+            if name == "toInt" { return MirIntrinsicCharToInt }
+            if name == "toByte" { return MirIntrinsicCharToByte }
+        }
         return MirIntrinsicInvalid
     }
     let recv = hirTypeNameOf(receiverT)
@@ -5321,6 +5600,8 @@ pub fn mirLowerStdlibIntrinsicForMethod(
 
 fn mirLowerListStdlibMethod(name: String) -> MirIntrinsicKind {
     if name == "push" { return MirIntrinsicListPush }
+    if name == "insert" { return MirIntrinsicListInsert }
+    if name == "clear" { return MirIntrinsicListClear }
     if name == "pop" { return MirIntrinsicListPop }
     if name == "len" { return MirIntrinsicListLen }
     if name == "get" { return MirIntrinsicListGet }
@@ -5370,12 +5651,60 @@ fn mirLowerResultStdlibMethod(name: String) -> MirIntrinsicKind {
     MirIntrinsicInvalid
 }
 
+/// mirLowerBuiltinFreeCallIntrinsic recognises prelude-shaped free
+/// calls that HIR may synthesize from method syntax in suppressed
+/// typing contexts: `xs.len()` can reach MIR as `len(xs)`. Keep this
+/// policy in Osty so the self-hosted lowerer does not need to bounce
+/// through Go just to recover collection length/is-empty calls.
+pub fn mirLowerBuiltinFreeCallIntrinsic(
+    bs: MirLowerBodyState,
+    name: String,
+    args: List<HirArg>,
+) -> MirIntrinsicKind {
+    if args.len() != 1 {
+        return MirIntrinsicInvalid
+    }
+    let recvT = mirLowerRecoveredExprType(bs, args[0].value)
+    mirLowerBuiltinFreeCallIntrinsicForReceiver(recvT, name)
+}
+
+pub fn mirLowerBuiltinFreeCallIntrinsicForReceiver(
+    receiverT: HirType,
+    name: String,
+) -> MirIntrinsicKind {
+    if receiverT.kind == HirTypePrim {
+        if receiverT.primKind == HirPrimString {
+            if name == "len" { return MirIntrinsicStringLen }
+            if name == "isEmpty" { return MirIntrinsicStringIsEmpty }
+        }
+        if receiverT.primKind == HirPrimBytes {
+            if name == "len" { return MirIntrinsicBytesLen }
+            if name == "isEmpty" { return MirIntrinsicBytesIsEmpty }
+        }
+        return MirIntrinsicInvalid
+    }
+    let recv = hirTypeNameOf(receiverT)
+    if recv == "List" {
+        if name == "len" { return MirIntrinsicListLen }
+        if name == "isEmpty" { return MirIntrinsicListIsEmpty }
+    }
+    if recv == "Map" {
+        if name == "len" { return MirIntrinsicMapLen }
+    }
+    if recv == "Set" {
+        if name == "len" { return MirIntrinsicSetLen }
+    }
+    MirIntrinsicInvalid
+}
+
 /// mirLowerIsVoidStdlibIntrinsic reports whether a stdlib intrinsic
 /// produces no MIR-visible value. Keeps call sites in expression
 /// position from carrying a stale dest through to the backend.
 pub fn mirLowerIsVoidStdlibIntrinsic(k: MirIntrinsicKind) -> Bool {
     match k {
         MirIntrinsicListPush -> true,
+        MirIntrinsicListInsert -> true,
+        MirIntrinsicListClear -> true,
         MirIntrinsicMapSet -> true,
         MirIntrinsicMapRemove -> true,
         MirIntrinsicSetInsert -> true,
@@ -5389,17 +5718,28 @@ pub fn mirLowerStringIntrinsicForMethod(name: String) -> MirIntrinsicKind {
     if name == "len" { return MirIntrinsicStringLen }
     if name == "isEmpty" { return MirIntrinsicStringIsEmpty }
     if name == "contains" { return MirIntrinsicStringContains }
+    if name == "count" { return MirIntrinsicStringCount }
     if name == "startsWith" { return MirIntrinsicStringStartsWith }
     if name == "endsWith" { return MirIntrinsicStringEndsWith }
     if name == "indexOf" { return MirIntrinsicStringIndexOf }
+    if name == "lastIndexOf" { return MirIntrinsicStringLastIndexOf }
     if name == "split" { return MirIntrinsicStringSplit }
+    if name == "splitN" { return MirIntrinsicStringSplitN }
+    if name == "fields" { return MirIntrinsicStringFields }
     if name == "join" { return MirIntrinsicStringJoin }
     if name == "trim" { return MirIntrinsicStringTrim }
+    if name == "trimSpace" { return MirIntrinsicStringTrim }
+    if name == "trimStart" { return MirIntrinsicStringTrimStart }
+    if name == "trimEnd" { return MirIntrinsicStringTrimEnd }
+    if name == "trimPrefix" { return MirIntrinsicStringTrimPrefix }
+    if name == "trimSuffix" { return MirIntrinsicStringTrimSuffix }
     if name == "toUpper" { return MirIntrinsicStringToUpper }
     if name == "toLower" { return MirIntrinsicStringToLower }
     if name == "toInt" { return MirIntrinsicStringToInt }
     if name == "toFloat" { return MirIntrinsicStringToFloat }
     if name == "replace" { return MirIntrinsicStringReplace }
+    if name == "replaceAll" { return MirIntrinsicStringReplaceAll }
+    if name == "repeat" { return MirIntrinsicStringRepeat }
     if name == "chars" { return MirIntrinsicStringChars }
     if name == "bytes" { return MirIntrinsicStringBytes }
     if name == "substring" { return MirIntrinsicStringSubstring }
@@ -5429,7 +5769,25 @@ pub fn mirLowerBytesIntrinsicForMethod(name: String) -> MirIntrinsicKind {
     if name == "toLower" { return MirIntrinsicBytesToLower }
     if name == "toHex" { return MirIntrinsicBytesToHex }
     if name == "slice" { return MirIntrinsicBytesSlice }
+    if name == "toString" { return MirIntrinsicBytesToString }
     MirIntrinsicInvalid
+}
+
+/// mirLowerStdlibBytesFreeFnToIntrinsic maps `std.bytes.NAME(...)`
+/// module helpers to the same MIR Bytes intrinsic family used by
+/// receiver methods. `join(parts, sep)` is reordered by the emitter.
+pub fn mirLowerStdlibBytesFreeFnToIntrinsic(
+    qualifier: String,
+    name: String,
+) -> MirIntrinsicKind {
+    if qualifier != "std.bytes" && qualifier != "bytes" {
+        return MirIntrinsicInvalid
+    }
+    if name == "from" { return MirIntrinsicBytesFromList }
+    if name == "fromString" { return MirIntrinsicBytesFromString }
+    if name == "fromHex" { return MirIntrinsicBytesFromHex }
+    if name == "toString" { return MirIntrinsicBytesToString }
+    mirLowerBytesIntrinsicForMethod(name)
 }
 
 /// mirLowerStdlibStringFreeFnToIntrinsic maps
@@ -5453,10 +5811,103 @@ pub fn mirLowerStdlibStringFreeFnToIntrinsic(
     // receiver-based table's unknown path.
     if name == "hasPrefix" { return MirIntrinsicStringStartsWith }
     if name == "hasSuffix" { return MirIntrinsicStringEndsWith }
+    if name == "LastIndex" { return MirIntrinsicStringLastIndexOf }
+    if name == "Count" { return MirIntrinsicStringCount }
+    if name == "SplitN" { return MirIntrinsicStringSplitN }
+    if name == "Fields" { return MirIntrinsicStringFields }
+    if name == "TrimStart" { return MirIntrinsicStringTrimStart }
+    if name == "TrimEnd" { return MirIntrinsicStringTrimEnd }
+    if name == "TrimPrefix" { return MirIntrinsicStringTrimPrefix }
+    if name == "TrimSuffix" { return MirIntrinsicStringTrimSuffix }
+    if name == "ReplaceAll" { return MirIntrinsicStringReplaceAll }
     if name == "slice" { return MirIntrinsicStringSubstring }
+    if name == "concat" { return MirIntrinsicStringConcat }
     // Delegate to the receiver-based table — `std.strings.split` and
     // `s.split(sep)` converge on the same runtime symbol.
     mirLowerStringIntrinsicForMethod(name)
+}
+
+fn mirLowerStdlibStringFreeFnReturnType(qualifier: String, name: String) -> HirType {
+    if qualifier != "std.strings" && qualifier != "strings" {
+        return hirTypeInvalid()
+    }
+    if name == "len" || name == "compare" || name == "Compare"
+        || name == "indexOf" || name == "Index"
+        || name == "LastIndex" || name == "count" || name == "Count" {
+        return hirTInt()
+    }
+    if name == "lastIndexOf" {
+        return hirTypeOptional(hirTInt())
+    }
+    if name == "isEmpty" || name == "contains" || name == "Contains"
+        || name == "hasPrefix" || name == "HasPrefix" || name == "startsWith"
+        || name == "hasSuffix" || name == "HasSuffix" || name == "endsWith" {
+        return hirTBool()
+    }
+    if name == "join" || name == "concat" || name == "substring" || name == "slice"
+        || name == "trim" || name == "trimSpace" || name == "trimStart"
+        || name == "trimEnd" || name == "trimPrefix" || name == "trimSuffix"
+        || name == "toUpper" || name == "toLower" || name == "replace"
+        || name == "replaceAll" || name == "repeat" {
+        return hirTString()
+    }
+    if name == "split" || name == "splitN" || name == "fields" {
+        return hirTypeBuiltin("List", [hirTString()])
+    }
+    if name == "chars" {
+        return hirTypeBuiltin("List", [hirTChar()])
+    }
+    if name == "bytes" {
+        return hirTypeBuiltin("List", [hirTByte()])
+    }
+    hirTypeInvalid()
+}
+
+fn mirLowerBuiltinErrorType() -> HirType {
+    hirTypeBuiltin("Error", [])
+}
+
+fn mirLowerBuiltinResultType(okT: HirType, errT: HirType) -> HirType {
+    hirTypeBuiltin("Result", [okT, errT])
+}
+
+fn mirLowerStdlibBytesFreeFnReturnType(qualifier: String, name: String) -> HirType {
+    if qualifier != "std.bytes" && qualifier != "bytes" {
+        return hirTypeInvalid()
+    }
+    if name == "len" {
+        return hirTInt()
+    }
+    if name == "isEmpty" || name == "contains" || name == "startsWith"
+        || name == "endsWith" || name == "equal" {
+        return hirTBool()
+    }
+    if name == "indexOf" || name == "lastIndexOf" {
+        return hirTypeOptional(hirTInt())
+    }
+    if name == "get" {
+        return hirTypeOptional(hirTByte())
+    }
+    if name == "split" {
+        return hirTypeBuiltin("List", [hirTBytes()])
+    }
+    if name == "from" || name == "fromString" || name == "join"
+        || name == "concat" || name == "repeat" || name == "replace"
+        || name == "replaceAll" || name == "trimLeft" || name == "trimRight"
+        || name == "trim" || name == "trimSpace" || name == "toUpper"
+        || name == "toLower" || name == "slice" {
+        return hirTBytes()
+    }
+    if name == "toHex" {
+        return hirTString()
+    }
+    if name == "toString" {
+        return mirLowerBuiltinResultType(hirTString(), mirLowerBuiltinErrorType())
+    }
+    if name == "fromHex" {
+        return mirLowerBuiltinResultType(hirTBytes(), mirLowerBuiltinErrorType())
+    }
+    hirTypeInvalid()
 }
 
 // ====================================================================
@@ -5487,6 +5938,26 @@ pub fn mirLowerEmitConcurrencyIntrinsic(
 /// intrinsic. Every supported runtime intrinsic today returns a
 /// value, but we still honour the unit-check just like Go's emitter.
 pub fn mirLowerEmitRuntimeIntrinsic(
+    bs: MirLowerBodyState,
+    kind: MirIntrinsicKind,
+    args: List<HirArg>,
+    dest: MirPlace,
+    destT: HirType,
+    span: MirSpan,
+) {
+    let mut out: List<MirOperand> = []
+    for a in args {
+        out.push(mirLowerExprAsOperand(bs, a.value))
+    }
+    let hasDest = !hirTypeIsUnit(destT)
+    let instr = mirIntrinsicInstr(hasDest, dest, kind, out, span)
+    mirLowerEmitInstr(bs, instr)
+}
+
+/// mirLowerEmitBuiltinFreeCallIntrinsic lowers builtin free calls
+/// such as `len(xs)` into the same receiver-first operand layout used
+/// by the corresponding method intrinsic (`xs.len()`).
+pub fn mirLowerEmitBuiltinFreeCallIntrinsic(
     bs: MirLowerBodyState,
     kind: MirIntrinsicKind,
     args: List<HirArg>,
@@ -5552,6 +6023,32 @@ pub fn mirLowerEmitStringFreeFnIntrinsic(
     for a in args {
         out.push(mirLowerExprAsOperand(bs, a.value))
         i = i + 1
+    }
+    let hasDest = !hirTypeIsUnit(destT)
+    let instr = mirIntrinsicInstr(hasDest, dest, kind, out, span)
+    mirLowerEmitInstr(bs, instr)
+}
+
+/// mirLowerEmitBytesFreeFnIntrinsic lowers `std.bytes.NAME(...)` by
+/// matching the Bytes receiver-intrinsic operand layout. Most helpers
+/// are already receiver-first; `join(parts, sep)` is flipped to
+/// `sep.join(parts)` before emission.
+pub fn mirLowerEmitBytesFreeFnIntrinsic(
+    bs: MirLowerBodyState,
+    kind: MirIntrinsicKind,
+    args: List<HirArg>,
+    dest: MirPlace,
+    destT: HirType,
+    span: MirSpan,
+) {
+    let mut out: List<MirOperand> = []
+    if kind == MirIntrinsicBytesJoin && args.len() == 2 {
+        out.push(mirLowerExprAsOperand(bs, args[1].value))
+        out.push(mirLowerExprAsOperand(bs, args[0].value))
+    } else {
+        for a in args {
+            out.push(mirLowerExprAsOperand(bs, a.value))
+        }
     }
     let hasDest = !hirTypeIsUnit(destT)
     let instr = mirIntrinsicInstr(hasDest, dest, kind, out, span)
@@ -5639,6 +6136,14 @@ pub fn mirLowerClosureRValue(
 
     // --- Body state for the lifted fn ---------------------------
     let liftedBS = mirLowerBodyState(bs.l, lifted, retT)
+    liftedBS.paramTypes.push(envType)
+    for p in e.closureParams {
+        if hirTypeIsValid(p.typ) {
+            liftedBS.paramTypes.push(p.typ)
+        } else {
+            liftedBS.paramTypes.push(hirTypeErr())
+        }
+    }
     // Re-index param names — mirLowerBodyState did this already
     // using lifted.params, so user params are bound. We need to
     // install capture locals next.

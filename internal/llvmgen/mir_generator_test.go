@@ -304,6 +304,43 @@ func TestGenerateFromMIRPrintln(t *testing.T) {
 	}
 }
 
+func TestGenerateFromMIRPrintlnStringUsesRuntimeIOWrite(t *testing.T) {
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "main",
+				Return: ir.TUnit,
+				Body: &ir.Block{
+					Stmts: []ir.Stmt{
+						&ir.ExprStmt{X: &ir.IntrinsicCall{
+							Kind: ir.IntrinsicPrintln,
+							Args: []ir.Arg{{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "hello"}}}}},
+						}},
+					},
+				},
+			},
+		},
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/print_string.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare void @osty_rt_io_write(ptr, i1, i1)",
+		"call void @osty_rt_io_write(ptr @.str.0, i1 true, i1 false)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "@printf") {
+		t.Fatalf("String println should not use printf directly:\n%s", got)
+	}
+}
+
 // TestGenerateFromMIRUnsupportedFallsBack — a module using an
 // unresolved NamedType (not a Builtin collection, not in the
 // module's LayoutTable, not a known prelude name) must trip
@@ -1078,6 +1115,91 @@ func TestGenerateFromMIROptionIsSomeLowers(t *testing.T) {
 	}
 }
 
+func TestGenerateFromMIRResultMethodsLower(t *testing.T) {
+	resultT := &ir.NamedType{Name: "Result", Args: []ir.Type{ir.TInt, ir.TString}}
+	param := func() *ir.Ident {
+		return &ir.Ident{Name: "x", Kind: ir.IdentParam, T: resultT}
+	}
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "resultIsOk",
+				Return: ir.TBool,
+				Params: []*ir.Param{{Name: "x", Type: resultT}},
+				Body: &ir.Block{Result: &ir.MethodCall{
+					Receiver: param(),
+					Name:     "isOk",
+					T:        ir.TBool,
+				}},
+			},
+			&ir.FnDecl{
+				Name:   "resultIsErr",
+				Return: ir.TBool,
+				Params: []*ir.Param{{Name: "x", Type: resultT}},
+				Body: &ir.Block{Result: &ir.MethodCall{
+					Receiver: param(),
+					Name:     "isErr",
+					T:        ir.TBool,
+				}},
+			},
+			&ir.FnDecl{
+				Name:   "resultUnwrap",
+				Return: ir.TInt,
+				Params: []*ir.Param{{Name: "x", Type: resultT}},
+				Body: &ir.Block{Result: &ir.MethodCall{
+					Receiver: param(),
+					Name:     "unwrap",
+					T:        ir.TInt,
+				}},
+			},
+			&ir.FnDecl{
+				Name:   "resultUnwrapOr",
+				Return: ir.TInt,
+				Params: []*ir.Param{{Name: "x", Type: resultT}},
+				Body: &ir.Block{Result: &ir.MethodCall{
+					Receiver: param(),
+					Name:     "unwrapOr",
+					Args:     []ir.Arg{{Value: &ir.IntLit{Text: "7", T: ir.TInt}}},
+					T:        ir.TInt,
+				}},
+			},
+		},
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/result_methods.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"%Result.i64.string = type { i64, i64 }",
+		"define i1 @resultIsOk(%Result.i64.string %arg0)",
+		"define i1 @resultIsErr(%Result.i64.string %arg0)",
+		"define i64 @resultUnwrap(%Result.i64.string %arg0)",
+		"define i64 @resultUnwrapOr(%Result.i64.string %arg0)",
+		"declare void @osty_rt_result_unwrap_err() noreturn",
+		"call void @osty_rt_result_unwrap_err()",
+		"icmp eq i64",
+		"phi i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	for kind, want := range map[mir.IntrinsicKind]string{
+		mir.IntrinsicResultIsOk:     "result.is_ok",
+		mir.IntrinsicResultIsErr:    "result.is_err",
+		mir.IntrinsicResultUnwrap:   "result.unwrap",
+		mir.IntrinsicResultUnwrapOr: "result.unwrap_or",
+		mir.IntrinsicListPop:        "list.pop",
+	} {
+		if got := mirIntrinsicLabel(kind); got != want {
+			t.Fatalf("mirIntrinsicLabel(%d) = %q, want %q", kind, got, want)
+		}
+	}
+}
+
 func TestGenerateFromMIRQuestionRebuildsOptionalReturnNone(t *testing.T) {
 	// fn widen(x: Int?) -> Bool? {
 	//   let n = x?
@@ -1175,6 +1297,131 @@ func TestGenerateFromMIRListLiteralAndLen(t *testing.T) {
 		"call void @osty_rt_list_push_i64(",
 		"declare i64 @osty_rt_list_len(ptr)",
 		"call i64 @osty_rt_list_len(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRListInsertInt(t *testing.T) {
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "insert",
+		Return: ir.TUnit,
+		Params: []*ir.Param{
+			{Name: "xs", Type: listInt},
+			{Name: "v", Type: ir.TInt},
+		},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.ExprStmt{X: &ir.MethodCall{
+					Receiver: &ir.Ident{Name: "xs", Kind: ir.IdentParam, T: listInt},
+					Name:     "insert",
+					Args: []ir.Arg{
+						{Value: &ir.IntLit{Text: "1", T: ir.TInt}},
+						{Value: &ir.Ident{Name: "v", Kind: ir.IdentParam, T: ir.TInt}},
+					},
+					T: ir.TUnit,
+				}},
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/list_insert_int_mir.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare void @osty_rt_list_insert_i64(ptr, i64, i64)",
+		"call void @osty_rt_list_insert_i64(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRListClear(t *testing.T) {
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "clear",
+		Return: ir.TUnit,
+		Params: []*ir.Param{{Name: "xs", Type: listInt}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.ExprStmt{X: &ir.MethodCall{
+					Receiver: &ir.Ident{Name: "xs", Kind: ir.IdentParam, T: listInt},
+					Name:     "clear",
+					T:        ir.TUnit,
+				}},
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/list_clear_mir.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare void @osty_rt_list_clear(ptr)",
+		"call void @osty_rt_list_clear(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRListInsertStruct(t *testing.T) {
+	pointT := &ir.NamedType{Name: "Point"}
+	pointDecl := &ir.StructDecl{
+		Name: "Point",
+		Fields: []*ir.Field{
+			{Name: "x", Type: ir.TInt, Exported: true},
+			{Name: "y", Type: ir.TInt, Exported: true},
+		},
+	}
+	listPoint := &ir.NamedType{Name: "List", Args: []ir.Type{pointT}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "insert",
+		Return: ir.TUnit,
+		Params: []*ir.Param{
+			{Name: "xs", Type: listPoint},
+			{Name: "p", Type: pointT},
+		},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.ExprStmt{X: &ir.MethodCall{
+					Receiver: &ir.Ident{Name: "xs", Kind: ir.IdentParam, T: listPoint},
+					Name:     "insert",
+					Args: []ir.Arg{
+						{Value: &ir.IntLit{Text: "1", T: ir.TInt}},
+						{Value: &ir.Ident{Name: "p", Kind: ir.IdentParam, T: pointT}},
+					},
+					T: ir.TUnit,
+				}},
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{pointDecl, fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/list_insert_struct_mir.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"%Point = type { i64, i64 }",
+		"declare void @osty_rt_list_insert_bytes_v1(ptr, i64, ptr, i64)",
+		"alloca %Point",
+		"store %Point ",
+		"getelementptr %Point, ptr null, i32 1",
+		"call void @osty_rt_list_insert_bytes_v1(",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
@@ -1332,6 +1579,48 @@ func TestGenerateFromMIRMapStructValueSet(t *testing.T) {
 	}
 	if !(allocaIdx < storeIdx && storeIdx < callIdx) {
 		t.Fatalf("expected alloca → store → call ordering in:\n%s", got)
+	}
+}
+
+// TestGenerateFromMIRMapStructValueNew verifies empty Map<String, Struct>
+// literals use a dynamic LLVM sizeof for the map value slot instead of
+// rejecting named aggregate values during `map_new`.
+func TestGenerateFromMIRMapStructValueNew(t *testing.T) {
+	// struct Point { x: Int, y: Int }
+	// fn make() -> Map<String, Point> { {:} }
+	pointT := &ir.NamedType{Name: "Point"}
+	pointDecl := &ir.StructDecl{
+		Name: "Point",
+		Fields: []*ir.Field{
+			{Name: "x", Type: ir.TInt, Exported: true},
+			{Name: "y", Type: ir.TInt, Exported: true},
+		},
+	}
+	mapT := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, pointT}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "make",
+		Return: mapT,
+		Body: &ir.Block{
+			Result: &ir.MapLit{KeyT: ir.TString, ValT: pointT},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{pointDecl, fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/map_struct_new.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"%Point = type { i64, i64 }",
+		"getelementptr %Point, ptr null, i32 1",
+		"ptrtoint ptr ",
+		"declare ptr @osty_rt_map_new(i64, i64, i64, ptr)",
+		"call ptr @osty_rt_map_new(i64 5, i64 6, i64 %",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
 	}
 }
 
@@ -1498,6 +1787,62 @@ func TestGenerateFromMIRMapGetMethod(t *testing.T) {
 	// No GC box for Option<Int> — struct stays on the stack.
 	if strings.Contains(got, "osty.gc.alloc_v1") {
 		t.Fatalf("map.get allocated a GC box (stack path regressed):\n%s", got)
+	}
+}
+
+func TestGenerateFromMIRMapGetStructValueBoxesOption(t *testing.T) {
+	// struct Point { x: Int, y: Int }
+	// fn lookup(m: Map<String, Point>, k: String) -> Point? { m.get(k) }
+	pointT := &ir.NamedType{Name: "Point"}
+	pointDecl := &ir.StructDecl{
+		Name: "Point",
+		Fields: []*ir.Field{
+			{Name: "x", Type: ir.TInt, Exported: true},
+			{Name: "y", Type: ir.TInt, Exported: true},
+		},
+	}
+	mapT := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, pointT}, Builtin: true}
+	optPointT := &ir.OptionalType{Inner: pointT}
+	fn := &ir.FnDecl{
+		Name:   "lookup",
+		Return: optPointT,
+		Params: []*ir.Param{
+			{Name: "m", Type: mapT},
+			{Name: "k", Type: ir.TString},
+		},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "m", Kind: ir.IdentParam, T: mapT},
+				Name:     "get",
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "k", Kind: ir.IdentParam, T: ir.TString}},
+				},
+				T: optPointT,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{pointDecl, fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/map_get_struct_method.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)",
+		"alloca %Point",
+		"call i1 @osty_rt_map_get_string(",
+		"call ptr @osty.gc.alloc_v1(i64 1, i64 %",
+		"store %Point ",
+		"insertvalue %Option.Point ",
+		"store %Option.Point zeroinitializer, ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "osty_rt_map_get_or_abort_") {
+		t.Fatalf("map.get regressed to abort runtime:\n%s", got)
 	}
 }
 
@@ -3243,6 +3588,53 @@ func TestGenerateFromMIRStringInterpolationBoxesCharAndByte(t *testing.T) {
 	}
 }
 
+func TestGenerateFromMIRStringInterpolationBoxesEnumVariantName(t *testing.T) {
+	coreKindT := &ir.NamedType{Name: "CoreKind"}
+	enumDecl := &ir.EnumDecl{
+		Name: "CoreKind",
+		Variants: []*ir.Variant{
+			{Name: "CkErr"},
+			{Name: "CkIdent"},
+		},
+	}
+	fn := &ir.FnDecl{
+		Name:   "renderKind",
+		Return: ir.TString,
+		Params: []*ir.Param{{Name: "k", Type: coreKindT}},
+		Body: &ir.Block{
+			Result: &ir.StringLit{
+				Parts: []ir.StringPart{
+					{IsLit: true, Lit: "kind="},
+					{Expr: &ir.Ident{Name: "k", Kind: ir.IdentParam, T: coreKindT}},
+				},
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{enumDecl, fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/enum_concat.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"switch i64",
+		"enumstr.CkErr",
+		"enumstr.CkIdent",
+		"phi ptr",
+		`c"CkErr\00"`,
+		`c"CkIdent\00"`,
+		"call ptr @osty_rt_strings_Concat(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "string_concat arg") {
+		t.Fatalf("enum interpolation should be boxed before concat:\n%s", got)
+	}
+}
+
 func TestGenerateFromMIRBinaryStringAddUsesRuntimeConcat(t *testing.T) {
 	fn := &ir.FnDecl{
 		Name:   "greet",
@@ -4434,6 +4826,244 @@ func TestGenerateFromMIRBytesSlice(t *testing.T) {
 	}
 }
 
+// TestGenerateFromMIRStringRepeat verifies String.repeat() dispatches
+// through `osty_rt_strings_Repeat(ptr, i64) -> ptr`.
+func TestGenerateFromMIRStringRepeat(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "echoString",
+		Return: ir.TString,
+		Params: []*ir.Param{
+			{Name: "s", Type: ir.TString},
+		},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString},
+				Name:     "repeat",
+				Args:     []ir.Arg{{Value: &ir.IntLit{Text: "3", T: ir.TInt}}},
+				T:        ir.TString,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/string_repeat.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_Repeat(ptr, i64)",
+		"call ptr @osty_rt_strings_Repeat(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRExpandedStringRuntimeIntrinsics(t *testing.T) {
+	listStr := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	stringParam := func(name string) *ir.Param {
+		return &ir.Param{Name: name, Type: ir.TString}
+	}
+	fn := func(name string, ret ir.Type, params []*ir.Param, method string, args []ir.Arg) *ir.FnDecl {
+		return &ir.FnDecl{
+			Name:   name,
+			Return: ret,
+			Params: params,
+			Body: &ir.Block{Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString},
+				Name:     method,
+				Args:     args,
+				T:        ret,
+			}},
+		}
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{
+		fn("trimPrefixMIR", ir.TString, []*ir.Param{stringParam("s"), stringParam("p")}, "trimPrefix",
+			[]ir.Arg{{Value: &ir.Ident{Name: "p", Kind: ir.IdentParam, T: ir.TString}}}),
+		fn("trimSuffixMIR", ir.TString, []*ir.Param{stringParam("s"), stringParam("p")}, "trimSuffix",
+			[]ir.Arg{{Value: &ir.Ident{Name: "p", Kind: ir.IdentParam, T: ir.TString}}}),
+		fn("trimStartMIR", ir.TString, []*ir.Param{stringParam("s")}, "trimStart", nil),
+		fn("trimEndMIR", ir.TString, []*ir.Param{stringParam("s")}, "trimEnd", nil),
+		fn("replaceAllMIR", ir.TString, []*ir.Param{stringParam("s"), stringParam("old"), stringParam("new")}, "replaceAll",
+			[]ir.Arg{
+				{Value: &ir.Ident{Name: "old", Kind: ir.IdentParam, T: ir.TString}},
+				{Value: &ir.Ident{Name: "new", Kind: ir.IdentParam, T: ir.TString}},
+			}),
+		fn("splitNMIR", listStr, []*ir.Param{stringParam("s"), stringParam("sep"), &ir.Param{Name: "n", Type: ir.TInt}}, "splitN",
+			[]ir.Arg{
+				{Value: &ir.Ident{Name: "sep", Kind: ir.IdentParam, T: ir.TString}},
+				{Value: &ir.Ident{Name: "n", Kind: ir.IdentParam, T: ir.TInt}},
+			}),
+		fn("fieldsMIR", listStr, []*ir.Param{stringParam("s")}, "fields", nil),
+	}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/string_expanded.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_TrimPrefix(ptr, ptr)",
+		"declare ptr @osty_rt_strings_TrimSuffix(ptr, ptr)",
+		"declare ptr @osty_rt_strings_TrimStart(ptr)",
+		"declare ptr @osty_rt_strings_TrimEnd(ptr)",
+		"declare ptr @osty_rt_strings_ReplaceAll(ptr, ptr, ptr)",
+		"declare ptr @osty_rt_strings_SplitN(ptr, ptr, i64)",
+		"declare ptr @osty_rt_strings_Fields(ptr)",
+		"call ptr @osty_rt_strings_TrimPrefix(",
+		"call ptr @osty_rt_strings_ReplaceAll(",
+		"call ptr @osty_rt_strings_SplitN(",
+		"call ptr @osty_rt_strings_Fields(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRRuntimeFilepathFFI(t *testing.T) {
+	useDecl := &ir.UseDecl{
+		Path:         []string{"runtime", "path", "filepath"},
+		RawPath:      "runtime.path.filepath",
+		Alias:        "filepath",
+		IsRuntimeFFI: true,
+		RuntimePath:  "runtime.path.filepath",
+	}
+	baseCall := &ir.CallExpr{
+		Callee: &ir.FieldExpr{
+			X:    &ir.Ident{Name: "filepath", T: ir.ErrTypeVal},
+			Name: "Base",
+			T:    ir.ErrTypeVal,
+		},
+		Args: []ir.Arg{{Value: &ir.Ident{Name: "path", Kind: ir.IdentParam, T: ir.TString}}},
+		T:    ir.TString,
+	}
+	fn := &ir.FnDecl{
+		Name:   "classify",
+		Return: ir.TString,
+		Params: []*ir.Param{{Name: "path", Type: ir.TString}},
+		Body: &ir.Block{
+			Result: &ir.CallExpr{
+				Callee: &ir.FieldExpr{
+					X:    &ir.Ident{Name: "filepath", T: ir.ErrTypeVal},
+					Name: "Ext",
+					T:    ir.ErrTypeVal,
+				},
+				Args: []ir.Arg{{Value: baseCall}},
+				T:    ir.TString,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{useDecl, fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/runtime_filepath_mir.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_path_filepath_Base(ptr)",
+		"declare ptr @osty_rt_path_filepath_Ext(ptr)",
+		"call ptr @osty_rt_path_filepath_Base(",
+		"call ptr @osty_rt_path_filepath_Ext(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRStdlibStringsConcatFreeFn(t *testing.T) {
+	useDecl := &ir.UseDecl{
+		Path:    []string{"std", "strings"},
+		RawPath: "std.strings",
+		Alias:   "strings",
+	}
+	fn := &ir.FnDecl{
+		Name:   "joinBang",
+		Return: ir.TString,
+		Params: []*ir.Param{{Name: "s", Type: ir.TString}},
+		Body: &ir.Block{Result: &ir.CallExpr{
+			Callee: &ir.FieldExpr{
+				X:    &ir.Ident{Name: "strings", T: ir.ErrTypeVal},
+				Name: "concat",
+				T:    ir.ErrTypeVal,
+			},
+			Args: []ir.Arg{
+				{Value: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString}},
+				{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "!"}}}},
+			},
+			T: ir.TString,
+		}},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{useDecl, fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/std_strings_concat_mir.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_Concat(ptr, ptr)",
+		"call ptr @osty_rt_strings_Concat(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "std.strings.concat") {
+		t.Fatalf("std.strings.concat leaked as direct call:\n%s", got)
+	}
+}
+
+func TestGenerateFromMIRStdlibStringsCompareFreeFn(t *testing.T) {
+	useDecl := &ir.UseDecl{
+		Path:    []string{"std", "strings"},
+		RawPath: "std.strings",
+		Alias:   "strings",
+	}
+	fn := &ir.FnDecl{
+		Name:   "cmp",
+		Return: ir.TInt,
+		Params: []*ir.Param{
+			{Name: "left", Type: ir.TString},
+			{Name: "right", Type: ir.TString},
+		},
+		Body: &ir.Block{Result: &ir.CallExpr{
+			Callee: &ir.FieldExpr{
+				X:    &ir.Ident{Name: "strings", T: ir.ErrTypeVal},
+				Name: "compare",
+				T:    ir.ErrTypeVal,
+			},
+			Args: []ir.Arg{
+				{Value: &ir.Ident{Name: "left", Kind: ir.IdentParam, T: ir.TString}},
+				{Value: &ir.Ident{Name: "right", Kind: ir.IdentParam, T: ir.TString}},
+			},
+			T: ir.TInt,
+		}},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{useDecl, fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/std_strings_compare_mir.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i64 @osty_rt_strings_Compare(ptr, ptr)",
+		"call i64 @osty_rt_strings_Compare(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "std.strings.compare") {
+		t.Fatalf("std.strings.compare leaked as direct call:\n%s", got)
+	}
+}
+
 // TestGenerateFromMIRBytesRepeat verifies Bytes.repeat() dispatches
 // through `osty_rt_bytes_repeat(ptr, i64) -> ptr`.
 func TestGenerateFromMIRBytesRepeat(t *testing.T) {
@@ -4772,5 +5402,162 @@ func TestGenerateFromMIRBytesToHex(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
+	}
+}
+
+func TestGenerateFromMIRStdlibBytesConstructors(t *testing.T) {
+	useDecl := &ir.UseDecl{
+		Path:    []string{"std", "bytes"},
+		RawPath: "std.bytes",
+		Alias:   "bytes",
+	}
+	listByte := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TByte}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "fromList",
+		Return: ir.TBytes,
+		Params: []*ir.Param{{Name: "buf", Type: listByte}},
+		Body: &ir.Block{
+			Result: &ir.CallExpr{
+				Callee: &ir.FieldExpr{
+					X:    &ir.Ident{Name: "bytes", T: ir.ErrTypeVal},
+					Name: "from",
+					T:    ir.ErrTypeVal,
+				},
+				Args: []ir.Arg{{Value: &ir.Ident{Name: "buf", Kind: ir.IdentParam, T: listByte}}},
+				T:    ir.ErrTypeVal,
+			},
+		},
+	}
+	fn2 := &ir.FnDecl{
+		Name:   "fromText",
+		Return: ir.TBytes,
+		Params: []*ir.Param{{Name: "s", Type: ir.TString}},
+		Body: &ir.Block{
+			Result: &ir.CallExpr{
+				Callee: &ir.FieldExpr{
+					X:    &ir.Ident{Name: "bytes", T: ir.ErrTypeVal},
+					Name: "fromString",
+					T:    ir.ErrTypeVal,
+				},
+				Args: []ir.Arg{{Value: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString}}},
+				T:    ir.ErrTypeVal,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{useDecl, fn, fn2}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/bytes_constructors.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_bytes_from_list(ptr)",
+		"call ptr @osty_rt_bytes_from_list(",
+		"declare ptr @osty_rt_strings_ToBytes(ptr)",
+		"call ptr @osty_rt_strings_ToBytes(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRStdlibBytesCheckedResults(t *testing.T) {
+	useDecl := &ir.UseDecl{
+		Path:    []string{"std", "bytes"},
+		RawPath: "std.bytes",
+		Alias:   "bytes",
+	}
+	resultString := &ir.NamedType{Name: "Result", Args: []ir.Type{ir.TString, &ir.NamedType{Name: "Error", Builtin: true}}, Builtin: true}
+	resultBytes := &ir.NamedType{Name: "Result", Args: []ir.Type{ir.TBytes, &ir.NamedType{Name: "Error", Builtin: true}}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "toText",
+		Return: resultString,
+		Params: []*ir.Param{{Name: "b", Type: ir.TBytes}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "b", Kind: ir.IdentParam, T: ir.TBytes},
+				Name:     "toString",
+				T:        resultString,
+			},
+		},
+	}
+	fn2 := &ir.FnDecl{
+		Name:   "fromHex",
+		Return: resultBytes,
+		Params: []*ir.Param{{Name: "s", Type: ir.TString}},
+		Body: &ir.Block{
+			Result: &ir.CallExpr{
+				Callee: &ir.FieldExpr{
+					X:    &ir.Ident{Name: "bytes", T: ir.ErrTypeVal},
+					Name: "fromHex",
+					T:    ir.ErrTypeVal,
+				},
+				Args: []ir.Arg{{Value: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString}}},
+				T:    ir.ErrTypeVal,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{useDecl, fn, fn2}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/bytes_checked_results.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i1 @osty_rt_bytes_is_valid_utf8(ptr)",
+		"declare ptr @osty_rt_bytes_to_string(ptr)",
+		"call i1 @osty_rt_bytes_is_valid_utf8(",
+		"call ptr @osty_rt_bytes_to_string(",
+		"declare i1 @osty_rt_bytes_is_valid_hex(ptr)",
+		"declare ptr @osty_rt_bytes_from_hex(ptr)",
+		"call i1 @osty_rt_bytes_is_valid_hex(",
+		"call ptr @osty_rt_bytes_from_hex(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRPrimitiveScalarConversions(t *testing.T) {
+	cases := []struct {
+		name   string
+		recvT  ir.Type
+		retT   ir.Type
+		method string
+		want   string
+	}{
+		{name: "intToByte", recvT: ir.TInt, retT: ir.TByte, method: "toByte", want: "trunc i64"},
+		{name: "intToChar", recvT: ir.TInt, retT: ir.TChar, method: "toChar", want: "trunc i64"},
+		{name: "byteToChar", recvT: ir.TByte, retT: ir.TChar, method: "toChar", want: "zext i8"},
+		{name: "charToByte", recvT: ir.TChar, retT: ir.TByte, method: "toByte", want: "trunc i32"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fn := &ir.FnDecl{
+				Name:   tc.name,
+				Return: tc.retT,
+				Params: []*ir.Param{{Name: "x", Type: tc.recvT}},
+				Body: &ir.Block{
+					Result: &ir.MethodCall{
+						Receiver: &ir.Ident{Name: "x", Kind: ir.IdentParam, T: tc.recvT},
+						Name:     tc.method,
+						T:        tc.retT,
+					},
+				},
+			}
+			hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+			m := buildMIRModuleFromHIR(t, hir)
+			out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/" + tc.name + ".osty"})
+			if err != nil {
+				t.Fatalf("GenerateFromMIR: %v", err)
+			}
+			if got := string(out); !strings.Contains(got, tc.want) {
+				t.Fatalf("missing %q in:\n%s", tc.want, got)
+			}
+		})
 	}
 }

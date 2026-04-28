@@ -4881,6 +4881,8 @@ const char *osty_rt_strings_TrimEnd(const char *value);
 const char *osty_rt_strings_TrimPrefix(const char *value, const char *prefix);
 const char *osty_rt_strings_TrimSuffix(const char *value, const char *suffix);
 const char *osty_rt_strings_TrimSpace(const char *value);
+const char *osty_rt_path_filepath_Base(const char *path);
+const char *osty_rt_path_filepath_Ext(const char *path);
 void *osty_rt_strings_ToBytes(const char *value);
 void *osty_rt_strings_Chars(const char *value);
 void *osty_rt_strings_Bytes(const char *value);
@@ -7810,6 +7812,58 @@ static inline char *osty_rt_string_dup_site_sso(const char *start, size_t len, c
 
 static char *osty_rt_string_dup_range(const char *start, size_t len) {
     return osty_rt_string_dup_site_sso(start, len, "runtime.strings.split.part");
+}
+
+static bool osty_rt_path_filepath_is_sep(char c) {
+    return c == '/' || c == '\\';
+}
+
+const char *osty_rt_path_filepath_Base(const char *path) {
+    size_t len;
+    size_t start;
+    char path_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+
+    path = (path == NULL) ? "" : path;
+    osty_rt_string_decode_to_buf_if_inline(&path, path_buf);
+    len = strlen(path);
+    if (len == 0) {
+        return osty_rt_string_dup_site(".", 1, "runtime.path.filepath.base.empty");
+    }
+    while (len > 1 && osty_rt_path_filepath_is_sep(path[len - 1])) {
+        len--;
+    }
+    if (len == 1 && osty_rt_path_filepath_is_sep(path[0])) {
+        return osty_rt_string_dup_site(path, 1, "runtime.path.filepath.base.root");
+    }
+    start = len;
+    while (start > 0 && !osty_rt_path_filepath_is_sep(path[start - 1])) {
+        start--;
+    }
+    if (len == start) {
+        return osty_rt_string_dup_site(".", 1, "runtime.path.filepath.base.empty");
+    }
+    return osty_rt_string_dup_site(path + start, len - start, "runtime.path.filepath.base");
+}
+
+const char *osty_rt_path_filepath_Ext(const char *path) {
+    size_t len;
+    size_t start;
+    size_t i;
+    char path_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+
+    path = (path == NULL) ? "" : path;
+    osty_rt_string_decode_to_buf_if_inline(&path, path_buf);
+    len = strlen(path);
+    start = len;
+    while (start > 0 && !osty_rt_path_filepath_is_sep(path[start - 1])) {
+        start--;
+    }
+    for (i = len; i > start; i--) {
+        if (path[i - 1] == '.') {
+            return osty_rt_string_dup_site(path + i - 1, len - (i - 1), "runtime.path.filepath.ext");
+        }
+    }
+    return osty_rt_string_dup_site("", 0, "runtime.path.filepath.ext.empty");
 }
 
 static bool osty_rt_f64_same_bits(double left, double right) {
