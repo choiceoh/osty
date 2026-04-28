@@ -1,6 +1,8 @@
 ### 10.1 Tier 1 (Core)
 
-- `std.io` — `print`, `println`, `eprint`, `eprintln`, `readLine`
+- `std.io` — `print`, `println`, `eprint`, `eprintln`, `readLine`, the
+  `Reader`/`Writer` protocol, in-memory `BytesReader`/`Buffer`, and core
+  stream helpers such as `readAll`, `readExact`, `copy`, `writeString`
 - `std.fs` — file I/O
 - `std.strings` — string manipulation
 - `std.collections` — `List`, `Map`, `Set`

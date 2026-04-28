@@ -1,9 +1,534 @@
-// std.io — console I/O.
+// std.io — console I/O plus composable byte-stream helpers.
 //
-// `print`, `println`, `eprint`, `eprintln`, `readLine` are the full
-// Tier 1 surface. All five are backend-owned declarations; the output
-// helpers are prelude-aliased while `readLine` is module-qualified.
-// The LLVM lowering routes them to the runtime stdio helpers.
+// `print`, `println`, `eprint`, `eprintln`, and `readLine` remain
+// backend-owned console primitives. The rest of the module defines the
+// reusable stream protocol used by higher-level stdlib code: pull-based
+// byte readers, short-write-aware writers, in-memory implementations,
+// and helper routines such as `readAll`, `writeAll`, `copy`, and
+// line-oriented text helpers.
+
+use std.bytes
+use std.error
+use std.strings
+
+pub interface Reader {
+    fn read(self, maxBytes: Int) -> Result<Bytes, Error>
+}
+
+pub interface Writer {
+    fn write(self, data: Bytes) -> Result<Int, Error>
+    fn flush(self) -> Result<(), Error>
+}
+
+pub interface Closer {
+    fn close(self) -> Result<(), Error>
+}
+
+pub interface ReadWriter {
+    Reader
+    Writer
+}
+
+pub interface ReadCloser {
+    Reader
+    Closer
+}
+
+pub interface WriteCloser {
+    Writer
+    Closer
+}
+
+pub interface ByteReader {
+    Reader
+    fn peek(self, maxBytes: Int) -> Result<Bytes, Error>
+    fn readByte(self) -> Result<Byte?, Error>
+    fn unreadByte(self) -> Result<(), Error>
+}
+
+pub interface LineReader {
+    Reader
+    fn readLineBytes(self) -> Result<Bytes?, Error>
+    fn readLine(self) -> Result<String?, Error>
+}
+
+pub interface ByteWriter {
+    Writer
+    fn writeByte(self, b: Byte) -> Result<Int, Error>
+    fn writeString(self, s: String) -> Result<Int, Error>
+    fn writeLine(self, s: String) -> Result<Int, Error>
+}
+
+pub interface ReaderFrom {
+    fn readFrom(self, r: Reader) -> Result<Int, Error>
+}
+
+pub interface WriterTo {
+    fn writeTo(self, w: Writer) -> Result<Int, Error>
+}
+
+pub interface BufferedReader {
+    ByteReader
+    LineReader
+}
+
+pub interface BufferedWriter {
+    ByteWriter
+    ReaderFrom
+    WriterTo
+}
+
+fn emptyBytes() -> Bytes {
+    bytes.fromString("")
+}
+
+fn newlineBytes() -> Bytes {
+    bytes.fromString("\n")
+}
+
+fn carriageReturnByte() -> Byte {
+    bytes.fromString("\r")[0]
+}
+
+fn newlineByte() -> Byte {
+    bytes.fromString("\n")[0]
+}
+
+fn minInt(a: Int, b: Int) -> Int {
+    if a < b { a } else { b }
+}
+
+fn closedError(kind: String) -> Error {
+    error.new("io.{kind}: closed")
+}
+
+fn unexpectedEOFError(op: String, want: Int, got: Int) -> Error {
+    error.new("io.{op}: unexpected EOF after {got} of {want} bytes")
+}
+
+fn invalidUnreadError() -> Error {
+    error.new("io.bytesReader: cannot unread at start")
+}
+
+fn invalidWriteCountError(op: String, n: Int, want: Int) -> Error {
+    error.new("io.{op}: writer reported invalid byte count {n} for {want}-byte buffer")
+}
+
+fn trimTrailingCR(data: Bytes) -> Bytes {
+    let n = data.len()
+    if n > 0 && data[n - 1] == carriageReturnByte() {
+        return bytes.slice(data, 0, n - 1)
+    }
+    data
+}
+
+fn writeChunk(w: Writer, data: Bytes, op: String) -> Result<(), Error> {
+    let total = data.len()
+    let mut offset = 0
+    for offset < total {
+        let remaining = total - offset
+        let wrote = w.write(bytes.slice(data, offset, total))?
+        if wrote <= 0 || wrote > remaining {
+            return Err(invalidWriteCountError(op, wrote, remaining))
+        }
+        offset = offset + wrote
+    }
+    Ok(())
+}
+
+pub struct BytesReader {
+    data: Bytes,
+    offset: Int,
+    closed: Bool,
+
+    pub fn len(self) -> Int {
+        self.data.len()
+    }
+
+    pub fn remaining(self) -> Int {
+        let total = self.data.len()
+        if self.offset >= total {
+            return 0
+        }
+        total - self.offset
+    }
+
+    pub fn isClosed(self) -> Bool {
+        self.closed
+    }
+
+    pub fn rewind(mut self) {
+        self.offset = 0
+    }
+
+    pub fn peek(self, maxBytes: Int) -> Result<Bytes, Error> {
+        if self.closed {
+            return Err(closedError("bytesReader"))
+        }
+        if maxBytes <= 0 {
+            return Ok(emptyBytes())
+        }
+        let take = minInt(maxBytes, self.remaining())
+        if take <= 0 {
+            return Ok(emptyBytes())
+        }
+        let start = self.offset
+        Ok(bytes.slice(self.data, start, start + take))
+    }
+
+    pub fn remainingBytes(self) -> Bytes {
+        let total = self.data.len()
+        let start = if self.offset < total { self.offset } else { total }
+        bytes.slice(self.data, start, total)
+    }
+
+    pub fn readByte(mut self) -> Result<Byte?, Error> {
+        if self.closed {
+            return Err(closedError("bytesReader"))
+        }
+        if self.remaining() <= 0 {
+            return Ok(None)
+        }
+        let out = self.data[self.offset]
+        self.offset = self.offset + 1
+        Ok(Some(out))
+    }
+
+    pub fn unreadByte(mut self) -> Result<(), Error> {
+        if self.closed {
+            return Err(closedError("bytesReader"))
+        }
+        if self.offset <= 0 {
+            return Err(invalidUnreadError())
+        }
+        self.offset = self.offset - 1
+        Ok(())
+    }
+
+    pub fn skip(mut self, n: Int) -> Result<Int, Error> {
+        if self.closed {
+            return Err(closedError("bytesReader"))
+        }
+        if n <= 0 {
+            return Ok(0)
+        }
+        let skipped = minInt(n, self.remaining())
+        self.offset = self.offset + skipped
+        Ok(skipped)
+    }
+
+    pub fn readLineBytes(mut self) -> Result<Bytes?, Error> {
+        if self.closed {
+            return Err(closedError("bytesReader"))
+        }
+        let start = self.offset
+        let total = self.data.len()
+        if start >= total {
+            return Ok(None)
+        }
+        let mut end = start
+        for end < total {
+            if self.data[end] == newlineByte() {
+                self.offset = end + 1
+                return Ok(Some(trimTrailingCR(bytes.slice(self.data, start, end))))
+            }
+            end = end + 1
+        }
+        self.offset = total
+        Ok(Some(trimTrailingCR(bytes.slice(self.data, start, total))))
+    }
+
+    pub fn readLine(mut self) -> Result<String?, Error> {
+        match self.readLineBytes()? {
+            Some(line) -> Ok(Some(line.toString()?)),
+            None       -> Ok(None),
+        }
+    }
+
+    pub fn read(mut self, maxBytes: Int) -> Result<Bytes, Error> {
+        if self.closed {
+            return Err(closedError("bytesReader"))
+        }
+        if maxBytes <= 0 {
+            return Ok(emptyBytes())
+        }
+        let take = minInt(maxBytes, self.remaining())
+        if take <= 0 {
+            return Ok(emptyBytes())
+        }
+        let start = self.offset
+        let end = start + take
+        self.offset = end
+        Ok(bytes.slice(self.data, start, end))
+    }
+
+    pub fn close(mut self) -> Result<(), Error> {
+        self.closed = true
+        Ok(())
+    }
+}
+
+pub struct Buffer {
+    buf: List<Byte>,
+    closed: Bool,
+
+    pub fn len(self) -> Int {
+        self.buf.len()
+    }
+
+    pub fn isEmpty(self) -> Bool {
+        self.buf.isEmpty()
+    }
+
+    pub fn isClosed(self) -> Bool {
+        self.closed
+    }
+
+    pub fn bytes(self) -> Bytes {
+        bytes.from(self.buf)
+    }
+
+    pub fn toString(self) -> Result<String, Error> {
+        self.bytes().toString()
+    }
+
+    pub fn clear(mut self) {
+        self.buf = []
+    }
+
+    pub fn reset(mut self) {
+        self.buf = []
+        self.closed = false
+    }
+
+    pub fn truncate(mut self, n: Int) {
+        let limit = if n <= 0 {
+            0
+        } else if n < self.buf.len() {
+            n
+        } else {
+            self.buf.len()
+        }
+        for self.buf.len() > limit {
+            self.buf.removeAt(self.buf.len() - 1)
+        }
+    }
+
+    pub fn reader(self) -> BytesReader {
+        bytesReader(self.bytes())
+    }
+
+    pub fn write(mut self, data: Bytes) -> Result<Int, Error> {
+        if self.closed {
+            return Err(closedError("buffer"))
+        }
+        let n = data.len()
+        for i in 0..n {
+            self.buf.push(data[i])
+        }
+        Ok(n)
+    }
+
+    pub fn writeByte(mut self, b: Byte) -> Result<Int, Error> {
+        if self.closed {
+            return Err(closedError("buffer"))
+        }
+        self.buf.push(b)
+        Ok(1)
+    }
+
+    pub fn writeString(mut self, s: String) -> Result<Int, Error> {
+        self.write(bytes.fromString(s))
+    }
+
+    pub fn writeLine(mut self, s: String) -> Result<Int, Error> {
+        let text = "{s}\n"
+        self.write(bytes.fromString(text))
+    }
+
+    pub fn readFrom(mut self, r: Reader) -> Result<Int, Error> {
+        if self.closed {
+            return Err(closedError("buffer"))
+        }
+        let mut total = 0
+        for {
+            let chunk = r.read(32 * 1024)?
+            let n = chunk.len()
+            if n == 0 {
+                return Ok(total)
+            }
+            for i in 0..n {
+                self.buf.push(chunk[i])
+            }
+            total = total + n
+        }
+    }
+
+    pub fn writeTo(self, w: Writer) -> Result<Int, Error> {
+        let data = self.bytes()
+        writeChunk(w, data, "buffer.writeTo")?
+        w.flush()?
+        Ok(data.len())
+    }
+
+    pub fn flush(self) -> Result<(), Error> {
+        Ok(())
+    }
+
+    pub fn close(mut self) -> Result<(), Error> {
+        self.closed = true
+        Ok(())
+    }
+}
+
+pub fn bytesReader(data: Bytes) -> BytesReader {
+    BytesReader { data: data, offset: 0, closed: false }
+}
+
+pub fn stringReader(s: String) -> BytesReader {
+    bytesReader(bytes.fromString(s))
+}
+
+pub fn buffer() -> Buffer {
+    Buffer { buf: [], closed: false }
+}
+
+pub fn copy(dst: Writer, src: Reader) -> Result<Int, Error> {
+    let mut total = 0
+    for {
+        let chunk = src.read(32 * 1024)?
+        let n = chunk.len()
+        if n == 0 {
+            break
+        }
+        writeChunk(dst, chunk, "copy")?
+        total = total + n
+    }
+    dst.flush()?
+    Ok(total)
+}
+
+pub fn readAll(r: Reader) -> Result<Bytes, Error> {
+    let mut out: List<Byte> = []
+    for {
+        let chunk = r.read(32 * 1024)?
+        let n = chunk.len()
+        if n == 0 {
+            break
+        }
+        for i in 0..n {
+            out.push(chunk[i])
+        }
+    }
+    Ok(bytes.from(out))
+}
+
+pub fn writeAll(w: Writer, data: Bytes) -> Result<(), Error> {
+    writeChunk(w, data, "writeAll")?
+    w.flush()?
+    Ok(())
+}
+
+pub fn copyN(dst: Writer, src: Reader, n: Int) -> Result<Int, Error> {
+    if n <= 0 {
+        return Ok(0)
+    }
+    let mut total = 0
+    for total < n {
+        let want = minInt(32 * 1024, n - total)
+        let chunk = src.read(want)?
+        let got = chunk.len()
+        if got == 0 {
+            return Err(unexpectedEOFError("copyN", n, total))
+        }
+        writeChunk(dst, chunk, "copyN")?
+        total = total + got
+    }
+    dst.flush()?
+    Ok(total)
+}
+
+pub fn readExact(r: Reader, n: Int) -> Result<Bytes, Error> {
+    if n <= 0 {
+        return Ok(emptyBytes())
+    }
+    let mut out: List<Byte> = []
+    let mut total = 0
+    for total < n {
+        let want = minInt(32 * 1024, n - total)
+        let chunk = r.read(want)?
+        let got = chunk.len()
+        if got == 0 {
+            return Err(unexpectedEOFError("readExact", n, total))
+        }
+        for i in 0..got {
+            out.push(chunk[i])
+        }
+        total = total + got
+    }
+    Ok(bytes.from(out))
+}
+
+pub fn discard(r: Reader) -> Result<Int, Error> {
+    let mut total = 0
+    for {
+        let chunk = r.read(32 * 1024)?
+        let n = chunk.len()
+        if n == 0 {
+            return Ok(total)
+        }
+        total = total + n
+    }
+}
+
+pub fn readString(r: Reader) -> Result<String, Error> {
+    readAll(r)?.toString()
+}
+
+pub fn readLines(r: Reader) -> Result<List<String>, Error> {
+    let text = readString(r)?
+    let raw = strings.lines(text)
+    if raw.isEmpty() {
+        return Ok(raw)
+    }
+    let mut out: List<String> = []
+    let last = raw.len() - 1
+    for i in 0..raw.len() {
+        let line = strings.trimSuffix(raw[i], "\r")
+        if i == last && line == "" && strings.endsWith(text, "\n") {
+            continue
+        }
+        out.push(line)
+    }
+    Ok(out)
+}
+
+pub fn readAllLines(r: LineReader) -> Result<List<String>, Error> {
+    let mut out: List<String> = []
+    let mut line = r.readLine()?
+    for let Some(text) = line {
+        out.push(text)
+        line = r.readLine()?
+    }
+    Ok(out)
+}
+
+pub fn writeString(w: Writer, s: String) -> Result<(), Error> {
+    writeAll(w, bytes.fromString(s))
+}
+
+pub fn writeLine(w: Writer, s: String) -> Result<(), Error> {
+    writeAll(w, bytes.concat(bytes.fromString(s), newlineBytes()))
+}
+
+pub fn writeLines(w: ByteWriter, lines: List<String>) -> Result<Int, Error> {
+    let mut total = 0
+    for line in lines {
+        total = total + w.writeLine(line)?
+    }
+    w.flush()?
+    Ok(total)
+}
 
 pub fn print(s: String)
 
