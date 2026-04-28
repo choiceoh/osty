@@ -1,0 +1,18 @@
+summary assignments=0 accepted=0 errors=2
+errorsByContext E0770=1
+errorsByContext E0773=1
+errorDetails E0770 runtime sublanguage surface used outside a privileged package: `#[intrinsic]` is a runtime-only annotation @L1:C1=1
+errorDetails E0773 `#[intrinsic]` function `bad` must have an empty body @L2:C17=1
+typedNodes
+  node=2 nodeId=2 typeId=2 kind=IntLit span=35:37 type=Int
+  node=4 nodeId=4 typeId=2 kind=Block span=29:39 type=Int
+bindings
+symbols
+  symbolId=0 node=5 nodeId=5 kind=fn name=bad owner= typeId=118 span=13:39 type=fn() -> Int
+instantiations
+diagnostics
+  code=E0773 severity=error span=29:39 line=2:17-4:2 message=`#[intrinsic]` function `bad` must have an empty body
+    note=LANG_SPEC §19.6: intrinsic implementations are supplied by the lowering layer; the source body is ignored
+    note=hint: keep the signature and drop the body, or use an empty block
+  code=E0770 severity=error span=0:12 line=1:1-1:13 message=runtime sublanguage surface used outside a privileged package: `#[intrinsic]` is a runtime-only annotation
+    note=LANG_SPEC §19.2: the runtime sublanguage is only reachable from `std.runtime.*` or from toolchain-workspace packages that opt in via `[capabilities] runtime = true` in `osty.toml`

@@ -259,93 +259,18 @@ func selfhostShiftTokenIndex(idx, base int) int {
 }
 
 func adaptCheckResultWithTokenLayout(checked *FrontCheckResult, layout *selfhostPackageTokenLayout) CheckResult {
-	if checked == nil {
-		return CheckResult{}
-	}
-	result := CheckResult{
-		Summary:        adaptCheckSummaryWithContext(checked, selfhostLayoutTokenPos(layout)),
-		TypedNodes:     make([]CheckedNode, 0, len(checked.typedNodes)),
-		Bindings:       make([]CheckedBinding, 0, len(checked.bindings)),
-		Symbols:        make([]CheckedSymbol, 0, len(checked.symbols)),
-		Instantiations: make([]CheckInstantiation, 0, len(checked.instantiations)),
-		Diagnostics:    make([]CheckDiagnosticRecord, 0, len(checked.diagnostics)),
-	}
-	for _, node := range checked.typedNodes {
-		if node == nil {
-			continue
-		}
-		start, end := checkNodeOffsetsWithTokenLayout(layout, node.start, node.end)
-		result.TypedNodes = append(result.TypedNodes, CheckedNode{
-			Node:  node.node,
-			Kind:  node.kind,
-			Type:  frontTypeReprToAPI(node.typeRepr),
-			Start: start,
-			End:   end,
-		})
-	}
-	for _, binding := range checked.bindings {
-		if binding == nil {
-			continue
-		}
-		start, end := checkNodeOffsetsWithTokenLayout(layout, binding.start, binding.end)
-		result.Bindings = append(result.Bindings, CheckedBinding{
-			Node:    binding.node,
-			Name:    binding.name,
-			Type:    frontTypeReprToAPI(binding.typeRepr),
-			Mutable: binding.mutable,
-			Start:   start,
-			End:     end,
-		})
-	}
-	for _, symbol := range checked.symbols {
-		if symbol == nil {
-			continue
-		}
-		start, end := checkNodeOffsetsWithTokenLayout(layout, symbol.start, symbol.end)
-		result.Symbols = append(result.Symbols, CheckedSymbol{
-			Node:  symbol.node,
-			Kind:  symbol.kind,
-			Name:  symbol.name,
-			Owner: symbol.owner,
-			Type:  frontTypeReprToAPI(symbol.typeRepr),
-			Start: start,
-			End:   end,
-		})
-	}
-	for _, inst := range checked.instantiations {
-		if inst == nil {
-			continue
-		}
-		start, end := checkNodeOffsetsWithTokenLayout(layout, inst.start, inst.end)
-		result.Instantiations = append(result.Instantiations, CheckInstantiation{
-			Node:       inst.node,
-			Callee:     inst.callee,
-			TypeArgs:   frontTypeReprSliceToAPI(inst.typeArgs),
-			ResultType: frontTypeReprToAPI(inst.resultType),
-			Start:      start,
-			End:        end,
-		})
-	}
-	for _, d := range checked.diagnostics {
-		if d == nil {
-			continue
-		}
-		start, end, startLine, startColumn, endLine, endColumn := checkNodeRangeWithTokenLayout(layout, d.start, d.end)
-		result.Diagnostics = append(result.Diagnostics, CheckDiagnosticRecord{
-			Code:        d.code,
-			Severity:    diagnosticSeverityName(d.severity),
-			Message:     d.message,
-			Start:       start,
-			End:         end,
-			StartLine:   startLine,
-			StartColumn: startColumn,
-			EndLine:     endLine,
-			EndColumn:   endColumn,
-			File:        checkFilePathWithTokenLayout(layout, d.start),
-			Notes:       append([]string(nil), d.notes...),
-		})
-	}
-	return result
+	return adaptCheckResultWithTokenMapper(checked, checkResultTokenMapper{
+		tokenPos: selfhostLayoutTokenPos(layout),
+		offsets: func(startToken, endToken int) (int, int) {
+			return checkNodeOffsetsWithTokenLayout(layout, startToken, endToken)
+		},
+		tokenRange: func(startToken, endToken int) (int, int, int, int, int, int) {
+			return checkNodeRangeWithTokenLayout(layout, startToken, endToken)
+		},
+		file: func(tokenIdx int) string {
+			return checkFilePathWithTokenLayout(layout, tokenIdx)
+		},
+	})
 }
 
 func checkFilePathWithTokenLayout(layout *selfhostPackageTokenLayout, tokenIdx int) string {
@@ -442,14 +367,14 @@ func selfhostInstallImportSurfaces(env *CheckEnv, imports []PackageCheckImport) 
 			})
 		}
 		for _, ext := range imp.InterfaceExts {
-			if ifaceTy := selfhostTypeNameToTy(env, ext.InterfaceType); ifaceTy >= 0 {
+			if ifaceTy := selfhostTypeReprToTy(env, ext.InterfaceTypeRepr, ext.InterfaceType); ifaceTy >= 0 {
 				checkRegisterInterfaceExtends(env, &CheckInterfaceExt{owner: ext.Owner, ifaceTy: ifaceTy})
 			}
 		}
 		for _, alias := range imp.Aliases {
 			checkRegisterAlias(env, &CheckAliasSig{
 				name:     alias.Name,
-				ty:       selfhostTypeNameToTy(env, alias.Target),
+				ty:       selfhostTypeReprToTy(env, alias.TargetRepr, alias.Target),
 				generics: append([]string(nil), alias.Generics...),
 			})
 		}
@@ -457,17 +382,14 @@ func selfhostInstallImportSurfaces(env *CheckEnv, imports []PackageCheckImport) 
 			sig := &CheckFieldSig{
 				owner:      field.Owner,
 				name:       field.Name,
-				ty:         selfhostTypeNameToTy(env, field.TypeName),
+				ty:         selfhostTypeReprToTy(env, field.Type, field.TypeName),
 				hasDefault: field.HasDefault,
 			}
 			selfhostSetCheckFieldExported(sig, field.Exported)
 			checkRegisterField(env, sig)
 		}
 		for _, variant := range imp.Variants {
-			fieldTys := make([]int, 0, len(variant.FieldTypes))
-			for _, tyName := range variant.FieldTypes {
-				fieldTys = append(fieldTys, selfhostTypeNameToTy(env, tyName))
-			}
+			fieldTys := selfhostTypeReprListToTys(env, variant.FieldTypeReprs, variant.FieldTypes)
 			checkRegisterVariant(env, &CheckVariantSig{
 				owner:    variant.Owner,
 				name:     variant.Name,
@@ -476,16 +398,13 @@ func selfhostInstallImportSurfaces(env *CheckEnv, imports []PackageCheckImport) 
 			})
 		}
 		for _, fn := range imp.Functions {
-			paramTys := make([]int, 0, len(fn.ParamTypes))
-			for _, tyName := range fn.ParamTypes {
-				paramTys = append(paramTys, selfhostTypeNameToTy(env, tyName))
-			}
+			paramTys := selfhostTypeReprListToTys(env, fn.ParamTypeReprs, fn.ParamTypes)
 			receiverTy := -1
-			if fn.ReceiverType != "" {
-				receiverTy = selfhostTypeNameToTy(env, fn.ReceiverType)
+			if fn.ReceiverTypeRepr != nil || fn.ReceiverType != "" {
+				receiverTy = selfhostTypeReprToTy(env, fn.ReceiverTypeRepr, fn.ReceiverType)
 			}
-			retTy := selfhostTypeNameToTy(env, fn.ReturnType)
-			if fn.ReturnType == "" || fn.ReturnType == "()" {
+			retTy := selfhostTypeReprToTy(env, fn.ReturnTypeRepr, fn.ReturnType)
+			if fn.ReturnTypeRepr == nil && (fn.ReturnType == "" || fn.ReturnType == "()") {
 				retTy = tUnit(env.tys)
 			}
 			checkRegisterFn(env, &CheckFnSig{
@@ -534,10 +453,91 @@ func selfhostMaterializeBounds(env *CheckEnv, bounds []PackageCheckGenericBound)
 	for _, bound := range bounds {
 		out = append(out, &CheckGenericBound{
 			tyParam: bound.TyParam,
-			iface:   selfhostTypeNameToTy(env, bound.InterfaceType),
+			iface:   selfhostTypeReprToTy(env, bound.InterfaceTypeRepr, bound.InterfaceType),
 		})
 	}
 	return out
+}
+
+func selfhostTypeReprListToTys(env *CheckEnv, reprs []TypeRepr, fallback []string) []int {
+	n := len(reprs)
+	if n == 0 {
+		n = len(fallback)
+	}
+	out := make([]int, 0, n)
+	for i := 0; i < n; i++ {
+		var repr *TypeRepr
+		if i < len(reprs) {
+			repr = &reprs[i]
+		}
+		fallbackName := ""
+		if i < len(fallback) {
+			fallbackName = fallback[i]
+		}
+		out = append(out, selfhostTypeReprToTy(env, repr, fallbackName))
+	}
+	return out
+}
+
+func selfhostTypeReprToTy(env *CheckEnv, repr *TypeRepr, fallback string) int {
+	if env == nil {
+		return -1
+	}
+	if repr == nil {
+		return selfhostTypeNameToTy(env, fallback)
+	}
+	switch repr.Kind {
+	case "unit":
+		return tUnit(env.tys)
+	case "never":
+		return tNever(env.tys)
+	case "error":
+		return tErr(env.tys)
+	case "poison":
+		return tPoison(env.tys)
+	case "primitive":
+		if prim := primKindFromName(repr.Name); !isInvalidPrimKind(prim) || repr.Name == "Invalid" {
+			return tyPrim(env.tys, prim)
+		}
+		return tyNamed(env.tys, repr.Name, nil)
+	case "named":
+		return tyNamed(env.tys, repr.Name, selfhostTypeReprArgsToTys(env, repr.Args))
+	case "optional":
+		return tyOptional(env.tys, selfhostTypeReprToTy(env, repr.Return, ""))
+	case "tuple":
+		return tyTuple(env.tys, selfhostTypeReprArgsToTys(env, repr.Args))
+	case "fn":
+		ret := tUnit(env.tys)
+		if repr.Return != nil {
+			ret = selfhostTypeReprToTy(env, repr.Return, "")
+		}
+		return tyFn(env.tys, selfhostTypeReprArgsToTys(env, repr.Args), ret)
+	case "typevar":
+		if repr.Name == "" {
+			return tErr(env.tys)
+		}
+		return tyNamed(env.tys, repr.Name, nil)
+	case "self":
+		return tySelf(env.tys, "")
+	default:
+		if repr.Name != "" {
+			return tyNamed(env.tys, repr.Name, selfhostTypeReprArgsToTys(env, repr.Args))
+		}
+		return selfhostTypeNameToTy(env, fallback)
+	}
+}
+
+func selfhostTypeReprArgsToTys(env *CheckEnv, reprs []TypeRepr) []int {
+	out := make([]int, 0, len(reprs))
+	for i := range reprs {
+		out = append(out, selfhostTypeReprToTy(env, &reprs[i], ""))
+	}
+	return out
+}
+
+func isInvalidPrimKind(prim PrimKind) bool {
+	_, ok := prim.(*PrimKind_PkInvalid)
+	return ok
 }
 
 func selfhostTypeNameToTy(env *CheckEnv, typeName string) int {

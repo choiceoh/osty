@@ -10,6 +10,7 @@ import (
 // continue to compile. Future work can switch consumers (cmd/osty,
 // internal/check) to `api.CheckResult` directly.
 type (
+	TypeRepr              = api.TypeRepr
 	CheckSummary          = api.CheckSummary
 	CheckedNode           = api.CheckedNode
 	CheckedBinding        = api.CheckedBinding
@@ -17,6 +18,7 @@ type (
 	CheckInstantiation    = api.CheckInstantiation
 	CheckDiagnosticRecord = api.CheckDiagnosticRecord
 	CheckResult           = api.CheckResult
+	CheckResultIndex      = api.CheckResultIndex
 )
 
 // CheckSource runs the bootstrapped Osty checker over one source string.
@@ -148,8 +150,30 @@ func adaptCheckResult(checked *FrontCheckResult, lexed *OstyLexedSource) CheckRe
 // CheckStructuredFromRun path, which reuses FrontendRun's own rt and
 // stream) can skip constructing an OstyLexedSource.
 func adaptCheckResultFromRuneStream(checked *FrontCheckResult, rt runeTable, stream *FrontLexStream) CheckResult {
+	return adaptCheckResultWithTokenMapper(checked, checkResultTokenMapper{
+		tokenPos: selfhostStreamTokenPos(stream),
+		offsets: func(startToken, endToken int) (int, int) {
+			return checkNodeOffsets(rt, stream, startToken, endToken)
+		},
+		tokenRange: func(startToken, endToken int) (int, int, int, int, int, int) {
+			return checkNodeRange(rt, stream, startToken, endToken)
+		},
+	})
+}
+
+type checkResultTokenMapper struct {
+	tokenPos   selfhostTokenPos
+	offsets    func(startToken, endToken int) (int, int)
+	tokenRange func(startToken, endToken int) (start, end, startLine, startColumn, endLine, endColumn int)
+	file       func(tokenIdx int) string
+}
+
+func adaptCheckResultWithTokenMapper(checked *FrontCheckResult, mapper checkResultTokenMapper) CheckResult {
+	if checked == nil {
+		return CheckResult{}
+	}
 	result := CheckResult{
-		Summary:        adaptCheckSummaryWithContext(checked, selfhostStreamTokenPos(stream)),
+		Summary:        adaptCheckSummaryWithContext(checked, mapper.tokenPos),
 		TypedNodes:     make([]CheckedNode, 0, len(checked.typedNodes)),
 		Bindings:       make([]CheckedBinding, 0, len(checked.bindings)),
 		Symbols:        make([]CheckedSymbol, 0, len(checked.symbols)),
@@ -160,63 +184,79 @@ func adaptCheckResultFromRuneStream(checked *FrontCheckResult, rt runeTable, str
 		if node == nil {
 			continue
 		}
-		start, end := checkNodeOffsets(rt, stream, node.start, node.end)
+		start, end := mapper.offsets(node.start, node.end)
 		result.TypedNodes = append(result.TypedNodes, CheckedNode{
-			Node:  node.node,
-			Kind:  node.kind,
-			Type:  frontTypeReprToAPI(node.typeRepr),
-			Start: start,
-			End:   end,
+			Node:   node.node,
+			NodeID: node.nodeId,
+			Kind:   node.kind,
+			Type:   frontTypeReprToAPI(node.typeRepr),
+			TypeID: node.typeId,
+			Start:  start,
+			End:    end,
 		})
 	}
 	for _, binding := range checked.bindings {
 		if binding == nil {
 			continue
 		}
-		start, end := checkNodeOffsets(rt, stream, binding.start, binding.end)
+		start, end := mapper.offsets(binding.start, binding.end)
 		result.Bindings = append(result.Bindings, CheckedBinding{
-			Node:    binding.node,
-			Name:    binding.name,
-			Type:    frontTypeReprToAPI(binding.typeRepr),
-			Mutable: binding.mutable,
-			Start:   start,
-			End:     end,
+			Node:      binding.node,
+			NodeID:    binding.nodeId,
+			BindingID: binding.bindingId,
+			Name:      binding.name,
+			Type:      frontTypeReprToAPI(binding.typeRepr),
+			TypeID:    binding.typeId,
+			Mutable:   binding.mutable,
+			Start:     start,
+			End:       end,
 		})
 	}
 	for _, symbol := range checked.symbols {
 		if symbol == nil {
 			continue
 		}
-		start, end := checkNodeOffsets(rt, stream, symbol.start, symbol.end)
+		start, end := mapper.offsets(symbol.start, symbol.end)
 		result.Symbols = append(result.Symbols, CheckedSymbol{
-			Node:  symbol.node,
-			Kind:  symbol.kind,
-			Name:  symbol.name,
-			Owner: symbol.owner,
-			Type:  frontTypeReprToAPI(symbol.typeRepr),
-			Start: start,
-			End:   end,
+			Node:     symbol.node,
+			NodeID:   symbol.nodeId,
+			SymbolID: symbol.symbolId,
+			Kind:     symbol.kind,
+			Name:     symbol.name,
+			Owner:    symbol.owner,
+			Type:     frontTypeReprToAPI(symbol.typeRepr),
+			TypeID:   symbol.typeId,
+			Start:    start,
+			End:      end,
 		})
 	}
 	for _, inst := range checked.instantiations {
 		if inst == nil {
 			continue
 		}
-		start, end := checkNodeOffsets(rt, stream, inst.start, inst.end)
+		start, end := mapper.offsets(inst.start, inst.end)
 		result.Instantiations = append(result.Instantiations, CheckInstantiation{
-			Node:       inst.node,
-			Callee:     inst.callee,
-			TypeArgs:   frontTypeReprSliceToAPI(inst.typeArgs),
-			ResultType: frontTypeReprToAPI(inst.resultType),
-			Start:      start,
-			End:        end,
+			Node:            inst.node,
+			NodeID:          inst.nodeId,
+			InstantiationID: inst.instantiationId,
+			Callee:          inst.callee,
+			TypeArgs:        frontTypeReprSliceToAPI(inst.typeArgs),
+			TypeArgIDs:      append([]int(nil), inst.typeArgIds...),
+			ResultType:      frontTypeReprToAPI(inst.resultType),
+			ResultTypeID:    inst.resultTypeId,
+			Start:           start,
+			End:             end,
 		})
 	}
 	for _, d := range checked.diagnostics {
 		if d == nil {
 			continue
 		}
-		start, end, startLine, startColumn, endLine, endColumn := checkNodeRange(rt, stream, d.start, d.end)
+		start, end, startLine, startColumn, endLine, endColumn := mapper.tokenRange(d.start, d.end)
+		file := ""
+		if mapper.file != nil {
+			file = mapper.file(d.start)
+		}
 		result.Diagnostics = append(result.Diagnostics, CheckDiagnosticRecord{
 			Code:        d.code,
 			Severity:    diagnosticSeverityName(d.severity),
@@ -227,7 +267,7 @@ func adaptCheckResultFromRuneStream(checked *FrontCheckResult, rt runeTable, str
 			StartColumn: startColumn,
 			EndLine:     endLine,
 			EndColumn:   endColumn,
-			File:        "",
+			File:        file,
 			Notes:       append([]string(nil), d.notes...),
 		})
 	}

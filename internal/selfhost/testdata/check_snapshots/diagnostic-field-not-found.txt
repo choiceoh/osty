@@ -1,0 +1,19 @@
+summary assignments=1 accepted=1 errors=1
+errorsByContext E0702=1
+errorDetails E0702 no field `age` on type `User` @L4:C19=1
+typedNodes
+  node=5 nodeId=5 typeId=17 kind=StringLit span=69:74 type=String
+  node=7 nodeId=7 typeId=118 kind=StructLit span=61:76 type=User
+  node=10 nodeId=10 typeId=118 kind=Ident span=91:95 type=User
+  node=13 nodeId=13 typeId=19 kind=Block span=39:101 type=()
+bindings
+  bindingId=0 node=3 nodeId=3 name=user mutable=false typeId=118 span=49:53 type=User
+  bindingId=1 node=9 nodeId=9 name=age mutable=false typeId=1 span=85:88 type=Poison
+symbols
+  symbolId=0 node=2 nodeId=2 kind=struct name=User owner= typeId=118 span=0:28 type=User
+  symbolId=1 node=1 nodeId=1 kind=field name=name owner=User typeId=17 span=14:26 type=String
+  symbolId=2 node=14 nodeId=14 kind=fn name=main owner= typeId=119 span=29:101 type=fn() -> ()
+instantiations
+diagnostics
+  code=E0702 severity=error span=95:99 line=4:19-4:23 message=no field `age` on type `User`
+    note=hint: did you mean `name`?

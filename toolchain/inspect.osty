@@ -58,7 +58,7 @@ pub struct InspectRecord {
     pub end: Int,
     pub nodeKind: String,
     pub rule: String,
-    pub typeName: String,
+    pub typeRepr: FrontTypeRepr,
     pub hintName: String,
     pub notes: List<String>,
 }
@@ -412,10 +412,10 @@ fn inspectSpreadForInHints(
 ///      / Paren inners / Closure bodies to their leaf expressions.
 ///
 ///   2. **Let values** — top-level via `symbols[*]` with `kind == "let"`
-///      (typeName = declared type), and local lets via the
-///      `AstNLet.left` pattern's matching binding record (typeName =
+///      (typeRepr = declared type), and local lets via the
+///      `AstNLet.left` pattern's matching binding record (typeRepr =
 ///      inferred binding type, which equals the annotation when one was
-///      written). The hint flows into `letNode.right` (the value
+///      written). The rendered hint flows into `letNode.right` (the value
 ///      expression).
 ///
 /// v1.9's direct-parent-type pass (List / Tuple / Map / Call) already
@@ -484,7 +484,7 @@ fn inspectThreadHintsThroughContainers(
 fn inspectBindingTypeByPattern(checked: FrontCheckResult) -> List<InspectBindingEntry> {
     let mut out: List<InspectBindingEntry> = []
     for bnd in checked.bindings {
-        out.push(InspectBindingEntry { node: bnd.node, typeName: frontTypeReprToString(bnd.typeRepr) })
+        out.push(InspectBindingEntry { node: bnd.node, typeRepr: bnd.typeRepr })
     }
     out
 }
@@ -495,7 +495,7 @@ fn inspectLookupBindingType(entries: List<InspectBindingEntry>, patternIdx: Int)
     }
     for e in entries {
         if e.node == patternIdx {
-            return e.typeName
+            return frontTypeReprToString(e.typeRepr)
         }
     }
     ""
@@ -558,7 +558,7 @@ fn inspectThreadHint(arena: AstArena, idx: Int, hint: String, hints: List<String
 
 struct InspectBindingEntry {
     node: Int,
-    typeName: String,
+    typeRepr: FrontTypeRepr,
 }
 
 fn inspectBuildRecords(
@@ -583,7 +583,7 @@ fn inspectBuildRecords(
             end: span.end,
             nodeKind: tn.kind,
             rule,
-            typeName: frontTypeReprToString(tn.typeRepr),
+            typeRepr: tn.typeRepr,
             hintName: hint,
             notes,
         })
@@ -605,7 +605,7 @@ fn inspectBuildRecords(
             end: sym.end,
             nodeKind: inspectNodeKindForSymbolKind(sym.kind),
             rule,
-            typeName: frontTypeReprToString(sym.typeRepr),
+            typeRepr: sym.typeRepr,
             hintName: "",
             notes,
         })
@@ -636,7 +636,7 @@ fn inspectBuildRecords(
             end: span.end,
             nodeKind,
             rule,
-            typeName: frontTypeReprToString(bnd.typeRepr),
+            typeRepr: bnd.typeRepr,
             hintName: "",
             notes,
         })
@@ -659,7 +659,7 @@ fn inspectBuildRecords(
             end: span.end,
             nodeKind: "TurbofishExpr",
             rule: "TURBOFISH",
-            typeName: "",
+            typeRepr: frontInvalidTypeRepr(),
             hintName: "",
             notes: turboNotes,
         })
@@ -1011,7 +1011,7 @@ pub fn inspectRecordRule(recs: List<InspectRecord>, i: Int) -> String {
 }
 
 pub fn inspectRecordTypeName(recs: List<InspectRecord>, i: Int) -> String {
-    recs[i].typeName
+    frontTypeReprToString(recs[i].typeRepr)
 }
 
 pub fn inspectRecordHintName(recs: List<InspectRecord>, i: Int) -> String {

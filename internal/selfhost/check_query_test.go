@@ -29,6 +29,9 @@ func TestTypeAtOffsetFindsBindingLiteral(t *testing.T) {
 	if !strings.Contains(strings.ToLower(got), "int") {
 		t.Errorf("expected an Int-flavoured type, got %q", got)
 	}
+	if typ := selfhost.TypeReprAtOffset(r, off+1); typ == nil || !strings.Contains(strings.ToLower(typ.String()), "int") {
+		t.Fatalf("TypeReprAtOffset = %#v, want structured Int-flavoured type", typ)
+	}
 }
 
 func TestTypeAtOffsetReturnsEmptyOutsideAnyNode(t *testing.T) {
@@ -85,6 +88,9 @@ func TestLetTypeAtOffsetFindsDeclaredBinding(t *testing.T) {
 	if !strings.Contains(strings.ToLower(got), "int") {
 		t.Errorf("expected Int let type, got %q", got)
 	}
+	if typ := selfhost.LetTypeReprAtOffset(r, xOff); typ == nil || !strings.Contains(strings.ToLower(typ.String()), "int") {
+		t.Fatalf("LetTypeReprAtOffset = %#v, want structured Int type", typ)
+	}
 }
 
 func TestLetTypeAtOffsetReturnsEmptyWhenOutsideBinding(t *testing.T) {
@@ -103,6 +109,35 @@ func TestSymbolNameAtOffsetReturnsEmptyOutsideDecl(t *testing.T) {
 	// Far past the end.
 	if got := selfhost.SymbolNameAtOffset(r, len(src)+10); got != "" {
 		t.Errorf("expected empty symbol at out-of-range offset, got %q", got)
+	}
+}
+
+func TestSymbolAtOffsetReturnsStructuredStableRecord(t *testing.T) {
+	src := []byte("fn helper() -> Int { 1 }\nfn main() {}\n")
+	r := selfhost.CheckSourceStructured(src)
+	off := strings.Index(string(src), "helper")
+	if off < 0 {
+		t.Fatalf("fixture missing helper")
+	}
+	sym := selfhost.SymbolAtOffset(r, off)
+	if sym == nil {
+		t.Fatalf("SymbolAtOffset = nil, symbols=%#v", r.Symbols)
+	}
+	if sym.Name != "helper" || sym.Kind != "fn" {
+		t.Fatalf("SymbolAtOffset = %#v, want helper fn", sym)
+	}
+	if sym.Type == nil || sym.Type.Kind != "fn" {
+		t.Fatalf("symbol type = %#v, want structured fn TypeRepr", sym.Type)
+	}
+	if sym.NodeID != sym.Node {
+		t.Fatalf("symbol node ids = nodeId %d / node %d, want stable id mirrored to legacy alias", sym.NodeID, sym.Node)
+	}
+	idx := r.Index()
+	if got := idx.SymbolsByID[sym.SymbolID]; got == nil || got.Name != "helper" {
+		t.Fatalf("Index().SymbolsByID[%d] = %#v, want helper", sym.SymbolID, got)
+	}
+	if got := idx.SymbolsByNodeID[sym.NodeID]; len(got) == 0 {
+		t.Fatalf("Index().SymbolsByNodeID[%d] = %#v, want at least helper", sym.NodeID, got)
 	}
 }
 

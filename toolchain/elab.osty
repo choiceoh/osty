@@ -1410,6 +1410,9 @@ fn elabInferCall(cx: ElabCx, callIdx: Int, node: AstNode, expected: Int) -> Elab
     instSeedExpectedRet(cx, inst, sig.retTy, expected)
 
     // Respect explicit turbofish args if supplied.
+    if checkIntListLenHelper(explicitArgs) > 0 && checkIntListLenHelper(explicitArgs) != checkStringListLenHelper(sig.generics) {
+        cx.env.diagnostics.push(diagGenericArgCount(sig.name, checkStringListLenHelper(sig.generics), checkIntListLenHelper(explicitArgs), callee.start, callee.end))
+    }
     instSeedPositionalArgs(cx, inst, explicitArgs)
 
     let coreFn = coreIdent(cx.core, baseCallee.text, IkFn, fnSigToTy(cx.env, sig), baseCallee.start, baseCallee.end)
@@ -2153,7 +2156,7 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
 /// constructing the same `fn(Ps) -> R` as a `tyFn` and attaching it
 /// via `coreField` with `originAst = fieldNode`'s arena index.
 /// `serializeCheckResult` (the sole consumer of `cx.core.nodes`) then
-/// emits a `FrontCheckedNode{kind: "AstNField", typeName: "fn(...) -> R"}`
+/// emits a `FrontCheckedNode{kind: "AstNField", typeRepr: fn(...) -> R}`
 /// just like the Go reference would.
 fn elabRecordMethodCalleeType(
     cx: ElabCx,

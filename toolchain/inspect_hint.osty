@@ -1,12 +1,12 @@
 // inspect_hint.osty — type-string parser utilities for inspect hint
 // propagation.
 //
-// The self-host checker exposes inferred types as rendered strings on
-// `FrontCheckedNode.typeName` — there is no structured `types.Type`
-// surface like the Go reference has. Walking hints top-down therefore
-// needs small helpers that unwrap compound type strings into their
-// component strings: `List<Int>` → `Int` as the element hint, tuples
-// into per-element hints, `Map<K, V>` into (K, V), and
+// The self-host checker exposes inferred types structurally as
+// `FrontCheckedNode.typeRepr`. Inspect hint propagation still renders those
+// structures to strings because the hint table is a display-only surface.
+// Walking hints top-down therefore needs small helpers that unwrap compound
+// type strings into their component strings: `List<Int>` → `Int` as the
+// element hint, tuples into per-element hints, `Map<K, V>` into (K, V), and
 // `fn(Ps...) -> R` into (Ps, R).
 //
 // This module is string-in / string-out; it intentionally does not

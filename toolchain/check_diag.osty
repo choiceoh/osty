@@ -51,6 +51,7 @@ pub fn checkCodeOptionalChainOnNon() -> String { "E0719" }
 pub fn checkCodeInvalidAssignTarget() -> String { "E0724" }
 pub fn checkCodeImmutableAssign() -> String { "E0725" }
 pub fn checkCodeReturnMismatch() -> String { "E0726" }
+pub fn checkCodeGenericArgCount() -> String { "E0727" }
 pub fn checkCodeUnknownVariant() -> String { "E0728" }
 pub fn checkCodeNonExhaustiveMatch() -> String { "E0731" }
 pub fn checkCodeUnreachablePattern() -> String { "E0740" }
@@ -153,6 +154,15 @@ pub fn diagArgCount(fnName: String, want: Int, got: Int, start: Int, end: Int) -
         "`{fnName}` takes {want} argument(s) but {got} were supplied"
     }
     checkDiag(checkCodeArgCount(), msg, start, end)
+}
+
+pub fn diagGenericArgCount(name: String, want: Int, got: Int, start: Int, end: Int) -> CheckDiagnostic {
+    let msg = if name == "" {
+        "this generic requires {want} type argument(s) but {got} were supplied"
+    } else {
+        "`{name}` requires {want} type argument(s) but {got} were supplied"
+    }
+    checkDiag(checkCodeGenericArgCount(), msg, start, end)
 }
 
 pub fn diagOperandType(op: String, ty: String, start: Int, end: Int) -> CheckDiagnostic {

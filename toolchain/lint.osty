@@ -2869,7 +2869,7 @@ fn selfLintMaybeEmitUnusedMethod(
 struct SelfLintTypeHints {
     pub enabled: Bool,
     pub nodes: List<Int>,
-    pub types: List<String>,
+    pub types: List<FrontTypeRepr>,
 }
 
 fn selfLintNoTypeHints() -> SelfLintTypeHints {
@@ -2878,29 +2878,29 @@ fn selfLintNoTypeHints() -> SelfLintTypeHints {
 
 fn selfLintTypeHintsFromChecked(checked: FrontCheckResult) -> SelfLintTypeHints {
     let mut nodes: List<Int> = []
-    let mut types: List<String> = []
+    let mut types: List<FrontTypeRepr> = []
     for tn in checked.typedNodes {
         nodes.push(tn.node)
-        types.push(frontTypeReprToString(tn.typeRepr))
+        types.push(tn.typeRepr)
     }
     SelfLintTypeHints { enabled: true, nodes, types }
 }
 
-fn selfLintTypeAt(hints: SelfLintTypeHints, nodeIdx: Int) -> String {
+fn selfLintTypeAt(hints: SelfLintTypeHints, nodeIdx: Int) -> FrontTypeRepr {
     if nodeIdx < 0 || !(hints.enabled) {
-        return ""
+        return frontInvalidTypeRepr()
     }
     let mut i = 0
     for target in hints.nodes {
         if target == nodeIdx {
-            return selfLintStringAt(hints.types, i)
+            return selfLintTypeReprAt(hints.types, i)
         }
         i = i + 1
     }
-    ""
+    frontInvalidTypeRepr()
 }
 
-fn selfLintStringAt(items: List<String>, target: Int) -> String {
+fn selfLintTypeReprAt(items: List<FrontTypeRepr>, target: Int) -> FrontTypeRepr {
     let mut idx = 0
     for item in items {
         if idx == target {
@@ -2908,24 +2908,24 @@ fn selfLintStringAt(items: List<String>, target: Int) -> String {
         }
         idx = idx + 1
     }
-    ""
+    frontInvalidTypeRepr()
 }
 
 /// selfLintTypeIsMustUse mirrors `internal/lint/typebased.go`'s
-/// `isIgnoredMustUse` using the checker's stringified type. Matches
+/// `isIgnoredMustUse` using the checker's structured type. Matches
 /// `Result<...>`, `Option<...>`, the shorthand `T?`, and the bare
 /// generic heads.
-fn selfLintTypeIsMustUse(typeName: String) -> Bool {
-    if typeName == "" || typeName == "Invalid" || typeName == "Poison" {
+fn selfLintTypeIsMustUse(typeRepr: FrontTypeRepr) -> Bool {
+    if typeRepr.kind == "error" || typeRepr.kind == "poison" {
         return false
     }
-    if typeName == "Result" || typeName == "Option" {
+    if typeRepr.kind == "optional" {
         return true
     }
-    if strings.hasPrefix(typeName, "Result<") || strings.hasPrefix(typeName, "Option<") {
+    if typeRepr.kind == "named" && (typeRepr.name == "Result" || typeRepr.name == "Option") {
         return true
     }
-    strings.hasSuffix(typeName, "?")
+    false
 }
 
 /// selfLintAstCheckIgnoredResult — L0007. Flags statement-level
@@ -3015,13 +3015,13 @@ fn selfLintIgnoredResultStmt(
     if node.kind == AstNExprStmt {
         let exprIdx = node.left
         if !(tailIsValue) {
-            let typeName = selfLintTypeAt(hints, exprIdx)
-            if selfLintTypeIsMustUse(typeName) {
+            let typeRepr = selfLintTypeAt(hints, exprIdx)
+            if selfLintTypeIsMustUse(typeRepr) {
                 out = selfLintEmitAtNode(
                     out,
                     "L0007",
                     "discarded must-use value — handle the error or assign to `_`",
-                    typeName,
+                    frontTypeReprToString(typeRepr),
                     node.start,
                     node.end,
                     exprIdx,
@@ -3042,13 +3042,13 @@ fn selfLintIgnoredResultStmt(
     }
     if node.kind == AstNDefer {
         let exprIdx = node.left
-        let typeName = selfLintTypeAt(hints, exprIdx)
-        if selfLintTypeIsMustUse(typeName) {
+        let typeRepr = selfLintTypeAt(hints, exprIdx)
+        if selfLintTypeIsMustUse(typeRepr) {
             out = selfLintEmitAtNode(
                 out,
                 "L0007",
                 "discarded must-use value in `defer` — wrap with `ignoreError` / `logError` (§10.1) or handle explicitly",
-                typeName,
+                frontTypeReprToString(typeRepr),
                 node.start,
                 node.end,
                 exprIdx,

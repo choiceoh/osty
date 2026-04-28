@@ -34,6 +34,16 @@ func TestInspectFromSourceEmitsRecords(t *testing.T) {
 			t.Fatalf("empty NodeKind on record %+v", r)
 		}
 	}
+	var typed bool
+	for _, r := range recs {
+		if r.Type != nil && r.Type.String() != "" && r.Type.String() != "Invalid" {
+			typed = true
+			break
+		}
+	}
+	if !typed {
+		t.Fatalf("expected at least one structured inspect type, got %#v", recs)
+	}
 	if summary := kindSummary(recs); summary == "" {
 		t.Fatal("empty kind summary")
 	}

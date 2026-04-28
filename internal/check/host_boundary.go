@@ -235,25 +235,52 @@ func packageCheckFingerprint(input selfhost.PackageCheckInput) []byte {
 			len(imp.InterfaceExts),
 		)
 		for _, fn := range imp.Functions {
-			fmt.Fprintf(h, "  fn=%s owner=%s recv=%s ret=%s params=%d\n",
-				fn.Name, fn.Owner, fn.ReceiverType, fn.ReturnType, len(fn.ParamTypes))
+			fmt.Fprintf(h, "  fn=%s owner=%s recv=%s recvRepr=%s ret=%s retRepr=%s params=%d reprParams=%d\n",
+				fn.Name, fn.Owner, fn.ReceiverType, checkFingerprintTypeRepr(fn.ReceiverTypeRepr), fn.ReturnType, checkFingerprintTypeRepr(fn.ReturnTypeRepr), len(fn.ParamTypes), len(fn.ParamTypeReprs))
 			for i, pt := range fn.ParamTypes {
 				fmt.Fprintf(h, "    p%d=%s\n", i, pt)
+			}
+			for i := range fn.ParamTypeReprs {
+				fmt.Fprintf(h, "    pr%d=%s\n", i, fn.ParamTypeReprs[i].String())
+			}
+			for _, bound := range fn.GenericBounds {
+				fmt.Fprintf(h, "    bound=%s:%s:%s\n", bound.TyParam, bound.InterfaceType, checkFingerprintTypeRepr(bound.InterfaceTypeRepr))
 			}
 		}
 		for _, td := range imp.TypeDecls {
 			fmt.Fprintf(h, "  type=%s kind=%s generics=%d\n", td.Name, td.Kind, len(td.Generics))
+			for _, bound := range td.GenericBounds {
+				fmt.Fprintf(h, "    typeBound=%s:%s:%s\n", bound.TyParam, bound.InterfaceType, checkFingerprintTypeRepr(bound.InterfaceTypeRepr))
+			}
 		}
 		for _, field := range imp.Fields {
-			fmt.Fprintf(h, "  field=%s/%s type=%s exported=%t default=%t\n",
-				field.Owner, field.Name, field.TypeName, field.Exported, field.HasDefault)
+			fmt.Fprintf(h, "  field=%s/%s type=%s typeRepr=%s exported=%t default=%t\n",
+				field.Owner, field.Name, field.TypeName, checkFingerprintTypeRepr(field.Type), field.Exported, field.HasDefault)
 		}
 		for _, v := range imp.Variants {
-			fmt.Fprintf(h, "  variant=%s/%s fields=%d\n", v.Owner, v.Name, len(v.FieldTypes))
+			fmt.Fprintf(h, "  variant=%s/%s fields=%d reprFields=%d\n", v.Owner, v.Name, len(v.FieldTypes), len(v.FieldTypeReprs))
+			for i := range v.FieldTypeReprs {
+				fmt.Fprintf(h, "    vr%d=%s\n", i, v.FieldTypeReprs[i].String())
+			}
+		}
+		for _, alias := range imp.Aliases {
+			fmt.Fprintf(h, "  alias=%s target=%s targetRepr=%s generics=%d\n",
+				alias.Name, alias.Target, checkFingerprintTypeRepr(alias.TargetRepr), len(alias.Generics))
+		}
+		for _, ext := range imp.InterfaceExts {
+			fmt.Fprintf(h, "  ifaceExt=%s iface=%s ifaceRepr=%s\n",
+				ext.Owner, ext.InterfaceType, checkFingerprintTypeRepr(ext.InterfaceTypeRepr))
 		}
 	}
 	sum := h.Sum(nil)
 	return sum[:]
+}
+
+func checkFingerprintTypeRepr(repr *api.TypeRepr) string {
+	if repr == nil {
+		return ""
+	}
+	return repr.String()
 }
 
 func (c cachedNativeChecker) read(key string) (api.CheckResult, bool) {
@@ -603,6 +630,7 @@ func cloneNativeCheckResult(checked api.CheckResult) *api.CheckResult {
 	out.Instantiations = append([]api.CheckInstantiation(nil), checked.Instantiations...)
 	for i := range out.Instantiations {
 		out.Instantiations[i].TypeArgs = cloneTypeReprList(out.Instantiations[i].TypeArgs)
+		out.Instantiations[i].TypeArgIDs = append([]int(nil), out.Instantiations[i].TypeArgIDs...)
 		out.Instantiations[i].ResultType = cloneTypeRepr(out.Instantiations[i].ResultType)
 	}
 	out.Diagnostics = cloneNativeDiagnostics(checked.Diagnostics)

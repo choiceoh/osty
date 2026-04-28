@@ -196,17 +196,17 @@ fn main() {
 		return fakeNativeChecker{result: api.CheckResult{
 			Summary: api.CheckSummary{Assignments: 1, Accepted: 1, Errors: 0},
 			TypedNodes: []api.CheckedNode{
-				{Kind: "Call", Type: &api.TypeRepr{Kind: "primitive", Name: "Int"}, Start: call.Pos().Offset, End: call.End().Offset},
-				{Kind: "IntLit", Type: &api.TypeRepr{Kind: "primitive", Name: "Int"}, Start: lit.Pos().Offset, End: lit.End().Offset},
+				{Node: 101, NodeID: 101, Kind: "Call", Type: &api.TypeRepr{Kind: "primitive", Name: "Int"}, TypeID: 301, Start: call.Pos().Offset, End: call.End().Offset},
+				{Node: 102, NodeID: 102, Kind: "IntLit", Type: &api.TypeRepr{Kind: "primitive", Name: "Int"}, TypeID: 301, Start: lit.Pos().Offset, End: lit.End().Offset},
 			},
 			Bindings: []api.CheckedBinding{
-				{Name: "answer", Type: &api.TypeRepr{Kind: "primitive", Name: "Int"}, Start: letStmt.Pattern.Pos().Offset, End: letStmt.Pattern.End().Offset},
+				{Node: 201, NodeID: 201, BindingID: 11, Name: "answer", Type: &api.TypeRepr{Kind: "primitive", Name: "Int"}, TypeID: 301, Start: letStmt.Pattern.Pos().Offset, End: letStmt.Pattern.End().Offset},
 			},
 			Symbols: []api.CheckedSymbol{
-				{Name: "id", Kind: "fn", Type: &api.TypeRepr{Kind: "fn", Args: []api.TypeRepr{{Kind: "typevar", Name: "T"}}, Return: &api.TypeRepr{Kind: "typevar", Name: "T"}}, Start: idDecl.Pos().Offset, End: idDecl.End().Offset},
+				{Node: 202, NodeID: 202, SymbolID: 21, Name: "id", Kind: "fn", Type: &api.TypeRepr{Kind: "fn", Args: []api.TypeRepr{{Kind: "typevar", Name: "T"}}, Return: &api.TypeRepr{Kind: "typevar", Name: "T"}}, TypeID: 401, Start: idDecl.Pos().Offset, End: idDecl.End().Offset},
 			},
 			Instantiations: []api.CheckInstantiation{
-				{Callee: "id", TypeArgs: []api.TypeRepr{{Kind: "primitive", Name: "Int"}}, Start: call.Pos().Offset, End: call.End().Offset},
+				{Node: 101, NodeID: 101, InstantiationID: 31, Callee: "id", TypeArgs: []api.TypeRepr{{Kind: "primitive", Name: "Int"}}, TypeArgIDs: []int{301}, ResultType: &api.TypeRepr{Kind: "primitive", Name: "Int"}, ResultTypeID: 301, Start: call.Pos().Offset, End: call.End().Offset},
 			},
 		}}, ""
 	}
@@ -244,11 +244,24 @@ fn main() {
 	if got := native.TypedNodes[0].Type.String(); got != "Int" {
 		t.Fatalf("native typed node type = %q, want Int", got)
 	}
+	idx := chk.NativeIndex()
+	if got := idx.TypedNodesByNodeID[101]; got == nil || got.Kind != "Call" {
+		t.Fatalf("native index typed node 101 = %#v, want Call", got)
+	}
+	if got := idx.BindingsByID[11]; got == nil || got.Name != "answer" {
+		t.Fatalf("native index binding 11 = %#v, want answer", got)
+	}
+	if got := idx.SymbolsByID[21]; got == nil || got.Name != "id" {
+		t.Fatalf("native index symbol 21 = %#v, want id", got)
+	}
 	if got := len(native.Instantiations); got != 1 {
 		t.Fatalf("native instantiations = %d, want 1", got)
 	}
 	if got := native.Instantiations[0].TypeArgs[0].String(); got != "Int" {
 		t.Fatalf("native instantiation arg = %q, want Int", got)
+	}
+	if got := idx.InstantiationsByID[31]; got == nil || got.ResultTypeID != 301 || len(got.TypeArgIDs) != 1 || got.TypeArgIDs[0] != 301 {
+		t.Fatalf("native index instantiation 31 = %#v, want stable type ids", got)
 	}
 }
 
@@ -301,6 +314,9 @@ func TestNativeBoundaryReportsMissingExecutable(t *testing.T) {
 	}
 	if got := chk.NativeResult(); got != nil {
 		t.Fatalf("NativeResult() = %#v, want nil when checker did not run", got)
+	}
+	if got := chk.NativeIndex(); len(got.TypedNodesByNodeID) != 0 || len(got.BindingsByID) != 0 || len(got.SymbolsByID) != 0 || len(got.InstantiationsByID) != 0 {
+		t.Fatalf("NativeIndex() = %#v, want empty maps when checker did not run", got)
 	}
 }
 

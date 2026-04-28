@@ -589,8 +589,8 @@ fn tyIntAt(xs: List<Int>, idx: Int) -> Int {
 
 // ---------------------------------------------------------------------
 // Pretty-printer. Output is stable and round-trippable via
-// `tyFromString`. Used for diagnostics + the `FrontCheckedNode.typeName`
-// serialization contract at the host-bridge seam.
+// `tyFromString`. Used for diagnostics and legacy text query helpers; the
+// host-bridge checker contract carries `FrontCheckedNode.typeRepr`.
 // ---------------------------------------------------------------------
 
 pub fn tyToString(arena: TyArena, idx: Int) -> String {
