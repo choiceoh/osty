@@ -636,6 +636,9 @@ func (g *generator) emitFieldExpr(expr *ast.FieldExpr) (value, error) {
 	if expr.IsOptional {
 		return g.emitOptionalFieldExpr(expr)
 	}
+	if v, found, err := g.emitStdMathField(expr); found || err != nil {
+		return v, err
+	}
 	if v, found, err := g.enumVariantValue(expr); found || err != nil {
 		return v, err
 	}
@@ -2748,6 +2751,13 @@ func bytesFromHexResultSourceType() ast.Type {
 
 func (g *generator) emitExprWithHintAndSourceType(expr ast.Expr, sourceType ast.Type, listElemTyp string, listElemString bool, mapKeyTyp string, mapValueTyp string, mapKeyString bool, setElemTyp string, setElemString bool) (value, error) {
 	if sourceType != nil {
+		if lit, ok := expr.(*ast.FloatLit); ok {
+			if v, ok, err := g.emitFloatLiteralWithSourceType(lit, sourceType); err != nil {
+				return value{}, err
+			} else if ok {
+				return v, nil
+			}
+		}
 		if elemTyp, elemString, ok, err := llvmListElementInfo(sourceType, g.typeEnv()); err != nil {
 			return value{}, err
 		} else if ok {
@@ -2836,6 +2846,31 @@ func (g *generator) emitExprWithHintAndSourceType(expr ast.Expr, sourceType ast.
 		}
 	}
 	return v, nil
+}
+
+func (g *generator) emitFloatLiteralWithSourceType(lit *ast.FloatLit, sourceType ast.Type) (value, bool, error) {
+	if lit == nil || sourceType == nil {
+		return value{}, false, nil
+	}
+	targetTyp, err := llvmType(sourceType, g.typeEnv())
+	if err != nil {
+		return value{}, false, err
+	}
+	text := strings.ReplaceAll(lit.Text, "_", "")
+	f, err := strconv.ParseFloat(text, 64)
+	if err != nil {
+		return value{}, false, unsupportedf("expression", "invalid Float literal %q", lit.Text)
+	}
+	switch targetTyp {
+	case "double":
+		return value{typ: "double", ref: llvmFloatConstLiteral(f), sourceType: sourceType}, true, nil
+	case "float":
+		narrow := float32(f)
+		ref := strconv.FormatFloat(float64(narrow), 'e', -1, 32)
+		return value{typ: "float", ref: ref, sourceType: sourceType}, true, nil
+	default:
+		return value{}, false, nil
+	}
 }
 
 func (g *generator) usesAggregateListABI(elemTyp string) bool {
@@ -7301,6 +7336,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitStdEnvCall(call); found || err != nil {
 		return v, err
 	}
+	if v, found, err := g.emitStdMathCall(call); found || err != nil {
+		return v, err
+	}
 	if v, found, err := g.emitStdIoCall(call); found || err != nil {
 		return v, err
 	}
@@ -7336,6 +7374,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 		return v, err
 	}
 	if v, found, err := g.emitBytesMethodCall(call); found || err != nil {
+		return v, err
+	}
+	if v, found, err := g.emitFloatMethodCall(call); found || err != nil {
 		return v, err
 	}
 	if v, found, err := g.emitPrimitiveToStringCall(call); found || err != nil {

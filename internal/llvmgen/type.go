@@ -422,6 +422,12 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 		}
 		return unwrapOptionalSourceType(src)
 	case *ast.CallExpr:
+		if src, ok := g.staticStdMathCallSourceType(e); ok {
+			return src, true
+		}
+		if src, ok := g.staticFloatMethodSourceType(e); ok {
+			return src, true
+		}
 		if src, ok := g.staticStringMethodSourceType(e); ok {
 			return src, true
 		}
@@ -484,6 +490,9 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 			return fn.returnSourceType, true
 		}
 	case *ast.FieldExpr:
+		if src, ok := g.staticStdMathFieldSourceType(e); ok {
+			return src, true
+		}
 		baseSource, ok := g.staticExprSourceType(e.X)
 		if !ok {
 			return nil, false
@@ -865,6 +874,12 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 		}
 		return value{typ: info.typ, sourceType: sourceType}, true
 	case *ast.CallExpr:
+		if out, ok := g.staticStdMathCallResult(e); ok {
+			return out, true
+		}
+		if out, ok := g.staticFloatMethodResult(e); ok {
+			return out, true
+		}
 		if out, ok := g.staticStringMethodResult(e); ok {
 			return out, true
 		}
@@ -930,6 +945,9 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 			return out, true
 		}
 	case *ast.FieldExpr:
+		if out, ok := g.staticStdMathFieldResult(e); ok {
+			return out, true
+		}
 		if e.IsOptional {
 			return value{}, false
 		}
