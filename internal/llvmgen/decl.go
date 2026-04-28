@@ -1876,87 +1876,58 @@ func (g *generator) constEnumVariant(info *enumInfo, variant variantInfo, payloa
 	return constValue{typ: "i64", init: strconv.Itoa(variant.tag), kind: constKindInt, intValue: int64(variant.tag)}, nil
 }
 
+// constCompare evaluates a comparison operator on two compile-time
+// constants and returns the resulting `constValue` with kind `Bool`.
+// Type mismatches between operands are rejected up-front. Per-kind
+// dispatch (int / float / bool / string) lives in the Osty-sourced
+// `mirConstCompare*` helpers; the host side just rebuilds the
+// `constValue{typ: "i1", ...}` shape so callers (constFromExpr,
+// constBinaryFold, …) keep their existing return shape.
 func constCompare(op token.Kind, left, right constValue) (constValue, error) {
 	if left.typ != right.typ {
 		return constValue{}, unsupportedf("type-system", "compare type mismatch %s/%s", left.typ, right.typ)
 	}
+	tokEQ, tokNEQ := int(token.EQ), int(token.NEQ)
+	tokLT, tokLEQ := int(token.LT), int(token.LEQ)
+	tokGT, tokGEQ := int(token.GT), int(token.GEQ)
 	switch left.kind {
 	case constKindInt:
-		return constBoolCompare(op, left.intValue, right.intValue)
+		if mirConstCompareIntStatus(int(op), tokEQ, tokNEQ, tokLT, tokLEQ, tokGT, tokGEQ) != 0 {
+			return constValue{}, unsupportedf("expression", "comparison operator %q", op)
+		}
+		bit := mirConstCompareIntValue(int(op), left.intValue, right.intValue, tokEQ, tokNEQ, tokLT, tokLEQ, tokGT, tokGEQ)
+		v := bit != 0
+		return constValue{typ: "i1", init: strconv.FormatBool(v), kind: constKindBool, boolValue: v}, nil
 	case constKindFloat:
-		return constBoolCompare(op, left.floatValue, right.floatValue)
+		if mirConstCompareIntStatus(int(op), tokEQ, tokNEQ, tokLT, tokLEQ, tokGT, tokGEQ) != 0 {
+			return constValue{}, unsupportedf("expression", "comparison operator %q", op)
+		}
+		bit := mirConstCompareFloatValue(int(op), left.floatValue, right.floatValue, tokEQ, tokNEQ, tokLT, tokLEQ, tokGT, tokGEQ)
+		v := bit != 0
+		return constValue{typ: "i1", init: strconv.FormatBool(v), kind: constKindBool, boolValue: v}, nil
 	case constKindBool:
-		return constBoolCompare(op, left.boolValue, right.boolValue)
+		if mirConstCompareBoolStatus(int(op), tokEQ, tokNEQ) != 0 {
+			return constValue{}, unsupportedf("expression", "comparison operator %q", op)
+		}
+		var v bool
+		if op == token.EQ {
+			v = left.boolValue == right.boolValue
+		} else {
+			v = left.boolValue != right.boolValue
+		}
+		return constValue{typ: "i1", init: strconv.FormatBool(v), kind: constKindBool, boolValue: v}, nil
 	case constKindString:
-		if op != token.EQ && op != token.NEQ {
+		if mirConstCompareStringStatus(int(op), tokEQ, tokNEQ) != 0 {
 			return constValue{}, unsupportedf("type-system", "compare type %s", left.typ)
 		}
-		value := left.stringValue == right.stringValue
+		v := left.stringValue == right.stringValue
 		if op == token.NEQ {
-			value = !value
+			v = !v
 		}
-		return constValue{typ: "i1", init: strconv.FormatBool(value), kind: constKindBool, boolValue: value}, nil
+		return constValue{typ: "i1", init: strconv.FormatBool(v), kind: constKindBool, boolValue: v}, nil
 	default:
 		return constValue{}, unsupportedf("type-system", "compare type %s", left.typ)
 	}
-}
-
-func constBoolCompare[T comparable](op token.Kind, left, right T) (constValue, error) {
-	var value bool
-	switch any(left).(type) {
-	case int64:
-		l := any(left).(int64)
-		r := any(right).(int64)
-		switch op {
-		case token.EQ:
-			value = l == r
-		case token.NEQ:
-			value = l != r
-		case token.LT:
-			value = l < r
-		case token.LEQ:
-			value = l <= r
-		case token.GT:
-			value = l > r
-		case token.GEQ:
-			value = l >= r
-		default:
-			return constValue{}, unsupportedf("expression", "comparison operator %q", op)
-		}
-	case float64:
-		l := any(left).(float64)
-		r := any(right).(float64)
-		switch op {
-		case token.EQ:
-			value = l == r
-		case token.NEQ:
-			value = l != r
-		case token.LT:
-			value = l < r
-		case token.LEQ:
-			value = l <= r
-		case token.GT:
-			value = l > r
-		case token.GEQ:
-			value = l >= r
-		default:
-			return constValue{}, unsupportedf("expression", "comparison operator %q", op)
-		}
-	case bool:
-		l := any(left).(bool)
-		r := any(right).(bool)
-		switch op {
-		case token.EQ:
-			value = l == r
-		case token.NEQ:
-			value = l != r
-		default:
-			return constValue{}, unsupportedf("expression", "comparison operator %q", op)
-		}
-	default:
-		return constValue{}, unsupportedf("expression", "comparison operator %q", op)
-	}
-	return constValue{typ: "i1", init: strconv.FormatBool(value), kind: constKindBool, boolValue: value}, nil
 }
 
 // constIntBinary applies a binary operator to two i64 operands at
@@ -1984,28 +1955,30 @@ func constIntBinary(op token.Kind, left, right int64) (int64, error) {
 	return mirConstIntBinary(int(op), left, right, plus, minus, star, slash, percent, bitAnd, bitOr, bitXor, shl, shr), nil
 }
 
+// constFloatBinary applies a binary arithmetic operator to two
+// compile-time double operands. The status helper
+// `mirConstFloatBinaryStatus` decides whether the operator is
+// supported and whether the divisor is zero; on a div-by-zero we
+// dispatch to the IEEE-754 special-case branch here on the host side
+// (Osty's Float→Int sign classification helpers haven't landed yet).
+// The arithmetic itself is in `mirConstFloatBinary`.
 func constFloatBinary(op token.Kind, left, right float64) (float64, error) {
-	switch op {
-	case token.PLUS:
-		return left + right, nil
-	case token.MINUS:
-		return left - right, nil
-	case token.STAR:
-		return left * right, nil
-	case token.SLASH:
-		switch {
-		case right == 0 && left == 0:
-			return math.NaN(), nil
-		case right == 0 && left > 0:
-			return math.Inf(1), nil
-		case right == 0 && left < 0:
-			return math.Inf(-1), nil
-		default:
-			return left / right, nil
-		}
-	default:
+	plus, minus, star := int(token.PLUS), int(token.MINUS), int(token.STAR)
+	slash := int(token.SLASH)
+	switch mirConstFloatBinaryStatus(int(op), right, plus, minus, star, slash) {
+	case 1:
 		return 0, unsupportedf("expression", "binary operator %q", op)
+	case 2:
+		switch {
+		case left == 0:
+			return math.NaN(), nil
+		case left > 0:
+			return math.Inf(1), nil
+		default:
+			return math.Inf(-1), nil
+		}
 	}
+	return mirConstFloatBinary(int(op), left, right, plus, minus, star, slash), nil
 }
 
 // llvmFloatConstLiteral renders a Float64 as an LLVM constant. NaN and

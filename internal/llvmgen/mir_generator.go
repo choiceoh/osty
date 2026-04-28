@@ -3043,20 +3043,23 @@ func isScalarLLVMType(t string) bool {
 // after consuming its iteration-count argument. Full failure-message
 // emission is deferred — the MIR tests assert on user-fn lowering, not
 // the diagnostic payload shape.
+// emitStdTestingCall dispatches a `std.testing.<method>` call site at
+// MIR emission time. Method classification is in
+// `mirStdTestingMethodKind`: `1` = assert family, `2` = fail,
+// `3` = expectOk, `4` = expectError, `5` = context, `6` = benchmark,
+// `7` = snapshot, `0` = unknown / fall-through.
 func (g *mirGen) emitStdTestingCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
 	method := strings.TrimPrefix(fnRef.Symbol, "std.testing.")
-	switch method {
-	case "assertEq", "assertNe", "assert", "assertTrue", "assertFalse":
+	switch mirStdTestingMethodKind(method) {
+	case 1, 2:
 		return true, g.emitTestingAssertMIR(c, method)
-	case "fail":
-		return true, g.emitTestingAssertMIR(c, method)
-	case "expectOk", "expectError":
+	case 3, 4:
 		return true, g.emitTestingExpectMIR(c, method)
-	case "context":
+	case 5:
 		return true, g.emitTestingContextMIR(c)
-	case "benchmark":
+	case 6:
 		return true, g.emitTestingBenchmarkMIR(c)
-	case "snapshot":
+	case 7:
 		return true, g.emitTestingSnapshotMIR(c)
 	}
 	return false, nil
@@ -3064,7 +3067,7 @@ func (g *mirGen) emitStdTestingCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, e
 
 func (g *mirGen) emitStdIoCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
 	method := strings.TrimPrefix(fnRef.Symbol, "std.io.")
-	if method == "readLine" {
+	if mirStdIoMethodIsReadLine(method) {
 		return true, g.emitStdIoReadLineMIR(c)
 	}
 	if !isStdIoOutputMethod(method) {
@@ -3253,6 +3256,10 @@ type testingResultTypes struct {
 	err mir.Type
 }
 
+// testingResultType returns the Result<T, E> sub-types when `t` is a
+// `Result` named type. The Args-count >= 2 predicate keeps us tolerant
+// of monomorphization shapes that may carry extra metadata args (today
+// none do, but the loose check matches the legacy behaviour).
 func testingResultType(t mir.Type) (testingResultTypes, bool) {
 	nt, ok := t.(*ir.NamedType)
 	if !ok || nt.Name != "Result" || len(nt.Args) < 2 {
@@ -3314,15 +3321,18 @@ func (g *mirGen) operandSourceText(op mir.Operand) string {
 	}
 }
 
+// testingConstSourceText pretty-prints a MIR constant for the
+// assert-message string. Int / Bool branches delegate to the
+// Osty-sourced `mirTestingConstSourceText{Int,Bool}`; the float and
+// string forms keep their host-side stringification because Osty has
+// no equivalent of `strconv.FormatFloat(g, -1, …)` or `strconv.Quote`
+// today.
 func testingConstSourceText(c mir.Const) string {
 	switch x := c.(type) {
 	case *mir.IntConst:
-		return strconv.FormatInt(x.Value, 10)
+		return mirTestingConstSourceTextInt(x.Value)
 	case *mir.BoolConst:
-		if x.Value {
-			return "true"
-		}
-		return "false"
+		return mirTestingConstSourceTextBool(x.Value)
 	case *mir.FloatConst:
 		return strconv.FormatFloat(x.Value, 'g', -1, 64)
 	case *mir.StringConst:
@@ -6455,10 +6465,10 @@ func (g *mirGen) emitTaskIntrinsic(i *mir.IntrinsicInstr) error {
 			operandArgs = append(operandArgs, "ptr "+v)
 		}
 		sym := mirRtTaskSpawnSymbol()
-		sig := "declare ptr @" + sym + "(ptr)"
+		sig := mirRuntimeDeclarePtrFromPtrLine(sym)
 		if len(i.Args) == 2 {
 			sym = mirRtTaskGroupSpawnSymbol()
-			sig = "declare ptr @" + sym + "(ptr, ptr)"
+			sig = mirRuntimeDeclarePtrFromTwoPtrLine(sym)
 		}
 		g.declareRuntime(sym, sig)
 		return g.emitSimpleCall(i, sym, "ptr", operandArgs)
@@ -6761,13 +6771,17 @@ func (g *mirGen) coerceValue(val, from, to string) (string, error) {
 	return val, nil
 }
 
+// mapKeyValueTypes returns the (K, V) sub-types of a `Map<K, V>` named
+// type. Shape predicate is in `mirMapKeyValueArgsValid`.
 func mapKeyValueTypes(t mir.Type) (mir.Type, mir.Type) {
-	if nt, ok := t.(*ir.NamedType); ok && nt.Name == "Map" {
-		if len(nt.Args) >= 2 {
-			return nt.Args[0], nt.Args[1]
-		}
+	nt, ok := t.(*ir.NamedType)
+	if !ok {
+		return nil, nil
 	}
-	return nil, nil
+	if !mirMapKeyValueArgsValid(nt.Name, len(nt.Args)) {
+		return nil, nil
+	}
+	return nt.Args[0], nt.Args[1]
 }
 
 // mapValueSizeBytes returns the slot width `osty_rt_map_new` expects
@@ -6783,11 +6797,19 @@ func mapValueSizeBytes(llvmTyp string) int {
 	return mirMapValueSizeBytes(llvmTyp)
 }
 
+// setElemType returns the element type of a `Set<T>` named type, or
+// nil if `t` isn't shaped that way. The shape index lives in
+// `mirSetElemTypeArgIndex`.
 func setElemType(t mir.Type) mir.Type {
-	if nt, ok := t.(*ir.NamedType); ok && nt.Name == "Set" && len(nt.Args) > 0 {
-		return nt.Args[0]
+	nt, ok := t.(*ir.NamedType)
+	if !ok {
+		return nil
 	}
-	return nil
+	idx := mirSetElemTypeArgIndex(nt.Name, len(nt.Args))
+	if idx < 0 {
+		return nil
+	}
+	return nt.Args[idx]
 }
 
 func isStringLLVMType(t mir.Type) bool {
@@ -7624,6 +7646,11 @@ func (g *mirGen) emitSizeOf(llvmType string) string {
 	return size.name
 }
 
+// listElemType returns the element type of a `List<T>` named type, or
+// nil if `t` isn't shaped that way. Uses the same shape predicate as
+// the AST-side `listElementType` (`mirListElemArgsValid`) but here we
+// don't require `Builtin == true` because monomorphized `List` shapes
+// may already have lost the builtin flag at the MIR boundary.
 func listElemType(t mir.Type) mir.Type {
 	if nt, ok := t.(*ir.NamedType); ok && nt.Name == "List" && len(nt.Args) > 0 {
 		return nt.Args[0]

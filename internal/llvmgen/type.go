@@ -151,19 +151,43 @@ func llvmSetElementType(t ast.Type, env typeEnv) (string, bool, bool, error) {
 	return elemTyp, llvmNamedTypeIsString(named.Args[0]), true, nil
 }
 
+// llvmNamedTypeIsString reports whether `t` is the bare `String` named
+// type. Shape predicate is in `mirIsLegacyZeroArgPathName`.
 func llvmNamedTypeIsString(t ast.Type) bool {
 	named, ok := t.(*ast.NamedType)
-	return ok && len(named.Path) == 1 && named.Path[0] == "String" && len(named.Args) == 0
+	if !ok {
+		return false
+	}
+	return mirIsLegacyZeroArgPathName(len(named.Path), firstPathOrEmpty(named.Path), len(named.Args), "String")
 }
 
+// llvmNamedTypeIsBytes reports whether `t` is the bare `Bytes` named
+// type.
 func llvmNamedTypeIsBytes(t ast.Type) bool {
 	named, ok := t.(*ast.NamedType)
-	return ok && len(named.Path) == 1 && named.Path[0] == "Bytes" && len(named.Args) == 0
+	if !ok {
+		return false
+	}
+	return mirIsLegacyZeroArgPathName(len(named.Path), firstPathOrEmpty(named.Path), len(named.Args), "Bytes")
 }
 
+// llvmNamedTypeIsByte reports whether `t` is the bare `Byte` named
+// type.
 func llvmNamedTypeIsByte(t ast.Type) bool {
 	named, ok := t.(*ast.NamedType)
-	return ok && len(named.Path) == 1 && named.Path[0] == "Byte" && len(named.Args) == 0
+	if !ok {
+		return false
+	}
+	return mirIsLegacyZeroArgPathName(len(named.Path), firstPathOrEmpty(named.Path), len(named.Args), "Byte")
+}
+
+// firstPathOrEmpty returns `path[0]` when `path` is non-empty, else
+// `""`. Used by the shape predicates to keep the call sites tidy.
+func firstPathOrEmpty(path []string) string {
+	if len(path) == 0 {
+		return ""
+	}
+	return path[0]
 }
 
 func llvmEnumPayloadType(t ast.Type, env typeEnv) (string, error) {
