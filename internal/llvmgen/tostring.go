@@ -613,14 +613,12 @@ func (g *generator) emitListToString(base value) (value, error) {
 	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", headerLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", headerLabel))
 	idxTmp := llvmNextTemp(emitter)
-	phiLine := fmt.Sprintf("  %s = phi i64 [ 0, %%%s ], [ __TOSTR_NEXT__, __TOSTR_LATCH__ ]", idxTmp)
 	phiIdx := len(emitter.body)
-	emitter.body = append(emitter.body, phiLine)
+	emitter.body = append(emitter.body, "")
 	condTmp := llvmNextTemp(emitter)
 	emitter.body = append(emitter.body, fmt.Sprintf("  %s = icmp slt i64 %s, %s", condTmp, idxTmp, lenTmp))
 	emitter.body = append(emitter.body, fmt.Sprintf("  br i1 %s, label %%%s, label %%%s", condTmp, bodyLabel, exitLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", bodyLabel))
-	_ = phiIdx
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(bodyLabel)
 
@@ -651,12 +649,7 @@ func (g *generator) emitListToString(base value) (value, error) {
 	emitter.body = append(emitter.body, fmt.Sprintf("  %s = add nuw i64 %s, 1", nextTmp, idxTmp))
 	emitter.body = append(emitter.body, fmt.Sprintf("  br label %%%s", headerLabel))
 	emitter.body = append(emitter.body, fmt.Sprintf("%s:", exitLabel))
-	for i := range emitter.body {
-		if emitter.body[i] == phiLine {
-			emitter.body[i] = fmt.Sprintf("  %s = phi i64 [ 0, %%%s ], [ %s, %%%s ]", idxTmp, entryPred, nextTmp, latchPred)
-			break
-		}
-	}
+	emitter.body[phiIdx] = fmt.Sprintf("  %s = phi i64 [ 0, %%%s ], [ %s, %%%s ]", idxTmp, entryPred, nextTmp, latchPred)
 	g.takeOstyEmitter(emitter)
 	g.enterBlock(exitLabel)
 

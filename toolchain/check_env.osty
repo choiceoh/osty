@@ -1837,7 +1837,7 @@ pub fn checkInstallPrelude(env: CheckEnv) {
     checkRegisterFn(env, CheckFnSig {
         name: "toString",
         owner: "ToString",
-        receiverTy: tSelfCmp,
+        receiverTy: tSelfCmp, hasReceiver: true,
         retTy: tString(env.tys),
         paramNames: [],
         paramTys: [],
