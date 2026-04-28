@@ -1,7 +1,7 @@
 ### 10.23 Network (`std.net`)
 
 Low-level TCP and UDP networking. Higher-level HTTP is in `std.http`
-(§10.2). All blocking operations are cancellation-aware (§8.4.2).
+(§10.24). All blocking operations are cancellation-aware (§8.4.2).
 
 ```osty
 use std.net
