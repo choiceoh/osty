@@ -1,4 +1,4 @@
-// std.option — Option<T> and its core combinators.
+// std.option — Option<T>, its core combinators, and nested-shape helpers.
 //
 // Canonical definition site of `Option<T>`, `Some`, and `None`. The
 // prelude auto-imports these so user code can write `Some(x)` without
@@ -40,6 +40,13 @@ pub enum Option<T> {
         match self {
             Some(value) -> value == item,
             None -> false,
+        }
+    }
+
+    pub fn count(self) -> Int {
+        match self {
+            Some(_) -> 1,
+            None -> 0,
         }
     }
 
@@ -138,6 +145,13 @@ pub enum Option<T> {
         }
     }
 
+    pub fn forEach(self, f: fn(T) -> ()) {
+        match self {
+            Some(value) -> f(value),
+            None -> {},
+        }
+    }
+
     pub fn map<U>(self, f: fn(T) -> U) -> U? {
         match self {
             Some(value) -> Some(f(value)),
@@ -169,6 +183,26 @@ pub enum Option<T> {
         }
     }
 
+    pub fn zipWith<U, R>(self, other: U?, f: fn(T, U) -> R) -> R? {
+        match self {
+            Some(a) -> match other {
+                Some(b) -> Some(f(a, b)),
+                None -> None,
+            },
+            None -> None,
+        }
+    }
+
+    pub fn reduce(self, other: T?, f: fn(T, T) -> T) -> T? {
+        match self {
+            Some(a) -> match other {
+                Some(b) -> Some(f(a, b)),
+                None -> Some(a),
+            },
+            None -> other,
+        }
+    }
+
     pub fn orError(self, msg: String) -> Result<T, Error> {
         match self {
             Some(value) -> Ok(value),
@@ -187,11 +221,121 @@ pub enum Option<T> {
         }
     }
 
+    pub fn toList(self) -> List<T> {
+        match self {
+            Some(value) -> [value],
+            None -> [],
+        }
+    }
+
     pub fn toString(self) -> String {
         match self {
-            Some(_) -> "Some(...)",
+            Some(value) -> "Some({value})",
             None -> "None",
         }
+    }
+}
+
+pub fn flatten<T>(value: T??) -> T? {
+    match value {
+        Some(inner) -> inner,
+        None -> None,
+    }
+}
+
+pub fn transpose<T, E>(value: Result<T, E>?) -> Result<T?, E> {
+    match value {
+        Some(Ok(item)) -> Ok(Some(item)),
+        Some(Err(err)) -> Err(err),
+        None -> Ok(None),
+    }
+}
+
+pub fn unzip<A, B>(value: (A, B)?) -> (A?, B?) {
+    match value {
+        Some((a, b)) -> (Some(a), Some(b)),
+        None -> (None, None),
+    }
+}
+
+pub fn values<T>(items: List<T?>) -> List<T> {
+    let mut out: List<T> = []
+    for item in items {
+        match item {
+            Some(value) -> out.push(value),
+            None -> {},
+        }
+    }
+    out
+}
+
+pub fn any<T>(items: List<T?>) -> T? {
+    for item in items {
+        match item {
+            Some(_) -> return item,
+            None -> {},
+        }
+    }
+    None
+}
+
+pub fn all<T>(items: List<T?>) -> List<T>? {
+    let mut out: List<T> = []
+    for item in items {
+        match item {
+            Some(value) -> out.push(value),
+            None -> return None,
+        }
+    }
+    Some(out)
+}
+
+pub fn traverse<T, U>(items: List<T>, f: fn(T) -> U?) -> List<U>? {
+    let mut out: List<U> = []
+    for item in items {
+        match f(item) {
+            Some(value) -> out.push(value),
+            None -> return None,
+        }
+    }
+    Some(out)
+}
+
+pub fn filterMap<T, U>(items: List<T>, f: fn(T) -> U?) -> List<U> {
+    let mut out: List<U> = []
+    for item in items {
+        match f(item) {
+            Some(value) -> out.push(value),
+            None -> {},
+        }
+    }
+    out
+}
+
+pub fn findMap<T, U>(items: List<T>, f: fn(T) -> U?) -> U? {
+    for item in items {
+        match f(item) {
+            Some(value) -> return Some(value),
+            None -> {},
+        }
+    }
+    None
+}
+
+pub fn map2<A, B, R>(left: A?, right: B?, f: fn(A, B) -> R) -> R? {
+    left.zipWith(right, f)
+}
+
+pub fn map3<A, B, C, R>(a: A?, b: B?, c: C?, f: fn(A, B, C) -> R) -> R? {
+    match a {
+        Some(av) -> match b {
+            Some(bv) -> match c {
+                Some(cv) -> Some(f(av, bv, cv)),
+                None -> None,
+            },
+            None -> None,
+        },
+        None -> None,
     }
 }
 

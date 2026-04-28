@@ -2640,6 +2640,11 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         generics: ["T", "E"], genericBounds: [],
     })
     checkRegisterFn(env, CheckFnSig {
+        name: "count", owner: "Result", receiverTy: tResTE, hasReceiver: true, retTy: tInt(tys),
+        paramNames: [], paramTys: [],
+        generics: ["T", "E"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
         name: "expect", owner: "Result", receiverTy: tResTE, hasReceiver: true, retTy: tT,
         paramNames: ["msg"], paramTys: [tStringResult],
         generics: ["T", "E"], genericBounds: [],
@@ -2700,6 +2705,11 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         generics: ["T", "E"], genericBounds: [],
     })
     checkRegisterFn(env, CheckFnSig {
+        name: "forEach", owner: "Result", receiverTy: tResTE, hasReceiver: true, retTy: tUnit(tys),
+        paramNames: ["f"], paramTys: [tyFn(tys, [tT], tUnit(tys))],
+        generics: ["T", "E"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
         name: "map", owner: "Result", receiverTy: tResTE, hasReceiver: true, retTy: tResUE,
         paramNames: ["f"], paramTys: [tyFn(tys, [tT], tU)],
         generics: ["T", "E", "U"], genericBounds: [],
@@ -2718,6 +2728,21 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         name: "mapOrElse", owner: "Result", receiverTy: tResTE, hasReceiver: true, retTy: tU,
         paramNames: ["fallback", "f"], paramTys: [tyFn(tys, [tE], tU), tyFn(tys, [tT], tU)],
         generics: ["T", "E", "U"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "zip", owner: "Result", receiverTy: tResTE, hasReceiver: true, retTy: tyNamed(tys, "Result", [tyTuple(tys, [tT, tU]), tE]),
+        paramNames: ["other"], paramTys: [tResUE],
+        generics: ["T", "E", "U"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "zipWith", owner: "Result", receiverTy: tResTE, hasReceiver: true, retTy: tyNamed(tys, "Result", [tR, tE]),
+        paramNames: ["other", "f"], paramTys: [tResUE, tyFn(tys, [tT, tU], tR)],
+        generics: ["T", "E", "U", "R"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toList", owner: "Result", receiverTy: tResTE, hasReceiver: true, retTy: tListT,
+        paramNames: [], paramTys: [],
+        generics: ["T", "E"], genericBounds: [],
     })
     checkRegisterFn(env, CheckFnSig {
         name: "toString", owner: "Result", receiverTy: tResTE, hasReceiver: true, retTy: tStringResult,
@@ -2753,6 +2778,11 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
     checkRegisterFn(env, CheckFnSig {
         name: "contains", owner: "Option", receiverTy: tOptTAlias, hasReceiver: true, retTy: tBool(tys),
         paramNames: ["item"], paramTys: [tT],
+        generics: ["T"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "count", owner: "Option", receiverTy: tOptTAlias, hasReceiver: true, retTy: tInt(tys),
+        paramNames: [], paramTys: [],
         generics: ["T"], genericBounds: [],
     })
     checkRegisterFn(env, CheckFnSig {
@@ -2817,6 +2847,11 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         generics: ["T"], genericBounds: [],
     })
     checkRegisterFn(env, CheckFnSig {
+        name: "forEach", owner: "Option", receiverTy: tOptTAlias, hasReceiver: true, retTy: tUnit(tys),
+        paramNames: ["f"], paramTys: [tyFn(tys, [tT], tUnit(tys))],
+        generics: ["T"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
         name: "map", owner: "Option", receiverTy: tOptTAlias, hasReceiver: true, retTy: tOptU,
         paramNames: ["f"], paramTys: [tyFn(tys, [tT], tU)],
         generics: ["T", "U"], genericBounds: [],
@@ -2836,6 +2871,16 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         paramNames: ["other"], paramTys: [tOptU],
         generics: ["T", "U"], genericBounds: [],
     })
+    checkRegisterFn(env, CheckFnSig {
+        name: "zipWith", owner: "Option", receiverTy: tOptTAlias, hasReceiver: true, retTy: tyOptional(tys, tR),
+        paramNames: ["other", "f"], paramTys: [tOptU, tyFn(tys, [tT, tU], tR)],
+        generics: ["T", "U", "R"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "reduce", owner: "Option", receiverTy: tOptTAlias, hasReceiver: true, retTy: tOptTAlias,
+        paramNames: ["other", "f"], paramTys: [tOptTAlias, tyFn(tys, [tT, tT], tT)],
+        generics: ["T"], genericBounds: [],
+    })
     let tResTError = tyNamed(tys, "Result", [tT, tyNamed(tys, "Error", [])])
     checkRegisterFn(env, CheckFnSig {
         name: "orError", owner: "Option", receiverTy: tOptTAlias, hasReceiver: true, retTy: tResTError,
@@ -2851,6 +2896,11 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         name: "okOrElse", owner: "Option", receiverTy: tOptTAlias, hasReceiver: true, retTy: tResTE,
         paramNames: ["err"], paramTys: [tyFn(tys, [], tE)],
         generics: ["T", "E"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toList", owner: "Option", receiverTy: tOptTAlias, hasReceiver: true, retTy: tListT,
+        paramNames: [], paramTys: [],
+        generics: ["T"], genericBounds: [],
     })
     checkRegisterFn(env, CheckFnSig {
         name: "toString", owner: "Option", receiverTy: tOptTAlias, hasReceiver: true, retTy: tStringResult,
