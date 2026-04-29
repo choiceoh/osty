@@ -358,7 +358,7 @@ fn probe(p: Printable) -> Note? {
 	if len(parseDiags) != 0 {
 		t.Fatalf("parse: %v", parseDiags)
 	}
-	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 
@@ -433,7 +433,7 @@ func TestLowerUseDeclRecoversBuiltinGenericTypesWithoutResolverTypeRefs(t *testi
 	if len(parseDiags) != 0 {
 		t.Fatalf("parse: %v", parseDiags)
 	}
-	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 

@@ -471,7 +471,7 @@ func TestMIRDualEmitFromSource(t *testing.T) {
 }
 `
 	file := parseLLVMGenFile(t, src)
-	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 
@@ -647,7 +647,7 @@ fn newRunner() -> Runner {
 }
 `
 	file := parseLLVMGenFile(t, src)
-	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 
@@ -2340,7 +2340,7 @@ func TestGenerateFromMIRVectorizedScalarListParamUsesRawDataFastPath(t *testing.
 }
 `
 	file := parseLLVMGenFile(t, src)
-	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 

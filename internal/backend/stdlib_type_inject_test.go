@@ -498,7 +498,7 @@ func lowerUserProgramForTest(t *testing.T, src string) *ir.Module {
 		}
 	}
 	reg := stdlib.LoadCached()
-	res := resolve.ResolveFileDefault(file, reg)
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, reg)
 	chk := check.SelfhostFile(file, res, check.Opts{
 		Source: []byte(src),
 		Stdlib: reg,

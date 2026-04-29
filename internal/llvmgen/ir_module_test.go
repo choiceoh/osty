@@ -11,7 +11,7 @@ import (
 )
 
 func TestGenerateModuleWhileLoopCompat(t *testing.T) {
-	file := parseLLVMGenFile(t, `fn main() {
+	src := `fn main() {
     let mut i = 0
     let mut sum = 0
     for i < 4 {
@@ -20,25 +20,17 @@ func TestGenerateModuleWhileLoopCompat(t *testing.T) {
     }
     println(sum)
 }
-`)
+`
+	file := parseLLVMGenFile(t, src)
 
-	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 
 		Stdlib:        reg,
 		Primitives:    reg.Primitives,
 		ResultMethods: reg.ResultMethods,
-		Source: []byte(`fn main() {
-    let mut i = 0
-    let mut sum = 0
-    for i < 4 {
-        sum = sum + i
-        i = i + 1
-    }
-    println(sum)
-}
-`),
+		Source:        []byte(src),
 	})
 	mod, issues := ir.Lower("main", file, res, chk)
 	if len(issues) != 0 {
@@ -86,7 +78,7 @@ fn main() {
 }
 `
 	file := parseLLVMGenFile(t, src)
-	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 
@@ -133,7 +125,7 @@ fn main() {
 func runMonoLowerPipeline(t *testing.T, src, sourcePath string) string {
 	t.Helper()
 	file := parseLLVMGenFile(t, src)
-	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 

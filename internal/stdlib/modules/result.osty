@@ -286,7 +286,7 @@ pub fn all<T, E>(items: List<Result<T, E>>) -> Result<List<T>, E> {
     for item in items {
         match item {
             Ok(value) -> out.push(value),
-            Err(err) -> return Err(err),
+            Err(err) -> { return Err(err) },
         }
     }
     Ok(out)
@@ -297,7 +297,7 @@ pub fn traverse<T, U, E>(items: List<T>, f: fn(T) -> Result<U, E>) -> Result<Lis
     for item in items {
         match f(item) {
             Ok(value) -> out.push(value),
-            Err(err) -> return Err(err),
+            Err(err) -> { return Err(err) },
         }
     }
     Ok(out)

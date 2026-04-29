@@ -71,7 +71,7 @@ func parseBackendFile(t *testing.T, src string) (*ast.File, *resolve.Result, *ch
 	if file == nil {
 		t.Fatal("ParseDiagnostics returned nil file")
 	}
-	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 

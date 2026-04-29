@@ -112,7 +112,7 @@ fn main() {
 }
 `
 	file := parseLLVMGenFile(t, src)
-	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 
@@ -176,7 +176,7 @@ func TestNativeLetTupleDestructureRejectsNonIdentElement(t *testing.T) {
 	if ok {
 		t.Fatal("TryGenerateNativeOwnedModule unexpectedly covered nested tuple destructure — stage-1 should defer")
 	}
-	_ = resolve.ResolveFileDefault // force import used on other tests
+	_ = resolve.ResolveFileSourceDefault // force import used on other tests
 	_ = check.SelfhostFile
 	_ = stdlib.LoadCached
 	_ = ostyir.ForIn
