@@ -231,7 +231,7 @@ func UnsupportedDiagnosticForModule(mod *ostyir.Module) (UnsupportedDiagnostic, 
 		if use.IsGoFFI {
 			return UnsupportedDiagnosticFor("go-ffi", use.GoPath), true
 		}
-		if use.IsRuntimeFFI && !llvmIsKnownRuntimeFfiPath(use.RuntimePath) {
+		if use.IsRuntimeFFI && !IsKnownRuntimeFFIPath(use.RuntimePath) {
 			return UnsupportedDiagnosticFor("runtime-ffi", use.RuntimePath), true
 		}
 	}

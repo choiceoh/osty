@@ -9,15 +9,19 @@
 // The dispatcher never falls back to Request.Entry.File when lowering
 // hits an unsupported shape.
 //
-// Dispatch order is intentionally small and observable:
+// LLVM dispatch is driven by CapabilityMatrix, an explicit per-entry
+// contract with rows for HIR node coverage, MIR lowering issues, MIR
+// emitter support, runtime ABI requirements, route coverage, and fallback
+// policy. Dispatch order is intentionally small and observable:
 //
-//   - `unsupported-preflight`: IR preflight rejects backend-capability gaps
+//   - `unsupported-preflight`: capability preflight rejects backend gaps
 //     such as Go FFI or unknown runtime FFI before any concrete emitter is
 //     selected.
 //   - `native-owned`: the native-owned llvmgen slice gets the first chance
 //     when the feature set allows it and no injected stdlib bodies are present.
 //   - `mir-direct`: every remaining normal backend request routes through
-//     MIR-direct emission.
+//     MIR-direct emission; MIR route blockers are read from the same
+//     capability matrix before emission.
 //
 // Unsupported input is not a fatal compiler crash and is not silently
 // retried through an older AST path. The backend writes an inspectable

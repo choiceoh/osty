@@ -37,6 +37,12 @@ type runtimeDecl struct {
 	params []paramInfo
 }
 
+// IsKnownRuntimeFFIPath reports whether the LLVM backend has a runtime ABI
+// contract for a `use runtime.*` import path.
+func IsKnownRuntimeFFIPath(path string) bool {
+	return llvmIsKnownRuntimeFfiPath(path)
+}
+
 func collectRuntimeFFI(file *ast.File, env typeEnv) map[string]map[string]*runtimeFFIFunction {
 	out := map[string]map[string]*runtimeFFIFunction{}
 	if file == nil {

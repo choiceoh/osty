@@ -1,6 +1,6 @@
 // Package llvmgen emits textual LLVM IR for the native backend.
 //
-// Public API surface (IR-only)
+// Public API surface (IR/MIR-only)
 //
 //   - GenerateModule(*ir.Module, Options) ([]byte, error) — the
 //     legacy IR entry point for code generation. Consumes the
@@ -9,9 +9,17 @@
 //     ([]byte, bool, error) — native-owned primitive/control-flow
 //     fast path only. Returns ok=false when the module should continue
 //     through the broader MIR backend path.
+//   - GenerateFromMIR(*mir.Module, Options) ([]byte, error) — direct
+//     MIR emitter used by backend dispatch after native-owned coverage
+//     declines.
+//   - MIRCapabilityReport(*mir.Module, Options) []MIRCapabilityRow —
+//     data-shaped MIR emitter coverage derived from the same whitelist
+//     that guards GenerateFromMIR.
 //   - UnsupportedDiagnosticForModule(*ir.Module)
 //     (UnsupportedDiagnostic, bool) — preflight backend-capability
 //     policy before a concrete emitter route is selected.
+//   - IsKnownRuntimeFFIPath(string) bool — exported runtime ABI
+//     knownness check shared with backend capability rows.
 //
 // The package previously exposed Generate(*ast.File, Options) as an
 // alternate entry point. That AST route has been removed: the LLVM

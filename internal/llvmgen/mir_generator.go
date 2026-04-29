@@ -108,6 +108,27 @@ func GenerateFromMIR(m *mir.Module, opts Options) ([]byte, error) {
 	return withDataLayout([]byte(g.out.String()), opts.Target), nil
 }
 
+// MIRCapabilityRow is one explicit MIR-direct LLVM emitter coverage row.
+type MIRCapabilityRow struct {
+	Subject            string
+	LLVMEmittable      bool
+	RuntimeABIRequired bool
+	RuntimeABIKnown    bool
+	Diagnostic         UnsupportedDiagnostic
+}
+
+// MIRCapabilityReport walks a MIR module through the same support whitelist
+// GenerateFromMIR uses before emission. It returns data rows instead of only
+// the first UnsupportedError so backend dispatch can expose capability policy
+// without duplicating the emitter's rules.
+func MIRCapabilityReport(m *mir.Module, opts Options) []MIRCapabilityRow {
+	if m == nil {
+		return []MIRCapabilityRow{unsupportedMIRCapabilityRow("mir.module", unsupported("source-layout", "nil MIR module"), false, false)}
+	}
+	opts.Target = CanonicalLLVMTarget(opts.Target)
+	return newMIRGen(m, opts).capabilityRows()
+}
+
 // ==== generator state ====
 
 type mirGen struct {
@@ -379,67 +400,151 @@ func (g *mirGen) emitLoopMetadata() {
 // so callers can render an explicit unsupported skeleton instead of
 // emitting malformed LLVM IR.
 func (g *mirGen) checkSupported() error {
+	for _, row := range g.capabilityRows() {
+		if row.LLVMEmittable {
+			continue
+		}
+		if row.Diagnostic.Code != "" || row.Diagnostic.Kind != "" || row.Diagnostic.Message != "" {
+			return &UnsupportedError{Diagnostic: row.Diagnostic}
+		}
+		return unsupported("unsupported-source", row.Subject)
+	}
+	return nil
+}
+
+func (g *mirGen) capabilityRows() []MIRCapabilityRow {
+	var rows []MIRCapabilityRow
 	for _, fn := range g.mod.Functions {
 		if fn == nil {
 			continue
 		}
+		fnSubject := "mir.function:" + fn.Name
 		if fn.IsIntrinsic {
-			return unsupported("mir-mvp", "intrinsic function declaration "+fn.Name)
+			rows = append(rows, unsupportedMIRCapabilityRow(fnSubject, unsupported("mir-mvp", "intrinsic function declaration "+fn.Name), false, false))
+			continue
 		}
 		if !fn.IsExternal && len(fn.Blocks) == 0 {
-			return unsupported("mir-mvp", "function "+fn.Name+" has no blocks")
+			rows = append(rows, unsupportedMIRCapabilityRow(fnSubject, unsupported("mir-mvp", "function "+fn.Name+" has no blocks"), false, false))
+			continue
 		}
+		rows = append(rows, supportedMIRCapabilityRow(fnSubject, false, false))
 		for _, loc := range fn.Locals {
 			if loc == nil {
 				continue
 			}
+			subject := fmt.Sprintf("mir.local:%s:%s:%d", fn.Name, localDisplayName(loc), loc.ID)
 			if allowUnusedErrLocal(fn, loc) {
+				rows = append(rows, supportedMIRCapabilityRow(subject, false, false))
 				continue
 			}
 			if !g.typeSupported(loc.Type) {
 				hint := localDefiningSiteHint(fn, loc.ID)
 				if hint != "" {
-					return unsupported("mir-mvp", fmt.Sprintf("unsupported local type %s in %s (local %s id=%d; %s)", mirTypeString(loc.Type), fn.Name, localDisplayName(loc), loc.ID, hint))
+					rows = append(rows, unsupportedMIRCapabilityRow(subject, unsupported("mir-mvp", fmt.Sprintf("unsupported local type %s in %s (local %s id=%d; %s)", mirTypeString(loc.Type), fn.Name, localDisplayName(loc), loc.ID, hint)), false, false))
+					continue
 				}
-				return unsupported("mir-mvp", fmt.Sprintf("unsupported local type %s in %s (local %s id=%d)", mirTypeString(loc.Type), fn.Name, localDisplayName(loc), loc.ID))
+				rows = append(rows, unsupportedMIRCapabilityRow(subject, unsupported("mir-mvp", fmt.Sprintf("unsupported local type %s in %s (local %s id=%d)", mirTypeString(loc.Type), fn.Name, localDisplayName(loc), loc.ID)), false, false))
+				continue
 			}
+			rows = append(rows, supportedMIRCapabilityRow(subject, false, false))
 		}
+		retSubject := "mir.return:" + fn.Name
 		if fn.ReturnType != nil && !g.typeSupported(fn.ReturnType) {
-			return unsupported("mir-mvp", fmt.Sprintf("unsupported return type %s in %s", mirTypeString(fn.ReturnType), fn.Name))
+			rows = append(rows, unsupportedMIRCapabilityRow(retSubject, unsupported("mir-mvp", fmt.Sprintf("unsupported return type %s in %s", mirTypeString(fn.ReturnType), fn.Name)), false, false))
+		} else {
+			rows = append(rows, supportedMIRCapabilityRow(retSubject, false, false))
 		}
 		for _, bb := range fn.Blocks {
 			if bb == nil {
 				continue
 			}
-			for _, inst := range bb.Instrs {
-				if err := g.checkInstrSupported(fn, inst); err != nil {
-					return err
-				}
+			for i, inst := range bb.Instrs {
+				runtimeRequired, runtimeKnown := mirInstrRuntimeABI(inst)
+				subject := fmt.Sprintf("mir.instr:%s:bb%d:%d:%T", fn.Name, bb.ID, i, inst)
+				rows = append(rows, mirCapabilityRowForError(subject, g.checkInstrSupported(fn, inst), runtimeRequired, runtimeKnown))
 			}
-			if err := g.checkTermSupported(fn, bb.Term); err != nil {
-				return err
-			}
+			subject := fmt.Sprintf("mir.term:%s:bb%d:%T", fn.Name, bb.ID, bb.Term)
+			rows = append(rows, mirCapabilityRowForError(subject, g.checkTermSupported(fn, bb.Term), false, false))
 		}
 	}
 	for _, glob := range g.mod.Globals {
 		if glob == nil {
 			continue
 		}
+		subject := "mir.global:" + glob.Name
 		if glob.Name == "" {
-			return unsupported("mir-mvp", "global with empty name")
+			rows = append(rows, unsupportedMIRCapabilityRow(subject, unsupported("mir-mvp", "global with empty name"), false, false))
+			continue
 		}
 		if !g.typeSupported(glob.Type) {
-			return unsupported("mir-mvp", fmt.Sprintf("global %q has unsupported type %s", glob.Name, mirTypeString(glob.Type)))
+			rows = append(rows, unsupportedMIRCapabilityRow(subject, unsupported("mir-mvp", fmt.Sprintf("global %q has unsupported type %s", glob.Name, mirTypeString(glob.Type))), false, false))
+		} else {
+			rows = append(rows, supportedMIRCapabilityRow(subject, false, false))
 		}
 		if glob.Init != nil && !glob.Init.IsExternal {
 			// Init fns aren't in Module.Functions, so walk them
 			// through the same whitelist checks as user fns.
-			if err := g.checkFunctionSupported(glob.Init); err != nil {
-				return err
-			}
+			rows = append(rows, mirCapabilityRowForError("mir.global-init:"+glob.Name, g.checkFunctionSupported(glob.Init), false, false))
 		}
 	}
-	return nil
+	return rows
+}
+
+func supportedMIRCapabilityRow(subject string, runtimeRequired, runtimeKnown bool) MIRCapabilityRow {
+	return MIRCapabilityRow{
+		Subject:            subject,
+		LLVMEmittable:      true,
+		RuntimeABIRequired: runtimeRequired,
+		RuntimeABIKnown:    runtimeKnown,
+	}
+}
+
+func unsupportedMIRCapabilityRow(subject string, err error, runtimeRequired, runtimeKnown bool) MIRCapabilityRow {
+	row := supportedMIRCapabilityRow(subject, runtimeRequired, runtimeKnown)
+	row.LLVMEmittable = false
+	row.Diagnostic = UnsupportedDiagnosticForError(err)
+	return row
+}
+
+func mirCapabilityRowForError(subject string, err error, runtimeRequired, runtimeKnown bool) MIRCapabilityRow {
+	if err != nil {
+		return unsupportedMIRCapabilityRow(subject, err, runtimeRequired, runtimeKnown)
+	}
+	return supportedMIRCapabilityRow(subject, runtimeRequired, runtimeKnown)
+}
+
+func mirInstrRuntimeABI(inst mir.Instr) (required, known bool) {
+	switch x := inst.(type) {
+	case *mir.IntrinsicInstr:
+		required = mirIntrinsicNeedsRuntimeABI(x.Kind)
+		known = !required || isSupportedIntrinsic(x.Kind)
+		return required, known
+	case *mir.CallInstr:
+		fn, ok := x.Callee.(*mir.FnRef)
+		if !ok || fn == nil {
+			return false, false
+		}
+		path, _, ok := splitRuntimeFFICallee(fn.Symbol)
+		if !ok {
+			return false, false
+		}
+		return true, IsKnownRuntimeFFIPath(path)
+	default:
+		return false, false
+	}
+}
+
+func mirIntrinsicNeedsRuntimeABI(k mir.IntrinsicKind) bool {
+	switch k {
+	case mir.IntrinsicInvalid,
+		mir.IntrinsicRawNull,
+		mir.IntrinsicByteToInt, mir.IntrinsicCharToInt,
+		mir.IntrinsicIntToByte, mir.IntrinsicIntToChar,
+		mir.IntrinsicByteToChar, mir.IntrinsicCharToByte:
+		return false
+	default:
+		return true
+	}
 }
 
 // checkFunctionSupported validates a single function against the
