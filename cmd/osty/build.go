@@ -229,17 +229,18 @@ func isOstySource(name string) bool {
 	return filepath.Ext(name) == ".osty"
 }
 
-// countLowerableFiles reports how many of pkg.Files actually carry a
-// parsed AST. PackageFile entries with a nil File slip through resolve
-// when parse fails fatally; ir.LowerPackage skips them, and the gen path
-// uses the same predicate to decide whether package lowering is viable.
+// countLowerableFiles reports how many package files can enter the legacy IR
+// package-lowering boundary. Native-owned packages carry Run with File left nil
+// until that boundary explicitly materializes public AST compatibility, so
+// counting only pf.File would incorrectly route compile fallbacks through the
+// synthetic single-file path.
 func countLowerableFiles(pkg *resolve.Package) int {
 	if pkg == nil {
 		return 0
 	}
 	n := 0
 	for _, pf := range pkg.Files {
-		if pf != nil && pf.File != nil {
+		if pf.CanMaterializeFile() {
 			n++
 		}
 	}

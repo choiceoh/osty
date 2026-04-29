@@ -92,7 +92,7 @@ func PreparePackage(packageName, sourcePath string, pkg *resolve.Package, entryF
 	}
 	if entryFile == nil {
 		for _, pf := range pkg.Files {
-			if pf != nil && pf.File != nil {
+			if pf.CanMaterializeFile() {
 				entryFile = pf
 				break
 			}
@@ -104,7 +104,7 @@ func PreparePackage(packageName, sourcePath string, pkg *resolve.Package, entryF
 		Check:       chk,
 	}
 	if entryFile != nil {
-		entry.File = entryFile.File
+		entry.File = entryFile.EnsureFile()
 		entry.Source = entryFile.Source
 		entry.Resolve = &resolve.Result{
 			FileScope: entryFile.FileScope,
