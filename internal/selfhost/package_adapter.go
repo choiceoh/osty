@@ -8,7 +8,8 @@ import (
 )
 
 // Package-level type aliases re-export the shared boundary shapes from
-// internal/selfhost/api. See selfhost/api/package.go for definitions.
+// internal/selfhost/api for compatibility. New consumers should import
+// internal/selfhost/api directly.
 type (
 	PackageCheckFile         = api.PackageCheckFile
 	PackageCheckGenericBound = api.PackageCheckGenericBound
