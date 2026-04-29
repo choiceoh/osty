@@ -54797,12 +54797,12 @@ func srSymbolFound(sym *SelfSymbol) bool {
 
 // Osty: /tmp/selfhost_merged.osty:28147:1
 func srIsBuiltinName(name string) bool {
-	return name == "true" || name == "false" || name == "None" || name == "Some" || name == "Ok" || name == "Err" || name == "println" || name == "panic" || name == "spawn" || name == "parallel" || name == "taskGroup" || name == "thread" || name == "Int" || name == "Float" || name == "Bool" || name == "String" || name == "Bytes" || name == "Char" || name == "Never" || name == "List" || name == "Map" || name == "Set" || name == "Option" || name == "Result" || name == "Error" || name == "Unit"
+	return name == "true" || name == "false" || name == "None" || name == "Some" || name == "Ok" || name == "Err" || name == "print" || name == "println" || name == "eprint" || name == "eprintln" || name == "dbg" || name == "panic" || name == "spawn" || name == "parallel" || name == "taskGroup" || name == "thread" || name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Byte" || name == "Float" || name == "Float32" || name == "Float64" || name == "Bool" || name == "String" || name == "Bytes" || name == "Char" || name == "Never" || name == "RawPtr" || name == "List" || name == "Map" || name == "Set" || name == "Chan" || name == "Channel" || name == "Handle" || name == "TaskGroup" || name == "Option" || name == "Result" || name == "Error" || name == "Unit" || name == "Equal" || name == "Ordered" || name == "Hashable" || name == "ToString" || name == "Pod"
 }
 
 // Osty: /tmp/selfhost_merged.osty:28151:1
 func srIsBuiltinTypeName(name string) bool {
-	return name == "Int" || name == "Float" || name == "Bool" || name == "String" || name == "Bytes" || name == "Char" || name == "Never" || name == "List" || name == "Map" || name == "Set" || name == "Option" || name == "Result" || name == "Error" || name == "Unit"
+	return name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Byte" || name == "Float" || name == "Float32" || name == "Float64" || name == "Bool" || name == "String" || name == "Bytes" || name == "Char" || name == "Never" || name == "RawPtr" || name == "List" || name == "Map" || name == "Set" || name == "Chan" || name == "Channel" || name == "Handle" || name == "TaskGroup" || name == "Option" || name == "Result" || name == "Error" || name == "Unit" || name == "Equal" || name == "Ordered" || name == "Hashable" || name == "ToString" || name == "Pod"
 }
 
 // Osty: /tmp/selfhost_merged.osty:28155:1

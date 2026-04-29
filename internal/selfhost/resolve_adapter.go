@@ -272,8 +272,106 @@ func ResolvePackageStructured(input PackageResolveInput) (ResolveResult, error) 
 		return checkNodeOffsetsWithTokenLayout(layout, start, end)
 	})
 	selfhostAnnotateResolveFiles(&result, input.Files)
+	selfhostFilterCrossFileDuplicateUseDiagnostics(&result, file, layout)
 	selfhostAssignResolveIDs(&result, selfhostResolvePackageKey(input))
 	return result, nil
+}
+
+func selfhostFilterCrossFileDuplicateUseDiagnostics(result *ResolveResult, file *AstFile, layout *selfhostPackageTokenLayout) {
+	if result == nil || file == nil || file.arena == nil || layout == nil {
+		return
+	}
+	uses := selfhostPackageUseAliasStarts(file, layout)
+	if len(uses) == 0 {
+		return
+	}
+	out := result.Diagnostics[:0]
+	droppedDuplicateUses := 0
+	for _, d := range result.Diagnostics {
+		if d.Code == "E0554" && !selfhostPackageHasEarlierUseAlias(uses, d.File, d.Name, d.Start) {
+			droppedDuplicateUses++
+			continue
+		}
+		out = append(out, d)
+	}
+	if droppedDuplicateUses == 0 {
+		return
+	}
+	result.Diagnostics = out
+	if result.Summary.Duplicates >= droppedDuplicateUses {
+		result.Summary.Duplicates -= droppedDuplicateUses
+	} else {
+		result.Summary.Duplicates = 0
+	}
+	selfhostRefreshResolveDiagnosticSummary(result)
+}
+
+func selfhostPackageUseAliasStarts(file *AstFile, layout *selfhostPackageTokenLayout) map[string][]int {
+	out := map[string][]int{}
+	if file == nil || file.arena == nil {
+		return out
+	}
+	var walk func(int)
+	walk = func(idx int) {
+		if idx < 0 || idx >= len(file.arena.nodes) {
+			return
+		}
+		node := file.arena.nodes[idx]
+		if node == nil {
+			return
+		}
+		if _, ok := node.kind.(*AstNodeKind_AstNUseDecl); !ok {
+			return
+		}
+		if astUseDeclIsGroup(node) {
+			for _, childIdx := range node.children {
+				walk(childIdx)
+			}
+			return
+		}
+		alias := srAstUseAlias(file, node)
+		path := checkFilePathWithTokenLayout(layout, node.start)
+		start, _ := checkNodeOffsetsWithTokenLayout(layout, node.start, node.end)
+		if alias == "" || path == "" {
+			return
+		}
+		key := path + "\x00" + alias
+		out[key] = append(out[key], start)
+	}
+	for _, declIdx := range file.arena.decls {
+		walk(declIdx)
+	}
+	return out
+}
+
+func selfhostPackageHasEarlierUseAlias(uses map[string][]int, file, name string, start int) bool {
+	if file == "" || name == "" {
+		return false
+	}
+	for _, candidate := range uses[file+"\x00"+name] {
+		if candidate < start {
+			return true
+		}
+	}
+	return false
+}
+
+func selfhostRefreshResolveDiagnosticSummary(result *ResolveResult) {
+	if result == nil {
+		return
+	}
+	result.Summary.Diagnostics = len(result.Diagnostics)
+	byCode := map[string]int{}
+	for _, d := range result.Diagnostics {
+		if d.Code == "" {
+			continue
+		}
+		byCode[d.Code]++
+	}
+	if len(byCode) == 0 {
+		byCode = nil
+	}
+	result.Summary.DiagnosticsByCode = byCode
 }
 
 func selfhostApplyResolveImportSurfaces(result *ResolveResult, file *AstFile, imports []PackageCheckImport, offsets func(start, end int) (int, int)) {
