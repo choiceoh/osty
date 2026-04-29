@@ -56,8 +56,15 @@ func TestSqlModuleSourcePinsBuilderBehavior(t *testing.T) {
 		`pub fn quoteIdent(name: String) -> Result<String, Error>`,
 		`pub fn placeholder(dialect: Dialect, index: Int) -> String`,
 		`pub fn render(q: Query, dialect: Dialect) -> String`,
+		`pub fn debugSql(q: Query) -> String`,
 		`pub fn insert(table: String, values: List<Assignment>) -> Result<Query, Error>`,
 		`strings.replaceAll(value, "'", "''")`,
+		`copySqlQuoted(chars, i, c)`,
+		`startsSqlDollarQuote(chars, i)`,
+		`copySqlBacktickQuoted(chars, i)`,
+		`c.toInt() == 0x5C`,
+		`startsSqlLineComment(chars, i)`,
+		`questionLooksLikeOperator(chars, i)`,
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("std.sql source missing %q", want)

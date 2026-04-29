@@ -126,12 +126,16 @@ pub struct Cookie {
     pub sameSite: SameSite?,
 
     pub fn toString(self) -> String {
-        let mut out = "{self.name}={self.value}"
+        let name = cookieNameOrAbort(self.name)
+        let value = cookieValueOrAbort("cookie value", self.value)
+        let mut out = "{name}={value}"
         if !self.path.isEmpty() {
-            out = "{out}; Path={self.path}"
+            let path = cookieValueOrAbort("cookie path", self.path)
+            out = "{out}; Path={path}"
         }
         if !self.domain.isEmpty() {
-            out = "{out}; Domain={self.domain}"
+            let domain = cookieValueOrAbort("cookie domain", self.domain)
+            out = "{out}; Domain={domain}"
         }
         if self.maxAge >= 0 {
             out = "{out}; Max-Age={self.maxAge}"
@@ -1145,7 +1149,9 @@ fn formatCookieHeader(cookies: CookieJar) -> String {
     let keys = cookies.keys().sorted()
     let mut parts: List<String> = []
     for key in keys {
-        parts.push("{key}={cookies.get(key).unwrap()}")
+        let name = cookieNameOrAbort(key)
+        let value = cookieValueOrAbort("cookie value", cookies.get(key).unwrap())
+        parts.push("{name}={value}")
     }
     strings.join(parts, "; ")
 }
@@ -1158,6 +1164,60 @@ fn parseNameValuePair(text: String) -> Result<(String, String), Error> {
     }
     let value = if kv.len() == 2 { strings.trimSpace(kv[1]) } else { "" }
     Ok((name, value))
+}
+
+fn cookieNameOrAbort(name: String) -> String {
+    if !isCookieName(name) {
+        process.abort("http: invalid cookie name")
+    }
+    name
+}
+
+fn cookieValueOrAbort(label: String, value: String) -> String {
+    if !isCookieValue(value) {
+        process.abort("http: invalid {label}")
+    }
+    value
+}
+
+fn isCookieName(name: String) -> Bool {
+    if name.isEmpty() {
+        return false
+    }
+    for c in name.chars() {
+        if !isCookieNameChar(c) {
+            return false
+        }
+    }
+    true
+}
+
+fn isCookieNameChar(c: Char) -> Bool {
+    (c >= 'A' && c <= 'Z') ||
+    (c >= 'a' && c <= 'z') ||
+    (c >= '0' && c <= '9') ||
+    c == '!' || c == '#' || c == '$' || c == '%' ||
+    c == '&' || c == '\'' || c == '*' || c == '+' ||
+    c == '-' || c == '.' || c == '^' || c == '_' ||
+    c == '`' || c == '|' || c == '~'
+}
+
+fn isCookieValue(value: String) -> Bool {
+    for c in value.chars() {
+        if !isCookieValueChar(c) {
+            return false
+        }
+    }
+    true
+}
+
+fn isCookieValueChar(c: Char) -> Bool {
+    let n = c.toInt()
+    n == 0x21 ||
+    (n >= 0x23 && n <= 0x2B) ||
+    (n >= 0x2D && n <= 0x3A) ||
+    (n >= 0x3C && n <= 0x5B) ||
+    (n >= 0x5D && n <= 0x7E)
 }
 
 fn acceptHeaderMatches(header: String, wanted: String) -> Bool {

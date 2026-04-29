@@ -337,11 +337,7 @@ fn parseCapability(message: String) -> Capability {
 }
 
 fn ensureDataBlock(data: String) -> String {
-    let normalized = normalizeBody(data)
-    if hasDataTerminator(normalized) {
-        return normalized
-    }
-    dataBlock(normalized)
+    dataBlock(data)
 }
 
 fn stripDataTerminator(data: String) -> String {

@@ -175,13 +175,38 @@ pub fn sqliteDialect() -> Dialect {
 pub fn render(q: Query, dialect: Dialect) -> String {
     let mut out = ""
     let mut index = 1
-    for c in q.sql.chars() {
-        if c.toInt() == 0x3F {
+    let chars = q.sql.chars()
+    let mut i = 0
+    for i < chars.len() {
+        let c = chars[i]
+        if startsSqlDollarQuote(chars, i) {
+            let quoted = copySqlDollarQuoted(chars, i)
+            out = "{out}{quoted.0}"
+            i = quoted.1
+        } else if c == '`' {
+            let quoted = copySqlBacktickQuoted(chars, i)
+            out = "{out}{quoted.0}"
+            i = quoted.1
+        } else if c == '\'' || c == '"' {
+            let quoted = copySqlQuoted(chars, i, c)
+            out = "{out}{quoted.0}"
+            i = quoted.1
+        } else if startsSqlLineComment(chars, i) {
+            let comment = copySqlLineComment(chars, i)
+            out = "{out}{comment.0}"
+            i = comment.1
+        } else if startsSqlBlockComment(chars, i) {
+            let comment = copySqlBlockComment(chars, i)
+            out = "{out}{comment.0}"
+            i = comment.1
+        } else if c.toInt() == 0x3F && index <= q.params.len() && !questionLooksLikeOperator(chars, i) {
             let marker = placeholder(dialect, index)
             out = "{out}{marker}"
             index = index + 1
+            i = i + 1
         } else {
             out = "{out}{c}"
+            i = i + 1
         }
     }
     out
@@ -190,13 +215,38 @@ pub fn render(q: Query, dialect: Dialect) -> String {
 pub fn debugSql(q: Query) -> String {
     let mut out = ""
     let mut index = 0
-    for c in q.sql.chars() {
-        if c.toInt() == 0x3F && index < q.params.len() {
+    let chars = q.sql.chars()
+    let mut i = 0
+    for i < chars.len() {
+        let c = chars[i]
+        if startsSqlDollarQuote(chars, i) {
+            let quoted = copySqlDollarQuoted(chars, i)
+            out = "{out}{quoted.0}"
+            i = quoted.1
+        } else if c == '`' {
+            let quoted = copySqlBacktickQuoted(chars, i)
+            out = "{out}{quoted.0}"
+            i = quoted.1
+        } else if c == '\'' || c == '"' {
+            let quoted = copySqlQuoted(chars, i, c)
+            out = "{out}{quoted.0}"
+            i = quoted.1
+        } else if startsSqlLineComment(chars, i) {
+            let comment = copySqlLineComment(chars, i)
+            out = "{out}{comment.0}"
+            i = comment.1
+        } else if startsSqlBlockComment(chars, i) {
+            let comment = copySqlBlockComment(chars, i)
+            out = "{out}{comment.0}"
+            i = comment.1
+        } else if c.toInt() == 0x3F && index < q.params.len() && !questionLooksLikeOperator(chars, i) {
             let value = literal(q.params[index])
             out = "{out}{value}"
             index = index + 1
+            i = i + 1
         } else {
             out = "{out}{c}"
+            i = i + 1
         }
     }
     out
@@ -396,6 +446,204 @@ fn appendValues(out: List<Value>, values: List<Value>) {
     for value in values {
         out.push(value)
     }
+}
+
+fn copySqlQuoted(chars: List<Char>, start: Int, quote: Char) -> (String, Int) {
+    let mut out = ""
+    let mut i = start
+    for i < chars.len() {
+        let c = chars[i]
+        out = "{out}{c}"
+        i = i + 1
+        if c.toInt() == 0x5C && i < chars.len() {
+            out = "{out}{chars[i]}"
+            i = i + 1
+            continue
+        }
+        if c == quote {
+            if i < chars.len() && chars[i] == quote {
+                out = "{out}{chars[i]}"
+                i = i + 1
+            } else {
+                return (out, i)
+            }
+        }
+    }
+    (out, i)
+}
+
+fn copySqlBacktickQuoted(chars: List<Char>, start: Int) -> (String, Int) {
+    let mut out = ""
+    let mut i = start
+    for i < chars.len() {
+        let c = chars[i]
+        out = "{out}{c}"
+        i = i + 1
+        if c == '`' {
+            if i < chars.len() && chars[i] == '`' {
+                out = "{out}{chars[i]}"
+                i = i + 1
+            } else {
+                return (out, i)
+            }
+        }
+    }
+    (out, i)
+}
+
+fn startsSqlDollarQuote(chars: List<Char>, i: Int) -> Bool {
+    sqlDollarTagEnd(chars, i) >= 0
+}
+
+fn copySqlDollarQuoted(chars: List<Char>, start: Int) -> (String, Int) {
+    let tagEnd = sqlDollarTagEnd(chars, start)
+    if tagEnd < 0 {
+        return ("{chars[start]}", start + 1)
+    }
+    let tagLen = tagEnd - start + 1
+    let tag = copySqlChars(chars, start, tagEnd + 1)
+    let mut out = tag
+    let mut i = tagEnd + 1
+    for i < chars.len() {
+        if startsWithSqlText(chars, i, tag) {
+            out = "{out}{tag}"
+            return (out, i + tagLen)
+        }
+        out = "{out}{chars[i]}"
+        i = i + 1
+    }
+    (out, i)
+}
+
+fn sqlDollarTagEnd(chars: List<Char>, start: Int) -> Int {
+    if start >= chars.len() || chars[start] != '$' {
+        return -1
+    }
+    let mut i = start + 1
+    for i < chars.len() {
+        if chars[i] == '$' {
+            return i
+        }
+        if !isSqlDollarTagChar(chars[i]) {
+            return -1
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn isSqlDollarTagChar(c: Char) -> Bool {
+    isIdentContinue(c)
+}
+
+fn startsWithSqlText(chars: List<Char>, index: Int, text: String) -> Bool {
+    let target = text.chars()
+    if index + target.len() > chars.len() {
+        return false
+    }
+    let mut i = 0
+    for i < target.len() {
+        if chars[index + i] != target[i] {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+
+fn copySqlChars(chars: List<Char>, start: Int, end: Int) -> String {
+    let mut out = ""
+    let mut i = start
+    for i < end {
+        out = "{out}{chars[i]}"
+        i = i + 1
+    }
+    out
+}
+
+fn startsSqlLineComment(chars: List<Char>, i: Int) -> Bool {
+    i + 1 < chars.len() && chars[i] == '-' && chars[i + 1] == '-'
+}
+
+fn copySqlLineComment(chars: List<Char>, start: Int) -> (String, Int) {
+    let mut out = ""
+    let mut i = start
+    for i < chars.len() {
+        let c = chars[i]
+        out = "{out}{c}"
+        i = i + 1
+        if c == '\n' {
+            return (out, i)
+        }
+    }
+    (out, i)
+}
+
+fn startsSqlBlockComment(chars: List<Char>, i: Int) -> Bool {
+    i + 1 < chars.len() && chars[i] == '/' && chars[i + 1] == '*'
+}
+
+fn copySqlBlockComment(chars: List<Char>, start: Int) -> (String, Int) {
+    let mut out = ""
+    let mut i = start
+    for i < chars.len() {
+        let c = chars[i]
+        out = "{out}{c}"
+        if c == '*' && i + 1 < chars.len() && chars[i + 1] == '/' {
+            out = "{out}{chars[i + 1]}"
+            return (out, i + 2)
+        }
+        i = i + 1
+    }
+    (out, i)
+}
+
+fn questionLooksLikeOperator(chars: List<Char>, index: Int) -> Bool {
+    if index + 1 < chars.len() && (chars[index + 1] == '|' || chars[index + 1] == '&') {
+        return true
+    }
+    match previousNonSqlSpace(chars, index) {
+        Some(prev) -> {
+            match nextNonSqlSpace(chars, index + 1) {
+                Some(next) -> isSqlOperandBoundary(prev) && (isSqlOperandBoundary(next) || next == '?'),
+                None       -> false,
+            }
+        },
+        None -> false,
+    }
+}
+
+fn previousNonSqlSpace(chars: List<Char>, index: Int) -> Char? {
+    if index <= 0 {
+        return None
+    }
+    let mut i = index - 1
+    for i >= 0 {
+        if !isSqlSpace(chars[i]) {
+            return Some(chars[i])
+        }
+        i = i - 1
+    }
+    None
+}
+
+fn nextNonSqlSpace(chars: List<Char>, index: Int) -> Char? {
+    let mut i = index
+    for i < chars.len() {
+        if !isSqlSpace(chars[i]) {
+            return Some(chars[i])
+        }
+        i = i + 1
+    }
+    None
+}
+
+fn isSqlSpace(c: Char) -> Bool {
+    c == ' ' || c == '\t' || c == '\n' || c == '\r'
+}
+
+fn isSqlOperandBoundary(c: Char) -> Bool {
+    isIdentContinue(c) || c == '\'' || c == '"' || c == '`' || c == ')' || c == ']' || c == '}'
 }
 
 fn escapeIdent(name: String) -> String {
