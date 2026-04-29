@@ -113,7 +113,7 @@ pub fn demo(text: String) -> Result<String, regex.RegexError> {
 	if len(parseDiags) != 0 {
 		t.Fatalf("parse diagnostics: %v", parseDiags)
 	}
-	res := resolve.ResolveFileDefault(file, Load())
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, Load())
 	for _, d := range res.Diags {
 		if d == nil || d.Severity != diag.Error {
 			continue

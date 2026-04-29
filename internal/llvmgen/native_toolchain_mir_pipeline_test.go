@@ -45,7 +45,7 @@ func TestNativeToolchainMergedMIRPipelineIsClean(t *testing.T) {
 	if file == nil {
 		t.Fatalf("merged parse returned nil (%d files, %d bytes)", len(files), len(merged))
 	}
-	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
+	res := resolve.ResolveFileSourceDefault(merged, file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 
@@ -117,7 +117,7 @@ func TestNativeToolchainMergedMIRErrTypeFloor(t *testing.T) {
 	if file == nil {
 		t.Fatalf("merged parse returned nil")
 	}
-	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
+	res := resolve.ResolveFileSourceDefault(merged, file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 

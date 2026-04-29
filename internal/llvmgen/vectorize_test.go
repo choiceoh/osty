@@ -238,7 +238,7 @@ fn main() {
 }
 `
 	file := parseLLVMGenFile(t, src)
-	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 

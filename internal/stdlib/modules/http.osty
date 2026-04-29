@@ -610,7 +610,7 @@ pub struct Router {
                 continue
             }
             match matchRoutePattern(route.pattern, path) {
-                Some(params) -> return Some(RouteMatch { route: route, params: params }),
+                Some(params) -> { return Some(RouteMatch { route: route, params: params }) },
                 None         -> {},
             }
         }
