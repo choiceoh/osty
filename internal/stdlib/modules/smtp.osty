@@ -1,0 +1,358 @@
+// std.smtp - SMTP command, reply, and transaction planning helpers.
+//
+// This module covers the protocol surface that can be implemented without a
+// TLS runtime: command construction, AUTH payloads, reply parsing, capability
+// extraction, and full message transaction scripts from std.email.Envelope.
+
+use std.bytes
+use std.email
+use std.encoding
+use std.error
+use std.strings
+
+pub enum AuthKind {
+    NoAuth,
+    Plain,
+    Login,
+}
+
+pub enum Security {
+    PlainText,
+    StartTls,
+    Tls,
+}
+
+pub struct Auth {
+    pub kind: AuthKind,
+    pub username: String,
+    pub password: String,
+}
+
+pub struct ClientConfig {
+    pub host: String,
+    pub port: Int,
+    pub hostname: String,
+    pub security: Security,
+    pub auth: Auth,
+}
+
+pub struct Reply {
+    pub code: Int,
+    pub message: String,
+    pub continuation: Bool,
+}
+
+pub struct Capability {
+    pub name: String,
+    pub args: List<String>,
+}
+
+pub struct Transaction {
+    pub config: ClientConfig,
+    pub envelope: email.Envelope,
+}
+
+pub fn noAuth() -> Auth {
+    Auth {
+        kind: NoAuth,
+        username: "",
+        password: "",
+    }
+}
+
+pub fn plainAuth(username: String, password: String) -> Auth {
+    Auth {
+        kind: Plain,
+        username: username,
+        password: password,
+    }
+}
+
+pub fn loginAuth(username: String, password: String) -> Auth {
+    Auth {
+        kind: Login,
+        username: username,
+        password: password,
+    }
+}
+
+pub fn config(host: String, port: Int, hostname: String) -> Result<ClientConfig, Error> {
+    if strings.trimSpace(host).isEmpty() {
+        return Err(error.new("smtp: host is empty"))
+    }
+    if port <= 0 {
+        return Err(error.new("smtp: port must be positive"))
+    }
+    let local = if strings.trimSpace(hostname).isEmpty() { "localhost" } else { sanitizeAtom(hostname) }
+    Ok(ClientConfig {
+        host: strings.trimSpace(host),
+        port: port,
+        hostname: local,
+        security: PlainText,
+        auth: noAuth(),
+    })
+}
+
+pub fn withSecurity(cfg: ClientConfig, security: Security) -> ClientConfig {
+    ClientConfig {
+        host: cfg.host,
+        port: cfg.port,
+        hostname: cfg.hostname,
+        security: security,
+        auth: cfg.auth,
+    }
+}
+
+pub fn withAuth(cfg: ClientConfig, auth: Auth) -> ClientConfig {
+    ClientConfig {
+        host: cfg.host,
+        port: cfg.port,
+        hostname: cfg.hostname,
+        security: cfg.security,
+        auth: auth,
+    }
+}
+
+pub fn defaultPort(security: Security) -> Int {
+    match security {
+        PlainText -> 25,
+        StartTls  -> 587,
+        Tls       -> 465,
+    }
+}
+
+pub fn ehlo(hostname: String) -> String {
+    "EHLO {sanitizeAtom(hostname)}"
+}
+
+pub fn helo(hostname: String) -> String {
+    "HELO {sanitizeAtom(hostname)}"
+}
+
+pub fn startTls() -> String {
+    "STARTTLS"
+}
+
+pub fn mailFrom(addr: String) -> Result<String, Error> {
+    if !email.isEmail(addr) {
+        return Err(error.new("smtp: invalid sender address: {addr}"))
+    }
+    Ok("MAIL FROM:<{addr}>")
+}
+
+pub fn rcptTo(addr: String) -> Result<String, Error> {
+    if !email.isEmail(addr) {
+        return Err(error.new("smtp: invalid recipient address: {addr}"))
+    }
+    Ok("RCPT TO:<{addr}>")
+}
+
+pub fn dataCommand() -> String {
+    "DATA"
+}
+
+pub fn quit() -> String {
+    "QUIT"
+}
+
+pub fn rset() -> String {
+    "RSET"
+}
+
+pub fn noop() -> String {
+    "NOOP"
+}
+
+pub fn authPlain(username: String, password: String) -> String {
+    "AUTH PLAIN {plainPayload(username, password)}"
+}
+
+pub fn authLogin(username: String, password: String) -> List<String> {
+    [
+        "AUTH LOGIN",
+        encoding.base64.encode(bytes.fromString(username)),
+        encoding.base64.encode(bytes.fromString(password)),
+    ]
+}
+
+pub fn authCommands(auth: Auth) -> List<String> {
+    match auth.kind {
+        NoAuth -> [],
+        Plain  -> [authPlain(auth.username, auth.password)],
+        Login  -> authLogin(auth.username, auth.password),
+    }
+}
+
+pub fn transaction(config: ClientConfig, envelope: email.Envelope) -> Transaction {
+    Transaction {
+        config: config,
+        envelope: envelope,
+    }
+}
+
+pub fn commands(tx: Transaction) -> Result<List<String>, Error> {
+    let mut out: List<String> = []
+    out.push(ehlo(tx.config.hostname))
+    if tx.config.security == StartTls {
+        out.push(startTls())
+        out.push(ehlo(tx.config.hostname))
+    }
+    for cmd in authCommands(tx.config.auth) {
+        out.push(cmd)
+    }
+    out.push(mailFrom(tx.envelope.from)?)
+    for rcpt in tx.envelope.recipients {
+        out.push(rcptTo(rcpt)?)
+    }
+    out.push(dataCommand())
+    out.push(tx.envelope.data)
+    out.push(quit())
+    Ok(out)
+}
+
+pub fn renderCommands(commands: List<String>) -> String {
+    let mut out = ""
+    for cmd in commands {
+        out = "{out}{cmd}{crlf()}"
+    }
+    out
+}
+
+pub fn parseReply(line: String) -> Result<Reply, Error> {
+    let text = strings.trimEndChars(line, "\r\n")
+    if text.len() < 3 {
+        return Err(error.new("smtp: reply line is too short"))
+    }
+    let codeText = strings.slice(text, 0, 3)
+    let code = parseCode(codeText)?
+    let continuation = text.len() > 3 && text[3] == '-'
+    let message = if text.len() > 4 { strings.slice(text, 4, text.len()) } else { "" }
+    Ok(Reply {
+        code: code,
+        message: message,
+        continuation: continuation,
+    })
+}
+
+pub fn parseReplies(text: String) -> Result<List<Reply>, Error> {
+    let mut out: List<Reply> = []
+    for line in strings.splitLines(text) {
+        if !strings.trimSpace(line).isEmpty() {
+            out.push(parseReply(line)?)
+        }
+    }
+    Ok(out)
+}
+
+pub fn isPositiveCompletion(reply: Reply) -> Bool {
+    reply.code >= 200 && reply.code < 300
+}
+
+pub fn isPositiveIntermediate(reply: Reply) -> Bool {
+    reply.code >= 300 && reply.code < 400
+}
+
+pub fn isTransientFailure(reply: Reply) -> Bool {
+    reply.code >= 400 && reply.code < 500
+}
+
+pub fn isPermanentFailure(reply: Reply) -> Bool {
+    reply.code >= 500 && reply.code < 600
+}
+
+pub fn capabilities(replies: List<Reply>) -> List<Capability> {
+    let mut out: List<Capability> = []
+    for reply in replies {
+        if reply.code == 250 {
+            let cap = parseCapability(reply.message)
+            if !cap.name.isEmpty() {
+                out.push(cap)
+            }
+        }
+    }
+    out
+}
+
+pub fn hasCapability(caps: List<Capability>, name: String) -> Bool {
+    let wanted = strings.toUpper(strings.trimSpace(name))
+    for cap in caps {
+        if cap.name == wanted {
+            return true
+        }
+    }
+    false
+}
+
+pub fn supportsAuth(caps: List<Capability>, mechanism: String) -> Bool {
+    let wanted = strings.toUpper(strings.trimSpace(mechanism))
+    for cap in caps {
+        if cap.name == "AUTH" {
+            for arg in cap.args {
+                if strings.toUpper(arg) == wanted {
+                    return true
+                }
+            }
+        }
+    }
+    false
+}
+
+fn parseCapability(message: String) -> Capability {
+    let fields = strings.split(strings.trimSpace(message), " ")
+    if fields.isEmpty() {
+        return Capability { name: "", args: [] }
+    }
+    let mut args: List<String> = []
+    let mut i = 1
+    for i < fields.len() {
+        let arg = strings.trimSpace(fields[i])
+        if !arg.isEmpty() {
+            args.push(arg)
+        }
+        i = i + 1
+    }
+    Capability {
+        name: strings.toUpper(fields[0]),
+        args: args,
+    }
+}
+
+fn plainPayload(username: String, password: String) -> String {
+    let mut raw: List<Byte> = []
+    raw.push(0.toByte())
+    appendStringBytes(raw, username)
+    raw.push(0.toByte())
+    appendStringBytes(raw, password)
+    encoding.base64.encode(bytes.from(raw))
+}
+
+fn appendStringBytes(out: List<Byte>, text: String) {
+    let raw = text.bytes()
+    let mut i = 0
+    for i < raw.len() {
+        out.push(raw[i])
+        i = i + 1
+    }
+}
+
+fn parseCode(text: String) -> Result<Int, Error> {
+    if text.len() != 3 {
+        return Err(error.new("smtp: reply code must have three digits"))
+    }
+    let mut code = 0
+    for c in text.chars() {
+        if c < '0' || c > '9' {
+            return Err(error.new("smtp: invalid reply code: {text}"))
+        }
+        code = code * 10 + (c.toInt() - '0'.toInt())
+    }
+    Ok(code)
+}
+
+fn sanitizeAtom(value: String) -> String {
+    strings.replaceAll(strings.replaceAll(strings.trimSpace(value), "\r", ""), "\n", "")
+}
+
+fn crlf() -> String {
+    "\r\n"
+}
