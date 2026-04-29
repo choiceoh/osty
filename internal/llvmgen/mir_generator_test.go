@@ -3827,6 +3827,99 @@ func TestGenerateFromMIRStringInterpolationBoxesEnumVariantName(t *testing.T) {
 	}
 }
 
+func TestGenerateFromMIRStringInterpolationBoxesFunctionValue(t *testing.T) {
+	fnT := &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TInt}
+	callee := &ir.FnDecl{
+		Name:   "nextValue",
+		Params: []*ir.Param{{Name: "n", Type: ir.TInt}},
+		Return: ir.TInt,
+		Body: &ir.Block{
+			Result: &ir.BinaryExpr{
+				Op:    ir.BinAdd,
+				Left:  &ir.Ident{Name: "n", Kind: ir.IdentParam, T: ir.TInt},
+				Right: &ir.IntLit{Text: "1", T: ir.TInt},
+				T:     ir.TInt,
+			},
+		},
+	}
+	render := &ir.FnDecl{
+		Name:   "renderFn",
+		Return: ir.TString,
+		Body: &ir.Block{
+			Result: &ir.StringLit{
+				Parts: []ir.StringPart{
+					{IsLit: true, Lit: "fn="},
+					{Expr: &ir.Ident{Name: "nextValue", Kind: ir.IdentFn, T: fnT}},
+				},
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{callee, render}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/fn_concat.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		`c"nextValue\00"`,
+		"call ptr @osty_rt_strings_Concat(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "string_concat arg") {
+		t.Fatalf("function interpolation should be boxed before concat:\n%s", got)
+	}
+}
+
+func TestGenerateFromMIRStringInterpolationBoxesOpaqueNamedValue(t *testing.T) {
+	nodeT := &ir.NamedType{Name: "CoreNode"}
+	render := &ir.FnDecl{
+		Name:   "renderNode",
+		Return: ir.TString,
+		Params: []*ir.Param{{Name: "node", Type: nodeT}},
+		Body: &ir.Block{
+			Result: &ir.StringLit{
+				Parts: []ir.StringPart{
+					{IsLit: true, Lit: "node="},
+					{Expr: &ir.Ident{Name: "node", Kind: ir.IdentParam, T: nodeT}},
+				},
+			},
+		},
+	}
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.StructDecl{
+				Name: "CoreNode",
+				Fields: []*ir.Field{
+					{Name: "kind", Type: ir.TInt, Exported: true},
+				},
+			},
+			render,
+		},
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/named_concat.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		`c"CoreNode\00"`,
+		"call ptr @osty_rt_strings_Concat(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "string_concat arg") {
+		t.Fatalf("named interpolation should be boxed before concat:\n%s", got)
+	}
+}
+
 func TestGenerateFromMIRBinaryStringAddUsesRuntimeConcat(t *testing.T) {
 	fn := &ir.FnDecl{
 		Name:   "greet",

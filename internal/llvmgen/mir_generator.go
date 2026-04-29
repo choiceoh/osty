@@ -6555,10 +6555,16 @@ func (g *mirGen) emitStringConcatBoxed(op mir.Operand) (*LlvmValue, error) {
 	if t == nil {
 		return nil, nil
 	}
+	if _, ok := t.(*ir.FnType); ok {
+		return g.emitFunctionStringConcatBoxed(op), nil
+	}
 	prim, ok := t.(*ir.PrimType)
 	if !ok {
 		if out, handled, err := g.emitEnumStringConcatBoxed(op, t); handled || err != nil {
 			return out, err
+		}
+		if out := g.emitOpaqueStringConcatBoxed(t); out != nil {
+			return out, nil
 		}
 		return nil, nil
 	}
@@ -6621,6 +6627,27 @@ func (g *mirGen) emitStringConcatBoxed(op mir.Operand) (*LlvmValue, error) {
 		return out, nil
 	}
 	return nil, nil
+}
+
+func (g *mirGen) emitFunctionStringConcatBoxed(op mir.Operand) *LlvmValue {
+	label := "<fn>"
+	if co, ok := op.(*mir.ConstOp); ok {
+		if fc, ok := co.Const.(*mir.FnConst); ok && fc.Symbol != "" {
+			label = fc.Symbol
+		}
+	}
+	return &LlvmValue{typ: "ptr", name: g.stringLiteral(label)}
+}
+
+func (g *mirGen) emitOpaqueStringConcatBoxed(t mir.Type) *LlvmValue {
+	if _, poisoned := t.(*ir.ErrType); poisoned {
+		return nil
+	}
+	label := mirTypeString(t)
+	if label == "" || label == "<nil>" {
+		return nil
+	}
+	return &LlvmValue{typ: "ptr", name: g.stringLiteral(label)}
 }
 
 func (g *mirGen) emitEnumStringConcatBoxed(op mir.Operand, t mir.Type) (*LlvmValue, bool, error) {
