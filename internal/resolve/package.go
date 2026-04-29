@@ -111,6 +111,14 @@ func (pf *PackageFile) CheckerSource() []byte {
 	return pf.Source
 }
 
+// CanMaterializeFile reports whether EnsureFile can produce the public AST
+// compatibility surface without stitching package source into a synthetic
+// single file. Native-loaded packages carry Run instead of File until a legacy
+// boundary explicitly asks for it.
+func (pf *PackageFile) CanMaterializeFile() bool {
+	return pf != nil && (pf.File != nil || pf.Run != nil)
+}
+
 // EnsureFile materializes the *ast.File for this PackageFile. Packages loaded
 // via LoadPackageForNative populate Run but leave File nil; calling EnsureFile
 // uses the explicit public-AST compatibility adapter on demand. Returns the

@@ -374,7 +374,7 @@ func countLowerableFiles(pkg *resolve.Package) int {
 	}
 	n := 0
 	for _, pf := range pkg.Files {
-		if pf != nil && pf.File != nil {
+		if pf.CanMaterializeFile() {
 			n++
 		}
 	}

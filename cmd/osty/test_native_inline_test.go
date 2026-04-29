@@ -1,6 +1,7 @@
 package main
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/osty/osty/internal/resolve"
@@ -160,6 +161,47 @@ fn inline_case() { let _ = 1 }
 	}
 	if benchNames["testAlpha"] || benchNames["inline_case"] {
 		t.Errorf("bench-mode must not pull test-prefixed / #[test] functions, got %v", benchNames)
+	}
+}
+
+func TestPrepareNativeTestBackendEntryFallbackKeepsNativePackageScopes(t *testing.T) {
+	dir := t.TempDir()
+	helperPath := filepath.Join(dir, "helper.osty")
+	testPath := filepath.Join(dir, "main_test.osty")
+	helperSrc := []byte("pub fn helper() -> Int { 1 }\n")
+	testSrc := []byte("fn testUsesHelper() { let _ = helper() }\n")
+	pkg := &resolve.Package{
+		Name: "native_test_pkg",
+		Dir:  dir,
+		Files: []*resolve.PackageFile{
+			{Path: helperPath, Source: helperSrc, Run: selfhost.Run(helperSrc)},
+			{Path: testPath, Source: testSrc, Run: selfhost.Run(testSrc)},
+		},
+	}
+	for _, pf := range pkg.Files {
+		if pf.File != nil {
+			t.Fatalf("test setup unexpectedly materialized %s", pf.Path)
+		}
+	}
+	if got := countLowerableFiles(pkg); got != 2 {
+		t.Fatalf("countLowerableFiles(native run-only package) = %d, want 2", got)
+	}
+
+	entry, err := prepareNativeTestBackendEntry(testPath, pkg)
+	if err != nil {
+		t.Fatalf("prepareNativeTestBackendEntry() error = %v", err)
+	}
+	if pkg.Files[0].File == nil || pkg.Files[1].File == nil {
+		t.Fatal("package lowering fallback did not materialize native-owned package files")
+	}
+	if entry.File != pkg.Files[1].File {
+		t.Fatal("backend entry did not keep the original package entry file")
+	}
+	if string(entry.Source) != string(testSrc) {
+		t.Fatalf("backend entry source = %q, want entry-file source; fallback must not merge package text", entry.Source)
+	}
+	if entry.IR == nil || len(entry.IR.Decls) != 2 {
+		t.Fatalf("backend entry decl count = %d, want 2 package decls", len(entry.IR.Decls))
 	}
 }
 
