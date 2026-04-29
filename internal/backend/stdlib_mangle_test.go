@@ -201,8 +201,8 @@ func TestRewriteStdlibMethodCallsitesRewritesSingletonMethod(t *testing.T) {
 	if len(call.Args) != 2 {
 		t.Fatalf("args len = %d, want 2 (receiver + original)", len(call.Args))
 	}
-	if call.Args[0].Value != receiver {
-		t.Fatalf("args[0] = %v, want original receiver pointer", call.Args[0].Value)
+	if lit, ok := call.Args[0].Value.(*ir.StructLit); !ok || lit.TypeName != "Base64" {
+		t.Fatalf("args[0] = %T %v, want materialized Base64 singleton", call.Args[0].Value, call.Args[0].Value)
 	}
 }
 
@@ -240,8 +240,8 @@ func TestRewriteStdlibMethodCallsitesRewritesSingletonMethodCall(t *testing.T) {
 	if len(call.Args) != 2 {
 		t.Fatalf("args len = %d, want 2 (receiver + original)", len(call.Args))
 	}
-	if call.Args[0].Value != receiver {
-		t.Fatalf("args[0] = %v, want original receiver pointer", call.Args[0].Value)
+	if lit, ok := call.Args[0].Value.(*ir.StructLit); !ok || lit.TypeName != "Base64" {
+		t.Fatalf("args[0] = %T %v, want materialized Base64 singleton", call.Args[0].Value, call.Args[0].Value)
 	}
 	if call.T != ir.TString {
 		t.Fatalf("call return T = %v, want String", call.T)

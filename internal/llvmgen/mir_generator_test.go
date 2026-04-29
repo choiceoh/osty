@@ -1176,8 +1176,10 @@ func TestGenerateFromMIRResultMethodsLower(t *testing.T) {
 		"define i1 @resultIsErr(%Result.i64.string %arg0)",
 		"define i64 @resultUnwrap(%Result.i64.string %arg0)",
 		"define i64 @resultUnwrapOr(%Result.i64.string %arg0)",
-		"declare void @osty_rt_result_unwrap_err() noreturn",
-		"call void @osty_rt_result_unwrap_err()",
+		"declare void @osty_rt_io_write(ptr, i1, i1)",
+		"declare void @exit(i32)",
+		"called unwrap on Err",
+		"call void @exit(i32 1)",
 		"icmp eq i64",
 		"phi i64",
 	} {
