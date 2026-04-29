@@ -1,0 +1,224 @@
+// std.graphql - GraphQL document and request-body builders.
+
+use std.error
+use std.strings
+
+pub struct Argument {
+    pub name: String,
+    pub value: String,
+}
+
+pub struct Request {
+    pub query: String,
+    pub operationName: String?,
+    pub variablesJson: String,
+}
+
+pub fn arg(name: String, value: String) -> Result<Argument, Error> {
+    if !isName(name) {
+        return Err(error.new("graphql: invalid argument name: {name}"))
+    }
+    Ok(Argument {
+        name: name,
+        value: value,
+    })
+}
+
+pub fn stringValue(value: String) -> String {
+    jsonString(value)
+}
+
+pub fn intValue(value: Int) -> String {
+    value.toString()
+}
+
+pub fn floatValue(value: Float) -> String {
+    value.toString()
+}
+
+pub fn boolValue(value: Bool) -> String {
+    if value { "true" } else { "false" }
+}
+
+pub fn nullValue() -> String {
+    "null"
+}
+
+pub fn variable(name: String) -> Result<String, Error> {
+    if !isName(name) {
+        return Err(error.new("graphql: invalid variable name: {name}"))
+    }
+    Ok("${name}")
+}
+
+pub fn listValue(values: List<String>) -> String {
+    "[{strings.join(values, \", \")}]"
+}
+
+pub fn objectValue(fields: List<Argument>) -> String {
+    let open = 123.toChar()
+    let close = 125.toChar()
+    let mut parts: List<String> = []
+    for field in fields {
+        parts.push("{field.name}: {field.value}")
+    }
+    "{open}{strings.join(parts, \", \")}{close}"
+}
+
+pub fn field(name: String) -> Result<String, Error> {
+    fieldArgs(name, [], "")
+}
+
+pub fn fieldArgs(name: String, args: List<Argument>, selectionSet: String) -> Result<String, Error> {
+    if !isName(name) {
+        return Err(error.new("graphql: invalid field name: {name}"))
+    }
+    let renderedArgs = renderArgs(args)
+    let renderedSelection = renderSelection(selectionSet)
+    Ok("{name}{renderedArgs}{renderedSelection}")
+}
+
+pub fn selection(fields: List<String>) -> String {
+    strings.join(fields, " ")
+}
+
+pub fn operation(kind: String, name: String, selectionSet: String) -> Result<String, Error> {
+    if kind != "query" && kind != "mutation" && kind != "subscription" {
+        return Err(error.new("graphql: invalid operation kind: {kind}"))
+    }
+    if !name.isEmpty() && !isName(name) {
+        return Err(error.new("graphql: invalid operation name: {name}"))
+    }
+    let open = 123.toChar()
+    let close = 125.toChar()
+    let body = strings.trimSpace(selectionSet)
+    if name.isEmpty() {
+        return Ok("{kind} {open} {body} {close}")
+    }
+    Ok("{kind} {name} {open} {body} {close}")
+}
+
+pub fn query(selectionSet: String) -> Result<String, Error> {
+    operation("query", "", selectionSet)
+}
+
+pub fn mutation(name: String, selectionSet: String) -> Result<String, Error> {
+    operation("mutation", name, selectionSet)
+}
+
+pub fn subscription(name: String, selectionSet: String) -> Result<String, Error> {
+    operation("subscription", name, selectionSet)
+}
+
+pub fn request(query: String) -> Request {
+    Request {
+        query: query,
+        operationName: noneString(),
+        variablesJson: "",
+    }
+}
+
+pub fn namedRequest(query: String, operationName: String) -> Request {
+    Request {
+        query: query,
+        operationName: Some(operationName),
+        variablesJson: "",
+    }
+}
+
+pub fn withVariablesJson(request: Request, variablesJson: String) -> Request {
+    Request {
+        query: request.query,
+        operationName: request.operationName,
+        variablesJson: strings.trimSpace(variablesJson),
+    }
+}
+
+pub fn encode(request: Request) -> String {
+    let open = 123.toChar()
+    let close = 125.toChar()
+    let quote = '"'
+    let mut out = "{open}{quote}query{quote}:{jsonString(request.query)}"
+    match request.operationName {
+        Some(name) -> {
+            out = "{out},{quote}operationName{quote}:{jsonString(name)}"
+        },
+        None       -> {},
+    }
+    if !strings.trimSpace(request.variablesJson).isEmpty() {
+        out = "{out},{quote}variables{quote}:{strings.trimSpace(request.variablesJson)}"
+    }
+    "{out}{close}"
+}
+
+pub fn isName(name: String) -> Bool {
+    if name.isEmpty() {
+        return false
+    }
+    let chars = name.chars()
+    if !isNameStart(chars[0]) {
+        return false
+    }
+    for c in chars {
+        if !isNameContinue(c) {
+            return false
+        }
+    }
+    true
+}
+
+fn renderArgs(args: List<Argument>) -> String {
+    if args.isEmpty() {
+        return ""
+    }
+    let mut parts: List<String> = []
+    for item in args {
+        parts.push("{item.name}: {item.value}")
+    }
+    "({strings.join(parts, \", \")})"
+}
+
+fn renderSelection(selectionSet: String) -> String {
+    let body = strings.trimSpace(selectionSet)
+    if body.isEmpty() {
+        return ""
+    }
+    let open = 123.toChar()
+    let close = 125.toChar()
+    " {open} {body} {close}"
+}
+
+fn jsonString(value: String) -> String {
+    let quote = '"'
+    let mut out = "{quote}"
+    for c in value.chars() {
+        if c == '"' {
+            out = "{out}\\\""
+        } else if c.toInt() == 92 {
+            out = "{out}\\\\"
+        } else if c == '\n' {
+            out = "{out}\\n"
+        } else if c == '\r' {
+            out = "{out}\\r"
+        } else if c == '\t' {
+            out = "{out}\\t"
+        } else {
+            out = "{out}{c}"
+        }
+    }
+    "{out}{quote}"
+}
+
+fn isNameStart(c: Char) -> Bool {
+    (c >= 'A' && c <= 'Z') ||
+    (c >= 'a' && c <= 'z') ||
+    c == '_'
+}
+
+fn isNameContinue(c: Char) -> Bool {
+    isNameStart(c) || (c >= '0' && c <= '9')
+}
+
+fn noneString() -> String? {
+    None
+}

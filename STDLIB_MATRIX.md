@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 41 모듈. 분류 기준:
+총 43 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (38 / 41 = 93%)
+### ⭐⭐⭐⭐⭐ Production (40 / 43 = 93%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -42,7 +42,9 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | csv | 351 | — | options-driven, header-aware decode |
 | xml | 391 | pure Osty | escape / unescape / tag builder / tokenizer |
 | encoding | 329 | pure Osty + bytes | Base64 / Base64Url / Hex / URL percent-encoding 구현 |
+| websocket | 322 | pure Osty + crypto/encoding | RFC 6455 accept key + handshake headers + frame encode/decode |
 | cli | 260 | pure Osty + env | flag / option spec, parse / parseEnv / usage |
+| graphql | 224 | pure Osty | document / field / argument builders + request JSON body encoding |
 | template | 148 | pure Osty | escaped/raw `{{name}}` 렌더링 + HTML escape / stripTags |
 | i18n | 136 | pure Osty | Locale / MessageCatalog / fallbackTags / pluralCategory / placeholder format |
 | char | 219 | — | Unicode / ASCII methods |
@@ -68,7 +70,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (2 / 41 = 5%)
+### ⭐⭐⭐⭐ Production-adjacent (2 / 43 = 5%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
@@ -82,7 +84,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 
 | 구분 | 갭 |
 |---|---|
-| 없는 모듈 | `db/sql`, `email/smtp`, `websocket`, `tar/zip`, `image`, `graphql` |
+| 없는 모듈 | `db/sql`, `email/smtp`, `tar/zip`, `image` |
 | 부분 구현 | `compress` 는 gzip 만 있음. deflate/zstd/zip/tar 계열 없음 |
 | 부분 실행 | `testing_gen` 의 일부 조합자는 표면만 있고 property runner 실행 subset 밖 |
 | 문서/코드 드리프트 | 일부 README/매트릭스 문구가 과거 G18 stub 정책을 아직 과장해서 남김 |
@@ -106,6 +108,8 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | HTML 템플릿 | ✅ 가능 | template (escaped/raw placeholder render) |
 | XML 처리 | ✅ 가능 | xml (escape / tag build / tokenize) |
 | 다국어 메시지 | ✅ 가능 | i18n (locale / catalog / placeholder / plural category) |
+| WebSocket handshake/frame | ✅ 가능 | websocket (accept key / headers / frame encode/decode) |
+| GraphQL 요청 생성 | ✅ 가능 | graphql (document builder / variables JSON body) |
 
 ## 3. 진짜 약점 (없는 모듈)
 
@@ -115,10 +119,8 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 |---|---|---|
 | db / sql | DB 작업 (sqlite / postgres wrap 필요) | 높음 (실용 어플리케이션 핵심) |
 | email / smtp | 메일 발송 | 중간 |
-| websocket | WS 통신 | 중간 (http 와 페어) |
 | tar / zip | 아카이브 (compress 는 gzip 만) | 낮음 |
 | image | 이미지 디코딩 | 낮음 |
-| graphql | GraphQL 클라이언트 / 서버 | 낮음 |
 
 ## 4. Phase A / B 분리 패턴
 
@@ -137,7 +139,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 18 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, net, fmt, json, url, io, collections, result, option, csv, xml, encoding, template, i18n, char, iter, bytes)
+- 20 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, net, fmt, json, url, io, collections, result, option, csv, xml, encoding, websocket, graphql, template, i18n, char, iter, bytes)
 - 6 모듈은 Phase A 충실 + Phase B declaration-only (fs, env, random, os, crypto, compress)
 - 나머지는 의도된 범위에서 surface 만으로 완성 (cli, math, cmp, hint, debug, ref, process, log, time, error, sync, thread, regex, testing, uuid)
 
@@ -206,7 +208,7 @@ stdlib audit 중 발견된 *진짜 자랑할 만한* 디자인 패턴:
 
 stdlib 자체는 거의 production. 다음 우선순위:
 
-1. **새 모듈 추가** (db / websocket / email) — *없는 모듈* 카테고리 채우기
+1. **새 모듈 추가** (db / email / archive / image) — *없는 모듈* 카테고리 채우기
 2. **compress 깊이 / encoding 확장** — zstd / deflate, Base32 등 추가 표준
 3. **Phase B surface 부풀리기** — random / crypto / compress 는 Phase A 풍부한데 Phase B helper 가 declaration 위주. user-friendly wrapper (예: `crypto.sha256Hex(data)`, `random.shuffle(list)`) 추가
 4. **스펙 문서 동기화** — `LANG_SPEC_v0.5/10-standard-library/*.md` 가 24 시간 sprint 진척 따라잡았는지 확인
