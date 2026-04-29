@@ -63,6 +63,7 @@ import (
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/scaffold"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/stdlib"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
@@ -1572,7 +1573,7 @@ func loadGenPackageEntryWithTransform(path string, transform resolve.SourceTrans
 	}
 	ws.SourceTransform = transform
 	ws.Stdlib = stdlib.LoadCached()
-	if _, err := ws.LoadPackageArenaFirst(""); err != nil {
+	if _, err := ws.LoadPackageNative(""); err != nil {
 		return nil, err
 	}
 	results := ws.ResolveAll()
@@ -1636,20 +1637,20 @@ func loadSelectedGenFilesWithTransform(sourcePath string, files []string, transf
 		if transform != nil {
 			src = transform(path, src)
 		}
-		parsed := parser.ParseDetailed(src)
-		canonicalSrc, canonicalMap := canonical.SourceWithMap(src, parsed.File)
+		run := selfhost.Run(src)
+		file := selfhost.LowerPublicFileFromRun(run)
+		canonicalSrc, canonicalMap := canonical.SourceWithMap(src, file)
 		pf := &resolve.PackageFile{
 			Path:            path,
 			Source:          src,
 			CanonicalSource: canonicalSrc,
 			CanonicalMap:    canonicalMap,
-			File:            parsed.File,
-			Run:             parsed.Run,
-			ParseDiags:      parsed.Diagnostics,
-			ParseProvenance: parsed.Provenance,
+			File:            file,
+			Run:             run,
+			ParseDiags:      run.Diagnostics(),
 		}
 		pkg.Files = append(pkg.Files, pf)
-		res.Diags = append(res.Diags, parsed.Diagnostics...)
+		res.Diags = append(res.Diags, pf.ParseDiags...)
 		if path == sourcePath {
 			entryFile = pf
 		}
@@ -1777,8 +1778,9 @@ func parseGenEmitFile(pkg *resolve.Package) (*ast.File, []byte, error) {
 	// checker inference paths out of sync with the merged byte stream, which in
 	// turn can poison the backend bridge with `<error>` types for otherwise valid
 	// native-test programs.
-	if reparsed, diags := parser.ParseDiagnostics(src); reparsed != nil && !hasError(diags) {
-		return reparsed, src, nil
+	run := selfhost.Run(src)
+	if file, diags := selfhost.LowerPublicFileFromRun(run), run.Diagnostics(); file != nil && !hasError(diags) {
+		return file, src, nil
 	}
 	return nil, nil, fmt.Errorf("%s: merged package source could not be reparsed for backend emission", pkg.Dir)
 }

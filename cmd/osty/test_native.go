@@ -127,7 +127,7 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	pkg, err := resolve.LoadPackageWithTestsTransform(pkgDir, aiRepairSourceTransform("osty test --airepair", stderr, flags))
+	pkg, err := resolve.LoadPackageForNativeWithTestsTransform(pkgDir, aiRepairSourceTransform("osty test --airepair", stderr, flags))
 	if err != nil {
 		fmt.Fprintf(stderr, "osty test: %v\n", err)
 		return 1
@@ -138,6 +138,11 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "osty test: parse errors in %s\n", pkgDir)
 		return 1
 	}
+	// Test discovery and the current package backend still consume the public
+	// AST compatibility surface. Keep that boundary explicit now that package
+	// loading itself is native-only.
+	pkg.MaterializePublicCompatibility()
+	pkg.MaterializeCanonicalSources()
 
 	tests, err := discoverNativeTests(pkg, filters, benchMode)
 	if err != nil {

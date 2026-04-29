@@ -600,12 +600,12 @@ func RunWithConfig(src []byte, stream io.Writer, cfg Config) Result {
 // separately), and the rest mirrors Run. Workspaces are not handled
 // here — point at a leaf package directory.
 //
-// If loading fails (e.g. directory unreadable), the returned Result
-// has empty Stages and the error is returned to the caller so the
-// CLI can decide whether to abort. Uses the arena-first loader
-// (Phase 1c.2) so parse keeps the astbridge counter low.
+// If loading fails (e.g. directory unreadable), the returned Result has empty
+// Stages and the error is returned to the caller so the CLI can decide whether
+// to abort. Loading starts from the selfhost native package loader; public AST
+// compatibility is materialized later only by legacy stages that still need it.
 func RunPackage(dir string, stream io.Writer, cfg Config) (Result, error) {
-	pkg, err := resolve.LoadPackageArenaFirstWithTransform(dir, cfg.SourceTransform)
+	pkg, err := resolve.LoadPackageForNativeWithTransform(dir, cfg.SourceTransform)
 	if err != nil {
 		return Result{}, err
 	}
@@ -812,7 +812,7 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 	ws.Stdlib = stdlib.LoadCached()
 	ws.SourceTransform = cfg.SourceTransform
 	for _, p := range resolve.WorkspacePackagePaths(dir) {
-		_, _ = ws.LoadPackageArenaFirst(p)
+		_, _ = ws.LoadPackageNative(p)
 	}
 
 	totalFiles, totalBytes, totalDecls, totalStmts, totalUses := 0, 0, 0, 0, 0

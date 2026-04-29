@@ -140,7 +140,7 @@ func runRun(args []string, cliF cliFlags) {
 	ws.SourceTransform = aiRepairSourceTransform("osty run --airepair", os.Stderr, cliF)
 	ws.Stdlib = stdlib.Load()
 	ws.Deps = deps
-	rootPkg, err := ws.LoadPackageArenaFirst("")
+	rootPkg, err := ws.LoadPackageNative("")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
 		os.Exit(1)

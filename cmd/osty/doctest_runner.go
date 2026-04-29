@@ -27,8 +27,8 @@ import (
 
 	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/doctest"
-	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 )
 
 // doctestRunnerFilename is the synthetic file name registered on the
@@ -73,8 +73,8 @@ func appendDoctestCases(pkg *resolve.Package, filters []string) ([]nativeTestCas
 
 	runnerPath := filepath.Join(pkg.Dir, doctestRunnerFilename)
 	source := doctest.BuildRunnerSource(collected)
-	parsed := parser.ParseDetailed(source)
-	file, diags := parsed.File, parsed.Diagnostics
+	run := selfhost.Run(source)
+	file, diags := selfhost.LowerPublicFileFromRun(run), run.Diagnostics()
 	if file == nil {
 		return nil, fmt.Errorf("parse doctest runner: %v", diags)
 	}
@@ -90,7 +90,7 @@ func appendDoctestCases(pkg *resolve.Package, filters []string) ([]nativeTestCas
 		CanonicalSource: canonicalSrc,
 		CanonicalMap:    canonicalMap,
 		File:            file,
-		Run:             parsed.Run,
+		Run:             run,
 		ParseDiags:      diags,
 	})
 
