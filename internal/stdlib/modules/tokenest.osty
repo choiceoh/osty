@@ -1,0 +1,305 @@
+// std.tokenest - dependency-free multilingual token estimation.
+//
+// Ported from Deneb's model-family-aware estimator. It uses Unicode script
+// classification and conservative per-family ratios so compaction decisions do
+// not need a tokenizer package.
+
+use std.bytes
+use std.char
+use std.strings
+
+// Family identifies tokenizer families with distinct multilingual compression.
+pub enum Family {
+    Claude,
+    OpenAI,
+    Gemini,
+    Default,
+
+    pub fn toString(self) -> String {
+        match self {
+            Claude  -> "claude",
+            OpenAI  -> "openai",
+            Gemini  -> "gemini",
+            Default -> "default",
+        }
+    }
+}
+
+pub enum ScriptClass {
+    Latin,
+    Hangul,
+    Cjk,
+    Digit,
+    Space,
+    Punct,
+    Other,
+}
+
+pub struct ScriptCounts {
+    pub latin: Int = 0,
+    pub hangul: Int = 0,
+    pub cjk: Int = 0,
+    pub digit: Int = 0,
+    pub space: Int = 0,
+    pub punct: Int = 0,
+    pub other: Int = 0,
+
+    pub fn total(self) -> Int {
+        self.latin + self.hangul + self.cjk + self.digit + self.space + self.punct + self.other
+    }
+}
+
+pub struct Estimate {
+    pub tokens: Int,
+    pub family: Family,
+    pub chars: Int,
+    pub bytes: Int,
+}
+
+pub struct Calibration {
+    pub claudeFactor: Float = 1.0,
+    pub openaiFactor: Float = 1.0,
+    pub geminiFactor: Float = 1.0,
+    pub defaultFactor: Float = 1.0,
+    pub claudeSamples: Int = 0,
+    pub openaiSamples: Int = 0,
+    pub geminiSamples: Int = 0,
+    pub defaultSamples: Int = 0,
+}
+
+pub fn estimate(text: String) -> Int {
+    estimateForFamily(text, Default)
+}
+
+pub fn estimateForModel(text: String, modelID: String) -> Int {
+    estimateForFamily(text, resolveFamily(modelID))
+}
+
+pub fn estimateForFamily(text: String, family: Family) -> Int {
+    estimateDetailed(text, family).tokens
+}
+
+pub fn estimateWithCalibration(text: String, family: Family, cal: Calibration) -> Int {
+    applyCalibration(estimateForFamily(text, family), family, cal)
+}
+
+pub fn estimateDetailed(text: String, family: Family) -> Estimate {
+    let counts = countScripts(text)
+    let mut tokens = 0.0
+    tokens = tokens + counts.latin.toFloat() / ratio(family, Latin)
+    tokens = tokens + counts.hangul.toFloat() / ratio(family, Hangul)
+    tokens = tokens + counts.cjk.toFloat() / ratio(family, Cjk)
+    tokens = tokens + counts.digit.toFloat() / ratio(family, Digit)
+    tokens = tokens + counts.space.toFloat() / ratio(family, Space)
+    tokens = tokens + counts.punct.toFloat() / ratio(family, Punct)
+    tokens = tokens + counts.other.toFloat() / ratio(family, Other)
+    let rounded = tokens.toIntRound().unwrap()
+    Estimate {
+        tokens: if rounded < 1 && !text.isEmpty() { 1 } else { rounded },
+        family: family,
+        chars: text.charCount(),
+        bytes: text.len(),
+    }
+}
+
+pub fn estimateBytes(data: Bytes) -> Int {
+    if data.len() == 0 {
+        return 0
+    }
+    let divisor = byteDivisor(data)
+    let rounded = (data.len().toFloat() / divisor).toIntRound().unwrap()
+    if rounded < 1 { 1 } else { rounded }
+}
+
+pub fn calibration() -> Calibration {
+    Calibration {}
+}
+
+pub fn recordFeedback(mut cal: Calibration, family: Family, estimated: Int, actual: Int) -> Calibration {
+    if estimated <= 0 || actual <= 0 {
+        return cal
+    }
+    let current = rawCorrectionFactor(family, cal)
+    let target = clampFloat(current * actual.toFloat() / estimated.toFloat(), 0.3, 3.0)
+    let next = if samplesFor(family, cal) == 0 {
+        target
+    } else {
+        current * 0.9 + target * 0.1
+    }
+    setCalibration(family, cal, next, samplesFor(family, cal) + 1)
+}
+
+pub fn correctionFactor(family: Family, cal: Calibration) -> Float {
+    if samplesFor(family, cal) < 10 {
+        return 1.0
+    }
+    rawCorrectionFactor(family, cal)
+}
+
+pub fn applyCalibration(tokens: Int, family: Family, cal: Calibration) -> Int {
+    if tokens <= 0 {
+        return tokens
+    }
+    let adjusted = (tokens.toFloat() * correctionFactor(family, cal)).toIntRound().unwrap()
+    if adjusted < 1 { 1 } else { adjusted }
+}
+
+pub fn resolveFamily(modelID: String) -> Family {
+    let m = strings.toLower(modelID)
+    if strings.contains(m, "claude") || strings.contains(m, "anthropic") {
+        return Claude
+    }
+    if strings.contains(m, "gpt") || strings.contains(m, "openai") || strings.contains(m, "o1") || strings.contains(m, "o3") || strings.contains(m, "o4") {
+        return OpenAI
+    }
+    if strings.contains(m, "gemini") || strings.contains(m, "gemma") {
+        return Gemini
+    }
+    Default
+}
+
+pub fn countScripts(text: String) -> ScriptCounts {
+    let mut out = ScriptCounts {}
+    for c in text.chars() {
+        let cls = classifyChar(c)
+        if cls == Latin {
+            out.latin = out.latin + 1
+        } else if cls == Hangul {
+            out.hangul = out.hangul + 1
+        } else if cls == Cjk {
+            out.cjk = out.cjk + 1
+        } else if cls == Digit {
+            out.digit = out.digit + 1
+        } else if cls == Space {
+            out.space = out.space + 1
+        } else if cls == Punct {
+            out.punct = out.punct + 1
+        } else {
+            out.other = out.other + 1
+        }
+    }
+    out
+}
+
+pub fn classifyChar(c: Char) -> ScriptClass {
+    if c <= '\u{7F}' {
+        if char.isAsciiAlpha(c) {
+            return Latin
+        }
+        if char.isAsciiDigit(c) {
+            return Digit
+        }
+        if char.isAsciiWhitespace(c) {
+            return Space
+        }
+        return Punct
+    }
+    let n = c.toInt()
+    if isHangulCodepoint(n) {
+        return Hangul
+    }
+    if isCjkCodepoint(n) {
+        return Cjk
+    }
+    Other
+}
+
+pub fn ratio(family: Family, class: ScriptClass) -> Float {
+    match family {
+        Claude -> match class {
+            Latin -> 4.0, Hangul -> 1.5, Cjk -> 1.3, Digit -> 2.5, Space -> 2.0, Punct -> 1.0, Other -> 1.0,
+        },
+        OpenAI -> match class {
+            Latin -> 4.0, Hangul -> 1.2, Cjk -> 1.2, Digit -> 2.5, Space -> 2.0, Punct -> 1.0, Other -> 1.0,
+        },
+        Gemini -> match class {
+            Latin -> 4.0, Hangul -> 1.4, Cjk -> 1.3, Digit -> 2.5, Space -> 2.0, Punct -> 1.0, Other -> 1.0,
+        },
+        Default -> match class {
+            Latin -> 3.5, Hangul -> 1.3, Cjk -> 1.2, Digit -> 2.0, Space -> 1.5, Punct -> 1.0, Other -> 1.0,
+        },
+    }
+}
+
+fn byteDivisor(data: Bytes) -> Float {
+    let sample = minInt(data.len(), 512)
+    let mut high = 0
+    let mut i = 0
+    for i < sample {
+        let b = bytes.get(data, i).unwrap().toInt()
+        if b >= 0x80 {
+            high = high + 1
+        }
+        i = i + 1
+    }
+    let highRatio = high.toFloat() / sample.toFloat()
+    4.0 + highRatio * 0.5
+}
+
+fn isHangulCodepoint(n: Int) -> Bool {
+    (n >= 0xAC00 && n <= 0xD7A3) ||
+    (n >= 0x1100 && n <= 0x11FF) ||
+    (n >= 0x3130 && n <= 0x318F) ||
+    (n >= 0xA960 && n <= 0xA97F) ||
+    (n >= 0xD7B0 && n <= 0xD7FF)
+}
+
+fn isCjkCodepoint(n: Int) -> Bool {
+    (n >= 0x4E00 && n <= 0x9FFF) ||
+    (n >= 0x3400 && n <= 0x4DBF) ||
+    (n >= 0x3040 && n <= 0x30FF)
+}
+
+fn minInt(a: Int, b: Int) -> Int {
+    if a < b { a } else { b }
+}
+
+fn samplesFor(family: Family, cal: Calibration) -> Int {
+    match family {
+        Claude  -> cal.claudeSamples,
+        OpenAI  -> cal.openaiSamples,
+        Gemini  -> cal.geminiSamples,
+        Default -> cal.defaultSamples,
+    }
+}
+
+fn rawCorrectionFactor(family: Family, cal: Calibration) -> Float {
+    match family {
+        Claude  -> cal.claudeFactor,
+        OpenAI  -> cal.openaiFactor,
+        Gemini  -> cal.geminiFactor,
+        Default -> cal.defaultFactor,
+    }
+}
+
+fn setCalibration(family: Family, mut cal: Calibration, factor: Float, samples: Int) -> Calibration {
+    match family {
+        Claude -> {
+            cal.claudeFactor = factor
+            cal.claudeSamples = samples
+        },
+        OpenAI -> {
+            cal.openaiFactor = factor
+            cal.openaiSamples = samples
+        },
+        Gemini -> {
+            cal.geminiFactor = factor
+            cal.geminiSamples = samples
+        },
+        Default -> {
+            cal.defaultFactor = factor
+            cal.defaultSamples = samples
+        },
+    }
+    cal
+}
+
+fn clampFloat(value: Float, lo: Float, hi: Float) -> Float {
+    if value < lo {
+        return lo
+    }
+    if value > hi {
+        return hi
+    }
+    value
+}

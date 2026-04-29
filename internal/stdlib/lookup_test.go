@@ -1,6 +1,11 @@
 package stdlib
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/resolve"
+)
 
 func TestLookupFnDeclFindsStringsCompare(t *testing.T) {
 	reg := LoadCached()
@@ -176,4 +181,59 @@ func TestLookupMethodDeclAndFnAreDistinctSurfaces(t *testing.T) {
 	if got := reg.LookupMethodDecl("encoding", "Hex", "encode"); got == nil {
 		t.Fatalf("LookupMethodDecl(encoding, Hex, encode) = nil, want non-nil")
 	}
+}
+
+func TestBuiltinTypeSurfacesBindPreludeBuiltinsToStdlibModules(t *testing.T) {
+	reg := LoadCached()
+	prelude := resolve.NewPrelude()
+	seen := map[string]bool{}
+	for _, surface := range BuiltinTypeSurfaces() {
+		if seen[surface.Name] {
+			t.Fatalf("duplicate builtin type surface for %s", surface.Name)
+		}
+		seen[surface.Name] = true
+		preludeSym := prelude.LookupLocal(surface.Name)
+		if preludeSym == nil || preludeSym.Kind != resolve.SymBuiltin {
+			t.Fatalf("%s prelude symbol = %#v, want SymBuiltin", surface.Name, preludeSym)
+		}
+		mod := reg.Modules[surface.Module]
+		if mod == nil || mod.Package == nil || mod.Package.PkgScope == nil || mod.File == nil {
+			t.Fatalf("%s surface module %q is missing from registry", surface.Name, surface.Module)
+		}
+		moduleSym := mod.Package.PkgScope.LookupLocal(surface.Name)
+		if moduleSym == nil || moduleSym.Kind != resolve.SymBuiltin || moduleSym.Decl != nil {
+			t.Fatalf("%s.%s symbol = %#v, want rebounded prelude builtin with nil Decl",
+				surface.Module, surface.Name, moduleSym)
+		}
+		if !stdlibFileDeclaresBuiltinSurface(mod.File, surface.Name, surface.Kind) {
+			t.Fatalf("%s.%s has no %s declaration backing the builtin surface",
+				surface.Module, surface.Name, surface.Kind)
+		}
+		if surface.Injectable && len(surface.GenericParams) == 0 {
+			t.Fatalf("%s marked injectable without generic params", surface.Name)
+		}
+	}
+}
+
+func stdlibFileDeclaresBuiltinSurface(file *ast.File, name string, kind BuiltinTypeKind) bool {
+	if file == nil {
+		return false
+	}
+	for _, decl := range file.Decls {
+		switch d := decl.(type) {
+		case *ast.StructDecl:
+			if kind == BuiltinTypeStruct && d.Name == name {
+				return true
+			}
+		case *ast.EnumDecl:
+			if kind == BuiltinTypeEnum && d.Name == name {
+				return true
+			}
+		case *ast.InterfaceDecl:
+			if kind == BuiltinTypeInterface && d.Name == name {
+				return true
+			}
+		}
+	}
+	return false
 }

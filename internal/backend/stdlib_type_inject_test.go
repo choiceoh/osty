@@ -229,6 +229,58 @@ fn main() {}
 	}
 }
 
+func TestInjectReachableStdlibTypesUsesStdlibBuiltinSurfaceTable(t *testing.T) {
+	mod := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name: "touch",
+				Params: []*ir.Param{
+					{Name: "list", Type: &ir.NamedType{Name: "List", Builtin: true, Args: []ir.Type{ir.TInt}}},
+					{Name: "map", Type: &ir.NamedType{Name: "Map", Builtin: true, Args: []ir.Type{ir.TString, ir.TInt}}},
+					{Name: "set", Type: &ir.NamedType{Name: "Set", Builtin: true, Args: []ir.Type{ir.TString}}},
+					{Name: "option", Type: &ir.NamedType{Name: "Option", Builtin: true, Args: []ir.Type{ir.TInt}}},
+					{Name: "result", Type: &ir.NamedType{Name: "Result", Builtin: true, Args: []ir.Type{ir.TInt, &ir.NamedType{Name: "Error", Builtin: true}}}},
+				},
+				Return: ir.TUnit,
+				Body:   &ir.Block{},
+			},
+		},
+	}
+	reg := stdlib.LoadCached()
+	injected, _ := injectReachableStdlibTypes(mod, reg)
+
+	want := map[string]string{}
+	for _, surface := range stdlib.BuiltinTypeSurfaces() {
+		if surface.Injectable {
+			want[surface.Name] = surface.Module
+		}
+	}
+	got := map[string]bool{}
+	for _, d := range injected {
+		switch x := d.(type) {
+		case *ir.StructDecl:
+			got[x.Name] = true
+		case *ir.EnumDecl:
+			got[x.Name] = true
+		}
+	}
+	for name, module := range want {
+		if !got[name] {
+			t.Fatalf("injectReachableStdlibTypes did not inject prelude builtin %s from std.%s; got %v", name, module, got)
+		}
+		if gotModule := moduleForStdlibType(name); gotModule != module {
+			t.Fatalf("moduleForStdlibType(%s) = %q, want %q from stdlib surface table", name, gotModule, module)
+		}
+		if !isInjectableTypeName(name) {
+			t.Fatalf("isInjectableTypeName(%s) = false, want true from stdlib surface table", name)
+		}
+	}
+	if got["Error"] {
+		t.Fatalf("Error was injected as a generic builtin template; only method-specializable generic surfaces should inject")
+	}
+}
+
 // TestInjectReachableStdlibTypesKeepsStdlibLayoutsQualified guards the
 // #1093 stdlib-type injection collision: importing a module like std.smtp
 // pulls in its internal Reply struct for injected bodies, but that must not

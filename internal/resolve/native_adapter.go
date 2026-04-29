@@ -11,6 +11,7 @@ import (
 	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/sourcemap"
 	"github.com/osty/osty/internal/token"
 )
@@ -18,7 +19,7 @@ import (
 type nativeResolveCache struct {
 	once       sync.Once
 	checkOnce  sync.Once
-	result     selfhost.ResolveResult
+	result     api.ResolveResult
 	check      selfhost.CheckResult
 	checkInput selfhost.PackageCheckInput
 	files      []nativeResolveFileInfo
@@ -95,7 +96,7 @@ type NativeImportSymbol struct {
 
 // NativeStructuredResult returns the cached selfhost structured resolve result
 // for pkg. The returned slices should be treated as read-only.
-func NativeStructuredResult(pkg *Package) (selfhost.ResolveResult, error) {
+func NativeStructuredResult(pkg *Package) (api.ResolveResult, error) {
 	result, _, err := nativeResolveArtifacts(pkg)
 	return result, err
 }
@@ -146,9 +147,9 @@ func NativeResolveFacts(pkg *Package) (NativeResolveFactSet, error) {
 	return facts, nil
 }
 
-func nativeResolveArtifacts(pkg *Package) (selfhost.ResolveResult, []nativeResolveFileInfo, error) {
+func nativeResolveArtifacts(pkg *Package) (api.ResolveResult, []nativeResolveFileInfo, error) {
 	if pkg == nil {
-		return selfhost.ResolveResult{}, nil, fmt.Errorf("native resolve: nil package")
+		return api.ResolveResult{}, nil, fmt.Errorf("native resolve: nil package")
 	}
 	pkg.nativeResolve.once.Do(func() {
 		input, files, err := nativeResolveInput(pkg)
@@ -171,7 +172,7 @@ func nativeResolveArtifacts(pkg *Package) (selfhost.ResolveResult, []nativeResol
 	return pkg.nativeResolve.result, pkg.nativeResolve.files, pkg.nativeResolve.err
 }
 
-func nativeResolveFactArtifacts(pkg *Package) (selfhost.ResolveResult, []nativeResolveFileInfo, selfhost.CheckResult, error) {
+func nativeResolveFactArtifacts(pkg *Package) (api.ResolveResult, []nativeResolveFileInfo, selfhost.CheckResult, error) {
 	result, files, err := nativeResolveArtifacts(pkg)
 	if err != nil || pkg == nil {
 		return result, files, selfhost.CheckResult{}, err
@@ -191,7 +192,7 @@ func nativeResolveFactArtifacts(pkg *Package) (selfhost.ResolveResult, []nativeR
 // DefaultCfgEnv when the workspace hasn't set one), so cross-compilation
 // flags populate both paths identically. Standalone packages (no workspace)
 // stay unfiltered.
-func nativeCfgEnvFor(pkg *Package) *selfhost.CfgEnv {
+func nativeCfgEnvFor(pkg *Package) *api.CfgEnv {
 	if pkg == nil || pkg.workspace == nil {
 		return nil
 	}
@@ -202,9 +203,9 @@ func nativeCfgEnvFor(pkg *Package) *selfhost.CfgEnv {
 	return env.toSelfhost()
 }
 
-func nativeResolveInput(pkg *Package) (selfhost.PackageResolveInput, []nativeResolveFileInfo, error) {
-	input := selfhost.PackageResolveInput{
-		Files:       make([]selfhost.PackageResolveFile, 0, len(pkg.Files)),
+func nativeResolveInput(pkg *Package) (api.PackageResolveInput, []nativeResolveFileInfo, error) {
+	input := api.PackageResolveInput{
+		Files:       make([]api.PackageResolveFile, 0, len(pkg.Files)),
 		Imports:     PackageImportSurfaces(pkg, pkg.workspace, nil),
 		PackagePath: nativeResolvePackagePath(pkg),
 		Cfg:         nativeCfgEnvFor(pkg),
@@ -217,7 +218,7 @@ func nativeResolveInput(pkg *Package) (selfhost.PackageResolveInput, []nativeRes
 		}
 		src, err := nativeResolveSourceForFile(pf)
 		if err != nil {
-			return selfhost.PackageResolveInput{}, nil, err
+			return api.PackageResolveInput{}, nil, err
 		}
 		if len(src) == 0 {
 			continue
@@ -225,7 +226,7 @@ func nativeResolveInput(pkg *Package) (selfhost.PackageResolveInput, []nativeRes
 		// ResolvePackageStructured re-parses Source via the self-host
 		// lexer + parser — no *ast.File round-trip, so we only pass
 		// source bytes + routing metadata here.
-		input.Files = append(input.Files, selfhost.PackageResolveFile{
+		input.Files = append(input.Files, api.PackageResolveFile{
 			Source: append([]byte(nil), src...),
 			Base:   base,
 			Name:   filepath.Base(pf.Path),
@@ -293,7 +294,7 @@ func nativeResolveLineStarts(src []byte) []int {
 	return starts
 }
 
-func nativeResolutionRowsFromArtifacts(path string, resolved selfhost.ResolveResult, files []nativeResolveFileInfo) []NativeResolutionRow {
+func nativeResolutionRowsFromArtifacts(path string, resolved api.ResolveResult, files []nativeResolveFileInfo) []NativeResolutionRow {
 	kindByNode := map[int]string{}
 	for _, sym := range resolved.Symbols {
 		kindByNode[sym.Node] = nativeResolveKindLabel(sym.Kind)
@@ -337,7 +338,7 @@ func nativeResolutionRowsFromArtifacts(path string, resolved selfhost.ResolveRes
 	return rows
 }
 
-func nativeResolveFactsFromArtifacts(resolved selfhost.ResolveResult, files []nativeResolveFileInfo, checked selfhost.CheckResult) NativeResolveFactSet {
+func nativeResolveFactsFromArtifacts(resolved api.ResolveResult, files []nativeResolveFileInfo, checked selfhost.CheckResult) NativeResolveFactSet {
 	facts := NativeResolveFactSet{
 		Symbols: make([]NativeResolvedSymbol, 0, len(resolved.Symbols)),
 		Refs:    make([]NativeResolvedRef, 0, len(resolved.Refs)+len(resolved.TypeRefs)),
@@ -595,7 +596,7 @@ func nativeResolvedRefFact(
 	}, true
 }
 
-func nativeIdentKindIndexFromArtifacts(path string, resolved selfhost.ResolveResult, files []nativeResolveFileInfo) map[int]string {
+func nativeIdentKindIndexFromArtifacts(path string, resolved api.ResolveResult, files []nativeResolveFileInfo) map[int]string {
 	kindByTarget := make(map[string]string, len(resolved.Symbols))
 	kindByID := make(map[string]string, len(resolved.Symbols))
 	for _, sym := range resolved.Symbols {
@@ -655,7 +656,7 @@ func nativeResolveTargetKey(file string, node, start, end int) string {
 	return file + "\x00" + fmt.Sprint(node) + "\x00" + fmt.Sprint(start) + "\x00" + fmt.Sprint(end)
 }
 
-func nativeResolveDiagnosticsFromArtifacts(resolved selfhost.ResolveResult, files []nativeResolveFileInfo) []*diag.Diagnostic {
+func nativeResolveDiagnosticsFromArtifacts(resolved api.ResolveResult, files []nativeResolveFileInfo) []*diag.Diagnostic {
 	out := make([]*diag.Diagnostic, 0, len(resolved.Diagnostics))
 	for _, record := range resolved.Diagnostics {
 		builder := diag.New(diag.Error, record.Message).Code(record.Code).File(record.File)

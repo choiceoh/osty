@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/runner"
@@ -95,6 +96,9 @@ func backendFromCLI(tool string, name backend.Name) backend.Backend {
 func exitBackendEmitError(tool string, result *backend.Result, err error) {
 	if errors.Is(err, backend.ErrLLVMNotImplemented) {
 		fmt.Fprintf(os.Stderr, "osty %s: %v\n", tool, err)
+		if detail := backendUnsupportedDetail(result); detail != nil {
+			fmt.Fprintf(os.Stderr, "  detail: %v\n", detail)
+		}
 		if result != nil {
 			if artifact := result.Artifacts.SourcePath(); artifact != "" {
 				fmt.Fprintf(os.Stderr, "  artifact: %s\n", artifact)
@@ -107,4 +111,24 @@ func exitBackendEmitError(tool string, result *backend.Result, err error) {
 	}
 	fmt.Fprintf(os.Stderr, "osty %s: %v\n", tool, err)
 	os.Exit(1)
+}
+
+func backendUnsupportedDetail(r *backend.Result) error {
+	if r == nil {
+		return nil
+	}
+	var fallback error
+	for _, warning := range r.Warnings {
+		if warning == nil || errors.Is(warning, backend.ErrLLVMNotImplemented) {
+			continue
+		}
+		if fallback == nil {
+			fallback = warning
+		}
+		msg := warning.Error()
+		if strings.Contains(msg, "LLVM0") || strings.Contains(msg, "backend-route:") {
+			return warning
+		}
+	}
+	return fallback
 }

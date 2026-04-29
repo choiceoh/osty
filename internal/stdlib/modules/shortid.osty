@@ -1,0 +1,65 @@
+// std.shortid - deterministic short process-local id formatting.
+//
+// Deneb's Go package uses an atomic process counter. The stdlib version keeps
+// the same visible shape while making state explicit, which is easier to test
+// and works without runtime globals.
+
+use std.strings
+
+pub struct Generator {
+    pub prefix: String,
+    pub nextValue: Int = 0,
+    pub modulo: Int = 10000,
+}
+
+pub struct Next {
+    pub id: String,
+    pub generator: Generator,
+}
+
+pub fn generator(prefix: String) -> Generator {
+    Generator { prefix: sanitizePrefix(prefix) }
+}
+
+pub fn next(gen: Generator) -> Next {
+    let value = if gen.modulo <= 0 { gen.nextValue } else { gen.nextValue % gen.modulo }
+    let id = format(gen.prefix, value)
+    Next {
+        id: id,
+        generator: Generator {
+            prefix: gen.prefix,
+            nextValue: gen.nextValue + 1,
+            modulo: gen.modulo,
+        },
+    }
+}
+
+pub fn format(prefix: String, value: Int) -> String {
+    "{sanitizePrefix(prefix)}_{pad4(value)}"
+}
+
+pub fn pad4(value: Int) -> String {
+    let n = if value < 0 { -value } else { value }
+    let s = (n % 10000).toString()
+    strings.repeat("0", maxInt(0, 4 - s.charCount())) + s
+}
+
+pub fn sanitizePrefix(prefix: String) -> String {
+    let trimmed = strings.trimSpace(prefix)
+    if trimmed.isEmpty() {
+        return "id"
+    }
+    let mut out = ""
+    for c in trimmed.chars() {
+        if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' {
+            out = "{out}{strings.fromChar(c)}"
+        } else if c == ' ' || c == ':' || c == '/' {
+            out = "{out}_"
+        }
+    }
+    if out.isEmpty() { "id" } else { out }
+}
+
+fn maxInt(a: Int, b: Int) -> Int {
+    if a > b { a } else { b }
+}

@@ -6,7 +6,7 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -208,6 +208,9 @@ func buildDeclIndex(file *ast.File) map[int]ast.Node {
 			idx[n.Pos().Offset] = n
 		}
 		walkDeclChildren(d, idx)
+	}
+	for _, s := range file.Stmts {
+		indexStmtBindings(s, idx)
 	}
 	return idx
 }
@@ -474,8 +477,8 @@ func walkReflect(v reflect.Value, onIdent identVisitor, onType typeVisitor) {
 // --- Bridge functions ---
 
 func bridgeRefs(
-	refs []selfhost.ResolvedRef,
-	symbols []selfhost.ResolvedSymbol,
+	refs []api.ResolvedRef,
+	symbols []api.ResolvedSymbol,
 	files []nativeResolveFileInfo,
 	fi nativeResolveFileInfo,
 	identIdx map[int]*ast.Ident,
@@ -592,8 +595,8 @@ func supplementUseAliasRefs(
 }
 
 func bridgeTypeRefs(
-	typeRefs []selfhost.ResolvedTypeRef,
-	symbols []selfhost.ResolvedSymbol,
+	typeRefs []api.ResolvedTypeRef,
+	symbols []api.ResolvedSymbol,
 	files []nativeResolveFileInfo,
 	fi nativeResolveFileInfo,
 	typeIdx map[int]*ast.NamedType,
@@ -623,8 +626,8 @@ func bridgeTypeRefs(
 
 func findOrCreateTypeSymbol(
 	cache map[nativeSymbolTarget]*Symbol,
-	ref selfhost.ResolvedTypeRef,
-	symByTarget map[nativeSymbolTarget]selfhost.ResolvedSymbol,
+	ref api.ResolvedTypeRef,
+	symByTarget map[nativeSymbolTarget]api.ResolvedSymbol,
 	files []nativeResolveFileInfo,
 	fi nativeResolveFileInfo,
 	declIndexes map[string]map[int]ast.Node,
@@ -690,8 +693,8 @@ func findOrCreateTypeSymbol(
 
 func findOrCreateSymbol(
 	cache map[nativeSymbolTarget]*Symbol,
-	ref selfhost.ResolvedRef,
-	symByTarget map[nativeSymbolTarget]selfhost.ResolvedSymbol,
+	ref api.ResolvedRef,
+	symByTarget map[nativeSymbolTarget]api.ResolvedSymbol,
 	files []nativeResolveFileInfo,
 	fi nativeResolveFileInfo,
 	declIndexes map[string]map[int]ast.Node,
@@ -740,7 +743,7 @@ func findOrCreateSymbol(
 	return sym
 }
 
-func fillSymbolIDsFromRef(sym *Symbol, ref selfhost.ResolvedRef) {
+func fillSymbolIDsFromRef(sym *Symbol, ref api.ResolvedRef) {
 	if sym == nil {
 		return
 	}
@@ -752,7 +755,7 @@ func fillSymbolIDsFromRef(sym *Symbol, ref selfhost.ResolvedRef) {
 	}
 }
 
-func fillSymbolIDsFromTypeRef(sym *Symbol, ref selfhost.ResolvedTypeRef) {
+func fillSymbolIDsFromTypeRef(sym *Symbol, ref api.ResolvedTypeRef) {
 	if sym == nil {
 		return
 	}
@@ -770,8 +773,8 @@ type nativeSymbolTarget struct {
 	start, end int
 }
 
-func nativeSymbolByTarget(symbols []selfhost.ResolvedSymbol) map[nativeSymbolTarget]selfhost.ResolvedSymbol {
-	out := make(map[nativeSymbolTarget]selfhost.ResolvedSymbol, len(symbols))
+func nativeSymbolByTarget(symbols []api.ResolvedSymbol) map[nativeSymbolTarget]api.ResolvedSymbol {
+	out := make(map[nativeSymbolTarget]api.ResolvedSymbol, len(symbols))
 	for _, sym := range symbols {
 		out[nativeSymbolTarget{file: sym.File, node: sym.Node, start: sym.Start, end: sym.End}] = sym
 	}
@@ -795,7 +798,7 @@ func findNearestDecl(declIdx map[int]ast.Node, targetOff int) ast.Node {
 
 func defineTopLevelSymbols(
 	scope *Scope,
-	symbols []selfhost.ResolvedSymbol,
+	symbols []api.ResolvedSymbol,
 	fi nativeResolveFileInfo,
 	declIdx map[int]ast.Node,
 ) {

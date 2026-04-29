@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -886,6 +887,45 @@ func TestLLVMBackendRefusesNilIR(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "missing lowered IR entry") {
 		t.Fatalf("expected IR-missing diagnostic, got: %v", err)
+	}
+}
+
+func TestLLVMBackendUnsupportedSkeletonIncludesDispatchDebug(t *testing.T) {
+	t.Parallel()
+
+	backend := LLVMBackend{toolchain: &fakeLLVMToolchain{}}
+	req := newBackendRequest(t, EmitLLVMIR, `use go "strings" as strings {
+    fn ToUpper(s: String) -> String
+}
+
+fn main() {
+    println(1)
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if !errors.Is(err, ErrLLVMNotImplemented) {
+		t.Fatalf("Emit error = %v, want ErrLLVMNotImplemented", err)
+	}
+	if result == nil {
+		t.Fatal("Emit result is nil")
+	}
+	gotBytes, readErr := os.ReadFile(result.Artifacts.LLVMIR)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
+	}
+	got := string(gotBytes)
+	for _, want := range []string{
+		"Osty LLVM backend skeleton",
+		"LLVM001 foreign-ffi",
+		"backend-route: unsupported-preflight",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("unsupported skeleton missing %q:\n%s", want, got)
+		}
+	}
+	if warningContaining(result.Warnings, "backend-route: unsupported-preflight") == nil {
+		t.Fatalf("warnings = %v, want backend route detail", result.Warnings)
 	}
 }
 

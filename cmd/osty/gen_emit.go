@@ -58,9 +58,6 @@ func emitGenLLVMIR(entry backend.Entry, pkgEntry *genPackageEntry) ([]byte, []er
 	if out, ok, warnings, err := tryExternalGenLLVMIR(pkgEntry); err == nil && ok {
 		return out, warnings, nil
 	}
-	if out, ok, warnings, err := backend.TryEmitNativeOwnedLLVMIRText(entry, ""); err == nil && ok {
-		return out, warnings, nil
-	}
 	return backend.EmitLLVMIRText(entry, "", nil)
 }
 

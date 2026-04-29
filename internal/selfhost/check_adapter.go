@@ -9,8 +9,8 @@ import (
 
 // Type aliases re-export the cross-boundary shapes from
 // internal/selfhost/api so existing `selfhost.CheckResult` callers
-// continue to compile. Future work can switch consumers (cmd/osty,
-// internal/check) to `api.CheckResult` directly.
+// continue to compile. New consumers should import internal/selfhost/api
+// directly and reserve these aliases for compatibility edges.
 type (
 	TypeRepr              = api.TypeRepr
 	CheckSummary          = api.CheckSummary

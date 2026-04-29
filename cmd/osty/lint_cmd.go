@@ -14,6 +14,7 @@ import (
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/selfhost/api"
 )
 
 // runLintPackage runs the lint pass over every .osty file in dir as a
@@ -105,7 +106,7 @@ func runLintLoadedPackage(
 	return lintPackageOutcome{anyErr: hasError(all), anyWarn: hasWarning(all)}
 }
 
-func lintNativePackageDiagnostics(pkg *resolve.Package, imports []selfhost.PackageCheckImport) ([]*diag.Diagnostic, error) {
+func lintNativePackageDiagnostics(pkg *resolve.Package, imports []api.PackageCheckImport) ([]*diag.Diagnostic, error) {
 	if pkg == nil {
 		return nil, nil
 	}

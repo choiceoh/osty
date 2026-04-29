@@ -11,8 +11,8 @@ import (
 	"github.com/osty/osty/internal/selfhost/api"
 )
 
-// Resolve-side types re-exported from internal/selfhost/api. See
-// selfhost/api/package.go for definitions.
+// Resolve-side types re-exported from internal/selfhost/api for compatibility.
+// New consumers should import internal/selfhost/api directly.
 type (
 	PackageResolveFile  = api.PackageResolveFile
 	PackageResolveInput = api.PackageResolveInput

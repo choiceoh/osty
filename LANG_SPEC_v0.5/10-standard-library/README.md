@@ -45,3 +45,7 @@ lowering remains implementation backlog.
 - [§10.30 SMTP (`std.smtp`)](./30-smtp.md)
 - [§10.31 ZIP (`std.zip`)](./31-zip.md)
 - [§10.32 Image (`std.image`)](./32-image.md)
+- [§10.33 AI Agents (`std.aiagents`)](./33-aiagents.md)
+- [§10.34 Deneb-Derived Utilities (`std.redact`, `std.security`,
+  `std.search`, `std.markdown`, `std.media`, `std.httpretry`, `std.jsonl`,
+  `std.tokenest`, `std.shortid`, `std.metrics`)](./34-deneb-utilities.md)

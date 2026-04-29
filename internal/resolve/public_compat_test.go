@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/selfhost"
 )
 
@@ -158,5 +161,57 @@ runtime = true
 	}
 	if !pkg.RuntimeCapability {
 		t.Fatal("RuntimeCapability = false, want true")
+	}
+}
+
+func TestNativeResolveBridgeIndexesScriptScopeBindings(t *testing.T) {
+	src := []byte("let x = 1\nlet y = x\n")
+	file, parseDiags := parser.ParseDiagnostics(src)
+	if len(parseDiags) != 0 {
+		t.Fatalf("parse diagnostics: %v", parseDiags)
+	}
+	if len(file.Stmts) != 2 {
+		t.Fatalf("script stmt count = %d, want 2", len(file.Stmts))
+	}
+	letY, ok := file.Stmts[1].(*ast.LetStmt)
+	if !ok {
+		t.Fatalf("second stmt = %T, want *ast.LetStmt", file.Stmts[1])
+	}
+	refX, ok := letY.Value.(*ast.Ident)
+	if !ok {
+		t.Fatalf("second let value = %T, want *ast.Ident", letY.Value)
+	}
+
+	res := ResolveFileSourceDefault(src, file, nil)
+	for _, d := range res.Diags {
+		if d != nil && d.Severity == diag.Error {
+			t.Fatalf("resolve diagnostic: %s: %s", d.Code, d.Message)
+		}
+	}
+
+	sym := res.RefsByID[refX.ID]
+	if sym == nil {
+		t.Fatalf("script ref %q was not bridged", refX.Name)
+	}
+	if sym.Kind != SymLet {
+		t.Fatalf("script ref kind = %s, want %s", sym.Kind, SymLet)
+	}
+	binding, ok := sym.Decl.(*ast.IdentPat)
+	if !ok {
+		t.Fatalf("script ref decl = %T, want *ast.IdentPat", sym.Decl)
+	}
+	if binding.Name != "x" {
+		t.Fatalf("script ref decl name = %q, want x", binding.Name)
+	}
+	if sym.Pos.Offset != binding.Pos().Offset {
+		t.Fatalf("script ref pos offset = %d, want binding offset %d", sym.Pos.Offset, binding.Pos().Offset)
+	}
+
+	scopeSym := res.FileScope.Lookup("x")
+	if scopeSym == nil {
+		t.Fatal("script binding x missing from bridged file scope chain")
+	}
+	if _, ok := scopeSym.Decl.(*ast.IdentPat); !ok {
+		t.Fatalf("script scope decl = %T, want *ast.IdentPat", scopeSym.Decl)
 	}
 }

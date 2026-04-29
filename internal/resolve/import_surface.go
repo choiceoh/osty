@@ -5,6 +5,7 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/selfhost/api"
 )
 
 type importUseRef struct {
@@ -19,7 +20,7 @@ type importUseRef struct {
 // The selfhost resolver and checker both consume this surface so package
 // export shape is decided in one place instead of being rebuilt by downstream
 // passes from resolver internals.
-func PackageImportSurfaces(pkg *Package, ws *Workspace, stdlib StdlibProvider) []selfhost.PackageCheckImport {
+func PackageImportSurfaces(pkg *Package, ws *Workspace, stdlib StdlibProvider) []api.PackageCheckImport {
 	if pkg == nil {
 		return nil
 	}
@@ -29,7 +30,7 @@ func PackageImportSurfaces(pkg *Package, ws *Workspace, stdlib StdlibProvider) [
 // PackageImportSurfacesForUses is the single-file sibling of
 // PackageImportSurfaces. It exists for file-mode checker calls that already
 // hold a parsed public AST rather than a Package.
-func PackageImportSurfacesForUses(uses []*ast.UseDecl, ws *Workspace, stdlib StdlibProvider) []selfhost.PackageCheckImport {
+func PackageImportSurfacesForUses(uses []*ast.UseDecl, ws *Workspace, stdlib StdlibProvider) []api.PackageCheckImport {
 	if len(uses) == 0 {
 		return nil
 	}
@@ -44,7 +45,7 @@ func PackageImportSurfacesForUses(uses []*ast.UseDecl, ws *Workspace, stdlib Std
 
 // PackageExportSurface projects one resolved package into the selfhost
 // package-import surface used by both resolve and check.
-func PackageExportSurface(importPath, alias string, pkg *Package) selfhost.PackageCheckImport {
+func PackageExportSurface(importPath, alias string, pkg *Package) api.PackageCheckImport {
 	return selfhost.PackageImportSurface(importPath, alias, packageFrontendRuns(pkg))
 }
 
@@ -117,12 +118,12 @@ func importUseRefFromAST(use *ast.UseDecl) (importUseRef, bool) {
 	return ref, true
 }
 
-func packageImportSurfacesFromRefs(refs []importUseRef, ws *Workspace, stdlib StdlibProvider) []selfhost.PackageCheckImport {
+func packageImportSurfacesFromRefs(refs []importUseRef, ws *Workspace, stdlib StdlibProvider) []api.PackageCheckImport {
 	if len(refs) == 0 {
 		return nil
 	}
 	seen := map[string]string{}
-	var out []selfhost.PackageCheckImport
+	var out []api.PackageCheckImport
 	for _, ref := range refs {
 		if ref.isGo || ref.alias == "" {
 			continue
