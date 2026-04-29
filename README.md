@@ -158,7 +158,7 @@ osty/
 │   ├── airepair/            # AI-powered source adaptation / auto-repair
 │   ├── diag/                # Diagnostics + Rust-style renderer
 │   ├── resolve/             # Name resolution (single + multi-file)
-│   ├── stdlib/              # Built-in prelude symbols + 37 `modules/*.osty` + 6 primitives
+│   ├── stdlib/              # Built-in prelude symbols + 63 top-level `modules/*.osty` + 6 primitives
 │   ├── types/               # Semantic types (shared by checker + LSP)
 │   ├── check/               # Type checker
 │   ├── lint/                # Style/correctness lint rules (L0xxx codes)

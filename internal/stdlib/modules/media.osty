@@ -1,0 +1,617 @@
+// std.media - dependency-free media sniffing and safe archive-name helpers.
+
+use std.bytes
+use std.error
+use std.strings
+
+pub enum MediaKind {
+    Unknown,
+    Text,
+    Json,
+    Html,
+    Markdown,
+    Image,
+    Audio,
+    Video,
+    Pdf,
+    Archive,
+}
+
+pub struct Detected {
+    pub kind: MediaKind,
+    pub mime: String,
+    pub extension: String = "",
+    pub binary: Bool = false,
+}
+
+pub struct MediaTokenResult {
+    pub text: String = "",
+    pub mediaUrls: List<String> = [],
+    pub audioAsVoice: Bool = false,
+}
+
+pub fn detectBytes(data: Bytes) -> Detected {
+    detect(data, "")
+}
+
+pub fn detect(data: Bytes, filename: String) -> Detected {
+    let byMagic = detectByMagic(data)
+    if byMagic.mime != "application/octet-stream" {
+        return byMagic
+    }
+    let byName = detectByName(filename)
+    if byName.mime != "application/octet-stream" {
+        return Detected { kind: byName.kind, mime: byName.mime, extension: byName.extension, binary: byName.binary || isBinarySample(data) }
+    }
+    if looksLikeText(data) {
+        return Detected { kind: Text, mime: "text/plain", extension: extensionOf(filename), binary: false }
+    }
+    Detected { kind: Unknown, mime: "application/octet-stream", extension: extensionOf(filename), binary: isBinarySample(data) }
+}
+
+pub fn detectByName(filename: String) -> Detected {
+    let ext = extensionOf(filename)
+    let mime = mimeFromExtension(ext)
+    Detected { kind: kindFromMime(mime), mime: mime, extension: ext, binary: !isTextMime(mime) }
+}
+
+pub fn detectByMagic(data: Bytes) -> Detected {
+    if hasPrefix(data, [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+        return Detected { kind: Image, mime: "image/png", extension: "png", binary: true }
+    }
+    if hasPrefix(data, [0xFF, 0xD8, 0xFF]) {
+        return Detected { kind: Image, mime: "image/jpeg", extension: "jpg", binary: true }
+    }
+    if hasPrefix(data, [0x00, 0x00, 0x01, 0x00]) {
+        return Detected { kind: Image, mime: "image/x-icon", extension: "ico", binary: true }
+    }
+    if data.len() >= 2 && byteAt(data, 0) == 0xFF && (byteAt(data, 1) & 0xE0) == 0xE0 {
+        return Detected { kind: Audio, mime: "audio/mpeg", extension: "mp3", binary: true }
+    }
+    if hasPrefix(data, [0x47, 0x49, 0x46, 0x38]) {
+        return Detected { kind: Image, mime: "image/gif", extension: "gif", binary: true }
+    }
+    if hasAsciiAt(data, 0, "RIFF") && hasAsciiAt(data, 8, "WEBP") {
+        return Detected { kind: Image, mime: "image/webp", extension: "webp", binary: true }
+    }
+    if hasAsciiAt(data, 0, "RIFF") && hasAsciiAt(data, 8, "WAVE") {
+        return Detected { kind: Audio, mime: "audio/wav", extension: "wav", binary: true }
+    }
+    if hasAsciiAt(data, 0, "BM") {
+        return Detected { kind: Image, mime: "image/bmp", extension: "bmp", binary: true }
+    }
+    if hasAsciiAt(data, 0, "ID3") {
+        return Detected { kind: Audio, mime: "audio/mpeg", extension: "mp3", binary: true }
+    }
+    if hasPrefix(data, [0x49, 0x49, 0x2A, 0x00]) || hasPrefix(data, [0x4D, 0x4D, 0x00, 0x2A]) {
+        return Detected { kind: Image, mime: "image/tiff", extension: "tiff", binary: true }
+    }
+    if hasAsciiAt(data, 0, "OggS") {
+        return Detected { kind: Audio, mime: "audio/ogg", extension: "ogg", binary: true }
+    }
+    if hasAsciiAt(data, 0, "fLaC") {
+        return Detected { kind: Audio, mime: "audio/flac", extension: "flac", binary: true }
+    }
+    if hasPrefix(data, [0x1A, 0x45, 0xDF, 0xA3]) {
+        return Detected { kind: Video, mime: "video/webm", extension: "webm", binary: true }
+    }
+    if hasPrefix(data, [0x25, 0x50, 0x44, 0x46]) {
+        return Detected { kind: Pdf, mime: "application/pdf", extension: "pdf", binary: true }
+    }
+    if hasPrefix(data, [0x50, 0x4B, 0x03, 0x04]) || hasPrefix(data, [0x50, 0x4B, 0x05, 0x06]) {
+        let ooxml = detectOOXML(data)
+        if !ooxml.isEmpty() {
+            return Detected { kind: Archive, mime: ooxml, extension: extensionFromOOXML(ooxml), binary: true }
+        }
+        return Detected { kind: Archive, mime: "application/zip", extension: "zip", binary: true }
+    }
+    if hasPrefix(data, [0x1F, 0x8B]) {
+        return Detected { kind: Archive, mime: "application/gzip", extension: "gz", binary: true }
+    }
+    let ftyp = detectFtyp(data)
+    if !ftyp.isEmpty() {
+        return Detected { kind: kindFromMime(ftyp), mime: ftyp, extension: extensionFromMime(ftyp), binary: true }
+    }
+    if data.len() >= 1 && (byteAt(data, 0) == 0x7B || byteAt(data, 0) == 0x5B) {
+        return Detected { kind: Json, mime: "application/json", extension: "json", binary: false }
+    }
+    if hasAsciiAt(data, 0, "<?xml") || hasAsciiAt(data, 0, "<svg") {
+        return Detected { kind: Text, mime: "application/xml", extension: "xml", binary: false }
+    }
+    if hasAsciiAt(data, 0, "<!DOCTYPE") || hasAsciiAt(data, 0, "<html") || hasAsciiAt(data, 0, "<HTML") {
+        return Detected { kind: Html, mime: "text/html", extension: "html", binary: false }
+    }
+    Detected { kind: Unknown, mime: "application/octet-stream", binary: true }
+}
+
+pub fn mimeFromExtension(ext: String) -> String {
+    match strings.toLower(strings.trimPrefix(ext, ".")) {
+        "txt" -> "text/plain",
+        "md" | "markdown" -> "text/markdown",
+        "html" | "htm" -> "text/html",
+        "json" -> "application/json",
+        "csv" -> "text/csv",
+        "xml" -> "application/xml",
+        "png" -> "image/png",
+        "jpg" | "jpeg" -> "image/jpeg",
+        "gif" -> "image/gif",
+        "webp" -> "image/webp",
+        "bmp" -> "image/bmp",
+        "ico" -> "image/x-icon",
+        "tif" | "tiff" -> "image/tiff",
+        "avif" -> "image/avif",
+        "heic" | "heif" -> "image/heic",
+        "svg" -> "image/svg+xml",
+        "pdf" -> "application/pdf",
+        "zip" -> "application/zip",
+        "gz" | "gzip" -> "application/gzip",
+        "tar" -> "application/x-tar",
+        "mp3" -> "audio/mpeg",
+        "wav" -> "audio/wav",
+        "ogg" -> "audio/ogg",
+        "flac" -> "audio/flac",
+        "mp4" -> "video/mp4",
+        "webm" -> "video/webm",
+        "mov" -> "video/quicktime",
+        "docx" -> "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx" -> "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "pptx" -> "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        _ -> "application/octet-stream",
+    }
+}
+
+pub fn kindFromMime(mime: String) -> MediaKind {
+    let m = strings.toLower(mime)
+    if strings.startsWith(m, "text/") {
+        if m == "text/html" { return Html }
+        if m == "text/markdown" { return Markdown }
+        return Text
+    }
+    if m == "application/json" {
+        return Json
+    }
+    if strings.startsWith(m, "image/") {
+        return Image
+    }
+    if strings.startsWith(m, "audio/") {
+        return Audio
+    }
+    if strings.startsWith(m, "video/") {
+        return Video
+    }
+    if m == "application/pdf" {
+        return Pdf
+    }
+    if strings.contains(m, "zip") || strings.contains(m, "gzip") || strings.contains(m, "tar") {
+        return Archive
+    }
+    Unknown
+}
+
+pub fn isTextMime(mime: String) -> Bool {
+    let m = strings.toLower(mime)
+    strings.startsWith(m, "text/") ||
+    m == "application/json" ||
+    m == "application/xml" ||
+    m == "image/svg+xml"
+}
+
+pub fn extensionOf(filename: String) -> String {
+    let clean = strings.toLower(strings.trimSpace(filename))
+    match strings.lastIndexOf(clean, ".") {
+        Some(i) -> {
+            if i + 1 < clean.charCount() { strings.slice(clean, i + 1, clean.charCount()) } else { "" }
+        },
+        None    -> "",
+    }
+}
+
+pub fn isBinarySample(data: Bytes) -> Bool {
+    if data.len() == 0 {
+        return false
+    }
+    let limit = minInt(data.len(), 512)
+    let mut controls = 0
+    let mut i = 0
+    for i < limit {
+        let b = bytes.get(data, i).unwrap().toInt()
+        if b == 0 {
+            return true
+        }
+        if b < 32 && b != 9 && b != 10 && b != 13 {
+            controls = controls + 1
+        }
+        i = i + 1
+    }
+    controls * 100 / limit > 20
+}
+
+pub fn looksLikeText(data: Bytes) -> Bool {
+    !isBinarySample(data)
+}
+
+pub fn cleanArchivePath(name: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(name)
+    if clean.isEmpty() {
+        return Err(error.new("media: empty archive path"))
+    }
+    if strings.startsWith(clean, "/") || strings.contains(clean, "\\") || isDrivePath(clean) {
+        return Err(error.new("media: unsafe archive path"))
+    }
+    if clean == ".." || strings.startsWith(clean, "../") || strings.endsWith(clean, "/..") || strings.contains(clean, "/../") {
+        return Err(error.new("media: parent path segments are not allowed"))
+    }
+    Ok(clean)
+}
+
+pub fn humanSize(bytesCount: Int) -> String {
+    if bytesCount < 1024 {
+        return "{bytesCount} B"
+    }
+    if bytesCount < 1024 * 1024 {
+        return "{bytesCount / 1024} KiB"
+    }
+    if bytesCount < 1024 * 1024 * 1024 {
+        return "{bytesCount / (1024 * 1024)} MiB"
+    }
+    "{bytesCount / (1024 * 1024 * 1024)} GiB"
+}
+
+pub fn isYoutubeUrl(raw: String) -> Bool {
+    let s = strings.toLower(raw)
+    strings.contains(s, "youtube.com/watch") ||
+    strings.contains(s, "youtu.be/") ||
+    strings.contains(s, "youtube.com/shorts/")
+}
+
+pub fn youtubeId(raw: String) -> String? {
+    let s = strings.trimSpace(raw)
+    match strings.indexOf(s, "youtu.be/") {
+        Some(i) -> {
+            return Some(takeUntilAny(strings.slice(s, i + 9, s.charCount()), "?&#/"))
+        },
+        None    -> {},
+    }
+    match strings.indexOf(s, "youtube.com/shorts/") {
+        Some(i) -> {
+            return Some(takeUntilAny(strings.slice(s, i + 19, s.charCount()), "?&#/"))
+        },
+        None    -> {},
+    }
+    match strings.indexOf(s, "v=") {
+        Some(i) -> {
+            return Some(takeUntilAny(strings.slice(s, i + 2, s.charCount()), "&#"))
+        },
+        None    -> {},
+    }
+    None
+}
+
+pub fn parseMediaTokens(raw: String) -> MediaTokenResult {
+    let trimmed = strings.trimEnd(raw)
+    if strings.trimSpace(trimmed).isEmpty() {
+        return MediaTokenResult {}
+    }
+    let mut kept: List<String> = []
+    let mut media: List<String> = []
+    let mut inFence = false
+    for line in strings.splitLines(trimmed) {
+        let start = strings.trimStart(line)
+        if strings.startsWith(start, "```") || strings.startsWith(start, "~~~") {
+            inFence = !inFence
+            kept.push(line)
+            continue
+        }
+        if inFence || !strings.startsWith(strings.toLower(start), "media:") {
+            kept.push(line)
+            continue
+        }
+        let payload = cleanMediaPayload(strings.slice(start, 6, start.charCount()))
+        let extracted = extractMediaSources(payload)
+        if extracted.isEmpty() {
+            if !isLikelyLocalPath(payload) {
+                kept.push(line)
+            }
+        } else {
+            for item in extracted {
+                media.push(item)
+            }
+        }
+    }
+    let cleaned = stripMediaDirectives(strings.trimSpace(collapseBlankLines(strings.join(kept, "\n"))))
+    MediaTokenResult {
+        text: cleaned.text,
+        mediaUrls: dedupeStrings(normalizeMediaSources(media)),
+        audioAsVoice: cleaned.audioAsVoice,
+    }
+}
+
+fn hasPrefix(data: Bytes, prefix: List<Int>) -> Bool {
+    if data.len() < prefix.len() {
+        return false
+    }
+    let mut i = 0
+    for i < prefix.len() {
+        if bytes.get(data, i).unwrap().toInt() != prefix[i] {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+
+fn byteAt(data: Bytes, index: Int) -> Int {
+    bytes.get(data, index).unwrap().toInt()
+}
+
+fn hasAsciiAt(data: Bytes, offset: Int, text: String) -> Bool {
+    let raw = text.bytes()
+    if data.len() < offset + raw.len() {
+        return false
+    }
+    let mut i = 0
+    for i < raw.len() {
+        if byteAt(data, offset + i) != raw[i].toInt() {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+
+fn containsAscii(data: Bytes, needle: String, limit: Int) -> Bool {
+    let raw = needle.bytes()
+    let max = minInt(data.len(), limit)
+    if raw.isEmpty() || max < raw.len() {
+        return false
+    }
+    let mut i = 0
+    for i + raw.len() <= max {
+        let mut ok = true
+        let mut j = 0
+        for j < raw.len() {
+            if byteAt(data, i + j) != raw[j].toInt() {
+                ok = false
+                break
+            }
+            j = j + 1
+        }
+        if ok {
+            return true
+        }
+        i = i + 1
+    }
+    false
+}
+
+fn detectFtyp(data: Bytes) -> String {
+    if !hasAsciiAt(data, 4, "ftyp") {
+        return ""
+    }
+    if hasAsciiAt(data, 8, "M4A ") || hasAsciiAt(data, 8, "M4B ") {
+        return "audio/mp4"
+    }
+    if hasAsciiAt(data, 8, "avif") || hasAsciiAt(data, 8, "avis") {
+        return "image/avif"
+    }
+    if hasAsciiAt(data, 8, "heic") || hasAsciiAt(data, 8, "heix") || hasAsciiAt(data, 8, "hevc") || hasAsciiAt(data, 8, "mif1") {
+        return "image/heic"
+    }
+    "video/mp4"
+}
+
+fn detectOOXML(data: Bytes) -> String {
+    if containsAscii(data, "xl/workbook.xml", 8192) || containsAscii(data, "xl/sharedStrings.xml", 8192) || containsAscii(data, "xl/styles.xml", 8192) {
+        return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    }
+    if containsAscii(data, "word/document.xml", 8192) || containsAscii(data, "word/styles.xml", 8192) || containsAscii(data, "word/settings.xml", 8192) {
+        return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    }
+    if containsAscii(data, "ppt/presentation.xml", 8192) || containsAscii(data, "ppt/slides/", 8192) || containsAscii(data, "ppt/slideMasters/", 8192) {
+        return "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    }
+    ""
+}
+
+fn extensionFromOOXML(mime: String) -> String {
+    if strings.contains(mime, "spreadsheetml") {
+        return "xlsx"
+    }
+    if strings.contains(mime, "wordprocessingml") {
+        return "docx"
+    }
+    if strings.contains(mime, "presentationml") {
+        return "pptx"
+    }
+    "zip"
+}
+
+fn extensionFromMime(mime: String) -> String {
+    match mime {
+        "audio/mp4" -> "m4a",
+        "image/avif" -> "avif",
+        "image/heic" -> "heic",
+        "video/mp4" -> "mp4",
+        _ -> "",
+    }
+}
+
+fn isDrivePath(name: String) -> Bool {
+    if name.charCount() < 2 {
+        return false
+    }
+    let c = name.chars()[0]
+    ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) && name.chars()[1] == ':'
+}
+
+fn takeUntilAny(text: String, cutset: String) -> String {
+    let chars = text.chars()
+    let cuts = cutset.chars()
+    let mut i = 0
+    for i < chars.len() {
+        for c in cuts {
+            if chars[i] == c {
+                return strings.slice(text, 0, i)
+            }
+        }
+        i = i + 1
+    }
+    text
+}
+
+fn minInt(a: Int, b: Int) -> Int {
+    if a < b { a } else { b }
+}
+
+fn cleanMediaPayload(payload: String) -> String {
+    let mut out = strings.trimSpace(payload)
+    out = strings.trimPrefix(out, "`")
+    out = strings.trimSuffix(out, "`")
+    out = strings.trimPrefix(out, "\"")
+    out = strings.trimSuffix(out, "\"")
+    out = strings.trimPrefix(out, "'")
+    out = strings.trimSuffix(out, "'")
+    strings.trimSpace(out)
+}
+
+fn extractMediaSources(payload: String) -> List<String> {
+    let mut out: List<String> = []
+    if isValidMediaSource(payload) || isBareFilename(payload) {
+        out.push(payload)
+        return out
+    }
+    for part in strings.fields(payload) {
+        let clean = cleanMediaCandidate(part)
+        if isValidMediaSource(clean) {
+            out.push(clean)
+        }
+    }
+    out
+}
+
+fn cleanMediaCandidate(part: String) -> String {
+    let mut out = strings.trimSpace(part)
+    out = strings.trimPrefix(out, "`")
+    out = strings.trimSuffix(out, "`")
+    out = strings.trimSuffix(out, ",")
+    out = strings.trimSuffix(out, ".")
+    out = strings.trimSuffix(out, ")")
+    out = strings.trimSuffix(out, "]")
+    out
+}
+
+fn normalizeMediaSources(values: List<String>) -> List<String> {
+    let mut out: List<String> = []
+    for value in values {
+        out.push(normalizeMediaSource(value))
+    }
+    out
+}
+
+fn normalizeMediaSource(value: String) -> String {
+    let clean = strings.trimSpace(value)
+    if strings.startsWith(strings.toLower(clean), "file://") {
+        return strings.slice(clean, 7, clean.charCount())
+    }
+    clean
+}
+
+fn isValidMediaSource(value: String) -> Bool {
+    let v = strings.toLower(strings.trimSpace(value))
+    if strings.startsWith(v, "http://") || strings.startsWith(v, "https://") || strings.startsWith(v, "file://") {
+        return true
+    }
+    isLikelyLocalPath(v) || isBareFilename(v)
+}
+
+fn isLikelyLocalPath(value: String) -> Bool {
+    let v = strings.trimSpace(value)
+    strings.startsWith(v, "./") ||
+    strings.startsWith(v, "../") ||
+    strings.startsWith(v, "/") ||
+    strings.contains(v, "/")
+}
+
+fn isBareFilename(value: String) -> Bool {
+    let v = strings.toLower(strings.trimSpace(value))
+    if v.isEmpty() || strings.contains(v, " ") {
+        return false
+    }
+    let ext = extensionOf(v)
+    matchesMediaExtension(ext)
+}
+
+fn matchesMediaExtension(ext: String) -> Bool {
+    match ext {
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "mp3" | "wav" | "ogg" | "flac" | "mp4" | "mov" | "webm" | "pdf" -> true,
+        _ -> false,
+    }
+}
+
+fn collapseBlankLines(text: String) -> String {
+    let mut out: List<String> = []
+    let mut lastBlank = false
+    for line in strings.splitLines(text) {
+        let blank = strings.trimSpace(line).isEmpty()
+        if blank && lastBlank {
+            continue
+        }
+        out.push(line)
+        lastBlank = blank
+    }
+    strings.join(out, "\n")
+}
+
+fn stripMediaDirectives(text: String) -> MediaTokenResult {
+    let tag = "[[audio_as_voice]]"
+    let mut out = text
+    let audio = strings.contains(out, tag)
+    out = strings.replaceAll(out, tag, "")
+    out = stripBracketDirectives(out)
+    MediaTokenResult {
+        text: strings.trimSpace(out),
+        audioAsVoice: audio,
+    }
+}
+
+fn stripBracketDirectives(text: String) -> String {
+    let chars = text.chars()
+    let mut out = ""
+    let mut i = 0
+    for i < chars.len() {
+        if i + 1 < chars.len() && chars[i] == '[' && chars[i + 1] == '[' {
+            let end = findDirectiveEnd(chars, i + 2)
+            if end >= 0 {
+                i = end + 2
+                continue
+            }
+        }
+        out = "{out}{strings.fromChar(chars[i])}"
+        i = i + 1
+    }
+    out
+}
+
+fn findDirectiveEnd(chars: List<Char>, start: Int) -> Int {
+    let mut i = start
+    for i + 1 < chars.len() {
+        if chars[i] == ']' && chars[i + 1] == ']' {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn dedupeStrings(values: List<String>) -> List<String> {
+    let mut seen: Map<String, Bool> = {:}
+    let mut out: List<String> = []
+    for value in values {
+        if seen.get(value) ?? false {
+            continue
+        }
+        seen.insert(value, true)
+        out.push(value)
+    }
+    out
+}
