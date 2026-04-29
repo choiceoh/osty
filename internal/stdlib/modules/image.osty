@@ -148,7 +148,7 @@ fn parsePng(data: Bytes) -> Result<Metadata, Error> {
 }
 
 fn parseGif(data: Bytes) -> Result<Metadata, Error> {
-    if data.len() < 10 {
+    if data.len() < 11 {
         return Err(error.new("image: truncated GIF header"))
     }
     let packed = byteAt(data, 10).toInt()

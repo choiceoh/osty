@@ -239,6 +239,12 @@ fn normalizeName(name: String) -> Result<String, Error> {
     if strings.startsWith(clean, "/") {
         return Err(error.new("zip: absolute paths are not allowed"))
     }
+    if strings.contains(clean, "\\") {
+        return Err(error.new("zip: backslashes are not allowed in entry names"))
+    }
+    if isDriveLetterPath(clean) {
+        return Err(error.new("zip: drive-letter paths are not allowed"))
+    }
     if strings.endsWith(clean, "/") {
         return Err(error.new("zip: directory entries are not supported yet"))
     }
@@ -246,6 +252,14 @@ fn normalizeName(name: String) -> Result<String, Error> {
         return Err(error.new("zip: parent path segments are not allowed"))
     }
     Ok(clean)
+}
+
+fn isDriveLetterPath(name: String) -> Bool {
+    if name.len() < 2 {
+        return false
+    }
+    let c = name[0]
+    ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) && name[1] == ':'
 }
 
 fn appendBytes(out: List<Byte>, data: Bytes) {
