@@ -37,6 +37,28 @@ fn main() {
 	}
 }
 
+func TestResolveSourceStructuredAcceptsCurrentPreludeTypes(t *testing.T) {
+	resolved := selfhost.ResolveSourceStructured([]byte(`fn accepts(
+    b: Byte,
+    small: Int8,
+    unsigned: UInt64,
+    flt: Float32,
+    ptr: RawPtr,
+    ch: Channel<Int>,
+    legacy: Chan<Int>,
+    h: Handle<Int>,
+) {
+}
+
+fn generic<T: Equal + Ordered + Hashable + ToString + Pod>(x: T) -> T {
+    x
+}
+`))
+	if resolved.Summary.Diagnostics != 0 {
+		t.Fatalf("diagnostics = %d, want 0 (summary=%#v diagnostics=%#v)", resolved.Summary.Diagnostics, resolved.Summary, resolved.Diagnostics)
+	}
+}
+
 func TestResolvePackageStructuredHandlesCrossFileRefsASTNative(t *testing.T) {
 	dir := t.TempDir()
 	helperPath := filepath.Join(dir, "helper.osty")
@@ -286,6 +308,58 @@ func TestResolvePackageStructuredDuplicateUsesOwningFilePath(t *testing.T) {
 	}
 	if resolved.Summary.Duplicates != 1 {
 		t.Fatalf("duplicates = %d, want 1 (summary=%#v)", resolved.Summary.Duplicates, resolved.Summary)
+	}
+}
+
+func TestResolvePackageStructuredAllowsPerFileDuplicateUseAlias(t *testing.T) {
+	dir := t.TempDir()
+	firstPath := filepath.Join(dir, "first.osty")
+	secondPath := filepath.Join(dir, "second.osty")
+
+	first := canonicalSelfhostInput(t, []byte(`use std.strings as strings
+
+pub fn first() -> Int {
+    1
+}
+`), 0)
+	first.Name = "first.osty"
+	first.Path = firstPath
+
+	second := canonicalSelfhostInput(t, []byte(`use std.strings as strings
+
+pub fn second() -> Int {
+    2
+}
+`), len(first.Source)+1)
+	second.Name = "second.osty"
+	second.Path = secondPath
+
+	resolved, err := selfhost.ResolvePackageStructured(selfhost.PackageResolveInput{
+		Files: []selfhost.PackageResolveFile{first, second},
+	})
+	if err != nil {
+		t.Fatalf("ResolvePackageStructured: %v", err)
+	}
+	if got := findResolveDiagnostic(resolved, "E0554"); got != nil {
+		t.Fatalf("cross-file duplicate use alias should be allowed, got %#v", got)
+	}
+	if resolved.Summary.DiagnosticsByCode != nil && resolved.Summary.DiagnosticsByCode["E0554"] != 0 {
+		t.Fatalf("diagnostic histogram = %#v, want no E0554", resolved.Summary.DiagnosticsByCode)
+	}
+}
+
+func TestResolvePackageStructuredKeepsSameFileDuplicateUseAlias(t *testing.T) {
+	src := canonicalSelfhostInput(t, []byte(`use std.strings as strings
+use std.fs as strings
+`), 0)
+	resolved, err := selfhost.ResolvePackageStructured(selfhost.PackageResolveInput{
+		Files: []selfhost.PackageResolveFile{src},
+	})
+	if err != nil {
+		t.Fatalf("ResolvePackageStructured: %v", err)
+	}
+	if got := findResolveDiagnostic(resolved, "E0554"); got == nil {
+		t.Fatalf("expected same-file E0554, got %#v", resolved.Diagnostics)
 	}
 }
 

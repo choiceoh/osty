@@ -7,6 +7,7 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/parser"
+	"github.com/osty/osty/internal/selfhost"
 )
 
 func TestSourceWithMapProjectsLoweredCallSpans(t *testing.T) {
@@ -45,5 +46,28 @@ func TestSourceWithMapProjectsLoweredCallSpans(t *testing.T) {
 	}
 	if remapped != original {
 		t.Fatalf("remapped span = %#v, want %#v", remapped, original)
+	}
+}
+
+func TestSourceEscapesBraceCharAndByteLiteralsForSelfhost(t *testing.T) {
+	src := []byte(`fn main() {
+    let openByte = b'\{'
+    let closeByte = b'\}'
+    let openChar = '\{'
+    let closeChar = '\}'
+}
+`)
+	parsed := parser.ParseDetailed(src)
+	if len(parsed.Diagnostics) != 0 {
+		t.Fatalf("parse diagnostics = %#v, want none", parsed.Diagnostics)
+	}
+	canonicalSrc, _ := SourceWithMap(src, parsed.File)
+	for _, want := range []string{`b'\{'`, `b'\}'`, `'\{'`, `'\}'`} {
+		if !bytes.Contains(canonicalSrc, []byte(want)) {
+			t.Fatalf("canonical source = %q, want %s", canonicalSrc, want)
+		}
+	}
+	if diags := selfhost.ParseDiagnostics(canonicalSrc); len(diags) != 0 {
+		t.Fatalf("selfhost parse diagnostics = %#v", diags)
 	}
 }

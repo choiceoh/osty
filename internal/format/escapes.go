@@ -64,6 +64,12 @@ func escapeForChar(r rune) string {
 	if r == '\'' {
 		return `\'`
 	}
+	if r == '{' {
+		return `\{`
+	}
+	if r == '}' {
+		return `\}`
+	}
 	if s := escapeCommon(r); s != "" {
 		return s
 	}
@@ -76,6 +82,12 @@ func escapeForChar(r rune) string {
 func escapeForByte(b byte) string {
 	if b == '\'' {
 		return `\'`
+	}
+	if b == '{' {
+		return `\{`
+	}
+	if b == '}' {
+		return `\}`
 	}
 	if s := escapeCommon(rune(b)); s != "" {
 		return s
