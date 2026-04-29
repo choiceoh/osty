@@ -12,6 +12,7 @@ import (
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/selfhost/api"
+	"github.com/osty/osty/internal/semanticdb"
 	"github.com/osty/osty/internal/sourcemap"
 	"github.com/osty/osty/internal/spanid"
 	"github.com/osty/osty/internal/token"
@@ -24,16 +25,18 @@ type nativeResolveCache struct {
 	check      api.CheckResult
 	checkInput api.PackageCheckInput
 	files      []nativeResolveFileInfo
+	db         *semanticdb.DB
 	err        error
 }
 
 type nativeResolveFileInfo struct {
-	path       string
-	sourceID   spanid.SourceFileID
-	base       int
-	source     []byte
-	sourceMap  *sourcemap.Map
-	lineStarts []int
+	path           string
+	sourceID       spanid.SourceFileID
+	base           int
+	source         []byte
+	originalSource []byte
+	sourceMap      *sourcemap.Map
+	lineStarts     []int
 }
 
 // NativeResolutionRow is one human-readable row derived from the selfhost
@@ -103,6 +106,17 @@ func NativeStructuredResult(pkg *Package) (api.ResolveResult, error) {
 	return result, err
 }
 
+// NativeSemanticDB returns the cached semantic database for pkg's selfhost
+// resolver run. The DB is read-only and can be shared by LSP/query/backend code
+// that wants stable resolver facts without projecting through Go AST maps.
+func NativeSemanticDB(pkg *Package) (*semanticdb.DB, error) {
+	_, _, err := nativeResolveArtifacts(pkg)
+	if err != nil {
+		return nil, err
+	}
+	return pkg.nativeResolve.db, nil
+}
+
 // NativeResolutionRows returns the cached selfhost resolve rows for one file in
 // pkg, sorted by source position.
 func NativeResolutionRows(pkg *Package, path string) ([]NativeResolutionRow, error) {
@@ -170,6 +184,7 @@ func nativeResolveArtifacts(pkg *Package) (api.ResolveResult, []nativeResolveFil
 		}
 		pkg.nativeResolve.result = resolved
 		pkg.nativeResolve.files = files
+		pkg.nativeResolve.db = semanticdb.New(nativeResolveSemanticFiles(files), resolved)
 	})
 	return pkg.nativeResolve.result, pkg.nativeResolve.files, pkg.nativeResolve.err
 }
@@ -186,6 +201,22 @@ func nativeResolveFactArtifacts(pkg *Package) (api.ResolveResult, []nativeResolv
 		}
 	})
 	return pkg.nativeResolve.result, pkg.nativeResolve.files, pkg.nativeResolve.check, pkg.nativeResolve.err
+}
+
+func nativeResolveSemanticFiles(files []nativeResolveFileInfo) []semanticdb.File {
+	out := make([]semanticdb.File, 0, len(files))
+	for _, file := range files {
+		out = append(out, semanticdb.File{
+			Path:           file.path,
+			Name:           filepath.Base(file.path),
+			Base:           file.base,
+			Source:         append([]byte(nil), file.source...),
+			OriginalSource: append([]byte(nil), file.originalSource...),
+			SourceMap:      file.sourceMap,
+			LineStarts:     append([]int(nil), file.lineStarts...),
+		})
+	}
+	return out
 }
 
 // nativeCfgEnvFor picks the `#[cfg(...)]` evaluation env the native resolver
@@ -236,12 +267,13 @@ func nativeResolveInput(pkg *Package) (api.PackageResolveInput, []nativeResolveF
 			SourceFileID: string(sourceFileIDForPackageFile(pf)),
 		})
 		files = append(files, nativeResolveFileInfo{
-			path:       pf.Path,
-			sourceID:   sourceFileIDForPackageFile(pf),
-			base:       base,
-			source:     append([]byte(nil), src...),
-			sourceMap:  pf.CheckerSourceMap(),
-			lineStarts: nativeResolveLineStarts(src),
+			path:           pf.Path,
+			sourceID:       sourceFileIDForPackageFile(pf),
+			base:           base,
+			source:         append([]byte(nil), src...),
+			originalSource: append([]byte(nil), pf.Source...),
+			sourceMap:      pf.CheckerSourceMap(),
+			lineStarts:     nativeResolveLineStarts(src),
 		})
 		base += len(src) + 1
 	}

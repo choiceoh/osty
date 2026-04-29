@@ -11,6 +11,8 @@ import (
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/selfhost/api"
+	"github.com/osty/osty/internal/semanticdb"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -115,6 +117,107 @@ func TestHoverMarkdownWrapsSelfHostedPolicy(t *testing.T) {
 	if want := "```osty\nraw\n```"; fallback != want {
 		t.Fatalf("fallback markdown = %q, want %q", fallback, want)
 	}
+}
+
+func TestSemanticHoverUsesSemanticDB(t *testing.T) {
+	path := "/tmp/main.osty"
+	src, declStart, refStart, db := semanticNavFixture(path)
+	hover, ok := semanticHoverAt(&docAnalysis{
+		sourcePath: path,
+		lines:      newLineIndex(src),
+		semantic:   db,
+	}, token.Pos{Offset: refStart + 1})
+	if !ok {
+		t.Fatal("semanticHoverAt returned !ok")
+	}
+	if !strings.Contains(hover.Contents.Value, "helper") || !strings.Contains(hover.Contents.Value, "Int") {
+		t.Fatalf("semantic hover markdown = %q, want helper with Int type", hover.Contents.Value)
+	}
+	wantRange := newLineIndex(src).rangeFromOffsets(refStart, refStart+len("helper"))
+	if hover.Range == nil || *hover.Range != wantRange {
+		t.Fatalf("semantic hover range = %#v, want %#v", hover.Range, wantRange)
+	}
+	if declStart < 0 {
+		t.Fatal("fixture did not find helper declaration")
+	}
+}
+
+func TestSemanticDefinitionReferencesAndRenameUseSemanticDB(t *testing.T) {
+	path := "/tmp/main.osty"
+	src, declStart, refStart, db := semanticNavFixture(path)
+	a := &docAnalysis{
+		sourcePath: path,
+		lines:      newLineIndex(src),
+		semantic:   db,
+	}
+	doc := &document{uri: pathToURI(path), src: src, analysis: a}
+	refPos := a.lines.offsetToLSP(refStart + 1)
+
+	def, ok := semanticDefinitionAt(doc, token.Pos{Offset: refStart + 1})
+	if !ok {
+		t.Fatal("semanticDefinitionAt returned !ok")
+	}
+	if def.Range != a.lines.rangeFromOffsets(declStart, declStart+len("helper")) {
+		t.Fatalf("definition range = %#v, want helper decl", def.Range)
+	}
+
+	locs, ok := (&Server{}).semanticReferences(doc, refPos, true)
+	if !ok {
+		t.Fatal("semanticReferences returned !ok")
+	}
+	if len(locs) != 2 {
+		t.Fatalf("semantic references = %#v, want use + decl", locs)
+	}
+	edits, ok := (&Server{}).semanticRenameEdits(doc, refPos, "renamed")
+	if !ok {
+		t.Fatal("semanticRenameEdits returned !ok")
+	}
+	if got := len(edits[doc.uri]); got != 2 {
+		t.Fatalf("rename edits = %#v, want 2 edits for document", edits)
+	}
+}
+
+func semanticNavFixture(path string) ([]byte, int, int, *semanticdb.DB) {
+	src := []byte("fn helper() -> Int { 1 }\nfn main() -> Int { helper() }\n")
+	declStart := strings.Index(string(src), "helper")
+	refStart := strings.LastIndex(string(src), "helper")
+	db := semanticdb.New([]semanticdb.File{{Path: path, Source: src}}, api.ResolveResult{
+		PackageID: "pkg",
+		Symbols: []api.ResolvedSymbol{{
+			ID:    "sym-helper",
+			File:  path,
+			Node:  1,
+			Name:  "helper",
+			Kind:  "fn",
+			Start: declStart,
+			End:   declStart + len("helper"),
+		}},
+		Refs: []api.ResolvedRef{{
+			ID:             "ref-helper",
+			File:           path,
+			Node:           2,
+			Name:           "helper",
+			Start:          refStart,
+			End:            refStart + len("helper"),
+			TargetSymbolID: "sym-helper",
+			TargetFile:     path,
+			TargetNode:     1,
+			TargetStart:    declStart,
+			TargetEnd:      declStart + len("helper"),
+		}},
+	}).WithCheck(api.CheckResult{
+		Symbols: []api.CheckedSymbol{{
+			Name: "helper",
+			Kind: "fn",
+			Type: &api.TypeRepr{
+				Kind:   "fn",
+				Return: &api.TypeRepr{Kind: "primitive", Name: "Int"},
+			},
+			Start: declStart,
+			End:   declStart + len("helper"),
+		}},
+	})
+	return src, declStart, refStart, db
 }
 
 func TestFindNameOffsetUsesSelfHostedLexerPolicy(t *testing.T) {

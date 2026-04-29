@@ -6,6 +6,7 @@ import (
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/semanticdb"
 	"github.com/osty/osty/internal/sourcemap"
 	"github.com/osty/osty/internal/spanid"
 )
@@ -245,6 +246,10 @@ type PackageResult struct {
 	// non-`use` top-level declarations live here regardless of which
 	// file they were parsed from.
 	PackageScope *Scope
+	// SemanticDB carries the authoritative selfhost resolver facts in a stable
+	// structured form. Legacy fields above remain populated for existing
+	// consumers; new consumers should prefer this DB over AST-keyed projections.
+	SemanticDB *semanticdb.DB
 	// Diags is every diagnostic produced by the parser (across all
 	// files) and the resolver, in a deterministic order.
 	Diags []*diag.Diagnostic

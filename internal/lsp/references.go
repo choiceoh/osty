@@ -4,6 +4,7 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/semanticdb"
 )
 
 // handleReferences answers `textDocument/references`. When available, it uses
@@ -23,6 +24,10 @@ func (s *Server) handleReferences(req *rpcRequest) {
 	doc := s.docs.get(params.TextDocument.URI)
 	if doc == nil || doc.analysis == nil {
 		replyJSON(s.conn, req.ID, []Location{})
+		return
+	}
+	if locs, ok := s.semanticReferences(doc, params.Position, params.Context.IncludeDeclaration); ok {
+		replyJSON(s.conn, req.ID, locs)
 		return
 	}
 	if ref := structuredReferenceAt(doc, params.Position); ref != nil {
@@ -73,6 +78,10 @@ func (s *Server) handleRename(req *rpcRequest) {
 		replyJSON(s.conn, req.ID, nil)
 		return
 	}
+	if edits, ok := s.semanticRenameEdits(doc, params.Position, params.NewName); ok {
+		replyJSON(s.conn, req.ID, &WorkspaceEdit{Changes: edits})
+		return
+	}
 	if ref := structuredReferenceAt(doc, params.Position); ref != nil {
 		if ref.targetSymbolID == "" {
 			replyJSON(s.conn, req.ID, nil)
@@ -110,6 +119,57 @@ func (s *Server) handleRename(req *rpcRequest) {
 	}
 	edits := s.renameEditsFor(doc, target, params.NewName)
 	replyJSON(s.conn, req.ID, &WorkspaceEdit{Changes: edits})
+}
+
+func (s *Server) semanticReferences(doc *document, lspPos Position, includeDecl bool) ([]Location, bool) {
+	if doc == nil || doc.analysis == nil || doc.analysis.semantic == nil {
+		return nil, false
+	}
+	pos := doc.analysis.lines.lspToOsty(lspPos)
+	spans, _, ok := doc.analysis.semantic.ReferencesAt(doc.analysis.sourcePath, pos.Offset, includeDecl)
+	if !ok {
+		return []Location{}, true
+	}
+	return sortDedupLocations(locationsFromSemanticSpans(doc, spans)), true
+}
+
+func (s *Server) semanticRenameEdits(doc *document, lspPos Position, newName string) (map[string][]TextEdit, bool) {
+	if doc == nil || doc.analysis == nil || doc.analysis.semantic == nil {
+		return nil, false
+	}
+	pos := doc.analysis.lines.lspToOsty(lspPos)
+	spans, target, ok := doc.analysis.semantic.ReferencesAt(doc.analysis.sourcePath, pos.Offset, true)
+	if !ok {
+		return nil, false
+	}
+	if target.Kind == "builtin" {
+		return nil, false
+	}
+	out := map[string][]TextEdit{}
+	for _, loc := range sortDedupLocations(locationsFromSemanticSpans(doc, spans)) {
+		out[loc.URI] = append(out[loc.URI], TextEdit{Range: loc.Range, NewText: newName})
+	}
+	return out, true
+}
+
+func locationsFromSemanticSpans(doc *document, spans []semanticdb.Span) []Location {
+	out := make([]Location, 0, len(spans))
+	for _, sp := range spans {
+		uri := doc.uri
+		src := doc.src
+		if sp.File != "" && sp.File != doc.analysis.sourcePath {
+			uri = pathToURI(sp.File)
+			if file := doc.analysis.semantic.FileForPath(sp.File); file != nil {
+				src = file.OriginalSourceBytes()
+			}
+		}
+		li := doc.analysis.lines
+		if sp.File != "" && sp.File != doc.analysis.sourcePath {
+			li = newLineIndex(src)
+		}
+		out = append(out, Location{URI: uri, Range: li.rangeFromOffsets(sp.Start, sp.End)})
+	}
+	return out
 }
 
 // targetSymbolAt resolves the identifier under an LSP Position to the
