@@ -1,0 +1,322 @@
+// std.websocket - RFC 6455 handshake and frame helpers.
+
+use std.bytes
+use std.crypto
+use std.encoding
+use std.error
+use std.strings
+
+pub type Headers = Map<String, String>
+
+pub enum Opcode {
+    Continuation,
+    Text,
+    Binary,
+    Close,
+    Ping,
+    Pong,
+
+    pub fn code(self) -> Int {
+        match self {
+            Continuation -> 0x0,
+            Text         -> 0x1,
+            Binary       -> 0x2,
+            Close        -> 0x8,
+            Ping         -> 0x9,
+            Pong         -> 0xA,
+        }
+    }
+
+    pub fn isControl(self) -> Bool {
+        match self {
+            Close | Ping | Pong -> true,
+            _                  -> false,
+        }
+    }
+}
+
+pub struct Frame {
+    pub fin: Bool,
+    pub opcode: Opcode,
+    pub payload: Bytes,
+    pub masked: Bool,
+    pub maskKey: List<Byte>,
+}
+
+pub struct DecodedFrame {
+    pub frame: Frame,
+    pub next: Int,
+}
+
+pub fn acceptKey(clientKey: String) -> String {
+    let seed = bytes.fromString("{strings.trimSpace(clientKey)}258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
+    encoding.base64.encode(crypto.sha1(seed))
+}
+
+pub fn handshakeHeaders(clientKey: String) -> Headers {
+    let mut out: Headers = {:}
+    out.insert("Upgrade", "websocket")
+    out.insert("Connection", "Upgrade")
+    out.insert("Sec-WebSocket-Accept", acceptKey(clientKey))
+    out
+}
+
+pub fn isHandshake(headers: Headers) -> Bool {
+    let connection = strings.toLower(header(headers, "Connection") ?? "")
+    let upgrade = strings.toLower(header(headers, "Upgrade") ?? "")
+    let version = strings.trimSpace(header(headers, "Sec-WebSocket-Version") ?? "")
+    let key = strings.trimSpace(header(headers, "Sec-WebSocket-Key") ?? "")
+    strings.contains(connection, "upgrade") &&
+    upgrade == "websocket" &&
+    version == "13" &&
+    !key.isEmpty()
+}
+
+pub fn text(value: String) -> Frame {
+    frame(Text, bytes.fromString(value))
+}
+
+pub fn binary(value: Bytes) -> Frame {
+    frame(Binary, value)
+}
+
+pub fn ping(value: Bytes) -> Frame {
+    frame(Ping, value)
+}
+
+pub fn pong(value: Bytes) -> Frame {
+    frame(Pong, value)
+}
+
+pub fn close(code: Int, reason: String) -> Frame {
+    let mut payload: List<Byte> = []
+    pushByte(payload, (code >> 8) & 0xFF)
+    pushByte(payload, code & 0xFF)
+    let reasonBytes = bytes.fromString(reason)
+    for i in 0..reasonBytes.len() {
+        payload.push(byteAt(reasonBytes, i))
+    }
+    frame(Close, bytes.from(payload))
+}
+
+pub fn frame(opcode: Opcode, payload: Bytes) -> Frame {
+    Frame {
+        fin: true,
+        opcode: opcode,
+        payload: payload,
+        masked: false,
+        maskKey: [],
+    }
+}
+
+pub fn masked(frame: Frame, key: List<Byte>) -> Result<Frame, Error> {
+    if key.len() != 4 {
+        return Err(error.new("websocket: mask key must be four bytes"))
+    }
+    Ok(Frame {
+        fin: frame.fin,
+        opcode: frame.opcode,
+        payload: frame.payload,
+        masked: true,
+        maskKey: key,
+    })
+}
+
+pub fn encode(frame: Frame) -> Result<Bytes, Error> {
+    if frame.opcode.isControl() {
+        if !frame.fin {
+            return Err(error.new("websocket: control frames must not be fragmented"))
+        }
+        if frame.payload.len() > 125 {
+            return Err(error.new("websocket: control frame payload too large"))
+        }
+    }
+    if frame.masked && frame.maskKey.len() != 4 {
+        return Err(error.new("websocket: mask key must be four bytes"))
+    }
+
+    let mut out: List<Byte> = []
+    let first = if frame.fin { 0x80 } else { 0 } | frame.opcode.code()
+    pushByte(out, first)
+
+    let maskBit = if frame.masked { 0x80 } else { 0 }
+    let n = frame.payload.len()
+    if n < 126 {
+        pushByte(out, maskBit | n)
+    } else if n <= 0xFFFF {
+        pushByte(out, maskBit | 126)
+        pushByte(out, (n >> 8) & 0xFF)
+        pushByte(out, n & 0xFF)
+    } else {
+        pushByte(out, maskBit | 127)
+        pushUInt64(out, n)
+    }
+
+    if frame.masked {
+        for keyByte in frame.maskKey {
+            out.push(keyByte)
+        }
+    }
+
+    for i in 0..n {
+        let b = byteAt(frame.payload, i).toInt()
+        if frame.masked {
+            pushByte(out, xorByte(b, frame.maskKey[i % 4].toInt()))
+        } else {
+            pushByte(out, b)
+        }
+    }
+    Ok(bytes.from(out))
+}
+
+pub fn decode(data: Bytes) -> Result<DecodedFrame, Error> {
+    if data.len() < 2 {
+        return Err(error.new("websocket: incomplete frame header"))
+    }
+    let b0 = byteAt(data, 0).toInt()
+    let b1 = byteAt(data, 1).toInt()
+    let fin = (b0 & 0x80) != 0
+    let rsv = b0 & 0x70
+    if rsv != 0 {
+        return Err(error.new("websocket: reserved bits are set"))
+    }
+    let opcode = opcodeFromCode(b0 & 0x0F)?
+    let maskedPayload = (b1 & 0x80) != 0
+    let mut length = b1 & 0x7F
+    let mut pos = 2
+
+    if length == 126 {
+        if data.len() < pos + 2 {
+            return Err(error.new("websocket: incomplete extended length"))
+        }
+        length = (byteAt(data, pos).toInt() << 8) | byteAt(data, pos + 1).toInt()
+        pos = pos + 2
+    } else if length == 127 {
+        if data.len() < pos + 8 {
+            return Err(error.new("websocket: incomplete extended length"))
+        }
+        length = readUInt64(data, pos)
+        pos = pos + 8
+    }
+
+    let mut key: List<Byte> = []
+    if maskedPayload {
+        if data.len() < pos + 4 {
+            return Err(error.new("websocket: incomplete mask key"))
+        }
+        for i in 0..4 {
+            key.push(byteAt(data, pos + i))
+        }
+        pos = pos + 4
+    }
+
+    if data.len() < pos + length {
+        return Err(error.new("websocket: incomplete payload"))
+    }
+    if opcode.isControl() {
+        if !fin {
+            return Err(error.new("websocket: control frames must not be fragmented"))
+        }
+        if length > 125 {
+            return Err(error.new("websocket: control frame payload too large"))
+        }
+    }
+
+    let mut payload: List<Byte> = []
+    for i in 0..length {
+        let b = byteAt(data, pos + i).toInt()
+        if maskedPayload {
+            pushByte(payload, xorByte(b, key[i % 4].toInt()))
+        } else {
+            pushByte(payload, b)
+        }
+    }
+
+    Ok(DecodedFrame {
+        frame: Frame {
+            fin: fin,
+            opcode: opcode,
+            payload: bytes.from(payload),
+            masked: maskedPayload,
+            maskKey: key,
+        },
+        next: pos + length,
+    })
+}
+
+pub fn textPayload(frame: Frame) -> Result<String, Error> {
+    match frame.opcode {
+        Text -> bytes.toString(frame.payload),
+        _    -> Err(error.new("websocket: frame is not text")),
+    }
+}
+
+fn header(headers: Headers, name: String) -> String? {
+    let wanted = strings.toLower(name)
+    for (key, value) in headers {
+        if strings.toLower(key) == wanted {
+            return Some(value)
+        }
+    }
+    None
+}
+
+fn opcodeFromCode(code: Int) -> Result<Opcode, Error> {
+    if code == 0x0 {
+        return Ok(Continuation)
+    }
+    if code == 0x1 {
+        return Ok(Text)
+    }
+    if code == 0x2 {
+        return Ok(Binary)
+    }
+    if code == 0x8 {
+        return Ok(Close)
+    }
+    if code == 0x9 {
+        return Ok(Ping)
+    }
+    if code == 0xA {
+        return Ok(Pong)
+    }
+    Err(error.new("websocket: unknown opcode: {code}"))
+}
+
+fn readUInt64(data: Bytes, pos: Int) -> Int {
+    let mut out = 0
+    for i in 0..8 {
+        out = (out << 8) | byteAt(data, pos + i).toInt()
+    }
+    out
+}
+
+fn pushUInt64(out: List<Byte>, value: Int) {
+    let mut shift = 56
+    for shift >= 0 {
+        pushByte(out, (value >> shift) & 0xFF)
+        shift = shift - 8
+    }
+}
+
+fn xorByte(a: Int, b: Int) -> Int {
+    let mut out = 0
+    let mut bit = 1
+    for bit < 256 {
+        let av = (a & bit) != 0
+        let bv = (b & bit) != 0
+        if av != bv {
+            out = out | bit
+        }
+        bit = bit << 1
+    }
+    out
+}
+
+fn pushByte(buf: List<Byte>, n: Int) {
+    buf.push((n & 0xFF).toByte())
+}
+
+fn byteAt(data: Bytes, index: Int) -> Byte {
+    bytes.get(data, index).unwrap()
+}
