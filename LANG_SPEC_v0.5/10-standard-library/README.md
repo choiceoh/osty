@@ -41,3 +41,4 @@ lowering remains implementation backlog.
 - [§10.26 Text UI (`std.tui`)](./26-tui.md)
 - [§10.27 Grid (`std.grid`)](./27-grid.md)
 - [§10.28 SQL (`std.sql`)](./28-sql.md)
+- [§10.29 DB (`std.db`)](./29-db.md)

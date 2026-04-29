@@ -16,7 +16,9 @@ func TestSqlModuleSurface(t *testing.T) {
 	for _, name := range []string{
 		"null", "text", "integer", "float", "boolean", "rawValue",
 		"query", "raw", "condition", "assignment", "asc", "desc",
-		"quoteIdent", "quotePath", "literal", "placeholder", "render", "debugSql",
+		"quoteIdent", "quotePath", "literal", "placeholder",
+		"genericDialect", "postgresDialect", "mysqlDialect", "sqliteDialect",
+		"render", "debugSql",
 		"eq", "ne", "gt", "gte", "lt", "lte", "like", "isNull", "isNotNull", "inList",
 		"allOf", "anyOf", "select", "selectWhere", "insert", "update", "deleteFrom",
 		"orderBy", "limit", "offset", "isIdent",

@@ -12,7 +12,7 @@ let base = sql.selectWhere("users", ["id", "email"], active)?
 let ordered = sql.orderBy(base, [sql.asc("email")?])?
 let q = sql.limit(ordered, 100)?
 
-let postgresText = sql.render(q, Postgres)
+let postgresText = sql.render(q, sql.postgresDialect())
 let debugText = sql.debugSql(q)
 ```
 
@@ -73,6 +73,10 @@ sql.quoteIdent(name) -> Result<String, Error>
 sql.quotePath(path) -> Result<String, Error>
 sql.literal(value) -> String
 sql.placeholder(dialect, index) -> String
+sql.genericDialect() -> Dialect
+sql.postgresDialect() -> Dialect
+sql.mysqlDialect() -> Dialect
+sql.sqliteDialect() -> Dialect
 sql.render(query, dialect) -> String
 sql.debugSql(query) -> String
 ```

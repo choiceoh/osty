@@ -156,6 +156,22 @@ pub fn placeholder(dialect: Dialect, index: Int) -> String {
     }
 }
 
+pub fn genericDialect() -> Dialect {
+    Generic
+}
+
+pub fn postgresDialect() -> Dialect {
+    Postgres
+}
+
+pub fn mysqlDialect() -> Dialect {
+    MySql
+}
+
+pub fn sqliteDialect() -> Dialect {
+    Sqlite
+}
+
 pub fn render(q: Query, dialect: Dialect) -> String {
     let mut out = ""
     let mut index = 1
