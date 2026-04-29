@@ -121,6 +121,12 @@ ci: build
 verify-selfhost:
     go test {{test_flags}} -run 'SnapshotParity|CoreSnapshotParity' ./internal/ci ./internal/runner
 
+verify-self-rebuild: build-all
+    bash scripts/verify-self-rebuild {{bin}}
+
+verify-self-rebuild-gates: build-all
+    bash scripts/verify-self-rebuild --gates-only {{bin}}
+
 check: fmt-check vet front
 
 prepush: fmt-check vet repair-check airepair-capture ci
