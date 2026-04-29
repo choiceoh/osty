@@ -60,7 +60,11 @@
 //   - Lower(pkg, file, res, chk) → (*Module, []error) — convert a
 //     type-checked AST into an IR Module. Non-fatal issues are
 //     returned separately; poisoned spots collapse to ErrorStmt /
-//     ErrorExpr / ErrorPat rather than panicking.
+//     ErrorExpr / ErrorPat rather than panicking. When chk carries a
+//     NativeCheckResult, lowering reads expression, binding, symbol,
+//     and generic-instantiation facts through the structured NativeIndex
+//     first, falling back to legacy AST-keyed checker maps only for
+//     compatibility or ambiguous package surfaces.
 //
 //   - Walk(v, n) / Inspect(n, fn) — pre-order traversal over every
 //     reachable Node (decl, stmt, expr, pattern).

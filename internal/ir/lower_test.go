@@ -7,7 +7,10 @@ import (
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/stdlib"
+	"github.com/osty/osty/internal/token"
+	"github.com/osty/osty/internal/types"
 )
 
 func TestLowerClassifiesTopLevelLetRefsAsGlobal(t *testing.T) {
@@ -95,6 +98,272 @@ func TestLowerPreludeVariantCallBecomesVariantLit(t *testing.T) {
 	}
 	if got := len(lit.Args); got != 1 {
 		t.Fatalf("variant args = %d, want 1", got)
+	}
+}
+
+func TestLowerCallTypeUsesNativeIndexWithoutLegacyTypeMap(t *testing.T) {
+	call := &ast.CallExpr{
+		ID: 7,
+		Fn: &ast.Ident{Name: "make_string"},
+	}
+	file := &ast.File{
+		Stmts: []ast.Stmt{&ast.LetStmt{
+			Pattern: &ast.IdentPat{Name: "s"},
+			Value:   call,
+		}},
+	}
+	chk := &check.Result{
+		NativeCheckResult: &api.CheckResult{
+			TypedNodes: []api.CheckedNode{{
+				NodeID: int(call.ID),
+				Kind:   "Call",
+				Type:   &api.TypeRepr{Kind: "primitive", Name: "String"},
+			}},
+		},
+	}
+
+	mod, issues := Lower("main", file, nil, chk)
+	if len(issues) != 0 {
+		t.Fatalf("Lower() issues = %v, want none", issues)
+	}
+	let, ok := mod.Script[0].(*LetStmt)
+	if !ok {
+		t.Fatalf("script[0] = %T, want *LetStmt", mod.Script[0])
+	}
+	if let.Type != TString {
+		t.Fatalf("let type = %#v, want TString", let.Type)
+	}
+	loweredCall, ok := let.Value.(*CallExpr)
+	if !ok {
+		t.Fatalf("let value = %T, want *CallExpr", let.Value)
+	}
+	if loweredCall.T != TString {
+		t.Fatalf("call type = %#v, want TString", loweredCall.T)
+	}
+}
+
+func TestLowerInstantiationArgsUseNativeIndexWithoutLegacyMap(t *testing.T) {
+	call := &ast.CallExpr{
+		ID: 11,
+		Fn: &ast.Ident{Name: "id"},
+	}
+	file := &ast.File{Stmts: []ast.Stmt{&ast.ExprStmt{X: call}}}
+	chk := &check.Result{
+		NativeCheckResult: &api.CheckResult{
+			Instantiations: []api.CheckInstantiation{{
+				NodeID:   int(call.ID),
+				Callee:   "id",
+				TypeArgs: []api.TypeRepr{{Kind: "primitive", Name: "Int"}},
+			}},
+		},
+	}
+
+	mod, issues := Lower("main", file, nil, chk)
+	if len(issues) != 0 {
+		t.Fatalf("Lower() issues = %v, want none", issues)
+	}
+	stmt, ok := mod.Script[0].(*ExprStmt)
+	if !ok {
+		t.Fatalf("script[0] = %T, want *ExprStmt", mod.Script[0])
+	}
+	loweredCall, ok := stmt.X.(*CallExpr)
+	if !ok {
+		t.Fatalf("stmt.X = %T, want *CallExpr", stmt.X)
+	}
+	if got := loweredCall.TypeArgs; len(got) != 1 || got[0] != TInt {
+		t.Fatalf("call type args = %#v, want [TInt]", got)
+	}
+}
+
+func TestLowerNativeDuplicateNodeIDsFallBackToLegacyTypeMap(t *testing.T) {
+	call := &ast.CallExpr{
+		ID: 13,
+		Fn: &ast.Ident{Name: "ambiguous"},
+	}
+	file := &ast.File{Stmts: []ast.Stmt{&ast.ExprStmt{X: call}}}
+	chk := &check.Result{
+		Types: map[ast.Expr]types.Type{
+			call: types.Bool,
+		},
+		NativeCheckResult: &api.CheckResult{
+			TypedNodes: []api.CheckedNode{
+				{NodeID: int(call.ID), Kind: "Call", Type: &api.TypeRepr{Kind: "primitive", Name: "String"}},
+				{NodeID: int(call.ID), Kind: "Call", Type: &api.TypeRepr{Kind: "primitive", Name: "Int"}},
+			},
+		},
+	}
+
+	mod, issues := Lower("main", file, nil, chk)
+	if len(issues) != 0 {
+		t.Fatalf("Lower() issues = %v, want none", issues)
+	}
+	stmt, ok := mod.Script[0].(*ExprStmt)
+	if !ok {
+		t.Fatalf("script[0] = %T, want *ExprStmt", mod.Script[0])
+	}
+	loweredCall, ok := stmt.X.(*CallExpr)
+	if !ok {
+		t.Fatalf("stmt.X = %T, want *CallExpr", stmt.X)
+	}
+	if loweredCall.T != TBool {
+		t.Fatalf("call type = %#v, want TBool from legacy map fallback", loweredCall.T)
+	}
+}
+
+func TestLowerNativeDuplicateNodeIDsUseSpanDisambiguation(t *testing.T) {
+	call := &ast.CallExpr{
+		ID:   15,
+		PosV: token.Pos{Line: 1, Column: 5, Offset: 4},
+		EndV: token.Pos{Line: 1, Column: 14, Offset: 13},
+		Fn:   &ast.Ident{Name: "current"},
+	}
+	file := &ast.File{Stmts: []ast.Stmt{&ast.ExprStmt{X: call}}}
+	chk := &check.Result{
+		NativeCheckResult: &api.CheckResult{
+			TypedNodes: []api.CheckedNode{
+				{NodeID: int(call.ID), Kind: "Call", Start: 40, End: 50, Type: &api.TypeRepr{Kind: "primitive", Name: "String"}},
+				{NodeID: int(call.ID), Kind: "Call", Start: 4, End: 13, Type: &api.TypeRepr{Kind: "primitive", Name: "Int"}},
+			},
+		},
+	}
+
+	mod, issues := Lower("main", file, nil, chk)
+	if len(issues) != 0 {
+		t.Fatalf("Lower() issues = %v, want none", issues)
+	}
+	stmt, ok := mod.Script[0].(*ExprStmt)
+	if !ok {
+		t.Fatalf("script[0] = %T, want *ExprStmt", mod.Script[0])
+	}
+	loweredCall, ok := stmt.X.(*CallExpr)
+	if !ok {
+		t.Fatalf("stmt.X = %T, want *CallExpr", stmt.X)
+	}
+	if loweredCall.T != TInt {
+		t.Fatalf("call type = %#v, want TInt from span-disambiguated native record", loweredCall.T)
+	}
+}
+
+func TestLowerNativeNodeIDSpanMismatchFallsBackToLegacyTypeMap(t *testing.T) {
+	call := &ast.CallExpr{
+		ID:   17,
+		PosV: token.Pos{Line: 1, Column: 11, Offset: 10},
+		EndV: token.Pos{Line: 1, Column: 22, Offset: 21},
+		Fn:   &ast.Ident{Name: "span_checked"},
+	}
+	file := &ast.File{Stmts: []ast.Stmt{&ast.ExprStmt{X: call}}}
+	chk := &check.Result{
+		Types: map[ast.Expr]types.Type{
+			call: types.Bool,
+		},
+		NativeCheckResult: &api.CheckResult{
+			TypedNodes: []api.CheckedNode{{
+				NodeID: int(call.ID),
+				Kind:   "Call",
+				Start:  0,
+				End:    4,
+				Type:   &api.TypeRepr{Kind: "primitive", Name: "String"},
+			}},
+		},
+	}
+
+	mod, issues := Lower("main", file, nil, chk)
+	if len(issues) != 0 {
+		t.Fatalf("Lower() issues = %v, want none", issues)
+	}
+	stmt, ok := mod.Script[0].(*ExprStmt)
+	if !ok {
+		t.Fatalf("script[0] = %T, want *ExprStmt", mod.Script[0])
+	}
+	loweredCall, ok := stmt.X.(*CallExpr)
+	if !ok {
+		t.Fatalf("stmt.X = %T, want *CallExpr", stmt.X)
+	}
+	if loweredCall.T != TBool {
+		t.Fatalf("call type = %#v, want TBool from legacy map fallback", loweredCall.T)
+	}
+}
+
+func TestLowerLetStmtUsesNativeBindingTypeWithoutLegacyMap(t *testing.T) {
+	pat := &ast.IdentPat{
+		ID:   21,
+		PosV: token.Pos{Line: 1, Column: 5, Offset: 4},
+		EndV: token.Pos{Line: 1, Column: 6, Offset: 5},
+		Name: "x",
+	}
+	file := &ast.File{Stmts: []ast.Stmt{&ast.LetStmt{
+		Pattern: pat,
+		Value:   &ast.CallExpr{ID: 22, Fn: &ast.Ident{Name: "unknown"}},
+	}}}
+	chk := &check.Result{
+		NativeCheckResult: &api.CheckResult{
+			Bindings: []api.CheckedBinding{{
+				NodeID: int(pat.ID),
+				Name:   "x",
+				Start:  4,
+				End:    5,
+				Type:   &api.TypeRepr{Kind: "primitive", Name: "Int"},
+			}},
+		},
+	}
+
+	mod, issues := Lower("main", file, nil, chk)
+	if len(issues) != 0 {
+		t.Fatalf("Lower() issues = %v, want none", issues)
+	}
+	let, ok := mod.Script[0].(*LetStmt)
+	if !ok {
+		t.Fatalf("script[0] = %T, want *LetStmt", mod.Script[0])
+	}
+	if let.Type != TInt {
+		t.Fatalf("let type = %#v, want TInt from native binding", let.Type)
+	}
+}
+
+func TestLowerIdentUsesNativeSymbolTypeWithoutLegacyMap(t *testing.T) {
+	global := &ast.LetDecl{ID: 31, Name: "g"}
+	ref := &ast.Ident{ID: 32, Name: "g"}
+	file := &ast.File{
+		Decls: []ast.Decl{global},
+		Stmts: []ast.Stmt{&ast.LetStmt{
+			Pattern: &ast.IdentPat{Name: "y"},
+			Value:   ref,
+		}},
+	}
+	res := &resolve.Result{
+		RefsByID: map[ast.NodeID]*resolve.Symbol{
+			ref.ID: {Name: "g", Kind: resolve.SymLet, Decl: global},
+		},
+		RefIdents: []*ast.Ident{ref},
+	}
+	chk := &check.Result{
+		NativeCheckResult: &api.CheckResult{
+			Symbols: []api.CheckedSymbol{{
+				NodeID: int(global.ID),
+				Kind:   "let",
+				Name:   "g",
+				Type:   &api.TypeRepr{Kind: "primitive", Name: "String"},
+			}},
+		},
+	}
+
+	mod, issues := Lower("main", file, res, chk)
+	if len(issues) != 0 {
+		t.Fatalf("Lower() issues = %v, want none", issues)
+	}
+	let, ok := mod.Script[0].(*LetStmt)
+	if !ok {
+		t.Fatalf("script[0] = %T, want *LetStmt", mod.Script[0])
+	}
+	if let.Type != TString {
+		t.Fatalf("let type = %#v, want TString from native symbol", let.Type)
+	}
+	id, ok := let.Value.(*Ident)
+	if !ok {
+		t.Fatalf("let value = %T, want *Ident", let.Value)
+	}
+	if id.T != TString {
+		t.Fatalf("ident type = %#v, want TString from native symbol", id.T)
 	}
 }
 
