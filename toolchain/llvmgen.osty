@@ -2864,15 +2864,18 @@ pub fn llvmListRuntimeDeclarations() -> List<String> {
         "declare void @osty_rt_list_push_i1(ptr, i1) nounwind willreturn",
         "declare void @osty_rt_list_push_f64(ptr, double) nounwind willreturn",
         "declare void @osty_rt_list_push_ptr(ptr, ptr) nounwind willreturn",
+        "declare void @osty_rt_list_push_string(ptr, ptr) nounwind willreturn",
         "declare void @osty_rt_list_push_bytes_v1(ptr, ptr, i64) nounwind willreturn",
         "declare void @osty_rt_list_insert_i64(ptr, i64, i64) nounwind willreturn",
         "declare void @osty_rt_list_insert_i1(ptr, i64, i1) nounwind willreturn",
         "declare void @osty_rt_list_insert_f64(ptr, i64, double) nounwind willreturn",
         "declare void @osty_rt_list_insert_ptr(ptr, i64, ptr) nounwind willreturn",
+        "declare void @osty_rt_list_insert_string(ptr, i64, ptr) nounwind willreturn",
         "declare i64 @osty_rt_list_get_i64(ptr, i64) nounwind willreturn memory(read)",
         "declare i1 @osty_rt_list_get_i1(ptr, i64) nounwind willreturn memory(read)",
         "declare double @osty_rt_list_get_f64(ptr, i64) nounwind willreturn memory(read)",
         "declare ptr @osty_rt_list_get_ptr(ptr, i64) nounwind willreturn memory(read)",
+        "declare ptr @osty_rt_list_get_string(ptr, i64) nounwind willreturn memory(read)",
         "declare ptr @osty_rt_list_data_i64(ptr) nounwind willreturn memory(read)",
         "declare ptr @osty_rt_list_data_i1(ptr) nounwind willreturn memory(read)",
         "declare ptr @osty_rt_list_data_f64(ptr) nounwind willreturn memory(read)",
@@ -2881,6 +2884,7 @@ pub fn llvmListRuntimeDeclarations() -> List<String> {
         "declare void @osty_rt_list_set_i1(ptr, i64, i1) nounwind willreturn",
         "declare void @osty_rt_list_set_f64(ptr, i64, double) nounwind willreturn",
         "declare void @osty_rt_list_set_ptr(ptr, i64, ptr) nounwind willreturn",
+        "declare void @osty_rt_list_set_string(ptr, i64, ptr) nounwind willreturn",
         "declare ptr @osty_rt_list_sorted_i64(ptr) nounwind willreturn",
         "declare ptr @osty_rt_list_sorted_i1(ptr) nounwind willreturn",
         "declare ptr @osty_rt_list_sorted_f64(ptr) nounwind willreturn",
@@ -2918,6 +2922,10 @@ pub fn llvmListPushF64(emitter: LlvmEmitter, list: LlvmValue, value: LlvmValue) 
 
 pub fn llvmListPushPtr(emitter: LlvmEmitter, list: LlvmValue, value: LlvmValue) {
     llvmCallVoid(emitter, "osty_rt_list_push_ptr", [list, value])
+}
+
+pub fn llvmListPushString(emitter: LlvmEmitter, list: LlvmValue, value: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_list_push_string", [list, value])
 }
 
 /// Emit a typed `osty_rt_list_push_<suffix>` call, picking the runtime
@@ -2961,6 +2969,10 @@ pub fn llvmListGetPtr(emitter: LlvmEmitter, list: LlvmValue, index: LlvmValue) -
     llvmCall(emitter, "ptr", "osty_rt_list_get_ptr", [list, index])
 }
 
+pub fn llvmListGetString(emitter: LlvmEmitter, list: LlvmValue, index: LlvmValue) -> LlvmValue {
+    llvmCall(emitter, "ptr", "osty_rt_list_get_string", [list, index])
+}
+
 pub fn llvmListSetI64(emitter: LlvmEmitter, list: LlvmValue, index: LlvmValue, value: LlvmValue) {
     llvmCallVoid(emitter, "osty_rt_list_set_i64", [list, index, value])
 }
@@ -2975,6 +2987,10 @@ pub fn llvmListSetF64(emitter: LlvmEmitter, list: LlvmValue, index: LlvmValue, v
 
 pub fn llvmListSetPtr(emitter: LlvmEmitter, list: LlvmValue, index: LlvmValue, value: LlvmValue) {
     llvmCallVoid(emitter, "osty_rt_list_set_ptr", [list, index, value])
+}
+
+pub fn llvmListSetString(emitter: LlvmEmitter, list: LlvmValue, index: LlvmValue, value: LlvmValue) {
+    llvmCallVoid(emitter, "osty_rt_list_set_string", [list, index, value])
 }
 
 /// LLVM forward declarations for the `osty_rt_map_*` C runtime surface.

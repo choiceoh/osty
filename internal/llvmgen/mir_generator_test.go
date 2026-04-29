@@ -2751,11 +2751,55 @@ func TestGenerateFromMIRListIndexReadPtrElem(t *testing.T) {
 		t.Fatalf("GenerateFromMIR: %v", err)
 	}
 	got := string(out)
-	// String elements are ptr-wide in the runtime, so the typed
-	// runtime suffix is `_ptr`.
+	// String elements are ptr-wide, but use the string-specialized
+	// runtime helper so inline SSO values skip the generic load barrier.
 	for _, want := range []string{
-		"declare ptr @osty_rt_list_get_ptr(ptr, i64)",
-		"call ptr @osty_rt_list_get_ptr(ptr ",
+		"declare ptr @osty_rt_list_get_string(ptr, i64)",
+		"call ptr @osty_rt_list_get_string(ptr ",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRListStringLiteralUsesStringPush(t *testing.T) {
+	listStr := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "head",
+		Return: ir.TString,
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "xs",
+					Type: listStr,
+					Value: &ir.ListLit{
+						Elems: []ir.Expr{
+							&ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "tail"}}},
+						},
+						Elem: ir.TString,
+					},
+				},
+			},
+			Result: &ir.IndexExpr{
+				X:     &ir.Ident{Name: "xs", Kind: ir.IdentLocal, T: listStr},
+				Index: &ir.IntLit{Text: "0", T: ir.TInt},
+				T:     ir.TString,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/list-string.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare void @osty_rt_list_push_string(ptr, ptr)",
+		"call void @osty_rt_list_push_string(",
+		"declare ptr @osty_rt_list_get_string(ptr, i64)",
+		"call ptr @osty_rt_list_get_string(",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)

@@ -158,6 +158,70 @@ int main(void) {
 	}
 }
 
+func TestBundledRuntimeListStringSkipsInlineBarriers(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_list_string_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_list_string_harness")
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+	if err := os.WriteFile(harnessPath, []byte(`#include <stdint.h>
+#include <stdio.h>
+
+void *osty_rt_list_new(void);
+void osty_rt_list_push_string(void *list, const char *value);
+const char *osty_rt_list_get_string(void *list, int64_t index);
+const char *osty_rt_int_to_string(int64_t value);
+const char *osty_rt_strings_ConcatI64Right(const char *left, int64_t right);
+int osty_rt_strings_Equal(const char *left, const char *right);
+int64_t osty_gc_debug_post_write_count(void);
+int64_t osty_gc_debug_load_count(void);
+
+int main(void) {
+    void *list = osty_rt_list_new();
+    const char *short_s = osty_rt_int_to_string(7);
+    int64_t post_before = osty_gc_debug_post_write_count();
+    osty_rt_list_push_string(list, short_s);
+    printf("%lld\n", (long long)(osty_gc_debug_post_write_count() - post_before));
+
+    int64_t load_before = osty_gc_debug_load_count();
+    const char *short_got = osty_rt_list_get_string(list, 0);
+    int64_t short_load_delta = osty_gc_debug_load_count() - load_before;
+    printf("%d\n", short_got == short_s);
+    printf("%lld\n", (long long)short_load_delta);
+
+    const char *long_s = osty_rt_strings_ConcatI64Right("longprefix:", 123456789);
+    post_before = osty_gc_debug_post_write_count();
+    osty_rt_list_push_string(list, long_s);
+    printf("%lld\n", (long long)(osty_gc_debug_post_write_count() - post_before));
+
+    load_before = osty_gc_debug_load_count();
+    const char *long_got = osty_rt_list_get_string(list, 1);
+    int64_t long_load_delta = osty_gc_debug_load_count() - load_before;
+    printf("%d\n", osty_rt_strings_Equal(long_got, long_s));
+    printf("%lld\n", (long long)long_load_delta);
+    return 0;
+}
+`), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+
+	cmd := runtimeClangCommand("-std=c11", "-O2", runtimePath, harnessPath, "-o", binaryPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("compile runtime list string harness: %v\n%s", err, out)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("run runtime list string harness: %v\n%s", err, runOutput)
+	}
+	if got, want := string(runOutput), "0\n1\n1\n1\n1\n2\n"; got != want {
+		t.Fatalf("runtime list string harness stdout = %q, want %q", got, want)
+	}
+}
+
 func TestBundledRuntimeSafepointScansStackRoots(t *testing.T) {
 	parallelClangBackendTest(t)
 

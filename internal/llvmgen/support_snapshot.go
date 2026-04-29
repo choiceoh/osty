@@ -2424,15 +2424,18 @@ func llvmListRuntimeDeclarations() []string {
 		"declare void @osty_rt_list_push_i1(ptr, i1) nounwind willreturn",
 		"declare void @osty_rt_list_push_f64(ptr, double) nounwind willreturn",
 		"declare void @osty_rt_list_push_ptr(ptr, ptr) nounwind willreturn",
+		"declare void @osty_rt_list_push_string(ptr, ptr) nounwind willreturn",
 		"declare void @osty_rt_list_push_bytes_v1(ptr, ptr, i64) nounwind willreturn",
 		"declare void @osty_rt_list_insert_i64(ptr, i64, i64) nounwind willreturn",
 		"declare void @osty_rt_list_insert_i1(ptr, i64, i1) nounwind willreturn",
 		"declare void @osty_rt_list_insert_f64(ptr, i64, double) nounwind willreturn",
 		"declare void @osty_rt_list_insert_ptr(ptr, i64, ptr) nounwind willreturn",
+		"declare void @osty_rt_list_insert_string(ptr, i64, ptr) nounwind willreturn",
 		"declare i64 @osty_rt_list_get_i64(ptr, i64) nounwind willreturn memory(read)",
 		"declare i1 @osty_rt_list_get_i1(ptr, i64) nounwind willreturn memory(read)",
 		"declare double @osty_rt_list_get_f64(ptr, i64) nounwind willreturn memory(read)",
 		"declare ptr @osty_rt_list_get_ptr(ptr, i64) nounwind willreturn memory(read)",
+		"declare ptr @osty_rt_list_get_string(ptr, i64) nounwind willreturn memory(read)",
 		"declare ptr @osty_rt_list_data_i64(ptr) nounwind willreturn memory(read)",
 		"declare ptr @osty_rt_list_data_i1(ptr) nounwind willreturn memory(read)",
 		"declare ptr @osty_rt_list_data_f64(ptr) nounwind willreturn memory(read)",
@@ -2441,6 +2444,7 @@ func llvmListRuntimeDeclarations() []string {
 		"declare void @osty_rt_list_set_i1(ptr, i64, i1) nounwind willreturn",
 		"declare void @osty_rt_list_set_f64(ptr, i64, double) nounwind willreturn",
 		"declare void @osty_rt_list_set_ptr(ptr, i64, ptr) nounwind willreturn",
+		"declare void @osty_rt_list_set_string(ptr, i64, ptr) nounwind willreturn",
 		"declare ptr @osty_rt_list_sorted_i64(ptr) nounwind willreturn",
 		"declare ptr @osty_rt_list_sorted_i1(ptr) nounwind willreturn",
 		"declare ptr @osty_rt_list_sorted_f64(ptr) nounwind willreturn",
@@ -2487,6 +2491,10 @@ func llvmListPushPtr(emitter *LlvmEmitter, list *LlvmValue, value *LlvmValue) {
 	llvmCallVoid(emitter, "osty_rt_list_push_ptr", []*LlvmValue{list, value})
 }
 
+func llvmListPushString(emitter *LlvmEmitter, list *LlvmValue, value *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_list_push_string", []*LlvmValue{list, value})
+}
+
 // Osty: toolchain/llvmgen.osty:1885:5
 func llvmListPush(emitter *LlvmEmitter, list *LlvmValue, value *LlvmValue) {
 	// Osty: toolchain/llvmgen.osty:1886:5
@@ -2528,6 +2536,10 @@ func llvmListGetPtr(emitter *LlvmEmitter, list *LlvmValue, index *LlvmValue) *Ll
 	return llvmCall(emitter, "ptr", "osty_rt_list_get_ptr", []*LlvmValue{list, index})
 }
 
+func llvmListGetString(emitter *LlvmEmitter, list *LlvmValue, index *LlvmValue) *LlvmValue {
+	return llvmCall(emitter, "ptr", "osty_rt_list_get_string", []*LlvmValue{list, index})
+}
+
 // Osty: toolchain/llvmgen.osty:1921:5
 func llvmListSetI64(emitter *LlvmEmitter, list *LlvmValue, index *LlvmValue, value *LlvmValue) {
 	// Osty: toolchain/llvmgen.osty:1922:5
@@ -2550,6 +2562,10 @@ func llvmListSetF64(emitter *LlvmEmitter, list *LlvmValue, index *LlvmValue, val
 func llvmListSetPtr(emitter *LlvmEmitter, list *LlvmValue, index *LlvmValue, value *LlvmValue) {
 	// Osty: toolchain/llvmgen.osty:1934:5
 	llvmCallVoid(emitter, "osty_rt_list_set_ptr", []*LlvmValue{list, index, value})
+}
+
+func llvmListSetString(emitter *LlvmEmitter, list *LlvmValue, index *LlvmValue, value *LlvmValue) {
+	llvmCallVoid(emitter, "osty_rt_list_set_string", []*LlvmValue{list, index, value})
 }
 
 // Osty: toolchain/llvmgen.osty:1943:5

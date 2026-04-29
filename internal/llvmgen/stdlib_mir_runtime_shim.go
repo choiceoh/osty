@@ -906,8 +906,7 @@ func (g *mirGen) emitStdRandomChoiceMIR(c *mir.CallInstr) error {
 	idx := g.fresh()
 	g.fnBuf.WriteString(mirCallValueLine(idx, "i64", ostyRtRandomIntSymbol,
 		mirRuntimeArgList([]mirRuntimeArg{rng, {typ: "i64", val: "0"}, {typ: "i64", val: lenReg}})))
-	elemLLVM := g.llvmType(elemT)
-	elemReg, err := g.emitListLoadElement(listReg, idx, elemLLVM)
+	elemReg, err := g.emitListLoadElement(listReg, idx, elemT)
 	if err != nil {
 		return err
 	}
