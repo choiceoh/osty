@@ -1,0 +1,189 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+	cat <<'USAGE'
+usage: scripts/verify-self-rebuild [--gates-only] [HOST_OSTY_BIN]
+
+Runs the self-rebuild ratchet:
+
+  1. host osty validates the toolchain sources and current MIR gates
+  2. host osty builds osty-self-1 from toolchain/
+  3. osty-self-1 builds osty-self-2 from toolchain/
+  4. osty-self-1 and osty-self-2 are compared byte-for-byte
+
+Environment overrides:
+
+  OSTY_SELF_REBUILD_DIR             staging dir (default .osty/self-rebuild)
+  OSTY_SELF_REBUILD_TOOLCHAIN_DIR   toolchain package dir (default toolchain)
+  OSTY_SELF_REBUILD_STAGE1_BIN      prebuilt osty-self-1 binary
+  OSTY_SELF_REBUILD_STAGE2_BIN      prebuilt osty-self-2 binary
+
+--gates-only stops after the currently available host-side gates.
+USAGE
+}
+
+mode="full"
+if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
+	usage
+	exit 0
+fi
+if [[ "${1:-}" == "--gates-only" ]]; then
+	mode="gates"
+	shift
+fi
+
+root="$(git rev-parse --show-toplevel)"
+host_bin="${1:-.bin/osty}"
+case "$host_bin" in
+/*) ;;
+*) host_bin="$root/$host_bin" ;;
+esac
+
+toolchain_dir="${OSTY_SELF_REBUILD_TOOLCHAIN_DIR:-$root/toolchain}"
+case "$toolchain_dir" in
+/*) ;;
+*) toolchain_dir="$root/$toolchain_dir" ;;
+esac
+
+stage_root="${OSTY_SELF_REBUILD_DIR:-$root/.osty/self-rebuild}"
+case "$stage_root" in
+/*) ;;
+*) stage_root="$root/$stage_root" ;;
+esac
+
+log() {
+	printf '>> %s\n' "$*"
+}
+
+fail() {
+	printf 'self-rebuild: %s\n' "$*" >&2
+	exit 1
+}
+
+require_file() {
+	local path="$1"
+	local label="$2"
+	[[ -f "$path" ]] || fail "$label not found: $path"
+}
+
+require_exec() {
+	local path="$1"
+	local label="$2"
+	require_file "$path" "$label"
+	[[ -x "$path" ]] || fail "$label is not executable: $path"
+}
+
+sha256_file() {
+	if command -v shasum >/dev/null 2>&1; then
+		shasum -a 256 "$1" | awk '{print $1}'
+	elif command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | awk '{print $1}'
+	else
+		fail "need shasum or sha256sum for byte parity reporting"
+	fi
+}
+
+snapshot_binaries() {
+	local out="$1"
+	: >"$out"
+	for dir in "$root/.osty" "$toolchain_dir/.osty"; do
+		[[ -d "$dir" ]] || continue
+		while IFS= read -r -d '' path; do
+			[[ -x "$path" ]] || continue
+			kind="$(file -b "$path" 2>/dev/null || true)"
+			case "$kind" in
+			*Mach-O* | *ELF* | *PE32*) printf '%s\n' "$path" ;;
+			esac
+		done < <(find "$dir" -type f -print0)
+	done | LC_ALL=C sort -u >>"$out"
+}
+
+copy_override_binary() {
+	local src="$1"
+	local dest="$2"
+	local label="$3"
+	require_exec "$src" "$label"
+	cp "$src" "$dest"
+	chmod +x "$dest"
+}
+
+build_self_binary() {
+	local driver="$1"
+	local label="$2"
+	local dest="$3"
+	local before="$stage_root/$label.before"
+	local after="$stage_root/$label.after"
+	local candidates="$stage_root/$label.candidates"
+
+	require_exec "$driver" "$label driver"
+	snapshot_binaries "$before"
+	log "$label: build toolchain package with $driver"
+	"$driver" build --backend=llvm --emit binary --force "$toolchain_dir"
+	snapshot_binaries "$after"
+	comm -13 "$before" "$after" >"$candidates"
+
+	local count
+	count="$(wc -l <"$candidates" | tr -d '[:space:]')"
+	if [[ "$count" == "0" ]]; then
+		fail "$label produced no compiler binary candidate. The recipe is wired, but toolchain/ still needs a CLI-compatible osty-self entrypoint that emits a binary artifact."
+	fi
+	if [[ "$count" != "1" ]]; then
+		printf 'self-rebuild: %s produced multiple binary candidates:\n' "$label" >&2
+		sed 's/^/  /' "$candidates" >&2
+		fail "set OSTY_SELF_REBUILD_STAGE${label#stage}_BIN to disambiguate"
+	fi
+
+	local candidate
+	candidate="$(sed -n '1p' "$candidates")"
+	cp "$candidate" "$dest"
+	chmod +x "$dest"
+}
+
+run_gates() {
+	log "toolchain check"
+	"$host_bin" check --airepair=false "$toolchain_dir"
+
+	log "selfhost snapshot parity"
+	go test -count=1 -vet=off ./internal/ci ./internal/runner -run 'SnapshotParity|CoreSnapshotParity'
+
+	log "merged native toolchain MIR pipeline"
+	go test -count=1 -vet=off ./internal/llvmgen -run 'TestNativeToolchainMergedMIRPipelineIsClean|TestNativeToolchainMergedMIRErrTypeFloor'
+}
+
+require_exec "$host_bin" "host osty"
+[[ -d "$toolchain_dir" ]] || fail "toolchain dir not found: $toolchain_dir"
+
+run_gates
+if [[ "$mode" == "gates" ]]; then
+	log "gates-only complete"
+	exit 0
+fi
+
+rm -rf "$stage_root"
+mkdir -p "$stage_root"
+stage1="$stage_root/osty-self-1"
+stage2="$stage_root/osty-self-2"
+
+if [[ -n "${OSTY_SELF_REBUILD_STAGE1_BIN:-}" ]]; then
+	log "stage1: use override $OSTY_SELF_REBUILD_STAGE1_BIN"
+	copy_override_binary "$OSTY_SELF_REBUILD_STAGE1_BIN" "$stage1" "osty-self-1 override"
+else
+	build_self_binary "$host_bin" "stage1" "$stage1"
+fi
+
+if [[ -n "${OSTY_SELF_REBUILD_STAGE2_BIN:-}" ]]; then
+	log "stage2: use override $OSTY_SELF_REBUILD_STAGE2_BIN"
+	copy_override_binary "$OSTY_SELF_REBUILD_STAGE2_BIN" "$stage2" "osty-self-2 override"
+else
+	build_self_binary "$stage1" "stage2" "$stage2"
+fi
+
+if ! cmp -s "$stage1" "$stage2"; then
+	printf 'self-rebuild: byte parity failed\n' >&2
+	printf '  osty-self-1 %s  %s\n' "$(sha256_file "$stage1")" "$stage1" >&2
+	printf '  osty-self-2 %s  %s\n' "$(sha256_file "$stage2")" "$stage2" >&2
+	exit 1
+fi
+
+log "byte parity OK: $(sha256_file "$stage1")"
