@@ -225,6 +225,18 @@ func (s *Server) handleHover(req *rpcRequest) {
 		replyJSON(s.conn, req.ID, nil)
 		return
 	}
+	if ref := structuredReferenceAt(doc, params.Position); ref != nil {
+		h := hoverForStructuredReference(ref)
+		h.Range = ptrRange(ref.rng)
+		replyJSON(s.conn, req.ID, h)
+		return
+	}
+	if sym := structuredSymbolAt(doc, params.Position); sym != nil {
+		h := hoverForStructuredSymbol(sym)
+		h.Range = ptrRange(sym.selectionRange)
+		replyJSON(s.conn, req.ID, h)
+		return
+	}
 	pos := doc.analysis.lines.lspToOsty(params.Position)
 
 	var (
@@ -259,6 +271,32 @@ func hoverForSymbol(sym *resolve.Symbol, nameFallback string, r *check.Result) *
 	return &Hover{Contents: MarkupContent{
 		Kind:  MarkupKindMarkdown,
 		Value: selfhost.LSPHoverMarkdown(view),
+	}}
+}
+
+func hoverForStructuredReference(ref *structuredReference) *Hover {
+	if ref == nil {
+		return nil
+	}
+	return hoverForStructuredView(ref.targetName, ref.targetKind, ref.targetType, ref.targetKind != "")
+}
+
+func hoverForStructuredSymbol(sym *structuredSymbol) *Hover {
+	if sym == nil {
+		return nil
+	}
+	return hoverForStructuredView(sym.name, sym.kind, sym.typeText, sym.kind != "")
+}
+
+func hoverForStructuredView(name, kind, typeText string, hasSym bool) *Hover {
+	return &Hover{Contents: MarkupContent{
+		Kind: MarkupKindMarkdown,
+		Value: selfhost.LSPHoverMarkdown(selfhost.LSPSymbolView{
+			Name:     name,
+			Kind:     kind,
+			TypeText: typeText,
+			HasSym:   hasSym,
+		}),
 	}}
 }
 
@@ -311,10 +349,10 @@ func symbolDoc(sym *resolve.Symbol) string {
 
 // ---- Definition ----
 
-// handleDefinition locates the identifier under the cursor and, if
-// its resolver-assigned symbol has an AST declaration (i.e. it's not
-// a builtin), replies with a Location pointing at the declaration
-// site. Builtins return `null` because there's no source to jump to.
+// handleDefinition locates the identifier under the cursor and replies with a
+// Location pointing at the declaration site. The selfhost structured result is
+// used first; the Go resolver Symbol fallback remains for compatibility paths.
+// Builtins return `null` because there's no source to jump to.
 func (s *Server) handleDefinition(req *rpcRequest) {
 	var params DefinitionParams
 	if err := unmarshalParams(req, &params); err != nil {
@@ -324,6 +362,22 @@ func (s *Server) handleDefinition(req *rpcRequest) {
 	doc := s.docs.get(params.TextDocument.URI)
 	if doc == nil {
 		replyJSON(s.conn, req.ID, nil)
+		return
+	}
+	if ref := structuredReferenceAt(doc, params.Position); ref != nil {
+		if ref.builtin || ref.targetURI == "" {
+			replyJSON(s.conn, req.ID, nil)
+			return
+		}
+		replyJSON(s.conn, req.ID, Location{URI: ref.targetURI, Range: ref.targetRange})
+		return
+	}
+	if sym := structuredSymbolAt(doc, params.Position); sym != nil {
+		if sym.builtin {
+			replyJSON(s.conn, req.ID, nil)
+			return
+		}
+		replyJSON(s.conn, req.ID, Location{URI: sym.uri, Range: sym.selectionRange})
 		return
 	}
 	pos := doc.analysis.lines.lspToOsty(params.Position)

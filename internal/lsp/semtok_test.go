@@ -5,7 +5,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -24,7 +23,7 @@ func TestClassifyTokenUsesSelfHostedPolicy(t *testing.T) {
 	tests := []struct {
 		name       string
 		tok        token.Token
-		symbolKind resolve.SymbolKind
+		symbolKind string
 		wantType   uint32
 		wantOK     bool
 	}{
@@ -55,14 +54,14 @@ func TestClassifyTokenUsesSelfHostedPolicy(t *testing.T) {
 		{
 			name:       "resolved function ident",
 			tok:        token.Token{Kind: token.IDENT, Pos: token.Pos{Offset: 10}},
-			symbolKind: resolve.SymFn,
+			symbolKind: "function",
 			wantType:   semTypeIndex(t, "function"),
 			wantOK:     true,
 		},
 		{
 			name:       "resolved parameter ident",
 			tok:        token.Token{Kind: token.IDENT, Pos: token.Pos{Offset: 10}},
-			symbolKind: resolve.SymParam,
+			symbolKind: "parameter",
 			wantType:   semTypeIndex(t, "parameter"),
 			wantOK:     true,
 		},
@@ -81,9 +80,9 @@ func TestClassifyTokenUsesSelfHostedPolicy(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			index := map[int]*resolve.Symbol{}
-			if tt.symbolKind != resolve.SymUnknown {
-				index[tt.tok.Pos.Offset] = &resolve.Symbol{Kind: tt.symbolKind}
+			index := map[int]string{}
+			if tt.symbolKind != "" {
+				index[tt.tok.Pos.Offset] = tt.symbolKind
 			}
 			got, ok := classifyToken(tt.tok, index)
 			if ok != tt.wantOK {

@@ -12,14 +12,15 @@ import (
 // by context:
 //
 //   - After `.` on a package alias (`fs.⟨cursor⟩`): suggest every
-//     `pub` symbol in the target package's PkgScope, scored by name.
+//     exported symbol from the selfhost import surface, with the
+//     PkgScope path kept only as compatibility fallback.
 //   - After `.` on any other receiver: fall back to a safe, empty
 //     list (member dispatch requires type-checker awareness we don't
 //     yet surface here; sending nothing is better than a sea of
 //     irrelevant global names).
-//   - Otherwise: suggest every name visible in the current lexical
-//     scope — locals, parameters, top-level decls in this package,
-//     builtins, and use aliases.
+//   - Otherwise: suggest selfhost structured package symbols first,
+//     then fill in locals, parameters, and builtins from the legacy
+//     lexical scope while those are still compatibility-only.
 //
 // The response sets IsIncomplete=false so VS Code doesn't thrash the
 // server on every keystroke; the list is deterministic across runs
@@ -65,11 +66,14 @@ func precedingContext(src []byte, offset int) (prefix, afterDot string) {
 	return ctx.Prefix, ctx.AfterDot
 }
 
-// completionAfterDot resolves `recvName` against the document's file
-// scope. When it binds a SymPackage with a loaded PkgScope, we emit
-// one item per exported member.
+// completionAfterDot resolves `recvName` against the selfhost import
+// surfaces captured in analysis. The legacy file-scope path remains as a
+// compatibility fallback while downstream consumers migrate off Scope.
 func (s *Server) completionAfterDot(doc *document, recvName, prefix string) []CompletionItem {
 	a := doc.analysis
+	if items, ok := completionAfterStructuredImport(a, recvName, prefix); ok {
+		return items
+	}
 	if a.resolve == nil || a.resolve.FileScope == nil {
 		return nil
 	}
@@ -98,17 +102,52 @@ func (s *Server) completionAfterDot(doc *document, recvName, prefix string) []Co
 	return sortCompletionItems(items)
 }
 
-// completionInScope emits one item per name visible from the scope
-// that contains the cursor. Walks up from the file scope through
-// every parent (package, prelude) so builtins, use aliases, and
-// top-level declarations all appear.
+func completionAfterStructuredImport(a *docAnalysis, recvName, prefix string) ([]CompletionItem, bool) {
+	if a == nil {
+		return nil, false
+	}
+	for _, surface := range a.structuredImports {
+		if surface.alias != recvName {
+			continue
+		}
+		items := make([]CompletionItem, 0, len(surface.symbols))
+		for _, sym := range surface.symbols {
+			if sym.name == "" {
+				continue
+			}
+			if prefix != "" && !strings.HasPrefix(sym.name, prefix) {
+				continue
+			}
+			items = append(items, completionItemFromStructuredImportSymbol(sym))
+		}
+		return sortCompletionItems(items), true
+	}
+	return nil, false
+}
+
+// completionInScope emits one item per visible name. Package-level symbols
+// come from selfhost structured facts; the scope walk remains only to supply
+// locals, parameters, and builtins not yet exposed in those facts.
 func (s *Server) completionInScope(doc *document, prefix string) []CompletionItem {
 	a := doc.analysis
-	if a.resolve == nil || a.resolve.FileScope == nil {
-		return nil
-	}
 	seen := map[string]struct{}{}
 	var items []CompletionItem
+	for _, sym := range a.structuredSymbols {
+		if sym.builtin || sym.name == "" || sym.depth != 0 {
+			continue
+		}
+		if _, dup := seen[sym.name]; dup {
+			continue
+		}
+		if prefix != "" && !strings.HasPrefix(sym.name, prefix) {
+			continue
+		}
+		seen[sym.name] = struct{}{}
+		items = append(items, completionItemFromStructuredSymbol(sym))
+	}
+	if a.resolve == nil || a.resolve.FileScope == nil {
+		return sortCompletionItems(items)
+	}
 	for sc := a.resolve.FileScope; sc != nil; sc = sc.Parent() {
 		for name, sym := range sc.Symbols() {
 			if _, dup := seen[name]; dup {
@@ -149,6 +188,24 @@ func sortCompletionItems(in []CompletionItem) []CompletionItem {
 // LSPSymbolView so the policy is portable.
 func completionItemFromSym(label string, sym *resolve.Symbol, r *check.Result) CompletionItem {
 	return completionItemFromView(completionSymbolView(label, sym, r))
+}
+
+func completionItemFromStructuredSymbol(sym structuredSymbol) CompletionItem {
+	return completionItemFromView(selfhost.LSPSymbolView{
+		Name:     sym.name,
+		Kind:     sym.kind,
+		TypeText: sym.typeText,
+		HasSym:   true,
+	})
+}
+
+func completionItemFromStructuredImportSymbol(sym structuredImportSymbol) CompletionItem {
+	return completionItemFromView(selfhost.LSPSymbolView{
+		Name:     sym.name,
+		Kind:     sym.kind,
+		TypeText: sym.typeText,
+		HasSym:   true,
+	})
 }
 
 // completionSymbolView projects a resolver Symbol into the
