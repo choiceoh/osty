@@ -1,0 +1,836 @@
+// std.markdown - tiny pure Markdown/HTML text extraction helpers.
+//
+// Deneb's markdown core is a full IR parser. The stdlib surface exposes the
+// most reusable dependency-free pieces: block classification, fence extraction,
+// HTML-to-Markdown text conversion, and markup stripping.
+
+use std.strings
+
+pub enum BlockKind {
+    Heading,
+    Paragraph,
+    FencedCode,
+    Quote,
+    ListItem,
+    TableRow,
+    HorizontalRule,
+    Blank,
+}
+
+pub struct Block {
+    pub kind: BlockKind,
+    pub text: String,
+    pub level: Int = 0,
+    pub language: String = "",
+}
+
+pub struct CodeFence {
+    pub language: String = "",
+    pub body: String,
+}
+
+pub struct HtmlOptions {
+    pub stripNoise: Bool = false,
+}
+
+pub struct HtmlResult {
+    pub text: String = "",
+    pub title: String = "",
+}
+
+pub fn parseBlocks(markdown: String) -> List<Block> {
+    let lines = strings.splitLines(markdown)
+    let mut out: List<Block> = []
+    let mut inFence = false
+    let mut fenceLang = ""
+    let mut fenceBody = ""
+
+    for line in lines {
+        let trimmed = strings.trimSpace(line)
+        if startsFence(trimmed) {
+            if inFence {
+                out.push(Block { kind: FencedCode, text: fenceBody, language: fenceLang })
+                fenceBody = ""
+                fenceLang = ""
+                inFence = false
+            } else {
+                inFence = true
+                fenceLang = fenceLanguage(trimmed)
+            }
+            continue
+        }
+        if inFence {
+            if !fenceBody.isEmpty() {
+                fenceBody = "{fenceBody}\n"
+            }
+            fenceBody = "{fenceBody}{line}"
+            continue
+        }
+        out.push(classifyLine(line))
+    }
+    if inFence {
+        out.push(Block { kind: FencedCode, text: fenceBody, language: fenceLang })
+    }
+    out
+}
+
+pub fn extractFences(markdown: String) -> List<CodeFence> {
+    let mut out: List<CodeFence> = []
+    for block in parseBlocks(markdown) {
+        if block.kind == FencedCode {
+            out.push(CodeFence { language: block.language, body: block.text })
+        }
+    }
+    out
+}
+
+pub fn stripMarkdown(markdown: String) -> String {
+    let mut parts: List<String> = []
+    for block in parseBlocks(markdown) {
+        match block.kind {
+            Blank -> {},
+            HorizontalRule -> {},
+            FencedCode -> parts.push(block.text),
+            _ -> parts.push(stripInlineMarkup(block.text)),
+        }
+    }
+    strings.join(parts, "\n")
+}
+
+pub fn htmlToMarkdown(html: String) -> String {
+    htmlToMarkdownResult(html).text
+}
+
+pub fn htmlToMarkdownResult(html: String) -> HtmlResult {
+    htmlToMarkdownWithOptions(html, HtmlOptions {})
+}
+
+pub fn htmlToMarkdownWithOptions(html: String, opts: HtmlOptions) -> HtmlResult {
+    let title = extractTitle(html)
+    let mut out = html
+    out = strings.replaceAll(out, "\r\n", "\n")
+    out = removePairedTagBody(out, "script")
+    out = removePairedTagBody(out, "style")
+    out = removePairedTagBody(out, "noscript")
+    out = removePairedTagBody(out, "head")
+    out = removePairedTagBody(out, "svg")
+    if opts.stripNoise {
+        out = removePairedTagBody(out, "nav")
+        out = removePairedTagBody(out, "aside")
+        out = removePairedTagBody(out, "iframe")
+        out = removePairedTagBody(out, "form")
+    }
+    out = convertTables(out)
+    out = convertPreCode(out)
+    out = convertImages(out)
+    out = convertAnchors(out)
+    out = strings.replaceAll(out, "<br>", "\n")
+    out = strings.replaceAll(out, "<br/>", "\n")
+    out = strings.replaceAll(out, "<br />", "\n")
+    out = replacePairedTag(out, "strong", "**")
+    out = replacePairedTag(out, "b", "**")
+    out = replacePairedTag(out, "em", "*")
+    out = replacePairedTag(out, "i", "*")
+    out = replacePairedTag(out, "code", "`")
+    out = replacePairedTag(out, "s", "~~")
+    out = replacePairedTag(out, "del", "~~")
+    out = replacePairedTag(out, "strike", "~~")
+    out = replacePairedTag(out, "blockquote", "\n> ")
+    out = convertOrderedLists(out)
+    out = replacePairedTag(out, "p", "\n")
+    out = replacePairedTag(out, "div", "\n")
+    out = replacePairedTag(out, "section", "\n")
+    out = replacePairedTag(out, "article", "\n")
+    out = replacePairedTag(out, "header", "\n")
+    out = replacePairedTag(out, "footer", "\n")
+    out = replaceSelfClosingTag(out, "hr", "\n---\n")
+    out = replacePairedTag(out, "li", "\n- ")
+    out = replacePairedTag(out, "h1", "\n# ")
+    out = replacePairedTag(out, "h2", "\n## ")
+    out = replacePairedTag(out, "h3", "\n### ")
+    out = replacePairedTag(out, "h4", "\n#### ")
+    out = replacePairedTag(out, "h5", "\n##### ")
+    out = replacePairedTag(out, "h6", "\n###### ")
+    HtmlResult {
+        text: normalizeMarkdownOutput(decodeEntities(stripTags(out))),
+        title: title,
+    }
+}
+
+pub fn stripTags(html: String) -> String {
+    let chars = html.chars()
+    let mut out = ""
+    let mut inTag = false
+    for c in chars {
+        if c == '<' {
+            inTag = true
+            continue
+        }
+        if c == '>' {
+            inTag = false
+            continue
+        }
+        if !inTag {
+            out = "{out}{strings.fromChar(c)}"
+        }
+    }
+    out
+}
+
+pub fn decodeEntities(text: String) -> String {
+    let mut out = text
+    out = strings.replaceAll(out, "&lt;", "<")
+    out = strings.replaceAll(out, "&gt;", ">")
+    out = strings.replaceAll(out, "&amp;", "&")
+    out = strings.replaceAll(out, "&quot;", "\"")
+    out = strings.replaceAll(out, "&apos;", "'")
+    out = strings.replaceAll(out, "&#x27;", "'")
+    out = strings.replaceAll(out, "&#39;", "'")
+    out = strings.replaceAll(out, "&#x41;", "A")
+    out = strings.replaceAll(out, "&#65;", "A")
+    out = strings.replaceAll(out, "&#8217;", "\u{2019}")
+    out = strings.replaceAll(out, "&#x2019;", "\u{2019}")
+    out = strings.replaceAll(out, "&mdash;", "\u{2014}")
+    out = strings.replaceAll(out, "&ndash;", "\u{2013}")
+    out = strings.replaceAll(out, "&hellip;", "\u{2026}")
+    out = strings.replaceAll(out, "&laquo;", "\u{00AB}")
+    out = strings.replaceAll(out, "&raquo;", "\u{00BB}")
+    out = strings.replaceAll(out, "&lsquo;", "\u{2018}")
+    out = strings.replaceAll(out, "&rsquo;", "\u{2019}")
+    out = strings.replaceAll(out, "&ldquo;", "\u{201C}")
+    out = strings.replaceAll(out, "&rdquo;", "\u{201D}")
+    out = strings.replaceAll(out, "&copy;", "\u{00A9}")
+    out = strings.replaceAll(out, "&reg;", "\u{00AE}")
+    out = strings.replaceAll(out, "&trade;", "\u{2122}")
+    out = strings.replaceAll(out, "&bull;", "\u{2022}")
+    out = strings.replaceAll(out, "&middot;", "\u{00B7}")
+    out = strings.replaceAll(out, "&deg;", "\u{00B0}")
+    out = strings.replaceAll(out, "&euro;", "\u{20AC}")
+    out = strings.replaceAll(out, "&pound;", "\u{00A3}")
+    out
+}
+
+fn classifyLine(line: String) -> Block {
+    let trimmed = strings.trimSpace(line)
+    if trimmed.isEmpty() {
+        return Block { kind: Blank, text: "" }
+    }
+    if isHorizontalRule(trimmed) {
+        return Block { kind: HorizontalRule, text: "" }
+    }
+    let headingLevel = countHeadingMarks(trimmed)
+    if headingLevel > 0 {
+        return Block { kind: Heading, level: headingLevel, text: strings.trimSpace(strings.slice(trimmed, headingLevel, trimmed.charCount())) }
+    }
+    if strings.startsWith(trimmed, ">") {
+        return Block { kind: Quote, text: strings.trimSpace(strings.trimPrefix(trimmed, ">")) }
+    }
+    if isListItem(trimmed) {
+        return Block { kind: ListItem, text: stripListMarker(trimmed) }
+    }
+    if strings.contains(trimmed, "|") {
+        return Block { kind: TableRow, text: trimmed }
+    }
+    Block { kind: Paragraph, text: trimmed }
+}
+
+fn startsFence(line: String) -> Bool {
+    strings.startsWith(line, "```") || strings.startsWith(line, "~~~")
+}
+
+fn fenceLanguage(line: String) -> String {
+    if strings.startsWith(line, "```") {
+        return strings.trimSpace(strings.trimPrefix(line, "```"))
+    }
+    if strings.startsWith(line, "~~~") {
+        return strings.trimSpace(strings.trimPrefix(line, "~~~"))
+    }
+    ""
+}
+
+fn countHeadingMarks(line: String) -> Int {
+    let chars = line.chars()
+    let mut i = 0
+    for i < chars.len() && chars[i] == '#' {
+        i = i + 1
+    }
+    if i > 0 && i <= 6 && i < chars.len() && chars[i] == ' ' {
+        return i
+    }
+    0
+}
+
+fn isHorizontalRule(line: String) -> Bool {
+    line == "---" || line == "***" || line == "___"
+}
+
+fn isListItem(line: String) -> Bool {
+    strings.startsWith(line, "- ") ||
+    strings.startsWith(line, "* ") ||
+    strings.startsWith(line, "+ ") ||
+    startsNumberedList(line)
+}
+
+fn startsNumberedList(line: String) -> Bool {
+    let chars = line.chars()
+    let mut i = 0
+    for i < chars.len() && chars[i] >= '0' && chars[i] <= '9' {
+        i = i + 1
+    }
+    i > 0 && i + 1 < chars.len() && chars[i] == '.' && chars[i + 1] == ' '
+}
+
+fn stripListMarker(line: String) -> String {
+    if strings.startsWith(line, "- ") || strings.startsWith(line, "* ") || strings.startsWith(line, "+ ") {
+        return strings.trimSpace(strings.slice(line, 2, line.charCount()))
+    }
+    let chars = line.chars()
+    let mut i = 0
+    for i < chars.len() && chars[i] >= '0' && chars[i] <= '9' {
+        i = i + 1
+    }
+    if i + 1 < chars.len() && chars[i] == '.' {
+        return strings.trimSpace(strings.slice(line, i + 1, line.charCount()))
+    }
+    line
+}
+
+fn stripInlineMarkup(text: String) -> String {
+    let mut out = text
+    out = strings.replaceAll(out, "**", "")
+    out = strings.replaceAll(out, "__", "")
+    out = strings.replaceAll(out, "`", "")
+    out = strings.replaceAll(out, "~~", "")
+    out
+}
+
+fn extractTitle(html: String) -> String {
+    let lower = strings.toLower(html)
+    match strings.indexOf(lower, "<title") {
+        Some(start) -> {
+            let after = strings.slice(html, start, html.charCount())
+            let afterLower = strings.toLower(after)
+            match strings.indexOf(afterLower, ">") {
+                Some(gt) -> {
+                    let bodyStart = gt + 1
+                    let bodyLower = strings.slice(afterLower, bodyStart, afterLower.charCount())
+                    match strings.indexOf(bodyLower, "</title>") {
+                        Some(closeRel) -> {
+                            decodeEntities(stripTags(strings.slice(after, bodyStart, bodyStart + closeRel)))
+                        },
+                        None -> "",
+                    }
+                },
+                None -> "",
+            }
+        },
+        None -> "",
+    }
+}
+
+fn normalizeMarkdownOutput(text: String) -> String {
+    let mut out: List<String> = []
+    let mut lastBlank = false
+    let mut inFence = false
+    for line in strings.splitLines(text) {
+        let trimmed = strings.trimSpace(line)
+        if strings.startsWith(trimmed, "```") {
+            out.push(trimmed)
+            inFence = !inFence
+            lastBlank = false
+            continue
+        }
+        if inFence {
+            out.push(line)
+            continue
+        }
+        let clean = collapseSpaces(trimmed)
+        let blank = clean.isEmpty()
+        if blank && lastBlank {
+            continue
+        }
+        out.push(clean)
+        lastBlank = blank
+    }
+    strings.trimSpace(strings.join(out, "\n"))
+}
+
+fn collapseSpaces(text: String) -> String {
+    let mut out: List<String> = []
+    for part in strings.fields(text) {
+        out.push(part)
+    }
+    strings.join(out, " ")
+}
+
+fn replaceSelfClosingTag(text: String, tag: String, replacement: String) -> String {
+    replaceOpeningTag(text, tag, replacement)
+}
+
+fn removePairedTagBody(text: String, tag: String) -> String {
+    let openNeedle = "<{tag}"
+    let closeNeedle = "</{tag}>"
+    let mut rest = text
+    let mut out = ""
+    for true {
+        let lower = strings.toLower(rest)
+        match strings.indexOf(lower, openNeedle) {
+            Some(start) -> {
+                out = "{out}{strings.slice(rest, 0, start)}"
+                let afterOpen = strings.slice(rest, start, rest.charCount())
+                let afterLower = strings.toLower(afterOpen)
+                match strings.indexOf(afterLower, ">") {
+                    Some(gt) -> {
+                        let bodyStart = gt + 1
+                        let bodyLower = strings.slice(afterLower, bodyStart, afterLower.charCount())
+                        match strings.indexOf(bodyLower, closeNeedle) {
+                            Some(closeRel) -> {
+                                let next = bodyStart + closeRel + closeNeedle.charCount()
+                                rest = strings.slice(afterOpen, next, afterOpen.charCount())
+                            },
+                            None -> {
+                                return out
+                            },
+                        }
+                    },
+                    None -> {
+                        return out
+                    },
+                }
+            },
+            None -> {
+                return "{out}{rest}"
+            },
+        }
+    }
+    out
+}
+
+fn convertPreCode(text: String) -> String {
+    let mut rest = text
+    let mut out = ""
+    for true {
+        let lower = strings.toLower(rest)
+        match strings.indexOf(lower, "<pre") {
+            Some(start) -> {
+                out = "{out}{strings.slice(rest, 0, start)}"
+                let after = strings.slice(rest, start, rest.charCount())
+                let afterLower = strings.toLower(after)
+                match strings.indexOf(afterLower, "</pre>") {
+                    Some(close) -> {
+                        let block = strings.slice(after, 0, close)
+                        let codeTag = firstOpeningTag(block, "code")
+                        let lang = extractCodeLanguage(codeTag)
+                        let body = decodeEntities(stripTags(block))
+                        out = "{out}\n```{lang}\n{strings.trimSpace(body)}\n```\n"
+                        rest = strings.slice(after, close + 6, after.charCount())
+                    },
+                    None -> {
+                        out = "{out}{after}"
+                        return out
+                    },
+                }
+            },
+            None -> {
+                return "{out}{rest}"
+            },
+        }
+    }
+    out
+}
+
+fn convertTables(text: String) -> String {
+    let mut rest = text
+    let mut out = ""
+    for true {
+        let lower = strings.toLower(rest)
+        match strings.indexOf(lower, "<table") {
+            Some(start) -> {
+                out = "{out}{strings.slice(rest, 0, start)}"
+                let after = strings.slice(rest, start, rest.charCount())
+                let afterLower = strings.toLower(after)
+                match strings.indexOf(afterLower, "</table>") {
+                    Some(close) -> {
+                        out = "{out}\n{tableToMarkdown(strings.slice(after, 0, close))}\n"
+                        rest = strings.slice(after, close + 8, after.charCount())
+                    },
+                    None -> {
+                        out = "{out}{after}"
+                        return out
+                    },
+                }
+            },
+            None -> {
+                return "{out}{rest}"
+            },
+        }
+    }
+    out
+}
+
+fn tableToMarkdown(tableHtml: String) -> String {
+    let rows = extractTagBodies(tableHtml, "tr")
+    let mut lines: List<String> = []
+    let mut rowIndex = 0
+    for row in rows {
+        let mut cells = extractTagBodies(row, "th")
+        if cells.isEmpty() {
+            cells = extractTagBodies(row, "td")
+        }
+        if cells.isEmpty() {
+            continue
+        }
+        lines.push(markdownTableRow(cells))
+        if rowIndex == 0 {
+            lines.push(markdownSeparator(cells.len()))
+        }
+        rowIndex = rowIndex + 1
+    }
+    strings.join(lines, "\n")
+}
+
+fn markdownTableRow(cells: List<String>) -> String {
+    let mut parts: List<String> = []
+    for cell in cells {
+        parts.push(escapeTableCell(decodeEntities(stripTags(cell))))
+    }
+    "| {strings.join(parts, " | ")} |"
+}
+
+fn markdownSeparator(count: Int) -> String {
+    let mut parts: List<String> = []
+    let mut i = 0
+    for i < count {
+        parts.push("---")
+        i = i + 1
+    }
+    "| {strings.join(parts, " | ")} |"
+}
+
+fn escapeTableCell(cell: String) -> String {
+    let mut out = strings.trimSpace(cell)
+    out = strings.replaceAll(out, "\\", "\\\\")
+    out = strings.replaceAll(out, "|", "\\|")
+    out
+}
+
+fn convertOrderedLists(text: String) -> String {
+    let mut rest = text
+    let mut out = ""
+    for true {
+        let lower = strings.toLower(rest)
+        match strings.indexOf(lower, "<ol") {
+            Some(start) -> {
+                out = "{out}{strings.slice(rest, 0, start)}"
+                let after = strings.slice(rest, start, rest.charCount())
+                let afterLower = strings.toLower(after)
+                match strings.indexOf(afterLower, "</ol>") {
+                    Some(close) -> {
+                        out = "{out}{orderedListToMarkdown(strings.slice(after, 0, close))}"
+                        rest = strings.slice(after, close + 5, after.charCount())
+                    },
+                    None -> {
+                        out = "{out}{after}"
+                        return out
+                    },
+                }
+            },
+            None -> {
+                return "{out}{rest}"
+            },
+        }
+    }
+    out
+}
+
+fn orderedListToMarkdown(html: String) -> String {
+    let items = extractTagBodies(html, "li")
+    let mut lines: List<String> = []
+    let mut n = 1
+    for item in items {
+        lines.push("{n}. {strings.trimSpace(decodeEntities(stripTags(item)))}")
+        n = n + 1
+    }
+    "\n{strings.join(lines, "\n")}\n"
+}
+
+fn extractTagBodies(html: String, tag: String) -> List<String> {
+    let mut rest = html
+    let mut out: List<String> = []
+    let openNeedle = "<{tag}"
+    let closeNeedle = "</{tag}>"
+    for true {
+        let lower = strings.toLower(rest)
+        match strings.indexOf(lower, openNeedle) {
+            Some(start) -> {
+                let after = strings.slice(rest, start, rest.charCount())
+                let afterLower = strings.toLower(after)
+                match strings.indexOf(afterLower, ">") {
+                    Some(gt) -> {
+                        let bodyStart = gt + 1
+                        let bodyLower = strings.slice(afterLower, bodyStart, afterLower.charCount())
+                        match strings.indexOf(bodyLower, closeNeedle) {
+                            Some(closeRel) -> {
+                                out.push(strings.slice(after, bodyStart, bodyStart + closeRel))
+                                rest = strings.slice(after, bodyStart + closeRel + closeNeedle.charCount(), after.charCount())
+                            },
+                            None -> {
+                                return out
+                            },
+                        }
+                    },
+                    None -> {
+                        return out
+                    },
+                }
+            },
+            None -> {
+                return out
+            },
+        }
+    }
+    out
+}
+
+fn firstOpeningTag(html: String, tag: String) -> String {
+    let lower = strings.toLower(html)
+    match strings.indexOf(lower, "<{tag}") {
+        Some(start) -> {
+            let after = strings.slice(html, start, html.charCount())
+            match strings.indexOf(after, ">") {
+                Some(gt) -> strings.slice(after, 0, gt + 1),
+                None -> "",
+            }
+        },
+        None -> "",
+    }
+}
+
+fn extractCodeLanguage(tag: String) -> String {
+    let classAttr = extractAttr(tag, "class")
+    let lower = strings.toLower(classAttr)
+    match strings.indexOf(lower, "language-") {
+        Some(i) -> takeClassName(strings.slice(classAttr, i + 9, classAttr.charCount())),
+        None -> {
+            match strings.indexOf(lower, "lang-") {
+                Some(i) -> takeClassName(strings.slice(classAttr, i + 5, classAttr.charCount())),
+                None -> "",
+            }
+        },
+    }
+}
+
+fn takeClassName(value: String) -> String {
+    let chars = value.chars()
+    let mut i = 0
+    for i < chars.len() && chars[i] != ' ' && chars[i] != '"' && chars[i] != '\'' {
+        i = i + 1
+    }
+    strings.slice(value, 0, i)
+}
+
+fn convertAnchors(text: String) -> String {
+    let mut rest = text
+    let mut out = ""
+    for true {
+        let lower = strings.toLower(rest)
+        match strings.indexOf(lower, "<a") {
+            Some(start) -> {
+                out = "{out}{strings.slice(rest, 0, start)}"
+                let after = strings.slice(rest, start, rest.charCount())
+                let afterLower = strings.toLower(after)
+                match strings.indexOf(afterLower, ">") {
+                    Some(gt) -> {
+                        let openTag = strings.slice(after, 0, gt + 1)
+                        let href = extractAttr(openTag, "href")
+                        let bodyStart = gt + 1
+                        let bodyLower = strings.slice(afterLower, bodyStart, afterLower.charCount())
+                        match strings.indexOf(bodyLower, "</a>") {
+                            Some(closeRel) -> {
+                                let body = decodeEntities(stripTags(strings.slice(after, bodyStart, bodyStart + closeRel)))
+                                if href.isEmpty() {
+                                    out = "{out}{body}"
+                                } else {
+                                    out = "{out}[{body}]({href})"
+                                }
+                                rest = strings.slice(after, bodyStart + closeRel + 4, after.charCount())
+                            },
+                            None -> {
+                                out = "{out}{after}"
+                                return out
+                            },
+                        }
+                    },
+                    None -> {
+                        out = "{out}{after}"
+                        return out
+                    },
+                }
+            },
+            None -> {
+                return "{out}{rest}"
+            },
+        }
+    }
+    out
+}
+
+fn convertImages(text: String) -> String {
+    let mut rest = text
+    let mut out = ""
+    for true {
+        let lower = strings.toLower(rest)
+        match strings.indexOf(lower, "<img") {
+            Some(start) -> {
+                out = "{out}{strings.slice(rest, 0, start)}"
+                let after = strings.slice(rest, start, rest.charCount())
+                match strings.indexOf(after, ">") {
+                    Some(gt) -> {
+                        let tag = strings.slice(after, 0, gt + 1)
+                        let src = extractAttr(tag, "src")
+                        let altRaw = extractAttr(tag, "alt")
+                        let alt = if altRaw.isEmpty() { filenameFromUrl(src) } else { altRaw }
+                        if src.isEmpty() {
+                            out = "{out}{tag}"
+                        } else {
+                            out = "{out}![{alt}]({src})"
+                        }
+                        rest = strings.slice(after, gt + 1, after.charCount())
+                    },
+                    None -> {
+                        out = "{out}{after}"
+                        return out
+                    },
+                }
+            },
+            None -> {
+                return "{out}{rest}"
+            },
+        }
+    }
+    out
+}
+
+fn filenameFromUrl(src: String) -> String {
+    let withoutQuery = takeUntilAny(src, "?#")
+    let parts = strings.split(withoutQuery, "/")
+    if parts.isEmpty() {
+        return ""
+    }
+    parts[parts.len() - 1]
+}
+
+fn takeUntilAny(text: String, cutset: String) -> String {
+    let chars = text.chars()
+    let stops = cutset.chars()
+    let mut i = 0
+    for i < chars.len() {
+        for stop in stops {
+            if chars[i] == stop {
+                return strings.slice(text, 0, i)
+            }
+        }
+        i = i + 1
+    }
+    text
+}
+
+fn extractAttr(tag: String, name: String) -> String {
+    let lower = strings.toLower(tag)
+    for quote in ["\"", "'"] {
+        let needle = "{strings.toLower(name)}={quote}"
+        match strings.indexOf(lower, needle) {
+            Some(i) -> {
+                let start = i + needle.charCount()
+                let rest = strings.slice(tag, start, tag.charCount())
+                match strings.indexOf(rest, quote) {
+                    Some(end) -> {
+                        return strings.slice(rest, 0, end)
+                    },
+                    None -> {},
+                }
+            },
+            None -> {},
+        }
+    }
+    ""
+}
+
+fn replacePairedTag(text: String, tag: String, replacement: String) -> String {
+    let opened = replaceOpeningTag(text, tag, replacement)
+    replaceClosingTag(opened, tag, "\n")
+}
+
+fn replaceOpeningTag(text: String, tag: String, replacement: String) -> String {
+    let chars = text.chars()
+    let mut out = ""
+    let mut i = 0
+    for i < chars.len() {
+        if chars[i] == '<' && matchesAtFold(chars, i + 1, tag) {
+            let after = i + 1 + tag.charCount()
+            if after < chars.len() && isTagBoundary(chars[after]) {
+                let close = findChar(chars, '>', after)
+                if close >= 0 {
+                    out = "{out}{replacement}"
+                    i = close + 1
+                    continue
+                }
+            }
+        }
+        out = "{out}{strings.fromChar(chars[i])}"
+        i = i + 1
+    }
+    out
+}
+
+fn replaceClosingTag(text: String, tag: String, replacement: String) -> String {
+    let chars = text.chars()
+    let mut out = ""
+    let mut i = 0
+    for i < chars.len() {
+        if i + 2 < chars.len() && chars[i] == '<' && chars[i + 1] == '/' && matchesAtFold(chars, i + 2, tag) {
+            let after = i + 2 + tag.charCount()
+            if after < chars.len() && isTagBoundary(chars[after]) {
+                let close = findChar(chars, '>', after)
+                if close >= 0 {
+                    out = "{out}{replacement}"
+                    i = close + 1
+                    continue
+                }
+            }
+        }
+        out = "{out}{strings.fromChar(chars[i])}"
+        i = i + 1
+    }
+    out
+}
+
+fn isTagBoundary(c: Char) -> Bool {
+    c == '>' || c == '/' || c == ' ' || c == '\t' || c == '\n' || c == '\r'
+}
+
+fn findChar(chars: List<Char>, target: Char, start: Int) -> Int {
+    let mut i = start
+    for i < chars.len() {
+        if chars[i] == target {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn matchesAtFold(chars: List<Char>, at: Int, needle: String) -> Bool {
+    let ns = strings.toLower(needle).chars()
+    if at < 0 || at + ns.len() > chars.len() {
+        return false
+    }
+    let mut i = 0
+    for i < ns.len() {
+        if strings.toLower(strings.fromChar(chars[at + i])) != strings.fromChar(ns[i]) {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}

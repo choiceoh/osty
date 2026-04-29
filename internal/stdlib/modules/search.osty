@@ -1,0 +1,357 @@
+// std.search - dependency-free in-memory text search.
+//
+// This is the stdlib-sized port of Deneb's pure textsearch package: Unicode-
+// aware tokenization, AND-first fallback, simple BM25-like scoring, and snippets
+// without SQLite/FTS or third-party indexes.
+
+use std.char
+use std.strings
+
+pub enum QueryMode {
+    Auto,
+    And,
+    Or,
+}
+
+pub struct Document {
+    pub id: String,
+    pub title: String = "",
+    pub body: String = "",
+    pub tags: List<String> = [],
+}
+
+pub struct Hit {
+    pub id: String,
+    pub score: Float,
+    pub snippet: String = "",
+}
+
+pub struct Index {
+    pub docs: List<Document> = [],
+}
+
+pub fn document(id: String, title: String, body: String) -> Document {
+    Document { id: id, title: title, body: body }
+}
+
+pub fn index() -> Index {
+    Index {}
+}
+
+pub fn upsert(mut idx: Index, doc: Document) -> Index {
+    idx = remove(idx, doc.id)
+    idx.docs.push(doc)
+    idx
+}
+
+pub fn upsertFields(idx: Index, id: String, title: String, body: String) -> Index {
+    upsert(idx, document(id, title, body))
+}
+
+pub fn remove(mut idx: Index, id: String) -> Index {
+    let mut out: List<Document> = []
+    for doc in idx.docs {
+        if doc.id != id {
+            out.push(doc)
+        }
+    }
+    idx.docs = out
+    idx
+}
+
+pub fn clear(idx: Index) -> Index {
+    Index {}
+}
+
+pub fn indexLen(idx: Index) -> Int {
+    idx.docs.len()
+}
+
+pub fn searchIndex(idx: Index, query: String, limit: Int) -> List<Hit> {
+    search(idx.docs, query, limit)
+}
+
+pub fn searchIndexOR(idx: Index, query: String, limit: Int) -> List<Hit> {
+    searchWithMode(idx.docs, query, limit, Or)
+}
+
+pub fn tokenize(text: String) -> List<String> {
+    let mut out: List<String> = []
+    let mut cur = ""
+    for c in strings.toLower(text).chars() {
+        if isTokenChar(c) {
+            cur = "{cur}{strings.fromChar(c)}"
+        } else if !cur.isEmpty() {
+            out.push(cur)
+            cur = ""
+        }
+    }
+    if !cur.isEmpty() {
+        out.push(cur)
+    }
+    out
+}
+
+pub fn searchDefault(docs: List<Document>, query: String) -> List<Hit> {
+    search(docs, query, 10)
+}
+
+pub fn search(docs: List<Document>, query: String, limit: Int) -> List<Hit> {
+    searchWithMode(docs, query, limit, Auto)
+}
+
+pub fn searchWithMode(docs: List<Document>, query: String, limit: Int, mode: QueryMode) -> List<Hit> {
+    let tokens = uniqueTokens(tokenize(query))
+    if tokens.isEmpty() || docs.isEmpty() || limit == 0 {
+        return []
+    }
+    let firstMode = if mode == Auto { And } else { mode }
+    let mut hits = scoreDocs(docs, tokens, firstMode)
+    if hits.isEmpty() && mode == Auto {
+        hits = scoreDocs(docs, tokens, Or)
+    }
+    topHits(hits, if limit < 0 { hits.len() } else { limit })
+}
+
+pub fn scoreDocument(doc: Document, queryTokens: List<String>, mode: QueryMode) -> Float {
+    let text = searchableText(doc)
+    let tokens = tokenize(text)
+    if tokens.isEmpty() || queryTokens.isEmpty() {
+        return 0.0
+    }
+    let mut matched = 0
+    let mut score = 0.0
+    for q in uniqueTokens(queryTokens) {
+        let tf = termFrequency(tokens, q)
+        if tf > 0 {
+            matched = matched + 1
+            score = score + (1.0 + tf.toFloat())
+            if strings.contains(strings.toLower(doc.title), q) {
+                score = score + 4.0
+            }
+            if hasPrefixMatch(tokens, q) {
+                score = score + 0.5
+            }
+        }
+    }
+    if mode == And && matched < queryTokens.len() {
+        return 0.0
+    }
+    if matched == 0 {
+        return 0.0
+    }
+    let coverage = matched.toFloat() / queryTokens.len().toFloat()
+    score * coverage + lengthBonus(tokens.len())
+}
+
+pub fn snippetDefault(doc: Document, query: String) -> String {
+    snippet(doc, query, 120)
+}
+
+pub fn snippet(doc: Document, query: String, contextChars: Int) -> String {
+    let text = searchableText(doc)
+    let tokens = tokenize(query)
+    if text.charCount() <= contextChars || tokens.isEmpty() {
+        return strings.slice(text, 0, minInt(text.charCount(), maxInt(contextChars, 0)))
+    }
+    let lower = strings.toLower(text)
+    let mut best = -1
+    for token in tokens {
+        match strings.indexOf(lower, token) {
+            Some(i) -> {
+                if best < 0 || i < best {
+                    best = i
+                }
+            },
+            None    -> {},
+        }
+    }
+    if best < 0 {
+        return strings.slice(text, 0, contextChars)
+    }
+    let half = contextChars / 2
+    let start = maxInt(0, best - half)
+    let end = minInt(text.charCount(), start + contextChars)
+    let prefix = if start > 0 { "..." } else { "" }
+    let suffix = if end < text.charCount() { "..." } else { "" }
+    "{prefix}{strings.slice(text, start, end)}{suffix}"
+}
+
+pub fn containsToken(text: String, token: String) -> Bool {
+    tokenize(text).contains(strings.toLower(token))
+}
+
+fn scoreDocs(docs: List<Document>, queryTokens: List<String>, mode: QueryMode) -> List<Hit> {
+    let mut hits: List<Hit> = []
+    let avgLen = averageDocLength(docs)
+    for doc in docs {
+        let score = scoreInCorpus(doc, docs, queryTokens, avgLen, mode)
+        if score > 0.0 {
+            hits.push(Hit { id: doc.id, score: score, snippet: snippet(doc, strings.join(queryTokens, " "), 160) })
+        }
+    }
+    hits
+}
+
+fn scoreInCorpus(doc: Document, corpus: List<Document>, queryTokens: List<String>, avgLen: Float, mode: QueryMode) -> Float {
+    let text = searchableText(doc)
+    let tokens = tokenize(text)
+    if tokens.isEmpty() || queryTokens.isEmpty() {
+        return 0.0
+    }
+    let n = corpus.len().toFloat()
+    let dl = tokens.len().toFloat()
+    let normalizer = 1.2 * (0.25 + 0.75 * (dl / if avgLen <= 0.0 { 1.0 } else { avgLen }))
+    let mut matched = 0
+    let mut score = 0.0
+    for q in uniqueTokens(queryTokens) {
+        let tf = termFrequency(tokens, q)
+        if tf <= 0 {
+            continue
+        }
+        matched = matched + 1
+        let df = docFrequency(corpus, q).toFloat()
+        let idf = (1.0 + ((n - df + 0.5) / (df + 0.5))).ln()
+        let tfScore = (tf.toFloat() * 2.2) / (tf.toFloat() + normalizer)
+        let titleBoost = if strings.contains(strings.toLower(doc.title), q) { 1.5 } else { 1.0 }
+        score = score + idf * tfScore * titleBoost
+    }
+    if mode == And && matched < queryTokens.len() {
+        return 0.0
+    }
+    if matched == 0 {
+        return 0.0
+    }
+    score * (matched.toFloat() / queryTokens.len().toFloat()) + lengthBonus(tokens.len())
+}
+
+fn docFrequency(corpus: List<Document>, query: String) -> Int {
+    let mut count = 0
+    for doc in corpus {
+        if termFrequency(tokenize(searchableText(doc)), query) > 0 {
+            count = count + 1
+        }
+    }
+    count
+}
+
+fn averageDocLength(docs: List<Document>) -> Float {
+    if docs.isEmpty() {
+        return 0.0
+    }
+    let mut total = 0
+    for doc in docs {
+        total = total + tokenize(searchableText(doc)).len()
+    }
+    total.toFloat() / docs.len().toFloat()
+}
+
+fn topHits(hits: List<Hit>, limit: Int) -> List<Hit> {
+    let mut used: Map<Int, Bool> = {:}
+    let mut out: List<Hit> = []
+    let max = if limit <= 0 { hits.len() } else { minInt(limit, hits.len()) }
+    for out.len() < max {
+        let mut best = -1
+        let mut bestScore = -1.0
+        for i in 0..hits.len() {
+            if used.get(i) ?? false {
+                continue
+            }
+            if best < 0 || hits[i].score > bestScore {
+                best = i
+                bestScore = hits[i].score
+            }
+        }
+        if best < 0 {
+            return out
+        }
+        used.insert(best, true)
+        out.push(hits[best])
+    }
+    out
+}
+
+fn searchableText(doc: Document) -> String {
+    let mut parts: List<String> = []
+    if !doc.title.isEmpty() {
+        parts.push(doc.title)
+    }
+    if !doc.body.isEmpty() {
+        parts.push(doc.body)
+    }
+    for tag in doc.tags {
+        parts.push(tag)
+    }
+    strings.join(parts, " ")
+}
+
+fn uniqueTokens(tokens: List<String>) -> List<String> {
+    let mut seen: Map<String, Bool> = {:}
+    let mut out: List<String> = []
+    for token in tokens {
+        if token.isEmpty() || (seen.get(token) ?? false) {
+            continue
+        }
+        seen.insert(token, true)
+        out.push(token)
+    }
+    out
+}
+
+fn termFrequency(tokens: List<String>, query: String) -> Int {
+    let mut count = 0
+    for token in tokens {
+        if token == query || strings.startsWith(token, query) {
+            count = count + 1
+        }
+    }
+    count
+}
+
+fn hasPrefixMatch(tokens: List<String>, query: String) -> Bool {
+    for token in tokens {
+        if token != query && strings.startsWith(token, query) {
+            return true
+        }
+    }
+    false
+}
+
+fn lengthBonus(tokenCount: Int) -> Float {
+    if tokenCount <= 0 {
+        return 0.0
+    }
+    if tokenCount < 40 {
+        return 1.0
+    }
+    if tokenCount < 200 {
+        return 0.5
+    }
+    0.0
+}
+
+fn isTokenChar(c: Char) -> Bool {
+    char.isAsciiAlphanumeric(c) ||
+    isHangul(c) ||
+    isCjk(c) ||
+    c == '_' ||
+    c == '-'
+}
+
+fn isHangul(c: Char) -> Bool {
+    let n = c.toInt()
+    (n >= 0xAC00 && n <= 0xD7AF) || (n >= 0x1100 && n <= 0x11FF) || (n >= 0x3130 && n <= 0x318F)
+}
+
+fn isCjk(c: Char) -> Bool {
+    let n = c.toInt()
+    (n >= 0x4E00 && n <= 0x9FFF) || (n >= 0x3040 && n <= 0x30FF)
+}
+
+fn minInt(a: Int, b: Int) -> Int {
+    if a < b { a } else { b }
+}
+
+fn maxInt(a: Int, b: Int) -> Int {
+    if a > b { a } else { b }
+}

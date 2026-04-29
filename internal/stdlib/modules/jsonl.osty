@@ -1,0 +1,117 @@
+// std.jsonl - JSON Lines parsing and append-only record helpers.
+
+use std.error
+use std.json
+use std.strings
+
+pub struct Record {
+    pub key: String,
+    pub value: json.Json,
+    pub createdAtMs: Int = 0,
+}
+
+pub fn encodeValue(value: json.Json) -> String {
+    json.stringifyValue(value)
+}
+
+pub fn encodeRecord(record: Record) -> String {
+    let open = "\{"
+    let close = "\}"
+    let mut out = "{open}\"key\":{jsonQuote(record.key)},\"value\":{json.stringifyValue(record.value)}"
+    if record.createdAtMs > 0 {
+        out = "{out},\"createdAtMs\":{record.createdAtMs}"
+    }
+    "{out}{close}"
+}
+
+pub fn parseLine(line: String) -> Result<json.Json, Error> {
+    let trimmed = strings.trimSpace(line)
+    if trimmed.isEmpty() {
+        return Err(error.new("jsonl: empty line"))
+    }
+    json.parseValue(trimmed)
+}
+
+pub fn parseLines(text: String) -> Result<List<json.Json>, Error> {
+    let mut out: List<json.Json> = []
+    for line in strings.splitLines(text) {
+        let trimmed = strings.trimSpace(line)
+        if trimmed.isEmpty() {
+            continue
+        }
+        out.push(json.parseValue(trimmed)?)
+    }
+    Ok(out)
+}
+
+pub fn appendLine(text: String, line: String) -> String {
+    if text.isEmpty() {
+        return strings.trimEnd(line)
+    }
+    "{strings.trimEnd(text)}\n{strings.trimEnd(line)}"
+}
+
+pub fn appendValue(text: String, value: json.Json) -> String {
+    appendLine(text, encodeValue(value))
+}
+
+pub fn compactHeadTail(text: String, keepHead: Int, keepTail: Int) -> String {
+    let lines = strings.splitLines(text)
+    if lines.len() <= keepHead + keepTail {
+        return text
+    }
+    let mut out: List<String> = []
+    let mut i = 0
+    for i < keepHead && i < lines.len() {
+        out.push(lines[i])
+        i = i + 1
+    }
+    out.push("... [{lines.len() - keepHead - keepTail} jsonl lines omitted] ...")
+    let startTail = maxInt(keepHead, lines.len() - keepTail)
+    i = startTail
+    for i < lines.len() {
+        out.push(lines[i])
+        i = i + 1
+    }
+    strings.join(out, "\n")
+}
+
+pub fn isJsonl(text: String) -> Bool {
+    for line in strings.splitLines(text) {
+        let trimmed = strings.trimSpace(line)
+        if trimmed.isEmpty() {
+            continue
+        }
+        match json.parseValue(trimmed) {
+            Ok(_) -> {},
+            Err(_) -> {
+                return false
+            },
+        }
+    }
+    true
+}
+
+fn maxInt(a: Int, b: Int) -> Int {
+    if a > b { a } else { b }
+}
+
+fn jsonQuote(text: String) -> String {
+    let mut out = "\""
+    for c in text.chars() {
+        if c == '"' {
+            out = "{out}\\\""
+        } else if c == '\\' {
+            out = "{out}\\\\"
+        } else if c == '\n' {
+            out = "{out}\\n"
+        } else if c == '\r' {
+            out = "{out}\\r"
+        } else if c == '\t' {
+            out = "{out}\\t"
+        } else {
+            out = "{out}{strings.fromChar(c)}"
+        }
+    }
+    "{out}\""
+}

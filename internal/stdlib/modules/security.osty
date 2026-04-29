@@ -1,0 +1,483 @@
+// std.security - small dependency-free security primitives.
+//
+// Deneb uses these shapes for SSRF-safe URL checks, HTML escaping, and stable
+// session-key validation. The stdlib version stays pure Osty and composes with
+// std.url/std.net instead of pulling in a web framework.
+
+use std.char
+use std.error
+use std.net
+use std.strings
+use std.url
+
+pub struct SafeUrlPolicy {
+    pub allowHttp: Bool = true,
+    pub allowHttps: Bool = true,
+    pub allowLocalhost: Bool = false,
+    pub allowPrivateNetworks: Bool = false,
+    pub allowCloudMetadata: Bool = false,
+    pub allowNumericIpv4Bypass: Bool = false,
+}
+
+pub struct UrlSafety {
+    pub safe: Bool,
+    pub reason: String = "",
+    pub scheme: String = "",
+    pub host: String = "",
+}
+
+pub struct LinkExtraction {
+    pub links: List<String>,
+    pub scanned: Int = 0,
+    pub rejected: Int = 0,
+}
+
+pub fn defaultSafeUrlPolicy() -> SafeUrlPolicy {
+    SafeUrlPolicy {}
+}
+
+pub fn isSafeUrl(raw: String) -> Bool {
+    checkUrl(raw, defaultSafeUrlPolicy()).safe
+}
+
+pub fn checkUrl(raw: String, policy: SafeUrlPolicy) -> UrlSafety {
+    let input = strings.trimSpace(raw)
+    if input.isEmpty() {
+        return unsafeUrl("empty url", "", "")
+    }
+    if strings.startsWith(input, "\\\\") || (strings.startsWith(input, "//") && !strings.contains(input, "://")) {
+        return unsafeUrl("network path is blocked", "", "")
+    }
+
+    let parsed = match url.parse(input) {
+        Ok(u) -> u,
+        Err(_) -> {
+            return unsafeUrl("invalid url", "", "")
+        },
+    }
+    let scheme = strings.toLower(parsed.scheme)
+    let host = normalizeHost(parsed.host)
+    if scheme == "http" && !policy.allowHttp {
+        return unsafeUrl("http scheme is disabled", scheme, host)
+    }
+    if scheme == "https" && !policy.allowHttps {
+        return unsafeUrl("https scheme is disabled", scheme, host)
+    }
+    if scheme != "http" && scheme != "https" {
+        return unsafeUrl("scheme is blocked", scheme, host)
+    }
+    if host.isEmpty() {
+        return unsafeUrl("missing host", scheme, host)
+    }
+    if isCloudMetadataHost(host) && !policy.allowCloudMetadata {
+        return unsafeUrl("cloud metadata host is blocked", scheme, host)
+    }
+    if isLocalHost(host) && !policy.allowLocalhost {
+        return unsafeUrl("localhost is blocked", scheme, host)
+    }
+    if isPrivateHost(host) && !policy.allowPrivateNetworks {
+        return unsafeUrl("private network host is blocked", scheme, host)
+    }
+    if isNumericPrivateIpv4(host) && !policy.allowNumericIpv4Bypass {
+        return unsafeUrl("numeric private IPv4 bypass is blocked", scheme, host)
+    }
+    UrlSafety { safe: true, scheme: scheme, host: host }
+}
+
+pub fn validateSessionKey(key: String) -> Result<(), Error> {
+    if key.isEmpty() {
+        return Err(error.new("security: empty session key"))
+    }
+    if key.charCount() > 512 {
+        return Err(error.new("security: session key too long"))
+    }
+    for c in key.chars() {
+        if char.isAsciiControl(c) && c != '\n' && c != '\t' && c != '\r' {
+            return Err(error.new("security: invalid control character in session key"))
+        }
+    }
+    Ok(())
+}
+
+pub fn sanitizeHtml(input: String) -> String {
+    if !strings.containsAny(input, "<>&\"'") {
+        return input
+    }
+    let mut out = ""
+    for c in input.chars() {
+        if c == '<' {
+            out = "{out}&lt;"
+        } else if c == '>' {
+            out = "{out}&gt;"
+        } else if c == '&' {
+            out = "{out}&amp;"
+        } else if c == '"' {
+            out = "{out}&quot;"
+        } else if c == '\'' {
+            out = "{out}&#x27;"
+        } else {
+            out = "{out}{strings.fromChar(c)}"
+        }
+    }
+    out
+}
+
+pub fn extractSafeLinksDefault(text: String) -> LinkExtraction {
+    extractSafeLinks(text, 5)
+}
+
+pub fn extractSafeLinks(text: String, maxLinks: Int) -> LinkExtraction {
+    let sanitized = stripMarkdownLinks(strings.trimSpace(text))
+    let limit = if maxLinks <= 0 { 5 } else { maxLinks }
+    let mut links: List<String> = []
+    let mut seen: Map<String, Bool> = {:}
+    let mut rejected = 0
+    let mut scanned = 0
+    for candidate in findBareUrls(sanitized) {
+        scanned = scanned + 1
+        let clean = stripUrlTail(strings.trimSpace(candidate))
+        if clean.isEmpty() {
+            continue
+        }
+        if !(checkUrl(clean, defaultSafeUrlPolicy()).safe) {
+            rejected = rejected + 1
+            continue
+        }
+        if seen.get(clean) ?? false {
+            continue
+        }
+        seen.insert(clean, true)
+        links.push(clean)
+        if links.len() >= limit {
+            break
+        }
+    }
+    LinkExtraction { links: links, scanned: scanned, rejected: rejected }
+}
+
+pub fn normalizeHost(host: String) -> String {
+    let lower = strings.toLower(strings.trimSpace(host))
+    let noBrackets = strings.trimSuffix(strings.trimPrefix(lower, "["), "]")
+    stripIpv6Zone(noBrackets)
+}
+
+pub fn isLocalHost(host: String) -> Bool {
+    let h = normalizeHost(host)
+    h == "localhost" ||
+    h == "127.0.0.1" ||
+    h == "0.0.0.0" ||
+    h == "::1" ||
+    h == "::0" ||
+    h == "0000:0000:0000:0000:0000:0000:0000:0001"
+}
+
+pub fn isCloudMetadataHost(host: String) -> Bool {
+    let h = normalizeHost(host)
+    h == "metadata.google.internal" ||
+    h == "169.254.169.254" ||
+    strings.startsWith(h, "metadata.") ||
+    strings.endsWith(h, ".metadata.google.internal")
+}
+
+pub fn isPrivateHost(host: String) -> Bool {
+    let h = normalizeHost(host)
+    let parsedIpv4 = match net.parseIpv4(h) {
+        Ok(ip) -> ip.isLoopback() || ip.isPrivate() || ip.isLinkLocal() || ip.isUnspecified() || ip.isShared(),
+        Err(_) -> false,
+    }
+    if parsedIpv4 {
+        return true
+    }
+    if strings.startsWith(h, "10.") || strings.startsWith(h, "192.168.") || strings.startsWith(h, "169.254.") {
+        return true
+    }
+    if strings.startsWith(h, "172.") {
+        let parts = strings.split(h, ".")
+        if parts.len() >= 2 {
+            let inRange = match strings.toInt(parts[1]) {
+                Ok(n) -> n >= 16 && n <= 31,
+                Err(_) -> false,
+            }
+            if inRange {
+                return true
+            }
+        }
+    }
+    if strings.startsWith(h, "100.") {
+        let parts = strings.split(h, ".")
+        if parts.len() >= 2 {
+            let inRange = match strings.toInt(parts[1]) {
+                Ok(n) -> n >= 64 && n <= 127,
+                Err(_) -> false,
+            }
+            if inRange {
+                return true
+            }
+        }
+    }
+    strings.startsWith(h, "::ffff:127.") ||
+    strings.startsWith(h, "::ffff:10.") ||
+    strings.startsWith(h, "::ffff:192.168.") ||
+    strings.startsWith(h, "::ffff:169.254.") ||
+    strings.startsWith(h, "fc") ||
+    strings.startsWith(h, "fd") ||
+    strings.startsWith(h, "fe80")
+}
+
+pub fn isNumericPrivateIpv4(host: String) -> Bool {
+    let h = normalizeHost(host)
+    if strings.startsWith(h, "0x") || strings.startsWith(h, "0X") {
+        let numeric = match parseRadix(strings.slice(h, 2, h.charCount()), 16) {
+            Some(n) -> isPrivateIpv4U32(n),
+            None    -> false,
+        }
+        if numeric {
+            return true
+        }
+    }
+    if strings.isDigits(h) {
+        let numeric = match strings.toInt(h) {
+            Ok(n) -> isPrivateIpv4U32(n),
+            Err(_) -> false,
+        }
+        if numeric {
+            return true
+        }
+    }
+    let parts = strings.split(h, ".")
+    if parts.len() == 4 {
+        let mut octets: List<Int> = []
+        let mut hadNonDecimal = false
+        for part in parts {
+            let parsed = parseMixedRadixOctet(part)
+            let ok = match parsed {
+                Some(v) -> {
+                    octets.push(v)
+                    true
+                },
+                None -> false,
+            }
+            if !ok {
+                return false
+            }
+            if (part.charCount() > 1 && strings.startsWith(part, "0")) || strings.startsWith(part, "0x") || strings.startsWith(part, "0X") {
+                hadNonDecimal = true
+            }
+        }
+        if hadNonDecimal {
+            return isPrivateIpv4U32((octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3])
+        }
+    }
+    false
+}
+
+fn unsafeUrl(reason: String, scheme: String, host: String) -> UrlSafety {
+    UrlSafety { safe: false, reason: reason, scheme: scheme, host: host }
+}
+
+fn stripIpv6Zone(host: String) -> String {
+    let first = match strings.indexOf(host, "%25") {
+        Some(i) -> strings.slice(host, 0, i),
+        None    -> "",
+    }
+    if !first.isEmpty() {
+        return first
+    }
+    match strings.indexOf(host, "%") {
+        Some(i) -> strings.slice(host, 0, i),
+        None    -> host,
+    }
+}
+
+fn parseMixedRadixOctet(part: String) -> Int? {
+    if part.isEmpty() {
+        return None
+    }
+    let radix = if strings.startsWith(part, "0x") || strings.startsWith(part, "0X") {
+        16
+    } else if part.charCount() > 1 && strings.startsWith(part, "0") {
+        8
+    } else {
+        10
+    }
+    let body = if radix == 16 { strings.slice(part, 2, part.charCount()) } else { part }
+    match parseRadix(body, radix) {
+        Some(v) -> {
+            if v >= 0 && v <= 255 { Some(v) } else { None }
+        },
+        None    -> None,
+    }
+}
+
+fn parseRadix(text: String, radix: Int) -> Int? {
+    if text.isEmpty() {
+        return None
+    }
+    let mut n = 0
+    for c in text.chars() {
+        let digit = match char.toDigit(c, radix) {
+            Some(d) -> d,
+            None    -> -1,
+        }
+        if digit < 0 {
+            return None
+        }
+        n = n * radix + digit
+    }
+    Some(n)
+}
+
+fn isPrivateIpv4U32(ip: Int) -> Bool {
+    let a = (ip >> 24) & 0xFF
+    let b = (ip >> 16) & 0xFF
+    if a == 127 || ip == 0 || a == 10 {
+        return true
+    }
+    if a == 172 && b >= 16 && b <= 31 {
+        return true
+    }
+    if a == 192 && b == 168 {
+        return true
+    }
+    if a == 169 && b == 254 {
+        return true
+    }
+    a == 100 && b >= 64 && b <= 127
+}
+
+fn stripMarkdownLinks(input: String) -> String {
+    let chars = input.chars()
+    let mut out = ""
+    let mut i = 0
+    for i < chars.len() {
+        if chars[i] == '[' {
+            let close = findChar(chars, ']', i + 1)
+            if close >= 0 && close + 1 < chars.len() && chars[close + 1] == '(' {
+                let end = findChar(chars, ')', close + 2)
+                if end >= 0 {
+                    let inside = sliceChars(chars, close + 2, end)
+                    if startsWithUrlScheme(inside) {
+                        out = "{out} "
+                        i = end + 1
+                        continue
+                    }
+                }
+            }
+        }
+        out = "{out}{strings.fromChar(chars[i])}"
+        i = i + 1
+    }
+    out
+}
+
+fn findBareUrls(text: String) -> List<String> {
+    let chars = text.chars()
+    let mut out: List<String> = []
+    let mut i = 0
+    for i < chars.len() {
+        if startsWithUrlSchemeAt(chars, i) {
+            let start = i
+            for i < chars.len() && !char.isAsciiWhitespace(chars[i]) {
+                i = i + 1
+            }
+            let candidate = stripUrlTail(sliceChars(chars, start, i))
+            if candidate.charCount() > 7 {
+                out.push(candidate)
+            }
+            continue
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn startsWithUrlScheme(text: String) -> Bool {
+    let lower = strings.toLower(strings.trimSpace(text))
+    strings.startsWith(lower, "http://") ||
+    strings.startsWith(lower, "https://") ||
+    strings.startsWith(lower, "ftp://")
+}
+
+fn startsWithUrlSchemeAt(chars: List<Char>, at: Int) -> Bool {
+    matchesAtFold(chars, at, "http://") ||
+    matchesAtFold(chars, at, "https://") ||
+    matchesAtFold(chars, at, "ftp://")
+}
+
+fn stripUrlTail(urlText: String) -> String {
+    let mut out = strings.trimSpace(urlText)
+    for true {
+        if out.isEmpty() {
+            return out
+        }
+        let last = out.chars()[out.charCount() - 1]
+        if isBalancedTrailingBracket(out, last) {
+            return out
+        }
+        if last == '.' || last == ',' || last == ';' || last == ':' || last == ')' || last == ']' || last == '}' || last == '"' || last == '\'' {
+            out = strings.slice(out, 0, out.charCount() - 1)
+        } else {
+            return out
+        }
+    }
+    out
+}
+
+fn isBalancedTrailingBracket(text: String, last: Char) -> Bool {
+    if last == ')' {
+        return countChar(text, '(') >= countChar(text, ')')
+    }
+    if last == ']' {
+        return countChar(text, '[') >= countChar(text, ']')
+    }
+    if last == '\u{7D}' {
+        return countChar(text, '\u{7B}') >= countChar(text, '\u{7D}')
+    }
+    false
+}
+
+fn countChar(text: String, target: Char) -> Int {
+    let mut n = 0
+    for c in text.chars() {
+        if c == target {
+            n = n + 1
+        }
+    }
+    n
+}
+
+fn findChar(chars: List<Char>, target: Char, start: Int) -> Int {
+    let mut i = start
+    for i < chars.len() {
+        if chars[i] == target {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn matchesAtFold(chars: List<Char>, at: Int, needle: String) -> Bool {
+    let ns = strings.toLower(needle).chars()
+    if at < 0 || at + ns.len() > chars.len() {
+        return false
+    }
+    let mut i = 0
+    for i < ns.len() {
+        if char.toAsciiLower(chars[at + i]) != ns[i] {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+
+fn sliceChars(chars: List<Char>, start: Int, end: Int) -> String {
+    let mut out: List<Char> = []
+    let mut i = start
+    for i < end && i < chars.len() {
+        out.push(chars[i])
+        i = i + 1
+    }
+    strings.fromChars(out)
+}
