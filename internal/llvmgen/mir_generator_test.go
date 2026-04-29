@@ -492,6 +492,81 @@ func TestGenerateFromMIRUnsupportedReportsDiagnostic(t *testing.T) {
 	}
 }
 
+func TestMIRCapabilityReportMatchesUnsupportedSentinel(t *testing.T) {
+	unknownT := &ir.NamedType{Name: "Unknown"}
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "use",
+				Return: ir.TUnit,
+				Params: []*ir.Param{{Name: "x", Type: unknownT}},
+				Body:   &ir.Block{},
+			},
+		},
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	rows := MIRCapabilityReport(m, Options{PackageName: "main", SourcePath: "/tmp/cap_unknown.osty"})
+
+	var blocked *MIRCapabilityRow
+	for i := range rows {
+		if !rows[i].LLVMEmittable {
+			blocked = &rows[i]
+			break
+		}
+	}
+	if blocked == nil {
+		t.Fatalf("MIRCapabilityReport did not report unsupported row: %+v", rows)
+	}
+	if blocked.Diagnostic.Code == "" || blocked.Diagnostic.Kind != "unsupported-source" {
+		t.Fatalf("blocked diagnostic = %+v, want structured unsupported-source", blocked.Diagnostic)
+	}
+
+	_, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/cap_unknown.osty"})
+	if err == nil {
+		t.Fatal("GenerateFromMIR unexpectedly accepted capability blocker")
+	}
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("GenerateFromMIR error = %T: %v, want ErrUnsupported sentinel", err, err)
+	}
+}
+
+func TestMIRCapabilityReportMarksRuntimeABI(t *testing.T) {
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "main",
+				Return: ir.TUnit,
+				Body: &ir.Block{
+					Stmts: []ir.Stmt{
+						&ir.ExprStmt{X: &ir.IntrinsicCall{
+							Kind: ir.IntrinsicPrintln,
+							Args: []ir.Arg{{Value: &ir.IntLit{Text: "42", T: ir.TInt}}},
+						}},
+					},
+				},
+			},
+		},
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	rows := MIRCapabilityReport(m, Options{PackageName: "main", SourcePath: "/tmp/cap_print.osty"})
+
+	for _, row := range rows {
+		if !strings.Contains(row.Subject, "*mir.IntrinsicInstr") {
+			continue
+		}
+		if !row.LLVMEmittable {
+			t.Fatalf("println capability row = %+v, want LLVM-emittable", row)
+		}
+		if !row.RuntimeABIRequired || !row.RuntimeABIKnown {
+			t.Fatalf("println capability row = %+v, want known runtime ABI", row)
+		}
+		return
+	}
+	t.Fatalf("MIRCapabilityReport missing intrinsic row: %+v", rows)
+}
+
 func TestGenerateFromMIRAllowsPoisonedUnusedLocal(t *testing.T) {
 	fn := &mir.Function{
 		Name:       "answer",

@@ -158,11 +158,20 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 		return nil, nil, fmt.Errorf("llvm backend: missing lowered IR entry")
 	}
 	warnings := append([]error(nil), entry.IRIssues...)
-	if diag, ok := llvmgen.UnsupportedDiagnosticForModule(entry.IR); ok {
-		traceLLVMDispatch("%s rejected %s: %s %s", llvmDispatchUnsupportedPreflight, entry.SourcePath, diag.Code, diag.Kind)
+	opts := llvmgen.Options{
+		PackageName: entry.PackageName,
+		SourcePath:  entry.SourcePath,
+		Source:      entry.Source,
+		Target:      target,
+		UseMIR:      useMIRBackend(features, emit),
+		EmitGC:      true,
+	}
+	capabilities := newLLVMDispatchCapabilityMatrix(entry, opts, features, emit)
+	if diag, row, ok := capabilities.PreflightBlockingDiagnostic(); ok {
+		traceLLVMDispatch("%s rejected %s: %s %s (%s)", llvmDispatchUnsupportedPreflight, entry.SourcePath, diag.Code, diag.Kind, row.ID)
 		return renderUnsupportedLLVMIR(entry, target, emit, warnings, diag, llvmDispatchUnsupportedPreflight)
 	}
-	if useNativeOwnedLLVMIR(features, emit) && !hasInjectedStdlibBodies(entry.IR) {
+	if capabilities.CanRoute(llvmDispatchNativeOwned) {
 		traceLLVMDispatch("%s try package=%s source=%s emit=%s target=%s", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath, emit, target)
 		if out, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(entry, target); err != nil {
 			traceLLVMDispatch("%s error: %v", llvmDispatchNativeOwned, err)
@@ -175,14 +184,6 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 	} else {
 		traceLLVMDispatch("%s skipped package=%s source=%s", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath)
 	}
-	opts := llvmgen.Options{
-		PackageName: entry.PackageName,
-		SourcePath:  entry.SourcePath,
-		Source:      entry.Source,
-		Target:      target,
-		UseMIR:      useMIRBackend(features, emit),
-		EmitGC:      true,
-	}
 	// IR is the sole input contract. The backend dispatcher never reaches
 	// for entry.File — the AST is a front-end artifact that the LLVM
 	// backend does not consume directly any more.
@@ -192,8 +193,12 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 	// emitter. MIR refusal now surfaces as the normal unsupported
 	// skeleton diagnostic; the LLVM backend no longer retries the
 	// legacy HIR bridge behind the user's back.
-	route := llvmFallbackDispatchRoute(opts, entry)
+	route := capabilities.DispatchRoute()
 	traceLLVMDispatch("%s emit package=%s source=%s emit=%s target=%s", route, entry.PackageName, entry.SourcePath, emit, target)
+	if diag, row, ok := capabilities.RouteBlockingDiagnostic(route); ok {
+		traceLLVMDispatch("%s unsupported: %s %s (%s)", route, diag.Code, diag.Kind, row.Subject)
+		return renderUnsupportedLLVMIR(entry, target, emit, warnings, diag, route)
+	}
 	irOut, genErr := emitLLVMFallback(route, entry, opts)
 	if genErr == nil {
 		traceLLVMDispatch("%s succeeded package=%s source=%s", route, entry.PackageName, entry.SourcePath)
@@ -205,10 +210,7 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 }
 
 func llvmFallbackDispatchRoute(opts llvmgen.Options, entry Entry) llvmDispatchRoute {
-	if opts.UseMIR {
-		return llvmDispatchMIRDirect
-	}
-	return llvmDispatchMIRDirect
+	return NewLLVMCapabilityMatrix(entry, opts).DispatchRoute()
 }
 
 func emitLLVMFallback(route llvmDispatchRoute, entry Entry, opts llvmgen.Options) ([]byte, error) {
