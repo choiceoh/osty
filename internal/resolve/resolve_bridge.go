@@ -209,6 +209,9 @@ func buildDeclIndex(file *ast.File) map[int]ast.Node {
 		}
 		walkDeclChildren(d, idx)
 	}
+	for _, s := range file.Stmts {
+		indexStmtBindings(s, idx)
+	}
 	return idx
 }
 
