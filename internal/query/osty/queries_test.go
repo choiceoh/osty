@@ -3,6 +3,8 @@ package osty
 import (
 	"strings"
 	"testing"
+
+	"github.com/osty/osty/internal/cst"
 )
 
 // Helper: seed one "package" with one file for tests.
@@ -60,6 +62,50 @@ func TestParseRerunsOnSourceChange(t *testing.T) {
 	after := eng.DB.Metrics().Sub(before)
 	if after.Reruns != 1 {
 		t.Fatalf("expected 1 rerun after source change, got %+v", after)
+	}
+}
+
+func TestParseCSTQueryReturnsNestedLosslessTree(t *testing.T) {
+	eng := NewEngine()
+	defer eng.Close()
+
+	path := seedFile(eng, "/tmp/pkg_cst", "main.osty", "fn main() {\n    let x = add(1, 2)\n}\n")
+
+	before := eng.DB.Metrics()
+	res := eng.Queries.ParseCST.Get(eng.DB, path)
+	after := eng.DB.Metrics().Sub(before)
+	if after.Misses == 0 {
+		t.Fatal("expected a miss on first ParseCST")
+	}
+	if res.Tree == nil {
+		t.Fatal("ParseCST returned nil tree")
+	}
+	if string(res.Tree.Source) != string(res.Source) {
+		t.Fatalf("tree source and query source differ: tree=%q query=%q", res.Tree.Source, res.Source)
+	}
+
+	var sawLet, sawCall bool
+	res.Tree.Root().Walk(func(r cst.Red) bool {
+		if r.Kind() == cst.GkLetStmt {
+			sawLet = true
+		}
+		if r.Kind() == cst.GkCall {
+			sawCall = true
+		}
+		return true
+	})
+	if !sawLet || !sawCall {
+		t.Fatalf("ParseCST tree missing nested nodes: sawLet=%v sawCall=%v", sawLet, sawCall)
+	}
+
+	before = eng.DB.Metrics()
+	again := eng.Queries.ParseCST.Get(eng.DB, path)
+	after = eng.DB.Metrics().Sub(before)
+	if again.Tree == nil {
+		t.Fatal("cached ParseCST returned nil tree")
+	}
+	if after.Misses != 0 || after.Reruns != 0 || after.Hits == 0 {
+		t.Fatalf("cached ParseCST should hit without miss/rerun, got %+v", after)
 	}
 }
 

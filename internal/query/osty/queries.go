@@ -7,6 +7,7 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/check"
+	"github.com/osty/osty/internal/cst"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/lint"
 	"github.com/osty/osty/internal/parser"
@@ -28,6 +29,15 @@ type ParseResult struct {
 	File            *ast.File
 	Diags           []*diag.Diagnostic
 	Provenance      *parser.Provenance
+}
+
+// CSTParseResult is the output of the [ParseCST] query — the lossless
+// Red/Green tree plus parser diagnostics. The Source field is the normalized
+// byte buffer covered by Tree.
+type CSTParseResult struct {
+	Source []byte
+	Tree   *cst.Tree
+	Diags  []*diag.Diagnostic
 }
 
 // ResolvedPackage is an immutable view over a resolved package. Once
@@ -199,6 +209,10 @@ type Queries struct {
 	// Depends on: SourceText(path).
 	Parse *query.Query[string, ParseResult]
 
+	// ParseCST: (path) -> lossless Red/Green CST + diagnostics.
+	// Depends on: SourceText(path).
+	ParseCST *query.Query[string, CSTParseResult]
+
 	// BuildPackage: (dir) -> fresh *resolve.Package with PackageFiles
 	// assembled from Parse'd contents. Not directly useful to
 	// callers; exists so ResolvePackage can rebuild cleanly on each
@@ -282,6 +296,20 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 			}
 		},
 		hashParseResult,
+	)
+
+	qs.ParseCST = query.Register(db, "ParseCST",
+		func(ctx *query.Ctx, path string) CSTParseResult {
+			src := inp.SourceText.Fetch(ctx, path)
+			tree, diags := parser.ParseCST(src)
+			normalized := cst.Normalize(src)
+			return CSTParseResult{
+				Source: normalized,
+				Tree:   tree,
+				Diags:  diags,
+			}
+		},
+		hashCSTParseResult,
 	)
 
 	// BuildPackage has no hashFn: its output carries fresh

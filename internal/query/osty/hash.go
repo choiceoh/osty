@@ -106,6 +106,19 @@ func hashParseResult(r ParseResult) [32]byte {
 	return h.sum()
 }
 
+// hashCSTParseResult fingerprints a [CSTParseResult]. The CST is lossless, so
+// the normalized source bytes are the stable identity for the tree contents;
+// diagnostics are included for the same cutoff behavior as Parse.
+func hashCSTParseResult(r CSTParseResult) [32]byte {
+	h := newHasher()
+	h.bytes(r.Source)
+	h.u32(uint32(len(r.Diags)))
+	for _, d := range r.Diags {
+		hashDiagnostic(h, d)
+	}
+	return h.sum()
+}
+
 // ---- Diagnostics ----
 
 func hashDiagnostic(h *stableHasher, d *diag.Diagnostic) {

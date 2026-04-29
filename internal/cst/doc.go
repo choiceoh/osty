@@ -2,12 +2,10 @@
 // front end. Unlike the abstract AST in internal/ast, the CST is lossless:
 // every source byte is reachable from either a token or a trivia run.
 //
-// Architecture decision: the lossless parser contract is Red/Green. The
-// current adapter still builds top-level structure from parser spans while the
-// selfhost generator cannot ingest a native lossless event stream, but
-// formatter/repair/LSP consumers should target Tree/Red/Green APIs rather than
-// an AstArena side table. The temporary adapter is therefore a compatibility
-// boundary, not the long-term CST architecture.
+// Architecture decision: the lossless parser contract is Red/Green. ParseCST
+// now uses the native token-stream Green parser, and formatter/repair/LSP
+// consumers should target Tree/Red/Green APIs rather than an AstArena side
+// table.
 //
 // Byte-coverage invariant: for any source src and tokens := selfhost.Lex(src),
 // Extract(src, tokens) returns []Trivia such that:

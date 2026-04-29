@@ -180,6 +180,36 @@ func (r Red) End() int { return r.absoluteOffset + r.Width() }
 // TextRange returns the [start, end) offsets in one value for convenience.
 func (r Red) TextRange() (int, int) { return r.Offset(), r.End() }
 
+// Text returns the exact source bytes covered by this Red handle, including
+// token trivia. It returns nil when the tree has no Source buffer or the range
+// is outside that buffer.
+func (r Red) Text() []byte {
+	if r.tree == nil || r.Offset() < 0 || r.End() < r.Offset() || r.End() > len(r.tree.Source) {
+		return nil
+	}
+	return r.tree.Source[r.Offset():r.End()]
+}
+
+// TokenTextRange returns the lexeme-only range for token leaves, excluding
+// leading and trailing trivia. The boolean is false for non-token Reds.
+func (r Red) TokenTextRange() (int, int, bool) {
+	if !r.IsToken() {
+		return 0, 0, false
+	}
+	tok := r.Token()
+	start := r.Offset() + tok.LeadingWidth
+	return start, start + tok.Width, true
+}
+
+// TokenText returns the token lexeme bytes, excluding attached trivia.
+func (r Red) TokenText() []byte {
+	start, end, ok := r.TokenTextRange()
+	if !ok || r.tree == nil || start < 0 || end < start || end > len(r.tree.Source) {
+		return nil
+	}
+	return r.tree.Source[start:end]
+}
+
 // ChildCount returns the number of direct children. Token leaves have 0.
 func (r Red) ChildCount() int {
 	if r.tag != GctNode {
@@ -242,6 +272,19 @@ func (r Red) ChildAt(i int) Red {
 	return child
 }
 
+// Children materializes every direct child in order.
+func (r Red) Children() []Red {
+	count := r.ChildCount()
+	if count == 0 {
+		return nil
+	}
+	out := make([]Red, count)
+	for i := 0; i < count; i++ {
+		out[i] = r.ChildAt(i)
+	}
+	return out
+}
+
 // Parent returns the Red handle of the parent node, or the zero-value Red
 // plus false if r is the root.
 func (r Red) Parent() (Red, bool) {
@@ -249,6 +292,35 @@ func (r Red) Parent() (Red, bool) {
 		return Red{}, false
 	}
 	return r.tree.reds[r.parent].red, true
+}
+
+// Ancestors returns r's parent chain, nearest parent first.
+func (r Red) Ancestors() []Red {
+	var out []Red
+	cur := r
+	for {
+		parent, ok := cur.Parent()
+		if !ok {
+			return out
+		}
+		out = append(out, parent)
+		cur = parent
+	}
+}
+
+// AncestorOfKind returns the nearest ancestor with kind.
+func (r Red) AncestorOfKind(kind GreenKind) (Red, bool) {
+	cur := r
+	for {
+		parent, ok := cur.Parent()
+		if !ok {
+			return Red{}, false
+		}
+		if parent.Kind() == kind {
+			return parent, true
+		}
+		cur = parent
+	}
 }
 
 // Pos converts Offset to a token.Pos using the tree's associated source. The
@@ -303,6 +375,29 @@ func (r Red) FindCoveringNode(offset int) Red {
 		}
 	}
 	return r
+}
+
+// FindTokenAt returns the leaf token containing offset, or false when offset
+// is outside r or only covered by an interior/error node.
+func (r Red) FindTokenAt(offset int) (Red, bool) {
+	found := r.FindCoveringNode(offset)
+	if found.IsToken() {
+		return found, true
+	}
+	return Red{}, false
+}
+
+// FindFirst returns the first node in pre-order with kind.
+func (r Red) FindFirst(kind GreenKind) (Red, bool) {
+	if r.Kind() == kind {
+		return r, true
+	}
+	for i := 0; i < r.ChildCount(); i++ {
+		if found, ok := r.ChildAt(i).FindFirst(kind); ok {
+			return found, true
+		}
+	}
+	return Red{}, false
 }
 
 // Walk visits r then its descendants in pre-order. The visit function may
