@@ -13,6 +13,7 @@ import (
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/sourcemap"
+	"github.com/osty/osty/internal/spanid"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -28,6 +29,7 @@ type nativeResolveCache struct {
 
 type nativeResolveFileInfo struct {
 	path       string
+	sourceID   spanid.SourceFileID
 	base       int
 	source     []byte
 	sourceMap  *sourcemap.Map
@@ -227,13 +229,15 @@ func nativeResolveInput(pkg *Package) (api.PackageResolveInput, []nativeResolveF
 		// lexer + parser — no *ast.File round-trip, so we only pass
 		// source bytes + routing metadata here.
 		input.Files = append(input.Files, api.PackageResolveFile{
-			Source: append([]byte(nil), src...),
-			Base:   base,
-			Name:   filepath.Base(pf.Path),
-			Path:   pf.Path,
+			Source:       append([]byte(nil), src...),
+			Base:         base,
+			Name:         filepath.Base(pf.Path),
+			Path:         pf.Path,
+			SourceFileID: string(sourceFileIDForPackageFile(pf)),
 		})
 		files = append(files, nativeResolveFileInfo{
 			path:       pf.Path,
+			sourceID:   sourceFileIDForPackageFile(pf),
 			base:       base,
 			source:     append([]byte(nil), src...),
 			sourceMap:  pf.CheckerSourceMap(),
@@ -242,6 +246,16 @@ func nativeResolveInput(pkg *Package) (api.PackageResolveInput, []nativeResolveF
 		base += len(src) + 1
 	}
 	return input, files, nil
+}
+
+func sourceFileIDForPackageFile(pf *PackageFile) spanid.SourceFileID {
+	if pf == nil {
+		return ""
+	}
+	if pf.SourceFileID != "" {
+		return pf.SourceFileID
+	}
+	return spanid.SourceFileIDFor(pf.Path)
 }
 
 func nativeResolvePackagePath(pkg *Package) string {
@@ -280,7 +294,7 @@ func nativeResolveSourceForFile(pf *PackageFile) ([]byte, error) {
 		// mutation of input.Files does not corrupt pf.Source.
 		return append([]byte(nil), pf.Source...), nil
 	}
-	src, _ := canonical.SourceWithMap(pf.Source, pf.File)
+	src, _ := canonical.SourceWithMapForFile(pf.Path, pf.Source, pf.File)
 	return src, nil
 }
 
@@ -661,6 +675,7 @@ func nativeResolveDiagnosticsFromArtifacts(resolved api.ResolveResult, files []n
 	for _, record := range resolved.Diagnostics {
 		builder := diag.New(diag.Error, record.Message).Code(record.Code).File(record.File)
 		if span, ok := nativeResolveSpan(files, record.File, record.Start, record.End); ok {
+			span = nativeResolveRecordSpanWithIdentity(span, record)
 			builder.Primary(span, "")
 		}
 		if record.Hint != "" {
@@ -669,6 +684,24 @@ func nativeResolveDiagnosticsFromArtifacts(resolved api.ResolveResult, files []n
 		out = append(out, builder.Build())
 	}
 	return out
+}
+
+func nativeResolveRecordSpanWithIdentity(span diag.Span, record api.ResolveDiagnosticRecord) diag.Span {
+	if record.SourceFileID != "" {
+		span = diag.StampSpanSourceFileID(span, spanid.SourceFileID(record.SourceFileID))
+	}
+	if record.SpanID != "" {
+		span.ID = spanid.SpanID(record.SpanID)
+	}
+	for _, p := range record.Provenance {
+		span.Provenance = spanid.AppendProvenance(span.Provenance, spanid.Provenance{
+			Kind:         spanid.ProvenanceKind(p.Kind),
+			SourceFileID: spanid.SourceFileID(p.SourceFileID),
+			SpanID:       spanid.SpanID(p.SpanID),
+			Detail:       p.Detail,
+		})
+	}
+	return span
 }
 
 func nativeResolveSpan(files []nativeResolveFileInfo, path string, start, end int) (diag.Span, bool) {
@@ -688,6 +721,7 @@ func nativeResolveSpan(files []nativeResolveFileInfo, path string, start, end in
 			Start: token.Pos{Offset: relStart},
 			End:   token.Pos{Offset: relEnd},
 		}); ok {
+			remapped = diag.StampSpanSourceFileID(remapped, file.sourceID)
 			return remapped, true
 		}
 	}
@@ -702,7 +736,7 @@ func nativeResolveSpan(files []nativeResolveFileInfo, path string, start, end in
 	if endPos.Offset < startPos.Offset {
 		endPos = startPos
 	}
-	return diag.Span{Start: startPos, End: endPos}, true
+	return diag.StampSpanSourceFileID(diag.Span{Start: startPos, End: endPos}, file.sourceID), true
 }
 
 func nativeResolveLineCol(files []nativeResolveFileInfo, path string, start, end int) (int, int, bool) {

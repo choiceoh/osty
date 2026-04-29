@@ -4,9 +4,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/cst"
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/lint"
 	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/spanid"
+	"github.com/osty/osty/internal/token"
 )
 
 // Helper: seed one "package" with one file for tests.
@@ -191,6 +195,59 @@ func TestDiagnosticsChangeOnError(t *testing.T) {
 	if len(diags) <= validDiagCount {
 		t.Fatalf("expected new diagnostics after parse error; before=%d after=%d",
 			validDiagCount, len(diags))
+	}
+}
+
+func TestParseDiagnosticsCarrySourceFileIdentity(t *testing.T) {
+	eng := NewEngine()
+	defer eng.Close()
+
+	path := seedFile(eng, "/tmp/pkg_span_parse", "main.osty", "pub fn {")
+	pr := eng.Queries.Parse.Get(eng.DB, path)
+	if len(pr.Diags) == 0 {
+		t.Fatal("expected parse diagnostics")
+	}
+	if pr.SourceFileID == "" {
+		t.Fatal("parse result SourceFileID is empty")
+	}
+	got := pr.Diags[0]
+	if got.File != path {
+		t.Fatalf("diagnostic file = %q, want %q", got.File, path)
+	}
+	span, ok := got.PrimarySpan()
+	if !ok {
+		t.Fatal("diagnostic missing primary span")
+	}
+	if span.SourceFileID != pr.SourceFileID || span.ID == "" {
+		t.Fatalf("diagnostic span identity = (%q, %q), want file %q and non-empty span", span.SourceFileID, span.ID, pr.SourceFileID)
+	}
+}
+
+func TestCollectFileDiagnosticsFiltersByFileIdentity(t *testing.T) {
+	pathA := NormalizePath("/tmp/pkg_span_filter/a.osty")
+	pathB := NormalizePath("/tmp/pkg_span_filter/b.osty")
+	pos := token.Pos{Offset: 4, Line: 1, Column: 5}
+	spanA := diag.StampSpanSourceFileID(
+		diag.Span{Start: pos, End: token.Pos{Offset: 5, Line: 1, Column: 6}},
+		spanid.SourceFileIDFor(pathA),
+	)
+	spanB := diag.StampSpanSourceFileID(
+		diag.Span{Start: pos, End: token.Pos{Offset: 5, Line: 1, Column: 6}},
+		spanid.SourceFileIDFor(pathB),
+	)
+	resolveDiags := []*diag.Diagnostic{
+		diag.New(diag.Error, "belongs to a by span id").Primary(spanA, "").Build(),
+		diag.New(diag.Error, "belongs to b by file").File(pathB).Primary(spanB, "").Build(),
+	}
+	chk := &check.Result{}
+	lr := &lint.Result{}
+
+	got := collectFileDiagnostics(pathA, ParseResult{}, resolveDiags, chk, lr)
+	if len(got) != 1 {
+		t.Fatalf("diagnostic count = %d, want 1: %#v", len(got), got)
+	}
+	if got[0].Message != "belongs to a by span id" {
+		t.Fatalf("diagnostic = %q, want span-id-routed diagnostic", got[0].Message)
 	}
 }
 

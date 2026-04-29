@@ -7,6 +7,7 @@ import (
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/sourcemap"
+	"github.com/osty/osty/internal/spanid"
 )
 
 // Package is the resolver's view of one Osty package — i.e. one directory
@@ -61,6 +62,9 @@ type PackageFile struct {
 	// Source is the parser-facing UTF-8 bytes. When a SourceTransform was
 	// applied, this is the transformed source.
 	Source []byte
+	// SourceFileID is the global identity for Source. It lets diagnostics and
+	// overlays distinguish identical offset ranges in different package files.
+	SourceFileID spanid.SourceFileID
 	// OriginalSource is the on-disk source before SourceTransform. Empty when
 	// Source already matches the file contents or the transform opted out of
 	// original-source remapping.
@@ -229,7 +233,7 @@ func (pkg *Package) MaterializeCanonicalSources() {
 		if pf == nil || pf.File == nil || len(pf.CanonicalSource) > 0 {
 			continue
 		}
-		pf.CanonicalSource, pf.CanonicalMap = canonical.SourceWithMap(pf.Source, pf.File)
+		pf.CanonicalSource, pf.CanonicalMap = canonical.SourceWithMapForFile(pf.Path, pf.Source, pf.File)
 	}
 }
 

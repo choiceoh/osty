@@ -901,7 +901,7 @@ func lspMaterializeNativePackageFiles(pkg *resolve.Package) {
 			pf.File = selfhost.LowerPublicFileFromRun(pf.Run)
 		}
 		if len(pf.CanonicalSource) == 0 && pf.File != nil {
-			pf.CanonicalSource, pf.CanonicalMap = canonical.SourceWithMap(pf.Source, pf.File)
+			pf.CanonicalSource, pf.CanonicalMap = canonical.SourceWithMapForFile(pf.Path, pf.Source, pf.File)
 		}
 	}
 }
@@ -959,11 +959,10 @@ func identIndexForFile(pkg *resolve.Package, path string, fallback *resolve.Resu
 }
 
 // collectDiagsForFile picks out the parser, resolver, checker, and
-// lint diagnostics that belong to one file. Parser diagnostics are
-// already file-attributed via PackageFile.ParseDiags; the other three
-// stages are filtered by byte-offset containment — positions from
-// different files have disjoint offset ranges because each file was
-// lexed against its own source buffer.
+// lint diagnostics that belong to one file. Parser/lint diagnostics are
+// file-attributed at their per-file boundaries; resolver/checker diagnostics
+// are routed by File or SourceFileID when available, with the old containment
+// heuristic left only as a compatibility fallback.
 func collectDiagsForFile(
 	pkg *resolve.Package,
 	pr *resolve.PackageResult,
@@ -1016,7 +1015,7 @@ func nativeResolveDiagsForFile(pkg *resolve.Package, pf *resolve.PackageFile) ([
 		if d == nil {
 			continue
 		}
-		if d.File != "" && d.File != pf.Path {
+		if !diagBelongsToFile(d, pf) {
 			continue
 		}
 		out = append(out, d)
@@ -1024,15 +1023,17 @@ func nativeResolveDiagsForFile(pkg *resolve.Package, pf *resolve.PackageFile) ([
 	return out, true
 }
 
-// diagBelongsToFile returns true when the diagnostic's primary
-// position could plausibly have come from this file. Positions carry
-// no file identity, so we filter on byte-range containment: a
-// diagnostic from file B at offset N would fail this test for any
-// file A with `len(A.Source) < N`. The heuristic misclassifies when
-// multiple files in the same package share an overlapping offset
-// range; fixing that requires threading a file identifier through
-// every diag.Diagnostic, which is a resolver-side change.
+// diagBelongsToFile returns true when the diagnostic is attributed to pf.
 func diagBelongsToFile(d *diag.Diagnostic, pf *resolve.PackageFile) bool {
+	if d == nil || pf == nil {
+		return false
+	}
+	if d.File != "" {
+		return ostyquery.NormalizePath(d.File) == ostyquery.NormalizePath(pf.Path)
+	}
+	if span, ok := d.PrimarySpan(); ok && span.SourceFileID != "" && pf.SourceFileID != "" {
+		return span.SourceFileID == pf.SourceFileID
+	}
 	pos := d.PrimaryPos()
 	if pos.Line == 0 {
 		return false

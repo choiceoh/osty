@@ -31,10 +31,11 @@ func selfhostPackageCheckInput(pkg *resolve.Package, ws *resolve.Workspace, stdl
 			name = filepath.Base(pf.Path)
 		}
 		input.Files = append(input.Files, api.PackageCheckFile{
-			Source: append([]byte(nil), src...),
-			Base:   base,
-			Name:   name,
-			Path:   pf.Path,
+			Source:       append([]byte(nil), src...),
+			Base:         base,
+			Name:         name,
+			Path:         pf.Path,
+			SourceFileID: string(pf.SourceFileID),
 		})
 		segmentIdx++
 	}

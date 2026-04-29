@@ -204,17 +204,20 @@ type CheckInstantiation struct {
 // consumed. StartLine/StartColumn/EndLine/EndColumn, when present, are the
 // checker-owned display positions for that span.
 type CheckDiagnosticRecord struct {
-	Code        string   `json:"code"`
-	Severity    string   `json:"severity"`
-	Message     string   `json:"message"`
-	Start       int      `json:"start"`
-	End         int      `json:"end"`
-	StartLine   int      `json:"startLine,omitempty"`
-	StartColumn int      `json:"startColumn,omitempty"`
-	EndLine     int      `json:"endLine,omitempty"`
-	EndColumn   int      `json:"endColumn,omitempty"`
-	File        string   `json:"file,omitempty"`
-	Notes       []string `json:"notes,omitempty"`
+	Code         string                 `json:"code"`
+	Severity     string                 `json:"severity"`
+	Message      string                 `json:"message"`
+	Start        int                    `json:"start"`
+	End          int                    `json:"end"`
+	StartLine    int                    `json:"startLine,omitempty"`
+	StartColumn  int                    `json:"startColumn,omitempty"`
+	EndLine      int                    `json:"endLine,omitempty"`
+	EndColumn    int                    `json:"endColumn,omitempty"`
+	File         string                 `json:"file,omitempty"`
+	Notes        []string               `json:"notes,omitempty"`
+	SourceFileID string                 `json:"sourceFileId,omitempty"`
+	SpanID       string                 `json:"spanId,omitempty"`
+	Provenance   []SpanProvenanceRecord `json:"provenance,omitempty"`
 }
 
 // CheckResult is the structured Go-facing surface for the bootstrapped checker.
@@ -589,16 +592,28 @@ type ResolvedTypeRef struct {
 // ResolveDiagnosticRecord is one structured diagnostic produced by the
 // self-host resolver.
 type ResolveDiagnosticRecord struct {
-	ID        string `json:"diagnosticId,omitempty"`
-	PackageID string `json:"packageId,omitempty"`
-	Code      string `json:"code"`
-	Message   string `json:"message"`
-	Name      string `json:"name,omitempty"`
-	Hint      string `json:"hint,omitempty"`
-	Node      int    `json:"node"`
-	Start     int    `json:"start"`
-	End       int    `json:"end"`
-	File      string `json:"file,omitempty"`
+	ID           string                 `json:"diagnosticId,omitempty"`
+	PackageID    string                 `json:"packageId,omitempty"`
+	Code         string                 `json:"code"`
+	Message      string                 `json:"message"`
+	Name         string                 `json:"name,omitempty"`
+	Hint         string                 `json:"hint,omitempty"`
+	Node         int                    `json:"node"`
+	Start        int                    `json:"start"`
+	End          int                    `json:"end"`
+	File         string                 `json:"file,omitempty"`
+	SourceFileID string                 `json:"sourceFileId,omitempty"`
+	SpanID       string                 `json:"spanId,omitempty"`
+	Provenance   []SpanProvenanceRecord `json:"provenance,omitempty"`
+}
+
+// SpanProvenanceRecord is the JSON-stable form of span provenance emitted by
+// selfhost adapters and consumed by host diagnostics.
+type SpanProvenanceRecord struct {
+	Kind         string `json:"kind,omitempty"`
+	SourceFileID string `json:"sourceFileId,omitempty"`
+	SpanID       string `json:"spanId,omitempty"`
+	Detail       string `json:"detail,omitempty"`
 }
 
 // ResolveResult is the structured Go-facing surface for the bootstrapped

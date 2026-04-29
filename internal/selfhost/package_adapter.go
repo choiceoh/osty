@@ -89,6 +89,7 @@ type selfhostPackageTokenLayout struct {
 	// the telemetry suffix drops back to `@Lnn:Cnn`).
 	fileIdx []int
 	files   []string
+	fileIDs []string
 }
 
 func selfhostBuildPackageAst(files []PackageCheckFile) (*AstFile, *selfhostPackageTokenLayout, error) {
@@ -114,9 +115,10 @@ func selfhostBuildPackageAst(files []PackageCheckFile) (*AstFile, *selfhostPacka
 		if displayName == "" {
 			displayName = file.Name
 		}
-		if displayName != "" {
+		if displayName != "" || file.SourceFileID != "" {
 			fileIdx = len(layout.files)
 			layout.files = append(layout.files, displayName)
+			layout.fileIDs = append(layout.fileIDs, file.SourceFileID)
 		}
 		selfhostAppendTokenLayout(layout, lexed, file.Base, fileIdx)
 		selfhostMergeAstArena(arena, parsed.arena, tokenBase)
@@ -302,6 +304,9 @@ func adaptCheckResultWithTokenLayout(checked *FrontCheckResult, layout *selfhost
 		file: func(tokenIdx int) string {
 			return checkFilePathWithTokenLayout(layout, tokenIdx)
 		},
+		sourceID: func(tokenIdx int) string {
+			return checkSourceFileIDWithTokenLayout(layout, tokenIdx)
+		},
 	})
 }
 
@@ -314,6 +319,17 @@ func checkFilePathWithTokenLayout(layout *selfhostPackageTokenLayout, tokenIdx i
 		return ""
 	}
 	return layout.files[idx]
+}
+
+func checkSourceFileIDWithTokenLayout(layout *selfhostPackageTokenLayout, tokenIdx int) string {
+	if layout == nil || tokenIdx < 0 || tokenIdx >= len(layout.fileIdx) {
+		return ""
+	}
+	idx := layout.fileIdx[tokenIdx]
+	if idx < 0 || idx >= len(layout.fileIDs) {
+		return ""
+	}
+	return layout.fileIDs[idx]
 }
 
 func checkNodeRangeWithTokenLayout(layout *selfhostPackageTokenLayout, startToken, endToken int) (start, end, startLine, startColumn, endLine, endColumn int) {

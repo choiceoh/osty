@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/spanid"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -16,12 +17,16 @@ type Entry struct {
 	Kind      string
 	Generated diag.Span
 	Original  diag.Span
+	// Provenance describes the derivation from Original to Generated.
+	Provenance []spanid.Provenance
 }
 
 // Map stores a coarse bidirectional mapping between canonical source emitted by
 // the formatter and the original spans carried on the AST.
 type Map struct {
-	entries []Entry
+	entries         []Entry
+	originalFileID  spanid.SourceFileID
+	generatedFileID spanid.SourceFileID
 
 	originalExactOnce sync.Once
 	originalExact     map[spanKey]*Entry
@@ -51,7 +56,11 @@ func (m *Map) Clone() *Map {
 	if m == nil || len(m.entries) == 0 {
 		return nil
 	}
-	return &Map{entries: append([]Entry(nil), m.entries...)}
+	return &Map{
+		entries:         append([]Entry(nil), m.entries...),
+		originalFileID:  m.originalFileID,
+		generatedFileID: m.generatedFileID,
+	}
 }
 
 // Compose chains this map with next. The returned map projects this map's
@@ -64,19 +73,41 @@ func (m *Map) Compose(next *Map) *Map {
 	if next == nil || len(next.entries) == 0 {
 		return m.Clone()
 	}
-	out := &Map{entries: make([]Entry, 0, len(m.entries))}
+	out := &Map{
+		entries:         make([]Entry, 0, len(m.entries)),
+		originalFileID:  next.originalFileID,
+		generatedFileID: m.generatedFileID,
+	}
 	for _, entry := range m.entries {
 		original := entry.Original
 		if remapped, ok := next.RemapSpanProjected(entry.Original); ok {
 			original = remapped
 		}
 		out.entries = append(out.entries, Entry{
-			Kind:      entry.Kind,
-			Generated: entry.Generated,
-			Original:  original,
+			Kind:       entry.Kind,
+			Generated:  entry.Generated,
+			Original:   original,
+			Provenance: append([]spanid.Provenance(nil), entry.Provenance...),
 		})
 	}
 	return out
+}
+
+// StampFileIDs attaches stable identities to every entry in the map.
+func (m *Map) StampFileIDs(originalFileID, generatedFileID spanid.SourceFileID) {
+	if m == nil {
+		return
+	}
+	m.originalFileID = originalFileID
+	m.generatedFileID = generatedFileID
+	for i := range m.entries {
+		entry := &m.entries[i]
+		entry.Original = diag.StampSpanSourceFileID(entry.Original, originalFileID)
+		entry.Generated = diag.StampSpanSourceFileID(entry.Generated, generatedFileID)
+		entry.Provenance = provenanceForEntry(*entry)
+	}
+	m.originalExactOnce = sync.Once{}
+	m.originalExact = nil
 }
 
 // RemapSpan projects a canonical/generated span back onto the original source.
@@ -85,7 +116,7 @@ func (m *Map) RemapSpan(span diag.Span) (diag.Span, bool) {
 	if entry == nil {
 		return diag.Span{}, false
 	}
-	return entry.Original, true
+	return m.remappedOriginal(span, *entry), true
 }
 
 // RemapSpanProjected projects a generated span back onto the original source
@@ -93,7 +124,8 @@ func (m *Map) RemapSpan(span diag.Span) (diag.Span, bool) {
 func (m *Map) RemapSpanProjected(span diag.Span) (diag.Span, bool) {
 	entry := m.entryForGenerated(span.Start.Offset, span.End.Offset)
 	if entry != nil {
-		return projectSpan(entry, span), true
+		projected := projectSpan(entry, span)
+		return m.remappedProjectedOriginal(projected, span, *entry), true
 	}
 	start, ok := m.RemapPos(span.Start)
 	if !ok {
@@ -125,7 +157,7 @@ func (m *Map) GeneratedSpanForOriginal(span diag.Span) (diag.Span, bool) {
 	if entry == nil {
 		return diag.Span{}, false
 	}
-	return entry.Generated, true
+	return m.generatedFromOriginal(span, *entry), true
 }
 
 func (m *Map) exactOriginalEntry(start, end int) *Entry {
@@ -160,6 +192,46 @@ func (m *Map) exactOriginalEntry(start, end int) *Entry {
 		m.originalExact = cache
 	})
 	return m.originalExact[spanKey{start: start, end: end}]
+}
+
+func (m *Map) remappedOriginal(generated diag.Span, entry Entry) diag.Span {
+	out := entry.Original
+	return m.remappedProjectedOriginal(out, generated, entry)
+}
+
+func (m *Map) remappedProjectedOriginal(out, generated diag.Span, entry Entry) diag.Span {
+	if m != nil && m.originalFileID != "" {
+		out = diag.StampSpanSourceFileID(out, m.originalFileID)
+	}
+	parent := generated
+	if parent.SourceFileID == "" {
+		parent = entry.Generated
+	}
+	if m != nil && m.generatedFileID != "" {
+		parent = diag.StampSpanSourceFileID(parent, m.generatedFileID)
+	}
+	if len(entry.Provenance) > 0 {
+		out.Provenance = spanid.AppendProvenance(out.Provenance, entry.Provenance...)
+	}
+	return diag.DeriveSpanSource(out, provenanceKindForEntryKind(entry.Kind), entry.Kind, parent)
+}
+
+func (m *Map) generatedFromOriginal(original diag.Span, entry Entry) diag.Span {
+	out := entry.Generated
+	if m != nil && m.generatedFileID != "" {
+		out = diag.StampSpanSourceFileID(out, m.generatedFileID)
+	}
+	parent := original
+	if parent.SourceFileID == "" {
+		parent = entry.Original
+	}
+	if m != nil && m.originalFileID != "" {
+		parent = diag.StampSpanSourceFileID(parent, m.originalFileID)
+	}
+	if len(entry.Provenance) > 0 {
+		out.Provenance = spanid.AppendProvenance(out.Provenance, entry.Provenance...)
+	}
+	return diag.DeriveSpanSource(out, provenanceKindForEntryKind(entry.Kind), entry.Kind, parent)
 }
 
 // RemapDiagnostic returns a deep-cloned diagnostic whose spans and structured
@@ -577,16 +649,38 @@ func (b *Builder) Build(generated []byte) *Map {
 		entries: make([]Entry, 0, len(b.entries)),
 	}
 	for _, entry := range b.entries {
-		out.entries = append(out.entries, Entry{
+		built := Entry{
 			Kind: entry.kind,
 			Generated: diag.Span{
 				Start: posForOffset(generated, lineStarts, entry.generatedFrom),
 				End:   posForOffset(generated, lineStarts, entry.generatedTo),
 			},
 			Original: entry.original,
-		})
+		}
+		built.Provenance = provenanceForEntry(built)
+		out.entries = append(out.entries, built)
 	}
 	return out
+}
+
+func provenanceForEntry(entry Entry) []spanid.Provenance {
+	if entry.Original.SourceFileID == "" && entry.Original.ID == "" {
+		return nil
+	}
+	parent := diag.StampSpanSourceFileID(entry.Original, entry.Original.SourceFileID)
+	return []spanid.Provenance{{
+		Kind:         provenanceKindForEntryKind(entry.Kind),
+		SourceFileID: parent.SourceFileID,
+		SpanID:       parent.ID,
+		Detail:       entry.Kind,
+	}}
+}
+
+func provenanceKindForEntryKind(kind string) spanid.ProvenanceKind {
+	if kind == "source-transform" {
+		return spanid.ProvenanceExpansion
+	}
+	return spanid.ProvenanceCanonical
 }
 
 func computeLineStarts(src []byte) []int {

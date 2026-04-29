@@ -5,6 +5,7 @@ import (
 
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/selfhost/api"
+	"github.com/osty/osty/internal/spanid"
 )
 
 // Type aliases re-export the cross-boundary shapes from
@@ -202,6 +203,7 @@ type checkResultTokenMapper struct {
 	offsets    func(startToken, endToken int) (int, int)
 	tokenRange func(startToken, endToken int) (start, end, startLine, startColumn, endLine, endColumn int)
 	file       func(tokenIdx int) string
+	sourceID   func(tokenIdx int) string
 }
 
 func adaptCheckResultWithTokenMapper(checked *FrontCheckResult, mapper checkResultTokenMapper) CheckResult {
@@ -293,18 +295,28 @@ func adaptCheckResultWithTokenMapper(checked *FrontCheckResult, mapper checkResu
 		if mapper.file != nil {
 			file = mapper.file(d.start)
 		}
+		sourceID := ""
+		if mapper.sourceID != nil {
+			sourceID = mapper.sourceID(d.start)
+		}
+		spanID := ""
+		if sourceID != "" {
+			spanID = string(spanid.SpanIDFor(spanid.SourceFileID(sourceID), start, end))
+		}
 		result.Diagnostics = append(result.Diagnostics, CheckDiagnosticRecord{
-			Code:        d.code,
-			Severity:    diagnosticSeverityName(d.severity),
-			Message:     d.message,
-			Start:       start,
-			End:         end,
-			StartLine:   startLine,
-			StartColumn: startColumn,
-			EndLine:     endLine,
-			EndColumn:   endColumn,
-			File:        file,
-			Notes:       append([]string(nil), d.notes...),
+			Code:         d.code,
+			Severity:     diagnosticSeverityName(d.severity),
+			Message:      d.message,
+			Start:        start,
+			End:          end,
+			StartLine:    startLine,
+			StartColumn:  startColumn,
+			EndLine:      endLine,
+			EndColumn:    endColumn,
+			File:         file,
+			Notes:        append([]string(nil), d.notes...),
+			SourceFileID: sourceID,
+			SpanID:       spanID,
 		})
 	}
 	result.EnsureStableIDs()

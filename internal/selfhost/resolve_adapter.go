@@ -9,6 +9,7 @@ import (
 
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/selfhost/api"
+	"github.com/osty/osty/internal/spanid"
 )
 
 // Resolve-side types re-exported from internal/selfhost/api for compatibility.
@@ -688,6 +689,14 @@ func selfhostAnnotateResolveFiles(result *ResolveResult, files []PackageResolveF
 	}
 	for i := range result.Diagnostics {
 		result.Diagnostics[i].File = selfhostResolveFilePath(files, result.Diagnostics[i].Start)
+		result.Diagnostics[i].SourceFileID = selfhostResolveFileID(files, result.Diagnostics[i].Start)
+		if result.Diagnostics[i].SourceFileID != "" {
+			result.Diagnostics[i].SpanID = string(spanid.SpanIDFor(
+				spanid.SourceFileID(result.Diagnostics[i].SourceFileID),
+				result.Diagnostics[i].Start,
+				result.Diagnostics[i].End,
+			))
+		}
 	}
 }
 
@@ -700,6 +709,20 @@ func selfhostResolveFilePath(files []PackageResolveFile, offset int) string {
 		end := file.Base + len(file.Source)
 		if offset >= start && offset <= end {
 			return file.Path
+		}
+	}
+	return ""
+}
+
+func selfhostResolveFileID(files []PackageResolveFile, offset int) string {
+	for _, file := range files {
+		if file.SourceFileID == "" || len(file.Source) == 0 {
+			continue
+		}
+		start := file.Base
+		end := file.Base + len(file.Source)
+		if offset >= start && offset <= end {
+			return file.SourceFileID
 		}
 	}
 	return ""

@@ -8,6 +8,7 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/selfhost/api"
+	"github.com/osty/osty/internal/spanid"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -153,6 +154,7 @@ func NewSingleFilePackageGraph(src []byte, file *ast.File, stdlib StdlibProvider
 		Files: []*PackageFile{{
 			Path:            "<input>",
 			Source:          append([]byte(nil), src...),
+			SourceFileID:    spanid.SourceFileIDFor("<input>"),
 			CanonicalSource: append([]byte(nil), src...),
 			File:            file,
 		}},
