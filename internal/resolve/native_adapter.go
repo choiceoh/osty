@@ -20,8 +20,8 @@ type nativeResolveCache struct {
 	once       sync.Once
 	checkOnce  sync.Once
 	result     api.ResolveResult
-	check      selfhost.CheckResult
-	checkInput selfhost.PackageCheckInput
+	check      api.CheckResult
+	checkInput api.PackageCheckInput
 	files      []nativeResolveFileInfo
 	err        error
 }
@@ -162,7 +162,7 @@ func nativeResolveArtifacts(pkg *Package) (api.ResolveResult, []nativeResolveFil
 			pkg.nativeResolve.err = err
 			return
 		}
-		pkg.nativeResolve.checkInput = selfhost.PackageCheckInput{
+		pkg.nativeResolve.checkInput = api.PackageCheckInput{
 			Files:   input.Files,
 			Imports: input.Imports,
 		}
@@ -172,10 +172,10 @@ func nativeResolveArtifacts(pkg *Package) (api.ResolveResult, []nativeResolveFil
 	return pkg.nativeResolve.result, pkg.nativeResolve.files, pkg.nativeResolve.err
 }
 
-func nativeResolveFactArtifacts(pkg *Package) (api.ResolveResult, []nativeResolveFileInfo, selfhost.CheckResult, error) {
+func nativeResolveFactArtifacts(pkg *Package) (api.ResolveResult, []nativeResolveFileInfo, api.CheckResult, error) {
 	result, files, err := nativeResolveArtifacts(pkg)
 	if err != nil || pkg == nil {
-		return result, files, selfhost.CheckResult{}, err
+		return result, files, api.CheckResult{}, err
 	}
 	pkg.nativeResolve.checkOnce.Do(func() {
 		checked, err := selfhost.CheckPackageStructured(pkg.nativeResolve.checkInput)
@@ -338,7 +338,7 @@ func nativeResolutionRowsFromArtifacts(path string, resolved api.ResolveResult, 
 	return rows
 }
 
-func nativeResolveFactsFromArtifacts(resolved api.ResolveResult, files []nativeResolveFileInfo, checked selfhost.CheckResult) NativeResolveFactSet {
+func nativeResolveFactsFromArtifacts(resolved api.ResolveResult, files []nativeResolveFileInfo, checked api.CheckResult) NativeResolveFactSet {
 	facts := NativeResolveFactSet{
 		Symbols: make([]NativeResolvedSymbol, 0, len(resolved.Symbols)),
 		Refs:    make([]NativeResolvedRef, 0, len(resolved.Refs)+len(resolved.TypeRefs)),
@@ -409,7 +409,7 @@ func nativeResolveFactsFromArtifacts(resolved api.ResolveResult, files []nativeR
 	return facts
 }
 
-func nativeCheckSymbolTypes(checked selfhost.CheckResult) map[int]string {
+func nativeCheckSymbolTypes(checked api.CheckResult) map[int]string {
 	if len(checked.Symbols) == 0 {
 		return nil
 	}
@@ -493,14 +493,14 @@ func nativeImportLocalName(name string) string {
 	return name
 }
 
-func nativeTypeReprText(repr *selfhost.TypeRepr, fallback string) string {
+func nativeTypeReprText(repr *api.TypeRepr, fallback string) string {
 	if repr != nil {
 		return repr.String()
 	}
 	return fallback
 }
 
-func nativeImportFnType(fn selfhost.PackageCheckFn) string {
+func nativeImportFnType(fn api.PackageCheckFn) string {
 	params := make([]string, 0, len(fn.ParamTypes)+len(fn.ParamTypeReprs))
 	if len(fn.ParamTypeReprs) > 0 {
 		for i := range fn.ParamTypeReprs {
@@ -516,7 +516,7 @@ func nativeImportFnType(fn selfhost.PackageCheckFn) string {
 	return "fn(" + strings.Join(params, ", ") + ") -> " + ret
 }
 
-func nativeImportVariantType(variant selfhost.PackageCheckVariant) string {
+func nativeImportVariantType(variant api.PackageCheckVariant) string {
 	fields := make([]string, 0, len(variant.FieldTypes)+len(variant.FieldTypeReprs))
 	if len(variant.FieldTypeReprs) > 0 {
 		for i := range variant.FieldTypeReprs {

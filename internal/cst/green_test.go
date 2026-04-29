@@ -154,7 +154,7 @@ func TestGreenKindNameCoverage(t *testing.T) {
 	// updating greenKindNames, its String() will fall back to GreenKind(N),
 	// which the eye catches in snapshot diffs; this test makes the failure
 	// explicit.
-	for k := GkNone; k <= GkErrorExtra; k++ {
+	for k := GkNone; k <= GkLoop; k++ {
 		if _, ok := greenKindNames[k]; !ok {
 			t.Errorf("greenKindNames missing label for kind %d (GreenKind(%d))", int(k), int(k))
 		}

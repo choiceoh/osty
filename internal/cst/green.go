@@ -141,6 +141,10 @@ const (
 	GkError        // a region the parser salvaged with at least one diagnostic
 	GkErrorMissing // zero-width "expected X here" marker
 	GkErrorExtra   // well-formed-looking tokens that were in the wrong place
+
+	// ---- Expression kinds appended after error nodes for kind ID stability ----
+
+	GkLoop
 )
 
 // String returns a stable label for the kind — used in snapshots, test
@@ -267,6 +271,7 @@ var greenKindNames = map[GreenKind]string{
 	GkError:            "Error",
 	GkErrorMissing:     "ErrorMissing",
 	GkErrorExtra:       "ErrorExtra",
+	GkLoop:             "Loop",
 }
 
 // GreenToken is an immutable leaf in the Green tree. It carries its raw

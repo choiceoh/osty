@@ -155,6 +155,267 @@ func TestParseGreenControlHeadersDoNotLeakStrayBraces(t *testing.T) {
 	}
 }
 
+func TestParseGreenMapLiteralsAreStructured(t *testing.T) {
+	const source = `fn main() {
+    let empty = {:}
+    let scores = {
+        "alice": 3,
+        "bob": add(1, 2),
+    }
+    let block = {
+        let x = 1
+        x
+    }
+}
+`
+	tree := buildTreeFromSource(t, source)
+	if report := cst.ValidateTree(tree); !report.OK() {
+		t.Fatalf("CST validation failed: %s", report.Error())
+	}
+	if got := string(emitTreeBytes(tree)); got != source {
+		t.Fatalf("round-trip mismatch:\nwant: %q\n got: %q", source, got)
+	}
+	if got := countKindBelow(tree.Root(), cst.GkMap); got != 2 {
+		t.Fatalf("map literal count = %d, want 2", got)
+	}
+	if got := countKindBelow(tree.Root(), cst.GkMapEntry); got != 2 {
+		t.Fatalf("map entry count = %d, want 2", got)
+	}
+	if got := countKindBelow(tree.Root(), cst.GkBlock); got < 2 {
+		t.Fatalf("block count = %d, want at least function body and block expression", got)
+	}
+}
+
+func TestParseGreenParenTupleAndElseAreStructured(t *testing.T) {
+	const source = `fn main() {
+    let grouped = (1 + 2)
+    let unit = ()
+    let single = (grouped,)
+    let pair = (grouped, single)
+    if grouped > 0 {
+        grouped
+    } else {
+        pair
+    }
+}
+`
+	tree := buildTreeFromSource(t, source)
+	if report := cst.ValidateTree(tree); !report.OK() {
+		t.Fatalf("CST validation failed: %s", report.Error())
+	}
+	if got := string(emitTreeBytes(tree)); got != source {
+		t.Fatalf("round-trip mismatch:\nwant: %q\n got: %q", source, got)
+	}
+	if got := countKindBelow(tree.Root(), cst.GkParen); got != 1 {
+		t.Fatalf("paren expr count = %d, want 1", got)
+	}
+	if got := countKindBelow(tree.Root(), cst.GkTuple); got != 3 {
+		t.Fatalf("tuple expr count = %d, want 3", got)
+	}
+	if got := countKindBelow(tree.Root(), cst.GkElse); got != 1 {
+		t.Fatalf("else count = %d, want 1", got)
+	}
+}
+
+func TestParseGreenLoopAndListsAreStructured(t *testing.T) {
+	const source = `enum Choice {
+    One,
+    Two(Int),
+}
+
+fn main() {
+    let picked = loop {
+        break 1
+    }
+    let labelled = 'outer: loop {
+        break 'outer picked
+    }
+    match Choice.One {
+        Choice.One -> labelled,
+        Choice.Two(n) -> n,
+    }
+}
+`
+	tree := buildTreeFromSource(t, source)
+	if report := cst.ValidateTree(tree); !report.OK() {
+		t.Fatalf("CST validation failed: %s", report.Error())
+	}
+	if got := string(emitTreeBytes(tree)); got != source {
+		t.Fatalf("round-trip mismatch:\nwant: %q\n got: %q", source, got)
+	}
+	if got := countKindBelow(tree.Root(), cst.GkLoop); got != 2 {
+		t.Fatalf("loop count = %d, want 2", got)
+	}
+	if got := countKindBelow(tree.Root(), cst.GkVariantList); got != 1 {
+		t.Fatalf("variant list count = %d, want 1", got)
+	}
+	if got := countKindBelow(tree.Root(), cst.GkVariant); got != 2 {
+		t.Fatalf("variant count = %d, want 2", got)
+	}
+	if got := countKindBelow(tree.Root(), cst.GkMatchArmList); got != 1 {
+		t.Fatalf("match arm list count = %d, want 1", got)
+	}
+	if got := countKindBelow(tree.Root(), cst.GkMatchArm); got != 2 {
+		t.Fatalf("match arm count = %d, want 2", got)
+	}
+}
+
+func TestParseGreenPatternsAreStructured(t *testing.T) {
+	const source = `fn main() {
+    let (x, _) = pair
+    if let Some(n) = maybe {
+        n
+    }
+    match value {
+        Value.IntVal(n @ 1..=9) -> n,
+        Point { x, y: _ } -> 0,
+        1 | 2 -> 12,
+        _ -> 1,
+    }
+}
+`
+	tree := buildTreeFromSource(t, source)
+	if report := cst.ValidateTree(tree); !report.OK() {
+		t.Fatalf("CST validation failed: %s", report.Error())
+	}
+	if got := string(emitTreeBytes(tree)); got != source {
+		t.Fatalf("round-trip mismatch:\nwant: %q\n got: %q", source, got)
+	}
+	for _, kind := range []cst.GreenKind{
+		cst.GkTuplePat,
+		cst.GkWildcardPat,
+		cst.GkIfLet,
+		cst.GkVariantPat,
+		cst.GkBindingPat,
+		cst.GkRangePat,
+		cst.GkStructPat,
+		cst.GkStructPatField,
+		cst.GkOrPat,
+	} {
+		if got := countKindBelow(tree.Root(), kind); got == 0 {
+			t.Fatalf("tree has no %v node", kind)
+		}
+	}
+}
+
+func TestParseGreenForHeadersAreStructured(t *testing.T) {
+	const source = `fn main() {
+    for item in items {
+        item
+    }
+    for (key, value) in entries {
+        value
+    }
+    for let Some(next) = maybe {
+        next
+    }
+    for count < limit {
+        count = count + 1
+    }
+    'outer: for x in xs {
+        continue 'outer
+    }
+}
+`
+	tree := buildTreeFromSource(t, source)
+	if report := cst.ValidateTree(tree); !report.OK() {
+		t.Fatalf("CST validation failed: %s", report.Error())
+	}
+	if got := string(emitTreeBytes(tree)); got != source {
+		t.Fatalf("round-trip mismatch:\nwant: %q\n got: %q", source, got)
+	}
+	if got := countKindBelow(tree.Root(), cst.GkForStmt); got != 5 {
+		t.Fatalf("for stmt count = %d, want 5", got)
+	}
+	for _, kind := range []cst.GreenKind{
+		cst.GkIdentPat,
+		cst.GkTuplePat,
+		cst.GkVariantPat,
+		cst.GkBinary,
+		cst.GkContinueStmt,
+	} {
+		if got := countKindBelow(tree.Root(), kind); got == 0 {
+			t.Fatalf("tree has no %v node", kind)
+		}
+	}
+}
+
+func TestParseGreenClosuresAreStructured(t *testing.T) {
+	const source = `fn main() {
+    let empty = || { 1 }
+    let inc = |x| x + 1
+    let labels = pairs.map(|(n, s)| "{n} -> {s}")
+    let addDiff = |label: String, old: String, new: String| {
+        label
+    }
+}
+`
+	tree := buildTreeFromSource(t, source)
+	if report := cst.ValidateTree(tree); !report.OK() {
+		t.Fatalf("CST validation failed: %s", report.Error())
+	}
+	if got := string(emitTreeBytes(tree)); got != source {
+		t.Fatalf("round-trip mismatch:\nwant: %q\n got: %q", source, got)
+	}
+	if got := countKindBelow(tree.Root(), cst.GkClosure); got != 4 {
+		t.Fatalf("closure count = %d, want 4", got)
+	}
+	for _, kind := range []cst.GreenKind{
+		cst.GkParamList,
+		cst.GkParam,
+		cst.GkTuplePat,
+		cst.GkIdentPat,
+		cst.GkNamedType,
+		cst.GkBinary,
+		cst.GkBlock,
+	} {
+		if got := countKindBelow(tree.Root(), kind); got == 0 {
+			t.Fatalf("tree has no %v node", kind)
+		}
+	}
+}
+
+func TestParseGreenCompositeTypesAndGenericBoundsAreStructured(t *testing.T) {
+	const source = `struct Box<T: Display + Clone> {
+    unit: ()
+    owner: Self?
+    callback: fn((), [String]) -> ()
+    reader: std.io.Reader?
+    maybeTuple: (String, Int)?
+    maybeList: [String]?
+}
+`
+	tree := buildTreeFromSource(t, source)
+	if report := cst.ValidateTree(tree); !report.OK() {
+		t.Fatalf("CST validation failed: %s", report.Error())
+	}
+	if got := string(emitTreeBytes(tree)); got != source {
+		t.Fatalf("round-trip mismatch:\nwant: %q\n got: %q", source, got)
+	}
+	for _, kind := range []cst.GreenKind{
+		cst.GkFunctionType,
+		cst.GkParamList,
+		cst.GkParam,
+		cst.GkTupleType,
+		cst.GkListType,
+		cst.GkNamedType,
+		cst.GkGenericBound,
+		cst.GkUnitType,
+		cst.GkSelfType,
+		cst.GkOptionalType,
+	} {
+		if got := countKindBelow(tree.Root(), kind); got == 0 {
+			t.Fatalf("tree has no %v node", kind)
+		}
+	}
+	if got := countKindBelow(tree.Root(), cst.GkGenericBound); got != 2 {
+		t.Fatalf("generic bound count = %d, want 2", got)
+	}
+	if got := countKindBelow(tree.Root(), cst.GkOptionalType); got != 4 {
+		t.Fatalf("optional type count = %d, want 4", got)
+	}
+}
+
 // TestBuildUseDeclStructuring verifies use-decls get their own structured
 // node.
 func TestBuildUseDeclStructuring(t *testing.T) {
@@ -201,6 +462,32 @@ func TestBuildGroupedUseDeclsHaveDistinctRanges(t *testing.T) {
 		if r[1] <= r[0] {
 			t.Fatalf("grouped use child range must be positive-width, got %v", ranges)
 		}
+	}
+}
+
+func TestParseGreenUseDeclsAreStructured(t *testing.T) {
+	const source = `use std.io as io
+use std.strings
+use std::{fs, io as groupedIO}
+use go "net/http" as http {
+    fn Get(url: String) -> String
+}
+`
+	tree := buildTreeFromSource(t, source)
+	if report := cst.ValidateTree(tree); !report.OK() {
+		t.Fatalf("CST validation failed: %s", report.Error())
+	}
+	if got := string(emitTreeBytes(tree)); got != source {
+		t.Fatalf("round-trip mismatch:\nwant: %q\n got: %q", source, got)
+	}
+	if got := countKindBelow(tree.Root(), cst.GkUseFFIBody); got != 1 {
+		t.Fatalf("use FFI body count = %d, want 1", got)
+	}
+	if got := countKindBelow(tree.Root(), cst.GkUseAlias); got != 3 {
+		t.Fatalf("use alias count = %d, want 3", got)
+	}
+	if got := countKindBelow(tree.Root(), cst.GkUsePath); got < 5 {
+		t.Fatalf("use path count = %d, want at least 5", got)
 	}
 }
 
