@@ -411,14 +411,12 @@ pub fn queryText(q: sql.Query, config: Config) -> String {
 fn serverConfig(driver: Driver, host: String, port: Int, database: String, user: String, password: String) -> Result<Config, Error> {
     let cleanHost = strings.trimSpace(host)
     let cleanDatabase = strings.trimSpace(database)
-    if cleanHost.isEmpty() {
-        return Err(error.new("db: host is empty"))
-    }
+    validateHost(cleanHost)?
     if cleanDatabase.isEmpty() {
         return Err(error.new("db: database is empty"))
     }
-    if port < 1 {
-        return Err(error.new("db: port must be positive"))
+    if port < 1 || port > 65535 {
+        return Err(error.new("db: port out of range"))
     }
     Ok(Config {
         driver: driver,
@@ -448,16 +446,56 @@ fn dsnWithSecrets(config: Config, redact: Bool) -> Result<String, Error> {
 }
 
 fn serverDsn(scheme: String, config: Config, redact: Bool) -> Result<String, Error> {
-    if config.host.isEmpty() {
-        return Err(error.new("db: host is empty"))
-    }
+    let host = dsnHost(config.host)?
     if config.database.isEmpty() {
         return Err(error.new("db: database is empty"))
+    }
+    if config.port < 1 || config.port > 65535 {
+        return Err(error.new("db: port out of range"))
     }
     let auth = authPart(config.user, config.password, redact)
     let database = encoding.url.encode(config.database)
     let query = querySuffix(config.params)
-    Ok("{scheme}://{auth}{config.host}:{config.port}/{database}{query}")
+    Ok("{scheme}://{auth}{host}:{config.port}/{database}{query}")
+}
+
+fn dsnHost(host: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(host)
+    validateHost(clean)?
+    if isIpv6Host(clean) {
+        return Ok("[{clean}]")
+    }
+    Ok(clean)
+}
+
+fn validateHost(host: String) -> Result<(), Error> {
+    if host.isEmpty() {
+        return Err(error.new("db: host is empty"))
+    }
+    if isIpv6Host(host) {
+        return Ok(())
+    }
+    if strings.contains(host, ":") {
+        return Err(error.new("db: host must not include a port"))
+    }
+    for c in host.chars() {
+        if !isHostChar(c) {
+            return Err(error.new("db: host contains unsafe character"))
+        }
+    }
+    Ok(())
+}
+
+fn isIpv6Host(host: String) -> Bool {
+    if countChar(host, ':') < 2 {
+        return false
+    }
+    for c in host.chars() {
+        if !(isHexChar(c) || c == ':' || c == '.') {
+            return false
+        }
+    }
+    true
 }
 
 fn authPart(user: String, password: String, redact: Bool) -> String {
@@ -506,6 +544,29 @@ fn isParamChar(c: Char) -> Bool {
     (c >= 'a' && c <= 'z') ||
     (c >= '0' && c <= '9') ||
     c == '_' || c == '-' || c == '.'
+}
+
+fn isHostChar(c: Char) -> Bool {
+    (c >= 'A' && c <= 'Z') ||
+    (c >= 'a' && c <= 'z') ||
+    (c >= '0' && c <= '9') ||
+    c == '_' || c == '-' || c == '.'
+}
+
+fn isHexChar(c: Char) -> Bool {
+    (c >= 'A' && c <= 'F') ||
+    (c >= 'a' && c <= 'f') ||
+    (c >= '0' && c <= '9')
+}
+
+fn countChar(text: String, needle: Char) -> Int {
+    let mut out = 0
+    for c in text.chars() {
+        if c == needle {
+            out = out + 1
+        }
+    }
+    out
 }
 
 fn containsInt(values: List<Int>, needle: Int) -> Bool {

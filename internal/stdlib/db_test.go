@@ -60,6 +60,10 @@ func TestDbModuleSourcePinsNonExecutingBehavior(t *testing.T) {
 		`pub fn resultSet(columns: List<String>, rows: List<Row>) -> Result<ResultSet, Error>`,
 		`pub fn migration(version: Int, name: String, up: sql.Query, down: sql.Query) -> Result<Migration, Error>`,
 		`Runtime-backed drivers can consume Config, PoolOptions, TxOptions, and`,
+		`fn dsnHost(host: String) -> Result<String, Error>`,
+		`fn validateHost(host: String) -> Result<(), Error>`,
+		`db: host contains unsafe character`,
+		`if isIpv6Host(clean)`,
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("std.db source missing %q", want)
