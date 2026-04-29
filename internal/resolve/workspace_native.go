@@ -3,17 +3,16 @@ package resolve
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
-	"github.com/osty/osty/internal/selfhost"
 )
 
-// LoadPackageNative is the astbridge-counter-free sibling of LoadPackage.
-// Packages are still lowered to public *ast.File nodes for workspace import
-// discovery and import-surface stitching, but that lowering happens through
-// selfhost.LowerPublicFileFromRun instead of FrontendRun.File(), so the native
-// CLI workspace path can stay off the runtime.golegacy.astbridge counter.
+// LoadPackageNative loads PackageFile.Run for each source file and discovers
+// transitive package uses from the selfhost arena. It deliberately leaves
+// PackageFile.File nil; legacy consumers must call
+// MaterializePublicCompatibility at their own boundary.
 func (w *Workspace) LoadPackageNative(dotPath string) (*Package, error) {
 	if pkg, ok := w.Packages[dotPath]; ok {
 		return pkg, nil
@@ -56,20 +55,9 @@ func (w *Workspace) LoadPackageNative(dotPath string) (*Package, error) {
 		return nil, err
 	}
 	pkg.Name = lastDotSeg(dotPath)
-	nativeMaterializePackageFiles(pkg)
 	w.Packages[dotPath] = pkg
 
-	for _, f := range pkg.Files {
-		if f == nil || f.File == nil {
-			continue
-		}
-		for _, u := range f.File.Uses {
-			if u.IsFFI() {
-				continue
-			}
-			w.loadUseDependencyNative(u)
-		}
-	}
+	w.loadNativePackageDependencies(pkg)
 	return pkg, nil
 }
 
@@ -93,25 +81,19 @@ func (w *Workspace) loadFromExternalDirNative(key, dir string) (*Package, error)
 		return nil, err
 	}
 	pkg.Name = lastSegment(key)
-	nativeMaterializePackageFiles(pkg)
 	w.Packages[key] = pkg
 
-	for _, f := range pkg.Files {
-		if f == nil || f.File == nil {
-			continue
-		}
-		for _, u := range f.File.Uses {
-			if u.IsFFI() {
-				continue
-			}
-			w.loadUseDependencyNative(u)
-		}
-	}
+	w.loadNativePackageDependencies(pkg)
 	return pkg, nil
 }
 
-func (w *Workspace) loadUseDependencyNative(u *ast.UseDecl) {
-	target := useDependencyKey(u)
+func (w *Workspace) loadNativePackageDependencies(pkg *Package) {
+	for _, target := range packageUseDependencyKeys(pkg) {
+		w.loadUseDependencyNative(target)
+	}
+}
+
+func (w *Workspace) loadUseDependencyNative(target string) {
 	if target == "" || w.loading[target] {
 		return
 	}
@@ -133,14 +115,26 @@ func useDependencyKey(u *ast.UseDecl) string {
 	return UseKey(u)
 }
 
-func nativeMaterializePackageFiles(pkg *Package) {
+func packageUseDependencyKeys(pkg *Package) []string {
 	if pkg == nil {
-		return
+		return nil
 	}
-	for _, pf := range pkg.Files {
-		if pf == nil || pf.File != nil || pf.Run == nil {
+	seen := map[string]bool{}
+	var out []string
+	for _, ref := range packageImportUseRefs(pkg) {
+		if ref.isGo {
 			continue
 		}
-		pf.File = selfhost.LowerPublicFileFromRun(pf.Run)
+		target := ref.path
+		if ref.isScoped {
+			target = ref.scopedBase
+		}
+		if target == "" || seen[target] {
+			continue
+		}
+		seen[target] = true
+		out = append(out, target)
 	}
+	sort.Strings(out)
+	return out
 }

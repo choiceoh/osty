@@ -36,7 +36,7 @@ func LoadPackageFilesWithTransform(paths []string, stdlib StdlibProvider, transf
 	if stdlib != nil {
 		pkg.workspace = newStdlibOnlyWorkspace(stdlib)
 	}
-	loaded, err := loadPackagePaths(absPaths, dir, filepath.Base(dir), transform)
+	loaded, err := loadPackageNativePaths(absPaths, dir, filepath.Base(dir), transform)
 	if err != nil {
 		return nil, err
 	}

@@ -62,21 +62,15 @@ type PackageFile struct {
 	// spans carried by the parsed AST. Nil when the canonical source is a direct
 	// passthrough or no map was produced.
 	CanonicalMap *sourcemap.Map
-	// File is the parsed AST. Normally non-nil, even when Parse reported
-	// errors (best-effort partial trees support multi-error reporting).
-	// Packages loaded via LoadPackageForNative defer File materialization
-	// — they populate Run instead and leave this nil until EnsureFile is
-	// called. All Go-native passes (resolve.ResolvePackage, check.File,
-	// lint) still require File, so callers that may hit those paths should
-	// EnsureFile first.
+	// File is the public AST compatibility surface. Native-loaded packages
+	// populate Run instead and leave this nil until EnsureFile is called.
+	// Legacy passes that still traverse Go AST should materialize it at the
+	// explicit boundary rather than relying on loader side effects.
 	File *ast.File
-	// Run is the self-host FrontendRun that produced this file's
-	// arena. Populated by LoadPackageForNative (and by
-	// LoadPackageWithTransform when File is also eagerly computed) so
-	// the native resolver / checker / llvmgen can consume the arena
-	// directly, skipping the astbridge *ast.File round-trip. Nil on
-	// synthetic packages built from already-parsed ASTs that were not
-	// produced by the self-host front end.
+	// Run is the self-host FrontendRun that produced this file's arena.
+	// Populated by LoadPackageForNative so the native resolver / checker /
+	// llvmgen can consume the arena directly, skipping public AST
+	// materialization unless a compatibility consumer asks for it.
 	Run *selfhost.FrontendRun
 	// ParseDiags are diagnostics produced during lex + parse of this
 	// file. They are merged with resolver diagnostics by the package
@@ -144,15 +138,6 @@ func (pkg *Package) MaterializePublicCompatibility() {
 	for _, pf := range pkg.Files {
 		pf.EnsureFile()
 	}
-}
-
-// EnsureFiles forces File materialization on every PackageFile in pkg.
-//
-// Deprecated: use MaterializePublicCompatibility at explicit public-AST
-// compatibility boundaries. Native front-end paths should keep consuming
-// PackageFile.Run / structured results instead.
-func (pkg *Package) EnsureFiles() {
-	pkg.MaterializePublicCompatibility()
 }
 
 // MaterializeCanonicalSources populates pf.CanonicalSource /
