@@ -300,23 +300,23 @@ func stdlibJoinFieldPath(path []string) string {
 func stdlibSingletonReceiverExpr(module, path, typeName string, fallback ir.Expr, span ir.Span) ir.Expr {
 	switch {
 	case module == "encoding" && path == "base64" && typeName == "Base64":
-		return stdlibStructLit("Base64", span, ir.StructLitField{
+		return stdlibStructLit(module, "Base64", span, ir.StructLitField{
 			Name:  "url",
-			Value: stdlibStructLit("Base64Url", span),
+			Value: stdlibStructLit(module, "Base64Url", span),
 			SpanV: span,
 		})
 	case module == "encoding" && path == "base64.url" && typeName == "Base64Url":
-		return stdlibStructLit("Base64Url", span)
+		return stdlibStructLit(module, "Base64Url", span)
 	case module == "encoding" && path == "hex" && typeName == "Hex":
-		return stdlibStructLit("Hex", span)
+		return stdlibStructLit(module, "Hex", span)
 	case module == "encoding" && path == "url" && typeName == "UrlEncoding":
-		return stdlibStructLit("UrlEncoding", span)
+		return stdlibStructLit(module, "UrlEncoding", span)
 	case module == "compress" && path == "gzip" && typeName == "Gzip":
-		return stdlibStructLit("Gzip", span)
+		return stdlibStructLit(module, "Gzip", span)
 	case module == "crypto" && path == "hmac" && typeName == "Hmac":
-		return stdlibStructLit("Hmac", span)
+		return stdlibStructLit(module, "Hmac", span)
 	case module == "os" && path == "path" && typeName == "Path":
-		return stdlibStructLit("Path", span)
+		return stdlibStructLit(module, "Path", span)
 	case module == "net" && typeName == "Ipv4Addr":
 		switch path {
 		case "LOCALHOST_V4":
@@ -337,17 +337,17 @@ func stdlibSingletonReceiverExpr(module, path, typeName string, fallback ir.Expr
 	return fallback
 }
 
-func stdlibStructLit(typeName string, span ir.Span, fields ...ir.StructLitField) *ir.StructLit {
+func stdlibStructLit(module, typeName string, span ir.Span, fields ...ir.StructLitField) *ir.StructLit {
 	return &ir.StructLit{
 		TypeName: typeName,
 		Fields:   fields,
-		T:        &ir.NamedType{Name: typeName},
+		T:        &ir.NamedType{Package: module, Name: typeName},
 		SpanV:    span,
 	}
 }
 
 func stdlibIpv4Lit(a, b, c, d int, span ir.Span) *ir.StructLit {
-	return stdlibStructLit("Ipv4Addr", span,
+	return stdlibStructLit("net", "Ipv4Addr", span,
 		stdlibIntField("a", a, span),
 		stdlibIntField("b", b, span),
 		stdlibIntField("c", c, span),
@@ -360,7 +360,7 @@ func stdlibIpv6Lit(groups []int, span ir.Span) *ir.StructLit {
 	for _, g := range groups {
 		elems = append(elems, stdlibIntLit(g, span))
 	}
-	return stdlibStructLit("Ipv6Addr", span, ir.StructLitField{
+	return stdlibStructLit("net", "Ipv6Addr", span, ir.StructLitField{
 		Name: "groups",
 		Value: &ir.ListLit{
 			Elems: elems,

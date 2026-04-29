@@ -1454,7 +1454,7 @@ func (bs *bodyState) lowerForRange(f *ir.ForStmt) {
 }
 
 func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
-	iterT := f.Iter.Type()
+	iterT := bs.recoveredTypeOf(f.Iter)
 	if isChannelType(iterT) {
 		bs.lowerForInChannel(f, iterT)
 		return
@@ -2273,6 +2273,11 @@ func (bs *bodyState) recoveredTypeOf(e ir.Expr) ir.Type {
 	case *ir.FieldExpr, *ir.IndexExpr, *ir.TupleAccess, *ir.MethodCall:
 		if rt := bs.recoverOperandType(e); rt != nil && !isPoisonType(rt) && !irHasPoisonedTypeArg(rt) {
 			return rt
+		}
+	}
+	if field, ok := e.(*ir.FieldExpr); ok {
+		if ft := bs.fieldExprType(field); ft != nil && !isPoisonType(ft) && !irHasPoisonedTypeArg(ft) {
+			return ft
 		}
 	}
 	t := e.Type()
@@ -4935,10 +4940,11 @@ func (l *lowerer) stdlibIntrinsicForMethod(receiverType Type, name string) Intri
 
 func (l *lowerer) stdlibReceiverName(t Type) string {
 	if nt, ok := t.(*ir.NamedType); ok && l != nil {
-		if st := l.structs[nt.Name]; st != nil && st.BuiltinSource != "" {
+		key := typeNameOf(nt)
+		if st := l.structs[key]; st != nil && st.BuiltinSource != "" {
 			return st.BuiltinSource
 		}
-		if en := l.enums[nt.Name]; en != nil && en.BuiltinSource != "" {
+		if en := l.enums[key]; en != nil && en.BuiltinSource != "" {
 			return en.BuiltinSource
 		}
 	}
@@ -4950,7 +4956,7 @@ func (l *lowerer) isListType(t ir.Type) bool {
 		return true
 	}
 	if nt, ok := t.(*ir.NamedType); ok && l != nil {
-		if st := l.structs[nt.Name]; st != nil && st.BuiltinSource == "List" {
+		if st := l.structs[typeNameOf(nt)]; st != nil && st.BuiltinSource == "List" {
 			return true
 		}
 	}
@@ -4962,7 +4968,7 @@ func (l *lowerer) listElementType(t ir.Type) Type {
 		return elemT
 	}
 	if nt, ok := t.(*ir.NamedType); ok && l != nil {
-		if st := l.structs[nt.Name]; st != nil && st.BuiltinSource == "List" && len(st.BuiltinSourceArgs) >= 1 {
+		if st := l.structs[typeNameOf(nt)]; st != nil && st.BuiltinSource == "List" && len(st.BuiltinSourceArgs) >= 1 {
 			return st.BuiltinSourceArgs[0]
 		}
 	}
@@ -4974,7 +4980,7 @@ func (l *lowerer) indexElementType(base Type) Type {
 		return elemT
 	}
 	if nt, ok := base.(*ir.NamedType); ok && l != nil {
-		if st := l.structs[nt.Name]; st != nil {
+		if st := l.structs[typeNameOf(nt)]; st != nil {
 			switch st.BuiltinSource {
 			case "List":
 				if len(st.BuiltinSourceArgs) >= 1 {
@@ -4996,7 +5002,7 @@ func (l *lowerer) mapKeyType(base Type) Type {
 			return nt.Args[0]
 		}
 		if l != nil {
-			if st := l.structs[nt.Name]; st != nil && st.BuiltinSource == "Map" && len(st.BuiltinSourceArgs) >= 1 {
+			if st := l.structs[typeNameOf(nt)]; st != nil && st.BuiltinSource == "Map" && len(st.BuiltinSourceArgs) >= 1 {
 				return st.BuiltinSourceArgs[0]
 			}
 		}
@@ -5797,7 +5803,7 @@ func (l *lowerer) variantIndexInType(t ir.Type, name string) (int, bool) {
 	if !ok || nt.Name == "" {
 		return 0, false
 	}
-	e := l.enums[nt.Name]
+	e := l.enums[typeNameOf(nt)]
 	if e == nil {
 		return 0, false
 	}
@@ -6057,6 +6063,10 @@ func variantLookupPayloadType(l *lowerer, scrutT ir.Type, variant string, idx in
 func typeNameOf(t ir.Type) string {
 	switch x := t.(type) {
 	case *ir.NamedType:
+		if x.Package != "" && !x.Builtin {
+			pkg := strings.TrimPrefix(x.Package, "std.")
+			return pkg + "." + x.Name
+		}
 		return x.Name
 	case *ir.OptionalType:
 		return "Option"

@@ -529,18 +529,19 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 		if isStdlibModuleMarkerTypeName(x.Name) {
 			return true
 		}
+		layoutKey := mirNamedTypeLayoutKey(x)
 		if g.mod != nil && g.mod.Layouts != nil {
-			if _, ok := g.mod.Layouts.Structs[x.Name]; ok {
+			if _, ok := g.mod.Layouts.Structs[layoutKey]; ok {
 				return true
 			}
-			if _, ok := g.mod.Layouts.Enums[x.Name]; ok {
+			if _, ok := g.mod.Layouts.Enums[layoutKey]; ok {
 				return true
 			}
 			// User-declared interface. The MIR lowerer populates
 			// Layouts.Interfaces for every surviving InterfaceDecl;
 			// values of interface type flow as `%osty.iface = { ptr,
 			// ptr }` at the LLVM level.
-			if _, ok := g.mod.Layouts.Interfaces[x.Name]; ok {
+			if _, ok := g.mod.Layouts.Interfaces[layoutKey]; ok {
 				return true
 			}
 		}
@@ -3660,7 +3661,7 @@ func (g *mirGen) resultPayloadTypes(t mir.Type) (mir.Type, mir.Type, bool) {
 	if !ok || g == nil || g.mod == nil || g.mod.Layouts == nil {
 		return nil, nil, false
 	}
-	if el := g.mod.Layouts.Enums[nt.Name]; el != nil && el.BuiltinSource == "Result" && len(el.BuiltinSourceArgs) >= 2 {
+	if el := g.mod.Layouts.Enums[mirNamedTypeLayoutKey(nt)]; el != nil && el.BuiltinSource == "Result" && len(el.BuiltinSourceArgs) >= 2 {
 		return el.BuiltinSourceArgs[0], el.BuiltinSourceArgs[1], true
 	}
 	return nil, nil, false
@@ -6952,7 +6953,7 @@ func (g *mirGen) emitEnumStringConcatBoxed(op mir.Operand, t mir.Type) (*LlvmVal
 	if !ok || nt.Name == "" || g.mod == nil || g.mod.Layouts == nil {
 		return nil, false, nil
 	}
-	layout := g.mod.Layouts.Enums[nt.Name]
+	layout := g.mod.Layouts.Enums[mirNamedTypeLayoutKey(nt)]
 	if layout == nil || len(layout.Variants) == 0 {
 		return nil, false, nil
 	}
@@ -7805,7 +7806,7 @@ func (g *mirGen) mapKeyValueTypes(t mir.Type) (mir.Type, mir.Type) {
 	if !ok || g == nil || g.mod == nil || g.mod.Layouts == nil {
 		return nil, nil
 	}
-	if sl := g.mod.Layouts.Structs[nt.Name]; sl != nil && sl.BuiltinSource == "Map" && len(sl.BuiltinSourceArgs) == 2 {
+	if sl := g.mod.Layouts.Structs[mirNamedTypeLayoutKey(nt)]; sl != nil && sl.BuiltinSource == "Map" && len(sl.BuiltinSourceArgs) == 2 {
 		return sl.BuiltinSourceArgs[0], sl.BuiltinSourceArgs[1]
 	}
 	return nil, nil
@@ -7842,7 +7843,7 @@ func (g *mirGen) setElemType(t mir.Type) mir.Type {
 	if !ok || g == nil || g.mod == nil || g.mod.Layouts == nil {
 		return nil
 	}
-	if sl := g.mod.Layouts.Structs[nt.Name]; sl != nil && sl.BuiltinSource == "Set" && len(sl.BuiltinSourceArgs) == 1 {
+	if sl := g.mod.Layouts.Structs[mirNamedTypeLayoutKey(nt)]; sl != nil && sl.BuiltinSource == "Set" && len(sl.BuiltinSourceArgs) == 1 {
 		return sl.BuiltinSourceArgs[0]
 	}
 	return nil
@@ -8751,7 +8752,7 @@ func (g *mirGen) listElemType(t mir.Type) mir.Type {
 	if !ok || g == nil || g.mod == nil || g.mod.Layouts == nil {
 		return nil
 	}
-	if sl := g.mod.Layouts.Structs[nt.Name]; sl != nil && sl.BuiltinSource == "List" && len(sl.BuiltinSourceArgs) == 1 {
+	if sl := g.mod.Layouts.Structs[mirNamedTypeLayoutKey(nt)]; sl != nil && sl.BuiltinSource == "List" && len(sl.BuiltinSourceArgs) == 1 {
 		return sl.BuiltinSourceArgs[0]
 	}
 	return nil
@@ -8770,7 +8771,7 @@ func (g *mirGen) aggregateElementTypes(aggT mir.Type, rv *mir.AggregateRV) ([]mi
 		if g.mod == nil || g.mod.Layouts == nil {
 			return nil, fmt.Errorf("mir-mvp: missing layout table for struct %s", nt.Name)
 		}
-		sl := g.mod.Layouts.Structs[nt.Name]
+		sl := g.mod.Layouts.Structs[mirNamedTypeLayoutKey(nt)]
 		if sl == nil {
 			return nil, fmt.Errorf("mir-mvp: missing layout for struct %s", nt.Name)
 		}
@@ -9365,7 +9366,7 @@ func (g *mirGen) isEnumValueType(t mir.Type) bool {
 	if !ok || g == nil || g.mod == nil || g.mod.Layouts == nil {
 		return false
 	}
-	return g.mod.Layouts.Enums[nt.Name] != nil
+	return g.mod.Layouts.Enums[mirNamedTypeLayoutKey(nt)] != nil
 }
 
 func (g *mirGen) emitEnumDiscriminantEquality(op mir.BinaryOp, left, right string, argT mir.Type) (string, error) {
@@ -9591,6 +9592,16 @@ func encodeLLVMString(s string) (string, int) {
 
 // ==== type mapping ====
 
+func mirNamedTypeLayoutKey(t *ir.NamedType) string {
+	if t == nil {
+		return ""
+	}
+	if t.Package != "" && !t.Builtin {
+		return strings.TrimPrefix(t.Package, "std.") + "." + t.Name
+	}
+	return t.Name
+}
+
 func (g *mirGen) llvmType(t mir.Type) string {
 	switch x := t.(type) {
 	case *ir.PrimType:
@@ -9642,24 +9653,25 @@ func (g *mirGen) llvmType(t mir.Type) string {
 		}
 		// User-declared struct or enum — register the enum in the
 		// layout pool on first use and emit by name.
+		layoutKey := mirNamedTypeLayoutKey(x)
 		if g.mod != nil && g.mod.Layouts != nil {
-			if sl := g.mod.Layouts.Structs[x.Name]; sl != nil && isOpaqueBuiltinStructLayout(sl) {
+			if sl := g.mod.Layouts.Structs[layoutKey]; sl != nil && isOpaqueBuiltinStructLayout(sl) {
 				return "ptr"
 			}
-			if _, ok := g.mod.Layouts.Structs[x.Name]; ok {
-				return "%" + x.Name
+			if _, ok := g.mod.Layouts.Structs[layoutKey]; ok {
+				return "%" + layoutKey
 			}
-			if en := g.mod.Layouts.Enums[x.Name]; en != nil {
+			if en := g.mod.Layouts.Enums[layoutKey]; en != nil {
 				if builtinLLVM := g.builtinEnumLayoutLLVMType(en); builtinLLVM != "" {
 					return builtinLLVM
 				}
-				g.registerEnumLayout(x.Name)
-				return "%" + x.Name
+				g.registerEnumLayout(layoutKey)
+				return "%" + layoutKey
 			}
 			// Interface values are fat pointers `{data, vtable}`. The
 			// concrete type name doesn't participate in LLVM typing —
 			// every interface lowers to the same `%osty.iface`.
-			if _, ok := g.mod.Layouts.Interfaces[x.Name]; ok {
+			if _, ok := g.mod.Layouts.Interfaces[layoutKey]; ok {
 				g.ifaceTouched = true
 				return "%osty.iface"
 			}
@@ -9720,7 +9732,7 @@ func (g *mirGen) isStdTermSizeType(t *ir.NamedType) bool {
 		return false
 	}
 	if g.mod != nil && g.mod.Layouts != nil {
-		if _, ok := g.mod.Layouts.Structs[t.Name]; ok {
+		if _, ok := g.mod.Layouts.Structs[mirNamedTypeLayoutKey(t)]; ok {
 			return false
 		}
 	}
@@ -9733,7 +9745,7 @@ func (g *mirGen) isStdOsOutputType(t *ir.NamedType) bool {
 		return false
 	}
 	if g.mod != nil && g.mod.Layouts != nil {
-		if _, ok := g.mod.Layouts.Structs[t.Name]; ok {
+		if _, ok := g.mod.Layouts.Structs[mirNamedTypeLayoutKey(t)]; ok {
 			return false
 		}
 	}

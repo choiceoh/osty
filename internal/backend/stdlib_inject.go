@@ -337,6 +337,7 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 		if lowered == nil {
 			continue
 		}
+		qualifyLoweredStdlibFnTypes(lowered, reg, r.Module)
 		lowered.Name = StdlibSymbol(r.Module, r.Fn.Name)
 		out = append(out, lowered)
 		loweredFreeFns = append(loweredFreeFns, loweredFromModule{module: r.Module, fn: lowered})
@@ -350,6 +351,7 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 			continue
 		}
 		freeFn := methodToFreeFn(lowered, m.Module, m.Type, m.Method)
+		qualifyLoweredStdlibFnTypes(freeFn, reg, m.Module)
 		out = append(out, freeFn)
 		// Methods can call same-module free fns too; route them
 		// through the same closure step.
@@ -391,6 +393,7 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 			if lowered == nil {
 				continue
 			}
+			qualifyLoweredStdlibFnTypes(lowered, reg, next.module)
 			lowered.Name = StdlibSymbol(next.module, callName)
 			out = append(out, lowered)
 			rewriteBareIdentCalls(next.fn, callName, lowered.Name)
@@ -418,6 +421,7 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 			if lowered == nil {
 				continue
 			}
+			qualifyLoweredStdlibFnTypes(lowered, reg, calleeModule)
 			lowered.Name = StdlibSymbol(calleeModule, ref.Name)
 			out = append(out, lowered)
 			rewriteQualifiedStdlibCalls(next.fn, ref.Qualifier, ref.Name, lowered.Name)
@@ -438,11 +442,13 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 				continue
 			}
 			freeFn := methodToFreeFn(lowered, m.Module, m.Type, m.Method)
+			qualifyLoweredStdlibFnTypes(freeFn, reg, m.Module)
 			out = append(out, freeFn)
 			rewriteStdlibMethodCallsitesInFn(next.fn, []ReachableStdlibMethod{m})
 			queue = append(queue, loweredFromModule{module: m.Module, fn: freeFn})
 		}
 	}
+	qualifyStdlibCallsiteTypes(mod, out)
 	return out, issues
 }
 
@@ -458,6 +464,217 @@ func rewriteStdlibMethodCallsitesInFn(fn *ir.FnDecl, reached []ReachableStdlibMe
 		return
 	}
 	RewriteStdlibMethodCallsites(&ir.Module{Decls: []ir.Decl{fn}}, reached)
+}
+
+func qualifyLoweredStdlibFnTypes(fn *ir.FnDecl, reg *stdlib.Registry, module string) {
+	if fn == nil || reg == nil || module == "" {
+		return
+	}
+	entry := loweredStdlibTypesFor(reg)
+	if entry == nil {
+		return
+	}
+	qualifyStdlibDeclTypes(fn, module, entry.moduleTypeNames(module))
+}
+
+func qualifyStdlibCallsiteTypes(mod *ir.Module, injected []ir.Decl) {
+	if mod == nil || len(injected) == 0 {
+		return
+	}
+	returns := map[string]ir.Type{}
+	for _, d := range injected {
+		fn, ok := d.(*ir.FnDecl)
+		if !ok || fn == nil || fn.Name == "" || fn.Return == nil {
+			continue
+		}
+		returns[fn.Name] = ir.CloneType(fn.Return)
+	}
+	if len(returns) == 0 {
+		return
+	}
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		call, ok := n.(*ir.CallExpr)
+		if !ok || call == nil {
+			return true
+		}
+		id, ok := call.Callee.(*ir.Ident)
+		if !ok || id == nil {
+			return true
+		}
+		if ret := returns[id.Name]; ret != nil {
+			call.T = ir.CloneType(ret)
+			if ft, ok := id.T.(*ir.FnType); ok && ft != nil {
+				ft.Return = ir.CloneType(ret)
+			}
+		}
+		return true
+	}), mod)
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		mc, ok := n.(*ir.MethodCall)
+		if !ok || mc == nil || mc.Receiver == nil {
+			return true
+		}
+		if ret := builtinReceiverMethodReturnType(mc.Receiver.Type(), mc.Name); ret != nil {
+			mc.T = ret
+		}
+		return true
+	}), mod)
+	qualifyStdlibLetTypes(mod)
+	qualifyStdlibIdentBindings(mod)
+	qualifyStdlibCollectionLiteralTypes(mod)
+	qualifyStdlibLetTypes(mod)
+	qualifyStdlibIdentBindings(mod)
+}
+
+func qualifyStdlibCollectionLiteralTypes(mod *ir.Module) {
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		switch x := n.(type) {
+		case *ir.ListLit:
+			if typeContainsQualifiedNamed(x.Elem) {
+				return true
+			}
+			for _, elem := range x.Elems {
+				if t := qualifiedValueType(elem); t != nil {
+					x.Elem = t
+					break
+				}
+			}
+		case *ir.MapLit:
+			if !typeContainsQualifiedNamed(x.KeyT) {
+				for _, entry := range x.Entries {
+					if t := qualifiedValueType(entry.Key); t != nil {
+						x.KeyT = t
+						break
+					}
+				}
+			}
+			if !typeContainsQualifiedNamed(x.ValT) {
+				for _, entry := range x.Entries {
+					if t := qualifiedValueType(entry.Value); t != nil {
+						x.ValT = t
+						break
+					}
+				}
+			}
+		}
+		return true
+	}), mod)
+}
+
+func qualifyStdlibLetTypes(mod *ir.Module) {
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		let, ok := n.(*ir.LetStmt)
+		if !ok || let == nil || let.Value == nil {
+			return true
+		}
+		if t := qualifiedValueType(let.Value); t != nil {
+			let.Type = t
+		}
+		return true
+	}), mod)
+}
+
+func qualifyStdlibIdentBindings(mod *ir.Module) {
+	bindings := map[string]ir.Type{}
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		let, ok := n.(*ir.LetStmt)
+		if !ok || let == nil || let.Name == "" || !typeContainsQualifiedNamed(let.Type) {
+			return true
+		}
+		bindings[let.Name] = ir.CloneType(let.Type)
+		return true
+	}), mod)
+	if len(bindings) > 0 {
+		ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+			id, ok := n.(*ir.Ident)
+			if !ok || id == nil {
+				return true
+			}
+			if t := bindings[id.Name]; t != nil {
+				id.T = ir.CloneType(t)
+			}
+			return true
+		}), mod)
+	}
+}
+
+func builtinReceiverMethodReturnType(receiver ir.Type, method string) ir.Type {
+	switch t := receiver.(type) {
+	case *ir.OptionalType:
+		switch method {
+		case "unwrap", "unwrapOr":
+			return ir.CloneType(t.Inner)
+		case "isSome", "isNone":
+			return ir.TBool
+		}
+	case *ir.NamedType:
+		switch t.Name {
+		case "Option", "Maybe":
+			switch method {
+			case "unwrap", "unwrapOr":
+				if len(t.Args) >= 1 {
+					return ir.CloneType(t.Args[0])
+				}
+			case "isSome", "isNone":
+				return ir.TBool
+			}
+		case "Result":
+			switch method {
+			case "unwrap", "unwrapOr":
+				if len(t.Args) >= 1 {
+					return ir.CloneType(t.Args[0])
+				}
+			case "unwrapErr":
+				if len(t.Args) >= 2 {
+					return ir.CloneType(t.Args[1])
+				}
+			case "isOk", "isErr":
+				return ir.TBool
+			}
+		}
+	}
+	return nil
+}
+
+func qualifiedValueType(e ir.Expr) ir.Type {
+	if e == nil {
+		return nil
+	}
+	t := e.Type()
+	if !typeContainsQualifiedNamed(t) {
+		return nil
+	}
+	return ir.CloneType(t)
+}
+
+func typeContainsQualifiedNamed(t ir.Type) bool {
+	switch x := t.(type) {
+	case *ir.NamedType:
+		if x.Package != "" {
+			return true
+		}
+		for _, a := range x.Args {
+			if typeContainsQualifiedNamed(a) {
+				return true
+			}
+		}
+	case *ir.OptionalType:
+		return typeContainsQualifiedNamed(x.Inner)
+	case *ir.TupleType:
+		for _, e := range x.Elems {
+			if typeContainsQualifiedNamed(e) {
+				return true
+			}
+		}
+	case *ir.FnType:
+		for _, p := range x.Params {
+			if typeContainsQualifiedNamed(p) {
+				return true
+			}
+		}
+		return typeContainsQualifiedNamed(x.Return)
+	}
+	return false
 }
 
 func sortedBareIdentCallNames(fn *ir.FnDecl) []string {
