@@ -62,6 +62,8 @@ type ResolveDiagnosticSurfaceRecord struct {
 	File         string
 	Start        int
 	End          int
+	SourceFileID string
+	SpanID       string
 }
 
 func ResolveSurfaceFromResult(result ResolveResult) ResolveSurface {
@@ -124,6 +126,8 @@ func ResolveSurfaceFromResult(result ResolveResult) ResolveSurface {
 			File:         d.File,
 			Start:        d.Start,
 			End:          d.End,
+			SourceFileID: d.SourceFileID,
+			SpanID:       d.SpanID,
 		})
 	}
 	sort.Slice(surface.Symbols, func(i, j int) bool {

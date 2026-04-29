@@ -15,6 +15,7 @@ import (
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/sourcemap"
+	"github.com/osty/osty/internal/spanid"
 )
 
 // ---- Value types ----
@@ -25,6 +26,7 @@ import (
 // rendering without re-reading the file.
 type ParseResult struct {
 	Source          []byte
+	SourceFileID    spanid.SourceFileID
 	CanonicalSource []byte
 	CanonicalMap    *sourcemap.Map
 	File            *ast.File
@@ -306,9 +308,11 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 		func(ctx *query.Ctx, path string) ParseResult {
 			src := inp.SourceText.Fetch(ctx, path)
 			parsed := parser.ParseDetailed(src)
-			canonicalSrc, canonicalMap := canonical.SourceWithMap(src, parsed.File)
+			canonicalSrc, canonicalMap := canonical.SourceWithMapForFile(path, src, parsed.File)
+			diag.StampFile(parsed.Diagnostics, path)
 			return ParseResult{
 				Source:          src,
+				SourceFileID:    spanid.SourceFileIDFor(path),
 				CanonicalSource: canonicalSrc,
 				CanonicalMap:    canonicalMap,
 				File:            parsed.File,
@@ -352,6 +356,7 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 				pkg.Files = append(pkg.Files, &resolve.PackageFile{
 					Path:            f,
 					Source:          pr.Source,
+					SourceFileID:    pr.SourceFileID,
 					CanonicalSource: pr.CanonicalSource,
 					CanonicalMap:    pr.CanonicalMap,
 					File:            pr.File,
@@ -382,6 +387,7 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 				pkg.Files[i] = &resolve.PackageFile{
 					Path:            pf.Path,
 					Source:          pf.Source,
+					SourceFileID:    pf.SourceFileID,
 					OriginalSource:  pf.OriginalSource,
 					TransformMap:    pf.TransformMap,
 					CanonicalSource: pf.CanonicalSource,
@@ -620,13 +626,23 @@ func collectFileDiagnostics(
 	lr *lint.Result,
 ) []*diag.Diagnostic {
 	norm := NormalizePath(path)
-	out := make([]*diag.Diagnostic, 0, len(pr.Diags)+len(resolveDiags)+len(chk.Diags)+len(lr.Diags))
+	fileID := pr.SourceFileID
+	if fileID == "" {
+		fileID = spanid.SourceFileIDFor(norm)
+	}
+	diag.StampFile(pr.Diags, norm)
+	if lr != nil {
+		// LintFile is source-only and therefore has no file context until this
+		// per-path aggregation boundary.
+		diag.StampFile(lr.Diags, norm)
+	}
+	out := make([]*diag.Diagnostic, 0, len(pr.Diags)+len(resolveDiags)+diagLen(chk)+diagLen(lr))
 	appendFiltered := func(ds []*diag.Diagnostic) {
 		for _, d := range ds {
 			if d == nil {
 				continue
 			}
-			if !diagnosticBelongsTo(d, norm) {
+			if !diagnosticBelongsTo(d, norm, fileID) {
 				continue
 			}
 			out = append(out, d)
@@ -636,8 +652,12 @@ func collectFileDiagnostics(
 	// no position-based filtering needed.
 	out = append(out, pr.Diags...)
 	appendFiltered(resolveDiags)
-	appendFiltered(chk.Diags)
-	appendFiltered(lr.Diags)
+	if chk != nil {
+		appendFiltered(chk.Diags)
+	}
+	if lr != nil {
+		appendFiltered(lr.Diags)
+	}
 	return out
 }
 
@@ -645,17 +665,24 @@ func nativeResolveDiagnosticsForFile(path string, pkg *resolve.Package) []*diag.
 	if pkg == nil {
 		return nil
 	}
+	norm := NormalizePath(path)
+	fileID := spanid.SourceFileIDFor(norm)
+	for _, pf := range pkg.Files {
+		if pf != nil && NormalizePath(pf.Path) == norm && pf.SourceFileID != "" {
+			fileID = pf.SourceFileID
+			break
+		}
+	}
 	ds, err := resolve.NativeDiagnostics(pkg)
 	if err != nil {
 		return nil
 	}
-	norm := NormalizePath(path)
 	out := make([]*diag.Diagnostic, 0, len(ds))
 	for _, d := range ds {
 		if d == nil {
 			continue
 		}
-		if d.File != "" && NormalizePath(d.File) != norm {
+		if !diagnosticBelongsTo(d, norm, fileID) {
 			continue
 		}
 		out = append(out, d)
@@ -663,12 +690,35 @@ func nativeResolveDiagnosticsForFile(path string, pkg *resolve.Package) []*diag.
 	return out
 }
 
-// diagnosticBelongsTo is a placeholder for per-file filtering. Span
-// filtering by path can't be done until token.Pos carries a file
-// identifier; callers currently receive every diagnostic and sort by
-// position for rendering.
-func diagnosticBelongsTo(d *diag.Diagnostic, normalizedPath string) bool {
-	return d != nil
+func diagLen(v any) int {
+	switch x := v.(type) {
+	case *check.Result:
+		if x != nil {
+			return len(x.Diags)
+		}
+	case *lint.Result:
+		if x != nil {
+			return len(x.Diags)
+		}
+	}
+	return 0
+}
+
+// diagnosticBelongsTo routes multi-file diagnostics by explicit path first and
+// then by SourceFileID carried on the primary span. Diagnostics without either
+// identity are retained as a compatibility fallback so older single-file
+// producers do not disappear from editor output.
+func diagnosticBelongsTo(d *diag.Diagnostic, normalizedPath string, fileID spanid.SourceFileID) bool {
+	if d == nil {
+		return false
+	}
+	if d.File != "" {
+		return NormalizePath(d.File) == normalizedPath
+	}
+	if span, ok := d.PrimarySpan(); ok && span.SourceFileID != "" {
+		return span.SourceFileID == fileID
+	}
+	return true
 }
 
 // ---- Workspace helpers ----
@@ -720,6 +770,7 @@ func copyPackageForWorkspace(src *resolve.Package) *resolve.Package {
 		pkg.Files[i] = &resolve.PackageFile{
 			Path:            pf.Path,
 			Source:          pf.Source,
+			SourceFileID:    pf.SourceFileID,
 			OriginalSource:  pf.OriginalSource,
 			TransformMap:    pf.TransformMap,
 			CanonicalSource: pf.CanonicalSource,

@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/selfhost/api"
+	"github.com/osty/osty/internal/spanid"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -60,7 +62,7 @@ func checkDiagnosticRecordAsDiagWithIndex(src []byte, index diagLineIndex, rec C
 	if rec.File != "" {
 		b = b.File(rec.File)
 	}
-	b = b.Primary(diagnosticRecordSpan(index, rec), "")
+	b = b.Primary(checkDiagnosticRecordSpanWithIdentity(index, rec), "")
 	for _, note := range rec.Notes {
 		if strings.TrimSpace(note) == "" {
 			continue
@@ -86,6 +88,29 @@ func diagnosticRecordSpan(index diagLineIndex, rec CheckDiagnosticRecord) diag.S
 		}
 	}
 	return index.byteRangeSpan(rec.Start, rec.End)
+}
+
+func checkDiagnosticRecordSpanWithIdentity(index diagLineIndex, rec CheckDiagnosticRecord) diag.Span {
+	span := diagnosticRecordSpan(index, rec)
+	return spanWithAPIIdentity(span, rec.SourceFileID, rec.SpanID, rec.Provenance)
+}
+
+func spanWithAPIIdentity(span diag.Span, sourceFileID, id string, provenance []api.SpanProvenanceRecord) diag.Span {
+	if sourceFileID != "" {
+		span = diag.StampSpanSourceFileID(span, spanid.SourceFileID(sourceFileID))
+	}
+	if id != "" {
+		span.ID = spanid.SpanID(id)
+	}
+	for _, p := range provenance {
+		span.Provenance = spanid.AppendProvenance(span.Provenance, spanid.Provenance{
+			Kind:         spanid.ProvenanceKind(p.Kind),
+			SourceFileID: spanid.SourceFileID(p.SourceFileID),
+			SpanID:       spanid.SpanID(p.SpanID),
+			Detail:       p.Detail,
+		})
+	}
+	return span
 }
 
 type diagLineIndex struct {

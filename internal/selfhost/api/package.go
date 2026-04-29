@@ -12,7 +12,8 @@ type PackageCheckFile struct {
 	// Path is the owning source path when known. Package-mode diagnostics carry
 	// this through the native checker boundary so multi-file callers do not
 	// need to guess which file owned a given span.
-	Path string `json:"path,omitempty"`
+	Path         string `json:"path,omitempty"`
+	SourceFileID string `json:"sourceFileId,omitempty"`
 }
 
 // PackageCheckGenericBound describes one `<T: Iface>` constraint on a

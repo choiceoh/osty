@@ -13,6 +13,7 @@ import (
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/lint"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/spanid"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
 )
@@ -98,6 +99,7 @@ func (s *stableHasher) pos(p token.Pos) {
 // alter resolver or checker output.
 func hashParseResult(r ParseResult) [32]byte {
 	h := newHasher()
+	h.str(string(r.SourceFileID))
 	h.bytes(r.Source)
 	h.u32(uint32(len(r.Diags)))
 	for _, d := range r.Diags {
@@ -128,12 +130,12 @@ func hashDiagnostic(h *stableHasher, d *diag.Diagnostic) {
 	}
 	h.byte(1)
 	h.byte(byte(d.Severity))
+	h.str(d.File)
 	h.str(d.Code)
 	h.str(d.Message)
 	h.u32(uint32(len(d.Spans)))
 	for _, sp := range d.Spans {
-		h.pos(sp.Span.Start)
-		h.pos(sp.Span.End)
+		hashSpan(h, sp.Span)
 		h.str(sp.Label)
 		h.bool(sp.Primary)
 	}
@@ -151,16 +153,29 @@ func hashDiagnostic(h *stableHasher, d *diag.Diagnostic) {
 func hashSuggestion(h *stableHasher, s diag.Suggestion) {
 	h.str(s.Label)
 	h.str(s.Replacement)
-	h.pos(s.Span.Start)
-	h.pos(s.Span.End)
+	hashSpan(h, s.Span)
 	if s.CopyFrom != nil {
 		h.byte(1)
-		h.pos(s.CopyFrom.Start)
-		h.pos(s.CopyFrom.End)
+		hashSpan(h, *s.CopyFrom)
 	} else {
 		h.byte(0)
 	}
 	h.bool(s.MachineApplicable)
+}
+
+func hashSpan(h *stableHasher, s diag.Span) {
+	h.pos(s.Start)
+	h.pos(s.End)
+	h.str(string(s.SourceFileID))
+	h.str(string(s.ID))
+	provenance := spanid.ProvenanceEntries(s.Provenance)
+	h.u32(uint32(len(provenance)))
+	for _, p := range provenance {
+		h.str(string(p.Kind))
+		h.str(string(p.SourceFileID))
+		h.str(string(p.SpanID))
+		h.str(p.Detail)
+	}
 }
 
 func hashDiagsList(h *stableHasher, ds []*diag.Diagnostic) {
@@ -250,6 +265,7 @@ func hashResolvedPackage(rp *ResolvedPackage) [32]byte {
 	facts, hasNativeFacts := nativeResolveFactsForHash(rp.pkg)
 	for _, pf := range files {
 		h.str(pf.Path)
+		h.str(string(pf.SourceFileID))
 		if !hasNativeFacts {
 			hashFileRefs(h, pf)
 		}

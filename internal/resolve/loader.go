@@ -12,6 +12,7 @@ import (
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/sourcemap"
+	"github.com/osty/osty/internal/spanid"
 )
 
 // SourceTransform lets callers rewrite raw source bytes before the
@@ -109,14 +110,34 @@ func loadPackageNativePaths(paths []string, dir, name string, opts LoadOptions) 
 		src, transformMap := ApplySourceTransform(p, original, opts)
 		transformApplied := opts.Transform != nil || opts.Transformer != nil
 		transformChanged := transformApplied && !bytes.Equal(src, original)
+		originalSourceID := spanid.SourceFileIDFor(p)
+		sourceFileID := originalSourceID
+		if transformMap != nil {
+			sourceFileID = spanid.DerivedSourceFileID(originalSourceID, spanid.ProvenanceExpansion, "source-transform")
+			transformMap.StampFileIDs(originalSourceID, sourceFileID)
+		}
 		run := selfhost.Run(src)
+		diags := append([]*diag.Diagnostic(nil), run.Diagnostics()...)
+		for _, d := range diags {
+			if d == nil {
+				continue
+			}
+			if d.File == "" {
+				d.File = p
+			}
+			diag.StampDiagnosticSourceFileID(d, sourceFileID)
+		}
+		if transformMap != nil {
+			diags = transformMap.RemapDiagnosticsProjected(diags)
+		}
 		pf := &PackageFile{
 			Path:                   p,
 			Source:                 src,
+			SourceFileID:           sourceFileID,
 			SourceTransformApplied: transformApplied,
 			SourceTransformChanged: transformChanged,
 			Run:                    run,
-			ParseDiags:             append([]*diag.Diagnostic(nil), run.Diagnostics()...),
+			ParseDiags:             diags,
 		}
 		if transformMap != nil {
 			pf.OriginalSource = append([]byte(nil), original...)

@@ -22,6 +22,7 @@ import (
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/sourcemap"
+	"github.com/osty/osty/internal/spanid"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
 )
@@ -350,6 +351,9 @@ type selfhostCheckedSource struct {
 
 type selfhostFileSegment struct {
 	file      *ast.File
+	path      string
+	source    []byte
+	sourceID  spanid.SourceFileID
 	scope     *resolve.Scope
 	refs      map[ast.NodeID]*resolve.Symbol
 	base      int
@@ -413,7 +417,7 @@ func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result,
 		return
 	}
 	policy := nativeDiagPolicy{privileged: privileged}
-	result.Diags = append(result.Diags, nativeCheckerDiags(checkedSrc.source, checked, policy)...)
+	result.Diags = append(result.Diags, nativeCheckerDiagsForCheckedSource(checkedSrc, checked, policy)...)
 	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked, policy)
 	result.NativeCheckResult = cloneNativeCheckResult(checked)
 	overlaySelfhostResult(result, checkedSrc, checked)
@@ -467,7 +471,7 @@ func applySelfhostPackageResult(result *Result, pkg *resolve.Package, _ *resolve
 		return
 	}
 	policy := nativeDiagPolicy{privileged: privileged}
-	result.Diags = append(result.Diags, nativeCheckerDiags(src.source, checked, policy)...)
+	result.Diags = append(result.Diags, nativeCheckerDiagsForCheckedSource(src, checked, policy)...)
 	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked, policy)
 	result.NativeCheckResult = cloneNativeCheckResult(checked)
 	overlaySelfhostResult(result, src, checked)
@@ -603,7 +607,7 @@ func runSelfhostPackageResultLocked(result *Result, pkg *resolve.Package, ws *re
 		return
 	}
 	policy := nativeDiagPolicy{privileged: privileged}
-	diags := nativeCheckerDiags(src.source, checked, policy)
+	diags := nativeCheckerDiagsForCheckedSource(src, checked, policy)
 	telemetry := nativeCheckerTelemetry(checked, policy)
 
 	mu.Lock()
@@ -748,6 +752,90 @@ func nativeCheckerDiags(src []byte, checked api.CheckResult, policy nativeDiagPo
 	return out
 }
 
+func nativeCheckerDiagsForCheckedSource(src selfhostCheckedSource, checked api.CheckResult, policy nativeDiagPolicy) []*diag.Diagnostic {
+	out := make([]*diag.Diagnostic, 0, len(checked.Diagnostics))
+	for _, d := range checked.Diagnostics {
+		if shouldSuppressNativeDiag(d, policy) {
+			continue
+		}
+		if converted := convertNativeDiagForCheckedSource(src, d); converted != nil {
+			out = append(out, converted)
+		}
+	}
+	summary := filteredNativeSummary(checked, policy)
+	if summary.Errors == 0 {
+		return out
+	}
+	label := "native checker reported type errors"
+	if summary.Errors == 1 {
+		label = "native checker reported a type error"
+	}
+	out = append(out,
+		diag.New(diag.Error, fmt.Sprintf("%s: %d error(s)", label, summary.Errors)).
+			Code(diag.CodeTypeMismatch).
+			Primary(fileStartSpan(src.source), "native checker summary").
+			Note(fmt.Sprintf(
+				"native checker accepted %d of %d assignment/return/call checks",
+				summary.Accepted,
+				summary.Assignments,
+			)).
+			Build(),
+	)
+	return out
+}
+
+func convertNativeDiagForCheckedSource(src selfhostCheckedSource, d api.CheckDiagnosticRecord) *diag.Diagnostic {
+	seg, relStart, relEnd, ok := nativeDiagSegment(src, d)
+	if !ok {
+		return convertNativeDiag(src.source, d)
+	}
+	mapped := d
+	mapped.Start = relStart
+	mapped.End = relEnd
+	if mapped.File == "" {
+		mapped.File = seg.path
+	}
+	if mapped.SourceFileID == "" && seg.sourceID != "" {
+		mapped.SourceFileID = string(seg.sourceID)
+	}
+	if mapped.SpanID == "" && mapped.SourceFileID != "" {
+		mapped.SpanID = string(spanid.SpanIDFor(spanid.SourceFileID(mapped.SourceFileID), mapped.Start, mapped.End))
+	}
+	if seg.base != 0 {
+		mapped.Provenance = append(mapped.Provenance, api.SpanProvenanceRecord{
+			Kind:         string(spanid.ProvenanceSelfhostShift),
+			SourceFileID: mapped.SourceFileID,
+			SpanID:       mapped.SpanID,
+			Detail:       fmt.Sprintf("base:%d", seg.base),
+		})
+	}
+	return convertNativeDiag(seg.source, mapped)
+}
+
+func nativeDiagSegment(src selfhostCheckedSource, d api.CheckDiagnosticRecord) (selfhostFileSegment, int, int, bool) {
+	for _, seg := range src.files {
+		if d.File != "" && seg.path != "" && d.File != seg.path {
+			continue
+		}
+		if len(seg.source) == 0 {
+			continue
+		}
+		relStart := d.Start - seg.base
+		relEnd := d.End - seg.base
+		if relStart < 0 || relStart > len(seg.source) {
+			continue
+		}
+		if relEnd < relStart {
+			relEnd = relStart
+		}
+		if relEnd > len(seg.source) {
+			relEnd = len(seg.source)
+		}
+		return seg, relStart, relEnd, true
+	}
+	return selfhostFileSegment{}, 0, 0, false
+}
+
 func filteredNativeSummary(checked api.CheckResult, policy nativeDiagPolicy) api.CheckSummary {
 	summary := checked.Summary
 	if !policy.privileged {
@@ -818,7 +906,7 @@ func convertNativeDiag(src []byte, d api.CheckDiagnosticRecord) *diag.Diagnostic
 	if d.File != "" {
 		b = b.File(d.File)
 	}
-	b = b.Primary(nativeDiagSpan(src, d), "")
+	b = b.Primary(nativeDiagSpanWithIdentity(src, d), "")
 	for _, note := range d.Notes {
 		if strings.TrimSpace(note) == "" {
 			continue
@@ -844,6 +932,25 @@ func nativeDiagSpan(src []byte, d api.CheckDiagnosticRecord) diag.Span {
 		}
 	}
 	return byteRangeSpan(src, d.Start, d.End)
+}
+
+func nativeDiagSpanWithIdentity(src []byte, d api.CheckDiagnosticRecord) diag.Span {
+	span := nativeDiagSpan(src, d)
+	if d.SourceFileID != "" {
+		span = diag.StampSpanSourceFileID(span, spanid.SourceFileID(d.SourceFileID))
+	}
+	if d.SpanID != "" {
+		span.ID = spanid.SpanID(d.SpanID)
+	}
+	for _, p := range d.Provenance {
+		span.Provenance = spanid.AppendProvenance(span.Provenance, spanid.Provenance{
+			Kind:         spanid.ProvenanceKind(p.Kind),
+			SourceFileID: spanid.SourceFileID(p.SourceFileID),
+			SpanID:       spanid.SpanID(p.SpanID),
+			Detail:       p.Detail,
+		})
+	}
+	return span
 }
 
 // byteRangeSpan builds a `diag.Span` for a [start, end) byte range
@@ -1866,6 +1973,7 @@ func selfhostFileSource(file *ast.File, rr *resolve.Result, src []byte, stdlib r
 		source: b.Bytes(),
 		files: []selfhostFileSegment{{
 			file:      file,
+			source:    append([]byte(nil), src...),
 			scope:     scope,
 			refs:      refs,
 			base:      base,
@@ -1891,6 +1999,7 @@ func selfhostFileStructuredSource(file *ast.File, rr *resolve.Result, src []byte
 		source: append([]byte(nil), src...),
 		files: []selfhostFileSegment{{
 			file:      file,
+			source:    append([]byte(nil), src...),
 			scope:     scope,
 			refs:      refs,
 			base:      0,
@@ -1918,6 +2027,9 @@ func selfhostPackageSource(pkg *resolve.Package, ws *resolve.Workspace, stdlib r
 		}
 		files = append(files, selfhostFileSegment{
 			file:      pf.File,
+			path:      pf.Path,
+			source:    append([]byte(nil), src...),
+			sourceID:  checkSourceFileID(pf),
 			scope:     pf.FileScope,
 			refs:      pf.RefsByID,
 			base:      base,
@@ -1925,6 +2037,16 @@ func selfhostPackageSource(pkg *resolve.Package, ws *resolve.Workspace, stdlib r
 		})
 	}
 	return selfhostCheckedSource{source: b.Bytes(), files: files}
+}
+
+func checkSourceFileID(pf *resolve.PackageFile) spanid.SourceFileID {
+	if pf == nil {
+		return ""
+	}
+	if pf.SourceFileID != "" {
+		return pf.SourceFileID
+	}
+	return spanid.SourceFileIDFor(pf.Path)
 }
 
 func writeSelfhostPackageImports(b *bytes.Buffer, pkg *resolve.Package, ws *resolve.Workspace, stdlib resolve.StdlibProvider) {

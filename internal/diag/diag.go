@@ -11,7 +11,10 @@
 // fields directly.
 package diag
 
-import "github.com/osty/osty/internal/token"
+import (
+	"github.com/osty/osty/internal/spanid"
+	"github.com/osty/osty/internal/token"
+)
 
 // Severity classifies a diagnostic.
 type Severity int
@@ -44,6 +47,14 @@ func (s Severity) String() string {
 type Span struct {
 	Start token.Pos
 	End   token.Pos
+	// SourceFileID/ID are optional global identities for consumers that need to
+	// distinguish equal byte offsets from different source surfaces.
+	SourceFileID spanid.SourceFileID
+	ID           spanid.SpanID
+	// Provenance records how generated/canonical/injected spans relate back to
+	// earlier source surfaces. Empty means the span is an original source span
+	// or predates the global identity system.
+	Provenance *spanid.ProvenanceList
 }
 
 // LabeledSpan is a span with an attached label, used to highlight the
@@ -120,15 +131,24 @@ type Suggestion struct {
 // first span's start if no primary span is present, or the zero Pos if
 // there are no spans.
 func (d *Diagnostic) PrimaryPos() token.Pos {
+	if span, ok := d.PrimarySpan(); ok {
+		return span.Start
+	}
+	return token.Pos{}
+}
+
+// PrimarySpan returns the first primary span, or the first span when no primary
+// span is explicitly marked.
+func (d *Diagnostic) PrimarySpan() (Span, bool) {
 	for _, s := range d.Spans {
 		if s.Primary {
-			return s.Span.Start
+			return s.Span, true
 		}
 	}
 	if len(d.Spans) > 0 {
-		return d.Spans[0].Span.Start
+		return d.Spans[0].Span, true
 	}
-	return token.Pos{}
+	return Span{}, false
 }
 
 // Error implements the error interface so a Diagnostic can be returned
@@ -164,6 +184,7 @@ func (b *Builder) Code(code string) *Builder { b.d.Code = code; return b }
 
 // Primary attaches a primary span with an optional label.
 func (b *Builder) Primary(span Span, label string) *Builder {
+	span = b.stampSpan(span)
 	b.d.Spans = append(b.d.Spans, LabeledSpan{Span: span, Label: label, Primary: true})
 	return b
 }
@@ -175,6 +196,7 @@ func (b *Builder) PrimaryPos(pos token.Pos, label string) *Builder {
 
 // Secondary attaches a secondary span (context, not the main culprit).
 func (b *Builder) Secondary(span Span, label string) *Builder {
+	span = b.stampSpan(span)
 	b.d.Spans = append(b.d.Spans, LabeledSpan{Span: span, Label: label, Primary: false})
 	return b
 }
@@ -191,7 +213,11 @@ func (b *Builder) Hint(text string) *Builder { b.d.Hint = text; return b }
 // File stamps the owning source file path. Used by multi-file package
 // walkers so the renderer can route the diagnostic to the right source
 // snippet even though `token.Pos` does not carry file identity.
-func (b *Builder) File(path string) *Builder { b.d.File = path; return b }
+func (b *Builder) File(path string) *Builder {
+	b.d.File = path
+	StampDiagnosticSourceFileID(b.d, spanid.SourceFileIDFor(path))
+	return b
+}
 
 // StampFile sets d.File on every diagnostic in ds that does not yet
 // have one. Call sites that know the file context (per-file checker
@@ -202,10 +228,72 @@ func StampFile(ds []*Diagnostic, path string) {
 		return
 	}
 	for _, d := range ds {
-		if d == nil || d.File != "" {
+		if d == nil {
 			continue
 		}
-		d.File = path
+		stampPath := path
+		if d.File == "" {
+			d.File = path
+		} else {
+			stampPath = d.File
+		}
+		StampDiagnosticSourceFileID(d, spanid.SourceFileIDFor(stampPath))
+	}
+}
+
+// StampSpanSourceFileID attaches a SourceFileID and stable SpanID without
+// rewriting existing identity from a more specific source map.
+func StampSpanSourceFileID(span Span, fileID spanid.SourceFileID) Span {
+	if fileID == "" {
+		return span
+	}
+	if span.SourceFileID == "" {
+		span.SourceFileID = fileID
+	}
+	if span.ID == "" {
+		span.ID = spanid.SpanIDFor(span.SourceFileID, span.Start.Offset, span.End.Offset)
+	}
+	return span
+}
+
+// DeriveSpanSource records a provenance edge from parent to span.
+func DeriveSpanSource(span Span, kind spanid.ProvenanceKind, detail string, parent Span) Span {
+	parent = StampSpanSourceFileID(parent, parent.SourceFileID)
+	if span.SourceFileID == "" && span.ID == "" && parent.SourceFileID == "" && parent.ID == "" {
+		return span
+	}
+	if span.SourceFileID == "" {
+		span.SourceFileID = parent.SourceFileID
+	}
+	if span.ID == "" {
+		span.ID = spanid.DerivedSpanID(span.SourceFileID, kind, span.Start.Offset, span.End.Offset, parent.ID)
+	}
+	if parent.SourceFileID != "" || parent.ID != "" || detail != "" || kind != "" {
+		span.Provenance = spanid.AppendProvenance(span.Provenance, spanid.Provenance{
+			Kind:         kind,
+			SourceFileID: parent.SourceFileID,
+			SpanID:       parent.ID,
+			Detail:       detail,
+		})
+	}
+	return span
+}
+
+// StampDiagnosticSourceFileID attaches file/span identity to every span-bearing
+// field in d while preserving existing source-map identities.
+func StampDiagnosticSourceFileID(d *Diagnostic, fileID spanid.SourceFileID) {
+	if d == nil || fileID == "" {
+		return
+	}
+	for i := range d.Spans {
+		d.Spans[i].Span = StampSpanSourceFileID(d.Spans[i].Span, fileID)
+	}
+	for i := range d.Suggestions {
+		d.Suggestions[i].Span = StampSpanSourceFileID(d.Suggestions[i].Span, fileID)
+		if d.Suggestions[i].CopyFrom != nil {
+			copied := StampSpanSourceFileID(*d.Suggestions[i].CopyFrom, fileID)
+			d.Suggestions[i].CopyFrom = &copied
+		}
 	}
 }
 
@@ -213,6 +301,7 @@ func StampFile(ds []*Diagnostic, path string) {
 // replacement, labelled for the user. MachineApplicable=true marks it
 // safe for tools to auto-apply.
 func (b *Builder) Suggest(span Span, replacement, label string, machineApplicable bool) *Builder {
+	span = b.stampSpan(span)
 	b.d.Suggestions = append(b.d.Suggestions, Suggestion{
 		Span:              span,
 		Replacement:       replacement,
@@ -230,6 +319,8 @@ func (b *Builder) Suggest(span Span, replacement, label string, machineApplicabl
 // sub-expressions (e.g. `!!x` → `x`, `x == true` → `x`) without
 // the lint pass needing access to the raw source bytes.
 func (b *Builder) SuggestCopy(span, copyFrom Span, template, label string, machineApplicable bool) *Builder {
+	span = b.stampSpan(span)
+	copyFrom = b.stampSpan(copyFrom)
 	cf := copyFrom
 	b.d.Suggestions = append(b.d.Suggestions, Suggestion{
 		Span:              span,
@@ -242,4 +333,16 @@ func (b *Builder) SuggestCopy(span, copyFrom Span, template, label string, machi
 }
 
 // Build returns the finished Diagnostic.
-func (b *Builder) Build() *Diagnostic { return b.d }
+func (b *Builder) Build() *Diagnostic {
+	if b.d.File != "" {
+		StampDiagnosticSourceFileID(b.d, spanid.SourceFileIDFor(b.d.File))
+	}
+	return b.d
+}
+
+func (b *Builder) stampSpan(span Span) Span {
+	if b == nil || b.d == nil || b.d.File == "" {
+		return span
+	}
+	return StampSpanSourceFileID(span, spanid.SourceFileIDFor(b.d.File))
+}

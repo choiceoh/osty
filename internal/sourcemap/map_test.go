@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/spanid"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -138,5 +139,40 @@ func TestRemapSpanKeepsLegacyWholeEntrySemantics(t *testing.T) {
 	}
 	if projected.Start.Offset != 104 || projected.End.Offset != 108 {
 		t.Fatalf("RemapSpanProjected offsets = %d..%d, want 104..108", projected.Start.Offset, projected.End.Offset)
+	}
+}
+
+func TestRemapSpanPreservesSourceIdentityAndProvenance(t *testing.T) {
+	originalID := spanid.SourceFileIDFor("/tmp/original.osty")
+	generatedID := spanid.DerivedSourceFileID(originalID, spanid.ProvenanceCanonical, "canonical")
+	original := diag.StampSpanSourceFileID(diag.Span{
+		Start: token.Pos{Offset: 10, Line: 1, Column: 11},
+		End:   token.Pos{Offset: 15, Line: 1, Column: 16},
+	}, originalID)
+	generated := diag.StampSpanSourceFileID(diag.Span{
+		Start: token.Pos{Offset: 100, Line: 5, Column: 1},
+		End:   token.Pos{Offset: 105, Line: 5, Column: 6},
+	}, generatedID)
+	sm := &Map{entries: []Entry{{
+		Kind:      "ident",
+		Generated: generated,
+		Original:  original,
+	}}}
+	sm.StampFileIDs(originalID, generatedID)
+
+	got, ok := sm.RemapSpan(generated)
+	if !ok {
+		t.Fatal("RemapSpan() = false")
+	}
+	if got.SourceFileID != originalID || got.ID == "" {
+		t.Fatalf("remapped identity = (%q, %q), want original file and non-empty span", got.SourceFileID, got.ID)
+	}
+	provenance := spanid.ProvenanceEntries(got.Provenance)
+	if len(provenance) == 0 {
+		t.Fatalf("remapped provenance is empty: %#v", got)
+	}
+	last := provenance[len(provenance)-1]
+	if last.Kind != spanid.ProvenanceCanonical || last.SourceFileID != generatedID {
+		t.Fatalf("provenance = %#v, want canonical edge from generated file", last)
 	}
 }
