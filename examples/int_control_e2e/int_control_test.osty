@@ -1,0 +1,389 @@
+// int_control_e2e — executable Osty tests for the small scalar runtime
+// surface that the LLVM test backend can run today. Keep these cases
+// dependency-light so they remain a stable canary for arithmetic,
+// comparisons, branches, and range loops.
+
+use std.testing
+
+// ─── Arithmetic ───────────────────────────────────────────────────
+
+fn testAddSubMulChain() {
+    let a: Int = 8
+    let b: Int = 5
+    let c: Int = 3
+    testing.assertEq((a + b) * c - b, 34)
+}
+
+fn testDivisionTruncatesTowardZero() {
+    let n: Int = 17
+    testing.assertEq(n / 5, 3)
+}
+
+fn testNegativeDivisionTruncatesTowardZero() {
+    let n: Int = -17
+    testing.assertEq(n / 5, -3)
+}
+
+fn testModuloPositive() {
+    let n: Int = 17
+    testing.assertEq(n % 5, 2)
+}
+
+fn testModuloNegativeDividend() {
+    let n: Int = -17
+    testing.assertEq(n % 5, -2)
+}
+
+fn testUnaryNegationExpression() {
+    let n: Int = 9
+    testing.assertEq(-(n + 4), -13)
+}
+
+// ─── Comparisons / booleans ───────────────────────────────────────
+
+fn testComparisonOperators() {
+    let a: Int = 4
+    let b: Int = 9
+    testing.assertTrue(a < b)
+    testing.assertTrue(b > a)
+    testing.assertTrue(a <= 4)
+    testing.assertTrue(b >= 9)
+}
+
+fn testEqualityOperators() {
+    let a: Int = 6
+    let b: Int = 7
+    testing.assertTrue(a == 6)
+    testing.assertTrue(a != b)
+    testing.assertFalse(a == b)
+}
+
+fn testBooleanAndShortCircuit() {
+    let a: Int = 2
+    let b: Int = 5
+    testing.assertTrue(a < b && b < 10)
+    testing.assertFalse(a > b && b < 10)
+}
+
+fn testBooleanOrShortCircuit() {
+    let a: Int = 2
+    let b: Int = 5
+    testing.assertTrue(a > b || b == 5)
+    testing.assertFalse(a > b || b < 0)
+}
+
+fn testBooleanNot() {
+    let n: Int = 4
+    testing.assertTrue(!(n < 0))
+}
+
+// ─── Branches ─────────────────────────────────────────────────────
+
+fn testIfThenElseAssignsLowArm() {
+    let n: Int = 3
+    let mut bucket: Int = 0
+    if n < 5 {
+        bucket = 1
+    } else {
+        bucket = 2
+    }
+    testing.assertEq(bucket, 1)
+}
+
+fn testIfThenElseAssignsHighArm() {
+    let n: Int = 8
+    let mut bucket: Int = 0
+    if n < 5 {
+        bucket = 1
+    } else {
+        bucket = 2
+    }
+    testing.assertEq(bucket, 2)
+}
+
+fn testNestedIfElse() {
+    let n: Int = 0
+    let mut sign: Int = 9
+    if n < 0 {
+        sign = -1
+    } else if n > 0 {
+        sign = 1
+    } else {
+        sign = 0
+    }
+    testing.assertEq(sign, 0)
+}
+
+// ─── Range loops ──────────────────────────────────────────────────
+
+fn testRangeLoopSumsExclusiveEnd() {
+    let mut total: Int = 0
+    for i in 0..5 {
+        total = total + i
+    }
+    testing.assertEq(total, 10)
+}
+
+fn testRangeLoopWithNonZeroStart() {
+    let mut total: Int = 0
+    for i in 3..7 {
+        total = total + i
+    }
+    testing.assertEq(total, 18)
+}
+
+fn testRangeLoopCanSkipBody() {
+    let mut total: Int = 41
+    for i in 3..3 {
+        total = total + i
+    }
+    testing.assertEq(total, 41)
+}
+
+fn testRangeLoopWithBranchInside() {
+    let mut total: Int = 0
+    for i in 0..6 {
+        if i % 2 == 0 {
+            total = total + i
+        }
+    }
+    testing.assertEq(total, 6)
+}
+
+// ─── Wider scalar surface ─────────────────────────────────────────
+
+fn testArithmeticPrecedence() {
+    let a: Int = 2
+    let b: Int = 3
+    let c: Int = 4
+    testing.assertEq(a + b * c, 14)
+}
+
+fn testArithmeticParenthesesOverridePrecedence() {
+    let a: Int = 2
+    let b: Int = 3
+    let c: Int = 4
+    testing.assertEq((a + b) * c, 20)
+}
+
+fn testSubtractionAssociatesLeft() {
+    let n: Int = 20
+    testing.assertEq(n - 5 - 3, 12)
+}
+
+fn testDivisionAfterMultiplication() {
+    let n: Int = 9
+    testing.assertEq(n * 6 / 4, 13)
+}
+
+fn testModuloAfterAddition() {
+    let n: Int = 14
+    testing.assertEq((n + 5) % 6, 1)
+}
+
+fn testZeroMultiplicationWins() {
+    let n: Int = 123
+    testing.assertEq(n * 0 + 7, 7)
+}
+
+fn testNegativeMultiplication() {
+    let a: Int = -8
+    let b: Int = 6
+    testing.assertEq(a * b, -48)
+}
+
+fn testComputedEquality() {
+    let a: Int = 6
+    let b: Int = 7
+    testing.assertTrue(a * b == 42)
+}
+
+fn testComputedInequality() {
+    let a: Int = 6
+    let b: Int = 7
+    testing.assertTrue(a * b != 41)
+}
+
+fn testComparisonAfterArithmetic() {
+    let a: Int = 3
+    let b: Int = 4
+    testing.assertTrue(a * a + b * b == 25)
+}
+
+fn testBooleanParenthesizedAndOr() {
+    let a: Int = 2
+    let b: Int = 5
+    let c: Int = 8
+    testing.assertTrue((a < b && b < c) || c < a)
+}
+
+fn testBooleanParenthesizedFalseBranch() {
+    let a: Int = 2
+    let b: Int = 5
+    let c: Int = 8
+    testing.assertFalse((a > b && b < c) || c < a)
+}
+
+fn testNotAroundDisjunction() {
+    let a: Int = 2
+    let b: Int = 5
+    testing.assertTrue(!(a > b || b < 0))
+}
+
+fn testBranchAssignsTwoValues() {
+    let n: Int = 7
+    let mut lo: Int = 0
+    let mut hi: Int = 0
+    if n > 5 {
+        lo = 5
+        hi = n
+    } else {
+        lo = n
+        hi = 5
+    }
+    testing.assertEq(lo, 5)
+    testing.assertEq(hi, 7)
+}
+
+fn testNestedBranchPositive() {
+    let n: Int = 9
+    let mut bucket: Int = 0
+    if n < 0 {
+        bucket = -1
+    } else {
+        if n > 5 {
+            bucket = 2
+        } else {
+            bucket = 1
+        }
+    }
+    testing.assertEq(bucket, 2)
+}
+
+fn testNestedBranchMiddle() {
+    let n: Int = 4
+    let mut bucket: Int = 0
+    if n < 0 {
+        bucket = -1
+    } else {
+        if n > 5 {
+            bucket = 2
+        } else {
+            bucket = 1
+        }
+    }
+    testing.assertEq(bucket, 1)
+}
+
+fn testNestedBranchNegative() {
+    let n: Int = -4
+    let mut bucket: Int = 0
+    if n < 0 {
+        bucket = -1
+    } else {
+        if n > 5 {
+            bucket = 2
+        } else {
+            bucket = 1
+        }
+    }
+    testing.assertEq(bucket, -1)
+}
+
+fn testRangeLoopCountsIterations() {
+    let mut count: Int = 0
+    for i in 4..9 {
+        count = count + 1
+    }
+    testing.assertEq(count, 5)
+}
+
+fn testRangeLoopProduct() {
+    let mut product: Int = 1
+    for i in 1..5 {
+        product = product * i
+    }
+    testing.assertEq(product, 24)
+}
+
+fn testRangeLoopCountsOdds() {
+    let mut count: Int = 0
+    for i in 0..9 {
+        if i % 2 != 0 {
+            count = count + 1
+        }
+    }
+    testing.assertEq(count, 4)
+}
+
+fn testRangeLoopNestedSum() {
+    let mut total: Int = 0
+    for i in 0..3 {
+        for j in 0..3 {
+            total = total + i + j
+        }
+    }
+    testing.assertEq(total, 18)
+}
+
+fn testRangeLoopBranchAccumulator() {
+    let mut score: Int = 0
+    for i in 0..6 {
+        if i < 3 {
+            score = score + 10
+        } else {
+            score = score + 1
+        }
+    }
+    testing.assertEq(score, 33)
+}
+
+fn testRangeLoopMinTracking() {
+    let mut minSeen: Int = 99
+    for i in 3..8 {
+        if i < minSeen {
+            minSeen = i
+        }
+    }
+    testing.assertEq(minSeen, 3)
+}
+
+fn testRangeLoopMaxTracking() {
+    let mut maxSeen: Int = -1
+    for i in 3..8 {
+        if i > maxSeen {
+            maxSeen = i
+        }
+    }
+    testing.assertEq(maxSeen, 7)
+}
+
+fn testRangeLoopMutatesMultipleAccumulators() {
+    let mut even: Int = 0
+    let mut odd: Int = 0
+    for i in 0..6 {
+        if i % 2 == 0 {
+            even = even + i
+        } else {
+            odd = odd + i
+        }
+    }
+    testing.assertEq(even, 6)
+    testing.assertEq(odd, 9)
+}
+
+fn testRangeLoopEmptyWhenStartAboveEnd() {
+    let mut total: Int = 7
+    for i in 8..3 {
+        total = total + i
+    }
+    testing.assertEq(total, 7)
+}
+
+fn testRangeLoopNegativeStart() {
+    let mut total: Int = 0
+    for i in -2..3 {
+        total = total + i
+    }
+    testing.assertEq(total, 0)
+}

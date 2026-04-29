@@ -22,6 +22,18 @@ fn testAbsNegative() {
     testing.assertEq(n.abs(), 7)
 }
 
+fn testAbsExpression() {
+    let a: Int = 2
+    let b: Int = 9
+    testing.assertEq((a - b).abs(), 7)
+}
+
+fn testAbsAfterMultiplication() {
+    let a: Int = -6
+    let b: Int = 7
+    testing.assertEq((a * b).abs(), 42)
+}
+
 // ─── min / max ────────────────────────────────────────────────────
 
 fn testMinLeftSmaller() {
@@ -60,6 +72,26 @@ fn testMinNegative() {
     testing.assertEq(a.max(b), -3)
 }
 
+fn testMinMaxComposed() {
+    let a: Int = 8
+    let b: Int = 3
+    let c: Int = 5
+    testing.assertEq(a.min(b).max(c), 5)
+}
+
+fn testMaxAfterAbs() {
+    let a: Int = -12
+    let b: Int = 9
+    testing.assertEq(a.abs().max(b), 12)
+}
+
+fn testMinMaxWithZero() {
+    let lo: Int = -4
+    let mid: Int = 0
+    let hi: Int = 6
+    testing.assertEq(mid.max(lo).min(hi), 0)
+}
+
 // ─── clamp ────────────────────────────────────────────────────────
 // The algorithm is `min(max(val, lo), hi)`. The previous lowering
 // returned `hi` when val < lo and `lo` when val > hi — these tests
@@ -95,6 +127,34 @@ fn testClampNegativeRange() {
     testing.assertEq(v.clamp(-10, -1), -10)
 }
 
+fn testClampComputedValue() {
+    let base: Int = 4
+    let delta: Int = 9
+    testing.assertEq((base + delta).clamp(0, 10), 10)
+}
+
+fn testClampComputedBounds() {
+    let v: Int = 12
+    let lo: Int = 3
+    let span: Int = 4
+    testing.assertEq(v.clamp(lo, lo + span), 7)
+}
+
+fn testClampSinglePointRange() {
+    let v: Int = 99
+    testing.assertEq(v.clamp(5, 5), 5)
+}
+
+fn testClampKeepsNegativeInRange() {
+    let v: Int = -6
+    testing.assertEq(v.clamp(-10, -1), -6)
+}
+
+fn testClampAfterAbs() {
+    let v: Int = -42
+    testing.assertEq(v.abs().clamp(0, 20), 20)
+}
+
 // ─── signum ───────────────────────────────────────────────────────
 // The algorithm is `(val < 0) ? -1 : ((val > 0) ? 1 : 0)`. The
 // previous lowering reused the same SSA register twice (LLVM rejects)
@@ -114,4 +174,134 @@ fn testSignumPositive() {
 fn testSignumNegative() {
     let n: Int = -7
     testing.assertEq(n.signum(), -1)
+}
+
+fn testSignumOfDifference() {
+    let left: Int = 3
+    let right: Int = 11
+    testing.assertEq((left - right).signum(), -1)
+}
+
+fn testSignumOfProduct() {
+    let left: Int = -3
+    let right: Int = -2
+    testing.assertEq((left * right).signum(), 1)
+}
+
+fn testClampThenSignum() {
+    let n: Int = -50
+    testing.assertEq(n.clamp(-10, 10).signum(), -1)
+}
+
+// ─── Composition regressions ──────────────────────────────────────
+
+fn testAbsMinComposition() {
+    let a: Int = -9
+    let b: Int = 4
+    testing.assertEq(a.abs().min(b), 4)
+}
+
+fn testAbsMaxComposition() {
+    let a: Int = -9
+    let b: Int = 4
+    testing.assertEq(a.abs().max(b), 9)
+}
+
+fn testMinThenClamp() {
+    let a: Int = 15
+    let b: Int = 8
+    testing.assertEq(a.min(b).clamp(0, 6), 6)
+}
+
+fn testMaxThenClamp() {
+    let a: Int = -15
+    let b: Int = -8
+    testing.assertEq(a.max(b).clamp(-6, 0), -6)
+}
+
+fn testClampThenAbs() {
+    let n: Int = -50
+    testing.assertEq(n.clamp(-10, 10).abs(), 10)
+}
+
+fn testClampKeepsZeroInNegativePositiveRange() {
+    let n: Int = 0
+    testing.assertEq(n.clamp(-3, 3), 0)
+}
+
+fn testClampComputedNegativeBounds() {
+    let n: Int = -12
+    let span: Int = 4
+    testing.assertEq(n.clamp(-span, span), -4)
+}
+
+fn testSignumAfterAbsIsPositive() {
+    let n: Int = -22
+    testing.assertEq(n.abs().signum(), 1)
+}
+
+fn testSignumAfterClampToZero() {
+    let n: Int = -22
+    testing.assertEq(n.clamp(0, 5).signum(), 0)
+}
+
+fn testMinAcrossArithmeticExpressions() {
+    let a: Int = 3
+    let b: Int = 5
+    testing.assertEq((a * b).min(a + b), 8)
+}
+
+fn testMaxAcrossArithmeticExpressions() {
+    let a: Int = 3
+    let b: Int = 5
+    testing.assertEq((a * b).max(a + b), 15)
+}
+
+fn testClampAcrossArithmeticExpressions() {
+    let a: Int = 3
+    let b: Int = 5
+    testing.assertEq((a * b).clamp(a + b, 20), 15)
+}
+
+fn testRepeatedMinIsStable() {
+    let n: Int = 7
+    testing.assertEq(n.min(9).min(11), 7)
+}
+
+fn testRepeatedMaxIsStable() {
+    let n: Int = 7
+    testing.assertEq(n.max(5).max(3), 7)
+}
+
+fn testRepeatedClampNarrowsRange() {
+    let n: Int = 20
+    testing.assertEq(n.clamp(0, 30).clamp(0, 10), 10)
+}
+
+fn testSignumOfClampedPositive() {
+    let n: Int = 50
+    testing.assertEq(n.clamp(-10, 10).signum(), 1)
+}
+
+fn testSignumOfClampedZero() {
+    let n: Int = 50
+    testing.assertEq(n.clamp(-10, 0).signum(), 0)
+}
+
+fn testAbsOfModuloResult() {
+    let n: Int = -17
+    testing.assertEq((n % 5).abs(), 2)
+}
+
+fn testMinMaxFormsMedian() {
+    let a: Int = 3
+    let b: Int = 9
+    let c: Int = 5
+    testing.assertEq(a.max(b.min(c)), 5)
+}
+
+fn testClampSinglePointAfterArithmetic() {
+    let a: Int = 6
+    let b: Int = 7
+    testing.assertEq((a * b).clamp(11, 11), 11)
 }

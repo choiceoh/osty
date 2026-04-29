@@ -542,3 +542,146 @@ fn testFrontendLexerAcceptsValidNumericSeparators() {
     testing.assertEq(summary.errors, 0)
     testing.assertEq(summary.literals, 6)
 }
+
+fn testFrontendLexerScansRuntimeUseBlock() {
+    let summary = frontendLexSummary(
+        r"use runtime.net as net { fn Dial(addr: String) -> RawPtr struct Conn { fd: Int } }",
+    )
+
+    testing.assertEq(summary.errors, 0)
+    testing.assert(summary.tokens >= 20)
+    testing.assert(summary.keywords >= 4)
+    testing.assert(summary.identifiers >= 8)
+}
+
+fn testFrontendLexerScansDenseGenericSurface() {
+    let summary = frontendLexSummary(r"fn f<T: A + B>(xs: List<Result<T, Error?>>) -> Map<String, T> {}")
+
+    testing.assertEq(summary.errors, 0)
+    testing.assert(summary.identifiers >= 12)
+    testing.assert(summary.punctuation >= 14)
+}
+
+fn testFrontendLexerScansLabelsAndControlKeywords() {
+    let summary = frontendLexSummary(r"'outer: loop { continue 'outer break 'outer }")
+
+    testing.assertEq(summary.errors, 0)
+    testing.assert(summary.keywords >= 3)
+    testing.assert(summary.identifiers >= 3)
+}
+
+fn testFrontendParserPortsRuntimeUseBlock() {
+    let parsed = frontendParseRichSummary(
+        r"""
+            use runtime.net as net {
+                fn Dial(addr: String) -> RawPtr
+                struct Conn { fd: Int }
+            }
+
+            fn main() {
+                let conn = net.Dial("localhost")
+            }
+            """,
+    )
+
+    testing.assertEq(parsed.goUses, 0)
+    testing.assertEq(parsed.useAliases, 1)
+    testing.assertEq(parsed.useGoItems, 0)
+    testing.assert(parsed.typeRefs >= 4)
+    testing.assert(parsed.calls >= 1)
+    testing.assertEq(parsed.errors, 0)
+}
+
+fn testFrontendParserPortsGenericInterfaceBounds() {
+    let parsed = frontendParseRichSummary(
+        r"""
+            interface Reader {
+                fn read(self) -> String
+            }
+
+            interface Writer {
+                fn write(self, text: String)
+            }
+
+            fn copy<T: Reader + Writer>(value: T) {
+                value.write(value.read())
+            }
+            """,
+    )
+
+    testing.assertEq(parsed.interfaces, 2)
+    testing.assertEq(parsed.funcs, 1)
+    testing.assert(parsed.methods >= 2)
+    testing.assert(parsed.genericParams >= 1)
+    testing.assert(parsed.typeRefs >= 4)
+    testing.assert(parsed.calls >= 2)
+    testing.assertEq(parsed.errors, 0)
+}
+
+fn testFrontendParserPortsAnnotationCluster() {
+    let parsed = frontendParseRichSummary(
+        r"""
+            #[cfg(feature = "net")]
+            #[deprecated(since = "0.6")]
+            pub fn oldNet() -> Int { 1 }
+            """,
+    )
+
+    testing.assertEq(parsed.funcs, 1)
+    testing.assertEq(parsed.publicDecls, 1)
+    testing.assert(parsed.annotations >= 2)
+    testing.assertEq(parsed.errors, 0)
+}
+
+fn testFrontendParserPortsNestedMatchPatterns() {
+    let parsed = frontendParseRichSummary(
+        r"""
+            fn classify(value: Result<Option<Int>, Error>) -> Int {
+                match value {
+                    Ok(Some(x)) -> x,
+                    Ok(None) -> 0,
+                    Err(_) -> -1,
+                }
+            }
+            """,
+    )
+
+    testing.assertEq(parsed.matchArms, 3)
+    testing.assert(parsed.variantPatterns >= 4)
+    testing.assert(parsed.typeRefs >= 5)
+    testing.assertEq(parsed.errors, 0)
+}
+
+fn testFrontendParserPortsStructSpreadAndKeywordArgsTogether() {
+    let parsed = frontendParseRichSummary(
+        r"""
+            fn make(origin: Point) -> Point {
+                let next = Point { x: 1, y: 2, ..origin }
+                draw(point: next, width: 3)
+                next
+            }
+            """,
+    )
+
+    testing.assertEq(parsed.structLits, 1)
+    testing.assertEq(parsed.structLitFields, 2)
+    testing.assertEq(parsed.spreads, 1)
+    testing.assertEq(parsed.keywordArgs, 2)
+    testing.assert(parsed.calls >= 1)
+    testing.assertEq(parsed.errors, 0)
+}
+
+fn testFrontendTypeCheckerRejectsBatchOfBadAssignments() {
+    let checked = frontendCheckAssignments(
+        [
+            frontAssignment("Int", "String"),
+            frontAssignment("Bool", "UntypedInt"),
+            frontAssignment("String", "Bool"),
+            frontAssignment("Float", "UntypedInt"),
+        ],
+    )
+
+    testing.assertEq(checked.assignments, 4)
+    testing.assertEq(checked.accepted, 1)
+    testing.assertEq(checked.errors, 3)
+}

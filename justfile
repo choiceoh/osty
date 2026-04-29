@@ -3,8 +3,10 @@ set shell := ["bash", "-cu"]
 bin := ".bin/osty"
 checker_bin := ".osty/bin/osty-native-checker"
 front_packages := "./internal/lexer ./internal/parser ./internal/resolve ./internal/check ./internal/diag ./internal/format ./internal/lint ./internal/pipeline"
+osty_test_dirs := "examples/int_control_e2e examples/int_methods_e2e examples/int_struct_e2e"
 test_flags := "-count=1 -vet=off"
 
+# Osty-first front-end loop.
 default: front
 
 help:
@@ -58,16 +60,28 @@ cross-one goos goarch:
     CGO_ENABLED=0 GOOS="{{goos}}" GOARCH="{{goarch}}" go build -o "$out/osty-native-checker$suffix" ./cmd/osty-native-checker
 
 front:
+    just osty
     go test {{test_flags}} {{front_packages}}
 
 spec:
     go test {{test_flags}} ./internal/speccorpus -v
 
 short:
+    just osty
     go list ./... | rg -v '^github\.com/osty/osty/benchmarks/' | xargs go test {{test_flags}} -short
 
 full:
+    just osty
     go test {{test_flags}} ./...
+
+osty: build verify-selfhost
+    {{bin}} ci .
+    just osty-tests
+
+osty-tests:
+    set -euo pipefail
+    test -x {{bin}} || just build
+    for dir in {{osty_test_dirs}}; do {{bin}} test --seed 0x1 --serial "$dir"; done
 
 test pkg="./...":
     go test {{test_flags}} {{pkg}}

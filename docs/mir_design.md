@@ -727,12 +727,10 @@ MIR tests isolated from front-end churn.
     triggers rather than producing malformed IR. Structs, enums,
     tuples, lists, maps, optional/result values, closures, and the
     concurrency family are all follow-up scope.
-  - **Parity tests.** `internal/llvmgen/mir_generator_test.go`
-    builds HIR modules by hand (independent of the parser), runs
-    them through both emitters, and asserts both outputs contain the
-    expected core instructions. A dedicated fallback test confirms
-    that a program outside the MVP is rejected by `GenerateFromMIR`
-    with `ErrUnsupported` and accepted by the legacy path.
+  - **Parity coverage.** Keep host-side MIR/LLVM tests focused on the
+    Go/Osty boundary. New source-level MIR parity cases should prefer
+    Osty fixtures and toolchain sources instead of rebuilding a broad
+    hand-authored Go front-end matrix.
 
 - **Stage 3.1 (landed).** Aggregate types — structs and tuples.
 

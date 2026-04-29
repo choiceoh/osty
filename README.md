@@ -79,23 +79,15 @@ same audit (note: `verify-selfhost` is narrow — it runs
 `SnapshotParity|CoreSnapshotParity` under `internal/ci` and `internal/runner`,
 not the merged toolchain MIR pipeline).
 
-The current red lights are explicit native LLVM/backend coverage gaps from
-`just short` / `go test -count=1 -vet=off -short`:
-
-- **Native-owned aggregate and pattern lowering.** The native path still lacks
-  complete coverage for struct field assignment, `Profile?` struct payload `?`,
-  optional field chains (`profile?.name`), and nested binding/destructuring
-  patterns such as `outer @ Outer { inner: Inner { x } }`.
-- **Native-owned generic, interface, and runtime-helper calls.** Generic method
-  turbofish calls (`b.get::<Int>(7)`), interface boxing / indirect dispatch
-  with non-self arguments, runtime string split/list-to-set coverage, and the
-  `Bytes` compare-policy shape remain short-suite failures.
-- **Map/std helper lowering.** `Map.update(k, callback)` must keep its dedicated
-  locked lowering (`osty_rt_map_lock` / `osty_rt_map_unlock`) instead of
-  falling through to the specialized stdlib body path; the specialized Map
-  method set and the std.url checker surface also still need cleanup.
-- **Prelude rebinding guard.** `internal/stdlib` still has a short-suite panic
-  in `TestPreludeBuiltinRebindings`.
+As of the 2026-04-29 test cleanup, part of the broad Go front-end/mid-end test
+surface has moved toward Osty-authored fixtures. `just front` and `just short`
+now start with the Osty-authored policy/source loop (`just osty`) and then run
+the remaining host-side smoke tests. New coverage for lex/parse/resolve/check
+policy should prefer `toolchain/*_test.osty` or focused host-boundary tests
+rather than another broad Go-only front-end matrix. The live Osty executable
+gate currently runs scalar control-flow, `Int` method, and `Int` aggregate
+fixtures under `examples/int_control_e2e`, `examples/int_methods_e2e`, and
+`examples/int_struct_e2e`.
 
 The `TestGoGenerateSelfhostLeavesGeneratedArtifactsClean` red light cited
 in earlier revisions of this section is gone — that test was removed when
@@ -647,8 +639,10 @@ go test -fuzz=FuzzParse -fuzztime=30s ./internal/parser/
 Fast local loops are captured in the `justfile`:
 
 ```sh
-just front                 # uncached front-end packages, usually a few seconds
-just short                 # skips benchmark fixtures, clang e2e, and info-only sweeps
+just osty                  # build, selfhost parity, `osty ci .`, and live Osty e2e tests
+just osty-tests            # only the live Osty e2e test dirs
+just front                 # Osty-first loop plus front-end package smoke
+just short                 # Osty-first loop plus remaining short Go smoke
 just gen TestQuestionOp    # one gen test or regex
 just lsp TestCompletion    # one LSP test or regex
 just pipe examples/calc    # front-end timing for an Osty package
