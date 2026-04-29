@@ -1,0 +1,554 @@
+// std.db - database configuration, migration, and result helpers.
+//
+// This module deliberately stops before opening sockets or executing queries.
+// Runtime-backed drivers can consume Config, PoolOptions, TxOptions, and
+// sql.Query values without pretending that pure Osty can talk to SQLite or a
+// network database by itself.
+
+use std.encoding
+use std.error
+use std.sql
+use std.strings
+
+pub enum Driver {
+    Sqlite,
+    Postgres,
+    MySql,
+}
+
+pub enum Isolation {
+    DefaultIsolation,
+    ReadUncommitted,
+    ReadCommitted,
+    RepeatableRead,
+    Serializable,
+}
+
+pub enum Cell {
+    CellNull,
+    CellString(String),
+    CellInt(Int),
+    CellFloat(Float),
+    CellBool(Bool),
+}
+
+pub struct Config {
+    pub driver: Driver,
+    pub host: String,
+    pub port: Int,
+    pub database: String,
+    pub user: String,
+    pub password: String,
+    pub path: String,
+    pub params: Map<String, String>,
+}
+
+pub struct PoolOptions {
+    pub maxOpen: Int,
+    pub maxIdle: Int,
+    pub connectTimeoutMs: Int,
+    pub idleTimeoutMs: Int,
+}
+
+pub struct TxOptions {
+    pub isolation: Isolation,
+    pub readOnly: Bool,
+}
+
+pub struct Row {
+    pub values: Map<String, Cell>,
+}
+
+pub struct ResultSet {
+    pub columns: List<String>,
+    pub rows: List<Row>,
+}
+
+pub struct ExecResult {
+    pub rowsAffected: Int,
+    pub lastInsertId: Int?,
+}
+
+pub struct Migration {
+    pub version: Int,
+    pub name: String,
+    pub up: sql.Query,
+    pub down: sql.Query,
+}
+
+pub struct MigrationPlan {
+    pub currentVersion: Int,
+    pub targetVersion: Int,
+    pub pending: List<Migration>,
+}
+
+pub fn sqlite(path: String) -> Result<Config, Error> {
+    let clean = strings.trimSpace(path)
+    if clean.isEmpty() {
+        return Err(error.new("db: sqlite path is empty"))
+    }
+    Ok(Config {
+        driver: Sqlite,
+        host: "",
+        port: 0,
+        database: "",
+        user: "",
+        password: "",
+        path: clean,
+        params: {:},
+    })
+}
+
+pub fn postgres(host: String, port: Int, database: String, user: String, password: String) -> Result<Config, Error> {
+    serverConfig(Postgres, host, port, database, user, password)
+}
+
+pub fn mysql(host: String, port: Int, database: String, user: String, password: String) -> Result<Config, Error> {
+    serverConfig(MySql, host, port, database, user, password)
+}
+
+pub fn withParam(config: Config, key: String, value: String) -> Result<Config, Error> {
+    let cleanKey = strings.trimSpace(key)
+    if !isParamName(cleanKey) {
+        return Err(error.new("db: invalid parameter name: {key}"))
+    }
+    let mut params = config.params
+    params.insert(cleanKey, value)
+    Ok(Config {
+        driver: config.driver,
+        host: config.host,
+        port: config.port,
+        database: config.database,
+        user: config.user,
+        password: config.password,
+        path: config.path,
+        params: params,
+    })
+}
+
+pub fn withPassword(config: Config, password: String) -> Config {
+    Config {
+        driver: config.driver,
+        host: config.host,
+        port: config.port,
+        database: config.database,
+        user: config.user,
+        password: password,
+        path: config.path,
+        params: config.params,
+    }
+}
+
+pub fn withoutPassword(config: Config) -> Config {
+    withPassword(config, "")
+}
+
+pub fn driverName(driver: Driver) -> String {
+    match driver {
+        Sqlite   -> "sqlite",
+        Postgres -> "postgres",
+        MySql    -> "mysql",
+    }
+}
+
+pub fn defaultPort(driver: Driver) -> Int {
+    match driver {
+        Sqlite   -> 0,
+        Postgres -> 5432,
+        MySql    -> 3306,
+    }
+}
+
+pub fn dialect(driver: Driver) -> sql.Dialect {
+    match driver {
+        Sqlite   -> sql.sqliteDialect(),
+        Postgres -> sql.postgresDialect(),
+        MySql    -> sql.mysqlDialect(),
+    }
+}
+
+pub fn dsn(config: Config) -> Result<String, Error> {
+    dsnWithSecrets(config, false)
+}
+
+pub fn redactedDsn(config: Config) -> Result<String, Error> {
+    dsnWithSecrets(config, true)
+}
+
+pub fn poolOptions() -> PoolOptions {
+    PoolOptions {
+        maxOpen: 10,
+        maxIdle: 2,
+        connectTimeoutMs: 30000,
+        idleTimeoutMs: 600000,
+    }
+}
+
+pub fn withMaxOpen(opts: PoolOptions, maxOpen: Int) -> Result<PoolOptions, Error> {
+    if maxOpen < 1 {
+        return Err(error.new("db: maxOpen must be positive"))
+    }
+    Ok(PoolOptions {
+        maxOpen: maxOpen,
+        maxIdle: opts.maxIdle,
+        connectTimeoutMs: opts.connectTimeoutMs,
+        idleTimeoutMs: opts.idleTimeoutMs,
+    })
+}
+
+pub fn withMaxIdle(opts: PoolOptions, maxIdle: Int) -> Result<PoolOptions, Error> {
+    if maxIdle < 0 {
+        return Err(error.new("db: maxIdle must not be negative"))
+    }
+    Ok(PoolOptions {
+        maxOpen: opts.maxOpen,
+        maxIdle: maxIdle,
+        connectTimeoutMs: opts.connectTimeoutMs,
+        idleTimeoutMs: opts.idleTimeoutMs,
+    })
+}
+
+pub fn withConnectTimeout(opts: PoolOptions, ms: Int) -> Result<PoolOptions, Error> {
+    if ms < 0 {
+        return Err(error.new("db: connect timeout must not be negative"))
+    }
+    Ok(PoolOptions {
+        maxOpen: opts.maxOpen,
+        maxIdle: opts.maxIdle,
+        connectTimeoutMs: ms,
+        idleTimeoutMs: opts.idleTimeoutMs,
+    })
+}
+
+pub fn withIdleTimeout(opts: PoolOptions, ms: Int) -> Result<PoolOptions, Error> {
+    if ms < 0 {
+        return Err(error.new("db: idle timeout must not be negative"))
+    }
+    Ok(PoolOptions {
+        maxOpen: opts.maxOpen,
+        maxIdle: opts.maxIdle,
+        connectTimeoutMs: opts.connectTimeoutMs,
+        idleTimeoutMs: ms,
+    })
+}
+
+pub fn txOptions() -> TxOptions {
+    TxOptions {
+        isolation: DefaultIsolation,
+        readOnly: false,
+    }
+}
+
+pub fn readOnlyTx() -> TxOptions {
+    TxOptions {
+        isolation: DefaultIsolation,
+        readOnly: true,
+    }
+}
+
+pub fn withIsolation(opts: TxOptions, isolation: Isolation) -> TxOptions {
+    TxOptions {
+        isolation: isolation,
+        readOnly: opts.readOnly,
+    }
+}
+
+pub fn isolationName(isolation: Isolation) -> String {
+    match isolation {
+        DefaultIsolation -> "default",
+        ReadUncommitted  -> "read uncommitted",
+        ReadCommitted    -> "read committed",
+        RepeatableRead   -> "repeatable read",
+        Serializable     -> "serializable",
+    }
+}
+
+pub fn cellNull() -> Cell {
+    CellNull
+}
+
+pub fn cellString(value: String) -> Cell {
+    CellString(value)
+}
+
+pub fn cellInt(value: Int) -> Cell {
+    CellInt(value)
+}
+
+pub fn cellFloat(value: Float) -> Cell {
+    CellFloat(value)
+}
+
+pub fn cellBool(value: Bool) -> Cell {
+    CellBool(value)
+}
+
+pub fn cellText(cell: Cell) -> String {
+    match cell {
+        CellNull      -> "",
+        CellString(s) -> s,
+        CellInt(n)    -> n.toString(),
+        CellFloat(n)  -> n.toString(),
+        CellBool(b)   -> if b { "true" } else { "false" },
+    }
+}
+
+pub fn row(values: Map<String, Cell>) -> Row {
+    Row { values: values }
+}
+
+pub fn rowGet(row: Row, column: String) -> Cell? {
+    row.values.get(column)
+}
+
+pub fn rowText(row: Row, column: String) -> String? {
+    let cell = rowGet(row, column)
+    match cell {
+        Some(value) -> {
+            let text = cellText(value)
+            Some(text)
+        },
+        None       -> noneString(),
+    }
+}
+
+pub fn resultSet(columns: List<String>, rows: List<Row>) -> Result<ResultSet, Error> {
+    let mut seen: Map<String, String> = {:}
+    for column in columns {
+        if column.isEmpty() {
+            return Err(error.new("db: result column is empty"))
+        }
+        if seen.containsKey(column) {
+            return Err(error.new("db: duplicate result column: {column}"))
+        }
+        seen.insert(column, column)
+    }
+    Ok(ResultSet {
+        columns: columns,
+        rows: rows,
+    })
+}
+
+pub fn emptyResultSet(columns: List<String>) -> Result<ResultSet, Error> {
+    resultSet(columns, [])
+}
+
+pub fn first(result: ResultSet) -> Row? {
+    if result.rows.isEmpty() {
+        return None
+    }
+    Some(result.rows[0])
+}
+
+pub fn columnNames(result: ResultSet) -> List<String> {
+    result.columns
+}
+
+pub fn execResult(rowsAffected: Int, lastInsertId: Int?) -> ExecResult {
+    ExecResult {
+        rowsAffected: rowsAffected,
+        lastInsertId: lastInsertId,
+    }
+}
+
+pub fn migration(version: Int, name: String, up: sql.Query, down: sql.Query) -> Result<Migration, Error> {
+    if version <= 0 {
+        return Err(error.new("db: migration version must be positive"))
+    }
+    let clean = strings.trimSpace(name)
+    if clean.isEmpty() {
+        return Err(error.new("db: migration name is empty"))
+    }
+    Ok(Migration {
+        version: version,
+        name: clean,
+        up: up,
+        down: down,
+    })
+}
+
+pub fn migrationTableSql() -> sql.Query {
+    sql.raw("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)")
+}
+
+pub fn recordMigrationSql(item: Migration) -> sql.Query {
+    sql.insert("schema_migrations", [
+        sql.assignment("version", sql.integer(item.version)).unwrap(),
+        sql.assignment("name", sql.text(item.name)).unwrap(),
+        sql.assignment("applied_at", sql.rawValue("CURRENT_TIMESTAMP")).unwrap(),
+    ]).unwrap()
+}
+
+pub fn pendingMigrations(appliedVersions: List<Int>, migrations: List<Migration>) -> List<Migration> {
+    let mut out: List<Migration> = []
+    for item in migrations {
+        if !containsInt(appliedVersions, item.version) {
+            out.push(item)
+        }
+    }
+    sortMigrations(out)
+}
+
+pub fn plan(currentVersion: Int, migrations: List<Migration>) -> MigrationPlan {
+    let mut applied: List<Int> = []
+    for item in migrations {
+        if item.version <= currentVersion {
+            applied.push(item.version)
+        }
+    }
+    let pending = pendingMigrations(applied, migrations)
+    MigrationPlan {
+        currentVersion: currentVersion,
+        targetVersion: maxMigrationVersion(migrations),
+        pending: pending,
+    }
+}
+
+pub fn queryText(q: sql.Query, config: Config) -> String {
+    sql.render(q, dialect(config.driver))
+}
+
+fn serverConfig(driver: Driver, host: String, port: Int, database: String, user: String, password: String) -> Result<Config, Error> {
+    let cleanHost = strings.trimSpace(host)
+    let cleanDatabase = strings.trimSpace(database)
+    if cleanHost.isEmpty() {
+        return Err(error.new("db: host is empty"))
+    }
+    if cleanDatabase.isEmpty() {
+        return Err(error.new("db: database is empty"))
+    }
+    if port < 1 {
+        return Err(error.new("db: port must be positive"))
+    }
+    Ok(Config {
+        driver: driver,
+        host: cleanHost,
+        port: port,
+        database: cleanDatabase,
+        user: strings.trimSpace(user),
+        password: password,
+        path: "",
+        params: {:},
+    })
+}
+
+fn dsnWithSecrets(config: Config, redact: Bool) -> Result<String, Error> {
+    match config.driver {
+        Sqlite -> {
+            if config.path.isEmpty() {
+                return Err(error.new("db: sqlite path is empty"))
+            }
+            let path = encoding.url.encode(config.path)
+            let query = querySuffix(config.params)
+            Ok("sqlite:///{path}{query}")
+        },
+        Postgres -> serverDsn("postgres", config, redact),
+        MySql -> serverDsn("mysql", config, redact),
+    }
+}
+
+fn serverDsn(scheme: String, config: Config, redact: Bool) -> Result<String, Error> {
+    if config.host.isEmpty() {
+        return Err(error.new("db: host is empty"))
+    }
+    if config.database.isEmpty() {
+        return Err(error.new("db: database is empty"))
+    }
+    let auth = authPart(config.user, config.password, redact)
+    let database = encoding.url.encode(config.database)
+    let query = querySuffix(config.params)
+    Ok("{scheme}://{auth}{config.host}:{config.port}/{database}{query}")
+}
+
+fn authPart(user: String, password: String, redact: Bool) -> String {
+    if user.isEmpty() {
+        return ""
+    }
+    let encodedUser = encoding.url.encode(user)
+    if password.isEmpty() {
+        return "{encodedUser}@"
+    }
+    let encodedPassword = if redact { "redacted" } else { encoding.url.encode(password) }
+    "{encodedUser}:{encodedPassword}@"
+}
+
+fn querySuffix(params: Map<String, String>) -> String {
+    let keys = params.keys().sorted()
+    if keys.isEmpty() {
+        return ""
+    }
+    let mut parts: List<String> = []
+    for key in keys {
+        let value = params.get(key).unwrap()
+        let encodedKey = encoding.url.encode(key)
+        let encodedValue = encoding.url.encode(value)
+        parts.push("{encodedKey}={encodedValue}")
+    }
+    let joined = strings.join(parts, "&")
+    "?{joined}"
+}
+
+fn isParamName(name: String) -> Bool {
+    if name.isEmpty() {
+        return false
+    }
+    let chars = name.chars()
+    for c in chars {
+        if !isParamChar(c) {
+            return false
+        }
+    }
+    true
+}
+
+fn isParamChar(c: Char) -> Bool {
+    (c >= 'A' && c <= 'Z') ||
+    (c >= 'a' && c <= 'z') ||
+    (c >= '0' && c <= '9') ||
+    c == '_' || c == '-' || c == '.'
+}
+
+fn containsInt(values: List<Int>, needle: Int) -> Bool {
+    for value in values {
+        if value == needle {
+            return true
+        }
+    }
+    false
+}
+
+fn sortMigrations(items: List<Migration>) -> List<Migration> {
+    let mut out = items
+    let mut i = 0
+    for i < out.len() {
+        let mut best = i
+        let mut j = i + 1
+        for j < out.len() {
+            if out[j].version < out[best].version {
+                best = j
+            }
+            j = j + 1
+        }
+        if best != i {
+            let tmp = out[i]
+            out[i] = out[best]
+            out[best] = tmp
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn maxMigrationVersion(items: List<Migration>) -> Int {
+    let mut version = 0
+    for item in items {
+        if item.version > version {
+            version = item.version
+        }
+    }
+    version
+}
+
+fn noneString() -> String? {
+    None
+}

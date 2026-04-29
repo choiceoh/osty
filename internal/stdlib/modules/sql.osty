@@ -1,0 +1,417 @@
+// std.sql - safe SQL fragment and query builders.
+
+use std.error
+use std.strings
+
+pub enum Dialect {
+    Generic,
+    Postgres,
+    MySql,
+    Sqlite,
+}
+
+pub enum Value {
+    SqlNull,
+    SqlString(String),
+    SqlInt(Int),
+    SqlFloat(Float),
+    SqlBool(Bool),
+    SqlRaw(String),
+}
+
+pub struct Query {
+    pub sql: String,
+    pub params: List<Value>,
+}
+
+pub struct Condition {
+    pub sql: String,
+    pub params: List<Value>,
+}
+
+pub struct Assignment {
+    pub column: String,
+    pub value: Value,
+}
+
+pub struct Order {
+    pub column: String,
+    pub descending: Bool,
+}
+
+pub fn null() -> Value {
+    SqlNull
+}
+
+pub fn text(value: String) -> Value {
+    SqlString(value)
+}
+
+pub fn integer(value: Int) -> Value {
+    SqlInt(value)
+}
+
+pub fn float(value: Float) -> Value {
+    SqlFloat(value)
+}
+
+pub fn boolean(value: Bool) -> Value {
+    SqlBool(value)
+}
+
+pub fn rawValue(value: String) -> Value {
+    SqlRaw(value)
+}
+
+pub fn query(sql: String, params: List<Value>) -> Query {
+    Query {
+        sql: strings.trimSpace(sql),
+        params: params,
+    }
+}
+
+pub fn raw(sql: String) -> Query {
+    query(sql, [])
+}
+
+pub fn condition(sql: String, params: List<Value>) -> Condition {
+    Condition {
+        sql: strings.trimSpace(sql),
+        params: params,
+    }
+}
+
+pub fn assignment(column: String, value: Value) -> Result<Assignment, Error> {
+    validatePath(column)?
+    Ok(Assignment {
+        column: column,
+        value: value,
+    })
+}
+
+pub fn asc(column: String) -> Result<Order, Error> {
+    validatePath(column)?
+    Ok(Order {
+        column: column,
+        descending: false,
+    })
+}
+
+pub fn desc(column: String) -> Result<Order, Error> {
+    validatePath(column)?
+    Ok(Order {
+        column: column,
+        descending: true,
+    })
+}
+
+pub fn quoteIdent(name: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(name)
+    if !isIdent(clean) {
+        return Err(error.new("sql: invalid identifier: {name}"))
+    }
+    Ok("\"{escapeIdent(clean)}\"")
+}
+
+pub fn quotePath(path: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(path)
+    if clean == "*" {
+        return Ok("*")
+    }
+    let parts = strings.split(clean, ".")
+    if parts.isEmpty() {
+        return Err(error.new("sql: empty identifier path"))
+    }
+    let mut out: List<String> = []
+    let mut i = 0
+    for i < parts.len() {
+        let part = strings.trimSpace(parts[i])
+        if part == "*" && i == parts.len() - 1 {
+            out.push("*")
+        } else {
+            out.push(quoteIdent(part)?)
+        }
+        i = i + 1
+    }
+    Ok(strings.join(out, "."))
+}
+
+pub fn literal(value: Value) -> String {
+    match value {
+        SqlNull      -> "NULL",
+        SqlString(s) -> "'{escapeString(s)}'",
+        SqlInt(n)    -> n.toString(),
+        SqlFloat(n)  -> n.toString(),
+        SqlBool(b)   -> if b { "TRUE" } else { "FALSE" },
+        SqlRaw(s)    -> s,
+    }
+}
+
+pub fn placeholder(dialect: Dialect, index: Int) -> String {
+    match dialect {
+        Postgres -> "${index}",
+        MySql    -> "?",
+        Sqlite   -> "?",
+        Generic  -> "?",
+    }
+}
+
+pub fn genericDialect() -> Dialect {
+    Generic
+}
+
+pub fn postgresDialect() -> Dialect {
+    Postgres
+}
+
+pub fn mysqlDialect() -> Dialect {
+    MySql
+}
+
+pub fn sqliteDialect() -> Dialect {
+    Sqlite
+}
+
+pub fn render(q: Query, dialect: Dialect) -> String {
+    let mut out = ""
+    let mut index = 1
+    for c in q.sql.chars() {
+        if c.toInt() == 0x3F {
+            let marker = placeholder(dialect, index)
+            out = "{out}{marker}"
+            index = index + 1
+        } else {
+            out = "{out}{c}"
+        }
+    }
+    out
+}
+
+pub fn debugSql(q: Query) -> String {
+    let mut out = ""
+    let mut index = 0
+    for c in q.sql.chars() {
+        if c.toInt() == 0x3F && index < q.params.len() {
+            let value = literal(q.params[index])
+            out = "{out}{value}"
+            index = index + 1
+        } else {
+            out = "{out}{c}"
+        }
+    }
+    out
+}
+
+pub fn eq(column: String, value: Value) -> Result<Condition, Error> {
+    compare(column, "=", value)
+}
+
+pub fn ne(column: String, value: Value) -> Result<Condition, Error> {
+    compare(column, "<>", value)
+}
+
+pub fn gt(column: String, value: Value) -> Result<Condition, Error> {
+    compare(column, ">", value)
+}
+
+pub fn gte(column: String, value: Value) -> Result<Condition, Error> {
+    compare(column, ">=", value)
+}
+
+pub fn lt(column: String, value: Value) -> Result<Condition, Error> {
+    compare(column, "<", value)
+}
+
+pub fn lte(column: String, value: Value) -> Result<Condition, Error> {
+    compare(column, "<=", value)
+}
+
+pub fn like(column: String, value: Value) -> Result<Condition, Error> {
+    compare(column, "LIKE", value)
+}
+
+pub fn isNull(column: String) -> Result<Condition, Error> {
+    let col = quotePath(column)?
+    Ok(condition("{col} IS NULL", []))
+}
+
+pub fn isNotNull(column: String) -> Result<Condition, Error> {
+    let col = quotePath(column)?
+    Ok(condition("{col} IS NOT NULL", []))
+}
+
+pub fn inList(column: String, values: List<Value>) -> Result<Condition, Error> {
+    if values.isEmpty() {
+        return Err(error.new("sql: IN list is empty"))
+    }
+    let mut placeholders: List<String> = []
+    let mut i = 0
+    for i < values.len() {
+        placeholders.push("?")
+        i = i + 1
+    }
+    let col = quotePath(column)?
+    let markers = strings.join(placeholders, ", ")
+    Ok(condition("{col} IN ({markers})", values))
+}
+
+pub fn allOf(conditions: List<Condition>) -> Condition {
+    joinConditions(conditions, "AND")
+}
+
+pub fn anyOf(conditions: List<Condition>) -> Condition {
+    joinConditions(conditions, "OR")
+}
+
+pub fn select(table: String, columns: List<String>) -> Result<Query, Error> {
+    let cols = renderColumns(columns)?
+    let tableName = quotePath(table)?
+    Ok(query("SELECT {cols} FROM {tableName}", []))
+}
+
+pub fn selectWhere(table: String, columns: List<String>, cond: Condition) -> Result<Query, Error> {
+    let base = select(table, columns)?
+    Ok(query("{base.sql} WHERE {cond.sql}", cond.params))
+}
+
+pub fn insert(table: String, values: List<Assignment>) -> Result<Query, Error> {
+    if values.isEmpty() {
+        return Err(error.new("sql: insert values are empty"))
+    }
+    let mut columns: List<String> = []
+    let mut markers: List<String> = []
+    let mut params: List<Value> = []
+    for item in values {
+        columns.push(quotePath(item.column)?)
+        markers.push("?")
+        params.push(item.value)
+    }
+    let tableName = quotePath(table)?
+    let colList = strings.join(columns, ", ")
+    let markerList = strings.join(markers, ", ")
+    Ok(query("INSERT INTO {tableName} ({colList}) VALUES ({markerList})", params))
+}
+
+pub fn update(table: String, values: List<Assignment>, cond: Condition) -> Result<Query, Error> {
+    if values.isEmpty() {
+        return Err(error.new("sql: update values are empty"))
+    }
+    let mut assigns: List<String> = []
+    let mut params: List<Value> = []
+    for item in values {
+        let col = quotePath(item.column)?
+        assigns.push("{col} = ?")
+        params.push(item.value)
+    }
+    appendValues(params, cond.params)
+    let tableName = quotePath(table)?
+    let setList = strings.join(assigns, ", ")
+    Ok(query("UPDATE {tableName} SET {setList} WHERE {cond.sql}", params))
+}
+
+pub fn deleteFrom(table: String, cond: Condition) -> Result<Query, Error> {
+    let tableName = quotePath(table)?
+    Ok(query("DELETE FROM {tableName} WHERE {cond.sql}", cond.params))
+}
+
+pub fn orderBy(q: Query, orders: List<Order>) -> Result<Query, Error> {
+    if orders.isEmpty() {
+        return Ok(q)
+    }
+    let mut parts: List<String> = []
+    for item in orders {
+        let dir = if item.descending { "DESC" } else { "ASC" }
+        let col = quotePath(item.column)?
+        parts.push("{col} {dir}")
+    }
+    let orderList = strings.join(parts, ", ")
+    Ok(query("{q.sql} ORDER BY {orderList}", q.params))
+}
+
+pub fn limit(q: Query, n: Int) -> Result<Query, Error> {
+    if n < 0 {
+        return Err(error.new("sql: negative limit"))
+    }
+    Ok(query("{q.sql} LIMIT {n}", q.params))
+}
+
+pub fn offset(q: Query, n: Int) -> Result<Query, Error> {
+    if n < 0 {
+        return Err(error.new("sql: negative offset"))
+    }
+    Ok(query("{q.sql} OFFSET {n}", q.params))
+}
+
+pub fn isIdent(name: String) -> Bool {
+    if name.isEmpty() {
+        return false
+    }
+    let chars = name.chars()
+    if !isIdentStart(chars[0]) {
+        return false
+    }
+    for c in chars {
+        if !isIdentContinue(c) {
+            return false
+        }
+    }
+    true
+}
+
+fn validatePath(path: String) -> Result<(), Error> {
+    quotePath(path)?
+    Ok(())
+}
+
+fn renderColumns(columns: List<String>) -> Result<String, Error> {
+    if columns.isEmpty() {
+        return Ok("*")
+    }
+    let mut out: List<String> = []
+    for column in columns {
+        out.push(quotePath(column)?)
+    }
+    Ok(strings.join(out, ", "))
+}
+
+fn compare(column: String, op: String, value: Value) -> Result<Condition, Error> {
+    let col = quotePath(column)?
+    Ok(condition("{col} {op} ?", [value]))
+}
+
+fn joinConditions(conditions: List<Condition>, op: String) -> Condition {
+    if conditions.isEmpty() {
+        return condition("1 = 1", [])
+    }
+    let mut parts: List<String> = []
+    let mut params: List<Value> = []
+    for cond in conditions {
+        parts.push("({cond.sql})")
+        appendValues(params, cond.params)
+    }
+    condition(strings.join(parts, " {op} "), params)
+}
+
+fn appendValues(out: List<Value>, values: List<Value>) {
+    for value in values {
+        out.push(value)
+    }
+}
+
+fn escapeIdent(name: String) -> String {
+    strings.replaceAll(name, "\"", "\"\"")
+}
+
+fn escapeString(value: String) -> String {
+    strings.replaceAll(value, "'", "''")
+}
+
+fn isIdentStart(c: Char) -> Bool {
+    (c >= 'A' && c <= 'Z') ||
+    (c >= 'a' && c <= 'z') ||
+    c == '_'
+}
+
+fn isIdentContinue(c: Char) -> Bool {
+    isIdentStart(c) || (c >= '0' && c <= '9')
+}
