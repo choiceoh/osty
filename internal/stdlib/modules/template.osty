@@ -1,0 +1,148 @@
+// std.template - tiny string and HTML template rendering.
+//
+// The syntax is deliberately small and deterministic:
+//   - `{{name}}` inserts an HTML-escaped value.
+//   - `{{{name}}}` inserts a raw value.
+//   - missing names are errors in strict render mode.
+
+use std.error
+use std.strings
+
+pub fn render(source: String, data: Map<String, String>) -> Result<String, Error> {
+    renderWith(source, data, true)
+}
+
+pub fn renderLoose(source: String, data: Map<String, String>) -> String {
+    match renderWith(source, data, false) {
+        Ok(out) -> out,
+        Err(_)  -> source,
+    }
+}
+
+pub fn renderRaw(source: String, data: Map<String, String>) -> Result<String, Error> {
+    let mut escaped: Map<String, String> = {:}
+    for (key, value) in data {
+        escaped.insert(key, value)
+    }
+    renderWithRawOnly(source, escaped, true)
+}
+
+pub fn escapeHtml(text: String) -> String {
+    let mut out = ""
+    for c in text.chars() {
+        if c == '&' {
+            out = "{out}&amp;"
+        } else if c == '<' {
+            out = "{out}&lt;"
+        } else if c == '>' {
+            out = "{out}&gt;"
+        } else if c == '"' {
+            out = "{out}&quot;"
+        } else if c == '\'' {
+            out = "{out}&#39;"
+        } else {
+            out = "{out}{c}"
+        }
+    }
+    out
+}
+
+pub fn stripTags(html: String) -> String {
+    let mut out = ""
+    let mut inTag = false
+    for c in html.chars() {
+        if c == '<' {
+            inTag = true
+        } else if c == '>' {
+            inTag = false
+        } else if !inTag {
+            out = "{out}{c}"
+        }
+    }
+    out
+}
+
+fn renderWith(source: String, data: Map<String, String>, strict: Bool) -> Result<String, Error> {
+    let mut escaped: Map<String, String> = {:}
+    for (key, value) in data {
+        escaped.insert(key, escapeHtml(value))
+    }
+    renderWithRawAndEscaped(source, data, escaped, strict)
+}
+
+fn renderWithRawOnly(source: String, data: Map<String, String>, strict: Bool) -> Result<String, Error> {
+    renderWithRawAndEscaped(source, data, data, strict)
+}
+
+fn renderWithRawAndEscaped(
+    source: String,
+    raw: Map<String, String>,
+    escaped: Map<String, String>,
+    strict: Bool,
+) -> Result<String, Error> {
+    let mut out = ""
+    let mut i = 0
+    for i < source.len() {
+        if startsAt(source, i, "\{\{\{") {
+            match closeAt(source, i + 3, "\}\}\}") {
+                Some(end) -> {
+                    let name = strings.trimSpace(strings.slice(source, i + 3, end))
+                    match raw.get(name) {
+                        Some(value) -> {
+                            out = "{out}{value}"
+                        },
+                        None -> {
+                            if strict {
+                                return Err(error.new("template: missing value: {name}"))
+                            }
+                        },
+                    }
+                    i = end + 3
+                    continue
+                },
+                None -> {},
+            }
+        }
+        if startsAt(source, i, "\{\{") {
+            match closeAt(source, i + 2, "\}\}") {
+                Some(end) -> {
+                    let name = strings.trimSpace(strings.slice(source, i + 2, end))
+                    match escaped.get(name) {
+                        Some(value) -> {
+                            out = "{out}{value}"
+                        },
+                        None -> {
+                            if strict {
+                                return Err(error.new("template: missing value: {name}"))
+                            }
+                        },
+                    }
+                    i = end + 2
+                    continue
+                },
+                None -> {},
+            }
+        }
+        out = "{out}{source[i]}"
+        i = i + 1
+    }
+    Ok(out)
+}
+
+fn startsAt(text: String, index: Int, needle: String) -> Bool {
+    if index < 0 || index + needle.len() > text.len() {
+        return false
+    }
+    strings.slice(text, index, index + needle.len()) == needle
+}
+
+fn closeAt(text: String, start: Int, marker: String) -> Int? {
+    let mut i = start
+    for i + marker.len() <= text.len() {
+        if startsAt(text, i, marker) {
+            return Some(i)
+        }
+        i = i + 1
+    }
+    None
+}

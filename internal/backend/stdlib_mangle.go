@@ -120,14 +120,88 @@ func RewriteStdlibMethodCallsites(mod *ir.Module, reached []ReachableStdlibMetho
 	}
 	type key struct{ module, typeName, method string }
 	set := map[key]string{}
+	type valueKey struct{ module, path, method string }
+	valueSet := map[valueKey]string{}
 	for _, r := range reached {
-		set[key{module: r.Module, typeName: r.Type, method: r.Method}] = StdlibMethodSymbol(r.Module, r.Type, r.Method)
+		mangled := StdlibMethodSymbol(r.Module, r.Type, r.Method)
+		set[key{module: r.Module, typeName: r.Type, method: r.Method}] = mangled
+		if r.ValuePath != "" {
+			valueSet[valueKey{module: r.Module, path: r.ValuePath, method: r.Method}] = mangled
+		}
+	}
+	valueRewriteCount := 0
+	if len(valueSet) > 0 {
+		ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+			call, ok := n.(*ir.CallExpr)
+			if !ok || call == nil {
+				return true
+			}
+			field, ok := call.Callee.(*ir.FieldExpr)
+			if !ok || field == nil || field.Name == "" {
+				return true
+			}
+			module, path, ok := stdlibFieldPath(field.X)
+			if !ok || module == "" || len(path) == 0 {
+				return true
+			}
+			mangled, hit := valueSet[valueKey{
+				module: module,
+				path:   stdlibJoinFieldPath(path),
+				method: field.Name,
+			}]
+			if !hit {
+				return true
+			}
+			receiver := field.X
+			args := make([]ir.Arg, 0, len(call.Args)+1)
+			args = append(args, ir.Arg{
+				Value: receiver,
+				SpanV: field.SpanV,
+			})
+			args = append(args, call.Args...)
+			call.Callee = &ir.Ident{
+				Name:  mangled,
+				Kind:  ir.IdentFn,
+				T:     stdlibFnType(args, call.T),
+				SpanV: field.SpanV,
+			}
+			call.Args = args
+			valueRewriteCount++
+			return true
+		}), mod)
 	}
 	swap := map[*ir.MethodCall]*ir.CallExpr{}
 	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
 		mc, ok := n.(*ir.MethodCall)
 		if !ok || mc == nil || mc.Receiver == nil || mc.Name == "" {
 			return true
+		}
+		if module, path, ok := stdlibFieldPath(mc.Receiver); ok && module != "" && len(path) != 0 {
+			if mangled, hit := valueSet[valueKey{
+				module: module,
+				path:   stdlibJoinFieldPath(path),
+				method: mc.Name,
+			}]; hit {
+				args := make([]ir.Arg, 0, len(mc.Args)+1)
+				args = append(args, ir.Arg{
+					Value: mc.Receiver,
+					SpanV: mc.SpanV,
+				})
+				args = append(args, mc.Args...)
+				swap[mc] = &ir.CallExpr{
+					Callee: &ir.Ident{
+						Name:  mangled,
+						Kind:  ir.IdentFn,
+						T:     stdlibFnType(args, mc.T),
+						SpanV: mc.SpanV,
+					},
+					TypeArgs: mc.TypeArgs,
+					Args:     args,
+					T:        mc.T,
+					SpanV:    mc.SpanV,
+				}
+				return true
+			}
 		}
 		named, ok := mc.Receiver.Type().(*ir.NamedType)
 		if !ok || named == nil || named.Package == "" || named.Name == "" {
@@ -152,6 +226,7 @@ func RewriteStdlibMethodCallsites(mod *ir.Module, reached []ReachableStdlibMetho
 			Callee: &ir.Ident{
 				Name:  mangled,
 				Kind:  ir.IdentFn,
+				T:     stdlibFnType(args, mc.T),
 				SpanV: mc.SpanV,
 			},
 			TypeArgs: mc.TypeArgs,
@@ -162,11 +237,58 @@ func RewriteStdlibMethodCallsites(mod *ir.Module, reached []ReachableStdlibMetho
 		return true
 	}), mod)
 	if len(swap) == 0 {
-		return 0
+		return valueRewriteCount
 	}
 	rw := &stdlibMethodCallsiteSpliceVisitor{swap: swap}
 	ir.Walk(rw, mod)
-	return rw.count
+	return valueRewriteCount + rw.count
+}
+
+func stdlibFnType(args []ir.Arg, ret ir.Type) ir.Type {
+	params := make([]ir.Type, 0, len(args))
+	for _, arg := range args {
+		if arg.Value == nil || arg.Value.Type() == nil {
+			params = append(params, ir.ErrTypeVal)
+			continue
+		}
+		params = append(params, arg.Value.Type())
+	}
+	if ret == nil {
+		ret = ir.ErrTypeVal
+	}
+	return &ir.FnType{Params: params, Return: ret}
+}
+
+func stdlibFieldPath(expr ir.Expr) (string, []string, bool) {
+	switch x := expr.(type) {
+	case *ir.Ident:
+		if x == nil || x.Name == "" {
+			return "", nil, false
+		}
+		return x.Name, nil, true
+	case *ir.FieldExpr:
+		if x == nil || x.Name == "" {
+			return "", nil, false
+		}
+		module, path, ok := stdlibFieldPath(x.X)
+		if !ok {
+			return "", nil, false
+		}
+		return module, append(path, x.Name), true
+	default:
+		return "", nil, false
+	}
+}
+
+func stdlibJoinFieldPath(path []string) string {
+	out := ""
+	for i, part := range path {
+		if i > 0 {
+			out += "."
+		}
+		out += part
+	}
+	return out
 }
 
 // stdlibMethodCallsiteSpliceVisitor walks every Expr-bearing slot in

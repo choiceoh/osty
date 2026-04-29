@@ -1,0 +1,136 @@
+// std.i18n - small locale and message-catalog helpers.
+
+use std.strings
+
+pub struct Locale {
+    pub language: String,
+    pub region: String,
+
+    pub fn tag(self) -> String {
+        if self.region.isEmpty() {
+            return self.language
+        }
+        "{self.language}-{self.region}"
+    }
+}
+
+pub struct MessageCatalog {
+    pub locale: Locale,
+    pub messages: Map<String, String>,
+}
+
+pub fn locale(language: String, region: String) -> Locale {
+    Locale {
+        language: strings.toLower(strings.trimSpace(language)),
+        region: strings.toUpper(strings.trimSpace(region)),
+    }
+}
+
+pub fn parseLocale(tag: String) -> Locale {
+    let normalized = strings.replaceAll(strings.trimSpace(tag), "_", "-")
+    match strings.indexOf(normalized, "-") {
+        Some(i) -> locale(
+            strings.slice(normalized, 0, i),
+            strings.slice(normalized, i + 1, normalized.len()),
+        ),
+        None -> locale(normalized, ""),
+    }
+}
+
+pub fn normalizeTag(tag: String) -> String {
+    parseLocale(tag).tag()
+}
+
+pub fn fallbackTags(tag: String) -> List<String> {
+    let loc = parseLocale(tag)
+    let mut out: List<String> = []
+    let full = loc.tag()
+    if !full.isEmpty() {
+        out.push(full)
+    }
+    if !loc.region.isEmpty() && !loc.language.isEmpty() {
+        out.push(loc.language)
+    }
+    out
+}
+
+pub fn catalog(tag: String, messages: Map<String, String>) -> MessageCatalog {
+    MessageCatalog {
+        locale: parseLocale(tag),
+        messages: messages,
+    }
+}
+
+pub fn translate(cat: MessageCatalog, key: String) -> String? {
+    cat.messages.get(key)
+}
+
+pub fn translateDefault(cat: MessageCatalog, key: String, fallback: String) -> String {
+    match translate(cat, key) {
+        Some(value) -> value,
+        None -> fallback,
+    }
+}
+
+pub fn format(message: String, values: Map<String, String>) -> String {
+    let mut out = ""
+    let mut i = 0
+    for i < message.len() {
+        if message[i].toInt() == 123 {
+            let end = findCloseBrace(message, i + 1)
+            if end > i + 1 {
+                let key = strings.trimSpace(strings.slice(message, i + 1, end))
+                match values.get(key) {
+                    Some(value) -> {
+                        out = "{out}{value}"
+                    },
+                    None -> {
+                        out = "{out}{message[i]}"
+                    },
+                }
+                if values.get(key).isSome() {
+                    i = end + 1
+                    continue
+                }
+            }
+        }
+        out = "{out}{message[i]}"
+        i = i + 1
+    }
+    out
+}
+
+pub fn pluralCategory(tag: String, count: Int) -> String {
+    let lang = parseLocale(tag).language
+    if lang == "ja" || lang == "ko" || lang == "zh" {
+        return "other"
+    }
+    if lang == "fr" {
+        if count == 0 || count == 1 {
+            return "one"
+        }
+        return "other"
+    }
+    if count == 1 {
+        return "one"
+    }
+    "other"
+}
+
+pub fn selectPlural(tag: String, count: Int, one: String, other: String) -> String {
+    if pluralCategory(tag, count) == "one" {
+        return one
+    }
+    other
+}
+
+fn findCloseBrace(text: String, start: Int) -> Int {
+    let mut i = start
+    for i < text.len() {
+        if text[i].toInt() == 125 {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}

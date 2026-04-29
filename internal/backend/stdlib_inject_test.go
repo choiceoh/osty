@@ -110,6 +110,73 @@ func TestReachableStdlibMethodsFindsHexEncode(t *testing.T) {
 	}
 }
 
+func TestReachableStdlibMethodsFindsEncodingSingletonMethod(t *testing.T) {
+	reg := stdlib.LoadCached()
+	mod := &ir.Module{
+		Package: "main",
+		Script: []ir.Stmt{
+			&ir.ExprStmt{X: &ir.MethodCall{
+				Receiver: &ir.FieldExpr{X: &ir.Ident{Name: "encoding"}, Name: "base64"},
+				Name:     "encode",
+				Args:     []ir.Arg{{Value: &ir.Ident{Name: "data"}}},
+			}},
+			&ir.ExprStmt{X: &ir.CallExpr{
+				Callee: &ir.FieldExpr{
+					X: &ir.FieldExpr{
+						X:    &ir.FieldExpr{X: &ir.Ident{Name: "encoding"}, Name: "base64"},
+						Name: "url",
+					},
+					Name: "decode",
+				},
+				Args: []ir.Arg{{Value: &ir.Ident{Name: "text"}}},
+			}},
+		},
+	}
+	got := ReachableStdlibMethods(mod, reg)
+	if len(got) != 2 {
+		t.Fatalf("got %d entries (%v), want 2", len(got), got)
+	}
+	if got[0].Module != "encoding" || got[0].Type != "Base64" || got[0].Method != "encode" || got[0].ValuePath != "base64" {
+		t.Fatalf("got[0] = {%s, %s, %s, %s}, want {encoding, Base64, encode, base64}",
+			got[0].Module, got[0].Type, got[0].Method, got[0].ValuePath)
+	}
+	if got[1].Module != "encoding" || got[1].Type != "Base64Url" || got[1].Method != "decode" || got[1].ValuePath != "base64.url" {
+		t.Fatalf("got[1] = {%s, %s, %s, %s}, want {encoding, Base64Url, decode, base64.url}",
+			got[1].Module, got[1].Type, got[1].Method, got[1].ValuePath)
+	}
+}
+
+func TestReachableStdlibMethodsKeepsSingletonPathWhenTypedReceiverAlsoReached(t *testing.T) {
+	reg := stdlib.LoadCached()
+	b64T := &ir.NamedType{Package: "encoding", Name: "Base64"}
+	mod := &ir.Module{
+		Package: "main",
+		Script: []ir.Stmt{
+			&ir.ExprStmt{X: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "b", T: b64T},
+				Name:     "encode",
+				Args:     []ir.Arg{{Value: &ir.Ident{Name: "data"}}},
+			}},
+			&ir.ExprStmt{X: &ir.MethodCall{
+				Receiver: &ir.FieldExpr{X: &ir.Ident{Name: "encoding"}, Name: "base64"},
+				Name:     "encode",
+				Args:     []ir.Arg{{Value: &ir.Ident{Name: "data"}}},
+			}},
+		},
+	}
+	got := ReachableStdlibMethods(mod, reg)
+	if len(got) != 1 {
+		t.Fatalf("got %d entries (%v), want 1 deduped Base64.encode entry", len(got), got)
+	}
+	if got[0].Module != "encoding" || got[0].Type != "Base64" || got[0].Method != "encode" {
+		t.Fatalf("got[0] = {%s, %s, %s}, want {encoding, Base64, encode}",
+			got[0].Module, got[0].Type, got[0].Method)
+	}
+	if got[0].ValuePath != "base64" {
+		t.Fatalf("got[0].ValuePath = %q, want base64", got[0].ValuePath)
+	}
+}
+
 func TestReachableStdlibMethodsSkipsUnknownMethod(t *testing.T) {
 	reg := stdlib.LoadCached()
 	hexT := &ir.NamedType{Package: "encoding", Name: "Hex"}

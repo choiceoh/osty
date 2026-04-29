@@ -1,0 +1,260 @@
+// std.cli - small command-line argument parser.
+//
+// This module is pure Osty and intentionally sits above `std.env`.
+// Programs can parse an explicit `List<String>` in tests, or call
+// `parseEnv` to parse process arguments after the executable name.
+
+use std.env
+use std.strings
+
+pub struct FlagSpec {
+    pub name: String,
+    pub short: String,
+    pub takesValue: Bool,
+    pub required: Bool,
+    pub defaultValue: String?,
+    pub help: String,
+}
+
+pub struct ParsedArgs {
+    pub values: Map<String, String>,
+    pub present: Map<String, Bool>,
+    pub positionals: List<String>,
+    pub errors: List<String>,
+
+    pub fn ok(self) -> Bool {
+        self.errors.len() == 0
+    }
+
+    pub fn has(self, name: String) -> Bool {
+        self.present.get(name) ?? false
+    }
+
+    pub fn value(self, name: String) -> String? {
+        self.values.get(name)
+    }
+
+    pub fn valueOr(self, name: String, defaultValue: String) -> String {
+        self.values.get(name) ?? defaultValue
+    }
+}
+
+pub fn flag(name: String, short: String, help: String) -> FlagSpec {
+    FlagSpec {
+        name: name,
+        short: short,
+        takesValue: false,
+        required: false,
+        defaultValue: noneString(),
+        help: help,
+    }
+}
+
+pub fn option(name: String, short: String, help: String) -> FlagSpec {
+    FlagSpec {
+        name: name,
+        short: short,
+        takesValue: true,
+        required: false,
+        defaultValue: noneString(),
+        help: help,
+    }
+}
+
+pub fn optionDefault(name: String, short: String, defaultValue: String, help: String) -> FlagSpec {
+    FlagSpec {
+        name: name,
+        short: short,
+        takesValue: true,
+        required: false,
+        defaultValue: Some(defaultValue),
+        help: help,
+    }
+}
+
+pub fn requiredOption(name: String, short: String, help: String) -> FlagSpec {
+    FlagSpec {
+        name: name,
+        short: short,
+        takesValue: true,
+        required: true,
+        defaultValue: noneString(),
+        help: help,
+    }
+}
+
+pub fn parseEnv(specs: List<FlagSpec>) -> ParsedArgs {
+    parse(env.args().drop(1), specs)
+}
+
+pub fn parse(args: List<String>, specs: List<FlagSpec>) -> ParsedArgs {
+    let mut values: Map<String, String> = {:}
+    let mut present: Map<String, Bool> = {:}
+    let mut positionals: List<String> = []
+    let mut errors: List<String> = []
+
+    for spec in specs {
+        present.insert(spec.name, false)
+        match spec.defaultValue {
+            Some(value) -> values.insert(spec.name, value),
+            None        -> {},
+        }
+    }
+
+    let mut i = 0
+    let mut positionalOnly = false
+    for i < args.len() {
+        let arg = args[i]
+        if positionalOnly {
+            positionals.push(arg)
+            i = i + 1
+            continue
+        }
+        if arg == "--" {
+            positionalOnly = true
+            i = i + 1
+            continue
+        }
+        if strings.startsWith(arg, "--") && arg.len() > 2 {
+            let parsed = splitInlineValue(strings.slice(arg, 2, arg.len()))
+            match findLong(specs, parsed.name) {
+                Some(spec) -> {
+                    let used = applySpec(spec, parsed.value, args, i, values, present, errors)
+                    i = i + used
+                },
+                None -> {
+                    errors.push("cli: unknown option --{parsed.name}")
+                    i = i + 1
+                },
+            }
+            continue
+        }
+        if strings.startsWith(arg, "-") && arg != "-" {
+            let parsed = splitInlineValue(strings.slice(arg, 1, arg.len()))
+            match findShort(specs, parsed.name) {
+                Some(spec) -> {
+                    let used = applySpec(spec, parsed.value, args, i, values, present, errors)
+                    i = i + used
+                },
+                None -> {
+                    errors.push("cli: unknown option -{parsed.name}")
+                    i = i + 1
+                },
+            }
+            continue
+        }
+        positionals.push(arg)
+        i = i + 1
+    }
+
+    for spec in specs {
+        if spec.required && !present.get(spec.name).unwrap() {
+            errors.push("cli: missing required option --{spec.name}")
+        }
+    }
+
+    ParsedArgs {
+        values: values,
+        present: present,
+        positionals: positionals,
+        errors: errors,
+    }
+}
+
+pub fn usage(program: String, specs: List<FlagSpec>) -> String {
+    let mut out = "Usage: {program}"
+    for spec in specs {
+        if spec.takesValue {
+            if spec.short.isEmpty() {
+                out = "{out} [--{spec.name} <value>]"
+            } else {
+                out = "{out} [-{spec.short}|--{spec.name} <value>]"
+            }
+        } else if spec.short.isEmpty() {
+            out = "{out} [--{spec.name}]"
+        } else {
+            out = "{out} [-{spec.short}|--{spec.name}]"
+        }
+    }
+    out
+}
+
+struct InlineArg {
+    name: String,
+    value: String?,
+}
+
+fn splitInlineValue(text: String) -> InlineArg {
+    match strings.indexOf(text, "=") {
+        Some(i) -> InlineArg {
+            name: strings.slice(text, 0, i),
+            value: Some(strings.slice(text, i + 1, text.len())),
+        },
+        None -> InlineArg {
+            name: text,
+            value: noneString(),
+        },
+    }
+}
+
+fn noneString() -> String? {
+    None
+}
+
+fn findLong(specs: List<FlagSpec>, name: String) -> FlagSpec? {
+    for spec in specs {
+        if spec.name == name {
+            return Some(spec)
+        }
+    }
+    None
+}
+
+fn findShort(specs: List<FlagSpec>, short: String) -> FlagSpec? {
+    for spec in specs {
+        if !spec.short.isEmpty() && spec.short == short {
+            return Some(spec)
+        }
+    }
+    None
+}
+
+fn applySpec(
+    spec: FlagSpec,
+    inlineValue: String?,
+    args: List<String>,
+    index: Int,
+    values: Map<String, String>,
+    present: Map<String, Bool>,
+    errors: List<String>,
+) -> Int {
+    present.insert(spec.name, true)
+    if !spec.takesValue {
+        match inlineValue {
+            Some(_) -> errors.push("cli: option --{spec.name} does not take a value"),
+            None    -> {},
+        }
+        values.insert(spec.name, "true")
+        return 1
+    }
+
+    match inlineValue {
+        Some(value) -> {
+            values.insert(spec.name, value)
+            return 1
+        },
+        None -> {},
+    }
+
+    if index + 1 >= args.len() {
+        errors.push("cli: option --{spec.name} requires a value")
+        return 1
+    }
+    let value = args[index + 1]
+    if strings.startsWith(value, "-") {
+        errors.push("cli: option --{spec.name} requires a value")
+        return 1
+    }
+    values.insert(spec.name, value)
+    2
+}

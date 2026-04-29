@@ -1,0 +1,391 @@
+// std.xml - lightweight XML escaping, tag building, and tokenization.
+
+use std.error
+use std.strings
+
+pub struct XmlAttr {
+    pub name: String,
+    pub value: String,
+}
+
+pub struct XmlTag {
+    pub name: String,
+    pub attrs: Map<String, String>,
+    pub selfClosing: Bool,
+}
+
+pub enum XmlToken {
+    XmlStart(XmlTag),
+    XmlEnd(String),
+    XmlText(String),
+    XmlComment(String),
+}
+
+pub fn attr(name: String, value: String) -> XmlAttr {
+    XmlAttr {
+        name: name,
+        value: value,
+    }
+}
+
+pub fn escape(text: String) -> String {
+    let mut out = ""
+    for c in text.chars() {
+        if c == '&' {
+            out = "{out}&amp;"
+        } else if c == '<' {
+            out = "{out}&lt;"
+        } else if c == '>' {
+            out = "{out}&gt;"
+        } else if c == '"' {
+            out = "{out}&quot;"
+        } else if c.toInt() == 39 {
+            out = "{out}&apos;"
+        } else {
+            out = "{out}{c}"
+        }
+    }
+    out
+}
+
+pub fn unescape(text: String) -> Result<String, Error> {
+    let mut out = ""
+    let mut i = 0
+    for i < text.len() {
+        if startsAt(text, i, "&amp;") {
+            out = "{out}&"
+            i = i + 5
+            continue
+        }
+        if startsAt(text, i, "&lt;") {
+            out = "{out}<"
+            i = i + 4
+            continue
+        }
+        if startsAt(text, i, "&gt;") {
+            out = "{out}>"
+            i = i + 4
+            continue
+        }
+        if startsAt(text, i, "&quot;") {
+            out = "{out}\""
+            i = i + 6
+            continue
+        }
+        if startsAt(text, i, "&apos;") {
+            out = "{out}{39.toChar()}"
+            i = i + 6
+            continue
+        }
+        if startsAt(text, i, "&#") {
+            match readNumericEntity(text, i + 2) {
+                Some(entity) -> {
+                    out = "{out}{entity.value.toChar()}"
+                    i = entity.next
+                    continue
+                },
+                None -> {
+                    return Err(error.new("xml: invalid numeric entity"))
+                },
+            }
+        }
+        if text[i] == '&' {
+            return Err(error.new("xml: unknown entity"))
+        }
+        out = "{out}{text[i]}"
+        i = i + 1
+    }
+    Ok(out)
+}
+
+pub fn isName(name: String) -> Bool {
+    if name.isEmpty() {
+        return false
+    }
+    let chars = name.chars()
+    if !isNameStart(chars[0]) {
+        return false
+    }
+    for c in chars {
+        if !isNameChar(c) {
+            return false
+        }
+    }
+    true
+}
+
+pub fn startTag(name: String, attrs: List<XmlAttr>) -> Result<String, Error> {
+    if !isName(name) {
+        return Err(error.new("xml: invalid element name: {name}"))
+    }
+    match renderAttrs(attrs) {
+        Ok(suffix) -> Ok("<{name}{suffix}>"),
+        Err(err) -> Err(err),
+    }
+}
+
+pub fn endTag(name: String) -> Result<String, Error> {
+    if !isName(name) {
+        return Err(error.new("xml: invalid element name: {name}"))
+    }
+    Ok("</{name}>")
+}
+
+pub fn emptyElement(name: String, attrs: List<XmlAttr>) -> Result<String, Error> {
+    if !isName(name) {
+        return Err(error.new("xml: invalid element name: {name}"))
+    }
+    match renderAttrs(attrs) {
+        Ok(suffix) -> Ok("<{name}{suffix}/>"),
+        Err(err) -> Err(err),
+    }
+}
+
+pub fn element(name: String, text: String, attrs: List<XmlAttr>) -> Result<String, Error> {
+    match startTag(name, attrs) {
+        Ok(open) -> {
+            match endTag(name) {
+                Ok(close) -> Ok("{open}{escape(text)}{close}"),
+                Err(err) -> Err(err),
+            }
+        },
+        Err(err) -> Err(err),
+    }
+}
+
+pub fn tokenize(source: String) -> Result<List<XmlToken>, Error> {
+    let mut tokens: List<XmlToken> = []
+    let mut i = 0
+    for i < source.len() {
+        if startsAt(source, i, "<!--") {
+            let end = indexOfFrom(source, "-->", i + 4)
+            if end < 0 {
+                return Err(error.new("xml: unterminated comment"))
+            }
+            tokens.push(XmlComment(strings.slice(source, i + 4, end)))
+            i = end + 3
+            continue
+        }
+        if source[i] == '<' {
+            let end = indexOfFrom(source, ">", i + 1)
+            if end < 0 {
+                return Err(error.new("xml: unterminated tag"))
+            }
+            let inside = strings.trimSpace(strings.slice(source, i + 1, end))
+            if inside.isEmpty() {
+                return Err(error.new("xml: empty tag"))
+            }
+            if startsAt(inside, 0, "/") {
+                let name = strings.trimSpace(strings.slice(inside, 1, inside.len()))
+                if !isName(name) {
+                    return Err(error.new("xml: invalid end tag: {name}"))
+                }
+                tokens.push(XmlEnd(name))
+            } else {
+                let selfClosing = lastNonSpaceIsSlash(inside)
+                let body = tagBody(inside, selfClosing)
+                match parseTag(body, selfClosing) {
+                    Ok(tag) -> tokens.push(XmlStart(tag)),
+                    Err(err) -> {
+                        return Err(err)
+                    },
+                }
+            }
+            i = end + 1
+            continue
+        }
+        let end = indexOfFrom(source, "<", i)
+        let next = if end < 0 { source.len() } else { end }
+        let raw = strings.slice(source, i, next)
+        match unescape(raw) {
+            Ok(text) -> {
+                if text != "" {
+                    tokens.push(XmlText(text))
+                }
+            },
+            Err(err) -> {
+                return Err(err)
+            },
+        }
+        i = next
+    }
+    Ok(tokens)
+}
+
+struct NumericEntity {
+    value: Int,
+    next: Int,
+}
+
+fn renderAttrs(attrs: List<XmlAttr>) -> Result<String, Error> {
+    let mut out = ""
+    let quote = '"'
+    for item in attrs {
+        if !isName(item.name) {
+            return Err(error.new("xml: invalid attribute name: {item.name}"))
+        }
+        out = "{out} {item.name}={quote}{escape(item.value)}{quote}"
+    }
+    Ok(out)
+}
+
+fn parseTag(body: String, selfClosing: Bool) -> Result<XmlTag, Error> {
+    let nameEnd = readNameEnd(body, 0)
+    if nameEnd == 0 {
+        return Err(error.new("xml: missing tag name"))
+    }
+    let name = strings.slice(body, 0, nameEnd)
+    let mut attrs: Map<String, String> = {:}
+    let mut i = nameEnd
+    for i < body.len() {
+        i = skipSpace(body, i)
+        if i >= body.len() {
+            break
+        }
+        let attrStart = i
+        let attrEnd = readNameEnd(body, i)
+        if attrEnd == attrStart {
+            return Err(error.new("xml: expected attribute name"))
+        }
+        let attrName = strings.slice(body, attrStart, attrEnd)
+        i = skipSpace(body, attrEnd)
+        if i >= body.len() || body[i] != '=' {
+            return Err(error.new("xml: expected = after attribute name"))
+        }
+        i = skipSpace(body, i + 1)
+        if i >= body.len() {
+            return Err(error.new("xml: expected quoted attribute value"))
+        }
+        let quote = body[i]
+        if quote != '"' && quote.toInt() != 39 {
+            return Err(error.new("xml: expected quoted attribute value"))
+        }
+        i = i + 1
+        let valueStart = i
+        for i < body.len() && body[i] != quote {
+            i = i + 1
+        }
+        if i >= body.len() {
+            return Err(error.new("xml: unterminated attribute value"))
+        }
+        match unescape(strings.slice(body, valueStart, i)) {
+            Ok(value) -> attrs.insert(attrName, value),
+            Err(err) -> {
+                return Err(err)
+            },
+        }
+        i = i + 1
+    }
+    Ok(XmlTag {
+        name: name,
+        attrs: attrs,
+        selfClosing: selfClosing,
+    })
+}
+
+fn readNumericEntity(text: String, start: Int) -> NumericEntity? {
+    let end = indexOfFrom(text, ";", start)
+    if end < 0 {
+        return None
+    }
+    let digits = strings.slice(text, start, end)
+    if digits.isEmpty() {
+        return None
+    }
+    let mut value = 0
+    for c in digits.chars() {
+        if c < '0' || c > '9' {
+            return None
+        }
+        value = value * 10 + (c.toInt() - '0'.toInt())
+    }
+    Some(NumericEntity {
+        value: value,
+        next: end + 1,
+    })
+}
+
+fn tagBody(inside: String, selfClosing: Bool) -> String {
+    if !selfClosing {
+        return inside
+    }
+    let slash = lastNonSpaceIndex(inside)
+    strings.trimSpace(strings.slice(inside, 0, slash))
+}
+
+fn lastNonSpaceIsSlash(text: String) -> Bool {
+    let i = lastNonSpaceIndex(text)
+    if i < 0 {
+        return false
+    }
+    text[i] == '/'
+}
+
+fn lastNonSpaceIndex(text: String) -> Int {
+    let mut i = text.len() - 1
+    for i >= 0 {
+        if !isSpace(text[i]) {
+            return i
+        }
+        i = i - 1
+    }
+    -1
+}
+
+fn readNameEnd(text: String, start: Int) -> Int {
+    if start >= text.len() || !isNameStart(text[start]) {
+        return start
+    }
+    let mut i = start + 1
+    for i < text.len() && isNameChar(text[i]) {
+        i = i + 1
+    }
+    i
+}
+
+fn skipSpace(text: String, start: Int) -> Int {
+    let mut i = start
+    for i < text.len() && isSpace(text[i]) {
+        i = i + 1
+    }
+    i
+}
+
+fn isNameStart(c: Char) -> Bool {
+    (c >= 'a' && c <= 'z') ||
+    (c >= 'A' && c <= 'Z') ||
+    c == '_' ||
+    c == ':'
+}
+
+fn isNameChar(c: Char) -> Bool {
+    isNameStart(c) ||
+    (c >= '0' && c <= '9') ||
+    c == '-' ||
+    c == '.'
+}
+
+fn isSpace(c: Char) -> Bool {
+    c == ' ' || c == '\t' || c == '\n' || c == '\r'
+}
+
+fn startsAt(text: String, index: Int, needle: String) -> Bool {
+    if index < 0 || index + needle.len() > text.len() {
+        return false
+    }
+    strings.slice(text, index, index + needle.len()) == needle
+}
+
+fn indexOfFrom(text: String, needle: String, start: Int) -> Int {
+    let mut i = start
+    if needle.isEmpty() {
+        return start
+    }
+    for i + needle.len() <= text.len() {
+        if startsAt(text, i, needle) {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
