@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -10,11 +9,10 @@ import (
 	"runtime"
 
 	"github.com/osty/osty/internal/backend"
-	"github.com/osty/osty/internal/check"
-	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/pkgmgr"
 	"github.com/osty/osty/internal/profile"
+	ostyquery "github.com/osty/osty/internal/query/osty"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/stdlib"
@@ -25,10 +23,9 @@ import (
 // Flow:
 //
 //  1. Locate osty.toml + vendor deps via pkgmgr.
-//  2. Resolve the project as a package; confirm we have an entry
-//     point (manifest Bin target or default main.osty with fn main).
-//  3. Run the front-end (parse + resolve + type check).
-//  4. Emit the entry file via internal/backend into .osty/out.
+//  2. Confirm we have an entry point (manifest Bin target or default main.osty).
+//  3. Seed the shared query graph and run resolve + check across it.
+//  4. Emit the root package through the graph's backend Emit query.
 //  5. Execute the native backend binary, passing through the
 //     user-supplied arguments after `--`.
 //
@@ -102,14 +99,14 @@ func runRun(args []string, cliF cliFlags) {
 
 	// Step 1: vendor deps (also runs resolve, computes the graph +
 	// DepProvider we'll attach to the workspace).
-	depGraph, env, err := resolveAndVendorEnvOpts(m, root, resolveOpts{
+	graph, env, err := resolveAndVendorEnvOpts(m, root, resolveOpts{
 		Offline: offline, Locked: locked, Frozen: frozen,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
 		os.Exit(3)
 	}
-	deps := pkgmgr.NewDepProvider(m, depGraph, env)
+	deps := pkgmgr.NewDepProvider(m, graph, env)
 
 	// Turn on the native-checker cache so repeated `osty run` cycles
 	// during development don't re-check packages that haven't changed.
@@ -130,8 +127,10 @@ func runRun(args []string, cliF cliFlags) {
 		os.Exit(2)
 	}
 
-	// Step 3: front-end through a Workspace so `use <dep>` resolves
-	// against vendored packages via the DepProvider.
+	// Step 3: front-end through the shared query graph. A Workspace is
+	// still used for manifest/dependency discovery, then the loaded
+	// packages are seeded into the graph so resolve/check/lower/emit
+	// share the same incremental path as build and LSP.
 	ws, err := resolve.NewWorkspace(root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
@@ -140,60 +139,22 @@ func runRun(args []string, cliF cliFlags) {
 	ws.SourceTransform = aiRepairSourceTransform("osty run --airepair", os.Stderr, cliF)
 	ws.Stdlib = stdlib.Load()
 	ws.Deps = deps
-	rootPkg, err := ws.LoadPackageNative("")
-	if err != nil {
+	if _, err := ws.LoadPackageNative(""); err != nil {
 		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
 		os.Exit(1)
 	}
-	packageGraph := resolve.NewPackageGraph(ws)
-	results := resolve.ResolveGraph(packageGraph)
-	checks := check.PackageGraph(packageGraph, results, checkOpts())
-	// Aggregate diagnostics across every loaded package so front-end
-	// errors in a vendored dep also surface.
-	var all []*diag.Diagnostic
-	for _, key := range packageGraph.PackagePaths() {
-		pkg := packageGraph.Package(key)
-		r := results[key]
-		if r == nil || pkg == nil {
-			continue
-		}
-		ds := append([]*diag.Diagnostic{}, r.Diags...)
-		if cr, ok := checks[key]; ok && cr != nil {
-			ds = append(ds, cr.Diags...)
-		}
-		printPackageDiags(pkg, ds, cliF)
-		all = append(all, ds...)
-	}
-	if hasError(all) {
-		fmt.Fprintf(os.Stderr, "osty run: front-end errors in %s\n", entry)
+	eng, seeded := seedBuildWorkspaceEngine(ws)
+	printBuildWorkspaceQueryDiags(eng, seeded, cliF)
+	rootDir := ostyquery.NormalizePath(root)
+	rw := eng.Queries.ResolveWorkspace.Get(eng.DB, seeded.Root)
+	if rw == nil || rw.PackageByDir(rootDir) == nil {
+		fmt.Fprintf(os.Stderr, "osty run: root package not in query graph\n")
 		os.Exit(1)
-	}
-
-	// Locate the root package entry file for package lowering.
-	var entryFile *resolve.PackageFile
-	entryAbs, _ := filepath.Abs(entry)
-	for _, pf := range rootPkg.Files {
-		if abs, _ := filepath.Abs(pf.Path); abs == entryAbs {
-			entryFile = pf
-			break
-		}
-	}
-	if entryFile == nil {
-		fmt.Fprintf(os.Stderr, "osty run: entry %s not part of the root package\n", entry)
-		os.Exit(1)
-	}
-	chk := checks[""]
-	if chk == nil {
-		chk = &check.Result{}
 	}
 
 	// Step 4: emit the selected backend. Per-profile/target/backend
 	// subdirectories keep debug / release / cross-built artifacts from
 	// clobbering each other.
-	triple := ""
-	if resolved.Target != nil {
-		triple = resolved.Target.Triple
-	}
 	// Binary filename policy (base name + optional .exe suffix) is
 	// authored in toolchain/runner.osty and snapshotted in
 	// internal/runner. Keep this call site free of OS-shape logic.
@@ -205,36 +166,17 @@ func runRun(args []string, cliF cliFlags) {
 		}
 		pkgName = m.Package.Name
 	}
-	binName := runner.BinaryNameFor(binBaseOverride, pkgName, runtime.GOOS)
-	selectedBackend := backendFromCLI("run", backendID)
-	layout := backend.Layout{
-		Root:    root,
-		Profile: resolved.Profile.Name,
-		Target:  triple,
+	binName := ""
+	if emitMode == backend.EmitBinary {
+		binName = runner.BinaryNameFor(binBaseOverride, pkgName, runtime.GOOS)
 	}
-	if backendID == backend.NameLLVM {
-		if emitResult, usedExternal, err := tryExternalPackageLLVMArtifacts(context.Background(), emitMode, layout, binName, resolved.Features, entryAbs, rootPkg); usedExternal {
-			if err != nil {
-				exitBackendEmitError("run", emitResult, err)
-			}
-			runNativeBinary(emitResult.Artifacts.Binary, runArgs, runDir)
-			return
-		}
-	}
-	backendEntry, err := backend.PrepareGraphPackage("main", entryAbs, packageGraph, "", entryFile, chk)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
+	emitResult := emitViaQuery("run", root, m, eng, ostyquery.LowerKey{
+		WorkspaceRoot: seeded.Root,
+		Dir:           rootDir,
+	}, resolved, featureSet(resolved), backendID, emitMode, binName)
+	if emitResult == nil {
+		fmt.Fprintf(os.Stderr, "osty run: backend did not produce a runnable artifact\n")
 		os.Exit(1)
-	}
-	emitResult, err := selectedBackend.Emit(context.Background(), backend.Request{
-		Layout:     layout,
-		Emit:       emitMode,
-		Entry:      backendEntry,
-		BinaryName: binName,
-		Features:   resolved.Features,
-	})
-	if err != nil {
-		exitBackendEmitError("run", emitResult, err)
 	}
 	runNativeBinary(emitResult.Artifacts.Binary, runArgs, runDir)
 }

@@ -59,6 +59,7 @@ import (
 	"github.com/osty/osty/internal/lsp"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/pipeline"
+	ostyquery "github.com/osty/osty/internal/query/osty"
 	"github.com/osty/osty/internal/repair"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/runner"
@@ -1549,12 +1550,14 @@ func adjustGenResultForUserOutput(result *backend.Result, name backend.Name, out
 
 type genPackageEntry struct {
 	sourcePath string
+	pkg        *resolve.Package
 	graph      *resolve.PackageGraph
 	pkgPath    string
-	pkg        *resolve.Package
 	res        *resolve.PackageResult
 	chk        *check.Result
 	file       *resolve.PackageFile
+	eng        *ostyquery.Engine
+	lower      ostyquery.LowerKey
 }
 
 func loadGenPackageEntry(path string) (*genPackageEntry, error) {
@@ -1578,10 +1581,18 @@ func loadGenPackageEntryWithTransform(path string, transform resolve.SourceTrans
 	if _, err := ws.LoadPackageNative(""); err != nil {
 		return nil, err
 	}
-	graph := resolve.NewPackageGraph(ws)
-	results := resolve.ResolveGraph(graph)
-	checks := check.PackageGraph(graph, results, checkOpts())
-	pkg := ws.Packages[""]
+	eng := ostyquery.NewEngine()
+	seeded, err := eng.SeedLoadedWorkspace(ws)
+	if err != nil {
+		return nil, err
+	}
+	rootDir := ostyquery.NormalizePath(ws.Root)
+	rw := eng.Queries.ResolveWorkspace.Get(eng.DB, seeded.Root)
+	cw := eng.Queries.CheckWorkspace.Get(eng.DB, seeded.Root)
+	if rw == nil {
+		return nil, fmt.Errorf("%s: workspace resolution did not produce a result", filepath.Dir(absPath))
+	}
+	pkg := rw.PackageByDir(rootDir)
 	if pkg == nil {
 		return nil, fmt.Errorf("%s: no package sources were loaded", filepath.Dir(absPath))
 	}
@@ -1602,22 +1613,33 @@ func loadGenPackageEntryWithTransform(path string, transform resolve.SourceTrans
 	if entryFile == nil {
 		return nil, fmt.Errorf("%s is not part of the package rooted at %s", absPath, pkg.Dir)
 	}
-	res := results[""]
+	res := rw.ResultByDir(rootDir)
 	if res == nil {
 		return nil, fmt.Errorf("%s: package resolution did not produce a root result", pkg.Dir)
 	}
-	chk := checks[""]
+	var chk *check.Result
+	if cw != nil {
+		chk = cw.ResultByDir(rootDir)
+	}
 	if chk == nil {
 		chk = &check.Result{}
 	}
 	return &genPackageEntry{
 		sourcePath: absPath,
-		graph:      graph,
-		pkgPath:    "",
 		pkg:        pkg,
+		graph:      rw.Graph(),
+		pkgPath:    rw.DotPathByDir(rootDir),
 		res:        res,
 		chk:        chk,
 		file:       entryFile,
+		eng:        eng,
+		lower: ostyquery.LowerKey{
+			WorkspaceRoot: seeded.Root,
+			Dir:           rootDir,
+			PackageName:   "main",
+			SourcePath:    absPath,
+			EntryPath:     absPath,
+		},
 	}, nil
 }
 
@@ -1635,30 +1657,24 @@ func loadSelectedGenFilesWithTransform(sourcePath string, files []string, transf
 	chk := &check.Result{}
 	var entryFile *resolve.PackageFile
 	for _, path := range files {
-		original, err := os.ReadFile(path)
+		src, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
 		}
-		src, transformMap := resolve.ApplySourceTransform(path, original, resolve.LoadOptions{Transform: transform})
-		transformApplied := transform != nil
-		transformChanged := transformApplied && !bytes.Equal(src, original)
+		if transform != nil {
+			src = transform(path, src)
+		}
 		run := selfhost.Run(src)
 		file := selfhost.LowerPublicFileFromRun(run)
 		canonicalSrc, canonicalMap := canonical.SourceWithMap(src, file)
 		pf := &resolve.PackageFile{
-			Path:                   path,
-			Source:                 src,
-			SourceTransformApplied: transformApplied,
-			SourceTransformChanged: transformChanged,
-			CanonicalSource:        canonicalSrc,
-			CanonicalMap:           canonicalMap,
-			File:                   file,
-			Run:                    run,
-			ParseDiags:             run.Diagnostics(),
-		}
-		if transformMap != nil {
-			pf.OriginalSource = append([]byte(nil), original...)
-			pf.TransformMap = transformMap
+			Path:            path,
+			Source:          src,
+			CanonicalSource: canonicalSrc,
+			CanonicalMap:    canonicalMap,
+			File:            file,
+			Run:             run,
+			ParseDiags:      run.Diagnostics(),
 		}
 		pkg.Files = append(pkg.Files, pf)
 		res.Diags = append(res.Diags, pf.ParseDiags...)
@@ -1669,12 +1685,10 @@ func loadSelectedGenFilesWithTransform(sourcePath string, files []string, transf
 	if entryFile == nil {
 		return nil, fmt.Errorf("%s is not part of the selected gen input set", sourcePath)
 	}
-	graph := resolve.NewPackageGraphForPackage("", pkg)
 	return &genPackageEntry{
 		sourcePath: sourcePath,
-		graph:      graph,
-		pkgPath:    "",
 		pkg:        pkg,
+		graph:      resolve.NewPackageGraphForPackage("", pkg),
 		res:        res,
 		chk:        chk,
 		file:       entryFile,

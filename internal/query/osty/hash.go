@@ -9,9 +9,12 @@ import (
 	"sync"
 
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/ir"
 	"github.com/osty/osty/internal/lint"
+	"github.com/osty/osty/internal/mir"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/spanid"
 	"github.com/osty/osty/internal/token"
@@ -632,6 +635,93 @@ func hashCheckWorkspaceMap(m map[string]*check.Result) [32]byte {
 	return h.sum()
 }
 
+// ---- Backend lowering / emit ----
+
+func hashLowerIRResult(r LowerIRResult) [32]byte {
+	h := newHasher()
+	hashBackendEntryBase(h, r.Entry)
+	hashIRModule(h, r.Entry.IR)
+	hashErrorList(h, r.Entry.IRIssues)
+	hashError(h, r.Err)
+	return h.sum()
+}
+
+func hashLowerMIRResult(r LowerMIRResult) [32]byte {
+	h := newHasher()
+	hashBackendEntryBase(h, r.Entry)
+	hashIRModule(h, r.Entry.IR)
+	hashErrorList(h, r.Entry.IRIssues)
+	hashMIRModule(h, r.Entry.MIR)
+	hashErrorList(h, r.Entry.MIRIssues)
+	hashError(h, r.Err)
+	return h.sum()
+}
+
+func hashEmitResult(r EmitResult) [32]byte {
+	h := newHasher()
+	if r.Result == nil {
+		h.byte(0)
+	} else {
+		h.byte(1)
+		h.str(r.Result.Backend.String())
+		h.str(r.Result.Emit.String())
+		hashArtifacts(h, r.Result.Artifacts)
+		hashErrorList(h, r.Result.Warnings)
+	}
+	hashError(h, r.Err)
+	return h.sum()
+}
+
+func hashBackendEntryBase(h *stableHasher, e backend.Entry) {
+	h.str(e.PackageName)
+	h.str(e.SourcePath)
+	h.bytes(e.Source)
+}
+
+func hashIRModule(h *stableHasher, m *ir.Module) {
+	if m == nil {
+		h.byte(0)
+		return
+	}
+	h.byte(1)
+	h.str(ir.Print(m))
+}
+
+func hashMIRModule(h *stableHasher, m *mir.Module) {
+	if m == nil {
+		h.byte(0)
+		return
+	}
+	h.byte(1)
+	h.str(mir.Print(m))
+}
+
+func hashArtifacts(h *stableHasher, a backend.Artifacts) {
+	h.str(a.Key)
+	h.str(a.OutputDir)
+	h.str(a.CachePath)
+	h.str(a.LLVMIR)
+	h.str(a.Object)
+	h.str(a.Binary)
+	h.str(a.RuntimeDir)
+}
+
+func hashErrorList(h *stableHasher, errs []error) {
+	h.u32(uint32(len(errs)))
+	for _, err := range errs {
+		hashError(h, err)
+	}
+}
+
+func hashError(h *stableHasher, err error) {
+	if err == nil {
+		h.byte(0)
+		return
+	}
+	h.byte(1)
+	h.str(err.Error())
+}
+
 // ---- Input hashers ----
 
 func hashBytesInput(b []byte) [32]byte { return sha256.Sum256(b) }
@@ -654,6 +744,32 @@ func hashStringSlice(ss []string) [32]byte {
 	h.u32(uint32(len(sorted)))
 	for _, s := range sorted {
 		h.str(s)
+	}
+	return h.sum()
+}
+
+func hashWorkspacePackageSlice(ms []WorkspacePackage) [32]byte {
+	h := newHasher()
+	if len(ms) == 0 {
+		h.u32(0)
+		return h.sum()
+	}
+	sorted := make([]WorkspacePackage, len(ms))
+	copy(sorted, ms)
+	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].DotPath != sorted[j].DotPath {
+			return sorted[i].DotPath < sorted[j].DotPath
+		}
+		if sorted[i].Dir != sorted[j].Dir {
+			return sorted[i].Dir < sorted[j].Dir
+		}
+		return sorted[i].Name < sorted[j].Name
+	})
+	h.u32(uint32(len(sorted)))
+	for _, m := range sorted {
+		h.str(m.DotPath)
+		h.str(m.Dir)
+		h.str(m.Name)
 	}
 	return h.sum()
 }

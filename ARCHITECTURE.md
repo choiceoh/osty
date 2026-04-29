@@ -425,9 +425,13 @@ File-mode analysis flows through a Salsa-style incremental query engine
 default path for a single dirty buffer is `analyzeSingleFileViaEngine`,
 so repeated edits to the same file benefit from query-level reuse of
 parse / resolve / check results. Package- and workspace-mode analysis
-still re-runs the eager per-file path while that migration catches up,
-so cross-file refactors read fresh state on each request. Wired as
-`osty lsp`.
+also seed the same engine first (`analyzePackageViaEngine` /
+`analyzeWorkspaceViaEngine`) and fall back to the eager path only when
+the graph cannot be seeded. The compiler-specific graph now extends
+past front-end diagnostics into backend boundaries: `LowerIRPackage`,
+`LowerMIRPackage`, and `Emit` let LSP/build/CLI callers reuse HIR, MIR,
+and artifact emission work under the same dependency-tracked cache.
+Wired as `osty lsp`.
 
 ### `internal/manifest`
 Project manifest (`osty.toml`) reader, validator, and writer (spec
@@ -483,10 +487,18 @@ revision counter + slot storage. `Frame` tracks the execution stack.
 Cached records per `(QueryID, key)` implement early cutoff: if a
 re-run produces the same hash, downstream dependents skip. The `osty`
 subpackage binds it to the compiler pipeline: `Engine` bundles
-`Database` + `Inputs` (`SourceText`, `PackageFiles`, `WorkspaceMembers`)
-+ registered queries (`Parse`, `ResolvePackage`, `CheckFile`,
-`FileDiagnostics`). The LSP server uses `analyzeSingleFileViaEngine`
-as its default path for a single dirty buffer.
+`Database` + `Inputs` (`SourceText`, `PackageFiles`, `WorkspaceMembers`,
+`WorkspacePackages`)
++ registered queries (`Parse`, `ResolvePackage`, `CheckPackage`,
+`LowerIRPackage`, `LowerMIRPackage`, `Emit`, `LintFile`,
+`FileDiagnostics`). The LSP server uses it for single-file, package,
+and workspace analysis paths; `osty build` and `osty run` seed the same
+graph from manifest/dependency-discovered packages and emit through
+`Emit`. General `osty gen` package input also reuses the graph for
+resolve/check/lower/emit, while its special toolchain-file bundle keeps
+the explicit selected-file path used for bootstrap generation.
+Backend-aware callers can stop at HIR, MIR, or artifact emission without
+re-running unaffected upstream work.
 
 ### `internal/airepair`
 Chains conservative lexical, structural, semantic, and diagnostic-driven

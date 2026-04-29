@@ -154,7 +154,7 @@ osty/
 │   ├── parser/              # Thin Go facade + compatibility lowerings over internal/selfhost
 │   ├── selfhost/            # Committed frozen Osty→Go seed (front end + adapters)
 │   ├── cst/                 # Concrete syntax tree (Red/Green tree for lossless round-trip)
-│   ├── query/               # Salsa-style incremental query engine (LSP backbone)
+│   ├── query/               # Salsa-style incremental query graph (LSP + CLI/backend boundaries)
 │   ├── airepair/            # AI-powered source adaptation / auto-repair
 │   ├── diag/                # Diagnostics + Rust-style renderer
 │   ├── resolve/             # Name resolution (single + multi-file)

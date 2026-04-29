@@ -8,7 +8,7 @@ import (
 	"github.com/osty/osty/internal/ir"
 )
 
-func TestFinalizeEntryModuleRejectsMIRLoweringIssues(t *testing.T) {
+func TestLowerEntryMIRRejectsMIRLoweringIssues(t *testing.T) {
 	rangeLit := &ir.RangeLit{
 		Start: &ir.IntLit{Text: "0", T: ir.TInt},
 		End:   &ir.IntLit{Text: "1", T: ir.TInt},
@@ -27,9 +27,13 @@ func TestFinalizeEntryModuleRejectsMIRLoweringIssues(t *testing.T) {
 		},
 	}
 
-	entry, err := finalizeEntryModule(Entry{PackageName: "main"}, mod)
+	entry, err := finalizeEntryIR(Entry{PackageName: "main"}, mod)
+	if err != nil {
+		t.Fatalf("finalizeEntryIR returned error before MIR lowering: %v", err)
+	}
+	entry, err = LowerEntryMIR(entry)
 	if err == nil {
-		t.Fatal("finalizeEntryModule returned nil error for MIR lowering issue")
+		t.Fatal("LowerEntryMIR returned nil error for MIR lowering issue")
 	}
 	if !errors.Is(err, ErrMIRCoverageIncomplete) {
 		t.Fatalf("error = %v, want ErrMIRCoverageIncomplete", err)

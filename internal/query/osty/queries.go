@@ -1,10 +1,13 @@
 package osty
 
 import (
+	"context"
+	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/cst"
@@ -17,6 +20,7 @@ import (
 	"github.com/osty/osty/internal/semanticdb"
 	"github.com/osty/osty/internal/sourcemap"
 	"github.com/osty/osty/internal/spanid"
+	"github.com/osty/osty/internal/stdlib"
 )
 
 // ---- Value types ----
@@ -107,6 +111,8 @@ type ResolvedWorkspace struct {
 	pkgMap   map[string]*resolve.Package       // normalized dir → Package
 	results  map[string]*resolve.PackageResult // normalized dir → PackageResult
 	resolved map[string]*ResolvedPackage       // normalized dir → ResolvedPackage
+	dotByDir map[string]string                 // normalized dir → resolve.Workspace dotted key
+	dirByDot map[string]string                 // resolve.Workspace dotted key → normalized dir
 }
 
 // Root returns the workspace root directory (normalized).
@@ -161,6 +167,14 @@ func (rw *ResolvedWorkspace) SemanticDBByDir(dir string) *semanticdb.DB {
 		return nil
 	}
 	return pr.SemanticDB
+}
+
+// DotPathByDir returns the resolve.Workspace key for dir.
+func (rw *ResolvedWorkspace) DotPathByDir(dir string) string {
+	if rw == nil {
+		return ""
+	}
+	return rw.dotByDir[dir]
 }
 
 // DirForPath returns the normalized directory of the package that
@@ -243,6 +257,133 @@ func (wcr *WorkspaceCheckResult) Len() int {
 	return len(wcr.byDir)
 }
 
+// LowerKey identifies a package-lowering query. Dir is the normalized package
+// directory; PackageName is the backend module name; EntryPath selects the
+// diagnostic/source anchor inside the package. When WorkspaceRoot is set,
+// lowering slices the package out of ResolveWorkspace / CheckWorkspace instead
+// of using standalone ResolvePackage / CheckPackage. SourcePath defaults to
+// EntryPath when left empty.
+type LowerKey struct {
+	WorkspaceRoot string
+	Dir           string
+	PackageName   string
+	SourcePath    string
+	EntryPath     string
+}
+
+func (k LowerKey) normalized() LowerKey {
+	if k.WorkspaceRoot != "" {
+		k.WorkspaceRoot = NormalizePath(k.WorkspaceRoot)
+	}
+	k.Dir = NormalizePath(k.Dir)
+	if k.EntryPath != "" {
+		k.EntryPath = NormalizePath(k.EntryPath)
+	}
+	if k.SourcePath == "" {
+		k.SourcePath = k.EntryPath
+	}
+	if k.SourcePath != "" {
+		k.SourcePath = NormalizePath(k.SourcePath)
+	}
+	if k.PackageName == "" {
+		k.PackageName = packageNameFromDir(k.Dir)
+	}
+	return k
+}
+
+// LowerIRResult is the output of LowerIRPackage. Err is set when the HIR
+// boundary rejects the package (for example, IR validation fails).
+type LowerIRResult struct {
+	Entry backend.Entry
+	Err   error
+}
+
+// LowerMIRResult is the output of LowerMIRPackage. Err carries any HIR-stage
+// failure from LowerIRPackage; MIR validation findings remain non-fatal
+// Entry.MIRIssues, matching backend.PreparePackage.
+type LowerMIRResult struct {
+	Entry backend.Entry
+	Err   error
+}
+
+// EmitTarget identifies a backend artifact query. FeaturesKey is the stable
+// feature-list encoding returned by FeatureKey.
+type EmitTarget struct {
+	Lower       LowerKey
+	Backend     backend.Name
+	Emit        backend.EmitMode
+	Root        string
+	Profile     string
+	Target      string
+	BinaryName  string
+	FeaturesKey string
+}
+
+// NewEmitTarget builds a normalized key for the Emit query.
+func NewEmitTarget(lower LowerKey, name backend.Name, mode backend.EmitMode, layout backend.Layout, binaryName string, features []string) EmitTarget {
+	return EmitTarget{
+		Lower:       lower,
+		Backend:     name,
+		Emit:        mode,
+		Root:        layout.Root,
+		Profile:     layout.Profile,
+		Target:      layout.Target,
+		BinaryName:  binaryName,
+		FeaturesKey: FeatureKey(features),
+	}.normalized()
+}
+
+func (t EmitTarget) normalized() EmitTarget {
+	t.Lower = t.Lower.normalized()
+	if t.Backend == "" {
+		t.Backend = backend.NameLLVM
+	}
+	if t.Emit == "" {
+		t.Emit = backend.EmitLLVMIR
+	}
+	if t.Root != "" {
+		t.Root = NormalizePath(t.Root)
+	}
+	t.FeaturesKey = FeatureKey(t.Features())
+	return t
+}
+
+// Features decodes the stable feature-list encoding on EmitTarget.
+func (t EmitTarget) Features() []string {
+	if t.FeaturesKey == "" {
+		return nil
+	}
+	return strings.Split(t.FeaturesKey, featureKeySep)
+}
+
+const featureKeySep = "\x00"
+
+// FeatureKey returns a comparable, order-insensitive feature-list key for
+// query keys. Backend feature handling treats the list as a set.
+func FeatureKey(features []string) string {
+	if len(features) == 0 {
+		return ""
+	}
+	clean := make([]string, 0, len(features))
+	for _, f := range features {
+		f = strings.TrimSpace(f)
+		if f != "" {
+			clean = append(clean, f)
+		}
+	}
+	if len(clean) == 0 {
+		return ""
+	}
+	sort.Strings(clean)
+	return strings.Join(clean, featureKeySep)
+}
+
+// EmitResult is the output of the Emit query.
+type EmitResult struct {
+	Result *backend.Result
+	Err    error
+}
+
 // ---- Queries struct ----
 
 // Queries groups the derived query handles. Constructed once by
@@ -292,16 +433,30 @@ type Queries struct {
 
 	// ResolveWorkspace: (rootDir) -> full cross-package resolution.
 	// Assembles a PackageGraph from BuildPackage outputs and runs
-	// resolve.ResolveGraph. Use this when WorkspaceMembers has been seeded
-	// (workspace mode) instead of the per-package ResolvePackage query.
-	// Depends on: WorkspaceMembers, BuildPackage(dir) for each dir.
+	// resolve.ResolveGraph. Uses WorkspacePackages when seeded so CLI
+	// build can preserve dependency-manager import keys, otherwise
+	// falls back to WorkspaceMembers for LSP/workspace callers.
+	// Depends on: WorkspacePackages or WorkspaceMembers, BuildPackage(dir)
+	// for each dir.
 	ResolveWorkspace *query.Query[string, *ResolvedWorkspace]
 
 	// CheckWorkspace: (rootDir) -> per-package check results for
-	// the entire workspace. Calls check.PackageGraph with the output of
-	// ResolveWorkspace.
+	// the entire workspace. Calls check.PackageGraph with the output
+	// of ResolveWorkspace.
 	// Depends on: ResolveWorkspace(rootDir).
 	CheckWorkspace *query.Query[string, *WorkspaceCheckResult]
+
+	// LowerIRPackage: (LowerKey) -> optimized, validated HIR backend entry.
+	// Depends on: ResolvePackage(dir), CheckPackage(dir).
+	LowerIRPackage *query.Query[LowerKey, LowerIRResult]
+
+	// LowerMIRPackage: (LowerKey) -> backend entry with MIR populated.
+	// Depends on: LowerIRPackage(key).
+	LowerMIRPackage *query.Query[LowerKey, LowerMIRResult]
+
+	// Emit: (EmitTarget) -> backend artifact result.
+	// Depends on: LowerMIRPackage(target.Lower).
+	Emit *query.Query[EmitTarget, EmitResult]
 
 	// LintFile: (path) -> lint diagnostics for one file. The self-hosted
 	// lint pass owns parsing internally, so this query stays source-only and
@@ -415,17 +570,19 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 			}
 			for i, pf := range built.Files {
 				pkg.Files[i] = &resolve.PackageFile{
-					Path:            pf.Path,
-					Source:          pf.Source,
-					SourceFileID:    pf.SourceFileID,
-					OriginalSource:  pf.OriginalSource,
-					TransformMap:    pf.TransformMap,
-					CanonicalSource: pf.CanonicalSource,
-					CanonicalMap:    pf.CanonicalMap,
-					File:            pf.File,
-					Run:             pf.Run,
-					ParseDiags:      pf.ParseDiags,
-					ParseProvenance: pf.ParseProvenance,
+					Path:                   pf.Path,
+					Source:                 pf.Source,
+					SourceFileID:           pf.SourceFileID,
+					OriginalSource:         pf.OriginalSource,
+					SourceTransformApplied: pf.SourceTransformApplied,
+					SourceTransformChanged: pf.SourceTransformChanged,
+					TransformMap:           pf.TransformMap,
+					CanonicalSource:        pf.CanonicalSource,
+					CanonicalMap:           pf.CanonicalMap,
+					File:                   pf.File,
+					Run:                    pf.Run,
+					ParseDiags:             pf.ParseDiags,
+					ParseProvenance:        pf.ParseProvenance,
 				}
 			}
 			// Stdlib attachment requires an unexported resolve.Workspace
@@ -459,7 +616,7 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 			if rp == nil || rp.pkg == nil {
 				return &check.Result{}
 			}
-			opts := check.Opts{Stdlib: resolveStdlibProvider(ctx)}
+			opts := checkOptsFromCtx(ctx)
 			return check.Package(rp.pkg, rp.res, opts)
 		},
 		hashCheckResult,
@@ -473,13 +630,12 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 		hashCheckResult,
 	)
 
-	// ResolveWorkspace assembles all packages listed in
-	// WorkspaceMembers into a resolve.Workspace, deep-copies each
-	// package (so ResolveAll's in-place mutation doesn't corrupt
-	// the BuildPackage cache), and runs cross-package resolution.
+	// ResolveWorkspace assembles all seeded packages into a resolve.Workspace,
+	// deep-copies each package (so ResolveAll's in-place mutation doesn't
+	// corrupt the BuildPackage cache), and runs cross-package resolution.
 	qs.ResolveWorkspace = query.Register(db, "ResolveWorkspace",
 		func(ctx *query.Ctx, rootDir string) *ResolvedWorkspace {
-			members := inp.WorkspaceMembers.Fetch(ctx, struct{}{})
+			members := workspaceMembersForRoot(ctx, inp, rootDir)
 			if len(members) == 0 {
 				return nil
 			}
@@ -487,24 +643,34 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 			// Build all packages from the engine's cached Parse
 			// results. Deep-copy each one so ResolveAll's in-place
 			// mutation doesn't corrupt the BuildPackage cache.
-			builtPkgs := make(map[string]*resolve.Package, len(members))
-			for _, dir := range members {
-				bp := qs.BuildPackage.Fetch(ctx, dir)
+			builtByDir := make(map[string]*resolve.Package, len(members))
+			builtByDot := make(map[string]*resolve.Package, len(members))
+			dotByDir := make(map[string]string, len(members))
+			dirByDot := make(map[string]string, len(members))
+			for _, member := range members {
+				bp := qs.BuildPackage.Fetch(ctx, member.Dir)
 				if bp == nil || len(bp.Files) == 0 {
 					continue
 				}
-				builtPkgs[dir] = copyPackageForWorkspace(bp)
+				pkg := copyPackageForWorkspace(bp)
+				if member.Name != "" {
+					pkg.Name = member.Name
+				}
+				builtByDir[member.Dir] = pkg
+				builtByDot[member.DotPath] = pkg
+				dotByDir[member.Dir] = member.DotPath
+				dirByDot[member.DotPath] = member.Dir
 			}
-			if len(builtPkgs) == 0 {
+			if len(builtByDot) == 0 {
 				return nil
 			}
 
 			// Assemble a resolve.Workspace. Package keys are dotted
-			// import paths (e.g. "", "app", "lib") derived from the
-			// relative path to the workspace root.
+			// import paths (e.g. "", "app", "lib", or a vendored
+			// external dependency key).
 			ws, _ := resolve.NewWorkspace(rootDir)
-			for dir, pkg := range builtPkgs {
-				dotPath := dotPathFromDir(rootDir, dir)
+			ws.Stdlib = resolveStdlibProvider(ctx)
+			for dotPath, pkg := range builtByDot {
 				ws.Packages[dotPath] = pkg
 			}
 
@@ -514,12 +680,12 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 
 			// Build the result, converting dotted-path keys back to
 			// normalized directory keys.
-			pkgList := make([]*resolve.Package, 0, len(builtPkgs))
-			resultsByDir := make(map[string]*resolve.PackageResult, len(builtPkgs))
-			resolvedByDir := make(map[string]*ResolvedPackage, len(builtPkgs))
-			for dir, pkg := range builtPkgs {
+			pkgList := make([]*resolve.Package, 0, len(builtByDir))
+			resultsByDir := make(map[string]*resolve.PackageResult, len(builtByDir))
+			resolvedByDir := make(map[string]*ResolvedPackage, len(builtByDir))
+			for dir, pkg := range builtByDir {
 				pkgList = append(pkgList, pkg)
-				dotPath := dotPathFromDir(rootDir, dir)
+				dotPath := dotByDir[dir]
 				if pr, ok := resolved[dotPath]; ok {
 					resultsByDir[dir] = pr
 					resolvedByDir[dir] = &ResolvedPackage{pkg: pkg, res: pr}
@@ -529,9 +695,11 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 				root:     rootDir,
 				graph:    graph,
 				pkgs:     pkgList,
-				pkgMap:   builtPkgs,
+				pkgMap:   builtByDir,
 				results:  resultsByDir,
 				resolved: resolvedByDir,
+				dotByDir: dotByDir,
+				dirByDot: dirByDot,
 			}
 		},
 		hashResolvedWorkspaceFn,
@@ -549,17 +717,17 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 			// Rebuild dotted-path result keys for check.PackageGraph.
 			resolvedMap := make(map[string]*resolve.PackageResult, len(rw.resolved))
 			for dir, rp := range rw.resolved {
-				dotPath := dotPathFromDir(rootDir, dir)
+				dotPath := rw.DotPathByDir(dir)
 				resolvedMap[dotPath] = rp.res
 			}
 
-			opts := check.Opts{Stdlib: resolveStdlibProvider(ctx)}
+			opts := checkOptsFromCtx(ctx)
 			checks := check.PackageGraph(rw.Graph(), resolvedMap, opts)
 
 			// Convert dotted-path keys back to directory keys.
 			byDir := make(map[string]*check.Result, len(checks))
 			for dotPath, result := range checks {
-				dir := dirFromDotPath(rootDir, dotPath)
+				dir := rw.dirByDot[dotPath]
 				if dir != "" {
 					byDir[dir] = result
 				}
@@ -567,6 +735,82 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 			return &WorkspaceCheckResult{byDir: byDir}
 		},
 		hashWorkspaceCheckResultFn,
+	)
+
+	qs.LowerIRPackage = query.Register(db, "LowerIRPackage",
+		func(ctx *query.Ctx, key LowerKey) LowerIRResult {
+			key = key.normalized()
+			if key.WorkspaceRoot != "" {
+				rw := qs.ResolveWorkspace.Fetch(ctx, key.WorkspaceRoot)
+				cw := qs.CheckWorkspace.Fetch(ctx, key.WorkspaceRoot)
+				if rw == nil {
+					return LowerIRResult{Err: fmt.Errorf("query lowerIR: workspace %s not resolved", key.WorkspaceRoot)}
+				}
+				pkg := rw.PackageByDir(key.Dir)
+				if pkg == nil {
+					return LowerIRResult{Err: fmt.Errorf("query lowerIR: package %s not in workspace %s", key.Dir, key.WorkspaceRoot)}
+				}
+				var chk *check.Result
+				if cw != nil {
+					chk = cw.ResultByDir(key.Dir)
+				}
+				if chk == nil {
+					chk = &check.Result{}
+				}
+				entryFile := packageEntryFileForPath(pkg, key.EntryPath)
+				entry, err := backend.LowerGraphPackageIR(key.PackageName, key.SourcePath, rw.Graph(), rw.DotPathByDir(key.Dir), entryFile, chk)
+				return LowerIRResult{Entry: entry, Err: err}
+			}
+			rp := qs.ResolvePackage.Fetch(ctx, key.Dir)
+			chk := qs.CheckPackage.Fetch(ctx, key.Dir)
+			if rp == nil || rp.pkg == nil {
+				return LowerIRResult{Err: fmt.Errorf("query lowerIR: package %s not resolved", key.Dir)}
+			}
+			entryFile := packageEntryFileForPath(rp.pkg, key.EntryPath)
+			entry, err := backend.LowerPackageIR(key.PackageName, key.SourcePath, rp.pkg, entryFile, chk)
+			return LowerIRResult{Entry: entry, Err: err}
+		},
+		hashLowerIRResult,
+	)
+
+	qs.LowerMIRPackage = query.Register(db, "LowerMIRPackage",
+		func(ctx *query.Ctx, key LowerKey) LowerMIRResult {
+			key = key.normalized()
+			lowered := qs.LowerIRPackage.Fetch(ctx, key)
+			if lowered.Err != nil {
+				return LowerMIRResult{Entry: lowered.Entry, Err: lowered.Err}
+			}
+			entry, err := backend.LowerEntryMIR(lowered.Entry)
+			return LowerMIRResult{Entry: entry, Err: err}
+		},
+		hashLowerMIRResult,
+	)
+
+	qs.Emit = query.Register(db, "Emit",
+		func(ctx *query.Ctx, target EmitTarget) EmitResult {
+			target = target.normalized()
+			lowered := qs.LowerMIRPackage.Fetch(ctx, target.Lower)
+			if lowered.Err != nil {
+				return EmitResult{Err: lowered.Err}
+			}
+			b, err := backend.New(target.Backend)
+			if err != nil {
+				return EmitResult{Err: err}
+			}
+			result, err := b.Emit(context.Background(), backend.Request{
+				Layout: backend.Layout{
+					Root:    target.Root,
+					Profile: target.Profile,
+					Target:  target.Target,
+				},
+				Emit:       target.Emit,
+				Entry:      lowered.Entry,
+				BinaryName: target.BinaryName,
+				Features:   target.Features(),
+			})
+			return EmitResult{Result: result, Err: err}
+		},
+		hashEmitResult,
 	)
 
 	qs.LintFile = query.Register(db, "LintFile",
@@ -633,6 +877,26 @@ func packageNameFromDir(dir string) string {
 	return dir
 }
 
+func packageEntryFileForPath(pkg *resolve.Package, entryPath string) *resolve.PackageFile {
+	if pkg == nil {
+		return nil
+	}
+	if entryPath != "" {
+		norm := NormalizePath(entryPath)
+		for _, pf := range pkg.Files {
+			if pf != nil && NormalizePath(pf.Path) == norm {
+				return pf
+			}
+		}
+	}
+	for _, pf := range pkg.Files {
+		if pf != nil && pf.CanMaterializeFile() {
+			return pf
+		}
+	}
+	return nil
+}
+
 // resolveStdlibProvider returns the stdlib provider suitable for
 // passing to check.Opts. Returns nil if the Database was constructed
 // without a stdlib registry.
@@ -642,6 +906,33 @@ func resolveStdlibProvider(ctx *query.Ctx) resolve.StdlibProvider {
 		return nil
 	}
 	return reg
+}
+
+type stdlibRegistryAccessor interface {
+	registry() *stdlib.Registry
+}
+
+func checkOptsFromCtx(ctx *query.Ctx) check.Opts {
+	provider := resolveStdlibProvider(ctx)
+	opts := check.Opts{Stdlib: provider}
+	if reg := stdlibRegistryFromProvider(provider); reg != nil {
+		opts.Primitives = reg.Primitives
+		opts.ResultMethods = reg.ResultMethods
+	}
+	return opts
+}
+
+func stdlibRegistryFromProvider(provider resolve.StdlibProvider) *stdlib.Registry {
+	switch p := provider.(type) {
+	case nil:
+		return nil
+	case *stdlib.Registry:
+		return p
+	case stdlibRegistryAccessor:
+		return p.registry()
+	default:
+		return nil
+	}
 }
 
 // collectFileDiagnostics merges every diagnostic produced by the
@@ -753,6 +1044,59 @@ func diagnosticBelongsTo(d *diag.Diagnostic, normalizedPath string, fileID spani
 
 // ---- Workspace helpers ----
 
+func workspaceMembersForRoot(ctx *query.Ctx, inp Inputs, rootDir string) []WorkspacePackage {
+	rootDir = NormalizePath(rootDir)
+	if inp.WorkspacePackages.HasFetch(ctx, rootDir) {
+		members := inp.WorkspacePackages.Fetch(ctx, rootDir)
+		return normalizeWorkspacePackages(rootDir, members)
+	}
+	dirs := inp.WorkspaceMembers.Fetch(ctx, struct{}{})
+	members := make([]WorkspacePackage, 0, len(dirs))
+	for _, dir := range dirs {
+		dir = NormalizePath(dir)
+		members = append(members, WorkspacePackage{
+			Dir:     dir,
+			DotPath: dotPathFromDir(rootDir, dir),
+			Name:    packageNameFromDir(dir),
+		})
+	}
+	return normalizeWorkspacePackages(rootDir, members)
+}
+
+func normalizeWorkspacePackages(rootDir string, members []WorkspacePackage) []WorkspacePackage {
+	if len(members) == 0 {
+		return nil
+	}
+	out := make([]WorkspacePackage, 0, len(members))
+	seen := map[string]bool{}
+	for _, m := range members {
+		m.Dir = NormalizePath(m.Dir)
+		if m.DotPath == "" && m.Dir != rootDir {
+			m.DotPath = dotPathFromDir(rootDir, m.Dir)
+		}
+		if m.Name == "" {
+			if m.DotPath != "" {
+				m.Name = packageNameFromDir(m.DotPath)
+			} else {
+				m.Name = packageNameFromDir(m.Dir)
+			}
+		}
+		key := m.DotPath + "\x00" + m.Dir
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		out = append(out, m)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].DotPath != out[j].DotPath {
+			return out[i].DotPath < out[j].DotPath
+		}
+		return out[i].Dir < out[j].Dir
+	})
+	return out
+}
+
 // dotPathFromDir converts a normalized package directory to the
 // dotted import path used by resolve.Workspace. Returns "" for the
 // root package (dir == root).
@@ -798,17 +1142,19 @@ func copyPackageForWorkspace(src *resolve.Package) *resolve.Package {
 			continue
 		}
 		pkg.Files[i] = &resolve.PackageFile{
-			Path:            pf.Path,
-			Source:          pf.Source,
-			SourceFileID:    pf.SourceFileID,
-			OriginalSource:  pf.OriginalSource,
-			TransformMap:    pf.TransformMap,
-			CanonicalSource: pf.CanonicalSource,
-			CanonicalMap:    pf.CanonicalMap,
-			File:            pf.File,
-			Run:             pf.Run,
-			ParseDiags:      pf.ParseDiags,
-			ParseProvenance: pf.ParseProvenance,
+			Path:                   pf.Path,
+			Source:                 pf.Source,
+			SourceFileID:           pf.SourceFileID,
+			OriginalSource:         pf.OriginalSource,
+			SourceTransformApplied: pf.SourceTransformApplied,
+			SourceTransformChanged: pf.SourceTransformChanged,
+			TransformMap:           pf.TransformMap,
+			CanonicalSource:        pf.CanonicalSource,
+			CanonicalMap:           pf.CanonicalMap,
+			File:                   pf.File,
+			Run:                    pf.Run,
+			ParseDiags:             pf.ParseDiags,
+			ParseProvenance:        pf.ParseProvenance,
 		}
 	}
 	return pkg

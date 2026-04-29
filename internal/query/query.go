@@ -405,3 +405,24 @@ func (i *Input[K, V]) Has(db *Database, key K) bool {
 	_, ok := db.slots[i.q.id][any(key)]
 	return ok
 }
+
+// HasFetch is the body-facing counterpart to Has. It records a dependency on
+// the key's presence so a query that branches on an optional input is
+// invalidated when that input is later Set or Clear'ed.
+func (i *Input[K, V]) HasFetch(ctx *Ctx, key K) bool {
+	parent := ctx.db.currentFrame()
+	m := ctx.db.slots[i.q.id]
+	s, ok := m[any(key)]
+	var changedAt Revision
+	if ok {
+		changedAt = s.computedAt
+	}
+	if parent != nil {
+		parent.deps = append(parent.deps, depRecord{
+			qid:       i.q.id,
+			key:       key,
+			changedAt: changedAt,
+		})
+	}
+	return ok
+}
