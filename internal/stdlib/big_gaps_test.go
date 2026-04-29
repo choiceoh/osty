@@ -19,7 +19,7 @@ func TestSmtpModuleSurface(t *testing.T) {
 		"dataCommand", "quit", "rset", "noop", "authPlain", "authLogin", "authCommands",
 		"transaction", "commands", "renderCommands", "parseReply", "parseReplies",
 		"isPositiveCompletion", "isPositiveIntermediate", "isTransientFailure", "isPermanentFailure",
-		"capabilities", "hasCapability", "supportsAuth",
+		"capabilities", "hasCapability", "supportsAuth", "dotStuff", "dataBlock",
 	} {
 		requirePublicFn(t, mod, "smtp", name)
 	}
@@ -68,16 +68,23 @@ func TestBigGapModuleSourcePinsBehavior(t *testing.T) {
 			`pub fn authPlain(username: String, password: String) -> String`,
 			`pub fn parseReply(line: String) -> Result<Reply, Error>`,
 			`pub fn commands(tx: Transaction) -> Result<List<String>, Error>`,
+			`pub fn dotStuff(data: String) -> String`,
+			`pub fn dataBlock(data: String) -> String`,
+			`out.push(ensureDataBlock(tx.envelope.data))`,
+			`strings.endsWith(data, "{crlf()}.{crlf()}")`,
 		},
 		"zip": {
 			`pub fn encode(entries: List<Entry>) -> Result<Bytes, Error>`,
 			`pub fn decode(archive: Bytes) -> Result<List<Entry>, Error>`,
 			`pub fn crc32(data: Bytes) -> Int`,
+			`strings.contains(clean, "\\")`,
+			`fn isDriveLetterPath(name: String) -> Bool`,
 		},
 		"image": {
 			`pub fn identify(data: Bytes) -> Format`,
 			`fn parsePng(data: Bytes) -> Result<Metadata, Error>`,
 			`fn parseJpeg(data: Bytes) -> Result<Metadata, Error>`,
+			`if data.len() < 11`,
 		},
 	}
 	for module, wants := range cases {

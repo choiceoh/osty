@@ -151,6 +151,25 @@ pub fn dataCommand() -> String {
     "DATA"
 }
 
+pub fn dotStuff(data: String) -> String {
+    let normalized = normalizeBody(data)
+    let lines = strings.split(normalized, crlf())
+    let mut out: List<String> = []
+    for line in lines {
+        if strings.startsWith(line, ".") {
+            out.push(".{line}")
+        } else {
+            out.push(line)
+        }
+    }
+    strings.join(out, crlf())
+}
+
+pub fn dataBlock(data: String) -> String {
+    let body = stripDataTerminator(data)
+    "{dotStuff(body)}{crlf()}.{crlf()}"
+}
+
 pub fn quit() -> String {
     "QUIT"
 }
@@ -205,7 +224,7 @@ pub fn commands(tx: Transaction) -> Result<List<String>, Error> {
         out.push(rcptTo(rcpt)?)
     }
     out.push(dataCommand())
-    out.push(tx.envelope.data)
+    out.push(ensureDataBlock(tx.envelope.data))
     out.push(quit())
     Ok(out)
 }
@@ -315,6 +334,30 @@ fn parseCapability(message: String) -> Capability {
         name: strings.toUpper(fields[0]),
         args: args,
     }
+}
+
+fn ensureDataBlock(data: String) -> String {
+    let normalized = normalizeBody(data)
+    if hasDataTerminator(normalized) {
+        return normalized
+    }
+    dataBlock(normalized)
+}
+
+fn stripDataTerminator(data: String) -> String {
+    let normalized = normalizeBody(data)
+    if hasDataTerminator(normalized) {
+        return strings.slice(normalized, 0, normalized.len() - 5)
+    }
+    normalized
+}
+
+fn hasDataTerminator(data: String) -> Bool {
+    strings.endsWith(data, "{crlf()}.{crlf()}")
+}
+
+fn normalizeBody(value: String) -> String {
+    strings.replaceAll(strings.replaceAll(value, "\r\n", "\n"), "\n", crlf())
 }
 
 fn plainPayload(username: String, password: String) -> String {
