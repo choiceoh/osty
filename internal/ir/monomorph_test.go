@@ -663,6 +663,32 @@ func TestTypeCodeOfUserNamedWithoutArgsUnchanged(t *testing.T) {
 	}
 }
 
+func TestTypeCodeOfQualifiedNamedTypeUsesOwnerPackage(t *testing.T) {
+	got := typeCodeOf(&NamedType{Package: "email", Name: "Address"}, "main")
+	const want = "N5email7AddressE"
+	if got != want {
+		t.Fatalf("typeCodeOf(email.Address): got %q, want %q", got, want)
+	}
+}
+
+func TestTypeCodeOfBuiltinArgKeepsQualifiedNamedPackage(t *testing.T) {
+	list := &NamedType{
+		Name:    "List",
+		Builtin: true,
+		Args: []Type{
+			&NamedType{Package: "email", Name: "Address"},
+		},
+	}
+	got := typeCodeOf(list, "main")
+	const want = "N4osty4ListIN5email7AddressEEE"
+	if got != want {
+		t.Fatalf("typeCodeOf(List<email.Address>): got %q, want %q", got, want)
+	}
+	if strings.Contains(got, "main") {
+		t.Fatalf("qualified type arg should not fall back to main package: %q", got)
+	}
+}
+
 // ==== Phase 2 rewriteType helper ====
 
 // newTestMonoState builds a blank monoState populated only with the

@@ -56,6 +56,22 @@ type loweredStdlibTypesEntry struct {
 	decls map[stdlibTypeKey]ir.Decl
 }
 
+func (e *loweredStdlibTypesEntry) moduleTypeNames(module string) map[string]bool {
+	if e == nil || module == "" || len(e.decls) == 0 {
+		return nil
+	}
+	out := map[string]bool{}
+	for key := range e.decls {
+		if key.Module == module && key.Name != "" {
+			out[key.Name] = true
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // injectReachableStdlibTypes appends stdlib built-in type decls
 // (`Map<K, V>`, `Option<T>`, …) to mod.Decls when user code
 // references them. After this pass, ir.Monomorphize sees the generic
@@ -99,7 +115,7 @@ func injectReachableStdlibTypes(mod *ir.Module, reg *stdlib.Registry) ([]ir.Decl
 			return
 		}
 		seen[key] = true
-		out = append(out, cloneStdlibTypeDecl(decl))
+		out = append(out, cloneStdlibTypeDecl(key, decl, entry.moduleTypeNames(key.Module)))
 	}
 	for _, key := range referenced {
 		appendKey(key)
@@ -673,14 +689,148 @@ func isInjectableTypeName(name string) bool {
 
 // cloneStdlibTypeDecl deep-clones a StructDecl or EnumDecl so the
 // per-user-module appended copy can be rewritten by the monomorphizer
-// without disturbing the shared cache. Uses the public ir.Clone and
-// type-asserts back to Decl.
-func cloneStdlibTypeDecl(d ir.Decl) ir.Decl {
+// without disturbing the shared cache. Non-builtin stdlib-local types
+// are qualified as "<module>.<Type>" so they cannot collide with a
+// user's ordinary top-level type named Reply, Header, Image, etc.
+func cloneStdlibTypeDecl(key stdlibTypeKey, d ir.Decl, moduleTypes map[string]bool) ir.Decl {
 	if d == nil {
 		return nil
 	}
 	cp, _ := ir.Clone(d).(ir.Decl)
+	qualifyStdlibDeclTypes(cp, key.Module, moduleTypes)
+	switch x := cp.(type) {
+	case *ir.StructDecl:
+		if shouldQualifyStdlibTypeName(key.Module, x.Name, moduleTypes) {
+			x.Name = qualifiedStdlibTypeName(key.Module, x.Name)
+		}
+	case *ir.EnumDecl:
+		if shouldQualifyStdlibTypeName(key.Module, x.Name, moduleTypes) {
+			x.Name = qualifiedStdlibTypeName(key.Module, x.Name)
+		}
+	}
 	return cp
+}
+
+func qualifyStdlibDeclTypes(d ir.Decl, module string, moduleTypes map[string]bool) {
+	if d == nil || module == "" || len(moduleTypes) == 0 {
+		return
+	}
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		switch x := n.(type) {
+		case *ir.FnDecl:
+			x.Return = qualifyStdlibType(x.Return, module, moduleTypes)
+		case *ir.Param:
+			x.Type = qualifyStdlibType(x.Type, module, moduleTypes)
+		case *ir.Field:
+			x.Type = qualifyStdlibType(x.Type, module, moduleTypes)
+		case *ir.LetDecl:
+			x.Type = qualifyStdlibType(x.Type, module, moduleTypes)
+		case *ir.LetStmt:
+			x.Type = qualifyStdlibType(x.Type, module, moduleTypes)
+		case *ir.IntLit:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+		case *ir.FloatLit:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+		case *ir.Ident:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+			qualifyStdlibTypeList(x.TypeArgs, module, moduleTypes)
+		case *ir.UnaryExpr:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+		case *ir.BinaryExpr:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+		case *ir.CallExpr:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+			qualifyStdlibTypeList(x.TypeArgs, module, moduleTypes)
+		case *ir.MethodCall:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+			qualifyStdlibTypeList(x.TypeArgs, module, moduleTypes)
+		case *ir.ListLit:
+			x.Elem = qualifyStdlibType(x.Elem, module, moduleTypes)
+		case *ir.MapLit:
+			x.KeyT = qualifyStdlibType(x.KeyT, module, moduleTypes)
+			x.ValT = qualifyStdlibType(x.ValT, module, moduleTypes)
+		case *ir.TupleLit:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+		case *ir.StructLit:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+			if shouldQualifyStdlibTypeName(module, x.TypeName, moduleTypes) {
+				x.TypeName = qualifiedStdlibTypeName(module, x.TypeName)
+			}
+		case *ir.VariantLit:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+			if shouldQualifyStdlibTypeName(module, x.Enum, moduleTypes) {
+				x.Enum = qualifiedStdlibTypeName(module, x.Enum)
+			}
+		case *ir.BlockExpr:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+		case *ir.IfExpr:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+		case *ir.IfLetExpr:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+		case *ir.MatchExpr:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+		case *ir.FieldExpr:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+		case *ir.IndexExpr:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+		case *ir.TupleAccess:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+		case *ir.RangeLit:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+		case *ir.QuestionExpr:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+		case *ir.CoalesceExpr:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+		case *ir.Closure:
+			x.T = qualifyStdlibType(x.T, module, moduleTypes)
+			x.Return = qualifyStdlibType(x.Return, module, moduleTypes)
+		}
+		return true
+	}), d)
+}
+
+func qualifyStdlibTypeList(types []ir.Type, module string, moduleTypes map[string]bool) {
+	for i, t := range types {
+		types[i] = qualifyStdlibType(t, module, moduleTypes)
+	}
+}
+
+func qualifyStdlibType(t ir.Type, module string, moduleTypes map[string]bool) ir.Type {
+	switch x := t.(type) {
+	case *ir.NamedType:
+		for i, a := range x.Args {
+			x.Args[i] = qualifyStdlibType(a, module, moduleTypes)
+		}
+		if shouldQualifyStdlibTypeName(module, x.Name, moduleTypes) && x.Package == "" {
+			x.Package = module
+		}
+	case *ir.OptionalType:
+		x.Inner = qualifyStdlibType(x.Inner, module, moduleTypes)
+	case *ir.TupleType:
+		for i, e := range x.Elems {
+			x.Elems[i] = qualifyStdlibType(e, module, moduleTypes)
+		}
+	case *ir.FnType:
+		for i, p := range x.Params {
+			x.Params[i] = qualifyStdlibType(p, module, moduleTypes)
+		}
+		x.Return = qualifyStdlibType(x.Return, module, moduleTypes)
+	}
+	return t
+}
+
+func shouldQualifyStdlibTypeName(module, name string, moduleTypes map[string]bool) bool {
+	if module == "" || name == "" || !moduleTypes[name] {
+		return false
+	}
+	return !isInjectableTypeName(name)
+}
+
+func qualifiedStdlibTypeName(module, name string) string {
+	if module == "" || name == "" || strings.Contains(name, ".") {
+		return name
+	}
+	return module + "." + name
 }
 
 // moduleForStdlibType is a lookup helper used by tests and

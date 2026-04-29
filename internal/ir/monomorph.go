@@ -1994,14 +1994,15 @@ func typeCodeOf(t Type, pkg string) string {
 		// template-nested form so a generic free function whose type arg
 		// is itself user-generic (e.g. `id::<Pair<Int,Int>>`) gets a
 		// unique mangled fn symbol per concrete Pair instantiation.
+		ownerPkg := namedTypeCodePackage(t, pkg)
 		if len(t.Args) > 0 {
 			var sb strings.Builder
 			for _, a := range t.Args {
 				sb.WriteString(typeCodeOf(a, pkg))
 			}
-			return MonomorphUserTemplateNested(firstNonEmpty(pkg, "main"), t.Name, sb.String())
+			return MonomorphUserTemplateNested(ownerPkg, t.Name, sb.String())
 		}
-		return MonomorphUserNested(firstNonEmpty(pkg, "main"), t.Name)
+		return MonomorphUserNested(ownerPkg, t.Name)
 	case *OptionalType:
 		inner := typeCodeOf(t.Inner, pkg)
 		return MonomorphBuiltinTemplate("Option", inner)
@@ -2058,4 +2059,11 @@ func firstNonEmpty(a, b string) string {
 		return a
 	}
 	return b
+}
+
+func namedTypeCodePackage(t *NamedType, fallback string) string {
+	if t != nil && t.Package != "" {
+		return firstNonEmpty(strings.TrimPrefix(t.Package, "std."), "main")
+	}
+	return firstNonEmpty(fallback, "main")
 }
