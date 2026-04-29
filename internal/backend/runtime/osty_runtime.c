@@ -7987,6 +7987,13 @@ void osty_rt_list_insert_ptr(void *raw_list, int64_t index, void *value) {
     osty_gc_post_write_v1(raw_list, value, OSTY_GC_KIND_LIST);
 }
 
+void osty_rt_list_insert_string(void *raw_list, int64_t index, const char *value) {
+    osty_rt_list_insert_raw(raw_list, index, &value, sizeof(value), osty_gc_mark_slot_v1);
+    if (!osty_rt_string_is_inline(value)) {
+        osty_gc_post_write_v1(raw_list, (void *)value, OSTY_GC_KIND_LIST);
+    }
+}
+
 // osty_rt_list_remove_at_discard shifts list[index+1..len] left by one slot
 // and decrements len. Aborts on out-of-range (matches stdlib
 // `removeAt(i) -> T` semantics — the caller reads the element first via
@@ -8095,6 +8102,13 @@ void osty_rt_list_push_f64(void *raw_list, double value) {
 OSTY_HOT_INLINE void osty_rt_list_push_ptr(void *raw_list, void *value) {
     osty_rt_list_push_raw(raw_list, &value, sizeof(value), osty_gc_mark_slot_v1);
     osty_gc_post_write_v1(raw_list, value, OSTY_GC_KIND_LIST);
+}
+
+OSTY_HOT_INLINE void osty_rt_list_push_string(void *raw_list, const char *value) {
+    osty_rt_list_push_raw(raw_list, &value, sizeof(value), osty_gc_mark_slot_v1);
+    if (!osty_rt_string_is_inline(value)) {
+        osty_gc_post_write_v1(raw_list, (void *)value, OSTY_GC_KIND_LIST);
+    }
 }
 
 void osty_rt_list_push_bytes(void *raw_list, const void *value, int64_t elem_size, osty_rt_trace_slot_fn trace_elem) {
@@ -8224,6 +8238,15 @@ OSTY_HOT_INLINE void *osty_rt_list_get_ptr(void *raw_list, int64_t index) {
     return osty_gc_load_v1(value);
 }
 
+OSTY_HOT_INLINE const char *osty_rt_list_get_string(void *raw_list, int64_t index) {
+    const char *value;
+    memcpy(&value, osty_rt_list_get_raw(raw_list, index, sizeof(value), osty_gc_mark_slot_v1), sizeof(value));
+    if (osty_rt_string_is_inline(value)) {
+        return value;
+    }
+    return (const char *)osty_gc_load_v1((void *)value);
+}
+
 OSTY_HOT_INLINE void osty_rt_list_get_bytes(void *raw_list, int64_t index, void *out_value, int64_t elem_size, osty_rt_trace_slot_fn trace_elem) {
     if (out_value == NULL || elem_size < 0) {
         osty_rt_abort("invalid list get_bytes call");
@@ -8267,6 +8290,13 @@ void osty_rt_list_set_f64(void *raw_list, int64_t index, double value) {
 void osty_rt_list_set_ptr(void *raw_list, int64_t index, void *value) {
     osty_rt_list_set_raw(raw_list, index, &value, sizeof(value), osty_gc_mark_slot_v1);
     osty_gc_post_write_v1(raw_list, value, OSTY_GC_KIND_LIST);
+}
+
+void osty_rt_list_set_string(void *raw_list, int64_t index, const char *value) {
+    osty_rt_list_set_raw(raw_list, index, &value, sizeof(value), osty_gc_mark_slot_v1);
+    if (!osty_rt_string_is_inline(value)) {
+        osty_gc_post_write_v1(raw_list, (void *)value, OSTY_GC_KIND_LIST);
+    }
 }
 
 void osty_rt_list_set_bytes(void *raw_list, int64_t index, const void *value, int64_t elem_size, osty_rt_trace_slot_fn trace_elem) {
@@ -9506,7 +9536,7 @@ void *osty_rt_strings_Split(const char *value, const char *sep) {
     if (sep == NULL || sep[0] == '\0') {
         while (*value != '\0') {
             char *piece = osty_rt_string_dup_range(value, 1);
-            osty_rt_list_push_ptr(out, piece);
+            osty_rt_list_push_string(out, piece);
             value += 1;
         }
         return out;
@@ -9525,17 +9555,17 @@ void *osty_rt_strings_Split(const char *value, const char *sep) {
         char ch = sep[0];
         while ((next = strchr(cursor, ch)) != NULL) {
             char *piece = osty_rt_string_dup_range(cursor, (size_t)(next - cursor));
-            osty_rt_list_push_ptr(out, piece);
+            osty_rt_list_push_string(out, piece);
             cursor = next + 1;
         }
     } else {
         while ((next = strstr(cursor, sep)) != NULL) {
             char *piece = osty_rt_string_dup_range(cursor, (size_t)(next - cursor));
-            osty_rt_list_push_ptr(out, piece);
+            osty_rt_list_push_string(out, piece);
             cursor = next + sep_len;
         }
     }
-    osty_rt_list_push_ptr(out, osty_rt_string_dup_range(cursor, strlen(cursor)));
+    osty_rt_list_push_string(out, osty_rt_string_dup_range(cursor, strlen(cursor)));
     return out;
 }
 
@@ -9545,7 +9575,7 @@ void *osty_rt_strings_Split(const char *value, const char *sep) {
  * but skips:
  *
  *   - the `osty_rt_list_new` allocation
- *   - the `osty_rt_list_push_ptr` calls for pieces 0..idx-1 (we just
+ *   - the `osty_rt_list_push_string` calls for pieces 0..idx-1 (we just
  *     advance the cursor past them; no piece dup)
  *   - the dup of every piece > idx (we stop scanning past idx)
  *
@@ -9661,7 +9691,7 @@ OSTY_HOT_INLINE void osty_rt_strings_SplitInto(void *raw_out, const char *value,
     }
     out = (osty_rt_list *)raw_out;
     /* Preserve the previously-stamped layout (elem_size = sizeof(ptr),
-     * trace_elem = osty_gc_mark_slot_v1) by replaying push_ptr through
+     * trace_elem = osty_gc_mark_slot_v1) by replaying push_string through
      * osty_rt_list_clear then push. clear() leaves data/cap untouched. */
     osty_rt_list_clear(out);
     if (value == NULL) {
@@ -9673,7 +9703,7 @@ OSTY_HOT_INLINE void osty_rt_strings_SplitInto(void *raw_out, const char *value,
     if (sep == NULL || sep[0] == '\0') {
         while (*value != '\0') {
             char *piece = osty_rt_string_dup_range(value, 1);
-            osty_rt_list_push_ptr(out, piece);
+            osty_rt_list_push_string(out, piece);
             value += 1;
         }
         return;
@@ -9688,17 +9718,17 @@ OSTY_HOT_INLINE void osty_rt_strings_SplitInto(void *raw_out, const char *value,
         char ch = sep[0];
         while ((next = strchr(cursor, ch)) != NULL) {
             char *piece = osty_rt_string_dup_range(cursor, (size_t)(next - cursor));
-            osty_rt_list_push_ptr(out, piece);
+            osty_rt_list_push_string(out, piece);
             cursor = next + 1;
         }
     } else {
         while ((next = strstr(cursor, sep)) != NULL) {
             char *piece = osty_rt_string_dup_range(cursor, (size_t)(next - cursor));
-            osty_rt_list_push_ptr(out, piece);
+            osty_rt_list_push_string(out, piece);
             cursor = next + sep_len;
         }
     }
-    osty_rt_list_push_ptr(out, osty_rt_string_dup_range(cursor, strlen(cursor)));
+    osty_rt_list_push_string(out, osty_rt_string_dup_range(cursor, strlen(cursor)));
 }
 
 // osty_rt_strings_SplitN caps the output at `n` pieces, matching the
@@ -9729,7 +9759,7 @@ void *osty_rt_strings_SplitN(const char *value, const char *sep, int64_t n) {
     }
     out = (osty_rt_list *)osty_rt_list_new();
     if (value == NULL) {
-        osty_rt_list_push_ptr(out, osty_rt_string_dup_range("", 0));
+        osty_rt_list_push_string(out, osty_rt_string_dup_range("", 0));
         return out;
     }
     /* SSO: byte-walking + strstr/strlen below need real addresses.
@@ -9741,18 +9771,18 @@ void *osty_rt_strings_SplitN(const char *value, const char *sep, int64_t n) {
         osty_rt_string_decode_to_buf_if_inline(&sep, sep_buf);
     }
     if (n == 1) {
-        osty_rt_list_push_ptr(out, osty_rt_string_dup_range(value, strlen(value)));
+        osty_rt_list_push_string(out, osty_rt_string_dup_range(value, strlen(value)));
         return out;
     }
     if (sep == NULL || sep[0] == '\0') {
         produced = 0;
         while (*value != '\0' && produced + 1 < n) {
             char *piece = osty_rt_string_dup_range(value, 1);
-            osty_rt_list_push_ptr(out, piece);
+            osty_rt_list_push_string(out, piece);
             value += 1;
             produced++;
         }
-        osty_rt_list_push_ptr(out, osty_rt_string_dup_range(value, strlen(value)));
+        osty_rt_list_push_string(out, osty_rt_string_dup_range(value, strlen(value)));
         return out;
     }
     sep_len = strlen(sep);
@@ -9760,11 +9790,11 @@ void *osty_rt_strings_SplitN(const char *value, const char *sep, int64_t n) {
     produced = 0;
     while (produced + 1 < n && (next = strstr(cursor, sep)) != NULL) {
         char *piece = osty_rt_string_dup_range(cursor, (size_t)(next - cursor));
-        osty_rt_list_push_ptr(out, piece);
+        osty_rt_list_push_string(out, piece);
         cursor = next + sep_len;
         produced++;
     }
-    osty_rt_list_push_ptr(out, osty_rt_string_dup_range(cursor, strlen(cursor)));
+    osty_rt_list_push_string(out, osty_rt_string_dup_range(cursor, strlen(cursor)));
     return out;
 }
 
@@ -9799,7 +9829,7 @@ void *osty_rt_strings_Fields(const char *value) {
                *cursor != '\f') {
             cursor += 1;
         }
-        osty_rt_list_push_ptr(out, osty_rt_string_dup_range(start, (size_t)(cursor - start)));
+        osty_rt_list_push_string(out, osty_rt_string_dup_range(start, (size_t)(cursor - start)));
     }
     return out;
 }
@@ -11586,11 +11616,16 @@ void *osty_rt_set_to_list(void *raw_set) {
             osty_rt_list_push_f64(out, value);
             break;
         }
-        case OSTY_RT_ABI_PTR:
-        case OSTY_RT_ABI_STRING: {
+        case OSTY_RT_ABI_PTR: {
             void *value = NULL;
             memcpy(&value, set->items + ((size_t)i * sizeof(value)), sizeof(value));
             osty_rt_list_push_ptr(out, value);
+            break;
+        }
+        case OSTY_RT_ABI_STRING: {
+            const char *value = NULL;
+            memcpy(&value, set->items + ((size_t)i * sizeof(value)), sizeof(value));
+            osty_rt_list_push_string(out, value);
             break;
         }
         default:
@@ -19404,7 +19439,7 @@ const char *osty_rt_list_primitive_to_string(void *list, int64_t elem_kind) {
             break;
         }
         case OSTY_LIST_KIND_STRING: {
-            const char *v = (const char *)osty_rt_list_get_ptr(list, i);
+            const char *v = osty_rt_list_get_string(list, i);
             osty_rt_diff_scratch_append(&s, "\"", 1);
             osty_rt_diff_scratch_append_cstr(&s, v == NULL ? "" : v);
             osty_rt_diff_scratch_append(&s, "\"", 1);

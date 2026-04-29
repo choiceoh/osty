@@ -2609,7 +2609,7 @@ func (g *mirGen) emitIndexedWrite(a *mir.AssignInstr, destLoc *mir.Local, ip *mi
 					return nil
 				}
 			}
-			sym := mirRtListSetSuffixSymbol(listRuntimeSymbolSuffix(elemLLVM))
+			sym := mirRtListSetSuffixSymbol(listRuntimeSymbolSuffixFor(elemLLVM, isStringLLVMType(elemT)))
 			g.declareRuntime(sym, mirRuntimeDeclareListSetSimpleLine(sym, elemLLVM))
 			g.fnBuf.WriteString(mirCallVoidListPtrI64ValueLine(sym, contReg, idxReg, elemLLVM, valReg))
 			return nil
@@ -2709,7 +2709,7 @@ func (g *mirGen) rebuildProjectedAggregate(baseReg string, baseT mir.Type, tail 
 		switch {
 		case isListPtrType(baseT):
 			if listUsesTypedRuntime(elemLLVM) {
-				sym := mirRtListGetSuffixSymbol(listRuntimeSymbolSuffix(elemLLVM))
+				sym := mirRtListGetSuffixSymbol(listRuntimeSymbolSuffixFor(elemLLVM, isStringLLVMType(elemT)))
 				g.declareRuntime(sym, mirRuntimeDeclareLine(elemLLVM, sym, "ptr, i64"))
 				elemReg = g.fresh()
 				g.fnBuf.WriteString(mirCallValueLine(elemReg, elemLLVM, sym, mirArgListPtrI64(baseReg, idxReg)))
@@ -2738,7 +2738,7 @@ func (g *mirGen) rebuildProjectedAggregate(baseReg string, baseT mir.Type, tail 
 		switch {
 		case isListPtrType(baseT):
 			if listUsesTypedRuntime(elemLLVM) {
-				sym := mirRtListSetSuffixSymbol(listRuntimeSymbolSuffix(elemLLVM))
+				sym := mirRtListSetSuffixSymbol(listRuntimeSymbolSuffixFor(elemLLVM, isStringLLVMType(elemT)))
 				g.declareRuntime(sym, mirRuntimeDeclareListSetSimpleLine(sym, elemLLVM))
 				g.fnBuf.WriteString(mirCallVoidListPtrI64ValueLine(sym, baseReg, idxReg, elemLLVM, rebuiltElem.name))
 			} else {
@@ -2850,7 +2850,7 @@ func (g *mirGen) emitIndexedResultWrite(dest mir.Place, destLoc *mir.Local, ip *
 					return nil
 				}
 			}
-			sym := mirRtListSetSuffixSymbol(listRuntimeSymbolSuffix(elemLLVM))
+			sym := mirRtListSetSuffixSymbol(listRuntimeSymbolSuffixFor(elemLLVM, isStringLLVMType(elemT)))
 			g.declareRuntime(sym, mirRuntimeDeclareListSetSimpleLine(sym, elemLLVM))
 			g.fnBuf.WriteString(mirCallVoidListPtrI64ValueLine(sym, contReg, idxReg, elemLLVM, valReg))
 			return nil
@@ -2937,7 +2937,7 @@ func (g *mirGen) emitIndexedElementResultWrite(dest mir.Place, destLoc *mir.Loca
 	switch {
 	case isListPtrType(containerT):
 		if listUsesTypedRuntime(elemLLVM) {
-			sym := mirRtListGetSuffixSymbol(listRuntimeSymbolSuffix(elemLLVM))
+			sym := mirRtListGetSuffixSymbol(listRuntimeSymbolSuffixFor(elemLLVM, isStringLLVMType(elemT)))
 			g.declareRuntime(sym, mirRuntimeDeclareLine(elemLLVM, sym, "ptr, i64"))
 			elemReg = g.fresh()
 			g.fnBuf.WriteString(mirCallValueLine(elemReg, elemLLVM, sym, mirArgListPtrI64(contReg, idxReg)))
@@ -2968,7 +2968,7 @@ func (g *mirGen) emitIndexedElementResultWrite(dest mir.Place, destLoc *mir.Loca
 	switch {
 	case isListPtrType(containerT):
 		if listUsesTypedRuntime(elemLLVM) {
-			sym := mirRtListSetSuffixSymbol(listRuntimeSymbolSuffix(elemLLVM))
+			sym := mirRtListSetSuffixSymbol(listRuntimeSymbolSuffixFor(elemLLVM, isStringLLVMType(elemT)))
 			g.declareRuntime(sym, mirRuntimeDeclareListSetSimpleLine(sym, elemLLVM))
 			g.fnBuf.WriteString(mirCallVoidListPtrI64ValueLine(sym, contReg, idxReg, elemLLVM, rebuilt.name))
 			return nil
@@ -5490,7 +5490,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		if i.Dest != nil && listUsesTypedRuntime(elemLLVM) {
 			if destLoc := g.fn.Local(i.Dest.Local); destLoc != nil {
 				if _, optDest := destLoc.Type.(*ir.OptionalType); optDest {
-					return g.emitListSafeGet(i, listReg, idxReg, elemLLVM, destLoc.Type)
+					return g.emitListSafeGet(i, listReg, idxReg, elemT, destLoc.Type)
 				}
 			}
 		}
@@ -5500,13 +5500,20 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 					return g.storeIntrinsicResult(i, &LlvmValue{typ: elemLLVM, name: fast})
 				}
 			}
-			sym := listRuntimeGetSymbol(elemLLVM)
+			sym := listRuntimeGetSymbolFor(elemLLVM, isStringLLVMType(elemT))
 			g.declareRuntime(sym, mirRuntimeDeclareMemoryRead(elemLLVM, sym, "ptr, i64"))
 			em := g.ostyEmitter()
-			result := llvmListGet(em,
-				&LlvmValue{typ: "ptr", name: listReg},
-				&LlvmValue{typ: "i64", name: idxReg},
-				elemLLVM)
+			var result *LlvmValue
+			if isStringLLVMType(elemT) {
+				result = llvmListGetString(em,
+					&LlvmValue{typ: "ptr", name: listReg},
+					&LlvmValue{typ: "i64", name: idxReg})
+			} else {
+				result = llvmListGet(em,
+					&LlvmValue{typ: "ptr", name: listReg},
+					&LlvmValue{typ: "i64", name: idxReg},
+					elemLLVM)
+			}
 			g.flushOstyEmitter(em)
 			return g.storeIntrinsicResult(i, result)
 		}
@@ -5571,7 +5578,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 			idxRef = g.fresh()
 			g.fnBuf.WriteString(mirSubI64MinusOneLine(idxRef, lenReg))
 		}
-		elemReg, err := g.emitListLoadElement(listReg, idxRef, elemLLVM)
+		elemReg, err := g.emitListLoadElement(listReg, idxRef, elemT)
 		if err != nil {
 			return err
 		}
@@ -5682,7 +5689,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		}
 		spliceSym := mirRtListRemoveAtDiscardSymbol()
 		g.declareRuntime(spliceSym, mirRuntimeDeclareVoidFromPtrI64Line(spliceSym))
-		elemReg, err := g.emitListLoadElement(listReg, idxReg, elemLLVM)
+		elemReg, err := g.emitListLoadElement(listReg, idxReg, elemT)
 		if err != nil {
 			return err
 		}
@@ -5714,7 +5721,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		}
 		lenSym := listRuntimeLenSymbol()
 		g.declareRuntime(lenSym, mirRuntimeDeclareMemoryRead("i64", lenSym, "ptr"))
-		getSym := listRuntimeGetSymbol(elemLLVM)
+		getSym := listRuntimeGetSymbolFor(elemLLVM, isStringLLVMType(elemT))
 		g.declareRuntime(getSym, mirRuntimeDeclareMemoryRead(elemLLVM, getSym, "ptr, i64"))
 		stringEq := ""
 		if isStringLLVMType(needleOp.Type()) {
@@ -5784,7 +5791,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		}
 		lenSym := listRuntimeLenSymbol()
 		g.declareRuntime(lenSym, mirRuntimeDeclareMemoryRead("i64", lenSym, "ptr"))
-		getSym := listRuntimeGetSymbol(elemLLVM)
+		getSym := listRuntimeGetSymbolFor(elemLLVM, isStringLLVMType(elemT))
 		g.declareRuntime(getSym, mirRuntimeDeclareMemoryRead(elemLLVM, getSym, "ptr, i64"))
 		stringEq := ""
 		if isStringLLVMType(needleOp.Type()) {
@@ -5862,7 +5869,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		g.fnBuf.WriteString(mirLabelLine(someLabel))
 		lastIdx := g.fresh()
 		g.fnBuf.WriteString(mirSubI64MinusOneLine(lastIdx, lenReg))
-		elemReg, err := g.emitListLoadElement(listReg, lastIdx, elemLLVM)
+		elemReg, err := g.emitListLoadElement(listReg, lastIdx, elemT)
 		if err != nil {
 			return err
 		}
@@ -5880,9 +5887,10 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 	return unsupported("mir-mvp", fmt.Sprintf("list intrinsic kind %d", i.Kind))
 }
 
-func (g *mirGen) emitListLoadElement(listReg, idxReg string, elemLLVM string) (string, error) {
+func (g *mirGen) emitListLoadElement(listReg, idxReg string, elemT mir.Type) (string, error) {
+	elemLLVM := g.llvmType(elemT)
 	if listUsesTypedRuntime(elemLLVM) {
-		getSym := listRuntimeGetSymbol(elemLLVM)
+		getSym := listRuntimeGetSymbolFor(elemLLVM, isStringLLVMType(elemT))
 		g.declareRuntime(getSym, mirRuntimeDeclareMemoryRead(elemLLVM, getSym, "ptr, i64"))
 		elemReg := g.fresh()
 		g.fnBuf.WriteString(mirCallValueListGetTypedLine(elemReg, elemLLVM, getSym, listReg, idxReg))
@@ -9268,12 +9276,19 @@ func (g *mirGen) emitListPushOperand(listReg string, op mir.Operand, elemT mir.T
 		}
 	}
 	if listUsesTypedRuntime(elemLLVM) {
-		sym := listRuntimePushSymbol(elemLLVM)
+		elemString := isStringLLVMType(elemT)
+		sym := listRuntimePushSymbolFor(elemLLVM, elemString)
 		g.declareRuntime(sym, mirRuntimeDeclareLine("void", sym, "ptr, "+elemLLVM))
 		em := g.ostyEmitter()
-		llvmListPush(em,
-			&LlvmValue{typ: "ptr", name: listReg, pointer: false},
-			&LlvmValue{typ: elemLLVM, name: val, pointer: false})
+		if elemString {
+			llvmListPushString(em,
+				&LlvmValue{typ: "ptr", name: listReg, pointer: false},
+				&LlvmValue{typ: elemLLVM, name: val, pointer: false})
+		} else {
+			llvmListPush(em,
+				&LlvmValue{typ: "ptr", name: listReg, pointer: false},
+				&LlvmValue{typ: elemLLVM, name: val, pointer: false})
+		}
 		g.flushOstyEmitter(em)
 		return nil
 	}
@@ -9304,7 +9319,7 @@ func (g *mirGen) emitListInsertOperand(listReg, idxReg string, op mir.Operand, e
 	}
 	elemLLVM := g.llvmType(elemT)
 	if listUsesTypedRuntime(elemLLVM) {
-		sym := listRuntimeInsertSymbol(elemLLVM)
+		sym := listRuntimeInsertSymbolFor(elemLLVM, isStringLLVMType(elemT))
 		g.declareRuntime(sym, mirRuntimeDeclareLine("void", sym, "ptr, i64, "+elemLLVM))
 		g.fnBuf.WriteString(mirCallVoidListPtrI64ValueLine(sym, listReg, idxReg, elemLLVM, val))
 		return nil
@@ -9329,12 +9344,13 @@ func (g *mirGen) emitListInsertOperand(listReg, idxReg string, op mir.Operand, e
 // branch. Pattern mirrors emitListIntrinsic(IntrinsicListFirst/Last).
 // Scalar elements only — composite element types go through the
 // existing bytes-v1 path and aren't rewrapped here.
-func (g *mirGen) emitListSafeGet(i *mir.IntrinsicInstr, listReg, idxReg, elemLLVM string, destT mir.Type) error {
+func (g *mirGen) emitListSafeGet(i *mir.IntrinsicInstr, listReg, idxReg string, elemT mir.Type, destT mir.Type) error {
+	elemLLVM := g.llvmType(elemT)
 	destLLVM := g.llvmType(destT)
 	destSlot := g.localSlots[i.Dest.Local]
 	lenSym := listRuntimeLenSymbol()
 	g.declareRuntime(lenSym, mirRuntimeDeclareMemoryRead("i64", lenSym, "ptr"))
-	getSym := listRuntimeGetSymbol(elemLLVM)
+	getSym := listRuntimeGetSymbolFor(elemLLVM, isStringLLVMType(elemT))
 	g.declareRuntime(getSym, mirRuntimeDeclareMemoryRead(elemLLVM, getSym, "ptr, i64"))
 	lenReg := g.fresh()
 	g.fnBuf.WriteString(mirCallValueI64FromPtrLine(lenReg, lenSym, listReg))
@@ -9826,7 +9842,7 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 						continue
 					}
 				}
-				sym := mirRtListGetSuffixSymbol(listRuntimeSymbolSuffix(elemLLVM))
+				sym := mirRtListGetSuffixSymbol(listRuntimeSymbolSuffixFor(elemLLVM, isStringLLVMType(elemT)))
 				g.declareRuntime(sym, mirRuntimeDeclareLine(elemLLVM, sym, "ptr, i64"))
 				next := g.fresh()
 				g.fnBuf.WriteString(mirCallValueLine(next, elemLLVM, sym,

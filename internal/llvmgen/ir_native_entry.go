@@ -3390,10 +3390,11 @@ func nativeExprFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeEx
 			return nil, false
 		}
 		out := &llvmNativeExpr{
-			kind:         llvmNativeExprListLit,
-			llvmType:     "ptr",
-			elemLLVMType: listInfo.listElemType,
-			childExprs:   make([]*llvmNativeExpr, 0, len(e.Elems)),
+			kind:             llvmNativeExprListLit,
+			llvmType:         "ptr",
+			elemLLVMType:     listInfo.listElemType,
+			elemLLVMIsString: listInfo.listElemString,
+			childExprs:       make([]*llvmNativeExpr, 0, len(e.Elems)),
 		}
 		for _, elem := range e.Elems {
 			value, ok := nativeExprFromIRWithHint(ctx, elem, listInfo.listElemType)
@@ -3604,10 +3605,11 @@ func nativeExprFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeEx
 			}
 			ctx.needsListRT = true
 			return &llvmNativeExpr{
-				kind:         llvmNativeExprListIndex,
-				llvmType:     llvmType,
-				elemLLVMType: baseInfo.listElemType,
-				childExprs:   []*llvmNativeExpr{base, index},
+				kind:             llvmNativeExprListIndex,
+				llvmType:         llvmType,
+				elemLLVMType:     baseInfo.listElemType,
+				elemLLVMIsString: baseInfo.listElemString,
+				childExprs:       []*llvmNativeExpr{base, index},
 			}, true
 		case nativeExprInfoMap:
 			key, ok := nativeExprFromIRWithHint(ctx, e.Index, baseInfo.mapKeyType)

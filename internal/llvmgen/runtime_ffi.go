@@ -609,16 +609,44 @@ func listRuntimePushSymbol(elemTyp string) string {
 	return llvmListRuntimePushSymbol(llvmListElementSuffix(elemTyp))
 }
 
+func listRuntimePushSymbolFor(elemTyp string, elemString bool) string {
+	if elemTyp == "ptr" && elemString {
+		return mirRtListSymbol("push_string")
+	}
+	return listRuntimePushSymbol(elemTyp)
+}
+
 func listRuntimeGetSymbol(elemTyp string) string {
 	return llvmListRuntimeGetSymbol(llvmListElementSuffix(elemTyp))
+}
+
+func listRuntimeGetSymbolFor(elemTyp string, elemString bool) string {
+	if elemTyp == "ptr" && elemString {
+		return mirRtListSymbol("get_string")
+	}
+	return listRuntimeGetSymbol(elemTyp)
 }
 
 func listRuntimeSetSymbol(elemTyp string) string {
 	return llvmListRuntimeSetSymbol(llvmListElementSuffix(elemTyp))
 }
 
+func listRuntimeSetSymbolFor(elemTyp string, elemString bool) string {
+	if elemTyp == "ptr" && elemString {
+		return mirRtListSymbol("set_string")
+	}
+	return listRuntimeSetSymbol(elemTyp)
+}
+
 func listRuntimeInsertSymbol(elemTyp string) string {
 	return llvmListRuntimeInsertSymbol(llvmListElementSuffix(elemTyp))
+}
+
+func listRuntimeInsertSymbolFor(elemTyp string, elemString bool) string {
+	if elemTyp == "ptr" && elemString {
+		return mirRtListSymbol("insert_string")
+	}
+	return listRuntimeInsertSymbol(elemTyp)
 }
 
 func listRuntimeInsertBytesV1Symbol() string {
@@ -782,4 +810,11 @@ func listUsesRawDataFastPath(elemTyp string) bool {
 
 func listRuntimeSymbolSuffix(typ string) string {
 	return llvmListElementSuffix(typ)
+}
+
+func listRuntimeSymbolSuffixFor(typ string, isString bool) string {
+	if typ == "ptr" && isString {
+		return "string"
+	}
+	return listRuntimeSymbolSuffix(typ)
 }

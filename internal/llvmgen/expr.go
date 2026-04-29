@@ -857,7 +857,7 @@ func (g *generator) emitIndexExpr(expr *ast.IndexExpr) (value, error) {
 			return value{}, unsupportedf("type-system", "list index type %s, want i64", index.typ)
 		}
 		if listUsesTypedRuntime(base.listElemTyp) {
-			symbol := listRuntimeGetSymbol(base.listElemTyp)
+			symbol := listRuntimeGetSymbolFor(base.listElemTyp, base.listElemString)
 			g.declareRuntimeSymbol(symbol, base.listElemTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
 			emitter := g.toOstyEmitter()
 			out := llvmCall(emitter, base.listElemTyp, symbol, []*LlvmValue{toOstyValue(base), toOstyValue(index)})
@@ -3356,7 +3356,7 @@ func (g *generator) emitListExprWithHint(expr *ast.ListExpr, elemSource ast.Type
 	traceSymbol := ""
 	if !useAggregateABI {
 		if listUsesTypedRuntime(elemTyp) {
-			pushSymbol = listRuntimePushSymbol(elemTyp)
+			pushSymbol = listRuntimePushSymbolFor(elemTyp, elemString)
 			g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
 		} else {
 			traceSymbol = g.traceCallbackSymbol(elemTyp, g.rootPathsForType(elemTyp))
@@ -3375,7 +3375,7 @@ func (g *generator) emitListExprWithHint(expr *ast.ListExpr, elemSource ast.Type
 		}
 		emitter = g.toOstyEmitter()
 		if listUsesTypedRuntime(elemTyp) {
-			pushSymbol := listRuntimePushSymbol(elemTyp)
+			pushSymbol := listRuntimePushSymbolFor(elemTyp, elemString)
 			g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
 			emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 				pushSymbol,
@@ -5998,7 +5998,7 @@ func (g *generator) emitListGetCall(call *ast.CallExpr, base value, elemTyp stri
 	if !scalar {
 		runtimeRet = "ptr"
 	}
-	getSym := listRuntimeGetSymbol(runtimeRet)
+	getSym := listRuntimeGetSymbolFor(runtimeRet, elemString)
 	g.declareRuntimeSymbol(getSym, runtimeRet, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
 
 	emitter := g.toOstyEmitter()
@@ -6467,7 +6467,7 @@ func (g *generator) emitMapIterate(mapVal value, keyTyp, valTyp string, keyStrin
 	}
 
 	// k = keysList[i]
-	listGetSym := listRuntimeGetSymbol(keyTyp)
+	listGetSym := listRuntimeGetSymbolFor(keyTyp, keyString)
 	g.declareRuntimeSymbol(listGetSym, keyTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
 	emitter = g.toOstyEmitter()
 	kCall := llvmCall(emitter, keyTyp, listGetSym, []*LlvmValue{toOstyValue(keysLoaded), llvmI64(loop.current)})

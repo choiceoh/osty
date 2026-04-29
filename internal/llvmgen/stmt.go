@@ -883,7 +883,7 @@ func (g *generator) emitListAssignValue(base, index, v value) error {
 	}
 	emitter := g.toOstyEmitter()
 	if listUsesTypedRuntime(base.listElemTyp) {
-		symbol := listRuntimeSetSymbol(base.listElemTyp)
+		symbol := listRuntimeSetSymbolFor(base.listElemTyp, base.listElemString)
 		g.declareRuntimeSymbol(symbol, "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: base.listElemTyp}})
 		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 			symbol,
@@ -911,7 +911,7 @@ func (g *generator) emitListElementValue(base, index value) (value, error) {
 		return value{}, unsupportedf("type-system", "list index type %s, want i64", index.typ)
 	}
 	if listUsesTypedRuntime(base.listElemTyp) {
-		symbol := listRuntimeGetSymbol(base.listElemTyp)
+		symbol := listRuntimeGetSymbolFor(base.listElemTyp, base.listElemString)
 		g.declareRuntimeSymbol(symbol, base.listElemTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
 		emitter := g.toOstyEmitter()
 		out := llvmCall(emitter, base.listElemTyp, symbol, []*LlvmValue{toOstyValue(base), toOstyValue(index)})
@@ -3037,7 +3037,7 @@ func (g *generator) emitPrintln(call *ast.CallExpr) error {
 }
 
 func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
-	field, elemTyp, _, found := g.listMethodInfo(call)
+	field, elemTyp, elemString, found := g.listMethodInfo(call)
 	if !found {
 		return false, nil
 	}
@@ -3120,7 +3120,7 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 		if !listUsesTypedRuntime(elemTyp) {
 			return true, unsupportedf("call", "list.insert is currently supported on List<T> with typed-runtime or aggregate element ABI; got element type %s", elemTyp)
 		}
-		insertSymbol := listRuntimeInsertSymbol(elemTyp)
+		insertSymbol := listRuntimeInsertSymbolFor(elemTyp, elemString)
 		g.declareRuntimeSymbol(insertSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: "i64"}, {typ: elemTyp}})
 		emitter = g.toOstyEmitter()
 		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
@@ -3159,11 +3159,10 @@ func (g *generator) emitListMethodCallStmt(call *ast.CallExpr) (bool, error) {
 	if g.usesAggregateListABI(elemTyp) {
 		return true, g.emitListAggregatePush(baseValue, argValue)
 	}
-	pushSymbol := listRuntimePushSymbol(elemTyp)
+	pushSymbol := listRuntimePushSymbolFor(elemTyp, elemString)
 	g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
 	emitter = g.toOstyEmitter()
 	if listUsesTypedRuntime(elemTyp) {
-		g.declareRuntimeSymbol(pushSymbol, "void", []paramInfo{{typ: "ptr"}, {typ: elemTyp}})
 		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
 			pushSymbol,
 			llvmCallArgs([]*LlvmValue{toOstyValue(baseValue), toOstyValue(argValue)}),
@@ -3393,7 +3392,7 @@ func (g *generator) emitMapRetainIfStmt(call *ast.CallExpr, base value, keyTyp s
 		if err != nil {
 			return err
 		}
-		pushSym := listRuntimePushSymbol(keyTyp)
+		pushSym := listRuntimePushSymbolFor(keyTyp, keyString)
 		g.declareRuntimeSymbol(pushSym, "void", []paramInfo{{typ: "ptr"}, {typ: keyTyp}})
 		emitter = g.toOstyEmitter()
 		emitter.body = append(emitter.body, mirCallRuntimeVoidOneArgText(
@@ -3441,7 +3440,7 @@ func (g *generator) emitMapRetainIfStmt(call *ast.CallExpr, base value, keyTyp s
 		g.popLoop()
 		return err
 	}
-	getSym := listRuntimeGetSymbol(keyTyp)
+	getSym := listRuntimeGetSymbolFor(keyTyp, keyString)
 	g.declareRuntimeSymbol(getSym, keyTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
 	emitter = g.toOstyEmitter()
 	vk := llvmCall(emitter, keyTyp, getSym, []*LlvmValue{toOstyValue(victimsLoaded), llvmI64(loop2.current)})
@@ -3653,6 +3652,7 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, elemTyp string) error {
 	if iterable.typ != "ptr" || elemTyp == "" {
 		return unsupportedf("type-system", "for-in iterable type %s", iterable.typ)
 	}
+	elemString := iterable.listElemString
 	useAggregateABI := g.usesAggregateListABI(elemTyp)
 	iterable = g.protectManagedTemporary("for.iter", iterable)
 	g.declareRuntimeSymbol(listRuntimeLenSymbol(), "i64", []paramInfo{{typ: "ptr"}})
@@ -3700,7 +3700,7 @@ func (g *generator) emitListFor(stmt *ast.ForStmt, elemTyp string) error {
 			return err
 		}
 	} else if listUsesTypedRuntime(elemTyp) {
-		getSymbol := listRuntimeGetSymbol(elemTyp)
+		getSymbol := listRuntimeGetSymbolFor(elemTyp, elemString)
 		g.declareRuntimeSymbol(getSymbol, elemTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
 		emitter = g.toOstyEmitter()
 		item := llvmCall(emitter, elemTyp, getSymbol, []*LlvmValue{toOstyValue(iterableValue), llvmI64(loop.current)})
@@ -3824,7 +3824,7 @@ func (g *generator) emitSetFor(stmt *ast.ForStmt, iterName, elemTyp string, elem
 		item.sourceType = elemSource
 		g.bindLocal(iterName, item)
 	} else if listUsesTypedRuntime(elemTyp) {
-		getSymbol := listRuntimeGetSymbol(elemTyp)
+		getSymbol := listRuntimeGetSymbolFor(elemTyp, elemString)
 		g.declareRuntimeSymbol(getSymbol, elemTyp, []paramInfo{{typ: "ptr"}, {typ: "i64"}})
 		emitter = g.toOstyEmitter()
 		item := llvmCall(emitter, elemTyp, getSymbol, []*LlvmValue{toOstyValue(snapshotV), llvmI64(loop.current)})

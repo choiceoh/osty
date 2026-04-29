@@ -104,6 +104,7 @@ type llvmNativeExpr struct {
 	fieldIndex          int
 	baseLLVMType        string
 	elemLLVMType        string
+	elemLLVMIsString    bool
 	mapKeyLLVMType      string
 	mapKeyIsString      bool
 	mapValueLLVMType    string
@@ -1393,7 +1394,11 @@ func llvmNativeEvalListLit(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValu
 	for _, child := range expr.childExprs {
 		value := llvmNativeEvalExpr(emitter, child)
 		if llvmListUsesTypedRuntime(expr.elemLLVMType) {
-			llvmListPush(emitter, list, value)
+			if expr.elemLLVMIsString {
+				llvmListPushString(emitter, list, value)
+			} else {
+				llvmListPush(emitter, list, value)
+			}
 			continue
 		}
 		slot := llvmSpillToSlot(emitter, value)
@@ -1462,6 +1467,9 @@ func llvmNativeEvalListIndex(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmVa
 	list := llvmNativeEvalExpr(emitter, expr.childExprs[0])
 	index := llvmNativeEvalExpr(emitter, expr.childExprs[1])
 	if llvmListUsesTypedRuntime(expr.elemLLVMType) {
+		if expr.elemLLVMIsString {
+			return llvmListGetString(emitter, list, index)
+		}
 		return llvmListGet(emitter, list, index, expr.elemLLVMType)
 	}
 	slot := llvmAllocaSlot(emitter, expr.elemLLVMType)
