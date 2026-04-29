@@ -501,7 +501,9 @@ func dirHasOstySiblings(dir, selfPath string) bool {
 // as one package. The file whose URI the client opened is substituted
 // with `src` so unsaved edits are honored.
 func (s *Server) analyzePackage(pkgDir, path string, src []byte) *docAnalysis {
-	pkg, err := resolve.LoadPackageForNativeWithTransform(pkgDir, lspSourceOverrideTransform(path, src))
+	pkg, err := resolve.LoadPackageForNativeWithOptions(pkgDir, resolve.LoadOptions{
+		Transformer: lspSourceOverrideTransformer(path, src),
+	})
 	if err != nil {
 		return nil
 	}
@@ -794,7 +796,7 @@ func (s *Server) analyzeWorkspace(root, path string, src []byte) *docAnalysis {
 	if err != nil {
 		return nil
 	}
-	ws.SourceTransform = lspSourceOverrideTransform(path, src)
+	ws.SourceTransformer = lspSourceOverrideTransformer(path, src)
 	// Seed the root package (if any) and every immediate subdir that
 	// has `.osty` files; LoadPackage chases `use` edges from there.
 	seedWorkspace(ws, root)
@@ -853,28 +855,28 @@ func seedWorkspace(ws *resolve.Workspace, root string) {
 	}
 }
 
-func lspSourceOverrideTransform(path string, src []byte) resolve.SourceTransform {
+func lspSourceOverrideTransformer(path string, src []byte) resolve.SourceTransformer {
 	if path == "" {
 		return nil
 	}
-	return func(candidate string, original []byte) []byte {
+	return func(candidate string, original []byte) resolve.SourceTransformResult {
 		if candidate != path {
-			return original
+			return resolve.SourceTransformResult{Source: original, MapKnown: true}
 		}
-		return append([]byte(nil), src...)
+		return resolve.SourceTransformResult{Source: append([]byte(nil), src...), MapKnown: true}
 	}
 }
 
-func lspSourceOverrideMapTransform(overrides map[string][]byte) resolve.SourceTransform {
+func lspSourceOverrideMapTransformer(overrides map[string][]byte) resolve.SourceTransformer {
 	if len(overrides) == 0 {
 		return nil
 	}
-	return func(candidate string, original []byte) []byte {
+	return func(candidate string, original []byte) resolve.SourceTransformResult {
 		src, ok := overrides[candidate]
 		if !ok {
-			return original
+			return resolve.SourceTransformResult{Source: original, MapKnown: true}
 		}
-		return append([]byte(nil), src...)
+		return resolve.SourceTransformResult{Source: append([]byte(nil), src...), MapKnown: true}
 	}
 }
 
@@ -1237,7 +1239,7 @@ func (s *Server) ensureWorkspaceIndex(root string) []*resolve.Package {
 		}
 	}
 	s.docs.mu.Unlock()
-	ws.SourceTransform = lspSourceOverrideMapTransform(openBufs)
+	ws.SourceTransformer = lspSourceOverrideMapTransformer(openBufs)
 	ws.Packages = map[string]*resolve.Package{}
 	seedWorkspace(ws, root)
 	lspMaterializeNativeWorkspace(ws)

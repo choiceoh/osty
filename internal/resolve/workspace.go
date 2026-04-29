@@ -132,6 +132,11 @@ type Workspace struct {
 	// resolver work begins.
 	SourceTransform SourceTransform
 
+	// SourceTransformer is the structured source rewrite hook. When set, it
+	// takes precedence over SourceTransform and may provide exact source-map
+	// metadata or deliberately opt out of original-source remapping.
+	SourceTransformer SourceTransformer
+
 	// stdlibStub is set to true when the workspace should tolerate
 	// `std.*` imports even though no stdlib sources are present. Useful
 	// in tests and before the stdlib is bundled with the compiler.
@@ -148,6 +153,16 @@ type Workspace struct {
 	// driver sets this explicitly when cross-compiling or toggling
 	// features.
 	cfgEnv *CfgEnv
+}
+
+func (w *Workspace) loadOptions() LoadOptions {
+	if w == nil {
+		return LoadOptions{}
+	}
+	return LoadOptions{
+		Transform:   w.SourceTransform,
+		Transformer: w.SourceTransformer,
+	}
 }
 
 // SetCfgEnv installs a CfgEnv that subsequent ResolveAll calls use
