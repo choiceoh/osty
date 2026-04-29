@@ -1,0 +1,8 @@
+use std.testing
+
+fn benchEphemeralGCChurn() {
+    testing.benchmark(20, || {
+        let _ = ephemeralGCChurn(2048)
+        Ok(())
+    })
+}

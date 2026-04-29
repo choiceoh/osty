@@ -4271,6 +4271,104 @@ func TestGenerateFromMIRBinaryStringAddUsesRuntimeConcat(t *testing.T) {
 	}
 }
 
+func TestGenerateFromMIRStringAddFusesIntToStringLeaf(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "key",
+		Return: ir.TString,
+		Params: []*ir.Param{{Name: "n", Type: ir.TInt}},
+		Body: &ir.Block{
+			Result: &ir.BinaryExpr{
+				Op:   ir.BinAdd,
+				Left: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "key:"}}},
+				Right: &ir.MethodCall{
+					Receiver: &ir.Ident{Name: "n", Kind: ir.IdentParam, T: ir.TInt},
+					Name:     "toString",
+					T:        ir.TString,
+				},
+				T: ir.TString,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/string_add_int_to_string.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_ConcatI64Right(ptr, i64)",
+		"call ptr @osty_rt_strings_ConcatI64Right(ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	for _, bad := range []string{
+		"osty_rt_int_to_string",
+		"call ptr @osty_rt_strings_Concat(",
+	} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("unexpected %q in fused string add:\n%s", bad, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRStringAddFusesIntToStringWrapperLeaf(t *testing.T) {
+	wrapper := &ir.FnDecl{
+		Name:   "intToStr",
+		Return: ir.TString,
+		Params: []*ir.Param{{Name: "n", Type: ir.TInt}},
+		Body: &ir.Block{
+			Result: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "n", Kind: ir.IdentParam, T: ir.TInt},
+				Name:     "toString",
+				T:        ir.TString,
+			},
+		},
+	}
+	fn := &ir.FnDecl{
+		Name:   "key",
+		Return: ir.TString,
+		Params: []*ir.Param{{Name: "n", Type: ir.TInt}},
+		Body: &ir.Block{
+			Result: &ir.BinaryExpr{
+				Op:   ir.BinAdd,
+				Left: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "key:"}}},
+				Right: &ir.CallExpr{
+					Callee: &ir.Ident{Name: "intToStr", Kind: ir.IdentFn, T: &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TString}},
+					Args:   []ir.Arg{{Value: &ir.Ident{Name: "n", Kind: ir.IdentParam, T: ir.TInt}}},
+					T:      ir.TString,
+				},
+				T: ir.TString,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{wrapper, fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/string_add_int_to_string_wrapper.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_ConcatI64Right(ptr, i64)",
+		"call ptr @osty_rt_strings_ConcatI64Right(ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	for _, bad := range []string{
+		"call ptr @intToStr(",
+		"call ptr @osty_rt_strings_Concat(",
+	} {
+		if strings.Contains(got, bad) {
+			t.Fatalf("unexpected %q in fused wrapper string add:\n%s", bad, got)
+		}
+	}
+}
+
 func TestGenerateFromMIRStringInterpolationRecoversFieldExprTypes(t *testing.T) {
 	diagT := &ir.NamedType{Name: "Diag"}
 	fn := &ir.FnDecl{

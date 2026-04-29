@@ -1,0 +1,18 @@
+fn intToStr(n: Int) -> String {
+    n.toString()
+}
+
+#[inline(never)]
+pub fn buildStringKeys(n: Int) -> Int {
+    let mut total = 0
+    let mut state = 1
+    let mut i = 0
+    for i < n {
+        state = (state * 1103515245 + 12345) % 2147483648
+        let target = state % 200000
+        let key = "key:" + intToStr(target)
+        total = total + key.len()
+        i = i + 1
+    }
+    total
+}

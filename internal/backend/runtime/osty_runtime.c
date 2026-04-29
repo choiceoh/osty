@@ -7788,16 +7788,14 @@ static char *osty_rt_string_dup_site(const char *start, size_t len, const char *
 }
 
 /* SSO-eligible dup. Strings up to 7 bytes pack into the pointer
- * itself, eliminating the `osty_gc_allocate_managed` call on the
- * hottest source of short-string allocs (split pieces). The other
- * `dup_site` callers (int_to_string / bool_to_string / chars / bytes
- * / case helpers) keep producing heap strings via the unsuffixed
- * variant — they all flow through `dup_site` whose body is now SSO-
- * input-safe (`osty_rt_string_copy_bytes`), so callers that splice
- * bytes from an inline source still work, but the OUTPUT of those
- * sites stays heap-resident. SSO output is opt-in via this `_sso`
- * variant so concat/IO-bound producers don't accidentally hand a
- * tagged pointer to libc.
+ * itself, eliminating the `osty_gc_allocate_managed` call on hot
+ * short-string producers (split pieces, small Int.toString results).
+ * Other `dup_site` callers keep producing heap strings via the
+ * unsuffixed variant; they all flow through `dup_site` whose body is
+ * SSO-input-safe (`osty_rt_string_copy_bytes`), so callers that splice
+ * bytes from an inline source still work. SSO output is opt-in via
+ * this `_sso` variant so each producer can be audited for downstream
+ * runtime support before it starts returning tagged pointers.
  *
  * `static inline`: single hot caller (`osty_rt_string_dup_range`)
  * benefits from inlining the length-branch so the constant-length
@@ -8499,13 +8497,51 @@ OSTY_HOT_INLINE bool osty_rt_strings_Equal(const char *left, const char *right) 
     return memcmp(left, right, left_len) == 0;
 }
 
+static OSTY_HOT_INLINE char *osty_rt_format_i64_decimal(char *end, int64_t value) {
+    char *p = end;
+    uint64_t n;
+
+    if (value < 0) {
+        n = (uint64_t)(-(value + 1)) + 1;
+    } else {
+        n = (uint64_t)value;
+    }
+    do {
+        *--p = (char)('0' + (n % 10));
+        n /= 10;
+    } while (n != 0);
+    if (value < 0) {
+        *--p = '-';
+    }
+    return p;
+}
+
+static OSTY_HOT_INLINE bool osty_rt_strings_equal_right_measured(const char *left,
+                                                                 const char *right,
+                                                                 size_t right_len) {
+    size_t left_len = 0;
+    char left_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    char right_buf[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    if (left == right) {
+        return true;
+    }
+    if (left == NULL || right == NULL) {
+        return false;
+    }
+    osty_rt_string_measure(left, &left_len, NULL);
+    if (left_len != right_len) {
+        return false;
+    }
+    osty_rt_string_decode_to_buf_if_inline(&left, left_buf);
+    osty_rt_string_decode_to_buf_if_inline(&right, right_buf);
+    return memcmp(left, right, left_len) == 0;
+}
+
 const char *osty_rt_int_to_string(int64_t value) {
     char buffer[32];
-    int written = snprintf(buffer, sizeof(buffer), "%lld", (long long)value);
-    if (written < 0) {
-        osty_rt_abort("failed to format Int as String");
-    }
-    return osty_rt_string_dup_site(buffer, (size_t)written, "runtime.int.to_string");
+    char *end = buffer + sizeof(buffer);
+    char *p = osty_rt_format_i64_decimal(end, value);
+    return osty_rt_string_dup_site_sso(p, (size_t)(end - p), "runtime.int.to_string");
 }
 
 /* List<T>.toString runtime entries. One per element ABI lane; each
@@ -9316,6 +9352,36 @@ OSTY_HOT_INLINE const char *osty_rt_strings_Concat(const char *left, const char 
      * Inline operands are decoded via `osty_rt_string_copy_bytes`. */
     out = (char *)osty_gc_allocate_managed(total_len + 1, OSTY_GC_KIND_STRING, "runtime.strings.concat", NULL, NULL);
     osty_rt_string_copy_bytes(out, left, left_len);
+    osty_rt_string_copy_bytes(out + left_len, right, right_len);
+    out[total_len] = '\0';
+    return out;
+}
+
+OSTY_HOT_INLINE const char *osty_rt_strings_ConcatI64Right(const char *left, int64_t right) {
+    char buffer[32];
+    char *end = buffer + sizeof(buffer);
+    char *right_start = osty_rt_format_i64_decimal(end, right);
+    size_t left_len = osty_rt_string_len(left);
+    size_t right_len = (size_t)(end - right_start);
+    size_t total_len = left_len + right_len;
+    char *out = (char *)osty_gc_allocate_managed(total_len + 1, OSTY_GC_KIND_STRING, "runtime.strings.concat_i64_right", NULL, NULL);
+
+    osty_rt_string_copy_bytes(out, left, left_len);
+    memcpy(out + left_len, right_start, right_len);
+    out[total_len] = '\0';
+    return out;
+}
+
+OSTY_HOT_INLINE const char *osty_rt_strings_ConcatI64Left(int64_t left, const char *right) {
+    char buffer[32];
+    char *end = buffer + sizeof(buffer);
+    char *left_start = osty_rt_format_i64_decimal(end, left);
+    size_t left_len = (size_t)(end - left_start);
+    size_t right_len = osty_rt_string_len(right);
+    size_t total_len = left_len + right_len;
+    char *out = (char *)osty_gc_allocate_managed(total_len + 1, OSTY_GC_KIND_STRING, "runtime.strings.concat_i64_left", NULL, NULL);
+
+    memcpy(out, left_start, left_len);
     osty_rt_string_copy_bytes(out + left_len, right, right_len);
     out[total_len] = '\0';
     return out;
@@ -10589,6 +10655,68 @@ static OSTY_HOT_INLINE int64_t osty_rt_map_find_index_indexed(osty_rt_map *map, 
     }
 }
 
+static OSTY_HOT_INLINE bool osty_rt_map_string_slot_equals(osty_rt_map *map,
+                                                           int64_t slot,
+                                                           const char *key,
+                                                           size_t key_len) {
+    const char *slot_key = NULL;
+    memcpy(&slot_key, osty_rt_map_key_slot(map, slot), sizeof(slot_key));
+    slot_key = (const char *)osty_gc_load_v1((void *)slot_key);
+    return osty_rt_strings_equal_right_measured(slot_key, key, key_len);
+}
+
+static OSTY_HOT_INLINE int64_t osty_rt_map_find_index_string_indexed(osty_rt_map *map,
+                                                                     const char *key) {
+    size_t key_len = 0;
+    size_t key_hash;
+    uint32_t key_fingerprint;
+    uint64_t mask;
+    uint64_t idx;
+
+    key = (const char *)osty_gc_load_v1((void *)key);
+    osty_rt_string_measure(key, &key_len, &key_hash);
+    key_fingerprint = osty_rt_map_key_fingerprint(key_hash);
+    mask = (uint64_t)(map->index_cap - 1);
+    idx = (uint64_t)key_hash & mask;
+
+    for (;;) {
+        int64_t entry = map->index_slots[idx];
+        int64_t slot;
+        if (entry == 0) {
+            return -1;
+        }
+        slot = entry - 1;
+        if (slot >= 0 && slot < map->len &&
+            map->index_hashes[idx] == key_fingerprint &&
+            osty_rt_map_string_slot_equals(map, slot, key, key_len)) {
+            return slot;
+        }
+        idx = (idx + 1) & mask;
+    }
+}
+
+static OSTY_HOT_INLINE int64_t osty_rt_map_find_index_string_linear(osty_rt_map *map,
+                                                                    const char *key) {
+    int64_t i;
+    size_t key_len = 0;
+    key = (const char *)osty_gc_load_v1((void *)key);
+    osty_rt_string_measure(key, &key_len, NULL);
+    for (i = 0; i < map->len; i++) {
+        if (osty_rt_map_string_slot_equals(map, i, key, key_len)) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+static OSTY_HOT_INLINE int64_t osty_rt_map_find_index_string(osty_rt_map *map,
+                                                            const char *key) {
+    if (map->index_cap > 0 && map->index_slots != NULL) {
+        return osty_rt_map_find_index_string_indexed(map, key);
+    }
+    return osty_rt_map_find_index_string_linear(map, key);
+}
+
 /* OSTY_HOT_INLINE on the dispatcher only — `find_index_indexed` (with
  * the probe loop) and `find_index_linear` (small-map scan) keep their
  * out-of-line forms because either body has enough instructions that
@@ -11139,7 +11267,90 @@ OSTY_RT_DEFINE_MAP_KEY_OPS(i64, int64_t)
 OSTY_RT_DEFINE_MAP_KEY_OPS(i1, bool)
 OSTY_RT_DEFINE_MAP_KEY_OPS(f64, double)
 OSTY_RT_DEFINE_MAP_KEY_OPS(ptr, void *)
-OSTY_RT_DEFINE_MAP_KEY_OPS(string, const char *)
+
+OSTY_HOT_INLINE bool osty_rt_map_contains_string(void *raw_map, const char *key) {
+    bool r;
+    osty_rt_map_lock(raw_map);
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
+    r = map != NULL && osty_rt_map_find_index_string(map, key) >= 0;
+    osty_rt_map_unlock(raw_map);
+    return r;
+}
+
+OSTY_HOT_INLINE void osty_rt_map_insert_string(void *raw_map, const char *key, const void *value) {
+    osty_rt_map_lock(raw_map);
+    osty_rt_map_insert_raw(raw_map, &key, value);
+    osty_rt_map_unlock(raw_map);
+}
+
+OSTY_HOT_INLINE bool osty_rt_map_remove_string(void *raw_map, const char *key) {
+    bool r;
+    osty_rt_map_lock(raw_map);
+    r = osty_rt_map_remove_raw(raw_map, &key);
+    osty_rt_map_unlock(raw_map);
+    return r;
+}
+
+OSTY_HOT_INLINE void osty_rt_map_get_or_abort_string(void *raw_map, const char *key, void *out_value) {
+    osty_rt_map_lock(raw_map);
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
+    int64_t index;
+    if (map == NULL || out_value == NULL) {
+        osty_rt_abort("invalid map get");
+    }
+    index = osty_rt_map_find_index_string(map, key);
+    if (index < 0) {
+        osty_rt_abort("map key not found");
+    }
+    memcpy(out_value, osty_rt_map_value_slot(map, index), map->value_size);
+    osty_rt_map_unlock(raw_map);
+}
+
+OSTY_HOT_INLINE bool osty_rt_map_get_string(void *raw_map, const char *key, void *out_value) {
+    bool r = false;
+    osty_rt_map_lock(raw_map);
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
+    int64_t index;
+    if (map == NULL || out_value == NULL) {
+        osty_rt_abort("invalid map get");
+    }
+    index = osty_rt_map_find_index_string(map, key);
+    if (index >= 0) {
+        memcpy(out_value, osty_rt_map_value_slot(map, index), map->value_size);
+        r = true;
+    }
+    osty_rt_map_unlock(raw_map);
+    return r;
+}
+
+const char *osty_rt_map_key_at_string(void *raw_map, int64_t index) {
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
+    const char *out;
+    if (map == NULL) osty_rt_abort("map is null");
+    osty_rt_map_lock(raw_map);
+    if (index < 0 || index >= map->len) {
+        osty_rt_map_unlock(raw_map);
+        osty_rt_abort("map key_at out of bounds");
+    }
+    memcpy(&out, osty_rt_map_key_slot(map, index), sizeof(out));
+    osty_rt_map_unlock(raw_map);
+    return out;
+}
+
+const char *osty_rt_map_entry_at_string(void *raw_map, int64_t index, void *out_value) {
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
+    const char *out;
+    if (map == NULL || out_value == NULL) osty_rt_abort("map entry_at invalid args");
+    osty_rt_map_lock(raw_map);
+    if (index < 0 || index >= map->len) {
+        osty_rt_map_unlock(raw_map);
+        osty_rt_abort("map entry_at out of bounds");
+    }
+    memcpy(&out, osty_rt_map_key_slot(map, index), sizeof(out));
+    memcpy(out_value, osty_rt_map_value_slot(map, index), map->value_size);
+    osty_rt_map_unlock(raw_map);
+    return out;
+}
 
 // `osty_rt_map_incr_i64_<suffix>(map, key, delta)`: perform
 // `map[key] = (map.get(key) ?? 0) + delta` as a single atomic
@@ -11188,7 +11399,24 @@ OSTY_RT_DEFINE_MAP_INCR_I64_OPS(i64, int64_t)
 OSTY_RT_DEFINE_MAP_INCR_I64_OPS(i1, bool)
 OSTY_RT_DEFINE_MAP_INCR_I64_OPS(f64, double)
 OSTY_RT_DEFINE_MAP_INCR_I64_OPS(ptr, void *)
-OSTY_RT_DEFINE_MAP_INCR_I64_OPS(string, const char *)
+
+OSTY_HOT_INLINE int64_t osty_rt_map_incr_i64_string(void *raw_map, const char *key, int64_t delta) {
+    int64_t next;
+    osty_rt_map_lock(raw_map);
+    osty_rt_map *map = osty_rt_map_cast(raw_map);
+    int64_t index = osty_rt_map_find_index_string(map, key);
+    if (index >= 0) {
+        int64_t current;
+        memcpy(&current, osty_rt_map_value_slot(map, index), sizeof(current));
+        next = current + delta;
+        memcpy(osty_rt_map_value_slot(map, index), &next, sizeof(next));
+    } else {
+        next = delta;
+        osty_rt_map_insert_raw(raw_map, &key, &next);
+    }
+    osty_rt_map_unlock(raw_map);
+    return next;
+}
 
 static void osty_rt_set_reserve(osty_rt_set *set, int64_t min_cap) {
     int64_t next_cap = set->cap;
@@ -14356,6 +14584,9 @@ void osty_gc_post_write_v1(void *owner, void *value, int64_t slot_kind) {
         if (owner == NULL || value == NULL) {
             return;
         }
+        if (osty_rt_string_is_inline((const char *)value)) {
+            return;
+        }
         /* Tinytag-young owner fast path. Pin / root-bind on a young
          * payload promotes it out of the no-header arena (Phase 7
          * step 2 contract), so any address we observe inside the
@@ -14445,6 +14676,10 @@ locked_path:
     osty_gc_acquire();
     osty_gc_post_write_count += 1;
     if (owner == NULL || value == NULL) {
+        osty_gc_release();
+        return;
+    }
+    if (osty_rt_string_is_inline((const char *)value)) {
         osty_gc_release();
         return;
     }

@@ -2901,7 +2901,75 @@ func (bs *bodyState) appendStringConcatLeaves(e ir.Expr, out *[]Operand) {
 		bs.appendStringConcatLeaves(be.Right, out)
 		return
 	}
+	if op, ok := bs.lowerPrimitiveIntToStringConcatLeaf(e); ok {
+		*out = append(*out, op)
+		return
+	}
 	*out = append(*out, bs.lowerExprAsOperand(e))
+}
+
+func (bs *bodyState) lowerPrimitiveIntToStringConcatLeaf(e ir.Expr) (Operand, bool) {
+	switch x := e.(type) {
+	case *ir.MethodCall:
+		if x == nil || x.Name != "toString" || len(x.Args) != 0 || !isI64PrimitiveInt(bs.recoveredTypeOf(x.Receiver)) {
+			return nil, false
+		}
+		return bs.lowerExprAsOperand(x.Receiver), true
+	case *ir.CallExpr:
+		if x == nil {
+			return nil, false
+		}
+		if len(x.Args) == 0 {
+			field, ok := x.Callee.(*ir.FieldExpr)
+			if !ok || field == nil || field.Optional || field.Name != "toString" || !isI64PrimitiveInt(bs.recoveredTypeOf(field.X)) {
+				return nil, false
+			}
+			return bs.lowerExprAsOperand(field.X), true
+		}
+		id, ok := x.Callee.(*ir.Ident)
+		if !ok || id == nil || id.Kind != ir.IdentFn || len(x.Args) != 1 || x.Args[0].IsKeyword() {
+			return nil, false
+		}
+		if !bs.l.isPrimitiveIntToStringWrapper(id.Name) || !isI64PrimitiveInt(bs.recoveredTypeOf(x.Args[0].Value)) {
+			return nil, false
+		}
+		return bs.lowerExprAsOperand(x.Args[0].Value), true
+	}
+	return nil, false
+}
+
+func (l *lowerer) isPrimitiveIntToStringWrapper(name string) bool {
+	sig := l.signatureForFn(name)
+	if sig == nil || sig.ir == nil || len(sig.params) != 1 || !isStringReceiver(sig.retType) || sig.ir.Body == nil {
+		return false
+	}
+	param := sig.params[0]
+	if param == nil || !isI64PrimitiveInt(param.Type) {
+		return false
+	}
+	call, ok := sig.ir.Body.Result.(*ir.MethodCall)
+	if !ok || call == nil || call.Name != "toString" || len(call.Args) != 0 {
+		return false
+	}
+	recv, ok := call.Receiver.(*ir.Ident)
+	return ok && recv != nil && recv.Name == param.Name && isI64PrimitiveInt(recv.Type())
+}
+
+func isI64PrimitiveInt(t ir.Type) bool {
+	pt, ok := t.(*ir.PrimType)
+	if !ok {
+		return false
+	}
+	return pt.Kind == ir.PrimInt || pt.Kind == ir.PrimInt64
+}
+
+func stringConcatPartsAllString(parts []Operand) bool {
+	for _, part := range parts {
+		if part == nil || !isStringReceiver(part.Type()) {
+			return false
+		}
+	}
+	return true
 }
 
 // pathQualifier returns the "." joined Path of a UseDecl, so
@@ -3112,7 +3180,7 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 		// too so leaves lower exactly once.
 		if x.Op == ir.BinAdd && isStringReceiver(x.T) {
 			parts := bs.flattenStringConcatChain(x)
-			if len(parts) >= 3 {
+			if len(parts) >= 3 || !stringConcatPartsAllString(parts) {
 				tmp := bs.freshTemp(TString, exprSpan(x))
 				bs.emit(&IntrinsicInstr{
 					Dest:  &Place{Local: tmp},
