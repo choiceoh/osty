@@ -1,0 +1,412 @@
+// std.tar - small ustar-compatible archive encoder and decoder.
+
+use std.bytes
+use std.error
+use std.strings
+
+pub enum EntryType {
+    File,
+    Directory,
+}
+
+pub struct Entry {
+    pub name: String,
+    pub kind: EntryType,
+    pub mode: Int,
+    pub mtime: Int,
+    pub data: Bytes,
+}
+
+pub fn file(name: String, data: Bytes) -> Result<Entry, Error> {
+    let clean = normalizeFileName(name)?
+    Ok(Entry {
+        name: clean,
+        kind: File,
+        mode: 0o644,
+        mtime: 0,
+        data: data,
+    })
+}
+
+pub fn directory(name: String) -> Result<Entry, Error> {
+    let clean = normalizeDirectoryName(name)?
+    Ok(Entry {
+        name: clean,
+        kind: Directory,
+        mode: 0o755,
+        mtime: 0,
+        data: bytes.fromString(""),
+    })
+}
+
+pub fn withMode(entry: Entry, mode: Int) -> Entry {
+    Entry {
+        name: entry.name,
+        kind: entry.kind,
+        mode: mode,
+        mtime: entry.mtime,
+        data: entry.data,
+    }
+}
+
+pub fn withMtime(entry: Entry, mtime: Int) -> Entry {
+    Entry {
+        name: entry.name,
+        kind: entry.kind,
+        mode: entry.mode,
+        mtime: mtime,
+        data: entry.data,
+    }
+}
+
+pub fn encode(entries: List<Entry>) -> Result<Bytes, Error> {
+    let mut out: List<Byte> = []
+    for entry in entries {
+        appendBytes(out, encodeEntry(entry)?)
+    }
+    appendZeroBlock(out)
+    appendZeroBlock(out)
+    Ok(bytes.from(out))
+}
+
+pub fn decode(archive: Bytes) -> Result<List<Entry>, Error> {
+    if archive.len() == 0 {
+        return Err(error.new("tar: empty archive"))
+    }
+    let mut out: List<Entry> = []
+    let mut pos = 0
+    for pos < archive.len() {
+        if pos + blockSize() > archive.len() {
+            return Err(error.new("tar: incomplete header block"))
+        }
+        if isZeroBlock(archive, pos) {
+            return Ok(out)
+        }
+        if !checksumValid(archive, pos) {
+            return Err(error.new("tar: header checksum mismatch"))
+        }
+        let name = readStringField(archive, pos, 100)
+        if name.isEmpty() {
+            return Err(error.new("tar: empty entry name"))
+        }
+        validateName(name)?
+        let mode = readOctalField(archive, pos + 100, 8)
+        let size = readOctalField(archive, pos + 124, 12)
+        let mtime = readOctalField(archive, pos + 136, 12)
+        let typeflag = byteAt(archive, pos + 156).toInt()
+        let kind = entryTypeFromFlag(typeflag)?
+        let dataStart = pos + blockSize()
+        let dataEnd = dataStart + size
+        if dataEnd > archive.len() {
+            return Err(error.new("tar: entry payload is truncated"))
+        }
+        let payload = if kind == Directory {
+            bytes.fromString("")
+        } else {
+            sliceBytes(archive, dataStart, dataEnd)
+        }
+        out.push(Entry {
+            name: name,
+            kind: kind,
+            mode: mode,
+            mtime: mtime,
+            data: payload,
+        })
+        pos = dataStart + paddedSize(size)
+    }
+    Ok(out)
+}
+
+pub fn list(archive: Bytes) -> Result<List<String>, Error> {
+    let entries = decode(archive)?
+    let mut out: List<String> = []
+    for entry in entries {
+        out.push(entry.name)
+    }
+    Ok(out)
+}
+
+pub fn extract(archive: Bytes, name: String) -> Result<Bytes?, Error> {
+    let entries = decode(archive)?
+    for entry in entries {
+        if entry.name == name && entry.kind == File {
+            return Ok(Some(entry.data))
+        }
+    }
+    Ok(None)
+}
+
+pub fn contains(archive: Bytes, name: String) -> Bool {
+    match list(archive) {
+        Ok(names) -> {
+            for item in names {
+                if item == name {
+                    return true
+                }
+            }
+            false
+        },
+        Err(_) -> false,
+    }
+}
+
+pub fn isArchive(data: Bytes) -> Bool {
+    match decode(data) {
+        Ok(_)  -> true,
+        Err(_) -> false,
+    }
+}
+
+fn encodeEntry(entry: Entry) -> Result<Bytes, Error> {
+    let name = if entry.kind == Directory {
+        normalizeDirectoryName(entry.name)?
+    } else {
+        normalizeFileName(entry.name)?
+    }
+    let size = if entry.kind == Directory { 0 } else { entry.data.len() }
+    let mut header = zeroBytes(blockSize())
+    writeStringField(header, 0, 100, name)
+    writeOctalField(header, 100, 8, entry.mode)
+    writeOctalField(header, 108, 8, 0)
+    writeOctalField(header, 116, 8, 0)
+    writeOctalField(header, 124, 12, size)
+    writeOctalField(header, 136, 12, entry.mtime)
+    for i in 148..156 {
+        header[i] = 0x20.toByte()
+    }
+    header[156] = entryTypeFlag(entry.kind).toByte()
+    writeStringField(header, 257, 6, "ustar")
+    writeStringField(header, 263, 2, "00")
+    writeStringField(header, 265, 32, "osty")
+    writeStringField(header, 297, 32, "osty")
+    writeOctalField(header, 148, 8, checksum(header))
+
+    let mut out: List<Byte> = []
+    for b in header {
+        out.push(b)
+    }
+    if entry.kind == File {
+        appendBytes(out, entry.data)
+        appendPadding(out, size)
+    }
+    Ok(bytes.from(out))
+}
+
+fn normalizeFileName(name: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(name)
+    validateName(clean)?
+    if strings.endsWith(clean, "/") {
+        return Err(error.new("tar: file name must not end with /"))
+    }
+    Ok(clean)
+}
+
+fn normalizeDirectoryName(name: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(name)
+    validateName(clean)?
+    if strings.endsWith(clean, "/") {
+        return Ok(clean)
+    }
+    Ok("{clean}/")
+}
+
+fn validateName(name: String) -> Result<(), Error> {
+    if name.isEmpty() {
+        return Err(error.new("tar: entry name is empty"))
+    }
+    if name.len() > 100 {
+        return Err(error.new("tar: entry name is too long"))
+    }
+    if strings.startsWith(name, "/") {
+        return Err(error.new("tar: absolute paths are not allowed"))
+    }
+    if name == ".." || strings.startsWith(name, "../") || strings.endsWith(name, "/..") || strings.contains(name, "/../") {
+        return Err(error.new("tar: parent path segments are not allowed"))
+    }
+    Ok(())
+}
+
+fn entryTypeFlag(kind: EntryType) -> Int {
+    match kind {
+        File      -> 0x30,
+        Directory -> 0x35,
+    }
+}
+
+fn entryTypeFromFlag(flag: Int) -> Result<EntryType, Error> {
+    if flag == 0 || flag == 0x30 {
+        return Ok(File)
+    }
+    if flag == 0x35 {
+        return Ok(Directory)
+    }
+    Err(error.new("tar: unsupported entry type"))
+}
+
+fn writeStringField(buf: List<Byte>, offset: Int, width: Int, value: String) {
+    let raw = value.bytes()
+    let mut i = 0
+    for i < width && i < raw.len() {
+        buf[offset + i] = raw[i]
+        i = i + 1
+    }
+}
+
+fn writeOctalField(buf: List<Byte>, offset: Int, width: Int, value: Int) {
+    let digits = toOctal(value)
+    let mut start = width - 1 - digits.len()
+    if start < 0 {
+        start = 0
+    }
+    let mut i = 0
+    for i < width {
+        buf[offset + i] = 0x30.toByte()
+        i = i + 1
+    }
+    i = 0
+    for i < digits.len() && start + i < width - 1 {
+        buf[offset + start + i] = digits[i].toInt().toByte()
+        i = i + 1
+    }
+    buf[offset + width - 1] = 0.toByte()
+}
+
+fn readStringField(data: Bytes, offset: Int, width: Int) -> String {
+    let mut out: List<Byte> = []
+    let mut i = 0
+    for i < width {
+        let b = byteAt(data, offset + i)
+        if b.toInt() == 0 {
+            return bytes.toString(bytes.from(out)).unwrap()
+        }
+        out.push(b)
+        i = i + 1
+    }
+    bytes.toString(bytes.from(out)).unwrap()
+}
+
+fn readOctalField(data: Bytes, offset: Int, width: Int) -> Int {
+    let mut value = 0
+    let mut i = 0
+    for i < width {
+        let n = byteAt(data, offset + i).toInt()
+        if n >= 0x30 && n <= 0x37 {
+            value = value * 8 + (n - 0x30)
+        }
+        i = i + 1
+    }
+    value
+}
+
+fn checksumValid(data: Bytes, offset: Int) -> Bool {
+    let expected = readOctalField(data, offset + 148, 8)
+    expected == checksumBlock(data, offset)
+}
+
+fn checksum(header: List<Byte>) -> Int {
+    let mut sum = 0
+    for b in header {
+        sum = sum + b.toInt()
+    }
+    sum
+}
+
+fn checksumBlock(data: Bytes, offset: Int) -> Int {
+    let mut sum = 0
+    let mut i = 0
+    for i < blockSize() {
+        if i >= 148 && i < 156 {
+            sum = sum + 0x20
+        } else {
+            sum = sum + byteAt(data, offset + i).toInt()
+        }
+        i = i + 1
+    }
+    sum
+}
+
+fn appendBytes(out: List<Byte>, data: Bytes) {
+    let mut i = 0
+    for i < data.len() {
+        out.push(byteAt(data, i))
+        i = i + 1
+    }
+}
+
+fn appendPadding(out: List<Byte>, size: Int) {
+    let pad = paddedSize(size) - size
+    let mut i = 0
+    for i < pad {
+        out.push(0.toByte())
+        i = i + 1
+    }
+}
+
+fn appendZeroBlock(out: List<Byte>) {
+    let mut i = 0
+    for i < blockSize() {
+        out.push(0.toByte())
+        i = i + 1
+    }
+}
+
+fn isZeroBlock(data: Bytes, offset: Int) -> Bool {
+    let mut i = 0
+    for i < blockSize() {
+        if byteAt(data, offset + i).toInt() != 0 {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+
+fn sliceBytes(data: Bytes, start: Int, end: Int) -> Bytes {
+    let mut out: List<Byte> = []
+    let mut i = start
+    for i < end {
+        out.push(byteAt(data, i))
+        i = i + 1
+    }
+    bytes.from(out)
+}
+
+fn zeroBytes(n: Int) -> List<Byte> {
+    let mut out: List<Byte> = []
+    let mut i = 0
+    for i < n {
+        out.push(0.toByte())
+        i = i + 1
+    }
+    out
+}
+
+fn paddedSize(n: Int) -> Int {
+    let rem = n % blockSize()
+    if rem == 0 {
+        return n
+    }
+    n + blockSize() - rem
+}
+
+fn toOctal(value: Int) -> String {
+    if value <= 0 {
+        return "0"
+    }
+    let mut n = value
+    let mut out = ""
+    for n > 0 {
+        let digit = n % 8
+        out = "{(0x30 + digit).toChar()}{out}"
+        n = n / 8
+    }
+    out
+}
+
+fn byteAt(data: Bytes, index: Int) -> Byte {
+    bytes.get(data, index).unwrap()
+}
+
+fn blockSize() -> Int {
+    512
+}
