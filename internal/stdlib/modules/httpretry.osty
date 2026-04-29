@@ -1,0 +1,322 @@
+// std.httpretry - retry/backoff and LLM-provider error classification.
+
+use std.strings
+
+pub enum FailureReason {
+    Unknown,
+    Auth,
+    AuthPermanent,
+    Billing,
+    RateLimit,
+    Overloaded,
+    ServerError,
+    Timeout,
+    Network,
+    PayloadTooLarge,
+    ContextOverflow,
+    ModelNotFound,
+    FormatError,
+    ThinkingSignature,
+    LongContextTier,
+}
+
+pub enum RetryAction {
+    RetryLater,
+    DoNotRetry,
+    RefreshCredentials,
+    CompactContext,
+    ReducePayload,
+    SwitchModel,
+    UpgradePlan,
+}
+
+pub struct RetryPolicy {
+    pub maxAttempts: Int = 4,
+    pub baseDelayMs: Int = 500,
+    pub maxDelayMs: Int = 30000,
+}
+
+pub struct ClassificationHint {
+    pub tokenUsagePercent: Float = 0.0,
+    pub approxTokens: Int = 0,
+    pub provider: String = "",
+}
+
+pub struct Decision {
+    pub reason: FailureReason,
+    pub action: RetryAction,
+    pub retryable: Bool,
+    pub delayMs: Int = 0,
+    pub rotate: Bool = false,
+    pub refresh: Bool = false,
+    pub compress: Bool = false,
+    pub stripThinking: Bool = false,
+    pub abort: Bool = false,
+    pub retryOnce: Bool = false,
+}
+
+pub fn defaultPolicy() -> RetryPolicy {
+    RetryPolicy {}
+}
+
+pub fn classify(status: Int, message: String) -> FailureReason {
+    classifyWithHint(status, message, "", ClassificationHint {})
+}
+
+pub fn classifyWithCode(status: Int, message: String, providerCode: String) -> FailureReason {
+    classifyWithHint(status, message, providerCode, ClassificationHint {})
+}
+
+pub fn classifyWithHint(status: Int, message: String, providerCode: String, hint: ClassificationHint) -> FailureReason {
+    let msg = strings.toLower(message)
+    if status == 400 && strings.contains(msg, "signature") && strings.contains(msg, "thinking") {
+        return ThinkingSignature
+    }
+    if status == 429 && strings.contains(msg, "extra usage") && strings.contains(msg, "long context") {
+        return LongContextTier
+    }
+    if isLargeSession(hint) && containsAny(msg, serverDisconnectPatterns()) && !containsAny(msg, sslTransientPatterns()) {
+        return ContextOverflow
+    }
+    match status {
+        401 -> Auth,
+        403 -> {
+            if containsAny(msg, ["spending limit", "key limit exceeded"]) { Billing } else { Auth }
+        },
+        402 -> classify402(msg),
+        404 -> {
+            if containsAny(msg, modelNotFoundPatterns()) { ModelNotFound } else { Unknown }
+        },
+        413 -> PayloadTooLarge,
+        429 -> RateLimit,
+        408 | 504 -> Timeout,
+        500 | 502 -> ServerError,
+        503 | 529 -> Overloaded,
+        400 -> classify400(msg, hint),
+        _ -> {
+            if status >= 400 && status < 500 {
+                FormatError
+            } else if status >= 500 && status < 600 {
+                ServerError
+            } else {
+                let byCode = classifyProviderCode(providerCode)
+                if byCode != Unknown { byCode } else { classifyMessage(msg) }
+            }
+        },
+    }
+}
+
+pub fn classifyMessage(message: String) -> FailureReason {
+    let msg = strings.toLower(message)
+    if msg.isEmpty() {
+        return Unknown
+    }
+    if containsAny(msg, payloadTooLargePatterns()) {
+        return PayloadTooLarge
+    }
+    if containsAny(msg, billingPatterns()) {
+        return Billing
+    }
+    if containsAny(msg, rateLimitPatterns()) {
+        return RateLimit
+    }
+    if containsAny(msg, usageLimitPatterns()) {
+        if containsAny(msg, usageLimitTransientSignals()) {
+            return RateLimit
+        }
+        return Billing
+    }
+    if containsAny(msg, contextOverflowPatterns()) {
+        return ContextOverflow
+    }
+    if containsAny(msg, authPatterns()) {
+        return Auth
+    }
+    if containsAny(msg, modelNotFoundPatterns()) {
+        return ModelNotFound
+    }
+    if containsAny(msg, sslTransientPatterns()) || containsAny(msg, transportMessagePatterns()) {
+        return Timeout
+    }
+    if containsAny(msg, serverDisconnectPatterns()) {
+        return Timeout
+    }
+    if containsAny(msg, ["overloaded", "temporarily unavailable", "service unavailable"]) {
+        return Overloaded
+    }
+    Unknown
+}
+
+pub fn decideDefault(status: Int, message: String, attempt: Int) -> Decision {
+    decide(status, message, attempt, defaultPolicy())
+}
+
+pub fn decide(status: Int, message: String, attempt: Int, policy: RetryPolicy) -> Decision {
+    decisionForReason(classify(status, message), attempt, policy)
+}
+
+pub fn decisionForReason(reason: FailureReason, attempt: Int, policy: RetryPolicy) -> Decision {
+    let canRetry = attempt < policy.maxAttempts
+    match reason {
+        Auth -> Decision { reason: reason, action: RefreshCredentials, retryable: true, rotate: true, refresh: true, retryOnce: true },
+        AuthPermanent -> Decision { reason: reason, action: DoNotRetry, retryable: false, abort: true },
+        Billing -> Decision { reason: reason, action: UpgradePlan, retryable: false, rotate: true, abort: true },
+        ModelNotFound -> Decision { reason: reason, action: SwitchModel, retryable: false, abort: true },
+        ContextOverflow -> Decision { reason: reason, action: CompactContext, retryable: true, delayMs: 0, compress: true },
+        PayloadTooLarge -> Decision { reason: reason, action: ReducePayload, retryable: true, delayMs: 0, compress: true },
+        RateLimit | Overloaded | ServerError | Timeout | Network | Unknown -> Decision {
+            reason: reason,
+            action: if canRetry { RetryLater } else { DoNotRetry },
+            retryable: canRetry,
+            delayMs: if canRetry { backoffMs(attempt, policy) } else { 0 },
+            rotate: reason == RateLimit,
+            abort: !canRetry,
+        },
+        ThinkingSignature -> Decision { reason: reason, action: RetryLater, retryable: true, stripThinking: true, retryOnce: true },
+        LongContextTier -> Decision { reason: reason, action: CompactContext, retryable: true, compress: true, delayMs: backoffMs(attempt, policy) },
+        FormatError -> Decision { reason: reason, action: DoNotRetry, retryable: false, abort: true },
+    }
+}
+
+pub fn backoffMsDefault(attempt: Int) -> Int {
+    backoffMs(attempt, defaultPolicy())
+}
+
+pub fn backoffMs(attempt: Int, policy: RetryPolicy) -> Int {
+    let n = if attempt <= 1 { 0 } else { attempt - 1 }
+    let mut delay = policy.baseDelayMs
+    let mut i = 0
+    for i < n {
+        delay = delay * 2
+        i = i + 1
+    }
+    if delay > policy.maxDelayMs {
+        return policy.maxDelayMs
+    }
+    delay
+}
+
+pub fn isRetriableStatus(status: Int) -> Bool {
+    status == 408 || status == 429 || status == 500 || status == 502 || status == 503 || status == 504 || status == 529
+}
+
+pub fn classifyProviderCode(code: String) -> FailureReason {
+    match strings.toLower(strings.trimSpace(code)) {
+        "resource_exhausted" | "throttled" | "rate_limit_exceeded" -> RateLimit,
+        "insufficient_quota" | "billing_not_active" | "payment_required" -> Billing,
+        "model_not_found" | "model_not_available" | "invalid_model" -> ModelNotFound,
+        "context_length_exceeded" | "max_tokens_exceeded" -> ContextOverflow,
+        "invalid_api_key" -> Auth,
+        _ -> Unknown,
+    }
+}
+
+fn classify402(msg: String) -> FailureReason {
+    if containsAny(msg, usageLimitPatterns()) && containsAny(msg, usageLimitTransientSignals()) {
+        return RateLimit
+    }
+    Billing
+}
+
+fn classify400(msg: String, hint: ClassificationHint) -> FailureReason {
+    if containsAny(msg, contextOverflowPatterns()) {
+        return ContextOverflow
+    }
+    if containsAny(msg, modelNotFoundPatterns()) {
+        return ModelNotFound
+    }
+    if containsAny(msg, rateLimitPatterns()) {
+        return RateLimit
+    }
+    if containsAny(msg, billingPatterns()) {
+        return Billing
+    }
+    if isLargeSession(hint) && isGenericMessage(msg) {
+        return ContextOverflow
+    }
+    FormatError
+}
+
+fn isLargeSession(hint: ClassificationHint) -> Bool {
+    hint.tokenUsagePercent >= 0.60 || hint.approxTokens >= 120000
+}
+
+fn isGenericMessage(msg: String) -> Bool {
+    let clean = strings.trimSpace(strings.toLower(msg))
+    clean.isEmpty() || clean == "error" || clean == "bad request" || clean == "invalid request"
+}
+
+fn billingPatterns() -> List<String> {
+    [
+        "insufficient credits", "insufficient_quota", "credit balance",
+        "credits have been exhausted", "top up your credits", "payment required",
+        "billing hard limit", "exceeded your current quota", "account is deactivated",
+        "plan does not include",
+    ]
+}
+
+fn rateLimitPatterns() -> List<String> {
+    [
+        "rate limit", "rate_limit", "too many requests", "throttled",
+        "requests per minute", "tokens per minute", "requests per day",
+        "try again in", "please retry after", "resource_exhausted",
+        "rate increased too quickly", "throttlingexception",
+        "too many concurrent requests", "servicequotaexceededexception",
+    ]
+}
+
+fn usageLimitPatterns() -> List<String> {
+    ["usage limit", "quota", "limit exceeded", "key limit exceeded"]
+}
+
+fn usageLimitTransientSignals() -> List<String> {
+    ["try again", "retry", "resets at", "reset in", "wait", "requests remaining", "periodic", "window"]
+}
+
+fn payloadTooLargePatterns() -> List<String> {
+    ["request entity too large", "payload too large", "error code: 413"]
+}
+
+fn contextOverflowPatterns() -> List<String> {
+    [
+        "context length", "context_length_exceeded", "context_too_long",
+        "context size", "maximum context", "token limit", "too many tokens",
+        "reduce the length", "exceeds the limit", "context window",
+        "prompt is too long", "prompt exceeds max length", "max_tokens",
+        "maximum number of tokens", "context overflow", "context too large",
+        "context exceeded", "context too long", "exceeds the max_model_len",
+        "max_model_len", "prompt length", "input is too long",
+        "maximum model length", "context length exceeded", "truncating input",
+        "slot context", "n_ctx_slot", "超过最大长度", "上下文长度",
+        "max input token", "input token", "exceeds the maximum number of input tokens",
+    ]
+}
+
+fn modelNotFoundPatterns() -> List<String> {
+    ["is not a valid model", "invalid model", "model not found", "model_not_found", "does not exist", "no such model", "unknown model", "unsupported model"]
+}
+
+fn authPatterns() -> List<String> {
+    ["invalid api key", "invalid_api_key", "authentication", "unauthorized", "forbidden", "invalid token", "token expired", "token revoked", "access denied"]
+}
+
+fn serverDisconnectPatterns() -> List<String> {
+    ["server disconnected", "peer closed connection", "connection reset by peer", "connection was closed", "network connection lost", "unexpected eof", "incomplete chunked read"]
+}
+
+fn sslTransientPatterns() -> List<String> {
+    ["bad record mac", "ssl alert", "tls alert", "ssl handshake failure", "tlsv1 alert", "sslv3 alert", "bad_record_mac", "ssl_alert", "tls_alert", "tls_alert_internal_error", "[ssl:"]
+}
+
+fn transportMessagePatterns() -> List<String> {
+    ["connection refused", "connection reset", "broken pipe", "no such host", "i/o timeout", "deadline exceeded", "unexpected eof", "eof", "read timeout", "connect timeout", "pool timeout"]
+}
+
+fn containsAny(text: String, needles: List<String>) -> Bool {
+    for needle in needles {
+        if strings.contains(text, needle) {
+            return true
+        }
+    }
+    false
+}

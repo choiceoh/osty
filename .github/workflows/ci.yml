@@ -45,7 +45,8 @@ jobs:
 
       - name: Format
         run: |
-          unformatted="$(gofmt -l $(git ls-files '*.go'))"
+          mapfile -t go_files < <(git ls-files '*.go')
+          unformatted="$(gofmt -l "${go_files[@]}")"
           if [ -n "$unformatted" ]; then
             echo "$unformatted"
             exit 1
@@ -79,15 +80,13 @@ jobs:
         run: |
           "$OSTY_BIN" ci .
 
-      - name: Verify selfhost snapshot parity
-        run: |
-          go test -count=1 -vet=off -run 'SnapshotParity|CoreSnapshotParity' \
-            ./internal/ci ./internal/runner
+      - name: Support matrix medium
+        run: just support-matrix-medium
 
       - name: Vet
         run: go vet ./...
 
-      - name: Test
+      - name: Full Go test loop
         run: go test -vet=off ./...
 
   cross-compile:

@@ -247,13 +247,20 @@ func hashResolvedPackage(rp *ResolvedPackage) [32]byte {
 		return files[i].Path < files[j].Path
 	})
 	h.u32(uint32(len(files)))
+	facts, hasNativeFacts := nativeResolveFactsForHash(rp.pkg)
 	for _, pf := range files {
 		h.str(pf.Path)
-		hashFileRefs(h, pf)
+		if !hasNativeFacts {
+			hashFileRefs(h, pf)
+		}
 		h.u32(uint32(len(pf.ParseDiags)))
 		for _, d := range pf.ParseDiags {
 			hashDiagnostic(h, d)
 		}
+	}
+	h.bool(hasNativeFacts)
+	if hasNativeFacts {
+		hashNativeResolveFacts(h, facts)
 	}
 
 	// Top-level declarations across all files. This captures
@@ -266,6 +273,57 @@ func hashResolvedPackage(rp *ResolvedPackage) [32]byte {
 		hashDiagsList(h, rp.res.Diags)
 	}
 	return h.sum()
+}
+
+func nativeResolveFactsForHash(pkg *resolve.Package) (resolve.NativeResolveFactSet, bool) {
+	facts, err := resolve.NativeResolveFacts(pkg)
+	if err != nil {
+		return resolve.NativeResolveFactSet{}, false
+	}
+	return facts, true
+}
+
+func hashNativeResolveFacts(h *stableHasher, facts resolve.NativeResolveFactSet) {
+	h.u32(uint32(len(facts.Symbols)))
+	for _, sym := range facts.Symbols {
+		h.str(sym.ID)
+		h.str(sym.File)
+		h.u64(uint64(sym.Start))
+		h.u64(uint64(sym.End))
+		h.str(sym.Name)
+		h.str(sym.Kind)
+		h.str(sym.Type)
+		h.u64(uint64(sym.Depth))
+		h.bool(sym.Public)
+		h.bool(sym.Builtin)
+	}
+	h.u32(uint32(len(facts.Refs)))
+	for _, ref := range facts.Refs {
+		h.str(ref.ID)
+		h.str(ref.File)
+		h.u64(uint64(ref.Start))
+		h.u64(uint64(ref.End))
+		h.str(ref.Name)
+		h.str(ref.TargetSymbolID)
+		h.str(ref.TargetName)
+		h.str(ref.TargetKind)
+		h.str(ref.TargetType)
+		h.str(ref.TargetFile)
+		h.u64(uint64(ref.TargetStart))
+		h.u64(uint64(ref.TargetEnd))
+		h.bool(ref.Type)
+		h.bool(ref.Builtin)
+	}
+	h.u32(uint32(len(facts.Imports)))
+	for _, imp := range facts.Imports {
+		h.str(imp.Alias)
+		h.u32(uint32(len(imp.Symbols)))
+		for _, sym := range imp.Symbols {
+			h.str(sym.Name)
+			h.str(sym.Kind)
+			h.str(sym.Type)
+		}
+	}
 }
 
 // hashFileRefs captures the per-file resolve output. Refs and TypeRefs
@@ -525,7 +583,7 @@ func hashDiagList(ds []*diag.Diagnostic) [32]byte {
 	return h.sum()
 }
 
-func hashIdentIndex(m map[int]*resolve.Symbol) [32]byte {
+func hashIdentIndex(m map[int]string) [32]byte {
 	h := newHasher()
 	keys := make([]int, 0, len(m))
 	for k := range m {
@@ -535,7 +593,7 @@ func hashIdentIndex(m map[int]*resolve.Symbol) [32]byte {
 	h.u32(uint32(len(keys)))
 	for _, k := range keys {
 		h.u32(uint32(k))
-		hashSymbol(h, m[k])
+		h.str(m[k])
 	}
 	return h.sum()
 }

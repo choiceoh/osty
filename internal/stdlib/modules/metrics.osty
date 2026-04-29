@@ -1,0 +1,48 @@
+// std.metrics - lightweight labeled counters without a metrics backend.
+
+use std.strings
+
+pub struct Counter {
+    pub values: Map<String, Int> = {:},
+}
+
+pub struct Sample {
+    pub labels: List<String>,
+    pub key: String,
+    pub value: Int,
+}
+
+pub fn counter() -> Counter {
+    Counter {}
+}
+
+pub fn inc(counter: Counter, labels: List<String>) -> Counter {
+    add(counter, labels, 1)
+}
+
+pub fn add(mut counter: Counter, labels: List<String>, delta: Int) -> Counter {
+    let k = key(labels)
+    counter.values.insert(k, (counter.values.get(k) ?? 0) + delta)
+    counter
+}
+
+pub fn get(counter: Counter, labels: List<String>) -> Int {
+    counter.values.get(key(labels)) ?? 0
+}
+
+pub fn snapshot(counter: Counter) -> List<Sample> {
+    let mut out: List<Sample> = []
+    let keys = counter.values.keys().sorted()
+    for k in keys {
+        out.push(Sample {
+            labels: strings.split(k, "\u{0}"),
+            key: k,
+            value: counter.values.get(k).unwrap(),
+        })
+    }
+    out
+}
+
+pub fn key(labels: List<String>) -> String {
+    strings.join(labels, "\u{0}")
+}

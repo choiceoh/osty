@@ -10,29 +10,6 @@ import (
 	"github.com/osty/osty/internal/stdlib"
 )
 
-// stdlibInjectableTypes lists the built-in generic types that live in
-// stdlib modules and whose bodied methods should be monomorphized
-// alongside user code. Each entry pairs the surface name (as written
-// by user code) with the stdlib module that holds its StructDecl or
-// EnumDecl.
-//
-// Option B's foundation: once these decls land in the user's IR
-// module, `ir.Monomorphize` specializes them automatically (the
-// existing generic-struct machinery at internal/ir/monomorph.go's
-// emitStructSpecialization + emitMethodSpecialization already handles
-// the heavy lifting — we just need to feed it the templates).
-var stdlibInjectableTypes = []struct {
-	Name   string // e.g. "Map", "Option"
-	Module string // stdlib module that declares it
-	Kind   string // "struct" | "enum"
-}{
-	{"Map", "collections", "struct"},
-	{"List", "collections", "struct"},
-	{"Set", "collections", "struct"},
-	{"Option", "option", "enum"},
-	{"Result", "result", "enum"},
-}
-
 type stdlibTypeKey struct {
 	Module string
 	Name   string
@@ -219,8 +196,10 @@ func collectReferencedStdlibTypes(mod *ir.Module) []stdlibTypeKey {
 		return nil
 	}
 	builtinModule := map[string]string{}
-	for _, t := range stdlibInjectableTypes {
-		builtinModule[t.Name] = t.Module
+	for _, surface := range stdlib.BuiltinTypeSurfaces() {
+		if surface.Injectable {
+			builtinModule[surface.Name] = surface.Module
+		}
 	}
 	seen := map[stdlibTypeKey]bool{}
 	var out []stdlibTypeKey
@@ -679,12 +658,8 @@ func lowerStdlibModule(reg *stdlib.Registry, module string) []ir.Decl {
 }
 
 func isInjectableTypeName(name string) bool {
-	for _, t := range stdlibInjectableTypes {
-		if t.Name == name {
-			return true
-		}
-	}
-	return false
+	surface, ok := stdlib.BuiltinTypeSurfaceByName(name)
+	return ok && surface.Injectable
 }
 
 // cloneStdlibTypeDecl deep-clones a StructDecl or EnumDecl so the
@@ -837,12 +812,11 @@ func qualifiedStdlibTypeName(module, name string) string {
 // diagnostics: given a built-in type name, returns the stdlib module
 // that declares it, or "" if unknown.
 func moduleForStdlibType(name string) string {
-	for _, t := range stdlibInjectableTypes {
-		if t.Name == name {
-			return t.Module
-		}
+	surface, ok := stdlib.BuiltinTypeSurfaceByName(name)
+	if !ok || !surface.Injectable {
+		return ""
 	}
-	return ""
+	return surface.Module
 }
 
 // The walker relies on ir.Walk visiting concrete types via their

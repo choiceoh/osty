@@ -20,7 +20,7 @@ func runInspectSource(path string, src []byte, flags cliFlags) {
 	writeInspect(check.InspectSource(src, nil), flags)
 }
 
-func runInspectPackageInput(input selfhost.PackageCheckInput, onlyPath string, flags cliFlags) {
+func runInspectPackageInput(input api.PackageCheckInput, onlyPath string, flags cliFlags) {
 	recs, err := selfhost.InspectPackageStructured(input)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty check --inspect: %v\n", err)

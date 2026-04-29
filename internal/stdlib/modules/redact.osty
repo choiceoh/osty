@@ -1,0 +1,746 @@
+// std.redact - dependency-free secret redaction helpers.
+//
+// This ports Deneb's "best-effort, never fail open" redaction idea into pure
+// Osty. It avoids a regex dependency by scanning key/value runs, known vendor
+// token prefixes, JWT-like runs, URL userinfo, and private-key blocks.
+
+use std.char
+use std.strings
+
+pub enum SecretKind {
+    Unknown,
+    VendorToken,
+    Jwt,
+    PrivateKey,
+    Authorization,
+    Header,
+    EnvAssignment,
+    QueryParam,
+    UrlUserinfo,
+}
+
+pub struct RedactPolicy {
+    pub enabled: Bool = true,
+    pub revealPrefix: Int = 6,
+    pub revealSuffix: Int = 4,
+    pub minPartialMaskChars: Int = 18,
+    pub mask: String = "***",
+}
+
+pub fn defaultPolicy() -> RedactPolicy {
+    RedactPolicy {}
+}
+
+pub fn redact(text: String) -> String {
+    redactWithPolicy(text, defaultPolicy())
+}
+
+pub fn redactWithPolicy(text: String, policy: RedactPolicy) -> String {
+    if text.isEmpty() || !policy.enabled {
+        return text
+    }
+    if !mightContainSecret(text) {
+        return text
+    }
+
+    let mut out = text
+    out = redactPrivateKeyBlocks(out, policy)
+    out = redactDbConnStrings(out, policy)
+    out = redactJsonFields(out, policy)
+    out = redactUrlUserinfo(out, policy)
+    out = redactUrlQueryParams(out, policy)
+    out = redactFormBody(out, policy)
+    out = redactSensitiveKeyValues(out, policy)
+    out = redactTelegramTokens(out, policy)
+    out = redactPrefixedTokens(out, policy)
+    out = redactJwtRuns(out, policy)
+    out = redactDiscordMentions(out)
+    out = redactPhoneNumbers(out)
+    out
+}
+
+pub fn maskToken(token: String) -> String {
+    maskTokenWithPolicy(token, defaultPolicy())
+}
+
+pub fn maskTokenWithPolicy(token: String, policy: RedactPolicy) -> String {
+    if isAlreadyMasked(token) {
+        return token
+    }
+    if token.charCount() < policy.minPartialMaskChars {
+        return policy.mask
+    }
+    let n = token.charCount()
+    let prefix = clampInt(policy.revealPrefix, 0, n)
+    let suffix = clampInt(policy.revealSuffix, 0, n - prefix)
+    if prefix + suffix <= 0 {
+        return policy.mask
+    }
+    "{strings.slice(token, 0, prefix)}...{strings.slice(token, n - suffix, n)}"
+}
+
+pub fn isAlreadyMasked(text: String) -> Bool {
+    if text == "***" {
+        return true
+    }
+    text.charCount() == 13 && strings.slice(text, 6, 9) == "..."
+}
+
+pub fn mightContainSecret(text: String) -> Bool {
+    containsAny(text, [
+        "sk-", "sk_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_",
+        "xox", "AIza", "pplx-", "xai-", "nvapi-", "fal_", "fc-", "bb_live_",
+        "gAAAA", "AKIA", "rk_live_", "sk_live_", "sk_test_", "SG.", "hf_",
+        "r8_", "npm_", "pypi-", "dop_v1_", "doo_v1_", "am_", "tvly-", "exa_",
+        "gsk_", "syt_", "retaindb_", "hsk-", "mem0_", "brv_", "eyJ",
+        "-----BEGIN", "Authorization", "authorization", "X-API-Key", "x-api-key",
+        "api_key", "apiKey", "token", "TOKEN", "secret", "SECRET", "password",
+        "PASSWORD", "client_secret", "access_token", "refresh_token", "://",
+        "postgres://", "postgresql://", "mysql://", "mongodb://", "mongodb+srv://",
+        "redis://", "amqp://", "bot", "+", "<@", "signature", "x-amz-signature",
+        "code=", "key=",
+    ])
+}
+
+pub fn looksLikeSecretToken(token: String) -> Bool {
+    if token.charCount() < 12 {
+        return false
+    }
+    let lower = strings.toLower(token)
+    if startsWithAny(token, knownSecretPrefixes()) {
+        return true
+    }
+    if strings.startsWith(token, "eyJ") && strings.contains(token, ".") {
+        return true
+    }
+    containsAny(lower, ["secret", "token", "apikey", "api_key", "password"])
+}
+
+pub fn knownSecretPrefixes() -> List<String> {
+    [
+        "sk-", "sk_", "ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_",
+        "xoxb-", "xoxa-", "xoxp-", "xoxr-", "xoxs-", "AIza", "pplx-", "xai-",
+        "nvapi-", "fal_", "fc-", "bb_live_", "gAAAA", "AKIA", "sk_live_",
+        "sk_test_", "rk_live_", "SG.", "hf_", "r8_", "npm_", "pypi-",
+        "dop_v1_", "doo_v1_", "am_", "tvly-", "exa_", "gsk_", "syt_",
+        "retaindb_", "hsk-", "mem0_", "brv_",
+    ]
+}
+
+pub fn sensitiveKeyNames() -> List<String> {
+    [
+        "authorization", "x-api-key", "api-key", "api_key", "apikey", "apiKey",
+        "token", "access_token", "refresh_token", "id_token", "auth_token",
+        "bearer", "secret", "client_secret", "password", "passwd", "credential",
+        "raw_secret", "secret_input", "key_material", "signature", "x-amz-signature",
+        "session", "auth", "jwt", "key", "code",
+    ]
+}
+
+pub fn containsAny(text: String, needles: List<String>) -> Bool {
+    for needle in needles {
+        if strings.contains(text, needle) {
+            return true
+        }
+    }
+    false
+}
+
+fn redactPrefixedTokens(text: String, policy: RedactPolicy) -> String {
+    let prefixes = knownSecretPrefixes()
+    let chars = text.chars()
+    let mut out = ""
+    let mut i = 0
+    for i < chars.len() {
+        let prefix = matchingPrefixAt(chars, i, prefixes)
+        if !prefix.isEmpty() && isBoundary(chars, i - 1) {
+            let end = scanSecretRun(chars, i)
+            let token = sliceChars(chars, i, end)
+            if token.charCount() >= prefix.charCount() + 6 && isBoundary(chars, end) {
+                out = "{out}{maskTokenWithPolicy(token, policy)}"
+                i = end
+                continue
+            }
+        }
+        out = "{out}{strings.fromChar(chars[i])}"
+        i = i + 1
+    }
+    out
+}
+
+fn redactJwtRuns(text: String, policy: RedactPolicy) -> String {
+    let chars = text.chars()
+    let mut out = ""
+    let mut i = 0
+    for i < chars.len() {
+        if matchesAt(chars, i, "eyJ") && isBoundary(chars, i - 1) {
+            let end = scanSecretRun(chars, i)
+            let token = sliceChars(chars, i, end)
+            if token.charCount() >= 14 && strings.contains(token, ".") {
+                out = "{out}{maskTokenWithPolicy(token, policy)}"
+                i = end
+                continue
+            }
+        }
+        out = "{out}{strings.fromChar(chars[i])}"
+        i = i + 1
+    }
+    out
+}
+
+fn redactPrivateKeyBlocks(text: String, policy: RedactPolicy) -> String {
+    let begin = "-----BEGIN"
+    let endMarker = "PRIVATE KEY-----"
+    let mut rest = text
+    let mut out = ""
+    for true {
+        match strings.indexOf(rest, begin) {
+            Some(start) -> {
+                out = "{out}{strings.slice(rest, 0, start)}"
+                let afterStart = strings.slice(rest, start, rest.charCount())
+                match strings.indexOf(afterStart, endMarker) {
+                    Some(endRel) -> {
+                        let blockEnd = endRel + endMarker.charCount()
+                        out = "{out}[REDACTED PRIVATE KEY]"
+                        rest = strings.slice(afterStart, blockEnd, afterStart.charCount())
+                    },
+                    _ -> {
+                        return "{out}[REDACTED PRIVATE KEY]"
+                    },
+                }
+            },
+            _ -> {
+                return "{out}{rest}"
+            },
+        }
+    }
+    out
+}
+
+fn redactDbConnStrings(text: String, policy: RedactPolicy) -> String {
+    let chars = text.chars()
+    let mut out = ""
+    let mut i = 0
+    for i < chars.len() {
+        let scheme = matchingDbSchemeAt(chars, i)
+        if !scheme.isEmpty() {
+            let userStart = i + scheme.charCount()
+            let authorityEnd = scanUntilAny(chars, userStart, "/?# \t\r\n")
+            let colon = findChar(chars, ':', userStart)
+            let at = findChar(chars, '@', userStart)
+            if colon >= 0 && at >= 0 && colon < at && at < authorityEnd {
+                out = "{out}{sliceChars(chars, i, colon + 1)}{policy.mask}@"
+                i = at + 1
+                continue
+            }
+        }
+        out = "{out}{strings.fromChar(chars[i])}"
+        i = i + 1
+    }
+    out
+}
+
+fn redactJsonFields(text: String, policy: RedactPolicy) -> String {
+    let chars = text.chars()
+    let keys = sensitiveKeyNames()
+    let mut out = ""
+    let mut i = 0
+    for i < chars.len() {
+        if chars[i] == '"' {
+            let keyStart = i + 1
+            let keyEnd = findChar(chars, '"', keyStart)
+            if keyEnd > keyStart {
+                let key = sliceChars(chars, keyStart, keyEnd)
+                if containsFold(keys, key) {
+                    let colon = skipSpaces(chars, keyEnd + 1)
+                    if colon < chars.len() && chars[colon] == ':' {
+                        let valueStart0 = skipSpaces(chars, colon + 1)
+                        if valueStart0 < chars.len() && chars[valueStart0] == '"' {
+                            let valueStart = valueStart0 + 1
+                            let valueEnd = findClosingQuote(chars, valueStart, '"')
+                            if valueEnd > valueStart {
+                                out = "{out}{sliceChars(chars, i, valueStart)}{maskTokenWithPolicy(sliceChars(chars, valueStart, valueEnd), policy)}"
+                                i = valueEnd
+                                continue
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        out = "{out}{strings.fromChar(chars[i])}"
+        i = i + 1
+    }
+    out
+}
+
+fn redactUrlUserinfo(text: String, policy: RedactPolicy) -> String {
+    let chars = text.chars()
+    let mut out = ""
+    let mut i = 0
+    for i < chars.len() {
+        if startsSchemeAt(chars, i) {
+            let schemeEnd = findChar(chars, ':', i)
+            if schemeEnd >= 0 && schemeEnd + 2 < chars.len() &&
+               chars[schemeEnd + 1] == '/' && chars[schemeEnd + 2] == '/' {
+                let authorityStart = schemeEnd + 3
+                let authorityEnd = scanUntilAny(chars, authorityStart, "/?# \t\r\n")
+                let at = findChar(chars, '@', authorityStart)
+                let colon = findChar(chars, ':', authorityStart)
+                if at >= 0 && at < authorityEnd && colon >= 0 && colon < at {
+                    out = "{out}{sliceChars(chars, i, colon + 1)}{policy.mask}@"
+                    i = at + 1
+                    continue
+                }
+            }
+        }
+        out = "{out}{strings.fromChar(chars[i])}"
+        i = i + 1
+    }
+    out
+}
+
+fn redactTelegramTokens(text: String, policy: RedactPolicy) -> String {
+    let chars = text.chars()
+    let mut out = ""
+    let mut i = 0
+    for i < chars.len() {
+        let botPrefix = matchesAtFold(chars, i, "bot")
+        let digitStart = if botPrefix { i + 3 } else { i }
+        let digitEnd = scanDigits(chars, digitStart)
+        if digitEnd - digitStart >= 8 && digitEnd < chars.len() && chars[digitEnd] == ':' {
+            let tokenStart = digitEnd + 1
+            let tokenEnd = scanSecretRun(chars, tokenStart)
+            if tokenEnd - tokenStart >= 30 {
+                out = "{out}{sliceChars(chars, i, tokenStart)}{policy.mask}"
+                i = tokenEnd
+                continue
+            }
+        }
+        out = "{out}{strings.fromChar(chars[i])}"
+        i = i + 1
+    }
+    out
+}
+
+fn redactDiscordMentions(text: String) -> String {
+    let chars = text.chars()
+    let mut out = ""
+    let mut i = 0
+    for i < chars.len() {
+        if matchesAt(chars, i, "<@!") || matchesAt(chars, i, "<@") {
+            let bang = matchesAt(chars, i, "<@!")
+            let digitStart = if bang { i + 3 } else { i + 2 }
+            let digitEnd = scanDigits(chars, digitStart)
+            if digitEnd - digitStart >= 17 && digitEnd - digitStart <= 20 && digitEnd < chars.len() && chars[digitEnd] == '>' {
+                out = if bang { "{out}<@!***>" } else { "{out}<@***>" }
+                i = digitEnd + 1
+                continue
+            }
+        }
+        out = "{out}{strings.fromChar(chars[i])}"
+        i = i + 1
+    }
+    out
+}
+
+fn redactPhoneNumbers(text: String) -> String {
+    let chars = text.chars()
+    let mut out = ""
+    let mut i = 0
+    for i < chars.len() {
+        if chars[i] == '+' && i + 1 < chars.len() && char.isAsciiDigit(chars[i + 1]) && chars[i + 1] != '0' {
+            let end = scanDigits(chars, i + 1)
+            let digits = end - i - 1
+            if digits >= 7 && digits <= 15 {
+                let raw = sliceChars(chars, i, end)
+                out = "{out}{maskPhone(raw)}"
+                i = end
+                continue
+            }
+        }
+        out = "{out}{strings.fromChar(chars[i])}"
+        i = i + 1
+    }
+    out
+}
+
+fn redactSensitiveKeyValues(text: String, policy: RedactPolicy) -> String {
+    let keys = sensitiveKeyNames()
+    let chars = text.chars()
+    let mut out = ""
+    let mut i = 0
+    for i < chars.len() {
+        let key = matchingKeyAt(chars, i, keys)
+        if !key.isEmpty() && isBoundary(chars, i - 1) {
+            let afterKey = i + key.charCount()
+            let delim = skipSpaces(chars, afterKey)
+            if delim < chars.len() && (chars[delim] == ':' || chars[delim] == '=') {
+                let valueStart0 = skipSpaces(chars, delim + 1)
+                let valueStart = skipBearer(chars, valueStart0)
+                let quote = if valueStart < chars.len() && (chars[valueStart] == '"' || chars[valueStart] == '\'') {
+                    chars[valueStart]
+                } else {
+                    '\u{0}'
+                }
+                let realStart = if quote == '\u{0}' { valueStart } else { valueStart + 1 }
+                let valueEnd = if quote == '\u{0}' {
+                    scanUntilAny(chars, realStart, "&,; \t\r\n\"'")
+                } else {
+                    findClosingQuote(chars, realStart, quote)
+                }
+                if valueEnd > realStart {
+                    let value = sliceChars(chars, realStart, valueEnd)
+                    if shouldRedactKeyValue(chars, i, delim, realStart, valueEnd, key, value, policy) {
+                        out = "{out}{sliceChars(chars, i, realStart)}{maskTokenWithPolicy(value, policy)}"
+                        i = valueEnd
+                        continue
+                    }
+                }
+            }
+        }
+        out = "{out}{strings.fromChar(chars[i])}"
+        i = i + 1
+    }
+    out
+}
+
+fn redactUrlQueryParams(text: String, policy: RedactPolicy) -> String {
+    let chars = text.chars()
+    let keys = sensitiveKeyNames()
+    let mut out = ""
+    let mut i = 0
+    for i < chars.len() {
+        let key = matchingKeyAt(chars, i, keys)
+        if !key.isEmpty() && isQueryKeyContext(chars, i) {
+            let afterKey = i + key.charCount()
+            if afterKey < chars.len() && chars[afterKey] == '=' {
+                let valueStart = afterKey + 1
+                let valueEnd = scanUntilAny(chars, valueStart, "&# \t\r\n\"'<>")
+                if valueEnd > valueStart {
+                    out = "{out}{sliceChars(chars, i, valueStart)}{policy.mask}"
+                    i = valueEnd
+                    continue
+                }
+            }
+        }
+        out = "{out}{strings.fromChar(chars[i])}"
+        i = i + 1
+    }
+    out
+}
+
+fn redactFormBody(text: String, policy: RedactPolicy) -> String {
+    if strings.contains(text, "\n") || !strings.contains(text, "&") {
+        return text
+    }
+    let trimmed = strings.trimSpace(text)
+    if !isFormBodyLike(trimmed) {
+        return text
+    }
+    redactQueryString(trimmed, policy)
+}
+
+fn matchingDbSchemeAt(chars: List<Char>, at: Int) -> String {
+    for scheme in ["postgres://", "postgresql://", "mysql://", "mongodb://", "mongodb+srv://", "redis://", "amqp://"] {
+        if matchesAtFold(chars, at, scheme) {
+            return scheme
+        }
+    }
+    ""
+}
+
+fn matchingPrefixAt(chars: List<Char>, at: Int, prefixes: List<String>) -> String {
+    for prefix in prefixes {
+        if matchesAt(chars, at, prefix) {
+            return prefix
+        }
+    }
+    ""
+}
+
+fn matchingKeyAt(chars: List<Char>, at: Int, keys: List<String>) -> String {
+    for key in keys {
+        if matchesAtFold(chars, at, key) {
+            return key
+        }
+    }
+    ""
+}
+
+fn startsWithAny(text: String, prefixes: List<String>) -> Bool {
+    for prefix in prefixes {
+        if strings.startsWith(text, prefix) {
+            return true
+        }
+    }
+    false
+}
+
+fn containsFold(values: List<String>, needle: String) -> Bool {
+    let clean = strings.toLower(needle)
+    for value in values {
+        if strings.toLower(value) == clean {
+            return true
+        }
+    }
+    false
+}
+
+fn shouldRedactKeyValue(chars: List<Char>, keyStart: Int, delim: Int, valueStart: Int, valueEnd: Int, key: String, value: String, policy: RedactPolicy) -> Bool {
+    if value.isEmpty() || isAlreadyMasked(value) {
+        return false
+    }
+    if isQueryKeyContext(chars, keyStart) || isFormKeyContext(chars, keyStart, valueEnd) {
+        return true
+    }
+    if isHeaderContext(chars, keyStart, delim, key) {
+        return true
+    }
+    if isEnvKeyName(key) {
+        return true
+    }
+    if value.charCount() >= policy.minPartialMaskChars {
+        return true
+    }
+    looksLikeSecretToken(value)
+}
+
+fn isQueryKeyContext(chars: List<Char>, keyStart: Int) -> Bool {
+    let mut i = keyStart - 1
+    for i >= 0 && !char.isAsciiWhitespace(chars[i]) {
+        if chars[i] == '?' || chars[i] == '&' {
+            return hasSchemeBefore(chars, i)
+        }
+        i = i - 1
+    }
+    false
+}
+
+fn hasSchemeBefore(chars: List<Char>, pos: Int) -> Bool {
+    let mut i = pos - 1
+    for i >= 0 && !char.isAsciiWhitespace(chars[i]) {
+        if chars[i] == ':' && i + 2 < chars.len() && chars[i + 1] == '/' && chars[i + 2] == '/' {
+            return true
+        }
+        i = i - 1
+    }
+    false
+}
+
+fn isFormKeyContext(chars: List<Char>, keyStart: Int, valueEnd: Int) -> Bool {
+    let before = keyStart > 0 && chars[keyStart - 1] == '&'
+    let after = valueEnd < chars.len() && chars[valueEnd] == '&'
+    before || after
+}
+
+fn isHeaderContext(chars: List<Char>, keyStart: Int, delim: Int, key: String) -> Bool {
+    if delim >= chars.len() || chars[delim] != ':' {
+        return false
+    }
+    let lower = strings.toLower(key)
+    if lower == "authorization" || lower == "x-api-key" || lower == "api-key" {
+        return true
+    }
+    keyStart == 0 || chars[keyStart - 1] == '\n' || chars[keyStart - 1] == '\r'
+}
+
+fn isEnvKeyName(key: String) -> Bool {
+    let upper = strings.toUpper(key)
+    containsAny(upper, ["API_KEY", "APIKEY", "TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "AUTH"])
+}
+
+fn isFormBodyLike(text: String) -> Bool {
+    if text.isEmpty() || strings.contains(text, "\n") || !strings.contains(text, "&") {
+        return false
+    }
+    let pairs = strings.split(text, "&")
+    if pairs.len() < 2 {
+        return false
+    }
+    for pair in pairs {
+        let eq = strings.indexOf(pair, "=")
+        match eq {
+            Some(i) -> {
+                if i <= 0 {
+                    return false
+                }
+            },
+            None -> {
+                return false
+            },
+        }
+    }
+    true
+}
+
+fn redactQueryString(query: String, policy: RedactPolicy) -> String {
+    let mut out: List<String> = []
+    for pair in strings.split(query, "&") {
+        match strings.indexOf(pair, "=") {
+            Some(i) -> {
+                let key = strings.slice(pair, 0, i)
+                let value = strings.slice(pair, i + 1, pair.charCount())
+                if containsFold(sensitiveKeyNames(), key) {
+                    out.push("{key}={policy.mask}")
+                } else {
+                    out.push("{key}={value}")
+                }
+            },
+            None -> {
+                out.push(pair)
+            },
+        }
+    }
+    strings.join(out, "&")
+}
+
+fn matchesAt(chars: List<Char>, at: Int, needle: String) -> Bool {
+    let ns = needle.chars()
+    if at < 0 || at + ns.len() > chars.len() {
+        return false
+    }
+    let mut i = 0
+    for i < ns.len() {
+        if chars[at + i] != ns[i] {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+
+fn matchesAtFold(chars: List<Char>, at: Int, needle: String) -> Bool {
+    let ns = strings.toLower(needle).chars()
+    if at < 0 || at + ns.len() > chars.len() {
+        return false
+    }
+    let mut i = 0
+    for i < ns.len() {
+        if char.toAsciiLower(chars[at + i]) != ns[i] {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+
+fn scanSecretRun(chars: List<Char>, start: Int) -> Int {
+    let mut i = start
+    for i < chars.len() && isSecretRunChar(chars[i]) {
+        i = i + 1
+    }
+    i
+}
+
+fn scanDigits(chars: List<Char>, start: Int) -> Int {
+    let mut i = start
+    for i < chars.len() && char.isAsciiDigit(chars[i]) {
+        i = i + 1
+    }
+    i
+}
+
+fn isSecretRunChar(c: Char) -> Bool {
+    char.isAsciiAlphanumeric(c) || c == '_' || c == '-' || c == '.' || c == '=' || c == '/'
+}
+
+fn isBoundary(chars: List<Char>, index: Int) -> Bool {
+    if index < 0 || index >= chars.len() {
+        return true
+    }
+    !isSecretRunChar(chars[index])
+}
+
+fn skipSpaces(chars: List<Char>, start: Int) -> Int {
+    let mut i = start
+    for i < chars.len() && (chars[i] == ' ' || chars[i] == '\t') {
+        i = i + 1
+    }
+    i
+}
+
+fn skipBearer(chars: List<Char>, start: Int) -> Int {
+    if matchesAtFold(chars, start, "Bearer") {
+        return skipSpaces(chars, start + 6)
+    }
+    start
+}
+
+fn findClosingQuote(chars: List<Char>, start: Int, quote: Char) -> Int {
+    let mut i = start
+    for i < chars.len() {
+        if chars[i] == quote {
+            return i
+        }
+        i = i + 1
+    }
+    chars.len()
+}
+
+fn startsSchemeAt(chars: List<Char>, at: Int) -> Bool {
+    matchesAtFold(chars, at, "http://") ||
+    matchesAtFold(chars, at, "https://") ||
+    matchesAtFold(chars, at, "wss://") ||
+    matchesAtFold(chars, at, "ftp://")
+}
+
+fn findChar(chars: List<Char>, c: Char, start: Int) -> Int {
+    let mut i = start
+    for i < chars.len() {
+        if chars[i] == c {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn scanUntilAny(chars: List<Char>, start: Int, cutset: String) -> Int {
+    let set = cutset.chars()
+    let mut i = start
+    for i < chars.len() {
+        if containsChar(set, chars[i]) {
+            return i
+        }
+        i = i + 1
+    }
+    chars.len()
+}
+
+fn containsChar(chars: List<Char>, c: Char) -> Bool {
+    for item in chars {
+        if item == c {
+            return true
+        }
+    }
+    false
+}
+
+fn sliceChars(chars: List<Char>, start: Int, end: Int) -> String {
+    let mut out: List<Char> = []
+    let mut i = start
+    for i < end && i < chars.len() {
+        out.push(chars[i])
+        i = i + 1
+    }
+    strings.fromChars(out)
+}
+
+fn maskPhone(raw: String) -> String {
+    let n = raw.charCount()
+    if n <= 8 {
+        return "{strings.slice(raw, 0, 2)}****{strings.slice(raw, n - 2, n)}"
+    }
+    "{strings.slice(raw, 0, 4)}****{strings.slice(raw, n - 4, n)}"
+}
+
+fn clampInt(value: Int, min: Int, max: Int) -> Int {
+    if value < min {
+        return min
+    }
+    if value > max {
+        return max
+    }
+    value
+}

@@ -1271,10 +1271,14 @@ fn withDefaultHeader(headers: Headers, name: String, value: String) -> Headers {
 }
 
 fn withHeaderValue(headers: Headers, name: String, value: String) -> Headers {
-    let canonical = canonicalHeaderName(name)
-    if canonical.isEmpty() {
-        process.abort("http: header name must not be empty")
+    let cleanName = strings.trimSpace(name)
+    if !isHeaderName(cleanName) {
+        process.abort("http: invalid header name")
     }
+    if !isHeaderValue(value) {
+        process.abort("http: invalid header value")
+    }
+    let canonical = canonicalHeaderName(cleanName)
     let mut out = headers
     let mut victims: List<String> = []
     for (key, unusedValue) in out {
@@ -1336,6 +1340,42 @@ fn canonicalHeaderPart(part: String) -> String {
         i = i + 1
     }
     out
+}
+
+fn isHeaderName(name: String) -> Bool {
+    if name.isEmpty() {
+        return false
+    }
+    for c in name.chars() {
+        if !isHeaderNameChar(c) {
+            return false
+        }
+    }
+    true
+}
+
+fn isHeaderNameChar(c: Char) -> Bool {
+    (c >= 'A' && c <= 'Z') ||
+    (c >= 'a' && c <= 'z') ||
+    (c >= '0' && c <= '9') ||
+    c == '!' || c == '#' || c == '$' || c == '%' ||
+    c == '&' || c == '\'' || c == '*' || c == '+' ||
+    c == '-' || c == '.' || c == '^' || c == '_' ||
+    c == '`' || c == '|' || c == '~'
+}
+
+fn isHeaderValue(value: String) -> Bool {
+    for c in value.chars() {
+        if !isHeaderValueChar(c) {
+            return false
+        }
+    }
+    true
+}
+
+fn isHeaderValueChar(c: Char) -> Bool {
+    let n = c.toInt()
+    c == '\t' || (n >= 0x20 && n != 0x7F)
 }
 
 fn splitFragment(text: String) -> (String, String?) {

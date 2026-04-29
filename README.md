@@ -158,7 +158,7 @@ osty/
 │   ├── airepair/            # AI-powered source adaptation / auto-repair
 │   ├── diag/                # Diagnostics + Rust-style renderer
 │   ├── resolve/             # Name resolution (single + multi-file)
-│   ├── stdlib/              # Built-in prelude symbols + 37 `modules/*.osty` + 6 primitives
+│   ├── stdlib/              # Built-in prelude symbols + 63 top-level `modules/*.osty` + 6 primitives
 │   ├── types/               # Semantic types (shared by checker + LSP)
 │   ├── check/               # Type checker
 │   ├── lint/                # Style/correctness lint rules (L0xxx codes)
@@ -639,6 +639,13 @@ go test -fuzz=FuzzParse -fuzztime=30s ./internal/parser/
 Fast local loops are captured in the `justfile`:
 
 ```sh
+just quick                 # fastest support-matrix smoke: stdlib + selfhost + front packages
+just medium                # matrix smoke plus broader short Go verification
+just verify-full           # full Go/Osty loop plus six-host cross-compile matrix
+just support-matrix-fast   # STDLIB_MATRIX + SELFHOST_PORT_MATRIX fast smoke
+just support-matrix-medium # deeper matrix bundles without the broad short loop
+just support-stdlib-fast   # STDLIB_MATRIX module-set and resolve smoke
+just support-selfhost-fast # SELFHOST_PORT_MATRIX default-path smoke
 just osty                  # build, selfhost parity, `osty ci .`, and live Osty e2e tests
 just osty-tests            # only the live Osty e2e test dirs
 just front                 # Osty-first loop plus front-end package smoke

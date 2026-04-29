@@ -8,6 +8,7 @@
 //   - resolve dot-segments per RFC 3986 when merging relative references
 
 use std.char as ascii
+use std.encoding
 use std.error
 use std.strings
 
@@ -101,7 +102,7 @@ fn parseReference(text: String, requireScheme: Bool) -> Result<UrlParts, Error> 
     let fragment: String? = if hash < 0 {
         None
     } else {
-        Some(sliceChars(chars, hash + 1, chars.len()))
+        Some(decodeComponent(sliceChars(chars, hash + 1, chars.len()))?)
     }
 
     let beforeChars = beforeFragment.chars()
@@ -260,15 +261,19 @@ fn parseQuery(s: String) -> Result<Map<String, String>, Error> {
             continue
         }
         let kv = strings.splitN(pair, "=", 2)
-        let key = kv[0]
+        let key = decodeComponent(kv[0])?
         let value = if kv.len() == 2 {
-            kv[1]
+            decodeComponent(kv[1])?
         } else {
             ""
         }
         out.insert(key, value)
     }
     Ok(out)
+}
+
+fn decodeComponent(value: String) -> Result<String, Error> {
+    encoding.url.decode(value)
 }
 
 fn encodeQuery(q: Map<String, String>) -> String {

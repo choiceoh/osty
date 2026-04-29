@@ -11,8 +11,15 @@
 // monomorphization. Direct callers set `Options.UseMIR = true` (and supply a
 // MIR module via the backend Entry); production backend dispatch reaches this
 // path once the native-owned fast path declines coverage.
+// Unsupported MIR shapes return an UnsupportedError so the dispatcher can
+// render a route-tagged skeleton artifact; it does not silently retry the
+// legacy HIR→AST bridge for backend requests. Direct llvmgen callers that
+// intentionally want the transitional bridge can still call GenerateModule;
+// see docs/mir_design.md for the removal checklist.
 //
-// MVP scope for this patch:
+// Original MVP scope for this entry point was deliberately small; the current
+// supported surface is broader and is guarded by checkSupported plus the
+// route-sensitive backend tests:
 //   - Primitive types: Int (i64), Int32/Int16/Int8/Byte/UInt*, Bool
 //     (i1), Float/Float64 (double), Float32 (float), Unit (void),
 //     String (ptr).
@@ -27,6 +34,8 @@
 //     aggregates, or concurrency intrinsics. Anything outside the MVP
 //     returns an UnsupportedError so callers can render the normal unsupported
 //     skeleton instead of producing malformed IR.
+//     The current supported surface is broader; checkSupported is the live
+//     gate.
 
 package llvmgen
 
@@ -54,8 +63,9 @@ func fastPathListWriteEnabled() bool {
 }
 
 // GenerateFromMIR emits textual LLVM IR from a MIR module. It is the
-// Stage 3 entry point into llvmgen. Callers that still want the legacy
-// HIR→AST path should call GenerateModule with Options.UseMIR == false.
+// Stage 3 entry point into llvmgen. Direct callers that still want the legacy
+// HIR→AST bridge should call GenerateModule; the backend dispatcher uses this
+// path for normal requests whenever Entry.MIR is available.
 func GenerateFromMIR(m *mir.Module, opts Options) ([]byte, error) {
 	if m == nil {
 		return nil, unsupported("source-layout", "nil MIR module")
@@ -573,6 +583,7 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 	case *ir.FnType:
 		// Fn values pass as `ptr` at the LLVM boundary; accept them
 		// here. Capturing closures lower through the uniform env ABI.
+		// Heap-escaping captured closures remain a Stage 5 gap.
 		return true
 	}
 	return false
@@ -846,9 +857,10 @@ func (g *mirGen) checkInstrSupported(fn *mir.Function, inst mir.Instr) error {
 }
 
 // checkProjectionsSupported walks a Place's projection chain and
-// refuses anything outside the emitter's current coverage. Stage 3.5
-// adds IndexProj for list-typed bases (e.g. `xs[i]`). DerefProj still
-// belongs to later stages.
+// refuses anything outside the emitter's current coverage. IndexProj
+// is limited to List / Map / String bases; DerefProj must carry the
+// type being loaded so the emit loop can keep the LLVM and MIR type
+// cursors aligned.
 func (g *mirGen) checkProjectionsSupported(fn *mir.Function, p mir.Place, ctx string) error {
 	for i, proj := range p.Projections {
 		switch proj.(type) {
@@ -8607,6 +8619,7 @@ func (g *mirGen) emitDiscriminantRV(rv *mir.DiscriminantRV) (string, error) {
 // emitLenRV lowers MIR's direct length query on a place to the same
 // runtime entrypoints used by the intrinsic path. This is the shape
 // lowerForIn emits for list iteration, so supporting it keeps those
+// loops on the MIR path.
 // loops on the MIR path.
 func (g *mirGen) emitLenRV(rv *mir.LenRV) (string, error) {
 	placeT := g.placeType(rv.Place)

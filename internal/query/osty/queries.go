@@ -269,16 +269,24 @@ type Queries struct {
 	// Depends on: SourceText(path).
 	LintFile *query.Query[string, *lint.Result]
 
-	// IdentIndex: (path) -> offset → resolver Symbol. Used by LSP
-	// hover / completion for O(1) position lookup.
-	// Depends on: ResolveFile(path).
-	IdentIndex *query.Query[string, map[int]*resolve.Symbol]
+	// IdentIndex: (path) -> offset → symbol kind. Used by LSP semantic
+	// tokens for O(1) position lookup. This is derived directly from the
+	// selfhost structured resolve result, so it does not need Go Scope /
+	// RefsByID compatibility maps.
+	// Depends on: BuildPackage(packageDirOf(path)).
+	IdentIndex *query.Query[string, map[int]string]
+
+	// ResolveDiagnostics: (path) -> resolver diagnostics for the owning
+	// package, sliced to this file. Derived directly from the selfhost
+	// structured resolve result instead of the Go compatibility Result.
+	// Depends on: BuildPackage(packageDirOf(path)).
+	ResolveDiagnostics *query.Query[string, []*diag.Diagnostic]
 
 	// FileDiagnostics: (path) -> unified diagnostic list for the
 	// file, aggregating parse, resolve (per-file), check (per-file),
 	// and lint results. This is the one query LSP's publishDiagnostics
 	// ultimately needs.
-	// Depends on: Parse(path), ResolveFile(path), CheckFile(path),
+	// Depends on: Parse(path), ResolveDiagnostics(path), CheckFile(path),
 	// LintFile(path).
 	FileDiagnostics *query.Query[string, []*diag.Diagnostic]
 }
@@ -526,20 +534,34 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 	)
 
 	qs.IdentIndex = query.Register(db, "IdentIndex",
-		func(ctx *query.Ctx, path string) map[int]*resolve.Symbol {
-			rr := qs.ResolveFile.Fetch(ctx, path)
-			return buildIdentIndex(rr)
+		func(ctx *query.Ctx, path string) map[int]string {
+			dir := PackageDirOf(path)
+			pkg := qs.BuildPackage.Fetch(ctx, dir)
+			index, err := resolve.NativeIdentKindIndex(pkg, path)
+			if err != nil {
+				return map[int]string{}
+			}
+			return index
 		},
 		hashIdentIndex,
+	)
+
+	qs.ResolveDiagnostics = query.Register(db, "ResolveDiagnostics",
+		func(ctx *query.Ctx, path string) []*diag.Diagnostic {
+			dir := PackageDirOf(path)
+			pkg := qs.BuildPackage.Fetch(ctx, dir)
+			return nativeResolveDiagnosticsForFile(path, pkg)
+		},
+		hashDiagList,
 	)
 
 	qs.FileDiagnostics = query.Register(db, "FileDiagnostics",
 		func(ctx *query.Ctx, path string) []*diag.Diagnostic {
 			pr := qs.Parse.Fetch(ctx, path)
-			rr := qs.ResolveFile.Fetch(ctx, path)
+			resolveDiags := qs.ResolveDiagnostics.Fetch(ctx, path)
 			chk := qs.CheckFile.Fetch(ctx, path)
 			lr := qs.LintFile.Fetch(ctx, path)
-			return collectFileDiagnostics(path, pr, rr, chk, lr)
+			return collectFileDiagnostics(path, pr, resolveDiags, chk, lr)
 		},
 		hashDiagList,
 	)
@@ -578,23 +600,6 @@ func resolveStdlibProvider(ctx *query.Ctx) resolve.StdlibProvider {
 	return reg
 }
 
-// buildIdentIndex inverts the resolve.Result's Refs and TypeRefs
-// maps into an offset → Symbol map. Mirrors the pre-query
-// implementation lifted from internal/lsp/server.go.
-func buildIdentIndex(r *resolve.Result) map[int]*resolve.Symbol {
-	if r == nil {
-		return map[int]*resolve.Symbol{}
-	}
-	out := make(map[int]*resolve.Symbol, len(r.RefIdents)+len(r.TypeRefIdents))
-	for _, id := range r.RefIdents {
-		out[id.Pos().Offset] = r.RefsByID[id.ID]
-	}
-	for _, nt := range r.TypeRefIdents {
-		out[nt.Pos().Offset] = r.TypeRefsByID[nt.ID]
-	}
-	return out
-}
-
 // collectFileDiagnostics merges every diagnostic produced by the
 // pipeline into one sorted list for the given file. Filtering by
 // path is necessary because the package-level resolve/check
@@ -602,12 +607,12 @@ func buildIdentIndex(r *resolve.Result) map[int]*resolve.Symbol {
 func collectFileDiagnostics(
 	path string,
 	pr ParseResult,
-	rr *resolve.Result,
+	resolveDiags []*diag.Diagnostic,
 	chk *check.Result,
 	lr *lint.Result,
 ) []*diag.Diagnostic {
 	norm := NormalizePath(path)
-	out := make([]*diag.Diagnostic, 0, len(pr.Diags)+len(rr.Diags)+len(chk.Diags)+len(lr.Diags))
+	out := make([]*diag.Diagnostic, 0, len(pr.Diags)+len(resolveDiags)+len(chk.Diags)+len(lr.Diags))
 	appendFiltered := func(ds []*diag.Diagnostic) {
 		for _, d := range ds {
 			if d == nil {
@@ -622,9 +627,31 @@ func collectFileDiagnostics(
 	// Parse diagnostics are always about the file that was parsed —
 	// no position-based filtering needed.
 	out = append(out, pr.Diags...)
-	appendFiltered(rr.Diags)
+	appendFiltered(resolveDiags)
 	appendFiltered(chk.Diags)
 	appendFiltered(lr.Diags)
+	return out
+}
+
+func nativeResolveDiagnosticsForFile(path string, pkg *resolve.Package) []*diag.Diagnostic {
+	if pkg == nil {
+		return nil
+	}
+	ds, err := resolve.NativeDiagnostics(pkg)
+	if err != nil {
+		return nil
+	}
+	norm := NormalizePath(path)
+	out := make([]*diag.Diagnostic, 0, len(ds))
+	for _, d := range ds {
+		if d == nil {
+			continue
+		}
+		if d.File != "" && NormalizePath(d.File) != norm {
+			continue
+		}
+		out = append(out, d)
+	}
 	return out
 }
 

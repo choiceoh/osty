@@ -9,6 +9,9 @@
 //     ([]byte, bool, error) — native-owned primitive/control-flow
 //     fast path only. Returns ok=false when the module should continue
 //     through the broader MIR backend path.
+//   - UnsupportedDiagnosticForModule(*ir.Module)
+//     (UnsupportedDiagnostic, bool) — preflight backend-capability
+//     policy before a concrete emitter route is selected.
 //
 // The package previously exposed Generate(*ast.File, Options) as an
 // alternate entry point. That AST route has been removed: the LLVM
@@ -32,8 +35,14 @@
 // generalisation for `Float` and `String` payload enums and the phase
 // 64-73 value/control-flow smoke expansion.
 //
-// Unsupported shapes return ErrUnsupported so the backend dispatcher
-// can render inspectable skeleton IR while the backend grows.
+// Unsupported shapes return ErrUnsupported carrying an UnsupportedDiagnostic
+// when the failure is a known policy category. The mapping is stable:
+// LLVM001/LLVM002 are backend-capability gaps (Go FFI and unknown runtime FFI),
+// LLVM010-LLVM018 classify source/layout/type/call/name/stdlib gaps, and
+// LLVM000 is the generic fallback. The backend dispatcher renders these as
+// inspectable skeleton IR and appends its selected route
+// (unsupported-preflight, native-owned, or mir-direct) to the warning text so
+// traces explain both what failed and which backend path observed it.
 //
 // Implementation note (transitional)
 //

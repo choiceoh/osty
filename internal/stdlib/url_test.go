@@ -77,6 +77,9 @@ func TestUrlModuleSourcePinsQualityGuards(t *testing.T) {
 		"userinfo not supported",
 		"bracket IPv6 literals in authority",
 		"percentEncodeChar(",
+		"use std.encoding",
+		"decodeComponent(kv[0])?",
+		"decodeComponent(sliceChars(chars, hash + 1, chars.len()))?",
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("std.url source missing %q", want)

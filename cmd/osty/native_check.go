@@ -15,6 +15,7 @@ import (
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/stdlib"
 )
 
@@ -232,11 +233,11 @@ func runTypecheckWorkspaceNative(dir string, flags cliFlags) int {
 // `# <path>` header followed by the single-file printNativeTypes
 // rows for each file that has at least one typed node. Files with
 // no typed nodes are silently skipped so the dump stays compact.
-func printNativePackageTypes(result selfhost.CheckResult, files []selfhost.PackageCheckFile) {
+func printNativePackageTypes(result api.CheckResult, files []api.PackageCheckFile) {
 	if len(result.TypedNodes) == 0 || len(files) == 0 {
 		return
 	}
-	buckets := make(map[int][]selfhost.CheckedNode, len(files))
+	buckets := make(map[int][]api.CheckedNode, len(files))
 	for _, n := range result.TypedNodes {
 		if n.Type == nil {
 			continue
@@ -262,7 +263,7 @@ func printNativePackageTypes(result selfhost.CheckResult, files []selfhost.Packa
 			continue
 		}
 		fmt.Printf("# %s\n", f.Path)
-		printNativeTypes(f.Source, selfhost.CheckResult{TypedNodes: bucket})
+		printNativeTypes(f.Source, api.CheckResult{TypedNodes: bucket})
 	}
 }
 
@@ -385,15 +386,15 @@ func nativeWorkspacePaths(ws *resolve.Workspace) []string {
 	sort.Strings(paths)
 	return paths
 }
-func nativePackageCheckInput(pkg *resolve.Package, imports []selfhost.PackageCheckImport) selfhost.PackageCheckInput {
-	input := selfhost.PackageCheckInput{
-		Files: make([]selfhost.PackageCheckFile, 0, len(pkg.Files)),
+func nativePackageCheckInput(pkg *resolve.Package, imports []api.PackageCheckImport) api.PackageCheckInput {
+	input := api.PackageCheckInput{
+		Files: make([]api.PackageCheckFile, 0, len(pkg.Files)),
 	}
 	if len(imports) == 0 {
 		imports = check.PackageImportSurfacesForSelfhost(pkg, nil, nativeLazyStdlibProvider{})
 	}
 	if len(imports) > 0 {
-		input.Imports = append([]selfhost.PackageCheckImport(nil), imports...)
+		input.Imports = append([]api.PackageCheckImport(nil), imports...)
 	}
 	base := 0
 	for _, pf := range pkg.Files {
@@ -405,7 +406,7 @@ func nativePackageCheckInput(pkg *resolve.Package, imports []selfhost.PackageChe
 			continue
 		}
 		name := filepath.Base(pf.Path)
-		input.Files = append(input.Files, selfhost.PackageCheckFile{
+		input.Files = append(input.Files, api.PackageCheckFile{
 			Source: append([]byte(nil), src...),
 			Base:   base,
 			Name:   name,
@@ -423,11 +424,11 @@ func nativePackageCheckInput(pkg *resolve.Package, imports []selfhost.PackageChe
 // not the concatenated bundle. Records that don't land inside any
 // file range (should not happen for well-formed output) are dropped
 // with their bundle offsets preserved as a defensive fallback.
-func nativePackageCheckDiags(records []selfhost.CheckDiagnosticRecord, files []selfhost.PackageCheckFile) []*diag.Diagnostic {
+func nativePackageCheckDiags(records []api.CheckDiagnosticRecord, files []api.PackageCheckFile) []*diag.Diagnostic {
 	if len(records) == 0 || len(files) == 0 {
 		return nil
 	}
-	buckets := make(map[int][]selfhost.CheckDiagnosticRecord, len(files))
+	buckets := make(map[int][]api.CheckDiagnosticRecord, len(files))
 	for _, rec := range records {
 		idx := findOwningFile(files, rec.Start)
 		if idx < 0 {
@@ -455,7 +456,7 @@ func nativePackageCheckDiags(records []selfhost.CheckDiagnosticRecord, files []s
 	}
 	return out
 }
-func findOwningFile(files []selfhost.PackageCheckFile, offset int) int {
+func findOwningFile(files []api.PackageCheckFile, offset int) int {
 	for i, f := range files {
 		end := f.Base + len(f.Source)
 		if offset >= f.Base && offset <= end {
@@ -467,7 +468,7 @@ func findOwningFile(files []selfhost.PackageCheckFile, offset int) int {
 
 // runTypecheckFileNative is runCheckFileNative plus the type dump.
 // After the check runs on the arena, prints every typed-node range
-// selfhost.CheckResult.TypedNodes recorded — one row per node with
+// api.CheckResult.TypedNodes recorded — one row per node with
 // line/column span and the inferred type. Zero astbridge lowerings
 // on the happy path (same counter invariant as runCheckFileNative).
 func runTypecheckFileNative(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
@@ -495,12 +496,12 @@ func runTypecheckFileNative(path string, src []byte, formatter *diag.Formatter, 
 }
 
 // printNativeTypes is the --native sibling of printTypes: it renders
-// selfhost.CheckResult.TypedNodes (node.Start, node.End are byte
+// api.CheckResult.TypedNodes (node.Start, node.End are byte
 // offsets produced by the native checker) as
 // `line:col-line:col\tType` rows sorted by start position. Rows
 // with nil Type (the checker's signal-only placeholders) are
 // dropped so output stays compact.
-func printNativeTypes(src []byte, result selfhost.CheckResult) {
+func printNativeTypes(src []byte, result api.CheckResult) {
 	type row struct {
 		start, end int
 		text       string

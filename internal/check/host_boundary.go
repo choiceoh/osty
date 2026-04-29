@@ -177,7 +177,7 @@ func (c cachedNativeChecker) CheckSourceStructured(src []byte) (api.CheckResult,
 	return res, err
 }
 
-func (c cachedNativeChecker) CheckPackageStructured(input selfhost.PackageCheckInput) (api.CheckResult, error) {
+func (c cachedNativeChecker) CheckPackageStructured(input api.PackageCheckInput) (api.CheckResult, error) {
 	// Key on the raw source + a stable subset of the import surface.
 	// Hashing the full PackageCheckInput through json.Marshal would
 	// traverse the entire parsed AST — multi-second for the regen
@@ -218,7 +218,7 @@ func (c cachedNativeChecker) CheckPackageStructured(input selfhost.PackageCheckI
 	return res, err
 }
 
-func packageCheckFingerprint(input selfhost.PackageCheckInput) []byte {
+func packageCheckFingerprint(input api.PackageCheckInput) []byte {
 	h := sha256.New()
 	for _, f := range input.Files {
 		fmt.Fprintf(h, "file=%s base=%d len=%d\n", f.Name, f.Base, len(f.Source))

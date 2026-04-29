@@ -23,6 +23,14 @@ type llvmToolchain interface {
 	LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string) error
 }
 
+type llvmDispatchRoute string
+
+const (
+	llvmDispatchUnsupportedPreflight llvmDispatchRoute = "unsupported-preflight"
+	llvmDispatchNativeOwned          llvmDispatchRoute = "native-owned"
+	llvmDispatchMIRDirect            llvmDispatchRoute = "mir-direct"
+)
+
 // LLVMBackend emits textual LLVM IR and can drive a host LLVM-compatible
 // toolchain for object/binary artifacts.
 type LLVMBackend struct {
@@ -149,12 +157,23 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 	if entry.IR == nil {
 		return nil, nil, fmt.Errorf("llvm backend: missing lowered IR entry")
 	}
+	warnings := append([]error(nil), entry.IRIssues...)
+	if diag, ok := llvmgen.UnsupportedDiagnosticForModule(entry.IR); ok {
+		traceLLVMDispatch("%s rejected %s: %s %s", llvmDispatchUnsupportedPreflight, entry.SourcePath, diag.Code, diag.Kind)
+		return renderUnsupportedLLVMIR(entry, target, emit, warnings, diag, llvmDispatchUnsupportedPreflight)
+	}
 	if useNativeOwnedLLVMIR(features, emit) && !hasInjectedStdlibBodies(entry.IR) {
+		traceLLVMDispatch("%s try package=%s source=%s emit=%s target=%s", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath, emit, target)
 		if out, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(entry, target); err != nil {
+			traceLLVMDispatch("%s error: %v", llvmDispatchNativeOwned, err)
 			return nil, warnings, err
 		} else if ok {
+			traceLLVMDispatch("%s covered package=%s source=%s", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath)
 			return out, warnings, nil
 		}
+		traceLLVMDispatch("%s declined package=%s source=%s", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath)
+	} else {
+		traceLLVMDispatch("%s skipped package=%s source=%s", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath)
 	}
 	opts := llvmgen.Options{
 		PackageName: entry.PackageName,
@@ -173,30 +192,67 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 	// emitter. MIR refusal now surfaces as the normal unsupported
 	// skeleton diagnostic; the LLVM backend no longer retries the
 	// legacy HIR bridge behind the user's back.
-	var (
-		irOut  []byte
-		genErr error
-	)
-	if opts.UseMIR {
-		irOut, genErr = llvmgen.GenerateFromMIR(entry.MIR, opts)
-	} else {
-		irOut, genErr = llvmgen.GenerateModule(entry.IR, opts)
-	}
-	warnings := append([]error(nil), entry.IRIssues...)
+	route := llvmFallbackDispatchRoute(opts, entry)
+	traceLLVMDispatch("%s emit package=%s source=%s emit=%s target=%s", route, entry.PackageName, entry.SourcePath, emit, target)
+	irOut, genErr := emitLLVMFallback(route, entry, opts)
 	if genErr == nil {
+		traceLLVMDispatch("%s succeeded package=%s source=%s", route, entry.PackageName, entry.SourcePath)
 		return irOut, warnings, nil
 	}
+	traceLLVMDispatch("%s unsupported: %v", route, genErr)
 	diag := llvmgen.UnsupportedDiagnosticForError(genErr)
-	return llvmgen.RenderSkeleton(
-			entry.PackageName,
-			entry.SourcePath,
-			string(emit),
-			target,
-			errors.New(llvmgen.UnsupportedSummary(diag)),
-		), append(warnings,
-			errors.New(llvmgen.UnsupportedSummary(diag)),
-			ErrLLVMNotImplemented,
-		), ErrLLVMNotImplemented
+	return renderUnsupportedLLVMIR(entry, target, emit, warnings, diag, route)
+}
+
+func llvmFallbackDispatchRoute(opts llvmgen.Options, entry Entry) llvmDispatchRoute {
+	if opts.UseMIR {
+		return llvmDispatchMIRDirect
+	}
+	return llvmDispatchMIRDirect
+}
+
+func emitLLVMFallback(route llvmDispatchRoute, entry Entry, opts llvmgen.Options) ([]byte, error) {
+	return llvmgen.GenerateFromMIR(entry.MIR, opts)
+}
+
+func renderUnsupportedLLVMIR(entry Entry, target string, emit EmitMode, warnings []error, diag llvmgen.UnsupportedDiagnostic, route llvmDispatchRoute) ([]byte, []error, error) {
+	summary := llvmUnsupportedTraceSummary(diag, route)
+	skeleton := llvmgen.RenderSkeleton(
+		entry.PackageName,
+		entry.SourcePath,
+		string(emit),
+		target,
+		errors.New(summary),
+	)
+	warnings = append(warnings,
+		errors.New(summary),
+		ErrLLVMNotImplemented,
+	)
+	return skeleton, warnings, ErrLLVMNotImplemented
+}
+
+func llvmUnsupportedTraceSummary(diag llvmgen.UnsupportedDiagnostic, route llvmDispatchRoute) string {
+	summary := llvmgen.UnsupportedSummary(diag)
+	if route == "" {
+		return summary
+	}
+	return summary + "; backend-route: " + string(route)
+}
+
+func traceLLVMDispatch(format string, args ...any) {
+	if !llvmBackendTraceEnabled() {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "backend trace: llvm "+format+"\n", args...)
+}
+
+func llvmBackendTraceEnabled() bool {
+	switch os.Getenv("OSTY_BACKEND_TRACE") {
+	case "", "0", "false", "off":
+		return false
+	default:
+		return true
+	}
 }
 
 func hasInjectedStdlibBodies(mod *ir.Module) bool {
