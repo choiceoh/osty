@@ -1,7 +1,6 @@
 package llvmgen
 
 import (
-	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,23 +13,17 @@ import (
 	"github.com/osty/osty/internal/stdlib"
 )
 
-// TestNativeToolchainMergedMIRPipelineIsClean gates the MIR-first
-// dispatcher on the merged non-bootstrap toolchain. It mirrors the
-// production path in internal/backend/llvm.go: attempt
-// GenerateFromMIR; on ErrUnsupported fall back to the legacy
-// HIR→AST emitter. The whole pipeline must produce LLVM IR without
-// a hard error.
+// TestNativeToolchainMergedMIRPipelineIsClean gates the MIR backend on
+// the merged non-bootstrap toolchain. The self-host critical path must
+// now lower the merged native toolchain through MIR directly; falling
+// back to the legacy HIR→AST emitter would hide real backend coverage
+// regressions.
 //
 // This test is the authoritative gate for the "complete MIR-direct
-// pipeline" milestone: both the fast path (MIR) and the graceful
-// fallback (legacy) must cooperate cleanly. MIR coverage gaps inside
-// the merged checker surface used to block the fast path outright
-// (first wall was `unsupported local type <error>`); the operand-based
-// type recovery in ir.Lower now drops ErrType locals by 91 %
-// (444 → 39), with the remainder concentrated in a handful of
-// synthesised-span BinaryRVs. When the fast path still refuses (the
-// typical case for the merged toolchain today) this gate checks the
-// fallback succeeds.
+// pipeline" milestone. Earlier versions accepted ErrUnsupported from
+// GenerateFromMIR and only required the legacy fallback to succeed; the
+// merged native toolchain is now expected to produce LLVM IR on the MIR
+// path itself.
 //
 // Paired with TestProbeNativeToolchainMergedMIR which is info-only
 // and logs the first MIR wall for debugging.
@@ -72,25 +65,13 @@ func TestNativeToolchainMergedMIRPipelineIsClean(t *testing.T) {
 	}
 	opts := Options{PackageName: "main", SourcePath: "/tmp/toolchain_native_merged_mir_pipeline.osty"}
 
-	// Mirror the dispatcher at internal/backend/llvm.go:177-183.
-	var (
-		out    []byte
-		genErr error
-	)
 	mirMod := mir.Lower(monoMod)
-	if mirMod != nil {
-		out, genErr = GenerateFromMIR(mirMod, opts)
+	if mirMod == nil {
+		t.Fatalf("mir.Lower returned nil module")
 	}
-	if genErr != nil && !errors.Is(genErr, ErrUnsupported) {
-		t.Fatalf("GenerateFromMIR hard error (not ErrUnsupported): %v", genErr)
-	}
+	out, genErr := GenerateFromMIR(mirMod, opts)
 	if genErr != nil {
-		// Fall back to legacy HIR path — the production dispatcher
-		// does the same on ErrUnsupported.
-		out, genErr = generateFromAST(file, opts)
-		if genErr != nil {
-			t.Fatalf("legacy fallback failed after MIR refusal: %v", genErr)
-		}
+		t.Fatalf("GenerateFromMIR failed on merged native toolchain: %v", genErr)
 	}
 	if len(out) == 0 {
 		t.Fatalf("pipeline produced empty IR output")
@@ -110,8 +91,9 @@ func firstN(b []byte, n int) string {
 // TestNativeToolchainMergedMIRErrTypeFloor locks the current MIR
 // ErrType leak count as a progress floor. After the operand-based
 // type recovery in ir.Lower (lowerBinary / lowerIfExpr / lowerCall /
-// lowerQualifiedCall), the merged native toolchain carries ≤40
-// ErrType locals into MIR. Regressions that increase that count
+// lowerQualifiedCall), the merged native toolchain carries only a
+// small handful of ErrType locals into MIR. Regressions that increase
+// that count
 // (e.g. a new checker-coverage gap or a reverted recovery helper)
 // will re-expand cascading ErrType propagation and fail this gate.
 //
@@ -120,7 +102,7 @@ func TestNativeToolchainMergedMIRErrTypeFloor(t *testing.T) {
 	if testing.Short() {
 		t.Skip("slow; skipped in -short")
 	}
-	const floor = 40
+	const floor = 8
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatalf("abs root: %v", err)
