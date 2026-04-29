@@ -1672,19 +1672,17 @@ func unaryOp(k token.Kind) (UnOp, bool) {
 }
 
 func (l *lowerer) lowerBinary(e *ast.BinaryExpr) Expr {
-	// `??` gets its own IR node so backends don't have to pattern-match
-	// on a BinaryExpr with a dedicated op when they have special lowering.
-	//
-	// Note: we do NOT recover CoalesceExpr.T from its operands. Leaving
-	// T=ErrTypeVal keeps the MIR emitter from attempting coalesce
-	// lowering (which has a latent bug in the merge-block terminator
-	// path) and defers to the legacy HIR path, which emits the
-	// `coalesce.some/none/end` labels the test corpus expects.
 	if e.Op == token.QQ {
+		left := l.lowerExpr(e.Left)
+		right := l.lowerExpr(e.Right)
+		t := l.exprType(e)
+		if t == ErrTypeVal {
+			t = recoverCoalesceType(left, right)
+		}
 		return &CoalesceExpr{
-			Left:  l.lowerExpr(e.Left),
-			Right: l.lowerExpr(e.Right),
-			T:     l.exprType(e),
+			Left:  left,
+			Right: right,
+			T:     t,
 			SpanV: nodeSpan(e),
 		}
 	}
@@ -1706,6 +1704,39 @@ func (l *lowerer) lowerBinary(e *ast.BinaryExpr) Expr {
 		T:     t,
 		SpanV: nodeSpan(e),
 	}
+}
+
+func recoverCoalesceType(left, right Expr) Type {
+	if left == nil || right == nil {
+		return ErrTypeVal
+	}
+	lt := left.Type()
+	rt := right.Type()
+	if lt == nil || lt == ErrTypeVal {
+		return ErrTypeVal
+	}
+	var inner Type
+	switch x := lt.(type) {
+	case *OptionalType:
+		inner = x.Inner
+	case *NamedType:
+		if (x.Name == "Option" || x.Name == "Maybe") && len(x.Args) >= 1 {
+			inner = x.Args[0]
+		}
+	}
+	if inner == nil || inner == ErrTypeVal {
+		return ErrTypeVal
+	}
+	if rt == nil || rt == ErrTypeVal {
+		return inner
+	}
+	if inner.String() == rt.String() {
+		return inner
+	}
+	if numericResult(inner, rt) != ErrTypeVal {
+		return numericResult(inner, rt)
+	}
+	return inner
 }
 
 // recoverBinaryType derives a binary expression's result type from its
@@ -2706,6 +2737,10 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 	case "substring", "slice", "replace", "repeat":
 		if isPrim(rt, PrimString) {
 			return TString
+		}
+	case "toBytes":
+		if isPrim(rt, PrimString) {
+			return TBytes
 		}
 	case "split":
 		if isPrim(rt, PrimString) {

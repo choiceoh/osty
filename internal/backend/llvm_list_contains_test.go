@@ -42,8 +42,8 @@ func TestLLVMBackendBinaryRunsListContains(t *testing.T) {
 	if err != nil {
 		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
 	}
-	// Bool prints as 1/0 through println's integer format path.
-	want := "1\n0\n1\n0\n0\n"
+	// Bool prints through the MIR bool formatter.
+	want := "true\nfalse\ntrue\nfalse\nfalse\n"
 	if got := string(output); got != want {
 		t.Fatalf("binary stdout = %q, want %q", got, want)
 	}

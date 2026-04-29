@@ -1,7 +1,6 @@
 package llvmgen
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
@@ -146,9 +145,9 @@ func TestGenerateCoalesceChainsRightAssoc(t *testing.T) {
 }
 
 // End-to-end: full compilation pipeline (parser -> resolve -> check ->
-// ir.Lower -> mir.Lower -> GenerateFromMIR, with legacy fallback on
-// ErrUnsupported) produces coalesce semantics on the same path that real
-// `osty build` takes. The MIR path now handles Option<String> directly, so
+// ir.Lower -> mir.Lower -> GenerateFromMIR) produces coalesce semantics
+// on the same MIR-owned path that real `osty build` takes. The MIR path
+// handles Option<String> directly, so
 // the proof checks for the lowered tagged-option branch rather than legacy
 // `coalesce.*` labels.
 func TestGenerateCoalesceFullPipeline(t *testing.T) {
@@ -180,16 +179,9 @@ fn main() {}
 	mirMod := mir.Lower(monoMod)
 	opts := Options{PackageName: "main", SourcePath: "/tmp/pipeline_coalesce.osty"}
 
-	// Mirror the dispatcher: MIR first, legacy fallback on ErrUnsupported.
 	out, err := GenerateFromMIR(mirMod, opts)
 	if err != nil {
-		if !errors.Is(err, ErrUnsupported) {
-			t.Fatalf("GenerateFromMIR hard error (not ErrUnsupported): %v", err)
-		}
-		out, err = GenerateModule(mod, opts)
-		if err != nil {
-			t.Fatalf("GenerateModule fallback error: %v", err)
-		}
+		t.Fatalf("GenerateFromMIR error: %v", err)
 	}
 
 	got := string(out)

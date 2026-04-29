@@ -7,8 +7,8 @@
 //     backend-neutral IR produced by `internal/ir`.
 //   - TryGenerateNativeOwnedModule(*ir.Module, Options)
 //     ([]byte, bool, error) — native-owned primitive/control-flow
-//     fast path only. Returns ok=false when the module still needs the
-//     transitional legacy fallback.
+//     fast path only. Returns ok=false when the module should continue
+//     through the broader MIR backend path.
 //
 // The package previously exposed Generate(*ast.File, Options) as an
 // alternate entry point. That AST route has been removed: the LLVM
@@ -33,7 +33,7 @@
 // 64-73 value/control-flow smoke expansion.
 //
 // Unsupported shapes return ErrUnsupported so the backend dispatcher
-// can fall back to inspectable skeleton IR while the backend grows.
+// can render inspectable skeleton IR while the backend grows.
 //
 // Implementation note (transitional)
 //
