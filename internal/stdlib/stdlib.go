@@ -93,6 +93,63 @@ type Module struct {
 	Package *resolve.Package
 }
 
+// BuiltinTypeKind describes the stdlib declaration shape backing a
+// prelude-owned builtin type.
+type BuiltinTypeKind string
+
+const (
+	BuiltinTypeStruct    BuiltinTypeKind = "struct"
+	BuiltinTypeEnum      BuiltinTypeKind = "enum"
+	BuiltinTypeInterface BuiltinTypeKind = "interface"
+)
+
+// BuiltinTypeSurface records the one stdlib declaration that backs a
+// prelude builtin type. The resolver owns the public symbol identity
+// (SymBuiltin in NewPrelude); the stdlib module owns the source
+// declaration, method bodies, and generic template used by backend
+// injection.
+type BuiltinTypeSurface struct {
+	Name          string
+	Module        string
+	Kind          BuiltinTypeKind
+	GenericParams []string
+	Injectable    bool
+}
+
+var builtinTypeSurfaces = []BuiltinTypeSurface{
+	{Name: "List", Module: "collections", Kind: BuiltinTypeStruct, GenericParams: []string{"T"}, Injectable: true},
+	{Name: "Map", Module: "collections", Kind: BuiltinTypeStruct, GenericParams: []string{"K", "V"}, Injectable: true},
+	{Name: "Set", Module: "collections", Kind: BuiltinTypeStruct, GenericParams: []string{"T"}, Injectable: true},
+	{Name: "Option", Module: "option", Kind: BuiltinTypeEnum, GenericParams: []string{"T"}, Injectable: true},
+	{Name: "Result", Module: "result", Kind: BuiltinTypeEnum, GenericParams: []string{"T", "E"}, Injectable: true},
+	{Name: "Error", Module: "error", Kind: BuiltinTypeInterface},
+}
+
+// BuiltinTypeSurfaces returns the canonical stdlib-owned surfaces for
+// prelude builtin types. The returned slice is detached from the
+// package-level table so callers cannot mutate global registry policy.
+func BuiltinTypeSurfaces() []BuiltinTypeSurface {
+	out := make([]BuiltinTypeSurface, len(builtinTypeSurfaces))
+	for i, surface := range builtinTypeSurfaces {
+		out[i] = surface
+		out[i].GenericParams = append([]string(nil), surface.GenericParams...)
+	}
+	return out
+}
+
+// BuiltinTypeSurfaceByName returns the stdlib surface backing a prelude
+// builtin type.
+func BuiltinTypeSurfaceByName(name string) (BuiltinTypeSurface, bool) {
+	for _, surface := range builtinTypeSurfaces {
+		if surface.Name == name {
+			out := surface
+			out.GenericParams = append([]string(nil), surface.GenericParams...)
+			return out, true
+		}
+	}
+	return BuiltinTypeSurface{}, false
+}
+
 // Load reads every embedded stub, parses it, resolves it against a
 // fresh prelude, and returns a Registry. Parse and resolve diagnostics
 // from every stub are aggregated in Registry.Diags; a well-formed stub
@@ -204,11 +261,17 @@ func cloneRegistry(r *Registry) *Registry {
 	return out
 }
 
-var preludeBuiltinRebinds = map[string][]string{
-	"collections": {"List", "Map", "Set"},
-	"error":       {"Error"},
-	"option":      {"Option"},
-	"result":      {"Result"},
+var preludeBuiltinRebinds = builtinTypeRebindsByModule()
+
+func builtinTypeRebindsByModule() map[string][]string {
+	out := map[string][]string{}
+	for _, surface := range builtinTypeSurfaces {
+		out[surface.Module] = append(out[surface.Module], surface.Name)
+	}
+	for _, names := range out {
+		sort.Strings(names)
+	}
+	return out
 }
 
 // rebindPreludeBuiltinTypes makes stdlib module exports that mirror
