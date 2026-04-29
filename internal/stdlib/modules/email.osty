@@ -232,13 +232,13 @@ pub fn envelope(msg: Message) -> Result<Envelope, Error> {
     Ok(Envelope {
         from: msg.from.email,
         recipients: recipients(msg),
-        data: smtpData(msg)?,
+        data: render(msg)?,
     })
 }
 
 pub fn smtpData(msg: Message) -> Result<String, Error> {
     let rendered = render(msg)?
-    Ok("{dotStuff(rendered)}{crlf()}.{crlf()}")
+    Ok(dataBlock(rendered))
 }
 
 pub fn smtpCommands(hostname: String, env: Envelope) -> List<String> {
@@ -249,7 +249,7 @@ pub fn smtpCommands(hostname: String, env: Envelope) -> List<String> {
         out.push("RCPT TO:<{rcpt}>")
     }
     out.push("DATA")
-    out.push(env.data)
+    out.push(dataBlock(env.data))
     out.push("QUIT")
     out
 }
@@ -307,7 +307,8 @@ fn renderAlternative(text: String, html: String, boundary: String) -> String {
 
 fn renderAttachment(part: Attachment) -> String {
     let encoded = wrapBase64(encoding.base64.encode(part.data))
-    "Content-Type: {part.contentType}; name=\"{part.filename}\"{crlf()}Content-Disposition: attachment; filename=\"{part.filename}\"{crlf()}Content-Transfer-Encoding: base64{crlf()}{crlf()}{encoded}{crlf()}"
+    let filename = quoteMimeParam(part.filename)
+    "Content-Type: {part.contentType}; name={filename}{crlf()}Content-Disposition: attachment; filename={filename}{crlf()}Content-Transfer-Encoding: base64{crlf()}{crlf()}{encoded}{crlf()}"
 }
 
 fn formatAddressList(addrs: List<Address>) -> String {
@@ -329,6 +330,16 @@ fn quoteDisplayName(name: String) -> String {
         return "{quote}{escaped}{quote}"
     }
     clean
+}
+
+fn quoteMimeParam(value: String) -> String {
+    let quote = '"'
+    "{quote}{escapeQuotedString(sanitizeHeader(value))}{quote}"
+}
+
+fn escapeQuotedString(value: String) -> String {
+    let escapedSlash = strings.replaceAll(value, "\\", "\\\\")
+    strings.replaceAll(escapedSlash, "\"", "\\\"")
 }
 
 fn unquoteDisplayName(name: String) -> String {
@@ -353,6 +364,23 @@ fn sanitizeContentType(value: String) -> String {
 
 fn normalizeBody(value: String) -> String {
     strings.replaceAll(strings.replaceAll(value, "\r\n", "\n"), "\n", crlf())
+}
+
+fn dataBlock(value: String) -> String {
+    let body = stripDataTerminator(value)
+    "{dotStuff(body)}{crlf()}.{crlf()}"
+}
+
+fn stripDataTerminator(value: String) -> String {
+    let normalized = normalizeBody(value)
+    if hasDataTerminator(normalized) {
+        return strings.slice(normalized, 0, normalized.len() - 5)
+    }
+    normalized
+}
+
+fn hasDataTerminator(value: String) -> Bool {
+    strings.endsWith(normalizeBody(value), "{crlf()}.{crlf()}")
 }
 
 fn dotStuff(value: String) -> String {

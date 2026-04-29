@@ -48,6 +48,11 @@ func TestWebsocketModuleSourcePinsHandshakeAndFrameBehavior(t *testing.T) {
 		`out.insert("Sec-WebSocket-Accept", acceptKey(clientKey))`,
 		`pub fn encode(frame: Frame) -> Result<Bytes, Error>`,
 		`pub fn decode(data: Bytes) -> Result<DecodedFrame, Error>`,
+		`strings.toLower(strings.trimSpace(header(headers, "Upgrade") ?? ""))`,
+		`fn hasConnectionToken(value: String, token: String) -> Bool`,
+		`strings.split(value, ",")`,
+		`fn isValidClientKey(key: String) -> Bool`,
+		`decoded.len() == 16`,
 		`fn xorByte(a: Int, b: Int) -> Int`,
 	} {
 		if !strings.Contains(src, want) {

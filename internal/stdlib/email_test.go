@@ -51,7 +51,12 @@ func TestEmailModuleSourcePinsMimeBehavior(t *testing.T) {
 		`Content-Type: multipart/mixed; boundary=`,
 		`encoding.base64.encode(part.data)`,
 		`pub fn smtpCommands(hostname: String, env: Envelope) -> List<String>`,
+		`data: render(msg)?`,
+		`out.push(dataBlock(env.data))`,
+		`fn dataBlock(value: String) -> String`,
 		`fn dotStuff(value: String) -> String`,
+		`fn quoteMimeParam(value: String) -> String`,
+		`strings.replaceAll(escapedSlash, "\"", "\\\"")`,
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("std.email source missing %q", want)

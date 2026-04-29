@@ -220,10 +220,24 @@ fn validateName(name: String) -> Result<(), Error> {
     if strings.startsWith(name, "/") {
         return Err(error.new("tar: absolute paths are not allowed"))
     }
+    if strings.contains(name, "\\") {
+        return Err(error.new("tar: backslashes are not allowed in entry names"))
+    }
+    if isDriveLetterPath(name) {
+        return Err(error.new("tar: drive-letter paths are not allowed"))
+    }
     if name == ".." || strings.startsWith(name, "../") || strings.endsWith(name, "/..") || strings.contains(name, "/../") {
         return Err(error.new("tar: parent path segments are not allowed"))
     }
     Ok(())
+}
+
+fn isDriveLetterPath(name: String) -> Bool {
+    if name.len() < 2 {
+        return false
+    }
+    let c = name[0]
+    ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) && name[1] == ':'
 }
 
 fn entryTypeFlag(kind: EntryType) -> Int {
