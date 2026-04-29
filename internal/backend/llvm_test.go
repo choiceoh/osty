@@ -71,7 +71,7 @@ func parseBackendFile(t *testing.T, src string) (*ast.File, *resolve.Result, *ch
 	if file == nil {
 		t.Fatal("ParseDiagnostics returned nil file")
 	}
-	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 
@@ -2106,6 +2106,35 @@ fn main() {
 		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
 	}
 	if got, want := string(output), "1\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
+func TestLLVMBackendBinaryResultUnitErrUsesReturnContext(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `fn fail() -> Result<(), String> {
+    return Err("nope")
+}
+
+fn main() {
+    match fail() {
+        Ok(_) -> println(0),
+        Err(msg) -> println(msg),
+    }
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	output, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "nope\n"; got != want {
 		t.Fatalf("binary stdout = %q, want %q", got, want)
 	}
 }

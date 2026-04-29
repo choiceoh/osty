@@ -159,7 +159,12 @@ func (l *lowerer) collectSignatures() {
 
 func (l *lowerer) buildLayouts() {
 	for name, s := range l.structs {
-		sl := &StructLayout{Name: name, Mangled: name}
+		sl := &StructLayout{
+			Name:              name,
+			Mangled:           name,
+			BuiltinSource:     s.BuiltinSource,
+			BuiltinSourceArgs: cloneTypeList(s.BuiltinSourceArgs),
+		}
 		for i, f := range s.Fields {
 			sl.Fields = append(sl.Fields, FieldLayout{
 				Index: i,
@@ -171,9 +176,11 @@ func (l *lowerer) buildLayouts() {
 	}
 	for name, e := range l.enums {
 		el := &EnumLayout{
-			Name:         name,
-			Mangled:      name,
-			Discriminant: TInt,
+			Name:              name,
+			Mangled:           name,
+			BuiltinSource:     e.BuiltinSource,
+			BuiltinSourceArgs: cloneTypeList(e.BuiltinSourceArgs),
+			Discriminant:      TInt,
 		}
 		for i, v := range e.Variants {
 			vl := VariantLayout{Index: i, Name: v.Name}
@@ -189,6 +196,17 @@ func (l *lowerer) buildLayouts() {
 		l.out.Layouts.Enums[name] = el
 	}
 	l.buildInterfaceLayouts()
+}
+
+func cloneTypeList(types []Type) []Type {
+	if len(types) == 0 {
+		return nil
+	}
+	out := make([]Type, len(types))
+	for i, t := range types {
+		out[i] = ir.CloneType(t)
+	}
+	return out
 }
 
 // buildInterfaceLayouts populates Layouts.Interfaces from every
@@ -1436,16 +1454,16 @@ func (bs *bodyState) lowerForRange(f *ir.ForStmt) {
 }
 
 func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
-	iterT := f.Iter.Type()
+	iterT := bs.recoveredTypeOf(f.Iter)
 	if isChannelType(iterT) {
 		bs.lowerForInChannel(f, iterT)
 		return
 	}
-	if !isListType(iterT) {
+	if !bs.l.isListType(iterT) {
 		bs.l.noteIssue("for-in over non-List/Channel iterable is not lowered to MIR yet")
 		return
 	}
-	elemT := listElementType(iterT)
+	elemT := bs.l.listElementType(iterT)
 	if elemT == nil || isPoisonType(elemT) {
 		// List<?> with a poisoned element type would propagate ErrType
 		// to the `_elem` copy and surface as `unsupported local type
@@ -1660,13 +1678,22 @@ func (bs *bodyState) lowerMatch(scrutinee ir.Expr, arms []*ir.MatchArm, tree ir.
 		_ = arm
 	}
 
+	// Bare enum cases can survive parsing as IdentPat (`Plain -> ...`).
+	// Against an enum scrutinee those names are variant tests, not catch-all
+	// bindings; rebuild the decision tree with normalized patterns so the
+	// MIR path does not collapse to arm 0.
+	decisionArms, normalizedBareVariants := bs.normalizeBareVariantMatchArms(scrutT, arms)
+	if normalizedBareVariants {
+		tree = ir.CompileDecisionTree(scrutT, decisionArms)
+	}
+
 	// Monomorph clones drop Tree (cloneMatchStmt / cloneMatchExpr leave
 	// it nil) — recompile on demand so the post-mono MIR path still sees
 	// a specialised decision tree instead of the goto-armBlocks[0]
 	// fallback, which silently collapses every match on Result / enum
 	// payload bindings to "always take arm 0".
-	if tree == nil && scrutinee.Type() != nil {
-		tree = ir.CompileDecisionTree(scrutinee.Type(), arms)
+	if tree == nil && scrutT != nil && !isPoisonType(scrutT) {
+		tree = ir.CompileDecisionTree(scrutT, decisionArms)
 	}
 
 	// If we have a decision tree, use it.
@@ -1777,6 +1804,80 @@ func (mc *matchContext) lowerTree(node ir.DecisionNode) {
 	default:
 		bs.l.noteIssue("decision tree: unsupported node %T", node)
 		bs.terminate(&UnreachableTerm{SpanV: mc.sp})
+	}
+}
+
+func (bs *bodyState) normalizeBareVariantMatchArms(scrutT Type, arms []*ir.MatchArm) ([]*ir.MatchArm, bool) {
+	if scrutT == nil || isPoisonType(scrutT) || len(arms) == 0 {
+		return arms, false
+	}
+	var out []*ir.MatchArm
+	changedAny := false
+	for i, arm := range arms {
+		if arm == nil {
+			continue
+		}
+		pat, changed := bs.normalizeBareVariantPattern(scrutT, arm.Pattern)
+		if !changed {
+			continue
+		}
+		if out == nil {
+			out = make([]*ir.MatchArm, len(arms))
+			copy(out, arms)
+		}
+		clone := *arm
+		clone.Pattern = pat
+		out[i] = &clone
+		changedAny = true
+	}
+	if !changedAny {
+		return arms, false
+	}
+	return out, true
+}
+
+func (bs *bodyState) normalizeBareVariantPattern(scrutT Type, pat ir.Pattern) (ir.Pattern, bool) {
+	switch p := pat.(type) {
+	case *ir.IdentPat:
+		if !bs.l.identPatternIsEnumVariant(scrutT, p.Name) {
+			return pat, false
+		}
+		return &ir.VariantPat{
+			Enum:    typeNameOf(scrutT),
+			Variant: p.Name,
+			SpanV:   p.SpanV,
+		}, true
+	case *ir.BindingPat:
+		inner, changed := bs.normalizeBareVariantPattern(scrutT, p.Pattern)
+		if !changed {
+			return pat, false
+		}
+		clone := *p
+		clone.Pattern = inner
+		return &clone, true
+	case *ir.OrPat:
+		var out []ir.Pattern
+		changedAny := false
+		for i, alt := range p.Alts {
+			normalized, changed := bs.normalizeBareVariantPattern(scrutT, alt)
+			if !changed {
+				continue
+			}
+			if out == nil {
+				out = make([]ir.Pattern, len(p.Alts))
+				copy(out, p.Alts)
+			}
+			out[i] = normalized
+			changedAny = true
+		}
+		if !changedAny {
+			return pat, false
+		}
+		clone := *p
+		clone.Alts = out
+		return &clone, true
+	default:
+		return pat, false
 	}
 }
 
@@ -2053,6 +2154,11 @@ func (bs *bodyState) lowerExprAsOperand(e ir.Expr) Operand {
 	case *ir.StringLit:
 		return bs.lowerStringLit(x)
 	case *ir.FieldExpr:
+		if rv, t, ok := bs.lowerQualifiedEnumVariantField(x, x.T); ok {
+			tmp := bs.freshTemp(t, exprSpan(x))
+			bs.emit(&AssignInstr{Dest: Place{Local: tmp}, Src: rv, SpanV: exprSpan(x)})
+			return &CopyOp{Place: Place{Local: tmp}, T: t}
+		}
 		if !x.Optional {
 			recvPlace, ok := bs.lowerExprToPlace(x.X)
 			if !ok {
@@ -2132,10 +2238,28 @@ func (bs *bodyState) lowerExprAsOperandHint(e ir.Expr, hint Type) Operand {
 			}
 		}
 	}
+	if c, ok := e.(*ir.CallExpr); ok && c != nil {
+		if id, ok := c.Callee.(*ir.Ident); ok && id != nil {
+			if _, _, ok := builtinVariantCallShape(hint, id.Name, len(c.Args)); ok {
+				tmp := bs.freshTemp(hint, exprSpan(e))
+				bs.lowerExprInto(e, tmp, hint)
+				return &CopyOp{Place: Place{Local: tmp}, T: hint}
+			}
+		}
+	}
 	if !shouldPreferHintType(e.Type(), hint) {
 		return bs.lowerExprAsOperand(e)
 	}
-	return bs.lowerExprAsOperand(e)
+	switch e.(type) {
+	case *ir.ListLit, *ir.StructLit, *ir.TupleLit, *ir.VariantLit:
+	default:
+		return bs.lowerExprAsOperand(e)
+	}
+	tmp := bs.freshTemp(hint, exprSpan(e))
+	if rv := bs.lowerExprToRValue(e, hint); rv != nil {
+		bs.emit(&AssignInstr{Dest: Place{Local: tmp}, Src: rv, SpanV: exprSpan(e)})
+	}
+	return &CopyOp{Place: Place{Local: tmp}, T: hint}
 }
 
 // recoveredTypeOf returns e.Type() when it's populated, otherwise
@@ -2151,9 +2275,14 @@ func (bs *bodyState) recoveredTypeOf(e ir.Expr) ir.Type {
 		}
 	}
 	switch e.(type) {
-	case *ir.FieldExpr, *ir.IndexExpr, *ir.TupleAccess:
+	case *ir.FieldExpr, *ir.IndexExpr, *ir.TupleAccess, *ir.MethodCall:
 		if rt := bs.recoverOperandType(e); rt != nil && !isPoisonType(rt) && !irHasPoisonedTypeArg(rt) {
 			return rt
+		}
+	}
+	if field, ok := e.(*ir.FieldExpr); ok {
+		if ft := bs.fieldExprType(field); ft != nil && !isPoisonType(ft) && !irHasPoisonedTypeArg(ft) {
+			return ft
 		}
 	}
 	t := e.Type()
@@ -2168,11 +2297,6 @@ func (bs *bodyState) recoveredTypeOf(e ir.Expr) ir.Type {
 
 func (bs *bodyState) recoveredIdentStorageType(id *ir.Ident) ir.Type {
 	if id == nil {
-		return nil
-	}
-	switch id.Kind {
-	case ir.IdentLocal, ir.IdentParam:
-	default:
 		return nil
 	}
 	local, ok := bs.lookup(id.Name)
@@ -2230,6 +2354,9 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 				if rt := stdlibFreeFnReturnType(pathQualifier(use), fx.Name); rt != nil {
 					return rt
 				}
+				if sig := useDeclFnType(use, fx.Name); sig != nil && sig.Return != nil && !isPoisonType(sig.Return) {
+					return sig.Return
+				}
 			}
 			// Otherwise rely on whatever FnType the FieldExpr carries.
 			if ct := fx.Type(); !isPoisonType(ct) {
@@ -2269,9 +2396,12 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 			if rt := stdlibFreeFnReturnType(pathQualifier(use), x.Name); rt != nil {
 				return rt
 			}
+			if sig := useDeclFnType(use, x.Name); sig != nil && sig.Return != nil && !isPoisonType(sig.Return) {
+				return sig.Return
+			}
 		}
 		recvT := bs.recoveredTypeOf(x.Receiver)
-		if rt := builtinMethodReturnType(recvT, x.Name); rt != nil {
+		if rt := bs.recoveredMethodReturnType(recvT, x.Name); rt != nil {
 			return rt
 		}
 		if isPoisonType(recvT) {
@@ -2458,6 +2588,10 @@ func builtinMethodReturnType(recvT ir.Type, method string) ir.Type {
 			}
 		case ir.PrimChar:
 			switch method {
+			case "isDigit", "isAlpha", "isAlphanumeric", "isWhitespace", "isUpper", "isLower":
+				return ir.TBool
+			case "toUpper", "toLower":
+				return ir.TChar
 			case "toInt":
 				return ir.TInt
 			case "toByte":
@@ -2471,6 +2605,26 @@ func builtinMethodReturnType(recvT ir.Type, method string) ir.Type {
 	// last) rarely hit this path because the checker tracks them.
 	if nt, ok := recvT.(*ir.NamedType); ok && nt.Builtin {
 		switch nt.Name {
+		case "Option", "Maybe":
+			if len(nt.Args) >= 1 {
+				switch method {
+				case "unwrap", "unwrapOr":
+					return nt.Args[0]
+				case "isSome", "isNone":
+					return ir.TBool
+				}
+			}
+		case "Result":
+			if len(nt.Args) >= 2 {
+				switch method {
+				case "unwrap", "unwrapOr":
+					return nt.Args[0]
+				case "unwrapErr":
+					return nt.Args[1]
+				case "isOk", "isErr":
+					return ir.TBool
+				}
+			}
 		case "List", "Map", "Set":
 			switch method {
 			case "len":
@@ -2478,6 +2632,69 @@ func builtinMethodReturnType(recvT ir.Type, method string) ir.Type {
 			case "isEmpty":
 				return ir.TBool
 			}
+		}
+	}
+	return nil
+}
+
+func (bs *bodyState) recoveredMethodReturnType(recvT ir.Type, method string) ir.Type {
+	if rt := builtinMethodReturnType(recvT, method); rt != nil {
+		return rt
+	}
+	if _, ok := recvT.(*ir.OptionalType); ok {
+		switch method {
+		case "isSome", "isNone":
+			return ir.TBool
+		case "unwrap", "unwrapOr":
+			return optionInnerType(recvT)
+		}
+	}
+	switch bs.l.stdlibReceiverName(recvT) {
+	case "Map":
+		keyT := bs.l.mapKeyType(recvT)
+		valueT := bs.l.indexElementType(recvT)
+		switch method {
+		case "get":
+			if !isPoisonType(valueT) {
+				return &ir.OptionalType{Inner: valueT}
+			}
+		case "getOr":
+			if !isPoisonType(valueT) {
+				return valueT
+			}
+		case "keys":
+			if !isPoisonType(keyT) {
+				return &ir.NamedType{Name: "List", Args: []ir.Type{keyT}, Builtin: true}
+			}
+		case "values":
+			if !isPoisonType(valueT) {
+				return &ir.NamedType{Name: "List", Args: []ir.Type{valueT}, Builtin: true}
+			}
+		case "len":
+			return ir.TInt
+		case "isEmpty", "contains", "containsKey":
+			return ir.TBool
+		}
+	case "List":
+		elemT := bs.l.listElementType(recvT)
+		switch method {
+		case "first", "last", "pop", "get":
+			if !isPoisonType(elemT) {
+				return &ir.OptionalType{Inner: elemT}
+			}
+		case "sorted", "reversed", "slice":
+			return recvT
+		case "len":
+			return ir.TInt
+		case "isEmpty", "contains":
+			return ir.TBool
+		}
+	case "Set":
+		switch method {
+		case "len":
+			return ir.TInt
+		case "isEmpty", "contains":
+			return ir.TBool
 		}
 	}
 	return nil
@@ -2547,6 +2764,17 @@ func pathQualifier(use *ir.UseDecl) string {
 		return ""
 	}
 	return strings.Join(use.Path, ".")
+}
+
+func isStdlibErrorUse(use *ir.UseDecl) bool {
+	if use == nil {
+		return false
+	}
+	switch qualifierOf(use) {
+	case "error", "std.error":
+		return true
+	}
+	return pathQualifier(use) == "std.error"
 }
 
 // stdlibFreeFnReturnType reports the declared return type for the
@@ -2623,6 +2851,35 @@ func stdlibFreeFnParamTypes(qualifier, name string) []ir.Type {
 	return nil
 }
 
+// useDeclFnType reports the inline signature for `use X { fn name(...) -> R }`
+// imports. Runtime FFI declarations use the same GoBody storage as the legacy
+// Go FFI bridge, so this gives MIR a single recovery path for both forms.
+func useDeclFnType(use *ir.UseDecl, name string) *ir.FnType {
+	if use == nil || name == "" {
+		return nil
+	}
+	for _, d := range use.GoBody {
+		fn, ok := d.(*ir.FnDecl)
+		if !ok || fn == nil || fn.Name != name {
+			continue
+		}
+		params := make([]ir.Type, 0, len(fn.Params))
+		for _, p := range fn.Params {
+			if p == nil || p.Type == nil {
+				params = append(params, ir.ErrTypeVal)
+				continue
+			}
+			params = append(params, ir.CloneType(p.Type))
+		}
+		ret := fn.Return
+		if ret == nil {
+			ret = TUnit
+		}
+		return &ir.FnType{Params: params, Return: ir.CloneType(ret)}
+	}
+	return nil
+}
+
 // builtinFreeCallReturnType recognises prelude-shaped free calls that
 // the frontend may synthesize from method syntax in suppressed type
 // contexts (notably string interpolation). `p.items.len()` can reach
@@ -2652,10 +2909,40 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 	case nil:
 		return &UseRV{Op: &ConstOp{Const: &UnitConst{}, T: TUnit}}
 	case *ir.UnaryExpr:
+		t := x.T
+		if isPoisonType(t) || irHasPoisonedTypeArg(t) || (x.Op != ir.UnNot && isUnit(t)) {
+			if !isPoisonType(hint) && !irHasPoisonedTypeArg(hint) && !isUnit(hint) {
+				t = hint
+			} else if rt := bs.recoverOperandType(x); rt != nil && !isPoisonType(rt) && !irHasPoisonedTypeArg(rt) && !(x.Op != ir.UnNot && isUnit(rt)) {
+				t = rt
+			} else if x.Op == ir.UnNot {
+				t = TBool
+			} else {
+				switch x.X.(type) {
+				case *ir.IntLit:
+					t = TInt
+				case *ir.FloatLit:
+					t = TFloat
+				}
+			}
+		}
+		arg := bs.lowerExprAsOperand(x.X)
+		if !isPoisonType(t) && !irHasPoisonedTypeArg(t) {
+			switch lit := x.X.(type) {
+			case *ir.IntLit:
+				v, _ := strconv.ParseInt(strings.ReplaceAll(lit.Text, "_", ""), 0, 64)
+				arg = &ConstOp{Const: &IntConst{Value: v, T: t}, T: t}
+			case *ir.FloatLit:
+				v, _ := strconv.ParseFloat(strings.ReplaceAll(lit.Text, "_", ""), 64)
+				arg = &ConstOp{Const: &FloatConst{Value: v, T: t}, T: t}
+			default:
+				arg = bs.lowerExprAsOperandHint(x.X, t)
+			}
+		}
 		return &UnaryRV{
 			Op:  mapUnaryOp(x.Op),
-			Arg: bs.lowerExprAsOperand(x.X),
-			T:   x.T,
+			Arg: arg,
+			T:   t,
 		}
 	case *ir.BinaryExpr:
 		// String + String + ... chains coalesce into a single
@@ -2703,6 +2990,9 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 			T:     x.T,
 		}
 	case *ir.FieldExpr:
+		if rv, _, ok := bs.lowerQualifiedEnumVariantField(x, hint); ok {
+			return rv
+		}
 		if !x.Optional {
 			// Plain field access; lower receiver into a place and
 			// project.
@@ -2750,7 +3040,7 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 				if rv, handled := bs.lowerStringSliceRValue(x, rng); handled {
 					return rv
 				}
-			case isListType(baseT):
+			case bs.l.isListType(baseT):
 				if rv, handled := bs.lowerListSliceRValue(x, rng); handled {
 					return rv
 				}
@@ -2773,13 +3063,14 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 		}
 		return &AggregateRV{Kind: AggTuple, Fields: fields, T: x.T}
 	case *ir.ListLit:
+		lt := hint
+		if lt == nil || isPoisonType(lt) {
+			lt = x.Type()
+		}
+		elemT := bs.l.listElementType(lt)
 		fields := make([]Operand, len(x.Elems))
 		for i, e := range x.Elems {
-			fields[i] = bs.lowerExprAsOperand(e)
-		}
-		lt := hint
-		if lt == nil {
-			lt = x.Type()
+			fields[i] = bs.lowerExprAsOperandHint(e, elemT)
 		}
 		return &AggregateRV{Kind: AggList, Fields: fields, T: lt}
 	case *ir.StructLit:
@@ -2798,6 +3089,56 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 	}
 	// Fallback: lower as operand and wrap in UseRV.
 	return &UseRV{Op: bs.lowerExprAsOperandHint(e, hint)}
+}
+
+func (bs *bodyState) lowerQualifiedEnumVariantField(x *ir.FieldExpr, hint Type) (RValue, Type, bool) {
+	t, idx, ok := bs.qualifiedEnumVariantFieldInfo(x, hint)
+	if !ok {
+		return nil, nil, false
+	}
+	return &AggregateRV{
+		Kind:       AggEnumVariant,
+		Fields:     nil,
+		T:          t,
+		VariantIdx: idx,
+		VariantTag: x.Name,
+	}, t, true
+}
+
+func (bs *bodyState) qualifiedEnumVariantFieldInfo(x *ir.FieldExpr, hint Type) (Type, int, bool) {
+	if x == nil || x.Optional {
+		return nil, 0, false
+	}
+	id, ok := x.X.(*ir.Ident)
+	if !ok || id == nil || id.Kind != ir.IdentTypeName || id.Name == "" {
+		return nil, 0, false
+	}
+	e := bs.l.enums[id.Name]
+	if e == nil {
+		return nil, 0, false
+	}
+	idx := -1
+	for i, v := range e.Variants {
+		if v != nil && v.Name == x.Name {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return nil, 0, false
+	}
+	t := x.T
+	if isPoisonType(t) || irHasPoisonedTypeArg(t) {
+		switch {
+		case hint != nil && !isPoisonType(hint) && typeNameOf(hint) == id.Name:
+			t = ir.CloneType(hint)
+		case id.T != nil && !isPoisonType(id.T) && typeNameOf(id.T) == id.Name:
+			t = ir.CloneType(id.T)
+		default:
+			t = &ir.NamedType{Name: id.Name}
+		}
+	}
+	return t, idx, true
 }
 
 // lowerExprToPlace tries to describe e as a Place without materialising
@@ -2834,7 +3175,8 @@ func (bs *bodyState) lowerExprToPlace(e ir.Expr) (Place, bool) {
 		// form instead (lowerExprAsRValue catches the string-slice
 		// pattern and emits the intrinsic directly).
 		if _, ok := x.Index.(*ir.RangeLit); ok {
-			if isStringReceiverType(x.X.Type()) || isListType(x.X.Type()) {
+			baseT := bs.recoveredTypeOf(x.X)
+			if isStringReceiverType(baseT) || bs.l.isListType(baseT) {
 				return Place{}, false
 			}
 		}
@@ -3042,7 +3384,7 @@ func (bs *bodyState) recoverOperandStorageType(op Operand) Type {
 		case *VariantProj:
 			cur = variantLookupPayloadType(bs.l, cur, p.Name, p.FieldIdx)
 		case *IndexProj:
-			cur = indexElementType(cur)
+			cur = bs.l.indexElementType(cur)
 		case *DerefProj:
 			cur = p.Type
 		}
@@ -3568,6 +3910,20 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 			bs.emitConcurrencyIntrinsic(kind, c.Args, dest, destT, c.SpanV)
 			return
 		}
+		if module, name, ok := loweredStdlibFreeSymbol(id.Name); ok {
+			switch module {
+			case "bytes":
+				if kind := stdlibBytesFreeFnToIntrinsic("std.bytes", name); kind != IntrinsicInvalid {
+					bs.emitBytesFreeFnIntrinsic(kind, c.Args, dest, destT, c.SpanV)
+					return
+				}
+			case "strings":
+				if kind := stdlibStringFreeFnToIntrinsic("std.strings", name); kind != IntrinsicInvalid {
+					bs.emitStringFreeFnIntrinsic(kind, c.Args, dest, destT, c.SpanV)
+					return
+				}
+			}
+		}
 		if kind := bs.builtinFreeCallIntrinsic(id.Name, c.Args); kind != IntrinsicInvalid {
 			bs.emitBuiltinFreeCallIntrinsic(kind, c.Args, dest, destT, c.SpanV)
 			return
@@ -3576,7 +3932,7 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 	if fx, ok := c.Callee.(*ir.FieldExpr); ok {
 		if id, ok := fx.X.(*ir.Ident); ok && id != nil {
 			switch id.Name {
-			case "Bytes":
+			case "Bytes", "bytes":
 				if kind := stdlibBytesFreeFnToIntrinsic("bytes", fx.Name); kind != IntrinsicInvalid {
 					bs.emitBytesFreeFnIntrinsic(kind, c.Args, dest, destT, c.SpanV)
 					return
@@ -3586,6 +3942,19 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 					bs.emitStringFreeFnIntrinsic(kind, c.Args, dest, destT, c.SpanV)
 					return
 				}
+			case "Error", "error":
+				args := bs.orderArgs(c.Args, nil)
+				destPtr := dest
+				if destPtr != nil && isUnit(destT) {
+					destPtr = nil
+				}
+				bs.emit(&CallInstr{
+					Dest:   destPtr,
+					Callee: &FnRef{Symbol: "std.error." + fx.Name, Type: c.T},
+					Args:   args,
+					SpanV:  c.SpanV,
+				})
+				return
 			}
 		}
 		if use := bs.l.useAliasFor(fx.X); use != nil {
@@ -3595,6 +3964,20 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 			}
 			if kind := runtimeIntrinsicForFree(qualifierOf(use), fx.Name); kind != IntrinsicInvalid {
 				bs.emitRuntimeIntrinsic(kind, c.Args, dest, destT, c.SpanV)
+				return
+			}
+			if isStdlibErrorUse(use) {
+				args := bs.orderArgs(c.Args, nil)
+				destPtr := dest
+				if destPtr != nil && isUnit(destT) {
+					destPtr = nil
+				}
+				bs.emit(&CallInstr{
+					Dest:   destPtr,
+					Callee: &FnRef{Symbol: "std.error." + fx.Name, Type: c.T},
+					Args:   args,
+					SpanV:  c.SpanV,
+				})
 				return
 			}
 			// Route `std.strings.fn(x, ...)` to the equivalent
@@ -3622,6 +4005,21 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 				bs.emitBytesFreeFnIntrinsic(kind, c.Args, dest, destT, c.SpanV)
 				return
 			}
+		}
+		if use, parts, ok := bs.l.useAliasFieldPath(fx); ok && stdlibNestedNamespacePath(use, parts) {
+			name := strings.Join(parts, ".")
+			args := bs.orderArgsByTypes(c.Args, stdlibFreeFnParamTypes(pathQualifier(use), name))
+			destPtr := dest
+			if destPtr != nil && isUnit(destT) {
+				destPtr = nil
+			}
+			bs.emit(&CallInstr{
+				Dest:   destPtr,
+				Callee: &FnRef{Symbol: qualifiedSymbol(use, name), Type: c.T},
+				Args:   args,
+				SpanV:  c.SpanV,
+			})
+			return
 		}
 	}
 	if bs.lowerBuiltinVariantCallInto(c, dest, destT) {
@@ -3878,8 +4276,18 @@ func (bs *bodyState) resolveCall(c *ir.CallExpr) ([]Operand, Callee) {
 // encodes the qualifier, and the argument list does NOT include a
 // synthetic receiver.
 func (bs *bodyState) resolveQualifiedCall(use *ir.UseDecl, name string, t Type, args []ir.Arg) ([]Operand, Callee) {
-	out := bs.orderArgsByTypes(args, stdlibFreeFnParamTypes(pathQualifier(use), name))
-	return out, &FnRef{Symbol: qualifiedSymbol(use, name), Type: t}
+	paramTypes := stdlibFreeFnParamTypes(pathQualifier(use), name)
+	callType := t
+	if sig := useDeclFnType(use, name); sig != nil {
+		if len(paramTypes) == 0 {
+			paramTypes = sig.Params
+		}
+		if isPoisonType(callType) || irHasPoisonedTypeArg(callType) {
+			callType = sig
+		}
+	}
+	out := bs.orderArgsByTypes(args, paramTypes)
+	return out, &FnRef{Symbol: qualifiedSymbol(use, name), Type: callType}
 }
 
 // qualifiedSymbol returns the MIR-visible symbol for a package- or
@@ -3917,6 +4325,50 @@ func (l *lowerer) useAliasFor(e ir.Expr) *ir.UseDecl {
 		return nil
 	}
 	return l.useAliases[id.Name]
+}
+
+// useAliasFieldPath recognizes nested package-namespace expressions
+// like `crypto.hmac.sha256` or `compress.gzip.decode`. The returned
+// path excludes the leading use alias and preserves the remaining
+// field segments in source order.
+func (l *lowerer) useAliasFieldPath(e ir.Expr) (*ir.UseDecl, []string, bool) {
+	field, ok := e.(*ir.FieldExpr)
+	if !ok || field == nil {
+		return nil, nil, false
+	}
+	var parts []string
+	cur := field
+	for cur != nil {
+		parts = append([]string{cur.Name}, parts...)
+		if use := l.useAliasFor(cur.X); use != nil {
+			return use, parts, true
+		}
+		next, ok := cur.X.(*ir.FieldExpr)
+		if !ok {
+			return nil, nil, false
+		}
+		cur = next
+	}
+	return nil, nil, false
+}
+
+func stdlibNestedNamespacePath(use *ir.UseDecl, parts []string) bool {
+	if use == nil || len(parts) < 2 {
+		return false
+	}
+	switch qualifierOf(use) {
+	case "crypto", "std.crypto":
+		return parts[0] == "hmac"
+	case "compress", "std.compress":
+		return parts[0] == "gzip"
+	}
+	switch pathQualifier(use) {
+	case "std.crypto":
+		return parts[0] == "hmac"
+	case "std.compress":
+		return parts[0] == "gzip"
+	}
+	return false
 }
 
 // paramTypesOf extracts a parameter-type slice from an FnType, or nil
@@ -4005,11 +4457,40 @@ func (bs *bodyState) orderArgs(args []ir.Arg, sig *fnSignature) []Operand {
 
 func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Type) {
 	recvType := bs.recoveredTypeOf(mc.Receiver)
+	if id, ok := mc.Receiver.(*ir.Ident); ok && id != nil {
+		switch id.Name {
+		case "bytes", "Bytes":
+			if kind := stdlibBytesFreeFnToIntrinsic("bytes", mc.Name); kind != IntrinsicInvalid {
+				bs.emitBytesFreeFnIntrinsic(kind, mc.Args, &dest, destT, mc.SpanV)
+				return
+			}
+		case "strings", "String":
+			if kind := stdlibStringFreeFnToIntrinsic("strings", mc.Name); kind != IntrinsicInvalid {
+				bs.emitStringFreeFnIntrinsic(kind, mc.Args, &dest, destT, mc.SpanV)
+				return
+			}
+		}
+	}
 	// Package/FFI-qualified calls land here when HIR lowered `pkg.fn()`
 	// into MethodCall{Receiver: Ident(pkg), Name: fn}. The receiver is
 	// a use alias, not a value — fast-path to a concurrency intrinsic
 	// when the qualifier targets `thread`, or emit a direct qualified
 	// call with no synthetic `self` argument otherwise.
+	if use, parts, ok := bs.l.useAliasFieldPath(mc.Receiver); ok && stdlibNestedNamespacePath(use, append(parts, mc.Name)) {
+		name := strings.Join(append(parts, mc.Name), ".")
+		args := bs.orderArgsByTypes(mc.Args, stdlibFreeFnParamTypes(pathQualifier(use), name))
+		destPtr := &dest
+		if isUnit(destT) {
+			destPtr = nil
+		}
+		bs.emit(&CallInstr{
+			Dest:   destPtr,
+			Callee: &FnRef{Symbol: qualifiedSymbol(use, name), Type: mc.T},
+			Args:   args,
+			SpanV:  mc.SpanV,
+		})
+		return
+	}
 	if use := bs.l.useAliasFor(mc.Receiver); use != nil {
 		if kind := concurrencyIntrinsicForFree(qualifierOf(use), mc.Name); kind != IntrinsicInvalid {
 			bs.emitConcurrencyIntrinsic(kind, mc.Args, &dest, destT, mc.SpanV)
@@ -4117,7 +4598,7 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 	// Option / Result methods. Matches the concurrency path above but
 	// for the primitive types whose method bodies in stdlib just
 	// return default values — the runtime handles the real work.
-	if kind := stdlibIntrinsicForMethod(recvType, mc.Name); kind != IntrinsicInvalid {
+	if kind := bs.l.stdlibIntrinsicForMethod(recvType, mc.Name); kind != IntrinsicInvalid {
 		recv := bs.lowerExprAsOperand(mc.Receiver)
 		args := []Operand{recv}
 		for _, a := range mc.Args {
@@ -4505,7 +4986,7 @@ func concurrencyIntrinsicForMethod(receiverType Type, name string) IntrinsicKind
 // The recogniser runs *after* the concurrency recogniser in the
 // method-call path so concurrency receivers (Channel, Handle, Group,
 // Select) never accidentally shadow the primitive names.
-func stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
+func (l *lowerer) stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
 	// Option<T> has two surface forms — NamedType{"Option"} and
 	// OptionalType (surface `T?`) — handle OptionalType first so the
 	// ordinary typeNameOf branch below doesn't need a special case.
@@ -4556,7 +5037,7 @@ func stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
 		}
 		return IntrinsicInvalid
 	}
-	switch typeNameOf(receiverType) {
+	switch l.stdlibReceiverName(receiverType) {
 	case "List":
 		switch name {
 		case "push":
@@ -4662,6 +5143,78 @@ func stdlibIntrinsicForMethod(receiverType Type, name string) IntrinsicKind {
 		}
 	}
 	return IntrinsicInvalid
+}
+
+func (l *lowerer) stdlibReceiverName(t Type) string {
+	if nt, ok := t.(*ir.NamedType); ok && l != nil {
+		key := typeNameOf(nt)
+		if st := l.structs[key]; st != nil && st.BuiltinSource != "" {
+			return st.BuiltinSource
+		}
+		if en := l.enums[key]; en != nil && en.BuiltinSource != "" {
+			return en.BuiltinSource
+		}
+	}
+	return typeNameOf(t)
+}
+
+func (l *lowerer) isListType(t ir.Type) bool {
+	if isListType(t) {
+		return true
+	}
+	if nt, ok := t.(*ir.NamedType); ok && l != nil {
+		if st := l.structs[typeNameOf(nt)]; st != nil && st.BuiltinSource == "List" {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *lowerer) listElementType(t ir.Type) Type {
+	if elemT := listElementType(t); !isPoisonType(elemT) {
+		return elemT
+	}
+	if nt, ok := t.(*ir.NamedType); ok && l != nil {
+		if st := l.structs[typeNameOf(nt)]; st != nil && st.BuiltinSource == "List" && len(st.BuiltinSourceArgs) >= 1 {
+			return st.BuiltinSourceArgs[0]
+		}
+	}
+	return ir.ErrTypeVal
+}
+
+func (l *lowerer) indexElementType(base Type) Type {
+	if elemT := indexElementType(base); !isPoisonType(elemT) {
+		return elemT
+	}
+	if nt, ok := base.(*ir.NamedType); ok && l != nil {
+		if st := l.structs[typeNameOf(nt)]; st != nil {
+			switch st.BuiltinSource {
+			case "List":
+				if len(st.BuiltinSourceArgs) >= 1 {
+					return st.BuiltinSourceArgs[0]
+				}
+			case "Map":
+				if len(st.BuiltinSourceArgs) >= 2 {
+					return st.BuiltinSourceArgs[1]
+				}
+			}
+		}
+	}
+	return ir.ErrTypeVal
+}
+
+func (l *lowerer) mapKeyType(base Type) Type {
+	if nt, ok := base.(*ir.NamedType); ok {
+		if nt.Name == "Map" && len(nt.Args) >= 1 {
+			return nt.Args[0]
+		}
+		if l != nil {
+			if st := l.structs[typeNameOf(nt)]; st != nil && st.BuiltinSource == "Map" && len(st.BuiltinSourceArgs) >= 1 {
+				return st.BuiltinSourceArgs[0]
+			}
+		}
+	}
+	return ir.ErrTypeVal
 }
 
 // isVoidStdlibIntrinsic reports whether a stdlib intrinsic produces
@@ -4814,6 +5367,22 @@ func stdlibBytesFreeFnToIntrinsic(qualifier, name string) IntrinsicKind {
 		return IntrinsicBytesToString
 	}
 	return bytesIntrinsicForMethod(name)
+}
+
+func loweredStdlibFreeSymbol(symbol string) (module, name string, ok bool) {
+	const prefix = "osty_std_"
+	if !strings.HasPrefix(symbol, prefix) {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(symbol, prefix)
+	parts := strings.SplitN(rest, "__", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	if strings.Contains(parts[1], "__") {
+		return "", "", false
+	}
+	return strings.ReplaceAll(parts[0], "_", "."), parts[1], true
 }
 
 // stdlibStringFreeFnToIntrinsic maps `std.strings.Y` free-function
@@ -5441,7 +6010,7 @@ func (l *lowerer) variantIndexInType(t ir.Type, name string) (int, bool) {
 	if !ok || nt.Name == "" {
 		return 0, false
 	}
-	e := l.enums[nt.Name]
+	e := l.enums[typeNameOf(nt)]
 	if e == nil {
 		return 0, false
 	}
@@ -5451,6 +6020,56 @@ func (l *lowerer) variantIndexInType(t ir.Type, name string) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+func (l *lowerer) identPatternIsEnumVariant(t ir.Type, name string) bool {
+	if name == "" || !startsUpperASCII(name) {
+		return false
+	}
+	if builtinEnumHasVariant(t, name) {
+		return true
+	}
+	if _, ok := l.variantIndexInType(t, name); ok {
+		return true
+	}
+	typeName := typeNameOf(t)
+	if typeName == "" || l.out == nil || l.out.Layouts == nil {
+		return false
+	}
+	if el := l.out.Layouts.Enums[typeName]; el != nil {
+		for _, v := range el.Variants {
+			if v.Name == name {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func startsUpperASCII(name string) bool {
+	if name == "" {
+		return false
+	}
+	return name[0] >= 'A' && name[0] <= 'Z'
+}
+
+func builtinEnumHasVariant(t ir.Type, name string) bool {
+	typeName := typeNameOf(t)
+	switch typeName {
+	case "Option":
+		return name == "None" || name == "Some"
+	case "Result":
+		return name == "Err" || name == "Ok"
+	}
+	if nt, ok := t.(*ir.NamedType); ok && nt != nil && nt.Builtin {
+		switch nt.Name {
+		case "Option":
+			return name == "None" || name == "Some"
+		case "Result":
+			return name == "Err" || name == "Ok"
+		}
+	}
+	return false
 }
 
 func (l *lowerer) variantIndexByName(t ir.Type, name string) int {
@@ -5597,13 +6216,6 @@ func flattenProjection(p *ir.Projection) []*ir.Projection {
 }
 
 func variantLookupPayloadType(l *lowerer, scrutT ir.Type, variant string, idx int) Type {
-	// If the "scrutinee" at this level is already the payload's scalar
-	// (because a prior ProjVariant already descended past the payload
-	// tuple boundary), then a ProjVariantN at idx==0 is a redundant
-	// projection — just return the same type.
-	if isScalarPayload(scrutT) && idx == 0 {
-		return scrutT
-	}
 	typeName := typeNameOf(scrutT)
 	if typeName == "" {
 		return ir.ErrTypeVal
@@ -5622,6 +6234,16 @@ func variantLookupPayloadType(l *lowerer, scrutT ir.Type, variant string, idx in
 				}
 			}
 		}
+	}
+	// If the "scrutinee" at this level is already the payload's scalar
+	// (because a prior ProjVariant already descended past the payload
+	// tuple boundary), then a ProjVariantN at idx==0 is a redundant
+	// projection — just return the same type. This must run after enum
+	// lookup: user enum containers are NamedType too, and treating them
+	// as scalar would bind `Case(x)` as the whole enum instead of the
+	// payload.
+	if isScalarPayload(scrutT) && idx == 0 {
+		return scrutT
 	}
 	// Builtin Option/Result heuristics
 	switch typeName {
@@ -5651,6 +6273,10 @@ func variantLookupPayloadType(l *lowerer, scrutT ir.Type, variant string, idx in
 func typeNameOf(t ir.Type) string {
 	switch x := t.(type) {
 	case *ir.NamedType:
+		if x.Package != "" && !x.Builtin {
+			pkg := strings.TrimPrefix(x.Package, "std.")
+			return pkg + "." + x.Name
+		}
 		return x.Name
 	case *ir.OptionalType:
 		return "Option"
@@ -5822,12 +6448,12 @@ func (bs *bodyState) indexExprType(x *ir.IndexExpr) Type {
 		if isStringReceiverType(baseT) {
 			return ir.TString
 		}
-		if isListType(baseT) {
+		if bs.l.isListType(baseT) {
 			return baseT
 		}
 	}
 	for _, baseT := range []Type{bs.recoveredTypeOf(x.X), bs.recoverOperandType(x.X)} {
-		if elemT := indexElementType(baseT); !isPoisonType(elemT) {
+		if elemT := bs.l.indexElementType(baseT); !isPoisonType(elemT) {
 			return elemT
 		}
 	}

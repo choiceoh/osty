@@ -102,6 +102,46 @@ func TestGenerateFromMIRBinaryArith(t *testing.T) {
 	}
 }
 
+func TestGenerateFromMIRByteArithmeticWidensToAnnotatedInt(t *testing.T) {
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "hexDigit",
+				Return: ir.TInt,
+				Params: []*ir.Param{{Name: "b", Type: ir.TByte}},
+				Body: &ir.Block{
+					Stmts: []ir.Stmt{
+						&ir.LetStmt{
+							Name: "n",
+							Type: ir.TInt,
+							Value: &ir.BinaryExpr{
+								Op:    ir.BinSub,
+								Left:  &ir.Ident{Name: "b", Kind: ir.IdentParam, T: ir.TByte},
+								Right: &ir.ByteLit{Value: '0'},
+								T:     ir.TByte,
+							},
+						},
+					},
+					Result: &ir.Ident{Name: "n", Kind: ir.IdentLocal, T: ir.TInt},
+				},
+			},
+		},
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/byte_widen.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	if !strings.Contains(got, "sub i64") {
+		t.Fatalf("byte arithmetic did not widen to Int before subtraction:\n%s", got)
+	}
+	if strings.Contains(got, "store i64 %") && strings.Contains(got, "sub i8") {
+		t.Fatalf("byte arithmetic left a narrow result for an Int store:\n%s", got)
+	}
+}
+
 // TestGenerateFromMIRIfBranch — if-expression lowers to branch +
 // block labels + phi-free merge.
 func TestGenerateFromMIRIfBranch(t *testing.T) {
@@ -211,6 +251,38 @@ func TestGenerateFromMIRWhileLoop(t *testing.T) {
 	}
 	if !strings.Contains(got, "icmp slt i64") {
 		t.Fatalf("expected cond check, got:\n%s", got)
+	}
+}
+
+func TestGenerateFromMIRNegativeLiteralUsesReturnHint(t *testing.T) {
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "missing",
+				Return: ir.TInt,
+				Body: &ir.Block{
+					Result: &ir.BinaryExpr{
+						Op:    ir.BinSub,
+						Left:  &ir.UnitLit{},
+						Right: &ir.IntLit{Text: "1", T: ir.TInt},
+						T:     ir.TUnit,
+					},
+				},
+			},
+		},
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/negative.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	if strings.Contains(got, "sub void") {
+		t.Fatalf("negative literal lost its integer type:\n%s", got)
+	}
+	if !strings.Contains(got, "sub i64 0, 1") {
+		t.Fatalf("missing typed negative literal subtraction in:\n%s", got)
 	}
 }
 
@@ -338,6 +410,57 @@ func TestGenerateFromMIRPrintlnStringUsesRuntimeIOWrite(t *testing.T) {
 	}
 	if strings.Contains(got, "@printf") {
 		t.Fatalf("String println should not use printf directly:\n%s", got)
+	}
+}
+
+func TestMIRInjectBeforeFirstFnIgnoresStringPoolMarkerText(t *testing.T) {
+	body := "; header\n@.str.0 = private unnamed_addr constant [8 x i8] c\"define \\00\"\n\ndefine i32 @main() {\n  ret i32 0\n}\n"
+	block := "declare void @rt()\n"
+	got := mirInjectBeforeFirstFn(body, block)
+	if strings.Contains(got, "c\"declare void @rt()") {
+		t.Fatalf("runtime block was inserted inside a string literal:\n%s", got)
+	}
+	want := "@.str.0 = private unnamed_addr constant [8 x i8] c\"define \\00\"\n\ndeclare void @rt()\ndefine i32 @main()"
+	if !strings.Contains(got, want) {
+		t.Fatalf("runtime block not inserted before top-level define:\n%s", got)
+	}
+}
+
+func TestGenerateFromMIRRuntimeDeclsIgnoreStringPoolDefineLiteral(t *testing.T) {
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "main",
+				Return: ir.TUnit,
+				Body: &ir.Block{
+					Stmts: []ir.Stmt{
+						&ir.ExprStmt{X: &ir.IntrinsicCall{
+							Kind: ir.IntrinsicPrintln,
+							Args: []ir.Arg{{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "define "}}}}},
+						}},
+					},
+				},
+			},
+		},
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/define_literal.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	if strings.Contains(got, `c"declare void @osty_rt_io_write`) {
+		t.Fatalf("runtime declaration was inserted inside string literal:\n%s", got)
+	}
+	for _, want := range []string{
+		`@.str.0 = private unnamed_addr constant [8 x i8] c"define \00"`,
+		"declare void @osty_rt_io_write(ptr, i1, i1)",
+		"define i32 @main()",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
 	}
 }
 
@@ -471,7 +594,7 @@ func TestMIRDualEmitFromSource(t *testing.T) {
 }
 `
 	file := parseLLVMGenFile(t, src)
-	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 
@@ -647,7 +770,7 @@ fn newRunner() -> Runner {
 }
 `
 	file := parseLLVMGenFile(t, src)
-	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 
@@ -807,6 +930,200 @@ func TestGenerateFromMIRProjectedFieldWrite(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
 		}
+	}
+}
+
+func TestGenerateFromMIRProjectedFieldCallWrite(t *testing.T) {
+	cellT := &ir.NamedType{Name: "Cell"}
+	cellDecl := &ir.StructDecl{
+		Name: "Cell",
+		Fields: []*ir.Field{
+			{Name: "left", Type: ir.TString, Exported: true},
+			{Name: "right", Type: ir.TString, Exported: true},
+		},
+	}
+	makeFn := &ir.FnDecl{
+		Name:   "makeName",
+		Return: ir.TString,
+		Body: &ir.Block{
+			Result: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "ok"}}},
+		},
+	}
+	fillFn := &ir.FnDecl{
+		Name:   "fill",
+		Return: cellT,
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "cell",
+					Type: cellT,
+					Mut:  true,
+					Value: &ir.StructLit{
+						TypeName: "Cell",
+						T:        cellT,
+						Fields: []ir.StructLitField{
+							{Name: "left", Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: ""}}}},
+							{Name: "right", Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: ""}}}},
+						},
+					},
+				},
+				&ir.AssignStmt{
+					Op: ir.AssignEq,
+					Targets: []ir.Expr{&ir.FieldExpr{
+						X:    &ir.Ident{Name: "cell", Kind: ir.IdentLocal, T: cellT},
+						Name: "right",
+						T:    ir.TString,
+					}},
+					Value: &ir.CallExpr{
+						Callee: &ir.Ident{
+							Name: "makeName",
+							Kind: ir.IdentFn,
+							T:    &ir.FnType{Return: ir.TString},
+						},
+						T: ir.TString,
+					},
+				},
+			},
+			Result: &ir.Ident{Name: "cell", Kind: ir.IdentLocal, T: cellT},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{cellDecl, makeFn, fillFn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/call-field-write.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	want := regexp.MustCompile(`call ptr @makeName\(\)\n\s+%t\d+ = load %Cell, ptr %l\d+\n\s+%t\d+ = insertvalue %Cell %t\d+, ptr %t\d+, 1\n\s+store %Cell %t\d+, ptr %l\d+`)
+	if !want.MatchString(got) {
+		t.Fatalf("projected call result should rebuild the struct field, got:\n%s", got)
+	}
+	if regexp.MustCompile(`store %Cell %t\d+, ptr %l\d+`).FindStringIndex(got) == nil {
+		t.Fatalf("missing rebuilt Cell store in:\n%s", got)
+	}
+}
+
+func TestGenerateFromMIRIndexedElementFieldCallWrite(t *testing.T) {
+	cellT := &ir.NamedType{Name: "Cell"}
+	listCellT := &ir.NamedType{Name: "List", Args: []ir.Type{cellT}, Builtin: true}
+	cellDecl := &ir.StructDecl{
+		Name: "Cell",
+		Fields: []*ir.Field{
+			{Name: "left", Type: ir.TString, Exported: true},
+			{Name: "right", Type: ir.TString, Exported: true},
+		},
+	}
+	makeFn := &ir.FnDecl{
+		Name:   "makeCellName",
+		Return: ir.TString,
+		Body: &ir.Block{
+			Result: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "ok"}}},
+		},
+	}
+	updateFn := &ir.FnDecl{
+		Name:   "updateCell",
+		Return: listCellT,
+		Params: []*ir.Param{{Name: "cells", Type: listCellT}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.AssignStmt{
+					Op: ir.AssignEq,
+					Targets: []ir.Expr{&ir.FieldExpr{
+						X: &ir.IndexExpr{
+							X:     &ir.Ident{Name: "cells", Kind: ir.IdentParam, T: listCellT},
+							Index: &ir.IntLit{Text: "0", T: ir.TInt},
+							T:     cellT,
+						},
+						Name: "right",
+						T:    ir.TString,
+					}},
+					Value: &ir.CallExpr{
+						Callee: &ir.Ident{
+							Name: "makeCellName",
+							Kind: ir.IdentFn,
+							T:    &ir.FnType{Return: ir.TString},
+						},
+						T: ir.TString,
+					},
+				},
+			},
+			Result: &ir.Ident{Name: "cells", Kind: ir.IdentParam, T: listCellT},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{cellDecl, makeFn, updateFn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/index-call-field-write.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	want := regexp.MustCompile(`(?s)call ptr @makeCellName\(\).*osty_rt_list_get_bytes_v1.*insertvalue %Cell.*osty_rt_list_set_bytes_v1`)
+	if !want.MatchString(got) {
+		t.Fatalf("indexed element call result should get, rebuild, and set the element, got:\n%s", got)
+	}
+}
+
+func TestGenerateFromMIRNestedIndexedElementCallWrite(t *testing.T) {
+	listStringT := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	cellT := &ir.NamedType{Name: "Cell"}
+	listCellT := &ir.NamedType{Name: "List", Args: []ir.Type{cellT}, Builtin: true}
+	cellDecl := &ir.StructDecl{
+		Name: "Cell",
+		Fields: []*ir.Field{
+			{Name: "names", Type: listStringT, Exported: true},
+		},
+	}
+	makeFn := &ir.FnDecl{
+		Name:   "makeNestedName",
+		Return: ir.TString,
+		Body: &ir.Block{
+			Result: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "ok"}}},
+		},
+	}
+	updateFn := &ir.FnDecl{
+		Name:   "updateNestedCell",
+		Return: listCellT,
+		Params: []*ir.Param{{Name: "cells", Type: listCellT}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.AssignStmt{
+					Op: ir.AssignEq,
+					Targets: []ir.Expr{&ir.IndexExpr{
+						X: &ir.FieldExpr{
+							X: &ir.IndexExpr{
+								X:     &ir.Ident{Name: "cells", Kind: ir.IdentParam, T: listCellT},
+								Index: &ir.IntLit{Text: "0", T: ir.TInt},
+								T:     cellT,
+							},
+							Name: "names",
+							T:    listStringT,
+						},
+						Index: &ir.IntLit{Text: "0", T: ir.TInt},
+						T:     ir.TString,
+					}},
+					Value: &ir.CallExpr{
+						Callee: &ir.Ident{
+							Name: "makeNestedName",
+							Kind: ir.IdentFn,
+							T:    &ir.FnType{Return: ir.TString},
+						},
+						T: ir.TString,
+					},
+				},
+			},
+			Result: &ir.Ident{Name: "cells", Kind: ir.IdentParam, T: listCellT},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{cellDecl, makeFn, updateFn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/nested-index-call-write.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	want := regexp.MustCompile(`(?s)call ptr @makeNestedName\(\).*osty_rt_list_get_bytes_v1.*osty_rt_list_set_ptr.*insertvalue %Cell.*osty_rt_list_set_bytes_v1`)
+	if !want.MatchString(got) {
+		t.Fatalf("nested indexed call result should update the inner list and outer element, got:\n%s", got)
 	}
 }
 
@@ -1176,8 +1493,10 @@ func TestGenerateFromMIRResultMethodsLower(t *testing.T) {
 		"define i1 @resultIsErr(%Result.i64.string %arg0)",
 		"define i64 @resultUnwrap(%Result.i64.string %arg0)",
 		"define i64 @resultUnwrapOr(%Result.i64.string %arg0)",
-		"declare void @osty_rt_result_unwrap_err() noreturn",
-		"call void @osty_rt_result_unwrap_err()",
+		"declare void @osty_rt_io_write(ptr, i1, i1)",
+		"declare void @exit(i32)",
+		"called unwrap on Err",
+		"call void @exit(i32 1)",
 		"icmp eq i64",
 		"phi i64",
 	} {
@@ -2338,7 +2657,7 @@ func TestGenerateFromMIRVectorizedScalarListParamUsesRawDataFastPath(t *testing.
 }
 `
 	file := parseLLVMGenFile(t, src)
-	res := resolve.ResolveFileDefault(file, stdlib.LoadCached())
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, stdlib.LoadCached())
 	reg := stdlib.LoadCached()
 	chk := check.SelfhostFile(file, res, check.Opts{
 
@@ -5213,6 +5532,18 @@ func TestGenerateFromMIRRuntimeFilepathFFI(t *testing.T) {
 		Alias:        "filepath",
 		IsRuntimeFFI: true,
 		RuntimePath:  "runtime.path.filepath",
+		GoBody: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "Base",
+				Params: []*ir.Param{{Name: "path", Type: ir.TString}},
+				Return: ir.TString,
+			},
+			&ir.FnDecl{
+				Name:   "Ext",
+				Params: []*ir.Param{{Name: "path", Type: ir.TString}},
+				Return: ir.TString,
+			},
+		},
 	}
 	baseCall := &ir.CallExpr{
 		Callee: &ir.FieldExpr{
@@ -5221,7 +5552,7 @@ func TestGenerateFromMIRRuntimeFilepathFFI(t *testing.T) {
 			T:    ir.ErrTypeVal,
 		},
 		Args: []ir.Arg{{Value: &ir.Ident{Name: "path", Kind: ir.IdentParam, T: ir.TString}}},
-		T:    ir.TString,
+		T:    ir.ErrTypeVal,
 	}
 	fn := &ir.FnDecl{
 		Name:   "classify",
@@ -5235,12 +5566,22 @@ func TestGenerateFromMIRRuntimeFilepathFFI(t *testing.T) {
 					T:    ir.ErrTypeVal,
 				},
 				Args: []ir.Arg{{Value: baseCall}},
-				T:    ir.TString,
+				T:    ir.ErrTypeVal,
 			},
 		},
 	}
 	hir := &ir.Module{Package: "main", Decls: []ir.Decl{useDecl, fn}}
 	m := buildMIRModuleFromHIR(t, hir)
+	if fn := m.LookupFunction("classify"); fn != nil {
+		for _, loc := range fn.Locals {
+			if loc == nil {
+				continue
+			}
+			if _, ok := loc.Type.(*ir.ErrType); ok {
+				t.Fatalf("runtime filepath MIR local stayed poisoned: id=%d name=%s\n%s", loc.ID, loc.Name, mir.PrintFunction(fn))
+			}
+		}
+	}
 	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/runtime_filepath_mir.osty"})
 	if err != nil {
 		t.Fatalf("GenerateFromMIR: %v", err)
@@ -5254,6 +5595,172 @@ func TestGenerateFromMIRRuntimeFilepathFFI(t *testing.T) {
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+func TestGenerateFromMIRRuntimeFFICallProjectedDestUsesLeafReturn(t *testing.T) {
+	timeT := &ir.NamedType{Name: "Time"}
+	holderT := &ir.NamedType{Name: "Holder"}
+	useDecl := &ir.UseDecl{
+		Path:         []string{"runtime", "cihost"},
+		RawPath:      "runtime.cihost",
+		Alias:        "host",
+		IsRuntimeFFI: true,
+		RuntimePath:  "runtime.cihost",
+		GoBody: []ir.Decl{
+			&ir.FnDecl{Name: "NowUTC", Return: timeT},
+		},
+	}
+	timeDecl := &ir.StructDecl{Name: "Time"}
+	holderDecl := &ir.StructDecl{
+		Name:   "Holder",
+		Fields: []*ir.Field{{Name: "finished", Type: timeT, Exported: true}},
+	}
+	fn := &ir.FnDecl{
+		Name:   "stamp",
+		Return: holderT,
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "h",
+					Type: holderT,
+					Mut:  true,
+					Value: &ir.StructLit{
+						TypeName: "Holder",
+						T:        holderT,
+						Fields: []ir.StructLitField{{
+							Name:  "finished",
+							Value: &ir.StructLit{TypeName: "Time", T: timeT},
+						}},
+					},
+				},
+				&ir.AssignStmt{
+					Op: ir.AssignEq,
+					Targets: []ir.Expr{&ir.FieldExpr{
+						X:    &ir.Ident{Name: "h", Kind: ir.IdentLocal, T: holderT},
+						Name: "finished",
+						T:    timeT,
+					}},
+					Value: &ir.CallExpr{
+						Callee: &ir.FieldExpr{
+							X:    &ir.Ident{Name: "host", T: ir.ErrTypeVal},
+							Name: "NowUTC",
+							T:    ir.ErrTypeVal,
+						},
+						T: ir.ErrTypeVal,
+					},
+				},
+			},
+			Result: &ir.Ident{Name: "h", Kind: ir.IdentLocal, T: holderT},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{useDecl, timeDecl, holderDecl, fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/runtime_projected_dest.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare %Time @osty_rt_cihost_NowUTC()",
+		"call %Time @osty_rt_cihost_NowUTC()",
+		"insertvalue %Holder",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "call %Holder @osty_rt_cihost_NowUTC()") {
+		t.Fatalf("runtime FFI call used root aggregate type instead of field type:\n%s", got)
+	}
+}
+
+func TestGenerateFromMIRQualifiedEnumVariantFieldPoisoned(t *testing.T) {
+	kindT := &ir.NamedType{Name: "PackageEntryKind"}
+	enum := &ir.EnumDecl{
+		Name: "PackageEntryKind",
+		Variants: []*ir.Variant{
+			{Name: "Ignored"},
+			{Name: "Source"},
+		},
+	}
+	variant := func(name string) ir.Expr {
+		return &ir.FieldExpr{
+			X:    &ir.Ident{Name: "PackageEntryKind", Kind: ir.IdentTypeName, T: ir.ErrTypeVal},
+			Name: name,
+			T:    ir.ErrTypeVal,
+		}
+	}
+	fn := &ir.FnDecl{
+		Name:   "packageEntryKind",
+		Return: kindT,
+		Params: []*ir.Param{{Name: "source", Type: ir.TBool}},
+		Body: &ir.Block{Result: &ir.IfExpr{
+			Cond: &ir.Ident{Name: "source", Kind: ir.IdentParam, T: ir.TBool},
+			Then: &ir.Block{Result: variant("Source")},
+			Else: &ir.Block{Result: variant("Ignored")},
+			T:    ir.ErrTypeVal,
+		}},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{enum, fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	mirFn := m.LookupFunction("packageEntryKind")
+	if mirFn == nil {
+		t.Fatal("missing packageEntryKind")
+	}
+	for _, loc := range mirFn.Locals {
+		if loc == nil {
+			continue
+		}
+		if _, ok := loc.Type.(*ir.ErrType); ok {
+			t.Fatalf("qualified enum variant MIR local stayed poisoned: id=%d name=%s\n%s", loc.ID, loc.Name, mir.PrintFunction(mirFn))
+		}
+	}
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/qualified_enum_variant.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v\n%s", err, mir.PrintFunction(mirFn))
+	}
+	if !strings.Contains(string(out), "define") || !strings.Contains(string(out), "@packageEntryKind") {
+		t.Fatalf("generated IR missing packageEntryKind define:\n%s", string(out))
+	}
+}
+
+func TestGenerateFromMIRStdProcessAbort(t *testing.T) {
+	useDecl := &ir.UseDecl{
+		Path:    []string{"std", "process"},
+		RawPath: "std.process",
+		Alias:   "process",
+	}
+	call := &ir.CallExpr{
+		Callee: &ir.FieldExpr{
+			X:    &ir.Ident{Name: "process", T: ir.ErrTypeVal},
+			Name: "abort",
+			T:    ir.ErrTypeVal,
+		},
+		Args: []ir.Arg{{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "boom"}}}}},
+		T:    ir.TNever,
+	}
+	fn := &ir.FnDecl{
+		Name:   "main",
+		Return: ir.TUnit,
+		Body:   &ir.Block{Stmts: []ir.Stmt{&ir.ExprStmt{X: call}}},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{useDecl, fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/std_process_abort_mir.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare void @osty_rt_io_write(ptr, i1, i1)",
+		"call void @osty_rt_io_write(",
+		"declare void @exit(i32)",
+		"call void @exit(i32 1)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
 		}
 	}
 }

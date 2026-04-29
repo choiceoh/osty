@@ -633,7 +633,7 @@ pub fn hirCloneDecisionNode(n: HirDecisionNode) -> HirDecisionNode {
         bindProj: hirCloneProjection(n.bindProj),
         bindType: hirCloneType(n.bindType),
         bindNext: hirCloneDecisionNodeList(n.bindNext),
-        guardCond: hirCloneExpr(n.guardCond),
+        guardCond: hirCloneExprList(n.guardCond),
         guardThen: hirCloneDecisionNodeList(n.guardThen),
         guardElse: hirCloneDecisionNodeList(n.guardElse),
         switchKind: n.switchKind,

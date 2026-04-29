@@ -48,7 +48,6 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 			declIndexes[pf.Path] = declIdx
 		}
 		fileScope := NewScope(pkgScope, "file:"+pf.Path)
-		nativeDeclareUses(fileScope, pkgScope, pkg, pf, &diags)
 
 		refsByID, refIdents := bridgeRefs(result.Refs, result.Symbols, files, fi, identIdx, declIndexes, fileScope)
 		refsByID, refIdents = supplementUseAliasRefs(pf.File, fileScope, refsByID, refIdents)
@@ -88,60 +87,6 @@ func nativeParseDiagnostics(pkg *Package) []*diag.Diagnostic {
 		}
 	}
 	return out
-}
-
-func nativeDeclareUses(fileScope, pkgScope *Scope, pkg *Package, pf *PackageFile, diags *[]*diag.Diagnostic) {
-	if pf == nil || pf.File == nil || fileScope == nil {
-		return
-	}
-	for _, u := range pf.File.Uses {
-		name := nativeUseAlias(u)
-		if name == "" {
-			continue
-		}
-		if !u.IsFFI() && pkg != nil && pkg.workspace != nil {
-			sym, d := resolveUseBinding(pkg.workspace, u, name, pf.Path)
-			if d != nil && diags != nil {
-				*diags = append(*diags, d)
-			}
-			if _, ok := fileScope.Define(sym); !ok {
-				continue
-			}
-			if u.IsPub && sym.Pub && pkgScope != nil && pkgScope != fileScope {
-				pkgSym := &Symbol{
-					StableID:  sym.StableID,
-					PackageID: sym.PackageID,
-					DeclID:    sym.DeclID,
-					Name:      sym.Name,
-					Kind:      sym.Kind,
-					Pos:       sym.Pos,
-					Decl:      sym.Decl,
-					Pub:       sym.Pub,
-					Package:   sym.Package,
-				}
-				pkgScope.Define(pkgSym)
-			}
-			continue
-		}
-		sym := placeholderUseSymbol(u, name, SymPackage, u.IsPub)
-		if _, ok := fileScope.Define(sym); !ok {
-			continue
-		}
-		if u.IsPub && sym.Pub && pkgScope != nil && pkgScope != fileScope {
-			pkgSym := &Symbol{
-				StableID:  sym.StableID,
-				PackageID: sym.PackageID,
-				DeclID:    sym.DeclID,
-				Name:      sym.Name,
-				Kind:      sym.Kind,
-				Pos:       sym.Pos,
-				Decl:      sym.Decl,
-				Pub:       sym.Pub,
-				Package:   sym.Package,
-			}
-			pkgScope.Define(pkgSym)
-		}
-	}
 }
 
 func nativeUseAlias(u *ast.UseDecl) string {
@@ -267,25 +212,222 @@ func buildDeclIndex(file *ast.File) map[int]ast.Node {
 	return idx
 }
 
+func indexFnGenerics(fn *ast.FnDecl, idx map[int]ast.Node) {
+	if fn == nil {
+		return
+	}
+	for _, gp := range fn.Generics {
+		if gp != nil {
+			idx[gp.Pos().Offset] = gp
+		}
+	}
+	for _, p := range fn.Params {
+		if p != nil {
+			idx[p.Pos().Offset] = p
+		}
+	}
+	if fn.Recv != nil {
+		idx[fn.Recv.Pos().Offset] = fn.Recv
+	}
+	if fn.Body != nil {
+		indexBlockBindings(fn.Body, idx)
+	}
+}
+
+// indexBlockBindings walks a block to surface `let` bindings (and any
+// nested closures' params/bodies) so the selfhost-bridge can resolve a
+// ResolvedRef whose target lands inside a function body. The selfhost
+// resolver emits Symbols only for depth-0 decls, so inner bindings are
+// otherwise opaque to refineNativeSymbolKind / findNearestDecl.
+func indexBlockBindings(b *ast.Block, idx map[int]ast.Node) {
+	if b == nil {
+		return
+	}
+	for _, s := range b.Stmts {
+		indexStmtBindings(s, idx)
+	}
+}
+
+func indexStmtBindings(s ast.Stmt, idx map[int]ast.Node) {
+	switch s := s.(type) {
+	case *ast.LetStmt:
+		indexPatternBindings(s.Pattern, idx)
+		indexExprBindings(s.Value, idx)
+	case *ast.ExprStmt:
+		indexExprBindings(s.X, idx)
+	case *ast.ForStmt:
+		indexPatternBindings(s.Pattern, idx)
+		indexExprBindings(s.Iter, idx)
+		if s.Body != nil {
+			indexBlockBindings(s.Body, idx)
+		}
+	case *ast.AssignStmt:
+		indexExprBindings(s.Value, idx)
+	case *ast.ReturnStmt:
+		indexExprBindings(s.Value, idx)
+	case *ast.DeferStmt:
+		indexExprBindings(s.X, idx)
+	}
+}
+
+func indexPatternBindings(p ast.Pattern, idx map[int]ast.Node) {
+	switch p := p.(type) {
+	case nil:
+		return
+	case *ast.IdentPat:
+		idx[p.Pos().Offset] = p
+	case *ast.BindingPat:
+		idx[p.Pos().Offset] = p
+		indexPatternBindings(p.Pattern, idx)
+	case *ast.TuplePat:
+		for _, e := range p.Elems {
+			indexPatternBindings(e, idx)
+		}
+	case *ast.StructPat:
+		for _, f := range p.Fields {
+			if f.Pattern != nil {
+				indexPatternBindings(f.Pattern, idx)
+			}
+		}
+	case *ast.VariantPat:
+		for _, a := range p.Args {
+			indexPatternBindings(a, idx)
+		}
+	case *ast.OrPat:
+		for _, alt := range p.Alts {
+			indexPatternBindings(alt, idx)
+		}
+	}
+}
+
+func indexExprBindings(e ast.Expr, idx map[int]ast.Node) {
+	switch e := e.(type) {
+	case nil:
+		return
+	case *ast.ClosureExpr:
+		for _, p := range e.Params {
+			if p != nil {
+				idx[p.Pos().Offset] = p
+				indexPatternBindings(p.Pattern, idx)
+			}
+		}
+		indexExprBindings(e.Body, idx)
+	case *ast.IfExpr:
+		indexPatternBindings(e.Pattern, idx)
+		indexExprBindings(e.Cond, idx)
+		if e.Then != nil {
+			indexBlockBindings(e.Then, idx)
+		}
+		indexExprBindings(e.Else, idx)
+	case *ast.MatchExpr:
+		indexExprBindings(e.Scrutinee, idx)
+		for _, arm := range e.Arms {
+			if arm == nil {
+				continue
+			}
+			indexPatternBindings(arm.Pattern, idx)
+			indexExprBindings(arm.Body, idx)
+		}
+	case *ast.Block:
+		indexBlockBindings(e, idx)
+	case *ast.CallExpr:
+		indexExprBindings(e.Fn, idx)
+		for _, a := range e.Args {
+			if a != nil {
+				indexExprBindings(a.Value, idx)
+			}
+		}
+	case *ast.BinaryExpr:
+		indexExprBindings(e.Left, idx)
+		indexExprBindings(e.Right, idx)
+	case *ast.UnaryExpr:
+		indexExprBindings(e.X, idx)
+	case *ast.FieldExpr:
+		indexExprBindings(e.X, idx)
+	case *ast.IndexExpr:
+		indexExprBindings(e.X, idx)
+		indexExprBindings(e.Index, idx)
+	case *ast.TupleExpr:
+		for _, el := range e.Elems {
+			indexExprBindings(el, idx)
+		}
+	case *ast.ListExpr:
+		for _, el := range e.Elems {
+			indexExprBindings(el, idx)
+		}
+	case *ast.MapExpr:
+		for _, en := range e.Entries {
+			if en != nil {
+				indexExprBindings(en.Key, idx)
+				indexExprBindings(en.Value, idx)
+			}
+		}
+	case *ast.StructLit:
+		for _, f := range e.Fields {
+			if f != nil {
+				indexExprBindings(f.Value, idx)
+			}
+		}
+	case *ast.QuestionExpr:
+		indexExprBindings(e.X, idx)
+	case *ast.TurbofishExpr:
+		indexExprBindings(e.Base, idx)
+	case *ast.RangeExpr:
+		indexExprBindings(e.Start, idx)
+		indexExprBindings(e.Stop, idx)
+		indexExprBindings(e.Step, idx)
+	case *ast.LoopExpr:
+		if e.Body != nil {
+			indexBlockBindings(e.Body, idx)
+		}
+	}
+}
+
 func walkDeclChildren(d ast.Decl, idx map[int]ast.Node) {
 	switch d := d.(type) {
 	case *ast.EnumDecl:
+		for _, gp := range d.Generics {
+			if gp != nil {
+				idx[gp.Pos().Offset] = gp
+			}
+		}
 		for _, v := range d.Variants {
 			idx[v.Pos().Offset] = v
 		}
 		for _, m := range d.Methods {
 			idx[m.Pos().Offset] = m
+			indexFnGenerics(m, idx)
 		}
 	case *ast.StructDecl:
+		for _, gp := range d.Generics {
+			if gp != nil {
+				idx[gp.Pos().Offset] = gp
+			}
+		}
 		for _, f := range d.Fields {
 			idx[f.Pos().Offset] = f
 		}
 		for _, m := range d.Methods {
 			idx[m.Pos().Offset] = m
+			indexFnGenerics(m, idx)
 		}
 	case *ast.InterfaceDecl:
+		for _, gp := range d.Generics {
+			if gp != nil {
+				idx[gp.Pos().Offset] = gp
+			}
+		}
 		for _, m := range d.Methods {
 			idx[m.Pos().Offset] = m
+			indexFnGenerics(m, idx)
+		}
+	case *ast.FnDecl:
+		indexFnGenerics(d, idx)
+	case *ast.TypeAliasDecl:
+		for _, gp := range d.Generics {
+			if gp != nil {
+				idx[gp.Pos().Offset] = gp
+			}
 		}
 	}
 }
@@ -299,7 +441,7 @@ func walkReflect(v reflect.Value, onIdent identVisitor, onType typeVisitor) {
 	if !v.IsValid() {
 		return
 	}
-	if v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
+	for v.Kind() == reflect.Ptr || v.Kind() == reflect.Interface {
 		if v.IsNil() {
 			return
 		}
@@ -517,12 +659,20 @@ func findOrCreateTypeSymbol(
 	if nativeSym.Name != "" {
 		name = nativeSym.Name
 	}
+	// The selfhost resolver targets generic-parameter type refs at the
+	// enclosing decl's start offset (a Map<K,V>.method's `K` param ref
+	// resolves to the FnDecl, not to the GenericParam node). Recover the
+	// generic by name when the enclosing decl declares one.
+	kind := refineNativeSymbolKind(nativeKindToSymbolKind(nativeSym.Kind), decl)
+	if kind != SymGeneric && declHasGenericParam(decl, ref.Name) {
+		kind = SymGeneric
+	}
 	sym := &Symbol{
 		StableID:  ref.TargetSymbolID,
 		PackageID: ref.PackageID,
 		DeclID:    nativeSym.DeclID,
 		Name:      name,
-		Kind:      nativeKindToSymbolKind(nativeSym.Kind),
+		Kind:      kind,
 		Pub:       true,
 		Decl:      decl,
 	}
@@ -574,7 +724,7 @@ func findOrCreateSymbol(
 		PackageID: ref.PackageID,
 		DeclID:    nativeSym.DeclID,
 		Name:      ref.Name,
-		Kind:      nativeKindToSymbolKind(nativeSym.Kind),
+		Kind:      refineNativeSymbolKind(nativeKindToSymbolKind(nativeSym.Kind), decl),
 		Pub:       true,
 		Decl:      decl,
 	}
@@ -661,13 +811,24 @@ func defineTopLevelSymbols(
 			continue
 		}
 		decl := findNearestDecl(declIdx, origOff)
+		// The frozen self-host parser drops the `pub` flag on top-level `let`
+		// declarations (it never threads `isPub` from `opParseDecl` into
+		// `opParseLetStmt`, so the symbol always emits Public=false). Recover
+		// it from the AST when the original LetDecl is reachable.
+		pub := sym.Public
+		if !pub {
+			if let, ok := decl.(*ast.LetDecl); ok {
+				pub = let.Pub
+			}
+		}
+		kind := refineNativeSymbolKind(nativeKindToSymbolKind(sym.Kind), decl)
 		goSym := &Symbol{
 			StableID:  sym.ID,
 			PackageID: sym.PackageID,
 			DeclID:    sym.DeclID,
 			Name:      sym.Name,
-			Kind:      nativeKindToSymbolKind(sym.Kind),
-			Pub:       sym.Public,
+			Kind:      kind,
+			Pub:       pub,
 			Decl:      decl,
 		}
 		if decl != nil {
@@ -677,6 +838,74 @@ func defineTopLevelSymbols(
 		}
 		scope.DefineForce(goSym)
 	}
+}
+
+// refineNativeSymbolKind upgrades the coarse kind that the selfhost
+// resolver emits ("type" for every nominal — struct, enum, interface,
+// type-alias) into the specific Go-side SymbolKind. Downstream consumers
+// like ir.lowerCall key off SymEnum (variant constructor recognition),
+// so leaving an enum mis-classified as SymStruct silently regresses
+// every `EnumName.Variant(args)` call to a generic MethodCall.
+// declHasGenericParam reports whether decl is a top-level decl that
+// declares a generic parameter named name. The selfhost resolver emits a
+// TypeRef whose target offset is the enclosing decl's start (not the
+// generic param's offset), so when the ref's name matches one of the
+// decl's declared generics we know it's pointing at that param.
+func declHasGenericParam(decl ast.Node, name string) bool {
+	if name == "" {
+		return false
+	}
+	var generics []*ast.GenericParam
+	switch d := decl.(type) {
+	case *ast.FnDecl:
+		generics = d.Generics
+	case *ast.StructDecl:
+		generics = d.Generics
+	case *ast.EnumDecl:
+		generics = d.Generics
+	case *ast.InterfaceDecl:
+		generics = d.Generics
+	case *ast.TypeAliasDecl:
+		generics = d.Generics
+	default:
+		return false
+	}
+	for _, gp := range generics {
+		if gp != nil && gp.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func refineNativeSymbolKind(kind SymbolKind, decl ast.Node) SymbolKind {
+	// A type-ref pointing at a generic parameter has no entry in the
+	// selfhost-emitted Symbols slice (only top-level decls and variants
+	// land there), so kind comes back as SymUnknown. Recover SymGeneric
+	// from the AST so downstream lowerers (ir.lowerType) build a TypeVar
+	// instead of an opaque NamedType — without this every generic
+	// payload (e.g. `enum Maybe<T> { Some(T) }`) survives monomorph as
+	// `T` and the LLVM backend rejects it.
+	switch decl.(type) {
+	case *ast.GenericParam:
+		return SymGeneric
+	case *ast.Param:
+		return SymParam
+	case *ast.IdentPat, *ast.BindingPat:
+		return SymLet
+	}
+	if kind != SymStruct {
+		return kind
+	}
+	switch decl.(type) {
+	case *ast.EnumDecl:
+		return SymEnum
+	case *ast.InterfaceDecl:
+		return SymInterface
+	case *ast.TypeAliasDecl:
+		return SymTypeAlias
+	}
+	return kind
 }
 
 func nativeKindToSymbolKind(kind string) SymbolKind {

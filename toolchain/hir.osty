@@ -3276,7 +3276,7 @@ pub struct HirDecisionNode {
     pub bindNext: List<HirDecisionNode>,
 
     // Guard — evaluate cond; true → then, false → else
-    pub guardCond: HirExpr,
+    pub guardCond: List<HirExpr>,
     pub guardThen: List<HirDecisionNode>,
     pub guardElse: List<HirDecisionNode>,
 
@@ -3297,7 +3297,7 @@ pub fn hirDecisionInvalid() -> HirDecisionNode {
         bindProj: hirProjScrutinee(),
         bindType: hirTypeInvalid(),
         bindNext: [],
-        guardCond: hirExprInvalid(),
+        guardCond: [],
         guardThen: [],
         guardElse: [],
         switchKind: HirSwitchUnknown,
@@ -3360,7 +3360,7 @@ pub fn hirDecisionGuard(
 ) -> HirDecisionNode {
     let mut n = hirDecisionInvalid()
     n.kind = HirDecisionGuard
-    n.guardCond = cond
+    n.guardCond.push(cond)
     n.guardThen.push(thenNode)
     n.guardElse.push(elseNode)
     n

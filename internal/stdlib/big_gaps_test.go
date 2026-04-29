@@ -71,6 +71,8 @@ func TestBigGapModuleSourcePinsBehavior(t *testing.T) {
 			`pub fn dotStuff(data: String) -> String`,
 			`pub fn dataBlock(data: String) -> String`,
 			`out.push(ensureDataBlock(tx.envelope.data))`,
+			`fn ensureDataBlock(data: String) -> String`,
+			`dataBlock(data)`,
 			`strings.endsWith(data, "{crlf()}.{crlf()}")`,
 		},
 		"zip": {

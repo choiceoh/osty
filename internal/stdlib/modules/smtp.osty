@@ -337,11 +337,7 @@ fn parseCapability(message: String) -> Capability {
 }
 
 fn ensureDataBlock(data: String) -> String {
-    let normalized = normalizeBody(data)
-    if hasDataTerminator(normalized) {
-        return normalized
-    }
-    dataBlock(normalized)
+    dataBlock(data)
 }
 
 fn stripDataTerminator(data: String) -> String {
@@ -366,7 +362,8 @@ fn plainPayload(username: String, password: String) -> String {
     appendStringBytes(raw, username)
     raw.push(0.toByte())
     appendStringBytes(raw, password)
-    encoding.base64.encode(bytes.from(raw))
+    let data = bytes.from(raw)
+    encoding.base64.encode(data)
 }
 
 fn appendStringBytes(out: List<Byte>, text: String) {

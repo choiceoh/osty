@@ -272,7 +272,7 @@ pub fn values<T>(items: List<T?>) -> List<T> {
 pub fn any<T>(items: List<T?>) -> T? {
     for item in items {
         match item {
-            Some(_) -> return item,
+            Some(_) -> { return item },
             None -> {},
         }
     }
@@ -284,7 +284,7 @@ pub fn all<T>(items: List<T?>) -> List<T>? {
     for item in items {
         match item {
             Some(value) -> out.push(value),
-            None -> return None,
+            None -> { return None },
         }
     }
     Some(out)
@@ -295,7 +295,7 @@ pub fn traverse<T, U>(items: List<T>, f: fn(T) -> U?) -> List<U>? {
     for item in items {
         match f(item) {
             Some(value) -> out.push(value),
-            None -> return None,
+            None -> { return None },
         }
     }
     Some(out)
@@ -315,7 +315,7 @@ pub fn filterMap<T, U>(items: List<T>, f: fn(T) -> U?) -> List<U> {
 pub fn findMap<T, U>(items: List<T>, f: fn(T) -> U?) -> U? {
     for item in items {
         match f(item) {
-            Some(value) -> return Some(value),
+            Some(value) -> { return Some(value) },
             None -> {},
         }
     }

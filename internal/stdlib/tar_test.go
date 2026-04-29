@@ -49,6 +49,8 @@ func TestTarModuleSourcePinsUstarBehavior(t *testing.T) {
 		`writeStringField(header, 257, 6, "ustar")`,
 		`writeOctalField(header, 148, 8, checksum(header))`,
 		`fn checksumBlock(data: Bytes, offset: Int) -> Int`,
+		`strings.contains(name, "\\")`,
+		`fn isDriveLetterPath(name: String) -> Bool`,
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("std.tar source missing %q", want)

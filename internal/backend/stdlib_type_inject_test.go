@@ -6,6 +6,8 @@ import (
 
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/ir"
+	"github.com/osty/osty/internal/llvmgen"
+	"github.com/osty/osty/internal/mir"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/stdlib"
@@ -227,6 +229,262 @@ fn main() {}
 	}
 }
 
+// TestInjectReachableStdlibTypesKeepsStdlibLayoutsQualified guards the
+// #1093 stdlib-type injection collision: importing a module like std.smtp
+// pulls in its internal Reply struct for injected bodies, but that must not
+// overwrite an ordinary user-declared struct Reply in backend layout tables.
+func TestInjectReachableStdlibTypesKeepsStdlibLayoutsQualified(t *testing.T) {
+	mod := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.UseDecl{Path: []string{"std", "smtp"}, RawPath: "std.smtp", Alias: "smtp"},
+			&ir.StructDecl{
+				Name: "Reply",
+				Fields: []*ir.Field{
+					{Name: "local", Type: ir.TInt},
+				},
+			},
+			&ir.FnDecl{
+				Name: "parse",
+				Return: &ir.NamedType{
+					Name:    "Result",
+					Builtin: true,
+					Args: []ir.Type{
+						&ir.NamedType{Package: "smtp", Name: "Reply"},
+						&ir.NamedType{Name: "Error", Builtin: true},
+					},
+				},
+				Body: &ir.Block{},
+			},
+			&ir.FnDecl{Name: "main", Return: ir.TUnit, Body: &ir.Block{}},
+		},
+	}
+	reg := stdlib.LoadCached()
+	injected, _ := injectReachableStdlibTypes(mod, reg)
+	mod.Decls = append(mod.Decls, injected...)
+
+	monoMod, monoErrs := ir.Monomorphize(mod)
+	if monoMod == nil {
+		t.Fatalf("ir.Monomorphize returned nil: %v", monoErrs)
+	}
+	mirMod := mir.Lower(monoMod)
+	userReply := mirMod.Layouts.Structs["Reply"]
+	if userReply == nil {
+		t.Fatalf("user Reply layout missing; layouts=%v", mirMod.Layouts.Structs)
+	}
+	if len(userReply.Fields) != 1 || userReply.Fields[0].Name != "local" {
+		t.Fatalf("user Reply layout was overwritten by injected stdlib Reply: %#v", userReply.Fields)
+	}
+	if stdReply := mirMod.Layouts.Structs["smtp.Reply"]; stdReply == nil {
+		t.Fatalf("qualified stdlib smtp.Reply layout missing; layouts=%v", mirMod.Layouts.Structs)
+	}
+}
+
+func TestInjectReachableStdlibBodiesQualifiesUnwrapCallsiteTypes(t *testing.T) {
+	src := `use std.zip
+
+fn main() {
+    let entry = zip.file("hello.txt", "hello".toBytes()).unwrap()
+    let archive = zip.encode([entry]).unwrap()
+    println(zip.isArchive(archive))
+}
+`
+	mod := lowerUserProgramForTest(t, src)
+	reg := stdlib.LoadCached()
+	injected, _ := injectReachableStdlibBodies(mod, reg)
+	mod.Decls = append(mod.Decls, injected...)
+
+	var entryType ir.Type
+	var entryLetType ir.Type
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		if entryType != nil {
+			return false
+		}
+		let, ok := n.(*ir.LetStmt)
+		if !ok || let == nil || let.Name != "entry" || let.Value == nil {
+			return true
+		}
+		entryLetType = let.Type
+		entryType = let.Value.Type()
+		return false
+	}), mod)
+	named, ok := entryType.(*ir.NamedType)
+	if !ok || named.Package != "zip" || named.Name != "Entry" {
+		t.Fatalf("entry type = %#v, want zip.Entry", entryType)
+	}
+	letNamed, ok := entryLetType.(*ir.NamedType)
+	if !ok || letNamed.Package != "zip" || letNamed.Name != "Entry" {
+		t.Fatalf("entry let type = %#v, want zip.Entry", entryLetType)
+	}
+
+	injectedTypes, _ := injectReachableStdlibTypes(mod, reg)
+	mod.Decls = append(mod.Decls, injectedTypes...)
+	monoMod, monoErrs := ir.Monomorphize(mod)
+	if monoMod == nil {
+		t.Fatalf("ir.Monomorphize returned nil: %v", monoErrs)
+	}
+	mirMod := mir.Lower(monoMod)
+	mainFn := mirMod.LookupFunction("main")
+	if mainFn == nil {
+		t.Fatalf("main MIR function missing")
+	}
+	foundEntryLocal := false
+	for _, loc := range mainFn.Locals {
+		if loc.Name != "entry" {
+			continue
+		}
+		foundEntryLocal = true
+		named, ok := loc.Type.(*ir.NamedType)
+		if !ok || named.Package != "zip" || named.Name != "Entry" {
+			t.Fatalf("MIR entry local type = %#v, want zip.Entry", loc.Type)
+		}
+	}
+	if !foundEntryLocal {
+		t.Fatalf("MIR entry local missing")
+	}
+	for _, fn := range mirMod.Functions {
+		if fn == nil || !strings.HasPrefix(fn.Name, "osty_std_zip__") {
+			continue
+		}
+		for _, loc := range fn.Locals {
+			if named, ok := loc.Type.(*ir.NamedType); ok && named.Package == "" && named.Name == "Entry" {
+				t.Fatalf("%s local %q type = %#v, want zip.Entry", fn.Name, loc.Name, loc.Type)
+			}
+		}
+	}
+	irOut, err := llvmgen.GenerateFromMIR(mirMod, llvmgen.Options{PackageName: "main", UseMIR: true, EmitGC: true})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR returned error: %v", err)
+	}
+	if strings.Contains(string(irOut), "%Entry") {
+		t.Fatalf("LLVM output still mentions bare %%Entry:\n%s", contextAround(string(irOut), "%Entry"))
+	}
+}
+
+func TestInjectReachableStdlibBodiesQualifiesForInElementTypes(t *testing.T) {
+	src := `use std.email
+
+fn main() {
+    let from = email.address("sender@example.com").unwrap()
+    let recipients = [email.address("rcpt@example.com").unwrap()]
+    let msg = email.message(from, recipients, "Subject", "Body")
+    let env = email.envelope(msg).unwrap()
+    println(env.to[0])
+}
+`
+	mod := lowerUserProgramForTest(t, src)
+	reg := stdlib.LoadCached()
+	injected, _ := injectReachableStdlibBodies(mod, reg)
+	mod.Decls = append(mod.Decls, injected...)
+	injectedTypes, _ := injectReachableStdlibTypes(mod, reg)
+	for _, d := range injectedTypes {
+		st, ok := d.(*ir.StructDecl)
+		if !ok || st.Name != "email.Message" {
+			continue
+		}
+		for _, f := range st.Fields {
+			if f.Name != "to" {
+				continue
+			}
+			list, ok := f.Type.(*ir.NamedType)
+			if !ok || list.Name != "List" || len(list.Args) != 1 {
+				t.Fatalf("Message.to type = %#v, want List<email.Address>", f.Type)
+			}
+			addr, ok := list.Args[0].(*ir.NamedType)
+			if !ok || addr.Package != "email" || addr.Name != "Address" {
+				t.Fatalf("Message.to elem type = %#v, want email.Address", list.Args[0])
+			}
+		}
+	}
+	mod.Decls = append(mod.Decls, injectedTypes...)
+	monoMod, monoErrs := ir.Monomorphize(mod)
+	if monoMod == nil {
+		t.Fatalf("ir.Monomorphize returned nil: %v", monoErrs)
+	}
+	mirMod := mir.Lower(monoMod)
+	for _, mirFn := range mirMod.Functions {
+		if mirFn == nil {
+			continue
+		}
+		for _, loc := range mirFn.Locals {
+			if named, ok := loc.Type.(*ir.NamedType); ok && named.Package == "" && named.Name == "Address" {
+				t.Fatalf("%s local %q type = %#v, want email.Address", mirFn.Name, loc.Name, loc.Type)
+			}
+		}
+	}
+	fn := mirMod.LookupFunction("osty_std_email__recipients")
+	if fn == nil {
+		t.Fatalf("osty_std_email__recipients MIR function missing")
+	}
+	for _, loc := range fn.Locals {
+		if loc.Name != "_elem" {
+			continue
+		}
+		named, ok := loc.Type.(*ir.NamedType)
+		if !ok || named.Package != "email" || named.Name != "Address" {
+			t.Fatalf("_elem type = %#v, want email.Address", loc.Type)
+		}
+		return
+	}
+	t.Fatalf("_elem local missing")
+}
+
+func TestInjectReachableStdlibBodiesQualifiesSmtpEmailLLVMTypes(t *testing.T) {
+	src := `use std.email
+use std.smtp
+
+fn main() {
+    let cfg = smtp.withAuth(
+        smtp.withSecurity(
+            smtp.config("smtp.example.com", smtp.defaultPort(StartTls), "client.local").unwrap(),
+            StartTls,
+        ),
+        smtp.plainAuth("user", "secret"),
+    )
+    let from = email.address("sender@example.com").unwrap()
+    let recipients = [email.address("rcpt@example.com").unwrap()]
+    let msg = email.message(from, recipients, "Subject", "Body")
+    let env = email.envelope(msg).unwrap()
+    let cmds = smtp.commands(smtp.transaction(cfg, env)).unwrap()
+    println(cmds.len())
+}
+`
+	mod := lowerUserProgramForTest(t, src)
+	reg := stdlib.LoadCached()
+	injected, _ := injectReachableStdlibBodies(mod, reg)
+	mod.Decls = append(mod.Decls, injected...)
+	injectedTypes, _ := injectReachableStdlibTypes(mod, reg)
+	mod.Decls = append(mod.Decls, injectedTypes...)
+	monoMod, monoErrs := ir.Monomorphize(mod)
+	if monoMod == nil {
+		t.Fatalf("ir.Monomorphize returned nil: %v", monoErrs)
+	}
+	mirMod := mir.Lower(monoMod)
+	irOut, err := llvmgen.GenerateFromMIR(mirMod, llvmgen.Options{PackageName: "main", UseMIR: true, EmitGC: true})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR returned error: %v", err)
+	}
+	if strings.Contains(string(irOut), "%Address") {
+		t.Fatalf("LLVM output still mentions bare %%Address:\n%s", contextAround(string(irOut), "%Address"))
+	}
+}
+
+func contextAround(s, needle string) string {
+	idx := strings.Index(s, needle)
+	if idx < 0 {
+		return ""
+	}
+	start := idx - 300
+	if start < 0 {
+		start = 0
+	}
+	end := idx + 300
+	if end > len(s) {
+		end = len(s)
+	}
+	return s[start:end]
+}
+
 // lowerUserProgramForTest runs the parse / resolve / check / ir.Lower
 // stack on user source and returns the resulting IR module. Helper for
 // the injection tests so each one focuses on the injection semantics
@@ -240,7 +498,7 @@ func lowerUserProgramForTest(t *testing.T, src string) *ir.Module {
 		}
 	}
 	reg := stdlib.LoadCached()
-	res := resolve.ResolveFileDefault(file, reg)
+	res := resolve.ResolveFileSourceDefault([]byte(src), file, reg)
 	chk := check.SelfhostFile(file, res, check.Opts{
 		Source: []byte(src),
 		Stdlib: reg,

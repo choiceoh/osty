@@ -1452,8 +1452,42 @@ pub fn mirEarliestAfterAny(input: String, needles: List<String>) -> Int {
     best
 }
 
+fn mirLineHasAnyPrefix(line: String, prefixes: List<String>) -> Bool {
+    for prefix in prefixes {
+        if line.startsWith(prefix) {
+            return true
+        }
+    }
+    false
+}
+
+/// mirFirstDirectiveLine returns the byte offset of the first line that
+/// starts with a top-level LLVM directive prefix. This deliberately
+/// ignores marker text inside string-pool constants such as
+/// `c"define \00"` so later insertion passes cannot splice runtime
+/// declarations into the middle of a string literal.
+fn mirFirstDirectiveLine(input: String, prefixes: List<String>) -> Int {
+    let n = input.len()
+    let mut start = 0
+    let mut i = 0
+    for i < n {
+        if input[i..(i + 1)] == "\n" {
+            let line = input[start..i]
+            if mirLineHasAnyPrefix(line, prefixes) {
+                return start
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < n && mirLineHasAnyPrefix(input[start..n], prefixes) {
+        return start
+    }
+    -1
+}
+
 /// mirInjectBeforeFirstFn splices `block` into `body` immediately
-/// before the first `define ` / `declare ` line, returning the
+/// before the first top-level `define ` / `declare ` line, returning the
 /// rewritten string. Mirrors the inject-before-first-fn pattern used
 /// by `emitGlobalVars` / `emitStringPool` / `emitTypeDefs` /
 /// `emitRuntimeDeclarations` in `internal/llvmgen/mir_generator.go`.
@@ -1462,7 +1496,7 @@ pub fn mirEarliestAfterAny(input: String, needles: List<String>) -> Int {
 /// caller never silently drops content.
 pub fn mirInjectBeforeFirstFn(body: String, block: String) -> String {
     let markers: List<String> = ["define ", "declare "]
-    let idx = mirEarliestAfterAny(body, markers)
+    let idx = mirFirstDirectiveLine(body, markers)
     if idx < 0 {
         return body + block
     }

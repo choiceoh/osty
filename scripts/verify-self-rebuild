@@ -1,0 +1,302 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+	cat <<'USAGE'
+usage: scripts/verify-self-rebuild [--gates-only|--ir-only|--stage1-only] [--skip-gates] [--reuse-stage1] [HOST_OSTY_BIN]
+
+Runs the self-rebuild ratchet:
+
+  1. host osty validates the toolchain sources and current MIR gates
+  2. host osty builds osty-self-1 from toolchain/
+  3. osty-self-1 builds osty-self-2 from toolchain/
+  4. osty-self-1 and osty-self-2 are compared byte-for-byte
+
+Environment overrides:
+
+  OSTY_SELF_REBUILD_DIR             staging dir (default .osty/self-rebuild)
+  OSTY_SELF_REBUILD_TOOLCHAIN_DIR   toolchain package dir (default toolchain)
+  OSTY_SELF_REBUILD_STAGE1_BIN      prebuilt osty-self-1 binary
+  OSTY_SELF_REBUILD_STAGE2_BIN      prebuilt osty-self-2 binary
+  OSTY_SELF_REBUILD_STAGE1_CACHE    reusable osty-self-1 cache (default .osty/self-rebuild-cache/osty-self-1)
+
+--gates-only stops after the currently available host-side gates.
+--ir-only emits stage1 LLVM IR only and copies it to $OSTY_SELF_REBUILD_DIR/stage1.ll.
+--stage1-only builds osty-self-1 only.
+--skip-gates reuses the current tree and jumps straight to the selected build loop.
+--reuse-stage1 reuses/caches osty-self-1 so repeated stage2/parity loops skip the slow first build.
+USAGE
+}
+
+mode="full"
+skip_gates=0
+reuse_stage1=0
+while [[ $# -gt 0 ]]; do
+	case "${1:-}" in
+	--help | -h)
+		usage
+		exit 0
+		;;
+	--gates-only)
+		mode="gates"
+		shift
+		;;
+	--ir-only)
+		mode="ir"
+		shift
+		;;
+	--stage1-only)
+		mode="stage1"
+		shift
+		;;
+	--skip-gates)
+		skip_gates=1
+		shift
+		;;
+	--reuse-stage1)
+		reuse_stage1=1
+		shift
+		;;
+	--)
+		shift
+		break
+		;;
+	-*)
+		usage >&2
+		exit 2
+		;;
+	*)
+		break
+		;;
+	esac
+done
+
+root="$(git rev-parse --show-toplevel)"
+host_bin="${1:-.bin/osty}"
+case "$host_bin" in
+/*) ;;
+*) host_bin="$root/$host_bin" ;;
+esac
+
+toolchain_dir="${OSTY_SELF_REBUILD_TOOLCHAIN_DIR:-$root/toolchain}"
+case "$toolchain_dir" in
+/*) ;;
+*) toolchain_dir="$root/$toolchain_dir" ;;
+esac
+
+stage_root="${OSTY_SELF_REBUILD_DIR:-$root/.osty/self-rebuild}"
+case "$stage_root" in
+/*) ;;
+*) stage_root="$root/$stage_root" ;;
+esac
+
+stage1_cache="${OSTY_SELF_REBUILD_STAGE1_CACHE:-$root/.osty/self-rebuild-cache/osty-self-1}"
+case "$stage1_cache" in
+/*) ;;
+*) stage1_cache="$root/$stage1_cache" ;;
+esac
+
+log() {
+	printf '>> %s\n' "$*"
+}
+
+fail() {
+	printf 'self-rebuild: %s\n' "$*" >&2
+	exit 1
+}
+
+require_file() {
+	local path="$1"
+	local label="$2"
+	[[ -f "$path" ]] || fail "$label not found: $path"
+}
+
+require_exec() {
+	local path="$1"
+	local label="$2"
+	require_file "$path" "$label"
+	[[ -x "$path" ]] || fail "$label is not executable: $path"
+}
+
+sha256_file() {
+	if command -v shasum >/dev/null 2>&1; then
+		shasum -a 256 "$1" | awk '{print $1}'
+	elif command -v sha256sum >/dev/null 2>&1; then
+		sha256sum "$1" | awk '{print $1}'
+	else
+		fail "need shasum or sha256sum for byte parity reporting"
+	fi
+}
+
+snapshot_binaries() {
+	local out="$1"
+	: >"$out"
+	for dir in "$root/.osty" "$toolchain_dir/.osty"; do
+		[[ -d "$dir" ]] || continue
+		while IFS= read -r -d '' path; do
+			[[ -x "$path" ]] || continue
+			kind="$(file -b "$path" 2>/dev/null || true)"
+			case "$kind" in
+			*Mach-O* | *ELF* | *PE32*) printf '%s\n' "$path" ;;
+			esac
+		done < <(find "$dir" -type f -print0)
+	done | LC_ALL=C sort -u >>"$out"
+}
+
+copy_override_binary() {
+	local src="$1"
+	local dest="$2"
+	local label="$3"
+	require_exec "$src" "$label"
+	cp "$src" "$dest"
+	chmod +x "$dest"
+}
+
+cache_stage1_binary() {
+	local src="$1"
+	local cache_dir
+	cache_dir="$(dirname "$stage1_cache")"
+	mkdir -p "$cache_dir"
+	cp "$src" "$stage1_cache"
+	chmod +x "$stage1_cache"
+	log "stage1: cached $stage1_cache"
+}
+
+stage1_cache_fresh() {
+	[[ -x "$stage1_cache" ]] || return 1
+	while IFS= read -r path; do
+		[[ -f "$path" ]] || continue
+		if [[ "$path" -nt "$stage1_cache" ]]; then
+			return 1
+		fi
+	done < <(find "$toolchain_dir" -type f ! -path "$toolchain_dir/.osty/*")
+	return 0
+}
+
+build_self_binary() {
+	local driver="$1"
+	local label="$2"
+	local dest="$3"
+	local before="$stage_root/$label.before"
+	local after="$stage_root/$label.after"
+	local candidates="$stage_root/$label.candidates"
+
+	require_exec "$driver" "$label driver"
+	snapshot_binaries "$before"
+	log "$label: build toolchain package with $driver"
+	local forward_args
+	printf -v forward_args 'build\n--backend=llvm\n--emit\nbinary\n--force\n%s' "$toolchain_dir"
+	OSTY_SELF_REBUILD_HOST_BIN="$host_bin" OSTY_SELF_REBUILD_FORWARD_ARGS="$forward_args" "$driver" build --backend=llvm --emit binary --force "$toolchain_dir"
+	snapshot_binaries "$after"
+	comm -13 "$before" "$after" >"$candidates"
+
+	local count
+	count="$(wc -l <"$candidates" | tr -d '[:space:]')"
+	local default_candidate="$toolchain_dir/.osty/out/debug/llvm/osty-self"
+	local candidate=""
+	if [[ "$count" == "0" ]]; then
+		if [[ -x "$default_candidate" ]]; then
+			candidate="$default_candidate"
+		else
+			fail "$label produced no compiler binary candidate. The recipe is wired, but toolchain/ still needs a CLI-compatible osty-self entrypoint that emits a binary artifact."
+		fi
+	fi
+	if [[ "$count" != "1" ]]; then
+		if [[ -z "$candidate" ]]; then
+			printf 'self-rebuild: %s produced multiple binary candidates:\n' "$label" >&2
+			sed 's/^/  /' "$candidates" >&2
+			fail "set OSTY_SELF_REBUILD_STAGE${label#stage}_BIN to disambiguate"
+		fi
+	fi
+
+	if [[ -z "$candidate" ]]; then
+		candidate="$(sed -n '1p' "$candidates")"
+	fi
+	cp "$candidate" "$dest"
+	chmod +x "$dest"
+}
+
+emit_stage1_ir() {
+	local out="$stage_root/stage1.ll"
+	local artifact="$toolchain_dir/.osty/out/debug/llvm/main.ll"
+	mkdir -p "$stage_root"
+	log "stage1-ir: emit toolchain LLVM IR with $host_bin"
+	OSTY_SELF_REBUILD_HOST_BIN="$host_bin" "$host_bin" build --backend=llvm --emit llvm-ir --force "$toolchain_dir"
+	require_file "$artifact" "stage1 LLVM IR artifact"
+	cp "$artifact" "$out"
+	log "ir-only complete: $out"
+}
+
+run_gates() {
+	log "toolchain check"
+	"$host_bin" check --airepair=false "$toolchain_dir"
+
+	log "selfhost snapshot parity"
+	go test -count=1 -vet=off ./internal/ci ./internal/runner -run 'SnapshotParity|CoreSnapshotParity'
+
+	log "merged native toolchain MIR pipeline"
+	go test -count=1 -vet=off ./internal/llvmgen -run 'TestNativeToolchainMergedMIRPipelineIsClean|TestNativeToolchainMergedMIRErrTypeFloor'
+}
+
+require_exec "$host_bin" "host osty"
+[[ -d "$toolchain_dir" ]] || fail "toolchain dir not found: $toolchain_dir"
+
+if [[ "$skip_gates" == "0" ]]; then
+	run_gates
+else
+	log "skip gates"
+fi
+if [[ "$mode" == "gates" ]]; then
+	log "gates-only complete"
+	exit 0
+fi
+
+rm -rf "$stage_root"
+mkdir -p "$stage_root"
+stage1="$stage_root/osty-self-1"
+stage2="$stage_root/osty-self-2"
+
+if [[ "$mode" == "ir" ]]; then
+	emit_stage1_ir
+	exit 0
+fi
+
+if [[ -n "${OSTY_SELF_REBUILD_STAGE1_BIN:-}" ]]; then
+	log "stage1: use override $OSTY_SELF_REBUILD_STAGE1_BIN"
+	copy_override_binary "$OSTY_SELF_REBUILD_STAGE1_BIN" "$stage1" "osty-self-1 override"
+elif [[ "$reuse_stage1" == "1" && -x "$stage1_cache" ]]; then
+	if stage1_cache_fresh; then
+		log "stage1: reuse cache $stage1_cache"
+		copy_override_binary "$stage1_cache" "$stage1" "osty-self-1 cache"
+	else
+		log "stage1: cache stale; rebuild $stage1_cache"
+		build_self_binary "$host_bin" "stage1" "$stage1"
+		cache_stage1_binary "$stage1"
+	fi
+else
+	build_self_binary "$host_bin" "stage1" "$stage1"
+	if [[ "$reuse_stage1" == "1" ]]; then
+		cache_stage1_binary "$stage1"
+	fi
+fi
+
+if [[ "$mode" == "stage1" ]]; then
+	log "stage1-only complete: $stage1"
+	exit 0
+fi
+
+if [[ -n "${OSTY_SELF_REBUILD_STAGE2_BIN:-}" ]]; then
+	log "stage2: use override $OSTY_SELF_REBUILD_STAGE2_BIN"
+	copy_override_binary "$OSTY_SELF_REBUILD_STAGE2_BIN" "$stage2" "osty-self-2 override"
+else
+	build_self_binary "$stage1" "stage2" "$stage2"
+fi
+
+if ! cmp -s "$stage1" "$stage2"; then
+	printf 'self-rebuild: byte parity failed\n' >&2
+	printf '  osty-self-1 %s  %s\n' "$(sha256_file "$stage1")" "$stage1" >&2
+	printf '  osty-self-2 %s  %s\n' "$(sha256_file "$stage2")" "$stage2" >&2
+	exit 1
+fi
+
+log "byte parity OK: $(sha256_file "$stage1")"

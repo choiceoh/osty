@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/osty/osty/internal/ir"
 	"github.com/osty/osty/internal/llvmgen"
 )
 
@@ -148,7 +149,7 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 	if entry.IR == nil {
 		return nil, nil, fmt.Errorf("llvm backend: missing lowered IR entry")
 	}
-	if useNativeOwnedLLVMIR(features, emit) {
+	if useNativeOwnedLLVMIR(features, emit) && !hasInjectedStdlibBodies(entry.IR) {
 		if out, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(entry, target); err != nil {
 			return nil, warnings, err
 		} else if ok {
@@ -196,6 +197,22 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 			errors.New(llvmgen.UnsupportedSummary(diag)),
 			ErrLLVMNotImplemented,
 		), ErrLLVMNotImplemented
+}
+
+func hasInjectedStdlibBodies(mod *ir.Module) bool {
+	if mod == nil {
+		return false
+	}
+	for _, decl := range mod.Decls {
+		fn, ok := decl.(*ir.FnDecl)
+		if !ok || fn == nil {
+			continue
+		}
+		if strings.HasPrefix(fn.Name, "osty_std_") && fn.Body != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (b LLVMBackend) llvmToolchain() llvmToolchain {

@@ -3,6 +3,7 @@ set shell := ["bash", "-cu"]
 bin := ".bin/osty"
 checker_bin := ".osty/bin/osty-native-checker"
 front_packages := "./internal/lexer ./internal/parser ./internal/resolve ./internal/check ./internal/diag ./internal/format ./internal/lint ./internal/pipeline"
+backend_packages := "./internal/ir ./internal/mir ./internal/backend ./internal/llvmgen"
 osty_test_dirs := "examples/int_control_e2e examples/int_methods_e2e examples/int_struct_e2e"
 test_flags := "-count=1 -vet=off"
 
@@ -120,6 +121,32 @@ ci: build
 
 verify-selfhost:
     go test {{test_flags}} -run 'SnapshotParity|CoreSnapshotParity' ./internal/ci ./internal/runner
+
+verify-self-rebuild: build-all
+    bash scripts/verify-self-rebuild {{bin}}
+
+verify-self-rebuild-fast: build-all
+    bash scripts/verify-self-rebuild --skip-gates --reuse-stage1 {{bin}}
+
+verify-self-rebuild-gates: build-all
+    bash scripts/verify-self-rebuild --gates-only {{bin}}
+
+verify-self-rebuild-ir: build
+    bash scripts/verify-self-rebuild --skip-gates --ir-only {{bin}}
+
+verify-self-rebuild-stage1: build
+    bash scripts/verify-self-rebuild --skip-gates --stage1-only {{bin}}
+
+backend-loop: build-all
+    rm -rf toolchain/.osty
+    go test {{test_flags}} {{backend_packages}}
+    bash scripts/verify-self-rebuild --skip-gates --reuse-stage1 {{bin}}
+
+backend-loop-gates: build-all
+    rm -rf toolchain/.osty
+    go test {{test_flags}} {{backend_packages}}
+    bash scripts/verify-self-rebuild --gates-only {{bin}}
+    bash scripts/verify-self-rebuild --skip-gates --reuse-stage1 {{bin}}
 
 check: fmt-check vet front
 

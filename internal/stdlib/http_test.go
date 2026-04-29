@@ -152,6 +152,9 @@ func TestHttpModuleSourcePinsQualityGuards(t *testing.T) {
 		`withDefaultHeader(self.headers, "Content-Type", "text/plain; charset=utf-8")`,
 		`process.abort("http: header name must not be empty")`,
 		`canonicalHeaderName(key) == canonical`,
+		`fn cookieNameOrAbort(name: String) -> String`,
+		`fn isCookieValueChar(c: Char) -> Bool`,
+		`let name = cookieNameOrAbort(key)`,
 		`bytes.fromString(json.encode(value))`,
 	} {
 		if !strings.Contains(src, want) {

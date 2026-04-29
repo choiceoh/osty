@@ -281,11 +281,7 @@ func (g *mirGen) emitRecordFieldLoad(raw, recordLLVM, fieldLLVM string, idx int)
 }
 
 func (g *mirGen) resultSubtypes(t mir.Type) (mir.Type, mir.Type, bool) {
-	info, ok := testingResultType(t)
-	if !ok {
-		return nil, nil, false
-	}
-	return info.ok, info.err, true
+	return g.resultPayloadTypes(t)
 }
 
 func (g *mirGen) emitStdEnvCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
@@ -1328,7 +1324,20 @@ func stringStaticIntrinsic(name string) mir.IntrinsicKind {
 
 func (g *mirGen) emitStdErrorCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
 	method := strings.TrimPrefix(fnRef.Symbol, "Error__")
+	method = strings.TrimPrefix(method, "std.error.")
 	switch method {
+	case "new":
+		if len(c.Args) != 1 {
+			return true, unsupported("mir-mvp", "std.error.new requires one positional String argument")
+		}
+		msg, err := g.evalTypedArg(c.Args[0], c.Args[0].Type())
+		if err != nil {
+			return true, err
+		}
+		if msg.typ != "ptr" {
+			return true, unsupported("mir-mvp", "std.error.new argument must lower to ptr")
+		}
+		return true, g.storeCallValue(c, "ptr", msg.val)
 	case "message":
 		if len(c.Args) != 1 {
 			return true, unsupported("mir-mvp", "Error.message requires receiver")

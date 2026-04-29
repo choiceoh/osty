@@ -62,14 +62,13 @@ pub fn handshakeHeaders(clientKey: String) -> Headers {
 }
 
 pub fn isHandshake(headers: Headers) -> Bool {
-    let connection = strings.toLower(header(headers, "Connection") ?? "")
-    let upgrade = strings.toLower(header(headers, "Upgrade") ?? "")
+    let upgrade = strings.toLower(strings.trimSpace(header(headers, "Upgrade") ?? ""))
     let version = strings.trimSpace(header(headers, "Sec-WebSocket-Version") ?? "")
     let key = strings.trimSpace(header(headers, "Sec-WebSocket-Key") ?? "")
-    strings.contains(connection, "upgrade") &&
+    hasConnectionToken(header(headers, "Connection") ?? "", "upgrade") &&
     upgrade == "websocket" &&
     version == "13" &&
-    !key.isEmpty()
+    isValidClientKey(key)
 }
 
 pub fn text(value: String) -> Frame {
@@ -259,6 +258,23 @@ fn header(headers: Headers, name: String) -> String? {
         }
     }
     None
+}
+
+fn hasConnectionToken(value: String, token: String) -> Bool {
+    let wanted = strings.toLower(strings.trimSpace(token))
+    for part in strings.split(value, ",") {
+        if strings.toLower(strings.trimSpace(part)) == wanted {
+            return true
+        }
+    }
+    false
+}
+
+fn isValidClientKey(key: String) -> Bool {
+    match encoding.base64.decode(strings.trimSpace(key)) {
+        Ok(decoded) -> decoded.len() == 16,
+        Err(_)      -> false,
+    }
 }
 
 fn opcodeFromCode(code: Int) -> Result<Opcode, Error> {

@@ -1,6 +1,8 @@
 package backend
 
 import (
+	"strconv"
+
 	"github.com/osty/osty/internal/ir"
 )
 
@@ -121,12 +123,13 @@ func RewriteStdlibMethodCallsites(mod *ir.Module, reached []ReachableStdlibMetho
 	type key struct{ module, typeName, method string }
 	set := map[key]string{}
 	type valueKey struct{ module, path, method string }
-	valueSet := map[valueKey]string{}
+	type valueRewriteTarget struct{ symbol, typeName string }
+	valueSet := map[valueKey]valueRewriteTarget{}
 	for _, r := range reached {
 		mangled := StdlibMethodSymbol(r.Module, r.Type, r.Method)
 		set[key{module: r.Module, typeName: r.Type, method: r.Method}] = mangled
 		if r.ValuePath != "" {
-			valueSet[valueKey{module: r.Module, path: r.ValuePath, method: r.Method}] = mangled
+			valueSet[valueKey{module: r.Module, path: r.ValuePath, method: r.Method}] = valueRewriteTarget{symbol: mangled, typeName: r.Type}
 		}
 	}
 	valueRewriteCount := 0
@@ -144,15 +147,16 @@ func RewriteStdlibMethodCallsites(mod *ir.Module, reached []ReachableStdlibMetho
 			if !ok || module == "" || len(path) == 0 {
 				return true
 			}
-			mangled, hit := valueSet[valueKey{
+			vk := valueKey{
 				module: module,
 				path:   stdlibJoinFieldPath(path),
 				method: field.Name,
-			}]
+			}
+			target, hit := valueSet[vk]
 			if !hit {
 				return true
 			}
-			receiver := field.X
+			receiver := stdlibSingletonReceiverExpr(module, vk.path, target.typeName, field.X, field.SpanV)
 			args := make([]ir.Arg, 0, len(call.Args)+1)
 			args = append(args, ir.Arg{
 				Value: receiver,
@@ -160,7 +164,7 @@ func RewriteStdlibMethodCallsites(mod *ir.Module, reached []ReachableStdlibMetho
 			})
 			args = append(args, call.Args...)
 			call.Callee = &ir.Ident{
-				Name:  mangled,
+				Name:  target.symbol,
 				Kind:  ir.IdentFn,
 				T:     stdlibFnType(args, call.T),
 				SpanV: field.SpanV,
@@ -177,20 +181,22 @@ func RewriteStdlibMethodCallsites(mod *ir.Module, reached []ReachableStdlibMetho
 			return true
 		}
 		if module, path, ok := stdlibFieldPath(mc.Receiver); ok && module != "" && len(path) != 0 {
-			if mangled, hit := valueSet[valueKey{
+			vk := valueKey{
 				module: module,
 				path:   stdlibJoinFieldPath(path),
 				method: mc.Name,
-			}]; hit {
+			}
+			if target, hit := valueSet[vk]; hit {
+				receiver := stdlibSingletonReceiverExpr(module, vk.path, target.typeName, mc.Receiver, mc.SpanV)
 				args := make([]ir.Arg, 0, len(mc.Args)+1)
 				args = append(args, ir.Arg{
-					Value: mc.Receiver,
+					Value: receiver,
 					SpanV: mc.SpanV,
 				})
 				args = append(args, mc.Args...)
 				swap[mc] = &ir.CallExpr{
 					Callee: &ir.Ident{
-						Name:  mangled,
+						Name:  target.symbol,
 						Kind:  ir.IdentFn,
 						T:     stdlibFnType(args, mc.T),
 						SpanV: mc.SpanV,
@@ -289,6 +295,88 @@ func stdlibJoinFieldPath(path []string) string {
 		out += part
 	}
 	return out
+}
+
+func stdlibSingletonReceiverExpr(module, path, typeName string, fallback ir.Expr, span ir.Span) ir.Expr {
+	switch {
+	case module == "encoding" && path == "base64" && typeName == "Base64":
+		return stdlibStructLit(module, "Base64", span, ir.StructLitField{
+			Name:  "url",
+			Value: stdlibStructLit(module, "Base64Url", span),
+			SpanV: span,
+		})
+	case module == "encoding" && path == "base64.url" && typeName == "Base64Url":
+		return stdlibStructLit(module, "Base64Url", span)
+	case module == "encoding" && path == "hex" && typeName == "Hex":
+		return stdlibStructLit(module, "Hex", span)
+	case module == "encoding" && path == "url" && typeName == "UrlEncoding":
+		return stdlibStructLit(module, "UrlEncoding", span)
+	case module == "compress" && path == "gzip" && typeName == "Gzip":
+		return stdlibStructLit(module, "Gzip", span)
+	case module == "crypto" && path == "hmac" && typeName == "Hmac":
+		return stdlibStructLit(module, "Hmac", span)
+	case module == "os" && path == "path" && typeName == "Path":
+		return stdlibStructLit(module, "Path", span)
+	case module == "net" && typeName == "Ipv4Addr":
+		switch path {
+		case "LOCALHOST_V4":
+			return stdlibIpv4Lit(127, 0, 0, 1, span)
+		case "UNSPECIFIED_V4":
+			return stdlibIpv4Lit(0, 0, 0, 0, span)
+		case "BROADCAST_V4":
+			return stdlibIpv4Lit(255, 255, 255, 255, span)
+		}
+	case module == "net" && typeName == "Ipv6Addr":
+		switch path {
+		case "LOCALHOST_V6":
+			return stdlibIpv6Lit([]int{0, 0, 0, 0, 0, 0, 0, 1}, span)
+		case "UNSPECIFIED_V6":
+			return stdlibIpv6Lit([]int{0, 0, 0, 0, 0, 0, 0, 0}, span)
+		}
+	}
+	return fallback
+}
+
+func stdlibStructLit(module, typeName string, span ir.Span, fields ...ir.StructLitField) *ir.StructLit {
+	return &ir.StructLit{
+		TypeName: typeName,
+		Fields:   fields,
+		T:        &ir.NamedType{Package: module, Name: typeName},
+		SpanV:    span,
+	}
+}
+
+func stdlibIpv4Lit(a, b, c, d int, span ir.Span) *ir.StructLit {
+	return stdlibStructLit("net", "Ipv4Addr", span,
+		stdlibIntField("a", a, span),
+		stdlibIntField("b", b, span),
+		stdlibIntField("c", c, span),
+		stdlibIntField("d", d, span),
+	)
+}
+
+func stdlibIpv6Lit(groups []int, span ir.Span) *ir.StructLit {
+	elems := make([]ir.Expr, 0, len(groups))
+	for _, g := range groups {
+		elems = append(elems, stdlibIntLit(g, span))
+	}
+	return stdlibStructLit("net", "Ipv6Addr", span, ir.StructLitField{
+		Name: "groups",
+		Value: &ir.ListLit{
+			Elems: elems,
+			Elem:  ir.TInt,
+			SpanV: span,
+		},
+		SpanV: span,
+	})
+}
+
+func stdlibIntField(name string, value int, span ir.Span) ir.StructLitField {
+	return ir.StructLitField{Name: name, Value: stdlibIntLit(value, span), SpanV: span}
+}
+
+func stdlibIntLit(value int, span ir.Span) *ir.IntLit {
+	return &ir.IntLit{Text: strconv.Itoa(value), T: ir.TInt, SpanV: span}
 }
 
 // stdlibMethodCallsiteSpliceVisitor walks every Expr-bearing slot in

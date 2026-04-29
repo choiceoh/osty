@@ -3,8 +3,10 @@ package backend
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -87,6 +89,53 @@ fn main() {
 		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
 	}
 	if got, want := string(output), "true\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\ntrue\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
+func TestLLVMBackendBinaryRunsStdOsExecWithSplitArgs(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	prog, args, _ := stdOsProcessCommands()
+	src := fmt.Sprintf(`use std.os
+use std.strings
+
+fn main() {
+    let args = strings.split(%q, "\n")
+    match os.exec(%q, args) {
+        Ok(out) -> {
+            println(out.exitCode == 3)
+            println(out.stdout == "direct-out")
+            println(out.stderr.contains("direct-err"))
+        },
+        Err(err) -> {
+            println(false)
+            println(err.message())
+            println(false)
+        },
+    }
+}
+`, strings.Join(args, "\n"), prog)
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, src)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	irBytes, readErr := os.ReadFile(result.Artifacts.LLVMIR)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
+	}
+	if !strings.Contains(string(irBytes), "osty LLVM MIR backend") {
+		t.Fatalf("std.os split-arg test did not exercise MIR backend:\n%s", irBytes)
+	}
+	output, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "true\ntrue\ntrue\n"; got != want {
 		t.Fatalf("binary stdout = %q, want %q", got, want)
 	}
 }

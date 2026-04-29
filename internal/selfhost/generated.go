@@ -43599,8 +43599,22 @@ func elabInferIf(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 	// Osty: /tmp/selfhost_merged.osty:20749:5
 	tys := cx.env.tys
 	_ = tys
-	// Osty: /tmp/selfhost_merged.osty:20750:5
-	cond := elabCheck(cx, node.left, tBool(tys))
+	// frozen-seed patch: handle if-let (node.flags == 1). For an
+	// if-let, node.left is the RHS expression (not a Bool) and
+	// children[1] is the pattern, which must bind into the then-scope.
+	// The plain-if path (else-branch) is unchanged.
+	isIfLet := node.flags == 1
+	ifLetScope := -1
+	var cond *ElabResult
+	if isIfLet {
+		cond = elabInfer(cx, node.left)
+		ifLetScope = checkScopeMark(cx.env)
+		condTy := checkResolveAliasDeep(cx.env, cond.ty)
+		patIdx := checkIntListAt(node.children, 1)
+		_ = elabPattern(cx, patIdx, condTy)
+	} else {
+		cond = elabCheck(cx, node.left, tBool(tys))
+	}
 	_ = cond
 	// Osty: /tmp/selfhost_merged.osty:20751:5
 	hasExpected := !(tyIsBad(tys, expected))
@@ -43614,6 +43628,9 @@ func elabInferIf(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 		}
 	}()
 	_ = then_
+	if isIfLet {
+		checkScopeDrop(cx.env, ifLetScope)
+	}
 	// Osty: /tmp/selfhost_merged.osty:20763:5
 	elseIdx := func() int {
 		if checkIntListLen(node.children) > 0 {

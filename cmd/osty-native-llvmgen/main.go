@@ -88,6 +88,11 @@ func preparePackageEntry(req llvmgenRequest) (backend.Entry, error) {
 	if _, err := ws.LoadPackageNative(""); err != nil {
 		return backend.Entry{}, err
 	}
+	if req.Package != nil {
+		if pkg := ws.Packages[""]; pkg != nil {
+			pkg.RuntimeCapability = req.Package.RuntimeCapability
+		}
+	}
 	results := ws.ResolveAll()
 	checks := check.Workspace(ws, results, check.Opts{
 
