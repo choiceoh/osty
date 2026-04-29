@@ -1,0 +1,11 @@
+use std.testing
+
+fn benchStringLookup() {
+    let keys = buildStringKeys(4096)
+    let queries = buildStringQueries(16384, 4096)
+    let index = buildStringMap(keys)
+    testing.benchmark(20, || {
+        let _ = stringLookupChecksum(index, queries)
+        Ok(())
+    })
+}

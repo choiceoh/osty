@@ -1,0 +1,8 @@
+use std.testing
+
+fn benchStringKeyBuild() {
+    testing.benchmark(20, || {
+        let _ = buildStringKeys(4096)
+        Ok(())
+    })
+}

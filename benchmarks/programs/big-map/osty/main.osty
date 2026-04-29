@@ -1,25 +1,7 @@
 // big-map — synthetic benchmark to measure Map<String, Int> at scale.
 
-use std.strings
-
 fn intToStr(n: Int) -> String {
-    let digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]
-    if n == 0 {
-        return "0"
-    }
-    let mut x = n
-    let mut chunks: List<String> = []
-    for x > 0 {
-        chunks.push(digits[x % 10])
-        x = x / 10
-    }
-    let mut pieces: List<String> = []
-    let mut i = chunks.len()
-    for i > 0 {
-        i = i - 1
-        pieces.push(chunks[i])
-    }
-    strings.join(pieces, "")
+    n.toString()
 }
 
 fn main() {

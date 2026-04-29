@@ -16,11 +16,13 @@ benchmarks/osty-vs-go/
 ├── hash_lookup/     # Map<Int,Int> insert + lookup (real dictionary workload)
 ├── lane_route/      # branchy 1D dynamic programming / route relaxation
 ├── loop_sum/        # tight scalar loop (vectorization regressions)
+├── string_key_build/ # big-map key creation: Int→String + "key:" concat
+├── map_string_lookup/ # prebuilt Map<String,Int> hash + lookup probe cost
+├── ephemeral_gc_churn/ # short-lived string/list writes + GC barriers
 ├── matmul/          # 64×64 integer matmul (nested-loop numeric kernel)
 ├── quicksort/       # iterative in-place Lomuto quicksort over List<Int>
 ├── record_pipeline/ # struct-heavy filter + group + sorted-key aggregate
 ├── simd_stats/      # long integer-array passes (vector-friendly hot loops)
-├── simd_stats/
 ├── word_freq/       # collections + sort + string-heavy aggregation
 └── <each>/
     ├── go/          # package <name>bench — BenchmarkFoo
@@ -43,6 +45,11 @@ style:
   `quicksort`): collections, structs, sort, hash. These dominate real
   application time and are the pairs most representative of deployed
   Osty code.
+- **Big-map decomposition** (`string_key_build`, `map_string_lookup`,
+  `ephemeral_gc_churn`): isolates the three costs that make
+  `benchmarks/programs/big-map` stand out — fresh string-key
+  construction, stable `Map<String, Int>` probes, and short-lived
+  String/List allocation plus GC barrier traffic.
 
 ### DCE defense — always use `#[inline(never)]`
 

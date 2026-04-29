@@ -6892,6 +6892,14 @@ func (g *mirGen) emitStringIntrinsic(i *mir.IntrinsicInstr) error {
 		if len(i.Args) == 0 {
 			return unsupported("mir-mvp", "string_concat with no args")
 		}
+		if len(i.Args) == 2 {
+			if out, handled, err := g.emitStringConcatI64Pair(i.Args[0], i.Args[1]); handled || err != nil {
+				if err != nil {
+					return err
+				}
+				return g.storeIntrinsicResult(i, out)
+			}
+		}
 		parts := make([]*LlvmValue, 0, len(i.Args))
 		for idx, op := range i.Args {
 			if !isStringLLVMType(op.Type()) {
@@ -7268,6 +7276,59 @@ func (g *mirGen) emitStringJoin(i *mir.IntrinsicInstr, partsReg string) error {
 	result := llvmCall(em, "ptr", sym, []*LlvmValue{{typ: "ptr", name: partsReg}, {typ: "ptr", name: sepReg}})
 	g.flushOstyEmitter(em)
 	return g.storeIntrinsicResult(i, result)
+}
+
+func mirRtStringConcatI64RightSymbol() string { return mirRtStringSymbol("ConcatI64Right") }
+func mirRtStringConcatI64LeftSymbol() string  { return mirRtStringSymbol("ConcatI64Left") }
+
+func isI64StringConcatOperand(t mir.Type) bool {
+	prim, ok := t.(*ir.PrimType)
+	if !ok {
+		return false
+	}
+	return prim.Kind == ir.PrimInt || prim.Kind == ir.PrimInt64
+}
+
+func (g *mirGen) emitStringConcatI64Pair(left, right mir.Operand) (*LlvmValue, bool, error) {
+	if isStringLLVMType(left.Type()) && isI64StringConcatOperand(right.Type()) {
+		leftReg, err := g.evalOperand(left, left.Type())
+		if err != nil {
+			return nil, true, err
+		}
+		rightReg, err := g.evalOperand(right, right.Type())
+		if err != nil {
+			return nil, true, err
+		}
+		sym := mirRtStringConcatI64RightSymbol()
+		g.declareRuntime(sym, mirRuntimeDeclareLine("ptr", sym, "ptr, i64"))
+		em := g.ostyEmitter()
+		out := llvmCall(em, "ptr", sym, []*LlvmValue{
+			{typ: "ptr", name: leftReg},
+			{typ: "i64", name: rightReg},
+		})
+		g.flushOstyEmitter(em)
+		return out, true, nil
+	}
+	if isI64StringConcatOperand(left.Type()) && isStringLLVMType(right.Type()) {
+		leftReg, err := g.evalOperand(left, left.Type())
+		if err != nil {
+			return nil, true, err
+		}
+		rightReg, err := g.evalOperand(right, right.Type())
+		if err != nil {
+			return nil, true, err
+		}
+		sym := mirRtStringConcatI64LeftSymbol()
+		g.declareRuntime(sym, mirRuntimeDeclareLine("ptr", sym, "i64, ptr"))
+		em := g.ostyEmitter()
+		out := llvmCall(em, "ptr", sym, []*LlvmValue{
+			{typ: "i64", name: leftReg},
+			{typ: "ptr", name: rightReg},
+		})
+		g.flushOstyEmitter(em)
+		return out, true, nil
+	}
+	return nil, false, nil
 }
 
 func (g *mirGen) emitStringConcatN(parts []*LlvmValue) *LlvmValue {

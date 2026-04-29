@@ -126,6 +126,134 @@ int main(void) {
 	}
 }
 
+func TestBundledRuntimeIntToStringShortValuesAreInline(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_int_to_string_sso_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_int_to_string_sso_harness")
+
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+
+	harness := `#include <stdint.h>
+#include <stdio.h>
+
+const char *osty_rt_int_to_string(int64_t value);
+int64_t osty_rt_strings_ByteLen(const char *value);
+int osty_rt_strings_Equal(const char *left, const char *right);
+int64_t osty_gc_debug_young_alloc_count_total(void);
+
+static void dump_short(int64_t value, const char *want) {
+    int64_t before = osty_gc_debug_young_alloc_count_total();
+    const char *s = osty_rt_int_to_string(value);
+    int64_t after = osty_gc_debug_young_alloc_count_total();
+    printf("%lld %d %lld\n",
+           (long long)osty_rt_strings_ByteLen(s),
+           osty_rt_strings_Equal(s, want),
+           (long long)(after - before));
+}
+
+int main(void) {
+    dump_short(0, "0");
+    dump_short(1234567, "1234567");
+    dump_short(-123456, "-123456");
+    return 0;
+}
+`
+	if err := os.WriteFile(harnessPath, []byte(harness), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+
+	buildOutput, err := runtimeClangCommand("-std=c11", runtimePath, harnessPath, "-o", binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+
+	want := "1 1 0\n" +
+		"7 1 0\n" +
+		"7 1 0\n"
+	if got := string(runOutput); got != want {
+		t.Fatalf("runtime int_to_string SSO harness stdout mismatch\n---got---\n%s\n---want---\n%s", got, want)
+	}
+}
+
+func TestBundledRuntimeStringConcatI64FastPaths(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	dir := t.TempDir()
+	runtimePath := filepath.Join(dir, bundledRuntimeSourceName)
+	harnessPath := filepath.Join(dir, "runtime_string_concat_i64_harness.c")
+	binaryPath := filepath.Join(dir, "runtime_string_concat_i64_harness")
+
+	if err := os.WriteFile(runtimePath, []byte(bundledRuntimeSource), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", runtimePath, err)
+	}
+
+	harness := `#include <stdint.h>
+#include <stdio.h>
+
+const char *osty_rt_int_to_string(int64_t value);
+const char *osty_rt_strings_ConcatI64Right(const char *left, int64_t right);
+const char *osty_rt_strings_ConcatI64Left(int64_t left, const char *right);
+int64_t osty_rt_strings_ByteLen(const char *value);
+int osty_rt_strings_Equal(const char *left, const char *right);
+int64_t osty_gc_debug_young_alloc_count_total(void);
+
+static void dump_right(const char *left, int64_t right, const char *want) {
+    int64_t before = osty_gc_debug_young_alloc_count_total();
+    const char *s = osty_rt_strings_ConcatI64Right(left, right);
+    int64_t after = osty_gc_debug_young_alloc_count_total();
+    printf("%lld %d %lld\n",
+           (long long)osty_rt_strings_ByteLen(s),
+           osty_rt_strings_Equal(s, want),
+           (long long)(after - before));
+}
+
+static void dump_left(int64_t left, const char *right, const char *want) {
+    int64_t before = osty_gc_debug_young_alloc_count_total();
+    const char *s = osty_rt_strings_ConcatI64Left(left, right);
+    int64_t after = osty_gc_debug_young_alloc_count_total();
+    printf("%lld %d %lld\n",
+           (long long)osty_rt_strings_ByteLen(s),
+           osty_rt_strings_Equal(s, want),
+           (long long)(after - before));
+}
+
+int main(void) {
+    dump_right("key:", 12345, "key:12345");
+    dump_left(-42, ":x", "-42:x");
+    dump_right(osty_rt_int_to_string(7), 8, "78");
+    return 0;
+}
+`
+	if err := os.WriteFile(harnessPath, []byte(harness), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", harnessPath, err)
+	}
+
+	buildOutput, err := runtimeClangCommand("-std=c11", runtimePath, harnessPath, "-o", binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("clang failed: %v\n%s", err, buildOutput)
+	}
+	runOutput, err := exec.Command(binaryPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", binaryPath, err, runOutput)
+	}
+
+	want := "9 1 1\n" +
+		"5 1 1\n" +
+		"2 1 1\n"
+	if got := string(runOutput); got != want {
+		t.Fatalf("runtime string concat_i64 harness stdout mismatch\n---got---\n%s\n---want---\n%s", got, want)
+	}
+}
+
 func TestBundledRuntimeStringsHelpersPreserveSemantics(t *testing.T) {
 	parallelClangBackendTest(t)
 

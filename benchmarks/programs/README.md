@@ -133,8 +133,9 @@ For every program the Osty implementation:
   the MIR LLVM lowering path (the alternate path mishandles
   String concat chains in some module shapes — seen during
   development on `markdown-stats`)
-- **avoids `Int.toString()`** (LLVM backend limit; uses a local
-  `intToStr` digit helper)
+- mostly **avoids `Int.toString()`** in older fixtures that still carry
+  local `intToStr` helpers; `big-map` intentionally uses native
+  `Int.toString()` so the suite tracks the current String-key fast path
 - **avoids `Option<scalar>` boxing in hot loops** — uses preallocated
   `List<Int>` + Int stack pointer rather than `pop() -> T?`
 - **avoids `xs.split(...)` of strings declared as `let body = a + b
