@@ -367,6 +367,32 @@ func mirBinaryForcesI1Type(symbol string) bool {
 	return symbol == "&&" || symbol == "||"
 }
 
+// Osty: mirBinaryResultIsBoolSymbol
+func mirBinaryResultIsBoolSymbol(symbol string) bool {
+	switch symbol {
+	case "==", "!=", "<", "<=", ">", ">=":
+		return true
+	}
+	return false
+}
+
+// Osty: mirBinaryResultCanUseOperandWidthSymbol
+func mirBinaryResultCanUseOperandWidthSymbol(symbol string) bool {
+	switch symbol {
+	case "+", "-", "*", "/", "%", "&&", "||", "&", "|", "^", "<<", ">>":
+		return true
+	}
+	return false
+}
+
+// Osty: mirNumericLLVMResizePossible
+func mirNumericLLVMResizePossible(from, to string) bool {
+	if mirIntLLVMBits(from) > 0 && mirIntLLVMBits(to) > 0 {
+		return true
+	}
+	return (from == "float" || from == "double") && (to == "float" || to == "double")
+}
+
 // Osty: toolchain/mir_generator.osty:307:5
 func mirUnaryIsIdentity(symbol string) bool {
 	return symbol == "+"
@@ -947,6 +973,32 @@ func mirEncodeLLVMString(s string) string {
 		}()
 	}
 	return out + "\\00"
+}
+
+// Osty: mirCanEncodeLLVMString
+func mirCanEncodeLLVMString(s string) bool {
+	printable := " !#$%&'()*+,-./0123456789:;<=" + ">?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+	for i := 0; i < len(s); i++ {
+		ch := s[i : i+1]
+		if ch == "\\" || ch == "\"" || llvmStrings.Contains(printable, ch) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// Osty: mirLLVMStringArraySize
+func mirLLVMStringArraySize(byteLen int) int {
+	return byteLen + 1
+}
+
+// Osty: mirInlineStringLiteralCandidate
+func mirInlineStringLiteralCandidate(byteLen int, hasNul bool) bool {
+	if hasNul {
+		return false
+	}
+	return byteLen <= 16
 }
 
 // Osty: toolchain/mir_generator.osty:781:5
@@ -9008,6 +9060,25 @@ func mirSanitizeLLVMName(name string) string {
 	return b.String()
 }
 
+// Osty: mirSanitizeLabelFragment
+func mirSanitizeLabelFragment(name string) string {
+	if name == "" {
+		return "variant"
+	}
+	var b llvmStrings.Builder
+	for _, c := range name {
+		if ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z') || ('0' <= c && c <= '9') {
+			b.WriteRune(c)
+		} else {
+			b.WriteByte('_')
+		}
+	}
+	if b.Len() == 0 {
+		return "variant"
+	}
+	return b.String()
+}
+
 // Osty: mirCloneRootPaths
 func mirCloneRootPaths(paths [][]int) [][]int {
 	if len(paths) == 0 {
@@ -11313,6 +11384,20 @@ func mirMonomorphMangledSourceName(name string) string {
 // Osty: mirMangledBuiltinSourceNameIs
 func mirMangledBuiltinSourceNameIs(name, want string) bool {
 	return mirMonomorphMangledSourceName(name) == want
+}
+
+// Osty: mirIsTwoWordEnumLLVM
+func mirIsTwoWordEnumLLVM(llvmT string) bool {
+	name := llvmT
+	if llvmStrings.HasPrefix(name, "%") {
+		name = name[1:]
+	}
+	return llvmStrings.HasPrefix(name, "Option.") ||
+		llvmStrings.HasPrefix(name, "Maybe.") ||
+		llvmStrings.HasPrefix(name, "Result.") ||
+		mirMangledBuiltinSourceNameIs(name, "Option") ||
+		mirMangledBuiltinSourceNameIs(name, "Maybe") ||
+		mirMangledBuiltinSourceNameIs(name, "Result")
 }
 
 // Osty: mirSetElemTypeArgIndex

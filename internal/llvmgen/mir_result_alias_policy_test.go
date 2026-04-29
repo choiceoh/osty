@@ -91,3 +91,69 @@ func TestMirMonomorphMangledSourceName(t *testing.T) {
 		t.Fatalf("mangled builtin predicate matched wrong source name")
 	}
 }
+
+func TestMirBackendBinaryPolicyHelpers(t *testing.T) {
+	if !mirBinaryResultIsBool(mir.BinEq) || !mirBinaryResultIsBool(mir.BinGeq) {
+		t.Fatalf("comparison operators should report Bool results")
+	}
+	if mirBinaryResultIsBool(mir.BinAdd) {
+		t.Fatalf("addition should not report a Bool result")
+	}
+	if !mirBinaryResultCanUseOperandWidth(mir.BinAdd) || !mirBinaryResultCanUseOperandWidth(mir.BinShl) {
+		t.Fatalf("arithmetic/shift operators should use operand width")
+	}
+	if mirBinaryResultCanUseOperandWidth(mir.BinEq) {
+		t.Fatalf("comparisons must not use operand width")
+	}
+	if !numericLLVMResizePossible("i8", "i64") || !numericLLVMResizePossible("float", "double") {
+		t.Fatalf("numeric resize policy rejected legal resize")
+	}
+	if numericLLVMResizePossible("ptr", "i64") || numericLLVMResizePossible("i64", "double") {
+		t.Fatalf("numeric resize policy accepted illegal resize")
+	}
+}
+
+func TestMirStringLiteralPolicyHelpers(t *testing.T) {
+	encoded, size := encodeLLVMString("a\"b\\c")
+	if encoded != "a\\22b\\\\c\\00" || size != 6 {
+		t.Fatalf("printable encode = (%q, %d)", encoded, size)
+	}
+	encoded, size = encodeLLVMString("\x01")
+	if encoded != "\\01\\00" || size != 2 {
+		t.Fatalf("fallback encode = (%q, %d)", encoded, size)
+	}
+	if !mirCanEncodeLLVMString("alpha-123") || mirCanEncodeLLVMString("line\nbreak") {
+		t.Fatalf("Osty string encoder capability predicate drifted")
+	}
+
+	okLit := &mir.ConstOp{Const: &mir.StringConst{Value: strings.Repeat("a", 16)}}
+	if got, ok := literalStringOperand(okLit); !ok || got != strings.Repeat("a", 16) {
+		t.Fatalf("16-byte literal should inline: %q %v", got, ok)
+	}
+	tooLong := &mir.ConstOp{Const: &mir.StringConst{Value: strings.Repeat("a", 17)}}
+	if _, ok := literalStringOperand(tooLong); ok {
+		t.Fatalf("17-byte literal should not inline")
+	}
+	withNul := &mir.ConstOp{Const: &mir.StringConst{Value: "a\x00b"}}
+	if _, ok := literalStringOperand(withNul); ok {
+		t.Fatalf("NUL literal should not inline")
+	}
+}
+
+func TestMirEnumAndLabelPolicyHelpers(t *testing.T) {
+	if !mirIsTwoWordEnumLLVM("%Result.i64.ptr") || !mirIsTwoWordEnumLLVM("%Option.i64") {
+		t.Fatalf("direct two-word enum LLVM names not recognized")
+	}
+	if !mirIsTwoWordEnumLLVM("_ZTSN4core6Result") {
+		t.Fatalf("monomorphized Result name not recognized")
+	}
+	if mirIsTwoWordEnumLLVM("%List.i64") {
+		t.Fatalf("List should not be treated as two-word enum")
+	}
+	if got := mirSanitizeLabelFragment("A-B!9"); got != "A_B_9" {
+		t.Fatalf("label fragment = %q", got)
+	}
+	if got := mirSanitizeLabelFragment(""); got != "variant" {
+		t.Fatalf("empty label fragment = %q", got)
+	}
+}
