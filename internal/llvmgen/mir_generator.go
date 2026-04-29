@@ -7,12 +7,18 @@
 // blocks, projections, and terminators, so the emitter is substantially
 // simpler than the AST-based one.
 //
-// Stage 3 is opt-in: callers set `Options.UseMIR = true` (and supply a
-// MIR module via the backend Entry). The legacy path remains the
-// default until parity lands on the full LLVM test corpus; see
-// docs/mir_design.md for the migration plan.
+// The backend dispatcher now selects this path by default for ordinary
+// LLVM requests after the native-owned fast path declines coverage.
+// Unsupported MIR shapes return an UnsupportedError so the dispatcher
+// can render a route-tagged skeleton artifact; it does not silently
+// retry the legacy HIR→AST bridge for normal backend requests. Direct
+// llvmgen callers that intentionally want the transitional bridge can
+// still call GenerateModule; see docs/mir_design.md for the removal
+// checklist.
 //
-// MVP scope for this patch:
+// Original MVP scope for this entry point was deliberately small; the current
+// supported surface is broader and is guarded by checkSupported plus the
+// route-sensitive backend tests:
 //   - Primitive types: Int (i64), Int32/Int16/Int8/Byte/UInt*, Bool
 //     (i1), Float/Float64 (double), Float32 (float), Unit (void),
 //     String (ptr).
@@ -25,8 +31,8 @@
 //     SSA during optimisation, so the emitter stays alloca-simple.
 //   - No structs, enums, tuples, lists, maps, optional unwrap, closure
 //     aggregates, or concurrency intrinsics. Anything outside the MVP
-//     returns an UnsupportedError so the backend dispatcher can fall
-//     back to the legacy path.
+//     returns an UnsupportedError so the backend dispatcher can report
+//     the uncovered route explicitly.
 
 package llvmgen
 
@@ -54,8 +60,9 @@ func fastPathListWriteEnabled() bool {
 }
 
 // GenerateFromMIR emits textual LLVM IR from a MIR module. It is the
-// Stage 3 entry point into llvmgen. Callers that still want the legacy
-// HIR→AST path should call GenerateModule with Options.UseMIR == false.
+// Stage 3 entry point into llvmgen. Direct callers that still want the legacy
+// HIR→AST bridge should call GenerateModule; the backend dispatcher uses this
+// path for normal requests whenever Entry.MIR is available.
 func GenerateFromMIR(m *mir.Module, opts Options) ([]byte, error) {
 	if m == nil {
 		return nil, unsupported("source-layout", "nil MIR module")
@@ -571,7 +578,7 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 		return true
 	case *ir.FnType:
 		// Fn values pass as `ptr` at the LLVM boundary; accept them
-		// for now (closures with captures still fall back to legacy).
+		// for now (heap-escaping captured closures remain a Stage 5 gap).
 		return true
 	}
 	return false
@@ -845,9 +852,10 @@ func (g *mirGen) checkInstrSupported(fn *mir.Function, inst mir.Instr) error {
 }
 
 // checkProjectionsSupported walks a Place's projection chain and
-// refuses anything outside the emitter's current coverage. Stage 3.5
-// adds IndexProj for list-typed bases (e.g. `xs[i]`). DerefProj still
-// belongs to later stages.
+// refuses anything outside the emitter's current coverage. IndexProj
+// is limited to List / Map / String bases; DerefProj must carry the
+// type being loaded so the emit loop can keep the LLVM and MIR type
+// cursors aligned.
 func (g *mirGen) checkProjectionsSupported(fn *mir.Function, p mir.Place, ctx string) error {
 	for i, proj := range p.Projections {
 		switch proj.(type) {
@@ -8606,7 +8614,7 @@ func (g *mirGen) emitDiscriminantRV(rv *mir.DiscriminantRV) (string, error) {
 // emitLenRV lowers MIR's direct length query on a place to the same
 // runtime entrypoints used by the intrinsic path. This is the shape
 // lowerForIn emits for list iteration, so supporting it keeps those
-// loops on the MIR path instead of forcing a legacy fallback.
+// loops on the MIR path instead of surfacing an unsupported route.
 func (g *mirGen) emitLenRV(rv *mir.LenRV) (string, error) {
 	placeT := g.placeType(rv.Place)
 	if placeT == nil {

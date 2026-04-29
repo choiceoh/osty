@@ -47,14 +47,14 @@
 //
 // Implementation note (transitional)
 //
-// GenerateModule now first tries a native-owned primitive/control-flow
-// slice mirrored from `toolchain/llvmgen.osty` and falls back to the
-// legacy IR -> AST bridge only for shapes still outside that slice
-// (see ir_module.go). TryGenerateNativeOwnedModule exposes just that
-// native-owned slice without taking the fallback. The bridge remains a
-// transitional implementation detail: callers never construct nor
-// observe the intermediate AST. Follow-on work will keep growing the
-// native path until the fallback disappears entirely.
+// GenerateModule first tries a native-owned primitive/control-flow slice
+// mirrored from `toolchain/llvmgen.osty` and then uses the legacy IR -> AST
+// bridge for direct callers whose shapes are still outside that slice (see
+// ir_module.go). The backend dispatcher does not use that bridge as a hidden
+// retry once an Entry has MIR; MIR unsupported shapes are surfaced as
+// route-tagged skeleton artifacts instead. TryGenerateNativeOwnedModule exposes
+// just the native-owned slice without taking the bridge. Follow-on work will
+// keep growing the native/MIR paths until the bridge disappears entirely.
 //
 // The active GC implementation path paired with this lowering lives
 // in `internal/backend/runtime/osty_runtime.c`.
