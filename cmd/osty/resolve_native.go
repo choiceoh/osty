@@ -6,7 +6,7 @@ import (
 
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
-	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -28,7 +28,7 @@ func printNativeResolutionRows(rows []resolve.NativeResolutionRow) {
 // resolve result into printNativeResolutionRows input. Pair with
 // selfhost.ResolveFromSource so the caller never threads a
 // *selfhost.FrontendRun through the CLI layer.
-func nativeResolveRowsFromResolved(resolved selfhost.ResolveResult, src []byte, path string) []resolve.NativeResolutionRow {
+func nativeResolveRowsFromResolved(resolved api.ResolveResult, src []byte, path string) []resolve.NativeResolutionRow {
 	lineStarts := computeLineStartsBytes(src)
 	kindByNode := map[int]string{}
 	for _, sym := range resolved.Symbols {
@@ -77,7 +77,7 @@ func nativeResolveRowsFromResolved(resolved selfhost.ResolveResult, src []byte, 
 // native resolver's structured diagnostics into *diag.Diagnostic,
 // preserving the code + primary span + hint shape callers expect.
 // Pair with selfhost.ResolveFromSource for the astbridge-free path.
-func nativeResolveDiagnosticsFromResolved(resolved selfhost.ResolveResult, src []byte, path string) []*diag.Diagnostic {
+func nativeResolveDiagnosticsFromResolved(resolved api.ResolveResult, src []byte, path string) []*diag.Diagnostic {
 	lineStarts := computeLineStartsBytes(src)
 	out := make([]*diag.Diagnostic, 0, len(resolved.Diagnostics))
 	for _, record := range resolved.Diagnostics {
