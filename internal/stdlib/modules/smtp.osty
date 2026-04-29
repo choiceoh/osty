@@ -232,7 +232,10 @@ pub fn commands(tx: Transaction) -> Result<List<String>, Error> {
 pub fn renderCommands(commands: List<String>) -> String {
     let mut out = ""
     for cmd in commands {
-        out = "{out}{cmd}{crlf()}"
+        out = "{out}{cmd}"
+        if !strings.endsWith(cmd, crlf()) {
+            out = "{out}{crlf()}"
+        }
     }
     out
 }
