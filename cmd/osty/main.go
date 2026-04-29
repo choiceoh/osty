@@ -474,8 +474,8 @@ func main() {
 
 	switch cmd {
 	case "parse":
-		parsed := parser.ParseDetailed(src)
-		file, diags := parsed.File, parsed.Diagnostics
+		run := selfhost.Run(src)
+		file, diags := selfhost.LowerPublicFileFromRun(run), run.Diagnostics()
 		printDiags(formatter, diags, flags)
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")

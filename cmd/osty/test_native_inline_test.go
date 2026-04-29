@@ -3,8 +3,8 @@ package main
 import (
 	"testing"
 
-	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 )
 
 // v0.5 (G32) inline `#[test]` discovery — the legacy `test*` name
@@ -56,6 +56,11 @@ fn notATest() -> Int {
 	}
 	if gotNames["add"] {
 		t.Error("add should not be discovered (production function)")
+	}
+	for _, pf := range pkg.Files {
+		if pf.File != nil {
+			t.Fatalf("discoverNativeTests materialized public AST for %s", pf.Path)
+		}
 	}
 }
 
@@ -163,14 +168,12 @@ fn inline_case() { let _ = 1 }
 // resolve diagnostic.
 func mustResolveSingleFilePackage(t *testing.T, path string, src []byte) *resolve.Package {
 	t.Helper()
-	file, diags := parser.ParseDiagnostics(src)
+	run := selfhost.Run(src)
+	diags := run.Diagnostics()
 	for _, d := range diags {
 		if d != nil && d.Severity.String() == "error" {
 			t.Fatalf("parse error: %s", d.Message)
 		}
-	}
-	if file == nil {
-		t.Fatal("parse returned nil file")
 	}
 	pkg := &resolve.Package{
 		Name: "inline_test_pkg",
@@ -178,7 +181,7 @@ func mustResolveSingleFilePackage(t *testing.T, path string, src []byte) *resolv
 		Files: []*resolve.PackageFile{{
 			Path:   path,
 			Source: src,
-			File:   file,
+			Run:    run,
 		}},
 	}
 	return pkg
