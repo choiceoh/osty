@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/resolve"
@@ -33,7 +34,7 @@ func (s *Server) handleSignatureHelp(req *rpcRequest) {
 		replyJSON(s.conn, req.ID, nil)
 		return
 	}
-	info, ok := buildSignatureInfo(call, doc.analysis)
+	info, ok := buildSignatureInfo(call, doc)
 	if !ok {
 		replyJSON(s.conn, req.ID, nil)
 		return
@@ -93,12 +94,17 @@ func inCallArgs(call *ast.CallExpr, pos token.Pos) bool {
 	return true
 }
 
-// buildSignatureInfo renders the callee's signature. We look up the
-// callee via the checker (for SymFn this gives us a *types.FnType
-// with parameter types). Parameter NAMES come from the resolver's
-// AST node when available — `types.FnType` is structural and carries
-// types only.
-func buildSignatureInfo(call *ast.CallExpr, a *docAnalysis) (SignatureInformation, bool) {
+// buildSignatureInfo renders the callee's signature. Selfhost structured refs
+// provide the function type first; the checker/symbol fallback is retained for
+// compatibility paths and can still recover declaration parameter names.
+func buildSignatureInfo(call *ast.CallExpr, doc *document) (SignatureInformation, bool) {
+	if info, ok := buildStructuredSignatureInfo(call, doc); ok {
+		return info, true
+	}
+	a := doc.analysis
+	if a == nil || a.check == nil {
+		return SignatureInformation{}, false
+	}
 	sym, fnDecl := calleeSymbol(call, a)
 	if sym == nil {
 		return SignatureInformation{}, false
@@ -138,6 +144,106 @@ func buildSignatureInfo(call *ast.CallExpr, a *docAnalysis) (SignatureInformatio
 	return info, true
 }
 
+func buildStructuredSignatureInfo(call *ast.CallExpr, doc *document) (SignatureInformation, bool) {
+	if call == nil || call.Fn == nil || doc == nil || doc.analysis == nil {
+		return SignatureInformation{}, false
+	}
+	ref := structuredReferenceAt(doc, doc.analysis.lines.offsetToLSP(call.Fn.Pos().Offset))
+	if ref == nil || ref.targetKind != "function" || ref.targetType == "" {
+		return SignatureInformation{}, false
+	}
+	paramTypes, returnType, ok := parseStructuredFunctionType(ref.targetType)
+	if !ok {
+		return SignatureInformation{}, false
+	}
+	paramNames := fallbackParameterNames(len(paramTypes))
+	params := make([]LSPSignatureParam, 0, len(paramTypes))
+	for i, pt := range paramTypes {
+		params = append(params, LSPSignatureParam{
+			Name:     paramNames[i],
+			TypeName: pt,
+		})
+	}
+	rendered := LSPBuildSignatureText(ref.targetName, params, returnType)
+	paramInfo := make([]ParameterInformation, 0, len(rendered.ParameterLabels))
+	for _, paramLabel := range rendered.ParameterLabels {
+		paramInfo = append(paramInfo, ParameterInformation{Label: paramLabel})
+	}
+	return SignatureInformation{
+		Label:      rendered.Label,
+		Parameters: paramInfo,
+	}, true
+}
+
+func parseStructuredFunctionType(typeText string) ([]string, string, bool) {
+	rest := strings.TrimSpace(typeText)
+	if !strings.HasPrefix(rest, "fn") {
+		return nil, "", false
+	}
+	rest = strings.TrimSpace(strings.TrimPrefix(rest, "fn"))
+	if !strings.HasPrefix(rest, "(") {
+		return nil, "", false
+	}
+	closeIdx := matchingCloseParen(rest)
+	if closeIdx < 0 {
+		return nil, "", false
+	}
+	paramsText := strings.TrimSpace(rest[1:closeIdx])
+	var params []string
+	if paramsText != "" {
+		params = splitTopLevelComma(paramsText)
+	}
+	returnType := ""
+	tail := strings.TrimSpace(rest[closeIdx+1:])
+	if strings.HasPrefix(tail, "->") {
+		returnType = strings.TrimSpace(strings.TrimPrefix(tail, "->"))
+	}
+	return params, returnType, true
+}
+
+func matchingCloseParen(s string) int {
+	depth := 0
+	for i, r := range s {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func splitTopLevelComma(s string) []string {
+	var out []string
+	start := 0
+	depth := 0
+	for i, r := range s {
+		switch r {
+		case '(', '[', '<':
+			depth++
+		case ')', ']', '>':
+			if depth > 0 {
+				depth--
+			}
+		case ',':
+			if depth == 0 {
+				if part := strings.TrimSpace(s[start:i]); part != "" {
+					out = append(out, part)
+				}
+				start = i + len(string(r))
+			}
+		}
+	}
+	if part := strings.TrimSpace(s[start:]); part != "" {
+		out = append(out, part)
+	}
+	return out
+}
+
 // calleeSymbol resolves the `Fn` side of a call expression to a
 // resolver symbol + (optionally) the FnDecl AST that declared it.
 // Returns (nil, nil) when the callee isn't a direct identifier
@@ -174,12 +280,22 @@ func parameterNames(fd *ast.FnDecl, count int) []string {
 			}
 		}
 	}
+	fillFallbackParameterNames(names)
+	return names
+}
+
+func fallbackParameterNames(count int) []string {
+	names := make([]string, count)
+	fillFallbackParameterNames(names)
+	return names
+}
+
+func fillFallbackParameterNames(names []string) {
 	for i := range names {
 		if names[i] == "" {
 			names[i] = fmt.Sprintf("arg%d", i+1)
 		}
 	}
-	return names
 }
 
 // activeParamFor computes which parameter index the cursor sits in by

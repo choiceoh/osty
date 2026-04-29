@@ -2,6 +2,7 @@ package lsp
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/osty/osty/internal/diag"
 )
@@ -28,8 +29,8 @@ import (
 //
 // Quick-fix coverage:
 //   - E0500 (undefined name): suggest rename-to-nearest-match using
-//     the resolver's own scope+Levenshtein logic, so the fixes line
-//     up with the hints the compiler emitted in the first place.
+//     selfhost structured package symbols plus the legacy scope fallback
+//     for locals/params.
 //   - L0001 / L0002 (unused binding / parameter): suggest prefixing
 //     the name with `_` to silence the lint.
 //   - L0003 (unused import): suggest deleting the whole `use` line.
@@ -74,11 +75,10 @@ func (s *Server) handleCodeAction(req *rpcRequest) {
 	replyJSON(s.conn, req.ID, actions)
 }
 
-// undefinedNameFixes asks the resolver for names within edit-distance
-// 2 of the offending identifier and emits one "rename to X" action
-// per candidate. Delegating the distance logic to resolve.Scope keeps
-// the LSP suggestions in lockstep with the compiler's own hints — no
-// parallel Levenshtein to drift out of sync.
+// undefinedNameFixes suggests visible names within edit-distance 2 of the
+// offending identifier. Selfhost structured symbols provide the package-level
+// candidate set first; the Go scope fallback adds locals/params while those
+// are still only exposed through compatibility state.
 func undefinedNameFixes(doc *document, d LSPDiagnostic) []CodeAction {
 	start := doc.analysis.lines.lspToOsty(d.Range.Start)
 	name := identifierAt(doc.src, start.Offset)
@@ -86,10 +86,10 @@ func undefinedNameFixes(doc *document, d LSPDiagnostic) []CodeAction {
 		return nil
 	}
 	a := doc.analysis
-	if a.resolve == nil || a.resolve.FileScope == nil {
-		return nil
+	candidates := nearbyStructuredSymbolNames(a.structuredSymbols, name, 2)
+	if a.resolve != nil && a.resolve.FileScope != nil {
+		candidates = mergeNearbyNames(candidates, a.resolve.FileScope.NearbyNames(name, 2))
 	}
-	candidates := a.resolve.FileScope.NearbyNames(name, 2)
 	if len(candidates) == 0 {
 		return nil
 	}
@@ -108,6 +108,116 @@ func undefinedNameFixes(doc *document, d LSPDiagnostic) []CodeAction {
 		})
 	}
 	return out
+}
+
+func nearbyStructuredSymbolNames(symbols []structuredSymbol, target string, maxDistance int) []string {
+	type candidate struct {
+		name string
+		dist int
+	}
+	seen := map[string]bool{}
+	var candidates []candidate
+	for _, sym := range symbols {
+		if sym.name == "" || sym.builtin || sym.depth != 0 || seen[sym.name] {
+			continue
+		}
+		dist := lspLevenshteinBounded(target, sym.name, maxDistance)
+		if dist > maxDistance {
+			continue
+		}
+		seen[sym.name] = true
+		candidates = append(candidates, candidate{name: sym.name, dist: dist})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].dist != candidates[j].dist {
+			return candidates[i].dist < candidates[j].dist
+		}
+		return candidates[i].name < candidates[j].name
+	})
+	out := make([]string, 0, len(candidates))
+	for _, c := range candidates {
+		out = append(out, c.name)
+	}
+	return out
+}
+
+func mergeNearbyNames(primary []string, fallback []string) []string {
+	if len(primary) == 0 {
+		return fallback
+	}
+	seen := make(map[string]bool, len(primary)+len(fallback))
+	out := make([]string, 0, len(primary)+len(fallback))
+	for _, name := range primary {
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	for _, name := range fallback {
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
+}
+
+func lspLevenshteinBounded(a, b string, limit int) int {
+	ar := []rune(a)
+	br := []rune(b)
+	if absInt(len(ar)-len(br)) > limit {
+		return limit + 1
+	}
+	prev := make([]int, len(br)+1)
+	curr := make([]int, len(br)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ar); i++ {
+		curr[0] = i
+		rowMin := curr[0]
+		for j := 1; j <= len(br); j++ {
+			cost := 0
+			if ar[i-1] != br[j-1] {
+				cost = 1
+			}
+			curr[j] = minInt(
+				prev[j]+1,
+				curr[j-1]+1,
+				prev[j-1]+cost,
+			)
+			if curr[j] < rowMin {
+				rowMin = curr[j]
+			}
+		}
+		if rowMin > limit {
+			return limit + 1
+		}
+		prev, curr = curr, prev
+	}
+	if prev[len(br)] > limit {
+		return limit + 1
+	}
+	return prev[len(br)]
+}
+
+func minInt(a, b, c int) int {
+	if b < a {
+		a = b
+	}
+	if c < a {
+		return c
+	}
+	return a
+}
+
+func absInt(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 // prefixUnderscoreFix produces a "silence by prefixing `_`" action

@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/osty/osty/internal/cst"
+	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/selfhost"
 )
 
 // Helper: seed one "package" with one file for tests.
@@ -231,11 +233,23 @@ func TestCutoffOnTrivialWhitespaceEdit(t *testing.T) {
 func TestIdentIndexUpdatesWithSymbols(t *testing.T) {
 	eng := NewEngine()
 	defer eng.Close()
-	path := seedFile(eng, "/tmp/pkg_ii", "main.osty", "pub fn foo() { }\npub fn bar() { }\n")
+	src := "pub fn foo() -> Int { 1 }\nfn main() { foo() }\n"
+	path := seedFile(eng, "/tmp/pkg_ii", "main.osty", src)
 
+	selfhost.ResetAstbridgeLowerCount()
 	idx := eng.Queries.IdentIndex.Get(eng.DB, path)
 	if idx == nil {
 		t.Fatal("IdentIndex returned nil")
+	}
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("IdentIndex touched astbridge = %d, want 0", got)
+	}
+	callOff := strings.LastIndex(src, "foo")
+	if callOff < 0 {
+		t.Fatal("test source missing foo call")
+	}
+	if got := idx[callOff]; got != "function" {
+		t.Fatalf("IdentIndex[%d] = %q, want function (idx=%#v)", callOff, got, idx)
 	}
 
 	// Cached repeat.
@@ -247,6 +261,31 @@ func TestIdentIndexUpdatesWithSymbols(t *testing.T) {
 	}
 	if len(idx) != len(idx2) {
 		t.Fatalf("index differs across cached calls: %d vs %d", len(idx), len(idx2))
+	}
+}
+
+func TestResolveDiagnosticsUseNativeStructuredResult(t *testing.T) {
+	eng := NewEngine()
+	defer eng.Close()
+
+	path := seedFile(eng, "/tmp/pkg_resolve_diags", "main.osty", "fn main() { missing() }\n")
+
+	selfhost.ResetAstbridgeLowerCount()
+	diags := eng.Queries.ResolveDiagnostics.Get(eng.DB, path)
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("ResolveDiagnostics touched astbridge = %d, want 0", got)
+	}
+	var sawUndefined bool
+	for _, d := range diags {
+		if d != nil && d.Code == diag.CodeUndefinedName {
+			sawUndefined = true
+			if d.File != path {
+				t.Fatalf("diagnostic file = %q, want %q", d.File, path)
+			}
+		}
+	}
+	if !sawUndefined {
+		t.Fatalf("ResolveDiagnostics = %#v, want undefined-name diagnostic", diags)
 	}
 }
 

@@ -1,6 +1,7 @@
 package resolve
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,10 +17,11 @@ func TestMaterializePublicCompatibilityKeepsNativePackageAstbridgeFree(t *testin
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(bPath, []byte(`fn main() {
+	bSrc := []byte(`fn main() {
     let value = helper()
 }
-`), 0o644); err != nil {
+`)
+	if err := os.WriteFile(bPath, bSrc, 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -54,6 +56,17 @@ func TestMaterializePublicCompatibilityKeepsNativePackageAstbridgeFree(t *testin
 	}
 	if len(rows) == 0 {
 		t.Fatal("NativeResolutionRows returned no rows for helper reference")
+	}
+	idx, err := NativeIdentKindIndex(pkg, bPath)
+	if err != nil {
+		t.Fatalf("NativeIdentKindIndex: %v", err)
+	}
+	helperOff := bytes.Index(bSrc, []byte("helper"))
+	if helperOff < 0 {
+		t.Fatal("test source missing helper call")
+	}
+	if got := idx[helperOff]; got != "function" {
+		t.Fatalf("NativeIdentKindIndex[%d] = %q, want function (idx=%#v)", helperOff, got, idx)
 	}
 	if got := selfhost.AstbridgeLowerCount(); got != 0 {
 		t.Fatalf("after native package queries: astbridge count = %d, want 0", got)

@@ -2,7 +2,6 @@ package lsp
 
 import (
 	"github.com/osty/osty/internal/lexer"
-	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/token"
 )
 
@@ -97,13 +96,13 @@ func (a *docAnalysis) semanticTokens() []uint32 {
 
 // classifyToken maps one token.Token to its (type, modifiers) pair through
 // the self-hosted LSP policy. For identifiers we consult the prebuilt
-// offset→Symbol index so function call sites color differently from plain
+// offset→kind index so function call sites color differently from plain
 // variable reads; the lookup is O(1) per token.
-func classifyToken(t token.Token, identIndex map[int]*resolve.Symbol) (semToken, bool) {
+func classifyToken(t token.Token, identIndex map[int]string) (semToken, bool) {
 	symbolKind := ""
 	if t.Kind == token.IDENT {
-		if sym, ok := identIndex[t.Pos.Offset]; ok && sym != nil {
-			symbolKind = sym.Kind.String()
+		if kind, ok := identIndex[t.Pos.Offset]; ok {
+			symbolKind = kind
 		}
 	}
 	tokenType, ok := LSPSemanticTypeForTokenKind(t.Kind.String(), symbolKind)

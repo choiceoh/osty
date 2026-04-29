@@ -317,11 +317,23 @@ type docAnalysis struct {
 	// (references, rename, workspaceSymbol) walk these.
 	packages []*resolve.Package
 	// identIndex maps the byte offset of an Ident's name token to
-	// the resolver Symbol it refers to. Built once per analysis so
+	// the resolved symbol kind it refers to. Built once per analysis so
 	// semanticTokens, completion context, and other
-	// offset-keyed lookups don't have to scan `resolve.Refs` in
+	// offset-keyed lookups don't have to scan resolver refs in
 	// O(n) per query.
-	identIndex map[int]*resolve.Symbol
+	identIndex map[int]string
+	// structuredRefs is the selfhost ResolveResult projection used by
+	// definition/references/rename. It carries stable target ids and
+	// source-relative ranges, so those handlers can avoid Go resolver
+	// pointer identity when native facts are available.
+	structuredRefs []structuredReference
+	// structuredSymbols is the declaration-side companion to structuredRefs.
+	// It lets declaration hovers/references/renames use the same selfhost
+	// target ids instead of falling through to Go Symbol pointers.
+	structuredSymbols []structuredSymbol
+	// structuredImports carries selfhost import surfaces by alias for
+	// `pkg.` completion without consulting package scope maps.
+	structuredImports []structuredImportSurface
 	// semanticTokenData memoizes the encoded reply payload for
 	// textDocument/semanticTokens/full. Editors often request this
 	// repeatedly for an unchanged buffer, so caching avoids re-lexing
@@ -331,20 +343,24 @@ type docAnalysis struct {
 	semanticTokenData []uint32
 }
 
-// buildIdentIndex walks the file-level Refs/TypeRefs and inverts them
-// into a byte-offset → Symbol lookup. TypeRef NamedTypes index under
-// their head token's offset so a click on `auth.User` resolves to
-// the right symbol for the head segment.
-func buildIdentIndex(r *resolve.Result) map[int]*resolve.Symbol {
+// buildIdentIndex walks the file-level Refs/TypeRefs and inverts them into a
+// byte-offset → symbol-kind lookup. Engine-backed analysis gets this map from
+// the selfhost structured resolve result; this helper keeps legacy package /
+// workspace fallbacks on the same value surface.
+func buildIdentIndex(r *resolve.Result) map[int]string {
 	if r == nil {
 		return nil
 	}
-	out := make(map[int]*resolve.Symbol, len(r.RefIdents)+len(r.TypeRefIdents))
+	out := make(map[int]string, len(r.RefIdents)+len(r.TypeRefIdents))
 	for _, id := range r.RefIdents {
-		out[id.PosV.Offset] = r.RefsByID[id.ID]
+		if sym := r.RefsByID[id.ID]; sym != nil {
+			out[id.PosV.Offset] = sym.Kind.String()
+		}
 	}
 	for _, nt := range r.TypeRefIdents {
-		out[nt.PosV.Offset] = r.TypeRefsByID[nt.ID]
+		if sym := r.TypeRefsByID[nt.ID]; sym != nil {
+			out[nt.PosV.Offset] = sym.Kind.String()
+		}
 	}
 	return out
 }
@@ -499,6 +515,9 @@ func (s *Server) analyzePackage(pkgDir, path string, src []byte) *docAnalysis {
 	a := analysisForFileInPackage(pkg, pr, chk, lr, path, src)
 	if a != nil {
 		a.packages = []*resolve.Package{pkg}
+		a.structuredRefs = buildStructuredReferences(a.packages)
+		a.structuredSymbols = buildStructuredSymbols(a.packages)
+		a.structuredImports = buildStructuredImports(a.packages)
 	}
 	return a
 }
@@ -588,16 +607,19 @@ func (s *Server) analyzePackageViaEngine(pkgDir, path string, src []byte) *docAn
 	}
 
 	return &docAnalysis{
-		lines:      newLineIndex(src),
-		file:       pr.File,
-		provenance: pr.Provenance,
-		canonical:  pr.CanonicalSource,
-		resolve:    rr,
-		check:      chk,
-		lint:       lr,
-		diags:      all,
-		identIndex: idx,
-		packages:   packages,
+		lines:             newLineIndex(src),
+		file:              pr.File,
+		provenance:        pr.Provenance,
+		canonical:         pr.CanonicalSource,
+		resolve:           rr,
+		check:             chk,
+		lint:              lr,
+		diags:             all,
+		identIndex:        idx,
+		packages:          packages,
+		structuredRefs:    buildStructuredReferences(packages),
+		structuredSymbols: buildStructuredSymbols(packages),
+		structuredImports: buildStructuredImports(packages),
 	}
 }
 
@@ -745,19 +767,22 @@ func (s *Server) analyzeWorkspaceViaEngine(root, path string, src []byte) *docAn
 	pr := rw.ResultByDir(dir)
 	lr := lint.Package(pkg, pr, chk)
 
-	allDiags := collectDiagsForFile(pr, chk, lr, pf)
+	allDiags := collectDiagsForFile(pkg, pr, chk, lr, pf)
 
 	return &docAnalysis{
-		lines:      newLineIndex(src),
-		file:       pf.File,
-		provenance: pf.ParseProvenance,
-		canonical:  pf.CanonicalSource,
-		resolve:    rr,
-		check:      chk,
-		lint:       lr,
-		diags:      allDiags,
-		identIndex: buildIdentIndex(rr),
-		packages:   rw.Packages(),
+		lines:             newLineIndex(src),
+		file:              pf.File,
+		provenance:        pf.ParseProvenance,
+		canonical:         pf.CanonicalSource,
+		resolve:           rr,
+		check:             chk,
+		lint:              lr,
+		diags:             allDiags,
+		identIndex:        identIndexForFile(pkg, path, rr),
+		packages:          rw.Packages(),
+		structuredRefs:    buildStructuredReferences(rw.Packages()),
+		structuredSymbols: buildStructuredSymbols(rw.Packages()),
+		structuredImports: buildStructuredImports(rw.Packages()),
 	}
 }
 
@@ -802,6 +827,9 @@ func (s *Server) analyzeWorkspace(root, path string, src []byte) *docAnalysis {
 				)
 				if a != nil {
 					a.packages = allPkgs
+					a.structuredRefs = buildStructuredReferences(allPkgs)
+					a.structuredSymbols = buildStructuredSymbols(allPkgs)
+					a.structuredImports = buildStructuredImports(allPkgs)
 				}
 				return a
 			}
@@ -898,18 +926,28 @@ func analysisForFileInPackage(
 		TypeRefIdents: pf.TypeRefIdents,
 		FileScope:     pf.FileScope,
 	}
-	all := collectDiagsForFile(pr, chk, lr, pf)
+	all := collectDiagsForFile(pkg, pr, chk, lr, pf)
 	return &docAnalysis{
-		lines:      newLineIndex(src),
-		file:       pf.File,
-		provenance: pf.ParseProvenance,
-		canonical:  pf.CanonicalSource,
-		resolve:    fileRes,
-		check:      chk,
-		lint:       lr,
-		diags:      all,
-		identIndex: buildIdentIndex(fileRes),
+		lines:             newLineIndex(src),
+		file:              pf.File,
+		provenance:        pf.ParseProvenance,
+		canonical:         pf.CanonicalSource,
+		resolve:           fileRes,
+		check:             chk,
+		lint:              lr,
+		diags:             all,
+		identIndex:        identIndexForFile(pkg, path, fileRes),
+		structuredRefs:    buildStructuredReferences([]*resolve.Package{pkg}),
+		structuredSymbols: buildStructuredSymbols([]*resolve.Package{pkg}),
+		structuredImports: buildStructuredImports([]*resolve.Package{pkg}),
 	}
+}
+
+func identIndexForFile(pkg *resolve.Package, path string, fallback *resolve.Result) map[int]string {
+	if idx, err := resolve.NativeIdentKindIndex(pkg, path); err == nil {
+		return idx
+	}
+	return buildIdentIndex(fallback)
 }
 
 // collectDiagsForFile picks out the parser, resolver, checker, and
@@ -919,6 +957,7 @@ func analysisForFileInPackage(
 // different files have disjoint offset ranges because each file was
 // lexed against its own source buffer.
 func collectDiagsForFile(
+	pkg *resolve.Package,
 	pr *resolve.PackageResult,
 	chk *check.Result,
 	lr *lint.Result,
@@ -926,7 +965,13 @@ func collectDiagsForFile(
 ) []*diag.Diagnostic {
 	var out []*diag.Diagnostic
 	out = append(out, pf.ParseDiags...)
-	if pr != nil {
+	if resolveDiags, ok := nativeResolveDiagsForFile(pkg, pf); ok {
+		for _, d := range resolveDiags {
+			if diagBelongsToFile(d, pf) {
+				out = append(out, d)
+			}
+		}
+	} else if pr != nil {
 		for _, d := range pr.Diags {
 			if diagBelongsToFile(d, pf) {
 				out = append(out, d)
@@ -948,6 +993,27 @@ func collectDiagsForFile(
 		}
 	}
 	return out
+}
+
+func nativeResolveDiagsForFile(pkg *resolve.Package, pf *resolve.PackageFile) ([]*diag.Diagnostic, bool) {
+	if pkg == nil || pf == nil {
+		return nil, false
+	}
+	ds, err := resolve.NativeDiagnostics(pkg)
+	if err != nil {
+		return nil, false
+	}
+	out := make([]*diag.Diagnostic, 0, len(ds))
+	for _, d := range ds {
+		if d == nil {
+			continue
+		}
+		if d.File != "" && d.File != pf.Path {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out, true
 }
 
 // diagBelongsToFile returns true when the diagnostic's primary
@@ -998,16 +1064,25 @@ func (s *Server) analyzeSingleFileViaEngine(uri string, src []byte) *docAnalysis
 	lr := s.engine.Queries.LintFile.Get(s.engine.DB, key)
 	idx := s.engine.Queries.IdentIndex.Get(s.engine.DB, key)
 	all := s.engine.Queries.FileDiagnostics.Get(s.engine.DB, key)
+	var packages []*resolve.Package
+	rp := s.engine.Queries.ResolvePackage.Get(s.engine.DB, dir)
+	if rp != nil && rp.Package() != nil {
+		packages = []*resolve.Package{rp.Package()}
+	}
 	return &docAnalysis{
-		lines:      newLineIndex(src),
-		file:       pr.File,
-		provenance: pr.Provenance,
-		canonical:  pr.CanonicalSource,
-		resolve:    rr,
-		check:      chk,
-		lint:       lr,
-		diags:      all,
-		identIndex: idx,
+		lines:             newLineIndex(src),
+		file:              pr.File,
+		provenance:        pr.Provenance,
+		canonical:         pr.CanonicalSource,
+		resolve:           rr,
+		check:             chk,
+		lint:              lr,
+		diags:             all,
+		identIndex:        idx,
+		packages:          packages,
+		structuredRefs:    buildStructuredReferences(packages),
+		structuredSymbols: buildStructuredSymbols(packages),
+		structuredImports: buildStructuredImports(packages),
 	}
 }
 

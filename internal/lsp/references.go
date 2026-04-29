@@ -6,10 +6,10 @@ import (
 	"github.com/osty/osty/internal/resolve"
 )
 
-// handleReferences answers `textDocument/references`. We locate the
-// symbol under the cursor, then walk every loaded package's Refs /
-// TypeRefs to find matching identifiers. Include the declaration
-// itself when the client asked for it (the standard IDE default).
+// handleReferences answers `textDocument/references`. When available, it uses
+// selfhost ResolveResult target ids; otherwise it falls back to the Go
+// compatibility Refs / TypeRefs projection. Include the declaration itself
+// when the client asked for it (the standard IDE default).
 //
 // Scope of the search follows whatever analysis mode the document is
 // in: single-file buffers only scan their own refs, package/workspace
@@ -23,6 +23,24 @@ func (s *Server) handleReferences(req *rpcRequest) {
 	doc := s.docs.get(params.TextDocument.URI)
 	if doc == nil || doc.analysis == nil {
 		replyJSON(s.conn, req.ID, []Location{})
+		return
+	}
+	if ref := structuredReferenceAt(doc, params.Position); ref != nil {
+		if ref.targetSymbolID == "" {
+			replyJSON(s.conn, req.ID, []Location{})
+			return
+		}
+		locs := structuredReferencesForTarget(doc.analysis.structuredRefs, doc.analysis.structuredSymbols, ref.targetSymbolID, params.Context.IncludeDeclaration)
+		replyJSON(s.conn, req.ID, locs)
+		return
+	}
+	if sym := structuredSymbolAt(doc, params.Position); sym != nil {
+		if sym.id == "" {
+			replyJSON(s.conn, req.ID, []Location{})
+			return
+		}
+		locs := structuredReferencesForTarget(doc.analysis.structuredRefs, doc.analysis.structuredSymbols, sym.id, params.Context.IncludeDeclaration)
+		replyJSON(s.conn, req.ID, locs)
 		return
 	}
 	target := s.targetSymbolAt(doc, params.Position)
@@ -53,6 +71,32 @@ func (s *Server) handleRename(req *rpcRequest) {
 	doc := s.docs.get(params.TextDocument.URI)
 	if doc == nil || doc.analysis == nil {
 		replyJSON(s.conn, req.ID, nil)
+		return
+	}
+	if ref := structuredReferenceAt(doc, params.Position); ref != nil {
+		if ref.targetSymbolID == "" {
+			replyJSON(s.conn, req.ID, nil)
+			return
+		}
+		if ref.builtin {
+			_ = s.conn.writeError(req.ID, errInvalidRequest, "cannot rename a builtin")
+			return
+		}
+		edits := structuredRenameEditsFor(doc.analysis.structuredRefs, doc.analysis.structuredSymbols, ref.targetSymbolID, params.NewName)
+		replyJSON(s.conn, req.ID, &WorkspaceEdit{Changes: edits})
+		return
+	}
+	if sym := structuredSymbolAt(doc, params.Position); sym != nil {
+		if sym.id == "" {
+			replyJSON(s.conn, req.ID, nil)
+			return
+		}
+		if sym.builtin {
+			_ = s.conn.writeError(req.ID, errInvalidRequest, "cannot rename a builtin")
+			return
+		}
+		edits := structuredRenameEditsFor(doc.analysis.structuredRefs, doc.analysis.structuredSymbols, sym.id, params.NewName)
+		replyJSON(s.conn, req.ID, &WorkspaceEdit{Changes: edits})
 		return
 	}
 	target := s.targetSymbolAt(doc, params.Position)
@@ -188,6 +232,18 @@ func sortDedupLocations(locs []Location) []Location {
 // per-URI partitions preserve that order without an extra sort pass.
 func (s *Server) renameEditsFor(doc *document, target *resolve.Symbol, newName string) map[string][]TextEdit {
 	locs := s.findReferences(doc, target, true)
+	out := map[string][]TextEdit{}
+	for _, loc := range locs {
+		out[loc.URI] = append(out[loc.URI], TextEdit{
+			Range:   loc.Range,
+			NewText: newName,
+		})
+	}
+	return out
+}
+
+func structuredRenameEditsFor(refs []structuredReference, symbols []structuredSymbol, targetID string, newName string) map[string][]TextEdit {
+	locs := structuredReferencesForTarget(refs, symbols, targetID, true)
 	out := map[string][]TextEdit{}
 	for _, loc := range locs {
 		out[loc.URI] = append(out[loc.URI], TextEdit{
