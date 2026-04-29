@@ -100,7 +100,7 @@ func ResolvePackage(pkg *Package, prelude *Scope) *PackageResult {
 	if !canResolveViaNative(pkg) {
 		return ResolvePackageFromAST(pkg, prelude)
 	}
-	pkg.EnsureFiles()
+	pkg.MaterializePublicCompatibility()
 	pkg.MaterializeCanonicalSources()
 	return resolvePackageViaNative(pkg, prelude)
 }
@@ -113,7 +113,7 @@ func ResolvePackageFromAST(pkg *Package, prelude *Scope) *PackageResult {
 	if pkg == nil {
 		return &PackageResult{}
 	}
-	pkg.EnsureFiles()
+	pkg.MaterializePublicCompatibility()
 	r := newPkgResolver(pkg, prelude)
 	r.declarePass(pkg)
 	r.bodyPass(pkg)

@@ -8,7 +8,6 @@ import (
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/sourcemap"
 	"github.com/osty/osty/internal/token"
@@ -45,7 +44,7 @@ var indentCache = strings.Repeat(Indent, cacheLevels)
 // best-effort AST when possible. Callers that want "format only clean
 // files" should inspect the returned diagnostics themselves.
 func Source(src []byte) ([]byte, []*diag.Diagnostic, error) {
-	_, diags := parser.ParseDiagnostics(src)
+	diags := selfhost.ParseDiagnostics(src)
 	for _, d := range diags {
 		if d.Severity == diag.Error {
 			return nil, diags, fmt.Errorf("cannot format file with parse errors")

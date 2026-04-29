@@ -8,6 +8,7 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
@@ -167,6 +168,32 @@ func firstOpt(opts []Opts) Opts {
 		return Opts{}
 	}
 	return opts[0]
+}
+
+// SelfhostRun checks an existing selfhost FrontendRun without requiring a
+// public *ast.File or resolver Result. It returns the authoritative structured
+// checker result and diagnostics, but intentionally leaves the legacy
+// AST-keyed maps empty because there is no public AST to overlay onto.
+//
+// Use this for new front-end consumers that can stay on stable selfhost node
+// IDs. Keep SelfhostFile for compatibility paths that still need Types /
+// LetTypes / SymTypes keyed by Go AST and resolver symbols.
+func SelfhostRun(run *selfhost.FrontendRun, opts ...Opts) *Result {
+	opt := firstOpt(opts)
+	result := newResult()
+	if run == nil {
+		return result
+	}
+	src := append([]byte(nil), opt.Source...)
+	result.inspectSource = append(result.inspectSource[:0], src...)
+	result.Diags = append(result.Diags, run.Diagnostics()...)
+	checked := selfhost.CheckStructuredFromRun(run)
+	policy := nativeDiagPolicy{privileged: opt.Privileged}
+	result.Diags = append(result.Diags, nativeCheckerDiags(src, checked, policy)...)
+	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked, policy)
+	result.NativeCheckResult = cloneNativeCheckResult(checked)
+	diag.StampFile(result.Diags, opt.Path)
+	return result
 }
 
 // SelfhostFile runs type checking for one resolved source file through

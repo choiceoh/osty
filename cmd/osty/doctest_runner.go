@@ -73,7 +73,8 @@ func appendDoctestCases(pkg *resolve.Package, filters []string) ([]nativeTestCas
 
 	runnerPath := filepath.Join(pkg.Dir, doctestRunnerFilename)
 	source := doctest.BuildRunnerSource(collected)
-	file, diags := parser.ParseDiagnostics(source)
+	parsed := parser.ParseDetailed(source)
+	file, diags := parsed.File, parsed.Diagnostics
 	if file == nil {
 		return nil, fmt.Errorf("parse doctest runner: %v", diags)
 	}
@@ -89,6 +90,7 @@ func appendDoctestCases(pkg *resolve.Package, filters []string) ([]nativeTestCas
 		CanonicalSource: canonicalSrc,
 		CanonicalMap:    canonicalMap,
 		File:            file,
+		Run:             parsed.Run,
 		ParseDiags:      diags,
 	})
 

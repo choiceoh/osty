@@ -13,20 +13,22 @@ import (
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/query"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/sourcemap"
 )
 
 // ---- Value types ----
 
-// ParseResult is the output of the [Parse] query — the AST plus any
-// lexer/parser diagnostics. The Source field holds the bytes the
-// parser consumed, enabling diagnostic rendering without re-reading
-// the file.
+// ParseResult is the output of the [Parse] query — the retained FrontendRun,
+// public-AST compatibility output, and any lexer/parser diagnostics. The
+// Source field holds the bytes the parser consumed, enabling diagnostic
+// rendering without re-reading the file.
 type ParseResult struct {
 	Source          []byte
 	CanonicalSource []byte
 	CanonicalMap    *sourcemap.Map
 	File            *ast.File
+	Run             *selfhost.FrontendRun
 	Diags           []*diag.Diagnostic
 	Provenance      *parser.Provenance
 }
@@ -205,7 +207,8 @@ func (wcr *WorkspaceCheckResult) Len() int {
 // Queries groups the derived query handles. Constructed once by
 // [NewEngine] and reused for the Database's lifetime.
 type Queries struct {
-	// Parse: (path) -> parsed AST + diagnostics.
+	// Parse: (path) -> retained FrontendRun + public AST compatibility output
+	// + diagnostics.
 	// Depends on: SourceText(path).
 	Parse *query.Query[string, ParseResult]
 
@@ -260,8 +263,10 @@ type Queries struct {
 	// Depends on: ResolveWorkspace(rootDir).
 	CheckWorkspace *query.Query[string, *WorkspaceCheckResult]
 
-	// LintFile: (path) -> lint diagnostics for one file.
-	// Depends on: Parse(path), ResolveFile(path), CheckFile(path).
+	// LintFile: (path) -> lint diagnostics for one file. The self-hosted
+	// lint pass owns parsing internally, so this query stays source-only and
+	// does not force public AST materialization through Parse.
+	// Depends on: SourceText(path).
 	LintFile *query.Query[string, *lint.Result]
 
 	// IdentIndex: (path) -> offset → resolver Symbol. Used by LSP
@@ -291,6 +296,7 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 				CanonicalSource: canonicalSrc,
 				CanonicalMap:    canonicalMap,
 				File:            parsed.File,
+				Run:             parsed.Run,
 				Diags:           parsed.Diagnostics,
 				Provenance:      parsed.Provenance,
 			}
@@ -313,10 +319,10 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 	)
 
 	// BuildPackage has no hashFn: its output carries fresh
-	// *resolve.Package + *ast.File pointers every run and cannot be
-	// content-compared cheaply. Downstream ResolvePackage supplies
-	// the real cutoff via its semantic output hash, so BuildPackage
-	// just bumps computedAt on every rerun.
+	// *resolve.Package + FrontendRun / *ast.File pointers every run and
+	// cannot be content-compared cheaply. Downstream ResolvePackage supplies
+	// the real cutoff via its semantic output hash, so BuildPackage just bumps
+	// computedAt on every rerun.
 	qs.BuildPackage = query.Register(db, "BuildPackage",
 		func(ctx *query.Ctx, dir string) *resolve.Package {
 			files := inp.PackageFiles.Fetch(ctx, dir)
@@ -333,6 +339,7 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 					CanonicalSource: pr.CanonicalSource,
 					CanonicalMap:    pr.CanonicalMap,
 					File:            pr.File,
+					Run:             pr.Run,
 					ParseDiags:      pr.Diags,
 					ParseProvenance: pr.Provenance,
 				})
@@ -348,7 +355,8 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 			// Allocate a brand-new Package with copied PackageFile
 			// entries so resolve.ResolvePackage's in-place mutation
 			// doesn't corrupt the BuildPackage cache. We reuse the
-			// already-parsed *ast.File pointers — they are read-only.
+			// already-parsed FrontendRun / *ast.File pointers — they
+			// are read-only.
 			pkg := &resolve.Package{
 				Dir:   built.Dir,
 				Name:  built.Name,
@@ -361,6 +369,7 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 					CanonicalSource: pf.CanonicalSource,
 					CanonicalMap:    pf.CanonicalMap,
 					File:            pf.File,
+					Run:             pf.Run,
 					ParseDiags:      pf.ParseDiags,
 					ParseProvenance: pf.ParseProvenance,
 				}
@@ -510,13 +519,8 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 
 	qs.LintFile = query.Register(db, "LintFile",
 		func(ctx *query.Ctx, path string) *lint.Result {
-			pr := qs.Parse.Fetch(ctx, path)
-			if pr.File == nil {
-				return &lint.Result{}
-			}
-			rr := qs.ResolveFile.Fetch(ctx, path)
-			chk := qs.CheckFile.Fetch(ctx, path)
-			return lint.File(pr.File, pr.Source, rr, chk)
+			src := inp.SourceText.Fetch(ctx, path)
+			return lint.Source(src)
 		},
 		hashLintResult,
 	)
@@ -661,10 +665,10 @@ func dirFromDotPath(root, dotPath string) string {
 
 // copyPackageForWorkspace creates a deep copy of a resolve.Package
 // suitable for passing to resolve.Workspace.ResolveAll. The original
-// package's *ast.File pointers are reused (they are read-only), but
-// the PackageFile slice and the Package struct itself are fresh so
-// ResolveAll's in-place mutation (setting PkgScope, RefsByID, etc.)
-// does not corrupt the BuildPackage cache.
+// package's FrontendRun / *ast.File pointers are reused (they are read-only),
+// but the PackageFile slice and the Package struct itself are fresh so
+// ResolveAll's in-place mutation (setting PkgScope, RefsByID, etc.) does not
+// corrupt the BuildPackage cache.
 func copyPackageForWorkspace(src *resolve.Package) *resolve.Package {
 	if src == nil {
 		return nil
@@ -684,6 +688,7 @@ func copyPackageForWorkspace(src *resolve.Package) *resolve.Package {
 			CanonicalSource: pf.CanonicalSource,
 			CanonicalMap:    pf.CanonicalMap,
 			File:            pf.File,
+			Run:             pf.Run,
 			ParseDiags:      pf.ParseDiags,
 			ParseProvenance: pf.ParseProvenance,
 		}
