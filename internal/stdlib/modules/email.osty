@@ -1,0 +1,461 @@
+// std.email - RFC-style address, MIME message, and SMTP data helpers.
+
+use std.bytes
+use std.encoding
+use std.error
+use std.strings
+
+pub struct Address {
+    pub name: String,
+    pub email: String,
+}
+
+pub struct Attachment {
+    pub filename: String,
+    pub contentType: String,
+    pub data: Bytes,
+}
+
+pub struct Message {
+    pub from: Address,
+    pub to: List<Address>,
+    pub cc: List<Address>,
+    pub bcc: List<Address>,
+    pub subject: String,
+    pub text: String,
+    pub html: String,
+    pub headers: Map<String, String>,
+    pub attachments: List<Attachment>,
+}
+
+pub struct Envelope {
+    pub from: String,
+    pub recipients: List<String>,
+    pub data: String,
+}
+
+pub fn address(email: String) -> Result<Address, Error> {
+    namedAddress("", email)
+}
+
+pub fn namedAddress(name: String, email: String) -> Result<Address, Error> {
+    let clean = strings.trimSpace(email)
+    if !isEmail(clean) {
+        return Err(error.new("email: invalid address: {email}"))
+    }
+    Ok(Address {
+        name: sanitizeHeader(name),
+        email: clean,
+    })
+}
+
+pub fn parseAddress(raw: String) -> Result<Address, Error> {
+    let text = strings.trimSpace(raw)
+    match strings.indexOf(text, "<") {
+        Some(open) -> {
+            match strings.indexOf(text, ">") {
+                Some(close) -> {
+                    if close <= open {
+                        return Err(error.new("email: invalid address: {raw}"))
+                    }
+                    let name = strings.trimSpace(strings.slice(text, 0, open))
+                    let email = strings.trimSpace(strings.slice(text, open + 1, close))
+                    namedAddress(unquoteDisplayName(name), email)
+                },
+                None -> Err(error.new("email: invalid address: {raw}")),
+            }
+        },
+        None -> address(text),
+    }
+}
+
+pub fn formatAddress(addr: Address) -> String {
+    if addr.name.isEmpty() {
+        return addr.email
+    }
+    "{quoteDisplayName(addr.name)} <{addr.email}>"
+}
+
+pub fn attachment(filename: String, contentType: String, data: Bytes) -> Result<Attachment, Error> {
+    let cleanName = sanitizeHeader(filename)
+    if cleanName.isEmpty() {
+        return Err(error.new("email: attachment filename is empty"))
+    }
+    Ok(Attachment {
+        filename: cleanName,
+        contentType: sanitizeContentType(contentType),
+        data: data,
+    })
+}
+
+pub fn message(from: Address, to: List<Address>, subject: String, text: String) -> Message {
+    Message {
+        from: from,
+        to: to,
+        cc: [],
+        bcc: [],
+        subject: sanitizeHeader(subject),
+        text: text,
+        html: "",
+        headers: {:},
+        attachments: [],
+    }
+}
+
+pub fn withCc(msg: Message, addr: Address) -> Message {
+    let mut cc = msg.cc
+    cc.push(addr)
+    Message {
+        from: msg.from,
+        to: msg.to,
+        cc: cc,
+        bcc: msg.bcc,
+        subject: msg.subject,
+        text: msg.text,
+        html: msg.html,
+        headers: msg.headers,
+        attachments: msg.attachments,
+    }
+}
+
+pub fn withBcc(msg: Message, addr: Address) -> Message {
+    let mut bcc = msg.bcc
+    bcc.push(addr)
+    Message {
+        from: msg.from,
+        to: msg.to,
+        cc: msg.cc,
+        bcc: bcc,
+        subject: msg.subject,
+        text: msg.text,
+        html: msg.html,
+        headers: msg.headers,
+        attachments: msg.attachments,
+    }
+}
+
+pub fn withHtml(msg: Message, html: String) -> Message {
+    Message {
+        from: msg.from,
+        to: msg.to,
+        cc: msg.cc,
+        bcc: msg.bcc,
+        subject: msg.subject,
+        text: msg.text,
+        html: html,
+        headers: msg.headers,
+        attachments: msg.attachments,
+    }
+}
+
+pub fn withHeader(msg: Message, name: String, value: String) -> Result<Message, Error> {
+    if !isHeaderName(name) {
+        return Err(error.new("email: invalid header name: {name}"))
+    }
+    let mut headers = msg.headers
+    headers.insert(name, sanitizeHeader(value))
+    Ok(Message {
+        from: msg.from,
+        to: msg.to,
+        cc: msg.cc,
+        bcc: msg.bcc,
+        subject: msg.subject,
+        text: msg.text,
+        html: msg.html,
+        headers: headers,
+        attachments: msg.attachments,
+    })
+}
+
+pub fn withAttachment(msg: Message, part: Attachment) -> Message {
+    let mut attachments = msg.attachments
+    attachments.push(part)
+    Message {
+        from: msg.from,
+        to: msg.to,
+        cc: msg.cc,
+        bcc: msg.bcc,
+        subject: msg.subject,
+        text: msg.text,
+        html: msg.html,
+        headers: msg.headers,
+        attachments: attachments,
+    }
+}
+
+pub fn recipients(msg: Message) -> List<String> {
+    let mut out: List<String> = []
+    for addr in msg.to {
+        out.push(addr.email)
+    }
+    for addr in msg.cc {
+        out.push(addr.email)
+    }
+    for addr in msg.bcc {
+        out.push(addr.email)
+    }
+    out
+}
+
+pub fn render(msg: Message) -> Result<String, Error> {
+    if msg.to.isEmpty() && msg.cc.isEmpty() && msg.bcc.isEmpty() {
+        return Err(error.new("email: message has no recipients"))
+    }
+    let mut out = renderHeaders(msg)?
+    let mixedBoundary = boundary("mixed", msg.subject)
+    let altBoundary = boundary("alt", msg.subject)
+
+    if !msg.attachments.isEmpty() {
+        out = "{out}Content-Type: multipart/mixed; boundary=\"{mixedBoundary}\"{crlf()}{crlf()}"
+        out = "{out}--{mixedBoundary}{crlf()}"
+        if msg.html.isEmpty() {
+            out = "{out}{renderTextPart(msg.text)}"
+        } else {
+            out = "{out}Content-Type: multipart/alternative; boundary=\"{altBoundary}\"{crlf()}{crlf()}"
+            out = "{out}{renderAlternative(msg.text, msg.html, altBoundary)}"
+        }
+        for part in msg.attachments {
+            out = "{out}--{mixedBoundary}{crlf()}{renderAttachment(part)}"
+        }
+        return Ok("{out}--{mixedBoundary}--{crlf()}")
+    }
+
+    if !msg.html.isEmpty() {
+        out = "{out}Content-Type: multipart/alternative; boundary=\"{altBoundary}\"{crlf()}{crlf()}"
+        return Ok("{out}{renderAlternative(msg.text, msg.html, altBoundary)}")
+    }
+
+    Ok("{out}{renderTextPart(msg.text)}")
+}
+
+pub fn envelope(msg: Message) -> Result<Envelope, Error> {
+    Ok(Envelope {
+        from: msg.from.email,
+        recipients: recipients(msg),
+        data: smtpData(msg)?,
+    })
+}
+
+pub fn smtpData(msg: Message) -> Result<String, Error> {
+    let rendered = render(msg)?
+    Ok("{dotStuff(rendered)}{crlf()}.{crlf()}")
+}
+
+pub fn smtpCommands(hostname: String, env: Envelope) -> List<String> {
+    let mut out: List<String> = []
+    out.push("EHLO {sanitizeHeader(hostname)}")
+    out.push("MAIL FROM:<{env.from}>")
+    for rcpt in env.recipients {
+        out.push("RCPT TO:<{rcpt}>")
+    }
+    out.push("DATA")
+    out.push(env.data)
+    out.push("QUIT")
+    out
+}
+
+pub fn isEmail(email: String) -> Bool {
+    let text = strings.trimSpace(email)
+    match strings.indexOf(text, "@") {
+        Some(at) -> {
+            if at <= 0 || at >= text.len() - 1 {
+                return false
+            }
+            let local = strings.slice(text, 0, at)
+            let domain = strings.slice(text, at + 1, text.len())
+            !hasSpace(local) && isDomain(domain)
+        },
+        None -> false,
+    }
+}
+
+fn renderHeaders(msg: Message) -> Result<String, Error> {
+    let mut out = ""
+    out = "{out}From: {formatAddress(msg.from)}{crlf()}"
+    if !msg.to.isEmpty() {
+        out = "{out}To: {formatAddressList(msg.to)}{crlf()}"
+    }
+    if !msg.cc.isEmpty() {
+        out = "{out}Cc: {formatAddressList(msg.cc)}{crlf()}"
+    }
+    out = "{out}Subject: {sanitizeHeader(msg.subject)}{crlf()}"
+    out = "{out}MIME-Version: 1.0{crlf()}"
+    let keys = msg.headers.keys().sorted()
+    for key in keys {
+        if !isHeaderName(key) {
+            return Err(error.new("email: invalid header name: {key}"))
+        }
+        out = "{out}{key}: {sanitizeHeader(msg.headers.get(key).unwrap())}{crlf()}"
+    }
+    Ok(out)
+}
+
+fn renderTextPart(text: String) -> String {
+    "Content-Type: text/plain; charset=utf-8{crlf()}Content-Transfer-Encoding: 8bit{crlf()}{crlf()}{normalizeBody(text)}{crlf()}"
+}
+
+fn renderHtmlPart(html: String) -> String {
+    "Content-Type: text/html; charset=utf-8{crlf()}Content-Transfer-Encoding: 8bit{crlf()}{crlf()}{normalizeBody(html)}{crlf()}"
+}
+
+fn renderAlternative(text: String, html: String, boundary: String) -> String {
+    let mut out = ""
+    out = "{out}--{boundary}{crlf()}{renderTextPart(text)}"
+    out = "{out}--{boundary}{crlf()}{renderHtmlPart(html)}"
+    "{out}--{boundary}--{crlf()}"
+}
+
+fn renderAttachment(part: Attachment) -> String {
+    let encoded = wrapBase64(encoding.base64.encode(part.data))
+    "Content-Type: {part.contentType}; name=\"{part.filename}\"{crlf()}Content-Disposition: attachment; filename=\"{part.filename}\"{crlf()}Content-Transfer-Encoding: base64{crlf()}{crlf()}{encoded}{crlf()}"
+}
+
+fn formatAddressList(addrs: List<Address>) -> String {
+    let mut parts: List<String> = []
+    for addr in addrs {
+        parts.push(formatAddress(addr))
+    }
+    strings.join(parts, ", ")
+}
+
+fn quoteDisplayName(name: String) -> String {
+    let clean = sanitizeHeader(name)
+    let quote = '"'
+    if clean.isEmpty() {
+        return ""
+    }
+    if displayNameNeedsQuotes(clean) {
+        return "{quote}{strings.replaceAll(clean, \"\\\"\", \"\\\\\\\"\")}{quote}"
+    }
+    clean
+}
+
+fn unquoteDisplayName(name: String) -> String {
+    let text = strings.trimSpace(name)
+    if text.len() >= 2 && text[0] == '"' && text[text.len() - 1] == '"' {
+        return strings.slice(text, 1, text.len() - 1)
+    }
+    text
+}
+
+fn sanitizeHeader(value: String) -> String {
+    strings.replaceAll(strings.replaceAll(value, "\r", " "), "\n", " ")
+}
+
+fn sanitizeContentType(value: String) -> String {
+    let clean = sanitizeHeader(strings.trimSpace(value))
+    if clean.isEmpty() {
+        return "application/octet-stream"
+    }
+    clean
+}
+
+fn normalizeBody(value: String) -> String {
+    strings.replaceAll(strings.replaceAll(value, "\r\n", "\n"), "\n", crlf())
+}
+
+fn dotStuff(value: String) -> String {
+    let normalized = normalizeBody(value)
+    let lines = strings.split(normalized, crlf())
+    let mut out: List<String> = []
+    for line in lines {
+        if strings.startsWith(line, ".") {
+            out.push(".{line}")
+        } else {
+            out.push(line)
+        }
+    }
+    strings.join(out, crlf())
+}
+
+fn wrapBase64(value: String) -> String {
+    let mut lines: List<String> = []
+    let mut i = 0
+    for i < value.len() {
+        let end = minInt(i + 76, value.len())
+        lines.push(strings.slice(value, i, end))
+        i = end
+    }
+    strings.join(lines, crlf())
+}
+
+fn boundary(prefix: String, seed: String) -> String {
+    "osty-{prefix}-{seed.len()}-{sanitizeBoundarySeed(seed)}"
+}
+
+fn sanitizeBoundarySeed(seed: String) -> String {
+    let mut out = ""
+    for c in seed.chars() {
+        if isBoundaryChar(c) {
+            out = "{out}{c}"
+        }
+    }
+    if out.isEmpty() {
+        return "message"
+    }
+    strings.slice(out, 0, minInt(out.len(), 24))
+}
+
+fn isHeaderName(name: String) -> Bool {
+    if name.isEmpty() {
+        return false
+    }
+    for c in name.chars() {
+        if !isHeaderNameChar(c) {
+            return false
+        }
+    }
+    true
+}
+
+fn isDomain(domain: String) -> Bool {
+    if domain.isEmpty() || !strings.contains(domain, ".") {
+        return false
+    }
+    for c in domain.chars() {
+        if !(isAlphaNum(c) || c == '-' || c == '.') {
+            return false
+        }
+    }
+    true
+}
+
+fn hasSpace(text: String) -> Bool {
+    for c in text.chars() {
+        if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+            return true
+        }
+    }
+    false
+}
+
+fn displayNameNeedsQuotes(text: String) -> Bool {
+    for c in text.chars() {
+        if c == ',' || c == ';' || c == '<' || c == '>' || c == '@' || c == '"' {
+            return true
+        }
+    }
+    false
+}
+
+fn isHeaderNameChar(c: Char) -> Bool {
+    isAlphaNum(c) || c == '-'
+}
+
+fn isBoundaryChar(c: Char) -> Bool {
+    isAlphaNum(c) || c == '-' || c == '_'
+}
+
+fn isAlphaNum(c: Char) -> Bool {
+    (c >= 'A' && c <= 'Z') ||
+    (c >= 'a' && c <= 'z') ||
+    (c >= '0' && c <= '9')
+}
+
+fn minInt(a: Int, b: Int) -> Int {
+    if a < b { a } else { b }
+}
+
+fn crlf() -> String {
+    "\r\n"
+}
