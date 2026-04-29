@@ -10,6 +10,7 @@ import (
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/selfhost/api"
+	"github.com/osty/osty/internal/semanticdb"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
 )
@@ -55,6 +56,11 @@ type Result struct {
 	// stable selfhost-node-id structured surface over span-rematching through
 	// the Go AST.
 	NativeCheckResult *api.CheckResult
+
+	// SemanticDB joins the authoritative resolve and check structured facts
+	// when both phases ran through the selfhost frontend. This is the migration
+	// surface for consumers that want to leave AST-keyed maps behind.
+	SemanticDB *semanticdb.DB
 
 	// inspectSource is the single-file source used to preserve the legacy
 	// Inspect(file, result) helper without reintroducing Go-side inference
@@ -116,6 +122,15 @@ func (r *Result) NativeIndex() api.CheckResultIndex {
 		return (*api.CheckResult)(nil).Index()
 	}
 	return r.NativeCheckResult.Index()
+}
+
+// Semantic returns the central selfhost semantic database, if the current
+// checking path had enough structured frontend data to assemble one.
+func (r *Result) Semantic() *semanticdb.DB {
+	if r == nil {
+		return nil
+	}
+	return r.SemanticDB
 }
 
 // Opts bundles optional inputs to File / Package / Workspace.
@@ -192,6 +207,7 @@ func SelfhostRun(run *selfhost.FrontendRun, opts ...Opts) *Result {
 	result.Diags = append(result.Diags, nativeCheckerDiags(src, checked, policy)...)
 	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked, policy)
 	result.NativeCheckResult = cloneNativeCheckResult(checked)
+	result.SemanticDB = semanticdb.FromCheck(checked)
 	diag.StampFile(result.Diags, opt.Path)
 	return result
 }

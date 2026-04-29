@@ -346,6 +346,33 @@ func TestResolveDiagnosticsUseNativeStructuredResult(t *testing.T) {
 	}
 }
 
+func TestSemanticDBAccessorsExposeResolveAndCheckFacts(t *testing.T) {
+	eng := NewEngine()
+	defer eng.Close()
+
+	dir := NormalizePath("/tmp/pkg_semanticdb")
+	path := seedFile(eng, dir, "main.osty", "fn id<T>(x: T) -> T { x }\nfn main() { let value = id::<Int>(1) }\n")
+
+	rp := eng.Queries.ResolvePackage.Get(eng.DB, dir)
+	if rp == nil || rp.SemanticDB() == nil {
+		t.Fatalf("ResolvePackage SemanticDB = %#v, want non-nil", rp)
+	}
+	if rp.SemanticDB().FileForPath(path) == nil {
+		t.Fatalf("SemanticDB missing file %q", path)
+	}
+
+	chk := eng.Queries.CheckFile.Get(eng.DB, path)
+	if chk == nil || chk.Semantic() == nil {
+		t.Fatalf("CheckFile SemanticDB = %#v, want non-nil", chk)
+	}
+	if chk.Semantic().Check == nil {
+		t.Fatal("combined SemanticDB missing checker facts")
+	}
+	if len(chk.Semantic().CheckIndex().InstantiationsByStableID) == 0 {
+		t.Fatalf("combined SemanticDB instantiations = %#v, want generic call facts", chk.Semantic().Check.Instantiations)
+	}
+}
+
 func TestNormalizePathIdempotent(t *testing.T) {
 	samples := []string{
 		"/abs/path/main.osty",

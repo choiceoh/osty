@@ -14,6 +14,7 @@ import (
 	"github.com/osty/osty/internal/query"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/semanticdb"
 	"github.com/osty/osty/internal/sourcemap"
 	"github.com/osty/osty/internal/spanid"
 )
@@ -59,6 +60,14 @@ func (rp *ResolvedPackage) Package() *resolve.Package { return rp.pkg }
 // PackageResult returns the resolver's summary output (package scope
 // and diagnostics). Read-only.
 func (rp *ResolvedPackage) PackageResult() *resolve.PackageResult { return rp.res }
+
+// SemanticDB returns the package's authoritative selfhost semantic database.
+func (rp *ResolvedPackage) SemanticDB() *semanticdb.DB {
+	if rp == nil || rp.res == nil {
+		return nil
+	}
+	return rp.res.SemanticDB
+}
 
 // FileResult produces a per-file resolve.Result slice for the given
 // path. Returns nil if the path does not belong to this package.
@@ -142,6 +151,18 @@ func (rw *ResolvedWorkspace) ResolvedByDir(dir string) *ResolvedPackage {
 	return rw.resolved[dir]
 }
 
+// SemanticDBByDir returns the resolve-phase semantic database for dir.
+func (rw *ResolvedWorkspace) SemanticDBByDir(dir string) *semanticdb.DB {
+	if rw == nil {
+		return nil
+	}
+	pr := rw.results[dir]
+	if pr == nil {
+		return nil
+	}
+	return pr.SemanticDB
+}
+
 // DirForPath returns the normalized directory of the package that
 // contains the given file path, or "" if the file is not in any
 // workspace package.
@@ -203,6 +224,15 @@ func (wcr *WorkspaceCheckResult) ResultByDir(dir string) *check.Result {
 		return nil
 	}
 	return wcr.byDir[dir]
+}
+
+// SemanticDBByDir returns the combined resolve/check semantic database for dir.
+func (wcr *WorkspaceCheckResult) SemanticDBByDir(dir string) *semanticdb.DB {
+	result := wcr.ResultByDir(dir)
+	if result == nil {
+		return nil
+	}
+	return result.Semantic()
 }
 
 // Len returns the number of packages with check results.

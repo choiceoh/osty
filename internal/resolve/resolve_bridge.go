@@ -21,6 +21,7 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 			},
 		}
 	}
+	semanticDB := pkg.nativeResolve.db
 
 	pkgScope := NewScope(prelude, "package:"+pkg.Name)
 	diags := nativeParseDiagnostics(pkg)
@@ -63,7 +64,7 @@ func resolvePackageViaNative(pkg *Package, prelude *Scope) *PackageResult {
 	pkg.PkgScope = pkgScope
 
 	diags = append(diags, nativeResolveDiagnosticsFromArtifacts(result, files)...)
-	return &PackageResult{PackageScope: pkgScope, Diags: diags}
+	return &PackageResult{PackageScope: pkgScope, SemanticDB: semanticDB, Diags: diags}
 }
 
 func nativeParseDiagnostics(pkg *Package) []*diag.Diagnostic {

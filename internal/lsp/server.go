@@ -21,6 +21,7 @@ import (
 	ostyquery "github.com/osty/osty/internal/query/osty"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/semanticdb"
 	"github.com/osty/osty/internal/stdlib"
 )
 
@@ -299,12 +300,14 @@ type document struct {
 // is fast enough that incremental reuse isn't worth the complexity
 // at this stage.
 type docAnalysis struct {
+	sourcePath string
 	lines      *lineIndex
 	file       *ast.File
 	provenance *parser.Provenance
 	canonical  []byte
 	resolve    *resolve.Result
 	check      *check.Result
+	semantic   *semanticdb.DB
 	// lint is the lint pass output (may be nil if the pipeline
 	// skipped linting, e.g. a future mode flag). Downstream handlers
 	// use it for the source.organizeImports / source.fixAll actions
@@ -607,14 +610,20 @@ func (s *Server) analyzePackageViaEngine(pkgDir, path string, src []byte) *docAn
 	if rp != nil && rp.Package() != nil {
 		packages = []*resolve.Package{rp.Package()}
 	}
+	var prResult *resolve.PackageResult
+	if rp != nil {
+		prResult = rp.PackageResult()
+	}
 
 	return &docAnalysis{
+		sourcePath:        key,
 		lines:             newLineIndex(src),
 		file:              pr.File,
 		provenance:        pr.Provenance,
 		canonical:         pr.CanonicalSource,
 		resolve:           rr,
 		check:             chk,
+		semantic:          semanticDBForAnalysis(chk, prResult),
 		lint:              lr,
 		diags:             all,
 		identIndex:        idx,
@@ -772,12 +781,14 @@ func (s *Server) analyzeWorkspaceViaEngine(root, path string, src []byte) *docAn
 	allDiags := collectDiagsForFile(pkg, pr, chk, lr, pf)
 
 	return &docAnalysis{
+		sourcePath:        key,
 		lines:             newLineIndex(src),
 		file:              pf.File,
 		provenance:        pf.ParseProvenance,
 		canonical:         pf.CanonicalSource,
 		resolve:           rr,
 		check:             chk,
+		semantic:          semanticDBForAnalysis(chk, pr),
 		lint:              lr,
 		diags:             allDiags,
 		identIndex:        identIndexForFile(pkg, path, rr),
@@ -936,12 +947,14 @@ func analysisForFileInPackage(
 	}
 	all := collectDiagsForFile(pkg, pr, chk, lr, pf)
 	return &docAnalysis{
+		sourcePath:        path,
 		lines:             newLineIndex(src),
 		file:              pf.File,
 		provenance:        pf.ParseProvenance,
 		canonical:         pf.CanonicalSource,
 		resolve:           fileRes,
 		check:             chk,
+		semantic:          semanticDBForAnalysis(chk, pr),
 		lint:              lr,
 		diags:             all,
 		identIndex:        identIndexForFile(pkg, path, fileRes),
@@ -1078,13 +1091,19 @@ func (s *Server) analyzeSingleFileViaEngine(uri string, src []byte) *docAnalysis
 	if rp != nil && rp.Package() != nil {
 		packages = []*resolve.Package{rp.Package()}
 	}
+	var prResult *resolve.PackageResult
+	if rp != nil {
+		prResult = rp.PackageResult()
+	}
 	return &docAnalysis{
+		sourcePath:        key,
 		lines:             newLineIndex(src),
 		file:              pr.File,
 		provenance:        pr.Provenance,
 		canonical:         pr.CanonicalSource,
 		resolve:           rr,
 		check:             chk,
+		semantic:          semanticDBForAnalysis(chk, prResult),
 		lint:              lr,
 		diags:             all,
 		identIndex:        idx,
@@ -1093,6 +1112,16 @@ func (s *Server) analyzeSingleFileViaEngine(uri string, src []byte) *docAnalysis
 		structuredSymbols: buildStructuredSymbols(packages),
 		structuredImports: buildStructuredImports(packages),
 	}
+}
+
+func semanticDBForAnalysis(chk *check.Result, pr *resolve.PackageResult) *semanticdb.DB {
+	if chk != nil && chk.Semantic() != nil {
+		return chk.Semantic()
+	}
+	if pr != nil {
+		return pr.SemanticDB
+	}
+	return nil
 }
 
 // engineKeyForURI converts an LSP URI to the engine's canonical key.

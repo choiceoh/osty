@@ -21,6 +21,7 @@ import (
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/selfhost/api"
+	"github.com/osty/osty/internal/semanticdb"
 	"github.com/osty/osty/internal/sourcemap"
 	"github.com/osty/osty/internal/spanid"
 	"github.com/osty/osty/internal/token"
@@ -420,6 +421,7 @@ func applySelfhostFileResult(result *Result, file *ast.File, rr *resolve.Result,
 	result.Diags = append(result.Diags, nativeCheckerDiagsForCheckedSource(checkedSrc, checked, policy)...)
 	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked, policy)
 	result.NativeCheckResult = cloneNativeCheckResult(checked)
+	result.SemanticDB = semanticdb.FromCheck(checked)
 	overlaySelfhostResult(result, checkedSrc, checked)
 }
 
@@ -427,7 +429,7 @@ func applyNativePackageResult(result *Result, pkg *resolve.Package, pr *resolve.
 	applySelfhostPackageResult(result, pkg, pr, ws, stdlib, privileged)
 }
 
-func applySelfhostPackageResult(result *Result, pkg *resolve.Package, _ *resolve.PackageResult, ws *resolve.Workspace, stdlib resolve.StdlibProvider, privileged bool) {
+func applySelfhostPackageResult(result *Result, pkg *resolve.Package, pr *resolve.PackageResult, ws *resolve.Workspace, stdlib resolve.StdlibProvider, privileged bool) {
 	if result == nil || pkg == nil {
 		return
 	}
@@ -474,6 +476,7 @@ func applySelfhostPackageResult(result *Result, pkg *resolve.Package, _ *resolve
 	result.Diags = append(result.Diags, nativeCheckerDiagsForCheckedSource(src, checked, policy)...)
 	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked, policy)
 	result.NativeCheckResult = cloneNativeCheckResult(checked)
+	attachSemanticDB(result, pr, checked)
 	overlaySelfhostResult(result, src, checked)
 }
 
@@ -481,7 +484,7 @@ func applyNativeWorkspaceResults(ws *resolve.Workspace, resolved map[string]*res
 	applySelfhostWorkspaceResults(ws, resolved, results, stdlib)
 }
 
-func applySelfhostWorkspaceResults(ws *resolve.Workspace, _ map[string]*resolve.PackageResult, results map[string]*Result, stdlib resolve.StdlibProvider) {
+func applySelfhostWorkspaceResults(ws *resolve.Workspace, resolved map[string]*resolve.PackageResult, results map[string]*Result, stdlib resolve.StdlibProvider) {
 	if ws == nil {
 		return
 	}
@@ -503,6 +506,7 @@ func applySelfhostWorkspaceResults(ws *resolve.Workspace, _ map[string]*resolve.
 	type pkgJob struct {
 		path       string
 		pkg        *resolve.Package
+		pr         *resolve.PackageResult
 		result     *Result
 		privileged bool
 	}
@@ -513,14 +517,14 @@ func applySelfhostWorkspaceResults(ws *resolve.Workspace, _ map[string]*resolve.
 			continue
 		}
 		privileged := isPrivilegedPackagePath(path) || isPrivilegedPackage(pkg)
-		jobs = append(jobs, pkgJob{path: path, pkg: pkg, result: result, privileged: privileged})
+		jobs = append(jobs, pkgJob{path: path, pkg: pkg, pr: resolved[path], result: result, privileged: privileged})
 	}
 	if len(jobs) == 0 {
 		return
 	}
 	if len(jobs) == 1 || os.Getenv("OSTY_CHECK_PARALLEL") == "0" {
 		for _, j := range jobs {
-			applySelfhostPackageResult(j.result, j.pkg, nil, ws, stdlib, j.privileged)
+			applySelfhostPackageResult(j.result, j.pkg, j.pr, ws, stdlib, j.privileged)
 		}
 		return
 	}
@@ -539,7 +543,7 @@ func applySelfhostWorkspaceResults(ws *resolve.Workspace, _ map[string]*resolve.
 		go func() {
 			defer wg.Done()
 			for j := range ch {
-				runSelfhostPackageResultLocked(j.result, j.pkg, ws, stdlib, j.privileged, &mu)
+				runSelfhostPackageResultLocked(j.result, j.pkg, j.pr, ws, stdlib, j.privileged, &mu)
 			}
 		}()
 	}
@@ -557,7 +561,7 @@ func applySelfhostWorkspaceResults(ws *resolve.Workspace, _ map[string]*resolve.
 // the shared type maps under `mu`. This is the parallel variant of
 // applySelfhostPackageResult; the single-threaded fast path in
 // applySelfhostWorkspaceResults still calls the non-locked version.
-func runSelfhostPackageResultLocked(result *Result, pkg *resolve.Package, ws *resolve.Workspace, stdlib resolve.StdlibProvider, privileged bool, mu *sync.Mutex) {
+func runSelfhostPackageResultLocked(result *Result, pkg *resolve.Package, pr *resolve.PackageResult, ws *resolve.Workspace, stdlib resolve.StdlibProvider, privileged bool, mu *sync.Mutex) {
 	if result == nil || pkg == nil {
 		return
 	}
@@ -615,7 +619,19 @@ func runSelfhostPackageResultLocked(result *Result, pkg *resolve.Package, ws *re
 	result.Diags = append(result.Diags, diags...)
 	result.NativeCheckerTelemetry = telemetry
 	result.NativeCheckResult = cloneNativeCheckResult(checked)
+	attachSemanticDB(result, pr, checked)
 	overlaySelfhostResult(result, src, checked)
+}
+
+func attachSemanticDB(result *Result, pr *resolve.PackageResult, checked api.CheckResult) {
+	if result == nil {
+		return
+	}
+	if pr != nil && pr.SemanticDB != nil {
+		result.SemanticDB = pr.SemanticDB.WithCheck(checked)
+		return
+	}
+	result.SemanticDB = semanticdb.FromCheck(checked)
 }
 
 func cloneNativeCheckResult(checked api.CheckResult) *api.CheckResult {

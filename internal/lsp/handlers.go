@@ -238,6 +238,10 @@ func (s *Server) handleHover(req *rpcRequest) {
 		return
 	}
 	pos := doc.analysis.lines.lspToOsty(params.Position)
+	if h, ok := semanticHoverAt(doc.analysis, pos); ok {
+		replyJSON(s.conn, req.ID, h)
+		return
+	}
 
 	var (
 		node     ast.Node
@@ -260,6 +264,72 @@ func (s *Server) handleHover(req *rpcRequest) {
 	h.Range = ptrRange(doc.analysis.lines.ostyRange(
 		diag.Span{Start: node.Pos(), End: node.End()}))
 	replyJSON(s.conn, req.ID, h)
+}
+
+func semanticHoverAt(a *docAnalysis, pos token.Pos) (*Hover, bool) {
+	if a == nil || a.semantic == nil {
+		return nil, false
+	}
+	hover, ok := a.semantic.HoverAt(a.sourcePath, pos.Offset)
+	if !ok || hover.Name == "" {
+		return nil, false
+	}
+	typeText := ""
+	if hover.Type != nil {
+		typeText = hover.Type.String()
+	}
+	docText, fallbackType := semanticHoverLegacyContext(a, pos)
+	if typeText == "" {
+		typeText = fallbackType
+	}
+	view := selfhost.LSPSymbolView{
+		Name:     hover.Name,
+		Kind:     semanticHoverKind(hover.Kind),
+		TypeText: typeText,
+		DocText:  docText,
+		HasSym:   true,
+	}
+	return &Hover{
+		Contents: MarkupContent{
+			Kind:  MarkupKindMarkdown,
+			Value: selfhost.LSPHoverMarkdown(view),
+		},
+		Range: ptrRange(a.lines.rangeFromOffsets(hover.Span.Start, hover.Span.End)),
+	}, true
+}
+
+func semanticHoverLegacyContext(a *docAnalysis, pos token.Pos) (docText string, typeText string) {
+	if a == nil {
+		return "", ""
+	}
+	var sym *resolve.Symbol
+	if _, hit := findIdentAt(a, pos); hit != nil {
+		sym = hit
+	} else if _, hit := findNamedTypeAt(a, pos); hit != nil {
+		sym = hit
+	}
+	if sym == nil {
+		return "", ""
+	}
+	if a.check != nil {
+		if t := a.check.LookupSymType(sym); t != nil {
+			typeText = t.String()
+		}
+	}
+	return symbolDoc(sym), typeText
+}
+
+func semanticHoverKind(kind string) string {
+	switch kind {
+	case "fn":
+		return "function"
+	case "value":
+		return "binding"
+	case "generic":
+		return "type parameter"
+	default:
+		return kind
+	}
 }
 
 // hoverForSymbol formats the markdown block shown on hover. The
@@ -381,6 +451,10 @@ func (s *Server) handleDefinition(req *rpcRequest) {
 		return
 	}
 	pos := doc.analysis.lines.lspToOsty(params.Position)
+	if loc, ok := semanticDefinitionAt(doc, pos); ok {
+		replyJSON(s.conn, req.ID, loc)
+		return
+	}
 
 	var sym *resolve.Symbol
 	if _, s2 := findIdentAt(doc.analysis, pos); s2 != nil {
@@ -404,6 +478,33 @@ func (s *Server) handleDefinition(req *rpcRequest) {
 		End:   sym.Decl.End(),
 	})
 	replyJSON(s.conn, req.ID, Location{URI: params.TextDocument.URI, Range: rng})
+}
+
+func semanticDefinitionAt(doc *document, pos token.Pos) (Location, bool) {
+	if doc == nil {
+		return Location{}, false
+	}
+	a := doc.analysis
+	if a == nil || a.semantic == nil {
+		return Location{}, false
+	}
+	sp, ok := a.semantic.DefinitionAt(a.sourcePath, pos.Offset)
+	if !ok || sp.File == "" {
+		return Location{}, false
+	}
+	uri := doc.uri
+	if sp.File != a.sourcePath {
+		uri = pathToURI(sp.File)
+	}
+	li := a.lines
+	if sp.File != a.sourcePath {
+		file := a.semantic.FileForPath(sp.File)
+		if file == nil {
+			return Location{}, false
+		}
+		li = newLineIndex(file.OriginalSourceBytes())
+	}
+	return Location{URI: uri, Range: li.rangeFromOffsets(sp.Start, sp.End)}, true
 }
 
 // ---- Formatting ----
