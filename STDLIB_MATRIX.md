@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 47 모듈. 분류 기준:
+총 48 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (45 / 47 = 96%)
+### ⭐⭐⭐⭐⭐ Production (46 / 48 = 96%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -40,6 +40,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | email | 461 | pure Osty + encoding | Address / Message / MIME multipart / attachment base64 / SMTP DATA helpers |
 | grid | 412 | pure Osty | Point / Size / Rect / Direction / row-major Grid<T> |
 | tar | 408 | pure Osty + bytes | ustar encode/decode/list/extract + checksum validation |
+| sql | 401 | pure Osty | identifier quoting / literals / placeholders / SELECT-INSERT-UPDATE-DELETE builders |
 | xml | 391 | pure Osty | escape / unescape / tag builder / tokenizer |
 | tui | 383 | pure Osty + term | retained frame buffers, ANSI render/diff helpers |
 | result | 357 | — | composition (map / mapErr / and / or / collect) |
@@ -75,7 +76,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (2 / 47 = 4%)
+### ⭐⭐⭐⭐ Production-adjacent (2 / 48 = 4%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
@@ -89,7 +90,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 
 | 구분 | 갭 |
 |---|---|
-| 없는 모듈 | `db/sql`, `smtp transport`, `zip`, `image` |
+| 없는 모듈 | `db driver/runtime`, `smtp transport`, `zip`, `image` |
 | 부분 구현 | `compress` 는 gzip 만 있음. deflate/zstd/zip 계열 없음 |
 | 부분 실행 | `testing_gen` 의 일부 조합자는 표면만 있고 property runner 실행 subset 밖 |
 | 문서/코드 드리프트 | 일부 README/매트릭스 문구가 과거 G18 stub 정책을 아직 과장해서 남김 |
@@ -117,6 +118,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | GraphQL 요청 생성 | ✅ 가능 | graphql (document builder / variables JSON body) |
 | 이메일/MIME 생성 | ✅ 가능 | email (address / MIME multipart / SMTP DATA helpers) |
 | TAR 아카이브 | ✅ 가능 | tar (ustar encode/decode/list/extract) |
+| SQL 쿼리 조립 | ✅ 가능 | sql (identifier quoting / value literals / dialect placeholders / CRUD builders) |
 
 ## 3. 진짜 약점 (없는 모듈)
 
@@ -124,7 +126,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 
 | 없는 모듈 | 영향 | 우선순위 |
 |---|---|---|
-| db / sql | DB 작업 (sqlite / postgres wrap 필요) | 높음 (실용 어플리케이션 핵심) |
+| db driver/runtime | 실제 DB 실행 (sqlite / postgres wrap 필요) | 높음 (실용 어플리케이션 핵심) |
 | smtp transport | 실제 SMTP 소켓 전송 / TLS | 중간 |
 | zip | 아카이브 (deflate/runtime 필요) | 낮음 |
 | image | 이미지 디코딩 | 낮음 |
@@ -146,7 +148,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 25 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, net, fmt, json, url, io, collections, email, grid, tar, xml, tui, result, option, csv, encoding, term, websocket, graphql, template, i18n, char, iter, bytes)
+- 26 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, net, fmt, json, url, io, collections, email, grid, tar, sql, xml, tui, result, option, csv, encoding, term, websocket, graphql, template, i18n, char, iter, bytes)
 - 6 모듈은 Phase A 충실 + Phase B declaration-only (fs, env, random, os, crypto, compress)
 - 나머지는 의도된 범위에서 surface 만으로 완성 (cli, math, cmp, hint, debug, ref, process, log, time, error, sync, thread, regex, testing, uuid)
 
@@ -215,7 +217,7 @@ stdlib audit 중 발견된 *진짜 자랑할 만한* 디자인 패턴:
 
 stdlib 자체는 거의 production. 다음 우선순위:
 
-1. **새 모듈 추가** (db / smtp transport / zip / image) — *없는 모듈* 카테고리 채우기
+1. **새 모듈 추가** (db driver/runtime / smtp transport / zip / image) — *없는 모듈* 카테고리 채우기
 2. **compress 깊이 / encoding 확장** — zstd / deflate, Base32 등 추가 표준
 3. **Phase B surface 부풀리기** — random / crypto / compress 는 Phase A 풍부한데 Phase B helper 가 declaration 위주. user-friendly wrapper (예: `crypto.sha256Hex(data)`, `random.shuffle(list)`) 추가
 4. **스펙 문서 동기화** — `LANG_SPEC_v0.5/10-standard-library/*.md` 가 24 시간 sprint 진척 따라잡았는지 확인
