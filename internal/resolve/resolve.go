@@ -73,19 +73,16 @@ func ResolvePackageDefault(pkg *Package) *PackageResult {
 // and the already-parsed AST, using the selfhost resolver as the source
 // of truth while still projecting refs and scopes back onto the Go AST.
 func ResolveFileSourceDefault(src []byte, file *ast.File, stdlib StdlibProvider) *Result {
-	pkg := &Package{
-		Name: "<file>",
-		Files: []*PackageFile{{
-			Path:            "<input>",
-			Source:          append([]byte(nil), src...),
-			CanonicalSource: append([]byte(nil), src...),
-			File:            file,
-		}},
+	graph := NewSingleFilePackageGraph(src, file, stdlib)
+	results := ResolveGraph(graph)
+	pkg := graph.Package("")
+	if pkg == nil {
+		return &Result{}
 	}
-	if stdlib != nil {
-		pkg.workspace = newStdlibOnlyWorkspace(stdlib)
+	pr := results[""]
+	if pr == nil {
+		pr = &PackageResult{}
 	}
-	pr := ResolvePackage(pkg, NewPrelude())
 	pf := pkg.Files[0]
 	return &Result{
 		RefsByID:      pf.RefsByID,

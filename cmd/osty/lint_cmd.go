@@ -54,13 +54,14 @@ func runLintWorkspace(dir string, flags cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		os.Exit(1)
 	}
+	graph := resolve.NewPackageGraph(ws)
 	anyErr, anyWarn := false, false
-	for _, path := range nativeWorkspacePaths(ws) {
-		pkg := ws.Packages[path]
+	for _, path := range nativeGraphPaths(graph) {
+		pkg := graph.Package(path)
 		if pkg == nil {
 			continue
 		}
-		imports := check.PackageImportSurfacesForSelfhost(pkg, ws, ws.Stdlib)
+		imports := resolve.PackageGraphImportSurfaces(graph, path)
 		frontendDiags, err := lintNativePackageDiagnostics(pkg, imports)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "osty: native check: %v\n", err)

@@ -31,6 +31,7 @@ type LoadResult struct {
 	Root      string
 	Manifest  *manifest.Manifest
 	Workspace *resolve.Workspace
+	Graph     *resolve.PackageGraph
 	Packages  []*resolve.Package
 	Results   []*resolve.PackageResult
 	Error     string
@@ -113,7 +114,9 @@ func LoadRunnerState(root string, preloaded *manifest.Manifest) LoadResult {
 	}
 	filterPackageCIFiles(pkg)
 	r.Packages = []*resolve.Package{pkg}
-	pr := resolve.ResolvePackageDefault(pkg)
+	r.Graph = resolve.NewPackageGraphForPackage("", pkg)
+	results := resolve.ResolveGraph(r.Graph)
+	pr := results[""]
 	r.Results = []*resolve.PackageResult{pr}
 	return *r
 }
@@ -155,7 +158,8 @@ func loadWorkspace(r *LoadResult, byManifest bool) LoadResult {
 		}
 	}
 
-	allResults := ws.ResolveAll()
+	r.Graph = resolve.NewPackageGraph(ws)
+	allResults := resolve.ResolveGraph(r.Graph)
 	for _, path := range pkgPaths {
 		r.Results = append(r.Results, allResults[path])
 	}

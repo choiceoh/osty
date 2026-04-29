@@ -7,6 +7,7 @@ import (
 
 	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/nativellvmgen"
+	"github.com/osty/osty/internal/resolve"
 )
 
 var tryExternalGenLLVMIR = func(entry *genPackageEntry) ([]byte, bool, []error, error) {
@@ -24,7 +25,11 @@ func prepareGenBackendEntry(pkgName string, entry *genPackageEntry) (backend.Ent
 		return backend.Entry{}, fmt.Errorf("missing package input for gen")
 	}
 	if countLowerableFiles(entry.pkg) > 0 {
-		return backend.PreparePackage(pkgName, entry.sourcePath, entry.pkg, entry.file, entry.chk)
+		graph := entry.graph
+		if graph == nil {
+			graph = resolve.NewPackageGraphForPackage(entry.pkgPath, entry.pkg)
+		}
+		return backend.PrepareGraphPackage(pkgName, entry.sourcePath, graph, entry.pkgPath, entry.file, entry.chk)
 	}
 	file, src, err := parseGenEmitFile(entry.pkg)
 	if err != nil {

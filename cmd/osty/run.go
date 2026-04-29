@@ -102,14 +102,14 @@ func runRun(args []string, cliF cliFlags) {
 
 	// Step 1: vendor deps (also runs resolve, computes the graph +
 	// DepProvider we'll attach to the workspace).
-	graph, env, err := resolveAndVendorEnvOpts(m, root, resolveOpts{
+	depGraph, env, err := resolveAndVendorEnvOpts(m, root, resolveOpts{
 		Offline: offline, Locked: locked, Frozen: frozen,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
 		os.Exit(3)
 	}
-	deps := pkgmgr.NewDepProvider(m, graph, env)
+	deps := pkgmgr.NewDepProvider(m, depGraph, env)
 
 	// Turn on the native-checker cache so repeated `osty run` cycles
 	// during development don't re-check packages that haven't changed.
@@ -145,12 +145,14 @@ func runRun(args []string, cliF cliFlags) {
 		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
 		os.Exit(1)
 	}
-	results := ws.ResolveAll()
-	checks := check.Workspace(ws, results, checkOpts())
+	packageGraph := resolve.NewPackageGraph(ws)
+	results := resolve.ResolveGraph(packageGraph)
+	checks := check.PackageGraph(packageGraph, results, checkOpts())
 	// Aggregate diagnostics across every loaded package so front-end
 	// errors in a vendored dep also surface.
 	var all []*diag.Diagnostic
-	for key, pkg := range ws.Packages {
+	for _, key := range packageGraph.PackagePaths() {
+		pkg := packageGraph.Package(key)
 		r := results[key]
 		if r == nil || pkg == nil {
 			continue
@@ -219,7 +221,7 @@ func runRun(args []string, cliF cliFlags) {
 			return
 		}
 	}
-	backendEntry, err := backend.PreparePackage("main", entryAbs, rootPkg, entryFile, chk)
+	backendEntry, err := backend.PrepareGraphPackage("main", entryAbs, packageGraph, "", entryFile, chk)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty run: %v\n", err)
 		os.Exit(1)

@@ -236,12 +236,14 @@ func runWorkspaceDoc(root, format, outPath, title string,
 	for _, p := range resolve.WorkspacePackagePaths(root) {
 		_, _ = ws.LoadPackageNative(p)
 	}
+	graph := resolve.NewPackageGraph(ws)
 
 	// Build docgen Packages keyed by the workspace's import paths so
 	// the index page's display order matches the resolver's view.
 	docPkgs := map[string]*docgen.SelfDocPackage{}
 	anyFatal := false
-	for impPath, pkg := range ws.Packages {
+	for _, impPath := range graph.PackagePaths() {
+		pkg := graph.Package(impPath)
 		if pkg == nil {
 			continue
 		}

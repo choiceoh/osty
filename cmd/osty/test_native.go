@@ -748,9 +748,14 @@ func prepareNativeTestBackendEntry(sourcePath string, pkg *resolve.Package) (bac
 		}
 	}
 	if countLowerableFiles(pkg) > 0 {
-		res := resolve.ResolvePackageDefault(pkg)
-		chk := check.Package(pkg, res, checkOpts())
-		return backend.PreparePackage("main", sourcePath, pkg, entryFile, chk)
+		graph := resolve.NewPackageGraphForPackage("", pkg)
+		results := resolve.ResolveGraph(graph)
+		checks := check.PackageGraph(graph, results, checkOpts())
+		chk := checks[""]
+		if chk == nil {
+			chk = &check.Result{}
+		}
+		return backend.PrepareGraphPackage("main", sourcePath, graph, "", entryFile, chk)
 	}
 	file, src, err := parseGenEmitFile(pkg)
 	if err != nil {

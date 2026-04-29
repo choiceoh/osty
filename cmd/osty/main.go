@@ -1549,6 +1549,8 @@ func adjustGenResultForUserOutput(result *backend.Result, name backend.Name, out
 
 type genPackageEntry struct {
 	sourcePath string
+	graph      *resolve.PackageGraph
+	pkgPath    string
 	pkg        *resolve.Package
 	res        *resolve.PackageResult
 	chk        *check.Result
@@ -1576,8 +1578,9 @@ func loadGenPackageEntryWithTransform(path string, transform resolve.SourceTrans
 	if _, err := ws.LoadPackageNative(""); err != nil {
 		return nil, err
 	}
-	results := ws.ResolveAll()
-	checks := check.Workspace(ws, results, checkOpts())
+	graph := resolve.NewPackageGraph(ws)
+	results := resolve.ResolveGraph(graph)
+	checks := check.PackageGraph(graph, results, checkOpts())
 	pkg := ws.Packages[""]
 	if pkg == nil {
 		return nil, fmt.Errorf("%s: no package sources were loaded", filepath.Dir(absPath))
@@ -1609,6 +1612,8 @@ func loadGenPackageEntryWithTransform(path string, transform resolve.SourceTrans
 	}
 	return &genPackageEntry{
 		sourcePath: absPath,
+		graph:      graph,
+		pkgPath:    "",
 		pkg:        pkg,
 		res:        res,
 		chk:        chk,
@@ -1634,20 +1639,29 @@ func loadSelectedGenFilesWithTransform(sourcePath string, files []string, transf
 		if err != nil {
 			return nil, err
 		}
+		var original []byte
+		transformApplied := false
+		transformChanged := false
 		if transform != nil {
+			original = append([]byte(nil), src...)
 			src = transform(path, src)
+			transformApplied = true
+			transformChanged = !bytes.Equal(original, src)
 		}
 		run := selfhost.Run(src)
 		file := selfhost.LowerPublicFileFromRun(run)
 		canonicalSrc, canonicalMap := canonical.SourceWithMap(src, file)
 		pf := &resolve.PackageFile{
-			Path:            path,
-			Source:          src,
-			CanonicalSource: canonicalSrc,
-			CanonicalMap:    canonicalMap,
-			File:            file,
-			Run:             run,
-			ParseDiags:      run.Diagnostics(),
+			Path:                   path,
+			Source:                 src,
+			OriginalSource:         original,
+			SourceTransformApplied: transformApplied,
+			SourceTransformChanged: transformChanged,
+			CanonicalSource:        canonicalSrc,
+			CanonicalMap:           canonicalMap,
+			File:                   file,
+			Run:                    run,
+			ParseDiags:             run.Diagnostics(),
 		}
 		pkg.Files = append(pkg.Files, pf)
 		res.Diags = append(res.Diags, pf.ParseDiags...)
@@ -1658,8 +1672,11 @@ func loadSelectedGenFilesWithTransform(sourcePath string, files []string, transf
 	if entryFile == nil {
 		return nil, fmt.Errorf("%s is not part of the selected gen input set", sourcePath)
 	}
+	graph := resolve.NewPackageGraphForPackage("", pkg)
 	return &genPackageEntry{
 		sourcePath: sourcePath,
+		graph:      graph,
+		pkgPath:    "",
 		pkg:        pkg,
 		res:        res,
 		chk:        chk,

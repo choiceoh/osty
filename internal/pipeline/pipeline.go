@@ -415,7 +415,8 @@ func emitConfiguredGenPackage(cfg Config, pkgName string, pkg *resolve.Package, 
 	if sourcePath == "" {
 		sourcePath = "<pipeline>"
 	}
-	entry, err := backend.PreparePackage(pkgName, sourcePath, pkg, entryFile, chk)
+	graph := resolve.NewPackageGraphForPackage("", pkg)
+	entry, err := backend.PrepareGraphPackage(pkgName, sourcePath, graph, "", entryFile, chk)
 	if err != nil {
 		return nil, err
 	}
@@ -814,17 +815,14 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 	for _, p := range resolve.WorkspacePackagePaths(dir) {
 		_, _ = ws.LoadPackageNative(p)
 	}
+	graph := resolve.NewPackageGraph(ws)
 
 	totalFiles, totalBytes, totalDecls, totalStmts, totalUses := 0, 0, 0, 0, 0
 	var loadDiags []*diag.Diagnostic
 	if r.Sources == nil {
 		r.Sources = map[string][]byte{}
 	}
-	pkgPaths := make([]string, 0, len(ws.Packages))
-	for p := range ws.Packages {
-		pkgPaths = append(pkgPaths, p)
-	}
-	sort.Strings(pkgPaths)
+	pkgPaths := graph.PackagePaths()
 	for _, p := range pkgPaths {
 		pkg := ws.Packages[p]
 		if pkg == nil {
@@ -864,7 +862,7 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 
 	// --- resolve (workspace-wide) ---
 	t0 = time.Now()
-	results := ws.ResolveAll()
+	results := resolve.ResolveGraph(graph)
 	totalRefs, totalTypeRefs := 0, 0
 	var resolveDiags []*diag.Diagnostic
 	for _, p := range pkgPaths {
@@ -910,7 +908,7 @@ func RunWorkspace(dir string, stream io.Writer, cfg Config) (Result, error) {
 			})
 		}
 	}
-	checks := check.Workspace(ws, results, checkOpts)
+	checks := check.PackageGraph(graph, results, checkOpts)
 	var checkDiags []*diag.Diagnostic
 	totalTypedExprs, totalLetTypes, totalSymTypes := 0, 0, 0
 	for _, p := range pkgPaths {
