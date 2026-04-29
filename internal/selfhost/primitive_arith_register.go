@@ -42,6 +42,25 @@ func installPrimitiveArithMethods(env *CheckEnv) {
 		registerSelfShapedBinary(env, k.owner, k.ty, "min", "other")
 		registerSelfShapedBinary(env, k.owner, k.ty, "max", "other")
 		registerSelfShapedClamp(env, k.owner, k.ty)
+		for _, name := range []string{"wrappingAdd", "wrappingSub", "wrappingMul", "wrappingDiv", "wrappingMod"} {
+			registerSelfShapedBinary(env, k.owner, k.ty, name, "other")
+		}
+		registerSelfIntUnary(env, k.owner, k.ty, "wrappingShl", "b")
+		registerSelfIntUnary(env, k.owner, k.ty, "wrappingShr", "b")
+		registerSelfShapedNullary(env, k.owner, k.ty, "wrappingAbs")
+		registerSelfShapedNullary(env, k.owner, k.ty, "wrappingNeg")
+		for _, name := range []string{"checkedAdd", "checkedSub", "checkedMul", "checkedDiv", "checkedMod"} {
+			registerOptionalSelfBinary(env, k.owner, k.ty, name, "other")
+		}
+		registerOptionalSelfIntUnary(env, k.owner, k.ty, "checkedShl", "b")
+		registerOptionalSelfIntUnary(env, k.owner, k.ty, "checkedShr", "b")
+		registerOptionalSelfNullary(env, k.owner, k.ty, "checkedAbs")
+		registerOptionalSelfNullary(env, k.owner, k.ty, "checkedNeg")
+		for _, name := range []string{"saturatingAdd", "saturatingSub", "saturatingMul", "saturatingDiv"} {
+			registerSelfShapedBinary(env, k.owner, k.ty, name, "other")
+		}
+		registerSelfIntUnary(env, k.owner, k.ty, "pow", "exp")
+		registerIntConversionMethods(env, k.owner, k.ty, tys)
 		// toString — narrow widths share the i64 ABI on the LLVM side
 		// and the dispatcher in `g.emitRuntimeIntToString` already
 		// handles every Int kind by routing through `osty_rt_int_to_string`.
@@ -54,6 +73,7 @@ func installPrimitiveArithMethods(env *CheckEnv) {
 		// ready.
 		registerToString(env, k.owner, k.ty)
 	}
+	registerSupplementalStdlibSurface(env)
 
 	// Float family — same `#[intrinsic_methods(Float, Float32, Float64)]`
 	// shape as the integer loop above. Register the full stdlib-declared
@@ -97,6 +117,54 @@ func installPrimitiveArithMethods(env *CheckEnv) {
 		registerPlainReturnNullary(env, k.owner, k.ty, "toFloat64", tFloat64(tys))
 		registerToString(env, k.owner, k.ty)
 	}
+}
+
+func registerSupplementalStdlibSurface(env *CheckEnv) {
+	tys := env.tys
+	tString_ := tString(tys)
+	tError := tyNamed(tys, "Error", make([]int, 0, 1))
+	tListString := tyNamed(tys, "List", []int{tString_})
+
+	checkRegisterFn(env, &CheckFnSig{
+		name:          "join",
+		owner:         "List",
+		receiverTy:    tListString,
+		hasReceiver:   true,
+		retTy:         tString_,
+		paramNames:    []string{"sep"},
+		paramTys:      []int{tString_},
+		generics:      make([]string, 0, 1),
+		genericBounds: make([]*CheckGenericBound, 0, 1),
+	})
+	checkRegisterFn(env, &CheckFnSig{
+		name:          "new",
+		owner:         "Error",
+		receiverTy:    -1,
+		hasReceiver:   false,
+		retTy:         tError,
+		paramNames:    []string{"message"},
+		paramTys:      []int{tString_},
+		generics:      make([]string, 0, 1),
+		genericBounds: make([]*CheckGenericBound, 0, 1),
+	})
+	checkMarkFnHasBody(env, "new", "Error")
+}
+
+func registerIntConversionMethods(env *CheckEnv, owner string, ty int, tys *TyArena) {
+	registerPlainReturnNullary(env, owner, ty, "toInt", tInt(tys))
+	registerResultReturnNullary(env, owner, ty, "toInt8", tInt8(tys), tys)
+	registerResultReturnNullary(env, owner, ty, "toInt16", tInt16(tys), tys)
+	registerResultReturnNullary(env, owner, ty, "toInt32", tInt32(tys), tys)
+	registerPlainReturnNullary(env, owner, ty, "toInt64", tInt64(tys))
+	registerResultReturnNullary(env, owner, ty, "toUInt8", tUInt8(tys), tys)
+	registerPlainReturnNullary(env, owner, ty, "toByte", tByte(tys))
+	registerResultReturnNullary(env, owner, ty, "toUInt16", tUInt16(tys), tys)
+	registerResultReturnNullary(env, owner, ty, "toUInt32", tUInt32(tys), tys)
+	registerResultReturnNullary(env, owner, ty, "toUInt64", tUInt64(tys), tys)
+	registerPlainReturnNullary(env, owner, ty, "toFloat", tFloat(tys))
+	registerPlainReturnNullary(env, owner, ty, "toFloat32", tFloat32(tys))
+	registerPlainReturnNullary(env, owner, ty, "toFloat64", tFloat64(tys))
+	registerPlainReturnNullary(env, owner, ty, "toChar", tChar(tys))
 }
 
 func registerStdMathModule(env *CheckEnv) {
@@ -220,6 +288,20 @@ func registerSelfShapedBinary(env *CheckEnv, owner string, ty int, name, paramNa
 	})
 }
 
+func registerSelfIntUnary(env *CheckEnv, owner string, ty int, name, paramName string) {
+	checkRegisterFn(env, &CheckFnSig{
+		name:          name,
+		owner:         owner,
+		receiverTy:    ty,
+		hasReceiver:   true,
+		retTy:         ty,
+		paramNames:    []string{paramName},
+		paramTys:      []int{tInt(env.tys)},
+		generics:      make([]string, 0, 1),
+		genericBounds: make([]*CheckGenericBound, 0, 1),
+	})
+}
+
 func registerSelfShapedClamp(env *CheckEnv, owner string, ty int) {
 	checkRegisterFn(env, &CheckFnSig{
 		name:          "clamp",
@@ -229,6 +311,48 @@ func registerSelfShapedClamp(env *CheckEnv, owner string, ty int) {
 		retTy:         ty,
 		paramNames:    []string{"lo", "hi"},
 		paramTys:      []int{ty, ty},
+		generics:      make([]string, 0, 1),
+		genericBounds: make([]*CheckGenericBound, 0, 1),
+	})
+}
+
+func registerOptionalSelfNullary(env *CheckEnv, owner string, ty int, name string) {
+	checkRegisterFn(env, &CheckFnSig{
+		name:          name,
+		owner:         owner,
+		receiverTy:    ty,
+		hasReceiver:   true,
+		retTy:         tyOptional(env.tys, ty),
+		paramNames:    make([]string, 0, 1),
+		paramTys:      make([]int, 0, 1),
+		generics:      make([]string, 0, 1),
+		genericBounds: make([]*CheckGenericBound, 0, 1),
+	})
+}
+
+func registerOptionalSelfBinary(env *CheckEnv, owner string, ty int, name, paramName string) {
+	checkRegisterFn(env, &CheckFnSig{
+		name:          name,
+		owner:         owner,
+		receiverTy:    ty,
+		hasReceiver:   true,
+		retTy:         tyOptional(env.tys, ty),
+		paramNames:    []string{paramName},
+		paramTys:      []int{ty},
+		generics:      make([]string, 0, 1),
+		genericBounds: make([]*CheckGenericBound, 0, 1),
+	})
+}
+
+func registerOptionalSelfIntUnary(env *CheckEnv, owner string, ty int, name, paramName string) {
+	checkRegisterFn(env, &CheckFnSig{
+		name:          name,
+		owner:         owner,
+		receiverTy:    ty,
+		hasReceiver:   true,
+		retTy:         tyOptional(env.tys, ty),
+		paramNames:    []string{paramName},
+		paramTys:      []int{tInt(env.tys)},
 		generics:      make([]string, 0, 1),
 		genericBounds: make([]*CheckGenericBound, 0, 1),
 	})
@@ -291,12 +415,16 @@ func registerPlainReturnNullary(env *CheckEnv, owner string, ty int, name string
 }
 
 func registerResultIntErrorNullary(env *CheckEnv, owner string, ty int, name string, tys *TyArena) {
+	registerResultReturnNullary(env, owner, ty, name, tInt(tys), tys)
+}
+
+func registerResultReturnNullary(env *CheckEnv, owner string, ty int, name string, retValueTy int, tys *TyArena) {
 	checkRegisterFn(env, &CheckFnSig{
 		name:          name,
 		owner:         owner,
 		receiverTy:    ty,
 		hasReceiver:   true,
-		retTy:         tyNamed(tys, "Result", []int{tInt(tys), tyNamed(tys, "Error", make([]int, 0, 1))}),
+		retTy:         tyNamed(tys, "Result", []int{retValueTy, tyNamed(tys, "Error", make([]int, 0, 1))}),
 		paramNames:    make([]string, 0, 1),
 		paramTys:      make([]int, 0, 1),
 		generics:      make([]string, 0, 1),

@@ -363,6 +363,95 @@ fn main() {
 	}
 }
 
+func TestCheckWorkspaceMemberDirLoadsEnclosingWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	depDir := filepath.Join(dir, "dep")
+	appDir := filepath.Join(dir, "app")
+	if err := os.MkdirAll(depDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "osty.toml"), []byte(`[workspace]
+members = ["dep", "app"]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(depDir, "osty.toml"), []byte(`[package]
+name = "dep"
+version = "0.1.0"
+edition = "0.5"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(depDir, "dep.osty"), []byte(`pub fn helper() -> Int { 1 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "osty.toml"), []byte(`[package]
+name = "app"
+version = "0.1.0"
+edition = "0.5"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(appDir, "main.osty"), []byte(`use dep
+
+fn main() {
+    let x = dep.helper()
+    x
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := runOstyCLI(t, "check", appDir)
+	if got.exit != 0 {
+		t.Fatalf("osty check member dir exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+	if strings.Contains(got.stderr, "error[") {
+		t.Fatalf("stderr contained error output on clean workspace member:\n%s", got.stderr)
+	}
+}
+
+func TestCheckStdlibSupplementalSurface(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	if err := os.WriteFile(path, []byte(`use std.testing
+use std.testing.gen as gen
+
+fn main() {
+    let n: Int = 7
+    let f: Float64 = n.toFloat64()
+    let b: Byte = n.toByte()
+    let rounded: Result<Int8, Error> = n.toInt8()
+    let checked: Int? = n.checkedAdd(1)
+    let wrapped: Int = n.wrappingAdd(1)
+    let mut lines: List<String> = ["value"]
+    lines.push(f.toString())
+    let joined: String = lines.join("\n")
+    let err: Error = Error.new(joined)
+    let _ = err.message()
+    let _ = rounded
+    let _ = b
+    let _ = checked
+    let _ = wrapped
+    testing.property("small ints", gen.intRange(0, 10), |x: Int| -> Bool { x >= 0 })
+}
+`), 0o644); err != nil {
+		t.Fatalf("write source: %v", err)
+	}
+
+	got := runOstyCLI(t, "check", "--no-airepair", path)
+	if got.exit != 0 {
+		t.Fatalf("osty check stdlib supplemental surface exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	}
+	if strings.Contains(got.stderr, "error[") {
+		t.Fatalf("stderr contained error output on stdlib supplemental surface:\n%s", got.stderr)
+	}
+}
+
 // TestRunCheckFileNativeIsAstbridgeFree is the in-process counter
 // test analog of TestRunResolveFileHappyPathIsAstbridgeFree. Proves
 // the --native CLI path produces zero astLowerPublicFile calls

@@ -48023,6 +48023,8 @@ func collectUseDecl(cx *ElabCx, declIdx int, node *AstNode) {
 		} else if node.text == "std.testing" {
 			// Osty: /tmp/selfhost_merged.osty:23278:13
 			registerStdTestingAliasFns(env, alias)
+		} else if node.text == "std.testing.gen" {
+			registerStdTestingGenAliasFns(env, alias)
 		} else if node.text == "std.fs" {
 			// Osty: /tmp/selfhost_merged.osty:23280:13
 			registerStdFsAliasFns(env, alias)
@@ -48260,6 +48262,7 @@ func registerStdTestingAliasFns(env *CheckEnv, alias string) {
 	checkRegisterFn(env, &CheckFnSig{name: "benchmark", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_, paramNames: []string{"iterations", "body"}, paramTys: []int{tInt_, tFnResUnit}, generics: emptyGenerics, genericBounds: emptyBounds})
 	// Osty: /tmp/selfhost_merged.osty:23583:5
 	checkRegisterFn(env, &CheckFnSig{name: "snapshot", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_, paramNames: []string{"name", "output"}, paramTys: []int{tString_, tString_}, generics: emptyGenerics, genericBounds: emptyBounds})
+	registerStdTestingPropertyAliasFns(env, alias)
 }
 
 // Osty: /tmp/selfhost_merged.osty:23593:1

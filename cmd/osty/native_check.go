@@ -74,11 +74,66 @@ func nativeWorkspaceRoot(dir string, flags cliFlags) (string, bool, bool) {
 		if m != nil && m.Workspace != nil {
 			return root, true, false
 		}
+		if enclosing, ok := enclosingWorkspaceRoot(dir, root); ok {
+			return enclosing, true, false
+		}
 	}
 	if isWorkspace(dir) {
 		return dir, true, false
 	}
 	return "", false, false
+}
+
+func enclosingWorkspaceRoot(dir, nearestManifestRoot string) (string, bool) {
+	start, err := filepath.Abs(dir)
+	if err != nil {
+		return "", false
+	}
+	stop, err := filepath.Abs(nearestManifestRoot)
+	if err != nil {
+		stop = nearestManifestRoot
+	}
+	for parent := filepath.Dir(stop); parent != stop; parent = filepath.Dir(parent) {
+		manifestPath := filepath.Join(parent, manifest.ManifestFile)
+		if _, err := os.Stat(manifestPath); err != nil {
+			if next := filepath.Dir(parent); next == parent {
+				break
+			}
+			continue
+		}
+		m, _, err := manifest.Load(manifestPath)
+		if err != nil || m == nil || m.Workspace == nil {
+			if next := filepath.Dir(parent); next == parent {
+				break
+			}
+			continue
+		}
+		if workspaceContainsPath(parent, m.Workspace.Members, start) {
+			return parent, true
+		}
+	}
+	return "", false
+}
+
+func workspaceContainsPath(root string, members []string, target string) bool {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		rootAbs = root
+	}
+	for _, member := range members {
+		memberAbs, err := filepath.Abs(filepath.Join(rootAbs, member))
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(memberAbs, target)
+		if err != nil {
+			continue
+		}
+		if rel == "." || rel == "" || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))) {
+			return true
+		}
+	}
+	return false
 }
 
 // runResolveFile drives the single-file `osty resolve FILE` happy path

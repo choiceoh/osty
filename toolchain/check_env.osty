@@ -2153,7 +2153,7 @@ fn checkInstallErrorIntrinsics(env: CheckEnv) {
     // `Err(Error.new("..."))` resolves. Spec doesn't mandate a
     // specific name but this is the canonical form in demos.
     checkRegisterFn(env, CheckFnSig {
-        name: "new", owner: "Error", receiverTy: tError, hasReceiver: true, retTy: tError,
+        name: "new", owner: "Error", receiverTy: -1, hasReceiver: false, retTy: tError,
         paramNames: ["message"], paramTys: [tString_],
         generics: [], genericBounds: [],
     })
@@ -2303,6 +2303,7 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
     let tListV = tyNamed(tys, "List", [tV])
     let tListChar = tyNamed(tys, "List", [tChar(tys)])
     let tListByte = tyNamed(tys, "List", [tByte(tys)])
+    let tListString = tyNamed(tys, "List", [tString(tys)])
     let tMapKV = tyNamed(tys, "Map", [tK, tV])
     let tBytes_ = tBytes(tys)
     let tOptT = tyOptional(tys, tT)
@@ -2367,6 +2368,11 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         name: "toString", owner: "List", receiverTy: tListT, hasReceiver: true, retTy: tString(tys),
         paramNames: [], paramTys: [],
         generics: ["T"], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "join", owner: "List", receiverTy: tListString, hasReceiver: true, retTy: tString(tys),
+        paramNames: ["sep"], paramTys: [tString(tys)],
+        generics: [], genericBounds: [],
     })
 
     // ----- Map<K, V> intrinsics (spec §10.6) -----
@@ -3283,6 +3289,132 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         checkRegisterFn(env, CheckFnSig {
             name: "clamp", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
             paramNames: ["lo", "hi"], paramTys: [ty, ty],
+            generics: [], genericBounds: [],
+        })
+        for name in ["wrappingAdd", "wrappingSub", "wrappingMul", "wrappingDiv", "wrappingMod"] {
+            checkRegisterFn(env, CheckFnSig {
+                name, owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+                paramNames: ["other"], paramTys: [ty],
+                generics: [], genericBounds: [],
+            })
+        }
+        for name in ["wrappingShl", "wrappingShr", "pow"] {
+            checkRegisterFn(env, CheckFnSig {
+                name, owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+                paramNames: ["b"], paramTys: [tInt(tys)],
+                generics: [], genericBounds: [],
+            })
+        }
+        for name in ["wrappingAbs", "wrappingNeg"] {
+            checkRegisterFn(env, CheckFnSig {
+                name, owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+                paramNames: [], paramTys: [],
+                generics: [], genericBounds: [],
+            })
+        }
+        for name in ["checkedAdd", "checkedSub", "checkedMul", "checkedDiv", "checkedMod"] {
+            checkRegisterFn(env, CheckFnSig {
+                name, owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tyOptional(tys, ty),
+                paramNames: ["other"], paramTys: [ty],
+                generics: [], genericBounds: [],
+            })
+        }
+        for name in ["checkedShl", "checkedShr"] {
+            checkRegisterFn(env, CheckFnSig {
+                name, owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tyOptional(tys, ty),
+                paramNames: ["b"], paramTys: [tInt(tys)],
+                generics: [], genericBounds: [],
+            })
+        }
+        for name in ["checkedAbs", "checkedNeg"] {
+            checkRegisterFn(env, CheckFnSig {
+                name, owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tyOptional(tys, ty),
+                paramNames: [], paramTys: [],
+                generics: [], genericBounds: [],
+            })
+        }
+        for name in ["saturatingAdd", "saturatingSub", "saturatingMul", "saturatingDiv"] {
+            checkRegisterFn(env, CheckFnSig {
+                name, owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+                paramNames: ["other"], paramTys: [ty],
+                generics: [], genericBounds: [],
+            })
+        }
+        checkRegisterFn(env, CheckFnSig {
+            name: "toInt", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tInt(tys),
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+        checkRegisterFn(env, CheckFnSig {
+            name: "toInt8", owner: ownerName, receiverTy: ty, hasReceiver: true,
+            retTy: tyNamed(tys, "Result", [tInt8(tys), tyNamed(tys, "Error", [])]),
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+        checkRegisterFn(env, CheckFnSig {
+            name: "toInt16", owner: ownerName, receiverTy: ty, hasReceiver: true,
+            retTy: tyNamed(tys, "Result", [tInt16(tys), tyNamed(tys, "Error", [])]),
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+        checkRegisterFn(env, CheckFnSig {
+            name: "toInt32", owner: ownerName, receiverTy: ty, hasReceiver: true,
+            retTy: tyNamed(tys, "Result", [tInt32(tys), tyNamed(tys, "Error", [])]),
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+        checkRegisterFn(env, CheckFnSig {
+            name: "toInt64", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tInt64(tys),
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+        checkRegisterFn(env, CheckFnSig {
+            name: "toUInt8", owner: ownerName, receiverTy: ty, hasReceiver: true,
+            retTy: tyNamed(tys, "Result", [tUInt8(tys), tyNamed(tys, "Error", [])]),
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+        checkRegisterFn(env, CheckFnSig {
+            name: "toByte", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tByte(tys),
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+        checkRegisterFn(env, CheckFnSig {
+            name: "toUInt16", owner: ownerName, receiverTy: ty, hasReceiver: true,
+            retTy: tyNamed(tys, "Result", [tUInt16(tys), tyNamed(tys, "Error", [])]),
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+        checkRegisterFn(env, CheckFnSig {
+            name: "toUInt32", owner: ownerName, receiverTy: ty, hasReceiver: true,
+            retTy: tyNamed(tys, "Result", [tUInt32(tys), tyNamed(tys, "Error", [])]),
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+        checkRegisterFn(env, CheckFnSig {
+            name: "toUInt64", owner: ownerName, receiverTy: ty, hasReceiver: true,
+            retTy: tyNamed(tys, "Result", [tUInt64(tys), tyNamed(tys, "Error", [])]),
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+        checkRegisterFn(env, CheckFnSig {
+            name: "toFloat", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tFloat(tys),
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+        checkRegisterFn(env, CheckFnSig {
+            name: "toFloat32", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tFloat32(tys),
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+        checkRegisterFn(env, CheckFnSig {
+            name: "toFloat64", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tFloat64(tys),
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+        checkRegisterFn(env, CheckFnSig {
+            name: "toChar", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tChar(tys),
+            paramNames: [], paramTys: [],
             generics: [], genericBounds: [],
         })
         // toString — narrow widths share the i64 ABI on the LLVM side

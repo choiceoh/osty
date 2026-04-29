@@ -12,6 +12,7 @@ use std.env
 use std.time
 use std.collections
 use std.testing
+use std.testing.gen as gen
 use std.log
 
 // ─── Status ────────────────────────────────────────────────────────
@@ -51,7 +52,7 @@ pub struct CheckResult {
     pub url: String,
     pub status: Status,
     pub latencyMs: Int,
-    pub at: Instant,
+    pub at: time.Instant,
 }
 
 // ─── Report ────────────────────────────────────────────────────────
@@ -64,8 +65,7 @@ pub struct Report {
     pub slowest: CheckResult?,
 
     pub fn healthyRate(self) -> Float {
-        if self.total == 0 { 0.0 }
-        else { self.healthy.toFloat64() / self.total.toFloat64() }
+        if self.total == 0 { 0.0 } else { self.healthy.toFloat64() / self.total.toFloat64() }
     }
 
     pub fn render(self) -> String {
@@ -129,11 +129,26 @@ fn fetchStatus(url: String, slowMs: Int) -> Result<Status, Error> {
 /// Run checks concurrently.
 /// taskGroup enforces that handles cannot escape scope (E0743)
 /// — every spawned task is joined here.
-pub fn checkAll(urls: List<String>, slowMs: Int = 1000) -> List<CheckResult> {
-    taskGroup(|g| {
-        let handles = urls.map(|u| g.spawn(|| checkOne(u, slowMs)))
-        handles.map(|h| h.join())
+pub fn checkAll(urls: List<String>, slowMs: Int) -> List<CheckResult> {
+    let grouped = taskGroup(|g: Group| -> Result<List<CheckResult>, Error> {
+        let mut handles: List<Handle<CheckResult>> = []
+        for url in urls {
+            let capturedUrl = url
+            let capturedSlowMs = slowMs
+            handles.push(g.spawn(|| checkOne(capturedUrl, capturedSlowMs)))
+        }
+
+        let mut out: List<CheckResult> = []
+        for h in handles {
+            out.push(h.join())
+        }
+        Ok(out)
     })
+
+    match grouped {
+        Ok(results) -> results,
+        Err(_)      -> [],
+    }
 }
 
 /// Aggregate results into a single Report.
@@ -148,10 +163,15 @@ pub fn aggregate(results: List<CheckResult>) -> Report {
 
         if r.status.isHealthy() { healthy += 1 }
 
-        slowest = match (slowest, r) {
-            (None, cur)                      -> Some(cur),
-            (Some(prev), cur) if cur.latencyMs > prev.latencyMs -> Some(cur),
-            (keep, _)                        -> keep,
+        if slowest.isNone() {
+            slowest = Some(r)
+        } else {
+            let prev = slowest.unwrap()
+            if r.latencyMs > prev.latencyMs {
+                slowest = Some(r)
+            } else {
+                slowest = Some(prev)
+            }
         }
     }
 
@@ -174,7 +194,7 @@ pub fn main() -> Result<(), Error> {
 
     println("Checking {urls.len()} URL(s)...")
 
-    let results = checkAll(urls)
+    let results = checkAll(urls, 1000)
     let report  = aggregate(results)
 
     println(report.render())
@@ -217,8 +237,8 @@ fn test_aggregate_render() {
 
 /// Property: healthyRate is always in [0.0, 1.0].
 fn test_healthy_rate_property() {
-    let g = testing.Gen.intRange(0, 100)
-    testing.property("rate stays in [0,1]", g, |n| {
+    let g = gen.intRange(0, 100)
+    testing.property("rate stays in [0,1]", g, |n: Int| -> Bool {
         let report = Report {
             total: 100, healthy: n, byLabel: {:}, slowest: None,
         }
