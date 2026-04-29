@@ -572,9 +572,9 @@ func runResolvePackageInner(dir string, flags cliFlags) int {
 		if res != nil {
 			return res
 		}
-		// Go-native resolver reads pf.File directly; materialize
-		// before calling so Run-only loaded files are lowered once.
-		pkg.EnsureFiles()
+		// Go-native resolver reads pf.File directly; materialize the
+		// explicit public-AST compatibility output before calling it.
+		pkg.MaterializePublicCompatibility()
 		res = resolve.ResolvePackageDefault(pkg)
 		return res
 	}
@@ -1644,6 +1644,7 @@ func loadSelectedGenFilesWithTransform(sourcePath string, files []string, transf
 			CanonicalSource: canonicalSrc,
 			CanonicalMap:    canonicalMap,
 			File:            parsed.File,
+			Run:             parsed.Run,
 			ParseDiags:      parsed.Diagnostics,
 			ParseProvenance: parsed.Provenance,
 		}

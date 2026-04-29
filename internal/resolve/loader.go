@@ -109,6 +109,7 @@ func loadPackagePaths(paths []string, dir, name string, transform SourceTransfor
 			CanonicalSource: canonicalSrc,
 			CanonicalMap:    canonicalMap,
 			File:            parsed.File,
+			Run:             parsed.Run,
 			ParseDiags:      parsed.Diagnostics,
 			ParseProvenance: parsed.Provenance,
 		})
@@ -178,13 +179,11 @@ func loadPackageNativePaths(paths []string, dir, name string, transform SourceTr
 	return pkg, nil
 }
 
-// LoadPackageArenaFirst is the recommended loader for CLI / pipeline /
-// LSP / cihost consumers that want the astbridge-free parse while still
-// handing downstream passes a Package with pf.File / pf.CanonicalSource
-// populated in the same shape LoadPackage produced. Internally it runs
-// LoadPackageForNative, EnsureFiles (lazy astbridge lowering per file),
-// and MaterializeCanonicalSources. Phase 1c.2 migration target — see
-// SELFHOST_PORT_MATRIX.md.
+// LoadPackageArenaFirst parses through the selfhost arena-first loader, then
+// explicitly materializes the public-AST compatibility surface expected by
+// legacy resolve/check/lint/codegen consumers. New native consumers should use
+// LoadPackageForNative and avoid this compatibility hop until they really need
+// pf.File / pf.CanonicalSource.
 func LoadPackageArenaFirst(dir string) (*Package, error) {
 	return LoadPackageArenaFirstWithTransform(dir, nil)
 }
@@ -196,23 +195,22 @@ func LoadPackageArenaFirstWithTransform(dir string, transform SourceTransform) (
 	if err != nil {
 		return nil, err
 	}
-	pkg.EnsureFiles()
+	pkg.MaterializePublicCompatibility()
 	pkg.MaterializeCanonicalSources()
 	return pkg, nil
 }
 
 // LoadPackageArenaFirst is the Workspace-level sibling of the
-// package-level LoadPackageArenaFirst. Delegates to LoadPackageNative
-// (arena-first parse + lazy *ast.File lowering) and then materializes
-// canonical sources so downstream consumers observe the full legacy
-// Package shape.
+// package-level LoadPackageArenaFirst. Delegates to LoadPackageNative, then
+// explicitly materializes public-AST compatibility output so downstream legacy
+// consumers observe the full Package shape.
 func (w *Workspace) LoadPackageArenaFirst(dotPath string) (*Package, error) {
 	pkg, err := w.LoadPackageNative(dotPath)
 	if err != nil {
 		return nil, err
 	}
 	if pkg != nil {
-		pkg.EnsureFiles()
+		pkg.MaterializePublicCompatibility()
 		pkg.MaterializeCanonicalSources()
 	}
 	return pkg, nil

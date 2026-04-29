@@ -21,18 +21,20 @@ type Result struct {
 	Diags []*diag.Diagnostic
 }
 
-// File runs the self-hosted lint pass over one resolved source file. rr and
-// chk are retained in the signature for callers that already have a complete
-// front-end result; the lint rules read the source through selfhost.
-func File(f *ast.File, src []byte, rr *resolve.Result, chk *check.Result) *Result {
-	if f == nil {
-		return &Result{}
-	}
-	_ = rr
-	_ = chk
+// Source runs the self-hosted lint pass over raw source. The Osty-authored lint
+// pass owns parsing and suppression handling, so callers that only need lint
+// diagnostics do not need to materialize the public Go AST.
+func Source(src []byte) *Result {
 	result := &Result{}
 	mergeSelfhostLint(result, src)
 	return result
+}
+
+// File runs the self-hosted lint pass over one source file. The AST / resolve /
+// check inputs are retained for compatibility with older front-end call sites,
+// but lint no longer treats the public Go AST as an authority input.
+func File(_ *ast.File, src []byte, _ *resolve.Result, _ *check.Result) *Result {
+	return Source(src)
 }
 
 // mergeSelfhostLint appends diagnostics from the Osty-authored lint pass
@@ -59,7 +61,7 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, chk *check.Result)
 	}
 	res := &Result{}
 	for _, pf := range pkg.Files {
-		if pf == nil || pf.File == nil {
+		if pf == nil {
 			continue
 		}
 		local := &Result{}

@@ -8,39 +8,38 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/osty/osty/internal/ast"
-	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/lint"
 	"github.com/osty/osty/internal/manifest"
-	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
-	"github.com/osty/osty/internal/stdlib"
+	"github.com/osty/osty/internal/selfhost"
 )
 
 // runLintPackage runs the lint pass over every .osty file in dir as a
 // single package so cross-file uses of `use` aliases and top-level
 // declarations don't trigger false "unused" warnings. Workspace mode
 // (dir-of-packages) runs lint per contained package via
-// runLintWorkspace. Single-package path loads arena-first (Phase 1c.2)
-// so parse goes through selfhost.Run; pf.File / canonical materialize
-// lazily for the Go resolver + linter until lint moves onto the
-// engine path in a later Phase 1c.5 slice.
+// runLintWorkspace. Both modes stay on the selfhost arena/native checker path
+// and only run lint from source, so public Go AST compatibility materializes
+// only if some unrelated legacy fallback asks for it.
 func runLintPackage(dir string, flags cliFlags) {
 	if isWorkspace(dir) {
 		runLintWorkspace(dir, flags)
 		return
 	}
-	pkg, err := resolve.LoadPackageArenaFirstWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("lint"), os.Stderr, flags))
+	pkg, err := resolve.LoadPackageForNativeWithTransform(dir, aiRepairSourceTransform(aiRepairPrefix("lint"), os.Stderr, flags))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		os.Exit(1)
 	}
-	res := resolve.ResolvePackageDefault(pkg)
-	chk := check.Package(pkg, res, checkOpts())
-	cfg, cfgBase, hasCfg := loadLintConfigWithBase(dir)
-	outcome := runLintLoadedPackage(pkg, res, chk, flags, cfg, cfgBase, hasCfg)
+	frontendDiags, err := lintNativePackageDiagnostics(pkg, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty: native check: %v\n", err)
+		os.Exit(1)
+	}
+	cfg, _, hasCfg := loadLintConfigWithBase(dir)
+	outcome := runLintLoadedPackage(pkg, frontendDiags, flags, cfg, hasCfg)
 	if outcome.anyErr || (flags.strict && outcome.anyWarn) {
 		os.Exit(1)
 	}
@@ -49,34 +48,32 @@ func runLintPackage(dir string, flags cliFlags) {
 // runLintWorkspace lints each package inside dir, aggregating diagnostics
 // so a single strict check covers the whole tree.
 func runLintWorkspace(dir string, flags cliFlags) {
-	ws, err := resolve.NewWorkspace(dir)
+	ws, err := loadNativeWorkspace(dir, "lint", flags)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		os.Exit(1)
 	}
-	ws.SourceTransform = aiRepairSourceTransform(aiRepairPrefix("lint"), os.Stderr, flags)
-	ws.Stdlib = stdlib.LoadCached()
 	anyErr, anyWarn := false, false
-	runOne := func(path string) {
-		pkg, err := ws.LoadPackageArenaFirst(path)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "osty: %v\n", err)
-			anyErr = true
-			return
+	for _, path := range nativeWorkspacePaths(ws) {
+		pkg := ws.Packages[path]
+		if pkg == nil {
+			continue
 		}
-		res := resolve.ResolvePackageDefault(pkg)
-		chk := check.Package(pkg, res, checkOpts())
-		cfg, cfgBase, hasCfg := loadLintConfigWithBase(pkg.Dir)
-		outcome := runLintLoadedPackage(pkg, res, chk, flags, cfg, cfgBase, hasCfg)
+		imports := check.PackageImportSurfacesForSelfhost(pkg, ws, ws.Stdlib)
+		frontendDiags, err := lintNativePackageDiagnostics(pkg, imports)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "osty: native check: %v\n", err)
+			anyErr = true
+			continue
+		}
+		cfg, _, hasCfg := loadLintConfigWithBase(pkg.Dir)
+		outcome := runLintLoadedPackage(pkg, frontendDiags, flags, cfg, hasCfg)
 		if outcome.anyErr {
 			anyErr = true
 		}
 		if outcome.anyWarn {
 			anyWarn = true
 		}
-	}
-	for _, p := range resolve.WorkspacePackagePaths(dir) {
-		runOne(p)
 	}
 	if anyErr || (flags.strict && anyWarn) {
 		os.Exit(1)
@@ -90,23 +87,36 @@ type lintPackageOutcome struct {
 
 func runLintLoadedPackage(
 	pkg *resolve.Package,
-	res *resolve.PackageResult,
-	chk *check.Result,
+	frontendDiags []*diag.Diagnostic,
 	flags cliFlags,
 	cfg lint.Config,
-	cfgBase string,
 	hasCfg bool,
 ) lintPackageOutcome {
-	lr := lint.Package(pkg, res, chk)
+	lr := lint.Package(pkg, nil, nil)
 	if hasCfg {
 		lr = cfg.Apply(lr)
 	}
-	all := append(append(append([]*diag.Diagnostic{}, res.Diags...), chk.Diags...), lr.Diags...)
+	all := append([]*diag.Diagnostic{}, frontendDiags...)
+	all = append(all, lr.Diags...)
 	printPackageDiags(pkg, all, flags)
 	if flags.fix || flags.fixDryRun {
 		applyPackageFixes(pkg, lr.Diags, flags)
 	}
 	return lintPackageOutcome{anyErr: hasError(all), anyWarn: hasWarning(all)}
+}
+
+func lintNativePackageDiagnostics(pkg *resolve.Package, imports []selfhost.PackageCheckImport) ([]*diag.Diagnostic, error) {
+	if pkg == nil {
+		return nil, nil
+	}
+	input := nativePackageCheckInput(pkg, imports)
+	checked, err := selfhost.CheckPackageStructured(input)
+	if err != nil {
+		return nil, err
+	}
+	diags := packageParseDiags(pkg)
+	diags = append(diags, nativePackageCheckDiags(checked.Diagnostics, input.Files)...)
+	return diags, nil
 }
 
 // applyPackageFixes runs lint.ApplyFixes on each file in the package
@@ -174,25 +184,19 @@ func applyPackageFixes(pkg *resolve.Package, diags []*diag.Diagnostic, flags cli
 
 // runLintFile is the extracted `osty lint FILE` body (minus the
 // exclude-config early-return, which stays in the caller so the "skip"
-// message fires before parse work begins). Runs parse → resolveFile →
-// check.SelfhostFile → lint engine; handles --fix / --fix-dry-run
-// stdout/disk side-effects inside the function.
-//
-// Uses check.SelfhostFile (not check.File) since Phase 1c.5 — lint on
-// a single file never exercises the AST-level builder-desugar rewrite
-// (desugar runs on check.Package for multi-file auto-derive chains),
-// so the selfhost-direct entry shaves that pass without altering the
-// `*check.Result` shape the lint engine consumes.
+// message fires before parse work begins). It keeps the single-file path on
+// selfhost FrontendRun / structured checker output and runs lint from source,
+// so the command no longer materializes the public Go AST just to surface lint
+// diagnostics. Handles --fix / --fix-dry-run stdout/disk side-effects inside
+// the function.
 func runLintFile(path string, src []byte, formatter *diag.Formatter, flags cliFlags, lintCfg lint.Config, lintCfgOk bool) int {
-	parsed := parser.ParseDetailed(src)
-	file, parseDiags := parsed.File, parsed.Diagnostics
-	res := resolveFile(src, file)
-	chk := check.SelfhostFile(file, res, checkOptsForFile(path, canonical.Source(src, file)))
-	lr := runLintEngine(file, src, res, chk)
+	run := selfhost.Run(src)
+	chk := check.SelfhostRun(run, check.Opts{Source: src, Path: path})
+	lr := runLintEngine(src)
 	if lintCfgOk {
 		lr = lintCfg.Apply(lr)
 	}
-	all := append(append(append([]*diag.Diagnostic{}, parseDiags...), res.Diags...), chk.Diags...)
+	all := append([]*diag.Diagnostic{}, chk.Diags...)
 	all = append(all, lr.Diags...)
 	printDiags(formatter, all, flags)
 	if flags.fix || flags.fixDryRun {
@@ -221,8 +225,8 @@ func runLintFile(path string, src []byte, formatter *diag.Formatter, flags cliFl
 	}
 	return 0
 }
-func runLintEngine(file *ast.File, src []byte, res *resolve.Result, chk *check.Result) *lint.Result {
-	return lint.File(file, src, res, chk)
+func runLintEngine(src []byte) *lint.Result {
+	return lint.Source(src)
 }
 
 // loadLintConfigWithBase walks up from the target path collecting

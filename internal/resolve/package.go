@@ -134,10 +134,10 @@ func (pf *PackageFile) EnsureFile() *ast.File {
 	return pf.File
 }
 
-// EnsureFiles forces File materialization on every PackageFile in pkg.
-// Call this before any code path that reads pf.File directly (the
-// Go-native resolver, checker, linter).
-func (pkg *Package) EnsureFiles() {
+// MaterializePublicCompatibility forces File materialization on every
+// PackageFile in pkg through the explicit public-AST compatibility adapter.
+// Call this before a legacy code path that still reads pf.File directly.
+func (pkg *Package) MaterializePublicCompatibility() {
 	if pkg == nil {
 		return
 	}
@@ -146,10 +146,19 @@ func (pkg *Package) EnsureFiles() {
 	}
 }
 
+// EnsureFiles forces File materialization on every PackageFile in pkg.
+//
+// Deprecated: use MaterializePublicCompatibility at explicit public-AST
+// compatibility boundaries. Native front-end paths should keep consuming
+// PackageFile.Run / structured results instead.
+func (pkg *Package) EnsureFiles() {
+	pkg.MaterializePublicCompatibility()
+}
+
 // MaterializeCanonicalSources populates pf.CanonicalSource /
 // pf.CanonicalMap on every file in pkg when either is missing and a
 // lowered *ast.File is available. Needed after arena-first loading
-// (LoadPackageForNative → EnsureFiles) so consumers that project
+// (LoadPackageForNative → MaterializePublicCompatibility) so consumers that project
 // canonical-source spans (native checker bridge, seedgen, LSP query
 // engine) see the same shape LoadPackage's eager loader produces.
 //

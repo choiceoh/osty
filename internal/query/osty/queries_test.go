@@ -26,6 +26,9 @@ func TestParseMissThenHit(t *testing.T) {
 	if pr.File == nil {
 		t.Fatal("parse returned nil file")
 	}
+	if pr.Run == nil {
+		t.Fatal("parse returned nil FrontendRun")
+	}
 	after := eng.DB.Metrics().Sub(before)
 	if after.Misses == 0 {
 		t.Fatal("expected at least one miss on first parse")
@@ -38,11 +41,47 @@ func TestParseMissThenHit(t *testing.T) {
 	if pr2.File == nil {
 		t.Fatal("second parse returned nil file")
 	}
+	if pr2.Run == nil {
+		t.Fatal("second parse returned nil FrontendRun")
+	}
 	if after.Misses != 0 || after.Reruns != 0 {
 		t.Fatalf("cached call should not miss/rerun, got %+v", after)
 	}
 	if after.Hits == 0 {
 		t.Fatalf("cached call should hit, got %+v", after)
+	}
+}
+
+func TestBuildPackagePreservesFrontendRuns(t *testing.T) {
+	eng := NewEngine()
+	defer eng.Close()
+
+	dir := NormalizePath("/tmp/pkg_run")
+	_ = seedFile(eng, dir, "main.osty", "pub fn main() { }\n")
+
+	pkg := eng.Queries.BuildPackage.Get(eng.DB, dir)
+	if pkg == nil || len(pkg.Files) != 1 {
+		t.Fatalf("BuildPackage returned %#v, want one file", pkg)
+	}
+	if pkg.Files[0].Run == nil {
+		t.Fatal("BuildPackage dropped FrontendRun; native consumers would be forced back through public AST")
+	}
+	if pkg.Files[0].File == nil {
+		t.Fatal("BuildPackage should still expose public AST compatibility output")
+	}
+}
+
+func TestLintFileDependsOnlyOnSourceText(t *testing.T) {
+	eng := NewEngine()
+	defer eng.Close()
+
+	path := seedFile(eng, "/tmp/pkg_lint_source", "main.osty", "pub fn main() { }\n")
+
+	before := eng.DB.Metrics()
+	_ = eng.Queries.LintFile.Get(eng.DB, path)
+	after := eng.DB.Metrics().Sub(before)
+	if after.Misses != 1 {
+		t.Fatalf("LintFile should compute without fetching Parse/Resolve/Check, got %+v", after)
 	}
 }
 

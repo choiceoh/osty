@@ -18,6 +18,7 @@ type Error = diag.Diagnostic
 // foreign syntax was absorbed into canonical Osty.
 type Result struct {
 	File        *ast.File
+	Run         *selfhost.FrontendRun
 	Diagnostics []*diag.Diagnostic
 	Provenance  *Provenance
 }
@@ -43,7 +44,7 @@ func ParseDetailed(src []byte) Result {
 	run := pipeline.parseRun()
 	pipeline.applySourceCompat(run)
 	file, diags := selfhost.LowerPublicFileFromRun(run), run.Diagnostics()
-	return pipeline.result(file, diags)
+	return pipeline.result(run, file, diags)
 }
 
 // ParseCanonical parses trusted source and returns the public semantic AST

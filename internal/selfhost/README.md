@@ -24,6 +24,14 @@ Authority rule:
 - `FrontendRun.File()` is deprecated for production code. If a legacy consumer
   still needs public AST shape, use `LowerPublicFileFromRun()` at that explicit
   boundary so the compatibility hop is visible and searchable.
+- Package-level code should keep `PackageFile.Run` / structured results where
+  possible. If a legacy package consumer still needs `PackageFile.File`, call
+  `MaterializePublicCompatibility()` at that boundary rather than hiding the
+  hop inside native loaders.
+- Self-hosted source passes that do their own parsing, such as lint and
+  format, should accept source/structured inputs directly. They should not
+  fetch Parse or require `PackageFile.File` just to satisfy an old adapter
+  signature.
 
 The exact merged Osty inputs live in
 [`internal/selfhost/bundle/bundle.go`](./bundle/bundle.go):

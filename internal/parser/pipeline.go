@@ -38,9 +38,10 @@ func (p *parsePipeline) parseRun() *selfhost.FrontendRun {
 	return selfhost.Run(p.parsedSrc)
 }
 
-func (p *parsePipeline) result(file *ast.File, diags []*diag.Diagnostic) Result {
+func (p *parsePipeline) result(run *selfhost.FrontendRun, file *ast.File, diags []*diag.Diagnostic) Result {
 	return Result{
 		File:        file,
+		Run:         run,
 		Diagnostics: diags,
 		Provenance:  p.provenancePtr(),
 	}
