@@ -9,7 +9,7 @@ bindings
   id=binding:46a24bc911e8 nodeKey=node:943860bfc5f7e91 typeKey=type:0cbe92b642f4e2f bindingId=0 node=8 nodeId=8 name=answer mutable=false typeId=2 span=50:56 type=Int
 symbols
   id=symbol:5f62d6da7a4ee nodeKey=node:5c0b26c77174404 typeKey=type:9addffd32952554 symbolId=0 node=7 nodeId=7 kind=fn name=id owner= typeId=108 span=0:33 type=fn(T) -> T
-  id=symbol:b8e98828503be nodeKey=node:3370ff521ebcb76 typeKey=type:b4f942e1ed0777f symbolId=1 node=16 nodeId=16 kind=fn name=main owner= typeId=118 span=34:73 type=fn() -> ()
+  id=symbol:b8e98828503be nodeKey=node:3370ff521ebcb76 typeKey=type:b4f942e1ed0777f symbolId=1 node=16 nodeId=16 kind=fn name=main owner= typeId=133 span=34:73 type=fn() -> ()
 instantiations
   id=instantiation:7468aa nodeKey=node:81030ece726c8c2 resultTypeKey=type:0cbe92b642f4e2f instantiationId=0 node=13 nodeId=13 callee=id span=68:71 typeArgIds=[2] typeArgKeys=[type:0cbe92b642f4e2f] typeArgs=[Int] resultTypeId=2 resultType=Int
 diagnostics

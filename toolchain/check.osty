@@ -340,6 +340,8 @@ fn collectUseDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
             // `use std.testing` (examples use this without an explicit alias,
             // so the alias defaults to "testing" via useDeclAliasName).
             registerStdTestingAliasFns(env, alias)
+        } else if node.text == "std.testing.gen" {
+            registerStdTestingGenAliasFns(env, alias)
         } else if node.text == "std.fs" {
             registerStdFsAliasFns(env, alias)
         } else if node.text == "std.debug" {
@@ -589,14 +591,20 @@ fn registerStdTestingAliasFns(env: CheckEnv, alias: String) {
     let tUnit_ = tUnit(tys)
     let tT = tyNamed(tys, "T", [])
     let tE = tyNamed(tys, "E", [])
+    let tGenT = tyNamed(tys, "Gen", [tT])
     let tResultTE = tyNamed(tys, "Result", [tT, tE])
     let tFnUnit = tyFn(tys, [], tUnit_)
     let tFnResUnit = tyFn(tys, [], tyNamed(tys, "Result", [tUnit_, tyNamed(tys, "Error", [])]))
+    let tFnTBool = tyFn(tys, [tT], tBool_)
 
     let emptyGenerics: List<String> = []
     let emptyBounds: List<CheckGenericBound> = []
     let gT: List<String> = ["T"]
     let gTE: List<String> = ["T", "E"]
+
+    checkRegisterType(env, CheckTypeSig {
+        name: "Gen", generics: gT, genericBounds: emptyBounds, kind: "struct",
+    })
 
     checkRegisterFn(env, CheckFnSig {
         name: "assert", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
@@ -652,6 +660,125 @@ fn registerStdTestingAliasFns(env: CheckEnv, alias: String) {
         name: "snapshot", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
         paramNames: ["name", "output"], paramTys: [tString_, tString_],
         generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "property", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
+        paramNames: ["name", "g", "pred"], paramTys: [tString_, tGenT, tFnTBool],
+        generics: gT, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "propertyN", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
+        paramNames: ["name", "g", "iterations", "pred"], paramTys: [tString_, tGenT, tInt_, tFnTBool],
+        generics: gT, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "propertySeeded", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
+        paramNames: ["name", "g", "seed", "pred"], paramTys: [tString_, tGenT, tInt_, tFnTBool],
+        generics: gT, genericBounds: emptyBounds,
+    })
+}
+
+fn registerStdTestingGenAliasFns(env: CheckEnv, alias: String) {
+    let tys = env.tys
+    let tInt_ = tInt(tys)
+    let tBool_ = tBool(tys)
+    let tString_ = tString(tys)
+    let tT = tyNamed(tys, "T", [])
+    let tU = tyNamed(tys, "U", [])
+    let tA = tyNamed(tys, "A", [])
+    let tB = tyNamed(tys, "B", [])
+    let tC = tyNamed(tys, "C", [])
+    let tE = tyNamed(tys, "E", [])
+    let tGenT = tyNamed(tys, "Gen", [tT])
+    let tGenU = tyNamed(tys, "Gen", [tU])
+    let tGenA = tyNamed(tys, "Gen", [tA])
+    let tGenB = tyNamed(tys, "Gen", [tB])
+    let tGenC = tyNamed(tys, "Gen", [tC])
+    let tGenE = tyNamed(tys, "Gen", [tE])
+    let emptyGenerics: List<String> = []
+    let emptyBounds: List<CheckGenericBound> = []
+    let gT: List<String> = ["T"]
+
+    checkRegisterType(env, CheckTypeSig {
+        name: "Gen", generics: gT, genericBounds: emptyBounds, kind: "struct",
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "int", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tInt_]),
+        paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "intRange", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tInt_]),
+        paramNames: ["lo", "hi"], paramTys: [tInt_, tInt_], generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "bool", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tBool_]),
+        paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "float", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tFloat64(tys)]),
+        paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "char", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tChar(tys)]),
+        paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "byte", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tByte(tys)]),
+        paramNames: [], paramTys: [], generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "asciiString", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tyNamed(tys, "Gen", [tString_]),
+        paramNames: ["maxLen"], paramTys: [tInt_], generics: emptyGenerics, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "oneOf", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tGenT,
+        paramNames: ["choices"], paramTys: [tyNamed(tys, "List", [tT])], generics: gT, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "map", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tGenU,
+        paramNames: ["g", "f"], paramTys: [tGenT, tyFn(tys, [tT], tU)], generics: ["T", "U"], genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "filter", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tGenT,
+        paramNames: ["g", "pred"], paramTys: [tGenT, tyFn(tys, [tT], tBool_)], generics: gT, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "pair", owner: alias, receiverTy: -1, hasReceiver: false,
+        retTy: tyNamed(tys, "Gen", [tyTuple(tys, [tA, tB])]),
+        paramNames: ["a", "b"], paramTys: [tGenA, tGenB], generics: ["A", "B"], genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "triple", owner: alias, receiverTy: -1, hasReceiver: false,
+        retTy: tyNamed(tys, "Gen", [tyTuple(tys, [tA, tB, tC])]),
+        paramNames: ["a", "b", "c"], paramTys: [tGenA, tGenB, tGenC], generics: ["A", "B", "C"], genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "list", owner: alias, receiverTy: -1, hasReceiver: false,
+        retTy: tyNamed(tys, "Gen", [tyNamed(tys, "List", [tT])]),
+        paramNames: ["item", "maxLen"], paramTys: [tGenT, tInt_], generics: gT, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "listOfSize", owner: alias, receiverTy: -1, hasReceiver: false,
+        retTy: tyNamed(tys, "Gen", [tyNamed(tys, "List", [tT])]),
+        paramNames: ["item", "size"], paramTys: [tGenT, tInt_], generics: gT, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "option", owner: alias, receiverTy: -1, hasReceiver: false,
+        retTy: tyNamed(tys, "Gen", [tyOptional(tys, tT)]),
+        paramNames: ["item"], paramTys: [tGenT], generics: gT, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "result", owner: alias, receiverTy: -1, hasReceiver: false,
+        retTy: tyNamed(tys, "Gen", [tyNamed(tys, "Result", [tT, tE])]),
+        paramNames: ["ok", "err"], paramTys: [tGenT, tGenE], generics: ["T", "E"], genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "constant", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tGenT,
+        paramNames: ["value"], paramTys: [tT], generics: gT, genericBounds: emptyBounds,
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "oneOfGens", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tGenT,
+        paramNames: ["gens"], paramTys: [tyNamed(tys, "List", [tGenT])], generics: gT, genericBounds: emptyBounds,
     })
 }
 

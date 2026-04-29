@@ -2,14 +2,14 @@ summary assignments=0 accepted=0 errors=1
 errorsByContext E0731=1
 errorDetails E0731 match is not exhaustive: missing `Option.Some(_)` @L2:C5=1
 typedNodes
-  id=typed-node:bb45f0d2f nodeKey=node:e821fb1de8a7b54 typeKey=type:a2841dcf374046a node=4 nodeId=4 typeId=118 kind=Ident span=43:44 type=Option<Int>
+  id=typed-node:bb45f0d2f nodeKey=node:e821fb1de8a7b54 typeKey=type:a2841dcf374046a node=4 nodeId=4 typeId=133 kind=Ident span=43:44 type=Option<Int>
   id=typed-node:68a6ad56e nodeKey=node:fd8a7b5bb1b9812 typeKey=type:0cbe92b642f4e2f node=7 nodeId=7 typeId=2 kind=IntLit span=67:68 type=Int
   id=typed-node:f658257e8 nodeKey=node:e113441d9af13f2 typeKey=type:0cbe92b642f4e2f node=10 nodeId=10 typeId=2 kind=IntLit span=86:87 type=Int
   id=typed-node:44bdcc86c nodeKey=node:0f2924b336195c7 typeKey=type:0cbe92b642f4e2f node=12 nodeId=12 typeId=2 kind=Match span=37:94 type=Int
   id=typed-node:6ae0146ac nodeKey=node:64e465f56c81267 typeKey=type:0cbe92b642f4e2f node=14 nodeId=14 typeId=2 kind=Block span=31:96 type=Int
 bindings
 symbols
-  id=symbol:8f9c4d6ff5c6e nodeKey=node:05c11385a8c46d8 typeKey=type:b094483ff5bf7fd symbolId=0 node=15 nodeId=15 kind=fn name=code owner= typeId=119 span=0:96 type=fn(Option<Int>) -> Int
+  id=symbol:8f9c4d6ff5c6e nodeKey=node:05c11385a8c46d8 typeKey=type:b094483ff5bf7fd symbolId=0 node=15 nodeId=15 kind=fn name=code owner= typeId=134 span=0:96 type=fn(Option<Int>) -> Int
 instantiations
 diagnostics
   code=E0731 severity=error span=37:94 line=2:5-5:6 message=match is not exhaustive: missing `Option.Some(_)`

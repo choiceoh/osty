@@ -11,7 +11,7 @@ bindings
   id=binding:36a65d5fffc6 nodeKey=node:943860bfc5f7e91 typeKey=type:819354aa58f2166 bindingId=0 node=8 nodeId=8 name=answer mutable=false typeId=21 span=50:56 type=UntypedInt
 symbols
   id=symbol:5f62d6da7a4ee nodeKey=node:5c0b26c77174404 typeKey=type:9addffd32952554 symbolId=0 node=7 nodeId=7 kind=fn name=id owner= typeId=108 span=0:33 type=fn(T) -> T
-  id=symbol:ccd3fe9f277c8 nodeKey=node:2a72dc672708fa9 typeKey=type:b4f942e1ed0777f symbolId=1 node=17 nodeId=17 kind=fn name=main owner= typeId=118 span=34:81 type=fn() -> ()
+  id=symbol:ccd3fe9f277c8 nodeKey=node:2a72dc672708fa9 typeKey=type:b4f942e1ed0777f symbolId=1 node=17 nodeId=17 kind=fn name=main owner= typeId=133 span=34:81 type=fn() -> ()
 instantiations
   id=instantiation:0e805f nodeKey=node:c75801d39c9edaa resultTypeKey=type:819354aa58f2166 instantiationId=0 node=14 nodeId=14 callee=id span=76:79 typeArgIds=[21] typeArgKeys=[type:819354aa58f2166] typeArgs=[UntypedInt] resultTypeId=21 resultType=UntypedInt
 diagnostics
