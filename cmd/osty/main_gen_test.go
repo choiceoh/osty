@@ -343,7 +343,7 @@ func TestEmitGenArtifactUsesNativeOwnedFastPathForListIndex(t *testing.T) {
 	}
 }
 
-func TestEmitGenArtifactFallsBackForStdTestingMIRBackend(t *testing.T) {
+func TestEmitGenArtifactUsesMIRDirectForStdTesting(t *testing.T) {
 	dir := t.TempDir()
 	target := writeGenTestFile(t, dir, "main.osty", `use std.testing
 
@@ -378,7 +378,7 @@ fn main() {
 	if _, ok, _, err := backend.TryEmitNativeOwnedLLVMIRText(backendEntry, ""); err != nil {
 		t.Fatalf("TryEmitNativeOwnedLLVMIRText() error = %v", err)
 	} else if ok {
-		t.Fatal("TryEmitNativeOwnedLLVMIRText() unexpectedly covered std.testing fallback")
+		t.Fatal("TryEmitNativeOwnedLLVMIRText() unexpectedly covered std.testing")
 	}
 
 	got, result, err := emitGenArtifact(backend.NameLLVM, backend.EmitLLVMIR, "main", entry)
@@ -389,6 +389,7 @@ fn main() {
 		t.Fatal("emitGenArtifact() result is nil")
 	}
 	for _, want := range []string{
+		"osty LLVM MIR backend",
 		"declare void @exit(i32)",
 		"extractvalue %Result.",
 		"testing.expectOk failed",
@@ -396,7 +397,7 @@ fn main() {
 		"testing.assertEq failed",
 	} {
 		if !strings.Contains(string(got), want) {
-			t.Fatalf("fallback llvm-ir missing %q:\n%s", want, got)
+			t.Fatalf("MIR llvm-ir missing %q:\n%s", want, got)
 		}
 	}
 }

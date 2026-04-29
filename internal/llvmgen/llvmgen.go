@@ -30,15 +30,15 @@ import (
 
 // ErrUnsupported marks source shapes that this early LLVM emitter does
 // not lower yet. Callers observing this sentinel must render the
-// skeleton IR themselves — the LLVM backend dispatcher no longer falls
+// skeleton IR themselves; the LLVM backend dispatcher no longer falls
 // back to an AST path when IR lowering hits a gap.
 var ErrUnsupported = errors.New("llvmgen: unsupported source shape")
 
 // Options configures textual LLVM IR emission.
 //
 // UseMIR selects the MIR-direct emitter. The LLVM backend now enables
-// it by default and falls back automatically on ErrUnsupported; direct
-// callers can still leave the zero value to stay on the legacy
+// it by default after the native-owned fast path declines coverage;
+// direct callers can still leave the zero value to stay on the legacy
 // HIR→AST bridge or set it explicitly when running dual-emission
 // tests.
 //

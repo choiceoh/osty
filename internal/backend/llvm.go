@@ -57,7 +57,7 @@ func EmitLLVMIRText(entry Entry, target string, features []string) ([]byte, []er
 // TryEmitNativeOwnedLLVMIRText runs only the native-owned llvmgen fast path
 // mirrored from toolchain/llvmgen.osty. It returns ok=false when the entry's
 // IR module is still outside that slice and the caller should choose a
-// fallback path.
+// broader MIR backend path.
 func TryEmitNativeOwnedLLVMIRText(entry Entry, target string) ([]byte, bool, []error, error) {
 	if entry.IR == nil {
 		return nil, false, nil, fmt.Errorf("llvm backend: missing lowered IR entry")
@@ -168,29 +168,16 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 	// backend does not consume directly any more.
 	//
 	// After the native-owned fast path declines coverage, every emit
-	// mode — raw `llvm-ir`, object, binary — prefers the MIR-direct
-	// emitter. On MIR-emitter refusal we fall back automatically to
-	// the HIR path, so MIR-first cannot reduce coverage.
+	// mode — raw `llvm-ir`, object, binary — enters the MIR-direct
+	// emitter. MIR refusal now surfaces as the normal unsupported
+	// skeleton diagnostic; the LLVM backend no longer retries the
+	// legacy HIR bridge behind the user's back.
 	var (
 		irOut  []byte
 		genErr error
 	)
 	if opts.UseMIR && entry.MIR != nil {
 		irOut, genErr = llvmgen.GenerateFromMIR(entry.MIR, opts)
-		if genErr != nil && errors.Is(genErr, llvmgen.ErrUnsupported) {
-			// OSTY_TRACE_MIR_FALLBACK is the probe env flag that prints
-			// which shape made the MIR emitter refuse. Off by default
-			// so user-facing `osty test` / `osty build` stays quiet —
-			// wire it on when extending MIR coverage to see the
-			// specific unsupported symbol/type hint the emitter
-			// surfaces.
-			if os.Getenv("OSTY_TRACE_MIR_FALLBACK") != "" {
-				fmt.Fprintf(os.Stderr, "osty-mir-fallback: %s: %v\n", entry.SourcePath, genErr)
-			}
-			// MIR emitter refused — fall back to the HIR path.
-			opts.UseMIR = false
-			irOut, genErr = llvmgen.GenerateModule(entry.IR, opts)
-		}
 	} else {
 		irOut, genErr = llvmgen.GenerateModule(entry.IR, opts)
 	}
@@ -288,10 +275,9 @@ func runClang(ctx context.Context, action string, args []string) error {
 	return fmt.Errorf("%s: %w", llvmgen.ClangFailureMessage(action, command, msg), err)
 }
 
-// useMIRBackend reports whether LLVM emission should prefer the
+// useMIRBackend reports whether LLVM emission should use the
 // MIR-direct path. Every emit mode — raw `llvm-ir`, object, binary —
-// is MIR-first; the dispatcher falls back to the HIR emitter on
-// `ErrUnsupported`, so coverage never regresses.
+// is MIR-owned once the native-owned fast path declines coverage.
 func useMIRBackend(_ []string, _ EmitMode) bool {
 	return true
 }

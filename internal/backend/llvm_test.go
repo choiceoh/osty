@@ -694,7 +694,7 @@ func TestLLVMBackendEmitBinaryPrefersNativeOwnedFastPathForListIndex(t *testing.
 	}
 }
 
-func TestEmitLLVMIRTextFallsBackForStdTestingMIRBackend(t *testing.T) {
+func TestEmitLLVMIRTextUsesMIRDirectForStdTesting(t *testing.T) {
 	t.Parallel()
 
 	req := newBackendRequest(t, EmitLLVMIR, `use std.testing
@@ -717,13 +717,14 @@ fn main() {
 	if _, ok, _, err := TryEmitNativeOwnedLLVMIRText(req.Entry, ""); err != nil {
 		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
 	} else if ok {
-		t.Fatal("TryEmitNativeOwnedLLVMIRText unexpectedly covered std.testing fallback")
+		t.Fatal("TryEmitNativeOwnedLLVMIRText unexpectedly covered std.testing")
 	}
 	got, warnings, err := EmitLLVMIRText(req.Entry, "", nil)
 	if err != nil {
 		t.Fatalf("EmitLLVMIRText returned error: %v", err)
 	}
 	for _, want := range []string{
+		"osty LLVM MIR backend",
 		"declare void @exit(i32)",
 		"extractvalue %Result.",
 		"testing.expectOk failed",
@@ -731,7 +732,7 @@ fn main() {
 		"testing.assertEq failed",
 	} {
 		if !strings.Contains(string(got), want) {
-			t.Fatalf("EmitLLVMIRText fallback IR missing %q:\n%s", want, got)
+			t.Fatalf("EmitLLVMIRText MIR IR missing %q:\n%s", want, got)
 		}
 	}
 	if len(warnings) != len(req.Entry.IRIssues) {
@@ -739,7 +740,7 @@ fn main() {
 	}
 }
 
-func TestLLVMBackendEmitBinaryFallsBackForStdTestingMIRBackend(t *testing.T) {
+func TestLLVMBackendEmitBinaryUsesMIRDirectForStdTesting(t *testing.T) {
 	t.Parallel()
 
 	tc := &fakeLLVMToolchain{}
@@ -764,7 +765,7 @@ fn main() {
 	if _, ok, _, err := TryEmitNativeOwnedLLVMIRText(req.Entry, ""); err != nil {
 		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
 	} else if ok {
-		t.Fatal("TryEmitNativeOwnedLLVMIRText unexpectedly covered std.testing fallback")
+		t.Fatal("TryEmitNativeOwnedLLVMIRText unexpectedly covered std.testing")
 	}
 	result, err := backend.Emit(context.Background(), req)
 	if err != nil {
@@ -775,6 +776,7 @@ fn main() {
 		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
 	}
 	for _, want := range []string{
+		"osty LLVM MIR backend",
 		"declare void @exit(i32)",
 		"extractvalue %Result.",
 		"testing.expectOk failed",
@@ -782,7 +784,7 @@ fn main() {
 		"testing.assertEq failed",
 	} {
 		if !strings.Contains(string(got), want) {
-			t.Fatalf("Emit binary fallback IR missing %q:\n%s", want, got)
+			t.Fatalf("Emit binary MIR IR missing %q:\n%s", want, got)
 		}
 	}
 }

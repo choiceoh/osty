@@ -1,7 +1,6 @@
 package llvmgen
 
 import (
-	"errors"
 	"strings"
 	"testing"
 
@@ -163,10 +162,10 @@ fn probe(p: Printable) -> Marker? {
 	}
 }
 
-// End-to-end: full compilation pipeline (parser → resolve → check →
-// ir.Lower → mir.Lower → GenerateFromMIR → fall back to
-// GenerateModule on ErrUnsupported) exercises the real `osty build`
-// route. Without this test the backend-only `generateFromAST` tests
+// End-to-end: full compilation pipeline (parser -> resolve -> check ->
+// ir.Lower -> mir.Lower -> GenerateFromMIR) exercises the real
+// MIR-owned `osty build` route. Without this test the backend-only
+// `generateFromAST` tests
 // don't prove anything about whether a user writing
 // `recv.downcast::<T>()` in a `.osty` source file actually reaches
 // the vtable-compare lowering.
@@ -213,13 +212,7 @@ fn main() {}
 
 	out, err := GenerateFromMIR(mirMod, opts)
 	if err != nil {
-		if !errors.Is(err, ErrUnsupported) {
-			t.Fatalf("GenerateFromMIR hard error (not ErrUnsupported): %v", err)
-		}
-		out, err = GenerateModule(mod, opts)
-		if err != nil {
-			t.Fatalf("GenerateModule fallback error: %v", err)
-		}
+		t.Fatalf("GenerateFromMIR error: %v", err)
 	}
 
 	got := string(out)

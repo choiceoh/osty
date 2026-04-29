@@ -341,12 +341,12 @@ func TestGenerateFromMIRPrintlnStringUsesRuntimeIOWrite(t *testing.T) {
 	}
 }
 
-// TestGenerateFromMIRUnsupportedFallsBack — a module using an
+// TestGenerateFromMIRUnsupportedReportsDiagnostic — a module using an
 // unresolved NamedType (not a Builtin collection, not in the
 // module's LayoutTable, not a known prelude name) must trip
-// `ErrUnsupported` so the backend dispatcher falls back to the
-// legacy path.
-func TestGenerateFromMIRUnsupportedFallsBack(t *testing.T) {
+// `ErrUnsupported` so the backend dispatcher can render a skeleton
+// diagnostic instead of silently retrying the legacy path.
+func TestGenerateFromMIRUnsupportedReportsDiagnostic(t *testing.T) {
 	unknownT := &ir.NamedType{Name: "Unknown"}
 	hir := &ir.Module{
 		Package: "main",
@@ -534,13 +534,11 @@ func TestMIRDualEmitFromSource(t *testing.T) {
 	}
 }
 
-// TestMIRDualEmitGracefulFallback proves that when the MIR emitter
-// refuses a program (a closure with captures is still outside the
-// MVP), the backend dispatcher catches `ErrUnsupported` and retries
-// on the HIR path. We hand-build the HIR here so the test is
-// independent of parser / checker restrictions on closure-trailing-
-// expr source shape.
-func TestMIRDualEmitGracefulFallback(t *testing.T) {
+// TestMIRUnsupportedKeepsErrUnsupportedSentinel proves that when the
+// MIR emitter refuses a program it preserves the public sentinel used
+// by backend diagnostics. We hand-build the HIR here so the test is
+// independent of parser / checker restrictions on source shape.
+func TestMIRUnsupportedKeepsErrUnsupportedSentinel(t *testing.T) {
 	// Use an unresolved NamedType — still outside MVP.
 	unknownT := &ir.NamedType{Name: "Unknown"}
 	hir := &ir.Module{

@@ -2412,6 +2412,8 @@ func builtinMethodReturnType(recvT ir.Type, method string) ir.Type {
 			return ir.TBool
 		case "substring", "slice", "trim", "toUpper", "toLower", "replace", "toString":
 			return ir.TString
+		case "toBytes":
+			return ir.TBytes
 		case "chars":
 			return &ir.NamedType{Name: "List", Args: []ir.Type{ir.TChar}, Builtin: true}
 		case "bytes":
@@ -3572,6 +3574,20 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 		}
 	}
 	if fx, ok := c.Callee.(*ir.FieldExpr); ok {
+		if id, ok := fx.X.(*ir.Ident); ok && id != nil {
+			switch id.Name {
+			case "Bytes":
+				if kind := stdlibBytesFreeFnToIntrinsic("bytes", fx.Name); kind != IntrinsicInvalid {
+					bs.emitBytesFreeFnIntrinsic(kind, c.Args, dest, destT, c.SpanV)
+					return
+				}
+			case "String", "strings":
+				if kind := stdlibStringFreeFnToIntrinsic("strings", fx.Name); kind != IntrinsicInvalid {
+					bs.emitStringFreeFnIntrinsic(kind, c.Args, dest, destT, c.SpanV)
+					return
+				}
+			}
+		}
 		if use := bs.l.useAliasFor(fx.X); use != nil {
 			if kind := concurrencyIntrinsicForFree(qualifierOf(use), fx.Name); kind != IntrinsicInvalid {
 				bs.emitConcurrencyIntrinsic(kind, c.Args, dest, destT, c.SpanV)
@@ -4719,6 +4735,8 @@ func stringIntrinsicForMethod(name string) IntrinsicKind {
 		return IntrinsicStringChars
 	case "bytes":
 		return IntrinsicStringBytes
+	case "toBytes":
+		return IntrinsicBytesFromString
 	}
 	return IntrinsicInvalid
 }
@@ -4856,6 +4874,8 @@ func stdlibStringFreeFnToIntrinsic(qualifier, name string) IntrinsicKind {
 		return IntrinsicStringChars
 	case "bytes":
 		return IntrinsicStringBytes
+	case "toBytes":
+		return IntrinsicBytesFromString
 	case "replace":
 		return IntrinsicStringReplace
 	case "replaceAll", "ReplaceAll":
