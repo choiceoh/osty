@@ -2118,6 +2118,30 @@ func mirFunctionParamPart(llvmT string, isNoalias bool, idxDigits string) string
 	return llvmT + " %arg" + idxDigits
 }
 
+// mirEnvArgsArgcParamPart / ArgvParamPart render the C ABI params
+// added to `main` when a MIR module uses `std.env.args()`.
+// Osty: mirEnvArgsArgcParamPart
+func mirEnvArgsArgcParamPart() string {
+	return "i32 %osty_env_argc"
+}
+
+// Osty: mirEnvArgsArgvParamPart
+func mirEnvArgsArgvParamPart() string {
+	return "ptr %osty_env_argv"
+}
+
+// mirEnvArgsArgcValue / ArgvValue name the incoming C ABI values used
+// by the `osty_rt_env_args_init` prologue.
+// Osty: mirEnvArgsArgcValue
+func mirEnvArgsArgcValue() string {
+	return "%osty_env_argc"
+}
+
+// Osty: mirEnvArgsArgvValue
+func mirEnvArgsArgvValue() string {
+	return "%osty_env_argv"
+}
+
 // mirBlockLabelName returns `"entry"` when isEntry / `"bb<N>"`
 // otherwise. `blockIDDigits` is the already-formatted decimal
 // block ID.
@@ -9345,6 +9369,16 @@ func mirCallVoidPtrI64Text(sym, p, n string) string {
 // Osty: mirCallVoidI64PtrText
 func mirCallVoidI64PtrText(sym, n, p string) string {
 	return "  call void @" + sym + "(i64 " + n + ", ptr " + p + ")"
+}
+
+// mirEnvArgsInitPreamble renders the two entry-block lines that seed
+// the runtime env-args snapshot from C `main(argc, argv)`.
+// Osty: mirEnvArgsInitPreamble
+func mirEnvArgsInitPreamble(initSym, argcI64 string) []string {
+	return []string{
+		mirSExtI32ToI64Text(argcI64, mirEnvArgsArgcValue()),
+		mirCallVoidI64PtrText(initSym, argcI64, mirEnvArgsArgvValue()),
+	}
 }
 
 // Osty: mirCallVoidPtrPtrText

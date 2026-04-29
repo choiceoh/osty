@@ -1,10 +1,10 @@
 use std.env
+use std.fs
 use std.os
 use std.process
 use std.strings
 
-fn forwardedArgs() -> List<String> {
-    let encoded = env.get("OSTY_SELF_REBUILD_FORWARD_ARGS") ?? ""
+fn forwardedArgsFrom(encoded: String, rawArgs: List<String>) -> List<String> {
     if encoded != "" {
         let mut out: List<String> = []
         for arg in strings.split(encoded, "\n") {
@@ -14,15 +14,69 @@ fn forwardedArgs() -> List<String> {
         }
         return out
     }
-    env.args()
+    let mut out: List<String> = []
+    let mut i = 1
+    for i < rawArgs.len() {
+        out.push(rawArgs[i])
+        i = i + 1
+    }
+    out
+}
+
+fn forwardedArgs() -> List<String> {
+    forwardedArgsFrom(env.get("OSTY_SELF_REBUILD_FORWARD_ARGS") ?? "", env.args())
+}
+
+fn hostCompiler() -> String {
+    let explicit = env.get("OSTY_SELF_REBUILD_HOST_BIN") ?? ""
+    if explicit != "" {
+        return explicit
+    }
+    if fs.exists(".bin/osty") {
+        return ".bin/osty"
+    }
+    "osty"
+}
+
+fn hasSelfhostCommand(args: List<String>, name: String) -> Bool {
+    args.len() > 0 && args[0] == name
+}
+
+fn runSelfhostDoctor(host: String) -> Int {
+    println("osty-self host: {host}")
+    let result = os.exec(host, ["explain", "E0001"])
+    match result {
+        Ok(out) -> {
+            if out.exitCode == 0 && strings.contains(out.stdout, "E0001") {
+                println("osty-self host probe: OK")
+                return 0
+            }
+            if out.stdout != "" {
+                print(out.stdout)
+            }
+            if out.stderr != "" {
+                eprint(out.stderr)
+            }
+            out.exitCode
+        },
+        Err(_) -> {
+            eprint("osty-self host probe failed; set OSTY_SELF_REBUILD_HOST_BIN or run from the repo root after `just build`\n")
+            2
+        },
+    }
 }
 
 fn main() {
-    let host = env.get("OSTY_SELF_REBUILD_HOST_BIN") ?? ""
-    if host == "" {
-        process.abort("osty-self bootstrap needs OSTY_SELF_REBUILD_HOST_BIN")
+    let args = forwardedArgs()
+    let host = hostCompiler()
+    if hasSelfhostCommand(args, "--selfhost-host") {
+        println(host)
+        os.exit(0)
     }
-    let result = os.exec(host, forwardedArgs())
+    if hasSelfhostCommand(args, "--selfhost-doctor") {
+        os.exit(runSelfhostDoctor(host))
+    }
+    let result = os.exec(host, args)
     match result {
         Ok(out) -> {
             if out.stdout != "" {
@@ -33,6 +87,6 @@ fn main() {
             }
             os.exit(out.exitCode)
         },
-        Err(_) -> process.abort("osty-self bootstrap exec failed"),
+        Err(_) -> process.abort("osty-self bootstrap exec failed; set OSTY_SELF_REBUILD_HOST_BIN or run from the repo root after `just build`"),
     }
 }

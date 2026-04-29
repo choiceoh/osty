@@ -37,6 +37,47 @@ func buildMIRModuleFromHIR(t *testing.T, mod *ir.Module) *mir.Module {
 	return m
 }
 
+func TestGenerateFromMIRStdEnvArgsInitializesArgv(t *testing.T) {
+	listStrT := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	fn := &mir.Function{
+		Name:       "main",
+		ReturnType: ir.TUnit,
+	}
+	ret := fn.NewLocal("_return", ir.TUnit, false, mir.Span{})
+	fn.ReturnLocal = ret
+	fn.Locals[ret].IsReturn = true
+	args := fn.NewLocal("args", listStrT, true, mir.Span{})
+	entry := fn.NewBlock(mir.Span{})
+	fn.Entry = entry
+	bb := fn.Block(entry)
+	bb.Instrs = append(bb.Instrs, &mir.CallInstr{
+		Dest:   &mir.Place{Local: args},
+		Callee: &mir.FnRef{Symbol: "std.env.args"},
+	})
+	bb.SetTerminator(&mir.ReturnTerm{})
+	m := &mir.Module{
+		Package:   "main",
+		Functions: []*mir.Function{fn},
+		Layouts:   mir.NewLayoutTable(),
+	}
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/std_env_args_mir.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare void @osty_rt_env_args_init(i64, ptr)",
+		"declare ptr @osty_rt_env_args()",
+		"define i32 @main(i32 %osty_env_argc, ptr %osty_env_argv)",
+		"call void @osty_rt_env_args_init(i64",
+		"call ptr @osty_rt_env_args()",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated MIR LLVM missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateFromMIRConstReturn — `fn answer() -> Int { 42 }`
 // should emit a define, alloca for the return slot, store 42,
 // load, ret.

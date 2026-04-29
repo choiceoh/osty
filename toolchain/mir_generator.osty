@@ -2643,6 +2643,26 @@ pub fn mirFunctionParamPart(llvmT: String, isNoalias: Bool, idxDigits: String) -
     llvmT + suffix
 }
 
+/// mirEnvArgsArgcParamPart / ArgvParamPart render the C ABI params
+/// added to `main` when a MIR module uses `std.env.args()`.
+pub fn mirEnvArgsArgcParamPart() -> String {
+    "i32 %osty_env_argc"
+}
+
+pub fn mirEnvArgsArgvParamPart() -> String {
+    "ptr %osty_env_argv"
+}
+
+/// mirEnvArgsArgcValue / ArgvValue name the incoming C ABI values used
+/// by the `osty_rt_env_args_init` prologue.
+pub fn mirEnvArgsArgcValue() -> String {
+    "%osty_env_argc"
+}
+
+pub fn mirEnvArgsArgvValue() -> String {
+    "%osty_env_argv"
+}
+
 /// mirBlockLabelName returns the LLVM basic-block label name for
 /// MIR block ID `blockID` — `"entry"` when it's the function's
 /// entry block, `"bb<N>"` otherwise (where N is the block ID).
@@ -14652,6 +14672,15 @@ pub fn mirCallVoidPtrI64Text(sym: String, p: String, n: String) -> String {
 /// `osty_rt_env_args_init`).
 pub fn mirCallVoidI64PtrText(sym: String, n: String, p: String) -> String {
     "  call void @" + sym + "(i64 " + n + ", ptr " + p + ")"
+}
+
+/// mirEnvArgsInitPreamble renders the two entry-block lines that seed
+/// the runtime env-args snapshot from C `main(argc, argv)`.
+pub fn mirEnvArgsInitPreamble(initSym: String, argcI64: String) -> List<String> {
+    [
+        mirSExtI32ToI64Text(argcI64, mirEnvArgsArgcValue()),
+        mirCallVoidI64PtrText(initSym, argcI64, mirEnvArgsArgvValue()),
+    ]
 }
 
 /// mirCallVoidPtrPtrText renders `  call void @<sym>(ptr <a>, ptr <b>)`.
