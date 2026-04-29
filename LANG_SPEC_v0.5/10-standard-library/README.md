@@ -42,3 +42,6 @@ lowering remains implementation backlog.
 - [§10.27 Grid (`std.grid`)](./27-grid.md)
 - [§10.28 SQL (`std.sql`)](./28-sql.md)
 - [§10.29 DB (`std.db`)](./29-db.md)
+- [§10.30 SMTP (`std.smtp`)](./30-smtp.md)
+- [§10.31 ZIP (`std.zip`)](./31-zip.md)
+- [§10.32 Image (`std.image`)](./32-image.md)
