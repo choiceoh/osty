@@ -11,13 +11,15 @@
 //
 // Dispatch order is intentionally small and observable:
 //
-//   - IR preflight rejects backend-capability gaps such as Go FFI or
-//     unknown runtime FFI before any concrete emitter is selected.
-//   - the native-owned llvmgen slice gets the first chance when the
-//     feature set allows it and no injected stdlib bodies are present.
-//   - every remaining normal backend request routes through MIR-direct
-//     emission; the legacy IR bridge is only a last resort for direct
-//     callers that provide no MIR.
+//   - `unsupported-preflight`: IR preflight rejects backend-capability gaps
+//     such as Go FFI or unknown runtime FFI before any concrete emitter is
+//     selected.
+//   - `native-owned`: the native-owned llvmgen slice gets the first chance
+//     when the feature set allows it and no injected stdlib bodies are present.
+//   - `mir-direct`: every remaining normal backend request routes through
+//     MIR-direct emission.
+//   - `legacy-ir-bridge`: the legacy IR bridge is only a last resort for
+//     direct callers that provide no MIR.
 //
 // Unsupported input is not a fatal compiler crash and is not silently
 // retried through an older AST path. The backend writes an inspectable

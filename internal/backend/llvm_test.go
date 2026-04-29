@@ -4,9 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	stdast "go/ast"
+	stdparser "go/parser"
+	"go/token"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -927,6 +932,380 @@ fn main() {
 	if warningContaining(result.Warnings, "backend-route: unsupported-preflight") == nil {
 		t.Fatalf("warnings = %v, want backend route detail", result.Warnings)
 	}
+}
+
+func TestLLVMBackendDispatchTraceReportsSelectedRoute(t *testing.T) {
+	backend := LLVMBackend{toolchain: &fakeLLVMToolchain{}}
+	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
+    let s = "abc"
+    println(s.len())
+}
+`)
+	req.Features = []string{"mir-backend"}
+
+	result, emitErr, trace := captureLLVMBackendTrace(t, backend, req)
+	if emitErr != nil {
+		t.Fatalf("Emit returned error: %v", emitErr)
+	}
+	if result == nil {
+		t.Fatal("Emit returned nil result")
+	}
+	for _, want := range []string{
+		"backend trace: llvm native-owned skipped",
+		"backend trace: llvm mir-direct emit",
+		"backend trace: llvm mir-direct succeeded",
+	} {
+		if !strings.Contains(trace, want) {
+			t.Fatalf("dispatch trace missing %q:\n%s", want, trace)
+		}
+	}
+}
+
+func TestLLVMBackendDispatchTraceUsesLegacyRouteOnlyWhenMIRMissing(t *testing.T) {
+	backend := LLVMBackend{toolchain: &fakeLLVMToolchain{}}
+	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
+    println(1)
+}
+`)
+	req.Features = []string{"mir-backend"}
+	req.Entry.MIR = nil
+
+	result, emitErr, trace := captureLLVMBackendTrace(t, backend, req)
+	if emitErr != nil {
+		t.Fatalf("Emit returned error: %v", emitErr)
+	}
+	if result == nil {
+		t.Fatal("Emit returned nil result")
+	}
+	for _, want := range []string{
+		"backend trace: llvm native-owned skipped",
+		"backend trace: llvm legacy-ir-bridge emit",
+		"backend trace: llvm legacy-ir-bridge succeeded",
+	} {
+		if !strings.Contains(trace, want) {
+			t.Fatalf("dispatch trace missing %q:\n%s", want, trace)
+		}
+	}
+	if strings.Contains(trace, "backend trace: llvm mir-direct emit") {
+		t.Fatalf("missing-MIR entry unexpectedly used MIR route:\n%s", trace)
+	}
+}
+
+func TestLLVMBackendDocsMentionDispatchRoutes(t *testing.T) {
+	root := repoRoot(t)
+	docPath := filepath.Join(root, "docs", "mir_design.md")
+	doc := readTextFile(t, docPath)
+	backendDoc := readTextFile(t, filepath.Join(root, "internal", "backend", "doc.go"))
+
+	for _, want := range []string{
+		"## Backend dispatch trace",
+		"## MIR-direct coverage ledger",
+		"Stage 5 checklist",
+		"Removal ledger",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Fatalf("docs/mir_design.md missing backend dispatch sync marker %q", want)
+		}
+	}
+
+	sourceRoutes := collectLLVMDispatchRoutesFromSource(t, filepath.Join(root, "internal", "backend", "llvm.go"))
+	docRoutes := map[string]bool{}
+	for _, line := range strings.Split(doc, "\n") {
+		cells := splitMarkdownTableRow(line)
+		if len(cells) == 0 || !strings.HasPrefix(cells[0], "`") || !strings.HasSuffix(cells[0], "`") {
+			continue
+		}
+		route := strings.Trim(cells[0], "`")
+		if strings.Contains(route, "-") {
+			docRoutes[route] = true
+		}
+	}
+
+	routeGuards := map[string][]string{
+		string(llvmDispatchUnsupportedPreflight): {
+			"UnsupportedDiagnosticForModule",
+			"TestLLVMBackendUnsupportedSkeletonIncludesDispatchDebug",
+		},
+		string(llvmDispatchNativeOwned): {
+			"TryGenerateNativeOwnedModule",
+			"TestEmitLLVMIRTextPrefersNativeOwnedFastPathWhenCovered",
+			"TestTryEmitNativeOwnedLLVMIRText*",
+		},
+		string(llvmDispatchMIRDirect): {
+			"GenerateFromMIR",
+			"TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics",
+			"TestNativeToolchainMergedMIRPipelineIsClean",
+		},
+		string(llvmDispatchLegacyIRBridge): {
+			"GenerateModule",
+			"legacyFileFromModule",
+			"TestLLVMBackendDispatchTraceUsesLegacyRouteOnlyWhenMIRMissing",
+		},
+	}
+	for _, route := range sourceRoutes {
+		guards, ok := routeGuards[route]
+		if !ok {
+			t.Fatalf("dispatch route %q from internal/backend/llvm.go needs doc-sync expectations", route)
+		}
+		if !docRoutes[route] {
+			t.Fatalf("docs/mir_design.md route table missing dispatch route %q from internal/backend/llvm.go", route)
+		}
+		row := markdownTableRowForFirstCell(t, doc, "`"+route+"`")
+		for _, want := range guards {
+			if !strings.Contains(row, want) {
+				t.Fatalf("docs/mir_design.md route row %q missing %q:\n%s", route, want, row)
+			}
+		}
+		if !strings.Contains(backendDoc, route) {
+			t.Fatalf("internal/backend/doc.go missing dispatch route %q", route)
+		}
+	}
+	for route := range docRoutes {
+		if !containsString(sourceRoutes, route) {
+			t.Fatalf("docs/mir_design.md documents stale dispatch route %q not found in internal/backend/llvm.go", route)
+		}
+	}
+
+	testFuncs := collectGoFunctionNames(t,
+		filepath.Join(root, "internal", "backend", "llvm_test.go"),
+		filepath.Join(root, "internal", "llvmgen", "native_toolchain_mir_pipeline_test.go"),
+	)
+	for _, name := range []string{
+		"TestLLVMBackendUnsupportedSkeletonIncludesDispatchDebug",
+		"TestEmitLLVMIRTextPrefersNativeOwnedFastPathWhenCovered",
+		"TestTryEmitNativeOwnedLLVMIRText*",
+		"TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics",
+		"TestNativeToolchainMergedMIRPipelineIsClean",
+		"TestLLVMBackendDispatchTraceUsesLegacyRouteOnlyWhenMIRMissing",
+		"TestLLVMBackendDocsMentionDispatchRoutes",
+	} {
+		if !functionNameOrPrefixExists(testFuncs, name) {
+			t.Fatalf("docs/mir_design.md names guard %q but no matching test exists", name)
+		}
+	}
+
+	backendFuncs := collectGoFunctionNames(t, filepath.Join(root, "internal", "backend", "llvm.go"))
+	mirFuncs := collectGoFunctionNames(t, filepath.Join(root, "internal", "llvmgen", "mir_generator.go"))
+	ledgerRows := []struct {
+		gate    string
+		anchors map[string]map[string]bool
+	}{
+		{
+			gate: "Backend route",
+			anchors: map[string]map[string]bool{
+				"backend": {"generateLLVMIR": true, "llvmFallbackDispatchRoute": true},
+			},
+		},
+		{
+			gate: "Module / function envelope",
+			anchors: map[string]map[string]bool{
+				"mir": {"checkSupported": true, "checkFunctionSupported": true},
+			},
+		},
+		{
+			gate: "Type surface",
+			anchors: map[string]map[string]bool{
+				"mir": {"typeSupported": true, "allowUnusedErrLocal": true},
+			},
+		},
+		{
+			gate: "Place / projection surface",
+			anchors: map[string]map[string]bool{
+				"mir": {"checkProjectionsSupported": true},
+			},
+		},
+		{
+			gate: "RValue surface",
+			anchors: map[string]map[string]bool{
+				"mir": {"checkRValueSupported": true},
+			},
+		},
+		{
+			gate: "Instruction / terminator surface",
+			anchors: map[string]map[string]bool{
+				"mir": {"checkInstrSupported": true, "checkTermSupported": true},
+			},
+		},
+		{
+			gate: "Intrinsic families",
+			anchors: map[string]map[string]bool{
+				"mir": {"isSupportedIntrinsic": true},
+			},
+		},
+	}
+	for _, row := range ledgerRows {
+		line := markdownTableRowForFirstCell(t, doc, row.gate)
+		for group, names := range row.anchors {
+			for name := range names {
+				if !strings.Contains(line, name) {
+					t.Fatalf("coverage ledger row %q missing code anchor %q:\n%s", row.gate, name, line)
+				}
+				switch group {
+				case "backend":
+					if !backendFuncs[name] {
+						t.Fatalf("coverage ledger anchor %q for row %q does not exist in internal/backend/llvm.go", name, row.gate)
+					}
+				case "mir":
+					if !mirFuncs[name] {
+						t.Fatalf("coverage ledger anchor %q for row %q does not exist in internal/llvmgen/mir_generator.go", name, row.gate)
+					}
+				}
+			}
+		}
+	}
+}
+
+func captureLLVMBackendTrace(t *testing.T, backend LLVMBackend, req Request) (*Result, error, string) {
+	t.Helper()
+	t.Setenv("OSTY_BACKEND_TRACE", "1")
+	oldStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("Pipe: %v", err)
+	}
+	os.Stderr = w
+	defer func() {
+		os.Stderr = oldStderr
+	}()
+	result, emitErr := backend.Emit(context.Background(), req)
+	if closeErr := w.Close(); closeErr != nil {
+		t.Fatalf("close stderr pipe: %v", closeErr)
+	}
+	os.Stderr = oldStderr
+	traceBytes, readErr := io.ReadAll(r)
+	if readErr != nil {
+		t.Fatalf("read trace pipe: %v", readErr)
+	}
+	if closeErr := r.Close(); closeErr != nil {
+		t.Fatalf("close trace pipe: %v", closeErr)
+	}
+	return result, emitErr, string(traceBytes)
+}
+
+func repoRoot(t *testing.T) string {
+	t.Helper()
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	return root
+}
+
+func readTextFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile(%q): %v", path, err)
+	}
+	return string(data)
+}
+
+func markdownTableRowForFirstCell(t *testing.T, doc, firstCell string) string {
+	t.Helper()
+	for _, line := range strings.Split(doc, "\n") {
+		cells := splitMarkdownTableRow(line)
+		if len(cells) > 0 && cells[0] == firstCell {
+			return strings.TrimSpace(line)
+		}
+	}
+	t.Fatalf("markdown table row with first cell %q not found", firstCell)
+	return ""
+}
+
+func splitMarkdownTableRow(line string) []string {
+	line = strings.TrimSpace(line)
+	if !strings.HasPrefix(line, "|") || !strings.HasSuffix(line, "|") {
+		return nil
+	}
+	line = strings.Trim(line, "|")
+	parts := strings.Split(line, "|")
+	cells := make([]string, 0, len(parts))
+	for _, part := range parts {
+		cells = append(cells, strings.TrimSpace(part))
+	}
+	return cells
+}
+
+func collectLLVMDispatchRoutesFromSource(t *testing.T, path string) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := stdparser.ParseFile(fset, path, nil, 0)
+	if err != nil {
+		t.Fatalf("ParseFile(%q): %v", path, err)
+	}
+	var routes []string
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*stdast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			valueSpec, ok := spec.(*stdast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range valueSpec.Names {
+				if !strings.HasPrefix(name.Name, "llvmDispatch") || i >= len(valueSpec.Values) {
+					continue
+				}
+				lit, ok := valueSpec.Values[i].(*stdast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				route, err := strconv.Unquote(lit.Value)
+				if err != nil {
+					t.Fatalf("unquote dispatch route %s in %q: %v", lit.Value, path, err)
+				}
+				routes = append(routes, route)
+			}
+		}
+	}
+	if len(routes) == 0 {
+		t.Fatalf("no llvmDispatch route constants found in %q", path)
+	}
+	return routes
+}
+
+func collectGoFunctionNames(t *testing.T, paths ...string) map[string]bool {
+	t.Helper()
+	out := map[string]bool{}
+	fset := token.NewFileSet()
+	for _, path := range paths {
+		file, err := stdparser.ParseFile(fset, path, nil, 0)
+		if err != nil {
+			t.Fatalf("ParseFile(%q): %v", path, err)
+		}
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*stdast.FuncDecl)
+			if !ok || fn.Name == nil {
+				continue
+			}
+			out[fn.Name.Name] = true
+		}
+	}
+	return out
+}
+
+func functionNameOrPrefixExists(names map[string]bool, want string) bool {
+	if strings.HasSuffix(want, "*") {
+		prefix := strings.TrimSuffix(want, "*")
+		for name := range names {
+			if strings.HasPrefix(name, prefix) {
+				return true
+			}
+		}
+		return false
+	}
+	return names[want]
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 // TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics — Stage 5 prep

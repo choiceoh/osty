@@ -168,7 +168,7 @@ Current-tree observations from the code re-audit:
 |---|---|---|
 | CLI wiring | universal LLVM entry wedge | **resolved** — hello-world `osty gen --backend=llvm` exits 0 and writes `.ll` output |
 | Bootstrap boundary | merged whole-toolchain probe / checker bundle | the current toolchain host adapter is `toolchain/ci.osty` with `use runtime.cihost as host`. `toolchain/ast_lower.osty` (dead duplicate of `internal/selfhost/ast_lower.osty`, 1672 LOC) was deleted 2026-04-22, and `internal/selfhost/ast_lower.osty` is now deliberately outside `ToolchainCheckerFiles()` as a legacy public-AST adapter for `FrontendRun.File` / `Parse` / `EnsureFile` consumers. `toolchain/docgen.osty` + `toolchain/manifest_validation.osty` were ported from `use go "strings"` to `use std.strings as strings` on the same day. |
-| Native backend surface | merged native-only probe | the old AST merged probe is info-only; the authoritative current gate is `TestNativeToolchainMergedMIRPipelineIsClean`, which mirrors production MIR-first dispatch and legacy fallback. Bootstrap-only sources are filtered by FFI stanza (`use runtime.cihost`, `use runtime.golegacy.*`, or `use go "..."`). Historical 2026-04-21 notes about `TestNativeToolchainMergedIsClean` describe the retired AST gate, not the current pass/fail surface. |
+| Native backend surface | merged native-only probe | the old AST merged probe is info-only; the authoritative current gate is `TestNativeToolchainMergedMIRPipelineIsClean`, which mirrors the production MIR-direct route. Unsupported shapes now surface as skeleton IR plus `backend-route`, not silent legacy fallback. Bootstrap-only sources are filtered by FFI stanza (`use runtime.cihost`, `use runtime.golegacy.*`, or `use go "..."`). Historical 2026-04-21 notes about `TestNativeToolchainMergedIsClean` describe the retired AST gate, not the current pass/fail surface. |
 | Public runtime scheduler | `osty_rt_*` task/thread/select | `#496` complete. Select-send arm landed as typed entry points `osty_rt_select_send_{i64,i1,f64,ptr,bytes_v1}` (scalar packing into channel ring slot, bytes via GC-managed copy). The public LLVM runtime now has zero `osty_sched_unimplemented` call sites — concurrency spec §8 (taskGroup / spawn / join / cancel / chan / select / parallel / race / collectAll) is fully covered. See RUNTIME_SCHEDULER.md |
 | MIR Osty port | `toolchain/mir.osty` | `#503` — MIR core (intrinsic kinds, printer, operand/instr shapes) now has an Osty-native mirror in `toolchain/mir.osty`; Go remains authoritative while the Osty side participates in the spec corpus |
 | Checker boundary | `internal/check` / `internal/toolchain` | host still manages an external `osty-native-checker` artifact and falls back to the embedded selfhost checker when it cannot be prepared |
@@ -392,9 +392,10 @@ rewire the remaining Go-hosted boundaries."
 
 1. **Keep the MIR-first native pipeline gate authoritative.**
    `TestNativeToolchainMergedMIRPipelineIsClean` now locks the production-like
-   path: MIR-first dispatch with legacy fallback. Future changes that
-   re-introduce a hard wall surface there immediately. When a new wall appears,
-   capture it through the MIR-first probe, `.osty` fixtures, or a narrow
+   MIR-direct path. Future changes that re-introduce a hard wall surface there
+   immediately through `ErrLLVMNotImplemented`, skeleton IR, and a
+   `backend-route` warning. When a new wall appears, capture it through
+   `OSTY_BACKEND_TRACE=1`, the MIR-first probe, `.osty` fixtures, or a narrow
    host-boundary test that exercises the remaining Go/Osty handoff.
 
 2. **Keep `osty check toolchain` green.**
