@@ -66,7 +66,7 @@ func prepareModuleGeneration(mod *ostyir.Module) error {
 	if err := validateLegacyFFISurface(mod); err != nil {
 		return err
 	}
-	if diag, ok := moduleUnsupportedDiagnostic(mod); ok {
+	if diag, ok := UnsupportedDiagnosticForModule(mod); ok {
 		return &UnsupportedError{Diagnostic: diag}
 	}
 	return nil
@@ -217,7 +217,12 @@ func appendExportAliases(out []byte, mod *ostyir.Module) []byte {
 	return out
 }
 
-func moduleUnsupportedDiagnostic(mod *ostyir.Module) (UnsupportedDiagnostic, bool) {
+// UnsupportedDiagnosticForModule reports backend-capability gaps that are
+// visible from the backend-neutral IR before a concrete LLVM emitter is chosen.
+// The backend dispatcher uses this as a preflight gate so Go-only FFI and
+// unknown runtime FFI imports cannot accidentally slip through a broader
+// fallback path.
+func UnsupportedDiagnosticForModule(mod *ostyir.Module) (UnsupportedDiagnostic, bool) {
 	if mod == nil {
 		return UnsupportedDiagnostic{}, false
 	}

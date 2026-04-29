@@ -4,9 +4,27 @@
 // The CLI routes native emission through this package so every backend
 // uses the same artifact / cache layout contract. The LLVM dispatcher
 // (llvm.go) consumes IR exclusively: Request.Entry.IR is the sole
-// input it hands to llvmgen. The dispatcher no longer falls back to
-// Request.Entry.File when IR lowering hits an unsupported shape —
-// unsupported input produces an inspectable skeleton artifact instead.
+// semantic input it hands to llvmgen. Request.Entry.MIR is the optional
+// MIR projection prepared from that same IR for the MIR-direct emitter.
+// The dispatcher never falls back to Request.Entry.File when lowering
+// hits an unsupported shape.
+//
+// Dispatch order is intentionally small and observable:
+//
+//   - IR preflight rejects backend-capability gaps such as Go FFI or
+//     unknown runtime FFI before any concrete emitter is selected.
+//   - the native-owned llvmgen slice gets the first chance when the
+//     feature set allows it and no injected stdlib bodies are present.
+//   - every remaining normal backend request routes through MIR-direct
+//     emission; the legacy IR bridge is only a last resort for direct
+//     callers that provide no MIR.
+//
+// Unsupported input is not a fatal compiler crash and is not silently
+// retried through an older AST path. The backend writes an inspectable
+// skeleton artifact, returns ErrLLVMNotImplemented, and includes the
+// structured LLVM00x diagnostic plus the backend route in Result.Warnings.
+// Set OSTY_BACKEND_TRACE=1 to stream the selected LLVM dispatch route to
+// stderr while debugging backend selection.
 //
 // LLVM lowering is still small, but it can produce textual IR and
 // drive a host clang toolchain for supported object / binary
