@@ -919,41 +919,12 @@ func isSetPtrType(t mir.Type) bool {
 }
 
 func mangledBuiltinSourceNameIs(name, want string) bool {
-	got, ok := monomorphMangledSourceName(name)
-	return ok && got == want
+	return mirMangledBuiltinSourceNameIs(name, want)
 }
 
 func monomorphMangledSourceName(name string) (string, bool) {
-	const prefix = "_ZTSN"
-	if !strings.HasPrefix(name, prefix) {
-		return "", false
-	}
-	rest := strings.TrimPrefix(name, prefix)
-	var ok bool
-	_, rest, ok = consumeLengthPrefixedName(rest)
-	if !ok {
-		return "", false
-	}
-	typeName, _, ok := consumeLengthPrefixedName(rest)
-	if !ok || typeName == "" {
-		return "", false
-	}
-	return typeName, true
-}
-
-func consumeLengthPrefixedName(s string) (string, string, bool) {
-	if s == "" || s[0] < '0' || s[0] > '9' {
-		return "", "", false
-	}
-	i := 0
-	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
-		i++
-	}
-	n, err := strconv.Atoi(s[:i])
-	if err != nil || n < 0 || i+n > len(s) {
-		return "", "", false
-	}
-	return s[i : i+n], s[i+n:], true
+	got := mirMonomorphMangledSourceName(name)
+	return got, got != ""
 }
 
 func vectorListElemType(t mir.Type) mir.Type {
@@ -8822,39 +8793,10 @@ func compatibleEnumAggregateHint(rv *mir.AggregateRV, hintT mir.Type) mir.Type {
 	if mirIsPoisonType(rv.T) || mirIsPoisonType(hintT) || rv.T.String() == hintT.String() {
 		return nil
 	}
-	rvResult, rvOK, rvErr := resultTypeArgs(rv.T)
-	hintResult, hintOK, hintErr := resultTypeArgs(hintT)
-	if rvResult && hintResult {
-		if unitTupleAliasTypes(rvOK, hintOK) && typesStringEqual(rvErr, hintErr) {
-			return hintT
-		}
-		switch rv.VariantTag {
-		case "Err":
-			if typesStringEqual(rvErr, hintErr) {
-				return hintT
-			}
-		case "Ok":
-			if unitTupleAliasTypes(rvOK, hintOK) {
-				return hintT
-			}
-		}
+	if mirCompatibleEnumAggregateHintText(mirTypeString(rv.T), mirTypeString(hintT), rv.VariantTag) {
+		return hintT
 	}
 	return nil
-}
-
-func resultTypeArgs(t mir.Type) (bool, mir.Type, mir.Type) {
-	nt, ok := t.(*ir.NamedType)
-	if !ok || nt.Name != "Result" || len(nt.Args) < 2 {
-		return false, nil, nil
-	}
-	return true, nt.Args[0], nt.Args[1]
-}
-
-func typesStringEqual(a, b mir.Type) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	return a.String() == b.String()
 }
 
 // emitEnumVariant builds `{ i64 disc, i64 payload }` for an enum or
@@ -9368,43 +9310,29 @@ func (g *mirGen) coerceOperandValue(val string, fromT, toT mir.Type) (string, er
 }
 
 func compatibleResultUnitTupleAlias(fromT, toT mir.Type) bool {
-	fromResult, fromOK, fromErr := resultTypeArgs(fromT)
-	toResult, toOK, toErr := resultTypeArgs(toT)
-	if !fromResult || !toResult {
+	if fromT == nil || toT == nil {
 		return false
 	}
-	return unitTupleAliasTypes(fromOK, toOK) && typesStringEqual(fromErr, toErr)
+	return mirCompatibleResultUnitTupleAliasText(mirTypeString(fromT), mirTypeString(toT))
 }
 
 func resultUnitTupleLLVMTypeAlias(fromLLVM, toLLVM string) bool {
-	if fromLLVM == "" || toLLVM == "" || fromLLVM == toLLVM {
-		return false
-	}
-	return strings.Replace(fromLLVM, ".unit.", ".Tuple..", 1) == toLLVM ||
-		strings.Replace(toLLVM, ".unit.", ".Tuple..", 1) == fromLLVM
+	return mirResultUnitTupleLLVMTypeAlias(fromLLVM, toLLVM)
 }
 
 func unitTupleAliasTypes(a, b mir.Type) bool {
-	if typesStringEqual(a, b) {
-		return true
+	if a == nil || b == nil {
+		return a == b
 	}
-	return (isUnitType(a) && isEmptyTupleType(b)) || (isEmptyTupleType(a) && isUnitType(b))
-}
-
-func isEmptyTupleType(t mir.Type) bool {
-	tt, ok := t.(*ir.TupleType)
-	return ok && len(tt.Elems) == 0
+	return mirUnitTupleAliasTypeText(mirTypeString(a), mirTypeString(b))
 }
 
 func (g *mirGen) retypeI64PairAggregate(val, fromLLVM, toLLVM string) string {
 	disc := g.fresh()
-	g.fnBuf.WriteString(mirExtractValueLine(disc, fromLLVM, val, "0"))
 	payload := g.fresh()
-	g.fnBuf.WriteString(mirExtractValueLine(payload, fromLLVM, val, "1"))
 	tmp := g.fresh()
-	g.fnBuf.WriteString(mirInsertValueI64Line(tmp, toLLVM, "undef", disc, "0"))
 	out := g.fresh()
-	g.fnBuf.WriteString(mirInsertValueI64Line(out, toLLVM, tmp, payload, "1"))
+	g.fnBuf.WriteString(mirRetypeI64PairAggregateLines(disc, payload, tmp, out, fromLLVM, toLLVM, val))
 	return out
 }
 

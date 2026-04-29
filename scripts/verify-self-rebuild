@@ -202,6 +202,9 @@ build_self_binary() {
 		fi
 	fi
 	if [[ "$count" != "1" ]]; then
+		if [[ -z "$candidate" && -x "$default_candidate" ]] && grep -Fxq "$default_candidate" "$candidates"; then
+			candidate="$default_candidate"
+		fi
 		if [[ -z "$candidate" ]]; then
 			printf 'self-rebuild: %s produced multiple binary candidates:\n' "$label" >&2
 			sed 's/^/  /' "$candidates" >&2

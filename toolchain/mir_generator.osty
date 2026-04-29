@@ -649,6 +649,191 @@ pub fn mirIsUnitTypeText(typeText: String) -> Bool {
     typeText == "Unit" || typeText == "()" || typeText == "Never"
 }
 
+/// mirTrimTypeText trims the single-space padding that `NamedType`
+/// rendering inserts after top-level commas (`Result<T, E>`). This is
+/// deliberately small and ASCII-only because type strings are compiler-
+/// authored, not user text.
+pub fn mirTrimTypeText(typeText: String) -> String {
+    let mut lo = 0
+    let mut hi = typeText.len()
+    for lo < hi && typeText[lo..(lo + 1)] == " " {
+        lo = lo + 1
+    }
+    for hi > lo && typeText[(hi - 1)..hi] == " " {
+        hi = hi - 1
+    }
+    typeText[lo..hi]
+}
+
+/// mirTopLevelTypeCommaIndex returns the comma that splits a generic
+/// argument list at depth zero. Nested generic / tuple / fn shapes are
+/// skipped so `Result<List<(Int, String)>, Error>` still splits on the
+/// Result comma rather than an inner tuple separator.
+pub fn mirTopLevelTypeCommaIndex(typeText: String) -> Int {
+    let mut depth = 0
+    let mut i = 0
+    let n = typeText.len()
+    for i < n {
+        let ch = typeText[i..(i + 1)]
+        if ch == "<" || ch == "(" {
+            depth = depth + 1
+        } else if ch == ">" || ch == ")" {
+            depth = depth - 1
+        } else if ch == "," && depth == 0 {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+/// mirResultTypeArgsText extracts the two textual type arguments from
+/// `Result<T, E>`. The packed return is `ok + "\n" + err`; `""`
+/// means the input is not a two-arg Result shape. Keeping the parser
+/// here lets Result-layout compatibility policy live in Osty while Go
+/// still owns the actual `mir.Type` nodes.
+pub fn mirResultTypeArgsText(typeText: String) -> String {
+    let head = mirLlvmTypeHeadName(typeText)
+    if head != "Result" && !llvmStrings.HasSuffix(head, ".Result") {
+        return ""
+    }
+    let lt = llvmStrings.Index(typeText, "<")
+    if lt < 0 {
+        return ""
+    }
+    if !llvmStrings.HasSuffix(typeText, ">") {
+        return ""
+    }
+    let body = typeText[(lt + 1)..(typeText.len() - 1)]
+    let comma = mirTopLevelTypeCommaIndex(body)
+    if comma < 0 {
+        return ""
+    }
+    let okText = mirTrimTypeText(body[0..comma])
+    let errText = mirTrimTypeText(body[(comma + 1)..body.len()])
+    if okText == "" || errText == "" {
+        return ""
+    }
+    okText + "\n" + errText
+}
+
+pub fn mirResultOkTypeText(typeText: String) -> String {
+    let packed = mirResultTypeArgsText(typeText)
+    let idx = llvmStrings.Index(packed, "\n")
+    if idx < 0 {
+        return ""
+    }
+    packed[0..idx]
+}
+
+pub fn mirResultErrTypeText(typeText: String) -> String {
+    let packed = mirResultTypeArgsText(typeText)
+    let idx = llvmStrings.Index(packed, "\n")
+    if idx < 0 {
+        return ""
+    }
+    packed[(idx + 1)..packed.len()]
+}
+
+/// mirUnitTupleAliasTypeText centralizes the no-value aliasing policy
+/// used when the frontend alternates between primitive Unit and the
+/// empty tuple spelling. Both render as `()` in the HIR/MIR type text,
+/// so equality covers the common MIR path; `"Unit"` is accepted for
+/// call sites that still forward pre-canonicalized surface text.
+pub fn mirUnitTupleAliasTypeText(a: String, b: String) -> Bool {
+    if a == b {
+        return true
+    }
+    (a == "Unit" && b == "()") || (a == "()" && b == "Unit")
+}
+
+/// mirCompatibleResultUnitTupleAliasText reports whether two Result
+/// type texts are layout-compatible when their Ok channel is only a
+/// Unit / empty-tuple spelling difference and their Err channel is the
+/// same. This is the pure policy half of the Go-side `mir.Type` check.
+pub fn mirCompatibleResultUnitTupleAliasText(fromText: String, toText: String) -> Bool {
+    let fromOk = mirResultOkTypeText(fromText)
+    let fromErr = mirResultErrTypeText(fromText)
+    let toOk = mirResultOkTypeText(toText)
+    let toErr = mirResultErrTypeText(toText)
+    if fromOk == "" || fromErr == "" || toOk == "" || toErr == "" {
+        return false
+    }
+    mirUnitTupleAliasTypeText(fromOk, toOk) && fromErr == toErr
+}
+
+/// mirCompatibleEnumAggregateHintText decides whether an enum-variant
+/// aggregate should adopt its contextual Result type. The full Result
+/// match accepts only Unit/tuple Ok aliases plus identical Err types;
+/// variant-specific construction can be looser because `Err(...)` does
+/// not observe Ok payload spelling and `Ok(())` does not observe Err
+/// payload storage.
+pub fn mirCompatibleEnumAggregateHintText(rvText: String, hintText: String, variantTag: String) -> Bool {
+    let rvOk = mirResultOkTypeText(rvText)
+    let rvErr = mirResultErrTypeText(rvText)
+    let hintOk = mirResultOkTypeText(hintText)
+    let hintErr = mirResultErrTypeText(hintText)
+    if rvOk == "" || rvErr == "" || hintOk == "" || hintErr == "" {
+        return false
+    }
+    if mirUnitTupleAliasTypeText(rvOk, hintOk) && rvErr == hintErr {
+        return true
+    }
+    if variantTag == "Err" && rvErr == hintErr {
+        return true
+    }
+    if variantTag == "Ok" && mirUnitTupleAliasTypeText(rvOk, hintOk) {
+        return true
+    }
+    false
+}
+
+/// mirReplaceFirstText returns `text` with the first `old` occurrence
+/// replaced by `newText`. Empty needles are ignored so callers do not
+/// accidentally manufacture aliases from every string boundary.
+pub fn mirReplaceFirstText(text: String, old: String, newText: String) -> String {
+    if old == "" {
+        return text
+    }
+    let idx = llvmStrings.Index(text, old)
+    if idx < 0 {
+        return text
+    }
+    text[0..idx] + newText + text[(idx + old.len())..text.len()]
+}
+
+/// mirResultUnitTupleLLVMTypeAlias recognizes the LLVM named-type
+/// alias produced by Result<(), E> when one path spells the Ok tag as
+/// `.unit.` and another as `.Tuple..`. The layouts are both `{ i64,
+/// i64 }`; only the textual type handle differs.
+pub fn mirResultUnitTupleLLVMTypeAlias(fromLLVM: String, toLLVM: String) -> Bool {
+    if fromLLVM == "" || toLLVM == "" || fromLLVM == toLLVM {
+        return false
+    }
+    mirReplaceFirstText(fromLLVM, ".unit.", ".Tuple..") == toLLVM ||
+        mirReplaceFirstText(toLLVM, ".unit.", ".Tuple..") == fromLLVM
+}
+
+/// mirRetypeI64PairAggregateLines rebuilds a `{ i64, i64 }` Result /
+/// Option aggregate under another compatible named LLVM type. LLVM IR
+/// requires the `extractvalue` source type and `insertvalue` target
+/// type to match their textual handles even when the physical layout is
+/// identical, so this helper owns the exact four-line rewrite shape.
+pub fn mirRetypeI64PairAggregateLines(
+    discReg: String,
+    payloadReg: String,
+    tmpReg: String,
+    outReg: String,
+    fromLLVM: String,
+    toLLVM: String,
+    valueReg: String,
+) -> String {
+    mirExtractValueLine(discReg, fromLLVM, valueReg, "0") +
+    mirExtractValueLine(payloadReg, fromLLVM, valueReg, "1") +
+    mirInsertValueI64Line(tmpReg, toLLVM, "undef", discReg, "0") +
+    mirInsertValueI64Line(outReg, toLLVM, tmpReg, payloadReg, "1")
+}
+
 /// mirIsFloatTypeText reports whether the hir-style type text names a
 /// floating-point primitive. Mirrors `isFloatType` in
 /// `internal/llvmgen/mir_generator.go`. Accepts both the spec surface
@@ -16989,6 +17174,86 @@ pub fn mirIsContainerNamedType(name: String, builtin: Bool) -> Bool {
 /// `internal/llvmgen/ir_native_entry.go`.
 pub fn mirIsPrimUnitName(name: String) -> Bool {
     name == "Unit"
+}
+
+/// mirDecimalDigitValue returns the integer value of an ASCII decimal
+/// digit or `-1` for non-digits. Kept near the name-mangling helpers
+/// because the Itanium-ish monomorph spellings use decimal length
+/// prefixes.
+pub fn mirDecimalDigitValue(ch: String) -> Int {
+    if ch == "0" { return 0 }
+    if ch == "1" { return 1 }
+    if ch == "2" { return 2 }
+    if ch == "3" { return 3 }
+    if ch == "4" { return 4 }
+    if ch == "5" { return 5 }
+    if ch == "6" { return 6 }
+    if ch == "7" { return 7 }
+    if ch == "8" { return 8 }
+    if ch == "9" { return 9 }
+    -1
+}
+
+/// mirParseDecimalPrefix parses a non-empty ASCII decimal prefix from
+/// `text[0..end]`. Returns `-1` if any byte is not a digit. The caller
+/// bounds-checks the resulting length against the full mangled string.
+pub fn mirParseDecimalPrefix(text: String, end: Int) -> Int {
+    if end <= 0 {
+        return -1
+    }
+    let mut out = 0
+    let mut i = 0
+    for i < end {
+        let d = mirDecimalDigitValue(text[i..(i + 1)])
+        if d < 0 {
+            return -1
+        }
+        out = (out * 10) + d
+        i = i + 1
+    }
+    out
+}
+
+/// mirMonomorphMangledSourceName extracts the source type name from the
+/// monomorphized layout spelling used by the current Go lowerer:
+/// `_ZTSN<pkgLen><pkg><typeLen><type>...`. Invalid or non-monomorph
+/// inputs return `""`. The package segment is intentionally skipped —
+/// callers only need to know whether the source head was List, Map,
+/// Set, Option, Maybe, or Result.
+pub fn mirMonomorphMangledSourceName(name: String) -> String {
+    let prefix = "_ZTSN"
+    if !llvmStrings.HasPrefix(name, prefix) {
+        return ""
+    }
+    let mut rest = name[prefix.len()..name.len()]
+
+    let mut i = 0
+    for i < rest.len() && mirDecimalDigitValue(rest[i..(i + 1)]) >= 0 {
+        i = i + 1
+    }
+    let pkgLen = mirParseDecimalPrefix(rest, i)
+    if pkgLen < 0 || (i + pkgLen) > rest.len() {
+        return ""
+    }
+    rest = rest[(i + pkgLen)..rest.len()]
+
+    i = 0
+    for i < rest.len() && mirDecimalDigitValue(rest[i..(i + 1)]) >= 0 {
+        i = i + 1
+    }
+    let typeLen = mirParseDecimalPrefix(rest, i)
+    if typeLen <= 0 || (i + typeLen) > rest.len() {
+        return ""
+    }
+    rest[i..(i + typeLen)]
+}
+
+/// mirMangledBuiltinSourceNameIs reports whether a monomorphized
+/// layout name originated from a particular builtin source type. This
+/// is the Osty-owned policy behind Go's List/Map/Set/Option/Result
+/// fallback checks.
+pub fn mirMangledBuiltinSourceNameIs(name: String, want: String) -> Bool {
+    mirMonomorphMangledSourceName(name) == want
 }
 
 /// mirSetElemTypeArgIndex returns the index of the element type in
