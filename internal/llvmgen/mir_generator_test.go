@@ -1237,7 +1237,7 @@ func TestGenerateFromMIRNestedIndexedElementCallWrite(t *testing.T) {
 		t.Fatalf("GenerateFromMIR: %v", err)
 	}
 	got := string(out)
-	want := regexp.MustCompile(`(?s)call ptr @makeNestedName\(\).*osty_rt_list_get_bytes_v1.*osty_rt_list_set_ptr.*insertvalue %Cell.*osty_rt_list_set_bytes_v1`)
+	want := regexp.MustCompile(`(?s)call ptr @makeNestedName\(\).*osty_rt_list_get_bytes_v1.*osty_rt_list_set_string.*insertvalue %Cell.*osty_rt_list_set_bytes_v1`)
 	if !want.MatchString(got) {
 		t.Fatalf("nested indexed call result should update the inner list and outer element, got:\n%s", got)
 	}

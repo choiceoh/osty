@@ -73,7 +73,7 @@ func TestListInsertString(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list.insert<String> errored: %v", err)
 	}
-	if got := string(ir); !strings.Contains(got, "@osty_rt_list_insert_ptr") {
-		t.Fatalf("list.insert<String> did not invoke insert_ptr:\n%s", got)
+	if got := string(ir); !strings.Contains(got, "@osty_rt_list_insert_string") {
+		t.Fatalf("list.insert<String> did not invoke insert_string:\n%s", got)
 	}
 }

@@ -296,6 +296,38 @@ pub fn mirBinaryForcesI1Type(symbol: String) -> Bool {
     symbol == "&&" || symbol == "||"
 }
 
+/// mirBinaryResultIsBoolSymbol reports whether a MIR binary operator's
+/// result type is Bool regardless of the operand type. The Go caller
+/// forwards `mir.BinaryOp.String()` so the result-shape policy can live
+/// next to the opcode table.
+pub fn mirBinaryResultIsBoolSymbol(symbol: String) -> Bool {
+    symbol == "==" || symbol == "!=" || symbol == "<" || symbol == "<=" ||
+        symbol == ">" || symbol == ">="
+}
+
+/// mirBinaryResultCanUseOperandWidthSymbol reports whether a binary
+/// operation may be widened/narrowed to the destination LLVM integer /
+/// float width before emission. Comparisons always return Bool and are
+/// excluded; arithmetic, logical, bitwise, and shifts can use the
+/// operand/result width selected by type inference.
+pub fn mirBinaryResultCanUseOperandWidthSymbol(symbol: String) -> Bool {
+    symbol == "+" || symbol == "-" || symbol == "*" || symbol == "/" ||
+        symbol == "%" || symbol == "&&" || symbol == "||" ||
+        symbol == "&" || symbol == "|" || symbol == "^" ||
+        symbol == "<<" || symbol == ">>"
+}
+
+/// mirNumericLLVMResizePossible reports whether a value of `from` LLVM
+/// type can be resized to `to` by the MIR binary-op coercion path. Int
+/// widths use zext/sext/trunc through `mirIntLLVMBits`; float widths use
+/// fpext/fptrunc. Mixed int/float and pointer shapes are rejected here.
+pub fn mirNumericLLVMResizePossible(from: String, to: String) -> Bool {
+    if mirIntLLVMBits(from) > 0 && mirIntLLVMBits(to) > 0 {
+        return true
+    }
+    (from == "float" || from == "double") && (to == "float" || to == "double")
+}
+
 /// mirUnaryIsIdentity reports whether a unary operator symbol is the
 /// no-op (unary-plus) form. The caller short-circuits before
 /// requesting an instruction body — unary plus emits nothing and just
@@ -945,6 +977,43 @@ pub fn mirEncodeLLVMString(s: String) -> String {
         i = i + 1
     }
     out + "\\00"
+}
+
+/// mirCanEncodeLLVMString reports whether `mirEncodeLLVMString` can
+/// encode `s` without falling back to the Go byte encoder. It accepts
+/// printable ASCII plus the two explicit structural escapes (`\` and
+/// `"`), matching the selfhost encoder's current capability.
+pub fn mirCanEncodeLLVMString(s: String) -> Bool {
+    let printable = " !#$%&'()*+,-./0123456789:;<=" + ">?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[]^_`abcdefghijklmnopqrstuvwxyz\{|\}~"
+    let n = s.len()
+    let mut i = 0
+    for i < n {
+        let ch = s[i..(i + 1)]
+        if ch == "\\" || ch == "\"" || llvmStrings.Contains(printable, ch) {
+            i = i + 1
+        } else {
+            return false
+        }
+    }
+    true
+}
+
+/// mirLLVMStringArraySize returns the LLVM constant array byte count
+/// for a string literal: source bytes plus the terminating NUL appended
+/// by `mirEncodeLLVMString`.
+pub fn mirLLVMStringArraySize(byteLen: Int) -> Int {
+    byteLen + 1
+}
+
+/// mirInlineStringLiteralCandidate owns the tiny literal policy for
+/// lowering `String == literal` without calling the runtime equality
+/// helper. The Go caller still extracts the literal and scans for NUL
+/// bytes, but the size threshold and embedded-NUL rejection live here.
+pub fn mirInlineStringLiteralCandidate(byteLen: Int, hasNul: Bool) -> Bool {
+    if hasNul {
+        return false
+    }
+    byteLen <= 16
 }
 
 /// mirLlvmGlobalVarLine renders `@<name> = global <ty> zeroinitializer\n`
@@ -14398,6 +14467,30 @@ pub fn mirSanitizeLLVMName(name: String) -> String {
     out
 }
 
+/// mirSanitizeLabelFragment folds enum variant names into a compact
+/// label suffix for string-interpolation switch blocks. Unlike
+/// `mirSanitizeLLVMName`, a leading digit is allowed because the caller
+/// always prefixes the fragment (`enumstr.<fragment>`). Empty/all-empty
+/// input becomes `"variant"`.
+pub fn mirSanitizeLabelFragment(name: String) -> String {
+    if name == "" { return "variant" }
+    let alnum = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    let n = name.len()
+    let mut out = ""
+    let mut i = 0
+    for i < n {
+        let ch = name[i..(i + 1)]
+        if llvmStrings.Contains(alnum, ch) {
+            out = out + ch
+        } else {
+            out = out + "_"
+        }
+        i = i + 1
+    }
+    if out == "" { return "variant" }
+    out
+}
+
 /// mirCloneRootPaths deep-copies a list of int-list paths so the caller
 /// can mutate the result without aliasing the source. Mirrors
 /// `cloneRootPaths` in `internal/llvmgen/generator.go`.
@@ -17283,6 +17376,25 @@ pub fn mirMonomorphMangledSourceName(name: String) -> String {
 /// fallback checks.
 pub fn mirMangledBuiltinSourceNameIs(name: String, want: String) -> Bool {
     mirMonomorphMangledSourceName(name) == want
+}
+
+/// mirIsTwoWordEnumLLVM reports whether an LLVM type name uses the
+/// canonical two-word enum layout (`{ i64, i64 }`) and can therefore be
+/// retyped by extracting/reinserting discriminant + payload. It handles
+/// both direct `%Option.*` / `%Result.*` names and monomorphized builtin
+/// layout spellings whose source head was Option, Maybe, or Result.
+pub fn mirIsTwoWordEnumLLVM(llvmT: String) -> Bool {
+    let name = if llvmStrings.HasPrefix(llvmT, "%") {
+        llvmT[1..llvmT.len()]
+    } else {
+        llvmT
+    }
+    llvmStrings.HasPrefix(name, "Option.") ||
+        llvmStrings.HasPrefix(name, "Maybe.") ||
+        llvmStrings.HasPrefix(name, "Result.") ||
+        mirMangledBuiltinSourceNameIs(name, "Option") ||
+        mirMangledBuiltinSourceNameIs(name, "Maybe") ||
+        mirMangledBuiltinSourceNameIs(name, "Result")
 }
 
 /// mirSetElemTypeArgIndex returns the index of the element type in

@@ -193,7 +193,7 @@ func TestGenerateReturnedListOfStringsLiteralPreservesStringHint(t *testing.T) {
 	got := string(ir)
 	for _, want := range []string{
 		"call ptr @osty_rt_list_new()",
-		"call void @osty_rt_list_push_ptr(",
+		"call void @osty_rt_list_push_string(",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)
@@ -1951,7 +1951,7 @@ fn prune(m: Map<String, Int>) {
 		"define private i1 @__osty_closure_thunk_keepPositive(ptr %env, ptr %arg0, i64 %arg1)",
 		"= call i1 (ptr, ptr, i64)",
 		"call ptr @osty_rt_list_new()",
-		"call void @osty_rt_list_push_ptr(",
+		"call void @osty_rt_list_push_string(",
 		// Second pass calls map_remove per victim.
 		"call i1 @osty_rt_map_remove_string(",
 	} {

@@ -7635,7 +7635,7 @@ func (g *mirGen) emitEnumStringConcatBoxed(op mir.Operand, t mir.Type) (*LlvmVal
 	labels := make([]string, len(layout.Variants))
 	values := make([]string, len(layout.Variants))
 	for idx, v := range layout.Variants {
-		label := g.freshLabel("enumstr." + sanitizeLabelFragment(v.Name))
+		label := g.freshLabel("enumstr." + mirSanitizeLabelFragment(v.Name))
 		labels[idx] = label
 		cases = append(cases, MirGenSwitchCase{
 			ValueText:   strconv.Itoa(v.Index),
@@ -7677,25 +7677,6 @@ func (g *mirGen) emitEnumStringConcatBoxed(op mir.Operand, t mir.Type) (*LlvmVal
 	b.WriteString(" ]\n")
 	g.fnBuf.WriteString(b.String())
 	return &LlvmValue{typ: "ptr", name: out}, true, nil
-}
-
-func sanitizeLabelFragment(s string) string {
-	if s == "" {
-		return "variant"
-	}
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('_')
-		}
-	}
-	if b.Len() == 0 {
-		return "variant"
-	}
-	return b.String()
 }
 
 // emitStringSplit emits `.split(sep)` as a call to the runtime
@@ -8413,16 +8394,6 @@ func (g *mirGen) coerceValue(val, from, to string) (string, error) {
 		return g.emitIntResize(val, from, to)
 	}
 	return "", fmt.Errorf("cannot coerce %s to %s", from, to)
-}
-
-func mirIsTwoWordEnumLLVM(llvmT string) bool {
-	name := strings.TrimPrefix(llvmT, "%")
-	return strings.HasPrefix(name, "Option.") ||
-		strings.HasPrefix(name, "Maybe.") ||
-		strings.HasPrefix(name, "Result.") ||
-		mangledBuiltinSourceNameIs(name, "Option") ||
-		mangledBuiltinSourceNameIs(name, "Maybe") ||
-		mangledBuiltinSourceNameIs(name, "Result")
 }
 
 func isOpaqueBuiltinStructLayout(sl *mir.StructLayout) bool {
@@ -10105,30 +10076,15 @@ func (g *mirGen) emitBinary(op mir.BinaryOp, left, right string, argT, resT mir.
 }
 
 func mirBinaryResultIsBool(op mir.BinaryOp) bool {
-	switch op {
-	case mir.BinEq, mir.BinNeq, mir.BinLt, mir.BinLeq, mir.BinGt, mir.BinGeq:
-		return true
-	default:
-		return false
-	}
+	return mirBinaryResultIsBoolSymbol(op.String())
 }
 
 func mirBinaryResultCanUseOperandWidth(op mir.BinaryOp) bool {
-	switch op {
-	case mir.BinAdd, mir.BinSub, mir.BinMul, mir.BinDiv, mir.BinMod,
-		mir.BinAnd, mir.BinOr, mir.BinBitAnd, mir.BinBitOr, mir.BinBitXor,
-		mir.BinShl, mir.BinShr:
-		return true
-	default:
-		return false
-	}
+	return mirBinaryResultCanUseOperandWidthSymbol(op.String())
 }
 
 func numericLLVMResizePossible(from, to string) bool {
-	if intLLVMBits(from) > 0 && intLLVMBits(to) > 0 {
-		return true
-	}
-	return (from == "float" || from == "double") && (to == "float" || to == "double")
+	return mirNumericLLVMResizePossible(from, to)
 }
 
 func (g *mirGen) isEnumValueType(t mir.Type) bool {
@@ -10185,19 +10141,10 @@ func (g *mirGen) emitHeapEquality(op mir.BinaryOp, left, right string) (string, 
 	return neq, nil
 }
 
-// stringEqInlineMaxBytes caps the literal length (excluding NUL) for
-// which `String == literal` / `!=` expands inline as a byte-wise
-// compare instead of dispatching to `osty_rt_strings_Equal`. Short
-// discriminator keywords dominate CSV / log parsing hot paths; inlining
-// eliminates the call overhead and the two strlen scans the runtime
-// performs. 16 covers common codes (regions, HTTP verbs, "enterprise",
-// etc.) while keeping the emitted IR compact.
-const stringEqInlineMaxBytes = 16
-
 // literalStringOperand returns (value, true) if op is a StringConst
-// with length ≤ stringEqInlineMaxBytes and no embedded NUL. Embedded
-// NULs are rejected because the inline compare terminates on the NUL
-// byte — such literals must keep routing to the runtime.
+// accepted by the Osty-owned inline-literal policy. Embedded NULs are
+// rejected because the inline compare terminates on the NUL byte — such
+// literals must keep routing to the runtime.
 func literalStringOperand(op mir.Operand) (string, bool) {
 	c, ok := op.(*mir.ConstOp)
 	if !ok {
@@ -10207,13 +10154,15 @@ func literalStringOperand(op mir.Operand) (string, bool) {
 	if !ok {
 		return "", false
 	}
-	if len(sc.Value) > stringEqInlineMaxBytes {
-		return "", false
-	}
+	hasNUL := false
 	for i := 0; i < len(sc.Value); i++ {
 		if sc.Value[i] == 0 {
-			return "", false
+			hasNUL = true
+			break
 		}
+	}
+	if !mirInlineStringLiteralCandidate(len(sc.Value), hasNUL) {
+		return "", false
 	}
 	return sc.Value, true
 }
@@ -10337,6 +10286,9 @@ func earliestAfter(s string, markers []string) int {
 // encodeLLVMString returns the LLVM-style escaped body of s and the
 // byte count of the underlying array (including a trailing NUL).
 func encodeLLVMString(s string) (string, int) {
+	if mirCanEncodeLLVMString(s) {
+		return mirEncodeLLVMString(s), mirLLVMStringArraySize(len(s))
+	}
 	var b strings.Builder
 	for i := 0; i < len(s); i++ {
 		c := s[i]

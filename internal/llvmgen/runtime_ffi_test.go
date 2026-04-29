@@ -684,7 +684,7 @@ func TestGenerateManagedListPushStmtUsesSafepoint(t *testing.T) {
 	for _, want := range []string{
 		"declare void @osty.gc.safepoint_v1(i64, ptr, i64)",
 		"call void @osty.gc.safepoint_v1(",
-		"call void @osty_rt_list_push_ptr(",
+		"call void @osty_rt_list_push_string(",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)

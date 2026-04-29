@@ -103,7 +103,7 @@ fn selfDocAddRefsFromText(
 		"define ptr @selfDocAddRefsFromText(",
 		"call ptr @osty_rt_strings_Split(",
 		"call ptr @osty_rt_strings_Concat(",
-		"call void @osty_rt_list_push_ptr(",
+		"call void @osty_rt_list_push_string(",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("generated IR missing %q:\n%s", want, got)
