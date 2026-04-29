@@ -164,6 +164,106 @@ runtime = true
 	}
 }
 
+func TestLoadPackageForNativeWithTransformKeepsOriginalDiagnosticSource(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	original := []byte("func main() {\n    let value = 1\n}\n")
+	if err := os.WriteFile(path, original, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pkg, err := LoadPackageForNativeWithTransform(dir, func(_ string, src []byte) []byte {
+		return []byte("fn main() {\n    let value = 1\n}\n")
+	})
+	if err != nil {
+		t.Fatalf("LoadPackageForNativeWithTransform: %v", err)
+	}
+	if len(pkg.Files) != 1 {
+		t.Fatalf("files = %d, want 1", len(pkg.Files))
+	}
+	pf := pkg.Files[0]
+	if got := string(pf.Source); got[:2] != "fn" {
+		t.Fatalf("Source prefix = %q, want transformed fn", got[:2])
+	}
+	if got := string(pf.DiagnosticSource()); got[:4] != "func" {
+		t.Fatalf("DiagnosticSource prefix = %q, want original func", got[:4])
+	}
+	if pf.TransformMap == nil {
+		t.Fatal("TransformMap is nil, want remap for changed source")
+	}
+}
+
+func TestLoadPackageForNativeWithTransformerCanOptOutOfOriginalRemap(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.osty")
+	if err := os.WriteFile(path, []byte("fn main() {\n    let value = 1\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pkg, err := LoadPackageForNativeWithOptions(dir, LoadOptions{
+		Transformer: func(_ string, _ []byte) SourceTransformResult {
+			return SourceTransformResult{
+				Source:   []byte("fn main() {\n    let value = 2\n}\n"),
+				MapKnown: true,
+			}
+		},
+	})
+	if err != nil {
+		t.Fatalf("LoadPackageForNativeWithOptions: %v", err)
+	}
+	pf := pkg.Files[0]
+	if got := string(pf.DiagnosticSource()); got != string(pf.Source) {
+		t.Fatalf("DiagnosticSource = %q, want transformed Source %q", got, string(pf.Source))
+	}
+	if pf.TransformMap != nil {
+		t.Fatal("TransformMap is non-nil, want explicit opt-out")
+	}
+}
+
+func TestWorkspacePackageGraphExposesLoadedEdges(t *testing.T) {
+	root := t.TempDir()
+	depDir := filepath.Join(root, "dep")
+	if err := os.MkdirAll(depDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.osty"), []byte("pub use dep\nfn main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(depDir, "lib.osty"), []byte("pub fn value() -> Int { 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	if _, err := ws.LoadPackageNative(""); err != nil {
+		t.Fatalf("LoadPackageNative: %v", err)
+	}
+	graph := NewPackageGraph(ws)
+	if len(graph.Packages) != 2 {
+		t.Fatalf("graph packages = %d, want 2", len(graph.Packages))
+	}
+	if len(graph.Edges) != 1 {
+		t.Fatalf("graph edges = %d, want 1", len(graph.Edges))
+	}
+	rootNode := graph.Packages[""]
+	depNode := graph.Packages["dep"]
+	if rootNode == nil || depNode == nil {
+		t.Fatalf("graph packages = %#v, want root and dep", graph.Packages)
+	}
+	if rootNode.IsStdlib || rootNode.IsExternalDep || depNode.IsStdlib || depNode.IsExternalDep {
+		t.Fatalf("graph package classifications = root %#v dep %#v, want workspace packages", rootNode, depNode)
+	}
+	edge := graph.Edges[0]
+	if edge.From != "" || edge.To != "dep" || !edge.IsPub || edge.Kind != PackageGraphEdgeWorkspace {
+		t.Fatalf("edge = %#v, want root pub edge to dep", edge)
+	}
+	if graph.Package("dep") != depNode.Package {
+		t.Fatalf("graph.Package(\"dep\") = %#v, want dep package %#v", graph.Package("dep"), depNode.Package)
+	}
+}
+
 func TestNativeResolveBridgeIndexesScriptScopeBindings(t *testing.T) {
 	src := []byte("let x = 1\nlet y = x\n")
 	file, parseDiags := parser.ParseDiagnostics(src)

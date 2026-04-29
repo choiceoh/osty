@@ -1635,26 +1635,19 @@ func loadSelectedGenFilesWithTransform(sourcePath string, files []string, transf
 	chk := &check.Result{}
 	var entryFile *resolve.PackageFile
 	for _, path := range files {
-		src, err := os.ReadFile(path)
+		original, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
 		}
-		var original []byte
-		transformApplied := false
-		transformChanged := false
-		if transform != nil {
-			original = append([]byte(nil), src...)
-			src = transform(path, src)
-			transformApplied = true
-			transformChanged = !bytes.Equal(original, src)
-		}
+		src, transformMap := resolve.ApplySourceTransform(path, original, resolve.LoadOptions{Transform: transform})
+		transformApplied := transform != nil
+		transformChanged := transformApplied && !bytes.Equal(src, original)
 		run := selfhost.Run(src)
 		file := selfhost.LowerPublicFileFromRun(run)
 		canonicalSrc, canonicalMap := canonical.SourceWithMap(src, file)
 		pf := &resolve.PackageFile{
 			Path:                   path,
 			Source:                 src,
-			OriginalSource:         original,
 			SourceTransformApplied: transformApplied,
 			SourceTransformChanged: transformChanged,
 			CanonicalSource:        canonicalSrc,
@@ -1662,6 +1655,10 @@ func loadSelectedGenFilesWithTransform(sourcePath string, files []string, transf
 			File:                   file,
 			Run:                    run,
 			ParseDiags:             run.Diagnostics(),
+		}
+		if transformMap != nil {
+			pf.OriginalSource = append([]byte(nil), original...)
+			pf.TransformMap = transformMap
 		}
 		pkg.Files = append(pkg.Files, pf)
 		res.Diags = append(res.Diags, pf.ParseDiags...)

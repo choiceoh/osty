@@ -50,7 +50,7 @@ func (w *Workspace) LoadPackageNative(dotPath string) (*Package, error) {
 	w.loading[dotPath] = true
 	defer delete(w.loading, dotPath)
 
-	pkg, err := LoadPackageForNativeWithTransform(dir, w.SourceTransform)
+	pkg, err := LoadPackageForNativeWithOptions(dir, w.loadOptions())
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +76,7 @@ func (w *Workspace) loadFromExternalDirNative(key, dir string) (*Package, error)
 	w.loading[key] = true
 	defer delete(w.loading, key)
 
-	pkg, err := LoadPackageForNativeWithTransform(dir, w.SourceTransform)
+	pkg, err := LoadPackageForNativeWithOptions(dir, w.loadOptions())
 	if err != nil {
 		return nil, err
 	}

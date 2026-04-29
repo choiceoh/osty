@@ -382,6 +382,8 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 				pkg.Files[i] = &resolve.PackageFile{
 					Path:            pf.Path,
 					Source:          pf.Source,
+					OriginalSource:  pf.OriginalSource,
+					TransformMap:    pf.TransformMap,
 					CanonicalSource: pf.CanonicalSource,
 					CanonicalMap:    pf.CanonicalMap,
 					File:            pf.File,
@@ -718,6 +720,8 @@ func copyPackageForWorkspace(src *resolve.Package) *resolve.Package {
 		pkg.Files[i] = &resolve.PackageFile{
 			Path:            pf.Path,
 			Source:          pf.Source,
+			OriginalSource:  pf.OriginalSource,
+			TransformMap:    pf.TransformMap,
 			CanonicalSource: pf.CanonicalSource,
 			CanonicalMap:    pf.CanonicalMap,
 			File:            pf.File,

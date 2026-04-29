@@ -1921,7 +1921,7 @@ func selfhostPackageSource(pkg *resolve.Package, ws *resolve.Workspace, stdlib r
 			scope:     pf.FileScope,
 			refs:      pf.RefsByID,
 			base:      base,
-			sourceMap: pf.CanonicalMap,
+			sourceMap: pf.CheckerSourceMap(),
 		})
 	}
 	return selfhostCheckedSource{source: b.Bytes(), files: files}

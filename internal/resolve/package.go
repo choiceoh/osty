@@ -58,17 +58,22 @@ type Package struct {
 type PackageFile struct {
 	// Path is the file's filesystem path.
 	Path string
-	// Source is the raw UTF-8 bytes. Retained so diagnostics can render
-	// source snippets without re-reading the file.
+	// Source is the parser-facing UTF-8 bytes. When a SourceTransform was
+	// applied, this is the transformed source.
 	Source []byte
-	// OriginalSource is the on-disk UTF-8 bytes before SourceTransform ran.
-	// Nil means the parser saw Source directly.
+	// OriginalSource is the on-disk source before SourceTransform. Empty when
+	// Source already matches the file contents or the transform opted out of
+	// original-source remapping.
 	OriginalSource []byte
 	// SourceTransformApplied records that the workspace source transform
 	// hook was invoked for this file.
 	SourceTransformApplied bool
 	// SourceTransformChanged records that Source differs from OriginalSource.
 	SourceTransformChanged bool
+	// TransformMap projects parser-facing Source spans back onto OriginalSource.
+	// Nil when no transform changed the file or when the transform explicitly
+	// keeps diagnostics on Source.
+	TransformMap *sourcemap.Map
 	// CanonicalSource is the checker-facing canonical Osty source produced from
 	// the parsed AST after parser-owned canonicalization. When empty,
 	// callers should fall back to Source.
@@ -124,6 +129,50 @@ func (pf *PackageFile) CheckerSource() []byte {
 		return pf.CanonicalSource
 	}
 	return pf.Source
+}
+
+func (pf *PackageFile) DiagnosticSource() []byte {
+	if pf == nil {
+		return nil
+	}
+	if len(pf.OriginalSource) > 0 {
+		return pf.OriginalSource
+	}
+	return pf.Source
+}
+
+func (pf *PackageFile) DiagnosticMap() *sourcemap.Map {
+	if pf == nil {
+		return nil
+	}
+	return pf.TransformMap
+}
+
+// CheckerSourceMap projects CheckerSource spans back onto parser-facing Source
+// spans. It deliberately stops before TransformMap so native bridge indexes can
+// still match the public AST, whose positions are in Source coordinates.
+func (pf *PackageFile) CheckerSourceMap() *sourcemap.Map {
+	if pf == nil {
+		return nil
+	}
+	return pf.CanonicalMap
+}
+
+// CheckerDiagnosticMap projects CheckerSource spans onto DiagnosticSource
+// spans. Use it only for diagnostics that are known to be checker-source
+// relative; parser and resolver diagnostics usually live in Source coordinates
+// and should use DiagnosticMap instead.
+func (pf *PackageFile) CheckerDiagnosticMap() *sourcemap.Map {
+	if pf == nil {
+		return nil
+	}
+	if pf.CanonicalMap == nil {
+		return pf.TransformMap
+	}
+	if pf.TransformMap == nil {
+		return pf.CanonicalMap
+	}
+	return pf.CanonicalMap.Compose(pf.TransformMap)
 }
 
 // CanMaterializeFile reports whether EnsureFile can produce the public AST

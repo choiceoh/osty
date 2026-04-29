@@ -16,6 +16,10 @@ func LoadPackageFiles(paths []string, stdlib StdlibProvider) (*Package, error) {
 // LoadPackageFilesWithTransform is LoadPackageFiles plus an optional
 // pre-parse source transform.
 func LoadPackageFilesWithTransform(paths []string, stdlib StdlibProvider, transform SourceTransform) (*Package, error) {
+	return LoadPackageFilesWithOptions(paths, stdlib, LoadOptions{Transform: transform})
+}
+
+func LoadPackageFilesWithOptions(paths []string, stdlib StdlibProvider, opts LoadOptions) (*Package, error) {
 	if len(paths) == 0 {
 		return nil, fmt.Errorf("load selected package: no files")
 	}
@@ -36,7 +40,7 @@ func LoadPackageFilesWithTransform(paths []string, stdlib StdlibProvider, transf
 	if stdlib != nil {
 		pkg.workspace = newStdlibOnlyWorkspace(stdlib)
 	}
-	loaded, err := loadPackageNativePaths(absPaths, dir, filepath.Base(dir), transform)
+	loaded, err := loadPackageNativePaths(absPaths, dir, filepath.Base(dir), opts)
 	if err != nil {
 		return nil, err
 	}
