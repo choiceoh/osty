@@ -11,9 +11,9 @@ import (
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/lexer"
-	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/repair"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/stdlib"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
@@ -393,17 +393,18 @@ func rewriteLengthProperties(src []byte) ([]byte, []repair.Change, bool) {
 // whose receiver type already has a `length` field — rewriting these to
 // `.len()` would replace a valid field read with a missing-method call.
 func validLengthFieldOffsets(src []byte) map[int]bool {
-	parsed := parser.ParseDetailed(src)
-	if parsed.File == nil {
+	run := selfhost.Run(src)
+	file := selfhost.LowerPublicFileFromRun(run)
+	if file == nil {
 		return nil
 	}
-	res := resolve.ResolveFileSourceDefault(src, parsed.File, stdlib.LoadCached())
-	chk := check.SelfhostFile(parsed.File, res, checkOptsForSource(canonical.Source(src, parsed.File)))
+	res := resolve.ResolveFileSourceDefault(src, file, stdlib.LoadCached())
+	chk := check.SelfhostFile(file, res, checkOptsForSource(canonical.Source(src, file)))
 	if chk == nil {
 		return nil
 	}
 	skip := make(map[int]bool)
-	walkFieldExprs(parsed.File, func(fe *ast.FieldExpr) {
+	walkFieldExprs(file, func(fe *ast.FieldExpr) {
 		if fe.Name != "length" {
 			return
 		}
