@@ -26,6 +26,7 @@ import (
 	"github.com/osty/osty/internal/llvmgen"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/runner"
+	"github.com/osty/osty/internal/selfhost"
 )
 
 type nativeTestCase struct {
@@ -127,7 +128,7 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	pkg, err := resolve.LoadPackageWithTestsTransform(pkgDir, aiRepairSourceTransform("osty test --airepair", stderr, flags))
+	pkg, err := resolve.LoadPackageForNativeWithTestsTransform(pkgDir, aiRepairSourceTransform("osty test --airepair", stderr, flags))
 	if err != nil {
 		fmt.Fprintf(stderr, "osty test: %v\n", err)
 		return 1
@@ -138,7 +139,6 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "osty test: parse errors in %s\n", pkgDir)
 		return 1
 	}
-
 	tests, err := discoverNativeTests(pkg, filters, benchMode)
 	if err != nil {
 		fmt.Fprintf(stderr, "osty test: %v\n", err)
@@ -149,6 +149,11 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "osty test: --doc and --bench cannot be combined")
 			return 2
 		}
+		// Doctest extraction still walks doc comments through the public AST.
+		// Keep this compatibility boundary local to --doc instead of forcing
+		// every ordinary `osty test` run through it.
+		pkg.MaterializePublicCompatibility()
+		pkg.MaterializeCanonicalSources()
 		doc, err := appendDoctestCases(pkg, filters)
 		if err != nil {
 			fmt.Fprintf(stderr, "osty test --doc: %v\n", err)
@@ -535,7 +540,29 @@ func discoverNativeTests(pkg *resolve.Package, filters []string, benchMode bool)
 	seen := map[string]string{}
 	var tests []nativeTestCase
 	for _, pf := range pkg.Files {
-		if pf == nil || pf.File == nil {
+		if pf == nil {
+			continue
+		}
+		if pf.Run != nil {
+			for _, fn := range selfhost.PackageFunctionsFromRun(pf.Run) {
+				if fn.Name == "main" {
+					return nil, fmt.Errorf("package %s already defines main; native test runner currently requires a library-style package", pkg.Dir)
+				}
+				if !isDiscoverableNativeTestFn(fn, benchMode) {
+					continue
+				}
+				if !matchesTestFilters(fn.Name, filters) {
+					continue
+				}
+				if prev, exists := seen[fn.Name]; exists {
+					return nil, fmt.Errorf("duplicate %s function %q in %s and %s", singularKindLabel(benchMode), fn.Name, prev, pf.Path)
+				}
+				seen[fn.Name] = pf.Path
+				tests = append(tests, nativeTestCase{Name: fn.Name, Path: pf.Path})
+			}
+			continue
+		}
+		if pf.File == nil {
 			continue
 		}
 		for _, decl := range pf.File.Decls {
@@ -593,6 +620,37 @@ func discoverNativeTests(pkg *resolve.Package, filters []string, benchMode bool)
 		return tests[i].Name < tests[j].Name
 	})
 	return tests, nil
+}
+
+func isDiscoverableNativeTestFn(fn selfhost.PackageFunctionRef, benchMode bool) bool {
+	if fn.HasReceiver || fn.GenericParamCount != 0 {
+		return false
+	}
+	if fn.Name == "testing" {
+		return false
+	}
+	if benchMode {
+		if !strings.HasPrefix(fn.Name, "bench") {
+			return false
+		}
+	} else {
+		if strings.HasPrefix(fn.Name, "bench") {
+			return false
+		}
+		if !strings.HasPrefix(fn.Name, "test") && !hasNativeTestAnnotation(fn) {
+			return false
+		}
+	}
+	return fn.ParamCount == 0 && !fn.HasReturn && fn.HasBody
+}
+
+func hasNativeTestAnnotation(fn selfhost.PackageFunctionRef) bool {
+	for _, name := range fn.Annotations {
+		if name == "test" {
+			return true
+		}
+	}
+	return false
 }
 
 func matchesTestFilters(name string, filters []string) bool {

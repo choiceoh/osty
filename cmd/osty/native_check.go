@@ -13,7 +13,6 @@ import (
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/manifest"
-	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/stdlib"
@@ -22,7 +21,7 @@ import (
 // runCheckPackage runs lex + parse + resolve over dir. Two modes:
 //
 //   - **Single-package**: dir contains `.osty` files directly. Loaded
-//     via resolve.LoadPackageArenaFirst.
+//     via resolve.LoadPackageForNativeWithTransform.
 //   - **Workspace**: dir has no top-level `.osty` files but one or
 //     more subdirectories do. The whole tree is loaded via Workspace
 //     so cross-package `use` declarations resolve.
@@ -138,9 +137,8 @@ func workspaceContainsPath(root string, members []string, target string) bool {
 
 // runResolveFile drives the single-file `osty resolve FILE` happy path
 // entirely through the self-host arena (selfhost.ResolveFromSource);
-// the astbridge *ast.File is only materialized lazily via
-// parser.ParseDiagnostics when a fallback needs it (printResolution
-// with no native rows, or --show-scopes). Returns the subcommand's
+// the public *ast.File is only materialized lazily when a fallback needs
+// it (printResolution with no native rows, or --show-scopes). Returns the subcommand's
 // exit code: 0 on clean input, 1 when any error-severity diagnostic
 // surfaces. Keeping the body factored out lets the astbridge counter
 // pin the end-to-end CLI invariant in-process (not just the library
@@ -153,8 +151,7 @@ func runResolveFile(path string, src []byte, formatter *diag.Formatter, flags cl
 	)
 	ensureLoweredFile := func() *ast.File {
 		if file == nil {
-			parsed, _ := parser.ParseDiagnostics(src)
-			file = parsed
+			file = selfhost.LowerPublicFileFromRun(selfhost.Run(src))
 		}
 		return file
 	}

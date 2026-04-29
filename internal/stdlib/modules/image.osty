@@ -1,0 +1,372 @@
+// std.image - lightweight image format detection and dimension parsing.
+//
+// Pixel decoding belongs in a future runtime-backed codec layer. This module
+// handles the useful pure-Osty part now: sniff common image formats and read
+// dimensions / basic metadata from their headers.
+
+use std.bytes
+use std.error
+
+pub enum Format {
+    Unknown,
+    Png,
+    Jpeg,
+    Gif,
+    Bmp,
+    Webp,
+}
+
+pub struct Size {
+    pub width: Int,
+    pub height: Int,
+}
+
+pub struct Metadata {
+    pub format: Format,
+    pub width: Int,
+    pub height: Int,
+    pub bitsPerPixel: Int,
+    pub hasAlpha: Bool,
+    pub animated: Bool,
+}
+
+pub fn identify(data: Bytes) -> Format {
+    if isPng(data) {
+        return Png
+    }
+    if isJpeg(data) {
+        return Jpeg
+    }
+    if isGif(data) {
+        return Gif
+    }
+    if isBmp(data) {
+        return Bmp
+    }
+    if isWebp(data) {
+        return Webp
+    }
+    Unknown
+}
+
+pub fn formatName(format: Format) -> String {
+    match format {
+        Png     -> "png",
+        Jpeg    -> "jpeg",
+        Gif     -> "gif",
+        Bmp     -> "bmp",
+        Webp    -> "webp",
+        Unknown -> "unknown",
+    }
+}
+
+pub fn parse(data: Bytes) -> Result<Metadata, Error> {
+    match identify(data) {
+        Png     -> parsePng(data),
+        Jpeg    -> parseJpeg(data),
+        Gif     -> parseGif(data),
+        Bmp     -> parseBmp(data),
+        Webp    -> parseWebp(data),
+        Unknown -> Err(error.new("image: unknown image format")),
+    }
+}
+
+pub fn dimensions(data: Bytes) -> Result<Size, Error> {
+    let meta = parse(data)?
+    Ok(Size {
+        width: meta.width,
+        height: meta.height,
+    })
+}
+
+pub fn isImage(data: Bytes) -> Bool {
+    identify(data) != Unknown
+}
+
+pub fn isPng(data: Bytes) -> Bool {
+    data.len() >= 8 &&
+    byteAt(data, 0).toInt() == 0x89 &&
+    asciiAt(data, 1) == 'P' &&
+    asciiAt(data, 2) == 'N' &&
+    asciiAt(data, 3) == 'G' &&
+    byteAt(data, 4).toInt() == 0x0D &&
+    byteAt(data, 5).toInt() == 0x0A &&
+    byteAt(data, 6).toInt() == 0x1A &&
+    byteAt(data, 7).toInt() == 0x0A
+}
+
+pub fn isJpeg(data: Bytes) -> Bool {
+    data.len() >= 3 &&
+    byteAt(data, 0).toInt() == 0xFF &&
+    byteAt(data, 1).toInt() == 0xD8 &&
+    byteAt(data, 2).toInt() == 0xFF
+}
+
+pub fn isGif(data: Bytes) -> Bool {
+    data.len() >= 6 &&
+    asciiAt(data, 0) == 'G' &&
+    asciiAt(data, 1) == 'I' &&
+    asciiAt(data, 2) == 'F' &&
+    asciiAt(data, 3) == '8' &&
+    (asciiAt(data, 4) == '7' || asciiAt(data, 4) == '9') &&
+    asciiAt(data, 5) == 'a'
+}
+
+pub fn isBmp(data: Bytes) -> Bool {
+    data.len() >= 2 && asciiAt(data, 0) == 'B' && asciiAt(data, 1) == 'M'
+}
+
+pub fn isWebp(data: Bytes) -> Bool {
+    data.len() >= 12 &&
+    asciiAt(data, 0) == 'R' &&
+    asciiAt(data, 1) == 'I' &&
+    asciiAt(data, 2) == 'F' &&
+    asciiAt(data, 3) == 'F' &&
+    asciiAt(data, 8) == 'W' &&
+    asciiAt(data, 9) == 'E' &&
+    asciiAt(data, 10) == 'B' &&
+    asciiAt(data, 11) == 'P'
+}
+
+fn parsePng(data: Bytes) -> Result<Metadata, Error> {
+    if data.len() < 29 {
+        return Err(error.new("image: truncated PNG header"))
+    }
+    if readU32BE(data, 12) != 0x49484452 {
+        return Err(error.new("image: PNG missing IHDR"))
+    }
+    let bitDepth = byteAt(data, 24)
+    let colorType = byteAt(data, 25)
+    Ok(Metadata {
+        format: Png,
+        width: readU32BE(data, 16),
+        height: readU32BE(data, 20),
+        bitsPerPixel: pngBitsPerPixel(bitDepth, colorType),
+        hasAlpha: colorType.toInt() == 4 || colorType.toInt() == 6,
+        animated: pngHasAcTL(data),
+    })
+}
+
+fn parseGif(data: Bytes) -> Result<Metadata, Error> {
+    if data.len() < 11 {
+        return Err(error.new("image: truncated GIF header"))
+    }
+    let packed = byteAt(data, 10).toInt()
+    Ok(Metadata {
+        format: Gif,
+        width: readU16LE(data, 6),
+        height: readU16LE(data, 8),
+        bitsPerPixel: (packed & 0x07) + 1,
+        hasAlpha: true,
+        animated: gifImageCount(data) > 1,
+    })
+}
+
+fn parseBmp(data: Bytes) -> Result<Metadata, Error> {
+    if data.len() < 30 {
+        return Err(error.new("image: truncated BMP header"))
+    }
+    let height = readI32LEAbs(data, 22)
+    Ok(Metadata {
+        format: Bmp,
+        width: readI32LEAbs(data, 18),
+        height: height,
+        bitsPerPixel: readU16LE(data, 28),
+        hasAlpha: readU16LE(data, 28) == 32,
+        animated: false,
+    })
+}
+
+fn parseWebp(data: Bytes) -> Result<Metadata, Error> {
+    if data.len() < 30 {
+        return Err(error.new("image: truncated WebP header"))
+    }
+    let chunk = readFourCC(data, 12)
+    if chunk == "VP8X" {
+        let features = byteAt(data, 20).toInt()
+        return Ok(Metadata {
+            format: Webp,
+            width: readU24LE(data, 24) + 1,
+            height: readU24LE(data, 27) + 1,
+            bitsPerPixel: 32,
+            hasAlpha: (features & 0x10) != 0,
+            animated: (features & 0x02) != 0,
+        })
+    }
+    if chunk == "VP8L" {
+        if data.len() < 25 || byteAt(data, 20).toInt() != 0x2F {
+            return Err(error.new("image: invalid VP8L header"))
+        }
+        let b0 = byteAt(data, 21).toInt()
+        let b1 = byteAt(data, 22).toInt()
+        let b2 = byteAt(data, 23).toInt()
+        let b3 = byteAt(data, 24).toInt()
+        return Ok(Metadata {
+            format: Webp,
+            width: 1 + b0 + ((b1 & 0x3F) << 8),
+            height: 1 + ((b1 & 0xC0) >> 6) + (b2 << 2) + ((b3 & 0x0F) << 10),
+            bitsPerPixel: 32,
+            hasAlpha: (b3 & 0x10) != 0,
+            animated: false,
+        })
+    }
+    if chunk == "VP8 " {
+        if data.len() < 30 {
+            return Err(error.new("image: truncated VP8 header"))
+        }
+        return Ok(Metadata {
+            format: Webp,
+            width: readU16LE(data, 26) & 0x3FFF,
+            height: readU16LE(data, 28) & 0x3FFF,
+            bitsPerPixel: 24,
+            hasAlpha: false,
+            animated: false,
+        })
+    }
+    Err(error.new("image: unsupported WebP chunk"))
+}
+
+fn parseJpeg(data: Bytes) -> Result<Metadata, Error> {
+    let mut pos = 2
+    for pos + 4 < data.len() {
+        for pos < data.len() && byteAt(data, pos).toInt() != 0xFF {
+            pos = pos + 1
+        }
+        for pos < data.len() && byteAt(data, pos).toInt() == 0xFF {
+            pos = pos + 1
+        }
+        if pos >= data.len() {
+            break
+        }
+        let marker = byteAt(data, pos).toInt()
+        pos = pos + 1
+        if marker == 0xD9 || marker == 0xDA {
+            break
+        }
+        if markerHasNoLength(marker) {
+            continue
+        }
+        if pos + 2 > data.len() {
+            return Err(error.new("image: truncated JPEG segment"))
+        }
+        let len = readU16BE(data, pos)
+        if len < 2 || pos + len > data.len() {
+            return Err(error.new("image: invalid JPEG segment length"))
+        }
+        if isSofMarker(marker) {
+            if len < 7 {
+                return Err(error.new("image: truncated JPEG SOF segment"))
+            }
+            let precision = byteAt(data, pos + 2).toInt()
+            return Ok(Metadata {
+                format: Jpeg,
+                width: readU16BE(data, pos + 5),
+                height: readU16BE(data, pos + 3),
+                bitsPerPixel: precision * 3,
+                hasAlpha: false,
+                animated: false,
+            })
+        }
+        pos = pos + len
+    }
+    Err(error.new("image: JPEG dimensions not found"))
+}
+
+fn pngBitsPerPixel(bitDepth: Byte, colorType: Byte) -> Int {
+    let depth = bitDepth.toInt()
+    match colorType.toInt() {
+        0 -> depth,
+        2 -> depth * 3,
+        3 -> depth,
+        4 -> depth * 2,
+        6 -> depth * 4,
+        _ -> depth,
+    }
+}
+
+fn pngHasAcTL(data: Bytes) -> Bool {
+    let mut pos = 8
+    for pos + 12 <= data.len() {
+        let len = readU32BE(data, pos)
+        if pos + 12 + len > data.len() {
+            return false
+        }
+        if readFourCC(data, pos + 4) == "acTL" {
+            return true
+        }
+        pos = pos + 12 + len
+    }
+    false
+}
+
+fn gifImageCount(data: Bytes) -> Int {
+    let mut count = 0
+    let mut i = 13
+    for i < data.len() {
+        if byteAt(data, i).toInt() == 0x2C {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    count
+}
+
+fn isSofMarker(marker: Int) -> Bool {
+    (marker >= 0xC0 && marker <= 0xC3) ||
+    (marker >= 0xC5 && marker <= 0xC7) ||
+    (marker >= 0xC9 && marker <= 0xCB) ||
+    (marker >= 0xCD && marker <= 0xCF)
+}
+
+fn markerHasNoLength(marker: Int) -> Bool {
+    marker == 0x01 || (marker >= 0xD0 && marker <= 0xD7)
+}
+
+fn readFourCC(data: Bytes, offset: Int) -> String {
+    let mut out: List<Byte> = []
+    out.push(byteAt(data, offset))
+    out.push(byteAt(data, offset + 1))
+    out.push(byteAt(data, offset + 2))
+    out.push(byteAt(data, offset + 3))
+    bytes.toString(bytes.from(out)).unwrap()
+}
+
+fn readU16BE(data: Bytes, offset: Int) -> Int {
+    (byteAt(data, offset).toInt() << 8) | byteAt(data, offset + 1).toInt()
+}
+
+fn readU16LE(data: Bytes, offset: Int) -> Int {
+    byteAt(data, offset).toInt() | (byteAt(data, offset + 1).toInt() << 8)
+}
+
+fn readU24LE(data: Bytes, offset: Int) -> Int {
+    byteAt(data, offset).toInt() |
+    (byteAt(data, offset + 1).toInt() << 8) |
+    (byteAt(data, offset + 2).toInt() << 16)
+}
+
+fn readU32BE(data: Bytes, offset: Int) -> Int {
+    (byteAt(data, offset).toInt() << 24) |
+    (byteAt(data, offset + 1).toInt() << 16) |
+    (byteAt(data, offset + 2).toInt() << 8) |
+    byteAt(data, offset + 3).toInt()
+}
+
+fn readI32LEAbs(data: Bytes, offset: Int) -> Int {
+    let raw = byteAt(data, offset).toInt() |
+    (byteAt(data, offset + 1).toInt() << 8) |
+    (byteAt(data, offset + 2).toInt() << 16) |
+    (byteAt(data, offset + 3).toInt() << 24)
+    if raw < 0 {
+        return 0 - raw
+    }
+    raw
+}
+
+fn asciiAt(data: Bytes, index: Int) -> Char {
+    byteAt(data, index).toInt().toChar()
+}
+
+fn byteAt(data: Bytes, index: Int) -> Byte {
+    bytes.get(data, index).unwrap()
+}

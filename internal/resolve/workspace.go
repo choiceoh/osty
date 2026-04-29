@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/token"
@@ -175,58 +174,13 @@ func NewWorkspace(root string) (*Workspace, error) {
 	}, nil
 }
 
-// LoadPackage loads the package identified by dotPath into the
-// workspace. If the package has already been loaded it is returned from
-// cache. The active implementation is arena-first and delegates to
-// LoadPackageArenaFirst so the workspace no longer has a Go-parser /
-// Go-resolver-specific loading path.
+// LoadPackage loads the package identified by dotPath into the workspace.
+// If the package has already been loaded it is returned from cache. Loading is
+// native by default: PackageFile.Run is populated while the public AST
+// compatibility surface stays nil until a legacy consumer explicitly asks for
+// it.
 func (w *Workspace) LoadPackage(dotPath string) (*Package, error) {
-	return w.LoadPackageArenaFirst(dotPath)
-}
-
-// loadExternalDep routes a URL-style use target through the
-// DepProvider. Returns a descriptive error when no provider is
-// attached or the provider doesn't recognize the path — the
-// resolver surfaces this as an unknown-package diagnostic with
-// source context.
-func (w *Workspace) loadExternalDep(rawPath string) (*Package, error) {
-	if w.Deps == nil {
-		return nil, fmt.Errorf("package %q: no dependency provider configured (did you forget `osty add`?)", rawPath)
-	}
-	dir, ok := w.Deps.LookupDep(rawPath)
-	if !ok {
-		return nil, fmt.Errorf("package %q: not found among declared dependencies", rawPath)
-	}
-	return w.loadFromExternalDir(rawPath, dir)
-}
-
-// loadFromExternalDir reads the package at dir and registers it
-// under key. Used by both URL-style imports and bare-alias
-// fallbacks once the DepProvider has located the vendored directory.
-// Recursion into transitive `use` declarations still happens — the
-// DepProvider is expected to know about them too.
-func (w *Workspace) loadFromExternalDir(key, dir string) (*Package, error) {
-	w.loading[key] = true
-	defer delete(w.loading, key)
-
-	pkg, err := LoadPackageWithTransform(dir, w.SourceTransform)
-	if err != nil {
-		return nil, err
-	}
-	// Name is the final segment: the last `/` chunk for URL paths,
-	// the alias itself for bare single-segment aliases.
-	pkg.Name = lastSegment(key)
-	w.Packages[key] = pkg
-
-	for _, f := range pkg.Files {
-		for _, u := range f.File.Uses {
-			if u.IsFFI() {
-				continue
-			}
-			w.loadUseDependencyNative(u)
-		}
-	}
-	return pkg, nil
+	return w.LoadPackageNative(dotPath)
 }
 
 // lastSegment picks the final `/`- or `.`-separated chunk of key.
@@ -246,6 +200,29 @@ func (w *Workspace) dirFor(dotPath string) string {
 	}
 	segs := strings.Split(dotPath, ".")
 	return filepath.Join(append([]string{w.Root}, segs...)...)
+}
+
+// MaterializePublicCompatibility forces public-AST compatibility output for
+// every loaded package. Keep calls to this method close to legacy boundaries
+// such as Go AST doc/refactor/lowering paths.
+func (w *Workspace) MaterializePublicCompatibility() {
+	if w == nil {
+		return
+	}
+	for _, pkg := range w.Packages {
+		pkg.MaterializePublicCompatibility()
+	}
+}
+
+// MaterializeCanonicalSources populates canonical sources for every loaded
+// package whose public-AST compatibility surface has been materialized.
+func (w *Workspace) MaterializeCanonicalSources() {
+	if w == nil {
+		return
+	}
+	for _, pkg := range w.Packages {
+		pkg.MaterializeCanonicalSources()
+	}
 }
 
 // ResolveAll runs the selfhost resolver over every loaded package,
@@ -327,21 +304,12 @@ func (w *Workspace) packageUseTargets(path string) []string {
 	}
 	seen := map[string]bool{}
 	var out []string
-	for _, f := range pkg.Files {
-		if f == nil || f.File == nil {
+	for _, edge := range packageUseGraphEdges(pkg) {
+		if edge.target == "" || seen[edge.target] {
 			continue
 		}
-		for _, u := range f.File.Uses {
-			if u == nil || u.IsFFI() {
-				continue
-			}
-			target := w.useGraphTarget(u)
-			if target == "" || seen[target] {
-				continue
-			}
-			seen[target] = true
-			out = append(out, target)
-		}
+		seen[edge.target] = true
+		out = append(out, edge.target)
 	}
 	sort.Strings(out)
 	return out
@@ -389,17 +357,11 @@ func (w *Workspace) detectCycles() []importCycleDiag {
 		if pkg.isStub || pkg.isCycleMarker {
 			continue
 		}
-		for _, f := range pkg.Files {
-			for _, u := range f.File.Uses {
-				if u.IsFFI() {
-					continue
-				}
-				target := w.useGraphTarget(u)
-				if target == "" {
-					continue
-				}
-				adj[path] = append(adj[path], importGraphEdge{target: target, pos: u.PosV, pub: u.IsPub})
+		for _, edge := range packageUseGraphEdges(pkg) {
+			if edge.target == "" {
+				continue
 			}
+			adj[path] = append(adj[path], importGraphEdge{target: edge.target, pos: edge.pos, pub: edge.pub})
 		}
 	}
 	pubReexportClosers := reexportCycleClosers(adj)
@@ -465,15 +427,78 @@ func (w *Workspace) detectCycles() []importCycleDiag {
 	return out
 }
 
-func (w *Workspace) useGraphTarget(u *ast.UseDecl) string {
-	target := useDependencyKey(u)
-	if target == "" {
-		return ""
+type packageUseGraphEdge struct {
+	target string
+	pos    token.Pos
+	pub    bool
+}
+
+func packageUseGraphEdges(pkg *Package) []packageUseGraphEdge {
+	if pkg == nil {
+		return nil
 	}
-	if _, ok := w.Packages[target]; ok {
-		return target
+	var out []packageUseGraphEdge
+	for _, pf := range pkg.Files {
+		if pf == nil {
+			continue
+		}
+		if pf.Run != nil {
+			for _, use := range selfhost.PackageUsesFromRun(pf.Run) {
+				if use.IsGo {
+					continue
+				}
+				target := use.Path
+				if use.IsScoped {
+					target = use.ScopedBase
+				}
+				if target == "" {
+					continue
+				}
+				out = append(out, packageUseGraphEdge{
+					target: target,
+					pos:    sourcePosAt(pf.Source, use.Start),
+					pub:    use.IsPub,
+				})
+			}
+			continue
+		}
+		if pf.File == nil {
+			continue
+		}
+		for _, u := range pf.File.Uses {
+			if u == nil || u.IsFFI() {
+				continue
+			}
+			target := useDependencyKey(u)
+			if target == "" {
+				continue
+			}
+			out = append(out, packageUseGraphEdge{target: target, pos: u.PosV, pub: u.IsPub})
+		}
 	}
-	return target
+	return out
+}
+
+func sourcePosAt(src []byte, offset int) token.Pos {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(src) {
+		offset = len(src)
+	}
+	pos := token.Pos{Line: 1, Column: 1, Offset: offset}
+	for i, b := range src {
+		if i >= offset {
+			break
+		}
+		if b == '\n' {
+			pos.Line++
+			pos.Column = 1
+			continue
+		}
+		pos.Column++
+	}
+	return pos
 }
 
 type cycleEdgeKey struct {

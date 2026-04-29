@@ -76,7 +76,11 @@ func LowerPackage(pkgName string, pkg *resolve.Package, chk *check.Result) (*Mod
 	mod := &Module{Package: pkgName}
 	var issues []error
 	for i, pf := range pkg.Files {
-		if pf == nil || pf.File == nil {
+		if pf == nil {
+			continue
+		}
+		file := pf.EnsureFile()
+		if file == nil {
 			continue
 		}
 		res := &resolve.Result{
@@ -86,7 +90,7 @@ func LowerPackage(pkgName string, pkg *resolve.Package, chk *check.Result) (*Mod
 			TypeRefIdents: pf.TypeRefIdents,
 			FileScope:     pf.FileScope,
 		}
-		l := &lowerer{pkgName: pkgName, file: pf.File, res: res, chk: chk}
+		l := &lowerer{pkgName: pkgName, file: file, res: res, chk: chk}
 		fileMod, fileIssues := l.run()
 		if i == 0 {
 			mod.SpanV = fileMod.SpanV

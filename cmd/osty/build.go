@@ -229,17 +229,18 @@ func isOstySource(name string) bool {
 	return filepath.Ext(name) == ".osty"
 }
 
-// countLowerableFiles reports how many of pkg.Files actually carry a
-// parsed AST. PackageFile entries with a nil File slip through resolve
-// when parse fails fatally; ir.LowerPackage skips them, and the gen path
-// uses the same predicate to decide whether package lowering is viable.
+// countLowerableFiles reports how many package files can enter the legacy IR
+// package-lowering boundary. Native-owned packages carry Run with File left nil
+// until that boundary explicitly materializes public AST compatibility, so
+// counting only pf.File would incorrectly route compile fallbacks through the
+// synthetic single-file path.
 func countLowerableFiles(pkg *resolve.Package) int {
 	if pkg == nil {
 		return 0
 	}
 	n := 0
 	for _, pf := range pkg.Files {
-		if pf != nil && pf.File != nil {
+		if pf.CanMaterializeFile() {
 			n++
 		}
 	}
@@ -315,10 +316,10 @@ func buildWorkspace(dir string, m *manifest.Manifest, flags cliFlags, deps resol
 	ws.Stdlib = stdlib.Load()
 	ws.Deps = deps
 	if m.HasPackage {
-		_, _ = ws.LoadPackageArenaFirst("")
+		_, _ = ws.LoadPackageNative("")
 	}
 	for _, mem := range m.Workspace.Members {
-		if _, err := ws.LoadPackageArenaFirst(mem); err != nil {
+		if _, err := ws.LoadPackageNative(mem); err != nil {
 			fmt.Fprintf(os.Stderr, "osty build: member %s: %v\n", mem, err)
 			os.Exit(1)
 		}
@@ -365,9 +366,8 @@ func buildWorkspace(dir string, m *manifest.Manifest, flags cliFlags, deps resol
 // the selected backend for the binary entry point.
 // When deps is non-nil, we wrap the package in a one-member Workspace
 // so `use` references to vendored external deps resolve through the
-// DepProvider. The plain resolve.LoadPackageArenaFirst path is kept as
-// a fallback for zero-dep projects because it's simpler and has no
-// workspace state to carry.
+// DepProvider. The zero-dep path uses the same native package loader without
+// workspace state.
 func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve.DepProvider, resolved *profile.Resolved, feats map[string]bool, backendID backend.Name, emitMode backend.EmitMode) *backend.Result {
 	if deps != nil {
 		ws, err := resolve.NewWorkspace(dir)
@@ -378,7 +378,7 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 		ws.SourceTransform = aiRepairSourceTransform("osty build --airepair", os.Stderr, flags)
 		ws.Stdlib = stdlib.Load()
 		ws.Deps = deps
-		if _, err := ws.LoadPackageArenaFirst(""); err != nil {
+		if _, err := ws.LoadPackageNative(""); err != nil {
 			fmt.Fprintf(os.Stderr, "osty build: %v\n", err)
 			os.Exit(1)
 		}
@@ -404,7 +404,7 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 		}
 		return nil
 	}
-	pkg, err := resolve.LoadPackageArenaFirstWithTransform(dir, aiRepairSourceTransform("osty build --airepair", os.Stderr, flags))
+	pkg, err := resolve.LoadPackageForNativeWithTransform(dir, aiRepairSourceTransform("osty build --airepair", os.Stderr, flags))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty build: %v\n", err)
 		os.Exit(1)

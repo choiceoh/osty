@@ -10,8 +10,8 @@ import (
 	"strings"
 
 	"github.com/osty/osty/internal/docgen"
-	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/stdlib"
 )
 
@@ -106,19 +106,19 @@ func runDoc(args []string, flags cliFlags) {
 
 	var pkgDoc *docgen.SelfDocPackage
 	if info.IsDir() {
-		pkg, err := resolve.LoadPackageArenaFirst(path)
+		pkg, err := resolve.LoadPackageForNative(path)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "osty doc: %v\n", err)
 			os.Exit(1)
 		}
 		anyFatal := false
 		for _, f := range pkg.Files {
-			if f.File == nil {
-				anyFatal = true
-			}
 			if len(f.ParseDiags) > 0 {
 				fmter := newFormatter(f.Path, f.Source, flags)
 				printDiags(fmter, f.ParseDiags, flags)
+				if hasError(f.ParseDiags) {
+					anyFatal = true
+				}
 			}
 		}
 		if anyFatal {
@@ -131,12 +131,13 @@ func runDoc(args []string, flags cliFlags) {
 			fmt.Fprintf(os.Stderr, "osty doc: %v\n", err)
 			os.Exit(1)
 		}
-		file, diags := parser.ParseDiagnostics(src)
+		run := selfhost.Run(src)
+		diags := run.Diagnostics()
 		if len(diags) > 0 {
 			fmter := newFormatter(path, src, flags)
 			printDiags(fmter, diags, flags)
 		}
-		if file == nil {
+		if hasError(diags) {
 			os.Exit(1)
 		}
 		label := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
@@ -233,7 +234,7 @@ func runWorkspaceDoc(root, format, outPath, title string,
 	}
 	ws.Stdlib = stdlib.LoadCached()
 	for _, p := range resolve.WorkspacePackagePaths(root) {
-		_, _ = ws.LoadPackageArenaFirst(p)
+		_, _ = ws.LoadPackageNative(p)
 	}
 
 	// Build docgen Packages keyed by the workspace's import paths so
@@ -245,15 +246,14 @@ func runWorkspaceDoc(root, format, outPath, title string,
 			continue
 		}
 		// Surface parse diagnostics for each file as before — keeps
-		// "docs from a noisy WIP tree" workable, fails only on AST-
-		// less files.
+		// "docs from a noisy WIP tree" workable.
 		for _, f := range pkg.Files {
-			if f.File == nil {
-				anyFatal = true
-			}
 			if len(f.ParseDiags) > 0 {
 				fmter := newFormatter(f.Path, f.Source, flags)
 				printDiags(fmter, f.ParseDiags, flags)
+				if hasError(f.ParseDiags) {
+					anyFatal = true
+				}
 			}
 		}
 		dp := docPackageFromResolved(pkg)

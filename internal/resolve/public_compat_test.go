@@ -74,3 +74,49 @@ func TestMaterializePublicCompatibilityKeepsNativePackageAstbridgeFree(t *testin
 		t.Fatalf("second MaterializePublicCompatibility: astbridge count = %d, want 0", got)
 	}
 }
+
+func TestWorkspaceLoadPackageNativeDiscoversDepsWithoutPublicAST(t *testing.T) {
+	root := t.TempDir()
+	depDir := filepath.Join(root, "dep")
+	if err := os.MkdirAll(depDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.osty"), []byte(`use dep
+
+fn main() {
+    dep.value()
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(depDir, "lib.osty"), []byte(`pub fn value() -> Int { 1 }
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	selfhost.ResetAstbridgeLowerCount()
+
+	ws, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	if _, err := ws.LoadPackageNative(""); err != nil {
+		t.Fatalf("LoadPackageNative: %v", err)
+	}
+	if ws.Packages["dep"] == nil {
+		t.Fatal("LoadPackageNative did not discover dep package from selfhost use refs")
+	}
+	for key, pkg := range ws.Packages {
+		for _, pf := range pkg.Files {
+			if pf.Run == nil {
+				t.Fatalf("package %q file %s has nil Run", key, pf.Path)
+			}
+			if pf.File != nil {
+				t.Fatalf("package %q file %s materialized public AST during native workspace load", key, pf.Path)
+			}
+		}
+	}
+	if got := selfhost.AstbridgeLowerCount(); got != 0 {
+		t.Fatalf("after workspace LoadPackageNative: astbridge count = %d, want 0", got)
+	}
+}

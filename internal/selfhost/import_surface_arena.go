@@ -15,9 +15,12 @@ type PackageUseRef struct {
 	Path         string
 	Alias        string
 	IsGo         bool
+	IsPub        bool
 	IsScoped     bool
 	ScopedBase   string
 	ScopedMember string
+	Start        int
+	End          int
 }
 
 // PackageUsesFromRun walks run's AstArena and returns one PackageUseRef
@@ -69,8 +72,11 @@ func appendArenaUseRefs(out []PackageUseRef, arena *AstArena, n *AstNode) []Pack
 	ref := PackageUseRef{
 		Path:     arenaStringUnquote(n.text),
 		IsGo:     arenaUseDeclIsGo(n),
+		IsPub:    arenaUseDeclIsPub(n),
 		Alias:    arenaUseDeclAlias(arena, n),
 		IsScoped: arenaUseDeclIsScoped(n),
+		Start:    n.start,
+		End:      n.end,
 	}
 	if ref.IsScoped {
 		ref.ScopedBase, ref.ScopedMember, _ = arenaSplitScopedUsePath(ref.Path)
@@ -90,6 +96,13 @@ func arenaUseDeclIsGo(n *AstNode) bool {
 		return false
 	}
 	return n.flags&1 != 0
+}
+
+func arenaUseDeclIsPub(n *AstNode) bool {
+	if n == nil {
+		return false
+	}
+	return n.flags&2 != 0
 }
 
 // arenaUseDeclIsGroup mirrors astUseDeclIsGroup: a synthetic wrapper use

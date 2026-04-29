@@ -1,0 +1,341 @@
+// std.zip - ZIP archive helpers for stored entries.
+//
+// ZIP's "store" method needs no compression runtime, so this module can
+// create and read interoperable archives today. Deflated entries are detected
+// and reported as unsupported until std.compress grows deflate support.
+
+use std.bytes
+use std.error
+use std.strings
+
+pub enum Method {
+    Stored,
+    Deflated,
+}
+
+pub struct Entry {
+    pub name: String,
+    pub method: Method,
+    pub data: Bytes,
+    pub crc32: Int,
+    pub compressedSize: Int,
+    pub uncompressedSize: Int,
+}
+
+pub fn file(name: String, data: Bytes) -> Result<Entry, Error> {
+    let clean = normalizeName(name)?
+    let crc = crc32(data)
+    Ok(Entry {
+        name: clean,
+        method: Stored,
+        data: data,
+        crc32: crc,
+        compressedSize: data.len(),
+        uncompressedSize: data.len(),
+    })
+}
+
+pub fn encode(entries: List<Entry>) -> Result<Bytes, Error> {
+    let mut out: List<Byte> = []
+    let mut central: List<Byte> = []
+    let mut offsets: List<Int> = []
+    for entry in entries {
+        let clean = normalizeName(entry.name)?
+        if entry.method != Stored {
+            return Err(error.new("zip: only stored entries can be encoded without deflate runtime"))
+        }
+        offsets.push(out.len())
+        appendLocalHeader(out, clean, entry.data)
+        appendBytes(out, entry.data)
+    }
+
+    let centralStart = out.len()
+    let mut i = 0
+    for entry in entries {
+        appendCentralHeader(central, normalizeName(entry.name)?, entry.data, offsets[i])
+        i = i + 1
+    }
+    appendBytes(out, bytes.from(central))
+    appendEndOfCentralDirectory(out, entries.len(), central.len(), centralStart)
+    Ok(bytes.from(out))
+}
+
+pub fn decode(archive: Bytes) -> Result<List<Entry>, Error> {
+    if archive.len() == 0 {
+        return Err(error.new("zip: empty archive"))
+    }
+    let mut out: List<Entry> = []
+    let mut pos = 0
+    for pos + 4 <= archive.len() {
+        let sig = readU32(archive, pos)
+        if sig == centralSignature() || sig == endSignature() {
+            return Ok(out)
+        }
+        if sig != localSignature() {
+            if out.isEmpty() {
+                return Err(error.new("zip: missing local file header"))
+            }
+            return Ok(out)
+        }
+        if pos + 30 > archive.len() {
+            return Err(error.new("zip: truncated local file header"))
+        }
+        let flags = readU16(archive, pos + 6)
+        let method = readU16(archive, pos + 8)
+        if (flags & 0x08) != 0 {
+            return Err(error.new("zip: data descriptor entries are not supported"))
+        }
+        if method != 0 {
+            return Err(error.new("zip: compressed entries require deflate runtime"))
+        }
+        let expectedCrc = readU32(archive, pos + 14)
+        let compressedSize = readU32(archive, pos + 18)
+        let uncompressedSize = readU32(archive, pos + 22)
+        let nameLen = readU16(archive, pos + 26)
+        let extraLen = readU16(archive, pos + 28)
+        let nameStart = pos + 30
+        let dataStart = nameStart + nameLen + extraLen
+        let dataEnd = dataStart + compressedSize
+        if dataEnd > archive.len() {
+            return Err(error.new("zip: truncated entry payload"))
+        }
+        let name = readString(archive, nameStart, nameLen)
+        normalizeName(name)?
+        let payload = sliceBytes(archive, dataStart, dataEnd)
+        let actualCrc = crc32(payload)
+        if actualCrc != expectedCrc {
+            return Err(error.new("zip: crc mismatch for {name}"))
+        }
+        if payload.len() != uncompressedSize {
+            return Err(error.new("zip: size mismatch for {name}"))
+        }
+        out.push(Entry {
+            name: name,
+            method: Stored,
+            data: payload,
+            crc32: actualCrc,
+            compressedSize: compressedSize,
+            uncompressedSize: uncompressedSize,
+        })
+        pos = dataEnd
+    }
+    Ok(out)
+}
+
+pub fn list(archive: Bytes) -> Result<List<String>, Error> {
+    let entries = decode(archive)?
+    let mut out: List<String> = []
+    for entry in entries {
+        out.push(entry.name)
+    }
+    Ok(out)
+}
+
+pub fn extract(archive: Bytes, name: String) -> Result<Bytes?, Error> {
+    let clean = normalizeName(name)?
+    for entry in decode(archive)? {
+        if entry.name == clean {
+            return Ok(Some(entry.data))
+        }
+    }
+    Ok(noneBytes())
+}
+
+pub fn contains(archive: Bytes, name: String) -> Bool {
+    match extract(archive, name) {
+        Ok(Some(_)) -> true,
+        _           -> false,
+    }
+}
+
+pub fn isArchive(data: Bytes) -> Bool {
+    if data.len() < 4 {
+        return false
+    }
+    let sig = readU32(data, 0)
+    sig == localSignature() || sig == endSignature()
+}
+
+pub fn crc32(data: Bytes) -> Int {
+    let mut crc = 0xFFFFFFFF
+    let mut i = 0
+    for i < data.len() {
+        crc = crc ^ byteAt(data, i).toInt()
+        let mut bit = 0
+        for bit < 8 {
+            if (crc & 1) != 0 {
+                crc = (crc >> 1) ^ 0xEDB88320
+            } else {
+                crc = crc >> 1
+            }
+            bit = bit + 1
+        }
+        i = i + 1
+    }
+    (crc ^ 0xFFFFFFFF) & 0xFFFFFFFF
+}
+
+pub fn methodName(method: Method) -> String {
+    match method {
+        Stored   -> "stored",
+        Deflated -> "deflated",
+    }
+}
+
+fn appendLocalHeader(out: List<Byte>, name: String, data: Bytes) {
+    let crc = crc32(data)
+    appendU32(out, localSignature())
+    appendU16(out, 20)
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU32(out, crc)
+    appendU32(out, data.len())
+    appendU32(out, data.len())
+    appendU16(out, name.bytes().len())
+    appendU16(out, 0)
+    appendString(out, name)
+}
+
+fn appendCentralHeader(out: List<Byte>, name: String, data: Bytes, offset: Int) {
+    let crc = crc32(data)
+    appendU32(out, centralSignature())
+    appendU16(out, 20)
+    appendU16(out, 20)
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU32(out, crc)
+    appendU32(out, data.len())
+    appendU32(out, data.len())
+    appendU16(out, name.bytes().len())
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU32(out, 0)
+    appendU32(out, offset)
+    appendString(out, name)
+}
+
+fn appendEndOfCentralDirectory(out: List<Byte>, count: Int, centralSize: Int, centralOffset: Int) {
+    appendU32(out, endSignature())
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU16(out, count)
+    appendU16(out, count)
+    appendU32(out, centralSize)
+    appendU32(out, centralOffset)
+    appendU16(out, 0)
+}
+
+fn normalizeName(name: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(name)
+    if clean.isEmpty() {
+        return Err(error.new("zip: entry name is empty"))
+    }
+    if strings.startsWith(clean, "/") {
+        return Err(error.new("zip: absolute paths are not allowed"))
+    }
+    if strings.contains(clean, "\\") {
+        return Err(error.new("zip: backslashes are not allowed in entry names"))
+    }
+    if isDriveLetterPath(clean) {
+        return Err(error.new("zip: drive-letter paths are not allowed"))
+    }
+    if strings.endsWith(clean, "/") {
+        return Err(error.new("zip: directory entries are not supported yet"))
+    }
+    if clean == ".." || strings.startsWith(clean, "../") || strings.endsWith(clean, "/..") || strings.contains(clean, "/../") {
+        return Err(error.new("zip: parent path segments are not allowed"))
+    }
+    Ok(clean)
+}
+
+fn isDriveLetterPath(name: String) -> Bool {
+    if name.len() < 2 {
+        return false
+    }
+    let c = name[0]
+    ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) && name[1] == ':'
+}
+
+fn appendBytes(out: List<Byte>, data: Bytes) {
+    let mut i = 0
+    for i < data.len() {
+        out.push(byteAt(data, i))
+        i = i + 1
+    }
+}
+
+fn appendString(out: List<Byte>, value: String) {
+    let raw = value.bytes()
+    let mut i = 0
+    for i < raw.len() {
+        out.push(raw[i])
+        i = i + 1
+    }
+}
+
+fn appendU16(out: List<Byte>, value: Int) {
+    pushByte(out, value & 0xFF)
+    pushByte(out, (value >> 8) & 0xFF)
+}
+
+fn appendU32(out: List<Byte>, value: Int) {
+    pushByte(out, value & 0xFF)
+    pushByte(out, (value >> 8) & 0xFF)
+    pushByte(out, (value >> 16) & 0xFF)
+    pushByte(out, (value >> 24) & 0xFF)
+}
+
+fn readU16(data: Bytes, offset: Int) -> Int {
+    byteAt(data, offset).toInt() | (byteAt(data, offset + 1).toInt() << 8)
+}
+
+fn readU32(data: Bytes, offset: Int) -> Int {
+    byteAt(data, offset).toInt() |
+    (byteAt(data, offset + 1).toInt() << 8) |
+    (byteAt(data, offset + 2).toInt() << 16) |
+    (byteAt(data, offset + 3).toInt() << 24)
+}
+
+fn readString(data: Bytes, offset: Int, len: Int) -> String {
+    bytes.toString(sliceBytes(data, offset, offset + len)).unwrap()
+}
+
+fn sliceBytes(data: Bytes, start: Int, end: Int) -> Bytes {
+    let mut out: List<Byte> = []
+    let mut i = start
+    for i < end {
+        out.push(byteAt(data, i))
+        i = i + 1
+    }
+    bytes.from(out)
+}
+
+fn pushByte(out: List<Byte>, value: Int) {
+    out.push((value & 0xFF).toByte())
+}
+
+fn byteAt(data: Bytes, index: Int) -> Byte {
+    bytes.get(data, index).unwrap()
+}
+
+fn noneBytes() -> Bytes? {
+    None
+}
+
+fn localSignature() -> Int {
+    0x04034B50
+}
+
+fn centralSignature() -> Int {
+    0x02014B50
+}
+
+fn endSignature() -> Int {
+    0x06054B50
+}
