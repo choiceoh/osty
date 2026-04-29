@@ -687,6 +687,154 @@ func mirIsUnitTypeText(typeText string) bool {
 	return typeText == "Unit" || typeText == "()" || typeText == "Never"
 }
 
+// Osty: mirTrimTypeText
+func mirTrimTypeText(typeText string) string {
+	lo := 0
+	hi := len(typeText)
+	for lo < hi && typeText[lo:lo+1] == " " {
+		lo++
+	}
+	for hi > lo && typeText[hi-1:hi] == " " {
+		hi--
+	}
+	return typeText[lo:hi]
+}
+
+// Osty: mirTopLevelTypeCommaIndex
+func mirTopLevelTypeCommaIndex(typeText string) int {
+	depth := 0
+	for i := 0; i < len(typeText); i++ {
+		ch := typeText[i : i+1]
+		switch ch {
+		case "<", "(":
+			depth++
+		case ">", ")":
+			depth--
+		case ",":
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// Osty: mirResultTypeArgsText
+func mirResultTypeArgsText(typeText string) string {
+	head := mirLlvmTypeHeadName(typeText)
+	if head != "Result" && !llvmStrings.HasSuffix(head, ".Result") {
+		return ""
+	}
+	lt := llvmStrings.Index(typeText, "<")
+	if lt < 0 {
+		return ""
+	}
+	if !llvmStrings.HasSuffix(typeText, ">") {
+		return ""
+	}
+	body := typeText[lt+1 : len(typeText)-1]
+	comma := mirTopLevelTypeCommaIndex(body)
+	if comma < 0 {
+		return ""
+	}
+	okText := mirTrimTypeText(body[:comma])
+	errText := mirTrimTypeText(body[comma+1:])
+	if okText == "" || errText == "" {
+		return ""
+	}
+	return okText + "\n" + errText
+}
+
+// Osty: mirResultOkTypeText
+func mirResultOkTypeText(typeText string) string {
+	packed := mirResultTypeArgsText(typeText)
+	idx := llvmStrings.Index(packed, "\n")
+	if idx < 0 {
+		return ""
+	}
+	return packed[:idx]
+}
+
+// Osty: mirResultErrTypeText
+func mirResultErrTypeText(typeText string) string {
+	packed := mirResultTypeArgsText(typeText)
+	idx := llvmStrings.Index(packed, "\n")
+	if idx < 0 {
+		return ""
+	}
+	return packed[idx+1:]
+}
+
+// Osty: mirUnitTupleAliasTypeText
+func mirUnitTupleAliasTypeText(a, b string) bool {
+	if a == b {
+		return true
+	}
+	return (a == "Unit" && b == "()") || (a == "()" && b == "Unit")
+}
+
+// Osty: mirCompatibleResultUnitTupleAliasText
+func mirCompatibleResultUnitTupleAliasText(fromText, toText string) bool {
+	fromOk := mirResultOkTypeText(fromText)
+	fromErr := mirResultErrTypeText(fromText)
+	toOk := mirResultOkTypeText(toText)
+	toErr := mirResultErrTypeText(toText)
+	if fromOk == "" || fromErr == "" || toOk == "" || toErr == "" {
+		return false
+	}
+	return mirUnitTupleAliasTypeText(fromOk, toOk) && fromErr == toErr
+}
+
+// Osty: mirCompatibleEnumAggregateHintText
+func mirCompatibleEnumAggregateHintText(rvText, hintText, variantTag string) bool {
+	rvOk := mirResultOkTypeText(rvText)
+	rvErr := mirResultErrTypeText(rvText)
+	hintOk := mirResultOkTypeText(hintText)
+	hintErr := mirResultErrTypeText(hintText)
+	if rvOk == "" || rvErr == "" || hintOk == "" || hintErr == "" {
+		return false
+	}
+	if mirUnitTupleAliasTypeText(rvOk, hintOk) && rvErr == hintErr {
+		return true
+	}
+	if variantTag == "Err" && rvErr == hintErr {
+		return true
+	}
+	if variantTag == "Ok" && mirUnitTupleAliasTypeText(rvOk, hintOk) {
+		return true
+	}
+	return false
+}
+
+// Osty: mirReplaceFirstText
+func mirReplaceFirstText(text, old, newText string) string {
+	if old == "" {
+		return text
+	}
+	idx := llvmStrings.Index(text, old)
+	if idx < 0 {
+		return text
+	}
+	return text[:idx] + newText + text[idx+len(old):]
+}
+
+// Osty: mirResultUnitTupleLLVMTypeAlias
+func mirResultUnitTupleLLVMTypeAlias(fromLLVM, toLLVM string) bool {
+	if fromLLVM == "" || toLLVM == "" || fromLLVM == toLLVM {
+		return false
+	}
+	return mirReplaceFirstText(fromLLVM, ".unit.", ".Tuple..") == toLLVM ||
+		mirReplaceFirstText(toLLVM, ".unit.", ".Tuple..") == fromLLVM
+}
+
+// Osty: mirRetypeI64PairAggregateLines
+func mirRetypeI64PairAggregateLines(discReg, payloadReg, tmpReg, outReg, fromLLVM, toLLVM, valueReg string) string {
+	return mirExtractValueLine(discReg, fromLLVM, valueReg, "0") +
+		mirExtractValueLine(payloadReg, fromLLVM, valueReg, "1") +
+		mirInsertValueI64Line(tmpReg, toLLVM, "undef", discReg, "0") +
+		mirInsertValueI64Line(outReg, toLLVM, tmpReg, payloadReg, "1")
+}
+
 // Osty: toolchain/mir_generator.osty:585:5
 func mirIsFloatTypeText(typeText string) bool {
 	return typeText == "Float" || typeText == "Float32" || typeText == "Float64" || typeText == "double" || typeText == "float"
@@ -11054,6 +11202,83 @@ func mirIsContainerNamedType(name string, builtin bool) bool {
 // Osty: mirIsPrimUnitName
 func mirIsPrimUnitName(name string) bool {
 	return name == "Unit"
+}
+
+// Osty: mirDecimalDigitValue
+func mirDecimalDigitValue(ch string) int {
+	switch ch {
+	case "0":
+		return 0
+	case "1":
+		return 1
+	case "2":
+		return 2
+	case "3":
+		return 3
+	case "4":
+		return 4
+	case "5":
+		return 5
+	case "6":
+		return 6
+	case "7":
+		return 7
+	case "8":
+		return 8
+	case "9":
+		return 9
+	}
+	return -1
+}
+
+// Osty: mirParseDecimalPrefix
+func mirParseDecimalPrefix(text string, end int) int {
+	if end <= 0 {
+		return -1
+	}
+	out := 0
+	for i := 0; i < end; i++ {
+		d := mirDecimalDigitValue(text[i : i+1])
+		if d < 0 {
+			return -1
+		}
+		out = (out * 10) + d
+	}
+	return out
+}
+
+// Osty: mirMonomorphMangledSourceName
+func mirMonomorphMangledSourceName(name string) string {
+	const prefix = "_ZTSN"
+	if !llvmStrings.HasPrefix(name, prefix) {
+		return ""
+	}
+	rest := name[len(prefix):]
+
+	i := 0
+	for i < len(rest) && mirDecimalDigitValue(rest[i:i+1]) >= 0 {
+		i++
+	}
+	pkgLen := mirParseDecimalPrefix(rest, i)
+	if pkgLen < 0 || i+pkgLen > len(rest) {
+		return ""
+	}
+	rest = rest[i+pkgLen:]
+
+	i = 0
+	for i < len(rest) && mirDecimalDigitValue(rest[i:i+1]) >= 0 {
+		i++
+	}
+	typeLen := mirParseDecimalPrefix(rest, i)
+	if typeLen <= 0 || i+typeLen > len(rest) {
+		return ""
+	}
+	return rest[i : i+typeLen]
+}
+
+// Osty: mirMangledBuiltinSourceNameIs
+func mirMangledBuiltinSourceNameIs(name, want string) bool {
+	return mirMonomorphMangledSourceName(name) == want
 }
 
 // Osty: mirSetElemTypeArgIndex
