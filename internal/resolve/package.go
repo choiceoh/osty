@@ -41,6 +41,10 @@ type Package struct {
 	// when a cycle is detected mid-load. The resolver emits
 	// CodeCyclicImport against the use site that completed the cycle.
 	isCycleMarker bool
+	// isExternalDep marks a package loaded through the dependency provider
+	// instead of the workspace root. PackageGraph uses this to classify
+	// compile-target edges without re-running provider lookup.
+	isExternalDep bool
 	// nativeResolve caches the read-only selfhost resolve projection so
 	// host-side tools can reuse one native run across several queries.
 	nativeResolve nativeResolveCache
@@ -57,6 +61,14 @@ type PackageFile struct {
 	// Source is the raw UTF-8 bytes. Retained so diagnostics can render
 	// source snippets without re-reading the file.
 	Source []byte
+	// OriginalSource is the on-disk UTF-8 bytes before SourceTransform ran.
+	// Nil means the parser saw Source directly.
+	OriginalSource []byte
+	// SourceTransformApplied records that the workspace source transform
+	// hook was invoked for this file.
+	SourceTransformApplied bool
+	// SourceTransformChanged records that Source differs from OriginalSource.
+	SourceTransformChanged bool
 	// CanonicalSource is the checker-facing canonical Osty source produced from
 	// the parsed AST after parser-owned canonicalization. When empty,
 	// callers should fall back to Source.

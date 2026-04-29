@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 
 	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/check"
@@ -324,13 +323,10 @@ func buildWorkspace(dir string, m *manifest.Manifest, flags cliFlags, deps resol
 			os.Exit(1)
 		}
 	}
-	results := ws.ResolveAll()
-	checks := check.Workspace(ws, results, checkOpts())
-	paths := make([]string, 0, len(ws.Packages))
-	for p := range ws.Packages {
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
+	graph := resolve.NewPackageGraph(ws)
+	results := resolve.ResolveGraph(graph)
+	checks := check.PackageGraph(graph, results, checkOpts())
+	paths := graph.PackagePaths()
 	anyErr := false
 	for _, p := range paths {
 		pkg := ws.Packages[p]
@@ -356,7 +352,7 @@ func buildWorkspace(dir string, m *manifest.Manifest, flags cliFlags, deps resol
 	if m.HasPackage {
 		rootPkg := ws.Packages[""]
 		if rootPkg != nil {
-			return emitAndBuild(dir, m, rootPkg, results[""], checks[""], resolved, feats, backendID, emitMode)
+			return emitAndBuild(dir, m, graph, "", rootPkg, results[""], checks[""], resolved, feats, backendID, emitMode)
 		}
 	}
 	return nil
@@ -382,9 +378,11 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 			fmt.Fprintf(os.Stderr, "osty build: %v\n", err)
 			os.Exit(1)
 		}
-		results := ws.ResolveAll()
-		checks := check.Workspace(ws, results, checkOpts())
-		for key, pkg := range ws.Packages {
+		graph := resolve.NewPackageGraph(ws)
+		results := resolve.ResolveGraph(graph)
+		checks := check.PackageGraph(graph, results, checkOpts())
+		for _, key := range graph.PackagePaths() {
+			pkg := ws.Packages[key]
 			r := results[key]
 			if r == nil || pkg == nil {
 				continue
@@ -400,7 +398,7 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 		}
 		rootPkg := ws.Packages[""]
 		if rootPkg != nil {
-			return emitAndBuild(dir, m, rootPkg, results[""], checks[""], resolved, feats, backendID, emitMode)
+			return emitAndBuild(dir, m, graph, "", rootPkg, results[""], checks[""], resolved, feats, backendID, emitMode)
 		}
 		return nil
 	}
@@ -409,8 +407,11 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 		fmt.Fprintf(os.Stderr, "osty build: %v\n", err)
 		os.Exit(1)
 	}
-	res := resolve.ResolvePackageDefault(pkg)
-	chk := check.Package(pkg, res, checkOpts())
+	graph := resolve.NewPackageGraphForPackage("", pkg)
+	results := resolve.ResolveGraph(graph)
+	checks := check.PackageGraph(graph, results, checkOpts())
+	res := results[""]
+	chk := checks[""]
 	ds := append(append([]*diag.Diagnostic{}, res.Diags...), chk.Diags...)
 	printPackageDiags(pkg, ds, flags)
 	if hasError(ds) {
@@ -419,7 +420,7 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 	// Note: the no-deps path feeds a synthetic PackageResult because
 	// emitAndBuild expects a *resolve.PackageResult with Diags; we
 	// already have all of it from ResolvePackage above.
-	return emitAndBuild(dir, m, pkg, res, chk, resolved, feats, backendID, emitMode)
+	return emitAndBuild(dir, m, graph, "", pkg, res, chk, resolved, feats, backendID, emitMode)
 }
 
 // emitAndBuild picks the entry file (manifest `[bin].path` or default
@@ -432,7 +433,7 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 //
 // A failure at the backend/toolchain step returns a non-zero exit; a gen-time
 // TODO marker is only logged so the clean portion remains inspectable.
-func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *resolve.PackageResult, chk *check.Result, resolved *profile.Resolved, feats map[string]bool, backendID backend.Name, emitMode backend.EmitMode) *backend.Result {
+func emitAndBuild(root string, m *manifest.Manifest, graph *resolve.PackageGraph, packagePath string, pkg *resolve.Package, pr *resolve.PackageResult, chk *check.Result, resolved *profile.Resolved, feats map[string]bool, backendID backend.Name, emitMode backend.EmitMode) *backend.Result {
 	// 1. Locate the entry file. A library project has no entry;
 	// skip the emit path so `osty build` still works as a front-end
 	// check for libs.
@@ -524,7 +525,10 @@ func emitAndBuild(root string, m *manifest.Manifest, pkg *resolve.Package, pr *r
 			}
 		}
 	}
-	entry, err := backend.PreparePackage("main", entryAbs, pkg, entryFile, chk)
+	if graph == nil {
+		graph = resolve.NewPackageGraphForPackage(packagePath, pkg)
+	}
+	entry, err := backend.PrepareGraphPackage("main", entryAbs, graph, packagePath, entryFile, chk)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty build: %v\n", err)
 		os.Exit(1)

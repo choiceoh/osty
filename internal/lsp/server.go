@@ -799,17 +799,23 @@ func (s *Server) analyzeWorkspace(root, path string, src []byte) *docAnalysis {
 	// has `.osty` files; LoadPackage chases `use` edges from there.
 	seedWorkspace(ws, root)
 	lspMaterializeNativeWorkspace(ws)
-	resolved := ws.ResolveAll()
-	checks := check.Workspace(ws, resolved, lspCheckOpts(nil))
+	graph := resolve.NewPackageGraph(ws)
+	resolved := resolve.ResolveGraph(graph)
+	checks := check.PackageGraph(graph, resolved, lspCheckOpts(nil))
 	// Collect every loaded package for cross-file handlers.
-	allPkgs := make([]*resolve.Package, 0, len(ws.Packages))
-	for _, pkg := range ws.Packages {
+	allPkgs := make([]*resolve.Package, 0, len(graph.Packages))
+	for _, pkgPath := range graph.PackagePaths() {
+		pkg := graph.Package(pkgPath)
 		if pkg != nil {
 			allPkgs = append(allPkgs, pkg)
 		}
 	}
 	// Find the package + file entry this document belongs to.
-	for pkgPath, pkg := range ws.Packages {
+	for _, pkgPath := range graph.PackagePaths() {
+		pkg := graph.Package(pkgPath)
+		if pkg == nil {
+			continue
+		}
 		for _, pf := range pkg.Files {
 			if pf.Path == path {
 				// Run lint over this package only — the owner of the
@@ -1235,9 +1241,11 @@ func (s *Server) ensureWorkspaceIndex(root string) []*resolve.Package {
 	ws.Packages = map[string]*resolve.Package{}
 	seedWorkspace(ws, root)
 	lspMaterializeNativeWorkspace(ws)
-	_ = ws.ResolveAll()
-	pkgs := make([]*resolve.Package, 0, len(ws.Packages))
-	for _, pkg := range ws.Packages {
+	graph := resolve.NewPackageGraph(ws)
+	_ = resolve.ResolveGraph(graph)
+	pkgs := make([]*resolve.Package, 0, len(graph.Packages))
+	for _, pkgPath := range graph.PackagePaths() {
+		pkg := graph.Package(pkgPath)
 		if pkg != nil {
 			pkgs = append(pkgs, pkg)
 		}

@@ -306,6 +306,48 @@ func Workspace(
 	return out
 }
 
+// PackageGraph returns type-check results for every package in a first-class
+// compile-target graph. Workspace-backed graphs keep using the workspace
+// adapter while standalone graph packages fall back to per-package checks.
+func PackageGraph(
+	graph *resolve.PackageGraph,
+	resolved map[string]*resolve.PackageResult,
+	opts ...Opts,
+) map[string]*Result {
+	if graph == nil {
+		return map[string]*Result{}
+	}
+	if ws := graph.Workspace(); ws != nil {
+		return Workspace(ws, resolved, opts...)
+	}
+	opt := firstOpt(opts)
+	paths := graph.PackagePaths()
+	if len(paths) == 0 {
+		return map[string]*Result{}
+	}
+	shared := newResult()
+	out := make(map[string]*Result, len(paths))
+	for _, path := range paths {
+		pkg := graph.Package(path)
+		if pkg == nil || pkg.PkgScope == nil {
+			continue
+		}
+		pr := resolved[path]
+		result := resultWithSharedMaps(shared)
+		out[path] = result
+		applyNativePackageResult(result, pkg, pr, nil, opt.Stdlib, isPrivilegedPackage(pkg))
+		stampPackageDiags(result.Diags, pkg)
+		for _, pf := range pkg.Files {
+			if pf == nil {
+				continue
+			}
+			recordSelfhostDeclPass(opt.OnDecl, pf.File, "collect")
+			recordSelfhostDeclPass(opt.OnDecl, pf.File, "check")
+		}
+	}
+	return out
+}
+
 func newResult() *Result {
 	return &Result{
 		Types:              map[ast.Expr]types.Type{},

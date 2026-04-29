@@ -81,6 +81,7 @@ func (w *Workspace) loadFromExternalDirNative(key, dir string) (*Package, error)
 		return nil, err
 	}
 	pkg.Name = lastSegment(key)
+	pkg.isExternalDep = true
 	w.Packages[key] = pkg
 
 	w.loadNativePackageDependencies(pkg)

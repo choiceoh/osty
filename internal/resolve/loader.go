@@ -1,6 +1,7 @@
 package resolve
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -81,15 +82,24 @@ func loadPackageNativePaths(paths []string, dir, name string, transform SourceTr
 		if err != nil {
 			return nil, fmt.Errorf("read %s: %w", p, err)
 		}
+		var original []byte
+		transformApplied := false
+		transformChanged := false
 		if transform != nil {
+			original = append([]byte(nil), src...)
 			src = transform(p, src)
+			transformApplied = true
+			transformChanged = !bytes.Equal(original, src)
 		}
 		run := selfhost.Run(src)
 		pkg.Files = append(pkg.Files, &PackageFile{
-			Path:       p,
-			Source:     src,
-			Run:        run,
-			ParseDiags: append([]*diag.Diagnostic(nil), run.Diagnostics()...),
+			Path:                   p,
+			Source:                 src,
+			OriginalSource:         original,
+			SourceTransformApplied: transformApplied,
+			SourceTransformChanged: transformChanged,
+			Run:                    run,
+			ParseDiags:             append([]*diag.Diagnostic(nil), run.Diagnostics()...),
 		})
 	}
 	return pkg, nil

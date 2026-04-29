@@ -122,6 +122,20 @@ func PreparePackage(packageName, sourcePath string, pkg *resolve.Package, entryF
 	return finalizeEntryModule(entry, mod)
 }
 
+// PrepareGraphPackage lowers one package selected from a first-class
+// PackageGraph. It is the graph-native spelling of PreparePackage and lets
+// build orchestrators keep the compile target explicit through backend setup.
+func PrepareGraphPackage(packageName, sourcePath string, graph *resolve.PackageGraph, packagePath string, entryFile *resolve.PackageFile, chk *check.Result) (Entry, error) {
+	if graph == nil {
+		return Entry{}, fmt.Errorf("backend: nil package graph")
+	}
+	pkg := graph.Package(packagePath)
+	if pkg == nil {
+		return Entry{}, fmt.Errorf("backend: graph package %q not found", packagePath)
+	}
+	return PreparePackage(packageName, sourcePath, pkg, entryFile, chk)
+}
+
 // finalizeEntryModule runs the post-lowering pipeline (stdlib injection
 // gate, monomorphize, validate, MIR lowering + optional optimize +
 // validate) shared by PrepareEntry and PreparePackage. Splitting this

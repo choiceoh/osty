@@ -93,8 +93,9 @@ func preparePackageEntry(req llvmgenRequest) (backend.Entry, error) {
 			pkg.RuntimeCapability = req.Package.RuntimeCapability
 		}
 	}
-	results := ws.ResolveAll()
-	checks := check.Workspace(ws, results, check.Opts{
+	graph := resolve.NewPackageGraph(ws)
+	results := resolve.ResolveGraph(graph)
+	checks := check.PackageGraph(graph, results, check.Opts{
 
 		Stdlib: ws.Stdlib,
 	})
@@ -123,7 +124,7 @@ func preparePackageEntry(req llvmgenRequest) (backend.Entry, error) {
 	if chk == nil {
 		chk = &check.Result{}
 	}
-	return backend.PreparePackage("main", entryPath, pkg, entryFile, chk)
+	return backend.PrepareGraphPackage("main", entryPath, graph, "", entryFile, chk)
 }
 
 func writePackageRequest(req llvmgenRequest) (string, string, error) {

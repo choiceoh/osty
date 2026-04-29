@@ -308,13 +308,14 @@ func runNativeWorkspaceCheck(dir, mode string, flags cliFlags, emitTypes bool) i
 		fmt.Fprintf(os.Stderr, "osty: %v\n", err)
 		return 1
 	}
+	graph := resolve.NewPackageGraph(ws)
 	anyErr := false
-	for _, path := range nativeWorkspacePaths(ws) {
-		pkg := ws.Packages[path]
+	for _, path := range nativeGraphPaths(graph) {
+		pkg := graph.Package(path)
 		if pkg == nil {
 			continue
 		}
-		input := nativePackageCheckInput(pkg, check.PackageImportSurfacesForSelfhost(pkg, ws, ws.Stdlib))
+		input := nativePackageCheckInput(pkg, resolve.PackageGraphImportSurfaces(graph, path))
 		checked, err := selfhost.CheckPackageStructured(input)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "osty: native check: %v\n", err)
@@ -386,6 +387,22 @@ func nativeWorkspacePaths(ws *resolve.Workspace) []string {
 	sort.Strings(paths)
 	return paths
 }
+
+func nativeGraphPaths(graph *resolve.PackageGraph) []string {
+	if graph == nil {
+		return nil
+	}
+	var paths []string
+	for _, path := range graph.PackagePaths() {
+		if strings.HasPrefix(path, resolve.StdPrefix) {
+			continue
+		}
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
 func nativePackageCheckInput(pkg *resolve.Package, imports []api.PackageCheckImport) api.PackageCheckInput {
 	input := api.PackageCheckInput{
 		Files: make([]api.PackageCheckFile, 0, len(pkg.Files)),

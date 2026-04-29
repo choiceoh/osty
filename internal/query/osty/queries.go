@@ -91,6 +91,7 @@ func (rp *ResolvedPackage) FileResult(path string) *resolve.Result {
 // handlers.
 type ResolvedWorkspace struct {
 	root     string
+	graph    *resolve.PackageGraph
 	pkgs     []*resolve.Package
 	pkgMap   map[string]*resolve.Package       // normalized dir → Package
 	results  map[string]*resolve.PackageResult // normalized dir → PackageResult
@@ -99,6 +100,14 @@ type ResolvedWorkspace struct {
 
 // Root returns the workspace root directory (normalized).
 func (rw *ResolvedWorkspace) Root() string { return rw.root }
+
+// Graph returns the first-class package graph used for workspace resolution.
+func (rw *ResolvedWorkspace) Graph() *resolve.PackageGraph {
+	if rw == nil {
+		return nil
+	}
+	return rw.graph
+}
 
 // Packages returns every loaded package. Callers must treat the
 // returned slice as read-only.
@@ -250,16 +259,15 @@ type Queries struct {
 	CheckFile *query.Query[string, *check.Result]
 
 	// ResolveWorkspace: (rootDir) -> full cross-package resolution.
-	// Assembles a resolve.Workspace from BuildPackage outputs and
-	// runs ws.ResolveAll(). Use this when WorkspaceMembers has been
-	// seeded (workspace mode) instead of the per-package
-	// ResolvePackage query.
+	// Assembles a PackageGraph from BuildPackage outputs and runs
+	// resolve.ResolveGraph. Use this when WorkspaceMembers has been seeded
+	// (workspace mode) instead of the per-package ResolvePackage query.
 	// Depends on: WorkspaceMembers, BuildPackage(dir) for each dir.
 	ResolveWorkspace *query.Query[string, *ResolvedWorkspace]
 
 	// CheckWorkspace: (rootDir) -> per-package check results for
-	// the entire workspace. Calls check.Workspace with the output
-	// of ResolveWorkspace.
+	// the entire workspace. Calls check.PackageGraph with the output of
+	// ResolveWorkspace.
 	// Depends on: ResolveWorkspace(rootDir).
 	CheckWorkspace *query.Query[string, *WorkspaceCheckResult]
 
@@ -463,7 +471,8 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 			}
 
 			// Cross-package resolution (declare pass + body pass).
-			resolved := ws.ResolveAll()
+			graph := resolve.NewPackageGraph(ws)
+			resolved := resolve.ResolveGraph(graph)
 
 			// Build the result, converting dotted-path keys back to
 			// normalized directory keys.
@@ -480,6 +489,7 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 			}
 			return &ResolvedWorkspace{
 				root:     rootDir,
+				graph:    graph,
 				pkgs:     pkgList,
 				pkgMap:   builtPkgs,
 				results:  resultsByDir,
@@ -489,9 +499,8 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 		hashResolvedWorkspaceFn,
 	)
 
-	// CheckWorkspace runs check.Workspace over the resolved packages.
-	// It rebuilds a temporary resolve.Workspace from the
-	// ResolveWorkspace output because check.Workspace expects one.
+	// CheckWorkspace runs check.PackageGraph over the resolved packages,
+	// reusing the first-class graph captured by ResolveWorkspace.
 	qs.CheckWorkspace = query.Register(db, "CheckWorkspace",
 		func(ctx *query.Ctx, rootDir string) *WorkspaceCheckResult {
 			rw := qs.ResolveWorkspace.Fetch(ctx, rootDir)
@@ -499,18 +508,15 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 				return &WorkspaceCheckResult{}
 			}
 
-			// Rebuild a resolve.Workspace + resolved map for
-			// check.Workspace, which expects dotted-path keys.
-			ws, _ := resolve.NewWorkspace(rootDir)
+			// Rebuild dotted-path result keys for check.PackageGraph.
 			resolvedMap := make(map[string]*resolve.PackageResult, len(rw.resolved))
 			for dir, rp := range rw.resolved {
 				dotPath := dotPathFromDir(rootDir, dir)
-				ws.Packages[dotPath] = rp.pkg
 				resolvedMap[dotPath] = rp.res
 			}
 
 			opts := check.Opts{Stdlib: resolveStdlibProvider(ctx)}
-			checks := check.Workspace(ws, resolvedMap, opts)
+			checks := check.PackageGraph(rw.Graph(), resolvedMap, opts)
 
 			// Convert dotted-path keys back to directory keys.
 			byDir := make(map[string]*check.Result, len(checks))
