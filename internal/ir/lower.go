@@ -669,16 +669,20 @@ func (l *lowerer) lowerNamedType(nt *ast.NamedType) Type {
 	// Consult the resolver for the head symbol so we can classify
 	// builtins vs user declarations vs generic parameters.
 	if sym := l.typeRef(nt); sym != nil {
+		symName := sym.Name
+		if pkg != "" && len(nt.Path) > 0 && symName == nt.Path[0] {
+			symName = name
+		}
 		switch sym.Kind {
 		case resolve.SymBuiltin:
 			if len(nt.Args) == 0 {
-				if p := primitiveByName(sym.Name); p != nil {
+				if p := primitiveByName(symName); p != nil {
 					return p
 				}
 			}
-			return &NamedType{Package: pkg, Name: sym.Name, Args: args, Builtin: true}
+			return &NamedType{Package: pkg, Name: symName, Args: args, Builtin: true}
 		case resolve.SymGeneric:
-			return &TypeVar{Name: sym.Name, Owner: ""}
+			return &TypeVar{Name: symName, Owner: ""}
 		case resolve.SymTypeAlias:
 			// Unwrap the alias at IR construction time. Without this,
 			// downstream passes (MIR generator's typeSupported,
@@ -691,7 +695,7 @@ func (l *lowerer) lowerNamedType(nt *ast.NamedType) Type {
 				return l.lowerType(aliasDecl.Target)
 			}
 		}
-		return &NamedType{Package: pkg, Name: sym.Name, Args: args}
+		return &NamedType{Package: pkg, Name: symName, Args: args}
 	}
 
 	// No resolver data available — best effort on the source name.

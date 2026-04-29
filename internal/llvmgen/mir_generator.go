@@ -513,7 +513,7 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 		// doesn't need a declared layout for them. These match what
 		// the runtime ABI hands back from chan_make / spawn / etc.
 		switch x.Name {
-		case "Channel", "Handle", "Group", "TaskGroup", "Select", "Duration", "Rng", "Gen":
+		case "Channel", "Handle", "Group", "TaskGroup", "Select", "Duration", "Rng", "Gen", "Never":
 			return true
 		case "Range":
 			// Range<T> is a prelude type but the Go-side resolver
@@ -524,6 +524,9 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 			// not — the MIR lowerer emits RangeLit as a placeholder
 			// UseRV(UnitConst) anyway, so the concrete shape is
 			// irrelevant until real lowering arrives.
+			return true
+		}
+		if isStdlibModuleMarkerTypeName(x.Name) {
 			return true
 		}
 		if g.mod != nil && g.mod.Layouts != nil {
@@ -862,8 +865,8 @@ func (g *mirGen) checkProjectionsSupported(fn *mir.Function, p mir.Place, ctx st
 			} else {
 				baseT = projectionType(p.Projections[i-1])
 			}
-			if !isListPtrType(baseT) && !isMapPtrType(baseT) {
-				return unsupported("mir-mvp", fmt.Sprintf("%s IndexProj on non-List/Map base %s in %s", ctx, mirTypeString(baseT), fn.Name))
+			if !isListPtrType(baseT) && !isMapPtrType(baseT) && !isStringPrimType(baseT) {
+				return unsupported("mir-mvp", fmt.Sprintf("%s IndexProj on non-List/Map/String base %s in %s", ctx, mirTypeString(baseT), fn.Name))
 			}
 		default:
 			return unsupported("mir-mvp", fmt.Sprintf("%s projection %T not yet supported in %s", ctx, proj, fn.Name))
@@ -878,7 +881,7 @@ func (g *mirGen) checkProjectionsSupported(fn *mir.Function, p mir.Place, ctx st
 // policy delegates to `mirIsBuiltinList` (`toolchain/mir_generator.osty`).
 func isListPtrType(t mir.Type) bool {
 	if nt, ok := t.(*ir.NamedType); ok {
-		return mirIsBuiltinList(nt.Name, nt.Builtin)
+		return mirIsBuiltinList(nt.Name, nt.Builtin) || mangledBuiltinSourceNameIs(nt.Name, "List")
 	}
 	return false
 }
@@ -887,7 +890,7 @@ func isListPtrType(t mir.Type) bool {
 // to `mirIsBuiltinMap`.
 func isMapPtrType(t mir.Type) bool {
 	if nt, ok := t.(*ir.NamedType); ok {
-		return mirIsBuiltinMap(nt.Name, nt.Builtin)
+		return mirIsBuiltinMap(nt.Name, nt.Builtin) || mangledBuiltinSourceNameIs(nt.Name, "Map")
 	}
 	return false
 }
@@ -896,9 +899,47 @@ func isMapPtrType(t mir.Type) bool {
 // `mirIsBuiltinSet`.
 func isSetPtrType(t mir.Type) bool {
 	if nt, ok := t.(*ir.NamedType); ok {
-		return mirIsBuiltinSet(nt.Name, nt.Builtin)
+		return mirIsBuiltinSet(nt.Name, nt.Builtin) || mangledBuiltinSourceNameIs(nt.Name, "Set")
 	}
 	return false
+}
+
+func mangledBuiltinSourceNameIs(name, want string) bool {
+	got, ok := monomorphMangledSourceName(name)
+	return ok && got == want
+}
+
+func monomorphMangledSourceName(name string) (string, bool) {
+	const prefix = "_ZTSN"
+	if !strings.HasPrefix(name, prefix) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(name, prefix)
+	var ok bool
+	_, rest, ok = consumeLengthPrefixedName(rest)
+	if !ok {
+		return "", false
+	}
+	typeName, _, ok := consumeLengthPrefixedName(rest)
+	if !ok || typeName == "" {
+		return "", false
+	}
+	return typeName, true
+}
+
+func consumeLengthPrefixedName(s string) (string, string, bool) {
+	if s == "" || s[0] < '0' || s[0] > '9' {
+		return "", "", false
+	}
+	i := 0
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		i++
+	}
+	n, err := strconv.Atoi(s[:i])
+	if err != nil || n < 0 || i+n > len(s) {
+		return "", "", false
+	}
+	return s[i : i+n], s[i+n:], true
 }
 
 func vectorListElemType(t mir.Type) mir.Type {
@@ -1602,18 +1643,18 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 	// the function entry. No-op unless opts.EmitGC is set.
 	g.emitGCEntry(fn)
 	g.emitVectorListPreamble(fn)
+	g.fnBuf.WriteString(mirBrUncondLine(g.blockLabels[fn.Entry]))
 
-	// Emit each block in ID order. The entry block was already opened
-	// (its label is implicit in LLVM, but we still emit it for clarity
-	// — and because we've appended to the preamble, not the entry
-	// block's content per se).
+	// Emit each block in ID order. The alloca / GC preamble is a real
+	// LLVM basic block now, so it branches to the MIR entry block and
+	// every MIR block is opened with an explicit label. This keeps
+	// functions valid even when MIR's entry block is not the first block
+	// in storage order (common after match lowering).
 	for _, bb := range fn.Blocks {
 		if bb == nil {
 			continue
 		}
-		if bb.ID != fn.Entry {
-			g.fnBuf.WriteString(mirLabelLine(g.blockLabels[bb.ID]))
-		}
+		g.fnBuf.WriteString(mirLabelLine(g.blockLabels[bb.ID]))
 		g.curBlockID = bb.ID
 		for _, inst := range bb.Instrs {
 			if err := g.emitInstr(inst); err != nil {
@@ -2435,7 +2476,7 @@ func (g *mirGen) emitIndexedWrite(a *mir.AssignInstr, destLoc *mir.Local, ip *mi
 		g.fnBuf.WriteString(mirCallVoidListBytesV1SetWithBarrierLine(sym, contReg, idxReg, valSlot.name, sizeReg, "null"))
 		return nil
 	case isMapPtrType(localT):
-		keyT, _ := mapKeyValueTypes(localT)
+		keyT, _ := g.mapKeyValueTypes(localT)
 		if keyT == nil {
 			return unsupported("mir-mvp", "map indexed write without key type")
 		}
@@ -2602,6 +2643,15 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 	if handled, err := g.emitRuntimeFFICall(c, fnRef); handled {
 		return err
 	}
+	if fnRef.Symbol == "__resultAbort" || fnRef.Symbol == "std.result.__resultAbort" {
+		return g.emitStdlibAbortCallMIR(c, "called unwrap on Err")
+	}
+	if fnRef.Symbol == "__optionAbort" || fnRef.Symbol == "std.option.__optionAbort" {
+		return g.emitStdlibAbortCallMIR(c, "called unwrap on None")
+	}
+	if fnRef.Symbol == "__optionError" || fnRef.Symbol == "std.option.__optionError" {
+		return g.emitStdlibOptionErrorCallMIR(c)
+	}
 	if strings.HasPrefix(fnRef.Symbol, "std.strings.") {
 		if handled, err := g.emitStdStringsCall(c, fnRef); handled {
 			return err
@@ -2643,6 +2693,11 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 		}
 	}
 	if strings.HasPrefix(fnRef.Symbol, "Error__") {
+		if handled, err := g.emitStdErrorCall(c, fnRef); handled {
+			return err
+		}
+	}
+	if strings.HasPrefix(fnRef.Symbol, "std.error.") {
 		if handled, err := g.emitStdErrorCall(c, fnRef); handled {
 			return err
 		}
@@ -2755,6 +2810,59 @@ func (g *mirGen) emitRuntimeFFICall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, e
 	return true, g.emitCallSiteByName(c, sym, retLLVM, argStrs)
 }
 
+func (g *mirGen) emitStdlibAbortCallMIR(c *mir.CallInstr, fallback string) error {
+	msg := g.stringLiteral(fallback)
+	if len(c.Args) > 0 && c.Args[0] != nil {
+		text, err := g.emitStdIoStringOperandMIR(c.Args[0], "stdlib abort")
+		if err != nil {
+			return err
+		}
+		msg = text
+	}
+	g.emitAbortStringPtrAndExit(msg)
+	return nil
+}
+
+func (g *mirGen) emitAbortStringPtrAndExit(msg string) {
+	g.declareRuntime(ostyRtIOWriteSymbol, mirRuntimeDeclareLine("void", ostyRtIOWriteSymbol, "ptr, i1, i1"))
+	g.fnBuf.WriteString(mirCallVoidLine(ostyRtIOWriteSymbol,
+		mirArgSlotPtr(msg)+", "+mirArgSlotI1(llvmStdIoI1Text(true))+", "+mirArgSlotI1(llvmStdIoI1Text(true))))
+	g.declareRuntime("exit", mirRuntimeDeclareExit())
+	g.fnBuf.WriteString(mirCallExitOneLine())
+}
+
+func (g *mirGen) emitStdlibOptionErrorCallMIR(c *mir.CallInstr) error {
+	if len(c.Args) != 1 {
+		return unsupported("mir-mvp", "__optionError requires one positional String argument")
+	}
+	if c.Dest == nil {
+		return nil
+	}
+	destLoc := g.fn.Local(c.Dest.Local)
+	if destLoc == nil {
+		return fmt.Errorf("mir-mvp: __optionError dest into unknown local %d", c.Dest.Local)
+	}
+	_, errT, ok := g.resultPayloadTypes(destLoc.Type)
+	if !ok {
+		return unsupported("mir-mvp", "__optionError dest is not Result<T, Error>")
+	}
+	msg, err := g.evalTypedArg(c.Args[0], c.Args[0].Type())
+	if err != nil {
+		return err
+	}
+	if msg.typ != "ptr" {
+		return unsupported("mir-mvp", "__optionError message must lower to ptr")
+	}
+	payload, err := g.toI64Slot(msg.val, errT)
+	if err != nil {
+		return err
+	}
+	resultLLVM := g.llvmType(destLoc.Type)
+	errValue := g.emitResultValue(resultLLVM, false, payload)
+	g.fnBuf.WriteString(mirStoreLine(resultLLVM, errValue, g.localSlots[c.Dest.Local]))
+	return nil
+}
+
 func splitRuntimeFFICallee(symbol string) (path string, name string, ok bool) {
 	idx := strings.LastIndex(symbol, ".")
 	if idx <= len("runtime") || idx == len(symbol)-1 {
@@ -2860,6 +2968,11 @@ func (g *mirGen) emitPrimitiveMethodCall(c *mir.CallInstr, fnRef *mir.FnRef) (bo
 	}
 	if isFloat {
 		return g.emitFloatPrimitiveMethodCall(c, method, recv, llvmTy)
+	}
+	if owner == "Char" {
+		if handled, err := g.emitCharPrimitiveMethodCall(c, method, recv); handled {
+			return true, err
+		}
 	}
 
 	// Emit the branchless body, capturing the result register so we
@@ -3045,6 +3158,70 @@ func (g *mirGen) emitPrimitiveMethodCall(c *mir.CallInstr, fnRef *mir.FnRef) (bo
 	return g.storePrimitiveResult(c, resultReg)
 }
 
+func (g *mirGen) emitCharPrimitiveMethodCall(c *mir.CallInstr, method, recv string) (bool, error) {
+	var body string
+	var resultReg string
+	rangeCheck := func(charRef string, low int, count int) string {
+		shifted := g.fresh()
+		cmp := g.fresh()
+		body += mirSubI32LiteralText(shifted, charRef, strconv.Itoa(low)) + "\n"
+		body += mirICmpULTI32LiteralText(cmp, shifted, strconv.Itoa(count)) + "\n"
+		return cmp
+	}
+	switch method {
+	case "isDigit":
+		resultReg = rangeCheck(recv, '0', 10)
+	case "isUpper":
+		resultReg = rangeCheck(recv, 'A', 26)
+	case "isLower":
+		resultReg = rangeCheck(recv, 'a', 26)
+	case "isAlpha":
+		up := rangeCheck(recv, 'A', 26)
+		lo := rangeCheck(recv, 'a', 26)
+		resultReg = g.fresh()
+		body += mirOrI1Text(resultReg, up, lo) + "\n"
+	case "isAlphanumeric":
+		dg := rangeCheck(recv, '0', 10)
+		up := rangeCheck(recv, 'A', 26)
+		lo := rangeCheck(recv, 'a', 26)
+		alpha := g.fresh()
+		body += mirOrI1Text(alpha, up, lo) + "\n"
+		resultReg = g.fresh()
+		body += mirOrI1Text(resultReg, dg, alpha) + "\n"
+	case "isWhitespace":
+		eqSp := g.fresh()
+		body += mirICmpEqI32LiteralText(eqSp, recv, "32") + "\n"
+		eqTab := g.fresh()
+		body += mirICmpEqI32LiteralText(eqTab, recv, "9") + "\n"
+		eqLf := g.fresh()
+		body += mirICmpEqI32LiteralText(eqLf, recv, "10") + "\n"
+		eqCr := g.fresh()
+		body += mirICmpEqI32LiteralText(eqCr, recv, "13") + "\n"
+		left := g.fresh()
+		body += mirOrI1Text(left, eqSp, eqTab) + "\n"
+		right := g.fresh()
+		body += mirOrI1Text(right, eqLf, eqCr) + "\n"
+		resultReg = g.fresh()
+		body += mirOrI1Text(resultReg, left, right) + "\n"
+	case "toLower":
+		isUp := rangeCheck(recv, 'A', 26)
+		shifted := g.fresh()
+		body += mirAddI32LiteralText(shifted, recv, "32") + "\n"
+		resultReg = g.fresh()
+		body += mirSelectI32Text(resultReg, isUp, shifted, recv) + "\n"
+	case "toUpper":
+		isLo := rangeCheck(recv, 'a', 26)
+		shifted := g.fresh()
+		body += mirSubI32LiteralText(shifted, recv, "32") + "\n"
+		resultReg = g.fresh()
+		body += mirSelectI32Text(resultReg, isLo, shifted, recv) + "\n"
+	default:
+		return false, nil
+	}
+	g.fnBuf.WriteString(body)
+	return g.storePrimitiveResult(c, resultReg)
+}
+
 // storePrimitiveResult stores the intrinsic result register into the
 // destination local. Used by emitPrimitiveMethodCall after the
 // branchless body has been written to g.fnBuf.
@@ -3082,7 +3259,11 @@ func (g *mirGen) emitIndirectCall(c *mir.CallInstr, callee *mir.IndirectCall) er
 	}
 	fnT, ok := calleeOp.Type().(*ir.FnType)
 	if !ok {
-		return unsupported("mir-mvp", fmt.Sprintf("indirect call on non-function type %s", mirTypeString(calleeOp.Type())))
+		fnName := "<unknown>"
+		if g.fn != nil && g.fn.Name != "" {
+			fnName = g.fn.Name
+		}
+		return unsupported("mir-mvp", fmt.Sprintf("indirect call on non-function type %s in %s", mirTypeString(calleeOp.Type()), fnName))
 	}
 	// Evaluate the operand to get the env ptr.
 	envPtr, err := g.evalOperand(calleeOp, calleeOp.Type())
@@ -3455,11 +3636,34 @@ type testingResultTypes struct {
 // of monomorphization shapes that may carry extra metadata args (today
 // none do, but the loose check matches the legacy behaviour).
 func testingResultType(t mir.Type) (testingResultTypes, bool) {
-	nt, ok := t.(*ir.NamedType)
-	if !ok || nt.Name != "Result" || len(nt.Args) < 2 {
+	okT, errT, ok := resultPayloadTypes(t)
+	if !ok {
 		return testingResultTypes{}, false
 	}
-	return testingResultTypes{ok: nt.Args[0], err: nt.Args[1]}, true
+	return testingResultTypes{ok: okT, err: errT}, true
+}
+
+func resultPayloadTypes(t mir.Type) (mir.Type, mir.Type, bool) {
+	nt, ok := t.(*ir.NamedType)
+	if !ok || nt.Name != "Result" || len(nt.Args) < 2 {
+		return nil, nil, false
+	}
+	return nt.Args[0], nt.Args[1], true
+}
+
+func (g *mirGen) resultPayloadTypes(t mir.Type) (mir.Type, mir.Type, bool) {
+	okT, errT, ok := resultPayloadTypes(t)
+	if ok {
+		return okT, errT, true
+	}
+	nt, ok := t.(*ir.NamedType)
+	if !ok || g == nil || g.mod == nil || g.mod.Layouts == nil {
+		return nil, nil, false
+	}
+	if el := g.mod.Layouts.Enums[nt.Name]; el != nil && el.BuiltinSource == "Result" && len(el.BuiltinSourceArgs) >= 2 {
+		return el.BuiltinSourceArgs[0], el.BuiltinSourceArgs[1], true
+	}
+	return nil, nil, false
 }
 
 func (g *mirGen) emitTestingFailureCheck(cond string, failWhenTrue bool, buildMessage func() (*LlvmValue, error)) error {
@@ -4380,7 +4584,7 @@ func (g *mirGen) emitOptionIntrinsic(i *mir.IntrinsicInstr) error {
 		g.fnBuf.WriteString(mirLabelLine(someLabel))
 		payload := g.fresh()
 		g.fnBuf.WriteString(mirExtractValueLine(payload, optLLVM, optVal, "1"))
-		narrowed, err := g.narrowOptionPayload(payload, destLLVM)
+		narrowed, err := g.fromI64Slot(payload, destLoc.Type)
 		if err != nil {
 			return err
 		}
@@ -4416,7 +4620,7 @@ func (g *mirGen) emitOptionIntrinsic(i *mir.IntrinsicInstr) error {
 		g.fnBuf.WriteString(mirLabelLine(someLabel))
 		payload := g.fresh()
 		g.fnBuf.WriteString(mirExtractValueLine(payload, optLLVM, optVal, "1"))
-		narrowed, err := g.narrowOptionPayload(payload, destLLVM)
+		narrowed, err := g.fromI64Slot(payload, destLoc.Type)
 		if err != nil {
 			return err
 		}
@@ -4440,12 +4644,12 @@ func (g *mirGen) emitResultIntrinsic(i *mir.IntrinsicInstr) error {
 	if len(i.Args) < 1 {
 		return unsupported("mir-mvp", fmt.Sprintf("%s without operand", mirIntrinsicLabel(i.Kind)))
 	}
-	resultT, ok := i.Args[0].Type().(*ir.NamedType)
-	if !ok || resultT.Name != "Result" || len(resultT.Args) < 2 {
+	resultType := i.Args[0].Type()
+	if _, _, ok := g.resultPayloadTypes(resultType); !ok {
 		return unsupported("mir-mvp", fmt.Sprintf("%s operand is not Result<T, E>", mirIntrinsicLabel(i.Kind)))
 	}
-	resultLLVM := g.llvmType(resultT)
-	resultVal, err := g.evalOperand(i.Args[0], resultT)
+	resultLLVM := g.llvmType(resultType)
+	resultVal, err := g.evalOperand(i.Args[0], resultType)
 	if err != nil {
 		return err
 	}
@@ -4475,9 +4679,7 @@ func (g *mirGen) emitResultIntrinsic(i *mir.IntrinsicInstr) error {
 		okLabel := g.freshLabel("result.unwrap.ok")
 		g.fnBuf.WriteString(mirBrCondLine(isErr, errLabel, okLabel))
 		g.fnBuf.WriteString(mirLabelLine(errLabel))
-		abortSym := mirRtResultUnwrapErrSymbol()
-		g.declareRuntime(abortSym, mirRuntimeDeclareNoReturn("void", abortSym, "", false))
-		g.fnBuf.WriteString(mirCallResultUnwrapErrLine())
+		g.emitAbortStringPtrAndExit(g.stringLiteral("called unwrap on Err"))
 		g.fnBuf.WriteString(mirUnreachableLine())
 		g.fnBuf.WriteString(mirLabelLine(okLabel))
 		if isUnitType(destLoc.Type) {
@@ -4621,7 +4823,7 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 	if err != nil {
 		return err
 	}
-	elemT := listElemType(listOp.Type())
+	elemT := g.listElemType(listOp.Type())
 	if elemT == nil {
 		return unsupported("mir-mvp", "list intrinsic: missing element type")
 	}
@@ -4665,9 +4867,14 @@ func (g *mirGen) emitListIntrinsic(i *mir.IntrinsicInstr) error {
 		g.flushOstyEmitter(em)
 		return g.storeIntrinsicResult(i, result)
 	case mir.IntrinsicListIsEmpty:
-		sym := mirRtListIsEmptySymbol()
-		g.declareRuntime(sym, mirRuntimeDeclareI1FromPtrLine(sym))
-		return g.emitSimpleCall(i, sym, "i1", []string{"ptr " + listReg})
+		sym := listRuntimeLenSymbol()
+		g.declareRuntime(sym, mirRuntimeDeclareMemoryRead("i64", sym, "ptr"))
+		em := g.ostyEmitter()
+		length := llvmListLen(em, &LlvmValue{typ: "ptr", name: listReg})
+		g.flushOstyEmitter(em)
+		isEmpty := g.fresh()
+		g.fnBuf.WriteString(mirICmpEqI64Line(isEmpty, length.name, "0"))
+		return g.storeIntrinsicResult(i, &LlvmValue{typ: "i1", name: isEmpty})
 	case mir.IntrinsicListGet:
 		if len(i.Args) != 2 {
 			return unsupported("mir-mvp", "list_get arity")
@@ -5137,7 +5344,7 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 		if destLoc == nil {
 			return unsupported("mir-mvp", "map_new dest into unknown local")
 		}
-		keyT, valT := mapKeyValueTypes(destLoc.Type)
+		keyT, valT := g.mapKeyValueTypes(destLoc.Type)
 		if keyT == nil || valT == nil {
 			return unsupported("mir-mvp", fmt.Sprintf("map_new dest type %s not Map<K,V>", mirTypeString(destLoc.Type)))
 		}
@@ -5171,7 +5378,7 @@ func (g *mirGen) emitMapIntrinsic(i *mir.IntrinsicInstr) error {
 	if err != nil {
 		return err
 	}
-	keyT, valT := mapKeyValueTypes(i.Args[0].Type())
+	keyT, valT := g.mapKeyValueTypes(i.Args[0].Type())
 	keyLLVM := g.llvmType(keyT)
 	keyString := isStringLLVMType(keyT)
 	_ = valT
@@ -5541,7 +5748,7 @@ func (g *mirGen) emitSetIntrinsic(i *mir.IntrinsicInstr) error {
 	if err != nil {
 		return err
 	}
-	elemT := setElemType(i.Args[0].Type())
+	elemT := g.setElemType(i.Args[0].Type())
 	elemLLVM := g.llvmType(elemT)
 	elemString := isStringLLVMType(elemT)
 	switch i.Kind {
@@ -6169,12 +6376,11 @@ func (g *mirGen) emitBytesValidatedResult(i *mir.IntrinsicInstr, inputReg, valid
 	if destLoc == nil {
 		return fmt.Errorf("mir-mvp: %s dest %d", mirIntrinsicLabel(i.Kind), i.Dest.Local)
 	}
-	resultT, ok := destLoc.Type.(*ir.NamedType)
-	if !ok || resultT.Name != "Result" || len(resultT.Args) < 2 {
+	okT, _, ok := g.resultPayloadTypes(destLoc.Type)
+	if !ok {
 		return unsupported("mir-mvp", fmt.Sprintf("%s dest is not Result<T, E>", mirIntrinsicLabel(i.Kind)))
 	}
 	resultLLVM := g.llvmType(destLoc.Type)
-	okT := resultT.Args[0]
 	g.declareRuntime(validateSym, mirRuntimeDeclareI1FromPtrLine(validateSym))
 	g.declareRuntime(successSym, mirRuntimeDeclarePtrFromPtrLine(successSym))
 
@@ -6997,8 +7203,8 @@ func (g *mirGen) emitStringParseResultIntrinsic(i *mir.IntrinsicInstr, strReg, v
 	if destLoc == nil {
 		return fmt.Errorf("mir-mvp: string parse dest %d", i.Dest.Local)
 	}
-	resultT, ok := destLoc.Type.(*ir.NamedType)
-	if !ok || resultT.Name != "Result" || len(resultT.Args) < 2 {
+	okT, _, ok := g.resultPayloadTypes(destLoc.Type)
+	if !ok {
 		return unsupported("mir-mvp", "string parse dest is not Result")
 	}
 	resultLLVM := g.llvmType(destLoc.Type)
@@ -7018,7 +7224,7 @@ func (g *mirGen) emitStringParseResultIntrinsic(i *mir.IntrinsicInstr, strReg, v
 	em = g.ostyEmitter()
 	parsed := llvmCall(em, parseLLVM, parseSym, []*LlvmValue{{typ: "ptr", name: strReg}})
 	g.flushOstyEmitter(em)
-	payload, err := g.toI64Slot(parsed.name, resultT.Args[0])
+	payload, err := g.toI64Slot(parsed.name, okT)
 	if err != nil {
 		return err
 	}
@@ -7559,7 +7765,22 @@ func mirIsTwoWordEnumLLVM(llvmT string) bool {
 	name := strings.TrimPrefix(llvmT, "%")
 	return strings.HasPrefix(name, "Option.") ||
 		strings.HasPrefix(name, "Maybe.") ||
-		strings.HasPrefix(name, "Result.")
+		strings.HasPrefix(name, "Result.") ||
+		mangledBuiltinSourceNameIs(name, "Option") ||
+		mangledBuiltinSourceNameIs(name, "Maybe") ||
+		mangledBuiltinSourceNameIs(name, "Result")
+}
+
+func isOpaqueBuiltinStructLayout(sl *mir.StructLayout) bool {
+	if sl == nil {
+		return false
+	}
+	switch sl.BuiltinSource {
+	case "List", "Map", "Set":
+		return true
+	default:
+		return false
+	}
 }
 
 // mapKeyValueTypes returns the (K, V) sub-types of a `Map<K, V>` named
@@ -7573,6 +7794,21 @@ func mapKeyValueTypes(t mir.Type) (mir.Type, mir.Type) {
 		return nil, nil
 	}
 	return nt.Args[0], nt.Args[1]
+}
+
+func (g *mirGen) mapKeyValueTypes(t mir.Type) (mir.Type, mir.Type) {
+	keyT, valT := mapKeyValueTypes(t)
+	if keyT != nil && valT != nil {
+		return keyT, valT
+	}
+	nt, ok := t.(*ir.NamedType)
+	if !ok || g == nil || g.mod == nil || g.mod.Layouts == nil {
+		return nil, nil
+	}
+	if sl := g.mod.Layouts.Structs[nt.Name]; sl != nil && sl.BuiltinSource == "Map" && len(sl.BuiltinSourceArgs) == 2 {
+		return sl.BuiltinSourceArgs[0], sl.BuiltinSourceArgs[1]
+	}
+	return nil, nil
 }
 
 // mapValueSizeBytes maps an LLVM value type to the byte width used when
@@ -7596,6 +7832,20 @@ func setElemType(t mir.Type) mir.Type {
 		return nil
 	}
 	return nt.Args[idx]
+}
+
+func (g *mirGen) setElemType(t mir.Type) mir.Type {
+	if elem := setElemType(t); elem != nil {
+		return elem
+	}
+	nt, ok := t.(*ir.NamedType)
+	if !ok || g == nil || g.mod == nil || g.mod.Layouts == nil {
+		return nil
+	}
+	if sl := g.mod.Layouts.Structs[nt.Name]; sl != nil && sl.BuiltinSource == "Set" && len(sl.BuiltinSourceArgs) == 1 {
+		return sl.BuiltinSourceArgs[0]
+	}
+	return nil
 }
 
 func isStringLLVMType(t mir.Type) bool {
@@ -8297,9 +8547,13 @@ func (g *mirGen) closureEnvTypeName(elems []mir.Type) string {
 }
 
 func (g *mirGen) emitListLiteral(rv *mir.AggregateRV, aggT mir.Type) (string, error) {
-	elemT := listElemType(aggT)
+	elemT := g.listElemType(aggT)
 	if elemT == nil {
-		return "", unsupported("mir-mvp", "list literal: missing element type")
+		fnName := "<unknown>"
+		if g.fn != nil && g.fn.Name != "" {
+			fnName = g.fn.Name
+		}
+		return "", unsupportedf("mir-mvp", "list literal: missing element type in %s (aggregate type %s)", fnName, mirTypeString(aggT))
 	}
 	g.declareRuntime(listRuntimeNewSymbol(), mirRuntimeDeclareLine("ptr", listRuntimeNewSymbol(), ""))
 	em := g.ostyEmitter()
@@ -8489,6 +8743,20 @@ func listElemType(t mir.Type) mir.Type {
 	return nil
 }
 
+func (g *mirGen) listElemType(t mir.Type) mir.Type {
+	if elem := listElemType(t); elem != nil {
+		return elem
+	}
+	nt, ok := t.(*ir.NamedType)
+	if !ok || g == nil || g.mod == nil || g.mod.Layouts == nil {
+		return nil
+	}
+	if sl := g.mod.Layouts.Structs[nt.Name]; sl != nil && sl.BuiltinSource == "List" && len(sl.BuiltinSourceArgs) == 1 {
+		return sl.BuiltinSourceArgs[0]
+	}
+	return nil
+}
+
 // aggregateElementTypes returns the element types an aggregate's
 // Fields should match. For structs this comes from the LayoutTable
 // so field order is authoritative; for tuples it's the type itself.
@@ -8535,9 +8803,17 @@ func (g *mirGen) aggregateElementTypes(aggT mir.Type, rv *mir.AggregateRV) ([]mi
 func (g *mirGen) evalOperand(op mir.Operand, hintT mir.Type) (string, error) {
 	switch o := op.(type) {
 	case *mir.CopyOp:
-		return g.emitLoad(o.Place, o.T)
+		val, err := g.emitLoad(o.Place, o.T)
+		if err != nil {
+			return "", err
+		}
+		return g.coerceOperandValue(val, o.T, hintT)
 	case *mir.MoveOp:
-		return g.emitLoad(o.Place, o.T)
+		val, err := g.emitLoad(o.Place, o.T)
+		if err != nil {
+			return "", err
+		}
+		return g.coerceOperandValue(val, o.T, hintT)
 	case *mir.ConstOp:
 		// Bare `FnConst` in value position (not a direct-call callee —
 		// those use `FnRef` and never flow through evalOperand). Under
@@ -8553,6 +8829,22 @@ func (g *mirGen) evalOperand(op mir.Operand, hintT mir.Type) (string, error) {
 		return g.renderConst(o.Const, o.T)
 	}
 	return "", unsupported("mir-mvp", fmt.Sprintf("operand %T", op))
+}
+
+func (g *mirGen) coerceOperandValue(val string, fromT, toT mir.Type) (string, error) {
+	if fromT == nil || toT == nil {
+		return val, nil
+	}
+	fromLLVM := g.llvmType(fromT)
+	toLLVM := g.llvmType(toT)
+	if fromLLVM == toLLVM {
+		return val, nil
+	}
+	coerced, err := g.coerceValue(val, fromLLVM, toLLVM)
+	if err != nil {
+		return val, nil
+	}
+	return coerced, nil
 }
 
 func mirBinaryArgType(left, right mir.Type) mir.Type {
@@ -8769,13 +9061,27 @@ func (g *mirGen) emitLoad(place mir.Place, t mir.Type) (string, error) {
 				}
 			}
 			elemLLVM := g.llvmType(elemT)
+			if isStringPrimType(curT) {
+				idxVal, err := g.evalOperand(ip.Index, mir.TInt)
+				if err != nil {
+					return "", err
+				}
+				sym := mirRtStringSymbol("CharAt")
+				g.declareRuntime(sym, mirRuntimeDeclareLine("i32", sym, "ptr, i64"))
+				next := g.fresh()
+				g.fnBuf.WriteString(mirCallValueLine(next, "i32", sym, mirArgListPtrI64(curReg, idxVal)))
+				curReg = next
+				curLLVM = elemLLVM
+				curT = elemT
+				continue
+			}
 			// Map IndexProj: delegate to the shared runtime helper so
 			// `m[k]` and `m.get(k)` share a single ABI. The helper
 			// allocates a fresh out-slot, calls the runtime, loads
 			// the result, and returns the SSA register holding the
 			// loaded value.
 			if isMapPtrType(curT) {
-				keyT, _ := mapKeyValueTypes(curT)
+				keyT, _ := g.mapKeyValueTypes(curT)
 				if keyT == nil {
 					return "", unsupported("mir-mvp", "map IndexProj without key type")
 				}
@@ -9031,6 +9337,9 @@ func (g *mirGen) emitBinary(op mir.BinaryOp, left, right string, argT, resT mir.
 	if (op == mir.BinEq || op == mir.BinNeq) && isHeapEqualityType(argT) {
 		return g.emitHeapEquality(op, left, right)
 	}
+	if (op == mir.BinEq || op == mir.BinNeq) && g.isEnumValueType(argT) {
+		return g.emitEnumDiscriminantEquality(op, left, right, argT)
+	}
 	if isStringOrderingBinOp(op) && isStringPrimType(argT) {
 		return g.emitStringOrdering(op, left, right)
 	}
@@ -9049,6 +9358,30 @@ func (g *mirGen) emitBinary(op mir.BinaryOp, left, right string, argT, resT mir.
 	tmp := g.fresh()
 	g.fnBuf.WriteString(mirBinaryOpLine(tmp, opcode, ty, left, right))
 	return tmp, nil
+}
+
+func (g *mirGen) isEnumValueType(t mir.Type) bool {
+	nt, ok := t.(*ir.NamedType)
+	if !ok || g == nil || g.mod == nil || g.mod.Layouts == nil {
+		return false
+	}
+	return g.mod.Layouts.Enums[nt.Name] != nil
+}
+
+func (g *mirGen) emitEnumDiscriminantEquality(op mir.BinaryOp, left, right string, argT mir.Type) (string, error) {
+	argLLVM := g.llvmType(argT)
+	leftDisc := g.fresh()
+	rightDisc := g.fresh()
+	g.fnBuf.WriteString(mirExtractValueLine(leftDisc, argLLVM, left, "0"))
+	g.fnBuf.WriteString(mirExtractValueLine(rightDisc, argLLVM, right, "0"))
+	eq := g.fresh()
+	g.fnBuf.WriteString(mirICmpEqI64Line(eq, leftDisc, rightDisc))
+	if op == mir.BinEq {
+		return eq, nil
+	}
+	neq := g.fresh()
+	g.fnBuf.WriteString(mirXorI1NegLine(neq, eq))
+	return neq, nil
 }
 
 // isHeapEqualityType reports whether MIR `==` / `!=` on values of type t
@@ -9282,6 +9615,9 @@ func (g *mirGen) llvmType(t mir.Type) string {
 		if x.Name == "Error" {
 			return "ptr"
 		}
+		if x.Name == "Never" {
+			return "void"
+		}
 		// Builtin collection + closure env: flow through the runtime
 		// as opaque pointers. The name table lives in the Osty port
 		// (`mirLlvmTypeForOpaqueNamed`) so callers that already have
@@ -9296,21 +9632,27 @@ func (g *mirGen) llvmType(t mir.Type) string {
 		if x.Name == "Rng" || x.Name == "Gen" {
 			return "ptr"
 		}
+		if isStdlibModuleMarkerTypeName(x.Name) {
+			return "ptr"
+		}
 		// Concurrency runtime types fall into the same ptr-handle
 		// bucket; Osty helper handles both via name match.
 		if s := mirLlvmTypeForOpaqueNamed(x.Name); s != "" {
 			return s
 		}
-		if strings.Contains(x.QualifiedName(), ".") {
-			return "ptr"
-		}
 		// User-declared struct or enum — register the enum in the
 		// layout pool on first use and emit by name.
 		if g.mod != nil && g.mod.Layouts != nil {
+			if sl := g.mod.Layouts.Structs[x.Name]; sl != nil && isOpaqueBuiltinStructLayout(sl) {
+				return "ptr"
+			}
 			if _, ok := g.mod.Layouts.Structs[x.Name]; ok {
 				return "%" + x.Name
 			}
-			if _, ok := g.mod.Layouts.Enums[x.Name]; ok {
+			if en := g.mod.Layouts.Enums[x.Name]; en != nil {
+				if builtinLLVM := g.builtinEnumLayoutLLVMType(en); builtinLLVM != "" {
+					return builtinLLVM
+				}
 				g.registerEnumLayout(x.Name)
 				return "%" + x.Name
 			}
@@ -9340,6 +9682,9 @@ func (g *mirGen) llvmType(t mir.Type) string {
 		case "Result":
 			return "%" + g.resultTypeName(x)
 		}
+		if strings.Contains(x.QualifiedName(), ".") {
+			return "ptr"
+		}
 		return "%" + x.Name
 	case *ir.OptionalType:
 		return "%" + g.optionalTypeName(x)
@@ -9353,6 +9698,21 @@ func (g *mirGen) llvmType(t mir.Type) string {
 	// Fallback: ptr works for anything we end up treating as opaque
 	// heap data.
 	return "ptr"
+}
+
+func (g *mirGen) builtinEnumLayoutLLVMType(en *mir.EnumLayout) string {
+	if en == nil || en.BuiltinSource == "" {
+		return ""
+	}
+	nt := &ir.NamedType{Name: en.BuiltinSource, Args: en.BuiltinSourceArgs, Builtin: true}
+	switch en.BuiltinSource {
+	case "Option", "Maybe":
+		return "%" + g.optionTypeName(nt)
+	case "Result":
+		return "%" + g.resultTypeName(nt)
+	default:
+		return ""
+	}
 }
 
 func (g *mirGen) isStdTermSizeType(t *ir.NamedType) bool {
@@ -9577,6 +9937,14 @@ func isUnitType(t mir.Type) bool {
 func isStdMathMarkerType(t mir.Type) bool {
 	nt, ok := t.(*ir.NamedType)
 	return ok && nt.QualifiedName() == "math.math"
+}
+
+func isStdlibModuleMarkerTypeName(name string) bool {
+	switch name {
+	case "bytes", "char", "email", "encoding", "error", "image", "smtp", "strings", "zip":
+		return true
+	}
+	return false
 }
 
 func stdMathConstLiteral(name string) (string, bool) {

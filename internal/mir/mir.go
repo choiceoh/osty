@@ -1394,11 +1394,13 @@ func NewLayoutTable() *LayoutTable {
 
 // StructLayout describes a single (possibly monomorphic) struct.
 type StructLayout struct {
-	Name    string
-	Mangled string
-	Fields  []FieldLayout
-	Size    int // 0 when the backend computes it
-	Align   int // 0 when the backend computes it
+	Name              string
+	Mangled           string
+	Fields            []FieldLayout
+	BuiltinSource     string
+	BuiltinSourceArgs []Type
+	Size              int // 0 when the backend computes it
+	Align             int // 0 when the backend computes it
 }
 
 // FieldLayout is one entry inside a StructLayout or VariantLayout.
@@ -1410,10 +1412,12 @@ type FieldLayout struct {
 
 // EnumLayout describes a single (possibly monomorphic) enum.
 type EnumLayout struct {
-	Name         string
-	Mangled      string
-	Discriminant Type
-	Variants     []VariantLayout
+	Name              string
+	Mangled           string
+	BuiltinSource     string
+	BuiltinSourceArgs []Type
+	Discriminant      Type
+	Variants          []VariantLayout
 }
 
 // VariantLayout is one enum arm.

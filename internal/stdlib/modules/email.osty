@@ -325,7 +325,8 @@ fn quoteDisplayName(name: String) -> String {
         return ""
     }
     if displayNameNeedsQuotes(clean) {
-        return "{quote}{strings.replaceAll(clean, \"\\\"\", \"\\\\\\\"\")}{quote}"
+        let escaped = strings.replaceAll(clean, "\"", "\\\"")
+        return "{quote}{escaped}{quote}"
     }
     clean
 }

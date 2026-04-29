@@ -1,6 +1,8 @@
 package backend
 
 import (
+	"sort"
+	"strings"
 	"sync"
 
 	"github.com/osty/osty/internal/ast"
@@ -31,9 +33,14 @@ var stdlibInjectableTypes = []struct {
 	{"Result", "result", "enum"},
 }
 
+type stdlibTypeKey struct {
+	Module string
+	Name   string
+}
+
 // loweredStdlibTypeCache memoizes one per-registry snapshot of the
-// generic stdlib type decls. Lowering collections.osty / option.osty
-// / result.osty is the expensive step; once lowered, each user module
+// stdlib type decls. Lowering stdlib modules is the expensive step; once
+// lowered, each user module
 // just deep-clones the subset it references. The cache is keyed by
 // stdlib.Registry pointer so a new registry (e.g. a fresh test
 // fixture) gets its own entry.
@@ -41,13 +48,12 @@ var loweredStdlibTypeCache sync.Map // map[*stdlib.Registry]*loweredStdlibTypesE
 
 type loweredStdlibTypesEntry struct {
 	once sync.Once
-	// decls maps the surface type name ("Map", "Option", …) to the
-	// generic StructDecl / EnumDecl extracted from the lowered stdlib
-	// module. Nil values mean the lower pass couldn't find the decl
-	// (e.g. a stdlib refactor that moved it) — those are silently
-	// skipped at injection time so a partial stdlib doesn't block
-	// user builds.
-	decls map[string]ir.Decl
+	// decls maps (module, surface type name) to the StructDecl /
+	// EnumDecl extracted from the lowered stdlib module. Nil values
+	// mean the lower pass couldn't find the decl (e.g. a stdlib
+	// refactor that moved it) — those are silently skipped at
+	// injection time so a partial stdlib doesn't block user builds.
+	decls map[stdlibTypeKey]ir.Decl
 }
 
 // injectReachableStdlibTypes appends stdlib built-in type decls
@@ -75,49 +81,150 @@ func injectReachableStdlibTypes(mod *ir.Module, reg *stdlib.Registry) ([]ir.Decl
 	if entry == nil {
 		return nil, nil
 	}
+	moduleRefs := collectInjectedStdlibModules(mod)
+	for module := range collectImportedStdlibModules(mod) {
+		if moduleRefs == nil {
+			moduleRefs = map[string]bool{}
+		}
+		moduleRefs[module] = true
+	}
 	var out []ir.Decl
-	seen := map[string]bool{}
-	for _, name := range referenced {
-		if seen[name] {
-			continue
+	seen := map[stdlibTypeKey]bool{}
+	appendKey := func(key stdlibTypeKey) {
+		if seen[key] {
+			return
 		}
-		decl, ok := entry.decls[name]
+		decl, ok := entry.decls[key]
 		if !ok || decl == nil {
-			continue
+			return
 		}
-		seen[name] = true
+		seen[key] = true
 		out = append(out, cloneStdlibTypeDecl(decl))
+	}
+	for _, key := range referenced {
+		appendKey(key)
+	}
+	if len(moduleRefs) > 0 {
+		keys := make([]stdlibTypeKey, 0, len(entry.decls))
+		for key := range entry.decls {
+			if moduleRefs[key.Module] {
+				keys = append(keys, key)
+			}
+		}
+		sort.Slice(keys, func(i, j int) bool {
+			if keys[i].Module != keys[j].Module {
+				return keys[i].Module < keys[j].Module
+			}
+			return keys[i].Name < keys[j].Name
+		})
+		for _, key := range keys {
+			appendKey(key)
+		}
 	}
 	return out, nil
 }
 
-// collectReferencedStdlibTypes walks mod's type surfaces (param types,
-// return types, field types, enum-variant payloads, let bindings) and
-// returns the set of stdlib-provided built-in type names that appear.
-// Order is deterministic (first-appearance) so the injection output is
-// reproducible across runs.
-func collectReferencedStdlibTypes(mod *ir.Module) []string {
+func collectInjectedStdlibModules(mod *ir.Module) map[string]bool {
 	if mod == nil {
 		return nil
 	}
-	wanted := map[string]bool{}
-	for _, t := range stdlibInjectableTypes {
-		wanted[t.Name] = true
-	}
-	seen := map[string]bool{}
-	var out []string
+	out := map[string]bool{}
 	record := func(name string) {
-		if !wanted[name] || seen[name] {
+		module, ok := stdlibModuleFromInjectedSymbol(name)
+		if ok {
+			out[module] = true
+		}
+	}
+	for _, d := range mod.Decls {
+		switch x := d.(type) {
+		case *ir.FnDecl:
+			if x != nil {
+				record(x.Name)
+			}
+		case *ir.StructDecl:
+			for _, m := range x.Methods {
+				if m != nil {
+					record(m.Name)
+				}
+			}
+		case *ir.EnumDecl:
+			for _, m := range x.Methods {
+				if m != nil {
+					record(m.Name)
+				}
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func collectImportedStdlibModules(mod *ir.Module) map[string]bool {
+	if mod == nil {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, d := range mod.Decls {
+		u, ok := d.(*ir.UseDecl)
+		if !ok || u == nil || len(u.Path) < 2 || u.Path[0] != "std" {
+			continue
+		}
+		out[u.Path[1]] = true
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func stdlibModuleFromInjectedSymbol(name string) (string, bool) {
+	const prefix = "osty_std_"
+	if !strings.HasPrefix(name, prefix) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(name, prefix)
+	idx := strings.Index(rest, "__")
+	if idx <= 0 {
+		return "", false
+	}
+	return rest[:idx], true
+}
+
+// collectReferencedStdlibTypes walks mod's type surfaces (param types,
+// return types, field types, enum-variant payloads, let bindings) and
+// expression result types and returns the set of stdlib-provided type
+// decls that appear.
+// Order is deterministic (first-appearance) so the injection output is
+// reproducible across runs.
+func collectReferencedStdlibTypes(mod *ir.Module) []stdlibTypeKey {
+	if mod == nil {
+		return nil
+	}
+	builtinModule := map[string]string{}
+	for _, t := range stdlibInjectableTypes {
+		builtinModule[t.Name] = t.Module
+	}
+	seen := map[stdlibTypeKey]bool{}
+	var out []stdlibTypeKey
+	record := func(key stdlibTypeKey) {
+		key.Module = normalizeStdlibTypeModule(key.Module)
+		if key.Module == "" || key.Name == "" || seen[key] {
 			return
 		}
-		seen[name] = true
-		out = append(out, name)
+		seen[key] = true
+		out = append(out, key)
 	}
 	var walk func(t ir.Type)
 	walk = func(t ir.Type) {
 		switch tt := t.(type) {
 		case *ir.NamedType:
-			record(tt.Name)
+			if tt.Package != "" {
+				record(stdlibTypeKey{Module: tt.Package, Name: tt.Name})
+			} else if module := builtinModule[tt.Name]; module != "" {
+				record(stdlibTypeKey{Module: module, Name: tt.Name})
+			}
 			for _, a := range tt.Args {
 				walk(a)
 			}
@@ -126,7 +233,7 @@ func collectReferencedStdlibTypes(mod *ir.Module) []string {
 			// Option as an enum also triggers isSome / isNone body
 			// specialization, so opt-chains in user code pull in the
 			// Option decl via this branch.
-			record("Option")
+			record(stdlibTypeKey{Module: "option", Name: "Option"})
 			walk(tt.Inner)
 		case *ir.TupleType:
 			for _, e := range tt.Elems {
@@ -140,6 +247,9 @@ func collectReferencedStdlibTypes(mod *ir.Module) []string {
 		}
 	}
 	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		if expr, ok := n.(ir.Expr); ok && expr != nil {
+			walk(expr.Type())
+		}
 		switch x := n.(type) {
 		case *ir.FnDecl:
 			for _, p := range x.Params {
@@ -170,6 +280,11 @@ func collectReferencedStdlibTypes(mod *ir.Module) []string {
 	return out
 }
 
+func normalizeStdlibTypeModule(module string) string {
+	module = strings.TrimPrefix(module, "std.")
+	return module
+}
+
 // loweredStdlibTypesFor returns the cached lowered stdlib type decls
 // for reg, loading them on first access. Safe for concurrent callers
 // via sync.Once.
@@ -185,38 +300,54 @@ func loweredStdlibTypesFor(reg *stdlib.Registry) *loweredStdlibTypesEntry {
 	return entry
 }
 
-// lowerStdlibTypesFromRegistry walks every stdlib module relevant to
-// the built-in type injection set (collections, option, result) and
-// returns a name → Decl map containing each generic Struct/Enum. The
+// lowerStdlibTypesFromRegistry walks stdlib modules and returns a
+// (module, name) → Decl map containing every Struct/Enum surface. The
 // returned decls are fresh clones from a one-shot `ir.Lower` per
 // module so the cache can safely hand them out by reference (each
 // caller deep-clones again before appending to user mods).
-func lowerStdlibTypesFromRegistry(reg *stdlib.Registry) map[string]ir.Decl {
-	out := map[string]ir.Decl{}
+func lowerStdlibTypesFromRegistry(reg *stdlib.Registry) map[stdlibTypeKey]ir.Decl {
+	out := map[stdlibTypeKey]ir.Decl{}
 	if reg == nil {
 		return out
 	}
-	// Gather unique stdlib modules to lower.
-	modules := map[string]bool{}
-	for _, t := range stdlibInjectableTypes {
-		modules[t.Module] = true
-	}
-	for mod := range modules {
-		loweredDecls := lowerStdlibModule(reg, mod)
+	for module := range reg.Modules {
+		loweredDecls := lowerStdlibModule(reg, module)
 		for _, d := range loweredDecls {
 			switch x := d.(type) {
 			case *ir.StructDecl:
-				if len(x.Generics) > 0 && isInjectableTypeName(x.Name) {
-					out[x.Name] = stripMethodsForInjection(x)
-				}
+				out[stdlibTypeKey{Module: module, Name: x.Name}] = stripStdlibTypeForInjection(x)
 			case *ir.EnumDecl:
-				if len(x.Generics) > 0 && isInjectableTypeName(x.Name) {
-					out[x.Name] = stripMethodsForInjection(x)
-				}
+				out[stdlibTypeKey{Module: module, Name: x.Name}] = stripStdlibTypeForInjection(x)
 			}
 		}
 	}
 	return out
+}
+
+func stripStdlibTypeForInjection(d ir.Decl) ir.Decl {
+	switch x := d.(type) {
+	case *ir.StructDecl:
+		switch x.Name {
+		case "List", "Set":
+			x.Methods = nil
+			return x
+		}
+		if len(x.Generics) == 0 {
+			x.Methods = nil
+			return x
+		}
+	case *ir.EnumDecl:
+		switch x.Name {
+		case "Option", "Result":
+			x.Methods = nil
+			return x
+		}
+		if len(x.Generics) == 0 {
+			x.Methods = nil
+			return x
+		}
+	}
+	return stripMethodsForInjection(d)
 }
 
 // stripMethodsForInjection drops methods whose signatures would drive
@@ -360,6 +491,9 @@ func filterMethodsAvoidingOwnerRecursion(owner string, generics []string, method
 func methodHasUnsupportedLLVMShape(owner string, m *ir.FnDecl) bool {
 	if m == nil {
 		return false
+	}
+	if owner == "List" && m.Name == "reverse" {
+		return true
 	}
 	// Map.find returns `(K, V)?`. The legacy AST LLVM path currently
 	// treats optional tuple returns as pointer-shaped at the function

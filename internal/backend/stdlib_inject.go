@@ -2,6 +2,7 @@ package backend
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/ir"
@@ -370,7 +371,7 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 	for len(queue) > 0 {
 		next := queue[0]
 		queue = queue[1:]
-		for callName := range scanBareIdentCallNames(next.fn) {
+		for _, callName := range sortedBareIdentCallNames(next.fn) {
 			calleeFn := reg.LookupFnDecl(next.module, callName)
 			if calleeFn == nil {
 				continue
@@ -395,8 +396,93 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 			rewriteBareIdentCalls(next.fn, callName, lowered.Name)
 			queue = append(queue, loweredFromModule{module: next.module, fn: lowered})
 		}
+		for _, ref := range sortedQualifiedStdlibCallRefs(next.fn) {
+			calleeModule := stdlibModuleNameFromQualifier(ref.Qualifier)
+			if calleeModule == "" || calleeModule == "error" {
+				continue
+			}
+			calleeFn := reg.LookupFnDecl(calleeModule, ref.Name)
+			if calleeFn == nil {
+				continue
+			}
+			k := fnKey{module: calleeModule, name: ref.Name}
+			if injectedFn[k] {
+				rewriteQualifiedStdlibCalls(next.fn, ref.Qualifier, ref.Name, StdlibSymbol(calleeModule, ref.Name))
+				continue
+			}
+			injectedFn[k] = true
+			res := stdlibResolveResult(reg, calleeModule)
+			chk := stdlibCheckResult(reg, calleeModule)
+			lowered, fnIssues := ir.LowerFnDecl(mod.Package, calleeFn, res, chk)
+			issues = append(issues, fnIssues...)
+			if lowered == nil {
+				continue
+			}
+			lowered.Name = StdlibSymbol(calleeModule, ref.Name)
+			out = append(out, lowered)
+			rewriteQualifiedStdlibCalls(next.fn, ref.Qualifier, ref.Name, lowered.Name)
+			queue = append(queue, loweredFromModule{module: calleeModule, fn: lowered})
+		}
+		for _, m := range reachableStdlibMethodsInFn(next.fn, reg) {
+			k := methodKey{module: m.Module, typeName: m.Type, method: m.Method}
+			if injectedMethod[k] {
+				rewriteStdlibMethodCallsitesInFn(next.fn, []ReachableStdlibMethod{m})
+				continue
+			}
+			injectedMethod[k] = true
+			res := stdlibResolveResult(reg, m.Module)
+			chk := stdlibCheckResult(reg, m.Module)
+			lowered, fnIssues := ir.LowerFnDecl(mod.Package, m.Fn, res, chk)
+			issues = append(issues, fnIssues...)
+			if lowered == nil {
+				continue
+			}
+			freeFn := methodToFreeFn(lowered, m.Module, m.Type, m.Method)
+			out = append(out, freeFn)
+			rewriteStdlibMethodCallsitesInFn(next.fn, []ReachableStdlibMethod{m})
+			queue = append(queue, loweredFromModule{module: m.Module, fn: freeFn})
+		}
 	}
 	return out, issues
+}
+
+func reachableStdlibMethodsInFn(fn *ir.FnDecl, reg *stdlib.Registry) []ReachableStdlibMethod {
+	if fn == nil || reg == nil {
+		return nil
+	}
+	return ReachableStdlibMethods(&ir.Module{Decls: []ir.Decl{fn}}, reg)
+}
+
+func rewriteStdlibMethodCallsitesInFn(fn *ir.FnDecl, reached []ReachableStdlibMethod) {
+	if fn == nil || len(reached) == 0 {
+		return
+	}
+	RewriteStdlibMethodCallsites(&ir.Module{Decls: []ir.Decl{fn}}, reached)
+}
+
+func sortedBareIdentCallNames(fn *ir.FnDecl) []string {
+	seen := scanBareIdentCallNames(fn)
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedQualifiedStdlibCallRefs(fn *ir.FnDecl) []ir.QualifiedRef {
+	seen := scanQualifiedCallRefs(fn)
+	out := make([]ir.QualifiedRef, 0, len(seen))
+	for ref := range seen {
+		out = append(out, ref)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Qualifier != out[j].Qualifier {
+			return out[i].Qualifier < out[j].Qualifier
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out
 }
 
 // scanBareIdentCallNames returns the set of names referenced in
@@ -431,6 +517,41 @@ func scanBareIdentCallNames(fn *ir.FnDecl) map[string]struct{} {
 	return out
 }
 
+func scanQualifiedCallRefs(fn *ir.FnDecl) map[ir.QualifiedRef]struct{} {
+	out := map[ir.QualifiedRef]struct{}{}
+	if fn == nil || fn.Body == nil {
+		return out
+	}
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		call, ok := n.(*ir.CallExpr)
+		if !ok || call == nil {
+			return true
+		}
+		field, ok := call.Callee.(*ir.FieldExpr)
+		if !ok || field == nil || field.Name == "" {
+			return true
+		}
+		ident, ok := field.X.(*ir.Ident)
+		if !ok || ident == nil || ident.Name == "" {
+			return true
+		}
+		out[ir.QualifiedRef{Qualifier: ident.Name, Name: field.Name}] = struct{}{}
+		return true
+	}), fn.Body)
+	return out
+}
+
+func stdlibModuleNameFromQualifier(qualifier string) string {
+	if qualifier == "" {
+		return ""
+	}
+	const prefix = "std."
+	if strings.HasPrefix(qualifier, prefix) {
+		return strings.TrimPrefix(qualifier, prefix)
+	}
+	return qualifier
+}
+
 // rewriteBareIdentCalls walks a function body and renames any bare
 // Ident callee whose Name == old to new. Mutates the IR in place.
 // Method calls and FieldExpr callees are not affected — they have
@@ -455,6 +576,33 @@ func rewriteBareIdentCalls(fn *ir.FnDecl, oldName, newName string) {
 		}
 		ident.Name = newName
 		ident.Kind = ir.IdentFn
+		return true
+	}), fn.Body)
+}
+
+func rewriteQualifiedStdlibCalls(fn *ir.FnDecl, qualifier, name, newName string) {
+	if fn == nil || fn.Body == nil || qualifier == "" || name == "" || newName == "" {
+		return
+	}
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		call, ok := n.(*ir.CallExpr)
+		if !ok || call == nil {
+			return true
+		}
+		field, ok := call.Callee.(*ir.FieldExpr)
+		if !ok || field == nil || field.Name != name {
+			return true
+		}
+		ident, ok := field.X.(*ir.Ident)
+		if !ok || ident == nil || ident.Name != qualifier {
+			return true
+		}
+		call.Callee = &ir.Ident{
+			Name:  newName,
+			Kind:  ir.IdentFn,
+			T:     field.T,
+			SpanV: field.SpanV,
+		}
 		return true
 	}), fn.Body)
 }
