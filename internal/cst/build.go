@@ -15,16 +15,30 @@ type EntitySpan struct {
 	Kind  GreenKind
 }
 
-// BuildFromEntitySpans lifts top-level syntax spans plus a token stream into a
-// Green tree wrapped in a Red Tree. The resulting tree carries:
+// SyntaxSpan is the nested form of EntitySpan. It describes one source-backed
+// syntax envelope and any already-known child envelopes. Start and End are
+// byte offsets in the normalized source; End is exclusive.
 //
-//  1. Structural Green nodes for the file and every top-level entity
-//     (GkFile, GkFnDecl, GkStructDecl, …). Nested declarations inside
-//     struct/enum bodies are NOT yet broken out — that is a follow-up phase.
-//  2. Flat token runs inside each top-level entity: expressions and
-//     statements are not yet structured. The public Red API does not depend
-//     on that structuring, so consumers can migrate when the native Green
-//     parser (blocked on the self-host generator) lands.
+// This is the compatibility bridge between the current semantic parser arena
+// and the long-term parser-owned Green event stream. Once the parser emits
+// StartNode/Token/FinishNode events directly, callers can bypass SyntaxSpan
+// and feed GreenBuilder without changing Red consumers.
+type SyntaxSpan struct {
+	Start    int
+	End      int
+	Kind     GreenKind
+	Children []SyntaxSpan
+}
+
+// BuildFromEntitySpans lifts flat top-level syntax spans plus a token stream
+// into a Green tree wrapped in a Red Tree. It is kept for older adapter
+// callers; new parser-facing code should prefer BuildFromSyntaxSpans.
+//
+// The resulting tree carries:
+//
+//  1. Structural Green nodes for the file and every supplied entity.
+//  2. Flat token runs inside each entity. Use BuildFromSyntaxSpans when nested
+//     expression/statement/type structure is available.
 //  3. Trivia attached as leading and trailing runs on tokens. Runs between
 //     tokens split at the first newline or doc comment — see
 //     pairTriviaToTokens for the exact rule. Tail trivia after the last
@@ -33,10 +47,20 @@ type EntitySpan struct {
 // Byte coverage: every source byte is reachable from the tree via either a
 // token's text or a trivia record. TestBuildRoundTrip enforces this.
 //
-// This builder is the adapter path while toolchain/lossless_lex.osty and a
-// native Green parser remain blocked on the self-host generator. A native
-// parser can replace this call without changing Red consumers.
+// A native parser can replace this adapter call without changing Red consumers.
 func BuildFromEntitySpans(src []byte, entities []EntitySpan, toks []token.Token, trivias []Trivia) *Tree {
+	spans := make([]SyntaxSpan, 0, len(entities))
+	for _, ent := range entities {
+		spans = append(spans, SyntaxSpan{Start: ent.Start, End: ent.End, Kind: ent.Kind})
+	}
+	return BuildFromSyntaxSpans(src, spans, toks, trivias)
+}
+
+// BuildFromSyntaxSpans lifts a nested syntax span tree plus a token stream into
+// a Green tree wrapped in a Red Tree. It preserves the same byte-coverage and
+// trivia-attachment contract as BuildFromEntitySpans, but keeps child syntax
+// nodes nested instead of flattening every top-level entity into raw tokens.
+func BuildFromSyntaxSpans(src []byte, spans []SyntaxSpan, toks []token.Token, trivias []Trivia) *Tree {
 	b := NewBuilder(nil)
 	arena := b.Arena()
 
@@ -45,31 +69,19 @@ func BuildFromEntitySpans(src []byte, entities []EntitySpan, toks []token.Token,
 		triviaIDs[i] = arena.AddTrivia(tr)
 	}
 	leading, trailing, tailTrivia := pairTriviaToTokens(toks, trivias)
-	entities = append([]EntitySpan(nil), entities...)
-	sort.SliceStable(entities, func(i, j int) bool {
-		if entities[i].Start == entities[j].Start {
-			return entities[i].End < entities[j].End
-		}
-		return entities[i].Start < entities[j].Start
-	})
+	spans = sanitizeSyntaxChildren(spans, 0, len(src))
 
 	b.StartNode(GkFile)
 	tokIdx := 0
-	for _, ent := range entities {
-		startOff := ent.Start
-		endOff := ent.End
+	for _, span := range spans {
+		startOff := span.Start
 
-		// Orphan tokens before the entity attach to the file root.
+		// Orphan tokens before the syntax node attach to the file root.
 		for tokIdx < len(toks) && !isEOF(toks[tokIdx]) && toks[tokIdx].Pos.Offset < startOff {
 			emitToken(b, toks[tokIdx], src, leading[tokIdx], trailing[tokIdx], triviaIDs)
 			tokIdx++
 		}
-		b.StartNode(ent.Kind)
-		for tokIdx < len(toks) && !isEOF(toks[tokIdx]) && toks[tokIdx].Pos.Offset < endOff {
-			emitToken(b, toks[tokIdx], src, leading[tokIdx], trailing[tokIdx], triviaIDs)
-			tokIdx++
-		}
-		b.FinishNode()
+		emitSyntaxSpan(b, span, toks, src, leading, trailing, triviaIDs, &tokIdx)
 	}
 	for tokIdx < len(toks) {
 		tk := toks[tokIdx]
@@ -91,6 +103,70 @@ func BuildFromEntitySpans(src []byte, entities []EntitySpan, toks []token.Token,
 	b.FinishNode() // GkFile
 	_, root := b.Finish()
 	return NewTreeFromSource(arena, root, src)
+}
+
+func emitSyntaxSpan(
+	b *GreenBuilder,
+	span SyntaxSpan,
+	toks []token.Token,
+	src []byte,
+	leading, trailing [][]int,
+	triviaIDs []int,
+	tokIdx *int,
+) {
+	b.StartNode(span.Kind)
+	children := sanitizeSyntaxChildren(span.Children, span.Start, span.End)
+	for _, child := range children {
+		for *tokIdx < len(toks) && !isEOF(toks[*tokIdx]) && toks[*tokIdx].Pos.Offset < child.Start {
+			emitToken(b, toks[*tokIdx], src, leading[*tokIdx], trailing[*tokIdx], triviaIDs)
+			*tokIdx = *tokIdx + 1
+		}
+		emitSyntaxSpan(b, child, toks, src, leading, trailing, triviaIDs, tokIdx)
+	}
+	for *tokIdx < len(toks) && !isEOF(toks[*tokIdx]) && toks[*tokIdx].Pos.Offset < span.End {
+		emitToken(b, toks[*tokIdx], src, leading[*tokIdx], trailing[*tokIdx], triviaIDs)
+		*tokIdx = *tokIdx + 1
+	}
+	b.FinishNode()
+}
+
+func sanitizeSyntaxChildren(children []SyntaxSpan, parentStart, parentEnd int) []SyntaxSpan {
+	if parentEnd < parentStart {
+		parentEnd = parentStart
+	}
+	out := make([]SyntaxSpan, 0, len(children))
+	for _, child := range children {
+		if child.Kind == GkNone {
+			continue
+		}
+		if child.Start < parentStart || child.End > parentEnd || child.End < child.Start {
+			continue
+		}
+		copied := child
+		copied.Children = sanitizeSyntaxChildren(child.Children, child.Start, child.End)
+		out = append(out, copied)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Start == out[j].Start {
+			return out[i].End > out[j].End
+		}
+		return out[i].Start < out[j].Start
+	})
+
+	// Keep direct children non-overlapping. Nested structure belongs inside
+	// the containing child; overlapping siblings make Red offsets ambiguous.
+	filtered := out[:0]
+	cursor := parentStart
+	for _, child := range out {
+		if child.Start < cursor {
+			continue
+		}
+		filtered = append(filtered, child)
+		if child.End > cursor {
+			cursor = child.End
+		}
+	}
+	return filtered
 }
 
 func isEOF(tk token.Token) bool { return tk.Kind == token.EOF }

@@ -98,6 +98,16 @@ type GreenBuilder struct {
 	root  int // node id of the final file root, -1 until Finish
 }
 
+// GreenCheckpoint marks a position in the current builder frame. StartNodeAt
+// can later wrap everything emitted since this checkpoint in a new node. This
+// is the key operation for Pratt parsers and other event-stream parsers that
+// discover a parent node after emitting its left edge.
+type GreenCheckpoint struct {
+	frame    int
+	children int
+	width    int
+}
+
 type builderFrame struct {
 	kind     GreenKind
 	children []GreenChild
@@ -117,11 +127,51 @@ func NewBuilder(arena *GreenArena) *GreenBuilder {
 // this after Finish() to traverse the tree.
 func (b *GreenBuilder) Arena() *GreenArena { return b.arena }
 
+// Checkpoint returns a marker for the current frame.
+func (b *GreenBuilder) Checkpoint() GreenCheckpoint {
+	if len(b.stack) == 0 {
+		panic("cst: GreenBuilder.Checkpoint called outside any StartNode frame")
+	}
+	top := b.stack[len(b.stack)-1]
+	return GreenCheckpoint{
+		frame:    len(b.stack) - 1,
+		children: len(top.children),
+		width:    top.width,
+	}
+}
+
 // StartNode opens a new interior node of the given kind. Every StartNode
 // must be matched by FinishNode; children added in between become this
 // node's children.
 func (b *GreenBuilder) StartNode(kind GreenKind) {
 	b.stack = append(b.stack, builderFrame{kind: kind})
+}
+
+// StartNodeAt opens a node that already contains every child emitted in the
+// current frame since checkpoint. This mirrors rowan's checkpoint/precede
+// pattern and lets parsers wrap a completed left-hand side once they see an
+// infix operator.
+func (b *GreenBuilder) StartNodeAt(kind GreenKind, checkpoint GreenCheckpoint) {
+	if len(b.stack) == 0 {
+		panic("cst: GreenBuilder.StartNodeAt called outside any StartNode frame")
+	}
+	frameIdx := len(b.stack) - 1
+	if checkpoint.frame != frameIdx {
+		panic("cst: GreenBuilder.StartNodeAt checkpoint belongs to a different frame")
+	}
+	top := &b.stack[frameIdx]
+	if checkpoint.children < 0 || checkpoint.children > len(top.children) || checkpoint.width < 0 || checkpoint.width > top.width {
+		panic("cst: GreenBuilder.StartNodeAt checkpoint is out of range")
+	}
+	wrappedChildren := append([]GreenChild(nil), top.children[checkpoint.children:]...)
+	wrappedWidth := top.width - checkpoint.width
+	top.children = top.children[:checkpoint.children]
+	top.width = checkpoint.width
+	b.stack = append(b.stack, builderFrame{
+		kind:     kind,
+		children: wrappedChildren,
+		width:    wrappedWidth,
+	})
 }
 
 // Token emits a terminal leaf. Leading/trailing slice are trivia indices

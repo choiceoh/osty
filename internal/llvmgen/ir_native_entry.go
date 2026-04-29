@@ -3453,6 +3453,9 @@ func nativeExprFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeEx
 		}
 		return out, true
 	case *ostyir.Ident:
+		if e.Kind == ostyir.IdentVariant {
+			return nativeBareVariantIdentFromIR(ctx, e)
+		}
 		llvmType, ok := nativeLLVMTypeFromIR(ctx, e.Type())
 		if !ok {
 			info, ok := ctx.lookupScopeName(e.Name)
@@ -5760,6 +5763,38 @@ func nativeBareVariantAccessFromIR(ctx *nativeProjectionCtx, e *ostyir.FieldExpr
 		// A payload-bearing variant referenced without parens is a
 		// function-value form (the constructor as a callable). Bail
 		// — only the zero-arg construction case lowers cleanly here.
+		return nil, false
+	}
+	children := []*llvmNativeExpr{{
+		kind:     llvmNativeExprInt,
+		llvmType: "i64",
+		text:     strconv.Itoa(variant.tag),
+	}}
+	if info.def.payloadSlotType != "" {
+		children = append(children, nativeZeroExprForLLVMType(info.def.payloadSlotType))
+	}
+	return &llvmNativeExpr{
+		kind:       llvmNativeExprStructLit,
+		llvmType:   info.def.llvmType,
+		childExprs: children,
+	}, true
+}
+
+// nativeBareVariantIdentFromIR lowers a resolver-classified bare enum variant
+// (`DivideByZero`) into the same zero-argument variant construction used for
+// qualified field syntax (`CalcError.DivideByZero`). Without this case the
+// generic identifier path treats the variant name as a variable and emits
+// invalid LLVM like `store %CalcError @DivideByZero`.
+func nativeBareVariantIdentFromIR(ctx *nativeProjectionCtx, ident *ostyir.Ident) (*llvmNativeExpr, bool) {
+	if ctx == nil || ident == nil || ident.Kind != ostyir.IdentVariant {
+		return nil, false
+	}
+	info, ok := nativeEnumInfoFromType(ctx, ident.Type())
+	if !ok {
+		return nil, false
+	}
+	variant, ok := info.variantsByName[ident.Name]
+	if !ok || len(variant.payloadIRTypes) != 0 {
 		return nil, false
 	}
 	children := []*llvmNativeExpr{{

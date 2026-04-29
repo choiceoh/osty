@@ -2104,9 +2104,6 @@ func (bs *bodyState) lowerExprAsOperandHint(e ir.Expr, hint Type) Operand {
 			return &CopyOp{Place: Place{Local: tmp}, T: hint}
 		}
 	}
-	if !shouldPreferHintType(e.Type(), hint) {
-		return bs.lowerExprAsOperand(e)
-	}
 	if id, ok := e.(*ir.Ident); ok {
 		if id.Name == "None" && id.Kind != ir.IdentLocal && id.Kind != ir.IdentParam {
 			tmp := bs.freshTemp(hint, id.SpanV)
@@ -2134,6 +2131,9 @@ func (bs *bodyState) lowerExprAsOperandHint(e ir.Expr, hint Type) Operand {
 				return &CopyOp{Place: Place{Local: tmp}, T: hint}
 			}
 		}
+	}
+	if !shouldPreferHintType(e.Type(), hint) {
+		return bs.lowerExprAsOperand(e)
 	}
 	return bs.lowerExprAsOperand(e)
 }

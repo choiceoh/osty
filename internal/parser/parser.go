@@ -4,6 +4,7 @@ package parser
 
 import (
 	"github.com/osty/osty/internal/ast"
+	"github.com/osty/osty/internal/cst"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/selfhost"
 )
@@ -73,4 +74,12 @@ func ParseDiagnostics(src []byte) (*ast.File, []*diag.Diagnostic) {
 // semantic arena on first access.
 func ParseRun(src []byte) *selfhost.FrontendRun {
 	return selfhost.Run(src)
+}
+
+// ParseCST lexes and parses src, returning the lossless Red/Green concrete
+// syntax tree plus the same diagnostics reported by the semantic parse path.
+// Use this entry point for formatter, repair, and LSP features that need
+// byte-for-byte source coverage instead of only the semantic AST.
+func ParseCST(src []byte) (*cst.Tree, []*diag.Diagnostic) {
+	return selfhost.ParseCST(src)
 }
