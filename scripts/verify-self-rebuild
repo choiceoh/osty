@@ -219,6 +219,40 @@ build_self_binary() {
 	chmod +x "$dest"
 }
 
+smoke_self_driver() {
+	local driver="$1"
+	local label="$2"
+	local reported_host
+	local out
+
+	require_exec "$driver" "$label driver"
+
+	log "$label: smoke selfhost host selection"
+	if ! reported_host="$(cd "$root" && OSTY_SELF_REBUILD_HOST_BIN="$host_bin" "$driver" --selfhost-host 2>&1)"; then
+		printf '%s\n' "$reported_host" >&2
+		fail "$label selfhost host selection failed"
+	fi
+	if [[ "$reported_host" != "$host_bin" ]]; then
+		printf 'self-rebuild: %s reported unexpected host:\n' "$label" >&2
+		printf '  expected: %s\n' "$host_bin" >&2
+		printf '  actual:   %s\n' "$reported_host" >&2
+		exit 1
+	fi
+
+	log "$label: smoke selfhost doctor"
+	if ! out="$(cd "$root" && OSTY_SELF_REBUILD_HOST_BIN="$host_bin" "$driver" --selfhost-doctor 2>&1)"; then
+		printf '%s\n' "$out" >&2
+		fail "$label selfhost doctor failed"
+	fi
+	case "$out" in
+	*"osty-self host probe: OK"*) ;;
+	*)
+		printf '%s\n' "$out" >&2
+		fail "$label selfhost doctor did not report OK"
+		;;
+	esac
+}
+
 emit_stage1_ir() {
 	local out="$stage_root/stage1.ll"
 	local artifact="$toolchain_dir/.osty/out/debug/llvm/main.ll"
@@ -283,6 +317,8 @@ else
 	fi
 fi
 
+smoke_self_driver "$stage1" "stage1"
+
 if [[ "$mode" == "stage1" ]]; then
 	log "stage1-only complete: $stage1"
 	exit 0
@@ -294,6 +330,8 @@ if [[ -n "${OSTY_SELF_REBUILD_STAGE2_BIN:-}" ]]; then
 else
 	build_self_binary "$stage1" "stage2" "$stage2"
 fi
+
+smoke_self_driver "$stage2" "stage2"
 
 if ! cmp -s "$stage1" "$stage2"; then
 	printf 'self-rebuild: byte parity failed\n' >&2

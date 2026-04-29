@@ -169,6 +169,10 @@ type mirGen struct {
 
 	// Module-level state.
 	functionTypes map[string]mirFnSig // symbol → declared signature
+	// needsEnvArgsInit is true when any MIR call reaches std.env.args.
+	// The only C ABI slot that receives argc/argv is main, so the
+	// module-wide pre-scan widens main before function bodies emit.
+	needsEnvArgsInit bool
 	// runtimeDecls owns the runtime forward-declaration pool —
 	// dedup + insertion-order, mirrored from
 	// `toolchain/mir_generator.osty: MirRuntimeDecls`. Replaces
@@ -290,13 +294,53 @@ type mirFnSig struct {
 
 func newMIRGen(m *mir.Module, opts Options) *mirGen {
 	return &mirGen{
-		mod:           m,
-		opts:          opts,
-		source:        filepath.ToSlash(firstNonEmpty(opts.SourcePath, "<unknown>")),
-		src:           append([]byte(nil), opts.Source...),
-		functionTypes: map[string]mirFnSig{},
-		tupleDefs:     map[string][]mir.Type{},
+		mod:              m,
+		opts:             opts,
+		source:           filepath.ToSlash(firstNonEmpty(opts.SourcePath, "<unknown>")),
+		src:              append([]byte(nil), opts.Source...),
+		functionTypes:    map[string]mirFnSig{},
+		needsEnvArgsInit: mirModuleUsesStdEnvArgs(m),
+		tupleDefs:        map[string][]mir.Type{},
 	}
+}
+
+func mirModuleUsesStdEnvArgs(m *mir.Module) bool {
+	if m == nil {
+		return false
+	}
+	for _, glob := range m.Globals {
+		if glob != nil && mirFunctionUsesStdEnvArgs(glob.Init) {
+			return true
+		}
+	}
+	for _, fn := range m.Functions {
+		if mirFunctionUsesStdEnvArgs(fn) {
+			return true
+		}
+	}
+	return false
+}
+
+func mirFunctionUsesStdEnvArgs(fn *mir.Function) bool {
+	if fn == nil {
+		return false
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			call, ok := instr.(*mir.CallInstr)
+			if !ok || call == nil {
+				continue
+			}
+			ref, ok := call.Callee.(*mir.FnRef)
+			if ok && ref != nil && ref.Symbol == "std.env.args" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // formatFnAttrs renders the v0.6 A8/A9/A10 function-level LLVM
@@ -1706,6 +1750,8 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 
 	// Signature line.
 	sig := g.functionTypes[fn.Name]
+	envArgsMain := g.needsEnvArgsInit && fn.Name == "main" &&
+		len(fn.Params) == 0 && isUnitType(fn.ReturnType)
 	// v0.6 A11: decide per-param whether the `noalias` attribute
 	// applies. Bare `#[noalias]` stamps every pointer param;
 	// `#[noalias(p1, p2)]` stamps only the named ones. Non-pointer
@@ -1723,11 +1769,17 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 		}
 		paramParts = append(paramParts, mirFunctionParamPart(llvmT, isNoalias, strconv.Itoa(i)))
 	}
+	if envArgsMain {
+		paramParts = append(paramParts, mirEnvArgsArgcParamPart(), mirEnvArgsArgvParamPart())
+	}
 	g.fnBuf.WriteString(mirFunctionDefineHeader(
 		cconv, sig.retLLVM, emitName, strings.Join(paramParts, ", "), attrs))
 
 	// Entry-block preamble: alloca one slot per non-parameter local,
 	// and store incoming params into their alloca slots.
+	if envArgsMain {
+		g.emitEnvArgsInitPreamble()
+	}
 	g.emitAllocaPreamble(fn)
 	// Register managed-ptr locals as GC roots and take a safepoint at
 	// the function entry. No-op unless opts.EmitGC is set.
@@ -1772,6 +1824,15 @@ func (g *mirGen) emitFunction(fn *mir.Function) error {
 		g.out.WriteString(g.fnBuf.String())
 	}
 	return nil
+}
+
+func (g *mirGen) emitEnvArgsInitPreamble() {
+	g.declareRuntime(ostyRtEnvArgsInitSymbol, mirRuntimeDeclareLine("void", ostyRtEnvArgsInitSymbol, "i64, ptr"))
+	argcI64 := g.fresh()
+	for _, line := range mirEnvArgsInitPreamble(ostyRtEnvArgsInitSymbol, argcI64) {
+		g.fnBuf.WriteString(line)
+		g.fnBuf.WriteByte('\n')
+	}
 }
 
 // tagParallelAccesses + isMemoryAccessLine moved fully to the Osty
