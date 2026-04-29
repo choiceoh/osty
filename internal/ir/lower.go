@@ -127,6 +127,9 @@ type lowerer struct {
 	// field access on a partial struct re-walks the file's decls
 	// looking for the matching StructDecl.
 	fieldTypeCache map[fieldKey]Type
+
+	// native caches structured selfhost checker facts for this lowering pass.
+	native nativeCheckCache
 }
 
 // ==== Top level ====
@@ -606,6 +609,11 @@ func (l *lowerer) lowerLetDecl(ld *ast.LetDecl) *LetDecl {
 			out.Type = out.Value.Type()
 		}
 	}
+	if !usableRecoveredType(out.Type) {
+		if t := l.nativeSymbolTypeForNode(ld, ld.Name); usableRecoveredType(t) {
+			out.Type = t
+		}
+	}
 	return out
 }
 
@@ -927,18 +935,8 @@ func (l *lowerer) expressionYieldsValue(e ast.Expr) bool {
 		// No checker; be conservative: don't promote.
 		return false
 	}
-	if t := l.chk.Types[e]; t != nil {
-		if p, ok := t.(*types.Primitive); ok {
-			if p.Kind == types.PUnit || p.Kind == types.PNever {
-				return false
-			}
-		}
-		if _, ok := t.(*types.Error); !ok {
-			return true
-		}
-		// Error type: fall through to the syntactic fallback so
-		// non-error literal shapes still promote when the checker
-		// didn't infer them.
+	if t := l.exprType(e); usableRecoveredType(t) {
+		return expressionTypeYieldsValue(t)
 	}
 	if t := l.bindingTypeFromAST(e); expressionTypeYieldsValue(t) {
 		return true
@@ -1037,6 +1035,13 @@ func (l *lowerer) lowerLetStmt(s *ast.LetStmt) Stmt {
 		out.Value = l.lowerExpr(s.Value)
 		if out.Type == nil {
 			out.Type = out.Value.Type()
+		}
+	}
+	if !usableRecoveredType(out.Type) {
+		if name, ok := simpleBindName(s.Pattern); ok {
+			if t := l.nativeBindingType(s.Pattern, name); usableRecoveredType(t) {
+				out.Type = t
+			}
 		}
 	}
 	// Record the inferred binding-pattern type so later references
@@ -1140,6 +1145,12 @@ func (l *lowerer) bindingIdentType(id *ast.Ident) Type {
 	sym := l.symbol(id)
 	if sym == nil {
 		return nil
+	}
+	if t := l.nativeBindingTypeForSymbol(sym); usableRecoveredType(t) {
+		return t
+	}
+	if t := l.nativeSymbolType(sym); usableRecoveredType(t) {
+		return t
 	}
 	if l.chk != nil {
 		if st := l.chk.SymTypes[sym]; st != nil {
@@ -1534,6 +1545,9 @@ func (l *lowerer) exprType(e ast.Expr) Type {
 	if l.chk == nil {
 		return ErrTypeVal
 	}
+	if t := l.nativeCheckedType(e); t != nil && t != ErrTypeVal {
+		return t
+	}
 	t := l.chk.Types[e]
 	if t == nil {
 		return ErrTypeVal
@@ -1573,11 +1587,15 @@ func (l *lowerer) lowerIdent(id *ast.Ident) Expr {
 		}
 	}
 	if l.chk != nil {
-		if t := l.chk.Types[id]; t != nil {
-			out.T = l.fromCheckerType(t)
+		if t := l.exprType(id); usableRecoveredType(t) {
+			out.T = t
 		} else if sym != nil {
-			if st := l.chk.SymTypes[sym]; st != nil {
-				out.T = l.fromCheckerType(st)
+			if t := l.nativeSymbolType(sym); usableRecoveredType(t) {
+				out.T = t
+			} else if l.chk.SymTypes != nil {
+				if st := l.chk.SymTypes[sym]; st != nil {
+					out.T = l.fromCheckerType(st)
+				}
 			}
 		}
 	}
@@ -2174,6 +2192,12 @@ func (l *lowerer) structDeclFromReceiver(e ast.Expr) *ast.StructDecl {
 		}
 		if l.chk != nil {
 			if sym := l.symbol(n); sym != nil {
+				if sd := l.structDeclByType(l.nativeBindingTypeForSymbol(sym)); sd != nil {
+					return sd
+				}
+				if sd := l.structDeclByType(l.nativeSymbolType(sym)); sd != nil {
+					return sd
+				}
 				if st := l.chk.SymTypes[sym]; st != nil {
 					if sd := l.structDeclByType(l.fromCheckerType(st)); sd != nil {
 						return sd
@@ -2220,6 +2244,12 @@ func (l *lowerer) structDeclFromReceiver(e ast.Expr) *ast.StructDecl {
 func (l *lowerer) structDeclFromSymbolDecl(sym *resolve.Symbol) *ast.StructDecl {
 	if sym == nil || sym.Decl == nil {
 		return nil
+	}
+	if sd := l.structDeclByType(l.nativeBindingTypeForSymbol(sym)); sd != nil {
+		return sd
+	}
+	if sd := l.structDeclByType(l.nativeSymbolType(sym)); sd != nil {
+		return sd
 	}
 	switch d := sym.Decl.(type) {
 	case *ast.LetStmt:
@@ -2455,7 +2485,13 @@ func (l *lowerer) lowerArg(a *ast.Arg) Arg {
 // checker recorded for this call site (monomorphisation info), or nil
 // when the checker did not annotate it.
 func (l *lowerer) instantiationArgs(e *ast.CallExpr) []Type {
-	if l.chk == nil || l.chk.InstantiationsByID == nil || e == nil {
+	if l.chk == nil || e == nil {
+		return nil
+	}
+	if args := l.nativeInstantiationArgs(e); len(args) > 0 {
+		return args
+	}
+	if l.chk.InstantiationsByID == nil {
 		return nil
 	}
 	raw, ok := l.chk.InstantiationsByID[e.ID]

@@ -359,6 +359,10 @@ type selfhostFileSegment struct {
 	refs      map[ast.NodeID]*resolve.Symbol
 	base      int
 	sourceMap *sourcemap.Map
+	// nativeNodeIDs marks segments where public AST IDs can be translated to
+	// native checker NodeIDs as nativeNodeIDBase + publicID - 2.
+	nativeNodeIDs    bool
+	nativeNodeIDBase int
 }
 
 func applyNativeFileResult(result *Result, file *ast.File, rr *resolve.Result, src []byte, stdlib resolve.StdlibProvider, privileged bool) {
@@ -1041,16 +1045,28 @@ type selfhostNameSpanKey struct {
 	name string
 }
 
+type selfhostNameNodeKey struct {
+	nodeID int
+	name   string
+}
+
 type selfhostSpanIndex struct {
-	exprs       map[selfhostSpanKey]ast.Expr
-	exprsByFrom map[int][]ast.Expr
-	exprKeys    map[ast.Expr]selfhostSpanKey
-	calls       map[selfhostSpanKey]*ast.CallExpr
-	callsByFrom map[int][]*ast.CallExpr
-	callKeys    map[*ast.CallExpr]selfhostSpanKey
-	scopes      map[selfhostSpanKey]*resolve.Scope
-	bindings    map[selfhostNameSpanKey]ast.Node
-	symbols     map[selfhostNameSpanKey]*resolve.Symbol
+	exprs          map[selfhostSpanKey]ast.Expr
+	exprsByFrom    map[int][]ast.Expr
+	exprKeys       map[ast.Expr]selfhostSpanKey
+	exprsByNode    map[int]ast.Expr
+	calls          map[selfhostSpanKey]*ast.CallExpr
+	callsByFrom    map[int][]*ast.CallExpr
+	callKeys       map[*ast.CallExpr]selfhostSpanKey
+	callsByNode    map[int]*ast.CallExpr
+	scopes         map[selfhostSpanKey]*resolve.Scope
+	scopesByNode   map[int]*resolve.Scope
+	bindings       map[selfhostNameSpanKey]ast.Node
+	bindingsByNode map[selfhostNameNodeKey]selfhostBindingNodeEntry
+	symbols        map[selfhostNameSpanKey]*resolve.Symbol
+	symbolsByNode  map[selfhostNameNodeKey]selfhostSymbolNodeEntry
+
+	nativeNodeIDBaseBySourceBase map[int]int
 
 	// scopeSpans is `scopes` sorted by span.start asc, materialised lazily on
 	// the first scopeFor cache miss. Lets the slow path binary-search the
@@ -1094,6 +1110,16 @@ type callSpanEntry struct {
 	call *ast.CallExpr
 }
 
+type selfhostBindingNodeEntry struct {
+	span selfhostSpanKey
+	node ast.Node
+}
+
+type selfhostSymbolNodeEntry struct {
+	span   selfhostSpanKey
+	symbol *resolve.Symbol
+}
+
 type exprQueryKey struct {
 	span selfhostSpanKey
 	kind string
@@ -1106,6 +1132,21 @@ func (idx *selfhostSpanIndex) bindNode(key selfhostNameSpanKey, n ast.Node) {
 	idx.bindings[key] = n
 }
 
+func (idx *selfhostSpanIndex) bindNodeByNativeID(anchor ast.Node, base int, key selfhostSpanKey, name string, n ast.Node) {
+	if name == "" || n == nil {
+		return
+	}
+	nodeID, ok := idx.nativeNodeIDForNode(anchor, base)
+	if !ok {
+		return
+	}
+	nodeKey := selfhostNameNodeKey{nodeID: nodeID, name: name}
+	if idx.bindingsByNode[nodeKey].node != nil {
+		return
+	}
+	idx.bindingsByNode[nodeKey] = selfhostBindingNodeEntry{span: key, node: n}
+}
+
 func overlaySelfhostResult(result *Result, src selfhostCheckedSource, checked api.CheckResult) {
 	if result == nil {
 		return
@@ -1114,11 +1155,24 @@ func overlaySelfhostResult(result *Result, src selfhostCheckedSource, checked ap
 	idx := buildSelfhostSpanIndex(src)
 	for _, node := range checked.TypedNodes {
 		key := selfhostSpanKey{start: node.Start, end: node.End}
-		expr := idx.lookupExpr(key, node.Kind)
+		var expr ast.Expr
+		var scope *resolve.Scope
+		if nodeID, ok := selfhostResultNodeID(node.NodeID, node.Node); ok {
+			expr = idx.lookupExprByNodeID(nodeID, key, node.Kind)
+			if expr != nil {
+				scope = idx.scopesByNode[nodeID]
+			}
+		}
+		if expr == nil {
+			expr = idx.lookupExpr(key, node.Kind)
+		}
 		if expr == nil {
 			continue
 		}
-		t := typeReprToType(node.Type, idx.scopeFor(key))
+		if scope == nil {
+			scope = idx.scopeFor(key)
+		}
+		t := typeReprToType(node.Type, scope)
 		if t == nil {
 			continue
 		}
@@ -1126,38 +1180,81 @@ func overlaySelfhostResult(result *Result, src selfhostCheckedSource, checked ap
 	}
 	for _, binding := range checked.Bindings {
 		key := selfhostSpanKey{start: binding.Start, end: binding.End}
-		t := typeReprToType(binding.Type, idx.scopeFor(key))
+		var scope *resolve.Scope
+		var directNode ast.Node
+		var directSym *resolve.Symbol
+		if nodeID, ok := selfhostResultNodeID(binding.NodeID, binding.Node); ok {
+			directNode = idx.lookupBindingByNodeID(nodeID, key, binding.Name)
+			directSym = idx.lookupSymbolByNodeID(nodeID, key, binding.Name)
+			if directNode != nil || directSym != nil {
+				scope = idx.scopesByNode[nodeID]
+			}
+		}
+		if scope == nil {
+			scope = idx.scopeFor(key)
+		}
+		t := typeReprToType(binding.Type, scope)
 		if t == nil {
 			continue
 		}
 		nameKey := selfhostNameSpanKey{selfhostSpanKey: key, name: binding.Name}
-		if n := idx.bindings[nameKey]; n != nil {
+		if n := directNode; n != nil {
+			result.LetTypes[n] = t
+		} else if n := idx.bindings[nameKey]; n != nil {
 			result.LetTypes[n] = t
 		}
-		if sym := idx.symbols[nameKey]; sym != nil {
+		if sym := directSym; sym != nil {
+			result.SymTypes[sym] = t
+		} else if sym := idx.symbols[nameKey]; sym != nil {
 			result.SymTypes[sym] = t
 		}
 	}
 	for _, symbol := range checked.Symbols {
 		key := selfhostSpanKey{start: symbol.Start, end: symbol.End}
-		t := typeReprToType(symbol.Type, idx.scopeFor(key))
+		var scope *resolve.Scope
+		var directSym *resolve.Symbol
+		if nodeID, ok := selfhostResultNodeID(symbol.NodeID, symbol.Node); ok {
+			directSym = idx.lookupSymbolByNodeID(nodeID, key, symbol.Name)
+			if directSym != nil {
+				scope = idx.scopesByNode[nodeID]
+			}
+		}
+		if scope == nil {
+			scope = idx.scopeFor(key)
+		}
+		t := typeReprToType(symbol.Type, scope)
 		if t == nil {
 			continue
 		}
 		nameKey := selfhostNameSpanKey{selfhostSpanKey: key, name: symbol.Name}
-		if sym := idx.symbols[nameKey]; sym != nil {
+		if sym := directSym; sym != nil {
+			result.SymTypes[sym] = t
+		} else if sym := idx.symbols[nameKey]; sym != nil {
 			result.SymTypes[sym] = t
 		}
 	}
 	for _, inst := range checked.Instantiations {
 		key := selfhostSpanKey{start: inst.Start, end: inst.End}
-		call := idx.lookupCall(key)
+		var call *ast.CallExpr
+		var scope *resolve.Scope
+		if nodeID, ok := selfhostResultNodeID(inst.NodeID, inst.Node); ok {
+			call = idx.lookupCallByNodeID(nodeID, key)
+			if call != nil {
+				scope = idx.scopesByNode[nodeID]
+			}
+		}
+		if call == nil {
+			call = idx.lookupCall(key)
+		}
 		if call == nil || len(inst.TypeArgs) == 0 {
 			continue
 		}
+		if scope == nil {
+			scope = idx.scopeFor(key)
+		}
 		args := make([]types.Type, 0, len(inst.TypeArgs))
 		for i := range inst.TypeArgs {
-			if t := typeReprToType(&inst.TypeArgs[i], idx.scopeFor(key)); t != nil {
+			if t := typeReprToType(&inst.TypeArgs[i], scope); t != nil {
 				args = append(args, t)
 			}
 		}
@@ -1172,19 +1269,28 @@ func overlaySelfhostResult(result *Result, src selfhostCheckedSource, checked ap
 
 func buildSelfhostSpanIndex(src selfhostCheckedSource) *selfhostSpanIndex {
 	idx := &selfhostSpanIndex{
-		exprs:       map[selfhostSpanKey]ast.Expr{},
-		exprsByFrom: map[int][]ast.Expr{},
-		exprKeys:    map[ast.Expr]selfhostSpanKey{},
-		calls:       map[selfhostSpanKey]*ast.CallExpr{},
-		callsByFrom: map[int][]*ast.CallExpr{},
-		callKeys:    map[*ast.CallExpr]selfhostSpanKey{},
-		scopes:      map[selfhostSpanKey]*resolve.Scope{},
-		bindings:    map[selfhostNameSpanKey]ast.Node{},
-		symbols:     map[selfhostNameSpanKey]*resolve.Symbol{},
+		exprs:                        map[selfhostSpanKey]ast.Expr{},
+		exprsByFrom:                  map[int][]ast.Expr{},
+		exprKeys:                     map[ast.Expr]selfhostSpanKey{},
+		exprsByNode:                  map[int]ast.Expr{},
+		calls:                        map[selfhostSpanKey]*ast.CallExpr{},
+		callsByFrom:                  map[int][]*ast.CallExpr{},
+		callKeys:                     map[*ast.CallExpr]selfhostSpanKey{},
+		callsByNode:                  map[int]*ast.CallExpr{},
+		scopes:                       map[selfhostSpanKey]*resolve.Scope{},
+		scopesByNode:                 map[int]*resolve.Scope{},
+		bindings:                     map[selfhostNameSpanKey]ast.Node{},
+		bindingsByNode:               map[selfhostNameNodeKey]selfhostBindingNodeEntry{},
+		symbols:                      map[selfhostNameSpanKey]*resolve.Symbol{},
+		symbolsByNode:                map[selfhostNameNodeKey]selfhostSymbolNodeEntry{},
+		nativeNodeIDBaseBySourceBase: map[int]int{},
 	}
 	for _, file := range src.files {
 		if file.file == nil {
 			continue
+		}
+		if file.nativeNodeIDs {
+			idx.nativeNodeIDBaseBySourceBase[file.base] = file.nativeNodeIDBase
 		}
 		for _, decl := range file.file.Decls {
 			idx.addNode(decl, file.base, file.scope, file.sourceMap)
@@ -1198,6 +1304,19 @@ func buildSelfhostSpanIndex(src selfhostCheckedSource) *selfhostSpanIndex {
 		}
 	}
 	return idx
+}
+
+func selfhostResultNodeID(nodeID, legacyNode int) (int, bool) {
+	if nodeID != 0 {
+		return nodeID, true
+	}
+	if legacyNode != 0 {
+		return legacyNode, true
+	}
+	// Arena node 0 is valid. Direct lookups still validate span/kind/name
+	// before accepting it, so trying 0 is safer than silently forcing the
+	// oldest record in each native result back through span rematching.
+	return 0, true
 }
 
 func (idx *selfhostSpanIndex) scopeFor(key selfhostSpanKey) *resolve.Scope {
@@ -1225,8 +1344,11 @@ func (idx *selfhostSpanIndex) scopeFor(key selfhostSpanKey) *resolve.Scope {
 
 	var best *resolve.Scope
 	bestSize := int(^uint(0) >> 1)
-	for i := 0; i < lo; i++ {
+	for i := lo - 1; i >= 0; i-- {
 		e := list[i]
+		if best != nil && key.end-e.span.start >= bestSize {
+			break
+		}
 		if e.span.end < key.end {
 			continue
 		}
@@ -1279,17 +1401,28 @@ func (idx *selfhostSpanIndex) addNode(n ast.Node, base int, scope *resolve.Scope
 		if _, ok := idx.scopes[key]; !ok {
 			idx.scopes[key] = scope
 		}
-		idx.addDeclaredSymbol(n, key, scope)
+		if nodeID, ok := idx.nativeNodeIDForNode(n, base); ok {
+			if _, have := idx.scopesByNode[nodeID]; !have {
+				idx.scopesByNode[nodeID] = scope
+			}
+		}
+		idx.addDeclaredSymbol(n, key, scope, base)
 		if e, ok := n.(ast.Expr); ok {
 			if _, have := idx.exprs[key]; !have {
 				idx.exprs[key] = e
 			}
 			idx.exprsByFrom[key.start] = append(idx.exprsByFrom[key.start], e)
 			idx.exprKeys[e] = key
+			if nodeID, ok := idx.nativeNodeIDForNode(n, base); ok {
+				idx.exprsByNode[nodeID] = e
+			}
 			if c, ok := e.(*ast.CallExpr); ok {
 				idx.calls[key] = c
 				idx.callsByFrom[key.start] = append(idx.callsByFrom[key.start], c)
 				idx.callKeys[c] = key
+				if nodeID, ok := idx.nativeNodeIDForNode(n, base); ok {
+					idx.callsByNode[nodeID] = c
+				}
 			}
 		}
 	}
@@ -1356,6 +1489,7 @@ func (idx *selfhostSpanIndex) addNode(n ast.Node, base int, scope *resolve.Scope
 	case *ast.Param:
 		if haveKey && v.Name != "" {
 			idx.bindNode(selfhostNameSpanKey{selfhostSpanKey: key, name: v.Name}, v)
+			idx.bindNodeByNativeID(v, base, key, v.Name, v)
 		}
 		idx.addNode(v.Pattern, base, scope, sm)
 		idx.addNode(v.Type, base, scope, sm)
@@ -1387,6 +1521,7 @@ func (idx *selfhostSpanIndex) addNode(n ast.Node, base int, scope *resolve.Scope
 		if name := bindingPatternName(v.Pattern); name != "" {
 			if patKey, ok := spanKeyForNode(v.Pattern, base, sm); ok {
 				idx.bindNode(selfhostNameSpanKey{selfhostSpanKey: patKey, name: name}, v)
+				idx.bindNodeByNativeID(v.Pattern, base, patKey, name, v)
 			}
 		}
 		idx.addNode(v.Pattern, base, scope, sm)
@@ -1487,6 +1622,7 @@ func (idx *selfhostSpanIndex) addNode(n ast.Node, base int, scope *resolve.Scope
 	case *ast.IdentPat:
 		if haveKey && v.Name != "" {
 			idx.bindNode(selfhostNameSpanKey{selfhostSpanKey: key, name: v.Name}, v)
+			idx.bindNodeByNativeID(v, base, key, v.Name, v)
 		}
 	case *ast.TuplePat:
 		for _, p := range v.Elems {
@@ -1512,6 +1648,7 @@ func (idx *selfhostSpanIndex) addNode(n ast.Node, base int, scope *resolve.Scope
 	case *ast.BindingPat:
 		if haveKey && v.Name != "" {
 			idx.bindNode(selfhostNameSpanKey{selfhostSpanKey: key, name: v.Name}, v)
+			idx.bindNodeByNativeID(v, base, key, v.Name, v)
 		}
 		idx.addNode(v.Pattern, base, scope, sm)
 	}
@@ -1529,12 +1666,18 @@ func (idx *selfhostSpanIndex) addScopeSubtree(scope *resolve.Scope, base int, sm
 	}
 }
 
-func (idx *selfhostSpanIndex) addDeclaredSymbol(n ast.Node, key selfhostSpanKey, scope *resolve.Scope) {
+func (idx *selfhostSpanIndex) addDeclaredSymbol(n ast.Node, key selfhostSpanKey, scope *resolve.Scope, base int) {
 	sym := declaredSymbolForNode(n, scope)
 	if sym == nil {
 		return
 	}
 	idx.symbols[selfhostNameSpanKey{selfhostSpanKey: key, name: sym.Name}] = sym
+	if nodeID, ok := idx.nativeNodeIDForNode(n, base); ok {
+		idx.symbolsByNode[selfhostNameNodeKey{nodeID: nodeID, name: sym.Name}] = selfhostSymbolNodeEntry{
+			span:   key,
+			symbol: sym,
+		}
+	}
 }
 
 func declaredSymbolForNode(n ast.Node, scope *resolve.Scope) *resolve.Symbol {
@@ -1579,6 +1722,20 @@ func lookupLocalDeclSymbol(scope *resolve.Scope, name string, decl ast.Node) *re
 	return sym
 }
 
+func (idx *selfhostSpanIndex) lookupExprByNodeID(nodeID int, key selfhostSpanKey, kind string) ast.Expr {
+	expr := idx.exprsByNode[nodeID]
+	if expr == nil {
+		return nil
+	}
+	if kind != "" && selfhostExprKind(expr) != kind {
+		return nil
+	}
+	if exprKey, ok := idx.exprKeys[expr]; !ok || exprKey != key {
+		return nil
+	}
+	return expr
+}
+
 func (idx *selfhostSpanIndex) lookupExpr(key selfhostSpanKey, kind string) ast.Expr {
 	if expr := idx.exprs[key]; expr != nil {
 		if kind == "" || selfhostExprKind(expr) == kind {
@@ -1620,8 +1777,11 @@ func (idx *selfhostSpanIndex) lookupExpr(key selfhostSpanKey, kind string) ast.E
 			hi = mid
 		}
 	}
-	for i := 0; i < lo; i++ {
+	for i := lo - 1; i >= 0; i-- {
 		e := list[i]
+		if best != nil && key.end-e.span.start >= bestSize {
+			break
+		}
 		if kind != "" && e.kind != kind {
 			continue
 		}
@@ -1656,6 +1816,17 @@ func (idx *selfhostSpanIndex) ensureExprSpans() {
 		list = []exprSpanEntry{}
 	}
 	idx.exprSpans = list
+}
+
+func (idx *selfhostSpanIndex) lookupCallByNodeID(nodeID int, key selfhostSpanKey) *ast.CallExpr {
+	call := idx.callsByNode[nodeID]
+	if call == nil {
+		return nil
+	}
+	if callKey, ok := idx.callKeys[call]; !ok || callKey != key {
+		return nil
+	}
+	return call
 }
 
 func (idx *selfhostSpanIndex) lookupCall(key selfhostSpanKey) *ast.CallExpr {
@@ -1693,8 +1864,11 @@ func (idx *selfhostSpanIndex) lookupCall(key selfhostSpanKey) *ast.CallExpr {
 			hi = mid
 		}
 	}
-	for i := 0; i < lo; i++ {
+	for i := lo - 1; i >= 0; i-- {
 		e := list[i]
+		if best != nil && key.end-e.span.start >= bestSize {
+			break
+		}
 		if e.span.end < key.end {
 			continue
 		}
@@ -1726,6 +1900,22 @@ func (idx *selfhostSpanIndex) ensureCallSpans() {
 		list = []callSpanEntry{}
 	}
 	idx.callSpans = list
+}
+
+func (idx *selfhostSpanIndex) lookupBindingByNodeID(nodeID int, key selfhostSpanKey, name string) ast.Node {
+	entry := idx.bindingsByNode[selfhostNameNodeKey{nodeID: nodeID, name: name}]
+	if entry.node == nil || entry.span != key {
+		return nil
+	}
+	return entry.node
+}
+
+func (idx *selfhostSpanIndex) lookupSymbolByNodeID(nodeID int, key selfhostSpanKey, name string) *resolve.Symbol {
+	entry := idx.symbolsByNode[selfhostNameNodeKey{nodeID: nodeID, name: name}]
+	if entry.symbol == nil || entry.span != key {
+		return nil
+	}
+	return entry.symbol
 }
 
 func selfhostExprKind(expr ast.Expr) string {
@@ -1792,10 +1982,59 @@ func (idx *selfhostSpanIndex) addSymbol(sym *resolve.Symbol, base int, scope *re
 		return
 	}
 	idx.symbols[selfhostNameSpanKey{selfhostSpanKey: key, name: sym.Name}] = sym
+	if nodeID, ok := idx.nativeNodeIDForNode(sym.Decl, base); ok {
+		idx.symbolsByNode[selfhostNameNodeKey{nodeID: nodeID, name: sym.Name}] = selfhostSymbolNodeEntry{
+			span:   key,
+			symbol: sym,
+		}
+	}
 	if _, ok := idx.scopes[key]; !ok {
 		idx.scopes[key] = scope
 	}
+	if nodeID, ok := idx.nativeNodeIDForNode(sym.Decl, base); ok {
+		if _, have := idx.scopesByNode[nodeID]; !have {
+			idx.scopesByNode[nodeID] = scope
+		}
+	}
 }
+
+func (idx *selfhostSpanIndex) nativeNodeIDForNode(n ast.Node, sourceBase int) (int, bool) {
+	nativeBase, ok := idx.nativeNodeIDBaseBySourceBase[sourceBase]
+	if !ok {
+		return 0, false
+	}
+	id, ok := publicASTNodeID(n)
+	if !ok || id <= 1 {
+		return 0, false
+	}
+	return nativeBase + int(id) - 2, true
+}
+
+func publicASTNodeID(n ast.Node) (ast.NodeID, bool) {
+	if n == nil {
+		return 0, false
+	}
+	rv := reflect.ValueOf(n)
+	if !rv.IsValid() {
+		return 0, false
+	}
+	if rv.Kind() == reflect.Ptr {
+		if rv.IsNil() {
+			return 0, false
+		}
+		rv = rv.Elem()
+	}
+	if rv.Kind() != reflect.Struct {
+		return 0, false
+	}
+	field := rv.FieldByName("ID")
+	if !field.IsValid() || field.Type() != astNodeIDReflectType {
+		return 0, false
+	}
+	return ast.NodeID(field.Uint()), true
+}
+
+var astNodeIDReflectType = reflect.TypeOf(ast.NodeID(0))
 
 func spanKeyForNode(n ast.Node, base int, sm *sourcemap.Map) (key selfhostSpanKey, ok bool) {
 	if n == nil {
@@ -2014,12 +2253,13 @@ func selfhostFileStructuredSource(file *ast.File, rr *resolve.Result, src []byte
 	return selfhostCheckedSource{
 		source: append([]byte(nil), src...),
 		files: []selfhostFileSegment{{
-			file:      file,
-			source:    append([]byte(nil), src...),
-			scope:     scope,
-			refs:      refs,
-			base:      0,
-			sourceMap: canonicalMap,
+			file:          file,
+			source:        append([]byte(nil), src...),
+			scope:         scope,
+			refs:          refs,
+			base:          0,
+			sourceMap:     canonicalMap,
+			nativeNodeIDs: true,
 		}},
 	}
 }
