@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -889,6 +890,45 @@ func TestLLVMBackendRefusesNilIR(t *testing.T) {
 	}
 }
 
+// TestLLVMBackendMissingMIRDoesNotRetryLegacyIRBridge locks the MIR-full
+// coverage contract at the dispatcher boundary. A malformed Entry with IR but
+// no MIR must surface as an unsupported MIR skeleton rather than silently
+// retrying GenerateModule on the legacy HIR bridge.
+func TestLLVMBackendMissingMIRDoesNotRetryLegacyIRBridge(t *testing.T) {
+	t.Parallel()
+
+	tc := &fakeLLVMToolchain{}
+	backend := LLVMBackend{toolchain: tc}
+	req := newBackendRequest(t, EmitLLVMIR, `fn main() { println(1) }`)
+	req.Features = []string{"mir-backend"}
+	req.Entry.MIR = nil
+
+	result, err := backend.Emit(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected missing MIR to produce unsupported skeleton error")
+	}
+	if !errors.Is(err, ErrLLVMNotImplemented) {
+		t.Fatalf("error = %v, want ErrLLVMNotImplemented", err)
+	}
+	if len(tc.irCompiles) != 0 || len(tc.cCompiles) != 0 || len(tc.links) != 0 {
+		t.Fatalf("toolchain should not run for LLVMIR skeleton emit: %+v %+v %+v", tc.irCompiles, tc.cCompiles, tc.links)
+	}
+	if result == nil || result.Artifacts.LLVMIR == "" {
+		t.Fatalf("result missing LLVMIR skeleton artifact: %+v", result)
+	}
+	irBytes, readErr := os.ReadFile(result.Artifacts.LLVMIR)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
+	}
+	ir := string(irBytes)
+	if strings.Contains(ir, "define i32 @main") {
+		t.Fatalf("missing MIR unexpectedly retried legacy IR bridge:\n%s", ir)
+	}
+	if !strings.Contains(ir, "nil MIR module") {
+		t.Fatalf("skeleton missing nil-MIR diagnostic:\n%s", ir)
+	}
+}
+
 // TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics — Stage 5 prep
 // IR-only parity check that doesn't require clang. On `mir-backend`,
 // a program using `.chars()` / `.bytes()` / `.len()` / `.isEmpty()` on
@@ -899,7 +939,7 @@ func TestLLVMBackendRefusesNilIR(t *testing.T) {
 // Paired with TestLLVMBackendBinaryMIRBackendStringCharsBytes: that
 // one locks in the actual runtime behavior through a linked binary
 // but needs clang and may be skipped. This one always runs and
-// catches silent fallback to the legacy bridge.
+// catches any silent departure from the MIR emitter.
 func TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics(t *testing.T) {
 	t.Parallel()
 

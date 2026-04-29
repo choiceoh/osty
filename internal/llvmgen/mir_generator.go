@@ -7,10 +7,10 @@
 // blocks, projections, and terminators, so the emitter is substantially
 // simpler than the AST-based one.
 //
-// Stage 3 is opt-in: callers set `Options.UseMIR = true` (and supply a
-// MIR module via the backend Entry). The legacy path remains the
-// default until parity lands on the full LLVM test corpus; see
-// docs/mir_design.md for the migration plan.
+// Backend entry now treats MIR as the full-coverage contract after HIR
+// monomorphization. Direct callers set `Options.UseMIR = true` (and supply a
+// MIR module via the backend Entry); production backend dispatch reaches this
+// path once the native-owned fast path declines coverage.
 //
 // MVP scope for this patch:
 //   - Primitive types: Int (i64), Int32/Int16/Int8/Byte/UInt*, Bool
@@ -25,8 +25,8 @@
 //     SSA during optimisation, so the emitter stays alloca-simple.
 //   - No structs, enums, tuples, lists, maps, optional unwrap, closure
 //     aggregates, or concurrency intrinsics. Anything outside the MVP
-//     returns an UnsupportedError so the backend dispatcher can fall
-//     back to the legacy path.
+//     returns an UnsupportedError so callers can render the normal unsupported
+//     skeleton instead of producing malformed IR.
 
 package llvmgen
 
@@ -366,7 +366,8 @@ func (g *mirGen) emitLoopMetadata() {
 
 // checkSupported scans the module and returns an UnsupportedError for
 // any construct the MVP emitter does not handle. This acts as a gate
-// so the backend dispatcher can fall back to the legacy path cleanly.
+// so callers can render an explicit unsupported skeleton instead of
+// emitting malformed LLVM IR.
 func (g *mirGen) checkSupported() error {
 	for _, fn := range g.mod.Functions {
 		if fn == nil {
@@ -571,7 +572,7 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 		return true
 	case *ir.FnType:
 		// Fn values pass as `ptr` at the LLVM boundary; accept them
-		// for now (closures with captures still fall back to legacy).
+		// here. Capturing closures lower through the uniform env ABI.
 		return true
 	}
 	return false
@@ -678,8 +679,8 @@ func allowUnusedErrLocal(fn *mir.Function, loc *mir.Local) bool {
 	}
 	// The checker / lowerer can leave a dead temporary at ErrType even
 	// when the live value path is still compilable. Keep MIR on the fast
-	// path for those pure bookkeeping locals, but continue to fall back
-	// when poisoned values participate in real operations or signatures.
+	// path for those pure bookkeeping locals, but reject poisoned values
+	// when they participate in real operations or signatures.
 	return !localReferenced(fn, loc.ID)
 }
 
@@ -8606,7 +8607,7 @@ func (g *mirGen) emitDiscriminantRV(rv *mir.DiscriminantRV) (string, error) {
 // emitLenRV lowers MIR's direct length query on a place to the same
 // runtime entrypoints used by the intrinsic path. This is the shape
 // lowerForIn emits for list iteration, so supporting it keeps those
-// loops on the MIR path instead of forcing a legacy fallback.
+// loops on the MIR path.
 func (g *mirGen) emitLenRV(rv *mir.LenRV) (string, error) {
 	placeT := g.placeType(rv.Place)
 	if placeT == nil {

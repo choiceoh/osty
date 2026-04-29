@@ -1004,6 +1004,71 @@ func TestLowerQuestionOperatorRebuildsErrorForResult(t *testing.T) {
 	}
 }
 
+func TestLowerQuestionOperatorRebuildsMonomorphizedResult(t *testing.T) {
+	resultAEName := "_ZTSN4main6ResultIiSsEE"
+	resultBEName := "_ZTSN4main6ResultIbSsEE"
+	resultAE := &ir.NamedType{Name: resultAEName}
+	resultBE := &ir.NamedType{Name: resultBEName}
+	resultEnum := func(name string, okT ir.Type) *ir.EnumDecl {
+		return &ir.EnumDecl{
+			Name:              name,
+			BuiltinSource:     "Result",
+			BuiltinSourceArgs: []ir.Type{okT, ir.TString},
+			Variants: []*ir.Variant{
+				{Name: "Err", Payload: []ir.Type{ir.TString}},
+				{Name: "Ok", Payload: []ir.Type{okT}},
+			},
+		}
+	}
+	fn := &ir.FnDecl{
+		Name:   "widen",
+		Return: resultBE,
+		Params: []*ir.Param{{Name: "x", Type: resultAE}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "n",
+					Type: ir.TInt,
+					Value: &ir.QuestionExpr{
+						X: &ir.Ident{Name: "x", Kind: ir.IdentParam, T: resultAE},
+						T: ir.TInt,
+					},
+				},
+			},
+			Result: &ir.VariantLit{
+				Enum:    resultBEName,
+				Variant: "Ok",
+				Args: []ir.Arg{{Value: &ir.BinaryExpr{
+					Op:    ir.BinGt,
+					Left:  &ir.Ident{Name: "n", Kind: ir.IdentLocal, T: ir.TInt},
+					Right: &ir.IntLit{Text: "0", T: ir.TInt},
+					T:     ir.TBool,
+				}}},
+				T: resultBE,
+			},
+		},
+	}
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{
+		resultEnum(resultAEName, ir.TInt),
+		resultEnum(resultBEName, ir.TBool),
+		fn,
+	}}
+	out := Lower(mod)
+	if len(out.Issues) != 0 {
+		t.Fatalf("lower issues: %v\n\n%s", out.Issues, Print(out))
+	}
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	if !strings.Contains(text, "aggregate variant Err") {
+		t.Fatalf("expected Err to be rebuilt for monomorphized Result, got:\n%s", text)
+	}
+	if strings.Contains(text, "? propagation: cannot rebuild") {
+		t.Fatalf("monomorphized Result was not classified for ?: \n%s", text)
+	}
+}
+
 func TestLowerQuestionOperatorNoneForOption(t *testing.T) {
 	// fn widen(x: Int?) -> Bool? {
 	//   let n = x?
@@ -1533,6 +1598,62 @@ func TestLowerForInChannel(t *testing.T) {
 	}
 	if !strings.Contains(text, "switchInt ") {
 		t.Fatalf("expected switchInt (Some vs None) for recv loop, got:\n%s", text)
+	}
+}
+
+func TestLowerForInMonomorphizedMap(t *testing.T) {
+	mapName := "_ZTSN4main3MapISsSsEE"
+	mapType := &ir.NamedType{Name: mapName}
+	fn := &ir.FnDecl{
+		Name:   "copy",
+		Return: ir.TUnit,
+		Params: []*ir.Param{{Name: "m", Type: mapType}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.ForStmt{
+					Kind: ir.ForIn,
+					Pattern: &ir.TuplePat{Elems: []ir.Pattern{
+						&ir.IdentPat{Name: "k"},
+						&ir.IdentPat{Name: "v"},
+					}},
+					Iter: &ir.Ident{Name: "m", Kind: ir.IdentParam, T: mapType},
+					Body: &ir.Block{
+						Stmts: []ir.Stmt{
+							&ir.ExprStmt{X: &ir.IntrinsicCall{
+								Kind: ir.IntrinsicPrintln,
+								Args: []ir.Arg{{Value: &ir.Ident{Name: "k", Kind: ir.IdentLocal, T: ir.TString}}},
+							}},
+							&ir.ExprStmt{X: &ir.IntrinsicCall{
+								Kind: ir.IntrinsicPrintln,
+								Args: []ir.Arg{{Value: &ir.Ident{Name: "v", Kind: ir.IdentLocal, T: ir.TString}}},
+							}},
+						},
+					},
+				},
+			},
+		},
+	}
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{
+		&ir.StructDecl{
+			Name:              mapName,
+			BuiltinSource:     "Map",
+			BuiltinSourceArgs: []ir.Type{ir.TString, ir.TString},
+		},
+		fn,
+	}}
+	out := Lower(mod)
+	if len(out.Issues) != 0 {
+		t.Fatalf("lower issues: %v\n\n%s", out.Issues, Print(out))
+	}
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	if !strings.Contains(text, "intrinsic map_keys(") {
+		t.Fatalf("expected map_keys snapshot in for-in over map, got:\n%s", text)
+	}
+	if !strings.Contains(text, "[_") || !strings.Contains(text, ".0") || !strings.Contains(text, ".1") {
+		t.Fatalf("expected map key lookup and tuple destructure, got:\n%s", text)
 	}
 }
 

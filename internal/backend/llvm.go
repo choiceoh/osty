@@ -177,7 +177,7 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 		irOut  []byte
 		genErr error
 	)
-	if opts.UseMIR && entry.MIR != nil {
+	if opts.UseMIR {
 		irOut, genErr = llvmgen.GenerateFromMIR(entry.MIR, opts)
 	} else {
 		irOut, genErr = llvmgen.GenerateModule(entry.IR, opts)

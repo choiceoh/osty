@@ -154,10 +154,10 @@ fn mirLowerUseAliasFieldPathInvalid() -> MirLowerUseAliasFieldPath {
 /// `globals` / `useAliases`); pass 2 iterates `src.fns` / `src.structs`
 /// / `src.enums` / `src.lets` again and emits MIR into `out`.
 ///
-/// `issues` is an append-only slush pile — non-fatal lowering problems
-/// (e.g. "generic decl reached MIR") get pushed here and the final
-/// MirModule also carries a copy so callers can decide whether to
-/// retry, fall back to the Go pipeline, or report the issue.
+    /// `issues` is an append-only diagnostic list for incomplete MIR
+    /// coverage (e.g. "generic decl reached MIR"). The final MirModule
+    /// carries a copy, and backend entry treats any issue as a coverage
+    /// failure rather than retrying another lowering path.
 pub struct MirLowerer {
     pub src: HirModule,
     pub out: MirModule,
@@ -214,8 +214,8 @@ pub fn mirLowerer(src: HirModule) -> MirLowerer {
     }
 }
 
-/// mirLowerNoteIssue records a non-fatal lowering issue. Issues are
-/// surfaced to callers through `MirModule.Issues` after `run()`.
+/// mirLowerNoteIssue records incomplete MIR coverage. Issues are surfaced
+/// to callers through `MirModule.Issues` after `run()`.
 pub fn mirLowerNoteIssue(l: MirLowerer, msg: String) {
     l.issues.push(msg)
 }
@@ -2562,8 +2562,8 @@ fn mirLowerForRange(bs: MirLowerBodyState, s: HirStmt) {
 /// mirLowerForIn lowers `for pat in iter` over List<T> and Channel<T>.
 /// List iteration emits a counted loop over LenRV + IndexProj. Channel
 /// iteration emits a chan_recv intrinsic, switches on Some/None, and
-/// exits when the channel is closed/drained. Other iterable shapes
-/// still report an issue instead of fabricating a partial loop.
+/// exits when the channel is closed/drained. Other iterable shapes report
+/// a coverage issue instead of fabricating a partial loop.
 fn mirLowerForIn(bs: MirLowerBodyState, s: HirStmt) {
     let span = mirSpanFromHir(s.span)
     let iterT = if s.forHasIter {
@@ -4469,7 +4469,7 @@ fn mirLowerFindVariantIndex(l: MirLowerer, enumName: String, variant: String) ->
     -1
 }
 
-/// mirLowerRangeLitInto records a Stage 1 MIR gap and emits a
+/// mirLowerRangeLitInto records a MIR coverage gap and emits a
 /// placeholder — the Go side does the same via `noteIssue("range
 /// literal in value position not lowered to MIR")`. Real Range
 /// backend support is tracked under the MIR emitter's Range<T>

@@ -284,9 +284,10 @@ type nativeConstValue struct {
 // native-owned primitive/control-flow slice mirrored from
 // toolchain/llvmgen.osty.
 //
-// ok=false means "shape not covered yet" and callers should choose a
-// fallback path themselves. Unlike GenerateModule, this helper never
-// falls back to the transitional IR -> AST bridge.
+// ok=false means "shape not covered yet" and callers should choose the next
+// backend path themselves. Production backend dispatch continues through
+// GenerateFromMIR; this helper never falls back to the transitional IR -> AST
+// bridge.
 func TryGenerateNativeOwnedModule(mod *ostyir.Module, opts Options) ([]byte, bool, error) {
 	if err := prepareModuleGeneration(mod); err != nil {
 		return nil, false, err
@@ -301,8 +302,8 @@ func TryGenerateNativeOwnedModule(mod *ostyir.Module, opts Options) ([]byte, boo
 
 // tryNativeOwnedModule projects the IR module into the native-owned
 // primitive/control-flow slice mirrored from toolchain/llvmgen.osty.
-// ok=false means "shape not covered yet" and callers should fall back to the
-// legacy IR -> AST bridge.
+// ok=false means "shape not covered yet" and production callers should
+// continue through the MIR-direct backend.
 func tryNativeOwnedModule(mod *ostyir.Module, opts Options) ([]byte, bool, error) {
 	nativeMod, ok := nativeModuleFromIR(mod, opts)
 	if !ok {
@@ -2872,9 +2873,8 @@ func nativeStmtFromIR(ctx *nativeProjectionCtx, stmt ostyir.Stmt, fnReturnType s
 // `IdentPat` binding and a single-typed payload slot — the tests
 // lock the `Maybe<Int>` / `Maybe.Some(x)` / `Maybe.None` shapes.
 // Multi-binding patterns, wildcard payloads, and nested patterns
-// return (nil, false) so the caller falls back to the legacy
-// bridge (still wired via `GenerateModule`) until a follow-up
-// extends this coverage.
+// return (nil, false) so the caller can continue through the MIR-direct
+// backend path until a follow-up extends this native-owned fast path.
 func nativeIfLetVariantStmt(
 	ctx *nativeProjectionCtx,
 	ifLet *ostyir.IfLetExpr,

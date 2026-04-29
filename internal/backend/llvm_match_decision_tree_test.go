@@ -88,8 +88,8 @@ func TestLLVMBackendBinaryRunsPrimitiveLiteralMatch(t *testing.T) {
 
 // TestLLVMBackendBinaryRunsCharLiteralMatch covers the Char (i32)
 // scrutinee case for the same regression — before the fix the MIR
-// emitter walled on "match scrutinee type i32, want enum tag" via the
-// legacy fallback, and the MIR path silently took arm 0.
+// emitter walled on "match scrutinee type i32, want enum tag", and
+// the MIR path silently took arm 0.
 func TestLLVMBackendBinaryRunsCharLiteralMatch(t *testing.T) {
 	parallelClangBackendTest(t)
 

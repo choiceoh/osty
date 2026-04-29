@@ -1157,7 +1157,8 @@ pub fn llvmRenderFunction(
 
 /// Primitive/native-owned module-entry slice. The host bridge projects the
 /// backend-neutral IR into this LLVM-typed surface first; unsupported shapes
-/// still fall back to the legacy IR -> AST bridge in Go.
+/// return to the host dispatcher, which now continues through the MIR-direct
+/// emitter rather than retrying the legacy IR -> AST bridge.
 pub enum LlvmNativeExprKind {
     LlvmNativeExprInvalid,
     LlvmNativeExprInt,

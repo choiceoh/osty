@@ -13,6 +13,12 @@ import (
 	"github.com/osty/osty/internal/stdlib"
 )
 
+// ErrMIRCoverageIncomplete means HIR successfully lowered and validated, but
+// the MIR contract could not cover the module completely. Once backend entry
+// reaches this point there is no legacy lowering retry; a non-empty MIR issue
+// list is a compiler/backend coverage bug that must be fixed at the MIR layer.
+var ErrMIRCoverageIncomplete = errors.New("backend: MIR coverage incomplete")
+
 // stdlibBodyLoweringEnabled reports whether the `PrepareEntry` step
 // should inject Osty-bodied stdlib functions into the user module. The
 // feature is off by default during rollout — users opt in by setting
@@ -30,12 +36,10 @@ func stdlibBodyLoweringEnabled() bool {
 // IR contract. Validation failures are returned as an error because they
 // indicate a broken lowering contract rather than a user-visible backend gap.
 //
-// Stage 3 of the MIR migration additionally produces a MIR module alongside
-// the HIR module. MIR lowering runs after HIR monomorphization + validation,
-// so the HIR path remains the primary contract while backends that have
-// migrated can consume `Entry.MIR` directly. MIR validation issues are
-// recorded on the entry as non-fatal warnings — they do not short-circuit
-// the backend dispatch, because MIR is opt-in at this stage.
+// The MIR migration now produces a MIR module as part of the backend entry
+// contract. MIR lowering runs after HIR monomorphization + validation; any
+// MIR lowering or validation issue is fatal because backend dispatch no longer
+// has a legacy HIR retry path.
 //
 // PrepareEntry handles the single-file path. For a multi-file package
 // where every sibling .osty file should contribute its top-level
@@ -150,15 +154,19 @@ func finalizeEntryModule(entry Entry, mod *ir.Module) (Entry, error) {
 		return entry, errors.Join(validateErrs...)
 	}
 	mirMod := mir.Lower(mod)
-	if mirMod != nil {
-		if mirOptimizeEnabled() {
-			mir.Optimize(mirMod)
-		}
-		entry.MIRIssues = append(entry.MIRIssues, mirMod.Issues...)
-		if mirValidateErrs := mir.Validate(mirMod); len(mirValidateErrs) != 0 {
-			entry.MIRIssues = append(entry.MIRIssues, mirValidateErrs...)
-		}
-		entry.MIR = mirMod
+	if mirMod == nil {
+		return entry, errors.Join(ErrMIRCoverageIncomplete, fmt.Errorf("mir.Lower returned nil module"))
+	}
+	if mirOptimizeEnabled() {
+		mir.Optimize(mirMod)
+	}
+	entry.MIRIssues = append(entry.MIRIssues, mirMod.Issues...)
+	if mirValidateErrs := mir.Validate(mirMod); len(mirValidateErrs) != 0 {
+		entry.MIRIssues = append(entry.MIRIssues, mirValidateErrs...)
+	}
+	entry.MIR = mirMod
+	if len(entry.MIRIssues) != 0 {
+		return entry, errors.Join(ErrMIRCoverageIncomplete, errors.Join(entry.MIRIssues...))
 	}
 	return entry, nil
 }

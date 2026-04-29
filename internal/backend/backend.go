@@ -113,10 +113,10 @@ type Backend interface {
 // front-end products grouped under one backend-neutral contract.
 //
 // IR is the HIR-level module produced by `ir.Lower` + `ir.Monomorphize`.
-// MIR is the MIR-level module produced by `mir.Lower`, available for
-// backends that have migrated off the HIR→AST bridge. Both are populated
-// by `PrepareEntry`; current LLVM emission still reads `IR`, but the
-// Stage 3 MIR emitter consumes `MIR` directly.
+// MIR is the MIR-level module produced by `mir.Lower`. Both are populated
+// by `PrepareEntry`; LLVM emission consumes MIR after the native-owned
+// fast path declines coverage. A non-empty MIRIssues list is fatal at
+// entry preparation time rather than a backend fallback signal.
 type Entry struct {
 	PackageName string
 	SourcePath  string

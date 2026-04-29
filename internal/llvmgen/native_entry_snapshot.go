@@ -1,7 +1,7 @@
 // native_entry_snapshot.go snapshots the native-owned primitive module-entry
 // slice from toolchain/llvmgen.osty into the bootstrap bridge. The Go side
-// projects internal/ir.Module into these LLVM-typed structs, then falls back
-// to the legacy IR -> AST bridge when a shape still sits outside this slice.
+// projects internal/ir.Module into these LLVM-typed structs; production backend
+// dispatch continues through MIR when a shape still sits outside this slice.
 
 package llvmgen
 

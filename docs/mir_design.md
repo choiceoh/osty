@@ -1,12 +1,10 @@
 # MIR design (Osty compiler)
 
-Status: Stage 3.12 landed (composite map values + ABI fix); Stage 4 partially
-landed — MIR-first IR emission is the default for an expanding shape set while
-`internal/llvmgen`'s IR→AST bridge (`legacyFileFromModule`) stays live as the
-fallback for shapes the MIR emitter does not yet cover. Stage 5 (Go fallback
-removal) is still deferred; the gaps are tracked in the MIR emitter's
-`checkSupported` / `ProbeModule` plus the Stage 5 notes lower in this
-document.
+Status: Stage 4 full-coverage backend contract landed. Backend entry now treats
+any `mir.Lower` / `mir.Validate` issue as fatal incomplete MIR coverage, and the
+LLVM dispatcher no longer retries the legacy HIR→AST bridge. The old bridge
+still exists for direct `llvmgen.GenerateModule` callers and legacy parity tests,
+but production backend entry is MIR-owned after HIR monomorphization.
 
 ## Why a second IR
 
@@ -69,13 +67,11 @@ source
   → ir.Validate      (HIR invariants)
   → mir.Lower        (HIR → MIR)              ⟵ Stage 1 landed
   → mir.Validate     (MIR invariants)         ⟵ Stage 1 landed
-  → backend dispatch (Stage 4 partial default):
-      if Options.UseMIR && Entry.MIR != nil:
-        llvmgen.GenerateFromMIR(Entry.MIR, opts)
-        └── on ErrUnsupported, falls back to HIR path
-      else:
-        llvmgen.GenerateModule(Entry.IR, opts)
-        └── legacy HIR→AST bridge (explicit opt-out / fallback path)
+  → backend dispatch (Stage 4 full-coverage contract):
+      native-owned fast path may emit directly from Entry.IR
+      otherwise llvmgen.GenerateFromMIR(Entry.MIR, opts)
+      MIR lowering / validation issues fail PrepareEntry
+      GenerateFromMIR unsupported shapes render the normal unsupported skeleton
 ```
 
 MIR lowering runs *after* monomorphisation: every `TypeVar` is gone,
@@ -104,11 +100,10 @@ reason about generics.
 | Compound & multi-target assign   | yes                 | expanded to `BinaryRV` / tuple destructure (Stage 2a) |
 | Top-level global read            | yes (`IdentGlobal`) | `GlobalRefRV` (Stage 2a)                              |
 
-Anything in the "not yet" rows causes `mir.Lower` to return an
-"unsupported" diagnostic today. That signals the caller (e.g. the
-backend dispatcher) to fall back to the existing HIR-based path. As
-each feature gains a settled lowering, it moves from the "not yet" row
-into full MIR coverage.
+Anything not covered by the rows above is a MIR coverage bug once it reaches
+backend entry. `mir.Lower` still records issue diagnostics on `MirModule`, but
+`PrepareEntry` treats a non-empty MIR issue list as fatal rather than dispatching
+to a HIR fallback.
 
 ## MIR node model
 
@@ -366,9 +361,11 @@ a new one.
   - `ForWhile`: header block branches on cond to body or exit.
   - `ForRange`: allocate index local, initialise, header block does
     bounds check, body increments.
-  - `ForIn`: treated as unsupported for Stage-1 when the iterable is
-    not a built-in `List<T>`. For `List<T>` it lowers to an index-based
-    loop using `LenRV` and an `IndexProj` read.
+  - `ForIn`: `List<T>` lowers to an index-based loop using `LenRV`
+    and an `IndexProj` read; `Map<K, V>` lowers to a keys snapshot
+    loop and binds `(K, V)` tuples by reading `map[key]`; `Channel<T>`
+    lowers through `chan_recv` and exits on `None`. Other iterable
+    shapes are MIR coverage bugs at backend entry.
 - `MatchStmt`: use `ir.CompileDecisionTree` (when available) to drive
   the CFG. Each `DecisionSwitch` becomes a `SwitchInt` or a `Branch`
   cascade; `DecisionBind` becomes an assign with projection;
@@ -554,7 +551,11 @@ MIR tests isolated from front-end churn.
     lowerer now classifies the operand as `Option`- or `Result`-
     shaped and rebuilds the error value in the enclosing return
     type: `NullaryRV{NullaryNone}` for Option, an `AggregateRV{Err}`
-    that re-wraps the extracted `Err` payload for Result.
+    that re-wraps the extracted `Err` payload for Result. The
+    classifier uses monomorphization metadata (`BuiltinSource` /
+    `BuiltinSourceArgs`) so `_ZTS...Result...` and `_ZTS...Option...`
+    specializations keep the same propagation semantics as surface
+    `Result<T, E>` / `Option<T>`.
   - **Package / FFI qualified call fix.** `strings.Split(s, ",")`
     used to lower as `Split(strings, s, ",")` because the FieldExpr
     callee path treated the qualifier as a receiver. The lowerer now
@@ -703,9 +704,7 @@ MIR tests isolated from front-end churn.
     *mir.Module` and `MIRIssues []error` fields alongside the existing
     `IR` / `IRIssues`. After HIR monomorphization + validation, the
     pipeline calls `mir.Lower` on the monomorphic HIR and runs
-    `mir.Validate` on the result. MIR issues are collected as
-    warnings rather than blocking the dispatch — the HIR path remains
-    authoritative while the MIR emitter grows to parity.
+    `mir.Validate` on the result.
   - **`llvmgen.GenerateFromMIR(m, opts)`** is the new public entry
     point. It consumes a `*mir.Module` directly (no HIR→AST bridge)
     and emits textual LLVM IR via an alloca-per-local SSA scheme
@@ -713,20 +712,19 @@ MIR tests isolated from front-end churn.
   - **Dispatcher gate.** `llvmgen.Options.UseMIR` selects the path.
     The backend dispatcher (`internal/backend/llvm.go`) prefers
     `GenerateFromMIR(entry.MIR, opts)` by default on every emit
-    mode — raw `llvm-ir`, object, binary. On `ErrUnsupported` the
-    dispatcher catches the sentinel and falls back to
-    `GenerateModule(entry.IR, opts)` automatically, so coverage
-    regressions are impossible while parity lands.
-  - **MVP coverage.** Primitive types (Int / UInt / Byte / Bool /
-    Char / Float{32,64} / String / Unit), functions with primitive
-    params + return types, `Assign` with Use/Unary/Binary/Const
-    rvalues, direct `Call` to `FnRef` callees, `IntrinsicPrint` /
-    `Println` (printf-backed), `Goto` / `Branch` / `SwitchInt` /
-    `Return` / `Unreachable` terminators. Anything outside the MVP
-    returns `ErrUnsupported` with a `mir-mvp` kind so the fallback
-    triggers rather than producing malformed IR. Structs, enums,
-    tuples, lists, maps, optional/result values, closures, and the
-    concurrency family are all follow-up scope.
+    mode — raw `llvm-ir`, object, binary. The dispatcher no longer
+    retries `GenerateModule(entry.IR, opts)` behind the user's back;
+    unsupported MIR emission renders the standard unsupported skeleton.
+  - **Initial MVP coverage.** The first MIR emitter patch covered
+    primitive types (Int / UInt / Byte / Bool / Char / Float{32,64} /
+    String / Unit), primitive params + returns, `Assign` with
+    Use/Unary/Binary/Const rvalues, direct `Call` to `FnRef`,
+    print intrinsics, and the basic terminators. Later Stage 3 slices
+    expanded this to structs, enums, tuples, lists, maps,
+    optional/result values, closures, globals, and concurrency
+    intrinsics. Anything still outside emitter coverage now renders an
+    unsupported skeleton; backend dispatch does not retry the legacy
+    HIR bridge.
   - **Parity coverage.** Keep host-side MIR/LLVM tests focused on the
     Go/Osty boundary. New source-level MIR parity cases should prefer
     Osty fixtures and toolchain sources instead of rebuilding a broad
@@ -759,7 +757,7 @@ MIR tests isolated from front-end churn.
     produces two-level insertvalue).
   - `checkSupported` accepts `NamedType` receivers only when the
     module's `LayoutTable` has a matching struct entry — enums
-    still fall through to fallback. `FieldProj` and `TupleProj` are
+    still reported as unsupported. `FieldProj` and `TupleProj` are
     the only projection kinds accepted; `VariantProj`, `IndexProj`,
     `DerefProj` remain in the unsupported set awaiting later
     expansion stages.
@@ -810,9 +808,9 @@ MIR tests isolated from front-end churn.
     match the legacy emitter's semantics; map values are widened
     into the ptr-sized slot through `toI64Slot` + `inttoptr` when
     the map value type is narrower than ptr.
-  - Composite list element types (structs, tuples, nested lists)
-    still fall back to legacy — the bytes runtime path needs a
-    struct-size computation that the MVP doesn't ship yet.
+  - Composite list element types originally stayed outside this stage; Stage
+    3.6 adds the bytes-v1 runtime path that covers them without a legacy
+    backend retry.
 
 - **Stage 3.4 (landed — non-capturing closures + indirect call).**
 
@@ -853,7 +851,7 @@ MIR tests isolated from front-end churn.
     so downstream projections (e.g. `xs[i].name`) compose without
     extra plumbing.
   - Composite list element types (structs, tuples, nested lists)
-    now route through the bytes-v1 fallback (Stage 3.6) rather than
+    now route through the bytes-v1 path (Stage 3.6) rather than
     falling back to the legacy path.
 
 - **Stage 3.6 (landed — composite list element types).**
@@ -911,10 +909,11 @@ MIR tests isolated from front-end churn.
     but out of scope here — the common cases (sorting / filtering
     / map-style callbacks consumed in-frame) work without heap.
 
-- **Stage 4 (partially landed — MIR-first IR emission).** The LLVM
-  backend prefers the MIR-direct emitter by default on every emit
-  mode — raw `llvm-ir`, object, binary. The dispatcher falls back
-  automatically on `ErrUnsupported`, so coverage never regresses.
+- **Stage 4 (landed — MIR full-coverage backend contract).** The LLVM
+  backend prefers the MIR-direct emitter by default on every emit mode — raw
+  `llvm-ir`, object, binary. `PrepareEntry` fails if MIR lowering or validation
+  records issues, so unsupported language shapes cannot be hidden as warnings.
+  The dispatcher no longer falls back to the legacy HIR→AST bridge.
 
 - **Stage 3.9 (landed — concurrency intrinsic runtime mapping).**
   All MIR concurrency intrinsics emitted by the MIR lowerer now
@@ -971,7 +970,8 @@ MIR tests isolated from front-end churn.
     code executes.
   - `checkSupported` removes the old hard block; global init fns
     walk through the same `checkFunctionSupported` whitelist as
-    user fns so unsupported init shapes still trigger fallback.
+    user fns so unsupported init shapes still render an explicit unsupported
+    skeleton.
 
 - **Stage 3.11 (landed — GC roots / safepoints, opt-in).** Adds
   `Options.EmitGC` to `internal/llvmgen`. When set, the MIR emitter

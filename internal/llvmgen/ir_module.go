@@ -9,18 +9,17 @@ import (
 	"github.com/osty/osty/internal/token"
 )
 
-// GenerateModule is the sole public entry point of the LLVM backend.
-// It consumes the backend-neutral IR (internal/ir) and emits textual
-// LLVM IR.
+// GenerateModule is the legacy IR entry point of the LLVM backend. It
+// consumes the backend-neutral IR (internal/ir) and emits textual LLVM IR.
 //
 // The implementation now first projects a primitive/control-flow slice
 // into the native-owned entrypoint mirrored from toolchain/llvmgen.osty.
 // Remaining shapes still reify the module back into a legacy AST shape
 // through legacyFileFromModule and then hand off to the long-standing
 // AST-driven emitter. This is a transitional detail: external callers
-// route through IR only, and the in-package test helper generateFromAST
-// is unexported. Once the emitter consumes IR directly end-to-end, the
-// fallback bridge and the AST helper both go away.
+// route through MIR-backed backend entry by default, and the in-package test
+// helper generateFromAST is unexported. Once direct callers are gone, the
+// legacy bridge and the AST helper both go away.
 func GenerateModule(mod *ostyir.Module, opts Options) ([]byte, error) {
 	mod = ostyir.Optimize(mod, ostyir.OptimizeOptions{})
 	if out, ok, err := TryGenerateNativeOwnedModule(mod, opts); err != nil {
@@ -112,8 +111,8 @@ func finalizeLegacyFFISurface(out []byte, mod *ostyir.Module) []byte {
 }
 
 // applyLegacyCABICallingConvention patches legacy-emitted `define`
-// lines for `#[c_abi]` functions so MIR fallback keeps the
-// calling-convention marker visible in the textual LLVM IR. The legacy
+// lines for `#[c_abi]` functions so direct GenerateModule callers keep
+// the calling-convention marker visible in the textual LLVM IR. The legacy
 // bridge emits user functions as definitions only, so constraining the
 // rewrite to `define` avoids touching unrelated runtime declarations
 // that might happen to share a symbol name.
@@ -179,11 +178,9 @@ func legacyCABISymbols(mod *ostyir.Module) map[string]struct{} {
 //
 // This makes the export symbol resolvable at link time without
 // renaming the function (which would break in-module call sites).
-// The MIR pipeline (`GenerateFromMIR`, opt-in via Options.UseMIR)
-// uses a different mechanism — it overrides the emitted name
-// directly because MIR has no internal callers in the v0.4
-// surface today. Both paths converge at link-time on the same
-// exported symbol name.
+// The MIR pipeline (`GenerateFromMIR`) uses a different mechanism: it
+// overrides the emitted name directly. Both paths converge at link-time on
+// the same exported symbol name.
 //
 // For C ABI purposes the LLVM-IR-side alias type need only be
 // `ptr` — the linker resolves the symbol by name and the C

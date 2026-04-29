@@ -3,7 +3,7 @@
 // Public API surface (IR-only)
 //
 //   - GenerateModule(*ir.Module, Options) ([]byte, error) — the
-//     primary entry point for code generation. Consumes the
+//     legacy IR entry point for code generation. Consumes the
 //     backend-neutral IR produced by `internal/ir`.
 //   - TryGenerateNativeOwnedModule(*ir.Module, Options)
 //     ([]byte, bool, error) — native-owned primitive/control-flow
@@ -42,9 +42,8 @@
 // legacy IR -> AST bridge only for shapes still outside that slice
 // (see ir_module.go). TryGenerateNativeOwnedModule exposes just that
 // native-owned slice without taking the fallback. The bridge remains a
-// transitional implementation detail: callers never construct nor
-// observe the intermediate AST. Follow-on work will keep growing the
-// native path until the fallback disappears entirely.
+// transitional implementation detail for direct GenerateModule callers:
+// production backend entry reaches MIR after this fast path declines.
 //
 // The active GC implementation path paired with this lowering lives
 // in `internal/backend/runtime/osty_runtime.c`.
