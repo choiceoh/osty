@@ -211,9 +211,9 @@ func TestProbeNativeToolchainMerged(t *testing.T) {
 // TestProbeNativeToolchainMerged. The AST-only probe uses
 // `generateFromAST`, which bypasses the IR→MIR lowering and measures the
 // legacy HIR→AST bridge surface. The real backend
-// (internal/backend/llvm.go) dispatches MIR-first and only falls back to
-// the legacy path on ErrUnsupported, so the AST probe's wall is
-// systematically more pessimistic than the self-host critical path.
+// (internal/backend/llvm.go) dispatches through MIR after the native-owned
+// fast path declines coverage, so the AST probe's wall is systematically more
+// pessimistic than the self-host critical path.
 //
 // This probe runs the merged native toolchain through the full
 // parse → resolve → check → ir.Lower → ir.Monomorphize → mir.Lower →

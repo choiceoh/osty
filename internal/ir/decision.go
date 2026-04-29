@@ -218,10 +218,11 @@ func projectionString(p *Projection) string {
 // CompileDecisionTree builds a decision tree for the given scrutinee
 // type and arms. It returns nil when the shape is outside the
 // compiler's current coverage (unusual pattern mixes, non-obvious
-// range patterns, etc.) — callers should then fall back to arm-by-arm
-// lowering. The resulting tree is well-formed: every interior node
-// has a terminating leaf on every path, and every DecisionLeaf index
-// is within [0, len(arms)).
+// range patterns, etc.). Legacy HIR consumers can still interpret the
+// original arms directly; MIR lowering records the missing tree as an
+// incomplete-coverage issue. The resulting tree is well-formed: every
+// interior node has a terminating leaf on every path, and every
+// DecisionLeaf index is within [0, len(arms)).
 //
 // The algorithm is intentionally conservative: it compiles the common
 // shapes (bare variant switches, literal switches, wild catch-all,

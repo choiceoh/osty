@@ -38,9 +38,8 @@ var ErrUnsupported = errors.New("llvmgen: unsupported source shape")
 //
 // UseMIR selects the MIR-direct emitter. The LLVM backend now enables
 // it by default after the native-owned fast path declines coverage;
-// direct callers can still leave the zero value to stay on the legacy
-// HIR→AST bridge or set it explicitly when running dual-emission
-// tests.
+// direct callers can still leave the zero value to call the legacy
+// HIR→AST bridge explicitly, or set it when running dual-emission tests.
 //
 // EmitGC asks the MIR emitter to instrument generated code with the
 // Osty GC runtime contract — root-slot binding for managed locals,

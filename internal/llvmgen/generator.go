@@ -125,9 +125,8 @@ type generator struct {
 	// on the generator (rather than in a sub-struct) to match the
 	// existing flat-state style of this file; they are reset at every
 	// function boundary by beginFunction. The HIR emitter mirrors the
-	// MIR emitter's `mirGen` fields — both backend paths honor the
-	// full annotation set so the backend dispatcher's MIR-first
-	// default does not drop hints on the legacy fallback.
+	// MIR emitter's `mirGen` fields so direct GenerateModule callers
+	// and the production MIR path preserve the same annotation surface.
 	vectorizeHint          bool
 	vectorizeWidth         int
 	vectorizeScalable      bool

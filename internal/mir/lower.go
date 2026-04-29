@@ -11,13 +11,14 @@ import (
 // Lower converts a monomorphic HIR module into a MIR module. The
 // caller is expected to have already run `ir.Monomorphize` on the HIR
 // — `Lower` does not handle generic declarations and returns an
-// unsupported issue when it encounters one.
+// issue when it encounters one.
 //
 // The returned *Module is always non-nil (even when the issues slice
-// is non-empty). Non-fatal issues are reported via Module.Issues so
-// that callers can decide whether to fall back to the HIR-based
-// backend path. Fatal bugs — shape invariants the lowerer itself
-// breaks — are caught by `mir.Validate` afterwards.
+// is non-empty). Issues are reported via Module.Issues for diagnostics,
+// but the backend entry contract treats any issue as incomplete MIR
+// coverage rather than retrying another lowering path. Fatal bugs — shape
+// invariants the lowerer itself breaks — are caught by `mir.Validate`
+// afterwards.
 func Lower(mod *ir.Module) *Module {
 	if mod == nil {
 		return &Module{Package: "", Layouts: NewLayoutTable()}
@@ -1459,8 +1460,12 @@ func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 		bs.lowerForInChannel(f, iterT)
 		return
 	}
+	if bs.l.isMapType(iterT) {
+		bs.lowerForInMap(f, iterT)
+		return
+	}
 	if !bs.l.isListType(iterT) {
-		bs.l.noteIssue("for-in over non-List/Channel iterable is not lowered to MIR yet")
+		bs.l.noteIssue("for-in over non-List/Map/Channel iterable is not lowered to MIR yet: %s", typeString(iterT))
 		return
 	}
 	elemT := bs.l.listElementType(iterT)
@@ -1529,6 +1534,136 @@ func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 	bs.emit(&AssignInstr{
 		Dest:  Place{Local: elemLocal},
 		Src:   &UseRV{Op: &CopyOp{Place: elemPlace, T: elemT}},
+		SpanV: f.SpanV,
+	})
+	if f.Pattern != nil {
+		bs.bindPattern(f.Pattern, Place{Local: elemLocal}, elemT, f.SpanV)
+	} else if f.Var != "" {
+		bs.bind(f.Var, elemLocal)
+	}
+	for _, s := range f.Body.Stmts {
+		bs.lowerStmt(s)
+	}
+	bs.replayTopFrame(f.Body.SpanV)
+	bs.loopStack = bs.loopStack[:len(bs.loopStack)-1]
+	bs.popDeferScope()
+	bs.popScope()
+	bs.terminate(&GotoTerm{Target: step, SpanV: f.SpanV})
+	bs.cur = step
+	bs.emit(&AssignInstr{
+		Dest: Place{Local: idx},
+		Src: &BinaryRV{
+			Op:    BinAdd,
+			Left:  &CopyOp{Place: Place{Local: idx}, T: TInt},
+			Right: &ConstOp{Const: &IntConst{Value: 1, T: TInt}, T: TInt},
+			T:     TInt,
+		},
+		SpanV: f.SpanV,
+	})
+	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
+	bs.cur = exit
+}
+
+func (bs *bodyState) lowerForInMap(f *ir.ForStmt, iterT Type) {
+	keyT := bs.l.mapKeyType(iterT)
+	valueT := bs.l.indexElementType(iterT)
+	if isPoisonType(keyT) || isPoisonType(valueT) {
+		bs.l.noteIssue("for-in over Map with unresolved key/value type is not lowered to MIR yet: %s", typeString(iterT))
+		return
+	}
+	iter := bs.newLocal("_iter", iterT, false, f.SpanV)
+	bs.emit(&StorageLiveInstr{Local: iter, SpanV: f.SpanV})
+	bs.lowerExprInto(f.Iter, iter, iterT)
+
+	keysT := &ir.NamedType{Name: "List", Args: []ir.Type{keyT}, Builtin: true}
+	keys := bs.newLocal("_keys", keysT, false, f.SpanV)
+	bs.emit(&StorageLiveInstr{Local: keys, SpanV: f.SpanV})
+	bs.emit(&IntrinsicInstr{
+		Dest:  &Place{Local: keys},
+		Kind:  IntrinsicMapKeys,
+		Args:  []Operand{&CopyOp{Place: Place{Local: iter}, T: iterT}},
+		SpanV: f.SpanV,
+	})
+
+	lenLocal := bs.newLocal("_len", TInt, false, f.SpanV)
+	bs.emit(&AssignInstr{
+		Dest:  Place{Local: lenLocal},
+		Src:   &LenRV{Place: Place{Local: keys}, T: TInt},
+		SpanV: f.SpanV,
+	})
+	idx := bs.newLocal("_idx", TInt, true, f.SpanV)
+	bs.emit(&AssignInstr{
+		Dest:  Place{Local: idx},
+		Src:   &UseRV{Op: &ConstOp{Const: &IntConst{Value: 0, T: TInt}, T: TInt}},
+		SpanV: f.SpanV,
+	})
+	header := bs.newBlock(f.SpanV)
+	body := bs.newBlock(f.SpanV)
+	step := bs.newBlock(f.SpanV)
+	exit := bs.newBlock(f.SpanV)
+	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
+	bs.cur = header
+	cmp := bs.freshTemp(TBool, f.SpanV)
+	bs.emit(&AssignInstr{
+		Dest: Place{Local: cmp},
+		Src: &BinaryRV{
+			Op:    BinLt,
+			Left:  &CopyOp{Place: Place{Local: idx}, T: TInt},
+			Right: &CopyOp{Place: Place{Local: lenLocal}, T: TInt},
+			T:     TBool,
+		},
+		SpanV: f.SpanV,
+	})
+	bs.terminate(&BranchTerm{
+		Cond:  &CopyOp{Place: Place{Local: cmp}, T: TBool},
+		Then:  body,
+		Else:  exit,
+		SpanV: f.SpanV,
+	})
+	bs.cur = body
+	bs.pushScope()
+	bs.pushDeferScope()
+	bs.loopStack = append(bs.loopStack, &loopFrame{
+		label:      f.Label,
+		breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
+	})
+
+	keyLocal := bs.newLocal("_key", keyT, false, f.SpanV)
+	keyPlace := Place{Local: keys, Projections: []Projection{
+		&IndexProj{
+			Index:    &CopyOp{Place: Place{Local: idx}, T: TInt},
+			ElemType: keyT,
+		},
+	}}
+	bs.emit(&AssignInstr{
+		Dest:  Place{Local: keyLocal},
+		Src:   &UseRV{Op: &CopyOp{Place: keyPlace, T: keyT}},
+		SpanV: f.SpanV,
+	})
+
+	keyOp := &CopyOp{Place: Place{Local: keyLocal}, T: keyT}
+	valueLocal := bs.newLocal("_value", valueT, false, f.SpanV)
+	valuePlace := Place{Local: iter, Projections: []Projection{
+		&IndexProj{Index: keyOp, ElemType: valueT},
+	}}
+	bs.emit(&AssignInstr{
+		Dest:  Place{Local: valueLocal},
+		Src:   &UseRV{Op: &CopyOp{Place: valuePlace, T: valueT}},
+		SpanV: f.SpanV,
+	})
+
+	elemT := &ir.TupleType{Elems: []ir.Type{keyT, valueT}}
+	elemLocal := bs.newLocal("_elem", elemT, false, f.SpanV)
+	bs.emit(&AssignInstr{
+		Dest: Place{Local: elemLocal},
+		Src: &AggregateRV{
+			Kind: AggTuple,
+			Fields: []Operand{
+				&CopyOp{Place: Place{Local: keyLocal}, T: keyT},
+				&CopyOp{Place: Place{Local: valueLocal}, T: valueT},
+			},
+			T: elemT,
+		},
 		SpanV: f.SpanV,
 	})
 	if f.Pattern != nil {
@@ -1709,8 +1844,8 @@ func (bs *bodyState) lowerMatch(scrutinee ir.Expr, arms []*ir.MatchArm, tree ir.
 		ctx.lowerTree(tree)
 	} else {
 		// No decision tree: keep the module structurally valid by
-		// routing to arm 0 and flag an issue so the caller knows to
-		// fall back to the HIR backend path.
+		// routing to arm 0 and flag an issue so backend entry rejects
+		// the incomplete MIR coverage.
 		bs.l.noteIssue("match without decision tree not lowered to MIR")
 		if len(armBlocks) > 0 {
 			bs.terminate(&GotoTerm{Target: armBlocks[0], SpanV: sp})
@@ -2240,7 +2375,7 @@ func (bs *bodyState) lowerExprAsOperandHint(e ir.Expr, hint Type) Operand {
 	}
 	if c, ok := e.(*ir.CallExpr); ok && c != nil {
 		if id, ok := c.Callee.(*ir.Ident); ok && id != nil {
-			if _, _, ok := builtinVariantCallShape(hint, id.Name, len(c.Args)); ok {
+			if _, _, ok := bs.l.builtinVariantCallShape(hint, id.Name, len(c.Args)); ok {
 				tmp := bs.freshTemp(hint, exprSpan(e))
 				bs.lowerExprInto(e, tmp, hint)
 				return &CopyOp{Place: Place{Local: tmp}, T: hint}
@@ -2491,6 +2626,19 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 		}
 		if rt := recoverBlockTailType(bs, x.Else); rt != nil {
 			return rt
+		}
+	case *ir.QuestionExpr:
+		if !isPoisonType(x.T) && !irHasPoisonedTypeArg(x.T) {
+			return x.T
+		}
+		xT := x.X.Type()
+		if isPoisonType(xT) || irHasPoisonedTypeArg(xT) {
+			if rt := bs.recoverOperandType(x.X); rt != nil {
+				xT = rt
+			}
+		}
+		if payloadT := bs.l.questionOkPayloadType(xT); !isPoisonType(payloadT) && !irHasPoisonedTypeArg(payloadT) {
+			return payloadT
 		}
 	}
 	return nil
@@ -3702,7 +3850,7 @@ func (bs *bodyState) lowerQuestionInto(q *ir.QuestionExpr, dest Place, destT Typ
 	errBB := bs.newBlock(q.SpanV)
 	bs.terminate(&SwitchIntTerm{
 		Scrutinee: &CopyOp{Place: Place{Local: disc}, T: TInt},
-		Cases:     []SwitchCase{{Value: okTagOf(xT), Target: okBB, Label: okVariantName(xT)}},
+		Cases:     []SwitchCase{{Value: okTagOf(xT), Target: okBB, Label: bs.l.okVariantName(xT)}},
 		Default:   errBB,
 		SpanV:     q.SpanV,
 	})
@@ -3713,7 +3861,7 @@ func (bs *bodyState) lowerQuestionInto(q *ir.QuestionExpr, dest Place, destT Typ
 	bs.cur = okBB
 	payloadProj := &VariantProj{
 		Variant:  int(okTagOf(xT)),
-		Name:     okVariantName(xT),
+		Name:     bs.l.okVariantName(xT),
 		FieldIdx: 0,
 		Type:     destT,
 	}
@@ -3741,7 +3889,7 @@ func (bs *bodyState) rebuildErrorIntoReturn(operand LocalID, operandT Type, sp S
 		})
 		return
 	}
-	switch classifyQShape(operandT) {
+	switch bs.l.qShape(operandT) {
 	case qShapeOption:
 		// Option<A> propagating into any Option<B> (or B?): the error
 		// value is just None of the return type.
@@ -3753,7 +3901,7 @@ func (bs *bodyState) rebuildErrorIntoReturn(operand LocalID, operandT Type, sp S
 	case qShapeResult:
 		// Result<A, E> propagating into Result<B, E>: extract the Err
 		// payload, rebuild as Err(payload) in the return type.
-		errT := resultErrType(operandT)
+		errT := bs.l.resultErrType(operandT)
 		errPayload := Place{Local: operand}.Project(&VariantProj{
 			Variant:  int(errTagOf(operandT)),
 			Name:     "Err",
@@ -3773,7 +3921,7 @@ func (bs *bodyState) rebuildErrorIntoReturn(operand LocalID, operandT Type, sp S
 		})
 	default:
 		// Unknown propagation target — conservative copy, note an
-		// issue so callers stay on the HIR path.
+		// issue so backend entry rejects the incomplete MIR coverage.
 		bs.l.noteIssue("? propagation: cannot rebuild %s in return type %s",
 			typeString(operandT), typeString(retT))
 		bs.emit(&AssignInstr{
@@ -3808,9 +3956,39 @@ func classifyQShape(t Type) qShape {
 	return qShapeUnknown
 }
 
+func (l *lowerer) qShape(t Type) qShape {
+	name, _ := l.builtinTypeShape(t)
+	switch name {
+	case "Option", "Maybe":
+		return qShapeOption
+	case "Result":
+		return qShapeResult
+	}
+	return qShapeUnknown
+}
+
 func resultErrType(t Type) Type {
 	if nt, ok := t.(*ir.NamedType); ok && nt.Name == "Result" && len(nt.Args) >= 2 {
 		return nt.Args[1]
+	}
+	return ir.ErrTypeVal
+}
+
+func (l *lowerer) resultErrType(t Type) Type {
+	name, args := l.builtinTypeShape(t)
+	if name == "Result" && len(args) >= 2 {
+		return args[1]
+	}
+	return ir.ErrTypeVal
+}
+
+func (l *lowerer) questionOkPayloadType(t Type) Type {
+	name, args := l.builtinTypeShape(t)
+	switch name {
+	case "Option", "Maybe", "Result":
+		if len(args) >= 1 {
+			return args[0]
+		}
 	}
 	return ir.ErrTypeVal
 }
@@ -4044,7 +4222,7 @@ func (bs *bodyState) lowerBuiltinVariantCallInto(c *ir.CallExpr, dest *Place, de
 	if !ok {
 		return false
 	}
-	idx, payloadHint, ok := builtinVariantCallShape(destT, id.Name, len(c.Args))
+	idx, payloadHint, ok := bs.l.builtinVariantCallShape(destT, id.Name, len(c.Args))
 	if !ok {
 		return false
 	}
@@ -4066,24 +4244,25 @@ func (bs *bodyState) lowerBuiltinVariantCallInto(c *ir.CallExpr, dest *Place, de
 	return true
 }
 
-func builtinVariantCallShape(t Type, name string, argc int) (int, Type, bool) {
+func (l *lowerer) builtinVariantCallShape(t Type, name string, argc int) (int, Type, bool) {
 	if argc != 1 {
 		return 0, nil, false
 	}
+	source, args := l.builtinTypeShape(t)
 	switch name {
 	case "Some":
 		if ot, ok := t.(*ir.OptionalType); ok {
 			return 1, ot.Inner, true
 		}
-		if nt, ok := t.(*ir.NamedType); ok && (nt.Name == "Option" || nt.Name == "Maybe") && len(nt.Args) >= 1 {
-			return 1, nt.Args[0], true
+		if (source == "Option" || source == "Maybe") && len(args) >= 1 {
+			return 1, args[0], true
 		}
 	case "Ok", "Err":
-		if nt, ok := t.(*ir.NamedType); ok && nt.Name == "Result" && len(nt.Args) >= 2 {
+		if source == "Result" && len(args) >= 2 {
 			if name == "Ok" {
-				return 1, nt.Args[0], true
+				return 1, args[0], true
 			}
-			return 0, nt.Args[1], true
+			return 0, args[1], true
 		}
 	}
 	return 0, nil, false
@@ -5146,38 +5325,26 @@ func (l *lowerer) stdlibIntrinsicForMethod(receiverType Type, name string) Intri
 }
 
 func (l *lowerer) stdlibReceiverName(t Type) string {
-	if nt, ok := t.(*ir.NamedType); ok && l != nil {
-		key := typeNameOf(nt)
-		if st := l.structs[key]; st != nil && st.BuiltinSource != "" {
-			return st.BuiltinSource
-		}
-		if en := l.enums[key]; en != nil && en.BuiltinSource != "" {
-			return en.BuiltinSource
-		}
+	if source, _ := l.builtinTypeShape(t); source != "" {
+		return source
 	}
 	return typeNameOf(t)
 }
 
 func (l *lowerer) isListType(t ir.Type) bool {
-	if isListType(t) {
-		return true
-	}
-	if nt, ok := t.(*ir.NamedType); ok && l != nil {
-		if st := l.structs[typeNameOf(nt)]; st != nil && st.BuiltinSource == "List" {
-			return true
-		}
-	}
-	return false
+	source, _ := l.builtinTypeShape(t)
+	return source == "List"
+}
+
+func (l *lowerer) isMapType(t ir.Type) bool {
+	source, _ := l.builtinTypeShape(t)
+	return source == "Map"
 }
 
 func (l *lowerer) listElementType(t ir.Type) Type {
-	if elemT := listElementType(t); !isPoisonType(elemT) {
-		return elemT
-	}
-	if nt, ok := t.(*ir.NamedType); ok && l != nil {
-		if st := l.structs[typeNameOf(nt)]; st != nil && st.BuiltinSource == "List" && len(st.BuiltinSourceArgs) >= 1 {
-			return st.BuiltinSourceArgs[0]
-		}
+	source, args := l.builtinTypeShape(t)
+	if source == "List" && len(args) >= 1 {
+		return args[0]
 	}
 	return ir.ErrTypeVal
 }
@@ -5186,35 +5353,62 @@ func (l *lowerer) indexElementType(base Type) Type {
 	if elemT := indexElementType(base); !isPoisonType(elemT) {
 		return elemT
 	}
-	if nt, ok := base.(*ir.NamedType); ok && l != nil {
-		if st := l.structs[typeNameOf(nt)]; st != nil {
-			switch st.BuiltinSource {
-			case "List":
-				if len(st.BuiltinSourceArgs) >= 1 {
-					return st.BuiltinSourceArgs[0]
-				}
-			case "Map":
-				if len(st.BuiltinSourceArgs) >= 2 {
-					return st.BuiltinSourceArgs[1]
-				}
-			}
+	source, args := l.builtinTypeShape(base)
+	switch source {
+	case "List":
+		if len(args) >= 1 {
+			return args[0]
+		}
+	case "Map":
+		if len(args) >= 2 {
+			return args[1]
 		}
 	}
 	return ir.ErrTypeVal
 }
 
 func (l *lowerer) mapKeyType(base Type) Type {
-	if nt, ok := base.(*ir.NamedType); ok {
-		if nt.Name == "Map" && len(nt.Args) >= 1 {
-			return nt.Args[0]
-		}
-		if l != nil {
-			if st := l.structs[typeNameOf(nt)]; st != nil && st.BuiltinSource == "Map" && len(st.BuiltinSourceArgs) >= 1 {
-				return st.BuiltinSourceArgs[0]
-			}
-		}
+	source, args := l.builtinTypeShape(base)
+	if source == "Map" && len(args) >= 1 {
+		return args[0]
 	}
 	return ir.ErrTypeVal
+}
+
+func (l *lowerer) builtinTypeShape(t Type) (string, []Type) {
+	switch x := t.(type) {
+	case *ir.OptionalType:
+		if x.Inner == nil {
+			return "Option", nil
+		}
+		return "Option", []Type{x.Inner}
+	case *ir.NamedType:
+		switch x.Name {
+		case "Option", "Maybe", "Result", "List", "Map", "Set", "Channel":
+			return x.Name, x.Args
+		}
+		if l == nil {
+			return x.Name, x.Args
+		}
+		key := typeNameOf(x)
+		if st := l.structs[key]; st != nil && st.BuiltinSource != "" {
+			return st.BuiltinSource, st.BuiltinSourceArgs
+		}
+		if en := l.enums[key]; en != nil && en.BuiltinSource != "" {
+			return en.BuiltinSource, en.BuiltinSourceArgs
+		}
+		if l.out != nil && l.out.Layouts != nil {
+			if st := l.out.Layouts.Structs[key]; st != nil && st.BuiltinSource != "" {
+				return st.BuiltinSource, st.BuiltinSourceArgs
+			}
+			if en := l.out.Layouts.Enums[key]; en != nil && en.BuiltinSource != "" {
+				return en.BuiltinSource, en.BuiltinSourceArgs
+			}
+		}
+		return x.Name, x.Args
+	default:
+		return typeNameOf(t), nil
+	}
 }
 
 // isVoidStdlibIntrinsic reports whether a stdlib intrinsic produces
@@ -6245,19 +6439,22 @@ func variantLookupPayloadType(l *lowerer, scrutT ir.Type, variant string, idx in
 	if isScalarPayload(scrutT) && idx == 0 {
 		return scrutT
 	}
-	// Builtin Option/Result heuristics
-	switch typeName {
+	// Builtin Option/Result heuristics, including monomorphized
+	// builtin enums whose surface name is `_ZTS...` but whose layout
+	// still records BuiltinSource/BuiltinSourceArgs.
+	source, args := l.builtinTypeShape(scrutT)
+	switch source {
 	case "Option", "Maybe":
-		if nt, ok := scrutT.(*ir.NamedType); ok && len(nt.Args) >= 1 {
-			return nt.Args[0]
+		if len(args) >= 1 {
+			return args[0]
 		}
 	case "Result":
-		if nt, ok := scrutT.(*ir.NamedType); ok && len(nt.Args) >= 2 {
+		if len(args) >= 2 {
 			if variant == "Ok" {
-				return nt.Args[0]
+				return args[0]
 			}
 			if variant == "Err" {
-				return nt.Args[1]
+				return args[1]
 			}
 		}
 	}
@@ -6589,6 +6786,17 @@ func okVariantName(t ir.Type) string {
 		return "Ok"
 	}
 	return "Ok"
+}
+
+func (l *lowerer) okVariantName(t ir.Type) string {
+	name, _ := l.builtinTypeShape(t)
+	switch name {
+	case "Option", "Maybe":
+		return "Some"
+	case "Result":
+		return "Ok"
+	}
+	return okVariantName(t)
 }
 
 func optionInnerType(t ir.Type) Type {

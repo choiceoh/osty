@@ -1581,9 +1581,9 @@ func ReachableBlocks(fn *Function) map[BlockID]bool {
 
 // ==== Diagnostics helper ====
 
-// Unsupported returns a sentinel error signalling that MIR lowering
-// has not implemented the given HIR shape. Callers use this to
-// decide whether to fall back to the HIR path.
+// Unsupported returns a sentinel error signalling that MIR lowering has not
+// implemented the given HIR shape. Backend entry treats these diagnostics as
+// incomplete MIR coverage.
 func Unsupported(format string, args ...any) error {
 	return fmt.Errorf("mir: unsupported: "+format, args...)
 }

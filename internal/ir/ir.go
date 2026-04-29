@@ -1183,8 +1183,9 @@ func (c *ChanSendStmt) At() Span { return c.SpanV }
 //
 // Tree is an optional pre-compiled decision tree (see decision.go). It
 // is nil when the lowerer skipped compilation (disabled, or a pattern
-// shape the tree compiler does not yet handle) — backends should then
-// fall back to arm-by-arm evaluation using Arms.
+// shape the tree compiler does not yet handle). Legacy HIR consumers
+// may interpret Arms directly; MIR backend entry treats a missing tree
+// that reaches MIR lowering as incomplete coverage.
 type MatchStmt struct {
 	Scrutinee Expr
 	Arms      []*MatchArm

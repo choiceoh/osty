@@ -1,14 +1,10 @@
 # MIR design (Osty compiler)
 
-Status: Stage 3.12 landed (composite map values + ABI fix); Stage 4 is the
-default backend dispatch for ordinary LLVM requests. The dispatcher now tries
-the native-owned slice first, then MIR-direct emission, and reports unsupported
-MIR shapes as an inspectable skeleton with a `backend-route` warning instead of
-silently retrying the legacy HIR→AST bridge. `internal/llvmgen`'s IR→AST bridge
-(`legacyFileFromModule`) stays live only for direct `GenerateModule` callers or
-entries that have no MIR projection. Stage 5 (Go fallback removal) is still
-deferred; the remaining gates are tracked in the dispatch matrix and checklist
-below.
+Status: Stage 4 full-coverage backend contract landed. Backend entry now treats
+any `mir.Lower` / `mir.Validate` issue as fatal incomplete MIR coverage, and the
+LLVM dispatcher no longer retries the legacy HIR→AST bridge. The old bridge
+still exists for direct `llvmgen.GenerateModule` callers and legacy parity tests,
+but production backend entry is MIR-owned after HIR monomorphization.
 
 ## Why a second IR
 
@@ -71,14 +67,11 @@ source
   → ir.Validate      (HIR invariants)
   → mir.Lower        (HIR → MIR)              ⟵ Stage 1 landed
   → mir.Validate     (MIR invariants)         ⟵ Stage 1 landed
-  → backend dispatch (Stage 4 default):
-      preflight: reject Go FFI / unknown runtime FFI before emitter selection
-      native-owned: TryGenerateNativeOwnedModule when eligible
-      mir-direct: llvmgen.GenerateFromMIR(Entry.MIR, opts)
-        └── on ErrUnsupported, emit skeleton + ErrLLVMNotImplemented
-            with `backend-route: mir-direct`
-      legacy-ir-bridge: llvmgen.GenerateModule(Entry.IR, opts)
-        └── last resort for direct callers / missing Entry.MIR only
+  → backend dispatch (Stage 4 full-coverage contract):
+      native-owned fast path may emit directly from Entry.IR
+      otherwise llvmgen.GenerateFromMIR(Entry.MIR, opts)
+      MIR lowering / validation issues fail PrepareEntry
+      GenerateFromMIR unsupported shapes render the normal unsupported skeleton
 ```
 
 MIR lowering runs *after* monomorphisation: every `TypeVar` is gone,
@@ -107,12 +100,15 @@ reason about generics.
 | Compound & multi-target assign   | yes                 | expanded to `BinaryRV` / tuple destructure (Stage 2a) |
 | Top-level global read            | yes (`IdentGlobal`) | `GlobalRefRV` (Stage 2a)                              |
 
-Anything in the "not yet" rows now surfaces as an unsupported backend
-diagnostic rather than a hidden retry through the old AST emitter. The backend
-dispatcher records the route in warnings and in the skeleton LLVM artifact so a
-coverage wall is visible at the same call site that hit it. As each feature
-gains a settled lowering, it moves from the "not yet" row into full MIR
-coverage and gets a route-sensitive regression test.
+Anything not covered by the rows above is a MIR coverage bug once it reaches
+backend entry. `mir.Lower` still records issue diagnostics on `MirModule`, but
+`PrepareEntry` treats a non-empty MIR issue list as fatal rather than dispatching
+to a HIR fallback.
+
+If the MIR emitter itself cannot handle a shape, the backend records the route
+in warnings and in the skeleton LLVM artifact so the coverage wall is visible at
+the same call site that hit it. As each feature gains a settled lowering, it
+moves into full MIR coverage and gets a route-sensitive regression test.
 
 ## Backend dispatch trace
 
@@ -134,8 +130,7 @@ for local diagnosis.
 |-------|---------------------|-----------------|-------|
 | `unsupported-preflight` | `UnsupportedDiagnosticForModule` rejects source-level backend gaps before concrete emitter selection | Skeleton LLVM IR + `ErrLLVMNotImplemented`; no legacy retry | `TestLLVMBackendUnsupportedSkeletonIncludesDispatchDebug` |
 | `native-owned` | default LLVM emit modes when the feature set allows it and no injected stdlib bodies are present | Full LLVM IR from `TryGenerateNativeOwnedModule`; decline falls through to MIR-direct | `TestEmitLLVMIRTextPrefersNativeOwnedFastPathWhenCovered`, `TestTryEmitNativeOwnedLLVMIRText*` |
-| `mir-direct` | every remaining normal backend request with `Entry.MIR != nil` | Full LLVM IR from `GenerateFromMIR`, or skeleton + `backend-route: mir-direct` on unsupported shape | `TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics`, `TestNativeToolchainMergedMIRPipelineIsClean` |
-| `legacy-ir-bridge` | direct `GenerateModule` callers, or a backend entry that lacks MIR | Transitional IR→AST bridge through `legacyFileFromModule` | `TestLLVMBackendDispatchTraceUsesLegacyRouteOnlyWhenMIRMissing`; new production coverage should not be added here |
+| `mir-direct` | every remaining normal backend request after native-owned declines, including malformed entries with missing MIR | Full LLVM IR from `GenerateFromMIR`, or skeleton + `backend-route: mir-direct` on unsupported shape | `TestLLVMBackendDispatchTraceReportsSelectedRoute`, `TestLLVMBackendMissingMIRDoesNotRetryLegacyIRBridge`, `TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics`, `TestNativeToolchainMergedMIRPipelineIsClean` |
 
 Route changes must update this table, `internal/backend/doc.go`, and any
 route-sensitive tests in the same patch.
@@ -148,7 +143,7 @@ gates that actually decide whether MIR-direct can emit a program.
 
 | Gate | Covered in MIR-direct | Still watched / next wall | Code anchor | Required guard |
 |------|-----------------------|---------------------------|-------------|----------------|
-| Backend route | `Entry.MIR != nil` routes normal backend requests to `mir-direct`; missing MIR is the only backend path to `legacy-ir-bridge` | Any `backend.Emit` request with MIR reaching `legacy-ir-bridge` is a regression | `internal/backend/llvm.go`: `generateLLVMIR`, `llvmFallbackDispatchRoute` | `TestLLVMBackendDispatchTraceReportsSelectedRoute`, `TestLLVMBackendDispatchTraceUsesLegacyRouteOnlyWhenMIRMissing` |
+| Backend route | Normal backend requests route to `mir-direct` after native-owned declines; missing MIR is an unsupported MIR contract violation, not a bridge escape hatch | Any `backend.Emit` request reaching the legacy HIR bridge is a regression | `internal/backend/llvm.go`: `generateLLVMIR`, `llvmFallbackDispatchRoute` | `TestLLVMBackendDispatchTraceReportsSelectedRoute`, `TestLLVMBackendMissingMIRDoesNotRetryLegacyIRBridge` |
 | Module / function envelope | Non-intrinsic fns with blocks, external stubs, global init fns walked through the same whitelist | Intrinsic fn declarations, empty non-external fns, unsupported global types | `checkSupported`, `checkFunctionSupported` | focused MIR emitter test or source-level backend fixture |
 | Type surface | Primitive ints / uints / byte / bool / char / floats / string / bytes / raw ptr / unit / never; builtin `List` / `Map` / `Set` / `ClosureEnv` / `Range`; declared struct and enum layouts; opaque runtime types (`Channel`, `Handle`, `Group`, `TaskGroup`, `Select`, `Duration`, `Rng`, `Gen`, `Never`); optionals, tuples, fn values | `ErrType` outside explicitly unused locals; named types without layout or runtime policy | `typeSupported`, `allowUnusedErrLocal` | type-specific backend smoke plus unsupported skeleton test |
 | Place / projection surface | `FieldProj`, `TupleProj`, `VariantProj`, `DerefProj` with declared type, `IndexProj` on `List` / `Map` / `String` bases | `IndexProj` on any other base; deref without a MIR type; future borrow/reference projections | `checkProjectionsSupported`, projection emit loop | projection-specific MIR test and source-level fixture |
@@ -418,9 +413,11 @@ a new one.
   - `ForWhile`: header block branches on cond to body or exit.
   - `ForRange`: allocate index local, initialise, header block does
     bounds check, body increments.
-  - `ForIn`: treated as unsupported for Stage-1 when the iterable is
-    not a built-in `List<T>`. For `List<T>` it lowers to an index-based
-    loop using `LenRV` and an `IndexProj` read.
+  - `ForIn`: `List<T>` lowers to an index-based loop using `LenRV`
+    and an `IndexProj` read; `Map<K, V>` lowers to a keys snapshot
+    loop and binds `(K, V)` tuples by reading `map[key]`; `Channel<T>`
+    lowers through `chan_recv` and exits on `None`. Other iterable
+    shapes are MIR coverage bugs at backend entry.
 - `MatchStmt`: use `ir.CompileDecisionTree` (when available) to drive
   the CFG. Each `DecisionSwitch` becomes a `SwitchInt` or a `Branch`
   cascade; `DecisionBind` becomes an assign with projection;
@@ -606,7 +603,11 @@ MIR tests isolated from front-end churn.
     lowerer now classifies the operand as `Option`- or `Result`-
     shaped and rebuilds the error value in the enclosing return
     type: `NullaryRV{NullaryNone}` for Option, an `AggregateRV{Err}`
-    that re-wraps the extracted `Err` payload for Result.
+    that re-wraps the extracted `Err` payload for Result. The
+    classifier uses monomorphization metadata (`BuiltinSource` /
+    `BuiltinSourceArgs`) so `_ZTS...Result...` and `_ZTS...Option...`
+    specializations keep the same propagation semantics as surface
+    `Result<T, E>` / `Option<T>`.
   - **Package / FFI qualified call fix.** `strings.Split(s, ",")`
     used to lower as `Split(strings, s, ",")` because the FieldExpr
     callee path treated the qualifier as a receiver. The lowerer now
@@ -755,9 +756,7 @@ MIR tests isolated from front-end churn.
     *mir.Module` and `MIRIssues []error` fields alongside the existing
     `IR` / `IRIssues`. After HIR monomorphization + validation, the
     pipeline calls `mir.Lower` on the monomorphic HIR and runs
-    `mir.Validate` on the result. MIR issues are collected as
-    warnings rather than blocking the dispatch — the HIR path remains
-    authoritative while the MIR emitter grows to parity.
+    `mir.Validate` on the result.
   - **`llvmgen.GenerateFromMIR(m, opts)`** is the new public entry
     point. It consumes a `*mir.Module` directly (no HIR→AST bridge)
     and emits textual LLVM IR via an alloca-per-local SSA scheme
@@ -766,22 +765,19 @@ MIR tests isolated from front-end churn.
     entry point. The backend dispatcher (`internal/backend/llvm.go`)
     runs the native-owned slice first when eligible, then prefers
     `GenerateFromMIR(entry.MIR, opts)` by default on every emit
-    mode — raw `llvm-ir`, object, binary. On `ErrUnsupported` the
-    dispatcher renders an unsupported skeleton and appends
-    `backend-route: mir-direct`; it does not silently retry
-    `GenerateModule(entry.IR, opts)` for ordinary backend requests.
-  - **Initial MVP coverage.** Primitive types (Int / UInt / Byte / Bool /
-    Char / Float{32,64} / String / Unit), functions with primitive
-    params + return types, `Assign` with Use/Unary/Binary/Const
-    rvalues, direct `Call` to `FnRef` callees, `IntrinsicPrint` /
-    `Println` (printf-backed), `Goto` / `Branch` / `SwitchInt` /
-    `Return` / `Unreachable` terminators. Anything outside the MVP
-    returns `ErrUnsupported` with a `mir-mvp` kind so the dispatcher
-    reports the uncovered route rather than producing malformed IR.
-    Structs, enums, tuples, lists, maps, optional/result values,
-    closures, and the concurrency family were follow-up scope from the
-    first MVP. The current coverage is the staged list below plus the
-    backend dispatch matrix above.
+    mode — raw `llvm-ir`, object, binary. The dispatcher no longer
+    retries `GenerateModule(entry.IR, opts)` behind the user's back;
+    unsupported MIR emission renders the standard unsupported skeleton.
+  - **Initial MVP coverage.** The first MIR emitter patch covered
+    primitive types (Int / UInt / Byte / Bool / Char / Float{32,64} /
+    String / Unit), primitive params + returns, `Assign` with
+    Use/Unary/Binary/Const rvalues, direct `Call` to `FnRef`,
+    print intrinsics, and the basic terminators. Later Stage 3 slices
+    expanded this to structs, enums, tuples, lists, maps,
+    optional/result values, closures, globals, and concurrency
+    intrinsics. Anything still outside emitter coverage now renders an
+    unsupported skeleton; backend dispatch does not retry the legacy
+    HIR bridge.
   - **Parity coverage.** Keep host-side MIR/LLVM tests focused on the
     Go/Osty boundary. New source-level MIR parity cases should prefer
     Osty fixtures and toolchain sources instead of rebuilding a broad
@@ -866,9 +862,9 @@ MIR tests isolated from front-end churn.
     match the legacy emitter's semantics; map values are widened
     into the ptr-sized slot through `toI64Slot` + `inttoptr` when
     the map value type is narrower than ptr.
-  - Composite list element types (structs, tuples, nested lists)
-    were outside this stage's coverage — the later bytes-v1 runtime
-    path expands this surface.
+  - Composite list element types originally stayed outside this stage; Stage
+    3.6 adds the bytes-v1 runtime path that covers them without a legacy
+    backend retry.
 
 - **Stage 3.4 (landed — non-capturing closures + indirect call).**
 
@@ -909,7 +905,7 @@ MIR tests isolated from front-end churn.
     so downstream projections (e.g. `xs[i].name`) compose without
     extra plumbing.
   - Composite list element types (structs, tuples, nested lists)
-    now route through the bytes-v1 fallback (Stage 3.6) rather than
+    now route through the bytes-v1 path (Stage 3.6) rather than
     falling back to the legacy path.
 
 - **Stage 3.6 (landed — composite list element types).**
@@ -967,11 +963,11 @@ MIR tests isolated from front-end churn.
     but out of scope here — the common cases (sorting / filtering
     / map-style callbacks consumed in-frame) work without heap.
 
-- **Stage 4 (landed — observable MIR-first IR emission).** The LLVM
-  backend prefers MIR-direct emission by default after the native-owned
-  fast path declines. Unsupported MIR shapes now produce an inspectable
-  skeleton and `ErrLLVMNotImplemented` with a `backend-route` warning;
-  they are no longer hidden by an automatic legacy bridge retry.
+- **Stage 4 (landed — MIR full-coverage backend contract).** The LLVM
+  backend prefers the MIR-direct emitter by default on every emit mode — raw
+  `llvm-ir`, object, binary. `PrepareEntry` fails if MIR lowering or validation
+  records issues, so unsupported language shapes cannot be hidden as warnings.
+  The dispatcher no longer falls back to the legacy HIR→AST bridge.
 
 - **Stage 3.9 (landed — concurrency intrinsic runtime mapping).**
   All MIR concurrency intrinsics emitted by the MIR lowerer now
@@ -1028,7 +1024,8 @@ MIR tests isolated from front-end churn.
     code executes.
   - `checkSupported` removes the old hard block; global init fns
     walk through the same `checkFunctionSupported` whitelist as
-    user fns so unsupported init shapes still trigger fallback.
+    user fns so unsupported init shapes still render an explicit unsupported
+    skeleton.
 
 - **Stage 3.11 (landed — GC roots / safepoints, opt-in).** Adds
   `Options.EmitGC` to `internal/llvmgen`. When set, the MIR emitter
@@ -1115,8 +1112,8 @@ MIR tests isolated from front-end churn.
 
   1. Capture the wall through the observable route first: reproduce with
      `OSTY_BACKEND_TRACE=1` or a `backend-route` warning, and record
-     whether the wall is `unsupported-preflight`, `native-owned`,
-     `mir-direct`, or `legacy-ir-bridge`.
+     whether the wall is `unsupported-preflight`, `native-owned`, or
+     `mir-direct`.
   2. Add or move coverage to the production route. Prefer MIR fixtures,
      source-level backend tests, or `TestNativeToolchainMergedMIRPipelineIsClean`;
      add direct legacy bridge tests only to pin deletion behavior.
@@ -1124,7 +1121,7 @@ MIR tests isolated from front-end churn.
      that changes dispatch behavior. If code says "skeleton", docs must
      not say "automatic fallback".
   4. Tighten the dispatch invariant: normal `backend.Emit` requests
-     should reach `legacy-ir-bridge` only when `Entry.MIR == nil`.
+     must not reach the legacy HIR bridge, even when `Entry.MIR == nil`.
      Add a route-sensitive test before relying on that invariant.
   5. Delete direct bridge dependencies in layers: first stop new calls
      to `GenerateModule` from backend entry points, then remove
@@ -1138,7 +1135,7 @@ MIR tests isolated from front-end churn.
 
   | Target | Current dependency | Exit condition | Guard before deletion |
   |--------|--------------------|----------------|-----------------------|
-  | Hidden backend retry | `internal/backend/llvm.go` route selection | Already removed for normal MIR-backed requests; keep missing-MIR route only as explicit bridge path | `TestLLVMBackendDispatchTraceReportsSelectedRoute`, `TestLLVMBackendDispatchTraceUsesLegacyRouteOnlyWhenMIRMissing` |
+  | Hidden backend retry | `internal/backend/llvm.go` route selection | Removed for normal MIR-backed requests and malformed missing-MIR entries | `TestLLVMBackendDispatchTraceReportsSelectedRoute`, `TestLLVMBackendMissingMIRDoesNotRetryLegacyIRBridge` |
   | Direct bridge entry | `llvmgen.GenerateModule` in `internal/llvmgen/ir_module.go` | No production caller needs `GenerateModule` for shapes outside `TryGenerateNativeOwnedModule`; direct callers either move to `GenerateFromMIR` or become tests of deleted behavior | `rg "GenerateModule" internal cmd toolchain` review plus route tests |
   | IR→AST bridge body | `legacyFileFromModule` and its side channels (`currentSpecializedBuiltin*`, lifted closure maps) | All runtime/stdlib metadata needed by MIR-direct or native-owned emitters has a non-AST representation | focused stdlib/backend tests for every side-channel family before removal |
   | In-package AST emitter tests | `generateFromAST` tests and legacy bridge fixtures | Equivalent source-level or MIR-direct tests exist for the behavior being preserved | move tests first, delete helper second |

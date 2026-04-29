@@ -4,7 +4,7 @@
 // The CLI routes native emission through this package so every backend
 // uses the same artifact / cache layout contract. The LLVM dispatcher
 // (llvm.go) consumes IR exclusively: Request.Entry.IR is the sole
-// semantic input it hands to llvmgen. Request.Entry.MIR is the optional
+// semantic input it hands to llvmgen. Request.Entry.MIR is the required
 // MIR projection prepared from that same IR for the MIR-direct emitter.
 // The dispatcher never falls back to Request.Entry.File when lowering
 // hits an unsupported shape.
@@ -18,8 +18,6 @@
 //     when the feature set allows it and no injected stdlib bodies are present.
 //   - `mir-direct`: every remaining normal backend request routes through
 //     MIR-direct emission.
-//   - `legacy-ir-bridge`: the legacy IR bridge is only a last resort for
-//     direct callers that provide no MIR.
 //
 // Unsupported input is not a fatal compiler crash and is not silently
 // retried through an older AST path. The backend writes an inspectable

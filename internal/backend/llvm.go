@@ -29,7 +29,6 @@ const (
 	llvmDispatchUnsupportedPreflight llvmDispatchRoute = "unsupported-preflight"
 	llvmDispatchNativeOwned          llvmDispatchRoute = "native-owned"
 	llvmDispatchMIRDirect            llvmDispatchRoute = "mir-direct"
-	llvmDispatchLegacyIRBridge       llvmDispatchRoute = "legacy-ir-bridge"
 )
 
 // LLVMBackend emits textual LLVM IR and can drive a host LLVM-compatible
@@ -206,19 +205,14 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 }
 
 func llvmFallbackDispatchRoute(opts llvmgen.Options, entry Entry) llvmDispatchRoute {
-	if opts.UseMIR && entry.MIR != nil {
+	if opts.UseMIR {
 		return llvmDispatchMIRDirect
 	}
-	return llvmDispatchLegacyIRBridge
+	return llvmDispatchMIRDirect
 }
 
 func emitLLVMFallback(route llvmDispatchRoute, entry Entry, opts llvmgen.Options) ([]byte, error) {
-	switch route {
-	case llvmDispatchMIRDirect:
-		return llvmgen.GenerateFromMIR(entry.MIR, opts)
-	default:
-		return llvmgen.GenerateModule(entry.IR, opts)
-	}
+	return llvmgen.GenerateFromMIR(entry.MIR, opts)
 }
 
 func renderUnsupportedLLVMIR(entry Entry, target string, emit EmitMode, warnings []error, diag llvmgen.UnsupportedDiagnostic, route llvmDispatchRoute) ([]byte, []error, error) {

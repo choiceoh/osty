@@ -15,13 +15,13 @@ import (
 // the default `GenerateModule` (legacy) emit path.
 //
 // Background: PR #329 wired ExportSymbol through the MIR pipeline
-// (`GenerateFromMIR`, opt-in via `Options.UseMIR`). Default callers
-// route through `GenerateModule` → `legacyFileFromModule` →
-// `generateASTFile`, which never knew about `#[export]`. This PR
-// adds a post-process step in `GenerateModule` that scans the IR
-// module for ExportSymbol-bearing fns and appends one alias line
-// per fn so the export symbol is link-resolvable without renaming
-// the underlying function (which would break in-module callers).
+// (`GenerateFromMIR`). Direct legacy callers still route through
+// `GenerateModule` → `legacyFileFromModule` → `generateASTFile`, which
+// never knew about `#[export]`. This PR adds a post-process step in
+// `GenerateModule` that scans the IR module for ExportSymbol-bearing fns
+// and appends one alias line per fn so the export symbol is link-resolvable
+// without renaming the underlying function (which would break in-module
+// callers).
 func TestLegacyExportAliasEmitsBothSymbols(t *testing.T) {
 	src := `
 #[export("osty.gc.legacy_v1")]

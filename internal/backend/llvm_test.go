@@ -961,8 +961,13 @@ func TestLLVMBackendDispatchTraceReportsSelectedRoute(t *testing.T) {
 	}
 }
 
-func TestLLVMBackendDispatchTraceUsesLegacyRouteOnlyWhenMIRMissing(t *testing.T) {
-	backend := LLVMBackend{toolchain: &fakeLLVMToolchain{}}
+// TestLLVMBackendMissingMIRDoesNotRetryLegacyIRBridge locks the MIR-full
+// coverage contract at the dispatcher boundary. A malformed Entry with IR but
+// no MIR must surface as an unsupported MIR skeleton rather than silently
+// retrying GenerateModule on the legacy HIR bridge.
+func TestLLVMBackendMissingMIRDoesNotRetryLegacyIRBridge(t *testing.T) {
+	tc := &fakeLLVMToolchain{}
+	backend := LLVMBackend{toolchain: tc}
 	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
     println(1)
 }
@@ -971,23 +976,42 @@ func TestLLVMBackendDispatchTraceUsesLegacyRouteOnlyWhenMIRMissing(t *testing.T)
 	req.Entry.MIR = nil
 
 	result, emitErr, trace := captureLLVMBackendTrace(t, backend, req)
-	if emitErr != nil {
-		t.Fatalf("Emit returned error: %v", emitErr)
+	if !errors.Is(emitErr, ErrLLVMNotImplemented) {
+		t.Fatalf("Emit error = %v, want ErrLLVMNotImplemented", emitErr)
 	}
-	if result == nil {
-		t.Fatal("Emit returned nil result")
+	if len(tc.irCompiles) != 0 || len(tc.cCompiles) != 0 || len(tc.links) != 0 {
+		t.Fatalf("toolchain should not run for LLVMIR skeleton emit: %+v %+v %+v", tc.irCompiles, tc.cCompiles, tc.links)
+	}
+	if result == nil || result.Artifacts.LLVMIR == "" {
+		t.Fatalf("result missing LLVMIR skeleton artifact: %+v", result)
 	}
 	for _, want := range []string{
 		"backend trace: llvm native-owned skipped",
-		"backend trace: llvm legacy-ir-bridge emit",
-		"backend trace: llvm legacy-ir-bridge succeeded",
+		"backend trace: llvm mir-direct emit",
+		"backend trace: llvm mir-direct unsupported",
 	} {
 		if !strings.Contains(trace, want) {
 			t.Fatalf("dispatch trace missing %q:\n%s", want, trace)
 		}
 	}
-	if strings.Contains(trace, "backend trace: llvm mir-direct emit") {
-		t.Fatalf("missing-MIR entry unexpectedly used MIR route:\n%s", trace)
+	if strings.Contains(trace, "legacy-ir-bridge") {
+		t.Fatalf("missing-MIR entry unexpectedly used legacy bridge route:\n%s", trace)
+	}
+	irBytes, readErr := os.ReadFile(result.Artifacts.LLVMIR)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
+	}
+	ir := string(irBytes)
+	if strings.Contains(ir, "define i32 @main") {
+		t.Fatalf("missing MIR unexpectedly retried legacy IR bridge:\n%s", ir)
+	}
+	for _, want := range []string{
+		"nil MIR module",
+		"backend-route: mir-direct",
+	} {
+		if !strings.Contains(ir, want) {
+			t.Fatalf("skeleton missing %q:\n%s", want, ir)
+		}
 	}
 }
 
@@ -1033,13 +1057,10 @@ func TestLLVMBackendDocsMentionDispatchRoutes(t *testing.T) {
 		},
 		string(llvmDispatchMIRDirect): {
 			"GenerateFromMIR",
+			"TestLLVMBackendDispatchTraceReportsSelectedRoute",
+			"TestLLVMBackendMissingMIRDoesNotRetryLegacyIRBridge",
 			"TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics",
 			"TestNativeToolchainMergedMIRPipelineIsClean",
-		},
-		string(llvmDispatchLegacyIRBridge): {
-			"GenerateModule",
-			"legacyFileFromModule",
-			"TestLLVMBackendDispatchTraceUsesLegacyRouteOnlyWhenMIRMissing",
 		},
 	}
 	for _, route := range sourceRoutes {
@@ -1074,9 +1095,10 @@ func TestLLVMBackendDocsMentionDispatchRoutes(t *testing.T) {
 		"TestLLVMBackendUnsupportedSkeletonIncludesDispatchDebug",
 		"TestEmitLLVMIRTextPrefersNativeOwnedFastPathWhenCovered",
 		"TestTryEmitNativeOwnedLLVMIRText*",
+		"TestLLVMBackendDispatchTraceReportsSelectedRoute",
+		"TestLLVMBackendMissingMIRDoesNotRetryLegacyIRBridge",
 		"TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics",
 		"TestNativeToolchainMergedMIRPipelineIsClean",
-		"TestLLVMBackendDispatchTraceUsesLegacyRouteOnlyWhenMIRMissing",
 		"TestLLVMBackendDocsMentionDispatchRoutes",
 	} {
 		if !functionNameOrPrefixExists(testFuncs, name) {
@@ -1318,7 +1340,7 @@ func containsString(values []string, want string) bool {
 // Paired with TestLLVMBackendBinaryMIRBackendStringCharsBytes: that
 // one locks in the actual runtime behavior through a linked binary
 // but needs clang and may be skipped. This one always runs and
-// catches silent fallback to the legacy bridge.
+// catches any silent departure from the MIR emitter.
 func TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics(t *testing.T) {
 	t.Parallel()
 
