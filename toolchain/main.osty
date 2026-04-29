@@ -1,0 +1,38 @@
+use std.env
+use std.os
+use std.process
+use std.strings
+
+fn forwardedArgs() -> List<String> {
+    let encoded = env.get("OSTY_SELF_REBUILD_FORWARD_ARGS") ?? ""
+    if encoded != "" {
+        let mut out: List<String> = []
+        for arg in strings.split(encoded, "\n") {
+            if arg != "" {
+                out.push(arg)
+            }
+        }
+        return out
+    }
+    env.args()
+}
+
+fn main() {
+    let host = env.get("OSTY_SELF_REBUILD_HOST_BIN") ?? ""
+    if host == "" {
+        process.abort("osty-self bootstrap needs OSTY_SELF_REBUILD_HOST_BIN")
+    }
+    let result = os.exec(host, forwardedArgs())
+    match result {
+        Ok(out) -> {
+            if out.stdout != "" {
+                print(out.stdout)
+            }
+            if out.stderr != "" {
+                eprint(out.stderr)
+            }
+            os.exit(out.exitCode)
+        },
+        Err(_) -> process.abort("osty-self bootstrap exec failed"),
+    }
+}

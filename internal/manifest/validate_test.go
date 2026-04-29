@@ -181,6 +181,47 @@ link = "m"
 	}
 }
 
+func TestParseCapabilitiesRuntime(t *testing.T) {
+	src := []byte(`
+[package]
+name = "toolchain"
+version = "1.0.0"
+edition = "0.5"
+
+[capabilities]
+runtime = true
+`)
+	m, err := Parse(src)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if m.Capabilities == nil || !m.Capabilities.Runtime {
+		t.Fatalf("capabilities = %#v, want runtime=true", m.Capabilities)
+	}
+	out := string(Marshal(m))
+	if !strings.Contains(out, "[capabilities]\nruntime = true\n") {
+		t.Fatalf("Marshal missing capabilities table:\n%s", out)
+	}
+}
+
+func TestParseCapabilitiesRejectsNonBool(t *testing.T) {
+	_, err := Parse([]byte(`
+[package]
+name = "demo"
+version = "1.0.0"
+edition = "0.5"
+
+[capabilities]
+runtime = "true"
+`))
+	if err == nil {
+		t.Fatal("Parse succeeded, want non-bool capabilities.runtime error")
+	}
+	if !strings.Contains(err.Error(), "capabilities.runtime") {
+		t.Fatalf("error = %q, want capabilities.runtime", err)
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

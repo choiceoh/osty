@@ -15,17 +15,17 @@ import (
 // from a full arena walker to just these two predicates after #770
 // ("refactor(check): drop Go-side §19 gate duplicates — Osty authoritative").
 
-// isPrivilegedPackage determines whether a resolver Package is
-// privileged under §19.2. The decision prefers the package's declared
-// path when available (via isPrivilegedPackagePath), then falls back
-// to the directory heuristic — `.../std/runtime/<anything>` on disk.
-// The manifest-capability path (`[capabilities] runtime = true`) is
-// read by the manifest loader and surfaced through a future
-// `Package.Capabilities` field; for now any `std/runtime` directory
-// shape is treated as privileged so the gate stays exercised against
-// the obvious fixtures.
+// isPrivilegedPackage determines whether a resolver Package is privileged under
+// §19.2. Toolchain packages can opt in with `[capabilities] runtime = true`;
+// std.runtime packages stay privileged by path.
 func isPrivilegedPackage(pkg *resolve.Package) bool {
-	if pkg == nil || pkg.Dir == "" {
+	if pkg == nil {
+		return false
+	}
+	if pkg.RuntimeCapability {
+		return true
+	}
+	if pkg.Dir == "" {
 		return false
 	}
 	// Normalize to forward slashes so the predicate is platform-agnostic.

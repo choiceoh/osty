@@ -44,6 +44,9 @@ type Package struct {
 	// nativeResolve caches the read-only selfhost resolve projection so
 	// host-side tools can reuse one native run across several queries.
 	nativeResolve nativeResolveCache
+	// RuntimeCapability is true when this package opted into the runtime
+	// sublanguage via `[capabilities] runtime = true` in osty.toml.
+	RuntimeCapability bool
 }
 
 // PackageFile bundles one parsed source file with the resolver outputs

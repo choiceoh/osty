@@ -23,7 +23,8 @@ type Request struct {
 }
 
 type PackageInput struct {
-	Files []PackageFile `json:"files,omitempty"`
+	Files             []PackageFile `json:"files,omitempty"`
+	RuntimeCapability bool          `json:"runtimeCapability,omitempty"`
 }
 
 type PackageFile struct {
@@ -126,7 +127,8 @@ func RequestFromPackage(entryPath string, pkg *resolve.Package) (Request, error)
 	return Request{
 		Path: entryPath,
 		Package: &PackageInput{
-			Files: files,
+			Files:             files,
+			RuntimeCapability: pkg.RuntimeCapability,
 		},
 	}, nil
 }

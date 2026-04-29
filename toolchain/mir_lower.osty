@@ -131,6 +131,20 @@ pub fn mirLowerSignatureDropReceiver(sig: MirLowerFnSignature) -> MirLowerFnSign
     }
 }
 
+pub struct MirLowerUseAliasFieldPath {
+    pub useIdx: Int,
+    pub parts: List<String>,
+    pub ok: Bool,
+}
+
+fn mirLowerUseAliasFieldPathInvalid() -> MirLowerUseAliasFieldPath {
+    MirLowerUseAliasFieldPath {
+        useIdx: -1,
+        parts: [],
+        ok: false,
+    }
+}
+
 // ====================================================================
 // Lowerer state
 // ====================================================================
@@ -3674,6 +3688,24 @@ fn mirLowerCallExprQualifiedIntrinsic(
     destT: HirType,
     span: MirSpan,
 ) -> Bool {
+    let nested = mirLowerUseAliasFieldPath(bs.l, callee)
+    if nested.ok {
+        let use_ = bs.l.useAliases[nested.useIdx]
+        if mirLowerStdlibNestedNamespacePath(use_, nested.parts) {
+            let name = strings.join(nested.parts, ".")
+            mirLowerEmitQualifiedCall(
+                bs,
+                e.callArgs,
+                use_,
+                name,
+                e.typ,
+                dest,
+                destT,
+                span,
+            )
+            return true
+        }
+    }
     if callee.fieldTarget.len() == 0 {
         return false
     }
@@ -3740,6 +3772,61 @@ fn mirLowerUseQualifier(use_: HirUseDecl) -> String {
     use_.rawPath
 }
 
+/// mirLowerUsePathQualifier returns the dotted source import path.
+/// This preserves `std.crypto` / `std.compress` even when the local
+/// alias is shorter (`crypto`, `compress`).
+fn mirLowerUsePathQualifier(use_: HirUseDecl) -> String {
+    if use_.path.len() == 0 {
+        return ""
+    }
+    strings.join(use_.path, ".")
+}
+
+/// mirLowerUseAliasFieldPath recognizes nested package namespace
+/// expressions like `crypto.hmac.sha256` and returns the field path
+/// after the leading use alias.
+fn mirLowerUseAliasFieldPath(l: MirLowerer, e: HirExpr) -> MirLowerUseAliasFieldPath {
+    if e.kind != HirExprField || e.fieldTarget.len() == 0 {
+        return mirLowerUseAliasFieldPathInvalid()
+    }
+    let recv = e.fieldTarget[0]
+    let mut nested = mirLowerUseAliasFieldPath(l, recv)
+    if nested.ok {
+        nested.parts.push(e.fieldName)
+        return nested
+    }
+    let useIdx = mirLowerUseAliasIndexForReceiver(l, recv)
+    if useIdx >= 0 {
+        return MirLowerUseAliasFieldPath {
+            useIdx,
+            parts: [e.fieldName],
+            ok: true,
+        }
+    }
+    mirLowerUseAliasFieldPathInvalid()
+}
+
+fn mirLowerStdlibNestedNamespacePath(use_: HirUseDecl, parts: List<String>) -> Bool {
+    if parts.len() < 2 {
+        return false
+    }
+    let qualifier = mirLowerUseQualifier(use_)
+    if qualifier == "crypto" || qualifier == "std.crypto" {
+        return parts[0] == "hmac"
+    }
+    if qualifier == "compress" || qualifier == "std.compress" {
+        return parts[0] == "gzip"
+    }
+    let pathQualifier = mirLowerUsePathQualifier(use_)
+    if pathQualifier == "std.crypto" {
+        return parts[0] == "hmac"
+    }
+    if pathQualifier == "std.compress" {
+        return parts[0] == "gzip"
+    }
+    false
+}
+
 fn mirLowerCallIdent(
     bs: MirLowerBodyState,
     e: HirExpr,
@@ -3784,7 +3871,12 @@ fn mirLowerVariantCtorCallInto(
             "mir_lower: keyword args in variant constructor \"" + callee.identName + "\" use source order",
         )
     }
-    let hintedT = mirLowerChooseVariantType(e.typ, destT)
+    let hintedT = if mirLowerIsPreludeVariantName(callee.identName)
+        && hirTypeIsValid(destT) && !hirTypeIsErr(destT) {
+        destT
+    } else {
+        mirLowerChooseVariantType(e.typ, destT)
+    }
     let variantT = mirLowerVariantValueType(bs.l, callee.identName, hintedT)
     let enumName = hirTypeNameOf(variantT)
     let variantIdx = if enumName != "" {
@@ -3866,6 +3958,33 @@ fn mirLowerDirectFnCall(
         dest,
         callee.identName,
         calleeTypeText,
+        operands,
+        span,
+    )
+    mirLowerEmitInstr(bs, instr)
+}
+
+fn mirLowerEmitQualifiedCall(
+    bs: MirLowerBodyState,
+    args: List<HirArg>,
+    use_: HirUseDecl,
+    name: String,
+    callT: HirType,
+    dest: MirPlace,
+    destT: HirType,
+    span: MirSpan,
+) {
+    let operands = mirLowerLowerCallArgsByTypes(
+        bs,
+        args,
+        mirLowerStdlibFreeFnParamTypes(mirLowerUsePathQualifier(use_), name),
+    )
+    let hasDest = !hirTypeIsUnit(destT)
+    let instr = mirCallInstr(
+        hasDest,
+        dest,
+        mirLowerQualifiedSymbol(use_, name),
+        hirTypeString(callT),
         operands,
         span,
     )
@@ -5202,6 +5321,26 @@ pub fn mirLowerMethodCallInto(
         mirLowerMethodCallQualified(bs, e, use_, dest, destT, span)
         return
     }
+    let nested = mirLowerUseAliasFieldPath(bs.l, recv)
+    if nested.ok {
+        let use_ = bs.l.useAliases[nested.useIdx]
+        let mut parts = nested.parts
+        parts.push(e.methodName)
+        if mirLowerStdlibNestedNamespacePath(use_, parts) {
+            let name = strings.join(parts, ".")
+            mirLowerEmitQualifiedCall(
+                bs,
+                e.methodArgs,
+                use_,
+                name,
+                e.typ,
+                dest,
+                destT,
+                span,
+            )
+            return
+        }
+    }
     let recvT = mirLowerRecoveredExprType(bs, recv)
     // 2. Concurrency method intrinsic (ch.recv() / h.join() /
     //    g.spawn(f) etc.) on runtime-owned receiver types.
@@ -5259,7 +5398,7 @@ fn mirLowerUseAliasIndexForReceiver(l: MirLowerer, recv: HirExpr) -> Int {
 
 /// mirLowerMethodCallQualified handles `pkg.fn(args)` shaped as a
 /// MethodCall where the receiver is a use alias (not a value). Emits
-/// a direct Fn call against the qualified symbol `pkg__fn` — no
+/// a direct Fn call against the qualified symbol `pkg.fn` — no
 /// synthetic `self` argument is inserted.
 ///
 /// Concurrency / runtime intrinsic detection is deferred to Stage
@@ -5279,39 +5418,29 @@ fn mirLowerMethodCallQualified(
                 + use_.alias + "." + e.methodName + "\"",
         )
     }
-    let symbol = mirLowerQualifiedSymbol(use_, e.methodName)
-    let operands = mirLowerLowerCallArgs(bs, e.methodArgs)
-    let hasDest = !hirTypeIsUnit(destT)
-    let calleeTypeText = hirTypeString(e.typ)
-    let instr = mirCallInstr(
-        hasDest,
-        dest,
-        symbol,
-        calleeTypeText,
-        operands,
-        span,
-    )
-    mirLowerEmitInstr(bs, instr)
+    mirLowerEmitQualifiedCall(bs, e.methodArgs, use_, e.methodName, e.typ, dest, destT, span)
 }
 
 /// mirLowerQualifiedSymbol renders a package-qualified call target.
 /// Matches Go's `qualifiedSymbol`: the use decl's qualifier joined
-/// by `__` with the method name. Use decls from `use go "..."`
-/// forms route through the goPath; ordinary imports use the alias.
+/// with `.` so backends can route package, Go FFI, and runtime calls
+/// before applying their own mangling.
 fn mirLowerQualifiedSymbol(use_: HirUseDecl, name: String) -> String {
-    let qualifier = if use_.isGoFFI && use_.goPath != "" {
-        use_.goPath
-    } else if use_.isRuntimeFFI && use_.runtimePath != "" {
+    let qualifier = if use_.isRuntimeFFI && use_.runtimePath != "" {
         use_.runtimePath
+    } else if use_.isGoFFI && use_.goPath != "" {
+        use_.goPath
+    } else if use_.rawPath != "" {
+        use_.rawPath
     } else if use_.alias != "" {
         use_.alias
     } else {
-        use_.rawPath
+        ""
     }
     if qualifier == "" {
         return name
     }
-    qualifier + "__" + name
+    qualifier + "." + name
 }
 
 /// mirLowerMethodCallUser handles user-defined methods on named
@@ -5917,6 +6046,12 @@ fn mirLowerStdlibBytesFreeFnReturnType(qualifier: String, name: String) -> HirTy
     hirTypeInvalid()
 }
 
+fn mirLowerStdlibFreeFnParamTypes(qualifier: String, name: String) -> List<HirType> {
+    let _ = qualifier
+    let _ = name
+    []
+}
+
 // ====================================================================
 // Stage 4e-4: Wire intrinsic fast paths into call lowering
 // ====================================================================
@@ -6404,14 +6539,20 @@ fn mirLowerDecisionLeaf(mc: MirLowerMatchContext, node: HirDecisionNode) {
 }
 
 fn mirLowerDecisionBind(mc: MirLowerMatchContext, node: HirDecisionNode) {
-    // Type: prefer the node's explicit bindType; else derive from
-    // projection walk.
-    let projType = if hirTypeIsValid(node.bindType) {
-        node.bindType
-    } else if node.bindHasProj {
+    // Type: derive from the projection walk first. Older decision
+    // trees may carry a broad bindType copied from the scrutinee; a
+    // concrete projection type is more precise for enum payloads.
+    let derivedType = if node.bindHasProj {
         mirLowerProjectionResultType(mc.bs.l, mc.scrutT, node.bindProj)
     } else {
         mc.scrutT
+    }
+    let projType = if hirTypeIsValid(derivedType) && !hirTypeIsErr(derivedType) {
+        derivedType
+    } else if hirTypeIsValid(node.bindType) {
+        node.bindType
+    } else {
+        derivedType
     }
     let place = if node.bindHasProj {
         mirLowerProjectionToPlace(mc.bs.l, mc.scrutLocal, mc.scrutT, node.bindProj)
@@ -6434,14 +6575,14 @@ fn mirLowerDecisionBind(mc: MirLowerMatchContext, node: HirDecisionNode) {
 }
 
 fn mirLowerDecisionGuard(mc: MirLowerMatchContext, node: HirDecisionNode) {
-    if !hirExprIsValid(node.guardCond) {
+    if node.guardCond.len() == 0 || !hirExprIsValid(node.guardCond[0]) {
         // Unconditional edge to Then (matches Go's `n.Cond == nil`).
         if node.guardThen.len() > 0 {
             mirLowerDecisionTree(mc, node.guardThen[0])
         }
         return
     }
-    let cond = mirLowerExprAsOperand(mc.bs, node.guardCond)
+    let cond = mirLowerExprAsOperand(mc.bs, node.guardCond[0])
     let thenBB = mirLowerNewBlock(mc.bs, mc.span)
     let elseBB = mirLowerNewBlock(mc.bs, mc.span)
     mirLowerTerminate(mc.bs, mirBranchTerm(cond, thenBB, elseBB, mc.span))
@@ -6740,17 +6881,27 @@ pub fn mirLowerProjectionToPlace(
             HirProjVariant -> {
                 let enumName = hirTypeNameOf(curT)
                 let variantIdx = mirLowerFindVariantIndex(l, enumName, hop.variant)
+                let payloadT = mirLowerVariantPayloadTypeForScrut(
+                    l,
+                    curT,
+                    enumName,
+                    hop.variant,
+                    0,
+                )
                 // Whole-payload projection: use fieldIdx = -1 sentinel
-                // (matches mir.osty's mirVariantProj convention).
-                let typeText = hirTypeString(curT)
+                // (matches mir.osty's mirVariantProj convention). The
+                // projection type is the payload, not the enum container.
+                let typeText = hirTypeString(payloadT)
                 out = mirPlaceProject(
                     out,
                     mirVariantProj(variantIdx, hop.variant, -1, typeText),
                 )
-                // curT does not change at the whole-variant step — nested
-                // VariantN hops re-read the variant name to pick a payload.
+                curT = payloadT
             },
             HirProjVariantN -> {
+                if mirLowerVariantNIsRedundantPayload(l, curT, hop.index) {
+                    continue
+                }
                 let enumName = hirTypeNameOf(curT)
                 let variantIdx = mirLowerFindVariantIndex(l, enumName, hop.variant)
                 let payloadT = mirLowerVariantPayloadType(l, enumName, hop.variant, hop.index)
@@ -6790,14 +6941,60 @@ pub fn mirLowerProjectionResultType(
                 let structName = hirTypeNameOf(curT)
                 curT = mirLowerStructFieldType(l, structName, hop.field)
             },
-            HirProjVariant -> {},
+            HirProjVariant -> {
+                let enumName = hirTypeNameOf(curT)
+                curT = mirLowerVariantPayloadTypeForScrut(
+                    l,
+                    curT,
+                    enumName,
+                    hop.variant,
+                    0,
+                )
+            },
             HirProjVariantN -> {
+                if mirLowerVariantNIsRedundantPayload(l, curT, hop.index) {
+                    continue
+                }
                 let enumName = hirTypeNameOf(curT)
                 curT = mirLowerVariantPayloadType(l, enumName, hop.variant, hop.index)
             },
         }
     }
     curT
+}
+
+fn mirLowerVariantNIsRedundantPayload(l: MirLowerer, t: HirType, idx: Int) -> Bool {
+    if idx != 0 {
+        return false
+    }
+    match t.kind {
+        HirTypePrim -> true,
+        HirTypeFn -> true,
+        HirTypeTuple -> true,
+        HirTypeNamed -> {
+            if t.namedName == "Option" || t.namedName == "Maybe" || t.namedName == "Result" {
+                return false
+            }
+            if mirLowerTypeIsKnownEnum(l, t.namedName) {
+                return false
+            }
+            true
+        },
+        HirTypeOptional -> false,
+        _ -> false,
+    }
+}
+
+fn mirLowerTypeIsKnownEnum(l: MirLowerer, name: String) -> Bool {
+    if name == "" {
+        return false
+    }
+    for e in l.enums {
+        if e.name == name {
+            return true
+        }
+    }
+    false
 }
 
 /// mirLowerFlattenProjection reverses the projection's linked-list

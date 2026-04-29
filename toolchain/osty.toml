@@ -6,4 +6,11 @@ description = "Self-hosting core algorithms ported to Osty."
 license = "MIT"
 keywords = ["toolchain", "semver", "registry", "manifest", "diagnostics", "ir", "lint", "resolve", "check", "docgen", "llvm"]
 
+[bin]
+name = "osty-self"
+path = "main.osty"
+
+[capabilities]
+runtime = true
+
 [dependencies]

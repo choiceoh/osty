@@ -90,6 +90,37 @@ func TestLowerFnDeclLowersStdlibNetTcpConnect(t *testing.T) {
 	}
 }
 
+func TestLowerFnDeclLowersStdlibPreludeResultConstructors(t *testing.T) {
+	out, issues := lowerStdlibFn(t, "zip", "file")
+	if out == nil {
+		t.Fatalf("LowerFnDecl returned nil for zip.file")
+	}
+	for _, issue := range issues {
+		t.Logf("non-fatal lowering issue: %v", issue)
+	}
+	foundOk := false
+	foundBareOkCall := false
+	Walk(VisitorFunc(func(n Node) bool {
+		switch x := n.(type) {
+		case *VariantLit:
+			if x.Variant == "Ok" {
+				foundOk = true
+			}
+		case *CallExpr:
+			if id, ok := x.Callee.(*Ident); ok && id.Name == "Ok" {
+				foundBareOkCall = true
+			}
+		}
+		return true
+	}), out)
+	if !foundOk {
+		t.Fatalf("zip.file did not lower Ok(...) to a VariantLit")
+	}
+	if foundBareOkCall {
+		t.Fatalf("zip.file still contains a bare Ok(...) call")
+	}
+}
+
 func lowerStdlibFn(t *testing.T, module, name string) (*FnDecl, []error) {
 	t.Helper()
 	reg := stdlib.LoadCached()

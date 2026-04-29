@@ -99,10 +99,9 @@ pub fn pmCompileArmBody(
 /// as a cascade of guards + leaves. The safe fallback for arms whose
 /// patterns the specialised compilers cannot handle.
 ///
-/// A guard with an invalid condition (represented here as a
-/// placeholder `hirExprInvalid` guardCond) means "unconditional
-/// take the Then branch" — the walker honours this form specifically
-/// for pattern-based arms whose guard is purely structural.
+/// A guard with no condition means "unconditional take the Then
+/// branch" — the walker honours this form specifically for
+/// pattern-based arms whose guard is purely structural.
 pub fn pmCompileArmChain(
     arms: List<HirMatchArm>,
     armStart: Int,

@@ -442,6 +442,20 @@ func TestLowerEnumMatch(t *testing.T) {
 	if out.Layouts.Enums["Maybe"] == nil {
 		t.Fatalf("expected Maybe layout entry")
 	}
+	score := out.Functions[0]
+	var payloadLocal *Local
+	for _, loc := range score.Locals {
+		if loc != nil && loc.Name == "x" {
+			payloadLocal = loc
+			break
+		}
+	}
+	if payloadLocal == nil {
+		t.Fatalf("expected payload binding local x in:\n%s", text)
+	}
+	if got := payloadLocal.Type.String(); got != "Int" {
+		t.Fatalf("payload binding x type = %s, want Int\n%s", got, text)
+	}
 	// Make sure no HIR-only node (e.g. MatchExpr/IfLetExpr/QuestionExpr)
 	// leaked through the printer output.
 	for _, forbidden := range []string{
@@ -1122,6 +1136,49 @@ func TestLowerCallExprWithFieldCallee(t *testing.T) {
 	text := Print(out)
 	if !strings.Contains(text, "call runtime.strings.Split(") {
 		t.Fatalf("expected qualified FieldExpr call, got:\n%s", text)
+	}
+}
+
+func TestLowerNestedUseAliasCallExprWithFieldCallee(t *testing.T) {
+	useDecl := &ir.UseDecl{
+		Path:    []string{"std", "crypto"},
+		RawPath: "std.crypto",
+		Alias:   "crypto",
+	}
+	bytesT := &ir.PrimType{Kind: ir.PrimBytes}
+	fn := &ir.FnDecl{
+		Name:   "digest",
+		Return: bytesT,
+		Params: []*ir.Param{
+			{Name: "key", Type: bytesT},
+			{Name: "msg", Type: bytesT},
+		},
+		Body: &ir.Block{
+			Result: &ir.CallExpr{
+				Callee: &ir.FieldExpr{
+					X: &ir.FieldExpr{
+						X:    &ir.Ident{Name: "crypto"},
+						Name: "hmac",
+						T:    &ir.NamedType{Name: "crypto"},
+					},
+					Name: "sha256",
+					T:    ir.ErrTypeVal,
+				},
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "key", Kind: ir.IdentParam, T: bytesT}},
+					{Value: &ir.Ident{Name: "msg", Kind: ir.IdentParam, T: bytesT}},
+				},
+				T: bytesT,
+			},
+		},
+	}
+	out := Lower(&ir.Module{Package: "main", Decls: []ir.Decl{useDecl, fn}})
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	if !strings.Contains(text, "call std.crypto.hmac.sha256(") {
+		t.Fatalf("expected nested qualified call, got:\n%s", text)
 	}
 }
 

@@ -74,8 +74,9 @@ func TestTryPackageUsesManagedBinaryWhenEnvUnset(t *testing.T) {
 	t.Cleanup(func() { ensureManagedBinary = oldEnsure })
 
 	pkg := &resolve.Package{
-		Dir:  "/tmp/demo",
-		Name: "demo",
+		Dir:               "/tmp/demo",
+		Name:              "demo",
+		RuntimeCapability: true,
 		Files: []*resolve.PackageFile{
 			{Path: "/tmp/demo/a.osty", Source: []byte("pub fn helper() -> Int { 1 }\n")},
 			{Path: "/tmp/demo/b.osty", Source: []byte("fn main() { println(helper()) }\n")},
@@ -109,6 +110,9 @@ func TestTryPackageUsesManagedBinaryWhenEnvUnset(t *testing.T) {
 	}
 	if got := req.Package.Files[1].Name; got != "b.osty" {
 		t.Fatalf("file[1].name = %q, want b.osty", got)
+	}
+	if !req.Package.RuntimeCapability {
+		t.Fatal("runtime capability was not forwarded")
 	}
 }
 

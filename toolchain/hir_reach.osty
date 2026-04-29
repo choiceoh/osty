@@ -356,7 +356,9 @@ fn hirReachDecision(out: List<HirQualifiedRef>, n: HirDecisionNode) {
             }
         },
         HirDecisionGuard -> {
-            hirReachExpr(out, n.guardCond)
+            if n.guardCond.len() > 0 {
+                hirReachExpr(out, n.guardCond[0])
+            }
             if n.guardThen.len() > 0 {
                 hirReachDecision(out, n.guardThen[0])
             }

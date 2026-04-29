@@ -120,3 +120,30 @@ fn main() {
 		t.Fatalf("after workspace LoadPackageNative: astbridge count = %d, want 0", got)
 	}
 }
+
+func TestLoadPackageForNativeReadsRuntimeCapability(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "osty.toml"), []byte(`[package]
+name = "toolchain"
+version = "1.0.0"
+edition = "0.5"
+
+[capabilities]
+runtime = true
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.osty"), []byte(`use runtime.strings as strings {
+    fn Split(s: String, sep: String) -> List<String>
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := LoadPackageForNative(dir)
+	if err != nil {
+		t.Fatalf("LoadPackageForNative: %v", err)
+	}
+	if !pkg.RuntimeCapability {
+		t.Fatal("RuntimeCapability = false, want true")
+	}
+}

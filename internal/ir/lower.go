@@ -1960,6 +1960,14 @@ func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
 				return l.lowerVariantCall(e, "", sym.Name)
 			}
 		}
+		// Stdlib body lowering sometimes runs with file-owned resolve
+		// data projected out of the cached registry. If a prelude
+		// constructor ref is absent from that lightweight projection,
+		// keep the source-level meaning instead of letting Ok/Err/Some
+		// degrade into unresolved function calls.
+		if isPreludeVariantName(id.Name) {
+			return l.lowerVariantCall(e, "", id.Name)
+		}
 	}
 	// Strip a turbofish wrapper to retain its type arguments.
 	var typeArgs []Type

@@ -2154,6 +2154,11 @@ func (bs *bodyState) lowerExprAsOperand(e ir.Expr) Operand {
 	case *ir.StringLit:
 		return bs.lowerStringLit(x)
 	case *ir.FieldExpr:
+		if rv, t, ok := bs.lowerQualifiedEnumVariantField(x, x.T); ok {
+			tmp := bs.freshTemp(t, exprSpan(x))
+			bs.emit(&AssignInstr{Dest: Place{Local: tmp}, Src: rv, SpanV: exprSpan(x)})
+			return &CopyOp{Place: Place{Local: tmp}, T: t}
+		}
 		if !x.Optional {
 			recvPlace, ok := bs.lowerExprToPlace(x.X)
 			if !ok {
@@ -2349,6 +2354,9 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 				if rt := stdlibFreeFnReturnType(pathQualifier(use), fx.Name); rt != nil {
 					return rt
 				}
+				if sig := useDeclFnType(use, fx.Name); sig != nil && sig.Return != nil && !isPoisonType(sig.Return) {
+					return sig.Return
+				}
 			}
 			// Otherwise rely on whatever FnType the FieldExpr carries.
 			if ct := fx.Type(); !isPoisonType(ct) {
@@ -2387,6 +2395,9 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 			}
 			if rt := stdlibFreeFnReturnType(pathQualifier(use), x.Name); rt != nil {
 				return rt
+			}
+			if sig := useDeclFnType(use, x.Name); sig != nil && sig.Return != nil && !isPoisonType(sig.Return) {
+				return sig.Return
 			}
 		}
 		recvT := bs.recoveredTypeOf(x.Receiver)
@@ -2840,6 +2851,35 @@ func stdlibFreeFnParamTypes(qualifier, name string) []ir.Type {
 	return nil
 }
 
+// useDeclFnType reports the inline signature for `use X { fn name(...) -> R }`
+// imports. Runtime FFI declarations use the same GoBody storage as the legacy
+// Go FFI bridge, so this gives MIR a single recovery path for both forms.
+func useDeclFnType(use *ir.UseDecl, name string) *ir.FnType {
+	if use == nil || name == "" {
+		return nil
+	}
+	for _, d := range use.GoBody {
+		fn, ok := d.(*ir.FnDecl)
+		if !ok || fn == nil || fn.Name != name {
+			continue
+		}
+		params := make([]ir.Type, 0, len(fn.Params))
+		for _, p := range fn.Params {
+			if p == nil || p.Type == nil {
+				params = append(params, ir.ErrTypeVal)
+				continue
+			}
+			params = append(params, ir.CloneType(p.Type))
+		}
+		ret := fn.Return
+		if ret == nil {
+			ret = TUnit
+		}
+		return &ir.FnType{Params: params, Return: ir.CloneType(ret)}
+	}
+	return nil
+}
+
 // builtinFreeCallReturnType recognises prelude-shaped free calls that
 // the frontend may synthesize from method syntax in suppressed type
 // contexts (notably string interpolation). `p.items.len()` can reach
@@ -2869,10 +2909,40 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 	case nil:
 		return &UseRV{Op: &ConstOp{Const: &UnitConst{}, T: TUnit}}
 	case *ir.UnaryExpr:
+		t := x.T
+		if isPoisonType(t) || irHasPoisonedTypeArg(t) || (x.Op != ir.UnNot && isUnit(t)) {
+			if !isPoisonType(hint) && !irHasPoisonedTypeArg(hint) && !isUnit(hint) {
+				t = hint
+			} else if rt := bs.recoverOperandType(x); rt != nil && !isPoisonType(rt) && !irHasPoisonedTypeArg(rt) && !(x.Op != ir.UnNot && isUnit(rt)) {
+				t = rt
+			} else if x.Op == ir.UnNot {
+				t = TBool
+			} else {
+				switch x.X.(type) {
+				case *ir.IntLit:
+					t = TInt
+				case *ir.FloatLit:
+					t = TFloat
+				}
+			}
+		}
+		arg := bs.lowerExprAsOperand(x.X)
+		if !isPoisonType(t) && !irHasPoisonedTypeArg(t) {
+			switch lit := x.X.(type) {
+			case *ir.IntLit:
+				v, _ := strconv.ParseInt(strings.ReplaceAll(lit.Text, "_", ""), 0, 64)
+				arg = &ConstOp{Const: &IntConst{Value: v, T: t}, T: t}
+			case *ir.FloatLit:
+				v, _ := strconv.ParseFloat(strings.ReplaceAll(lit.Text, "_", ""), 64)
+				arg = &ConstOp{Const: &FloatConst{Value: v, T: t}, T: t}
+			default:
+				arg = bs.lowerExprAsOperandHint(x.X, t)
+			}
+		}
 		return &UnaryRV{
 			Op:  mapUnaryOp(x.Op),
-			Arg: bs.lowerExprAsOperand(x.X),
-			T:   x.T,
+			Arg: arg,
+			T:   t,
 		}
 	case *ir.BinaryExpr:
 		// String + String + ... chains coalesce into a single
@@ -2920,6 +2990,9 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 			T:     x.T,
 		}
 	case *ir.FieldExpr:
+		if rv, _, ok := bs.lowerQualifiedEnumVariantField(x, hint); ok {
+			return rv
+		}
 		if !x.Optional {
 			// Plain field access; lower receiver into a place and
 			// project.
@@ -3016,6 +3089,56 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 	}
 	// Fallback: lower as operand and wrap in UseRV.
 	return &UseRV{Op: bs.lowerExprAsOperandHint(e, hint)}
+}
+
+func (bs *bodyState) lowerQualifiedEnumVariantField(x *ir.FieldExpr, hint Type) (RValue, Type, bool) {
+	t, idx, ok := bs.qualifiedEnumVariantFieldInfo(x, hint)
+	if !ok {
+		return nil, nil, false
+	}
+	return &AggregateRV{
+		Kind:       AggEnumVariant,
+		Fields:     nil,
+		T:          t,
+		VariantIdx: idx,
+		VariantTag: x.Name,
+	}, t, true
+}
+
+func (bs *bodyState) qualifiedEnumVariantFieldInfo(x *ir.FieldExpr, hint Type) (Type, int, bool) {
+	if x == nil || x.Optional {
+		return nil, 0, false
+	}
+	id, ok := x.X.(*ir.Ident)
+	if !ok || id == nil || id.Kind != ir.IdentTypeName || id.Name == "" {
+		return nil, 0, false
+	}
+	e := bs.l.enums[id.Name]
+	if e == nil {
+		return nil, 0, false
+	}
+	idx := -1
+	for i, v := range e.Variants {
+		if v != nil && v.Name == x.Name {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return nil, 0, false
+	}
+	t := x.T
+	if isPoisonType(t) || irHasPoisonedTypeArg(t) {
+		switch {
+		case hint != nil && !isPoisonType(hint) && typeNameOf(hint) == id.Name:
+			t = ir.CloneType(hint)
+		case id.T != nil && !isPoisonType(id.T) && typeNameOf(id.T) == id.Name:
+			t = ir.CloneType(id.T)
+		default:
+			t = &ir.NamedType{Name: id.Name}
+		}
+	}
+	return t, idx, true
 }
 
 // lowerExprToPlace tries to describe e as a Place without materialising
@@ -3883,6 +4006,21 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 				return
 			}
 		}
+		if use, parts, ok := bs.l.useAliasFieldPath(fx); ok && stdlibNestedNamespacePath(use, parts) {
+			name := strings.Join(parts, ".")
+			args := bs.orderArgsByTypes(c.Args, stdlibFreeFnParamTypes(pathQualifier(use), name))
+			destPtr := dest
+			if destPtr != nil && isUnit(destT) {
+				destPtr = nil
+			}
+			bs.emit(&CallInstr{
+				Dest:   destPtr,
+				Callee: &FnRef{Symbol: qualifiedSymbol(use, name), Type: c.T},
+				Args:   args,
+				SpanV:  c.SpanV,
+			})
+			return
+		}
 	}
 	if bs.lowerBuiltinVariantCallInto(c, dest, destT) {
 		return
@@ -4138,8 +4276,18 @@ func (bs *bodyState) resolveCall(c *ir.CallExpr) ([]Operand, Callee) {
 // encodes the qualifier, and the argument list does NOT include a
 // synthetic receiver.
 func (bs *bodyState) resolveQualifiedCall(use *ir.UseDecl, name string, t Type, args []ir.Arg) ([]Operand, Callee) {
-	out := bs.orderArgsByTypes(args, stdlibFreeFnParamTypes(pathQualifier(use), name))
-	return out, &FnRef{Symbol: qualifiedSymbol(use, name), Type: t}
+	paramTypes := stdlibFreeFnParamTypes(pathQualifier(use), name)
+	callType := t
+	if sig := useDeclFnType(use, name); sig != nil {
+		if len(paramTypes) == 0 {
+			paramTypes = sig.Params
+		}
+		if isPoisonType(callType) || irHasPoisonedTypeArg(callType) {
+			callType = sig
+		}
+	}
+	out := bs.orderArgsByTypes(args, paramTypes)
+	return out, &FnRef{Symbol: qualifiedSymbol(use, name), Type: callType}
 }
 
 // qualifiedSymbol returns the MIR-visible symbol for a package- or
@@ -4177,6 +4325,50 @@ func (l *lowerer) useAliasFor(e ir.Expr) *ir.UseDecl {
 		return nil
 	}
 	return l.useAliases[id.Name]
+}
+
+// useAliasFieldPath recognizes nested package-namespace expressions
+// like `crypto.hmac.sha256` or `compress.gzip.decode`. The returned
+// path excludes the leading use alias and preserves the remaining
+// field segments in source order.
+func (l *lowerer) useAliasFieldPath(e ir.Expr) (*ir.UseDecl, []string, bool) {
+	field, ok := e.(*ir.FieldExpr)
+	if !ok || field == nil {
+		return nil, nil, false
+	}
+	var parts []string
+	cur := field
+	for cur != nil {
+		parts = append([]string{cur.Name}, parts...)
+		if use := l.useAliasFor(cur.X); use != nil {
+			return use, parts, true
+		}
+		next, ok := cur.X.(*ir.FieldExpr)
+		if !ok {
+			return nil, nil, false
+		}
+		cur = next
+	}
+	return nil, nil, false
+}
+
+func stdlibNestedNamespacePath(use *ir.UseDecl, parts []string) bool {
+	if use == nil || len(parts) < 2 {
+		return false
+	}
+	switch qualifierOf(use) {
+	case "crypto", "std.crypto":
+		return parts[0] == "hmac"
+	case "compress", "std.compress":
+		return parts[0] == "gzip"
+	}
+	switch pathQualifier(use) {
+	case "std.crypto":
+		return parts[0] == "hmac"
+	case "std.compress":
+		return parts[0] == "gzip"
+	}
+	return false
 }
 
 // paramTypesOf extracts a parameter-type slice from an FnType, or nil
@@ -4284,6 +4476,21 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 	// a use alias, not a value — fast-path to a concurrency intrinsic
 	// when the qualifier targets `thread`, or emit a direct qualified
 	// call with no synthetic `self` argument otherwise.
+	if use, parts, ok := bs.l.useAliasFieldPath(mc.Receiver); ok && stdlibNestedNamespacePath(use, append(parts, mc.Name)) {
+		name := strings.Join(append(parts, mc.Name), ".")
+		args := bs.orderArgsByTypes(mc.Args, stdlibFreeFnParamTypes(pathQualifier(use), name))
+		destPtr := &dest
+		if isUnit(destT) {
+			destPtr = nil
+		}
+		bs.emit(&CallInstr{
+			Dest:   destPtr,
+			Callee: &FnRef{Symbol: qualifiedSymbol(use, name), Type: mc.T},
+			Args:   args,
+			SpanV:  mc.SpanV,
+		})
+		return
+	}
 	if use := bs.l.useAliasFor(mc.Receiver); use != nil {
 		if kind := concurrencyIntrinsicForFree(qualifierOf(use), mc.Name); kind != IntrinsicInvalid {
 			bs.emitConcurrencyIntrinsic(kind, mc.Args, &dest, destT, mc.SpanV)
@@ -6009,13 +6216,6 @@ func flattenProjection(p *ir.Projection) []*ir.Projection {
 }
 
 func variantLookupPayloadType(l *lowerer, scrutT ir.Type, variant string, idx int) Type {
-	// If the "scrutinee" at this level is already the payload's scalar
-	// (because a prior ProjVariant already descended past the payload
-	// tuple boundary), then a ProjVariantN at idx==0 is a redundant
-	// projection — just return the same type.
-	if isScalarPayload(scrutT) && idx == 0 {
-		return scrutT
-	}
 	typeName := typeNameOf(scrutT)
 	if typeName == "" {
 		return ir.ErrTypeVal
@@ -6034,6 +6234,16 @@ func variantLookupPayloadType(l *lowerer, scrutT ir.Type, variant string, idx in
 				}
 			}
 		}
+	}
+	// If the "scrutinee" at this level is already the payload's scalar
+	// (because a prior ProjVariant already descended past the payload
+	// tuple boundary), then a ProjVariantN at idx==0 is a redundant
+	// projection — just return the same type. This must run after enum
+	// lookup: user enum containers are NamedType too, and treating them
+	// as scalar would bind `Case(x)` as the whole enum instead of the
+	// payload.
+	if isScalarPayload(scrutT) && idx == 0 {
+		return scrutT
 	}
 	// Builtin Option/Result heuristics
 	switch typeName {

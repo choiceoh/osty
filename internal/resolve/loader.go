@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/osty/osty/internal/diag"
+	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/selfhost"
 )
 
@@ -74,7 +75,7 @@ func loadPackageForNativeWithTransform(dir string, transform SourceTransform, in
 }
 
 func loadPackageNativePaths(paths []string, dir, name string, transform SourceTransform) (*Package, error) {
-	pkg := &Package{Dir: dir, Name: name}
+	pkg := &Package{Dir: dir, Name: name, RuntimeCapability: packageRuntimeCapability(dir)}
 	for _, p := range paths {
 		src, err := os.ReadFile(p)
 		if err != nil {
@@ -92,4 +93,16 @@ func loadPackageNativePaths(paths []string, dir, name string, transform SourceTr
 		})
 	}
 	return pkg, nil
+}
+
+func packageRuntimeCapability(dir string) bool {
+	src, err := os.ReadFile(filepath.Join(dir, manifest.ManifestFile))
+	if err != nil {
+		return false
+	}
+	m, err := manifest.Parse(src)
+	if err != nil || m == nil || m.Capabilities == nil {
+		return false
+	}
+	return m.Capabilities.Runtime
 }

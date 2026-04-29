@@ -2110,6 +2110,35 @@ fn main() {
 	}
 }
 
+func TestLLVMBackendBinaryResultUnitErrUsesReturnContext(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `fn fail() -> Result<(), String> {
+    return Err("nope")
+}
+
+fn main() {
+    match fail() {
+        Ok(_) -> println(0),
+        Err(msg) -> println(msg),
+    }
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	output, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "nope\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
 func TestLLVMBackendBinaryLetStructPatternDestructuring(t *testing.T) {
 	parallelClangBackendTest(t)
 

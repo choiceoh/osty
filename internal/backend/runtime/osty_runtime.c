@@ -21400,6 +21400,32 @@ static osty_rt_os_string_result *osty_rt_os_string_error_result(const char *pref
     return out;
 }
 
+static char *osty_rt_os_cstr_dup(const char *value, const char *site) {
+    char decoded[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    const char *src = value == NULL ? "" : value;
+    size_t len;
+    char *out;
+    osty_rt_string_decode_to_buf_if_inline(&src, decoded);
+    len = strlen(src);
+    out = (char *)osty_rt_xmalloc(len + 1, site);
+    if (len != 0) {
+        memcpy(out, src, len);
+    }
+    out[len] = '\0';
+    return out;
+}
+
+static void osty_rt_os_argv_free(char **argv) {
+    int64_t i;
+    if (argv == NULL) {
+        return;
+    }
+    for (i = 0; argv[i] != NULL; i++) {
+        free(argv[i]);
+    }
+    free(argv);
+}
+
 #if defined(_WIN32)
 static char *osty_rt_os_win_strdup(const char *text, const char *site) {
     size_t n = text == NULL ? 0 : strlen(text);
@@ -21450,7 +21476,11 @@ static size_t osty_rt_os_win_quoted_len(const char *arg) {
     size_t n = 0;
     size_t backslashes = 0;
     bool needs_quotes = false;
-    const unsigned char *p = (const unsigned char *)(arg == NULL ? "" : arg);
+    char decoded[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    const char *arg_text = arg == NULL ? "" : arg;
+    const unsigned char *p;
+    osty_rt_string_decode_to_buf_if_inline(&arg_text, decoded);
+    p = (const unsigned char *)arg_text;
     if (*p == '\0') {
         return 2;
     }
@@ -21460,10 +21490,10 @@ static size_t osty_rt_os_win_quoted_len(const char *arg) {
         }
     }
     if (!needs_quotes) {
-        return strlen(arg);
+        return strlen(arg_text);
     }
     n = 2;
-    p = (const unsigned char *)(arg == NULL ? "" : arg);
+    p = (const unsigned char *)arg_text;
     for (; *p != '\0'; p++) {
         if (*p == '\\') {
             backslashes++;
@@ -21484,7 +21514,11 @@ static size_t osty_rt_os_win_quoted_len(const char *arg) {
 static char *osty_rt_os_win_append_quoted(char *dst, const char *arg) {
     size_t backslashes = 0;
     bool needs_quotes = false;
-    const unsigned char *p = (const unsigned char *)(arg == NULL ? "" : arg);
+    char decoded[OSTY_RT_SSO_DECODE_BUF_BYTES];
+    const char *arg_text = arg == NULL ? "" : arg;
+    const unsigned char *p;
+    osty_rt_string_decode_to_buf_if_inline(&arg_text, decoded);
+    p = (const unsigned char *)arg_text;
     if (*p == '\0') {
         *dst++ = '"';
         *dst++ = '"';
@@ -21496,12 +21530,12 @@ static char *osty_rt_os_win_append_quoted(char *dst, const char *arg) {
         }
     }
     if (!needs_quotes) {
-        size_t n = strlen(arg);
-        memcpy(dst, arg, n);
+        size_t n = strlen(arg_text);
+        memcpy(dst, arg_text, n);
         return dst + n;
     }
     *dst++ = '"';
-    p = (const unsigned char *)(arg == NULL ? "" : arg);
+    p = (const unsigned char *)arg_text;
     for (; *p != '\0'; p++) {
         if (*p == '\\') {
             backslashes++;
@@ -21689,17 +21723,17 @@ static char **osty_rt_os_build_posix_argv(const char *cmd, void *args, bool shel
     int64_t i;
     if (shell) {
         argv = (char **)osty_rt_xmalloc(sizeof(char *) * 4, "runtime.os.exec.argv");
-        argv[0] = (char *)"/bin/sh";
-        argv[1] = (char *)"-c";
-        argv[2] = (char *)(cmd == NULL ? "" : cmd);
+        argv[0] = osty_rt_os_cstr_dup("/bin/sh", "runtime.os.exec.argv.shell");
+        argv[1] = osty_rt_os_cstr_dup("-c", "runtime.os.exec.argv.shell");
+        argv[2] = osty_rt_os_cstr_dup(cmd, "runtime.os.exec.argv.shell");
         argv[3] = NULL;
         return argv;
     }
     argv = (char **)osty_rt_xmalloc(sizeof(char *) * (size_t)(arg_count + 2), "runtime.os.exec.argv");
-    argv[0] = (char *)(cmd == NULL ? "" : cmd);
+    argv[0] = osty_rt_os_cstr_dup(cmd, "runtime.os.exec.argv.cmd");
     for (i = 0; i < arg_count; i++) {
         char *arg = (char *)osty_rt_list_get_ptr(args, i);
-        argv[i + 1] = arg == NULL ? (char *)"" : arg;
+        argv[i + 1] = osty_rt_os_cstr_dup(arg, "runtime.os.exec.argv.arg");
     }
     argv[arg_count + 1] = NULL;
     return argv;
@@ -21799,7 +21833,7 @@ static osty_rt_os_exec_result *osty_rt_os_exec_posix(const char *cmd, void *args
         unlink(stderr_path);
         free(stdout_path);
         free(stderr_path);
-        free(argv);
+        osty_rt_os_argv_free(argv);
         return osty_rt_os_exec_error_result("failed to launch process", strerror(err), "runtime.os.exec.error");
     }
     if (pid == 0) {
@@ -21814,7 +21848,7 @@ static osty_rt_os_exec_result *osty_rt_os_exec_posix(const char *cmd, void *args
         if (shell) {
             execv("/bin/sh", argv);
         } else {
-            execvp(cmd, argv);
+            execvp(argv[0], argv);
         }
         {
             int err = errno;
@@ -21843,7 +21877,7 @@ static osty_rt_os_exec_result *osty_rt_os_exec_posix(const char *cmd, void *args
     if (sigchld_reset) {
         (void)sigaction(SIGCHLD, &old_sigchld, NULL);
     }
-    free(argv);
+    osty_rt_os_argv_free(argv);
     if (waited < 0) {
         unlink(stdout_path);
         unlink(stderr_path);

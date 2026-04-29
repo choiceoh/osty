@@ -46,6 +46,7 @@ type Manifest struct {
 	Registries      []Registry // [registries.<name>] entries
 	Workspace       *Workspace // non-nil when [workspace] is present
 	Lint            *Lint      // nil when [lint] absent; defaults apply
+	Capabilities    *Capabilities
 
 	// Profiles are the `[profile.<name>]` tables — custom build
 	// profile overrides or new profiles inheriting from the built-in
@@ -115,6 +116,13 @@ type Lint struct {
 	// Exclude is a list of path globs. Files matching any entry are
 	// skipped entirely by `osty lint`. `**` is a cross-segment wildcard.
 	Exclude []string
+}
+
+// Capabilities declares privileged package capabilities. These are intentionally
+// narrow and opt-in: ordinary packages do not get access to the runtime
+// sublanguage unless this table says so.
+type Capabilities struct {
+	Runtime bool
 }
 
 // Profile mirrors one `[profile.<name>]` table. The Has* flags
@@ -396,6 +404,26 @@ func Parse(src []byte) (*Manifest, error) {
 			}
 		}
 		m.Lint = lc
+	}
+	// [capabilities]
+	if capV, ok := root.get("capabilities"); ok {
+		if capV.Tbl == nil {
+			return nil, fmt.Errorf("osty.toml:%d: [capabilities] must be a table", capV.Line)
+		}
+		caps := &Capabilities{}
+		for _, k := range capV.Tbl.keys {
+			kv, _ := capV.Tbl.get(k)
+			switch k {
+			case "runtime":
+				if kv.Bool == nil {
+					return nil, fmt.Errorf("osty.toml:%d: capabilities.runtime must be a boolean", kv.Line)
+				}
+				caps.Runtime = *kv.Bool
+			default:
+				return nil, fmt.Errorf("osty.toml:%d: unknown key `%s` in [capabilities]", kv.Line, k)
+			}
+		}
+		m.Capabilities = caps
 	}
 	// [profile.<name>]
 	if profV, ok := root.get("profile"); ok {
@@ -927,6 +955,10 @@ func Marshal(m *Manifest) []byte {
 			writeStringArray(&b, "deny", m.Lint.Deny)
 		}
 	}
+	if m.Capabilities != nil {
+		b.WriteString("\n[capabilities]\n")
+		writeBool(&b, "runtime", m.Capabilities.Runtime)
+	}
 	return []byte(b.String())
 }
 
@@ -1016,6 +1048,10 @@ func writeStringArray(b *strings.Builder, key string, vals []string) {
 		fmt.Fprintf(b, "%q", v)
 	}
 	b.WriteString("]\n")
+}
+
+func writeBool(b *strings.Builder, key string, val bool) {
+	fmt.Fprintf(b, "%s = %t\n", key, val)
 }
 
 // FindUp searches cwd and each parent directory for osty.toml,

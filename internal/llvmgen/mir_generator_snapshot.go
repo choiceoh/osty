@@ -1140,11 +1140,38 @@ func mirEarliestAfterAny(input string, needles []string) int {
 // Osty: toolchain/mir_generator.osty (mirInjectBeforeFirstFn)
 func mirInjectBeforeFirstFn(body string, block string) string {
 	markers := []string{"define ", "declare "}
-	idx := mirEarliestAfterAny(body, markers)
+	idx := mirFirstDirectiveLine(body, markers)
 	if idx < 0 {
 		return body + block
 	}
 	return body[0:idx] + block + body[idx:]
+}
+
+func mirLineHasAnyPrefix(line string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if llvmStrings.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func mirFirstDirectiveLine(input string, prefixes []string) int {
+	n := len(input)
+	start := 0
+	for i := 0; i < n; i++ {
+		if input[i] != '\n' {
+			continue
+		}
+		if mirLineHasAnyPrefix(input[start:i], prefixes) {
+			return start
+		}
+		start = i + 1
+	}
+	if start < n && mirLineHasAnyPrefix(input[start:n], prefixes) {
+		return start
+	}
+	return -1
 }
 
 // Osty: toolchain/mir_generator.osty (mirJoinDeclareLines)
