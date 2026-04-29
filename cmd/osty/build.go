@@ -9,11 +9,11 @@ import (
 	"runtime"
 
 	"github.com/osty/osty/internal/backend"
-	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/pkgmgr"
 	"github.com/osty/osty/internal/profile"
+	ostyquery "github.com/osty/osty/internal/query/osty"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/stdlib"
@@ -27,11 +27,11 @@ import (
 //  2. Load + validate the manifest, rendering any E2xxx diagnostics.
 //  3. Resolve dependencies (osty.lock is read; regenerated if stale).
 //  4. Vendor deps into <project>/.osty/deps/<name>/.
-//  5. Run the front-end (parse + resolve + type-check + lint) across
-//     the project sources — as a workspace when [workspace] is present,
-//     as a single package otherwise.
-//  6. Emit the selected backend artifact (LLVM IR/object/binary)
-//     under .osty/out/<profile>[-<target>]/<backend>/.
+//  5. Seed the query graph with project sources, then run the front-end
+//     (parse + resolve + type-check + lint) across the graph — as a workspace
+//     when [workspace] is present, as a single package otherwise.
+//  6. Emit the selected backend artifact through the graph's Emit query
+//     (LLVM IR/object/binary) under .osty/out/<profile>[-<target>]/<backend>/.
 //  7. Record a backend-aware fingerprint under .osty/cache/ so an
 //     unchanged build can skip the front-end and backend work.
 //
@@ -323,36 +323,20 @@ func buildWorkspace(dir string, m *manifest.Manifest, flags cliFlags, deps resol
 			os.Exit(1)
 		}
 	}
-	graph := resolve.NewPackageGraph(ws)
-	results := resolve.ResolveGraph(graph)
-	checks := check.PackageGraph(graph, results, checkOpts())
-	paths := graph.PackagePaths()
-	anyErr := false
-	for _, p := range paths {
-		pkg := ws.Packages[p]
-		r, ok := results[p]
-		if !ok || pkg == nil {
-			continue
-		}
-		ds := append([]*diag.Diagnostic{}, r.Diags...)
-		if cr, ok := checks[p]; ok && cr != nil {
-			ds = append(ds, cr.Diags...)
-		}
-		printPackageDiags(pkg, ds, flags)
-		if hasError(ds) {
-			anyErr = true
-		}
-	}
-	if anyErr {
-		os.Exit(1)
-	}
+	eng, seeded := seedBuildWorkspaceEngine(ws)
+	printBuildWorkspaceQueryDiags(eng, seeded, flags)
+
 	// Emit the root binary package (if any). Library members fall out of the
 	// binary emit for now — multi-target workspace builds are tracked as
 	// emitter/backend parity work.
 	if m.HasPackage {
-		rootPkg := ws.Packages[""]
-		if rootPkg != nil {
-			return emitAndBuild(dir, m, graph, "", rootPkg, results[""], checks[""], resolved, feats, backendID, emitMode)
+		rootDir := ostyquery.NormalizePath(dir)
+		rw := eng.Queries.ResolveWorkspace.Get(eng.DB, seeded.Root)
+		if rw != nil && rw.PackageByDir(rootDir) != nil {
+			return emitAndBuildViaQuery(dir, m, eng, ostyquery.LowerKey{
+				WorkspaceRoot: seeded.Root,
+				Dir:           rootDir,
+			}, resolved, feats, backendID, emitMode)
 		}
 	}
 	return nil
@@ -378,170 +362,218 @@ func buildPackage(dir string, m *manifest.Manifest, flags cliFlags, deps resolve
 			fmt.Fprintf(os.Stderr, "osty build: %v\n", err)
 			os.Exit(1)
 		}
-		graph := resolve.NewPackageGraph(ws)
-		results := resolve.ResolveGraph(graph)
-		checks := check.PackageGraph(graph, results, checkOpts())
-		for _, key := range graph.PackagePaths() {
-			pkg := ws.Packages[key]
-			r := results[key]
-			if r == nil || pkg == nil {
-				continue
-			}
-			ds := append([]*diag.Diagnostic{}, r.Diags...)
-			if cr, ok := checks[key]; ok && cr != nil {
-				ds = append(ds, cr.Diags...)
-			}
-			printPackageDiags(pkg, ds, flags)
-			if hasError(ds) {
-				os.Exit(1)
-			}
-		}
-		rootPkg := ws.Packages[""]
-		if rootPkg != nil {
-			return emitAndBuild(dir, m, graph, "", rootPkg, results[""], checks[""], resolved, feats, backendID, emitMode)
+		eng, seeded := seedBuildWorkspaceEngine(ws)
+		printBuildWorkspaceQueryDiags(eng, seeded, flags)
+		rootDir := ostyquery.NormalizePath(dir)
+		rw := eng.Queries.ResolveWorkspace.Get(eng.DB, seeded.Root)
+		if rw != nil && rw.PackageByDir(rootDir) != nil {
+			return emitAndBuildViaQuery(dir, m, eng, ostyquery.LowerKey{
+				WorkspaceRoot: seeded.Root,
+				Dir:           rootDir,
+			}, resolved, feats, backendID, emitMode)
 		}
 		return nil
 	}
-	pkg, err := resolve.LoadPackageForNativeWithTransform(dir, aiRepairSourceTransform("osty build --airepair", os.Stderr, flags))
+	eng := ostyquery.NewEngine()
+	seeded, err := eng.SeedPackageDir(dir, aiRepairSourceTransform("osty build --airepair", os.Stderr, flags))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty build: %v\n", err)
 		os.Exit(1)
 	}
-	graph := resolve.NewPackageGraphForPackage("", pkg)
-	results := resolve.ResolveGraph(graph)
-	checks := check.PackageGraph(graph, results, checkOpts())
-	res := results[""]
-	chk := checks[""]
-	ds := append(append([]*diag.Diagnostic{}, res.Diags...), chk.Diags...)
+	rp := eng.Queries.ResolvePackage.Get(eng.DB, seeded.Dir)
+	chk := eng.Queries.CheckPackage.Get(eng.DB, seeded.Dir)
+	var pkg *resolve.Package
+	var res *resolve.PackageResult
+	if rp != nil {
+		pkg = rp.Package()
+		res = rp.PackageResult()
+	}
+	ds := append([]*diag.Diagnostic{}, resDiags(res)...)
+	if chk != nil {
+		ds = append(ds, chk.Diags...)
+	}
 	printPackageDiags(pkg, ds, flags)
 	if hasError(ds) {
 		os.Exit(1)
 	}
-	// Note: the no-deps path feeds a synthetic PackageResult because
-	// emitAndBuild expects a *resolve.PackageResult with Diags; we
-	// already have all of it from ResolvePackage above.
-	return emitAndBuild(dir, m, graph, "", pkg, res, chk, resolved, feats, backendID, emitMode)
+	return emitAndBuildViaQuery(dir, m, eng, ostyquery.LowerKey{
+		Dir: seeded.Dir,
+	}, resolved, feats, backendID, emitMode)
 }
 
-// emitAndBuild picks the entry file (manifest `[bin].path` or default
-// `main.osty`) and drives the selected native backend. Libraries (no entry file
-// on disk) are a no-op until the emitter grows package-per-package output.
-//
-// Files whose header declares `@feature: NAME` via the @feature
-// pragma are skipped when NAME isn't in the active feature set, so
-// feature-gated modules drop out before backend emission.
-//
-// A failure at the backend/toolchain step returns a non-zero exit; a gen-time
-// TODO marker is only logged so the clean portion remains inspectable.
-func emitAndBuild(root string, m *manifest.Manifest, graph *resolve.PackageGraph, packagePath string, pkg *resolve.Package, pr *resolve.PackageResult, chk *check.Result, resolved *profile.Resolved, feats map[string]bool, backendID backend.Name, emitMode backend.EmitMode) *backend.Result {
-	// 1. Locate the entry file. A library project has no entry;
-	// skip the emit path so `osty build` still works as a front-end
-	// check for libs.
+func seedBuildWorkspaceEngine(ws *resolve.Workspace) (*ostyquery.Engine, ostyquery.SeededWorkspace) {
+	eng := ostyquery.NewEngine()
+	seeded, err := eng.SeedLoadedWorkspace(ws)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty build: %v\n", err)
+		os.Exit(1)
+	}
+	return eng, seeded
+}
+
+func printBuildWorkspaceQueryDiags(eng *ostyquery.Engine, seeded ostyquery.SeededWorkspace, flags cliFlags) {
+	rw := eng.Queries.ResolveWorkspace.Get(eng.DB, seeded.Root)
+	cw := eng.Queries.CheckWorkspace.Get(eng.DB, seeded.Root)
+	if rw == nil {
+		return
+	}
+	anyErr := false
+	for _, member := range seeded.Packages {
+		pkg := rw.PackageByDir(member.Dir)
+		if pkg == nil {
+			continue
+		}
+		var ds []*diag.Diagnostic
+		if pr := rw.ResultByDir(member.Dir); pr != nil {
+			ds = append(ds, pr.Diags...)
+		}
+		if cw != nil {
+			if cr := cw.ResultByDir(member.Dir); cr != nil {
+				ds = append(ds, cr.Diags...)
+			}
+		}
+		printPackageDiags(pkg, ds, flags)
+		if hasError(ds) {
+			anyErr = true
+		}
+	}
+	if anyErr {
+		os.Exit(1)
+	}
+}
+
+func resDiags(res *resolve.PackageResult) []*diag.Diagnostic {
+	if res == nil {
+		return nil
+	}
+	return res.Diags
+}
+
+func emitAndBuildViaQuery(root string, m *manifest.Manifest, eng *ostyquery.Engine, lower ostyquery.LowerKey, resolved *profile.Resolved, feats map[string]bool, backendID backend.Name, emitMode backend.EmitMode) *backend.Result {
+	profileName, triple := resolvedKey(resolved)
+	binName := buildBinaryNameForEmit(m, resolved, triple, emitMode)
+	emitResult := emitViaQuery("build", root, m, eng, lower, resolved, feats, backendID, emitMode, binName)
+	if emitResult == nil {
+		return nil
+	}
+	return finishBuildEmitResult(backendID, emitMode, emitResult, profileName)
+}
+
+func emitViaQuery(command string, root string, m *manifest.Manifest, eng *ostyquery.Engine, lower ostyquery.LowerKey, resolved *profile.Resolved, feats map[string]bool, backendID backend.Name, emitMode backend.EmitMode, binName string) *backend.Result {
+	commandName := "osty " + command
 	entryRel := "main.osty"
 	if m != nil && m.Bin != nil && m.Bin.Path != "" {
 		entryRel = m.Bin.Path
 	}
 	entryAbs := filepath.Join(root, entryRel)
 	if _, err := os.Stat(entryAbs); err != nil {
-		// Library or deferred binary: emit step is a no-op.
 		return nil
 	}
-	// 2. Feature-pragma filter: don't emit a file whose pragma
-	// requires an inactive feature. If the entry file is gated out
-	// the whole build degrades to front-end only.
 	if skipped, reason := fileIsFeatureGated(entryAbs, feats); skipped {
-		fmt.Fprintf(os.Stderr, "osty build: skipping %s (feature %q not enabled)\n",
+		fmt.Fprintf(os.Stderr, "%s: skipping %s (feature %q not enabled)\n",
+			commandName,
 			entryRel, reason)
 		return nil
 	}
-	// 3. Find the PackageFile matching entryAbs so we can pass AST +
-	// Refs into gen.
-	var entryFile *resolve.PackageFile
+
+	pkg := queryPackageForLowerKey(eng, lower)
+	if pkg == nil {
+		fmt.Fprintf(os.Stderr, "%s: package %s not in query graph\n", commandName, lower.Dir)
+		os.Exit(1)
+	}
 	absEntry, _ := filepath.Abs(entryAbs)
+	entryInPackage := false
 	for _, pf := range pkg.Files {
+		if pf == nil {
+			continue
+		}
 		if fp, _ := filepath.Abs(pf.Path); fp == absEntry {
-			entryFile = pf
+			entryInPackage = true
 			break
 		}
 	}
-	if entryFile == nil {
-		fmt.Fprintf(os.Stderr, "osty build: entry %s not in package\n", entryRel)
+	if !entryInPackage {
+		fmt.Fprintf(os.Stderr, "%s: entry %s not in package\n", commandName, entryRel)
 		os.Exit(1)
 	}
-	// 4. Transpile. Unsupported lowering shapes produce TODO markers;
-	// we log the warning but proceed so simple programs build. Package
-	// lowering is now the default even for single-file packages so the
-	// build path has one consistent backend entry contract.
-	if chk == nil {
-		chk = &check.Result{}
-	}
+
 	profileName, triple := resolvedKey(resolved)
-	binName := ""
-	if emitMode == backend.EmitBinary {
-		// Binary filename policy lives in toolchain/runner.osty —
-		// base name + optional -<triple> + optional .exe are all a
-		// function of (manifest, target, host). See internal/runner.
-		binBaseOverride := ""
-		pkgName := ""
-		if m != nil {
-			if m.Bin != nil {
-				binBaseOverride = m.Bin.Name
-			}
-			pkgName = m.Package.Name
-		}
-		targetOS := ""
-		if resolved.Target != nil {
-			targetOS = resolved.Target.OS
-		}
-		binName = runner.BuildBinaryName(binBaseOverride, pkgName, triple, targetOS, runtime.GOOS)
-	}
-	selectedBackend := backendFromCLI("build", backendID)
 	layout := backend.Layout{
 		Root:    root,
 		Profile: profileName,
 		Target:  triple,
 	}
+	features := resolvedFeatures(resolved)
+
 	if backendID == backend.NameLLVM {
-		if emitResult, usedExternal, err := tryExternalPackageLLVMArtifacts(context.Background(), emitMode, layout, binName, resolved.Features, entryAbs, pkg); usedExternal {
+		if emitResult, usedExternal, err := tryExternalPackageLLVMArtifacts(context.Background(), emitMode, layout, binName, features, entryAbs, pkg); usedExternal {
 			if err != nil {
-				exitBackendEmitError("build", emitResult, err)
+				exitBackendEmitError(command, emitResult, err)
 			}
-			switch emitMode {
-			case backend.EmitBinary:
-				if emitResult.Artifacts.Binary != "" {
-					fmt.Printf("Built %s (%s)\n", emitResult.Artifacts.Binary, profileName)
-					return emitResult
-				}
-			case backend.EmitObject:
-				if emitResult.Artifacts.Object != "" {
-					fmt.Printf("Generated %s (%s)\n", emitResult.Artifacts.Object, profileName)
-					return emitResult
-				}
-			case backend.EmitLLVMIR:
-				if artifact := emitResult.Artifacts.SourcePath(); artifact != "" {
-					fmt.Printf("Generated %s (%s)\n", artifact, profileName)
-					return emitResult
-				}
-			}
+			return emitResult
 		}
 	}
-	if graph == nil {
-		graph = resolve.NewPackageGraphForPackage(packagePath, pkg)
+
+	lower.PackageName = "main"
+	lower.SourcePath = entryAbs
+	lower.EntryPath = entryAbs
+	target := ostyquery.NewEmitTarget(lower, backendID, emitMode, layout, binName, features)
+	emitted := eng.Queries.Emit.Get(eng.DB, target)
+	if emitted.Err != nil {
+		exitBackendEmitError(command, emitted.Result, emitted.Err)
 	}
-	entry, err := backend.PrepareGraphPackage("main", entryAbs, graph, packagePath, entryFile, chk)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "osty build: %v\n", err)
+	return emitted.Result
+}
+
+func queryPackageForLowerKey(eng *ostyquery.Engine, lower ostyquery.LowerKey) *resolve.Package {
+	if lower.WorkspaceRoot != "" {
+		lower.WorkspaceRoot = ostyquery.NormalizePath(lower.WorkspaceRoot)
+	}
+	lower.Dir = ostyquery.NormalizePath(lower.Dir)
+	if lower.WorkspaceRoot != "" {
+		rw := eng.Queries.ResolveWorkspace.Get(eng.DB, lower.WorkspaceRoot)
+		if rw == nil {
+			return nil
+		}
+		return rw.PackageByDir(lower.Dir)
+	}
+	rp := eng.Queries.ResolvePackage.Get(eng.DB, lower.Dir)
+	if rp == nil {
+		return nil
+	}
+	return rp.Package()
+}
+
+func buildBinaryNameForEmit(m *manifest.Manifest, resolved *profile.Resolved, triple string, emitMode backend.EmitMode) string {
+	if emitMode != backend.EmitBinary {
+		return ""
+	}
+	binBaseOverride := ""
+	pkgName := ""
+	if m != nil {
+		if m.Bin != nil {
+			binBaseOverride = m.Bin.Name
+		}
+		pkgName = m.Package.Name
+	}
+	targetOS := ""
+	if resolved != nil && resolved.Target != nil {
+		targetOS = resolved.Target.OS
+	}
+	return runner.BuildBinaryName(binBaseOverride, pkgName, triple, targetOS, runtime.GOOS)
+}
+
+func resolvedFeatures(r *profile.Resolved) []string {
+	if r == nil {
+		return nil
+	}
+	return r.Features
+}
+
+func finishBuildEmitResult(backendID backend.Name, emitMode backend.EmitMode, emitResult *backend.Result, profileName string) *backend.Result {
+	if emitResult == nil {
+		fmt.Fprintf(os.Stderr, "osty build: backend %q emit %q did not produce a buildable artifact\n", backendID, emitMode)
 		os.Exit(1)
-	}
-	emitResult, err := selectedBackend.Emit(context.Background(), backend.Request{
-		Layout:     layout,
-		Emit:       emitMode,
-		Entry:      entry,
-		BinaryName: binName,
-		Features:   resolved.Features,
-	})
-	if err != nil {
-		exitBackendEmitError("build", emitResult, err)
 	}
 	switch emitMode {
 	case backend.EmitBinary:

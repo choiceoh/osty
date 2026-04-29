@@ -1,8 +1,9 @@
 // Package osty wires the Osty compiler pipeline into the generic
 // query engine in [github.com/osty/osty/internal/query]. Callers
-// (LSP, CLI) construct an [Engine], seed inputs (SourceText,
-// PackageFiles, WorkspaceMembers), and pull results via typed query
-// handles (Parse, ResolvePackage, CheckFile, FileDiagnostics, etc.).
+// (LSP, CLI, build daemons) construct an [Engine], seed inputs
+// (SourceText, PackageFiles, WorkspaceMembers / WorkspacePackages), and pull
+// results via typed query handles (Parse, ResolvePackage, CheckFile,
+// LowerIRPackage, LowerMIRPackage, Emit, FileDiagnostics, etc.).
 //
 // # Input seams
 //

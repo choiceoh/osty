@@ -56,9 +56,30 @@ func PrepareEntry(packageName, sourcePath string, file *ast.File, res *resolve.R
 	if file == nil {
 		return entry, fmt.Errorf("backend: nil source file")
 	}
+	entry, err := LowerEntryIR(packageName, sourcePath, file, res, chk)
+	if err != nil {
+		return entry, err
+	}
+	return LowerEntryMIR(entry)
+}
+
+// LowerEntryIR lowers a checked single-file front-end result into optimized,
+// validated HIR. It intentionally stops before MIR so incremental callers can
+// cache lowerIR(package) and lowerMIR(package) as separate query nodes.
+func LowerEntryIR(packageName, sourcePath string, file *ast.File, res *resolve.Result, chk *check.Result) (Entry, error) {
+	entry := Entry{
+		PackageName: packageName,
+		SourcePath:  sourcePath,
+		File:        file,
+		Resolve:     res,
+		Check:       chk,
+	}
+	if file == nil {
+		return entry, fmt.Errorf("backend: nil source file")
+	}
 	mod, issues := ir.Lower(packageName, file, res, chk)
 	entry.IRIssues = append(entry.IRIssues, issues...)
-	return finalizeEntryModule(entry, mod)
+	return finalizeEntryIR(entry, mod)
 }
 
 // mirOptimizeEnabled reports whether `PrepareEntry` should call
@@ -91,6 +112,17 @@ func mirOptimizeEnabled() bool {
 // When entryFile is nil the first file in pkg.Files acts as the
 // diagnostic anchor.
 func PreparePackage(packageName, sourcePath string, pkg *resolve.Package, entryFile *resolve.PackageFile, chk *check.Result) (Entry, error) {
+	entry, err := LowerPackageIR(packageName, sourcePath, pkg, entryFile, chk)
+	if err != nil {
+		return entry, err
+	}
+	return LowerEntryMIR(entry)
+}
+
+// LowerPackageIR is the multi-file analogue of LowerEntryIR. It lowers every
+// file in a resolved package into one optimized, validated HIR module and
+// leaves MIR construction to LowerEntryMIR.
+func LowerPackageIR(packageName, sourcePath string, pkg *resolve.Package, entryFile *resolve.PackageFile, chk *check.Result) (Entry, error) {
 	if pkg == nil {
 		return Entry{}, fmt.Errorf("backend: nil package")
 	}
@@ -119,13 +151,22 @@ func PreparePackage(packageName, sourcePath string, pkg *resolve.Package, entryF
 	if mod == nil {
 		return entry, fmt.Errorf("backend: ir.LowerPackage returned nil module")
 	}
-	return finalizeEntryModule(entry, mod)
+	return finalizeEntryIR(entry, mod)
 }
 
 // PrepareGraphPackage lowers one package selected from a first-class
 // PackageGraph. It is the graph-native spelling of PreparePackage and lets
 // build orchestrators keep the compile target explicit through backend setup.
 func PrepareGraphPackage(packageName, sourcePath string, graph *resolve.PackageGraph, packagePath string, entryFile *resolve.PackageFile, chk *check.Result) (Entry, error) {
+	entry, err := LowerGraphPackageIR(packageName, sourcePath, graph, packagePath, entryFile, chk)
+	if err != nil {
+		return entry, err
+	}
+	return LowerEntryMIR(entry)
+}
+
+// LowerGraphPackageIR is the PackageGraph analogue of LowerPackageIR.
+func LowerGraphPackageIR(packageName, sourcePath string, graph *resolve.PackageGraph, packagePath string, entryFile *resolve.PackageFile, chk *check.Result) (Entry, error) {
 	if graph == nil {
 		return Entry{}, fmt.Errorf("backend: nil package graph")
 	}
@@ -133,15 +174,15 @@ func PrepareGraphPackage(packageName, sourcePath string, graph *resolve.PackageG
 	if pkg == nil {
 		return Entry{}, fmt.Errorf("backend: graph package %q not found", packagePath)
 	}
-	return PreparePackage(packageName, sourcePath, pkg, entryFile, chk)
+	return LowerPackageIR(packageName, sourcePath, pkg, entryFile, chk)
 }
 
-// finalizeEntryModule runs the post-lowering pipeline (stdlib injection
-// gate, monomorphize, validate, MIR lowering + optional optimize +
-// validate) shared by PrepareEntry and PreparePackage. Splitting this
-// out keeps the two entry points in lock-step: any new pass added here
-// applies to both single-file and multi-file builds at the same time.
-func finalizeEntryModule(entry Entry, mod *ir.Module) (Entry, error) {
+// finalizeEntryIR runs the post-HIR-lowering pipeline (stdlib injection gate,
+// monomorphize, optimize, validate) shared by LowerEntryIR and LowerPackageIR.
+// Splitting MIR into LowerEntryMIR lets the incremental query graph cache the
+// HIR and MIR boundaries independently without changing PrepareEntry /
+// PreparePackage behavior for existing callers.
+func finalizeEntryIR(entry Entry, mod *ir.Module) (Entry, error) {
 	if stdlibBodyLoweringEnabled() {
 		reg := stdlib.LoadCached()
 		injected, injectionErrs := injectReachableStdlibBodies(mod, reg)
@@ -167,7 +208,15 @@ func finalizeEntryModule(entry Entry, mod *ir.Module) (Entry, error) {
 		entry.IRIssues = append(entry.IRIssues, validateErrs...)
 		return entry, errors.Join(validateErrs...)
 	}
-	mirMod := mir.Lower(mod)
+	return entry, nil
+}
+
+// LowerEntryMIR lowers an already-valid HIR backend entry into MIR, applies the
+// optional MIR optimizer, and records MIR validation findings as entry warnings.
+// Any MIR coverage issue is fatal because backend dispatch no longer retries a
+// legacy HIR path.
+func LowerEntryMIR(entry Entry) (Entry, error) {
+	mirMod := mir.Lower(entry.IR)
 	if mirMod == nil {
 		return entry, errors.Join(ErrMIRCoverageIncomplete, fmt.Errorf("mir.Lower returned nil module"))
 	}

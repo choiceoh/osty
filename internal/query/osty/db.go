@@ -58,16 +58,21 @@ func newLazyStdlibProvider() resolve.StdlibProvider {
 }
 
 func (p *lazyStdlibProvider) LookupPackage(dotPath string) *resolve.Package {
+	reg := p.registry()
+	if reg == nil {
+		return nil
+	}
+	return reg.LookupPackage(dotPath)
+}
+
+func (p *lazyStdlibProvider) registry() *stdlib.Registry {
 	if p == nil {
 		return nil
 	}
 	p.once.Do(func() {
 		p.reg = stdlib.LoadCached()
 	})
-	if p.reg == nil {
-		return nil
-	}
-	return p.reg.LookupPackage(dotPath)
+	return p.reg
 }
 
 // Close is reserved for future cleanup hooks (e.g. releasing cached
