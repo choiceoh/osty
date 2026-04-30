@@ -50,3 +50,4 @@ lowering remains implementation backlog.
   `std.search`, `std.markdown`, `std.media`, `std.httpretry`, `std.jsonl`,
   `std.tokenest`, `std.shortid`, `std.metrics`)](./34-deneb-utilities.md)
 - [§10.35 Tables (`std.table`)](./35-table.md)
+- [§10.36 AI API (`std.ai`)](./36-ai.md)

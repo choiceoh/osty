@@ -1,0 +1,1793 @@
+// std.ai - provider-neutral AI API request builders and response parsers.
+//
+// The transport stays in std.http. This module owns the dependency-light
+// shapes that make OpenAI-compatible, OpenRouter, Anthropic, Gemini, and local
+// OpenAI-compatible runtimes feel like one small API surface.
+
+use std.bytes
+use std.error
+use std.http
+use std.json
+use std.strings
+use std.tokenest
+
+pub enum Provider {
+    OpenAI,
+    OpenAICompatible,
+    OpenRouter,
+    Anthropic,
+    Gemini,
+    Ollama,
+    LMStudio,
+    Custom,
+
+    pub fn toString(self) -> String {
+        match self {
+            OpenAI           -> "openai",
+            OpenAICompatible -> "openai-compatible",
+            OpenRouter       -> "openrouter",
+            Anthropic        -> "anthropic",
+            Gemini           -> "gemini",
+            Ollama           -> "ollama",
+            LMStudio         -> "lmstudio",
+            Custom           -> "custom",
+        }
+    }
+
+    pub fn isOpenAICompatible(self) -> Bool {
+        match self {
+            OpenAI | OpenAICompatible | OpenRouter | Ollama | LMStudio | Custom -> true,
+            _                                                              -> false,
+        }
+    }
+
+    pub fn defaultBaseUrl(self) -> String {
+        match self {
+            OpenAI           -> "https://api.openai.com/v1",
+            OpenAICompatible -> "",
+            OpenRouter       -> "https://openrouter.ai/api/v1",
+            Anthropic        -> "https://api.anthropic.com",
+            Gemini           -> "https://generativelanguage.googleapis.com",
+            Ollama           -> "http://localhost:11434/v1",
+            LMStudio         -> "http://localhost:1234/v1",
+            Custom           -> "",
+        }
+    }
+}
+
+pub enum Role {
+    System,
+    Developer,
+    User,
+    Assistant,
+    Tool,
+
+    pub fn toString(self) -> String {
+        match self {
+            System    -> "system",
+            Developer -> "developer",
+            User      -> "user",
+            Assistant -> "assistant",
+            Tool      -> "tool",
+        }
+    }
+
+    pub fn isInstruction(self) -> Bool {
+        match self {
+            System | Developer -> true,
+            _                  -> false,
+        }
+    }
+
+    pub fn toAnthropicRole(self) -> String {
+        match self {
+            Assistant -> "assistant",
+            _         -> "user",
+        }
+    }
+
+    pub fn toGeminiRole(self) -> String {
+        match self {
+            Assistant -> "model",
+            _         -> "user",
+        }
+    }
+}
+
+pub enum ToolChoiceMode {
+    DefaultToolChoice,
+    AutoToolChoice,
+    NoneToolChoice,
+    RequiredToolChoice,
+    AnyToolChoice,
+    NamedToolChoice,
+
+    pub fn isConfigured(self) -> Bool {
+        self != DefaultToolChoice
+    }
+}
+
+pub struct ProviderConfig {
+    pub provider: Provider,
+    pub baseUrl: String = "",
+    pub apiKey: String = "",
+    pub organization: String = "",
+    pub project: String = "",
+    pub referer: String = "",
+    pub title: String = "",
+    pub apiVersion: String = "",
+    pub beta: String = "",
+    pub extraHeaders: http.Headers = {:},
+
+    pub fn resolvedBaseUrl(self) -> String {
+        let configured = strings.trimEnd(strings.trimSpace(self.baseUrl))
+        if !configured.isEmpty() {
+            return stripTrailingSlash(configured)
+        }
+        stripTrailingSlash(self.provider.defaultBaseUrl())
+    }
+
+    pub fn withBaseUrl(mut self, baseUrl: String) -> ProviderConfig {
+        self.baseUrl = baseUrl
+        self
+    }
+
+    pub fn withApiKey(mut self, apiKey: String) -> ProviderConfig {
+        self.apiKey = apiKey
+        self
+    }
+
+    pub fn withOrganization(mut self, organization: String) -> ProviderConfig {
+        self.organization = organization
+        self
+    }
+
+    pub fn withProject(mut self, project: String) -> ProviderConfig {
+        self.project = project
+        self
+    }
+
+    pub fn withApp(mut self, referer: String, title: String) -> ProviderConfig {
+        self.referer = referer
+        self.title = title
+        self
+    }
+
+    pub fn withApiVersion(mut self, version: String) -> ProviderConfig {
+        self.apiVersion = version
+        self
+    }
+
+    pub fn withBeta(mut self, beta: String) -> ProviderConfig {
+        self.beta = beta
+        self
+    }
+
+    pub fn withHeader(mut self, name: String, value: String) -> ProviderConfig {
+        self.extraHeaders.insert(name, value)
+        self
+    }
+}
+
+pub struct ToolDefinition {
+    pub name: String,
+    pub description: String = "",
+    pub parametersJson: String = "\{\}",
+    pub strict: Bool = false,
+
+    pub fn withDescription(mut self, description: String) -> ToolDefinition {
+        self.description = description
+        self
+    }
+
+    pub fn withParametersJson(mut self, parametersJson: String) -> ToolDefinition {
+        self.parametersJson = parametersJson
+        self
+    }
+
+    pub fn withParameters(mut self, parameters: json.Json) -> ToolDefinition {
+        self.parametersJson = json.stringifyValue(parameters)
+        self
+    }
+
+    pub fn withStrict(mut self, strict: Bool) -> ToolDefinition {
+        self.strict = strict
+        self
+    }
+}
+
+pub struct ToolChoice {
+    pub mode: ToolChoiceMode,
+    pub name: String = "",
+
+    pub fn isConfigured(self) -> Bool {
+        self.mode.isConfigured()
+    }
+}
+
+pub struct ToolCall {
+    pub id: String = "",
+    pub name: String,
+    pub argumentsJson: String = "\{\}",
+    pub kind: String = "function",
+
+    pub fn arguments(self) -> Result<json.Json, Error> {
+        json.parseValue(self.argumentsJson)
+    }
+
+    pub fn withId(mut self, id: String) -> ToolCall {
+        self.id = id
+        self
+    }
+}
+
+pub struct ToolResult {
+    pub toolCallId: String = "",
+    pub name: String = "",
+    pub content: String = "",
+    pub contentJson: String = "",
+    pub isError: Bool = false,
+
+    pub fn bodyJson(self) -> String {
+        let raw = strings.trimSpace(self.contentJson)
+        if !raw.isEmpty() {
+            return normalizedJsonObject(raw)
+        }
+        object([prop("content", quote(self.content))])
+    }
+}
+
+pub struct Message {
+    pub role: Role,
+    pub content: String,
+    pub name: String = "",
+    pub toolCallId: String = "",
+    pub toolCalls: List<ToolCall> = [],
+    pub toolResults: List<ToolResult> = [],
+
+    pub fn tokenEstimate(self, model: String) -> Int {
+        tokenest.estimateForModel(self.content, model)
+    }
+
+    pub fn isInstruction(self) -> Bool {
+        self.role.isInstruction()
+    }
+
+    pub fn withToolCall(mut self, call: ToolCall) -> Message {
+        self.toolCalls.push(call)
+        self
+    }
+
+    pub fn withToolCalls(mut self, calls: List<ToolCall>) -> Message {
+        self.toolCalls = calls
+        self
+    }
+
+    pub fn withToolResult(mut self, result: ToolResult) -> Message {
+        self.toolResults.push(result)
+        if self.role != Tool {
+            self.role = Tool
+        }
+        self
+    }
+}
+
+pub struct ChatOptions {
+    pub temperature: Float = -1.0,
+    pub topP: Float = -1.0,
+    pub maxOutputTokens: Int = 0,
+    pub stop: List<String> = [],
+    pub stream: Bool = false,
+    pub responseFormat: String = "",
+    pub user: String = "",
+    pub seed: Int = -1,
+    pub reasoningEffort: String = "",
+    pub tools: List<ToolDefinition> = [],
+    pub toolChoice: ToolChoice? = None,
+    pub toolsJson: String = "",
+    pub toolChoiceJson: String = "",
+    pub extraJson: String = "",
+}
+
+pub struct ChatRequest {
+    pub model: String,
+    pub messages: List<Message>,
+    pub options: ChatOptions,
+
+    pub fn append(mut self, msg: Message) -> ChatRequest {
+        self.messages.push(msg)
+        self
+    }
+
+    pub fn tokenEstimate(self) -> Int {
+        estimateChatTokens(self)
+    }
+}
+
+pub struct Usage {
+    pub inputTokens: Int = 0,
+    pub outputTokens: Int = 0,
+    pub totalTokens: Int = 0,
+    pub cachedTokens: Int = 0,
+    pub reasoningTokens: Int = 0,
+}
+
+pub struct Choice {
+    pub index: Int,
+    pub role: Role,
+    pub content: String,
+    pub finishReason: String = "",
+    pub toolCalls: List<ToolCall> = [],
+}
+
+pub struct ChatResponse {
+    pub id: String = "",
+    pub model: String = "",
+    pub choices: List<Choice>,
+    pub usage: Usage,
+    pub rawJson: String = "",
+
+    pub fn text(self) -> String {
+        let mut parts: List<String> = []
+        for choice in self.choices {
+            if !choice.content.isEmpty() {
+                parts.push(choice.content)
+            }
+        }
+        strings.join(parts, "\n")
+    }
+
+    pub fn toolCalls(self) -> List<ToolCall> {
+        let mut out: List<ToolCall> = []
+        for choice in self.choices {
+            for call in choice.toolCalls {
+                out.push(call)
+            }
+        }
+        out
+    }
+
+    pub fn hasToolCalls(self) -> Bool {
+        !self.toolCalls().isEmpty()
+    }
+}
+
+pub struct EmbeddingRequest {
+    pub model: String,
+    pub input: List<String>,
+    pub encodingFormat: String = "float",
+    pub dimensions: Int = 0,
+}
+
+pub struct EmbeddingVector {
+    pub index: Int,
+    pub values: List<Float>,
+}
+
+pub struct EmbeddingResponse {
+    pub model: String = "",
+    pub data: List<EmbeddingVector>,
+    pub usage: Usage,
+    pub rawJson: String = "",
+}
+
+pub fn provider(provider: Provider, apiKey: String) -> ProviderConfig {
+    ProviderConfig {
+        provider: provider,
+        apiKey: apiKey,
+    }
+}
+
+pub fn providerNoKey(provider: Provider) -> ProviderConfig {
+    provider(provider, "")
+}
+
+pub fn openAI(apiKey: String) -> ProviderConfig {
+    provider(OpenAI, apiKey)
+}
+
+pub fn openAICompatible(baseUrl: String, apiKey: String) -> ProviderConfig {
+    provider(OpenAICompatible, apiKey).withBaseUrl(baseUrl)
+}
+
+pub fn openAICompatibleLocal(baseUrl: String) -> ProviderConfig {
+    openAICompatible(baseUrl, "")
+}
+
+pub fn openRouter(apiKey: String) -> ProviderConfig {
+    provider(OpenRouter, apiKey)
+}
+
+pub fn anthropic(apiKey: String) -> ProviderConfig {
+    provider(Anthropic, apiKey).withApiVersion("2023-06-01")
+}
+
+pub fn gemini(apiKey: String) -> ProviderConfig {
+    provider(Gemini, apiKey)
+}
+
+pub fn ollama() -> ProviderConfig {
+    provider(Ollama, "")
+}
+
+pub fn lmStudio() -> ProviderConfig {
+    provider(LMStudio, "")
+}
+
+pub fn custom(baseUrl: String, apiKey: String) -> ProviderConfig {
+    provider(Custom, apiKey).withBaseUrl(baseUrl)
+}
+
+pub fn customNoAuth(baseUrl: String) -> ProviderConfig {
+    custom(baseUrl, "")
+}
+
+pub fn message(role: Role, content: String) -> Message {
+    Message {
+        role: role,
+        content: content,
+    }
+}
+
+pub fn system(content: String) -> Message {
+    message(System, content)
+}
+
+pub fn developer(content: String) -> Message {
+    message(Developer, content)
+}
+
+pub fn user(content: String) -> Message {
+    message(User, content)
+}
+
+pub fn assistant(content: String) -> Message {
+    message(Assistant, content)
+}
+
+pub fn tool(toolCallId: String, content: String) -> Message {
+    let result = toolResult(toolCallId, content)
+    Message {
+        role: Tool,
+        content: content,
+        toolCallId: toolCallId,
+        toolResults: [result],
+    }
+}
+
+pub fn functionTool(name: String, description: String, parametersJson: String) -> ToolDefinition {
+    ToolDefinition {
+        name: name,
+        description: description,
+        parametersJson: parametersJson,
+    }
+}
+
+pub fn functionToolNoSchema(name: String, description: String) -> ToolDefinition {
+    functionTool(name, description, "\{\}")
+}
+
+pub fn functionToolValue(name: String, description: String, parameters: json.Json) -> ToolDefinition {
+    functionTool(name, description, json.stringifyValue(parameters))
+}
+
+pub fn toolChoiceAuto() -> ToolChoice {
+    ToolChoice { mode: AutoToolChoice }
+}
+
+pub fn toolChoiceNone() -> ToolChoice {
+    ToolChoice { mode: NoneToolChoice }
+}
+
+pub fn toolChoiceRequired() -> ToolChoice {
+    ToolChoice { mode: RequiredToolChoice }
+}
+
+pub fn toolChoiceAny() -> ToolChoice {
+    ToolChoice { mode: AnyToolChoice }
+}
+
+pub fn toolChoiceNamed(name: String) -> ToolChoice {
+    ToolChoice {
+        mode: NamedToolChoice,
+        name: name,
+    }
+}
+
+pub fn toolCall(id: String, name: String, argumentsJson: String) -> ToolCall {
+    ToolCall {
+        id: id,
+        name: name,
+        argumentsJson: argumentsJson,
+    }
+}
+
+pub fn toolCallNoId(name: String, argumentsJson: String) -> ToolCall {
+    toolCall("", name, argumentsJson)
+}
+
+pub fn toolCallValue(id: String, name: String, arguments: json.Json) -> ToolCall {
+    toolCall(id, name, json.stringifyValue(arguments))
+}
+
+pub fn assistantToolCalls(calls: List<ToolCall>) -> Message {
+    Message {
+        role: Assistant,
+        content: "",
+        toolCalls: calls,
+    }
+}
+
+pub fn toolResult(toolCallId: String, content: String) -> ToolResult {
+    ToolResult {
+        toolCallId: toolCallId,
+        content: content,
+    }
+}
+
+pub fn toolResultNamed(toolCallId: String, name: String, content: String) -> ToolResult {
+    ToolResult {
+        toolCallId: toolCallId,
+        name: name,
+        content: content,
+    }
+}
+
+pub fn toolResultJson(toolCallId: String, name: String, contentJson: String) -> ToolResult {
+    ToolResult {
+        toolCallId: toolCallId,
+        name: name,
+        contentJson: contentJson,
+    }
+}
+
+pub fn toolResultValue(toolCallId: String, name: String, content: json.Json) -> ToolResult {
+    toolResultJson(toolCallId, name, json.stringifyValue(content))
+}
+
+pub fn toolResultMessage(result: ToolResult) -> Message {
+    Message {
+        role: Tool,
+        content: result.content,
+        toolCallId: result.toolCallId,
+        toolResults: [result],
+    }
+}
+
+pub fn options() -> ChatOptions {
+    ChatOptions {}
+}
+
+pub fn chat(model: String, messages: List<Message>) -> ChatRequest {
+    ChatRequest {
+        model: model,
+        messages: messages,
+        options: options(),
+    }
+}
+
+pub fn chatText(model: String, prompt: String) -> ChatRequest {
+    chat(model, [user(prompt)])
+}
+
+pub fn withOptions(mut req: ChatRequest, options: ChatOptions) -> ChatRequest {
+    req.options = options
+    req
+}
+
+pub fn withTemperature(mut opts: ChatOptions, temperature: Float) -> ChatOptions {
+    opts.temperature = temperature
+    opts
+}
+
+pub fn withTopP(mut opts: ChatOptions, topP: Float) -> ChatOptions {
+    opts.topP = topP
+    opts
+}
+
+pub fn withMaxOutputTokens(mut opts: ChatOptions, tokens: Int) -> ChatOptions {
+    opts.maxOutputTokens = tokens
+    opts
+}
+
+pub fn withStop(mut opts: ChatOptions, stop: List<String>) -> ChatOptions {
+    opts.stop = stop
+    opts
+}
+
+pub fn withStream(mut opts: ChatOptions, stream: Bool) -> ChatOptions {
+    opts.stream = stream
+    opts
+}
+
+pub fn withJsonResponse(mut opts: ChatOptions) -> ChatOptions {
+    opts.responseFormat = "json_object"
+    opts
+}
+
+pub fn withResponseFormat(mut opts: ChatOptions, format: String) -> ChatOptions {
+    opts.responseFormat = format
+    opts
+}
+
+pub fn withUser(mut opts: ChatOptions, user: String) -> ChatOptions {
+    opts.user = user
+    opts
+}
+
+pub fn withSeed(mut opts: ChatOptions, seed: Int) -> ChatOptions {
+    opts.seed = seed
+    opts
+}
+
+pub fn withReasoningEffort(mut opts: ChatOptions, effort: String) -> ChatOptions {
+    opts.reasoningEffort = effort
+    opts
+}
+
+pub fn withTools(mut opts: ChatOptions, tools: List<ToolDefinition>) -> ChatOptions {
+    opts.tools = tools
+    opts
+}
+
+pub fn withTool(mut opts: ChatOptions, tool: ToolDefinition) -> ChatOptions {
+    opts.tools.push(tool)
+    opts
+}
+
+pub fn withToolChoice(mut opts: ChatOptions, choice: ToolChoice) -> ChatOptions {
+    opts.toolChoice = Some(choice)
+    opts
+}
+
+pub fn withToolsJson(mut opts: ChatOptions, toolsJson: String) -> ChatOptions {
+    opts.toolsJson = strings.trimSpace(toolsJson)
+    opts
+}
+
+pub fn withToolChoiceJson(mut opts: ChatOptions, toolChoiceJson: String) -> ChatOptions {
+    opts.toolChoiceJson = strings.trimSpace(toolChoiceJson)
+    opts
+}
+
+pub fn withExtraJson(mut opts: ChatOptions, extraJson: String) -> ChatOptions {
+    opts.extraJson = strings.trimSpace(extraJson)
+    opts
+}
+
+pub fn embedding(model: String, input: List<String>) -> EmbeddingRequest {
+    EmbeddingRequest {
+        model: model,
+        input: input,
+    }
+}
+
+pub fn embeddingText(model: String, input: String) -> EmbeddingRequest {
+    embedding(model, [input])
+}
+
+pub fn withEmbeddingDimensions(mut req: EmbeddingRequest, dimensions: Int) -> EmbeddingRequest {
+    req.dimensions = dimensions
+    req
+}
+
+pub fn withEmbeddingEncoding(mut req: EmbeddingRequest, encodingFormat: String) -> EmbeddingRequest {
+    req.encodingFormat = encodingFormat
+    req
+}
+
+pub fn chatUrl(config: ProviderConfig, model: String) -> Result<String, Error> {
+    let base = config.resolvedBaseUrl()
+    if base.isEmpty() {
+        return Err(error.new("ai: provider {config.provider.toString()} needs a base URL"))
+    }
+    match config.provider {
+        Anthropic -> Ok(joinUrl(base, "/v1/messages")),
+        Gemini    -> Ok(joinUrl(base, "/v1beta/models/{geminiModelPath(model)}:generateContent")),
+        _         -> Ok(joinUrl(base, "/chat/completions")),
+    }
+}
+
+pub fn modelsUrl(config: ProviderConfig) -> Result<String, Error> {
+    let base = config.resolvedBaseUrl()
+    if base.isEmpty() {
+        return Err(error.new("ai: provider {config.provider.toString()} needs a base URL"))
+    }
+    match config.provider {
+        Gemini -> Ok(joinUrl(base, "/v1beta/models")),
+        _      -> Ok(joinUrl(base, "/models")),
+    }
+}
+
+pub fn embeddingsUrl(config: ProviderConfig) -> Result<String, Error> {
+    if !supportsEmbeddings(config.provider) {
+        return Err(error.new("ai: embeddings are not defined for provider {config.provider.toString()}"))
+    }
+    let base = config.resolvedBaseUrl()
+    if base.isEmpty() {
+        return Err(error.new("ai: provider {config.provider.toString()} needs a base URL"))
+    }
+    Ok(joinUrl(base, "/embeddings"))
+}
+
+pub fn supportsEmbeddings(provider: Provider) -> Bool {
+    match provider {
+        OpenAI | OpenAICompatible | Ollama | LMStudio | Custom -> true,
+        _                                                   -> false,
+    }
+}
+
+pub fn headers(config: ProviderConfig) -> http.Headers {
+    let mut out: http.Headers = {:}
+    out.insert("Accept", "application/json")
+    out.insert("Content-Type", "application/json")
+    match config.provider {
+        Anthropic -> {
+            if !strings.trimSpace(config.apiKey).isEmpty() {
+                out.insert("x-api-key", strings.trimSpace(config.apiKey))
+            }
+            let version = if strings.trimSpace(config.apiVersion).isEmpty() { "2023-06-01" } else { strings.trimSpace(config.apiVersion) }
+            out.insert("anthropic-version", version)
+            if !strings.trimSpace(config.beta).isEmpty() {
+                out.insert("anthropic-beta", strings.trimSpace(config.beta))
+            }
+        },
+        Gemini -> {
+            if !strings.trimSpace(config.apiKey).isEmpty() {
+                out.insert("x-goog-api-key", strings.trimSpace(config.apiKey))
+            }
+        },
+        _ -> {
+            if !strings.trimSpace(config.apiKey).isEmpty() {
+                out.insert("Authorization", "Bearer {strings.trimSpace(config.apiKey)}")
+            }
+            if !strings.trimSpace(config.organization).isEmpty() {
+                out.insert("OpenAI-Organization", strings.trimSpace(config.organization))
+            }
+            if !strings.trimSpace(config.project).isEmpty() {
+                out.insert("OpenAI-Project", strings.trimSpace(config.project))
+            }
+            if config.provider == OpenRouter {
+                if !strings.trimSpace(config.referer).isEmpty() {
+                    out.insert("HTTP-Referer", strings.trimSpace(config.referer))
+                }
+                if !strings.trimSpace(config.title).isEmpty() {
+                    out.insert("X-OpenRouter-Title", strings.trimSpace(config.title))
+                }
+            }
+        },
+    }
+    for (name, value) in config.extraHeaders {
+        out.insert(name, value)
+    }
+    out
+}
+
+pub fn validateConfig(config: ProviderConfig) -> Result<(), Error> {
+    if config.resolvedBaseUrl().isEmpty() {
+        return Err(error.new("ai: provider {config.provider.toString()} needs a base URL"))
+    }
+    if providerNeedsApiKey(config.provider) && strings.trimSpace(config.apiKey).isEmpty() {
+        return Err(error.new("ai: provider {config.provider.toString()} needs an API key"))
+    }
+    Ok(())
+}
+
+pub fn validateChat(req: ChatRequest) -> Result<(), Error> {
+    if strings.trimSpace(req.model).isEmpty() {
+        return Err(error.new("ai: model is empty"))
+    }
+    if req.messages.isEmpty() {
+        return Err(error.new("ai: chat request has no messages"))
+    }
+    for tool in req.options.tools {
+        if strings.trimSpace(tool.name).isEmpty() {
+            return Err(error.new("ai: tool name is empty"))
+        }
+    }
+    match req.options.toolChoice {
+        Some(choice) -> {
+            if choice.mode == NamedToolChoice && strings.trimSpace(choice.name).isEmpty() {
+                return Err(error.new("ai: named tool choice needs a tool name"))
+            }
+        },
+        None -> {},
+    }
+    Ok(())
+}
+
+pub fn validateEmbedding(req: EmbeddingRequest) -> Result<(), Error> {
+    if strings.trimSpace(req.model).isEmpty() {
+        return Err(error.new("ai: embedding model is empty"))
+    }
+    if req.input.isEmpty() {
+        return Err(error.new("ai: embedding request has no input"))
+    }
+    Ok(())
+}
+
+pub fn encodeChat(config: ProviderConfig, req: ChatRequest) -> Result<String, Error> {
+    validateChat(req)?
+    match config.provider {
+        Anthropic -> Ok(encodeAnthropicChat(req)),
+        Gemini    -> Ok(encodeGeminiChat(req)),
+        OpenAI    -> Ok(encodeOpenAIChat(req, true)),
+        _         -> Ok(encodeOpenAIChat(req, false)),
+    }
+}
+
+pub fn chatHttpRequest(config: ProviderConfig, req: ChatRequest) -> Result<http.Request, Error> {
+    validateConfig(config)?
+    let body = encodeChat(config, req)?
+    let method = http.parseMethod("POST")?
+    Ok(http.newRequest(method, chatUrl(config, req.model)?)
+        .withHeaders(headers(config))
+        .withBody(bytes.fromString(body)))
+}
+
+pub fn sendChat(config: ProviderConfig, req: ChatRequest) -> Result<ChatResponse, Error> {
+    let transport = chatHttpRequest(config, req)?
+    let resp = http.request(transport)?
+    if !resp.isSuccess() {
+        return Err(error.new("ai: provider returned {resp.status}: {responseErrorMessage(resp.text()?)}"))
+    }
+    parseChatResponse(config.provider, resp.text()?)
+}
+
+pub fn sendChatText(config: ProviderConfig, req: ChatRequest) -> Result<String, Error> {
+    Ok((sendChat(config, req)?).text())
+}
+
+pub fn modelsHttpRequest(config: ProviderConfig) -> Result<http.Request, Error> {
+    validateConfig(config)?
+    let method = http.parseMethod("GET")?
+    Ok(http.newRequest(method, modelsUrl(config)?)
+        .withHeaders(headers(config)))
+}
+
+pub fn sendModels(config: ProviderConfig) -> Result<List<String>, Error> {
+    let resp = http.request(modelsHttpRequest(config)?)?
+    if !resp.isSuccess() {
+        return Err(error.new("ai: provider returned {resp.status}: {responseErrorMessage(resp.text()?)}"))
+    }
+    parseModelsResponse(resp.text()?)
+}
+
+pub fn encodeEmbedding(req: EmbeddingRequest) -> Result<String, Error> {
+    validateEmbedding(req)?
+    let mut props: List<String> = [
+        prop("model", quote(req.model)),
+        prop("input", quoteList(req.input)),
+    ]
+    if !strings.trimSpace(req.encodingFormat).isEmpty() {
+        props.push(prop("encoding_format", quote(strings.trimSpace(req.encodingFormat))))
+    }
+    if req.dimensions > 0 {
+        props.push(prop("dimensions", req.dimensions.toString()))
+    }
+    Ok(object(props))
+}
+
+pub fn embeddingHttpRequest(config: ProviderConfig, req: EmbeddingRequest) -> Result<http.Request, Error> {
+    validateConfig(config)?
+    let body = encodeEmbedding(req)?
+    let method = http.parseMethod("POST")?
+    Ok(http.newRequest(method, embeddingsUrl(config)?)
+        .withHeaders(headers(config))
+        .withBody(bytes.fromString(body)))
+}
+
+pub fn sendEmbedding(config: ProviderConfig, req: EmbeddingRequest) -> Result<EmbeddingResponse, Error> {
+    let resp = http.request(embeddingHttpRequest(config, req)?)?
+    if !resp.isSuccess() {
+        return Err(error.new("ai: provider returned {resp.status}: {responseErrorMessage(resp.text()?)}"))
+    }
+    parseEmbeddingResponse(resp.text()?)
+}
+
+pub fn parseChatResponse(provider: Provider, rawJson: String) -> Result<ChatResponse, Error> {
+    let root = json.parseValue(rawJson)?
+    match provider {
+        Anthropic -> parseAnthropicResponse(root, rawJson),
+        Gemini    -> parseGeminiResponse(root, rawJson),
+        _         -> parseOpenAIResponse(root, rawJson),
+    }
+}
+
+pub fn parseModelsResponse(rawJson: String) -> Result<List<String>, Error> {
+    let root = json.parseValue(rawJson)?
+    let mut out: List<String> = []
+    for item in arrayField(root, "data") {
+        let id = stringField(item, "id")
+        if !id.isEmpty() {
+            out.push(id)
+        }
+    }
+    for item in arrayField(root, "models") {
+        let name = stringField(item, "name")
+        if !name.isEmpty() {
+            out.push(name)
+        }
+    }
+    Ok(out)
+}
+
+pub fn parseEmbeddingResponse(rawJson: String) -> Result<EmbeddingResponse, Error> {
+    let root = json.parseValue(rawJson)?
+    let mut vectors: List<EmbeddingVector> = []
+    for item in arrayField(root, "data") {
+        let mut values: List<Float> = []
+        match field(item, "embedding") {
+            Some(embedding) -> {
+                for value in asArrayOrEmpty(embedding) {
+                    match json.asNumber(value) {
+                        Ok(number) -> values.push(number),
+                        Err(_)     -> {},
+                    }
+                }
+            },
+            None -> {},
+        }
+        vectors.push(EmbeddingVector {
+            index: intField(item, "index"),
+            values: values,
+        })
+    }
+    Ok(EmbeddingResponse {
+        model: stringField(root, "model"),
+        data: vectors,
+        usage: parseOpenAIUsage(root),
+        rawJson: rawJson,
+    })
+}
+
+pub fn estimateChatTokens(req: ChatRequest) -> Int {
+    let mut total = 0
+    for msg in req.messages {
+        total = total + msg.tokenEstimate(req.model) + 4
+    }
+    total
+}
+
+pub fn streamDataPayload(line: String) -> String? {
+    let trimmed = strings.trimSpace(line)
+    if !strings.startsWith(trimmed, "data:") {
+        return None
+    }
+    Some(strings.trimSpace(strings.slice(trimmed, 5, trimmed.charCount())))
+}
+
+pub fn isDonePayload(payload: String) -> Bool {
+    strings.trimSpace(payload) == "[DONE]"
+}
+
+pub fn responseErrorMessage(rawJson: String) -> String {
+    match json.parseValue(rawJson) {
+        Ok(root) -> {
+            match field(root, "error") {
+                Some(err) -> {
+                    let msg = stringField(err, "message")
+                    if !msg.isEmpty() {
+                        return msg
+                    }
+                    let typ = stringField(err, "type")
+                    if !typ.isEmpty() {
+                        return typ
+                    }
+                },
+                None -> {},
+            }
+            let msg = stringField(root, "message")
+            if !msg.isEmpty() {
+                return msg
+            }
+            strings.trimSpace(rawJson)
+        },
+        Err(_) -> strings.trimSpace(rawJson),
+    }
+}
+
+fn encodeOpenAIChat(req: ChatRequest, currentOpenAI: Bool) -> String {
+    let mut props: List<String> = [
+        prop("model", quote(req.model)),
+        prop("messages", renderOpenAIMessages(req.messages)),
+    ]
+    addCommonOpenAIOptions(props, req.options, currentOpenAI)
+    objectWithExtra(props, req.options.extraJson)
+}
+
+fn encodeAnthropicChat(req: ChatRequest) -> String {
+    let mut props: List<String> = [
+        prop("model", quote(req.model)),
+        prop("max_tokens", maxOutputOrDefault(req.options, 1024).toString()),
+        prop("messages", renderAnthropicMessages(req.messages)),
+    ]
+    let systemPrompt = instructionText(req.messages)
+    if !systemPrompt.isEmpty() {
+        props.push(prop("system", quote(systemPrompt)))
+    }
+    if req.options.temperature >= 0.0 {
+        props.push(prop("temperature", req.options.temperature.toString()))
+    }
+    if req.options.topP >= 0.0 {
+        props.push(prop("top_p", req.options.topP.toString()))
+    }
+    if !req.options.stop.isEmpty() {
+        props.push(prop("stop_sequences", quoteList(req.options.stop)))
+    }
+    if req.options.stream {
+        props.push(prop("stream", "true"))
+    }
+    if !req.options.tools.isEmpty() {
+        props.push(prop("tools", renderAnthropicTools(req.options.tools)))
+    } else if !strings.trimSpace(req.options.toolsJson).isEmpty() {
+        props.push(prop("tools", strings.trimSpace(req.options.toolsJson)))
+    }
+    match req.options.toolChoice {
+        Some(choice) -> props.push(prop("tool_choice", renderAnthropicToolChoice(choice))),
+        None -> {
+            if !strings.trimSpace(req.options.toolChoiceJson).isEmpty() {
+                props.push(prop("tool_choice", strings.trimSpace(req.options.toolChoiceJson)))
+            }
+        },
+    }
+    objectWithExtra(props, req.options.extraJson)
+}
+
+fn encodeGeminiChat(req: ChatRequest) -> String {
+    let mut props: List<String> = [
+        prop("contents", renderGeminiMessages(req.messages)),
+    ]
+    let systemPrompt = instructionText(req.messages)
+    if !systemPrompt.isEmpty() {
+        props.push(prop("systemInstruction", object([prop("parts", array([object([prop("text", quote(systemPrompt))])]))])))
+    }
+    let gen = renderGeminiGenerationConfig(req.options)
+    if !gen.isEmpty() {
+        props.push(prop("generationConfig", gen))
+    }
+    if !req.options.tools.isEmpty() {
+        props.push(prop("tools", renderGeminiTools(req.options.tools)))
+    } else if !strings.trimSpace(req.options.toolsJson).isEmpty() {
+        props.push(prop("tools", strings.trimSpace(req.options.toolsJson)))
+    }
+    match req.options.toolChoice {
+        Some(choice) -> props.push(prop("toolConfig", renderGeminiToolConfig(choice))),
+        None -> {
+            if !strings.trimSpace(req.options.toolChoiceJson).isEmpty() {
+                props.push(prop("toolConfig", strings.trimSpace(req.options.toolChoiceJson)))
+            }
+        },
+    }
+    objectWithExtra(props, req.options.extraJson)
+}
+
+fn addCommonOpenAIOptions(props: List<String>, opts: ChatOptions, currentOpenAI: Bool) {
+    if opts.temperature >= 0.0 {
+        props.push(prop("temperature", opts.temperature.toString()))
+    }
+    if opts.topP >= 0.0 {
+        props.push(prop("top_p", opts.topP.toString()))
+    }
+    if opts.maxOutputTokens > 0 {
+        let key = if currentOpenAI { "max_completion_tokens" } else { "max_tokens" }
+        props.push(prop(key, opts.maxOutputTokens.toString()))
+    }
+    if !opts.stop.isEmpty() {
+        props.push(prop("stop", quoteList(opts.stop)))
+    }
+    if opts.stream {
+        props.push(prop("stream", "true"))
+    }
+    if !strings.trimSpace(opts.responseFormat).isEmpty() {
+        props.push(prop("response_format", object([prop("type", quote(strings.trimSpace(opts.responseFormat)))])))
+    }
+    if !strings.trimSpace(opts.user).isEmpty() {
+        props.push(prop("user", quote(strings.trimSpace(opts.user))))
+    }
+    if opts.seed >= 0 {
+        props.push(prop("seed", opts.seed.toString()))
+    }
+    if !strings.trimSpace(opts.reasoningEffort).isEmpty() {
+        props.push(prop("reasoning_effort", quote(strings.trimSpace(opts.reasoningEffort))))
+    }
+    if !opts.tools.isEmpty() {
+        props.push(prop("tools", renderOpenAITools(opts.tools)))
+    } else if !strings.trimSpace(opts.toolsJson).isEmpty() {
+        props.push(prop("tools", strings.trimSpace(opts.toolsJson)))
+    }
+    match opts.toolChoice {
+        Some(choice) -> props.push(prop("tool_choice", renderOpenAIToolChoice(choice))),
+        None -> {
+            if !strings.trimSpace(opts.toolChoiceJson).isEmpty() {
+                props.push(prop("tool_choice", strings.trimSpace(opts.toolChoiceJson)))
+            }
+        },
+    }
+}
+
+fn renderOpenAITools(tools: List<ToolDefinition>) -> String {
+    let mut out: List<String> = []
+    for tool in tools {
+        let mut fnProps: List<String> = [
+            prop("name", quote(strings.trimSpace(tool.name))),
+        ]
+        if !strings.trimSpace(tool.description).isEmpty() {
+            fnProps.push(prop("description", quote(strings.trimSpace(tool.description))))
+        }
+        fnProps.push(prop("parameters", normalizedJsonObject(tool.parametersJson)))
+        if tool.strict {
+            fnProps.push(prop("strict", "true"))
+        }
+        out.push(object([
+            prop("type", quote("function")),
+            prop("function", object(fnProps)),
+        ]))
+    }
+    array(out)
+}
+
+fn renderAnthropicTools(tools: List<ToolDefinition>) -> String {
+    let mut out: List<String> = []
+    for tool in tools {
+        let mut props: List<String> = [
+            prop("name", quote(strings.trimSpace(tool.name))),
+            prop("input_schema", normalizedJsonObject(tool.parametersJson)),
+        ]
+        if !strings.trimSpace(tool.description).isEmpty() {
+            props.push(prop("description", quote(strings.trimSpace(tool.description))))
+        }
+        if tool.strict {
+            props.push(prop("strict", "true"))
+        }
+        out.push(object(props))
+    }
+    array(out)
+}
+
+fn renderGeminiTools(tools: List<ToolDefinition>) -> String {
+    let mut declarations: List<String> = []
+    for tool in tools {
+        let mut props: List<String> = [
+            prop("name", quote(strings.trimSpace(tool.name))),
+            prop("parameters", normalizedJsonObject(tool.parametersJson)),
+        ]
+        if !strings.trimSpace(tool.description).isEmpty() {
+            props.push(prop("description", quote(strings.trimSpace(tool.description))))
+        }
+        declarations.push(object(props))
+    }
+    array([object([prop("functionDeclarations", array(declarations))])])
+}
+
+fn renderOpenAIToolChoice(choice: ToolChoice) -> String {
+    match choice.mode {
+        AutoToolChoice     -> quote("auto"),
+        NoneToolChoice     -> quote("none"),
+        RequiredToolChoice -> quote("required"),
+        AnyToolChoice      -> quote("required"),
+        NamedToolChoice    -> object([
+            prop("type", quote("function")),
+            prop("function", object([prop("name", quote(strings.trimSpace(choice.name)))])),
+        ]),
+        _ -> quote("auto"),
+    }
+}
+
+fn renderAnthropicToolChoice(choice: ToolChoice) -> String {
+    match choice.mode {
+        AutoToolChoice     -> object([prop("type", quote("auto"))]),
+        NoneToolChoice     -> object([prop("type", quote("none"))]),
+        RequiredToolChoice -> object([prop("type", quote("any"))]),
+        AnyToolChoice      -> object([prop("type", quote("any"))]),
+        NamedToolChoice    -> object([
+            prop("type", quote("tool")),
+            prop("name", quote(strings.trimSpace(choice.name))),
+        ]),
+        _ -> object([prop("type", quote("auto"))]),
+    }
+}
+
+fn renderGeminiToolConfig(choice: ToolChoice) -> String {
+    let mut cfg: List<String> = []
+    match choice.mode {
+        NoneToolChoice     -> cfg.push(prop("mode", quote("none"))),
+        RequiredToolChoice -> cfg.push(prop("mode", quote("any"))),
+        AnyToolChoice      -> cfg.push(prop("mode", quote("any"))),
+        NamedToolChoice    -> {
+            cfg.push(prop("mode", quote("any")))
+            cfg.push(prop("allowedFunctionNames", quoteList([strings.trimSpace(choice.name)])))
+        },
+        AutoToolChoice -> cfg.push(prop("mode", quote("auto"))),
+        _              -> cfg.push(prop("mode", quote("auto"))),
+    }
+    object([prop("functionCallingConfig", object(cfg))])
+}
+
+fn renderOpenAIMessages(messages: List<Message>) -> String {
+    let mut parts: List<String> = []
+    for msg in messages {
+        if msg.role == Tool || !msg.toolResults.isEmpty() {
+            for result in normalizedToolResults(msg) {
+                parts.push(object([
+                    prop("role", quote("tool")),
+                    prop("content", quote(toolResultContent(result))),
+                    prop("tool_call_id", quote(strings.trimSpace(result.toolCallId))),
+                ]))
+            }
+            continue
+        }
+        let mut props: List<String> = [
+            prop("role", quote(msg.role.toString())),
+            prop("content", quote(msg.content)),
+        ]
+        if !strings.trimSpace(msg.name).isEmpty() {
+            props.push(prop("name", quote(strings.trimSpace(msg.name))))
+        }
+        if msg.role == Tool && !strings.trimSpace(msg.toolCallId).isEmpty() {
+            props.push(prop("tool_call_id", quote(strings.trimSpace(msg.toolCallId))))
+        }
+        if msg.role == Assistant && !msg.toolCalls.isEmpty() {
+            props.push(prop("tool_calls", renderOpenAIToolCalls(msg.toolCalls)))
+        }
+        parts.push(object(props))
+    }
+    array(parts)
+}
+
+fn renderOpenAIToolCalls(calls: List<ToolCall>) -> String {
+    let mut out: List<String> = []
+    for call in calls {
+        out.push(object([
+            prop("id", quote(strings.trimSpace(call.id))),
+            prop("type", quote("function")),
+            prop("function", object([
+                prop("name", quote(strings.trimSpace(call.name))),
+                prop("arguments", quote(strings.trimSpace(call.argumentsJson))),
+            ])),
+        ]))
+    }
+    array(out)
+}
+
+fn renderAnthropicMessages(messages: List<Message>) -> String {
+    let mut parts: List<String> = []
+    for msg in messages {
+        if msg.role.isInstruction() {
+            continue
+        }
+        if msg.role == Assistant && !msg.toolCalls.isEmpty() {
+            parts.push(object([
+                prop("role", quote("assistant")),
+                prop("content", renderAnthropicAssistantContent(msg)),
+            ]))
+        } else if msg.role == Tool || !msg.toolResults.isEmpty() {
+            parts.push(object([
+                prop("role", quote("user")),
+                prop("content", renderAnthropicToolResults(msg)),
+            ]))
+        } else {
+            parts.push(object([
+                prop("role", quote(msg.role.toAnthropicRole())),
+                prop("content", quote(msg.content)),
+            ]))
+        }
+    }
+    array(parts)
+}
+
+fn renderAnthropicAssistantContent(msg: Message) -> String {
+    let mut blocks: List<String> = []
+    if !strings.trimSpace(msg.content).isEmpty() {
+        blocks.push(object([
+            prop("type", quote("text")),
+            prop("text", quote(msg.content)),
+        ]))
+    }
+    for call in msg.toolCalls {
+        blocks.push(object([
+            prop("type", quote("tool_use")),
+            prop("id", quote(strings.trimSpace(call.id))),
+            prop("name", quote(strings.trimSpace(call.name))),
+            prop("input", normalizedJsonObject(call.argumentsJson)),
+        ]))
+    }
+    array(blocks)
+}
+
+fn renderAnthropicToolResults(msg: Message) -> String {
+    let mut blocks: List<String> = []
+    let results = normalizedToolResults(msg)
+    for result in results {
+        let mut props: List<String> = [
+            prop("type", quote("tool_result")),
+            prop("tool_use_id", quote(strings.trimSpace(result.toolCallId))),
+            prop("content", quote(toolResultContent(result))),
+        ]
+        if result.isError {
+            props.push(prop("is_error", "true"))
+        }
+        blocks.push(object(props))
+    }
+    array(blocks)
+}
+
+fn renderGeminiMessages(messages: List<Message>) -> String {
+    let mut parts: List<String> = []
+    for msg in messages {
+        if msg.role.isInstruction() {
+            continue
+        }
+        parts.push(object([
+            prop("role", quote(msg.role.toGeminiRole())),
+            prop("parts", renderGeminiParts(msg)),
+        ]))
+    }
+    array(parts)
+}
+
+fn renderGeminiParts(msg: Message) -> String {
+    let mut parts: List<String> = []
+    if !strings.trimSpace(msg.content).isEmpty() {
+        parts.push(object([prop("text", quote(msg.content))]))
+    }
+    if msg.role == Assistant {
+        for call in msg.toolCalls {
+            parts.push(object([
+                prop("functionCall", object([
+                    prop("name", quote(strings.trimSpace(call.name))),
+                    prop("args", normalizedJsonObject(call.argumentsJson)),
+                ])),
+            ]))
+        }
+    }
+    if msg.role == Tool || !msg.toolResults.isEmpty() {
+        for result in normalizedToolResults(msg) {
+            parts.push(object([
+                prop("functionResponse", object([
+                    prop("name", quote(strings.trimSpace(result.name))),
+                    prop("response", result.bodyJson()),
+                ])),
+            ]))
+        }
+    }
+    if parts.isEmpty() {
+        parts.push(object([prop("text", quote(""))]))
+    }
+    array(parts)
+}
+
+fn renderGeminiGenerationConfig(opts: ChatOptions) -> String {
+    let mut props: List<String> = []
+    if opts.maxOutputTokens > 0 {
+        props.push(prop("maxOutputTokens", opts.maxOutputTokens.toString()))
+    }
+    if opts.temperature >= 0.0 {
+        props.push(prop("temperature", opts.temperature.toString()))
+    }
+    if opts.topP >= 0.0 {
+        props.push(prop("topP", opts.topP.toString()))
+    }
+    if !opts.stop.isEmpty() {
+        props.push(prop("stopSequences", quoteList(opts.stop)))
+    }
+    if strings.trimSpace(opts.responseFormat) == "json_object" {
+        props.push(prop("responseMimeType", quote("application/json")))
+    }
+    if props.isEmpty() {
+        return ""
+    }
+    object(props)
+}
+
+fn instructionText(messages: List<Message>) -> String {
+    let mut parts: List<String> = []
+    for msg in messages {
+        if msg.role.isInstruction() && !strings.trimSpace(msg.content).isEmpty() {
+            parts.push(strings.trimSpace(msg.content))
+        }
+    }
+    strings.join(parts, "\n\n")
+}
+
+fn parseOpenAIResponse(root: json.Json, rawJson: String) -> Result<ChatResponse, Error> {
+    let mut choices: List<Choice> = []
+    for item in arrayField(root, "choices") {
+        let msg = field(item, "message") ?? field(item, "delta") ?? item
+        choices.push(Choice {
+            index: intField(item, "index"),
+            role: parseRole(stringField(msg, "role")),
+            content: contentTextField(msg, "content"),
+            finishReason: stringField(item, "finish_reason"),
+            toolCalls: parseOpenAIToolCalls(arrayField(msg, "tool_calls")),
+        })
+    }
+    Ok(ChatResponse {
+        id: stringField(root, "id"),
+        model: stringField(root, "model"),
+        choices: choices,
+        usage: parseOpenAIUsage(root),
+        rawJson: rawJson,
+    })
+}
+
+fn parseAnthropicResponse(root: json.Json, rawJson: String) -> Result<ChatResponse, Error> {
+    let blocks = arrayField(root, "content")
+    let content = collectAnthropicText(blocks)
+    Ok(ChatResponse {
+        id: stringField(root, "id"),
+        model: stringField(root, "model"),
+        choices: [Choice {
+            index: 0,
+            role: Assistant,
+            content: content,
+            finishReason: stringField(root, "stop_reason"),
+            toolCalls: parseAnthropicToolCalls(blocks),
+        }],
+        usage: parseAnthropicUsage(root),
+        rawJson: rawJson,
+    })
+}
+
+fn parseGeminiResponse(root: json.Json, rawJson: String) -> Result<ChatResponse, Error> {
+    let mut choices: List<Choice> = []
+    let mut i = 0
+    for item in arrayField(root, "candidates") {
+        let content = field(item, "content") ?? item
+        let parts = arrayField(content, "parts")
+        choices.push(Choice {
+            index: i,
+            role: Assistant,
+            content: collectGeminiParts(parts),
+            finishReason: stringField(item, "finishReason"),
+            toolCalls: parseGeminiToolCalls(parts),
+        })
+        i = i + 1
+    }
+    Ok(ChatResponse {
+        id: "",
+        model: stringField(root, "modelVersion"),
+        choices: choices,
+        usage: parseGeminiUsage(root),
+        rawJson: rawJson,
+    })
+}
+
+fn parseOpenAIUsage(root: json.Json) -> Usage {
+    match field(root, "usage") {
+        Some(usage) -> Usage {
+            inputTokens: intField(usage, "prompt_tokens"),
+            outputTokens: intField(usage, "completion_tokens"),
+            totalTokens: intField(usage, "total_tokens"),
+            cachedTokens: intField(field(usage, "prompt_tokens_details") ?? usage, "cached_tokens"),
+            reasoningTokens: intField(field(usage, "completion_tokens_details") ?? usage, "reasoning_tokens"),
+        },
+        None -> Usage {},
+    }
+}
+
+fn parseAnthropicUsage(root: json.Json) -> Usage {
+    match field(root, "usage") {
+        Some(usage) -> {
+            let input = intField(usage, "input_tokens")
+            let output = intField(usage, "output_tokens")
+            Usage {
+                inputTokens: input,
+                outputTokens: output,
+                totalTokens: input + output,
+            }
+        },
+        None -> Usage {},
+    }
+}
+
+fn parseGeminiUsage(root: json.Json) -> Usage {
+    match field(root, "usageMetadata") {
+        Some(usage) -> Usage {
+            inputTokens: intField(usage, "promptTokenCount"),
+            outputTokens: intField(usage, "candidatesTokenCount"),
+            totalTokens: intField(usage, "totalTokenCount"),
+        },
+        None -> Usage {},
+    }
+}
+
+fn collectAnthropicText(blocks: List<json.Json>) -> String {
+    let mut parts: List<String> = []
+    for block in blocks {
+        if stringField(block, "type") == "text" {
+            let text = stringField(block, "text")
+            if !text.isEmpty() {
+                parts.push(text)
+            }
+        }
+    }
+    strings.join(parts, "")
+}
+
+fn collectGeminiParts(partsJson: List<json.Json>) -> String {
+    let mut parts: List<String> = []
+    for part in partsJson {
+        let text = stringField(part, "text")
+        if !text.isEmpty() {
+            parts.push(text)
+        }
+    }
+    strings.join(parts, "")
+}
+
+fn parseOpenAIToolCalls(items: List<json.Json>) -> List<ToolCall> {
+    let mut calls: List<ToolCall> = []
+    for item in items {
+        let fnObj = field(item, "function") ?? item
+        let name = stringField(fnObj, "name")
+        if name.isEmpty() {
+            continue
+        }
+        calls.push(ToolCall {
+            id: stringField(item, "id"),
+            name: name,
+            argumentsJson: stringField(fnObj, "arguments"),
+            kind: stringField(item, "type"),
+        })
+    }
+    calls
+}
+
+fn parseAnthropicToolCalls(blocks: List<json.Json>) -> List<ToolCall> {
+    let mut calls: List<ToolCall> = []
+    for block in blocks {
+        if stringField(block, "type") != "tool_use" {
+            continue
+        }
+        let name = stringField(block, "name")
+        if name.isEmpty() {
+            continue
+        }
+        calls.push(ToolCall {
+            id: stringField(block, "id"),
+            name: name,
+            argumentsJson: jsonTextField(block, "input"),
+            kind: "tool_use",
+        })
+    }
+    calls
+}
+
+fn parseGeminiToolCalls(partsJson: List<json.Json>) -> List<ToolCall> {
+    let mut calls: List<ToolCall> = []
+    for part in partsJson {
+        match field(part, "functionCall") {
+            Some(call) -> {
+                let name = stringField(call, "name")
+                if !name.isEmpty() {
+                    calls.push(ToolCall {
+                        id: "",
+                        name: name,
+                        argumentsJson: jsonTextField(call, "args"),
+                        kind: "functionCall",
+                    })
+                }
+            },
+            None -> {},
+        }
+    }
+    calls
+}
+
+fn contentTextField(obj: json.Json, key: String) -> String {
+    match field(obj, key) {
+        Some(value) -> {
+            match json.asString(value) {
+                Ok(text) -> text,
+                Err(_) -> collectContentParts(asArrayOrEmpty(value)),
+            }
+        },
+        None -> "",
+    }
+}
+
+fn collectContentParts(partsJson: List<json.Json>) -> String {
+    let mut parts: List<String> = []
+    for part in partsJson {
+        let text = stringField(part, "text")
+        if !text.isEmpty() {
+            parts.push(text)
+        }
+    }
+    strings.join(parts, "")
+}
+
+fn jsonTextField(obj: json.Json, key: String) -> String {
+    match field(obj, key) {
+        Some(value) -> json.stringifyValue(value),
+        None        -> "\{\}",
+    }
+}
+
+fn parseRole(role: String) -> Role {
+    match strings.toLower(strings.trimSpace(role)) {
+        "system"    -> System,
+        "developer" -> Developer,
+        "user"      -> User,
+        "tool"      -> Tool,
+        _           -> Assistant,
+    }
+}
+
+fn field(obj: json.Json, key: String) -> json.Json? {
+    match json.getField(obj, key) {
+        Ok(value) -> Some(value),
+        Err(_)    -> None,
+    }
+}
+
+fn stringField(obj: json.Json, key: String) -> String {
+    match field(obj, key) {
+        Some(value) -> match json.asString(value) {
+            Ok(text) -> text,
+            Err(_)   -> "",
+        },
+        None -> "",
+    }
+}
+
+fn intField(obj: json.Json, key: String) -> Int {
+    match field(obj, key) {
+        Some(value) -> match json.asNumber(value) {
+            Ok(number) -> number.toInt(),
+            Err(_)     -> 0,
+        },
+        None -> 0,
+    }
+}
+
+fn arrayField(obj: json.Json, key: String) -> List<json.Json> {
+    match field(obj, key) {
+        Some(value) -> asArrayOrEmpty(value),
+        None        -> [],
+    }
+}
+
+fn asArrayOrEmpty(value: json.Json) -> List<json.Json> {
+    match json.asArray(value) {
+        Ok(items) -> items,
+        Err(_)    -> [],
+    }
+}
+
+fn providerNeedsApiKey(provider: Provider) -> Bool {
+    match provider {
+        OpenAI | OpenRouter | Anthropic | Gemini -> true,
+        _                                    -> false,
+    }
+}
+
+fn maxOutputOrDefault(opts: ChatOptions, fallback: Int) -> Int {
+    if opts.maxOutputTokens > 0 { opts.maxOutputTokens } else { fallback }
+}
+
+fn geminiModelPath(model: String) -> String {
+    let trimmed = strings.trimSpace(model)
+    if strings.startsWith(trimmed, "models/") {
+        return trimmed
+    }
+    "models/{trimmed}"
+}
+
+fn joinUrl(baseUrl: String, path: String) -> String {
+    let base = stripTrailingSlash(baseUrl)
+    let suffix = if strings.startsWith(path, "/") { strings.slice(path, 1, path.charCount()) } else { path }
+    "{base}/{suffix}"
+}
+
+fn stripTrailingSlash(text: String) -> String {
+    let mut out = strings.trimSpace(text)
+    for strings.endsWith(out, "/") {
+        out = strings.slice(out, 0, out.charCount() - 1)
+    }
+    out
+}
+
+fn normalizedToolResults(msg: Message) -> List<ToolResult> {
+    if !msg.toolResults.isEmpty() {
+        return msg.toolResults
+    }
+    if msg.role == Tool {
+        return [ToolResult {
+            toolCallId: msg.toolCallId,
+            name: msg.name,
+            content: msg.content,
+        }]
+    }
+    []
+}
+
+fn toolResultContent(result: ToolResult) -> String {
+    if !result.content.isEmpty() {
+        return result.content
+    }
+    strings.trimSpace(result.contentJson)
+}
+
+fn normalizedJsonObject(text: String) -> String {
+    let trimmed = strings.trimSpace(text)
+    if trimmed.isEmpty() {
+        return "\{\}"
+    }
+    match json.parseValue(trimmed) {
+        Ok(value) -> {
+            match json.asObject(value) {
+                Ok(_)  -> json.stringifyValue(value),
+                Err(_) -> "\{\}",
+            }
+        },
+        Err(_) -> "\{\}",
+    }
+}
+
+fn object(props: List<String>) -> String {
+    let open = "\{"
+    let close = "\}"
+    let sep = ","
+    "{open}{strings.join(props, sep)}{close}"
+}
+
+fn objectWithExtra(props: List<String>, extraJson: String) -> String {
+    let extra = strings.trimSpace(extraJson)
+    if extra.isEmpty() {
+        return object(props)
+    }
+    let trimmed = trimOuterObject(extra)
+    if trimmed.isEmpty() {
+        return object(props)
+    }
+    let mut all = props
+    all.push(trimmed)
+    object(all)
+}
+
+fn array(items: List<String>) -> String {
+    let sep = ","
+    "[{strings.join(items, sep)}]"
+}
+
+fn prop(name: String, value: String) -> String {
+    "{quote(name)}:{value}"
+}
+
+fn quoteList(items: List<String>) -> String {
+    let mut out: List<String> = []
+    for item in items {
+        out.push(quote(item))
+    }
+    array(out)
+}
+
+fn quote(text: String) -> String {
+    let mut out = "\""
+    for c in text.chars() {
+        if c == '"' {
+            out = "{out}\\\""
+        } else if c == '\\' {
+            out = "{out}\\\\"
+        } else if c == '\n' {
+            out = "{out}\\n"
+        } else if c == '\r' {
+            out = "{out}\\r"
+        } else if c == '\t' {
+            out = "{out}\\t"
+        } else {
+            out = "{out}{strings.fromChar(c)}"
+        }
+    }
+    "{out}\""
+}
+
+fn trimOuterObject(text: String) -> String {
+    let trimmed = strings.trimSpace(text)
+    if strings.startsWith(trimmed, "\{") && strings.endsWith(trimmed, "\}") && trimmed.charCount() >= 2 {
+        return strings.trimSpace(strings.slice(trimmed, 1, trimmed.charCount() - 1))
+    }
+    trimmed
+}
