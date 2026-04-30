@@ -1339,6 +1339,7 @@ pub struct LlvmNativeParam {
     pub llvmType: String,
     pub irType: String,
     pub byRef: Bool,
+    pub listElemLLVMType: String,
 }
 
 pub struct LlvmNativeGlobal {
@@ -2270,6 +2271,296 @@ pub fn llvmNativeIsSafeListAccess(
         return false
     }
     addend <= maxOff.unwrap()
+}
+
+pub fn llvmNativeCallPreservesScalarListParam(
+    expr: LlvmNativeExpr,
+    paramName: String,
+) -> Bool {
+    if paramName == "" {
+        return false
+    }
+    if expr.name != llvmListRuntimeLenSymbol() || expr.childExprs.len() != 1 {
+        return false
+    }
+    let arg = expr.childExprs[0]
+    arg.kind == LlvmNativeExprIdent && arg.name == paramName
+}
+
+fn llvmNativePruneScalarListParamsInExpr(
+    expr: LlvmNativeExpr,
+    eligible: Map<String, String>,
+) {
+    if eligible.len() == 0 {
+        return
+    }
+    if expr.kind == LlvmNativeExprCall {
+        for arg in expr.childExprs {
+            if arg.kind != LlvmNativeExprIdent {
+                continue
+            }
+            if eligible.get(arg.name).isSome() &&
+               !(llvmNativeCallPreservesScalarListParam(expr, arg.name)) {
+                let _ = eligible.remove(arg.name)
+            }
+        }
+    }
+    for child in expr.childExprs {
+        llvmNativePruneScalarListParamsInExpr(child, eligible)
+    }
+    for block in expr.childBlocks {
+        llvmNativePruneScalarListParamsInBlock(block, eligible)
+    }
+}
+
+fn llvmNativePruneScalarListParamsInStmt(
+    stmt: LlvmNativeStmt,
+    eligible: Map<String, String>,
+) {
+    if eligible.len() == 0 {
+        return
+    }
+    if stmt.name != "" {
+        let _ = eligible.remove(stmt.name)
+    }
+    for expr in stmt.childExprs {
+        llvmNativePruneScalarListParamsInExpr(expr, eligible)
+    }
+    for block in stmt.childBlocks {
+        llvmNativePruneScalarListParamsInBlock(block, eligible)
+    }
+}
+
+fn llvmNativePruneScalarListParamsInBlock(
+    block: LlvmNativeBlock,
+    eligible: Map<String, String>,
+) {
+    if eligible.len() == 0 {
+        return
+    }
+    for stmt in block.stmts {
+        llvmNativePruneScalarListParamsInStmt(stmt, eligible)
+    }
+    if block.hasResult {
+        llvmNativePruneScalarListParamsInExpr(block.result, eligible)
+    }
+}
+
+pub fn llvmNativeEligibleScalarListParams(
+    function: LlvmNativeFunction,
+) -> Map<String, String> {
+    let mut eligible: Map<String, String> = {:}
+    for param in function.params {
+        if param.byRef || !(mirListUsesRawDataFastPath(param.listElemLLVMType)) {
+            continue
+        }
+        eligible.insert(param.name, param.listElemLLVMType)
+    }
+    if eligible.len() == 0 {
+        return eligible
+    }
+    llvmNativePruneScalarListParamsInBlock(function.body, eligible)
+    eligible
+}
+
+pub fn llvmNativeRangeStartIsNonNegative(expr: LlvmNativeExpr) -> Bool {
+    if expr.kind != LlvmNativeExprInt {
+        return false
+    }
+    let text = llvmStrings.trimSpace(expr.text)
+    text != "" && !(llvmStrings.hasPrefix(text, "-"))
+}
+
+pub fn llvmNativeListLenSource(expr: LlvmNativeExpr) -> String {
+    if expr.kind != LlvmNativeExprCall {
+        return ""
+    }
+    if expr.name != llvmListRuntimeLenSymbol() || expr.childExprs.len() != 1 {
+        return ""
+    }
+    let recv = expr.childExprs[0]
+    if recv.kind != LlvmNativeExprIdent {
+        return ""
+    }
+    recv.name
+}
+
+pub fn llvmNativeBoundedLensFor(
+    emitter: LlvmEmitter,
+    expr: LlvmNativeExpr,
+) -> Map<String, Int> {
+    let list = llvmNativeListLenSource(expr)
+    if list != "" {
+        if emitter.nativeListLens.get(list).isSome() {
+            let mut out: Map<String, Int> = {:}
+            out.insert(list, 0)
+            return out
+        }
+        return {:}
+    }
+    if expr.kind == LlvmNativeExprIdent {
+        let known = emitter.nativeBoundedLens.get(expr.name)
+        if known.isSome() {
+            return llvmNativeCloneOffsetMap(known.unwrap())
+        }
+        return {:}
+    }
+    if expr.kind == LlvmNativeExprBinary && expr.op == "-" && expr.childExprs.len() == 2 {
+        let (k, ok) = llvmNativeIntLiteralValue(expr.childExprs[1])
+        if !(ok) || k < 0 {
+            return {:}
+        }
+        let base = llvmNativeBoundedLensFor(emitter, expr.childExprs[0])
+        if base.len() == 0 {
+            return {:}
+        }
+        let mut out: Map<String, Int> = {:}
+        for key in base.keys() {
+            let off = base.get(key)
+            if off.isSome() {
+                out.insert(key, off.unwrap() + k)
+            }
+        }
+        return out
+    }
+    {:}
+}
+
+pub fn llvmNativeRecordBoundedLen(
+    emitter: LlvmEmitter,
+    name: String,
+    expr: LlvmNativeExpr,
+) {
+    if name == "" {
+        return
+    }
+    let bounded = llvmNativeBoundedLensFor(emitter, expr)
+    if bounded.len() > 0 {
+        emitter.nativeBoundedLens.insert(name, bounded)
+        return
+    }
+    if expr.kind != LlvmNativeExprIf {
+        return
+    }
+    if expr.childExprs.len() == 0 || expr.childBlocks.len() < 2 {
+        return
+    }
+    let thenLists = llvmNativeBlockResultLenSources(expr.childBlocks[0])
+    let elseLists = llvmNativeBlockResultLenSources(expr.childBlocks[1])
+    if thenLists.len() == 0 || elseLists.len() == 0 {
+        return
+    }
+    let condLists = llvmNativeCondLenSources(expr.childExprs[0])
+    if condLists.len() < 2 {
+        return
+    }
+    let mut condSet: Map<String, Bool> = {:}
+    for list in condLists {
+        condSet.insert(list, true)
+    }
+    let mut thenAllDrawn = thenLists.len() > 0
+    for list in thenLists {
+        if condSet.get(list).isNone() {
+            thenAllDrawn = false
+        }
+    }
+    let mut elseAllDrawn = elseLists.len() > 0
+    for list in elseLists {
+        if condSet.get(list).isNone() {
+            elseAllDrawn = false
+        }
+    }
+    if !(thenAllDrawn) || !(elseAllDrawn) {
+        return
+    }
+    let mut out: Map<String, Int> = {:}
+    for list in condSet.keys() {
+        out.insert(list, 0)
+    }
+    emitter.nativeBoundedLens.insert(name, out)
+}
+
+pub fn llvmNativeBlockResultLenSources(block: LlvmNativeBlock) -> List<String> {
+    if !(block.hasResult) {
+        return []
+    }
+    let list = llvmNativeListLenSource(block.result)
+    if list == "" {
+        return []
+    }
+    [list]
+}
+
+pub fn llvmNativeCondLenSources(expr: LlvmNativeExpr) -> List<String> {
+    if expr.kind != LlvmNativeExprBinary {
+        return []
+    }
+    if expr.op != "<" && expr.op != "<=" && expr.op != ">" && expr.op != ">=" {
+        return []
+    }
+    if expr.childExprs.len() != 2 {
+        return []
+    }
+    let left = llvmNativeListLenSource(expr.childExprs[0])
+    let right = llvmNativeListLenSource(expr.childExprs[1])
+    if left == "" || right == "" {
+        return []
+    }
+    [left, right]
+}
+
+pub fn llvmNativeIntLiteralValue(expr: LlvmNativeExpr) -> (Int, Bool) {
+    if expr.kind != LlvmNativeExprInt {
+        return (0, false)
+    }
+    let mut text = llvmStrings.trimSpace(expr.text)
+    text = llvmStrings.replaceAll(text, "_", "")
+    if text == "" {
+        return (0, false)
+    }
+    if llvmStrings.hasPrefix(text, "+") {
+        text = llvmStrings.trimPrefix(text, "+")
+    }
+    if text == "" || llvmStrings.hasPrefix(text, "-") {
+        return (0, false)
+    }
+    let mut value = 0
+    let zero = '0'.toInt()
+    let nine = '9'.toInt()
+    for c in text.chars() {
+        let digit = c.toInt()
+        if digit < zero || digit > nine {
+            return (0, false)
+        }
+        value = value * 10 + (digit - zero)
+    }
+    (value, true)
+}
+
+pub fn llvmNativeIndexIdentAndAddend(
+    expr: LlvmNativeExpr,
+) -> (String, Int, Bool) {
+    if expr.kind == LlvmNativeExprIdent {
+        return (expr.name, 0, true)
+    }
+    if expr.kind != LlvmNativeExprBinary || expr.op != "+" || expr.childExprs.len() != 2 {
+        return ("", 0, false)
+    }
+    let left = expr.childExprs[0]
+    let right = expr.childExprs[1]
+    if left.kind == LlvmNativeExprIdent {
+        let (k, ok) = llvmNativeIntLiteralValue(right)
+        if ok {
+            return (left.name, k, true)
+        }
+    }
+    if right.kind == LlvmNativeExprIdent {
+        let (k, ok) = llvmNativeIntLiteralValue(left)
+        if ok {
+            return (right.name, k, true)
+        }
+    }
+    ("", 0, false)
 }
 
 /// Phase A4 fn-value thunk template. Renders the IR body of a private
