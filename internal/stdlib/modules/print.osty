@@ -1,0 +1,461 @@
+// std.print - host printer jobs for PDF and image documents.
+//
+// The module keeps print rendering outside the language runtime. It builds and
+// runs explicit host command plans, defaulting to the CUPS `lp` command used by
+// macOS and many Linux desktops. Callers that need a different spooler can
+// choose another backend or pass a custom command.
+
+use std.error
+use std.fs
+use std.media
+use std.os
+use std.strings
+
+pub enum DocumentKind {
+    AutoDocument,
+    PdfDocument,
+    ImageDocument,
+}
+
+pub enum Backend {
+    AutoBackend,
+    Lp,
+    Lpr,
+    WindowsShell,
+    CustomCommand(String),
+}
+
+pub enum Orientation {
+    AutoOrientation,
+    Portrait,
+    Landscape,
+}
+
+pub enum Duplex {
+    DefaultDuplex,
+    OneSided,
+    LongEdge,
+    ShortEdge,
+}
+
+pub enum ColorMode {
+    DefaultColor,
+    Color,
+    Grayscale,
+}
+
+pub struct Document {
+    pub path: String,
+    pub kind: DocumentKind,
+    pub mime: String = "",
+}
+
+pub struct PageRange {
+    pub from: Int,
+    pub to: Int,
+}
+
+pub struct Options {
+    pub printer: String = "",
+    pub copies: Int = 1,
+    pub jobName: String = "",
+    pub media: String = "",
+    pub fitToPage: Bool = true,
+    pub orientation: Orientation,
+    pub duplex: Duplex,
+    pub color: ColorMode,
+    pub pageRanges: List<PageRange> = [],
+    pub backend: Backend,
+}
+
+pub struct Printer {
+    pub name: String,
+    pub description: String = "",
+    pub isDefault: Bool = false,
+}
+
+pub struct CommandPlan {
+    pub command: String,
+    pub args: List<String> = [],
+}
+
+pub struct Job {
+    pub id: String = "",
+    pub printer: String = "",
+    pub document: Document,
+    pub plan: CommandPlan,
+    pub output: os.Output,
+}
+
+pub fn options() -> Options {
+    Options {
+        orientation: AutoOrientation,
+        duplex: DefaultDuplex,
+        color: DefaultColor,
+        backend: AutoBackend,
+    }
+}
+
+pub fn withPrinter(mut opts: Options, printer: String) -> Options {
+    opts.printer = printer
+    opts
+}
+
+pub fn withCopies(mut opts: Options, copies: Int) -> Options {
+    opts.copies = copies
+    opts
+}
+
+pub fn withJobName(mut opts: Options, name: String) -> Options {
+    opts.jobName = name
+    opts
+}
+
+pub fn withMedia(mut opts: Options, mediaName: String) -> Options {
+    opts.media = mediaName
+    opts
+}
+
+pub fn withFitToPage(mut opts: Options, enabled: Bool) -> Options {
+    opts.fitToPage = enabled
+    opts
+}
+
+pub fn withOrientation(mut opts: Options, orientation: Orientation) -> Options {
+    opts.orientation = orientation
+    opts
+}
+
+pub fn withDuplex(mut opts: Options, duplex: Duplex) -> Options {
+    opts.duplex = duplex
+    opts
+}
+
+pub fn withColorMode(mut opts: Options, color: ColorMode) -> Options {
+    opts.color = color
+    opts
+}
+
+pub fn withPageRanges(mut opts: Options, ranges: List<PageRange>) -> Options {
+    opts.pageRanges = ranges
+    opts
+}
+
+pub fn withBackend(mut opts: Options, backend: Backend) -> Options {
+    opts.backend = backend
+    opts
+}
+
+pub fn pageRange(from: Int, to: Int) -> Result<PageRange, Error> {
+    if from <= 0 || to <= 0 {
+        return Err(error.new("print: page ranges are 1-based"))
+    }
+    if to < from {
+        return Err(error.new("print: page range end is before start"))
+    }
+    Ok(PageRange { from: from, to: to })
+}
+
+pub fn file(path: String) -> Document {
+    let detected = media.detectByName(path)
+    Document { path: path, kind: AutoDocument, mime: detected.mime }
+}
+
+pub fn pdf(path: String) -> Document {
+    Document { path: path, kind: PdfDocument, mime: "application/pdf" }
+}
+
+pub fn image(path: String) -> Document {
+    let detected = media.detectByName(path)
+    let mime = if strings.startsWith(detected.mime, "image/") { detected.mime } else { "image/*" }
+    Document { path: path, kind: ImageDocument, mime: mime }
+}
+
+pub fn isPrintable(doc: Document) -> Bool {
+    match doc.kind {
+        PdfDocument -> true,
+        ImageDocument -> true,
+        AutoDocument -> isPrintableMime(doc.mime),
+    }
+}
+
+pub fn defaultPrinterName() -> Result<String, Error> {
+    let output = os.exec("lpstat", ["-d"])?
+    if output.exitCode != 0 {
+        return Err(error.new("print: lpstat -d failed with exit code {output.exitCode}: {output.stderr}"))
+    }
+    let name = parseDefaultPrinterName(output.stdout)
+    if name.isEmpty() {
+        Err(error.new("print: no default printer configured"))
+    } else {
+        Ok(name)
+    }
+}
+
+pub fn printers() -> Result<List<Printer>, Error> {
+    let output = os.exec("lpstat", ["-p", "-d"])?
+    if output.exitCode != 0 {
+        return Err(error.new("print: lpstat -p -d failed with exit code {output.exitCode}: {output.stderr}"))
+    }
+    Ok(parsePrinters(output.stdout))
+}
+
+pub fn plan(doc: Document, opts: Options) -> Result<CommandPlan, Error> {
+    validatePlanInputs(doc, opts)?
+    match opts.backend {
+        AutoBackend -> Ok(lpPlan(doc, opts)),
+        Lp -> Ok(lpPlan(doc, opts)),
+        Lpr -> Ok(lprPlan(doc, opts)),
+        WindowsShell -> windowsShellPlan(doc, opts),
+        CustomCommand(command) -> {
+            if strings.trimSpace(command).isEmpty() {
+                Err(error.new("print: custom command is empty"))
+            } else {
+                Ok(CommandPlan { command: command, args: [doc.path] })
+            }
+        },
+    }
+}
+
+pub fn print(doc: Document, opts: Options) -> Result<Job, Error> {
+    validateDocument(doc)?
+    let p = plan(doc, opts)?
+    let output = os.exec(p.command, p.args)?
+    if output.exitCode != 0 {
+        return Err(error.new("print: command failed with exit code {output.exitCode}: {output.stderr}"))
+    }
+    Ok(Job {
+        id: parseJobId(output.stdout),
+        printer: opts.printer,
+        document: doc,
+        plan: p,
+        output: output,
+    })
+}
+
+pub fn printFile(path: String) -> Result<Job, Error> {
+    print(file(path), options())
+}
+
+pub fn printPdf(path: String) -> Result<Job, Error> {
+    print(pdf(path), options())
+}
+
+pub fn printImage(path: String) -> Result<Job, Error> {
+    print(image(path), options())
+}
+
+fn validatePlanInputs(doc: Document, opts: Options) -> Result<(), Error> {
+    if strings.trimSpace(doc.path).isEmpty() {
+        return Err(error.new("print: document path is empty"))
+    }
+    if opts.copies <= 0 {
+        return Err(error.new("print: copies must be positive"))
+    }
+    validatePageRanges(opts.pageRanges)?
+    if !isPrintable(doc) {
+        return Err(error.new("print: unsupported document type: {doc.mime}"))
+    }
+    Ok(())
+}
+
+fn validateDocument(doc: Document) -> Result<(), Error> {
+    if strings.trimSpace(doc.path).isEmpty() {
+        return Err(error.new("print: document path is empty"))
+    }
+    if !fs.exists(doc.path) {
+        return Err(error.new("print: document does not exist: {doc.path}"))
+    }
+    if !isPrintable(doc) {
+        return Err(error.new("print: unsupported document type: {doc.mime}"))
+    }
+    Ok(())
+}
+
+fn validatePageRanges(ranges: List<PageRange>) -> Result<(), Error> {
+    for r in ranges {
+        if r.from <= 0 || r.to <= 0 {
+            return Err(error.new("print: page ranges are 1-based"))
+        }
+        if r.to < r.from {
+            return Err(error.new("print: page range end is before start"))
+        }
+    }
+    Ok(())
+}
+
+fn lpPlan(doc: Document, opts: Options) -> CommandPlan {
+    let mut args = commonCupsArgs(opts, true)
+    args.push(doc.path)
+    CommandPlan { command: "lp", args: args }
+}
+
+fn lprPlan(doc: Document, opts: Options) -> CommandPlan {
+    let mut args: List<String> = []
+    if !strings.trimSpace(opts.printer).isEmpty() {
+        args.push("-P")
+        args.push(opts.printer)
+    }
+    if opts.copies > 1 {
+        args.push("-#")
+        args.push(opts.copies.toString())
+    }
+    if !strings.trimSpace(opts.jobName).isEmpty() {
+        args.push("-T")
+        args.push(opts.jobName)
+    }
+    args = appendCupsOptions(args, opts)
+    args.push(doc.path)
+    CommandPlan { command: "lpr", args: args }
+}
+
+fn windowsShellPlan(doc: Document, opts: Options) -> Result<CommandPlan, Error> {
+    if !strings.trimSpace(opts.printer).isEmpty() {
+        return Err(error.new("print: WindowsShell backend supports only the default printer"))
+    }
+    Ok(CommandPlan {
+        command: "powershell",
+        args: ["-NoProfile", "-Command", "Start-Process -FilePath {powerShellQuote(doc.path)} -Verb Print"],
+    })
+}
+
+fn commonCupsArgs(opts: Options, lpStyle: Bool) -> List<String> {
+    let mut args: List<String> = []
+    if !strings.trimSpace(opts.printer).isEmpty() {
+        if lpStyle {
+            args.push("-d")
+        } else {
+            args.push("-P")
+        }
+        args.push(opts.printer)
+    }
+    if opts.copies > 1 {
+        args.push("-n")
+        args.push(opts.copies.toString())
+    }
+    if !strings.trimSpace(opts.jobName).isEmpty() {
+        args.push("-t")
+        args.push(opts.jobName)
+    }
+    args = appendCupsOptions(args, opts)
+    args
+}
+
+fn appendCupsOptions(args: List<String>, opts: Options) -> List<String> {
+    let mut out = args
+    if !strings.trimSpace(opts.media).isEmpty() {
+        out.push("-o")
+        out.push("media={opts.media}")
+    }
+    if opts.fitToPage {
+        out.push("-o")
+        out.push("fit-to-page")
+    }
+    if opts.pageRanges.len() > 0 {
+        out.push("-o")
+        out.push("page-ranges={pageRangesSpec(opts.pageRanges)}")
+    }
+    let orientation = orientationOption(opts.orientation)
+    if !orientation.isEmpty() {
+        out.push("-o")
+        out.push(orientation)
+    }
+    let duplex = duplexOption(opts.duplex)
+    if !duplex.isEmpty() {
+        out.push("-o")
+        out.push(duplex)
+    }
+    let color = colorOption(opts.color)
+    if !color.isEmpty() {
+        out.push("-o")
+        out.push(color)
+    }
+    out
+}
+
+fn orientationOption(value: Orientation) -> String {
+    match value {
+        AutoOrientation -> "",
+        Portrait -> "orientation-requested=3",
+        Landscape -> "orientation-requested=4",
+    }
+}
+
+fn duplexOption(value: Duplex) -> String {
+    match value {
+        DefaultDuplex -> "",
+        OneSided -> "sides=one-sided",
+        LongEdge -> "sides=two-sided-long-edge",
+        ShortEdge -> "sides=two-sided-short-edge",
+    }
+}
+
+fn colorOption(value: ColorMode) -> String {
+    match value {
+        DefaultColor -> "",
+        Color -> "ColorModel=RGB",
+        Grayscale -> "ColorModel=Gray",
+    }
+}
+
+fn pageRangesSpec(ranges: List<PageRange>) -> String {
+    let mut parts: List<String> = []
+    for r in ranges {
+        if r.from == r.to {
+            parts.push(r.from.toString())
+        } else {
+            parts.push("{r.from}-{r.to}")
+        }
+    }
+    strings.join(parts, ",")
+}
+
+fn isPrintableMime(mime: String) -> Bool {
+    let m = strings.toLower(mime)
+    m == "application/pdf" || strings.startsWith(m, "image/")
+}
+
+fn parseDefaultPrinterName(text: String) -> String {
+    for line in strings.splitLines(text) {
+        let trimmed = strings.trimSpace(line)
+        if strings.startsWith(trimmed, "system default destination:") {
+            return strings.trimSpace(strings.trimPrefix(trimmed, "system default destination:"))
+        }
+        if strings.startsWith(trimmed, "default destination:") {
+            return strings.trimSpace(strings.trimPrefix(trimmed, "default destination:"))
+        }
+    }
+    ""
+}
+
+fn parsePrinters(text: String) -> List<Printer> {
+    let defaultName = parseDefaultPrinterName(text)
+    let mut out: List<Printer> = []
+    for line in strings.splitLines(text) {
+        let trimmed = strings.trimSpace(line)
+        if strings.startsWith(trimmed, "printer ") {
+            let fields = strings.fields(trimmed)
+            if fields.len() >= 2 {
+                let name = fields[1]
+                out.push(Printer { name: name, isDefault: name == defaultName })
+            }
+        }
+    }
+    out
+}
+
+fn parseJobId(text: String) -> String {
+    let trimmed = strings.trimSpace(text)
+    if strings.startsWith(trimmed, "request id is ") {
+        let rest = strings.trimPrefix(trimmed, "request id is ")
+        let fields = strings.fields(rest)
+        if fields.len() > 0 {
+            return fields[0]
+        }
+    }
+    ""
+}
+
+fn powerShellQuote(value: String) -> String {
+    "'{strings.replaceAll(value, "'", "''")}'"
+}
