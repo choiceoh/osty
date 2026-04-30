@@ -1,0 +1,400 @@
+// std.report - human-readable Markdown and HTML report builders.
+//
+// This module is intentionally pure Osty. CLI tools and analysis passes can
+// format their results without depending on a browser, filesystem, or host
+// charting runtime, while still exporting chart-friendly CSV/JSON data.
+
+use std.strings
+
+pub enum Align {
+    Left,
+    Center,
+    Right,
+}
+
+pub enum CardTone {
+    Neutral,
+    Info,
+    Good,
+    Warning,
+    Danger,
+}
+
+pub struct SummaryCard {
+    pub label: String,
+    pub value: String,
+    pub detail: String = "",
+    pub tone: CardTone,
+}
+
+pub struct TableColumn {
+    pub key: String,
+    pub label: String,
+    pub align: Align,
+}
+
+pub struct TableRow {
+    pub cells: Map<String, String> = {:},
+}
+
+pub struct Table {
+    pub title: String = "",
+    pub columns: List<TableColumn> = [],
+    pub rows: List<TableRow> = [],
+}
+
+pub struct ReportSection {
+    pub heading: String,
+    pub body: String,
+}
+
+pub struct ChartPoint {
+    pub series: String = "",
+    pub label: String,
+    pub value: Float,
+}
+
+pub struct Report {
+    pub title: String,
+    pub subtitle: String = "",
+    pub cards: List<SummaryCard> = [],
+    pub sections: List<ReportSection> = [],
+    pub tables: List<Table> = [],
+    pub chart: List<ChartPoint> = [],
+}
+
+pub fn report(title: String) -> Report {
+    Report { title: title }
+}
+
+pub fn section(heading: String, body: String) -> ReportSection {
+    ReportSection { heading: heading, body: body }
+}
+
+pub fn card(label: String, value: String) -> SummaryCard {
+    SummaryCard { label: label, value: value, tone: Neutral }
+}
+
+pub fn cardDetail(label: String, value: String, detail: String, tone: CardTone) -> SummaryCard {
+    SummaryCard {
+        label: label,
+        value: value,
+        detail: detail,
+        tone: tone,
+    }
+}
+
+pub fn column(key: String, label: String) -> TableColumn {
+    TableColumn { key: key, label: label, align: Left }
+}
+
+pub fn alignedColumn(key: String, label: String, align: Align) -> TableColumn {
+    TableColumn { key: key, label: label, align: align }
+}
+
+pub fn row(cells: Map<String, String>) -> TableRow {
+    TableRow { cells: cells }
+}
+
+pub fn table(title: String, columns: List<TableColumn>, rows: List<TableRow>) -> Table {
+    Table { title: title, columns: columns, rows: rows }
+}
+
+pub fn chartPoint(label: String, value: Float) -> ChartPoint {
+    ChartPoint { label: label, value: value }
+}
+
+pub fn seriesPoint(series: String, label: String, value: Float) -> ChartPoint {
+    ChartPoint { series: series, label: label, value: value }
+}
+
+pub fn renderMarkdown(report: Report) -> String {
+    let mut blocks: List<String> = []
+    blocks.push("# {escapeMarkdownText(report.title)}")
+    if !strings.trimSpace(report.subtitle).isEmpty() {
+        blocks.push(strings.trimSpace(report.subtitle))
+    }
+    let cards = renderCardsMarkdown(report.cards)
+    if !cards.isEmpty() {
+        blocks.push(cards)
+    }
+    for section in report.sections {
+        blocks.push("## {escapeMarkdownText(section.heading)}\n\n{strings.trimSpace(section.body)}")
+    }
+    for table in report.tables {
+        let rendered = renderTableMarkdown(table)
+        if !rendered.isEmpty() {
+            blocks.push(rendered)
+        }
+    }
+    if !report.chart.isEmpty() {
+        blocks.push("## Chart data\n\n```csv\n{exportChartCsv(report.chart)}\n```")
+    }
+    strings.join(blocks, "\n\n")
+}
+
+pub fn renderHtml(report: Report) -> String {
+    let mut body: List<String> = []
+    body.push("<header><h1>{escapeHtml(report.title)}</h1>{subtitleHtml(report.subtitle)}</header>")
+    let cards = renderCardsHtml(report.cards)
+    if !cards.isEmpty() {
+        body.push(cards)
+    }
+    for section in report.sections {
+        body.push("<section><h2>{escapeHtml(section.heading)}</h2>{paragraphsHtml(section.body)}</section>")
+    }
+    for table in report.tables {
+        let rendered = renderTableHtml(table)
+        if !rendered.isEmpty() {
+            body.push(rendered)
+        }
+    }
+    if !report.chart.isEmpty() {
+        body.push("<section><h2>Chart data</h2><pre>{escapeHtml(exportChartCsv(report.chart))}</pre><script type=\"application/json\" data-report-chart>{exportChartJson(report.chart)}</script></section>")
+    }
+    htmlDocument(strings.join(body, "\n"))
+}
+
+pub fn renderCardsMarkdown(cards: List<SummaryCard>) -> String {
+    if cards.isEmpty() {
+        return ""
+    }
+    let mut out: List<String> = []
+    out.push("## Summary")
+    for card in cards {
+        let mut line = "- **{escapeMarkdownText(card.label)}**: {escapeMarkdownText(card.value)}"
+        if !strings.trimSpace(card.detail).isEmpty() {
+            line = "{line} ({escapeMarkdownText(card.detail)})"
+        }
+        out.push(line)
+    }
+    strings.join(out, "\n")
+}
+
+pub fn renderCardsHtml(cards: List<SummaryCard>) -> String {
+    if cards.isEmpty() {
+        return ""
+    }
+    let mut out = "<section class=\"cards\">"
+    for card in cards {
+        out = "{out}<article class=\"card {toneClass(card.tone)}\"><div class=\"card-label\">{escapeHtml(card.label)}</div><div class=\"card-value\">{escapeHtml(card.value)}</div>{cardDetailHtml(card.detail)}</article>"
+    }
+    "{out}</section>"
+}
+
+pub fn renderTableMarkdown(table: Table) -> String {
+    if table.columns.isEmpty() {
+        return ""
+    }
+    let mut lines: List<String> = []
+    if !strings.trimSpace(table.title).isEmpty() {
+        lines.push("### {escapeMarkdownText(table.title)}")
+    }
+    lines.push(markdownTableHeader(table.columns))
+    lines.push(markdownAlignRow(table.columns))
+    for row in table.rows {
+        lines.push(markdownTableRow(table.columns, row))
+    }
+    strings.join(lines, "\n")
+}
+
+pub fn renderTableHtml(table: Table) -> String {
+    if table.columns.isEmpty() {
+        return ""
+    }
+    let mut out = "<section class=\"table-block\">"
+    if !strings.trimSpace(table.title).isEmpty() {
+        out = "{out}<h2>{escapeHtml(table.title)}</h2>"
+    }
+    out = "{out}<table><thead><tr>"
+    for col in table.columns {
+        out = "{out}<th style=\"text-align:{alignCss(col.align)}\">{escapeHtml(col.label)}</th>"
+    }
+    out = "{out}</tr></thead><tbody>"
+    for row in table.rows {
+        out = "{out}<tr>"
+        for col in table.columns {
+            let value = row.cells.get(col.key) ?? ""
+            out = "{out}<td style=\"text-align:{alignCss(col.align)}\">{escapeHtml(value)}</td>"
+        }
+        out = "{out}</tr>"
+    }
+    "{out}</tbody></table></section>"
+}
+
+pub fn exportChartCsv(points: List<ChartPoint>) -> String {
+    let mut lines: List<String> = ["series,label,value"]
+    for point in points {
+        lines.push("{csvCell(point.series)},{csvCell(point.label)},{point.value.toString()}")
+    }
+    strings.join(lines, "\n")
+}
+
+pub fn exportChartJson(points: List<ChartPoint>) -> String {
+    let mut parts: List<String> = []
+    for point in points {
+        let open = 123.toChar()
+        let close = 125.toChar()
+        let quote = '"'
+        parts.push("{open}{quote}series{quote}:{jsonString(point.series)},{quote}label{quote}:{jsonString(point.label)},{quote}value{quote}:{point.value.toString()}{close}")
+    }
+    let joined = strings.join(parts, ",")
+    "[{joined}]"
+}
+
+pub fn escapeHtml(text: String) -> String {
+    let mut out = ""
+    for c in text.chars() {
+        if c == '&' {
+            out = "{out}&amp;"
+        } else if c == '<' {
+            out = "{out}&lt;"
+        } else if c == '>' {
+            out = "{out}&gt;"
+        } else if c == '"' {
+            out = "{out}&quot;"
+        } else if c == '\'' {
+            out = "{out}&#39;"
+        } else {
+            out = "{out}{strings.fromChar(c)}"
+        }
+    }
+    out
+}
+
+pub fn escapeMarkdownText(text: String) -> String {
+    let mut out = text
+    out = strings.replaceAll(out, "\\", "\\\\")
+    out = strings.replaceAll(out, "|", "\\|")
+    out = strings.replaceAll(out, "`", "\\`")
+    out = strings.replaceAll(out, "*", "\\*")
+    out = strings.replaceAll(out, "_", "\\_")
+    out
+}
+
+fn markdownTableHeader(columns: List<TableColumn>) -> String {
+    let mut cells: List<String> = []
+    for col in columns {
+        cells.push(escapeMarkdownCell(col.label))
+    }
+    let joined = strings.join(cells, " | ")
+    "| {joined} |"
+}
+
+fn markdownAlignRow(columns: List<TableColumn>) -> String {
+    let mut cells: List<String> = []
+    for col in columns {
+        match col.align {
+            Left   -> cells.push(":---"),
+            Center -> cells.push(":---:"),
+            Right  -> cells.push("---:"),
+        }
+    }
+    let joined = strings.join(cells, " | ")
+    "| {joined} |"
+}
+
+fn markdownTableRow(columns: List<TableColumn>, row: TableRow) -> String {
+    let mut cells: List<String> = []
+    for col in columns {
+        cells.push(escapeMarkdownCell(row.cells.get(col.key) ?? ""))
+    }
+    let joined = strings.join(cells, " | ")
+    "| {joined} |"
+}
+
+fn escapeMarkdownCell(text: String) -> String {
+    let mut out = escapeMarkdownText(text)
+    out = strings.replaceAll(out, "\r\n", "<br>")
+    out = strings.replaceAll(out, "\n", "<br>")
+    strings.trimSpace(out)
+}
+
+fn subtitleHtml(subtitle: String) -> String {
+    let trimmed = strings.trimSpace(subtitle)
+    if trimmed.isEmpty() {
+        return ""
+    }
+    "<p class=\"subtitle\">{escapeHtml(trimmed)}</p>"
+}
+
+fn paragraphsHtml(text: String) -> String {
+    let mut parts: List<String> = []
+    for line in strings.splitLines(text) {
+        let trimmed = strings.trimSpace(line)
+        if !trimmed.isEmpty() {
+            parts.push("<p>{escapeHtml(trimmed)}</p>")
+        }
+    }
+    if parts.isEmpty() {
+        return ""
+    }
+    strings.join(parts, "")
+}
+
+fn cardDetailHtml(detail: String) -> String {
+    let trimmed = strings.trimSpace(detail)
+    if trimmed.isEmpty() {
+        return ""
+    }
+    "<div class=\"card-detail\">{escapeHtml(trimmed)}</div>"
+}
+
+fn toneClass(tone: CardTone) -> String {
+    match tone {
+        Neutral -> "tone-neutral",
+        Info    -> "tone-info",
+        Good    -> "tone-good",
+        Warning -> "tone-warning",
+        Danger  -> "tone-danger",
+    }
+}
+
+fn alignCss(align: Align) -> String {
+    match align {
+        Left   -> "left",
+        Center -> "center",
+        Right  -> "right",
+    }
+}
+
+fn csvCell(text: String) -> String {
+    let needsQuote = strings.contains(text, ",") ||
+        strings.contains(text, "\"") ||
+        strings.contains(text, "\n") ||
+        strings.contains(text, "\r")
+    if !needsQuote {
+        return text
+    }
+    let quote = '"'
+    let escaped = strings.replaceAll(text, "\"", "\"\"")
+    "{quote}{escaped}{quote}"
+}
+
+fn jsonString(text: String) -> String {
+    let mut out = "\""
+    for c in text.chars() {
+        if c == '"' {
+            out = "{out}\\\""
+        } else if c == '\\' {
+            out = "{out}\\\\"
+        } else if c == '\n' {
+            out = "{out}\\n"
+        } else if c == '\r' {
+            out = "{out}\\r"
+        } else if c == '\t' {
+            out = "{out}\\t"
+        } else {
+            out = "{out}{strings.fromChar(c)}"
+        }
+    }
+    "{out}\""
+}
+
+fn htmlDocument(body: String) -> String {
+    "<!doctype html><html><head><meta charset=\"utf-8\"><title>Report</title><style>{reportCss()}</style></head><body>{body}</body></html>"
+}
+
+fn reportCss() -> String {
+    "body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;margin:32px;color:#172033;background:#f7f8fb}header,section{max-width:960px;margin:0 auto 24px}h1{font-size:32px;margin:0 0 8px}.subtitle{color:#596273;margin:0}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.card{background:white;border:1px solid #dde2ea;border-radius:8px;padding:14px}.card-label{font-size:12px;text-transform:uppercase;color:#667085}.card-value{font-size:24px;font-weight:700;margin-top:4px}.card-detail{color:#667085;margin-top:6px}.tone-good{border-left:4px solid #1a7f37}.tone-warning{border-left:4px solid #b7791f}.tone-danger{border-left:4px solid #c2410c}.tone-info{border-left:4px solid #2563eb}table{width:100%;border-collapse:collapse;background:white}th,td{border:1px solid #dde2ea;padding:8px 10px}th{background:#eef2f7}pre{background:#101828;color:#f8fafc;padding:12px;overflow:auto;border-radius:8px}"
+}
