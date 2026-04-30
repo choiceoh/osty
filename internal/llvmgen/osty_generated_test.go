@@ -188,6 +188,82 @@ func TestGeneratedGCRootPoliciesAreOstyOwned(t *testing.T) {
 	}
 }
 
+func TestGeneratedSplitArgTypesTrimsCommaSeparatedLLVMTypes(t *testing.T) {
+	got := llvmSplitArgTypes(" i64, ptr ,double ")
+	want := []string{"i64", "ptr", "double"}
+	if len(got) != len(want) {
+		t.Fatalf("len(llvmSplitArgTypes) = %d, want %d (%v)", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("llvmSplitArgTypes()[%d] = %q, want %q (full=%v)", i, got[i], want[i], got)
+		}
+	}
+	if got := llvmSplitArgTypes(""); got != nil {
+		t.Fatalf("llvmSplitArgTypes(\"\") = %#v, want nil", got)
+	}
+}
+
+func TestGeneratedNativeTailHelpersAreOstyOwned(t *testing.T) {
+	if got := llvmNativeZeroValue(""); got.typ != "i64" || got.name != "0" {
+		t.Fatalf("llvmNativeZeroValue(\"\") = %#v, want i64 zero", got)
+	}
+	if got := llvmNativeZeroValue("void"); got.typ != "i64" || got.name != "0" {
+		t.Fatalf("llvmNativeZeroValue(\"void\") = %#v, want i64 zero", got)
+	}
+	if got := llvmNativeZeroValue("ptr"); got.typ != "ptr" || got.name != "null" {
+		t.Fatalf("llvmNativeZeroValue(\"ptr\") = %#v, want ptr null", got)
+	}
+	if got := llvmNativeZeroValue("double"); got.typ != "double" || got.name != "0.0" {
+		t.Fatalf("llvmNativeZeroValue(\"double\") = %#v, want double 0.0", got)
+	}
+	if llvmNativeBodyHasTerminator(nil) {
+		t.Fatal("empty body must not report a terminator")
+	}
+	if !llvmNativeBodyHasTerminator([]string{"entry:", "  ret i64 0"}) {
+		t.Fatal("ret-terminated body must report a terminator")
+	}
+	if !llvmNativeBodyHasTerminator([]string{"entry:", "  br label %done"}) {
+		t.Fatal("br-terminated body must report a terminator")
+	}
+	if llvmNativeBodyHasTerminator([]string{"entry:", "  %t0 = add i64 1, 2"}) {
+		t.Fatal("plain instruction tail must not report a terminator")
+	}
+}
+
+func TestGeneratedNativeSafeIndexHelpersAreOstyOwned(t *testing.T) {
+	em := llvmEmitter()
+	llvmNativePushSafeIndices(em, "i", map[string]int{"xs": 2, "ys": 0})
+	if !llvmNativeIsSafeListAccess(em, "xs", "i", 0) {
+		t.Fatal("xs[i] should be safe after push")
+	}
+	if !llvmNativeIsSafeListAccess(em, "xs", "i", 2) {
+		t.Fatal("xs[i+2] should be safe within recorded slack")
+	}
+	if llvmNativeIsSafeListAccess(em, "xs", "i", 3) {
+		t.Fatal("xs[i+3] should not be safe beyond recorded slack")
+	}
+	if !llvmNativeIsSafeListAccess(em, "ys", "i", 0) {
+		t.Fatal("ys[i] should be safe with zero slack")
+	}
+	if llvmNativeIsSafeListAccess(em, "ys", "i", 1) {
+		t.Fatal("ys[i+1] should not be safe with zero slack")
+	}
+	llvmNativePushSafeIndices(em, "i", map[string]int{})
+	if llvmNativeIsSafeListAccess(em, "xs", "i", 0) {
+		t.Fatal("empty push must clear prior slack for reused loop variable")
+	}
+	llvmNativePushSafeIndices(em, "", map[string]int{"xs": 9})
+	if llvmNativeIsSafeListAccess(em, "xs", "", 0) {
+		t.Fatal("empty idx name must never report safe access")
+	}
+	llvmNativePushSafeIndices(em, "j", map[string]int{"xs": 1})
+	llvmNativePopSafeIndices(em, "j")
+	if llvmNativeIsSafeListAccess(em, "xs", "j", 0) {
+		t.Fatal("pop must clear loop-variable safety entry")
+	}
+}
+
 func TestGeneratedClangLinkBinaryArgsAcceptMultipleObjects(t *testing.T) {
 	args := llvmClangLinkBinaryArgs("", []string{"/tmp/main.o", "/tmp/runtime/gc_runtime.o"}, "/tmp/app")
 	got := strings.Join(args, " ")

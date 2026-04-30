@@ -6772,3 +6772,100 @@ func llvmNextLabel(emitter *LlvmEmitter, prefix string) string {
 	}()
 	return name
 }
+
+// Osty: toolchain/llvmgen.osty:5158:1
+func llvmClosureEnvPointerBitmap(captureTypes []string) int {
+	var bitmap uint64
+	for i, typ := range captureTypes {
+		if typ == "ptr" {
+			bitmap |= uint64(1) << uint(i)
+		}
+	}
+	return int(bitmap)
+}
+
+// Osty: toolchain/llvmgen.osty:5171:1
+func llvmSplitArgTypes(text string) []string {
+	if text == "" {
+		return nil
+	}
+	raw := llvmStrings.Split(text, ",")
+	out := make([]string, 0, len(raw))
+	for _, part := range raw {
+		out = append(out, llvmStrings.TrimSpace(part))
+	}
+	return out
+}
+
+// Osty: toolchain/llvmgen.osty:5183:1
+func llvmNativeInlineAttrKeyword(mode int) string {
+	switch mode {
+	case 1:
+		return "inlinehint"
+	case 2:
+		return "alwaysinline"
+	case 3:
+		return "noinline"
+	default:
+		return ""
+	}
+}
+
+// Osty: toolchain/llvmgen.osty:5190:1
+func llvmNativeFnAttrStringForInlineMode(mode int) string {
+	return llvmNativeInlineAttrKeyword(mode)
+}
+
+// Osty: toolchain/llvmgen.osty:2196:1
+func llvmNativeZeroValue(llvmType string) *LlvmValue {
+	if llvmType == "" || llvmType == "void" {
+		return llvmI64("0")
+	}
+	return &LlvmValue{typ: llvmType, name: llvmZeroLiteral(llvmType), pointer: false}
+}
+
+// Osty: toolchain/llvmgen.osty:2206:1
+func llvmNativeBodyHasTerminator(body []string) bool {
+	if len(body) == 0 {
+		return false
+	}
+	last := body[len(body)-1]
+	return llvmStrings.HasPrefix(last, "  ret ") || llvmStrings.HasPrefix(last, "  br ")
+}
+
+// Osty: toolchain/llvmgen.osty:2213:1
+func llvmNativePushSafeIndices(emitter *LlvmEmitter, idxName string, lists map[string]int) {
+	if idxName == "" || emitter == nil {
+		return
+	}
+	if len(lists) == 0 {
+		emitter.nativeSafeIndices[idxName] = map[string]int{}
+		return
+	}
+	copied := make(map[string]int, len(lists))
+	for key, value := range lists {
+		copied[key] = value
+	}
+	emitter.nativeSafeIndices[idxName] = copied
+}
+
+// Osty: toolchain/llvmgen.osty:2228:1
+func llvmNativePopSafeIndices(emitter *LlvmEmitter, idxName string) {
+	if idxName == "" || emitter == nil {
+		return
+	}
+	delete(emitter.nativeSafeIndices, idxName)
+}
+
+// Osty: toolchain/llvmgen.osty:2236:1
+func llvmNativeIsSafeListAccess(emitter *LlvmEmitter, paramName string, idxName string, addend int) bool {
+	if emitter == nil || paramName == "" || idxName == "" || addend < 0 {
+		return false
+	}
+	set := emitter.nativeSafeIndices[idxName]
+	maxOff, ok := set[paramName]
+	if !ok {
+		return false
+	}
+	return addend <= maxOff
+}

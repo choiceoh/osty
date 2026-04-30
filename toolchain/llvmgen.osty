@@ -1414,13 +1414,21 @@ pub fn llvmNativeInlineAttrKeyword(mode: Int) -> String {
     }
 }
 
+/// Pure inline-mode projection used by Go snapshot wrappers that don't
+/// carry the full `LlvmNativeFunction` struct shape. Keeps the native
+/// define-line attribute policy owned by the Osty source even when the
+/// Go side only has the discriminant handy.
+pub fn llvmNativeFnAttrStringForInlineMode(mode: Int) -> String {
+    llvmNativeInlineAttrKeyword(mode)
+}
+
 /// Assemble the fn-attribute string spliced between `)` and `\{` on a
 /// `LlvmNativeFunction`'s `define` line. Currently only the A8 inline
 /// family contributes; future v0.6 annotations (hot/cold/pure/target
 /// features/noalias) land in this helper as they gain Osty-emitter
 /// coverage so all callers stay on one call shape.
 pub fn llvmNativeFnAttrString(function: LlvmNativeFunction) -> String {
-    llvmNativeInlineAttrKeyword(function.inlineMode)
+    llvmNativeFnAttrStringForInlineMode(function.inlineMode)
 }
 
 /// Variant of `llvmRenderFunction` that splices a fn-attribute string
@@ -2180,16 +2188,88 @@ fn llvmNativeBlockValue(
     llvmNativeZeroValue(llvmType)
 }
 
-fn llvmNativeZeroValue(llvmType: String) -> LlvmValue {
+/// Zero-value constructor shared by the native-entry snapshot helpers.
+/// `""` / `"void"` normalize to the legacy native-path sentinel
+/// `i64 0` so callers that need "no meaningful value" still receive a
+/// non-empty `LlvmValue` handle and can pass it through existing scalar
+/// helper code without special casing.
+pub fn llvmNativeZeroValue(llvmType: String) -> LlvmValue {
+    if llvmType == "" || llvmType == "void" {
+        return llvmI64("0")
+    }
     LlvmValue { typ: llvmType, name: llvmZeroLiteral(llvmType), pointer: false }
 }
 
-fn llvmNativeBodyHasTerminator(body: List<String>) -> Bool {
+/// Reports whether a native-entry block body already ends in a
+/// terminator (`ret` or `br`). The snapshot uses this before appending a
+/// synthetic fallthrough return.
+pub fn llvmNativeBodyHasTerminator(body: List<String>) -> Bool {
     if body.len() == 0 {
         return false
     }
     let last = body[body.len() - 1]
     llvmStrings.hasPrefix(last, "  ret ") || llvmStrings.hasPrefix(last, "  br ")
+}
+
+fn llvmNativeCloneOffsetMap(input: Map<String, Int>) -> Map<String, Int> {
+    let mut out: Map<String, Int> = {:}
+    for key in input.keys() {
+        let value = input.get(key)
+        if value.isSome() {
+            out.insert(key, value.unwrap())
+        }
+    }
+    out
+}
+
+/// Records the per-loop safe-index slack map for `idxName`. Empty input
+/// deliberately overwrites any prior entry with an empty map so reusing
+/// the same loop-var name in an inner scope cannot inherit stale bounds
+/// facts from an outer loop.
+pub fn llvmNativePushSafeIndices(
+    emitter: LlvmEmitter,
+    idxName: String,
+    lists: Map<String, Int>,
+) {
+    if idxName == "" {
+        return
+    }
+    if lists.len() == 0 {
+        emitter.nativeSafeIndices.insert(idxName, {:})
+        return
+    }
+    emitter.nativeSafeIndices.insert(idxName, llvmNativeCloneOffsetMap(lists))
+}
+
+/// Clears the native safe-index entry for a loop variable after its body
+/// has been emitted.
+pub fn llvmNativePopSafeIndices(emitter: LlvmEmitter, idxName: String) {
+    if idxName == "" {
+        return
+    }
+    let _ = emitter.nativeSafeIndices.remove(idxName)
+}
+
+/// Reports whether `paramName[idxName + addend]` is proven in-bounds by
+/// the current native safe-index table.
+pub fn llvmNativeIsSafeListAccess(
+    emitter: LlvmEmitter,
+    paramName: String,
+    idxName: String,
+    addend: Int,
+) -> Bool {
+    if paramName == "" || idxName == "" || addend < 0 {
+        return false
+    }
+    let set = emitter.nativeSafeIndices.get(idxName)
+    if set.isNone() {
+        return false
+    }
+    let maxOff = set.unwrap().get(paramName)
+    if maxOff.isNone() {
+        return false
+    }
+    addend <= maxOff.unwrap()
 }
 
 /// Phase A4 fn-value thunk template. Renders the IR body of a private
@@ -6887,4 +6967,35 @@ fn llvmNextLabel(emitter: LlvmEmitter, prefix: String) -> String {
     let name = "{prefix}{emitter.label}"
     emitter.label = emitter.label + 1
     name
+}
+
+/// llvmClosureEnvPointerBitmap encodes which closure-capture slots hold
+/// managed pointers (bit i = 1 iff `captureTypes[i] == "ptr"`). The
+/// helper lives in Osty so both the legacy AST bridge and the native
+/// entry snapshot share one source of truth for the GC-visible capture
+/// layout policy. Callers cap the list at 64 entries and may reinterpret
+/// the returned signed Int as an unsigned 64-bit bitmap on the Go side.
+pub fn llvmClosureEnvPointerBitmap(captureTypes: List<String>) -> Int {
+    let mut bitmap = 0
+    for i in 0..captureTypes.len() {
+        if captureTypes[i] == "ptr" {
+            bitmap = bitmap | (1 << i)
+        }
+    }
+    bitmap
+}
+
+/// llvmSplitArgTypes parses a comma-separated LLVM type list used by the
+/// native-entry snapshot helpers (`expr.text` for interface/fn-value
+/// shims, closure capture layouts, etc.). Empty input yields an empty
+/// list; each part is trimmed so both `"i64, ptr"` and `"i64,ptr"`
+/// normalize to the same result.
+pub fn llvmSplitArgTypes(text: String) -> List<String> {
+    if text == "" { return [] }
+    let raw = llvmStrings.split(text, ",")
+    let mut out: List<String> = []
+    for part in raw {
+        out.push(llvmStrings.trimSpace(part))
+    }
+    out
 }
