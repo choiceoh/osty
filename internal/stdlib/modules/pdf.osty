@@ -1,0 +1,805 @@
+// std.pdf - lightweight PDF inspection and text extraction helpers.
+//
+// PDF rendering, font shaping, image decode, and compressed stream decoding
+// belong in host/runtime-backed layers. This pure Osty module covers the
+// useful dependency-free surface: header validation, document metadata,
+// object inventory, page counting, and text extraction from uncompressed
+// content streams.
+
+use std.bytes
+use std.error
+use std.strings
+
+pub struct Version {
+    pub major: Int,
+    pub minor: Int,
+    pub raw: String,
+}
+
+pub struct Info {
+    pub title: String = "",
+    pub author: String = "",
+    pub subject: String = "",
+    pub keywords: String = "",
+    pub creator: String = "",
+    pub producer: String = "",
+    pub creationDate: String = "",
+    pub modDate: String = "",
+}
+
+pub struct Document {
+    pub version: Version,
+    pub pageCount: Int,
+    pub encrypted: Bool = false,
+    pub linearized: Bool = false,
+    pub xrefStream: Bool = false,
+    pub objectCount: Int = 0,
+    pub info: Info,
+}
+
+pub enum ObjectKind {
+    Catalog,
+    Pages,
+    Page,
+    Font,
+    Image,
+    Metadata,
+    Xref,
+    Content,
+    Other,
+}
+
+pub struct ObjectHeader {
+    pub objectNumber: Int,
+    pub generation: Int,
+    pub offset: Int,
+    pub stream: Bool = false,
+    pub kind: ObjectKind,
+}
+
+pub struct TextOptions {
+    pub maxObjects: Int = 2000,
+    pub includePageBreaks: Bool = false,
+}
+
+pub fn mime() -> String {
+    "application/pdf"
+}
+
+pub fn isPdf(data: Bytes) -> Bool {
+    headerOffset(data) >= 0
+}
+
+pub fn version(data: Bytes) -> Result<Version, Error> {
+    let at = headerOffset(data)
+    if at < 0 {
+        return Err(error.new("pdf: missing %PDF header"))
+    }
+    if data.len() < at + 8 || byteAt(data, at + 6) != '.'.toInt() {
+        return Err(error.new("pdf: truncated PDF version header"))
+    }
+    let major = digitAt(data, at + 5)?
+    let minor = digitAt(data, at + 7)?
+    Ok(Version {
+        major: major,
+        minor: minor,
+        raw: readAscii(data, at, at + 8),
+    })
+}
+
+pub fn parse(data: Bytes) -> Result<Document, Error> {
+    let v = version(data)?
+    let text = safeAscii(data)
+    let objs = objectHeadersFromText(text)
+    Ok(Document {
+        version: v,
+        pageCount: countPageTypes(text),
+        encrypted: strings.contains(text, "/Encrypt"),
+        linearized: strings.contains(text, "/Linearized"),
+        xrefStream: strings.contains(text, "/Type /XRef"),
+        objectCount: objs.len(),
+        info: infoFromText(text),
+    })
+}
+
+pub fn metadata(data: Bytes) -> Result<Info, Error> {
+    version(data)?
+    Ok(infoFromText(safeAscii(data)))
+}
+
+pub fn pageCount(data: Bytes) -> Result<Int, Error> {
+    version(data)?
+    Ok(countPageTypes(safeAscii(data)))
+}
+
+pub fn objects(data: Bytes) -> Result<List<ObjectHeader>, Error> {
+    version(data)?
+    Ok(objectHeadersFromText(safeAscii(data)))
+}
+
+pub fn isEncrypted(data: Bytes) -> Bool {
+    isPdf(data) && strings.contains(safeAscii(data), "/Encrypt")
+}
+
+pub fn isLinearized(data: Bytes) -> Bool {
+    isPdf(data) && strings.contains(safeAscii(data), "/Linearized")
+}
+
+pub fn hasXrefStream(data: Bytes) -> Bool {
+    isPdf(data) && strings.contains(safeAscii(data), "/Type /XRef")
+}
+
+pub fn extractText(data: Bytes) -> Result<String, Error> {
+    extractTextWithOptions(data, TextOptions {})
+}
+
+pub fn extractTextWithOptions(data: Bytes, options: TextOptions) -> Result<String, Error> {
+    version(data)?
+    let text = safeAscii(data)
+    let chars = text.chars()
+    let mut chunks: List<String> = []
+    let mut pos = 0
+    let mut seen = 0
+    for pos < chars.len() {
+        if options.maxObjects > 0 && seen >= options.maxObjects {
+            break
+        }
+        let streamAt = indexOfToken(chars, "stream", pos)
+        if streamAt < 0 {
+            break
+        }
+        let bodyStart = streamBodyStart(chars, streamAt + "stream".len())
+        let endAt = indexOfToken(chars, "endstream", bodyStart)
+        if endAt < 0 {
+            break
+        }
+        let dict = sliceString(text, maxInt(0, streamAt - 900), streamAt)
+        if !strings.contains(dict, "/Filter") && !strings.contains(dict, "/Subtype /Image") {
+            let body = sliceString(text, bodyStart, endAt)
+            let chunk = normalizeWhitespace(extractTextOperators(body, true))
+            if !chunk.isEmpty() {
+                chunks.push(chunk)
+            }
+        }
+        seen = seen + 1
+        pos = endAt + "endstream".len()
+    }
+    if chunks.isEmpty() {
+        let fallback = normalizeWhitespace(extractTextOperators(text, false))
+        if !fallback.isEmpty() {
+            chunks.push(fallback)
+        }
+    }
+    if options.includePageBreaks {
+        return Ok(strings.join(chunks, "\n\n"))
+    }
+    Ok(strings.join(chunks, " "))
+}
+
+pub fn hasText(data: Bytes) -> Bool {
+    match extractText(data) {
+        Ok(text) -> !strings.trimSpace(text).isEmpty(),
+        Err(_)   -> false,
+    }
+}
+
+pub fn kindName(kind: ObjectKind) -> String {
+    match kind {
+        Catalog  -> "catalog",
+        Pages    -> "pages",
+        Page     -> "page",
+        Font     -> "font",
+        Image    -> "image",
+        Metadata -> "metadata",
+        Xref     -> "xref",
+        Content  -> "content",
+        Other    -> "other",
+    }
+}
+
+fn headerOffset(data: Bytes) -> Int {
+    let raw = "%PDF-".bytes()
+    let limit = minInt(data.len(), 1024)
+    if limit < raw.len() {
+        return -1
+    }
+    let mut i = 0
+    for i + raw.len() <= limit {
+        let mut ok = true
+        let mut j = 0
+        for j < raw.len() {
+            if byteAt(data, i + j) != raw[j].toInt() {
+                ok = false
+                break
+            }
+            j = j + 1
+        }
+        if ok {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn digitAt(data: Bytes, index: Int) -> Result<Int, Error> {
+    let n = byteAt(data, index)
+    if n < '0'.toInt() || n > '9'.toInt() {
+        return Err(error.new("pdf: invalid version digit"))
+    }
+    Ok(n - '0'.toInt())
+}
+
+fn safeAscii(data: Bytes) -> String {
+    let mut out = ""
+    let mut i = 0
+    for i < data.len() {
+        let b = byteAt(data, i)
+        if b == 0x09 || b == 0x0A || b == 0x0D || (b >= 0x20 && b <= 0x7E) {
+            out = "{out}{b.toChar()}"
+        } else {
+            out = "{out} "
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn readAscii(data: Bytes, start: Int, end: Int) -> String {
+    let mut out = ""
+    let limit = minInt(end, data.len())
+    let mut i = maxInt(0, start)
+    for i < limit {
+        let b = byteAt(data, i)
+        if b >= 0x20 && b <= 0x7E {
+            out = "{out}{b.toChar()}"
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn infoFromText(text: String) -> Info {
+    Info {
+        title: infoValue(text, "Title"),
+        author: infoValue(text, "Author"),
+        subject: infoValue(text, "Subject"),
+        keywords: infoValue(text, "Keywords"),
+        creator: infoValue(text, "Creator"),
+        producer: infoValue(text, "Producer"),
+        creationDate: infoValue(text, "CreationDate"),
+        modDate: infoValue(text, "ModDate"),
+    }
+}
+
+fn infoValue(text: String, key: String) -> String {
+    let chars = text.chars()
+    let needle = "/{key}"
+    let mut i = 0
+    for i < chars.len() {
+        if matchesLiteral(chars, i, needle) && nameBoundary(chars, i + needle.len()) {
+            let valueStart = skipWhitespace(chars, i + needle.len())
+            let value = readPdfStringValue(chars, valueStart)
+            if !value.isEmpty() {
+                return value
+            }
+        }
+        i = i + 1
+    }
+    ""
+}
+
+fn readPdfStringValue(chars: List<Char>, at: Int) -> String {
+    if at >= chars.len() {
+        return ""
+    }
+    if chars[at] == '(' {
+        let (value, _) = readLiteralString(chars, at)
+        return value
+    }
+    if chars[at] == '<' && (at + 1 >= chars.len() || chars[at + 1] != '<') {
+        let (value, _) = readHexString(chars, at)
+        return value
+    }
+    if chars[at] == '/' {
+        return readName(chars, at + 1)
+    }
+    readBareToken(chars, at)
+}
+
+fn countPageTypes(text: String) -> Int {
+    let chars = text.chars()
+    let mut count = 0
+    let mut i = 0
+    for i < chars.len() {
+        if matchesLiteral(chars, i, "/Type") {
+            let nameAt = skipWhitespace(chars, i + "/Type".len())
+            if matchesLiteral(chars, nameAt, "/Page") && nameBoundary(chars, nameAt + "/Page".len()) {
+                count = count + 1
+                i = nameAt + "/Page".len()
+                continue
+            }
+        }
+        i = i + 1
+    }
+    if count > 0 {
+        return count
+    }
+    maxPagesCount(text)
+}
+
+fn maxPagesCount(text: String) -> Int {
+    let chars = text.chars()
+    let mut best = 0
+    let mut i = 0
+    for i < chars.len() {
+        if matchesLiteral(chars, i, "/Count") {
+            let numAt = skipWhitespace(chars, i + "/Count".len())
+            let (value, endAt) = parseUnsigned(chars, numAt)
+            if value > best {
+                best = value
+            }
+            i = maxInt(endAt, i + 1)
+            continue
+        }
+        i = i + 1
+    }
+    best
+}
+
+fn objectHeadersFromText(text: String) -> List<ObjectHeader> {
+    let chars = text.chars()
+    let mut out: List<ObjectHeader> = []
+    let mut i = 0
+    for i < chars.len() {
+        if !isDigit(chars[i]) || (i > 0 && !isDelimiter(chars[i - 1])) {
+            i = i + 1
+            continue
+        }
+        let (objectNumber, afterObject) = parseUnsigned(chars, i)
+        let genAt = skipInlineSpace(chars, afterObject)
+        if genAt == afterObject || genAt >= chars.len() || !isDigit(chars[genAt]) {
+            i = i + 1
+            continue
+        }
+        let (generation, afterGeneration) = parseUnsigned(chars, genAt)
+        let objAt = skipInlineSpace(chars, afterGeneration)
+        if objAt == afterGeneration || !matchesLiteral(chars, objAt, "obj") || !nameBoundary(chars, objAt + 3) {
+            i = i + 1
+            continue
+        }
+        let bodyStart = objAt + 3
+        let bodyEnd = indexOfToken(chars, "endobj", bodyStart)
+        let endAt = if bodyEnd < 0 { minInt(chars.len(), bodyStart + 1200) } else { bodyEnd }
+        let body = sliceString(text, bodyStart, endAt)
+        out.push(ObjectHeader {
+            objectNumber: objectNumber,
+            generation: generation,
+            offset: i,
+            stream: strings.contains(body, "stream"),
+            kind: classifyObject(body),
+        })
+        i = maxInt(endAt, bodyStart)
+    }
+    out
+}
+
+fn classifyObject(body: String) -> ObjectKind {
+    if strings.contains(body, "/Type /Catalog") {
+        return Catalog
+    }
+    if strings.contains(body, "/Type /Pages") {
+        return Pages
+    }
+    if strings.contains(body, "/Type /Page") {
+        return Page
+    }
+    if strings.contains(body, "/Type /Font") {
+        return Font
+    }
+    if strings.contains(body, "/Subtype /Image") {
+        return Image
+    }
+    if strings.contains(body, "/Type /Metadata") {
+        return Metadata
+    }
+    if strings.contains(body, "/Type /XRef") {
+        return Xref
+    }
+    if strings.contains(body, "stream") {
+        return Content
+    }
+    Other
+}
+
+fn extractTextOperators(body: String, requireTextBlock: Bool) -> String {
+    let chars = body.chars()
+    let mut out: List<String> = []
+    let mut inText = !requireTextBlock
+    let mut i = 0
+    for i < chars.len() {
+        if tokenAt(chars, i, "BT") {
+            inText = true
+            i = i + 2
+            continue
+        }
+        if tokenAt(chars, i, "ET") {
+            inText = false
+            i = i + 2
+            continue
+        }
+        if !inText {
+            i = i + 1
+            continue
+        }
+        if chars[i] == '[' {
+            let (text, endAt, ok) = readTextArray(chars, i)
+            if ok && !text.isEmpty() {
+                out.push(text)
+                i = endAt
+                continue
+            }
+        } else if chars[i] == '(' {
+            let (text, endAt) = readLiteralString(chars, i)
+            let opAt = skipWhitespace(chars, endAt)
+            if isShowTextOperator(chars, opAt) && !text.isEmpty() {
+                out.push(text)
+                i = opAt + 1
+                continue
+            }
+            i = endAt
+            continue
+        } else if chars[i] == '<' && (i + 1 >= chars.len() || chars[i + 1] != '<') {
+            let (text, endAt) = readHexString(chars, i)
+            let opAt = skipWhitespace(chars, endAt)
+            if isShowTextOperator(chars, opAt) && !text.isEmpty() {
+                out.push(text)
+                i = opAt + 1
+                continue
+            }
+            i = endAt
+            continue
+        }
+        i = i + 1
+    }
+    strings.join(out, " ")
+}
+
+fn readTextArray(chars: List<Char>, at: Int) -> (String, Int, Bool) {
+    let mut parts: List<String> = []
+    let mut i = at + 1
+    for i < chars.len() && chars[i] != ']' {
+        if chars[i] == '(' {
+            let (value, endAt) = readLiteralString(chars, i)
+            if !value.isEmpty() {
+                parts.push(value)
+            }
+            i = endAt
+            continue
+        }
+        if chars[i] == '<' && (i + 1 >= chars.len() || chars[i + 1] != '<') {
+            let (value, endAt) = readHexString(chars, i)
+            if !value.isEmpty() {
+                parts.push(value)
+            }
+            i = endAt
+            continue
+        }
+        i = i + 1
+    }
+    if i >= chars.len() || chars[i] != ']' {
+        return ("", i, false)
+    }
+    let opAt = skipWhitespace(chars, i + 1)
+    if matchesLiteral(chars, opAt, "TJ") && tokenBoundary(chars, opAt, opAt + 2) {
+        return (strings.join(parts, ""), opAt + 2, true)
+    }
+    ("", i + 1, false)
+}
+
+fn readLiteralString(chars: List<Char>, at: Int) -> (String, Int) {
+    let mut out = ""
+    let mut depth = 0
+    let mut escaped = false
+    let mut i = at
+    for i < chars.len() {
+        let c = chars[i]
+        if escaped {
+            if c == 'n' {
+                out = "{out}\n"
+            } else if c == 'r' {
+                out = "{out}\r"
+            } else if c == 't' {
+                out = "{out}\t"
+            } else if c == 'b' || c == 'f' {
+                out = "{out} "
+            } else if c == '\r' {
+                if i + 1 < chars.len() && chars[i + 1] == '\n' {
+                    i = i + 1
+                }
+            } else if c == '\n' {
+            } else if isOctalDigit(c) {
+                let (value, endAt) = readOctalEscape(chars, i)
+                out = "{out}{value.toChar()}"
+                i = endAt - 1
+            } else {
+                out = "{out}{c}"
+            }
+            escaped = false
+            i = i + 1
+            continue
+        }
+        if c == '\\' {
+            escaped = true
+            i = i + 1
+            continue
+        }
+        if c == '(' {
+            depth = depth + 1
+            if depth > 1 {
+                out = "{out}{c}"
+            }
+            i = i + 1
+            continue
+        }
+        if c == ')' {
+            depth = depth - 1
+            if depth <= 0 {
+                return (out, i + 1)
+            }
+            out = "{out}{c}"
+            i = i + 1
+            continue
+        }
+        out = "{out}{c}"
+        i = i + 1
+    }
+    (out, i)
+}
+
+fn readHexString(chars: List<Char>, at: Int) -> (String, Int) {
+    let mut raw: List<Int> = []
+    let mut pending = -1
+    let mut i = at + 1
+    for i < chars.len() && chars[i] != '>' {
+        let digit = hexDigit(chars[i])
+        if digit >= 0 {
+            if pending < 0 {
+                pending = digit
+            } else {
+                raw.push((pending << 4) | digit)
+                pending = -1
+            }
+        }
+        i = i + 1
+    }
+    if pending >= 0 {
+        raw.push(pending << 4)
+    }
+    (decodePdfBytes(raw), minInt(i + 1, chars.len()))
+}
+
+fn decodePdfBytes(raw: List<Int>) -> String {
+    if raw.len() >= 2 && raw[0] == 0xFE && raw[1] == 0xFF {
+        let mut out = ""
+        let mut i = 2
+        for i + 1 < raw.len() {
+            let cp = (raw[i] << 8) | raw[i + 1]
+            if cp >= 0x20 && cp <= 0x10FFFF {
+                out = "{out}{cp.toChar()}"
+            }
+            i = i + 2
+        }
+        return out
+    }
+    let mut out = ""
+    for b in raw {
+        if b == 0x09 || b == 0x0A || b == 0x0D || (b >= 0x20 && b <= 0x7E) {
+            out = "{out}{b.toChar()}"
+        } else {
+            out = "{out} "
+        }
+    }
+    out
+}
+
+fn readOctalEscape(chars: List<Char>, at: Int) -> (Int, Int) {
+    let mut value = 0
+    let mut count = 0
+    let mut i = at
+    for i < chars.len() && count < 3 && isOctalDigit(chars[i]) {
+        value = value * 8 + (chars[i].toInt() - '0'.toInt())
+        i = i + 1
+        count = count + 1
+    }
+    (value & 0xFF, i)
+}
+
+fn streamBodyStart(chars: List<Char>, at: Int) -> Int {
+    if at < chars.len() && chars[at] == '\r' {
+        if at + 1 < chars.len() && chars[at + 1] == '\n' {
+            return at + 2
+        }
+        return at + 1
+    }
+    if at < chars.len() && chars[at] == '\n' {
+        return at + 1
+    }
+    at
+}
+
+fn isShowTextOperator(chars: List<Char>, at: Int) -> Bool {
+    if at >= chars.len() {
+        return false
+    }
+    if matchesLiteral(chars, at, "Tj") && tokenBoundary(chars, at, at + 2) {
+        return true
+    }
+    chars[at] == '\'' || chars[at] == '"'
+}
+
+fn tokenAt(chars: List<Char>, at: Int, token: String) -> Bool {
+    matchesLiteral(chars, at, token) && tokenBoundary(chars, at, at + token.len())
+}
+
+fn tokenBoundary(chars: List<Char>, start: Int, end: Int) -> Bool {
+    (start == 0 || isDelimiter(chars[start - 1])) &&
+    (end >= chars.len() || isDelimiter(chars[end]))
+}
+
+fn indexOfToken(chars: List<Char>, token: String, start: Int) -> Int {
+    let mut i = maxInt(0, start)
+    for i + token.len() <= chars.len() {
+        if tokenAt(chars, i, token) {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn matchesLiteral(chars: List<Char>, at: Int, literal: String) -> Bool {
+    let raw = literal.chars()
+    if at < 0 || at + raw.len() > chars.len() {
+        return false
+    }
+    let mut i = 0
+    for i < raw.len() {
+        if chars[at + i] != raw[i] {
+            return false
+        }
+        i = i + 1
+    }
+    true
+}
+
+fn parseUnsigned(chars: List<Char>, at: Int) -> (Int, Int) {
+    let mut value = 0
+    let mut i = at
+    for i < chars.len() && isDigit(chars[i]) {
+        value = value * 10 + (chars[i].toInt() - '0'.toInt())
+        i = i + 1
+    }
+    (value, i)
+}
+
+fn skipWhitespace(chars: List<Char>, at: Int) -> Int {
+    let mut i = maxInt(0, at)
+    for i < chars.len() && isPdfWhitespace(chars[i]) {
+        i = i + 1
+    }
+    i
+}
+
+fn skipInlineSpace(chars: List<Char>, at: Int) -> Int {
+    let mut i = maxInt(0, at)
+    for i < chars.len() && (chars[i] == ' ' || chars[i] == '\t') {
+        i = i + 1
+    }
+    i
+}
+
+fn readName(chars: List<Char>, at: Int) -> String {
+    let mut out = ""
+    let mut i = at
+    for i < chars.len() && !isDelimiter(chars[i]) {
+        out = "{out}{chars[i]}"
+        i = i + 1
+    }
+    out
+}
+
+fn readBareToken(chars: List<Char>, at: Int) -> String {
+    let mut out = ""
+    let mut i = at
+    for i < chars.len() && !isDelimiter(chars[i]) {
+        out = "{out}{chars[i]}"
+        i = i + 1
+    }
+    out
+}
+
+fn nameBoundary(chars: List<Char>, at: Int) -> Bool {
+    at >= chars.len() || isDelimiter(chars[at]) || chars[at] == '/' || chars[at] == '<' || chars[at] == '>'
+}
+
+fn isDelimiter(c: Char) -> Bool {
+    isPdfWhitespace(c) ||
+    c == '(' || c == ')' ||
+    c == '<' || c == '>' ||
+    c == '[' || c == ']' ||
+    c.toInt() == 0x7B || c.toInt() == 0x7D ||
+    c == '/' || c == '%'
+}
+
+fn isPdfWhitespace(c: Char) -> Bool {
+    c == ' ' ||
+    c == '\t' ||
+    c == '\n' ||
+    c == '\r' ||
+    c.toInt() == 0x0C ||
+    c.toInt() == 0x00
+}
+
+fn isDigit(c: Char) -> Bool {
+    c >= '0' && c <= '9'
+}
+
+fn isOctalDigit(c: Char) -> Bool {
+    c >= '0' && c <= '7'
+}
+
+fn hexDigit(c: Char) -> Int {
+    if c >= '0' && c <= '9' {
+        return c.toInt() - '0'.toInt()
+    }
+    if c >= 'a' && c <= 'f' {
+        return c.toInt() - 'a'.toInt() + 10
+    }
+    if c >= 'A' && c <= 'F' {
+        return c.toInt() - 'A'.toInt() + 10
+    }
+    -1
+}
+
+fn normalizeWhitespace(text: String) -> String {
+    let mut out = ""
+    let mut pendingSpace = false
+    for c in text.chars() {
+        if isPdfWhitespace(c) {
+            pendingSpace = true
+            continue
+        }
+        if pendingSpace && !out.isEmpty() {
+            out = "{out} "
+        }
+        out = "{out}{c}"
+        pendingSpace = false
+    }
+    strings.trimSpace(out)
+}
+
+fn sliceString(text: String, start: Int, end: Int) -> String {
+    let chars = text.chars()
+    let s = minInt(maxInt(0, start), chars.len())
+    let e = minInt(maxInt(s, end), chars.len())
+    let mut out = ""
+    let mut i = s
+    for i < e {
+        out = "{out}{chars[i]}"
+        i = i + 1
+    }
+    out
+}
+
+fn minInt(a: Int, b: Int) -> Int {
+    if a < b { a } else { b }
+}
+
+fn maxInt(a: Int, b: Int) -> Int {
+    if a > b { a } else { b }
+}
+
+fn byteAt(data: Bytes, index: Int) -> Int {
+    bytes.get(data, index).unwrap().toInt()
+}
