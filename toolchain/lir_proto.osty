@@ -489,7 +489,6 @@ pub fn lirDiagnosticKindName(kind: LirDiagnosticKind) -> String {
         LirDiagInvalidInput -> "invalid_input",
         LirDiagUnsupported -> "unsupported",
         LirDiagValidation -> "validation",
-        _ -> "unknown",
     }
 }
 pub fn lirDiagnosticRender(d: LirDiagnostic) -> String {

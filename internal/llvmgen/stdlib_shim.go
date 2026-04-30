@@ -88,7 +88,7 @@ func collectStdNetAliases(file *ast.File) map[string]bool {
 	return out
 }
 
-func stdBytesArgNoun(n int) string {
+func stdShimArgNoun(n int) string {
 	if n == 1 {
 		return "argument"
 	}
@@ -112,6 +112,19 @@ func (g *generator) emitStdBytesDescriptorArg(arg *ast.Arg, name string, index i
 	}
 }
 
+func (g *generator) emitStdStringsDescriptorArg(arg *ast.Arg, name string, index int) (value, error) {
+	switch llvmStdStringsCallParamKind(name, index) {
+	case llvmRuntimeFfiKindString():
+		return g.emitStdStringsArg(arg, name, index)
+	case llvmRuntimeFfiKindInt():
+		return g.emitStdStringsIntArg(arg, name, index)
+	case llvmRuntimeFfiKindListString():
+		return g.emitStdStringsListArg(arg, name, index)
+	default:
+		return value{}, unsupportedf("call", "strings.%s arg %d has unknown descriptor kind", name, index+1)
+	}
+}
+
 func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 	if call == nil || len(g.stdBytesAliases) == 0 {
 		return value{}, false, nil
@@ -130,7 +143,7 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		return value{}, false, nil
 	}
 	if len(call.Args) != expected {
-		return value{}, true, unsupportedf("call", "bytes.%s expects %d %s, got %d", name, expected, stdBytesArgNoun(expected), len(call.Args))
+		return value{}, true, unsupportedf("call", "bytes.%s expects %d %s, got %d", name, expected, stdShimArgNoun(expected), len(call.Args))
 	}
 	switch name {
 	case "from":
@@ -539,6 +552,13 @@ func (g *generator) emitStdStringsCall(call *ast.CallExpr) (value, bool, error) 
 		return value{}, false, nil
 	}
 	name := canonicalStdStringsCallName(field.Name)
+	expected := llvmStdStringsCallArgCount(name)
+	if expected == 0 {
+		return value{}, false, nil
+	}
+	if len(call.Args) != expected {
+		return value{}, true, unsupportedf("call", "strings.%s expects %d %s, got %d", name, expected, stdShimArgNoun(expected), len(call.Args))
+	}
 	switch name {
 	case "compare":
 		v, err := g.emitStdStringsBinary(call, "compare", "i64", llvmStringRuntimeCompareSymbol())
@@ -629,7 +649,7 @@ func (g *generator) emitStdStringsCall(call *ast.CallExpr) (value, bool, error) 
 }
 
 func canonicalStdStringsCallName(name string) string {
-	return llvmCanonicalStdStringsCallName(name)
+	return llvmStdStringsCallCanonicalName(name)
 }
 
 // stdStringsCallStaticResult mirrors runtimeFFICallTarget for the std.strings
@@ -651,15 +671,12 @@ func (g *generator) stdStringsCallStaticResult(call *ast.CallExpr) (value, bool)
 	}
 	stringT := &ast.NamedType{Path: []string{"String"}}
 	listStringT := &ast.NamedType{Path: []string{"List"}, Args: []ast.Type{stringT}}
-	name := canonicalStdStringsCallName(field.Name)
-	switch name {
-	case "compare":
+	switch llvmStdStringsCallReturnKind(field.Name) {
+	case llvmRuntimeFfiKindInt():
 		return value{typ: "i64"}, true
-	case "count":
-		return value{typ: "i64"}, true
-	case "Index", "LastIndex":
+	case llvmStdStringsResultKindRawIndex():
 		return value{typ: "i64", sourceType: &ast.NamedType{Path: []string{"Int"}}}, true
-	case "indexOf", "lastIndexOf":
+	case llvmStdStringsResultKindOptionInt():
 		return value{
 			typ:       "ptr",
 			gcManaged: true,
@@ -667,23 +684,23 @@ func (g *generator) stdStringsCallStaticResult(call *ast.CallExpr) (value, bool)
 				Inner: &ast.NamedType{Path: []string{"Int"}},
 			},
 		}, true
-	case "toInt":
+	case llvmStdStringsResultKindResultIntError():
 		if info, ok := builtinResultTypeFromAST(stringToIntResultSourceType(), g.typeEnv()); ok {
 			return value{typ: info.typ, sourceType: stringToIntResultSourceType(), rootPaths: g.rootPathsForType(info.typ)}, true
 		}
 		return value{}, false
-	case "toFloat":
+	case llvmStdStringsResultKindResultFloatError():
 		if info, ok := builtinResultTypeFromAST(stringToFloatResultSourceType(), g.typeEnv()); ok {
 			return value{typ: info.typ, sourceType: stringToFloatResultSourceType(), rootPaths: g.rootPathsForType(info.typ)}, true
 		}
 		return value{}, false
-	case "contains", "hasPrefix", "hasSuffix":
+	case llvmRuntimeFfiKindBool():
 		return value{typ: "i1"}, true
-	case "toBytes":
+	case llvmRuntimeFfiKindBytes():
 		return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"Bytes"}}}, true
-	case "concat", "join", "repeat", "replace", "replaceAll", "slice", "trim", "trimSpace", "trimStart", "trimEnd", "trimPrefix", "trimSuffix", "toUpper", "toLower":
+	case llvmRuntimeFfiKindString():
 		return value{typ: "ptr", gcManaged: true, sourceType: stringT}, true
-	case "split", "splitN", "fields":
+	case llvmRuntimeFfiKindListString():
 		return value{typ: "ptr", gcManaged: true, listElemTyp: "ptr", listElemString: true, sourceType: listStringT}, true
 	}
 	return value{}, false
@@ -743,14 +760,11 @@ func (g *generator) stdBytesCallStaticResult(call *ast.CallExpr) (value, bool) {
 }
 
 func (g *generator) emitStdStringsSplit(call *ast.CallExpr) (value, error) {
-	if len(call.Args) != 2 {
-		return value{}, unsupportedf("call", "strings.split expects 2 arguments, got %d", len(call.Args))
-	}
-	s, err := g.emitStdStringsArg(call.Args[0], "split", 0)
+	s, err := g.emitStdStringsDescriptorArg(call.Args[0], "split", 0)
 	if err != nil {
 		return value{}, err
 	}
-	sep, err := g.emitStdStringsArg(call.Args[1], "split", 1)
+	sep, err := g.emitStdStringsDescriptorArg(call.Args[1], "split", 1)
 	if err != nil {
 		return value{}, err
 	}
@@ -769,39 +783,23 @@ func (g *generator) emitStdStringsSplit(call *ast.CallExpr) (value, error) {
 // emitStdStringsSplitN mirrors emitStdStringsSplit but threads a third
 // Int argument to the runtime cap. The runtime body lives in
 // osty_rt_strings_SplitN; semantics match the pure-Osty stdlib body.
-// `n` bypasses emitStdStringsArg because that helper enforces ptr
-// (String) for every argument — splitN's count is the one outlier.
 func (g *generator) emitStdStringsSplitN(call *ast.CallExpr) (value, error) {
-	if len(call.Args) != 3 {
-		return value{}, unsupportedf("call", "strings.splitN expects 3 arguments, got %d", len(call.Args))
-	}
-	s, err := g.emitStdStringsArg(call.Args[0], "splitN", 0)
+	s, err := g.emitStdStringsDescriptorArg(call.Args[0], "splitN", 0)
 	if err != nil {
 		return value{}, err
 	}
-	sep, err := g.emitStdStringsArg(call.Args[1], "splitN", 1)
+	sep, err := g.emitStdStringsDescriptorArg(call.Args[1], "splitN", 1)
 	if err != nil {
 		return value{}, err
 	}
-	nArg := call.Args[2]
-	if nArg == nil || nArg.Name != "" || nArg.Value == nil {
-		return value{}, unsupportedf("call", "strings.splitN requires positional arguments")
-	}
-	nVal, err := g.emitExpr(nArg.Value)
+	n, err := g.emitStdStringsDescriptorArg(call.Args[2], "splitN", 2)
 	if err != nil {
 		return value{}, err
-	}
-	nLoaded, err := g.loadIfPointer(nVal)
-	if err != nil {
-		return value{}, err
-	}
-	if nLoaded.typ != "i64" {
-		return value{}, unsupportedf("type-system", "strings.splitN arg 3 type %s, want Int", nLoaded.typ)
 	}
 	symbol := llvmStringRuntimeSplitNSymbol()
 	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i64"}})
 	emitter := g.toOstyEmitter()
-	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(s), toOstyValue(sep), toOstyValue(nLoaded)})
+	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(s), toOstyValue(sep), toOstyValue(n)})
 	g.takeOstyEmitter(emitter)
 	parts := fromOstyValue(out)
 	parts.gcManaged = true
@@ -816,10 +814,7 @@ func (g *generator) emitStdStringsSplitN(call *ast.CallExpr) (value, error) {
 // internal/stdlib/modules/strings.osty:fields (byte-level ASCII
 // whitespace, consistent with the rest of the shim).
 func (g *generator) emitStdStringsFields(call *ast.CallExpr) (value, error) {
-	if len(call.Args) != 1 {
-		return value{}, unsupportedf("call", "strings.fields expects 1 argument, got %d", len(call.Args))
-	}
-	s, err := g.emitStdStringsArg(call.Args[0], "fields", 0)
+	s, err := g.emitStdStringsDescriptorArg(call.Args[0], "fields", 0)
 	if err != nil {
 		return value{}, err
 	}
@@ -836,10 +831,7 @@ func (g *generator) emitStdStringsFields(call *ast.CallExpr) (value, error) {
 }
 
 func (g *generator) emitStdStringsUnary(call *ast.CallExpr, name, symbol string) (value, error) {
-	if len(call.Args) != 1 {
-		return value{}, unsupportedf("call", "strings.%s expects 1 argument, got %d", name, len(call.Args))
-	}
-	s, err := g.emitStdStringsArg(call.Args[0], name, 0)
+	s, err := g.emitStdStringsDescriptorArg(call.Args[0], name, 0)
 	if err != nil {
 		return value{}, err
 	}
@@ -853,10 +845,7 @@ func (g *generator) emitStdStringsUnary(call *ast.CallExpr, name, symbol string)
 }
 
 func (g *generator) emitStdStringsParseResult(call *ast.CallExpr, name string, sourceType ast.Type, validateSymbol, parseSymbol, okTyp string) (value, error) {
-	if len(call.Args) != 1 {
-		return value{}, unsupportedf("call", "strings.%s expects 1 argument, got %d", name, len(call.Args))
-	}
-	s, err := g.emitStdStringsArg(call.Args[0], name, 0)
+	s, err := g.emitStdStringsDescriptorArg(call.Args[0], name, 0)
 	if err != nil {
 		return value{}, err
 	}
@@ -864,25 +853,11 @@ func (g *generator) emitStdStringsParseResult(call *ast.CallExpr, name string, s
 }
 
 func (g *generator) emitStdStringsJoin(call *ast.CallExpr) (value, error) {
-	if len(call.Args) != 2 {
-		return value{}, unsupportedf("call", "strings.join expects 2 arguments, got %d", len(call.Args))
-	}
-	if call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil ||
-		call.Args[1] == nil || call.Args[1].Name != "" || call.Args[1].Value == nil {
-		return value{}, unsupportedf("call", "strings.join requires positional arguments")
-	}
-	parts, err := g.emitExprWithHintAndSourceType(call.Args[0].Value, nil, "ptr", true, "", "", false, "", false)
+	parts, err := g.emitStdStringsDescriptorArg(call.Args[0], "join", 0)
 	if err != nil {
 		return value{}, err
 	}
-	parts, err = g.loadIfPointer(parts)
-	if err != nil {
-		return value{}, err
-	}
-	if parts.typ != "ptr" {
-		return value{}, unsupportedf("type-system", "strings.join arg 1 type %s, want List<String>", parts.typ)
-	}
-	sep, err := g.emitStdStringsArg(call.Args[1], "join", 1)
+	sep, err := g.emitStdStringsDescriptorArg(call.Args[1], "join", 1)
 	if err != nil {
 		return value{}, err
 	}
@@ -897,14 +872,11 @@ func (g *generator) emitStdStringsJoin(call *ast.CallExpr) (value, error) {
 }
 
 func (g *generator) emitStdStringsRepeat(call *ast.CallExpr) (value, error) {
-	if len(call.Args) != 2 {
-		return value{}, unsupportedf("call", "strings.repeat expects 2 arguments, got %d", len(call.Args))
-	}
-	s, err := g.emitStdStringsArg(call.Args[0], "repeat", 0)
+	s, err := g.emitStdStringsDescriptorArg(call.Args[0], "repeat", 0)
 	if err != nil {
 		return value{}, err
 	}
-	n, err := g.emitStdStringsIntArg(call.Args[1], "repeat", 1)
+	n, err := g.emitStdStringsDescriptorArg(call.Args[1], "repeat", 1)
 	if err != nil {
 		return value{}, err
 	}
@@ -919,14 +891,11 @@ func (g *generator) emitStdStringsRepeat(call *ast.CallExpr) (value, error) {
 }
 
 func (g *generator) emitStdStringsIndexOf(call *ast.CallExpr) (value, error) {
-	if len(call.Args) != 2 {
-		return value{}, unsupportedf("call", "strings.indexOf expects 2 arguments, got %d", len(call.Args))
-	}
-	s, err := g.emitStdStringsArg(call.Args[0], "indexOf", 0)
+	s, err := g.emitStdStringsDescriptorArg(call.Args[0], "indexOf", 0)
 	if err != nil {
 		return value{}, err
 	}
-	substr, err := g.emitStdStringsArg(call.Args[1], "indexOf", 1)
+	substr, err := g.emitStdStringsDescriptorArg(call.Args[1], "indexOf", 1)
 	if err != nil {
 		return value{}, err
 	}
@@ -934,14 +903,11 @@ func (g *generator) emitStdStringsIndexOf(call *ast.CallExpr) (value, error) {
 }
 
 func (g *generator) emitStdStringsLastIndexOf(call *ast.CallExpr) (value, error) {
-	if len(call.Args) != 2 {
-		return value{}, unsupportedf("call", "strings.lastIndexOf expects 2 arguments, got %d", len(call.Args))
-	}
-	s, err := g.emitStdStringsArg(call.Args[0], "lastIndexOf", 0)
+	s, err := g.emitStdStringsDescriptorArg(call.Args[0], "lastIndexOf", 0)
 	if err != nil {
 		return value{}, err
 	}
-	substr, err := g.emitStdStringsArg(call.Args[1], "lastIndexOf", 1)
+	substr, err := g.emitStdStringsDescriptorArg(call.Args[1], "lastIndexOf", 1)
 	if err != nil {
 		return value{}, err
 	}
@@ -953,14 +919,11 @@ func (g *generator) emitStdStringsLastIndexOf(call *ast.CallExpr) (value, error)
 }
 
 func (g *generator) emitStdStringsRawIndex(call *ast.CallExpr, name, symbol string) (value, error) {
-	if len(call.Args) != 2 {
-		return value{}, unsupportedf("call", "strings.%s expects 2 arguments, got %d", name, len(call.Args))
-	}
-	s, err := g.emitStdStringsArg(call.Args[0], name, 0)
+	s, err := g.emitStdStringsDescriptorArg(call.Args[0], name, 0)
 	if err != nil {
 		return value{}, err
 	}
-	substr, err := g.emitStdStringsArg(call.Args[1], name, 1)
+	substr, err := g.emitStdStringsDescriptorArg(call.Args[1], name, 1)
 	if err != nil {
 		return value{}, err
 	}
@@ -976,18 +939,15 @@ func (g *generator) emitStdStringsRawIndexValue(s, substr value, symbol string) 
 }
 
 func (g *generator) emitStdStringsReplace(call *ast.CallExpr) (value, error) {
-	if len(call.Args) != 3 {
-		return value{}, unsupportedf("call", "strings.replace expects 3 arguments, got %d", len(call.Args))
-	}
-	s, err := g.emitStdStringsArg(call.Args[0], "replace", 0)
+	s, err := g.emitStdStringsDescriptorArg(call.Args[0], "replace", 0)
 	if err != nil {
 		return value{}, err
 	}
-	old, err := g.emitStdStringsArg(call.Args[1], "replace", 1)
+	old, err := g.emitStdStringsDescriptorArg(call.Args[1], "replace", 1)
 	if err != nil {
 		return value{}, err
 	}
-	newValue, err := g.emitStdStringsArg(call.Args[2], "replace", 2)
+	newValue, err := g.emitStdStringsDescriptorArg(call.Args[2], "replace", 2)
 	if err != nil {
 		return value{}, err
 	}
@@ -995,10 +955,7 @@ func (g *generator) emitStdStringsReplace(call *ast.CallExpr) (value, error) {
 }
 
 func (g *generator) emitStdStringsToBytes(call *ast.CallExpr) (value, error) {
-	if len(call.Args) != 1 {
-		return value{}, unsupportedf("call", "strings.toBytes expects 1 argument, got %d", len(call.Args))
-	}
-	s, err := g.emitStdStringsArg(call.Args[0], "toBytes", 0)
+	s, err := g.emitStdStringsDescriptorArg(call.Args[0], "toBytes", 0)
 	if err != nil {
 		return value{}, err
 	}
@@ -1013,18 +970,15 @@ func (g *generator) emitStdStringsToBytes(call *ast.CallExpr) (value, error) {
 }
 
 func (g *generator) emitStdStringsReplaceAll(call *ast.CallExpr) (value, error) {
-	if len(call.Args) != 3 {
-		return value{}, unsupportedf("call", "strings.replaceAll expects 3 arguments, got %d", len(call.Args))
-	}
-	s, err := g.emitStdStringsArg(call.Args[0], "replaceAll", 0)
+	s, err := g.emitStdStringsDescriptorArg(call.Args[0], "replaceAll", 0)
 	if err != nil {
 		return value{}, err
 	}
-	old, err := g.emitStdStringsArg(call.Args[1], "replaceAll", 1)
+	old, err := g.emitStdStringsDescriptorArg(call.Args[1], "replaceAll", 1)
 	if err != nil {
 		return value{}, err
 	}
-	newValue, err := g.emitStdStringsArg(call.Args[2], "replaceAll", 2)
+	newValue, err := g.emitStdStringsDescriptorArg(call.Args[2], "replaceAll", 2)
 	if err != nil {
 		return value{}, err
 	}
@@ -1039,18 +993,15 @@ func (g *generator) emitStdStringsReplaceAll(call *ast.CallExpr) (value, error) 
 }
 
 func (g *generator) emitStdStringsSlice(call *ast.CallExpr) (value, error) {
-	if len(call.Args) != 3 {
-		return value{}, unsupportedf("call", "strings.slice expects 3 arguments, got %d", len(call.Args))
-	}
-	s, err := g.emitStdStringsArg(call.Args[0], "slice", 0)
+	s, err := g.emitStdStringsDescriptorArg(call.Args[0], "slice", 0)
 	if err != nil {
 		return value{}, err
 	}
-	start, err := g.emitStdStringsIntArg(call.Args[1], "slice", 1)
+	start, err := g.emitStdStringsDescriptorArg(call.Args[1], "slice", 1)
 	if err != nil {
 		return value{}, err
 	}
-	end, err := g.emitStdStringsIntArg(call.Args[2], "slice", 2)
+	end, err := g.emitStdStringsDescriptorArg(call.Args[2], "slice", 2)
 	if err != nil {
 		return value{}, err
 	}
@@ -1065,14 +1016,11 @@ func (g *generator) emitStdStringsSlice(call *ast.CallExpr) (value, error) {
 }
 
 func (g *generator) emitStdStringsBinary(call *ast.CallExpr, name, retTyp, symbol string) (value, error) {
-	if len(call.Args) != 2 {
-		return value{}, unsupportedf("call", "strings.%s expects 2 arguments, got %d", name, len(call.Args))
-	}
-	left, err := g.emitStdStringsArg(call.Args[0], name, 0)
+	left, err := g.emitStdStringsDescriptorArg(call.Args[0], name, 0)
 	if err != nil {
 		return value{}, err
 	}
-	right, err := g.emitStdStringsArg(call.Args[1], name, 1)
+	right, err := g.emitStdStringsDescriptorArg(call.Args[1], name, 1)
 	if err != nil {
 		return value{}, err
 	}
@@ -1107,6 +1055,27 @@ func (g *generator) emitStdStringsArg(arg *ast.Arg, name string, index int) (val
 	if loaded.typ != "ptr" {
 		return value{}, unsupportedf("type-system", "strings.%s arg %d type %s, want String", name, index+1, loaded.typ)
 	}
+	return loaded, nil
+}
+
+func (g *generator) emitStdStringsListArg(arg *ast.Arg, name string, index int) (value, error) {
+	if arg == nil || arg.Name != "" || arg.Value == nil {
+		return value{}, unsupportedf("call", "strings.%s requires positional arguments", name)
+	}
+	v, err := g.emitExprWithHintAndSourceType(arg.Value, nil, "ptr", true, "", "", false, "", false)
+	if err != nil {
+		return value{}, err
+	}
+	loaded, err := g.loadIfPointer(v)
+	if err != nil {
+		return value{}, err
+	}
+	if loaded.typ != "ptr" {
+		return value{}, unsupportedf("type-system", "strings.%s arg %d type %s, want List<String>", name, index+1, loaded.typ)
+	}
+	loaded.gcManaged = true
+	loaded.listElemTyp = "ptr"
+	loaded.listElemString = true
 	return loaded, nil
 }
 

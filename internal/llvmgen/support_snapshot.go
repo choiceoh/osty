@@ -3566,6 +3566,135 @@ func llvmStdBytesResultKindResultBytesError() int { return 102 }
 // Osty: llvmStdBytesResultKindResultStringError
 func llvmStdBytesResultKindResultStringError() int { return 103 }
 
+// Osty: llvmStdStringsResultKindRawIndex
+func llvmStdStringsResultKindRawIndex() int { return 110 }
+
+// Osty: llvmStdStringsResultKindOptionInt
+func llvmStdStringsResultKindOptionInt() int { return 111 }
+
+// Osty: llvmStdStringsResultKindResultIntError
+func llvmStdStringsResultKindResultIntError() int { return 112 }
+
+// Osty: llvmStdStringsResultKindResultFloatError
+func llvmStdStringsResultKindResultFloatError() int { return 113 }
+
+// Osty: llvmStdStringsCallCanonicalName
+func llvmStdStringsCallCanonicalName(name string) string {
+	return llvmCanonicalStdStringsCallName(name)
+}
+
+// Osty: llvmStdStringsCallArgCount
+func llvmStdStringsCallArgCount(name string) int {
+	canonical := llvmStdStringsCallCanonicalName(name)
+	switch canonical {
+	case "fields", "toInt", "toFloat", "toBytes", "trimStart", "trimEnd", "trim", "trimSpace", "toUpper", "toLower":
+		return 1
+	case "compare", "count", "indexOf", "Index", "lastIndexOf", "LastIndex", "concat", "contains", "hasPrefix", "hasSuffix", "join", "repeat", "split", "trimPrefix", "trimSuffix":
+		return 2
+	case "replace", "replaceAll", "splitN", "slice":
+		return 3
+	default:
+		return 0
+	}
+}
+
+// Osty: llvmStdStringsCallReturnKind
+func llvmStdStringsCallReturnKind(name string) int {
+	canonical := llvmStdStringsCallCanonicalName(name)
+	switch canonical {
+	case "compare", "count":
+		return llvmRuntimeFfiKindInt()
+	case "Index", "LastIndex":
+		return llvmStdStringsResultKindRawIndex()
+	case "indexOf", "lastIndexOf":
+		return llvmStdStringsResultKindOptionInt()
+	case "toInt":
+		return llvmStdStringsResultKindResultIntError()
+	case "toFloat":
+		return llvmStdStringsResultKindResultFloatError()
+	case "contains", "hasPrefix", "hasSuffix":
+		return llvmRuntimeFfiKindBool()
+	case "toBytes":
+		return llvmRuntimeFfiKindBytes()
+	case "split", "splitN", "fields":
+		return llvmRuntimeFfiKindListString()
+	default:
+		if llvmStdStringsCallArgCount(canonical) != 0 {
+			return llvmRuntimeFfiKindString()
+		}
+		return llvmRuntimeFfiKindUnknown()
+	}
+}
+
+// Osty: llvmStdStringsCallParamName
+func llvmStdStringsCallParamName(name string, index int) string {
+	canonical := llvmStdStringsCallCanonicalName(name)
+	if index < 0 || index >= llvmStdStringsCallArgCount(canonical) {
+		return ""
+	}
+	switch index {
+	case 0:
+		switch canonical {
+		case "compare", "concat":
+			return "left"
+		case "join":
+			return "parts"
+		default:
+			return "value"
+		}
+	case 1:
+		switch canonical {
+		case "compare", "concat":
+			return "right"
+		case "count", "indexOf", "Index", "lastIndexOf", "LastIndex", "contains":
+			return "substr"
+		case "hasPrefix", "trimPrefix":
+			return "prefix"
+		case "hasSuffix", "trimSuffix":
+			return "suffix"
+		case "join", "split", "splitN":
+			return "sep"
+		case "repeat":
+			return "n"
+		case "replace", "replaceAll":
+			return "old"
+		case "slice":
+			return "start"
+		}
+	case 2:
+		switch canonical {
+		case "replace", "replaceAll":
+			return "new"
+		case "splitN":
+			return "n"
+		case "slice":
+			return "end"
+		}
+	}
+	return ""
+}
+
+// Osty: llvmStdStringsCallParamKind
+func llvmStdStringsCallParamKind(name string, index int) int {
+	canonical := llvmStdStringsCallCanonicalName(name)
+	if index < 0 || index >= llvmStdStringsCallArgCount(canonical) {
+		return llvmRuntimeFfiKindUnknown()
+	}
+	if canonical == "join" && index == 0 {
+		return llvmRuntimeFfiKindListString()
+	}
+	if canonical == "repeat" && index == 1 {
+		return llvmRuntimeFfiKindInt()
+	}
+	if canonical == "splitN" && index == 2 {
+		return llvmRuntimeFfiKindInt()
+	}
+	if canonical == "slice" && (index == 1 || index == 2) {
+		return llvmRuntimeFfiKindInt()
+	}
+	return llvmRuntimeFfiKindString()
+}
+
 // Osty: llvmStdBytesCallCanonicalName
 func llvmStdBytesCallCanonicalName(name string) string {
 	switch name {
