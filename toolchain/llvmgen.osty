@@ -477,6 +477,101 @@ pub fn llvmGcRootRelease(emitter: LlvmEmitter, value: LlvmValue) {
     llvmCallVoid(emitter, "osty.gc.root_release_v1", [value])
 }
 
+/// The runtime frame slot-kind used when the legacy emitter records a
+/// mutable local slot through `osty.gc.post_write_v1`. Keeping the tag in
+/// this Osty-owned policy surface prevents Go-side GC constants from
+/// drifting away from `examples/gc` / `osty_runtime.c` terminology.
+pub fn llvmGcRuntimeFrameSlotKind() -> Int { 5 }
+
+/// Reports whether a value's container metadata makes the value GC-visible.
+/// `gcManaged` covers raw managed pointers; the container fields cover
+/// runtime-owned List / Map / Set handles even when their element storage is
+/// not itself a plain `ptr`.
+pub fn llvmValueNeedsManagedRoot(
+    gcManaged: Bool,
+    listElemTyp: String,
+    mapKeyTyp: String,
+    setElemTyp: String,
+) -> Bool {
+    gcManaged || listElemTyp != "" || mapKeyTyp != "" || setElemTyp != ""
+}
+
+/// Local bindings are materialized as slots when mutation requires an address,
+/// when a managed pointer/container handle must be root-bound, or when an
+/// aggregate value carries nested root paths.
+pub fn llvmShouldBindLocalToSlot(
+    mutable: Bool,
+    typ: String,
+    gcManaged: Bool,
+    listElemTyp: String,
+    mapKeyTyp: String,
+    setElemTyp: String,
+    rootPathCount: Int,
+) -> Bool {
+    mutable || (typ == "ptr" && llvmValueNeedsManagedRoot(
+        gcManaged,
+        listElemTyp,
+        mapKeyTyp,
+        setElemTyp,
+    )) || rootPathCount > 0
+}
+
+/// Temporaries that are already addressable (`pointer = true`) are visible to
+/// safepoints through their owning slot. Non-addressable managed pointers and
+/// aggregates with nested root paths need temporary slot protection before a
+/// call can run.
+pub fn llvmNeedsSafepointProtection(
+    pointer: Bool,
+    typ: String,
+    gcManaged: Bool,
+    rootPathCount: Int,
+) -> Bool {
+    if pointer {
+        return false
+    }
+    (typ == "ptr" && gcManaged) || rootPathCount > 0
+}
+
+/// Canonical GC mark-slot callback used for plain managed-pointer fields and
+/// aggregate trace helpers.
+pub fn llvmGcMarkSlotSymbol() -> String { "osty.gc.mark_slot_v1" }
+
+/// Returns a built-in trace callback when no synthetic aggregate trace helper
+/// is needed. Empty / untraced types use `null`; plain managed pointers use
+/// the runtime mark-slot callback; aggregates with root paths return `""` so
+/// the Go glue can synthesize a helper body.
+pub fn llvmTraceCallbackDirectSymbol(typ: String, rootPathCount: Int) -> String {
+    if typ == "" {
+        return "null"
+    }
+    if typ == "ptr" {
+        return llvmGcMarkSlotSymbol()
+    }
+    if rootPathCount <= 0 {
+        return "null"
+    }
+    ""
+}
+
+/// Cache key for synthetic aggregate trace helpers. The second argument is the
+/// Go-rendered root-path list today; owning the separator here keeps the cache
+/// namespace in one place while the type graph still lives in Go.
+pub fn llvmTraceHelperCacheKey(typ: String, rootPathsText: String) -> String {
+    typ + ":" + rootPathsText
+}
+
+pub fn llvmTraceHelperSymbol(index: Int) -> String {
+    "osty_rt_trace_{index}"
+}
+
+pub fn llvmTraceCallbackParamName() -> String { "value.addr" }
+
+pub fn llvmTraceCallbackParamRef() -> String { "%value.addr" }
+
+pub fn llvmTraceFieldTempName(step: Int, fieldIndex: Int) -> String {
+    "%trace.field.{step}.{fieldIndex}"
+}
+
 /// Phase A5 safepoint kind taxonomy (`RUNTIME_GC_DELTA.md` §10.1).
 ///
 /// The id passed to `osty.gc.safepoint_v1` packs a kind tag in the high

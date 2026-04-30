@@ -200,10 +200,6 @@ type builtinOptionContext struct {
 	sourceType ast.Type
 }
 
-const (
-	llvmGcRuntimeFrameSlotKind = 5
-)
-
 func (g *generator) beginFunction() {
 	g.temp = 0
 	g.label = 0
@@ -353,7 +349,7 @@ func (g *generator) postGCWriteIfPointer(emitter *LlvmEmitter, slot, v value) {
 	if slot.typ != "ptr" || !slot.gcManaged || v.typ != "ptr" || !v.gcManaged {
 		return
 	}
-	llvmGcPostWrite(emitter, toOstyValue(slot), toOstyValue(v), llvmGcRuntimeFrameSlotKind)
+	llvmGcPostWrite(emitter, toOstyValue(slot), toOstyValue(v), llvmGcRuntimeFrameSlotKind())
 	g.needsGCRuntime = true
 }
 
@@ -1186,7 +1182,15 @@ func (g *generator) registerDefer(stmt *ast.DeferStmt) error {
 }
 
 func (g *generator) bindNamedLocal(name string, v value, mutable bool) {
-	if mutable || (v.typ == "ptr" && valueNeedsManagedRoot(v)) || len(v.rootPaths) != 0 {
+	if llvmShouldBindLocalToSlot(
+		mutable,
+		v.typ,
+		v.gcManaged,
+		v.listElemTyp,
+		v.mapKeyTyp,
+		v.setElemTyp,
+		len(v.rootPaths),
+	) {
 		emitter := g.toOstyEmitter()
 		slot := llvmMutableLetSlot(emitter, name, toOstyValue(v))
 		slotValue := fromOstyValue(slot)
@@ -1203,7 +1207,7 @@ func (g *generator) bindNamedLocal(name string, v value, mutable bool) {
 }
 
 func valueNeedsManagedRoot(v value) bool {
-	return v.gcManaged || v.listElemTyp != "" || v.mapKeyTyp != "" || v.setElemTyp != ""
+	return llvmValueNeedsManagedRoot(v.gcManaged, v.listElemTyp, v.mapKeyTyp, v.setElemTyp)
 }
 
 func copyContainerMetadata(dst *value, src value) {
@@ -1420,32 +1424,28 @@ func (g *generator) safepointRootAddress(emitter *LlvmEmitter, root gcSafepointR
 }
 
 func (g *generator) traceCallbackSymbol(typ string, rootPaths [][]int) string {
-	if typ == "" {
-		return "null"
+	if direct := llvmTraceCallbackDirectSymbol(typ, len(rootPaths)); direct != "" {
+		if direct == llvmGcMarkSlotSymbol() {
+			g.declareRuntimeSymbol(llvmGcMarkSlotSymbol(), "void", []paramInfo{{typ: "ptr"}})
+			g.needsGCRuntime = true
+		}
+		return direct
 	}
-	if typ == "ptr" {
-		g.declareRuntimeSymbol("osty.gc.mark_slot_v1", "void", []paramInfo{{typ: "ptr"}})
-		g.needsGCRuntime = true
-		return "osty.gc.mark_slot_v1"
-	}
-	if len(rootPaths) == 0 {
-		return "null"
-	}
-	key := typ + ":" + fmt.Sprint(rootPaths)
+	key := llvmTraceHelperCacheKey(typ, fmt.Sprint(rootPaths))
 	if name, ok := g.traceHelpers[key]; ok {
 		return name
 	}
-	name := mirRtSymbol("trace_" + strconv.Itoa(len(g.traceHelpers)))
+	name := llvmTraceHelperSymbol(len(g.traceHelpers))
 	g.traceHelpers[key] = name
-	g.declareRuntimeSymbol("osty.gc.mark_slot_v1", "void", []paramInfo{{typ: "ptr"}})
+	g.declareRuntimeSymbol(llvmGcMarkSlotSymbol(), "void", []paramInfo{{typ: "ptr"}})
 	g.needsGCRuntime = true
 	body := []string{}
 	currentType := ""
 	for _, path := range rootPaths {
-		addr := "%value.addr"
+		addr := llvmTraceCallbackParamRef()
 		currentType = typ
 		for _, index := range path {
-			fieldPtr := fmt.Sprintf("%%trace.field.%d.%d", len(body), index)
+			fieldPtr := llvmTraceFieldTempName(len(body), index)
 			body = append(body, mirGEPInboundsFieldText(fieldPtr, currentType, addr, strconv.Itoa(index)))
 			nextType, ok := g.aggregateFieldType(currentType, index)
 			if !ok {
@@ -1461,7 +1461,7 @@ func (g *generator) traceCallbackSymbol(typ string, rootPaths [][]int) string {
 		body = append(body, mirGCMarkSlotText(addr))
 	}
 	body = append(body, mirRetVoidText())
-	g.traceHelperDefs = append(g.traceHelperDefs, llvmRenderFunction("void", name, []*LlvmParam{llvmParam("value.addr", "ptr")}, body))
+	g.traceHelperDefs = append(g.traceHelperDefs, llvmRenderFunction("void", name, []*LlvmParam{llvmParam(llvmTraceCallbackParamName(), "ptr")}, body))
 	return name
 }
 
@@ -1546,10 +1546,7 @@ func (g *generator) nextHiddenLocalName(prefix string) string {
 }
 
 func (g *generator) needsSafepointProtection(v value) bool {
-	if v.ptr {
-		return false
-	}
-	return (v.typ == "ptr" && v.gcManaged) || len(v.rootPaths) != 0
+	return llvmNeedsSafepointProtection(v.ptr, v.typ, v.gcManaged, len(v.rootPaths))
 }
 
 func (g *generator) protectManagedTemporary(prefix string, v value) value {

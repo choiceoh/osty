@@ -110,6 +110,84 @@ func TestGeneratedSafepointChunkPlanIsOstyOwned(t *testing.T) {
 	}
 }
 
+func TestGeneratedGCRootPoliciesAreOstyOwned(t *testing.T) {
+	if got, want := llvmGcRuntimeFrameSlotKind(), 5; got != want {
+		t.Fatalf("llvmGcRuntimeFrameSlotKind() = %d, want %d", got, want)
+	}
+	if !llvmValueNeedsManagedRoot(true, "", "", "") {
+		t.Fatal("managed ptr should need a root")
+	}
+	if !llvmValueNeedsManagedRoot(false, "i64", "", "") {
+		t.Fatal("list handle should need a root")
+	}
+	if !llvmValueNeedsManagedRoot(false, "", "ptr", "") {
+		t.Fatal("map handle should need a root")
+	}
+	if !llvmValueNeedsManagedRoot(false, "", "", "i64") {
+		t.Fatal("set handle should need a root")
+	}
+	if llvmValueNeedsManagedRoot(false, "", "", "") {
+		t.Fatal("plain scalar metadata should not need a root")
+	}
+
+	if !llvmShouldBindLocalToSlot(false, "ptr", true, "", "", "", 0) {
+		t.Fatal("managed ptr local should bind to a rootable slot")
+	}
+	if !llvmShouldBindLocalToSlot(false, "%Pair", false, "", "", "", 1) {
+		t.Fatal("aggregate with nested root path should bind to a slot")
+	}
+	if !llvmShouldBindLocalToSlot(true, "i64", false, "", "", "", 0) {
+		t.Fatal("mutable scalar should bind to a slot")
+	}
+	if llvmShouldBindLocalToSlot(false, "i64", false, "", "", "", 0) {
+		t.Fatal("immutable scalar should not bind to a slot")
+	}
+
+	if !llvmNeedsSafepointProtection(false, "ptr", true, 0) {
+		t.Fatal("non-addressable managed ptr temporary should be protected")
+	}
+	if !llvmNeedsSafepointProtection(false, "%Pair", false, 2) {
+		t.Fatal("aggregate temporary with nested root paths should be protected")
+	}
+	if llvmNeedsSafepointProtection(true, "ptr", true, 0) {
+		t.Fatal("addressable managed ptr already has slot protection")
+	}
+	if llvmNeedsSafepointProtection(false, "i64", false, 0) {
+		t.Fatal("plain scalar temporary should not be protected")
+	}
+
+	if got, want := llvmGcMarkSlotSymbol(), "osty.gc.mark_slot_v1"; got != want {
+		t.Fatalf("llvmGcMarkSlotSymbol() = %q, want %q", got, want)
+	}
+	if got, want := llvmTraceCallbackDirectSymbol("", 3), "null"; got != want {
+		t.Fatalf("empty trace direct = %q, want %q", got, want)
+	}
+	if got, want := llvmTraceCallbackDirectSymbol("ptr", 0), "osty.gc.mark_slot_v1"; got != want {
+		t.Fatalf("ptr trace direct = %q, want %q", got, want)
+	}
+	if got, want := llvmTraceCallbackDirectSymbol("%Pair", 0), "null"; got != want {
+		t.Fatalf("rootless aggregate trace direct = %q, want %q", got, want)
+	}
+	if got := llvmTraceCallbackDirectSymbol("%Pair", 2); got != "" {
+		t.Fatalf("aggregate helper-needed trace direct = %q, want empty helper signal", got)
+	}
+	if got, want := llvmTraceHelperCacheKey("%Pair", "[[1] [2 0]]"), "%Pair:[[1] [2 0]]"; got != want {
+		t.Fatalf("llvmTraceHelperCacheKey() = %q, want %q", got, want)
+	}
+	if got, want := llvmTraceHelperSymbol(3), "osty_rt_trace_3"; got != want {
+		t.Fatalf("llvmTraceHelperSymbol(3) = %q, want %q", got, want)
+	}
+	if got, want := llvmTraceCallbackParamName(), "value.addr"; got != want {
+		t.Fatalf("llvmTraceCallbackParamName() = %q, want %q", got, want)
+	}
+	if got, want := llvmTraceCallbackParamRef(), "%value.addr"; got != want {
+		t.Fatalf("llvmTraceCallbackParamRef() = %q, want %q", got, want)
+	}
+	if got, want := llvmTraceFieldTempName(4, 2), "%trace.field.4.2"; got != want {
+		t.Fatalf("llvmTraceFieldTempName(4, 2) = %q, want %q", got, want)
+	}
+}
+
 func TestGeneratedClangLinkBinaryArgsAcceptMultipleObjects(t *testing.T) {
 	args := llvmClangLinkBinaryArgs("", []string{"/tmp/main.o", "/tmp/runtime/gc_runtime.o"}, "/tmp/app")
 	got := strings.Join(args, " ")
