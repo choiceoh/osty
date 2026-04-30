@@ -90,7 +90,7 @@ pub fn monomorphPrimCode(name: String) -> String {
     if name == "Char" {
         return "w"
     }
-    if name == "Unit" {
+    if name == "Unit" || name == "()" {
         return "v"
     }
     // Osty string & byte slice are opaque aggregates at the IR level.

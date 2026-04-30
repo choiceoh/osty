@@ -2,7 +2,9 @@ package backend
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
+	"path/filepath"
 	"testing"
 )
 
@@ -143,6 +145,63 @@ fn main() {
 		"true\n" +
 		"true\n" +
 		"true\n"
+	if got := string(output); got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
+func TestLLVMBackendBinaryRunsStdKvFileStore(t *testing.T) {
+	requireClangForBackendTest(t)
+	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
+
+	path := filepath.Join(t.TempDir(), "cache.jsonl")
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, fmt.Sprintf(`use std.kv
+
+fn main() {
+    let store = kv.open(%q).unwrap()
+    match kv.putString(store, "name", "osty") {
+        Ok(_) -> {},
+        Err(err) -> {
+            println(err.message())
+            return
+        },
+    }
+    match kv.putInt(store, "count", 2) {
+        Ok(_) -> {},
+        Err(err) -> {
+            println(err.message())
+            return
+        },
+    }
+    println(kv.getString(store, "name").unwrap().unwrap())
+    println(kv.getInt(store, "count").unwrap().unwrap())
+    println(kv.contains(store, "name").unwrap())
+    match kv.remove(store, "name") {
+        Ok(_) -> {},
+        Err(err) -> {
+            println(err.message())
+            return
+        },
+    }
+    println(kv.contains(store, "name").unwrap())
+    println(kv.compact(store).unwrap())
+    let keys = kv.keys(store).unwrap()
+    println(keys.len())
+    println(keys[0])
+}
+`, path))
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		logBackendWarnings(t, result)
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	output, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	want := "osty\n2\ntrue\nfalse\n1\n1\ncount\n"
 	if got := string(output); got != want {
 		t.Fatalf("binary stdout = %q, want %q", got, want)
 	}

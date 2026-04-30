@@ -304,8 +304,8 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 	if mod == nil || reg == nil {
 		return nil, nil
 	}
-	reachedFns := ReachableStdlibFns(mod, reg)
-	reachedMethods := ReachableStdlibMethods(mod, reg)
+	reachedFns := bodyfulStdlibFns(ReachableStdlibFns(mod, reg))
+	reachedMethods := bodyfulStdlibMethods(ReachableStdlibMethods(mod, reg))
 	if len(reachedFns) == 0 && len(reachedMethods) == 0 {
 		return nil, nil
 	}
@@ -378,6 +378,10 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 			if calleeFn == nil {
 				continue
 			}
+			if calleeFn.Body == nil {
+				rewriteBareIdentCalls(next.fn, callName, CanonicalStdlibSymbol(next.module, callName))
+				continue
+			}
 			k := fnKey{module: next.module, name: callName}
 			if injectedFn[k] {
 				// Already injected — just rewrite this body's
@@ -408,6 +412,10 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 			if calleeFn == nil {
 				continue
 			}
+			if calleeFn.Body == nil {
+				rewriteQualifiedStdlibCalls(next.fn, ref.Qualifier, ref.Name, CanonicalStdlibSymbol(calleeModule, ref.Name))
+				continue
+			}
 			k := fnKey{module: calleeModule, name: ref.Name}
 			if injectedFn[k] {
 				rewriteQualifiedStdlibCalls(next.fn, ref.Qualifier, ref.Name, StdlibSymbol(calleeModule, ref.Name))
@@ -428,6 +436,9 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 			queue = append(queue, loweredFromModule{module: calleeModule, fn: lowered})
 		}
 		for _, m := range reachableStdlibMethodsInFn(next.fn, reg) {
+			if m.Fn == nil || m.Fn.Body == nil {
+				continue
+			}
 			k := methodKey{module: m.Module, typeName: m.Type, method: m.Method}
 			if injectedMethod[k] {
 				rewriteStdlibMethodCallsitesInFn(next.fn, []ReachableStdlibMethod{m})
@@ -450,6 +461,34 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 	}
 	qualifyStdlibCallsiteTypes(mod, out)
 	return out, issues
+}
+
+func bodyfulStdlibFns(in []ReachableStdlibFn) []ReachableStdlibFn {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]ReachableStdlibFn, 0, len(in))
+	for _, r := range in {
+		if r.Fn == nil || r.Fn.Body == nil {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
+}
+
+func bodyfulStdlibMethods(in []ReachableStdlibMethod) []ReachableStdlibMethod {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]ReachableStdlibMethod, 0, len(in))
+	for _, r := range in {
+		if r.Fn == nil || r.Fn.Body == nil {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 func reachableStdlibMethodsInFn(fn *ir.FnDecl, reg *stdlib.Registry) []ReachableStdlibMethod {

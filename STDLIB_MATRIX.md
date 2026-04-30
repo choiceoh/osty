@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 71 공개 모듈. 분류 기준:
+총 72 공개 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (67 / 71 = 94%)
+### ⭐⭐⭐⭐⭐ Production (68 / 72 = 94%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -42,6 +42,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | tokenest | 305 | pure Osty + bytes | Deneb-derived model-family-aware token estimator with explicit calibration state for Claude/OpenAI/Gemini/default |
 | httpretry | 322 | pure Osty | Deneb-derived retry/backoff decisions and LLM/provider error classification with provider codes, large-session disconnect handling, context/billing/rate-limit disambiguation, and action flags |
 | jsonl | 117 | pure Osty + json | Deneb-style JSON Lines parse/append/compact helpers |
+| kv | 459 | pure Osty + fs/json | JSONL append-log local KV: file-backed cache/history/settings store, string-first typed getters/setters, tombstone delete, compact rewrite, JSON convenience helpers |
 | shortid | 65 | pure Osty | Deneb-style `prefix_0000` deterministic short id generator |
 | metrics | 48 | pure Osty | Deneb-style labeled counter snapshots without a metrics backend |
 | net | 1084 | net 40 runtime | TCP/UDP, IPv4/IPv6, parseSocketAddr, tcpListen |
@@ -98,7 +99,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (4 / 71 = 6%)
+### ⭐⭐⭐⭐ Production-adjacent (4 / 72 = 6%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
@@ -154,6 +155,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | DB 설정/마이그레이션 계획 | ✅ 가능 | db + sql (DSN / pool / tx options / result rows / migration helpers) |
 | 두 언어 앱 / repo 경계 | ✅ 가능 | polyglot + os + env + fs + `osty scaffold polyglot` (Osty+Go/Rust/Python/Node 등 역할 분리, 빌드/테스트/경계 계약, doctorRun/check runner) |
 | AI agent shell / chat mode | ✅ 가능 | ai + aiagents + http/json/log/thread |
+| Local KV / 설정 DB | ✅ 즉시 가능 | kv + fs + json (JSONL append-log, compact, typed getters/setters) |
 | Agent-safe logs/transcripts | ✅ 가능 | redact + security + tokenest + aiagents |
 | Local document search | ✅ 가능 | search + markdown + media + jsonl |
 | 사람이 읽는 리포트 산출물 | ✅ 가능 | report + markdown/jsonl/csv |
@@ -187,7 +189,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 48 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, redact, media, security, search, markdown, report, tokenest, httpretry, jsonl, shortid, metrics, net, fmt, json, config, table, url, io, collections, email, db, polyglot, grid, gui, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
+- 49 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, redact, media, security, search, markdown, report, tokenest, httpretry, jsonl, kv, shortid, metrics, net, fmt, json, config, table, url, io, collections, email, db, polyglot, grid, gui, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
 - 5 모듈은 Phase A 충실 + Phase B declaration-only (env, random, os, crypto, compress)
 - fs 는 Phase A 충실 + 확장된 tool-facing declaration surface (walk/glob/watch/atomicWrite/lockFile/hashFile/copyDir/diffFiles)
 - 나머지는 의도된 범위에서 surface 만으로 완성 (cli, math, cmp, hint, debug, ref, process, log, time, error, sync, thread, regex, testing, uuid)

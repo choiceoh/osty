@@ -1,0 +1,459 @@
+// std.kv - local JSONL-backed key-value stores.
+//
+// This is intentionally file-backed rather than driver-backed: it gives
+// Osty programs a practical local cache/history/settings store today,
+// while keeping a small append-log format that can later be mirrored by
+// a native SQLite backend without changing most call sites.
+use std.error
+use std.fs
+use std.json
+use std.strings
+pub struct Store {
+    pub path: String,
+}
+pub struct Entry {
+    pub key: String,
+    pub value: String,
+    pub deleted: Bool,
+    pub updatedAtMs: Int = 0,
+}
+pub struct Snapshot {
+    pub values: Map<String, String>,
+    pub records: Int,
+    pub tombstones: Int,
+}
+pub fn open(path: String) -> Result<Store, Error> {
+    let clean = strings.trimSpace(path)
+    validatePath(clean)?
+    Ok(Store {path: clean})
+}
+pub fn ensure(store: Store) -> Result<(), Error> {
+    ensureParent(store.path)?
+    if !fs.exists(store.path) {
+        fs.writeString(store.path, "")?
+    }
+    Ok(())
+}
+pub fn entry(key: String, value: String) -> Result<Entry, Error> {
+    entryAt(key, value, 0)
+}
+pub fn entryAt(key: String, value: String, updatedAtMs: Int) -> Result<Entry, Error> {
+    let clean = strings.trimSpace(key)
+    validateKey(clean)?
+    Ok(Entry {key: clean, value: value, deleted: false, updatedAtMs: updatedAtMs})
+}
+pub fn tombstone(key: String) -> Result<Entry, Error> {
+    tombstoneAt(key, 0)
+}
+pub fn tombstoneAt(key: String, updatedAtMs: Int) -> Result<Entry, Error> {
+    let clean = strings.trimSpace(key)
+    validateKey(clean)?
+    Ok(Entry {key: clean, value: "", deleted: true, updatedAtMs: updatedAtMs})
+}
+pub fn text(value: String) -> String {
+    value
+}
+pub fn integer(value: Int) -> String {
+    value.toString()
+}
+pub fn float(value: Float) -> String {
+    value.toString()
+}
+pub fn boolean(value: Bool) -> String {
+    if value {
+        "true"
+    } else {
+        "false"
+    }
+}
+pub fn nullValue() -> String {
+    "null"
+}
+pub fn encodeEntry(item: Entry) -> String {
+    let open = "\{"
+    let close = "\}"
+    let deleted = if item.deleted {
+        "true"
+    } else {
+        "false"
+    }
+    let mut out = "{open}\"deleted\":{deleted},\"key\":{jsonQuote(item.key)},\"updatedAtMs\":{item.updatedAtMs}"
+    out = "{out},\"value\":{jsonQuote(item.value)}"
+    "{out}{close}"
+}
+pub fn parseEntry(line: String) -> Result<Entry, Error> {
+    let trimmed = strings.trimSpace(line)
+    if trimmed.isEmpty() {
+        return Err(error.new("kv: empty log line"))
+    }
+    let key = stringField(trimmed, "key")?
+    let deleted = boolField(trimmed, "deleted", false)?
+    let updatedAtMs = intField(trimmed, "updatedAtMs", 0)?
+    let value = stringField(trimmed, "value")?
+    let clean = strings.trimSpace(key)
+    validateKey(clean)?
+    Ok(Entry {key: clean, value: value, deleted: deleted, updatedAtMs: updatedAtMs})
+}
+pub fn parseLog(text: String) -> Result<List<Entry>, Error> {
+    let mut out: List<Entry> = []
+    for line in strings.splitLines(text) {
+        let trimmed = strings.trimSpace(line)
+        if trimmed.isEmpty() {
+            continue
+        }
+        out.push(parseEntry(trimmed)?)
+    }
+    Ok(out)
+}
+pub fn replay(entries: List<Entry>) -> Snapshot {
+    let mut values: Map<String, String> = {:}
+    let mut tombstones = 0
+    for item in entries {
+        if item.deleted {
+            values.remove(item.key)
+            tombstones = tombstones + 1
+        } else {
+            values.insert(item.key, item.value)
+        }
+    }
+    Snapshot {values: values, records: entries.len(), tombstones: tombstones}
+}
+pub fn inMemory(values: Map<String, String>) -> Snapshot {
+    Snapshot {values: values, records: values.len(), tombstones: 0}
+}
+pub fn load(store: Store) -> Result<Snapshot, Error> {
+    let text = readLog(store)?
+    Ok(replay(parseLog(text)?))
+}
+pub fn snapshot(store: Store) -> Result<Snapshot, Error> {
+    load(store)
+}
+pub fn keys(store: Store) -> Result<List<String>, Error> {
+    let snap = load(store)?
+    Ok(snap.values.keys().sorted())
+}
+pub fn get(store: Store, key: String) -> Result<String?, Error> {
+    let clean = strings.trimSpace(key)
+    validateKey(clean)?
+    let snap = load(store)?
+    Ok(snap.values.get(clean))
+}
+pub fn getString(store: Store, key: String) -> Result<String?, Error> {
+    get(store, key)
+}
+pub fn getInt(store: Store, key: String) -> Result<Int?, Error> {
+    match get(store, key)? {
+        Some(value) -> Ok(Some(strings.toInt(value)?)),
+        None -> Ok(noneInt()),
+    }
+}
+pub fn getFloat(store: Store, key: String) -> Result<Float?, Error> {
+    match get(store, key)? {
+        Some(value) -> Ok(Some(strings.toFloat(value)?)),
+        None -> Ok(noneFloat()),
+    }
+}
+pub fn getBool(store: Store, key: String) -> Result<Bool?, Error> {
+    match get(store, key)? {
+        Some(value) -> {
+            if value == "true" {
+                Ok(Some(true))
+            } else if value == "false" {
+                Ok(Some(false))
+            } else {
+                Err(error.new("kv: expected bool value"))
+            }
+        },
+        None -> Ok(noneBool()),
+    }
+}
+pub fn getJson(store: Store, key: String) -> Result<json.Json?, Error> {
+    match get(store, key)? {
+        Some(value) -> Ok(Some(json.parseValue(value)?)),
+        None -> Ok(noneJson()),
+    }
+}
+pub fn contains(store: Store, key: String) -> Result<Bool, Error> {
+    let value = get(store, key)?
+    Ok(value.isSome())
+}
+pub fn put(store: Store, key: String, value: String) -> Result<(), Error> {
+    putAt(store, key, value, 0)
+}
+pub fn putAt(store: Store, key: String, value: String, updatedAtMs: Int) -> Result<(), Error> {
+    appendEntry(store, entryAt(key, value, updatedAtMs)?)
+}
+pub fn putString(store: Store, key: String, value: String) -> Result<(), Error> {
+    put(store, key, value)
+}
+pub fn putInt(store: Store, key: String, value: Int) -> Result<(), Error> {
+    put(store, key, integer(value))
+}
+pub fn putFloat(store: Store, key: String, value: Float) -> Result<(), Error> {
+    put(store, key, float(value))
+}
+pub fn putBool(store: Store, key: String, value: Bool) -> Result<(), Error> {
+    put(store, key, boolean(value))
+}
+pub fn putJson(store: Store, key: String, value: json.Json) -> Result<(), Error> {
+    put(store, key, json.stringifyValue(value))
+}
+pub fn remove(store: Store, key: String) -> Result<(), Error> {
+    removeAt(store, key, 0)
+}
+pub fn removeAt(store: Store, key: String, updatedAtMs: Int) -> Result<(), Error> {
+    appendEntry(store, tombstoneAt(key, updatedAtMs)?)
+}
+pub fn deleteKey(store: Store, key: String) -> Result<(), Error> {
+    remove(store, key)
+}
+pub fn clear(store: Store) -> Result<(), Error> {
+    ensureParent(store.path)?
+    fs.writeString(store.path, "")?
+    Ok(())
+}
+pub fn compact(store: Store) -> Result<Int, Error> {
+    let snap = load(store)?
+    let text = encodeSnapshot(snap)
+    ensureParent(store.path)?
+    fs.writeString(store.path, text)?
+    Ok(snap.values.len())
+}
+pub fn encodeSnapshot(snap: Snapshot) -> String {
+    let mut out = ""
+    for key in snap.values.keys().sorted() {
+        let value = snap.values.get(key).unwrap()
+        out = appendLine(out, encodeEntry(entryAt(key, value, 0).unwrap()))
+    }
+    out
+}
+pub fn appendEntry(store: Store, item: Entry) -> Result<(), Error> {
+    ensureParent(store.path)?
+    let current = readLog(store)?
+    let next = appendLine(current, encodeEntry(item))
+    fs.writeString(store.path, next)?
+    Ok(())
+}
+fn readLog(store: Store) -> Result<String, Error> {
+    validatePath(store.path)?
+    if !fs.exists(store.path) {
+        return Ok("")
+    }
+    fs.readToString(store.path)
+}
+fn appendLine(text: String, line: String) -> String {
+    if text.isEmpty() {
+        return line
+    }
+    "{text}\n{line}"
+}
+fn stringField(text: String, name: String) -> Result<String, Error> {
+    let needle = "\"{name}\":"
+    let at = match strings.indexOf(text, needle) {
+        Some(i) -> i,
+        None -> {
+            return Err(error.new("kv: missing field: {name}"))
+        },
+    }
+    let chars = text.chars()
+    let mut pos = at + needle.len()
+    pos = skipSpaces(chars, pos)
+    if pos >= chars.len() || chars[pos] != '"' {
+        return Err(error.new("kv: expected string field: {name}"))
+    }
+    decodeJsonString(chars, pos + 1)
+}
+fn boolField(text: String, name: String, defaultValue: Bool) -> Result<Bool, Error> {
+    let raw = rawField(text, name)?
+    if raw.isEmpty() {
+        return Ok(defaultValue)
+    }
+    if raw == "true" {
+        return Ok(true)
+    }
+    if raw == "false" {
+        return Ok(false)
+    }
+    Err(error.new("kv: expected bool field: {name}"))
+}
+fn intField(text: String, name: String, defaultValue: Int) -> Result<Int, Error> {
+    let raw = rawField(text, name)?
+    if raw.isEmpty() {
+        return Ok(defaultValue)
+    }
+    strings.toInt(raw)
+}
+fn rawField(text: String, name: String) -> Result<String, Error> {
+    let needle = "\"{name}\":"
+    let at = match strings.indexOf(text, needle) {
+        Some(i) -> i,
+        None -> {
+            return Ok("")
+        },
+    }
+    let chars = text.chars()
+    let mut pos = at + needle.len()
+    pos = skipSpaces(chars, pos)
+    let start = pos
+    for pos < chars.len() && chars[pos] != ',' && chars[pos] != '}' {
+        pos = pos + 1
+    }
+    Ok(strings.trimSpace(text[start..pos]))
+}
+fn skipSpaces(chars: List<Char>, pos: Int) -> Int {
+    let mut i = pos
+    for i < chars.len() && (chars[i] == ' ' || chars[i] == '\t' || chars[i] == '\n' || chars[i] == '\r') {
+        i = i + 1
+    }
+    i
+}
+fn decodeJsonString(chars: List<Char>, start: Int) -> Result<String, Error> {
+    let mut out = ""
+    let mut i = start
+    for i < chars.len() {
+        let c = chars[i]
+        if c == '"' {
+            return Ok(out)
+        }
+        if c == '\\' {
+            if i + 1 >= chars.len() {
+                return Err(error.new("kv: unterminated escape"))
+            }
+            let e = chars[i + 1]
+            if e == '"' {
+                out = "{out}\""
+                i = i + 2
+            } else if e == '\\' {
+                out = "{out}\\"
+                i = i + 2
+            } else if e == 'n' {
+                out = "{out}\n"
+                i = i + 2
+            } else if e == 'r' {
+                out = "{out}\r"
+                i = i + 2
+            } else if e == 't' {
+                out = "{out}\t"
+                i = i + 2
+            } else if e == 'u' {
+                if i + 5 >= chars.len() {
+                    return Err(error.new("kv: short unicode escape"))
+                }
+                out = "{out}{decodeUnicodeEscape(chars, i + 2)?}"
+                i = i + 6
+            } else {
+                return Err(error.new("kv: unsupported escape"))
+            }
+        } else {
+            out = "{out}{c}"
+            i = i + 1
+        }
+    }
+    Err(error.new("kv: unterminated string field"))
+}
+fn decodeUnicodeEscape(chars: List<Char>, start: Int) -> Result<String, Error> {
+    let mut value = 0
+    for i in start..start + 4 {
+        value = value * 16 + hexValue(chars[i])?
+    }
+    let c = value.toChar()
+    Ok("{c}")
+}
+fn hexValue(c: Char) -> Result<Int, Error> {
+    if c >= '0' && c <= '9' {
+        return Ok(c.toInt() - '0'.toInt())
+    }
+    if c >= 'a' && c <= 'f' {
+        return Ok(c.toInt() - 'a'.toInt() + 10)
+    }
+    if c >= 'A' && c <= 'F' {
+        return Ok(c.toInt() - 'A'.toInt() + 10)
+    }
+    Err(error.new("kv: invalid hex escape"))
+}
+fn noneInt() -> Int? {
+    None
+}
+fn noneFloat() -> Float? {
+    None
+}
+fn noneBool() -> Bool? {
+    None
+}
+fn noneJson() -> json.Json? {
+    None
+}
+fn validatePath(path: String) -> Result<(), Error> {
+    if path.isEmpty() {
+        return Err(error.new("kv: path is empty"))
+    }
+    for c in path.chars() {
+        if c.toInt() == 0 {
+            return Err(error.new("kv: path contains NUL"))
+        }
+    }
+    Ok(())
+}
+fn validateKey(key: String) -> Result<(), Error> {
+    if key.isEmpty() {
+        return Err(error.new("kv: key is empty"))
+    }
+    for c in key.chars() {
+        if c.toInt() < 0x20 {
+            return Err(error.new("kv: key contains control character"))
+        }
+    }
+    Ok(())
+}
+fn ensureParent(path: String) -> Result<(), Error> {
+    let dir = parentDir(path)
+    if dir.isEmpty() || dir == "." || dir == path {
+        return Ok(())
+    }
+    fs.mkdirAll(dir)
+}
+fn parentDir(path: String) -> String {
+    let chars = path.chars()
+    let mut last = -1
+    for i in 0..chars.len() {
+        if chars[i] == '/' || chars[i] == '\\' {
+            last = i
+        }
+    }
+    if last < 0 {
+        return ""
+    }
+    if last == 0 {
+        return path[0..1]
+    }
+    path[0..last]
+}
+fn jsonQuote(text: String) -> String {
+    let mut out = "\""
+    for c in text.chars() {
+        if c == '"' {
+            out = "{out}\\\""
+        } else if c == '\\' {
+            out = "{out}\\\\"
+        } else if c == '\n' {
+            out = "{out}\\n"
+        } else if c == '\r' {
+            out = "{out}\\r"
+        } else if c == '\t' {
+            out = "{out}\\t"
+        } else if c.toInt() < 0x20 {
+            out = "{out}\\u{hex4(c.toInt())}"
+        } else {
+            out = "{out}{c}"
+        }
+    }
+    "{out}\""
+}
+fn hex4(value: Int) -> String {
+    let digits = "0123456789abcdef"
+    let a = digits[(value >> 12) & 0x0F]
+    let b = digits[(value >> 8) & 0x0F]
+    let c = digits[(value >> 4) & 0x0F]
+    let d = digits[value & 0x0F]
+    "{a}{b}{c}{d}"
+}

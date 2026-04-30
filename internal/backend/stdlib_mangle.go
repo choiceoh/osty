@@ -20,6 +20,13 @@ func StdlibSymbol(module, name string) string {
 	return "osty_std_" + module + "__" + name
 }
 
+// CanonicalStdlibSymbol returns the MIR-visible symbol for bodyless
+// runtime-backed stdlib declarations that must stay routed through
+// backend shims rather than injected as Osty source bodies.
+func CanonicalStdlibSymbol(module, name string) string {
+	return "std." + module + "." + name
+}
+
 // StdlibMethodSymbol returns the mangled IR name for a stdlib struct/
 // enum method lowered into a free-function helper alongside user code.
 // The scheme is `osty_std_<module>__<type>__<method>`, extending

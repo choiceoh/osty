@@ -119,7 +119,7 @@ func MonomorphPrimCode(name string) string {
 	if name == "Char" {
 		return "w"
 	}
-	if name == "Unit" {
+	if name == "Unit" || name == "()" {
 		return "v"
 	}
 	// Osty `String` and `Bytes` are opaque aggregates at IR level but

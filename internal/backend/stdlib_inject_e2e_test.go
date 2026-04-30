@@ -378,6 +378,46 @@ func TestInjectReachableStdlibBodiesTransitiveDedupe(t *testing.T) {
 	}
 }
 
+func TestInjectReachableStdlibBodiesSkipsBodylessRuntimeBackedDecls(t *testing.T) {
+	reg := stdlib.LoadCached()
+	fsCall := &ir.CallExpr{
+		Callee: &ir.FieldExpr{X: &ir.Ident{Name: "fs"}, Name: "writeString"},
+		Args: []ir.Arg{
+			{Value: irString("out.txt")},
+			{Value: irString("hello")},
+		},
+	}
+	osCall := &ir.MethodCall{
+		Receiver: &ir.Ident{Name: "path", T: &ir.NamedType{Package: "os", Name: "Path"}},
+		Name:     "dirname",
+		Args:     []ir.Arg{{Value: irString("one/two")}},
+	}
+	mod := &ir.Module{
+		Package: "main",
+		Script: []ir.Stmt{
+			&ir.ExprStmt{X: fsCall},
+			&ir.ExprStmt{X: osCall},
+		},
+	}
+	injected, issues := injectReachableStdlibBodies(mod, reg)
+	if len(issues) != 0 {
+		t.Fatalf("issues = %v, want none for bodyless stdlib decls", issues)
+	}
+	if len(injected) != 0 {
+		t.Fatalf("injected = %v, want no bodyless runtime-backed decls", fnDeclNames(injected))
+	}
+	if _, ok := fsCall.Callee.(*ir.FieldExpr); !ok {
+		t.Fatalf("fs.writeString callsite was rewritten; want runtime-backed call left intact")
+	}
+	if osCall.Name != "dirname" {
+		t.Fatalf("os.Path.dirname method call was rewritten; want runtime-backed method left intact")
+	}
+}
+
+func irString(value string) *ir.StringLit {
+	return &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: value}}}
+}
+
 func fnDeclNames(decls []ir.Decl) []string {
 	out := []string{}
 	for _, d := range decls {
