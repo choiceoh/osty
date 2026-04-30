@@ -1,0 +1,201 @@
+// std.aidev.osty - Osty-specific helpers for AI coding loops.
+//
+// The core std.aidev module is language-neutral. This nested module adds
+// lightweight Osty knowledge: common AI-authored source habits, diagnostic
+// hint text, and summaries that an agent runner can pass into its next repair
+// prompt.
+
+use std.aidev as aidev
+use std.strings
+
+pub enum OstySourceHabit {
+    HabitUnknown,
+    HabitPythonColonBlock,
+    HabitJsStrictEquality,
+    HabitJsForOf,
+    HabitGoShortDecl,
+    HabitForeignFunction,
+    HabitFromImport,
+    HabitBareTupleLoop,
+
+    pub fn toString(self) -> String {
+        match self {
+            HabitUnknown         -> "unknown",
+            HabitPythonColonBlock -> "python_colon_block",
+            HabitJsStrictEquality -> "js_strict_equality",
+            HabitJsForOf          -> "js_for_of",
+            HabitGoShortDecl      -> "go_short_decl",
+            HabitForeignFunction  -> "foreign_function",
+            HabitFromImport       -> "from_import",
+            HabitBareTupleLoop    -> "bare_tuple_loop",
+        }
+    }
+}
+
+pub enum OstyRepairAction {
+    ActionInspect,
+    ActionRewriteSyntax,
+    ActionAddImport,
+    ActionFixType,
+    ActionAddMatchArm,
+    ActionRenameSymbol,
+
+    pub fn toString(self) -> String {
+        match self {
+            ActionInspect       -> "inspect",
+            ActionRewriteSyntax -> "rewrite_syntax",
+            ActionAddImport     -> "add_import",
+            ActionFixType       -> "fix_type",
+            ActionAddMatchArm   -> "add_match_arm",
+            ActionRenameSymbol  -> "rename_symbol",
+        }
+    }
+}
+
+pub struct OstyRepairHint {
+    pub action: OstyRepairAction,
+    pub message: String,
+    pub confidence: Float = 0.5,
+}
+
+pub fn classifySourceHabit(source: String) -> OstySourceHabit {
+    let lower = strings.toLower(source)
+    if strings.contains(source, "===") || strings.contains(source, "!==") {
+        return HabitJsStrictEquality
+    }
+    if strings.contains(lower, "for ") && strings.contains(lower, " of ") {
+        return HabitJsForOf
+    }
+    if strings.contains(source, ":=") {
+        return HabitGoShortDecl
+    }
+    if strings.contains(lower, "function ") || strings.contains(lower, "func ") {
+        return HabitForeignFunction
+    }
+    if strings.contains(lower, "from ") && strings.contains(lower, " import ") {
+        return HabitFromImport
+    }
+    if strings.contains(source, ":\n") &&
+       (strings.contains(lower, "if ") || strings.contains(lower, "for ") || strings.contains(lower, "match ")) {
+        return HabitPythonColonBlock
+    }
+    if strings.contains(lower, "for ") && strings.contains(source, "(") && strings.contains(source, ",") {
+        return HabitBareTupleLoop
+    }
+    HabitUnknown
+}
+
+pub fn diagnosticHint(diag: aidev.Diagnostic) -> OstyRepairHint {
+    let code = strings.toLower(diag.code)
+    let msg = strings.toLower(diag.message)
+    if strings.contains(msg, "unknown symbol") || strings.contains(msg, "undefined") || strings.contains(msg, "not found") {
+        return OstyRepairHint {
+            action: ActionRenameSymbol,
+            message: "Check for a typo, missing use declaration, or a symbol that belongs to another module.",
+            confidence: 0.72,
+        }
+    }
+    if strings.contains(msg, "method") && strings.contains(msg, "not found") {
+        return OstyRepairHint {
+            action: ActionFixType,
+            message: "Verify the receiver type and prefer the stdlib method surface for that concrete type.",
+            confidence: 0.70,
+        }
+    }
+    if strings.contains(msg, "non-exhaustive") || strings.contains(msg, "not exhaustive") {
+        return OstyRepairHint {
+            action: ActionAddMatchArm,
+            message: "Add the missing match arm or a final wildcard arm if the fallback is intentional.",
+            confidence: 0.78,
+        }
+    }
+    if strings.contains(msg, "type mismatch") || strings.contains(msg, "cannot assign") || strings.contains(msg, "expected") {
+        return OstyRepairHint {
+            action: ActionFixType,
+            message: "Align the expression type with the expected type before changing surrounding control flow.",
+            confidence: 0.66,
+        }
+    }
+    if strings.contains(code, "e0740") || strings.contains(msg, "unreachable pattern") {
+        return OstyRepairHint {
+            action: ActionAddMatchArm,
+            message: "Review match arm ordering; a broader pattern is probably hiding a later arm.",
+            confidence: 0.76,
+        }
+    }
+    OstyRepairHint {
+        action: ActionInspect,
+        message: "Inspect the diagnostic span and keep the smallest source edit that removes this error.",
+        confidence: 0.45,
+    }
+}
+
+pub fn habitHint(habit: OstySourceHabit) -> OstyRepairHint {
+    match habit {
+        HabitPythonColonBlock -> OstyRepairHint {
+            action: ActionRewriteSyntax,
+            message: "Rewrite Python-style colon blocks into Osty brace blocks.",
+            confidence: 0.86,
+        },
+        HabitJsStrictEquality -> OstyRepairHint {
+            action: ActionRewriteSyntax,
+            message: "Use Osty equality operators == and != instead of JavaScript === or !==.",
+            confidence: 0.90,
+        },
+        HabitJsForOf -> OstyRepairHint {
+            action: ActionRewriteSyntax,
+            message: "Rewrite JavaScript for-of loops as Osty for item in items blocks.",
+            confidence: 0.82,
+        },
+        HabitGoShortDecl -> OstyRepairHint {
+            action: ActionRewriteSyntax,
+            message: "Replace Go := declarations with Osty let or let mut declarations.",
+            confidence: 0.84,
+        },
+        HabitForeignFunction -> OstyRepairHint {
+            action: ActionRewriteSyntax,
+            message: "Replace foreign function keywords with Osty fn declarations.",
+            confidence: 0.72,
+        },
+        HabitFromImport -> OstyRepairHint {
+            action: ActionAddImport,
+            message: "Rewrite Python-style from imports as Osty use declarations.",
+            confidence: 0.76,
+        },
+        HabitBareTupleLoop -> OstyRepairHint {
+            action: ActionRewriteSyntax,
+            message: "Use an Osty tuple pattern or explicit destructuring inside the loop body.",
+            confidence: 0.58,
+        },
+        HabitUnknown -> OstyRepairHint {
+            action: ActionInspect,
+            message: "No common AI source habit detected.",
+            confidence: 0.30,
+        },
+    }
+}
+
+pub fn summarizeOstyDiagnostics(diags: List<aidev.Diagnostic>, source: String) -> String {
+    let base = aidev.summarizeDiagnostics(diags, 6)
+    let habit = classifySourceHabit(source)
+    let hint = habitHint(habit)
+    if habit == HabitUnknown {
+        return base
+    }
+    "{base}\nsource habit: {habit.toString()} -> {hint.message}"
+}
+
+pub fn buildOstyFixContext(file: aidev.SourceFile, diags: List<aidev.Diagnostic>) -> aidev.FixContext {
+    let context = aidev.buildFixContext(file, diags, 3, 3)
+    let habit = classifySourceHabit(file.text)
+    if habit == HabitUnknown {
+        return context
+    }
+    let hint = habitHint(habit)
+    aidev.FixContext {
+        file: context.file,
+        diagnostics: context.diagnostics,
+        summary: "{context.summary}\nsource habit: {habit.toString()} -> {hint.message}",
+        excerpt: context.excerpt,
+    }
+}

@@ -1,0 +1,449 @@
+// std.aidev.verify - verification plans and outcomes for AI coding loops.
+//
+// The host still runs commands. This module defines the shared contract an AI
+// coding agent can use to describe what should be checked, record the results,
+// and decide whether a repair should be accepted, retried, or rejected.
+
+use std.aidev as aidev
+use std.strings
+
+pub enum VerifyKind {
+    VerifyTokens,
+    VerifyParse,
+    VerifyCheck,
+    VerifyTests,
+    VerifyFormat,
+    VerifyDiff,
+    VerifyBuild,
+    VerifyCustom,
+
+    pub fn toString(self) -> String {
+        match self {
+            VerifyTokens -> "tokens",
+            VerifyParse  -> "parse",
+            VerifyCheck  -> "check",
+            VerifyTests  -> "tests",
+            VerifyFormat -> "format",
+            VerifyDiff   -> "diff",
+            VerifyBuild  -> "build",
+            VerifyCustom -> "custom",
+        }
+    }
+}
+
+pub enum VerifyOutcome {
+    OutcomeUnknown,
+    OutcomePassed,
+    OutcomeFailed,
+    OutcomeSkipped,
+    OutcomeTimedOut,
+
+    pub fn toString(self) -> String {
+        match self {
+            OutcomeUnknown -> "unknown",
+            OutcomePassed  -> "passed",
+            OutcomeFailed  -> "failed",
+            OutcomeSkipped -> "skipped",
+            OutcomeTimedOut -> "timed_out",
+        }
+    }
+
+    pub fn isFailure(self) -> Bool {
+        self == OutcomeFailed || self == OutcomeTimedOut
+    }
+
+    pub fn isSuccess(self) -> Bool {
+        self == OutcomePassed
+    }
+}
+
+pub enum VerifyDecision {
+    DecisionContinue,
+    DecisionAccept,
+    DecisionRetry,
+    DecisionReject,
+    DecisionInvestigate,
+
+    pub fn toString(self) -> String {
+        match self {
+            DecisionContinue    -> "continue",
+            DecisionAccept      -> "accept",
+            DecisionRetry       -> "retry",
+            DecisionReject      -> "reject",
+            DecisionInvestigate -> "investigate",
+        }
+    }
+}
+
+pub struct VerifyCommand {
+    pub id: String,
+    pub kind: VerifyKind,
+    pub label: String,
+    pub command: String,
+    pub workingDir: String = "",
+    pub targetPaths: List<String> = [],
+    pub required: Bool = true,
+    pub timeoutMs: Int = 0,
+}
+
+pub struct VerifyPlan {
+    pub reason: String,
+    pub commands: List<VerifyCommand>,
+    pub changedPaths: List<String> = [],
+    pub maxFailures: Int = 1,
+}
+
+pub struct VerifyResult {
+    pub commandId: String,
+    pub outcome: VerifyOutcome,
+    pub exitCode: Int = 0,
+    pub durationMs: Int = 0,
+    pub stdoutSummary: String = "",
+    pub stderrSummary: String = "",
+    pub diagnostics: List<aidev.Diagnostic> = [],
+    pub notes: List<String> = [],
+}
+
+pub struct VerifyReport {
+    pub plan: VerifyPlan,
+    pub results: List<VerifyResult>,
+    pub before: aidev.CheckSummary,
+    pub after: aidev.CheckSummary,
+    pub passed: Int = 0,
+    pub failed: Int = 0,
+    pub skipped: Int = 0,
+    pub timedOut: Int = 0,
+    pub missingRequired: Int = 0,
+    pub decision: VerifyDecision,
+}
+
+pub fn verifyCommand(id: String, kind: VerifyKind, label: String, commandText: String) -> VerifyCommand {
+    VerifyCommand {
+        id,
+        kind,
+        label,
+        command: commandText,
+    }
+}
+
+pub fn optionalCommand(commandValue: VerifyCommand) -> VerifyCommand {
+    VerifyCommand {
+        id: commandValue.id,
+        kind: commandValue.kind,
+        label: commandValue.label,
+        command: commandValue.command,
+        workingDir: commandValue.workingDir,
+        targetPaths: commandValue.targetPaths,
+        required: false,
+        timeoutMs: commandValue.timeoutMs,
+    }
+}
+
+pub fn commandWithTargets(commandValue: VerifyCommand, targets: List<String>) -> VerifyCommand {
+    VerifyCommand {
+        id: commandValue.id,
+        kind: commandValue.kind,
+        label: commandValue.label,
+        command: commandValue.command,
+        workingDir: commandValue.workingDir,
+        targetPaths: targets,
+        required: commandValue.required,
+        timeoutMs: commandValue.timeoutMs,
+    }
+}
+
+pub fn commandWithTimeout(commandValue: VerifyCommand, timeoutMs: Int) -> VerifyCommand {
+    VerifyCommand {
+        id: commandValue.id,
+        kind: commandValue.kind,
+        label: commandValue.label,
+        command: commandValue.command,
+        workingDir: commandValue.workingDir,
+        targetPaths: commandValue.targetPaths,
+        required: commandValue.required,
+        timeoutMs,
+    }
+}
+
+pub fn tokensCommand(path: String) -> VerifyCommand {
+    commandWithTargets(
+        verifyCommand("tokens:{path}", VerifyTokens, "Tokenize {path}", "go run ./cmd/osty tokens {path} >/dev/null"),
+        [path],
+    )
+}
+
+pub fn parseCommand(path: String) -> VerifyCommand {
+    commandWithTargets(
+        verifyCommand("parse:{path}", VerifyParse, "Parse {path}", "go run ./cmd/osty parse {path} >/dev/null"),
+        [path],
+    )
+}
+
+pub fn checkCommand(path: String) -> VerifyCommand {
+    commandWithTargets(
+        verifyCommand("check:{path}", VerifyCheck, "Check {path}", "go run ./cmd/osty check --airepair=false {path}"),
+        [path],
+    )
+}
+
+pub fn goTestCommand(pkg: String, regex: String) -> VerifyCommand {
+    let mut commandText = "go test -count=1 -vet=off {pkg}"
+    let mut label = "Go test {pkg}"
+    let mut id = "gotest:{pkg}"
+    if !regex.isEmpty() {
+        commandText = "{commandText} -run '{regex}'"
+        label = "{label} / {regex}"
+        id = "{id}:{regex}"
+    }
+    verifyCommand(id, VerifyTests, label, commandText)
+}
+
+pub fn justCommand(recipe: String) -> VerifyCommand {
+    verifyCommand("just:{recipe}", VerifyCustom, "just {recipe}", "just {recipe}")
+}
+
+pub fn fmtCheckCommand() -> VerifyCommand {
+    verifyCommand("fmt-check", VerifyFormat, "Format check", "just fmt-check")
+}
+
+pub fn diffCheckCommand() -> VerifyCommand {
+    verifyCommand("diff-check", VerifyDiff, "Git whitespace check", "git diff --check")
+}
+
+pub fn plan(reason: String, commands: List<VerifyCommand>, changedPaths: List<String>) -> VerifyPlan {
+    VerifyPlan {
+        reason,
+        commands,
+        changedPaths,
+    }
+}
+
+pub fn planForPatch(reason: String, patchResult: aidev.PatchResult, commands: List<VerifyCommand>) -> VerifyPlan {
+    VerifyPlan {
+        reason,
+        commands,
+        changedPaths: patchResult.changedPaths,
+    }
+}
+
+pub fn ostySourcePlan(path: String) -> VerifyPlan {
+    plan("verify osty source {path}", [tokensCommand(path), checkCommand(path)], [path])
+}
+
+pub fn stdlibAidevPlan() -> VerifyPlan {
+    plan(
+        "verify std.aidev modules",
+        [
+            goTestCommand("./internal/stdlib", "TestAidev"),
+            goTestCommand("./internal/backend", "TestStdlibCheckResultAidev"),
+            fmtCheckCommand(),
+            diffCheckCommand(),
+        ],
+        [],
+    )
+}
+
+pub fn verifyResult(commandId: String, outcome: VerifyOutcome, exitCode: Int, stdoutSummary: String, stderrSummary: String, diagnostics: List<aidev.Diagnostic>) -> VerifyResult {
+    VerifyResult {
+        commandId,
+        outcome,
+        exitCode,
+        stdoutSummary,
+        stderrSummary,
+        diagnostics,
+    }
+}
+
+pub fn passed(commandId: String) -> VerifyResult {
+    verifyResult(commandId, OutcomePassed, 0, "", "", [])
+}
+
+pub fn failed(commandId: String, exitCode: Int, stderrSummary: String) -> VerifyResult {
+    verifyResult(commandId, OutcomeFailed, exitCode, "", stderrSummary, [])
+}
+
+pub fn skipped(commandId: String, note: String) -> VerifyResult {
+    VerifyResult {
+        commandId,
+        outcome: OutcomeSkipped,
+        notes: [note],
+    }
+}
+
+pub fn timedOut(commandId: String, timeoutMs: Int) -> VerifyResult {
+    VerifyResult {
+        commandId,
+        outcome: OutcomeTimedOut,
+        durationMs: timeoutMs,
+        notes: ["timeout after {timeoutMs}ms"],
+    }
+}
+
+pub fn buildReport(planValue: VerifyPlan, results: List<VerifyResult>, beforeDiags: List<aidev.Diagnostic>, afterDiags: List<aidev.Diagnostic>, patchResult: aidev.PatchResult) -> VerifyReport {
+    let before = aidev.checkSummary(beforeDiags)
+    let after = aidev.checkSummary(afterDiags)
+    let mut report = VerifyReport {
+        plan: planValue,
+        results,
+        before,
+        after,
+        decision: DecisionInvestigate,
+    }
+    for item in report.results {
+        if item.outcome == OutcomePassed {
+            report.passed = report.passed + 1
+        } else if item.outcome == OutcomeFailed {
+            report.failed = report.failed + 1
+        } else if item.outcome == OutcomeSkipped {
+            report.skipped = report.skipped + 1
+        } else if item.outcome == OutcomeTimedOut {
+            report.timedOut = report.timedOut + 1
+        }
+    }
+    report.missingRequired = missingRequiredCount(report.plan, report.results)
+    report.decision = inferDecision(report.plan, report.results, before, after, patchResult)
+    report
+}
+
+pub fn inferDecision(planValue: VerifyPlan, results: List<VerifyResult>, before: aidev.CheckSummary, after: aidev.CheckSummary, patchResult: aidev.PatchResult) -> VerifyDecision {
+    if patchResult.status.toString() == "rejected" {
+        return DecisionReject
+    }
+    if after.totalErrors > before.totalErrors {
+        return DecisionReject
+    }
+    if requiredFailureCount(planValue, results) > 0 {
+        return DecisionRetry
+    }
+    if missingRequiredCount(planValue, results) > 0 {
+        return DecisionInvestigate
+    }
+    if after.totalErrors > 0 {
+        return DecisionRetry
+    }
+    if allRequiredPassed(planValue, results) {
+        return DecisionAccept
+    }
+    if results.isEmpty() {
+        return DecisionInvestigate
+    }
+    DecisionContinue
+}
+
+pub fn allRequiredPassed(planValue: VerifyPlan, results: List<VerifyResult>) -> Bool {
+    for commandValue in planValue.commands {
+        if commandValue.required {
+            let found = resultFor(results, commandValue.id)
+            match found {
+                Some(item) -> {
+                    if !item.outcome.isSuccess() {
+                        return false
+                    }
+                },
+                None -> { return false },
+            }
+        }
+    }
+    true
+}
+
+pub fn requiredFailureCount(planValue: VerifyPlan, results: List<VerifyResult>) -> Int {
+    let mut count = 0
+    for commandValue in planValue.commands {
+        if commandValue.required {
+            let found = resultFor(results, commandValue.id)
+            match found {
+                Some(item) -> {
+                    if item.outcome.isFailure() {
+                        count = count + 1
+                    }
+                },
+                None -> {},
+            }
+        }
+    }
+    count
+}
+
+pub fn missingRequiredCount(planValue: VerifyPlan, results: List<VerifyResult>) -> Int {
+    let mut count = 0
+    for commandValue in planValue.commands {
+        if commandValue.required && resultFor(results, commandValue.id).isNone() {
+            count = count + 1
+        }
+    }
+    count
+}
+
+pub fn resultFor(results: List<VerifyResult>, commandId: String) -> VerifyResult? {
+    for item in results {
+        if item.commandId == commandId {
+            return Some(item)
+        }
+    }
+    None
+}
+
+pub fn failedCommandIds(planValue: VerifyPlan, results: List<VerifyResult>) -> List<String> {
+    let mut out: List<String> = []
+    for commandValue in planValue.commands {
+        let found = resultFor(results, commandValue.id)
+        match found {
+            Some(item) -> {
+                if item.outcome.isFailure() {
+                    out.push(commandValue.id)
+                }
+            },
+            None -> {
+                if commandValue.required {
+                    out.push(commandValue.id)
+                }
+            },
+        }
+    }
+    out
+}
+
+pub fn resultDiagnostics(results: List<VerifyResult>) -> List<aidev.Diagnostic> {
+    let mut out: List<aidev.Diagnostic> = []
+    for item in results {
+        for diag in item.diagnostics {
+            out.push(diag)
+        }
+    }
+    out
+}
+
+pub fn summarizePlan(planValue: VerifyPlan) -> String {
+    let mut parts: List<String> = []
+    for commandValue in planValue.commands {
+        parts.push(formatCommand(commandValue))
+    }
+    strings.join(parts, "\n")
+}
+
+pub fn summarizeReport(report: VerifyReport) -> String {
+    let decision = report.decision.toString()
+    let afterSummary = aidev.formatCheckSummary(report.after)
+    let mut parts: List<String> = [
+        "decision={decision}",
+        "passed={report.passed}",
+        "failed={report.failed}",
+        "skipped={report.skipped}",
+        "timed_out={report.timedOut}",
+        "missing_required={report.missingRequired}",
+        "after={afterSummary}",
+    ]
+    let failures = failedCommandIds(report.plan, report.results)
+    if !failures.isEmpty() {
+        let joined = strings.join(failures, ", ")
+        parts.push("failed_commands={joined}")
+    }
+    strings.join(parts, "; ")
+}
+
+pub fn formatCommand(commandValue: VerifyCommand) -> String {
+    let kind = commandValue.kind.toString()
+    let required = if commandValue.required { "required" } else { "optional" }
+    "{commandValue.id} [{kind}, {required}] {commandValue.command}"
+}
