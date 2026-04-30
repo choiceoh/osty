@@ -732,11 +732,11 @@ fn checkLookupExactIndex(keys: List<String>, hashes: List<Int>, values: List<Int
 }
 
 fn checkFnKey(name: String, owner: String) -> String {
-    "{owner}\u{1f}{name}"
+    owner + "\u{1f}" + name
 }
 
 fn checkOwnerKey(owner: String, name: String) -> String {
-    "{owner}\u{1f}{name}"
+    owner + "\u{1f}" + name
 }
 
 // ---------------------------------------------------------------------
@@ -954,7 +954,7 @@ fn checkSubstCacheKey(ty: Int, generics: List<String>, args: List<Int>) -> Strin
     // `let v: Int = xs[i]` workaround in `checkIntKey` below.
     let gKey: String = checkStringKey(generics)
     let aKey: String = checkIntKey(args)
-    "{ty}\u{1f}{gKey}\u{1f}{aKey}"
+    "{ty}" + "\u{1f}" + gKey + "\u{1f}" + aKey
 }
 
 // ---------------------------------------------------------------------

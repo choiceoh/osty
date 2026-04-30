@@ -6,8 +6,8 @@ package runner
 import "strings"
 
 // ResolveTestWorkers picks the worker-pool size for `osty test`
-// given the flag state and discovered test count. See the Osty
-// source for the precedence table.
+// given the flag state, caller-provided CPU budget, and discovered
+// test count. See the Osty source for the precedence table.
 //
 // Osty: toolchain/test_runner.osty:24
 func ResolveTestWorkers(serial bool, jobs, cpuCount, testCount int) int {

@@ -19,7 +19,7 @@ use std.strings as strings
 /// Precedence:
 ///   - --serial always wins: 1 worker, run in order.
 ///   - --jobs N caps the pool at N (negative is treated as 0).
-///   - --jobs 0 (the default) uses the host's CPU count.
+///   - --jobs 0 (the default) uses the host-provided CPU budget.
 ///   - The pool is clamped to a minimum of 1 and to at most `n`
 ///     (the number of discovered tests — no idle goroutines).
 pub fn resolveTestWorkers(serial: Bool, jobs: Int, cpuCount: Int, testCount: Int) -> Int {

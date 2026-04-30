@@ -29584,27 +29584,27 @@ func tyLookupInterned(arena *TyArena, key string, hash int) int {
 
 // Osty: /tmp/selfhost_merged.osty:11848:1
 func tyKeyNamed(head string, args []int) string {
-	return fmt.Sprintf("N|%s|%s", ostyToString(head), ostyToString(tyKeyArgs(args)))
+	return "N|" + head + "|" + tyKeyArgs(args)
 }
 
 // Osty: /tmp/selfhost_merged.osty:11852:1
 func tyKeyTuple(args []int) string {
-	return fmt.Sprintf("T|%s", ostyToString(tyKeyArgs(args)))
+	return "T|" + tyKeyArgs(args)
 }
 
 // Osty: /tmp/selfhost_merged.osty:11856:1
 func tyKeyFn(args []int, ret int) string {
-	return fmt.Sprintf("F|%s|%s", ostyToString(tyKeyArgs(args)), ostyToString(ret))
+	return "F|" + tyKeyArgs(args) + "|" + strconv.Itoa(ret)
 }
 
 // Osty: /tmp/selfhost_merged.osty:11860:1
 func tyKeyOptional(inner int) string {
-	return fmt.Sprintf("O|%s", ostyToString(inner))
+	return "O|" + strconv.Itoa(inner)
 }
 
 // Osty: /tmp/selfhost_merged.osty:11864:1
 func tyKeySelf(owner string) string {
-	return fmt.Sprintf("S|%s", ostyToString(owner))
+	return "S|" + owner
 }
 
 // Osty: /tmp/selfhost_merged.osty:11868:1
@@ -29614,35 +29614,18 @@ func tyKeyArgs(args []int) string {
 		// Osty: /tmp/selfhost_merged.osty:11870:9
 		return ""
 	}
-	// Osty: /tmp/selfhost_merged.osty:11872:5
-	out := ""
-	_ = out
-	// Osty: /tmp/selfhost_merged.osty:11873:5
-	i := 0
-	_ = i
-	// Osty: /tmp/selfhost_merged.osty:11874:5
-	for _, arg := range args {
-		// Osty: /tmp/selfhost_merged.osty:11875:9
-		if i > 0 {
-			// Osty: /tmp/selfhost_merged.osty:11876:13
-			out = fmt.Sprintf("%s,", ostyToString(out))
-		}
-		// Osty: /tmp/selfhost_merged.osty:11878:9
-		out = fmt.Sprintf("%s%s", ostyToString(out), ostyToString(arg))
-		// Osty: /tmp/selfhost_merged.osty:11879:9
-		func() {
-			var _cur2012 int = i
-			var _rhs2013 int = 1
-			if _rhs2013 > 0 && _cur2012 > math.MaxInt-_rhs2013 {
-				panic("integer overflow")
-			}
-			if _rhs2013 < 0 && _cur2012 < math.MinInt-_rhs2013 {
-				panic("integer overflow")
-			}
-			i = _cur2012 + _rhs2013
-		}()
+	if len(args) == 1 {
+		return strconv.Itoa(args[0])
 	}
-	return out
+	var b strings.Builder
+	b.Grow(len(args) * 3)
+	for i, arg := range args {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(strconv.Itoa(arg))
+	}
+	return b.String()
 }
 
 // Osty: /tmp/selfhost_merged.osty:11891:5
@@ -34955,138 +34938,41 @@ func checkGenericBoundIndexPop(env *CheckEnv, name string) {
 
 // Osty: /tmp/selfhost_merged.osty:14884:1
 func checkHashKey(key string) int {
-	// Osty: /tmp/selfhost_merged.osty:14885:5
 	h := 5381
-	_ = h
-	// Osty: /tmp/selfhost_merged.osty:14886:5
-	for _, b := range []byte(key) {
-		// Osty: /tmp/selfhost_merged.osty:14887:9
-		func() {
-			var _cur2101 int = (func() int {
-				var _p2103 int = h
-				var _rhs2104 int = 33
-				if _p2103 != 0 && _rhs2104 != 0 {
-					if _p2103 == int(-1) && _rhs2104 == math.MinInt {
-						panic("integer overflow")
-					}
-					if _rhs2104 == int(-1) && _p2103 == math.MinInt {
-						panic("integer overflow")
-					}
-					if _p2103 > 0 {
-						if _rhs2104 > 0 && _p2103 > math.MaxInt/_rhs2104 {
-							panic("integer overflow")
-						}
-						if _rhs2104 < 0 && _rhs2104 < math.MinInt/_p2103 {
-							panic("integer overflow")
-						}
-					} else {
-						if _rhs2104 > 0 && _p2103 < math.MinInt/_rhs2104 {
-							panic("integer overflow")
-						}
-						if _rhs2104 < 0 && _p2103 < math.MaxInt/_rhs2104 {
-							panic("integer overflow")
-						}
-					}
-				}
-				return _p2103 * _rhs2104
-			}() + int(b))
-			var _rhs2102 int = 1073741789
-			if _rhs2102 == 0 {
-				panic("integer modulo by zero")
-			}
-			if _cur2101 == math.MinInt && _rhs2102 == int(-1) {
-				panic("integer overflow")
-			}
-			h = _cur2101 % _rhs2102
-		}()
+	for i := 0; i < len(key); i++ {
+		h = (h*33 + int(key[i])) % 1073741789
 	}
 	return h
 }
 
 // Osty: /tmp/selfhost_merged.osty:14892:1
 func checkNameIndex(names []string, hashes []int, name string, hash int) int {
-	// Osty: /tmp/selfhost_merged.osty:14893:5
-	i := func() int {
-		var _p2105 int = len(names)
-		var _rhs2106 int = 1
-		if _rhs2106 < 0 && _p2105 > math.MaxInt+_rhs2106 {
-			panic("integer overflow")
-		}
-		if _rhs2106 > 0 && _p2105 < math.MinInt+_rhs2106 {
-			panic("integer overflow")
-		}
-		return _p2105 - _rhs2106
-	}()
-	_ = i
-	// Osty: /tmp/selfhost_merged.osty:14894:5
-	for i >= 0 {
-		// Osty: /tmp/selfhost_merged.osty:14895:9
+	for i := len(names) - 1; i >= 0; i-- {
 		if hashes[i] == hash && names[i] == name {
-			// Osty: /tmp/selfhost_merged.osty:14896:13
 			return i
 		}
-		// Osty: /tmp/selfhost_merged.osty:14898:9
-		func() {
-			var _cur2107 int = i
-			var _rhs2108 int = 1
-			if _rhs2108 < 0 && _cur2107 > math.MaxInt+_rhs2108 {
-				panic("integer overflow")
-			}
-			if _rhs2108 > 0 && _cur2107 < math.MinInt+_rhs2108 {
-				panic("integer overflow")
-			}
-			i = _cur2107 - _rhs2108
-		}()
 	}
 	return -1
 }
 
 // Osty: /tmp/selfhost_merged.osty:14903:1
 func checkLookupExactIndex(keys []string, hashes []int, values []int, key string, hash int) int {
-	// Osty: /tmp/selfhost_merged.osty:14904:5
-	i := func() int {
-		var _p2109 int = len(keys)
-		var _rhs2110 int = 1
-		if _rhs2110 < 0 && _p2109 > math.MaxInt+_rhs2110 {
-			panic("integer overflow")
-		}
-		if _rhs2110 > 0 && _p2109 < math.MinInt+_rhs2110 {
-			panic("integer overflow")
-		}
-		return _p2109 - _rhs2110
-	}()
-	_ = i
-	// Osty: /tmp/selfhost_merged.osty:14905:5
-	for i >= 0 {
-		// Osty: /tmp/selfhost_merged.osty:14906:9
+	for i := len(keys) - 1; i >= 0; i-- {
 		if hashes[i] == hash && keys[i] == key {
-			// Osty: /tmp/selfhost_merged.osty:14907:13
 			return values[i]
 		}
-		// Osty: /tmp/selfhost_merged.osty:14909:9
-		func() {
-			var _cur2111 int = i
-			var _rhs2112 int = 1
-			if _rhs2112 < 0 && _cur2111 > math.MaxInt+_rhs2112 {
-				panic("integer overflow")
-			}
-			if _rhs2112 > 0 && _cur2111 < math.MinInt+_rhs2112 {
-				panic("integer overflow")
-			}
-			i = _cur2111 - _rhs2112
-		}()
 	}
 	return -1
 }
 
 // Osty: /tmp/selfhost_merged.osty:14914:1
 func checkFnKey(name string, owner string) string {
-	return fmt.Sprintf("%s\x1f%s", ostyToString(owner), ostyToString(name))
+	return owner + "\x1f" + name
 }
 
 // Osty: /tmp/selfhost_merged.osty:14918:1
 func checkOwnerKey(owner string, name string) string {
-	return fmt.Sprintf("%s\x1f%s", ostyToString(owner), ostyToString(name))
+	return owner + "\x1f" + name
 }
 
 // Osty: /tmp/selfhost_merged.osty:14930:5
@@ -35552,7 +35438,7 @@ func checkSubstCacheKey(ty int, generics []string, args []int) string {
 	// Osty: /tmp/selfhost_merged.osty:15144:5
 	var aKey string = checkIntKey(args)
 	_ = aKey
-	return fmt.Sprintf("%s\x1f%s\x1f%s", ostyToString(ty), ostyToString(gKey), ostyToString(aKey))
+	return strconv.Itoa(ty) + "\x1f" + gKey + "\x1f" + aKey
 }
 
 // Osty: /tmp/selfhost_merged.osty:15152:5
