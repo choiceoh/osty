@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 82 공개 모듈. 분류 기준:
+총 83 공개 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (78 / 82 = 95%)
+### ⭐⭐⭐⭐⭐ Production (79 / 83 = 95%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -47,6 +47,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | report | 400 | pure Osty | Markdown/HTML report builder: summary cards, sections, aligned tables, chart CSV/JSON export |
 | tokenest | 305 | pure Osty + bytes | Deneb-derived model-family-aware token estimator with explicit calibration state for Claude/OpenAI/Gemini/default |
 | httpretry | 322 | pure Osty | Deneb-derived retry/backoff decisions and LLM/provider error classification with provider codes, large-session disconnect handling, context/billing/rate-limit disambiguation, and action flags |
+| schedule | 637 | pure Osty | cron parser/matcher, interval/daily next-run planning, task state, due/tick helpers, and retry backoff |
 | jsonl | 117 | pure Osty + json | Deneb-style JSON Lines parse/append/compact helpers |
 | kv | 459 | pure Osty + fs/json | JSONL append-log local KV: file-backed cache/history/settings store, string-first typed getters/setters, tombstone delete, compact rewrite, JSON convenience helpers |
 | shortid | 65 | pure Osty | Deneb-style `prefix_0000` deterministic short id generator |
@@ -110,7 +111,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (4 / 82 = 5%)
+### ⭐⭐⭐⭐ Production-adjacent (4 / 83 = 5%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
@@ -126,7 +127,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 
 | 구분 | 갭 |
 |---|---|
-| 없는 모듈 | 없음 (`db`, `smtp`, `zip`, `image`, `dialog`, `watch`, `scan` surface 는 존재) |
+| 없는 모듈 | 없음 (`db`, `smtp`, `zip`, `image`, `schedule`, `dialog`, `watch`, `scan`, `print` surface 는 존재) |
 | 남은 runtime/deep 기능 | `db driver/runtime`, `smtp TLS/socket execution`, `zip deflate`, `image pixel decode` |
 | 부분 구현 | `compress` 는 gzip 만 있음. deflate/zstd 계열 없음 |
 | 문서/코드 드리프트 | 일부 README/매트릭스 문구가 과거 G18 stub 정책을 아직 과장해서 남김 |
@@ -149,6 +150,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | Property-based testing | ✅ 가능 | testing (Gen<T> / property / propertySeeded) |
 | Structured logging | ✅ 가능 | log (Handler / TextHandler / JsonHandler) |
 | 동시성 (구조적) | ✅ 가능 | thread (spawn / race / chan / select / cancel) |
+| 예약 작업 / 재시도 | ✅ 가능 | schedule (cron / interval / daily / due tick / retry backoff) |
 | HTML 템플릿 | ✅ 가능 | template (escaped/raw placeholder render) |
 | XML 처리 | ✅ 가능 | xml (escape / tag build / tokenize) |
 | 다국어 메시지 | ✅ 가능 | i18n (locale / catalog / placeholder / plural category) |
@@ -173,7 +175,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | Local document search | ✅ 가능 | search + markdown + media + jsonl |
 | 사람이 읽는 리포트 산출물 | ✅ 가능 | report + markdown/jsonl/csv |
 | PDF/이미지 인쇄 | ✅ 가능 | print + fs/media/os (기본 CUPS `lp`, `lpr`, Windows shell print, custom command plan) |
-| LLM retry/compaction loop | ✅ 가능 | ai + httpretry + tokenest + aiagents |
+| LLM retry/compaction loop | ✅ 가능 | ai + httpretry + schedule + tokenest + aiagents |
 
 ## 3. 진짜 약점 (남은 런타임 / 딥 기능)
 
@@ -203,7 +205,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 58 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, jsonl, kv, shortid, metrics, net, fmt, json, config, table, url, io, collections, email, db, polyglot, grid, gui, dialog, tar, sql, xml, tui, image, ocr, scan, smtp, result, option, csv, encoding, zip, term, websocket, watch, graphql, template, i18n, char, iter, bytes)
+- 59 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, schedule, jsonl, kv, shortid, metrics, net, fmt, json, config, table, url, io, collections, email, db, polyglot, grid, gui, dialog, tar, sql, xml, tui, image, ocr, scan, smtp, result, option, csv, encoding, zip, term, websocket, watch, graphql, template, i18n, char, iter, bytes)
 - 5 모듈은 Phase A 충실 + Phase B declaration-only (env, random, os, crypto, compress)
 - fs 는 Phase A 충실 + 확장된 tool-facing declaration surface (walk/glob/watch/atomicWrite/lockFile/hashFile/copyDir/diffFiles)
 - print 는 기존 `std.os` host process bridge 위에서 CUPS/Windows/custom spooler 실행 계획을 제공한다. 실제 출력은 가능하지만 프린터별 capability discovery 는 production-adjacent 로 남긴다.
