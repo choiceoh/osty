@@ -1,0 +1,500 @@
+// lir_proto_parity.osty - Osty-owned parity fixture catalog for LIR Proto.
+//
+// The deleted prototype kept parity expectations outside the Osty source.
+// This catalog keeps the same shape-critical expectations next to the
+// self-hosted LIR surface so fixture ownership moves with the implementation.
+use std.strings as strings
+pub enum LirParityFixtureKind {
+    LirParityManualMIR,
+    LirParitySource,
+}
+pub struct LirParityNeedle {
+    pub text: String,
+    pub note: String,
+}
+pub fn lirParityNeedle(text: String, note: String) -> LirParityNeedle {
+    LirParityNeedle {text, note}
+}
+pub struct LirParityFixture {
+    pub name: String,
+    pub kind: LirParityFixtureKind,
+    pub sourcePath: String,
+    pub source: String,
+    pub phase: String,
+    pub tags: List<String>,
+    pub needles: List<LirParityNeedle>,
+}
+pub fn lirParityFixture(name: String, kind: LirParityFixtureKind, sourcePath: String, source: String, phase: String, tags: List<String>, needles: List<LirParityNeedle>) -> LirParityFixture {
+    LirParityFixture {name, kind, sourcePath, source, phase, tags, needles}
+}
+pub fn lirParityNeedleTexts(fixture: LirParityFixture) -> List<String> {
+    let mut out: List<String> = []
+    for needle in fixture.needles {
+        out.push(needle.text)
+    }
+    out
+}
+pub fn lirParityFixtureNames(fixtures: List<LirParityFixture>) -> List<String> {
+    let mut out: List<String> = []
+    for fixture in fixtures {
+        out.push(fixture.name)
+    }
+    out
+}
+pub fn lirParityFindMissing(rendered: String, fixture: LirParityFixture) -> List<String> {
+    let mut missing: List<String> = []
+    for needle in fixture.needles {
+        if !(strings.contains(rendered, needle.text)) {
+            missing.push(needle.text)
+        }
+    }
+    missing
+}
+pub fn lirParityRenderMissingReport(label: String, fixture: LirParityFixture, missing: List<String>) -> String {
+    if missing.len() == 0 {
+        return label + " " + fixture.name + ": ok"
+    }
+    label + " " + fixture.name + ": missing " + strings.join(missing, " | ")
+}
+pub struct LirParityCheckResult {
+    pub label: String,
+    pub fixtureName: String,
+    pub ok: Bool,
+    pub missing: List<String>,
+    pub diagnostics: List<LirDiagnostic>,
+    pub rendered: String,
+}
+pub fn lirParityCheckResult(label: String, fixtureName: String, missing: List<String>, diagnostics: List<LirDiagnostic>, rendered: String) -> LirParityCheckResult {
+    LirParityCheckResult {label, fixtureName, ok: missing.len() == 0 && diagnostics.len() == 0, missing, diagnostics, rendered}
+}
+pub fn lirParityCheckRendered(label: String, fixture: LirParityFixture, rendered: String) -> LirParityCheckResult {
+    lirParityCheckResult(label, fixture.name, lirParityFindMissing(rendered, fixture), [], rendered)
+}
+pub fn lirParityCheckManualFixture(cfg: LirLowerConfig, fixture: LirParityFixture) -> LirParityCheckResult {
+    let mut diags: List<LirDiagnostic> = []
+    if fixture.kind != LirParityManualMIR {
+        diags.push(lirDiagnosticError(LirDiagInvalidInput, "fixture is not a manual MIR parity fixture", fixture.name))
+        return lirParityCheckResult("lir", fixture.name, [], diags, "")
+    }
+    let mut lowerCfg = lirLowerConfigCopy(cfg)
+    if lowerCfg.packageName == "" {
+        lowerCfg.packageName = "main"
+    }
+    if lowerCfg.sourcePath == "" {
+        lowerCfg.sourcePath = fixture.sourcePath
+    }
+    let lowered = lirLowererLowerMIR(lirNewLowerer(lowerCfg), lirParityBuildManualModule(fixture.name))
+    for d in lowered.diagnostics {
+        diags.push(d)
+    }
+    if lirLowerHasErrors(lowered) {
+        return lirParityCheckResult("lir", fixture.name, [], diags, "")
+    }
+    let rendered = lirRenderModule(lowered.module)
+    lirParityCheckResult("lir", fixture.name, lirParityFindMissing(rendered, fixture), diags, rendered)
+}
+pub fn lirParityCheckManualFixtures(cfg: LirLowerConfig, fixtures: List<LirParityFixture>) -> List<LirParityCheckResult> {
+    let mut out: List<LirParityCheckResult> = []
+    for fixture in fixtures {
+        out.push(lirParityCheckManualFixture(cfg, fixture))
+    }
+    out
+}
+pub fn lirParityCheckAllManual(cfg: LirLowerConfig) -> List<LirParityCheckResult> {
+    lirParityCheckManualFixtures(cfg, lirParityManualMIRFixtures())
+}
+pub fn lirParityChecksOK(results: List<LirParityCheckResult>) -> Bool {
+    for result in results {
+        if !(result.ok) {
+            return false
+        }
+    }
+    true
+}
+pub fn lirParityCheckReport(result: LirParityCheckResult) -> String {
+    if result.ok {
+        return result.label + " " + result.fixtureName + ": ok"
+    }
+    let mut parts: List<String> = []
+    for d in result.diagnostics {
+        parts.push(lirDiagnosticRender(d))
+    }
+    for missing in result.missing {
+        parts.push("missing " + missing)
+    }
+    if parts.len() == 0 {
+        parts.push("failed")
+    }
+    result.label + " " + result.fixtureName + ": " + strings.join(parts, " | ")
+}
+pub fn lirParityCheckReports(results: List<LirParityCheckResult>) -> List<String> {
+    let mut out: List<String> = []
+    for result in results {
+        out.push(lirParityCheckReport(result))
+    }
+    out
+}
+pub fn lirParityCheckSummary(results: List<LirParityCheckResult>) -> String {
+    strings.join(lirParityCheckReports(results), "\n")
+}
+pub fn lirParityBuiltinFixtures() -> List<LirParityFixture> {
+    let mut out: List<LirParityFixture> = []
+    for fixture in lirParityManualMIRFixtures() {
+        out.push(fixture)
+    }
+    for fixture in lirParitySourceFixtures() {
+        out.push(fixture)
+    }
+    out
+}
+pub fn lirParityManualMIRFixtures() -> List<LirParityFixture> {
+    [lirParityManualConstReturnFixture(), lirParityManualDirectCallFixture(), lirParityManualBranchFixture(), lirParityManualSwitchFixture(), lirParityManualPrintlnStringFixture(), lirParityManualCastIntResizeFixture(), lirParityManualCastFloatResizeFixture(), lirParityManualCastIntToFloatFixture(), lirParityManualDirectCallArgCoercionFixture(), lirParityManualPrimitiveIntToByteFixture(), lirParityManualPrimitiveByteToCharFixture(), lirParityManualTupleLiteralReadFixture(), lirParityManualStructLiteralReadFixture(), lirParityManualNestedProjectedAssignFixture(), lirParityManualProjectedCallResultFixture(), lirParityManualProjectedIntrinsicResultFixture()]
+}
+pub fn lirParitySourceFixtures() -> List<LirParityFixture> {
+    [lirParitySourceScalarArithmeticFixture(), lirParitySourceScalarBranchFixture(), lirParitySourcePrimitiveByteToCharFixture(), lirParitySourceDirectCallFixture(), lirParitySourceTupleLiteralReadFixture(), lirParitySourceStructLiteralReadFixture(), lirParitySourceNestedProjectedAssignFixture(), lirParitySourceProjectedCallResultFixture(), lirParitySourceProjectedIntrinsicResultFixture(), lirParitySourcePrintlnIntFixture()]
+}
+pub fn lirParityManualConstReturnFixture() -> LirParityFixture {
+    lirParityFixture("const_return", LirParityManualMIR, "/tmp/lir_proto_parity_const.osty", "", "phase2-scalar", ["return", "const"], [lirParityNeedle("define i64 @answer()", "function envelope"), lirParityNeedle("store i64 42", "constant stored into return slot"), lirParityNeedle("ret i64", "scalar return")])
+}
+pub fn lirParityManualDirectCallFixture() -> LirParityFixture {
+    lirParityFixture("direct_call", LirParityManualMIR, "/tmp/lir_proto_parity_call.osty", "", "phase2-call", ["call", "scalar"], [lirParityNeedle("define i64 @inc(i64", "callee function"), lirParityNeedle("define i64 @main()", "caller function"), lirParityNeedle("call i64 @inc(i64 41)", "direct same-module call"), lirParityNeedle("ret i64", "caller return")])
+}
+pub fn lirParityManualBranchFixture() -> LirParityFixture {
+    lirParityFixture("branch", LirParityManualMIR, "/tmp/lir_proto_parity_branch.osty", "", "phase2-control", ["branch", "scalar"], [lirParityNeedle("define i64 @choose(i1", "bool parameter lowered to i1"), lirParityNeedle("br i1", "conditional branch"), lirParityNeedle("label %bb1", "then label"), lirParityNeedle("label %bb2", "else label"), lirParityNeedle("store i64 1", "then return store"), lirParityNeedle("store i64 2", "else return store"), lirParityNeedle("ret i64", "merged scalar return shape")])
+}
+pub fn lirParityManualSwitchFixture() -> LirParityFixture {
+    lirParityFixture("switch", LirParityManualMIR, "/tmp/lir_proto_parity_switch.osty", "", "phase2-control", ["switch", "scalar"], [lirParityNeedle("define i64 @pick(i64", "integer parameter"), lirParityNeedle("switch i64", "integer switch"), lirParityNeedle("i64 0, label %bb1", "zero case"), lirParityNeedle("i64 1, label %bb2", "one case"), lirParityNeedle("label %bb3", "default case"), lirParityNeedle("store i64 10", "zero result"), lirParityNeedle("store i64 20", "one result"), lirParityNeedle("store i64 30", "default result"), lirParityNeedle("ret i64", "scalar return")])
+}
+pub fn lirParityManualPrintlnStringFixture() -> LirParityFixture {
+    lirParityFixture("println_string", LirParityManualMIR, "/tmp/lir_proto_parity_print_string.osty", "", "phase2-runtime", ["print", "runtime"], [lirParityNeedle("@.str.0 = private unnamed_addr constant [6 x i8] c\"hello\\00\"", "string pool entry"), lirParityNeedle("declare void @osty_rt_io_write(ptr, i1, i1)", "print runtime declaration"), lirParityNeedle("call void @osty_rt_io_write(ptr @.str.0", "print call")])
+}
+pub fn lirParityManualCastIntResizeFixture() -> LirParityFixture {
+    lirParityFixture("cast_int_resize", LirParityManualMIR, "/tmp/lir_proto_parity_cast_int_resize.osty", "", "phase2-cast", ["cast", "int"], [lirParityNeedle("define i64 @widen()", "function envelope"), lirParityNeedle("sext i32", "signed integer extension"), lirParityNeedle("to i64", "wide integer target"), lirParityNeedle("store i64", "return slot store"), lirParityNeedle("ret i64", "scalar return")])
+}
+pub fn lirParityManualCastFloatResizeFixture() -> LirParityFixture {
+    lirParityFixture("cast_float_resize", LirParityManualMIR, "/tmp/lir_proto_parity_cast_float_resize.osty", "", "phase2-cast", ["cast", "float"], [lirParityNeedle("define float @narrowFloat()", "function envelope"), lirParityNeedle("fptrunc double", "float narrowing"), lirParityNeedle("to float", "narrow float target"), lirParityNeedle("store float", "return slot store"), lirParityNeedle("ret float", "scalar return")])
+}
+pub fn lirParityManualCastIntToFloatFixture() -> LirParityFixture {
+    lirParityFixture("cast_int_to_float", LirParityManualMIR, "/tmp/lir_proto_parity_cast_int_to_float.osty", "", "phase2-cast", ["cast", "float"], [lirParityNeedle("define double @toFloat()", "function envelope"), lirParityNeedle("sitofp i64", "signed int to float"), lirParityNeedle("to double", "double target"), lirParityNeedle("store double", "return slot store"), lirParityNeedle("ret double", "scalar return")])
+}
+pub fn lirParityManualDirectCallArgCoercionFixture() -> LirParityFixture {
+    lirParityFixture("direct_call_arg_coercion", LirParityManualMIR, "/tmp/lir_proto_parity_call_arg_coercion.osty", "", "phase2-call", ["call", "coercion"], [lirParityNeedle("define i64 @id(i64", "callee expects i64"), lirParityNeedle("define i64 @main()", "caller function"), lirParityNeedle("sext i32", "argument widening"), lirParityNeedle("to i64", "argument target"), lirParityNeedle("call i64 @id(i64", "coerced call argument"), lirParityNeedle("ret i64", "scalar return")])
+}
+pub fn lirParityManualPrimitiveIntToByteFixture() -> LirParityFixture {
+    lirParityFixture("primitive_int_to_byte", LirParityManualMIR, "/tmp/lir_proto_parity_primitive_int_to_byte.osty", "", "phase2-intrinsic", ["intrinsic", "primitive"], [lirParityNeedle("define i8 @intToByte()", "byte return"), lirParityNeedle("trunc i64", "int narrowing"), lirParityNeedle("to i8", "byte target"), lirParityNeedle("store i8", "return slot store"), lirParityNeedle("ret i8", "byte return")])
+}
+pub fn lirParityManualPrimitiveByteToCharFixture() -> LirParityFixture {
+    lirParityFixture("primitive_byte_to_char", LirParityManualMIR, "/tmp/lir_proto_parity_primitive_byte_to_char.osty", "", "phase2-intrinsic", ["intrinsic", "primitive"], [lirParityNeedle("define i32 @byteToChar()", "char return"), lirParityNeedle("zext i8", "byte widening"), lirParityNeedle("to i32", "char target"), lirParityNeedle("store i32", "return slot store"), lirParityNeedle("ret i32", "char return")])
+}
+pub fn lirParityManualTupleLiteralReadFixture() -> LirParityFixture {
+    lirParityFixture("tuple_literal_read", LirParityManualMIR, "/tmp/lir_proto_parity_tuple_literal_read.osty", "", "phase3-aggregate", ["tuple", "projection"], [lirParityNeedle("%Tuple.i64.i64 = type \{ i64, i64 \}", "tuple type declaration"), lirParityNeedle("define i64 @pack()", "function envelope"), lirParityNeedle("insertvalue %Tuple.i64.i64 undef, i64 1, 0", "first tuple field"), lirParityNeedle("insertvalue %Tuple.i64.i64", "second tuple field"), lirParityNeedle("extractvalue %Tuple.i64.i64", "tuple element read"), lirParityNeedle("add i64", "element arithmetic"), lirParityNeedle("ret i64", "scalar return")])
+}
+pub fn lirParityManualStructLiteralReadFixture() -> LirParityFixture {
+    lirParityFixture("struct_literal_read", LirParityManualMIR, "/tmp/lir_proto_parity_struct_literal_read.osty", "", "phase3-aggregate", ["struct", "projection"], [lirParityNeedle("%Point = type \{ i64, i64 \}", "struct type declaration"), lirParityNeedle("define i64 @sum()", "function envelope"), lirParityNeedle("insertvalue %Point undef, i64 1, 0", "first field"), lirParityNeedle("insertvalue %Point", "second field"), lirParityNeedle("extractvalue %Point", "field read"), lirParityNeedle("add i64", "field arithmetic"), lirParityNeedle("ret i64", "scalar return")])
+}
+pub fn lirParityManualNestedProjectedAssignFixture() -> LirParityFixture {
+    lirParityFixture("nested_struct_projected_assign", LirParityManualMIR, "/tmp/lir_proto_parity_nested_struct_projected_assign.osty", "", "phase3-projection", ["struct", "projection", "store"], [lirParityNeedle("%Inner = type \{ i64 \}", "inner type declaration"), lirParityNeedle("%Outer = type \{ %Inner, i64 \}", "outer type declaration"), lirParityNeedle("define i64 @update()", "function envelope"), lirParityNeedle("extractvalue %Outer", "load nested aggregate"), lirParityNeedle("insertvalue %Inner", "rebuild inner aggregate"), lirParityNeedle("insertvalue %Outer", "rebuild root aggregate"), lirParityNeedle("store %Outer", "write rebuilt root"), lirParityNeedle("add i64", "post-update read"), lirParityNeedle("ret i64", "scalar return")])
+}
+pub fn lirParityManualProjectedCallResultFixture() -> LirParityFixture {
+    lirParityFixture("projected_call_result", LirParityManualMIR, "/tmp/lir_proto_parity_projected_call_result.osty", "", "phase3-projection", ["call", "projection"], [lirParityNeedle("%Cell = type \{ i64, i64 \}", "cell layout"), lirParityNeedle("define i64 @makeValue()", "callee"), lirParityNeedle("define i64 @fill()", "caller"), lirParityNeedle("call i64 @makeValue()", "call result"), lirParityNeedle("load %Cell", "load root aggregate"), lirParityNeedle("insertvalue %Cell", "rebuild projected field"), lirParityNeedle("store %Cell", "store rebuilt root"), lirParityNeedle("extractvalue %Cell", "read projected fields"), lirParityNeedle("add i64", "field arithmetic"), lirParityNeedle("ret i64", "scalar return")])
+}
+pub fn lirParityManualProjectedIntrinsicResultFixture() -> LirParityFixture {
+    lirParityFixture("projected_intrinsic_result", LirParityManualMIR, "/tmp/lir_proto_parity_projected_intrinsic_result.osty", "", "phase3-projection", ["intrinsic", "projection"], [lirParityNeedle("%Cell = type \{ i64, i64 \}", "cell layout"), lirParityNeedle("define i64 @fillIntrinsic(i8", "function with byte param"), lirParityNeedle("zext i8", "byte to int conversion"), lirParityNeedle("to i64", "conversion target"), lirParityNeedle("load %Cell", "load root aggregate"), lirParityNeedle("insertvalue %Cell", "rebuild projected field"), lirParityNeedle("store %Cell", "store rebuilt root"), lirParityNeedle("extractvalue %Cell", "read projected fields"), lirParityNeedle("add i64", "field arithmetic"), lirParityNeedle("ret i64", "scalar return")])
+}
+pub fn lirParitySourceScalarArithmeticFixture() -> LirParityFixture {
+    lirParityFixture("source_scalar_arithmetic", LirParitySource, "/tmp/lir_proto_source_scalar_arithmetic.osty", "fn answer(n: Int) -> Int \{\n    n + 1\n\}\n", "source-parity", ["source", "scalar"], [lirParityNeedle("define i64 @answer(i64", "function envelope"), lirParityNeedle("add i64", "arithmetic"), lirParityNeedle("store i64", "return slot store"), lirParityNeedle("ret i64", "scalar return")])
+}
+pub fn lirParitySourceScalarBranchFixture() -> LirParityFixture {
+    lirParityFixture("source_scalar_branch", LirParitySource, "/tmp/lir_proto_source_scalar_branch.osty", "fn choose(ok: Bool) -> Int \{\n    if ok \{\n        return 1\n    \}\n    return 2\n\}\n", "source-parity", ["source", "branch"], [lirParityNeedle("define i64 @choose(i1", "bool param"), lirParityNeedle("br i1", "conditional branch"), lirParityNeedle("store i64 1", "then return"), lirParityNeedle("store i64 2", "else return"), lirParityNeedle("ret i64", "scalar return")])
+}
+pub fn lirParitySourcePrimitiveByteToCharFixture() -> LirParityFixture {
+    lirParityFixture("source_primitive_byte_to_char", LirParitySource, "/tmp/lir_proto_source_primitive_byte_to_char.osty", "fn byteAsChar(b: Byte) -> Char \{\n    b.toChar()\n\}\n", "source-parity", ["source", "intrinsic"], [lirParityNeedle("define i32 @byteAsChar(i8", "function envelope"), lirParityNeedle("zext i8", "conversion"), lirParityNeedle("to i32", "char target"), lirParityNeedle("store i32", "return slot store"), lirParityNeedle("ret i32", "char return")])
+}
+pub fn lirParitySourceDirectCallFixture() -> LirParityFixture {
+    lirParityFixture("source_direct_call", LirParitySource, "/tmp/lir_proto_source_direct_call.osty", "fn inc(n: Int) -> Int \{\n    n + 1\n\}\n\nfn useInc() -> Int \{\n    inc(41)\n\}\n", "source-parity", ["source", "call"], [lirParityNeedle("define i64 @inc(i64", "callee"), lirParityNeedle("define i64 @useInc()", "caller"), lirParityNeedle("call i64 @inc(i64 41)", "direct call"), lirParityNeedle("store i64", "return slot store"), lirParityNeedle("ret i64", "scalar return")])
+}
+pub fn lirParitySourceTupleLiteralReadFixture() -> LirParityFixture {
+    lirParityFixture("source_tuple_literal_read", LirParitySource, "/tmp/lir_proto_source_tuple_literal_read.osty", "fn pack() -> Int \{\n    let t = (1, 2)\n    t.0 + t.1\n\}\n", "source-parity", ["source", "tuple"], [lirParityNeedle("%Tuple.i64.i64 = type \{ i64, i64 \}", "tuple type"), lirParityNeedle("define i64 @pack()", "function"), lirParityNeedle("insertvalue %Tuple.i64.i64 undef, i64 1, 0", "first element"), lirParityNeedle("insertvalue %Tuple.i64.i64", "second element"), lirParityNeedle("extractvalue %Tuple.i64.i64", "element read"), lirParityNeedle("add i64", "arithmetic"), lirParityNeedle("ret i64", "return")])
+}
+pub fn lirParitySourceStructLiteralReadFixture() -> LirParityFixture {
+    lirParityFixture("source_struct_literal_read", LirParitySource, "/tmp/lir_proto_source_struct_literal_read.osty", "struct Point \{\n    x: Int,\n    y: Int,\n\}\n\nfn sum() -> Int \{\n    let p = Point \{ x: 1, y: 2 \}\n    p.x + p.y\n\}\n", "source-parity", ["source", "struct"], [lirParityNeedle("%Point = type \{ i64, i64 \}", "struct type"), lirParityNeedle("define i64 @sum()", "function"), lirParityNeedle("insertvalue %Point undef, i64 1, 0", "first field"), lirParityNeedle("insertvalue %Point", "second field"), lirParityNeedle("extractvalue %Point", "field read"), lirParityNeedle("add i64", "arithmetic"), lirParityNeedle("ret i64", "return")])
+}
+pub fn lirParitySourceNestedProjectedAssignFixture() -> LirParityFixture {
+    lirParityFixture("source_nested_projected_assign", LirParitySource, "/tmp/lir_proto_source_nested_projected_assign.osty", "struct Inner \{\n    value: Int,\n\}\n\nstruct Outer \{\n    inner: Inner,\n    flag: Int,\n\}\n\nfn update() -> Int \{\n    let mut o = Outer \{ inner: Inner \{ value: 0 \}, flag: 1 \}\n    o.inner.value = 42\n    o.inner.value + o.flag\n\}\n", "source-parity", ["source", "projection"], [lirParityNeedle("%Inner = type \{ i64 \}", "inner type"), lirParityNeedle("%Outer = type \{ %Inner, i64 \}", "outer type"), lirParityNeedle("define i64 @update()", "function"), lirParityNeedle("extractvalue %Outer", "nested read"), lirParityNeedle("insertvalue %Inner", "inner rebuild"), lirParityNeedle("insertvalue %Outer", "outer rebuild"), lirParityNeedle("store %Outer", "store rebuilt root"), lirParityNeedle("add i64", "arithmetic"), lirParityNeedle("ret i64", "return")])
+}
+pub fn lirParitySourceProjectedCallResultFixture() -> LirParityFixture {
+    lirParityFixture("source_projected_call_result", LirParitySource, "/tmp/lir_proto_source_projected_call_result.osty", "struct Cell \{\n    value: Int,\n    other: Int,\n\}\n\nfn makeValue() -> Int \{\n    7\n\}\n\nfn fill() -> Int \{\n    let mut cell = Cell \{ value: 0, other: 1 \}\n    cell.value = makeValue()\n    cell.value + cell.other\n\}\n", "source-parity", ["source", "call", "projection"], [lirParityNeedle("%Cell = type \{ i64, i64 \}", "cell type"), lirParityNeedle("define i64 @makeValue()", "callee"), lirParityNeedle("define i64 @fill()", "caller"), lirParityNeedle("call i64 @makeValue()", "call result"), lirParityNeedle("load %Cell", "load aggregate"), lirParityNeedle("insertvalue %Cell", "rebuild field"), lirParityNeedle("store %Cell", "store aggregate"), lirParityNeedle("extractvalue %Cell", "read fields"), lirParityNeedle("add i64", "arithmetic"), lirParityNeedle("ret i64", "return")])
+}
+pub fn lirParitySourceProjectedIntrinsicResultFixture() -> LirParityFixture {
+    lirParityFixture("source_projected_intrinsic_result", LirParitySource, "/tmp/lir_proto_source_projected_intrinsic_result.osty", "struct Cell \{\n    value: Int,\n    other: Int,\n\}\n\nfn fillIntrinsic(b: Byte) -> Int \{\n    let mut cell = Cell \{ value: 0, other: 1 \}\n    cell.value = b.toInt()\n    cell.value + cell.other\n\}\n", "source-parity", ["source", "intrinsic", "projection"], [lirParityNeedle("%Cell = type \{ i64, i64 \}", "cell type"), lirParityNeedle("define i64 @fillIntrinsic(i8", "function"), lirParityNeedle("zext i8", "conversion"), lirParityNeedle("to i64", "conversion target"), lirParityNeedle("load %Cell", "load aggregate"), lirParityNeedle("insertvalue %Cell", "rebuild field"), lirParityNeedle("store %Cell", "store aggregate"), lirParityNeedle("extractvalue %Cell", "read fields"), lirParityNeedle("add i64", "arithmetic"), lirParityNeedle("ret i64", "return")])
+}
+pub fn lirParitySourcePrintlnIntFixture() -> LirParityFixture {
+    lirParityFixture("source_println_int_runtime_abi", LirParitySource, "/tmp/lir_proto_source_println_int.osty", "fn say() \{\n    println(7)\n\}\n", "source-parity", ["source", "print", "runtime"], [lirParityNeedle("declare ptr @osty_rt_int_to_string(i64)", "integer string conversion runtime"), lirParityNeedle("declare void @osty_rt_io_write(ptr, i1, i1)", "io runtime"), lirParityNeedle("call ptr @osty_rt_int_to_string(i64 7)", "string conversion call"), lirParityNeedle("call void @osty_rt_io_write", "print call")])
+}
+fn lirParityFunction(name: String, retType: String) -> MirFunction {
+    let mut fn_ = mirFunction(name, retType, mirNoSpan())
+    let ret = mirFunctionNewLocal(fn_, "_return", retType, false, mirNoSpan())
+    fn_.returnLocal = ret
+    fn_.locals[ret].isReturn = true
+    fn_
+}
+fn lirParityParam(fn_: MirFunction, name: String, typ: String) -> Int {
+    let id = mirFunctionNewLocal(fn_, name, typ, false, mirNoSpan())
+    fn_.locals[id].isParam = true
+    fn_.params.push(id)
+    id
+}
+fn lirParityLocal(fn_: MirFunction, name: String, typ: String) -> Int {
+    mirFunctionNewLocal(fn_, name, typ, false, mirNoSpan())
+}
+fn lirParityEntry(fn_: MirFunction) -> Int {
+    let entry = mirFunctionNewBlock(fn_, mirNoSpan())
+    fn_.entry = entry
+    entry
+}
+fn lirParityReturnConst(fn_: MirFunction, block: Int, value: Int) {
+    mirFunctionAppend(fn_, block, mirAssignInstr(mirPlace(fn_.returnLocal), mirRVUse(mirOperandConst(mirConstInt(value, "Int"))), mirNoSpan()))
+    mirFunctionTerminate(fn_, block, mirReturnTerm(mirNoSpan()))
+}
+fn lirParityModule(functions: List<MirFunction>) -> MirModule {
+    let mut m = mirModule("main")
+    for fn_ in functions {
+        m.functions.push(fn_)
+    }
+    m
+}
+fn lirParityField(index: Int, name: String, typ: String) -> MirFieldLayout {
+    MirFieldLayout {index, name, typ}
+}
+fn lirParityStructLayout(name: String, fields: List<MirFieldLayout>) -> MirStructLayout {
+    MirStructLayout {name, mangled: name, fields, size: 0, align: 0}
+}
+fn lirParityTupleLayout(key: String, fields: List<MirFieldLayout>) -> MirTupleLayout {
+    MirTupleLayout {key, mangled: key, fields}
+}
+pub fn lirParityBuildManualModule(name: String) -> MirModule {
+    if name == "const_return" {
+        return lirParityBuildConstReturnModule()
+    }
+    if name == "direct_call" {
+        return lirParityBuildDirectCallModule()
+    }
+    if name == "branch" {
+        return lirParityBuildBranchModule()
+    }
+    if name == "switch" {
+        return lirParityBuildSwitchModule()
+    }
+    if name == "println_string" {
+        return lirParityBuildPrintlnStringModule()
+    }
+    if name == "cast_int_resize" {
+        return lirParityBuildCastIntResizeModule()
+    }
+    if name == "cast_float_resize" {
+        return lirParityBuildCastFloatResizeModule()
+    }
+    if name == "cast_int_to_float" {
+        return lirParityBuildCastIntToFloatModule()
+    }
+    if name == "direct_call_arg_coercion" {
+        return lirParityBuildDirectCallArgCoercionModule()
+    }
+    if name == "primitive_int_to_byte" {
+        return lirParityBuildPrimitiveIntToByteModule()
+    }
+    if name == "primitive_byte_to_char" {
+        return lirParityBuildPrimitiveByteToCharModule()
+    }
+    if name == "tuple_literal_read" {
+        return lirParityBuildTupleLiteralReadModule()
+    }
+    if name == "struct_literal_read" {
+        return lirParityBuildStructLiteralReadModule()
+    }
+    if name == "nested_struct_projected_assign" {
+        return lirParityBuildNestedProjectedAssignModule()
+    }
+    if name == "projected_call_result" {
+        return lirParityBuildProjectedCallResultModule()
+    }
+    if name == "projected_intrinsic_result" {
+        return lirParityBuildProjectedIntrinsicResultModule()
+    }
+    mirModule("main")
+}
+pub fn lirParityBuildConstReturnModule() -> MirModule {
+    let mut fn_ = lirParityFunction("answer", "Int")
+    let entry = lirParityEntry(fn_)
+    lirParityReturnConst(fn_, entry, 42)
+    lirParityModule([fn_])
+}
+pub fn lirParityBuildDirectCallModule() -> MirModule {
+    let mut inc = lirParityFunction("inc", "Int")
+    let x = lirParityParam(inc, "x", "Int")
+    let incEntry = lirParityEntry(inc)
+    mirFunctionAppend(inc, incEntry, mirAssignInstr(mirPlace(inc.returnLocal), mirRVBinary(MirBinAdd, mirOperandCopy(mirPlace(x), "Int"), mirOperandConst(mirConstInt(1, "Int")), "Int"), mirNoSpan()))
+    mirFunctionTerminate(inc, incEntry, mirReturnTerm(mirNoSpan()))
+    let mut main = lirParityFunction("main", "Int")
+    let mainEntry = lirParityEntry(main)
+    mirFunctionAppend(main, mainEntry, mirCallInstr(true, mirPlace(main.returnLocal), "inc", "(Int)->Int", [mirOperandConst(mirConstInt(41, "Int"))], mirNoSpan()))
+    mirFunctionTerminate(main, mainEntry, mirReturnTerm(mirNoSpan()))
+    lirParityModule([inc, main])
+}
+pub fn lirParityBuildBranchModule() -> MirModule {
+    let mut fn_ = lirParityFunction("choose", "Int")
+    let cond = lirParityParam(fn_, "ok", "Bool")
+    let entry = lirParityEntry(fn_)
+    let thenBlock = mirFunctionNewBlock(fn_, mirNoSpan())
+    let elseBlock = mirFunctionNewBlock(fn_, mirNoSpan())
+    mirFunctionTerminate(fn_, entry, mirBranchTerm(mirOperandCopy(mirPlace(cond), "Bool"), thenBlock, elseBlock, mirNoSpan()))
+    lirParityReturnConst(fn_, thenBlock, 1)
+    lirParityReturnConst(fn_, elseBlock, 2)
+    lirParityModule([fn_])
+}
+pub fn lirParityBuildSwitchModule() -> MirModule {
+    let mut fn_ = lirParityFunction("pick", "Int")
+    let n = lirParityParam(fn_, "n", "Int")
+    let entry = lirParityEntry(fn_)
+    let zero = mirFunctionNewBlock(fn_, mirNoSpan())
+    let one = mirFunctionNewBlock(fn_, mirNoSpan())
+    let default = mirFunctionNewBlock(fn_, mirNoSpan())
+    mirFunctionTerminate(fn_, entry, mirSwitchIntTerm(mirOperandCopy(mirPlace(n), "Int"), [mirSwitchCase(0, zero, "zero"), mirSwitchCase(1, one, "one")], default, mirNoSpan()))
+    lirParityReturnConst(fn_, zero, 10)
+    lirParityReturnConst(fn_, one, 20)
+    lirParityReturnConst(fn_, default, 30)
+    lirParityModule([fn_])
+}
+pub fn lirParityBuildPrintlnStringModule() -> MirModule {
+    let mut fn_ = lirParityFunction("main", "Unit")
+    let entry = lirParityEntry(fn_)
+    mirFunctionAppend(fn_, entry, mirIntrinsicInstr(false, mirPlace(-1), MirIntrinsicPrintln, [mirOperandConst(mirConstString("hello"))], mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    lirParityModule([fn_])
+}
+pub fn lirParityBuildCastIntResizeModule() -> MirModule {
+    let mut fn_ = lirParityFunction("widen", "Int")
+    let entry = lirParityEntry(fn_)
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(fn_.returnLocal), mirRVCast(MirCastIntResize, mirOperandConst(mirConstInt(7, "Int32")), "Int32", "Int"), mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    lirParityModule([fn_])
+}
+pub fn lirParityBuildCastFloatResizeModule() -> MirModule {
+    let mut fn_ = lirParityFunction("narrowFloat", "Float32")
+    let entry = lirParityEntry(fn_)
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(fn_.returnLocal), mirRVCast(MirCastFloatResize, mirOperandConst(mirConstFloat("1.5", "Float")), "Float", "Float32"), mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    lirParityModule([fn_])
+}
+pub fn lirParityBuildCastIntToFloatModule() -> MirModule {
+    let mut fn_ = lirParityFunction("toFloat", "Float")
+    let entry = lirParityEntry(fn_)
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(fn_.returnLocal), mirRVCast(MirCastIntToFloat, mirOperandConst(mirConstInt(7, "Int")), "Int", "Float"), mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    lirParityModule([fn_])
+}
+pub fn lirParityBuildDirectCallArgCoercionModule() -> MirModule {
+    let mut id = lirParityFunction("id", "Int")
+    let x = lirParityParam(id, "x", "Int")
+    let idEntry = lirParityEntry(id)
+    mirFunctionAppend(id, idEntry, mirAssignInstr(mirPlace(id.returnLocal), mirRVUse(mirOperandCopy(mirPlace(x), "Int")), mirNoSpan()))
+    mirFunctionTerminate(id, idEntry, mirReturnTerm(mirNoSpan()))
+    let mut main = lirParityFunction("main", "Int")
+    let mainEntry = lirParityEntry(main)
+    mirFunctionAppend(main, mainEntry, mirCallInstr(true, mirPlace(main.returnLocal), "id", "(Int)->Int", [mirOperandConst(mirConstInt(41, "Int32"))], mirNoSpan()))
+    mirFunctionTerminate(main, mainEntry, mirReturnTerm(mirNoSpan()))
+    lirParityModule([id, main])
+}
+pub fn lirParityBuildPrimitiveIntToByteModule() -> MirModule {
+    let mut fn_ = lirParityFunction("intToByte", "Byte")
+    let entry = lirParityEntry(fn_)
+    mirFunctionAppend(fn_, entry, mirIntrinsicInstr(true, mirPlace(fn_.returnLocal), MirIntrinsicIntToByte, [mirOperandConst(mirConstInt(7, "Int"))], mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    lirParityModule([fn_])
+}
+pub fn lirParityBuildPrimitiveByteToCharModule() -> MirModule {
+    let mut fn_ = lirParityFunction("byteToChar", "Char")
+    let entry = lirParityEntry(fn_)
+    mirFunctionAppend(fn_, entry, mirIntrinsicInstr(true, mirPlace(fn_.returnLocal), MirIntrinsicByteToChar, [mirOperandConst(mirConstByte(7))], mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    lirParityModule([fn_])
+}
+pub fn lirParityBuildTupleLiteralReadModule() -> MirModule {
+    let tupleName = "Tuple.i64.i64"
+    let mut fn_ = lirParityFunction("pack", "Int")
+    let tupleLocal = lirParityLocal(fn_, "t", tupleName)
+    let entry = lirParityEntry(fn_)
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(tupleLocal), mirRVAggregate(MirAggTuple, [mirOperandConst(mirConstInt(1, "Int")), mirOperandConst(mirConstInt(2, "Int"))], tupleName), mirNoSpan()))
+    let left = mirOperandCopy(mirPlaceProject(mirPlace(tupleLocal), mirTupleProj(0, "Int")), "Int")
+    let right = mirOperandCopy(mirPlaceProject(mirPlace(tupleLocal), mirTupleProj(1, "Int")), "Int")
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(fn_.returnLocal), mirRVBinary(MirBinAdd, left, right, "Int"), mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    let mut m = lirParityModule([fn_])
+    m.layouts.tuples.push(lirParityTupleLayout(tupleName, [lirParityField(0, "0", "Int"), lirParityField(1, "1", "Int")]))
+    m
+}
+pub fn lirParityBuildStructLiteralReadModule() -> MirModule {
+    let mut fn_ = lirParityFunction("sum", "Int")
+    let pointLocal = lirParityLocal(fn_, "p", "Point")
+    let entry = lirParityEntry(fn_)
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(pointLocal), mirRVAggregate(MirAggStruct, [mirOperandConst(mirConstInt(1, "Int")), mirOperandConst(mirConstInt(2, "Int"))], "Point"), mirNoSpan()))
+    let left = mirOperandCopy(mirPlaceProject(mirPlace(pointLocal), mirFieldProj(0, "x", "Int")), "Int")
+    let right = mirOperandCopy(mirPlaceProject(mirPlace(pointLocal), mirFieldProj(1, "y", "Int")), "Int")
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(fn_.returnLocal), mirRVBinary(MirBinAdd, left, right, "Int"), mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    let mut m = lirParityModule([fn_])
+    m.layouts.structs.push(lirParityStructLayout("Point", [lirParityField(0, "x", "Int"), lirParityField(1, "y", "Int")]))
+    m
+}
+pub fn lirParityBuildNestedProjectedAssignModule() -> MirModule {
+    let mut fn_ = lirParityFunction("update", "Int")
+    let innerLocal = lirParityLocal(fn_, "inner", "Inner")
+    let outerLocal = lirParityLocal(fn_, "outer", "Outer")
+    let entry = lirParityEntry(fn_)
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(innerLocal), mirRVAggregate(MirAggStruct, [mirOperandConst(mirConstInt(0, "Int"))], "Inner"), mirNoSpan()))
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(outerLocal), mirRVAggregate(MirAggStruct, [mirOperandCopy(mirPlace(innerLocal), "Inner"), mirOperandConst(mirConstInt(1, "Int"))], "Outer"), mirNoSpan()))
+    let nested = mirPlaceProject(mirPlaceProject(mirPlace(outerLocal), mirFieldProj(0, "inner", "Inner")), mirFieldProj(0, "value", "Int"))
+    mirFunctionAppend(fn_, entry, mirAssignInstr(nested, mirRVUse(mirOperandConst(mirConstInt(42, "Int"))), mirNoSpan()))
+    let left = mirOperandCopy(nested, "Int")
+    let right = mirOperandCopy(mirPlaceProject(mirPlace(outerLocal), mirFieldProj(1, "flag", "Int")), "Int")
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(fn_.returnLocal), mirRVBinary(MirBinAdd, left, right, "Int"), mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    let mut m = lirParityModule([fn_])
+    m.layouts.structs.push(lirParityStructLayout("Inner", [lirParityField(0, "value", "Int")]))
+    m.layouts.structs.push(lirParityStructLayout("Outer", [lirParityField(0, "inner", "Inner"), lirParityField(1, "flag", "Int")]))
+    m
+}
+pub fn lirParityBuildProjectedCallResultModule() -> MirModule {
+    let mut makeValue = lirParityFunction("makeValue", "Int")
+    let makeEntry = lirParityEntry(makeValue)
+    lirParityReturnConst(makeValue, makeEntry, 7)
+    let mut fill = lirParityFunction("fill", "Int")
+    let cellLocal = lirParityLocal(fill, "cell", "Cell")
+    let fillEntry = lirParityEntry(fill)
+    mirFunctionAppend(fill, fillEntry, mirAssignInstr(mirPlace(cellLocal), mirRVAggregate(MirAggStruct, [mirOperandConst(mirConstInt(0, "Int")), mirOperandConst(mirConstInt(1, "Int"))], "Cell"), mirNoSpan()))
+    let valuePlace = mirPlaceProject(mirPlace(cellLocal), mirFieldProj(0, "value", "Int"))
+    mirFunctionAppend(fill, fillEntry, mirCallInstr(true, valuePlace, "makeValue", "()->Int", [], mirNoSpan()))
+    let left = mirOperandCopy(valuePlace, "Int")
+    let right = mirOperandCopy(mirPlaceProject(mirPlace(cellLocal), mirFieldProj(1, "other", "Int")), "Int")
+    mirFunctionAppend(fill, fillEntry, mirAssignInstr(mirPlace(fill.returnLocal), mirRVBinary(MirBinAdd, left, right, "Int"), mirNoSpan()))
+    mirFunctionTerminate(fill, fillEntry, mirReturnTerm(mirNoSpan()))
+    let mut m = lirParityModule([makeValue, fill])
+    m.layouts.structs.push(lirParityStructLayout("Cell", [lirParityField(0, "value", "Int"), lirParityField(1, "other", "Int")]))
+    m
+}
+pub fn lirParityBuildProjectedIntrinsicResultModule() -> MirModule {
+    let mut fn_ = lirParityFunction("fillIntrinsic", "Int")
+    let cellLocal = lirParityLocal(fn_, "cell", "Cell")
+    let byteLocal = lirParityParam(fn_, "b", "Byte")
+    let entry = lirParityEntry(fn_)
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(cellLocal), mirRVAggregate(MirAggStruct, [mirOperandConst(mirConstInt(0, "Int")), mirOperandConst(mirConstInt(1, "Int"))], "Cell"), mirNoSpan()))
+    let valuePlace = mirPlaceProject(mirPlace(cellLocal), mirFieldProj(0, "value", "Int"))
+    mirFunctionAppend(fn_, entry, mirIntrinsicInstr(true, valuePlace, MirIntrinsicByteToInt, [mirOperandCopy(mirPlace(byteLocal), "Byte")], mirNoSpan()))
+    let left = mirOperandCopy(valuePlace, "Int")
+    let right = mirOperandCopy(mirPlaceProject(mirPlace(cellLocal), mirFieldProj(1, "other", "Int")), "Int")
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(fn_.returnLocal), mirRVBinary(MirBinAdd, left, right, "Int"), mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    let mut m = lirParityModule([fn_])
+    m.layouts.structs.push(lirParityStructLayout("Cell", [lirParityField(0, "value", "Int"), lirParityField(1, "other", "Int")]))
+    m
+}

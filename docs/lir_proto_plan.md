@@ -2,8 +2,8 @@
 
 Status: isolated prototype in progress. No production wiring yet.
 Authoring direction: new LIR Proto shape is Osty-first in
-`toolchain/lir_proto.osty`; Go code remains a harness/bridge until the final
-production switch.
+`toolchain/lir_proto.osty`; the earlier Go prototype has been ported out and
+removed so new shape lands in Osty before production wiring.
 
 LIR Proto is the working name for a low-level prototype between
 `internal/mir` and backend text emission. It starts LLVM-aware because the
@@ -53,20 +53,21 @@ Osty source of truth:
 toolchain/lir_proto.osty
 ```
 
-Go bridge/prototype package:
+Osty smoke/shape tests:
 
 ```text
-internal/lirproto
+toolchain/lir_proto_test.osty
+toolchain/lir_proto_parity.osty
 ```
 
-The package name intentionally says `proto`. The package is independent because
-the intended future is larger than a local LLVM refactor, but `proto` keeps
+The name intentionally says `proto`. The surface is independent because the
+intended future is larger than a local LLVM refactor, but `proto` keeps
 production assumptions out until parity proves the shape.
 
 Design decision: after the Phase-3 projected-result slice, LIR Proto authoring
-switches to Osty-first. Existing Go prototype behavior should be ported into
-`toolchain/lir_proto.osty` rather than expanded only in Go, because the eventual
-self-hosted backend should not require a second translation pass.
+switched to Osty-first. Existing Go prototype behavior has been ported into
+`toolchain/lir_proto.osty` and the ported Go package has been removed, because
+the eventual self-hosted backend should not require a second translation pass.
 
 ## Core contract
 
@@ -78,7 +79,7 @@ Input:
 
 Output:
 
-- A deterministic `lirproto.Module`.
+- A deterministic `LirModule`.
 - A renderer that can emit LLVM text from that module.
 - A structured unsupported diagnostic when the selected surface is not covered.
 
@@ -151,11 +152,10 @@ Design decision: instruction and terminator nodes are typed variants from
 Phase 1. There is no raw instruction text escape hatch inside function bodies;
 if a new LLVM operation is needed, add a node for it and a renderer case.
 
-Design decision: the LIR node vocabulary is sealed. External packages should
-construct the node types defined by `internal/lirproto`, not implement their
-own instruction or terminator variants. New operations must be added to
-`internal/lirproto` so validation, rendering, and future lowering stay in one
-place.
+Design decision: the LIR node vocabulary is sealed. External code should
+construct the node types defined by `toolchain/lir_proto.osty`, not implement
+its own instruction or terminator variants. New operations must be added to the
+Osty surface so validation, rendering, and future lowering stay in one place.
 
 Design decision: value names stay string-backed in Phase 1. `Operand` carries
 `{Type, Value string}` rather than splitting value identity into `Reg`,
@@ -171,19 +171,20 @@ semantic bucket (`void`, integer, float, pointer, aggregate, function, unknown)
 for early validation and future ABI planning. Do not grow this into a full
 second type system until runtime ABI lowering proves the missing invariants.
 
-Design decision: add a Phase-1 structural validator. `Validate(Module)`
+Design decision: add a Phase-1 structural validator. `lirValidateModule(module)`
 checks the plan shape before rendering: missing function names, duplicate
 block labels, nil instructions, missing terminators, empty operands, invalid
 void positions, negative alignment, and obvious `Type{LLVM, Class}`
 mismatches. It does not check MIR semantic parity, dominance, SSA use-def
 rules, runtime ABI compatibility, or target data layout yet.
 
-Design decision: MIR lowering uses a stateful `Lowerer` object:
-`NewLowerer(cfg).LowerMIR(mod) LowerResult`. The lowerer owns per-run state
-that will grow in later phases: type caches, string interning, runtime
-declaration planning, block/local maps, and diagnostics. `LowerResult` keeps
-the structured module plus diagnostics so unsupported gaps, invalid inputs, and
-lowering bugs can be tracked without parsing error strings.
+Design decision: MIR lowering exposes both the direct entry point
+`lirLowerMirModule(cfg, mir) -> LirLowerResult` and the ported lowerer shell
+`lirNewLowerer(cfg) -> LirLowerer` / `lirLowererLowerMIR(lowerer, mir)`. The
+Osty lowerer keeps a defensive config snapshot while each run owns fresh
+diagnostics and per-function state. `LirLowerResult` keeps the structured
+module plus diagnostics so unsupported gaps, invalid inputs, and lowering bugs
+can be tracked without parsing error strings.
 
 Design decision: Phase 2 starts with the Single-Block Scalar Core. This covers
 functions with exactly one MIR basic block, scalar locals/params/return slots,
@@ -276,6 +277,23 @@ the rebuilt root. Runtime-backed `IndexProj`, enum payload writes, call-result
 projected destinations, and intrinsic projected destinations remain outside
 this slice.
 
+The projected assignment fixtures include a three-level struct path
+(`root.middle.leaf.value`) so the rebuild loop must retain the aggregate value
+for each projection frame, not just the final intermediate aggregate. This
+guards the exact failure mode where two-level writes appear correct while
+deeper writes rebuild the wrong aggregate. `LirProjectionFrame` is part of the
+Osty surface so this rebuild rule is described and exercised in
+`toolchain/lir_proto.osty` / `toolchain/lir_proto_test.osty`.
+
+Parity ownership is now also Osty-side. `toolchain/lir_proto_parity.osty`
+contains the manual-MIR and source-level shape-critical fixture catalog:
+scalar returns, control flow, direct calls, print runtime ABI, casts, primitive
+conversions, tuple/struct aggregate reads, nested projected assignment,
+projected call results, and projected intrinsic results. It also owns the
+manual-fixture check surface (`lirParityCheckAllManual` and related result
+helpers), so adding a new manual parity case no longer requires rebuilding a Go
+test harness first.
+
 Design decision: the fourth Phase-3 slice reuses that projected value-store
 path for direct-call and scalar primitive-conversion intrinsic results. A
 supported result can now target `place.field` / `place.tupleIndex` directly,
@@ -285,11 +303,17 @@ first fixtures cover both same-module direct calls and `Byte.toInt()` projected
 intrinsic results. Void-call destinations, runtime-backed index projections,
 and broader runtime intrinsics remain deferred.
 
+The call-result and intrinsic-result fixtures also cover the same
+`root.middle.leaf.value` path as projected assignment, so every entry point
+that reuses projected value-store lowering is pinned against deeper aggregate
+rebuilds.
+
 Design decision: the first Osty-first port slice mirrors the accumulated Go
 prototype surface in one file: LIR model structs, renderer, validator,
 runtime declaration/string-pool helpers, scalar cast/coercion planning,
-aggregate projection records, and a self-hosted `MirModule -> LirModule`
-lowerer shell. This still does not alter production dispatch.
+aggregate projection records, result diagnostic helpers, and a self-hosted
+`MirModule -> LirModule` lowerer shell. This still does not alter production
+dispatch.
 
 ## Phase 0: lock the boundary
 
@@ -309,9 +333,8 @@ Exit criteria:
 
 Deliverables:
 
-- Add `internal/lirproto` with pure data structs.
-- Add `toolchain/lir_proto.osty` as the Osty-owned mirror/source for the same
-  data model and renderer surface.
+- Add `toolchain/lir_proto.osty` as the Osty-owned source for the data model,
+  validator, renderer surface, and MIR-lowering shape.
 - Add a renderer that can print an empty module, a simple function shell, type
   declarations, runtime declarations, and a string pool.
 - Model function-body instructions and terminators as typed variants from the
@@ -322,7 +345,7 @@ Deliverables:
 Coverage target:
 
 - No MIR lowering yet.
-- Construct `lirproto.Module` by hand in tests.
+- Construct `LirModule` by hand in tests.
 
 Exit criteria:
 
@@ -336,9 +359,9 @@ Exit criteria:
 
 Deliverables:
 
-- Expand `NewLowerer(cfg).LowerMIR(mod)` beyond the Phase-1 envelope shell.
-- Keep `toolchain/lir_proto.osty` moving with each Go prototype slice so the
-  self-hosted backend surface does not lag behind the harness.
+- Expand `lirLowerMirModule(cfg, mir)` beyond the Phase-1 envelope shell.
+- Keep `toolchain/lir_proto.osty` as the implementation source for each slice
+  so the self-hosted backend surface does not lag behind the design.
 - First slice: Single-Block Scalar Core for scalar locals, params, returns,
   primitive constants, unary/binary ops, and `ReturnTerm`.
 - Second slice: multi-block scalar control flow through `GotoTerm`,
@@ -386,10 +409,10 @@ Deliverables:
   `mir.LayoutTable.Structs`, with direct MIR, parity, and source fixtures.
 - Third slice: nested `FieldProj` / `TupleProj` projected assignments through
   load-modify-store aggregate rebuilding, with direct MIR, parity, and source
-  fixtures.
+  fixtures, including a three-level nested struct write.
 - Fourth slice: projected direct-call and scalar primitive-conversion intrinsic
   result writes through the same aggregate rebuilding helper, with direct MIR,
-  parity, and source fixtures.
+  parity, and source fixtures, including a three-level nested destination.
 - Add struct, tuple, enum, option/result, and interface-shaped value support.
 - Add projection lowering for field, tuple, variant payload, and map/list/string
   index reads that are already supported by MIR direct emission.
@@ -520,21 +543,21 @@ Fast checks during early phases:
 
 ```text
 go run ./cmd/osty tokens toolchain/lir_proto.osty
+go run ./cmd/osty tokens toolchain/lir_proto_parity.osty
 go run ./cmd/osty tokens toolchain/lir_proto_test.osty
 go run ./cmd/osty parse toolchain/lir_proto.osty >/tmp/lir_proto.parse.json
+go run ./cmd/osty parse toolchain/lir_proto_parity.osty >/tmp/lir_proto_parity.parse.json
 go run ./cmd/osty parse toolchain/lir_proto_test.osty >/tmp/lir_proto_test.parse.json
 go run ./cmd/osty fmt --check toolchain/lir_proto.osty
+go run ./cmd/osty fmt --check toolchain/lir_proto_parity.osty
 go run ./cmd/osty fmt --check toolchain/lir_proto_test.osty
-go test -count=1 -vet=off ./internal/lirproto
-go test -count=1 -vet=off ./internal/llvmgen -run 'LIRProto|GenerateFromMIR'
+go test -count=1 -vet=off ./internal/llvmgen -run 'GenerateFromMIR'
 ```
 
-`internal/lirproto` now includes a mirror guard that reads
-`toolchain/lir_proto.osty` and `toolchain/lir_proto_test.osty`, parses both,
-checks canonical formatting, and pins the exported LIR Proto surface. Until the
-native test runner supports `toolchain`'s existing `main` package shape,
-`toolchain/lir_proto_test.osty` remains a parser/formatter smoke source rather
-than a directly executable `osty test` target.
+Until the native test runner supports `toolchain`'s existing `main` package
+shape, `toolchain/lir_proto_test.osty` remains a parser/formatter smoke source
+rather than a directly executable `osty test` target. Keep shape checks in this
+Osty source so new slices do not reintroduce a parallel Go prototype.
 
 Broader checks near wiring:
 
@@ -550,19 +573,14 @@ toolchain.
 
 ## First implementation slice
 
-The first Go-side slices already landed as an isolated harness:
+The current implementation slice is Osty-first:
 
-- `internal/lirproto/model.go`
-- `internal/lirproto/render.go`
-- `internal/lirproto/render_test.go`
-- scalar/control/direct-call/print/cast/primitive-conversion/aggregate parity
-  fixtures under `internal/lirproto`
-
-The current next slice is the Osty-first port:
-
-- `toolchain/lir_proto.osty`
-- `toolchain/lir_proto_test.osty`
-- `internal/lirproto/osty_mirror_test.go`
+- `toolchain/lir_proto.osty` owns the LIR Proto model, validator, renderer, and
+  MIR-lowering surface.
+- `toolchain/lir_proto_parity.osty` owns the shape-critical manual/source
+  parity catalog and manual check result surface.
+- `toolchain/lir_proto_test.osty` owns parser/formatter smoke coverage for the
+  ported model, renderer, lowerer, and parity catalog shapes.
 
 This gives the project a self-hosted place to land future pieces without
 touching backend dispatch. Production wiring still waits for the explicit

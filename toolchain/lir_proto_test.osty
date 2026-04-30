@@ -3,6 +3,13 @@ use std.testing
 fn assertLirContains(text: String, needle: String) {
     testing.assert(strings.contains(text, needle))
 }
+fn assertLirDiagnosticsContain(diags: List<LirDiagnostic>, needle: String) {
+    let mut rendered = ""
+    for d in diags {
+        rendered = rendered + "\n" + lirDiagnosticRender(d)
+    }
+    assertLirContains(rendered, needle)
+}
 fn testLirProtoRendersSimpleModuleOstyOwned() {
     let i64 = lirIntType(64)
     let i32 = lirIntType(32)
@@ -38,6 +45,52 @@ fn testLirProtoRendersSimpleModuleOstyOwned() {
     assertLirContains(ir, "%t0 = add i64 %a, %b")
     assertLirContains(ir, "ret i64 %t0")
     assertLirContains(ir, "; metadata sentinel")
+    testing.assertEq(lirValidateModule(m).len(), 0)
+}
+fn testLirProtoRuntimeDeclAndStringPoolOrderingOstyOwned() {
+    let i32 = lirIntType(32)
+    let ptr = lirPtrType()
+    let mut decls = lirRuntimeDecls()
+    testing.assert(lirRuntimeDeclsIsEmpty(decls))
+    testing.assert(lirRuntimeDeclsDeclare(decls, lirRuntimeDecl("printf", i32, [ptr], true)))
+    testing.assert(lirRuntimeDeclsDeclare(decls, lirRuntimeDecl("osty_rt_ping", lirVoidType(), [], false)))
+    testing.assert(!(lirRuntimeDeclsDeclare(decls, lirRuntimeDecl("printf", i32, [ptr], true))))
+    testing.assert(!(lirRuntimeDeclsIsEmpty(decls)))
+    let mut orderedDecls = lirRuntimeDeclsOrdered(decls)
+    testing.assertEq(orderedDecls.len(), 2)
+    testing.assertEq(orderedDecls[0].symbol, "printf")
+    testing.assertEq(orderedDecls[1].symbol, "osty_rt_ping")
+    orderedDecls.push(lirRuntimeDecl("extra", lirVoidType(), [], false))
+    testing.assertEq(lirRuntimeDeclsOrdered(decls).len(), 2)
+    let mut pool = lirStringPool()
+    testing.assert(lirStringPoolIsEmpty(pool))
+    testing.assertEq(lirStringPoolIntern(pool, "hello\n"), "@.str.0")
+    testing.assertEq(lirStringPoolIntern(pool, "hello\n"), "@.str.0")
+    testing.assertEq(lirStringPoolIntern(pool, "quote \" slash \\"), "@.str.1")
+    testing.assertEq(lirStringPoolSymbol(pool, "hello\n"), "@.str.0")
+    testing.assertEq(lirStringPoolSymbol(pool, "missing"), "")
+    testing.assert(!(lirStringPoolIsEmpty(pool)))
+    let mut strings_ = lirStringPoolOrdered(pool)
+    testing.assertEq(strings_.len(), 2)
+    testing.assertEq(strings_[0].symbol, "@.str.0")
+    testing.assertEq(strings_[0].encoded, "hello\\0A\\00")
+    testing.assertEq(strings_[0].byteLen, 7)
+    testing.assertEq(strings_[1].symbol, "@.str.1")
+    testing.assertEq(strings_[1].encoded, "quote \\22 slash \\5C\\00")
+    strings_.push(lirStringGlobal("@.str.extra", "extra", "extra\\00", 6))
+    testing.assertEq(lirStringPoolOrdered(pool).len(), 2)
+}
+fn testLirProtoRendersDefaultSourceAndVoidReturnOstyOwned() {
+    let mut fn_ = lirFunction("main", lirTypeInvalid())
+    fn_.blocks.push(lirBlock("", lirRetVoid()))
+    let mut m = lirModule("", "", "")
+    m.functions.push(fn_)
+    let ir = lirRenderModule(m)
+    assertLirContains(ir, "; Osty: <unknown>")
+    assertLirContains(ir, "source_filename = \"<unknown>\"")
+    assertLirContains(ir, "define void @main() \{")
+    assertLirContains(ir, "entry:")
+    assertLirContains(ir, "ret void")
     testing.assertEq(lirValidateModule(m).len(), 0)
 }
 fn testLirProtoRendersTypedInstructionSurface() {
@@ -84,18 +137,31 @@ fn testLirProtoRendersTypedInstructionSurface() {
     testing.assertEq(lirValidateModule(m).len(), 0)
 }
 fn testLirProtoValidationFindsMalformedPlan() {
+    let badPtr = LirType {llvm: "i64", className: LirTypePtr}
     let mut fn_ = lirFunction("", lirVoidType())
     let mut entry = lirBlock("entry", lirTermInvalid())
     entry.instrs.push(lirAlloca("", lirVoidType(), -1))
+    entry.instrs.push(lirCall("", lirIntType(64), "", []))
     fn_.blocks.push(entry)
-    fn_.blocks.push(lirBlock("entry", lirRetVoid()))
+    fn_.params.push(lirParam("%p", badPtr))
+    fn_.blocks.push(lirBlock("entry", lirRetValue(lirTypeInvalid(), "%dangling")))
     let mut m = lirModule("main", "", "")
     m.typeDefs.push(lirTypeDef("", ""))
+    m.typeDefs.push(lirTypeDef("%Broken", ""))
+    m.globals.push(lirGlobal("@bad", lirVoidType(), ""))
     m.functions.push(fn_)
     let diags = lirValidateModule(m)
-    testing.assert(diags.len() >= 5)
-    let rendered = lirDiagnosticRender(diags[0])
-    assertLirContains(rendered, "validation")
+    testing.assert(diags.len() >= 10)
+    assertLirDiagnosticsContain(diags, "missing name")
+    assertLirDiagnosticsContain(diags, "missing body")
+    assertLirDiagnosticsContain(diags, "void is not allowed here")
+    assertLirDiagnosticsContain(diags, "class ptr has LLVM spelling `i64`")
+    assertLirDiagnosticsContain(diags, "missing dest")
+    assertLirDiagnosticsContain(diags, "negative alignment")
+    assertLirDiagnosticsContain(diags, "missing callee")
+    assertLirDiagnosticsContain(diags, "duplicate block label `entry`")
+    assertLirDiagnosticsContain(diags, "missing terminator")
+    assertLirDiagnosticsContain(diags, "return value without return type")
 }
 fn testLirProtoScalarPlanningHelpers() {
     testing.assertEq(lirLowerPrimitiveTypeName("Int").llvm, "i64")
@@ -121,4 +187,388 @@ fn testLirProtoAggregateProjectionHelpers() {
     let steps = [lirFieldProjection(1, "inner", lirAggregateType("%Inner")), lirTupleProjection(0, lirIntType(64))]
     testing.assertEq(lirProjectionPathText(steps), ".inner.0")
     testing.assertEq(lirRenderIndices(lirProjectionPathIndices(steps)), "1, 0")
+}
+fn testLirProtoProjectionFrameKeepsEachAggregateOperand() {
+    let root = lirAggregateType("%Root")
+    let middle = lirAggregateType("%Middle")
+    let leaf = lirAggregateType("%Leaf")
+    let frames = [lirProjectionFrame(lirOperand(root, "%base"), 0), lirProjectionFrame(lirOperand(middle, "%middle"), 0), lirProjectionFrame(lirOperand(leaf, "%leaf"), 0)]
+    testing.assertEq(frames.len(), 3)
+    testing.assertEq(frames[0].aggregate.typ.llvm, "%Root")
+    testing.assertEq(frames[0].aggregate.value, "%base")
+    testing.assertEq(frames[1].aggregate.typ.llvm, "%Middle")
+    testing.assertEq(frames[1].aggregate.value, "%middle")
+    testing.assertEq(frames[2].aggregate.typ.llvm, "%Leaf")
+    testing.assertEq(frames[2].aggregate.value, "%leaf")
+}
+fn testLirProtoRendersDeepProjectedStoreRebuildOstyOwned() {
+    let i64 = lirIntType(64)
+    let ptr = lirPtrType()
+    let leaf = lirAggregateType("%Leaf")
+    let middle = lirAggregateType("%Middle")
+    let root = lirAggregateType("%Root")
+    let mut fn_ = lirFunction("deepProjectedStore", lirVoidType())
+    fn_.params.push(lirParam("%root", ptr))
+    fn_.params.push(lirParam("%value", i64))
+    let mut entry = lirBlock("entry", lirRetVoid())
+    entry.instrs.push(lirLoad("%base", root, "%root", 0))
+    entry.instrs.push(lirExtractValue("%middle", root, "%base", [0]))
+    entry.instrs.push(lirExtractValue("%leaf", middle, "%middle", [0]))
+    entry.instrs.push(lirInsertValue("%newLeaf", leaf, "%leaf", lirOperand(i64, "%value"), [0]))
+    entry.instrs.push(lirInsertValue("%newMiddle", middle, "%middle", lirOperand(leaf, "%newLeaf"), [0]))
+    entry.instrs.push(lirInsertValue("%newRoot", root, "%base", lirOperand(middle, "%newMiddle"), [0]))
+    entry.instrs.push(lirStore(lirOperand(root, "%newRoot"), "%root", 0))
+    fn_.blocks.push(entry)
+    let mut m = lirModule("main", "/tmp/deep_projected_store.osty", "")
+    m.typeDefs.push(lirTypeDef("%Leaf", "\{ i64 \}"))
+    m.typeDefs.push(lirTypeDef("%Middle", "\{ %Leaf, i64 \}"))
+    m.typeDefs.push(lirTypeDef("%Root", "\{ %Middle, i64 \}"))
+    m.functions.push(fn_)
+    let ir = lirRenderModule(m)
+    assertLirContains(ir, "%Leaf = type \{ i64 \}")
+    assertLirContains(ir, "%Middle = type \{ %Leaf, i64 \}")
+    assertLirContains(ir, "%Root = type \{ %Middle, i64 \}")
+    assertLirContains(ir, "%base = load %Root, ptr %root")
+    assertLirContains(ir, "%middle = extractvalue %Root %base, 0")
+    assertLirContains(ir, "%leaf = extractvalue %Middle %middle, 0")
+    assertLirContains(ir, "%newLeaf = insertvalue %Leaf %leaf, i64 %value, 0")
+    assertLirContains(ir, "%newMiddle = insertvalue %Middle %middle, %Leaf %newLeaf, 0")
+    assertLirContains(ir, "%newRoot = insertvalue %Root %base, %Middle %newMiddle, 0")
+    assertLirContains(ir, "store %Root %newRoot, ptr %root")
+    testing.assertEq(lirValidateModule(m).len(), 0)
+}
+fn assertLirContainsAll(text: String, needles: List<String>) {
+    for needle in needles {
+        assertLirContains(text, needle)
+    }
+}
+fn assertLirLoweredContains(m: MirModule, needles: List<String>) {
+    let result = lirLowerMirModule(lirLowerConfig("main", "/tmp/lir_proto_fixture.osty", ""), m)
+    testing.assert(!(lirLowerHasErrors(result)))
+    let ir = lirRenderModule(result.module)
+    assertLirContainsAll(ir, needles)
+}
+fn assertLirLoweredDiagnosticsContain(m: MirModule, needle: String) {
+    let result = lirLowerMirModule(lirLowerConfig("main", "/tmp/lir_proto_fixture.osty", ""), m)
+    testing.assert(lirLowerHasErrors(result))
+    assertLirDiagnosticsContain(result.diagnostics, needle)
+}
+fn lirTestFunction(name: String, retType: String) -> MirFunction {
+    let mut fn_ = mirFunction(name, retType, mirNoSpan())
+    let ret = mirFunctionNewLocal(fn_, "_return", retType, false, mirNoSpan())
+    fn_.returnLocal = ret
+    fn_.locals[ret].isReturn = true
+    fn_
+}
+fn lirTestAddParam(fn_: MirFunction, name: String, typ: String) -> Int {
+    let id = mirFunctionNewLocal(fn_, name, typ, false, mirNoSpan())
+    fn_.locals[id].isParam = true
+    fn_.params.push(id)
+    id
+}
+fn lirTestAddLocal(fn_: MirFunction, name: String, typ: String) -> Int {
+    mirFunctionNewLocal(fn_, name, typ, false, mirNoSpan())
+}
+fn lirTestEntryBlock(fn_: MirFunction) -> Int {
+    let entry = mirFunctionNewBlock(fn_, mirNoSpan())
+    fn_.entry = entry
+    entry
+}
+fn lirTestAppendConstReturn(fn_: MirFunction, block: Int, value: Int) {
+    mirFunctionAppend(fn_, block, mirAssignInstr(mirPlace(fn_.returnLocal), mirRVUse(mirOperandConst(mirConstInt(value, "Int"))), mirNoSpan()))
+    mirFunctionTerminate(fn_, block, mirReturnTerm(mirNoSpan()))
+}
+fn lirTestModule(functions: List<MirFunction>) -> MirModule {
+    let mut m = mirModule("main")
+    for fn_ in functions {
+        m.functions.push(fn_)
+    }
+    m
+}
+fn lirTestField(index: Int, name: String, typ: String) -> MirFieldLayout {
+    MirFieldLayout {index, name, typ}
+}
+fn lirTestStructLayout(name: String, fields: List<MirFieldLayout>) -> MirStructLayout {
+    MirStructLayout {name, mangled: name, fields, size: 0, align: 0}
+}
+fn lirTestTupleLayout(key: String, fields: List<MirFieldLayout>) -> MirTupleLayout {
+    MirTupleLayout {key, mangled: key, fields}
+}
+fn testLirProtoLowerMirConstReturnOstyOwned() {
+    let mut fn_ = lirTestFunction("answer", "Int")
+    let entry = lirTestEntryBlock(fn_)
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(fn_.returnLocal), mirRVUse(mirOperandConst(mirConstInt(42, "Int"))), mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    assertLirLoweredContains(lirTestModule([fn_]), ["source_filename = \"/tmp/lir_proto_fixture.osty\"", "define i64 @answer() \{", "%l0 = alloca i64", "store i64 42, ptr %l0", "ret i64"])
+}
+fn testLirProtoLowerMirBinaryParamsOstyOwned() {
+    let mut fn_ = lirTestFunction("add", "Int")
+    let a = lirTestAddParam(fn_, "a", "Int")
+    let b = lirTestAddParam(fn_, "b", "Int")
+    let entry = lirTestEntryBlock(fn_)
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(fn_.returnLocal), mirRVBinary(MirBinAdd, mirOperandCopy(mirPlace(a), "Int"), mirOperandCopy(mirPlace(b), "Int"), "Int"), mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    assertLirLoweredContains(lirTestModule([fn_]), ["define i64 @add(i64 %p1, i64 %p2) \{", "store i64 %p1, ptr %l1", "store i64 %p2, ptr %l2", "add i64", "store i64", "ret i64"])
+}
+fn testLirProtoLowerMirBranchAndSwitchOstyOwned() {
+    let mut choose = lirTestFunction("choose", "Int")
+    let cond = lirTestAddParam(choose, "cond", "Bool")
+    let entry = lirTestEntryBlock(choose)
+    let thenBlock = mirFunctionNewBlock(choose, mirNoSpan())
+    let elseBlock = mirFunctionNewBlock(choose, mirNoSpan())
+    mirFunctionTerminate(choose, entry, mirBranchTerm(mirOperandCopy(mirPlace(cond), "Bool"), thenBlock, elseBlock, mirNoSpan()))
+    lirTestAppendConstReturn(choose, thenBlock, 1)
+    lirTestAppendConstReturn(choose, elseBlock, 2)
+    let mut pick = lirTestFunction("pick", "Int")
+    let n = lirTestAddParam(pick, "n", "Int")
+    let switchEntry = lirTestEntryBlock(pick)
+    let zero = mirFunctionNewBlock(pick, mirNoSpan())
+    let one = mirFunctionNewBlock(pick, mirNoSpan())
+    let default = mirFunctionNewBlock(pick, mirNoSpan())
+    mirFunctionTerminate(pick, switchEntry, mirSwitchIntTerm(mirOperandCopy(mirPlace(n), "Int"), [mirSwitchCase(0, zero, "zero"), mirSwitchCase(1, one, "one")], default, mirNoSpan()))
+    lirTestAppendConstReturn(pick, zero, 10)
+    lirTestAppendConstReturn(pick, one, 20)
+    lirTestAppendConstReturn(pick, default, 30)
+    assertLirLoweredContains(lirTestModule([choose, pick]), ["define i64 @choose(i1 %p1) \{", "br i1", "label %bb1", "label %bb2", "define i64 @pick(i64 %p1) \{", "switch i64", "i64 0, label %bb1", "i64 1, label %bb2"])
+}
+fn testLirProtoLowerMirDirectCallsOstyOwned() {
+    let mut inc = lirTestFunction("inc", "Int")
+    let x = lirTestAddParam(inc, "x", "Int")
+    let incEntry = lirTestEntryBlock(inc)
+    mirFunctionAppend(inc, incEntry, mirAssignInstr(mirPlace(inc.returnLocal), mirRVBinary(MirBinAdd, mirOperandCopy(mirPlace(x), "Int"), mirOperandConst(mirConstInt(1, "Int")), "Int"), mirNoSpan()))
+    mirFunctionTerminate(inc, incEntry, mirReturnTerm(mirNoSpan()))
+    let mut noop = lirTestFunction("noop", "Unit")
+    let noopEntry = lirTestEntryBlock(noop)
+    mirFunctionTerminate(noop, noopEntry, mirReturnTerm(mirNoSpan()))
+    let mut caller = lirTestFunction("main", "Int")
+    let callerEntry = lirTestEntryBlock(caller)
+    mirFunctionAppend(caller, callerEntry, mirCallInstr(true, mirPlace(caller.returnLocal), "inc", "(Int)->Int", [mirOperandConst(mirConstInt(41, "Int"))], mirNoSpan()))
+    mirFunctionAppend(caller, callerEntry, mirCallInstr(false, mirPlace(-1), "noop", "()->Unit", [], mirNoSpan()))
+    mirFunctionTerminate(caller, callerEntry, mirReturnTerm(mirNoSpan()))
+    assertLirLoweredContains(lirTestModule([inc, noop, caller]), ["define i64 @inc(i64 %p1) \{", "define void @noop() \{", "call i64 @inc(i64 41)", "call void @noop()"])
+}
+fn testLirProtoLowerMirPrintIntrinsicsOstyOwned() {
+    let mut fn_ = lirTestFunction("main", "Unit")
+    let entry = lirTestEntryBlock(fn_)
+    mirFunctionAppend(fn_, entry, mirIntrinsicInstr(false, mirPlace(-1), MirIntrinsicPrintln, [mirOperandConst(mirConstString("hello"))], mirNoSpan()))
+    mirFunctionAppend(fn_, entry, mirIntrinsicInstr(false, mirPlace(-1), MirIntrinsicEprintln, [mirOperandConst(mirConstInt(7, "Int"))], mirNoSpan()))
+    mirFunctionAppend(fn_, entry, mirIntrinsicInstr(false, mirPlace(-1), MirIntrinsicPrint, [mirOperandConst(mirConstFloat("1.5", "Float32"))], mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    assertLirLoweredContains(lirTestModule([fn_]), ["@.str.0 = private unnamed_addr constant [6 x i8] c\"hello\\00\"", "declare ptr @osty_rt_int_to_string(i64)", "declare ptr @osty_rt_float_to_string(double)", "declare void @osty_rt_io_write(ptr, i1, i1)", "call void @osty_rt_io_write(ptr @.str.0, i1 1, i1 0)", "call void @osty_rt_io_write"])
+}
+fn testLirProtoLowerMirScalarCastsOstyOwned() {
+    let mut widen = lirTestFunction("widen", "Int")
+    let widenEntry = lirTestEntryBlock(widen)
+    mirFunctionAppend(widen, widenEntry, mirAssignInstr(mirPlace(widen.returnLocal), mirRVCast(MirCastIntResize, mirOperandConst(mirConstInt(7, "Int32")), "Int32", "Int"), mirNoSpan()))
+    mirFunctionTerminate(widen, widenEntry, mirReturnTerm(mirNoSpan()))
+    let mut unsigned = lirTestFunction("uwiden", "UInt64")
+    let unsignedEntry = lirTestEntryBlock(unsigned)
+    mirFunctionAppend(unsigned, unsignedEntry, mirAssignInstr(mirPlace(unsigned.returnLocal), mirRVCast(MirCastIntResize, mirOperandConst(mirConstInt(7, "UInt32")), "UInt32", "UInt64"), mirNoSpan()))
+    mirFunctionTerminate(unsigned, unsignedEntry, mirReturnTerm(mirNoSpan()))
+    let mut floatNarrow = lirTestFunction("narrowFloat", "Float32")
+    let floatEntry = lirTestEntryBlock(floatNarrow)
+    mirFunctionAppend(floatNarrow, floatEntry, mirAssignInstr(mirPlace(floatNarrow.returnLocal), mirRVCast(MirCastFloatResize, mirOperandConst(mirConstFloat("1.5", "Float")), "Float", "Float32"), mirNoSpan()))
+    mirFunctionTerminate(floatNarrow, floatEntry, mirReturnTerm(mirNoSpan()))
+    let mut toFloat = lirTestFunction("toFloat", "Float")
+    let toFloatEntry = lirTestEntryBlock(toFloat)
+    mirFunctionAppend(toFloat, toFloatEntry, mirAssignInstr(mirPlace(toFloat.returnLocal), mirRVCast(MirCastIntToFloat, mirOperandConst(mirConstInt(7, "Int")), "Int", "Float"), mirNoSpan()))
+    mirFunctionTerminate(toFloat, toFloatEntry, mirReturnTerm(mirNoSpan()))
+    assertLirLoweredContains(lirTestModule([widen, unsigned, floatNarrow, toFloat]), ["define i64 @widen() \{", "sext i32 7 to i64", "define i64 @uwiden() \{", "zext i32 7 to i64", "define float @narrowFloat() \{", "fptrunc double 1.5 to float", "define double @toFloat() \{", "sitofp i64 7 to double"])
+}
+fn testLirProtoLowerMirPrimitiveConversionIntrinsicsOstyOwned() {
+    let mut byteToInt = lirTestFunction("byteToInt", "Int")
+    let btiEntry = lirTestEntryBlock(byteToInt)
+    mirFunctionAppend(byteToInt, btiEntry, mirIntrinsicInstr(true, mirPlace(byteToInt.returnLocal), MirIntrinsicByteToInt, [mirOperandConst(mirConstByte(7))], mirNoSpan()))
+    mirFunctionTerminate(byteToInt, btiEntry, mirReturnTerm(mirNoSpan()))
+    let mut charToInt = lirTestFunction("charToInt", "Int")
+    let ctiEntry = lirTestEntryBlock(charToInt)
+    mirFunctionAppend(charToInt, ctiEntry, mirIntrinsicInstr(true, mirPlace(charToInt.returnLocal), MirIntrinsicCharToInt, [mirOperandConst(mirConstChar(65))], mirNoSpan()))
+    mirFunctionTerminate(charToInt, ctiEntry, mirReturnTerm(mirNoSpan()))
+    let mut intToByte = lirTestFunction("intToByte", "Byte")
+    let itbEntry = lirTestEntryBlock(intToByte)
+    mirFunctionAppend(intToByte, itbEntry, mirIntrinsicInstr(true, mirPlace(intToByte.returnLocal), MirIntrinsicIntToByte, [mirOperandConst(mirConstInt(7, "Int"))], mirNoSpan()))
+    mirFunctionTerminate(intToByte, itbEntry, mirReturnTerm(mirNoSpan()))
+    let mut intToChar = lirTestFunction("intToChar", "Char")
+    let itcEntry = lirTestEntryBlock(intToChar)
+    mirFunctionAppend(intToChar, itcEntry, mirIntrinsicInstr(true, mirPlace(intToChar.returnLocal), MirIntrinsicIntToChar, [mirOperandConst(mirConstInt(65, "Int"))], mirNoSpan()))
+    mirFunctionTerminate(intToChar, itcEntry, mirReturnTerm(mirNoSpan()))
+    let mut byteToChar = lirTestFunction("byteToChar", "Char")
+    let btcEntry = lirTestEntryBlock(byteToChar)
+    mirFunctionAppend(byteToChar, btcEntry, mirIntrinsicInstr(true, mirPlace(byteToChar.returnLocal), MirIntrinsicByteToChar, [mirOperandConst(mirConstByte(7))], mirNoSpan()))
+    mirFunctionTerminate(byteToChar, btcEntry, mirReturnTerm(mirNoSpan()))
+    let mut charToByte = lirTestFunction("charToByte", "Byte")
+    let ctbEntry = lirTestEntryBlock(charToByte)
+    mirFunctionAppend(charToByte, ctbEntry, mirIntrinsicInstr(true, mirPlace(charToByte.returnLocal), MirIntrinsicCharToByte, [mirOperandConst(mirConstChar(65))], mirNoSpan()))
+    mirFunctionTerminate(charToByte, ctbEntry, mirReturnTerm(mirNoSpan()))
+    assertLirLoweredContains(lirTestModule([byteToInt, charToInt, intToByte, intToChar, byteToChar, charToByte]), ["define i64 @byteToInt() \{", "zext i8 7 to i64", "define i64 @charToInt() \{", "zext i32 65 to i64", "define i8 @intToByte() \{", "trunc i64 7 to i8", "define i32 @intToChar() \{", "trunc i64 65 to i32", "define i32 @byteToChar() \{", "zext i8 7 to i32", "define i8 @charToByte() \{", "trunc i32 65 to i8"])
+}
+fn testLirProtoLowerMirDirectCallArgCoercionOstyOwned() {
+    let mut id = lirTestFunction("id", "Int")
+    let x = lirTestAddParam(id, "x", "Int")
+    let idEntry = lirTestEntryBlock(id)
+    mirFunctionAppend(id, idEntry, mirAssignInstr(mirPlace(id.returnLocal), mirRVUse(mirOperandCopy(mirPlace(x), "Int")), mirNoSpan()))
+    mirFunctionTerminate(id, idEntry, mirReturnTerm(mirNoSpan()))
+    let mut caller = lirTestFunction("main", "Int")
+    let callerEntry = lirTestEntryBlock(caller)
+    mirFunctionAppend(caller, callerEntry, mirCallInstr(true, mirPlace(caller.returnLocal), "id", "(Int)->Int", [mirOperandConst(mirConstInt(41, "Int32"))], mirNoSpan()))
+    mirFunctionTerminate(caller, callerEntry, mirReturnTerm(mirNoSpan()))
+    assertLirLoweredContains(lirTestModule([id, caller]), ["define i64 @main() \{", "sext i32 41 to i64", "call i64 @id(i64", "store i64"])
+}
+fn testLirProtoLowerMirTupleLiteralAndElementReadOstyOwned() {
+    let tupleName = "Tuple.i64.i64"
+    let mut fn_ = lirTestFunction("pack", "Int")
+    let tupleLocal = lirTestAddLocal(fn_, "t", tupleName)
+    let entry = lirTestEntryBlock(fn_)
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(tupleLocal), mirRVAggregate(MirAggTuple, [mirOperandConst(mirConstInt(1, "Int")), mirOperandConst(mirConstInt(2, "Int"))], tupleName), mirNoSpan()))
+    let left = mirOperandCopy(mirPlaceProject(mirPlace(tupleLocal), mirTupleProj(0, "Int")), "Int")
+    let right = mirOperandCopy(mirPlaceProject(mirPlace(tupleLocal), mirTupleProj(1, "Int")), "Int")
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(fn_.returnLocal), mirRVBinary(MirBinAdd, left, right, "Int"), mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    let mut m = lirTestModule([fn_])
+    m.layouts.tuples.push(lirTestTupleLayout(tupleName, [lirTestField(0, "0", "Int"), lirTestField(1, "1", "Int")]))
+    assertLirLoweredContains(m, ["%Tuple.i64.i64 = type \{ i64, i64 \}", "insertvalue %Tuple.i64.i64 undef, i64 1, 0", "insertvalue %Tuple.i64.i64", "extractvalue %Tuple.i64.i64", "add i64"])
+}
+fn testLirProtoLowerMirStructLiteralAndFieldReadOstyOwned() {
+    let mut fn_ = lirTestFunction("sum", "Int")
+    let pointLocal = lirTestAddLocal(fn_, "p", "Point")
+    let entry = lirTestEntryBlock(fn_)
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(pointLocal), mirRVAggregate(MirAggStruct, [mirOperandConst(mirConstInt(1, "Int")), mirOperandConst(mirConstInt(2, "Int"))], "Point"), mirNoSpan()))
+    let left = mirOperandCopy(mirPlaceProject(mirPlace(pointLocal), mirFieldProj(0, "x", "Int")), "Int")
+    let right = mirOperandCopy(mirPlaceProject(mirPlace(pointLocal), mirFieldProj(1, "y", "Int")), "Int")
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(fn_.returnLocal), mirRVBinary(MirBinAdd, left, right, "Int"), mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    let mut m = lirTestModule([fn_])
+    m.layouts.structs.push(lirTestStructLayout("Point", [lirTestField(0, "x", "Int"), lirTestField(1, "y", "Int")]))
+    assertLirLoweredContains(m, ["%Point = type \{ i64, i64 \}", "insertvalue %Point undef, i64 1, 0", "insertvalue %Point", "extractvalue %Point", "add i64"])
+}
+fn testLirProtoLowerMirNestedProjectedAssignOstyOwned() {
+    let mut fn_ = lirTestFunction("update", "Int")
+    let innerLocal = lirTestAddLocal(fn_, "inner", "Inner")
+    let outerLocal = lirTestAddLocal(fn_, "outer", "Outer")
+    let entry = lirTestEntryBlock(fn_)
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(innerLocal), mirRVAggregate(MirAggStruct, [mirOperandConst(mirConstInt(0, "Int"))], "Inner"), mirNoSpan()))
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(outerLocal), mirRVAggregate(MirAggStruct, [mirOperandCopy(mirPlace(innerLocal), "Inner"), mirOperandConst(mirConstInt(1, "Int"))], "Outer"), mirNoSpan()))
+    let nested = mirPlaceProject(mirPlaceProject(mirPlace(outerLocal), mirFieldProj(0, "inner", "Inner")), mirFieldProj(0, "value", "Int"))
+    mirFunctionAppend(fn_, entry, mirAssignInstr(nested, mirRVUse(mirOperandConst(mirConstInt(42, "Int"))), mirNoSpan()))
+    let left = mirOperandCopy(nested, "Int")
+    let right = mirOperandCopy(mirPlaceProject(mirPlace(outerLocal), mirFieldProj(1, "flag", "Int")), "Int")
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(fn_.returnLocal), mirRVBinary(MirBinAdd, left, right, "Int"), mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    let mut m = lirTestModule([fn_])
+    m.layouts.structs.push(lirTestStructLayout("Inner", [lirTestField(0, "value", "Int")]))
+    m.layouts.structs.push(lirTestStructLayout("Outer", [lirTestField(0, "inner", "Inner"), lirTestField(1, "flag", "Int")]))
+    assertLirLoweredContains(m, ["%Inner = type \{ i64 \}", "%Outer = type \{ %Inner, i64 \}", "extractvalue %Outer", "insertvalue %Inner", "insertvalue %Outer", "store %Outer"])
+}
+fn testLirProtoLowerMirProjectedCallAndIntrinsicResultsOstyOwned() {
+    let mut makeValue = lirTestFunction("makeValue", "Int")
+    let makeEntry = lirTestEntryBlock(makeValue)
+    mirFunctionAppend(makeValue, makeEntry, mirAssignInstr(mirPlace(makeValue.returnLocal), mirRVUse(mirOperandConst(mirConstInt(7, "Int"))), mirNoSpan()))
+    mirFunctionTerminate(makeValue, makeEntry, mirReturnTerm(mirNoSpan()))
+    let mut fill = lirTestFunction("fill", "Int")
+    let cellLocal = lirTestAddLocal(fill, "cell", "Cell")
+    let byteLocal = lirTestAddParam(fill, "b", "Byte")
+    let fillEntry = lirTestEntryBlock(fill)
+    mirFunctionAppend(fill, fillEntry, mirAssignInstr(mirPlace(cellLocal), mirRVAggregate(MirAggStruct, [mirOperandConst(mirConstInt(0, "Int")), mirOperandConst(mirConstInt(1, "Int"))], "Cell"), mirNoSpan()))
+    let cellValue = mirPlaceProject(mirPlace(cellLocal), mirFieldProj(0, "value", "Int"))
+    mirFunctionAppend(fill, fillEntry, mirCallInstr(true, cellValue, "makeValue", "()->Int", [], mirNoSpan()))
+    mirFunctionAppend(fill, fillEntry, mirIntrinsicInstr(true, cellValue, MirIntrinsicByteToInt, [mirOperandCopy(mirPlace(byteLocal), "Byte")], mirNoSpan()))
+    let left = mirOperandCopy(cellValue, "Int")
+    let right = mirOperandCopy(mirPlaceProject(mirPlace(cellLocal), mirFieldProj(1, "other", "Int")), "Int")
+    mirFunctionAppend(fill, fillEntry, mirAssignInstr(mirPlace(fill.returnLocal), mirRVBinary(MirBinAdd, left, right, "Int"), mirNoSpan()))
+    mirFunctionTerminate(fill, fillEntry, mirReturnTerm(mirNoSpan()))
+    let mut m = lirTestModule([makeValue, fill])
+    m.layouts.structs.push(lirTestStructLayout("Cell", [lirTestField(0, "value", "Int"), lirTestField(1, "other", "Int")]))
+    assertLirLoweredContains(m, ["%Cell = type \{ i64, i64 \}", "define i64 @makeValue() \{", "define i64 @fill(i8 %p2) \{", "call i64 @makeValue()", "zext i8", "insertvalue %Cell", "store %Cell", "extractvalue %Cell"])
+}
+fn testLirProtoLowerMirDiagnosticsForUnsupportedModuleShapeOstyOwned() {
+    let mut m = mirModule("main")
+    m.globals.push(mirGlobal("g", "Int", false, mirNoSpan()))
+    m.uses.push(mirUse("std.io", "io", mirNoSpan()))
+    assertLirLoweredDiagnosticsContain(m, "MIR globals are not implemented")
+    assertLirLoweredDiagnosticsContain(m, "MIR uses/imports are not implemented")
+}
+fn testLirProtoParityCatalogIsOstyOwned() {
+    let manual = lirParityManualMIRFixtures()
+    let source = lirParitySourceFixtures()
+    let all = lirParityBuiltinFixtures()
+    testing.assert(manual.len() >= 16)
+    testing.assert(source.len() >= 10)
+    testing.assert(all.len() == manual.len() + source.len())
+    let names = strings.join(lirParityFixtureNames(all), ",")
+    assertLirContains(names, "const_return")
+    assertLirContains(names, "projected_intrinsic_result")
+    assertLirContains(names, "source_projected_intrinsic_result")
+    assertLirContains(names, "source_println_int_runtime_abi")
+}
+fn testLirProtoParityCatalogFindsMissingNeedles() {
+    let fixture = lirParityManualConstReturnFixture()
+    let ok = "define i64 @answer()\nstore i64 42\nret i64"
+    testing.assertEq(lirParityFindMissing(ok, fixture).len(), 0)
+    let okCheck = lirParityCheckRendered("lir", fixture, ok)
+    testing.assert(okCheck.ok)
+    let missing = lirParityFindMissing("define i64 @answer()", fixture)
+    testing.assert(missing.len() > 0)
+    let report = lirParityRenderMissingReport("lir", fixture, missing)
+    assertLirContains(report, "const_return")
+    assertLirContains(report, "missing")
+    let failedCheck = lirParityCheckRendered("lir", fixture, "define i64 @answer()")
+    testing.assert(!(failedCheck.ok))
+    assertLirContains(lirParityCheckReport(failedCheck), "missing")
+}
+fn testLirProtoParityManualBuildersLowerThroughOsty() {
+    let constFixture = lirParityManualConstReturnFixture()
+    let constResult = lirLowerMirModule(lirLowerConfig("main", constFixture.sourcePath, ""), lirParityBuildManualModule(constFixture.name))
+    testing.assert(!(lirLowerHasErrors(constResult)))
+    testing.assertEq(lirParityFindMissing(lirRenderModule(constResult.module), constFixture).len(), 0)
+    let projectedFixture = lirParityManualProjectedIntrinsicResultFixture()
+    let projectedResult = lirLowerMirModule(lirLowerConfig("main", projectedFixture.sourcePath, ""), lirParityBuildManualModule(projectedFixture.name))
+    testing.assert(!(lirLowerHasErrors(projectedResult)))
+    testing.assertEq(lirParityFindMissing(lirRenderModule(projectedResult.module), projectedFixture).len(), 0)
+    let checks = lirParityCheckAllManual(lirLowerConfig("main", "", ""))
+    testing.assertEq(checks.len(), lirParityManualMIRFixtures().len())
+    testing.assert(lirParityChecksOK(checks))
+    assertLirContains(lirParityCheckSummary(checks), "projected_intrinsic_result: ok")
+}
+fn testLirProtoLowererEnvelopeAndPackageFallbackOstyOwned() {
+    let mut cfg = lirLowerConfig("", "/tmp/empty.osty", "arm64-apple-macosx")
+    testing.assert(lirLowerConfigAddFeatureGate(cfg, "x"))
+    let lowerer = lirNewLowerer(cfg)
+    let mut snapshot = lirLowererConfig(lowerer)
+    testing.assert(lirLowerConfigHasFeatureGate(snapshot, "x"))
+    testing.assert(lirLowerConfigAddFeatureGate(snapshot, "y"))
+    testing.assert(!(lirLowerConfigHasFeatureGate(lirLowererConfig(lowerer), "y")))
+    let mut empty = mirModule("pkg")
+    let result = lirLowererLowerMIR(lowerer, empty)
+    testing.assert(lirLowerOK(result))
+    testing.assert(!(lirLowerHasErrors(result)))
+    testing.assert(!(lirLowerHasUnsupported(result)))
+    testing.assertEq(result.module.packageName, "pkg")
+    let ir = lirRenderModule(result.module)
+    assertLirContains(ir, "source_filename = \"/tmp/empty.osty\"")
+    assertLirContains(ir, "target triple = \"arm64-apple-macosx\"")
+    let mut unsupported = mirModule("pkg")
+    unsupported.globals.push(mirGlobal("g", "Int", false, mirNoSpan()))
+    let first = lirLowererLowerMIR(lowerer, unsupported)
+    testing.assert(!(lirLowerOK(first)))
+    testing.assert(lirLowerHasErrors(first))
+    testing.assert(lirLowerHasUnsupported(first))
+    let second = lirLowererLowerMIR(lowerer, mirModule("pkg"))
+    testing.assert(lirLowerOK(second))
+    testing.assertEq(second.diagnostics.len(), 0)
+}
+fn testLirProtoLowererReportsInvalidControlTargetsOstyOwned() {
+    let mut fn_ = lirTestFunction("bad", "Int")
+    let entry = lirTestEntryBlock(fn_)
+    mirFunctionTerminate(fn_, entry, mirGotoTerm(99, mirNoSpan()))
+    assertLirLoweredDiagnosticsContain(lirTestModule([fn_]), "target block 99 is not present")
+}
+fn testLirProtoLowererReportsVoidDestinationMismatchOstyOwned() {
+    let mut noop = lirTestFunction("noop", "Unit")
+    let noopEntry = lirTestEntryBlock(noop)
+    mirFunctionTerminate(noop, noopEntry, mirReturnTerm(mirNoSpan()))
+    let mut caller = lirTestFunction("main", "Int")
+    let entry = lirTestEntryBlock(caller)
+    mirFunctionAppend(caller, entry, mirCallInstr(true, mirPlace(caller.returnLocal), "noop", "()->Unit", [], mirNoSpan()))
+    mirFunctionTerminate(caller, entry, mirReturnTerm(mirNoSpan()))
+    assertLirLoweredDiagnosticsContain(lirTestModule([noop, caller]), "cannot store void result into non-unit local")
 }
