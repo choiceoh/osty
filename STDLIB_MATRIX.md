@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 70 공개 모듈. 분류 기준:
+총 71 공개 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (66 / 70 = 94%)
+### ⭐⭐⭐⭐⭐ Production (67 / 71 = 94%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -54,6 +54,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | collections | 509 | list 68 + map 42 + set 17 | 30+ List 메서드, groupBy, windowed, zip3 |
 | email | 461 | pure Osty + encoding | Address / Message / MIME multipart / attachment base64 / SMTP DATA helpers |
 | db | 554 | pure Osty + sql | Config / DSN / pool / tx options / result rows / migration planning helpers |
+| polyglot | 2319 | pure Osty + os/env/fs | 두 언어 repo 표준 레일: Language / Component / Boundary / Workspace, BoundaryContract, ExecutionPolicy, doctorRun/check runner, Go+Rust/Osty+Go/Rust/Python/Node preset, build/test plan, Process/C ABI/shared-file boundary 검증, cwd/env 복원 실행, env/artifact/schema 계약 audit |
 | grid | 412 | pure Osty | Point / Size / Rect / Direction / row-major Grid<T> |
 | gui | 2004 | pure Osty + fs/os/json | retained GUI core: geometry / theme / flex+stack layout / render commands / HTML document renderer / browser event bridge / SVG renderer / browser document write/open launch helpers / browser event state application / pointer-key routing / focus / accessibility audit / snapshot diff |
 | tar | 408 | pure Osty + bytes | ustar encode/decode/list/extract + checksum validation |
@@ -97,7 +98,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (4 / 70 = 6%)
+### ⭐⭐⭐⭐ Production-adjacent (4 / 71 = 6%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
@@ -151,6 +152,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | OCR 엔진 연결 / 결과 분석 | ✅ 가능 | ocr (PaddleOCR v5 / Tesseract 실행 계획, JSON/TSV normalize, confidence/search/key-value/chunk helpers) |
 | SQL 쿼리 조립 | ✅ 가능 | sql (identifier quoting / value literals / dialect placeholders / CRUD builders) |
 | DB 설정/마이그레이션 계획 | ✅ 가능 | db + sql (DSN / pool / tx options / result rows / migration helpers) |
+| 두 언어 앱 / repo 경계 | ✅ 가능 | polyglot + os + env + fs + `osty scaffold polyglot` (Osty+Go/Rust/Python/Node 등 역할 분리, 빌드/테스트/경계 계약, doctorRun/check runner) |
 | AI agent shell / chat mode | ✅ 가능 | ai + aiagents + http/json/log/thread |
 | Agent-safe logs/transcripts | ✅ 가능 | redact + security + tokenest + aiagents |
 | Local document search | ✅ 가능 | search + markdown + media + jsonl |
@@ -185,7 +187,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 47 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, redact, media, security, search, markdown, report, tokenest, httpretry, jsonl, shortid, metrics, net, fmt, json, config, table, url, io, collections, email, db, grid, gui, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
+- 48 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, redact, media, security, search, markdown, report, tokenest, httpretry, jsonl, shortid, metrics, net, fmt, json, config, table, url, io, collections, email, db, polyglot, grid, gui, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
 - 5 모듈은 Phase A 충실 + Phase B declaration-only (env, random, os, crypto, compress)
 - fs 는 Phase A 충실 + 확장된 tool-facing declaration surface (walk/glob/watch/atomicWrite/lockFile/hashFile/copyDir/diffFiles)
 - 나머지는 의도된 범위에서 surface 만으로 완성 (cli, math, cmp, hint, debug, ref, process, log, time, error, sync, thread, regex, testing, uuid)

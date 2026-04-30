@@ -1,7 +1,7 @@
 // scaffold_cmd.go — `osty scaffold` subcommand dispatcher.
 //
 // This is the CLI side of the small code-generation tools that live
-// in internal/scaffold (fixture / schema / ffi). They share a flag
+// in internal/scaffold (fixture / schema / ffi / polyglot). They share a flag
 // shape — every generator takes `--out DIR` (default ".") and
 // produces a single .osty file derived from the positional NAME — so
 // the dispatcher centralises argument parsing and exit-code mapping.
@@ -31,6 +31,8 @@ func runScaffold(args []string) {
 		runScaffoldSchema(args[1:])
 	case "ffi":
 		runScaffoldFFI(args[1:])
+	case "polyglot":
+		runScaffoldPolyglot(args[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "osty scaffold: unknown generator %q\n", args[0])
 		scaffoldUsage()
@@ -39,13 +41,15 @@ func runScaffold(args []string) {
 }
 
 func scaffoldUsage() {
-	fmt.Fprintln(os.Stderr, "usage: osty scaffold <fixture|schema|ffi> [flags] NAME")
-	fmt.Fprintln(os.Stderr, "  fixture NAME [--cases N] [--out DIR]")
+	fmt.Fprintln(os.Stderr, "usage: osty scaffold <fixture|schema|ffi|polyglot> [flags] NAME")
+	fmt.Fprintln(os.Stderr, "  fixture [--cases N] [--out DIR] NAME")
 	fmt.Fprintln(os.Stderr, "      generate a table-driven `*_test.osty` skeleton")
-	fmt.Fprintln(os.Stderr, "  schema NAME --from FILE.json [--out DIR]")
+	fmt.Fprintln(os.Stderr, "  schema --from FILE.json [--out DIR] NAME")
 	fmt.Fprintln(os.Stderr, "      infer a `pub struct` from a JSON sample payload")
-	fmt.Fprintln(os.Stderr, "  ffi NAME --header FILE.h [--out DIR]")
+	fmt.Fprintln(os.Stderr, "  ffi --header FILE.h [--out DIR] NAME")
 	fmt.Fprintln(os.Stderr, "      emit Osty wrapper stubs for top-level C function decls")
+	fmt.Fprintln(os.Stderr, "  polyglot [--primary osty] [--secondary rust] [--protocol json] [--out DIR] NAME")
+	fmt.Fprintln(os.Stderr, "      emit a std.polyglot workspace + doctor rail for a two-language repo")
 }
 
 func runScaffoldFixture(args []string) {
@@ -55,7 +59,7 @@ func runScaffoldFixture(args []string) {
 	fs.IntVar(&cases, "cases", 3, "number of placeholder rows in the generated table")
 	fs.StringVar(&out, "out", ".", "directory to write the fixture into")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty scaffold fixture NAME [--cases N] [--out DIR]")
+		fmt.Fprintln(os.Stderr, "usage: osty scaffold fixture [--cases N] [--out DIR] NAME")
 		fs.PrintDefaults()
 	}
 	_ = fs.Parse(args)
@@ -80,7 +84,7 @@ func runScaffoldSchema(args []string) {
 	fs.StringVar(&from, "from", "", "path to a JSON sample (object) to infer fields from")
 	fs.StringVar(&out, "out", ".", "directory to write the generated struct into")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty scaffold schema NAME --from FILE.json [--out DIR]")
+		fmt.Fprintln(os.Stderr, "usage: osty scaffold schema --from FILE.json [--out DIR] NAME")
 		fs.PrintDefaults()
 	}
 	_ = fs.Parse(args)
@@ -110,7 +114,7 @@ func runScaffoldFFI(args []string) {
 	fs.StringVar(&header, "header", "", "path to a C header to scan for `<retType> <name>(<args>);` decls")
 	fs.StringVar(&out, "out", ".", "directory to write the generated bindings into")
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty scaffold ffi NAME --header FILE.h [--out DIR]")
+		fmt.Fprintln(os.Stderr, "usage: osty scaffold ffi --header FILE.h [--out DIR] NAME")
 		fs.PrintDefaults()
 	}
 	_ = fs.Parse(args)
@@ -132,4 +136,33 @@ func runScaffoldFFI(args []string) {
 		os.Exit(scaffoldExitCode(d))
 	}
 	fmt.Printf("Wrote FFI bindings %s\n", path)
+}
+
+func runScaffoldPolyglot(args []string) {
+	fs := flag.NewFlagSet("scaffold polyglot", flag.ExitOnError)
+	var out, primary, secondary, protocol string
+	fs.StringVar(&out, "out", ".", "directory to write the generated polyglot rail into")
+	fs.StringVar(&primary, "primary", "osty", "primary language (osty, go, rust, python, javascript, typescript)")
+	fs.StringVar(&secondary, "secondary", "rust", "secondary language (osty, go, rust, python, javascript, typescript)")
+	fs.StringVar(&protocol, "protocol", "json", "boundary protocol (json, json-lines, stdio-text, files, command-args)")
+	fs.Usage = func() {
+		fmt.Fprintln(os.Stderr, "usage: osty scaffold polyglot [--primary LANG] [--secondary LANG] [--protocol PROTOCOL] [--out DIR] NAME")
+		fs.PrintDefaults()
+	}
+	_ = fs.Parse(args)
+	if fs.NArg() != 1 {
+		fs.Usage()
+		os.Exit(2)
+	}
+	path, d := scaffold.WritePolyglot(out, scaffold.PolyglotOptions{
+		Name:      fs.Arg(0),
+		Primary:   primary,
+		Secondary: secondary,
+		Protocol:  protocol,
+	})
+	if d != nil {
+		printScaffoldDiag(d)
+		os.Exit(scaffoldExitCode(d))
+	}
+	fmt.Printf("Wrote polyglot rail %s\n", path)
 }

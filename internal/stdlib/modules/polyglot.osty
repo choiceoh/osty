@@ -1,0 +1,2319 @@
+// std.polyglot - helpers for two-language programs.
+//
+// Osty already exposes `std.os.exec` for host process execution. This module
+// adds a typed layer for the common polyglot case: an Osty project intentionally
+// leans on a second mature language for runtime, ecosystem, FFI, or performance
+// depth while keeping the boundary explicit, testable, and easy to audit.
+
+use std.env as hostenv
+use std.error
+use std.fs
+use std.os
+use std.strings
+
+pub enum Language {
+    Osty,
+    Go,
+    Python,
+    JavaScript,
+    TypeScript,
+    Rust,
+    C,
+    Cpp,
+    Shell,
+    Custom(String),
+    Unknown,
+
+    pub fn name(self) -> String {
+        languageName(self)
+    }
+
+    pub fn extension(self) -> String {
+        sourceExtension(self)
+    }
+
+    pub fn runtime(self) -> String {
+        runtimeCommand(self)
+    }
+}
+
+pub enum BoundaryProtocol {
+    Json,
+    JsonLines,
+    StdioText,
+    Files,
+    CommandArgs,
+
+    pub fn name(self) -> String {
+        protocolName(self)
+    }
+}
+
+pub enum LinkMode {
+    Process,
+    CAbi,
+    StaticLibrary,
+    DynamicLibrary,
+    GeneratedSource,
+    SharedFiles,
+
+    pub fn name(self) -> String {
+        linkModeName(self)
+    }
+}
+
+pub enum ComponentKind {
+    Gateway,
+    Core,
+    Cli,
+    Worker,
+    NativeLibrary,
+    Tooling,
+    Tests,
+
+    pub fn name(self) -> String {
+        componentKindName(self)
+    }
+}
+
+pub enum ContractStability {
+    Experimental,
+    Draft,
+    Stable,
+    Frozen,
+
+    pub fn name(self) -> String {
+        stabilityName(self)
+    }
+}
+
+pub enum CheckKind {
+    ToolchainCheck,
+    BuildCheck,
+    TestCheck,
+    ContractCheck,
+    ArtifactCheck,
+    SmokeCheck,
+
+    pub fn name(self) -> String {
+        checkKindName(self)
+    }
+}
+
+pub enum CheckStatus {
+    Pass,
+    Warn,
+    Fail,
+    Skip,
+
+    pub fn name(self) -> String {
+        checkStatusName(self)
+    }
+}
+
+pub struct RetryPolicy {
+    pub attempts: Int,
+    pub backoffMs: Int,
+    pub jitterMs: Int = 0,
+}
+
+pub struct ExecutionPolicy {
+    pub failFast: Bool = true,
+    pub isolateEnv: Bool = true,
+    pub requireContracts: Bool = true,
+    pub requireTests: Bool = true,
+    pub requireArtifacts: Bool = false,
+    pub defaultTimeoutMs: Int = 30000,
+    pub maxPayloadBytes: Int = 1048576,
+}
+
+pub struct BoundaryContract {
+    pub name: String,
+    pub version: String,
+    pub stability: ContractStability,
+    pub protocol: BoundaryProtocol,
+    pub linkMode: LinkMode,
+    pub requestSchema: String = "",
+    pub responseSchema: String = "",
+    pub errorSchema: String = "",
+    pub schemaHash: String = "",
+    pub invariants: List<String> = [],
+    pub requiredEnv: List<String> = [],
+    pub secretEnv: List<String> = [],
+    pub artifacts: List<String> = [],
+    pub timeoutMs: Int = 30000,
+    pub maxPayloadBytes: Int = 1048576,
+    pub retry: RetryPolicy? = None,
+
+    pub fn id(self) -> String {
+        "{self.name}@{self.version}"
+    }
+
+    pub fn stable(self) -> Bool {
+        match self.stability {
+            Stable | Frozen -> true,
+            _               -> false,
+        }
+    }
+}
+
+pub struct ExecPlan {
+    pub language: Language,
+    pub command: String,
+    pub args: List<String>,
+    pub env: Map<String, String> = {:},
+    pub cwd: String = "",
+    pub allowNonZero: Bool = true,
+    pub label: String = "",
+
+    pub fn display(self) -> String {
+        commandLine(self)
+    }
+
+    pub fn checked(self) -> ExecPlan {
+        checked(self)
+    }
+
+    pub fn withArg(self, arg: String) -> ExecPlan {
+        withArg(self, arg)
+    }
+
+    pub fn withEnv(self, name: String, value: String) -> Result<ExecPlan, Error> {
+        withEnv(self, name, value)
+    }
+
+    pub fn withCwd(self, cwd: String) -> ExecPlan {
+        withCwd(self, cwd)
+    }
+}
+
+pub struct Boundary {
+    pub host: Language,
+    pub guest: Language,
+    pub protocol: BoundaryProtocol,
+    pub linkMode: LinkMode,
+    pub entrypoint: String,
+    pub plan: ExecPlan,
+    pub contract: String = "",
+    pub contractSpec: BoundaryContract? = None,
+
+    pub fn id(self) -> String {
+        boundaryId(self)
+    }
+
+    pub fn display(self) -> String {
+        "{self.id()} :: {self.plan.display()}"
+    }
+}
+
+pub struct PolyglotCheck {
+    pub name: String,
+    pub kind: CheckKind,
+    pub plan: ExecPlan?,
+    pub required: Bool = true,
+    pub component: String = "",
+    pub boundary: String = "",
+    pub hint: String = "",
+    pub timeoutMs: Int = 0,
+    pub maxPayloadBytes: Int = 0,
+    pub retry: RetryPolicy? = None,
+}
+
+pub struct CheckRun {
+    pub name: String,
+    pub kind: CheckKind,
+    pub status: CheckStatus,
+    pub exitCode: Int,
+    pub stdout: String = "",
+    pub stderr: String = "",
+    pub hint: String = "",
+}
+
+pub struct DoctorRunReport {
+    pub ok: Bool,
+    pub score: Int,
+    pub doctor: DoctorReport,
+    pub runs: List<CheckRun>,
+
+    pub fn render(self) -> String {
+        renderDoctorRun(self)
+    }
+}
+
+pub struct DoctorReport {
+    pub ok: Bool,
+    pub score: Int,
+    pub errors: List<String>,
+    pub warnings: List<String>,
+    pub checks: List<PolyglotCheck>,
+
+    pub fn render(self) -> String {
+        renderDoctor(self)
+    }
+}
+
+pub struct Component {
+    pub name: String,
+    pub language: Language,
+    pub kind: ComponentKind,
+    pub root: String,
+    pub build: ExecPlan?,
+    pub test: ExecPlan?,
+    pub artifacts: List<String> = [],
+    pub responsibilities: List<String> = [],
+
+    pub fn display(self) -> String {
+        "{self.name} [{componentKindName(self.kind)}:{languageName(self.language)}] {self.root}"
+    }
+
+    pub fn hasBuild(self) -> Bool {
+        self.build.isSome()
+    }
+
+    pub fn hasTest(self) -> Bool {
+        self.test.isSome()
+    }
+}
+
+pub struct Workspace {
+    pub primary: Language,
+    pub secondary: Language,
+    pub components: List<Component>,
+    pub boundaries: List<Boundary>,
+    pub contracts: List<BoundaryContract> = [],
+    pub checks: List<PolyglotCheck> = [],
+    pub policy: ExecutionPolicy? = None,
+    pub sharedProtocol: String = "",
+
+    pub fn isTwoLanguage(self) -> Bool {
+        isTwoLanguage(self.primary, self.secondary)
+    }
+
+    pub fn describe(self) -> String {
+        workspaceSummary(self)
+    }
+}
+
+struct EnvBackup {
+    name: String,
+    value: String?,
+}
+
+pub fn languageName(language: Language) -> String {
+    match language {
+        Osty        -> "osty",
+        Go          -> "go",
+        Python      -> "python",
+        JavaScript  -> "javascript",
+        TypeScript  -> "typescript",
+        Rust        -> "rust",
+        C           -> "c",
+        Cpp         -> "cpp",
+        Shell       -> "shell",
+        Custom(name) -> strings.toLower(strings.trimSpace(name)),
+        Unknown     -> "unknown",
+    }
+}
+
+pub fn parseLanguage(name: String) -> Language {
+    let lower = strings.toLower(strings.trimSpace(name))
+    if lower == "osty" {
+        return Osty
+    }
+    if lower == "go" || lower == "golang" {
+        return Go
+    }
+    if lower == "py" || lower == "python" || lower == "python3" {
+        return Python
+    }
+    if lower == "js" || lower == "javascript" || lower == "node" || lower == "nodejs" {
+        return JavaScript
+    }
+    if lower == "ts" || lower == "typescript" || lower == "tsx" {
+        return TypeScript
+    }
+    if lower == "rs" || lower == "rust" {
+        return Rust
+    }
+    if lower == "c" {
+        return C
+    }
+    if lower == "cc" || lower == "cpp" || lower == "c++" || lower == "cxx" {
+        return Cpp
+    }
+    if lower == "sh" || lower == "shell" || lower == "bash" {
+        return Shell
+    }
+    if lower.isEmpty() || lower == "unknown" {
+        return Unknown
+    }
+    Custom(lower)
+}
+
+pub fn sourceExtension(language: Language) -> String {
+    match language {
+        Osty       -> ".osty",
+        Go         -> ".go",
+        Python     -> ".py",
+        JavaScript -> ".js",
+        TypeScript -> ".ts",
+        Rust       -> ".rs",
+        C          -> ".c",
+        Cpp        -> ".cpp",
+        Shell      -> ".sh",
+        Custom(_)  -> "",
+        Unknown    -> "",
+    }
+}
+
+pub fn runtimeCommand(language: Language) -> String {
+    match language {
+        Osty       -> "osty",
+        Go         -> "go",
+        Python     -> "python3",
+        JavaScript -> "node",
+        TypeScript -> "tsx",
+        Rust       -> "",
+        C          -> "",
+        Cpp        -> "",
+        Shell      -> "sh",
+        Custom(name) -> name,
+        Unknown    -> "",
+    }
+}
+
+pub fn compilerCommand(language: Language) -> String {
+    match language {
+        Osty       -> "osty",
+        Go         -> "go",
+        TypeScript -> "tsc",
+        Rust       -> "rustc",
+        C          -> "cc",
+        Cpp        -> "c++",
+        _          -> "",
+    }
+}
+
+pub fn languageFromExtension(ext: String) -> Language? {
+    let lower = strings.toLower(strings.trimSpace(ext))
+    let clean = if strings.startsWith(lower, ".") {
+        strings.slice(lower, 1, lower.len())
+    } else {
+        lower
+    }
+    match clean {
+        "osty" -> Some(Osty),
+        "go"   -> Some(Go),
+        "py"   -> Some(Python),
+        "js" | "mjs" | "cjs" -> Some(JavaScript),
+        "ts" | "tsx" -> Some(TypeScript),
+        "rs" -> Some(Rust),
+        "c" | "h" -> Some(C),
+        "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" -> Some(Cpp),
+        "sh" | "bash" -> Some(Shell),
+        _ -> None,
+    }
+}
+
+pub fn languageFromPath(path: String) -> Language? {
+    languageFromExtension(extensionOf(path))
+}
+
+pub fn sameLanguage(a: Language, b: Language) -> Bool {
+    languageName(a) == languageName(b)
+}
+
+pub fn isTwoLanguage(host: Language, guest: Language) -> Bool {
+    !sameLanguage(host, guest) && languageName(host) != "unknown" && languageName(guest) != "unknown"
+}
+
+pub fn protocolName(protocol: BoundaryProtocol) -> String {
+    match protocol {
+        Json        -> "json",
+        JsonLines   -> "json-lines",
+        StdioText   -> "stdio-text",
+        Files       -> "files",
+        CommandArgs -> "command-args",
+    }
+}
+
+pub fn linkModeName(mode: LinkMode) -> String {
+    match mode {
+        Process         -> "process",
+        CAbi            -> "c-abi",
+        StaticLibrary   -> "static-library",
+        DynamicLibrary  -> "dynamic-library",
+        GeneratedSource -> "generated-source",
+        SharedFiles     -> "shared-files",
+    }
+}
+
+pub fn componentKindName(kind: ComponentKind) -> String {
+    match kind {
+        Gateway       -> "gateway",
+        Core          -> "core",
+        Cli           -> "cli",
+        Worker        -> "worker",
+        NativeLibrary -> "native-library",
+        Tooling       -> "tooling",
+        Tests         -> "tests",
+    }
+}
+
+pub fn stabilityName(stability: ContractStability) -> String {
+    match stability {
+        Experimental -> "experimental",
+        Draft        -> "draft",
+        Stable       -> "stable",
+        Frozen       -> "frozen",
+    }
+}
+
+pub fn checkKindName(kind: CheckKind) -> String {
+    match kind {
+        ToolchainCheck -> "toolchain",
+        BuildCheck     -> "build",
+        TestCheck      -> "test",
+        ContractCheck  -> "contract",
+        ArtifactCheck  -> "artifact",
+        SmokeCheck     -> "smoke",
+    }
+}
+
+pub fn checkStatusName(status: CheckStatus) -> String {
+    match status {
+        Pass -> "pass",
+        Warn -> "warn",
+        Fail -> "fail",
+        Skip -> "skip",
+    }
+}
+
+pub fn retryPolicy(attempts: Int, backoffMs: Int, jitterMs: Int) -> Result<RetryPolicy, Error> {
+    if attempts < 1 {
+        return Err(error.new("polyglot: retry attempts must be positive"))
+    }
+    if backoffMs < 0 || jitterMs < 0 {
+        return Err(error.new("polyglot: retry delays must not be negative"))
+    }
+    Ok(RetryPolicy {
+        attempts: attempts,
+        backoffMs: backoffMs,
+        jitterMs: jitterMs,
+    })
+}
+
+pub fn strictPolicy() -> ExecutionPolicy {
+    ExecutionPolicy {
+        failFast: true,
+        isolateEnv: true,
+        requireContracts: true,
+        requireTests: true,
+        requireArtifacts: true,
+        defaultTimeoutMs: 30000,
+        maxPayloadBytes: 1048576,
+    }
+}
+
+pub fn relaxedPolicy() -> ExecutionPolicy {
+    ExecutionPolicy {
+        failFast: false,
+        isolateEnv: true,
+        requireContracts: false,
+        requireTests: false,
+        requireArtifacts: false,
+        defaultTimeoutMs: 30000,
+        maxPayloadBytes: 1048576,
+    }
+}
+
+pub fn command(command: String, args: List<String>) -> ExecPlan {
+    ExecPlan {
+        language: Unknown,
+        command: command,
+        args: args,
+        env: {:},
+        cwd: "",
+        allowNonZero: true,
+        label: "",
+    }
+}
+
+pub fn command0(command: String) -> ExecPlan {
+    command(command, [])
+}
+
+pub fn scriptPlan(language: Language, entrypoint: String, args: List<String>) -> Result<ExecPlan, Error> {
+    let cmd = runtimeCommand(language)
+    if cmd.isEmpty() {
+        return Err(error.new("polyglot: no script runtime for {languageName(language)}"))
+    }
+    let cleanEntry = strings.trimSpace(entrypoint)
+    if cleanEntry.isEmpty() {
+        return Err(error.new("polyglot: entrypoint is empty"))
+    }
+
+    match language {
+        Osty -> Ok(ExecPlan {
+            language: language,
+            command: cmd,
+            args: ["run", "--"].concat(args),
+            env: {:},
+            cwd: cleanEntry,
+            allowNonZero: true,
+            label: "osty project",
+        }),
+        Go -> Ok(ExecPlan {
+            language: language,
+            command: cmd,
+            args: ["run", cleanEntry].concat(args),
+            env: {:},
+            cwd: "",
+            allowNonZero: true,
+            label: cleanEntry,
+        }),
+        Shell -> Ok(ExecPlan {
+            language: language,
+            command: cmd,
+            args: [cleanEntry].concat(args),
+            env: {:},
+            cwd: "",
+            allowNonZero: true,
+            label: cleanEntry,
+        }),
+        _ -> Ok(ExecPlan {
+            language: language,
+            command: cmd,
+            args: [cleanEntry].concat(args),
+            env: {:},
+            cwd: "",
+            allowNonZero: true,
+            label: cleanEntry,
+        }),
+    }
+}
+
+pub fn scriptPlan0(language: Language, entrypoint: String) -> Result<ExecPlan, Error> {
+    scriptPlan(language, entrypoint, [])
+}
+
+pub fn compilePlan(language: Language, source: String, output: String, extraArgs: List<String>) -> Result<ExecPlan, Error> {
+    let cmd = compilerCommand(language)
+    if cmd.isEmpty() {
+        return Err(error.new("polyglot: no compiler command for {languageName(language)}"))
+    }
+    let cleanSource = strings.trimSpace(source)
+    let cleanOutput = strings.trimSpace(output)
+    if cleanSource.isEmpty() {
+        return Err(error.new("polyglot: source path is empty"))
+    }
+    if cleanOutput.isEmpty() {
+        return Err(error.new("polyglot: output path is empty"))
+    }
+
+    let args = match language {
+        Osty       -> ["build", cleanSource, "-o", cleanOutput].concat(extraArgs),
+        Go         -> ["build", "-o", cleanOutput].concat(extraArgs).appended(cleanSource),
+        TypeScript -> ["--outDir", cleanOutput].concat(extraArgs).appended(cleanSource),
+        Rust       -> extraArgs.concat(["-o", cleanOutput, cleanSource]),
+        C          -> extraArgs.concat(["-o", cleanOutput, cleanSource]),
+        Cpp        -> extraArgs.concat(["-o", cleanOutput, cleanSource]),
+        _          -> extraArgs.concat([cleanSource]),
+    }
+
+    Ok(ExecPlan {
+        language: language,
+        command: cmd,
+        args: args,
+        env: {:},
+        cwd: "",
+        allowNonZero: true,
+        label: cleanSource,
+    })
+}
+
+pub fn compilePlan0(language: Language, source: String, output: String) -> Result<ExecPlan, Error> {
+    compilePlan(language, source, output, [])
+}
+
+pub fn testPlan(language: Language, root: String, extraArgs: List<String>) -> Result<ExecPlan, Error> {
+    let cleanRoot = strings.trimSpace(root)
+    if cleanRoot.isEmpty() {
+        return Err(error.new("polyglot: test root is empty"))
+    }
+    match language {
+        Osty -> Ok(checked(ExecPlan {
+            language: language,
+            command: "osty",
+            args: ["test"].concat(extraArgs),
+            env: {:},
+            cwd: cleanRoot,
+            allowNonZero: true,
+            label: "osty test",
+        })),
+        Go -> Ok(checked(ExecPlan {
+            language: language,
+            command: "go",
+            args: ["test"].concat(extraArgs),
+            env: {:},
+            cwd: cleanRoot,
+            allowNonZero: true,
+            label: "go test",
+        })),
+        Rust -> Ok(checked(ExecPlan {
+            language: language,
+            command: "cargo",
+            args: ["test"].concat(extraArgs),
+            env: {:},
+            cwd: cleanRoot,
+            allowNonZero: true,
+            label: "cargo test",
+        })),
+        Python -> Ok(checked(ExecPlan {
+            language: language,
+            command: "python3",
+            args: ["-m", "pytest"].concat(extraArgs),
+            env: {:},
+            cwd: cleanRoot,
+            allowNonZero: true,
+            label: "pytest",
+        })),
+        JavaScript | TypeScript -> Ok(checked(ExecPlan {
+            language: language,
+            command: "npm",
+            args: ["test"].concat(extraArgs),
+            env: {:},
+            cwd: cleanRoot,
+            allowNonZero: true,
+            label: "npm test",
+        })),
+        _ -> Err(error.new("polyglot: no default test plan for {languageName(language)}")),
+    }
+}
+
+pub fn testPlan0(language: Language, root: String) -> Result<ExecPlan, Error> {
+    testPlan(language, root, [])
+}
+
+pub fn buildPlan(language: Language, root: String, extraArgs: List<String>) -> Result<ExecPlan, Error> {
+    let cleanRoot = strings.trimSpace(root)
+    if cleanRoot.isEmpty() {
+        return Err(error.new("polyglot: build root is empty"))
+    }
+    match language {
+        Osty -> Ok(checked(ExecPlan {
+            language: language,
+            command: "osty",
+            args: ["build"].concat(extraArgs),
+            env: {:},
+            cwd: cleanRoot,
+            allowNonZero: true,
+            label: "osty build",
+        })),
+        Go -> Ok(checked(ExecPlan {
+            language: language,
+            command: "go",
+            args: ["build"].concat(extraArgs),
+            env: {:},
+            cwd: cleanRoot,
+            allowNonZero: true,
+            label: "go build",
+        })),
+        Rust -> Ok(checked(ExecPlan {
+            language: language,
+            command: "cargo",
+            args: ["build"].concat(extraArgs),
+            env: {:},
+            cwd: cleanRoot,
+            allowNonZero: true,
+            label: "cargo build",
+        })),
+        Python -> Ok(checked(ExecPlan {
+            language: language,
+            command: "python3",
+            args: ["-m", "compileall", "."].concat(extraArgs),
+            env: {:},
+            cwd: cleanRoot,
+            allowNonZero: true,
+            label: "python compileall",
+        })),
+        JavaScript | TypeScript -> Ok(checked(ExecPlan {
+            language: language,
+            command: "npm",
+            args: ["run", "build"].concat(extraArgs),
+            env: {:},
+            cwd: cleanRoot,
+            allowNonZero: true,
+            label: "npm build",
+        })),
+        _ -> Err(error.new("polyglot: no default build plan for {languageName(language)}")),
+    }
+}
+
+pub fn buildPlan0(language: Language, root: String) -> Result<ExecPlan, Error> {
+    buildPlan(language, root, [])
+}
+
+pub fn contract(name: String, version: String, protocol: BoundaryProtocol, mode: LinkMode) -> Result<BoundaryContract, Error> {
+    let c = BoundaryContract {
+        name: strings.trimSpace(name),
+        version: strings.trimSpace(version),
+        stability: Draft,
+        protocol: protocol,
+        linkMode: mode,
+        requestSchema: "",
+        responseSchema: "",
+        errorSchema: "",
+        schemaHash: "",
+        invariants: [],
+        requiredEnv: [],
+        secretEnv: [],
+        artifacts: [],
+        timeoutMs: 30000,
+        maxPayloadBytes: 1048576,
+        retry: None,
+    }
+    validateContract(c)?
+    Ok(c)
+}
+
+pub fn stableContract(name: String, version: String, protocol: BoundaryProtocol, mode: LinkMode) -> Result<BoundaryContract, Error> {
+    contractWithStability(contract(name, version, protocol, mode)?, Stable)
+}
+
+pub fn frozenContract(name: String, version: String, protocol: BoundaryProtocol, mode: LinkMode) -> Result<BoundaryContract, Error> {
+    contractWithStability(contract(name, version, protocol, mode)?, Frozen)
+}
+
+pub fn contractWithStability(c: BoundaryContract, stability: ContractStability) -> Result<BoundaryContract, Error> {
+    let out = BoundaryContract {
+        name: c.name,
+        version: c.version,
+        stability: stability,
+        protocol: c.protocol,
+        linkMode: c.linkMode,
+        requestSchema: c.requestSchema,
+        responseSchema: c.responseSchema,
+        errorSchema: c.errorSchema,
+        schemaHash: c.schemaHash,
+        invariants: c.invariants,
+        requiredEnv: c.requiredEnv,
+        secretEnv: c.secretEnv,
+        artifacts: c.artifacts,
+        timeoutMs: c.timeoutMs,
+        maxPayloadBytes: c.maxPayloadBytes,
+        retry: c.retry,
+    }
+    validateContract(out)?
+    Ok(out)
+}
+
+pub fn contractSchemas(c: BoundaryContract, requestSchema: String, responseSchema: String, errorSchema: String) -> Result<BoundaryContract, Error> {
+    let out = BoundaryContract {
+        name: c.name,
+        version: c.version,
+        stability: c.stability,
+        protocol: c.protocol,
+        linkMode: c.linkMode,
+        requestSchema: requestSchema,
+        responseSchema: responseSchema,
+        errorSchema: errorSchema,
+        schemaHash: c.schemaHash,
+        invariants: c.invariants,
+        requiredEnv: c.requiredEnv,
+        secretEnv: c.secretEnv,
+        artifacts: c.artifacts,
+        timeoutMs: c.timeoutMs,
+        maxPayloadBytes: c.maxPayloadBytes,
+        retry: c.retry,
+    }
+    validateContract(out)?
+    Ok(out)
+}
+
+pub fn contractSchemaHash(c: BoundaryContract, schemaHash: String) -> Result<BoundaryContract, Error> {
+    let out = BoundaryContract {
+        name: c.name,
+        version: c.version,
+        stability: c.stability,
+        protocol: c.protocol,
+        linkMode: c.linkMode,
+        requestSchema: c.requestSchema,
+        responseSchema: c.responseSchema,
+        errorSchema: c.errorSchema,
+        schemaHash: strings.trimSpace(schemaHash),
+        invariants: c.invariants,
+        requiredEnv: c.requiredEnv,
+        secretEnv: c.secretEnv,
+        artifacts: c.artifacts,
+        timeoutMs: c.timeoutMs,
+        maxPayloadBytes: c.maxPayloadBytes,
+        retry: c.retry,
+    }
+    validateContract(out)?
+    Ok(out)
+}
+
+pub fn contractInvariant(c: BoundaryContract, invariant: String) -> BoundaryContract {
+    BoundaryContract {
+        name: c.name,
+        version: c.version,
+        stability: c.stability,
+        protocol: c.protocol,
+        linkMode: c.linkMode,
+        requestSchema: c.requestSchema,
+        responseSchema: c.responseSchema,
+        errorSchema: c.errorSchema,
+        schemaHash: c.schemaHash,
+        invariants: c.invariants.appended(invariant),
+        requiredEnv: c.requiredEnv,
+        secretEnv: c.secretEnv,
+        artifacts: c.artifacts,
+        timeoutMs: c.timeoutMs,
+        maxPayloadBytes: c.maxPayloadBytes,
+        retry: c.retry,
+    }
+}
+
+pub fn contractRequiredEnv(c: BoundaryContract, name: String) -> Result<BoundaryContract, Error> {
+    validateEnvName(name)?
+    Ok(BoundaryContract {
+        name: c.name,
+        version: c.version,
+        stability: c.stability,
+        protocol: c.protocol,
+        linkMode: c.linkMode,
+        requestSchema: c.requestSchema,
+        responseSchema: c.responseSchema,
+        errorSchema: c.errorSchema,
+        schemaHash: c.schemaHash,
+        invariants: c.invariants,
+        requiredEnv: c.requiredEnv.appended(name),
+        secretEnv: c.secretEnv,
+        artifacts: c.artifacts,
+        timeoutMs: c.timeoutMs,
+        maxPayloadBytes: c.maxPayloadBytes,
+        retry: c.retry,
+    })
+}
+
+pub fn contractSecretEnv(c: BoundaryContract, name: String) -> Result<BoundaryContract, Error> {
+    validateEnvName(name)?
+    Ok(BoundaryContract {
+        name: c.name,
+        version: c.version,
+        stability: c.stability,
+        protocol: c.protocol,
+        linkMode: c.linkMode,
+        requestSchema: c.requestSchema,
+        responseSchema: c.responseSchema,
+        errorSchema: c.errorSchema,
+        schemaHash: c.schemaHash,
+        invariants: c.invariants,
+        requiredEnv: c.requiredEnv,
+        secretEnv: c.secretEnv.appended(name),
+        artifacts: c.artifacts,
+        timeoutMs: c.timeoutMs,
+        maxPayloadBytes: c.maxPayloadBytes,
+        retry: c.retry,
+    })
+}
+
+pub fn contractArtifact(c: BoundaryContract, path: String) -> BoundaryContract {
+    BoundaryContract {
+        name: c.name,
+        version: c.version,
+        stability: c.stability,
+        protocol: c.protocol,
+        linkMode: c.linkMode,
+        requestSchema: c.requestSchema,
+        responseSchema: c.responseSchema,
+        errorSchema: c.errorSchema,
+        schemaHash: c.schemaHash,
+        invariants: c.invariants,
+        requiredEnv: c.requiredEnv,
+        secretEnv: c.secretEnv,
+        artifacts: c.artifacts.appended(path),
+        timeoutMs: c.timeoutMs,
+        maxPayloadBytes: c.maxPayloadBytes,
+        retry: c.retry,
+    }
+}
+
+pub fn contractLimits(c: BoundaryContract, timeoutMs: Int, maxPayloadBytes: Int) -> Result<BoundaryContract, Error> {
+    let out = BoundaryContract {
+        name: c.name,
+        version: c.version,
+        stability: c.stability,
+        protocol: c.protocol,
+        linkMode: c.linkMode,
+        requestSchema: c.requestSchema,
+        responseSchema: c.responseSchema,
+        errorSchema: c.errorSchema,
+        schemaHash: c.schemaHash,
+        invariants: c.invariants,
+        requiredEnv: c.requiredEnv,
+        secretEnv: c.secretEnv,
+        artifacts: c.artifacts,
+        timeoutMs: timeoutMs,
+        maxPayloadBytes: maxPayloadBytes,
+        retry: c.retry,
+    }
+    validateContract(out)?
+    Ok(out)
+}
+
+pub fn contractRetry(c: BoundaryContract, retry: RetryPolicy) -> BoundaryContract {
+    BoundaryContract {
+        name: c.name,
+        version: c.version,
+        stability: c.stability,
+        protocol: c.protocol,
+        linkMode: c.linkMode,
+        requestSchema: c.requestSchema,
+        responseSchema: c.responseSchema,
+        errorSchema: c.errorSchema,
+        schemaHash: c.schemaHash,
+        invariants: c.invariants,
+        requiredEnv: c.requiredEnv,
+        secretEnv: c.secretEnv,
+        artifacts: c.artifacts,
+        timeoutMs: c.timeoutMs,
+        maxPayloadBytes: c.maxPayloadBytes,
+        retry: Some(retry),
+    }
+}
+
+pub fn majorVersion(version: String) -> Int? {
+    let parts = strings.split(strings.trimSpace(version), ".")
+    if parts.len() == 0 {
+        return None
+    }
+    match parts[0].toInt() {
+        Ok(n) -> if n >= 0 { Some(n) } else { None },
+        Err(_) -> None,
+    }
+}
+
+pub fn compatibleMajor(expected: BoundaryContract, actual: BoundaryContract) -> Bool {
+    expected.name == actual.name && majorVersion(expected.version) == majorVersion(actual.version)
+}
+
+pub fn contractSummary(c: BoundaryContract) -> String {
+    let mut parts: List<String> = [
+        c.id(),
+        protocolName(c.protocol),
+        linkModeName(c.linkMode),
+        stabilityName(c.stability),
+    ]
+    if !c.schemaHash.isEmpty() {
+        parts.push("schema={c.schemaHash}")
+    }
+    if c.invariants.len() > 0 {
+        parts.push("invariants={c.invariants.len()}")
+    }
+    if c.artifacts.len() > 0 {
+        parts.push("artifacts={c.artifacts.len()}")
+    }
+    strings.join(parts, " ")
+}
+
+pub fn contractFingerprint(c: BoundaryContract) -> String {
+    strings.join([
+        c.name,
+        c.version,
+        stabilityName(c.stability),
+        protocolName(c.protocol),
+        linkModeName(c.linkMode),
+        c.requestSchema,
+        c.responseSchema,
+        c.errorSchema,
+        c.schemaHash,
+    ], "|")
+}
+
+pub fn validateContract(c: BoundaryContract) -> Result<(), Error> {
+    if strings.trimSpace(c.name).isEmpty() {
+        return Err(error.new("polyglot: contract name is empty"))
+    }
+    if majorVersion(c.version).isNone() {
+        return Err(error.new("polyglot: contract version must start with a non-negative major version"))
+    }
+    if c.timeoutMs <= 0 {
+        return Err(error.new("polyglot: contract timeout must be positive"))
+    }
+    if c.maxPayloadBytes <= 0 {
+        return Err(error.new("polyglot: contract payload limit must be positive"))
+    }
+    if c.linkMode == CAbi && c.protocol == StdioText {
+        return Err(error.new("polyglot: C ABI boundaries need a structured protocol, not stdio text"))
+    }
+    for name in c.requiredEnv {
+        validateEnvName(name)?
+    }
+    for name in c.secretEnv {
+        validateEnvName(name)?
+    }
+    Ok(())
+}
+
+pub fn checked(plan: ExecPlan) -> ExecPlan {
+    ExecPlan {
+        language: plan.language,
+        command: plan.command,
+        args: plan.args,
+        env: plan.env,
+        cwd: plan.cwd,
+        allowNonZero: false,
+        label: plan.label,
+    }
+}
+
+pub fn unchecked(plan: ExecPlan) -> ExecPlan {
+    ExecPlan {
+        language: plan.language,
+        command: plan.command,
+        args: plan.args,
+        env: plan.env,
+        cwd: plan.cwd,
+        allowNonZero: true,
+        label: plan.label,
+    }
+}
+
+pub fn withArg(plan: ExecPlan, arg: String) -> ExecPlan {
+    ExecPlan {
+        language: plan.language,
+        command: plan.command,
+        args: plan.args.appended(arg),
+        env: plan.env,
+        cwd: plan.cwd,
+        allowNonZero: plan.allowNonZero,
+        label: plan.label,
+    }
+}
+
+pub fn withArgs(plan: ExecPlan, args: List<String>) -> ExecPlan {
+    ExecPlan {
+        language: plan.language,
+        command: plan.command,
+        args: plan.args.concat(args),
+        env: plan.env,
+        cwd: plan.cwd,
+        allowNonZero: plan.allowNonZero,
+        label: plan.label,
+    }
+}
+
+pub fn withEnv(plan: ExecPlan, name: String, value: String) -> Result<ExecPlan, Error> {
+    validateEnvName(name)?
+    let mut vars = plan.env
+    vars.insert(name, value)
+    Ok(ExecPlan {
+        language: plan.language,
+        command: plan.command,
+        args: plan.args,
+        env: vars,
+        cwd: plan.cwd,
+        allowNonZero: plan.allowNonZero,
+        label: plan.label,
+    })
+}
+
+pub fn withCwd(plan: ExecPlan, cwd: String) -> ExecPlan {
+    ExecPlan {
+        language: plan.language,
+        command: plan.command,
+        args: plan.args,
+        env: plan.env,
+        cwd: cwd,
+        allowNonZero: plan.allowNonZero,
+        label: plan.label,
+    }
+}
+
+pub fn boundary(host: Language, guest: Language, protocol: BoundaryProtocol, entrypoint: String) -> Result<Boundary, Error> {
+    if !isTwoLanguage(host, guest) {
+        return Err(error.new("polyglot: boundary requires two distinct known languages"))
+    }
+    let plan = scriptPlan(guest, entrypoint, [])?
+    Ok(Boundary {
+        host: host,
+        guest: guest,
+        protocol: protocol,
+        linkMode: Process,
+        entrypoint: entrypoint,
+        plan: plan,
+        contract: "",
+        contractSpec: None,
+    })
+}
+
+pub fn commandBoundary(host: Language, guest: Language, protocol: BoundaryProtocol, plan: ExecPlan) -> Result<Boundary, Error> {
+    linkedBoundary(host, guest, protocol, Process, plan)
+}
+
+pub fn linkedBoundary(host: Language, guest: Language, protocol: BoundaryProtocol, mode: LinkMode, plan: ExecPlan) -> Result<Boundary, Error> {
+    if !isTwoLanguage(host, guest) {
+        return Err(error.new("polyglot: boundary requires two distinct known languages"))
+    }
+    if strings.trimSpace(plan.command).isEmpty() {
+        return Err(error.new("polyglot: boundary command is empty"))
+    }
+    Ok(Boundary {
+        host: host,
+        guest: guest,
+        protocol: protocol,
+        linkMode: mode,
+        entrypoint: plan.label,
+        plan: plan,
+        contract: "",
+        contractSpec: None,
+    })
+}
+
+pub fn withContract(boundary: Boundary, contract: String) -> Boundary {
+    Boundary {
+        host: boundary.host,
+        guest: boundary.guest,
+        protocol: boundary.protocol,
+        linkMode: boundary.linkMode,
+        entrypoint: boundary.entrypoint,
+        plan: boundary.plan,
+        contract: contract,
+        contractSpec: boundary.contractSpec,
+    }
+}
+
+pub fn boundaryWithContractSpec(boundary: Boundary, contractSpec: BoundaryContract) -> Result<Boundary, Error> {
+    validateContract(contractSpec)?
+    if boundary.protocol != contractSpec.protocol {
+        return Err(error.new("polyglot: boundary protocol does not match contract"))
+    }
+    if boundary.linkMode != contractSpec.linkMode {
+        return Err(error.new("polyglot: boundary link mode does not match contract"))
+    }
+    Ok(Boundary {
+        host: boundary.host,
+        guest: boundary.guest,
+        protocol: boundary.protocol,
+        linkMode: boundary.linkMode,
+        entrypoint: boundary.entrypoint,
+        plan: boundary.plan,
+        contract: contractSpec.id(),
+        contractSpec: Some(contractSpec),
+    })
+}
+
+pub fn boundaryId(boundary: Boundary) -> String {
+    "{languageName(boundary.host)}->{languageName(boundary.guest)}:{protocolName(boundary.protocol)}:{linkModeName(boundary.linkMode)}"
+}
+
+pub fn component(name: String, language: Language, kind: ComponentKind, root: String) -> Result<Component, Error> {
+    let cleanName = strings.trimSpace(name)
+    let cleanRoot = strings.trimSpace(root)
+    if cleanName.isEmpty() {
+        return Err(error.new("polyglot: component name is empty"))
+    }
+    if cleanRoot.isEmpty() {
+        return Err(error.new("polyglot: component root is empty"))
+    }
+    Ok(Component {
+        name: cleanName,
+        language: language,
+        kind: kind,
+        root: cleanRoot,
+        build: None,
+        test: None,
+        artifacts: [],
+        responsibilities: [],
+    })
+}
+
+pub fn goGateway(name: String, root: String) -> Result<Component, Error> {
+    let mut c = component(name, Go, Gateway, root)?
+    c.build = Some(buildPlan(Go, c.root, ["./..."])?)
+    c.test = Some(testPlan(Go, c.root, ["./..."])?)
+    c.responsibilities = ["network/api boundary", "configuration", "orchestration", "observability"]
+    Ok(c)
+}
+
+pub fn rustCore(name: String, root: String) -> Result<Component, Error> {
+    let mut c = component(name, Rust, Core, root)?
+    c.build = Some(buildPlan(Rust, c.root, [])?)
+    c.test = Some(testPlan(Rust, c.root, ["--all-targets"])?)
+    c.responsibilities = ["performance core", "native algorithms", "memory-safe systems code"]
+    Ok(c)
+}
+
+pub fn pythonWorker(name: String, root: String) -> Result<Component, Error> {
+    let mut c = component(name, Python, Worker, root)?
+    c.build = Some(buildPlan(Python, c.root, [])?)
+    c.test = Some(testPlan(Python, c.root, [])?)
+    c.responsibilities = ["fast ecosystem integration", "data science or automation worker"]
+    Ok(c)
+}
+
+pub fn jsWorker(name: String, root: String) -> Result<Component, Error> {
+    let mut c = component(name, JavaScript, Worker, root)?
+    c.build = Some(buildPlan(JavaScript, c.root, [])?)
+    c.test = Some(testPlan(JavaScript, c.root, [])?)
+    c.responsibilities = ["web ecosystem integration", "tooling or UI worker"]
+    Ok(c)
+}
+
+pub fn nodeTooling(name: String, root: String) -> Result<Component, Error> {
+    let mut c = component(name, JavaScript, Tooling, root)?
+    c.build = Some(buildPlan(JavaScript, c.root, [])?)
+    c.test = Some(testPlan(JavaScript, c.root, [])?)
+    c.responsibilities = ["node ecosystem tooling", "code generation", "asset pipeline", "developer automation"]
+    Ok(c)
+}
+
+pub fn withBuild(component: Component, plan: ExecPlan) -> Component {
+    Component {
+        name: component.name,
+        language: component.language,
+        kind: component.kind,
+        root: component.root,
+        build: Some(plan),
+        test: component.test,
+        artifacts: component.artifacts,
+        responsibilities: component.responsibilities,
+    }
+}
+
+pub fn withTest(component: Component, plan: ExecPlan) -> Component {
+    Component {
+        name: component.name,
+        language: component.language,
+        kind: component.kind,
+        root: component.root,
+        build: component.build,
+        test: Some(plan),
+        artifacts: component.artifacts,
+        responsibilities: component.responsibilities,
+    }
+}
+
+pub fn withArtifact(component: Component, path: String) -> Component {
+    Component {
+        name: component.name,
+        language: component.language,
+        kind: component.kind,
+        root: component.root,
+        build: component.build,
+        test: component.test,
+        artifacts: component.artifacts.appended(path),
+        responsibilities: component.responsibilities,
+    }
+}
+
+pub fn withResponsibility(component: Component, text: String) -> Component {
+    Component {
+        name: component.name,
+        language: component.language,
+        kind: component.kind,
+        root: component.root,
+        build: component.build,
+        test: component.test,
+        artifacts: component.artifacts,
+        responsibilities: component.responsibilities.appended(text),
+    }
+}
+
+pub fn workspace(primary: Language, secondary: Language, components: List<Component>, boundaries: List<Boundary>) -> Result<Workspace, Error> {
+    if !isTwoLanguage(primary, secondary) {
+        return Err(error.new("polyglot: workspace requires two distinct known languages"))
+    }
+    let ws = Workspace {
+        primary: primary,
+        secondary: secondary,
+        components: components,
+        boundaries: boundaries,
+        contracts: [],
+        checks: [],
+        policy: None,
+        sharedProtocol: "",
+    }
+    validateWorkspace(ws)?
+    Ok(ws)
+}
+
+pub fn goRustWorkspace(goRoot: String, rustRoot: String) -> Result<Workspace, Error> {
+    let gateway = goGateway("go-gateway", goRoot)?
+    let core = rustCore("rust-core", rustRoot)?
+    let boundaryPlan = checked(ExecPlan {
+        language: Rust,
+        command: "cargo",
+        args: ["test", "--all-targets"],
+        env: {:},
+        cwd: rustRoot,
+        allowNonZero: true,
+        label: "rust-core contract",
+    })
+    let b = linkedBoundary(Go, Rust, Json, CAbi, boundaryPlan)?
+    let c = contractInvariant(stableContract("go-rust-core", "1.0.0", Json, CAbi)?, "Go owns orchestration; Rust owns the stable core contract.")
+    let linked = boundaryWithContractSpec(b, c)?
+    workspace(Go, Rust, [gateway, core], [withContract(linked, "Go owns orchestration; Rust owns the stable core contract.")])
+}
+
+pub fn goRustCAbi(goRoot: String, rustRoot: String) -> Result<Workspace, Error> {
+    goRustWorkspace(goRoot, rustRoot)
+}
+
+pub fn ostyWith(language: Language, ostyRoot: String, guestRoot: String, protocol: BoundaryProtocol) -> Result<Workspace, Error> {
+    if languageName(language) == "osty" {
+        return Err(error.new("polyglot: secondary language must not be Osty"))
+    }
+    let host = ostyHost(ostyRoot)?
+    let guest = guestComponent(language, guestRoot)?
+    let guestTest = testPlan(language, guestRoot, [])?
+    let b = linkedBoundary(Osty, language, protocol, Process, guestTest)?
+    let c = contractInvariant(stableContract("osty-{languageName(language)}", "1.0.0", protocol, Process)?, "Osty keeps application policy; the guest language supplies mature ecosystem or runtime depth.")
+    let linked = boundaryWithContractSpec(b, c)?
+    workspace(Osty, language, [host, guest], [withContract(linked, "Osty keeps application policy; the guest language supplies mature ecosystem or runtime depth.")])
+}
+
+pub fn ostyGoService(ostyRoot: String, goRoot: String, protocol: BoundaryProtocol) -> Result<Workspace, Error> {
+    let host = ostyHost(ostyRoot)?
+    let guest = goGateway("go-service", goRoot)?
+    let b = linkedBoundary(Osty, Go, protocol, Process, testPlan(Go, goRoot, ["./..."])?)?
+    let c = contractInvariant(stableContract("osty-go-service", "1.0.0", protocol, Process)?, "Osty owns product policy; Go owns the service gateway and production networking surface.")
+    let linked = boundaryWithContractSpec(b, c)?
+    workspace(Osty, Go, [host, guest], [withContract(linked, "Osty owns product policy; Go owns the service gateway and production networking surface.")])
+}
+
+pub fn ostyRustCore(ostyRoot: String, rustRoot: String) -> Result<Workspace, Error> {
+    let host = ostyHost(ostyRoot)?
+    let core = rustCore("rust-core", rustRoot)?
+    let boundaryPlan = checked(ExecPlan {
+        language: Rust,
+        command: "cargo",
+        args: ["test", "--all-targets"],
+        env: {:},
+        cwd: rustRoot,
+        allowNonZero: true,
+        label: "rust-core contract",
+    })
+    let b = linkedBoundary(Osty, Rust, Json, CAbi, boundaryPlan)?
+    let c = contractInvariant(stableContract("osty-rust-core", "1.0.0", Json, CAbi)?, "Osty owns application policy; Rust owns native performance and the stable C ABI contract.")
+    let linked = boundaryWithContractSpec(b, c)?
+    workspace(Osty, Rust, [host, core], [withContract(linked, "Osty owns application policy; Rust owns native performance and the stable C ABI contract.")])
+}
+
+pub fn ostyPythonWorker(ostyRoot: String, pythonRoot: String) -> Result<Workspace, Error> {
+    let host = ostyHost(ostyRoot)?
+    let worker = pythonWorker("python-worker", pythonRoot)?
+    let b = linkedBoundary(Osty, Python, JsonLines, Process, testPlan(Python, pythonRoot, [])?)?
+    let c = contractInvariant(stableContract("osty-python-worker", "1.0.0", JsonLines, Process)?, "Osty owns orchestration and policy; Python owns ecosystem-heavy worker code.")
+    let linked = boundaryWithContractSpec(b, c)?
+    workspace(Osty, Python, [host, worker], [withContract(linked, "Osty owns orchestration and policy; Python owns ecosystem-heavy worker code.")])
+}
+
+pub fn ostyNodeTooling(ostyRoot: String, nodeRoot: String) -> Result<Workspace, Error> {
+    let host = ostyHost(ostyRoot)?
+    let tooling = nodeTooling("node-tooling", nodeRoot)?
+    let b = linkedBoundary(Osty, JavaScript, Json, Process, testPlan(JavaScript, nodeRoot, [])?)?
+    let c = contractInvariant(stableContract("osty-node-tooling", "1.0.0", Json, Process)?, "Osty owns application behavior; Node owns mature package tooling and asset automation.")
+    let linked = boundaryWithContractSpec(b, c)?
+    workspace(Osty, JavaScript, [host, tooling], [withContract(linked, "Osty owns application behavior; Node owns mature package tooling and asset automation.")])
+}
+
+pub fn withSharedProtocol(ws: Workspace, text: String) -> Workspace {
+    Workspace {
+        primary: ws.primary,
+        secondary: ws.secondary,
+        components: ws.components,
+        boundaries: ws.boundaries,
+        contracts: ws.contracts,
+        checks: ws.checks,
+        policy: ws.policy,
+        sharedProtocol: text,
+    }
+}
+
+pub fn workspaceWithPolicy(ws: Workspace, policy: ExecutionPolicy) -> Workspace {
+    Workspace {
+        primary: ws.primary,
+        secondary: ws.secondary,
+        components: ws.components,
+        boundaries: ws.boundaries,
+        contracts: ws.contracts,
+        checks: ws.checks,
+        policy: Some(policy),
+        sharedProtocol: ws.sharedProtocol,
+    }
+}
+
+pub fn workspaceWithContract(ws: Workspace, contractSpec: BoundaryContract) -> Result<Workspace, Error> {
+    validateContract(contractSpec)?
+    Ok(Workspace {
+        primary: ws.primary,
+        secondary: ws.secondary,
+        components: ws.components,
+        boundaries: ws.boundaries,
+        contracts: ws.contracts.appended(contractSpec),
+        checks: ws.checks,
+        policy: ws.policy,
+        sharedProtocol: ws.sharedProtocol,
+    })
+}
+
+pub fn workspaceWithCheck(ws: Workspace, check: PolyglotCheck) -> Workspace {
+    Workspace {
+        primary: ws.primary,
+        secondary: ws.secondary,
+        components: ws.components,
+        boundaries: ws.boundaries,
+        contracts: ws.contracts,
+        checks: ws.checks.appended(check),
+        policy: ws.policy,
+        sharedProtocol: ws.sharedProtocol,
+    }
+}
+
+pub fn buildPlans(ws: Workspace) -> List<ExecPlan> {
+    let mut out: List<ExecPlan> = []
+    for c in ws.components {
+        match c.build {
+            Some(plan) -> out.push(plan),
+            None       -> {},
+        }
+    }
+    out
+}
+
+pub fn testPlans(ws: Workspace) -> List<ExecPlan> {
+    let mut out: List<ExecPlan> = []
+    for c in ws.components {
+        match c.test {
+            Some(plan) -> out.push(plan),
+            None       -> {},
+        }
+    }
+    for b in ws.boundaries {
+        out.push(b.plan)
+    }
+    out
+}
+
+pub fn checkPlan(name: String, kind: CheckKind, plan: ExecPlan, required: Bool, hint: String) -> PolyglotCheck {
+    PolyglotCheck {
+        name: name,
+        kind: kind,
+        plan: Some(plan),
+        required: required,
+        component: "",
+        boundary: "",
+        hint: hint,
+    }
+}
+
+pub fn checkLimits(check: PolyglotCheck, timeoutMs: Int, maxPayloadBytes: Int) -> Result<PolyglotCheck, Error> {
+    if timeoutMs < 0 {
+        return Err(error.new("polyglot: check timeout must not be negative"))
+    }
+    if maxPayloadBytes < 0 {
+        return Err(error.new("polyglot: check payload limit must not be negative"))
+    }
+    Ok(PolyglotCheck {
+        name: check.name,
+        kind: check.kind,
+        plan: check.plan,
+        required: check.required,
+        component: check.component,
+        boundary: check.boundary,
+        hint: check.hint,
+        timeoutMs: timeoutMs,
+        maxPayloadBytes: maxPayloadBytes,
+        retry: check.retry,
+    })
+}
+
+pub fn checkRetry(check: PolyglotCheck, retry: RetryPolicy) -> PolyglotCheck {
+    PolyglotCheck {
+        name: check.name,
+        kind: check.kind,
+        plan: check.plan,
+        required: check.required,
+        component: check.component,
+        boundary: check.boundary,
+        hint: check.hint,
+        timeoutMs: check.timeoutMs,
+        maxPayloadBytes: check.maxPayloadBytes,
+        retry: Some(retry),
+    }
+}
+
+pub fn componentBuildCheck(component: Component) -> PolyglotCheck? {
+    match component.build {
+        Some(plan) -> Some(PolyglotCheck {
+            name: "{component.name}:build",
+            kind: BuildCheck,
+            plan: Some(plan),
+            required: true,
+            component: component.name,
+            boundary: "",
+            hint: "build the component before trusting the cross-language boundary",
+        }),
+        None -> noneCheck(),
+    }
+}
+
+pub fn componentTestCheck(component: Component) -> PolyglotCheck? {
+    match component.test {
+        Some(plan) -> Some(PolyglotCheck {
+            name: "{component.name}:test",
+            kind: TestCheck,
+            plan: Some(plan),
+            required: true,
+            component: component.name,
+            boundary: "",
+            hint: "run the component tests before accepting the integration",
+        }),
+        None -> noneCheck(),
+    }
+}
+
+pub fn boundaryContractCheck(boundary: Boundary) -> PolyglotCheck {
+    let mut timeoutMs = 0
+    let mut maxPayloadBytes = 0
+    let mut retry: RetryPolicy? = None
+    match boundary.contractSpec {
+        Some(c) -> {
+            timeoutMs = c.timeoutMs
+            maxPayloadBytes = c.maxPayloadBytes
+            retry = c.retry
+        },
+        None -> {},
+    }
+    PolyglotCheck {
+        name: "{boundary.id()}:contract",
+        kind: ContractCheck,
+        plan: Some(boundary.plan),
+        required: true,
+        component: "",
+        boundary: boundary.id(),
+        hint: "exercise the boundary plan and keep request/response/error shapes stable",
+        timeoutMs: timeoutMs,
+        maxPayloadBytes: maxPayloadBytes,
+        retry: retry,
+    }
+}
+
+pub fn toolchainCheck(language: Language) -> Result<PolyglotCheck, Error> {
+    let cmd = toolchainCommand(language)
+    if cmd.isEmpty() {
+        return Err(error.new("polyglot: no toolchain command for {languageName(language)}"))
+    }
+    Ok(PolyglotCheck {
+        name: "{languageName(language)}:toolchain",
+        kind: ToolchainCheck,
+        plan: Some(ExecPlan {
+            language: language,
+            command: cmd,
+            args: ["--version"],
+            env: {:},
+            cwd: "",
+            allowNonZero: true,
+            label: "{languageName(language)} toolchain",
+        }),
+        required: true,
+        component: "",
+        boundary: "",
+        hint: "toolchain must be installed on the host that builds this workspace",
+    })
+}
+
+pub fn defaultChecks(ws: Workspace) -> List<PolyglotCheck> {
+    let mut checks: List<PolyglotCheck> = []
+    match toolchainCheck(ws.primary) {
+        Ok(check) -> checks.push(check),
+        Err(_)    -> {},
+    }
+    match toolchainCheck(ws.secondary) {
+        Ok(check) -> checks.push(check),
+        Err(_)    -> {},
+    }
+    for c in ws.components {
+        match componentBuildCheck(c) {
+            Some(check) -> checks.push(check),
+            None        -> {},
+        }
+        match componentTestCheck(c) {
+            Some(check) -> checks.push(check),
+            None        -> {},
+        }
+    }
+    for b in ws.boundaries {
+        checks.push(boundaryContractCheck(b))
+    }
+    checks.concat(ws.checks)
+}
+
+pub fn runCheck(check: PolyglotCheck) -> Result<CheckRun, Error> {
+    Ok(runCheckWithPolicy(check, relaxedPolicy()))
+}
+
+pub fn runCheckWithPolicy(check: PolyglotCheck, policy: ExecutionPolicy) -> CheckRun {
+    let attempts = checkAttempts(check)
+    let mut last = skipRun(check)
+    for i in 0..attempts {
+        let run = runCheckOnce(check, policy)
+        if checkRunOk(run) {
+            return run
+        }
+        last = run
+    }
+    last
+}
+
+pub fn runChecks(checks: List<PolyglotCheck>) -> Result<List<CheckRun>, Error> {
+    Ok(runChecksWithPolicy(checks, relaxedPolicy()))
+}
+
+pub fn runChecksWithPolicy(checks: List<PolyglotCheck>, policy: ExecutionPolicy) -> List<CheckRun> {
+    let mut out: List<CheckRun> = []
+    for check in checks {
+        let run = runCheckWithPolicy(check, policy)
+        out.push(run)
+        if policy.failFast && checkRunFailed(run) {
+            return out
+        }
+    }
+    out
+}
+
+pub fn checkRunOk(run: CheckRun) -> Bool {
+    run.status == Pass || run.status == Skip
+}
+
+pub fn checkRunFailed(run: CheckRun) -> Bool {
+    run.status == Fail
+}
+
+pub fn renderCheckRun(run: CheckRun) -> String {
+    let mut text = "{checkStatusName(run.status)} {checkKindName(run.kind)} {run.name}"
+    if run.exitCode != 0 {
+        text = "{text} exit={run.exitCode}"
+    }
+    if !run.hint.isEmpty() {
+        text = "{text} hint={run.hint}"
+    }
+    text
+}
+
+pub fn doctor(ws: Workspace) -> DoctorReport {
+    let policy = ws.policy ?? strictPolicy()
+    let mut errors: List<String> = []
+    let mut warnings: List<String> = []
+
+    match validateWorkspace(ws) {
+        Ok(_)    -> {},
+        Err(err) -> errors.push(err.message()),
+    }
+
+    for c in ws.components {
+        if !componentRootLooksPresent(c) {
+            warnings.push("component {c.name}: root does not look like {languageName(c.language)} ({c.root})")
+        }
+        if policy.requireTests && c.test.isNone() {
+            errors.push("component {c.name}: missing test plan")
+        }
+        if c.build.isNone() {
+            warnings.push("component {c.name}: missing build plan")
+        }
+    }
+
+    for b in ws.boundaries {
+        match b.contractSpec {
+            Some(c) -> {
+                match validateContract(c) {
+                    Ok(_)    -> {},
+                    Err(err) -> errors.push("boundary {b.id()}: {err.message()}"),
+                }
+                for err in contractAuditErrors(c, policy) {
+                    errors.push("boundary {b.id()}: {err}")
+                }
+                for warn in contractAuditWarnings(c, policy) {
+                    warnings.push("boundary {b.id()}: {warn}")
+                }
+            },
+            None -> {
+                if policy.requireContracts {
+                    errors.push("boundary {b.id()}: missing contract spec")
+                } else {
+                    warnings.push("boundary {b.id()}: missing contract spec")
+                }
+            },
+        }
+    }
+
+    for c in ws.contracts {
+        match validateContract(c) {
+            Ok(_)    -> {},
+            Err(err) -> errors.push("contract {c.id()}: {err.message()}"),
+        }
+        for err in contractAuditErrors(c, policy) {
+            errors.push("contract {c.id()}: {err}")
+        }
+        for warn in contractAuditWarnings(c, policy) {
+            warnings.push("contract {c.id()}: {warn}")
+        }
+        if policy.requireArtifacts && c.artifacts.len() == 0 {
+            warnings.push("contract {c.id()}: no artifact paths recorded")
+        }
+    }
+
+    let checks = defaultChecks(ws)
+    let score = doctorScore(errors, warnings)
+    DoctorReport {
+        ok: errors.len() == 0,
+        score: score,
+        errors: errors,
+        warnings: warnings,
+        checks: checks,
+    }
+}
+
+pub fn doctorRun(ws: Workspace) -> DoctorRunReport {
+    let policy = ws.policy ?? strictPolicy()
+    let report = doctor(ws)
+    let checks = defaultChecks(ws)
+    let runs = if report.ok || !policy.failFast {
+        runChecksWithPolicy(checks, policy)
+    } else {
+        []
+    }
+    let ok = report.ok && checkRunsOk(runs)
+    DoctorRunReport {
+        ok: ok,
+        score: doctorRunScore(report.score, runs),
+        doctor: report,
+        runs: runs,
+    }
+}
+
+pub fn renderDoctor(report: DoctorReport) -> String {
+    let status = if report.ok { "ok" } else { "fail" }
+    let mut lines: List<String> = ["polyglot doctor: {status} score={report.score}"]
+    for err in report.errors {
+        lines.push("error: {err}")
+    }
+    for warn in report.warnings {
+        lines.push("warning: {warn}")
+    }
+    for check in report.checks {
+        lines.push("check: {check.name} [{checkKindName(check.kind)}]")
+    }
+    strings.join(lines, "\n")
+}
+
+pub fn renderDoctorRun(report: DoctorRunReport) -> String {
+    let status = if report.ok { "ok" } else { "fail" }
+    let mut lines: List<String> = ["polyglot doctor run: {status} score={report.score}"]
+    lines.push(report.doctor.render())
+    for run in report.runs {
+        lines.push("run: {renderCheckRun(run)}")
+    }
+    strings.join(lines, "\n")
+}
+
+pub fn validateWorkspace(ws: Workspace) -> Result<(), Error> {
+    if !isTwoLanguage(ws.primary, ws.secondary) {
+        return Err(error.new("polyglot: workspace languages must be distinct and known"))
+    }
+    if ws.components.len() < 2 {
+        return Err(error.new("polyglot: workspace needs at least two components"))
+    }
+    if ws.boundaries.len() == 0 {
+        return Err(error.new("polyglot: workspace needs at least one explicit boundary"))
+    }
+
+    let mut sawPrimary = false
+    let mut sawSecondary = false
+    for c in ws.components {
+        if sameLanguage(c.language, ws.primary) {
+            sawPrimary = true
+        }
+        if sameLanguage(c.language, ws.secondary) {
+            sawSecondary = true
+        }
+        if strings.trimSpace(c.name).isEmpty() || strings.trimSpace(c.root).isEmpty() {
+            return Err(error.new("polyglot: component has empty name or root"))
+        }
+    }
+    if !sawPrimary || !sawSecondary {
+        return Err(error.new("polyglot: components must include both workspace languages"))
+    }
+
+    for b in ws.boundaries {
+        if !sameLanguage(b.host, ws.primary) && !sameLanguage(b.host, ws.secondary) {
+            return Err(error.new("polyglot: boundary host outside workspace: {languageName(b.host)}"))
+        }
+        if !sameLanguage(b.guest, ws.primary) && !sameLanguage(b.guest, ws.secondary) {
+            return Err(error.new("polyglot: boundary guest outside workspace: {languageName(b.guest)}"))
+        }
+        if sameLanguage(b.host, b.guest) {
+            return Err(error.new("polyglot: boundary must cross languages"))
+        }
+        if strings.trimSpace(b.plan.command).isEmpty() {
+            return Err(error.new("polyglot: boundary plan command is empty"))
+        }
+        match b.contractSpec {
+            Some(c) -> {
+                validateContract(c)?
+                if c.protocol != b.protocol || c.linkMode != b.linkMode {
+                    return Err(error.new("polyglot: boundary contract does not match boundary protocol/link mode"))
+                }
+            },
+            None -> {},
+        }
+    }
+    Ok(())
+}
+
+pub fn workspaceSummary(ws: Workspace) -> String {
+    let mut lines: List<String> = [
+        "polyglot workspace {languageName(ws.primary)} + {languageName(ws.secondary)}",
+    ]
+    for c in ws.components {
+        lines.push("- component {c.display()}")
+    }
+    for b in ws.boundaries {
+        let contractText = match b.contractSpec {
+            Some(c) -> contractSummary(c),
+            None    -> b.contract,
+        }
+        if contractText.isEmpty() {
+            lines.push("- boundary {b.id()} {b.entrypoint}")
+        } else {
+            lines.push("- boundary {b.id()} {b.entrypoint} contract={contractText}")
+        }
+    }
+    for c in ws.contracts {
+        lines.push("- contract {c.id()} {stabilityName(c.stability)}")
+    }
+    for check in ws.checks {
+        lines.push("- check {check.name} {checkKindName(check.kind)}")
+    }
+    if !ws.sharedProtocol.isEmpty() {
+        lines.push("- protocol {ws.sharedProtocol}")
+    }
+    strings.join(lines, "\n")
+}
+
+pub fn run(plan: ExecPlan) -> Result<os.Output, Error> {
+    if strings.trimSpace(plan.command).isEmpty() {
+        return Err(error.new("polyglot: command is empty"))
+    }
+    validateEnv(plan.env)?
+
+    let mut originalDir = ""
+    let mut changedDir = false
+    if !strings.trimSpace(plan.cwd).isEmpty() {
+        originalDir = hostenv.currentDir()?
+        hostenv.setCurrentDir(plan.cwd)?
+        changedDir = true
+    }
+
+    let backups = captureEnv(plan.env)
+    match applyEnv(plan.env) {
+        Ok(_) -> {},
+        Err(err) -> {
+            restoreEnv(backups)
+            if changedDir {
+                let _ = hostenv.setCurrentDir(originalDir)
+            }
+            return Err(err)
+        },
+    }
+
+    let result = os.exec(plan.command, plan.args)
+    restoreEnv(backups)
+    if changedDir {
+        let _ = hostenv.setCurrentDir(originalDir)
+    }
+
+    match result {
+        Ok(output) -> {
+            if !plan.allowNonZero && output.exitCode != 0 {
+                return Err(error.new("polyglot: command exited {output.exitCode}: {commandLine(plan)}"))
+            }
+            Ok(output)
+        },
+        Err(err) -> Err(error.wrap(err, "polyglot: run {commandLine(plan)}")),
+    }
+}
+
+pub fn runBoundary(boundary: Boundary) -> Result<os.Output, Error> {
+    run(boundary.plan)
+}
+
+pub fn commandLine(plan: ExecPlan) -> String {
+    let mut parts: List<String> = [shellQuote(plan.command)]
+    for arg in plan.args {
+        parts.push(shellQuote(arg))
+    }
+    strings.join(parts, " ")
+}
+
+pub fn describe(plan: ExecPlan) -> String {
+    let lang = languageName(plan.language)
+    let cwd = if plan.cwd.isEmpty() { "." } else { plan.cwd }
+    let label = if plan.label.isEmpty() { lang } else { plan.label }
+    "{label} [{lang}] cwd={cwd} cmd={commandLine(plan)}"
+}
+
+fn toolchainCommand(language: Language) -> String {
+    let runtime = runtimeCommand(language)
+    if !runtime.isEmpty() {
+        return runtime
+    }
+    compilerCommand(language)
+}
+
+fn runCheckOnce(check: PolyglotCheck, policy: ExecutionPolicy) -> CheckRun {
+    match check.plan {
+        Some(plan) -> {
+            match run(unchecked(plan)) {
+                Ok(output) -> {
+                    let ok = output.exitCode == 0
+                    let status = if ok {
+                        Pass
+                    } else if check.required {
+                        Fail
+                    } else {
+                        Warn
+                    }
+                    limitCheckOutput(CheckRun {
+                        name: check.name,
+                        kind: check.kind,
+                        status: status,
+                        exitCode: output.exitCode,
+                        stdout: output.stdout,
+                        stderr: output.stderr,
+                        hint: check.hint,
+                    }, check, policy)
+                },
+                Err(err) -> CheckRun {
+                    name: check.name,
+                    kind: check.kind,
+                    status: if check.required { Fail } else { Warn },
+                    exitCode: -1,
+                    stdout: "",
+                    stderr: err.message(),
+                    hint: check.hint,
+                },
+            }
+        },
+        None -> skipRun(check),
+    }
+}
+
+fn skipRun(check: PolyglotCheck) -> CheckRun {
+    CheckRun {
+        name: check.name,
+        kind: check.kind,
+        status: Skip,
+        exitCode: 0,
+        stdout: "",
+        stderr: "",
+        hint: check.hint,
+    }
+}
+
+fn checkAttempts(check: PolyglotCheck) -> Int {
+    match check.retry {
+        Some(retry) -> retry.attempts,
+        None        -> 1,
+    }
+}
+
+fn limitCheckOutput(run: CheckRun, check: PolyglotCheck, policy: ExecutionPolicy) -> CheckRun {
+    let limit = effectivePayloadLimit(check, policy)
+    if limit <= 0 {
+        return run
+    }
+    let used = run.stdout.len() + run.stderr.len()
+    if used <= limit {
+        return run
+    }
+    CheckRun {
+        name: run.name,
+        kind: run.kind,
+        status: if check.required { Fail } else { Warn },
+        exitCode: run.exitCode,
+        stdout: run.stdout,
+        stderr: run.stderr,
+        hint: appendHint(run.hint, "output exceeded payload limit {used}/{limit} bytes"),
+    }
+}
+
+fn effectivePayloadLimit(check: PolyglotCheck, policy: ExecutionPolicy) -> Int {
+    if check.maxPayloadBytes > 0 {
+        check.maxPayloadBytes
+    } else {
+        policy.maxPayloadBytes
+    }
+}
+
+fn appendHint(base: String, extra: String) -> String {
+    if base.isEmpty() {
+        extra
+    } else {
+        "{base}; {extra}"
+    }
+}
+
+fn noneCheck() -> PolyglotCheck? {
+    None
+}
+
+fn ostyHost(root: String) -> Result<Component, Error> {
+    let mut c = component("osty-host", Osty, Gateway, root)?
+    c.build = Some(buildPlan(Osty, c.root, [])?)
+    c.test = Some(testPlan(Osty, c.root, [])?)
+    c.responsibilities = ["application policy", "cross-language orchestration", "contract ownership"]
+    Ok(c)
+}
+
+fn guestComponent(language: Language, root: String) -> Result<Component, Error> {
+    match language {
+        Go         -> goGateway("go-guest", root),
+        Rust       -> rustCore("rust-guest", root),
+        Python     -> pythonWorker("python-guest", root),
+        JavaScript -> jsWorker("javascript-guest", root),
+        TypeScript -> {
+            let mut c = component("typescript-guest", TypeScript, Worker, root)?
+            c.build = Some(buildPlan(TypeScript, c.root, [])?)
+            c.test = Some(testPlan(TypeScript, c.root, [])?)
+            c.responsibilities = ["typed JavaScript ecosystem integration", "tooling or UI worker"]
+            Ok(c)
+        },
+        _ -> {
+            let mut c = component("{languageName(language)}-guest", language, Worker, root)?
+            c.build = Some(buildPlan(language, c.root, [])?)
+            c.test = Some(testPlan(language, c.root, [])?)
+            c.responsibilities = ["guest language integration"]
+            Ok(c)
+        },
+    }
+}
+
+fn markerFiles(language: Language) -> List<String> {
+    match language {
+        Osty       -> ["osty.toml", "main.osty"],
+        Go         -> ["go.mod"],
+        Rust       -> ["Cargo.toml"],
+        Python     -> ["pyproject.toml", "requirements.txt", "setup.py"],
+        JavaScript -> ["package.json"],
+        TypeScript -> ["package.json", "tsconfig.json"],
+        C          -> ["Makefile", "CMakeLists.txt"],
+        Cpp        -> ["Makefile", "CMakeLists.txt"],
+        Shell      -> ["Makefile"],
+        Custom(_)  -> [],
+        Unknown    -> [],
+    }
+}
+
+fn componentRootLooksPresent(component: Component) -> Bool {
+    let root = strings.trimSpace(component.root)
+    if root.isEmpty() {
+        return false
+    }
+    if fs.exists(root) {
+        let markers = markerFiles(component.language)
+        if markers.len() == 0 {
+            return true
+        }
+        for marker in markers {
+            if fs.exists(joinPath(root, marker)) {
+                return true
+            }
+        }
+    }
+    false
+}
+
+fn joinPath(root: String, child: String) -> String {
+    if root.isEmpty() {
+        return child
+    }
+    if strings.endsWith(root, "/") || strings.endsWith(root, "\\") {
+        "{root}{child}"
+    } else {
+        "{root}/{child}"
+    }
+}
+
+fn doctorScore(errors: List<String>, warnings: List<String>) -> Int {
+    let mut score = 100 - (errors.len() * 25) - (warnings.len() * 5)
+    if score < 0 {
+        score = 0
+    }
+    score
+}
+
+fn doctorRunScore(base: Int, runs: List<CheckRun>) -> Int {
+    let mut score = base
+    for run in runs {
+        match run.status {
+            Fail -> {
+                score = score - 20
+            },
+            Warn -> {
+                score = score - 5
+            },
+            _ -> {},
+        }
+    }
+    if score < 0 {
+        0
+    } else {
+        score
+    }
+}
+
+fn checkRunsOk(runs: List<CheckRun>) -> Bool {
+    for run in runs {
+        if checkRunFailed(run) {
+            return false
+        }
+    }
+    true
+}
+
+fn contractAuditErrors(c: BoundaryContract, policy: ExecutionPolicy) -> List<String> {
+    let mut out: List<String> = []
+    for name in c.requiredEnv {
+        if hostenv.get(name).isNone() {
+            out.push("required env {name} is not set")
+        }
+    }
+    for name in c.secretEnv {
+        if hostenv.get(name).isNone() {
+            out.push("secret env {name} is not set")
+        }
+    }
+    for path in c.artifacts {
+        if strings.trimSpace(path).isEmpty() {
+            out.push("artifact path is empty")
+        } else if policy.requireArtifacts && !fs.exists(path) {
+            out.push("artifact does not exist: {path}")
+        }
+    }
+    out
+}
+
+fn contractAuditWarnings(c: BoundaryContract, policy: ExecutionPolicy) -> List<String> {
+    let mut out: List<String> = []
+    if c.stable() && c.invariants.len() == 0 {
+        out.push("stable contract has no invariants")
+    }
+    if c.stable() && c.requestSchema.isEmpty() && c.responseSchema.isEmpty() && c.schemaHash.isEmpty() {
+        out.push("stable contract has no schema text or schema hash")
+    }
+    if c.timeoutMs > policy.defaultTimeoutMs {
+        out.push("timeout {c.timeoutMs}ms exceeds workspace default {policy.defaultTimeoutMs}ms")
+    }
+    if c.maxPayloadBytes > policy.maxPayloadBytes {
+        out.push("payload limit {c.maxPayloadBytes} exceeds workspace limit {policy.maxPayloadBytes}")
+    }
+    if !policy.requireArtifacts {
+        for path in c.artifacts {
+            if !strings.trimSpace(path).isEmpty() && !fs.exists(path) {
+                out.push("artifact not found yet: {path}")
+            }
+        }
+    }
+    out
+}
+
+fn extensionOf(path: String) -> String {
+    let base = basename(path)
+    match strings.lastIndexOf(base, ".") {
+        Some(i) -> {
+            if i == 0 || i + 1 >= base.len() {
+                ""
+            } else {
+                strings.slice(base, i, base.len())
+            }
+        },
+        None -> "",
+    }
+}
+
+fn basename(path: String) -> String {
+    let slash = strings.lastIndexOf(path, "/") ?? -1
+    let backslash = strings.lastIndexOf(path, "\\") ?? -1
+    let sep = if slash > backslash { slash } else { backslash }
+    if sep < 0 || sep + 1 >= path.len() {
+        path
+    } else {
+        strings.slice(path, sep + 1, path.len())
+    }
+}
+
+fn validateEnv(vars: Map<String, String>) -> Result<(), Error> {
+    for (name, unusedValue) in vars {
+        validateEnvName(name)?
+    }
+    Ok(())
+}
+
+fn validateEnvName(name: String) -> Result<(), Error> {
+    if strings.trimSpace(name).isEmpty() {
+        return Err(error.new("polyglot: environment name is empty"))
+    }
+    if strings.contains(name, "=") {
+        return Err(error.new("polyglot: environment name contains '=': {name}"))
+    }
+    Ok(())
+}
+
+fn captureEnv(vars: Map<String, String>) -> List<EnvBackup> {
+    let mut backups: List<EnvBackup> = []
+    for (name, unusedValue) in vars {
+        backups.push(EnvBackup {
+            name: name,
+            value: hostenv.get(name),
+        })
+    }
+    backups
+}
+
+fn applyEnv(vars: Map<String, String>) -> Result<(), Error> {
+    for (name, value) in vars {
+        hostenv.set(name, value)?
+    }
+    Ok(())
+}
+
+fn restoreEnv(backups: List<EnvBackup>) {
+    for backup in backups {
+        match backup.value {
+            Some(value) -> {
+                let _ = hostenv.set(backup.name, value)
+            },
+            None -> {
+                let _ = hostenv.unset(backup.name)
+            },
+        }
+    }
+}
+
+fn shellQuote(value: String) -> String {
+    if value.isEmpty() {
+        return "\"\""
+    }
+    if !strings.containsAny(value, " \t\n\"'$`|&;<>(){}[]*?!") {
+        return value
+    }
+    let mut out = strings.replaceAll(value, "\\", "\\\\")
+    out = strings.replaceAll(out, "\"", "\\\"")
+    out = strings.replaceAll(out, "$", "\\$")
+    out = strings.replaceAll(out, "`", "\\`")
+    "\"{out}\""
+}

@@ -1227,7 +1227,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "       osty features             (list declared opt-in features)")
 	fmt.Fprintln(os.Stderr, "       osty cache [ls|clean|info] (inspect / prune the build cache)")
 	fmt.Fprintln(os.Stderr, "       osty gui doctor qtquick   (diagnose Qt Quick runtime/setup)")
-	fmt.Fprintln(os.Stderr, "       osty scaffold <fixture|schema|ffi> [flags] NAME")
+	fmt.Fprintln(os.Stderr, "       osty scaffold <fixture|schema|ffi|polyglot> [flags] NAME")
 	fmt.Fprintln(os.Stderr, "       osty lsp                  (language server on stdio)")
 	fmt.Fprintln(os.Stderr, "       osty explain [CODE]       (describe a diagnostic code; no arg lists every code)")
 	fmt.Fprintln(os.Stderr, "       osty pipeline FILE|DIR    (run every front-end phase; per-stage timing; --gen supports --backend)")
