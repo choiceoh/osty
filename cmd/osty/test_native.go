@@ -66,7 +66,7 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	registerAIRepairCommandFlags(fs, &flags.aiRepair, &aiRepairModeName)
 	var backendName string
 	var emitName string
-	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (llvm)")
+	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (llvm, onb)")
 	fs.StringVar(&emitName, "emit", "", "artifact mode to execute (binary)")
 	var seedFlag string
 	fs.StringVar(&seedFlag, "seed", "", "deterministic test-order seed (decimal or 0x-hex); default is a fresh random seed")

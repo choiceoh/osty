@@ -1269,7 +1269,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "gen-specific flags (after the subcommand):")
 	fmt.Fprintln(os.Stderr, "  -o PATH            write generated artifact to PATH instead of stdout")
 	fmt.Fprintln(os.Stderr, "  --package NAME     backend package/module name (default: main)")
-	fmt.Fprintln(os.Stderr, "  --backend NAME     code generation backend (llvm; default llvm)")
+	fmt.Fprintln(os.Stderr, "  --backend NAME     code generation backend (llvm, onb; default llvm)")
 	fmt.Fprintln(os.Stderr, "  --emit MODE        artifact mode (llvm-ir; default follows backend)")
 	fmt.Fprintln(os.Stderr, "new-specific flags (after the subcommand):")
 	fmt.Fprintln(os.Stderr, "  --lib              scaffold a library project (lib.osty, no main)")
@@ -1296,7 +1296,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --target TRIPLE    cross-compilation target (e.g. amd64-linux)")
 	fmt.Fprintln(os.Stderr, "  --features LIST    comma-separated feature flags to enable")
 	fmt.Fprintln(os.Stderr, "  --no-default-features  drop the manifest's [features].default set")
-	fmt.Fprintln(os.Stderr, "  --backend NAME     code generation backend (llvm; default llvm)")
+	fmt.Fprintln(os.Stderr, "  --backend NAME     code generation backend (llvm, onb; default llvm)")
 	fmt.Fprintln(os.Stderr, "  --emit MODE        artifact mode (llvm-ir, object, or binary)")
 	fmt.Fprintln(os.Stderr, "build-specific flags:")
 	fmt.Fprintln(os.Stderr, "  --force            ignore the build cache and rebuild from source")
@@ -1482,8 +1482,8 @@ func runGen(args []string, flags cliFlags) {
 	fs.StringVar(&outPath, "o", "", "write generated artifact to this file instead of stdout")
 	fs.StringVar(&outPath, "out", "", "alias for -o")
 	fs.StringVar(&pkgName, "package", "main", "backend package/module name (default: main)")
-	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (llvm)")
-	fs.StringVar(&emitName, "emit", "", "artifact mode (llvm-ir; default follows backend)")
+	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (llvm, onb)")
+	fs.StringVar(&emitName, "emit", "", "artifact mode (llvm-ir, asm; default follows backend)")
 	_ = fs.Parse(args)
 	backendID, emitMode := resolveBackendAndEmitFlags("gen", backendName, emitName)
 	if fs.NArg() != 1 {
@@ -1545,6 +1545,9 @@ func adjustGenResultForUserOutput(result *backend.Result, name backend.Name, out
 	}
 	if name == backend.NameLLVM {
 		result.Artifacts.LLVMIR = outPath
+	}
+	if name == backend.NameONB {
+		result.Artifacts.Assembly = outPath
 	}
 }
 

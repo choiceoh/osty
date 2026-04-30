@@ -233,6 +233,9 @@ pub fn toolEmitCompat(tool: String, backend: String, emit: String) -> RunnerDiag
         if backend == "llvm" && emit != "llvm-ir" {
             return Some(toolEmitMismatch(tool, backend, emit, "llvm-ir", "R0011"))
         }
+        if backend == "onb" && emit != "asm" {
+            return Some(toolEmitMismatch(tool, backend, emit, "asm", "R0013"))
+        }
     }
     if tool == "run" || tool == "test" {
         if emit != "binary" {

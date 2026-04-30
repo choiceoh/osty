@@ -28,6 +28,9 @@ func defaultBackendName() string {
 // exposes llvm-ir / binary / object; both of runner's outputs
 // (llvm-ir, binary) parse cleanly in the default build.
 func defaultEmitMode(tool string, name backend.Name) backend.EmitMode {
+	if (tool == "gen" || tool == "pipeline") && name == backend.NameONB {
+		return backend.EmitASM
+	}
 	raw := runner.DefaultEmitMode(tool)
 	mode, err := backend.ParseEmitMode(raw)
 	if err != nil {
@@ -105,6 +108,18 @@ func exitBackendEmitError(tool string, result *backend.Result, err error) {
 			}
 			if result.Artifacts.RuntimeDir != "" {
 				fmt.Fprintf(os.Stderr, "  runtime: %s\n", result.Artifacts.RuntimeDir)
+			}
+		}
+		os.Exit(1)
+	}
+	if errors.Is(err, backend.ErrONBNotImplemented) {
+		fmt.Fprintf(os.Stderr, "osty %s: %v\n", tool, err)
+		if result != nil {
+			if artifact := result.Artifacts.SourcePath(); artifact != "" {
+				fmt.Fprintf(os.Stderr, "  artifact: %s\n", artifact)
+			}
+			if result.Artifacts.OutputDir != "" {
+				fmt.Fprintf(os.Stderr, "  output-dir: %s\n", result.Artifacts.OutputDir)
 			}
 		}
 		os.Exit(1)

@@ -8,5 +8,8 @@ func (a Artifacts) SourcePath() string {
 	if a.LLVMIR != "" {
 		return filepath.Clean(a.LLVMIR)
 	}
+	if a.Assembly != "" {
+		return filepath.Clean(a.Assembly)
+	}
 	return ""
 }
