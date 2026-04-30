@@ -119,38 +119,51 @@ pub struct CheckInstantiationRecord {
 // Environment.
 // ---------------------------------------------------------------------
 
+pub struct CheckNameIndexTable {
+    pub keys: List<String>,
+    pub hashes: List<Int>,
+    pub values: List<Int>,
+    pub slots: Map<String, Int>,
+}
+
+pub struct CheckNameSetTable {
+    pub keys: List<String>,
+    pub hashes: List<Int>,
+    pub slots: Map<String, Int>,
+}
+
+pub struct CheckBindingStackIndex {
+    pub keys: List<String>,
+    pub hashes: List<Int>,
+    pub stacks: List<List<CheckBinding>>,
+    pub slots: Map<String, Int>,
+}
+
+pub struct CheckIntStackIndex {
+    pub keys: List<String>,
+    pub hashes: List<Int>,
+    pub stacks: List<List<Int>>,
+    pub slots: Map<String, Int>,
+}
+
 pub struct CheckGlobalEnv {
     // Module-level signatures. These are logically global to one checked
     // package/file and are seeded from the frozen prelude template before
     // local declarations/import surfaces are registered.
     pub fns: List<CheckFnSig>,
-    pub fnIndexKeys: List<String>,
-    pub fnIndexHashes: List<Int>,
-    pub fnIndexValues: List<Int>,
-    pub fnBodyKeys: List<String>,
-    pub fnBodyHashes: List<Int>,
+    pub fnIndex: CheckNameIndexTable,
+    pub fnBodyIndex: CheckNameSetTable,
     pub fields: List<CheckFieldSig>,
-    pub fieldIndexKeys: List<String>,
-    pub fieldIndexHashes: List<Int>,
-    pub fieldIndexValues: List<Int>,
+    pub fieldIndex: CheckNameIndexTable,
     pub variants: List<CheckVariantSig>,
-    pub variantIndexKeys: List<String>,
-    pub variantIndexHashes: List<Int>,
-    pub variantIndexValues: List<Int>,
-    pub variantOwnerIndexKeys: List<String>,
-    pub variantOwnerIndexHashes: List<Int>,
-    pub variantOwnerIndexValues: List<Int>,
+    pub variantIndex: CheckNameIndexTable,
+    pub variantOwnerIndex: CheckNameIndexTable,
     pub aliases: List<CheckAliasSig>,
-    pub aliasIndexKeys: List<String>,
-    pub aliasIndexHashes: List<Int>,
-    pub aliasIndexValues: List<Int>,
+    pub aliasIndex: CheckNameIndexTable,
     pub types: List<CheckTypeSig>,
-    pub typeIndexKeys: List<String>,
-    pub typeIndexHashes: List<Int>,
-    pub typeIndexValues: List<Int>,
+    pub typeIndex: CheckNameIndexTable,
     pub interfaces: List<String>,
-    pub interfaceIndexKeys: List<String>,
-    pub interfaceIndexHashes: List<Int>,
+    pub interfaceIndex: CheckNameSetTable,
     pub interfaceExtends: List<CheckInterfaceExt>,
     pub importAliases: List<String>,
 }
@@ -159,21 +172,15 @@ pub struct CheckLocalEnv {
     // Lexical stack; binding operations push to the tail and `checkScopeDrop`
     // truncates to a previously captured mark.
     //
-    // Each `*Index*` table is backed by parallel arrays: `Keys` holds
-    // the string key, `Values` holds the slot payload, and `Hashes`
-    // caches a 30-bit fingerprint computed by `checkHashKey`. Lookups
-    // iterate backwards and compare the cheap Int hash first so most
-    // misses are rejected without a full string comparison.
+    // Name indexes keep the compact key/hash/value vectors used by the
+    // selfhost mirror while generated Go also materializes `slots` maps
+    // for O(1) entry lookup on hot repeated checks.
     pub bindings: List<CheckBinding>,
-    pub bindingIndexNames: List<String>,
-    pub bindingIndexHashes: List<Int>,
-    pub bindingIndexStacks: List<List<CheckBinding>>,
+    pub bindingIndex: CheckBindingStackIndex,
 
     // Generic bounds currently in scope (owner fn / struct / impl).
     pub genericBounds: List<CheckGenericBound>,
-    pub genericBoundIndexNames: List<String>,
-    pub genericBoundIndexHashes: List<Int>,
-    pub genericBoundIndexStacks: List<List<Int>>,
+    pub genericBoundIndex: CheckIntStackIndex,
 
     // Memoized type rewrites. `aliasDeepCache` is indexed directly by
     // type handle; substitution cache keys include the generic/arg
@@ -211,45 +218,27 @@ pub fn emptyCheckEnv(tys: TyArena) -> CheckEnv {
         tys,
         global: CheckGlobalEnv {
             fns: [],
-            fnIndexKeys: [],
-            fnIndexHashes: [],
-            fnIndexValues: [],
-            fnBodyKeys: [],
-            fnBodyHashes: [],
+            fnIndex: emptyCheckNameIndexTable(),
+            fnBodyIndex: emptyCheckNameSetTable(),
             fields: [],
-            fieldIndexKeys: [],
-            fieldIndexHashes: [],
-            fieldIndexValues: [],
+            fieldIndex: emptyCheckNameIndexTable(),
             variants: [],
-            variantIndexKeys: [],
-            variantIndexHashes: [],
-            variantIndexValues: [],
-            variantOwnerIndexKeys: [],
-            variantOwnerIndexHashes: [],
-            variantOwnerIndexValues: [],
+            variantIndex: emptyCheckNameIndexTable(),
+            variantOwnerIndex: emptyCheckNameIndexTable(),
             aliases: [],
-            aliasIndexKeys: [],
-            aliasIndexHashes: [],
-            aliasIndexValues: [],
+            aliasIndex: emptyCheckNameIndexTable(),
             types: [],
-            typeIndexKeys: [],
-            typeIndexHashes: [],
-            typeIndexValues: [],
+            typeIndex: emptyCheckNameIndexTable(),
             interfaces: [],
-            interfaceIndexKeys: [],
-            interfaceIndexHashes: [],
+            interfaceIndex: emptyCheckNameSetTable(),
             interfaceExtends: [],
             importAliases: [],
         },
         local: CheckLocalEnv {
             bindings: [],
-            bindingIndexNames: [],
-            bindingIndexHashes: [],
-            bindingIndexStacks: [],
+            bindingIndex: emptyCheckBindingStackIndex(),
             genericBounds: [],
-            genericBoundIndexNames: [],
-            genericBoundIndexHashes: [],
-            genericBoundIndexStacks: [],
+            genericBoundIndex: emptyCheckIntStackIndex(),
             aliasDeepCache: [],
             substCacheKeys: [],
             substCacheHashes: [],
@@ -264,6 +253,41 @@ pub fn emptyCheckEnv(tys: TyArena) -> CheckEnv {
             symbolRecords: [],
             instantiations: [],
         },
+    }
+}
+
+fn emptyCheckNameIndexTable() -> CheckNameIndexTable {
+    CheckNameIndexTable {
+        keys: [],
+        hashes: [],
+        values: [],
+        slots: {:},
+    }
+}
+
+fn emptyCheckNameSetTable() -> CheckNameSetTable {
+    CheckNameSetTable {
+        keys: [],
+        hashes: [],
+        slots: {:},
+    }
+}
+
+fn emptyCheckBindingStackIndex() -> CheckBindingStackIndex {
+    CheckBindingStackIndex {
+        keys: [],
+        hashes: [],
+        stacks: [],
+        slots: {:},
+    }
+}
+
+fn emptyCheckIntStackIndex() -> CheckIntStackIndex {
+    CheckIntStackIndex {
+        keys: [],
+        hashes: [],
+        stacks: [],
+        slots: {:},
     }
 }
 
@@ -337,27 +361,19 @@ pub fn checkBindSpan(env: CheckEnv, name: String, ty: Int, mutable: Bool, start:
 /// the most recent binding for `name`. Returns `-1` (no type) when
 /// `name` is not in scope.
 pub fn checkLookup(env: CheckEnv, name: String) -> Int {
-    let slot = checkNameIndex(env.local.bindingIndexNames, env.local.bindingIndexHashes, name, checkHashKey(name))
-    if slot < 0 {
+    let binding = checkBindingStackIndexTop(env.local.bindingIndex, name)
+    if binding.isNone() {
         return -1
     }
-    let stack = env.local.bindingIndexStacks[slot]
-    if stack.len() == 0 {
-        return -1
-    }
-    stack[stack.len() - 1].ty
+    binding.unwrap().ty
 }
 
 pub fn checkLookupMutable(env: CheckEnv, name: String) -> Bool {
-    let slot = checkNameIndex(env.local.bindingIndexNames, env.local.bindingIndexHashes, name, checkHashKey(name))
-    if slot < 0 {
+    let binding = checkBindingStackIndexTop(env.local.bindingIndex, name)
+    if binding.isNone() {
         return false
     }
-    let stack = env.local.bindingIndexStacks[slot]
-    if stack.len() == 0 {
-        return false
-    }
-    stack[stack.len() - 1].mutable
+    binding.unwrap().mutable
 }
 
 // ---------------------------------------------------------------------
@@ -368,15 +384,7 @@ pub fn checkRegisterFn(env: CheckEnv, sig: CheckFnSig) {
     let idx = env.global.fns.len()
     env.global.fns.push(sig)
     let key = checkFnKey(sig.name, sig.owner)
-    let keyHash = checkHashKey(key)
-    let slot = checkNameIndex(env.global.fnIndexKeys, env.global.fnIndexHashes, key, keyHash)
-    if slot < 0 {
-        env.global.fnIndexKeys.push(key)
-        env.global.fnIndexHashes.push(keyHash)
-        env.global.fnIndexValues.push(idx)
-    } else {
-        env.global.fnIndexValues[slot] = idx
-    }
+    checkNameIndexTableSet(env.global.fnIndex, key, idx)
 }
 
 pub fn checkMarkImportAlias(env: CheckEnv, alias: String) {
@@ -397,22 +405,17 @@ pub fn checkHasImportAlias(env: CheckEnv, alias: String) -> Bool {
 
 pub fn checkMarkFnHasBody(env: CheckEnv, name: String, owner: String) {
     let key = checkFnKey(name, owner)
-    let keyHash = checkHashKey(key)
-    if checkNameIndex(env.global.fnBodyKeys, env.global.fnBodyHashes, key, keyHash) >= 0 {
-        return
-    }
-    env.global.fnBodyKeys.push(key)
-    env.global.fnBodyHashes.push(keyHash)
+    checkNameSetTableAdd(env.global.fnBodyIndex, key)
 }
 
 pub fn checkFnHasBody(env: CheckEnv, name: String, owner: String) -> Bool {
     let key = checkFnKey(name, owner)
-    checkNameIndex(env.global.fnBodyKeys, env.global.fnBodyHashes, key, checkHashKey(key)) >= 0
+    checkNameSetTableHas(env.global.fnBodyIndex, key)
 }
 
 pub fn checkLookupFn(env: CheckEnv, name: String, owner: String) -> CheckFnSig {
     let key = checkFnKey(name, owner)
-    let idx = checkLookupExactIndex(env.global.fnIndexKeys, env.global.fnIndexHashes, env.global.fnIndexValues, key, checkHashKey(key))
+    let idx = checkNameIndexTableGet(env.global.fnIndex, key)
     if idx >= 0 {
         return env.global.fns[idx]
     }
@@ -472,20 +475,12 @@ pub fn checkRegisterField(env: CheckEnv, field: CheckFieldSig) {
     let idx = env.global.fields.len()
     env.global.fields.push(field)
     let key = checkOwnerKey(field.owner, field.name)
-    let keyHash = checkHashKey(key)
-    let slot = checkNameIndex(env.global.fieldIndexKeys, env.global.fieldIndexHashes, key, keyHash)
-    if slot < 0 {
-        env.global.fieldIndexKeys.push(key)
-        env.global.fieldIndexHashes.push(keyHash)
-        env.global.fieldIndexValues.push(idx)
-    } else {
-        env.global.fieldIndexValues[slot] = idx
-    }
+    checkNameIndexTableSet(env.global.fieldIndex, key, idx)
 }
 
 pub fn checkLookupField(env: CheckEnv, owner: String, name: String) -> CheckFieldSig {
     let key = checkOwnerKey(owner, name)
-    let idx = checkLookupExactIndex(env.global.fieldIndexKeys, env.global.fieldIndexHashes, env.global.fieldIndexValues, key, checkHashKey(key))
+    let idx = checkNameIndexTableGet(env.global.fieldIndex, key)
     if idx >= 0 {
         return env.global.fields[idx]
     }
@@ -495,29 +490,13 @@ pub fn checkLookupField(env: CheckEnv, owner: String, name: String) -> CheckFiel
 pub fn checkRegisterVariant(env: CheckEnv, variant: CheckVariantSig) {
     let idx = env.global.variants.len()
     env.global.variants.push(variant)
-    let nameHash = checkHashKey(variant.name)
-    let nameSlot = checkNameIndex(env.global.variantIndexKeys, env.global.variantIndexHashes, variant.name, nameHash)
-    if nameSlot < 0 {
-        env.global.variantIndexKeys.push(variant.name)
-        env.global.variantIndexHashes.push(nameHash)
-        env.global.variantIndexValues.push(idx)
-    } else {
-        env.global.variantIndexValues[nameSlot] = idx
-    }
+    checkNameIndexTableSet(env.global.variantIndex, variant.name, idx)
     let ownerKey = checkOwnerKey(variant.owner, variant.name)
-    let ownerHash = checkHashKey(ownerKey)
-    let ownerSlot = checkNameIndex(env.global.variantOwnerIndexKeys, env.global.variantOwnerIndexHashes, ownerKey, ownerHash)
-    if ownerSlot < 0 {
-        env.global.variantOwnerIndexKeys.push(ownerKey)
-        env.global.variantOwnerIndexHashes.push(ownerHash)
-        env.global.variantOwnerIndexValues.push(idx)
-    } else {
-        env.global.variantOwnerIndexValues[ownerSlot] = idx
-    }
+    checkNameIndexTableSet(env.global.variantOwnerIndex, ownerKey, idx)
 }
 
 pub fn checkLookupVariant(env: CheckEnv, name: String) -> CheckVariantSig {
-    let idx = checkLookupExactIndex(env.global.variantIndexKeys, env.global.variantIndexHashes, env.global.variantIndexValues, name, checkHashKey(name))
+    let idx = checkNameIndexTableGet(env.global.variantIndex, name)
     if idx >= 0 {
         return env.global.variants[idx]
     }
@@ -526,7 +505,7 @@ pub fn checkLookupVariant(env: CheckEnv, name: String) -> CheckVariantSig {
 
 pub fn checkLookupVariantInOwner(env: CheckEnv, owner: String, name: String) -> CheckVariantSig {
     let key = checkOwnerKey(owner, name)
-    let idx = checkLookupExactIndex(env.global.variantOwnerIndexKeys, env.global.variantOwnerIndexHashes, env.global.variantOwnerIndexValues, key, checkHashKey(key))
+    let idx = checkNameIndexTableGet(env.global.variantOwnerIndex, key)
     if idx >= 0 {
         return env.global.variants[idx]
     }
@@ -536,20 +515,12 @@ pub fn checkLookupVariantInOwner(env: CheckEnv, owner: String, name: String) -> 
 pub fn checkRegisterAlias(env: CheckEnv, alias: CheckAliasSig) {
     let idx = env.global.aliases.len()
     env.global.aliases.push(alias)
-    let nameHash = checkHashKey(alias.name)
-    let slot = checkNameIndex(env.global.aliasIndexKeys, env.global.aliasIndexHashes, alias.name, nameHash)
-    if slot < 0 {
-        env.global.aliasIndexKeys.push(alias.name)
-        env.global.aliasIndexHashes.push(nameHash)
-        env.global.aliasIndexValues.push(idx)
-    } else {
-        env.global.aliasIndexValues[slot] = idx
-    }
+    checkNameIndexTableSet(env.global.aliasIndex, alias.name, idx)
     env.local.aliasDeepCache = []
 }
 
 pub fn checkLookupAlias(env: CheckEnv, name: String) -> CheckAliasSig {
-    let idx = checkLookupExactIndex(env.global.aliasIndexKeys, env.global.aliasIndexHashes, env.global.aliasIndexValues, name, checkHashKey(name))
+    let idx = checkNameIndexTableGet(env.global.aliasIndex, name)
     if idx >= 0 {
         return env.global.aliases[idx]
     }
@@ -559,19 +530,11 @@ pub fn checkLookupAlias(env: CheckEnv, name: String) -> CheckAliasSig {
 pub fn checkRegisterType(env: CheckEnv, sig: CheckTypeSig) {
     let idx = env.global.types.len()
     env.global.types.push(sig)
-    let nameHash = checkHashKey(sig.name)
-    let slot = checkNameIndex(env.global.typeIndexKeys, env.global.typeIndexHashes, sig.name, nameHash)
-    if slot < 0 {
-        env.global.typeIndexKeys.push(sig.name)
-        env.global.typeIndexHashes.push(nameHash)
-        env.global.typeIndexValues.push(idx)
-    } else {
-        env.global.typeIndexValues[slot] = idx
-    }
+    checkNameIndexTableSet(env.global.typeIndex, sig.name, idx)
 }
 
 pub fn checkLookupType(env: CheckEnv, name: String) -> CheckTypeSig {
-    let idx = checkLookupExactIndex(env.global.typeIndexKeys, env.global.typeIndexHashes, env.global.typeIndexValues, name, checkHashKey(name))
+    let idx = checkNameIndexTableGet(env.global.typeIndex, name)
     if idx >= 0 {
         return env.global.types[idx]
     }
@@ -590,15 +553,11 @@ pub fn checkDeclaredTypeExists(env: CheckEnv, name: String) -> Bool {
 
 pub fn checkRegisterInterface(env: CheckEnv, name: String) {
     env.global.interfaces.push(name)
-    let nameHash = checkHashKey(name)
-    if checkNameIndex(env.global.interfaceIndexKeys, env.global.interfaceIndexHashes, name, nameHash) < 0 {
-        env.global.interfaceIndexKeys.push(name)
-        env.global.interfaceIndexHashes.push(nameHash)
-    }
+    checkNameSetTableAdd(env.global.interfaceIndex, name)
 }
 
 pub fn checkIsInterface(env: CheckEnv, name: String) -> Bool {
-    checkNameIndex(env.global.interfaceIndexKeys, env.global.interfaceIndexHashes, name, checkHashKey(name)) >= 0
+    checkNameSetTableHas(env.global.interfaceIndex, name)
 }
 
 pub fn checkRegisterInterfaceExtends(env: CheckEnv, ext: CheckInterfaceExt) {
@@ -625,11 +584,7 @@ pub fn checkAddGenericBound(env: CheckEnv, bound: CheckGenericBound) {
 }
 
 pub fn checkLookupGenericBound(env: CheckEnv, tyParam: String) -> Int {
-    let slot = checkNameIndex(env.local.genericBoundIndexNames, env.local.genericBoundIndexHashes, tyParam, checkHashKey(tyParam))
-    if slot < 0 {
-        return -1
-    }
-    let stack = env.local.genericBoundIndexStacks[slot]
+    let stack = checkIntStackIndexValues(env.local.genericBoundIndex, tyParam)
     if stack.len() == 0 {
         return -1
     }
@@ -637,11 +592,7 @@ pub fn checkLookupGenericBound(env: CheckEnv, tyParam: String) -> Int {
 }
 
 pub fn checkGenericBoundsFor(env: CheckEnv, tyParam: String) -> List<Int> {
-    let slot = checkNameIndex(env.local.genericBoundIndexNames, env.local.genericBoundIndexHashes, tyParam, checkHashKey(tyParam))
-    if slot < 0 {
-        return []
-    }
-    env.local.genericBoundIndexStacks[slot]
+    checkIntStackIndexValues(env.local.genericBoundIndex, tyParam)
 }
 
 pub fn checkClearGenericBoundsAfter(env: CheckEnv, mark: Int) {
@@ -663,62 +614,162 @@ fn checkGenericBoundCount(env: CheckEnv) -> Int {
 }
 
 fn checkBindingIndexPush(env: CheckEnv, binding: CheckBinding) {
-    let nameHash = checkHashKey(binding.name)
-    let slot = checkNameIndex(env.local.bindingIndexNames, env.local.bindingIndexHashes, binding.name, nameHash)
-    if slot < 0 {
-        env.local.bindingIndexNames.push(binding.name)
-        env.local.bindingIndexHashes.push(nameHash)
-        env.local.bindingIndexStacks.push([binding])
-        return
-    }
-    env.local.bindingIndexStacks[slot].push(binding)
+    checkBindingStackIndexPush(env.local.bindingIndex, binding)
 }
 
 fn checkBindingIndexPop(env: CheckEnv, name: String) {
-    let slot = checkNameIndex(env.local.bindingIndexNames, env.local.bindingIndexHashes, name, checkHashKey(name))
-    if slot < 0 {
-        return
-    }
-    if env.local.bindingIndexStacks[slot].len() > 0 {
-        let _ = env.local.bindingIndexStacks[slot].pop()
-    }
+    checkBindingStackIndexPop(env.local.bindingIndex, name)
 }
 
 fn checkGenericBoundIndexPush(env: CheckEnv, name: String, iface: Int) {
-    let nameHash = checkHashKey(name)
-    let slot = checkNameIndex(env.local.genericBoundIndexNames, env.local.genericBoundIndexHashes, name, nameHash)
-    if slot < 0 {
-        env.local.genericBoundIndexNames.push(name)
-        env.local.genericBoundIndexHashes.push(nameHash)
-        env.local.genericBoundIndexStacks.push([iface])
-        return
-    }
-    env.local.genericBoundIndexStacks[slot].push(iface)
+    checkIntStackIndexPush(env.local.genericBoundIndex, name, iface)
 }
 
 fn checkGenericBoundIndexPop(env: CheckEnv, name: String) {
-    let slot = checkNameIndex(env.local.genericBoundIndexNames, env.local.genericBoundIndexHashes, name, checkHashKey(name))
-    if slot < 0 {
-        return
-    }
-    if env.local.genericBoundIndexStacks[slot].len() > 0 {
-        let _ = env.local.genericBoundIndexStacks[slot].pop()
-    }
+    checkIntStackIndexPop(env.local.genericBoundIndex, name)
 }
 
 /// checkHashKey computes a 30-bit djb2-style fingerprint over the
-/// UTF-8 bytes of `key`. The result is used as a fast pre-filter in
-/// the parallel `*IndexHashes` arrays — lookups reject a non-matching
-/// slot after a single `Int` compare and only fall back to the full
-/// `==` string compare when the hash matches. Bounded by
-/// 1_073_741_789 (largest prime below 2^30) so `h * 33` stays well
-/// under Int.MAX.
+/// UTF-8 bytes of `key`. The mirror keeps this cached beside each key,
+/// while generated Go also uses per-table slot maps for hot lookups.
+/// Bounded by 1_073_741_789 (largest prime below 2^30) so `h * 33`
+/// stays well under Int.MAX.
 fn checkHashKey(key: String) -> Int {
     let mut h = 5381
     for b in key.bytes() {
         h = (h * 33 + b.toInt()) % 1073741789
     }
     h
+}
+
+fn checkNameIndexTableSlot(table: CheckNameIndexTable, key: String) -> Int {
+    let slot = table.slots.get(key)
+    if slot.isSome() {
+        return slot.unwrap()
+    }
+    -1
+}
+
+fn checkNameIndexTableSet(table: CheckNameIndexTable, key: String, value: Int) {
+    let slot = checkNameIndexTableSlot(table, key)
+    if slot < 0 {
+        table.keys.push(key)
+        table.hashes.push(checkHashKey(key))
+        table.values.push(value)
+        table.slots.insert(key, table.values.len() - 1)
+        return
+    }
+    table.values[slot] = value
+}
+
+fn checkNameIndexTableGet(table: CheckNameIndexTable, key: String) -> Int {
+    let slot = checkNameIndexTableSlot(table, key)
+    if slot < 0 {
+        return -1
+    }
+    table.values[slot]
+}
+
+fn checkNameSetTableSlot(table: CheckNameSetTable, key: String) -> Int {
+    let slot = table.slots.get(key)
+    if slot.isSome() {
+        return slot.unwrap()
+    }
+    -1
+}
+
+fn checkNameSetTableAdd(table: CheckNameSetTable, key: String) {
+    let slot = checkNameSetTableSlot(table, key)
+    if slot >= 0 {
+        return
+    }
+    table.keys.push(key)
+    table.hashes.push(checkHashKey(key))
+    table.slots.insert(key, table.keys.len() - 1)
+}
+
+fn checkNameSetTableHas(table: CheckNameSetTable, key: String) -> Bool {
+    checkNameSetTableSlot(table, key) >= 0
+}
+
+fn checkBindingStackIndexSlot(table: CheckBindingStackIndex, key: String) -> Int {
+    let slot = table.slots.get(key)
+    if slot.isSome() {
+        return slot.unwrap()
+    }
+    -1
+}
+
+fn checkBindingStackIndexPush(table: CheckBindingStackIndex, binding: CheckBinding) {
+    let slot = checkBindingStackIndexSlot(table, binding.name)
+    if slot < 0 {
+        table.keys.push(binding.name)
+        table.hashes.push(checkHashKey(binding.name))
+        table.stacks.push([binding])
+        table.slots.insert(binding.name, table.stacks.len() - 1)
+        return
+    }
+    table.stacks[slot].push(binding)
+}
+
+fn checkBindingStackIndexPop(table: CheckBindingStackIndex, name: String) {
+    let slot = checkBindingStackIndexSlot(table, name)
+    if slot < 0 {
+        return
+    }
+    if table.stacks[slot].len() > 0 {
+        let _ = table.stacks[slot].pop()
+    }
+}
+
+fn checkBindingStackIndexTop(table: CheckBindingStackIndex, name: String) -> CheckBinding? {
+    let slot = checkBindingStackIndexSlot(table, name)
+    if slot < 0 {
+        return None
+    }
+    let stack = table.stacks[slot]
+    if stack.len() == 0 {
+        return None
+    }
+    Some(stack[stack.len() - 1])
+}
+
+fn checkIntStackIndexSlot(table: CheckIntStackIndex, key: String) -> Int {
+    let slot = table.slots.get(key)
+    if slot.isSome() {
+        return slot.unwrap()
+    }
+    -1
+}
+
+fn checkIntStackIndexPush(table: CheckIntStackIndex, key: String, value: Int) {
+    let slot = checkIntStackIndexSlot(table, key)
+    if slot < 0 {
+        table.keys.push(key)
+        table.hashes.push(checkHashKey(key))
+        table.stacks.push([value])
+        table.slots.insert(key, table.stacks.len() - 1)
+        return
+    }
+    table.stacks[slot].push(value)
+}
+
+fn checkIntStackIndexPop(table: CheckIntStackIndex, key: String) {
+    let slot = checkIntStackIndexSlot(table, key)
+    if slot < 0 {
+        return
+    }
+    if table.stacks[slot].len() > 0 {
+        let _ = table.stacks[slot].pop()
+    }
+}
+
+fn checkIntStackIndexValues(table: CheckIntStackIndex, key: String) -> List<Int> {
+    let slot = checkIntStackIndexSlot(table, key)
+    if slot < 0 {
+        return []
+    }
+    table.stacks[slot]
 }
 
 fn checkNameIndex(names: List<String>, hashes: List<Int>, name: String, hash: Int) -> Int {

@@ -34047,63 +34047,71 @@ type CheckInstantiationRecord struct {
 	end      int
 }
 
+type CheckNameIndexTable struct {
+	keys   []string
+	hashes []int
+	values []int
+	slots  map[string]int
+}
+
+type CheckNameSetTable struct {
+	keys   []string
+	hashes []int
+	slots  map[string]int
+}
+
+type CheckBindingStackIndex struct {
+	keys   []string
+	hashes []int
+	stacks [][]*CheckBinding
+	slots  map[string]int
+}
+
+type CheckIntStackIndex struct {
+	keys   []string
+	hashes []int
+	stacks [][]int
+	slots  map[string]int
+}
+
 // Osty: /tmp/selfhost_merged.osty:14320:5
 type CheckGlobalEnv struct {
-	fns                     []*CheckFnSig
-	fnIndexKeys             []string
-	fnIndexHashes           []int
-	fnIndexValues           []int
-	fnIndexSlots            map[string]int
-	fnBodyKeys              []string
-	fnBodyHashes            []int
-	fields                  []*CheckFieldSig
-	fieldIndexKeys          []string
-	fieldIndexHashes        []int
-	fieldIndexValues        []int
-	variants                []*CheckVariantSig
-	variantIndexKeys        []string
-	variantIndexHashes      []int
-	variantIndexValues      []int
-	variantOwnerIndexKeys   []string
-	variantOwnerIndexHashes []int
-	variantOwnerIndexValues []int
-	aliases                 []*CheckAliasSig
-	aliasIndexKeys          []string
-	aliasIndexHashes        []int
-	aliasIndexValues        []int
-	types                   []*CheckTypeSig
-	typeIndexKeys           []string
-	typeIndexHashes         []int
-	typeIndexValues         []int
-	interfaces              []string
-	interfaceIndexKeys      []string
-	interfaceIndexHashes    []int
-	interfaceExtends        []*CheckInterfaceExt
-	importAliases           []string
+	fns               []*CheckFnSig
+	fnIndex           CheckNameIndexTable
+	fnBodyIndex       CheckNameSetTable
+	fields            []*CheckFieldSig
+	fieldIndex        CheckNameIndexTable
+	variants          []*CheckVariantSig
+	variantIndex      CheckNameIndexTable
+	variantOwnerIndex CheckNameIndexTable
+	aliases           []*CheckAliasSig
+	aliasIndex        CheckNameIndexTable
+	types             []*CheckTypeSig
+	typeIndex         CheckNameIndexTable
+	interfaces        []string
+	interfaceIndex    CheckNameSetTable
+	interfaceExtends  []*CheckInterfaceExt
+	importAliases     []string
 }
 
 type CheckLocalEnv struct {
-	bindings                []*CheckBinding
-	bindingIndexNames       []string
-	bindingIndexHashes      []int
-	bindingIndexStacks      [][]*CheckBinding
-	genericBounds           []*CheckGenericBound
-	genericBoundIndexNames  []string
-	genericBoundIndexHashes []int
-	genericBoundIndexStacks [][]int
-	aliasDeepCache          []int
-	substCacheKeys          []string
-	substCacheHashes        []int
-	substCacheValues        []int
-	returnTy                int
-	fnName                  string
-	inLoop                  bool
-	diagnostics             []*CheckDiagnostic
-	assignments             int
-	accepted                int
-	bindingRecords          []*CheckBindingRecord
-	symbolRecords           []*CheckSymbolRecord
-	instantiations          []*CheckInstantiationRecord
+	bindings          []*CheckBinding
+	bindingIndex      CheckBindingStackIndex
+	genericBounds     []*CheckGenericBound
+	genericBoundIndex CheckIntStackIndex
+	aliasDeepCache    []int
+	substCacheKeys    []string
+	substCacheHashes  []int
+	substCacheValues  []int
+	returnTy          int
+	fnName            string
+	inLoop            bool
+	diagnostics       []*CheckDiagnostic
+	assignments       int
+	accepted          int
+	bindingRecords    []*CheckBindingRecord
+	symbolRecords     []*CheckSymbolRecord
+	instantiations    []*CheckInstantiationRecord
 }
 
 type CheckEnv struct {
@@ -34119,60 +34127,41 @@ func emptyCheckEnv(tys *TyArena) *CheckEnv {
 	return &CheckEnv{
 		tys: tys,
 		global: CheckGlobalEnv{
-			fns:                     make([]*CheckFnSig, 0, checkPreludeFnCap),
-			fnIndexKeys:             make([]string, 0, checkPreludeFnCap),
-			fnIndexHashes:           make([]int, 0, checkPreludeFnCap),
-			fnIndexValues:           make([]int, 0, checkPreludeFnCap),
-			fnIndexSlots:            make(map[string]int, checkPreludeFnCap),
-			fnBodyKeys:              make([]string, 0, 1),
-			fnBodyHashes:            make([]int, 0, 1),
-			fields:                  make([]*CheckFieldSig, 0, 1),
-			fieldIndexKeys:          make([]string, 0, 1),
-			fieldIndexHashes:        make([]int, 0, 1),
-			fieldIndexValues:        make([]int, 0, 1),
-			variants:                make([]*CheckVariantSig, 0, 1),
-			variantIndexKeys:        make([]string, 0, 1),
-			variantIndexHashes:      make([]int, 0, 1),
-			variantIndexValues:      make([]int, 0, 1),
-			variantOwnerIndexKeys:   make([]string, 0, 1),
-			variantOwnerIndexHashes: make([]int, 0, 1),
-			variantOwnerIndexValues: make([]int, 0, 1),
-			aliases:                 make([]*CheckAliasSig, 0, 1),
-			aliasIndexKeys:          make([]string, 0, 1),
-			aliasIndexHashes:        make([]int, 0, 1),
-			aliasIndexValues:        make([]int, 0, 1),
-			types:                   make([]*CheckTypeSig, 0, 1),
-			typeIndexKeys:           make([]string, 0, 1),
-			typeIndexHashes:         make([]int, 0, 1),
-			typeIndexValues:         make([]int, 0, 1),
-			interfaces:              make([]string, 0, 1),
-			interfaceIndexKeys:      make([]string, 0, 1),
-			interfaceIndexHashes:    make([]int, 0, 1),
-			interfaceExtends:        make([]*CheckInterfaceExt, 0, 1),
-			importAliases:           make([]string, 0, 1),
+			fns:               make([]*CheckFnSig, 0, checkPreludeFnCap),
+			fnIndex:           emptyCheckNameIndexTable(checkPreludeFnCap),
+			fnBodyIndex:       emptyCheckNameSetTable(1),
+			fields:            make([]*CheckFieldSig, 0, 1),
+			fieldIndex:        emptyCheckNameIndexTable(1),
+			variants:          make([]*CheckVariantSig, 0, 1),
+			variantIndex:      emptyCheckNameIndexTable(1),
+			variantOwnerIndex: emptyCheckNameIndexTable(1),
+			aliases:           make([]*CheckAliasSig, 0, 1),
+			aliasIndex:        emptyCheckNameIndexTable(1),
+			types:             make([]*CheckTypeSig, 0, 1),
+			typeIndex:         emptyCheckNameIndexTable(1),
+			interfaces:        make([]string, 0, 1),
+			interfaceIndex:    emptyCheckNameSetTable(1),
+			interfaceExtends:  make([]*CheckInterfaceExt, 0, 1),
+			importAliases:     make([]string, 0, 1),
 		},
 		local: CheckLocalEnv{
-			bindings:                make([]*CheckBinding, 0, 1),
-			bindingIndexNames:       make([]string, 0, 1),
-			bindingIndexHashes:      make([]int, 0, 1),
-			bindingIndexStacks:      make([][]*CheckBinding, 0, 1),
-			genericBounds:           make([]*CheckGenericBound, 0, 1),
-			genericBoundIndexNames:  make([]string, 0, 1),
-			genericBoundIndexHashes: make([]int, 0, 1),
-			genericBoundIndexStacks: make([][]int, 0, 1),
-			aliasDeepCache:          make([]int, 0, 1),
-			substCacheKeys:          make([]string, 0, 1),
-			substCacheHashes:        make([]int, 0, 1),
-			substCacheValues:        make([]int, 0, 1),
-			returnTy:                tErr(tys),
-			fnName:                  "",
-			inLoop:                  false,
-			diagnostics:             make([]*CheckDiagnostic, 0, 1),
-			assignments:             0,
-			accepted:                0,
-			bindingRecords:          make([]*CheckBindingRecord, 0, 1),
-			symbolRecords:           make([]*CheckSymbolRecord, 0, 1),
-			instantiations:          make([]*CheckInstantiationRecord, 0, 1),
+			bindings:          make([]*CheckBinding, 0, 1),
+			bindingIndex:      emptyCheckBindingStackIndex(1),
+			genericBounds:     make([]*CheckGenericBound, 0, 1),
+			genericBoundIndex: emptyCheckIntStackIndex(1),
+			aliasDeepCache:    make([]int, 0, 1),
+			substCacheKeys:    make([]string, 0, 1),
+			substCacheHashes:  make([]int, 0, 1),
+			substCacheValues:  make([]int, 0, 1),
+			returnTy:          tErr(tys),
+			fnName:            "",
+			inLoop:            false,
+			diagnostics:       make([]*CheckDiagnostic, 0, 1),
+			assignments:       0,
+			accepted:          0,
+			bindingRecords:    make([]*CheckBindingRecord, 0, 1),
+			symbolRecords:     make([]*CheckSymbolRecord, 0, 1),
+			instantiations:    make([]*CheckInstantiationRecord, 0, 1),
 		},
 	}
 }
@@ -34270,64 +34259,22 @@ func checkBindSpan(env *CheckEnv, name string, ty int, mutable bool, start int, 
 
 // Osty: /tmp/selfhost_merged.osty:14523:5
 func checkLookup(env *CheckEnv, name string) int {
-	// Osty: /tmp/selfhost_merged.osty:14524:5
-	slot := checkNameIndex(env.local.bindingIndexNames, env.local.bindingIndexHashes, name, checkHashKey(name))
-	_ = slot
-	// Osty: /tmp/selfhost_merged.osty:14525:5
-	if slot < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14526:9
+	binding := checkBindingStackIndexTop(&env.local.bindingIndex, name)
+	_ = binding
+	if binding == nil {
 		return -1
 	}
-	// Osty: /tmp/selfhost_merged.osty:14528:5
-	stack := env.local.bindingIndexStacks[slot]
-	_ = stack
-	// Osty: /tmp/selfhost_merged.osty:14529:5
-	if len(stack) == 0 {
-		// Osty: /tmp/selfhost_merged.osty:14530:9
-		return -1
-	}
-	return stack[func() int {
-		var _p2091 int = len(stack)
-		var _rhs2092 int = 1
-		if _rhs2092 < 0 && _p2091 > math.MaxInt+_rhs2092 {
-			panic("integer overflow")
-		}
-		if _rhs2092 > 0 && _p2091 < math.MinInt+_rhs2092 {
-			panic("integer overflow")
-		}
-		return _p2091 - _rhs2092
-	}()].ty
+	return binding.ty
 }
 
 // Osty: /tmp/selfhost_merged.osty:14535:5
 func checkLookupMutable(env *CheckEnv, name string) bool {
-	// Osty: /tmp/selfhost_merged.osty:14536:5
-	slot := checkNameIndex(env.local.bindingIndexNames, env.local.bindingIndexHashes, name, checkHashKey(name))
-	_ = slot
-	// Osty: /tmp/selfhost_merged.osty:14537:5
-	if slot < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14538:9
+	binding := checkBindingStackIndexTop(&env.local.bindingIndex, name)
+	_ = binding
+	if binding == nil {
 		return false
 	}
-	// Osty: /tmp/selfhost_merged.osty:14540:5
-	stack := env.local.bindingIndexStacks[slot]
-	_ = stack
-	// Osty: /tmp/selfhost_merged.osty:14541:5
-	if len(stack) == 0 {
-		// Osty: /tmp/selfhost_merged.osty:14542:9
-		return false
-	}
-	return stack[func() int {
-		var _p2093 int = len(stack)
-		var _rhs2094 int = 1
-		if _rhs2094 < 0 && _p2093 > math.MaxInt+_rhs2094 {
-			panic("integer overflow")
-		}
-		if _rhs2094 > 0 && _p2093 < math.MinInt+_rhs2094 {
-			panic("integer overflow")
-		}
-		return _p2093 - _rhs2094
-	}()].mutable
+	return binding.mutable
 }
 
 // Osty: /tmp/selfhost_merged.osty:14551:5
@@ -34340,38 +34287,7 @@ func checkRegisterFn(env *CheckEnv, sig *CheckFnSig) {
 	// Osty: /tmp/selfhost_merged.osty:14554:5
 	key := checkFnKey(sig.name, sig.owner)
 	_ = key
-	// Osty: /tmp/selfhost_merged.osty:14556:5
-	slot := checkFnIndexSlot(env, key)
-	_ = slot
-	// Osty: /tmp/selfhost_merged.osty:14557:5
-	if slot < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14555:5
-		keyHash := checkHashKey(key)
-		_ = keyHash
-		// Osty: /tmp/selfhost_merged.osty:14558:9
-		env.global.fnIndexKeys = append(env.global.fnIndexKeys, key)
-		// Osty: /tmp/selfhost_merged.osty:14559:9
-		env.global.fnIndexHashes = append(env.global.fnIndexHashes, keyHash)
-		// Osty: /tmp/selfhost_merged.osty:14560:9
-		env.global.fnIndexValues = append(env.global.fnIndexValues, idx)
-		env.global.fnIndexSlots[key] = len(env.global.fnIndexValues) - 1
-	} else {
-		// Osty: /tmp/selfhost_merged.osty:14562:26
-		env.global.fnIndexValues[slot] = idx
-	}
-}
-
-func checkFnIndexSlot(env *CheckEnv, key string) int {
-	if env.global.fnIndexSlots == nil {
-		env.global.fnIndexSlots = make(map[string]int, len(env.global.fnIndexKeys)+1)
-		for i, existing := range env.global.fnIndexKeys {
-			env.global.fnIndexSlots[existing] = i
-		}
-	}
-	if slot, ok := env.global.fnIndexSlots[key]; ok {
-		return slot
-	}
-	return -1
+	checkNameIndexTableSet(&env.global.fnIndex, key, idx)
 }
 
 func checkMarkImportAlias(env *CheckEnv, alias string) {
@@ -34398,18 +34314,7 @@ func checkMarkFnHasBody(env *CheckEnv, name string, owner string) {
 	// Osty: /tmp/selfhost_merged.osty:14567:5
 	key := checkFnKey(name, owner)
 	_ = key
-	// Osty: /tmp/selfhost_merged.osty:14568:5
-	keyHash := checkHashKey(key)
-	_ = keyHash
-	// Osty: /tmp/selfhost_merged.osty:14569:5
-	if checkNameIndex(env.global.fnBodyKeys, env.global.fnBodyHashes, key, keyHash) >= 0 {
-		// Osty: /tmp/selfhost_merged.osty:14570:9
-		return
-	}
-	// Osty: /tmp/selfhost_merged.osty:14572:5
-	func() struct{} { env.global.fnBodyKeys = append(env.global.fnBodyKeys, key); return struct{}{} }()
-	// Osty: /tmp/selfhost_merged.osty:14573:5
-	func() struct{} { env.global.fnBodyHashes = append(env.global.fnBodyHashes, keyHash); return struct{}{} }()
+	checkNameSetTableAdd(&env.global.fnBodyIndex, key)
 }
 
 // Osty: /tmp/selfhost_merged.osty:14576:5
@@ -34417,7 +34322,7 @@ func checkFnHasBody(env *CheckEnv, name string, owner string) bool {
 	// Osty: /tmp/selfhost_merged.osty:14577:5
 	key := checkFnKey(name, owner)
 	_ = key
-	return checkNameIndex(env.global.fnBodyKeys, env.global.fnBodyHashes, key, checkHashKey(key)) >= 0
+	return checkNameSetTableHas(&env.global.fnBodyIndex, key)
 }
 
 // Osty: /tmp/selfhost_merged.osty:14581:5
@@ -34425,13 +34330,7 @@ func checkLookupFn(env *CheckEnv, name string, owner string) *CheckFnSig {
 	// Osty: /tmp/selfhost_merged.osty:14582:5
 	key := checkFnKey(name, owner)
 	_ = key
-	// Osty: /tmp/selfhost_merged.osty:14583:5
-	slot := checkFnIndexSlot(env, key)
-	_ = slot
-	idx := -1
-	if slot >= 0 {
-		idx = env.global.fnIndexValues[slot]
-	}
+	idx := checkNameIndexTableGet(&env.global.fnIndex, key)
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14584:5
 	if idx >= 0 {
@@ -34530,30 +34429,7 @@ func checkRegisterField(env *CheckEnv, field *CheckFieldSig) {
 	// Osty: /tmp/selfhost_merged.osty:14642:5
 	key := checkOwnerKey(field.owner, field.name)
 	_ = key
-	// Osty: /tmp/selfhost_merged.osty:14643:5
-	keyHash := checkHashKey(key)
-	_ = keyHash
-	// Osty: /tmp/selfhost_merged.osty:14644:5
-	slot := checkNameIndex(env.global.fieldIndexKeys, env.global.fieldIndexHashes, key, keyHash)
-	_ = slot
-	// Osty: /tmp/selfhost_merged.osty:14645:5
-	if slot < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14646:9
-		func() struct{} { env.global.fieldIndexKeys = append(env.global.fieldIndexKeys, key); return struct{}{} }()
-		// Osty: /tmp/selfhost_merged.osty:14647:9
-		func() struct{} {
-			env.global.fieldIndexHashes = append(env.global.fieldIndexHashes, keyHash)
-			return struct{}{}
-		}()
-		// Osty: /tmp/selfhost_merged.osty:14648:9
-		func() struct{} {
-			env.global.fieldIndexValues = append(env.global.fieldIndexValues, idx)
-			return struct{}{}
-		}()
-	} else {
-		// Osty: /tmp/selfhost_merged.osty:14650:29
-		env.global.fieldIndexValues[slot] = idx
-	}
+	checkNameIndexTableSet(&env.global.fieldIndex, key, idx)
 }
 
 // Osty: /tmp/selfhost_merged.osty:14654:5
@@ -34561,8 +34437,7 @@ func checkLookupField(env *CheckEnv, owner string, name string) *CheckFieldSig {
 	// Osty: /tmp/selfhost_merged.osty:14655:5
 	key := checkOwnerKey(owner, name)
 	_ = key
-	// Osty: /tmp/selfhost_merged.osty:14656:5
-	idx := checkLookupExactIndex(env.global.fieldIndexKeys, env.global.fieldIndexHashes, env.global.fieldIndexValues, key, checkHashKey(key))
+	idx := checkNameIndexTableGet(&env.global.fieldIndex, key)
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14657:5
 	if idx >= 0 {
@@ -34579,69 +34454,16 @@ func checkRegisterVariant(env *CheckEnv, variant *CheckVariantSig) {
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14665:5
 	func() struct{} { env.global.variants = append(env.global.variants, variant); return struct{}{} }()
-	// Osty: /tmp/selfhost_merged.osty:14666:5
-	nameHash := checkHashKey(variant.name)
-	_ = nameHash
-	// Osty: /tmp/selfhost_merged.osty:14667:5
-	nameSlot := checkNameIndex(env.global.variantIndexKeys, env.global.variantIndexHashes, variant.name, nameHash)
-	_ = nameSlot
-	// Osty: /tmp/selfhost_merged.osty:14668:5
-	if nameSlot < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14669:9
-		func() struct{} {
-			env.global.variantIndexKeys = append(env.global.variantIndexKeys, variant.name)
-			return struct{}{}
-		}()
-		// Osty: /tmp/selfhost_merged.osty:14670:9
-		func() struct{} {
-			env.global.variantIndexHashes = append(env.global.variantIndexHashes, nameHash)
-			return struct{}{}
-		}()
-		// Osty: /tmp/selfhost_merged.osty:14671:9
-		func() struct{} {
-			env.global.variantIndexValues = append(env.global.variantIndexValues, idx)
-			return struct{}{}
-		}()
-	} else {
-		// Osty: /tmp/selfhost_merged.osty:14673:31
-		env.global.variantIndexValues[nameSlot] = idx
-	}
+	checkNameIndexTableSet(&env.global.variantIndex, variant.name, idx)
 	// Osty: /tmp/selfhost_merged.osty:14675:5
 	ownerKey := checkOwnerKey(variant.owner, variant.name)
 	_ = ownerKey
-	// Osty: /tmp/selfhost_merged.osty:14676:5
-	ownerHash := checkHashKey(ownerKey)
-	_ = ownerHash
-	// Osty: /tmp/selfhost_merged.osty:14677:5
-	ownerSlot := checkNameIndex(env.global.variantOwnerIndexKeys, env.global.variantOwnerIndexHashes, ownerKey, ownerHash)
-	_ = ownerSlot
-	// Osty: /tmp/selfhost_merged.osty:14678:5
-	if ownerSlot < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14679:9
-		func() struct{} {
-			env.global.variantOwnerIndexKeys = append(env.global.variantOwnerIndexKeys, ownerKey)
-			return struct{}{}
-		}()
-		// Osty: /tmp/selfhost_merged.osty:14680:9
-		func() struct{} {
-			env.global.variantOwnerIndexHashes = append(env.global.variantOwnerIndexHashes, ownerHash)
-			return struct{}{}
-		}()
-		// Osty: /tmp/selfhost_merged.osty:14681:9
-		func() struct{} {
-			env.global.variantOwnerIndexValues = append(env.global.variantOwnerIndexValues, idx)
-			return struct{}{}
-		}()
-	} else {
-		// Osty: /tmp/selfhost_merged.osty:14683:36
-		env.global.variantOwnerIndexValues[ownerSlot] = idx
-	}
+	checkNameIndexTableSet(&env.global.variantOwnerIndex, ownerKey, idx)
 }
 
 // Osty: /tmp/selfhost_merged.osty:14687:5
 func checkLookupVariant(env *CheckEnv, name string) *CheckVariantSig {
-	// Osty: /tmp/selfhost_merged.osty:14688:5
-	idx := checkLookupExactIndex(env.global.variantIndexKeys, env.global.variantIndexHashes, env.global.variantIndexValues, name, checkHashKey(name))
+	idx := checkNameIndexTableGet(&env.global.variantIndex, name)
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14689:5
 	if idx >= 0 {
@@ -34656,8 +34478,7 @@ func checkLookupVariantInOwner(env *CheckEnv, owner string, name string) *CheckV
 	// Osty: /tmp/selfhost_merged.osty:14696:5
 	key := checkOwnerKey(owner, name)
 	_ = key
-	// Osty: /tmp/selfhost_merged.osty:14697:5
-	idx := checkLookupExactIndex(env.global.variantOwnerIndexKeys, env.global.variantOwnerIndexHashes, env.global.variantOwnerIndexValues, key, checkHashKey(key))
+	idx := checkNameIndexTableGet(&env.global.variantOwnerIndex, key)
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14698:5
 	if idx >= 0 {
@@ -34674,41 +34495,14 @@ func checkRegisterAlias(env *CheckEnv, alias *CheckAliasSig) {
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14706:5
 	func() struct{} { env.global.aliases = append(env.global.aliases, alias); return struct{}{} }()
-	// Osty: /tmp/selfhost_merged.osty:14707:5
-	nameHash := checkHashKey(alias.name)
-	_ = nameHash
-	// Osty: /tmp/selfhost_merged.osty:14708:5
-	slot := checkNameIndex(env.global.aliasIndexKeys, env.global.aliasIndexHashes, alias.name, nameHash)
-	_ = slot
-	// Osty: /tmp/selfhost_merged.osty:14709:5
-	if slot < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14710:9
-		func() struct{} {
-			env.global.aliasIndexKeys = append(env.global.aliasIndexKeys, alias.name)
-			return struct{}{}
-		}()
-		// Osty: /tmp/selfhost_merged.osty:14711:9
-		func() struct{} {
-			env.global.aliasIndexHashes = append(env.global.aliasIndexHashes, nameHash)
-			return struct{}{}
-		}()
-		// Osty: /tmp/selfhost_merged.osty:14712:9
-		func() struct{} {
-			env.global.aliasIndexValues = append(env.global.aliasIndexValues, idx)
-			return struct{}{}
-		}()
-	} else {
-		// Osty: /tmp/selfhost_merged.osty:14714:29
-		env.global.aliasIndexValues[slot] = idx
-	}
+	checkNameIndexTableSet(&env.global.aliasIndex, alias.name, idx)
 	// Osty: /tmp/selfhost_merged.osty:14716:8
 	env.local.aliasDeepCache = make([]int, 0, 1)
 }
 
 // Osty: /tmp/selfhost_merged.osty:14719:5
 func checkLookupAlias(env *CheckEnv, name string) *CheckAliasSig {
-	// Osty: /tmp/selfhost_merged.osty:14720:5
-	idx := checkLookupExactIndex(env.global.aliasIndexKeys, env.global.aliasIndexHashes, env.global.aliasIndexValues, name, checkHashKey(name))
+	idx := checkNameIndexTableGet(&env.global.aliasIndex, name)
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14721:5
 	if idx >= 0 {
@@ -34725,39 +34519,12 @@ func checkRegisterType(env *CheckEnv, sig *CheckTypeSig) {
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14729:5
 	func() struct{} { env.global.types = append(env.global.types, sig); return struct{}{} }()
-	// Osty: /tmp/selfhost_merged.osty:14730:5
-	nameHash := checkHashKey(sig.name)
-	_ = nameHash
-	// Osty: /tmp/selfhost_merged.osty:14731:5
-	slot := checkNameIndex(env.global.typeIndexKeys, env.global.typeIndexHashes, sig.name, nameHash)
-	_ = slot
-	// Osty: /tmp/selfhost_merged.osty:14732:5
-	if slot < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14733:9
-		func() struct{} {
-			env.global.typeIndexKeys = append(env.global.typeIndexKeys, sig.name)
-			return struct{}{}
-		}()
-		// Osty: /tmp/selfhost_merged.osty:14734:9
-		func() struct{} {
-			env.global.typeIndexHashes = append(env.global.typeIndexHashes, nameHash)
-			return struct{}{}
-		}()
-		// Osty: /tmp/selfhost_merged.osty:14735:9
-		func() struct{} {
-			env.global.typeIndexValues = append(env.global.typeIndexValues, idx)
-			return struct{}{}
-		}()
-	} else {
-		// Osty: /tmp/selfhost_merged.osty:14737:28
-		env.global.typeIndexValues[slot] = idx
-	}
+	checkNameIndexTableSet(&env.global.typeIndex, sig.name, idx)
 }
 
 // Osty: /tmp/selfhost_merged.osty:14741:5
 func checkLookupType(env *CheckEnv, name string) *CheckTypeSig {
-	// Osty: /tmp/selfhost_merged.osty:14742:5
-	idx := checkLookupExactIndex(env.global.typeIndexKeys, env.global.typeIndexHashes, env.global.typeIndexValues, name, checkHashKey(name))
+	idx := checkNameIndexTableGet(&env.global.typeIndex, name)
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14743:5
 	if idx >= 0 {
@@ -34786,27 +34553,12 @@ func checkDeclaredTypeExists(env *CheckEnv, name string) bool {
 func checkRegisterInterface(env *CheckEnv, name string) {
 	// Osty: /tmp/selfhost_merged.osty:14760:5
 	func() struct{} { env.global.interfaces = append(env.global.interfaces, name); return struct{}{} }()
-	// Osty: /tmp/selfhost_merged.osty:14761:5
-	nameHash := checkHashKey(name)
-	_ = nameHash
-	// Osty: /tmp/selfhost_merged.osty:14762:5
-	if checkNameIndex(env.global.interfaceIndexKeys, env.global.interfaceIndexHashes, name, nameHash) < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14763:9
-		func() struct{} {
-			env.global.interfaceIndexKeys = append(env.global.interfaceIndexKeys, name)
-			return struct{}{}
-		}()
-		// Osty: /tmp/selfhost_merged.osty:14764:9
-		func() struct{} {
-			env.global.interfaceIndexHashes = append(env.global.interfaceIndexHashes, nameHash)
-			return struct{}{}
-		}()
-	}
+	checkNameSetTableAdd(&env.global.interfaceIndex, name)
 }
 
 // Osty: /tmp/selfhost_merged.osty:14768:5
 func checkIsInterface(env *CheckEnv, name string) bool {
-	return checkNameIndex(env.global.interfaceIndexKeys, env.global.interfaceIndexHashes, name, checkHashKey(name)) >= 0
+	return checkNameSetTableHas(&env.global.interfaceIndex, name)
 }
 
 // Osty: /tmp/selfhost_merged.osty:14772:5
@@ -34844,20 +34596,9 @@ func checkAddGenericBound(env *CheckEnv, bound *CheckGenericBound) {
 
 // Osty: /tmp/selfhost_merged.osty:14795:5
 func checkLookupGenericBound(env *CheckEnv, tyParam string) int {
-	// Osty: /tmp/selfhost_merged.osty:14796:5
-	slot := checkNameIndex(env.local.genericBoundIndexNames, env.local.genericBoundIndexHashes, tyParam, checkHashKey(tyParam))
-	_ = slot
-	// Osty: /tmp/selfhost_merged.osty:14797:5
-	if slot < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14798:9
-		return -1
-	}
-	// Osty: /tmp/selfhost_merged.osty:14800:5
-	stack := env.local.genericBoundIndexStacks[slot]
+	stack := checkIntStackIndexValues(&env.local.genericBoundIndex, tyParam)
 	_ = stack
-	// Osty: /tmp/selfhost_merged.osty:14801:5
 	if len(stack) == 0 {
-		// Osty: /tmp/selfhost_merged.osty:14802:9
 		return -1
 	}
 	return stack[func() int {
@@ -34875,15 +34616,7 @@ func checkLookupGenericBound(env *CheckEnv, tyParam string) int {
 
 // Osty: /tmp/selfhost_merged.osty:14807:5
 func checkGenericBoundsFor(env *CheckEnv, tyParam string) []int {
-	// Osty: /tmp/selfhost_merged.osty:14808:5
-	slot := checkNameIndex(env.local.genericBoundIndexNames, env.local.genericBoundIndexHashes, tyParam, checkHashKey(tyParam))
-	_ = slot
-	// Osty: /tmp/selfhost_merged.osty:14809:5
-	if slot < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14810:9
-		return make([]int, 0, 1)
-	}
-	return env.local.genericBoundIndexStacks[slot]
+	return checkIntStackIndexValues(&env.local.genericBoundIndex, tyParam)
 }
 
 // Osty: /tmp/selfhost_merged.osty:14815:5
@@ -34946,124 +34679,22 @@ func checkGenericBoundCount(env *CheckEnv) int {
 
 // Osty: /tmp/selfhost_merged.osty:14833:1
 func checkBindingIndexPush(env *CheckEnv, binding *CheckBinding) {
-	// Osty: /tmp/selfhost_merged.osty:14834:5
-	nameHash := checkHashKey(binding.name)
-	_ = nameHash
-	// Osty: /tmp/selfhost_merged.osty:14835:5
-	slot := checkNameIndex(env.local.bindingIndexNames, env.local.bindingIndexHashes, binding.name, nameHash)
-	_ = slot
-	// Osty: /tmp/selfhost_merged.osty:14836:5
-	if slot < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14837:9
-		func() struct{} {
-			env.local.bindingIndexNames = append(env.local.bindingIndexNames, binding.name)
-			return struct{}{}
-		}()
-		// Osty: /tmp/selfhost_merged.osty:14838:9
-		func() struct{} {
-			env.local.bindingIndexHashes = append(env.local.bindingIndexHashes, nameHash)
-			return struct{}{}
-		}()
-		// Osty: /tmp/selfhost_merged.osty:14839:9
-		func() struct{} {
-			env.local.bindingIndexStacks = append(env.local.bindingIndexStacks, []*CheckBinding{binding})
-			return struct{}{}
-		}()
-		// Osty: /tmp/selfhost_merged.osty:14840:9
-		return
-	}
-	// Osty: /tmp/selfhost_merged.osty:14842:5
-	func() struct{} {
-		env.local.bindingIndexStacks[slot] = append(env.local.bindingIndexStacks[slot], binding)
-		return struct{}{}
-	}()
+	checkBindingStackIndexPush(&env.local.bindingIndex, binding)
 }
 
 // Osty: /tmp/selfhost_merged.osty:14845:1
 func checkBindingIndexPop(env *CheckEnv, name string) {
-	// Osty: /tmp/selfhost_merged.osty:14846:5
-	slot := checkNameIndex(env.local.bindingIndexNames, env.local.bindingIndexHashes, name, checkHashKey(name))
-	_ = slot
-	// Osty: /tmp/selfhost_merged.osty:14847:5
-	if slot < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14848:9
-		return
-	}
-	// Osty: /tmp/selfhost_merged.osty:14850:5
-	if len(env.local.bindingIndexStacks[slot]) > 0 {
-		// Osty: /tmp/selfhost_merged.osty:14851:9
-		_ = func() **CheckBinding {
-			if len(env.local.bindingIndexStacks[slot]) == 0 {
-				return nil
-			}
-			v := env.local.bindingIndexStacks[slot][len(env.local.bindingIndexStacks[slot])-1]
-			var zero *CheckBinding
-			env.local.bindingIndexStacks[slot][len(env.local.bindingIndexStacks[slot])-1] = zero
-			env.local.bindingIndexStacks[slot] = env.local.bindingIndexStacks[slot][:len(env.local.bindingIndexStacks[slot])-1]
-			return &v
-		}()
-	}
+	checkBindingStackIndexPop(&env.local.bindingIndex, name)
 }
 
 // Osty: /tmp/selfhost_merged.osty:14855:1
 func checkGenericBoundIndexPush(env *CheckEnv, name string, iface int) {
-	// Osty: /tmp/selfhost_merged.osty:14856:5
-	nameHash := checkHashKey(name)
-	_ = nameHash
-	// Osty: /tmp/selfhost_merged.osty:14857:5
-	slot := checkNameIndex(env.local.genericBoundIndexNames, env.local.genericBoundIndexHashes, name, nameHash)
-	_ = slot
-	// Osty: /tmp/selfhost_merged.osty:14858:5
-	if slot < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14859:9
-		func() struct{} {
-			env.local.genericBoundIndexNames = append(env.local.genericBoundIndexNames, name)
-			return struct{}{}
-		}()
-		// Osty: /tmp/selfhost_merged.osty:14860:9
-		func() struct{} {
-			env.local.genericBoundIndexHashes = append(env.local.genericBoundIndexHashes, nameHash)
-			return struct{}{}
-		}()
-		// Osty: /tmp/selfhost_merged.osty:14861:9
-		func() struct{} {
-			env.local.genericBoundIndexStacks = append(env.local.genericBoundIndexStacks, []int{iface})
-			return struct{}{}
-		}()
-		// Osty: /tmp/selfhost_merged.osty:14862:9
-		return
-	}
-	// Osty: /tmp/selfhost_merged.osty:14864:5
-	func() struct{} {
-		env.local.genericBoundIndexStacks[slot] = append(env.local.genericBoundIndexStacks[slot], iface)
-		return struct{}{}
-	}()
+	checkIntStackIndexPush(&env.local.genericBoundIndex, name, iface)
 }
 
 // Osty: /tmp/selfhost_merged.osty:14867:1
 func checkGenericBoundIndexPop(env *CheckEnv, name string) {
-	// Osty: /tmp/selfhost_merged.osty:14868:5
-	slot := checkNameIndex(env.local.genericBoundIndexNames, env.local.genericBoundIndexHashes, name, checkHashKey(name))
-	_ = slot
-	// Osty: /tmp/selfhost_merged.osty:14869:5
-	if slot < 0 {
-		// Osty: /tmp/selfhost_merged.osty:14870:9
-		return
-	}
-	// Osty: /tmp/selfhost_merged.osty:14872:5
-	if len(env.local.genericBoundIndexStacks[slot]) > 0 {
-		// Osty: /tmp/selfhost_merged.osty:14873:9
-		_ = func() *int {
-			if len(env.local.genericBoundIndexStacks[slot]) == 0 {
-				return nil
-			}
-			v := env.local.genericBoundIndexStacks[slot][len(env.local.genericBoundIndexStacks[slot])-1]
-			var zero int
-			env.local.genericBoundIndexStacks[slot][len(env.local.genericBoundIndexStacks[slot])-1] = zero
-			env.local.genericBoundIndexStacks[slot] = env.local.genericBoundIndexStacks[slot][:len(env.local.genericBoundIndexStacks[slot])-1]
-			return &v
-		}()
-	}
+	checkIntStackIndexPop(&env.local.genericBoundIndex, name)
 }
 
 // Osty: /tmp/selfhost_merged.osty:14884:1
@@ -35073,6 +34704,188 @@ func checkHashKey(key string) int {
 		h = (h*33 + int(key[i])) % 1073741789
 	}
 	return h
+}
+
+func emptyCheckNameIndexTable(capacity int) CheckNameIndexTable {
+	return CheckNameIndexTable{
+		keys:   make([]string, 0, capacity),
+		hashes: make([]int, 0, capacity),
+		values: make([]int, 0, capacity),
+		slots:  make(map[string]int, capacity),
+	}
+}
+
+func emptyCheckNameSetTable(capacity int) CheckNameSetTable {
+	return CheckNameSetTable{
+		keys:   make([]string, 0, capacity),
+		hashes: make([]int, 0, capacity),
+		slots:  make(map[string]int, capacity),
+	}
+}
+
+func emptyCheckBindingStackIndex(capacity int) CheckBindingStackIndex {
+	return CheckBindingStackIndex{
+		keys:   make([]string, 0, capacity),
+		hashes: make([]int, 0, capacity),
+		stacks: make([][]*CheckBinding, 0, capacity),
+		slots:  make(map[string]int, capacity),
+	}
+}
+
+func emptyCheckIntStackIndex(capacity int) CheckIntStackIndex {
+	return CheckIntStackIndex{
+		keys:   make([]string, 0, capacity),
+		hashes: make([]int, 0, capacity),
+		stacks: make([][]int, 0, capacity),
+		slots:  make(map[string]int, capacity),
+	}
+}
+
+func checkNameIndexTableSlot(table *CheckNameIndexTable, key string) int {
+	if table.slots == nil {
+		table.slots = make(map[string]int, len(table.keys)+1)
+		for i, existing := range table.keys {
+			table.slots[existing] = i
+		}
+	}
+	if slot, ok := table.slots[key]; ok {
+		return slot
+	}
+	return -1
+}
+
+func checkNameIndexTableSet(table *CheckNameIndexTable, key string, value int) {
+	slot := checkNameIndexTableSlot(table, key)
+	if slot < 0 {
+		table.keys = append(table.keys, key)
+		table.hashes = append(table.hashes, checkHashKey(key))
+		table.values = append(table.values, value)
+		table.slots[key] = len(table.values) - 1
+		return
+	}
+	table.values[slot] = value
+}
+
+func checkNameIndexTableGet(table *CheckNameIndexTable, key string) int {
+	slot := checkNameIndexTableSlot(table, key)
+	if slot < 0 {
+		return -1
+	}
+	return table.values[slot]
+}
+
+func checkNameSetTableSlot(table *CheckNameSetTable, key string) int {
+	if table.slots == nil {
+		table.slots = make(map[string]int, len(table.keys)+1)
+		for i, existing := range table.keys {
+			table.slots[existing] = i
+		}
+	}
+	if slot, ok := table.slots[key]; ok {
+		return slot
+	}
+	return -1
+}
+
+func checkNameSetTableAdd(table *CheckNameSetTable, key string) {
+	slot := checkNameSetTableSlot(table, key)
+	if slot >= 0 {
+		return
+	}
+	table.keys = append(table.keys, key)
+	table.hashes = append(table.hashes, checkHashKey(key))
+	table.slots[key] = len(table.keys) - 1
+}
+
+func checkNameSetTableHas(table *CheckNameSetTable, key string) bool {
+	return checkNameSetTableSlot(table, key) >= 0
+}
+
+func checkBindingStackIndexSlot(table *CheckBindingStackIndex, key string) int {
+	if table.slots == nil {
+		table.slots = make(map[string]int, len(table.keys)+1)
+		for i, existing := range table.keys {
+			table.slots[existing] = i
+		}
+	}
+	if slot, ok := table.slots[key]; ok {
+		return slot
+	}
+	return -1
+}
+
+func checkBindingStackIndexPush(table *CheckBindingStackIndex, binding *CheckBinding) {
+	slot := checkBindingStackIndexSlot(table, binding.name)
+	if slot < 0 {
+		table.keys = append(table.keys, binding.name)
+		table.hashes = append(table.hashes, checkHashKey(binding.name))
+		table.stacks = append(table.stacks, []*CheckBinding{binding})
+		table.slots[binding.name] = len(table.stacks) - 1
+		return
+	}
+	table.stacks[slot] = append(table.stacks[slot], binding)
+}
+
+func checkBindingStackIndexPop(table *CheckBindingStackIndex, name string) {
+	slot := checkBindingStackIndexSlot(table, name)
+	if slot < 0 || len(table.stacks[slot]) == 0 {
+		return
+	}
+	last := len(table.stacks[slot]) - 1
+	var zero *CheckBinding
+	table.stacks[slot][last] = zero
+	table.stacks[slot] = table.stacks[slot][:last]
+}
+
+func checkBindingStackIndexTop(table *CheckBindingStackIndex, name string) *CheckBinding {
+	slot := checkBindingStackIndexSlot(table, name)
+	if slot < 0 || len(table.stacks[slot]) == 0 {
+		return nil
+	}
+	return table.stacks[slot][len(table.stacks[slot])-1]
+}
+
+func checkIntStackIndexSlot(table *CheckIntStackIndex, key string) int {
+	if table.slots == nil {
+		table.slots = make(map[string]int, len(table.keys)+1)
+		for i, existing := range table.keys {
+			table.slots[existing] = i
+		}
+	}
+	if slot, ok := table.slots[key]; ok {
+		return slot
+	}
+	return -1
+}
+
+func checkIntStackIndexPush(table *CheckIntStackIndex, key string, value int) {
+	slot := checkIntStackIndexSlot(table, key)
+	if slot < 0 {
+		table.keys = append(table.keys, key)
+		table.hashes = append(table.hashes, checkHashKey(key))
+		table.stacks = append(table.stacks, []int{value})
+		table.slots[key] = len(table.stacks) - 1
+		return
+	}
+	table.stacks[slot] = append(table.stacks[slot], value)
+}
+
+func checkIntStackIndexPop(table *CheckIntStackIndex, key string) {
+	slot := checkIntStackIndexSlot(table, key)
+	if slot < 0 || len(table.stacks[slot]) == 0 {
+		return
+	}
+	last := len(table.stacks[slot]) - 1
+	table.stacks[slot][last] = 0
+	table.stacks[slot] = table.stacks[slot][:last]
+}
+
+func checkIntStackIndexValues(table *CheckIntStackIndex, key string) []int {
+	slot := checkIntStackIndexSlot(table, key)
+	if slot < 0 {
+		return make([]int, 0, 1)
+	}
+	return table.stacks[slot]
 }
 
 // Osty: /tmp/selfhost_merged.osty:14892:1

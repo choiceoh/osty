@@ -39,20 +39,58 @@ func TestCheckFnIndexSlotReturnsLatestRegistration(t *testing.T) {
 
 	checkRegisterFn(env, first)
 	key := checkFnKey("value", "Box")
-	firstSlot, ok := env.global.fnIndexSlots[key]
+	firstSlot, ok := env.global.fnIndex.slots[key]
 	if !ok {
-		t.Fatalf("fnIndexSlots missing key %q", key)
+		t.Fatalf("fnIndex.slots missing key %q", key)
 	}
 
 	checkRegisterFn(env, second)
-	if got := len(env.global.fnIndexKeys); got != 1 {
-		t.Fatalf("fnIndexKeys len = %d, want 1", got)
+	if got := len(env.global.fnIndex.keys); got != 1 {
+		t.Fatalf("fnIndex.keys len = %d, want 1", got)
 	}
-	if got := env.global.fnIndexSlots[key]; got != firstSlot {
-		t.Fatalf("fnIndexSlots[%q] = %d, want %d", key, got, firstSlot)
+	if got := env.global.fnIndex.slots[key]; got != firstSlot {
+		t.Fatalf("fnIndex.slots[%q] = %d, want %d", key, got, firstSlot)
 	}
 	if got := checkLookupFn(env, "value", "Box"); got != second {
 		t.Fatalf("checkLookupFn returned %#v, want latest registration", got)
+	}
+}
+
+func TestCheckNameIndexTableReturnsLatestValue(t *testing.T) {
+	table := emptyCheckNameIndexTable(1)
+	checkNameIndexTableSet(&table, "alpha", 10)
+	checkNameIndexTableSet(&table, "beta", 20)
+	checkNameIndexTableSet(&table, "alpha", 30)
+
+	if got := len(table.keys); got != 2 {
+		t.Fatalf("table keys len = %d, want 2", got)
+	}
+	if got := checkNameIndexTableGet(&table, "alpha"); got != 30 {
+		t.Fatalf("checkNameIndexTableGet = %d, want 30", got)
+	}
+}
+
+func TestCheckStackIndexesUseSlotFastPath(t *testing.T) {
+	arena := emptyTyArena()
+	bindings := emptyCheckBindingStackIndex(1)
+	checkBindingStackIndexPush(&bindings, &CheckBinding{name: "item", ty: tInt(arena), mutable: false})
+	checkBindingStackIndexPush(&bindings, &CheckBinding{name: "item", ty: tString(arena), mutable: true})
+
+	if got := len(bindings.keys); got != 1 {
+		t.Fatalf("binding index keys len = %d, want 1", got)
+	}
+	if got := checkBindingStackIndexTop(&bindings, "item"); got == nil || got.ty != tString(arena) {
+		t.Fatalf("binding top = %#v, want latest string binding", got)
+	}
+
+	bounds := emptyCheckIntStackIndex(1)
+	checkIntStackIndexPush(&bounds, "T", 1)
+	checkIntStackIndexPush(&bounds, "T", 2)
+	if got := len(bounds.keys); got != 1 {
+		t.Fatalf("generic bound keys len = %d, want 1", got)
+	}
+	if got := checkIntStackIndexValues(&bounds, "T"); len(got) != 2 || got[1] != 2 {
+		t.Fatalf("generic bound stack = %#v, want [1 2]", got)
 	}
 }
 
