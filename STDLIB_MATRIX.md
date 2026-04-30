@@ -18,19 +18,20 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 69 공개 모듈. 분류 기준:
+총 70 공개 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (65 / 69 = 94%)
+### ⭐⭐⭐⭐⭐ Production (66 / 70 = 94%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
 | strings | 7242 | string 17 + bytes 29 runtime | 압도적. UTF-8 / casefold / normalize / grapheme |
 | http | 1468 | net 40 runtime | Router + Cookie + MediaType + Form + Query + dispatch |
+| ai | 1793 | pure Osty + http/json | OpenAI-compatible / OpenRouter / Anthropic / Gemini / local-runtime chat requests, headers, structured tool calls/results, response parsing, models, embeddings, SSE data helpers |
 | aiagents | 736 | pure Osty | Deneb-derived agent/session/message types, tool presets, safety boundary, RankLines / TruncateHeadTail compaction |
 | redact | 746 | pure Osty | Deneb-derived secret redaction: vendor tokens, JWTs, URL query/form distinction, JSON/env/key-value, DB URLs, URL userinfo, Telegram/Discord/phone/private-key handling |
 | media | 617 | pure Osty + bytes | Deneb-derived MIME sniffing: magic bytes, icon/ftyp/OOXML ZIP, binary sampling, archive path safety, YouTube + MEDIA token helpers with file:// normalization/directive stripping |
@@ -96,7 +97,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (4 / 69 = 6%)
+### ⭐⭐⭐⭐ Production-adjacent (4 / 70 = 6%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
@@ -141,6 +142,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | WebSocket handshake/frame | ✅ 가능 | websocket (accept key / headers / frame encode/decode) |
 | GUI 앱 코어 | ✅ 가능 | gui (retained node tree + layout + event routing + render-command backend contract + 기본 HTML/SVG 렌더러 + 브라우저 이벤트 브리지 + input/change 상태 반영 + HTML 파일 저장/기본 브라우저 실행 헬퍼) |
 | GraphQL 요청 생성 | ✅ 가능 | graphql (document builder / variables JSON body) |
+| AI API 연동 | ✅ 가능 | ai + http + json (OpenAI-compatible / OpenRouter / Anthropic / Gemini chat, structured tool calls/results, models, embeddings) |
 | 이메일/MIME 생성 | ✅ 가능 | email (address / MIME multipart / SMTP DATA helpers) |
 | SMTP 트랜잭션 조립 | ✅ 가능 | smtp (EHLO / STARTTLS plan / AUTH / MAIL-RCPT-DATA / reply parsing) |
 | TAR 아카이브 | ✅ 가능 | tar (ustar encode/decode/list/extract) |
@@ -149,11 +151,11 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | OCR 엔진 연결 / 결과 분석 | ✅ 가능 | ocr (PaddleOCR v5 / Tesseract 실행 계획, JSON/TSV normalize, confidence/search/key-value/chunk helpers) |
 | SQL 쿼리 조립 | ✅ 가능 | sql (identifier quoting / value literals / dialect placeholders / CRUD builders) |
 | DB 설정/마이그레이션 계획 | ✅ 가능 | db + sql (DSN / pool / tx options / result rows / migration helpers) |
-| AI agent shell / chat mode | ✅ 가능 | aiagents + http/json/log/thread |
+| AI agent shell / chat mode | ✅ 가능 | ai + aiagents + http/json/log/thread |
 | Agent-safe logs/transcripts | ✅ 가능 | redact + security + tokenest + aiagents |
 | Local document search | ✅ 가능 | search + markdown + media + jsonl |
 | 사람이 읽는 리포트 산출물 | ✅ 가능 | report + markdown/jsonl/csv |
-| LLM retry/compaction loop | ✅ 가능 | httpretry + tokenest + aiagents |
+| LLM retry/compaction loop | ✅ 가능 | ai + httpretry + tokenest + aiagents |
 
 ## 3. 진짜 약점 (남은 런타임 / 딥 기능)
 
@@ -183,7 +185,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 46 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, aiagents, redact, media, security, search, markdown, report, tokenest, httpretry, jsonl, shortid, metrics, net, fmt, json, config, table, url, io, collections, email, db, grid, gui, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
+- 47 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, redact, media, security, search, markdown, report, tokenest, httpretry, jsonl, shortid, metrics, net, fmt, json, config, table, url, io, collections, email, db, grid, gui, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
 - 5 모듈은 Phase A 충실 + Phase B declaration-only (env, random, os, crypto, compress)
 - fs 는 Phase A 충실 + 확장된 tool-facing declaration surface (walk/glob/watch/atomicWrite/lockFile/hashFile/copyDir/diffFiles)
 - 나머지는 의도된 범위에서 surface 만으로 완성 (cli, math, cmp, hint, debug, ref, process, log, time, error, sync, thread, regex, testing, uuid)
@@ -249,8 +251,9 @@ stdlib audit 중 발견된 *진짜 자랑할 만한* 디자인 패턴:
 8. **`http.Router` + `Cookie` + `MediaType` + `parseQuery` + `parseSetCookie`** — 풀 HTTP 스택. 단순 client wrapper 아님
 9. **`io.Reader` / `Writer` / `ByteWriter` / `LineReader`** — Go io 동급 추상화. fs / http / net 다 이 위에 얹힘
 10. **`collections.windowed(size, step)`** — sliding window. Rust std 에 없음 (itertools 만)
-11. **`aiagents.ToolPreset` + `SafetyPolicy` + `rankLines`** — Deneb 의존성 없는 agent runtime 규칙을 stdlib 표면으로 포팅. chat-only/web-only 모드와 로그/도구출력 compaction trust boundary 를 앱마다 재발명하지 않아도 됨
-12. **`redact` + `security` + `search` + `media` + `tokenest`** — Deneb 에서 "의존성 없이 어렵다" 쪽을 자체 구현한 부분을 stdlib 로 승격. secret 누출 방지, SSRF 우회 차단, local FTS 대체, magic-byte media sniffing, multilingual token budget 계산을 앱마다 재발명하지 않아도 됨
+11. **`ai.chatHttpRequest` + `sendChat` + `ToolCall` / `ToolResult` + provider별 parser** — OpenAI-compatible / OpenRouter / Anthropic / Gemini / local runtime 연동과 tool loop 를 앱마다 JSON 문자열로 재발명하지 않아도 됨
+12. **`aiagents.ToolPreset` + `SafetyPolicy` + `rankLines`** — Deneb 의존성 없는 agent runtime 규칙을 stdlib 표면으로 포팅. chat-only/web-only 모드와 로그/도구출력 compaction trust boundary 를 앱마다 재발명하지 않아도 됨
+13. **`redact` + `security` + `search` + `media` + `tokenest`** — Deneb 에서 "의존성 없이 어렵다" 쪽을 자체 구현한 부분을 stdlib 로 승격. secret 누출 방지, SSRF 우회 차단, local FTS 대체, magic-byte media sniffing, multilingual token budget 계산을 앱마다 재발명하지 않아도 됨
 
 ## 8. 다음 라운드 후보
 

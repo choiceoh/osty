@@ -26,6 +26,10 @@
 - `std.tui` — retained terminal frame buffers and diff rendering
 - `std.grid` — `Point`, `Size`, `Rect`, `Direction`, and `Grid<T>` for
   board, map, and turn-based layouts
+- `std.ai` — provider-neutral AI API request builders, headers, response
+  parsers, structured tool call/result loops, model listing, embeddings, and SSE
+  data-line helpers for OpenAI-compatible, OpenRouter, Anthropic, Gemini, and
+  local runtimes
 - `std.aiagents` — dependency-light agent/session/message, tool preset,
   safety-boundary, and compaction-policy primitives
 - `std.redact` — dependency-free secret redaction for logs, transcripts, URLs,
