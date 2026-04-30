@@ -25,7 +25,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (68 / 72 = 94%)
+### ⭐⭐⭐⭐⭐ Production (69 / 72 = 96%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -83,7 +83,8 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | sync | 96 | mu 5 + rmu 5 | Mutex<T> / Locked<T> type-state, RwLock, Atomic |
 | error | 96 | — | Error interface + wrap / rootCause cause chain |
 | time | 89 | (검색 필요) | Duration / Instant / Zone / Weekday / ZonedTime |
-| testing | 88 + 168 (gen) | test 5 + bench 7 | assert + benchmark + snapshot + property-based (Gen<T>) |
+| testing | 88 | test 5 + bench 7 | assert + benchmark + snapshot + property runner entrypoints |
+| testing_gen | 168 | test property lowering + runtime | property generators: int/intRange/bool/float/char/byte/asciiString/list/listOfSize/option/result/pair/triple/oneOf/oneOfGens/map/filter/constant |
 | log | 85 | — | Level + Handler + TextHandler / JsonHandler — slog 동급 |
 | regex | 74 | — | compile / matches / find / findAll / replace / split |
 | os | 71 | shim + runtime | exec / execShell / execWith / execShellWith / exit / pid / hostname / onSignal |
@@ -100,14 +101,13 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (4 / 72 = 6%)
+### ⭐⭐⭐⭐ Production-adjacent (3 / 72 = 4%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
 | gui.qtquick | 243 | Qt Quick/QML native app backend MVP. `libosty_qt` bridge, runtime diagnostics, reload/import-path helpers, `osty gui doctor qtquick`; bundle/deploy 연계는 후속 |
 | gui.webview2 | 292 | Windows WebView2 C ABI shim. Safe wrapper / scaffold / runtime diagnostics landed; local virtual-origin assets, console-log event bridge, Osty→Web command channel, and handle-lifetime hardening added; Windows smoke and packaged linker flow still pending |
 | compress | 11 | gzip 만 (zstd / deflate 추가 가능). Phase A shim 199 |
-| testing_gen | 168 | property runner 는 int/intRange/asciiString/pair/triple/oneOf/constant subset 실행. bool/float/char/byte/list/listOfSize/option/result/oneOfGens/map/filter 는 아직 실행 subset 밖 |
 
 ### 🚧 실제 미구현 / 갭
 
@@ -119,7 +119,6 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | 없는 모듈 | 없음 (`db`, `smtp`, `zip`, `image` surface 는 존재) |
 | 남은 runtime/deep 기능 | `db driver/runtime`, `smtp TLS/socket execution`, `zip deflate`, `image pixel decode` |
 | 부분 구현 | `compress` 는 gzip 만 있음. deflate/zstd 계열 없음 |
-| 부분 실행 | `testing_gen` 의 일부 조합자는 표면만 있고 property runner 실행 subset 밖 |
 | 문서/코드 드리프트 | 일부 README/매트릭스 문구가 과거 G18 stub 정책을 아직 과장해서 남김 |
 
 ## 2. 카테고리별 데모 가능성

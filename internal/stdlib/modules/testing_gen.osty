@@ -24,10 +24,10 @@
 //         )
 //     }
 //
-// v0.5 scope: signature stubs only (G18 convention). Runtime
-// sampling / shrinking is supplied by the native test runner; these
-// bodies return deterministic-looking placeholders so the stdlib
-// stub checker passes.
+// v0.5 scope: the LLVM test lowering samples every combinator in
+// this module when it appears inside `testing.property*`. These
+// Osty bodies still return deterministic-looking descriptors so the
+// stdlib stub checker and import surface can stay ordinary Osty.
 
 use std.testing as testing
 

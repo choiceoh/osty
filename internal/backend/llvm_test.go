@@ -1924,6 +1924,26 @@ use std.testing.gen as gen
 
 fn main() {
     testing.property(
+        "bool generator produces bools",
+        gen.bool(),
+        |b: Bool| b || !(b),
+    )
+    testing.property(
+        "float generator stays in unit range",
+        gen.float(),
+        |f: Float64| f >= 0.0 && f < 1.0,
+    )
+    testing.property(
+        "char generator stays printable ASCII",
+        gen.char(),
+        |c: Char| c.toInt() >= 32 && c.toInt() < 127,
+    )
+    testing.property(
+        "byte generator stays byte-sized",
+        gen.byte(),
+        |b: Byte| b.toInt() >= 0 && b.toInt() < 256,
+    )
+    testing.property(
         "intRange stays inside bounds",
         gen.intRange(-1000, 1000),
         |n: Int| n >= -1000 && n < 1000,
@@ -1944,9 +1964,44 @@ fn main() {
         |(a, b, c): (Int, Int, Int)| a >= 0 && a < 2 && b >= 3 && b < 5 && c >= 6 && c < 8,
     )
     testing.property(
+        "list generator honors max length",
+        gen.list(gen.intRange(0, 5), 4),
+        |xs: List<Int>| xs.len() <= 4,
+    )
+    testing.property(
+        "listOfSize generator honors exact length",
+        gen.listOfSize(gen.bool(), 3),
+        |xs: List<Bool>| xs.len() == 3,
+    )
+    testing.property(
+        "option generator makes valid options",
+        gen.option(gen.intRange(0, 5)),
+        |x: Int?| x.isNone() || x.unwrap() >= 0,
+    )
+    testing.property(
+        "result generator makes valid results",
+        gen.result(gen.intRange(0, 5), gen.constant("err")),
+        |r: Result<Int, String>| r.isOk() || r.isErr(),
+    )
+    testing.property(
+        "map generator transforms samples",
+        gen.map(gen.intRange(0, 5), |n: Int| n + 1),
+        |n: Int| n >= 1 && n <= 5,
+    )
+    testing.property(
+        "filter generator retries until predicate matches",
+        gen.filter(gen.intRange(-8, 8), |n: Int| n >= 0),
+        |n: Int| n >= 0,
+    )
+    testing.property(
         "oneOf chooses from the provided literal pool",
         gen.oneOf(["aa", "bbb", "cccc"]),
         |s: String| s == "aa" || s == "bbb" || s == "cccc",
+    )
+    testing.property(
+        "oneOfGens chooses from generator pool",
+        gen.oneOfGens([gen.constant(1), gen.intRange(2, 4)]),
+        |n: Int| n == 1 || (n >= 2 && n < 4),
     )
     println("ok")
 }
