@@ -3865,6 +3865,167 @@ pub fn llvmRuntimeFfiKindBytes() -> Int { 6 }
 pub fn llvmRuntimeFfiKindListString() -> Int { 7 }
 pub fn llvmRuntimeFfiKindListChar() -> Int { 8 }
 pub fn llvmRuntimeFfiKindListByte() -> Int { 9 }
+pub fn llvmRuntimeFfiKindListBytes() -> Int { 10 }
+
+/// std.bytes descriptor-only result kinds. The shared scalar/container
+/// values above stay compatible with runtime FFI descriptors, while these
+/// wrapper shapes are consumed by the Go shim to preserve source types.
+pub fn llvmStdBytesResultKindOptionInt() -> Int { 100 }
+pub fn llvmStdBytesResultKindOptionByte() -> Int { 101 }
+pub fn llvmStdBytesResultKindResultBytesError() -> Int { 102 }
+pub fn llvmStdBytesResultKindResultStringError() -> Int { 103 }
+
+pub fn llvmStdBytesCallCanonicalName(name: String) -> String {
+    if name == "From" { return "from" }
+    if name == "Split" { return "split" }
+    if name == "Join" { return "join" }
+    if name == "Concat" { return "concat" }
+    if name == "Repeat" { return "repeat" }
+    if name == "Replace" { return "replace" }
+    if name == "ReplaceAll" { return "replaceAll" }
+    if name == "TrimLeft" || name == "TrimStart" || name == "trimStart" {
+        return "trimLeft"
+    }
+    if name == "TrimRight" || name == "TrimEnd" || name == "trimEnd" {
+        return "trimRight"
+    }
+    if name == "Trim" { return "trim" }
+    if name == "TrimSpace" { return "trimSpace" }
+    if name == "ToUpper" { return "toUpper" }
+    if name == "ToLower" { return "toLower" }
+    if name == "ToHex" { return "toHex" }
+    if name == "FromHex" { return "fromHex" }
+    if name == "Contains" { return "contains" }
+    if name == "StartsWith" { return "startsWith" }
+    if name == "EndsWith" { return "endsWith" }
+    if name == "IndexOf" || name == "Index" { return "indexOf" }
+    if name == "LastIndexOf" || name == "LastIndex" { return "lastIndexOf" }
+    if name == "Slice" { return "slice" }
+    if name == "ToString" { return "toString" }
+    if name == "Len" { return "len" }
+    if name == "IsEmpty" { return "isEmpty" }
+    if name == "Get" { return "get" }
+    if name == "FromString" { return "fromString" }
+    name
+}
+
+pub fn llvmStdBytesCallArgCount(name: String) -> Int {
+    let canonical = llvmStdBytesCallCanonicalName(name)
+    if canonical == "from" || canonical == "trimSpace" ||
+        canonical == "toUpper" || canonical == "toLower" ||
+        canonical == "toHex" || canonical == "fromHex" ||
+        canonical == "toString" || canonical == "len" ||
+        canonical == "isEmpty" || canonical == "fromString" {
+        return 1
+    }
+    if canonical == "split" || canonical == "join" ||
+        canonical == "concat" || canonical == "repeat" ||
+        canonical == "trimLeft" || canonical == "trimRight" ||
+        canonical == "trim" || canonical == "contains" ||
+        canonical == "startsWith" || canonical == "endsWith" ||
+        canonical == "indexOf" || canonical == "lastIndexOf" ||
+        canonical == "get" {
+        return 2
+    }
+    if canonical == "replace" || canonical == "replaceAll" ||
+        canonical == "slice" {
+        return 3
+    }
+    0
+}
+
+pub fn llvmStdBytesCallReturnKind(name: String) -> Int {
+    let canonical = llvmStdBytesCallCanonicalName(name)
+    if canonical == "len" {
+        return llvmRuntimeFfiKindInt()
+    }
+    if canonical == "isEmpty" || canonical == "contains" ||
+        canonical == "startsWith" || canonical == "endsWith" {
+        return llvmRuntimeFfiKindBool()
+    }
+    if canonical == "indexOf" || canonical == "lastIndexOf" {
+        return llvmStdBytesResultKindOptionInt()
+    }
+    if canonical == "get" {
+        return llvmStdBytesResultKindOptionByte()
+    }
+    if canonical == "fromHex" {
+        return llvmStdBytesResultKindResultBytesError()
+    }
+    if canonical == "toString" {
+        return llvmStdBytesResultKindResultStringError()
+    }
+    if canonical == "toHex" {
+        return llvmRuntimeFfiKindString()
+    }
+    if canonical == "split" {
+        return llvmRuntimeFfiKindListBytes()
+    }
+    if llvmStdBytesCallArgCount(canonical) != 0 {
+        return llvmRuntimeFfiKindBytes()
+    }
+    llvmRuntimeFfiKindUnknown()
+}
+
+pub fn llvmStdBytesCallParamName(name: String, index: Int) -> String {
+    let canonical = llvmStdBytesCallCanonicalName(name)
+    if index < 0 || index >= llvmStdBytesCallArgCount(canonical) {
+        return ""
+    }
+    if index == 0 {
+        if canonical == "from" { return "items" }
+        if canonical == "join" { return "parts" }
+        if canonical == "fromHex" || canonical == "fromString" { return "text" }
+        if canonical == "concat" { return "left" }
+        return "value"
+    }
+    if index == 1 {
+        if canonical == "split" || canonical == "join" { return "sep" }
+        if canonical == "concat" { return "right" }
+        if canonical == "repeat" { return "n" }
+        if canonical == "replace" || canonical == "replaceAll" { return "old" }
+        if canonical == "trimLeft" || canonical == "trimRight" ||
+            canonical == "trim" {
+            return "strip"
+        }
+        if canonical == "contains" || canonical == "indexOf" ||
+            canonical == "lastIndexOf" {
+            return "needle"
+        }
+        if canonical == "startsWith" { return "prefix" }
+        if canonical == "endsWith" { return "suffix" }
+        if canonical == "slice" { return "start" }
+        if canonical == "get" { return "index" }
+    }
+    if index == 2 {
+        if canonical == "replace" || canonical == "replaceAll" { return "new" }
+        if canonical == "slice" { return "end" }
+    }
+    ""
+}
+
+pub fn llvmStdBytesCallParamKind(name: String, index: Int) -> Int {
+    let canonical = llvmStdBytesCallCanonicalName(name)
+    if index < 0 || index >= llvmStdBytesCallArgCount(canonical) {
+        return llvmRuntimeFfiKindUnknown()
+    }
+    if canonical == "from" && index == 0 {
+        return llvmRuntimeFfiKindListByte()
+    }
+    if canonical == "join" && index == 0 {
+        return llvmRuntimeFfiKindListBytes()
+    }
+    if (canonical == "repeat" || canonical == "get") && index == 1 {
+        return llvmRuntimeFfiKindInt()
+    }
+    if canonical == "slice" && (index == 1 || index == 2) {
+        return llvmRuntimeFfiKindInt()
+    }
+    if (canonical == "fromHex" || canonical == "fromString") && index == 0 {
+        return llvmRuntimeFfiKindString()
+    }
+    llvmRuntimeFfiKindBytes()
+}
 
 pub fn llvmRuntimeStringsCanonicalFfiName(name: String) -> String {
     let canon = llvmCanonicalStdStringsCallName(name)

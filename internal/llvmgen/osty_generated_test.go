@@ -962,6 +962,73 @@ func TestGeneratedRuntimeStringsFFIPolicyIsOstyOwned(t *testing.T) {
 	}
 }
 
+func TestGeneratedStdBytesCallPolicyIsOstyOwned(t *testing.T) {
+	canonical := []struct {
+		name string
+		want string
+	}{
+		{"From", "from"},
+		{"Split", "split"},
+		{"TrimStart", "trimLeft"},
+		{"trimEnd", "trimRight"},
+		{"Index", "indexOf"},
+		{"LastIndex", "lastIndexOf"},
+		{"Len", "len"},
+		{"unknown", "unknown"},
+	}
+	for _, c := range canonical {
+		if got := llvmStdBytesCallCanonicalName(c.name); got != c.want {
+			t.Fatalf("canonical %s = %q, want %q", c.name, got, c.want)
+		}
+	}
+
+	shape := []struct {
+		name       string
+		retKind    int
+		paramKinds []int
+		paramNames []string
+	}{
+		{"from", llvmRuntimeFfiKindBytes(), []int{llvmRuntimeFfiKindListByte()}, []string{"items"}},
+		{"split", llvmRuntimeFfiKindListBytes(), []int{llvmRuntimeFfiKindBytes(), llvmRuntimeFfiKindBytes()}, []string{"value", "sep"}},
+		{"join", llvmRuntimeFfiKindBytes(), []int{llvmRuntimeFfiKindListBytes(), llvmRuntimeFfiKindBytes()}, []string{"parts", "sep"}},
+		{"repeat", llvmRuntimeFfiKindBytes(), []int{llvmRuntimeFfiKindBytes(), llvmRuntimeFfiKindInt()}, []string{"value", "n"}},
+		{"replace", llvmRuntimeFfiKindBytes(), []int{llvmRuntimeFfiKindBytes(), llvmRuntimeFfiKindBytes(), llvmRuntimeFfiKindBytes()}, []string{"value", "old", "new"}},
+		{"slice", llvmRuntimeFfiKindBytes(), []int{llvmRuntimeFfiKindBytes(), llvmRuntimeFfiKindInt(), llvmRuntimeFfiKindInt()}, []string{"value", "start", "end"}},
+		{"fromHex", llvmStdBytesResultKindResultBytesError(), []int{llvmRuntimeFfiKindString()}, []string{"text"}},
+		{"toString", llvmStdBytesResultKindResultStringError(), []int{llvmRuntimeFfiKindBytes()}, []string{"value"}},
+		{"indexOf", llvmStdBytesResultKindOptionInt(), []int{llvmRuntimeFfiKindBytes(), llvmRuntimeFfiKindBytes()}, []string{"value", "needle"}},
+		{"get", llvmStdBytesResultKindOptionByte(), []int{llvmRuntimeFfiKindBytes(), llvmRuntimeFfiKindInt()}, []string{"value", "index"}},
+		{"toHex", llvmRuntimeFfiKindString(), []int{llvmRuntimeFfiKindBytes()}, []string{"value"}},
+		{"contains", llvmRuntimeFfiKindBool(), []int{llvmRuntimeFfiKindBytes(), llvmRuntimeFfiKindBytes()}, []string{"value", "needle"}},
+		{"len", llvmRuntimeFfiKindInt(), []int{llvmRuntimeFfiKindBytes()}, []string{"value"}},
+	}
+	for _, c := range shape {
+		if got := llvmStdBytesCallReturnKind(c.name); got != c.retKind {
+			t.Fatalf("%s return kind = %d, want %d", c.name, got, c.retKind)
+		}
+		if got := llvmStdBytesCallArgCount(c.name); got != len(c.paramKinds) {
+			t.Fatalf("%s arg count = %d, want %d", c.name, got, len(c.paramKinds))
+		}
+		for i, wantKind := range c.paramKinds {
+			if got := llvmStdBytesCallParamKind(c.name, i); got != wantKind {
+				t.Fatalf("%s param %d kind = %d, want %d", c.name, i, got, wantKind)
+			}
+			if got := llvmStdBytesCallParamName(c.name, i); got != c.paramNames[i] {
+				t.Fatalf("%s param %d name = %q, want %q", c.name, i, got, c.paramNames[i])
+			}
+		}
+	}
+	if got := llvmStdBytesCallArgCount("unknown"); got != 0 {
+		t.Fatalf("unknown arg count = %d, want 0", got)
+	}
+	if got := llvmStdBytesCallReturnKind("unknown"); got != llvmRuntimeFfiKindUnknown() {
+		t.Fatalf("unknown return kind = %d, want unknown", got)
+	}
+	if got := llvmStdBytesCallParamKind("split", 99); got != llvmRuntimeFfiKindUnknown() {
+		t.Fatalf("out-of-range param kind = %d, want unknown", got)
+	}
+}
+
 func TestGeneratedStringRuntimeDeclarationsAreOstyOwned(t *testing.T) {
 	decls := strings.Join(llvmStringRuntimeDeclarations(), "\n")
 

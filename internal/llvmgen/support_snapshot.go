@@ -3551,6 +3551,202 @@ func llvmRuntimeFfiKindListChar() int { return 8 }
 // Osty: llvmRuntimeFfiKindListByte
 func llvmRuntimeFfiKindListByte() int { return 9 }
 
+// Osty: llvmRuntimeFfiKindListBytes
+func llvmRuntimeFfiKindListBytes() int { return 10 }
+
+// Osty: llvmStdBytesResultKindOptionInt
+func llvmStdBytesResultKindOptionInt() int { return 100 }
+
+// Osty: llvmStdBytesResultKindOptionByte
+func llvmStdBytesResultKindOptionByte() int { return 101 }
+
+// Osty: llvmStdBytesResultKindResultBytesError
+func llvmStdBytesResultKindResultBytesError() int { return 102 }
+
+// Osty: llvmStdBytesResultKindResultStringError
+func llvmStdBytesResultKindResultStringError() int { return 103 }
+
+// Osty: llvmStdBytesCallCanonicalName
+func llvmStdBytesCallCanonicalName(name string) string {
+	switch name {
+	case "From":
+		return "from"
+	case "Split":
+		return "split"
+	case "Join":
+		return "join"
+	case "Concat":
+		return "concat"
+	case "Repeat":
+		return "repeat"
+	case "Replace":
+		return "replace"
+	case "ReplaceAll":
+		return "replaceAll"
+	case "TrimLeft", "TrimStart", "trimStart":
+		return "trimLeft"
+	case "TrimRight", "TrimEnd", "trimEnd":
+		return "trimRight"
+	case "Trim":
+		return "trim"
+	case "TrimSpace":
+		return "trimSpace"
+	case "ToUpper":
+		return "toUpper"
+	case "ToLower":
+		return "toLower"
+	case "ToHex":
+		return "toHex"
+	case "FromHex":
+		return "fromHex"
+	case "Contains":
+		return "contains"
+	case "StartsWith":
+		return "startsWith"
+	case "EndsWith":
+		return "endsWith"
+	case "IndexOf", "Index":
+		return "indexOf"
+	case "LastIndexOf", "LastIndex":
+		return "lastIndexOf"
+	case "Slice":
+		return "slice"
+	case "ToString":
+		return "toString"
+	case "Len":
+		return "len"
+	case "IsEmpty":
+		return "isEmpty"
+	case "Get":
+		return "get"
+	case "FromString":
+		return "fromString"
+	default:
+		return name
+	}
+}
+
+// Osty: llvmStdBytesCallArgCount
+func llvmStdBytesCallArgCount(name string) int {
+	canonical := llvmStdBytesCallCanonicalName(name)
+	switch canonical {
+	case "from", "trimSpace", "toUpper", "toLower", "toHex", "fromHex", "toString", "len", "isEmpty", "fromString":
+		return 1
+	case "split", "join", "concat", "repeat", "trimLeft", "trimRight", "trim", "contains", "startsWith", "endsWith", "indexOf", "lastIndexOf", "get":
+		return 2
+	case "replace", "replaceAll", "slice":
+		return 3
+	default:
+		return 0
+	}
+}
+
+// Osty: llvmStdBytesCallReturnKind
+func llvmStdBytesCallReturnKind(name string) int {
+	canonical := llvmStdBytesCallCanonicalName(name)
+	switch canonical {
+	case "len":
+		return llvmRuntimeFfiKindInt()
+	case "isEmpty", "contains", "startsWith", "endsWith":
+		return llvmRuntimeFfiKindBool()
+	case "indexOf", "lastIndexOf":
+		return llvmStdBytesResultKindOptionInt()
+	case "get":
+		return llvmStdBytesResultKindOptionByte()
+	case "fromHex":
+		return llvmStdBytesResultKindResultBytesError()
+	case "toString":
+		return llvmStdBytesResultKindResultStringError()
+	case "toHex":
+		return llvmRuntimeFfiKindString()
+	case "split":
+		return llvmRuntimeFfiKindListBytes()
+	default:
+		if llvmStdBytesCallArgCount(canonical) != 0 {
+			return llvmRuntimeFfiKindBytes()
+		}
+		return llvmRuntimeFfiKindUnknown()
+	}
+}
+
+// Osty: llvmStdBytesCallParamName
+func llvmStdBytesCallParamName(name string, index int) string {
+	canonical := llvmStdBytesCallCanonicalName(name)
+	if index < 0 || index >= llvmStdBytesCallArgCount(canonical) {
+		return ""
+	}
+	switch index {
+	case 0:
+		switch canonical {
+		case "from":
+			return "items"
+		case "join":
+			return "parts"
+		case "fromHex", "fromString":
+			return "text"
+		case "concat":
+			return "left"
+		default:
+			return "value"
+		}
+	case 1:
+		switch canonical {
+		case "split", "join":
+			return "sep"
+		case "concat":
+			return "right"
+		case "repeat":
+			return "n"
+		case "replace", "replaceAll":
+			return "old"
+		case "trimLeft", "trimRight", "trim":
+			return "strip"
+		case "contains", "indexOf", "lastIndexOf":
+			return "needle"
+		case "startsWith":
+			return "prefix"
+		case "endsWith":
+			return "suffix"
+		case "slice":
+			return "start"
+		case "get":
+			return "index"
+		}
+	case 2:
+		switch canonical {
+		case "replace", "replaceAll":
+			return "new"
+		case "slice":
+			return "end"
+		}
+	}
+	return ""
+}
+
+// Osty: llvmStdBytesCallParamKind
+func llvmStdBytesCallParamKind(name string, index int) int {
+	canonical := llvmStdBytesCallCanonicalName(name)
+	if index < 0 || index >= llvmStdBytesCallArgCount(canonical) {
+		return llvmRuntimeFfiKindUnknown()
+	}
+	if canonical == "from" && index == 0 {
+		return llvmRuntimeFfiKindListByte()
+	}
+	if canonical == "join" && index == 0 {
+		return llvmRuntimeFfiKindListBytes()
+	}
+	if (canonical == "repeat" || canonical == "get") && index == 1 {
+		return llvmRuntimeFfiKindInt()
+	}
+	if canonical == "slice" && (index == 1 || index == 2) {
+		return llvmRuntimeFfiKindInt()
+	}
+	if (canonical == "fromHex" || canonical == "fromString") && index == 0 {
+		return llvmRuntimeFfiKindString()
+	}
+	return llvmRuntimeFfiKindBytes()
+}
+
 // Osty: llvmRuntimeStringsCanonicalFfiName
 func llvmRuntimeStringsCanonicalFfiName(name string) string {
 	canon := llvmCanonicalStdStringsCallName(name)
