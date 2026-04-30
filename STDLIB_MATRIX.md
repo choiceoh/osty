@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 66 공개 모듈. 분류 기준:
+총 67 공개 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (62 / 66 = 94%)
+### ⭐⭐⭐⭐⭐ Production (63 / 67 = 94%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -57,6 +57,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | xml | 391 | pure Osty | escape / unescape / tag builder / tokenizer |
 | tui | 383 | pure Osty + term | retained frame buffers, ANSI render/diff helpers |
 | image | 372 | pure Osty + bytes | PNG / JPEG / GIF / BMP / WebP format + dimension metadata parser |
+| ocr | 1136 | pure Osty + os/fs/json | PaddleOCR v5 / Tesseract command adapters, fast/accurate presets, batch JSON ingestion, confidence review queues, search, key-value extraction, RAG-friendly chunks |
 | smtp | 358 | pure Osty + email/encoding | SMTP commands / AUTH payloads / reply parsing / transaction scripts |
 | result | 357 | — | composition (map / mapErr / and / or / collect) |
 | option | 356 | — | flatten / transpose / traverse / map2 / map3 |
@@ -92,7 +93,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (4 / 66 = 6%)
+### ⭐⭐⭐⭐ Production-adjacent (4 / 67 = 6%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
@@ -141,6 +142,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | TAR 아카이브 | ✅ 가능 | tar (ustar encode/decode/list/extract) |
 | ZIP 아카이브 | ✅ 가능 | zip (stored-entry encode/decode/list/extract, deflate 는 runtime 후보) |
 | 이미지 메타데이터 | ✅ 가능 | image (PNG / JPEG / GIF / BMP / WebP dimensions) |
+| OCR 엔진 연결 / 결과 분석 | ✅ 가능 | ocr (PaddleOCR v5 / Tesseract 실행 계획, JSON/TSV normalize, confidence/search/key-value/chunk helpers) |
 | SQL 쿼리 조립 | ✅ 가능 | sql (identifier quoting / value literals / dialect placeholders / CRUD builders) |
 | DB 설정/마이그레이션 계획 | ✅ 가능 | db + sql (DSN / pool / tx options / result rows / migration helpers) |
 | AI agent shell / chat mode | ✅ 가능 | aiagents + http/json/log/thread |
@@ -176,7 +178,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 42 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, aiagents, redact, media, security, search, markdown, tokenest, httpretry, jsonl, shortid, metrics, net, fmt, json, url, io, collections, email, db, grid, gui, tar, sql, xml, tui, image, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
+- 43 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, aiagents, redact, media, security, search, markdown, tokenest, httpretry, jsonl, shortid, metrics, net, fmt, json, url, io, collections, email, db, grid, gui, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
 - 6 모듈은 Phase A 충실 + Phase B declaration-only (fs, env, random, os, crypto, compress)
 - 나머지는 의도된 범위에서 surface 만으로 완성 (cli, math, cmp, hint, debug, ref, process, log, time, error, sync, thread, regex, testing, uuid)
 
