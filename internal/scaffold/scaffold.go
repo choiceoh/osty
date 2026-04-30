@@ -725,6 +725,12 @@ cmake --build .osty/qt-build
 
 Then make the produced library visible to your platform linker/runtime and run
 the app with `+"`osty run`"+`.
+
+Before running, check the local Qt setup:
+
+`+"```sh"+`
+osty gui doctor qtquick
+`+"```"+`
 `, name)
 }
 
@@ -1017,7 +1023,9 @@ use std.json
 pub struct GuiState {
     pub status: String,
     pub count: Int,
+    pub input: String,
     pub logs: List<String>,
+    pub diagnostic: String,
 }
 
 fn main() {
@@ -1028,16 +1036,23 @@ fn main() {
 }
 
 fn run() -> Result<(), Error> {
+    let runtime = gui.runtimeDiagnostic()
     let app = gui.app("Osty GUI")?
-    let window = app.window(gui.windowOptions("Osty GUI", 900, 620, "ui/main.qml"))?
+    app.addImportPath("ui")?
+    let window = app.window(gui.defaultWindowOptions("Osty GUI", "ui/main.qml"))?
 
-    app.setState(readyState())?
+    app.setState(readyState(runtime.message))?
     window.show()?
 
     for app.poll() {
         for event in app.events() {
             if event.name == "click" {
                 app.setState(clickedState(event.payload))?
+            } else if event.name == "input" {
+                app.setState(inputState(event.payload))?
+            } else if event.name == "reload" {
+                window.reload()?
+                app.setState(reloadedState())?
             } else if event.name == "quit" {
                 let _ = app.quit()
             }
@@ -1048,11 +1063,13 @@ fn run() -> Result<(), Error> {
     Ok(())
 }
 
-fn readyState() -> String {
+fn readyState(diagnostic: String) -> String {
     json.encode(GuiState {
         status: "ready",
         count: 0,
-        logs: ["app started"],
+        input: "hello from Osty",
+        logs: ["app started", diagnostic],
+        diagnostic,
     })
 }
 
@@ -1060,7 +1077,29 @@ fn clickedState(payload: String) -> String {
     json.encode(GuiState {
         status: "clicked",
         count: 1,
+        input: "hello from Osty",
         logs: ["button clicked", "payload: {payload}"],
+        diagnostic: "Button event flow is active.",
+    })
+}
+
+fn inputState(payload: String) -> String {
+    json.encode(GuiState {
+        status: "input updated",
+        count: 1,
+        input: payload,
+        logs: ["input changed", "payload: {payload}"],
+        diagnostic: "Input event flow is active.",
+    })
+}
+
+fn reloadedState() -> String {
+    json.encode(GuiState {
+        status: "qml reloaded",
+        count: 1,
+        input: "hello from Osty",
+        logs: ["reload requested", "QML engine rebuilt"],
+        diagnostic: "Reload surface is active.",
     })
 }
 `
@@ -1091,6 +1130,26 @@ ApplicationWindow {
         Button {
             text: "Run"
             onClicked: osty.emit("click", { source: "main.qml" })
+        }
+
+        RowLayout {
+            Layout.fillWidth: true
+            TextField {
+                id: input
+                Layout.fillWidth: true
+                text: state.input || ""
+                onEditingFinished: osty.emit("input", { value: text })
+            }
+            Button {
+                text: "Reload"
+                onClicked: osty.emit("reload", { source: "main.qml" })
+            }
+        }
+
+        Label {
+            Layout.fillWidth: true
+            text: state.diagnostic || ""
+            wrapMode: Text.Wrap
         }
 
         ListView {

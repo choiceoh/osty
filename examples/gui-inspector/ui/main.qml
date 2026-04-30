@@ -34,11 +34,15 @@ ApplicationWindow {
             Item { Layout.fillWidth: true }
             Button {
                 text: "Run"
-                onClicked: osty.emit("run", { stage: stageList.currentItem ? stageList.currentItem.text : "lexer" })
+                onClicked: osty.emit("run", { stage: stageList.currentItem ? stageList.currentItem.text : "lexer", input: sourceInput.text })
+            }
+            Button {
+                text: "Reload"
+                onClicked: osty.emit("reload", { source: "toolbar" })
             }
             Button {
                 text: root.dark ? "Light" : "Dark"
-                onClicked: osty.emit("toggle-theme", { current: root.state.theme || "dark" })
+                onClicked: osty.emit(root.dark ? "theme-light" : "theme-dark", {})
             }
         }
     }
@@ -64,7 +68,10 @@ ApplicationWindow {
                     text: modelData
                     checkable: true
                     checked: ListView.isCurrentItem
-                    onClicked: stageList.currentIndex = index
+                    onClicked: {
+                        stageList.currentIndex = index
+                        osty.emit("select-stage", { stage: modelData })
+                    }
                 }
             }
         }
@@ -80,11 +87,35 @@ ApplicationWindow {
 
                 ScrollView {
                     anchors.fill: parent
-                    TextArea {
-                        readOnly: true
-                        wrapMode: TextArea.Wrap
-                        text: root.state.output || ""
-                        color: root.dark ? "#e8edf3" : "#17202a"
+                    ColumnLayout {
+                        width: parent.width
+                        spacing: 12
+
+                        TextField {
+                            id: sourceInput
+                            Layout.fillWidth: true
+                            text: root.state.input || ""
+                            placeholderText: "Osty source"
+                            selectByMouse: true
+                            onAccepted: osty.emit("input", { value: text })
+                            onEditingFinished: osty.emit("input", { value: text })
+                        }
+
+                        Label {
+                            Layout.fillWidth: true
+                            text: root.state.diagnostic || ""
+                            wrapMode: Text.Wrap
+                            color: root.dark ? "#9fb0c3" : "#53606e"
+                        }
+
+                        TextArea {
+                            Layout.fillWidth: true
+                            Layout.preferredHeight: 280
+                            readOnly: true
+                            wrapMode: TextArea.Wrap
+                            text: root.state.output || ""
+                            color: root.dark ? "#e8edf3" : "#17202a"
+                        }
                     }
                 }
             }
@@ -99,6 +130,7 @@ ApplicationWindow {
                     delegate: Label {
                         width: ListView.view.width
                         text: modelData
+                        padding: 4
                         color: root.dark ? "#aab7c4" : "#42505e"
                     }
                 }

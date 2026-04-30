@@ -5,9 +5,12 @@ pub struct InspectorState {
     pub status: String,
     pub theme: String,
     pub selected: String,
+    pub input: String,
+    pub runCount: Int,
     pub stages: List<String>,
     pub output: String,
     pub logs: List<String>,
+    pub diagnostic: String,
 }
 
 fn main() {
@@ -18,18 +21,29 @@ fn main() {
 }
 
 fn run() -> Result<(), Error> {
+    let runtime = gui.runtimeDiagnostic()
     let app = gui.app("Osty Inspector")?
-    let window = app.window(gui.windowOptions("Osty Inspector", 1100, 720, "ui/main.qml"))?
+    app.addImportPath("ui")?
+    let window = app.window(gui.defaultWindowOptions("Osty Inspector", "ui/main.qml"))?
 
-    app.setState(initialState())?
+    app.setState(initialState(runtime.message))?
     window.show()?
 
     for app.poll() {
         for event in app.events() {
             if event.name == "run" {
                 app.setState(runningState(event.payload))?
-            } else if event.name == "toggle-theme" {
-                app.setState(themeState(event.payload))?
+            } else if event.name == "input" {
+                app.setState(inputState(event.payload))?
+            } else if event.name == "select-stage" {
+                app.setState(selectedState(event.payload))?
+            } else if event.name == "reload" {
+                window.reload()?
+                app.setState(reloadedState())?
+            } else if event.name == "theme-light" {
+                app.setState(themeState("light"))?
+            } else if event.name == "theme-dark" {
+                app.setState(themeState("dark"))?
             } else if event.name == "quit" {
                 let _ = app.quit()
             }
@@ -40,14 +54,17 @@ fn run() -> Result<(), Error> {
     Ok(())
 }
 
-fn initialState() -> String {
+fn initialState(diagnostic: String) -> String {
     json.encode(InspectorState {
         status: "ready",
         theme: "dark",
         selected: "lexer",
+        input: "let answer = 42",
+        runCount: 0,
         stages: ["lexer", "parser", "checker", "backend"],
         output: "Select a stage and press Run.",
-        logs: ["Inspector initialized", "Qt bridge ready"],
+        logs: ["Inspector initialized", diagnostic],
+        diagnostic,
     })
 }
 
@@ -56,19 +73,67 @@ fn runningState(payload: String) -> String {
         status: "completed",
         theme: "dark",
         selected: "checker",
+        input: "let answer = 42",
+        runCount: 1,
         stages: ["lexer", "parser", "checker", "backend"],
         output: "Latest event payload: {payload}",
-        logs: ["Run requested from QML", "Event reached Osty", "State pushed back to QML"],
+        logs: ["Run requested from QML", "Button click reached Osty", "State pushed back to QML"],
+        diagnostic: "Runtime stayed available through the event loop.",
     })
 }
 
-fn themeState(payload: String) -> String {
+fn inputState(payload: String) -> String {
+    json.encode(InspectorState {
+        status: "input updated",
+        theme: "dark",
+        selected: "parser",
+        input: payload,
+        runCount: 1,
+        stages: ["lexer", "parser", "checker", "backend"],
+        output: "Input event payload: {payload}",
+        logs: ["Input changed in QML", "Payload copied through the Qt bridge", "Osty refreshed the state model"],
+        diagnostic: "Text input flow is active.",
+    })
+}
+
+fn selectedState(payload: String) -> String {
+    json.encode(InspectorState {
+        status: "stage selected",
+        theme: "dark",
+        selected: payload,
+        input: "let answer = 42",
+        runCount: 1,
+        stages: ["lexer", "parser", "checker", "backend"],
+        output: "List selection payload: {payload}",
+        logs: ["List selection changed", "QML emitted select-stage", "Osty updated selected stage"],
+        diagnostic: "List event flow is active.",
+    })
+}
+
+fn reloadedState() -> String {
+    json.encode(InspectorState {
+        status: "qml reloaded",
+        theme: "dark",
+        selected: "backend",
+        input: "let answer = 42",
+        runCount: 1,
+        stages: ["lexer", "parser", "checker", "backend"],
+        output: "QML view reloaded without replacing the app state contract.",
+        logs: ["Reload requested", "QML engine rebuilt", "State pushed after reload"],
+        diagnostic: "Reload surface is active.",
+    })
+}
+
+fn themeState(theme: String) -> String {
     json.encode(InspectorState {
         status: "theme updated",
-        theme: "light",
+        theme,
         selected: "backend",
+        input: "let answer = 42",
+        runCount: 1,
         stages: ["lexer", "parser", "checker", "backend"],
-        output: "Theme event payload: {payload}",
+        output: "Theme switched to {theme}.",
         logs: ["Theme toggle received", "State model stayed JSON"],
+        diagnostic: "Theme event flow is active.",
     })
 }

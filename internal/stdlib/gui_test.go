@@ -214,7 +214,7 @@ func TestGuiQtQuickModuleSurface(t *testing.T) {
 	if mod == nil || mod.Package == nil || mod.Package.PkgScope == nil {
 		t.Fatalf("std.gui.qtquick not loaded with package scope; registry diagnostics:\n%s", stdlibRebindDiagSummary(reg))
 	}
-	for _, name := range []string{"App", "Window", "WindowOptions", "Event", "RuntimeInfo"} {
+	for _, name := range []string{"App", "Window", "WindowOptions", "Event", "RuntimeInfo", "RuntimeDiagnostic"} {
 		sym := mod.Package.PkgScope.LookupLocal(name)
 		if sym == nil {
 			t.Fatalf("std.gui.qtquick missing type %q", name)
@@ -223,7 +223,7 @@ func TestGuiQtQuickModuleSurface(t *testing.T) {
 			t.Fatalf("std.gui.qtquick.%s not public", name)
 		}
 	}
-	for _, name := range []string{"app", "windowOptions", "runtimeInfo", "abiVersion", "available", "lastError"} {
+	for _, name := range []string{"app", "windowOptions", "defaultWindowOptions", "runtimeInfo", "runtimeDiagnostic", "abiVersion", "available", "lastError", "lastErrorMessage"} {
 		sym := mod.Package.PkgScope.LookupLocal(name)
 		if sym == nil {
 			t.Fatalf("std.gui.qtquick missing export %q", name)
@@ -238,6 +238,23 @@ func TestGuiQtQuickModuleSurface(t *testing.T) {
 	if fn := reg.LookupMethodDecl("gui.qtquick", "App", "events"); fn == nil {
 		t.Fatalf("LookupMethodDecl(gui.qtquick, App, events) = nil, want event polling surface")
 	}
+	if fn := reg.LookupMethodDecl("gui.qtquick", "App", "addImportPath"); fn == nil {
+		t.Fatalf("LookupMethodDecl(gui.qtquick, App, addImportPath) = nil, want QML import path surface")
+	}
+	if fn := reg.LookupMethodDecl("gui.qtquick", "Window", "reload"); fn == nil {
+		t.Fatalf("LookupMethodDecl(gui.qtquick, Window, reload) = nil, want QML reload surface")
+	}
+	src := guiQtQuickModuleSource(t)
+	for _, want := range []string{
+		`fn osty_qt_app_add_import_path(app: Int, path: String) -> Bool`,
+		`fn osty_qt_window_reload(window: Int) -> Bool`,
+		`pub fn runtimeDiagnostic() -> RuntimeDiagnostic`,
+		`strings.concat(s, "")`,
+	} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("std.gui.qtquick source missing %q", want)
+		}
+	}
 }
 
 func guiModuleSource(t *testing.T) string {
@@ -246,6 +263,16 @@ func guiModuleSource(t *testing.T) string {
 	mod := reg.Modules["gui"]
 	if mod == nil {
 		t.Fatal("stdlib gui module missing")
+	}
+	return string(mod.Source)
+}
+
+func guiQtQuickModuleSource(t *testing.T) string {
+	t.Helper()
+	reg := LoadCached()
+	mod := reg.Modules["gui.qtquick"]
+	if mod == nil {
+		t.Fatal("stdlib gui.qtquick module missing")
 	}
 	return string(mod.Source)
 }

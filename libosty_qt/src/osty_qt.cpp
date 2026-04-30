@@ -22,6 +22,8 @@
 #  include <QJsonValue>
 #  include <QQmlApplicationEngine>
 #  include <QQmlContext>
+#  include <QQmlEngine>
+#  include <QQmlError>
 #  include <QString>
 #  include <QUrl>
 #  include <QVariant>
@@ -98,6 +100,8 @@ struct Window {
     QObject *root = nullptr;
     QWindow *qwindow = nullptr;
     QObject *bridge = nullptr;
+    std::string resolved_qml_url;
+    std::vector<std::string> load_warnings;
 #endif
 };
 
@@ -174,6 +178,48 @@ QUrl qml_url(const std::string &path) {
         return QUrl(qpath);
     }
     return QUrl::fromLocalFile(QFileInfo(qpath).absoluteFilePath());
+}
+
+std::string qurl_to_utf8(const QUrl &url) {
+    QString text = url.isLocalFile() ? url.toLocalFile() : url.toString();
+    return text.toUtf8().toStdString();
+}
+
+std::string join_lines(const std::vector<std::string> &items, const char *prefix) {
+    std::string out;
+    for (const auto &item : items) {
+        if (item.empty()) {
+            continue;
+        }
+        out += "\n";
+        out += prefix;
+        out += item;
+    }
+    return out;
+}
+
+std::string qml_failure_message(Window *window, const std::string &reason) {
+    std::string msg = "osty_qt: " + reason + ": " + window->qml_path;
+    if (!window->resolved_qml_url.empty()) {
+        msg += "\n  resolved: " + window->resolved_qml_url;
+    }
+    if (window->engine != nullptr) {
+        std::vector<std::string> import_paths;
+        const QStringList paths = window->engine->importPathList();
+        for (const auto &path : paths) {
+            import_paths.push_back(path.toUtf8().toStdString());
+        }
+        if (!import_paths.empty()) {
+            msg += "\n  QML import paths:";
+            msg += join_lines(import_paths, "    - ");
+        }
+    }
+    if (!window->load_warnings.empty()) {
+        msg += "\n  QML diagnostics:";
+        msg += join_lines(window->load_warnings, "    - ");
+    }
+    msg += "\n  hint: run `osty gui doctor qtquick` from the app root, and verify Qt Quick/QML modules and platform plugins are installed.";
+    return msg;
 }
 
 QVariant json_to_variant(const std::string &json, bool *ok = nullptr) {
@@ -260,22 +306,34 @@ bool load_window(Window *window) {
         set_error("osty_qt: nil window");
         return false;
     }
-    App *app = nullptr;
+    std::string state_json;
+    std::vector<std::string> import_paths;
     {
         std::lock_guard<std::mutex> lock(g_mu);
-        app = lookup_app_locked(window->app);
+        App *app = lookup_app_locked(window->app);
         if (app == nullptr) {
             return false;
         }
+        state_json = app->state_json;
+        import_paths = app->import_paths;
     }
 
     window->engine = std::make_unique<QQmlApplicationEngine>();
     window->root = nullptr;
     window->qwindow = nullptr;
+    window->bridge = nullptr;
+    window->resolved_qml_url.clear();
+    window->load_warnings.clear();
+    QObject::connect(window->engine.get(), &QQmlEngine::warnings,
+                     [window](const QList<QQmlError> &warnings) {
+                         for (const QQmlError &warning : warnings) {
+                             window->load_warnings.push_back(warning.toString().toUtf8().toStdString());
+                         }
+                     });
     auto *bridge = new OstyBridge(window->app, window->engine.get());
     window->bridge = bridge;
     bool state_ok = false;
-    QVariant state = json_to_variant(app->state_json, &state_ok);
+    QVariant state = json_to_variant(state_json, &state_ok);
     if (!state_ok) {
         set_error("osty_qt: app state is not valid JSON");
         return false;
@@ -283,12 +341,18 @@ bool load_window(Window *window) {
     bridge->setState(state);
     window->engine->rootContext()->setContextProperty(QStringLiteral("osty"), bridge);
     window->engine->rootContext()->setContextProperty(QStringLiteral("appState"), state);
-    for (const auto &path : app->import_paths) {
+    for (const auto &path : import_paths) {
         window->engine->addImportPath(to_qstring(path));
     }
-    window->engine->load(qml_url(window->qml_path));
+    QUrl url = qml_url(window->qml_path);
+    window->resolved_qml_url = qurl_to_utf8(url);
+    if (url.isLocalFile() && !QFileInfo::exists(url.toLocalFile())) {
+        set_error(qml_failure_message(window, "QML file not found"));
+        return false;
+    }
+    window->engine->load(url);
     if (window->engine->rootObjects().isEmpty()) {
-        set_error("osty_qt: QML load failed: " + window->qml_path);
+        set_error(qml_failure_message(window, "QML load failed"));
         return false;
     }
     window->root = window->engine->rootObjects().first();

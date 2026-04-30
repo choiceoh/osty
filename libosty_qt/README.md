@@ -21,6 +21,20 @@ cmake --build .osty/qt-build
 That stub build exports the same symbols, but `osty_qt_app_new` fails with a
 clear error saying Qt support was not compiled in.
 
+## Diagnostics
+
+From a Qt Quick app root, run:
+
+```sh
+osty gui doctor qtquick
+```
+
+The doctor checks the manifest `[gui]` entry, the QML file, the Osty entrypoint,
+host target link hints, the `libosty_qt` source tree, CMake, and whether CMake
+can find Qt Quick/QML. QML load failures from the bridge include the resolved
+QML path, active import paths, captured QML diagnostics, and a pointer back to
+the doctor command.
+
 ## String Boundary
 
 The ABI receives Osty `String` values as the native runtime string pointer, not
