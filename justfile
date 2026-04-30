@@ -7,7 +7,7 @@ backend_packages := "./internal/ir ./internal/mir ./internal/backend ./internal/
 osty_test_dirs := "examples/int_control_e2e examples/int_methods_e2e examples/int_struct_e2e"
 test_flags := "-count=1 -vet=off"
 stdlib_matrix_fast_tests := "TestStdlibSupportMatrix"
-stdlib_matrix_backend_tests := "Test(Stdlib(CheckResult|Symbol|Method)|InjectReachableStdlib|ReachableStdlib|Phase2|LLVMBackendBinaryRunsStd(Zip|Image|Smtp|Crypto|Random|Term|Os)|PrepareEntryRewritesStdEncoding)"
+stdlib_matrix_backend_tests := "Test(Stdlib(CheckResult|Symbol|Method)|InjectReachableStdlib|ReachableStdlib|Phase2|LLVMBackendBinaryRunsStd(Zip|Xlsx|Image|Smtp|Crypto|Random|Term|Os)|PrepareEntryRewritesStdEncoding)"
 stdlib_matrix_llvmgen_tests := "Test(Std(Env|Io|Term|Strings|Bytes|Crypto)|UnsupportedDiagnostic)"
 selfhost_matrix_fast_tests := "Test(CheckCLIDefaultPathExitsZero|RunCheckFileDefaultPathIsAstbridgeFree|ProductionFrontendPathsDoNotCallFrontendRunFile)"
 selfhost_matrix_cmd_tests := "Test(Run(Check|Typecheck|Resolve)(File|Package|Workspace).*AstbridgeFree|CheckCLI(DefaultPathExitsZero|Native.*)|TypecheckCLI.*|ResolveCLI.*)"
