@@ -1,0 +1,366 @@
+// std.aidev.corpus - JSONL-friendly repair corpus records.
+//
+// Hosts run check/test commands and write files. This module keeps the durable
+// record shape for AI coding feedback loops: failing cases, repair attempts,
+// before/after diagnostics, patch outcomes, and residual error summaries.
+
+use std.aidev as aidev
+use std.jsonl
+use std.strings
+
+pub enum RecordKind {
+    KindCase,
+    KindAttempt,
+
+    pub fn toString(self) -> String {
+        match self {
+            KindCase    -> "case",
+            KindAttempt -> "attempt",
+        }
+    }
+}
+
+pub enum AttemptStatus {
+    AttemptUnknown,
+    AttemptNoChange,
+    AttemptClean,
+    AttemptImproved,
+    AttemptResidual,
+    AttemptRejected,
+    AttemptRegressed,
+
+    pub fn toString(self) -> String {
+        match self {
+            AttemptUnknown   -> "unknown",
+            AttemptNoChange  -> "no_change",
+            AttemptClean     -> "clean",
+            AttemptImproved  -> "improved",
+            AttemptResidual  -> "residual",
+            AttemptRejected  -> "rejected",
+            AttemptRegressed -> "regressed",
+        }
+    }
+
+    pub fn isSuccess(self) -> Bool {
+        self == AttemptClean || self == AttemptImproved
+    }
+}
+
+pub struct CorpusCase {
+    pub id: String,
+    pub title: String,
+    pub language: String,
+    pub sourcePath: String,
+    pub sourceFingerprint: String,
+    pub sourceHabit: String = "",
+    pub diagnostics: List<aidev.Diagnostic>,
+    pub createdAtMs: Int = 0,
+}
+
+pub struct RepairAttempt {
+    pub id: String,
+    pub caseId: String,
+    pub status: AttemptStatus,
+    pub before: aidev.CheckSummary,
+    pub after: aidev.CheckSummary,
+    pub patchSummary: String = "",
+    pub changedPaths: List<String> = [],
+    pub residualDiagnostics: List<aidev.Diagnostic> = [],
+    pub notes: List<String> = [],
+    pub createdAtMs: Int = 0,
+}
+
+pub struct CorpusStats {
+    pub cases: Int = 0,
+    pub attempts: Int = 0,
+    pub successfulAttempts: Int = 0,
+    pub rejectedAttempts: Int = 0,
+    pub regressedAttempts: Int = 0,
+    pub residualErrors: Int = 0,
+    pub changedFiles: Int = 0,
+}
+
+pub fn repairCase(id: String, title: String, file: aidev.SourceFile, diags: List<aidev.Diagnostic>, sourceHabit: String) -> CorpusCase {
+    CorpusCase {
+        id,
+        title,
+        language: file.language,
+        sourcePath: file.path,
+        sourceFingerprint: sourceFingerprint(file, diags),
+        sourceHabit,
+        diagnostics: diags,
+    }
+}
+
+pub fn repairCaseWithTime(id: String, title: String, file: aidev.SourceFile, diags: List<aidev.Diagnostic>, sourceHabit: String, createdAtMs: Int) -> CorpusCase {
+    let item = repairCase(id, title, file, diags, sourceHabit)
+    CorpusCase {
+        id: item.id,
+        title: item.title,
+        language: item.language,
+        sourcePath: item.sourcePath,
+        sourceFingerprint: item.sourceFingerprint,
+        sourceHabit: item.sourceHabit,
+        diagnostics: item.diagnostics,
+        createdAtMs,
+    }
+}
+
+pub fn repairAttempt(id: String, caseId: String, beforeDiags: List<aidev.Diagnostic>, afterDiags: List<aidev.Diagnostic>, patchResult: aidev.PatchResult, notes: List<String>) -> RepairAttempt {
+    let before = aidev.checkSummary(beforeDiags)
+    let after = aidev.checkSummary(afterDiags)
+    RepairAttempt {
+        id,
+        caseId,
+        status: inferAttemptStatus(before, after, patchResult),
+        before,
+        after,
+        patchSummary: patchResult.summary,
+        changedPaths: patchResult.changedPaths,
+        residualDiagnostics: afterDiags,
+        notes,
+    }
+}
+
+pub fn repairAttemptWithTime(id: String, caseId: String, beforeDiags: List<aidev.Diagnostic>, afterDiags: List<aidev.Diagnostic>, patchResult: aidev.PatchResult, notes: List<String>, createdAtMs: Int) -> RepairAttempt {
+    let item = repairAttempt(id, caseId, beforeDiags, afterDiags, patchResult, notes)
+    RepairAttempt {
+        id: item.id,
+        caseId: item.caseId,
+        status: item.status,
+        before: item.before,
+        after: item.after,
+        patchSummary: item.patchSummary,
+        changedPaths: item.changedPaths,
+        residualDiagnostics: item.residualDiagnostics,
+        notes: item.notes,
+        createdAtMs,
+    }
+}
+
+pub fn inferAttemptStatus(before: aidev.CheckSummary, after: aidev.CheckSummary, patchResult: aidev.PatchResult) -> AttemptStatus {
+    if patchResult.status.toString() == "rejected" {
+        return AttemptRejected
+    }
+    if after.totalErrors > before.totalErrors {
+        return AttemptRegressed
+    }
+    if after.totalErrors == 0 && before.totalErrors > 0 {
+        return AttemptClean
+    }
+    if after.totalErrors < before.totalErrors {
+        return AttemptImproved
+    }
+    if after.totalErrors > 0 {
+        return AttemptResidual
+    }
+    if patchResult.changedPaths.isEmpty() {
+        return AttemptNoChange
+    }
+    AttemptUnknown
+}
+
+pub fn appendCase(log: String, item: CorpusCase) -> String {
+    jsonl.appendLine(log, encodeCaseJson(item))
+}
+
+pub fn appendAttempt(log: String, item: RepairAttempt) -> String {
+    jsonl.appendLine(log, encodeAttemptJson(item))
+}
+
+pub fn compactLog(log: String, keepHead: Int, keepTail: Int) -> String {
+    jsonl.compactHeadTail(log, keepHead, keepTail)
+}
+
+pub fn corpusStats(cases: List<CorpusCase>, attempts: List<RepairAttempt>) -> CorpusStats {
+    let mut stats = CorpusStats {
+        cases: cases.len(),
+        attempts: attempts.len(),
+    }
+    for item in attempts {
+        if item.status.isSuccess() {
+            stats.successfulAttempts = stats.successfulAttempts + 1
+        }
+        if item.status == AttemptRejected {
+            stats.rejectedAttempts = stats.rejectedAttempts + 1
+        }
+        if item.status == AttemptRegressed {
+            stats.regressedAttempts = stats.regressedAttempts + 1
+        }
+        stats.residualErrors = stats.residualErrors + item.after.totalErrors
+        stats.changedFiles = stats.changedFiles + item.changedPaths.len()
+    }
+    stats
+}
+
+pub fn summarizeStats(stats: CorpusStats) -> String {
+    let mut parts: List<String> = [
+        "cases={stats.cases}",
+        "attempts={stats.attempts}",
+        "success={stats.successfulAttempts}",
+    ]
+    if stats.rejectedAttempts > 0 {
+        parts.push("rejected={stats.rejectedAttempts}")
+    }
+    if stats.regressedAttempts > 0 {
+        parts.push("regressed={stats.regressedAttempts}")
+    }
+    if stats.residualErrors > 0 {
+        parts.push("residual_errors={stats.residualErrors}")
+    }
+    if stats.changedFiles > 0 {
+        parts.push("changed_files={stats.changedFiles}")
+    }
+    strings.join(parts, ", ")
+}
+
+pub fn residualDiagnostics(attempts: List<RepairAttempt>) -> List<aidev.Diagnostic> {
+    let mut out: List<aidev.Diagnostic> = []
+    for item in attempts {
+        for diag in item.residualDiagnostics {
+            if diag.isError() {
+                out.push(diag)
+            }
+        }
+    }
+    out
+}
+
+pub fn uniqueDiagnosticCodes(diags: List<aidev.Diagnostic>) -> List<String> {
+    let mut out: List<String> = []
+    for diag in diags {
+        let code = if diag.code.isEmpty() { diag.stage.toString() } else { diag.code }
+        if !out.contains(code) {
+            out.push(code)
+        }
+    }
+    out
+}
+
+pub fn sourceFingerprint(file: aidev.SourceFile, diags: List<aidev.Diagnostic>) -> String {
+    let primary = match aidev.primaryDiagnostic(diags) {
+        Some(diag) -> diagnosticFingerprint(diag),
+        None       -> "clean",
+    }
+    "{file.path}:{file.text.charCount()}:{primary}"
+}
+
+pub fn diagnosticFingerprint(diag: aidev.Diagnostic) -> String {
+    let where = match diag.span {
+        Some(span) -> span.label(),
+        None       -> diag.stage.toString(),
+    }
+    let code = if diag.code.isEmpty() { diag.severity.toString() } else { diag.code }
+    "{code}:{where}:{diag.message.charCount()}"
+}
+
+pub fn summarizeAttempt(item: RepairAttempt) -> String {
+    let before = aidev.formatCheckSummary(item.before)
+    let after = aidev.formatCheckSummary(item.after)
+    "{item.status.toString()} {item.id}: {before} -> {after}; {item.patchSummary}"
+}
+
+pub fn encodeCaseJson(item: CorpusCase) -> String {
+    let open = "\{"
+    let close = "\}"
+    let mut out = "{open}\"kind\":\"case\""
+    out = "{out},\"id\":{jsonQuote(item.id)}"
+    out = "{out},\"title\":{jsonQuote(item.title)}"
+    out = "{out},\"language\":{jsonQuote(item.language)}"
+    out = "{out},\"sourcePath\":{jsonQuote(item.sourcePath)}"
+    out = "{out},\"sourceFingerprint\":{jsonQuote(item.sourceFingerprint)}"
+    out = "{out},\"sourceHabit\":{jsonQuote(item.sourceHabit)}"
+    out = "{out},\"diagnostics\":{encodeDiagnostics(item.diagnostics)}"
+    if item.createdAtMs > 0 {
+        out = "{out},\"createdAtMs\":{item.createdAtMs}"
+    }
+    "{out}{close}"
+}
+
+pub fn encodeAttemptJson(item: RepairAttempt) -> String {
+    let open = "\{"
+    let close = "\}"
+    let mut out = "{open}\"kind\":\"attempt\""
+    out = "{out},\"id\":{jsonQuote(item.id)}"
+    out = "{out},\"caseId\":{jsonQuote(item.caseId)}"
+    out = "{out},\"status\":{jsonQuote(item.status.toString())}"
+    out = "{out},\"before\":{encodeSummary(item.before)}"
+    out = "{out},\"after\":{encodeSummary(item.after)}"
+    out = "{out},\"patchSummary\":{jsonQuote(item.patchSummary)}"
+    out = "{out},\"changedPaths\":{encodeStringList(item.changedPaths)}"
+    out = "{out},\"residualDiagnostics\":{encodeDiagnostics(item.residualDiagnostics)}"
+    out = "{out},\"notes\":{encodeStringList(item.notes)}"
+    if item.createdAtMs > 0 {
+        out = "{out},\"createdAtMs\":{item.createdAtMs}"
+    }
+    "{out}{close}"
+}
+
+fn encodeSummary(summary: aidev.CheckSummary) -> String {
+    let open = "\{"
+    let close = "\}"
+    "{open}\"totalErrors\":{summary.totalErrors},\"totalWarnings\":{summary.totalWarnings},\"parseErrors\":{summary.parseErrors},\"resolveErrors\":{summary.resolveErrors},\"checkErrors\":{summary.checkErrors},\"testErrors\":{summary.testErrors},\"runtimeErrors\":{summary.runtimeErrors}{close}"
+}
+
+fn encodeDiagnostics(diags: List<aidev.Diagnostic>) -> String {
+    let mut parts: List<String> = []
+    for diag in diags {
+        parts.push(encodeDiagnostic(diag))
+    }
+    let joined = strings.join(parts, ",")
+    "[{joined}]"
+}
+
+fn encodeDiagnostic(diag: aidev.Diagnostic) -> String {
+    let open = "\{"
+    let close = "\}"
+    let mut out = "{open}\"code\":{jsonQuote(diag.code)}"
+    out = "{out},\"message\":{jsonQuote(diag.message)}"
+    out = "{out},\"severity\":{jsonQuote(diag.severity.toString())}"
+    out = "{out},\"stage\":{jsonQuote(diag.stage.toString())}"
+    out = "{out},\"span\":{encodeOptionalSpan(diag.span)}"
+    out = "{out},\"notes\":{encodeStringList(diag.notes)}"
+    "{out}{close}"
+}
+
+fn encodeOptionalSpan(spanValue: aidev.SourceSpan?) -> String {
+    match spanValue {
+        Some(span) -> encodeSpan(span),
+        None       -> "null",
+    }
+}
+
+fn encodeSpan(spanValue: aidev.SourceSpan) -> String {
+    let open = "\{"
+    let close = "\}"
+    "{open}\"path\":{jsonQuote(spanValue.path)},\"startLine\":{spanValue.startLine},\"startColumn\":{spanValue.startColumn},\"endLine\":{spanValue.endLine},\"endColumn\":{spanValue.endColumn}{close}"
+}
+
+fn encodeStringList(items: List<String>) -> String {
+    let mut parts: List<String> = []
+    for item in items {
+        parts.push(jsonQuote(item))
+    }
+    let joined = strings.join(parts, ",")
+    "[{joined}]"
+}
+
+fn jsonQuote(text: String) -> String {
+    let mut out = "\""
+    for c in text.chars() {
+        if c == '"' {
+            out = "{out}\\\""
+        } else if c == '\\' {
+            out = "{out}\\\\"
+        } else if c == '\n' {
+            out = "{out}\\n"
+        } else if c == '\r' {
+            out = "{out}\\r"
+        } else if c == '\t' {
+            out = "{out}\\t"
+        } else {
+            out = "{out}{strings.fromChar(c)}"
+        }
+    }
+    "{out}\""
+}

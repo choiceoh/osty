@@ -1,0 +1,701 @@
+// std.aidev - AI-assisted coding loop primitives.
+//
+// This module deliberately stays pure Osty. Host tools still own file I/O,
+// model calls, git, and process execution; std.aidev owns the shared data
+// model and deterministic helpers that make an agent coding loop inspectable:
+// diagnostics, source spans, context excerpts, edit validation, and patch
+// application.
+
+use std.error
+use std.strings
+
+pub enum Severity {
+    SevError,
+    SevWarning,
+    SevInfo,
+    SevHint,
+
+    pub fn toString(self) -> String {
+        match self {
+            SevError   -> "error",
+            SevWarning -> "warning",
+            SevInfo    -> "info",
+            SevHint    -> "hint",
+        }
+    }
+
+    pub fn weight(self) -> Int {
+        match self {
+            SevError   -> 4,
+            SevWarning -> 3,
+            SevInfo    -> 2,
+            SevHint    -> 1,
+        }
+    }
+
+    pub fn isError(self) -> Bool {
+        self == SevError
+    }
+}
+
+pub enum CheckStage {
+    StageUnknown,
+    StageParse,
+    StageResolve,
+    StageCheck,
+    StageTest,
+    StageRuntime,
+
+    pub fn toString(self) -> String {
+        match self {
+            StageUnknown -> "unknown",
+            StageParse   -> "parse",
+            StageResolve -> "resolve",
+            StageCheck   -> "check",
+            StageTest    -> "test",
+            StageRuntime -> "runtime",
+        }
+    }
+}
+
+pub enum PatchStatus {
+    PatchApplied,
+    PatchRejected,
+    PatchPartial,
+
+    pub fn toString(self) -> String {
+        match self {
+            PatchApplied  -> "applied",
+            PatchRejected -> "rejected",
+            PatchPartial  -> "partial",
+        }
+    }
+}
+
+pub struct SourceFile {
+    pub path: String,
+    pub language: String = "",
+    pub text: String,
+}
+
+pub struct SourceSpan {
+    pub path: String,
+    pub startLine: Int,
+    pub startColumn: Int,
+    pub endLine: Int,
+    pub endColumn: Int,
+
+    pub fn isPoint(self) -> Bool {
+        self.startLine == self.endLine && self.startColumn == self.endColumn
+    }
+
+    pub fn label(self) -> String {
+        spanLabel(self)
+    }
+}
+
+pub struct Diagnostic {
+    pub code: String = "",
+    pub message: String,
+    pub severity: Severity,
+    pub stage: CheckStage,
+    pub span: SourceSpan? = None,
+    pub notes: List<String> = [],
+
+    pub fn isError(self) -> Bool {
+        self.severity.isError()
+    }
+
+    pub fn line(self) -> String {
+        summarizeDiagnostic(self)
+    }
+}
+
+pub struct CheckSummary {
+    pub parseErrors: Int = 0,
+    pub resolveErrors: Int = 0,
+    pub checkErrors: Int = 0,
+    pub testErrors: Int = 0,
+    pub runtimeErrors: Int = 0,
+    pub warnings: Int = 0,
+    pub infos: Int = 0,
+    pub totalErrors: Int = 0,
+    pub totalWarnings: Int = 0,
+    pub primaryDiagnostic: Diagnostic? = None,
+}
+
+pub struct Edit {
+    pub path: String,
+    pub span: SourceSpan,
+    pub replacement: String,
+    pub reason: String = "",
+}
+
+pub struct Patch {
+    pub edits: List<Edit>,
+    pub summary: String = "",
+}
+
+pub struct PatchIssue {
+    pub editIndex: Int,
+    pub path: String,
+    pub message: String,
+}
+
+pub struct PatchResult {
+    pub status: PatchStatus,
+    pub files: List<SourceFile>,
+    pub issues: List<PatchIssue> = [],
+    pub changedPaths: List<String> = [],
+    pub summary: String = "",
+}
+
+pub struct FixContext {
+    pub file: SourceFile,
+    pub diagnostics: List<Diagnostic>,
+    pub summary: String,
+    pub excerpt: String,
+}
+
+pub fn sourceFile(path: String, language: String, text: String) -> SourceFile {
+    SourceFile { path, language, text }
+}
+
+pub fn span(path: String, startLine: Int, startColumn: Int, endLine: Int, endColumn: Int) -> SourceSpan {
+    SourceSpan {
+        path,
+        startLine,
+        startColumn,
+        endLine,
+        endColumn,
+    }
+}
+
+pub fn pointSpan(path: String, line: Int, column: Int) -> SourceSpan {
+    span(path, line, column, line, column)
+}
+
+pub fn diagnostic(code: String, message: String, severity: Severity, stage: CheckStage, spanValue: SourceSpan?) -> Diagnostic {
+    Diagnostic {
+        code,
+        message,
+        severity,
+        stage,
+        span: spanValue,
+    }
+}
+
+pub fn edit(path: String, spanValue: SourceSpan, replacement: String) -> Edit {
+    Edit {
+        path,
+        span: spanValue,
+        replacement,
+    }
+}
+
+pub fn patch(edits: List<Edit>, summary: String) -> Patch {
+    Patch { edits, summary }
+}
+
+pub fn spanLabel(spanValue: SourceSpan) -> String {
+    if spanValue.path.isEmpty() {
+        return "{spanValue.startLine}:{spanValue.startColumn}"
+    }
+    "{spanValue.path}:{spanValue.startLine}:{spanValue.startColumn}"
+}
+
+pub fn countDiagnostics(diags: List<Diagnostic>, severity: Severity) -> Int {
+    let mut total = 0
+    for diag in diags {
+        if diag.severity == severity {
+            total = total + 1
+        }
+    }
+    total
+}
+
+pub fn countStageErrors(diags: List<Diagnostic>, stage: CheckStage) -> Int {
+    let mut total = 0
+    for diag in diags {
+        if diag.stage == stage && diag.severity == SevError {
+            total = total + 1
+        }
+    }
+    total
+}
+
+pub fn primaryDiagnostic(diags: List<Diagnostic>) -> Diagnostic? {
+    let mut best: Diagnostic? = None
+    for diag in diags {
+        match best {
+            Some(current) -> {
+                if diag.severity.weight() > current.severity.weight() {
+                    best = Some(diag)
+                }
+            },
+            None -> {
+                best = Some(diag)
+            },
+        }
+    }
+    best
+}
+
+pub fn checkSummary(diags: List<Diagnostic>) -> CheckSummary {
+    let parseErrors = countStageErrors(diags, StageParse)
+    let resolveErrors = countStageErrors(diags, StageResolve)
+    let checkErrors = countStageErrors(diags, StageCheck)
+    let testErrors = countStageErrors(diags, StageTest)
+    let runtimeErrors = countStageErrors(diags, StageRuntime)
+    let warnings = countDiagnostics(diags, SevWarning)
+    let infos = countDiagnostics(diags, SevInfo) + countDiagnostics(diags, SevHint)
+    CheckSummary {
+        parseErrors,
+        resolveErrors,
+        checkErrors,
+        testErrors,
+        runtimeErrors,
+        warnings,
+        infos,
+        totalErrors: countDiagnostics(diags, SevError),
+        totalWarnings: warnings,
+        primaryDiagnostic: primaryDiagnostic(diags),
+    }
+}
+
+pub fn formatCheckSummary(summary: CheckSummary) -> String {
+    let mut parts: List<String> = []
+    if summary.parseErrors > 0 {
+        parts.push("parse={summary.parseErrors}")
+    }
+    if summary.resolveErrors > 0 {
+        parts.push("resolve={summary.resolveErrors}")
+    }
+    if summary.checkErrors > 0 {
+        parts.push("check={summary.checkErrors}")
+    }
+    if summary.testErrors > 0 {
+        parts.push("test={summary.testErrors}")
+    }
+    if summary.runtimeErrors > 0 {
+        parts.push("runtime={summary.runtimeErrors}")
+    }
+    if summary.warnings > 0 {
+        parts.push("warnings={summary.warnings}")
+    }
+    if parts.isEmpty() {
+        return "clean"
+    }
+    strings.join(parts, ", ")
+}
+
+pub fn summarizeDiagnostic(diag: Diagnostic) -> String {
+    let code = if diag.code.isEmpty() { diag.severity.toString() } else { diag.code }
+    let where = match diag.span {
+        Some(s) -> s.label(),
+        None    -> diag.stage.toString(),
+    }
+    "{diag.severity.toString()} {code} at {where}: {diag.message}"
+}
+
+pub fn summarizeDiagnostics(diags: List<Diagnostic>, limit: Int) -> String {
+    if diags.isEmpty() {
+        return "no diagnostics"
+    }
+    let max = if limit <= 0 { diags.len() } else { minInt(limit, diags.len()) }
+    let mut lines: List<String> = []
+    let summary = checkSummary(diags)
+    lines.push(formatCheckSummary(summary))
+    let mut i = 0
+    for i < max {
+        lines.push(summarizeDiagnostic(diags[i]))
+        i = i + 1
+    }
+    if diags.len() > max {
+        lines.push("... {diags.len() - max} more diagnostic(s)")
+    }
+    strings.join(lines, "\n")
+}
+
+pub fn sourceLineCount(file: SourceFile) -> Int {
+    sourceLines(file.text).len()
+}
+
+pub fn lineAt(file: SourceFile, line: Int) -> String? {
+    let lines = sourceLines(file.text)
+    if line < 1 || line > lines.len() {
+        return None
+    }
+    Some(lines[line - 1])
+}
+
+pub fn sourceExcerpt(file: SourceFile, spanValue: SourceSpan, before: Int, after: Int) -> String {
+    let lines = sourceLines(file.text)
+    if lines.isEmpty() {
+        return ""
+    }
+    let start = maxInt(1, spanValue.startLine - maxInt(before, 0))
+    let end = minInt(lines.len(), spanValue.endLine + maxInt(after, 0))
+    let mut out: List<String> = []
+    let mut lineNo = start
+    for lineNo <= end {
+        let marker = if lineNo >= spanValue.startLine && lineNo <= spanValue.endLine { ">" } else { " " }
+        out.push("{marker} {lineNo}: {lines[lineNo - 1]}")
+        lineNo = lineNo + 1
+    }
+    strings.join(out, "\n")
+}
+
+pub fn buildFixContext(file: SourceFile, diags: List<Diagnostic>, before: Int, after: Int) -> FixContext {
+    let summary = summarizeDiagnostics(diags, 6)
+    let excerpt = match primaryDiagnostic(diags) {
+        Some(diag) -> match diag.span {
+            Some(s) -> sourceExcerpt(file, s, before, after),
+            None    -> sourceHead(file, before + after + 1),
+        },
+        None -> sourceHead(file, before + after + 1),
+    }
+    FixContext {
+        file,
+        diagnostics: diags,
+        summary,
+        excerpt,
+    }
+}
+
+pub fn validateSourceSpan(file: SourceFile, spanValue: SourceSpan) -> Result<(), Error> {
+    if spanValue.path != "" && spanValue.path != file.path {
+        return Err(error.new("aidev: span path does not match file path"))
+    }
+    if spanValue.startLine < 1 || spanValue.endLine < 1 {
+        return Err(error.new("aidev: span line numbers are 1-based"))
+    }
+    if spanValue.startColumn < 1 || spanValue.endColumn < 1 {
+        return Err(error.new("aidev: span columns are 1-based"))
+    }
+    if spanValue.endLine < spanValue.startLine ||
+       (spanValue.endLine == spanValue.startLine && spanValue.endColumn < spanValue.startColumn) {
+        return Err(error.new("aidev: span end is before span start"))
+    }
+
+    let lines = sourceLines(file.text)
+    if spanValue.startLine > lines.len() || spanValue.endLine > lines.len() {
+        return Err(error.new("aidev: span line is outside the file"))
+    }
+    let startLen = lines[spanValue.startLine - 1].charCount()
+    let endLen = lines[spanValue.endLine - 1].charCount()
+    if spanValue.startColumn > startLen + 1 {
+        return Err(error.new("aidev: span start column is outside the line"))
+    }
+    if spanValue.endColumn > endLen + 1 {
+        return Err(error.new("aidev: span end column is outside the line"))
+    }
+    Ok(())
+}
+
+pub fn validateNonOverlappingEdits(edits: List<Edit>) -> List<PatchIssue> {
+    let mut issues: List<PatchIssue> = []
+    let mut i = 0
+    for i < edits.len() {
+        let mut j = i + 1
+        for j < edits.len() {
+            if editsOverlap(edits[i], edits[j]) {
+                issues.push(PatchIssue {
+                    editIndex: j,
+                    path: edits[j].path,
+                    message: "edit overlaps with edit {i}",
+                })
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+    issues
+}
+
+pub fn validatePatch(files: List<SourceFile>, patchValue: Patch) -> List<PatchIssue> {
+    let mut issues = validateNonOverlappingEdits(patchValue.edits)
+    let mut i = 0
+    for i < patchValue.edits.len() {
+        let item = patchValue.edits[i]
+        match findFile(files, item.path) {
+            Some(file) -> match validateSourceSpan(file, item.span) {
+                Ok(_) -> {},
+                Err(err) -> issues.push(PatchIssue {
+                    editIndex: i,
+                    path: item.path,
+                    message: err.message(),
+                }),
+            },
+            None -> issues.push(PatchIssue {
+                editIndex: i,
+                path: item.path,
+                message: "target file is not present",
+            }),
+        }
+        i = i + 1
+    }
+    issues
+}
+
+pub fn applyPatchToFile(file: SourceFile, patchValue: Patch) -> PatchResult {
+    let issues = validatePatch([file], patchValue)
+    if !issues.isEmpty() {
+        return PatchResult {
+            status: PatchRejected,
+            files: [file],
+            issues,
+            summary: "patch rejected",
+        }
+    }
+    match applyEditsToFile(file, patchValue.edits) {
+        Ok(updated) -> PatchResult {
+            status: PatchApplied,
+            files: [updated],
+            changedPaths: if updated.text == file.text { [] } else { [file.path] },
+            summary: formatPatchSummary(Patch { edits: editsForPath(file.path, patchValue.edits), summary: patchValue.summary }),
+        },
+        Err(err) -> PatchResult {
+            status: PatchPartial,
+            files: [file],
+            issues: [PatchIssue { editIndex: 0, path: file.path, message: err.message() }],
+            summary: "patch failed while applying edits",
+        },
+    }
+}
+
+pub fn applyPatch(files: List<SourceFile>, patchValue: Patch) -> PatchResult {
+    let issues = validatePatch(files, patchValue)
+    if !issues.isEmpty() {
+        return PatchResult {
+            status: PatchRejected,
+            files,
+            issues,
+            summary: "patch rejected",
+        }
+    }
+
+    let mut updatedFiles: List<SourceFile> = []
+    let mut changed: List<String> = []
+    for file in files {
+        match applyEditsToFile(file, patchValue.edits) {
+            Ok(updated) -> {
+                if updated.text != file.text {
+                    changed = appendUnique(changed, file.path)
+                }
+                updatedFiles.push(updated)
+            },
+            Err(err) -> {
+                return PatchResult {
+                    status: PatchPartial,
+                    files: updatedFiles,
+                    issues: [PatchIssue { editIndex: 0, path: file.path, message: err.message() }],
+                    changedPaths: changed,
+                    summary: "patch failed while applying edits",
+                }
+            },
+        }
+    }
+    PatchResult {
+        status: PatchApplied,
+        files: updatedFiles,
+        changedPaths: changed,
+        summary: formatPatchSummary(patchValue),
+    }
+}
+
+pub fn touchedPaths(patchValue: Patch) -> List<String> {
+    let mut paths: List<String> = []
+    for item in patchValue.edits {
+        paths = appendUnique(paths, item.path)
+    }
+    paths
+}
+
+pub fn formatPatchSummary(patchValue: Patch) -> String {
+    let paths = touchedPaths(patchValue)
+    let base = if patchValue.summary.isEmpty() {
+        "{patchValue.edits.len()} edit(s) across {paths.len()} file(s)"
+    } else {
+        patchValue.summary
+    }
+    if paths.isEmpty() {
+        return base
+    }
+    let joined = strings.join(paths, ", ")
+    "{base}: {joined}"
+}
+
+fn applyEditsToFile(file: SourceFile, edits: List<Edit>) -> Result<SourceFile, Error> {
+    let ordered = editsForPathDescending(file.path, edits)
+    if ordered.isEmpty() {
+        return Ok(file)
+    }
+    let mut text = file.text
+    for item in ordered {
+        text = applyEditText(text, item)?
+    }
+    Ok(SourceFile {
+        path: file.path,
+        language: file.language,
+        text,
+    })
+}
+
+fn applyEditText(text: String, item: Edit) -> Result<String, Error> {
+    let lines = sourceLines(text)
+    let startLine = item.span.startLine - 1
+    let endLine = item.span.endLine - 1
+    if startLine < 0 || endLine >= lines.len() {
+        return Err(error.new("aidev: edit span is outside the file"))
+    }
+
+    let startText = lines[startLine]
+    let endText = lines[endLine]
+    let prefix = strings.slice(startText, 0, item.span.startColumn - 1)
+    let suffix = strings.slice(endText, item.span.endColumn - 1, endText.charCount())
+    let replacementLines = sourceLines("{prefix}{item.replacement}{suffix}")
+
+    let mut out: List<String> = []
+    let mut i = 0
+    for i < startLine {
+        out.push(lines[i])
+        i = i + 1
+    }
+    for line in replacementLines {
+        out.push(line)
+    }
+    i = endLine + 1
+    for i < lines.len() {
+        out.push(lines[i])
+        i = i + 1
+    }
+    Ok(strings.join(out, "\n"))
+}
+
+fn spansOverlap(a: SourceSpan, b: SourceSpan) -> Bool {
+    if a.path != b.path {
+        return false
+    }
+    if compareSpanStart(a, b) <= 0 {
+        return spanEndAfterStart(a, b)
+    }
+    spanEndAfterStart(b, a)
+}
+
+fn editsOverlap(a: Edit, b: Edit) -> Bool {
+    if a.path != b.path {
+        return false
+    }
+    spansOverlap(normalizeSpanPath(a.span, a.path), normalizeSpanPath(b.span, b.path))
+}
+
+fn normalizeSpanPath(spanValue: SourceSpan, path: String) -> SourceSpan {
+    if !spanValue.path.isEmpty() {
+        return spanValue
+    }
+    SourceSpan {
+        path,
+        startLine: spanValue.startLine,
+        startColumn: spanValue.startColumn,
+        endLine: spanValue.endLine,
+        endColumn: spanValue.endColumn,
+    }
+}
+
+fn spanEndAfterStart(left: SourceSpan, right: SourceSpan) -> Bool {
+    left.endLine > right.startLine ||
+    (left.endLine == right.startLine && left.endColumn > right.startColumn)
+}
+
+fn compareSpanStart(a: SourceSpan, b: SourceSpan) -> Int {
+    if a.startLine < b.startLine {
+        return -1
+    }
+    if a.startLine > b.startLine {
+        return 1
+    }
+    if a.startColumn < b.startColumn {
+        return -1
+    }
+    if a.startColumn > b.startColumn {
+        return 1
+    }
+    0
+}
+
+fn editsForPath(path: String, edits: List<Edit>) -> List<Edit> {
+    let mut out: List<Edit> = []
+    for item in edits {
+        if item.path == path {
+            out.push(item)
+        }
+    }
+    out
+}
+
+fn editsForPathDescending(path: String, edits: List<Edit>) -> List<Edit> {
+    let mut out: List<Edit> = []
+    for item in edits {
+        if item.path != path {
+            continue
+        }
+        let mut inserted = false
+        let mut i = 0
+        for i < out.len() {
+            if compareSpanStart(item.span, out[i].span) > 0 {
+                out.insert(i, item)
+                inserted = true
+                break
+            }
+            i = i + 1
+        }
+        if !inserted {
+            out.push(item)
+        }
+    }
+    out
+}
+
+fn findFile(files: List<SourceFile>, path: String) -> SourceFile? {
+    for file in files {
+        if file.path == path {
+            return Some(file)
+        }
+    }
+    None
+}
+
+fn sourceHead(file: SourceFile, maxLines: Int) -> String {
+    let lines = sourceLines(file.text)
+    let limit = if maxLines <= 0 { lines.len() } else { minInt(maxLines, lines.len()) }
+    let mut out: List<String> = []
+    let mut i = 0
+    for i < limit {
+        out.push("{i + 1}: {lines[i]}")
+        i = i + 1
+    }
+    strings.join(out, "\n")
+}
+
+fn sourceLines(text: String) -> List<String> {
+    if text.isEmpty() {
+        return [""]
+    }
+    strings.splitLines(text)
+}
+
+fn appendUnique(items: List<String>, item: String) -> List<String> {
+    if !items.contains(item) {
+        items.push(item)
+    }
+    items
+}
+
+fn minInt(a: Int, b: Int) -> Int {
+    if a < b { a } else { b }
+}
+
+fn maxInt(a: Int, b: Int) -> Int {
+    if a > b { a } else { b }
+}
