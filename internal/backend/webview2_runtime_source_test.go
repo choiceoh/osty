@@ -15,6 +15,7 @@ func TestWebView2RuntimeUsesVirtualLocalOrigin(t *testing.T) {
 		`std::wstring(L"https://") + kOstyLocalHost`,
 		"SetVirtualHostNameToFolderMapping",
 		"COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY_CORS",
+		"osty_wv2_window_post_command_json",
 		"navigation blocked: local paths must stay under the WebView2 app asset root",
 	} {
 		if !strings.Contains(src, want) {
@@ -27,6 +28,9 @@ func TestWebView2RuntimeHardensBridgeAndLifetime(t *testing.T) {
 	src := readWebView2RuntimeSource(t)
 	for _, want := range []string{
 		"Object.freeze(api)",
+		"const commandHandlers = new Set()",
+		"onCommand(handler)",
+		"event.data.type === 'command'",
 		"queueMicrotask(() => handler(lastState))",
 		"typeof name !== 'string'",
 		"name: `console.${level}`",

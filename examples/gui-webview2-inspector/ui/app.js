@@ -32,6 +32,12 @@ document.querySelector("#quit").addEventListener("click", () => {
 
 if (window.osty) {
   window.osty.onState(renderState);
+  window.osty.onCommand((name, payload) => {
+    if (name === "flash") {
+      detail.textContent = `Command from ${payload && payload.source ? payload.source : "Osty"}: ${payload && payload.reason ? payload.reason : "update"}`;
+      console.debug("command handled", name, payload);
+    }
+  });
 } else {
   renderState({ status: "preview", detail: "Run this example through WebView2 on Windows." });
 }

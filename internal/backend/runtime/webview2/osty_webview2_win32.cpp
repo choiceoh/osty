@@ -85,6 +85,35 @@ bool fail_hr(const char *context, HRESULT hr) {
     return fail(buf);
 }
 
+std::string json_escape_string(const std::string &s) {
+    std::string out;
+    out.reserve(s.size() + 2);
+    out.push_back('"');
+    const char *hex = "0123456789abcdef";
+    for (unsigned char c : s) {
+        switch (c) {
+        case '"': out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\b': out += "\\b"; break;
+        case '\f': out += "\\f"; break;
+        case '\n': out += "\\n"; break;
+        case '\r': out += "\\r"; break;
+        case '\t': out += "\\t"; break;
+        default:
+            if (c < 0x20) {
+                out += "\\u00";
+                out.push_back(hex[(c >> 4) & 0xf]);
+                out.push_back(hex[c & 0xf]);
+            } else {
+                out.push_back(static_cast<char>(c));
+            }
+            break;
+        }
+    }
+    out.push_back('"');
+    return out;
+}
+
 std::string osty_string_to_utf8(const char *value) {
     if (value == nullptr) {
         return "";
@@ -240,6 +269,7 @@ std::wstring bridge_script() {
     return LR"JS((() => {
   if (window.osty && window.osty.__ostyWebView2Bridge) return;
   const stateHandlers = new Set();
+  const commandHandlers = new Set();
   let lastState;
   let hasState = false;
   const post = (message) => {
@@ -272,6 +302,10 @@ std::wstring bridge_script() {
       stateHandlers.add(handler);
       if (hasState) queueMicrotask(() => handler(lastState));
       return () => stateHandlers.delete(handler);
+    },
+    onCommand(handler) {
+      commandHandlers.add(handler);
+      return () => commandHandlers.delete(handler);
     }
   };
   Object.defineProperty(window, 'osty', { value: Object.freeze(api), configurable: false, writable: false });
@@ -287,7 +321,12 @@ std::wstring bridge_script() {
   }
   if (window.chrome && window.chrome.webview) {
     window.chrome.webview.addEventListener('message', (event) => {
-      if (!event.data || event.data.type !== 'state') return;
+      if (!event.data) return;
+      if (event.data.type === 'command') {
+        for (const handler of commandHandlers) handler(event.data.name, event.data.payload);
+        return;
+      }
+      if (event.data.type !== 'state') return;
       hasState = true;
       lastState = event.data.payload;
       for (const handler of stateHandlers) handler(event.data.payload);
@@ -424,6 +463,14 @@ bool json_value_field(const std::string &json, const std::string &key, std::stri
     return true;
 }
 
+std::string json_payload_or_null(const char *payload) {
+    std::string raw = osty_string_to_utf8(payload);
+    if (raw.empty()) {
+        return "null";
+    }
+    return raw;
+}
+
 void pump_messages_until(bool *done) {
     MSG msg;
     while (!*done) {
@@ -445,6 +492,25 @@ App *lookup_app(int64_t id) {
 Window *lookup_window(int64_t id) {
     auto it = g_windows.find(id);
     return it == g_windows.end() ? nullptr : it->second.get();
+}
+
+int post_web_message_json(int64_t window, const std::string &message, const char *context) {
+    Window *w = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        w = lookup_window(window);
+    }
+    if (w == nullptr || !w->webview) {
+        fail("invalid WebView2 window handle");
+        return 0;
+    }
+    HRESULT hr = w->webview->PostWebMessageAsJson(utf8_to_wide(message).c_str());
+    if (FAILED(hr)) {
+        fail_hr(context, hr);
+        return 0;
+    }
+    clear_error();
+    return 1;
 }
 
 void resize_controller(Window *w) {
@@ -855,27 +921,26 @@ int osty_wv2_window_navigate(int64_t window, const char *url) {
 }
 
 int osty_wv2_window_post_state_json(int64_t window, const char *state) {
-    Window *w = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(g_mu);
-        w = lookup_window(window);
-    }
-    if (w == nullptr || !w->webview) {
-        fail("invalid WebView2 window handle");
+    return post_web_message_json(
+        window,
+        std::string("{\"type\":\"state\",\"payload\":") + json_payload_or_null(state) + "}",
+        "CoreWebView2.PostWebMessageAsJson");
+}
+
+int osty_wv2_window_post_command_json(int64_t window, const char *name, const char *payload) {
+    std::string command_name = osty_string_to_utf8(name);
+    if (command_name.empty()) {
+        fail("WebView2 command name must not be empty");
         return 0;
     }
-    std::string raw = osty_string_to_utf8(state);
-    if (raw.empty()) {
-        raw = "null";
-    }
-    std::wstring msg = utf8_to_wide(std::string("{\"type\":\"state\",\"payload\":") + raw + "}");
-    HRESULT hr = w->webview->PostWebMessageAsJson(msg.c_str());
-    if (FAILED(hr)) {
-        fail_hr("CoreWebView2.PostWebMessageAsJson", hr);
-        return 0;
-    }
-    clear_error();
-    return 1;
+    return post_web_message_json(
+        window,
+        std::string("{\"type\":\"command\",\"name\":") +
+            json_escape_string(command_name) +
+            ",\"payload\":" +
+            json_payload_or_null(payload) +
+            "}",
+        "CoreWebView2.PostWebMessageAsJson");
 }
 
 const char *osty_wv2_window_eval(int64_t window, const char *js) {

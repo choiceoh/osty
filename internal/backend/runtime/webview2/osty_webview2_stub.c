@@ -75,6 +75,13 @@ int osty_wv2_window_post_state_json(int64_t window, const char *state) {
     return 0;
 }
 
+int osty_wv2_window_post_command_json(int64_t window, const char *name, const char *payload) {
+    (void)window;
+    (void)name;
+    (void)payload;
+    return 0;
+}
+
 const char *osty_wv2_window_eval(int64_t window, const char *js) {
     (void)window;
     (void)js;

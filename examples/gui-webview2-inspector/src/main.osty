@@ -15,6 +15,7 @@ fn main() -> Result<(), Error> {
                 app.quit()
             } else if event.name == "refresh" {
                 window.setState(initialStateJson())?
+                window.send("flash", "\{\"source\":\"osty\",\"reason\":\"refresh\"\}")?
             } else if event.name == "inspect" {
                 window.openDevTools()?
             } else if event.name == "state" {

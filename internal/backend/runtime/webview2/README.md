@@ -17,6 +17,11 @@ as normal Osty events named `console.<level>`. App code can inspect those with
 `std.gui.webview2.isConsoleEvent` and `consoleEventLevel` while keeping the
 original browser console behavior intact.
 
+Osty can send targeted UI commands back to JavaScript with `Window.send`.
+Those arrive at `window.osty.onCommand((name, payload) => ...)`, giving apps an
+imperative channel for focus, toast, reload, and animation requests without
+overloading the state JSON stream.
+
 Example Windows build shape:
 
 ```powershell

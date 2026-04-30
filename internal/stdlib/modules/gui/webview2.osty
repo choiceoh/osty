@@ -24,6 +24,7 @@ use c "osty_webview2" as wv {
     fn osty_wv2_window_set_title(window: Int, title: String) -> Bool
     fn osty_wv2_window_navigate(window: Int, url: String) -> Bool
     fn osty_wv2_window_post_state_json(window: Int, state: String) -> Bool
+    fn osty_wv2_window_post_command_json(window: Int, name: String, payload: String) -> Bool
     fn osty_wv2_window_eval(window: Int, js: String) -> String
     fn osty_wv2_window_open_devtools(window: Int) -> Bool
 
@@ -109,6 +110,10 @@ pub struct Window {
 
     pub fn setState(self, stateJson: String) -> Result<(), Error> {
         okUnit(wv.osty_wv2_window_post_state_json(self.handle, stateJson))
+    }
+
+    pub fn send(self, name: String, payloadJson: String) -> Result<(), Error> {
+        okUnit(wv.osty_wv2_window_post_command_json(self.handle, name, payloadJson))
     }
 
     pub fn eval(self, js: String) -> Result<String, Error> {
@@ -199,6 +204,7 @@ pub fn bridgeScript() -> String {
 (() => {
   if (window.osty && window.osty.__ostyWebView2Bridge) return;
   const stateHandlers = new Set();
+  const commandHandlers = new Set();
   let lastState;
   let hasState = false;
   const post = (message) => {
@@ -231,6 +237,10 @@ pub fn bridgeScript() -> String {
       stateHandlers.add(handler);
       if (hasState) queueMicrotask(() => handler(lastState));
       return () => stateHandlers.delete(handler);
+    },
+    onCommand(handler) {
+      commandHandlers.add(handler);
+      return () => commandHandlers.delete(handler);
     }
   };
   Object.defineProperty(window, 'osty', { value: Object.freeze(api), configurable: false, writable: false });
@@ -246,7 +256,12 @@ pub fn bridgeScript() -> String {
   }
   if (window.chrome && window.chrome.webview) {
     window.chrome.webview.addEventListener('message', (event) => {
-      if (!event.data || event.data.type !== 'state') return;
+      if (!event.data) return;
+      if (event.data.type === 'command') {
+        for (const handler of commandHandlers) handler(event.data.name, event.data.payload);
+        return;
+      }
+      if (event.data.type !== 'state') return;
       hasState = true;
       lastState = event.data.payload;
       for (const handler of stateHandlers) handler(event.data.payload);
