@@ -1,0 +1,637 @@
+// std.schedule - cron, interval, daily, and retry task planning.
+//
+// This module deliberately keeps scheduling policy in pure Osty. Host code or
+// std.thread owns the long-running loop; std.schedule owns deterministic plan
+// calculation, due-task selection, retry backoff, and single-tick execution.
+use std.error
+use std.strings
+let SECOND_MS: Int = 1000
+let MINUTE_MS: Int = 60000
+let HOUR_MS: Int = 3600000
+let DAY_MS: Int = 86400000
+pub enum ScheduleKind {
+    Once,
+    Interval,
+    Daily,
+    Cron,
+}
+pub enum MissedRunPolicy {
+    Skip,
+    FireOnce,
+    CatchUp,
+}
+pub enum TaskState {
+    Ready,
+    Paused,
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+pub enum RunReason {
+    Scheduled,
+    Retry,
+    Manual,
+}
+pub type Handler = fn(TaskContext) -> Result<(), Error>
+pub struct Schedule {
+    pub kind: ScheduleKind,
+    pub expression: String = "",
+    pub everyMs: Int = 0,
+    pub anchorMs: Int = 0,
+    pub atMs: Int = 0,
+    pub hour: Int = 0,
+    pub minute: Int = 0,
+    pub second: Int = 0,
+    pub offsetMinutes: Int = 0,
+    pub missed: MissedRunPolicy,
+}
+pub struct CronField {
+    pub raw: String,
+    pub any: Bool,
+    pub values: List<Int>,
+}
+pub struct CronSpec {
+    pub expression: String,
+    pub minute: CronField,
+    pub hour: CronField,
+    pub dayOfMonth: CronField,
+    pub month: CronField,
+    pub dayOfWeek: CronField,
+    pub offsetMinutes: Int = 0,
+}
+pub struct Moment {
+    pub year: Int,
+    pub month: Int,
+    pub dayOfMonth: Int,
+    pub hour: Int,
+    pub minute: Int,
+    pub second: Int,
+    pub weekday: Int,
+}
+pub struct RetryPolicy {
+    pub maxAttempts: Int = 3,
+    pub baseDelayMs: Int = 1000,
+    pub maxDelayMs: Int = 60000,
+    pub multiplier: Int = 2,
+}
+pub struct RetryDecision {
+    pub retry: Bool,
+    pub exhausted: Bool,
+    pub attempt: Int,
+    pub delayMs: Int = 0,
+    pub nextRunMs: Int = 0,
+}
+pub struct Task {
+    pub id: String,
+    pub name: String = "",
+    pub schedule: Schedule,
+    pub retry: RetryPolicy,
+    pub state: TaskState,
+    pub nextRunMs: Int = 0,
+    pub lastRunMs: Int = 0,
+    pub attempts: Int = 0,
+    pub lastError: String = "",
+}
+pub struct TaskContext {
+    pub taskId: String,
+    pub name: String,
+    pub attempt: Int,
+    pub scheduledAtMs: Int,
+    pub startedAtMs: Int,
+    pub reason: RunReason,
+}
+pub struct DueTask {
+    pub task: Task,
+    pub scheduledAtMs: Int,
+    pub reason: RunReason,
+    pub attempt: Int,
+}
+pub struct Tick {
+    pub due: List<DueTask>,
+    pub nextWakeMs: Int?,
+}
+pub fn seconds(n: Int) -> Int {
+    n * SECOND_MS
+}
+pub fn minutes(n: Int) -> Int {
+    n * MINUTE_MS
+}
+pub fn hours(n: Int) -> Int {
+    n * HOUR_MS
+}
+pub fn days(n: Int) -> Int {
+    n * DAY_MS
+}
+pub fn once(atMs: Int) -> Schedule {
+    Schedule {kind: ScheduleKind.Once, atMs: atMs, missed: MissedRunPolicy.FireOnce}
+}
+pub fn intervalMs(everyMs: Int) -> Result<Schedule, Error> {
+    intervalAnchored(everyMs, 0)
+}
+pub fn intervalAnchored(everyMs: Int, anchorMs: Int) -> Result<Schedule, Error> {
+    if everyMs <= 0 {
+        return Err(error.new("schedule: interval must be positive"))
+    }
+    Ok(Schedule {kind: ScheduleKind.Interval, everyMs: everyMs, anchorMs: anchorMs, missed: MissedRunPolicy.FireOnce})
+}
+pub fn daily(hour: Int, minute: Int) -> Result<Schedule, Error> {
+    dailyAt(hour, minute, 0, 0)
+}
+pub fn dailyAt(hour: Int, minute: Int, second: Int, offsetMinutes: Int) -> Result<Schedule, Error> {
+    validateClock(hour, minute, second)?
+    Ok(Schedule {kind: ScheduleKind.Daily, hour: hour, minute: minute, second: second, offsetMinutes: offsetMinutes, missed: MissedRunPolicy.FireOnce})
+}
+pub fn cron(expression: String) -> Result<Schedule, Error> {
+    cronInZone(expression, 0)
+}
+pub fn cronInZone(expression: String, offsetMinutes: Int) -> Result<Schedule, Error> {
+    let spec = parseCronInZone(expression, offsetMinutes)?
+    Ok(Schedule {kind: ScheduleKind.Cron, expression: spec.expression, offsetMinutes: offsetMinutes, missed: MissedRunPolicy.FireOnce})
+}
+pub fn withMissedPolicy(mut schedule: Schedule, policy: MissedRunPolicy) -> Schedule {
+    schedule.missed = policy
+    schedule
+}
+pub fn defaultRetryPolicy() -> RetryPolicy {
+    RetryPolicy {}
+}
+pub fn retryPolicy(maxAttempts: Int, baseDelayMs: Int, maxDelayMs: Int, multiplier: Int) -> Result<RetryPolicy, Error> {
+    if maxAttempts <= 0 {
+        return Err(error.new("schedule: retry maxAttempts must be positive"))
+    }
+    if baseDelayMs < 0 || maxDelayMs < 0 {
+        return Err(error.new("schedule: retry delays must be non-negative"))
+    }
+    if multiplier < 1 {
+        return Err(error.new("schedule: retry multiplier must be at least 1"))
+    }
+    Ok(RetryPolicy {maxAttempts: maxAttempts, baseDelayMs: baseDelayMs, maxDelayMs: maxDelayMs, multiplier: multiplier})
+}
+pub fn task(id: String, schedule: Schedule) -> Task {
+    Task {id: id, schedule: schedule, retry: defaultRetryPolicy(), state: TaskState.Ready}
+}
+pub fn namedTask(id: String, name: String, schedule: Schedule) -> Task {
+    let mut out = task(id, schedule)
+    out.name = name
+    out
+}
+pub fn withRetry(mut taskValue: Task, policy: RetryPolicy) -> Task {
+    taskValue.retry = policy
+    taskValue
+}
+pub fn scheduleTask(mut taskValue: Task, afterMs: Int) -> Result<Task, Error> {
+    match nextRunAfter(taskValue.schedule, afterMs)? {
+        Some(next) -> {
+            taskValue.nextRunMs = next
+            taskValue.state = TaskState.Ready
+            Ok(taskValue)
+        },
+        None -> {
+            taskValue.nextRunMs = 0
+            taskValue.state = TaskState.Succeeded
+            Ok(taskValue)
+        },
+    }
+}
+pub fn pause(mut taskValue: Task) -> Task {
+    taskValue.state = TaskState.Paused
+    taskValue
+}
+pub fn resume(taskValue: Task, nowMs: Int) -> Result<Task, Error> {
+    scheduleTask(taskValue, nowMs)
+}
+pub fn cancel(mut taskValue: Task) -> Task {
+    taskValue.state = TaskState.Cancelled
+    taskValue.nextRunMs = 0
+    taskValue
+}
+pub fn isTerminal(state: TaskState) -> Bool {
+    match state {
+        Succeeded | Failed | Cancelled -> true,
+        _ -> false,
+    }
+}
+pub fn isRepeating(schedule: Schedule) -> Bool {
+    match schedule.kind {
+        Once -> false,
+        _ -> true,
+    }
+}
+pub fn isDue(taskValue: Task, nowMs: Int) -> Bool {
+    taskValue.state == TaskState.Ready && taskValue.nextRunMs > 0 && taskValue.nextRunMs <= nowMs
+}
+pub fn due(tasks: List<Task>, nowMs: Int) -> List<DueTask> {
+    let mut out: List<DueTask> = []
+    for taskValue in tasks {
+        if isDue(taskValue, nowMs) {
+            out.push(DueTask {task: taskValue, scheduledAtMs: taskValue.nextRunMs, reason: reasonFor(taskValue), attempt: taskValue.attempts + 1})
+        }
+    }
+    out
+}
+pub fn tick(tasks: List<Task>, nowMs: Int) -> Tick {
+    Tick {due: due(tasks, nowMs), nextWakeMs: nextWake(tasks)}
+}
+pub fn run(taskValue: Task, nowMs: Int, body: Handler) -> Task {
+    let started = markStarted(taskValue)
+    let ctx = contextFor(started, nowMs)
+    match body(ctx) {
+        Ok(_) -> markSuccess(started, nowMs),
+        Err(err) -> markFailure(started, nowMs, err.message()),
+    }
+}
+pub fn runDue(tasks: List<Task>, nowMs: Int, body: Handler) -> List<Task> {
+    let mut out: List<Task> = []
+    for taskValue in tasks {
+        if isDue(taskValue, nowMs) {
+            out.push(run(taskValue, nowMs, body))
+        } else {
+            out.push(taskValue)
+        }
+    }
+    out
+}
+pub fn markStarted(mut taskValue: Task) -> Task {
+    taskValue.state = TaskState.Running
+    taskValue
+}
+pub fn markSuccess(mut taskValue: Task, finishedAtMs: Int) -> Task {
+    taskValue.lastRunMs = finishedAtMs
+    taskValue.attempts = 0
+    taskValue.lastError = ""
+    match nextRunAfter(taskValue.schedule, finishedAtMs) {
+        Ok(Some(next)) -> {
+            taskValue.nextRunMs = next
+            taskValue.state = TaskState.Ready
+        },
+        _ -> {
+            taskValue.nextRunMs = 0
+            taskValue.state = TaskState.Succeeded
+        },
+    }
+    taskValue
+}
+pub fn markFailure(mut taskValue: Task, failedAtMs: Int, message: String) -> Task {
+    let attempt = taskValue.attempts + 1
+    taskValue.lastRunMs = failedAtMs
+    taskValue.attempts = attempt
+    taskValue.lastError = message
+    let decision = retryAfter(attempt, taskValue.retry, failedAtMs)
+    if decision.retry {
+        taskValue.nextRunMs = decision.nextRunMs
+        taskValue.state = TaskState.Ready
+    } else {
+        taskValue.nextRunMs = 0
+        taskValue.state = TaskState.Failed
+    }
+    taskValue
+}
+pub fn contextFor(taskValue: Task, startedAtMs: Int) -> TaskContext {
+    TaskContext {taskId: taskValue.id, name: taskValue.name, attempt: taskValue.attempts + 1, scheduledAtMs: taskValue.nextRunMs, startedAtMs: startedAtMs, reason: reasonFor(taskValue)}
+}
+pub fn nextWake(tasks: List<Task>) -> Int? {
+    let mut best: Int? = None
+    for taskValue in tasks {
+        if taskValue.state == TaskState.Ready && taskValue.nextRunMs > 0 {
+            match best {
+                Some(current) -> {
+                    if taskValue.nextRunMs < current {
+                        best = Some(taskValue.nextRunMs)
+                    }
+                },
+                None -> {
+                    best = Some(taskValue.nextRunMs)
+                },
+            }
+        }
+    }
+    best
+}
+pub fn nextDelayMs(schedule: Schedule, nowMs: Int) -> Result<Int?, Error> {
+    match nextRunAfter(schedule, nowMs)? {
+        Some(next) -> Ok(Some(maxInt(0, next - nowMs))),
+        None -> Ok(None),
+    }
+}
+pub fn nextRunAfter(schedule: Schedule, afterMs: Int) -> Result<Int?, Error> {
+    match schedule.kind {
+        Once -> {
+            if schedule.atMs > afterMs {
+                Ok(Some(schedule.atMs))
+            } else {
+                Ok(None)
+            }
+        },
+        Interval -> Ok(Some(nextInterval(schedule.everyMs, schedule.anchorMs, afterMs)?)),
+        Daily -> Ok(Some(nextDaily(schedule, afterMs)?)),
+        Cron -> {
+            let spec = parseCronInZone(schedule.expression, schedule.offsetMinutes)?
+            Ok(nextCron(spec, afterMs))
+        },
+    }
+}
+pub fn nextInterval(everyMs: Int, anchorMs: Int, afterMs: Int) -> Result<Int, Error> {
+    if everyMs <= 0 {
+        return Err(error.new("schedule: interval must be positive"))
+    }
+    if afterMs < anchorMs {
+        return Ok(anchorMs)
+    }
+    let elapsed = afterMs - anchorMs
+    let steps = (elapsed / everyMs) + 1
+    Ok(anchorMs + steps * everyMs)
+}
+pub fn nextDaily(schedule: Schedule, afterMs: Int) -> Result<Int, Error> {
+    validateClock(schedule.hour, schedule.minute, schedule.second)?
+    let offsetMs = schedule.offsetMinutes * MINUTE_MS
+    let shifted = afterMs + offsetMs
+    let day = floorDiv(shifted, DAY_MS)
+    let targetOfDay = schedule.hour * HOUR_MS + schedule.minute * MINUTE_MS + schedule.second * SECOND_MS
+    let mut target = day * DAY_MS + targetOfDay - offsetMs
+    if target <= afterMs {
+        target = target + DAY_MS
+    }
+    Ok(target)
+}
+pub fn parseCron(expression: String) -> Result<CronSpec, Error> {
+    parseCronInZone(expression, 0)
+}
+pub fn parseCronInZone(expression: String, offsetMinutes: Int) -> Result<CronSpec, Error> {
+    let expanded = expandCronAlias(expression)?
+    let parts = splitFields(expanded)
+    if parts.len() != 5 {
+        return Err(error.new("schedule: cron expression must have 5 fields"))
+    }
+    Ok(CronSpec {expression: expanded, minute: parseCronField(parts[0], 0, 59, "minute")?, hour: parseCronField(parts[1], 0, 23, "hour")?, dayOfMonth: parseCronField(parts[2], 1, 31, "day-of-month")?, month: parseCronField(parts[3], 1, 12, "month")?, dayOfWeek: parseCronField(parts[4], 0, 7, "day-of-week")?, offsetMinutes: offsetMinutes})
+}
+pub fn matchesCronAt(spec: CronSpec, atMs: Int) -> Bool {
+    matchesCron(spec, momentAt(atMs, spec.offsetMinutes))
+}
+pub fn matchesCron(spec: CronSpec, moment: Moment) -> Bool {
+    if !fieldMatches(spec.minute, moment.minute) {
+        return false
+    }
+    if !fieldMatches(spec.hour, moment.hour) {
+        return false
+    }
+    if !fieldMatches(spec.month, moment.month) {
+        return false
+    }
+    let dom = fieldMatches(spec.dayOfMonth, moment.dayOfMonth)
+    let dow = fieldMatchesDayOfWeek(spec.dayOfWeek, moment.weekday)
+    if !spec.dayOfMonth.any && !spec.dayOfWeek.any {
+        dom || dow
+    } else {
+        dom && dow
+    }
+}
+pub fn nextCron(spec: CronSpec, afterMs: Int) -> Int? {
+    let mut cursor = ceilToMinute(afterMs + 1)
+    let end = cursor + days(366 * 5)
+    for cursor <= end {
+        if matchesCronAt(spec, cursor) {
+            return Some(cursor)
+        }
+        cursor = cursor + MINUTE_MS
+    }
+    None
+}
+pub fn momentAt(atMs: Int, offsetMinutes: Int) -> Moment {
+    let shifted = atMs + offsetMinutes * MINUTE_MS
+    let dayIndex = floorDiv(shifted, DAY_MS)
+    let msOfDay = positiveMod(shifted, DAY_MS)
+    let civil = civilFromDays(dayIndex)
+    Moment {year: civil.year, month: civil.month, dayOfMonth: civil.dayOfMonth, hour: msOfDay / HOUR_MS, minute: (msOfDay % HOUR_MS) / MINUTE_MS, second: (msOfDay % MINUTE_MS) / SECOND_MS, weekday: positiveMod(dayIndex + 4, 7)}
+}
+pub fn retryDelayMs(attempt: Int, policy: RetryPolicy) -> Int {
+    if attempt <= 0 {
+        return 0
+    }
+    let mut delay = policy.baseDelayMs
+    let mut i = 1
+    for i < attempt {
+        delay = delay * policy.multiplier
+        if delay >= policy.maxDelayMs {
+            return policy.maxDelayMs
+        }
+        i = i + 1
+    }
+    if delay > policy.maxDelayMs {
+        policy.maxDelayMs
+    } else {
+        delay
+    }
+}
+pub fn shouldRetry(attempt: Int, policy: RetryPolicy) -> Bool {
+    attempt < policy.maxAttempts
+}
+pub fn retryAfter(attempt: Int, policy: RetryPolicy, failedAtMs: Int) -> RetryDecision {
+    let retryable = shouldRetry(attempt, policy)
+    let delay = if retryable {
+        retryDelayMs(attempt, policy)
+    } else {
+        0
+    }
+    RetryDecision {retry: retryable, exhausted: !retryable, attempt: attempt, delayMs: delay, nextRunMs: if retryable {
+        failedAtMs + delay
+    } else {
+        0
+    }}
+}
+fn reasonFor(taskValue: Task) -> RunReason {
+    if taskValue.attempts > 0 && !taskValue.lastError.isEmpty() {
+        RunReason.Retry
+    } else {
+        RunReason.Scheduled
+    }
+}
+fn validateClock(hour: Int, minute: Int, second: Int) -> Result<(), Error> {
+    if hour < 0 || hour > 23 {
+        return Err(error.new("schedule: hour must be 0..23"))
+    }
+    if minute < 0 || minute > 59 {
+        return Err(error.new("schedule: minute must be 0..59"))
+    }
+    if second < 0 || second > 59 {
+        return Err(error.new("schedule: second must be 0..59"))
+    }
+    Ok(())
+}
+fn expandCronAlias(expression: String) -> Result<String, Error> {
+    let clean = strings.toLower(strings.trimSpace(expression))
+    match clean {
+        "@hourly" -> Ok("0 * * * *"),
+        "@daily" | "@midnight" -> Ok("0 0 * * *"),
+        "@weekly" -> Ok("0 0 * * 0"),
+        "@monthly" -> Ok("0 0 1 * *"),
+        "@yearly" | "@annually" -> Ok("0 0 1 1 *"),
+        _ -> {
+            if strings.startsWith(clean, "@") {
+                Err(error.new("schedule: unknown cron alias: {expression}"))
+            } else {
+                Ok(strings.trimSpace(expression))
+            }
+        },
+    }
+}
+fn parseCronField(raw: String, min: Int, max: Int, fieldName: String) -> Result<CronField, Error> {
+    let clean = strings.trimSpace(raw)
+    if clean == "" {
+        return Err(error.new("schedule: empty cron {fieldName} field"))
+    }
+    if clean == "*" {
+        return Ok(CronField {raw: clean, any: true, values: []})
+    }
+    let mut values: List<Int> = []
+    for part in strings.split(clean, ",") {
+        addCronPart(values, strings.trimSpace(part), min, max, fieldName)?
+    }
+    if values.isEmpty() {
+        return Err(error.new("schedule: cron {fieldName} field has no values"))
+    }
+    Ok(CronField {raw: clean, any: false, values: values.sorted()})
+}
+fn addCronPart(values: List<Int>, part: String, min: Int, max: Int, fieldName: String) -> Result<(), Error> {
+    if part == "" {
+        return Err(error.new("schedule: empty cron {fieldName} item"))
+    }
+    let pieces = strings.splitN(part, "/", 2)
+    let base = pieces[0]
+    let step = if pieces.len() == 2 {
+        parsePositiveInt(pieces[1], fieldName)?
+    } else {
+        1
+    }
+    if base == "*" {
+        addCronRange(values, min, max, step, min, max, fieldName)
+    } else if strings.contains(base, "-") {
+        let bounds = strings.splitN(base, "-", 2)
+        if bounds.len() != 2 {
+            return Err(error.new("schedule: invalid cron {fieldName} range"))
+        }
+        let start = parseCronInt(bounds[0], min, max, fieldName)?
+        let end = parseCronInt(bounds[1], min, max, fieldName)?
+        if start > end {
+            return Err(error.new("schedule: cron {fieldName} range start exceeds end"))
+        }
+        addCronRange(values, start, end, step, min, max, fieldName)
+    } else {
+        if pieces.len() == 2 {
+            return Err(error.new("schedule: cron {fieldName} step requires * or range"))
+        }
+        pushCronValue(values, parseCronInt(base, min, max, fieldName)?, min, max, fieldName)
+    }
+}
+fn addCronRange(values: List<Int>, start: Int, end: Int, step: Int, min: Int, max: Int, fieldName: String) -> Result<(), Error> {
+    let mut value = start
+    for value <= end {
+        pushCronValue(values, value, min, max, fieldName)?
+        value = value + step
+    }
+    Ok(())
+}
+fn pushCronValue(values: List<Int>, value: Int, min: Int, max: Int, fieldName: String) -> Result<(), Error> {
+    if value < min || value > max {
+        return Err(error.new("schedule: cron {fieldName} value out of range"))
+    }
+    if !values.contains(value) {
+        values.push(value)
+    }
+    Ok(())
+}
+fn parseCronInt(raw: String, min: Int, max: Int, fieldName: String) -> Result<Int, Error> {
+    let clean = strings.trimSpace(raw)
+    if !strings.isDigits(clean) {
+        return Err(error.new("schedule: cron {fieldName} value must be numeric"))
+    }
+    let value = strings.toInt(clean)?
+    if value < min || value > max {
+        return Err(error.new("schedule: cron {fieldName} value out of range"))
+    }
+    Ok(value)
+}
+fn parsePositiveInt(raw: String, fieldName: String) -> Result<Int, Error> {
+    let clean = strings.trimSpace(raw)
+    if !strings.isDigits(clean) {
+        return Err(error.new("schedule: cron {fieldName} step must be numeric"))
+    }
+    let value = strings.toInt(clean)?
+    if value <= 0 {
+        return Err(error.new("schedule: cron {fieldName} step must be positive"))
+    }
+    Ok(value)
+}
+fn fieldMatches(field: CronField, value: Int) -> Bool {
+    field.any || field.values.contains(value)
+}
+fn fieldMatchesDayOfWeek(field: CronField, value: Int) -> Bool {
+    if field.any {
+        return true
+    }
+    field.values.contains(value) || (value == 0 && field.values.contains(7))
+}
+fn splitFields(text: String) -> List<String> {
+    let normalized = strings.replaceAll(strings.replaceAll(strings.trimSpace(text), "\t", " "), "\n", " ")
+    let mut out: List<String> = []
+    for part in strings.split(normalized, " ") {
+        let clean = strings.trimSpace(part)
+        if clean != "" {
+            out.push(clean)
+        }
+    }
+    out
+}
+fn ceilToMinute(ms: Int) -> Int {
+    let floor = floorDiv(ms, MINUTE_MS) * MINUTE_MS
+    if floor == ms {
+        ms
+    } else {
+        floor + MINUTE_MS
+    }
+}
+fn floorDiv(a: Int, b: Int) -> Int {
+    let q = a / b
+    let r = a % b
+    if r != 0 && ((r < 0 && b > 0) || (r > 0 && b < 0)) {
+        q - 1
+    } else {
+        q
+    }
+}
+fn positiveMod(a: Int, b: Int) -> Int {
+    let r = a % b
+    if r < 0 {
+        r + b
+    } else {
+        r
+    }
+}
+fn civilFromDays(daysSinceEpoch: Int) -> Moment {
+    let z = daysSinceEpoch + 719468
+    let era = floorDiv(z, 146097)
+    let doe = z - era * 146097
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    let y = yoe + era * 400
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    let mp = (5 * doy + 2) / 153
+    let day = doy - (153 * mp + 2) / 5 + 1
+    let month = mp + if mp < 10 {
+        3
+    } else {
+        -9
+    }
+    let year = y + if month <= 2 {
+        1
+    } else {
+        0
+    }
+    Moment {year: year, month: month, dayOfMonth: day, hour: 0, minute: 0, second: 0, weekday: 0}
+}
+fn maxInt(a: Int, b: Int) -> Int {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
