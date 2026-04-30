@@ -439,6 +439,48 @@ func TestInputHas(t *testing.T) {
 	}
 }
 
+func TestHasFetchAbsentInputDoesNotRerunOnUnrelatedChange(t *testing.T) {
+	db := NewDatabase(nil, nil)
+	optional := RegisterInput[string, string](db, "Optional", hashString)
+	other := RegisterInput[string, string](db, "Other", hashString)
+
+	bodyCount := 0
+	derived := Register(db, "Derived",
+		func(ctx *Ctx, key string) string {
+			bodyCount++
+			if optional.HasFetch(ctx, key) {
+				return optional.Fetch(ctx, key)
+			}
+			return "missing"
+		},
+		hashString,
+	)
+
+	other.Set(db, "noise", "v1")
+	if got := derived.Get(db, "pkg"); got != "missing" {
+		t.Fatalf("initial derived = %q, want missing", got)
+	}
+	if bodyCount != 1 {
+		t.Fatalf("initial body count = %d, want 1", bodyCount)
+	}
+
+	other.Set(db, "noise", "v2")
+	if got := derived.Get(db, "pkg"); got != "missing" {
+		t.Fatalf("after unrelated change derived = %q, want missing", got)
+	}
+	if bodyCount != 1 {
+		t.Fatalf("absent optional input caused rerun; body count = %d, want 1", bodyCount)
+	}
+
+	optional.Set(db, "pkg", "present")
+	if got := derived.Get(db, "pkg"); got != "present" {
+		t.Fatalf("after optional set derived = %q, want present", got)
+	}
+	if bodyCount != 2 {
+		t.Fatalf("optional set should rerun body once, got %d", bodyCount)
+	}
+}
+
 // ---- Metrics sanity ----
 
 func TestMetricsSubtraction(t *testing.T) {

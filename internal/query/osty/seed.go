@@ -36,12 +36,12 @@ func (e *Engine) SeedPackageDir(dir string, transform resolve.SourceTransform) (
 	if err != nil {
 		return SeededPackage{}, err
 	}
-	runtimeCapability := PackageRuntimeCapabilityFromManifest(dir)
-	e.seedPackageInputs(dir, files, sources, runtimeCapability)
+	metadata := PackageMetadataForDir(dir, packageNameFromDir(dir))
+	e.seedPackageInputs(dir, files, sources, metadata)
 	return SeededPackage{
 		Dir:               dir,
-		Name:              packageNameFromDir(dir),
-		RuntimeCapability: runtimeCapability,
+		Name:              metadataNameOrFallback(metadata, dir),
+		RuntimeCapability: metadata.RuntimeCapability,
 		Files:             files,
 		Sources:           sources,
 	}, nil
@@ -61,16 +61,16 @@ func (e *Engine) SeedWorkspaceDirs(root string, packages []WorkspacePackage, tra
 		if err != nil {
 			return SeededWorkspace{}, err
 		}
-		runtimeCapability := PackageRuntimeCapabilityFromManifest(member.Dir)
-		e.seedPackageInputs(member.Dir, files, sources, runtimeCapability)
+		metadata := PackageMetadataForDir(member.Dir, member.Name)
+		e.seedPackageInputs(member.Dir, files, sources, metadata)
 		for path, src := range sources {
 			out.Sources[path] = src
 		}
 		out.Packages = append(out.Packages, SeededPackage{
 			Dir:               member.Dir,
 			DotPath:           member.DotPath,
-			Name:              member.Name,
-			RuntimeCapability: runtimeCapability,
+			Name:              metadataNameOrFallback(metadata, member.Dir),
+			RuntimeCapability: metadata.RuntimeCapability,
 			Files:             files,
 			Sources:           sources,
 		})
@@ -128,12 +128,16 @@ func (e *Engine) SeedLoadedWorkspace(ws *resolve.Workspace) (SeededWorkspace, er
 			out.Sources[path] = src
 		}
 		sort.Strings(files)
-		e.seedPackageInputs(dir, files, sources, pkg.RuntimeCapability)
+		metadata := PackageMetadata{
+			Name:              pkg.Name,
+			RuntimeCapability: pkg.RuntimeCapability,
+		}
+		e.seedPackageInputs(dir, files, sources, metadata)
 		out.Packages = append(out.Packages, SeededPackage{
 			Dir:               dir,
 			DotPath:           key,
-			Name:              pkg.Name,
-			RuntimeCapability: pkg.RuntimeCapability,
+			Name:              metadataNameOrFallback(metadata, dir),
+			RuntimeCapability: metadata.RuntimeCapability,
 			Files:             files,
 			Sources:           sources,
 		})
@@ -143,12 +147,51 @@ func (e *Engine) SeedLoadedWorkspace(ws *resolve.Workspace) (SeededWorkspace, er
 	return out, nil
 }
 
-func (e *Engine) seedPackageInputs(dir string, files []string, sources map[string][]byte, runtimeCapability bool) {
+func (e *Engine) seedPackageInputs(dir string, files []string, sources map[string][]byte, metadata PackageMetadata) {
 	for _, path := range files {
 		e.Inputs.SourceText.Set(e.DB, path, sources[path])
 	}
+	e.Inputs.PackageMetadata.Set(e.DB, dir, metadata)
 	e.Inputs.PackageFiles.Set(e.DB, dir, files)
-	e.Inputs.PackageRuntimeCapability.Set(e.DB, dir, runtimeCapability)
+}
+
+// PackageMetadataForDir reads manifest-backed package metadata when present.
+// It deliberately tolerates missing or malformed manifests and falls back to the
+// caller's name so editor and scratch-buffer paths can keep analyzing source.
+func PackageMetadataForDir(dir string, fallbackName string) PackageMetadata {
+	dir = NormalizePath(dir)
+	metadata := PackageMetadata{Name: fallbackName}
+	if metadata.Name == "" {
+		metadata.Name = packageNameFromDir(dir)
+	}
+	src, err := os.ReadFile(filepath.Join(dir, manifest.ManifestFile))
+	if err != nil {
+		return metadata
+	}
+	m, err := manifest.Parse(src)
+	if err != nil || m == nil {
+		return metadata
+	}
+	if m.HasPackage && m.Package.Name != "" {
+		metadata.Name = m.Package.Name
+	}
+	if m.Capabilities != nil {
+		metadata.RuntimeCapability = m.Capabilities.Runtime
+	}
+	return metadata
+}
+
+func metadataNameOrFallback(metadata PackageMetadata, dir string) string {
+	if metadata.Name != "" {
+		return metadata.Name
+	}
+	return packageNameFromDir(dir)
+}
+
+// PackageRuntimeCapabilityFromManifest preserves the older narrow helper in
+// terms of the fuller package metadata input.
+func PackageRuntimeCapabilityFromManifest(dir string) bool {
+	return PackageMetadataForDir(dir, "").RuntimeCapability
 }
 
 func readPackageSources(dir string, transform resolve.SourceTransform) ([]string, map[string][]byte, error) {
@@ -179,19 +222,4 @@ func readPackageSources(dir string, transform resolve.SourceTransform) ([]string
 	}
 	sort.Strings(files)
 	return files, sources, nil
-}
-
-// PackageRuntimeCapabilityFromManifest reads dir/osty.toml and reports whether
-// it declares `[capabilities] runtime = true`. Missing or invalid manifests are
-// treated as ordinary unprivileged packages, matching the native loader.
-func PackageRuntimeCapabilityFromManifest(dir string) bool {
-	src, err := os.ReadFile(filepath.Join(dir, manifest.ManifestFile))
-	if err != nil {
-		return false
-	}
-	m, err := manifest.Parse(src)
-	if err != nil || m == nil || m.Capabilities == nil {
-		return false
-	}
-	return m.Capabilities.Runtime
 }

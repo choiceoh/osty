@@ -593,8 +593,8 @@ func (s *Server) analyzePackageViaEngine(pkgDir, path string, src []byte) *docAn
 	}
 
 	// Seed PackageFiles so BuildPackage can assemble the resolve.Package.
+	s.engine.Inputs.PackageMetadata.Set(s.engine.DB, dir, ostyquery.PackageMetadataForDir(pkgDir, ""))
 	s.engine.Inputs.PackageFiles.Set(s.engine.DB, dir, filePaths)
-	s.engine.Inputs.PackageRuntimeCapability.Set(s.engine.DB, dir, ostyquery.PackageRuntimeCapabilityFromManifest(dir))
 
 	// Pull per-file results from the engine query chain.
 	pr := s.engine.Queries.Parse.Get(s.engine.DB, key)
@@ -730,8 +730,8 @@ func (s *Server) analyzeWorkspaceViaEngine(root, path string, src []byte) *docAn
 			s.engine.Inputs.SourceText.Set(s.engine.DB, fp, diskSrc)
 		}
 
+		s.engine.Inputs.PackageMetadata.Set(s.engine.DB, pkgDir, ostyquery.PackageMetadataForDir(pkgDir, ""))
 		s.engine.Inputs.PackageFiles.Set(s.engine.DB, pkgDir, filePaths)
-		s.engine.Inputs.PackageRuntimeCapability.Set(s.engine.DB, pkgDir, ostyquery.PackageRuntimeCapabilityFromManifest(pkgDir))
 	}
 
 	// Seed WorkspaceMembers so ResolveWorkspace knows which packages
@@ -1080,8 +1080,10 @@ func (s *Server) analyzeSingleFileViaEngine(uri string, src []byte) *docAnalysis
 	// Build the list deterministically from what the engine already
 	// knows about — i.e., just this one file. Multi-file scratch
 	// scenarios are rare in single-file mode.
+	if path, ok := fileURIPath(uri); ok {
+		s.engine.Inputs.PackageMetadata.Set(s.engine.DB, dir, ostyquery.PackageMetadataForDir(filepath.Dir(path), ""))
+	}
 	s.engine.Inputs.PackageFiles.Set(s.engine.DB, dir, []string{key})
-	s.engine.Inputs.PackageRuntimeCapability.Set(s.engine.DB, dir, ostyquery.PackageRuntimeCapabilityFromManifest(dir))
 
 	pr := s.engine.Queries.Parse.Get(s.engine.DB, key)
 	rr := s.engine.Queries.ResolveFile.Get(s.engine.DB, key)

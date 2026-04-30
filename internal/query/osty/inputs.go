@@ -14,8 +14,15 @@ type WorkspacePackage struct {
 	Name    string
 }
 
-// Inputs groups the primitive input handles that drive the entire Osty query
-// graph. Callers (LSP, CLI) use these to push the
+// PackageMetadata carries the manifest-derived metadata that belongs on the
+// query-built resolve.Package, separate from source-file membership.
+type PackageMetadata struct {
+	Name              string
+	RuntimeCapability bool
+}
+
+// Inputs groups the primitive input handles that drive the
+// entire Osty query graph. Callers (LSP, CLI) use these to push the
 // current world state into the Database; every derived query reads
 // from them transitively.
 //
@@ -38,11 +45,10 @@ type Inputs struct {
 	// to the package by path convention.
 	PackageFiles *query.Input[string, []string]
 
-	// PackageRuntimeCapability maps a normalized package directory to whether
-	// its manifest opted into the runtime sublanguage via
-	// `[capabilities] runtime = true`. Scratch and ad-hoc LSP packages seed
-	// false explicitly.
-	PackageRuntimeCapability *query.Input[string, bool]
+	// PackageMetadata maps a normalized package directory to metadata read from
+	// osty.toml (or from an already-loaded resolve.Package). BuildPackage uses
+	// it when present and otherwise falls back to directory-derived defaults.
+	PackageMetadata *query.Input[string, PackageMetadata]
 
 	// WorkspaceMembers lists every package directory in the current
 	// workspace. Keyed by struct{} so there is exactly one slot.
@@ -60,10 +66,10 @@ type Inputs struct {
 
 func registerInputs(db *query.Database) Inputs {
 	return Inputs{
-		SourceText:               query.RegisterInput[string, []byte](db, "SourceText", hashBytesInput),
-		PackageFiles:             query.RegisterInput[string, []string](db, "PackageFiles", hashStringSlice),
-		PackageRuntimeCapability: query.RegisterInput[string, bool](db, "PackageRuntimeCapability", hashBoolInput),
-		WorkspaceMembers:         query.RegisterInput[struct{}, []string](db, "WorkspaceMembers", hashStringSlice),
-		WorkspacePackages:        query.RegisterInput[string, []WorkspacePackage](db, "WorkspacePackages", hashWorkspacePackageSlice),
+		SourceText:        query.RegisterInput[string, []byte](db, "SourceText", hashBytesInput),
+		PackageFiles:      query.RegisterInput[string, []string](db, "PackageFiles", hashStringSlice),
+		PackageMetadata:   query.RegisterInput[string, PackageMetadata](db, "PackageMetadata", hashPackageMetadata),
+		WorkspaceMembers:  query.RegisterInput[struct{}, []string](db, "WorkspaceMembers", hashStringSlice),
+		WorkspacePackages: query.RegisterInput[string, []WorkspacePackage](db, "WorkspacePackages", hashWorkspacePackageSlice),
 	}
 }

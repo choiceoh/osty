@@ -20,37 +20,9 @@ import (
 // Helper: seed one "package" with one file for tests.
 func seedFile(eng *Engine, dir, name, src string) string {
 	path := NormalizePath(dir + "/" + name)
-	dir = NormalizePath(dir)
 	eng.Inputs.SourceText.Set(eng.DB, path, []byte(src))
-	eng.Inputs.PackageFiles.Set(eng.DB, dir, []string{path})
-	eng.Inputs.PackageRuntimeCapability.Set(eng.DB, dir, false)
+	eng.Inputs.PackageFiles.Set(eng.DB, NormalizePath(dir), []string{path})
 	return path
-}
-
-func writeRuntimeCapabilityPackage(t *testing.T, dir string) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(dir, "osty.toml"), []byte(`[package]
-name = "toolchain"
-version = "1.0.0"
-edition = "0.5"
-
-[capabilities]
-runtime = true
-`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "main.osty"), []byte("#[repr(c)]\nstruct Raw { x: Int }\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func hasDiagnosticCode(ds []*diag.Diagnostic, code string) bool {
-	for _, d := range ds {
-		if d != nil && d.Code == code {
-			return true
-		}
-	}
-	return false
 }
 
 func TestParseMissThenHit(t *testing.T) {
@@ -109,85 +81,82 @@ func TestBuildPackagePreservesFrontendRuns(t *testing.T) {
 	}
 }
 
-func TestRuntimeCapabilityInputInvalidatesCheckPackage(t *testing.T) {
+func TestBuildPackagePreservesPackageMetadata(t *testing.T) {
 	eng := NewEngine()
 	defer eng.Close()
 
-	dir := NormalizePath("/tmp/pkg_runtime_capability_input")
-	_ = seedFile(eng, dir, "main.osty", "#[repr(c)]\nstruct Raw { x: Int }\n")
+	dir := NormalizePath(t.TempDir())
+	path := seedFile(eng, dir, "main.osty", `#[no_alloc]
+fn pure() -> Int {
+    1
+}
+`)
+	eng.Inputs.PackageMetadata.Set(eng.DB, dir, PackageMetadata{
+		Name:              "toolchain",
+		RuntimeCapability: true,
+	})
+
+	pkg := eng.Queries.BuildPackage.Get(eng.DB, dir)
+	if pkg == nil {
+		t.Fatal("BuildPackage returned nil")
+	}
+	if got := pkg.Name; got != "toolchain" {
+		t.Fatalf("package name = %q, want toolchain", got)
+	}
+	if !pkg.RuntimeCapability {
+		t.Fatal("BuildPackage dropped RuntimeCapability")
+	}
 
 	chk := eng.Queries.CheckPackage.Get(eng.DB, dir)
-	if !hasDiagnosticCode(chk.Diags, diag.CodeRuntimePrivilegeViolation) {
-		t.Fatalf("unprivileged check missing %s: %#v", diag.CodeRuntimePrivilegeViolation, chk.Diags)
+	if hasDiagCode(chk.Diags, diag.CodeRuntimePrivilegeViolation) {
+		t.Fatalf("privileged package emitted runtime privilege diagnostic: %#v", chk.Diags)
 	}
 
-	eng.Inputs.PackageRuntimeCapability.Set(eng.DB, dir, true)
-	rp := eng.Queries.ResolvePackage.Get(eng.DB, dir)
-	if rp == nil || rp.Package() == nil || !rp.Package().RuntimeCapability {
-		t.Fatalf("ResolvePackage RuntimeCapability = %#v, want true", rp)
-	}
+	eng.Inputs.PackageMetadata.Set(eng.DB, dir, PackageMetadata{Name: "toolchain"})
 	chk = eng.Queries.CheckPackage.Get(eng.DB, dir)
-	if hasDiagnosticCode(chk.Diags, diag.CodeRuntimePrivilegeViolation) {
-		t.Fatalf("privileged check retained %s: %#v", diag.CodeRuntimePrivilegeViolation, chk.Diags)
+	if !hasDiagCode(chk.Diags, diag.CodeRuntimePrivilegeViolation) {
+		t.Fatalf("ordinary package did not emit runtime privilege diagnostic for %s: %#v", path, chk.Diags)
 	}
 }
 
-func TestSeedPackageDirReadsRuntimeCapability(t *testing.T) {
-	dir := t.TempDir()
-	writeRuntimeCapabilityPackage(t, dir)
-
+func TestSeedPackageDirReadsManifestPackageMetadata(t *testing.T) {
 	eng := NewEngine()
 	defer eng.Close()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "osty.toml"), []byte(`[package]
+name = "toolchain"
+version = "1.0.0"
+edition = "0.5"
+
+[capabilities]
+runtime = true
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.osty"), []byte("fn main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
 	seeded, err := eng.SeedPackageDir(dir, nil)
 	if err != nil {
 		t.Fatalf("SeedPackageDir: %v", err)
+	}
+	if got := seeded.Name; got != "toolchain" {
+		t.Fatalf("seeded package name = %q, want toolchain", got)
 	}
 	if !seeded.RuntimeCapability {
 		t.Fatal("seeded RuntimeCapability = false, want true")
 	}
 	pkg := eng.Queries.BuildPackage.Get(eng.DB, seeded.Dir)
-	if pkg == nil || !pkg.RuntimeCapability {
-		t.Fatalf("BuildPackage RuntimeCapability = %#v, want true", pkg)
+	if pkg == nil {
+		t.Fatal("BuildPackage returned nil")
 	}
-}
-
-func TestSeedLoadedWorkspacePreservesRuntimeCapability(t *testing.T) {
-	root := t.TempDir()
-	writeRuntimeCapabilityPackage(t, root)
-
-	ws, err := resolve.NewWorkspace(root)
-	if err != nil {
-		t.Fatalf("NewWorkspace: %v", err)
+	if got := pkg.Name; got != "toolchain" {
+		t.Fatalf("package name = %q, want toolchain", got)
 	}
-	if _, err := ws.LoadPackageNative(""); err != nil {
-		t.Fatalf("LoadPackageNative: %v", err)
-	}
-
-	eng := NewEngine()
-	defer eng.Close()
-	seeded, err := eng.SeedLoadedWorkspace(ws)
-	if err != nil {
-		t.Fatalf("SeedLoadedWorkspace: %v", err)
-	}
-	rootDir := NormalizePath(root)
-	built := eng.Queries.BuildPackage.Get(eng.DB, rootDir)
-	if built == nil || !built.RuntimeCapability {
-		t.Fatalf("BuildPackage RuntimeCapability = %#v, want true", built)
-	}
-	rw := eng.Queries.ResolveWorkspace.Get(eng.DB, seeded.Root)
-	if rw == nil {
-		t.Fatal("ResolveWorkspace returned nil")
-	}
-	pkg := rw.PackageByDir(rootDir)
-	if pkg == nil || !pkg.RuntimeCapability {
-		t.Fatalf("workspace package RuntimeCapability = %#v, want true", pkg)
-	}
-	cw := eng.Queries.CheckWorkspace.Get(eng.DB, seeded.Root)
-	if cw == nil || cw.ResultByDir(rootDir) == nil {
-		t.Fatal("CheckWorkspace missing root result")
-	}
-	if hasDiagnosticCode(cw.ResultByDir(rootDir).Diags, diag.CodeRuntimePrivilegeViolation) {
-		t.Fatalf("workspace check retained %s: %#v", diag.CodeRuntimePrivilegeViolation, cw.ResultByDir(rootDir).Diags)
+	if !pkg.RuntimeCapability {
+		t.Fatal("manifest [capabilities] runtime=true was not carried into query-built package")
 	}
 }
 
@@ -657,6 +626,65 @@ fn main() {
 	}
 }
 
+func TestSeedLoadedWorkspacePreservesRuntimeCapability(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "osty.toml"), []byte(`[package]
+name = "toolchain"
+version = "1.0.0"
+edition = "0.5"
+
+[capabilities]
+runtime = true
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "main.osty"), []byte(`#[no_alloc]
+fn pure() -> Int {
+    1
+}
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ws, err := resolve.NewWorkspace(root)
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	if _, err := ws.LoadPackageNative(""); err != nil {
+		t.Fatalf("LoadPackageNative: %v", err)
+	}
+
+	eng := NewEngine()
+	defer eng.Close()
+	seeded, err := eng.SeedLoadedWorkspace(ws)
+	if err != nil {
+		t.Fatalf("SeedLoadedWorkspace: %v", err)
+	}
+	rw := eng.Queries.ResolveWorkspace.Get(eng.DB, seeded.Root)
+	if rw == nil {
+		t.Fatal("ResolveWorkspace returned nil")
+	}
+	rootDir := NormalizePath(root)
+	pkg := rw.PackageByDir(rootDir)
+	if pkg == nil {
+		t.Fatal("root package missing from resolved workspace")
+	}
+	if !pkg.RuntimeCapability {
+		t.Fatal("resolved workspace package dropped RuntimeCapability")
+	}
+	if node := rw.Graph().Packages[""]; node == nil || !node.RuntimeCapability {
+		t.Fatalf("package graph node runtime capability = %#v, want true", node)
+	}
+	cw := eng.Queries.CheckWorkspace.Get(eng.DB, seeded.Root)
+	chk := cw.ResultByDir(rootDir)
+	if chk == nil {
+		t.Fatal("CheckWorkspace missing root check result")
+	}
+	if hasDiagCode(chk.Diags, diag.CodeRuntimePrivilegeViolation) {
+		t.Fatalf("workspace query treated runtime-capable package as ordinary: %#v", chk.Diags)
+	}
+}
+
 func TestResolveWorkspaceSwitchesFromMemberFallbackToSeededPackages(t *testing.T) {
 	eng := NewEngine()
 	defer eng.Close()
@@ -686,6 +714,15 @@ func TestResolveWorkspaceSwitchesFromMemberFallbackToSeededPackages(t *testing.T
 	if rw.PackageByDir(depDir) == nil {
 		t.Fatal("ResolveWorkspace did not invalidate after WorkspacePackages was seeded")
 	}
+}
+
+func hasDiagCode(diags []*diag.Diagnostic, code string) bool {
+	for _, d := range diags {
+		if d != nil && d.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 func TestNormalizePathIdempotent(t *testing.T) {

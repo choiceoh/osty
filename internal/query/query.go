@@ -239,7 +239,14 @@ func (q *Query[K, V]) validateOrRunLocked(db *Database, key K) *slot {
 	stale := false
 	for _, d := range s.deps {
 		depSlot := db.validateDepLocked(d)
-		if depSlot == nil || depSlot.computedAt > d.changedAt {
+		if depSlot == nil {
+			if d.changedAt != 0 {
+				stale = true
+				break
+			}
+			continue
+		}
+		if depSlot.computedAt > d.changedAt {
 			stale = true
 			break
 		}
