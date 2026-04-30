@@ -3274,6 +3274,16 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 			return err
 		}
 	}
+	if strings.HasPrefix(fnRef.Symbol, "std.keychain.") {
+		if handled, err := g.emitStdKeychainCall(c, fnRef); handled {
+			return err
+		}
+	}
+	if strings.HasPrefix(fnRef.Symbol, "std.secrets.") {
+		if handled, err := g.emitStdSecretsCall(c, fnRef); handled {
+			return err
+		}
+	}
 	if strings.HasPrefix(fnRef.Symbol, "std.process.") {
 		if handled, err := g.emitStdProcessCall(c, fnRef); handled {
 			return err

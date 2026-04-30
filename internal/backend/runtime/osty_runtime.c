@@ -116,6 +116,7 @@
 #    define WIN32_LEAN_AND_MEAN
 #  endif
 #  include <windows.h>
+#  include <wincred.h>
 #  include <io.h>
 #  include <process.h>
 #  include <signal.h>         /* sig_atomic_t for SIGURG TLS flag */
@@ -143,6 +144,8 @@ typedef INIT_ONCE          osty_rt_once_t;
 #  include <sys/time.h>
 #  if defined(__APPLE__)
 #    include <crt_externs.h>
+#    include <CoreFoundation/CoreFoundation.h>
+#    include <Security/Security.h>
 #  endif
 #  if defined(__STDC_NO_THREADS__) || defined(__APPLE__)
 #    define OSTY_RT_TLS __thread
@@ -23497,4 +23500,396 @@ int64_t osty_rt_os_pid(void) {
 
 void osty_rt_os_exit(int32_t code) {
     exit((int)code);
+}
+
+/* std.keychain credential-store surface.
+ *
+ * The API stores generic secrets by `(service, account)`. macOS binds to
+ * Security.framework Keychain Services; Windows binds to Credential Manager.
+ * Other targets keep the stdlib surface available but report an unavailable
+ * backend at runtime. */
+static void *osty_rt_keychain_error_message(const char *prefix, const char *detail, const char *site) {
+    return osty_rt_os_error_message(prefix, detail, site);
+}
+
+static void *osty_rt_keychain_status_error(const char *prefix, int64_t status, const char *site) {
+    char buf[96];
+    int written = snprintf(buf, sizeof(buf), "status %lld", (long long)status);
+    if (written < 0) {
+        return osty_rt_keychain_error_message(prefix, "platform credential store failed", site);
+    }
+    return osty_rt_keychain_error_message(prefix, buf, site);
+}
+
+static void *osty_rt_keychain_win32_error(const char *prefix, uint64_t code, const char *site) {
+    char buf[96];
+    int written = snprintf(buf, sizeof(buf), "win32 error %llu", (unsigned long long)code);
+    if (written < 0) {
+        return osty_rt_keychain_error_message(prefix, "Windows credential manager failed", site);
+    }
+    return osty_rt_keychain_error_message(prefix, buf, site);
+}
+
+static void *osty_rt_keychain_unavailable_error(const char *site) {
+    return osty_rt_keychain_error_message("std.keychain unavailable",
+                                          "no OS credential store backend is compiled for this target",
+                                          site);
+}
+
+static void *osty_rt_keychain_validate_nonempty(const char *value, const char *kind, const char *site) {
+    if (value == NULL || value[0] == '\0') {
+        char buf[64];
+        int written = snprintf(buf, sizeof(buf), "%s is empty", kind == NULL ? "name" : kind);
+        if (written < 0) {
+            return osty_rt_keychain_error_message("invalid keychain entry", "empty name", site);
+        }
+        return osty_rt_keychain_error_message("invalid keychain entry", buf, site);
+    }
+    return NULL;
+}
+
+static osty_rt_os_string_result *osty_rt_keychain_success_string(const void *data, size_t len, const char *site) {
+    osty_rt_os_string_result *out =
+        (osty_rt_os_string_result *)osty_rt_xmalloc(sizeof(*out), site);
+    out->tag = 0;
+    out->value_text = osty_rt_string_dup_site((const char *)data, len, site);
+    out->error_text = NULL;
+    return out;
+}
+
+void *osty_rt_keychain_backend(void) {
+#if defined(__APPLE__)
+    return osty_rt_string_dup_site("macos-keychain", strlen("macos-keychain"), "runtime.keychain.backend");
+#elif defined(_WIN32)
+    return osty_rt_string_dup_site("windows-credential-manager", strlen("windows-credential-manager"), "runtime.keychain.backend");
+#else
+    return osty_rt_string_dup_site("unavailable", strlen("unavailable"), "runtime.keychain.backend");
+#endif
+}
+
+bool osty_rt_keychain_is_available(void) {
+#if defined(__APPLE__) || defined(_WIN32)
+    return true;
+#else
+    return false;
+#endif
+}
+
+#if defined(__APPLE__)
+static bool osty_rt_keychain_macos_lengths(const char *service,
+                                           const char *account,
+                                           UInt32 *service_len,
+                                           UInt32 *account_len,
+                                           void **err_text) {
+    size_t svc_len = strlen(service);
+    size_t acct_len = strlen(account);
+    if (svc_len > UINT32_MAX || acct_len > UINT32_MAX) {
+        *err_text = osty_rt_keychain_error_message("invalid keychain entry",
+                                                   "service or account is too long",
+                                                   "runtime.keychain.length");
+        return false;
+    }
+    *service_len = (UInt32)svc_len;
+    *account_len = (UInt32)acct_len;
+    return true;
+}
+
+static osty_rt_os_string_result *osty_rt_keychain_macos_get(const char *service_text, const char *account_text) {
+    char *service = osty_rt_os_cstr_dup(service_text, "runtime.keychain.get.service");
+    char *account = osty_rt_os_cstr_dup(account_text, "runtime.keychain.get.account");
+    UInt32 service_len = 0;
+    UInt32 account_len = 0;
+    UInt32 password_len = 0;
+    void *password_data = NULL;
+    void *err_text = NULL;
+    OSStatus status;
+    if ((err_text = osty_rt_keychain_validate_nonempty(service, "service", "runtime.keychain.get.validate")) != NULL ||
+        (err_text = osty_rt_keychain_validate_nonempty(account, "account", "runtime.keychain.get.validate")) != NULL ||
+        !osty_rt_keychain_macos_lengths(service, account, &service_len, &account_len, &err_text)) {
+        free(service);
+        free(account);
+        {
+            osty_rt_os_string_result *out =
+                (osty_rt_os_string_result *)osty_rt_xmalloc(sizeof(*out), "runtime.keychain.get.error");
+            out->tag = 1;
+            out->value_text = NULL;
+            out->error_text = err_text;
+            return out;
+        }
+    }
+    status = SecKeychainFindGenericPassword(NULL, service_len, service, account_len, account,
+                                            &password_len, &password_data, NULL);
+    free(service);
+    free(account);
+    if (status == errSecItemNotFound) {
+        return osty_rt_os_string_error_result("keychain secret not found",
+                                              "no credential exists for the requested service/account",
+                                              "runtime.keychain.get.not_found");
+    }
+    if (status != errSecSuccess) {
+        return osty_rt_os_string_error_result("failed to read keychain secret",
+                                              "macOS Keychain read failed",
+                                              "runtime.keychain.get.error");
+    }
+    {
+        osty_rt_os_string_result *out =
+            osty_rt_keychain_success_string(password_data == NULL ? "" : password_data,
+                                            (size_t)password_len,
+                                            "runtime.keychain.get.value");
+        if (password_data != NULL) {
+            SecKeychainItemFreeContent(NULL, password_data);
+        }
+        return out;
+    }
+}
+
+static void *osty_rt_keychain_macos_set(const char *service_text, const char *account_text, const char *secret_text) {
+    char *service = osty_rt_os_cstr_dup(service_text, "runtime.keychain.set.service");
+    char *account = osty_rt_os_cstr_dup(account_text, "runtime.keychain.set.account");
+    char *secret = osty_rt_os_cstr_dup(secret_text, "runtime.keychain.set.secret");
+    UInt32 service_len = 0;
+    UInt32 account_len = 0;
+    size_t secret_len = strlen(secret);
+    UInt32 password_len = 0;
+    void *password_data = NULL;
+    void *err_text = NULL;
+    SecKeychainItemRef item_ref = NULL;
+    OSStatus status;
+    if ((err_text = osty_rt_keychain_validate_nonempty(service, "service", "runtime.keychain.set.validate")) != NULL ||
+        (err_text = osty_rt_keychain_validate_nonempty(account, "account", "runtime.keychain.set.validate")) != NULL ||
+        !osty_rt_keychain_macos_lengths(service, account, &service_len, &account_len, &err_text)) {
+        free(service);
+        free(account);
+        free(secret);
+        return err_text;
+    }
+    if (secret_len > UINT32_MAX) {
+        free(service);
+        free(account);
+        free(secret);
+        return osty_rt_keychain_error_message("invalid keychain secret",
+                                              "secret is too long",
+                                              "runtime.keychain.set.length");
+    }
+    status = SecKeychainFindGenericPassword(NULL, service_len, service, account_len, account,
+                                            &password_len, &password_data, &item_ref);
+    if (password_data != NULL) {
+        SecKeychainItemFreeContent(NULL, password_data);
+    }
+    if (status == errSecSuccess && item_ref != NULL) {
+        status = SecKeychainItemModifyAttributesAndData(item_ref, NULL, (UInt32)secret_len, secret);
+        CFRelease(item_ref);
+    } else if (status == errSecItemNotFound) {
+        status = SecKeychainAddGenericPassword(NULL, service_len, service, account_len, account,
+                                               (UInt32)secret_len, secret, NULL);
+    }
+    free(service);
+    free(account);
+    free(secret);
+    if (status != errSecSuccess) {
+        return osty_rt_keychain_status_error("failed to store keychain secret", (int64_t)status, "runtime.keychain.set.error");
+    }
+    return NULL;
+}
+
+static void *osty_rt_keychain_macos_delete(const char *service_text, const char *account_text) {
+    char *service = osty_rt_os_cstr_dup(service_text, "runtime.keychain.delete.service");
+    char *account = osty_rt_os_cstr_dup(account_text, "runtime.keychain.delete.account");
+    UInt32 service_len = 0;
+    UInt32 account_len = 0;
+    void *err_text = NULL;
+    SecKeychainItemRef item_ref = NULL;
+    OSStatus status;
+    if ((err_text = osty_rt_keychain_validate_nonempty(service, "service", "runtime.keychain.delete.validate")) != NULL ||
+        (err_text = osty_rt_keychain_validate_nonempty(account, "account", "runtime.keychain.delete.validate")) != NULL ||
+        !osty_rt_keychain_macos_lengths(service, account, &service_len, &account_len, &err_text)) {
+        free(service);
+        free(account);
+        return err_text;
+    }
+    status = SecKeychainFindGenericPassword(NULL, service_len, service, account_len, account,
+                                            NULL, NULL, &item_ref);
+    free(service);
+    free(account);
+    if (status == errSecItemNotFound) {
+        return NULL;
+    }
+    if (status != errSecSuccess) {
+        return osty_rt_keychain_status_error("failed to find keychain secret", (int64_t)status, "runtime.keychain.delete.find");
+    }
+    status = SecKeychainItemDelete(item_ref);
+    CFRelease(item_ref);
+    if (status != errSecSuccess) {
+        return osty_rt_keychain_status_error("failed to delete keychain secret", (int64_t)status, "runtime.keychain.delete.error");
+    }
+    return NULL;
+}
+#endif
+
+#if defined(_WIN32)
+static char *osty_rt_keychain_windows_target_dup(const char *service, const char *account, const char *site) {
+    size_t service_len = strlen(service);
+    size_t account_len = strlen(account);
+    size_t total = service_len + 1 + account_len;
+    char *out = (char *)osty_rt_xmalloc(total + 1, site);
+    memcpy(out, service, service_len);
+    out[service_len] = '/';
+    memcpy(out + service_len + 1, account, account_len);
+    out[total] = '\0';
+    return out;
+}
+
+static osty_rt_os_string_result *osty_rt_keychain_windows_get(const char *service_text, const char *account_text) {
+    char *service = osty_rt_os_cstr_dup(service_text, "runtime.keychain.get.service");
+    char *account = osty_rt_os_cstr_dup(account_text, "runtime.keychain.get.account");
+    void *err_text = NULL;
+    char *target = NULL;
+    PCREDENTIALA cred = NULL;
+    if ((err_text = osty_rt_keychain_validate_nonempty(service, "service", "runtime.keychain.get.validate")) != NULL ||
+        (err_text = osty_rt_keychain_validate_nonempty(account, "account", "runtime.keychain.get.validate")) != NULL) {
+        free(service);
+        free(account);
+        {
+            osty_rt_os_string_result *out =
+                (osty_rt_os_string_result *)osty_rt_xmalloc(sizeof(*out), "runtime.keychain.get.error");
+            out->tag = 1;
+            out->value_text = NULL;
+            out->error_text = err_text;
+            return out;
+        }
+    }
+    target = osty_rt_keychain_windows_target_dup(service, account, "runtime.keychain.get.target");
+    free(service);
+    free(account);
+    if (!CredReadA(target, CRED_TYPE_GENERIC, 0, &cred)) {
+        DWORD code = GetLastError();
+        free(target);
+        if (code == ERROR_NOT_FOUND) {
+            return osty_rt_os_string_error_result("keychain secret not found",
+                                                  "no credential exists for the requested service/account",
+                                                  "runtime.keychain.get.not_found");
+        }
+        return osty_rt_os_string_error_result("failed to read keychain secret",
+                                              "Windows Credential Manager read failed",
+                                              "runtime.keychain.get.error");
+    }
+    free(target);
+    {
+        osty_rt_os_string_result *out =
+            osty_rt_keychain_success_string(cred->CredentialBlob == NULL ? "" : cred->CredentialBlob,
+                                            (size_t)cred->CredentialBlobSize,
+                                            "runtime.keychain.get.value");
+        CredFree(cred);
+        return out;
+    }
+}
+
+static void *osty_rt_keychain_windows_set(const char *service_text, const char *account_text, const char *secret_text) {
+    char *service = osty_rt_os_cstr_dup(service_text, "runtime.keychain.set.service");
+    char *account = osty_rt_os_cstr_dup(account_text, "runtime.keychain.set.account");
+    char *secret = osty_rt_os_cstr_dup(secret_text, "runtime.keychain.set.secret");
+    size_t secret_len = strlen(secret);
+    void *err_text = NULL;
+    char *target = NULL;
+    CREDENTIALA cred;
+    if ((err_text = osty_rt_keychain_validate_nonempty(service, "service", "runtime.keychain.set.validate")) != NULL ||
+        (err_text = osty_rt_keychain_validate_nonempty(account, "account", "runtime.keychain.set.validate")) != NULL) {
+        free(service);
+        free(account);
+        free(secret);
+        return err_text;
+    }
+    if (secret_len > CRED_MAX_CREDENTIAL_BLOB_SIZE) {
+        free(service);
+        free(account);
+        free(secret);
+        return osty_rt_keychain_error_message("invalid keychain secret",
+                                              "secret is too long for Windows Credential Manager",
+                                              "runtime.keychain.set.length");
+    }
+    target = osty_rt_keychain_windows_target_dup(service, account, "runtime.keychain.set.target");
+    memset(&cred, 0, sizeof(cred));
+    cred.Type = CRED_TYPE_GENERIC;
+    cred.TargetName = target;
+    cred.CredentialBlobSize = (DWORD)secret_len;
+    cred.CredentialBlob = (LPBYTE)secret;
+    cred.Persist = CRED_PERSIST_LOCAL_MACHINE;
+    cred.UserName = account;
+    if (!CredWriteA(&cred, 0)) {
+        DWORD code = GetLastError();
+        free(target);
+        free(service);
+        free(account);
+        free(secret);
+        return osty_rt_keychain_win32_error("failed to store keychain secret", (uint64_t)code, "runtime.keychain.set.error");
+    }
+    free(target);
+    free(service);
+    free(account);
+    free(secret);
+    return NULL;
+}
+
+static void *osty_rt_keychain_windows_delete(const char *service_text, const char *account_text) {
+    char *service = osty_rt_os_cstr_dup(service_text, "runtime.keychain.delete.service");
+    char *account = osty_rt_os_cstr_dup(account_text, "runtime.keychain.delete.account");
+    void *err_text = NULL;
+    char *target = NULL;
+    if ((err_text = osty_rt_keychain_validate_nonempty(service, "service", "runtime.keychain.delete.validate")) != NULL ||
+        (err_text = osty_rt_keychain_validate_nonempty(account, "account", "runtime.keychain.delete.validate")) != NULL) {
+        free(service);
+        free(account);
+        return err_text;
+    }
+    target = osty_rt_keychain_windows_target_dup(service, account, "runtime.keychain.delete.target");
+    free(service);
+    free(account);
+    if (!CredDeleteA(target, CRED_TYPE_GENERIC, 0)) {
+        DWORD code = GetLastError();
+        free(target);
+        if (code == ERROR_NOT_FOUND) {
+            return NULL;
+        }
+        return osty_rt_keychain_win32_error("failed to delete keychain secret", (uint64_t)code, "runtime.keychain.delete.error");
+    }
+    free(target);
+    return NULL;
+}
+#endif
+
+osty_rt_os_string_result *osty_rt_keychain_get(const char *service, const char *account) {
+#if defined(__APPLE__)
+    return osty_rt_keychain_macos_get(service, account);
+#elif defined(_WIN32)
+    return osty_rt_keychain_windows_get(service, account);
+#else
+    return osty_rt_os_string_error_result("std.keychain unavailable",
+                                          "no OS credential store backend is compiled for this target",
+                                          "runtime.keychain.get.unavailable");
+#endif
+}
+
+void *osty_rt_keychain_set(const char *service, const char *account, const char *secret) {
+#if defined(__APPLE__)
+    return osty_rt_keychain_macos_set(service, account, secret);
+#elif defined(_WIN32)
+    return osty_rt_keychain_windows_set(service, account, secret);
+#else
+    (void)service;
+    (void)account;
+    (void)secret;
+    return osty_rt_keychain_unavailable_error("runtime.keychain.set.unavailable");
+#endif
+}
+
+void *osty_rt_keychain_delete(const char *service, const char *account) {
+#if defined(__APPLE__)
+    return osty_rt_keychain_macos_delete(service, account);
+#elif defined(_WIN32)
+    return osty_rt_keychain_windows_delete(service, account);
+#else
+    (void)service;
+    (void)account;
+    return osty_rt_keychain_unavailable_error("runtime.keychain.delete.unavailable");
+#endif
 }

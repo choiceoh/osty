@@ -6,26 +6,26 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 > `internal/llvmgen/stdlib_*_shim.go` (Phase A / LLVM bridge) +
 > `internal/backend/runtime/osty_runtime.c` 의 `osty_rt_*` 함수 (Phase A / C runtime).
 >
-> **기준일**: 2026-04-28 (post-stdlib-sprint audit). 어제 (#1018–#1029) 24시간
+> **기준일**: 2026-05-01 (post-keychain runtime audit). 어제 (#1018–#1029) 24시간
 > 안에 stdlib 8개 모듈에 대규모 작업이 들어왔고 (http 26×, io 34×, net 1.5×,
 > crypto runtime 1679 LOC, random/compress/math/os runtime 추가),
 > osty resolver authoritative 마일스톤(#1013)도 같이 통과했다.
 >
 > **평가 모델 정정 (중요)**: `.osty` 줄 수만 보면 *bodyless declaration +
-> runtime intrinsic* 패턴 모듈 (math, crypto, fs, env, random, os, compress)
+> runtime intrinsic* 패턴 모듈 (math, crypto, fs, env, random, os, compress, keychain)
 > 들이 stub 으로 오해된다. 실제 평가는 *의도된 범위 ÷ 실제 커버리지* 기준
 > 이어야 한다. 자세한 함정 케이스는 [§5](#5-평가-함정-osty-줄-수-모델의-한계) 참조.
 
 ## 1. 4-tier 분류
 
-총 88 공개 모듈. 분류 기준:
+총 90 공개 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (84 / 88 = 95%)
+### ⭐⭐⭐⭐⭐ Production (84 / 90 = 93%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -116,13 +116,15 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (4 / 88 = 5%)
+### ⭐⭐⭐⭐ Production-adjacent (6 / 90 = 7%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
 | gui.qtquick | 243 | Qt Quick/QML native app backend MVP. `libosty_qt` bridge, runtime diagnostics, reload/import-path helpers, `osty gui doctor qtquick`; bundle/deploy 연계는 후속 |
 | gui.webview2 | 292 | Windows WebView2 C ABI shim. Safe wrapper / scaffold / runtime diagnostics landed; local virtual-origin assets, console-log event bridge, Osty→Web command channel, and handle-lifetime hardening added; Windows smoke and packaged linker flow still pending |
 | print | 461 | 기본 프린터 / PDF / 이미지 인쇄 표면. CUPS `lp`/`lpr`, Windows shell print, custom command plan/exec, 프린터 조회와 옵션 검증은 추가됨; host spooler별 세부 기능 편차는 후속 |
+| keychain | 79 | OS credential store facade. macOS Keychain + Windows Credential Manager runtime/LLVM bridge landed; Linux Secret Service backend pending |
+| secrets | 38 | API-key/token convenience facade over `std.keychain`; availability follows keychain backend |
 | compress | 11 | gzip 만 (zstd / deflate 추가 가능). Phase A shim 199 |
 
 ### 🚧 실제 미구현 / 갭
@@ -132,8 +134,8 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 
 | 구분 | 갭 |
 |---|---|
-| 없는 모듈 | 없음 (`db`, `smtp`, `zip`, `image`, `xlsx`, `schedule`, `dialog`, `watch`, `scan`, `rpa`, `barcode`, `qr`, `print`, `clipboard` surface 는 존재) |
-| 남은 runtime/deep 기능 | `db driver/runtime`, `smtp TLS/socket execution`, `zip deflate`, `image pixel decode` |
+| 없는 모듈 | 없음 (`db`, `smtp`, `zip`, `image`, `xlsx`, `schedule`, `dialog`, `watch`, `scan`, `rpa`, `barcode`, `qr`, `print`, `clipboard`, `keychain`, `secrets` surface 는 존재) |
+| 남은 runtime/deep 기능 | `db driver/runtime`, `smtp TLS/socket execution`, `zip deflate`, `image pixel decode`, `keychain Linux Secret Service` |
 | 부분 구현 | `compress` 는 gzip 만 있음. deflate/zstd 계열 없음 |
 | 문서/코드 드리프트 | 일부 README/매트릭스 문구가 과거 G18 stub 정책을 아직 과장해서 남김 |
 
@@ -164,6 +166,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | GUI 앱 코어 | ✅ 가능 | gui (retained node tree + layout + event routing + render-command backend contract + 기본 HTML/SVG 렌더러 + 브라우저 이벤트 브리지 + input/change 상태 반영 + HTML 파일 저장/기본 브라우저 실행 헬퍼) |
 | GraphQL 요청 생성 | ✅ 가능 | graphql (document builder / variables JSON body) |
 | AI API 연동 | ✅ 가능 | ai + http + json (OpenAI-compatible / OpenRouter / Anthropic / Gemini chat, structured tool calls/results, models, embeddings) |
+| API 키 / 토큰 저장 | ✅ macOS/Windows 가능 | keychain + secrets (macOS Keychain / Windows Credential Manager; Linux Secret Service pending) |
 | 이메일/MIME 생성 | ✅ 가능 | email (address / MIME multipart / SMTP DATA helpers) |
 | SMTP 트랜잭션 조립 | ✅ 가능 | smtp (EHLO / STARTTLS plan / AUTH / MAIL-RCPT-DATA / reply parsing) |
 | TAR 아카이브 | ✅ 가능 | tar (ustar encode/decode/list/extract) |
@@ -193,6 +196,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 |---|---|---|
 | db driver/runtime | 실제 DB 실행 (sqlite / postgres wrap 필요) | 높음 (실용 어플리케이션 핵심) |
 | smtp TLS/socket execution | 실제 SMTP 전송 / TLS | 중간 |
+| keychain Linux Secret Service | Linux desktop credential store support | 중간 |
 | zip deflate | 압축 ZIP 호환성 | 낮음 |
 | image pixel decode | 실제 픽셀 디코딩 / 변환 | 낮음 |
 
@@ -215,6 +219,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **현재 상태**:
 - 64 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, schedule, jsonl, kv, shortid, metrics, net, fmt, json, config, table, xlsx, url, io, collections, email, db, polyglot, grid, gui, dialog, tar, sql, xml, tui, image, ocr, rpa, scan, barcode, qr, smtp, result, option, csv, encoding, zip, term, websocket, watch, clipboard, graphql, template, i18n, char, iter, bytes)
 - 5 모듈은 Phase A 충실 + Phase B declaration-only (env, random, os, crypto, compress)
+- keychain/secrets 는 macOS/Windows Phase A+B 연결 완료, Linux Secret Service backend 대기
 - fs 는 Phase A 충실 + 확장된 tool-facing declaration surface (walk/glob/watch/atomicWrite/lockFile/hashFile/copyDir/diffFiles)
 - print 는 기존 `std.os` host process bridge 위에서 CUPS/Windows/custom spooler 실행 계획을 제공한다. 실제 출력은 가능하지만 프린터별 capability discovery 는 production-adjacent 로 남긴다.
 - 나머지는 의도된 범위에서 surface 만으로 완성 (cli, math, cmp, hint, debug, ref, process, log, time, error, sync, thread, regex, testing, uuid)

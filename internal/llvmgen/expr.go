@@ -7917,6 +7917,12 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitStdEnvCall(call); found || err != nil {
 		return g.finishCallResult(call, v, err)
 	}
+	if v, found, err := g.emitStdKeychainCall(call); found || err != nil {
+		return g.finishCallResult(call, v, err)
+	}
+	if v, found, err := g.emitStdSecretsCall(call); found || err != nil {
+		return g.finishCallResult(call, v, err)
+	}
 	if v, found, err := g.emitStdNetCall(call); found || err != nil {
 		return g.finishCallResult(call, v, err)
 	}
