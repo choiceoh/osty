@@ -3874,6 +3874,128 @@ pub fn llvmStdBytesResultKindOptionInt() -> Int { 100 }
 pub fn llvmStdBytesResultKindOptionByte() -> Int { 101 }
 pub fn llvmStdBytesResultKindResultBytesError() -> Int { 102 }
 pub fn llvmStdBytesResultKindResultStringError() -> Int { 103 }
+pub fn llvmStdStringsResultKindRawIndex() -> Int { 110 }
+pub fn llvmStdStringsResultKindOptionInt() -> Int { 111 }
+pub fn llvmStdStringsResultKindResultIntError() -> Int { 112 }
+pub fn llvmStdStringsResultKindResultFloatError() -> Int { 113 }
+
+pub fn llvmStdStringsCallCanonicalName(name: String) -> String {
+    llvmCanonicalStdStringsCallName(name)
+}
+
+pub fn llvmStdStringsCallArgCount(name: String) -> Int {
+    let canonical = llvmStdStringsCallCanonicalName(name)
+    if canonical == "fields" || canonical == "toInt" ||
+        canonical == "toFloat" || canonical == "toBytes" ||
+        canonical == "trimStart" || canonical == "trimEnd" ||
+        canonical == "trim" || canonical == "trimSpace" ||
+        canonical == "toUpper" || canonical == "toLower" {
+        return 1
+    }
+    if canonical == "compare" || canonical == "count" ||
+        canonical == "indexOf" || canonical == "Index" ||
+        canonical == "lastIndexOf" || canonical == "LastIndex" ||
+        canonical == "concat" || canonical == "contains" ||
+        canonical == "hasPrefix" || canonical == "hasSuffix" ||
+        canonical == "join" || canonical == "repeat" ||
+        canonical == "split" || canonical == "trimPrefix" ||
+        canonical == "trimSuffix" {
+        return 2
+    }
+    if canonical == "replace" || canonical == "replaceAll" ||
+        canonical == "splitN" || canonical == "slice" {
+        return 3
+    }
+    0
+}
+
+pub fn llvmStdStringsCallReturnKind(name: String) -> Int {
+    let canonical = llvmStdStringsCallCanonicalName(name)
+    if canonical == "compare" || canonical == "count" {
+        return llvmRuntimeFfiKindInt()
+    }
+    if canonical == "Index" || canonical == "LastIndex" {
+        return llvmStdStringsResultKindRawIndex()
+    }
+    if canonical == "indexOf" || canonical == "lastIndexOf" {
+        return llvmStdStringsResultKindOptionInt()
+    }
+    if canonical == "toInt" {
+        return llvmStdStringsResultKindResultIntError()
+    }
+    if canonical == "toFloat" {
+        return llvmStdStringsResultKindResultFloatError()
+    }
+    if canonical == "contains" || canonical == "hasPrefix" ||
+        canonical == "hasSuffix" {
+        return llvmRuntimeFfiKindBool()
+    }
+    if canonical == "toBytes" {
+        return llvmRuntimeFfiKindBytes()
+    }
+    if canonical == "split" || canonical == "splitN" ||
+        canonical == "fields" {
+        return llvmRuntimeFfiKindListString()
+    }
+    if llvmStdStringsCallArgCount(canonical) != 0 {
+        return llvmRuntimeFfiKindString()
+    }
+    llvmRuntimeFfiKindUnknown()
+}
+
+pub fn llvmStdStringsCallParamName(name: String, index: Int) -> String {
+    let canonical = llvmStdStringsCallCanonicalName(name)
+    if index < 0 || index >= llvmStdStringsCallArgCount(canonical) {
+        return ""
+    }
+    if index == 0 {
+        if canonical == "compare" || canonical == "concat" { return "left" }
+        if canonical == "join" { return "parts" }
+        return "value"
+    }
+    if index == 1 {
+        if canonical == "compare" || canonical == "concat" { return "right" }
+        if canonical == "count" || canonical == "indexOf" ||
+            canonical == "Index" || canonical == "lastIndexOf" ||
+            canonical == "LastIndex" || canonical == "contains" {
+            return "substr"
+        }
+        if canonical == "hasPrefix" || canonical == "trimPrefix" { return "prefix" }
+        if canonical == "hasSuffix" || canonical == "trimSuffix" { return "suffix" }
+        if canonical == "join" || canonical == "split" || canonical == "splitN" {
+            return "sep"
+        }
+        if canonical == "repeat" { return "n" }
+        if canonical == "replace" || canonical == "replaceAll" { return "old" }
+        if canonical == "slice" { return "start" }
+    }
+    if index == 2 {
+        if canonical == "replace" || canonical == "replaceAll" { return "new" }
+        if canonical == "splitN" { return "n" }
+        if canonical == "slice" { return "end" }
+    }
+    ""
+}
+
+pub fn llvmStdStringsCallParamKind(name: String, index: Int) -> Int {
+    let canonical = llvmStdStringsCallCanonicalName(name)
+    if index < 0 || index >= llvmStdStringsCallArgCount(canonical) {
+        return llvmRuntimeFfiKindUnknown()
+    }
+    if canonical == "join" && index == 0 {
+        return llvmRuntimeFfiKindListString()
+    }
+    if canonical == "repeat" && index == 1 {
+        return llvmRuntimeFfiKindInt()
+    }
+    if canonical == "splitN" && index == 2 {
+        return llvmRuntimeFfiKindInt()
+    }
+    if canonical == "slice" && (index == 1 || index == 2) {
+        return llvmRuntimeFfiKindInt()
+    }
+    llvmRuntimeFfiKindString()
+}
 
 pub fn llvmStdBytesCallCanonicalName(name: String) -> String {
     if name == "From" { return "from" }
