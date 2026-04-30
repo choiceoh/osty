@@ -3,6 +3,7 @@ package selfhost
 import (
 	"fmt"
 	"reflect"
+	"sync"
 	"testing"
 )
 
@@ -70,6 +71,97 @@ func BenchmarkNewElabCx(b *testing.B) {
 		if cx == nil || cx.env == nil || cx.core == nil {
 			b.Fatal("newElabCx returned incomplete context")
 		}
+	}
+}
+
+func TestSelfhostEntryPointsRunConcurrently(t *testing.T) {
+	sources := [][]byte{
+		[]byte(`fn main() {
+    let xs = [1, 2, 3]
+    let y = xs[0] + 2
+    y
+}
+`),
+		[]byte(`fn id<T>(x: T) -> T { x }
+
+fn main() {
+    let value = id(42)
+    value
+}
+`),
+		[]byte(`struct User {
+    name: String
+}
+
+fn main() {
+    let user = User { name: "Ada" }
+    user.name
+}
+`),
+	}
+	packageInput := PackageCheckInput{
+		Files: []PackageCheckFile{{
+			Source: sources[0],
+			Base:   0,
+		}},
+	}
+	const rounds = 8
+	start := make(chan struct{})
+	errs := make(chan string, rounds*4)
+	var wg sync.WaitGroup
+	launch := func(name string, idx int, run func(int) string) {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if msg := run(idx); msg != "" {
+				errs <- fmt.Sprintf("%s[%d]: %s", name, idx, msg)
+			}
+		}()
+	}
+	for i := 0; i < rounds; i++ {
+		i := i
+		launch("source", i, func(idx int) string {
+			result := CheckSourceStructured(sources[idx%len(sources)])
+			if result.Summary.Errors != 0 {
+				return fmt.Sprintf("errors=%d details=%v", result.Summary.Errors, result.Summary.ErrorDetails)
+			}
+			return ""
+		})
+		launch("run", i, func(idx int) string {
+			run := Run(sources[idx%len(sources)])
+			result := CheckStructuredFromRun(run)
+			if result.Summary.Errors != 0 {
+				return fmt.Sprintf("errors=%d details=%v", result.Summary.Errors, result.Summary.ErrorDetails)
+			}
+			return ""
+		})
+		launch("package", i, func(int) string {
+			result, err := CheckPackageStructured(packageInput)
+			if err != nil {
+				return err.Error()
+			}
+			if result.Summary.Errors != 0 {
+				return fmt.Sprintf("errors=%d details=%v", result.Summary.Errors, result.Summary.ErrorDetails)
+			}
+			return ""
+		})
+		launch("inspect", i, func(int) string {
+			records, err := InspectPackageStructured(packageInput)
+			if err != nil {
+				return err.Error()
+			}
+			if len(records) == 0 {
+				return "no inspect records"
+			}
+			return ""
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for msg := range errs {
+		t.Error(msg)
 	}
 }
 
