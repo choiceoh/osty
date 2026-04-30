@@ -73,7 +73,7 @@ func runTestMain(args []string, flags cliFlags, stdout, stderr io.Writer) int {
 	var serial bool
 	fs.BoolVar(&serial, "serial", false, "run tests sequentially in the shuffled order (default: parallel)")
 	var jobs int
-	fs.IntVar(&jobs, "jobs", 0, "max concurrent tests when parallel (0 = runtime.NumCPU())")
+	fs.IntVar(&jobs, "jobs", 0, "max concurrent tests when parallel (0 = runtime.GOMAXPROCS)")
 	var docTests bool
 	fs.BoolVar(&docTests, "doc", false, "v0.5 G32: extract `osty-fenced examples from /// doc comments and run each as an additional test")
 	var benchMode bool
@@ -487,7 +487,7 @@ func formatTestDuration(d time.Duration) string {
 }
 
 func resolveTestWorkers(serial bool, jobs, n int) int {
-	return runner.ResolveTestWorkers(serial, jobs, runtime.NumCPU(), n)
+	return runner.ResolveTestWorkers(serial, jobs, runtime.GOMAXPROCS(0), n)
 }
 
 // shuffleNativeTests randomizes the test slice in place using a PRNG

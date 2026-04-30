@@ -374,39 +374,42 @@ fn tyLookupInterned(arena: TyArena, key: String, hash: Int) -> Int {
 }
 
 fn tyKeyNamed(head: String, args: List<Int>) -> String {
-    "N|{head}|{tyKeyArgs(args)}"
+    "N|" + head + "|" + tyKeyArgs(args)
 }
 
 fn tyKeyTuple(args: List<Int>) -> String {
-    "T|{tyKeyArgs(args)}"
+    "T|" + tyKeyArgs(args)
 }
 
 fn tyKeyFn(args: List<Int>, ret: Int) -> String {
-    "F|{tyKeyArgs(args)}|{ret}"
+    "F|" + tyKeyArgs(args) + "|" + "{ret}"
 }
 
 fn tyKeyOptional(inner: Int) -> String {
-    "O|{inner}"
+    "O|" + "{inner}"
 }
 
 fn tyKeySelf(owner: String) -> String {
-    "S|{owner}"
+    "S|" + owner
 }
 
 fn tyKeyArgs(args: List<Int>) -> String {
-    if args.len() == 0 {
+    let n = args.len()
+    if n == 0 {
         return ""
     }
-    let mut out = ""
+    if n == 1 {
+        let only: Int = args[0]
+        return "{only}"
+    }
+    let mut parts: List<String> = []
     let mut i = 0
-    for arg in args {
-        if i > 0 {
-            out = "{out},"
-        }
-        out = "{out}{arg}"
+    for i < n {
+        let arg: Int = args[i]
+        parts.push("{arg}")
         i = i + 1
     }
-    out
+    strings.join(parts, ",")
 }
 
 // ---------------------------------------------------------------------
