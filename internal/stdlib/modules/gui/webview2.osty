@@ -1,0 +1,223 @@
+// std.gui.webview2 - Windows WebView2 desktop app bridge.
+//
+// This module keeps the creator-facing API small: Osty owns app state,
+// file/network/process work stays in stdlib, and HTML/CSS/JavaScript owns
+// the view inside a native Windows window. The native COM/Win32 details live
+// behind the `osty_webview2` C ABI shim.
+
+use std.error
+use std.strings
+
+use c "osty_webview2" as wv {
+    fn osty_wv2_failed() -> Bool
+    fn osty_wv2_last_error() -> String
+
+    fn osty_wv2_app_new(name: String) -> Int
+    fn osty_wv2_app_free(app: Int)
+    fn osty_wv2_app_run(app: Int) -> Int
+    fn osty_wv2_app_poll(app: Int) -> Bool
+    fn osty_wv2_app_quit(app: Int)
+
+    fn osty_wv2_window_new(app: Int, title: String, width: Int, height: Int, entry: String) -> Int
+    fn osty_wv2_window_show(window: Int) -> Bool
+    fn osty_wv2_window_close(window: Int)
+    fn osty_wv2_window_set_title(window: Int, title: String) -> Bool
+    fn osty_wv2_window_navigate(window: Int, url: String) -> Bool
+    fn osty_wv2_window_post_state_json(window: Int, state: String) -> Bool
+    fn osty_wv2_window_eval(window: Int, js: String) -> String
+    fn osty_wv2_window_open_devtools(window: Int) -> Bool
+
+    fn osty_wv2_event_count(app: Int) -> Int
+    fn osty_wv2_event_name(app: Int, index: Int) -> String
+    fn osty_wv2_event_payload(app: Int, index: Int) -> String
+    fn osty_wv2_event_clear(app: Int)
+
+    fn osty_wv2_runtime_available() -> Bool
+    fn osty_wv2_runtime_version() -> String
+}
+
+pub struct App {
+    handle: Int,
+
+    pub fn window(self, options: WindowOptions) -> Result<Window, Error> {
+        let handle = wv.osty_wv2_window_new(
+            self.handle,
+            options.title,
+            options.width,
+            options.height,
+            options.entry,
+        )
+        if handle <= 0 {
+            return Err(lastError())
+        }
+        let window = Window { handle }
+        if options.devtools {
+            window.openDevTools()?
+        }
+        Ok(window)
+    }
+
+    pub fn poll(self) -> Bool {
+        wv.osty_wv2_app_poll(self.handle)
+    }
+
+    pub fn events(self) -> List<Event> {
+        let count = wv.osty_wv2_event_count(self.handle)
+        let mut out: List<Event> = []
+        for i in 0..count {
+            out.push(Event {
+                name: copyString(wv.osty_wv2_event_name(self.handle, i)),
+                payload: copyString(wv.osty_wv2_event_payload(self.handle, i)),
+            })
+        }
+        wv.osty_wv2_event_clear(self.handle)
+        out
+    }
+
+    pub fn quit(self) {
+        wv.osty_wv2_app_quit(self.handle)
+    }
+
+    pub fn run(self) -> Result<Int, Error> {
+        let code = wv.osty_wv2_app_run(self.handle)
+        if code < 0 {
+            Err(lastError())
+        } else {
+            Ok(code)
+        }
+    }
+
+    pub fn close(self) {
+        wv.osty_wv2_app_free(self.handle)
+    }
+}
+
+pub struct Window {
+    handle: Int,
+
+    pub fn show(self) -> Result<(), Error> {
+        okUnit(wv.osty_wv2_window_show(self.handle))
+    }
+
+    pub fn navigate(self, url: String) -> Result<(), Error> {
+        okUnit(wv.osty_wv2_window_navigate(self.handle, url))
+    }
+
+    pub fn setTitle(self, title: String) -> Result<(), Error> {
+        okUnit(wv.osty_wv2_window_set_title(self.handle, title))
+    }
+
+    pub fn setState(self, stateJson: String) -> Result<(), Error> {
+        okUnit(wv.osty_wv2_window_post_state_json(self.handle, stateJson))
+    }
+
+    pub fn eval(self, js: String) -> Result<String, Error> {
+        let result = wv.osty_wv2_window_eval(self.handle, js)
+        if wv.osty_wv2_failed() {
+            Err(lastError())
+        } else {
+            Ok(copyString(result))
+        }
+    }
+
+    pub fn openDevTools(self) -> Result<(), Error> {
+        okUnit(wv.osty_wv2_window_open_devtools(self.handle))
+    }
+
+    pub fn close(self) {
+        wv.osty_wv2_window_close(self.handle)
+    }
+}
+
+pub struct WindowOptions {
+    pub title: String,
+    pub width: Int,
+    pub height: Int,
+    pub entry: String,
+    pub devtools: Bool,
+}
+
+pub struct Event {
+    pub name: String,
+    pub payload: String,
+}
+
+pub struct RuntimeDiagnostic {
+    pub available: Bool,
+    pub version: String,
+    pub message: String,
+}
+
+pub fn app(name: String) -> Result<App, Error> {
+    let handle = wv.osty_wv2_app_new(name)
+    if handle <= 0 {
+        Err(lastError())
+    } else {
+        Ok(App { handle })
+    }
+}
+
+pub fn defaultWindowOptions(title: String, entry: String) -> WindowOptions {
+    WindowOptions {
+        title,
+        width: 1100,
+        height: 720,
+        entry,
+        devtools: false,
+    }
+}
+
+pub fn runtimeDiagnostic() -> RuntimeDiagnostic {
+    let available = wv.osty_wv2_runtime_available()
+    let version = copyString(wv.osty_wv2_runtime_version())
+    let message = if available {
+        "WebView2 runtime available: {version}"
+    } else {
+        "WebView2 runtime is not available. Install the Microsoft Edge WebView2 Evergreen Runtime."
+    }
+    RuntimeDiagnostic { available, version, message }
+}
+
+pub fn bridgeScript() -> String {
+    r"""
+(() => {
+  const stateHandlers = new Set();
+  const api = {
+    platform: 'windows-webview2',
+    version: '0.1',
+    emit(name, payload = {}) {
+      chrome.webview.postMessage(JSON.stringify({ type: 'event', name, payload }));
+    },
+    onState(handler) {
+      stateHandlers.add(handler);
+      return () => stateHandlers.delete(handler);
+    }
+  };
+  Object.defineProperty(window, 'osty', { value: api, configurable: false, writable: false });
+  chrome.webview.addEventListener('message', (event) => {
+    if (!event.data || event.data.type !== 'state') return;
+    for (const handler of stateHandlers) handler(event.data.payload);
+  });
+})();
+"""
+}
+
+pub fn lastErrorMessage() -> String {
+    copyString(wv.osty_wv2_last_error())
+}
+
+fn lastError() -> Error {
+    error.new(lastErrorMessage())
+}
+
+fn okUnit(ok: Bool) -> Result<(), Error> {
+    if ok {
+        Ok(())
+    } else {
+        Err(lastError())
+    }
+}
+
+fn copyString(s: String) -> String {
+    strings.concat(s, "")
+}

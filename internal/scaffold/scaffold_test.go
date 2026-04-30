@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/osty/osty/internal/manifest"
 )
 
 func TestCreateHappyPath(t *testing.T) {
@@ -71,6 +73,59 @@ func TestCreateGUIQtQuickLayout(t *testing.T) {
 	}
 }
 
+func TestCreateWebView2GuiProject(t *testing.T) {
+	parent := t.TempDir()
+	path, d := Create(Options{Parent: parent, Name: "mygui", Kind: KindGUIWebView2})
+	if d != nil {
+		t.Fatalf("Create returned diagnostic: %v", d)
+	}
+	for _, f := range []string{
+		"osty.toml",
+		"src/main.osty",
+		"src/main_test.osty",
+		"ui/index.html",
+		"ui/app.css",
+		"ui/app.js",
+		"assets/.gitkeep",
+		".gitignore",
+	} {
+		if _, err := os.Stat(filepath.Join(path, f)); err != nil {
+			t.Errorf("expected %s to exist: %v", f, err)
+		}
+	}
+
+	rawManifest, err := os.ReadFile(filepath.Join(path, "osty.toml"))
+	if err != nil {
+		t.Fatalf("read osty.toml: %v", err)
+	}
+	for _, want := range []string{
+		`[bin]`,
+		`path = "src/main.osty"`,
+		`[gui]`,
+		`backend = "webview2"`,
+		`entry = "ui/index.html"`,
+		`[gui.webview2]`,
+		`link = ["osty_webview2", "WebView2Loader", "user32", "ole32"]`,
+	} {
+		if !strings.Contains(string(rawManifest), want) {
+			t.Fatalf("manifest missing %q:\n%s", want, rawManifest)
+		}
+	}
+	parsed, err := manifest.Parse(rawManifest)
+	if err != nil {
+		t.Fatalf("parse scaffolded manifest: %v", err)
+	}
+	if parsed.Bin == nil || parsed.Bin.Path != "src/main.osty" {
+		t.Fatalf("Bin = %#v, want path src/main.osty", parsed.Bin)
+	}
+	if parsed.GUI == nil || parsed.GUI.Backend != "webview2" || parsed.GUI.WebView2 == nil {
+		t.Fatalf("GUI = %#v, want webview2 metadata", parsed.GUI)
+	}
+	if len(parsed.Targets) != 1 || !equalStrings(parsed.Targets[0].Link, []string{"osty_webview2", "WebView2Loader", "user32", "ole32"}) {
+		t.Fatalf("Targets = %#v, want WebView2 link hints", parsed.Targets)
+	}
+}
+
 // TestCreateRollbackOnMkdirFailure verifies that when MkdirAll fails
 // (read-only parent dir) no partial outer directory is left behind.
 func TestCreateRollbackOnMkdirFailure(t *testing.T) {
@@ -96,6 +151,18 @@ func TestCreateRollbackOnMkdirFailure(t *testing.T) {
 	} else if !os.IsNotExist(err) {
 		t.Errorf("unexpected stat err on %s: %v", target, err)
 	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // TestInitRollbackOnMidWriteFailure induces a WriteFile failure on the

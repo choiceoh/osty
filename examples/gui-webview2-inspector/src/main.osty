@@ -1,0 +1,33 @@
+use std.gui.webview2 as webview2
+
+fn main() -> Result<(), Error> {
+    let app = webview2.app("Osty Inspector")?
+    let mut options = webview2.defaultWindowOptions("Osty Inspector", "ui/index.html")
+    options.devtools = true
+
+    let window = app.window(options)?
+    window.setState(initialStateJson())?
+    window.show()?
+
+    for app.poll() {
+        for event in app.events() {
+            if event.name == "quit" {
+                app.quit()
+            } else if event.name == "refresh" {
+                window.setState(initialStateJson())?
+            } else if event.name == "inspect" {
+                window.openDevTools()?
+            } else if event.name == "state" {
+                window.setState(event.payload)?
+            }
+        }
+    }
+
+    window.close()
+    app.close()
+    Ok(())
+}
+
+pub fn initialStateJson() -> String {
+    "\{\"status\":\"ready\",\"detail\":\"Inspector state is owned by Osty\"\}"
+}

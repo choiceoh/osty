@@ -19,6 +19,8 @@ the compiler evolves.
   and property-based testing.
 - `stdlib-tour`: front-end checked package that demonstrates Tier 1
   standard-library imports and Result-style error flow.
+- `gui-webview2-inspector`: Windows WebView2 GUI example using
+  `std.gui.webview2`, a native C ABI shim, and a small HTML/CSS/JS UI.
 - `workspace`: virtual workspace with two member packages and a
   cross-package call from `cli` to `core`.
 

@@ -1,0 +1,820 @@
+#if defined(_WIN32)
+
+#include "osty_webview2.h"
+
+#include <WebView2.h>
+#include <windows.h>
+#include <wrl.h>
+
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+using Microsoft::WRL::Callback;
+using Microsoft::WRL::ComPtr;
+
+namespace {
+
+constexpr uintptr_t kOstySSOTag = (uintptr_t{1} << 63);
+constexpr uintptr_t kOstySSOLenShift = 56;
+
+thread_local bool t_failed = false;
+thread_local std::string t_last_error;
+thread_local std::string t_return;
+
+struct Event {
+    std::string name;
+    std::string payload;
+};
+
+struct App;
+
+struct Window {
+    int64_t id = 0;
+    App *app = nullptr;
+    HWND hwnd = nullptr;
+    ComPtr<ICoreWebView2Controller> controller;
+    ComPtr<ICoreWebView2> webview;
+    bool closed = false;
+};
+
+struct App {
+    int64_t id = 0;
+    std::wstring name;
+    bool quit = false;
+    std::vector<Event> events;
+};
+
+std::mutex g_mu;
+int64_t g_next_app = 1;
+int64_t g_next_window = 1;
+std::unordered_map<int64_t, std::unique_ptr<App>> g_apps;
+std::unordered_map<int64_t, std::unique_ptr<Window>> g_windows;
+ATOM g_window_class = 0;
+
+void clear_error() {
+    t_failed = false;
+    t_last_error.clear();
+}
+
+bool fail(const std::string &message) {
+    t_failed = true;
+    t_last_error = message;
+    return false;
+}
+
+bool fail_hr(const char *context, HRESULT hr) {
+    char buf[160];
+    snprintf(buf, sizeof(buf), "%s failed: HRESULT 0x%08lx", context, static_cast<unsigned long>(hr));
+    return fail(buf);
+}
+
+std::string osty_string_to_utf8(const char *value) {
+    if (value == nullptr) {
+        return "";
+    }
+    uintptr_t raw = reinterpret_cast<uintptr_t>(value);
+    if ((raw & kOstySSOTag) != 0) {
+        size_t len = (raw >> kOstySSOLenShift) & 0x7;
+        std::string out;
+        out.reserve(len);
+        for (size_t i = 0; i < len; i++) {
+            out.push_back(static_cast<char>((raw >> (i * 8)) & 0xff));
+        }
+        return out;
+    }
+    return std::string(value);
+}
+
+std::wstring utf8_to_wide(const std::string &s) {
+    if (s.empty()) {
+        return L"";
+    }
+    int needed = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, s.data(), static_cast<int>(s.size()), nullptr, 0);
+    if (needed <= 0) {
+        needed = MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0);
+    }
+    std::wstring out(static_cast<size_t>(needed), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), out.data(), needed);
+    return out;
+}
+
+std::string wide_to_utf8(const std::wstring &s) {
+    if (s.empty()) {
+        return "";
+    }
+    int needed = WideCharToMultiByte(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), nullptr, 0, nullptr, nullptr);
+    std::string out(static_cast<size_t>(needed), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, s.data(), static_cast<int>(s.size()), out.data(), needed, nullptr, nullptr);
+    return out;
+}
+
+bool has_uri_scheme(const std::string &s) {
+    auto pos = s.find(':');
+    if (pos == std::string::npos || pos == 0) {
+        return false;
+    }
+    for (size_t i = 0; i < pos; i++) {
+        unsigned char c = static_cast<unsigned char>(s[i]);
+        if (!std::isalnum(c) && c != '+' && c != '-' && c != '.') {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::wstring file_uri_for_entry(const std::string &entry) {
+    std::filesystem::path p = std::filesystem::absolute(std::filesystem::path(utf8_to_wide(entry))).lexically_normal();
+    std::wstring path = p.wstring();
+    std::replace(path.begin(), path.end(), L'\\', L'/');
+    if (path.rfind(L"//", 0) == 0) {
+        return L"file:" + path;
+    }
+    return L"file:///" + path;
+}
+
+std::wstring uri_for_entry(const char *entry) {
+    std::string raw = osty_string_to_utf8(entry);
+    if (has_uri_scheme(raw)) {
+        return utf8_to_wide(raw);
+    }
+    return file_uri_for_entry(raw);
+}
+
+bool allowed_uri(const std::wstring &uri) {
+    return uri.rfind(L"file:///", 0) == 0 ||
+           uri.rfind(L"file://", 0) == 0 ||
+           uri.rfind(L"https://osty.local/", 0) == 0;
+}
+
+std::wstring bridge_script() {
+    return LR"JS((() => {
+  if (window.osty && window.osty.__ostyWebView2Bridge) return;
+  const stateHandlers = new Set();
+  const api = {
+    __ostyWebView2Bridge: true,
+    platform: 'windows-webview2',
+    version: '0.1',
+    emit(name, payload = {}) {
+      chrome.webview.postMessage(JSON.stringify({ type: 'event', name, payload }));
+    },
+    onState(handler) {
+      stateHandlers.add(handler);
+      return () => stateHandlers.delete(handler);
+    }
+  };
+  Object.defineProperty(window, 'osty', { value: api, configurable: false, writable: false });
+  chrome.webview.addEventListener('message', (event) => {
+    if (!event.data || event.data.type !== 'state') return;
+    for (const handler of stateHandlers) handler(event.data.payload);
+  });
+})();)JS";
+}
+
+std::string json_unescape(std::string s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); i++) {
+        if (s[i] != '\\' || i + 1 >= s.size()) {
+            out.push_back(s[i]);
+            continue;
+        }
+        char n = s[++i];
+        switch (n) {
+        case '"': out.push_back('"'); break;
+        case '\\': out.push_back('\\'); break;
+        case '/': out.push_back('/'); break;
+        case 'b': out.push_back('\b'); break;
+        case 'f': out.push_back('\f'); break;
+        case 'n': out.push_back('\n'); break;
+        case 'r': out.push_back('\r'); break;
+        case 't': out.push_back('\t'); break;
+        default:
+            out.push_back('\\');
+            out.push_back(n);
+            break;
+        }
+    }
+    return out;
+}
+
+bool json_string_field(const std::string &json, const std::string &key, std::string *out) {
+    std::string needle = "\"" + key + "\"";
+    size_t pos = json.find(needle);
+    if (pos == std::string::npos) {
+        return false;
+    }
+    pos = json.find(':', pos + needle.size());
+    if (pos == std::string::npos) {
+        return false;
+    }
+    pos++;
+    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) {
+        pos++;
+    }
+    if (pos >= json.size() || json[pos] != '"') {
+        return false;
+    }
+    pos++;
+    std::string value;
+    bool esc = false;
+    for (; pos < json.size(); pos++) {
+        char c = json[pos];
+        if (esc) {
+            value.push_back('\\');
+            value.push_back(c);
+            esc = false;
+            continue;
+        }
+        if (c == '\\') {
+            esc = true;
+            continue;
+        }
+        if (c == '"') {
+            *out = json_unescape(value);
+            return true;
+        }
+        value.push_back(c);
+    }
+    return false;
+}
+
+bool json_value_field(const std::string &json, const std::string &key, std::string *out) {
+    std::string needle = "\"" + key + "\"";
+    size_t pos = json.find(needle);
+    if (pos == std::string::npos) {
+        return false;
+    }
+    pos = json.find(':', pos + needle.size());
+    if (pos == std::string::npos) {
+        return false;
+    }
+    pos++;
+    while (pos < json.size() && std::isspace(static_cast<unsigned char>(json[pos]))) {
+        pos++;
+    }
+    size_t start = pos;
+    int depth = 0;
+    bool in_string = false;
+    bool esc = false;
+    for (; pos < json.size(); pos++) {
+        char c = json[pos];
+        if (in_string) {
+            if (esc) {
+                esc = false;
+            } else if (c == '\\') {
+                esc = true;
+            } else if (c == '"') {
+                in_string = false;
+            }
+            continue;
+        }
+        if (c == '"') {
+            in_string = true;
+            continue;
+        }
+        if (c == '{' || c == '[') {
+            depth++;
+            continue;
+        }
+        if (c == '}' || c == ']') {
+            if (depth == 0) {
+                break;
+            }
+            depth--;
+            continue;
+        }
+        if (depth == 0 && c == ',') {
+            break;
+        }
+    }
+    size_t end = pos;
+    while (end > start && std::isspace(static_cast<unsigned char>(json[end - 1]))) {
+        end--;
+    }
+    *out = json.substr(start, end - start);
+    if (out->empty()) {
+        *out = "{}";
+    }
+    return true;
+}
+
+void pump_messages_until(bool *done) {
+    MSG msg;
+    while (!*done) {
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+        if (!*done) {
+            MsgWaitForMultipleObjects(0, nullptr, FALSE, 10, QS_ALLINPUT);
+        }
+    }
+}
+
+App *lookup_app(int64_t id) {
+    auto it = g_apps.find(id);
+    return it == g_apps.end() ? nullptr : it->second.get();
+}
+
+Window *lookup_window(int64_t id) {
+    auto it = g_windows.find(id);
+    return it == g_windows.end() ? nullptr : it->second.get();
+}
+
+void resize_controller(Window *w) {
+    if (w == nullptr || !w->controller) {
+        return;
+    }
+    RECT bounds;
+    GetClientRect(w->hwnd, &bounds);
+    w->controller->put_Bounds(bounds);
+}
+
+LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    Window *w = reinterpret_cast<Window *>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+    if (msg == WM_NCCREATE) {
+        auto *cs = reinterpret_cast<CREATESTRUCTW *>(lp);
+        w = reinterpret_cast<Window *>(cs->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(w));
+    }
+    switch (msg) {
+    case WM_SIZE:
+        resize_controller(w);
+        return 0;
+    case WM_CLOSE:
+        if (w != nullptr) {
+            w->closed = true;
+            if (w->app != nullptr) {
+                w->app->quit = true;
+            }
+        }
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_DESTROY:
+        return 0;
+    default:
+        return DefWindowProcW(hwnd, msg, wp, lp);
+    }
+}
+
+bool ensure_window_class() {
+    if (g_window_class != 0) {
+        return true;
+    }
+    WNDCLASSW wc = {};
+    wc.lpfnWndProc = wndproc;
+    wc.hInstance = GetModuleHandleW(nullptr);
+    wc.lpszClassName = L"OstyWebView2Window";
+    wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    g_window_class = RegisterClassW(&wc);
+    if (g_window_class == 0) {
+        return fail("RegisterClassW failed");
+    }
+    return true;
+}
+
+bool init_webview(Window *w, const wchar_t *entry) {
+    bool done = false;
+    bool ok = false;
+    std::wstring initial_uri = entry;
+    HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(
+        nullptr,
+        nullptr,
+        nullptr,
+        Callback<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler>(
+            [w, &done, &ok, initial_uri](HRESULT result, ICoreWebView2Environment *env) -> HRESULT {
+                if (FAILED(result) || env == nullptr) {
+                    fail_hr("CreateCoreWebView2EnvironmentWithOptions", result);
+                    done = true;
+                    return S_OK;
+                }
+                env->CreateCoreWebView2Controller(
+                    w->hwnd,
+                    Callback<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler>(
+                        [w, &done, &ok, initial_uri](HRESULT result2, ICoreWebView2Controller *controller) -> HRESULT {
+                            if (FAILED(result2) || controller == nullptr) {
+                                fail_hr("CreateCoreWebView2Controller", result2);
+                                done = true;
+                                return S_OK;
+                            }
+                            w->controller = controller;
+                            HRESULT hr2 = controller->get_CoreWebView2(&w->webview);
+                            if (FAILED(hr2) || !w->webview) {
+                                fail_hr("get_CoreWebView2", hr2);
+                                done = true;
+                                return S_OK;
+                            }
+                            resize_controller(w);
+                            w->webview->AddScriptToExecuteOnDocumentCreated(bridge_script().c_str(), nullptr);
+                            EventRegistrationToken token{};
+                            w->webview->add_WebMessageReceived(
+                                Callback<ICoreWebView2WebMessageReceivedEventHandler>(
+                                    [w](ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventArgs *args) -> HRESULT {
+                                        LPWSTR raw = nullptr;
+                                        std::string json;
+                                        if (SUCCEEDED(args->TryGetWebMessageAsString(&raw)) && raw != nullptr) {
+                                            json = wide_to_utf8(raw);
+                                            CoTaskMemFree(raw);
+                                        } else if (SUCCEEDED(args->get_WebMessageAsJson(&raw)) && raw != nullptr) {
+                                            json = wide_to_utf8(raw);
+                                            CoTaskMemFree(raw);
+                                        }
+                                        std::string type;
+                                        std::string name;
+                                        std::string payload;
+                                        if (!json_string_field(json, "type", &type) || type != "event") {
+                                            return S_OK;
+                                        }
+                                        if (!json_string_field(json, "name", &name)) {
+                                            name = "";
+                                        }
+                                        if (!json_value_field(json, "payload", &payload)) {
+                                            payload = "{}";
+                                        }
+                                        if (w->app != nullptr) {
+                                            w->app->events.push_back(Event{name, payload});
+                                        }
+                                        return S_OK;
+                                    })
+                                    .Get(),
+                                &token);
+                            w->webview->add_NavigationStarting(
+                                Callback<ICoreWebView2NavigationStartingEventHandler>(
+                                    [](ICoreWebView2 *, ICoreWebView2NavigationStartingEventArgs *args) -> HRESULT {
+                                        LPWSTR uri = nullptr;
+                                        if (SUCCEEDED(args->get_Uri(&uri)) && uri != nullptr) {
+                                            std::wstring value(uri);
+                                            CoTaskMemFree(uri);
+                                            if (!allowed_uri(value)) {
+                                                args->put_Cancel(TRUE);
+                                            }
+                                        }
+                                        return S_OK;
+                                    })
+                                    .Get(),
+                                &token);
+                            w->webview->Navigate(initial_uri.c_str());
+                            ok = true;
+                            clear_error();
+                            done = true;
+                            return S_OK;
+                        })
+                        .Get());
+                return S_OK;
+            })
+            .Get());
+    if (FAILED(hr)) {
+        return fail_hr("CreateCoreWebView2EnvironmentWithOptions", hr);
+    }
+    pump_messages_until(&done);
+    return ok;
+}
+
+} // namespace
+
+extern "C" {
+
+int osty_wv2_failed(void) {
+    return t_failed ? 1 : 0;
+}
+
+const char *osty_wv2_last_error(void) {
+    return t_last_error.empty() ? "" : t_last_error.c_str();
+}
+
+int64_t osty_wv2_app_new(const char *name) {
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
+        fail_hr("CoInitializeEx", hr);
+        return 0;
+    }
+    if (!ensure_window_class()) {
+        return 0;
+    }
+    auto app = std::make_unique<App>();
+    app->name = utf8_to_wide(osty_string_to_utf8(name));
+    std::lock_guard<std::mutex> lock(g_mu);
+    app->id = g_next_app++;
+    int64_t id = app->id;
+    g_apps[id] = std::move(app);
+    clear_error();
+    return id;
+}
+
+void osty_wv2_app_free(int64_t app) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    g_apps.erase(app);
+    clear_error();
+}
+
+int64_t osty_wv2_app_run(int64_t app) {
+    App *a = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        a = lookup_app(app);
+    }
+    if (a == nullptr) {
+        fail("invalid WebView2 app handle");
+        return -1;
+    }
+    while (!a->quit && osty_wv2_app_poll(app)) {
+        MsgWaitForMultipleObjects(0, nullptr, FALSE, 16, QS_ALLINPUT);
+    }
+    clear_error();
+    return 0;
+}
+
+int osty_wv2_app_poll(int64_t app) {
+    App *a = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        a = lookup_app(app);
+    }
+    if (a == nullptr) {
+        fail("invalid WebView2 app handle");
+        return 0;
+    }
+    MSG msg;
+    while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+        if (msg.message == WM_QUIT) {
+            a->quit = true;
+        }
+        TranslateMessage(&msg);
+        DispatchMessageW(&msg);
+    }
+    clear_error();
+    return a->quit ? 0 : 1;
+}
+
+void osty_wv2_app_quit(int64_t app) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    if (App *a = lookup_app(app)) {
+        a->quit = true;
+    }
+    clear_error();
+}
+
+int64_t osty_wv2_window_new(int64_t app, const char *title, int64_t width, int64_t height, const char *entry) {
+    App *a = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        a = lookup_app(app);
+    }
+    if (a == nullptr) {
+        fail("invalid WebView2 app handle");
+        return 0;
+    }
+    auto w = std::make_unique<Window>();
+    w->app = a;
+    std::wstring wide_title = utf8_to_wide(osty_string_to_utf8(title));
+    if (wide_title.empty()) {
+        wide_title = a->name.empty() ? L"Osty" : a->name;
+    }
+    if (width <= 0) {
+        width = 1100;
+    }
+    if (height <= 0) {
+        height = 720;
+    }
+    HWND hwnd = CreateWindowExW(
+        0,
+        L"OstyWebView2Window",
+        wide_title.c_str(),
+        WS_OVERLAPPEDWINDOW,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        static_cast<int>(width),
+        static_cast<int>(height),
+        nullptr,
+        nullptr,
+        GetModuleHandleW(nullptr),
+        w.get());
+    if (hwnd == nullptr) {
+        fail("CreateWindowExW failed");
+        return 0;
+    }
+    w->hwnd = hwnd;
+    std::wstring entry_uri = uri_for_entry(entry);
+    if (!init_webview(w.get(), entry_uri.c_str())) {
+        DestroyWindow(hwnd);
+        return 0;
+    }
+    std::lock_guard<std::mutex> lock(g_mu);
+    w->id = g_next_window++;
+    int64_t id = w->id;
+    g_windows[id] = std::move(w);
+    clear_error();
+    return id;
+}
+
+int osty_wv2_window_show(int64_t window) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    Window *w = lookup_window(window);
+    if (w == nullptr || w->hwnd == nullptr) {
+        fail("invalid WebView2 window handle");
+        return 0;
+    }
+    ShowWindow(w->hwnd, SW_SHOW);
+    UpdateWindow(w->hwnd);
+    clear_error();
+    return 1;
+}
+
+void osty_wv2_window_close(int64_t window) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    Window *w = lookup_window(window);
+    if (w != nullptr && w->hwnd != nullptr) {
+        DestroyWindow(w->hwnd);
+        w->hwnd = nullptr;
+    }
+    g_windows.erase(window);
+    clear_error();
+}
+
+int osty_wv2_window_set_title(int64_t window, const char *title) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    Window *w = lookup_window(window);
+    if (w == nullptr || w->hwnd == nullptr) {
+        fail("invalid WebView2 window handle");
+        return 0;
+    }
+    SetWindowTextW(w->hwnd, utf8_to_wide(osty_string_to_utf8(title)).c_str());
+    clear_error();
+    return 1;
+}
+
+int osty_wv2_window_navigate(int64_t window, const char *url) {
+    Window *w = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        w = lookup_window(window);
+    }
+    if (w == nullptr || !w->webview) {
+        fail("invalid WebView2 window handle");
+        return 0;
+    }
+    std::wstring uri = uri_for_entry(url);
+    if (!allowed_uri(uri)) {
+        fail("navigation blocked: only local file URLs and https://osty.local/ are allowed");
+        return 0;
+    }
+    HRESULT hr = w->webview->Navigate(uri.c_str());
+    if (FAILED(hr)) {
+        fail_hr("CoreWebView2.Navigate", hr);
+        return 0;
+    }
+    clear_error();
+    return 1;
+}
+
+int osty_wv2_window_post_state_json(int64_t window, const char *state) {
+    Window *w = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        w = lookup_window(window);
+    }
+    if (w == nullptr || !w->webview) {
+        fail("invalid WebView2 window handle");
+        return 0;
+    }
+    std::string raw = osty_string_to_utf8(state);
+    if (raw.empty()) {
+        raw = "null";
+    }
+    std::wstring msg = utf8_to_wide(std::string("{\"type\":\"state\",\"payload\":") + raw + "}");
+    HRESULT hr = w->webview->PostWebMessageAsJson(msg.c_str());
+    if (FAILED(hr)) {
+        fail_hr("CoreWebView2.PostWebMessageAsJson", hr);
+        return 0;
+    }
+    clear_error();
+    return 1;
+}
+
+const char *osty_wv2_window_eval(int64_t window, const char *js) {
+    Window *w = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        w = lookup_window(window);
+    }
+    if (w == nullptr || !w->webview) {
+        fail("invalid WebView2 window handle");
+        return "";
+    }
+    bool done = false;
+    HRESULT hr = w->webview->ExecuteScript(
+        utf8_to_wide(osty_string_to_utf8(js)).c_str(),
+        Callback<ICoreWebView2ExecuteScriptCompletedHandler>(
+            [&done](HRESULT result, LPCWSTR value) -> HRESULT {
+                if (FAILED(result)) {
+                    fail_hr("CoreWebView2.ExecuteScript", result);
+                } else {
+                    t_return = wide_to_utf8(value == nullptr ? L"" : value);
+                    clear_error();
+                }
+                done = true;
+                return S_OK;
+            })
+            .Get());
+    if (FAILED(hr)) {
+        fail_hr("CoreWebView2.ExecuteScript", hr);
+        return "";
+    }
+    pump_messages_until(&done);
+    return t_return.c_str();
+}
+
+int osty_wv2_window_open_devtools(int64_t window) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    Window *w = lookup_window(window);
+    if (w == nullptr || !w->webview) {
+        fail("invalid WebView2 window handle");
+        return 0;
+    }
+    HRESULT hr = w->webview->OpenDevToolsWindow();
+    if (FAILED(hr)) {
+        fail_hr("CoreWebView2.OpenDevToolsWindow", hr);
+        return 0;
+    }
+    clear_error();
+    return 1;
+}
+
+int64_t osty_wv2_event_count(int64_t app) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    App *a = lookup_app(app);
+    if (a == nullptr) {
+        fail("invalid WebView2 app handle");
+        return 0;
+    }
+    clear_error();
+    return static_cast<int64_t>(a->events.size());
+}
+
+const char *osty_wv2_event_name(int64_t app, int64_t index) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    App *a = lookup_app(app);
+    if (a == nullptr || index < 0 || static_cast<size_t>(index) >= a->events.size()) {
+        fail("invalid WebView2 event index");
+        return "";
+    }
+    clear_error();
+    return a->events[static_cast<size_t>(index)].name.c_str();
+}
+
+const char *osty_wv2_event_payload(int64_t app, int64_t index) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    App *a = lookup_app(app);
+    if (a == nullptr || index < 0 || static_cast<size_t>(index) >= a->events.size()) {
+        fail("invalid WebView2 event index");
+        return "{}";
+    }
+    clear_error();
+    return a->events[static_cast<size_t>(index)].payload.c_str();
+}
+
+void osty_wv2_event_clear(int64_t app) {
+    std::lock_guard<std::mutex> lock(g_mu);
+    if (App *a = lookup_app(app)) {
+        a->events.clear();
+    }
+    clear_error();
+}
+
+int osty_wv2_runtime_available(void) {
+    LPWSTR version = nullptr;
+    HRESULT hr = GetAvailableCoreWebView2BrowserVersionString(nullptr, &version);
+    if (SUCCEEDED(hr) && version != nullptr) {
+        CoTaskMemFree(version);
+        clear_error();
+        return 1;
+    }
+    fail_hr("GetAvailableCoreWebView2BrowserVersionString", hr);
+    return 0;
+}
+
+const char *osty_wv2_runtime_version(void) {
+    LPWSTR version = nullptr;
+    HRESULT hr = GetAvailableCoreWebView2BrowserVersionString(nullptr, &version);
+    if (FAILED(hr) || version == nullptr) {
+        fail_hr("GetAvailableCoreWebView2BrowserVersionString", hr);
+        return "";
+    }
+    t_return = wide_to_utf8(version);
+    CoTaskMemFree(version);
+    clear_error();
+    return t_return.c_str();
+}
+
+} // extern "C"
+
+#endif
