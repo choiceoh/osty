@@ -6833,7 +6833,14 @@ func llvmNativeBodyHasTerminator(body []string) bool {
 	return llvmStrings.HasPrefix(last, "  ret ") || llvmStrings.HasPrefix(last, "  br ")
 }
 
-// Osty: toolchain/llvmgen.osty:2213:1
+func llvmNativeCloneOffsetMap(input map[string]int) map[string]int {
+	out := make(map[string]int, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
+}
+
 func llvmNativePushSafeIndices(emitter *LlvmEmitter, idxName string, lists map[string]int) {
 	if idxName == "" || emitter == nil {
 		return
@@ -6842,14 +6849,9 @@ func llvmNativePushSafeIndices(emitter *LlvmEmitter, idxName string, lists map[s
 		emitter.nativeSafeIndices[idxName] = map[string]int{}
 		return
 	}
-	copied := make(map[string]int, len(lists))
-	for key, value := range lists {
-		copied[key] = value
-	}
-	emitter.nativeSafeIndices[idxName] = copied
+	emitter.nativeSafeIndices[idxName] = llvmNativeCloneOffsetMap(lists)
 }
 
-// Osty: toolchain/llvmgen.osty:2228:1
 func llvmNativePopSafeIndices(emitter *LlvmEmitter, idxName string) {
 	if idxName == "" || emitter == nil {
 		return
@@ -6857,7 +6859,6 @@ func llvmNativePopSafeIndices(emitter *LlvmEmitter, idxName string) {
 	delete(emitter.nativeSafeIndices, idxName)
 }
 
-// Osty: toolchain/llvmgen.osty:2236:1
 func llvmNativeIsSafeListAccess(emitter *LlvmEmitter, paramName string, idxName string, addend int) bool {
 	if emitter == nil || paramName == "" || idxName == "" || addend < 0 {
 		return false
@@ -6868,4 +6869,261 @@ func llvmNativeIsSafeListAccess(emitter *LlvmEmitter, paramName string, idxName 
 		return false
 	}
 	return addend <= maxOff
+}
+
+func llvmNativeCallPreservesScalarListParam(expr *llvmNativeExpr, paramName string) bool {
+	if expr == nil || paramName == "" {
+		return false
+	}
+	if expr.name != llvmListRuntimeLenSymbol() || len(expr.childExprs) != 1 {
+		return false
+	}
+	arg := expr.childExprs[0]
+	return arg != nil && arg.kind == llvmNativeExprIdent && arg.name == paramName
+}
+
+func llvmNativePruneScalarListParamsInExpr(expr *llvmNativeExpr, eligible map[string]string) {
+	if expr == nil || len(eligible) == 0 {
+		return
+	}
+	if expr.kind == llvmNativeExprCall {
+		for _, arg := range expr.childExprs {
+			if arg == nil || arg.kind != llvmNativeExprIdent {
+				continue
+			}
+			if _, ok := eligible[arg.name]; ok && !llvmNativeCallPreservesScalarListParam(expr, arg.name) {
+				delete(eligible, arg.name)
+			}
+		}
+	}
+	for _, child := range expr.childExprs {
+		llvmNativePruneScalarListParamsInExpr(child, eligible)
+	}
+	for _, block := range expr.childBlocks {
+		llvmNativePruneScalarListParamsInBlock(block, eligible)
+	}
+}
+
+func llvmNativePruneScalarListParamsInStmt(stmt *llvmNativeStmt, eligible map[string]string) {
+	if stmt == nil || len(eligible) == 0 {
+		return
+	}
+	if stmt.name != "" {
+		delete(eligible, stmt.name)
+	}
+	for _, expr := range stmt.childExprs {
+		llvmNativePruneScalarListParamsInExpr(expr, eligible)
+	}
+	for _, block := range stmt.childBlocks {
+		llvmNativePruneScalarListParamsInBlock(block, eligible)
+	}
+}
+
+func llvmNativePruneScalarListParamsInBlock(block *llvmNativeBlock, eligible map[string]string) {
+	if block == nil || len(eligible) == 0 {
+		return
+	}
+	for _, stmt := range block.stmts {
+		llvmNativePruneScalarListParamsInStmt(stmt, eligible)
+	}
+	if block.result != nil {
+		llvmNativePruneScalarListParamsInExpr(block.result, eligible)
+	}
+}
+
+func llvmNativeEligibleScalarListParams(fn *llvmNativeFunction) map[string]string {
+	eligible := map[string]string{}
+	if fn == nil {
+		return eligible
+	}
+	for _, param := range fn.params {
+		if param == nil || param.byRef || !mirListUsesRawDataFastPath(param.listElemLLVMType) {
+			continue
+		}
+		eligible[param.name] = param.listElemLLVMType
+	}
+	if len(eligible) == 0 {
+		return eligible
+	}
+	llvmNativePruneScalarListParamsInBlock(fn.body, eligible)
+	return eligible
+}
+
+func llvmNativeRangeStartIsNonNegative(expr *llvmNativeExpr) bool {
+	if expr == nil || expr.kind != llvmNativeExprInt {
+		return false
+	}
+	text := llvmStrings.TrimSpace(expr.text)
+	return text != "" && !llvmStrings.HasPrefix(text, "-")
+}
+
+func llvmNativeListLenSource(expr *llvmNativeExpr) string {
+	if expr == nil || expr.kind != llvmNativeExprCall {
+		return ""
+	}
+	if expr.name != llvmListRuntimeLenSymbol() || len(expr.childExprs) != 1 {
+		return ""
+	}
+	recv := expr.childExprs[0]
+	if recv == nil || recv.kind != llvmNativeExprIdent {
+		return ""
+	}
+	return recv.name
+}
+
+func llvmNativeBoundedLensFor(emitter *LlvmEmitter, expr *llvmNativeExpr) map[string]int {
+	if emitter == nil || expr == nil {
+		return nil
+	}
+	if list := llvmNativeListLenSource(expr); list != "" {
+		if _, ok := emitter.nativeListLens[list]; ok {
+			return map[string]int{list: 0}
+		}
+		return nil
+	}
+	if expr.kind == llvmNativeExprIdent {
+		if set := emitter.nativeBoundedLens[expr.name]; len(set) > 0 {
+			return llvmNativeCloneOffsetMap(set)
+		}
+		return nil
+	}
+	if expr.kind == llvmNativeExprBinary && expr.op == "-" && len(expr.childExprs) == 2 {
+		k, ok := llvmNativeIntLiteralValue(expr.childExprs[1])
+		if !ok || k < 0 {
+			return nil
+		}
+		base := llvmNativeBoundedLensFor(emitter, expr.childExprs[0])
+		if len(base) == 0 {
+			return nil
+		}
+		out := make(map[string]int, len(base))
+		for list, off := range base {
+			out[list] = off + k
+		}
+		return out
+	}
+	return nil
+}
+
+func llvmNativeRecordBoundedLen(emitter *LlvmEmitter, name string, expr *llvmNativeExpr) {
+	if emitter == nil || name == "" || expr == nil {
+		return
+	}
+	if bounded := llvmNativeBoundedLensFor(emitter, expr); len(bounded) > 0 {
+		emitter.nativeBoundedLens[name] = bounded
+		return
+	}
+	if expr.kind != llvmNativeExprIf || len(expr.childExprs) == 0 || len(expr.childBlocks) < 2 {
+		return
+	}
+	thenLists := llvmNativeBlockResultLenSources(expr.childBlocks[0])
+	elseLists := llvmNativeBlockResultLenSources(expr.childBlocks[1])
+	if len(thenLists) == 0 || len(elseLists) == 0 {
+		return
+	}
+	condLists := llvmNativeCondLenSources(expr.childExprs[0])
+	if len(condLists) < 2 {
+		return
+	}
+	condSet := map[string]bool{}
+	for _, list := range condLists {
+		condSet[list] = true
+	}
+	allDrawn := func(arm []string) bool {
+		if len(arm) == 0 {
+			return false
+		}
+		for _, list := range arm {
+			if !condSet[list] {
+				return false
+			}
+		}
+		return true
+	}
+	if !allDrawn(thenLists) || !allDrawn(elseLists) {
+		return
+	}
+	bounded := make(map[string]int, len(condSet))
+	for list := range condSet {
+		bounded[list] = 0
+	}
+	emitter.nativeBoundedLens[name] = bounded
+}
+
+func llvmNativeBlockResultLenSources(block *llvmNativeBlock) []string {
+	if block == nil || !block.hasResult {
+		return nil
+	}
+	if list := llvmNativeListLenSource(block.result); list != "" {
+		return []string{list}
+	}
+	return nil
+}
+
+func llvmNativeCondLenSources(expr *llvmNativeExpr) []string {
+	if expr == nil || expr.kind != llvmNativeExprBinary {
+		return nil
+	}
+	switch expr.op {
+	case "<", "<=", ">", ">=":
+	default:
+		return nil
+	}
+	if len(expr.childExprs) != 2 {
+		return nil
+	}
+	left := llvmNativeListLenSource(expr.childExprs[0])
+	right := llvmNativeListLenSource(expr.childExprs[1])
+	if left == "" || right == "" {
+		return nil
+	}
+	return []string{left, right}
+}
+
+func llvmNativeIntLiteralValue(expr *llvmNativeExpr) (int, bool) {
+	if expr == nil || expr.kind != llvmNativeExprInt {
+		return 0, false
+	}
+	text := llvmStrings.ReplaceAll(llvmStrings.TrimSpace(expr.text), "_", "")
+	if text == "" {
+		return 0, false
+	}
+	if llvmStrings.HasPrefix(text, "+") {
+		text = llvmStrings.TrimPrefix(text, "+")
+	}
+	if text == "" || llvmStrings.HasPrefix(text, "-") {
+		return 0, false
+	}
+	var value int
+	for _, c := range text {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+		value = value*10 + int(c-'0')
+	}
+	return value, true
+}
+
+func llvmNativeIndexIdentAndAddend(expr *llvmNativeExpr) (string, int, bool) {
+	if expr == nil {
+		return "", 0, false
+	}
+	if expr.kind == llvmNativeExprIdent {
+		return expr.name, 0, true
+	}
+	if expr.kind != llvmNativeExprBinary || expr.op != "+" || len(expr.childExprs) != 2 {
+		return "", 0, false
+	}
+	left, right := expr.childExprs[0], expr.childExprs[1]
+	if left != nil && left.kind == llvmNativeExprIdent {
+		if k, ok := llvmNativeIntLiteralValue(right); ok {
+			return left.name, k, true
+		}
+	}
+	if right != nil && right.kind == llvmNativeExprIdent {
+		if k, ok := llvmNativeIntLiteralValue(left); ok {
+			return right.name, k, true
+		}
+	}
+	return "", 0, false
 }
