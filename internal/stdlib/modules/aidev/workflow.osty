@@ -1,0 +1,241 @@
+// std.aidev.workflow - end-to-end AI coding workflow records.
+//
+// Hosts still call models, run commands, and write files. This module ties the
+// std.aidev family into one typed loop: diagnostics -> prompt -> patch ->
+// verification -> corpus record.
+
+use std.aidev as aidev
+use std.aidev.corpus as corpus
+use std.aidev.osty as ostydev
+use std.aidev.prompt as prompt
+use std.aidev.verify as verify
+use std.strings
+
+pub enum WorkflowStage {
+    StageDiagnose,
+    StagePrompt,
+    StagePatch,
+    StageVerify,
+    StageRecord,
+
+    pub fn toString(self) -> String {
+        match self {
+            StageDiagnose -> "diagnose",
+            StagePrompt   -> "prompt",
+            StagePatch    -> "patch",
+            StageVerify   -> "verify",
+            StageRecord   -> "record",
+        }
+    }
+}
+
+pub enum WorkflowStatus {
+    WorkflowPlanned,
+    WorkflowPromptReady,
+    WorkflowPatchReady,
+    WorkflowPatchRejected,
+    WorkflowVerified,
+    WorkflowRecorded,
+    WorkflowRetry,
+    WorkflowRejected,
+    WorkflowInvestigate,
+
+    pub fn toString(self) -> String {
+        match self {
+            WorkflowPlanned       -> "planned",
+            WorkflowPromptReady   -> "prompt_ready",
+            WorkflowPatchReady    -> "patch_ready",
+            WorkflowPatchRejected -> "patch_rejected",
+            WorkflowVerified      -> "verified",
+            WorkflowRecorded      -> "recorded",
+            WorkflowRetry         -> "retry",
+            WorkflowRejected      -> "rejected",
+            WorkflowInvestigate   -> "investigate",
+        }
+    }
+
+    pub fn isTerminal(self) -> Bool {
+        self == WorkflowRecorded || self == WorkflowRejected || self == WorkflowPatchRejected
+    }
+}
+
+pub struct WorkflowStep {
+    pub stage: WorkflowStage,
+    pub status: WorkflowStatus,
+    pub summary: String,
+}
+
+pub struct WorkflowDraft {
+    pub id: String,
+    pub caseItem: corpus.CorpusCase,
+    pub context: aidev.FixContext,
+    pub promptBundle: prompt.PromptBundle,
+    pub verifyPlan: verify.VerifyPlan,
+    pub status: WorkflowStatus,
+    pub steps: List<WorkflowStep> = [],
+}
+
+pub struct WorkflowProposal {
+    pub draft: WorkflowDraft,
+    pub patch: aidev.Patch,
+    pub patchResult: aidev.PatchResult,
+    pub status: WorkflowStatus,
+    pub steps: List<WorkflowStep> = [],
+}
+
+pub struct WorkflowRun {
+    pub draft: WorkflowDraft,
+    pub patch: aidev.Patch,
+    pub patchResult: aidev.PatchResult,
+    pub verifyReport: verify.VerifyReport,
+    pub attempt: corpus.RepairAttempt,
+    pub log: String,
+    pub status: WorkflowStatus,
+    pub steps: List<WorkflowStep> = [],
+}
+
+pub fn step(stage: WorkflowStage, status: WorkflowStatus, summary: String) -> WorkflowStep {
+    WorkflowStep { stage, status, summary }
+}
+
+pub fn startDefault(id: String, title: String, file: aidev.SourceFile, diags: List<aidev.Diagnostic>) -> WorkflowDraft {
+    start(id, title, file, diags, prompt.defaultPolicy(), defaultVerifyPlan(file))
+}
+
+pub fn start(id: String, title: String, file: aidev.SourceFile, diags: List<aidev.Diagnostic>, policy: prompt.PromptPolicy, verifyPlan: verify.VerifyPlan) -> WorkflowDraft {
+    let context = buildContext(file, diags)
+    let bundle = prompt.buildFixPrompt(context, policy)
+    let habit = sourceHabit(file)
+    let caseItem = corpus.repairCase(id, title, file, diags, habit)
+    WorkflowDraft {
+        id,
+        caseItem,
+        context,
+        promptBundle: bundle,
+        verifyPlan,
+        status: WorkflowPromptReady,
+        steps: [
+            step(StageDiagnose, WorkflowPlanned, aidev.formatCheckSummary(aidev.checkSummary(diags))),
+            step(StagePrompt, WorkflowPromptReady, bundle.summary),
+        ],
+    }
+}
+
+pub fn buildContext(file: aidev.SourceFile, diags: List<aidev.Diagnostic>) -> aidev.FixContext {
+    if isOstyFile(file) {
+        return ostydev.buildOstyFixContext(file, diags)
+    }
+    aidev.buildFixContext(file, diags, 3, 3)
+}
+
+pub fn defaultVerifyPlan(file: aidev.SourceFile) -> verify.VerifyPlan {
+    if isOstyFile(file) {
+        return verify.ostySourcePlan(file.path)
+    }
+    verify.plan("verify patch for {file.path}", [verify.diffCheckCommand()], [file.path])
+}
+
+pub fn propose(draft: WorkflowDraft, patchValue: aidev.Patch) -> WorkflowProposal {
+    let result = aidev.applyPatchToFile(draft.context.file, patchValue)
+    proposalFromResult(draft, patchValue, result)
+}
+
+pub fn proposalFromResult(draft: WorkflowDraft, patchValue: aidev.Patch, patchResult: aidev.PatchResult) -> WorkflowProposal {
+    let status = if patchResult.status.toString() == "rejected" { WorkflowPatchRejected } else { WorkflowPatchReady }
+    let mut steps = draft.steps
+    steps.push(step(StagePatch, status, patchResult.summary))
+    WorkflowProposal {
+        draft,
+        patch: patchValue,
+        patchResult,
+        status,
+        steps,
+    }
+}
+
+pub fn complete(proposal: WorkflowProposal, results: List<verify.VerifyResult>, afterDiags: List<aidev.Diagnostic>, notes: List<String>, existingLog: String) -> WorkflowRun {
+    let report = verify.buildReport(
+        proposal.draft.verifyPlan,
+        results,
+        proposal.draft.caseItem.diagnostics,
+        afterDiags,
+        proposal.patchResult,
+    )
+    completeWithReport(proposal, report, afterDiags, notes, existingLog)
+}
+
+pub fn completeWithReport(proposal: WorkflowProposal, report: verify.VerifyReport, afterDiags: List<aidev.Diagnostic>, notes: List<String>, existingLog: String) -> WorkflowRun {
+    let attempt = corpus.repairAttempt(
+        "{proposal.draft.id}:attempt",
+        proposal.draft.caseItem.id,
+        proposal.draft.caseItem.diagnostics,
+        afterDiags,
+        proposal.patchResult,
+        notes,
+    )
+    let status = statusForDecision(report.decision)
+    let mut steps = proposal.steps
+    steps.push(step(StageVerify, status, verify.summarizeReport(report)))
+    let log = recordAttempt(existingLog, proposal.draft.caseItem, attempt)
+    steps.push(step(StageRecord, WorkflowRecorded, "case and attempt appended"))
+    WorkflowRun {
+        draft: proposal.draft,
+        patch: proposal.patch,
+        patchResult: proposal.patchResult,
+        verifyReport: report,
+        attempt,
+        log,
+        status: if status == WorkflowRejected || status == WorkflowRetry || status == WorkflowInvestigate { status } else { WorkflowRecorded },
+        steps,
+    }
+}
+
+pub fn recordAttempt(log: String, caseItem: corpus.CorpusCase, attempt: corpus.RepairAttempt) -> String {
+    let withCase = corpus.appendCase(log, caseItem)
+    corpus.appendAttempt(withCase, attempt)
+}
+
+pub fn statusForDecision(decision: verify.VerifyDecision) -> WorkflowStatus {
+    match decision.toString() {
+        "accept"      -> WorkflowVerified,
+        "retry"       -> WorkflowRetry,
+        "reject"      -> WorkflowRejected,
+        "investigate" -> WorkflowInvestigate,
+        _             -> WorkflowPlanned,
+    }
+}
+
+pub fn isOstyFile(file: aidev.SourceFile) -> Bool {
+    file.language == "osty" || strings.endsWith(file.path, ".osty")
+}
+
+pub fn sourceHabit(file: aidev.SourceFile) -> String {
+    if !isOstyFile(file) {
+        return ""
+    }
+    ostydev.classifySourceHabit(file.text).toString()
+}
+
+pub fn summarizeDraft(draft: WorkflowDraft) -> String {
+    let promptTokens = draft.promptBundle.estimatedTokens
+    "{draft.id}: {draft.status.toString()} case={draft.caseItem.sourceFingerprint} prompt_tokens={promptTokens}"
+}
+
+pub fn summarizeProposal(proposal: WorkflowProposal) -> String {
+    let patchSummary = aidev.formatPatchSummary(proposal.patch)
+    "{proposal.draft.id}: {proposal.status.toString()} {patchSummary}"
+}
+
+pub fn summarizeRun(run: WorkflowRun) -> String {
+    let attempt = corpus.summarizeAttempt(run.attempt)
+    let report = verify.summarizeReport(run.verifyReport)
+    "{run.draft.id}: {run.status.toString()} | {attempt} | {report}"
+}
+
+pub fn formatSteps(steps: List<WorkflowStep>) -> String {
+    let mut out: List<String> = []
+    for item in steps {
+        out.push("{item.stage.toString()}:{item.status.toString()} {item.summary}")
+    }
+    strings.join(out, "\n")
+}

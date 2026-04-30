@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 77 공개 모듈. 분류 기준:
+총 78 공개 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (74 / 77 = 96%)
+### ⭐⭐⭐⭐⭐ Production (75 / 78 = 96%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -38,6 +38,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | aidev.prompt | 267 | pure Osty + aidev/redact/tokenest | Prompt material builders: compact/redacted fix prompts, review prompts, trust-labeled sections, token estimates, patch contract rules |
 | aidev.corpus | 366 | pure Osty + aidev/jsonl | JSONL-friendly repair corpus records: failing cases, repair attempts, before/after summaries, residual diagnostics, and corpus stats |
 | aidev.verify | 449 | pure Osty + aidev | Verification contract: command plans, host result records, required-check accounting, accept/retry/reject decisions, and report summaries |
+| aidev.workflow | 241 | pure Osty + aidev/prompt/corpus/verify | End-to-end AI coding workflow records: diagnostics to prompt, patch proposal, verification report, corpus append, and run summaries |
 | redact | 746 | pure Osty | Deneb-derived secret redaction: vendor tokens, JWTs, URL query/form distinction, JSON/env/key-value, DB URLs, URL userinfo, Telegram/Discord/phone/private-key handling |
 | media | 617 | pure Osty + bytes | Deneb-derived MIME sniffing: magic bytes, icon/ftyp/OOXML ZIP, binary sampling, archive path safety, YouTube + MEDIA token helpers with file:// normalization/directive stripping |
 | security | 483 | pure Osty + url/net | Deneb-derived SSRF-safe URL checks, numeric IPv4 bypass detection, balanced URL-tail cleanup, safe link extraction, HTML escape, session-key validation |
@@ -106,7 +107,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (3 / 77 = 4%)
+### ⭐⭐⭐⭐ Production-adjacent (3 / 78 = 4%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
@@ -161,7 +162,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | 두 언어 앱 / repo 경계 | ✅ 가능 | polyglot + os + env + fs + `osty scaffold polyglot` (Osty+Go/Rust/Python/Node 등 역할 분리, 빌드/테스트/경계 계약, doctorRun/check runner) |
 | AI agent shell / chat mode | ✅ 가능 | ai + aiagents + http/json/log/thread |
 | Local KV / 설정 DB | ✅ 즉시 가능 | kv + fs + json (JSONL append-log, compact, typed getters/setters) |
-| AI code assist loop | ✅ 가능 | aidev + aidev.osty + aidev.prompt + aidev.corpus + aidev.verify (diagnostic model / source spans / fix context / patch validation / Osty source-habit hints / compact prompt material / repair corpus records / verification plans and decisions) |
+| AI code assist loop | ✅ 가능 | aidev + aidev.osty + aidev.prompt + aidev.corpus + aidev.verify + aidev.workflow (diagnostic model / source spans / fix context / patch validation / Osty source-habit hints / compact prompt material / repair corpus records / verification plans and decisions / end-to-end run records) |
 | Agent-safe logs/transcripts | ✅ 가능 | redact + security + tokenest + aiagents |
 | Local document search | ✅ 가능 | search + markdown + media + jsonl |
 | 사람이 읽는 리포트 산출물 | ✅ 가능 | report + markdown/jsonl/csv |
@@ -195,7 +196,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 54 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, redact, media, security, search, markdown, report, tokenest, httpretry, jsonl, kv, shortid, metrics, net, fmt, json, config, table, url, io, collections, email, db, polyglot, grid, gui, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
+- 55 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, jsonl, kv, shortid, metrics, net, fmt, json, config, table, url, io, collections, email, db, polyglot, grid, gui, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
 - 5 모듈은 Phase A 충실 + Phase B declaration-only (env, random, os, crypto, compress)
 - fs 는 Phase A 충실 + 확장된 tool-facing declaration surface (walk/glob/watch/atomicWrite/lockFile/hashFile/copyDir/diffFiles)
 - 나머지는 의도된 범위에서 surface 만으로 완성 (cli, math, cmp, hint, debug, ref, process, log, time, error, sync, thread, regex, testing, uuid)
@@ -263,7 +264,7 @@ stdlib audit 중 발견된 *진짜 자랑할 만한* 디자인 패턴:
 10. **`collections.windowed(size, step)`** — sliding window. Rust std 에 없음 (itertools 만)
 11. **`ai.chatHttpRequest` + `sendChat` + `ToolCall` / `ToolResult` + provider별 parser** — OpenAI-compatible / OpenRouter / Anthropic / Gemini / local runtime 연동과 tool loop 를 앱마다 JSON 문자열로 재발명하지 않아도 됨
 12. **`aiagents.ToolPreset` + `SafetyPolicy` + `rankLines`** — Deneb 의존성 없는 agent runtime 규칙을 stdlib 표면으로 포팅. chat-only/web-only 모드와 로그/도구출력 compaction trust boundary 를 앱마다 재발명하지 않아도 됨
-13. **`aidev.SourceSpan` + `Patch` + `FixContext` + `prompt.PromptBundle` + `corpus.RepairAttempt` + `verify.VerifyReport`** — AI 코드 작성 루프를 문자열 로그가 아니라 진단/소스 범위/수정 계획/패치 검증/프롬프트 재료/수리 코퍼스/검증 판정이라는 구조화된 stdlib 계약으로 다룸
+13. **`aidev.SourceSpan` + `Patch` + `FixContext` + `prompt.PromptBundle` + `corpus.RepairAttempt` + `verify.VerifyReport` + `workflow.WorkflowRun`** — AI 코드 작성 루프를 문자열 로그가 아니라 진단/소스 범위/수정 계획/패치 검증/프롬프트 재료/수리 코퍼스/검증 판정/전체 실행 기록이라는 구조화된 stdlib 계약으로 다룸
 14. **`redact` + `security` + `search` + `media` + `tokenest`** — Deneb 에서 "의존성 없이 어렵다" 쪽을 자체 구현한 부분을 stdlib 로 승격. secret 누출 방지, SSRF 우회 차단, local FTS 대체, magic-byte media sniffing, multilingual token budget 계산을 앱마다 재발명하지 않아도 됨
 
 ## 8. 다음 라운드 후보
