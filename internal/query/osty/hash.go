@@ -256,6 +256,7 @@ func hashResolvedPackage(rp *ResolvedPackage) [32]byte {
 	}
 	h.str(rp.pkg.Dir)
 	h.str(rp.pkg.Name)
+	h.bool(rp.pkg.RuntimeCapability)
 
 	// Files are already in lexicographic order by Path, but sort
 	// defensively.
@@ -725,6 +726,12 @@ func hashError(h *stableHasher, err error) {
 // ---- Input hashers ----
 
 func hashBytesInput(b []byte) [32]byte { return sha256.Sum256(b) }
+
+func hashBoolInput(v bool) [32]byte {
+	h := newHasher()
+	h.bool(v)
+	return h.sum()
+}
 
 func hashStringSlice(ss []string) [32]byte {
 	// Fast path for the single-file case — single-file LSP analyze

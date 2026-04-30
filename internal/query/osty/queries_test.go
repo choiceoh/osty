@@ -20,9 +20,37 @@ import (
 // Helper: seed one "package" with one file for tests.
 func seedFile(eng *Engine, dir, name, src string) string {
 	path := NormalizePath(dir + "/" + name)
+	dir = NormalizePath(dir)
 	eng.Inputs.SourceText.Set(eng.DB, path, []byte(src))
-	eng.Inputs.PackageFiles.Set(eng.DB, NormalizePath(dir), []string{path})
+	eng.Inputs.PackageFiles.Set(eng.DB, dir, []string{path})
+	eng.Inputs.PackageRuntimeCapability.Set(eng.DB, dir, false)
 	return path
+}
+
+func writeRuntimeCapabilityPackage(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "osty.toml"), []byte(`[package]
+name = "toolchain"
+version = "1.0.0"
+edition = "0.5"
+
+[capabilities]
+runtime = true
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.osty"), []byte("#[repr(c)]\nstruct Raw { x: Int }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func hasDiagnosticCode(ds []*diag.Diagnostic, code string) bool {
+	for _, d := range ds {
+		if d != nil && d.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 func TestParseMissThenHit(t *testing.T) {
@@ -78,6 +106,88 @@ func TestBuildPackagePreservesFrontendRuns(t *testing.T) {
 	}
 	if pkg.Files[0].File == nil {
 		t.Fatal("BuildPackage should still expose public AST compatibility output")
+	}
+}
+
+func TestRuntimeCapabilityInputInvalidatesCheckPackage(t *testing.T) {
+	eng := NewEngine()
+	defer eng.Close()
+
+	dir := NormalizePath("/tmp/pkg_runtime_capability_input")
+	_ = seedFile(eng, dir, "main.osty", "#[repr(c)]\nstruct Raw { x: Int }\n")
+
+	chk := eng.Queries.CheckPackage.Get(eng.DB, dir)
+	if !hasDiagnosticCode(chk.Diags, diag.CodeRuntimePrivilegeViolation) {
+		t.Fatalf("unprivileged check missing %s: %#v", diag.CodeRuntimePrivilegeViolation, chk.Diags)
+	}
+
+	eng.Inputs.PackageRuntimeCapability.Set(eng.DB, dir, true)
+	rp := eng.Queries.ResolvePackage.Get(eng.DB, dir)
+	if rp == nil || rp.Package() == nil || !rp.Package().RuntimeCapability {
+		t.Fatalf("ResolvePackage RuntimeCapability = %#v, want true", rp)
+	}
+	chk = eng.Queries.CheckPackage.Get(eng.DB, dir)
+	if hasDiagnosticCode(chk.Diags, diag.CodeRuntimePrivilegeViolation) {
+		t.Fatalf("privileged check retained %s: %#v", diag.CodeRuntimePrivilegeViolation, chk.Diags)
+	}
+}
+
+func TestSeedPackageDirReadsRuntimeCapability(t *testing.T) {
+	dir := t.TempDir()
+	writeRuntimeCapabilityPackage(t, dir)
+
+	eng := NewEngine()
+	defer eng.Close()
+	seeded, err := eng.SeedPackageDir(dir, nil)
+	if err != nil {
+		t.Fatalf("SeedPackageDir: %v", err)
+	}
+	if !seeded.RuntimeCapability {
+		t.Fatal("seeded RuntimeCapability = false, want true")
+	}
+	pkg := eng.Queries.BuildPackage.Get(eng.DB, seeded.Dir)
+	if pkg == nil || !pkg.RuntimeCapability {
+		t.Fatalf("BuildPackage RuntimeCapability = %#v, want true", pkg)
+	}
+}
+
+func TestSeedLoadedWorkspacePreservesRuntimeCapability(t *testing.T) {
+	root := t.TempDir()
+	writeRuntimeCapabilityPackage(t, root)
+
+	ws, err := resolve.NewWorkspace(root)
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	if _, err := ws.LoadPackageNative(""); err != nil {
+		t.Fatalf("LoadPackageNative: %v", err)
+	}
+
+	eng := NewEngine()
+	defer eng.Close()
+	seeded, err := eng.SeedLoadedWorkspace(ws)
+	if err != nil {
+		t.Fatalf("SeedLoadedWorkspace: %v", err)
+	}
+	rootDir := NormalizePath(root)
+	built := eng.Queries.BuildPackage.Get(eng.DB, rootDir)
+	if built == nil || !built.RuntimeCapability {
+		t.Fatalf("BuildPackage RuntimeCapability = %#v, want true", built)
+	}
+	rw := eng.Queries.ResolveWorkspace.Get(eng.DB, seeded.Root)
+	if rw == nil {
+		t.Fatal("ResolveWorkspace returned nil")
+	}
+	pkg := rw.PackageByDir(rootDir)
+	if pkg == nil || !pkg.RuntimeCapability {
+		t.Fatalf("workspace package RuntimeCapability = %#v, want true", pkg)
+	}
+	cw := eng.Queries.CheckWorkspace.Get(eng.DB, seeded.Root)
+	if cw == nil || cw.ResultByDir(rootDir) == nil {
+		t.Fatal("CheckWorkspace missing root result")
+	}
+	if hasDiagnosticCode(cw.ResultByDir(rootDir).Diags, diag.CodeRuntimePrivilegeViolation) {
+		t.Fatalf("workspace check retained %s: %#v", diag.CodeRuntimePrivilegeViolation, cw.ResultByDir(rootDir).Diags)
 	}
 }
 
