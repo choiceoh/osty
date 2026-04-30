@@ -574,6 +574,12 @@ func TestMonomorphMangleTypeEnumMaybeInt(t *testing.T) {
 	}
 }
 
+func TestTypeCodeOfUnitPrimitiveUsesValidCode(t *testing.T) {
+	if got := typeCodeOf(TUnit, "main"); got != "v" {
+		t.Fatalf("typeCodeOf(Unit): got %q, want %q", got, "v")
+	}
+}
+
 func TestMonomorphMangleTypeNamePartMatches(t *testing.T) {
 	// The symbol must be decomposable as `_ZTS` + <nested-template-name>.
 	req := NewMonomorphTypeRequest("main", "Box", []string{"b"})
