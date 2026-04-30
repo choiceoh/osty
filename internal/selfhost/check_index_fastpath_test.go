@@ -31,6 +31,31 @@ func TestCheckLookupExactIndexReturnsLatestValue(t *testing.T) {
 	}
 }
 
+func TestCheckFnIndexSlotReturnsLatestRegistration(t *testing.T) {
+	arena := emptyTyArena()
+	env := emptyCheckEnv(arena)
+	first := &CheckFnSig{name: "value", owner: "Box", retTy: tInt(arena)}
+	second := &CheckFnSig{name: "value", owner: "Box", retTy: tString(arena)}
+
+	checkRegisterFn(env, first)
+	key := checkFnKey("value", "Box")
+	firstSlot, ok := env.fnIndexSlots[key]
+	if !ok {
+		t.Fatalf("fnIndexSlots missing key %q", key)
+	}
+
+	checkRegisterFn(env, second)
+	if got := len(env.fnIndexKeys); got != 1 {
+		t.Fatalf("fnIndexKeys len = %d, want 1", got)
+	}
+	if got := env.fnIndexSlots[key]; got != firstSlot {
+		t.Fatalf("fnIndexSlots[%q] = %d, want %d", key, got, firstSlot)
+	}
+	if got := checkLookupFn(env, "value", "Box"); got != second {
+		t.Fatalf("checkLookupFn returned %#v, want latest registration", got)
+	}
+}
+
 func TestCheckHashKeyIsStable(t *testing.T) {
 	if got, want := checkHashKey("hello::world"), checkHashKey("hello::world"); got != want {
 		t.Fatalf("checkHashKey is not stable: %d != %d", got, want)

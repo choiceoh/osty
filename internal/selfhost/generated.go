@@ -34058,6 +34058,7 @@ type CheckEnv struct {
 	fnIndexKeys             []string
 	fnIndexHashes           []int
 	fnIndexValues           []int
+	fnIndexSlots            map[string]int
 	fnBodyKeys              []string
 	fnBodyHashes            []int
 	fields                  []*CheckFieldSig
@@ -34105,7 +34106,7 @@ type CheckEnv struct {
 
 // Osty: /tmp/selfhost_merged.osty:14398:5
 func emptyCheckEnv(tys *TyArena) *CheckEnv {
-	return &CheckEnv{tys: tys, bindings: make([]*CheckBinding, 0, 1), bindingIndexNames: make([]string, 0, 1), bindingIndexHashes: make([]int, 0, 1), bindingIndexStacks: make([][]*CheckBinding, 0, 1), fns: make([]*CheckFnSig, 0, 1), fnIndexKeys: make([]string, 0, 1), fnIndexHashes: make([]int, 0, 1), fnIndexValues: make([]int, 0, 1), fnBodyKeys: make([]string, 0, 1), fnBodyHashes: make([]int, 0, 1), fields: make([]*CheckFieldSig, 0, 1), fieldIndexKeys: make([]string, 0, 1), fieldIndexHashes: make([]int, 0, 1), fieldIndexValues: make([]int, 0, 1), variants: make([]*CheckVariantSig, 0, 1), variantIndexKeys: make([]string, 0, 1), variantIndexHashes: make([]int, 0, 1), variantIndexValues: make([]int, 0, 1), variantOwnerIndexKeys: make([]string, 0, 1), variantOwnerIndexHashes: make([]int, 0, 1), variantOwnerIndexValues: make([]int, 0, 1), aliases: make([]*CheckAliasSig, 0, 1), aliasIndexKeys: make([]string, 0, 1), aliasIndexHashes: make([]int, 0, 1), aliasIndexValues: make([]int, 0, 1), types: make([]*CheckTypeSig, 0, 1), typeIndexKeys: make([]string, 0, 1), typeIndexHashes: make([]int, 0, 1), typeIndexValues: make([]int, 0, 1), interfaces: make([]string, 0, 1), interfaceIndexKeys: make([]string, 0, 1), interfaceIndexHashes: make([]int, 0, 1), interfaceExtends: make([]*CheckInterfaceExt, 0, 1), importAliases: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1), genericBoundIndexNames: make([]string, 0, 1), genericBoundIndexHashes: make([]int, 0, 1), genericBoundIndexStacks: make([][]int, 0, 1), aliasDeepCache: make([]int, 0, 1), substCacheKeys: make([]string, 0, 1), substCacheHashes: make([]int, 0, 1), substCacheValues: make([]int, 0, 1), returnTy: tErr(tys), fnName: "", inLoop: false, diagnostics: make([]*CheckDiagnostic, 0, 1), assignments: 0, accepted: 0, bindingRecords: make([]*CheckBindingRecord, 0, 1), symbolRecords: make([]*CheckSymbolRecord, 0, 1), instantiations: make([]*CheckInstantiationRecord, 0, 1)}
+	return &CheckEnv{tys: tys, bindings: make([]*CheckBinding, 0, 1), bindingIndexNames: make([]string, 0, 1), bindingIndexHashes: make([]int, 0, 1), bindingIndexStacks: make([][]*CheckBinding, 0, 1), fns: make([]*CheckFnSig, 0, 256), fnIndexKeys: make([]string, 0, 256), fnIndexHashes: make([]int, 0, 256), fnIndexValues: make([]int, 0, 256), fnIndexSlots: make(map[string]int, 256), fnBodyKeys: make([]string, 0, 1), fnBodyHashes: make([]int, 0, 1), fields: make([]*CheckFieldSig, 0, 1), fieldIndexKeys: make([]string, 0, 1), fieldIndexHashes: make([]int, 0, 1), fieldIndexValues: make([]int, 0, 1), variants: make([]*CheckVariantSig, 0, 1), variantIndexKeys: make([]string, 0, 1), variantIndexHashes: make([]int, 0, 1), variantIndexValues: make([]int, 0, 1), variantOwnerIndexKeys: make([]string, 0, 1), variantOwnerIndexHashes: make([]int, 0, 1), variantOwnerIndexValues: make([]int, 0, 1), aliases: make([]*CheckAliasSig, 0, 1), aliasIndexKeys: make([]string, 0, 1), aliasIndexHashes: make([]int, 0, 1), aliasIndexValues: make([]int, 0, 1), types: make([]*CheckTypeSig, 0, 1), typeIndexKeys: make([]string, 0, 1), typeIndexHashes: make([]int, 0, 1), typeIndexValues: make([]int, 0, 1), interfaces: make([]string, 0, 1), interfaceIndexKeys: make([]string, 0, 1), interfaceIndexHashes: make([]int, 0, 1), interfaceExtends: make([]*CheckInterfaceExt, 0, 1), importAliases: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1), genericBoundIndexNames: make([]string, 0, 1), genericBoundIndexHashes: make([]int, 0, 1), genericBoundIndexStacks: make([][]int, 0, 1), aliasDeepCache: make([]int, 0, 1), substCacheKeys: make([]string, 0, 1), substCacheHashes: make([]int, 0, 1), substCacheValues: make([]int, 0, 1), returnTy: tErr(tys), fnName: "", inLoop: false, diagnostics: make([]*CheckDiagnostic, 0, 1), assignments: 0, accepted: 0, bindingRecords: make([]*CheckBindingRecord, 0, 1), symbolRecords: make([]*CheckSymbolRecord, 0, 1), instantiations: make([]*CheckInstantiationRecord, 0, 1)}
 }
 
 // Osty: /tmp/selfhost_merged.osty:14463:5
@@ -34267,28 +34268,42 @@ func checkRegisterFn(env *CheckEnv, sig *CheckFnSig) {
 	idx := len(env.fns)
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14553:5
-	func() struct{} { env.fns = append(env.fns, sig); return struct{}{} }()
+	env.fns = append(env.fns, sig)
 	// Osty: /tmp/selfhost_merged.osty:14554:5
 	key := checkFnKey(sig.name, sig.owner)
 	_ = key
-	// Osty: /tmp/selfhost_merged.osty:14555:5
-	keyHash := checkHashKey(key)
-	_ = keyHash
 	// Osty: /tmp/selfhost_merged.osty:14556:5
-	slot := checkNameIndex(env.fnIndexKeys, env.fnIndexHashes, key, keyHash)
+	slot := checkFnIndexSlot(env, key)
 	_ = slot
 	// Osty: /tmp/selfhost_merged.osty:14557:5
 	if slot < 0 {
+		// Osty: /tmp/selfhost_merged.osty:14555:5
+		keyHash := checkHashKey(key)
+		_ = keyHash
 		// Osty: /tmp/selfhost_merged.osty:14558:9
-		func() struct{} { env.fnIndexKeys = append(env.fnIndexKeys, key); return struct{}{} }()
+		env.fnIndexKeys = append(env.fnIndexKeys, key)
 		// Osty: /tmp/selfhost_merged.osty:14559:9
-		func() struct{} { env.fnIndexHashes = append(env.fnIndexHashes, keyHash); return struct{}{} }()
+		env.fnIndexHashes = append(env.fnIndexHashes, keyHash)
 		// Osty: /tmp/selfhost_merged.osty:14560:9
-		func() struct{} { env.fnIndexValues = append(env.fnIndexValues, idx); return struct{}{} }()
+		env.fnIndexValues = append(env.fnIndexValues, idx)
+		env.fnIndexSlots[key] = len(env.fnIndexValues) - 1
 	} else {
 		// Osty: /tmp/selfhost_merged.osty:14562:26
 		env.fnIndexValues[slot] = idx
 	}
+}
+
+func checkFnIndexSlot(env *CheckEnv, key string) int {
+	if env.fnIndexSlots == nil {
+		env.fnIndexSlots = make(map[string]int, len(env.fnIndexKeys)+1)
+		for i, existing := range env.fnIndexKeys {
+			env.fnIndexSlots[existing] = i
+		}
+	}
+	if slot, ok := env.fnIndexSlots[key]; ok {
+		return slot
+	}
+	return -1
 }
 
 func checkMarkImportAlias(env *CheckEnv, alias string) {
@@ -34343,7 +34358,12 @@ func checkLookupFn(env *CheckEnv, name string, owner string) *CheckFnSig {
 	key := checkFnKey(name, owner)
 	_ = key
 	// Osty: /tmp/selfhost_merged.osty:14583:5
-	idx := checkLookupExactIndex(env.fnIndexKeys, env.fnIndexHashes, env.fnIndexValues, key, checkHashKey(key))
+	slot := checkFnIndexSlot(env, key)
+	_ = slot
+	idx := -1
+	if slot >= 0 {
+		idx = env.fnIndexValues[slot]
+	}
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14584:5
 	if idx >= 0 {
