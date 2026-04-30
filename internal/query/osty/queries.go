@@ -531,11 +531,17 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 	qs.BuildPackage = query.Register(db, "BuildPackage",
 		func(ctx *query.Ctx, dir string) *resolve.Package {
 			files := inp.PackageFiles.Fetch(ctx, dir)
-			runtimeCapability := inp.PackageRuntimeCapability.Fetch(ctx, dir)
+			metadata := PackageMetadata{Name: packageNameFromDir(dir)}
+			if inp.PackageMetadata.HasFetch(ctx, dir) {
+				metadata = inp.PackageMetadata.Fetch(ctx, dir)
+				if metadata.Name == "" {
+					metadata.Name = packageNameFromDir(dir)
+				}
+			}
 			pkg := &resolve.Package{
 				Dir:               dir,
-				Name:              packageNameFromDir(dir),
-				RuntimeCapability: runtimeCapability,
+				Name:              metadata.Name,
+				RuntimeCapability: metadata.RuntimeCapability,
 				Files:             make([]*resolve.PackageFile, 0, len(files)),
 			}
 			for _, f := range files {

@@ -755,6 +755,13 @@ func hashStringSlice(ss []string) [32]byte {
 	return h.sum()
 }
 
+func hashPackageMetadata(m PackageMetadata) [32]byte {
+	h := newHasher()
+	h.str(m.Name)
+	h.bool(m.RuntimeCapability)
+	return h.sum()
+}
+
 func hashWorkspacePackageSlice(ms []WorkspacePackage) [32]byte {
 	h := newHasher()
 	if len(ms) == 0 {
