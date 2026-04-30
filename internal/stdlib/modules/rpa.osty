@@ -1,0 +1,1089 @@
+// std.rpa - desktop automation plans for repetitive work.
+//
+// This module stays host-tool-backed instead of pretending that mouse,
+// keyboard, and window-manager access is portable inside the language
+// runtime. It gives Osty programs a typed automation script model, OS-specific
+// command plans, and parsers for common window-list output. The default
+// backends target practical tools: cliclick/osascript on macOS, xdotool on X11,
+// and PowerShell on Windows.
+
+use std.error
+use std.os
+use std.strings
+
+pub enum Platform {
+    MacOS,
+    WindowsDesktop,
+    LinuxX11,
+    LinuxWayland,
+    CustomPlatform,
+
+    pub fn toString(self) -> String {
+        match self {
+            MacOS          -> "macos",
+            WindowsDesktop -> "windows",
+            LinuxX11       -> "linux-x11",
+            LinuxWayland   -> "linux-wayland",
+            CustomPlatform -> "custom",
+        }
+    }
+}
+
+pub enum MouseButton {
+    LeftButton,
+    RightButton,
+    MiddleButton,
+
+    pub fn number(self) -> Int {
+        match self {
+            LeftButton   -> 1,
+            MiddleButton -> 2,
+            RightButton  -> 3,
+        }
+    }
+
+    pub fn cliclickName(self) -> String {
+        match self {
+            LeftButton   -> "c",
+            RightButton  -> "rc",
+            MiddleButton -> "mc",
+        }
+    }
+}
+
+pub enum ScrollDirection {
+    ScrollUp,
+    ScrollDown,
+    ScrollLeft,
+    ScrollRight,
+}
+
+pub enum Modifier {
+    Shift,
+    Control,
+    Alt,
+    Meta,
+}
+
+pub enum MatchMode {
+    MatchContains,
+    MatchExact,
+    MatchPrefix,
+    MatchSuffix,
+}
+
+pub enum WindowState {
+    WindowUnknown,
+    WindowVisible,
+    WindowMinimized,
+    WindowFocused,
+}
+
+pub struct Point {
+    pub x: Int = 0,
+    pub y: Int = 0,
+
+    pub fn translate(self, dx: Int, dy: Int) -> Point {
+        Point { x: self.x + dx, y: self.y + dy }
+    }
+
+    pub fn toPair(self) -> String {
+        "{self.x},{self.y}"
+    }
+}
+
+pub struct Bounds {
+    pub x: Int = 0,
+    pub y: Int = 0,
+    pub width: Int = 0,
+    pub height: Int = 0,
+
+    pub fn isEmpty(self) -> Bool {
+        self.width <= 0 || self.height <= 0
+    }
+
+    pub fn contains(self, p: Point) -> Bool {
+        p.x >= self.x && p.y >= self.y && p.x < self.x + self.width && p.y < self.y + self.height
+    }
+
+    pub fn center(self) -> Point {
+        Point { x: self.x + self.width / 2, y: self.y + self.height / 2 }
+    }
+}
+
+pub struct WindowQuery {
+    pub title: String = "",
+    pub appName: String = "",
+    pub processName: String = "",
+    pub id: String = "",
+    pub mode: MatchMode,
+    pub onlyVisible: Bool = true,
+    pub limit: Int = 20,
+
+    pub fn matches(self, win: WindowInfo) -> Bool {
+        matchesWindow(win, self)
+    }
+
+    pub fn withLimit(mut self, limit: Int) -> WindowQuery {
+        self.limit = limit
+        self
+    }
+
+    pub fn visible(mut self, onlyVisible: Bool) -> WindowQuery {
+        self.onlyVisible = onlyVisible
+        self
+    }
+}
+
+pub struct WindowInfo {
+    pub id: String = "",
+    pub appName: String = "",
+    pub processName: String = "",
+    pub title: String = "",
+    pub bounds: Bounds,
+    pub state: WindowState,
+
+    pub fn label(self) -> String {
+        if self.appName.isEmpty() {
+            self.title
+        } else if self.title.isEmpty() {
+            self.appName
+        } else {
+            "{self.appName} - {self.title}"
+        }
+    }
+}
+
+pub struct Backend {
+    pub platform: Platform,
+    pub mouseCommand: String = "",
+    pub keyboardCommand: String = "",
+    pub windowCommand: String = "",
+    pub shellCommand: String = "",
+    pub dryRun: Bool = false,
+
+    pub fn dry(mut self) -> Backend {
+        self.dryRun = true
+        self
+    }
+
+    pub fn withMouseCommand(mut self, command: String) -> Backend {
+        self.mouseCommand = command
+        self
+    }
+
+    pub fn withKeyboardCommand(mut self, command: String) -> Backend {
+        self.keyboardCommand = command
+        self
+    }
+
+    pub fn withWindowCommand(mut self, command: String) -> Backend {
+        self.windowCommand = command
+        self
+    }
+}
+
+pub struct CommandPlan {
+    pub command: String,
+    pub args: List<String>,
+    pub description: String,
+    pub sensitive: Bool = false,
+    pub capturesWindows: Bool = false,
+
+    pub fn commandLine(self) -> String {
+        let mut parts = [self.command]
+        for arg in self.args {
+            parts.push(arg)
+        }
+        strings.join(parts, " ")
+    }
+
+    pub fn sensitive(mut self) -> CommandPlan {
+        self.sensitive = true
+        self
+    }
+}
+
+pub enum Action {
+    MoveMouse(Point),
+    ClickMouse(Point, MouseButton, Int),
+    DragMouse(Point, Point, Int),
+    ScrollMouse(ScrollDirection, Int),
+    TypeText(String),
+    KeyTap(List<Modifier>, String),
+    PasteText(String),
+    FindWindows(WindowQuery),
+    FocusWindow(WindowQuery),
+    WaitWindow(WindowQuery, Int, Int),
+    Pause(Int),
+
+    pub fn description(self) -> String {
+        match self {
+            MoveMouse(pos) -> "move mouse to {pos.toPair()}",
+            ClickMouse(pos, button, clicks) -> "click {button.number()} at {pos.toPair()} x{clicks}",
+            DragMouse(from, to, _) -> "drag from {from.toPair()} to {to.toPair()}",
+            ScrollMouse(_, amount) -> "scroll {amount}",
+            TypeText(text) -> "type {text.charCount()} chars",
+            KeyTap(_, key) -> "press {key}",
+            PasteText(text) -> "paste {text.charCount()} chars",
+            FindWindows(query) -> "find windows {query.title}",
+            FocusWindow(query) -> "focus window {query.title}",
+            WaitWindow(query, timeoutMillis, _) -> "wait {timeoutMillis}ms for window {query.title}",
+            Pause(millis) -> "pause {millis}ms",
+        }
+    }
+}
+
+pub struct ActionResult {
+    pub action: Action,
+    pub plan: CommandPlan,
+    pub output: os.Output? = None,
+    pub skipped: Bool = false,
+    pub windows: List<WindowInfo> = [],
+
+    pub fn ok(self) -> Bool {
+        match self.output {
+            Some(out) -> out.exitCode == 0,
+            None      -> self.skipped,
+        }
+    }
+}
+
+pub struct Script {
+    pub actions: List<Action>,
+    pub defaultDelayMillis: Int = 0,
+    pub repeatCount: Int = 1,
+
+    pub fn append(mut self, action: Action) -> Script {
+        self.actions.push(action)
+        self
+    }
+
+    pub fn delay(mut self, millis: Int) -> Script {
+        self.defaultDelayMillis = millis
+        self
+    }
+
+    pub fn repeat(mut self, count: Int) -> Script {
+        self.repeatCount = maxInt(1, count)
+        self
+    }
+}
+
+pub fn point(x: Int, y: Int) -> Point {
+    Point { x, y }
+}
+
+pub fn bounds(x: Int, y: Int, width: Int, height: Int) -> Bounds {
+    Bounds { x, y, width, height }
+}
+
+pub fn windowQuery() -> WindowQuery {
+    WindowQuery {
+        mode: MatchContains,
+    }
+}
+
+pub fn titleContains(title: String) -> WindowQuery {
+    let mut query = windowQuery()
+    query.title = title
+    query
+}
+
+pub fn appContains(appName: String) -> WindowQuery {
+    let mut query = windowQuery()
+    query.appName = appName
+    query
+}
+
+pub fn processContains(processName: String) -> WindowQuery {
+    let mut query = windowQuery()
+    query.processName = processName
+    query
+}
+
+pub fn windowID(id: String) -> WindowQuery {
+    let mut query = windowQuery()
+    query.id = id
+    query.mode = MatchExact
+    query
+}
+
+pub fn exactTitle(title: String) -> WindowQuery {
+    let mut query = titleContains(title)
+    query.mode = MatchExact
+    query
+}
+
+pub fn macBackend() -> Backend {
+    Backend {
+        platform: MacOS,
+        mouseCommand: "cliclick",
+        keyboardCommand: "osascript",
+        windowCommand: "osascript",
+        shellCommand: "sh",
+    }
+}
+
+pub fn linuxX11Backend() -> Backend {
+    Backend {
+        platform: LinuxX11,
+        mouseCommand: "xdotool",
+        keyboardCommand: "xdotool",
+        windowCommand: "xdotool",
+        shellCommand: "sh",
+    }
+}
+
+pub fn linuxWaylandBackend() -> Backend {
+    Backend {
+        platform: LinuxWayland,
+        mouseCommand: "ydotool",
+        keyboardCommand: "ydotool",
+        windowCommand: "wlrctl",
+        shellCommand: "sh",
+    }
+}
+
+pub fn windowsBackend() -> Backend {
+    Backend {
+        platform: WindowsDesktop,
+        mouseCommand: "powershell",
+        keyboardCommand: "powershell",
+        windowCommand: "powershell",
+        shellCommand: "powershell",
+    }
+}
+
+pub fn customBackend(platform: Platform, mouseCommand: String, keyboardCommand: String, windowCommand: String) -> Backend {
+    Backend {
+        platform,
+        mouseCommand,
+        keyboardCommand,
+        windowCommand,
+        shellCommand: "",
+    }
+}
+
+pub fn moveTo(x: Int, y: Int) -> Action {
+    MoveMouse(point(x, y))
+}
+
+pub fn clickAt(x: Int, y: Int) -> Action {
+    ClickMouse(point(x, y), LeftButton, 1)
+}
+
+pub fn doubleClickAt(x: Int, y: Int) -> Action {
+    ClickMouse(point(x, y), LeftButton, 2)
+}
+
+pub fn rightClickAt(x: Int, y: Int) -> Action {
+    ClickMouse(point(x, y), RightButton, 1)
+}
+
+pub fn click(pos: Point, button: MouseButton, clicks: Int) -> Action {
+    ClickMouse(pos, button, maxInt(1, clicks))
+}
+
+pub fn drag(from: Point, to: Point, durationMillis: Int) -> Action {
+    DragMouse(from, to, maxInt(0, durationMillis))
+}
+
+pub fn scroll(direction: ScrollDirection, amount: Int) -> Action {
+    ScrollMouse(direction, maxInt(1, amount))
+}
+
+pub fn typeText(text: String) -> Action {
+    TypeText(text)
+}
+
+pub fn keyTap(key: String) -> Action {
+    KeyTap([], key)
+}
+
+pub fn hotkey(modifiers: List<Modifier>, key: String) -> Action {
+    KeyTap(modifiers, key)
+}
+
+pub fn pasteText(text: String) -> Action {
+    PasteText(text)
+}
+
+pub fn findWindowsAction(query: WindowQuery) -> Action {
+    FindWindows(query)
+}
+
+pub fn focus(query: WindowQuery) -> Action {
+    FocusWindow(query)
+}
+
+pub fn waitWindow(query: WindowQuery, timeoutMillis: Int, pollMillis: Int) -> Action {
+    WaitWindow(query, maxInt(0, timeoutMillis), maxInt(50, pollMillis))
+}
+
+pub fn pause(millis: Int) -> Action {
+    Pause(maxInt(0, millis))
+}
+
+pub fn script(actions: List<Action>) -> Script {
+    Script { actions }
+}
+
+pub fn repeatAction(action: Action, count: Int) -> Script {
+    script([action]).repeat(count)
+}
+
+pub fn plan(action: Action, backend: Backend) -> Result<CommandPlan, Error> {
+    planAction(action, backend)
+}
+
+pub fn plans(scriptValue: Script, backend: Backend) -> Result<List<CommandPlan>, Error> {
+    let mut out: List<CommandPlan> = []
+    let actions = expand(scriptValue)
+    for action in actions {
+        out.push(planAction(action, backend)?)
+        if scriptValue.defaultDelayMillis > 0 {
+            out.push(pausePlan(scriptValue.defaultDelayMillis, backend)?)
+        }
+    }
+    Ok(out)
+}
+
+pub fn run(action: Action, backend: Backend) -> Result<ActionResult, Error> {
+    match action {
+        WaitWindow(query, timeoutMillis, pollMillis) -> runWaitWindow(query, timeoutMillis, pollMillis, backend),
+        _ -> runPlanned(action, backend),
+    }
+}
+
+pub fn runScript(scriptValue: Script, backend: Backend) -> Result<List<ActionResult>, Error> {
+    let mut out: List<ActionResult> = []
+    let actions = expand(scriptValue)
+    for action in actions {
+        out.push(run(action, backend)?)
+        if scriptValue.defaultDelayMillis > 0 {
+            out.push(run(Pause(scriptValue.defaultDelayMillis), backend)?)
+        }
+    }
+    Ok(out)
+}
+
+pub fn findWindows(query: WindowQuery, backend: Backend) -> Result<List<WindowInfo>, Error> {
+    let plan = findWindowPlan(query, backend)?
+    if backend.dryRun {
+        return Ok([])
+    }
+    let output = os.exec(plan.command, plan.args)?
+    Ok(filterWindows(parseWindowList(output.stdout, backend.platform), query))
+}
+
+pub fn firstWindow(query: WindowQuery, backend: Backend) -> Result<WindowInfo?, Error> {
+    let wins = findWindows(query, backend)?
+    if wins.isEmpty() {
+        Ok(None)
+    } else {
+        Ok(Some(wins[0]))
+    }
+}
+
+pub fn focusFirstWindow(query: WindowQuery, backend: Backend) -> Result<ActionResult, Error> {
+    run(FocusWindow(query), backend)
+}
+
+pub fn parseWindowList(text: String, platform: Platform) -> List<WindowInfo> {
+    let mut out: List<WindowInfo> = []
+    for line in strings.splitLines(text) {
+        let trimmed = strings.trimSpace(line)
+        if trimmed.isEmpty() {
+            continue
+        }
+        out.push(parseWindowLine(trimmed, platform))
+    }
+    out
+}
+
+pub fn filterWindows(windows: List<WindowInfo>, query: WindowQuery) -> List<WindowInfo> {
+    let mut out: List<WindowInfo> = []
+    for win in windows {
+        if matchesWindow(win, query) {
+            out.push(win)
+            if query.limit > 0 && out.len() >= query.limit {
+                return out
+            }
+        }
+    }
+    out
+}
+
+pub fn matchesWindow(win: WindowInfo, query: WindowQuery) -> Bool {
+    if !query.id.isEmpty() && win.id != query.id {
+        return false
+    }
+    if !query.title.isEmpty() && !matchText(win.title, query.title, query.mode) {
+        return false
+    }
+    if !query.appName.isEmpty() && !matchText(win.appName, query.appName, query.mode) {
+        return false
+    }
+    if !query.processName.isEmpty() && !matchText(win.processName, query.processName, query.mode) {
+        return false
+    }
+    if query.onlyVisible && win.state == WindowMinimized {
+        return false
+    }
+    true
+}
+
+pub fn summarize(scriptValue: Script) -> String {
+    let mut lines: List<String> = []
+    for action in expand(scriptValue) {
+        lines.push(action.description())
+    }
+    strings.join(lines, "\n")
+}
+
+fn runPlanned(action: Action, backend: Backend) -> Result<ActionResult, Error> {
+    let plan = planAction(action, backend)?
+    if backend.dryRun {
+        return Ok(ActionResult { action, plan, skipped: true })
+    }
+    let output = os.exec(plan.command, plan.args)?
+    let windows = if plan.capturesWindows {
+        filterWindows(parseWindowList(output.stdout, backend.platform), queryForAction(action))
+    } else {
+        []
+    }
+    Ok(ActionResult {
+        action,
+        plan,
+        output: Some(output),
+        windows,
+    })
+}
+
+fn runWaitWindow(query: WindowQuery, timeoutMillis: Int, pollMillis: Int, backend: Backend) -> Result<ActionResult, Error> {
+    let action = WaitWindow(query, timeoutMillis, pollMillis)
+    let plan = findWindowPlan(query, backend)?
+    if backend.dryRun {
+        return Ok(ActionResult { action, plan, skipped: true })
+    }
+    let mut elapsed = 0
+    for elapsed <= timeoutMillis {
+        let output = os.exec(plan.command, plan.args)?
+        let wins = filterWindows(parseWindowList(output.stdout, backend.platform), query)
+        if !wins.isEmpty() {
+            return Ok(ActionResult {
+                action,
+                plan,
+                output: Some(output),
+                windows: wins,
+            })
+        }
+        let pause = pausePlan(pollMillis, backend)?
+        let _ = os.exec(pause.command, pause.args)?
+        elapsed = elapsed + pollMillis
+    }
+    Err(error.new("rpa: window wait timed out"))
+}
+
+fn planAction(action: Action, backend: Backend) -> Result<CommandPlan, Error> {
+    match action {
+        MoveMouse(pos) -> movePlan(pos, backend),
+        ClickMouse(pos, button, clicks) -> clickPlan(pos, button, clicks, backend),
+        DragMouse(from, to, durationMillis) -> dragPlan(from, to, durationMillis, backend),
+        ScrollMouse(direction, amount) -> scrollPlan(direction, amount, backend),
+        TypeText(text) -> typePlan(text, backend),
+        KeyTap(modifiers, key) -> keyPlan(modifiers, key, backend),
+        PasteText(text) -> pastePlan(text, backend),
+        FindWindows(query) -> findWindowPlan(query, backend),
+        FocusWindow(query) -> focusWindowPlan(query, backend),
+        WaitWindow(query, _, _) -> findWindowPlan(query, backend),
+        Pause(millis) -> pausePlan(millis, backend),
+    }
+}
+
+fn movePlan(pos: Point, backend: Backend) -> Result<CommandPlan, Error> {
+    match backend.platform {
+        MacOS -> Ok(planOf(backend.mouseCommand, ["m:{pos.toPair()}"], "move mouse to {pos.toPair()}")),
+        LinuxX11 -> Ok(planOf(backend.mouseCommand, ["mousemove", "{pos.x}", "{pos.y}"], "move mouse to {pos.toPair()}")),
+        LinuxWayland -> Ok(planOf(backend.mouseCommand, ["mousemove", "--absolute", "{pos.x}", "{pos.y}"], "move mouse to {pos.toPair()}")),
+        WindowsDesktop -> Ok(powershellPlan(windowsMouseMoveScript(pos), "move mouse to {pos.toPair()}")),
+        CustomPlatform -> Err(error.new("rpa: custom mouse backend needs an adapter")),
+    }
+}
+
+fn clickPlan(pos: Point, button: MouseButton, clicks: Int, backend: Backend) -> Result<CommandPlan, Error> {
+    let n = maxInt(1, clicks)
+    match backend.platform {
+        MacOS -> {
+            let verb = if n > 1 && button == LeftButton { "dc" } else { button.cliclickName() }
+            Ok(planOf(backend.mouseCommand, ["{verb}:{pos.toPair()}"], "click at {pos.toPair()}"))
+        },
+        LinuxX11 -> Ok(planOf(backend.mouseCommand, ["mousemove", "{pos.x}", "{pos.y}", "click", "--repeat", "{n}", "{button.number()}"], "click at {pos.toPair()}")),
+        LinuxWayland -> Ok(planOf(backend.mouseCommand, ["mousemove", "--absolute", "{pos.x}", "{pos.y}", "click", "{button.number()}"], "click at {pos.toPair()}")),
+        WindowsDesktop -> Ok(powershellPlan(windowsClickScript(pos, button, n), "click at {pos.toPair()}")),
+        CustomPlatform -> Err(error.new("rpa: custom mouse backend needs an adapter")),
+    }
+}
+
+fn dragPlan(from: Point, to: Point, durationMillis: Int, backend: Backend) -> Result<CommandPlan, Error> {
+    match backend.platform {
+        MacOS -> Ok(planOf(backend.mouseCommand, ["dd:{from.toPair()}", "w:{durationMillis}", "du:{to.toPair()}"], "drag mouse")),
+        LinuxX11 -> Ok(planOf(backend.mouseCommand, ["mousemove", "{from.x}", "{from.y}", "mousedown", "1", "mousemove", "--sync", "{to.x}", "{to.y}", "mouseup", "1"], "drag mouse")),
+        LinuxWayland -> Ok(planOf(backend.mouseCommand, ["mousemove", "--absolute", "{from.x}", "{from.y}", "click", "0x40", "mousemove", "--absolute", "{to.x}", "{to.y}", "click", "0x80"], "drag mouse")),
+        WindowsDesktop -> Ok(powershellPlan(windowsDragScript(from, to, durationMillis), "drag mouse")),
+        CustomPlatform -> Err(error.new("rpa: custom mouse backend needs an adapter")),
+    }
+}
+
+fn scrollPlan(direction: ScrollDirection, amount: Int, backend: Backend) -> Result<CommandPlan, Error> {
+    let n = maxInt(1, amount)
+    match backend.platform {
+        MacOS -> Ok(planOf(backend.mouseCommand, ["{cliclickScroll(direction)}:{n}"], "scroll")),
+        LinuxX11 -> Ok(planOf(backend.mouseCommand, ["click", "--repeat", "{n}", "{x11ScrollButton(direction)}"], "scroll")),
+        LinuxWayland -> Ok(planOf(backend.mouseCommand, ["wheel", "{waylandWheel(direction, n)}"], "scroll")),
+        WindowsDesktop -> Ok(powershellPlan(windowsScrollScript(direction, n), "scroll")),
+        CustomPlatform -> Err(error.new("rpa: custom mouse backend needs an adapter")),
+    }
+}
+
+fn typePlan(text: String, backend: Backend) -> Result<CommandPlan, Error> {
+    match backend.platform {
+        MacOS -> Ok(osascriptPlan("tell application \"System Events\" to keystroke \"{appleString(text)}\"", "type text").sensitive()),
+        LinuxX11 -> Ok(planOf(backend.keyboardCommand, ["type", "--clearmodifiers", text], "type text").sensitive()),
+        LinuxWayland -> Ok(planOf(backend.keyboardCommand, ["type", text], "type text").sensitive()),
+        WindowsDesktop -> Ok(powershellPlan(windowsSendKeysScript(sendKeysEscape(text)), "type text").sensitive()),
+        CustomPlatform -> Err(error.new("rpa: custom keyboard backend needs an adapter")),
+    }
+}
+
+fn keyPlan(modifiers: List<Modifier>, key: String, backend: Backend) -> Result<CommandPlan, Error> {
+    match backend.platform {
+        MacOS -> Ok(osascriptPlan(macKeyScript(modifiers, key), "press key")),
+        LinuxX11 -> Ok(planOf(backend.keyboardCommand, ["key", x11KeyChord(modifiers, key)], "press key")),
+        LinuxWayland -> Ok(planOf(backend.keyboardCommand, ["key", x11KeyChord(modifiers, key)], "press key")),
+        WindowsDesktop -> Ok(powershellPlan(windowsSendKeysScript(windowsKeyChord(modifiers, key)), "press key")),
+        CustomPlatform -> Err(error.new("rpa: custom keyboard backend needs an adapter")),
+    }
+}
+
+fn pastePlan(text: String, backend: Backend) -> Result<CommandPlan, Error> {
+    match backend.platform {
+        MacOS -> Ok(osascriptPlan("set the clipboard to \"{appleString(text)}\"\ntell application \"System Events\" to keystroke \"v\" using {command down}", "paste text").sensitive()),
+        LinuxX11 -> Ok(planOf("sh", ["-lc", "printf %s \"$1\" | xclip -selection clipboard && xdotool key ctrl+v", "osty-rpa", text], "paste text").sensitive()),
+        LinuxWayland -> Ok(planOf("sh", ["-lc", "printf %s \"$1\" | wl-copy && wtype -M ctrl v -m ctrl", "osty-rpa", text], "paste text").sensitive()),
+        WindowsDesktop -> Ok(powershellPlan("Set-Clipboard -Value '{psSingle(text)}'; $wshell = New-Object -ComObject WScript.Shell; $wshell.SendKeys('^v')", "paste text").sensitive()),
+        CustomPlatform -> Err(error.new("rpa: custom keyboard backend needs an adapter")),
+    }
+}
+
+fn findWindowPlan(query: WindowQuery, backend: Backend) -> Result<CommandPlan, Error> {
+    match backend.platform {
+        MacOS -> {
+            let plan = osascriptPlan(macFindWindowsScript(), "find windows")
+            Ok(CommandPlan { command: plan.command, args: plan.args, description: plan.description, capturesWindows: true })
+        },
+        LinuxX11 -> Ok(CommandPlan {
+            command: "sh",
+            args: ["-lc", x11FindWindowsShell(query), "osty-rpa", query.title],
+            description: "find windows",
+            capturesWindows: true,
+        }),
+        LinuxWayland -> Ok(CommandPlan {
+            command: backend.windowCommand,
+            args: ["toplevel", "list"],
+            description: "find windows",
+            capturesWindows: true,
+        }),
+        WindowsDesktop -> Ok(CommandPlan {
+            command: backend.windowCommand,
+            args: ["-NoProfile", "-Command", windowsFindWindowsScript(query)],
+            description: "find windows",
+            capturesWindows: true,
+        }),
+        CustomPlatform -> Err(error.new("rpa: custom window backend needs an adapter")),
+    }
+}
+
+fn focusWindowPlan(query: WindowQuery, backend: Backend) -> Result<CommandPlan, Error> {
+    match backend.platform {
+        MacOS -> Ok(osascriptPlan(macFocusWindowScript(query), "focus window")),
+        LinuxX11 -> Ok(planOf("sh", ["-lc", "xdotool search --onlyvisible --name \"$1\" windowactivate %@ ", "osty-rpa", query.title], "focus window")),
+        LinuxWayland -> Ok(planOf(backend.windowCommand, ["toplevel", "focus", query.title], "focus window")),
+        WindowsDesktop -> Ok(powershellPlan("$wshell = New-Object -ComObject WScript.Shell; $wshell.AppActivate('{psSingle(bestQueryText(query))}')", "focus window")),
+        CustomPlatform -> Err(error.new("rpa: custom window backend needs an adapter")),
+    }
+}
+
+fn pausePlan(millis: Int, backend: Backend) -> Result<CommandPlan, Error> {
+    let n = maxInt(0, millis)
+    match backend.platform {
+        MacOS -> Ok(osascriptPlan("delay {secondsForMillis(n)}", "pause")),
+        LinuxX11 | LinuxWayland -> Ok(planOf("sleep", ["{secondsForMillis(n)}"], "pause")),
+        WindowsDesktop -> Ok(powershellPlan("Start-Sleep -Milliseconds {n}", "pause")),
+        CustomPlatform -> Ok(planOf("sleep", ["{secondsForMillis(n)}"], "pause")),
+    }
+}
+
+fn expand(scriptValue: Script) -> List<Action> {
+    let mut out: List<Action> = []
+    let repeat = maxInt(1, scriptValue.repeatCount)
+    let mut i = 0
+    for i < repeat {
+        for action in scriptValue.actions {
+            out.push(action)
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn queryForAction(action: Action) -> WindowQuery {
+    match action {
+        FindWindows(query) -> query,
+        WaitWindow(query, _, _) -> query,
+        FocusWindow(query) -> query,
+        _ -> windowQuery(),
+    }
+}
+
+fn parseWindowLine(line: String, platform: Platform) -> WindowInfo {
+    match platform {
+        LinuxWayland -> parseWaylandWindowLine(line),
+        _ -> parseTabbedWindowLine(line),
+    }
+}
+
+fn parseTabbedWindowLine(line: String) -> WindowInfo {
+    let fields = strings.split(line, "\t")
+    WindowInfo {
+        id: fieldOrEmpty(fields, 0),
+        appName: fieldOrEmpty(fields, 1),
+        processName: fieldOrEmpty(fields, 1),
+        title: fieldOrEmpty(fields, 2),
+        bounds: parseBoundsField(fieldOrEmpty(fields, 3)),
+        state: WindowVisible,
+    }
+}
+
+fn parseWaylandWindowLine(line: String) -> WindowInfo {
+    WindowInfo {
+        id: "",
+        appName: "",
+        processName: "",
+        title: strings.trimSpace(line),
+        bounds: Bounds {},
+        state: WindowVisible,
+    }
+}
+
+fn parseBoundsField(text: String) -> Bounds {
+    let parts = strings.split(text, ",")
+    if parts.len() < 4 {
+        return Bounds {}
+    }
+    Bounds {
+        x: intOrZero(parts[0]),
+        y: intOrZero(parts[1]),
+        width: intOrZero(parts[2]),
+        height: intOrZero(parts[3]),
+    }
+}
+
+fn fieldOrEmpty(fields: List<String>, index: Int) -> String {
+    if index < 0 || index >= fields.len() {
+        ""
+    } else {
+        strings.trimSpace(fields[index])
+    }
+}
+
+fn intOrZero(text: String) -> Int {
+    match strings.toInt(strings.trimSpace(text)) {
+        Ok(n) -> n,
+        Err(_) -> 0,
+    }
+}
+
+fn matchText(text: String, needle: String, mode: MatchMode) -> Bool {
+    let t = strings.toLower(text)
+    let n = strings.toLower(needle)
+    match mode {
+        MatchContains -> strings.contains(t, n),
+        MatchExact    -> t == n,
+        MatchPrefix   -> strings.startsWith(t, n),
+        MatchSuffix   -> strings.endsWith(t, n),
+    }
+}
+
+fn bestQueryText(query: WindowQuery) -> String {
+    if !query.title.isEmpty() {
+        return query.title
+    }
+    if !query.appName.isEmpty() {
+        return query.appName
+    }
+    if !query.processName.isEmpty() {
+        return query.processName
+    }
+    query.id
+}
+
+fn planOf(command: String, args: List<String>, description: String) -> CommandPlan {
+    CommandPlan {
+        command,
+        args,
+        description,
+    }
+}
+
+fn osascriptPlan(scriptText: String, description: String) -> CommandPlan {
+    planOf("osascript", ["-e", scriptText], description)
+}
+
+fn powershellPlan(scriptText: String, description: String) -> CommandPlan {
+    planOf("powershell", ["-NoProfile", "-Command", scriptText], description)
+}
+
+fn appleString(text: String) -> String {
+    strings.replaceAll(strings.replaceAll(text, "\\", "\\\\"), "\"", "\\\"")
+}
+
+fn psSingle(text: String) -> String {
+    strings.replaceAll(text, "'", "''")
+}
+
+fn sendKeysEscape(text: String) -> String {
+    let mut out = ""
+    for c in text.chars() {
+        if c == '+' || c == '^' || c == '%' || c == '~' || c == '(' || c == ')' || c == '\{' || c == '\}' {
+            out = "{out}{{}{c}{}}"
+        } else {
+            out = "{out}{c}"
+        }
+    }
+    out
+}
+
+fn cliclickScroll(direction: ScrollDirection) -> String {
+    match direction {
+        ScrollUp    -> "wu",
+        ScrollDown  -> "wd",
+        ScrollLeft  -> "wl",
+        ScrollRight -> "wr",
+    }
+}
+
+fn x11ScrollButton(direction: ScrollDirection) -> String {
+    match direction {
+        ScrollUp    -> "4",
+        ScrollDown  -> "5",
+        ScrollLeft  -> "6",
+        ScrollRight -> "7",
+    }
+}
+
+fn waylandWheel(direction: ScrollDirection, amount: Int) -> String {
+    match direction {
+        ScrollUp    -> "0 {amount}",
+        ScrollDown  -> "0 -{amount}",
+        ScrollLeft  -> "-{amount} 0",
+        ScrollRight -> "{amount} 0",
+    }
+}
+
+fn x11KeyChord(modifiers: List<Modifier>, key: String) -> String {
+    let mut parts: List<String> = []
+    for modifier in modifiers {
+        parts.push(x11Modifier(modifier))
+    }
+    parts.push(key)
+    strings.join(parts, "+")
+}
+
+fn x11Modifier(modifier: Modifier) -> String {
+    match modifier {
+        Shift   -> "shift",
+        Control -> "ctrl",
+        Alt     -> "alt",
+        Meta    -> "super",
+    }
+}
+
+fn macKeyScript(modifiers: List<Modifier>, key: String) -> String {
+    let usingText = macUsing(modifiers)
+    let lower = strings.toLower(key)
+    match macKeyCode(lower) {
+        Some(code) -> "tell application \"System Events\" to key code {code}{usingText}",
+        None       -> "tell application \"System Events\" to keystroke \"{appleString(key)}\"{usingText}",
+    }
+}
+
+fn macUsing(modifiers: List<Modifier>) -> String {
+    if modifiers.isEmpty() {
+        return ""
+    }
+    let mut parts: List<String> = []
+    for modifier in modifiers {
+        parts.push(macModifier(modifier))
+    }
+    " using {" + strings.join(parts, ", ") + "}"
+}
+
+fn macModifier(modifier: Modifier) -> String {
+    match modifier {
+        Shift   -> "shift down",
+        Control -> "control down",
+        Alt     -> "option down",
+        Meta    -> "command down",
+    }
+}
+
+fn macKeyCode(key: String) -> Int? {
+    match key {
+        "return" | "enter" -> Some(36),
+        "tab"              -> Some(48),
+        "space"            -> Some(49),
+        "delete"           -> Some(51),
+        "escape" | "esc"   -> Some(53),
+        "left"             -> Some(123),
+        "right"            -> Some(124),
+        "down"             -> Some(125),
+        "up"               -> Some(126),
+        _                  -> None,
+    }
+}
+
+fn windowsKeyChord(modifiers: List<Modifier>, key: String) -> String {
+    let mut prefix = ""
+    for modifier in modifiers {
+        prefix = "{prefix}{windowsModifier(modifier)}"
+    }
+    "{prefix}{windowsKey(key)}"
+}
+
+fn windowsModifier(modifier: Modifier) -> String {
+    match modifier {
+        Shift   -> "+",
+        Control -> "^",
+        Alt     -> "%",
+        Meta    -> "^{ESC}",
+    }
+}
+
+fn windowsKey(key: String) -> String {
+    match strings.toLower(key) {
+        "enter" | "return" -> "{ENTER}",
+        "tab"              -> "{TAB}",
+        "escape" | "esc"   -> "{ESC}",
+        "space"            -> " ",
+        "backspace"        -> "{BACKSPACE}",
+        "delete"           -> "{DELETE}",
+        "left"             -> "{LEFT}",
+        "right"            -> "{RIGHT}",
+        "up"               -> "{UP}",
+        "down"             -> "{DOWN}",
+        _                  -> sendKeysEscape(key),
+    }
+}
+
+fn windowsSendKeysScript(keys: String) -> String {
+    "$wshell = New-Object -ComObject WScript.Shell; $wshell.SendKeys('{psSingle(keys)}')"
+}
+
+fn windowsMouseMoveScript(pos: Point) -> String {
+    windowsUser32Preamble() + "[Native]::SetCursorPos({pos.x}, {pos.y}) | Out-Null"
+}
+
+fn windowsClickScript(pos: Point, button: MouseButton, clicks: Int) -> String {
+    let flags = windowsClickFlags(button)
+    let mut body = windowsMouseMoveScript(pos)
+    let mut i = 0
+    for i < maxInt(1, clicks) {
+        body = "{body}; [Native]::mouse_event({flags}, 0, 0, 0, 0)"
+        i = i + 1
+    }
+    body
+}
+
+fn windowsDragScript(from: Point, to: Point, durationMillis: Int) -> String {
+    windowsUser32Preamble() +
+    "[Native]::SetCursorPos({from.x}, {from.y}) | Out-Null; " +
+    "[Native]::mouse_event(2, 0, 0, 0, 0); " +
+    "Start-Sleep -Milliseconds {durationMillis}; " +
+    "[Native]::SetCursorPos({to.x}, {to.y}) | Out-Null; " +
+    "[Native]::mouse_event(4, 0, 0, 0, 0)"
+}
+
+fn windowsScrollScript(direction: ScrollDirection, amount: Int) -> String {
+    let delta = match direction {
+        ScrollUp    -> amount * 120,
+        ScrollDown  -> 0 - amount * 120,
+        ScrollLeft  -> 0 - amount * 120,
+        ScrollRight -> amount * 120,
+    }
+    let flag = match direction {
+        ScrollLeft | ScrollRight -> 4096,
+        _                       -> 2048,
+    }
+    windowsUser32Preamble() + "[Native]::mouse_event({flag}, 0, 0, {delta}, 0)"
+}
+
+fn windowsClickFlags(button: MouseButton) -> Int {
+    match button {
+        LeftButton   -> 2 + 4,
+        RightButton  -> 8 + 16,
+        MiddleButton -> 32 + 64,
+    }
+}
+
+fn windowsUser32Preamble() -> String {
+    "Add-Type -Name Native -Namespace Win32 -MemberDefinition '[DllImport(\"user32.dll\")] public static extern bool SetCursorPos(int x, int y); [DllImport(\"user32.dll\")] public static extern void mouse_event(int flags, int dx, int dy, int data, int extra);'; "
+}
+
+fn macFindWindowsScript() -> String {
+    "set output to \"\"\n" +
+    "tell application \"System Events\"\n" +
+    "repeat with proc in application processes\n" +
+    "if visible of proc then\n" +
+    "repeat with win in windows of proc\n" +
+    "set output to output & (unix id of proc as text) & tab & (name of proc as text) & tab & (name of win as text) & tab & \"0,0,0,0\" & linefeed\n" +
+    "end repeat\n" +
+    "end if\n" +
+    "end repeat\n" +
+    "end tell\n" +
+    "return output"
+}
+
+fn macFocusWindowScript(query: WindowQuery) -> String {
+    let app = appleString(if query.appName.isEmpty() { query.processName } else { query.appName })
+    if !app.isEmpty() {
+        return "tell application \"System Events\" to set frontmost of first application process whose name contains \"{app}\" to true"
+    }
+    let title = appleString(query.title)
+    "tell application \"System Events\" to perform action \"AXRaise\" of first window of first application process whose name of windows contains \"{title}\""
+}
+
+fn x11FindWindowsShell(query: WindowQuery) -> String {
+    let needle = if query.title.isEmpty() { ".*" } else { "$1" }
+    "xdotool search --onlyvisible --name \"{needle}\" | while read id; do printf '%s\\t%s\\t%s\\t0,0,0,0\\n' \"$id\" \"\" \"$(xdotool getwindowname \"$id\")\"; done"
+}
+
+fn windowsFindWindowsScript(query: WindowQuery) -> String {
+    let needle = psSingle(bestQueryText(query))
+    "$needle = '{needle}'; " +
+    "Get-Process | Where-Object \{ $_.MainWindowTitle -ne \"\" -and ($needle -eq \"\" -or $_.MainWindowTitle.ToLower().Contains($needle.ToLower()) -or $_.ProcessName.ToLower().Contains($needle.ToLower())) \} | " +
+    "Select-Object -First {maxInt(1, query.limit)} | " +
+    "ForEach-Object \{ [string]$_.Id + \"`t\" + $_.ProcessName + \"`t\" + $_.MainWindowTitle + \"`t0,0,0,0\" \}"
+}
+
+fn maxInt(a: Int, b: Int) -> Int {
+    if a > b { a } else { b }
+}
+
+fn secondsForMillis(millis: Int) -> Int {
+    if millis <= 0 {
+        return 0
+    }
+    (millis + 999) / 1000
+}
