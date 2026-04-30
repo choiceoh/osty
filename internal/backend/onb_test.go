@@ -13,11 +13,12 @@ type fakeONBLinker struct {
 	links []linkCall
 }
 
-func (f *fakeONBLinker) LinkBinary(_ context.Context, objectPaths []string, binaryPath, target string) error {
+func (f *fakeONBLinker) LinkBinary(_ context.Context, objectPaths []string, binaryPath, target string, linkLibraries []string) error {
 	f.links = append(f.links, linkCall{
-		objectPaths: append([]string(nil), objectPaths...),
-		binaryPath:  binaryPath,
-		target:      target,
+		objectPaths:   append([]string(nil), objectPaths...),
+		binaryPath:    binaryPath,
+		target:        target,
+		linkLibraries: append([]string(nil), linkLibraries...),
 	})
 	return os.WriteFile(binaryPath, []byte("onb fake binary"), 0o755)
 }

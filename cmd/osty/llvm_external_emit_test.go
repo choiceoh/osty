@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/osty/osty/internal/backend"
@@ -42,6 +43,9 @@ func TestTryExternalPackageLLVMArtifactsUsesCoveredExternalIR(t *testing.T) {
 		if req.BinaryName != "app" {
 			t.Fatalf("binary name = %q, want app", req.BinaryName)
 		}
+		if want := []string{"osty_qt", "WebView2Loader"}; !slices.Equal(req.LinkLibraries, want) {
+			t.Fatalf("link libraries = %v, want %v", req.LinkLibraries, want)
+		}
 		if string(irOut) != "; external ir" {
 			t.Fatalf("ir = %q, want external ir", irOut)
 		}
@@ -60,7 +64,7 @@ func TestTryExternalPackageLLVMArtifactsUsesCoveredExternalIR(t *testing.T) {
 	result, used, err := tryExternalPackageLLVMArtifacts(context.Background(), backend.EmitObject, backend.Layout{
 		Root:    pkg.Dir,
 		Profile: "debug",
-	}, "app", nil, "/tmp/main.osty", pkg)
+	}, "app", nil, []string{"osty_qt", "WebView2Loader"}, "/tmp/main.osty", pkg)
 	if err != nil {
 		t.Fatalf("tryExternalPackageLLVMArtifacts() error = %v", err)
 	}
@@ -87,7 +91,7 @@ func TestTryExternalPackageLLVMArtifactsSkipsWhenFeatureOverridesNativePath(t *t
 	result, used, err := tryExternalPackageLLVMArtifacts(context.Background(), backend.EmitBinary, backend.Layout{
 		Root:    pkg.Dir,
 		Profile: "debug",
-	}, "app", []string{"mir-backend"}, "/tmp/main.osty", pkg)
+	}, "app", []string{"mir-backend"}, nil, "/tmp/main.osty", pkg)
 	if err != nil {
 		t.Fatalf("tryExternalPackageLLVMArtifacts() error = %v", err)
 	}

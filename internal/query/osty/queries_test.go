@@ -25,6 +25,42 @@ func seedFile(eng *Engine, dir, name, src string) string {
 	return path
 }
 
+func TestSeedPackageDirIncludesManifestBinPath(t *testing.T) {
+	eng := NewEngine()
+	defer eng.Close()
+
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "osty.toml"), []byte(`[package]
+name = "desk"
+version = "0.1.0"
+edition = "0.5"
+
+[bin]
+path = "src/main.osty"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainPath := filepath.Join(dir, "src", "main.osty")
+	if err := os.WriteFile(mainPath, []byte("pub fn main() { }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	seeded, err := eng.SeedPackageDir(dir, nil)
+	if err != nil {
+		t.Fatalf("SeedPackageDir: %v", err)
+	}
+	want := NormalizePath(mainPath)
+	if len(seeded.Files) != 1 || seeded.Files[0] != want {
+		t.Fatalf("seeded files = %v, want [%s]", seeded.Files, want)
+	}
+	if got := eng.Inputs.SourceText.Get(eng.DB, want); string(got) != "pub fn main() { }\n" {
+		t.Fatalf("seeded source = %q", got)
+	}
+}
+
 func TestParseMissThenHit(t *testing.T) {
 	eng := NewEngine()
 	defer eng.Close()

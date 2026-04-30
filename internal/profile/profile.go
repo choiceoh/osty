@@ -79,6 +79,7 @@ type Target struct {
 	Arch   string
 	CGO    *bool // nil = leave CGO_ENABLED untouched
 	Env    map[string]string
+	Link   []string
 
 	// UserDefined is set for manifest-declared targets.
 	UserDefined bool
@@ -99,6 +100,9 @@ func (t *Target) Clone() *Target {
 		for k, v := range t.Env {
 			cp.Env[k] = v
 		}
+	}
+	if t.Link != nil {
+		cp.Link = append([]string(nil), t.Link...)
 	}
 	return &cp
 }

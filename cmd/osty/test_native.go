@@ -697,7 +697,7 @@ func compileNativeTestBundle(ctx context.Context, b backend.Backend, tmpRoot str
 	if result, usedExternal, err := tryExternalPackageLLVMArtifacts(ctx, backend.EmitObject, backend.Layout{
 		Root:    layoutRoot,
 		Profile: "test",
-	}, "", nil, sourcePath, pkg); usedExternal {
+	}, "", nil, nil, sourcePath, pkg); usedExternal {
 		if err != nil {
 			return nativeTestBundleAssets{}, err
 		}

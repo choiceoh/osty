@@ -92,6 +92,9 @@ func BuildConfig(m *manifest.Manifest) (*Config, error) {
 				t.Env[k] = v
 			}
 		}
+		if len(mt.Link) > 0 {
+			t.Link = append([]string(nil), mt.Link...)
+		}
 		c.Targets[mt.Triple] = t
 	}
 

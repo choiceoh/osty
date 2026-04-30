@@ -13,31 +13,29 @@ import (
 )
 
 // IsWorkspaceRoot reports whether dir is structured as a workspace —
-// it contains at least one immediate subdirectory (other than
-// skipDir) whose files include at least one .osty source. Pass "" for
-// skipDir to scan every subdirectory. Tools that support both
+// it contains at least one immediate subdirectory (other than skipDir)
+// whose package source discovery yields at least one .osty source. Pass
+// "" for skipDir to scan every subdirectory. Tools that support both
 // package and workspace layouts use this as a mode switch.
 func IsWorkspaceRoot(dir, skipDir string) bool {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return false
 	}
+	rootOwnedSubdirs := packageSourceSubdirs(dir)
 	for _, e := range entries {
 		if !e.IsDir() {
+			continue
+		}
+		if rootOwnedSubdirs[e.Name()] {
 			continue
 		}
 		sub := filepath.Join(dir, e.Name())
 		if sub == skipDir {
 			continue
 		}
-		subs, err := os.ReadDir(sub)
-		if err != nil {
-			continue
-		}
-		for _, s := range subs {
-			if !s.IsDir() && filepath.Ext(s.Name()) == ".osty" {
-				return true
-			}
+		if packageHasSource(sub) {
+			return true
 		}
 	}
 	return false
@@ -46,10 +44,10 @@ func IsWorkspaceRoot(dir, skipDir string) bool {
 // WorkspacePackagePaths enumerates the dotted import paths that should
 // be seeded into a Workspace rooted at dir. The output contains:
 //
-//   - "" (the root package) when dir itself holds at least one .osty
-//     file; and
-//   - each immediate subdirectory name whose files include at least
-//     one .osty source.
+//   - "" (the root package) when dir itself has package sources, including
+//     manifest-declared [bin].path / [lib].path entries; and
+//   - each immediate subdirectory name whose package source discovery yields
+//     at least one .osty source.
 //
 // The result is a read-only filesystem scan — no Workspace state is
 // touched. Callers typically iterate the returned slice and invoke
@@ -60,25 +58,50 @@ func WorkspacePackagePaths(root string) []string {
 		return nil
 	}
 	var paths []string
-	for _, e := range entries {
-		if !e.IsDir() && filepath.Ext(e.Name()) == ".osty" {
-			paths = append(paths, "")
-			break
-		}
+	if packageHasSource(root) {
+		paths = append(paths, "")
 	}
+	rootOwnedSubdirs := packageSourceSubdirs(root)
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		subs, _ := os.ReadDir(filepath.Join(root, e.Name()))
-		for _, s := range subs {
-			if !s.IsDir() && filepath.Ext(s.Name()) == ".osty" {
-				paths = append(paths, e.Name())
-				break
-			}
+		if rootOwnedSubdirs[e.Name()] {
+			continue
+		}
+		if packageHasSource(filepath.Join(root, e.Name())) {
+			paths = append(paths, e.Name())
 		}
 	}
 	return paths
+}
+
+func packageHasSource(dir string) bool {
+	paths, err := PackageSourcePaths(dir, false)
+	return err == nil && len(paths) > 0
+}
+
+func packageSourceSubdirs(root string) map[string]bool {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil
+	}
+	paths, err := PackageSourcePaths(absRoot, false)
+	if err != nil {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, path := range paths {
+		rel, err := filepath.Rel(absRoot, path)
+		if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+			continue
+		}
+		parts := strings.Split(filepath.Clean(rel), string(filepath.Separator))
+		if len(parts) > 1 && parts[0] != "." && parts[0] != "" {
+			out[parts[0]] = true
+		}
+	}
+	return out
 }
 
 // StdPrefix is the dotted-path prefix that identifies a stdlib import.

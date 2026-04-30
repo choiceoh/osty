@@ -147,11 +147,12 @@ type Entry struct {
 // Request is the backend-neutral build request shared by gen/build/run/test
 // orchestration.
 type Request struct {
-	Layout     Layout
-	Emit       EmitMode
-	Entry      Entry
-	BinaryName string
-	Features   []string
+	Layout        Layout
+	Emit          EmitMode
+	Entry         Entry
+	BinaryName    string
+	Features      []string
+	LinkLibraries []string
 }
 
 // Artifacts returns the conventional artifact paths for backend n.

@@ -195,21 +195,14 @@ func PackageRuntimeCapabilityFromManifest(dir string) bool {
 }
 
 func readPackageSources(dir string, transform resolve.SourceTransform) ([]string, map[string][]byte, error) {
-	entries, err := os.ReadDir(dir)
+	paths, err := resolve.PackageSourcePaths(dir, false)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read %s: %w", dir, err)
 	}
 	var files []string
 	sources := map[string][]byte{}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if !strings.HasSuffix(name, ".osty") || strings.HasSuffix(name, "_test.osty") {
-			continue
-		}
-		path := NormalizePath(filepath.Join(dir, name))
+	for _, path := range paths {
+		path := NormalizePath(path)
 		src, err := os.ReadFile(path)
 		if err != nil {
 			return nil, nil, fmt.Errorf("read %s: %w", path, err)

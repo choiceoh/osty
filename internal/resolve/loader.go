@@ -78,26 +78,71 @@ func LoadPackageForNativeWithOptions(dir string, opts LoadOptions) (*Package, er
 	if err != nil {
 		return nil, err
 	}
+	paths, err := PackageSourcePaths(abs, opts.IncludeTests)
+	if err != nil {
+		return nil, err
+	}
+	return loadPackageNativePaths(paths, abs, filepath.Base(abs), opts)
+}
+
+// PackageSourcePaths returns the source files that belong to a package root.
+// Root-level .osty files are included for the traditional layout, and explicit
+// manifest entry paths such as [bin].path = "src/main.osty" are added so
+// scaffolded applications with assets under the root still compile.
+func PackageSourcePaths(dir string, includeTests bool) ([]string, error) {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(abs)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", abs, err)
 	}
 	var paths []string
+	seen := map[string]bool{}
+	addSource := func(path string) {
+		path = filepath.Clean(path)
+		name := filepath.Base(path)
+		if !strings.HasSuffix(name, ".osty") {
+			return
+		}
+		if !includeTests && strings.HasSuffix(name, "_test.osty") {
+			return
+		}
+		if seen[path] {
+			return
+		}
+		seen[path] = true
+		paths = append(paths, path)
+	}
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
 		}
-		name := e.Name()
-		if !strings.HasSuffix(name, ".osty") {
-			continue
+		addSource(filepath.Join(abs, e.Name()))
+	}
+	if m := packageManifest(abs); m != nil {
+		if m.Lib != nil && m.Lib.Path != "" {
+			addSource(filepath.Join(abs, m.Lib.Path))
 		}
-		if !opts.IncludeTests && strings.HasSuffix(name, "_test.osty") {
-			continue
+		if m.Bin != nil && m.Bin.Path != "" {
+			addSource(filepath.Join(abs, m.Bin.Path))
 		}
-		paths = append(paths, filepath.Join(abs, name))
 	}
 	sort.Strings(paths)
-	return loadPackageNativePaths(paths, abs, filepath.Base(abs), opts)
+	return paths, nil
+}
+
+func packageManifest(dir string) *manifest.Manifest {
+	src, err := os.ReadFile(filepath.Join(dir, manifest.ManifestFile))
+	if err != nil {
+		return nil
+	}
+	m, err := manifest.Parse(src)
+	if err != nil {
+		return nil
+	}
+	return m
 }
 
 func loadPackageNativePaths(paths []string, dir, name string, opts LoadOptions) (*Package, error) {
