@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 90 공개 모듈. 분류 기준:
+총 91 공개 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (84 / 90 = 93%)
+### ⭐⭐⭐⭐⭐ Production (85 / 91 = 93%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -85,6 +85,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | zip | 327 | pure Osty + bytes | ZIP stored-entry encode/decode/list/extract + CRC32 |
 | term | 320 | host-backed + pure ANSI | terminal mode/size/input declarations + ANSI sequence builders |
 | websocket | 322 | pure Osty + crypto/encoding | RFC 6455 accept key + handshake headers + frame encode/decode |
+| pdf | 805 | pure Osty + bytes | PDF header/version/Info metadata, page count, object inventory, uncompressed text extraction |
 | cli | 260 | pure Osty + env | flag / option spec, parse / parseEnv / usage |
 | cmd | 214 | os shim + runtime | command builder, cwd/env/timeout, captured output, POSIX shell escaping, pipeline rendering |
 | watch | 535 | pure Osty + fs/time/cmd | polling file watcher: fs.watch snapshot parsing, typed create/modify/remove diff, debounce, hidden/build-dir filters, transform/sync command tasks |
@@ -116,7 +117,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (6 / 90 = 7%)
+### ⭐⭐⭐⭐ Production-adjacent (6 / 91 = 7%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
@@ -134,7 +135,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 
 | 구분 | 갭 |
 |---|---|
-| 없는 모듈 | 없음 (`db`, `smtp`, `zip`, `image`, `xlsx`, `schedule`, `dialog`, `watch`, `scan`, `rpa`, `barcode`, `qr`, `print`, `clipboard`, `keychain`, `secrets` surface 는 존재) |
+| 없는 모듈 | 없음 (`db`, `smtp`, `zip`, `image`, `xlsx`, `pdf`, `schedule`, `dialog`, `watch`, `scan`, `rpa`, `barcode`, `qr`, `print`, `clipboard`, `keychain`, `secrets` surface 는 존재) |
 | 남은 runtime/deep 기능 | `db driver/runtime`, `smtp TLS/socket execution`, `zip deflate`, `image pixel decode`, `keychain Linux Secret Service` |
 | 부분 구현 | `compress` 는 gzip 만 있음. deflate/zstd 계열 없음 |
 | 문서/코드 드리프트 | 일부 README/매트릭스 문구가 과거 G18 stub 정책을 아직 과장해서 남김 |
@@ -172,6 +173,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | TAR 아카이브 | ✅ 가능 | tar (ustar encode/decode/list/extract) |
 | ZIP 아카이브 | ✅ 가능 | zip (stored-entry encode/decode/list/extract, deflate 는 runtime 후보) |
 | 이미지 메타데이터 | ✅ 가능 | image (PNG / JPEG / GIF / BMP / WebP dimensions) |
+| PDF 검사 / 텍스트 추출 | ✅ 가능 | pdf (metadata / pages / objects / uncompressed text streams) |
 | OCR 엔진 연결 / 결과 분석 | ✅ 가능 | ocr (PaddleOCR v5 / Tesseract 실행 계획, JSON/TSV normalize, confidence/search/key-value/chunk helpers) |
 | 스캔→OCR 문서 자동화 | ✅ 가능 | scan + ocr + image + fs/os (SANE/custom scanner command plan, scanned page metadata, OCR batch/index/manifest) |
 | Desktop RPA / 반복 업무 자동화 | ✅ 가능 | rpa (마우스 이동/클릭/드래그/스크롤, 키 입력/hotkey/paste, 창 검색/focus/wait, 반복 스크립트, macOS/Linux/Windows command plan) |
@@ -217,7 +219,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 64 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, schedule, jsonl, kv, shortid, metrics, net, fmt, json, config, table, xlsx, url, io, collections, email, db, polyglot, grid, gui, dialog, tar, sql, xml, tui, image, ocr, rpa, scan, barcode, qr, smtp, result, option, csv, encoding, zip, term, websocket, watch, clipboard, graphql, template, i18n, char, iter, bytes)
+- 65 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, schedule, jsonl, kv, shortid, metrics, net, fmt, json, config, table, xlsx, url, io, collections, email, db, polyglot, grid, gui, dialog, tar, sql, xml, tui, image, pdf, ocr, rpa, scan, barcode, qr, smtp, result, option, csv, encoding, zip, term, websocket, watch, clipboard, graphql, template, i18n, char, iter, bytes)
 - 5 모듈은 Phase A 충실 + Phase B declaration-only (env, random, os, crypto, compress)
 - keychain/secrets 는 macOS/Windows Phase A+B 연결 완료, Linux Secret Service backend 대기
 - fs 는 Phase A 충실 + 확장된 tool-facing declaration surface (walk/glob/watch/atomicWrite/lockFile/hashFile/copyDir/diffFiles)
