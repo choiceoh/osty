@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 67 공개 모듈. 분류 기준:
+총 68 공개 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (63 / 67 = 94%)
+### ⭐⭐⭐⭐⭐ Production (64 / 68 = 94%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -37,6 +37,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | security | 483 | pure Osty + url/net | Deneb-derived SSRF-safe URL checks, numeric IPv4 bypass detection, balanced URL-tail cleanup, safe link extraction, HTML escape, session-key validation |
 | search | 357 | pure Osty | Deneb-derived stateful in-memory index + stateless search: upsert/remove/OR, Unicode tokenization, AND→OR fallback, BM25-style scoring, snippets |
 | markdown | 836 | pure Osty | Deneb-derived markdown + full-ish htmlmd conversion: Result/Options, title, noise stripping, pre/code, tables, ordered lists, links/images, emphasis, entities, multibyte-safe scanners |
+| report | 400 | pure Osty | Markdown/HTML report builder: summary cards, sections, aligned tables, chart CSV/JSON export |
 | tokenest | 305 | pure Osty + bytes | Deneb-derived model-family-aware token estimator with explicit calibration state for Claude/OpenAI/Gemini/default |
 | httpretry | 322 | pure Osty | Deneb-derived retry/backoff decisions and LLM/provider error classification with provider codes, large-session disconnect handling, context/billing/rate-limit disambiguation, and action flags |
 | jsonl | 117 | pure Osty + json | Deneb-style JSON Lines parse/append/compact helpers |
@@ -94,7 +95,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (4 / 67 = 6%)
+### ⭐⭐⭐⭐ Production-adjacent (4 / 68 = 6%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
@@ -149,6 +150,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | AI agent shell / chat mode | ✅ 가능 | aiagents + http/json/log/thread |
 | Agent-safe logs/transcripts | ✅ 가능 | redact + security + tokenest + aiagents |
 | Local document search | ✅ 가능 | search + markdown + media + jsonl |
+| 사람이 읽는 리포트 산출물 | ✅ 가능 | report + markdown/jsonl/csv |
 | LLM retry/compaction loop | ✅ 가능 | httpretry + tokenest + aiagents |
 
 ## 3. 진짜 약점 (남은 런타임 / 딥 기능)
@@ -179,7 +181,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 44 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, aiagents, redact, media, security, search, markdown, tokenest, httpretry, jsonl, shortid, metrics, net, fmt, json, table, url, io, collections, email, db, grid, gui, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
+- 45 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, aiagents, redact, media, security, search, markdown, report, tokenest, httpretry, jsonl, shortid, metrics, net, fmt, json, table, url, io, collections, email, db, grid, gui, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
 - 6 모듈은 Phase A 충실 + Phase B declaration-only (fs, env, random, os, crypto, compress)
 - 나머지는 의도된 범위에서 surface 만으로 완성 (cli, math, cmp, hint, debug, ref, process, log, time, error, sync, thread, regex, testing, uuid)
 
