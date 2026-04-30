@@ -164,6 +164,63 @@ runtime = true
 	}
 }
 
+func TestLoadPackageForNativeIncludesManifestBinPath(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "osty.toml"), []byte(`[package]
+name = "desk"
+version = "0.1.0"
+edition = "0.5"
+
+[bin]
+path = "src/main.osty"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainPath := filepath.Join(dir, "src", "main.osty")
+	if err := os.WriteFile(mainPath, []byte("pub fn main() { }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	pkg, err := LoadPackageForNative(dir)
+	if err != nil {
+		t.Fatalf("LoadPackageForNative: %v", err)
+	}
+	if len(pkg.Files) != 1 {
+		t.Fatalf("files = %d, want 1 (%v)", len(pkg.Files), pkg.Files)
+	}
+	if got := filepath.Clean(pkg.Files[0].Path); got != filepath.Clean(mainPath) {
+		t.Fatalf("file path = %q, want %q", got, mainPath)
+	}
+}
+
+func TestWorkspacePackagePathsIncludesManifestBinPath(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "osty.toml"), []byte(`[package]
+name = "desk"
+version = "0.1.0"
+edition = "0.5"
+
+[bin]
+path = "src/main.osty"
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "src", "main.osty"), []byte("pub fn main() { }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	paths := WorkspacePackagePaths(root)
+	if len(paths) != 1 || paths[0] != "" {
+		t.Fatalf("WorkspacePackagePaths = %v, want root package", paths)
+	}
+}
+
 func TestLoadPackageForNativeWithTransformKeepsOriginalDiagnosticSource(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "main.osty")

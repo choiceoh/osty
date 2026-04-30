@@ -20,7 +20,7 @@ var ErrLLVMNotImplemented = errors.New(llvmgen.UnsupportedBackendErrorMessage())
 type llvmToolchain interface {
 	CompileObject(ctx context.Context, irPath, objectPath, target string) error
 	CompileCObject(ctx context.Context, sourcePath, objectPath, target string) error
-	LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string) error
+	LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string, linkLibraries []string) error
 }
 
 type llvmDispatchRoute string
@@ -120,7 +120,7 @@ func (b LLVMBackend) emitPrebuiltIR(ctx context.Context, req Request, irOut []by
 	if runtimeObject != "" {
 		linkObjects = append(linkObjects, runtimeObject)
 	}
-	if err := tc.LinkBinary(ctx, linkObjects, out.Artifacts.Binary, req.Layout.Target); err != nil {
+	if err := tc.LinkBinary(ctx, linkObjects, out.Artifacts.Binary, req.Layout.Target, req.LinkLibraries); err != nil {
 		return out, err
 	}
 	return out, nil
@@ -292,12 +292,37 @@ func (clangToolchain) CompileCObject(ctx context.Context, sourcePath, objectPath
 	return runClang(ctx, "compile runtime", args)
 }
 
-func (clangToolchain) LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string) error {
+func (clangToolchain) LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string, linkLibraries []string) error {
 	args := llvmgen.ClangLinkBinaryArgs(target, objectPaths, binaryPath)
+	args = append(args, clangLinkLibraryArgs(linkLibraries)...)
 	if !isWindowsTarget(target) {
 		args = append(args, "-lm")
 	}
 	return runClang(ctx, "link binary", args)
+}
+
+func clangLinkLibraryArgs(libraries []string) []string {
+	if len(libraries) == 0 {
+		return nil
+	}
+	args := make([]string, 0, len(libraries))
+	for _, lib := range libraries {
+		lib = strings.TrimSpace(lib)
+		if lib == "" {
+			continue
+		}
+		if strings.HasPrefix(lib, "-") ||
+			strings.ContainsAny(lib, `/\`) ||
+			strings.HasSuffix(lib, ".a") ||
+			strings.HasSuffix(lib, ".so") ||
+			strings.HasSuffix(lib, ".dylib") ||
+			strings.HasSuffix(lib, ".lib") {
+			args = append(args, lib)
+			continue
+		}
+		args = append(args, "-l"+lib)
+	}
+	return args
 }
 
 func clangCompileCObjectArgs(target, sourcePath, objectPath string) []string {

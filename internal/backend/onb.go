@@ -13,7 +13,7 @@ import (
 var ErrONBNotImplemented = onb.ErrNotImplemented
 
 type onbLinker interface {
-	LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string) error
+	LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string, linkLibraries []string) error
 }
 
 // ONBBackend is the LLVM-complementary dev/debug backend. It consumes MIR and
@@ -85,7 +85,7 @@ func (b ONBBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 	if artifacts.Binary == "" {
 		return result, fmt.Errorf("onb backend: missing binary artifact path")
 	}
-	if err := b.onbLinker().LinkBinary(ctx, []string{artifacts.Object}, artifacts.Binary, req.Layout.Target); err != nil {
+	if err := b.onbLinker().LinkBinary(ctx, []string{artifacts.Object}, artifacts.Binary, req.Layout.Target, req.LinkLibraries); err != nil {
 		return result, err
 	}
 	return result, nil

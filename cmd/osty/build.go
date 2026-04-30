@@ -467,6 +467,10 @@ func emitViaQuery(command string, root string, m *manifest.Manifest, eng *ostyqu
 	}
 	entryAbs := filepath.Join(root, entryRel)
 	if _, err := os.Stat(entryAbs); err != nil {
+		if m != nil && m.Bin != nil && m.Bin.Path != "" {
+			fmt.Fprintf(os.Stderr, "%s: entry %s not found: %v\n", commandName, entryRel, err)
+			os.Exit(1)
+		}
 		return nil
 	}
 	if skipped, reason := fileIsFeatureGated(entryAbs, feats); skipped {
@@ -504,9 +508,10 @@ func emitViaQuery(command string, root string, m *manifest.Manifest, eng *ostyqu
 		Target:  triple,
 	}
 	features := resolvedFeatures(resolved)
+	linkLibraries := resolvedLinkLibraries(resolved)
 
 	if backendID == backend.NameLLVM {
-		if emitResult, usedExternal, err := tryExternalPackageLLVMArtifacts(context.Background(), emitMode, layout, binName, features, entryAbs, pkg); usedExternal {
+		if emitResult, usedExternal, err := tryExternalPackageLLVMArtifacts(context.Background(), emitMode, layout, binName, features, linkLibraries, entryAbs, pkg); usedExternal {
 			if err != nil {
 				exitBackendEmitError(command, emitResult, err)
 			}
@@ -517,7 +522,8 @@ func emitViaQuery(command string, root string, m *manifest.Manifest, eng *ostyqu
 	lower.PackageName = "main"
 	lower.SourcePath = entryAbs
 	lower.EntryPath = entryAbs
-	target := ostyquery.NewEmitTarget(lower, backendID, emitMode, layout, binName, features)
+	target := ostyquery.NewEmitTarget(lower, backendID, emitMode, layout, binName, features).
+		WithLinkLibraries(linkLibraries)
 	emitted := eng.Queries.Emit.Get(eng.DB, target)
 	if emitted.Err != nil {
 		exitBackendEmitError(command, emitted.Result, emitted.Err)
@@ -568,6 +574,13 @@ func resolvedFeatures(r *profile.Resolved) []string {
 		return nil
 	}
 	return r.Features
+}
+
+func resolvedLinkLibraries(r *profile.Resolved) []string {
+	if r == nil || r.Target == nil || len(r.Target.Link) == 0 {
+		return nil
+	}
+	return append([]string(nil), r.Target.Link...)
 }
 
 func finishBuildEmitResult(backendID backend.Name, emitMode backend.EmitMode, emitResult *backend.Result, profileName string) *backend.Result {

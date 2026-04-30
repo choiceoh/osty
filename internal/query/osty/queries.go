@@ -309,14 +309,15 @@ type LowerMIRResult struct {
 // EmitTarget identifies a backend artifact query. FeaturesKey is the stable
 // feature-list encoding returned by FeatureKey.
 type EmitTarget struct {
-	Lower       LowerKey
-	Backend     backend.Name
-	Emit        backend.EmitMode
-	Root        string
-	Profile     string
-	Target      string
-	BinaryName  string
-	FeaturesKey string
+	Lower            LowerKey
+	Backend          backend.Name
+	Emit             backend.EmitMode
+	Root             string
+	Profile          string
+	Target           string
+	BinaryName       string
+	FeaturesKey      string
+	LinkLibrariesKey string
 }
 
 // NewEmitTarget builds a normalized key for the Emit query.
@@ -333,6 +334,13 @@ func NewEmitTarget(lower LowerKey, name backend.Name, mode backend.EmitMode, lay
 	}.normalized()
 }
 
+// WithLinkLibraries returns a copy of t carrying ordered native link library
+// names that should be forwarded to the backend link step.
+func (t EmitTarget) WithLinkLibraries(libraries []string) EmitTarget {
+	t.LinkLibrariesKey = LinkLibrariesKey(libraries)
+	return t.normalized()
+}
+
 func (t EmitTarget) normalized() EmitTarget {
 	t.Lower = t.Lower.normalized()
 	if t.Backend == "" {
@@ -345,6 +353,7 @@ func (t EmitTarget) normalized() EmitTarget {
 		t.Root = NormalizePath(t.Root)
 	}
 	t.FeaturesKey = FeatureKey(t.Features())
+	t.LinkLibrariesKey = LinkLibrariesKey(t.LinkLibraries())
 	return t
 }
 
@@ -354,6 +363,14 @@ func (t EmitTarget) Features() []string {
 		return nil
 	}
 	return strings.Split(t.FeaturesKey, featureKeySep)
+}
+
+// LinkLibraries decodes the ordered native link-library list on EmitTarget.
+func (t EmitTarget) LinkLibraries() []string {
+	if t.LinkLibrariesKey == "" {
+		return nil
+	}
+	return strings.Split(t.LinkLibrariesKey, featureKeySep)
 }
 
 const featureKeySep = "\x00"
@@ -375,6 +392,22 @@ func FeatureKey(features []string) string {
 		return ""
 	}
 	sort.Strings(clean)
+	return strings.Join(clean, featureKeySep)
+}
+
+// LinkLibrariesKey returns an order-preserving comparable key for linker
+// libraries. Unlike features, link order can be semantically meaningful.
+func LinkLibrariesKey(libraries []string) string {
+	if len(libraries) == 0 {
+		return ""
+	}
+	clean := make([]string, 0, len(libraries))
+	for _, lib := range libraries {
+		lib = strings.TrimSpace(lib)
+		if lib != "" {
+			clean = append(clean, lib)
+		}
+	}
 	return strings.Join(clean, featureKeySep)
 }
 
@@ -812,10 +845,11 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 					Profile: target.Profile,
 					Target:  target.Target,
 				},
-				Emit:       target.Emit,
-				Entry:      lowered.Entry,
-				BinaryName: target.BinaryName,
-				Features:   target.Features(),
+				Emit:          target.Emit,
+				Entry:         lowered.Entry,
+				BinaryName:    target.BinaryName,
+				Features:      target.Features(),
+				LinkLibraries: target.LinkLibraries(),
 			})
 			return EmitResult{Result: result, Err: err}
 		},

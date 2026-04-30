@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -29,9 +30,10 @@ type compileCall struct {
 }
 
 type linkCall struct {
-	objectPaths []string
-	binaryPath  string
-	target      string
+	objectPaths   []string
+	binaryPath    string
+	target        string
+	linkLibraries []string
 }
 
 type fakeLLVMToolchain struct {
@@ -58,11 +60,12 @@ func (f *fakeLLVMToolchain) CompileCObject(_ context.Context, sourcePath, object
 	return nil
 }
 
-func (f *fakeLLVMToolchain) LinkBinary(_ context.Context, objectPaths []string, binaryPath, target string) error {
+func (f *fakeLLVMToolchain) LinkBinary(_ context.Context, objectPaths []string, binaryPath, target string, linkLibraries []string) error {
 	f.links = append(f.links, linkCall{
-		objectPaths: append([]string(nil), objectPaths...),
-		binaryPath:  binaryPath,
-		target:      target,
+		objectPaths:   append([]string(nil), objectPaths...),
+		binaryPath:    binaryPath,
+		target:        target,
+		linkLibraries: append([]string(nil), linkLibraries...),
 	})
 	return nil
 }
@@ -203,6 +206,38 @@ func TestLLVMBackendEmitBinaryBuildsBundledRuntime(t *testing.T) {
 	}
 	if got := link.objectPaths[1]; got != runtimeObject {
 		t.Fatalf("link object[1] = %q, want %q", got, runtimeObject)
+	}
+}
+
+func TestLLVMBackendPassesRequestLinkLibraries(t *testing.T) {
+	t.Parallel()
+
+	tc := &fakeLLVMToolchain{}
+	backend := LLVMBackend{toolchain: tc}
+	req := newBackendRequest(t, EmitBinary, `fn main() {
+    println(1)
+}
+`)
+	req.LinkLibraries = []string{"osty_qt", "WebView2Loader", "user32"}
+
+	if _, err := backend.Emit(context.Background(), req); err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	if len(tc.links) != 1 {
+		t.Fatalf("link count = %d, want 1", len(tc.links))
+	}
+	if got, want := tc.links[0].linkLibraries, req.LinkLibraries; !slices.Equal(got, want) {
+		t.Fatalf("link libraries = %v, want %v", got, want)
+	}
+}
+
+func TestClangLinkLibraryArgs(t *testing.T) {
+	t.Parallel()
+
+	got := clangLinkLibraryArgs([]string{"osty_qt", " WebView2Loader ", "", "-framework", "/opt/libcustom.a", "foo.lib"})
+	want := []string{"-losty_qt", "-lWebView2Loader", "-framework", "/opt/libcustom.a", "foo.lib"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("clang link library args = %v, want %v", got, want)
 	}
 }
 
