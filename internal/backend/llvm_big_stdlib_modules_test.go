@@ -207,6 +207,51 @@ fn main() {
 	}
 }
 
+func TestLLVMBackendBinaryRunsStdWatchDiffPlanning(t *testing.T) {
+	requireClangForBackendTest(t)
+	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `use std.watch as watch
+
+fn main() {
+    let before = watch.parseRows(".", ["F\t5\t1\t./src/a.md", "F\t2\t1\t./src/old.md"]).unwrap()
+    let after = watch.parseRows(".", ["F\t6\t2\t./src/a.md", "F\t1\t1\t./src/b.md"]).unwrap()
+    let events = watch.diff(before, after)
+    println(events.len())
+    println(watch.kindName(events[0].kind))
+    println(events[0].relativePath)
+    println(watch.kindName(events[1].kind))
+    println(events[1].relativePath)
+    println(watch.kindName(events[2].kind))
+    println(events[2].relativePath)
+    println(watch.summary(events))
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		logBackendWarnings(t, result)
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	output, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	want := "" +
+		"3\n" +
+		"removed\n" +
+		"src/old.md\n" +
+		"modified\n" +
+		"src/a.md\n" +
+		"created\n" +
+		"src/b.md\n" +
+		"1 created, 1 modified, 1 removed\n"
+	if got := string(output); got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
 func logBackendWarnings(t *testing.T, result *Result) {
 	t.Helper()
 	if result == nil {

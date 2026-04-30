@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 79 공개 모듈. 분류 기준:
+총 80 공개 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (76 / 79 = 96%)
+### ⭐⭐⭐⭐⭐ Production (77 / 80 = 96%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -81,6 +81,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | websocket | 322 | pure Osty + crypto/encoding | RFC 6455 accept key + handshake headers + frame encode/decode |
 | cli | 260 | pure Osty + env | flag / option spec, parse / parseEnv / usage |
 | cmd | 214 | os shim + runtime | command builder, cwd/env/timeout, captured output, POSIX shell escaping, pipeline rendering |
+| watch | 535 | pure Osty + fs/time/cmd | polling file watcher: fs.watch snapshot parsing, typed create/modify/remove diff, debounce, hidden/build-dir filters, transform/sync command tasks |
 | graphql | 224 | pure Osty | document / field / argument builders + request JSON body encoding |
 | template | 148 | pure Osty | escaped/raw `{{name}}` 렌더링 + HTML escape / stripTags |
 | i18n | 136 | pure Osty | Locale / MessageCatalog / fallbackTags / pluralCategory / placeholder format |
@@ -108,7 +109,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (3 / 79 = 4%)
+### ⭐⭐⭐⭐ Production-adjacent (3 / 80 = 4%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
@@ -137,6 +138,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | 설정 파일 로딩 | ✅ 즉시 가능 | config + json + fs + env |
 | 데이터 처리 (CSV / TSV / JSON / tables) | ✅ 즉시 가능 | table + csv + json + collections + iter + fmt |
 | 파일 변환기 / 아카이브 | ✅ 가능 | fs + io + tar + compress (gzip 만) + fmt |
+| 파일 변경 감시 / 자동 변환 | ✅ 가능 | watch + fs + time + cmd |
 | 암호화 / 해시 | ✅ 가능 | crypto (sha256 / hmac / random / constantTimeEq) |
 | 랜덤 게임 / 시뮬레이션 | ✅ 가능 | random (seeded RNG) + math |
 | 수치 계산 | ✅ 가능 | math (sin / cos / log / exp / sqrt / pow / floor / ceil / clamp / hypot) |
@@ -197,7 +199,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 56 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, jsonl, kv, shortid, metrics, net, fmt, json, config, table, url, io, collections, email, db, polyglot, grid, gui, dialog, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
+- 57 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, jsonl, kv, shortid, metrics, net, fmt, json, config, table, url, io, collections, email, db, polyglot, grid, gui, dialog, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, watch, graphql, template, i18n, char, iter, bytes)
 - 5 모듈은 Phase A 충실 + Phase B declaration-only (env, random, os, crypto, compress)
 - fs 는 Phase A 충실 + 확장된 tool-facing declaration surface (walk/glob/watch/atomicWrite/lockFile/hashFile/copyDir/diffFiles)
 - 나머지는 의도된 범위에서 surface 만으로 완성 (cli, math, cmp, hint, debug, ref, process, log, time, error, sync, thread, regex, testing, uuid)
