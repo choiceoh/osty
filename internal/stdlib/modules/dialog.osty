@@ -1,0 +1,644 @@
+// std.dialog -- desktop file/folder/save dialogs.
+//
+// Dialogs are host UI, so the stable stdlib surface is a typed command-plan
+// layer plus small runners over common desktop dialog providers:
+// macOS AppleScript, Windows PowerShell/WinForms, Zenity, and KDialog.
+
+use std.error
+use std.os
+use std.strings
+
+pub enum Mode {
+    OpenFile,
+    OpenFiles,
+    OpenFolder,
+    SaveFile,
+}
+
+pub enum Backend {
+    Auto,
+    MacOSAppleScript,
+    WindowsPowerShell,
+    Zenity,
+    KDialog,
+    CustomCommand(String, List<String>),
+}
+
+pub struct Filter {
+    pub name: String,
+    pub patterns: List<String> = [],
+    pub extensions: List<String> = [],
+}
+
+pub struct Options {
+    pub title: String = "",
+    pub initialDirectory: String = "",
+    pub defaultName: String = "",
+    pub allowMultiple: Bool = false,
+    pub confirmOverwrite: Bool = true,
+    pub showHidden: Bool = false,
+    pub filters: List<Filter> = [],
+    pub backend: Backend,
+
+    pub fn withTitle(mut self, title: String) -> Options {
+        self.title = title
+        self
+    }
+
+    pub fn withInitialDirectory(mut self, path: String) -> Options {
+        self.initialDirectory = path
+        self
+    }
+
+    pub fn withDefaultName(mut self, name: String) -> Options {
+        self.defaultName = name
+        self
+    }
+
+    pub fn withMultiple(mut self, allow: Bool) -> Options {
+        self.allowMultiple = allow
+        self
+    }
+
+    pub fn withConfirmOverwrite(mut self, confirm: Bool) -> Options {
+        self.confirmOverwrite = confirm
+        self
+    }
+
+    pub fn withShowHidden(mut self, show: Bool) -> Options {
+        self.showHidden = show
+        self
+    }
+
+    pub fn withBackend(mut self, backend: Backend) -> Options {
+        self.backend = backend
+        self
+    }
+
+    pub fn withFilter(mut self, filter: Filter) -> Options {
+        self.filters.push(filter)
+        self
+    }
+
+    pub fn withFilters(mut self, filters: List<Filter>) -> Options {
+        self.filters = filters
+        self
+    }
+}
+
+pub struct CommandPlan {
+    pub backend: Backend,
+    pub mode: Mode,
+    pub command: String,
+    pub args: List<String>,
+}
+
+pub struct Selection {
+    pub accepted: Bool = false,
+    pub paths: List<String> = [],
+
+    pub fn first(self) -> String? {
+        if self.paths.len() == 0 {
+            None
+        } else {
+            Some(self.paths[0])
+        }
+    }
+
+    pub fn pathOr(self, fallback: String) -> String {
+        self.first() ?? fallback
+    }
+}
+
+pub fn filter(name: String, patterns: List<String>) -> Filter {
+    Filter {
+        name: name,
+        patterns: patterns,
+        extensions: extensionsFromPatterns(patterns),
+    }
+}
+
+pub fn extensionFilter(name: String, extensions: List<String>) -> Filter {
+    Filter {
+        name: name,
+        patterns: patternsFromExtensions(extensions),
+        extensions: cleanExtensions(extensions),
+    }
+}
+
+pub fn anyFileFilter() -> Filter {
+    Filter { name: "All files", patterns: ["*"], extensions: [] }
+}
+
+pub fn openFileOptions(title: String) -> Options {
+    Options {
+        title: title,
+        allowMultiple: false,
+        confirmOverwrite: true,
+        backend: Auto,
+    }
+}
+
+pub fn openFilesOptions(title: String) -> Options {
+    openFileOptions(title).withMultiple(true)
+}
+
+pub fn folderOptions(title: String) -> Options {
+    Options {
+        title: title,
+        allowMultiple: false,
+        confirmOverwrite: true,
+        backend: Auto,
+    }
+}
+
+pub fn saveFileOptions(title: String, defaultName: String) -> Options {
+    Options {
+        title: title,
+        defaultName: defaultName,
+        allowMultiple: false,
+        confirmOverwrite: true,
+        backend: Auto,
+    }
+}
+
+pub fn selectFile(title: String) -> Result<String?, Error> {
+    let selected = run(OpenFile, openFileOptions(title))?
+    Ok(selected.first())
+}
+
+pub fn selectFiles(options: Options) -> Result<List<String>, Error> {
+    let selected = run(OpenFiles, options.withMultiple(true))?
+    Ok(selected.paths)
+}
+
+pub fn selectFolder(title: String) -> Result<String?, Error> {
+    let selected = run(OpenFolder, folderOptions(title))?
+    Ok(selected.first())
+}
+
+pub fn saveFile(title: String, defaultName: String) -> Result<String?, Error> {
+    let selected = run(SaveFile, saveFileOptions(title, defaultName))?
+    Ok(selected.first())
+}
+
+pub fn plan(mode: Mode, options: Options) -> Result<CommandPlan, Error> {
+    let candidates = plans(mode, options)?
+    if candidates.len() == 0 {
+        Err(error.new("dialog: no command plan available"))
+    } else {
+        Ok(candidates[0])
+    }
+}
+
+pub fn plans(mode: Mode, options: Options) -> Result<List<CommandPlan>, Error> {
+    validate(mode, options)?
+    match options.backend {
+        Auto -> Ok([
+            macOSPlan(mode, options),
+            windowsPowerShellPlan(mode, options),
+            zenityPlan(mode, options),
+            kDialogPlan(mode, options),
+        ]),
+        MacOSAppleScript -> Ok([macOSPlan(mode, options)]),
+        WindowsPowerShell -> Ok([windowsPowerShellPlan(mode, options)]),
+        Zenity -> Ok([zenityPlan(mode, options)]),
+        KDialog -> Ok([kDialogPlan(mode, options)]),
+        CustomCommand(command, args) -> Ok([CommandPlan {
+            backend: CustomCommand(command, args),
+            mode: mode,
+            command: command,
+            args: args,
+        }]),
+    }
+}
+
+pub fn run(mode: Mode, options: Options) -> Result<Selection, Error> {
+    let candidates = plans(mode, options)?
+    let mut errors: List<String> = []
+    for candidate in candidates {
+        match runPlan(candidate) {
+            Ok(selection) -> {
+                return Ok(selection)
+            },
+            Err(err) -> errors.push(err.message()),
+        }
+    }
+    let joined = strings.join(errors, "; ")
+    Err(error.new("dialog: no backend succeeded: {joined}"))
+}
+
+pub fn runPlan(plan: CommandPlan) -> Result<Selection, Error> {
+    let output = os.exec(plan.command, plan.args)?
+    if output.exitCode == 0 {
+        return Ok(selectionFromStdout(output.stdout))
+    }
+    if isCancel(plan.backend, output.exitCode, output.stderr) {
+        return Ok(Selection { accepted: false, paths: [] })
+    }
+    Err(error.new("dialog: {backendName(plan.backend)} failed with exit code {output.exitCode}: {output.stderr}"))
+}
+
+pub fn commandLine(plan: CommandPlan) -> String {
+    let mut parts = [shellQuote(plan.command)]
+    for arg in plan.args {
+        parts.push(shellQuote(arg))
+    }
+    strings.join(parts, " ")
+}
+
+pub fn backendName(backend: Backend) -> String {
+    match backend {
+        Auto -> "auto",
+        MacOSAppleScript -> "macos-applescript",
+        WindowsPowerShell -> "windows-powershell",
+        Zenity -> "zenity",
+        KDialog -> "kdialog",
+        CustomCommand(command, _) -> "custom:{command}",
+    }
+}
+
+pub fn modeName(mode: Mode) -> String {
+    match mode {
+        OpenFile -> "open-file",
+        OpenFiles -> "open-files",
+        OpenFolder -> "open-folder",
+        SaveFile -> "save-file",
+    }
+}
+
+fn validate(mode: Mode, options: Options) -> Result<(), Error> {
+    if mode == SaveFile && strings.trimSpace(options.defaultName).isEmpty() && strings.trimSpace(options.initialDirectory).isEmpty() {
+        return Err(error.new("dialog: save dialogs need a default name or initial directory"))
+    }
+    if mode == OpenFolder && options.allowMultiple {
+        return Err(error.new("dialog: folder selection does not support multiple paths"))
+    }
+    Ok(())
+}
+
+fn macOSPlan(mode: Mode, options: Options) -> CommandPlan {
+    CommandPlan {
+        backend: MacOSAppleScript,
+        mode: mode,
+        command: "osascript",
+        args: ["-e", macOSScript(mode, options)],
+    }
+}
+
+fn windowsPowerShellPlan(mode: Mode, options: Options) -> CommandPlan {
+    CommandPlan {
+        backend: WindowsPowerShell,
+        mode: mode,
+        command: "powershell",
+        args: ["-NoProfile", "-STA", "-Command", windowsScript(mode, options)],
+    }
+}
+
+fn zenityPlan(mode: Mode, options: Options) -> CommandPlan {
+    let mut args: List<String> = ["--file-selection"]
+    if !options.title.isEmpty() {
+        args.push("--title={options.title}")
+    }
+    let filename = dialogInitialPath(options)
+    if !filename.isEmpty() {
+        args.push("--filename={filename}")
+    }
+    if mode == OpenFolder {
+        args.push("--directory")
+    }
+    if mode == SaveFile {
+        args.push("--save")
+        if options.confirmOverwrite {
+            args.push("--confirm-overwrite")
+        }
+    }
+    if (mode == OpenFiles || options.allowMultiple) && mode != OpenFolder && mode != SaveFile {
+        args.push("--multiple")
+        args.push("--separator=\n")
+    }
+    if options.showHidden {
+        args.push("--show-hidden")
+    }
+    for filter in normalizedFilters(options.filters) {
+        args.push("--file-filter={zenityFilter(filter)}")
+    }
+    CommandPlan { backend: Zenity, mode: mode, command: "zenity", args: args }
+}
+
+fn kDialogPlan(mode: Mode, options: Options) -> CommandPlan {
+    let mut args: List<String> = []
+    if !options.title.isEmpty() {
+        args.push("--title")
+        args.push(options.title)
+    }
+    if (mode == OpenFiles || options.allowMultiple) && mode != OpenFolder && mode != SaveFile {
+        args.push("--multiple")
+        args.push("--separate-output")
+    }
+    match mode {
+        OpenFolder -> args.push("--getexistingdirectory"),
+        SaveFile -> args.push("--getsavefilename"),
+        _ -> args.push("--getopenfilename"),
+    }
+    let initial = dialogInitialPath(options)
+    if !initial.isEmpty() {
+        args.push(initial)
+    }
+    let filterText = kDialogFilters(options.filters)
+    if !filterText.isEmpty() && mode != OpenFolder {
+        args.push(filterText)
+    }
+    CommandPlan { backend: KDialog, mode: mode, command: "kdialog", args: args }
+}
+
+fn macOSScript(mode: Mode, options: Options) -> String {
+    let prompt = if options.title.isEmpty() { defaultTitle(mode) } else { options.title }
+    let base = match mode {
+        OpenFolder -> "choose folder with prompt {appleString(prompt)}{appleDefaultLocation(options.initialDirectory)}",
+        SaveFile -> "choose file name with prompt {appleString(prompt)}{appleDefaultName(options.defaultName)}{appleDefaultLocation(options.initialDirectory)}",
+        _ -> "choose file with prompt {appleString(prompt)}{appleDefaultLocation(options.initialDirectory)}{appleTypeClause(options.filters)}{appleMultiClause(mode, options)}",
+    }
+    if mode == OpenFiles || options.allowMultiple {
+        strings.join([
+            "set chosenItems to {base}",
+            "set oldDelims to AppleScript's text item delimiters",
+            "set AppleScript's text item delimiters to linefeed",
+            "set outputPaths to {}",
+            "repeat with itemRef in chosenItems",
+            "set end of outputPaths to POSIX path of itemRef",
+            "end repeat",
+            "set rendered to outputPaths as text",
+            "set AppleScript's text item delimiters to oldDelims",
+            "rendered",
+        ], "\n")
+    } else {
+        "POSIX path of ({base})"
+    }
+}
+
+fn windowsScript(mode: Mode, options: Options) -> String {
+    let mut lines: List<String> = [
+        "Add-Type -AssemblyName System.Windows.Forms",
+        "[System.Windows.Forms.Application]::EnableVisualStyles()",
+    ]
+    match mode {
+        OpenFolder -> {
+            lines.push("$dlg = New-Object System.Windows.Forms.FolderBrowserDialog")
+            if !options.title.isEmpty() {
+                lines.push("$dlg.Description = {psString(options.title)}")
+            }
+            if !options.initialDirectory.isEmpty() {
+                lines.push("$dlg.SelectedPath = {psString(options.initialDirectory)}")
+            }
+            lines.push("if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) \{ Write-Output $dlg.SelectedPath; exit 0 \} else \{ exit 2 \}")
+        },
+        SaveFile -> {
+            lines.push("$dlg = New-Object System.Windows.Forms.SaveFileDialog")
+            appendWindowsCommon(lines, options)
+            lines.push("$dlg.OverwritePrompt = {psBool(options.confirmOverwrite)}")
+            if !options.defaultName.isEmpty() {
+                lines.push("$dlg.FileName = {psString(options.defaultName)}")
+            }
+            lines.push("if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) \{ Write-Output $dlg.FileName; exit 0 \} else \{ exit 2 \}")
+        },
+        _ -> {
+            lines.push("$dlg = New-Object System.Windows.Forms.OpenFileDialog")
+            appendWindowsCommon(lines, options)
+            lines.push("$dlg.Multiselect = {psBool(mode == OpenFiles || options.allowMultiple)}")
+            lines.push("if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) \{ Write-Output ($dlg.FileNames -join '`n'); exit 0 \} else \{ exit 2 \}")
+        },
+    }
+    strings.join(lines, "; ")
+}
+
+fn appendWindowsCommon(lines: List<String>, options: Options) {
+    if !options.title.isEmpty() {
+        lines.push("$dlg.Title = {psString(options.title)}")
+    }
+    if !options.initialDirectory.isEmpty() {
+        lines.push("$dlg.InitialDirectory = {psString(options.initialDirectory)}")
+    }
+    let filterText = windowsFilters(options.filters)
+    if !filterText.isEmpty() {
+        lines.push("$dlg.Filter = {psString(filterText)}")
+    }
+    lines.push("$dlg.RestoreDirectory = $true")
+}
+
+fn selectionFromStdout(stdout: String) -> Selection {
+    let mut paths: List<String> = []
+    for line in strings.splitLines(stdout) {
+        let clean = strings.trimSpace(line)
+        if !clean.isEmpty() {
+            paths.push(clean)
+        }
+    }
+    Selection { accepted: paths.len() > 0, paths: paths }
+}
+
+fn isCancel(backend: Backend, code: Int, stderr: String) -> Bool {
+    let msg = strings.toLower(strings.trimSpace(stderr))
+    match backend {
+        WindowsPowerShell -> code == 2,
+        MacOSAppleScript -> code == 1 && (strings.contains(msg, "user canceled") || strings.contains(msg, "cancelled")),
+        Zenity -> code == 1 && (msg.isEmpty() || strings.contains(msg, "cancel")),
+        KDialog -> code == 1 && (msg.isEmpty() || strings.contains(msg, "cancel")),
+        _ -> false,
+    }
+}
+
+fn dialogInitialPath(options: Options) -> String {
+    if options.initialDirectory.isEmpty() {
+        options.defaultName
+    } else if options.defaultName.isEmpty() {
+        options.initialDirectory
+    } else if strings.endsWith(options.initialDirectory, "/") || strings.endsWith(options.initialDirectory, "\\") {
+        "{options.initialDirectory}{options.defaultName}"
+    } else {
+        "{options.initialDirectory}/{options.defaultName}"
+    }
+}
+
+fn normalizedFilters(filters: List<Filter>) -> List<Filter> {
+    if filters.len() == 0 {
+        [anyFileFilter()]
+    } else {
+        filters
+    }
+}
+
+fn zenityFilter(filter: Filter) -> String {
+    let patterns = normalizedPatterns(filter)
+    let joined = strings.join(patterns, " ")
+    "{filter.name} | {joined}"
+}
+
+fn kDialogFilters(filters: List<Filter>) -> String {
+    let mut parts: List<String> = []
+    for filter in normalizedFilters(filters) {
+        let patterns = normalizedPatterns(filter)
+        let joined = strings.join(patterns, " ")
+        parts.push("{joined}|{filter.name}")
+    }
+    strings.join(parts, "\n")
+}
+
+fn windowsFilters(filters: List<Filter>) -> String {
+    let mut parts: List<String> = []
+    for filter in normalizedFilters(filters) {
+        let patterns = normalizedPatterns(filter)
+        let joined = strings.join(patterns, ";")
+        parts.push("{filter.name} ({joined})")
+        parts.push(strings.join(patterns, ";"))
+    }
+    strings.join(parts, "|")
+}
+
+fn appleTypeClause(filters: List<Filter>) -> String {
+    let mut exts: List<String> = []
+    for filter in filters {
+        for ext in filter.extensions {
+            let clean = cleanExtension(ext)
+            if !clean.isEmpty() {
+                exts.push(appleString(clean))
+            }
+        }
+    }
+    if exts.len() == 0 {
+        ""
+    } else {
+        let open = "\{"
+        let close = "\}"
+        let joined = strings.join(exts, ", ")
+        " of type {open}{joined}{close}"
+    }
+}
+
+fn appleMultiClause(mode: Mode, options: Options) -> String {
+    if mode == OpenFiles || options.allowMultiple {
+        " with multiple selections allowed"
+    } else {
+        ""
+    }
+}
+
+fn appleDefaultLocation(path: String) -> String {
+    if strings.trimSpace(path).isEmpty() {
+        ""
+    } else {
+        " default location POSIX file {appleString(path)}"
+    }
+}
+
+fn appleDefaultName(name: String) -> String {
+    if strings.trimSpace(name).isEmpty() {
+        ""
+    } else {
+        " default name {appleString(name)}"
+    }
+}
+
+fn defaultTitle(mode: Mode) -> String {
+    match mode {
+        OpenFile -> "Choose a file",
+        OpenFiles -> "Choose files",
+        OpenFolder -> "Choose a folder",
+        SaveFile -> "Save as",
+    }
+}
+
+fn normalizedPatterns(filter: Filter) -> List<String> {
+    if filter.patterns.len() > 0 {
+        filter.patterns
+    } else {
+        patternsFromExtensions(filter.extensions)
+    }
+}
+
+fn patternsFromExtensions(extensions: List<String>) -> List<String> {
+    let mut out: List<String> = []
+    for ext in cleanExtensions(extensions) {
+        out.push("*.{ext}")
+    }
+    if out.len() == 0 {
+        out.push("*")
+    }
+    out
+}
+
+fn extensionsFromPatterns(patterns: List<String>) -> List<String> {
+    let mut out: List<String> = []
+    for pattern in patterns {
+        let clean = cleanPatternExtension(pattern)
+        if !clean.isEmpty() {
+            out.push(clean)
+        }
+    }
+    out
+}
+
+fn cleanExtensions(extensions: List<String>) -> List<String> {
+    let mut out: List<String> = []
+    for ext in extensions {
+        let clean = cleanExtension(ext)
+        if !clean.isEmpty() {
+            out.push(clean)
+        }
+    }
+    out
+}
+
+fn cleanPatternExtension(pattern: String) -> String {
+    let clean = strings.trimSpace(pattern)
+    if strings.startsWith(clean, "*.") {
+        return cleanExtension(strings.slice(clean, 2, clean.len()))
+    }
+    if strings.startsWith(clean, ".") {
+        return cleanExtension(clean)
+    }
+    ""
+}
+
+fn cleanExtension(ext: String) -> String {
+    let mut clean = strings.trimSpace(ext)
+    for strings.startsWith(clean, ".") {
+        clean = strings.slice(clean, 1, clean.len())
+    }
+    strings.toLower(clean)
+}
+
+fn appleString(text: String) -> String {
+    "\"{escapeApple(text)}\""
+}
+
+fn escapeApple(text: String) -> String {
+    let slash = strings.replaceAll(text, "\\", "\\\\")
+    let quote = strings.replaceAll(slash, "\"", "\\\"")
+    let newline = strings.replaceAll(quote, "\n", "\\n")
+    strings.replaceAll(newline, "\r", "\\r")
+}
+
+fn psString(text: String) -> String {
+    let escaped = strings.replaceAll(text, "'", "''")
+    "'{escaped}'"
+}
+
+fn psBool(flag: Bool) -> String {
+    if flag { "$true" } else { "$false" }
+}
+
+fn shellQuote(arg: String) -> String {
+    if arg.isEmpty() {
+        return "''"
+    }
+    let mut out = "'"
+    for c in arg.chars() {
+        if c == '\'' {
+            out = "{out}'\\''"
+        } else {
+            out = "{out}{c}"
+        }
+    }
+    "{out}'"
+}
