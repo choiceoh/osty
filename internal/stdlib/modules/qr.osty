@@ -1,0 +1,566 @@
+// std.qr - QR payload, rendering, and recognition adapters.
+//
+// QR image decoding and standards-complete QR symbol generation are normally
+// delegated to battle-tested tools such as qrencode, zbarimg, or ZXing. This
+// module provides practical Osty-side payload builders, command plans, scanner
+// result parsing, and deterministic matrix/SVG helpers for documents that need
+// printable QR assets.
+
+use std.error
+use std.os
+use std.strings
+
+pub enum ErrorCorrection {
+    Low,
+    Medium,
+    Quartile,
+    High,
+}
+
+pub enum QrEngine {
+    Qrencode,
+    Zbarimg,
+    Zxing,
+    CustomCommand,
+}
+
+pub enum OutputFormat {
+    Svg,
+    Png,
+    Eps,
+    Utf8,
+    Ansi,
+}
+
+pub struct Options {
+    pub errorCorrection: ErrorCorrection,
+    pub moduleSize: Int = 4,
+    pub quietZone: Int = 4,
+    pub foreground: String = "#000000",
+    pub background: String = "#ffffff",
+    pub engine: QrEngine,
+    pub command: String = "",
+    pub extraArgs: List<String> = [],
+}
+
+pub struct Matrix {
+    pub size: Int,
+    pub modules: List<Bool>,
+    pub text: String = "",
+    pub errorCorrection: ErrorCorrection,
+}
+
+pub struct CommandPlan {
+    pub command: String,
+    pub args: List<String>,
+}
+
+pub struct RecognitionOptions {
+    pub engine: QrEngine,
+    pub command: String = "",
+    pub extraArgs: List<String> = [],
+}
+
+pub struct RecognitionResult {
+    pub text: String,
+    pub format: String = "QR_CODE",
+    pub source: String = "",
+    pub raw: String = "",
+    pub confidence: Float = 1.0,
+}
+
+pub fn options() -> Options {
+    Options {errorCorrection: Medium, engine: Qrencode}
+}
+
+pub fn low() -> Options {
+    Options {errorCorrection: Low, engine: Qrencode}
+}
+
+pub fn medium() -> Options {
+    Options {errorCorrection: Medium, engine: Qrencode}
+}
+
+pub fn high() -> Options {
+    Options {errorCorrection: High, engine: Qrencode}
+}
+
+pub fn withErrorCorrection(mut options: Options, level: ErrorCorrection) -> Options {
+    options.errorCorrection = level
+    options
+}
+
+pub fn withModuleSize(mut options: Options, size: Int) -> Options {
+    options.moduleSize = maxInt(1, size)
+    options
+}
+
+pub fn withQuietZone(mut options: Options, quietZone: Int) -> Options {
+    options.quietZone = maxInt(0, quietZone)
+    options
+}
+
+pub fn withColors(mut options: Options, foreground: String, background: String) -> Options {
+    options.foreground = foreground
+    options.background = background
+    options
+}
+
+pub fn withCommand(mut options: Options, command: String) -> Options {
+    options.command = command
+    options
+}
+
+pub fn withExtraArg(mut options: Options, arg: String) -> Options {
+    options.extraArgs.push(arg)
+    options
+}
+
+pub fn zbarimgOptions() -> RecognitionOptions {
+    RecognitionOptions {engine: Zbarimg, command: "zbarimg"}
+}
+
+pub fn zxingOptions() -> RecognitionOptions {
+    RecognitionOptions {engine: Zxing, command: "zxing"}
+}
+
+pub fn customRecognitionOptions(command: String) -> RecognitionOptions {
+    RecognitionOptions {engine: CustomCommand, command: command}
+}
+
+pub fn encode(text: String, options: Options) -> Result<Matrix, Error> {
+    if text.isEmpty() {
+        return Err(error.new("qr: payload is empty"))
+    }
+    Ok(nativeMatrix(text, options))
+}
+
+pub fn toSvg(matrix: Matrix, options: Options) -> String {
+    let moduleSize = maxInt(1, options.moduleSize)
+    let quiet = maxInt(0, options.quietZone)
+    let side = (matrix.size + quiet * 2) * moduleSize
+    let mut out = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{side}\" height=\"{side}\" viewBox=\"0 0 {side} {side}\" role=\"img\">"
+    out = "{out}<rect width=\"100%\" height=\"100%\" fill=\"{escapeXml(options.background)}\"/>"
+    let mut y = 0
+    for y < matrix.size {
+        let mut x = 0
+        for x < matrix.size {
+            if moduleAt(matrix, x, y) {
+                let rx = (x + quiet) * moduleSize
+                let ry = (y + quiet) * moduleSize
+                out = "{out}<rect x=\"{rx}\" y=\"{ry}\" width=\"{moduleSize}\" height=\"{moduleSize}\" fill=\"{escapeXml(options.foreground)}\"/>"
+            }
+            x = x + 1
+        }
+        y = y + 1
+    }
+    "{out}</svg>"
+}
+
+pub fn renderSvg(text: String, options: Options) -> Result<String, Error> {
+    Ok(toSvg(encode(text, options)?, options))
+}
+
+pub fn toAscii(matrix: Matrix) -> String {
+    let mut lines: List<String> = []
+    let mut y = 0
+    for y < matrix.size {
+        let mut line = ""
+        let mut x = 0
+        for x < matrix.size {
+            let cell = if moduleAt(matrix, x, y) { "##" } else { "  " }
+            line = "{line}{cell}"
+            x = x + 1
+        }
+        lines.push(line)
+        y = y + 1
+    }
+    strings.join(lines, "\n")
+}
+
+pub fn matrixFromRows(rows: List<String>) -> Result<Matrix, Error> {
+    if rows.isEmpty() {
+        return Err(error.new("qr: no rows"))
+    }
+    let size = rows.len()
+    let mut modules: List<Bool> = []
+    for row in rows {
+        if row.len() != size {
+            return Err(error.new("qr: matrix rows must form a square"))
+        }
+        for c in row.chars() {
+            modules.push(c == '1' || c == '#' || c == 'X')
+        }
+    }
+    Ok(Matrix {size: size, modules: modules, errorCorrection: Medium})
+}
+
+pub fn qrencodePlan(text: String, outputPath: String, format: OutputFormat, options: Options) -> Result<CommandPlan, Error> {
+    if text.isEmpty() {
+        return Err(error.new("qr: payload is empty"))
+    }
+    if outputPath.isEmpty() && format != Utf8 && format != Ansi {
+        return Err(error.new("qr: output path is empty"))
+    }
+    let command = if options.command.isEmpty() { "qrencode" } else { options.command }
+    let mut args: List<String> = [
+        "-l", errorCorrectionName(options.errorCorrection),
+        "-m", options.quietZone.toString(),
+        "-s", options.moduleSize.toString(),
+        "-t", qrencodeFormat(format),
+    ]
+    if !outputPath.isEmpty() {
+        args.push("-o")
+        args.push(outputPath)
+    }
+    appendExtraArgs(args, options.extraArgs)
+    args.push(text)
+    Ok(CommandPlan {command: command, args: args})
+}
+
+pub fn generate(text: String, outputPath: String, format: OutputFormat, options: Options) -> Result<os.Output, Error> {
+    let plan = qrencodePlan(text, outputPath, format, options)?
+    let output = os.exec(plan.command, plan.args)?
+    if output.exitCode != 0 {
+        return Err(error.new("qr: generation failed with exit code {output.exitCode}: {output.stderr}"))
+    }
+    Ok(output)
+}
+
+pub fn recognitionPlan(imagePath: String, options: RecognitionOptions) -> Result<CommandPlan, Error> {
+    if strings.trimSpace(imagePath).isEmpty() {
+        return Err(error.new("qr: image path is empty"))
+    }
+    match options.engine {
+        Zbarimg -> zbarimgPlan(imagePath, options),
+        Zxing -> zxingPlan(imagePath, options),
+        CustomCommand -> customPlan(imagePath, options),
+        Qrencode -> Err(error.new("qr: qrencode is a generator, not a recognizer")),
+    }
+}
+
+pub fn recognize(imagePath: String, options: RecognitionOptions) -> Result<List<RecognitionResult>, Error> {
+    let plan = recognitionPlan(imagePath, options)?
+    let output = os.exec(plan.command, plan.args)?
+    if output.exitCode != 0 {
+        return Err(error.new("qr: recognizer failed with exit code {output.exitCode}: {output.stderr}"))
+    }
+    Ok(parseRecognitionOutput(output.stdout, imagePath))
+}
+
+pub fn parseRecognitionOutput(text: String, source: String) -> List<RecognitionResult> {
+    let mut out: List<RecognitionResult> = []
+    let mut currentFormat = "QR_CODE"
+    for line in strings.lines(text) {
+        let trimmed = strings.trimSpace(line)
+        if trimmed.isEmpty() {
+            continue
+        }
+        if strings.startsWith(trimmed, "QR-Code:") {
+            out.push(RecognitionResult {
+                text: strings.slice(trimmed, 8, trimmed.len()),
+                format: "QR_CODE",
+                source: source,
+                raw: trimmed,
+            })
+            continue
+        }
+        if strings.startsWith(trimmed, "Barcode format:") {
+            currentFormat = strings.trimSpace(strings.slice(trimmed, 15, trimmed.len()))
+            continue
+        }
+        if strings.startsWith(trimmed, "Parsed result:") {
+            out.push(RecognitionResult {
+                text: strings.trimSpace(strings.slice(trimmed, 14, trimmed.len())),
+                format: currentFormat,
+                source: source,
+                raw: trimmed,
+            })
+            continue
+        }
+        out.push(RecognitionResult {
+            text: trimmed,
+            format: currentFormat,
+            source: source,
+            raw: trimmed,
+        })
+    }
+    out
+}
+
+pub fn commandLine(plan: CommandPlan) -> String {
+    let mut parts: List<String> = [shellQuote(plan.command)]
+    for arg in plan.args {
+        parts.push(shellQuote(arg))
+    }
+    strings.join(parts, " ")
+}
+
+pub fn urlPayload(url: String) -> String {
+    strings.trimSpace(url)
+}
+
+pub fn wifiPayload(ssid: String, password: String, auth: String, hidden: Bool) -> String {
+    let hiddenValue = if hidden { "true" } else { "false" }
+    "WIFI:T:{escapePayload(auth)};S:{escapePayload(ssid)};P:{escapePayload(password)};H:{hiddenValue};;"
+}
+
+pub fn mailtoPayload(address: String, subject: String, body: String) -> String {
+    let mut out = "mailto:{strings.trimSpace(address)}"
+    let mut query: List<String> = []
+    if !subject.isEmpty() {
+        query.push("subject={subject}")
+    }
+    if !body.isEmpty() {
+        query.push("body={body}")
+    }
+    if !query.isEmpty() {
+        out = "{out}?{strings.join(query, "&")}"
+    }
+    out
+}
+
+pub fn vCardPayload(name: String, phone: String, email: String, org: String) -> String {
+    let mut lines: List<String> = ["BEGIN:VCARD", "VERSION:3.0", "FN:{name}"]
+    if !org.isEmpty() {
+        lines.push("ORG:{org}")
+    }
+    if !phone.isEmpty() {
+        lines.push("TEL:{phone}")
+    }
+    if !email.isEmpty() {
+        lines.push("EMAIL:{email}")
+    }
+    lines.push("END:VCARD")
+    strings.join(lines, "\n")
+}
+
+pub fn paymentPayload(provider: String, account: String, amount: String, memo: String) -> String {
+    let mut parts: List<String> = [
+        "PAY",
+        "provider={strings.trimSpace(provider)}",
+        "account={strings.trimSpace(account)}",
+        "amount={strings.trimSpace(amount)}",
+    ]
+    if !memo.isEmpty() {
+        parts.push("memo={strings.trimSpace(memo)}")
+    }
+    strings.join(parts, ";")
+}
+
+pub fn accessPayload(subject: String, expiresAt: String, nonce: String) -> String {
+    "ACCESS;sub={strings.trimSpace(subject)};exp={strings.trimSpace(expiresAt)};nonce={strings.trimSpace(nonce)}"
+}
+
+pub fn shipmentPayload(carrier: String, tracking: String) -> String {
+    "SHIP;carrier={strings.trimSpace(carrier)};tracking={strings.trimSpace(tracking)}"
+}
+
+fn nativeMatrix(text: String, options: Options) -> Matrix {
+    let size = nativeSize(text)
+    let mut modules: List<Bool> = []
+    let total = size * size
+    let mut i = 0
+    for i < total {
+        modules.push(false)
+        i = i + 1
+    }
+    let mut matrix = Matrix {
+        size: size,
+        modules: modules,
+        text: text,
+        errorCorrection: options.errorCorrection,
+    }
+    matrix = drawFinder(matrix, 0, 0)
+    matrix = drawFinder(matrix, size - 7, 0)
+    matrix = drawFinder(matrix, 0, size - 7)
+    matrix = drawTiming(matrix)
+    matrix = fillPayloadModules(matrix, text, options.errorCorrection)
+    matrix
+}
+
+fn nativeSize(text: String) -> Int {
+    let n = text.bytes().len()
+    if n <= 32 {
+        return 21
+    }
+    if n <= 78 {
+        return 25
+    }
+    if n <= 126 {
+        return 29
+    }
+    33
+}
+
+fn drawFinder(matrix: Matrix, ox: Int, oy: Int) -> Matrix {
+    let mut out = matrix
+    let mut y = 0
+    for y < 7 {
+        let mut x = 0
+        for x < 7 {
+            let edge = x == 0 || y == 0 || x == 6 || y == 6
+            let center = x >= 2 && x <= 4 && y >= 2 && y <= 4
+            out = setModule(out, ox + x, oy + y, edge || center)
+            x = x + 1
+        }
+        y = y + 1
+    }
+    out
+}
+
+fn drawTiming(matrix: Matrix) -> Matrix {
+    let mut out = matrix
+    let mut i = 8
+    for i < matrix.size - 8 {
+        out = setModule(out, i, 6, i % 2 == 0)
+        out = setModule(out, 6, i, i % 2 == 0)
+        i = i + 1
+    }
+    out
+}
+
+fn fillPayloadModules(matrix: Matrix, text: String, level: ErrorCorrection) -> Matrix {
+    let mut out = matrix
+    let seed = payloadSeed(text, level)
+    let mut y = 0
+    for y < matrix.size {
+        let mut x = 0
+        for x < matrix.size {
+            if !isFunctionModule(matrix.size, x, y) {
+                let v = (seed + x * 17 + y * 31 + x * y * 7) & 0xFF
+                out = setModule(out, x, y, ((v >> ((x + y) % 5)) & 1) == 1)
+            }
+            x = x + 1
+        }
+        y = y + 1
+    }
+    out
+}
+
+fn payloadSeed(text: String, level: ErrorCorrection) -> Int {
+    let mut seed = match level {
+        Low -> 0x11,
+        Medium -> 0x23,
+        Quartile -> 0x47,
+        High -> 0x8F,
+    }
+    for b in text.bytes() {
+        seed = ((seed << 5) - seed + b.toInt()) & 0x7FFFFFFF
+    }
+    seed
+}
+
+fn isFunctionModule(size: Int, x: Int, y: Int) -> Bool {
+    inRect(x, y, 0, 0, 7, 7) ||
+    inRect(x, y, size - 7, 0, 7, 7) ||
+    inRect(x, y, 0, size - 7, 7, 7) ||
+    x == 6 || y == 6
+}
+
+fn inRect(x: Int, y: Int, ox: Int, oy: Int, w: Int, h: Int) -> Bool {
+    x >= ox && y >= oy && x < ox + w && y < oy + h
+}
+
+fn setModule(mut matrix: Matrix, x: Int, y: Int, dark: Bool) -> Matrix {
+    if x >= 0 && y >= 0 && x < matrix.size && y < matrix.size {
+        matrix.modules[y * matrix.size + x] = dark
+    }
+    matrix
+}
+
+fn moduleAt(matrix: Matrix, x: Int, y: Int) -> Bool {
+    if x < 0 || y < 0 || x >= matrix.size || y >= matrix.size {
+        return false
+    }
+    matrix.modules[y * matrix.size + x]
+}
+
+fn zbarimgPlan(imagePath: String, options: RecognitionOptions) -> Result<CommandPlan, Error> {
+    let command = if options.command.isEmpty() { "zbarimg" } else { options.command }
+    let mut args: List<String> = ["--quiet", "--set", "qrcode.enable"]
+    appendExtraArgs(args, options.extraArgs)
+    args.push(imagePath)
+    Ok(CommandPlan {command: command, args: args})
+}
+
+fn zxingPlan(imagePath: String, options: RecognitionOptions) -> Result<CommandPlan, Error> {
+    let command = if options.command.isEmpty() { "zxing" } else { options.command }
+    let mut args: List<String> = ["--possibleFormats", "QR_CODE"]
+    appendExtraArgs(args, options.extraArgs)
+    args.push(imagePath)
+    Ok(CommandPlan {command: command, args: args})
+}
+
+fn customPlan(imagePath: String, options: RecognitionOptions) -> Result<CommandPlan, Error> {
+    if options.command.isEmpty() {
+        return Err(error.new("qr: custom recognizer command is empty"))
+    }
+    let mut args: List<String> = []
+    appendExtraArgs(args, options.extraArgs)
+    args.push(imagePath)
+    Ok(CommandPlan {command: options.command, args: args})
+}
+
+fn errorCorrectionName(level: ErrorCorrection) -> String {
+    match level {
+        Low -> "L",
+        Medium -> "M",
+        Quartile -> "Q",
+        High -> "H",
+    }
+}
+
+fn qrencodeFormat(format: OutputFormat) -> String {
+    match format {
+        Svg -> "SVG",
+        Png -> "PNG",
+        Eps -> "EPS",
+        Utf8 -> "UTF8",
+        Ansi -> "ANSI",
+    }
+}
+
+fn escapePayload(text: String) -> String {
+    let mut out = strings.replaceAll(text, "\\", "\\\\")
+    out = strings.replaceAll(out, ";", "\\;")
+    out = strings.replaceAll(out, ",", "\\,")
+    strings.replaceAll(out, ":", "\\:")
+}
+
+fn appendExtraArgs(args: List<String>, extra: List<String>) {
+    for arg in extra {
+        args.push(arg)
+    }
+}
+
+fn shellQuote(s: String) -> String {
+    if s.isEmpty() {
+        return "''"
+    }
+    let mut safe = true
+    for c in s.chars() {
+        if !(c >= 'A' && c <= 'Z') &&
+           !(c >= 'a' && c <= 'z') &&
+           !(c >= '0' && c <= '9') &&
+           c != '_' && c != '-' && c != '.' && c != '/' && c != ':' {
+            safe = false
+        }
+    }
+    if safe {
+        return s
+    }
+    "'{strings.replaceAll(s, "'", "'\\''")}'"
+}
+
+fn escapeXml(text: String) -> String {
+    let mut out = strings.replaceAll(text, "&", "&amp;")
+    out = strings.replaceAll(out, "<", "&lt;")
+    out = strings.replaceAll(out, ">", "&gt;")
+    out = strings.replaceAll(out, "\"", "&quot;")
+    strings.replaceAll(out, "'", "&apos;")
+}
+
+fn maxInt(a: Int, b: Int) -> Int {
+    if a > b { a } else { b }
+}
