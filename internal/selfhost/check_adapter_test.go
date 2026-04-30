@@ -183,7 +183,7 @@ func TestNewElabCxClonesFrozenPrelude(t *testing.T) {
 	if got := len(template.tys.nodes); got != templateTyCount {
 		t.Fatalf("template ty nodes len = %d, want %d", got, templateTyCount)
 	}
-	if _, ok := template.global.fnIndexSlots[checkFnKey("localOnly", "")]; ok {
+	if _, ok := template.global.fnIndex.slots[checkFnKey("localOnly", "")]; ok {
 		t.Fatalf("template observed function registered into cloned env")
 	}
 	fresh := newElabCx(nil, nil)

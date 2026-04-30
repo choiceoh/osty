@@ -69,6 +69,41 @@ func cloneCheckStringIntMap(in map[string]int) map[string]int {
 	return out
 }
 
+func cloneCheckNameIndexTable(src CheckNameIndexTable) CheckNameIndexTable {
+	return CheckNameIndexTable{
+		keys:   append([]string(nil), src.keys...),
+		hashes: append([]int(nil), src.hashes...),
+		values: append([]int(nil), src.values...),
+		slots:  cloneCheckStringIntMap(src.slots),
+	}
+}
+
+func cloneCheckNameSetTable(src CheckNameSetTable) CheckNameSetTable {
+	return CheckNameSetTable{
+		keys:   append([]string(nil), src.keys...),
+		hashes: append([]int(nil), src.hashes...),
+		slots:  cloneCheckStringIntMap(src.slots),
+	}
+}
+
+func cloneCheckBindingStackIndex(src CheckBindingStackIndex) CheckBindingStackIndex {
+	return CheckBindingStackIndex{
+		keys:   append([]string(nil), src.keys...),
+		hashes: append([]int(nil), src.hashes...),
+		stacks: cloneCheckBindingStacks(src.stacks),
+		slots:  cloneCheckStringIntMap(src.slots),
+	}
+}
+
+func cloneCheckIntStackIndex(src CheckIntStackIndex) CheckIntStackIndex {
+	return CheckIntStackIndex{
+		keys:   append([]string(nil), src.keys...),
+		hashes: append([]int(nil), src.hashes...),
+		stacks: cloneCheckIntStacks(src.stacks),
+		slots:  cloneCheckStringIntMap(src.slots),
+	}
+}
+
 func snapshotCheckPreludeTemplate(src *CheckEnv) *checkPreludeTemplateSnapshot {
 	if src == nil {
 		return nil
@@ -82,53 +117,34 @@ func snapshotCheckPreludeTemplate(src *CheckEnv) *checkPreludeTemplateSnapshot {
 
 func cloneCheckGlobalEnv(src CheckGlobalEnv) CheckGlobalEnv {
 	return CheckGlobalEnv{
-		fns:                     append([]*CheckFnSig(nil), src.fns...),
-		fnIndexKeys:             append([]string(nil), src.fnIndexKeys...),
-		fnIndexHashes:           append([]int(nil), src.fnIndexHashes...),
-		fnIndexValues:           append([]int(nil), src.fnIndexValues...),
-		fnIndexSlots:            cloneCheckStringIntMap(src.fnIndexSlots),
-		fnBodyKeys:              append([]string(nil), src.fnBodyKeys...),
-		fnBodyHashes:            append([]int(nil), src.fnBodyHashes...),
-		fields:                  append([]*CheckFieldSig(nil), src.fields...),
-		fieldIndexKeys:          append([]string(nil), src.fieldIndexKeys...),
-		fieldIndexHashes:        append([]int(nil), src.fieldIndexHashes...),
-		fieldIndexValues:        append([]int(nil), src.fieldIndexValues...),
-		variants:                append([]*CheckVariantSig(nil), src.variants...),
-		variantIndexKeys:        append([]string(nil), src.variantIndexKeys...),
-		variantIndexHashes:      append([]int(nil), src.variantIndexHashes...),
-		variantIndexValues:      append([]int(nil), src.variantIndexValues...),
-		variantOwnerIndexKeys:   append([]string(nil), src.variantOwnerIndexKeys...),
-		variantOwnerIndexHashes: append([]int(nil), src.variantOwnerIndexHashes...),
-		variantOwnerIndexValues: append([]int(nil), src.variantOwnerIndexValues...),
-		aliases:                 append([]*CheckAliasSig(nil), src.aliases...),
-		aliasIndexKeys:          append([]string(nil), src.aliasIndexKeys...),
-		aliasIndexHashes:        append([]int(nil), src.aliasIndexHashes...),
-		aliasIndexValues:        append([]int(nil), src.aliasIndexValues...),
-		types:                   append([]*CheckTypeSig(nil), src.types...),
-		typeIndexKeys:           append([]string(nil), src.typeIndexKeys...),
-		typeIndexHashes:         append([]int(nil), src.typeIndexHashes...),
-		typeIndexValues:         append([]int(nil), src.typeIndexValues...),
-		interfaces:              append([]string(nil), src.interfaces...),
-		interfaceIndexKeys:      append([]string(nil), src.interfaceIndexKeys...),
-		interfaceIndexHashes:    append([]int(nil), src.interfaceIndexHashes...),
-		interfaceExtends:        append([]*CheckInterfaceExt(nil), src.interfaceExtends...),
-		importAliases:           append([]string(nil), src.importAliases...),
+		fns:               append([]*CheckFnSig(nil), src.fns...),
+		fnIndex:           cloneCheckNameIndexTable(src.fnIndex),
+		fnBodyIndex:       cloneCheckNameSetTable(src.fnBodyIndex),
+		fields:            append([]*CheckFieldSig(nil), src.fields...),
+		fieldIndex:        cloneCheckNameIndexTable(src.fieldIndex),
+		variants:          append([]*CheckVariantSig(nil), src.variants...),
+		variantIndex:      cloneCheckNameIndexTable(src.variantIndex),
+		variantOwnerIndex: cloneCheckNameIndexTable(src.variantOwnerIndex),
+		aliases:           append([]*CheckAliasSig(nil), src.aliases...),
+		aliasIndex:        cloneCheckNameIndexTable(src.aliasIndex),
+		types:             append([]*CheckTypeSig(nil), src.types...),
+		typeIndex:         cloneCheckNameIndexTable(src.typeIndex),
+		interfaces:        append([]string(nil), src.interfaces...),
+		interfaceIndex:    cloneCheckNameSetTable(src.interfaceIndex),
+		interfaceExtends:  append([]*CheckInterfaceExt(nil), src.interfaceExtends...),
+		importAliases:     append([]string(nil), src.importAliases...),
 	}
 }
 
 func cloneCheckPreludeLocalEnv(src CheckLocalEnv, tys *TyArena) CheckLocalEnv {
 	return CheckLocalEnv{
-		bindings:                append([]*CheckBinding(nil), src.bindings...),
-		bindingIndexNames:       append([]string(nil), src.bindingIndexNames...),
-		bindingIndexHashes:      append([]int(nil), src.bindingIndexHashes...),
-		bindingIndexStacks:      cloneCheckBindingStacks(src.bindingIndexStacks),
-		genericBounds:           append([]*CheckGenericBound(nil), src.genericBounds...),
-		genericBoundIndexNames:  append([]string(nil), src.genericBoundIndexNames...),
-		genericBoundIndexHashes: append([]int(nil), src.genericBoundIndexHashes...),
-		genericBoundIndexStacks: cloneCheckIntStacks(src.genericBoundIndexStacks),
-		returnTy:                tErr(tys),
-		fnName:                  "",
-		inLoop:                  false,
+		bindings:          append([]*CheckBinding(nil), src.bindings...),
+		bindingIndex:      cloneCheckBindingStackIndex(src.bindingIndex),
+		genericBounds:     append([]*CheckGenericBound(nil), src.genericBounds...),
+		genericBoundIndex: cloneCheckIntStackIndex(src.genericBoundIndex),
+		returnTy:          tErr(tys),
+		fnName:            "",
+		inLoop:            false,
 	}
 }
 
