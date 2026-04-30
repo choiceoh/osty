@@ -1,0 +1,1253 @@
+// std.config - practical configuration loading.
+//
+// The module normalizes common tool configuration formats into
+// std.json.Json so callers can keep one value model across TOML,
+// YAML, INI, .env files, process env, default merging, and schema
+// validation. The parsers intentionally cover the common config-file
+// subset: nested objects, repeated objects, scalars, inline arrays,
+// and quoted strings.
+
+use std.env
+use std.error
+use std.fs
+use std.json
+use std.strings
+
+pub type ConfigValue = json.Json
+
+pub enum ConfigFormat {
+    JsonFormat,
+    TomlFormat,
+    YamlFormat,
+    IniFormat,
+    EnvFormat,
+}
+
+pub enum ConfigType {
+    AnyType,
+    StringType,
+    NumberType,
+    IntType,
+    BoolType,
+    ObjectType,
+    ArrayType,
+}
+
+pub struct ConfigField {
+    pub path: String,
+    pub kind: ConfigType,
+    pub required: Bool,
+    pub defaultValue: json.Json?,
+    pub allowed: List<json.Json>,
+    pub min: Float?,
+    pub max: Float?,
+}
+
+pub struct ConfigSchema {
+    pub fields: List<ConfigField>,
+    pub allowUnknown: Bool,
+}
+
+pub struct ValidationIssue {
+    pub path: String,
+    pub message: String,
+}
+
+pub struct ValidationResult {
+    pub issues: List<ValidationIssue>,
+
+    pub fn ok(self) -> Bool {
+        self.issues.len() == 0
+    }
+
+    pub fn error(self) -> Error {
+        if self.ok() {
+            return configError("config: validation ok")
+        }
+        configError(self.issues[0].message)
+    }
+}
+
+pub fn schema(fields: List<ConfigField>, allowUnknown: Bool) -> ConfigSchema {
+    ConfigSchema { fields, allowUnknown }
+}
+
+pub fn field(path: String, kind: ConfigType) -> ConfigField {
+    ConfigField {
+        path,
+        kind,
+        required: false,
+        defaultValue: None,
+        allowed: [],
+        min: None,
+        max: None,
+    }
+}
+
+pub fn requiredField(path: String, kind: ConfigType) -> ConfigField {
+    ConfigField {
+        path,
+        kind,
+        required: true,
+        defaultValue: None,
+        allowed: [],
+        min: None,
+        max: None,
+    }
+}
+
+pub fn fieldDefault(path: String, kind: ConfigType, defaultValue: json.Json) -> ConfigField {
+    ConfigField {
+        path,
+        kind,
+        required: false,
+        defaultValue: Some(defaultValue),
+        allowed: [],
+        min: None,
+        max: None,
+    }
+}
+
+pub fn fieldAllowed(path: String, kind: ConfigType, allowed: List<json.Json>, required: Bool) -> ConfigField {
+    ConfigField {
+        path,
+        kind,
+        required,
+        defaultValue: None,
+        allowed,
+        min: None,
+        max: None,
+    }
+}
+
+pub fn numberField(path: String, required: Bool, min: Float?, max: Float?) -> ConfigField {
+    ConfigField {
+        path,
+        kind: NumberType,
+        required,
+        defaultValue: None,
+        allowed: [],
+        min,
+        max,
+    }
+}
+
+pub fn parse(text: String, format: ConfigFormat) -> Result<json.Json, Error> {
+    match format {
+        JsonFormat -> json.parseValue(text),
+        TomlFormat -> parseToml(text),
+        YamlFormat -> parseYaml(text),
+        IniFormat  -> parseIni(text),
+        EnvFormat  -> parseEnv(text),
+    }
+}
+
+pub fn read(path: String, format: ConfigFormat) -> Result<json.Json, Error> {
+    let text = fs.readToString(path)?
+    parse(text, format)
+}
+
+pub fn readAuto(path: String) -> Result<json.Json, Error> {
+    match inferFormat(path) {
+        Some(format) -> read(path, format),
+        None -> Err(configError("config: cannot infer format from path: {path}")),
+    }
+}
+
+pub fn loadText(text: String, format: ConfigFormat, s: ConfigSchema) -> Result<json.Json, Error> {
+    let parsed = parse(text, format)?
+    let withDefaults = applySchemaDefaults(parsed, s)
+    let coerced = coerceWithSchema(withDefaults, s)?
+    validateOrError(coerced, s)
+}
+
+pub fn load(path: String, format: ConfigFormat, s: ConfigSchema) -> Result<json.Json, Error> {
+    let text = fs.readToString(path)?
+    loadText(text, format, s)
+}
+
+pub fn loadAuto(path: String, s: ConfigSchema) -> Result<json.Json, Error> {
+    match inferFormat(path) {
+        Some(format) -> load(path, format, s),
+        None -> Err(configError("config: cannot infer format from path: {path}")),
+    }
+}
+
+pub fn inferFormat(path: String) -> ConfigFormat? {
+    let p = strings.toLower(path)
+    if strings.endsWith(p, ".json") {
+        return Some(JsonFormat)
+    }
+    if strings.endsWith(p, ".toml") {
+        return Some(TomlFormat)
+    }
+    if strings.endsWith(p, ".yaml") || strings.endsWith(p, ".yml") {
+        return Some(YamlFormat)
+    }
+    if strings.endsWith(p, ".ini") || strings.endsWith(p, ".conf") {
+        return Some(IniFormat)
+    }
+    if strings.endsWith(p, ".env") {
+        return Some(EnvFormat)
+    }
+    None
+}
+
+pub fn parseToml(text: String) -> Result<json.Json, Error> {
+    let root: Map<String, json.Json> = {:}
+    let mut section: List<String> = []
+    let mut sectionArray = false
+    let mut lineNo = 0
+    for rawLine in strings.splitLines(text) {
+        lineNo = lineNo + 1
+        let line = strings.trimSpace(stripComment(rawLine, '#'))
+        if line == "" {
+            continue
+        }
+        if strings.startsWith(line, "[[") {
+            if !strings.endsWith(line, "]]") {
+                return Err(configError("config: TOML array-of-tables section is missing closing ]] at line {lineNo}"))
+            }
+            let name = strings.trimSpace(strings.slice(line, 2, line.len() - 2))
+            section = parseDottedPath(name)?
+            let _ = appendObjectArrayPath(root, section, lineNo)?
+            sectionArray = true
+            continue
+        }
+        if strings.startsWith(line, "[") {
+            if !strings.endsWith(line, "]") {
+                return Err(configError("config: TOML section is missing closing ] at line {lineNo}"))
+            }
+            let name = strings.trimSpace(strings.slice(line, 1, line.len() - 1))
+            section = parseDottedPath(name)?
+            ensureObjectPath(root, section, lineNo)?
+            sectionArray = false
+            continue
+        }
+        match splitFirst(line, "=") {
+            Some(pair) -> {
+                let keyParts = parseDottedPath(pair.left)?
+                let value = parseScalar(pair.right)?
+                if sectionArray {
+                    setLastArrayObjectPathStrict(root, section, keyParts, value, lineNo)?
+                } else {
+                    let parts = appendPath(section, keyParts)
+                    setObjectPathStrict(root, parts, value, lineNo)?
+                }
+            },
+            None -> { return Err(configError("config: TOML expected key = value at line {lineNo}")) },
+        }
+    }
+    Ok(json.object(root))
+}
+
+pub fn parseYaml(text: String) -> Result<json.Json, Error> {
+    let root: Map<String, json.Json> = {:}
+    let mut levels: List<List<String>> = [[]]
+    let mut arrayLevels: List<Bool> = [false]
+    let mut lineNo = 0
+    for rawLine in strings.splitLines(text) {
+        lineNo = lineNo + 1
+        let withoutComment = stripComment(rawLine, '#')
+        let trimmed = strings.trimSpace(withoutComment)
+        if trimmed == "" || trimmed == "---" || trimmed == "..." {
+            continue
+        }
+        let level = countLeadingSpaces(rawLine) / 2
+        if strings.startsWith(trimmed, "- ") {
+            let parent = levelPath(levels, level)
+            if parent.len() == 0 {
+                return Err(configError("config: YAML top-level arrays need a key at line {lineNo}"))
+            }
+            let itemText = strings.trimSpace(strings.slice(trimmed, 2, trimmed.len()))
+            if itemText == "" {
+                let _ = appendObjectArrayPath(root, parent, lineNo)?
+                setLevelPath(levels, level + 1, parent)
+                setLevelArray(arrayLevels, level + 1, true)
+                continue
+            }
+            match splitFirst(itemText, ":") {
+                Some(pair) -> {
+                    let key = cleanKey(pair.left)
+                    if key == "" {
+                        return Err(configError("config: YAML empty array item key at line {lineNo}"))
+                    }
+                    let obj = appendObjectArrayPath(root, parent, lineNo)?
+                    let rhs = strings.trimSpace(pair.right)
+                    if rhs == "" {
+                        let childPath = [key]
+                        ensureObjectPath(obj, childPath, lineNo)?
+                        setLevelPath(levels, level + 1, appendKey(parent, key))
+                        setLevelArray(arrayLevels, level + 1, false)
+                    } else {
+                        setObjectPath(obj, [key], parseScalar(rhs)?, lineNo)?
+                        setLevelPath(levels, level + 1, parent)
+                        setLevelArray(arrayLevels, level + 1, true)
+                    }
+                },
+                None -> {
+                    let item = parseScalar(itemText)?
+                    appendArrayPath(root, parent, item, lineNo)?
+                    setLevelPath(levels, level + 1, parent)
+                    setLevelArray(arrayLevels, level + 1, false)
+                },
+            }
+            continue
+        }
+        match splitFirst(trimmed, ":") {
+            Some(pair) -> {
+                let key = cleanKey(pair.left)
+                if key == "" {
+                    return Err(configError("config: YAML empty key at line {lineNo}"))
+                }
+                let parent = levelPath(levels, level)
+                let path = appendKey(parent, key)
+                let rhs = strings.trimSpace(pair.right)
+                if levelIsArray(arrayLevels, level) {
+                    if rhs == "" {
+                        ensureLastArrayObjectPath(root, parent, [key], lineNo)?
+                        setLevelPath(levels, level + 1, appendKey(parent, key))
+                        setLevelArray(arrayLevels, level + 1, false)
+                    } else {
+                        setLastArrayObjectPath(root, parent, [key], parseScalar(rhs)?, lineNo)?
+                    }
+                } else {
+                    if rhs == "" {
+                        ensureObjectPath(root, path, lineNo)?
+                        setLevelPath(levels, level + 1, path)
+                        setLevelArray(arrayLevels, level + 1, false)
+                    } else {
+                        setObjectPath(root, path, parseScalar(rhs)?, lineNo)?
+                    }
+                }
+            },
+            None -> { return Err(configError("config: YAML expected key: value at line {lineNo}")) },
+        }
+    }
+    Ok(json.object(root))
+}
+
+pub fn parseIni(text: String) -> Result<json.Json, Error> {
+    let root: Map<String, json.Json> = {:}
+    let mut section: List<String> = []
+    let mut lineNo = 0
+    for rawLine in strings.splitLines(text) {
+        lineNo = lineNo + 1
+        let line = strings.trimSpace(stripComment(stripComment(rawLine, '#'), ';'))
+        if line == "" {
+            continue
+        }
+        if strings.startsWith(line, "[") {
+            if !strings.endsWith(line, "]") {
+                return Err(configError("config: INI section is missing closing ] at line {lineNo}"))
+            }
+            section = parseDottedPath(strings.slice(line, 1, line.len() - 1))?
+            ensureObjectPath(root, section, lineNo)?
+            continue
+        }
+        let pair = splitFirstEither(line, "=", ":")
+        match pair {
+            Some(kv) -> {
+                let path = appendPath(section, parseDottedPath(kv.left)?)
+                setObjectPath(root, path, parseScalar(kv.right)?, lineNo)?
+            },
+            None -> { return Err(configError("config: INI expected key=value at line {lineNo}")) },
+        }
+    }
+    Ok(json.object(root))
+}
+
+pub fn parseEnv(text: String) -> Result<json.Json, Error> {
+    let root: Map<String, json.Json> = {:}
+    let mut lineNo = 0
+    for rawLine in strings.splitLines(text) {
+        lineNo = lineNo + 1
+        let mut line = strings.trimSpace(stripComment(rawLine, '#'))
+        if line == "" {
+            continue
+        }
+        if strings.startsWith(line, "export ") {
+            line = strings.trimSpace(strings.slice(line, 7, line.len()))
+        }
+        match splitFirst(line, "=") {
+            Some(pair) -> {
+                let key = strings.trimSpace(pair.left)
+                if key == "" {
+                    return Err(configError("config: env empty key at line {lineNo}"))
+                }
+                let value = parseEnvValue(pair.right)?
+                setObjectPath(root, parseEnvPath(key), json.string(value), lineNo)?
+            },
+            None -> { return Err(configError("config: env expected KEY=value at line {lineNo}")) },
+        }
+    }
+    Ok(json.object(root))
+}
+
+pub fn fromEnv(prefix: String) -> json.Json {
+    let root: Map<String, json.Json> = {:}
+    let vars = env.vars()
+    for key in vars.keys().sorted() {
+        if prefix == "" || strings.startsWith(key, prefix) {
+            let name = if prefix == "" { key } else { strings.slice(key, prefix.len(), key.len()) }
+            match vars.get(key) {
+                Some(value) -> {
+                    let _ = setObjectPath(root, parseEnvPath(name), json.string(value), 0)
+                },
+                None -> {},
+            }
+        }
+    }
+    json.object(root)
+}
+
+pub fn mergeDefaults(value: json.Json, defaults: json.Json) -> json.Json {
+    match json.asObject(defaults) {
+        Ok(defObj) -> match json.asObject(value) {
+            Ok(valObj) -> {
+                let mut out: Map<String, json.Json> = {:}
+                for key in defObj.keys() {
+                    out.insert(key, defObj.get(key).unwrap())
+                }
+                for key in valObj.keys() {
+                    let val = valObj.get(key).unwrap()
+                    match out.get(key) {
+                        Some(defVal) -> out.insert(key, mergeDefaults(val, defVal)),
+                        None -> out.insert(key, val),
+                    }
+                }
+                json.object(out)
+            },
+            Err(_) -> value,
+        },
+        Err(_) -> value,
+    }
+}
+
+pub fn mergeLayers(layers: List<json.Json>) -> json.Json {
+    let mut out = json.object({:})
+    for layer in layers {
+        out = mergeDefaults(layer, out)
+    }
+    out
+}
+
+pub fn defaultsFromSchema(s: ConfigSchema) -> json.Json {
+    let root: Map<String, json.Json> = {:}
+    for f in s.fields {
+        match f.defaultValue {
+            Some(value) -> {
+                let _ = setObjectPath(root, parsePath(f.path), value, 0)
+            },
+            None -> {},
+        }
+    }
+    json.object(root)
+}
+
+pub fn applySchemaDefaults(value: json.Json, s: ConfigSchema) -> json.Json {
+    mergeDefaults(value, defaultsFromSchema(s))
+}
+
+pub fn coerceWithSchema(value: json.Json, s: ConfigSchema) -> Result<json.Json, Error> {
+    let root = json.asObject(value)?
+    for f in s.fields {
+        let parts = parsePath(f.path)
+        match getPath(json.object(root), parts) {
+            Some(found) -> {
+                let coerced = coerceValue(found, f)?
+                setObjectPath(root, parts, coerced, 0)?
+            },
+            None -> {},
+        }
+    }
+    Ok(json.object(root))
+}
+
+pub fn validate(value: json.Json, s: ConfigSchema) -> ValidationResult {
+    let mut issues: List<ValidationIssue> = []
+    for f in s.fields {
+        let parts = parsePath(f.path)
+        match getPath(value, parts) {
+            Some(found) -> validateField(found, f, issues),
+            None -> {
+                if f.required {
+                    issues.push(issue(f.path, "config: missing required field: {f.path}"))
+                }
+            },
+        }
+    }
+    if !s.allowUnknown {
+        collectUnknown(value, "", s, issues)
+    }
+    ValidationResult { issues }
+}
+
+pub fn validateOrError(value: json.Json, s: ConfigSchema) -> Result<json.Json, Error> {
+    let result = validate(value, s)
+    if result.ok() {
+        Ok(value)
+    } else {
+        Err(result.error())
+    }
+}
+
+pub fn get(value: json.Json, path: String) -> json.Json? {
+    getPath(value, parsePath(path))
+}
+
+pub fn getString(value: json.Json, path: String) -> String? {
+    match get(value, path) {
+        Some(v) -> match json.asString(v) {
+            Ok(s) -> Some(s),
+            Err(_) -> noneString(),
+        },
+        None -> noneString(),
+    }
+}
+
+pub fn getBool(value: json.Json, path: String) -> Bool? {
+    match get(value, path) {
+        Some(v) -> match json.asBool(v) {
+            Ok(b) -> Some(b),
+            Err(_) -> noneBool(),
+        },
+        None -> noneBool(),
+    }
+}
+
+pub fn getNumber(value: json.Json, path: String) -> Float? {
+    match get(value, path) {
+        Some(v) -> match json.asNumber(v) {
+            Ok(n) -> Some(n),
+            Err(_) -> noneFloat(),
+        },
+        None -> noneFloat(),
+    }
+}
+
+struct SplitPair {
+    left: String,
+    right: String,
+}
+
+fn parseScalar(raw: String) -> Result<json.Json, Error> {
+    let value = strings.trimSpace(raw)
+    if value == "" {
+        return Ok(json.string(""))
+    }
+    let lower = strings.toLower(value)
+    if lower == "true" {
+        return Ok(json.bool(true))
+    }
+    if lower == "false" {
+        return Ok(json.bool(false))
+    }
+    if lower == "null" || lower == "~" {
+        return Ok(json.null())
+    }
+    if isWrapped(value, '"') || isWrapped(value, '\'') {
+        return Ok(json.string(unquote(value)?))
+    }
+    if strings.startsWith(value, "[") && strings.endsWith(value, "]") {
+        return parseInlineArray(value)
+    }
+    if strings.startsWith(value, "\{") && strings.endsWith(value, "\}") {
+        return parseInlineObject(value)
+    }
+    if looksNumber(value) {
+        let normalized = strings.replaceAll(value, "_", "")
+        match strings.toFloat(normalized) {
+            Ok(n) -> { return Ok(json.number(n)) },
+            Err(_) -> {},
+        }
+    }
+    Ok(json.string(value))
+}
+
+fn parseInlineArray(raw: String) -> Result<json.Json, Error> {
+    let inner = strings.trimSpace(strings.slice(raw, 1, raw.len() - 1))
+    let mut items: List<json.Json> = []
+    if inner == "" {
+        return Ok(json.array(items))
+    }
+    for part in splitTopLevel(inner, ',') {
+        items.push(parseScalar(part)?)
+    }
+    Ok(json.array(items))
+}
+
+fn parseInlineObject(raw: String) -> Result<json.Json, Error> {
+    let inner = strings.trimSpace(strings.slice(raw, 1, raw.len() - 1))
+    let obj: Map<String, json.Json> = {:}
+    if inner == "" {
+        return Ok(json.object(obj))
+    }
+    for part in splitTopLevel(inner, ',') {
+        let pair = splitFirstEither(part, "=", ":")
+        match pair {
+            Some(kv) -> {
+                let key = cleanKey(kv.left)
+                if key == "" {
+                    return Err(configError("config: inline object has empty key"))
+                }
+                obj.insert(key, parseScalar(kv.right)?)
+            },
+            None -> { return Err(configError("config: inline object expected key=value")) },
+        }
+    }
+    Ok(json.object(obj))
+}
+
+fn parseEnvValue(raw: String) -> Result<String, Error> {
+    let value = strings.trimSpace(raw)
+    if isWrapped(value, '"') || isWrapped(value, '\'') {
+        return unquote(value)
+    }
+    Ok(value)
+}
+
+fn coerceValue(value: json.Json, f: ConfigField) -> Result<json.Json, Error> {
+    if typeMatches(value, f.kind) {
+        return Ok(value)
+    }
+    match json.asString(value) {
+        Ok(text) -> coerceStringValue(text, f),
+        Err(_) -> Ok(value),
+    }
+}
+
+fn coerceStringValue(text: String, f: ConfigField) -> Result<json.Json, Error> {
+    let trimmed = strings.trimSpace(text)
+    match f.kind {
+        AnyType -> Ok(json.string(text)),
+        StringType -> Ok(json.string(text)),
+        NumberType -> Ok(json.number(parseNumberString(trimmed, f.path)?)),
+        IntType -> {
+            let n = parseNumberString(trimmed, f.path)?
+            if n.toInt().toFloat() != n {
+                return Err(configError("config: field {f.path} expected integer, got {text}"))
+            }
+            Ok(json.number(n))
+        },
+        BoolType -> coerceBoolString(trimmed, f.path),
+        ObjectType -> {
+            if strings.startsWith(trimmed, "\{") && strings.endsWith(trimmed, "\}") {
+                return parseInlineObject(trimmed)
+            }
+            Err(configError("config: field {f.path} expected object, got string"))
+        },
+        ArrayType -> {
+            if strings.startsWith(trimmed, "[") && strings.endsWith(trimmed, "]") {
+                return parseInlineArray(trimmed)
+            }
+            Err(configError("config: field {f.path} expected array, got string"))
+        },
+    }
+}
+
+fn parseNumberString(text: String, path: String) -> Result<Float, Error> {
+    let normalized = strings.replaceAll(text, "_", "")
+    match strings.toFloat(normalized) {
+        Ok(n) -> Ok(n),
+        Err(_) -> Err(configError("config: field {path} expected number, got {text}")),
+    }
+}
+
+fn coerceBoolString(text: String, path: String) -> Result<json.Json, Error> {
+    let lower = strings.toLower(text)
+    if lower == "true" || lower == "1" || lower == "yes" || lower == "on" {
+        return Ok(json.bool(true))
+    }
+    if lower == "false" || lower == "0" || lower == "no" || lower == "off" {
+        return Ok(json.bool(false))
+    }
+    Err(configError("config: field {path} expected bool, got {text}"))
+}
+
+fn validateField(value: json.Json, f: ConfigField, issues: List<ValidationIssue>) {
+    if !typeMatches(value, f.kind) {
+        issues.push(issue(f.path, "config: field {f.path} has wrong type"))
+        return
+    }
+    match json.asNumber(value) {
+        Ok(n) -> {
+            match f.min {
+                Some(min) -> if n < min {
+                    issues.push(issue(f.path, "config: field {f.path} is below minimum"))
+                },
+                None -> {},
+            }
+            match f.max {
+                Some(max) -> if n > max {
+                    issues.push(issue(f.path, "config: field {f.path} is above maximum"))
+                },
+                None -> {},
+            }
+        },
+        Err(_) -> {},
+    }
+    if f.allowed.len() > 0 {
+        let mut ok = false
+        for allowed in f.allowed {
+            if jsonEqual(value, allowed) {
+                ok = true
+            }
+        }
+        if !ok {
+            issues.push(issue(f.path, "config: field {f.path} is not one of the allowed values"))
+        }
+    }
+}
+
+fn typeMatches(value: json.Json, kind: ConfigType) -> Bool {
+    match kind {
+        AnyType -> true,
+        StringType -> json.isString(value),
+        NumberType -> json.isNumber(value),
+        IntType -> match json.asNumber(value) {
+            Ok(n) -> n.toInt().toFloat() == n,
+            Err(_) -> false,
+        },
+        BoolType -> json.isBool(value),
+        ObjectType -> json.isObject(value),
+        ArrayType -> json.isArray(value),
+    }
+}
+
+fn collectUnknown(value: json.Json, prefix: String, s: ConfigSchema, issues: List<ValidationIssue>) {
+    match json.asObject(value) {
+        Ok(obj) -> {
+            for key in obj.keys() {
+                let path = if prefix == "" { key } else { "{prefix}.{key}" }
+                if !schemaHasPathOrPrefix(s, path) {
+                    issues.push(issue(path, "config: unknown field: {path}"))
+                } else {
+                    match obj.get(key) {
+                        Some(child) -> collectUnknown(child, path, s, issues),
+                        None -> {},
+                    }
+                }
+            }
+        },
+        Err(_) -> {},
+    }
+}
+
+fn schemaHasPathOrPrefix(s: ConfigSchema, path: String) -> Bool {
+    for f in s.fields {
+        if f.path == path || strings.startsWith(f.path, "{path}.") {
+            return true
+        }
+    }
+    false
+}
+
+fn getPath(value: json.Json, parts: List<String>) -> json.Json? {
+    if parts.len() == 0 {
+        return Some(value)
+    }
+    let mut cur = value
+    for part in parts {
+        match json.asObject(cur) {
+            Ok(obj) -> match obj.get(part) {
+                Some(next) -> { cur = next },
+                None -> { return noneJson() },
+            },
+            Err(_) -> { return noneJson() },
+        }
+    }
+    Some(cur)
+}
+
+fn setObjectPath(root: Map<String, json.Json>, parts: List<String>, value: json.Json, line: Int) -> Result<(), Error> {
+    setObjectPathAt(root, parts, 0, value, line, false)
+}
+
+fn setObjectPathStrict(root: Map<String, json.Json>, parts: List<String>, value: json.Json, line: Int) -> Result<(), Error> {
+    setObjectPathAt(root, parts, 0, value, line, true)
+}
+
+fn setObjectPathAt(root: Map<String, json.Json>, parts: List<String>, index: Int, value: json.Json, line: Int, strict: Bool) -> Result<(), Error> {
+    if index >= parts.len() {
+        return Err(configError("config: empty path at line {line}"))
+    }
+    let key = parts[index]
+    if key == "" {
+        return Err(configError("config: empty path segment at line {line}"))
+    }
+    if index == parts.len() - 1 {
+        if strict && root.get(key).isSome() {
+            return Err(configError("config: duplicate key {key} at line {line}"))
+        }
+        root.insert(key, value)
+        return Ok(())
+    }
+    match root.get(key) {
+        Some(existing) -> match json.asObject(existing) {
+            Ok(child) -> setObjectPathAt(child, parts, index + 1, value, line, strict),
+            Err(_) -> Err(configError("config: path {key} is not an object at line {line}")),
+        },
+        None -> {
+            let child: Map<String, json.Json> = {:}
+            root.insert(key, json.object(child))
+            setObjectPathAt(child, parts, index + 1, value, line, strict)
+        },
+    }
+}
+
+fn ensureObjectPath(root: Map<String, json.Json>, parts: List<String>, line: Int) -> Result<(), Error> {
+    if parts.len() == 0 {
+        return Ok(())
+    }
+    ensureObjectPathAt(root, parts, 0, line)
+}
+
+fn ensureObjectPathAt(root: Map<String, json.Json>, parts: List<String>, index: Int, line: Int) -> Result<(), Error> {
+    let key = parts[index]
+    if index == parts.len() - 1 {
+        match root.get(key) {
+            Some(existing) -> match json.asObject(existing) {
+                Ok(_) -> Ok(()),
+                Err(_) -> Err(configError("config: section {key} conflicts with scalar at line {line}")),
+            },
+            None -> {
+                let child: Map<String, json.Json> = {:}
+                root.insert(key, json.object(child))
+                Ok(())
+            },
+        }
+    } else {
+        match root.get(key) {
+            Some(existing) -> match json.asObject(existing) {
+                Ok(child) -> ensureObjectPathAt(child, parts, index + 1, line),
+                Err(_) -> Err(configError("config: section {key} conflicts with scalar at line {line}")),
+            },
+            None -> {
+                let child: Map<String, json.Json> = {:}
+                root.insert(key, json.object(child))
+                ensureObjectPathAt(child, parts, index + 1, line)
+            },
+        }
+    }
+}
+
+fn appendArrayPath(root: Map<String, json.Json>, parts: List<String>, value: json.Json, line: Int) -> Result<(), Error> {
+    let parent = parentPath(parts)
+    let key = parts[parts.len() - 1]
+    let obj = objectAtPath(root, parent, line)?
+    match obj.get(key) {
+        Some(existing) -> match json.asArray(existing) {
+            Ok(items) -> {
+                items.push(value)
+                Ok(())
+            },
+            Err(_) -> match json.asObject(existing) {
+                Ok(empty) -> {
+                    if empty.len() == 0 {
+                        obj.insert(key, json.array([value]))
+                        Ok(())
+                    } else {
+                        Err(configError("config: YAML list target is an object at line {line}"))
+                    }
+                },
+                Err(_) -> Err(configError("config: YAML list target is not an array at line {line}")),
+            },
+        },
+        None -> {
+            obj.insert(key, json.array([value]))
+            Ok(())
+        },
+    }
+}
+
+fn appendObjectArrayPath(root: Map<String, json.Json>, parts: List<String>, line: Int) -> Result<Map<String, json.Json>, Error> {
+    let arr = arrayAtPath(root, parts, line)?
+    let child: Map<String, json.Json> = {:}
+    arr.push(json.object(child))
+    Ok(child)
+}
+
+fn setLastArrayObjectPath(root: Map<String, json.Json>, arrayPath: List<String>, itemPath: List<String>, value: json.Json, line: Int) -> Result<(), Error> {
+    let obj = lastArrayObject(root, arrayPath, line)?
+    setObjectPath(obj, itemPath, value, line)
+}
+
+fn setLastArrayObjectPathStrict(root: Map<String, json.Json>, arrayPath: List<String>, itemPath: List<String>, value: json.Json, line: Int) -> Result<(), Error> {
+    let obj = lastArrayObject(root, arrayPath, line)?
+    setObjectPathStrict(obj, itemPath, value, line)
+}
+
+fn ensureLastArrayObjectPath(root: Map<String, json.Json>, arrayPath: List<String>, itemPath: List<String>, line: Int) -> Result<(), Error> {
+    let obj = lastArrayObject(root, arrayPath, line)?
+    ensureObjectPath(obj, itemPath, line)
+}
+
+fn lastArrayObject(root: Map<String, json.Json>, parts: List<String>, line: Int) -> Result<Map<String, json.Json>, Error> {
+    let arr = arrayAtPath(root, parts, line)?
+    if arr.len() == 0 {
+        return appendObjectArrayPath(root, parts, line)
+    }
+    let last = arr[arr.len() - 1]
+    match json.asObject(last) {
+        Ok(obj) -> Ok(obj),
+        Err(_) -> Err(configError("config: expected object item at line {line}")),
+    }
+}
+
+fn arrayAtPath(root: Map<String, json.Json>, parts: List<String>, line: Int) -> Result<List<json.Json>, Error> {
+    if parts.len() == 0 {
+        return Err(configError("config: empty array path at line {line}"))
+    }
+    let parent = parentPath(parts)
+    let key = parts[parts.len() - 1]
+    let obj = objectAtPath(root, parent, line)?
+    match obj.get(key) {
+        Some(existing) -> match json.asArray(existing) {
+            Ok(items) -> Ok(items),
+            Err(_) -> match json.asObject(existing) {
+                Ok(empty) -> {
+                    if empty.len() == 0 {
+                        let items: List<json.Json> = []
+                        obj.insert(key, json.array(items))
+                        Ok(items)
+                    } else {
+                        Err(configError("config: path {key} is an object, not an array at line {line}"))
+                    }
+                },
+                Err(_) -> Err(configError("config: path {key} is not an array at line {line}")),
+            },
+        },
+        None -> {
+            let items: List<json.Json> = []
+            obj.insert(key, json.array(items))
+            Ok(items)
+        },
+    }
+}
+
+fn objectAtPath(root: Map<String, json.Json>, parts: List<String>, line: Int) -> Result<Map<String, json.Json>, Error> {
+    if parts.len() == 0 {
+        return Ok(root)
+    }
+    let key = parts[0]
+    match root.get(key) {
+        Some(existing) -> match json.asObject(existing) {
+            Ok(child) -> objectAtPath(child, tailPath(parts), line),
+            Err(_) -> Err(configError("config: path {key} is not an object at line {line}")),
+        },
+        None -> {
+            let child: Map<String, json.Json> = {:}
+            root.insert(key, json.object(child))
+            objectAtPath(child, tailPath(parts), line)
+        },
+    }
+}
+
+fn parsePath(path: String) -> List<String> {
+    let mut out: List<String> = []
+    for part in strings.split(path, ".") {
+        let clean = cleanKey(part)
+        if clean != "" {
+            out.push(clean)
+        }
+    }
+    out
+}
+
+fn parseDottedPath(path: String) -> Result<List<String>, Error> {
+    let parts = parsePath(path)
+    if parts.len() == 0 {
+        return Err(configError("config: empty dotted path"))
+    }
+    Ok(parts)
+}
+
+fn parseEnvPath(name: String) -> List<String> {
+    let mut out: List<String> = []
+    for part in strings.split(name, "__") {
+        let clean = strings.toLower(strings.trimSpace(part))
+        if clean != "" {
+            out.push(clean)
+        }
+    }
+    out
+}
+
+fn appendPath(left: List<String>, right: List<String>) -> List<String> {
+    let mut out: List<String> = []
+    for item in left {
+        out.push(item)
+    }
+    for item in right {
+        out.push(item)
+    }
+    out
+}
+
+fn appendKey(parts: List<String>, key: String) -> List<String> {
+    let mut out: List<String> = []
+    for item in parts {
+        out.push(item)
+    }
+    out.push(key)
+    out
+}
+
+fn parentPath(parts: List<String>) -> List<String> {
+    let mut out: List<String> = []
+    if parts.len() <= 1 {
+        return out
+    }
+    for i in 0..(parts.len() - 1) {
+        out.push(parts[i])
+    }
+    out
+}
+
+fn tailPath(parts: List<String>) -> List<String> {
+    let mut out: List<String> = []
+    for i in 1..parts.len() {
+        out.push(parts[i])
+    }
+    out
+}
+
+fn levelPath(levels: List<List<String>>, level: Int) -> List<String> {
+    if level >= 0 && level < levels.len() {
+        return levels[level]
+    }
+    []
+}
+
+fn setLevelPath(levels: List<List<String>>, level: Int, path: List<String>) {
+    for levels.len() <= level {
+        levels.push([])
+    }
+    levels[level] = path
+}
+
+fn levelIsArray(flags: List<Bool>, level: Int) -> Bool {
+    if level >= 0 && level < flags.len() {
+        return flags[level]
+    }
+    false
+}
+
+fn setLevelArray(flags: List<Bool>, level: Int, value: Bool) {
+    for flags.len() <= level {
+        flags.push(false)
+    }
+    flags[level] = value
+}
+
+fn splitFirst(text: String, sep: String) -> SplitPair? {
+    match strings.indexOf(text, sep) {
+        Some(i) -> Some(SplitPair {
+            left: strings.slice(text, 0, i),
+            right: strings.slice(text, i + sep.len(), text.len()),
+        }),
+        None -> noneSplitPair(),
+    }
+}
+
+fn splitFirstEither(text: String, first: String, second: String) -> SplitPair? {
+    match splitFirst(text, first) {
+        Some(pair) -> Some(pair),
+        None -> splitFirst(text, second),
+    }
+}
+
+fn splitTopLevel(text: String, sep: Char) -> List<String> {
+    let mut out: List<String> = []
+    let mut cur = ""
+    let mut depth = 0
+    let mut quote = 0
+    let mut escaped = false
+    for c in text.chars() {
+        if quote != 0 {
+            cur = "{cur}{c}"
+            if escaped {
+                escaped = false
+            } else if c == '\\' {
+                escaped = true
+            } else if c.toInt() == quote {
+                quote = 0
+            }
+            continue
+        }
+        if c == '"' || c == '\'' {
+            quote = c.toInt()
+            cur = "{cur}{c}"
+        } else if c == '[' || c == '\{' {
+            depth = depth + 1
+            cur = "{cur}{c}"
+        } else if c == ']' || c == '\}' {
+            depth = depth - 1
+            cur = "{cur}{c}"
+        } else if c == sep && depth == 0 {
+            out.push(strings.trimSpace(cur))
+            cur = ""
+        } else {
+            cur = "{cur}{c}"
+        }
+    }
+    out.push(strings.trimSpace(cur))
+    out
+}
+
+fn stripComment(line: String, marker: Char) -> String {
+    let mut out = ""
+    let mut quote = 0
+    let mut escaped = false
+    for c in line.chars() {
+        if quote != 0 {
+            out = "{out}{c}"
+            if escaped {
+                escaped = false
+            } else if c == '\\' {
+                escaped = true
+            } else if c.toInt() == quote {
+                quote = 0
+            }
+            continue
+        }
+        if c == '"' || c == '\'' {
+            quote = c.toInt()
+            out = "{out}{c}"
+        } else if c == marker {
+            return out
+        } else {
+            out = "{out}{c}"
+        }
+    }
+    out
+}
+
+fn cleanKey(raw: String) -> String {
+    let key = strings.trimSpace(raw)
+    if isWrapped(key, '"') || isWrapped(key, '\'') {
+        match unquote(key) {
+            Ok(value) -> value,
+            Err(_) -> key,
+        }
+    } else {
+        key
+    }
+}
+
+fn unquote(raw: String) -> Result<String, Error> {
+    let chars = raw.chars()
+    if chars.len() < 2 {
+        return Err(configError("config: invalid quoted string"))
+    }
+    let quote = chars[0]
+    if chars[chars.len() - 1] != quote {
+        return Err(configError("config: unterminated quoted string"))
+    }
+    if quote == '\'' {
+        return Ok(strings.slice(raw, 1, raw.len() - 1))
+    }
+    let mut out = ""
+    let mut i = 1
+    for i < chars.len() - 1 {
+        let c = chars[i]
+        if c == '\\' {
+            i = i + 1
+            if i >= chars.len() - 1 {
+                return Err(configError("config: unterminated escape"))
+            }
+            let esc = chars[i]
+            if esc == 'n' {
+                out = "{out}\n"
+            } else if esc == 'r' {
+                out = "{out}\r"
+            } else if esc == 't' {
+                out = "{out}\t"
+            } else if esc == '"' {
+                out = "{out}\""
+            } else if esc == '\\' {
+                out = "{out}\\"
+            } else {
+                out = "{out}{esc}"
+            }
+        } else {
+            out = "{out}{c}"
+        }
+        i = i + 1
+    }
+    Ok(out)
+}
+
+fn isWrapped(text: String, quote: Char) -> Bool {
+    let chars = text.chars()
+    chars.len() >= 2 && chars[0] == quote && chars[chars.len() - 1] == quote
+}
+
+fn looksNumber(text: String) -> Bool {
+    let chars = text.chars()
+    if chars.len() == 0 {
+        return false
+    }
+    let mut i = 0
+    let mut digit = false
+    if chars[0] == '-' || chars[0] == '+' {
+        i = 1
+    }
+    for i < chars.len() {
+        let c = chars[i]
+        if c >= '0' && c <= '9' {
+            digit = true
+        } else if c == '.' || c == '_' || c == 'e' || c == 'E' || c == '-' || c == '+' {
+            let _ = c
+        } else {
+            return false
+        }
+        i = i + 1
+    }
+    digit
+}
+
+fn countLeadingSpaces(text: String) -> Int {
+    let mut n = 0
+    for c in text.chars() {
+        if c == ' ' {
+            n = n + 1
+        } else {
+            return n
+        }
+    }
+    n
+}
+
+fn jsonEqual(a: json.Json, b: json.Json) -> Bool {
+    json.stringifyValue(a) == json.stringifyValue(b)
+}
+
+fn issue(path: String, message: String) -> ValidationIssue {
+    ValidationIssue { path, message }
+}
+
+fn noneJson() -> json.Json? {
+    None
+}
+
+fn noneString() -> String? {
+    None
+}
+
+fn noneBool() -> Bool? {
+    None
+}
+
+fn noneFloat() -> Float? {
+    None
+}
+
+fn noneSplitPair() -> SplitPair? {
+    None
+}
+
+fn configError(message: String) -> Error {
+    error.new(message)
+}

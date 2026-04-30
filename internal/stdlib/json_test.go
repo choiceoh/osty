@@ -27,6 +27,19 @@ func TestJsonGenericWrappersAreLoweringStubs(t *testing.T) {
 	}
 }
 
+func TestJsonValueConstructorsAreExported(t *testing.T) {
+	reg := LoadCached()
+	for _, name := range []string{"object", "emptyObject", "array", "string", "number", "int", "bool", "null"} {
+		fn := reg.LookupFnDecl("json", name)
+		if fn == nil {
+			t.Fatalf("LookupFnDecl(json, %s) = nil, want *ast.FnDecl", name)
+		}
+		if fn.Body == nil {
+			t.Fatalf("json.%s body = nil, want source constructor body", name)
+		}
+	}
+}
+
 func TestJsonValueStringifierPreservesUTF8Bytes(t *testing.T) {
 	src := jsonModuleSource(t)
 	if strings.Contains(src, "b.toChar()") {
@@ -34,7 +47,7 @@ func TestJsonValueStringifierPreservesUTF8Bytes(t *testing.T) {
 	}
 	for _, want := range []string{
 		"out.push(b)",
-		"bytes.from(out).toString().unwrap()",
+		"bytes.toString(bytes.from(out)).unwrap()",
 	} {
 		if !strings.Contains(src, want) {
 			t.Fatalf("json stringifier source missing %q", want)

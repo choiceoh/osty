@@ -10,6 +10,7 @@
 // pair is fully implemented here as a spec-checked reference.
 use std.bytes
 use std.error
+use std.strings
 
 // ---------------------------------------------------------------------------
 // Type aliases
@@ -32,6 +33,38 @@ pub enum Json {
     Number(JsonNumber),
     Bool(JsonBool),
     Null,
+}
+
+pub fn object(entries: JsonObject) -> Json {
+    Object(entries)
+}
+
+pub fn emptyObject() -> Json {
+    Object({:})
+}
+
+pub fn array(items: JsonArray) -> Json {
+    Array(items)
+}
+
+pub fn string(value: String) -> Json {
+    String(value)
+}
+
+pub fn number(value: Float) -> Json {
+    Number(value)
+}
+
+pub fn int(value: Int) -> Json {
+    Number(value.toFloat())
+}
+
+pub fn bool(value: Bool) -> Json {
+    Bool(value)
+}
+
+pub fn null() -> Json {
+    Null
 }
 
 // ---------------------------------------------------------------------------
@@ -145,7 +178,7 @@ fn escapeJsonString(s: String) -> String {
         i = i + 1
     }
     pushByte(out, 0x22)
-    bytes.from(out).toString().unwrap()
+    bytes.toString(bytes.from(out)).unwrap()
 }
 
 fn pushAscii(buf: List<Byte>, s: String) {
@@ -264,7 +297,7 @@ fn parseStr(bs: List<Byte>, pos: Int, len: Int) -> Result<(String, Int), Error> 
         let b = bs[i].toInt()
         if b == 0x22 {
             // closing "
-            let result = bytes.from(buf).toString()?
+            let result = bytes.toString(bytes.from(buf))?
             return Ok((result, i + 1))
         }
         if b == 0x5C {
@@ -356,7 +389,7 @@ fn parseHex4(bs: List<Byte>, pos: Int) -> Result<Int, Error> {
 }
 
 fn pushByte(buf: List<Byte>, n: Int) {
-    buf.push(n.toByte().unwrap())
+    buf.push(n.toByte())
 }
 
 fn encodeUtf8(buf: List<Byte>, cp: Int) {
@@ -430,8 +463,8 @@ fn parseNum(bs: List<Byte>, pos: Int, len: Int) -> Result<(Json, Int), Error> {
         numBuf.push(bs[j])
         j = j + 1
     }
-    let numStr = bytes.from(numBuf).toString()?
-    let n = numStr.toFloat()?
+    let numStr = bytes.toString(bytes.from(numBuf))?
+    let n = strings.toFloat(numStr)?
     if n.isNaN() || n.isInfinite() {
         return Err(error.new("json: number out of range"))
     }
