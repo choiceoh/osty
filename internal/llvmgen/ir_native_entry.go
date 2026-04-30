@@ -2115,9 +2115,11 @@ func nativeStdFsResultInfo(ctx *nativeProjectionCtx, method string) (*nativeResu
 	switch method {
 	case "read":
 		okIR = ostyir.TBytes
-	case "readToString":
+	case "readToString", "hashFile", "diffFiles":
 		okIR = ostyir.TString
-	case "write", "writeString", "create", "remove", "rename", "copy", "mkdir", "mkdirAll":
+	case "walk", "glob", "watch":
+		okIR = &ostyir.NamedType{Name: "List", Args: []ostyir.Type{ostyir.TString}, Builtin: true}
+	case "write", "writeString", "create", "remove", "rename", "copy", "copyDir", "mkdir", "mkdirAll", "atomicWrite", "atomicWriteString", "lockFile":
 		okIR = &ostyir.TupleType{}
 	default:
 		return nil, false
@@ -2131,28 +2133,17 @@ func nativeStdFsResultInfo(ctx *nativeProjectionCtx, method string) (*nativeResu
 	return info, info != nil
 }
 
-func nativeStdFsPtrResultExpr(ctx *nativeProjectionCtx, call *ostyir.CallExpr, valueSymbol, errorSymbol string) (*llvmNativeExpr, bool) {
-	if ctx == nil || call == nil || len(call.Args) != 1 || call.Args[0].IsKeyword() || call.Args[0].Value == nil {
+func nativeStdFsPtrResultExpr(ctx *nativeProjectionCtx, method, valueSymbol, errorSymbol string, args ...*llvmNativeExpr) (*llvmNativeExpr, bool) {
+	if ctx == nil || len(args) == 0 {
 		return nil, false
-	}
-	method, _, _ := strings.Cut(strings.TrimPrefix(valueSymbol, "osty_rt_fs_"), "_")
-	if valueSymbol == ostyRtFsReadSymbol {
-		method = "read"
-	}
-	if valueSymbol == ostyRtFsReadStringSymbol {
-		method = "readToString"
 	}
 	resultInfo, ok := nativeStdFsResultInfo(ctx, method)
 	if !ok {
 		return nil, false
 	}
-	path, ok := nativeStdFsStringExpr(ctx, call.Args[0].Value)
-	if !ok {
-		return nil, false
-	}
-	ctx.addRuntimeDecl("declare ptr @" + valueSymbol + "(ptr)")
+	ctx.addRuntimeDecl("declare ptr @" + valueSymbol + "(" + strings.Join(nativeStdFsDeclParams(len(args)), ", ") + ")")
 	ctx.addRuntimeDecl("declare ptr @" + errorSymbol + "()")
-	read := nativeRuntimeCallExpr("ptr", valueSymbol, path)
+	read := nativeRuntimeCallExpr("ptr", valueSymbol, args...)
 	return &llvmNativeExpr{
 		kind:     llvmNativeExprIf,
 		llvmType: resultInfo.def.llvmType,
@@ -2194,6 +2185,32 @@ func nativeStdFsPtrResultExpr(ctx *nativeProjectionCtx, call *ostyir.CallExpr, v
 	}, true
 }
 
+func nativeStdFsSingleStringPtrResultExpr(ctx *nativeProjectionCtx, call *ostyir.CallExpr, method, valueSymbol, errorSymbol string) (*llvmNativeExpr, bool) {
+	if ctx == nil || call == nil || len(call.Args) != 1 || call.Args[0].IsKeyword() || call.Args[0].Value == nil {
+		return nil, false
+	}
+	path, ok := nativeStdFsStringExpr(ctx, call.Args[0].Value)
+	if !ok {
+		return nil, false
+	}
+	return nativeStdFsPtrResultExpr(ctx, method, valueSymbol, errorSymbol, path)
+}
+
+func nativeStdFsTwoStringPtrResultExpr(ctx *nativeProjectionCtx, call *ostyir.CallExpr, method, valueSymbol, errorSymbol string) (*llvmNativeExpr, bool) {
+	if ctx == nil || call == nil || len(call.Args) != 2 || call.Args[0].IsKeyword() || call.Args[1].IsKeyword() || call.Args[0].Value == nil || call.Args[1].Value == nil {
+		return nil, false
+	}
+	left, ok := nativeStdFsStringExpr(ctx, call.Args[0].Value)
+	if !ok {
+		return nil, false
+	}
+	right, ok := nativeStdFsStringExpr(ctx, call.Args[1].Value)
+	if !ok {
+		return nil, false
+	}
+	return nativeStdFsPtrResultExpr(ctx, method, valueSymbol, errorSymbol, left, right)
+}
+
 func nativeStdFsUnitResultExpr(ctx *nativeProjectionCtx, call *ostyir.CallExpr, symbol string, args ...*llvmNativeExpr) (*llvmNativeExpr, bool) {
 	if ctx == nil || call == nil {
 		return nil, false
@@ -2207,6 +2224,18 @@ func nativeStdFsUnitResultExpr(ctx *nativeProjectionCtx, call *ostyir.CallExpr, 
 	}
 	if method == "mkdir_all" {
 		method = "mkdirAll"
+	}
+	if method == "atomic_write_bytes" {
+		method = "atomicWrite"
+	}
+	if method == "atomic_write_string" {
+		method = "atomicWriteString"
+	}
+	if method == "lock_file" {
+		method = "lockFile"
+	}
+	if method == "copy_dir" {
+		method = "copyDir"
 	}
 	resultInfo, ok := nativeStdFsResultInfo(ctx, method)
 	if !ok {
@@ -2277,6 +2306,36 @@ func nativeStdFsSinglePathUnitResultExpr(ctx *nativeProjectionCtx, call *ostyir.
 	return nativeStdFsUnitResultExpr(ctx, call, symbol, path)
 }
 
+func nativeStdFsTwoStringUnitResultExpr(ctx *nativeProjectionCtx, call *ostyir.CallExpr, symbol string) (*llvmNativeExpr, bool) {
+	if ctx == nil || call == nil || len(call.Args) != 2 || call.Args[0].IsKeyword() || call.Args[1].IsKeyword() || call.Args[0].Value == nil || call.Args[1].Value == nil {
+		return nil, false
+	}
+	left, ok := nativeStdFsStringExpr(ctx, call.Args[0].Value)
+	if !ok {
+		return nil, false
+	}
+	right, ok := nativeStdFsStringExpr(ctx, call.Args[1].Value)
+	if !ok {
+		return nil, false
+	}
+	return nativeStdFsUnitResultExpr(ctx, call, symbol, left, right)
+}
+
+func nativeStdFsStringBytesUnitResultExpr(ctx *nativeProjectionCtx, call *ostyir.CallExpr, symbol string) (*llvmNativeExpr, bool) {
+	if ctx == nil || call == nil || len(call.Args) != 2 || call.Args[0].IsKeyword() || call.Args[1].IsKeyword() || call.Args[0].Value == nil || call.Args[1].Value == nil {
+		return nil, false
+	}
+	path, ok := nativeStdFsStringExpr(ctx, call.Args[0].Value)
+	if !ok {
+		return nil, false
+	}
+	contents, ok := nativeStdFsBytesExpr(ctx, call.Args[1].Value)
+	if !ok {
+		return nil, false
+	}
+	return nativeStdFsUnitResultExpr(ctx, call, symbol, path, contents)
+}
+
 func nativeStdFsExprFromIR(ctx *nativeProjectionCtx, call *ostyir.CallExpr) (*llvmNativeExpr, bool) {
 	method, ok := nativeStdFsCallMethod(ctx, call)
 	if !ok {
@@ -2284,9 +2343,9 @@ func nativeStdFsExprFromIR(ctx *nativeProjectionCtx, call *ostyir.CallExpr) (*ll
 	}
 	switch method {
 	case "read":
-		return nativeStdFsPtrResultExpr(ctx, call, ostyRtFsReadSymbol, ostyRtFsReadErrorSymbol)
+		return nativeStdFsSingleStringPtrResultExpr(ctx, call, "read", ostyRtFsReadSymbol, ostyRtFsReadErrorSymbol)
 	case "readToString":
-		return nativeStdFsPtrResultExpr(ctx, call, ostyRtFsReadStringSymbol, ostyRtFsReadStringErrorSymbol)
+		return nativeStdFsSingleStringPtrResultExpr(ctx, call, "readToString", ostyRtFsReadStringSymbol, ostyRtFsReadStringErrorSymbol)
 	case "write":
 		if len(call.Args) != 2 || call.Args[0].IsKeyword() || call.Args[1].IsKeyword() || call.Args[0].Value == nil || call.Args[1].Value == nil {
 			return nil, false
@@ -2323,6 +2382,12 @@ func nativeStdFsExprFromIR(ctx *nativeProjectionCtx, call *ostyir.CallExpr) (*ll
 		}
 		ctx.addRuntimeDecl("declare i1 @" + ostyRtFsExistsSymbol + "(ptr)")
 		return nativeRuntimeCallExpr("i1", ostyRtFsExistsSymbol, path), true
+	case "walk":
+		return nativeStdFsSingleStringPtrResultExpr(ctx, call, "walk", ostyRtFsWalkSymbol, ostyRtFsErrorSymbol)
+	case "glob":
+		return nativeStdFsSingleStringPtrResultExpr(ctx, call, "glob", ostyRtFsGlobSymbol, ostyRtFsErrorSymbol)
+	case "watch":
+		return nativeStdFsSingleStringPtrResultExpr(ctx, call, "watch", ostyRtFsWatchSymbol, ostyRtFsErrorSymbol)
 	case "create":
 		return nativeStdFsSinglePathUnitResultExpr(ctx, call, ostyRtFsCreateSymbol)
 	case "remove":
@@ -2353,10 +2418,22 @@ func nativeStdFsExprFromIR(ctx *nativeProjectionCtx, call *ostyir.CallExpr) (*ll
 			return nil, false
 		}
 		return nativeStdFsUnitResultExpr(ctx, call, ostyRtFsCopySymbol, from, to)
+	case "copyDir":
+		return nativeStdFsTwoStringUnitResultExpr(ctx, call, ostyRtFsCopyDirSymbol)
 	case "mkdir":
 		return nativeStdFsSinglePathUnitResultExpr(ctx, call, ostyRtFsMkdirSymbol)
 	case "mkdirAll":
 		return nativeStdFsSinglePathUnitResultExpr(ctx, call, ostyRtFsMkdirAllSymbol)
+	case "atomicWrite":
+		return nativeStdFsStringBytesUnitResultExpr(ctx, call, ostyRtFsAtomicWriteBytesSymbol)
+	case "atomicWriteString":
+		return nativeStdFsTwoStringUnitResultExpr(ctx, call, ostyRtFsAtomicWriteStringSymbol)
+	case "lockFile":
+		return nativeStdFsSinglePathUnitResultExpr(ctx, call, ostyRtFsLockFileSymbol)
+	case "hashFile":
+		return nativeStdFsSingleStringPtrResultExpr(ctx, call, "hashFile", ostyRtFsHashFileSymbol, ostyRtFsErrorSymbol)
+	case "diffFiles":
+		return nativeStdFsTwoStringPtrResultExpr(ctx, call, "diffFiles", ostyRtFsDiffFilesSymbol, ostyRtFsErrorSymbol)
 	default:
 		return nil, false
 	}

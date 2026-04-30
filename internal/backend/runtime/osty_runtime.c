@@ -81,6 +81,7 @@
 #  include <direct.h>
 #  define OSTY_RT_MKDIR_ONE(path) _mkdir(path)
 #else
+#  include <dirent.h>
 #  include <fcntl.h>
 #  include <sys/stat.h>
 #  include <sys/types.h>
@@ -21313,6 +21314,450 @@ static int osty_rt_fs_mkdir_p(const char *path) {
     return rc;
 }
 
+typedef struct osty_rt_fs_path_vec {
+    char **items;
+    size_t len;
+    size_t cap;
+} osty_rt_fs_path_vec;
+
+static void osty_rt_fs_path_vec_init(osty_rt_fs_path_vec *vec) {
+    vec->items = NULL;
+    vec->len = 0;
+    vec->cap = 0;
+}
+
+static void osty_rt_fs_path_vec_free(osty_rt_fs_path_vec *vec) {
+    if (vec == NULL) {
+        return;
+    }
+    for (size_t i = 0; i < vec->len; i++) {
+        free(vec->items[i]);
+    }
+    free(vec->items);
+    vec->items = NULL;
+    vec->len = 0;
+    vec->cap = 0;
+}
+
+static void osty_rt_fs_path_vec_push_take(osty_rt_fs_path_vec *vec, char *value) {
+    if (vec->len == vec->cap) {
+        size_t next = vec->cap == 0 ? 16U : vec->cap * 2U;
+        char **items = (char **)realloc(vec->items, next * sizeof(char *));
+        if (items == NULL) {
+            free(value);
+            osty_rt_abort("runtime.fs.path_vec: out of memory");
+        }
+        vec->items = items;
+        vec->cap = next;
+    }
+    vec->items[vec->len++] = value;
+}
+
+static void osty_rt_fs_path_vec_push_dup(osty_rt_fs_path_vec *vec, const char *value, const char *site) {
+    const char *text = value == NULL ? "" : value;
+    osty_rt_fs_path_vec_push_take(vec, osty_rt_strndup(text, strlen(text), site));
+}
+
+static int osty_rt_fs_path_cmp(const void *a, const void *b) {
+    const char *lhs = *(const char * const *)a;
+    const char *rhs = *(const char * const *)b;
+    return strcmp(lhs == NULL ? "" : lhs, rhs == NULL ? "" : rhs);
+}
+
+static void *osty_rt_fs_path_vec_to_list(osty_rt_fs_path_vec *vec, const char *site) {
+    void *out = osty_rt_list_new();
+    if (vec == NULL) {
+        return out;
+    }
+    if (vec->len > 1) {
+        qsort(vec->items, vec->len, sizeof(char *), osty_rt_fs_path_cmp);
+    }
+    for (size_t i = 0; i < vec->len; i++) {
+        const char *raw = vec->items[i] == NULL ? "" : vec->items[i];
+        const char *managed = osty_rt_string_dup_site(raw, strlen(raw), site);
+        osty_rt_list_push_string(out, managed);
+    }
+    return out;
+}
+
+static char *osty_rt_fs_join_path(const char *base, const char *name, bool trailing_slash) {
+    const char *lhs = base == NULL ? "" : base;
+    const char *rhs = name == NULL ? "" : name;
+    size_t lhs_len = strlen(lhs);
+    size_t rhs_len = strlen(rhs);
+    bool need_sep = lhs_len != 0 && lhs[lhs_len - 1] != '/' && lhs[lhs_len - 1] != '\\';
+    size_t total = lhs_len + (need_sep ? 1U : 0U) + rhs_len + (trailing_slash ? 1U : 0U);
+    char *out = (char *)osty_rt_xmalloc(total + 1U, "runtime.fs.join_path");
+    size_t off = 0;
+    if (lhs_len != 0) {
+        memcpy(out + off, lhs, lhs_len);
+        off += lhs_len;
+    }
+    if (need_sep) {
+        out[off++] = '/';
+    }
+    if (rhs_len != 0) {
+        memcpy(out + off, rhs, rhs_len);
+        off += rhs_len;
+    }
+    if (trailing_slash) {
+        out[off++] = '/';
+    }
+    out[off] = '\0';
+    return out;
+}
+
+static void osty_rt_fs_normalize_slashes(char *path) {
+    if (path == NULL) {
+        return;
+    }
+    for (char *p = path; *p != '\0'; p++) {
+        if (*p == '\\') {
+            *p = '/';
+        }
+    }
+}
+
+static char *osty_rt_fs_snapshot_row(char kind, const char *path, int64_t size, int64_t mtime_sec) {
+    const char *text = path == NULL ? "" : path;
+    int needed = snprintf(NULL, 0, "%c\t%lld\t%lld\t%s",
+                          kind, (long long)size, (long long)mtime_sec, text);
+    if (needed < 0) {
+        osty_rt_abort("runtime.fs.watch: snprintf failed");
+    }
+    char *out = (char *)osty_rt_xmalloc((size_t)needed + 1U, "runtime.fs.watch.row");
+    snprintf(out, (size_t)needed + 1U, "%c\t%lld\t%lld\t%s",
+             kind, (long long)size, (long long)mtime_sec, text);
+    return out;
+}
+
+void *osty_rt_fs_copy(const char *from, const char *to);
+
+#if defined(OSTY_RT_PLATFORM_POSIX)
+static int osty_rt_fs_collect_path(const char *path, const struct stat *st, osty_rt_fs_path_vec *out, bool snapshot) {
+    bool is_dir = S_ISDIR(st->st_mode);
+    bool is_link = S_ISLNK(st->st_mode);
+    char *stored = NULL;
+    if (snapshot) {
+        char kind = is_dir ? 'D' : (is_link ? 'L' : 'F');
+        stored = osty_rt_fs_snapshot_row(kind, path, (int64_t)st->st_size, (int64_t)st->st_mtime);
+    } else {
+        stored = osty_rt_strndup(path, strlen(path), "runtime.fs.walk.path");
+        osty_rt_fs_normalize_slashes(stored);
+    }
+    osty_rt_fs_path_vec_push_take(out, stored);
+    return is_dir ? 1 : 0;
+}
+
+static int osty_rt_fs_walk_dir_children_posix(const char *dir_path, osty_rt_fs_path_vec *out, bool snapshot) {
+    DIR *dir = opendir(dir_path);
+    if (dir == NULL) {
+        return -1;
+    }
+    for (;;) {
+        errno = 0;
+        struct dirent *ent = readdir(dir);
+        if (ent == NULL) {
+            int err = errno;
+            closedir(dir);
+            if (err != 0) {
+                errno = err;
+                return -1;
+            }
+            return 0;
+        }
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+            continue;
+        }
+        char *child = osty_rt_fs_join_path(dir_path, ent->d_name, false);
+        struct stat st;
+        if (lstat(child, &st) != 0) {
+            int err = errno;
+            free(child);
+            closedir(dir);
+            errno = err;
+            return -1;
+        }
+        char *visible = child;
+        if (S_ISDIR(st.st_mode)) {
+            visible = osty_rt_fs_join_path(child, "", false);
+        }
+        int recurse = osty_rt_fs_collect_path(visible, &st, out, snapshot);
+        if (visible != child) {
+            free(visible);
+        }
+        if (recurse < 0) {
+            free(child);
+            closedir(dir);
+            return -1;
+        }
+        if (recurse > 0) {
+            if (osty_rt_fs_walk_dir_children_posix(child, out, snapshot) != 0) {
+                int err = errno;
+                free(child);
+                closedir(dir);
+                errno = err;
+                return -1;
+            }
+        }
+        free(child);
+    }
+}
+
+static int osty_rt_fs_walk_root_posix(const char *root, osty_rt_fs_path_vec *out, bool snapshot) {
+    struct stat st;
+    if (lstat(root, &st) != 0) {
+        return -1;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        (void)osty_rt_fs_collect_path(root, &st, out, snapshot);
+        return 0;
+    }
+    return osty_rt_fs_walk_dir_children_posix(root, out, snapshot);
+}
+
+static int osty_rt_fs_copy_dir_posix(const char *from, const char *to) {
+    struct stat st;
+    DIR *dir;
+
+    if (lstat(from, &st) != 0) {
+        return -1;
+    }
+    if (!S_ISDIR(st.st_mode)) {
+        osty_rt_fs_set_last_error_literal("source is not a directory");
+        errno = 0;
+        return -1;
+    }
+    if (osty_rt_fs_mkdir_p(to) != 0) {
+        return -1;
+    }
+    dir = opendir(from);
+    if (dir == NULL) {
+        return -1;
+    }
+    for (;;) {
+        errno = 0;
+        struct dirent *ent = readdir(dir);
+        if (ent == NULL) {
+            int err = errno;
+            closedir(dir);
+            if (err != 0) {
+                errno = err;
+                return -1;
+            }
+            return 0;
+        }
+        if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0) {
+            continue;
+        }
+        char *src = osty_rt_fs_join_path(from, ent->d_name, false);
+        char *dst = osty_rt_fs_join_path(to, ent->d_name, false);
+        struct stat child_st;
+        int rc;
+        if (lstat(src, &child_st) != 0) {
+            int err = errno;
+            free(src);
+            free(dst);
+            closedir(dir);
+            errno = err;
+            return -1;
+        }
+        if (S_ISDIR(child_st.st_mode)) {
+            rc = osty_rt_fs_copy_dir_posix(src, dst);
+        } else {
+            void *err = osty_rt_fs_copy(src, dst);
+            rc = err == NULL ? 0 : -1;
+        }
+        if (rc != 0) {
+            int err = errno;
+            free(src);
+            free(dst);
+            closedir(dir);
+            if (err != 0) {
+                errno = err;
+            }
+            return -1;
+        }
+        free(src);
+        free(dst);
+    }
+}
+#endif
+
+static bool osty_rt_fs_glob_has_wildcard(const char *pattern) {
+    if (pattern == NULL) {
+        return false;
+    }
+    for (const char *p = pattern; *p != '\0'; p++) {
+        if (*p == '*' || *p == '?') {
+            return true;
+        }
+    }
+    return false;
+}
+
+static char *osty_rt_fs_glob_root(const char *pattern) {
+    const char *first = NULL;
+    const char *last_sep = NULL;
+    if (pattern == NULL || pattern[0] == '\0') {
+        return osty_rt_strndup(".", 1, "runtime.fs.glob.root");
+    }
+    for (const char *p = pattern; *p != '\0'; p++) {
+        if (*p == '*' || *p == '?') {
+            first = p;
+            break;
+        }
+        if (*p == '/' || *p == '\\') {
+            last_sep = p;
+        }
+    }
+    if (first == NULL) {
+        return osty_rt_strndup(pattern, strlen(pattern), "runtime.fs.glob.root");
+    }
+    if (last_sep == NULL) {
+        return osty_rt_strndup(".", 1, "runtime.fs.glob.root");
+    }
+    if (last_sep == pattern) {
+        return osty_rt_strndup(pattern, 1, "runtime.fs.glob.root");
+    }
+    return osty_rt_strndup(pattern, (size_t)(last_sep - pattern), "runtime.fs.glob.root");
+}
+
+static bool osty_rt_fs_glob_match_here(const char *pattern, const char *path) {
+    if (*pattern == '\0') {
+        return *path == '\0';
+    }
+    if (pattern[0] == '*' && pattern[1] == '*') {
+        const char *next = pattern + 2;
+        if (*next == '/') {
+            if (osty_rt_fs_glob_match_here(next + 1, path)) {
+                return true;
+            }
+            for (const char *p = path; *p != '\0'; p++) {
+                if (*p == '/' && osty_rt_fs_glob_match_here(next + 1, p + 1)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        do {
+            if (osty_rt_fs_glob_match_here(next, path)) {
+                return true;
+            }
+        } while (*path++ != '\0');
+        return false;
+    }
+    if (*pattern == '*') {
+        const char *next = pattern + 1;
+        const char *p = path;
+        do {
+            if (osty_rt_fs_glob_match_here(next, p)) {
+                return true;
+            }
+            if (*p == '\0' || *p == '/') {
+                return false;
+            }
+            p++;
+        } while (true);
+    }
+    if (*pattern == '?') {
+        return *path != '\0' && *path != '/' && osty_rt_fs_glob_match_here(pattern + 1, path + 1);
+    }
+    if (*pattern == *path) {
+        return osty_rt_fs_glob_match_here(pattern + 1, path + 1);
+    }
+    return false;
+}
+
+static bool osty_rt_fs_glob_match(const char *pattern, const char *path) {
+    char *pat = osty_rt_strndup(pattern == NULL ? "" : pattern, strlen(pattern == NULL ? "" : pattern), "runtime.fs.glob.pattern");
+    char *candidate = osty_rt_strndup(path == NULL ? "" : path, strlen(path == NULL ? "" : path), "runtime.fs.glob.candidate");
+    osty_rt_fs_normalize_slashes(pat);
+    osty_rt_fs_normalize_slashes(candidate);
+    bool ok = osty_rt_fs_glob_match_here(pat, candidate);
+    free(pat);
+    free(candidate);
+    return ok;
+}
+
+static char *osty_rt_fs_atomic_temp_path(const char *path, unsigned int attempt) {
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    long pid = (long)_getpid();
+#else
+    long pid = (long)getpid();
+#endif
+    int needed = snprintf(NULL, 0, "%s.tmp.%ld.%u", path == NULL ? "" : path, pid, attempt);
+    if (needed < 0) {
+        osty_rt_abort("runtime.fs.atomic_write: snprintf failed");
+    }
+    char *out = (char *)osty_rt_xmalloc((size_t)needed + 1U, "runtime.fs.atomic_write.temp");
+    snprintf(out, (size_t)needed + 1U, "%s.tmp.%ld.%u", path == NULL ? "" : path, pid, attempt);
+    return out;
+}
+
+static int osty_rt_fs_atomic_write_data(const char *path, const unsigned char *data, size_t len) {
+    if (path == NULL) {
+        osty_rt_fs_set_last_error_literal("path is null");
+        errno = 0;
+        return -1;
+    }
+    for (unsigned int attempt = 0; attempt < 32U; attempt++) {
+        char *tmp = osty_rt_fs_atomic_temp_path(path, attempt);
+        FILE *f = fopen(tmp, "rb");
+        if (f != NULL) {
+            fclose(f);
+            free(tmp);
+            continue;
+        }
+        if (osty_rt_fs_write_all(tmp, data, len) != 0) {
+            int err = errno;
+            remove(tmp);
+            free(tmp);
+            errno = err;
+            return -1;
+        }
+        if (rename(tmp, path) == 0) {
+            free(tmp);
+            return 0;
+        }
+        int err = errno;
+        remove(tmp);
+        free(tmp);
+        errno = err;
+        return -1;
+    }
+    osty_rt_fs_set_last_error_literal("could not allocate temporary file name");
+    errno = 0;
+    return -1;
+}
+
+static int osty_rt_fs_lock_file_raw(const char *path) {
+    if (path == NULL) {
+        osty_rt_fs_set_last_error_literal("path is null");
+        errno = 0;
+        return -1;
+    }
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    HANDLE h = CreateFileA(path, GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) {
+        DWORD code = GetLastError();
+        errno = code == ERROR_FILE_EXISTS || code == ERROR_ALREADY_EXISTS ? EEXIST : EIO;
+        return -1;
+    }
+    CloseHandle(h);
+    return 0;
+#else
+    int fd = open(path, O_CREAT | O_EXCL | O_WRONLY, 0644);
+    if (fd < 0) {
+        return -1;
+    }
+    if (close(fd) != 0) {
+        return -1;
+    }
+    return 0;
+#endif
+}
+
 void *osty_rt_fs_read(const char *path) {
     char path_buf[9];
     unsigned char *raw = NULL;
@@ -21559,6 +22004,268 @@ void *osty_rt_fs_mkdir_all(const char *path) {
         return NULL;
     }
     return osty_rt_fs_error_message("failed to create directory tree", "runtime.fs.mkdir_all.error");
+}
+
+void *osty_rt_fs_error(void) {
+    return osty_rt_fs_error_message("filesystem operation failed", "runtime.fs.error");
+}
+
+void *osty_rt_fs_walk(const char *root) {
+    char root_buf[9];
+    osty_rt_fs_path_vec vec;
+
+    osty_rt_string_decode_to_buf_if_inline(&root, root_buf);
+    if (root == NULL) {
+        osty_rt_fs_set_last_error_literal("root path is null");
+        errno = 0;
+        return NULL;
+    }
+    osty_rt_fs_clear_last_error();
+    osty_rt_fs_path_vec_init(&vec);
+#if defined(OSTY_RT_PLATFORM_POSIX)
+    if (osty_rt_fs_walk_root_posix(root, &vec, false) != 0) {
+        osty_rt_fs_path_vec_free(&vec);
+        return NULL;
+    }
+#else
+    osty_rt_fs_path_vec_free(&vec);
+    osty_rt_fs_set_last_error_literal("walk is not supported on this platform");
+    errno = 0;
+    return NULL;
+#endif
+    void *out = osty_rt_fs_path_vec_to_list(&vec, "runtime.fs.walk.entry");
+    osty_rt_fs_path_vec_free(&vec);
+    return out;
+}
+
+void *osty_rt_fs_glob(const char *pattern) {
+    char pattern_buf[9];
+    osty_rt_fs_path_vec candidates;
+    osty_rt_fs_path_vec matches;
+    char *root;
+
+    osty_rt_string_decode_to_buf_if_inline(&pattern, pattern_buf);
+    if (pattern == NULL) {
+        osty_rt_fs_set_last_error_literal("pattern is null");
+        errno = 0;
+        return NULL;
+    }
+    osty_rt_fs_clear_last_error();
+    osty_rt_fs_path_vec_init(&matches);
+    if (!osty_rt_fs_glob_has_wildcard(pattern)) {
+        if (osty_rt_fs_exists(pattern)) {
+            osty_rt_fs_path_vec_push_dup(&matches, pattern, "runtime.fs.glob.literal");
+        }
+        void *out = osty_rt_fs_path_vec_to_list(&matches, "runtime.fs.glob.entry");
+        osty_rt_fs_path_vec_free(&matches);
+        return out;
+    }
+
+    root = osty_rt_fs_glob_root(pattern);
+    osty_rt_fs_path_vec_init(&candidates);
+#if defined(OSTY_RT_PLATFORM_POSIX)
+    if (osty_rt_fs_walk_root_posix(root, &candidates, false) != 0) {
+        int err = errno;
+        if (err == ENOENT || err == ENOTDIR) {
+            osty_rt_fs_path_vec_free(&candidates);
+            free(root);
+            void *out = osty_rt_fs_path_vec_to_list(&matches, "runtime.fs.glob.entry");
+            osty_rt_fs_path_vec_free(&matches);
+            osty_rt_fs_clear_last_error();
+            errno = 0;
+            return out;
+        }
+        osty_rt_fs_path_vec_free(&candidates);
+        osty_rt_fs_path_vec_free(&matches);
+        free(root);
+        errno = err;
+        return NULL;
+    }
+#else
+    osty_rt_fs_path_vec_free(&candidates);
+    osty_rt_fs_path_vec_free(&matches);
+    free(root);
+    osty_rt_fs_set_last_error_literal("glob is not supported on this platform");
+    errno = 0;
+    return NULL;
+#endif
+    for (size_t i = 0; i < candidates.len; i++) {
+        const char *candidate = candidates.items[i] == NULL ? "" : candidates.items[i];
+        const char *visible = candidate;
+        if (strcmp(root, ".") == 0 && strncmp(candidate, "./", 2) == 0) {
+            visible = candidate + 2;
+        }
+        if (osty_rt_fs_glob_match(pattern, visible)) {
+            osty_rt_fs_path_vec_push_dup(&matches, visible, "runtime.fs.glob.match");
+        }
+    }
+    free(root);
+    osty_rt_fs_path_vec_free(&candidates);
+    void *out = osty_rt_fs_path_vec_to_list(&matches, "runtime.fs.glob.entry");
+    osty_rt_fs_path_vec_free(&matches);
+    return out;
+}
+
+void *osty_rt_fs_watch(const char *root) {
+    char root_buf[9];
+    osty_rt_fs_path_vec vec;
+
+    osty_rt_string_decode_to_buf_if_inline(&root, root_buf);
+    if (root == NULL) {
+        osty_rt_fs_set_last_error_literal("root path is null");
+        errno = 0;
+        return NULL;
+    }
+    osty_rt_fs_clear_last_error();
+    osty_rt_fs_path_vec_init(&vec);
+#if defined(OSTY_RT_PLATFORM_POSIX)
+    if (osty_rt_fs_walk_root_posix(root, &vec, true) != 0) {
+        osty_rt_fs_path_vec_free(&vec);
+        return NULL;
+    }
+#else
+    osty_rt_fs_path_vec_free(&vec);
+    osty_rt_fs_set_last_error_literal("watch snapshot is not supported on this platform");
+    errno = 0;
+    return NULL;
+#endif
+    void *out = osty_rt_fs_path_vec_to_list(&vec, "runtime.fs.watch.entry");
+    osty_rt_fs_path_vec_free(&vec);
+    return out;
+}
+
+void *osty_rt_fs_atomic_write_bytes(const char *path, void *raw_bytes) {
+    char path_buf[9];
+    osty_rt_bytes *bytes = (osty_rt_bytes *)raw_bytes;
+
+    osty_rt_string_decode_to_buf_if_inline(&path, path_buf);
+    if (bytes == NULL) {
+        osty_rt_fs_set_last_error_literal("contents is null");
+        errno = 0;
+        return osty_rt_fs_error_message("failed to atomically write file", "runtime.fs.atomic_write.error");
+    }
+    osty_rt_fs_clear_last_error();
+    if (osty_rt_fs_atomic_write_data(path, bytes->data, (size_t)bytes->len) != 0) {
+        return osty_rt_fs_error_message("failed to atomically write file", "runtime.fs.atomic_write.error");
+    }
+    return NULL;
+}
+
+void *osty_rt_fs_atomic_write_string(const char *path, const char *contents) {
+    char path_buf[9];
+    char contents_buf[9];
+
+    osty_rt_string_decode_to_buf_if_inline(&path, path_buf);
+    osty_rt_string_decode_to_buf_if_inline(&contents, contents_buf);
+    if (contents == NULL) {
+        osty_rt_fs_set_last_error_literal("contents is null");
+        errno = 0;
+        return osty_rt_fs_error_message("failed to atomically write text file", "runtime.fs.atomic_write_string.error");
+    }
+    osty_rt_fs_clear_last_error();
+    if (osty_rt_fs_atomic_write_data(path, (const unsigned char *)contents, osty_rt_string_len(contents)) != 0) {
+        return osty_rt_fs_error_message("failed to atomically write text file", "runtime.fs.atomic_write_string.error");
+    }
+    return NULL;
+}
+
+void *osty_rt_fs_lock_file(const char *path) {
+    char path_buf[9];
+
+    osty_rt_string_decode_to_buf_if_inline(&path, path_buf);
+    osty_rt_fs_clear_last_error();
+    if (osty_rt_fs_lock_file_raw(path) != 0) {
+        return osty_rt_fs_error_message("failed to create lock file", "runtime.fs.lock_file.error");
+    }
+    return NULL;
+}
+
+void *osty_rt_fs_copy_dir(const char *from, const char *to) {
+    char from_buf[9];
+    char to_buf[9];
+
+    osty_rt_string_decode_to_buf_if_inline(&from, from_buf);
+    osty_rt_string_decode_to_buf_if_inline(&to, to_buf);
+    if (from == NULL) {
+        osty_rt_fs_set_last_error_literal("source path is null");
+        errno = 0;
+        return osty_rt_fs_error_message("failed to copy directory", "runtime.fs.copy_dir.error");
+    }
+    if (to == NULL) {
+        osty_rt_fs_set_last_error_literal("destination path is null");
+        errno = 0;
+        return osty_rt_fs_error_message("failed to copy directory", "runtime.fs.copy_dir.error");
+    }
+    osty_rt_fs_clear_last_error();
+#if defined(OSTY_RT_PLATFORM_POSIX)
+    if (osty_rt_fs_copy_dir_posix(from, to) != 0) {
+        return osty_rt_fs_error_message("failed to copy directory", "runtime.fs.copy_dir.error");
+    }
+    return NULL;
+#else
+    osty_rt_fs_set_last_error_literal("copyDir is not supported on this platform");
+    errno = 0;
+    return osty_rt_fs_error_message("failed to copy directory", "runtime.fs.copy_dir.error");
+#endif
+}
+
+void *osty_rt_fs_hash_file(const char *path) {
+    char path_buf[9];
+    unsigned char *raw = NULL;
+    size_t raw_len = 0;
+    unsigned char digest[32];
+    char hex[65];
+    static const char alphabet[] = "0123456789abcdef";
+
+    osty_rt_string_decode_to_buf_if_inline(&path, path_buf);
+    osty_rt_crypto_require_selftest();
+    if (osty_rt_fs_read_all(path, &raw, &raw_len) != 0) {
+        return NULL;
+    }
+    osty_rt_crypto_sha256_digest(raw, raw_len, digest);
+    for (size_t i = 0; i < sizeof(digest); i++) {
+        hex[i * 2U] = alphabet[digest[i] >> 4U];
+        hex[i * 2U + 1U] = alphabet[digest[i] & 0x0FU];
+    }
+    hex[64] = '\0';
+    free(raw);
+    osty_rt_crypto_secure_zero(digest, sizeof(digest));
+    return osty_rt_string_dup_site(hex, 64, "runtime.fs.hash_file");
+}
+
+void *osty_rt_fs_diff_files(const char *left, const char *right) {
+    char left_buf[9];
+    char right_buf[9];
+    unsigned char *left_raw = NULL;
+    unsigned char *right_raw = NULL;
+    size_t left_len = 0;
+    size_t right_len = 0;
+    const char *diff;
+
+    osty_rt_string_decode_to_buf_if_inline(&left, left_buf);
+    osty_rt_string_decode_to_buf_if_inline(&right, right_buf);
+    if (osty_rt_fs_read_all(left, &left_raw, &left_len) != 0) {
+        return NULL;
+    }
+    if (osty_rt_fs_read_all(right, &right_raw, &right_len) != 0) {
+        free(left_raw);
+        return NULL;
+    }
+    if (left_len == right_len && (left_len == 0 || memcmp(left_raw, right_raw, left_len) == 0)) {
+        free(left_raw);
+        free(right_raw);
+        return osty_rt_string_dup_site("", 0, "runtime.fs.diff_files.empty");
+    }
+    if (!osty_rt_bytes_validate_utf8_data(left_raw, left_len) ||
+        !osty_rt_bytes_validate_utf8_data(right_raw, right_len)) {
+        free(left_raw);
+        free(right_raw);
+        return osty_rt_string_dup_site("binary files differ", 19, "runtime.fs.diff_files.binary");
+    }
+    diff = osty_rt_strings_DiffLines((const char *)left_raw, (const char *)right_raw);
+    free(left_raw);
+    free(right_raw);
+    return (void *)diff;
 }
 
 /* std.os process-control surface.

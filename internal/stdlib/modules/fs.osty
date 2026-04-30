@@ -1,10 +1,14 @@
 // std.fs — practical filesystem access.
 //
 // The Tier 1 surface stays intentionally whole-file oriented: read and
-// write files, probe existence, create/remove/rename paths, and create
-// directories. Streaming handles remain a higher-tier concern. The
-// concrete behavior is provided by the backend/runtime bridge.
+// write files, enumerate trees, probe existence, mutate paths, hash and
+// diff files, and create directories. Streaming handles remain a
+// higher-tier concern. The concrete behavior is provided by the
+// backend/runtime bridge.
 // `readToString` returns Err when the file bytes are not valid UTF-8.
+// `walk` returns sorted descendants; directory paths end in `/`.
+// `glob` supports `*`, `?`, and `**` over slash-normalized paths.
+// `watch` is a polling snapshot: each row is `kind<TAB>size<TAB>mtime<TAB>path`.
 
 pub fn read(path: String) -> Result<Bytes, Error>
 
@@ -16,6 +20,12 @@ pub fn writeString(path: String, contents: String) -> Result<(), Error>
 
 pub fn exists(path: String) -> Bool
 
+pub fn walk(root: String) -> Result<List<String>, Error>
+
+pub fn glob(pattern: String) -> Result<List<String>, Error>
+
+pub fn watch(root: String) -> Result<List<String>, Error>
+
 pub fn create(path: String) -> Result<(), Error>
 
 pub fn remove(path: String) -> Result<(), Error>
@@ -24,6 +34,18 @@ pub fn rename(from: String, to: String) -> Result<(), Error>
 
 pub fn copy(from: String, to: String) -> Result<(), Error>
 
+pub fn copyDir(from: String, to: String) -> Result<(), Error>
+
 pub fn mkdir(path: String) -> Result<(), Error>
 
 pub fn mkdirAll(path: String) -> Result<(), Error>
+
+pub fn atomicWrite(path: String, contents: Bytes) -> Result<(), Error>
+
+pub fn atomicWriteString(path: String, contents: String) -> Result<(), Error>
+
+pub fn lockFile(path: String) -> Result<(), Error>
+
+pub fn hashFile(path: String) -> Result<String, Error>
+
+pub fn diffFiles(left: String, right: String) -> Result<String, Error>

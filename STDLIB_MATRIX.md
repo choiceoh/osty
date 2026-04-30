@@ -184,7 +184,8 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 
 **현재 상태**:
 - 46 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, aiagents, redact, media, security, search, markdown, report, tokenest, httpretry, jsonl, shortid, metrics, net, fmt, json, config, table, url, io, collections, email, db, grid, gui, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
-- 6 모듈은 Phase A 충실 + Phase B declaration-only (fs, env, random, os, crypto, compress)
+- 5 모듈은 Phase A 충실 + Phase B declaration-only (env, random, os, crypto, compress)
+- fs 는 Phase A 충실 + 확장된 tool-facing declaration surface (walk/glob/watch/atomicWrite/lockFile/hashFile/copyDir/diffFiles)
 - 나머지는 의도된 범위에서 surface 만으로 완성 (cli, math, cmp, hint, debug, ref, process, log, time, error, sync, thread, regex, testing, uuid)
 
 ## 5. 평가 함정: `.osty` 줄 수 모델의 한계
@@ -193,11 +194,12 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 
 ### 5.1 Bodyless declaration + runtime intrinsic
 
-`math.osty` 42 줄, `fs.osty` 29 줄, `crypto.osty` 23 줄 모두 *각 함수가 한 줄 declaration*:
+`math.osty` 42 줄, `fs.osty`, `crypto.osty` 23 줄 모두 *각 함수가 한 줄 declaration*:
 
 ```osty
 pub fn sin(x: Float) -> Float
 pub fn read(path: String) -> Result<Bytes, Error>
+pub fn walk(root: String) -> Result<List<String>, Error>
 pub fn sha256(data: Bytes) -> Bytes
 ```
 

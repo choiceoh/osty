@@ -5,7 +5,9 @@
   stream helpers such as `readAll`, `readExact`, `copy`, `writeString`
 - `std.fs` — whole-file and path operations:
   `read`, `readToString`, `write`, `writeString`, `exists`,
-  `create`, `remove`, `rename`, `copy`, `mkdir`, `mkdirAll`
+  `walk`, `glob`, `watch`, `create`, `remove`, `rename`, `copy`,
+  `copyDir`, `mkdir`, `mkdirAll`, `atomicWrite`, `atomicWriteString`,
+  `lockFile`, `hashFile`, `diffFiles`
 - `std.strings` — string manipulation
 - `std.collections` — `List`, `Map`, `Set`
 - `std.option` — `Option`, `Some`, `None` (auto-imported), plus rich

@@ -28,6 +28,22 @@ func TestSmtpModuleSurface(t *testing.T) {
 	}
 }
 
+func TestFsModuleSurface(t *testing.T) {
+	reg := LoadCached()
+	mod := reg.Modules["fs"]
+	if mod == nil || mod.Package == nil {
+		t.Fatalf("std.fs not loaded")
+	}
+	for _, name := range []string{
+		"read", "readToString", "write", "writeString", "exists",
+		"walk", "glob", "watch", "create", "remove", "rename", "copy",
+		"copyDir", "mkdir", "mkdirAll", "atomicWrite", "atomicWriteString",
+		"lockFile", "hashFile", "diffFiles",
+	} {
+		requirePublicFn(t, mod, "fs", name)
+	}
+}
+
 func TestZipModuleSurface(t *testing.T) {
 	reg := LoadCached()
 	mod := reg.Modules["zip"]
@@ -64,6 +80,16 @@ func TestImageModuleSurface(t *testing.T) {
 func TestBigGapModuleSourcePinsBehavior(t *testing.T) {
 	reg := LoadCached()
 	cases := map[string][]string{
+		"fs": {
+			`pub fn walk(root: String) -> Result<List<String>, Error>`,
+			`pub fn glob(pattern: String) -> Result<List<String>, Error>`,
+			`pub fn watch(root: String) -> Result<List<String>, Error>`,
+			`pub fn atomicWrite(path: String, contents: Bytes) -> Result<(), Error>`,
+			`pub fn lockFile(path: String) -> Result<(), Error>`,
+			`pub fn hashFile(path: String) -> Result<String, Error>`,
+			`pub fn copyDir(from: String, to: String) -> Result<(), Error>`,
+			`pub fn diffFiles(left: String, right: String) -> Result<String, Error>`,
+		},
 		"smtp": {
 			`pub fn authPlain(username: String, password: String) -> String`,
 			`pub fn parseReply(line: String) -> Result<Reply, Error>`,
