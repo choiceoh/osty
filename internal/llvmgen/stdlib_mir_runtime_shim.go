@@ -532,9 +532,13 @@ func (g *mirGen) emitStdOsCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error)
 	method := strings.TrimPrefix(fnRef.Symbol, "std.os.")
 	switch method {
 	case "exec":
-		return true, g.emitStdOsExecMIR(c, false)
+		return true, g.emitStdOsExecMIR(c, false, false)
 	case "execShell":
-		return true, g.emitStdOsExecMIR(c, true)
+		return true, g.emitStdOsExecMIR(c, true, false)
+	case "execWith":
+		return true, g.emitStdOsExecMIR(c, false, true)
+	case "execShellWith":
+		return true, g.emitStdOsExecMIR(c, true, true)
 	case "pid":
 		if len(c.Args) != 0 {
 			return true, unsupported("mir-mvp", "std.os.pid requires no arguments")
@@ -559,8 +563,9 @@ func (g *mirGen) emitStdOsCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error)
 	return false, nil
 }
 
-func (g *mirGen) emitStdOsExecMIR(c *mir.CallInstr, shell bool) error {
-	if len(c.Args) == 0 || (!shell && len(c.Args) > 2) || (shell && len(c.Args) != 1) {
+func (g *mirGen) emitStdOsExecMIR(c *mir.CallInstr, shell bool, withOptions bool) error {
+	if len(c.Args) == 0 || (!withOptions && ((!shell && len(c.Args) > 2) || (shell && len(c.Args) != 1))) ||
+		(withOptions && ((!shell && len(c.Args) != 5) || (shell && len(c.Args) != 4))) {
 		return unsupported("mir-mvp", "std.os.exec/execShell argument shape")
 	}
 	cmdArg, err := g.evalStringArg(c.Args[0], "std.os.exec", 0)
@@ -577,19 +582,59 @@ func (g *mirGen) emitStdOsExecMIR(c *mir.CallInstr, shell bool) error {
 			return unsupported("mir-mvp", "std.os.exec args must be List<String>")
 		}
 	}
+	cwdArg := mirRuntimeArg{typ: "ptr", val: "null"}
+	envArg := mirRuntimeArg{typ: "ptr", val: "null"}
+	timeoutArg := mirRuntimeArg{typ: "i64", val: "0"}
+	if withOptions {
+		argsIndex := 1
+		if !shell {
+			argsArg, err = g.evalTypedArg(c.Args[1], c.Args[1].Type())
+			if err != nil {
+				return err
+			}
+			if argsArg.typ != "ptr" {
+				return unsupported("mir-mvp", "std.os.execWith args must be List<String>")
+			}
+			argsIndex = 2
+		}
+		cwdArg, err = g.evalStringArg(c.Args[argsIndex], "std.os.execWith", argsIndex)
+		if err != nil {
+			return err
+		}
+		envArg, err = g.evalTypedArg(c.Args[argsIndex+1], c.Args[argsIndex+1].Type())
+		if err != nil {
+			return err
+		}
+		if envArg.typ != "ptr" {
+			return unsupported("mir-mvp", "std.os.execWith env must be Map<String, String>")
+		}
+		timeoutArg, err = g.evalIntArg(c.Args[argsIndex+2], "std.os.execWith", argsIndex+2)
+		if err != nil {
+			return err
+		}
+	}
 	shellArg := mirRuntimeArg{typ: "i1", val: "false"}
 	if shell {
 		shellArg.val = "true"
 	}
-	g.declareRuntime(ostyRtOsExecSymbol, mirRuntimeDeclareLine("ptr", ostyRtOsExecSymbol, "ptr, ptr, i1"))
+	if withOptions {
+		g.declareRuntime(ostyRtOsExecOptionsSymbol, mirRuntimeDeclareLine("ptr", ostyRtOsExecOptionsSymbol, "ptr, ptr, i1, ptr, ptr, i64"))
+	} else {
+		g.declareRuntime(ostyRtOsExecSymbol, mirRuntimeDeclareLine("ptr", ostyRtOsExecSymbol, "ptr, ptr, i1"))
+	}
 	g.declareRuntime(ostyRtOsExecResultFreeSymbol, mirRuntimeDeclareLine("void", ostyRtOsExecResultFreeSymbol, "ptr"))
 	raw := g.fresh()
-	g.fnBuf.WriteString(mirCallValueLine(raw, "ptr", ostyRtOsExecSymbol, mirRuntimeArgList([]mirRuntimeArg{cmdArg, argsArg, shellArg})))
+	if withOptions {
+		g.fnBuf.WriteString(mirCallValueLine(raw, "ptr", ostyRtOsExecOptionsSymbol, mirRuntimeArgList([]mirRuntimeArg{cmdArg, argsArg, shellArg, cwdArg, envArg, timeoutArg})))
+	} else {
+		g.fnBuf.WriteString(mirCallValueLine(raw, "ptr", ostyRtOsExecSymbol, mirRuntimeArgList([]mirRuntimeArg{cmdArg, argsArg, shellArg})))
+	}
 	tag := g.emitRecordFieldLoad(raw, stdOsExecRuntimeRecordLLVMType, "i64", 0)
 	exitCode := g.emitRecordFieldLoad(raw, stdOsExecRuntimeRecordLLVMType, "i64", 1)
-	stdoutText := g.emitRecordFieldLoad(raw, stdOsExecRuntimeRecordLLVMType, "ptr", 2)
-	stderrText := g.emitRecordFieldLoad(raw, stdOsExecRuntimeRecordLLVMType, "ptr", 3)
-	errText := g.emitRecordFieldLoad(raw, stdOsExecRuntimeRecordLLVMType, "ptr", 4)
+	timedOut := g.emitRecordFieldLoad(raw, stdOsExecRuntimeRecordLLVMType, "i1", 2)
+	stdoutText := g.emitRecordFieldLoad(raw, stdOsExecRuntimeRecordLLVMType, "ptr", 3)
+	stderrText := g.emitRecordFieldLoad(raw, stdOsExecRuntimeRecordLLVMType, "ptr", 4)
+	errText := g.emitRecordFieldLoad(raw, stdOsExecRuntimeRecordLLVMType, "ptr", 5)
 	g.fnBuf.WriteString(mirCallVoidLine(ostyRtOsExecResultFreeSymbol, mirArgSlotPtr(raw)))
 	if c.Dest == nil {
 		return nil
@@ -617,11 +662,15 @@ func (g *mirGen) emitStdOsExecMIR(c *mir.CallInstr, shell bool) error {
 	g.fnBuf.WriteString(mirBrUncondLine(contLabel))
 
 	g.fnBuf.WriteString(mirLabelLine(okLabel))
-	output, err := g.buildAggregateValue(okT, []mirRuntimeArg{
+	outputArgs := []mirRuntimeArg{
 		{typ: "i64", val: exitCode},
 		{typ: "ptr", val: stdoutText},
 		{typ: "ptr", val: stderrText},
-	})
+	}
+	if withOptions {
+		outputArgs = append(outputArgs, mirRuntimeArg{typ: "i1", val: timedOut})
+	}
+	output, err := g.buildAggregateValue(okT, outputArgs)
 	if err != nil {
 		return err
 	}
