@@ -7,15 +7,17 @@ import (
 )
 
 const ostyRtOsExecSymbol = "osty_rt_os_exec"
+const ostyRtOsExecOptionsSymbol = "osty_rt_os_exec_options"
 const ostyRtOsHostnameSymbol = "osty_rt_os_hostname"
 const ostyRtOsPidSymbol = "osty_rt_os_pid"
 const ostyRtOsExitSymbol = "osty_rt_os_exit"
 const ostyRtOsExecResultFreeSymbol = "osty_rt_os_exec_result_free"
 const ostyRtOsStringResultFreeSymbol = "osty_rt_os_string_result_free"
 
-const stdOsExecRuntimeRecordLLVMType = "{ i64, i64, ptr, ptr, ptr }"
+const stdOsExecRuntimeRecordLLVMType = "{ i64, i64, i1, ptr, ptr, ptr }"
 const stdOsStringRuntimeRecordLLVMType = "{ i64, ptr, ptr }"
 const stdOsSyntheticOutputTypeName = "__osty_std_os_Output"
+const stdOsSyntheticExecOutputTypeName = "__osty_std_os_ExecOutput"
 
 func llvmRuntimeStructFieldPtr(emitter *LlvmEmitter, structType string, base *LlvmValue, index int) *LlvmValue {
 	reg := llvmNextTemp(emitter)
@@ -38,6 +40,18 @@ var stdOsExecResultSourceTypeSingleton ast.Type = &ast.NamedType{
 	Path: []string{"Result"},
 	Args: []ast.Type{
 		stdOsOutputSourceTypeSingleton,
+		errorSourceTypeSingleton,
+	},
+}
+
+var stdOsExecOutputSourceTypeSingleton ast.Type = &ast.NamedType{
+	Path: []string{stdOsSyntheticExecOutputTypeName},
+}
+
+var stdOsExecOptionsResultSourceTypeSingleton ast.Type = &ast.NamedType{
+	Path: []string{"Result"},
+	Args: []ast.Type{
+		stdOsExecOutputSourceTypeSingleton,
 		errorSourceTypeSingleton,
 	},
 }
@@ -119,6 +133,60 @@ func ensureStdOsSyntheticOutputStruct(g *generator) *structInfo {
 	return info
 }
 
+func ensureStdOsSyntheticExecOutputStruct(g *generator) *structInfo {
+	if g == nil {
+		return nil
+	}
+	if info := g.structsByName[stdOsSyntheticExecOutputTypeName]; info != nil {
+		return info
+	}
+	if g.structsByName == nil {
+		g.structsByName = map[string]*structInfo{}
+	}
+	if g.structsByType == nil {
+		g.structsByType = map[string]*structInfo{}
+	}
+	info := &structInfo{
+		name:   stdOsSyntheticExecOutputTypeName,
+		typ:    llvmStructTypeName(stdOsSyntheticExecOutputTypeName),
+		byName: map[string]fieldInfo{},
+	}
+	fields := []fieldInfo{
+		{
+			name:       "exitCode",
+			typ:        "i64",
+			index:      0,
+			sourceType: &ast.NamedType{Path: []string{"Int"}},
+		},
+		{
+			name:       "stdout",
+			typ:        "ptr",
+			index:      1,
+			sourceType: &ast.NamedType{Path: []string{"String"}},
+		},
+		{
+			name:       "stderr",
+			typ:        "ptr",
+			index:      2,
+			sourceType: &ast.NamedType{Path: []string{"String"}},
+		},
+		{
+			name:       "timedOut",
+			typ:        "i1",
+			index:      3,
+			sourceType: &ast.NamedType{Path: []string{"Bool"}},
+		},
+	}
+	info.fields = fields
+	for _, field := range fields {
+		info.byName[field.name] = field
+	}
+	g.structs = append(g.structs, info)
+	g.structsByName[info.name] = info
+	g.structsByType[info.typ] = info
+	return info
+}
+
 func (g *generator) emitStdOsCall(call *ast.CallExpr) (value, bool, error) {
 	field, ok := g.stdOsCallField(call)
 	if !ok {
@@ -129,6 +197,10 @@ func (g *generator) emitStdOsCall(call *ast.CallExpr) (value, bool, error) {
 		return g.emitStdOsExecCall(call)
 	case "execShell":
 		return g.emitStdOsExecShellCall(call)
+	case "execWith":
+		return g.emitStdOsExecWithCall(call)
+	case "execShellWith":
+		return g.emitStdOsExecShellWithCall(call)
 	case "pid":
 		return g.emitStdOsPidCall(call)
 	case "hostname":
@@ -157,6 +229,17 @@ func (g *generator) stdOsCallStaticResult(call *ast.CallExpr) (value, bool) {
 			sourceType: stdOsExecResultSourceTypeSingleton,
 			rootPaths:  g.rootPathsForType(info.typ),
 		}, true
+	case "execWith", "execShellWith":
+		ensureStdOsSyntheticExecOutputStruct(g)
+		info, ok := builtinResultTypeFromAST(stdOsExecOptionsResultSourceTypeSingleton, g.typeEnv())
+		if !ok {
+			return value{}, false
+		}
+		return value{
+			typ:        info.typ,
+			sourceType: stdOsExecOptionsResultSourceTypeSingleton,
+			rootPaths:  g.rootPathsForType(info.typ),
+		}, true
 	case "pid":
 		return value{typ: "i64"}, true
 	case "hostname":
@@ -183,6 +266,9 @@ func (g *generator) staticStdOsCallSourceType(call *ast.CallExpr) (ast.Type, boo
 	case "exec", "execShell":
 		ensureStdOsSyntheticOutputStruct(g)
 		return stdOsExecResultSourceTypeSingleton, true
+	case "execWith", "execShellWith":
+		ensureStdOsSyntheticExecOutputStruct(g)
+		return stdOsExecOptionsResultSourceTypeSingleton, true
 	case "pid":
 		return &ast.NamedType{Path: []string{"Int"}}, true
 	case "hostname":
@@ -208,36 +294,56 @@ func (g *generator) stdOsCallField(call *ast.CallExpr) (*ast.FieldExpr, bool) {
 }
 
 func (g *generator) emitStdOsExecCall(call *ast.CallExpr) (value, bool, error) {
-	return g.emitStdOsExecLikeCall(call, false)
+	return g.emitStdOsExecLikeCall(call, false, false)
 }
 
 func (g *generator) emitStdOsExecShellCall(call *ast.CallExpr) (value, bool, error) {
-	return g.emitStdOsExecLikeCall(call, true)
+	return g.emitStdOsExecLikeCall(call, true, false)
 }
 
-func (g *generator) emitStdOsExecLikeCall(call *ast.CallExpr, shell bool) (value, bool, error) {
+func (g *generator) emitStdOsExecWithCall(call *ast.CallExpr) (value, bool, error) {
+	return g.emitStdOsExecLikeCall(call, false, true)
+}
+
+func (g *generator) emitStdOsExecShellWithCall(call *ast.CallExpr) (value, bool, error) {
+	return g.emitStdOsExecLikeCall(call, true, true)
+}
+
+func (g *generator) emitStdOsExecLikeCall(call *ast.CallExpr, shell bool, withOptions bool) (value, bool, error) {
+	resultSourceType := stdOsExecResultSourceTypeSingleton
 	ensureStdOsSyntheticOutputStruct(g)
-	info, ok := builtinResultTypeFromAST(stdOsExecResultSourceTypeSingleton, g.typeEnv())
+	if withOptions {
+		resultSourceType = stdOsExecOptionsResultSourceTypeSingleton
+		ensureStdOsSyntheticExecOutputStruct(g)
+	}
+	info, ok := builtinResultTypeFromAST(resultSourceType, g.typeEnv())
 	if !ok {
-		return value{}, true, unsupported("type-system", "std.os exec Result<Output, Error> type is unavailable")
+		return value{}, true, unsupported("type-system", "std.os exec Result output type is unavailable")
 	}
 	if g.resultTypes == nil {
 		g.resultTypes = map[string]builtinResultType{}
 	}
 	g.resultTypes[info.typ] = info
-	if len(call.Args) == 0 || len(call.Args) > 2 {
-		name := "os.exec"
+	wantArgs := 2
+	minArgs := 1
+	if shell {
+		wantArgs = 1
+	}
+	if withOptions {
 		if shell {
-			name = "os.execShell"
+			wantArgs = 4
+		} else {
+			wantArgs = 5
 		}
+		minArgs = wantArgs
+	}
+	if len(call.Args) < minArgs || len(call.Args) > wantArgs {
+		name := stdOsExecCallName(shell, withOptions)
 		return value{}, true, unsupportedf("call", "%s received %d arguments", name, len(call.Args))
 	}
 	cmdArg := call.Args[0]
 	if cmdArg == nil || (cmdArg.Name != "" && cmdArg.Name != "cmd" && cmdArg.Name != "command") || cmdArg.Value == nil {
-		name := "os.exec"
-		if shell {
-			name = "os.execShell"
-		}
+		name := stdOsExecCallName(shell, withOptions)
 		return value{}, true, unsupported("call", name+" requires a String command argument")
 	}
 	cmd, err := g.emitExpr(cmdArg.Value)
@@ -271,20 +377,85 @@ func (g *generator) emitStdOsExecLikeCall(call *ast.CallExpr, shell bool) (value
 			return value{}, true, unsupportedf("type-system", "os.exec args type %s, want List<String>", argsValue.typ)
 		}
 	}
-	g.declareRuntimeSymbol(ostyRtOsExecSymbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i1"}})
+	cwdValue := value{typ: "ptr", ref: "null"}
+	envValue := value{typ: "ptr", ref: "null"}
+	timeoutValue := value{typ: "i64", ref: "0"}
+	if withOptions {
+		argsIndex := 1
+		if !shell {
+			argsArg := call.Args[1]
+			if argsArg == nil || (argsArg.Name != "" && argsArg.Name != "args") || argsArg.Value == nil {
+				return value{}, true, unsupported("call", "os.execWith requires args as a positional or `args:` List<String> argument")
+			}
+			argsValue, err = g.emitExpr(argsArg.Value)
+			if err != nil {
+				return value{}, true, err
+			}
+			argsValue = g.protectManagedTemporary("os.execWith.args", argsValue)
+			argsValue, err = g.loadIfPointer(argsValue)
+			if err != nil {
+				return value{}, true, err
+			}
+			if argsValue.typ != "ptr" {
+				return value{}, true, unsupportedf("type-system", "os.execWith args type %s, want List<String>", argsValue.typ)
+			}
+			argsIndex = 2
+		}
+		cwdValue, err = g.emitStdOsExecPtrArg(call.Args[argsIndex], "cwd", "String", "os.execWith.cwd")
+		if err != nil {
+			return value{}, true, err
+		}
+		envValue, err = g.emitStdOsExecPtrArg(call.Args[argsIndex+1], "env", "Map<String, String>", "os.execWith.env")
+		if err != nil {
+			return value{}, true, err
+		}
+		timeoutArg := call.Args[argsIndex+2]
+		if timeoutArg == nil || (timeoutArg.Name != "" && timeoutArg.Name != "timeoutMillis") || timeoutArg.Value == nil {
+			return value{}, true, unsupported("call", "os.execWith requires a timeoutMillis Int argument")
+		}
+		timeoutValue, err = g.emitExpr(timeoutArg.Value)
+		if err != nil {
+			return value{}, true, err
+		}
+		timeoutValue, err = g.loadIfPointer(timeoutValue)
+		if err != nil {
+			return value{}, true, err
+		}
+		if timeoutValue.typ != "i64" {
+			return value{}, true, unsupportedf("type-system", "os.execWith timeoutMillis type %s, want Int", timeoutValue.typ)
+		}
+	}
+	if withOptions {
+		g.declareRuntimeSymbol(ostyRtOsExecOptionsSymbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i1"}, {typ: "ptr"}, {typ: "ptr"}, {typ: "i64"}})
+	} else {
+		g.declareRuntimeSymbol(ostyRtOsExecSymbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i1"}})
+	}
 	g.declareRuntimeSymbol(ostyRtOsExecResultFreeSymbol, "void", []paramInfo{{typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	g.emitCallSafepointIfNeeded(emitter)
-	raw := llvmCall(emitter, "ptr", ostyRtOsExecSymbol, []*LlvmValue{
-		toOstyValue(cmd),
-		toOstyValue(argsValue),
-		llvmStdIoBoolValue(shell),
-	})
+	var raw *LlvmValue
+	if withOptions {
+		raw = llvmCall(emitter, "ptr", ostyRtOsExecOptionsSymbol, []*LlvmValue{
+			toOstyValue(cmd),
+			toOstyValue(argsValue),
+			llvmStdIoBoolValue(shell),
+			toOstyValue(cwdValue),
+			toOstyValue(envValue),
+			toOstyValue(timeoutValue),
+		})
+	} else {
+		raw = llvmCall(emitter, "ptr", ostyRtOsExecSymbol, []*LlvmValue{
+			toOstyValue(cmd),
+			toOstyValue(argsValue),
+			llvmStdIoBoolValue(shell),
+		})
+	}
 	tag := llvmLoadFromPtr(emitter, "i64", llvmRuntimeStructFieldPtr(emitter, stdOsExecRuntimeRecordLLVMType, raw, 0))
 	exitCode := llvmLoadFromPtr(emitter, "i64", llvmRuntimeStructFieldPtr(emitter, stdOsExecRuntimeRecordLLVMType, raw, 1))
-	stdoutText := llvmLoadFromPtr(emitter, "ptr", llvmRuntimeStructFieldPtr(emitter, stdOsExecRuntimeRecordLLVMType, raw, 2))
-	stderrText := llvmLoadFromPtr(emitter, "ptr", llvmRuntimeStructFieldPtr(emitter, stdOsExecRuntimeRecordLLVMType, raw, 3))
-	errText := llvmLoadFromPtr(emitter, "ptr", llvmRuntimeStructFieldPtr(emitter, stdOsExecRuntimeRecordLLVMType, raw, 4))
+	timedOut := llvmLoadFromPtr(emitter, "i1", llvmRuntimeStructFieldPtr(emitter, stdOsExecRuntimeRecordLLVMType, raw, 2))
+	stdoutText := llvmLoadFromPtr(emitter, "ptr", llvmRuntimeStructFieldPtr(emitter, stdOsExecRuntimeRecordLLVMType, raw, 3))
+	stderrText := llvmLoadFromPtr(emitter, "ptr", llvmRuntimeStructFieldPtr(emitter, stdOsExecRuntimeRecordLLVMType, raw, 4))
+	errText := llvmLoadFromPtr(emitter, "ptr", llvmRuntimeStructFieldPtr(emitter, stdOsExecRuntimeRecordLLVMType, raw, 5))
 	emitter.body = append(emitter.body, "  call void @"+ostyRtOsExecResultFreeSymbol+"(ptr "+raw.name+")")
 	failed := llvmCompare(emitter, "eq", tag, toOstyValue(value{typ: "i64", ref: "1"}))
 	errLabel := llvmNextLabel(emitter, "os.exec.err")
@@ -301,12 +472,24 @@ func (g *generator) emitStdOsExecLikeCall(call *ast.CallExpr, shell bool) (value
 	emitter.body = append(emitter.body, "  br label %"+contLabel)
 
 	emitter.body = append(emitter.body, mirLabelText(okLabel))
-	outputInfo := ensureStdOsSyntheticOutputStruct(g)
-	outputValue := llvmStructLiteral(emitter, outputInfo.typ, []*LlvmValue{
-		exitCode,
-		stdoutText,
-		stderrText,
-	})
+	var outputInfo *structInfo
+	var outputValue *LlvmValue
+	if withOptions {
+		outputInfo = ensureStdOsSyntheticExecOutputStruct(g)
+		outputValue = llvmStructLiteral(emitter, outputInfo.typ, []*LlvmValue{
+			exitCode,
+			stdoutText,
+			stderrText,
+			timedOut,
+		})
+	} else {
+		outputInfo = ensureStdOsSyntheticOutputStruct(g)
+		outputValue = llvmStructLiteral(emitter, outputInfo.typ, []*LlvmValue{
+			exitCode,
+			stdoutText,
+			stderrText,
+		})
+	}
 	okResult := llvmStructLiteral(emitter, info.typ, []*LlvmValue{
 		toOstyValue(value{typ: "i64", ref: "0"}),
 		outputValue,
@@ -321,10 +504,42 @@ func (g *generator) emitStdOsExecLikeCall(call *ast.CallExpr, shell bool) (value
 	v := value{
 		typ:        info.typ,
 		ref:        phi,
-		sourceType: stdOsExecResultSourceTypeSingleton,
+		sourceType: resultSourceType,
 	}
 	v.rootPaths = g.rootPathsForType(v.typ)
 	return v, true, nil
+}
+
+func stdOsExecCallName(shell bool, withOptions bool) string {
+	switch {
+	case shell && withOptions:
+		return "os.execShellWith"
+	case shell:
+		return "os.execShell"
+	case withOptions:
+		return "os.execWith"
+	default:
+		return "os.exec"
+	}
+}
+
+func (g *generator) emitStdOsExecPtrArg(arg *ast.Arg, name string, want string, label string) (value, error) {
+	if arg == nil || (arg.Name != "" && arg.Name != name) || arg.Value == nil {
+		return value{}, unsupported("call", "os.execWith requires "+name+" as a positional or `"+name+":` "+want+" argument")
+	}
+	out, err := g.emitExpr(arg.Value)
+	if err != nil {
+		return value{}, err
+	}
+	out = g.protectManagedTemporary(label, out)
+	out, err = g.loadIfPointer(out)
+	if err != nil {
+		return value{}, err
+	}
+	if out.typ != "ptr" {
+		return value{}, unsupportedf("type-system", "os.execWith %s type %s, want %s", name, out.typ, want)
+	}
+	return out, nil
 }
 
 func (g *generator) emitStdOsPidCall(call *ast.CallExpr) (value, bool, error) {

@@ -1,0 +1,214 @@
+// std.cmd — automation-friendly command execution.
+//
+// `std.process` remains the abort/todo/result-helper module. OS process
+// execution lives here as a builder over the low-level `std.os` runtime
+// calls, with explicit cwd/env/timeout knobs and shell-safe pipeline
+// rendering.
+
+use std.error
+use std.os
+
+pub struct RunOutput {
+    pub exitCode: Int,
+    pub stdout: String,
+    pub stderr: String,
+    pub timedOut: Bool,
+
+    pub fn ok(self) -> Bool {
+        self.exitCode == 0 && !self.timedOut
+    }
+
+    pub fn check(self) -> Result<RunOutput, Error> {
+        if self.ok() {
+            Ok(self)
+        } else if self.timedOut {
+            Err(error.new("cmd: timed out"))
+        } else {
+            Err(error.new("cmd: exit code {self.exitCode}"))
+        }
+    }
+}
+
+pub struct Command {
+    pub program: String,
+    pub args: List<String>,
+    pub cwd: String,
+    pub env: Map<String, String>,
+    pub timeoutMillis: Int,
+    pub useShell: Bool,
+
+    pub fn arg(mut self, value: String) -> Command {
+        self.args.push(value)
+        self
+    }
+
+    pub fn withArgs(mut self, values: List<String>) -> Command {
+        self.args = values
+        self
+    }
+
+    pub fn withCwd(mut self, path: String) -> Command {
+        self.cwd = path
+        self
+    }
+
+    pub fn withEnv(mut self, name: String, value: String) -> Command {
+        self.env.insert(name, value)
+        self
+    }
+
+    pub fn withEnvMap(mut self, values: Map<String, String>) -> Command {
+        self.env = values
+        self
+    }
+
+    pub fn withTimeoutMillis(mut self, millis: Int) -> Command {
+        self.timeoutMillis = millis
+        self
+    }
+
+    pub fn run(self) -> Result<RunOutput, Error> {
+        if self.useShell {
+            fromOs(os.execShellWith(self.program, self.cwd, self.env, self.timeoutMillis))
+        } else {
+            fromOs(os.execWith(self.program, self.args, self.cwd, self.env, self.timeoutMillis))
+        }
+    }
+
+    pub fn shellLine(self) -> String {
+        if self.useShell {
+            return self.program
+        }
+        joinEscaped(self.program, self.args)
+    }
+}
+
+pub struct Pipeline {
+    pub stages: List<Command>,
+    pub cwd: String,
+    pub env: Map<String, String>,
+    pub timeoutMillis: Int,
+
+    pub fn stage(mut self, next: Command) -> Pipeline {
+        self.stages.push(next)
+        self
+    }
+
+    pub fn withCwd(mut self, path: String) -> Pipeline {
+        self.cwd = path
+        self
+    }
+
+    pub fn withEnv(mut self, name: String, value: String) -> Pipeline {
+        self.env.insert(name, value)
+        self
+    }
+
+    pub fn withEnvMap(mut self, values: Map<String, String>) -> Pipeline {
+        self.env = values
+        self
+    }
+
+    pub fn withTimeoutMillis(mut self, millis: Int) -> Pipeline {
+        self.timeoutMillis = millis
+        self
+    }
+
+    pub fn shellLine(self) -> Result<String, Error> {
+        renderPipeline(self.stages)
+    }
+
+    pub fn run(self) -> Result<RunOutput, Error> {
+        let line = renderPipeline(self.stages)?
+        fromOs(os.execShellWith(line, self.cwd, self.env, self.timeoutMillis))
+    }
+}
+
+pub fn command(program: String) -> Command {
+    Command {
+        program: program,
+        args: [],
+        cwd: "",
+        env: {:},
+        timeoutMillis: 0,
+        useShell: false,
+    }
+}
+
+pub fn commandArgs(program: String, args: List<String>) -> Command {
+    command(program).withArgs(args)
+}
+
+pub fn shell(line: String) -> Command {
+    Command {
+        program: line,
+        args: [],
+        cwd: "",
+        env: {:},
+        timeoutMillis: 0,
+        useShell: true,
+    }
+}
+
+pub fn pipeline(stages: List<Command>) -> Pipeline {
+    Pipeline {
+        stages: stages,
+        cwd: "",
+        env: {:},
+        timeoutMillis: 0,
+    }
+}
+
+pub fn pipe(left: Command, right: Command) -> Pipeline {
+    pipeline([left, right])
+}
+
+pub fn shellEscape(arg: String) -> String {
+    if arg.isEmpty() {
+        return "''"
+    }
+    let mut out = "'"
+    for c in arg.chars() {
+        if c == '\'' {
+            out = "{out}'\\''"
+        } else {
+            out = "{out}{c}"
+        }
+    }
+    "{out}'"
+}
+
+pub fn joinEscaped(program: String, args: List<String>) -> String {
+    let mut parts = [shellEscape(program)]
+    for arg in args {
+        parts.push(shellEscape(arg))
+    }
+    " ".join(parts)
+}
+
+fn renderPipeline(stages: List<Command>) -> Result<String, Error> {
+    if stages.len() == 0 {
+        return Err(error.new("cmd: pipeline requires at least one stage"))
+    }
+    let mut parts: List<String> = []
+    for stage in stages {
+        if stage.useShell {
+            parts.push(stage.program)
+        } else {
+            parts.push(stage.shellLine())
+        }
+    }
+    Ok(" | ".join(parts))
+}
+
+fn fromOs(result: Result<os.ExecOutput, Error>) -> Result<RunOutput, Error> {
+    match result {
+        Ok(out) -> Ok(RunOutput {
+            exitCode: out.exitCode,
+            stdout: out.stdout,
+            stderr: out.stderr,
+            timedOut: out.timedOut,
+        }),
+        Err(err) -> Err(err),
+    }
+}

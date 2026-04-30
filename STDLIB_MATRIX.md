@@ -73,6 +73,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | term | 320 | host-backed + pure ANSI | terminal mode/size/input declarations + ANSI sequence builders |
 | websocket | 322 | pure Osty + crypto/encoding | RFC 6455 accept key + handshake headers + frame encode/decode |
 | cli | 260 | pure Osty + env | flag / option spec, parse / parseEnv / usage |
+| cmd | 214 | os shim + runtime | command builder, cwd/env/timeout, captured output, POSIX shell escaping, pipeline rendering |
 | graphql | 224 | pure Osty | document / field / argument builders + request JSON body encoding |
 | template | 148 | pure Osty | escaped/raw `{{name}}` 렌더링 + HTML escape / stripTags |
 | i18n | 136 | pure Osty | Locale / MessageCatalog / fallbackTags / pluralCategory / placeholder format |
@@ -85,7 +86,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | testing | 88 + 168 (gen) | test 5 + bench 7 | assert + benchmark + snapshot + property-based (Gen<T>) |
 | log | 85 | — | Level + Handler + TextHandler / JsonHandler — slog 동급 |
 | regex | 74 | — | compile / matches / find / findAll / replace / split |
-| os | 60 | shim 421 + runtime 22 | exec / execShell / exit / pid / hostname / onSignal |
+| os | 71 | shim + runtime | exec / execShell / execWith / execShellWith / exit / pid / hostname / onSignal |
 | thread | 59 | thread 16 + chan 10 + select 22 | spawn / race / chan / select / cancel — 구조적 동시성 |
 | math | 42 | float 40 runtime | sin/cos/tan/asin/acos/atan/atan2/sinh/cosh/tanh/exp/log/log2/log10/sqrt/cbrt/pow/floor/ceil/round/trunc/abs/min/max/hypot/clamp/fract/signum + libm 매핑 |
 | fs | 29 | shim 685 + runtime 21 | read/write/exists/create/remove/rename/copy/mkdir/mkdirAll — 11 API |

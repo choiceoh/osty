@@ -62,6 +62,12 @@ func fastPathListWriteEnabled() bool {
 	return os.Getenv("OSTY_LLVM_LIST_WRITE_FASTPATH") == "1"
 }
 
+const (
+	stdCmdSyntheticCommandTypeName   = "__osty_std_cmd_Command"
+	stdCmdSyntheticRunOutputTypeName = "__osty_std_cmd_RunOutput"
+	stdCmdSyntheticPipelineTypeName  = "__osty_std_cmd_Pipeline"
+)
+
 // GenerateFromMIR emits textual LLVM IR from a MIR module. It is the
 // Stage 3 entry point into llvmgen. Direct callers that still want the legacy
 // HIR→AST bridge should call GenerateModule; the backend dispatcher uses this
@@ -202,8 +208,12 @@ type mirGen struct {
 	layoutCache MirLayoutCache        // §14 enum / tuple order cache (Osty mirror)
 	tupleDefs   map[string][]mir.Type // mangled tuple name → element types
 
-	stdTermSizeTouched bool // synthetic std.term Size payload used by MIR
-	stdOsOutputTouched bool // synthetic std.os Output payload used by MIR
+	stdTermSizeTouched     bool // synthetic std.term Size payload used by MIR
+	stdOsOutputTouched     bool // synthetic std.os Output payload used by MIR
+	stdOsExecOutputTouched bool // synthetic std.os ExecOutput payload used by MIR
+	stdCmdCommandTouched   bool // synthetic std.cmd Command payload used by MIR
+	stdCmdRunOutputTouched bool // synthetic std.cmd RunOutput payload used by MIR
+	stdCmdPipelineTouched  bool // synthetic std.cmd Pipeline payload used by MIR
 
 	// Closure-env thunks generated on demand when a bare `FnConst`
 	// (top-level fn used as a value) reaches an indirect-call site.
@@ -712,7 +722,12 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 		case "Option", "Maybe", "Result":
 			return true
 		}
-		if g.isStdTermSizeType(x) || g.isStdOsOutputType(x) {
+		if g.isStdTermSizeType(x) ||
+			g.isStdOsOutputType(x) ||
+			g.isStdOsExecOutputType(x) ||
+			g.isStdCmdCommandType(x) ||
+			g.isStdCmdRunOutputType(x) ||
+			g.isStdCmdPipelineType(x) {
 			return true
 		}
 		if strings.Contains(x.QualifiedName(), ".") {
@@ -1603,7 +1618,15 @@ func (g *mirGen) emitTypeDefs() {
 			g.registerEnumLayout(name)
 		}
 	}
-	if len(g.structOrder) == 0 && g.layoutCache.IsEmpty() && !g.ifaceTouched && !g.stdTermSizeTouched && !g.stdOsOutputTouched {
+	if len(g.structOrder) == 0 &&
+		g.layoutCache.IsEmpty() &&
+		!g.ifaceTouched &&
+		!g.stdTermSizeTouched &&
+		!g.stdOsOutputTouched &&
+		!g.stdOsExecOutputTouched &&
+		!g.stdCmdCommandTouched &&
+		!g.stdCmdRunOutputTouched &&
+		!g.stdCmdPipelineTouched {
 		return
 	}
 
@@ -1630,6 +1653,18 @@ func (g *mirGen) emitTypeDefs() {
 	}
 	if g.stdOsOutputTouched {
 		block.WriteString(mirLlvmStructTypeDefLine(stdOsSyntheticOutputTypeName, "i64, ptr, ptr"))
+	}
+	if g.stdOsExecOutputTouched {
+		block.WriteString(mirLlvmStructTypeDefLine(stdOsSyntheticExecOutputTypeName, "i64, ptr, ptr, i1"))
+	}
+	if g.stdCmdCommandTouched {
+		block.WriteString(mirLlvmStructTypeDefLine(stdCmdSyntheticCommandTypeName, "ptr, ptr, ptr, ptr, i64, i1"))
+	}
+	if g.stdCmdRunOutputTouched {
+		block.WriteString(mirLlvmStructTypeDefLine(stdCmdSyntheticRunOutputTypeName, "i64, ptr, ptr, i1"))
+	}
+	if g.stdCmdPipelineTouched {
+		block.WriteString(mirLlvmStructTypeDefLine(stdCmdSyntheticPipelineTypeName, "ptr, ptr, ptr, i64"))
 	}
 	for _, name := range g.layoutCache.EnumLayoutOrder {
 		block.WriteString(mirLlvmEnumLayoutTypeDefLine(name))
@@ -3253,6 +3288,9 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 		if handled, err := g.emitStdCompressCall(c, fnRef); handled {
 			return err
 		}
+	}
+	if handled, err := g.emitStdCmdCall(c, fnRef); handled {
+		return err
 	}
 	if strings.HasPrefix(fnRef.Symbol, "std.os.") {
 		if handled, err := g.emitStdOsCall(c, fnRef); handled {
@@ -9430,6 +9468,35 @@ func (g *mirGen) listElemType(t mir.Type) mir.Type {
 	return nil
 }
 
+func stdCmdStringListType() mir.Type {
+	return &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+}
+
+func stdCmdStringMapType() mir.Type {
+	return &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, ir.TString}, Builtin: true}
+}
+
+func stdCmdCommandNamedType() mir.Type {
+	return &ir.NamedType{Name: "Command"}
+}
+
+func stdCmdCommandListType() mir.Type {
+	return &ir.NamedType{Name: "List", Args: []ir.Type{stdCmdCommandNamedType()}, Builtin: true}
+}
+
+func (g *mirGen) syntheticStdlibStructElementTypes(nt *ir.NamedType) ([]mir.Type, bool) {
+	switch {
+	case g.isStdCmdCommandType(nt):
+		return []mir.Type{ir.TString, stdCmdStringListType(), ir.TString, stdCmdStringMapType(), ir.TInt, ir.TBool}, true
+	case g.isStdCmdRunOutputType(nt):
+		return []mir.Type{ir.TInt, ir.TString, ir.TString, ir.TBool}, true
+	case g.isStdCmdPipelineType(nt):
+		return []mir.Type{stdCmdCommandListType(), ir.TString, stdCmdStringMapType(), ir.TInt}, true
+	default:
+		return nil, false
+	}
+}
+
 // aggregateElementTypes returns the element types an aggregate's
 // Fields should match. For structs this comes from the LayoutTable
 // so field order is authoritative; for tuples it's the type itself.
@@ -9439,6 +9506,9 @@ func (g *mirGen) aggregateElementTypes(aggT mir.Type, rv *mir.AggregateRV) ([]mi
 		nt, ok := aggT.(*ir.NamedType)
 		if !ok {
 			return nil, fmt.Errorf("mir-mvp: struct aggregate type %s", mirTypeString(aggT))
+		}
+		if elems, ok := g.syntheticStdlibStructElementTypes(nt); ok {
+			return elems, nil
 		}
 		if g.mod == nil || g.mod.Layouts == nil {
 			return nil, fmt.Errorf("mir-mvp: missing layout table for struct %s", nt.Name)
@@ -9912,6 +9982,58 @@ func (g *mirGen) projectionIndexForType(base mir.Type, p mir.Projection) (int, b
 					return 1, true
 				case "stderr":
 					return 2, true
+				}
+			}
+			if g.isStdOsExecOutputType(nt) {
+				switch fp.Name {
+				case "exitCode":
+					return 0, true
+				case "stdout":
+					return 1, true
+				case "stderr":
+					return 2, true
+				case "timedOut":
+					return 3, true
+				}
+			}
+			if g.isStdCmdCommandType(nt) {
+				switch fp.Name {
+				case "program":
+					return 0, true
+				case "args":
+					return 1, true
+				case "cwd":
+					return 2, true
+				case "env":
+					return 3, true
+				case "timeoutMillis":
+					return 4, true
+				case "useShell":
+					return 5, true
+				}
+			}
+			if g.isStdCmdRunOutputType(nt) {
+				switch fp.Name {
+				case "exitCode":
+					return 0, true
+				case "stdout":
+					return 1, true
+				case "stderr":
+					return 2, true
+				case "timedOut":
+					return 3, true
+				}
+			}
+			if g.isStdCmdPipelineType(nt) {
+				switch fp.Name {
+				case "stages":
+					return 0, true
+				case "cwd":
+					return 1, true
+				case "env":
+					return 2, true
+				case "timeoutMillis":
+					return 3, true
 				}
 			}
 		}
@@ -10407,6 +10529,22 @@ func (g *mirGen) llvmType(t mir.Type) string {
 			g.stdOsOutputTouched = true
 			return "%" + stdOsSyntheticOutputTypeName
 		}
+		if g.isStdOsExecOutputType(x) {
+			g.stdOsExecOutputTouched = true
+			return "%" + stdOsSyntheticExecOutputTypeName
+		}
+		if g.isStdCmdCommandType(x) {
+			g.stdCmdCommandTouched = true
+			return "%" + stdCmdSyntheticCommandTypeName
+		}
+		if g.isStdCmdRunOutputType(x) {
+			g.stdCmdRunOutputTouched = true
+			return "%" + stdCmdSyntheticRunOutputTypeName
+		}
+		if g.isStdCmdPipelineType(x) {
+			g.stdCmdPipelineTouched = true
+			return "%" + stdCmdSyntheticPipelineTypeName
+		}
 		// Prelude Option / Maybe / Result. Mint an anonymous
 		// `%Option.<T>` / `%Result.<T>.<E>` so the IR carries the
 		// element type in its name — mimicking how the legacy
@@ -10474,6 +10612,58 @@ func (g *mirGen) isStdOsOutputType(t *ir.NamedType) bool {
 	}
 	q := t.QualifiedName()
 	return q == "Output" || q == "std.os.Output" || q == "os.Output"
+}
+
+func (g *mirGen) isStdOsExecOutputType(t *ir.NamedType) bool {
+	if t == nil || t.Name != "ExecOutput" {
+		return false
+	}
+	if g.mod != nil && g.mod.Layouts != nil {
+		if _, ok := g.mod.Layouts.Structs[mirNamedTypeLayoutKey(t)]; ok {
+			return false
+		}
+	}
+	q := t.QualifiedName()
+	return q == "ExecOutput" || q == "std.os.ExecOutput" || q == "os.ExecOutput"
+}
+
+func (g *mirGen) isStdCmdCommandType(t *ir.NamedType) bool {
+	if t == nil || t.Name != "Command" {
+		return false
+	}
+	if g.mod != nil && g.mod.Layouts != nil {
+		if _, ok := g.mod.Layouts.Structs[mirNamedTypeLayoutKey(t)]; ok {
+			return false
+		}
+	}
+	q := t.QualifiedName()
+	return q == "Command" || q == "std.cmd.Command" || q == "cmd.Command"
+}
+
+func (g *mirGen) isStdCmdRunOutputType(t *ir.NamedType) bool {
+	if t == nil || t.Name != "RunOutput" {
+		return false
+	}
+	if g.mod != nil && g.mod.Layouts != nil {
+		if _, ok := g.mod.Layouts.Structs[mirNamedTypeLayoutKey(t)]; ok {
+			return false
+		}
+	}
+	q := t.QualifiedName()
+	return q == "RunOutput" || q == "std.cmd.RunOutput" || q == "cmd.RunOutput"
+}
+
+func (g *mirGen) isStdCmdPipelineType(t *ir.NamedType) bool {
+	if t == nil || t.Name != "Pipeline" {
+		return false
+	}
+	if g.mod != nil && g.mod.Layouts != nil {
+		if _, ok := g.mod.Layouts.Structs[mirNamedTypeLayoutKey(t)]; ok {
+			return false
+		}
+	}
+	q := t.QualifiedName()
+	return q == "Pipeline" || q == "std.cmd.Pipeline" || q == "cmd.Pipeline"
 }
 
 // ==== enum layout helpers ====

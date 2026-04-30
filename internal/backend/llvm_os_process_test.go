@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -137,6 +138,90 @@ fn main() {
 	}
 	if got, want := string(output), "true\ntrue\ntrue\n"; got != want {
 		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
+func stdCmdEnvCwdCommand() (program string, args []string, timeoutShell string) {
+	if runtime.GOOS == "windows" {
+		return "cmd",
+			[]string{"/d", "/s", "/c", "<nul set /p =%OSTY_CMD_TEST%:%CD%"},
+			"ping -n 3 127.0.0.1 >NUL"
+	}
+	return "sh",
+		[]string{"-c", "printf \"$OSTY_CMD_TEST:$(basename \"$PWD\")\""},
+		"sleep 2"
+}
+
+func TestLLVMBackendBinaryRunsStdCmdBuilderSurface(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	tmp := t.TempDir()
+	prog, args, timeoutShell := stdCmdEnvCwdCommand()
+	base := filepath.Base(tmp)
+	pipelineBlock := ""
+	want := "true\ntrue\ntrue\ntrue\ntrue\ntrue\n"
+	if runtime.GOOS != "windows" {
+		pipelineBlock = `
+    match cmd.pipe(
+        cmd.command("printf").arg("hello\nworld\n"),
+        cmd.command("grep").arg("world"),
+    ).run() {
+        Ok(out) -> {
+            println(out.exitCode == 0)
+            println(out.stdout.contains("world"))
+        },
+        Err(err) -> {
+            println(false)
+            println(err.message())
+        },
+    }
+`
+		want += "true\ntrue\n"
+	}
+	src := fmt.Sprintf(`use std.cmd
+
+fn main() {
+    match cmd.command(%q).withArgs(%s).withCwd(%q).withEnv("OSTY_CMD_TEST", "env-ok").run() {
+        Ok(out) -> {
+            println(out.exitCode == 0)
+            println(out.stdout.contains("env-ok"))
+            println(out.stdout.contains(%q))
+            println(!out.timedOut)
+        },
+        Err(err) -> {
+            println(false)
+            println(err.message())
+            println(false)
+            println(false)
+        },
+    }
+
+    match cmd.shell(%q).withTimeoutMillis(100).run() {
+        Ok(out) -> {
+            println(out.timedOut)
+            println(out.exitCode != 0)
+        },
+        Err(err) -> {
+            println(false)
+            println(err.message())
+        },
+    }
+%s}
+`, prog, ostyStringListLiteral(args), tmp, base, timeoutShell, pipelineBlock)
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, src)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	output, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got := string(output); got != want {
+		t.Fatalf("binary stdout = %q, want %q\nsource:\n%s", got, want, src)
 	}
 }
 
