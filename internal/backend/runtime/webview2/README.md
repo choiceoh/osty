@@ -6,6 +6,12 @@ returning clear runtime diagnostics. The Windows implementation lives in
 `osty_webview2_win32.cpp` and owns the Win32 window, WebView2 controller,
 bridge injection, navigation allow-listing, and event queue.
 
+Local app assets are served through a WebView2 virtual host mapping at
+`https://osty.local/...` rather than as raw `file://` navigations. This keeps
+the HTML/CSS/JS bundle on one stable local origin, denies cross-origin resource
+access by default, and lets the navigation allow-list block external websites
+without breaking relative asset loads.
+
 Example Windows build shape:
 
 ```powershell

@@ -181,23 +181,38 @@ pub fn runtimeDiagnostic() -> RuntimeDiagnostic {
 pub fn bridgeScript() -> String {
     r"""
 (() => {
+  if (window.osty && window.osty.__ostyWebView2Bridge) return;
   const stateHandlers = new Set();
+  let lastState;
+  let hasState = false;
+  const post = (message) => {
+    if (!window.chrome || !window.chrome.webview) return false;
+    window.chrome.webview.postMessage(JSON.stringify(message));
+    return true;
+  };
   const api = {
+    __ostyWebView2Bridge: true,
     platform: 'windows-webview2',
     version: '0.1',
     emit(name, payload = {}) {
-      chrome.webview.postMessage(JSON.stringify({ type: 'event', name, payload }));
+      if (typeof name !== 'string' || name.length === 0) return false;
+      return post({ type: 'event', name, payload });
     },
     onState(handler) {
       stateHandlers.add(handler);
+      if (hasState) queueMicrotask(() => handler(lastState));
       return () => stateHandlers.delete(handler);
     }
   };
-  Object.defineProperty(window, 'osty', { value: api, configurable: false, writable: false });
-  chrome.webview.addEventListener('message', (event) => {
-    if (!event.data || event.data.type !== 'state') return;
-    for (const handler of stateHandlers) handler(event.data.payload);
-  });
+  Object.defineProperty(window, 'osty', { value: Object.freeze(api), configurable: false, writable: false });
+  if (window.chrome && window.chrome.webview) {
+    window.chrome.webview.addEventListener('message', (event) => {
+      if (!event.data || event.data.type !== 'state') return;
+      hasState = true;
+      lastState = event.data.payload;
+      for (const handler of stateHandlers) handler(event.data.payload);
+    });
+  }
 })();
 """
 }
