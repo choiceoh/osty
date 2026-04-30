@@ -1,0 +1,926 @@
+// std.xlsx - XLSX workbook helpers built on stored ZIP entries.
+//
+// This module writes interoperable XLSX workbooks using inline strings and
+// reads the same store-method packages back into a small workbook model.
+// Deflated third-party XLSX files require std.compress deflate support before
+// std.zip can expose their entries.
+
+use std.bytes
+use std.error
+use std.strings
+use std.table
+use std.zip
+
+pub enum CellKind {
+    BlankCell,
+    TextCell,
+    NumberCell,
+    BoolCell,
+}
+
+pub struct Cell {
+    pub address: String,
+    pub kind: CellKind,
+    pub value: String,
+}
+
+pub struct Sheet {
+    pub name: String,
+    pub cells: List<Cell>,
+
+    pub fn rows(self) -> List<List<String>> {
+        rows(self)
+    }
+
+    pub fn toTable(self) -> Result<table.Table, Error> {
+        toTable(self)
+    }
+}
+
+pub struct Workbook {
+    pub sheets: List<Sheet>,
+
+    pub fn sheetNames(self) -> List<String> {
+        sheetNames(self)
+    }
+
+    pub fn firstSheet(self) -> Sheet? {
+        if self.sheets.isEmpty() {
+            return None
+        }
+        Some(self.sheets[0])
+    }
+}
+
+struct XlsxPart {
+    name: String,
+    data: Bytes,
+}
+
+pub fn cell(address: String, value: String, kind: CellKind) -> Result<Cell, Error> {
+    let clean = normalizeAddress(address)?
+    Ok(Cell {
+        address: clean,
+        kind: kind,
+        value: value,
+    })
+}
+
+pub fn text(address: String, value: String) -> Result<Cell, Error> {
+    cell(address, value, TextCell)
+}
+
+pub fn number(address: String, value: Float) -> Result<Cell, Error> {
+    cell(address, value.toString(), NumberCell)
+}
+
+pub fn int(address: String, value: Int) -> Result<Cell, Error> {
+    cell(address, intText(value), NumberCell)
+}
+
+pub fn bool(address: String, value: Bool) -> Result<Cell, Error> {
+    cell(address, if value { "1" } else { "0" }, BoolCell)
+}
+
+pub fn blank(address: String) -> Result<Cell, Error> {
+    cell(address, "", BlankCell)
+}
+
+pub fn sheet(name: String, cells: List<Cell>) -> Result<Sheet, Error> {
+    let clean = validateSheetName(name)?
+    let mut cleanCells: List<Cell> = []
+    for item in cells {
+        cleanCells.push(Cell {
+            address: normalizeAddress(item.address)?,
+            kind: item.kind,
+            value: item.value,
+        })
+    }
+    Ok(Sheet {
+        name: clean,
+        cells: cleanCells,
+    })
+}
+
+pub fn workbook(sheets: List<Sheet>) -> Result<Workbook, Error> {
+    if sheets.isEmpty() {
+        return Err(error.new("xlsx: workbook needs at least one sheet"))
+    }
+    let mut seen: Map<String, Bool> = {:}
+    let mut cleanSheets: List<Sheet> = []
+    for item in sheets {
+        let clean = sheet(item.name, item.cells)?
+        if seen.get(clean.name).isSome() {
+            return Err(error.new("xlsx: duplicate sheet name: {clean.name}"))
+        }
+        seen.insert(clean.name, true)
+        cleanSheets.push(clean)
+    }
+    Ok(Workbook { sheets: cleanSheets })
+}
+
+pub fn fromRows(name: String, rawRows: List<List<String>>) -> Result<Sheet, Error> {
+    let clean = validateSheetName(name)?
+    let mut cells: List<Cell> = []
+    let mut r = 0
+    for r < rawRows.len() {
+        let row = rawRows[r]
+        let mut c = 0
+        for c < row.len() {
+            cells.push(Cell {
+                address: addressOf(r + 1, c + 1),
+                kind: TextCell,
+                value: row[c],
+            })
+            c = c + 1
+        }
+        r = r + 1
+    }
+    Ok(Sheet { name: clean, cells: cells })
+}
+
+pub fn fromTable(name: String, value: table.Table) -> Result<Sheet, Error> {
+    fromRows(name, value.toRows())
+}
+
+pub fn toTable(sheetValue: Sheet) -> Result<table.Table, Error> {
+    let data = rows(sheetValue)
+    if data.isEmpty() {
+        return table.fromRows([], [])
+    }
+    let columns = data[0]
+    let mut body: List<List<String>> = []
+    let mut i = 1
+    for i < data.len() {
+        body.push(data[i])
+        i = i + 1
+    }
+    table.fromRows(columns, body)
+}
+
+pub fn rows(sheetValue: Sheet) -> List<List<String>> {
+    let height = maxRow(sheetValue.cells)
+    let width = maxColumn(sheetValue.cells)
+    let mut out: List<List<String>> = []
+    let mut r = 1
+    for r <= height {
+        let mut row: List<String> = []
+        let mut c = 1
+        for c <= width {
+            row.push(cellAt(sheetValue.cells, r, c) ?? "")
+            c = c + 1
+        }
+        out.push(row)
+        r = r + 1
+    }
+    out
+}
+
+pub fn sheetNames(book: Workbook) -> List<String> {
+    let mut out: List<String> = []
+    for sheetValue in book.sheets {
+        out.push(sheetValue.name)
+    }
+    out
+}
+
+pub fn encodeRows(name: String, rawRows: List<List<String>>) -> Result<Bytes, Error> {
+    encode(workbook([fromRows(name, rawRows)?])?)
+}
+
+pub fn encodeTable(name: String, value: table.Table) -> Result<Bytes, Error> {
+    encode(workbook([fromTable(name, value)?])?)
+}
+
+pub fn encode(book: Workbook) -> Result<Bytes, Error> {
+    let checked = workbook(book.sheets)?
+    let mut parts: List<XlsxPart> = []
+    parts.push(part("[Content_Types].xml", bytes.fromString(contentTypes(checked))))
+    parts.push(part("_rels/.rels", bytes.fromString(rootRels())))
+    parts.push(part("docProps/core.xml", bytes.fromString(coreProps())))
+    parts.push(part("docProps/app.xml", bytes.fromString(appProps(checked))))
+    parts.push(part("xl/workbook.xml", bytes.fromString(workbookXml(checked))))
+    parts.push(part("xl/_rels/workbook.xml.rels", bytes.fromString(workbookRels(checked))))
+    let mut i = 0
+    for i < checked.sheets.len() {
+        let path = "xl/worksheets/sheet{intText(i + 1)}.xml"
+        parts.push(part(path, bytes.fromString(sheetXml(checked.sheets[i]))))
+        i = i + 1
+    }
+    Ok(encodeParts(parts))
+}
+
+pub fn decode(archive: Bytes) -> Result<Workbook, Error> {
+    let workbookText = requiredText(archive, "xl/workbook.xml")?
+    let relsText = requiredText(archive, "xl/_rels/workbook.xml.rels")?
+    let shared = optionalSharedStrings(archive)?
+    let rels = parseWorkbookRels(relsText)?
+    let specs = parseWorkbookSheets(workbookText)?
+    if specs.isEmpty() {
+        return Err(error.new("xlsx: workbook has no sheets"))
+    }
+
+    let mut sheets: List<Sheet> = []
+    for spec in specs {
+        let target = rels.get(spec.relId) ?? ""
+        if target.isEmpty() {
+            return Err(error.new("xlsx: missing worksheet relationship {spec.relId}"))
+        }
+        let path = normalizeWorksheetTarget(target)
+        let worksheetText = requiredText(archive, path)?
+        let parsed = parseWorksheet(spec.name, worksheetText, shared)?
+        sheets.push(parsed)
+    }
+    workbook(sheets)
+}
+
+pub fn decodeRows(archive: Bytes, name: String) -> Result<List<List<String>>, Error> {
+    let book = decode(archive)?
+    for sheetValue in book.sheets {
+        if sheetValue.name == name {
+            return Ok(rows(sheetValue))
+        }
+    }
+    Err(error.new("xlsx: sheet not found: {name}"))
+}
+
+pub fn isWorkbook(data: Bytes) -> Bool {
+    if !zip.isArchive(data) {
+        return false
+    }
+    zip.contains(data, "xl/workbook.xml")
+}
+
+pub fn kindName(kind: CellKind) -> String {
+    match kind {
+        BlankCell  -> "blank",
+        TextCell   -> "text",
+        NumberCell -> "number",
+        BoolCell   -> "bool",
+    }
+}
+
+// Internal helpers -----------------------------------------------------------
+
+struct SheetSpec {
+    name: String,
+    relId: String,
+}
+
+fn workbookXml(book: Workbook) -> String {
+    let mut body = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><workbook xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><sheets>"
+    let mut i = 0
+    for i < book.sheets.len() {
+        let id = i + 1
+        let idText = intText(id)
+        body = "{body}<sheet name=\"{escapeXml(book.sheets[i].name)}\" sheetId=\"{idText}\" r:id=\"rId{idText}\"/>"
+        i = i + 1
+    }
+    "{body}</sheets></workbook>"
+}
+
+fn part(name: String, data: Bytes) -> XlsxPart {
+    XlsxPart {
+        name: name,
+        data: data,
+    }
+}
+
+fn encodeParts(parts: List<XlsxPart>) -> Bytes {
+    let mut out: List<Byte> = []
+    let mut central: List<Byte> = []
+    let mut offsets: List<Int> = []
+    for item in parts {
+        offsets.push(out.len())
+        appendLocalHeader(out, item.name, item.data)
+        appendBytes(out, item.data)
+    }
+
+    let centralStart = out.len()
+    let mut i = 0
+    for item in parts {
+        appendCentralHeader(central, item.name, item.data, offsets[i])
+        i = i + 1
+    }
+    appendBytes(out, bytes.from(central))
+    appendEndOfCentralDirectory(out, parts.len(), central.len(), centralStart)
+    bytes.from(out)
+}
+
+fn appendLocalHeader(out: List<Byte>, name: String, data: Bytes) {
+    let crc = zip.crc32(data)
+    appendU32(out, localSignature())
+    appendU16(out, 20)
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU32(out, crc)
+    appendU32(out, data.len())
+    appendU32(out, data.len())
+    appendU16(out, name.bytes().len())
+    appendU16(out, 0)
+    appendString(out, name)
+}
+
+fn appendCentralHeader(out: List<Byte>, name: String, data: Bytes, offset: Int) {
+    let crc = zip.crc32(data)
+    appendU32(out, centralSignature())
+    appendU16(out, 20)
+    appendU16(out, 20)
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU32(out, crc)
+    appendU32(out, data.len())
+    appendU32(out, data.len())
+    appendU16(out, name.bytes().len())
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU32(out, 0)
+    appendU32(out, offset)
+    appendString(out, name)
+}
+
+fn appendEndOfCentralDirectory(out: List<Byte>, count: Int, centralSize: Int, centralOffset: Int) {
+    appendU32(out, endSignature())
+    appendU16(out, 0)
+    appendU16(out, 0)
+    appendU16(out, count)
+    appendU16(out, count)
+    appendU32(out, centralSize)
+    appendU32(out, centralOffset)
+    appendU16(out, 0)
+}
+
+fn appendBytes(out: List<Byte>, data: Bytes) {
+    let mut i = 0
+    for i < data.len() {
+        out.push(bytes.get(data, i).unwrap())
+        i = i + 1
+    }
+}
+
+fn appendString(out: List<Byte>, value: String) {
+    let raw = value.bytes()
+    let mut i = 0
+    for i < raw.len() {
+        out.push(raw[i])
+        i = i + 1
+    }
+}
+
+fn appendU16(out: List<Byte>, value: Int) {
+    pushByte(out, value & 0xFF)
+    pushByte(out, (value >> 8) & 0xFF)
+}
+
+fn appendU32(out: List<Byte>, value: Int) {
+    pushByte(out, value & 0xFF)
+    pushByte(out, (value >> 8) & 0xFF)
+    pushByte(out, (value >> 16) & 0xFF)
+    pushByte(out, (value >> 24) & 0xFF)
+}
+
+fn pushByte(out: List<Byte>, value: Int) {
+    out.push((value & 0xFF).toByte())
+}
+
+fn localSignature() -> Int {
+    0x04034B50
+}
+
+fn centralSignature() -> Int {
+    0x02014B50
+}
+
+fn endSignature() -> Int {
+    0x06054B50
+}
+
+fn workbookRels(book: Workbook) -> String {
+    let mut body = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">"
+    let mut i = 0
+    for i < book.sheets.len() {
+        let id = i + 1
+        let idText = intText(id)
+        body = "{body}<Relationship Id=\"rId{idText}\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet\" Target=\"worksheets/sheet{idText}.xml\"/>"
+        i = i + 1
+    }
+    "{body}</Relationships>"
+}
+
+fn contentTypes(book: Workbook) -> String {
+    let mut body = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"xml\" ContentType=\"application/xml\"/><Override PartName=\"/xl/workbook.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml\"/><Override PartName=\"/docProps/core.xml\" ContentType=\"application/vnd.openxmlformats-package.core-properties+xml\"/><Override PartName=\"/docProps/app.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.extended-properties+xml\"/>"
+    let mut i = 0
+    for i < book.sheets.len() {
+        let id = i + 1
+        body = "{body}<Override PartName=\"/xl/worksheets/sheet{intText(id)}.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml\"/>"
+        i = i + 1
+    }
+    "{body}</Types>"
+}
+
+fn rootRels() -> String {
+    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\"><Relationship Id=\"rId1\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument\" Target=\"xl/workbook.xml\"/><Relationship Id=\"rId2\" Type=\"http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties\" Target=\"docProps/core.xml\"/><Relationship Id=\"rId3\" Type=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties\" Target=\"docProps/app.xml\"/></Relationships>"
+}
+
+fn coreProps() -> String {
+    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><cp:coreProperties xmlns:cp=\"http://schemas.openxmlformats.org/package/2006/metadata/core-properties\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:creator>Osty</dc:creator></cp:coreProperties>"
+}
+
+fn appProps(book: Workbook) -> String {
+    "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><Properties xmlns=\"http://schemas.openxmlformats.org/officeDocument/2006/extended-properties\"><Application>Osty</Application><Sheets>{intText(book.sheets.len())}</Sheets></Properties>"
+}
+
+fn sheetXml(sheetValue: Sheet) -> String {
+    let height = maxRow(sheetValue.cells)
+    let mut body = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\"><sheetData>"
+    let mut r = 1
+    for r <= height {
+        let rowXml = rowXml(sheetValue.cells, r)
+        if !rowXml.isEmpty() {
+            body = "{body}<row r=\"{intText(r)}\">{rowXml}</row>"
+        }
+        r = r + 1
+    }
+    "{body}</sheetData></worksheet>"
+}
+
+fn rowXml(cells: List<Cell>, rowIndex: Int) -> String {
+    let mut out = ""
+    for item in cells {
+        if rowOf(item.address) == rowIndex {
+            out = "{out}{cellXml(item)}"
+        }
+    }
+    out
+}
+
+fn cellXml(item: Cell) -> String {
+    match item.kind {
+        BlankCell -> "<c r=\"{item.address}\"/>",
+        TextCell -> "<c r=\"{item.address}\" t=\"inlineStr\"><is><t xml:space=\"preserve\">{escapeXml(item.value)}</t></is></c>",
+        NumberCell -> "<c r=\"{item.address}\"><v>{escapeXml(item.value)}</v></c>",
+        BoolCell -> "<c r=\"{item.address}\" t=\"b\"><v>{boolValue(item.value)}</v></c>",
+    }
+}
+
+fn boolValue(value: String) -> String {
+    let clean = strings.toLower(strings.trimSpace(value))
+    if clean == "true" || clean == "1" {
+        return "1"
+    }
+    "0"
+}
+
+fn escapeXml(text: String) -> String {
+    let amp = strings.replaceAll(text, "&", "&amp;")
+    let lt = strings.replaceAll(amp, "<", "&lt;")
+    let gt = strings.replaceAll(lt, ">", "&gt;")
+    let quote = strings.replaceAll(gt, "\"", "&quot;")
+    strings.replaceAll(quote, "'", "&apos;")
+}
+
+fn unescapeXml(text: String) -> Result<String, Error> {
+    let quot = strings.replaceAll(text, "&quot;", "\"")
+    let apos = strings.replaceAll(quot, "&apos;", "'")
+    let lt = strings.replaceAll(apos, "&lt;", "<")
+    let gt = strings.replaceAll(lt, "&gt;", ">")
+    Ok(strings.replaceAll(gt, "&amp;", "&"))
+}
+
+fn requiredText(archive: Bytes, path: String) -> Result<String, Error> {
+    match zip.extract(archive, path)? {
+        Some(data) -> bytes.toString(data),
+        None       -> Err(error.new("xlsx: missing part {path}")),
+    }
+}
+
+fn optionalText(archive: Bytes, path: String) -> Result<String?, Error> {
+    match zip.extract(archive, path)? {
+        Some(data) -> Ok(Some(bytes.toString(data)?)),
+        None       -> Ok(noneString()),
+    }
+}
+
+fn optionalSharedStrings(archive: Bytes) -> Result<List<String>, Error> {
+    match optionalText(archive, "xl/sharedStrings.xml")? {
+        Some(text) -> parseSharedStrings(text),
+        None       -> Ok([]),
+    }
+}
+
+fn parseWorkbookSheets(source: String) -> Result<List<SheetSpec>, Error> {
+    let mut out: List<SheetSpec> = []
+    let mut pos = 0
+    for true {
+        let start = indexOfFrom(source, "<sheet ", pos)
+        if start < 0 {
+            break
+        }
+        let end = indexOfFrom(source, ">", start)
+        if end < 0 {
+            return Err(error.new("xlsx: unterminated sheet tag"))
+        }
+        let tag = strings.slice(source, start, end + 1)
+        let name = attrOrEmpty(tag, "name")?
+        let relId = attrOrEmpty(tag, "r:id")?
+        if name.isEmpty() || relId.isEmpty() {
+            return Err(error.new("xlsx: malformed sheet entry"))
+        }
+        out.push(SheetSpec {
+            name: validateSheetName(name)?,
+            relId: relId,
+        })
+        pos = end + 1
+    }
+    Ok(out)
+}
+
+fn parseWorkbookRels(source: String) -> Result<Map<String, String>, Error> {
+    let mut out: Map<String, String> = {:}
+    let mut pos = 0
+    for true {
+        let start = indexOfFrom(source, "<Relationship ", pos)
+        if start < 0 {
+            break
+        }
+        let end = indexOfFrom(source, ">", start)
+        if end < 0 {
+            return Err(error.new("xlsx: unterminated relationship tag"))
+        }
+        let tag = strings.slice(source, start, end + 1)
+        let id = attrOrEmpty(tag, "Id")?
+        let target = attrOrEmpty(tag, "Target")?
+        if !id.isEmpty() && !target.isEmpty() {
+            out.insert(id, target)
+        }
+        pos = end + 1
+    }
+    Ok(out)
+}
+
+fn parseSharedStrings(source: String) -> Result<List<String>, Error> {
+    let mut out: List<String> = []
+    let mut pos = 0
+    for true {
+        let start = indexOfFrom(source, "<si", pos)
+        if start < 0 {
+            break
+        }
+        let openEnd = indexOfFrom(source, ">", start)
+        if openEnd < 0 {
+            return Err(error.new("xlsx: unterminated shared string"))
+        }
+        let close = indexOfFrom(source, "</si>", openEnd + 1)
+        if close < 0 {
+            return Err(error.new("xlsx: unterminated shared string"))
+        }
+        let body = strings.slice(source, openEnd + 1, close)
+        out.push(collectTextNodes(body, "t")?)
+        pos = close + 5
+    }
+    Ok(out)
+}
+
+fn parseWorksheet(name: String, source: String, shared: List<String>) -> Result<Sheet, Error> {
+    let mut cells: List<Cell> = []
+    let mut pos = 0
+    for true {
+        let start = indexOfFrom(source, "<c ", pos)
+        if start < 0 {
+            break
+        }
+        let tagEnd = indexOfFrom(source, ">", start)
+        if tagEnd < 0 {
+            return Err(error.new("xlsx: unterminated cell tag"))
+        }
+        let tag = strings.slice(source, start, tagEnd + 1)
+        let address = normalizeAddress(attrOrEmpty(tag, "r")?)?
+        let rawType = attrOrEmpty(tag, "t")?
+        if isSelfClosingTag(tag) {
+            cells.push(Cell {
+                address: address,
+                kind: BlankCell,
+                value: "",
+            })
+            pos = tagEnd + 1
+            continue
+        }
+        let close = indexOfFrom(source, "</c>", tagEnd + 1)
+        if close < 0 {
+            return Err(error.new("xlsx: unterminated cell"))
+        }
+        let body = strings.slice(source, tagEnd + 1, close)
+        let mut kind = kindFromType(rawType)
+        let mut value = if rawType == "inlineStr" || rawType == "str" {
+            collectTextNodes(body, "t")?
+        } else {
+            collectTextNodes(body, "v")?
+        }
+        if value.isEmpty() && rawType.isEmpty() {
+            kind = BlankCell
+        }
+        if rawType == "s" {
+            value = sharedString(shared, value)?
+            kind = TextCell
+        }
+        cells.push(Cell {
+            address: address,
+            kind: kind,
+            value: value,
+        })
+        pos = close + 4
+    }
+    sheet(name, cells)
+}
+
+fn collectTextNodes(body: String, name: String) -> Result<String, Error> {
+    let mut out = ""
+    let open = "<{name}"
+    let closeTag = "</{name}>"
+    let mut pos = 0
+    for true {
+        let start = indexOfFrom(body, open, pos)
+        if start < 0 {
+            break
+        }
+        let openEnd = indexOfFrom(body, ">", start)
+        if openEnd < 0 {
+            return Err(error.new("xlsx: unterminated text node"))
+        }
+        let close = indexOfFrom(body, closeTag, openEnd + 1)
+        if close < 0 {
+            return Err(error.new("xlsx: unterminated text node"))
+        }
+        match unescapeXml(strings.slice(body, openEnd + 1, close)) {
+            Ok(text) -> {
+                out = "{out}{text}"
+            },
+            Err(err) -> {
+                return Err(err)
+            },
+        }
+        pos = close + closeTag.len()
+    }
+    Ok(out)
+}
+
+fn kindFromType(raw: String) -> CellKind {
+    if raw == "b" {
+        return BoolCell
+    }
+    if raw == "inlineStr" || raw == "str" || raw == "s" {
+        return TextCell
+    }
+    NumberCell
+}
+
+fn sharedString(shared: List<String>, raw: String) -> Result<String, Error> {
+    let idx = strings.toInt(strings.trimSpace(raw))?
+    if idx < 0 || idx >= shared.len() {
+        return Err(error.new("xlsx: shared string index out of range"))
+    }
+    Ok(shared[idx])
+}
+
+fn attrOrEmpty(tag: String, name: String) -> Result<String, Error> {
+    match attrValue(tag, name)? {
+        Some(value) -> Ok(value),
+        None        -> Ok(""),
+    }
+}
+
+fn attrValue(tag: String, name: String) -> Result<String?, Error> {
+    let needle = "{name}=\""
+    let start = indexOfFrom(tag, needle, 0)
+    if start < 0 {
+        return Ok(noneString())
+    }
+    let valueStart = start + needle.len()
+    let valueEnd = indexOfFrom(tag, "\"", valueStart)
+    if valueEnd < 0 {
+        return Err(error.new("xlsx: unterminated attribute {name}"))
+    }
+    match unescapeXml(strings.slice(tag, valueStart, valueEnd)) {
+        Ok(value) -> {
+            Ok(Some(value))
+        },
+        Err(err) -> {
+            Err(err)
+        },
+    }
+}
+
+fn isSelfClosingTag(tag: String) -> Bool {
+    strings.endsWith(strings.trimSpace(tag), "/>")
+}
+
+fn indexOfFrom(text: String, needle: String, start: Int) -> Int {
+    if needle.isEmpty() {
+        return start
+    }
+    let mut i = start
+    for i + needle.len() <= text.len() {
+        if strings.slice(text, i, i + needle.len()) == needle {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+
+fn normalizeWorksheetTarget(target: String) -> String {
+    if strings.startsWith(target, "/") {
+        return strings.slice(target, 1, target.len())
+    }
+    if strings.startsWith(target, "xl/") {
+        return target
+    }
+    "xl/{target}"
+}
+
+fn validateSheetName(name: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(name)
+    if clean.isEmpty() {
+        return Err(error.new("xlsx: sheet name is empty"))
+    }
+    if clean.len() > 31 {
+        return Err(error.new("xlsx: sheet name is longer than 31 characters"))
+    }
+    for c in clean.chars() {
+        if c == '[' || c == ']' || c == ':' || c == '*' || c == '?' || c == '/' || c == '\\' {
+            return Err(error.new("xlsx: invalid sheet name: {clean}"))
+        }
+    }
+    Ok(clean)
+}
+
+fn normalizeAddress(address: String) -> Result<String, Error> {
+    let clean = strings.toUpper(strings.trimSpace(address))
+    if clean.isEmpty() {
+        return Err(error.new("xlsx: cell address is empty"))
+    }
+    let row = rowOf(clean)
+    let col = columnOf(clean)
+    if row <= 0 || col <= 0 {
+        return Err(error.new("xlsx: invalid cell address: {address}"))
+    }
+    Ok(clean)
+}
+
+fn rowOf(address: String) -> Int {
+    let chars = address.chars()
+    let mut i = 0
+    for i < chars.len() && isLetter(chars[i]) {
+        i = i + 1
+    }
+    if i == 0 || i >= chars.len() {
+        return 0
+    }
+    let mut row = 0
+    for i < chars.len() {
+        if !isDigit(chars[i]) {
+            return 0
+        }
+        row = row * 10 + (chars[i].toInt() - '0'.toInt())
+        i = i + 1
+    }
+    row
+}
+
+fn columnOf(address: String) -> Int {
+    let chars = address.chars()
+    let mut i = 0
+    let mut col = 0
+    for i < chars.len() && isLetter(chars[i]) {
+        col = col * 26 + (chars[i].toInt() - 'A'.toInt() + 1)
+        i = i + 1
+    }
+    if i == 0 {
+        return 0
+    }
+    col
+}
+
+fn addressOf(row: Int, column: Int) -> String {
+    "{columnName(column)}{intText(row)}"
+}
+
+fn intText(value: Int) -> String {
+    if value == 0 {
+        return "0"
+    }
+    let mut n = value
+    let negative = n < 0
+    if negative {
+        n = 0 - n
+    }
+    let mut out = ""
+    for n > 0 {
+        let digit = n % 10
+        out = "{digitText(digit)}{out}"
+        n = n / 10
+    }
+    if negative {
+        return "-{out}"
+    }
+    out
+}
+
+fn columnName(index: Int) -> String {
+    let mut n = index
+    let mut out = ""
+    for n > 0 {
+        let rem = (n - 1) % 26
+        out = "{letterText(rem)}{out}"
+        n = (n - 1) / 26
+    }
+    out
+}
+
+fn digitText(digit: Int) -> String {
+    match digit {
+        0 -> "0",
+        1 -> "1",
+        2 -> "2",
+        3 -> "3",
+        4 -> "4",
+        5 -> "5",
+        6 -> "6",
+        7 -> "7",
+        8 -> "8",
+        9 -> "9",
+        _ -> "",
+    }
+}
+
+fn letterText(index: Int) -> String {
+    strings.slice("ABCDEFGHIJKLMNOPQRSTUVWXYZ", index, index + 1)
+}
+
+fn maxRow(cells: List<Cell>) -> Int {
+    let mut out = 0
+    for item in cells {
+        let row = rowOf(item.address)
+        if row > out {
+            out = row
+        }
+    }
+    out
+}
+
+fn maxColumn(cells: List<Cell>) -> Int {
+    let mut out = 0
+    for item in cells {
+        let col = columnOf(item.address)
+        if col > out {
+            out = col
+        }
+    }
+    out
+}
+
+fn cellAt(cells: List<Cell>, row: Int, column: Int) -> String? {
+    for item in cells {
+        if rowOf(item.address) == row && columnOf(item.address) == column {
+            return Some(displayValue(item))
+        }
+    }
+    None
+}
+
+fn displayValue(item: Cell) -> String {
+    match item.kind {
+        BoolCell -> {
+            if boolValue(item.value) == "1" {
+                return "TRUE"
+            }
+            "FALSE"
+        },
+        _ -> item.value,
+    }
+}
+
+fn localName(name: String) -> String {
+    match strings.lastIndexOf(name, ":") {
+        Some(i) -> strings.slice(name, i + 1, name.len()),
+        None    -> name,
+    }
+}
+
+fn isLetter(c: Char) -> Bool {
+    c >= 'A' && c <= 'Z'
+}
+
+fn isDigit(c: Char) -> Bool {
+    c >= '0' && c <= '9'
+}
+
+fn noneString() -> String? {
+    None
+}

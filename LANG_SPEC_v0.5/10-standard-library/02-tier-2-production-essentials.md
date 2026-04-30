@@ -21,6 +21,8 @@
 - `std.csv` — CSV read/write
 - `std.table` — small dataframe helpers for CSV/TSV-scale table work:
   type inference, schema validation/coercion, typed sort, aggregation, join
+- `std.xlsx` — stored-entry XLSX workbook encode/decode helpers with
+  row/table adapters
 - `std.compress` — gzip compression
 - `std.term` — terminal mode, ANSI control, size, and key input
 - `std.tui` — retained terminal frame buffers and diff rendering

@@ -54,3 +54,4 @@ lowering remains implementation backlog.
 - [§10.37 Scanner Automation (`std.scan`)](./37-scan.md)
 - [§10.38 Print (`std.print`)](./38-print.md)
 - [§10.39 Clipboard (`std.clipboard`)](./39-clipboard.md)
+- [§10.40 XLSX (`std.xlsx`)](./40-xlsx.md)

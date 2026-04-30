@@ -45,6 +45,46 @@ fn main() {
 	}
 }
 
+func TestLLVMBackendBinaryRunsStdXlsxRowsEncode(t *testing.T) {
+	requireClangForBackendTest(t)
+	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `use std.xlsx
+use std.zip
+
+fn main() {
+    let archive = xlsx.encodeRows("Report", [
+        ["name", "score"],
+        ["Ada", "42"],
+    ]).unwrap()
+    println(zip.isArchive(archive))
+    println(zip.contains(archive, "xl/workbook.xml"))
+    println(zip.contains(archive, "xl/worksheets/sheet1.xml"))
+    let names = zip.list(archive).unwrap()
+    println(names.len())
+    println(names[0])
+    let sheet = zip.extract(archive, "xl/worksheets/sheet1.xml").unwrap().unwrap().toString().unwrap()
+    println(sheet.contains("Ada"))
+    println(sheet.contains("inlineStr"))
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		logBackendWarnings(t, result)
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	output, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	want := "true\ntrue\ntrue\n7\n[Content_Types].xml\ntrue\ntrue\n"
+	if got := string(output); got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
 func TestLLVMBackendBinaryRunsStdImageMetadata(t *testing.T) {
 	requireClangForBackendTest(t)
 	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
