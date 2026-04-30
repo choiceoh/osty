@@ -39,16 +39,16 @@ func TestCheckFnIndexSlotReturnsLatestRegistration(t *testing.T) {
 
 	checkRegisterFn(env, first)
 	key := checkFnKey("value", "Box")
-	firstSlot, ok := env.fnIndexSlots[key]
+	firstSlot, ok := env.global.fnIndexSlots[key]
 	if !ok {
 		t.Fatalf("fnIndexSlots missing key %q", key)
 	}
 
 	checkRegisterFn(env, second)
-	if got := len(env.fnIndexKeys); got != 1 {
+	if got := len(env.global.fnIndexKeys); got != 1 {
 		t.Fatalf("fnIndexKeys len = %d, want 1", got)
 	}
-	if got := env.fnIndexSlots[key]; got != firstSlot {
+	if got := env.global.fnIndexSlots[key]; got != firstSlot {
 		t.Fatalf("fnIndexSlots[%q] = %d, want %d", key, got, firstSlot)
 	}
 	if got := checkLookupFn(env, "value", "Box"); got != second {

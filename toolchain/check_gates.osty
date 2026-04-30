@@ -111,7 +111,7 @@ fn checkIntrinsicBodyFn(cx: ElabCx, arena: AstArena, fn_: AstNode) {
         return
     }
     let name = fn_.text
-    cx.env.diagnostics.push(diagIntrinsicNonEmptyBody(name, body.start, body.end))
+    cx.env.local.diagnostics.push(diagIntrinsicNonEmptyBody(name, body.start, body.end))
 }
 
 // ---------------------------------------------------------------------
@@ -196,7 +196,7 @@ fn checkPodStructShape(cx: ElabCx, arena: AstArena, structNode: AstNode, podStru
     // annotation's children, and the default repr convention the Go
     // gate uses is "any `#[repr(...)]` satisfies rule 1".
     if !checkGateAnnotationContains(arena, structNode.extra, "repr") {
-        cx.env.diagnostics.push(diagPodShapeViolation(
+        cx.env.local.diagnostics.push(diagPodShapeViolation(
             "`#[pod]` struct `{structName}` is missing `#[repr(c)]`",
             "add `#[repr(c)]` so the field layout is C ABI-stable",
             structNode.start,
@@ -217,7 +217,7 @@ fn checkPodStructShape(cx: ElabCx, arena: AstArena, structNode: AstNode, podStru
         if genericParamHasPodBound(arena, gp) {
             podGenericParams.push(gp.text)
         } else {
-            cx.env.diagnostics.push(diagPodShapeViolation(
+            cx.env.local.diagnostics.push(diagPodShapeViolation(
                 "`#[pod]` struct `{structName}` has unbounded generic parameter `{gp.text}`",
                 "add `: Pod` to the parameter — per-instantiation `Pod` is not supported in v0.4 (§19.4)",
                 gp.start,
@@ -239,7 +239,7 @@ fn checkPodStructShape(cx: ElabCx, arena: AstArena, structNode: AstNode, podStru
         if !isPodType(arena, typeIdx, podStructs, podGenericParams) {
             let typeStr = formatTypeForDiag(arena, typeIdx)
             let fieldName = member.text
-            cx.env.diagnostics.push(diagPodShapeViolation(
+            cx.env.local.diagnostics.push(diagPodShapeViolation(
                 "field `{structName}.{fieldName}` has non-Pod type `{typeStr}`",
                 "replace with a primitive, `RawPtr`, `Option<T: Pod>`, a tuple of Pod, or another `#[pod] #[repr(c)]` struct",
                 member.start,
@@ -436,7 +436,7 @@ fn privilegeWalkDecl(cx: ElabCx, arena: AstArena, declIdx: Int) {
 fn privilegeCheckUse(cx: ElabCx, arena: AstArena, node: AstNode) {
     let raw = node.text
     if isPrivilegedUsePath(raw) {
-        cx.env.diagnostics.push(diagRuntimePrivilege(
+        cx.env.local.diagnostics.push(diagRuntimePrivilege(
             "`use {raw}` imports a privileged namespace",
             "only `std.runtime.*` packages and toolchain-workspace packages with `[capabilities] runtime = true` may import this namespace",
             node.start,
@@ -585,7 +585,7 @@ fn privilegeCheckAnnotationTree(cx: ElabCx, arena: AstArena, idx: Int) {
         return
     }
     if isPrivilegedAnnotationName(node.text) {
-        cx.env.diagnostics.push(diagRuntimePrivilege(
+        cx.env.local.diagnostics.push(diagRuntimePrivilege(
             "`#[{node.text}]` is a runtime-only annotation",
             "",
             node.start,
@@ -637,7 +637,7 @@ fn privilegeWalkType(cx: ElabCx, arena: AstArena, typeIdx: Int) {
     // gate above when the import itself is privileged.
     let name = node.text
     if isPrivilegedTypeName(name) {
-        cx.env.diagnostics.push(diagRuntimePrivilege(
+        cx.env.local.diagnostics.push(diagRuntimePrivilege(
             "`{name}` is a runtime-only type",
             "",
             node.start,
@@ -869,7 +869,7 @@ fn noAllocWalkBlock(cx: ElabCx, arena: AstArena, blockIdx: Int, fnName: String, 
 }
 
 fn noAllocEmit(cx: ElabCx, fnName: String, what: String, fixHint: String, start: Int, end: Int) {
-    cx.env.diagnostics.push(diagNoAllocViolation(fnName, what, fixHint, start, end))
+    cx.env.local.diagnostics.push(diagNoAllocViolation(fnName, what, fixHint, start, end))
 }
 
 fn noAllocWalkExpr(cx: ElabCx, arena: AstArena, idx: Int, fnName: String, noAllocNames: List<String>) {
@@ -1214,7 +1214,7 @@ fn pureWalkBlock(cx: ElabCx, arena: AstArena, blockIdx: Int, fnName: String, pur
 }
 
 fn pureEmit(cx: ElabCx, fnName: String, what: String, fixHint: String, start: Int, end: Int) {
-    cx.env.diagnostics.push(diagPureViolation(fnName, what, fixHint, start, end))
+    cx.env.local.diagnostics.push(diagPureViolation(fnName, what, fixHint, start, end))
 }
 
 fn pureWalkExpr(cx: ElabCx, arena: AstArena, idx: Int, fnName: String, pureNames: List<String>, locals: List<String>) {

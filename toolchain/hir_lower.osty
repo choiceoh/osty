@@ -168,7 +168,7 @@ fn hirLowerCollectDiagnostics(cx: HirLowerContext) {
         }
         hirLowerNote(cx.l, msg)
     }
-    for d in cx.elab.env.diagnostics {
+    for d in cx.elab.env.local.diagnostics {
         hirLowerNote(cx.l, checkDiagRender(d))
     }
 }

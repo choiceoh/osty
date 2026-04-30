@@ -75,7 +75,7 @@ func BenchmarkNewElabCx(b *testing.B) {
 
 func TestNewElabCxClonesFrozenPrelude(t *testing.T) {
 	template := checkPreludeTemplateEnv()
-	templateFnCount := len(template.fns)
+	templateFnCount := len(template.global.fns)
 	templateTyCount := len(template.tys.nodes)
 	if templateFnCount == 0 || templateTyCount == 0 {
 		t.Fatalf("empty prelude template: fns=%d tys=%d", templateFnCount, templateTyCount)
@@ -85,18 +85,52 @@ func TestNewElabCxClonesFrozenPrelude(t *testing.T) {
 	checkRegisterFn(cx.env, &CheckFnSig{name: "localOnly", owner: "", retTy: tInt(cx.env.tys)})
 	_ = tyNamed(cx.env.tys, "LocalOnly", []int{tInt(cx.env.tys)})
 
-	if got := len(template.fns); got != templateFnCount {
+	if got := len(template.global.fns); got != templateFnCount {
 		t.Fatalf("template fns len = %d, want %d", got, templateFnCount)
 	}
 	if got := len(template.tys.nodes); got != templateTyCount {
 		t.Fatalf("template ty nodes len = %d, want %d", got, templateTyCount)
 	}
-	if checkFnExists(template, "localOnly", "") {
+	if _, ok := template.global.fnIndexSlots[checkFnKey("localOnly", "")]; ok {
 		t.Fatalf("template observed function registered into cloned env")
 	}
 	fresh := newElabCx(nil, nil)
 	if checkFnExists(fresh.env, "localOnly", "") {
 		t.Fatalf("fresh env observed function registered into earlier clone")
+	}
+}
+
+func TestPreludeTemplateMaterializesLocalCheckState(t *testing.T) {
+	cx := newElabCx(nil, nil)
+	if cx.env.local.returnTy != tErr(cx.env.tys) {
+		t.Fatalf("returnTy = %d, want Err", cx.env.local.returnTy)
+	}
+	if cx.env.local.fnName != "" {
+		t.Fatalf("fnName = %q, want empty", cx.env.local.fnName)
+	}
+	if cx.env.local.inLoop {
+		t.Fatal("inLoop = true, want false")
+	}
+	if cx.env.local.assignments != 0 || cx.env.local.accepted != 0 {
+		t.Fatalf("local counters = assignments:%d accepted:%d, want zero", cx.env.local.assignments, cx.env.local.accepted)
+	}
+	if len(cx.env.local.diagnostics) != 0 {
+		t.Fatalf("diagnostics len = %d, want 0", len(cx.env.local.diagnostics))
+	}
+	if len(cx.env.local.bindingRecords) != 0 {
+		t.Fatalf("bindingRecords len = %d, want 0", len(cx.env.local.bindingRecords))
+	}
+	if len(cx.env.local.symbolRecords) != 0 {
+		t.Fatalf("symbolRecords len = %d, want 0", len(cx.env.local.symbolRecords))
+	}
+	if len(cx.env.local.instantiations) != 0 {
+		t.Fatalf("instantiations len = %d, want 0", len(cx.env.local.instantiations))
+	}
+	if len(cx.env.local.aliasDeepCache) != 0 {
+		t.Fatalf("aliasDeepCache len = %d, want 0", len(cx.env.local.aliasDeepCache))
+	}
+	if len(cx.env.local.substCacheKeys) != 0 || len(cx.env.local.substCacheHashes) != 0 || len(cx.env.local.substCacheValues) != 0 {
+		t.Fatalf("subst cache lens = keys:%d hashes:%d values:%d, want zero", len(cx.env.local.substCacheKeys), len(cx.env.local.substCacheHashes), len(cx.env.local.substCacheValues))
 	}
 }
 
