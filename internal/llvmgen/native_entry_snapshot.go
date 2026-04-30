@@ -552,24 +552,6 @@ func llvmNativeEmitFunction(fn *llvmNativeFunction, globals []*llvmNativeGlobal,
 	}
 }
 
-// llvmNativeInlineAttrKeyword mirrors toolchain/llvmgen.osty's
-// `llvmNativeInlineAttrKeyword`. Maps the v0.6 A8 `#[inline]` family
-// discriminant to the matching LLVM fn-attribute keyword; unknown
-// modes fall through to the empty string so the renderer produces the
-// attribute-free `define ... (...) {` shape.
-func llvmNativeInlineAttrKeyword(mode int) string {
-	switch mode {
-	case 1:
-		return mirFnAttrInlineHint()
-	case 2:
-		return mirFnAttrAlwaysInline()
-	case 3:
-		return mirFnAttrNoInline()
-	default:
-		return ""
-	}
-}
-
 // llvmNativeFnAttrString mirrors toolchain/llvmgen.osty's
 // `llvmNativeFnAttrString`. Assembles the fn-attribute string spliced
 // between `)` and `{` on a `llvmNativeFunction`'s `define` line.
@@ -577,7 +559,7 @@ func llvmNativeFnAttrString(fn *llvmNativeFunction) string {
 	if fn == nil {
 		return ""
 	}
-	return llvmNativeInlineAttrKeyword(fn.inlineMode)
+	return llvmNativeFnAttrStringForInlineMode(fn.inlineMode)
 }
 
 // llvmRenderFunctionWithAttrs mirrors toolchain/llvmgen.osty's
@@ -973,52 +955,6 @@ func llvmNativeCondLenSources(expr *llvmNativeExpr) []string {
 	return []string{left, right}
 }
 
-// llvmNativePushSafeIndices marks (idxName, list) pairs as bounds-
-// safe for the body emission that follows. The map's value is the
-// maximum addend `k` for which `list[idxName + k]` is still proven
-// in-bounds; values can be 0. Pass nil to mean "no safety
-// established for this loop" — still call the matching pop so the
-// symbol is restored to its prior state cleanly.
-func llvmNativePushSafeIndices(emitter *LlvmEmitter, idxName string, lists map[string]int) {
-	if idxName == "" {
-		return
-	}
-	if len(lists) == 0 {
-		// Still record an empty entry so pop doesn't restore stale
-		// safety from an outer loop with the same loop-var name.
-		emitter.nativeSafeIndices[idxName] = nil
-		return
-	}
-	emitter.nativeSafeIndices[idxName] = cloneOffsetMap(lists)
-}
-
-// llvmNativePopSafeIndices clears the safe-index entry for the given
-// loop variable. The native AST has no nested scoping for loop names
-// in our current shape — peeling on body-end is sufficient.
-func llvmNativePopSafeIndices(emitter *LlvmEmitter, idxName string) {
-	if idxName == "" {
-		return
-	}
-	delete(emitter.nativeSafeIndices, idxName)
-}
-
-// llvmNativeIsSafeListAccess reports whether `paramName[idxName +
-// addend]` is proven in-bounds by the analysis above. idxName == ""
-// means the caller couldn't pin the index back to a source-level
-// identifier (e.g. an expression that isn't `loopvar` or
-// `loopvar + constant`); those keep the runtime check.
-func llvmNativeIsSafeListAccess(emitter *LlvmEmitter, paramName, idxName string, addend int) bool {
-	if paramName == "" || idxName == "" || addend < 0 {
-		return false
-	}
-	set := emitter.nativeSafeIndices[idxName]
-	maxOff, ok := set[paramName]
-	if !ok {
-		return false
-	}
-	return addend <= maxOff
-}
-
 // llvmNativeIntLiteralValue extracts the int value from a literal
 // integer expression. Used to recognise constant addends and
 // constant subtrahends.
@@ -1250,7 +1186,7 @@ func llvmNativeEvalInterfaceCall(emitter *LlvmEmitter, expr *llvmNativeExpr) *Ll
 	var argList strings.Builder
 	argList.WriteString("ptr ")
 	argList.WriteString(data)
-	argTypes := splitArgTypes(expr.text)
+	argTypes := llvmSplitArgTypes(expr.text)
 	for i := 1; i < len(expr.childExprs); i++ {
 		argVal := llvmNativeEvalExpr(emitter, expr.childExprs[i])
 		argList.WriteString(", ")
@@ -1302,13 +1238,8 @@ func llvmNativeEvalClosureEnvAlloc(emitter *LlvmEmitter, expr *llvmNativeExpr) *
 		siteLabel = expr.text[:idx]
 		capTypesRaw = expr.text[idx+1:]
 	}
-	capTypes := splitArgTypes(capTypesRaw)
-	var bitmap uint64
-	for i, t := range capTypes {
-		if t == "ptr" {
-			bitmap |= uint64(1) << uint(i)
-		}
-	}
+	capTypes := llvmSplitArgTypes(capTypesRaw)
+	bitmap := uint64(llvmClosureEnvPointerBitmap(capTypes))
 	site := llvmStringLiteral(emitter, siteLabel)
 	env := llvmNextTemp(emitter)
 	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call ptr @osty.rt.closure_env_alloc_v2(i64 %d, ptr %s, i64 %d)", env, len(capTypes), site.name, bitmap))
@@ -1349,7 +1280,7 @@ func llvmNativeEvalFnValueCall(emitter *LlvmEmitter, expr *llvmNativeExpr) *Llvm
 	var argList strings.Builder
 	argList.WriteString("ptr ")
 	argList.WriteString(env.name)
-	argTypes := splitArgTypes(expr.text)
+	argTypes := llvmSplitArgTypes(expr.text)
 	for i := 1; i < len(expr.childExprs); i++ {
 		arg := llvmNativeEvalExpr(emitter, expr.childExprs[i])
 		argList.WriteString(", ")
@@ -1373,20 +1304,6 @@ func llvmNativeEvalFnValueCall(emitter *LlvmEmitter, expr *llvmNativeExpr) *Llvm
 	res := llvmNextTemp(emitter)
 	emitter.body = append(emitter.body, fmt.Sprintf("  %s = call %s %s(%s)", res, ret, fnPtr, argList.String()))
 	return &LlvmValue{typ: ret, name: res}
-}
-
-// splitArgTypes parses a comma-separated list of LLVM types out of
-// the `text` field. Empty input yields a nil slice. No input
-// sanitization — callers control this field.
-func splitArgTypes(text string) []string {
-	if text == "" {
-		return nil
-	}
-	parts := strings.Split(text, ",")
-	for i := range parts {
-		parts[i] = strings.TrimSpace(parts[i])
-	}
-	return parts
 }
 
 func llvmNativeEvalListLit(emitter *LlvmEmitter, expr *llvmNativeExpr) *LlvmValue {
@@ -1717,21 +1634,4 @@ func llvmNativeBlockValue(emitter *LlvmEmitter, block *llvmNativeBlock, llvmType
 		return value.value
 	}
 	return llvmNativeZeroValue(llvmType)
-}
-
-func llvmNativeZeroValue(llvmType string) *LlvmValue {
-	switch llvmType {
-	case "", "void":
-		return llvmI64("0")
-	default:
-		return &LlvmValue{typ: llvmType, name: llvmZeroLiteral(llvmType)}
-	}
-}
-
-func llvmNativeBodyHasTerminator(body []string) bool {
-	if len(body) == 0 {
-		return false
-	}
-	last := body[len(body)-1]
-	return strings.HasPrefix(last, "  ret ") || strings.HasPrefix(last, "  br ")
 }

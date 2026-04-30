@@ -77,3 +77,27 @@ fn main() {
 		t.Fatalf("unannotated plain() define line should end `) {` (no attrs), got:\n  %s", defineLine)
 	}
 }
+
+func TestNativeInlineAttrHelpersUseOstyMapping(t *testing.T) {
+	cases := []struct {
+		mode int
+		want string
+	}{
+		{0, ""},
+		{1, "inlinehint"},
+		{2, "alwaysinline"},
+		{3, "noinline"},
+		{99, ""},
+	}
+	for _, tc := range cases {
+		if got := llvmNativeInlineAttrKeyword(tc.mode); got != tc.want {
+			t.Fatalf("llvmNativeInlineAttrKeyword(%d) = %q, want %q", tc.mode, got, tc.want)
+		}
+	}
+	if got := llvmNativeFnAttrString(nil); got != "" {
+		t.Fatalf("llvmNativeFnAttrString(nil) = %q, want empty", got)
+	}
+	if got := llvmNativeFnAttrString(&llvmNativeFunction{inlineMode: 2}); got != "alwaysinline" {
+		t.Fatalf("llvmNativeFnAttrString(always) = %q, want alwaysinline", got)
+	}
+}

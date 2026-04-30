@@ -73,13 +73,11 @@ type closureCapture struct {
 //
 // Caller must ensure len(captures) <= 64 (enforced at emit time).
 func pointerBitmapForCaptures(captures []closureCapture) uint64 {
-	var bitmap uint64
-	for i, c := range captures {
-		if c.llvmTyp == "ptr" {
-			bitmap |= uint64(1) << uint(i)
-		}
+	types := make([]string, 0, len(captures))
+	for _, c := range captures {
+		types = append(types, c.llvmTyp)
 	}
-	return bitmap
+	return uint64(llvmClosureEnvPointerBitmap(types))
 }
 
 // liftedClosure is the per-closure record produced by the lift pass.

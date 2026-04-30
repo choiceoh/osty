@@ -286,3 +286,11 @@ fn main() {
 		t.Fatalf("expected bitmap `i64 1)` or `i64 2)` for one-pointer-one-scalar env, got:\n%s", got)
 	}
 }
+
+func TestLLVMClosureEnvPointerBitmapTracksPtrSlots(t *testing.T) {
+	got := llvmClosureEnvPointerBitmap([]string{"i64", "ptr", "double", "ptr", "i1"})
+	want := (1 << 1) | (1 << 3)
+	if got != want {
+		t.Fatalf("llvmClosureEnvPointerBitmap(...) = %d, want %d", got, want)
+	}
+}
