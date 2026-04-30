@@ -40,7 +40,7 @@ func CheckPackageStructured(input PackageCheckInput) (result CheckResult, err er
 	if file == nil {
 		return CheckResult{}, nil
 	}
-	cx := newElabCx(file, emptyTyArena())
+	cx := newElabCx(file, nil)
 	selfhostInstallImportSurfaces(cx.env, input.Imports)
 	elabFile(cx)
 	result = adaptCheckResultWithTokenLayout(serializeCheckResult(cx), layout)
@@ -69,7 +69,7 @@ func InspectPackageStructured(input PackageCheckInput) (records []api.InspectRec
 	if file == nil {
 		return nil, nil
 	}
-	cx := newElabCx(file, emptyTyArena())
+	cx := newElabCx(file, nil)
 	selfhostInstallImportSurfaces(cx.env, input.Imports)
 	elabFile(cx)
 	checked := serializeCheckResult(cx)

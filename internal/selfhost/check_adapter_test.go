@@ -66,10 +66,37 @@ func BenchmarkNewElabCx(b *testing.B) {
 
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		cx := newElabCx(file, emptyTyArena())
+		cx := newElabCx(file, nil)
 		if cx == nil || cx.env == nil || cx.core == nil {
 			b.Fatal("newElabCx returned incomplete context")
 		}
+	}
+}
+
+func TestNewElabCxClonesFrozenPrelude(t *testing.T) {
+	template := checkPreludeTemplateEnv()
+	templateFnCount := len(template.fns)
+	templateTyCount := len(template.tys.nodes)
+	if templateFnCount == 0 || templateTyCount == 0 {
+		t.Fatalf("empty prelude template: fns=%d tys=%d", templateFnCount, templateTyCount)
+	}
+
+	cx := newElabCx(nil, nil)
+	checkRegisterFn(cx.env, &CheckFnSig{name: "localOnly", owner: "", retTy: tInt(cx.env.tys)})
+	_ = tyNamed(cx.env.tys, "LocalOnly", []int{tInt(cx.env.tys)})
+
+	if got := len(template.fns); got != templateFnCount {
+		t.Fatalf("template fns len = %d, want %d", got, templateFnCount)
+	}
+	if got := len(template.tys.nodes); got != templateTyCount {
+		t.Fatalf("template ty nodes len = %d, want %d", got, templateTyCount)
+	}
+	if checkFnExists(template, "localOnly", "") {
+		t.Fatalf("template observed function registered into cloned env")
+	}
+	fresh := newElabCx(nil, nil)
+	if checkFnExists(fresh.env, "localOnly", "") {
+		t.Fatalf("fresh env observed function registered into earlier clone")
 	}
 }
 

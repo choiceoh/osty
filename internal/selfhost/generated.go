@@ -38225,10 +38225,8 @@ type InstSession struct {
 // Osty: /tmp/selfhost_merged.osty:17750:5
 func newElabCx(ast *AstFile, tys *TyArena) *ElabCx {
 	// Osty: /tmp/selfhost_merged.osty:17751:5
-	env := emptyCheckEnv(tys)
+	env := clonePreludeCheckEnv(checkPreludeTemplateEnv())
 	_ = env
-	// Osty: /tmp/selfhost_merged.osty:17752:5
-	checkInstallPrelude(env)
 	return &ElabCx{ast: ast, core: emptyCoreArena(), env: env, typedExprNodes: make([]int, 0, 1), typedExprCoreNodes: make([]int, 0, 1), typedExprTypes: make([]int, 0, 1), typedStmtNodes: make([]int, 0, 1), typedStmtCoreNodes: make([]int, 0, 1)}
 }
 
@@ -47834,10 +47832,7 @@ func frontendCheckAst(file *AstFile) *FrontCheckSummary {
 // Osty: /tmp/selfhost_merged.osty:23175:5
 func frontendCheckAstStructured(file *AstFile) *FrontCheckResult {
 	// Osty: /tmp/selfhost_merged.osty:23176:5
-	tys := emptyTyArena()
-	_ = tys
-	// Osty: /tmp/selfhost_merged.osty:23177:5
-	cx := newElabCx(file, tys)
+	cx := newElabCx(file, nil)
 	_ = cx
 	// Osty: /tmp/selfhost_merged.osty:23178:5
 	elabFile(cx)
