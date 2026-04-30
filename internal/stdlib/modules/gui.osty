@@ -1,0 +1,1900 @@
+// std.gui -- retained, backend-neutral GUI primitives.
+//
+// The module deliberately keeps native windows, GPU surfaces, and OS event
+// pumps host-backed. What belongs here is the deterministic core every backend
+// needs: geometry, themes, retained nodes, layout, event routing, render
+// commands, accessibility checks, snapshot diffs, and portable browser/webview
+// document launch helpers.
+
+use std.error
+use std.fs
+use std.json
+use std.os
+use std.strings
+
+pub struct Point {
+    pub x: Float = 0.0,
+    pub y: Float = 0.0,
+
+    pub fn add(self, other: Point) -> Point {
+        Point { x: self.x + other.x, y: self.y + other.y }
+    }
+
+    pub fn sub(self, other: Point) -> Point {
+        Point { x: self.x - other.x, y: self.y - other.y }
+    }
+
+    pub fn distanceTo(self, other: Point) -> Float {
+        let dx = self.x - other.x
+        let dy = self.y - other.y
+        (dx * dx + dy * dy).sqrt()
+    }
+}
+
+pub struct Size {
+    pub width: Float = 0.0,
+    pub height: Float = 0.0,
+
+    pub fn isEmpty(self) -> Bool {
+        self.width <= 0.0 || self.height <= 0.0
+    }
+
+    pub fn area(self) -> Float {
+        if self.isEmpty() {
+            return 0.0
+        }
+        self.width * self.height
+    }
+
+    pub fn clamp(self, min: Size, max: Size) -> Size {
+        Size {
+            width: clampFloat(self.width, min.width, max.width),
+            height: clampFloat(self.height, min.height, max.height),
+        }
+    }
+}
+
+pub struct Rect {
+    pub origin: Point,
+    pub size: Size,
+
+    pub fn minX(self) -> Float { self.origin.x }
+    pub fn minY(self) -> Float { self.origin.y }
+    pub fn maxX(self) -> Float { self.origin.x + self.size.width }
+    pub fn maxY(self) -> Float { self.origin.y + self.size.height }
+    pub fn center(self) -> Point {
+        Point { x: self.minX() + self.size.width / 2.0, y: self.minY() + self.size.height / 2.0 }
+    }
+    pub fn isEmpty(self) -> Bool { self.size.isEmpty() }
+
+    pub fn contains(self, point: Point) -> Bool {
+        point.x >= self.minX() && point.y >= self.minY() &&
+        point.x < self.maxX() && point.y < self.maxY()
+    }
+
+    pub fn intersects(self, other: Rect) -> Bool {
+        !self.isEmpty() && !other.isEmpty() &&
+        self.minX() < other.maxX() && self.maxX() > other.minX() &&
+        self.minY() < other.maxY() && self.maxY() > other.minY()
+    }
+
+    pub fn intersection(self, other: Rect) -> Rect? {
+        if !self.intersects(other) {
+            return None
+        }
+        let x1 = maxFloat(self.minX(), other.minX())
+        let y1 = maxFloat(self.minY(), other.minY())
+        let x2 = minFloat(self.maxX(), other.maxX())
+        let y2 = minFloat(self.maxY(), other.maxY())
+        Some(rect(x1, y1, x2 - x1, y2 - y1))
+    }
+
+    pub fn inset(self, insets: Insets) -> Rect {
+        insetRect(self, insets)
+    }
+
+    pub fn translate(self, delta: Point) -> Rect {
+        Rect { origin: self.origin.add(delta), size: self.size }
+    }
+}
+
+pub struct Insets {
+    pub top: Float = 0.0,
+    pub right: Float = 0.0,
+    pub bottom: Float = 0.0,
+    pub left: Float = 0.0,
+
+    pub fn horizontal(self) -> Float {
+        self.left + self.right
+    }
+
+    pub fn vertical(self) -> Float {
+        self.top + self.bottom
+    }
+}
+
+pub struct Radius {
+    pub topLeft: Float = 0.0,
+    pub topRight: Float = 0.0,
+    pub bottomRight: Float = 0.0,
+    pub bottomLeft: Float = 0.0,
+}
+
+pub enum Color {
+    Transparent,
+    Rgba(Int, Int, Int, Float),
+}
+
+pub struct ColorStop {
+    pub offset: Float,
+    pub color: Color,
+}
+
+pub enum Paint {
+    NoPaint,
+    Solid(Color),
+    LinearGradient(Point, Point, List<ColorStop>),
+}
+
+pub struct Border {
+    pub color: Color,
+    pub width: Float = 0.0,
+}
+
+pub struct Shadow {
+    pub offset: Point,
+    pub blur: Float = 0.0,
+    pub spread: Float = 0.0,
+    pub color: Color,
+}
+
+pub enum FontWeight {
+    Thin,
+    ExtraLight,
+    Light,
+    Regular,
+    Medium,
+    Semibold,
+    Bold,
+    ExtraBold,
+    Black,
+}
+
+pub enum TextAlign {
+    AlignStart,
+    AlignCenter,
+    AlignEnd,
+    AlignJustify,
+}
+
+pub enum TextOverflow {
+    Clip,
+    Ellipsis,
+    Wrap,
+}
+
+pub struct TextStyle {
+    pub family: String = "",
+    pub size: Float = 14.0,
+    pub weight: FontWeight,
+    pub color: Color,
+    pub lineHeight: Float = 1.3,
+    pub align: TextAlign,
+    pub overflow: TextOverflow,
+}
+
+pub struct Style {
+    pub background: Paint,
+    pub foreground: Color,
+    pub border: Border,
+    pub radius: Radius,
+    pub padding: Insets,
+    pub margin: Insets,
+    pub shadow: Shadow,
+    pub opacity: Float = 1.0,
+    pub text: TextStyle,
+    pub cursor: Cursor,
+
+    pub fn withBackground(mut self, paint: Paint) -> Style {
+        self.background = paint
+        self
+    }
+
+    pub fn withForeground(mut self, color: Color) -> Style {
+        self.foreground = color
+        self.text.color = color
+        self
+    }
+
+    pub fn withPadding(mut self, value: Insets) -> Style {
+        self.padding = value
+        self
+    }
+
+    pub fn withMargin(mut self, value: Insets) -> Style {
+        self.margin = value
+        self
+    }
+
+    pub fn withRadius(mut self, value: Radius) -> Style {
+        self.radius = value
+        self
+    }
+
+    pub fn withBorder(mut self, value: Border) -> Style {
+        self.border = value
+        self
+    }
+
+    pub fn hasBackground(self) -> Bool {
+        match self.background {
+            NoPaint -> false,
+            _       -> true,
+        }
+    }
+
+    pub fn contentRect(self, frame: Rect) -> Rect {
+        frame.inset(self.padding)
+    }
+}
+
+pub struct Theme {
+    pub name: String = "default",
+    pub surface: Color,
+    pub surfaceRaised: Color,
+    pub text: Color,
+    pub mutedText: Color,
+    pub accent: Color,
+    pub danger: Color,
+    pub border: Color,
+    pub focus: Color,
+    pub radius: Float = 8.0,
+    pub spacing: Float = 8.0,
+}
+
+pub enum Cursor {
+    Default,
+    Pointer,
+    TextCursor,
+    Crosshair,
+    Grab,
+    Grabbing,
+    ResizeHorizontal,
+    ResizeVertical,
+    NotAllowed,
+}
+
+pub enum LayoutMode {
+    FreeLayout,
+    RowLayout,
+    ColumnLayout,
+    StackLayout,
+    AbsoluteLayout,
+}
+
+pub enum CrossAlign {
+    CrossStart,
+    CrossCenter,
+    CrossEnd,
+    CrossStretch,
+}
+
+pub enum MainAlign {
+    MainStart,
+    MainCenter,
+    MainEnd,
+    SpaceBetween,
+}
+
+pub struct Layout {
+    pub mode: LayoutMode,
+    pub gap: Float = 0.0,
+    pub grow: Float = 0.0,
+    pub shrink: Float = 1.0,
+    pub basis: Float = 0.0,
+    pub minSize: Size,
+    pub maxSize: Size,
+    pub crossAlign: CrossAlign,
+    pub mainAlign: MainAlign,
+    pub absolute: Rect? = None,
+}
+
+pub struct Constraints {
+    pub min: Size,
+    pub max: Size,
+}
+
+pub enum NodeKind {
+    WindowRoot,
+    Layer,
+    Row,
+    Column,
+    Stack,
+    Scroll,
+    Panel,
+    Label,
+    Button,
+    TextInput,
+    Checkbox,
+    ImageView,
+    Canvas,
+    Spacer,
+    Custom(String),
+}
+
+pub enum Role {
+    App,
+    Window,
+    Group,
+    Header,
+    TextRole,
+    ButtonRole,
+    Link,
+    TextField,
+    CheckboxRole,
+    ImageRole,
+    List,
+    ListItem,
+    CanvasRole,
+    NoneRole,
+}
+
+pub struct Accessibility {
+    pub role: Role,
+    pub label: String = "",
+    pub hint: String = "",
+    pub value: String = "",
+    pub focusable: Bool = false,
+    pub disabled: Bool = false,
+    pub hidden: Bool = false,
+    pub selected: Bool = false,
+    pub checked: Bool = false,
+
+    pub fn isInteractive(self) -> Bool {
+        self.focusable || self.role == Role.ButtonRole || self.role == Role.Link ||
+        self.role == Role.TextField || self.role == Role.CheckboxRole
+    }
+
+    pub fn hasName(self) -> Bool {
+        !strings.trimSpace(self.label).isEmpty()
+    }
+}
+
+pub struct Node {
+    pub id: String = "",
+    pub kind: NodeKind,
+    pub text: String = "",
+    pub value: String = "",
+    pub checked: Bool = false,
+    pub disabled: Bool = false,
+    pub visible: Bool = true,
+    pub frame: Rect,
+    pub style: Style,
+    pub layout: Layout,
+    pub access: Accessibility,
+    pub children: List<Node> = [],
+
+    pub fn withId(mut self, id: String) -> Node {
+        self.id = id
+        self
+    }
+
+    pub fn withText(mut self, text: String) -> Node {
+        self.text = text
+        if self.access.label.isEmpty() {
+            self.access.label = text
+        }
+        self
+    }
+
+    pub fn withStyle(mut self, style: Style) -> Node {
+        self.style = style
+        self
+    }
+
+    pub fn withLayout(mut self, layout: Layout) -> Node {
+        self.layout = layout
+        self
+    }
+
+    pub fn withAccess(mut self, access: Accessibility) -> Node {
+        self.access = access
+        self
+    }
+
+    pub fn add(mut self, child: Node) -> Node {
+        self.children.push(child)
+        self
+    }
+
+    pub fn addAll(mut self, children: List<Node>) -> Node {
+        for child in children {
+            self.children.push(child)
+        }
+        self
+    }
+
+    pub fn isInteractive(self) -> Bool {
+        if self.disabled || self.access.disabled {
+            return false
+        }
+        if self.access.isInteractive() {
+            return true
+        }
+        match self.kind {
+            Button | TextInput | Checkbox -> true,
+            _                             -> false,
+        }
+    }
+
+    pub fn focusable(self) -> Bool {
+        self.visible && self.isInteractive()
+    }
+
+    pub fn measure(self, constraints: Constraints) -> Size {
+        let intrinsic = intrinsicSize(self)
+        let padded = Size {
+            width: intrinsic.width + self.style.padding.horizontal() + self.style.border.width * 2.0,
+            height: intrinsic.height + self.style.padding.vertical() + self.style.border.width * 2.0,
+        }
+        padded.clamp(maxSize(self.layout.minSize, constraints.min), minSize(self.layout.maxSize, constraints.max))
+    }
+
+    pub fn layoutIn(mut self, bounds: Rect) -> Node {
+        let own = applyAbsolute(self.layout, bounds)
+        self.frame = own
+        let content = self.style.contentRect(own)
+        self.children = layoutChildren(self.children, self.layout, content)
+        self
+    }
+
+    pub fn hitTest(self, point: Point) -> String? {
+        if !self.visible || !self.frame.contains(point) {
+            return None
+        }
+        let mut i = self.children.len()
+        for i > 0 {
+            i = i - 1
+            match self.children[i].hitTest(point) {
+                Some(id) -> {
+                    return Some(id)
+                },
+                None     -> {},
+            }
+        }
+        if self.isInteractive() && !self.id.isEmpty() {
+            return Some(self.id)
+        }
+        None
+    }
+
+    pub fn findById(self, id: String) -> Node? {
+        if self.id == id {
+            return Some(self)
+        }
+        for child in self.children {
+            match child.findById(id) {
+                Some(found) -> {
+                    return Some(found)
+                },
+                None        -> {},
+            }
+        }
+        None
+    }
+}
+
+pub enum PointerPhase {
+    PointerDown,
+    PointerMove,
+    PointerUp,
+    PointerCancel,
+    PointerEnter,
+    PointerLeave,
+}
+
+pub enum PointerButton {
+    Primary,
+    Secondary,
+    Middle,
+    Back,
+    Forward,
+    NoButton,
+}
+
+pub struct Modifiers {
+    pub shift: Bool = false,
+    pub control: Bool = false,
+    pub alt: Bool = false,
+    pub meta: Bool = false,
+}
+
+pub struct PointerEvent {
+    pub phase: PointerPhase,
+    pub position: Point,
+    pub button: PointerButton,
+    pub clickCount: Int = 0,
+    pub modifiers: Modifiers,
+    pub timestampMs: Int = 0,
+}
+
+pub struct KeyEvent {
+    pub key: String,
+    pub text: String = "",
+    pub pressed: Bool = true,
+    pub repeat: Bool = false,
+    pub modifiers: Modifiers,
+    pub timestampMs: Int = 0,
+}
+
+pub struct ScrollEvent {
+    pub position: Point,
+    pub delta: Point,
+    pub precise: Bool = true,
+    pub modifiers: Modifiers,
+    pub timestampMs: Int = 0,
+}
+
+pub enum GuiEvent {
+    PointerInput(PointerEvent),
+    Key(KeyEvent),
+    Scroll(ScrollEvent),
+    Resize(Size),
+    TextInput(String),
+    Tick(Int),
+}
+
+pub enum BrowserEventKind {
+    BrowserClick,
+    BrowserInput,
+    BrowserChange,
+    BrowserKeyDown,
+    BrowserKeyUp,
+    BrowserPointerDown,
+    BrowserPointerMove,
+    BrowserPointerUp,
+    BrowserCustom(String),
+}
+
+pub struct BrowserEvent {
+    pub kind: BrowserEventKind,
+    pub id: String,
+    pub value: String = "",
+    pub checked: Bool = false,
+    pub x: Float = 0.0,
+    pub y: Float = 0.0,
+    pub key: String = "",
+    pub text: String = "",
+    pub button: Int = 0,
+    pub shift: Bool = false,
+    pub control: Bool = false,
+    pub alt: Bool = false,
+    pub meta: Bool = false,
+    pub timestampMs: Int = 0,
+}
+
+pub enum BrowserLauncher {
+    MacOpen,
+    XdgOpen,
+    WindowsStart,
+    CommandLauncher(String),
+}
+
+pub struct BrowserLaunchPlan {
+    pub command: String,
+    pub args: List<String> = [],
+}
+
+pub struct BrowserLaunchResult {
+    pub path: String,
+    pub command: String,
+    pub exitCode: Int = 0,
+    pub stdout: String = "",
+    pub stderr: String = "",
+}
+
+pub struct EventTarget {
+    pub nodeId: String,
+    pub event: GuiEvent,
+}
+
+pub enum RenderCommand {
+    Save,
+    Restore,
+    Clip(Rect),
+    Fill(Rect, Paint, Radius),
+    Stroke(Rect, Border, Radius),
+    Text(Rect, String, TextStyle),
+    Image(Rect, String),
+    FocusRing(Rect, Color, Radius),
+    CustomCommand(String),
+}
+
+pub struct RenderFrame {
+    pub size: Size,
+    pub commands: List<RenderCommand> = [],
+}
+
+pub struct Snapshot {
+    pub frames: Map<String, Rect> = {:},
+    pub focusId: String? = None,
+}
+
+pub struct SnapshotDiff {
+    pub added: List<String> = [],
+    pub removed: List<String> = [],
+    pub moved: List<String> = [],
+    pub focusChanged: Bool = false,
+
+    pub fn isEmpty(self) -> Bool {
+        self.added.isEmpty() && self.removed.isEmpty() &&
+        self.moved.isEmpty() && !self.focusChanged
+    }
+}
+
+pub struct AccessibilityReport {
+    pub nodes: Int = 0,
+    pub focusable: Int = 0,
+    pub errors: List<String> = [],
+    pub warnings: List<String> = [],
+
+    pub fn ok(self) -> Bool {
+        self.errors.isEmpty()
+    }
+}
+
+pub enum Breakpoint {
+    Compact,
+    Medium,
+    Expanded,
+}
+
+pub fn point(x: Float, y: Float) -> Point {
+    Point { x: x, y: y }
+}
+
+pub fn size(width: Float, height: Float) -> Size {
+    Size { width: maxFloat(0.0, width), height: maxFloat(0.0, height) }
+}
+
+pub fn rect(x: Float, y: Float, width: Float, height: Float) -> Rect {
+    Rect { origin: point(x, y), size: size(width, height) }
+}
+
+pub fn emptyRect() -> Rect {
+    rect(0.0, 0.0, 0.0, 0.0)
+}
+
+pub fn insets(all: Float) -> Insets {
+    Insets { top: all, right: all, bottom: all, left: all }
+}
+
+pub fn insetsXY(x: Float, y: Float) -> Insets {
+    Insets { top: y, right: x, bottom: y, left: x }
+}
+
+pub fn insetsLTRB(left: Float, top: Float, right: Float, bottom: Float) -> Insets {
+    Insets { top: top, right: right, bottom: bottom, left: left }
+}
+
+pub fn radius(all: Float) -> Radius {
+    Radius { topLeft: all, topRight: all, bottomRight: all, bottomLeft: all }
+}
+
+pub fn rgb(r: Int, g: Int, b: Int) -> Color {
+    rgba(r, g, b, 1.0)
+}
+
+pub fn rgba(r: Int, g: Int, b: Int, a: Float) -> Color {
+    Rgba(clampInt(r, 0, 255), clampInt(g, 0, 255), clampInt(b, 0, 255), clampFloat(a, 0.0, 1.0))
+}
+
+pub fn solid(color: Color) -> Paint {
+    Solid(color)
+}
+
+pub fn border(color: Color, width: Float) -> Border {
+    Border { color: color, width: maxFloat(0.0, width) }
+}
+
+pub fn defaultBorder() -> Border {
+    border(rgb(0, 0, 0), 0.0)
+}
+
+pub fn defaultShadow() -> Shadow {
+    Shadow { offset: point(0.0, 0.0), blur: 0.0, spread: 0.0, color: rgba(0, 0, 0, 0.0) }
+}
+
+pub fn defaultTextStyle() -> TextStyle {
+    TextStyle {
+        family: "",
+        size: 14.0,
+        weight: FontWeight.Regular,
+        color: rgb(17, 24, 39),
+        lineHeight: 1.3,
+        align: TextAlign.AlignStart,
+        overflow: TextOverflow.Clip,
+    }
+}
+
+pub fn defaultStyle() -> Style {
+    Style {
+        background: Paint.NoPaint,
+        foreground: rgb(17, 24, 39),
+        border: defaultBorder(),
+        radius: radius(0.0),
+        padding: insets(0.0),
+        margin: insets(0.0),
+        shadow: defaultShadow(),
+        opacity: 1.0,
+        text: defaultTextStyle(),
+        cursor: Cursor.Default,
+    }
+}
+
+pub fn defaultTheme() -> Theme {
+    Theme {
+        name: "default",
+        surface: rgb(255, 255, 255),
+        surfaceRaised: rgb(249, 250, 251),
+        text: rgb(17, 24, 39),
+        mutedText: rgb(107, 114, 128),
+        accent: rgb(37, 99, 235),
+        danger: rgb(220, 38, 38),
+        border: rgb(209, 213, 219),
+        focus: rgb(59, 130, 246),
+        radius: 8.0,
+        spacing: 8.0,
+    }
+}
+
+pub fn darkTheme() -> Theme {
+    Theme {
+        name: "dark",
+        surface: rgb(17, 24, 39),
+        surfaceRaised: rgb(31, 41, 55),
+        text: rgb(243, 244, 246),
+        mutedText: rgb(156, 163, 175),
+        accent: rgb(96, 165, 250),
+        danger: rgb(248, 113, 113),
+        border: rgb(75, 85, 99),
+        focus: rgb(147, 197, 253),
+        radius: 8.0,
+        spacing: 8.0,
+    }
+}
+
+pub fn styleFromTheme(theme: Theme) -> Style {
+    let mut out = defaultStyle()
+    out = out.withBackground(Solid(theme.surface))
+    out = out.withForeground(theme.text)
+    out = out.withBorder(Border { color: theme.border, width: 1.0 })
+    out = out.withRadius(radius(theme.radius))
+    out
+}
+
+pub fn layout(mode: LayoutMode) -> Layout {
+    Layout {
+        mode: mode,
+        gap: 0.0,
+        grow: 0.0,
+        shrink: 1.0,
+        basis: 0.0,
+        minSize: size(0.0, 0.0),
+        maxSize: size(1000000.0, 1000000.0),
+        crossAlign: CrossStretch,
+        mainAlign: MainStart,
+        absolute: None,
+    }
+}
+
+pub fn rowLayout(gap: Float) -> Layout {
+    let mut out = layout(LayoutMode.RowLayout)
+    out.gap = maxFloat(0.0, gap)
+    out
+}
+
+pub fn columnLayout(gap: Float) -> Layout {
+    let mut out = layout(LayoutMode.ColumnLayout)
+    out.gap = maxFloat(0.0, gap)
+    out
+}
+
+pub fn stackLayout() -> Layout {
+    layout(LayoutMode.StackLayout)
+}
+
+pub fn grow(mut layout: Layout, amount: Float) -> Layout {
+    layout.grow = maxFloat(0.0, amount)
+    layout
+}
+
+pub fn fixed(width: Float, height: Float) -> Layout {
+    let mut out = layout(LayoutMode.FreeLayout)
+    out.minSize = size(width, height)
+    out.maxSize = size(width, height)
+    out.basis = width
+    out
+}
+
+pub fn constraints(width: Float, height: Float) -> Constraints {
+    Constraints { min: size(0.0, 0.0), max: size(width, height) }
+}
+
+pub fn node(kind: NodeKind) -> Node {
+    Node {
+        id: "",
+        kind: kind,
+        text: "",
+        value: "",
+        checked: false,
+        disabled: false,
+        visible: true,
+        frame: emptyRect(),
+        style: defaultStyle(),
+        layout: layout(LayoutMode.FreeLayout),
+        access: accessibility(Role.NoneRole, ""),
+        children: [],
+    }
+}
+
+pub fn accessibility(role: Role, labelText: String) -> Accessibility {
+    Accessibility {
+        role: role,
+        label: labelText,
+        hint: "",
+        value: "",
+        focusable: false,
+        disabled: false,
+        hidden: false,
+        selected: false,
+        checked: false,
+    }
+}
+
+pub fn modifiers() -> Modifiers {
+    Modifiers { shift: false, control: false, alt: false, meta: false }
+}
+
+pub fn root(id: String, children: List<Node>) -> Node {
+    let mut out = node(NodeKind.WindowRoot)
+    out.id = id
+    out.layout = columnLayout(0.0)
+    out.access = accessibility(Role.App, id)
+    out.children = children
+    out
+}
+
+pub fn layer(id: String, children: List<Node>) -> Node {
+    let mut out = node(NodeKind.Layer)
+    out.id = id
+    out.layout = stackLayout()
+    out.access = accessibility(Role.Group, id)
+    out.children = children
+    out
+}
+
+pub fn row(id: String, children: List<Node>, gap: Float) -> Node {
+    let mut out = node(NodeKind.Row)
+    out.id = id
+    out.layout = rowLayout(gap)
+    out.access = accessibility(Role.Group, id)
+    out.children = children
+    out
+}
+
+pub fn column(id: String, children: List<Node>, gap: Float) -> Node {
+    let mut out = node(NodeKind.Column)
+    out.id = id
+    out.layout = columnLayout(gap)
+    out.access = accessibility(Role.Group, id)
+    out.children = children
+    out
+}
+
+pub fn panel(id: String, children: List<Node>) -> Node {
+    let mut out = node(NodeKind.Panel)
+    out.id = id
+    out.layout = columnLayout(0.0)
+    out.access = accessibility(Role.Group, id)
+    out.children = children
+    out
+}
+
+pub fn label(id: String, text: String) -> Node {
+    let mut out = node(NodeKind.Label)
+    out.id = id
+    out.text = text
+    out.access = accessibility(Role.TextRole, text)
+    out
+}
+
+pub fn button(id: String, labelText: String) -> Node {
+    let mut out = node(NodeKind.Button)
+    out.id = id
+    out.text = labelText
+    out.style = buttonStyle()
+    out.access = accessibility(Role.ButtonRole, labelText)
+    out.access.focusable = true
+    out
+}
+
+pub fn textInput(id: String, value: String, labelText: String) -> Node {
+    let mut out = node(NodeKind.TextInput)
+    out.id = id
+    out.value = value
+    out.style = textInputStyle()
+    out.access = accessibility(Role.TextField, labelText)
+    out.access.value = value
+    out.access.focusable = true
+    out
+}
+
+pub fn checkbox(id: String, labelText: String, checked: Bool) -> Node {
+    let mut out = node(NodeKind.Checkbox)
+    out.id = id
+    out.text = labelText
+    out.checked = checked
+    out.access = accessibility(Role.CheckboxRole, labelText)
+    out.access.checked = checked
+    out.access.focusable = true
+    out
+}
+
+pub fn image(id: String, source: String, description: String, width: Float, height: Float) -> Node {
+    let mut out = node(NodeKind.ImageView)
+    out.id = id
+    out.value = source
+    if width > 0.0 && height > 0.0 {
+        out.layout = fixed(width, height)
+    }
+    out.access = accessibility(Role.ImageRole, description)
+    out
+}
+
+pub fn spacer(amount: Float) -> Node {
+    let mut out = node(NodeKind.Spacer)
+    let mut l = layout(LayoutMode.FreeLayout)
+    l.minSize = size(0.0, 0.0)
+    l.basis = amount
+    out.layout = grow(l, amount)
+    out
+}
+
+fn buttonStyle() -> Style {
+    let mut out = defaultStyle()
+    let mut text = defaultTextStyle()
+    text.color = rgb(255, 255, 255)
+    text.weight = FontWeight.Semibold
+    out.background = Solid(rgb(37, 99, 235))
+    out.foreground = rgb(255, 255, 255)
+    out.padding = insetsXY(12.0, 8.0)
+    out.radius = radius(6.0)
+    out.cursor = Cursor.Pointer
+    out.text = text
+    out
+}
+
+fn textInputStyle() -> Style {
+    let mut out = defaultStyle()
+    out.background = Solid(rgb(255, 255, 255))
+    out.border = border(rgb(209, 213, 219), 1.0)
+    out.padding = insetsXY(10.0, 8.0)
+    out.radius = radius(6.0)
+    out.cursor = Cursor.TextCursor
+    out
+}
+
+pub fn computeLayout(rootNode: Node, viewport: Size) -> Node {
+    rootNode.layoutIn(Rect { origin: point(0.0, 0.0), size: viewport })
+}
+
+pub fn render(rootNode: Node, viewport: Size) -> RenderFrame {
+    let laidOut = computeLayout(rootNode, viewport)
+    RenderFrame { size: viewport, commands: renderNode(laidOut, None) }
+}
+
+pub fn routePointer(rootNode: Node, event: PointerEvent) -> EventTarget? {
+    let id = rootNode.hitTest(event.position)
+    if id.isNone() {
+        return None
+    }
+    Some(EventTarget { nodeId: id.unwrap(), event: PointerInput(event) })
+}
+
+pub fn focusOrder(rootNode: Node) -> List<String> {
+    let mut out: List<String> = []
+    collectFocus(rootNode, out)
+    out
+}
+
+pub fn nextFocus(rootNode: Node, currentId: String?) -> String? {
+    let order = focusOrder(rootNode)
+    if order.isEmpty() {
+        return None
+    }
+    if currentId.isNone() {
+        return Some(order[0])
+    }
+    let current = currentId.unwrap()
+    let mut i = 0
+    for i < order.len() {
+        if order[i] == current {
+            return Some(order[(i + 1) % order.len()])
+        }
+        i = i + 1
+    }
+    Some(order[0])
+}
+
+pub fn previousFocus(rootNode: Node, currentId: String?) -> String? {
+    let order = focusOrder(rootNode)
+    if order.isEmpty() {
+        return None
+    }
+    if currentId.isNone() {
+        return Some(order[order.len() - 1])
+    }
+    let current = currentId.unwrap()
+    let mut i = 0
+    for i < order.len() {
+        if order[i] == current {
+            if i == 0 {
+                return Some(order[order.len() - 1])
+            }
+            return Some(order[i - 1])
+        }
+        i = i + 1
+    }
+    Some(order[0])
+}
+
+pub fn snapshot(rootNode: Node, focusId: String?) -> Snapshot {
+    let mut frames: Map<String, Rect> = {:}
+    collectSnapshot(rootNode, frames)
+    Snapshot { frames: frames, focusId: focusId }
+}
+
+pub fn snapshotTree(rootNode: Node) -> Snapshot {
+    snapshot(rootNode, None)
+}
+
+pub fn diffSnapshots(before: Snapshot, after: Snapshot) -> SnapshotDiff {
+    let mut diff = SnapshotDiff { focusChanged: before.focusId != after.focusId }
+    for id in after.frames.keys() {
+        match before.frames.get(id) {
+            Some(oldFrame) -> {
+                let newFrame = after.frames.get(id).unwrap()
+                if !sameRect(oldFrame, newFrame) {
+                    diff.moved.push(id)
+                }
+            },
+            None -> diff.added.push(id),
+        }
+    }
+    for id in before.frames.keys() {
+        if !after.frames.containsKey(id) {
+            diff.removed.push(id)
+        }
+    }
+    diff
+}
+
+pub fn auditAccessibility(rootNode: Node) -> AccessibilityReport {
+    let mut report = AccessibilityReport {}
+    auditNode(rootNode, report)
+    report
+}
+
+pub fn breakpoint(viewport: Size) -> Breakpoint {
+    if viewport.width < 640.0 {
+        return Compact
+    }
+    if viewport.width < 1024.0 {
+        return Medium
+    }
+    Expanded
+}
+
+pub fn describeTree(rootNode: Node) -> String {
+    let mut lines: List<String> = []
+    describeNode(rootNode, 0, lines)
+    strings.join(lines, "\n")
+}
+
+pub fn renderHtml(rootNode: Node, viewport: Size) -> String {
+    let laidOut = computeLayout(rootNode, viewport)
+    let style = "position:relative;width:{cssPx(viewport.width)};height:{cssPx(viewport.height)};overflow:hidden;background:{colorCss(defaultTheme().surface)}"
+    "<div class=\"osty-gui\" role=\"application\" style=\"{style}\">{htmlNode(laidOut, point(0.0, 0.0))}</div>"
+}
+
+pub fn htmlDocument(title: String, rootNode: Node, viewport: Size) -> String {
+    let body = renderHtml(rootNode, viewport)
+    "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{escapeHtml(title)}</title>\n<style>{htmlStyleSheet()}</style>\n</head>\n<body>{body}</body>\n</html>"
+}
+
+pub fn browserHtmlDocument(title: String, rootNode: Node, viewport: Size) -> String {
+    let body = renderHtml(rootNode, viewport)
+    "<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>{escapeHtml(title)}</title>\n<style>{htmlStyleSheet()}</style>\n<script>{browserScript()}</script>\n</head>\n<body>{body}</body>\n</html>"
+}
+
+pub fn renderSvg(rootNode: Node, viewport: Size) -> String {
+    let laidOut = computeLayout(rootNode, viewport)
+    "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{viewport.width}\" height=\"{viewport.height}\" viewBox=\"0 0 {viewport.width} {viewport.height}\" role=\"img\">{svgNode(laidOut)}</svg>"
+}
+
+pub fn macBrowserLauncher() -> BrowserLauncher {
+    MacOpen
+}
+
+pub fn xdgBrowserLauncher() -> BrowserLauncher {
+    XdgOpen
+}
+
+pub fn windowsBrowserLauncher() -> BrowserLauncher {
+    WindowsStart
+}
+
+pub fn commandBrowserLauncher(command: String) -> BrowserLauncher {
+    CommandLauncher(command)
+}
+
+pub fn browserLaunchPlan(path: String, launcher: BrowserLauncher) -> BrowserLaunchPlan {
+    match launcher {
+        MacOpen -> BrowserLaunchPlan { command: "open", args: [path] },
+        XdgOpen -> BrowserLaunchPlan { command: "xdg-open", args: [path] },
+        WindowsStart -> BrowserLaunchPlan { command: "cmd", args: ["/c", "start", "", path] },
+        CommandLauncher(command) -> BrowserLaunchPlan { command: command, args: [path] },
+    }
+}
+
+pub fn writeBrowserDocument(path: String, title: String, rootNode: Node, viewport: Size) -> Result<String, Error> {
+    let html = browserHtmlDocument(title, rootNode, viewport)
+    let _ = fs.writeString(path, html)?
+    Ok(path)
+}
+
+pub fn openBrowserDocument(path: String, launcher: BrowserLauncher) -> Result<BrowserLaunchResult, Error> {
+    let plan = browserLaunchPlan(path, launcher)
+    let output = os.exec(plan.command, plan.args)?
+    Ok(BrowserLaunchResult {
+        path: path,
+        command: plan.command,
+        exitCode: output.exitCode,
+        stdout: output.stdout,
+        stderr: output.stderr,
+    })
+}
+
+pub fn launchBrowserDocument(path: String, title: String, rootNode: Node, viewport: Size, launcher: BrowserLauncher) -> Result<BrowserLaunchResult, Error> {
+    let _ = writeBrowserDocument(path, title, rootNode, viewport)?
+    openBrowserDocument(path, launcher)
+}
+
+pub fn htmlStyleSheet() -> String {
+    "html,body\{margin:0;min-height:100%;font-family:system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif;background:#fff\}.osty-gui *\{box-sizing:border-box\}.osty-gui button,.osty-gui input\{font:inherit\}.osty-gui [data-gui-disabled=\"true\"]\{pointer-events:none;filter:saturate(.65);opacity:.55\}.osty-gui [data-gui-focusable=\"true\"]:focus\{outline:2px solid #3b82f6;outline-offset:2px\}"
+}
+
+pub fn browserScript() -> String {
+    "(function()\{const root=document.querySelector('.osty-gui');if(!root)return;window.__ostyGuiEvents=window.__ostyGuiEvents||[];function target(e)\{return e.target&&e.target.closest?e.target.closest('[data-gui-id]'):null\}function emit(kind,el,e)\{const p=\{kind:kind,id:el.getAttribute('data-gui-id')||'',value:el.value||'',checked:!!el.checked,x:e.clientX||0,y:e.clientY||0,key:e.key||'',text:e.data||'',button:e.button||0,shift:!!e.shiftKey,control:!!e.ctrlKey,alt:!!e.altKey,meta:!!e.metaKey,timestampMs:Math.round(e.timeStamp||Date.now())\};window.__ostyGuiEvents.push(p);const text=JSON.stringify(p);if(window.OstyGui&&window.OstyGui.postMessage)\{window.OstyGui.postMessage(text)\}window.dispatchEvent(new CustomEvent('osty-gui-event',\{detail:p\}))\}root.addEventListener('click',function(e)\{const el=target(e);if(el)emit('click',el,e)\});root.addEventListener('input',function(e)\{const el=target(e);if(el)emit('input',el,e)\});root.addEventListener('change',function(e)\{const el=target(e);if(el)emit('change',el,e)\});root.addEventListener('keydown',function(e)\{const el=target(e);if(el)emit('keydown',el,e)\});root.addEventListener('keyup',function(e)\{const el=target(e);if(el)emit('keyup',el,e)\});root.addEventListener('pointerdown',function(e)\{const el=target(e);if(el)emit('pointerdown',el,e)\});root.addEventListener('pointermove',function(e)\{const el=target(e);if(el)emit('pointermove',el,e)\});root.addEventListener('pointerup',function(e)\{const el=target(e);if(el)emit('pointerup',el,e)\})\})();"
+}
+
+pub fn decodeBrowserEvent(payload: String) -> Result<BrowserEvent, Error> {
+    let obj = json.parseValue(payload)?
+    let kindText = jsonStringField(obj, "kind")
+    let id = jsonStringField(obj, "id")
+    Ok(BrowserEvent {
+        kind: browserEventKind(kindText),
+        id: id,
+        value: jsonStringField(obj, "value"),
+        checked: jsonBoolField(obj, "checked"),
+        x: jsonNumberField(obj, "x"),
+        y: jsonNumberField(obj, "y"),
+        key: jsonStringField(obj, "key"),
+        text: jsonStringField(obj, "text"),
+        button: jsonNumberField(obj, "button").toInt(),
+        shift: jsonBoolField(obj, "shift"),
+        control: jsonBoolField(obj, "control"),
+        alt: jsonBoolField(obj, "alt"),
+        meta: jsonBoolField(obj, "meta"),
+        timestampMs: jsonNumberField(obj, "timestampMs").toInt(),
+    })
+}
+
+pub fn browserEventTarget(payload: String) -> Result<EventTarget, Error> {
+    let event = decodeBrowserEvent(payload)?
+    if event.id.isEmpty() {
+        return Err(error.new("gui: browser event missing node id"))
+    }
+    Ok(EventTarget { nodeId: event.id, event: browserGuiEvent(event) })
+}
+
+pub fn browserGuiEvent(event: BrowserEvent) -> GuiEvent {
+    match event.kind {
+        BrowserClick -> PointerInput(browserPointerEvent(event, PointerUp)),
+        BrowserInput | BrowserChange -> TextInput(event.value),
+        BrowserKeyDown -> Key(browserKeyEvent(event, true)),
+        BrowserKeyUp -> Key(browserKeyEvent(event, false)),
+        BrowserPointerDown -> PointerInput(browserPointerEvent(event, PointerDown)),
+        BrowserPointerMove -> PointerInput(browserPointerEvent(event, PointerMove)),
+        BrowserPointerUp -> PointerInput(browserPointerEvent(event, PointerUp)),
+        BrowserCustom(_) -> Tick(event.timestampMs),
+    }
+}
+
+fn browserPointerEvent(event: BrowserEvent, phase: PointerPhase) -> PointerEvent {
+    PointerEvent {
+        phase: phase,
+        position: point(event.x, event.y),
+        button: pointerButtonFromInt(event.button),
+        clickCount: 0,
+        modifiers: browserModifiers(event),
+        timestampMs: event.timestampMs,
+    }
+}
+
+fn browserKeyEvent(event: BrowserEvent, pressed: Bool) -> KeyEvent {
+    KeyEvent {
+        key: event.key,
+        text: event.text,
+        pressed: pressed,
+        repeat: false,
+        modifiers: browserModifiers(event),
+        timestampMs: event.timestampMs,
+    }
+}
+
+fn browserModifiers(event: BrowserEvent) -> Modifiers {
+    Modifiers {
+        shift: event.shift,
+        control: event.control,
+        alt: event.alt,
+        meta: event.meta,
+    }
+}
+
+fn pointerButtonFromInt(value: Int) -> PointerButton {
+    match value {
+        0 -> Primary,
+        1 -> Middle,
+        2 -> Secondary,
+        3 -> Back,
+        4 -> Forward,
+        _ -> NoButton,
+    }
+}
+
+fn browserEventKind(kind: String) -> BrowserEventKind {
+    match kind {
+        "click" -> BrowserClick,
+        "input" -> BrowserInput,
+        "change" -> BrowserChange,
+        "keydown" -> BrowserKeyDown,
+        "keyup" -> BrowserKeyUp,
+        "pointerdown" -> BrowserPointerDown,
+        "pointermove" -> BrowserPointerMove,
+        "pointerup" -> BrowserPointerUp,
+        _ -> BrowserCustom(kind),
+    }
+}
+
+fn jsonStringField(obj: json.Json, key: String) -> String {
+    match json.getField(obj, key) {
+        Ok(value) -> match json.asString(value) {
+            Ok(text) -> text,
+            Err(_) -> "",
+        },
+        Err(_) -> "",
+    }
+}
+
+fn jsonNumberField(obj: json.Json, key: String) -> Float {
+    match json.getField(obj, key) {
+        Ok(value) -> match json.asNumber(value) {
+            Ok(number) -> number,
+            Err(_) -> 0.0,
+        },
+        Err(_) -> 0.0,
+    }
+}
+
+fn jsonBoolField(obj: json.Json, key: String) -> Bool {
+    match json.getField(obj, key) {
+        Ok(value) -> match json.asBool(value) {
+            Ok(flag) -> flag,
+            Err(_) -> false,
+        },
+        Err(_) -> false,
+    }
+}
+
+fn htmlNode(node: Node, parentOrigin: Point) -> String {
+    if !node.visible || node.access.hidden {
+        return ""
+    }
+    let frame = rect(
+        node.frame.origin.x - parentOrigin.x,
+        node.frame.origin.y - parentOrigin.y,
+        node.frame.size.width,
+        node.frame.size.height,
+    )
+    let style = nodeCss(node, frame)
+    let attrs = nodeAttrs(node)
+    let children = htmlChildren(node)
+    match node.kind {
+        Button -> "<button{attrs} type=\"button\" style=\"{style}\">{escapeHtml(node.text)}</button>",
+        TextInput -> "<input{attrs} type=\"text\" value=\"{escapeAttr(node.value)}\" style=\"{style}\">",
+        Checkbox -> checkboxHtml(node, style, attrs),
+        ImageView -> "<img{attrs} src=\"{escapeAttr(node.value)}\" alt=\"{escapeAttr(node.access.label)}\" style=\"{style}\">",
+        Label -> "<div{attrs} style=\"{style}\">{escapeHtml(node.text)}</div>",
+        Spacer -> "<div{attrs} style=\"{style}\"></div>",
+        _ -> "<div{attrs} style=\"{style}\">{nodeTextHtml(node)}{children}</div>",
+    }
+}
+
+fn htmlChildren(node: Node) -> String {
+    let mut out = ""
+    for child in node.children {
+        out = "{out}{htmlNode(child, node.frame.origin)}"
+    }
+    out
+}
+
+fn nodeTextHtml(node: Node) -> String {
+    if node.text.isEmpty() {
+        return ""
+    }
+    "<span>{escapeHtml(node.text)}</span>"
+}
+
+fn checkboxHtml(node: Node, style: String, attrs: String) -> String {
+    let checked = if node.checked { " checked" } else { "" }
+    "<label{attrs} style=\"{style}\"><input type=\"checkbox\"{checked}> <span>{escapeHtml(node.text)}</span></label>"
+}
+
+fn nodeAttrs(node: Node) -> String {
+    let idAttr = if node.id.isEmpty() { "" } else { " id=\"{escapeAttr(node.id)}\" data-gui-id=\"{escapeAttr(node.id)}\"" }
+    let role = roleName(node.access.role)
+    let roleAttr = if role.isEmpty() { "" } else { " role=\"{role}\"" }
+    let labelAttr = if node.access.label.isEmpty() { "" } else { " aria-label=\"{escapeAttr(node.access.label)}\"" }
+    let valueAttr = if node.access.value.isEmpty() { "" } else { " aria-valuetext=\"{escapeAttr(node.access.value)}\"" }
+    let hintAttr = if node.access.hint.isEmpty() { "" } else { " title=\"{escapeAttr(node.access.hint)}\"" }
+    let disabled = if node.disabled || node.access.disabled { " aria-disabled=\"true\" data-gui-disabled=\"true\" disabled" } else { " data-gui-disabled=\"false\"" }
+    let selected = if node.access.selected { " aria-selected=\"true\"" } else { "" }
+    let checked = if node.access.checked || node.checked { " aria-checked=\"true\"" } else { "" }
+    let focusable = if node.focusable() { " tabindex=\"0\" data-gui-focusable=\"true\"" } else { " data-gui-focusable=\"false\"" }
+    "{idAttr}{roleAttr}{labelAttr}{valueAttr}{hintAttr}{disabled}{selected}{checked}{focusable}"
+}
+
+fn nodeCss(node: Node, frame: Rect) -> String {
+    let mut out = "position:absolute;left:{cssPx(frame.origin.x)};top:{cssPx(frame.origin.y)};width:{cssPx(frame.size.width)};height:{cssPx(frame.size.height)};overflow:hidden"
+    out = "{out};box-sizing:border-box"
+    out = "{out};opacity:{node.style.opacity}"
+    out = "{out};cursor:{cursorCss(node.style.cursor)}"
+    out = "{out};color:{colorCss(node.style.foreground)}"
+    out = "{out};font:{fontWeightCss(node.style.text.weight)} {cssPx(node.style.text.size)} {fontFamilyCss(node.style.text.family)}"
+    out = "{out};line-height:{node.style.text.lineHeight}"
+    out = "{out};text-align:{textAlignCss(node.style.text.align)}"
+    out = "{out};padding:{insetsCss(node.style.padding)}"
+    out = "{out};border-radius:{radiusCss(node.style.radius)}"
+    out = "{out};background:{paintCss(node.style.background)}"
+    if node.style.border.width > 0.0 {
+        out = "{out};border:{cssPx(node.style.border.width)} solid {colorCss(node.style.border.color)}"
+    } else {
+        out = "{out};border:0"
+    }
+    if node.style.shadow.blur > 0.0 || node.style.shadow.spread > 0.0 {
+        out = "{out};box-shadow:{cssPx(node.style.shadow.offset.x)} {cssPx(node.style.shadow.offset.y)} {cssPx(node.style.shadow.blur)} {cssPx(node.style.shadow.spread)} {colorCss(node.style.shadow.color)}"
+    }
+    if node.disabled || node.access.disabled {
+        out = "{out};pointer-events:none"
+    }
+    out
+}
+
+fn svgNode(node: Node) -> String {
+    if !node.visible || node.access.hidden {
+        return ""
+    }
+    let mut out = ""
+    let none = "none"
+    if node.style.hasBackground() {
+        out = "{out}{svgRect(node.frame, paintCss(node.style.background), none, 0.0, node.style.radius)}"
+    }
+    if node.style.border.width > 0.0 {
+        out = "{out}{svgRect(node.frame, none, colorCss(node.style.border.color), node.style.border.width, node.style.radius)}"
+    }
+    match node.kind {
+        Label | Button | Checkbox -> {
+            out = "{out}{svgText(node.frame, node.text, node.style.text)}"
+        },
+        TextInput -> {
+            out = "{out}{svgText(node.frame, node.value, node.style.text)}"
+        },
+        ImageView -> {
+            out = "{out}<image href=\"{escapeAttr(node.value)}\" x=\"{node.frame.origin.x}\" y=\"{node.frame.origin.y}\" width=\"{node.frame.size.width}\" height=\"{node.frame.size.height}\"><title>{escapeHtml(node.access.label)}</title></image>"
+        },
+        _ -> {},
+    }
+    for child in node.children {
+        out = "{out}{svgNode(child)}"
+    }
+    out
+}
+
+fn svgRect(frame: Rect, fill: String, stroke: String, strokeWidth: Float, radius: Radius) -> String {
+    let r = maxFloat(maxFloat(radius.topLeft, radius.topRight), maxFloat(radius.bottomLeft, radius.bottomRight))
+    "<rect x=\"{frame.origin.x}\" y=\"{frame.origin.y}\" width=\"{frame.size.width}\" height=\"{frame.size.height}\" rx=\"{r}\" ry=\"{r}\" fill=\"{escapeAttr(fill)}\" stroke=\"{escapeAttr(stroke)}\" stroke-width=\"{strokeWidth}\"/>"
+}
+
+fn svgText(frame: Rect, text: String, style: TextStyle) -> String {
+    if text.isEmpty() {
+        return ""
+    }
+    let x = frame.origin.x + 4.0
+    let y = frame.origin.y + style.size * style.lineHeight
+    "<text x=\"{x}\" y=\"{y}\" fill=\"{escapeAttr(colorCss(style.color))}\" font-size=\"{style.size}\" font-weight=\"{fontWeightCss(style.weight)}\">{escapeHtml(text)}</text>"
+}
+
+fn intrinsicSize(node: Node) -> Size {
+    match node.kind {
+        Label -> textSize(node.text, node.style.text),
+        Button -> {
+            let t = textSize(node.text, node.style.text)
+            Size { width: maxFloat(44.0, t.width + 24.0), height: maxFloat(32.0, t.height + 16.0) }
+        },
+        TextInput -> Size { width: maxFloat(160.0, node.value.charCount().toFloat() * 8.0 + 24.0), height: 36.0 },
+        Checkbox -> {
+            let t = textSize(node.text, node.style.text)
+            Size { width: t.width + 28.0, height: maxFloat(20.0, t.height) }
+        },
+        ImageView -> {
+            if node.layout.minSize.width > 0.0 || node.layout.minSize.height > 0.0 {
+                return node.layout.minSize
+            }
+            Size { width: 160.0, height: 120.0 }
+        },
+        Spacer -> Size {},
+        _ -> {
+            if node.children.isEmpty() {
+                return Size { width: 0.0, height: 0.0 }
+            }
+            measureChildren(node.children, node.layout)
+        },
+    }
+}
+
+fn textSize(text: String, style: TextStyle) -> Size {
+    let chars = maxFloat(1.0, text.charCount().toFloat())
+    Size { width: chars * style.size * 0.56, height: style.size * style.lineHeight }
+}
+
+fn layoutChildren(children: List<Node>, layout: Layout, bounds: Rect) -> List<Node> {
+    match layout.mode {
+        RowLayout -> layoutFlow(children, bounds, true, layout),
+        ColumnLayout -> layoutFlow(children, bounds, false, layout),
+        StackLayout -> layoutStack(children, bounds),
+        AbsoluteLayout -> layoutAbsolute(children, bounds),
+        FreeLayout -> layoutStack(children, bounds),
+    }
+}
+
+fn layoutFlow(children: List<Node>, bounds: Rect, horizontal: Bool, layout: Layout) -> List<Node> {
+    let mut out: List<Node> = []
+    if children.isEmpty() {
+        return out
+    }
+    let mainAvailable = if horizontal { bounds.size.width } else { bounds.size.height }
+    let crossAvailable = if horizontal { bounds.size.height } else { bounds.size.width }
+    let gapTotal = layout.gap * maxFloat(0.0, (children.len() - 1).toFloat())
+    let mut used = gapTotal
+    let mut growTotal = 0.0
+    let mut measured: List<Size> = []
+
+    for child in children {
+        let measure = child.measure(Constraints { min: size(0.0, 0.0), max: bounds.size })
+        measured.push(measure)
+        let main = if horizontal { measure.width } else { measure.height }
+        used = used + maxFloat(child.layout.basis, main)
+        growTotal = growTotal + child.layout.grow
+    }
+
+    let free = maxFloat(0.0, mainAvailable - used)
+    let mut cursor = alignStartOffset(layout.mainAlign, mainAvailable, used, children.len(), layout.gap)
+    let actualGap = actualGapFor(layout.mainAlign, mainAvailable, used, children.len(), layout.gap)
+    let mut i = 0
+    for i < children.len() {
+        let child = children[i]
+        let measuredSize = measured[i]
+        let measuredMain = if horizontal { measuredSize.width } else { measuredSize.height }
+        let extra = if growTotal > 0.0 { free * child.layout.grow / growTotal } else { 0.0 }
+        let childMain = maxFloat(child.layout.basis, measuredMain) + extra
+        let measuredCross = if horizontal { measuredSize.height } else { measuredSize.width }
+        let childCross = crossSize(layout.crossAlign, measuredCross, crossAvailable)
+        let cross = crossOffset(layout.crossAlign, crossAvailable, childCross)
+        let frame = if horizontal {
+            rect(bounds.origin.x + cursor, bounds.origin.y + cross, childMain, childCross)
+        } else {
+            rect(bounds.origin.x + cross, bounds.origin.y + cursor, childCross, childMain)
+        }
+        out.push(child.layoutIn(frame))
+        cursor = cursor + childMain + actualGap
+        i = i + 1
+    }
+    out
+}
+
+fn layoutStack(children: List<Node>, bounds: Rect) -> List<Node> {
+    let mut out: List<Node> = []
+    for child in children {
+        out.push(child.layoutIn(bounds))
+    }
+    out
+}
+
+fn layoutAbsolute(children: List<Node>, bounds: Rect) -> List<Node> {
+    let mut out: List<Node> = []
+    for child in children {
+        out.push(child.layoutIn(applyAbsolute(child.layout, bounds)))
+    }
+    out
+}
+
+fn applyAbsolute(layout: Layout, fallback: Rect) -> Rect {
+    match layout.absolute {
+        Some(r) -> r,
+        None    -> fallback,
+    }
+}
+
+fn measureChildren(children: List<Node>, layout: Layout) -> Size {
+    let mut width = 0.0
+    let mut height = 0.0
+    let horizontal = layout.mode == RowLayout
+    let vertical = layout.mode == ColumnLayout
+    for child in children {
+        let size = child.measure(Constraints { min: size(0.0, 0.0), max: size(1000000.0, 1000000.0) })
+        if horizontal {
+            width = width + size.width
+            height = maxFloat(height, size.height)
+        } else if vertical {
+            width = maxFloat(width, size.width)
+            height = height + size.height
+        } else {
+            width = maxFloat(width, size.width)
+            height = maxFloat(height, size.height)
+        }
+    }
+    if children.len() > 1 {
+        if horizontal {
+            width = width + layout.gap * (children.len() - 1).toFloat()
+        }
+        if vertical {
+            height = height + layout.gap * (children.len() - 1).toFloat()
+        }
+    }
+    Size { width: width, height: height }
+}
+
+fn renderNode(node: Node, focusedId: String?) -> List<RenderCommand> {
+    let mut out: List<RenderCommand> = []
+    if !node.visible {
+        return out
+    }
+    if node.style.hasBackground() {
+        out.push(Fill(node.frame, node.style.background, node.style.radius))
+    }
+    if node.style.border.width > 0.0 {
+        out.push(Stroke(node.frame, node.style.border, node.style.radius))
+    }
+    match node.kind {
+        Label | Button | Checkbox -> {
+            if !node.text.isEmpty() {
+                out.push(Text(node.style.contentRect(node.frame), node.text, node.style.text))
+            }
+        },
+        TextInput -> out.push(Text(node.style.contentRect(node.frame), node.value, node.style.text)),
+        ImageView -> out.push(Image(node.frame, node.value)),
+        _ -> {},
+    }
+    if focusedId.isSome() && node.id == focusedId.unwrap() {
+        out.push(FocusRing(node.frame, rgb(59, 130, 246), node.style.radius))
+    }
+    for child in node.children {
+        for cmd in renderNode(child, focusedId) {
+            out.push(cmd)
+        }
+    }
+    out
+}
+
+fn collectFocus(node: Node, out: List<String>) {
+    if node.focusable() && !node.id.isEmpty() {
+        out.push(node.id)
+    }
+    for child in node.children {
+        collectFocus(child, out)
+    }
+}
+
+fn collectSnapshot(node: Node, frames: Map<String, Rect>) {
+    if !node.id.isEmpty() {
+        frames.insert(node.id, node.frame)
+    }
+    for child in node.children {
+        collectSnapshot(child, frames)
+    }
+}
+
+fn auditNode(node: Node, report: AccessibilityReport) {
+    if !node.visible || node.access.hidden {
+        return
+    }
+    report.nodes = report.nodes + 1
+    if node.focusable() {
+        report.focusable = report.focusable + 1
+    }
+    if node.isInteractive() && !node.access.hasName() && node.text.isEmpty() {
+        report.errors.push("gui.accessibility: interactive node '{node.id}' has no accessible label")
+    }
+    match node.kind {
+        ImageView -> {
+            if !node.access.hasName() {
+                report.warnings.push("gui.accessibility: image '{node.id}' is missing description")
+            }
+        },
+        TextInput -> {
+            if !node.access.hasName() {
+                report.errors.push("gui.accessibility: text input '{node.id}' is missing label")
+            }
+        },
+        _ -> {},
+    }
+    for child in node.children {
+        auditNode(child, report)
+    }
+}
+
+fn describeNode(node: Node, depth: Int, lines: List<String>) {
+    let mut prefix = ""
+    let mut i = 0
+    for i < depth {
+        prefix = "{prefix}  "
+        i = i + 1
+    }
+    let name = if node.id.isEmpty() { kindName(node.kind) } else { node.id }
+    lines.push("{prefix}{kindName(node.kind)} {name} [{node.frame.origin.x},{node.frame.origin.y} {node.frame.size.width}x{node.frame.size.height}]")
+    for child in node.children {
+        describeNode(child, depth + 1, lines)
+    }
+}
+
+fn kindName(kind: NodeKind) -> String {
+    match kind {
+        WindowRoot -> "root",
+        Layer -> "layer",
+        Row -> "row",
+        Column -> "column",
+        Stack -> "stack",
+        Scroll -> "scroll",
+        Panel -> "panel",
+        Label -> "label",
+        Button -> "button",
+        TextInput -> "text-input",
+        Checkbox -> "checkbox",
+        ImageView -> "image",
+        Canvas -> "canvas",
+        Spacer -> "spacer",
+        Custom(name) -> name,
+    }
+}
+
+fn cssPx(value: Float) -> String {
+    "{value}px"
+}
+
+fn colorCss(color: Color) -> String {
+    match color {
+        Transparent -> "transparent",
+        Rgba(r, g, b, a) -> "rgba({r}, {g}, {b}, {a})",
+    }
+}
+
+fn paintCss(paint: Paint) -> String {
+    match paint {
+        NoPaint -> "transparent",
+        Solid(color) -> colorCss(color),
+        LinearGradient(start, end, stops) -> gradientCss(start, end, stops),
+    }
+}
+
+fn gradientCss(start: Point, end: Point, stops: List<ColorStop>) -> String {
+    let dx = end.x - start.x
+    let dy = end.y - start.y
+    let angle = if dx.abs() >= dy.abs() {
+        if dx >= 0.0 { "90deg" } else { "270deg" }
+    } else {
+        if dy >= 0.0 { "180deg" } else { "0deg" }
+    }
+    let mut parts: List<String> = []
+    for stop in stops {
+        let pct = clampFloat(stop.offset, 0.0, 1.0) * 100.0
+        parts.push("{colorCss(stop.color)} {pct}%")
+    }
+    if parts.isEmpty() {
+        return "transparent"
+    }
+    let sep = ", "
+    "linear-gradient({angle}, {strings.join(parts, sep)})"
+}
+
+fn roleName(role: Role) -> String {
+    match role {
+        App -> "application",
+        Window -> "dialog",
+        Group -> "group",
+        Header -> "heading",
+        TextRole -> "text",
+        ButtonRole -> "button",
+        Link -> "link",
+        TextField -> "textbox",
+        CheckboxRole -> "checkbox",
+        ImageRole -> "img",
+        List -> "list",
+        ListItem -> "listitem",
+        CanvasRole -> "img",
+        NoneRole -> "",
+    }
+}
+
+fn cursorCss(cursor: Cursor) -> String {
+    match cursor {
+        Default -> "default",
+        Pointer -> "pointer",
+        TextCursor -> "text",
+        Crosshair -> "crosshair",
+        Grab -> "grab",
+        Grabbing -> "grabbing",
+        ResizeHorizontal -> "ew-resize",
+        ResizeVertical -> "ns-resize",
+        NotAllowed -> "not-allowed",
+    }
+}
+
+fn fontWeightCss(weight: FontWeight) -> String {
+    match weight {
+        Thin -> "100",
+        ExtraLight -> "200",
+        Light -> "300",
+        Regular -> "400",
+        Medium -> "500",
+        Semibold -> "600",
+        Bold -> "700",
+        ExtraBold -> "800",
+        Black -> "900",
+    }
+}
+
+fn fontFamilyCss(family: String) -> String {
+    if strings.trimSpace(family).isEmpty() {
+        return "system-ui,-apple-system,BlinkMacSystemFont,\"Segoe UI\",sans-serif"
+    }
+    escapeAttr(family)
+}
+
+fn textAlignCss(align: TextAlign) -> String {
+    match align {
+        AlignStart -> "start",
+        AlignCenter -> "center",
+        AlignEnd -> "end",
+        AlignJustify -> "justify",
+    }
+}
+
+fn insetsCss(insets: Insets) -> String {
+    "{cssPx(insets.top)} {cssPx(insets.right)} {cssPx(insets.bottom)} {cssPx(insets.left)}"
+}
+
+fn radiusCss(radius: Radius) -> String {
+    "{cssPx(radius.topLeft)} {cssPx(radius.topRight)} {cssPx(radius.bottomRight)} {cssPx(radius.bottomLeft)}"
+}
+
+fn escapeHtml(text: String) -> String {
+    let mut out = text
+    out = strings.replaceAll(out, "&", "&amp;")
+    out = strings.replaceAll(out, "<", "&lt;")
+    out = strings.replaceAll(out, ">", "&gt;")
+    out
+}
+
+fn escapeAttr(text: String) -> String {
+    let mut out = escapeHtml(text)
+    out = strings.replaceAll(out, "\"", "&quot;")
+    out
+}
+
+fn insetRect(r: Rect, insets: Insets) -> Rect {
+    let x = r.origin.x + insets.left
+    let y = r.origin.y + insets.top
+    let w = maxFloat(0.0, r.size.width - insets.horizontal())
+    let h = maxFloat(0.0, r.size.height - insets.vertical())
+    rect(x, y, w, h)
+}
+
+fn alignStartOffset(align: MainAlign, available: Float, used: Float, count: Int, gap: Float) -> Float {
+    match align {
+        MainCenter -> maxFloat(0.0, (available - used) / 2.0),
+        MainEnd -> maxFloat(0.0, available - used),
+        _ -> 0.0,
+    }
+}
+
+fn actualGapFor(align: MainAlign, available: Float, used: Float, count: Int, gap: Float) -> Float {
+    if align == SpaceBetween && count > 1 {
+        return gap + maxFloat(0.0, available - used) / (count - 1).toFloat()
+    }
+    gap
+}
+
+fn crossSize(align: CrossAlign, measured: Float, available: Float) -> Float {
+    if align == CrossStretch {
+        return available
+    }
+    minFloat(measured, available)
+}
+
+fn crossOffset(align: CrossAlign, available: Float, size: Float) -> Float {
+    match align {
+        CrossCenter -> maxFloat(0.0, (available - size) / 2.0),
+        CrossEnd -> maxFloat(0.0, available - size),
+        _ -> 0.0,
+    }
+}
+
+fn sameRect(a: Rect, b: Rect) -> Bool {
+    sameFloat(a.origin.x, b.origin.x) &&
+    sameFloat(a.origin.y, b.origin.y) &&
+    sameFloat(a.size.width, b.size.width) &&
+    sameFloat(a.size.height, b.size.height)
+}
+
+fn sameFloat(a: Float, b: Float) -> Bool {
+    let diff = if a > b { a - b } else { b - a }
+    diff < 0.0001
+}
+
+fn maxSize(a: Size, b: Size) -> Size {
+    Size { width: maxFloat(a.width, b.width), height: maxFloat(a.height, b.height) }
+}
+
+fn minSize(a: Size, b: Size) -> Size {
+    Size { width: minFloat(a.width, b.width), height: minFloat(a.height, b.height) }
+}
+
+fn minFloat(a: Float, b: Float) -> Float {
+    if a < b { a } else { b }
+}
+
+fn maxFloat(a: Float, b: Float) -> Float {
+    if a > b { a } else { b }
+}
+
+fn clampFloat(value: Float, min: Float, max: Float) -> Float {
+    if value < min {
+        return min
+    }
+    if value > max {
+        return max
+    }
+    value
+}
+
+fn clampInt(value: Int, min: Int, max: Int) -> Int {
+    if value < min {
+        return min
+    }
+    if value > max {
+        return max
+    }
+    value
+}

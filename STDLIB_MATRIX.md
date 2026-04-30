@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 63 top-level 모듈. 분류 기준:
+총 64 top-level 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (61 / 63 = 97%)
+### ⭐⭐⭐⭐⭐ Production (62 / 64 = 97%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -51,6 +51,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | email | 461 | pure Osty + encoding | Address / Message / MIME multipart / attachment base64 / SMTP DATA helpers |
 | db | 554 | pure Osty + sql | Config / DSN / pool / tx options / result rows / migration planning helpers |
 | grid | 412 | pure Osty | Point / Size / Rect / Direction / row-major Grid<T> |
+| gui | 1900 | pure Osty + fs/os/json | retained GUI core: geometry / theme / flex+stack layout / render commands / HTML document renderer / browser event bridge / SVG renderer / browser document write/open launch helpers / pointer-key routing / focus / accessibility audit / snapshot diff |
 | tar | 408 | pure Osty + bytes | ustar encode/decode/list/extract + checksum validation |
 | sql | 417 | pure Osty | identifier quoting / literals / placeholders / SELECT-INSERT-UPDATE-DELETE builders |
 | xml | 391 | pure Osty | escape / unescape / tag builder / tokenizer |
@@ -91,7 +92,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (2 / 63 = 3%)
+### ⭐⭐⭐⭐ Production-adjacent (2 / 64 = 3%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
@@ -131,6 +132,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | XML 처리 | ✅ 가능 | xml (escape / tag build / tokenize) |
 | 다국어 메시지 | ✅ 가능 | i18n (locale / catalog / placeholder / plural category) |
 | WebSocket handshake/frame | ✅ 가능 | websocket (accept key / headers / frame encode/decode) |
+| GUI 앱 코어 | ✅ 가능 | gui (retained node tree + layout + event routing + render-command backend contract + 기본 HTML/SVG 렌더러 + 브라우저 이벤트 브리지 + HTML 파일 저장/기본 브라우저 실행 헬퍼) |
 | GraphQL 요청 생성 | ✅ 가능 | graphql (document builder / variables JSON body) |
 | 이메일/MIME 생성 | ✅ 가능 | email (address / MIME multipart / SMTP DATA helpers) |
 | SMTP 트랜잭션 조립 | ✅ 가능 | smtp (EHLO / STARTTLS plan / AUTH / MAIL-RCPT-DATA / reply parsing) |
@@ -172,7 +174,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 41 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, aiagents, redact, media, security, search, markdown, tokenest, httpretry, jsonl, shortid, metrics, net, fmt, json, url, io, collections, email, db, grid, tar, sql, xml, tui, image, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
+- 42 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, aiagents, redact, media, security, search, markdown, tokenest, httpretry, jsonl, shortid, metrics, net, fmt, json, url, io, collections, email, db, grid, gui, tar, sql, xml, tui, image, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
 - 6 모듈은 Phase A 충실 + Phase B declaration-only (fs, env, random, os, crypto, compress)
 - 나머지는 의도된 범위에서 surface 만으로 완성 (cli, math, cmp, hint, debug, ref, process, log, time, error, sync, thread, regex, testing, uuid)
 
