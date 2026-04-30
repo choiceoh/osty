@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -33,6 +34,40 @@ func TestInitHappyPath(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(parent, f)); err != nil {
 			t.Errorf("expected %s to exist: %v", f, err)
 		}
+	}
+}
+
+func TestCreateGUIQtQuickLayout(t *testing.T) {
+	parent := t.TempDir()
+	path, d := Create(Options{Parent: parent, Name: "desk", Kind: KindGUIQtQuick})
+	if d != nil {
+		t.Fatalf("Create returned diagnostic: %v", d)
+	}
+	for _, f := range []string{"osty.toml", "main.osty", "ui/main.qml", "README.md", ".gitignore"} {
+		if _, err := os.Stat(filepath.Join(path, f)); err != nil {
+			t.Errorf("expected %s to exist: %v", f, err)
+		}
+	}
+	if info, err := os.Stat(filepath.Join(path, "assets")); err != nil {
+		t.Errorf("expected assets dir to exist: %v", err)
+	} else if !info.IsDir() {
+		t.Errorf("assets is not a directory")
+	}
+	manifest, err := os.ReadFile(filepath.Join(path, "osty.toml"))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	for _, want := range []string{`[gui]`, `backend = "qtquick"`, `link = ["osty_qt"]`} {
+		if !strings.Contains(string(manifest), want) {
+			t.Fatalf("manifest missing %q:\n%s", want, manifest)
+		}
+	}
+	mainSrc, err := os.ReadFile(filepath.Join(path, "main.osty"))
+	if err != nil {
+		t.Fatalf("read main.osty: %v", err)
+	}
+	if !strings.Contains(string(mainSrc), "use std.gui") {
+		t.Fatalf("main.osty missing std.gui import:\n%s", mainSrc)
 	}
 }
 

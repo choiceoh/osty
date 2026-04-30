@@ -1,0 +1,74 @@
+use std.gui.qtquick as gui
+use std.json
+
+pub struct InspectorState {
+    pub status: String,
+    pub theme: String,
+    pub selected: String,
+    pub stages: List<String>,
+    pub output: String,
+    pub logs: List<String>,
+}
+
+fn main() {
+    match run() {
+        Ok(_) -> {},
+        Err(err) -> eprintln("gui-inspector: {err.message()}"),
+    }
+}
+
+fn run() -> Result<(), Error> {
+    let app = gui.app("Osty Inspector")?
+    let window = app.window(gui.windowOptions("Osty Inspector", 1100, 720, "ui/main.qml"))?
+
+    app.setState(initialState())?
+    window.show()?
+
+    for app.poll() {
+        for event in app.events() {
+            if event.name == "run" {
+                app.setState(runningState(event.payload))?
+            } else if event.name == "toggle-theme" {
+                app.setState(themeState(event.payload))?
+            } else if event.name == "quit" {
+                let _ = app.quit()
+            }
+        }
+    }
+
+    app.close()
+    Ok(())
+}
+
+fn initialState() -> String {
+    json.encode(InspectorState {
+        status: "ready",
+        theme: "dark",
+        selected: "lexer",
+        stages: ["lexer", "parser", "checker", "backend"],
+        output: "Select a stage and press Run.",
+        logs: ["Inspector initialized", "Qt bridge ready"],
+    })
+}
+
+fn runningState(payload: String) -> String {
+    json.encode(InspectorState {
+        status: "completed",
+        theme: "dark",
+        selected: "checker",
+        stages: ["lexer", "parser", "checker", "backend"],
+        output: "Latest event payload: {payload}",
+        logs: ["Run requested from QML", "Event reached Osty", "State pushed back to QML"],
+    })
+}
+
+fn themeState(payload: String) -> String {
+    json.encode(InspectorState {
+        status: "theme updated",
+        theme: "light",
+        selected: "backend",
+        stages: ["lexer", "parser", "checker", "backend"],
+        output: "Theme event payload: {payload}",
+        logs: ["Theme toggle received", "State model stayed JSON"],
+    })
+}

@@ -51,6 +51,15 @@
 //	├── routes_test.osty    # tests every handler + dispatch fan-out
 //	└── .gitignore
 //
+//	# Qt Quick GUI app project (--gui qtquick)
+//	NAME/
+//	├── osty.toml
+//	├── main.osty
+//	├── ui/main.qml
+//	├── assets/
+//	├── README.md
+//	└── .gitignore
+//
 // The --cli and --service variants are still binary packages (they
 // build a `fn main`), but their starter source replaces the bare
 // "Hello, Osty!" with a small but realistic skeleton split across
@@ -109,6 +118,9 @@ const (
 	// not in Tier 1 — but the shape matches what a real service body
 	// would grow into.
 	KindService
+	// KindGUIQtQuick scaffolds a binary package wired to std.gui and
+	// a short Qt Quick/QML entry file.
+	KindGUIQtQuick
 )
 
 // CurrentEdition is the spec version the scaffolder records in
@@ -340,6 +352,14 @@ func expectedPaths(dir string, opts Options) []string {
 			filepath.Join(dir, "routes_test.osty"),
 			filepath.Join(dir, ".gitignore"),
 		}
+	case KindGUIQtQuick:
+		return []string{
+			filepath.Join(dir, "osty.toml"),
+			filepath.Join(dir, "main.osty"),
+			filepath.Join(dir, "ui", "main.qml"),
+			filepath.Join(dir, "README.md"),
+			filepath.Join(dir, ".gitignore"),
+		}
 	default: // KindBin
 		return []string{
 			filepath.Join(dir, "osty.toml"),
@@ -399,6 +419,22 @@ func writeLayout(tx *writeTx, dir string, opts Options) *diag.Diagnostic {
 			{filepath.Join(dir, "main.osty"), serviceMainTemplate},
 			{filepath.Join(dir, "routes.osty"), serviceRoutesTemplate},
 			{filepath.Join(dir, "routes_test.osty"), serviceRoutesTestTemplate},
+			{filepath.Join(dir, ".gitignore"), gitignoreTemplate},
+		})
+	case KindGUIQtQuick:
+		uiDir := filepath.Join(dir, "ui")
+		assetsDir := filepath.Join(dir, "assets")
+		if err := tx.mkdir(uiDir); err != nil {
+			return ioErr(uiDir, err)
+		}
+		if err := tx.mkdir(assetsDir); err != nil {
+			return ioErr(assetsDir, err)
+		}
+		return tx.writeFiles([]fileSpec{
+			{filepath.Join(dir, "osty.toml"), renderGUIQtQuickManifest(opts.Name, edition)},
+			{filepath.Join(dir, "main.osty"), guiQtQuickMainTemplate},
+			{filepath.Join(uiDir, "main.qml"), guiQtQuickQMLTemplate},
+			{filepath.Join(dir, "README.md"), renderGUIQtQuickReadme(opts.Name)},
 			{filepath.Join(dir, ".gitignore"), gitignoreTemplate},
 		})
 	default: // KindBin
@@ -508,6 +544,8 @@ func RenderSource(k Kind) string {
 		return cliMainTemplate
 	case KindService:
 		return serviceMainTemplate
+	case KindGUIQtQuick:
+		return guiQtQuickMainTemplate
 	default:
 		return binSourceTemplate
 	}
@@ -526,6 +564,8 @@ func RenderTestSource(k Kind) string {
 		return cliAppTestTemplate
 	case KindService:
 		return serviceRoutesTestTemplate
+	case KindGUIQtQuick:
+		return ""
 	default:
 		return binTestTemplate
 	}
@@ -546,6 +586,8 @@ func renderManifest(name, edition string, k Kind) string {
 		header = "# CLI app project; main.osty splits parsed Args from the testable run() core."
 	case KindService:
 		header = "# HTTP service project; main.osty defines Request/Response and a handle() core."
+	case KindGUIQtQuick:
+		header = "# Qt Quick GUI app project; main.osty owns state/events and ui/main.qml owns layout."
 	}
 	return fmt.Sprintf(`%s
 
@@ -558,6 +600,51 @@ edition = "%s"
 # Add dependencies here, for example:
 # json-ext = { path = "../json-ext" }
 `, header, name, edition)
+}
+
+func renderGUIQtQuickManifest(name, edition string) string {
+	return fmt.Sprintf(`# Qt Quick GUI app project; build libosty_qt and make it visible to the linker/runtime.
+
+[package]
+name = "%s"
+version = "0.1.0"
+edition = "%s"
+
+[dependencies]
+
+[gui]
+backend = "qtquick"
+entry = "ui/main.qml"
+
+[target.arm64-darwin]
+link = ["osty_qt"]
+
+[target.amd64-darwin]
+link = ["osty_qt"]
+
+[target.amd64-linux]
+link = ["osty_qt"]
+
+[target.amd64-windows]
+link = ["osty_qt"]
+`, name, edition)
+}
+
+func renderGUIQtQuickReadme(name string) string {
+	return fmt.Sprintf(`# %s
+
+This app uses `+"`std.gui`"+` with the Qt Quick/QML backend.
+
+Build the bridge from the Osty repository root:
+
+`+"```sh"+`
+cmake -S libosty_qt -B .osty/qt-build
+cmake --build .osty/qt-build
+`+"```"+`
+
+Then make the produced library visible to your platform linker/runtime and run
+the app with `+"`osty run`"+`.
+`, name)
 }
 
 func renderWorkspaceManifest(name, edition, member string) string {
@@ -840,6 +927,101 @@ fn testDispatchFallsThroughTo404() {
     let req = Request { method: "GET", path: "/missing" }
     let res = dispatch(req)
     let _ = res.status
+}
+`
+
+const guiQtQuickMainTemplate = `use std.gui.qtquick as gui
+use std.json
+
+pub struct GuiState {
+    pub status: String,
+    pub count: Int,
+    pub logs: List<String>,
+}
+
+fn main() {
+    match run() {
+        Ok(_) -> {},
+        Err(err) -> eprintln("gui app: {err.message()}"),
+    }
+}
+
+fn run() -> Result<(), Error> {
+    let app = gui.app("Osty GUI")?
+    let window = app.window(gui.windowOptions("Osty GUI", 900, 620, "ui/main.qml"))?
+
+    app.setState(readyState())?
+    window.show()?
+
+    for app.poll() {
+        for event in app.events() {
+            if event.name == "click" {
+                app.setState(clickedState(event.payload))?
+            } else if event.name == "quit" {
+                let _ = app.quit()
+            }
+        }
+    }
+
+    app.close()
+    Ok(())
+}
+
+fn readyState() -> String {
+    json.encode(GuiState {
+        status: "ready",
+        count: 0,
+        logs: ["app started"],
+    })
+}
+
+fn clickedState(payload: String) -> String {
+    json.encode(GuiState {
+        status: "clicked",
+        count: 1,
+        logs: ["button clicked", "payload: {payload}"],
+    })
+}
+`
+
+const guiQtQuickQMLTemplate = `import QtQuick
+import QtQuick.Controls
+import QtQuick.Layouts
+
+ApplicationWindow {
+    visible: true
+    width: 900
+    height: 620
+    title: "Osty GUI"
+
+    readonly property var state: osty.appState || ({})
+
+    ColumnLayout {
+        anchors.fill: parent
+        anchors.margins: 24
+        spacing: 12
+
+        Label {
+            text: state.status || "ready"
+            font.pixelSize: 24
+            font.bold: true
+        }
+
+        Button {
+            text: "Run"
+            onClicked: osty.emit("click", { source: "main.qml" })
+        }
+
+        ListView {
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            model: state.logs || []
+            delegate: Label {
+                width: ListView.view.width
+                text: modelData
+            }
+        }
+    }
 }
 `
 

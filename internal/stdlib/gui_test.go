@@ -208,6 +208,38 @@ func TestGuiModuleImportSurfaceIncludesRenderers(t *testing.T) {
 	}
 }
 
+func TestGuiQtQuickModuleSurface(t *testing.T) {
+	reg := LoadCached()
+	mod := reg.Modules["gui.qtquick"]
+	if mod == nil || mod.Package == nil || mod.Package.PkgScope == nil {
+		t.Fatalf("std.gui.qtquick not loaded with package scope; registry diagnostics:\n%s", stdlibRebindDiagSummary(reg))
+	}
+	for _, name := range []string{"App", "Window", "WindowOptions", "Event", "RuntimeInfo"} {
+		sym := mod.Package.PkgScope.LookupLocal(name)
+		if sym == nil {
+			t.Fatalf("std.gui.qtquick missing type %q", name)
+		}
+		if !sym.Pub {
+			t.Fatalf("std.gui.qtquick.%s not public", name)
+		}
+	}
+	for _, name := range []string{"app", "windowOptions", "runtimeInfo", "abiVersion", "available", "lastError"} {
+		sym := mod.Package.PkgScope.LookupLocal(name)
+		if sym == nil {
+			t.Fatalf("std.gui.qtquick missing export %q", name)
+		}
+		if sym.Kind != resolve.SymFn {
+			t.Fatalf("std.gui.qtquick.%s kind = %s, want fn", name, sym.Kind)
+		}
+		if !sym.Pub {
+			t.Fatalf("std.gui.qtquick.%s not public", name)
+		}
+	}
+	if fn := reg.LookupMethodDecl("gui.qtquick", "App", "events"); fn == nil {
+		t.Fatalf("LookupMethodDecl(gui.qtquick, App, events) = nil, want event polling surface")
+	}
+}
+
 func guiModuleSource(t *testing.T) string {
 	t.Helper()
 	reg := LoadCached()
