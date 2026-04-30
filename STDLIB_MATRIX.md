@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 81 공개 모듈. 분류 기준:
+총 82 공개 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (78 / 81 = 96%)
+### ⭐⭐⭐⭐⭐ Production (78 / 82 = 95%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -110,12 +110,13 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (3 / 81 = 4%)
+### ⭐⭐⭐⭐ Production-adjacent (4 / 82 = 5%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
 | gui.qtquick | 243 | Qt Quick/QML native app backend MVP. `libosty_qt` bridge, runtime diagnostics, reload/import-path helpers, `osty gui doctor qtquick`; bundle/deploy 연계는 후속 |
 | gui.webview2 | 292 | Windows WebView2 C ABI shim. Safe wrapper / scaffold / runtime diagnostics landed; local virtual-origin assets, console-log event bridge, Osty→Web command channel, and handle-lifetime hardening added; Windows smoke and packaged linker flow still pending |
+| print | 461 | 기본 프린터 / PDF / 이미지 인쇄 표면. CUPS `lp`/`lpr`, Windows shell print, custom command plan/exec, 프린터 조회와 옵션 검증은 추가됨; host spooler별 세부 기능 편차는 후속 |
 | compress | 11 | gzip 만 (zstd / deflate 추가 가능). Phase A shim 199 |
 
 ### 🚧 실제 미구현 / 갭
@@ -171,6 +172,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | Agent-safe logs/transcripts | ✅ 가능 | redact + security + tokenest + aiagents |
 | Local document search | ✅ 가능 | search + markdown + media + jsonl |
 | 사람이 읽는 리포트 산출물 | ✅ 가능 | report + markdown/jsonl/csv |
+| PDF/이미지 인쇄 | ✅ 가능 | print + fs/media/os (기본 CUPS `lp`, `lpr`, Windows shell print, custom command plan) |
 | LLM retry/compaction loop | ✅ 가능 | ai + httpretry + tokenest + aiagents |
 
 ## 3. 진짜 약점 (남은 런타임 / 딥 기능)
@@ -204,6 +206,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 - 58 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, jsonl, kv, shortid, metrics, net, fmt, json, config, table, url, io, collections, email, db, polyglot, grid, gui, dialog, tar, sql, xml, tui, image, ocr, scan, smtp, result, option, csv, encoding, zip, term, websocket, watch, graphql, template, i18n, char, iter, bytes)
 - 5 모듈은 Phase A 충실 + Phase B declaration-only (env, random, os, crypto, compress)
 - fs 는 Phase A 충실 + 확장된 tool-facing declaration surface (walk/glob/watch/atomicWrite/lockFile/hashFile/copyDir/diffFiles)
+- print 는 기존 `std.os` host process bridge 위에서 CUPS/Windows/custom spooler 실행 계획을 제공한다. 실제 출력은 가능하지만 프린터별 capability discovery 는 production-adjacent 로 남긴다.
 - 나머지는 의도된 범위에서 surface 만으로 완성 (cli, math, cmp, hint, debug, ref, process, log, time, error, sync, thread, regex, testing, uuid)
 
 ## 5. 평가 함정: `.osty` 줄 수 모델의 한계
