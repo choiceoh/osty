@@ -20945,6 +20945,11 @@ int64_t osty_rt_test_gen_int_range(int64_t lo, int64_t hi, int64_t seed) {
     return lo + (int64_t)(mixed % span);
 }
 
+double osty_rt_test_gen_float(int64_t seed) {
+    uint64_t mixed = osty_rt_test_gen_mix_u64((uint64_t)seed);
+    return (double)(mixed >> 11) * (1.0 / 9007199254740992.0);
+}
+
 void *osty_rt_test_gen_ascii_string(int64_t max_len, int64_t seed) {
     uint64_t mixed;
     size_t len;

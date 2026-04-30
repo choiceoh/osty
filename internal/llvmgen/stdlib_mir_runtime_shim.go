@@ -1201,7 +1201,7 @@ func (g *mirGen) emitStdTestingGenCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool
 	switch method {
 	case "int", "intRange", "bool", "float", "char", "byte", "asciiString",
 		"oneOf", "map", "filter", "pair", "triple", "list", "listOfSize",
-		"option", "result", "constant":
+		"option", "result", "constant", "oneOfGens":
 		return true, g.storeZeroDest(c)
 	}
 	return false, nil
