@@ -33,6 +33,7 @@ OSTY_WV2_EXPORT void osty_wv2_window_close(int64_t window);
 OSTY_WV2_EXPORT int osty_wv2_window_set_title(int64_t window, const char *title);
 OSTY_WV2_EXPORT int osty_wv2_window_navigate(int64_t window, const char *url);
 OSTY_WV2_EXPORT int osty_wv2_window_post_state_json(int64_t window, const char *state);
+OSTY_WV2_EXPORT int osty_wv2_window_post_command_json(int64_t window, const char *name, const char *payload);
 OSTY_WV2_EXPORT const char *osty_wv2_window_eval(int64_t window, const char *js);
 OSTY_WV2_EXPORT int osty_wv2_window_open_devtools(int64_t window);
 

@@ -18,6 +18,9 @@ func TestGuiWebView2ModuleSurface(t *testing.T) {
 	for _, name := range []string{
 		"app",
 		"defaultWindowOptions",
+		"consoleEventName",
+		"isConsoleEvent",
+		"consoleEventLevel",
 		"runtimeDiagnostic",
 		"bridgeScript",
 		"lastErrorMessage",
@@ -45,6 +48,7 @@ func TestGuiWebView2ModuleSurface(t *testing.T) {
 		{"Window", "navigate"},
 		{"Window", "setTitle"},
 		{"Window", "setState"},
+		{"Window", "send"},
 		{"Window", "eval"},
 		{"Window", "openDevTools"},
 		{"Window", "close"},
@@ -64,12 +68,22 @@ func TestGuiWebView2SourcePinsBridgeAndCABI(t *testing.T) {
 	for _, want := range []string{
 		`use c "osty_webview2" as wv`,
 		"fn osty_wv2_window_post_state_json(window: Int, state: String) -> Bool",
+		"fn osty_wv2_window_post_command_json(window: Int, name: String, payload: String) -> Bool",
 		"fn osty_wv2_event_name(app: Int, index: Int) -> String",
 		"fn osty_wv2_runtime_available() -> Bool",
 		"pub struct WindowOptions",
 		"pub struct Event",
 		"pub fn bridgeScript() -> String",
+		"__ostyWebView2Bridge: true",
+		"const commandHandlers = new Set()",
 		"chrome.webview.postMessage(JSON.stringify",
+		"Object.freeze(api)",
+		"onCommand(handler)",
+		"event.data.type === 'command'",
+		"queueMicrotask(() => handler(lastState))",
+		"typeof name !== 'string'",
+		"name: `console.${level}`",
+		"rendered.join(' ')",
 		"Object.defineProperty(window, 'osty'",
 		"copyString(wv.osty_wv2_event_name",
 		`strings.concat(s, "")`,
@@ -93,8 +107,11 @@ pub fn demo() -> Result<(), Error> {
     let window = app.window(options)?
     window.show()?
     window.setState("\{\"status\":\"ready\"\}")?
+    window.send("flash", "\{\"source\":\"test\"\}")?
     for event in app.events() {
-        if event.name == "run" {
+        if webview2.isConsoleEvent(event) {
+            let _ = webview2.consoleEventLevel(event)
+        } else if event.name == "run" {
             window.setState(event.payload)?
         }
     }

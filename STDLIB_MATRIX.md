@@ -101,7 +101,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
 | gui.qtquick | 243 | Qt Quick/QML native app backend MVP. `libosty_qt` bridge, runtime diagnostics, reload/import-path helpers, `osty gui doctor qtquick`; bundle/deploy 연계는 후속 |
-| gui.webview2 | 223 | Windows WebView2 C ABI shim spike. Safe wrapper / scaffold / runtime diagnostics landed; Windows smoke and packaged linker flow still pending |
+| gui.webview2 | 292 | Windows WebView2 C ABI shim. Safe wrapper / scaffold / runtime diagnostics landed; local virtual-origin assets, console-log event bridge, Osty→Web command channel, and handle-lifetime hardening added; Windows smoke and packaged linker flow still pending |
 | compress | 11 | gzip 만 (zstd / deflate 추가 가능). Phase A shim 199 |
 | testing_gen | 168 | property runner 는 int/intRange/asciiString/pair/triple/oneOf/constant subset 실행. bool/float/char/byte/list/listOfSize/option/result/oneOfGens/map/filter 는 아직 실행 subset 밖 |
 

@@ -15,10 +15,13 @@ fn main() -> Result<(), Error> {
                 app.quit()
             } else if event.name == "refresh" {
                 window.setState(initialStateJson())?
+                window.send("flash", "\{\"source\":\"osty\",\"reason\":\"refresh\"\}")?
             } else if event.name == "inspect" {
                 window.openDevTools()?
             } else if event.name == "state" {
                 window.setState(event.payload)?
+            } else if webview2.isConsoleEvent(event) {
+                println("[webview2 {webview2.consoleEventLevel(event)}] {event.payload}")
             }
         }
     }
