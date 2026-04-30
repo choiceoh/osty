@@ -1,0 +1,1136 @@
+// std.ocr - OCR engine adapters and result analysis helpers.
+//
+// The stdlib does not bundle a vision model. Instead this module makes common
+// OCR engines such as PaddleOCR v5 and Tesseract easy to drive from Osty, then
+// normalizes their outputs into text, lines, words, bounds, summaries, search
+// hits, key-value pairs, and chunkable text.
+use std.error
+use std.fs
+use std.json
+use std.os
+use std.strings
+pub enum Engine {
+    PaddleOCR,
+    Tesseract,
+    CustomCommand,
+}
+pub enum OutputFormat {
+    PlainText,
+    PaddleJson,
+    TesseractTsv,
+    Hocr,
+    JsonLines,
+}
+pub enum ReadingOrder {
+    InputOrder,
+    TopToBottomLeftToRight,
+}
+pub struct Bounds {
+    pub x: Int = 0,
+    pub y: Int = 0,
+    pub width: Int = 0,
+    pub height: Int = 0,
+    pub fn right(self) -> Int {
+        self.x + self.width
+    }
+    pub fn bottom(self) -> Int {
+        self.y + self.height
+    }
+    pub fn isEmpty(self) -> Bool {
+        self.width <= 0 || self.height <= 0
+    }
+}
+pub struct Word {
+    pub text: String,
+    pub confidence: Float = 0.0,
+    pub bounds: Bounds,
+    pub page: Int = 1,
+    pub block: Int = 1,
+    pub paragraph: Int = 1,
+    pub line: Int = 1,
+    pub word: Int = 1,
+}
+pub struct Line {
+    pub text: String,
+    pub confidence: Float = 0.0,
+    pub bounds: Bounds,
+    pub words: List<Word> = [],
+    pub page: Int = 1,
+    pub block: Int = 1,
+    pub paragraph: Int = 1,
+    pub line: Int = 1,
+}
+pub struct Block {
+    pub text: String,
+    pub confidence: Float = 0.0,
+    pub bounds: Bounds,
+    pub lines: List<Line> = [],
+    pub page: Int = 1,
+    pub block: Int = 1,
+}
+pub struct Document {
+    pub text: String,
+    pub words: List<Word> = [],
+    pub lines: List<Line> = [],
+    pub blocks: List<Block> = [],
+    pub source: String = "",
+    pub language: String = "",
+    pub engine: Engine,
+}
+pub struct ReviewItem {
+    pub source: String = "",
+    pub reason: String,
+    pub text: String,
+    pub confidence: Float = 0.0,
+    pub bounds: Bounds,
+    pub page: Int = 1,
+    pub line: Int = 1,
+}
+pub struct IndexedDocument {
+    pub id: String,
+    pub source: String,
+    pub text: String,
+    pub chunks: List<TextChunk> = [],
+    pub keyValues: List<KeyValue> = [],
+    pub reviewItems: List<ReviewItem> = [],
+    pub averageConfidence: Float = 0.0,
+    pub lines: Int = 0,
+    pub words: Int = 0,
+}
+pub struct BatchItem {
+    pub source: String,
+    pub jsonPath: String = "",
+    pub document: Document? = None,
+    pub error: String = "",
+}
+pub struct BatchResult {
+    pub items: List<BatchItem> = [],
+    pub documents: List<Document> = [],
+    pub errors: List<String> = [],
+}
+pub struct Options {
+    pub engine: Engine,
+    pub command: String = "",
+    pub language: String = "",
+    pub device: String = "",
+    pub ocrVersion: String = "PP-OCRv5",
+    pub textDetectionModel: String = "",
+    pub textRecognitionModel: String = "",
+    pub paddlexConfig: String = "",
+    pub savePath: String = "",
+    pub outputFormat: OutputFormat,
+    pub minConfidence: Float = 0.0,
+    pub textScoreThreshold: Float = -1.0,
+    pub useDocOrientationClassify: Bool = false,
+    pub useDocUnwarping: Bool = false,
+    pub useTextLineOrientation: Bool = false,
+    pub readingOrder: ReadingOrder,
+    pub extraArgs: List<String> = [],
+}
+pub struct CommandPlan {
+    pub command: String,
+    pub args: List<String>,
+}
+pub struct RunResult {
+    pub output: os.Output,
+    pub document: Document,
+}
+pub struct Summary {
+    pub pages: Int = 0,
+    pub blocks: Int = 0,
+    pub lines: Int = 0,
+    pub words: Int = 0,
+    pub chars: Int = 0,
+    pub averageConfidence: Float = 0.0,
+    pub lowConfidenceWords: Int = 0,
+}
+pub struct TextChunk {
+    pub index: Int,
+    pub text: String,
+    pub startLine: Int,
+    pub endLine: Int,
+    pub confidence: Float = 0.0,
+}
+pub struct KeyValue {
+    pub key: String,
+    pub value: String,
+    pub line: Int,
+    pub confidence: Float = 0.0,
+}
+pub fn paddleV5Options(language: String) -> Options {
+    Options {engine: PaddleOCR, command: "paddleocr", language: language, ocrVersion: "PP-OCRv5", outputFormat: PlainText, readingOrder: TopToBottomLeftToRight}
+}
+pub fn paddleV5JsonOptions(language: String, savePath: String) -> Options {
+    let mut options = paddleV5Options(language)
+    options.outputFormat = PaddleJson
+    options.savePath = savePath
+    options
+}
+pub fn paddleV5FastJsonOptions(language: String, savePath: String) -> Options {
+    let mut options = paddleV5JsonOptions(language, savePath)
+    options.textDetectionModel = "PP-OCRv5_mobile_det"
+    options.textRecognitionModel = "PP-OCRv5_mobile_rec"
+    options
+}
+pub fn paddleV5AccurateJsonOptions(language: String, savePath: String) -> Options {
+    let mut options = paddleV5JsonOptions(language, savePath)
+    options.textDetectionModel = "PP-OCRv5_server_det"
+    options.textRecognitionModel = "PP-OCRv5_server_rec"
+    options
+}
+pub fn tesseractTsvOptions(language: String) -> Options {
+    Options {engine: Tesseract, command: "tesseract", language: language, outputFormat: TesseractTsv, readingOrder: TopToBottomLeftToRight}
+}
+pub fn customCommandOptions(command: String, format: OutputFormat) -> Options {
+    Options {engine: CustomCommand, command: command, outputFormat: format, readingOrder: TopToBottomLeftToRight}
+}
+pub fn withLanguage(mut options: Options, language: String) -> Options {
+    options.language = language
+    options
+}
+pub fn withDevice(mut options: Options, device: String) -> Options {
+    options.device = device
+    options
+}
+pub fn withSavePath(mut options: Options, savePath: String) -> Options {
+    options.savePath = savePath
+    options
+}
+pub fn withPaddleModels(mut options: Options, detectionModel: String, recognitionModel: String) -> Options {
+    options.textDetectionModel = detectionModel
+    options.textRecognitionModel = recognitionModel
+    options
+}
+pub fn withPaddlexConfig(mut options: Options, path: String) -> Options {
+    options.paddlexConfig = path
+    options
+}
+pub fn withPaddlePreprocessing(mut options: Options, orientation: Bool, unwarping: Bool, textLineOrientation: Bool) -> Options {
+    options.useDocOrientationClassify = orientation
+    options.useDocUnwarping = unwarping
+    options.useTextLineOrientation = textLineOrientation
+    options
+}
+pub fn withMinConfidence(mut options: Options, minConfidence: Float) -> Options {
+    options.minConfidence = minConfidence
+    options
+}
+pub fn withTextScoreThreshold(mut options: Options, threshold: Float) -> Options {
+    options.textScoreThreshold = threshold
+    options
+}
+pub fn withExtraArg(mut options: Options, arg: String) -> Options {
+    options.extraArgs.push(arg)
+    options
+}
+pub fn withExtraArgs(mut options: Options, args: List<String>) -> Options {
+    for arg in args {
+        options.extraArgs.push(arg)
+    }
+    options
+}
+pub fn paddlePlan(imagePath: String, options: Options) -> Result<CommandPlan, Error> {
+    let command = if options.command.isEmpty() {
+        "paddleocr"
+    } else {
+        options.command
+    }
+    let mut args: List<String> = ["ocr", "-i", imagePath]
+    if !options.language.isEmpty() {
+        args.push("--lang")
+        args.push(options.language)
+    }
+    if !options.ocrVersion.isEmpty() {
+        args.push("--ocr_version")
+        args.push(options.ocrVersion)
+    }
+    args.push("--use_doc_orientation_classify")
+    args.push(paddleBool(options.useDocOrientationClassify))
+    args.push("--use_doc_unwarping")
+    args.push(paddleBool(options.useDocUnwarping))
+    args.push("--use_textline_orientation")
+    args.push(paddleBool(options.useTextLineOrientation))
+    if !options.device.isEmpty() {
+        args.push("--device")
+        args.push(options.device)
+    }
+    if !options.paddlexConfig.isEmpty() {
+        args.push("--paddlex_config")
+        args.push(options.paddlexConfig)
+    }
+    if !options.textDetectionModel.isEmpty() {
+        args.push("--text_detection_model_name")
+        args.push(options.textDetectionModel)
+    }
+    if !options.textRecognitionModel.isEmpty() {
+        args.push("--text_recognition_model_name")
+        args.push(options.textRecognitionModel)
+    }
+    if options.textScoreThreshold >= 0.0 {
+        args.push("--text_rec_score_thresh")
+        args.push(options.textScoreThreshold.toString())
+    }
+    if !options.savePath.isEmpty() {
+        args.push("--save_path")
+        args.push(options.savePath)
+    }
+    appendExtraArgs(args, options.extraArgs)
+    Ok(CommandPlan {command: command, args: args})
+}
+pub fn tesseractPlan(imagePath: String, options: Options) -> Result<CommandPlan, Error> {
+    let command = if options.command.isEmpty() {
+        "tesseract"
+    } else {
+        options.command
+    }
+    let mut args: List<String> = [imagePath, "stdout"]
+    if !options.language.isEmpty() {
+        args.push("-l")
+        args.push(options.language)
+    }
+    match options.outputFormat {
+        TesseractTsv -> args.push("tsv"),
+        Hocr -> args.push("hocr"),
+        _ -> {
+        },
+    }
+    appendExtraArgs(args, options.extraArgs)
+    Ok(CommandPlan {command: command, args: args})
+}
+pub fn customPlan(imagePath: String, options: Options) -> Result<CommandPlan, Error> {
+    if options.command.isEmpty() {
+        return Err(error.new("ocr: custom command is empty"))
+    }
+    let mut args: List<String> = [imagePath]
+    appendExtraArgs(args, options.extraArgs)
+    Ok(CommandPlan {command: options.command, args: args})
+}
+pub fn plan(imagePath: String, options: Options) -> Result<CommandPlan, Error> {
+    if strings.trimSpace(imagePath).isEmpty() {
+        return Err(error.new("ocr: image path is empty"))
+    }
+    match options.engine {
+        PaddleOCR -> paddlePlan(imagePath, options),
+        Tesseract -> tesseractPlan(imagePath, options),
+        CustomCommand -> customPlan(imagePath, options),
+    }
+}
+pub fn commandLine(plan: CommandPlan) -> String {
+    let mut parts: List<String> = [shellQuote(plan.command)]
+    for arg in plan.args {
+        parts.push(shellQuote(arg))
+    }
+    strings.join(parts, " ")
+}
+pub fn run(imagePath: String, options: Options) -> Result<RunResult, Error> {
+    let cmd = plan(imagePath, options)?
+    let output = os.exec(cmd.command, cmd.args)?
+    if output.exitCode != 0 {
+        return Err(error.new("ocr: command failed with exit code {output.exitCode}: {output.stderr}"))
+    }
+    let doc = parseOutput(output.stdout, imagePath, options)?
+    Ok(RunResult {output: output, document: doc})
+}
+pub fn runAndReadJson(imagePath: String, jsonPath: String, options: Options) -> Result<RunResult, Error> {
+    let mut configured = options
+    configured.outputFormat = PaddleJson
+    configured.savePath = jsonPath
+    let cmd = plan(imagePath, configured)?
+    let output = os.exec(cmd.command, cmd.args)?
+    if output.exitCode != 0 {
+        return Err(error.new("ocr: command failed with exit code {output.exitCode}: {output.stderr}"))
+    }
+    let jsonText = fs.readToString(jsonPath)?
+    let mut doc = parsePaddleJsonWithOptions(jsonText, configured)?
+    doc.source = imagePath
+    Ok(RunResult {output: output, document: doc})
+}
+pub fn runPaddleJson(imagePath: String, savePath: String, options: Options) -> Result<RunResult, Error> {
+    let jsonPath = paddleJsonPath(imagePath, savePath)?
+    let mut configured = options
+    configured.engine = PaddleOCR
+    configured.outputFormat = PaddleJson
+    configured.savePath = savePath
+    let cmd = plan(imagePath, configured)?
+    let output = os.exec(cmd.command, cmd.args)?
+    if output.exitCode != 0 {
+        return Err(error.new("ocr: command failed with exit code {output.exitCode}: {output.stderr}"))
+    }
+    let jsonText = fs.readToString(jsonPath)?
+    let mut doc = parsePaddleJsonWithOptions(jsonText, configured)?
+    doc.source = imagePath
+    Ok(RunResult {output: output, document: doc})
+}
+pub fn runPaddleJsonBatch(imagePaths: List<String>, savePath: String, options: Options) -> BatchResult {
+    let mut items: List<BatchItem> = []
+    let mut documents: List<Document> = []
+    let mut errors: List<String> = []
+    for imagePath in imagePaths {
+        let jsonPath = paddleJsonPath(imagePath, savePath).unwrapOr("")
+        match runPaddleJson(imagePath, savePath, options) {
+            Ok(result) -> {
+                documents.push(result.document)
+                items.push(BatchItem {source: imagePath, jsonPath: jsonPath, document: Some(result.document)})
+            },
+            Err(err) -> {
+                let msg = err.message()
+                errors.push("{imagePath}: {msg}")
+                items.push(BatchItem {source: imagePath, jsonPath: jsonPath, error: msg})
+            },
+        }
+    }
+    BatchResult {items: items, documents: documents, errors: errors}
+}
+pub fn paddleJsonPath(imagePath: String, savePath: String) -> Result<String, Error> {
+    let cleanSavePath = strings.trimSpace(savePath)
+    if cleanSavePath.isEmpty() {
+        return Err(error.new("ocr: PaddleOCR save path is empty"))
+    }
+    if strings.endsWith(strings.toLower(cleanSavePath), ".json") {
+        return Ok(cleanSavePath)
+    }
+    let base = os.path.basename(imagePath)
+    let stem = fileStem(base)
+    Ok(os.path.join([cleanSavePath, "{stem}_res.json"]))
+}
+pub fn parseOutput(text: String, source: String, options: Options) -> Result<Document, Error> {
+    match options.outputFormat {
+        PaddleJson -> {
+            let mut doc = parsePaddleJsonWithOptions(text, options)?
+            doc.source = source
+            Ok(doc)
+        },
+        TesseractTsv -> {
+            let mut doc = parseTesseractTsvWithOptions(text, options)?
+            doc.source = source
+            Ok(doc)
+        },
+        Hocr -> Ok(documentFromText(stripTags(text), source, options)),
+        JsonLines -> parseJsonLines(text, source, options),
+        PlainText -> Ok(documentFromText(text, source, options)),
+    }
+}
+pub fn parsePaddleJson(text: String) -> Result<Document, Error> {
+    parsePaddleJsonWithOptions(text, paddleV5Options(""))
+}
+pub fn parsePaddleJsonWithOptions(text: String, options: Options) -> Result<Document, Error> {
+    let root = json.parseValue(text)?
+    match json.asArray(root) {
+        Ok(items) -> {
+            let mut docs: List<Document> = []
+            for item in items {
+                docs.push(parsePaddleJsonValue(item, options)?)
+            }
+            Ok(combineDocuments(docs, options))
+        },
+        Err(_) -> parsePaddleJsonValue(root, options),
+    }
+}
+pub fn parseTesseractTsv(text: String) -> Result<Document, Error> {
+    parseTesseractTsvWithOptions(text, tesseractTsvOptions(""))
+}
+pub fn parseTesseractTsvWithOptions(text: String, options: Options) -> Result<Document, Error> {
+    let mut words: List<Word> = []
+    let mut rowNo = 0
+    for rawLine in strings.splitLines(text) {
+        rowNo = rowNo + 1
+        if rowNo == 1 {
+            continue
+        }
+        let line = strings.trimEnd(rawLine)
+        if line.isEmpty() {
+            continue
+        }
+        let cols = strings.split(line, "\t")
+        if cols.len() < 12 {
+            continue
+        }
+        if parseIntOr(cols[0], 0) != 5 {
+            continue
+        }
+        let textValue = strings.trimSpace(strings.join(cols.drop(11), "\t"))
+        if textValue.isEmpty() {
+            continue
+        }
+        let confidence = parseFloatOr(cols[10], -1.0)
+        if confidence < options.minConfidence {
+            continue
+        }
+        words.push(Word {text: textValue, confidence: confidence, bounds: Bounds {x: parseIntOr(cols[6], 0), y: parseIntOr(cols[7], 0), width: parseIntOr(cols[8], 0), height: parseIntOr(cols[9], 0)}, page: parseIntOr(cols[1], 1), block: parseIntOr(cols[2], 1), paragraph: parseIntOr(cols[3], 1), line: parseIntOr(cols[4], 1), word: parseIntOr(cols[5], 1)})
+    }
+    Ok(documentFromWords(words, "", options))
+}
+pub fn documentFromText(text: String, source: String, options: Options) -> Document {
+    let mut lines: List<Line> = []
+    let mut lineNo = 1
+    for rawLine in strings.splitLines(text) {
+        let value = strings.trimSpace(rawLine)
+        if value.isEmpty() {
+            lineNo = lineNo + 1
+            continue
+        }
+        lines.push(Line {text: value, confidence: 1.0, bounds: Bounds {}, words: [], page: 1, block: 1, paragraph: 1, line: lineNo})
+        lineNo = lineNo + 1
+    }
+    documentFromLines(lines, source, options)
+}
+pub fn summary(doc: Document) -> Summary {
+    let mut pages = 0
+    let mut low = 0
+    let mut total = 0.0
+    let mut counted = 0
+    for word in doc.words {
+        if word.page > pages {
+            pages = word.page
+        }
+        if word.confidence >= 0.0 {
+            total = total + word.confidence
+            counted = counted + 1
+            if word.confidence < 50.0 {
+                low = low + 1
+            }
+        }
+    }
+    if pages == 0 && !doc.lines.isEmpty() {
+        pages = 1
+    }
+    Summary {pages: pages, blocks: doc.blocks.len(), lines: doc.lines.len(), words: doc.words.len(), chars: doc.text.charCount(), averageConfidence: if counted == 0 {
+        0.0
+    } else {
+        total / counted.toFloat()
+    }, lowConfidenceWords: low}
+}
+pub fn indexDocument(doc: Document, maxChunkChars: Int, reviewThreshold: Float) -> IndexedDocument {
+    let s = summary(doc)
+    IndexedDocument {id: stableDocumentId(doc), source: doc.source, text: doc.text, chunks: chunks(doc, maxChunkChars), keyValues: keyValues(doc), reviewItems: reviewItems(doc, reviewThreshold), averageConfidence: s.averageConfidence, lines: s.lines, words: s.words}
+}
+pub fn indexBatch(batch: BatchResult, maxChunkChars: Int, reviewThreshold: Float) -> List<IndexedDocument> {
+    let mut out: List<IndexedDocument> = []
+    for doc in batch.documents {
+        out.push(indexDocument(doc, maxChunkChars, reviewThreshold))
+    }
+    out
+}
+pub fn combine(batch: BatchResult) -> Document {
+    let options = paddleV5Options("")
+    combineDocuments(batch.documents, options)
+}
+pub fn lowConfidenceWords(doc: Document, threshold: Float) -> List<Word> {
+    let mut out: List<Word> = []
+    for word in doc.words {
+        if word.confidence >= 0.0 && word.confidence < threshold {
+            out.push(word)
+        }
+    }
+    out
+}
+pub fn reviewItems(doc: Document, confidenceThreshold: Float) -> List<ReviewItem> {
+    let mut out: List<ReviewItem> = []
+    for line in doc.lines {
+        if line.confidence >= 0.0 && line.confidence < confidenceThreshold {
+            out.push(ReviewItem {source: doc.source, reason: "low-confidence-line", text: line.text, confidence: line.confidence, bounds: line.bounds, page: line.page, line: line.line})
+        }
+    }
+    for word in lowConfidenceWords(doc, confidenceThreshold) {
+        out.push(ReviewItem {source: doc.source, reason: "low-confidence-word", text: word.text, confidence: word.confidence, bounds: word.bounds, page: word.page, line: word.line})
+    }
+    out
+}
+pub fn reviewMarkdown(doc: Document, confidenceThreshold: Float) -> String {
+    let mut rows: List<String> = ["| source | page | line | confidence | reason | text |", "|---|---:|---:|---:|---|---|"]
+    for item in reviewItems(doc, confidenceThreshold) {
+        rows.push("| {escapeMarkdownCell(item.source)} | {item.page} | {item.line} | {item.confidence} | {item.reason} | {escapeMarkdownCell(item.text)} |")
+    }
+    strings.join(rows, "\n")
+}
+pub fn search(doc: Document, query: String) -> List<Line> {
+    let needle = strings.toLower(strings.trimSpace(query))
+    let mut out: List<Line> = []
+    if needle.isEmpty() {
+        return out
+    }
+    for line in doc.lines {
+        if strings.contains(strings.toLower(line.text), needle) {
+            out.push(line)
+        }
+    }
+    out
+}
+pub fn keyValues(doc: Document) -> List<KeyValue> {
+    let mut out: List<KeyValue> = []
+    for line in doc.lines {
+        match parseKeyValue(line) {
+            Some(pair) -> out.push(pair),
+            None -> {
+            },
+        }
+    }
+    out
+}
+pub fn valueForKey(doc: Document, key: String) -> String? {
+    let want = normalizeKey(key)
+    for pair in keyValues(doc) {
+        if normalizeKey(pair.key) == want {
+            return Some(pair.value)
+        }
+    }
+    None
+}
+pub fn valueForAnyKey(doc: Document, keys: List<String>) -> String? {
+    for key in keys {
+        match valueForKey(doc, key) {
+            Some(value) -> {
+                return Some(value)
+            },
+            None -> {
+            },
+        }
+    }
+    None
+}
+pub fn chunks(doc: Document, maxChars: Int) -> List<TextChunk> {
+    let limit = if maxChars <= 0 {
+        1200
+    } else {
+        maxChars
+    }
+    let mut out: List<TextChunk> = []
+    let mut current = ""
+    let mut startLine = 0
+    let mut endLine = 0
+    let mut totalConfidence = 0.0
+    let mut confidenceCount = 0
+    for line in doc.lines {
+        let next = if current.isEmpty() {
+            line.text
+        } else {
+            "{current}\n{line.text}"
+        }
+        if !current.isEmpty() && next.charCount() > limit {
+            out.push(TextChunk {index: out.len(), text: current, startLine: startLine, endLine: endLine, confidence: if confidenceCount == 0 {
+                0.0
+            } else {
+                totalConfidence / confidenceCount.toFloat()
+            }})
+            current = line.text
+            startLine = line.line
+            totalConfidence = line.confidence
+            confidenceCount = 1
+        } else {
+            current = next
+            if startLine == 0 {
+                startLine = line.line
+            }
+            totalConfidence = totalConfidence + line.confidence
+            confidenceCount = confidenceCount + 1
+        }
+        endLine = line.line
+    }
+    if !current.isEmpty() {
+        out.push(TextChunk {index: out.len(), text: current, startLine: startLine, endLine: endLine, confidence: if confidenceCount == 0 {
+            0.0
+        } else {
+            totalConfidence / confidenceCount.toFloat()
+        }})
+    }
+    out
+}
+pub fn toMarkdown(doc: Document) -> String {
+    let mut out: List<String> = []
+    for block in doc.blocks {
+        if !block.text.isEmpty() {
+            out.push(strings.trimSpace(block.text))
+        }
+    }
+    strings.join(out, "\n\n")
+}
+pub fn toPlainText(doc: Document) -> String {
+    doc.text
+}
+pub fn sortedLines(doc: Document) -> List<Line> {
+    sortLinesByReadingOrder(doc.lines)
+}
+fn parsePaddleJsonValue(value: json.Json, options: Options) -> Result<Document, Error> {
+    let obj = paddlePayloadObject(value)?
+    let textItems = json.asArray(requiredField(obj, "rec_texts")?)?
+    let scoreItems = optionalArray(obj, "rec_scores")
+    let boxItems = optionalArray(obj, "rec_boxes")
+    let mut lines: List<Line> = []
+    let mut words: List<Word> = []
+    let mut i = 0
+    for i < textItems.len() {
+        let textValue = strings.trimSpace(json.asString(textItems[i])?)
+        if textValue.isEmpty() {
+            i = i + 1
+            continue
+        }
+        let confidence = jsonArrayNumber(scoreItems, i, 1.0)
+        if confidence < options.minConfidence {
+            i = i + 1
+            continue
+        }
+        let bounds = jsonArrayBounds(boxItems, i)
+        let word = Word {text: textValue, confidence: confidence, bounds: bounds, page: 1, block: 1, paragraph: 1, line: i + 1, word: 1}
+        words.push(word)
+        lines.push(Line {text: textValue, confidence: confidence, bounds: bounds, words: [word], page: 1, block: 1, paragraph: 1, line: i + 1})
+        i = i + 1
+    }
+    Ok(documentFromLinesAndWords(lines, words, "", options))
+}
+fn parseJsonLines(text: String, source: String, options: Options) -> Result<Document, Error> {
+    let mut docs: List<Document> = []
+    for line in strings.splitLines(text) {
+        let trimmed = strings.trimSpace(line)
+        if trimmed.isEmpty() {
+            continue
+        }
+        docs.push(parsePaddleJsonWithOptions(trimmed, options)?)
+    }
+    let mut doc = combineDocuments(docs, options)
+    doc.source = source
+    Ok(doc)
+}
+fn documentFromWords(words: List<Word>, source: String, options: Options) -> Document {
+    let lines = linesFromWords(words)
+    documentFromLinesAndWords(lines, words, source, options)
+}
+fn documentFromLines(lines: List<Line>, source: String, options: Options) -> Document {
+    let mut words: List<Word> = []
+    for line in lines {
+        if line.words.isEmpty() {
+            let tokens = strings.fields(line.text)
+            let mut index = 1
+            for token in tokens {
+                words.push(Word {text: token, confidence: line.confidence, bounds: line.bounds, page: line.page, block: line.block, paragraph: line.paragraph, line: line.line, word: index})
+                index = index + 1
+            }
+        } else {
+            for word in line.words {
+                words.push(word)
+            }
+        }
+    }
+    documentFromLinesAndWords(lines, words, source, options)
+}
+fn documentFromLinesAndWords(lines: List<Line>, words: List<Word>, source: String, options: Options) -> Document {
+    let ordered = match options.readingOrder {
+        TopToBottomLeftToRight -> sortLinesByReadingOrder(lines),
+        InputOrder -> lines,
+    }
+    Document {text: linesText(ordered), words: words, lines: ordered, blocks: blocksFromLines(ordered), source: source, language: options.language, engine: options.engine}
+}
+fn combineDocuments(docs: List<Document>, options: Options) -> Document {
+    let mut words: List<Word> = []
+    let mut lines: List<Line> = []
+    let mut source = ""
+    for doc in docs {
+        if source.isEmpty() {
+            source = doc.source
+        }
+        for word in doc.words {
+            words.push(word)
+        }
+        for line in doc.lines {
+            lines.push(line)
+        }
+    }
+    documentFromLinesAndWords(lines, words, source, options)
+}
+fn linesFromWords(words: List<Word>) -> List<Line> {
+    let mut out: List<Line> = []
+    let mut current: List<Word> = []
+    for word in words {
+        if current.isEmpty() || sameWordLine(current[0], word) {
+            current.push(word)
+        } else {
+            out.push(lineFromWords(current))
+            current = [word]
+        }
+    }
+    if !current.isEmpty() {
+        out.push(lineFromWords(current))
+    }
+    out
+}
+fn lineFromWords(words: List<Word>) -> Line {
+    let first = words[0]
+    Line {text: joinWordTexts(words), confidence: averageWordConfidence(words), bounds: boundsForWords(words), words: words, page: first.page, block: first.block, paragraph: first.paragraph, line: first.line}
+}
+fn blocksFromLines(lines: List<Line>) -> List<Block> {
+    let mut out: List<Block> = []
+    let mut current: List<Line> = []
+    for line in lines {
+        if current.isEmpty() || sameLineBlock(current[0], line) {
+            current.push(line)
+        } else {
+            out.push(blockFromLines(current))
+            current = [line]
+        }
+    }
+    if !current.isEmpty() {
+        out.push(blockFromLines(current))
+    }
+    out
+}
+fn blockFromLines(lines: List<Line>) -> Block {
+    let first = lines[0]
+    Block {text: linesText(lines), confidence: averageLineConfidence(lines), bounds: boundsForLines(lines), lines: lines, page: first.page, block: first.block}
+}
+fn parseKeyValue(line: Line) -> KeyValue? {
+    let at = firstKeyValueSeparator(line.text)
+    if at < 0 {
+        return None
+    }
+    let key = strings.trimSpace(strings.slice(line.text, 0, at))
+    let value = strings.trimSpace(strings.slice(line.text, at + 1, line.text.len()))
+    if key.isEmpty() || value.isEmpty() {
+        return None
+    }
+    Some(KeyValue {key: key, value: value, line: line.line, confidence: line.confidence})
+}
+fn firstKeyValueSeparator(text: String) -> Int {
+    let colon = optionInt(strings.indexOf(text, ":"))
+    let eq = optionInt(strings.indexOf(text, "="))
+    if colon < 0 {
+        return eq
+    }
+    if eq < 0 {
+        return colon
+    }
+    if colon < eq {
+        colon
+    } else {
+        eq
+    }
+}
+fn paddlePayloadObject(value: json.Json) -> Result<json.JsonObject, Error> {
+    let obj = json.asObject(value)?
+    if obj.containsKey("rec_texts") {
+        return Ok(obj)
+    }
+    match obj.get("res") {
+        Some(res) -> match json.asObject(res) {
+            Ok(inner) -> {
+                if inner.containsKey("rec_texts") {
+                    return Ok(inner)
+                }
+            },
+            Err(_) -> {
+            },
+        },
+        None -> {
+        },
+    }
+    Ok(obj)
+}
+fn requiredField(obj: json.JsonObject, key: String) -> Result<json.Json, Error> {
+    match obj.get(key) {
+        Some(value) -> Ok(value),
+        None -> Err(error.new("ocr: missing PaddleOCR field {key}")),
+    }
+}
+fn optionalArray(obj: json.JsonObject, key: String) -> json.JsonArray {
+    match obj.get(key) {
+        Some(value) -> match json.asArray(value) {
+            Ok(arr) -> arr,
+            Err(_) -> [],
+        },
+        None -> [],
+    }
+}
+fn jsonArrayNumber(items: json.JsonArray, index: Int, fallback: Float) -> Float {
+    match items.get(index) {
+        Some(value) -> match json.asNumber(value) {
+            Ok(n) -> n,
+            Err(_) -> fallback,
+        },
+        None -> fallback,
+    }
+}
+fn jsonArrayBounds(items: json.JsonArray, index: Int) -> Bounds {
+    match items.get(index) {
+        Some(value) -> boundsFromJson(value),
+        None -> Bounds {},
+    }
+}
+fn boundsFromJson(value: json.Json) -> Bounds {
+    let arr = match json.asArray(value) {
+        Ok(items) -> items,
+        Err(_) -> [],
+    }
+    if arr.len() == 4 && jsonInt(arr[0]).isSome() {
+        let x1 = jsonInt(arr[0]).unwrapOr(0)
+        let y1 = jsonInt(arr[1]).unwrapOr(0)
+        let x2 = jsonInt(arr[2]).unwrapOr(x1)
+        let y2 = jsonInt(arr[3]).unwrapOr(y1)
+        return Bounds {x: x1, y: y1, width: maxInt(0, x2 - x1), height: maxInt(0, y2 - y1)}
+    }
+    boundsFromPolygon(arr)
+}
+fn boundsFromPolygon(points: json.JsonArray) -> Bounds {
+    let mut seen = false
+    let mut minX = 0
+    let mut minY = 0
+    let mut maxX = 0
+    let mut maxY = 0
+    for pointValue in points {
+        match json.asArray(pointValue) {
+            Ok(point) -> {
+                if point.len() >= 2 {
+                    let x = jsonInt(point[0]).unwrapOr(0)
+                    let y = jsonInt(point[1]).unwrapOr(0)
+                    if !seen {
+                        minX = x
+                        maxX = x
+                        minY = y
+                        maxY = y
+                        seen = true
+                    } else {
+                        minX = minInt(minX, x)
+                        minY = minInt(minY, y)
+                        maxX = maxInt(maxX, x)
+                        maxY = maxInt(maxY, y)
+                    }
+                }
+            },
+            Err(_) -> {
+            },
+        }
+    }
+    if !seen {
+        return Bounds {}
+    }
+    Bounds {x: minX, y: minY, width: maxInt(0, maxX - minX), height: maxInt(0, maxY - minY)}
+}
+fn jsonInt(value: json.Json) -> Int? {
+    match json.asNumber(value) {
+        Ok(n) -> Some(n.toInt()),
+        Err(_) -> None,
+    }
+}
+fn sameWordLine(a: Word, b: Word) -> Bool {
+    a.page == b.page && a.block == b.block && a.paragraph == b.paragraph && a.line == b.line
+}
+fn sameLineBlock(a: Line, b: Line) -> Bool {
+    a.page == b.page && a.block == b.block
+}
+fn readingOrderKey(line: Line) -> Int {
+    line.page * 1000000000 + line.bounds.y * 100000 + line.bounds.x
+}
+fn sortLinesByReadingOrder(lines: List<Line>) -> List<Line> {
+    let mut out: List<Line> = []
+    for line in lines {
+        out.push(line)
+    }
+    let mut i = 0
+    for i < out.len() {
+        let mut best = i
+        let mut j = i + 1
+        for j < out.len() {
+            if readingOrderKey(out[j]) < readingOrderKey(out[best]) {
+                best = j
+            }
+            j = j + 1
+        }
+        if best != i {
+            let tmp = out[i]
+            out[i] = out[best]
+            out[best] = tmp
+        }
+        i = i + 1
+    }
+    out
+}
+fn linesText(lines: List<Line>) -> String {
+    let mut parts: List<String> = []
+    for line in lines {
+        if !strings.trimSpace(line.text).isEmpty() {
+            parts.push(strings.trimSpace(line.text))
+        }
+    }
+    strings.join(parts, "\n")
+}
+fn joinWordTexts(words: List<Word>) -> String {
+    let mut parts: List<String> = []
+    for word in words {
+        if !strings.trimSpace(word.text).isEmpty() {
+            parts.push(strings.trimSpace(word.text))
+        }
+    }
+    strings.join(parts, " ")
+}
+fn averageWordConfidence(words: List<Word>) -> Float {
+    let mut total = 0.0
+    let mut count = 0
+    for word in words {
+        if word.confidence >= 0.0 {
+            total = total + word.confidence
+            count = count + 1
+        }
+    }
+    if count == 0 {
+        0.0
+    } else {
+        total / count.toFloat()
+    }
+}
+fn averageLineConfidence(lines: List<Line>) -> Float {
+    let mut total = 0.0
+    let mut count = 0
+    for line in lines {
+        if line.confidence >= 0.0 {
+            total = total + line.confidence
+            count = count + 1
+        }
+    }
+    if count == 0 {
+        0.0
+    } else {
+        total / count.toFloat()
+    }
+}
+fn boundsForWords(words: List<Word>) -> Bounds {
+    if words.isEmpty() {
+        return Bounds {}
+    }
+    let mut out = words[0].bounds
+    for word in words.drop(1) {
+        out = mergeBounds(out, word.bounds)
+    }
+    out
+}
+fn boundsForLines(lines: List<Line>) -> Bounds {
+    if lines.isEmpty() {
+        return Bounds {}
+    }
+    let mut out = lines[0].bounds
+    for line in lines.drop(1) {
+        out = mergeBounds(out, line.bounds)
+    }
+    out
+}
+fn mergeBounds(a: Bounds, b: Bounds) -> Bounds {
+    if a.isEmpty() {
+        return b
+    }
+    if b.isEmpty() {
+        return a
+    }
+    let x1 = minInt(a.x, b.x)
+    let y1 = minInt(a.y, b.y)
+    let x2 = maxInt(a.right(), b.right())
+    let y2 = maxInt(a.bottom(), b.bottom())
+    Bounds {x: x1, y: y1, width: x2 - x1, height: y2 - y1}
+}
+fn parseIntOr(text: String, fallback: Int) -> Int {
+    match strings.toInt(strings.trimSpace(text)) {
+        Ok(n) -> n,
+        Err(_) -> fallback,
+    }
+}
+fn parseFloatOr(text: String, fallback: Float) -> Float {
+    match strings.toFloat(strings.trimSpace(text)) {
+        Ok(n) -> n,
+        Err(_) -> fallback,
+    }
+}
+fn optionInt(value: Int?) -> Int {
+    match value {
+        Some(n) -> n,
+        None -> -1,
+    }
+}
+fn appendExtraArgs(args: List<String>, extra: List<String>) {
+    for arg in extra {
+        args.push(arg)
+    }
+}
+fn paddleBool(value: Bool) -> String {
+    if value {
+        "True"
+    } else {
+        "False"
+    }
+}
+fn fileStem(path: String) -> String {
+    let base = os.path.basename(path)
+    match strings.lastIndexOf(base, ".") {
+        Some(i) -> if i > 0 {
+            strings.slice(base, 0, i)
+        } else {
+            base
+        },
+        None -> base,
+    }
+}
+fn stableDocumentId(doc: Document) -> String {
+    if !doc.source.isEmpty() {
+        return doc.source
+    }
+    let head = strings.replaceAll(strings.slice(doc.text, 0, minInt(doc.text.charCount(), 48)), "\n", " ")
+    "ocr:{head}:{doc.text.charCount()}"
+}
+fn normalizeKey(key: String) -> String {
+    let mut out = ""
+    for c in strings.toLower(key).chars() {
+        if isAsciiAlphanumeric(c) {
+            out = "{out}{strings.fromChar(c)}"
+        }
+    }
+    out
+}
+fn escapeMarkdownCell(text: String) -> String {
+    let noBreaks = strings.replaceAll(strings.replaceAll(text, "\r", " "), "\n", " ")
+    strings.replaceAll(noBreaks, "|", "\\|")
+}
+fn shellQuote(text: String) -> String {
+    if text.isEmpty() {
+        return "''"
+    }
+    let mut safe = true
+    for c in text.chars() {
+        if !(isAsciiAlphanumeric(c) || c == '-' || c == '_' || c == '.' || c == '/' || c == ':' || c == '=') {
+            safe = false
+        }
+    }
+    if safe {
+        return text
+    }
+    let escaped = strings.replaceAll(text, "'", "'\\''")
+    "'{escaped}'"
+}
+fn stripTags(text: String) -> String {
+    let mut out = ""
+    let mut inTag = false
+    for c in text.chars() {
+        if c == '<' {
+            inTag = true
+        } else if c == '>' {
+            inTag = false
+            out = "{out} "
+        } else if !inTag {
+            out = "{out}{strings.fromChar(c)}"
+        }
+    }
+    collapseWhitespace(out)
+}
+fn collapseWhitespace(text: String) -> String {
+    strings.join(strings.fields(text), " ")
+}
+fn isAsciiAlphanumeric(c: Char) -> Bool {
+    (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+}
+fn minInt(a: Int, b: Int) -> Int {
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
+fn maxInt(a: Int, b: Int) -> Int {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
