@@ -322,7 +322,7 @@ fn elabInferIdent(cx: ElabCx, node: AstNode) -> ElabResult {
     // E0604 here before the ordinary unknown-name fallback kicks in,
     // matching toolchain/resolve.osty::srResolveOneAstIdent's contract.
     if node.text == "_" {
-        cx.env.diagnostics.push(diagWildcardInExpr(node.start, node.end))
+        cx.env.local.diagnostics.push(diagWildcardInExpr(node.start, node.end))
         return elabPoisonResult(cx, node.start, node.end)
     }
     let ty = checkLookup(cx.env, node.text)
@@ -338,7 +338,7 @@ fn elabInferIdent(cx: ElabCx, node: AstNode) -> ElabResult {
         // call path in `elabInferCall` resolves via `checkLookupFn`
         // directly and bypasses this site, so calls are unaffected.
         if checkStringListLenHelper(fnSig.generics) > 0 {
-            cx.env.diagnostics.push(diagGenericCallableReference(node.text, node.start, node.end))
+            cx.env.local.diagnostics.push(diagGenericCallableReference(node.text, node.start, node.end))
             return elabPoisonResult(cx, node.start, node.end)
         }
         let fnTy = fnSigToTy(cx.env, fnSig)
@@ -366,7 +366,7 @@ fn elabInferIdent(cx: ElabCx, node: AstNode) -> ElabResult {
         diagUnknownName(node.text, node.start, node.end),
         diagDidYouMean(suggestion),
     )
-    cx.env.diagnostics.push(diag)
+    cx.env.local.diagnostics.push(diag)
     elabPoisonResult(cx, node.start, node.end)
 }
 
@@ -420,7 +420,7 @@ fn unOpNot(env: CheckEnv, inner: Int, start: Int, end: Int) -> Int {
     if tyEq(tys, inner, tBool(tys)) {
         return tBool(tys)
     }
-    env.diagnostics.push(diagOperandType("!", tyToString(tys, inner), start, end))
+    env.local.diagnostics.push(diagOperandType("!", tyToString(tys, inner), start, end))
     tErr(tys)
 }
 
@@ -429,7 +429,7 @@ fn unOpNumeric(env: CheckEnv, symbol: String, inner: Int, start: Int, end: Int) 
     if tyIsNumeric(tys, inner) {
         return inner
     }
-    env.diagnostics.push(diagOperandType(symbol, tyToString(tys, inner), start, end))
+    env.local.diagnostics.push(diagOperandType(symbol, tyToString(tys, inner), start, end))
     tErr(tys)
 }
 
@@ -438,7 +438,7 @@ fn unOpBitNot(env: CheckEnv, inner: Int, start: Int, end: Int) -> Int {
     if tyIsInteger(tys, inner) {
         return inner
     }
-    env.diagnostics.push(diagOperandType("~", tyToString(tys, inner), start, end))
+    env.local.diagnostics.push(diagOperandType("~", tyToString(tys, inner), start, end))
     tErr(tys)
 }
 
@@ -539,7 +539,7 @@ fn binBoolCompatible(env: CheckEnv, left: Int, right: Int, start: Int, end: Int)
     if checkIsAssignable(env, left, right) || checkIsAssignable(env, right, left) {
         return tBool(env.tys)
     }
-    env.diagnostics.push(diagMismatch(tyToString(env.tys, left), tyToString(env.tys, right), start, end))
+    env.local.diagnostics.push(diagMismatch(tyToString(env.tys, left), tyToString(env.tys, right), start, end))
     tErr(env.tys)
 }
 
@@ -548,7 +548,7 @@ fn binOrderedCompatible(env: CheckEnv, left: Int, right: Int, start: Int, end: I
         (checkIsAssignable(env, left, right) || checkIsAssignable(env, right, left)) {
         return tBool(env.tys)
     }
-    env.diagnostics.push(diagOperandType("<", tyToString(env.tys, left), start, end))
+    env.local.diagnostics.push(diagOperandType("<", tyToString(env.tys, left), start, end))
     tErr(env.tys)
 }
 
@@ -557,14 +557,14 @@ fn binBoolOnly(env: CheckEnv, left: Int, right: Int, start: Int, end: Int) -> In
     if tyEq(tys, left, tBool(tys)) && tyEq(tys, right, tBool(tys)) {
         return tBool(tys)
     }
-    env.diagnostics.push(diagOperandType("&&", tyToString(tys, left), start, end))
+    env.local.diagnostics.push(diagOperandType("&&", tyToString(tys, left), start, end))
     tErr(tys)
 }
 
 fn binIntCommon(env: CheckEnv, left: Int, right: Int, start: Int, end: Int) -> Int {
     let tys = env.tys
     if !(tyIsInteger(tys, left)) || !(tyIsInteger(tys, right)) {
-        env.diagnostics.push(diagOperandType("&|^<<>>", tyToString(tys, left), start, end))
+        env.local.diagnostics.push(diagOperandType("&|^<<>>", tyToString(tys, left), start, end))
         return tErr(tys)
     }
     if tyEq(tys, left, tUntypedInt(tys)) {
@@ -576,7 +576,7 @@ fn binIntCommon(env: CheckEnv, left: Int, right: Int, start: Int, end: Int) -> I
 fn binNumericCommon(env: CheckEnv, left: Int, right: Int, start: Int, end: Int) -> Int {
     let tys = env.tys
     if !(tyIsNumeric(tys, left)) || !(tyIsNumeric(tys, right)) {
-        env.diagnostics.push(diagOperandType("+-*/%", tyToString(tys, left), start, end))
+        env.local.diagnostics.push(diagOperandType("+-*/%", tyToString(tys, left), start, end))
         return tErr(tys)
     }
     // Float dominates.
@@ -639,7 +639,7 @@ fn elabCoalesce(cx: ElabCx, node: AstNode) -> ElabResult {
         let coreIdx = coreCoalesce(cx.core, left.node, right.node, inner, node.start, node.end)
         return ElabResult { node: coreIdx, ty: inner }
     }
-    cx.env.diagnostics.push(diagOperandType("??", tyToString(tys, leftTy), node.start, node.end))
+    cx.env.local.diagnostics.push(diagOperandType("??", tyToString(tys, leftTy), node.start, node.end))
     elabErrResult(cx, node.start, node.end)
 }
 
@@ -784,7 +784,7 @@ fn elabLetStmt(cx: ElabCx, node: AstNode) -> Int {
     let effectiveTy = if declared >= 0 { declared } else { value.ty }
 
     if !(patIsIrrefutable(cx, patIdx, effectiveTy)) {
-        cx.env.diagnostics.push(diagRefutablePattern("let binding", node.start, node.end))
+        cx.env.local.diagnostics.push(diagRefutablePattern("let binding", node.start, node.end))
     }
 
     let patNode = elabBindPattern(cx, patIdx, effectiveTy, mutable)
@@ -807,27 +807,27 @@ fn elabAssignStmt(cx: ElabCx, node: AstNode) -> Int {
 
 fn elabAssignableTarget(cx: ElabCx, idx: Int) -> ElabResult {
     if idx < 0 {
-        cx.env.diagnostics.push(diagInvalidAssignTarget(0, 0))
+        cx.env.local.diagnostics.push(diagInvalidAssignTarget(0, 0))
         return elabErrResult(cx, 0, 0)
     }
     let node = astArenaNodeAt(cx.ast.arena, idx)
     if node.kind != AstNIdent && node.kind != AstNField && node.kind != AstNIndex {
         let target = elabInfer(cx, idx)
-        cx.env.diagnostics.push(diagInvalidAssignTarget(node.start, node.end))
+        cx.env.local.diagnostics.push(diagInvalidAssignTarget(node.start, node.end))
         return target
     }
     let target = elabInfer(cx, idx)
     if node.kind == AstNIdent {
         let name = node.text
         if checkLookup(cx.env, name) >= 0 && !(checkLookupMutable(cx.env, name)) {
-            cx.env.diagnostics.push(diagImmutableAssign(name, node.start, node.end))
+            cx.env.local.diagnostics.push(diagImmutableAssign(name, node.start, node.end))
         }
     }
     target
 }
 
 fn elabReturnStmt(cx: ElabCx, node: AstNode) -> Int {
-    let expected = cx.env.returnTy
+    let expected = cx.env.local.returnTy
     let valueIdx = node.left
     let value = if valueIdx >= 0 && !(tyIsBad(cx.env.tys, expected)) {
         elabCheck(cx, valueIdx, expected)
@@ -868,10 +868,10 @@ fn elabChanSendStmt(cx: ElabCx, node: AstNode) -> Int {
 /// site via the normal assignment check against the first type.
 fn elabInferLoop(cx: ElabCx, idx: Int, node: AstNode) -> ElabResult {
     let tys = cx.env.tys
-    let prevInLoop = cx.env.inLoop
-    cx.env.inLoop = true
+    let prevInLoop = cx.env.local.inLoop
+    cx.env.local.inLoop = true
     let firstBreakTy = elabFindFirstBreakValueTy(cx, node.right, -1)
-    cx.env.inLoop = prevInLoop
+    cx.env.local.inLoop = prevInLoop
     let resultTy = if firstBreakTy < 0 { tNever(tys) } else { firstBreakTy }
     let body = elabLoopBody(cx, node.right)
     let coreIdx = coreForStmt(cx.core, -1, -1, body, 0, node.start, node.end)
@@ -941,7 +941,7 @@ fn elabForStmt(cx: ElabCx, node: AstNode) -> Int {
         let iter = elabInfer(cx, iterIdx)
         let elemTy = elabForIterableElemTy(cx, iter.ty, node.start, node.end)
         if !(patIsIrrefutable(cx, patIdx, elemTy)) {
-            cx.env.diagnostics.push(diagRefutablePattern("for-in binding", node.start, node.end))
+            cx.env.local.diagnostics.push(diagRefutablePattern("for-in binding", node.start, node.end))
         }
         let mark = checkScopeMark(cx.env)
         let patNode = elabBindPattern(cx, patIdx, elemTy, false)
@@ -958,8 +958,8 @@ fn elabLoopBody(cx: ElabCx, bodyIdx: Int) -> Int {
     if bodyIdx < 0 {
         return coreStmtBlock(cx.core, [], 0, 0)
     }
-    let prevInLoop = cx.env.inLoop
-    cx.env.inLoop = true
+    let prevInLoop = cx.env.local.inLoop
+    cx.env.local.inLoop = true
     let node = astArenaNodeAt(cx.ast.arena, bodyIdx)
     let body = if node.kind == AstNBlock {
         elabInferBlock(cx, bodyIdx, node).node
@@ -967,7 +967,7 @@ fn elabLoopBody(cx: ElabCx, bodyIdx: Int) -> Int {
         let stmt = elabStmt(cx, bodyIdx)
         coreStmtBlock(cx.core, [stmt], node.start, node.end)
     }
-    cx.env.inLoop = prevInLoop
+    cx.env.local.inLoop = prevInLoop
     body
 }
 
@@ -984,7 +984,7 @@ fn elabChannelElemTy(cx: ElabCx, ty: Int, start: Int, end: Int) -> Int {
         return resolved
     }
     if !(tyIsBad(tys, resolved)) {
-        cx.env.diagnostics.push(diagOperandType("<-", tyToString(tys, resolved), start, end))
+        cx.env.local.diagnostics.push(diagOperandType("<-", tyToString(tys, resolved), start, end))
     }
     tErr(tys)
 }
@@ -1017,7 +1017,7 @@ fn elabForIterableElemTy(cx: ElabCx, ty: Int, start: Int, end: Int) -> Int {
             return checkIntListAt(args, 0)
         }
     }
-    cx.env.diagnostics.push(diagOperandType("in", tyToString(tys, resolved), start, end))
+    cx.env.local.diagnostics.push(diagOperandType("in", tyToString(tys, resolved), start, end))
     tErr(tys)
 }
 
@@ -1444,7 +1444,7 @@ fn elabInferCall(cx: ElabCx, callIdx: Int, node: AstNode, expected: Int) -> Elab
 
     // Respect explicit turbofish args if supplied.
     if checkIntListLenHelper(explicitArgs) > 0 && checkIntListLenHelper(explicitArgs) != checkStringListLenHelper(sig.generics) {
-        cx.env.diagnostics.push(diagGenericArgCount(sig.name, checkStringListLenHelper(sig.generics), checkIntListLenHelper(explicitArgs), callee.start, callee.end))
+        cx.env.local.diagnostics.push(diagGenericArgCount(sig.name, checkStringListLenHelper(sig.generics), checkIntListLenHelper(explicitArgs), callee.start, callee.end))
     }
     instSeedPositionalArgs(cx, inst, explicitArgs)
 
@@ -1499,7 +1499,7 @@ fn elabCheckCallReturnEscape(
     } else {
         "call to `{ownerName}.{methodName}`"
     }
-    cx.env.diagnostics.push(diagNonEscapingEscape(
+    cx.env.local.diagnostics.push(diagNonEscapingEscape(
         tyToString(cx.env.tys, retTy),
         context,
         start,
@@ -1582,7 +1582,7 @@ fn elabInferStaticMethodCall(
     if sig.receiverTy != -1 {
         let totalArgs = checkIntListLenHelper(argIdxs)
         if totalArgs == 0 {
-            cx.env.diagnostics.push(diagArgCount(
+            cx.env.local.diagnostics.push(diagArgCount(
                 "{ownerName}.{sig.name}",
                 1 + checkIntListLenHelper(sig.paramTys),
                 totalArgs,
@@ -1808,14 +1808,14 @@ fn elabBuilderDeriveInfoForOwner(env: CheckEnv, owner: String) -> CheckBuilderDe
     let mut fieldExported: List<Bool> = []
     let mut fieldHasDefaults: List<Bool> = []
     let mut methodNames: List<String> = []
-    for field in env.fields {
+    for field in env.global.fields {
         if field.owner == owner {
             fieldNames.push(field.name)
             fieldExported.push(field.exported)
             fieldHasDefaults.push(field.hasDefault)
         }
     }
-    for fnSig in env.fns {
+    for fnSig in env.global.fns {
         if fnSig.owner == owner && !fnSig.hasReceiver {
             methodNames.push(fnSig.name)
         }
@@ -1824,7 +1824,7 @@ fn elabBuilderDeriveInfoForOwner(env: CheckEnv, owner: String) -> CheckBuilderDe
 }
 
 fn elabBuilderHasExportedField(env: CheckEnv, owner: String, fieldName: String) -> Bool {
-    for field in env.fields {
+    for field in env.global.fields {
         if field.owner == owner && field.name == fieldName && field.exported {
             return true
         }
@@ -1876,7 +1876,7 @@ fn elabLowerBuilderChain(
 
     let mut missing: List<String> = []
     let mut coreFieldsList: List<Int> = []
-    for field in cx.env.fields {
+    for field in cx.env.global.fields {
         if field.owner != owner || !(field.exported) {
             continue
         }
@@ -1896,7 +1896,7 @@ fn elabLowerBuilderChain(
     }
 
     if spreadNode < 0 && missing.len() > 0 {
-        cx.env.diagnostics.push(diagBuilderMissingRequiredField(owner, missing, callNode.start, callNode.end))
+        cx.env.local.diagnostics.push(diagBuilderMissingRequiredField(owner, missing, callNode.start, callNode.end))
     }
 
     instCheckBounds(cx, inst, typeSig.genericBounds, callNode.start, callNode.end)
@@ -2016,7 +2016,7 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
         if tyKindAt(cx.env.tys, recvResolved) == TkOptional {
             lookupRecvTy = tyInnerAt(cx.env.tys, recvResolved)
         } else {
-            cx.env.diagnostics.push(diagOptionalChainOnNon(
+            cx.env.local.diagnostics.push(diagOptionalChainOnNon(
                 tyToString(cx.env.tys, recvResolved),
                 fieldNode.start,
                 fieldNode.end,
@@ -2030,7 +2030,7 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
     // ordinary method-lookup path would emit a generic E0703.
     if callNode.flags == 1 {
         if !(tyIsNamedHead(cx.env.tys, recvResolved, "Error")) {
-            cx.env.diagnostics.push(diagAsQuestionBadOperand(
+            cx.env.local.diagnostics.push(diagAsQuestionBadOperand(
                 tyToString(cx.env.tys, recvResolved),
                 callNode.start,
                 callNode.end,
@@ -2065,7 +2065,7 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
                     }
                 }
                 if rejected {
-                    cx.env.diagnostics.push(diagAsQuestionBadType(
+                    cx.env.local.diagnostics.push(diagAsQuestionBadType(
                         tyToString(cx.env.tys, targetResolved),
                         callNode.start,
                         callNode.end,
@@ -2090,7 +2090,7 @@ fn elabInferMethodCall(cx: ElabCx, callNode: AstNode, fieldNode: AstNode, expect
         let hint = diagDidYouMean(
             checkSuggestSimilar(checkMethodNamesForReceiver(cx.env, lookupRecvTy, ownerName), methodName),
         )
-        cx.env.diagnostics.push(checkDiagAttachHint(
+        cx.env.local.diagnostics.push(checkDiagAttachHint(
             diagUnknownMethod(ownerName, methodName, fieldNode.start, fieldNode.end),
             hint,
         ))
@@ -2227,7 +2227,7 @@ fn elabInferFnValueCall(cx: ElabCx, node: AstNode, argIdxs: List<Int>, expected:
         return elabPoisonResult(cx, node.start, node.end)
     }
     if tyKindAt(cx.env.tys, fnTy) != TkFn {
-        cx.env.diagnostics.push(diagNotCallable(tyToString(cx.env.tys, fnTy), node.start, node.end))
+        cx.env.local.diagnostics.push(diagNotCallable(tyToString(cx.env.tys, fnTy), node.start, node.end))
         return elabPoisonResult(cx, node.start, node.end)
     }
     let paramTys = tyArgsAt(cx.env.tys, fnTy)
@@ -2235,7 +2235,7 @@ fn elabInferFnValueCall(cx: ElabCx, node: AstNode, argIdxs: List<Int>, expected:
     let wantCount = checkIntListLenHelper(paramTys)
     let gotCount = checkIntListLenHelper(argIdxs)
     if wantCount != gotCount {
-        cx.env.diagnostics.push(diagArgCount("", wantCount, gotCount, node.start, node.end))
+        cx.env.local.diagnostics.push(diagArgCount("", wantCount, gotCount, node.start, node.end))
     }
     let mut coreArgs: List<Int> = []
     let mut i = 0
@@ -2275,7 +2275,7 @@ fn elabCallArgs(
     let defaultCount = paramDefaultCount(sig.paramNames)
     let minArity = wantCount - defaultCount
     if gotCount > wantCount || gotCount < minArity {
-        cx.env.diagnostics.push(diagArgCount(sig.name, wantCount, gotCount, start, end))
+        cx.env.local.diagnostics.push(diagArgCount(sig.name, wantCount, gotCount, start, end))
     }
     let mut coreArgs: List<Int> = []
     let mut i = 0
@@ -2368,7 +2368,7 @@ fn elabCallArgsMonomorphicWithNames(
     let defaultCount = paramDefaultCount(paramNames)
     let minArity = wantCount - defaultCount
     if gotCount > wantCount || gotCount < minArity {
-        cx.env.diagnostics.push(diagArgCount(callee, wantCount, gotCount, start, end))
+        cx.env.local.diagnostics.push(diagArgCount(callee, wantCount, gotCount, start, end))
     }
     let skipParamCheck = elabIsToStringFormatter(callee)
     let mut coreArgs: List<Int> = []
@@ -2481,7 +2481,7 @@ fn elabReportUnresolvedGenerics(
             let name = checkIntListAt(stringIndicesForGenerics(sig.generics), i)
             let _ = name
             let gname = stringAt(sig.generics, i)
-            cx.env.diagnostics.push(diagCannotInferTyParam(gname, sig.name, start, end))
+            cx.env.local.diagnostics.push(diagCannotInferTyParam(gname, sig.name, start, end))
         }
         i = i + 1
     }
@@ -2507,7 +2507,7 @@ fn elabCheckGenericBounds(
         }
         let ifaceTy = zonk(cx.env, solver, checkSubstituteTy(cx.env, bound.iface, generics, freshs))
         if !(checkGenericBoundSatisfied(cx.env, solver, concrete, ifaceTy)) {
-            cx.env.diagnostics.push(diagBoundViolation(
+            cx.env.local.diagnostics.push(diagBoundViolation(
                 bound.tyParam,
                 tyToString(cx.env.tys, ifaceTy),
                 tyToString(cx.env.tys, concrete),
@@ -2604,7 +2604,7 @@ fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
         if tyKindAt(cx.env.tys, recvTy) == TkOptional {
             lookupTy = tyInnerAt(cx.env.tys, recvTy)
         } else {
-            cx.env.diagnostics.push(diagOptionalChainOnNon(
+            cx.env.local.diagnostics.push(diagOptionalChainOnNon(
                 tyToString(cx.env.tys, recvTy),
                 node.start,
                 node.end,
@@ -2619,7 +2619,7 @@ fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
             let elems = tyArgsAt(cx.env.tys, lookupTy)
             let idx = parseTupleIndex(fieldName)
             if idx < 0 || idx >= checkIntListLenHelper(elems) {
-                cx.env.diagnostics.push(diagUnknownField(
+                cx.env.local.diagnostics.push(diagUnknownField(
                     tyToString(cx.env.tys, lookupTy),
                     fieldName,
                     node.start,
@@ -2639,7 +2639,7 @@ fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
                 let hint = diagDidYouMean(
                     checkSuggestSimilar(checkFieldNamesOf(cx.env, owner), fieldName),
                 )
-                cx.env.diagnostics.push(checkDiagAttachHint(
+                cx.env.local.diagnostics.push(checkDiagAttachHint(
                     diagUnknownField(owner, fieldName, node.start, node.end),
                     hint,
                 ))
@@ -2658,7 +2658,7 @@ fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
             ElabResult { node: coreIdx, ty: resultTy }
         },
         _ -> {
-            cx.env.diagnostics.push(diagUnknownField(
+            cx.env.local.diagnostics.push(diagUnknownField(
                 tyToString(cx.env.tys, lookupTy),
                 fieldName,
                 node.start,
@@ -2745,7 +2745,7 @@ fn elabInferIndex(cx: ElabCx, node: AstNode) -> ElabResult {
                 return ElabResult { node: coreIdx, ty: recvTy }
             }
             if !(checkIsAssignable(cx.env, tInt(tys), idx.ty)) {
-                cx.env.diagnostics.push(diagMismatch("Int", tyToString(tys, idx.ty), node.start, node.end))
+                cx.env.local.diagnostics.push(diagMismatch("Int", tyToString(tys, idx.ty), node.start, node.end))
             }
             let coreIdx = coreIndex(cx.core, recv.node, idx.node, elem, node.start, node.end)
             return ElabResult { node: coreIdx, ty: elem }
@@ -2770,12 +2770,12 @@ fn elabInferIndex(cx: ElabCx, node: AstNode) -> ElabResult {
             return ElabResult { node: coreIdx, ty: tString(tys) }
         }
         if !(checkIsAssignable(cx.env, tInt(tys), idx.ty)) {
-            cx.env.diagnostics.push(diagMismatch("Int", tyToString(tys, idx.ty), node.start, node.end))
+            cx.env.local.diagnostics.push(diagMismatch("Int", tyToString(tys, idx.ty), node.start, node.end))
         }
         let coreIdx = coreIndex(cx.core, recv.node, idx.node, tChar(tys), node.start, node.end)
         return ElabResult { node: coreIdx, ty: tChar(tys) }
     }
-    cx.env.diagnostics.push(diagUnknownField(tyToString(tys, recvTy), "[]", node.start, node.end))
+    cx.env.local.diagnostics.push(diagUnknownField(tyToString(tys, recvTy), "[]", node.start, node.end))
     elabPoisonResult(cx, node.start, node.end)
 }
 
@@ -2890,7 +2890,7 @@ fn elabInferTuple(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         i = i + 1
     }
     if expectedIsTuple && checkIntListLenHelper(expectedElems) != arity {
-        cx.env.diagnostics.push(diagArgCount("", checkIntListLenHelper(expectedElems), arity, node.start, node.end))
+        cx.env.local.diagnostics.push(diagArgCount("", checkIntListLenHelper(expectedElems), arity, node.start, node.end))
     }
     let tupleTy = tyTuple(tys, elemTys)
     let coreIdx = coreTuple(cx.core, coreElems, tupleTy, node.start, node.end)
@@ -2917,7 +2917,7 @@ fn elabInferStructLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     }
     let typeSig = checkLookupType(cx.env, owner)
     if typeSig.name == "" {
-        cx.env.diagnostics.push(diagUnknownName(owner, node.start, node.end))
+        cx.env.local.diagnostics.push(diagUnknownName(owner, node.start, node.end))
         return elabPoisonResult(cx, node.start, node.end)
     }
 
@@ -2942,7 +2942,7 @@ fn elabInferStructLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         coreSpread = spreadResult.node
         let _ = unify(cx.env, inst.solver, spreadHint, spreadResult.ty)
         if tyIsNamedHead(tys, spreadResult.ty, owner) {
-            for f in cx.env.fields {
+            for f in cx.env.global.fields {
                 if f.owner == owner {
                     spreadSupplied.push(f.name)
                 }
@@ -2960,14 +2960,14 @@ fn elabInferStructLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
             let suggestion = diagDidYouMean(
                 checkSuggestSimilar(checkFieldNamesOf(cx.env, owner), fieldName),
             )
-            cx.env.diagnostics.push(checkDiagAttachHint(
+            cx.env.local.diagnostics.push(checkDiagAttachHint(
                 diagUnknownField(owner, fieldName, fieldNode.start, fieldNode.end),
                 suggestion,
             ))
             continue
         }
         if listContainsString(seenNames, fieldName) {
-            cx.env.diagnostics.push(diagDuplicateField(owner, fieldName, fieldNode.start, fieldNode.end))
+            cx.env.local.diagnostics.push(diagDuplicateField(owner, fieldName, fieldNode.start, fieldNode.end))
         }
         seenNames.push(fieldName)
 
@@ -2980,12 +2980,12 @@ fn elabInferStructLit(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
 
     // Missing required fields — a spread supplies every field of the
     // owner, so we skip fields supplied either explicitly or via spread.
-    for f in cx.env.fields {
+    for f in cx.env.global.fields {
         if f.owner == owner
            && !(listContainsString(seenNames, f.name))
            && !(listContainsString(spreadSupplied, f.name))
            && !(f.hasDefault) {
-            cx.env.diagnostics.push(diagMissingField(owner, f.name, node.start, node.end))
+            cx.env.local.diagnostics.push(diagMissingField(owner, f.name, node.start, node.end))
         }
     }
 
@@ -3028,7 +3028,7 @@ fn elabInferClosure(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     let paramIdxs = node.children
     let arity = checkIntListLenHelper(paramIdxs)
     if expectedIsFn && checkIntListLenHelper(expectedParams) != arity {
-        cx.env.diagnostics.push(diagArgCount("closure", checkIntListLenHelper(expectedParams), arity, node.start, node.end))
+        cx.env.local.diagnostics.push(diagArgCount("closure", checkIntListLenHelper(expectedParams), arity, node.start, node.end))
     }
 
     let mark = checkScopeMark(cx.env)
@@ -3044,7 +3044,7 @@ fn elabInferClosure(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         } else if expectedIsFn && i < checkIntListLenHelper(expectedParams) {
             checkIntListAt(expectedParams, i)
         } else {
-            cx.env.diagnostics.push(diagClosureAnnotationRequired(paramNode.start, paramNode.end))
+            cx.env.local.diagnostics.push(diagClosureAnnotationRequired(paramNode.start, paramNode.end))
             tErr(tys)
         }
         let paramName = paramNode.text
@@ -3064,7 +3064,7 @@ fn elabInferClosure(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
         }
         if hasPattern {
             if !(tyIsBad(tys, paramTy)) && !(patIsIrrefutable(cx, paramNode.left, paramTy)) {
-                cx.env.diagnostics.push(diagRefutablePattern("closure parameter", paramNode.start, paramNode.end))
+                cx.env.local.diagnostics.push(diagRefutablePattern("closure parameter", paramNode.start, paramNode.end))
             }
             let patNode = elabBindPattern(cx, paramNode.left, paramTy, true)
             let tempRef = coreIdent(cx.core, storedParamName, IkParam, paramTy, paramNode.start, paramNode.end)
@@ -3129,10 +3129,10 @@ fn elabInferRange(cx: ElabCx, node: AstNode) -> ElabResult {
     let lo = if node.left >= 0 { elabInfer(cx, node.left) } else { ElabResult { node: -1, ty: tInt(tys) } }
     let hi = if node.right >= 0 { elabInfer(cx, node.right) } else { ElabResult { node: -1, ty: tInt(tys) } }
     if !(tyIsInteger(tys, lo.ty)) && !(tyIsBad(tys, lo.ty)) {
-        cx.env.diagnostics.push(diagMismatch("Int", tyToString(tys, lo.ty), node.start, node.end))
+        cx.env.local.diagnostics.push(diagMismatch("Int", tyToString(tys, lo.ty), node.start, node.end))
     }
     if !(tyIsInteger(tys, hi.ty)) && !(tyIsBad(tys, hi.ty)) {
-        cx.env.diagnostics.push(diagMismatch("Int", tyToString(tys, hi.ty), node.start, node.end))
+        cx.env.local.diagnostics.push(diagMismatch("Int", tyToString(tys, hi.ty), node.start, node.end))
     }
     // G25 §A.4: optional `by <expr>` stride. flags bit 1 marks presence;
     // the step expr sits in children[0]. Must be integer to match
@@ -3141,7 +3141,7 @@ fn elabInferRange(cx: ElabCx, node: AstNode) -> ElabResult {
     if hasStep && node.children.len() > 0 {
         let step = elabInfer(cx, node.children[0])
         if !(tyIsInteger(tys, step.ty)) && !(tyIsBad(tys, step.ty)) {
-            cx.env.diagnostics.push(diagMismatch("Int", tyToString(tys, step.ty), node.start, node.end))
+            cx.env.local.diagnostics.push(diagMismatch("Int", tyToString(tys, step.ty), node.start, node.end))
         }
     }
     // Range result type mirrors the shared operand prim (Int in the
@@ -3289,12 +3289,12 @@ fn elabInferMatch(cx: ElabCx, node: AstNode, expected: Int) -> ElabResult {
     if pmOut.handled {
         if !pmOut.exhaustive {
             let msg = pmWitnessesJoin(pmOut.witnesses)
-            cx.env.diagnostics.push(diagNonExhaustiveMatch(msg, node.start, node.end))
+            cx.env.local.diagnostics.push(diagNonExhaustiveMatch(msg, node.start, node.end))
         }
         for armPos in pmOut.unreachable {
             let armIdx = checkIntListAt(node.children, armPos)
             let arm = astArenaNodeAt(cx.ast.arena, armIdx)
-            cx.env.diagnostics.push(diagUnreachablePattern(arm.start, arm.end))
+            cx.env.local.diagnostics.push(diagUnreachablePattern(arm.start, arm.end))
         }
     } else {
         exhaustCheckMatch(cx, node, scrutTy)
@@ -3313,7 +3313,7 @@ fn elabInferQuestion(cx: ElabCx, node: AstNode) -> ElabResult {
     let tys = cx.env.tys
     let inner = elabInfer(cx, node.left)
     let innerTy = checkResolveAliasDeep(cx.env, inner.ty)
-    let retTy = checkResolveAliasDeep(cx.env, cx.env.returnTy)
+    let retTy = checkResolveAliasDeep(cx.env, cx.env.local.returnTy)
     if tyIsBad(tys, innerTy) || tyIsBad(tys, retTy) {
         return elabPoisonResult(cx, node.start, node.end)
     }
@@ -3325,7 +3325,7 @@ fn elabInferQuestion(cx: ElabCx, node: AstNode) -> ElabResult {
         }
         let payload = checkIntListAt(args, 0)
         if !(tyIsNamedHead(tys, retTy, "Option")) && !(tyIsBad(tys, retTy)) {
-            cx.env.diagnostics.push(diagQuestionNotOptional(tyToString(tys, retTy), node.start, node.end))
+            cx.env.local.diagnostics.push(diagQuestionNotOptional(tyToString(tys, retTy), node.start, node.end))
         }
         let coreIdx = coreQuestion(cx.core, inner.node, payload, node.start, node.end)
         return ElabResult { node: coreIdx, ty: payload }
@@ -3345,14 +3345,14 @@ fn elabInferQuestion(cx: ElabCx, node: AstNode) -> ElabResult {
                 let _ = checkExpectAssignable(cx.env, outerErr, errTy, node.start, node.end)
             }
         } else if !(tyIsBad(tys, retTy)) {
-            cx.env.diagnostics.push(diagQuestionNotOptional(tyToString(tys, retTy), node.start, node.end))
+            cx.env.local.diagnostics.push(diagQuestionNotOptional(tyToString(tys, retTy), node.start, node.end))
         }
         let coreIdx = coreQuestion(cx.core, inner.node, payload, node.start, node.end)
         return ElabResult { node: coreIdx, ty: payload }
     }
 
     if !(tyIsBad(tys, innerTy)) {
-        cx.env.diagnostics.push(diagQuestionNotOptional(tyToString(tys, innerTy), node.start, node.end))
+        cx.env.local.diagnostics.push(diagQuestionNotOptional(tyToString(tys, innerTy), node.start, node.end))
     }
     elabErrResult(cx, node.start, node.end)
 }
@@ -3397,7 +3397,7 @@ fn elabPatternMode(cx: ElabCx, idx: Int, scrutTy: Int, mutable: Bool, recordBind
         let litIdx = node.left
         let lit = elabInfer(cx, litIdx)
         if !(checkIsAssignable(cx.env, scrutTy, lit.ty)) && !(tyIsBad(tys, lit.ty)) {
-            cx.env.diagnostics.push(diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
+            cx.env.local.diagnostics.push(diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
         }
         return corePatLit(cx.core, lit.node, scrutTy, node.start, node.end)
     }
@@ -3488,7 +3488,7 @@ fn elabRangePattern(cx: ElabCx, node: AstNode, scrutTy: Int) -> Int {
     if !(tyIsBad(tys, scrutTy))
         && !(tyIsInteger(tys, scrutTy))
         && !(tyIsPrim(tys, scrutTy, PkChar)) {
-        cx.env.diagnostics.push(diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
+        cx.env.local.diagnostics.push(diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
     }
     let lo = if node.left >= 0 { elabInfer(cx, node.left).node } else { -1 }
     let hi = if node.right >= 0 { elabInfer(cx, node.right).node } else { -1 }
@@ -3522,7 +3522,7 @@ fn elabVariantPattern(cx: ElabCx, node: AstNode, scrutTy: Int, mutable: Bool, re
         let suggestion = diagDidYouMean(
             checkSuggestSimilar(checkVariantNamesOf(cx.env, scrutHead), variantName),
         )
-        cx.env.diagnostics.push(checkDiagAttachHint(
+        cx.env.local.diagnostics.push(checkDiagAttachHint(
             diagUnknownVariant(scrutHead, variantName, node.start, node.end),
             suggestion,
         ))
@@ -3556,12 +3556,12 @@ fn elabTuplePattern(cx: ElabCx, node: AstNode, scrutTy: Int, mutable: Bool, reco
     let tys = cx.env.tys
     let kind = tyKindAt(tys, scrutTy)
     if kind != TkTuple {
-        cx.env.diagnostics.push(diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
+        cx.env.local.diagnostics.push(diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
         return corePatErr(cx.core, node.start, node.end)
     }
     let elems = tyArgsAt(tys, scrutTy)
     if checkIntListLenHelper(elems) != checkIntListLenHelper(node.children) {
-        cx.env.diagnostics.push(diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
+        cx.env.local.diagnostics.push(diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
     }
     let mut subs: List<Int> = []
     let mut i = 0
@@ -3578,7 +3578,7 @@ fn elabStructPattern(cx: ElabCx, node: AstNode, scrutTy: Int, mutable: Bool, rec
     let owner = tyHeadAt(tys, scrutTy)
     let typeSig = checkLookupType(cx.env, owner)
     if typeSig.name == "" {
-        cx.env.diagnostics.push(diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
+        cx.env.local.diagnostics.push(diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
         return corePatErr(cx.core, node.start, node.end)
     }
     let ownerArgs = tyArgsAt(tys, scrutTy)
@@ -3591,7 +3591,7 @@ fn elabStructPattern(cx: ElabCx, node: AstNode, scrutTy: Int, mutable: Bool, rec
             let suggestion = diagDidYouMean(
                 checkSuggestSimilar(checkFieldNamesOf(cx.env, owner), fieldName),
             )
-            cx.env.diagnostics.push(checkDiagAttachHint(
+            cx.env.local.diagnostics.push(checkDiagAttachHint(
                 diagUnknownField(owner, fieldName, child.start, child.end),
                 suggestion,
             ))
@@ -3808,19 +3808,19 @@ fn exhaustCheckMatch(cx: ElabCx, matchNode: AstNode, scrutTy: Int) {
             return
         }
         if typeSig.kind == "struct" {
-            cx.env.diagnostics.push(diagNonExhaustiveMatch(witnessRenderStruct(cx, owner), matchNode.start, matchNode.end))
+            cx.env.local.diagnostics.push(diagNonExhaustiveMatch(witnessRenderStruct(cx, owner), matchNode.start, matchNode.end))
             return
         }
         // Interface / unknown named — fall through to scalar branch below.
     }
     if kind == TkTuple {
-        cx.env.diagnostics.push(diagNonExhaustiveMatch(witnessRenderTuple(cx, scrutTy), matchNode.start, matchNode.end))
+        cx.env.local.diagnostics.push(diagNonExhaustiveMatch(witnessRenderTuple(cx, scrutTy), matchNode.start, matchNode.end))
         return
     }
     if kind == TkPrim {
         // Non-Bool scalar requires catch-all; we are here only because
         // no unguarded irrefutable arm exists.
-        cx.env.diagnostics.push(diagNonExhaustiveMatch("_", matchNode.start, matchNode.end))
+        cx.env.local.diagnostics.push(diagNonExhaustiveMatch("_", matchNode.start, matchNode.end))
         return
     }
     // Fn / Self / Var / other: no check.
@@ -3846,9 +3846,9 @@ fn exhaustCheckBool(cx: ElabCx, matchNode: AstNode, scrutTy: Int) {
         }
     }
     if !seenTrue {
-        cx.env.diagnostics.push(diagNonExhaustiveMatch("true", matchNode.start, matchNode.end))
+        cx.env.local.diagnostics.push(diagNonExhaustiveMatch("true", matchNode.start, matchNode.end))
     } else if !seenFalse {
-        cx.env.diagnostics.push(diagNonExhaustiveMatch("false", matchNode.start, matchNode.end))
+        cx.env.local.diagnostics.push(diagNonExhaustiveMatch("false", matchNode.start, matchNode.end))
     }
 }
 
@@ -3885,7 +3885,7 @@ fn exhaustCheckEnum(cx: ElabCx, matchNode: AstNode, scrutTy: Int, owner: String)
     let _ = scrutTy
     for v in variants {
         if !(anyArmCoversVariant(cx, matchNode, scrutTy, v)) {
-            cx.env.diagnostics.push(diagNonExhaustiveMatch(witnessRenderVariant(v), matchNode.start, matchNode.end))
+            cx.env.local.diagnostics.push(diagNonExhaustiveMatch(witnessRenderVariant(v), matchNode.start, matchNode.end))
             return
         }
     }
@@ -4005,7 +4005,7 @@ fn reachCheckArms(cx: ElabCx, matchNode: AstNode, scrutTy: Int) {
                 false
             }
             if unreachable {
-                cx.env.diagnostics.push(diagUnreachablePattern(arm.start, arm.end))
+                cx.env.local.diagnostics.push(diagUnreachablePattern(arm.start, arm.end))
             }
         }
 
@@ -4317,7 +4317,7 @@ fn witnessRenderStruct(cx: ElabCx, owner: String) -> String {
     // struct witnesses as a parenthesised field-list. Full brace syntax
     // is a Phase 2 polish once the host escape story is exercised.
     let mut parts: List<String> = []
-    for f in cx.env.fields {
+    for f in cx.env.global.fields {
         if f.owner == owner {
             parts.push("{f.name}: _")
         }
@@ -4352,7 +4352,7 @@ fn repeatedPlaceholder(count: Int, sep: String) -> String {
 
 fn allVariantsForOwner(env: CheckEnv, owner: String) -> List<CheckVariantSig> {
     let mut out: List<CheckVariantSig> = []
-    for v in env.variants {
+    for v in env.global.variants {
         if v.owner == owner {
             out.push(v)
         }
@@ -4953,7 +4953,7 @@ fn pmStructCtorFor(env: CheckEnv, owner: String, ty: Int) -> PmCtor {
 
 fn pmStructFieldsForOwner(env: CheckEnv, owner: String) -> List<CheckFieldSig> {
     let mut out: List<CheckFieldSig> = []
-    for f in env.fields {
+    for f in env.global.fields {
         if f.owner == owner {
             out.push(f)
         }
