@@ -34048,12 +34048,7 @@ type CheckInstantiationRecord struct {
 }
 
 // Osty: /tmp/selfhost_merged.osty:14320:5
-type CheckEnv struct {
-	tys                     *TyArena
-	bindings                []*CheckBinding
-	bindingIndexNames       []string
-	bindingIndexHashes      []int
-	bindingIndexStacks      [][]*CheckBinding
+type CheckGlobalEnv struct {
 	fns                     []*CheckFnSig
 	fnIndexKeys             []string
 	fnIndexHashes           []int
@@ -34085,6 +34080,13 @@ type CheckEnv struct {
 	interfaceIndexHashes    []int
 	interfaceExtends        []*CheckInterfaceExt
 	importAliases           []string
+}
+
+type CheckLocalEnv struct {
+	bindings                []*CheckBinding
+	bindingIndexNames       []string
+	bindingIndexHashes      []int
+	bindingIndexStacks      [][]*CheckBinding
 	genericBounds           []*CheckGenericBound
 	genericBoundIndexNames  []string
 	genericBoundIndexHashes []int
@@ -34104,11 +34106,75 @@ type CheckEnv struct {
 	instantiations          []*CheckInstantiationRecord
 }
 
+type CheckEnv struct {
+	tys    *TyArena
+	global CheckGlobalEnv
+	local  CheckLocalEnv
+}
+
 const checkPreludeFnCap = 512
 
 // Osty: /tmp/selfhost_merged.osty:14398:5
 func emptyCheckEnv(tys *TyArena) *CheckEnv {
-	return &CheckEnv{tys: tys, bindings: make([]*CheckBinding, 0, 1), bindingIndexNames: make([]string, 0, 1), bindingIndexHashes: make([]int, 0, 1), bindingIndexStacks: make([][]*CheckBinding, 0, 1), fns: make([]*CheckFnSig, 0, checkPreludeFnCap), fnIndexKeys: make([]string, 0, checkPreludeFnCap), fnIndexHashes: make([]int, 0, checkPreludeFnCap), fnIndexValues: make([]int, 0, checkPreludeFnCap), fnIndexSlots: make(map[string]int, checkPreludeFnCap), fnBodyKeys: make([]string, 0, 1), fnBodyHashes: make([]int, 0, 1), fields: make([]*CheckFieldSig, 0, 1), fieldIndexKeys: make([]string, 0, 1), fieldIndexHashes: make([]int, 0, 1), fieldIndexValues: make([]int, 0, 1), variants: make([]*CheckVariantSig, 0, 1), variantIndexKeys: make([]string, 0, 1), variantIndexHashes: make([]int, 0, 1), variantIndexValues: make([]int, 0, 1), variantOwnerIndexKeys: make([]string, 0, 1), variantOwnerIndexHashes: make([]int, 0, 1), variantOwnerIndexValues: make([]int, 0, 1), aliases: make([]*CheckAliasSig, 0, 1), aliasIndexKeys: make([]string, 0, 1), aliasIndexHashes: make([]int, 0, 1), aliasIndexValues: make([]int, 0, 1), types: make([]*CheckTypeSig, 0, 1), typeIndexKeys: make([]string, 0, 1), typeIndexHashes: make([]int, 0, 1), typeIndexValues: make([]int, 0, 1), interfaces: make([]string, 0, 1), interfaceIndexKeys: make([]string, 0, 1), interfaceIndexHashes: make([]int, 0, 1), interfaceExtends: make([]*CheckInterfaceExt, 0, 1), importAliases: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1), genericBoundIndexNames: make([]string, 0, 1), genericBoundIndexHashes: make([]int, 0, 1), genericBoundIndexStacks: make([][]int, 0, 1), aliasDeepCache: make([]int, 0, 1), substCacheKeys: make([]string, 0, 1), substCacheHashes: make([]int, 0, 1), substCacheValues: make([]int, 0, 1), returnTy: tErr(tys), fnName: "", inLoop: false, diagnostics: make([]*CheckDiagnostic, 0, 1), assignments: 0, accepted: 0, bindingRecords: make([]*CheckBindingRecord, 0, 1), symbolRecords: make([]*CheckSymbolRecord, 0, 1), instantiations: make([]*CheckInstantiationRecord, 0, 1)}
+	return &CheckEnv{
+		tys: tys,
+		global: CheckGlobalEnv{
+			fns:                     make([]*CheckFnSig, 0, checkPreludeFnCap),
+			fnIndexKeys:             make([]string, 0, checkPreludeFnCap),
+			fnIndexHashes:           make([]int, 0, checkPreludeFnCap),
+			fnIndexValues:           make([]int, 0, checkPreludeFnCap),
+			fnIndexSlots:            make(map[string]int, checkPreludeFnCap),
+			fnBodyKeys:              make([]string, 0, 1),
+			fnBodyHashes:            make([]int, 0, 1),
+			fields:                  make([]*CheckFieldSig, 0, 1),
+			fieldIndexKeys:          make([]string, 0, 1),
+			fieldIndexHashes:        make([]int, 0, 1),
+			fieldIndexValues:        make([]int, 0, 1),
+			variants:                make([]*CheckVariantSig, 0, 1),
+			variantIndexKeys:        make([]string, 0, 1),
+			variantIndexHashes:      make([]int, 0, 1),
+			variantIndexValues:      make([]int, 0, 1),
+			variantOwnerIndexKeys:   make([]string, 0, 1),
+			variantOwnerIndexHashes: make([]int, 0, 1),
+			variantOwnerIndexValues: make([]int, 0, 1),
+			aliases:                 make([]*CheckAliasSig, 0, 1),
+			aliasIndexKeys:          make([]string, 0, 1),
+			aliasIndexHashes:        make([]int, 0, 1),
+			aliasIndexValues:        make([]int, 0, 1),
+			types:                   make([]*CheckTypeSig, 0, 1),
+			typeIndexKeys:           make([]string, 0, 1),
+			typeIndexHashes:         make([]int, 0, 1),
+			typeIndexValues:         make([]int, 0, 1),
+			interfaces:              make([]string, 0, 1),
+			interfaceIndexKeys:      make([]string, 0, 1),
+			interfaceIndexHashes:    make([]int, 0, 1),
+			interfaceExtends:        make([]*CheckInterfaceExt, 0, 1),
+			importAliases:           make([]string, 0, 1),
+		},
+		local: CheckLocalEnv{
+			bindings:                make([]*CheckBinding, 0, 1),
+			bindingIndexNames:       make([]string, 0, 1),
+			bindingIndexHashes:      make([]int, 0, 1),
+			bindingIndexStacks:      make([][]*CheckBinding, 0, 1),
+			genericBounds:           make([]*CheckGenericBound, 0, 1),
+			genericBoundIndexNames:  make([]string, 0, 1),
+			genericBoundIndexHashes: make([]int, 0, 1),
+			genericBoundIndexStacks: make([][]int, 0, 1),
+			aliasDeepCache:          make([]int, 0, 1),
+			substCacheKeys:          make([]string, 0, 1),
+			substCacheHashes:        make([]int, 0, 1),
+			substCacheValues:        make([]int, 0, 1),
+			returnTy:                tErr(tys),
+			fnName:                  "",
+			inLoop:                  false,
+			diagnostics:             make([]*CheckDiagnostic, 0, 1),
+			assignments:             0,
+			accepted:                0,
+			bindingRecords:          make([]*CheckBindingRecord, 0, 1),
+			symbolRecords:           make([]*CheckSymbolRecord, 0, 1),
+			instantiations:          make([]*CheckInstantiationRecord, 0, 1),
+		},
+	}
 }
 
 // Osty: /tmp/selfhost_merged.osty:14463:5
@@ -34119,12 +34185,12 @@ func checkScopeMark(env *CheckEnv) int {
 // Osty: /tmp/selfhost_merged.osty:14467:5
 func checkScopeDrop(env *CheckEnv, mark int) {
 	// Osty: /tmp/selfhost_merged.osty:14470:5
-	current := len(env.bindings)
+	current := len(env.local.bindings)
 	_ = current
 	// Osty: /tmp/selfhost_merged.osty:14471:5
 	for current > mark {
 		// Osty: /tmp/selfhost_merged.osty:14472:9
-		popped := env.bindings[func() int {
+		popped := env.local.bindings[func() int {
 			var _p2087 int = current
 			var _rhs2088 int = 1
 			if _rhs2088 < 0 && _p2087 > math.MaxInt+_rhs2088 {
@@ -34138,13 +34204,13 @@ func checkScopeDrop(env *CheckEnv, mark int) {
 		_ = popped
 		// Osty: /tmp/selfhost_merged.osty:14473:9
 		_ = func() **CheckBinding {
-			if len(env.bindings) == 0 {
+			if len(env.local.bindings) == 0 {
 				return nil
 			}
-			v := env.bindings[len(env.bindings)-1]
+			v := env.local.bindings[len(env.local.bindings)-1]
 			var zero *CheckBinding
-			env.bindings[len(env.bindings)-1] = zero
-			env.bindings = env.bindings[:len(env.bindings)-1]
+			env.local.bindings[len(env.local.bindings)-1] = zero
+			env.local.bindings = env.local.bindings[:len(env.local.bindings)-1]
 			return &v
 		}()
 		// Osty: /tmp/selfhost_merged.osty:14474:9
@@ -34166,7 +34232,7 @@ func checkScopeDrop(env *CheckEnv, mark int) {
 
 // Osty: /tmp/selfhost_merged.osty:14479:5
 func checkBindingCount(env *CheckEnv) int {
-	return len(env.bindings)
+	return len(env.local.bindings)
 }
 
 // Osty: /tmp/selfhost_merged.osty:14488:5
@@ -34175,7 +34241,7 @@ func checkBind(env *CheckEnv, name string, ty int) {
 	binding := &CheckBinding{name: name, ty: ty, mutable: false, start: -1, end: -1}
 	_ = binding
 	// Osty: /tmp/selfhost_merged.osty:14496:5
-	func() struct{} { env.bindings = append(env.bindings, binding); return struct{}{} }()
+	func() struct{} { env.local.bindings = append(env.local.bindings, binding); return struct{}{} }()
 	// Osty: /tmp/selfhost_merged.osty:14497:5
 	checkBindingIndexPush(env, binding)
 }
@@ -34186,7 +34252,7 @@ func checkBindMut(env *CheckEnv, name string, ty int) {
 	binding := &CheckBinding{name: name, ty: ty, mutable: true, start: -1, end: -1}
 	_ = binding
 	// Osty: /tmp/selfhost_merged.osty:14508:5
-	func() struct{} { env.bindings = append(env.bindings, binding); return struct{}{} }()
+	func() struct{} { env.local.bindings = append(env.local.bindings, binding); return struct{}{} }()
 	// Osty: /tmp/selfhost_merged.osty:14509:5
 	checkBindingIndexPush(env, binding)
 }
@@ -34197,7 +34263,7 @@ func checkBindSpan(env *CheckEnv, name string, ty int, mutable bool, start int, 
 	binding := &CheckBinding{name: name, ty: ty, mutable: mutable, start: start, end: end}
 	_ = binding
 	// Osty: /tmp/selfhost_merged.osty:14516:5
-	func() struct{} { env.bindings = append(env.bindings, binding); return struct{}{} }()
+	func() struct{} { env.local.bindings = append(env.local.bindings, binding); return struct{}{} }()
 	// Osty: /tmp/selfhost_merged.osty:14517:5
 	checkBindingIndexPush(env, binding)
 }
@@ -34205,7 +34271,7 @@ func checkBindSpan(env *CheckEnv, name string, ty int, mutable bool, start int, 
 // Osty: /tmp/selfhost_merged.osty:14523:5
 func checkLookup(env *CheckEnv, name string) int {
 	// Osty: /tmp/selfhost_merged.osty:14524:5
-	slot := checkNameIndex(env.bindingIndexNames, env.bindingIndexHashes, name, checkHashKey(name))
+	slot := checkNameIndex(env.local.bindingIndexNames, env.local.bindingIndexHashes, name, checkHashKey(name))
 	_ = slot
 	// Osty: /tmp/selfhost_merged.osty:14525:5
 	if slot < 0 {
@@ -34213,7 +34279,7 @@ func checkLookup(env *CheckEnv, name string) int {
 		return -1
 	}
 	// Osty: /tmp/selfhost_merged.osty:14528:5
-	stack := env.bindingIndexStacks[slot]
+	stack := env.local.bindingIndexStacks[slot]
 	_ = stack
 	// Osty: /tmp/selfhost_merged.osty:14529:5
 	if len(stack) == 0 {
@@ -34236,7 +34302,7 @@ func checkLookup(env *CheckEnv, name string) int {
 // Osty: /tmp/selfhost_merged.osty:14535:5
 func checkLookupMutable(env *CheckEnv, name string) bool {
 	// Osty: /tmp/selfhost_merged.osty:14536:5
-	slot := checkNameIndex(env.bindingIndexNames, env.bindingIndexHashes, name, checkHashKey(name))
+	slot := checkNameIndex(env.local.bindingIndexNames, env.local.bindingIndexHashes, name, checkHashKey(name))
 	_ = slot
 	// Osty: /tmp/selfhost_merged.osty:14537:5
 	if slot < 0 {
@@ -34244,7 +34310,7 @@ func checkLookupMutable(env *CheckEnv, name string) bool {
 		return false
 	}
 	// Osty: /tmp/selfhost_merged.osty:14540:5
-	stack := env.bindingIndexStacks[slot]
+	stack := env.local.bindingIndexStacks[slot]
 	_ = stack
 	// Osty: /tmp/selfhost_merged.osty:14541:5
 	if len(stack) == 0 {
@@ -34267,10 +34333,10 @@ func checkLookupMutable(env *CheckEnv, name string) bool {
 // Osty: /tmp/selfhost_merged.osty:14551:5
 func checkRegisterFn(env *CheckEnv, sig *CheckFnSig) {
 	// Osty: /tmp/selfhost_merged.osty:14552:5
-	idx := len(env.fns)
+	idx := len(env.global.fns)
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14553:5
-	env.fns = append(env.fns, sig)
+	env.global.fns = append(env.global.fns, sig)
 	// Osty: /tmp/selfhost_merged.osty:14554:5
 	key := checkFnKey(sig.name, sig.owner)
 	_ = key
@@ -34283,26 +34349,26 @@ func checkRegisterFn(env *CheckEnv, sig *CheckFnSig) {
 		keyHash := checkHashKey(key)
 		_ = keyHash
 		// Osty: /tmp/selfhost_merged.osty:14558:9
-		env.fnIndexKeys = append(env.fnIndexKeys, key)
+		env.global.fnIndexKeys = append(env.global.fnIndexKeys, key)
 		// Osty: /tmp/selfhost_merged.osty:14559:9
-		env.fnIndexHashes = append(env.fnIndexHashes, keyHash)
+		env.global.fnIndexHashes = append(env.global.fnIndexHashes, keyHash)
 		// Osty: /tmp/selfhost_merged.osty:14560:9
-		env.fnIndexValues = append(env.fnIndexValues, idx)
-		env.fnIndexSlots[key] = len(env.fnIndexValues) - 1
+		env.global.fnIndexValues = append(env.global.fnIndexValues, idx)
+		env.global.fnIndexSlots[key] = len(env.global.fnIndexValues) - 1
 	} else {
 		// Osty: /tmp/selfhost_merged.osty:14562:26
-		env.fnIndexValues[slot] = idx
+		env.global.fnIndexValues[slot] = idx
 	}
 }
 
 func checkFnIndexSlot(env *CheckEnv, key string) int {
-	if env.fnIndexSlots == nil {
-		env.fnIndexSlots = make(map[string]int, len(env.fnIndexKeys)+1)
-		for i, existing := range env.fnIndexKeys {
-			env.fnIndexSlots[existing] = i
+	if env.global.fnIndexSlots == nil {
+		env.global.fnIndexSlots = make(map[string]int, len(env.global.fnIndexKeys)+1)
+		for i, existing := range env.global.fnIndexKeys {
+			env.global.fnIndexSlots[existing] = i
 		}
 	}
-	if slot, ok := env.fnIndexSlots[key]; ok {
+	if slot, ok := env.global.fnIndexSlots[key]; ok {
 		return slot
 	}
 	return -1
@@ -34312,14 +34378,14 @@ func checkMarkImportAlias(env *CheckEnv, alias string) {
 	if env == nil || alias == "" || checkHasImportAlias(env, alias) {
 		return
 	}
-	env.importAliases = append(env.importAliases, alias)
+	env.global.importAliases = append(env.global.importAliases, alias)
 }
 
 func checkHasImportAlias(env *CheckEnv, alias string) bool {
 	if env == nil || alias == "" {
 		return false
 	}
-	for _, existing := range env.importAliases {
+	for _, existing := range env.global.importAliases {
 		if existing == alias {
 			return true
 		}
@@ -34336,14 +34402,14 @@ func checkMarkFnHasBody(env *CheckEnv, name string, owner string) {
 	keyHash := checkHashKey(key)
 	_ = keyHash
 	// Osty: /tmp/selfhost_merged.osty:14569:5
-	if checkNameIndex(env.fnBodyKeys, env.fnBodyHashes, key, keyHash) >= 0 {
+	if checkNameIndex(env.global.fnBodyKeys, env.global.fnBodyHashes, key, keyHash) >= 0 {
 		// Osty: /tmp/selfhost_merged.osty:14570:9
 		return
 	}
 	// Osty: /tmp/selfhost_merged.osty:14572:5
-	func() struct{} { env.fnBodyKeys = append(env.fnBodyKeys, key); return struct{}{} }()
+	func() struct{} { env.global.fnBodyKeys = append(env.global.fnBodyKeys, key); return struct{}{} }()
 	// Osty: /tmp/selfhost_merged.osty:14573:5
-	func() struct{} { env.fnBodyHashes = append(env.fnBodyHashes, keyHash); return struct{}{} }()
+	func() struct{} { env.global.fnBodyHashes = append(env.global.fnBodyHashes, keyHash); return struct{}{} }()
 }
 
 // Osty: /tmp/selfhost_merged.osty:14576:5
@@ -34351,7 +34417,7 @@ func checkFnHasBody(env *CheckEnv, name string, owner string) bool {
 	// Osty: /tmp/selfhost_merged.osty:14577:5
 	key := checkFnKey(name, owner)
 	_ = key
-	return checkNameIndex(env.fnBodyKeys, env.fnBodyHashes, key, checkHashKey(key)) >= 0
+	return checkNameIndex(env.global.fnBodyKeys, env.global.fnBodyHashes, key, checkHashKey(key)) >= 0
 }
 
 // Osty: /tmp/selfhost_merged.osty:14581:5
@@ -34364,13 +34430,13 @@ func checkLookupFn(env *CheckEnv, name string, owner string) *CheckFnSig {
 	_ = slot
 	idx := -1
 	if slot >= 0 {
-		idx = env.fnIndexValues[slot]
+		idx = env.global.fnIndexValues[slot]
 	}
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14584:5
 	if idx >= 0 {
 		// Osty: /tmp/selfhost_merged.osty:14585:9
-		return env.fns[idx]
+		return env.global.fns[idx]
 	}
 	return emptyCheckFnSig()
 }
@@ -34400,7 +34466,7 @@ func checkLookupMethod(env *CheckEnv, owner string, name string) *CheckFnSig {
 		}
 	}
 	// Osty: /tmp/selfhost_merged.osty:14606:5
-	for _, ext := range env.interfaceExtends {
+	for _, ext := range env.global.interfaceExtends {
 		// Osty: /tmp/selfhost_merged.osty:14607:9
 		if ext.owner == owner {
 			// Osty: /tmp/selfhost_merged.osty:14608:13
@@ -34457,10 +34523,10 @@ func checkFnExists(env *CheckEnv, name string, owner string) bool {
 // Osty: /tmp/selfhost_merged.osty:14639:5
 func checkRegisterField(env *CheckEnv, field *CheckFieldSig) {
 	// Osty: /tmp/selfhost_merged.osty:14640:5
-	idx := len(env.fields)
+	idx := len(env.global.fields)
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14641:5
-	func() struct{} { env.fields = append(env.fields, field); return struct{}{} }()
+	func() struct{} { env.global.fields = append(env.global.fields, field); return struct{}{} }()
 	// Osty: /tmp/selfhost_merged.osty:14642:5
 	key := checkOwnerKey(field.owner, field.name)
 	_ = key
@@ -34468,19 +34534,25 @@ func checkRegisterField(env *CheckEnv, field *CheckFieldSig) {
 	keyHash := checkHashKey(key)
 	_ = keyHash
 	// Osty: /tmp/selfhost_merged.osty:14644:5
-	slot := checkNameIndex(env.fieldIndexKeys, env.fieldIndexHashes, key, keyHash)
+	slot := checkNameIndex(env.global.fieldIndexKeys, env.global.fieldIndexHashes, key, keyHash)
 	_ = slot
 	// Osty: /tmp/selfhost_merged.osty:14645:5
 	if slot < 0 {
 		// Osty: /tmp/selfhost_merged.osty:14646:9
-		func() struct{} { env.fieldIndexKeys = append(env.fieldIndexKeys, key); return struct{}{} }()
+		func() struct{} { env.global.fieldIndexKeys = append(env.global.fieldIndexKeys, key); return struct{}{} }()
 		// Osty: /tmp/selfhost_merged.osty:14647:9
-		func() struct{} { env.fieldIndexHashes = append(env.fieldIndexHashes, keyHash); return struct{}{} }()
+		func() struct{} {
+			env.global.fieldIndexHashes = append(env.global.fieldIndexHashes, keyHash)
+			return struct{}{}
+		}()
 		// Osty: /tmp/selfhost_merged.osty:14648:9
-		func() struct{} { env.fieldIndexValues = append(env.fieldIndexValues, idx); return struct{}{} }()
+		func() struct{} {
+			env.global.fieldIndexValues = append(env.global.fieldIndexValues, idx)
+			return struct{}{}
+		}()
 	} else {
 		// Osty: /tmp/selfhost_merged.osty:14650:29
-		env.fieldIndexValues[slot] = idx
+		env.global.fieldIndexValues[slot] = idx
 	}
 }
 
@@ -34490,12 +34562,12 @@ func checkLookupField(env *CheckEnv, owner string, name string) *CheckFieldSig {
 	key := checkOwnerKey(owner, name)
 	_ = key
 	// Osty: /tmp/selfhost_merged.osty:14656:5
-	idx := checkLookupExactIndex(env.fieldIndexKeys, env.fieldIndexHashes, env.fieldIndexValues, key, checkHashKey(key))
+	idx := checkLookupExactIndex(env.global.fieldIndexKeys, env.global.fieldIndexHashes, env.global.fieldIndexValues, key, checkHashKey(key))
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14657:5
 	if idx >= 0 {
 		// Osty: /tmp/selfhost_merged.osty:14658:9
-		return env.fields[idx]
+		return env.global.fields[idx]
 	}
 	return emptyCheckFieldSig()
 }
@@ -34503,27 +34575,36 @@ func checkLookupField(env *CheckEnv, owner string, name string) *CheckFieldSig {
 // Osty: /tmp/selfhost_merged.osty:14663:5
 func checkRegisterVariant(env *CheckEnv, variant *CheckVariantSig) {
 	// Osty: /tmp/selfhost_merged.osty:14664:5
-	idx := len(env.variants)
+	idx := len(env.global.variants)
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14665:5
-	func() struct{} { env.variants = append(env.variants, variant); return struct{}{} }()
+	func() struct{} { env.global.variants = append(env.global.variants, variant); return struct{}{} }()
 	// Osty: /tmp/selfhost_merged.osty:14666:5
 	nameHash := checkHashKey(variant.name)
 	_ = nameHash
 	// Osty: /tmp/selfhost_merged.osty:14667:5
-	nameSlot := checkNameIndex(env.variantIndexKeys, env.variantIndexHashes, variant.name, nameHash)
+	nameSlot := checkNameIndex(env.global.variantIndexKeys, env.global.variantIndexHashes, variant.name, nameHash)
 	_ = nameSlot
 	// Osty: /tmp/selfhost_merged.osty:14668:5
 	if nameSlot < 0 {
 		// Osty: /tmp/selfhost_merged.osty:14669:9
-		func() struct{} { env.variantIndexKeys = append(env.variantIndexKeys, variant.name); return struct{}{} }()
+		func() struct{} {
+			env.global.variantIndexKeys = append(env.global.variantIndexKeys, variant.name)
+			return struct{}{}
+		}()
 		// Osty: /tmp/selfhost_merged.osty:14670:9
-		func() struct{} { env.variantIndexHashes = append(env.variantIndexHashes, nameHash); return struct{}{} }()
+		func() struct{} {
+			env.global.variantIndexHashes = append(env.global.variantIndexHashes, nameHash)
+			return struct{}{}
+		}()
 		// Osty: /tmp/selfhost_merged.osty:14671:9
-		func() struct{} { env.variantIndexValues = append(env.variantIndexValues, idx); return struct{}{} }()
+		func() struct{} {
+			env.global.variantIndexValues = append(env.global.variantIndexValues, idx)
+			return struct{}{}
+		}()
 	} else {
 		// Osty: /tmp/selfhost_merged.osty:14673:31
-		env.variantIndexValues[nameSlot] = idx
+		env.global.variantIndexValues[nameSlot] = idx
 	}
 	// Osty: /tmp/selfhost_merged.osty:14675:5
 	ownerKey := checkOwnerKey(variant.owner, variant.name)
@@ -34532,40 +34613,40 @@ func checkRegisterVariant(env *CheckEnv, variant *CheckVariantSig) {
 	ownerHash := checkHashKey(ownerKey)
 	_ = ownerHash
 	// Osty: /tmp/selfhost_merged.osty:14677:5
-	ownerSlot := checkNameIndex(env.variantOwnerIndexKeys, env.variantOwnerIndexHashes, ownerKey, ownerHash)
+	ownerSlot := checkNameIndex(env.global.variantOwnerIndexKeys, env.global.variantOwnerIndexHashes, ownerKey, ownerHash)
 	_ = ownerSlot
 	// Osty: /tmp/selfhost_merged.osty:14678:5
 	if ownerSlot < 0 {
 		// Osty: /tmp/selfhost_merged.osty:14679:9
 		func() struct{} {
-			env.variantOwnerIndexKeys = append(env.variantOwnerIndexKeys, ownerKey)
+			env.global.variantOwnerIndexKeys = append(env.global.variantOwnerIndexKeys, ownerKey)
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:14680:9
 		func() struct{} {
-			env.variantOwnerIndexHashes = append(env.variantOwnerIndexHashes, ownerHash)
+			env.global.variantOwnerIndexHashes = append(env.global.variantOwnerIndexHashes, ownerHash)
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:14681:9
 		func() struct{} {
-			env.variantOwnerIndexValues = append(env.variantOwnerIndexValues, idx)
+			env.global.variantOwnerIndexValues = append(env.global.variantOwnerIndexValues, idx)
 			return struct{}{}
 		}()
 	} else {
 		// Osty: /tmp/selfhost_merged.osty:14683:36
-		env.variantOwnerIndexValues[ownerSlot] = idx
+		env.global.variantOwnerIndexValues[ownerSlot] = idx
 	}
 }
 
 // Osty: /tmp/selfhost_merged.osty:14687:5
 func checkLookupVariant(env *CheckEnv, name string) *CheckVariantSig {
 	// Osty: /tmp/selfhost_merged.osty:14688:5
-	idx := checkLookupExactIndex(env.variantIndexKeys, env.variantIndexHashes, env.variantIndexValues, name, checkHashKey(name))
+	idx := checkLookupExactIndex(env.global.variantIndexKeys, env.global.variantIndexHashes, env.global.variantIndexValues, name, checkHashKey(name))
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14689:5
 	if idx >= 0 {
 		// Osty: /tmp/selfhost_merged.osty:14690:9
-		return env.variants[idx]
+		return env.global.variants[idx]
 	}
 	return emptyCheckVariantSig()
 }
@@ -34576,12 +34657,12 @@ func checkLookupVariantInOwner(env *CheckEnv, owner string, name string) *CheckV
 	key := checkOwnerKey(owner, name)
 	_ = key
 	// Osty: /tmp/selfhost_merged.osty:14697:5
-	idx := checkLookupExactIndex(env.variantOwnerIndexKeys, env.variantOwnerIndexHashes, env.variantOwnerIndexValues, key, checkHashKey(key))
+	idx := checkLookupExactIndex(env.global.variantOwnerIndexKeys, env.global.variantOwnerIndexHashes, env.global.variantOwnerIndexValues, key, checkHashKey(key))
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14698:5
 	if idx >= 0 {
 		// Osty: /tmp/selfhost_merged.osty:14699:9
-		return env.variants[idx]
+		return env.global.variants[idx]
 	}
 	return emptyCheckVariantSig()
 }
@@ -34589,41 +34670,50 @@ func checkLookupVariantInOwner(env *CheckEnv, owner string, name string) *CheckV
 // Osty: /tmp/selfhost_merged.osty:14704:5
 func checkRegisterAlias(env *CheckEnv, alias *CheckAliasSig) {
 	// Osty: /tmp/selfhost_merged.osty:14705:5
-	idx := len(env.aliases)
+	idx := len(env.global.aliases)
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14706:5
-	func() struct{} { env.aliases = append(env.aliases, alias); return struct{}{} }()
+	func() struct{} { env.global.aliases = append(env.global.aliases, alias); return struct{}{} }()
 	// Osty: /tmp/selfhost_merged.osty:14707:5
 	nameHash := checkHashKey(alias.name)
 	_ = nameHash
 	// Osty: /tmp/selfhost_merged.osty:14708:5
-	slot := checkNameIndex(env.aliasIndexKeys, env.aliasIndexHashes, alias.name, nameHash)
+	slot := checkNameIndex(env.global.aliasIndexKeys, env.global.aliasIndexHashes, alias.name, nameHash)
 	_ = slot
 	// Osty: /tmp/selfhost_merged.osty:14709:5
 	if slot < 0 {
 		// Osty: /tmp/selfhost_merged.osty:14710:9
-		func() struct{} { env.aliasIndexKeys = append(env.aliasIndexKeys, alias.name); return struct{}{} }()
+		func() struct{} {
+			env.global.aliasIndexKeys = append(env.global.aliasIndexKeys, alias.name)
+			return struct{}{}
+		}()
 		// Osty: /tmp/selfhost_merged.osty:14711:9
-		func() struct{} { env.aliasIndexHashes = append(env.aliasIndexHashes, nameHash); return struct{}{} }()
+		func() struct{} {
+			env.global.aliasIndexHashes = append(env.global.aliasIndexHashes, nameHash)
+			return struct{}{}
+		}()
 		// Osty: /tmp/selfhost_merged.osty:14712:9
-		func() struct{} { env.aliasIndexValues = append(env.aliasIndexValues, idx); return struct{}{} }()
+		func() struct{} {
+			env.global.aliasIndexValues = append(env.global.aliasIndexValues, idx)
+			return struct{}{}
+		}()
 	} else {
 		// Osty: /tmp/selfhost_merged.osty:14714:29
-		env.aliasIndexValues[slot] = idx
+		env.global.aliasIndexValues[slot] = idx
 	}
 	// Osty: /tmp/selfhost_merged.osty:14716:8
-	env.aliasDeepCache = make([]int, 0, 1)
+	env.local.aliasDeepCache = make([]int, 0, 1)
 }
 
 // Osty: /tmp/selfhost_merged.osty:14719:5
 func checkLookupAlias(env *CheckEnv, name string) *CheckAliasSig {
 	// Osty: /tmp/selfhost_merged.osty:14720:5
-	idx := checkLookupExactIndex(env.aliasIndexKeys, env.aliasIndexHashes, env.aliasIndexValues, name, checkHashKey(name))
+	idx := checkLookupExactIndex(env.global.aliasIndexKeys, env.global.aliasIndexHashes, env.global.aliasIndexValues, name, checkHashKey(name))
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14721:5
 	if idx >= 0 {
 		// Osty: /tmp/selfhost_merged.osty:14722:9
-		return env.aliases[idx]
+		return env.global.aliases[idx]
 	}
 	return emptyCheckAliasSig()
 }
@@ -34631,39 +34721,48 @@ func checkLookupAlias(env *CheckEnv, name string) *CheckAliasSig {
 // Osty: /tmp/selfhost_merged.osty:14727:5
 func checkRegisterType(env *CheckEnv, sig *CheckTypeSig) {
 	// Osty: /tmp/selfhost_merged.osty:14728:5
-	idx := len(env.types)
+	idx := len(env.global.types)
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14729:5
-	func() struct{} { env.types = append(env.types, sig); return struct{}{} }()
+	func() struct{} { env.global.types = append(env.global.types, sig); return struct{}{} }()
 	// Osty: /tmp/selfhost_merged.osty:14730:5
 	nameHash := checkHashKey(sig.name)
 	_ = nameHash
 	// Osty: /tmp/selfhost_merged.osty:14731:5
-	slot := checkNameIndex(env.typeIndexKeys, env.typeIndexHashes, sig.name, nameHash)
+	slot := checkNameIndex(env.global.typeIndexKeys, env.global.typeIndexHashes, sig.name, nameHash)
 	_ = slot
 	// Osty: /tmp/selfhost_merged.osty:14732:5
 	if slot < 0 {
 		// Osty: /tmp/selfhost_merged.osty:14733:9
-		func() struct{} { env.typeIndexKeys = append(env.typeIndexKeys, sig.name); return struct{}{} }()
+		func() struct{} {
+			env.global.typeIndexKeys = append(env.global.typeIndexKeys, sig.name)
+			return struct{}{}
+		}()
 		// Osty: /tmp/selfhost_merged.osty:14734:9
-		func() struct{} { env.typeIndexHashes = append(env.typeIndexHashes, nameHash); return struct{}{} }()
+		func() struct{} {
+			env.global.typeIndexHashes = append(env.global.typeIndexHashes, nameHash)
+			return struct{}{}
+		}()
 		// Osty: /tmp/selfhost_merged.osty:14735:9
-		func() struct{} { env.typeIndexValues = append(env.typeIndexValues, idx); return struct{}{} }()
+		func() struct{} {
+			env.global.typeIndexValues = append(env.global.typeIndexValues, idx)
+			return struct{}{}
+		}()
 	} else {
 		// Osty: /tmp/selfhost_merged.osty:14737:28
-		env.typeIndexValues[slot] = idx
+		env.global.typeIndexValues[slot] = idx
 	}
 }
 
 // Osty: /tmp/selfhost_merged.osty:14741:5
 func checkLookupType(env *CheckEnv, name string) *CheckTypeSig {
 	// Osty: /tmp/selfhost_merged.osty:14742:5
-	idx := checkLookupExactIndex(env.typeIndexKeys, env.typeIndexHashes, env.typeIndexValues, name, checkHashKey(name))
+	idx := checkLookupExactIndex(env.global.typeIndexKeys, env.global.typeIndexHashes, env.global.typeIndexValues, name, checkHashKey(name))
 	_ = idx
 	// Osty: /tmp/selfhost_merged.osty:14743:5
 	if idx >= 0 {
 		// Osty: /tmp/selfhost_merged.osty:14744:9
-		return env.types[idx]
+		return env.global.types[idx]
 	}
 	return emptyCheckTypeSig()
 }
@@ -34686,17 +34785,20 @@ func checkDeclaredTypeExists(env *CheckEnv, name string) bool {
 // Osty: /tmp/selfhost_merged.osty:14759:5
 func checkRegisterInterface(env *CheckEnv, name string) {
 	// Osty: /tmp/selfhost_merged.osty:14760:5
-	func() struct{} { env.interfaces = append(env.interfaces, name); return struct{}{} }()
+	func() struct{} { env.global.interfaces = append(env.global.interfaces, name); return struct{}{} }()
 	// Osty: /tmp/selfhost_merged.osty:14761:5
 	nameHash := checkHashKey(name)
 	_ = nameHash
 	// Osty: /tmp/selfhost_merged.osty:14762:5
-	if checkNameIndex(env.interfaceIndexKeys, env.interfaceIndexHashes, name, nameHash) < 0 {
+	if checkNameIndex(env.global.interfaceIndexKeys, env.global.interfaceIndexHashes, name, nameHash) < 0 {
 		// Osty: /tmp/selfhost_merged.osty:14763:9
-		func() struct{} { env.interfaceIndexKeys = append(env.interfaceIndexKeys, name); return struct{}{} }()
+		func() struct{} {
+			env.global.interfaceIndexKeys = append(env.global.interfaceIndexKeys, name)
+			return struct{}{}
+		}()
 		// Osty: /tmp/selfhost_merged.osty:14764:9
 		func() struct{} {
-			env.interfaceIndexHashes = append(env.interfaceIndexHashes, nameHash)
+			env.global.interfaceIndexHashes = append(env.global.interfaceIndexHashes, nameHash)
 			return struct{}{}
 		}()
 	}
@@ -34704,13 +34806,16 @@ func checkRegisterInterface(env *CheckEnv, name string) {
 
 // Osty: /tmp/selfhost_merged.osty:14768:5
 func checkIsInterface(env *CheckEnv, name string) bool {
-	return checkNameIndex(env.interfaceIndexKeys, env.interfaceIndexHashes, name, checkHashKey(name)) >= 0
+	return checkNameIndex(env.global.interfaceIndexKeys, env.global.interfaceIndexHashes, name, checkHashKey(name)) >= 0
 }
 
 // Osty: /tmp/selfhost_merged.osty:14772:5
 func checkRegisterInterfaceExtends(env *CheckEnv, ext *CheckInterfaceExt) {
 	// Osty: /tmp/selfhost_merged.osty:14773:5
-	func() struct{} { env.interfaceExtends = append(env.interfaceExtends, ext); return struct{}{} }()
+	func() struct{} {
+		env.global.interfaceExtends = append(env.global.interfaceExtends, ext)
+		return struct{}{}
+	}()
 }
 
 // Osty: /tmp/selfhost_merged.osty:14776:5
@@ -34719,7 +34824,7 @@ func checkInterfaceExtendsList(env *CheckEnv, owner string) []int {
 	var out []int = make([]int, 0, 1)
 	_ = out
 	// Osty: /tmp/selfhost_merged.osty:14778:5
-	for _, ext := range env.interfaceExtends {
+	for _, ext := range env.global.interfaceExtends {
 		// Osty: /tmp/selfhost_merged.osty:14779:9
 		if ext.owner == owner {
 			// Osty: /tmp/selfhost_merged.osty:14780:13
@@ -34732,7 +34837,7 @@ func checkInterfaceExtendsList(env *CheckEnv, owner string) []int {
 // Osty: /tmp/selfhost_merged.osty:14790:5
 func checkAddGenericBound(env *CheckEnv, bound *CheckGenericBound) {
 	// Osty: /tmp/selfhost_merged.osty:14791:5
-	func() struct{} { env.genericBounds = append(env.genericBounds, bound); return struct{}{} }()
+	func() struct{} { env.local.genericBounds = append(env.local.genericBounds, bound); return struct{}{} }()
 	// Osty: /tmp/selfhost_merged.osty:14792:5
 	checkGenericBoundIndexPush(env, bound.tyParam, bound.iface)
 }
@@ -34740,7 +34845,7 @@ func checkAddGenericBound(env *CheckEnv, bound *CheckGenericBound) {
 // Osty: /tmp/selfhost_merged.osty:14795:5
 func checkLookupGenericBound(env *CheckEnv, tyParam string) int {
 	// Osty: /tmp/selfhost_merged.osty:14796:5
-	slot := checkNameIndex(env.genericBoundIndexNames, env.genericBoundIndexHashes, tyParam, checkHashKey(tyParam))
+	slot := checkNameIndex(env.local.genericBoundIndexNames, env.local.genericBoundIndexHashes, tyParam, checkHashKey(tyParam))
 	_ = slot
 	// Osty: /tmp/selfhost_merged.osty:14797:5
 	if slot < 0 {
@@ -34748,7 +34853,7 @@ func checkLookupGenericBound(env *CheckEnv, tyParam string) int {
 		return -1
 	}
 	// Osty: /tmp/selfhost_merged.osty:14800:5
-	stack := env.genericBoundIndexStacks[slot]
+	stack := env.local.genericBoundIndexStacks[slot]
 	_ = stack
 	// Osty: /tmp/selfhost_merged.osty:14801:5
 	if len(stack) == 0 {
@@ -34771,14 +34876,14 @@ func checkLookupGenericBound(env *CheckEnv, tyParam string) int {
 // Osty: /tmp/selfhost_merged.osty:14807:5
 func checkGenericBoundsFor(env *CheckEnv, tyParam string) []int {
 	// Osty: /tmp/selfhost_merged.osty:14808:5
-	slot := checkNameIndex(env.genericBoundIndexNames, env.genericBoundIndexHashes, tyParam, checkHashKey(tyParam))
+	slot := checkNameIndex(env.local.genericBoundIndexNames, env.local.genericBoundIndexHashes, tyParam, checkHashKey(tyParam))
 	_ = slot
 	// Osty: /tmp/selfhost_merged.osty:14809:5
 	if slot < 0 {
 		// Osty: /tmp/selfhost_merged.osty:14810:9
 		return make([]int, 0, 1)
 	}
-	return env.genericBoundIndexStacks[slot]
+	return env.local.genericBoundIndexStacks[slot]
 }
 
 // Osty: /tmp/selfhost_merged.osty:14815:5
@@ -34789,7 +34894,7 @@ func checkClearGenericBoundsAfter(env *CheckEnv, mark int) {
 	// Osty: /tmp/selfhost_merged.osty:14817:5
 	for current > mark {
 		// Osty: /tmp/selfhost_merged.osty:14818:9
-		popped := env.genericBounds[func() int {
+		popped := env.local.genericBounds[func() int {
 			var _p2097 int = current
 			var _rhs2098 int = 1
 			if _rhs2098 < 0 && _p2097 > math.MaxInt+_rhs2098 {
@@ -34803,13 +34908,13 @@ func checkClearGenericBoundsAfter(env *CheckEnv, mark int) {
 		_ = popped
 		// Osty: /tmp/selfhost_merged.osty:14819:9
 		_ = func() **CheckGenericBound {
-			if len(env.genericBounds) == 0 {
+			if len(env.local.genericBounds) == 0 {
 				return nil
 			}
-			v := env.genericBounds[len(env.genericBounds)-1]
+			v := env.local.genericBounds[len(env.local.genericBounds)-1]
 			var zero *CheckGenericBound
-			env.genericBounds[len(env.genericBounds)-1] = zero
-			env.genericBounds = env.genericBounds[:len(env.genericBounds)-1]
+			env.local.genericBounds[len(env.local.genericBounds)-1] = zero
+			env.local.genericBounds = env.local.genericBounds[:len(env.local.genericBounds)-1]
 			return &v
 		}()
 		// Osty: /tmp/selfhost_merged.osty:14820:9
@@ -34836,7 +34941,7 @@ func checkGenericBoundMark(env *CheckEnv) int {
 
 // Osty: /tmp/selfhost_merged.osty:14829:1
 func checkGenericBoundCount(env *CheckEnv) int {
-	return len(env.genericBounds)
+	return len(env.local.genericBounds)
 }
 
 // Osty: /tmp/selfhost_merged.osty:14833:1
@@ -34845,20 +34950,23 @@ func checkBindingIndexPush(env *CheckEnv, binding *CheckBinding) {
 	nameHash := checkHashKey(binding.name)
 	_ = nameHash
 	// Osty: /tmp/selfhost_merged.osty:14835:5
-	slot := checkNameIndex(env.bindingIndexNames, env.bindingIndexHashes, binding.name, nameHash)
+	slot := checkNameIndex(env.local.bindingIndexNames, env.local.bindingIndexHashes, binding.name, nameHash)
 	_ = slot
 	// Osty: /tmp/selfhost_merged.osty:14836:5
 	if slot < 0 {
 		// Osty: /tmp/selfhost_merged.osty:14837:9
 		func() struct{} {
-			env.bindingIndexNames = append(env.bindingIndexNames, binding.name)
+			env.local.bindingIndexNames = append(env.local.bindingIndexNames, binding.name)
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:14838:9
-		func() struct{} { env.bindingIndexHashes = append(env.bindingIndexHashes, nameHash); return struct{}{} }()
+		func() struct{} {
+			env.local.bindingIndexHashes = append(env.local.bindingIndexHashes, nameHash)
+			return struct{}{}
+		}()
 		// Osty: /tmp/selfhost_merged.osty:14839:9
 		func() struct{} {
-			env.bindingIndexStacks = append(env.bindingIndexStacks, []*CheckBinding{binding})
+			env.local.bindingIndexStacks = append(env.local.bindingIndexStacks, []*CheckBinding{binding})
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:14840:9
@@ -34866,7 +34974,7 @@ func checkBindingIndexPush(env *CheckEnv, binding *CheckBinding) {
 	}
 	// Osty: /tmp/selfhost_merged.osty:14842:5
 	func() struct{} {
-		env.bindingIndexStacks[slot] = append(env.bindingIndexStacks[slot], binding)
+		env.local.bindingIndexStacks[slot] = append(env.local.bindingIndexStacks[slot], binding)
 		return struct{}{}
 	}()
 }
@@ -34874,7 +34982,7 @@ func checkBindingIndexPush(env *CheckEnv, binding *CheckBinding) {
 // Osty: /tmp/selfhost_merged.osty:14845:1
 func checkBindingIndexPop(env *CheckEnv, name string) {
 	// Osty: /tmp/selfhost_merged.osty:14846:5
-	slot := checkNameIndex(env.bindingIndexNames, env.bindingIndexHashes, name, checkHashKey(name))
+	slot := checkNameIndex(env.local.bindingIndexNames, env.local.bindingIndexHashes, name, checkHashKey(name))
 	_ = slot
 	// Osty: /tmp/selfhost_merged.osty:14847:5
 	if slot < 0 {
@@ -34882,16 +34990,16 @@ func checkBindingIndexPop(env *CheckEnv, name string) {
 		return
 	}
 	// Osty: /tmp/selfhost_merged.osty:14850:5
-	if len(env.bindingIndexStacks[slot]) > 0 {
+	if len(env.local.bindingIndexStacks[slot]) > 0 {
 		// Osty: /tmp/selfhost_merged.osty:14851:9
 		_ = func() **CheckBinding {
-			if len(env.bindingIndexStacks[slot]) == 0 {
+			if len(env.local.bindingIndexStacks[slot]) == 0 {
 				return nil
 			}
-			v := env.bindingIndexStacks[slot][len(env.bindingIndexStacks[slot])-1]
+			v := env.local.bindingIndexStacks[slot][len(env.local.bindingIndexStacks[slot])-1]
 			var zero *CheckBinding
-			env.bindingIndexStacks[slot][len(env.bindingIndexStacks[slot])-1] = zero
-			env.bindingIndexStacks[slot] = env.bindingIndexStacks[slot][:len(env.bindingIndexStacks[slot])-1]
+			env.local.bindingIndexStacks[slot][len(env.local.bindingIndexStacks[slot])-1] = zero
+			env.local.bindingIndexStacks[slot] = env.local.bindingIndexStacks[slot][:len(env.local.bindingIndexStacks[slot])-1]
 			return &v
 		}()
 	}
@@ -34903,23 +35011,23 @@ func checkGenericBoundIndexPush(env *CheckEnv, name string, iface int) {
 	nameHash := checkHashKey(name)
 	_ = nameHash
 	// Osty: /tmp/selfhost_merged.osty:14857:5
-	slot := checkNameIndex(env.genericBoundIndexNames, env.genericBoundIndexHashes, name, nameHash)
+	slot := checkNameIndex(env.local.genericBoundIndexNames, env.local.genericBoundIndexHashes, name, nameHash)
 	_ = slot
 	// Osty: /tmp/selfhost_merged.osty:14858:5
 	if slot < 0 {
 		// Osty: /tmp/selfhost_merged.osty:14859:9
 		func() struct{} {
-			env.genericBoundIndexNames = append(env.genericBoundIndexNames, name)
+			env.local.genericBoundIndexNames = append(env.local.genericBoundIndexNames, name)
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:14860:9
 		func() struct{} {
-			env.genericBoundIndexHashes = append(env.genericBoundIndexHashes, nameHash)
+			env.local.genericBoundIndexHashes = append(env.local.genericBoundIndexHashes, nameHash)
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:14861:9
 		func() struct{} {
-			env.genericBoundIndexStacks = append(env.genericBoundIndexStacks, []int{iface})
+			env.local.genericBoundIndexStacks = append(env.local.genericBoundIndexStacks, []int{iface})
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:14862:9
@@ -34927,7 +35035,7 @@ func checkGenericBoundIndexPush(env *CheckEnv, name string, iface int) {
 	}
 	// Osty: /tmp/selfhost_merged.osty:14864:5
 	func() struct{} {
-		env.genericBoundIndexStacks[slot] = append(env.genericBoundIndexStacks[slot], iface)
+		env.local.genericBoundIndexStacks[slot] = append(env.local.genericBoundIndexStacks[slot], iface)
 		return struct{}{}
 	}()
 }
@@ -34935,7 +35043,7 @@ func checkGenericBoundIndexPush(env *CheckEnv, name string, iface int) {
 // Osty: /tmp/selfhost_merged.osty:14867:1
 func checkGenericBoundIndexPop(env *CheckEnv, name string) {
 	// Osty: /tmp/selfhost_merged.osty:14868:5
-	slot := checkNameIndex(env.genericBoundIndexNames, env.genericBoundIndexHashes, name, checkHashKey(name))
+	slot := checkNameIndex(env.local.genericBoundIndexNames, env.local.genericBoundIndexHashes, name, checkHashKey(name))
 	_ = slot
 	// Osty: /tmp/selfhost_merged.osty:14869:5
 	if slot < 0 {
@@ -34943,16 +35051,16 @@ func checkGenericBoundIndexPop(env *CheckEnv, name string) {
 		return
 	}
 	// Osty: /tmp/selfhost_merged.osty:14872:5
-	if len(env.genericBoundIndexStacks[slot]) > 0 {
+	if len(env.local.genericBoundIndexStacks[slot]) > 0 {
 		// Osty: /tmp/selfhost_merged.osty:14873:9
 		_ = func() *int {
-			if len(env.genericBoundIndexStacks[slot]) == 0 {
+			if len(env.local.genericBoundIndexStacks[slot]) == 0 {
 				return nil
 			}
-			v := env.genericBoundIndexStacks[slot][len(env.genericBoundIndexStacks[slot])-1]
+			v := env.local.genericBoundIndexStacks[slot][len(env.local.genericBoundIndexStacks[slot])-1]
 			var zero int
-			env.genericBoundIndexStacks[slot][len(env.genericBoundIndexStacks[slot])-1] = zero
-			env.genericBoundIndexStacks[slot] = env.genericBoundIndexStacks[slot][:len(env.genericBoundIndexStacks[slot])-1]
+			env.local.genericBoundIndexStacks[slot][len(env.local.genericBoundIndexStacks[slot])-1] = zero
+			env.local.genericBoundIndexStacks[slot] = env.local.genericBoundIndexStacks[slot][:len(env.local.genericBoundIndexStacks[slot])-1]
 			return &v
 		}()
 	}
@@ -35390,11 +35498,11 @@ func checkSubstituteTyFn(env *CheckEnv, ty int, generics []string, args []int) i
 // Osty: /tmp/selfhost_merged.osty:15105:1
 func checkAliasDeepCacheGet(env *CheckEnv, ty int) int {
 	// Osty: /tmp/selfhost_merged.osty:15106:5
-	if ty < 0 || ty >= len(env.aliasDeepCache) {
+	if ty < 0 || ty >= len(env.local.aliasDeepCache) {
 		// Osty: /tmp/selfhost_merged.osty:15107:9
 		return -1
 	}
-	return env.aliasDeepCache[ty]
+	return env.local.aliasDeepCache[ty]
 }
 
 // Osty: /tmp/selfhost_merged.osty:15112:1
@@ -35405,12 +35513,12 @@ func checkAliasDeepCacheSet(env *CheckEnv, ty int, resolved int) {
 		return
 	}
 	// Osty: /tmp/selfhost_merged.osty:15116:5
-	n := len(env.aliasDeepCache)
+	n := len(env.local.aliasDeepCache)
 	_ = n
 	// Osty: /tmp/selfhost_merged.osty:15117:5
 	for n <= ty {
 		// Osty: /tmp/selfhost_merged.osty:15118:9
-		func() struct{} { env.aliasDeepCache = append(env.aliasDeepCache, -1); return struct{}{} }()
+		func() struct{} { env.local.aliasDeepCache = append(env.local.aliasDeepCache, -1); return struct{}{} }()
 		// Osty: /tmp/selfhost_merged.osty:15119:9
 		func() {
 			var _cur2129 int = n
@@ -35425,7 +35533,7 @@ func checkAliasDeepCacheSet(env *CheckEnv, ty int, resolved int) {
 		}()
 	}
 	// Osty: /tmp/selfhost_merged.osty:15121:23
-	env.aliasDeepCache[ty] = resolved
+	env.local.aliasDeepCache[ty] = resolved
 }
 
 // Osty: /tmp/selfhost_merged.osty:15124:1
@@ -35433,7 +35541,7 @@ func checkSubstCacheGet(env *CheckEnv, ty int, generics []string, args []int) in
 	// Osty: /tmp/selfhost_merged.osty:15125:5
 	key := checkSubstCacheKey(ty, generics, args)
 	_ = key
-	return checkLookupExactIndex(env.substCacheKeys, env.substCacheHashes, env.substCacheValues, key, checkHashKey(key))
+	return checkLookupExactIndex(env.local.substCacheKeys, env.local.substCacheHashes, env.local.substCacheValues, key, checkHashKey(key))
 }
 
 // Osty: /tmp/selfhost_merged.osty:15129:1
@@ -35442,14 +35550,17 @@ func checkSubstCacheSet(env *CheckEnv, ty int, generics []string, args []int, re
 	key := checkSubstCacheKey(ty, generics, args)
 	_ = key
 	// Osty: /tmp/selfhost_merged.osty:15131:5
-	func() struct{} { env.substCacheKeys = append(env.substCacheKeys, key); return struct{}{} }()
+	func() struct{} { env.local.substCacheKeys = append(env.local.substCacheKeys, key); return struct{}{} }()
 	// Osty: /tmp/selfhost_merged.osty:15132:5
 	func() struct{} {
-		env.substCacheHashes = append(env.substCacheHashes, checkHashKey(key))
+		env.local.substCacheHashes = append(env.local.substCacheHashes, checkHashKey(key))
 		return struct{}{}
 	}()
 	// Osty: /tmp/selfhost_merged.osty:15133:5
-	func() struct{} { env.substCacheValues = append(env.substCacheValues, resolved); return struct{}{} }()
+	func() struct{} {
+		env.local.substCacheValues = append(env.local.substCacheValues, resolved)
+		return struct{}{}
+	}()
 }
 
 // Osty: /tmp/selfhost_merged.osty:15136:1
@@ -35467,7 +35578,7 @@ func checkSubstCacheKey(ty int, generics []string, args []int) string {
 func checkRecordBinding(env *CheckEnv, nodeIdx int, name string, ty int, mutable bool, start int, end int) {
 	// Osty: /tmp/selfhost_merged.osty:15153:5
 	func() struct{} {
-		env.bindingRecords = append(env.bindingRecords, &CheckBindingRecord{node: nodeIdx, name: name, ty: ty, mutable: mutable, start: start, end: end})
+		env.local.bindingRecords = append(env.local.bindingRecords, &CheckBindingRecord{node: nodeIdx, name: name, ty: ty, mutable: mutable, start: start, end: end})
 		return struct{}{}
 	}()
 }
@@ -35476,7 +35587,7 @@ func checkRecordBinding(env *CheckEnv, nodeIdx int, name string, ty int, mutable
 func checkRecordSymbol(env *CheckEnv, nodeIdx int, kind string, name string, owner string, ty int, start int, end int) {
 	// Osty: /tmp/selfhost_merged.osty:15157:5
 	func() struct{} {
-		env.symbolRecords = append(env.symbolRecords, &CheckSymbolRecord{node: nodeIdx, kind: kind, name: name, owner: owner, ty: ty, start: start, end: end})
+		env.local.symbolRecords = append(env.local.symbolRecords, &CheckSymbolRecord{node: nodeIdx, kind: kind, name: name, owner: owner, ty: ty, start: start, end: end})
 		return struct{}{}
 	}()
 }
@@ -35485,7 +35596,7 @@ func checkRecordSymbol(env *CheckEnv, nodeIdx int, kind string, name string, own
 func checkRecordInstantiation(env *CheckEnv, nodeIdx int, callee string, typeArgs []int, resultTy int, start int, end int) {
 	// Osty: /tmp/selfhost_merged.osty:15161:5
 	func() struct{} {
-		env.instantiations = append(env.instantiations, &CheckInstantiationRecord{node: nodeIdx, callee: callee, typeArgs: typeArgs, resultTy: resultTy, start: start, end: end})
+		env.local.instantiations = append(env.local.instantiations, &CheckInstantiationRecord{node: nodeIdx, callee: callee, typeArgs: typeArgs, resultTy: resultTy, start: start, end: end})
 		return struct{}{}
 	}()
 }
@@ -35493,8 +35604,8 @@ func checkRecordInstantiation(env *CheckEnv, nodeIdx int, callee string, typeArg
 // Osty: /tmp/selfhost_merged.osty:15176:5
 func checkExpectAssignable(env *CheckEnv, expected int, got int, start int, end int) bool {
 	// Osty: /tmp/selfhost_merged.osty:15177:8
-	env.assignments = func() int {
-		var _p2131 int = env.assignments
+	env.local.assignments = func() int {
+		var _p2131 int = env.local.assignments
 		var _rhs2132 int = 1
 		if _rhs2132 > 0 && _p2131 > math.MaxInt-_rhs2132 {
 			panic("integer overflow")
@@ -35513,8 +35624,8 @@ func checkExpectAssignable(env *CheckEnv, expected int, got int, start int, end 
 	// Osty: /tmp/selfhost_merged.osty:15180:5
 	if checkIsAssignable(env, expectedResolved, gotResolved) {
 		// Osty: /tmp/selfhost_merged.osty:15181:12
-		env.accepted = func() int {
-			var _p2133 int = env.accepted
+		env.local.accepted = func() int {
+			var _p2133 int = env.local.accepted
 			var _rhs2134 int = 1
 			if _rhs2134 > 0 && _p2133 > math.MaxInt-_rhs2134 {
 				panic("integer overflow")
@@ -35531,7 +35642,7 @@ func checkExpectAssignable(env *CheckEnv, expected int, got int, start int, end 
 	if ostyEqual(tyKindAt(env.tys, expectedResolved), TyKind(&TyKind_TkNamed{})) && checkIsInterface(env, tyHeadAt(env.tys, expectedResolved)) {
 		// Osty: /tmp/selfhost_merged.osty:15185:9
 		func() struct{} {
-			env.diagnostics = append(env.diagnostics, diagInterfaceNotSatisfied(tyToString(env.tys, gotResolved), tyToString(env.tys, expectedResolved), start, end))
+			env.local.diagnostics = append(env.local.diagnostics, diagInterfaceNotSatisfied(tyToString(env.tys, gotResolved), tyToString(env.tys, expectedResolved), start, end))
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:15191:9
@@ -35539,7 +35650,7 @@ func checkExpectAssignable(env *CheckEnv, expected int, got int, start int, end 
 	}
 	// Osty: /tmp/selfhost_merged.osty:15193:5
 	func() struct{} {
-		env.diagnostics = append(env.diagnostics, diagMismatch(tyToString(env.tys, expectedResolved), tyToString(env.tys, gotResolved), start, end))
+		env.local.diagnostics = append(env.local.diagnostics, diagMismatch(tyToString(env.tys, expectedResolved), tyToString(env.tys, gotResolved), start, end))
 		return struct{}{}
 	}()
 	return false
@@ -36074,7 +36185,7 @@ func checkDerivedNominalInterfaceInstance(env *CheckEnv, concrete int, ifaceHead
 	// Osty: /tmp/selfhost_merged.osty:15502:5
 	if typeSig.kind == "struct" {
 		// Osty: /tmp/selfhost_merged.osty:15503:9
-		for _, field := range env.fields {
+		for _, field := range env.global.fields {
 			// Osty: /tmp/selfhost_merged.osty:15504:13
 			if field.owner == concreteHead {
 				// Osty: /tmp/selfhost_merged.osty:15505:17
@@ -36091,7 +36202,7 @@ func checkDerivedNominalInterfaceInstance(env *CheckEnv, concrete int, ifaceHead
 		return true
 	}
 	// Osty: /tmp/selfhost_merged.osty:15514:5
-	for _, variant := range env.variants {
+	for _, variant := range env.global.variants {
 		// Osty: /tmp/selfhost_merged.osty:15515:9
 		if variant.owner == concreteHead {
 			// Osty: /tmp/selfhost_merged.osty:15516:13
@@ -36232,7 +36343,7 @@ func checkCollectInterfaceMethods(env *CheckEnv, owner string, out []*CheckFnSig
 	var nextSeen []string = seen
 	_ = nextSeen
 	// Osty: /tmp/selfhost_merged.osty:15610:5
-	for _, sig := range env.fns {
+	for _, sig := range env.global.fns {
 		// Osty: /tmp/selfhost_merged.osty:15611:9
 		if sig.owner == owner && !(listContainsString(nextSeen, sig.name)) {
 			// Osty: /tmp/selfhost_merged.osty:15612:13
@@ -36503,7 +36614,7 @@ func checkVisibleBindingNames(env *CheckEnv) []string {
 	var out []string = make([]string, 0, 1)
 	_ = out
 	// Osty: /tmp/selfhost_merged.osty:15776:5
-	for _, b := range env.bindings {
+	for _, b := range env.local.bindings {
 		// Osty: /tmp/selfhost_merged.osty:15777:9
 		if !(listContainsString(out, b.name)) {
 			// Osty: /tmp/selfhost_merged.osty:15778:13
@@ -36511,7 +36622,7 @@ func checkVisibleBindingNames(env *CheckEnv) []string {
 		}
 	}
 	// Osty: /tmp/selfhost_merged.osty:15781:5
-	for _, sig := range env.fns {
+	for _, sig := range env.global.fns {
 		// Osty: /tmp/selfhost_merged.osty:15782:9
 		if sig.owner == "" && !(listContainsString(out, sig.name)) {
 			// Osty: /tmp/selfhost_merged.osty:15783:13
@@ -36532,7 +36643,7 @@ func checkFieldNamesOf(env *CheckEnv, owner string) []string {
 		return out
 	}
 	// Osty: /tmp/selfhost_merged.osty:15796:5
-	for _, f := range env.fields {
+	for _, f := range env.global.fields {
 		// Osty: /tmp/selfhost_merged.osty:15797:9
 		if f.owner == owner && !(listContainsString(out, f.name)) {
 			// Osty: /tmp/selfhost_merged.osty:15798:13
@@ -36588,7 +36699,7 @@ func checkCollectMethodNames(env *CheckEnv, owner string, acc []string) []string
 	out := acc
 	_ = out
 	// Osty: /tmp/selfhost_merged.osty:15834:5
-	for _, sig := range env.fns {
+	for _, sig := range env.global.fns {
 		// Osty: /tmp/selfhost_merged.osty:15835:9
 		if sig.owner == owner && !(listContainsString(out, sig.name)) {
 			// Osty: /tmp/selfhost_merged.osty:15836:13
@@ -36596,7 +36707,7 @@ func checkCollectMethodNames(env *CheckEnv, owner string, acc []string) []string
 		}
 	}
 	// Osty: /tmp/selfhost_merged.osty:15839:5
-	for _, ext := range env.interfaceExtends {
+	for _, ext := range env.global.interfaceExtends {
 		// Osty: /tmp/selfhost_merged.osty:15840:9
 		if ext.owner == owner {
 			// Osty: /tmp/selfhost_merged.osty:15841:13
@@ -36615,7 +36726,7 @@ func checkVariantNamesOf(env *CheckEnv, owner string) []string {
 	var out []string = make([]string, 0, 1)
 	_ = out
 	// Osty: /tmp/selfhost_merged.osty:15854:5
-	for _, v := range env.variants {
+	for _, v := range env.global.variants {
 		// Osty: /tmp/selfhost_merged.osty:15855:9
 		matches := owner == "" || v.owner == owner
 		_ = matches
@@ -37468,7 +37579,7 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 
 // Osty: /tmp/selfhost_merged.osty:17200:5
 func checkErrorsCount(env *CheckEnv) int {
-	return checkDiagCountErrors(env.diagnostics)
+	return checkDiagCountErrors(env.local.diagnostics)
 }
 
 // Osty: /tmp/selfhost_merged.osty:17204:5
@@ -37489,7 +37600,7 @@ func checkEnvSummary(env *CheckEnv) string {
 	// Osty: /tmp/selfhost_merged.osty:17213:5
 	errs := checkErrorsCount(env)
 	_ = errs
-	return fmt.Sprintf("assignments=%s accepted=%s errors=%s", ostyToString(env.assignments), ostyToString(env.accepted), ostyToString(errs))
+	return fmt.Sprintf("assignments=%s accepted=%s errors=%s", ostyToString(env.local.assignments), ostyToString(env.local.accepted), ostyToString(errs))
 }
 
 // Osty: /tmp/selfhost_merged.osty:17237:5
@@ -38648,7 +38759,7 @@ func elabInferIdent(cx *ElabCx, node *AstNode) *ElabResult {
 	if node.text == "_" {
 		// Osty: /tmp/selfhost_merged.osty:18003:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagWildcardInExpr(node.start, node.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagWildcardInExpr(node.start, node.end))
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:18004:9
@@ -38674,7 +38785,7 @@ func elabInferIdent(cx *ElabCx, node *AstNode) *ElabResult {
 		if checkStringListLenHelper(fnSig.generics) > 0 {
 			// Osty: /tmp/selfhost_merged.osty:18019:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagGenericCallableReference(node.text, node.start, node.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagGenericCallableReference(node.text, node.start, node.end))
 				return struct{}{}
 			}()
 			// Osty: /tmp/selfhost_merged.osty:18020:13
@@ -38710,7 +38821,7 @@ func elabInferIdent(cx *ElabCx, node *AstNode) *ElabResult {
 	diag := checkDiagAttachHint(diagUnknownName(node.text, node.start, node.end), diagDidYouMean(suggestion))
 	_ = diag
 	// Osty: /tmp/selfhost_merged.osty:18047:5
-	func() struct{} { cx.env.diagnostics = append(cx.env.diagnostics, diag); return struct{}{} }()
+	func() struct{} { cx.env.local.diagnostics = append(cx.env.local.diagnostics, diag); return struct{}{} }()
 	return elabPoisonResult(cx, node.start, node.end)
 }
 
@@ -38796,7 +38907,7 @@ func unOpNot(env *CheckEnv, inner int, start int, end int) int {
 	}
 	// Osty: /tmp/selfhost_merged.osty:18103:5
 	func() struct{} {
-		env.diagnostics = append(env.diagnostics, diagOperandType("!", tyToString(tys, inner), start, end))
+		env.local.diagnostics = append(env.local.diagnostics, diagOperandType("!", tyToString(tys, inner), start, end))
 		return struct{}{}
 	}()
 	return tErr(tys)
@@ -38814,7 +38925,7 @@ func unOpNumeric(env *CheckEnv, symbol string, inner int, start int, end int) in
 	}
 	// Osty: /tmp/selfhost_merged.osty:18112:5
 	func() struct{} {
-		env.diagnostics = append(env.diagnostics, diagOperandType(symbol, tyToString(tys, inner), start, end))
+		env.local.diagnostics = append(env.local.diagnostics, diagOperandType(symbol, tyToString(tys, inner), start, end))
 		return struct{}{}
 	}()
 	return tErr(tys)
@@ -38832,7 +38943,7 @@ func unOpBitNot(env *CheckEnv, inner int, start int, end int) int {
 	}
 	// Osty: /tmp/selfhost_merged.osty:18121:5
 	func() struct{} {
-		env.diagnostics = append(env.diagnostics, diagOperandType("~", tyToString(tys, inner), start, end))
+		env.local.diagnostics = append(env.local.diagnostics, diagOperandType("~", tyToString(tys, inner), start, end))
 		return struct{}{}
 	}()
 	return tErr(tys)
@@ -38995,7 +39106,7 @@ func binBoolCompatible(env *CheckEnv, left int, right int, start int, end int) i
 	}
 	// Osty: /tmp/selfhost_merged.osty:18189:5
 	func() struct{} {
-		env.diagnostics = append(env.diagnostics, diagMismatch(tyToString(env.tys, left), tyToString(env.tys, right), start, end))
+		env.local.diagnostics = append(env.local.diagnostics, diagMismatch(tyToString(env.tys, left), tyToString(env.tys, right), start, end))
 		return struct{}{}
 	}()
 	return tErr(env.tys)
@@ -39010,7 +39121,7 @@ func binOrderedCompatible(env *CheckEnv, left int, right int, start int, end int
 	}
 	// Osty: /tmp/selfhost_merged.osty:18198:5
 	func() struct{} {
-		env.diagnostics = append(env.diagnostics, diagOperandType("<", tyToString(env.tys, left), start, end))
+		env.local.diagnostics = append(env.local.diagnostics, diagOperandType("<", tyToString(env.tys, left), start, end))
 		return struct{}{}
 	}()
 	return tErr(env.tys)
@@ -39028,7 +39139,7 @@ func binBoolOnly(env *CheckEnv, left int, right int, start int, end int) int {
 	}
 	// Osty: /tmp/selfhost_merged.osty:18207:5
 	func() struct{} {
-		env.diagnostics = append(env.diagnostics, diagOperandType("&&", tyToString(tys, left), start, end))
+		env.local.diagnostics = append(env.local.diagnostics, diagOperandType("&&", tyToString(tys, left), start, end))
 		return struct{}{}
 	}()
 	return tErr(tys)
@@ -39043,7 +39154,7 @@ func binIntCommon(env *CheckEnv, left int, right int, start int, end int) int {
 	if !(tyIsInteger(tys, left)) || !(tyIsInteger(tys, right)) {
 		// Osty: /tmp/selfhost_merged.osty:18214:9
 		func() struct{} {
-			env.diagnostics = append(env.diagnostics, diagOperandType("&|^<<>>", tyToString(tys, left), start, end))
+			env.local.diagnostics = append(env.local.diagnostics, diagOperandType("&|^<<>>", tyToString(tys, left), start, end))
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:18215:9
@@ -39066,7 +39177,7 @@ func binNumericCommon(env *CheckEnv, left int, right int, start int, end int) in
 	if !(tyIsNumeric(tys, left)) || !(tyIsNumeric(tys, right)) {
 		// Osty: /tmp/selfhost_merged.osty:18226:9
 		func() struct{} {
-			env.diagnostics = append(env.diagnostics, diagOperandType("+-*/%", tyToString(tys, left), start, end))
+			env.local.diagnostics = append(env.local.diagnostics, diagOperandType("+-*/%", tyToString(tys, left), start, end))
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:18227:9
@@ -39160,7 +39271,7 @@ func elabCoalesce(cx *ElabCx, node *AstNode) *ElabResult {
 	}
 	// Osty: /tmp/selfhost_merged.osty:18289:5
 	func() struct{} {
-		cx.env.diagnostics = append(cx.env.diagnostics, diagOperandType("??", tyToString(tys, leftTy), node.start, node.end))
+		cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagOperandType("??", tyToString(tys, leftTy), node.start, node.end))
 		return struct{}{}
 	}()
 	return elabErrResult(cx, node.start, node.end)
@@ -39457,7 +39568,7 @@ func elabLetStmt(cx *ElabCx, node *AstNode) int {
 	if !(patIsIrrefutable(cx, patIdx, effectiveTy)) {
 		// Osty: /tmp/selfhost_merged.osty:18434:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagRefutablePattern("let binding", node.start, node.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagRefutablePattern("let binding", node.start, node.end))
 			return struct{}{}
 		}()
 	}
@@ -39502,7 +39613,7 @@ func elabAssignableTarget(cx *ElabCx, idx int) *ElabResult {
 	if idx < 0 {
 		// Osty: /tmp/selfhost_merged.osty:18457:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagInvalidAssignTarget(0, 0))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagInvalidAssignTarget(0, 0))
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:18458:9
@@ -39518,7 +39629,7 @@ func elabAssignableTarget(cx *ElabCx, idx int) *ElabResult {
 		_ = target
 		// Osty: /tmp/selfhost_merged.osty:18463:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagInvalidAssignTarget(node.start, node.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagInvalidAssignTarget(node.start, node.end))
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:18464:9
@@ -39536,7 +39647,7 @@ func elabAssignableTarget(cx *ElabCx, idx int) *ElabResult {
 		if checkLookup(cx.env, name) >= 0 && !(checkLookupMutable(cx.env, name)) {
 			// Osty: /tmp/selfhost_merged.osty:18470:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagImmutableAssign(name, node.start, node.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagImmutableAssign(name, node.start, node.end))
 				return struct{}{}
 			}()
 		}
@@ -39547,7 +39658,7 @@ func elabAssignableTarget(cx *ElabCx, idx int) *ElabResult {
 // Osty: /tmp/selfhost_merged.osty:18476:1
 func elabReturnStmt(cx *ElabCx, node *AstNode) int {
 	// Osty: /tmp/selfhost_merged.osty:18477:5
-	expected := cx.env.returnTy
+	expected := cx.env.local.returnTy
 	_ = expected
 	// Osty: /tmp/selfhost_merged.osty:18478:5
 	valueIdx := node.left
@@ -39611,15 +39722,15 @@ func elabInferLoop(cx *ElabCx, idx int, node *AstNode) *ElabResult {
 	tys := cx.env.tys
 	_ = tys
 	// Osty: /tmp/selfhost_merged.osty:18518:5
-	prevInLoop := cx.env.inLoop
+	prevInLoop := cx.env.local.inLoop
 	_ = prevInLoop
 	// Osty: /tmp/selfhost_merged.osty:18519:11
-	cx.env.inLoop = true
+	cx.env.local.inLoop = true
 	// Osty: /tmp/selfhost_merged.osty:18520:5
 	firstBreakTy := elabFindFirstBreakValueTy(cx, node.right, -1)
 	_ = firstBreakTy
 	// Osty: /tmp/selfhost_merged.osty:18521:11
-	cx.env.inLoop = prevInLoop
+	cx.env.local.inLoop = prevInLoop
 	// Osty: /tmp/selfhost_merged.osty:18522:5
 	resultTy := func() int {
 		if firstBreakTy < 0 {
@@ -39746,7 +39857,7 @@ func elabForStmt(cx *ElabCx, node *AstNode) int {
 		if !(patIsIrrefutable(cx, patIdx, elemTy)) {
 			// Osty: /tmp/selfhost_merged.osty:18591:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagRefutablePattern("for-in binding", node.start, node.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagRefutablePattern("for-in binding", node.start, node.end))
 				return struct{}{}
 			}()
 		}
@@ -39778,10 +39889,10 @@ func elabLoopBody(cx *ElabCx, bodyIdx int) int {
 		return coreStmtBlock(cx.core, make([]int, 0, 1), 0, 0)
 	}
 	// Osty: /tmp/selfhost_merged.osty:18608:5
-	prevInLoop := cx.env.inLoop
+	prevInLoop := cx.env.local.inLoop
 	_ = prevInLoop
 	// Osty: /tmp/selfhost_merged.osty:18609:11
-	cx.env.inLoop = true
+	cx.env.local.inLoop = true
 	// Osty: /tmp/selfhost_merged.osty:18610:5
 	node := astArenaNodeAt(cx.ast.arena, bodyIdx)
 	_ = node
@@ -39798,7 +39909,7 @@ func elabLoopBody(cx *ElabCx, bodyIdx int) int {
 	}()
 	_ = body
 	// Osty: /tmp/selfhost_merged.osty:18617:11
-	cx.env.inLoop = prevInLoop
+	cx.env.local.inLoop = prevInLoop
 	return body
 }
 
@@ -39830,7 +39941,7 @@ func elabChannelElemTy(cx *ElabCx, ty int, start int, end int) int {
 	if !(tyIsBad(tys, resolved)) {
 		// Osty: /tmp/selfhost_merged.osty:18634:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagOperandType("<-", tyToString(tys, resolved), start, end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagOperandType("<-", tyToString(tys, resolved), start, end))
 			return struct{}{}
 		}()
 	}
@@ -39884,7 +39995,7 @@ func elabForIterableElemTy(cx *ElabCx, ty int, start int, end int) int {
 	}
 	// Osty: /tmp/selfhost_merged.osty:18667:5
 	func() struct{} {
-		cx.env.diagnostics = append(cx.env.diagnostics, diagOperandType("in", tyToString(tys, resolved), start, end))
+		cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagOperandType("in", tyToString(tys, resolved), start, end))
 		return struct{}{}
 	}()
 	return tErr(tys)
@@ -40703,7 +40814,7 @@ func elabInferCall(cx *ElabCx, callIdx int, node *AstNode, expected int) *ElabRe
 	instSeedExpectedRet(cx, inst, sig.retTy, expected)
 	// Osty: /tmp/selfhost_merged.osty:19093:5
 	if checkIntListLenHelper(explicitArgs) > 0 && checkIntListLenHelper(explicitArgs) != checkStringListLenHelper(sig.generics) {
-		cx.env.diagnostics = append(cx.env.diagnostics, diagGenericArgCount(sig.name, checkStringListLenHelper(sig.generics), checkIntListLenHelper(explicitArgs), callee.start, callee.end))
+		cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagGenericArgCount(sig.name, checkStringListLenHelper(sig.generics), checkIntListLenHelper(explicitArgs), callee.start, callee.end))
 	}
 	instSeedPositionalArgs(cx, inst, explicitArgs)
 	// Osty: /tmp/selfhost_merged.osty:19095:5
@@ -40761,7 +40872,7 @@ func elabCheckCallReturnEscape(cx *ElabCx, ownerName string, methodName string, 
 	_ = context
 	// Osty: /tmp/selfhost_merged.osty:19146:5
 	func() struct{} {
-		cx.env.diagnostics = append(cx.env.diagnostics, diagNonEscapingEscape(tyToString(cx.env.tys, retTy), context, start, end))
+		cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagNonEscapingEscape(tyToString(cx.env.tys, retTy), context, start, end))
 		return struct{}{}
 	}()
 }
@@ -40818,7 +40929,7 @@ func elabInferStaticMethodCall(cx *ElabCx, callIdx int, node *AstNode, fieldNode
 		if totalArgs == 0 {
 			// Osty: /tmp/selfhost_merged.osty:19229:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagArgCount(fmt.Sprintf("%s.%s", ostyToString(ownerName), ostyToString(sig.name)), func() int {
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagArgCount(fmt.Sprintf("%s.%s", ostyToString(ownerName), ostyToString(sig.name)), func() int {
 					var _p2204 int = 1
 					var _rhs2205 int = checkIntListLenHelper(sig.paramTys)
 					if _rhs2205 > 0 && _p2204 > math.MaxInt-_rhs2205 {
@@ -41182,7 +41293,7 @@ func elabBuilderDeriveInfoForOwner(env *CheckEnv, owner string) *CheckBuilderDer
 	var methodNames []string = make([]string, 0, 1)
 	_ = methodNames
 	// Osty: /tmp/selfhost_merged.osty:19445:5
-	for _, field := range env.fields {
+	for _, field := range env.global.fields {
 		// Osty: /tmp/selfhost_merged.osty:19446:9
 		if field.owner == owner {
 			// Osty: /tmp/selfhost_merged.osty:19447:13
@@ -41194,7 +41305,7 @@ func elabBuilderDeriveInfoForOwner(env *CheckEnv, owner string) *CheckBuilderDer
 		}
 	}
 	// Osty: /tmp/selfhost_merged.osty:19452:5
-	for _, fnSig := range env.fns {
+	for _, fnSig := range env.global.fns {
 		// Osty: /tmp/selfhost_merged.osty:19453:9
 		if fnSig.owner == owner && !fnSig.hasReceiver {
 			// Osty: /tmp/selfhost_merged.osty:19454:13
@@ -41207,7 +41318,7 @@ func elabBuilderDeriveInfoForOwner(env *CheckEnv, owner string) *CheckBuilderDer
 // Osty: /tmp/selfhost_merged.osty:19460:1
 func elabBuilderHasExportedField(env *CheckEnv, owner string, fieldName string) bool {
 	// Osty: /tmp/selfhost_merged.osty:19461:5
-	for _, field := range env.fields {
+	for _, field := range env.global.fields {
 		// Osty: /tmp/selfhost_merged.osty:19462:9
 		if field.owner == owner && field.name == fieldName && field.exported {
 			// Osty: /tmp/selfhost_merged.osty:19463:13
@@ -41289,7 +41400,7 @@ func elabLowerBuilderChain(cx *ElabCx, callNode *AstNode, expected int, owner st
 	var coreFieldsList []int = make([]int, 0, 1)
 	_ = coreFieldsList
 	// Osty: /tmp/selfhost_merged.osty:19513:5
-	for _, field := range cx.env.fields {
+	for _, field := range cx.env.global.fields {
 		// Osty: /tmp/selfhost_merged.osty:19514:9
 		if field.owner != owner || !(field.exported) {
 			// Osty: /tmp/selfhost_merged.osty:19515:13
@@ -41332,7 +41443,7 @@ func elabLowerBuilderChain(cx *ElabCx, callNode *AstNode, expected int, owner st
 	if spreadNode < 0 && len(missing) > 0 {
 		// Osty: /tmp/selfhost_merged.osty:19533:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagBuilderMissingRequiredField(owner, missing, callNode.start, callNode.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagBuilderMissingRequiredField(owner, missing, callNode.start, callNode.end))
 			return struct{}{}
 		}()
 	}
@@ -41523,7 +41634,7 @@ func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expe
 		} else {
 			// Osty: /tmp/selfhost_merged.osty:19653:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagOptionalChainOnNon(tyToString(cx.env.tys, recvResolved), fieldNode.start, fieldNode.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagOptionalChainOnNon(tyToString(cx.env.tys, recvResolved), fieldNode.start, fieldNode.end))
 				return struct{}{}
 			}()
 			// Osty: /tmp/selfhost_merged.osty:19658:13
@@ -41536,7 +41647,7 @@ func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expe
 		if !(tyIsNamedHead(cx.env.tys, recvResolved, "Error")) {
 			// Osty: /tmp/selfhost_merged.osty:19667:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagAsQuestionBadOperand(tyToString(cx.env.tys, recvResolved), callNode.start, callNode.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagAsQuestionBadOperand(tyToString(cx.env.tys, recvResolved), callNode.start, callNode.end))
 				return struct{}{}
 			}()
 			// Osty: /tmp/selfhost_merged.osty:19672:13
@@ -41582,7 +41693,7 @@ func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expe
 				if rejected {
 					// Osty: /tmp/selfhost_merged.osty:19702:21
 					func() struct{} {
-						cx.env.diagnostics = append(cx.env.diagnostics, diagAsQuestionBadType(tyToString(cx.env.tys, targetResolved), callNode.start, callNode.end))
+						cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagAsQuestionBadType(tyToString(cx.env.tys, targetResolved), callNode.start, callNode.end))
 						return struct{}{}
 					}()
 					// Osty: /tmp/selfhost_merged.osty:19707:21
@@ -41621,7 +41732,7 @@ func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expe
 		_ = hint
 		// Osty: /tmp/selfhost_merged.osty:19727:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, checkDiagAttachHint(diagUnknownMethod(ownerName, methodName, fieldNode.start, fieldNode.end), hint))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, checkDiagAttachHint(diagUnknownMethod(ownerName, methodName, fieldNode.start, fieldNode.end), hint))
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:19731:9
@@ -41709,7 +41820,7 @@ func elabInferFnValueCall(cx *ElabCx, node *AstNode, argIdxs []int, expected int
 	if !ostyEqual(tyKindAt(cx.env.tys, fnTy), TyKind(&TyKind_TkFn{})) {
 		// Osty: /tmp/selfhost_merged.osty:19813:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagNotCallable(tyToString(cx.env.tys, fnTy), node.start, node.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagNotCallable(tyToString(cx.env.tys, fnTy), node.start, node.end))
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:19814:9
@@ -41731,7 +41842,7 @@ func elabInferFnValueCall(cx *ElabCx, node *AstNode, argIdxs []int, expected int
 	if wantCount != gotCount {
 		// Osty: /tmp/selfhost_merged.osty:19821:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagArgCount("", wantCount, gotCount, node.start, node.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagArgCount("", wantCount, gotCount, node.start, node.end))
 			return struct{}{}
 		}()
 	}
@@ -41804,7 +41915,7 @@ func elabCallArgs(cx *ElabCx, solver *Solver, sig *CheckFnSig, freshs []int, arg
 	if gotCount > wantCount || gotCount < minArity {
 		// Osty: /tmp/selfhost_merged.osty:19861:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagArgCount(sig.name, wantCount, gotCount, start, end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagArgCount(sig.name, wantCount, gotCount, start, end))
 			return struct{}{}
 		}()
 	}
@@ -41946,7 +42057,7 @@ func elabCallArgsMonomorphicWithNames(cx *ElabCx, callee string, paramNames []st
 	if gotCount > wantCount || gotCount < minArity {
 		// Osty: /tmp/selfhost_merged.osty:19954:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagArgCount(callee, wantCount, gotCount, start, end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagArgCount(callee, wantCount, gotCount, start, end))
 			return struct{}{}
 		}()
 	}
@@ -42185,7 +42296,7 @@ func elabReportUnresolvedGenerics(cx *ElabCx, solver *Solver, sig *CheckFnSig, f
 			_ = gname
 			// Osty: /tmp/selfhost_merged.osty:20067:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagCannotInferTyParam(gname, sig.name, start, end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagCannotInferTyParam(gname, sig.name, start, end))
 				return struct{}{}
 			}()
 		}
@@ -42231,7 +42342,7 @@ func elabCheckGenericBounds(cx *ElabCx, solver *Solver, generics []string, bound
 		if !(checkGenericBoundSatisfied(cx.env, solver, concrete, ifaceTy)) {
 			// Osty: /tmp/selfhost_merged.osty:20093:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagBoundViolation(bound.tyParam, tyToString(cx.env.tys, ifaceTy), tyToString(cx.env.tys, concrete), start, end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagBoundViolation(bound.tyParam, tyToString(cx.env.tys, ifaceTy), tyToString(cx.env.tys, concrete), start, end))
 				return struct{}{}
 			}()
 		}
@@ -42379,7 +42490,7 @@ func elabInferField(cx *ElabCx, node *AstNode) *ElabResult {
 		} else {
 			// Osty: /tmp/selfhost_merged.osty:20190:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagOptionalChainOnNon(tyToString(cx.env.tys, recvTy), node.start, node.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagOptionalChainOnNon(tyToString(cx.env.tys, recvTy), node.start, node.end))
 				return struct{}{}
 			}()
 			// Osty: /tmp/selfhost_merged.osty:20195:13
@@ -42406,7 +42517,7 @@ func elabInferField(cx *ElabCx, node *AstNode) *ElabResult {
 			if idx < 0 || idx >= checkIntListLenHelper(elems) {
 				// Osty: /tmp/selfhost_merged.osty:20205:17
 				func() struct{} {
-					cx.env.diagnostics = append(cx.env.diagnostics, diagUnknownField(tyToString(cx.env.tys, lookupTy), fieldName, node.start, node.end))
+					cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagUnknownField(tyToString(cx.env.tys, lookupTy), fieldName, node.start, node.end))
 					return struct{}{}
 				}()
 				// Osty: /tmp/selfhost_merged.osty:20211:17
@@ -42437,7 +42548,7 @@ func elabInferField(cx *ElabCx, node *AstNode) *ElabResult {
 				_ = hint
 				// Osty: /tmp/selfhost_merged.osty:20225:17
 				func() struct{} {
-					cx.env.diagnostics = append(cx.env.diagnostics, checkDiagAttachHint(diagUnknownField(owner, fieldName, node.start, node.end), hint))
+					cx.env.local.diagnostics = append(cx.env.local.diagnostics, checkDiagAttachHint(diagUnknownField(owner, fieldName, node.start, node.end), hint))
 					return struct{}{}
 				}()
 				// Osty: /tmp/selfhost_merged.osty:20229:17
@@ -42469,7 +42580,7 @@ func elabInferField(cx *ElabCx, node *AstNode) *ElabResult {
 		{
 			// Osty: /tmp/selfhost_merged.osty:20244:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagUnknownField(tyToString(cx.env.tys, lookupTy), fieldName, node.start, node.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagUnknownField(tyToString(cx.env.tys, lookupTy), fieldName, node.start, node.end))
 				return struct{}{}
 			}()
 			return elabPoisonResult(cx, node.start, node.end)
@@ -42671,7 +42782,7 @@ func elabInferIndex(cx *ElabCx, node *AstNode) *ElabResult {
 			if !(checkIsAssignable(cx.env, tInt(tys), idx.ty)) {
 				// Osty: /tmp/selfhost_merged.osty:20331:17
 				func() struct{} {
-					cx.env.diagnostics = append(cx.env.diagnostics, diagMismatch("Int", tyToString(tys, idx.ty), node.start, node.end))
+					cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagMismatch("Int", tyToString(tys, idx.ty), node.start, node.end))
 					return struct{}{}
 				}()
 			}
@@ -42721,7 +42832,7 @@ func elabInferIndex(cx *ElabCx, node *AstNode) *ElabResult {
 		if !(checkIsAssignable(cx.env, tInt(tys), idx.ty)) {
 			// Osty: /tmp/selfhost_merged.osty:20356:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagMismatch("Int", tyToString(tys, idx.ty), node.start, node.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagMismatch("Int", tyToString(tys, idx.ty), node.start, node.end))
 				return struct{}{}
 			}()
 		}
@@ -42733,7 +42844,7 @@ func elabInferIndex(cx *ElabCx, node *AstNode) *ElabResult {
 	}
 	// Osty: /tmp/selfhost_merged.osty:20361:5
 	func() struct{} {
-		cx.env.diagnostics = append(cx.env.diagnostics, diagUnknownField(tyToString(tys, recvTy), "[]", node.start, node.end))
+		cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagUnknownField(tyToString(tys, recvTy), "[]", node.start, node.end))
 		return struct{}{}
 	}()
 	return elabPoisonResult(cx, node.start, node.end)
@@ -43013,7 +43124,7 @@ func elabInferTuple(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 	if expectedIsTuple && checkIntListLenHelper(expectedElems) != arity {
 		// Osty: /tmp/selfhost_merged.osty:20476:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagArgCount("", checkIntListLenHelper(expectedElems), arity, node.start, node.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagArgCount("", checkIntListLenHelper(expectedElems), arity, node.start, node.end))
 			return struct{}{}
 		}()
 	}
@@ -43053,7 +43164,7 @@ func elabInferStructLit(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 	if typeSig.name == "" {
 		// Osty: /tmp/selfhost_merged.osty:20503:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagUnknownName(owner, node.start, node.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagUnknownName(owner, node.start, node.end))
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:20504:9
@@ -43091,7 +43202,7 @@ func elabInferStructLit(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 		// Osty: /tmp/selfhost_merged.osty:20527:9
 		if tyIsNamedHead(tys, spreadResult.ty, owner) {
 			// Osty: /tmp/selfhost_merged.osty:20528:13
-			for _, f := range cx.env.fields {
+			for _, f := range cx.env.global.fields {
 				// Osty: /tmp/selfhost_merged.osty:20529:17
 				if f.owner == owner {
 					// Osty: /tmp/selfhost_merged.osty:20530:21
@@ -43124,7 +43235,7 @@ func elabInferStructLit(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 			_ = suggestion
 			// Osty: /tmp/selfhost_merged.osty:20546:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, checkDiagAttachHint(diagUnknownField(owner, fieldName, fieldNode.start, fieldNode.end), suggestion))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, checkDiagAttachHint(diagUnknownField(owner, fieldName, fieldNode.start, fieldNode.end), suggestion))
 				return struct{}{}
 			}()
 			// Osty: /tmp/selfhost_merged.osty:20550:13
@@ -43134,7 +43245,7 @@ func elabInferStructLit(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 		if listContainsString(seenNames, fieldName) {
 			// Osty: /tmp/selfhost_merged.osty:20553:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagDuplicateField(owner, fieldName, fieldNode.start, fieldNode.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagDuplicateField(owner, fieldName, fieldNode.start, fieldNode.end))
 				return struct{}{}
 			}()
 		}
@@ -43158,12 +43269,12 @@ func elabInferStructLit(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 		}()
 	}
 	// Osty: /tmp/selfhost_merged.osty:20566:5
-	for _, f := range cx.env.fields {
+	for _, f := range cx.env.global.fields {
 		// Osty: /tmp/selfhost_merged.osty:20567:9
 		if f.owner == owner && !(listContainsString(seenNames, f.name)) && !(listContainsString(spreadSupplied, f.name)) && !(f.hasDefault) {
 			// Osty: /tmp/selfhost_merged.osty:20571:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagMissingField(owner, f.name, node.start, node.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagMissingField(owner, f.name, node.start, node.end))
 				return struct{}{}
 			}()
 		}
@@ -43241,7 +43352,7 @@ func elabInferClosure(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 	if expectedIsFn && checkIntListLenHelper(expectedParams) != arity {
 		// Osty: /tmp/selfhost_merged.osty:20614:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagArgCount("closure", checkIntListLenHelper(expectedParams), arity, node.start, node.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagArgCount("closure", checkIntListLenHelper(expectedParams), arity, node.start, node.end))
 			return struct{}{}
 		}()
 	}
@@ -43277,7 +43388,7 @@ func elabInferClosure(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 			} else {
 				// Osty: /tmp/selfhost_merged.osty:20630:13
 				func() struct{} {
-					cx.env.diagnostics = append(cx.env.diagnostics, diagClosureAnnotationRequired(paramNode.start, paramNode.end))
+					cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagClosureAnnotationRequired(paramNode.start, paramNode.end))
 					return struct{}{}
 				}()
 				return tErr(tys)
@@ -43319,7 +43430,7 @@ func elabInferClosure(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 			if !(tyIsBad(tys, paramTy)) && !(patIsIrrefutable(cx, paramNode.left, paramTy)) {
 				// Osty: /tmp/selfhost_merged.osty:20650:17
 				func() struct{} {
-					cx.env.diagnostics = append(cx.env.diagnostics, diagRefutablePattern("closure parameter", paramNode.start, paramNode.end))
+					cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagRefutablePattern("closure parameter", paramNode.start, paramNode.end))
 					return struct{}{}
 				}()
 			}
@@ -43450,7 +43561,7 @@ func elabInferRange(cx *ElabCx, node *AstNode) *ElabResult {
 	if !(tyIsInteger(tys, lo.ty)) && !(tyIsBad(tys, lo.ty)) {
 		// Osty: /tmp/selfhost_merged.osty:20715:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagMismatch("Int", tyToString(tys, lo.ty), node.start, node.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagMismatch("Int", tyToString(tys, lo.ty), node.start, node.end))
 			return struct{}{}
 		}()
 	}
@@ -43458,7 +43569,7 @@ func elabInferRange(cx *ElabCx, node *AstNode) *ElabResult {
 	if !(tyIsInteger(tys, hi.ty)) && !(tyIsBad(tys, hi.ty)) {
 		// Osty: /tmp/selfhost_merged.osty:20718:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagMismatch("Int", tyToString(tys, hi.ty), node.start, node.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagMismatch("Int", tyToString(tys, hi.ty), node.start, node.end))
 			return struct{}{}
 		}()
 	}
@@ -43474,7 +43585,7 @@ func elabInferRange(cx *ElabCx, node *AstNode) *ElabResult {
 		if !(tyIsInteger(tys, step.ty)) && !(tyIsBad(tys, step.ty)) {
 			// Osty: /tmp/selfhost_merged.osty:20727:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagMismatch("Int", tyToString(tys, step.ty), node.start, node.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagMismatch("Int", tyToString(tys, step.ty), node.start, node.end))
 				return struct{}{}
 			}()
 		}
@@ -43733,7 +43844,7 @@ func elabInferMatch(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 			_ = msg
 			// Osty: /tmp/selfhost_merged.osty:20875:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagNonExhaustiveMatch(msg, node.start, node.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagNonExhaustiveMatch(msg, node.start, node.end))
 				return struct{}{}
 			}()
 		}
@@ -43747,7 +43858,7 @@ func elabInferMatch(cx *ElabCx, node *AstNode, expected int) *ElabResult {
 			_ = arm
 			// Osty: /tmp/selfhost_merged.osty:20880:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagUnreachablePattern(arm.start, arm.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagUnreachablePattern(arm.start, arm.end))
 				return struct{}{}
 			}()
 		}
@@ -43775,7 +43886,7 @@ func elabInferQuestion(cx *ElabCx, node *AstNode) *ElabResult {
 	innerTy := checkResolveAliasDeep(cx.env, inner.ty)
 	_ = innerTy
 	// Osty: /tmp/selfhost_merged.osty:20899:5
-	retTy := checkResolveAliasDeep(cx.env, cx.env.returnTy)
+	retTy := checkResolveAliasDeep(cx.env, cx.env.local.returnTy)
 	_ = retTy
 	// Osty: /tmp/selfhost_merged.osty:20900:5
 	if tyIsBad(tys, innerTy) || tyIsBad(tys, retTy) {
@@ -43799,7 +43910,7 @@ func elabInferQuestion(cx *ElabCx, node *AstNode) *ElabResult {
 		if !(tyIsNamedHead(tys, retTy, "Option")) && !(tyIsBad(tys, retTy)) {
 			// Osty: /tmp/selfhost_merged.osty:20911:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagQuestionNotOptional(tyToString(tys, retTy), node.start, node.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagQuestionNotOptional(tyToString(tys, retTy), node.start, node.end))
 				return struct{}{}
 			}()
 		}
@@ -43841,7 +43952,7 @@ func elabInferQuestion(cx *ElabCx, node *AstNode) *ElabResult {
 		} else if !(tyIsBad(tys, retTy)) {
 			// Osty: /tmp/selfhost_merged.osty:20931:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagQuestionNotOptional(tyToString(tys, retTy), node.start, node.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagQuestionNotOptional(tyToString(tys, retTy), node.start, node.end))
 				return struct{}{}
 			}()
 		}
@@ -43855,7 +43966,7 @@ func elabInferQuestion(cx *ElabCx, node *AstNode) *ElabResult {
 	if !(tyIsBad(tys, innerTy)) {
 		// Osty: /tmp/selfhost_merged.osty:20938:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagQuestionNotOptional(tyToString(tys, innerTy), node.start, node.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagQuestionNotOptional(tyToString(tys, innerTy), node.start, node.end))
 			return struct{}{}
 		}()
 	}
@@ -43925,7 +44036,7 @@ func elabPatternMode(cx *ElabCx, idx int, scrutTy int, mutable bool, recordBindi
 		if !(checkIsAssignable(cx.env, scrutTy, lit.ty)) && !(tyIsBad(tys, lit.ty)) {
 			// Osty: /tmp/selfhost_merged.osty:20983:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
 				return struct{}{}
 			}()
 		}
@@ -44083,7 +44194,7 @@ func elabRangePattern(cx *ElabCx, node *AstNode, scrutTy int) int {
 	if !(tyIsBad(tys, scrutTy)) && !(tyIsInteger(tys, scrutTy)) && !(tyIsPrim(tys, scrutTy, PrimKind(&PrimKind_PkChar{}))) {
 		// Osty: /tmp/selfhost_merged.osty:21074:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
 			return struct{}{}
 		}()
 	}
@@ -44153,7 +44264,7 @@ func elabVariantPattern(cx *ElabCx, node *AstNode, scrutTy int, mutable bool, re
 		_ = suggestion
 		// Osty: /tmp/selfhost_merged.osty:21108:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, checkDiagAttachHint(diagUnknownVariant(scrutHead, variantName, node.start, node.end), suggestion))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, checkDiagAttachHint(diagUnknownVariant(scrutHead, variantName, node.start, node.end), suggestion))
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:21112:9
@@ -44232,7 +44343,7 @@ func elabTuplePattern(cx *ElabCx, node *AstNode, scrutTy int, mutable bool, reco
 	if !ostyEqual(kind, TyKind(&TyKind_TkTuple{})) {
 		// Osty: /tmp/selfhost_merged.osty:21142:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:21143:9
@@ -44245,7 +44356,7 @@ func elabTuplePattern(cx *ElabCx, node *AstNode, scrutTy int, mutable bool, reco
 	if checkIntListLenHelper(elems) != checkIntListLenHelper(node.children) {
 		// Osty: /tmp/selfhost_merged.osty:21147:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
 			return struct{}{}
 		}()
 	}
@@ -44302,7 +44413,7 @@ func elabStructPattern(cx *ElabCx, node *AstNode, scrutTy int, mutable bool, rec
 	if typeSig.name == "" {
 		// Osty: /tmp/selfhost_merged.osty:21164:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagPatternShapeMismatch(tyToString(tys, scrutTy), node.start, node.end))
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:21165:9
@@ -44332,7 +44443,7 @@ func elabStructPattern(cx *ElabCx, node *AstNode, scrutTy int, mutable bool, rec
 			_ = suggestion
 			// Osty: /tmp/selfhost_merged.osty:21177:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, checkDiagAttachHint(diagUnknownField(owner, fieldName, child.start, child.end), suggestion))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, checkDiagAttachHint(diagUnknownField(owner, fieldName, child.start, child.end), suggestion))
 				return struct{}{}
 			}()
 			// Osty: /tmp/selfhost_merged.osty:21181:13
@@ -44642,7 +44753,7 @@ func exhaustCheckMatch(cx *ElabCx, matchNode *AstNode, scrutTy int) {
 		if typeSig.kind == "struct" {
 			// Osty: /tmp/selfhost_merged.osty:21394:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagNonExhaustiveMatch(witnessRenderStruct(cx, owner), matchNode.start, matchNode.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagNonExhaustiveMatch(witnessRenderStruct(cx, owner), matchNode.start, matchNode.end))
 				return struct{}{}
 			}()
 			// Osty: /tmp/selfhost_merged.osty:21395:13
@@ -44653,7 +44764,7 @@ func exhaustCheckMatch(cx *ElabCx, matchNode *AstNode, scrutTy int) {
 	if ostyEqual(kind, TyKind(&TyKind_TkTuple{})) {
 		// Osty: /tmp/selfhost_merged.osty:21400:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagNonExhaustiveMatch(witnessRenderTuple(cx, scrutTy), matchNode.start, matchNode.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagNonExhaustiveMatch(witnessRenderTuple(cx, scrutTy), matchNode.start, matchNode.end))
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:21401:9
@@ -44663,7 +44774,7 @@ func exhaustCheckMatch(cx *ElabCx, matchNode *AstNode, scrutTy int) {
 	if ostyEqual(kind, TyKind(&TyKind_TkPrim{})) {
 		// Osty: /tmp/selfhost_merged.osty:21406:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagNonExhaustiveMatch("_", matchNode.start, matchNode.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagNonExhaustiveMatch("_", matchNode.start, matchNode.end))
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:21407:9
@@ -44710,13 +44821,13 @@ func exhaustCheckBool(cx *ElabCx, matchNode *AstNode, scrutTy int) {
 	if !seenTrue {
 		// Osty: /tmp/selfhost_merged.osty:21432:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagNonExhaustiveMatch("true", matchNode.start, matchNode.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagNonExhaustiveMatch("true", matchNode.start, matchNode.end))
 			return struct{}{}
 		}()
 	} else if !seenFalse {
 		// Osty: /tmp/selfhost_merged.osty:21434:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagNonExhaustiveMatch("false", matchNode.start, matchNode.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagNonExhaustiveMatch("false", matchNode.start, matchNode.end))
 			return struct{}{}
 		}()
 	}
@@ -44781,7 +44892,7 @@ func exhaustCheckEnum(cx *ElabCx, matchNode *AstNode, scrutTy int, owner string)
 		if !(anyArmCoversVariant(cx, matchNode, scrutTy, v)) {
 			// Osty: /tmp/selfhost_merged.osty:21471:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagNonExhaustiveMatch(witnessRenderVariant(v), matchNode.start, matchNode.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagNonExhaustiveMatch(witnessRenderVariant(v), matchNode.start, matchNode.end))
 				return struct{}{}
 			}()
 			// Osty: /tmp/selfhost_merged.osty:21472:13
@@ -44990,7 +45101,7 @@ func reachCheckArms(cx *ElabCx, matchNode *AstNode, scrutTy int) {
 			if unreachable {
 				// Osty: /tmp/selfhost_merged.osty:21591:17
 				func() struct{} {
-					cx.env.diagnostics = append(cx.env.diagnostics, diagUnreachablePattern(arm.start, arm.end))
+					cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagUnreachablePattern(arm.start, arm.end))
 					return struct{}{}
 				}()
 			}
@@ -45524,7 +45635,7 @@ func witnessRenderStruct(cx *ElabCx, owner string) string {
 	var parts []string = make([]string, 0, 1)
 	_ = parts
 	// Osty: /tmp/selfhost_merged.osty:21903:5
-	for _, f := range cx.env.fields {
+	for _, f := range cx.env.global.fields {
 		// Osty: /tmp/selfhost_merged.osty:21904:9
 		if f.owner == owner {
 			// Osty: /tmp/selfhost_merged.osty:21905:13
@@ -45587,7 +45698,7 @@ func allVariantsForOwner(env *CheckEnv, owner string) []*CheckVariantSig {
 	var out []*CheckVariantSig = make([]*CheckVariantSig, 0, 1)
 	_ = out
 	// Osty: /tmp/selfhost_merged.osty:21938:5
-	for _, v := range env.variants {
+	for _, v := range env.global.variants {
 		// Osty: /tmp/selfhost_merged.osty:21939:9
 		if v.owner == owner {
 			// Osty: /tmp/selfhost_merged.osty:21940:13
@@ -46541,7 +46652,7 @@ func pmStructFieldsForOwner(env *CheckEnv, owner string) []*CheckFieldSig {
 	var out []*CheckFieldSig = make([]*CheckFieldSig, 0, 1)
 	_ = out
 	// Osty: /tmp/selfhost_merged.osty:22539:5
-	for _, f := range env.fields {
+	for _, f := range env.global.fields {
 		// Osty: /tmp/selfhost_merged.osty:22540:9
 		if f.owner == owner {
 			// Osty: /tmp/selfhost_merged.osty:22541:13
@@ -48523,7 +48634,7 @@ func collectFnDecl(cx *ElabCx, declIdx int, node *AstNode, owner string, ownerGe
 		_ = retNode
 		// Osty: /tmp/selfhost_merged.osty:23812:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagNonEscapingEscape(tyToString(cx.env.tys, retEffective), "function return", retNode.start, retNode.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagNonEscapingEscape(tyToString(cx.env.tys, retEffective), "function return", retNode.start, retNode.end))
 			return struct{}{}
 		}()
 	}
@@ -48603,7 +48714,7 @@ func collectStructDecl(cx *ElabCx, declIdx int, node *AstNode) {
 				if tyEscapingCapabilityHead(cx.env.tys, effectiveTy) != "" {
 					// Osty: /tmp/selfhost_merged.osty:23867:21
 					func() struct{} {
-						cx.env.diagnostics = append(cx.env.diagnostics, diagNonEscapingEscape(tyToString(cx.env.tys, effectiveTy), "struct field", member.start, member.end))
+						cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagNonEscapingEscape(tyToString(cx.env.tys, effectiveTy), "struct field", member.start, member.end))
 						return struct{}{}
 					}()
 				}
@@ -48679,7 +48790,7 @@ func collectEnumDecl(cx *ElabCx, declIdx int, node *AstNode) {
 						if tyEscapingCapabilityHead(cx.env.tys, ty) != "" {
 							// Osty: /tmp/selfhost_merged.osty:23921:29
 							func() struct{} {
-								cx.env.diagnostics = append(cx.env.diagnostics, diagNonEscapingEscape(tyToString(cx.env.tys, ty), "enum variant payload", f.start, f.end))
+								cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagNonEscapingEscape(tyToString(cx.env.tys, ty), "enum variant payload", f.start, f.end))
 								return struct{}{}
 							}()
 						}
@@ -48780,7 +48891,7 @@ func collectTypeAlias(cx *ElabCx, declIdx int, node *AstNode) {
 		_ = targetNode
 		// Osty: /tmp/selfhost_merged.osty:23983:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagNonEscapingEscape(tyToString(cx.env.tys, ty), "type alias", targetNode.start, targetNode.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagNonEscapingEscape(tyToString(cx.env.tys, ty), "type alias", targetNode.start, targetNode.end))
 			return struct{}{}
 		}()
 	}
@@ -48825,7 +48936,7 @@ func collectLetDecl(cx *ElabCx, declIdx int, node *AstNode) {
 	if declared >= 0 && tyEscapingCapabilityHead(cx.env.tys, ty) != "" {
 		// Osty: /tmp/selfhost_merged.osty:24009:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagNonEscapingEscape(tyToString(cx.env.tys, ty), "module-level binding", node.start, node.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagNonEscapingEscape(tyToString(cx.env.tys, ty), "module-level binding", node.start, node.end))
 			return struct{}{}
 		}()
 	}
@@ -48895,15 +49006,15 @@ func elaborateFnBody(cx *ElabCx, node *AstNode, owner string) {
 	boundsMark := checkGenericBoundMark(cx.env)
 	_ = boundsMark
 	// Osty: /tmp/selfhost_merged.osty:24053:5
-	prevReturn := cx.env.returnTy
+	prevReturn := cx.env.local.returnTy
 	_ = prevReturn
 	// Osty: /tmp/selfhost_merged.osty:24054:5
-	prevFnName := cx.env.fnName
+	prevFnName := cx.env.local.fnName
 	_ = prevFnName
 	// Osty: /tmp/selfhost_merged.osty:24055:11
-	cx.env.returnTy = sig.retTy
+	cx.env.local.returnTy = sig.retTy
 	// Osty: /tmp/selfhost_merged.osty:24056:11
-	cx.env.fnName = sig.name
+	cx.env.local.fnName = sig.name
 	// Osty: /tmp/selfhost_merged.osty:24057:5
 	for _, bound := range sig.genericBounds {
 		// Osty: /tmp/selfhost_merged.osty:24058:9
@@ -48952,9 +49063,9 @@ func elaborateFnBody(cx *ElabCx, node *AstNode, owner string) {
 		_ = sig
 	}
 	// Osty: /tmp/selfhost_merged.osty:24080:11
-	cx.env.returnTy = prevReturn
+	cx.env.local.returnTy = prevReturn
 	// Osty: /tmp/selfhost_merged.osty:24081:11
-	cx.env.fnName = prevFnName
+	cx.env.local.fnName = prevFnName
 	// Osty: /tmp/selfhost_merged.osty:24082:5
 	checkClearGenericBoundsAfter(cx.env, boundsMark)
 	// Osty: /tmp/selfhost_merged.osty:24083:5
@@ -49252,7 +49363,7 @@ func typedExprKindNameAt(ast *AstFile, idx int) string {
 // Osty: /tmp/selfhost_merged.osty:24248:1
 func serializeCheckResult(cx *ElabCx) *FrontCheckResult {
 	// Osty: /tmp/selfhost_merged.osty:24249:5
-	summary := &FrontCheckSummary{assignments: cx.env.assignments, accepted: cx.env.accepted, errors: checkDiagCountErrors(cx.env.diagnostics)}
+	summary := &FrontCheckSummary{assignments: cx.env.local.assignments, accepted: cx.env.local.accepted, errors: checkDiagCountErrors(cx.env.local.diagnostics)}
 	_ = summary
 	// Osty: /tmp/selfhost_merged.osty:24255:5
 	var typedNodes []*FrontCheckedNode = make([]*FrontCheckedNode, 0, 1)
@@ -49286,7 +49397,7 @@ func serializeCheckResult(cx *ElabCx) *FrontCheckResult {
 	_ = bindings
 	bindingId := 0
 	// Osty: /tmp/selfhost_merged.osty:24275:5
-	for _, b := range cx.env.bindingRecords {
+	for _, b := range cx.env.local.bindingRecords {
 		// Osty: /tmp/selfhost_merged.osty:24276:9
 		func() struct{} {
 			bindings = append(bindings, &FrontCheckedBinding{node: b.node, nodeId: b.node, bindingId: bindingId, name: b.name, typeRepr: tyToRepr(cx.env.tys, b.ty), typeId: b.ty, mutable: b.mutable, start: b.start, end: b.end})
@@ -49299,7 +49410,7 @@ func serializeCheckResult(cx *ElabCx) *FrontCheckResult {
 	_ = symbols
 	symbolId := 0
 	// Osty: /tmp/selfhost_merged.osty:24287:5
-	for _, s := range cx.env.symbolRecords {
+	for _, s := range cx.env.local.symbolRecords {
 		// Osty: /tmp/selfhost_merged.osty:24288:9
 		func() struct{} {
 			symbols = append(symbols, &FrontCheckedSymbol{node: s.node, nodeId: s.node, symbolId: symbolId, kind: s.kind, name: s.name, owner: s.owner, typeRepr: tyToRepr(cx.env.tys, s.ty), typeId: s.ty, start: s.start, end: s.end})
@@ -49312,7 +49423,7 @@ func serializeCheckResult(cx *ElabCx) *FrontCheckResult {
 	_ = instantiations
 	instantiationId := 0
 	// Osty: /tmp/selfhost_merged.osty:24300:5
-	for _, inst := range cx.env.instantiations {
+	for _, inst := range cx.env.local.instantiations {
 		// Osty: /tmp/selfhost_merged.osty:24301:9
 		var typeArgReprs []*FrontTypeRepr = make([]*FrontTypeRepr, 0, 1)
 		_ = typeArgReprs
@@ -49331,7 +49442,7 @@ func serializeCheckResult(cx *ElabCx) *FrontCheckResult {
 		}()
 		instantiationId++
 	}
-	return &FrontCheckResult{summary: summary, typedNodes: typedNodes, bindings: bindings, symbols: symbols, instantiations: instantiations, diagnostics: cx.env.diagnostics}
+	return &FrontCheckResult{summary: summary, typedNodes: typedNodes, bindings: bindings, symbols: symbols, instantiations: instantiations, diagnostics: cx.env.local.diagnostics}
 }
 
 // Osty: /tmp/selfhost_merged.osty:24331:5
@@ -49691,7 +49802,7 @@ func checkIntrinsicBodyFn(cx *ElabCx, arena *AstArena, fn_ *AstNode) {
 	_ = name
 	// Osty: /tmp/selfhost_merged.osty:24596:5
 	func() struct{} {
-		cx.env.diagnostics = append(cx.env.diagnostics, diagIntrinsicNonEmptyBody(name, body.start, body.end))
+		cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagIntrinsicNonEmptyBody(name, body.start, body.end))
 		return struct{}{}
 	}()
 }
@@ -49793,7 +49904,7 @@ func checkPodStructShape(cx *ElabCx, arena *AstArena, structNode *AstNode, podSt
 	if !checkGateAnnotationContains(arena, structNode.extra, "repr") {
 		// Osty: /tmp/selfhost_merged.osty:24681:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagPodShapeViolation(fmt.Sprintf("`#[pod]` struct `%s` is missing `#[repr(c)]`", ostyToString(structName)), "add `#[repr(c)]` so the field layout is C ABI-stable", structNode.start, structNode.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagPodShapeViolation(fmt.Sprintf("`#[pod]` struct `%s` is missing `#[repr(c)]`", ostyToString(structName)), "add `#[repr(c)]` so the field layout is C ABI-stable", structNode.start, structNode.end))
 			return struct{}{}
 		}()
 		// Osty: /tmp/selfhost_merged.osty:24687:9
@@ -49819,7 +49930,7 @@ func checkPodStructShape(cx *ElabCx, arena *AstArena, structNode *AstNode, podSt
 		} else {
 			// Osty: /tmp/selfhost_merged.osty:24702:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagPodShapeViolation(fmt.Sprintf("`#[pod]` struct `%s` has unbounded generic parameter `%s`", ostyToString(structName), ostyToString(gp.text)), "add `: Pod` to the parameter — per-instantiation `Pod` is not supported in v0.4 (§19.4)", gp.start, gp.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagPodShapeViolation(fmt.Sprintf("`#[pod]` struct `%s` has unbounded generic parameter `%s`", ostyToString(structName), ostyToString(gp.text)), "add `: Pod` to the parameter — per-instantiation `Pod` is not supported in v0.4 (§19.4)", gp.start, gp.end))
 				return struct{}{}
 			}()
 		}
@@ -49852,7 +49963,7 @@ func checkPodStructShape(cx *ElabCx, arena *AstArena, structNode *AstNode, podSt
 			_ = fieldName
 			// Osty: /tmp/selfhost_merged.osty:24724:13
 			func() struct{} {
-				cx.env.diagnostics = append(cx.env.diagnostics, diagPodShapeViolation(fmt.Sprintf("field `%s.%s` has non-Pod type `%s`", ostyToString(structName), ostyToString(fieldName), ostyToString(typeStr)), "replace with a primitive, `RawPtr`, `Option<T: Pod>`, a tuple of Pod, or another `#[pod] #[repr(c)]` struct", member.start, member.end))
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagPodShapeViolation(fmt.Sprintf("field `%s.%s` has non-Pod type `%s`", ostyToString(structName), ostyToString(fieldName), ostyToString(typeStr)), "replace with a primitive, `RawPtr`, `Option<T: Pod>`, a tuple of Pod, or another `#[pod] #[repr(c)]` struct", member.start, member.end))
 				return struct{}{}
 			}()
 		}
@@ -50128,7 +50239,7 @@ func privilegeCheckUse(cx *ElabCx, arena *AstArena, node *AstNode) {
 	if isPrivilegedUsePath(raw) {
 		// Osty: /tmp/selfhost_merged.osty:24921:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagRuntimePrivilege(fmt.Sprintf("`use %s` imports a privileged namespace", ostyToString(raw)), "only `std.runtime.*` packages and toolchain-workspace packages with `[capabilities] runtime = true` may import this namespace", node.start, node.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagRuntimePrivilege(fmt.Sprintf("`use %s` imports a privileged namespace", ostyToString(raw)), "only `std.runtime.*` packages and toolchain-workspace packages with `[capabilities] runtime = true` may import this namespace", node.start, node.end))
 			return struct{}{}
 		}()
 	}
@@ -50344,7 +50455,7 @@ func privilegeCheckAnnotationTree(cx *ElabCx, arena *AstArena, idx int) {
 	if isPrivilegedAnnotationName(node.text) {
 		// Osty: /tmp/selfhost_merged.osty:25070:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagRuntimePrivilege(fmt.Sprintf("`#[%s]` is a runtime-only annotation", ostyToString(node.text)), "", node.start, node.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagRuntimePrivilege(fmt.Sprintf("`#[%s]` is a runtime-only annotation", ostyToString(node.text)), "", node.start, node.end))
 			return struct{}{}
 		}()
 	}
@@ -50411,7 +50522,7 @@ func privilegeWalkType(cx *ElabCx, arena *AstArena, typeIdx int) {
 	if isPrivilegedTypeName(name) {
 		// Osty: /tmp/selfhost_merged.osty:25122:9
 		func() struct{} {
-			cx.env.diagnostics = append(cx.env.diagnostics, diagRuntimePrivilege(fmt.Sprintf("`%s` is a runtime-only type", ostyToString(name)), "", node.start, node.end))
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagRuntimePrivilege(fmt.Sprintf("`%s` is a runtime-only type", ostyToString(name)), "", node.start, node.end))
 			return struct{}{}
 		}()
 	}
@@ -50753,7 +50864,7 @@ func noAllocWalkBlock(cx *ElabCx, arena *AstArena, blockIdx int, fnName string, 
 func noAllocEmit(cx *ElabCx, fnName string, what string, fixHint string, start int, end int) {
 	// Osty: /tmp/selfhost_merged.osty:25354:5
 	func() struct{} {
-		cx.env.diagnostics = append(cx.env.diagnostics, diagNoAllocViolation(fnName, what, fixHint, start, end))
+		cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagNoAllocViolation(fnName, what, fixHint, start, end))
 		return struct{}{}
 	}()
 }
@@ -69759,7 +69870,7 @@ func pureEmit(cx *ElabCx, fnName, what, fixHint string, start, end int) {
 	if fixHint != "" {
 		notes = append(notes, "hint: "+fixHint)
 	}
-	cx.env.diagnostics = append(cx.env.diagnostics, checkDiagWithNotes(
+	cx.env.local.diagnostics = append(cx.env.local.diagnostics, checkDiagWithNotes(
 		"E0775",
 		fmt.Sprintf("`#[pure]` function `%s` cannot %s", fnName, what),
 		start,

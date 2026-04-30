@@ -1054,7 +1054,7 @@ fn collectFnDecl(
         } else {
             node
         }
-        cx.env.diagnostics.push(diagNonEscapingEscape(
+        cx.env.local.diagnostics.push(diagNonEscapingEscape(
             tyToString(cx.env.tys, retEffective),
             "function return",
             retNode.start,
@@ -1109,7 +1109,7 @@ fn collectStructDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
                 // §8.1 G13 / E0743: struct fields can outlive the group
                 // that produced the capability, so banned here.
                 if tyEscapingCapabilityHead(cx.env.tys, effectiveTy) != "" {
-                    cx.env.diagnostics.push(diagNonEscapingEscape(
+                    cx.env.local.diagnostics.push(diagNonEscapingEscape(
                         tyToString(cx.env.tys, effectiveTy),
                         "struct field",
                         member.start,
@@ -1163,7 +1163,7 @@ fn collectEnumDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
                         // §8.1 G13 / E0743: enum variant payloads outlive
                         // the owning group just as struct fields do.
                         if tyEscapingCapabilityHead(cx.env.tys, ty) != "" {
-                            cx.env.diagnostics.push(diagNonEscapingEscape(
+                            cx.env.local.diagnostics.push(diagNonEscapingEscape(
                                 tyToString(cx.env.tys, ty),
                                 "enum variant payload",
                                 f.start,
@@ -1225,7 +1225,7 @@ fn collectTypeAlias(cx: ElabCx, declIdx: Int, node: AstNode) {
         } else {
             node
         }
-        cx.env.diagnostics.push(diagNonEscapingEscape(
+        cx.env.local.diagnostics.push(diagNonEscapingEscape(
             tyToString(cx.env.tys, ty),
             "type alias",
             targetNode.start,
@@ -1251,7 +1251,7 @@ fn collectLetDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
     // §8.1 G13 / E0743: a module-scope `let` outlives any individual
     // taskGroup body — banned from storing Handle/Group.
     if declared >= 0 && tyEscapingCapabilityHead(cx.env.tys, ty) != "" {
-        cx.env.diagnostics.push(diagNonEscapingEscape(
+        cx.env.local.diagnostics.push(diagNonEscapingEscape(
             tyToString(cx.env.tys, ty),
             "module-level binding",
             node.start,
@@ -1295,10 +1295,10 @@ fn elaborateFnBody(cx: ElabCx, node: AstNode, owner: String) {
     }
     let mark = checkScopeMark(cx.env)
     let boundsMark = checkGenericBoundMark(cx.env)
-    let prevReturn = cx.env.returnTy
-    let prevFnName = cx.env.fnName
-    cx.env.returnTy = sig.retTy
-    cx.env.fnName = sig.name
+    let prevReturn = cx.env.local.returnTy
+    let prevFnName = cx.env.local.fnName
+    cx.env.local.returnTy = sig.retTy
+    cx.env.local.fnName = sig.name
     for bound in sig.genericBounds {
         checkAddGenericBound(cx.env, bound)
     }
@@ -1322,8 +1322,8 @@ fn elaborateFnBody(cx: ElabCx, node: AstNode, owner: String) {
         let _ = sig
     }
 
-    cx.env.returnTy = prevReturn
-    cx.env.fnName = prevFnName
+    cx.env.local.returnTy = prevReturn
+    cx.env.local.fnName = prevFnName
     checkClearGenericBoundsAfter(cx.env, boundsMark)
     checkScopeDrop(cx.env, mark)
 }
@@ -1492,9 +1492,9 @@ fn typedExprKindNameAt(ast: AstFile, idx: Int) -> String {
 
 fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
     let summary = FrontCheckSummary {
-        assignments: cx.env.assignments,
-        accepted: cx.env.accepted,
-        errors: checkDiagCountErrors(cx.env.diagnostics),
+        assignments: cx.env.local.assignments,
+        accepted: cx.env.local.accepted,
+        errors: checkDiagCountErrors(cx.env.local.diagnostics),
     }
 
     let mut typedNodes: List<FrontCheckedNode> = []
@@ -1520,7 +1520,7 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
 
     let mut bindings: List<FrontCheckedBinding> = []
     let mut bindingId = 0
-    for b in cx.env.bindingRecords {
+    for b in cx.env.local.bindingRecords {
         bindings.push(FrontCheckedBinding {
             node: b.node,
             nodeId: b.node,
@@ -1537,7 +1537,7 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
 
     let mut symbols: List<FrontCheckedSymbol> = []
     let mut symbolId = 0
-    for s in cx.env.symbolRecords {
+    for s in cx.env.local.symbolRecords {
         symbols.push(FrontCheckedSymbol {
             node: s.node,
             nodeId: s.node,
@@ -1555,7 +1555,7 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
 
     let mut instantiations: List<FrontCheckInstantiation> = []
     let mut instantiationId = 0
-    for inst in cx.env.instantiations {
+    for inst in cx.env.local.instantiations {
         let mut typeArgReprs: List<FrontTypeRepr> = []
         let mut typeArgIds: List<Int> = []
         for tyArg in inst.typeArgs {
@@ -1583,7 +1583,7 @@ fn serializeCheckResult(cx: ElabCx) -> FrontCheckResult {
         bindings,
         symbols,
         instantiations,
-        diagnostics: cx.env.diagnostics,
+        diagnostics: cx.env.local.diagnostics,
     }
 }
 

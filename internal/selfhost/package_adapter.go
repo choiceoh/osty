@@ -30,8 +30,6 @@ type (
 // point — no *ast.File round-trip, no astbridge bumps.
 func CheckPackageStructured(input PackageCheckInput) (result CheckResult, err error) {
 	defer recoverCheckResult(&result, "package")
-	selfhostCheckMu.Lock()
-	defer selfhostCheckMu.Unlock()
 
 	file, layout, err := selfhostBuildPackageAst(input.Files)
 	if err != nil {
@@ -59,8 +57,6 @@ func InspectPackageStructured(input PackageCheckInput) (records []api.InspectRec
 			err = fmt.Errorf("selfhost inspect recovered from panic: %v", recovered)
 		}
 	}()
-	selfhostCheckMu.Lock()
-	defer selfhostCheckMu.Unlock()
 
 	file, layout, err := selfhostBuildPackageAst(input.Files)
 	if err != nil {
