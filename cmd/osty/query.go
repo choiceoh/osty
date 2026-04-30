@@ -56,6 +56,7 @@ func runQueryCheck(args []string) {
 
 	eng.Inputs.SourceText.Set(eng.DB, key, src)
 	eng.Inputs.PackageFiles.Set(eng.DB, dir, []string{key})
+	eng.Inputs.PackageRuntimeCapability.Set(eng.DB, dir, ostyquery.PackageRuntimeCapabilityFromManifest(dir))
 
 	before := eng.DB.Metrics()
 	diags := eng.Queries.FileDiagnostics.Get(eng.DB, key)

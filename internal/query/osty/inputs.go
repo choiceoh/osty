@@ -14,8 +14,8 @@ type WorkspacePackage struct {
 	Name    string
 }
 
-// Inputs groups the three primitive input handles that drive the
-// entire Osty query graph. Callers (LSP, CLI) use these to push the
+// Inputs groups the primitive input handles that drive the entire Osty query
+// graph. Callers (LSP, CLI) use these to push the
 // current world state into the Database; every derived query reads
 // from them transitively.
 //
@@ -38,6 +38,12 @@ type Inputs struct {
 	// to the package by path convention.
 	PackageFiles *query.Input[string, []string]
 
+	// PackageRuntimeCapability maps a normalized package directory to whether
+	// its manifest opted into the runtime sublanguage via
+	// `[capabilities] runtime = true`. Scratch and ad-hoc LSP packages seed
+	// false explicitly.
+	PackageRuntimeCapability *query.Input[string, bool]
+
 	// WorkspaceMembers lists every package directory in the current
 	// workspace. Keyed by struct{} so there is exactly one slot.
 	// CLI entry points populate this from the osty.toml manifest;
@@ -54,9 +60,10 @@ type Inputs struct {
 
 func registerInputs(db *query.Database) Inputs {
 	return Inputs{
-		SourceText:        query.RegisterInput[string, []byte](db, "SourceText", hashBytesInput),
-		PackageFiles:      query.RegisterInput[string, []string](db, "PackageFiles", hashStringSlice),
-		WorkspaceMembers:  query.RegisterInput[struct{}, []string](db, "WorkspaceMembers", hashStringSlice),
-		WorkspacePackages: query.RegisterInput[string, []WorkspacePackage](db, "WorkspacePackages", hashWorkspacePackageSlice),
+		SourceText:               query.RegisterInput[string, []byte](db, "SourceText", hashBytesInput),
+		PackageFiles:             query.RegisterInput[string, []string](db, "PackageFiles", hashStringSlice),
+		PackageRuntimeCapability: query.RegisterInput[string, bool](db, "PackageRuntimeCapability", hashBoolInput),
+		WorkspaceMembers:         query.RegisterInput[struct{}, []string](db, "WorkspaceMembers", hashStringSlice),
+		WorkspacePackages:        query.RegisterInput[string, []WorkspacePackage](db, "WorkspacePackages", hashWorkspacePackageSlice),
 	}
 }

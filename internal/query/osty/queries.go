@@ -531,10 +531,12 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 	qs.BuildPackage = query.Register(db, "BuildPackage",
 		func(ctx *query.Ctx, dir string) *resolve.Package {
 			files := inp.PackageFiles.Fetch(ctx, dir)
+			runtimeCapability := inp.PackageRuntimeCapability.Fetch(ctx, dir)
 			pkg := &resolve.Package{
-				Dir:   dir,
-				Name:  packageNameFromDir(dir),
-				Files: make([]*resolve.PackageFile, 0, len(files)),
+				Dir:               dir,
+				Name:              packageNameFromDir(dir),
+				RuntimeCapability: runtimeCapability,
+				Files:             make([]*resolve.PackageFile, 0, len(files)),
 			}
 			for _, f := range files {
 				pr := qs.Parse.Fetch(ctx, f)
@@ -564,9 +566,10 @@ func registerQueries(db *query.Database, inp Inputs) Queries {
 			// already-parsed FrontendRun / *ast.File pointers — they
 			// are read-only.
 			pkg := &resolve.Package{
-				Dir:   built.Dir,
-				Name:  built.Name,
-				Files: make([]*resolve.PackageFile, len(built.Files)),
+				Dir:               built.Dir,
+				Name:              built.Name,
+				RuntimeCapability: built.RuntimeCapability,
+				Files:             make([]*resolve.PackageFile, len(built.Files)),
 			}
 			for i, pf := range built.Files {
 				pkg.Files[i] = &resolve.PackageFile{
@@ -1133,9 +1136,10 @@ func copyPackageForWorkspace(src *resolve.Package) *resolve.Package {
 		return nil
 	}
 	pkg := &resolve.Package{
-		Dir:   src.Dir,
-		Name:  src.Name,
-		Files: make([]*resolve.PackageFile, len(src.Files)),
+		Dir:               src.Dir,
+		Name:              src.Name,
+		RuntimeCapability: src.RuntimeCapability,
+		Files:             make([]*resolve.PackageFile, len(src.Files)),
 	}
 	for i, pf := range src.Files {
 		if pf == nil {

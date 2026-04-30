@@ -7,16 +7,18 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/resolve"
 )
 
 // SeededPackage describes the package inputs written into an Engine.
 type SeededPackage struct {
-	Dir     string
-	DotPath string
-	Name    string
-	Files   []string
-	Sources map[string][]byte
+	Dir               string
+	DotPath           string
+	Name              string
+	RuntimeCapability bool
+	Files             []string
+	Sources           map[string][]byte
 }
 
 // SeededWorkspace describes the workspace inputs written into an Engine.
@@ -34,12 +36,14 @@ func (e *Engine) SeedPackageDir(dir string, transform resolve.SourceTransform) (
 	if err != nil {
 		return SeededPackage{}, err
 	}
-	e.seedPackageInputs(dir, files, sources)
+	runtimeCapability := PackageRuntimeCapabilityFromManifest(dir)
+	e.seedPackageInputs(dir, files, sources, runtimeCapability)
 	return SeededPackage{
-		Dir:     dir,
-		Name:    packageNameFromDir(dir),
-		Files:   files,
-		Sources: sources,
+		Dir:               dir,
+		Name:              packageNameFromDir(dir),
+		RuntimeCapability: runtimeCapability,
+		Files:             files,
+		Sources:           sources,
 	}, nil
 }
 
@@ -57,16 +61,18 @@ func (e *Engine) SeedWorkspaceDirs(root string, packages []WorkspacePackage, tra
 		if err != nil {
 			return SeededWorkspace{}, err
 		}
-		e.seedPackageInputs(member.Dir, files, sources)
+		runtimeCapability := PackageRuntimeCapabilityFromManifest(member.Dir)
+		e.seedPackageInputs(member.Dir, files, sources, runtimeCapability)
 		for path, src := range sources {
 			out.Sources[path] = src
 		}
 		out.Packages = append(out.Packages, SeededPackage{
-			Dir:     member.Dir,
-			DotPath: member.DotPath,
-			Name:    member.Name,
-			Files:   files,
-			Sources: sources,
+			Dir:               member.Dir,
+			DotPath:           member.DotPath,
+			Name:              member.Name,
+			RuntimeCapability: runtimeCapability,
+			Files:             files,
+			Sources:           sources,
 		})
 	}
 	e.Inputs.WorkspacePackages.Set(e.DB, root, members)
@@ -122,13 +128,14 @@ func (e *Engine) SeedLoadedWorkspace(ws *resolve.Workspace) (SeededWorkspace, er
 			out.Sources[path] = src
 		}
 		sort.Strings(files)
-		e.seedPackageInputs(dir, files, sources)
+		e.seedPackageInputs(dir, files, sources, pkg.RuntimeCapability)
 		out.Packages = append(out.Packages, SeededPackage{
-			Dir:     dir,
-			DotPath: key,
-			Name:    pkg.Name,
-			Files:   files,
-			Sources: sources,
+			Dir:               dir,
+			DotPath:           key,
+			Name:              pkg.Name,
+			RuntimeCapability: pkg.RuntimeCapability,
+			Files:             files,
+			Sources:           sources,
 		})
 	}
 	members = normalizeWorkspacePackages(root, members)
@@ -136,11 +143,12 @@ func (e *Engine) SeedLoadedWorkspace(ws *resolve.Workspace) (SeededWorkspace, er
 	return out, nil
 }
 
-func (e *Engine) seedPackageInputs(dir string, files []string, sources map[string][]byte) {
+func (e *Engine) seedPackageInputs(dir string, files []string, sources map[string][]byte, runtimeCapability bool) {
 	for _, path := range files {
 		e.Inputs.SourceText.Set(e.DB, path, sources[path])
 	}
 	e.Inputs.PackageFiles.Set(e.DB, dir, files)
+	e.Inputs.PackageRuntimeCapability.Set(e.DB, dir, runtimeCapability)
 }
 
 func readPackageSources(dir string, transform resolve.SourceTransform) ([]string, map[string][]byte, error) {
@@ -171,4 +179,19 @@ func readPackageSources(dir string, transform resolve.SourceTransform) ([]string
 	}
 	sort.Strings(files)
 	return files, sources, nil
+}
+
+// PackageRuntimeCapabilityFromManifest reads dir/osty.toml and reports whether
+// it declares `[capabilities] runtime = true`. Missing or invalid manifests are
+// treated as ordinary unprivileged packages, matching the native loader.
+func PackageRuntimeCapabilityFromManifest(dir string) bool {
+	src, err := os.ReadFile(filepath.Join(dir, manifest.ManifestFile))
+	if err != nil {
+		return false
+	}
+	m, err := manifest.Parse(src)
+	if err != nil || m == nil || m.Capabilities == nil {
+		return false
+	}
+	return m.Capabilities.Runtime
 }
