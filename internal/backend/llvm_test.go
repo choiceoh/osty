@@ -241,6 +241,39 @@ func TestClangLinkLibraryArgs(t *testing.T) {
 	}
 }
 
+func TestClangPlatformRuntimeLinkArgs(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		target string
+		want   []string
+	}{
+		{
+			name:   "darwin",
+			target: "arm64-apple-darwin",
+			want:   []string{"-lm", "-framework", "Security", "-framework", "CoreFoundation"},
+		},
+		{
+			name:   "windows",
+			target: "x86_64-pc-windows-msvc",
+			want:   []string{"-ladvapi32"},
+		},
+		{
+			name:   "linux",
+			target: "x86_64-unknown-linux-gnu",
+			want:   []string{"-lm"},
+		},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := clangPlatformRuntimeLinkArgs(tt.target); !slices.Equal(got, tt.want) {
+				t.Fatalf("clangPlatformRuntimeLinkArgs(%q) = %v, want %v", tt.target, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestLLVMBackendEmitLLVMIRSkipsToolchain(t *testing.T) {
 	t.Parallel()
 

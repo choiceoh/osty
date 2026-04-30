@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 
 	"github.com/osty/osty/internal/ir"
@@ -295,10 +296,22 @@ func (clangToolchain) CompileCObject(ctx context.Context, sourcePath, objectPath
 func (clangToolchain) LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string, linkLibraries []string) error {
 	args := llvmgen.ClangLinkBinaryArgs(target, objectPaths, binaryPath)
 	args = append(args, clangLinkLibraryArgs(linkLibraries)...)
+	args = append(args, clangPlatformRuntimeLinkArgs(target)...)
+	return runClang(ctx, "link binary", args)
+}
+
+func clangPlatformRuntimeLinkArgs(target string) []string {
+	var args []string
 	if !isWindowsTarget(target) {
 		args = append(args, "-lm")
 	}
-	return runClang(ctx, "link binary", args)
+	if isDarwinTarget(target) {
+		args = append(args, "-framework", "Security", "-framework", "CoreFoundation")
+	}
+	if isWindowsTarget(target) {
+		args = append(args, "-ladvapi32")
+	}
+	return args
 }
 
 func clangLinkLibraryArgs(libraries []string) []string {
@@ -355,6 +368,13 @@ func clangCompileCObjectArgs(target, sourcePath, objectPath string) []string {
 // the runtime.GOOS-derived default in that case.
 func isWindowsTarget(target string) bool {
 	return strings.Contains(target, "windows")
+}
+
+func isDarwinTarget(target string) bool {
+	if target == "" {
+		return runtime.GOOS == "darwin"
+	}
+	return strings.Contains(target, "darwin") || strings.Contains(target, "apple")
 }
 
 func runClang(ctx context.Context, action string, args []string) error {

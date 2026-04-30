@@ -485,6 +485,12 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 		if src, ok := g.staticStdEnvCallSourceType(e); ok {
 			return src, true
 		}
+		if src, ok := g.staticStdKeychainCallSourceType(e); ok {
+			return src, true
+		}
+		if src, ok := g.staticStdSecretsCallSourceType(e); ok {
+			return src, true
+		}
 		if src, ok := g.staticStdRandomCallSourceType(e); ok {
 			return src, true
 		}
@@ -1014,6 +1020,12 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 			return out, true
 		}
 		if out, ok := g.stdEnvCallStaticResult(e); ok {
+			return out, true
+		}
+		if out, ok := g.stdKeychainCallStaticResult(e); ok {
+			return out, true
+		}
+		if out, ok := g.stdSecretsCallStaticResult(e); ok {
 			return out, true
 		}
 		if out, ok := g.stdRandomCallStaticResult(e); ok {

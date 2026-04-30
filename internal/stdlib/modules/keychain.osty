@@ -1,0 +1,79 @@
+// std.keychain - OS credential store access for application secrets.
+//
+// Secrets are stored in the platform credential store: macOS Keychain on
+// Darwin targets and Windows Credential Manager on Windows targets. Other
+// targets currently report an unavailable backend.
+
+use std.error
+use std.strings
+
+pub let defaultApiKeyService: String = "osty.api"
+
+pub struct Entry {
+    pub service: String,
+    pub account: String,
+}
+
+/// Return the active backend name, such as "macos-keychain",
+/// "windows-credential-manager", or "unavailable".
+pub fn backend() -> String
+
+/// Return true when this runtime can read and write an OS credential store.
+pub fn isAvailable() -> Bool
+
+/// Read a secret from the OS credential store.
+///
+/// Missing entries return Err rather than None so callers can propagate the
+/// same Result shape used by file and process APIs.
+pub fn get(service: String, account: String) -> Result<String, Error>
+
+/// Store or replace a secret in the OS credential store.
+pub fn set(service: String, account: String, secret: String) -> Result<(), Error>
+
+/// Delete a secret. Missing entries are treated as success.
+pub fn delete(service: String, account: String) -> Result<(), Error>
+
+pub fn entry(service: String, account: String) -> Result<Entry, Error> {
+    let cleanService = requireName("service", service)?
+    let cleanAccount = requireName("account", account)?
+    Ok(Entry { service: cleanService, account: cleanAccount })
+}
+
+pub fn getEntry(item: Entry) -> Result<String, Error> {
+    get(item.service, item.account)
+}
+
+pub fn setEntry(item: Entry, secret: String) -> Result<(), Error> {
+    set(item.service, item.account, secret)
+}
+
+pub fn deleteEntry(item: Entry) -> Result<(), Error> {
+    delete(item.service, item.account)
+}
+
+pub fn getApiKey(provider: String) -> Result<String, Error> {
+    let account = requireName("provider", provider)?
+    get(defaultApiKeyService, account)
+}
+
+pub fn setApiKey(provider: String, secret: String) -> Result<(), Error> {
+    let account = requireName("provider", provider)?
+    let cleanSecret = strings.trimSpace(secret)
+    if cleanSecret.isEmpty() {
+        return Err(error.new("keychain: API key is empty"))
+    }
+    set(defaultApiKeyService, account, cleanSecret)
+}
+
+pub fn deleteApiKey(provider: String) -> Result<(), Error> {
+    let account = requireName("provider", provider)?
+    delete(defaultApiKeyService, account)
+}
+
+fn requireName(kind: String, value: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(value)
+    if clean.isEmpty() {
+        return Err(error.new("keychain: {kind} is empty"))
+    }
+    Ok(clean)
+}
