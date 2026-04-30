@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 78 공개 모듈. 분류 기준:
+총 79 공개 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (75 / 78 = 96%)
+### ⭐⭐⭐⭐⭐ Production (76 / 79 = 96%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -64,6 +64,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | polyglot | 2319 | pure Osty + os/env/fs | 두 언어 repo 표준 레일: Language / Component / Boundary / Workspace, BoundaryContract, ExecutionPolicy, doctorRun/check runner, Go+Rust/Osty+Go/Rust/Python/Node preset, build/test plan, Process/C ABI/shared-file boundary 검증, cwd/env 복원 실행, env/artifact/schema 계약 audit |
 | grid | 412 | pure Osty | Point / Size / Rect / Direction / row-major Grid<T> |
 | gui | 2004 | pure Osty + fs/os/json | retained GUI core: geometry / theme / flex+stack layout / render commands / HTML document renderer / browser event bridge / SVG renderer / browser document write/open launch helpers / browser event state application / pointer-key routing / focus / accessibility audit / snapshot diff |
+| dialog | 644 | pure Osty + os | file picker / multi-file picker / folder picker / save dialog command plans and runners for macOS AppleScript, Windows PowerShell, Zenity, KDialog, custom commands |
 | tar | 408 | pure Osty + bytes | ustar encode/decode/list/extract + checksum validation |
 | sql | 417 | pure Osty | identifier quoting / literals / placeholders / SELECT-INSERT-UPDATE-DELETE builders |
 | xml | 391 | pure Osty | escape / unescape / tag builder / tokenizer |
@@ -107,7 +108,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (3 / 78 = 4%)
+### ⭐⭐⭐⭐ Production-adjacent (3 / 79 = 4%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
@@ -196,7 +197,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 55 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, jsonl, kv, shortid, metrics, net, fmt, json, config, table, url, io, collections, email, db, polyglot, grid, gui, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
+- 56 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, jsonl, kv, shortid, metrics, net, fmt, json, config, table, url, io, collections, email, db, polyglot, grid, gui, dialog, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
 - 5 모듈은 Phase A 충실 + Phase B declaration-only (env, random, os, crypto, compress)
 - fs 는 Phase A 충실 + 확장된 tool-facing declaration surface (walk/glob/watch/atomicWrite/lockFile/hashFile/copyDir/diffFiles)
 - 나머지는 의도된 범위에서 surface 만으로 완성 (cli, math, cmp, hint, debug, ref, process, log, time, error, sync, thread, regex, testing, uuid)
