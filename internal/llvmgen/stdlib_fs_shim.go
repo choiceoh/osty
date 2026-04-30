@@ -21,8 +21,19 @@ const ostyRtFsRenameSymbol = "osty_rt_fs_rename"
 const ostyRtFsCopySymbol = "osty_rt_fs_copy"
 const ostyRtFsMkdirSymbol = "osty_rt_fs_mkdir"
 const ostyRtFsMkdirAllSymbol = "osty_rt_fs_mkdir_all"
+const ostyRtFsWalkSymbol = "osty_rt_fs_walk"
+const ostyRtFsGlobSymbol = "osty_rt_fs_glob"
+const ostyRtFsWatchSymbol = "osty_rt_fs_watch"
+const ostyRtFsErrorSymbol = "osty_rt_fs_error"
+const ostyRtFsAtomicWriteBytesSymbol = "osty_rt_fs_atomic_write_bytes"
+const ostyRtFsAtomicWriteStringSymbol = "osty_rt_fs_atomic_write_string"
+const ostyRtFsLockFileSymbol = "osty_rt_fs_lock_file"
+const ostyRtFsHashFileSymbol = "osty_rt_fs_hash_file"
+const ostyRtFsCopyDirSymbol = "osty_rt_fs_copy_dir"
+const ostyRtFsDiffFilesSymbol = "osty_rt_fs_diff_files"
 
 var fsBytesSourceTypeSingleton ast.Type = &ast.NamedType{Path: []string{"Bytes"}}
+var fsStringSourceTypeSingleton ast.Type = &ast.NamedType{Path: []string{"String"}}
 
 var stdFsReadResultSourceTypeSingleton ast.Type = &ast.NamedType{
 	Path: []string{"Result"},
@@ -35,7 +46,22 @@ var stdFsReadResultSourceTypeSingleton ast.Type = &ast.NamedType{
 var stdFsReadStringResultSourceTypeSingleton ast.Type = &ast.NamedType{
 	Path: []string{"Result"},
 	Args: []ast.Type{
-		&ast.NamedType{Path: []string{"String"}},
+		fsStringSourceTypeSingleton,
+		errorSourceTypeSingleton,
+	},
+}
+
+var stdFsListStringSourceTypeSingleton ast.Type = &ast.NamedType{
+	Path: []string{"List"},
+	Args: []ast.Type{
+		fsStringSourceTypeSingleton,
+	},
+}
+
+var stdFsListStringResultSourceTypeSingleton ast.Type = &ast.NamedType{
+	Path: []string{"Result"},
+	Args: []ast.Type{
+		stdFsListStringSourceTypeSingleton,
 		errorSourceTypeSingleton,
 	},
 }
@@ -87,6 +113,12 @@ func (g *generator) emitStdFsCall(call *ast.CallExpr) (value, bool, error) {
 		return g.emitStdFsWriteStringCall(call)
 	case "exists":
 		return g.emitStdFsExistsCall(call)
+	case "walk":
+		return g.emitStdFsSingleStringPtrResultCall(call, "walk", stdFsListStringResultSourceTypeSingleton, ostyRtFsWalkSymbol, ostyRtFsErrorSymbol)
+	case "glob":
+		return g.emitStdFsSingleStringPtrResultCall(call, "glob", stdFsListStringResultSourceTypeSingleton, ostyRtFsGlobSymbol, ostyRtFsErrorSymbol)
+	case "watch":
+		return g.emitStdFsSingleStringPtrResultCall(call, "watch", stdFsListStringResultSourceTypeSingleton, ostyRtFsWatchSymbol, ostyRtFsErrorSymbol)
 	case "create":
 		return g.emitStdFsCreateCall(call)
 	case "remove":
@@ -95,10 +127,22 @@ func (g *generator) emitStdFsCall(call *ast.CallExpr) (value, bool, error) {
 		return g.emitStdFsRenameCall(call)
 	case "copy":
 		return g.emitStdFsCopyCall(call)
+	case "copyDir":
+		return g.emitStdFsTwoStringUnitCall(call, "copyDir", ostyRtFsCopyDirSymbol)
 	case "mkdir":
 		return g.emitStdFsMkdirCall(call)
 	case "mkdirAll":
 		return g.emitStdFsMkdirAllCall(call)
+	case "atomicWrite":
+		return g.emitStdFsStringBytesUnitCall(call, "atomicWrite", ostyRtFsAtomicWriteBytesSymbol)
+	case "atomicWriteString":
+		return g.emitStdFsStringStringUnitCall(call, "atomicWriteString", ostyRtFsAtomicWriteStringSymbol)
+	case "lockFile":
+		return g.emitStdFsUnitCall(call, "lockFile", ostyRtFsLockFileSymbol)
+	case "hashFile":
+		return g.emitStdFsSingleStringPtrResultCall(call, "hashFile", stdFsReadStringResultSourceTypeSingleton, ostyRtFsHashFileSymbol, ostyRtFsErrorSymbol)
+	case "diffFiles":
+		return g.emitStdFsTwoStringPtrResultCall(call, "diffFiles", stdFsReadStringResultSourceTypeSingleton, ostyRtFsDiffFilesSymbol, ostyRtFsErrorSymbol)
 	default:
 		return value{}, false, nil
 	}
@@ -122,7 +166,19 @@ func (g *generator) stdFsCallStaticResult(call *ast.CallExpr) (value, bool) {
 			return value{}, false
 		}
 		return value{typ: info.typ, sourceType: stdFsReadStringResultSourceTypeSingleton}, true
-	case "write", "writeString", "create", "remove", "rename", "copy", "mkdir", "mkdirAll":
+	case "walk", "glob", "watch":
+		info, ok := builtinResultTypeFromAST(stdFsListStringResultSourceTypeSingleton, g.typeEnv())
+		if !ok {
+			return value{}, false
+		}
+		return value{typ: info.typ, sourceType: stdFsListStringResultSourceTypeSingleton}, true
+	case "hashFile", "diffFiles":
+		info, ok := builtinResultTypeFromAST(stdFsReadStringResultSourceTypeSingleton, g.typeEnv())
+		if !ok {
+			return value{}, false
+		}
+		return value{typ: info.typ, sourceType: stdFsReadStringResultSourceTypeSingleton}, true
+	case "write", "writeString", "create", "remove", "rename", "copy", "copyDir", "mkdir", "mkdirAll", "atomicWrite", "atomicWriteString", "lockFile":
 		info, ok := builtinResultTypeFromAST(stdFsUnitErrorResultSourceTypeSingleton, g.typeEnv())
 		if !ok {
 			return value{}, false
@@ -145,7 +201,11 @@ func (g *generator) staticStdFsCallSourceType(call *ast.CallExpr) (ast.Type, boo
 		return stdFsReadResultSourceTypeSingleton, true
 	case "readToString":
 		return stdFsReadStringResultSourceTypeSingleton, true
-	case "write", "writeString", "create", "remove", "rename", "copy", "mkdir", "mkdirAll":
+	case "walk", "glob", "watch":
+		return stdFsListStringResultSourceTypeSingleton, true
+	case "hashFile", "diffFiles":
+		return stdFsReadStringResultSourceTypeSingleton, true
+	case "write", "writeString", "create", "remove", "rename", "copy", "copyDir", "mkdir", "mkdirAll", "atomicWrite", "atomicWriteString", "lockFile":
 		return stdFsUnitErrorResultSourceTypeSingleton, true
 	case "exists":
 		return &ast.NamedType{Path: []string{"Bool"}}, true
@@ -302,6 +362,94 @@ func (g *generator) emitStdFsCopyCall(call *ast.CallExpr) (value, bool, error) {
 		[]*LlvmValue{toOstyValue(from), toOstyValue(to)},
 	)
 	return v, true, err
+}
+
+func (g *generator) emitStdFsSingleStringPtrResultCall(call *ast.CallExpr, name string, sourceType ast.Type, valueSymbol, errorSymbol string) (value, bool, error) {
+	if len(call.Args) != 1 {
+		return value{}, true, unsupportedf("call", "fs.%s expects 1 argument, got %d", name, len(call.Args))
+	}
+	path, err := g.emitStdFsStringArg(call.Args[0], name, 0)
+	if err != nil {
+		return value{}, true, err
+	}
+	return g.emitStdFsPtrResultFromRuntimeCall(
+		"fs."+name,
+		sourceType,
+		valueSymbol,
+		errorSymbol,
+		[]paramInfo{{typ: "ptr"}},
+		[]*LlvmValue{toOstyValue(path)},
+	)
+}
+
+func (g *generator) emitStdFsTwoStringPtrResultCall(call *ast.CallExpr, name string, sourceType ast.Type, valueSymbol, errorSymbol string) (value, bool, error) {
+	if len(call.Args) != 2 {
+		return value{}, true, unsupportedf("call", "fs.%s expects 2 arguments, got %d", name, len(call.Args))
+	}
+	left, err := g.emitStdFsStringArg(call.Args[0], name, 0)
+	if err != nil {
+		return value{}, true, err
+	}
+	right, err := g.emitStdFsStringArg(call.Args[1], name, 1)
+	if err != nil {
+		return value{}, true, err
+	}
+	return g.emitStdFsPtrResultFromRuntimeCall(
+		"fs."+name,
+		sourceType,
+		valueSymbol,
+		errorSymbol,
+		[]paramInfo{{typ: "ptr"}, {typ: "ptr"}},
+		[]*LlvmValue{toOstyValue(left), toOstyValue(right)},
+	)
+}
+
+func (g *generator) emitStdFsStringBytesUnitCall(call *ast.CallExpr, name, symbol string) (value, bool, error) {
+	if len(call.Args) != 2 {
+		return value{}, true, unsupportedf("call", "fs.%s expects 2 arguments, got %d", name, len(call.Args))
+	}
+	path, err := g.emitStdFsStringArg(call.Args[0], name, 0)
+	if err != nil {
+		return value{}, true, err
+	}
+	contents, err := g.emitStdFsBytesArg(call.Args[1], name, 1)
+	if err != nil {
+		return value{}, true, err
+	}
+	v, _, err := g.emitStdEnvUnitErrorResultFromRuntimeCall(
+		"fs."+name,
+		stdFsUnitErrorResultSourceTypeSingleton,
+		symbol,
+		[]paramInfo{{typ: "ptr"}, {typ: "ptr"}},
+		[]*LlvmValue{toOstyValue(path), toOstyValue(contents)},
+	)
+	return v, true, err
+}
+
+func (g *generator) emitStdFsStringStringUnitCall(call *ast.CallExpr, name, symbol string) (value, bool, error) {
+	if len(call.Args) != 2 {
+		return value{}, true, unsupportedf("call", "fs.%s expects 2 arguments, got %d", name, len(call.Args))
+	}
+	left, err := g.emitStdFsStringArg(call.Args[0], name, 0)
+	if err != nil {
+		return value{}, true, err
+	}
+	right, err := g.emitStdFsStringArg(call.Args[1], name, 1)
+	if err != nil {
+		return value{}, true, err
+	}
+	v, _, err := g.emitStdEnvUnitErrorResultFromRuntimeCall(
+		"fs."+name,
+		stdFsUnitErrorResultSourceTypeSingleton,
+		symbol,
+		[]paramInfo{{typ: "ptr"}, {typ: "ptr"}},
+		[]*LlvmValue{toOstyValue(left), toOstyValue(right)},
+	)
+	return v, true, err
+}
+
+func (g *generator) emitStdFsTwoStringUnitCall(call *ast.CallExpr, name, symbol string) (value, bool, error) {
+	return g.emitStdFsStringStringUnitCall(call, name, symbol)
 }
 
 func (g *generator) emitStdFsMkdirCall(call *ast.CallExpr) (value, bool, error) {
@@ -461,6 +609,12 @@ func (g *mirGen) emitStdFsCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error)
 		return true, g.emitStdFsWriteStringMIR(c)
 	case "exists":
 		return true, g.emitStdFsExistsMIR(c)
+	case "walk":
+		return true, g.emitStdFsPtrResultMIR(c, "walk", ostyRtFsWalkSymbol, ostyRtFsErrorSymbol)
+	case "glob":
+		return true, g.emitStdFsPtrResultMIR(c, "glob", ostyRtFsGlobSymbol, ostyRtFsErrorSymbol)
+	case "watch":
+		return true, g.emitStdFsPtrResultMIR(c, "watch", ostyRtFsWatchSymbol, ostyRtFsErrorSymbol)
 	case "create":
 		return true, g.emitStdFsUnitResultMIR(c, "create", ostyRtFsCreateSymbol)
 	case "remove":
@@ -469,10 +623,22 @@ func (g *mirGen) emitStdFsCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error)
 		return true, g.emitStdFsRenameMIR(c)
 	case "copy":
 		return true, g.emitStdFsCopyMIR(c)
+	case "copyDir":
+		return true, g.emitStdFsTwoStringUnitResultMIR(c, "copyDir", ostyRtFsCopyDirSymbol)
 	case "mkdir":
 		return true, g.emitStdFsUnitResultMIR(c, "mkdir", ostyRtFsMkdirSymbol)
 	case "mkdirAll":
 		return true, g.emitStdFsUnitResultMIR(c, "mkdirAll", ostyRtFsMkdirAllSymbol)
+	case "atomicWrite":
+		return true, g.emitStdFsStringBytesUnitResultMIR(c, "atomicWrite", ostyRtFsAtomicWriteBytesSymbol)
+	case "atomicWriteString":
+		return true, g.emitStdFsStringStringUnitResultMIR(c, "atomicWriteString", ostyRtFsAtomicWriteStringSymbol)
+	case "lockFile":
+		return true, g.emitStdFsUnitResultMIR(c, "lockFile", ostyRtFsLockFileSymbol)
+	case "hashFile":
+		return true, g.emitStdFsPtrResultMIR(c, "hashFile", ostyRtFsHashFileSymbol, ostyRtFsErrorSymbol)
+	case "diffFiles":
+		return true, g.emitStdFsTwoStringPtrResultMIR(c, "diffFiles", ostyRtFsDiffFilesSymbol, ostyRtFsErrorSymbol)
 	default:
 		return false, nil
 	}
@@ -506,6 +672,40 @@ func (g *mirGen) emitStdFsWriteStringMIR(c *mir.CallInstr) error {
 		return err
 	}
 	return g.emitStdFsUnitResultMIRArgs(c, ostyRtFsWriteStringSymbol, []string{mirArgSlotPtr(path), mirArgSlotPtr(contents)})
+}
+
+func (g *mirGen) emitStdFsStringBytesUnitResultMIR(c *mir.CallInstr, method, symbol string) error {
+	if len(c.Args) != 2 {
+		return unsupported("mir-mvp", fmt.Sprintf("std.fs.%s requires two positional arguments, got %d", method, len(c.Args)))
+	}
+	path, err := g.emitStdFsStringOperandMIR(c.Args[0], method, 0)
+	if err != nil {
+		return err
+	}
+	contents, err := g.emitStdFsBytesOperandMIR(c.Args[1], method, 1)
+	if err != nil {
+		return err
+	}
+	return g.emitStdFsUnitResultMIRArgs(c, symbol, []string{mirArgSlotPtr(path), mirArgSlotPtr(contents)})
+}
+
+func (g *mirGen) emitStdFsStringStringUnitResultMIR(c *mir.CallInstr, method, symbol string) error {
+	if len(c.Args) != 2 {
+		return unsupported("mir-mvp", fmt.Sprintf("std.fs.%s requires two positional arguments, got %d", method, len(c.Args)))
+	}
+	left, err := g.emitStdFsStringOperandMIR(c.Args[0], method, 0)
+	if err != nil {
+		return err
+	}
+	right, err := g.emitStdFsStringOperandMIR(c.Args[1], method, 1)
+	if err != nil {
+		return err
+	}
+	return g.emitStdFsUnitResultMIRArgs(c, symbol, []string{mirArgSlotPtr(left), mirArgSlotPtr(right)})
+}
+
+func (g *mirGen) emitStdFsTwoStringUnitResultMIR(c *mir.CallInstr, method, symbol string) error {
+	return g.emitStdFsStringStringUnitResultMIR(c, method, symbol)
 }
 
 func (g *mirGen) emitStdFsExistsMIR(c *mir.CallInstr) error {
@@ -612,9 +812,28 @@ func (g *mirGen) emitStdFsPtrResultMIR(c *mir.CallInstr, method, valueSymbol, er
 	if err != nil {
 		return err
 	}
-	g.declareRuntime(valueSymbol, mirRuntimeDeclareLine("ptr", valueSymbol, "ptr"))
+	return g.emitStdFsPtrResultMIRArgs(c, method, valueSymbol, errorSymbol, []string{mirArgSlotPtr(path)})
+}
+
+func (g *mirGen) emitStdFsTwoStringPtrResultMIR(c *mir.CallInstr, method, valueSymbol, errorSymbol string) error {
+	if len(c.Args) != 2 {
+		return unsupported("mir-mvp", fmt.Sprintf("std.fs.%s requires two positional arguments, got %d", method, len(c.Args)))
+	}
+	left, err := g.emitStdFsStringOperandMIR(c.Args[0], method, 0)
+	if err != nil {
+		return err
+	}
+	right, err := g.emitStdFsStringOperandMIR(c.Args[1], method, 1)
+	if err != nil {
+		return err
+	}
+	return g.emitStdFsPtrResultMIRArgs(c, method, valueSymbol, errorSymbol, []string{mirArgSlotPtr(left), mirArgSlotPtr(right)})
+}
+
+func (g *mirGen) emitStdFsPtrResultMIRArgs(c *mir.CallInstr, method, valueSymbol, errorSymbol string, argStrs []string) error {
+	g.declareRuntime(valueSymbol, mirRuntimeDeclareLine("ptr", valueSymbol, strings.Join(mirPtrParamList(len(argStrs)), ", ")))
 	if c.Dest == nil {
-		g.fnBuf.WriteString(mirCallStmtLine("ptr", valueSymbol, mirArgSlotPtr(path)))
+		g.fnBuf.WriteString(mirCallStmtLine("ptr", valueSymbol, strings.Join(argStrs, ", ")))
 		return nil
 	}
 	destLoc := g.fn.Local(c.Dest.Local)
@@ -624,7 +843,7 @@ func (g *mirGen) emitStdFsPtrResultMIR(c *mir.CallInstr, method, valueSymbol, er
 	aggLLVM := g.llvmType(destLoc.Type)
 	g.declareRuntime(errorSymbol, mirRuntimeDeclarePtrNoArgsLine(errorSymbol))
 	valReg := g.fresh()
-	g.fnBuf.WriteString(mirCallValueLine(valReg, "ptr", valueSymbol, mirArgSlotPtr(path)))
+	g.fnBuf.WriteString(mirCallValueLine(valReg, "ptr", valueSymbol, strings.Join(argStrs, ", ")))
 	isNil := g.fresh()
 	g.fnBuf.WriteString(mirICmpEqLine(isNil, "ptr", valReg, "null"))
 	errLabel := g.freshLabel("fs.ptr.err")

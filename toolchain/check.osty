@@ -803,27 +803,62 @@ fn useDeclAliasName(cx: ElabCx, node: AstNode) -> String {
     }
 }
 
-/// registerStdFsAliasFns — hot subset of std.fs.
+/// registerStdFsAliasFns — tool-facing std.fs surface.
 fn registerStdFsAliasFns(env: CheckEnv, alias: String) {
     let tys = env.tys
     let tString_ = tString(tys)
+    let tBytes_ = tBytes(tys)
     let tBool_ = tBool(tys)
     let tUnit_ = tUnit(tys)
+    let tError_ = tyNamed(tys, "Error", [])
+    let tListString = tyNamed(tys, "List", [tString_])
     let tResUnit = tyNamed(tys, "Result", [tUnit_, tyNamed(tys, "Error", [])])
+    let tResBytes = tyNamed(tys, "Result", [tBytes_, tError_])
     let tResString = tyNamed(tys, "Result", [tString_, tyNamed(tys, "Error", [])])
+    let tResListString = tyNamed(tys, "Result", [tListString, tError_])
     let emptyGenerics: List<String> = []
     let emptyBounds: List<CheckGenericBound> = []
     let add = [
         CheckFnSig { name: "exists", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_,
             paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "read", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResBytes,
+            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
         CheckFnSig { name: "readToString", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResString,
             paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "walk", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResListString,
+            paramNames: ["root"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "glob", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResListString,
+            paramNames: ["pattern"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "watch", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResListString,
+            paramNames: ["root"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "write", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
+            paramNames: ["path", "contents"], paramTys: [tString_, tBytes_], generics: emptyGenerics, genericBounds: emptyBounds },
         CheckFnSig { name: "writeString", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
             paramNames: ["path", "contents"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds },
-        CheckFnSig { name: "remove", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
-            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
         CheckFnSig { name: "create", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
             paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "remove", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
+            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "rename", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
+            paramNames: ["from", "to"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "copy", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
+            paramNames: ["from", "to"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "copyDir", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
+            paramNames: ["from", "to"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "mkdir", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
+            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "mkdirAll", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
+            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "atomicWrite", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
+            paramNames: ["path", "contents"], paramTys: [tString_, tBytes_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "atomicWriteString", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
+            paramNames: ["path", "contents"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "lockFile", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit,
+            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "hashFile", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResString,
+            paramNames: ["path"], paramTys: [tString_], generics: emptyGenerics, genericBounds: emptyBounds },
+        CheckFnSig { name: "diffFiles", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResString,
+            paramNames: ["left", "right"], paramTys: [tString_, tString_], generics: emptyGenerics, genericBounds: emptyBounds },
     ]
     for sig in add {
         checkRegisterFn(env, sig)

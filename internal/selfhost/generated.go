@@ -48325,38 +48325,57 @@ func useDeclAliasName(cx *ElabCx, node *AstNode) string {
 	}()
 }
 
-// Osty: /tmp/selfhost_merged.osty:23612:1
 func registerStdFsAliasFns(env *CheckEnv, alias string) {
-	// Osty: /tmp/selfhost_merged.osty:23613:5
 	tys := env.tys
 	_ = tys
-	// Osty: /tmp/selfhost_merged.osty:23614:5
 	tString_ := tString(tys)
 	_ = tString_
-	// Osty: /tmp/selfhost_merged.osty:23615:5
+	tBytes_ := tBytes(tys)
+	_ = tBytes_
 	tBool_ := tBool(tys)
 	_ = tBool_
-	// Osty: /tmp/selfhost_merged.osty:23616:5
 	tUnit_ := tUnit(tys)
 	_ = tUnit_
-	// Osty: /tmp/selfhost_merged.osty:23617:5
-	tResUnit := tyNamed(tys, "Result", []int{tUnit_, tyNamed(tys, "Error", make([]int, 0, 1))})
+	tError_ := tyNamed(tys, "Error", make([]int, 0, 1))
+	_ = tError_
+	tListString := tyNamed(tys, "List", []int{tString_})
+	_ = tListString
+	tResUnit := tyNamed(tys, "Result", []int{tUnit_, tError_})
 	_ = tResUnit
-	// Osty: /tmp/selfhost_merged.osty:23618:5
-	tResString := tyNamed(tys, "Result", []int{tString_, tyNamed(tys, "Error", make([]int, 0, 1))})
+	tResBytes := tyNamed(tys, "Result", []int{tBytes_, tError_})
+	_ = tResBytes
+	tResString := tyNamed(tys, "Result", []int{tString_, tError_})
 	_ = tResString
-	// Osty: /tmp/selfhost_merged.osty:23619:5
+	tResListString := tyNamed(tys, "Result", []int{tListString, tError_})
+	_ = tResListString
 	var emptyGenerics []string = make([]string, 0, 1)
 	_ = emptyGenerics
-	// Osty: /tmp/selfhost_merged.osty:23620:5
 	var emptyBounds []*CheckGenericBound = make([]*CheckGenericBound, 0, 1)
 	_ = emptyBounds
-	// Osty: /tmp/selfhost_merged.osty:23621:5
-	add := []*CheckFnSig{&CheckFnSig{name: "exists", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_, paramNames: []string{"path"}, paramTys: []int{tString_}, generics: emptyGenerics, genericBounds: emptyBounds}, &CheckFnSig{name: "readToString", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResString, paramNames: []string{"path"}, paramTys: []int{tString_}, generics: emptyGenerics, genericBounds: emptyBounds}, &CheckFnSig{name: "writeString", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: []string{"path", "contents"}, paramTys: []int{tString_, tString_}, generics: emptyGenerics, genericBounds: emptyBounds}, &CheckFnSig{name: "remove", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: []string{"path"}, paramTys: []int{tString_}, generics: emptyGenerics, genericBounds: emptyBounds}, &CheckFnSig{name: "create", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: []string{"path"}, paramTys: []int{tString_}, generics: emptyGenerics, genericBounds: emptyBounds}}
+	add := []*CheckFnSig{
+		&CheckFnSig{name: "exists", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tBool_, paramNames: []string{"path"}, paramTys: []int{tString_}, generics: emptyGenerics, genericBounds: emptyBounds},
+		&CheckFnSig{name: "read", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResBytes, paramNames: []string{"path"}, paramTys: []int{tString_}, generics: emptyGenerics, genericBounds: emptyBounds},
+		&CheckFnSig{name: "readToString", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResString, paramNames: []string{"path"}, paramTys: []int{tString_}, generics: emptyGenerics, genericBounds: emptyBounds},
+		&CheckFnSig{name: "walk", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResListString, paramNames: []string{"root"}, paramTys: []int{tString_}, generics: emptyGenerics, genericBounds: emptyBounds},
+		&CheckFnSig{name: "glob", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResListString, paramNames: []string{"pattern"}, paramTys: []int{tString_}, generics: emptyGenerics, genericBounds: emptyBounds},
+		&CheckFnSig{name: "watch", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResListString, paramNames: []string{"root"}, paramTys: []int{tString_}, generics: emptyGenerics, genericBounds: emptyBounds},
+		&CheckFnSig{name: "write", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: []string{"path", "contents"}, paramTys: []int{tString_, tBytes_}, generics: emptyGenerics, genericBounds: emptyBounds},
+		&CheckFnSig{name: "writeString", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: []string{"path", "contents"}, paramTys: []int{tString_, tString_}, generics: emptyGenerics, genericBounds: emptyBounds},
+		&CheckFnSig{name: "create", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: []string{"path"}, paramTys: []int{tString_}, generics: emptyGenerics, genericBounds: emptyBounds},
+		&CheckFnSig{name: "remove", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: []string{"path"}, paramTys: []int{tString_}, generics: emptyGenerics, genericBounds: emptyBounds},
+		&CheckFnSig{name: "rename", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: []string{"from", "to"}, paramTys: []int{tString_, tString_}, generics: emptyGenerics, genericBounds: emptyBounds},
+		&CheckFnSig{name: "copy", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: []string{"from", "to"}, paramTys: []int{tString_, tString_}, generics: emptyGenerics, genericBounds: emptyBounds},
+		&CheckFnSig{name: "copyDir", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: []string{"from", "to"}, paramTys: []int{tString_, tString_}, generics: emptyGenerics, genericBounds: emptyBounds},
+		&CheckFnSig{name: "mkdir", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: []string{"path"}, paramTys: []int{tString_}, generics: emptyGenerics, genericBounds: emptyBounds},
+		&CheckFnSig{name: "mkdirAll", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: []string{"path"}, paramTys: []int{tString_}, generics: emptyGenerics, genericBounds: emptyBounds},
+		&CheckFnSig{name: "atomicWrite", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: []string{"path", "contents"}, paramTys: []int{tString_, tBytes_}, generics: emptyGenerics, genericBounds: emptyBounds},
+		&CheckFnSig{name: "atomicWriteString", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: []string{"path", "contents"}, paramTys: []int{tString_, tString_}, generics: emptyGenerics, genericBounds: emptyBounds},
+		&CheckFnSig{name: "lockFile", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: []string{"path"}, paramTys: []int{tString_}, generics: emptyGenerics, genericBounds: emptyBounds},
+		&CheckFnSig{name: "hashFile", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResString, paramNames: []string{"path"}, paramTys: []int{tString_}, generics: emptyGenerics, genericBounds: emptyBounds},
+		&CheckFnSig{name: "diffFiles", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResString, paramNames: []string{"left", "right"}, paramTys: []int{tString_, tString_}, generics: emptyGenerics, genericBounds: emptyBounds},
+	}
 	_ = add
-	// Osty: /tmp/selfhost_merged.osty:23633:5
 	for _, sig := range add {
-		// Osty: /tmp/selfhost_merged.osty:23634:9
 		checkRegisterFn(env, sig)
 	}
 }
