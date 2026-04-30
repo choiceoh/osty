@@ -1,0 +1,28 @@
+cmake_minimum_required(VERSION 3.20)
+
+project(osty_qt LANGUAGES CXX)
+
+option(OSTY_QT_ENABLE_QT "Build libosty_qt against Qt Quick/QML" ON)
+
+add_library(osty_qt SHARED src/osty_qt.cpp)
+target_include_directories(osty_qt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_features(osty_qt PRIVATE cxx_std_17)
+target_compile_definitions(osty_qt PRIVATE OSTY_QT_BUILD_SHARED)
+
+if(OSTY_QT_ENABLE_QT)
+  find_package(Qt6 QUIET COMPONENTS Gui Qml Quick)
+  if(Qt6_FOUND)
+    set_target_properties(osty_qt PROPERTIES AUTOMOC ON)
+    target_compile_definitions(osty_qt PRIVATE OSTY_QT_ENABLE_QT=1)
+    target_link_libraries(osty_qt PRIVATE Qt6::Gui Qt6::Qml Qt6::Quick)
+  else()
+    find_package(Qt5 QUIET COMPONENTS Gui Qml Quick)
+    if(Qt5_FOUND)
+      set_target_properties(osty_qt PROPERTIES AUTOMOC ON)
+      target_compile_definitions(osty_qt PRIVATE OSTY_QT_ENABLE_QT=1)
+      target_link_libraries(osty_qt PRIVATE Qt5::Gui Qt5::Qml Qt5::Quick)
+    else()
+      message(FATAL_ERROR "Qt Quick/QML not found. Install Qt or configure with -DOSTY_QT_ENABLE_QT=OFF for diagnostic-only stubs.")
+    endif()
+  endif()
+endif()

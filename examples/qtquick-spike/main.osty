@@ -1,0 +1,42 @@
+use c "osty_qt" as qt {
+    fn osty_qt_app_new(name: String) -> Int
+    fn osty_qt_app_poll(app: Int) -> Bool
+    fn osty_qt_app_quit(app: Int)
+    fn osty_qt_window_new(app: Int, title: String, width: Int, height: Int, qml: String) -> Int
+    fn osty_qt_window_show(window: Int) -> Bool
+    fn osty_qt_event_count(app: Int) -> Int
+    fn osty_qt_event_name(app: Int, index: Int) -> String
+    fn osty_qt_event_payload(app: Int, index: Int) -> String
+    fn osty_qt_event_clear(app: Int)
+    fn osty_qt_last_error() -> String
+}
+
+fn main() {
+    let app = qt.osty_qt_app_new("Osty Qt Spike")
+    if app == 0 {
+        eprintln(qt.osty_qt_last_error())
+        return
+    }
+    let window = qt.osty_qt_window_new(app, "Osty Qt Spike", 720, 420, "ui/main.qml")
+    if window == 0 {
+        eprintln(qt.osty_qt_last_error())
+        return
+    }
+    if !qt.osty_qt_window_show(window) {
+        eprintln(qt.osty_qt_last_error())
+        return
+    }
+
+    for qt.osty_qt_app_poll(app) {
+        let n = qt.osty_qt_event_count(app)
+        for i in 0..n {
+            let name = qt.osty_qt_event_name(app, i)
+            let payload = qt.osty_qt_event_payload(app, i)
+            println("event {name}: {payload}")
+            if name == "quit" {
+                qt.osty_qt_app_quit(app)
+            }
+        }
+        qt.osty_qt_event_clear(app)
+    }
+}

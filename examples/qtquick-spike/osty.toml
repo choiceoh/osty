@@ -1,0 +1,19 @@
+[package]
+name = "qtquick-spike"
+version = "0.1.0"
+edition = "0.5"
+description = "Direct libosty_qt C ABI spike."
+
+[dependencies]
+
+[target.arm64-darwin]
+link = ["osty_qt"]
+
+[target.amd64-darwin]
+link = ["osty_qt"]
+
+[target.amd64-linux]
+link = ["osty_qt"]
+
+[target.amd64-windows]
+link = ["osty_qt"]

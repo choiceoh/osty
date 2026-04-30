@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 64 top-level 모듈. 분류 기준:
+총 65 top-level 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (62 / 64 = 97%)
+### ⭐⭐⭐⭐⭐ Production (62 / 65 = 95%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -92,10 +92,11 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (2 / 64 = 3%)
+### ⭐⭐⭐⭐ Production-adjacent (3 / 65 = 5%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
+| gui.qtquick | 183 | Qt Quick/QML native app backend MVP. `libosty_qt` bridge 필요, bundle/deploy 연계는 후속 |
 | compress | 11 | gzip 만 (zstd / deflate 추가 가능). Phase A shim 199 |
 | testing_gen | 168 | property runner 는 int/intRange/asciiString/pair/triple/oneOf/constant subset 실행. bool/float/char/byte/list/listOfSize/option/result/oneOfGens/map/filter 는 아직 실행 subset 밖 |
 

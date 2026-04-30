@@ -350,6 +350,49 @@ fn main() {
 	}
 }
 
+func TestGenerateUseCOstyQtSpikeSurface(t *testing.T) {
+	file := parseLLVMGenFile(t, `use c "osty_qt" as qt {
+    fn osty_qt_app_new(name: String) -> Int
+    fn osty_qt_app_poll(app: Int) -> Bool
+    fn osty_qt_window_new(app: Int, title: String, width: Int, height: Int, qml: String) -> Int
+    fn osty_qt_event_name(app: Int, index: Int) -> String
+}
+
+fn main() {
+    let app = qt.osty_qt_app_new("Spike")
+    let window = qt.osty_qt_window_new(app, "Spike", 640, 360, "ui/main.qml")
+    if qt.osty_qt_app_poll(app) {
+        println(qt.osty_qt_event_name(app, 0))
+    } else {
+        println(window)
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/use_c_osty_qt.osty",
+		Target:      "x86_64-unknown-linux-gnu",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare i64 @osty_qt_app_new(ptr)",
+		"declare i1 @osty_qt_app_poll(i64)",
+		"declare i64 @osty_qt_window_new(i64, ptr, i64, i64, ptr)",
+		"declare ptr @osty_qt_event_name(i64, i64)",
+		"call i64 @osty_qt_app_new(",
+		"call i64 @osty_qt_window_new(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateRuntimeCABIEmitsLiteralExternSymbol verifies that
 // `use runtime.cabi.<lib>` paths bypass the `osty_rt_` namespace and
 // declare the function name as the literal extern C symbol. This is
