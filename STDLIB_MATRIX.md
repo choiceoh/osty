@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 86 공개 모듈. 분류 기준:
+총 88 공개 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (82 / 86 = 95%)
+### ⭐⭐⭐⭐⭐ Production (84 / 88 = 95%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -75,6 +75,8 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | ocr | 1136 | pure Osty + os/fs/json | PaddleOCR v5 / Tesseract command adapters, fast/accurate presets, batch JSON ingestion, confidence review queues, search, key-value extraction, RAG-friendly chunks |
 | rpa | 1089 | pure Osty + os/strings | Desktop RPA command plans: mouse move/click/drag/scroll, keyboard typing/hotkeys/paste, window query/focus/wait, script repeat/delay, macOS cliclick+osascript / Linux xdotool / Windows PowerShell adapters |
 | scan | 670 | pure Osty + os/fs/image/ocr | SANE `scanimage` / custom scanner command planning, device-list parsing, batch page paths, image metadata probe, manifest generation, scan→OCR indexed document handoff |
+| barcode | 709 | pure Osty + os | Code39 / EAN-13 / UPC-A native renderers, SVG/ASCII output, scanner command adapters, ZBar/ZXing output parsing, inventory/shipment/access label helpers |
+| qr | 564 | pure Osty + os | QR payload builders, matrix/SVG render helpers, qrencode generation plans, ZBar/ZXing recognition plans and result parsing |
 | smtp | 358 | pure Osty + email/encoding | SMTP commands / AUTH payloads / reply parsing / transaction scripts |
 | result | 357 | — | composition (map / mapErr / and / or / collect) |
 | option | 356 | — | flatten / transpose / traverse / map2 / map3 |
@@ -114,7 +116,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (4 / 86 = 5%)
+### ⭐⭐⭐⭐ Production-adjacent (4 / 88 = 5%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
@@ -130,7 +132,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 
 | 구분 | 갭 |
 |---|---|
-| 없는 모듈 | 없음 (`db`, `smtp`, `zip`, `image`, `schedule`, `dialog`, `watch`, `scan`, `rpa`, `print`, `clipboard` surface 는 존재) |
+| 없는 모듈 | 없음 (`db`, `smtp`, `zip`, `image`, `xlsx`, `schedule`, `dialog`, `watch`, `scan`, `rpa`, `barcode`, `qr`, `print`, `clipboard` surface 는 존재) |
 | 남은 runtime/deep 기능 | `db driver/runtime`, `smtp TLS/socket execution`, `zip deflate`, `image pixel decode` |
 | 부분 구현 | `compress` 는 gzip 만 있음. deflate/zstd 계열 없음 |
 | 문서/코드 드리프트 | 일부 README/매트릭스 문구가 과거 G18 stub 정책을 아직 과장해서 남김 |
@@ -170,6 +172,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | OCR 엔진 연결 / 결과 분석 | ✅ 가능 | ocr (PaddleOCR v5 / Tesseract 실행 계획, JSON/TSV normalize, confidence/search/key-value/chunk helpers) |
 | 스캔→OCR 문서 자동화 | ✅ 가능 | scan + ocr + image + fs/os (SANE/custom scanner command plan, scanned page metadata, OCR batch/index/manifest) |
 | Desktop RPA / 반복 업무 자동화 | ✅ 가능 | rpa (마우스 이동/클릭/드래그/스크롤, 키 입력/hotkey/paste, 창 검색/focus/wait, 반복 스크립트, macOS/Linux/Windows command plan) |
+| QR / 바코드 문서 | ✅ 가능 | qr + barcode (QR payload/qrencode 계획, ZBar/ZXing 인식 파싱, Code39/EAN-13/UPC-A SVG 렌더링) |
 | SQL 쿼리 조립 | ✅ 가능 | sql (identifier quoting / value literals / dialect placeholders / CRUD builders) |
 | DB 설정/마이그레이션 계획 | ✅ 가능 | db + sql (DSN / pool / tx options / result rows / migration helpers) |
 | 두 언어 앱 / repo 경계 | ✅ 가능 | polyglot + os + env + fs + `osty scaffold polyglot` (Osty+Go/Rust/Python/Node 등 역할 분리, 빌드/테스트/경계 계약, doctorRun/check runner) |
@@ -210,7 +213,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 62 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, schedule, jsonl, kv, shortid, metrics, net, fmt, json, config, table, xlsx, url, io, collections, email, db, polyglot, grid, gui, dialog, tar, sql, xml, tui, image, ocr, rpa, scan, smtp, result, option, csv, encoding, zip, term, websocket, watch, clipboard, graphql, template, i18n, char, iter, bytes)
+- 64 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, schedule, jsonl, kv, shortid, metrics, net, fmt, json, config, table, xlsx, url, io, collections, email, db, polyglot, grid, gui, dialog, tar, sql, xml, tui, image, ocr, rpa, scan, barcode, qr, smtp, result, option, csv, encoding, zip, term, websocket, watch, clipboard, graphql, template, i18n, char, iter, bytes)
 - 5 모듈은 Phase A 충실 + Phase B declaration-only (env, random, os, crypto, compress)
 - fs 는 Phase A 충실 + 확장된 tool-facing declaration surface (walk/glob/watch/atomicWrite/lockFile/hashFile/copyDir/diffFiles)
 - print 는 기존 `std.os` host process bridge 위에서 CUPS/Windows/custom spooler 실행 계획을 제공한다. 실제 출력은 가능하지만 프린터별 capability discovery 는 production-adjacent 로 남긴다.

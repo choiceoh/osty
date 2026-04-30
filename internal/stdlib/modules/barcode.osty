@@ -1,0 +1,718 @@
+// std.barcode - practical linear barcode helpers.
+//
+// The module covers native generation for common document and logistics
+// formats (Code 39, EAN-13, UPC-A) plus scanner command adapters for image
+// recognition through tools such as zbarimg or ZXing.
+
+use std.error
+use std.os
+use std.strings
+
+pub enum Symbology {
+    Code39,
+    Ean13,
+    UpcA,
+    QrCode,
+    DataMatrix,
+    Pdf417,
+    UnknownSymbology,
+}
+
+pub enum ChecksumPolicy {
+    NoChecksum,
+    VerifyChecksum,
+    AppendChecksum,
+}
+
+pub enum ScannerEngine {
+    Zbarimg,
+    Zxing,
+    CustomCommand,
+}
+
+pub struct Options {
+    pub symbology: Symbology,
+    pub moduleWidth: Int = 2,
+    pub barHeight: Int = 80,
+    pub quietZone: Int = 10,
+    pub foreground: String = "#000000",
+    pub background: String = "#ffffff",
+    pub showText: Bool = true,
+    pub checksum: ChecksumPolicy,
+}
+
+pub struct LinearCode {
+    pub symbology: Symbology,
+    pub text: String,
+    pub pattern: String,
+    pub checksum: String = "",
+    pub valid: Bool = true,
+}
+
+pub struct ScanOptions {
+    pub engine: ScannerEngine,
+    pub command: String = "",
+    pub symbologies: List<Symbology> = [],
+    pub extraArgs: List<String> = [],
+}
+
+pub struct ScanResult {
+    pub symbology: Symbology,
+    pub text: String,
+    pub raw: String,
+    pub source: String = "",
+    pub confidence: Float = 1.0,
+}
+
+pub struct CommandPlan {
+    pub command: String,
+    pub args: List<String>,
+}
+
+pub fn code39Options() -> Options {
+    Options {symbology: Code39, checksum: NoChecksum}
+}
+
+pub fn ean13Options() -> Options {
+    Options {symbology: Ean13, checksum: VerifyChecksum}
+}
+
+pub fn upcAOptions() -> Options {
+    Options {symbology: UpcA, checksum: VerifyChecksum}
+}
+
+pub fn zbarimgOptions() -> ScanOptions {
+    ScanOptions {engine: Zbarimg, command: "zbarimg"}
+}
+
+pub fn zxingOptions() -> ScanOptions {
+    ScanOptions {engine: Zxing, command: "zxing"}
+}
+
+pub fn customScanOptions(command: String) -> ScanOptions {
+    ScanOptions {engine: CustomCommand, command: command}
+}
+
+pub fn withModuleWidth(mut options: Options, width: Int) -> Options {
+    options.moduleWidth = maxInt(1, width)
+    options
+}
+
+pub fn withBarHeight(mut options: Options, height: Int) -> Options {
+    options.barHeight = maxInt(1, height)
+    options
+}
+
+pub fn withQuietZone(mut options: Options, quietZone: Int) -> Options {
+    options.quietZone = maxInt(0, quietZone)
+    options
+}
+
+pub fn withText(mut options: Options, show: Bool) -> Options {
+    options.showText = show
+    options
+}
+
+pub fn withColors(mut options: Options, foreground: String, background: String) -> Options {
+    options.foreground = foreground
+    options.background = background
+    options
+}
+
+pub fn withChecksum(mut options: Options, policy: ChecksumPolicy) -> Options {
+    options.checksum = policy
+    options
+}
+
+pub fn withSymbology(mut options: ScanOptions, symbology: Symbology) -> ScanOptions {
+    options.symbologies.push(symbology)
+    options
+}
+
+pub fn withExtraArg(mut options: ScanOptions, arg: String) -> ScanOptions {
+    options.extraArgs.push(arg)
+    options
+}
+
+pub fn encode(text: String, options: Options) -> Result<LinearCode, Error> {
+    match options.symbology {
+        Code39 -> encodeCode39(text, options.checksum),
+        Ean13 -> encodeEan13(text, options.checksum),
+        UpcA -> encodeUpcA(text, options.checksum),
+        _ -> Err(error.new("barcode: native encoder supports Code39, EAN-13, and UPC-A")),
+    }
+}
+
+pub fn encodeCode39(text: String, checksum: ChecksumPolicy) -> Result<LinearCode, Error> {
+    let normalized = normalizeCode39(text)?
+    let payload = match checksum {
+        AppendChecksum -> "{normalized}{code39Checksum(normalized)?}",
+        VerifyChecksum -> verifyCode39Checksum(normalized)?,
+        NoChecksum -> normalized,
+    }
+    let mut pattern = code39CharacterBits('*')
+    for c in payload.chars() {
+        pattern = "{pattern}0{code39CharacterBits(c)}"
+    }
+    pattern = "{pattern}0{code39CharacterBits('*')}"
+    let checksumText = if checksum == AppendChecksum { strings.slice(payload, payload.len() - 1, payload.len()) } else { "" }
+    Ok(LinearCode {
+        symbology: Code39,
+        text: payload,
+        pattern: pattern,
+        checksum: checksumText,
+        valid: true,
+    })
+}
+
+pub fn encodeEan13(text: String, checksum: ChecksumPolicy) -> Result<LinearCode, Error> {
+    let body = strings.trimSpace(text)
+    if !allDigits(body) || (body.len() != 12 && body.len() != 13) {
+        return Err(error.new("barcode: EAN-13 requires 12 data digits or 13 digits with check digit"))
+    }
+    let full = if body.len() == 12 {
+        "{body}{ean13CheckDigit(body).toString()}"
+    } else {
+        if checksum != NoChecksum && !isValidEan13(body) {
+            return Err(error.new("barcode: invalid EAN-13 check digit"))
+        }
+        body
+    }
+    let pattern = ean13Pattern(full)?
+    Ok(LinearCode {
+        symbology: Ean13,
+        text: full,
+        pattern: pattern,
+        checksum: strings.slice(full, 12, 13),
+        valid: isValidEan13(full),
+    })
+}
+
+pub fn encodeUpcA(text: String, checksum: ChecksumPolicy) -> Result<LinearCode, Error> {
+    let body = strings.trimSpace(text)
+    if !allDigits(body) || (body.len() != 11 && body.len() != 12) {
+        return Err(error.new("barcode: UPC-A requires 11 data digits or 12 digits with check digit"))
+    }
+    let full = if body.len() == 11 {
+        "{body}{upcACheckDigit(body).toString()}"
+    } else {
+        if checksum != NoChecksum && !isValidUpcA(body) {
+            return Err(error.new("barcode: invalid UPC-A check digit"))
+        }
+        body
+    }
+    let ean = "0{full}"
+    Ok(LinearCode {
+        symbology: UpcA,
+        text: full,
+        pattern: ean13Pattern(ean)?,
+        checksum: strings.slice(full, 11, 12),
+        valid: isValidUpcA(full),
+    })
+}
+
+pub fn toSvg(code: LinearCode, options: Options) -> String {
+    let moduleWidth = maxInt(1, options.moduleWidth)
+    let quiet = maxInt(0, options.quietZone)
+    let barHeight = maxInt(1, options.barHeight)
+    let width = code.pattern.len() * moduleWidth + quiet * 2
+    let height = barHeight + quiet * 2 + if options.showText { 22 } else { 0 }
+    let mut out = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width}\" height=\"{height}\" viewBox=\"0 0 {width} {height}\" role=\"img\">"
+    out = "{out}<rect width=\"100%\" height=\"100%\" fill=\"{escapeXml(options.background)}\"/>"
+    let mut i = 0
+    for i < code.pattern.len() {
+        if code.pattern[i] == '1' {
+            let x = quiet + i * moduleWidth
+            out = "{out}<rect x=\"{x}\" y=\"{quiet}\" width=\"{moduleWidth}\" height=\"{barHeight}\" fill=\"{escapeXml(options.foreground)}\"/>"
+        }
+        i = i + 1
+    }
+    if options.showText {
+        let y = quiet + barHeight + 16
+        out = "{out}<text x=\"{width / 2}\" y=\"{y}\" text-anchor=\"middle\" font-family=\"monospace\" font-size=\"14\" fill=\"{escapeXml(options.foreground)}\">{escapeXml(code.text)}</text>"
+    }
+    "{out}</svg>"
+}
+
+pub fn renderSvg(text: String, options: Options) -> Result<String, Error> {
+    Ok(toSvg(encode(text, options)?, options))
+}
+
+pub fn toAscii(code: LinearCode) -> String {
+    let mut out = ""
+    for c in code.pattern.chars() {
+        let bit = if c == '1' { "#" } else { " " }
+        out = "{out}{bit}"
+    }
+    out
+}
+
+pub fn symbologyName(symbology: Symbology) -> String {
+    match symbology {
+        Code39 -> "CODE39",
+        Ean13 -> "EAN13",
+        UpcA -> "UPC-A",
+        QrCode -> "QR_CODE",
+        DataMatrix -> "DATA_MATRIX",
+        Pdf417 -> "PDF417",
+        UnknownSymbology -> "UNKNOWN",
+    }
+}
+
+pub fn parseSymbology(name: String) -> Symbology {
+    match strings.toUpper(strings.replaceAll(strings.trimSpace(name), "-", "_")) {
+        "CODE39" | "CODE_39" -> Code39,
+        "EAN13" | "EAN_13" -> Ean13,
+        "UPC_A" | "UPCA" -> UpcA,
+        "QR" | "QRCODE" | "QR_CODE" -> QrCode,
+        "DATAMATRIX" | "DATA_MATRIX" -> DataMatrix,
+        "PDF417" | "PDF_417" -> Pdf417,
+        _ -> UnknownSymbology,
+    }
+}
+
+pub fn detectSymbology(text: String) -> Symbology {
+    let trimmed = strings.trimSpace(text)
+    if isValidEan13(trimmed) {
+        return Ean13
+    }
+    if isValidUpcA(trimmed) {
+        return UpcA
+    }
+    match normalizeCode39(trimmed) {
+        Ok(_) -> Code39,
+        Err(_) -> UnknownSymbology,
+    }
+}
+
+pub fn scanPlan(imagePath: String, options: ScanOptions) -> Result<CommandPlan, Error> {
+    if strings.trimSpace(imagePath).isEmpty() {
+        return Err(error.new("barcode: image path is empty"))
+    }
+    match options.engine {
+        Zbarimg -> zbarimgPlan(imagePath, options),
+        Zxing -> zxingPlan(imagePath, options),
+        CustomCommand -> customPlan(imagePath, options),
+    }
+}
+
+pub fn commandLine(plan: CommandPlan) -> String {
+    let mut parts: List<String> = [shellQuote(plan.command)]
+    for arg in plan.args {
+        parts.push(shellQuote(arg))
+    }
+    strings.join(parts, " ")
+}
+
+pub fn scan(imagePath: String, options: ScanOptions) -> Result<List<ScanResult>, Error> {
+    let cmd = scanPlan(imagePath, options)?
+    let output = os.exec(cmd.command, cmd.args)?
+    if output.exitCode != 0 {
+        return Err(error.new("barcode: scanner failed with exit code {output.exitCode}: {output.stderr}"))
+    }
+    Ok(parseScanLines(output.stdout, imagePath))
+}
+
+pub fn parseScanLines(text: String, source: String) -> List<ScanResult> {
+    let mut out: List<ScanResult> = []
+    for line in strings.lines(text) {
+        let trimmed = strings.trimSpace(line)
+        if trimmed.isEmpty() {
+            continue
+        }
+        match splitFirst(trimmed, ":") {
+            Some(pair) -> out.push(ScanResult {
+                symbology: parseSymbology(pair.left),
+                text: pair.right,
+                raw: trimmed,
+                source: source,
+            }),
+            None -> out.push(ScanResult {
+                symbology: detectSymbology(trimmed),
+                text: trimmed,
+                raw: trimmed,
+                source: source,
+            }),
+        }
+    }
+    out
+}
+
+pub fn parseZbarOutput(text: String, source: String) -> List<ScanResult> {
+    parseScanLines(text, source)
+}
+
+pub fn parseZxingOutput(text: String, source: String) -> List<ScanResult> {
+    let mut out: List<ScanResult> = []
+    let mut currentFormat = UnknownSymbology
+    for line in strings.lines(text) {
+        let trimmed = strings.trimSpace(line)
+        if strings.startsWith(trimmed, "Barcode format:") {
+            currentFormat = parseSymbology(strings.trimSpace(strings.slice(trimmed, 15, trimmed.len())))
+        } else if strings.startsWith(trimmed, "Parsed result:") {
+            let value = strings.trimSpace(strings.slice(trimmed, 14, trimmed.len()))
+            out.push(ScanResult {symbology: currentFormat, text: value, raw: trimmed, source: source})
+        }
+    }
+    if out.isEmpty() {
+        return parseScanLines(text, source)
+    }
+    out
+}
+
+pub fn ean13CheckDigit(text: String) -> Int {
+    let chars = text.chars()
+    let mut sum = 0
+    let mut i = 0
+    for i < 12 && i < chars.len() {
+        let d = digitValue(chars[i])
+        sum = sum + if i % 2 == 0 { d } else { d * 3 }
+        i = i + 1
+    }
+    (10 - (sum % 10)) % 10
+}
+
+pub fn upcACheckDigit(text: String) -> Int {
+    let chars = text.chars()
+    let mut sum = 0
+    let mut i = 0
+    for i < 11 && i < chars.len() {
+        let d = digitValue(chars[i])
+        sum = sum + if i % 2 == 0 { d * 3 } else { d }
+        i = i + 1
+    }
+    (10 - (sum % 10)) % 10
+}
+
+pub fn isValidEan13(text: String) -> Bool {
+    let value = strings.trimSpace(text)
+    value.len() == 13 && allDigits(value) && digitValue(value[12]) == ean13CheckDigit(strings.slice(value, 0, 12))
+}
+
+pub fn isValidUpcA(text: String) -> Bool {
+    let value = strings.trimSpace(text)
+    value.len() == 12 && allDigits(value) && digitValue(value[11]) == upcACheckDigit(strings.slice(value, 0, 11))
+}
+
+pub fn inventoryLabel(sku: String, lot: String) -> String {
+    "INV:{strings.trimSpace(sku)}:{strings.trimSpace(lot)}"
+}
+
+pub fn shipmentLabel(carrier: String, tracking: String) -> String {
+    "SHIP:{strings.trimSpace(carrier)}:{strings.trimSpace(tracking)}"
+}
+
+pub fn accessLabel(subject: String, nonce: String) -> String {
+    "ACCESS:{strings.trimSpace(subject)}:{strings.trimSpace(nonce)}"
+}
+
+fn zbarimgPlan(imagePath: String, options: ScanOptions) -> Result<CommandPlan, Error> {
+    let command = if options.command.isEmpty() { "zbarimg" } else { options.command }
+    let mut args: List<String> = ["--quiet"]
+    for sym in options.symbologies {
+        args.push("--set")
+        args.push("{zbarSymbologyName(sym)}.enable")
+    }
+    appendExtraArgs(args, options.extraArgs)
+    args.push(imagePath)
+    Ok(CommandPlan {command: command, args: args})
+}
+
+fn zxingPlan(imagePath: String, options: ScanOptions) -> Result<CommandPlan, Error> {
+    let command = if options.command.isEmpty() { "zxing" } else { options.command }
+    let mut args: List<String> = []
+    for sym in options.symbologies {
+        args.push("--possibleFormats")
+        args.push(symbologyName(sym))
+    }
+    appendExtraArgs(args, options.extraArgs)
+    args.push(imagePath)
+    Ok(CommandPlan {command: command, args: args})
+}
+
+fn customPlan(imagePath: String, options: ScanOptions) -> Result<CommandPlan, Error> {
+    if options.command.isEmpty() {
+        return Err(error.new("barcode: custom scanner command is empty"))
+    }
+    let mut args: List<String> = []
+    appendExtraArgs(args, options.extraArgs)
+    args.push(imagePath)
+    Ok(CommandPlan {command: options.command, args: args})
+}
+
+fn zbarSymbologyName(symbology: Symbology) -> String {
+    match symbology {
+        Code39 -> "code39",
+        Ean13 -> "ean13",
+        UpcA -> "upca",
+        QrCode -> "qrcode",
+        DataMatrix -> "datamatrix",
+        Pdf417 -> "pdf417",
+        UnknownSymbology -> "unknown",
+    }
+}
+
+struct Pair {
+    left: String,
+    right: String,
+}
+
+fn splitFirst(text: String, sep: String) -> Pair? {
+    let found = strings.indexOf(text, sep)
+    if found.isNone() {
+        return None
+    }
+    let i = found.unwrap()
+    Some(Pair {
+        left: strings.slice(text, 0, i),
+        right: strings.slice(text, i + sep.len(), text.len()),
+    })
+}
+
+fn normalizeCode39(text: String) -> Result<String, Error> {
+    let value = strings.toUpper(strings.trimSpace(text))
+    if value.isEmpty() {
+        return Err(error.new("barcode: Code39 text is empty"))
+    }
+    for c in value.chars() {
+        if c == '*' || !isCode39Char(c) {
+            return Err(error.new("barcode: unsupported Code39 character {c}"))
+        }
+    }
+    Ok(value)
+}
+
+fn verifyCode39Checksum(value: String) -> Result<String, Error> {
+    if value.len() < 2 {
+        return Err(error.new("barcode: Code39 checksum requires at least two characters"))
+    }
+    let body = strings.slice(value, 0, value.len() - 1)
+    let got = value[value.len() - 1]
+    let want = code39Checksum(body)?
+    if got != want {
+        return Err(error.new("barcode: invalid Code39 checksum"))
+    }
+    Ok(body)
+}
+
+fn code39Checksum(value: String) -> Result<Char, Error> {
+    let alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-. $/+%"
+    let mut sum = 0
+    for c in value.chars() {
+        let idx = strings.indexOfChar(alphabet, c)
+        match idx {
+            Some(i) -> {
+                sum = sum + i
+            },
+            None -> {
+                return Err(error.new("barcode: unsupported Code39 checksum character {c}"))
+            },
+        }
+    }
+    Ok(alphabet[sum % 43])
+}
+
+fn isCode39Char(c: Char) -> Bool {
+    (c >= 'A' && c <= 'Z') ||
+    (c >= '0' && c <= '9') ||
+    c == '-' || c == '.' || c == ' ' || c == '$' || c == '/' || c == '+' || c == '%'
+}
+
+fn code39CharacterBits(c: Char) -> String {
+    widthPatternToBits(match c {
+        '0' -> "nnnwwnwnn",
+        '1' -> "wnnwnnnnw",
+        '2' -> "nnwwnnnnw",
+        '3' -> "wnwwnnnnn",
+        '4' -> "nnnwwnnnw",
+        '5' -> "wnnwwnnnn",
+        '6' -> "nnwwwnnnn",
+        '7' -> "nnnwnnwnw",
+        '8' -> "wnnwnnwnn",
+        '9' -> "nnwwnnwnn",
+        'A' -> "wnnnnwnnw",
+        'B' -> "nnwnnwnnw",
+        'C' -> "wnwnnwnnn",
+        'D' -> "nnnnwwnnw",
+        'E' -> "wnnnwwnnn",
+        'F' -> "nnwnwwnnn",
+        'G' -> "nnnnnwwnw",
+        'H' -> "wnnnnwwnn",
+        'I' -> "nnwnnwwnn",
+        'J' -> "nnnnwwwnn",
+        'K' -> "wnnnnnnww",
+        'L' -> "nnwnnnnww",
+        'M' -> "wnwnnnnwn",
+        'N' -> "nnnnwnnww",
+        'O' -> "wnnnwnnwn",
+        'P' -> "nnwnwnnwn",
+        'Q' -> "nnnnnnwww",
+        'R' -> "wnnnnnwwn",
+        'S' -> "nnwnnnwwn",
+        'T' -> "nnnnwnwwn",
+        'U' -> "wwnnnnnnw",
+        'V' -> "nwwnnnnnw",
+        'W' -> "wwwnnnnnn",
+        'X' -> "nwnnwnnnw",
+        'Y' -> "wwnnwnnnn",
+        'Z' -> "nwwnwnnnn",
+        '-' -> "nwnnnnwnw",
+        '.' -> "wwnnnnwnn",
+        ' ' -> "nwwnnnwnn",
+        '$' -> "nwnwnwnnn",
+        '/' -> "nwnwnnnwn",
+        '+' -> "nwnnnwnwn",
+        '%' -> "nnnwnwnwn",
+        '*' -> "nwnnwnwnn",
+        _ -> "nwnnwnwnn",
+    })
+}
+
+fn widthPatternToBits(pattern: String) -> String {
+    let mut out = ""
+    let mut bar = true
+    for c in pattern.chars() {
+        let count = if c == 'w' { 3 } else { 1 }
+        let bit = if bar { "1" } else { "0" }
+        out = "{out}{strings.repeat(bit, count)}"
+        bar = !bar
+    }
+    out
+}
+
+fn ean13Pattern(full: String) -> Result<String, Error> {
+    if full.len() != 13 || !allDigits(full) {
+        return Err(error.new("barcode: EAN-13 pattern requires 13 digits"))
+    }
+    let parity = ean13Parity(digitValue(full[0]))
+    let mut bits = "101"
+    let mut i = 1
+    for i <= 6 {
+        let d = digitValue(full[i])
+        bits = "{bits}{eanLeftPattern(d, parity[i - 1] == 'G')}"
+        i = i + 1
+    }
+    bits = "{bits}01010"
+    i = 7
+    for i < 13 {
+        bits = "{bits}{eanRightPattern(digitValue(full[i]))}"
+        i = i + 1
+    }
+    Ok("{bits}101")
+}
+
+fn ean13Parity(first: Int) -> String {
+    match first {
+        0 -> "OOOOOO",
+        1 -> "OOGOGG",
+        2 -> "OOGGOG",
+        3 -> "OOGGGO",
+        4 -> "OGOOGG",
+        5 -> "OGGOOG",
+        6 -> "OGGGOO",
+        7 -> "OGOGOG",
+        8 -> "OGOGGO",
+        9 -> "OGGOGO",
+        _ -> "OOOOOO",
+    }
+}
+
+fn eanLeftPattern(digit: Int, even: Bool) -> String {
+    if even {
+        return match digit {
+            0 -> "0100111",
+            1 -> "0110011",
+            2 -> "0011011",
+            3 -> "0100001",
+            4 -> "0011101",
+            5 -> "0111001",
+            6 -> "0000101",
+            7 -> "0010001",
+            8 -> "0001001",
+            9 -> "0010111",
+            _ -> "0000000",
+        }
+    }
+    match digit {
+        0 -> "0001101",
+        1 -> "0011001",
+        2 -> "0010011",
+        3 -> "0111101",
+        4 -> "0100011",
+        5 -> "0110001",
+        6 -> "0101111",
+        7 -> "0111011",
+        8 -> "0110111",
+        9 -> "0001011",
+        _ -> "0000000",
+    }
+}
+
+fn eanRightPattern(digit: Int) -> String {
+    match digit {
+        0 -> "1110010",
+        1 -> "1100110",
+        2 -> "1101100",
+        3 -> "1000010",
+        4 -> "1011100",
+        5 -> "1001110",
+        6 -> "1010000",
+        7 -> "1000100",
+        8 -> "1001000",
+        9 -> "1110100",
+        _ -> "0000000",
+    }
+}
+
+fn allDigits(text: String) -> Bool {
+    if text.isEmpty() {
+        return false
+    }
+    for c in text.chars() {
+        if c < '0' || c > '9' {
+            return false
+        }
+    }
+    true
+}
+
+fn digitValue(c: Char) -> Int {
+    c.toInt() - '0'.toInt()
+}
+
+fn appendExtraArgs(args: List<String>, extra: List<String>) {
+    for arg in extra {
+        args.push(arg)
+    }
+}
+
+fn shellQuote(s: String) -> String {
+    if s.isEmpty() {
+        return "''"
+    }
+    let mut safe = true
+    for c in s.chars() {
+        if !(c >= 'A' && c <= 'Z') &&
+           !(c >= 'a' && c <= 'z') &&
+           !(c >= '0' && c <= '9') &&
+           c != '_' && c != '-' && c != '.' && c != '/' && c != ':' {
+            safe = false
+        }
+    }
+    if safe {
+        return s
+    }
+    "'{strings.replaceAll(s, "'", "'\\''")}'"
+}
+
+fn escapeXml(text: String) -> String {
+    let mut out = strings.replaceAll(text, "&", "&amp;")
+    out = strings.replaceAll(out, "<", "&lt;")
+    out = strings.replaceAll(out, ">", "&gt;")
+    out = strings.replaceAll(out, "\"", "&quot;")
+    strings.replaceAll(out, "'", "&apos;")
+}
+
+fn maxInt(a: Int, b: Int) -> Int {
+    if a > b { a } else { b }
+}
