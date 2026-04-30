@@ -387,6 +387,24 @@ pub struct Node {
         self
     }
 
+    pub fn withValue(mut self, value: String) -> Node {
+        self.value = value
+        self.access.value = value
+        self
+    }
+
+    pub fn withChecked(mut self, checked: Bool) -> Node {
+        self.checked = checked
+        self.access.checked = checked
+        self
+    }
+
+    pub fn withDisabled(mut self, disabled: Bool) -> Node {
+        self.disabled = disabled
+        self.access.disabled = disabled
+        self
+    }
+
     pub fn withStyle(mut self, style: Style) -> Node {
         self.style = style
         self
@@ -1222,6 +1240,60 @@ pub fn browserGuiEvent(event: BrowserEvent) -> GuiEvent {
     }
 }
 
+pub fn setNodeValue(rootNode: Node, id: String, value: String) -> Node {
+    let mut out = rootNode
+    if out.id == id {
+        out.value = value
+        out.access.value = value
+    }
+    let mut children: List<Node> = []
+    for child in out.children {
+        children.push(setNodeValue(child, id, value))
+    }
+    out.children = children
+    out
+}
+
+pub fn setNodeChecked(rootNode: Node, id: String, checked: Bool) -> Node {
+    let mut out = rootNode
+    if out.id == id {
+        out.checked = checked
+        out.access.checked = checked
+    }
+    let mut children: List<Node> = []
+    for child in out.children {
+        children.push(setNodeChecked(child, id, checked))
+    }
+    out.children = children
+    out
+}
+
+pub fn setNodeDisabled(rootNode: Node, id: String, disabled: Bool) -> Node {
+    let mut out = rootNode
+    if out.id == id {
+        out.disabled = disabled
+        out.access.disabled = disabled
+    }
+    let mut children: List<Node> = []
+    for child in out.children {
+        children.push(setNodeDisabled(child, id, disabled))
+    }
+    out.children = children
+    out
+}
+
+pub fn applyBrowserEvent(rootNode: Node, payload: String) -> Result<Node, Error> {
+    let event = decodeBrowserEvent(payload)?
+    if event.id.isEmpty() {
+        return Err(error.new("gui: browser event missing node id"))
+    }
+    Ok(applyDecodedBrowserEvent(rootNode, event))
+}
+
+pub fn applyDecodedBrowserEvent(rootNode: Node, event: BrowserEvent) -> Node {
+    applyBrowserState(rootNode, event)
+}
+
 fn browserPointerEvent(event: BrowserEvent, phase: PointerPhase) -> PointerEvent {
     PointerEvent {
         phase: phase,
@@ -1262,6 +1334,38 @@ fn pointerButtonFromInt(value: Int) -> PointerButton {
         4 -> Forward,
         _ -> NoButton,
     }
+}
+
+fn applyBrowserState(mut node: Node, event: BrowserEvent) -> Node {
+    if node.id == event.id {
+        match node.kind {
+            TextInput -> {
+                match event.kind {
+                    BrowserInput | BrowserChange -> {
+                        node.value = event.value
+                        node.access.value = event.value
+                    },
+                    _ -> {},
+                }
+            },
+            Checkbox -> {
+                match event.kind {
+                    BrowserClick | BrowserInput | BrowserChange -> {
+                        node.checked = event.checked
+                        node.access.checked = event.checked
+                    },
+                    _ -> {},
+                }
+            },
+            _ -> {},
+        }
+    }
+    let mut children: List<Node> = []
+    for child in node.children {
+        children.push(applyBrowserState(child, event))
+    }
+    node.children = children
+    node
 }
 
 fn browserEventKind(kind: String) -> BrowserEventKind {

@@ -54,6 +54,9 @@ fn main() {
     let written = gui.writeBrowserDocument("/tmp/osty-gui-demo.html", "Demo", app, viewport)
     let opened = gui.openBrowserDocument("/tmp/osty-gui-demo.html", gui.commandBrowserLauncher("open"))
     let launched = gui.launchBrowserDocument("/tmp/osty-gui-demo.html", "Demo", app, viewport, launcher)
+    let inputApplied = gui.applyBrowserEvent(app, "\{\"kind\":\"input\",\"id\":\"name\",\"value\":\"Ada\",\"checked\":false,\"x\":4,\"y\":5,\"button\":0,\"timestampMs\":7\}")
+    let checkedApplied = gui.applyBrowserEvent(app, "\{\"kind\":\"change\",\"id\":\"ready\",\"value\":\"\",\"checked\":false,\"x\":4,\"y\":5,\"button\":0,\"timestampMs\":8\}")
+    let manualState = gui.setNodeDisabled(gui.setNodeChecked(gui.setNodeValue(app, "name", "Ada"), "ready", false), "save", true)
     let _ = strings.contains(html, "data-gui-id")
     let _ = strings.contains(html, "osty-gui-event")
     let _ = strings.contains(svg, "<svg")
@@ -62,6 +65,9 @@ fn main() {
     let _ = written
     let _ = opened
     let _ = launched
+    let _ = inputApplied
+    let _ = checkedApplied
+    let _ = manualState
 }
 `
 	if err := os.WriteFile(path, []byte(source), 0o644); err != nil {

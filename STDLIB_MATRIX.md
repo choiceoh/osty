@@ -51,7 +51,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | email | 461 | pure Osty + encoding | Address / Message / MIME multipart / attachment base64 / SMTP DATA helpers |
 | db | 554 | pure Osty + sql | Config / DSN / pool / tx options / result rows / migration planning helpers |
 | grid | 412 | pure Osty | Point / Size / Rect / Direction / row-major Grid<T> |
-| gui | 1900 | pure Osty + fs/os/json | retained GUI core: geometry / theme / flex+stack layout / render commands / HTML document renderer / browser event bridge / SVG renderer / browser document write/open launch helpers / pointer-key routing / focus / accessibility audit / snapshot diff |
+| gui | 2004 | pure Osty + fs/os/json | retained GUI core: geometry / theme / flex+stack layout / render commands / HTML document renderer / browser event bridge / SVG renderer / browser document write/open launch helpers / browser event state application / pointer-key routing / focus / accessibility audit / snapshot diff |
 | tar | 408 | pure Osty + bytes | ustar encode/decode/list/extract + checksum validation |
 | sql | 417 | pure Osty | identifier quoting / literals / placeholders / SELECT-INSERT-UPDATE-DELETE builders |
 | xml | 391 | pure Osty | escape / unescape / tag builder / tokenizer |
@@ -132,7 +132,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | XML 처리 | ✅ 가능 | xml (escape / tag build / tokenize) |
 | 다국어 메시지 | ✅ 가능 | i18n (locale / catalog / placeholder / plural category) |
 | WebSocket handshake/frame | ✅ 가능 | websocket (accept key / headers / frame encode/decode) |
-| GUI 앱 코어 | ✅ 가능 | gui (retained node tree + layout + event routing + render-command backend contract + 기본 HTML/SVG 렌더러 + 브라우저 이벤트 브리지 + HTML 파일 저장/기본 브라우저 실행 헬퍼) |
+| GUI 앱 코어 | ✅ 가능 | gui (retained node tree + layout + event routing + render-command backend contract + 기본 HTML/SVG 렌더러 + 브라우저 이벤트 브리지 + input/change 상태 반영 + HTML 파일 저장/기본 브라우저 실행 헬퍼) |
 | GraphQL 요청 생성 | ✅ 가능 | graphql (document builder / variables JSON body) |
 | 이메일/MIME 생성 | ✅ 가능 | email (address / MIME multipart / SMTP DATA helpers) |
 | SMTP 트랜잭션 조립 | ✅ 가능 | smtp (EHLO / STARTTLS plan / AUTH / MAIL-RCPT-DATA / reply parsing) |
