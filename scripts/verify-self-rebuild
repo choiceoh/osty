@@ -10,14 +10,13 @@ Runs the self-rebuild ratchet:
   1. host osty validates the toolchain sources and current MIR gates
   2. host osty builds osty-self-1 from toolchain/
   3. osty-self-1 builds osty-self-2 from toolchain/
-  4. osty-self-1 and osty-self-2 are compared byte-for-byte
+  4. osty-self-2 builds osty-self-3 from toolchain/
+  5. osty-self-2 and osty-self-3 are compared byte-for-byte
 
 Environment overrides:
 
   OSTY_SELF_REBUILD_DIR             staging dir (default .osty/self-rebuild)
   OSTY_SELF_REBUILD_TOOLCHAIN_DIR   toolchain package dir (default toolchain)
-  OSTY_SELF_REBUILD_STAGE1_BIN      prebuilt osty-self-1 binary
-  OSTY_SELF_REBUILD_STAGE2_BIN      prebuilt osty-self-2 binary
   OSTY_SELF_REBUILD_STAGE1_CACHE    reusable osty-self-1 cache (default .osty/self-rebuild-cache/osty-self-1)
 
 --gates-only stops after the currently available host-side gates.
@@ -152,6 +151,15 @@ copy_override_binary() {
 	chmod +x "$dest"
 }
 
+reject_external_stage_overrides() {
+	local name
+	for name in OSTY_SELF_REBUILD_STAGE1_BIN OSTY_SELF_REBUILD_STAGE2_BIN OSTY_SELF_REBUILD_STAGE3_BIN; do
+		if [[ -n "${!name:-}" ]]; then
+			fail "$name is disabled for the self-rebuild ratchet; every stage must be produced by the previous stage"
+		fi
+	done
+}
+
 cache_stage1_binary() {
 	local src="$1"
 	local cache_dir
@@ -177,6 +185,7 @@ build_self_binary() {
 	local driver="$1"
 	local label="$2"
 	local dest="$3"
+	local host_guard="${4:-}"
 	local before="$stage_root/$label.before"
 	local after="$stage_root/$label.after"
 	local candidates="$stage_root/$label.candidates"
@@ -186,7 +195,11 @@ build_self_binary() {
 	log "$label: build toolchain package with $driver"
 	local forward_args
 	printf -v forward_args 'build\n--backend=llvm\n--emit\nbinary\n--force\n%s' "$toolchain_dir"
-	OSTY_SELF_REBUILD_HOST_BIN="$host_bin" OSTY_SELF_REBUILD_FORWARD_ARGS="$forward_args" "$driver" build --backend=llvm --emit binary --force "$toolchain_dir"
+	if [[ -n "$host_guard" ]]; then
+		OSTY_SELF_REBUILD_HOST_BIN="$host_guard" OSTY_SELF_REBUILD_FORWARD_ARGS="$forward_args" "$driver" build --backend=llvm --emit binary --force "$toolchain_dir"
+	else
+		OSTY_SELF_REBUILD_FORWARD_ARGS="$forward_args" "$driver" build --backend=llvm --emit binary --force "$toolchain_dir"
+	fi
 	snapshot_binaries "$after"
 	comm -13 "$before" "$after" >"$candidates"
 
@@ -222,35 +235,30 @@ build_self_binary() {
 smoke_self_driver() {
 	local driver="$1"
 	local label="$2"
-	local reported_host
 	local out
 
 	require_exec "$driver" "$label driver"
 
-	log "$label: smoke selfhost host selection"
-	if ! reported_host="$(cd "$root" && OSTY_SELF_REBUILD_HOST_BIN="$host_bin" "$driver" --selfhost-host 2>&1)"; then
-		printf '%s\n' "$reported_host" >&2
-		fail "$label selfhost host selection failed"
+	log "$label: smoke self-rebuild doctor"
+	if ! out="$(cd "$root" && "$driver" --selfhost-doctor 2>&1)"; then
+		printf '%s\n' "$out" >&2
+		fail "$label is not a real self-rebuild compiler yet"
 	fi
-	if [[ "$reported_host" != "$host_bin" ]]; then
-		printf 'self-rebuild: %s reported unexpected host:\n' "$label" >&2
-		printf '  expected: %s\n' "$host_bin" >&2
-		printf '  actual:   %s\n' "$reported_host" >&2
-		exit 1
+	if [[ "$out" != *"osty-self host compiler: disabled"* || "$out" != *"osty-self source compiler: enabled"* || "$out" != *"osty-self self-rebuild probe: OK"* ]]; then
+		printf '%s\n' "$out" >&2
+		fail "$label selfhost doctor did not report host-free OK"
 	fi
+}
 
-	log "$label: smoke selfhost doctor"
-	if ! out="$(cd "$root" && OSTY_SELF_REBUILD_HOST_BIN="$host_bin" "$driver" --selfhost-doctor 2>&1)"; then
-		printf '%s\n' "$out" >&2
-		fail "$label selfhost doctor failed"
-	fi
-	case "$out" in
-	*"osty-self host probe: OK"*) ;;
-	*)
-		printf '%s\n' "$out" >&2
-		fail "$label selfhost doctor did not report OK"
-		;;
-	esac
+prepare_host_guard() {
+	local guard="$stage_root/host-compiler-forbidden"
+	cat >"$guard" <<'SH'
+#!/usr/bin/env bash
+echo "self-rebuild: host compiler forwarding is forbidden after stage1" >&2
+exit 86
+SH
+	chmod +x "$guard"
+	printf '%s\n' "$guard"
 }
 
 emit_stage1_ir() {
@@ -277,6 +285,7 @@ run_gates() {
 
 require_exec "$host_bin" "host osty"
 [[ -d "$toolchain_dir" ]] || fail "toolchain dir not found: $toolchain_dir"
+reject_external_stage_overrides
 
 if [[ "$skip_gates" == "0" ]]; then
 	run_gates
@@ -292,16 +301,15 @@ rm -rf "$stage_root"
 mkdir -p "$stage_root"
 stage1="$stage_root/osty-self-1"
 stage2="$stage_root/osty-self-2"
+stage3="$stage_root/osty-self-3"
+host_guard="$(prepare_host_guard)"
 
 if [[ "$mode" == "ir" ]]; then
 	emit_stage1_ir
 	exit 0
 fi
 
-if [[ -n "${OSTY_SELF_REBUILD_STAGE1_BIN:-}" ]]; then
-	log "stage1: use override $OSTY_SELF_REBUILD_STAGE1_BIN"
-	copy_override_binary "$OSTY_SELF_REBUILD_STAGE1_BIN" "$stage1" "osty-self-1 override"
-elif [[ "$reuse_stage1" == "1" && -x "$stage1_cache" ]]; then
+if [[ "$reuse_stage1" == "1" && -x "$stage1_cache" ]]; then
 	if stage1_cache_fresh; then
 		log "stage1: reuse cache $stage1_cache"
 		copy_override_binary "$stage1_cache" "$stage1" "osty-self-1 cache"
@@ -324,20 +332,19 @@ if [[ "$mode" == "stage1" ]]; then
 	exit 0
 fi
 
-if [[ -n "${OSTY_SELF_REBUILD_STAGE2_BIN:-}" ]]; then
-	log "stage2: use override $OSTY_SELF_REBUILD_STAGE2_BIN"
-	copy_override_binary "$OSTY_SELF_REBUILD_STAGE2_BIN" "$stage2" "osty-self-2 override"
-else
-	build_self_binary "$stage1" "stage2" "$stage2"
-fi
+build_self_binary "$stage1" "stage2" "$stage2" "$host_guard"
 
 smoke_self_driver "$stage2" "stage2"
 
-if ! cmp -s "$stage1" "$stage2"; then
+build_self_binary "$stage2" "stage3" "$stage3" "$host_guard"
+
+smoke_self_driver "$stage3" "stage3"
+
+if ! cmp -s "$stage2" "$stage3"; then
 	printf 'self-rebuild: byte parity failed\n' >&2
-	printf '  osty-self-1 %s  %s\n' "$(sha256_file "$stage1")" "$stage1" >&2
 	printf '  osty-self-2 %s  %s\n' "$(sha256_file "$stage2")" "$stage2" >&2
+	printf '  osty-self-3 %s  %s\n' "$(sha256_file "$stage3")" "$stage3" >&2
 	exit 1
 fi
 
-log "byte parity OK: $(sha256_file "$stage1")"
+log "byte parity OK: $(sha256_file "$stage2")"
