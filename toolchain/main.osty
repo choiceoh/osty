@@ -1,5 +1,4 @@
 use std.env
-use std.fs
 use std.os
 use std.process
 use std.strings
@@ -27,66 +26,93 @@ fn forwardedArgs() -> List<String> {
     forwardedArgsFrom(env.get("OSTY_SELF_REBUILD_FORWARD_ARGS") ?? "", env.args())
 }
 
-fn hostCompiler() -> String {
-    let explicit = env.get("OSTY_SELF_REBUILD_HOST_BIN") ?? ""
-    if explicit != "" {
-        return explicit
-    }
-    if fs.exists(".bin/osty") {
-        return ".bin/osty"
-    }
-    "osty"
-}
-
 fn hasSelfhostCommand(args: List<String>, name: String) -> Bool {
     args.len() > 0 && args[0] == name
 }
 
-fn runSelfhostDoctor(host: String) -> Int {
-    println("osty-self host: {host}")
-    let result = os.exec(host, ["explain", "E0001"])
-    match result {
-        Ok(out) -> {
-            if out.exitCode == 0 && strings.contains(out.stdout, "E0001") {
-                println("osty-self host probe: OK")
-                return 0
-            }
-            if out.stdout != "" {
-                print(out.stdout)
-            }
-            if out.stderr != "" {
-                eprint(out.stderr)
-            }
-            out.exitCode
-        },
-        Err(_) -> {
-            eprint("osty-self host probe failed; set OSTY_SELF_REBUILD_HOST_BIN or run from the repo root after `just build`\n")
-            2
-        },
+fn hasOptionValue(args: List<String>, name: String, value: String) -> Bool {
+    let joined = name + "=" + value
+    let mut i = 0
+    for i < args.len() {
+        let arg = args[i]
+        if arg == joined {
+            return true
+        }
+        if arg == name && i + 1 < args.len() && args[i + 1] == value {
+            return true
+        }
+        i = i + 1
     }
+    false
+}
+
+fn lastArg(args: List<String>) -> String {
+    if args.len() == 0 {
+        return ""
+    }
+    args[args.len() - 1]
+}
+
+fn isSelfRebuildBuild(args: List<String>) -> Bool {
+    args.len() > 1 &&
+        args[0] == "build" &&
+        hasOptionValue(args, "--backend", "llvm") &&
+        hasOptionValue(args, "--emit", "binary") &&
+        lastArg(args) != ""
+}
+
+fn selfRebuildPath(dir: String, rest: String) -> String {
+    if dir == "" {
+        return rest
+    }
+    if strings.hasSuffix(dir, "/") {
+        dir + rest
+    } else {
+        dir + "/" + rest
+    }
+}
+
+fn currentExecutable() -> String {
+    let args = env.args()
+    if args.len() == 0 {
+        return ""
+    }
+    args[0]
+}
+
+fn runSelfRebuild(args: List<String>) -> Int {
+    let toolchainDir = lastArg(args)
+    let _ = selfRebuildPath(toolchainDir, ".osty/out/debug/llvm/osty-self")
+    eprint("osty-self rebuild blocked: real self-rebuild requires an Osty-owned MIR-to-LLVM module emitter.\n")
+    eprint("missing entrypoint: toolchain/mir_generator.osty must own GenerateFromMIR-equivalent orchestration before osty-self can rebuild itself.\n")
+    2
+}
+
+fn runSelfhostDoctor() -> Int {
+    let exe = currentExecutable()
+    if exe == "" {
+        eprint("osty-self self-rebuild probe failed: executable not found\n")
+        return 2
+    }
+    println("osty-self mode: self-rebuild")
+    println("osty-self host compiler: disabled")
+    println("osty-self source compiler: missing")
+    println("osty-self missing stage: MIR-to-LLVM module emitter")
+    2
 }
 
 fn main() {
     let args = forwardedArgs()
-    let host = hostCompiler()
     if hasSelfhostCommand(args, "--selfhost-host") {
-        println(host)
+        println("disabled")
         os.exit(0)
     }
     if hasSelfhostCommand(args, "--selfhost-doctor") {
-        os.exit(runSelfhostDoctor(host))
+        os.exit(runSelfhostDoctor())
     }
-    let result = os.exec(host, args)
-    match result {
-        Ok(out) -> {
-            if out.stdout != "" {
-                print(out.stdout)
-            }
-            if out.stderr != "" {
-                eprint(out.stderr)
-            }
-            os.exit(out.exitCode)
-        },
-        Err(_) -> process.abort("osty-self bootstrap exec failed; set OSTY_SELF_REBUILD_HOST_BIN or run from the repo root after `just build`"),
+    if isSelfRebuildBuild(args) {
+        os.exit(runSelfRebuild(args))
     }
+    eprint("osty-self: unsupported command; host compiler forwarding is disabled\n")
+    process.abort("osty-self cannot rebuild until the Osty-owned MIR-to-LLVM module emitter is wired")
 }
