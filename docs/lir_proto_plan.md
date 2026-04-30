@@ -489,6 +489,15 @@ MIR -> LIR Proto -> LLVM text
 - Run the current MIR direct LLVM fixture set through both paths.
 - Track unsupported gaps in one table inside the test output or a helper file.
 
+The first shadow slice is deliberately narrower than full dual emission.
+`toolchain/lir_proto_parity.osty` marks source fixtures that the current
+generator should already satisfy with the `current-generator` tag.
+`internal/llvmgen` parses that Osty-owned catalog, lowers each embedded source
+through the normal front-end, IR, monomorphization, and MIR pipeline, runs
+`GenerateFromMIR`, and checks the fixture needles. Fixtures such as
+`source_println_int_runtime_abi` stay tagged `lir-only` until the current
+generator and LIR Proto runtime ABI intentionally converge.
+
 Coverage target:
 
 - The current MIR-first support whitelist.
@@ -581,6 +590,9 @@ The current implementation slice is Osty-first:
   parity catalog and manual check result surface.
 - `toolchain/lir_proto_test.osty` owns parser/formatter smoke coverage for the
   ported model, renderer, lowerer, and parity catalog shapes.
+- `internal/llvmgen/lir_proto_shadow_parity_test.go` wires the
+  `current-generator` source fixture subset into the current `GenerateFromMIR`
+  path as the first shadow parity harness.
 
 This gives the project a self-hosted place to land future pieces without
 touching backend dispatch. Production wiring still waits for the explicit
