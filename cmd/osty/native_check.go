@@ -608,14 +608,14 @@ func runCheckFileNative(path string, src []byte, formatter *diag.Formatter, flag
 	return 0
 }
 
-func nativeCheckFile(path string, src []byte) ([]*diag.Diagnostic, selfhost.CheckResult, error) {
+func nativeCheckFile(path string, src []byte) ([]*diag.Diagnostic, api.CheckResult, error) {
 	run := selfhost.Run(src)
 	parseDiags := run.Diagnostics()
 	if hasError(parseDiags) {
-		return parseDiags, selfhost.CheckResult{}, nil
+		return parseDiags, api.CheckResult{}, nil
 	}
 	imports := nativeFileImportSurfaces(run)
-	var checked selfhost.CheckResult
+	var checked api.CheckResult
 	if len(imports) > 0 {
 		var err error
 		checked, err = selfhost.CheckPackageStructured(api.PackageCheckInput{
@@ -627,7 +627,7 @@ func nativeCheckFile(path string, src []byte) ([]*diag.Diagnostic, selfhost.Chec
 			}},
 		})
 		if err != nil {
-			return parseDiags, selfhost.CheckResult{}, err
+			return parseDiags, api.CheckResult{}, err
 		}
 	} else {
 		_, checked = selfhost.CheckFromSource(src)

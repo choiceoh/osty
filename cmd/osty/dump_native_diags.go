@@ -18,7 +18,7 @@ import (
 	"sort"
 
 	"github.com/osty/osty/internal/check"
-	"github.com/osty/osty/internal/selfhost"
+	"github.com/osty/osty/internal/selfhost/api"
 )
 
 type nativeDiagTelemetry struct {
@@ -51,7 +51,7 @@ func dumpNativeDiagsFor(label string, chk *check.Result) {
 // dumpNativeDiagsForSummary is the native CLI-path sibling of
 // dumpNativeDiagsFor: it reads the already-materialized self-host
 // summary directly instead of going through check.Result.
-func dumpNativeDiagsForSummary(label string, summary selfhost.CheckSummary) {
+func dumpNativeDiagsForSummary(label string, summary api.CheckSummary) {
 	dumpNativeDiagTelemetry(label, nativeDiagTelemetry{
 		Assignments:     summary.Assignments,
 		Accepted:        summary.Accepted,
