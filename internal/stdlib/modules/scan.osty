@@ -1,0 +1,670 @@
+// std.scan - host scanner command adapters plus OCR handoff helpers.
+//
+// Scanners are platform and driver specific, so the stdlib keeps hardware I/O
+// behind host commands. The pure Osty layer plans SANE scanimage or custom
+// command invocations, records expected page images, probes image metadata when
+// files exist, and hands pages directly to std.ocr for document automation.
+
+use std.error
+use std.fs
+use std.image
+use std.ocr
+use std.os
+use std.strings
+
+pub enum Backend {
+    Scanimage,
+    CustomCommand,
+}
+
+pub enum Source {
+    DefaultSource,
+    Flatbed,
+    Adf,
+    DuplexAdf,
+}
+
+pub enum ColorMode {
+    Color,
+    Gray,
+    Lineart,
+}
+
+pub enum ScanFormat {
+    Png,
+    Jpeg,
+    Tiff,
+    Pnm,
+    Pdf,
+}
+
+pub struct Device {
+    pub id: String,
+    pub name: String,
+    pub vendor: String = "",
+    pub model: String = "",
+    pub kind: String = "scanner",
+}
+
+pub struct Options {
+    pub backend: Backend,
+    pub command: String = "",
+    pub device: String = "",
+    pub source: Source,
+    pub colorMode: ColorMode,
+    pub format: ScanFormat,
+    pub outputDir: String,
+    pub filePrefix: String = "scan",
+    pub startIndex: Int = 1,
+    pub pageCount: Int = 1,
+    pub resolutionDpi: Int = 300,
+    pub pageSize: String = "",
+    pub duplex: Bool = false,
+    pub timeoutMillis: Int = 0,
+    pub extraArgs: List<String> = [],
+}
+
+pub struct CommandPlan {
+    pub command: String,
+    pub args: List<String>,
+    pub expectedPaths: List<String> = [],
+    pub batchPattern: String = "",
+}
+
+pub struct ScannedPage {
+    pub index: Int,
+    pub path: String,
+    pub format: ScanFormat,
+    pub mimeType: String,
+    pub metadata: image.Metadata? = None,
+}
+
+pub struct ScanResult {
+    pub id: String,
+    pub plan: CommandPlan,
+    pub output: os.ExecOutput,
+    pub pages: List<ScannedPage> = [],
+}
+
+pub struct OcrPageItem {
+    pub source: String,
+    pub document: ocr.Document? = None,
+    pub error: String = "",
+}
+
+pub struct OcrBatch {
+    pub items: List<OcrPageItem> = [],
+    pub documents: List<ocr.Document> = [],
+    pub errors: List<String> = [],
+}
+
+pub struct OcrScanResult {
+    pub scan: ScanResult,
+    pub ocrBatch: OcrBatch,
+    pub indexed: List<ocr.IndexedDocument> = [],
+}
+
+pub fn scanimageOptions(outputDir: String) -> Options {
+    Options {
+        backend: Scanimage,
+        source: DefaultSource,
+        colorMode: Color,
+        format: Png,
+        outputDir: outputDir,
+    }
+}
+
+pub fn adfOptions(outputDir: String) -> Options {
+    let mut options = scanimageOptions(outputDir)
+    options.source = Adf
+    options.pageCount = 10
+    options
+}
+
+pub fn duplexAdfOptions(outputDir: String) -> Options {
+    let mut options = adfOptions(outputDir)
+    options.source = DuplexAdf
+    options.duplex = true
+    options
+}
+
+pub fn customCommandOptions(command: String, outputDir: String) -> Options {
+    Options {
+        backend: CustomCommand,
+        command: command,
+        source: DefaultSource,
+        colorMode: Color,
+        format: Png,
+        outputDir: outputDir,
+    }
+}
+
+pub fn withCommand(mut options: Options, command: String) -> Options {
+    options.command = command
+    options
+}
+
+pub fn withDevice(mut options: Options, device: String) -> Options {
+    options.device = device
+    options
+}
+
+pub fn withSource(mut options: Options, source: Source) -> Options {
+    options.source = source
+    options
+}
+
+pub fn withColorMode(mut options: Options, mode: ColorMode) -> Options {
+    options.colorMode = mode
+    options
+}
+
+pub fn withFormat(mut options: Options, format: ScanFormat) -> Options {
+    options.format = format
+    options
+}
+
+pub fn withOutput(mut options: Options, outputDir: String, filePrefix: String) -> Options {
+    options.outputDir = outputDir
+    options.filePrefix = filePrefix
+    options
+}
+
+pub fn withPageCount(mut options: Options, count: Int) -> Options {
+    options.pageCount = count
+    options
+}
+
+pub fn withStartIndex(mut options: Options, index: Int) -> Options {
+    options.startIndex = index
+    options
+}
+
+pub fn withResolutionDpi(mut options: Options, dpi: Int) -> Options {
+    options.resolutionDpi = dpi
+    options
+}
+
+pub fn withPageSize(mut options: Options, pageSize: String) -> Options {
+    options.pageSize = pageSize
+    options
+}
+
+pub fn withDuplex(mut options: Options, duplex: Bool) -> Options {
+    options.duplex = duplex
+    if duplex {
+        options.source = DuplexAdf
+    }
+    options
+}
+
+pub fn withTimeoutMillis(mut options: Options, millis: Int) -> Options {
+    options.timeoutMillis = millis
+    options
+}
+
+pub fn withExtraArg(mut options: Options, arg: String) -> Options {
+    options.extraArgs.push(arg)
+    options
+}
+
+pub fn withExtraArgs(mut options: Options, args: List<String>) -> Options {
+    for arg in args {
+        options.extraArgs.push(arg)
+    }
+    options
+}
+
+pub fn plannedPaths(options: Options) -> List<String> {
+    let count = maxInt(1, options.pageCount)
+    let mut out: List<String> = []
+    let mut i = 0
+    for i < count {
+        out.push(pagePath(options.outputDir, options.filePrefix, options.startIndex + i, options.format))
+        i = i + 1
+    }
+    out
+}
+
+pub fn pagePath(outputDir: String, prefix: String, index: Int, format: ScanFormat) -> String {
+    os.path.join([outputDir, "{normalizedPrefix(prefix)}-{padLeft(index.toString(), 3, "0")}.{formatExtension(format)}"])
+}
+
+pub fn plan(options: Options) -> Result<CommandPlan, Error> {
+    validateOptions(options)?
+    match options.backend {
+        Scanimage -> scanimagePlan(options),
+        CustomCommand -> customPlan(options),
+    }
+}
+
+pub fn scanimagePlan(options: Options) -> Result<CommandPlan, Error> {
+    if options.format == Pdf {
+        return Err(error.new("scan: scanimage does not emit PDF directly; scan an image format or use CustomCommand"))
+    }
+    let command = defaultCommand(options.command, "scanimage")
+    let paths = plannedPaths(options)
+    let mut args: List<String> = []
+    if !options.device.isEmpty() {
+        args.push("--device-name")
+        args.push(options.device)
+    }
+    args.push("--format")
+    args.push(scanimageFormat(options.format))
+    if options.resolutionDpi > 0 {
+        args.push("--resolution")
+        args.push(options.resolutionDpi.toString())
+    }
+    let source = scanimageSource(options)
+    if !source.isEmpty() {
+        args.push("--source")
+        args.push(source)
+    }
+    let mode = colorModeName(options.colorMode)
+    if !mode.isEmpty() {
+        args.push("--mode")
+        args.push(mode)
+    }
+    if !options.pageSize.isEmpty() {
+        args.push("--page-size")
+        args.push(options.pageSize)
+    }
+    let batch = if paths.len() > 1 {
+        batchPattern(options)
+    } else {
+        ""
+    }
+    if paths.len() <= 1 {
+        args.push("--output-file")
+        args.push(firstOutputPath(paths))
+    } else {
+        args.push("--batch={batch}")
+        args.push("--batch-start={options.startIndex}")
+        args.push("--batch-count={options.pageCount}")
+    }
+    appendExtraArgs(args, options.extraArgs)
+    Ok(CommandPlan {command: command, args: args, expectedPaths: paths, batchPattern: batch})
+}
+
+pub fn customPlan(options: Options) -> Result<CommandPlan, Error> {
+    if strings.trimSpace(options.command).isEmpty() {
+        return Err(error.new("scan: custom command is empty"))
+    }
+    let paths = plannedPaths(options)
+    Ok(CommandPlan {
+        command: options.command,
+        args: renderCustomArgs(options, paths),
+        expectedPaths: paths,
+        batchPattern: if paths.len() > 1 { batchPattern(options) } else { "" },
+    })
+}
+
+pub fn commandLine(plan: CommandPlan) -> String {
+    let mut parts: List<String> = [shellQuote(plan.command)]
+    for arg in plan.args {
+        parts.push(shellQuote(arg))
+    }
+    strings.join(parts, " ")
+}
+
+pub fn scan(options: Options) -> Result<ScanResult, Error> {
+    run(options)
+}
+
+pub fn run(options: Options) -> Result<ScanResult, Error> {
+    let cmd = plan(options)?
+    let output = os.execWith(cmd.command, cmd.args, "", {:}, options.timeoutMillis)?
+    if output.timedOut {
+        return Err(error.new("scan: command timed out"))
+    }
+    if output.exitCode != 0 {
+        return Err(error.new("scan: command failed with exit code {output.exitCode}: {output.stderr}"))
+    }
+    let pages = pagesFromPaths(cmd.expectedPaths, options.format)?
+    Ok(ScanResult {id: stableScanId(cmd, output), plan: cmd, output: output, pages: pages})
+}
+
+pub fn scanAndOcr(options: Options, ocrOptions: ocr.Options, maxChunkChars: Int, reviewThreshold: Float) -> Result<OcrScanResult, Error> {
+    runAndOcr(options, ocrOptions, maxChunkChars, reviewThreshold)
+}
+
+pub fn runAndOcr(options: Options, ocrOptions: ocr.Options, maxChunkChars: Int, reviewThreshold: Float) -> Result<OcrScanResult, Error> {
+    let result = run(options)?
+    let batch = ocrPages(result.pages, ocrOptions)
+    let indexed = indexOcrBatch(batch, maxChunkChars, reviewThreshold)
+    Ok(OcrScanResult {scan: result, ocrBatch: batch, indexed: indexed})
+}
+
+pub fn ocrPages(pages: List<ScannedPage>, options: ocr.Options) -> OcrBatch {
+    let mut items: List<OcrPageItem> = []
+    let mut documents: List<ocr.Document> = []
+    let mut errors: List<String> = []
+    for page in pages {
+        match ocr.run(page.path, options) {
+            Ok(result) -> {
+                documents.push(result.document)
+                items.push(OcrPageItem {source: page.path, document: Some(result.document)})
+            },
+            Err(err) -> {
+                let msg = err.message()
+                errors.push("{page.path}: {msg}")
+                items.push(OcrPageItem {source: page.path, error: msg})
+            },
+        }
+    }
+    OcrBatch {items: items, documents: documents, errors: errors}
+}
+
+pub fn indexOcrBatch(batch: OcrBatch, maxChunkChars: Int, reviewThreshold: Float) -> List<ocr.IndexedDocument> {
+    let mut out: List<ocr.IndexedDocument> = []
+    for doc in batch.documents {
+        out.push(ocr.indexDocument(doc, maxChunkChars, reviewThreshold))
+    }
+    out
+}
+
+pub fn scanimageListDevicesPlan(command: String) -> CommandPlan {
+    CommandPlan {command: defaultCommand(command, "scanimage"), args: ["-L"], expectedPaths: []}
+}
+
+pub fn scanimageDefaultListDevicesPlan() -> CommandPlan {
+    scanimageListDevicesPlan("")
+}
+
+pub fn listDevices(command: String) -> Result<List<Device>, Error> {
+    let cmd = scanimageListDevicesPlan(command)
+    let output = os.execWith(cmd.command, cmd.args, "", {:}, 0)?
+    if output.exitCode != 0 {
+        return Err(error.new("scan: device listing failed with exit code {output.exitCode}: {output.stderr}"))
+    }
+    Ok(parseScanimageDevices(output.stdout))
+}
+
+pub fn listDefaultDevices() -> Result<List<Device>, Error> {
+    listDevices("")
+}
+
+pub fn parseScanimageDevices(text: String) -> List<Device> {
+    let mut out: List<Device> = []
+    for line in strings.splitLines(text) {
+        let trimmed = strings.trimSpace(line)
+        if strings.startsWith(trimmed, "device `") {
+            out.push(parseScanimageDeviceLine(trimmed))
+        }
+    }
+    out
+}
+
+pub fn pagesFromPaths(paths: List<String>, format: ScanFormat) -> Result<List<ScannedPage>, Error> {
+    let mut pages: List<ScannedPage> = []
+    let mut i = 0
+    for i < paths.len() {
+        pages.push(pageFromPath(paths[i], i + 1, format)?)
+        i = i + 1
+    }
+    Ok(pages)
+}
+
+pub fn pageFromPath(path: String, index: Int, format: ScanFormat) -> Result<ScannedPage, Error> {
+    let metadata = if fs.exists(path) {
+        match image.parse(fs.read(path)?) {
+            Ok(meta) -> Some(meta),
+            Err(_) -> None,
+        }
+    } else {
+        None
+    }
+    Ok(ScannedPage {index: index, path: path, format: format, mimeType: formatMime(format), metadata: metadata})
+}
+
+pub fn pagePaths(pages: List<ScannedPage>) -> List<String> {
+    let mut out: List<String> = []
+    for page in pages {
+        out.push(page.path)
+    }
+    out
+}
+
+pub fn manifest(result: ScanResult) -> String {
+    let mut lines: List<String> = ["\{"]
+    lines.push("  \"id\": {jsonString(result.id)},")
+    lines.push("  \"command\": {jsonString(commandLine(result.plan))},")
+    lines.push("  \"exitCode\": {result.output.exitCode},")
+    lines.push("  \"pages\": [")
+    let mut i = 0
+    for i < result.pages.len() {
+        let suffix = if i + 1 < result.pages.len() { "," } else { "" }
+        lines.push("    {pageManifest(result.pages[i])}{suffix}")
+        i = i + 1
+    }
+    lines.push("  ]")
+    lines.push("\}")
+    strings.join(lines, "\n")
+}
+
+pub fn writeManifest(path: String, result: ScanResult) -> Result<(), Error> {
+    fs.writeString(path, manifest(result))
+}
+
+pub fn formatName(format: ScanFormat) -> String {
+    match format {
+        Png  -> "png",
+        Jpeg -> "jpeg",
+        Tiff -> "tiff",
+        Pnm  -> "pnm",
+        Pdf  -> "pdf",
+    }
+}
+
+pub fn formatMime(format: ScanFormat) -> String {
+    match format {
+        Png  -> "image/png",
+        Jpeg -> "image/jpeg",
+        Tiff -> "image/tiff",
+        Pnm  -> "image/x-portable-anymap",
+        Pdf  -> "application/pdf",
+    }
+}
+
+fn validateOptions(options: Options) -> Result<(), Error> {
+    if strings.trimSpace(options.outputDir).isEmpty() {
+        return Err(error.new("scan: output directory is empty"))
+    }
+    if options.pageCount <= 0 {
+        return Err(error.new("scan: page count must be positive"))
+    }
+    if options.startIndex <= 0 {
+        return Err(error.new("scan: start index must be positive"))
+    }
+    if options.resolutionDpi <= 0 {
+        return Err(error.new("scan: resolution must be positive"))
+    }
+    Ok(())
+}
+
+fn renderCustomArgs(options: Options, paths: List<String>) -> List<String> {
+    let mut args: List<String> = []
+    let mut sawOutput = false
+    for arg in options.extraArgs {
+        if strings.contains(arg, "\{output\}") || strings.contains(arg, "\{outputs\}") {
+            sawOutput = true
+        }
+        args.push(renderCustomArg(arg, options, paths))
+    }
+    if !sawOutput {
+        args.push(firstOutputPath(paths))
+    }
+    args
+}
+
+fn renderCustomArg(arg: String, options: Options, paths: List<String>) -> String {
+    let mut out = arg
+    out = strings.replaceAll(out, "\{output\}", firstOutputPath(paths))
+    out = strings.replaceAll(out, "\{outputs\}", strings.join(paths, " "))
+    out = strings.replaceAll(out, "\{outputDir\}", options.outputDir)
+    out = strings.replaceAll(out, "\{batchPattern\}", batchPattern(options))
+    out = strings.replaceAll(out, "\{device\}", options.device)
+    out = strings.replaceAll(out, "\{format\}", formatName(options.format))
+    out = strings.replaceAll(out, "\{dpi\}", options.resolutionDpi.toString())
+    out
+}
+
+fn parseScanimageDeviceLine(line: String) -> Device {
+    let id = between(line, "`", "'")
+    let name = match strings.indexOf(line, " is ") {
+        Some(i) -> strings.trimSpace(strings.slice(line, i + 4, line.charCount())),
+        None    -> id,
+    }
+    let fields = strings.fields(name)
+    let vendor = if fields.len() > 0 { fields[0] } else { "" }
+    Device {id: id, name: name, vendor: vendor, model: name, kind: "scanner"}
+}
+
+fn between(text: String, startMarker: String, endMarker: String) -> String {
+    match strings.indexOf(text, startMarker) {
+        Some(start) -> {
+            let rest = strings.slice(text, start + startMarker.charCount(), text.charCount())
+            match strings.indexOf(rest, endMarker) {
+                Some(end) -> strings.slice(rest, 0, end),
+                None      -> "",
+            }
+        },
+        None -> "",
+    }
+}
+
+fn batchPattern(options: Options) -> String {
+    os.path.join([options.outputDir, "{normalizedPrefix(options.filePrefix)}-%03d.{formatExtension(options.format)}"])
+}
+
+fn scanimageSource(options: Options) -> String {
+    if options.duplex {
+        return "ADF Duplex"
+    }
+    match options.source {
+        DefaultSource -> "",
+        Flatbed       -> "Flatbed",
+        Adf           -> "ADF",
+        DuplexAdf     -> "ADF Duplex",
+    }
+}
+
+fn colorModeName(mode: ColorMode) -> String {
+    match mode {
+        Color   -> "Color",
+        Gray    -> "Gray",
+        Lineart -> "Lineart",
+    }
+}
+
+fn scanimageFormat(format: ScanFormat) -> String {
+    match format {
+        Png  -> "png",
+        Jpeg -> "jpeg",
+        Tiff -> "tiff",
+        Pnm  -> "pnm",
+        Pdf  -> "pdf",
+    }
+}
+
+fn formatExtension(format: ScanFormat) -> String {
+    match format {
+        Png  -> "png",
+        Jpeg -> "jpg",
+        Tiff -> "tiff",
+        Pnm  -> "pnm",
+        Pdf  -> "pdf",
+    }
+}
+
+fn normalizedPrefix(prefix: String) -> String {
+    let trimmed = strings.trimSpace(prefix)
+    if trimmed.isEmpty() {
+        "scan"
+    } else {
+        trimmed
+    }
+}
+
+fn firstOutputPath(paths: List<String>) -> String {
+    if paths.len() == 0 {
+        ""
+    } else {
+        paths[0]
+    }
+}
+
+fn stableScanId(plan: CommandPlan, output: os.ExecOutput) -> String {
+    "scan:{firstOutputPath(plan.expectedPaths)}:{output.exitCode}"
+}
+
+fn pageManifest(page: ScannedPage) -> String {
+    let size = match page.metadata {
+        Some(meta) -> ", \"width\": {meta.width}, \"height\": {meta.height}, \"bitsPerPixel\": {meta.bitsPerPixel}",
+        None       -> "",
+    }
+    "\{\"index\": {page.index}, \"path\": {jsonString(page.path)}, \"format\": {jsonString(formatName(page.format))}, \"mime\": {jsonString(page.mimeType)}{size}\}"
+}
+
+fn jsonString(text: String) -> String {
+    "\"{escapeJson(text)}\""
+}
+
+fn escapeJson(text: String) -> String {
+    let slashes = strings.replaceAll(text, "\\", "\\\\")
+    let quotes = strings.replaceAll(slashes, "\"", "\\\"")
+    let lines = strings.replaceAll(quotes, "\n", "\\n")
+    strings.replaceAll(strings.replaceAll(lines, "\r", "\\r"), "\t", "\\t")
+}
+
+fn defaultCommand(value: String, fallback: String) -> String {
+    let trimmed = strings.trimSpace(value)
+    if trimmed.isEmpty() {
+        fallback
+    } else {
+        trimmed
+    }
+}
+
+fn appendExtraArgs(args: List<String>, extra: List<String>) {
+    for arg in extra {
+        args.push(arg)
+    }
+}
+
+fn padLeft(text: String, width: Int, fill: String) -> String {
+    let mut out = text
+    for out.charCount() < width {
+        out = "{fill}{out}"
+    }
+    out
+}
+
+fn shellQuote(text: String) -> String {
+    if text.isEmpty() {
+        return "''"
+    }
+    let mut safe = true
+    for c in text.chars() {
+        if !(isAsciiAlphanumeric(c) || c == '-' || c == '_' || c == '.' || c == '/' || c == ':' || c == '=' || c == '%') {
+            safe = false
+        }
+    }
+    if safe {
+        return text
+    }
+    let escaped = strings.replaceAll(text, "'", "'\\''")
+    "'{escaped}'"
+}
+
+fn isAsciiAlphanumeric(c: Char) -> Bool {
+    (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+}
+
+fn maxInt(a: Int, b: Int) -> Int {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}

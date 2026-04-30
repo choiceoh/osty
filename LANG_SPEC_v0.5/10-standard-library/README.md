@@ -51,3 +51,4 @@ lowering remains implementation backlog.
   `std.tokenest`, `std.shortid`, `std.metrics`)](./34-deneb-utilities.md)
 - [§10.35 Tables (`std.table`)](./35-table.md)
 - [§10.36 AI API (`std.ai`)](./36-ai.md)
+- [§10.37 Scanner Automation (`std.scan`)](./37-scan.md)
