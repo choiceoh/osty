@@ -264,6 +264,132 @@ func TestGeneratedNativeSafeIndexHelpersAreOstyOwned(t *testing.T) {
 	}
 }
 
+func TestGeneratedNativeAnalysisHelpersAreOstyOwned(t *testing.T) {
+	listLen := func(name string) *llvmNativeExpr {
+		return &llvmNativeExpr{
+			kind: llvmNativeExprCall,
+			name: llvmListRuntimeLenSymbol(),
+			childExprs: []*llvmNativeExpr{
+				{kind: llvmNativeExprIdent, name: name},
+			},
+		}
+	}
+	intLit := func(text string) *llvmNativeExpr {
+		return &llvmNativeExpr{kind: llvmNativeExprInt, text: text}
+	}
+
+	if !llvmNativeRangeStartIsNonNegative(intLit("0")) {
+		t.Fatal("zero range start should be non-negative")
+	}
+	if llvmNativeRangeStartIsNonNegative(intLit("-1")) {
+		t.Fatal("negative literal range start must not be treated as non-negative")
+	}
+	if got := llvmNativeListLenSource(listLen("xs")); got != "xs" {
+		t.Fatalf("llvmNativeListLenSource(xs.len()) = %q, want xs", got)
+	}
+	if got := llvmNativeListLenSource(&llvmNativeExpr{kind: llvmNativeExprCall, name: "other"}); got != "" {
+		t.Fatalf("non-len call source = %q, want empty", got)
+	}
+	if got, ok := llvmNativeIntLiteralValue(intLit("1_024")); !ok || got != 1024 {
+		t.Fatalf("llvmNativeIntLiteralValue(1_024) = (%d, %v), want (1024, true)", got, ok)
+	}
+	if _, ok := llvmNativeIntLiteralValue(intLit("-3")); ok {
+		t.Fatal("negative literal must not be accepted as a non-negative addend")
+	}
+	if name, addend, ok := llvmNativeIndexIdentAndAddend(&llvmNativeExpr{
+		kind: llvmNativeExprBinary,
+		op:   "+",
+		childExprs: []*llvmNativeExpr{
+			intLit("2"),
+			{kind: llvmNativeExprIdent, name: "i"},
+		},
+	}); !ok || name != "i" || addend != 2 {
+		t.Fatalf("llvmNativeIndexIdentAndAddend(K+i) = (%q, %d, %v), want (i, 2, true)", name, addend, ok)
+	}
+
+	em := llvmEmitter()
+	em.nativeListLens["xs"] = llvmI64("%xs.len")
+	em.nativeListLens["ys"] = llvmI64("%ys.len")
+	llvmNativeRecordBoundedLen(em, "bound", &llvmNativeExpr{
+		kind: llvmNativeExprIf,
+		childExprs: []*llvmNativeExpr{
+			{
+				kind: llvmNativeExprBinary,
+				op:   "<",
+				childExprs: []*llvmNativeExpr{
+					listLen("xs"),
+					listLen("ys"),
+				},
+			},
+		},
+		childBlocks: []*llvmNativeBlock{
+			{hasResult: true, result: listLen("xs")},
+			{hasResult: true, result: listLen("ys")},
+		},
+	})
+	if got := em.nativeBoundedLens["bound"]; len(got) != 2 || got["xs"] != 0 || got["ys"] != 0 {
+		t.Fatalf("recorded bounded lens = %#v, want xs/ys zero slack", got)
+	}
+	derived := llvmNativeBoundedLensFor(em, &llvmNativeExpr{
+		kind: llvmNativeExprBinary,
+		op:   "-",
+		childExprs: []*llvmNativeExpr{
+			{kind: llvmNativeExprIdent, name: "bound"},
+			intLit("3"),
+		},
+	})
+	if len(derived) != 2 || derived["xs"] != 3 || derived["ys"] != 3 {
+		t.Fatalf("derived bounded lens = %#v, want xs/ys slack 3", derived)
+	}
+	derived["xs"] = 99
+	if got := em.nativeBoundedLens["bound"]["xs"]; got != 0 {
+		t.Fatalf("bounded lens clone must not mutate emitter state, got xs slack %d", got)
+	}
+
+	kept := llvmNativeEligibleScalarListParams(&llvmNativeFunction{
+		params: []*llvmNativeParam{
+			{name: "xs", listElemLLVMType: "i64"},
+		},
+		body: &llvmNativeBlock{
+			stmts: []*llvmNativeStmt{
+				{
+					kind: llvmNativeStmtExpr,
+					childExprs: []*llvmNativeExpr{
+						listLen("xs"),
+					},
+				},
+			},
+		},
+	})
+	if got := kept["xs"]; got != "i64" || len(kept) != 1 {
+		t.Fatalf("eligible params after len(xs) = %#v, want xs preserved", kept)
+	}
+	pruned := llvmNativeEligibleScalarListParams(&llvmNativeFunction{
+		params: []*llvmNativeParam{
+			{name: "xs", listElemLLVMType: "i64"},
+		},
+		body: &llvmNativeBlock{
+			stmts: []*llvmNativeStmt{
+				{
+					kind: llvmNativeStmtExpr,
+					childExprs: []*llvmNativeExpr{
+						{
+							kind: llvmNativeExprCall,
+							name: "helper",
+							childExprs: []*llvmNativeExpr{
+								{kind: llvmNativeExprIdent, name: "xs"},
+							},
+						},
+					},
+				},
+			},
+		},
+	})
+	if len(pruned) != 0 {
+		t.Fatalf("eligible params after helper(xs) = %#v, want pruned", pruned)
+	}
+}
+
 func TestGeneratedClangLinkBinaryArgsAcceptMultipleObjects(t *testing.T) {
 	args := llvmClangLinkBinaryArgs("", []string{"/tmp/main.o", "/tmp/runtime/gc_runtime.o"}, "/tmp/app")
 	got := strings.Join(args, " ")
