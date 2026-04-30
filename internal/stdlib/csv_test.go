@@ -15,7 +15,7 @@ func TestCsvModuleSurface(t *testing.T) {
 		t.Fatalf("std.csv not loaded")
 	}
 
-	for _, name := range []string{"encode", "encodeWith", "decode", "decodeWith", "decodeHeaders"} {
+	for _, name := range []string{"encode", "encodeTsv", "encodeWith", "decode", "decodeTsv", "decodeWith", "decodeHeaders", "decodeTsvHeaders", "tsvOptions"} {
 		sym := mod.Package.PkgScope.LookupLocal(name)
 		if sym == nil {
 			t.Errorf("std.csv missing export %q", name)
@@ -78,6 +78,8 @@ func TestCsvModuleSourcePinsQualityGuards(t *testing.T) {
 		"row.len() != headers.len()",
 		"record.insert(headers[c], row[c])",
 		"options.trimSpace && hasOuterAsciiSpace(field)",
+		"decodeWith(text, tsvOptions())",
+		"encodeWith(rows, tsvOptions())",
 	} {
 		if !strings.Contains(src, want) {
 			t.Errorf("std.csv source missing quality guard %q", want)

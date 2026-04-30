@@ -1,0 +1,1112 @@
+// std.table - small dataframe helpers for CSV/TSV-scale data work.
+//
+// Tables keep raw cell text so round-trips preserve user data, while typed
+// helpers and column inference let CLI tools quickly sort, group, and join
+// records without building a custom row model first.
+
+use std.csv
+use std.error
+use std.strings
+
+pub enum ColumnType {
+    EmptyColumn,
+    BoolColumn,
+    IntColumn,
+    FloatColumn,
+    TextColumn,
+    MixedColumn,
+}
+
+pub struct ColumnSchema {
+    pub name: String,
+    pub kind: ColumnType,
+}
+
+pub struct Row {
+    pub values: Map<String, String>,
+
+    pub fn get(self, column: String) -> String? {
+        self.values.get(column)
+    }
+
+    pub fn getOr(self, column: String, fallback: String) -> String {
+        self.values.get(column) ?? fallback
+    }
+
+    pub fn int(self, column: String) -> Int? {
+        match self.values.get(column) {
+            Some(value) -> parseInt(value),
+            None -> noneInt(),
+        }
+    }
+
+    pub fn float(self, column: String) -> Float? {
+        match self.values.get(column) {
+            Some(value) -> parseFloat(value),
+            None -> noneFloat(),
+        }
+    }
+
+    pub fn bool(self, column: String) -> Bool? {
+        match self.values.get(column) {
+            Some(value) -> parseBool(value),
+            None -> noneBool(),
+        }
+    }
+}
+
+pub struct TableGroup {
+    pub key: String,
+    pub rows: List<Row>,
+}
+
+pub struct NumericSummary {
+    pub count: Int,
+    pub sum: Float,
+    pub avg: Float,
+    pub min: Float,
+    pub max: Float,
+}
+
+pub struct JoinIndex {
+    pub columns: List<String>,
+    pub column: String,
+    pub keys: List<String>,
+    pub buckets: Map<String, List<Row>>,
+}
+
+pub struct Table {
+    pub columns: List<String>,
+    pub rows: List<Row>,
+
+    pub fn len(self) -> Int {
+        self.rows.len()
+    }
+
+    pub fn isEmpty(self) -> Bool {
+        self.rows.isEmpty()
+    }
+
+    pub fn width(self) -> Int {
+        self.columns.len()
+    }
+
+    pub fn hasColumn(self, column: String) -> Bool {
+        hasColumn(self.columns, column)
+    }
+
+    pub fn get(self, row: Int, column: String) -> String? {
+        match self.rows.get(row) {
+            Some(item) -> item.get(column),
+            None -> noneString(),
+        }
+    }
+
+    pub fn select(self, columns: List<String>) -> Result<Table, Error> {
+        select(self, columns)
+    }
+
+    pub fn drop(self, columns: List<String>) -> Result<Table, Error> {
+        drop(self, columns)
+    }
+
+    pub fn filter(self, pred: fn(Row) -> Bool) -> Table {
+        let mut out: List<Row> = []
+        for row in self.rows {
+            if pred(row) {
+                out.push(row)
+            }
+        }
+        Table { columns: copyStrings(self.columns), rows: out }
+    }
+
+    pub fn sortBy(self, column: String, descending: Bool) -> Result<Table, Error> {
+        sortBy(self, column, descending)
+    }
+
+    pub fn sortByType(self, column: String, kind: ColumnType, descending: Bool) -> Result<Table, Error> {
+        sortByType(self, column, kind, descending)
+    }
+
+    pub fn sortByInt(self, column: String, descending: Bool) -> Result<Table, Error> {
+        sortByInt(self, column, descending)
+    }
+
+    pub fn sortByFloat(self, column: String, descending: Bool) -> Result<Table, Error> {
+        sortByFloat(self, column, descending)
+    }
+
+    pub fn sortByBool(self, column: String, descending: Bool) -> Result<Table, Error> {
+        sortByBool(self, column, descending)
+    }
+
+    pub fn groupBy(self, column: String) -> Result<List<TableGroup>, Error> {
+        groupBy(self, column)
+    }
+
+    pub fn countBy(self, column: String, countColumn: String) -> Result<Table, Error> {
+        countBy(self, column, countColumn)
+    }
+
+    pub fn innerJoin(self, right: Table, leftColumn: String, rightColumn: String) -> Result<Table, Error> {
+        innerJoin(self, right, leftColumn, rightColumn)
+    }
+
+    pub fn leftJoin(self, right: Table, leftColumn: String, rightColumn: String) -> Result<Table, Error> {
+        leftJoin(self, right, leftColumn, rightColumn)
+    }
+
+    pub fn innerJoinIndex(self, right: JoinIndex, leftColumn: String) -> Result<Table, Error> {
+        innerJoinIndex(self, right, leftColumn)
+    }
+
+    pub fn leftJoinIndex(self, right: JoinIndex, leftColumn: String) -> Result<Table, Error> {
+        leftJoinIndex(self, right, leftColumn)
+    }
+
+    pub fn inferTypes(self) -> List<ColumnSchema> {
+        inferTypes(self)
+    }
+
+    pub fn validateSchema(self, schema: List<ColumnSchema>) -> Result<(), Error> {
+        validateSchema(self, schema)
+    }
+
+    pub fn coerce(self, schema: List<ColumnSchema>) -> Result<Table, Error> {
+        coerce(self, schema)
+    }
+
+    pub fn summarize(self, column: String) -> Result<NumericSummary, Error> {
+        summarize(self, column)
+    }
+
+    pub fn summarizeBy(self, groupColumn: String, valueColumn: String) -> Result<Table, Error> {
+        summarizeBy(self, groupColumn, valueColumn)
+    }
+
+    pub fn sum(self, column: String) -> Result<Float, Error> {
+        sum(self, column)
+    }
+
+    pub fn avg(self, column: String) -> Result<Float, Error> {
+        avg(self, column)
+    }
+
+    pub fn min(self, column: String) -> Result<Float, Error> {
+        min(self, column)
+    }
+
+    pub fn max(self, column: String) -> Result<Float, Error> {
+        max(self, column)
+    }
+
+    pub fn indexBy(self, column: String) -> Result<JoinIndex, Error> {
+        indexBy(self, column)
+    }
+
+    pub fn dataRows(self) -> List<List<String>> {
+        dataRows(self)
+    }
+
+    pub fn toRows(self) -> List<List<String>> {
+        toRows(self)
+    }
+
+    pub fn records(self) -> List<Map<String, String>> {
+        records(self)
+    }
+
+    pub fn toCsv(self) -> String {
+        toCsv(self)
+    }
+
+    pub fn toTsv(self) -> String {
+        toTsv(self)
+    }
+}
+
+pub fn empty() -> Table {
+    Table { columns: [], rows: [] }
+}
+
+pub fn row(values: Map<String, String>) -> Row {
+    Row { values: values }
+}
+
+pub fn schema(name: String, kind: ColumnType) -> ColumnSchema {
+    ColumnSchema { name: name, kind: kind }
+}
+
+pub fn schemaFrom(columns: List<String>, kinds: List<ColumnType>) -> Result<List<ColumnSchema>, Error> {
+    validateColumns(columns)?
+    if columns.len() != kinds.len() {
+        let expected = columns.len()
+        let got = kinds.len()
+        return Err(tableError("schema kind count mismatch: expected {expected}, got {got}"))
+    }
+
+    let mut out: List<ColumnSchema> = []
+    let mut i = 0
+    for i < columns.len() {
+        out.push(ColumnSchema { name: columns[i], kind: kinds[i] })
+        i = i + 1
+    }
+    Ok(out)
+}
+
+pub fn fromRows(columns: List<String>, rows: List<List<String>>) -> Result<Table, Error> {
+    validateColumns(columns)?
+
+    let mut out: List<Row> = []
+    let mut r = 0
+    for r < rows.len() {
+        let raw = rows[r]
+        if raw.len() != columns.len() {
+            let rowNo = r + 1
+            let expected = columns.len()
+            let got = raw.len()
+            return Err(tableError("row {rowNo}: expected {expected} fields, got {got}"))
+        }
+        out.push(rowFromCells(columns, raw))
+        r = r + 1
+    }
+    Ok(Table { columns: copyStrings(columns), rows: out })
+}
+
+pub fn fromRecords(columns: List<String>, rows: List<Map<String, String>>) -> Result<Table, Error> {
+    validateColumns(columns)?
+
+    let mut out: List<Row> = []
+    for values in rows {
+        let mut record: Map<String, String> = {:}
+        for column in columns {
+            record.insert(column, values.get(column) ?? "")
+        }
+        out.push(Row { values: record })
+    }
+    Ok(Table { columns: copyStrings(columns), rows: out })
+}
+
+pub fn fromCsv(text: String) -> Result<Table, Error> {
+    let rows = csv.decode(text)?
+    fromDecodedRows(rows)
+}
+
+pub fn fromTsv(text: String) -> Result<Table, Error> {
+    let rows = csv.decodeTsv(text)?
+    fromDecodedRows(rows)
+}
+
+pub fn fromDelimited(text: String, options: csv.CsvOptions) -> Result<Table, Error> {
+    let rows = csv.decodeWith(text, options)?
+    fromDecodedRows(rows)
+}
+
+pub fn toCsv(table: Table) -> String {
+    csv.encode(table.toRows())
+}
+
+pub fn toTsv(table: Table) -> String {
+    csv.encodeTsv(table.toRows())
+}
+
+pub fn toDelimited(table: Table, options: csv.CsvOptions) -> String {
+    csv.encodeWith(table.toRows(), options)
+}
+
+pub fn dataRows(table: Table) -> List<List<String>> {
+    let mut rows: List<List<String>> = []
+    for item in table.rows {
+        rows.push(rowCells(table.columns, item))
+    }
+    rows
+}
+
+pub fn toRows(table: Table) -> List<List<String>> {
+    let mut rows: List<List<String>> = [copyStrings(table.columns)]
+    for item in table.rows {
+        rows.push(rowCells(table.columns, item))
+    }
+    rows
+}
+
+pub fn records(table: Table) -> List<Map<String, String>> {
+    let mut out: List<Map<String, String>> = []
+    for item in table.rows {
+        let mut values: Map<String, String> = {:}
+        for column in table.columns {
+            values.insert(column, item.getOr(column, ""))
+        }
+        out.push(values)
+    }
+    out
+}
+
+pub fn select(table: Table, columns: List<String>) -> Result<Table, Error> {
+    validateSelection(table.columns, columns)?
+
+    let mut rows: List<Row> = []
+    for item in table.rows {
+        let mut values: Map<String, String> = {:}
+        for column in columns {
+            values.insert(column, item.getOr(column, ""))
+        }
+        rows.push(Row { values: values })
+    }
+    Ok(Table { columns: copyStrings(columns), rows: rows })
+}
+
+pub fn drop(table: Table, columns: List<String>) -> Result<Table, Error> {
+    for column in columns {
+        ensureColumn(table.columns, column)?
+    }
+
+    let mut selected: List<String> = []
+    for column in table.columns {
+        if !hasColumn(columns, column) {
+            selected.push(column)
+        }
+    }
+    select(table, selected)
+}
+
+pub fn sortBy(table: Table, column: String, descending: Bool) -> Result<Table, Error> {
+    ensureColumn(table.columns, column)?
+
+    let mut rows = copyRows(table.rows)
+    let mut i = 0
+    for i < rows.len() {
+        let mut best = i
+        let mut j = i + 1
+        for j < rows.len() {
+            let candidate = rows[j].getOr(column, "")
+            let current = rows[best].getOr(column, "")
+            if shouldSortBefore(candidate, current, descending) {
+                best = j
+            }
+            j = j + 1
+        }
+        if best != i {
+            let tmp = rows[i]
+            rows[i] = rows[best]
+            rows[best] = tmp
+        }
+        i = i + 1
+    }
+    Ok(Table { columns: copyStrings(table.columns), rows: rows })
+}
+
+pub fn sortByType(table: Table, column: String, kind: ColumnType, descending: Bool) -> Result<Table, Error> {
+    ensureColumn(table.columns, column)?
+    ensureSortableKind(kind)?
+
+    let mut rows = copyRows(table.rows)
+    let mut i = 0
+    for i < rows.len() {
+        let mut best = i
+        let mut j = i + 1
+        for j < rows.len() {
+            let candidate = rows[j].getOr(column, "")
+            let current = rows[best].getOr(column, "")
+            if shouldSortBeforeType(candidate, current, column, kind, descending)? {
+                best = j
+            }
+            j = j + 1
+        }
+        if best != i {
+            let tmp = rows[i]
+            rows[i] = rows[best]
+            rows[best] = tmp
+        }
+        i = i + 1
+    }
+    Ok(Table { columns: copyStrings(table.columns), rows: rows })
+}
+
+pub fn sortByInt(table: Table, column: String, descending: Bool) -> Result<Table, Error> {
+    sortByType(table, column, IntColumn, descending)
+}
+
+pub fn sortByFloat(table: Table, column: String, descending: Bool) -> Result<Table, Error> {
+    sortByType(table, column, FloatColumn, descending)
+}
+
+pub fn sortByBool(table: Table, column: String, descending: Bool) -> Result<Table, Error> {
+    sortByType(table, column, BoolColumn, descending)
+}
+
+pub fn groupBy(table: Table, column: String) -> Result<List<TableGroup>, Error> {
+    ensureColumn(table.columns, column)?
+
+    let mut groups: List<TableGroup> = []
+    let mut indexByKey: Map<String, Int> = {:}
+    for item in table.rows {
+        let key = item.getOr(column, "")
+        match indexByKey.get(key) {
+            Some(idx) -> {
+                let group = groups[idx]
+                let mut rows = group.rows
+                rows.push(item)
+                groups[idx] = TableGroup { key: group.key, rows: rows }
+            },
+            None -> {
+                indexByKey.insert(key, groups.len())
+                groups.push(TableGroup { key: key, rows: [item] })
+            },
+        }
+    }
+    Ok(groups)
+}
+
+pub fn countBy(table: Table, column: String, countColumn: String) -> Result<Table, Error> {
+    ensureColumn(table.columns, column)?
+    let cleanCount = strings.trimSpace(countColumn)
+    if cleanCount.isEmpty() {
+        return Err(tableError("count column is empty"))
+    }
+    if cleanCount == column {
+        return Err(tableError("count column duplicates grouped column: {column}"))
+    }
+
+    let groups = groupBy(table, column)?
+    let columns = [column, cleanCount]
+    let mut rows: List<Row> = []
+    for group in groups {
+        let mut values: Map<String, String> = {:}
+        values.insert(column, group.key)
+        values.insert(cleanCount, group.rows.len().toString())
+        rows.push(Row { values: values })
+    }
+    Ok(Table { columns: columns, rows: rows })
+}
+
+pub fn innerJoin(left: Table, right: Table, leftColumn: String, rightColumn: String) -> Result<Table, Error> {
+    joinTables(left, right, leftColumn, rightColumn, false)
+}
+
+pub fn leftJoin(left: Table, right: Table, leftColumn: String, rightColumn: String) -> Result<Table, Error> {
+    joinTables(left, right, leftColumn, rightColumn, true)
+}
+
+pub fn innerJoinIndex(left: Table, right: JoinIndex, leftColumn: String) -> Result<Table, Error> {
+    joinIndexed(left, right, leftColumn, false)
+}
+
+pub fn leftJoinIndex(left: Table, right: JoinIndex, leftColumn: String) -> Result<Table, Error> {
+    joinIndexed(left, right, leftColumn, true)
+}
+
+pub fn inferTypes(table: Table) -> List<ColumnSchema> {
+    let mut out: List<ColumnSchema> = []
+    for column in table.columns {
+        let mut kind = EmptyColumn
+        for item in table.rows {
+            kind = mergeColumnType(kind, inferCellType(item.getOr(column, "")))
+        }
+        out.push(ColumnSchema { name: column, kind: kind })
+    }
+    out
+}
+
+pub fn validateSchema(table: Table, schema: List<ColumnSchema>) -> Result<(), Error> {
+    validateSchemaList(schema)?
+    for spec in schema {
+        ensureColumn(table.columns, spec.name)?
+        let mut rowNo = 1
+        for item in table.rows {
+            validateCell(spec.name, item.getOr(spec.name, ""), spec.kind, rowNo)?
+            rowNo = rowNo + 1
+        }
+    }
+    Ok(())
+}
+
+pub fn coerce(table: Table, schema: List<ColumnSchema>) -> Result<Table, Error> {
+    validateSchema(table, schema)?
+
+    let mut schemaKinds: Map<String, ColumnType> = {:}
+    for spec in schema {
+        schemaKinds.insert(spec.name, spec.kind)
+    }
+
+    let mut rows: List<Row> = []
+    for item in table.rows {
+        let mut values: Map<String, String> = {:}
+        for column in table.columns {
+            match schemaKinds.get(column) {
+                Some(kind) -> values.insert(column, coerceCell(column, item.getOr(column, ""), kind)?),
+                None -> values.insert(column, item.getOr(column, "")),
+            }
+        }
+        rows.push(Row { values: values })
+    }
+    Ok(Table { columns: copyStrings(table.columns), rows: rows })
+}
+
+pub fn summarize(table: Table, column: String) -> Result<NumericSummary, Error> {
+    ensureColumn(table.columns, column)?
+    summarizeRows(table.rows, column)
+}
+
+pub fn summarizeBy(table: Table, groupColumn: String, valueColumn: String) -> Result<Table, Error> {
+    ensureColumn(table.columns, groupColumn)?
+    ensureColumn(table.columns, valueColumn)?
+    ensureSummaryColumnDoesNotConflict(groupColumn)?
+
+    let groups = groupBy(table, groupColumn)?
+    let columns = [groupColumn, "count", "sum", "avg", "min", "max"]
+    let mut rows: List<Row> = []
+    for group in groups {
+        let summary = summarizeRows(group.rows, valueColumn)?
+        let mut values: Map<String, String> = {:}
+        values.insert(groupColumn, group.key)
+        values.insert("count", summary.count.toString())
+        values.insert("sum", summary.sum.toString())
+        values.insert("avg", summary.avg.toString())
+        values.insert("min", summary.min.toString())
+        values.insert("max", summary.max.toString())
+        rows.push(Row { values: values })
+    }
+    Ok(Table { columns: columns, rows: rows })
+}
+
+pub fn sum(table: Table, column: String) -> Result<Float, Error> {
+    let summary = summarize(table, column)?
+    Ok(summary.sum)
+}
+
+pub fn avg(table: Table, column: String) -> Result<Float, Error> {
+    let summary = summarize(table, column)?
+    Ok(summary.avg)
+}
+
+pub fn min(table: Table, column: String) -> Result<Float, Error> {
+    let summary = summarize(table, column)?
+    Ok(summary.min)
+}
+
+pub fn max(table: Table, column: String) -> Result<Float, Error> {
+    let summary = summarize(table, column)?
+    Ok(summary.max)
+}
+
+pub fn indexBy(table: Table, column: String) -> Result<JoinIndex, Error> {
+    ensureColumn(table.columns, column)?
+
+    let mut keys: List<String> = []
+    let mut buckets: Map<String, List<Row>> = {:}
+    for item in table.rows {
+        let key = item.getOr(column, "")
+        match buckets.get(key) {
+            Some(existing) -> {
+                let mut rows = existing
+                rows.push(item)
+                buckets.insert(key, rows)
+            },
+            None -> {
+                keys.push(key)
+                buckets.insert(key, [item])
+            },
+        }
+    }
+    Ok(JoinIndex { columns: copyStrings(table.columns), column: column, keys: keys, buckets: buckets })
+}
+
+pub fn columnTypeName(kind: ColumnType) -> String {
+    match kind {
+        EmptyColumn -> "empty",
+        BoolColumn  -> "bool",
+        IntColumn   -> "int",
+        FloatColumn -> "float",
+        TextColumn  -> "text",
+        MixedColumn -> "mixed",
+    }
+}
+
+// Internal helpers -----------------------------------------------------------
+
+fn fromDecodedRows(rows: List<List<String>>) -> Result<Table, Error> {
+    if rows.isEmpty() {
+        return Ok(empty())
+    }
+    let headers = rows[0]
+    let data = rows.drop(1)
+    fromRows(headers, data)
+}
+
+fn validateColumns(columns: List<String>) -> Result<(), Error> {
+    let mut seen: Map<String, Bool> = {:}
+    let mut i = 0
+    for i < columns.len() {
+        let name = columns[i]
+        let colNo = i + 1
+        if strings.trimSpace(name).isEmpty() {
+            return Err(tableError("empty column at position {colNo}"))
+        }
+        if seen.containsKey(name) {
+            return Err(tableError("duplicate column: {name}"))
+        }
+        seen.insert(name, true)
+        i = i + 1
+    }
+    Ok(())
+}
+
+fn validateSelection(available: List<String>, selected: List<String>) -> Result<(), Error> {
+    validateColumns(selected)?
+    for column in selected {
+        ensureColumn(available, column)?
+    }
+    Ok(())
+}
+
+fn ensureColumn(columns: List<String>, column: String) -> Result<(), Error> {
+    if !hasColumn(columns, column) {
+        return Err(tableError("unknown column: {column}"))
+    }
+    Ok(())
+}
+
+fn hasColumn(columns: List<String>, column: String) -> Bool {
+    for item in columns {
+        if item == column {
+            return true
+        }
+    }
+    false
+}
+
+fn rowFromCells(columns: List<String>, cells: List<String>) -> Row {
+    let mut values: Map<String, String> = {:}
+    let mut i = 0
+    for i < columns.len() {
+        values.insert(columns[i], cells[i])
+        i = i + 1
+    }
+    Row { values: values }
+}
+
+fn rowCells(columns: List<String>, item: Row) -> List<String> {
+    let mut out: List<String> = []
+    for column in columns {
+        out.push(item.getOr(column, ""))
+    }
+    out
+}
+
+fn copyStrings(items: List<String>) -> List<String> {
+    let mut out: List<String> = []
+    for item in items {
+        out.push(item)
+    }
+    out
+}
+
+fn copyRows(items: List<Row>) -> List<Row> {
+    let mut out: List<Row> = []
+    for item in items {
+        out.push(item)
+    }
+    out
+}
+
+fn shouldSortBefore(candidate: String, current: String, descending: Bool) -> Bool {
+    if descending {
+        candidate > current
+    } else {
+        candidate < current
+    }
+}
+
+fn shouldSortBeforeType(candidate: String, current: String, column: String, kind: ColumnType, descending: Bool) -> Result<Bool, Error> {
+    match kind {
+        IntColumn -> {
+            let a = parseIntCell(column, candidate)?
+            let b = parseIntCell(column, current)?
+            Ok(sortIntBefore(a, b, descending))
+        },
+        FloatColumn -> {
+            let a = parseFloatCell(column, candidate)?
+            let b = parseFloatCell(column, current)?
+            Ok(sortFloatBefore(a, b, descending))
+        },
+        BoolColumn -> {
+            let a = parseBoolCell(column, candidate)?
+            let b = parseBoolCell(column, current)?
+            Ok(sortBoolBefore(a, b, descending))
+        },
+        TextColumn -> Ok(shouldSortBefore(candidate, current, descending)),
+        EmptyColumn -> Err(tableError("cannot sort empty column type")),
+        MixedColumn -> Err(tableError("cannot sort mixed column type")),
+    }
+}
+
+fn sortIntBefore(a: Int, b: Int, descending: Bool) -> Bool {
+    if descending {
+        a > b
+    } else {
+        a < b
+    }
+}
+
+fn sortFloatBefore(a: Float, b: Float, descending: Bool) -> Bool {
+    if descending {
+        a > b
+    } else {
+        a < b
+    }
+}
+
+fn sortBoolBefore(a: Bool, b: Bool, descending: Bool) -> Bool {
+    if a == b {
+        return false
+    }
+    if descending {
+        a && !b
+    } else {
+        !a && b
+    }
+}
+
+fn ensureSortableKind(kind: ColumnType) -> Result<(), Error> {
+    match kind {
+        EmptyColumn -> Err(tableError("cannot sort empty column type")),
+        MixedColumn -> Err(tableError("cannot sort mixed column type")),
+        _ -> Ok(()),
+    }
+}
+
+fn validateSchemaList(schema: List<ColumnSchema>) -> Result<(), Error> {
+    let mut names: List<String> = []
+    for spec in schema {
+        names.push(spec.name)
+    }
+    validateColumns(names)
+}
+
+fn validateCell(column: String, value: String, kind: ColumnType, rowNo: Int) -> Result<(), Error> {
+    let clean = strings.trimSpace(value)
+    match kind {
+        EmptyColumn -> {
+            if clean.isEmpty() {
+                Ok(())
+            } else {
+                Err(tableError("column {column} row {rowNo}: expected empty, got {value}"))
+            }
+        },
+        IntColumn -> {
+            if clean.isEmpty() {
+                Ok(())
+            } else {
+                parseIntCell(column, clean)?
+                Ok(())
+            }
+        },
+        FloatColumn -> {
+            if clean.isEmpty() {
+                Ok(())
+            } else {
+                parseFloatCell(column, clean)?
+                Ok(())
+            }
+        },
+        BoolColumn -> {
+            if clean.isEmpty() {
+                Ok(())
+            } else {
+                parseBoolCell(column, clean)?
+                Ok(())
+            }
+        },
+        TextColumn -> Ok(()),
+        MixedColumn -> Ok(()),
+    }
+}
+
+fn coerceCell(column: String, value: String, kind: ColumnType) -> Result<String, Error> {
+    let clean = strings.trimSpace(value)
+    if clean.isEmpty() {
+        return Ok("")
+    }
+
+    match kind {
+        EmptyColumn -> Ok(""),
+        IntColumn -> {
+            let value = parseIntCell(column, clean)?
+            Ok(value.toString())
+        },
+        FloatColumn -> {
+            let value = parseFloatCell(column, clean)?
+            Ok(value.toString())
+        },
+        BoolColumn -> {
+            let value = parseBoolCell(column, clean)?
+            Ok(boolText(value))
+        },
+        TextColumn -> Ok(value),
+        MixedColumn -> Ok(value),
+    }
+}
+
+fn parseIntCell(column: String, value: String) -> Result<Int, Error> {
+    let clean = strings.trimSpace(value)
+    if clean.isEmpty() {
+        return Err(tableError("column {column}: expected int, got empty"))
+    }
+    match strings.toInt(clean) {
+        Ok(n) -> Ok(n),
+        Err(_) -> Err(tableError("column {column}: expected int, got {value}")),
+    }
+}
+
+fn parseFloatCell(column: String, value: String) -> Result<Float, Error> {
+    let clean = strings.trimSpace(value)
+    if clean.isEmpty() {
+        return Err(tableError("column {column}: expected float, got empty"))
+    }
+    match strings.toFloat(clean) {
+        Ok(n) -> Ok(n),
+        Err(_) -> Err(tableError("column {column}: expected float, got {value}")),
+    }
+}
+
+fn parseBoolCell(column: String, value: String) -> Result<Bool, Error> {
+    match parseBool(value) {
+        Some(flag) -> Ok(flag),
+        None -> Err(tableError("column {column}: expected bool, got {value}")),
+    }
+}
+
+fn boolText(value: Bool) -> String {
+    if value {
+        "true"
+    } else {
+        "false"
+    }
+}
+
+fn summarizeRows(rows: List<Row>, column: String) -> Result<NumericSummary, Error> {
+    let mut count = 0
+    let mut total = 0.0
+    let mut minValue = 0.0
+    let mut maxValue = 0.0
+
+    for item in rows {
+        let raw = item.getOr(column, "")
+        if !strings.trimSpace(raw).isEmpty() {
+            let value = parseFloatCell(column, raw)?
+            if count == 0 {
+                minValue = value
+                maxValue = value
+            } else {
+                if value < minValue {
+                    minValue = value
+                }
+                if value > maxValue {
+                    maxValue = value
+                }
+            }
+            total = total + value
+            count = count + 1
+        }
+    }
+
+    if count == 0 {
+        return Err(tableError("column {column}: no numeric values"))
+    }
+    Ok(NumericSummary {
+        count: count,
+        sum: total,
+        avg: total / count.toFloat(),
+        min: minValue,
+        max: maxValue,
+    })
+}
+
+fn ensureSummaryColumnDoesNotConflict(groupColumn: String) -> Result<(), Error> {
+    if groupColumn == "count" || groupColumn == "sum" || groupColumn == "avg" || groupColumn == "min" || groupColumn == "max" {
+        return Err(tableError("group column conflicts with summary output column: {groupColumn}"))
+    }
+    Ok(())
+}
+
+fn joinTables(left: Table, right: Table, leftColumn: String, rightColumn: String, includeUnmatchedLeft: Bool) -> Result<Table, Error> {
+    ensureColumn(left.columns, leftColumn)?
+    ensureColumn(right.columns, rightColumn)?
+    let index = indexBy(right, rightColumn)?
+    joinIndexed(left, index, leftColumn, includeUnmatchedLeft)
+}
+
+fn joinIndexed(left: Table, right: JoinIndex, leftColumn: String, includeUnmatchedLeft: Bool) -> Result<Table, Error> {
+    ensureColumn(left.columns, leftColumn)?
+    ensureColumn(right.columns, right.column)?
+
+    let mut outputColumns = copyStrings(left.columns)
+    let mut rightAliases: List<String> = []
+    for column in right.columns {
+        if column == right.column {
+            rightAliases.push("")
+        } else {
+            let name = rightOutputName(left.columns, outputColumns, column)
+            rightAliases.push(name)
+            outputColumns.push(name)
+        }
+    }
+
+    let mut rows: List<Row> = []
+    for leftRow in left.rows {
+        let key = leftRow.getOr(leftColumn, "")
+        let mut matched = false
+        match right.buckets.get(key) {
+            Some(matches) -> {
+                for rightRow in matches {
+                    rows.push(joinRow(left.columns, leftRow, right.columns, rightAliases, rightRow, right.column))
+                    matched = true
+                }
+            },
+            None -> {},
+        }
+        if includeUnmatchedLeft && !matched {
+            rows.push(joinMissingRight(left.columns, leftRow, right.columns, rightAliases, right.column))
+        }
+    }
+    Ok(Table { columns: outputColumns, rows: rows })
+}
+
+fn rightOutputName(leftColumns: List<String>, outputColumns: List<String>, column: String) -> String {
+    let base = if hasColumn(leftColumns, column) { "right.{column}" } else { column }
+    let mut name = base
+    let mut i = 2
+    for hasColumn(outputColumns, name) {
+        name = "{base}_{i}"
+        i = i + 1
+    }
+    name
+}
+
+fn joinRow(leftColumns: List<String>, leftRow: Row, rightColumns: List<String>, rightAliases: List<String>, rightRow: Row, rightColumn: String) -> Row {
+    let mut values: Map<String, String> = {:}
+    for column in leftColumns {
+        values.insert(column, leftRow.getOr(column, ""))
+    }
+
+    let mut i = 0
+    for i < rightColumns.len() {
+        let column = rightColumns[i]
+        if column != rightColumn {
+            values.insert(rightAliases[i], rightRow.getOr(column, ""))
+        }
+        i = i + 1
+    }
+    Row { values: values }
+}
+
+fn joinMissingRight(leftColumns: List<String>, leftRow: Row, rightColumns: List<String>, rightAliases: List<String>, rightColumn: String) -> Row {
+    let mut values: Map<String, String> = {:}
+    for column in leftColumns {
+        values.insert(column, leftRow.getOr(column, ""))
+    }
+
+    let mut i = 0
+    for i < rightColumns.len() {
+        let column = rightColumns[i]
+        if column != rightColumn {
+            values.insert(rightAliases[i], "")
+        }
+        i = i + 1
+    }
+    Row { values: values }
+}
+
+fn inferCellType(value: String) -> ColumnType {
+    let clean = strings.trimSpace(value)
+    if clean.isEmpty() {
+        return EmptyColumn
+    }
+    if parseInt(clean).isSome() {
+        return IntColumn
+    }
+    if parseFloat(clean).isSome() {
+        return FloatColumn
+    }
+    if parseBool(clean).isSome() {
+        return BoolColumn
+    }
+    TextColumn
+}
+
+fn mergeColumnType(current: ColumnType, next: ColumnType) -> ColumnType {
+    match current {
+        EmptyColumn -> next,
+        IntColumn -> match next {
+            EmptyColumn -> IntColumn,
+            IntColumn -> IntColumn,
+            FloatColumn -> FloatColumn,
+            TextColumn -> TextColumn,
+            _ -> MixedColumn,
+        },
+        FloatColumn -> match next {
+            EmptyColumn -> FloatColumn,
+            IntColumn -> FloatColumn,
+            FloatColumn -> FloatColumn,
+            TextColumn -> TextColumn,
+            _ -> MixedColumn,
+        },
+        BoolColumn -> match next {
+            EmptyColumn -> BoolColumn,
+            BoolColumn -> BoolColumn,
+            TextColumn -> TextColumn,
+            _ -> MixedColumn,
+        },
+        TextColumn -> TextColumn,
+        MixedColumn -> match next {
+            TextColumn -> TextColumn,
+            _ -> MixedColumn,
+        },
+    }
+}
+
+fn parseInt(value: String) -> Int? {
+    match strings.toInt(strings.trimSpace(value)) {
+        Ok(n) -> Some(n),
+        Err(_) -> noneInt(),
+    }
+}
+
+fn parseFloat(value: String) -> Float? {
+    match strings.toFloat(strings.trimSpace(value)) {
+        Ok(n) -> Some(n),
+        Err(_) -> noneFloat(),
+    }
+}
+
+fn parseBool(value: String) -> Bool? {
+    let clean = strings.toLower(strings.trimSpace(value))
+    if clean == "true" || clean == "yes" || clean == "y" {
+        return Some(true)
+    }
+    if clean == "false" || clean == "no" || clean == "n" {
+        return Some(false)
+    }
+    noneBool()
+}
+
+fn noneString() -> String? {
+    None
+}
+
+fn noneInt() -> Int? {
+    None
+}
+
+fn noneFloat() -> Float? {
+    None
+}
+
+fn noneBool() -> Bool? {
+    None
+}
+
+fn tableError(message: String) -> Error {
+    error.new("table: {message}")
+}
