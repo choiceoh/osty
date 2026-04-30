@@ -489,7 +489,11 @@ func findOwningFile(files []api.PackageCheckFile, offset int) int {
 // line/column span and the inferred type. Zero astbridge lowerings
 // on the happy path (same counter invariant as runCheckFileNative).
 func runTypecheckFileNative(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
-	parseDiags, checked := selfhost.CheckFromSource(src)
+	parseDiags, checked, err := nativeCheckFile(path, src)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty: native check: %v\n", err)
+		return 1
+	}
 	checkDiags := selfhost.CheckDiagnosticsAsDiag(src, checked.Diagnostics)
 	for _, d := range checkDiags {
 		if d != nil && d.File == "" {
@@ -569,17 +573,20 @@ func byteOffsetLineCol(src []byte, offset int) (int, int) {
 }
 
 // runCheckFileNative drives `osty check --native FILE` end-to-end on
-// the self-host arena pipeline: selfhost.CheckFromSource parses once
-// and runs the native checker directly on the arena (arena-direct
-// gate included), and selfhost.CheckDiagnosticsAsDiag lifts the
-// structured records into the CLI's usual diag.Diagnostic shape.
-// Zero astbridge lowerings on the happy path — the counter stays at
-// 0 throughout, pinned by TestRunCheckFileNativeIsAstbridgeFree.
+// the self-host arena pipeline. Files without imports still take the
+// direct source path; files with bundled stdlib imports use the same
+// structured package import surface as package/workspace checks, so
+// calls like `strings.trim(...)` and `gui.renderHtml(...)` are checked
+// against real exported signatures. Both paths stay astbridge-free.
 // Returns the
 // subcommand's exit code (0 clean / 1 on any error-severity
 // diagnostic).
 func runCheckFileNative(path string, src []byte, formatter *diag.Formatter, flags cliFlags) int {
-	parseDiags, checked := selfhost.CheckFromSource(src)
+	parseDiags, checked, err := nativeCheckFile(path, src)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "osty: native check: %v\n", err)
+		return 1
+	}
 	checkDiags := selfhost.CheckDiagnosticsAsDiag(src, checked.Diagnostics)
 	for _, d := range checkDiags {
 		if d != nil && d.File == "" {
@@ -599,4 +606,78 @@ func runCheckFileNative(path string, src []byte, formatter *diag.Formatter, flag
 		return 1
 	}
 	return 0
+}
+
+func nativeCheckFile(path string, src []byte) ([]*diag.Diagnostic, selfhost.CheckResult, error) {
+	run := selfhost.Run(src)
+	parseDiags := run.Diagnostics()
+	if hasError(parseDiags) {
+		return parseDiags, selfhost.CheckResult{}, nil
+	}
+	imports := nativeFileImportSurfaces(run)
+	var checked selfhost.CheckResult
+	if len(imports) > 0 {
+		var err error
+		checked, err = selfhost.CheckPackageStructured(api.PackageCheckInput{
+			Imports: imports,
+			Files: []api.PackageCheckFile{{
+				Source: append([]byte(nil), src...),
+				Name:   filepath.Base(path),
+				Path:   path,
+			}},
+		})
+		if err != nil {
+			return parseDiags, selfhost.CheckResult{}, err
+		}
+	} else {
+		_, checked = selfhost.CheckFromSource(src)
+	}
+	return parseDiags, checked, nil
+}
+
+func nativeFileImportSurfaces(run *selfhost.FrontendRun) []api.PackageCheckImport {
+	uses := selfhost.PackageUsesFromRun(run)
+	if len(uses) == 0 {
+		return nil
+	}
+	reg := stdlib.LoadCached()
+	seen := map[string]string{}
+	var out []api.PackageCheckImport
+	for _, use := range uses {
+		if use.IsGo || use.Alias == "" {
+			continue
+		}
+		targetPath := use.Path
+		importAlias := use.Alias
+		if use.IsScoped {
+			targetPath = use.ScopedBase
+			importAlias = nativeLastPathSegment(targetPath)
+		}
+		if targetPath == "" || importAlias == "" {
+			continue
+		}
+		target := reg.LookupPackage(targetPath)
+		if target == nil {
+			continue
+		}
+		if prev, ok := seen[importAlias]; ok {
+			if prev == targetPath {
+				continue
+			}
+			continue
+		}
+		seen[importAlias] = targetPath
+		out = append(out, resolve.PackageExportSurface(targetPath, importAlias, target))
+	}
+	return out
+}
+
+func nativeLastPathSegment(path string) string {
+	if path == "" {
+		return ""
+	}
+	if idx := strings.LastIndexAny(path, "/."); idx >= 0 && idx+1 < len(path) {
+		return path[idx+1:]
+	}
+	return path
 }
