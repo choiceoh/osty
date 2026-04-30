@@ -1,0 +1,541 @@
+// std.watch - polling file-change watcher helpers.
+//
+// The runtime-backed `std.fs.watch` primitive returns one snapshot of a
+// tree. This module turns those rows into typed entries, diffs snapshots,
+// debounces change bursts, and can drive command tasks for transform or
+// sync-style developer tools.
+
+use std.cmd
+use std.error
+use std.fs
+use std.strings
+use std.time
+
+pub enum EntryKind {
+    File,
+    Directory,
+    Symlink,
+    Other,
+}
+
+pub enum EventKind {
+    Created,
+    Modified,
+    Removed,
+}
+
+pub struct Entry {
+    pub path: String,
+    pub relativePath: String,
+    pub kind: EntryKind,
+    pub size: Int,
+    pub mtimeSeconds: Int,
+}
+
+pub struct Event {
+    pub kind: EventKind,
+    pub path: String,
+    pub relativePath: String,
+    pub entryKind: EntryKind,
+    pub before: Entry?,
+    pub after: Entry?,
+}
+
+pub struct Snapshot {
+    pub root: String,
+    pub entries: Map<String, Entry>,
+
+    pub fn paths(self) -> List<String> {
+        self.entries.keys().sorted()
+    }
+
+    pub fn len(self) -> Int {
+        self.entries.len()
+    }
+}
+
+pub struct Options {
+    pub root: String,
+    pub pollMillis: Int,
+    pub settleMillis: Int,
+    pub includeDirectories: Bool,
+    pub ignoreHidden: Bool,
+    pub ignorePrefixes: List<String>,
+    pub ignoreSuffixes: List<String>,
+    pub onlySuffixes: List<String>,
+
+    pub fn withPollMillis(mut self, millis: Int) -> Options {
+        self.pollMillis = positiveMillis(millis, self.pollMillis)
+        self
+    }
+
+    pub fn withSettleMillis(mut self, millis: Int) -> Options {
+        self.settleMillis = if millis < 0 { 0 } else { millis }
+        self
+    }
+
+    pub fn withDirectories(mut self, include: Bool) -> Options {
+        self.includeDirectories = include
+        self
+    }
+
+    pub fn withHidden(mut self, include: Bool) -> Options {
+        self.ignoreHidden = !include
+        self
+    }
+
+    pub fn withOnlySuffix(mut self, suffix: String) -> Options {
+        self.onlySuffixes.push(suffix)
+        self
+    }
+
+    pub fn withIgnorePrefix(mut self, prefix: String) -> Options {
+        self.ignorePrefixes.push(prefix)
+        self
+    }
+
+    pub fn withIgnoreSuffix(mut self, suffix: String) -> Options {
+        self.ignoreSuffixes.push(suffix)
+        self
+    }
+}
+
+pub struct Watcher {
+    pub options: Options,
+    pub previous: Snapshot,
+}
+
+pub struct Poll {
+    pub watcher: Watcher,
+    pub events: List<Event>,
+}
+
+pub struct Task {
+    pub name: String,
+    pub command: cmd.Command,
+    pub suffixes: List<String>,
+    pub runOnCreate: Bool,
+    pub runOnModify: Bool,
+    pub runOnRemove: Bool,
+
+    pub fn withSuffix(mut self, suffix: String) -> Task {
+        self.suffixes.push(suffix)
+        self
+    }
+
+    pub fn withCreates(mut self, enabled: Bool) -> Task {
+        self.runOnCreate = enabled
+        self
+    }
+
+    pub fn withModifies(mut self, enabled: Bool) -> Task {
+        self.runOnModify = enabled
+        self
+    }
+
+    pub fn withRemoves(mut self, enabled: Bool) -> Task {
+        self.runOnRemove = enabled
+        self
+    }
+}
+
+pub fn options(root: String) -> Options {
+    Options {
+        root: root,
+        pollMillis: 250,
+        settleMillis: 50,
+        includeDirectories: false,
+        ignoreHidden: true,
+        ignorePrefixes: [".git", ".osty", ".direnv", ".bin", ".profiles", "node_modules"],
+        ignoreSuffixes: ["~", ".tmp", ".swp", ".part"],
+        onlySuffixes: [],
+    }
+}
+
+pub fn snapshot(root: String) -> Result<Snapshot, Error> {
+    snapshotWithOptions(options(root))
+}
+
+pub fn snapshotWithOptions(opts: Options) -> Result<Snapshot, Error> {
+    let raw = parseRows(opts.root, fs.watch(opts.root)?)?
+    Ok(filterSnapshot(raw, opts))
+}
+
+pub fn parseRows(root: String, rows: List<String>) -> Result<Snapshot, Error> {
+    let mut entries: Map<String, Entry> = {:}
+    for row in rows {
+        if strings.trimSpace(row).isEmpty() {
+            continue
+        }
+        let entry = parseEntryForRoot(root, row)?
+        entries.insert(entry.relativePath, entry)
+    }
+    Ok(Snapshot { root: root, entries: entries })
+}
+
+pub fn parseEntry(row: String) -> Result<Entry, Error> {
+    parseEntryForRoot(".", row)
+}
+
+pub fn parseEntryForRoot(root: String, row: String) -> Result<Entry, Error> {
+    let parts = strings.splitN(row, "\t", 4)
+    if parts.len() < 4 {
+        return Err(error.new("watch: malformed snapshot row"))
+    }
+    let path = normalizePath(parts[3])
+    let relative = relativeToRoot(root, path)
+    Ok(Entry {
+        path: path,
+        relativePath: relative,
+        kind: entryKindFromCode(parts[0]),
+        size: strings.toInt(parts[1])?,
+        mtimeSeconds: strings.toInt(parts[2])?,
+    })
+}
+
+pub fn diff(before: Snapshot, after: Snapshot) -> List<Event> {
+    let mut events: List<Event> = []
+    for path in before.entries.keys().sorted() {
+        let old = before.entries.get(path).unwrap()
+        match after.entries.get(path) {
+            Some(_) -> {},
+            None -> {
+                events.push(Event {
+                    kind: Removed,
+                    path: old.path,
+                    relativePath: old.relativePath,
+                    entryKind: old.kind,
+                    before: Some(old),
+                    after: None,
+                })
+            },
+        }
+    }
+    for path in after.entries.keys().sorted() {
+        let next = after.entries.get(path).unwrap()
+        match before.entries.get(path) {
+            Some(old) -> {
+                if entryChanged(old, next) {
+                    events.push(Event {
+                        kind: Modified,
+                        path: next.path,
+                        relativePath: next.relativePath,
+                        entryKind: next.kind,
+                        before: Some(old),
+                        after: Some(next),
+                    })
+                }
+            },
+            None -> {
+                events.push(Event {
+                    kind: Created,
+                    path: next.path,
+                    relativePath: next.relativePath,
+                    entryKind: next.kind,
+                    before: None,
+                    after: Some(next),
+                })
+            },
+        }
+    }
+    events
+}
+
+pub fn open(root: String) -> Result<Watcher, Error> {
+    openWithOptions(options(root))
+}
+
+pub fn openWithOptions(opts: Options) -> Result<Watcher, Error> {
+    Ok(Watcher { options: opts, previous: snapshotWithOptions(opts)? })
+}
+
+pub fn poll(watcher: Watcher) -> Result<Poll, Error> {
+    let next = snapshotWithOptions(watcher.options)?
+    Ok(Poll {
+        watcher: Watcher { options: watcher.options, previous: next },
+        events: diff(watcher.previous, next),
+    })
+}
+
+pub fn wait(watcher: Watcher) -> Result<Poll, Error> {
+    let mut current = watcher
+    for true {
+        time.sleep(millisDuration(current.options.pollMillis))?
+        let first = poll(current)?
+        if first.events.len() > 0 {
+            if first.watcher.options.settleMillis > 0 {
+                time.sleep(millisDuration(first.watcher.options.settleMillis))?
+                return poll(current)
+            }
+            return Ok(first)
+        }
+        current = first.watcher
+    }
+    Ok(Poll { watcher: current, events: [] })
+}
+
+pub fn watch(options: Options, handler: fn(List<Event>) -> Result<(), Error>) -> Result<(), Error> {
+    let mut watcher = openWithOptions(options)?
+    for true {
+        let polled = wait(watcher)?
+        if polled.events.len() > 0 {
+            handler(polled.events)?
+        }
+        watcher = polled.watcher
+    }
+    Ok(())
+}
+
+pub fn task(name: String, command: cmd.Command) -> Task {
+    Task {
+        name: name,
+        command: command,
+        suffixes: [],
+        runOnCreate: true,
+        runOnModify: true,
+        runOnRemove: false,
+    }
+}
+
+pub fn transformTask(name: String, command: cmd.Command, suffixes: List<String>) -> Task {
+    Task {
+        name: name,
+        command: command,
+        suffixes: suffixes,
+        runOnCreate: true,
+        runOnModify: true,
+        runOnRemove: false,
+    }
+}
+
+pub fn shellTask(name: String, line: String, suffixes: List<String>) -> Task {
+    transformTask(name, cmd.shell(line), suffixes)
+}
+
+pub fn syncTask(name: String, command: cmd.Command) -> Task {
+    Task {
+        name: name,
+        command: command,
+        suffixes: [],
+        runOnCreate: true,
+        runOnModify: true,
+        runOnRemove: true,
+    }
+}
+
+pub fn runTask(task: Task, events: List<Event>) -> Result<List<cmd.RunOutput>, Error> {
+    if !taskMatches(task, events) {
+        return Ok([])
+    }
+    let out = task.command.run()?
+    Ok([out])
+}
+
+pub fn runTasks(tasks: List<Task>, events: List<Event>) -> Result<List<cmd.RunOutput>, Error> {
+    let mut outputs: List<cmd.RunOutput> = []
+    for t in tasks {
+        for out in runTask(t, events)? {
+            outputs.push(out)
+        }
+    }
+    Ok(outputs)
+}
+
+pub fn runLoop(options: Options, tasks: List<Task>) -> Result<(), Error> {
+    let mut watcher = openWithOptions(options)?
+    for true {
+        let polled = wait(watcher)?
+        runTasks(tasks, polled.events)?
+        watcher = polled.watcher
+    }
+    Ok(())
+}
+
+pub fn changedPaths(events: List<Event>) -> List<String> {
+    let mut out: List<String> = []
+    for event in events {
+        if event.relativePath.isEmpty() {
+            out.push(event.path)
+        } else {
+            out.push(event.relativePath)
+        }
+    }
+    out
+}
+
+pub fn renderEvents(events: List<Event>) -> List<String> {
+    let mut out: List<String> = []
+    for event in events {
+        let path = if event.relativePath.isEmpty() { event.path } else { event.relativePath }
+        out.push("{kindName(event.kind)}\t{path}")
+    }
+    out
+}
+
+pub fn summary(events: List<Event>) -> String {
+    let mut created = 0
+    let mut modified = 0
+    let mut removed = 0
+    for event in events {
+        match event.kind {
+            Created -> {
+                created = created + 1
+            },
+            Modified -> {
+                modified = modified + 1
+            },
+            Removed -> {
+                removed = removed + 1
+            },
+        }
+    }
+    "{created} created, {modified} modified, {removed} removed"
+}
+
+pub fn kindName(kind: EventKind) -> String {
+    match kind {
+        Created -> "created",
+        Modified -> "modified",
+        Removed -> "removed",
+    }
+}
+
+fn filterSnapshot(snap: Snapshot, opts: Options) -> Snapshot {
+    let mut entries: Map<String, Entry> = {:}
+    for path in snap.entries.keys().sorted() {
+        let entry = snap.entries.get(path).unwrap()
+        if includeEntry(entry, opts) {
+            entries.insert(entry.relativePath, entry)
+        }
+    }
+    Snapshot { root: snap.root, entries: entries }
+}
+
+fn includeEntry(entry: Entry, opts: Options) -> Bool {
+    if entry.kind == Directory && !opts.includeDirectories {
+        return false
+    }
+    if opts.ignoreHidden && isHiddenPath(entry.relativePath) {
+        return false
+    }
+    if hasIgnoredPrefix(entry.relativePath, opts.ignorePrefixes) {
+        return false
+    }
+    if hasAnySuffix(entry.relativePath, opts.ignoreSuffixes) {
+        return false
+    }
+    if opts.onlySuffixes.len() > 0 && !hasAnySuffix(entry.relativePath, opts.onlySuffixes) {
+        return false
+    }
+    true
+}
+
+fn taskMatches(task: Task, events: List<Event>) -> Bool {
+    for event in events {
+        if taskWantsKind(task, event.kind) && taskMatchesSuffix(task, event) {
+            return true
+        }
+    }
+    false
+}
+
+fn taskWantsKind(task: Task, kind: EventKind) -> Bool {
+    match kind {
+        Created -> task.runOnCreate,
+        Modified -> task.runOnModify,
+        Removed -> task.runOnRemove,
+    }
+}
+
+fn taskMatchesSuffix(task: Task, event: Event) -> Bool {
+    if task.suffixes.len() == 0 {
+        return true
+    }
+    let path = if event.relativePath.isEmpty() { event.path } else { event.relativePath }
+    hasAnySuffix(path, task.suffixes)
+}
+
+fn entryChanged(before: Entry, after: Entry) -> Bool {
+    before.kind != after.kind || before.size != after.size || before.mtimeSeconds != after.mtimeSeconds
+}
+
+fn entryKindFromCode(code: String) -> EntryKind {
+    let tag = if code.isEmpty() { "" } else { strings.slice(code, 0, 1) }
+    match tag {
+        "F" -> File,
+        "D" -> Directory,
+        "L" -> Symlink,
+        _ -> Other,
+    }
+}
+
+fn relativeToRoot(root: String, path: String) -> String {
+    let cleanRoot = normalizePath(root)
+    let cleanPath = normalizePath(path)
+    if cleanRoot.isEmpty() || cleanRoot == "." {
+        return cleanPath
+    }
+    if cleanPath == cleanRoot {
+        return ""
+    }
+    let prefix = "{cleanRoot}/"
+    if strings.startsWith(cleanPath, prefix) {
+        return strings.slice(cleanPath, prefix.len(), cleanPath.len())
+    }
+    cleanPath
+}
+
+fn normalizePath(path: String) -> String {
+    let mut out = strings.replaceAll(path, "\\", "/")
+    for strings.startsWith(out, "./") {
+        out = strings.slice(out, 2, out.len())
+    }
+    out
+}
+
+fn isHiddenPath(path: String) -> Bool {
+    for part in strings.split(path, "/") {
+        if part.isEmpty() || part == "." {
+            continue
+        }
+        if strings.startsWith(part, ".") {
+            return true
+        }
+    }
+    false
+}
+
+fn hasIgnoredPrefix(path: String, prefixes: List<String>) -> Bool {
+    for prefix in prefixes {
+        let clean = normalizePath(prefix)
+        if clean.isEmpty() {
+            continue
+        }
+        if path == clean || strings.startsWith(path, "{clean}/") {
+            return true
+        }
+    }
+    false
+}
+
+fn hasAnySuffix(path: String, suffixes: List<String>) -> Bool {
+    for suffix in suffixes {
+        if !suffix.isEmpty() && strings.endsWith(path, suffix) {
+            return true
+        }
+    }
+    false
+}
+
+fn millisDuration(millis: Int) -> time.Duration {
+    let nanosPerMilli: Int64 = 1000000
+    time.Duration { nanoseconds: positiveMillis(millis, 1).toInt64() * nanosPerMilli }
+}
+
+fn positiveMillis(value: Int, fallback: Int) -> Int {
+    if value <= 0 {
+        fallback
+    } else {
+        value
+    }
+}
