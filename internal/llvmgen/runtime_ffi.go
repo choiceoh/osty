@@ -288,215 +288,62 @@ func runtimeStringsKnownFFIFunction(name string) *runtimeFFIFunction {
 	if !ok {
 		return nil
 	}
-	stringType := runtimeFFIStringSourceType()
-	intType := runtimeFFIIntSourceType()
-	boolType := runtimeFFIBoolSourceType()
-	charType := runtimeFFICharSourceType()
-	floatType := runtimeFFIFloatSourceType()
-	listStringType := runtimeFFIListSourceType(stringType)
-	listCharType := runtimeFFIListSourceType(charType)
-	listByteType := runtimeFFIListSourceType(runtimeFFIByteSourceType())
-	bytesType := runtimeFFIBytesSourceType()
+	retTyp, retSource, retListTyp, retListString, ok := runtimeFFIKindInfo(llvmRuntimeStringsFfiReturnKind(canonical))
+	if !ok {
+		return nil
+	}
 	fn := &runtimeFFIFunction{
-		path:       "runtime.strings",
-		sourceName: name,
+		path:             "runtime.strings",
+		sourceName:       name,
+		symbol:           llvmRuntimeStringsFfiSymbol(canonical),
+		ret:              retTyp,
+		returnSourceType: retSource,
+		listElemTyp:      retListTyp,
+		listElemString:   retListString,
 	}
-	p := func(paramName, typ string, source ast.Type) paramInfo {
-		info := paramInfo{name: paramName, typ: typ, sourceType: source}
-		if list, ok := source.(*ast.NamedType); ok && len(list.Path) == 1 && list.Path[0] == "List" && len(list.Args) == 1 {
-			switch elem := list.Args[0].(type) {
-			case *ast.NamedType:
-				if len(elem.Path) == 1 {
-					switch elem.Path[0] {
-					case "String":
-						info.listElemTyp = "ptr"
-						info.listElemString = true
-					case "Char":
-						info.listElemTyp = "i32"
-					case "Byte":
-						info.listElemTyp = "i8"
-					case "Int":
-						info.listElemTyp = "i64"
-					case "Bool":
-						info.listElemTyp = "i1"
-					case "Float":
-						info.listElemTyp = "double"
-					}
-				}
-			}
+	for i := 0; i < llvmRuntimeStringsFfiParamCount(canonical); i++ {
+		paramTyp, paramSource, paramListTyp, paramListString, ok := runtimeFFIKindInfo(llvmRuntimeStringsFfiParamKind(canonical, i))
+		if !ok {
+			return nil
 		}
-		return info
+		fn.params = append(fn.params, paramInfo{
+			name:           llvmRuntimeStringsFfiParamName(canonical, i),
+			typ:            paramTyp,
+			sourceType:     paramSource,
+			listElemTyp:    paramListTyp,
+			listElemString: paramListString,
+		})
 	}
-	ret := func(symbol, typ string, source ast.Type, params ...paramInfo) *runtimeFFIFunction {
-		fn.symbol = symbol
-		fn.ret = typ
-		fn.returnSourceType = source
-		fn.params = params
-		if list, ok := source.(*ast.NamedType); ok && len(list.Path) == 1 && list.Path[0] == "List" && len(list.Args) == 1 {
-			switch elem := list.Args[0].(type) {
-			case *ast.NamedType:
-				if len(elem.Path) == 1 {
-					switch elem.Path[0] {
-					case "String":
-						fn.listElemTyp = "ptr"
-						fn.listElemString = true
-					case "Char":
-						fn.listElemTyp = "i32"
-					case "Byte":
-						fn.listElemTyp = "i8"
-					case "Int":
-						fn.listElemTyp = "i64"
-					case "Bool":
-						fn.listElemTyp = "i1"
-					case "Float":
-						fn.listElemTyp = "double"
-					}
-				}
-			}
-		}
-		return fn
-	}
-	switch canonical {
-	case "Equal":
-		return ret("osty_rt_strings_Equal", "i1", boolType, p("left", "ptr", stringType), p("right", "ptr", stringType))
-	case "Compare":
-		return ret(llvmStringRuntimeCompareSymbol(), "i64", intType, p("left", "ptr", stringType), p("right", "ptr", stringType))
-	case "Count":
-		return ret(llvmStringRuntimeCountSymbol(), "i64", intType, p("value", "ptr", stringType), p("substr", "ptr", stringType))
-	case "IndexOf":
-		return ret(llvmStringRuntimeIndexOfSymbol(), "i64", intType, p("value", "ptr", stringType), p("substr", "ptr", stringType))
-	case "LastIndexOf":
-		return ret(mirRtStringLastIndexOfSymbol(), "i64", intType, p("value", "ptr", stringType), p("substr", "ptr", stringType))
-	case "CharAt":
-		return ret(mirRtStringSymbol("CharAt"), "i32", charType, p("value", "ptr", stringType), p("index", "i64", intType))
-	case "ByteLen":
-		return ret(llvmStringRuntimeByteLenSymbol(), "i64", intType, p("value", "ptr", stringType))
-	case "Contains":
-		return ret(llvmStringRuntimeContainsSymbol(), "i1", boolType, p("value", "ptr", stringType), p("substr", "ptr", stringType))
-	case "HasPrefix":
-		return ret(llvmStringRuntimeHasPrefixSymbol(), "i1", boolType, p("value", "ptr", stringType), p("prefix", "ptr", stringType))
-	case "HasSuffix":
-		return ret(llvmStringRuntimeHasSuffixSymbol(), "i1", boolType, p("value", "ptr", stringType), p("suffix", "ptr", stringType))
-	case "Split":
-		return ret(llvmStringRuntimeSplitSymbol(), "ptr", listStringType, p("value", "ptr", stringType), p("sep", "ptr", stringType))
-	case "SplitN":
-		return ret(llvmStringRuntimeSplitNSymbol(), "ptr", listStringType, p("value", "ptr", stringType), p("sep", "ptr", stringType), p("n", "i64", intType))
-	case "Fields":
-		return ret(mirRtStringSymbol("Fields"), "ptr", listStringType, p("value", "ptr", stringType))
-	case "Join":
-		return ret(llvmStringRuntimeJoinSymbol(), "ptr", stringType, p("parts", "ptr", listStringType), p("sep", "ptr", stringType))
-	case "Concat":
-		return ret(llvmStringRuntimeConcatSymbol(), "ptr", stringType, p("left", "ptr", stringType), p("right", "ptr", stringType))
-	case "Repeat":
-		return ret(llvmStringRuntimeRepeatSymbol(), "ptr", stringType, p("value", "ptr", stringType), p("n", "i64", intType))
-	case "Replace":
-		return ret(llvmStringRuntimeReplaceSymbol(), "ptr", stringType, p("value", "ptr", stringType), p("old", "ptr", stringType), p("new", "ptr", stringType))
-	case "ReplaceAll":
-		return ret(llvmStringRuntimeReplaceAllSymbol(), "ptr", stringType, p("value", "ptr", stringType), p("old", "ptr", stringType), p("new", "ptr", stringType))
-	case "Slice":
-		return ret(llvmStringRuntimeSliceSymbol(), "ptr", stringType, p("value", "ptr", stringType), p("start", "i64", intType), p("end", "i64", intType))
-	case "ToUpper":
-		return ret(llvmStringRuntimeToUpperSymbol(), "ptr", stringType, p("value", "ptr", stringType))
-	case "ToLower":
-		return ret(llvmStringRuntimeToLowerSymbol(), "ptr", stringType, p("value", "ptr", stringType))
-	case "IsValidInt":
-		return ret(llvmStringRuntimeIsValidIntSymbol(), "i1", boolType, p("value", "ptr", stringType))
-	case "ToInt":
-		return ret(llvmStringRuntimeToIntSymbol(), "i64", intType, p("value", "ptr", stringType))
-	case "IsValidFloat":
-		return ret(llvmStringRuntimeIsValidFloatSymbol(), "i1", boolType, p("value", "ptr", stringType))
-	case "ToFloat":
-		return ret(llvmStringRuntimeToFloatSymbol(), "double", floatType, p("value", "ptr", stringType))
-	case "TrimStart":
-		return ret(llvmStringRuntimeTrimStartSymbol(), "ptr", stringType, p("value", "ptr", stringType))
-	case "TrimEnd":
-		return ret(llvmStringRuntimeTrimEndSymbol(), "ptr", stringType, p("value", "ptr", stringType))
-	case "TrimPrefix":
-		return ret(llvmStringRuntimeTrimPrefixSymbol(), "ptr", stringType, p("value", "ptr", stringType), p("prefix", "ptr", stringType))
-	case "TrimSuffix":
-		return ret(llvmStringRuntimeTrimSuffixSymbol(), "ptr", stringType, p("value", "ptr", stringType), p("suffix", "ptr", stringType))
-	case "TrimSpace":
-		return ret(llvmStringRuntimeTrimSpaceSymbol(), "ptr", stringType, p("value", "ptr", stringType))
-	case "Chars":
-		return ret(llvmStringRuntimeCharsSymbol(), "ptr", listCharType, p("value", "ptr", stringType))
-	case "Bytes":
-		return ret(llvmStringRuntimeBytesSymbol(), "ptr", listByteType, p("value", "ptr", stringType))
-	case "ToBytes":
-		return ret(llvmStringRuntimeToBytesSymbol(), "ptr", bytesType, p("value", "ptr", stringType))
-	}
-	return nil
+	return fn
 }
 
 func runtimeStringsCanonicalFFIName(name string) (string, bool) {
-	switch canonicalStdStringsCallName(name) {
-	case "Equal", "equal":
-		return "Equal", true
-	case "compare":
-		return "Compare", true
-	case "count":
-		return "Count", true
-	case "indexOf", "Index", "IndexOf":
-		return "IndexOf", true
-	case "lastIndexOf", "LastIndex", "LastIndexOf":
-		return "LastIndexOf", true
-	case "charAt", "CharAt":
-		return "CharAt", true
-	case "len", "Len", "byteLen", "ByteLen":
-		return "ByteLen", true
-	case "contains":
-		return "Contains", true
-	case "hasPrefix":
-		return "HasPrefix", true
-	case "hasSuffix":
-		return "HasSuffix", true
-	case "split":
-		return "Split", true
-	case "splitN":
-		return "SplitN", true
-	case "fields":
-		return "Fields", true
-	case "join":
-		return "Join", true
-	case "concat":
-		return "Concat", true
-	case "repeat":
-		return "Repeat", true
-	case "replace":
-		return "Replace", true
-	case "replaceAll":
-		return "ReplaceAll", true
-	case "slice", "substring", "Substring":
-		return "Slice", true
-	case "toUpper":
-		return "ToUpper", true
-	case "toLower":
-		return "ToLower", true
-	case "isValidInt", "IsValidInt":
-		return "IsValidInt", true
-	case "toInt":
-		return "ToInt", true
-	case "isValidFloat", "IsValidFloat":
-		return "IsValidFloat", true
-	case "toFloat":
-		return "ToFloat", true
-	case "trimStart", "trimLeft", "TrimLeft":
-		return "TrimStart", true
-	case "trimEnd", "trimRight", "TrimRight":
-		return "TrimEnd", true
-	case "trimPrefix":
-		return "TrimPrefix", true
-	case "trimSuffix":
-		return "TrimSuffix", true
-	case "trim", "trimSpace":
-		return "TrimSpace", true
-	case "chars", "Chars":
-		return "Chars", true
-	case "bytes", "Bytes":
-		return "Bytes", true
-	case "toBytes":
-		return "ToBytes", true
+	canonical := llvmRuntimeStringsCanonicalFfiName(name)
+	return canonical, canonical != ""
+}
+
+func runtimeFFIKindInfo(kind int) (typ string, source ast.Type, listElemTyp string, listElemString bool, ok bool) {
+	switch kind {
+	case 1:
+		return "ptr", runtimeFFIStringSourceType(), "", false, true
+	case 2:
+		return "i64", runtimeFFIIntSourceType(), "", false, true
+	case 3:
+		return "i1", runtimeFFIBoolSourceType(), "", false, true
+	case 4:
+		return "i32", runtimeFFICharSourceType(), "", false, true
+	case 5:
+		return "double", runtimeFFIFloatSourceType(), "", false, true
+	case 6:
+		return "ptr", runtimeFFIBytesSourceType(), "", false, true
+	case 7:
+		return "ptr", runtimeFFIListSourceType(runtimeFFIStringSourceType()), "ptr", true, true
+	case 8:
+		return "ptr", runtimeFFIListSourceType(runtimeFFICharSourceType()), "i32", false, true
+	case 9:
+		return "ptr", runtimeFFIListSourceType(runtimeFFIByteSourceType()), "i8", false, true
 	default:
-		return "", false
+		return "", nil, "", false, false
 	}
 }
 
@@ -610,10 +457,7 @@ func listRuntimePushSymbol(elemTyp string) string {
 }
 
 func listRuntimePushSymbolFor(elemTyp string, elemString bool) string {
-	if elemTyp == "ptr" && elemString {
-		return mirRtListSymbol("push_string")
-	}
-	return listRuntimePushSymbol(elemTyp)
+	return llvmListRuntimePushSymbolFor(elemTyp, elemString)
 }
 
 func listRuntimeGetSymbol(elemTyp string) string {
@@ -621,10 +465,7 @@ func listRuntimeGetSymbol(elemTyp string) string {
 }
 
 func listRuntimeGetSymbolFor(elemTyp string, elemString bool) string {
-	if elemTyp == "ptr" && elemString {
-		return mirRtListSymbol("get_string")
-	}
-	return listRuntimeGetSymbol(elemTyp)
+	return llvmListRuntimeGetSymbolFor(elemTyp, elemString)
 }
 
 func listRuntimeSetSymbol(elemTyp string) string {
@@ -632,10 +473,7 @@ func listRuntimeSetSymbol(elemTyp string) string {
 }
 
 func listRuntimeSetSymbolFor(elemTyp string, elemString bool) string {
-	if elemTyp == "ptr" && elemString {
-		return mirRtListSymbol("set_string")
-	}
-	return listRuntimeSetSymbol(elemTyp)
+	return llvmListRuntimeSetSymbolFor(elemTyp, elemString)
 }
 
 func listRuntimeInsertSymbol(elemTyp string) string {
@@ -643,10 +481,7 @@ func listRuntimeInsertSymbol(elemTyp string) string {
 }
 
 func listRuntimeInsertSymbolFor(elemTyp string, elemString bool) string {
-	if elemTyp == "ptr" && elemString {
-		return mirRtListSymbol("insert_string")
-	}
-	return listRuntimeInsertSymbol(elemTyp)
+	return llvmListRuntimeInsertSymbolFor(elemTyp, elemString)
 }
 
 func listRuntimeInsertBytesV1Symbol() string {

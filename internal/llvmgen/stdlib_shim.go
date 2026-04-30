@@ -675,66 +675,7 @@ func (g *generator) emitStdStringsCall(call *ast.CallExpr) (value, bool, error) 
 }
 
 func canonicalStdStringsCallName(name string) string {
-	switch name {
-	case "Compare":
-		return "compare"
-	case "Count":
-		return "count"
-	case "Index":
-		return "Index"
-	case "LastIndex":
-		return "LastIndex"
-	case "Concat":
-		return "concat"
-	case "Contains":
-		return "contains"
-	case "HasPrefix", "StartsWith", "startsWith":
-		return "hasPrefix"
-	case "HasSuffix", "EndsWith", "endsWith":
-		return "hasSuffix"
-	case "Join":
-		return "join"
-	case "Repeat":
-		return "repeat"
-	case "Replace":
-		return "replace"
-	case "ReplaceAll":
-		return "replaceAll"
-	case "Split":
-		return "split"
-	case "SplitN":
-		return "splitN"
-	case "Fields":
-		return "fields"
-	case "Slice":
-		return "slice"
-	case "ToInt":
-		return "toInt"
-	case "ToFloat":
-		return "toFloat"
-	case "ToBytes":
-		return "toBytes"
-	case "TrimPrefix":
-		return "trimPrefix"
-	case "TrimSuffix":
-		return "trimSuffix"
-	case "TrimStart":
-		return "trimStart"
-	case "TrimEnd":
-		return "trimEnd"
-	case "Trim":
-		return "trim"
-	case "TrimSpace":
-		return "trimSpace"
-	case "ToUpper":
-		return "toUpper"
-	case "ToLower":
-		return "toLower"
-	case "lastIndexOf":
-		return "lastIndexOf"
-	default:
-		return name
-	}
+	return llvmCanonicalStdStringsCallName(name)
 }
 
 // stdStringsCallStaticResult mirrors runtimeFFICallTarget for the std.strings
