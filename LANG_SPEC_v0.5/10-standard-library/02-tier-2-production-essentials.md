@@ -26,6 +26,8 @@
 - `std.tui` — retained terminal frame buffers and diff rendering
 - `std.grid` — `Point`, `Size`, `Rect`, `Direction`, and `Grid<T>` for
   board, map, and turn-based layouts
+- `std.clipboard` — host clipboard text read/write for small workflow tools,
+  implemented through the common platform clipboard commands
 - `std.ai` — provider-neutral AI API request builders, headers, response
   parsers, structured tool call/result loops, model listing, embeddings, and SSE
   data-line helpers for OpenAI-compatible, OpenRouter, Anthropic, Gemini, and
