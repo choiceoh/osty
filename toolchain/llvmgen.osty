@@ -2638,16 +2638,44 @@ pub fn llvmListRuntimePushSymbol(suffix: String) -> String {
     "osty_rt_list_push_{suffix}"
 }
 
+pub fn llvmListRuntimePushSymbolFor(elemTyp: String, isString: Bool) -> String {
+    if elemTyp == "ptr" && isString {
+        return "osty_rt_list_push_string"
+    }
+    llvmListRuntimePushSymbol(llvmListElementSuffix(elemTyp))
+}
+
 pub fn llvmListRuntimeGetSymbol(suffix: String) -> String {
     "osty_rt_list_get_{suffix}"
+}
+
+pub fn llvmListRuntimeGetSymbolFor(elemTyp: String, isString: Bool) -> String {
+    if elemTyp == "ptr" && isString {
+        return "osty_rt_list_get_string"
+    }
+    llvmListRuntimeGetSymbol(llvmListElementSuffix(elemTyp))
 }
 
 pub fn llvmListRuntimeSetSymbol(suffix: String) -> String {
     "osty_rt_list_set_{suffix}"
 }
 
+pub fn llvmListRuntimeSetSymbolFor(elemTyp: String, isString: Bool) -> String {
+    if elemTyp == "ptr" && isString {
+        return "osty_rt_list_set_string"
+    }
+    llvmListRuntimeSetSymbol(llvmListElementSuffix(elemTyp))
+}
+
 pub fn llvmListRuntimeInsertSymbol(suffix: String) -> String {
     "osty_rt_list_insert_{suffix}"
+}
+
+pub fn llvmListRuntimeInsertSymbolFor(elemTyp: String, isString: Bool) -> String {
+    if elemTyp == "ptr" && isString {
+        return "osty_rt_list_insert_string"
+    }
+    llvmListRuntimeInsertSymbol(llvmListElementSuffix(elemTyp))
 }
 
 /// Pick the `osty_rt_list_sorted_*` entry point for an element LLVM
@@ -3787,6 +3815,226 @@ pub fn llvmStringRuntimeBytesSymbol() -> String {
 
 pub fn llvmStringRuntimeToBytesSymbol() -> String {
     "osty_rt_strings_ToBytes"
+}
+
+pub fn llvmCanonicalStdStringsCallName(name: String) -> String {
+    if name == "Compare" { return "compare" }
+    if name == "Count" { return "count" }
+    if name == "Index" { return "Index" }
+    if name == "LastIndex" { return "LastIndex" }
+    if name == "Concat" { return "concat" }
+    if name == "Contains" { return "contains" }
+    if name == "HasPrefix" || name == "StartsWith" || name == "startsWith" {
+        return "hasPrefix"
+    }
+    if name == "HasSuffix" || name == "EndsWith" || name == "endsWith" {
+        return "hasSuffix"
+    }
+    if name == "Join" { return "join" }
+    if name == "Repeat" { return "repeat" }
+    if name == "Replace" { return "replace" }
+    if name == "ReplaceAll" { return "replaceAll" }
+    if name == "Split" { return "split" }
+    if name == "SplitN" { return "splitN" }
+    if name == "Fields" { return "fields" }
+    if name == "Slice" { return "slice" }
+    if name == "ToInt" { return "toInt" }
+    if name == "ToFloat" { return "toFloat" }
+    if name == "ToBytes" { return "toBytes" }
+    if name == "TrimPrefix" { return "trimPrefix" }
+    if name == "TrimSuffix" { return "trimSuffix" }
+    if name == "TrimStart" { return "trimStart" }
+    if name == "TrimEnd" { return "trimEnd" }
+    if name == "Trim" { return "trim" }
+    if name == "TrimSpace" { return "trimSpace" }
+    if name == "ToUpper" { return "toUpper" }
+    if name == "ToLower" { return "toLower" }
+    if name == "lastIndexOf" { return "lastIndexOf" }
+    name
+}
+
+/// Runtime-strings FFI descriptor kind. The Go emitter still constructs
+/// AST source-type nodes, but the stable signature policy is owned here.
+pub fn llvmRuntimeFfiKindUnknown() -> Int { 0 }
+pub fn llvmRuntimeFfiKindString() -> Int { 1 }
+pub fn llvmRuntimeFfiKindInt() -> Int { 2 }
+pub fn llvmRuntimeFfiKindBool() -> Int { 3 }
+pub fn llvmRuntimeFfiKindChar() -> Int { 4 }
+pub fn llvmRuntimeFfiKindFloat() -> Int { 5 }
+pub fn llvmRuntimeFfiKindBytes() -> Int { 6 }
+pub fn llvmRuntimeFfiKindListString() -> Int { 7 }
+pub fn llvmRuntimeFfiKindListChar() -> Int { 8 }
+pub fn llvmRuntimeFfiKindListByte() -> Int { 9 }
+
+pub fn llvmRuntimeStringsCanonicalFfiName(name: String) -> String {
+    let canon = llvmCanonicalStdStringsCallName(name)
+    if canon == "Equal" || canon == "equal" { return "Equal" }
+    if canon == "compare" { return "Compare" }
+    if canon == "count" { return "Count" }
+    if canon == "indexOf" || canon == "Index" || canon == "IndexOf" { return "IndexOf" }
+    if canon == "lastIndexOf" || canon == "LastIndex" || canon == "LastIndexOf" { return "LastIndexOf" }
+    if canon == "charAt" || canon == "CharAt" { return "CharAt" }
+    if canon == "len" || canon == "Len" || canon == "byteLen" || canon == "ByteLen" { return "ByteLen" }
+    if canon == "contains" { return "Contains" }
+    if canon == "hasPrefix" { return "HasPrefix" }
+    if canon == "hasSuffix" { return "HasSuffix" }
+    if canon == "split" { return "Split" }
+    if canon == "splitN" { return "SplitN" }
+    if canon == "fields" { return "Fields" }
+    if canon == "join" { return "Join" }
+    if canon == "concat" { return "Concat" }
+    if canon == "repeat" { return "Repeat" }
+    if canon == "replace" { return "Replace" }
+    if canon == "replaceAll" { return "ReplaceAll" }
+    if canon == "slice" || canon == "substring" || canon == "Substring" { return "Slice" }
+    if canon == "toUpper" { return "ToUpper" }
+    if canon == "toLower" { return "ToLower" }
+    if canon == "isValidInt" || canon == "IsValidInt" { return "IsValidInt" }
+    if canon == "toInt" { return "ToInt" }
+    if canon == "isValidFloat" || canon == "IsValidFloat" { return "IsValidFloat" }
+    if canon == "toFloat" { return "ToFloat" }
+    if canon == "trimStart" || canon == "trimLeft" || canon == "TrimLeft" { return "TrimStart" }
+    if canon == "trimEnd" || canon == "trimRight" || canon == "TrimRight" { return "TrimEnd" }
+    if canon == "trimPrefix" { return "TrimPrefix" }
+    if canon == "trimSuffix" { return "TrimSuffix" }
+    if canon == "trim" || canon == "trimSpace" { return "TrimSpace" }
+    if canon == "chars" || canon == "Chars" { return "Chars" }
+    if canon == "bytes" || canon == "Bytes" { return "Bytes" }
+    if canon == "toBytes" { return "ToBytes" }
+    ""
+}
+
+pub fn llvmRuntimeStringsFfiSymbol(canonical: String) -> String {
+    if canonical == "Equal" { return llvmStringRuntimeEqualSymbol() }
+    if canonical == "Compare" { return llvmStringRuntimeCompareSymbol() }
+    if canonical == "Count" { return llvmStringRuntimeCountSymbol() }
+    if canonical == "IndexOf" { return llvmStringRuntimeIndexOfSymbol() }
+    if canonical == "LastIndexOf" { return "osty_rt_strings_LastIndexOf" }
+    if canonical == "CharAt" { return "osty_rt_strings_CharAt" }
+    if canonical == "ByteLen" { return llvmStringRuntimeByteLenSymbol() }
+    if canonical == "Contains" { return llvmStringRuntimeContainsSymbol() }
+    if canonical == "HasPrefix" { return llvmStringRuntimeHasPrefixSymbol() }
+    if canonical == "HasSuffix" { return llvmStringRuntimeHasSuffixSymbol() }
+    if canonical == "Split" { return llvmStringRuntimeSplitSymbol() }
+    if canonical == "SplitN" { return llvmStringRuntimeSplitNSymbol() }
+    if canonical == "Fields" { return "osty_rt_strings_Fields" }
+    if canonical == "Join" { return llvmStringRuntimeJoinSymbol() }
+    if canonical == "Concat" { return llvmStringRuntimeConcatSymbol() }
+    if canonical == "Repeat" { return llvmStringRuntimeRepeatSymbol() }
+    if canonical == "Replace" { return llvmStringRuntimeReplaceSymbol() }
+    if canonical == "ReplaceAll" { return llvmStringRuntimeReplaceAllSymbol() }
+    if canonical == "Slice" { return llvmStringRuntimeSliceSymbol() }
+    if canonical == "ToUpper" { return llvmStringRuntimeToUpperSymbol() }
+    if canonical == "ToLower" { return llvmStringRuntimeToLowerSymbol() }
+    if canonical == "IsValidInt" { return llvmStringRuntimeIsValidIntSymbol() }
+    if canonical == "ToInt" { return llvmStringRuntimeToIntSymbol() }
+    if canonical == "IsValidFloat" { return llvmStringRuntimeIsValidFloatSymbol() }
+    if canonical == "ToFloat" { return llvmStringRuntimeToFloatSymbol() }
+    if canonical == "TrimStart" { return llvmStringRuntimeTrimStartSymbol() }
+    if canonical == "TrimEnd" { return llvmStringRuntimeTrimEndSymbol() }
+    if canonical == "TrimPrefix" { return llvmStringRuntimeTrimPrefixSymbol() }
+    if canonical == "TrimSuffix" { return llvmStringRuntimeTrimSuffixSymbol() }
+    if canonical == "TrimSpace" { return llvmStringRuntimeTrimSpaceSymbol() }
+    if canonical == "Chars" { return llvmStringRuntimeCharsSymbol() }
+    if canonical == "Bytes" { return llvmStringRuntimeBytesSymbol() }
+    if canonical == "ToBytes" { return llvmStringRuntimeToBytesSymbol() }
+    ""
+}
+
+pub fn llvmRuntimeStringsFfiReturnKind(canonical: String) -> Int {
+    if canonical == "Equal" || canonical == "Contains" ||
+        canonical == "HasPrefix" || canonical == "HasSuffix" ||
+        canonical == "IsValidInt" || canonical == "IsValidFloat" {
+        return llvmRuntimeFfiKindBool()
+    }
+    if canonical == "Compare" || canonical == "Count" ||
+        canonical == "IndexOf" || canonical == "LastIndexOf" ||
+        canonical == "ByteLen" || canonical == "ToInt" {
+        return llvmRuntimeFfiKindInt()
+    }
+    if canonical == "CharAt" { return llvmRuntimeFfiKindChar() }
+    if canonical == "ToFloat" { return llvmRuntimeFfiKindFloat() }
+    if canonical == "Split" || canonical == "SplitN" || canonical == "Fields" {
+        return llvmRuntimeFfiKindListString()
+    }
+    if canonical == "Chars" { return llvmRuntimeFfiKindListChar() }
+    if canonical == "Bytes" { return llvmRuntimeFfiKindListByte() }
+    if canonical == "ToBytes" { return llvmRuntimeFfiKindBytes() }
+    if llvmRuntimeStringsFfiSymbol(canonical) != "" {
+        return llvmRuntimeFfiKindString()
+    }
+    llvmRuntimeFfiKindUnknown()
+}
+
+pub fn llvmRuntimeStringsFfiParamCount(canonical: String) -> Int {
+    if canonical == "ByteLen" || canonical == "Fields" ||
+        canonical == "ToUpper" || canonical == "ToLower" ||
+        canonical == "IsValidInt" || canonical == "ToInt" ||
+        canonical == "IsValidFloat" || canonical == "ToFloat" ||
+        canonical == "TrimStart" || canonical == "TrimEnd" ||
+        canonical == "TrimSpace" || canonical == "Chars" ||
+        canonical == "Bytes" || canonical == "ToBytes" {
+        return 1
+    }
+    if canonical == "SplitN" || canonical == "Replace" ||
+        canonical == "ReplaceAll" || canonical == "Slice" {
+        return 3
+    }
+    if llvmRuntimeStringsFfiSymbol(canonical) != "" {
+        return 2
+    }
+    0
+}
+
+pub fn llvmRuntimeStringsFfiParamName(canonical: String, index: Int) -> String {
+    if index == 0 {
+        if canonical == "Equal" || canonical == "Compare" || canonical == "Concat" {
+            return "left"
+        }
+        if canonical == "Join" { return "parts" }
+        return "value"
+    }
+    if index == 1 {
+        if canonical == "Equal" || canonical == "Compare" || canonical == "Concat" {
+            return "right"
+        }
+        if canonical == "Count" || canonical == "IndexOf" ||
+            canonical == "LastIndexOf" || canonical == "Contains" {
+            return "substr"
+        }
+        if canonical == "CharAt" { return "index" }
+        if canonical == "HasPrefix" || canonical == "TrimPrefix" { return "prefix" }
+        if canonical == "HasSuffix" || canonical == "TrimSuffix" { return "suffix" }
+        if canonical == "Split" || canonical == "SplitN" || canonical == "Join" { return "sep" }
+        if canonical == "Repeat" { return "n" }
+        if canonical == "Replace" || canonical == "ReplaceAll" { return "old" }
+        if canonical == "Slice" { return "start" }
+    }
+    if index == 2 {
+        if canonical == "SplitN" { return "n" }
+        if canonical == "Replace" || canonical == "ReplaceAll" { return "new" }
+        if canonical == "Slice" { return "end" }
+    }
+    ""
+}
+
+pub fn llvmRuntimeStringsFfiParamKind(canonical: String, index: Int) -> Int {
+    if index < 0 || index >= llvmRuntimeStringsFfiParamCount(canonical) {
+        return llvmRuntimeFfiKindUnknown()
+    }
+    if canonical == "Join" && index == 0 {
+        return llvmRuntimeFfiKindListString()
+    }
+    if (canonical == "CharAt" || canonical == "Repeat") && index == 1 {
+        return llvmRuntimeFfiKindInt()
+    }
+    if canonical == "SplitN" && index == 2 {
+        return llvmRuntimeFfiKindInt()
+    }
+    if canonical == "Slice" && (index == 1 || index == 2) {
+        return llvmRuntimeFfiKindInt()
+    }
+    llvmRuntimeFfiKindString()
 }
 
 /// LLVM forward declarations for the string runtime surface plus the

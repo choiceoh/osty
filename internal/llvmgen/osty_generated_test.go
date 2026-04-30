@@ -462,10 +462,12 @@ func TestGeneratedListRuntimeSymbolsAreOstyOwned(t *testing.T) {
 		{"push_i64", llvmListRuntimePushSymbol("i64"), "osty_rt_list_push_i64"},
 		{"push_f64", llvmListRuntimePushSymbol("f64"), "osty_rt_list_push_f64"},
 		{"get_ptr", llvmListRuntimeGetSymbol("ptr"), "osty_rt_list_get_ptr"},
+		{"push_for_i64", llvmListRuntimePushSymbolFor("i64", false), "osty_rt_list_push_i64"},
 		{"push_string", listRuntimePushSymbolFor("ptr", true), "osty_rt_list_push_string"},
 		{"get_string", listRuntimeGetSymbolFor("ptr", true), "osty_rt_list_get_string"},
 		{"set_string", listRuntimeSetSymbolFor("ptr", true), "osty_rt_list_set_string"},
 		{"insert_string", listRuntimeInsertSymbolFor("ptr", true), "osty_rt_list_insert_string"},
+		{"insert_ptr", llvmListRuntimeInsertSymbolFor("ptr", false), "osty_rt_list_insert_ptr"},
 		{"set_i1", llvmListRuntimeSetSymbol("i1"), "osty_rt_list_set_i1"},
 		{"sorted_i64", llvmListRuntimeSortedSymbol("i64", false), "osty_rt_list_sorted_i64"},
 		{"sorted_string", llvmListRuntimeSortedSymbol("ptr", true), "osty_rt_list_sorted_string"},
@@ -897,6 +899,66 @@ func TestGeneratedStringRuntimeSymbolsAreOstyOwned(t *testing.T) {
 		if c.got != c.want {
 			t.Fatalf("%s: got %q, want %q", c.name, c.got, c.want)
 		}
+	}
+}
+
+func TestGeneratedRuntimeStringsFFIPolicyIsOstyOwned(t *testing.T) {
+	canonical := []struct {
+		name string
+		want string
+	}{
+		{"Equal", "Equal"},
+		{"len", "ByteLen"},
+		{"Index", "IndexOf"},
+		{"LastIndex", "LastIndexOf"},
+		{"startsWith", "HasPrefix"},
+		{"endsWith", "HasSuffix"},
+		{"trimLeft", "TrimStart"},
+		{"TrimRight", "TrimEnd"},
+		{"substring", "Slice"},
+		{"unknown", ""},
+	}
+	for _, c := range canonical {
+		if got := llvmRuntimeStringsCanonicalFfiName(c.name); got != c.want {
+			t.Fatalf("canonical %s = %q, want %q", c.name, got, c.want)
+		}
+	}
+
+	shape := []struct {
+		canonical  string
+		symbol     string
+		retKind    int
+		paramKinds []int
+		paramNames []string
+	}{
+		{"Equal", "osty_rt_strings_Equal", llvmRuntimeFfiKindBool(), []int{llvmRuntimeFfiKindString(), llvmRuntimeFfiKindString()}, []string{"left", "right"}},
+		{"SplitN", "osty_rt_strings_SplitN", llvmRuntimeFfiKindListString(), []int{llvmRuntimeFfiKindString(), llvmRuntimeFfiKindString(), llvmRuntimeFfiKindInt()}, []string{"value", "sep", "n"}},
+		{"Join", "osty_rt_strings_Join", llvmRuntimeFfiKindString(), []int{llvmRuntimeFfiKindListString(), llvmRuntimeFfiKindString()}, []string{"parts", "sep"}},
+		{"Chars", "osty_rt_strings_Chars", llvmRuntimeFfiKindListChar(), []int{llvmRuntimeFfiKindString()}, []string{"value"}},
+		{"ToBytes", "osty_rt_strings_ToBytes", llvmRuntimeFfiKindBytes(), []int{llvmRuntimeFfiKindString()}, []string{"value"}},
+		{"CharAt", "osty_rt_strings_CharAt", llvmRuntimeFfiKindChar(), []int{llvmRuntimeFfiKindString(), llvmRuntimeFfiKindInt()}, []string{"value", "index"}},
+	}
+	for _, c := range shape {
+		if got := llvmRuntimeStringsFfiSymbol(c.canonical); got != c.symbol {
+			t.Fatalf("%s symbol = %q, want %q", c.canonical, got, c.symbol)
+		}
+		if got := llvmRuntimeStringsFfiReturnKind(c.canonical); got != c.retKind {
+			t.Fatalf("%s return kind = %d, want %d", c.canonical, got, c.retKind)
+		}
+		if got := llvmRuntimeStringsFfiParamCount(c.canonical); got != len(c.paramKinds) {
+			t.Fatalf("%s param count = %d, want %d", c.canonical, got, len(c.paramKinds))
+		}
+		for i, wantKind := range c.paramKinds {
+			if got := llvmRuntimeStringsFfiParamKind(c.canonical, i); got != wantKind {
+				t.Fatalf("%s param %d kind = %d, want %d", c.canonical, i, got, wantKind)
+			}
+			if got := llvmRuntimeStringsFfiParamName(c.canonical, i); got != c.paramNames[i] {
+				t.Fatalf("%s param %d name = %q, want %q", c.canonical, i, got, c.paramNames[i])
+			}
+		}
+	}
+	if got := llvmRuntimeStringsFfiParamKind("Split", 99); got != llvmRuntimeFfiKindUnknown() {
+		t.Fatalf("out-of-range param kind = %d, want unknown", got)
 	}
 }
 

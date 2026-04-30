@@ -225,6 +225,34 @@ fn stitch(s: String) -> String {
 	}
 }
 
+func TestRuntimeStringsSyntheticFFIUsesOstyPolicyDescriptor(t *testing.T) {
+	splitN := runtimeStringsKnownFFIFunction("splitN")
+	if splitN == nil {
+		t.Fatal("splitN synthetic FFI missing")
+	}
+	if splitN.symbol != "osty_rt_strings_SplitN" || splitN.ret != "ptr" || splitN.listElemTyp != "ptr" || !splitN.listElemString {
+		t.Fatalf("splitN descriptor drifted: %#v", splitN)
+	}
+	if len(splitN.params) != 3 || splitN.params[0].name != "value" || splitN.params[1].name != "sep" || splitN.params[2].name != "n" || splitN.params[2].typ != "i64" {
+		t.Fatalf("splitN params drifted: %#v", splitN.params)
+	}
+
+	join := runtimeStringsKnownFFIFunction("join")
+	if join == nil || len(join.params) != 2 || join.params[0].listElemTyp != "ptr" || !join.params[0].listElemString {
+		t.Fatalf("join List<String> param metadata drifted: %#v", join)
+	}
+
+	chars := runtimeStringsKnownFFIFunction("chars")
+	if chars == nil || chars.listElemTyp != "i32" || chars.listElemString {
+		t.Fatalf("chars List<Char> metadata drifted: %#v", chars)
+	}
+
+	toBytes := runtimeStringsKnownFFIFunction("toBytes")
+	if toBytes == nil || toBytes.symbol != "osty_rt_strings_ToBytes" || toBytes.ret != "ptr" || toBytes.listElemTyp != "" {
+		t.Fatalf("toBytes descriptor drifted: %#v", toBytes)
+	}
+}
+
 // TestGenerateUseCSurfaceCharByteCoverage exercises `use c` with the
 // Char (i32) and Byte (i8) primitives that the runtime ABI gained in
 // LLVM011 follow-up work (#404). This is the regression net for

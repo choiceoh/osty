@@ -2157,9 +2157,25 @@ func llvmListRuntimePushSymbol(suffix string) string {
 	return fmt.Sprintf("osty_rt_list_push_%s", ostyToString(suffix))
 }
 
+// Osty: llvmListRuntimePushSymbolFor
+func llvmListRuntimePushSymbolFor(elemTyp string, isString bool) string {
+	if elemTyp == "ptr" && isString {
+		return "osty_rt_list_push_string"
+	}
+	return llvmListRuntimePushSymbol(llvmListElementSuffix(elemTyp))
+}
+
 // Osty: toolchain/llvmgen.osty:1625:5
 func llvmListRuntimeGetSymbol(suffix string) string {
 	return fmt.Sprintf("osty_rt_list_get_%s", ostyToString(suffix))
+}
+
+// Osty: llvmListRuntimeGetSymbolFor
+func llvmListRuntimeGetSymbolFor(elemTyp string, isString bool) string {
+	if elemTyp == "ptr" && isString {
+		return "osty_rt_list_get_string"
+	}
+	return llvmListRuntimeGetSymbol(llvmListElementSuffix(elemTyp))
 }
 
 // Osty: toolchain/llvmgen.osty:1629:5
@@ -2167,9 +2183,25 @@ func llvmListRuntimeSetSymbol(suffix string) string {
 	return fmt.Sprintf("osty_rt_list_set_%s", ostyToString(suffix))
 }
 
+// Osty: llvmListRuntimeSetSymbolFor
+func llvmListRuntimeSetSymbolFor(elemTyp string, isString bool) string {
+	if elemTyp == "ptr" && isString {
+		return "osty_rt_list_set_string"
+	}
+	return llvmListRuntimeSetSymbol(llvmListElementSuffix(elemTyp))
+}
+
 // Osty: toolchain/llvmgen.osty:1633:5
 func llvmListRuntimeInsertSymbol(suffix string) string {
 	return fmt.Sprintf("osty_rt_list_insert_%s", ostyToString(suffix))
+}
+
+// Osty: llvmListRuntimeInsertSymbolFor
+func llvmListRuntimeInsertSymbolFor(elemTyp string, isString bool) string {
+	if elemTyp == "ptr" && isString {
+		return "osty_rt_list_insert_string"
+	}
+	return llvmListRuntimeInsertSymbol(llvmListElementSuffix(elemTyp))
 }
 
 // Osty: toolchain/llvmgen.osty:1642:5
@@ -3423,6 +3455,357 @@ func llvmStringRuntimeBytesSymbol() string {
 // Osty: toolchain/llvmgen.osty:2721:5
 func llvmStringRuntimeToBytesSymbol() string {
 	return "osty_rt_strings_ToBytes"
+}
+
+// Osty: llvmCanonicalStdStringsCallName
+func llvmCanonicalStdStringsCallName(name string) string {
+	switch name {
+	case "Compare":
+		return "compare"
+	case "Count":
+		return "count"
+	case "Index":
+		return "Index"
+	case "LastIndex":
+		return "LastIndex"
+	case "Concat":
+		return "concat"
+	case "Contains":
+		return "contains"
+	case "HasPrefix", "StartsWith", "startsWith":
+		return "hasPrefix"
+	case "HasSuffix", "EndsWith", "endsWith":
+		return "hasSuffix"
+	case "Join":
+		return "join"
+	case "Repeat":
+		return "repeat"
+	case "Replace":
+		return "replace"
+	case "ReplaceAll":
+		return "replaceAll"
+	case "Split":
+		return "split"
+	case "SplitN":
+		return "splitN"
+	case "Fields":
+		return "fields"
+	case "Slice":
+		return "slice"
+	case "ToInt":
+		return "toInt"
+	case "ToFloat":
+		return "toFloat"
+	case "ToBytes":
+		return "toBytes"
+	case "TrimPrefix":
+		return "trimPrefix"
+	case "TrimSuffix":
+		return "trimSuffix"
+	case "TrimStart":
+		return "trimStart"
+	case "TrimEnd":
+		return "trimEnd"
+	case "Trim":
+		return "trim"
+	case "TrimSpace":
+		return "trimSpace"
+	case "ToUpper":
+		return "toUpper"
+	case "ToLower":
+		return "toLower"
+	case "lastIndexOf":
+		return "lastIndexOf"
+	default:
+		return name
+	}
+}
+
+// Osty: llvmRuntimeFfiKindUnknown
+func llvmRuntimeFfiKindUnknown() int { return 0 }
+
+// Osty: llvmRuntimeFfiKindString
+func llvmRuntimeFfiKindString() int { return 1 }
+
+// Osty: llvmRuntimeFfiKindInt
+func llvmRuntimeFfiKindInt() int { return 2 }
+
+// Osty: llvmRuntimeFfiKindBool
+func llvmRuntimeFfiKindBool() int { return 3 }
+
+// Osty: llvmRuntimeFfiKindChar
+func llvmRuntimeFfiKindChar() int { return 4 }
+
+// Osty: llvmRuntimeFfiKindFloat
+func llvmRuntimeFfiKindFloat() int { return 5 }
+
+// Osty: llvmRuntimeFfiKindBytes
+func llvmRuntimeFfiKindBytes() int { return 6 }
+
+// Osty: llvmRuntimeFfiKindListString
+func llvmRuntimeFfiKindListString() int { return 7 }
+
+// Osty: llvmRuntimeFfiKindListChar
+func llvmRuntimeFfiKindListChar() int { return 8 }
+
+// Osty: llvmRuntimeFfiKindListByte
+func llvmRuntimeFfiKindListByte() int { return 9 }
+
+// Osty: llvmRuntimeStringsCanonicalFfiName
+func llvmRuntimeStringsCanonicalFfiName(name string) string {
+	canon := llvmCanonicalStdStringsCallName(name)
+	switch canon {
+	case "Equal", "equal":
+		return "Equal"
+	case "compare":
+		return "Compare"
+	case "count":
+		return "Count"
+	case "indexOf", "Index", "IndexOf":
+		return "IndexOf"
+	case "lastIndexOf", "LastIndex", "LastIndexOf":
+		return "LastIndexOf"
+	case "charAt", "CharAt":
+		return "CharAt"
+	case "len", "Len", "byteLen", "ByteLen":
+		return "ByteLen"
+	case "contains":
+		return "Contains"
+	case "hasPrefix":
+		return "HasPrefix"
+	case "hasSuffix":
+		return "HasSuffix"
+	case "split":
+		return "Split"
+	case "splitN":
+		return "SplitN"
+	case "fields":
+		return "Fields"
+	case "join":
+		return "Join"
+	case "concat":
+		return "Concat"
+	case "repeat":
+		return "Repeat"
+	case "replace":
+		return "Replace"
+	case "replaceAll":
+		return "ReplaceAll"
+	case "slice", "substring", "Substring":
+		return "Slice"
+	case "toUpper":
+		return "ToUpper"
+	case "toLower":
+		return "ToLower"
+	case "isValidInt", "IsValidInt":
+		return "IsValidInt"
+	case "toInt":
+		return "ToInt"
+	case "isValidFloat", "IsValidFloat":
+		return "IsValidFloat"
+	case "toFloat":
+		return "ToFloat"
+	case "trimStart", "trimLeft", "TrimLeft":
+		return "TrimStart"
+	case "trimEnd", "trimRight", "TrimRight":
+		return "TrimEnd"
+	case "trimPrefix":
+		return "TrimPrefix"
+	case "trimSuffix":
+		return "TrimSuffix"
+	case "trim", "trimSpace":
+		return "TrimSpace"
+	case "chars", "Chars":
+		return "Chars"
+	case "bytes", "Bytes":
+		return "Bytes"
+	case "toBytes":
+		return "ToBytes"
+	default:
+		return ""
+	}
+}
+
+// Osty: llvmRuntimeStringsFfiSymbol
+func llvmRuntimeStringsFfiSymbol(canonical string) string {
+	switch canonical {
+	case "Equal":
+		return llvmStringRuntimeEqualSymbol()
+	case "Compare":
+		return llvmStringRuntimeCompareSymbol()
+	case "Count":
+		return llvmStringRuntimeCountSymbol()
+	case "IndexOf":
+		return llvmStringRuntimeIndexOfSymbol()
+	case "LastIndexOf":
+		return "osty_rt_strings_LastIndexOf"
+	case "CharAt":
+		return "osty_rt_strings_CharAt"
+	case "ByteLen":
+		return llvmStringRuntimeByteLenSymbol()
+	case "Contains":
+		return llvmStringRuntimeContainsSymbol()
+	case "HasPrefix":
+		return llvmStringRuntimeHasPrefixSymbol()
+	case "HasSuffix":
+		return llvmStringRuntimeHasSuffixSymbol()
+	case "Split":
+		return llvmStringRuntimeSplitSymbol()
+	case "SplitN":
+		return llvmStringRuntimeSplitNSymbol()
+	case "Fields":
+		return "osty_rt_strings_Fields"
+	case "Join":
+		return llvmStringRuntimeJoinSymbol()
+	case "Concat":
+		return llvmStringRuntimeConcatSymbol()
+	case "Repeat":
+		return llvmStringRuntimeRepeatSymbol()
+	case "Replace":
+		return llvmStringRuntimeReplaceSymbol()
+	case "ReplaceAll":
+		return llvmStringRuntimeReplaceAllSymbol()
+	case "Slice":
+		return llvmStringRuntimeSliceSymbol()
+	case "ToUpper":
+		return llvmStringRuntimeToUpperSymbol()
+	case "ToLower":
+		return llvmStringRuntimeToLowerSymbol()
+	case "IsValidInt":
+		return llvmStringRuntimeIsValidIntSymbol()
+	case "ToInt":
+		return llvmStringRuntimeToIntSymbol()
+	case "IsValidFloat":
+		return llvmStringRuntimeIsValidFloatSymbol()
+	case "ToFloat":
+		return llvmStringRuntimeToFloatSymbol()
+	case "TrimStart":
+		return llvmStringRuntimeTrimStartSymbol()
+	case "TrimEnd":
+		return llvmStringRuntimeTrimEndSymbol()
+	case "TrimPrefix":
+		return llvmStringRuntimeTrimPrefixSymbol()
+	case "TrimSuffix":
+		return llvmStringRuntimeTrimSuffixSymbol()
+	case "TrimSpace":
+		return llvmStringRuntimeTrimSpaceSymbol()
+	case "Chars":
+		return llvmStringRuntimeCharsSymbol()
+	case "Bytes":
+		return llvmStringRuntimeBytesSymbol()
+	case "ToBytes":
+		return llvmStringRuntimeToBytesSymbol()
+	default:
+		return ""
+	}
+}
+
+// Osty: llvmRuntimeStringsFfiReturnKind
+func llvmRuntimeStringsFfiReturnKind(canonical string) int {
+	switch canonical {
+	case "Equal", "Contains", "HasPrefix", "HasSuffix", "IsValidInt", "IsValidFloat":
+		return llvmRuntimeFfiKindBool()
+	case "Compare", "Count", "IndexOf", "LastIndexOf", "ByteLen", "ToInt":
+		return llvmRuntimeFfiKindInt()
+	case "CharAt":
+		return llvmRuntimeFfiKindChar()
+	case "ToFloat":
+		return llvmRuntimeFfiKindFloat()
+	case "Split", "SplitN", "Fields":
+		return llvmRuntimeFfiKindListString()
+	case "Chars":
+		return llvmRuntimeFfiKindListChar()
+	case "Bytes":
+		return llvmRuntimeFfiKindListByte()
+	case "ToBytes":
+		return llvmRuntimeFfiKindBytes()
+	default:
+		if llvmRuntimeStringsFfiSymbol(canonical) != "" {
+			return llvmRuntimeFfiKindString()
+		}
+		return llvmRuntimeFfiKindUnknown()
+	}
+}
+
+// Osty: llvmRuntimeStringsFfiParamCount
+func llvmRuntimeStringsFfiParamCount(canonical string) int {
+	switch canonical {
+	case "ByteLen", "Fields", "ToUpper", "ToLower", "IsValidInt", "ToInt", "IsValidFloat", "ToFloat", "TrimStart", "TrimEnd", "TrimSpace", "Chars", "Bytes", "ToBytes":
+		return 1
+	case "SplitN", "Replace", "ReplaceAll", "Slice":
+		return 3
+	default:
+		if llvmRuntimeStringsFfiSymbol(canonical) != "" {
+			return 2
+		}
+		return 0
+	}
+}
+
+// Osty: llvmRuntimeStringsFfiParamName
+func llvmRuntimeStringsFfiParamName(canonical string, index int) string {
+	switch index {
+	case 0:
+		switch canonical {
+		case "Equal", "Compare", "Concat":
+			return "left"
+		case "Join":
+			return "parts"
+		default:
+			return "value"
+		}
+	case 1:
+		switch canonical {
+		case "Equal", "Compare", "Concat":
+			return "right"
+		case "Count", "IndexOf", "LastIndexOf", "Contains":
+			return "substr"
+		case "CharAt":
+			return "index"
+		case "HasPrefix", "TrimPrefix":
+			return "prefix"
+		case "HasSuffix", "TrimSuffix":
+			return "suffix"
+		case "Split", "SplitN", "Join":
+			return "sep"
+		case "Repeat":
+			return "n"
+		case "Replace", "ReplaceAll":
+			return "old"
+		case "Slice":
+			return "start"
+		}
+	case 2:
+		switch canonical {
+		case "SplitN":
+			return "n"
+		case "Replace", "ReplaceAll":
+			return "new"
+		case "Slice":
+			return "end"
+		}
+	}
+	return ""
+}
+
+// Osty: llvmRuntimeStringsFfiParamKind
+func llvmRuntimeStringsFfiParamKind(canonical string, index int) int {
+	if index < 0 || index >= llvmRuntimeStringsFfiParamCount(canonical) {
+		return llvmRuntimeFfiKindUnknown()
+	}
+	if canonical == "Join" && index == 0 {
+		return llvmRuntimeFfiKindListString()
+	}
+	if (canonical == "CharAt" || canonical == "Repeat") && index == 1 {
+		return llvmRuntimeFfiKindInt()
+	}
+	if canonical == "SplitN" && index == 2 {
+		return llvmRuntimeFfiKindInt()
+	}
+	if canonical == "Slice" && (index == 1 || index == 2) {
+		return llvmRuntimeFfiKindInt()
+	}
+	return llvmRuntimeFfiKindString()
 }
 
 // Osty: toolchain/llvmgen.osty:2731:5
