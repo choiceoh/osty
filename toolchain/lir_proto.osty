@@ -1,0 +1,2446 @@
+// lir_proto.osty - self-hosted LIR Proto model, renderer, and planning helpers.
+//
+// This file is the Osty-owned source for the LIR Proto surface. The Go
+// `internal/lirproto` package may stay useful as a bridge/harness while this
+// grows, but new shape should be described here first so the backend can move
+// toward the self-hosted toolchain without a second porting pass.
+//
+// Scope:
+//   - renderable LLVM-aware low-level plan
+//   - shallow structural validation
+//   - runtime declaration/string pool ordering helpers
+//   - scalar type/cast/coercion planning helpers
+//   - aggregate projection planning records
+//
+// Non-scope:
+//   - production backend dispatch
+//   - MIR semantic lowering
+//   - SSA/dominance verification
+//   - target data-layout reasoning
+use std.strings as strings
+// ====================================================================
+// Enum kinds
+// ====================================================================
+pub enum LirTypeClass {
+    LirTypeUnknown,
+    LirTypeVoid,
+    LirTypeInt,
+    LirTypeFloat,
+    LirTypePtr,
+    LirTypeAggregate,
+    LirTypeFunction,
+}
+pub enum LirInstrKind {
+    LirInstrInvalid,
+    LirInstrAlloca,
+    LirInstrLoad,
+    LirInstrStore,
+    LirInstrBinary,
+    LirInstrUnary,
+    LirInstrCall,
+    LirInstrCast,
+    LirInstrInsertValue,
+    LirInstrExtractValue,
+    LirInstrGep,
+    LirInstrComment,
+}
+pub enum LirTermKind {
+    LirTermInvalid,
+    LirTermRet,
+    LirTermBr,
+    LirTermCondBr,
+    LirTermSwitch,
+    LirTermUnreachable,
+}
+pub enum LirDiagnosticKind {
+    LirDiagInvalidInput,
+    LirDiagUnsupported,
+    LirDiagValidation,
+}
+pub enum LirSeverity {
+    LirSeverityInfo,
+    LirSeverityWarning,
+    LirSeverityError,
+}
+pub enum LirProjectionKind {
+    LirProjInvalid,
+    LirProjField,
+    LirProjTuple,
+    LirProjVariant,
+    LirProjIndex,
+    LirProjDeref,
+}
+// ====================================================================
+// Types and operands
+// ====================================================================
+/// LirType is deliberately hybrid: `llvm` remains the exact renderer
+/// spelling, while `className` gives validation/lowering a small semantic
+/// bucket without inventing a full second type system.
+pub struct LirType {
+    pub llvm: String,
+    pub className: LirTypeClass,
+}
+pub fn lirTypeInvalid() -> LirType {
+    LirType {llvm: "", className: LirTypeUnknown}
+}
+pub fn lirRawType(llvm: String) -> LirType {
+    LirType {llvm, className: LirTypeUnknown}
+}
+pub fn lirVoidType() -> LirType {
+    LirType {llvm: "void", className: LirTypeVoid}
+}
+pub fn lirIntType(bits: Int) -> LirType {
+    LirType {llvm: "i" + lirIntToString(bits), className: LirTypeInt}
+}
+pub fn lirFloatType(llvm: String) -> LirType {
+    LirType {llvm, className: LirTypeFloat}
+}
+pub fn lirPtrType() -> LirType {
+    LirType {llvm: "ptr", className: LirTypePtr}
+}
+pub fn lirAggregateType(llvm: String) -> LirType {
+    LirType {llvm, className: LirTypeAggregate}
+}
+pub fn lirFunctionType(llvm: String) -> LirType {
+    LirType {llvm, className: LirTypeFunction}
+}
+pub fn lirTypeString(t: LirType) -> String {
+    t.llvm
+}
+pub fn lirTypeIsZero(t: LirType) -> Bool {
+    t.llvm == "" && t.className == LirTypeUnknown
+}
+pub fn lirTypeIsVoid(t: LirType) -> Bool {
+    t.className == LirTypeVoid || t.llvm == "void"
+}
+pub fn lirTypeSame(a: LirType, b: LirType) -> Bool {
+    a.llvm == b.llvm && a.className == b.className
+}
+pub fn lirTypeClassName(c: LirTypeClass) -> String {
+    match c {
+        LirTypeVoid -> "void",
+        LirTypeInt -> "int",
+        LirTypeFloat -> "float",
+        LirTypePtr -> "ptr",
+        LirTypeAggregate -> "aggregate",
+        LirTypeFunction -> "function",
+        _ -> "unknown",
+    }
+}
+pub struct LirOperand {
+    pub typ: LirType,
+    pub value: String,
+}
+pub fn lirOperand(typ: LirType, value: String) -> LirOperand {
+    LirOperand {typ, value}
+}
+pub fn lirOperandInvalid() -> LirOperand {
+    LirOperand {typ: lirTypeInvalid(), value: ""}
+}
+pub fn lirOperandString(op: LirOperand) -> String {
+    lirTypeString(op.typ) + " " + op.value
+}
+// ====================================================================
+// Module model
+// ====================================================================
+pub struct LirTypeDef {
+    pub name: String,
+    pub body: String,
+}
+pub fn lirTypeDef(name: String, body: String) -> LirTypeDef {
+    LirTypeDef {name, body}
+}
+pub struct LirGlobal {
+    pub name: String,
+    pub typ: LirType,
+    pub init: String,
+    pub attrs: List<String>,
+}
+pub fn lirGlobal(name: String, typ: LirType, init: String) -> LirGlobal {
+    LirGlobal {name, typ, init, attrs: []}
+}
+pub struct LirParam {
+    pub name: String,
+    pub typ: LirType,
+}
+pub fn lirParam(name: String, typ: LirType) -> LirParam {
+    LirParam {name, typ}
+}
+/// LirInstr is a sealed-by-convention flat variant. The `kind` field selects
+/// which payload fields are live. Keeping this as one struct mirrors the rest
+/// of the self-hosted toolchain and avoids interface-shaped bridge work later.
+pub struct LirInstr {
+    pub kind: LirInstrKind,
+    pub dest: String,
+    pub typ: LirType,
+    pub align: Int,
+    pub ptr: String,
+    pub value: LirOperand,
+    pub op: String,
+    pub left: String,
+    pub right: String,
+    pub from: LirOperand,
+    pub toType: LirType,
+    pub returnType: LirType,
+    pub callee: String,
+    pub args: List<LirOperand>,
+    pub callingConv: String,
+    pub attrs: List<String>,
+    pub aggregate: String,
+    pub indices: List<Int>,
+    pub elemType: LirType,
+    pub gepIndices: List<LirOperand>,
+    pub inbounds: Bool,
+    pub text: String,
+}
+// Common result/value fields.
+// Binary/unary/cast fields.
+// Call fields.
+// Aggregate/GEP fields.
+// Comment payload.
+pub fn lirInstrInvalid() -> LirInstr {
+    LirInstr {kind: LirInstrInvalid, dest: "", typ: lirTypeInvalid(), align: 0, ptr: "", value: lirOperandInvalid(), op: "", left: "", right: "", from: lirOperandInvalid(), toType: lirTypeInvalid(), returnType: lirTypeInvalid(), callee: "", args: [], callingConv: "", attrs: [], aggregate: "", indices: [], elemType: lirTypeInvalid(), gepIndices: [], inbounds: false, text: ""}
+}
+pub fn lirAlloca(dest: String, typ: LirType, align: Int) -> LirInstr {
+    let mut i = lirInstrInvalid()
+    i.kind = LirInstrAlloca
+    i.dest = dest
+    i.typ = typ
+    i.align = align
+    i
+}
+pub fn lirLoad(dest: String, typ: LirType, ptr: String, align: Int) -> LirInstr {
+    let mut i = lirInstrInvalid()
+    i.kind = LirInstrLoad
+    i.dest = dest
+    i.typ = typ
+    i.ptr = ptr
+    i.align = align
+    i
+}
+pub fn lirStore(value: LirOperand, ptr: String, align: Int) -> LirInstr {
+    let mut i = lirInstrInvalid()
+    i.kind = LirInstrStore
+    i.value = value
+    i.ptr = ptr
+    i.align = align
+    i
+}
+pub fn lirBinary(dest: String, op: String, typ: LirType, left: String, right: String) -> LirInstr {
+    let mut i = lirInstrInvalid()
+    i.kind = LirInstrBinary
+    i.dest = dest
+    i.op = op
+    i.typ = typ
+    i.left = left
+    i.right = right
+    i
+}
+pub fn lirUnary(dest: String, op: String, typ: LirType, value: String) -> LirInstr {
+    let mut i = lirInstrInvalid()
+    i.kind = LirInstrUnary
+    i.dest = dest
+    i.op = op
+    i.typ = typ
+    i.left = value
+    i
+}
+pub fn lirCall(dest: String, returnType: LirType, callee: String, args: List<LirOperand>) -> LirInstr {
+    let mut i = lirInstrInvalid()
+    i.kind = LirInstrCall
+    i.dest = dest
+    i.returnType = returnType
+    i.callee = callee
+    i.args = args
+    i
+}
+pub fn lirCallWithAttrs(dest: String, returnType: LirType, callee: String, args: List<LirOperand>, callingConv: String, attrs: List<String>) -> LirInstr {
+    let mut i = lirCall(dest, returnType, callee, args)
+    i.callingConv = callingConv
+    i.attrs = attrs
+    i
+}
+pub fn lirCast(dest: String, op: String, from: LirOperand, toType: LirType) -> LirInstr {
+    let mut i = lirInstrInvalid()
+    i.kind = LirInstrCast
+    i.dest = dest
+    i.op = op
+    i.from = from
+    i.toType = toType
+    i
+}
+pub fn lirInsertValue(dest: String, typ: LirType, aggregate: String, value: LirOperand, indices: List<Int>) -> LirInstr {
+    let mut i = lirInstrInvalid()
+    i.kind = LirInstrInsertValue
+    i.dest = dest
+    i.typ = typ
+    i.aggregate = aggregate
+    i.value = value
+    i.indices = indices
+    i
+}
+pub fn lirExtractValue(dest: String, typ: LirType, aggregate: String, indices: List<Int>) -> LirInstr {
+    let mut i = lirInstrInvalid()
+    i.kind = LirInstrExtractValue
+    i.dest = dest
+    i.typ = typ
+    i.aggregate = aggregate
+    i.indices = indices
+    i
+}
+pub fn lirGep(dest: String, elemType: LirType, ptr: String, indices: List<LirOperand>, inbounds: Bool) -> LirInstr {
+    let mut i = lirInstrInvalid()
+    i.kind = LirInstrGep
+    i.dest = dest
+    i.elemType = elemType
+    i.ptr = ptr
+    i.gepIndices = indices
+    i.inbounds = inbounds
+    i
+}
+pub fn lirComment(text: String) -> LirInstr {
+    let mut i = lirInstrInvalid()
+    i.kind = LirInstrComment
+    i.text = text
+    i
+}
+pub struct LirSwitchCase {
+    pub value: String,
+    pub label: String,
+}
+pub fn lirSwitchCase(value: String, label: String) -> LirSwitchCase {
+    LirSwitchCase {value, label}
+}
+pub struct LirTerm {
+    pub kind: LirTermKind,
+    pub retType: LirType,
+    pub retValue: String,
+    pub target: String,
+    pub cond: String,
+    pub thenLabel: String,
+    pub elseLabel: String,
+    pub switchType: LirType,
+    pub switchScrutinee: String,
+    pub switchDefault: String,
+    pub cases: List<LirSwitchCase>,
+}
+pub fn lirTermInvalid() -> LirTerm {
+    LirTerm {kind: LirTermInvalid, retType: lirTypeInvalid(), retValue: "", target: "", cond: "", thenLabel: "", elseLabel: "", switchType: lirTypeInvalid(), switchScrutinee: "", switchDefault: "", cases: []}
+}
+pub fn lirRetVoid() -> LirTerm {
+    let mut t = lirTermInvalid()
+    t.kind = LirTermRet
+    t
+}
+pub fn lirRetValue(typ: LirType, value: String) -> LirTerm {
+    let mut t = lirTermInvalid()
+    t.kind = LirTermRet
+    t.retType = typ
+    t.retValue = value
+    t
+}
+pub fn lirBr(target: String) -> LirTerm {
+    let mut t = lirTermInvalid()
+    t.kind = LirTermBr
+    t.target = target
+    t
+}
+pub fn lirCondBr(cond: String, thenLabel: String, elseLabel: String) -> LirTerm {
+    let mut t = lirTermInvalid()
+    t.kind = LirTermCondBr
+    t.cond = cond
+    t.thenLabel = thenLabel
+    t.elseLabel = elseLabel
+    t
+}
+pub fn lirSwitch(typ: LirType, scrutinee: String, defaultLabel: String, cases: List<LirSwitchCase>) -> LirTerm {
+    let mut t = lirTermInvalid()
+    t.kind = LirTermSwitch
+    t.switchType = typ
+    t.switchScrutinee = scrutinee
+    t.switchDefault = defaultLabel
+    t.cases = cases
+    t
+}
+pub fn lirUnreachable() -> LirTerm {
+    let mut t = lirTermInvalid()
+    t.kind = LirTermUnreachable
+    t
+}
+pub struct LirBlock {
+    pub label: String,
+    pub instrs: List<LirInstr>,
+    pub term: LirTerm,
+}
+pub fn lirBlock(label: String, term: LirTerm) -> LirBlock {
+    LirBlock {label, instrs: [], term}
+}
+pub fn lirBlockAppend(block: LirBlock, instr: LirInstr) {
+    block.instrs.push(instr)
+}
+pub struct LirFunction {
+    pub name: String,
+    pub returnType: LirType,
+    pub params: List<LirParam>,
+    pub blocks: List<LirBlock>,
+    pub linkage: String,
+    pub callingConv: String,
+    pub attrs: List<String>,
+}
+pub fn lirFunction(name: String, returnType: LirType) -> LirFunction {
+    LirFunction {name, returnType, params: [], blocks: [], linkage: "", callingConv: "", attrs: []}
+}
+pub struct LirRuntimeDecl {
+    pub symbol: String,
+    pub returnType: LirType,
+    pub params: List<LirType>,
+    pub vararg: Bool,
+}
+pub fn lirRuntimeDecl(symbol: String, returnType: LirType, params: List<LirType>, vararg: Bool) -> LirRuntimeDecl {
+    LirRuntimeDecl {symbol, returnType, params, vararg}
+}
+pub struct LirRuntimeDecls {
+    pub decls: List<LirRuntimeDecl>,
+}
+pub fn lirRuntimeDecls() -> LirRuntimeDecls {
+    LirRuntimeDecls {decls: []}
+}
+/// lirRuntimeDeclsDeclare records the first declaration for a runtime symbol.
+/// It returns false for empty or duplicate symbols.
+pub fn lirRuntimeDeclsDeclare(decls: LirRuntimeDecls, decl: LirRuntimeDecl) -> Bool {
+    if decl.symbol == "" {
+        return false
+    }
+    for existing in decls.decls {
+        if existing.symbol == decl.symbol {
+            return false
+        }
+    }
+    decls.decls.push(decl)
+    true
+}
+pub struct LirStringGlobal {
+    pub symbol: String,
+    pub content: String,
+    pub encoded: String,
+    pub byteLen: Int,
+}
+pub fn lirStringGlobal(symbol: String, content: String, encoded: String, byteLen: Int) -> LirStringGlobal {
+    LirStringGlobal {symbol, content, encoded, byteLen}
+}
+pub struct LirStringPool {
+    pub entries: List<LirStringGlobal>,
+}
+pub fn lirStringPool() -> LirStringPool {
+    LirStringPool {entries: []}
+}
+/// lirStringPoolInternKnown interns a string when the caller already knows
+/// the LLVM C-string encoding and byte length. Full byte escaping belongs in a
+/// later runtime/text utility; this keeps the pool deterministic now.
+pub fn lirStringPoolInternKnown(pool: LirStringPool, content: String, encoded: String, byteLen: Int) -> String {
+    for existing in pool.entries {
+        if existing.content == content {
+            return existing.symbol
+        }
+    }
+    let symbol = "@.str." + lirIntToString(pool.entries.len())
+    pool.entries.push(lirStringGlobal(symbol, content, encoded, byteLen))
+    symbol
+}
+pub fn lirStringPoolSymbol(pool: LirStringPool, content: String) -> String {
+    for existing in pool.entries {
+        if existing.content == content {
+            return existing.symbol
+        }
+    }
+    ""
+}
+pub struct LirModule {
+    pub packageName: String,
+    pub sourcePath: String,
+    pub target: String,
+    pub typeDefs: List<LirTypeDef>,
+    pub globals: List<LirGlobal>,
+    pub functions: List<LirFunction>,
+    pub runtimeDecls: LirRuntimeDecls,
+    pub stringPool: LirStringPool,
+    pub metadata: List<String>,
+}
+pub fn lirModule(packageName: String, sourcePath: String, target: String) -> LirModule {
+    LirModule {packageName, sourcePath, target, typeDefs: [], globals: [], functions: [], runtimeDecls: lirRuntimeDecls(), stringPool: lirStringPool(), metadata: []}
+}
+// ====================================================================
+// Diagnostics and lowerer shell
+// ====================================================================
+pub struct LirDiagnostic {
+    pub kind: LirDiagnosticKind,
+    pub severity: LirSeverity,
+    pub message: String,
+    pub path: String,
+}
+pub fn lirDiagnostic(kind: LirDiagnosticKind, severity: LirSeverity, message: String, path: String) -> LirDiagnostic {
+    LirDiagnostic {kind, severity, message, path}
+}
+pub fn lirDiagnosticError(kind: LirDiagnosticKind, message: String, path: String) -> LirDiagnostic {
+    lirDiagnostic(kind, LirSeverityError, message, path)
+}
+pub fn lirDiagnosticKindName(kind: LirDiagnosticKind) -> String {
+    match kind {
+        LirDiagInvalidInput -> "invalid_input",
+        LirDiagUnsupported -> "unsupported",
+        LirDiagValidation -> "validation",
+        _ -> "unknown",
+    }
+}
+pub fn lirDiagnosticRender(d: LirDiagnostic) -> String {
+    let mut prefix = lirDiagnosticKindName(d.kind)
+    if d.path != "" {
+        prefix = prefix + " " + d.path
+    }
+    prefix + ": " + d.message
+}
+pub struct LirLowerConfig {
+    pub packageName: String,
+    pub sourcePath: String,
+    pub target: String,
+    pub emitGC: Bool,
+    pub featureGates: List<String>,
+}
+pub fn lirLowerConfig(packageName: String, sourcePath: String, target: String) -> LirLowerConfig {
+    LirLowerConfig {packageName, sourcePath, target, emitGC: false, featureGates: []}
+}
+pub struct LirLowerResult {
+    pub module: LirModule,
+    pub diagnostics: List<LirDiagnostic>,
+}
+pub fn lirLowerResultOk(module: LirModule) -> LirLowerResult {
+    LirLowerResult {module, diagnostics: []}
+}
+pub fn lirLowerUnsupported(cfg: LirLowerConfig, message: String) -> LirLowerResult {
+    let mut diags: List<LirDiagnostic> = []
+    diags.push(lirDiagnosticError(LirDiagUnsupported, message, ""))
+    LirLowerResult {module: lirModule(cfg.packageName, cfg.sourcePath, cfg.target), diagnostics: diags}
+}
+pub fn lirLowerHasErrors(result: LirLowerResult) -> Bool {
+    for d in result.diagnostics {
+        if d.severity == LirSeverityError {
+            return true
+        }
+    }
+    false
+}
+// ====================================================================
+// Renderer
+// ====================================================================
+pub fn lirGeneratedHeader() -> String {
+    "; Code generated by osty LIR Proto. DO NOT EDIT."
+}
+pub fn lirRenderModule(m: LirModule) -> String {
+    let mut lines: List<String> = []
+    let source = if m.sourcePath == "" {
+        "<unknown>"
+    } else {
+        m.sourcePath
+    }
+    lines.push(lirGeneratedHeader())
+    lines.push("; Osty: " + source)
+    lines.push("source_filename = \"" + source + "\"")
+    if m.target != "" {
+        lines.push("target triple = \"" + m.target + "\"")
+    }
+    lines.push("")
+    for td in m.typeDefs {
+        lines.push(lirRenderTypeDef(td))
+    }
+    if m.typeDefs.len() > 0 {
+        lines.push("")
+    }
+    for g in m.globals {
+        lines.push(lirRenderGlobal(g))
+    }
+    for sg in m.stringPool.entries {
+        lines.push(lirRenderStringGlobal(sg))
+    }
+    if m.globals.len() > 0 || m.stringPool.entries.len() > 0 {
+        lines.push("")
+    }
+    for decl in m.runtimeDecls.decls {
+        lines.push(lirRenderRuntimeDecl(decl))
+    }
+    if m.runtimeDecls.decls.len() > 0 {
+        lines.push("")
+    }
+    let mut i = 0
+    for fn_ in m.functions {
+        if i > 0 {
+            lines.push("")
+        }
+        lines.push(lirRenderFunction(fn_))
+        i = i + 1
+    }
+    if m.metadata.len() > 0 {
+        if m.functions.len() > 0 {
+            lines.push("")
+        }
+        for md in m.metadata {
+            lines.push(md)
+        }
+    }
+    strings.join(lirTrimTrailingBlank(lines), "\n")
+}
+pub fn lirRenderTypeDef(td: LirTypeDef) -> String {
+    td.name + " = type " + td.body
+}
+pub fn lirRenderGlobal(g: LirGlobal) -> String {
+    let init = if g.init == "" {
+        "zeroinitializer"
+    } else {
+        g.init
+    }
+    let mut parts: List<String> = [g.name, "=", "global", lirTypeString(g.typ), init]
+    for attr in g.attrs {
+        parts.push(attr)
+    }
+    strings.join(parts, " ")
+}
+pub fn lirRenderStringGlobal(g: LirStringGlobal) -> String {
+    g.symbol + " = private unnamed_addr constant [" + lirIntToString(g.byteLen) + " x i8] c\"" + g.encoded + "\""
+}
+pub fn lirRenderRuntimeDecl(d: LirRuntimeDecl) -> String {
+    let mut params: List<String> = []
+    for p in d.params {
+        params.push(lirTypeString(p))
+    }
+    if d.vararg {
+        params.push("...")
+    }
+    "declare " + lirTypeString(d.returnType) + " @" + d.symbol + "(" + strings.join(params, ", ") + ")"
+}
+pub fn lirRenderFunction(fn_: LirFunction) -> String {
+    let ret = if lirTypeIsZero(fn_.returnType) {
+        lirVoidType()
+    } else {
+        fn_.returnType
+    }
+    let linkage = if fn_.linkage == "" {
+        "define"
+    } else {
+        fn_.linkage
+    }
+    let mut head: List<String> = [linkage]
+    if fn_.callingConv != "" {
+        head.push(fn_.callingConv)
+    }
+    head.push(lirTypeString(ret))
+    head.push("@" + fn_.name + "(" + lirRenderParams(fn_.params) + ")")
+    for attr in fn_.attrs {
+        head.push(attr)
+    }
+    let mut lines: List<String> = []
+    lines.push(strings.join(head, " ") + " \{")
+    for block in fn_.blocks {
+        let label = if block.label == "" {
+            "entry"
+        } else {
+            block.label
+        }
+        lines.push(label + ":")
+        for instr in block.instrs {
+            let text = lirRenderInstr(instr)
+            if text != "" {
+                lines.push("  " + text)
+            }
+        }
+        let term = lirRenderTerm(block.term)
+        if term != "" {
+            lines.push("  " + term)
+        }
+    }
+    lines.push("\}")
+    strings.join(lines, "\n")
+}
+pub fn lirRenderParams(params: List<LirParam>) -> String {
+    let mut out: List<String> = []
+    for p in params {
+        if p.name == "" {
+            out.push(lirTypeString(p.typ))
+        } else {
+            out.push(lirTypeString(p.typ) + " " + p.name)
+        }
+    }
+    strings.join(out, ", ")
+}
+pub fn lirRenderInstr(i: LirInstr) -> String {
+    match i.kind {
+        LirInstrAlloca -> lirAppendAlign(i.dest + " = alloca " + lirTypeString(i.typ), i.align),
+        LirInstrLoad -> lirAppendAlign(i.dest + " = load " + lirTypeString(i.typ) + ", ptr " + i.ptr, i.align),
+        LirInstrStore -> lirAppendAlign("store " + lirOperandString(i.value) + ", ptr " + i.ptr, i.align),
+        LirInstrBinary -> i.dest + " = " + i.op + " " + lirTypeString(i.typ) + " " + i.left + ", " + i.right,
+        LirInstrUnary -> i.dest + " = " + i.op + " " + lirTypeString(i.typ) + " " + i.left,
+        LirInstrCall -> lirRenderCallInstr(i),
+        LirInstrCast -> i.dest + " = " + i.op + " " + lirOperandString(i.from) + " to " + lirTypeString(i.toType),
+        LirInstrInsertValue -> i.dest + " = insertvalue " + lirTypeString(i.typ) + " " + i.aggregate + ", " + lirOperandString(i.value) + ", " + lirRenderIndices(i.indices),
+        LirInstrExtractValue -> i.dest + " = extractvalue " + lirTypeString(i.typ) + " " + i.aggregate + ", " + lirRenderIndices(i.indices),
+        LirInstrGep -> lirRenderGepInstr(i),
+        LirInstrComment -> lirRenderComment(i.text),
+        _ -> "",
+    }
+}
+fn lirRenderCallInstr(i: LirInstr) -> String {
+    let ret = if lirTypeIsZero(i.returnType) {
+        lirVoidType()
+    } else {
+        i.returnType
+    }
+    let mut parts: List<String> = []
+    if i.dest != "" {
+        parts.push(i.dest)
+        parts.push("=")
+    }
+    parts.push("call")
+    if i.callingConv != "" {
+        parts.push(i.callingConv)
+    }
+    parts.push(lirTypeString(ret))
+    parts.push(i.callee + "(" + lirRenderOperands(i.args) + ")")
+    for attr in i.attrs {
+        parts.push(attr)
+    }
+    strings.join(parts, " ")
+}
+fn lirRenderGepInstr(i: LirInstr) -> String {
+    let op = if i.inbounds {
+        "getelementptr inbounds"
+    } else {
+        "getelementptr"
+    }
+    i.dest + " = " + op + " " + lirTypeString(i.elemType) + ", ptr " + i.ptr + ", " + lirRenderOperands(i.gepIndices)
+}
+fn lirRenderComment(text: String) -> String {
+    if text == "" {
+        return ""
+    }
+    if strings.slice(text, 0, 1) == ";" {
+        return text
+    }
+    "; " + text
+}
+pub fn lirRenderTerm(t: LirTerm) -> String {
+    match t.kind {
+        LirTermRet -> {
+            if lirTypeIsZero(t.retType) && t.retValue == "" {
+                return "ret void"
+            }
+            if lirTypeIsVoid(t.retType) && t.retValue == "" {
+                return "ret void"
+            }
+            "ret " + lirTypeString(t.retType) + " " + t.retValue
+        },
+        LirTermBr -> "br label %" + lirTrimLabelPercent(t.target),
+        LirTermCondBr -> "br i1 " + t.cond + ", label %" + lirTrimLabelPercent(t.thenLabel) + ", label %" + lirTrimLabelPercent(t.elseLabel),
+        LirTermSwitch -> lirRenderSwitchTerm(t),
+        LirTermUnreachable -> "unreachable",
+        _ -> "",
+    }
+}
+fn lirRenderSwitchTerm(t: LirTerm) -> String {
+    let typ = lirTypeString(t.switchType)
+    let mut out = "switch " + typ + " " + t.switchScrutinee + ", label %" + lirTrimLabelPercent(t.switchDefault) + " ["
+    for c in t.cases {
+        out = out + "\n    " + typ + " " + c.value + ", label %" + lirTrimLabelPercent(c.label)
+    }
+    if t.cases.len() > 0 {
+        out = out + "\n  "
+    }
+    out + "]"
+}
+pub fn lirRenderOperands(args: List<LirOperand>) -> String {
+    let mut out: List<String> = []
+    for arg in args {
+        out.push(lirOperandString(arg))
+    }
+    strings.join(out, ", ")
+}
+pub fn lirRenderIndices(indices: List<Int>) -> String {
+    let mut out: List<String> = []
+    for idx in indices {
+        out.push(lirIntToString(idx))
+    }
+    strings.join(out, ", ")
+}
+pub fn lirAppendAlign(line: String, align: Int) -> String {
+    if align <= 0 {
+        return line
+    }
+    line + ", align " + lirIntToString(align)
+}
+pub fn lirTrimTrailingBlank(lines: List<String>) -> List<String> {
+    let mut out: List<String> = []
+    let mut last = lines.len() - 1
+    for _i in 0..lines.len() {
+        if last < 0 {
+            break
+        }
+        if lines[last] != "" {
+            break
+        }
+        last = last - 1
+    }
+    let mut i = 0
+    for line in lines {
+        if i <= last {
+            out.push(line)
+        }
+        i = i + 1
+    }
+    out
+}
+pub fn lirTrimLabelPercent(label: String) -> String {
+    if label.len() > 0 && strings.slice(label, 0, 1) == "%" {
+        return strings.slice(label, 1, label.len())
+    }
+    label
+}
+// ====================================================================
+// Validation
+// ====================================================================
+pub fn lirValidateModule(m: LirModule) -> List<LirDiagnostic> {
+    let mut diags: List<LirDiagnostic> = []
+    let mut tdIndex = 0
+    for td in m.typeDefs {
+        let path = "typeDefs[" + lirIntToString(tdIndex) + "]"
+        if td.name == "" {
+            lirDiagPush(diags, "missing name", path)
+        }
+        if td.body == "" {
+            lirDiagPush(diags, "missing body", path)
+        }
+        tdIndex = tdIndex + 1
+    }
+    let mut globIndex = 0
+    for g in m.globals {
+        let path = "globals[" + lirIntToString(globIndex) + "]"
+        if g.name == "" {
+            lirDiagPush(diags, "missing name", path)
+        }
+        lirValidateNonVoidType(diags, g.typ, path + ".typ")
+        globIndex = globIndex + 1
+    }
+    let mut declIndex = 0
+    for decl in m.runtimeDecls.decls {
+        lirValidateRuntimeDecl(diags, decl, "runtimeDecls[" + lirIntToString(declIndex) + "]")
+        declIndex = declIndex + 1
+    }
+    let mut fnIndex = 0
+    for fn_ in m.functions {
+        lirValidateFunction(diags, fn_, "functions[" + lirIntToString(fnIndex) + "]")
+        fnIndex = fnIndex + 1
+    }
+    diags
+}
+fn lirDiagPush(diags: List<LirDiagnostic>, message: String, path: String) {
+    diags.push(lirDiagnosticError(LirDiagValidation, message, path))
+}
+fn lirValidateRuntimeDecl(diags: List<LirDiagnostic>, decl: LirRuntimeDecl, path: String) {
+    if decl.symbol == "" {
+        lirDiagPush(diags, "missing symbol", path)
+    }
+    lirValidateType(diags, decl.returnType, true, path + ".return")
+    let mut i = 0
+    for p in decl.params {
+        lirValidateNonVoidType(diags, p, path + ".params[" + lirIntToString(i) + "]")
+        i = i + 1
+    }
+}
+fn lirValidateFunction(diags: List<LirDiagnostic>, fn_: LirFunction, path: String) {
+    if fn_.name == "" {
+        lirDiagPush(diags, "missing name", path)
+    }
+    if !(lirTypeIsZero(fn_.returnType)) {
+        lirValidateType(diags, fn_.returnType, true, path + ".return")
+    }
+    let mut paramIndex = 0
+    for p in fn_.params {
+        lirValidateNonVoidType(diags, p.typ, path + ".params[" + lirIntToString(paramIndex) + "]")
+        paramIndex = paramIndex + 1
+    }
+    if fn_.blocks.len() == 0 {
+        lirDiagPush(diags, "missing blocks", path)
+        return
+    }
+    lirValidateDuplicateBlockLabels(diags, fn_, path)
+    let mut blockIndex = 0
+    for block in fn_.blocks {
+        lirValidateBlock(diags, block, path + ".blocks[" + lirIntToString(blockIndex) + "]")
+        blockIndex = blockIndex + 1
+    }
+}
+fn lirValidateDuplicateBlockLabels(diags: List<LirDiagnostic>, fn_: LirFunction, path: String) {
+    let mut i = 0
+    for a in fn_.blocks {
+        let aLabel = if a.label == "" {
+            "entry"
+        } else {
+            a.label
+        }
+        let mut j = 0
+        for b in fn_.blocks {
+            if j > i {
+                let bLabel = if b.label == "" {
+                    "entry"
+                } else {
+                    b.label
+                }
+                if aLabel == bLabel {
+                    lirDiagPush(diags, "duplicate block label `" + aLabel + "`", path + ".blocks[" + lirIntToString(j) + "]")
+                }
+            }
+            j = j + 1
+        }
+        i = i + 1
+    }
+}
+fn lirValidateBlock(diags: List<LirDiagnostic>, block: LirBlock, path: String) {
+    let mut instrIndex = 0
+    for instr in block.instrs {
+        lirValidateInstr(diags, instr, path + ".instrs[" + lirIntToString(instrIndex) + "]")
+        instrIndex = instrIndex + 1
+    }
+    if block.term.kind == LirTermInvalid {
+        lirDiagPush(diags, "missing terminator", path)
+    } else {
+        lirValidateTerm(diags, block.term, path + ".term")
+    }
+}
+fn lirValidateInstr(diags: List<LirDiagnostic>, i: LirInstr, path: String) {
+    match i.kind {
+        LirInstrAlloca -> {
+            lirValidateName(diags, i.dest, "missing dest", path + ".dest")
+            lirValidateNonVoidType(diags, i.typ, path + ".typ")
+            lirValidateAlign(diags, i.align, path + ".align")
+        },
+        LirInstrLoad -> {
+            lirValidateName(diags, i.dest, "missing dest", path + ".dest")
+            lirValidateNonVoidType(diags, i.typ, path + ".typ")
+            lirValidateName(diags, i.ptr, "missing ptr", path + ".ptr")
+            lirValidateAlign(diags, i.align, path + ".align")
+        },
+        LirInstrStore -> {
+            lirValidateOperand(diags, i.value, path + ".value")
+            lirValidateName(diags, i.ptr, "missing ptr", path + ".ptr")
+            lirValidateAlign(diags, i.align, path + ".align")
+        },
+        LirInstrBinary -> {
+            lirValidateName(diags, i.dest, "missing dest", path + ".dest")
+            lirValidateName(diags, i.op, "missing op", path + ".op")
+            lirValidateNonVoidType(diags, i.typ, path + ".typ")
+            lirValidateName(diags, i.left, "missing left operand", path + ".left")
+            lirValidateName(diags, i.right, "missing right operand", path + ".right")
+        },
+        LirInstrUnary -> {
+            lirValidateName(diags, i.dest, "missing dest", path + ".dest")
+            lirValidateName(diags, i.op, "missing op", path + ".op")
+            lirValidateNonVoidType(diags, i.typ, path + ".typ")
+            lirValidateName(diags, i.left, "missing value", path + ".value")
+        },
+        LirInstrCall -> {
+            if !(lirTypeIsZero(i.returnType)) {
+                lirValidateType(diags, i.returnType, true, path + ".return")
+            }
+            lirValidateName(diags, i.callee, "missing callee", path + ".callee")
+            let mut ai = 0
+            for arg in i.args {
+                lirValidateOperand(diags, arg, path + ".args[" + lirIntToString(ai) + "]")
+                ai = ai + 1
+            }
+        },
+        LirInstrCast -> {
+            lirValidateName(diags, i.dest, "missing dest", path + ".dest")
+            lirValidateName(diags, i.op, "missing op", path + ".op")
+            lirValidateOperand(diags, i.from, path + ".from")
+            lirValidateNonVoidType(diags, i.toType, path + ".to")
+        },
+        LirInstrInsertValue -> {
+            lirValidateName(diags, i.dest, "missing dest", path + ".dest")
+            lirValidateNonVoidType(diags, i.typ, path + ".typ")
+            lirValidateName(diags, i.aggregate, "missing aggregate", path + ".aggregate")
+            lirValidateOperand(diags, i.value, path + ".value")
+            lirValidateIndices(diags, i.indices, path + ".indices")
+        },
+        LirInstrExtractValue -> {
+            lirValidateName(diags, i.dest, "missing dest", path + ".dest")
+            lirValidateNonVoidType(diags, i.typ, path + ".typ")
+            lirValidateName(diags, i.aggregate, "missing aggregate", path + ".aggregate")
+            lirValidateIndices(diags, i.indices, path + ".indices")
+        },
+        LirInstrGep -> {
+            lirValidateName(diags, i.dest, "missing dest", path + ".dest")
+            lirValidateNonVoidType(diags, i.elemType, path + ".elemType")
+            lirValidateName(diags, i.ptr, "missing ptr", path + ".ptr")
+            if i.gepIndices.len() == 0 {
+                lirDiagPush(diags, "missing GEP indices", path + ".gepIndices")
+            }
+            let mut gi = 0
+            for idx in i.gepIndices {
+                lirValidateOperand(diags, idx, path + ".gepIndices[" + lirIntToString(gi) + "]")
+                gi = gi + 1
+            }
+        },
+        LirInstrComment -> {
+        },
+        _ -> lirDiagPush(diags, "invalid instruction kind", path),
+    }
+}
+fn lirValidateTerm(diags: List<LirDiagnostic>, t: LirTerm, path: String) {
+    match t.kind {
+        LirTermRet -> {
+            if lirTypeIsZero(t.retType) {
+                if t.retValue != "" {
+                    lirDiagPush(diags, "return value without return type", path + ".retValue")
+                }
+            } else {
+                lirValidateType(diags, t.retType, false, path + ".retType")
+                lirValidateName(diags, t.retValue, "missing return value", path + ".retValue")
+            }
+        },
+        LirTermBr -> lirValidateName(diags, t.target, "missing target", path + ".target"),
+        LirTermCondBr -> {
+            lirValidateName(diags, t.cond, "missing condition", path + ".cond")
+            lirValidateName(diags, t.thenLabel, "missing then target", path + ".then")
+            lirValidateName(diags, t.elseLabel, "missing else target", path + ".else")
+        },
+        LirTermSwitch -> {
+            lirValidateNonVoidType(diags, t.switchType, path + ".type")
+            lirValidateName(diags, t.switchScrutinee, "missing scrutinee", path + ".scrutinee")
+            lirValidateName(diags, t.switchDefault, "missing default", path + ".default")
+            let mut i = 0
+            for c in t.cases {
+                if c.value == "" {
+                    lirDiagPush(diags, "missing case value", path + ".cases[" + lirIntToString(i) + "].value")
+                }
+                if c.label == "" {
+                    lirDiagPush(diags, "missing case label", path + ".cases[" + lirIntToString(i) + "].label")
+                }
+                i = i + 1
+            }
+        },
+        LirTermUnreachable -> {
+        },
+        _ -> lirDiagPush(diags, "invalid terminator kind", path),
+    }
+}
+fn lirValidateOperand(diags: List<LirDiagnostic>, op: LirOperand, path: String) {
+    lirValidateNonVoidType(diags, op.typ, path + ".typ")
+    lirValidateName(diags, op.value, "missing value", path + ".value")
+}
+fn lirValidateType(diags: List<LirDiagnostic>, typ: LirType, allowVoid: Bool, path: String) {
+    if lirTypeIsZero(typ) {
+        lirDiagPush(diags, "missing type", path)
+        return
+    }
+    if typ.llvm == "" {
+        lirDiagPush(diags, "missing LLVM spelling", path)
+        return
+    }
+    match typ.className {
+        LirTypeUnknown -> {
+        },
+        LirTypeVoid -> {
+            if typ.llvm != "void" {
+                lirDiagPush(diags, "class void has LLVM spelling `" + typ.llvm + "`", path)
+            }
+            if !(allowVoid) {
+                lirDiagPush(diags, "void is not allowed here", path)
+            }
+        },
+        LirTypeInt -> {
+            if !(lirIsIntegerLLVMType(typ.llvm)) {
+                lirDiagPush(diags, "class int has LLVM spelling `" + typ.llvm + "`", path)
+            }
+        },
+        LirTypeFloat -> {
+            if !(lirIsFloatLLVMType(typ.llvm)) {
+                lirDiagPush(diags, "class float has LLVM spelling `" + typ.llvm + "`", path)
+            }
+        },
+        LirTypePtr -> {
+            if typ.llvm != "ptr" {
+                lirDiagPush(diags, "class ptr has LLVM spelling `" + typ.llvm + "`", path)
+            }
+        },
+        LirTypeAggregate -> {
+            if !(lirIsAggregateLLVMType(typ.llvm)) {
+                lirDiagPush(diags, "class aggregate has LLVM spelling `" + typ.llvm + "`", path)
+            }
+        },
+        LirTypeFunction -> {
+            if !(strings.contains(typ.llvm, "(")) {
+                lirDiagPush(diags, "class function has LLVM spelling `" + typ.llvm + "`", path)
+            }
+        },
+    }
+}
+fn lirValidateNonVoidType(diags: List<LirDiagnostic>, typ: LirType, path: String) {
+    lirValidateType(diags, typ, false, path)
+}
+fn lirValidateName(diags: List<LirDiagnostic>, text: String, message: String, path: String) {
+    if text == "" {
+        lirDiagPush(diags, message, path)
+    }
+}
+fn lirValidateAlign(diags: List<LirDiagnostic>, align: Int, path: String) {
+    if align < 0 {
+        lirDiagPush(diags, "negative alignment", path)
+    }
+}
+fn lirValidateIndices(diags: List<LirDiagnostic>, indices: List<Int>, path: String) {
+    if indices.len() == 0 {
+        lirDiagPush(diags, "missing indices", path)
+        return
+    }
+    let mut i = 0
+    for idx in indices {
+        if idx < 0 {
+            lirDiagPush(diags, "negative index", path + "[" + lirIntToString(i) + "]")
+        }
+        i = i + 1
+    }
+}
+// ====================================================================
+// Type and ABI planning helpers
+// ====================================================================
+pub fn lirLowerPrimitiveTypeName(name: String) -> LirType {
+    if name == "Int" {
+        return lirIntType(64)
+    }
+    if name == "Int8" {
+        return lirIntType(8)
+    }
+    if name == "Int16" {
+        return lirIntType(16)
+    }
+    if name == "Int32" {
+        return lirIntType(32)
+    }
+    if name == "Int64" {
+        return lirIntType(64)
+    }
+    if name == "UInt8" {
+        return lirIntType(8)
+    }
+    if name == "UInt16" {
+        return lirIntType(16)
+    }
+    if name == "UInt32" {
+        return lirIntType(32)
+    }
+    if name == "UInt64" {
+        return lirIntType(64)
+    }
+    if name == "Byte" {
+        return lirIntType(8)
+    }
+    if name == "Bool" {
+        return lirIntType(1)
+    }
+    if name == "Char" {
+        return lirIntType(32)
+    }
+    if name == "Float" {
+        return lirFloatType("double")
+    }
+    if name == "Float32" {
+        return lirFloatType("float")
+    }
+    if name == "Float64" {
+        return lirFloatType("double")
+    }
+    if name == "String" {
+        return lirPtrType()
+    }
+    if name == "Bytes" {
+        return lirPtrType()
+    }
+    if name == "RawPtr" {
+        return lirPtrType()
+    }
+    if name == "Unit" {
+        return lirVoidType()
+    }
+    if name == "Never" {
+        return lirVoidType()
+    }
+    lirTypeInvalid()
+}
+pub fn lirPrimitiveTypeSupported(name: String) -> Bool {
+    !(lirTypeIsZero(lirLowerPrimitiveTypeName(name)))
+}
+pub fn lirPrimitiveTypeIsUnsigned(name: String) -> Bool {
+    name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Byte"
+}
+pub fn lirPrimitiveTypeIsScalarByValue(name: String) -> Bool {
+    let typ = lirLowerPrimitiveTypeName(name)
+    if typ.className == LirTypeInt {
+        return true
+    }
+    if typ.className == LirTypeFloat {
+        return true
+    }
+    if typ.className == LirTypePtr {
+        return true
+    }
+    false
+}
+pub fn lirIsCanonicalScalarLLVMType(llvm: String) -> Bool {
+    if llvm == "ptr" {
+        return true
+    }
+    if lirIsIntegerLLVMType(llvm) {
+        return true
+    }
+    if lirIsFloatLLVMType(llvm) {
+        return true
+    }
+    false
+}
+pub fn lirIsIntegerLLVMType(llvm: String) -> Bool {
+    if llvm == "i1" {
+        return true
+    }
+    if llvm == "i8" {
+        return true
+    }
+    if llvm == "i16" {
+        return true
+    }
+    if llvm == "i32" {
+        return true
+    }
+    if llvm == "i64" {
+        return true
+    }
+    if llvm == "i128" {
+        return true
+    }
+    false
+}
+pub fn lirIntegerBitWidth(llvm: String) -> Int {
+    if llvm == "i1" {
+        return 1
+    }
+    if llvm == "i8" {
+        return 8
+    }
+    if llvm == "i16" {
+        return 16
+    }
+    if llvm == "i32" {
+        return 32
+    }
+    if llvm == "i64" {
+        return 64
+    }
+    if llvm == "i128" {
+        return 128
+    }
+    0
+}
+pub fn lirIsFloatLLVMType(llvm: String) -> Bool {
+    if llvm == "float" {
+        return true
+    }
+    if llvm == "double" {
+        return true
+    }
+    if llvm == "fp128" {
+        return true
+    }
+    false
+}
+pub fn lirFloatBitWidth(llvm: String) -> Int {
+    if llvm == "float" {
+        return 32
+    }
+    if llvm == "double" {
+        return 64
+    }
+    if llvm == "fp128" {
+        return 128
+    }
+    0
+}
+pub fn lirIsAggregateLLVMType(llvm: String) -> Bool {
+    if llvm == "" {
+        return false
+    }
+    if strings.slice(llvm, 0, 1) == "%" {
+        return true
+    }
+    if strings.slice(llvm, 0, 1) == "\{" {
+        return true
+    }
+    if strings.slice(llvm, 0, 1) == "[" {
+        return true
+    }
+    false
+}
+/// lirPlanScalarCastOpcode returns the LLVM opcode needed to convert between
+/// scalar LLVM types. Empty means either no conversion is needed or the pair is
+/// unsupported by this scalar-only planner.
+pub fn lirPlanScalarCastOpcode(from: LirType, to: LirType, unsigned: Bool) -> String {
+    if from.llvm == to.llvm {
+        return ""
+    }
+    if from.className == LirTypeInt && to.className == LirTypeInt {
+        let fb = lirIntegerBitWidth(from.llvm)
+        let tb = lirIntegerBitWidth(to.llvm)
+        if fb == 0 || tb == 0 {
+            return ""
+        }
+        if fb < tb {
+            if unsigned {
+                return "zext"
+            }
+            return "sext"
+        }
+        if fb > tb {
+            return "trunc"
+        }
+        return ""
+    }
+    if from.className == LirTypeInt && to.className == LirTypeFloat {
+        if unsigned {
+            return "uitofp"
+        }
+        return "sitofp"
+    }
+    if from.className == LirTypeFloat && to.className == LirTypeInt {
+        if unsigned {
+            return "fptoui"
+        }
+        return "fptosi"
+    }
+    if from.className == LirTypeFloat && to.className == LirTypeFloat {
+        let fb = lirFloatBitWidth(from.llvm)
+        let tb = lirFloatBitWidth(to.llvm)
+        if fb == 0 || tb == 0 {
+            return ""
+        }
+        if fb < tb {
+            return "fpext"
+        }
+        if fb > tb {
+            return "fptrunc"
+        }
+        return ""
+    }
+    if from.className == LirTypePtr && to.className == LirTypePtr {
+        return "bitcast"
+    }
+    ""
+}
+/// lirPlanSameFamilyCoercionOpcode is narrower than explicit casts: it only
+/// permits integer resize and float resize. Cross-family conversion must come
+/// from MIR as an explicit cast node.
+pub fn lirPlanSameFamilyCoercionOpcode(from: LirType, to: LirType, unsigned: Bool) -> String {
+    if from.llvm == to.llvm {
+        return ""
+    }
+    if from.className == LirTypeInt && to.className == LirTypeInt {
+        return lirPlanScalarCastOpcode(from, to, unsigned)
+    }
+    if from.className == LirTypeFloat && to.className == LirTypeFloat {
+        return lirPlanScalarCastOpcode(from, to, unsigned)
+    }
+    ""
+}
+pub fn lirCastInstrForCoercion(dest: String, from: LirOperand, to: LirType, unsigned: Bool) -> LirInstr {
+    let op = lirPlanSameFamilyCoercionOpcode(from.typ, to, unsigned)
+    if op == "" {
+        return lirInstrInvalid()
+    }
+    lirCast(dest, op, from, to)
+}
+pub fn lirRuntimeIOWriteDecl() -> LirRuntimeDecl {
+    lirRuntimeDecl("osty_rt_io_write", lirVoidType(), [lirPtrType(), lirIntType(1), lirIntType(1)], false)
+}
+pub fn lirRuntimeToStringDecl(symbol: String, argType: LirType) -> LirRuntimeDecl {
+    lirRuntimeDecl(symbol, lirPtrType(), [argType], false)
+}
+pub fn lirRuntimeToStringSymbolForType(typ: LirType) -> String {
+    if typ.llvm == "i64" {
+        return "osty_rt_int_to_string"
+    }
+    if typ.llvm == "double" {
+        return "osty_rt_float_to_string"
+    }
+    if typ.llvm == "i1" {
+        return "osty_rt_bool_to_string"
+    }
+    if typ.llvm == "i32" {
+        return "osty_rt_char_to_string"
+    }
+    if typ.llvm == "i8" {
+        return "osty_rt_byte_to_string"
+    }
+    ""
+}
+// ====================================================================
+// Aggregate and projection planning helpers
+// ====================================================================
+pub struct LirProjectionStep {
+    pub kind: LirProjectionKind,
+    pub index: Int,
+    pub name: String,
+    pub typ: LirType,
+}
+pub fn lirFieldProjection(index: Int, name: String, typ: LirType) -> LirProjectionStep {
+    LirProjectionStep {kind: LirProjField, index, name, typ}
+}
+pub fn lirTupleProjection(index: Int, typ: LirType) -> LirProjectionStep {
+    LirProjectionStep {kind: LirProjTuple, index, name: "", typ}
+}
+pub fn lirVariantProjection(index: Int, name: String, typ: LirType) -> LirProjectionStep {
+    LirProjectionStep {kind: LirProjVariant, index, name, typ}
+}
+pub fn lirIndexProjection(index: Int, typ: LirType) -> LirProjectionStep {
+    LirProjectionStep {kind: LirProjIndex, index, name: "", typ}
+}
+pub struct LirProjectedStorePlan {
+    pub rootPtr: String,
+    pub rootType: LirType,
+    pub leafValue: LirOperand,
+    pub steps: List<LirProjectionStep>,
+}
+pub fn lirProjectedStorePlan(rootPtr: String, rootType: LirType, leafValue: LirOperand, steps: List<LirProjectionStep>) -> LirProjectedStorePlan {
+    LirProjectedStorePlan {rootPtr, rootType, leafValue, steps}
+}
+pub fn lirProjectionStepIndex(step: LirProjectionStep) -> Int {
+    step.index
+}
+pub fn lirProjectionPathIndices(steps: List<LirProjectionStep>) -> List<Int> {
+    let mut out: List<Int> = []
+    for step in steps {
+        out.push(lirProjectionStepIndex(step))
+    }
+    out
+}
+pub fn lirProjectionPathText(steps: List<LirProjectionStep>) -> String {
+    let mut parts: List<String> = []
+    for step in steps {
+        match step.kind {
+            LirProjField -> {
+                if step.name == "" {
+                    parts.push(".field" + lirIntToString(step.index))
+                } else {
+                    parts.push("." + step.name)
+                }
+            },
+            LirProjTuple -> parts.push("." + lirIntToString(step.index)),
+            LirProjVariant -> parts.push("@" + step.name),
+            LirProjIndex -> parts.push("[" + lirIntToString(step.index) + "]"),
+            LirProjDeref -> parts.push(".*"),
+            _ -> parts.push(".?"),
+        }
+    }
+    strings.join(parts, "")
+}
+pub fn lirTupleTypeNameFromTypes(types: List<LirType>) -> String {
+    let mut tags: List<String> = []
+    for typ in types {
+        tags.push(lirLLVMTypeTag(typ.llvm))
+    }
+    "%osty.tuple." + strings.join(tags, ".")
+}
+pub fn lirTupleTypeBody(types: List<LirType>) -> String {
+    let mut parts: List<String> = []
+    for typ in types {
+        parts.push(lirTypeString(typ))
+    }
+    "\{ " + strings.join(parts, ", ") + " \}"
+}
+pub fn lirNamedTypeLayoutKey(packageName: String, builtin: Bool, name: String) -> String {
+    if builtin {
+        return "builtin:" + name
+    }
+    if packageName == "" {
+        return name
+    }
+    packageName + "." + name
+}
+pub fn lirLLVMTypeTag(llvm: String) -> String {
+    let mut out = llvm
+    out = strings.replaceAll(out, "%", "named_")
+    out = strings.replaceAll(out, " ", "_")
+    out = strings.replaceAll(out, "*", "ptr")
+    out = strings.replaceAll(out, ",", "_")
+    out = strings.replaceAll(out, "\{", "struct_")
+    out = strings.replaceAll(out, "\}", "")
+    out = strings.replaceAll(out, "[", "array_")
+    out = strings.replaceAll(out, "]", "")
+    if out == "" {
+        return "unknown"
+    }
+    out
+}
+// ====================================================================
+// MIR -> LIR Proto lowering, self-host surface
+// ====================================================================
+pub struct LirLocalSlot {
+    pub id: Int,
+    pub slot: String,
+    pub typ: LirType,
+}
+pub struct LirBlockLabel {
+    pub id: Int,
+    pub label: String,
+}
+pub struct LirMirFunctionLowerer {
+    pub cfg: LirLowerConfig,
+    pub mirModule: MirModule,
+    pub fn_: MirFunction,
+    pub out: LirModule,
+    pub diagnostics: List<LirDiagnostic>,
+    pub prologue: List<LirInstr>,
+    pub instrs: List<LirInstr>,
+    pub slots: List<LirLocalSlot>,
+    pub labels: List<LirBlockLabel>,
+    pub temp: Int,
+}
+pub fn lirLowerMirModule(cfg: LirLowerConfig, mir: MirModule) -> LirLowerResult {
+    let packageName = if cfg.packageName == "" {
+        mir.packageName
+    } else {
+        cfg.packageName
+    }
+    let mut out = lirModule(packageName, cfg.sourcePath, cfg.target)
+    let mut diags: List<LirDiagnostic> = []
+    if mir.globals.len() > 0 {
+        diags.push(lirDiagnosticError(LirDiagUnsupported, "MIR globals are not implemented in LIR Proto lowering", "module.globals"))
+    }
+    if mir.uses.len() > 0 {
+        diags.push(lirDiagnosticError(LirDiagUnsupported, "MIR uses/imports are not implemented in LIR Proto lowering", "module.uses"))
+    }
+    for fn_ in mir.functions {
+        let lowered = lirLowerMirFunction(cfg, mir, out, fn_)
+        for d in lowered.diagnostics {
+            diags.push(d)
+        }
+        if !(lirLowerHasErrors(lowered)) {
+            if lowered.module.functions.len() > 0 {
+                out.functions.push(lowered.module.functions[0])
+            }
+            for td in lowered.module.typeDefs {
+                lirModuleDeclareTypeDef(out, td)
+            }
+            for decl in lowered.module.runtimeDecls.decls {
+                lirRuntimeDeclsDeclare(out.runtimeDecls, decl)
+            }
+            for sg in lowered.module.stringPool.entries {
+                lirStringPoolInternKnown(out.stringPool, sg.content, sg.encoded, sg.byteLen)
+            }
+        }
+    }
+    for d in lirValidateModule(out) {
+        diags.push(d)
+    }
+    LirLowerResult {module: out, diagnostics: diags}
+}
+pub fn lirLowerMirFunction(cfg: LirLowerConfig, mir: MirModule, module: LirModule, fn_: MirFunction) -> LirLowerResult {
+    let mut l = LirMirFunctionLowerer {cfg, mirModule: mir, fn_, out: lirModule(module.packageName, module.sourcePath, module.target), diagnostics: [], prologue: [], instrs: [], slots: [], labels: [], temp: 0}
+    l.out.typeDefs = module.typeDefs
+    l.out.runtimeDecls = module.runtimeDecls
+    l.out.stringPool = module.stringPool
+    let name = lirRenderedMirFunctionName(fn_)
+    if name == "" {
+        lirLowerError(l, LirDiagInvalidInput, "MIR function has empty name", "function.name")
+    }
+    if fn_.isExternal {
+        lirLowerError(l, LirDiagUnsupported, "external MIR functions are not implemented in LIR Proto lowering", name)
+    }
+    if fn_.isIntrinsic {
+        lirLowerError(l, LirDiagUnsupported, "intrinsic MIR functions are not implemented in LIR Proto lowering", name)
+    }
+    if fn_.blocks.len() == 0 {
+        lirLowerError(l, LirDiagUnsupported, "MIR function has no blocks", name)
+    }
+    lirInitMirBlockLabels(l)
+    let ret = lirLowerMirType(l, fn_.returnType)
+    let mut params: List<LirParam> = []
+    for id in fn_.params {
+        let loc = mirFunctionLocal(fn_, id)
+        if loc.id < 0 {
+            lirLowerError(l, LirDiagInvalidInput, "param local out of range: " + lirIntToString(id), name)
+            continue
+        }
+        let typ = lirLowerMirType(l, loc.typ)
+        if lirTypeIsZero(typ) || lirTypeIsVoid(typ) {
+            lirLowerError(l, LirDiagUnsupported, "unsupported param type `" + loc.typ + "`", name)
+            continue
+        }
+        params.push(lirParam(lirMirParamName(id), typ))
+    }
+    lirLowerMirLocals(l)
+    let mut blocks: List<LirBlock> = []
+    for bb in lirOrderedMirBlocks(fn_) {
+        l.instrs = []
+        if bb.id == fn_.entry {
+            for p in l.prologue {
+                l.instrs.push(p)
+            }
+        }
+        for instr in bb.instrs {
+            lirLowerMirInstr(l, instr)
+        }
+        let term = lirLowerMirTerm(l, bb.term, ret)
+        blocks.push(LirBlock {label: lirLabelForMirBlock(l, bb.id), instrs: l.instrs, term})
+    }
+    if l.diagnostics.len() == 0 {
+        let mut outFn = lirFunction(name, ret)
+        outFn.params = params
+        outFn.blocks = blocks
+        if fn_.cAbi {
+            outFn.callingConv = "ccc"
+        }
+        l.out.functions.push(outFn)
+    }
+    LirLowerResult {module: l.out, diagnostics: l.diagnostics}
+}
+fn lirLowerError(l: LirMirFunctionLowerer, kind: LirDiagnosticKind, message: String, path: String) {
+    l.diagnostics.push(lirDiagnosticError(kind, message, path))
+}
+fn lirRenderedMirFunctionName(fn_: MirFunction) -> String {
+    if fn_.exportSymbol != "" {
+        return fn_.exportSymbol
+    }
+    fn_.name
+}
+fn lirInitMirBlockLabels(l: LirMirFunctionLowerer) {
+    for bb in l.fn_.blocks {
+        let label = if bb.id == l.fn_.entry {
+            "entry"
+        } else {
+            "bb" + lirIntToString(bb.id)
+        }
+        l.labels.push(LirBlockLabel {id: bb.id, label})
+    }
+}
+fn lirLabelForMirBlock(l: LirMirFunctionLowerer, id: Int) -> String {
+    for label in l.labels {
+        if label.id == id {
+            return label.label
+        }
+    }
+    ""
+}
+fn lirOrderedMirBlocks(fn_: MirFunction) -> List<MirBasicBlock> {
+    let mut out: List<MirBasicBlock> = []
+    for bb in fn_.blocks {
+        if bb.id == fn_.entry {
+            out.push(bb)
+            break
+        }
+    }
+    for bb in fn_.blocks {
+        if bb.id != fn_.entry {
+            out.push(bb)
+        }
+    }
+    out
+}
+fn lirLowerMirLocals(l: LirMirFunctionLowerer) {
+    for loc in l.fn_.locals {
+        let typ = lirLowerMirType(l, loc.typ)
+        if lirTypeIsZero(typ) {
+            lirLowerError(l, LirDiagUnsupported, "unsupported local type `" + loc.typ + "`", "local." + loc.name)
+            continue
+        }
+        if lirTypeIsVoid(typ) {
+            continue
+        }
+        let slot = lirMirLocalSlotName(loc.id)
+        l.slots.push(LirLocalSlot {id: loc.id, slot, typ})
+        l.prologue.push(lirAlloca(slot, typ, 0))
+        if loc.isParam {
+            l.prologue.push(lirStore(lirOperand(typ, lirMirParamName(loc.id)), slot, 0))
+        }
+    }
+}
+fn lirMirLocalSlot(l: LirMirFunctionLowerer, id: Int) -> LirLocalSlot {
+    for slot in l.slots {
+        if slot.id == id {
+            return slot
+        }
+    }
+    LirLocalSlot {id: -1, slot: "", typ: lirTypeInvalid()}
+}
+fn lirMirLocalSlotName(id: Int) -> String {
+    "%l" + lirIntToString(id)
+}
+fn lirMirParamName(id: Int) -> String {
+    "%p" + lirIntToString(id)
+}
+fn lirFresh(l: LirMirFunctionLowerer) -> String {
+    let name = "%t" + lirIntToString(l.temp)
+    l.temp = l.temp + 1
+    name
+}
+fn lirLowerMirInstr(l: LirMirFunctionLowerer, instr: MirInstr) {
+    match instr.kind {
+        MirInstrAssign -> lirLowerMirAssign(l, instr),
+        MirInstrCall -> lirLowerMirCall(l, instr),
+        MirInstrIntrinsic -> lirLowerMirIntrinsic(l, instr),
+        MirInstrStorageLive -> {
+        },
+        MirInstrStorageDead -> {
+        },
+        _ -> lirLowerError(l, LirDiagUnsupported, "unsupported MIR instruction kind", "instr"),
+    }
+}
+fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
+    let destLoc = mirFunctionLocal(l.fn_, instr.dest.local)
+    if destLoc.id < 0 {
+        lirLowerError(l, LirDiagInvalidInput, "assign destination local out of range", "assign.dest")
+        return
+    }
+    let destType = lirLowerMirType(l, destLoc.typ)
+    if lirTypeIsZero(destType) {
+        lirLowerError(l, LirDiagUnsupported, "unsupported assign destination type `" + destLoc.typ + "`", "assign.dest")
+        return
+    }
+    if mirPlaceHasProjections(instr.dest) {
+        let leafTypeName = lirMirProjectionLeafType(instr.dest.projections)
+        let leafType = lirLowerMirType(l, leafTypeName)
+        let value = lirLowerMirRValue(l, instr.src, leafTypeName, leafType)
+        lirStoreProjectedMirValue(l, instr.dest, destLoc, destType, value, instr.src.typ, "projected assign")
+        return
+    }
+    let mut value = lirLowerMirRValue(l, instr.src, destLoc.typ, destType)
+    if lirTypeIsVoid(destType) {
+        return
+    }
+    if value.typ.llvm != destType.llvm {
+        value = lirCoerceMirOperand(l, value, instr.src.typ, destType, "assign")
+        if value.value == "" {
+            return
+        }
+    }
+    let slot = lirMirLocalSlot(l, destLoc.id)
+    if slot.slot == "" {
+        lirLowerError(l, LirDiagValidation, "destination local has no LIR slot", "assign.dest")
+        return
+    }
+    l.instrs.push(lirStore(value, slot.slot, 0))
+}
+fn lirStoreProjectedMirValue(l: LirMirFunctionLowerer, place: MirPlace, root: MirLocal, rootType: LirType, value: LirOperand, valueMirType: String, context: String) {
+    if rootType.className != LirTypeAggregate {
+        lirLowerError(l, LirDiagUnsupported, context + " requires aggregate root", context)
+        return
+    }
+    let leafTypeName = lirMirProjectionLeafType(place.projections)
+    let leafType = lirLowerMirType(l, leafTypeName)
+    let mut stored = value
+    if stored.typ.llvm != leafType.llvm {
+        stored = lirCoerceMirOperand(l, stored, valueMirType, leafType, context)
+        if stored.value == "" {
+            return
+        }
+    }
+    let slot = lirMirLocalSlot(l, root.id)
+    if slot.slot == "" {
+        lirLowerError(l, LirDiagValidation, "projected root local has no LIR slot", context)
+        return
+    }
+    let base = lirFresh(l)
+    l.instrs.push(lirLoad(base, rootType, slot.slot, 0))
+    let mut frames: List<LirProjectionStep> = []
+    let mut current = lirOperand(rootType, base)
+    let mut idx = 0
+    for proj in place.projections {
+        if current.typ.className != LirTypeAggregate {
+            lirLowerError(l, LirDiagUnsupported, context + " projection on non-aggregate type", context)
+            return
+        }
+        let step = lirProjectionStepFromMir(l, proj)
+        if step.kind == LirProjInvalid {
+            lirLowerError(l, LirDiagUnsupported, context + " unsupported projection", context)
+            return
+        }
+        frames.push(step)
+        if idx < place.projections.len() - 1 {
+            let next = lirFresh(l)
+            l.instrs.push(lirExtractValue(next, current.typ, current.value, [step.index]))
+            current = lirOperand(step.typ, next)
+        }
+        idx = idx + 1
+    }
+    let mut rebuilt = stored
+    let mut i = frames.len() - 1
+    for _j in 0..frames.len() {
+        if i < 0 {
+            break
+        }
+        let fr = frames[i]
+        let aggregateType = if i == 0 {
+            rootType
+        } else {
+            frames[i - 1].typ
+        }
+        let dest = lirFresh(l)
+        let aggregateValue = if i == 0 {
+            base
+        } else {
+            current.value
+        }
+        l.instrs.push(lirInsertValue(dest, aggregateType, aggregateValue, rebuilt, [fr.index]))
+        rebuilt = lirOperand(aggregateType, dest)
+        i = i - 1
+    }
+    l.instrs.push(lirStore(rebuilt, slot.slot, 0))
+}
+fn lirProjectionStepFromMir(l: LirMirFunctionLowerer, proj: MirProjection) -> LirProjectionStep {
+    let typ = lirLowerMirType(l, proj.typ)
+    match proj.kind {
+        MirProjField -> lirFieldProjection(proj.index, proj.name, typ),
+        MirProjTuple -> lirTupleProjection(proj.index, typ),
+        MirProjVariant -> lirVariantProjection(proj.index, proj.name, typ),
+        MirProjIndex -> lirIndexProjection(proj.indexConst, typ),
+        _ -> LirProjectionStep {kind: LirProjInvalid, index: 0, name: "", typ: lirTypeInvalid()},
+    }
+}
+fn lirMirProjectionLeafType(projections: List<MirProjection>) -> String {
+    if projections.len() == 0 {
+        return ""
+    }
+    projections[projections.len() - 1].typ
+}
+fn lirLowerMirCall(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.calleeKind != MirCalleeFn {
+        lirLowerError(l, LirDiagUnsupported, "indirect calls are not implemented in LIR Proto lowering", "call")
+        return
+    }
+    let callee = lirLookupMirFunction(l.mirModule, instr.calleeSymbol)
+    if callee.name == "" {
+        lirLowerError(l, LirDiagUnsupported, "direct call target `" + instr.calleeSymbol + "` is not in this MIR module", "call")
+        return
+    }
+    let retType = lirLowerMirType(l, callee.returnType)
+    let args = lirLowerMirCallArgs(l, instr.args, callee)
+    if lirLowerHasErrorDiagnostics(l.diagnostics) {
+        return
+    }
+    if lirTypeIsVoid(retType) {
+        l.instrs.push(lirCall("", retType, "@" + lirRenderedMirFunctionName(callee), args))
+        return
+    }
+    let destName = if instr.hasDest {
+        lirFresh(l)
+    } else {
+        ""
+    }
+    l.instrs.push(lirCall(destName, retType, "@" + lirRenderedMirFunctionName(callee), args))
+    if instr.hasDest {
+        lirStoreMirResult(l, instr.dest, lirOperand(retType, destName), callee.returnType, "call result")
+    }
+}
+fn lirLowerMirCallArgs(l: LirMirFunctionLowerer, args: List<MirOperand>, callee: MirFunction) -> List<LirOperand> {
+    let mut out: List<LirOperand> = []
+    if args.len() != callee.params.len() {
+        lirLowerError(l, LirDiagInvalidInput, "direct call argument count mismatch", "call.args")
+        return out
+    }
+    let mut i = 0
+    for arg in args {
+        let paramLocal = mirFunctionLocal(callee, callee.params[i])
+        let paramType = lirLowerMirType(l, paramLocal.typ)
+        let mut value = lirLowerMirOperand(l, arg, paramLocal.typ, paramType)
+        if value.typ.llvm != paramType.llvm {
+            value = lirCoerceMirOperand(l, value, arg.typ, paramType, "direct call arg")
+        }
+        out.push(lirOperand(paramType, value.value))
+        i = i + 1
+    }
+    out
+}
+fn lirStoreMirResult(l: LirMirFunctionLowerer, dest: MirPlace, result: LirOperand, resultTypeName: String, context: String) {
+    let loc = mirFunctionLocal(l.fn_, dest.local)
+    if loc.id < 0 {
+        lirLowerError(l, LirDiagInvalidInput, context + " destination local out of range", context)
+        return
+    }
+    let destType = lirLowerMirType(l, loc.typ)
+    if lirTypeIsVoid(destType) {
+        return
+    }
+    if mirPlaceHasProjections(dest) {
+        lirStoreProjectedMirValue(l, dest, loc, destType, result, resultTypeName, context)
+        return
+    }
+    let mut stored = result
+    if stored.typ.llvm != destType.llvm {
+        stored = lirCoerceMirOperand(l, stored, resultTypeName, destType, context)
+    }
+    let slot = lirMirLocalSlot(l, loc.id)
+    if slot.slot == "" {
+        lirLowerError(l, LirDiagValidation, context + " destination has no LIR slot", context)
+        return
+    }
+    l.instrs.push(lirStore(stored, slot.slot, 0))
+}
+fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
+    match instr.intrinsic {
+        MirIntrinsicPrint -> lirLowerMirPrintIntrinsic(l, instr, false, false),
+        MirIntrinsicPrintln -> lirLowerMirPrintIntrinsic(l, instr, true, false),
+        MirIntrinsicEprint -> lirLowerMirPrintIntrinsic(l, instr, false, true),
+        MirIntrinsicEprintln -> lirLowerMirPrintIntrinsic(l, instr, true, true),
+        MirIntrinsicByteToInt -> lirLowerMirIntegerConversionIntrinsic(l, instr, "Byte", "Int", "zext"),
+        MirIntrinsicCharToInt -> lirLowerMirIntegerConversionIntrinsic(l, instr, "Char", "Int", "zext"),
+        MirIntrinsicIntToByte -> lirLowerMirIntegerConversionIntrinsic(l, instr, "Int", "Byte", "trunc"),
+        MirIntrinsicIntToChar -> lirLowerMirIntegerConversionIntrinsic(l, instr, "Int", "Char", "trunc"),
+        MirIntrinsicByteToChar -> lirLowerMirIntegerConversionIntrinsic(l, instr, "Byte", "Char", "zext"),
+        MirIntrinsicCharToByte -> lirLowerMirIntegerConversionIntrinsic(l, instr, "Char", "Byte", "trunc"),
+        _ -> lirLowerError(l, LirDiagUnsupported, "unsupported MIR intrinsic `" + mirIntrinsicName(instr.intrinsic) + "`", "intrinsic"),
+    }
+}
+fn lirLowerMirPrintIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr, newline: Bool, stderr: Bool) {
+    if instr.args.len() != 1 {
+        lirLowerError(l, LirDiagInvalidInput, "print intrinsic expects exactly one argument", "intrinsic.print")
+        return
+    }
+    let text = lirLowerMirPrintTextOperand(l, instr.args[0])
+    if text.value == "" {
+        return
+    }
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeIOWriteDecl())
+    l.instrs.push(lirCall("", lirVoidType(), "@osty_rt_io_write", [text, lirBoolOperand(newline), lirBoolOperand(stderr)]))
+}
+fn lirLowerMirPrintTextOperand(l: LirMirFunctionLowerer, op: MirOperand) -> LirOperand {
+    let argType = lirLowerMirType(l, op.typ)
+    let value = lirLowerMirOperand(l, op, op.typ, argType)
+    if op.typ == "String" {
+        return lirOperand(lirPtrType(), value.value)
+    }
+    let symbol = lirRuntimeToStringSymbolForType(argType)
+    if symbol == "" {
+        lirLowerError(l, LirDiagUnsupported, "print argument type `" + op.typ + "` is not implemented", "intrinsic.print")
+        return lirOperandInvalid()
+    }
+    let mut arg = value
+    if symbol == "osty_rt_int_to_string" && arg.typ.llvm != "i64" {
+        let castOp = if lirPrimitiveTypeIsUnsigned(op.typ) {
+            "zext"
+        } else {
+            "sext"
+        }
+        arg = lirCastMirOperand(l, arg, castOp, lirIntType(64))
+    }
+    if symbol == "osty_rt_float_to_string" && arg.typ.llvm == "float" {
+        arg = lirCastMirOperand(l, arg, "fpext", lirFloatType("double"))
+    }
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeToStringDecl(symbol, arg.typ))
+    let dest = lirFresh(l)
+    l.instrs.push(lirCall(dest, lirPtrType(), "@" + symbol, [arg]))
+    lirOperand(lirPtrType(), dest)
+}
+fn lirLowerMirIntegerConversionIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr, fromName: String, toName: String, opcode: String) {
+    if instr.args.len() != 1 {
+        lirLowerError(l, LirDiagInvalidInput, "integer conversion intrinsic expects one argument", "intrinsic.convert")
+        return
+    }
+    let fromType = lirLowerPrimitiveTypeName(fromName)
+    let toType = lirLowerPrimitiveTypeName(toName)
+    let value = lirLowerMirOperand(l, instr.args[0], fromName, fromType)
+    let result = lirCastMirOperand(l, value, opcode, toType)
+    if instr.hasDest {
+        lirStoreMirResult(l, instr.dest, result, toName, "intrinsic conversion result")
+    }
+}
+fn lirLowerMirTerm(l: LirMirFunctionLowerer, term: MirTerm, ret: LirType) -> LirTerm {
+    match term.kind {
+        MirTermReturn -> {
+            if lirTypeIsVoid(ret) {
+                return lirRetVoid()
+            }
+            let value = lirLoadMirLocal(l, l.fn_.returnLocal)
+            return lirRetValue(value.typ, value.value)
+        },
+        MirTermGoto -> lirBr(lirLabelForMirBlock(l, term.target)),
+        MirTermBranch -> {
+            let cond = lirLowerMirOperand(l, term.cond, "Bool", lirIntType(1))
+            return lirCondBr(cond.value, lirLabelForMirBlock(l, term.thenBlock), lirLabelForMirBlock(l, term.elseBlock))
+        },
+        MirTermSwitchInt -> {
+            let scrutinee = lirLowerMirOperand(l, term.cond, term.cond.typ, lirTypeInvalid())
+            let mut cases: List<LirSwitchCase> = []
+            for c in term.cases {
+                cases.push(lirSwitchCase(lirIntToString(c.value), lirLabelForMirBlock(l, c.target)))
+            }
+            return lirSwitch(scrutinee.typ, scrutinee.value, lirLabelForMirBlock(l, term.target), cases)
+        },
+        MirTermUnreachable -> lirUnreachable(),
+        _ -> {
+            lirLowerError(l, LirDiagInvalidInput, "missing or unsupported MIR terminator", "term")
+            lirUnreachable()
+        },
+    }
+}
+fn lirLowerMirRValue(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
+    match rv.kind {
+        MirRVUse -> lirLowerMirOperand(l, rv.arg, hintName, hint),
+        MirRVUnary -> lirLowerMirUnary(l, rv, hintName, hint),
+        MirRVBinary -> lirLowerMirBinary(l, rv, hintName, hint),
+        MirRVCast -> lirLowerMirCast(l, rv, hintName, hint),
+        MirRVAggregate -> lirLowerMirAggregate(l, rv, hintName, hint),
+        _ -> {
+            lirLowerError(l, LirDiagUnsupported, "unsupported MIR rvalue kind", "rvalue")
+            lirOperandInvalid()
+        },
+    }
+}
+fn lirLowerMirUnary(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
+    let arg = lirLowerMirOperand(l, rv.arg, hintName, hint)
+    if rv.unaryOp == MirUnPlus {
+        return arg
+    }
+    let typ = if lirTypeIsZero(hint) {
+        arg.typ
+    } else {
+        hint
+    }
+    let dest = lirFresh(l)
+    match rv.unaryOp {
+        MirUnNeg -> {
+            if typ.className == LirTypeFloat {
+                l.instrs.push(lirUnary(dest, "fneg", typ, arg.value))
+            } else {
+                l.instrs.push(lirBinary(dest, "sub", typ, lirZeroValue(typ), arg.value))
+            }
+        },
+        MirUnNot -> l.instrs.push(lirBinary(dest, "xor", typ, arg.value, "1")),
+        MirUnBitNot -> l.instrs.push(lirBinary(dest, "xor", typ, arg.value, "-1")),
+        _ -> {
+            lirLowerError(l, LirDiagUnsupported, "unsupported MIR unary op", "unary")
+            return lirOperandInvalid()
+        },
+    }
+    lirOperand(typ, dest)
+}
+fn lirLowerMirBinary(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
+    let argType = if lirTypeIsZero(hint) {
+        lirLowerMirType(l, rv.arg.typ)
+    } else {
+        hint
+    }
+    let left = lirLowerMirOperand(l, rv.arg, rv.arg.typ, argType)
+    let right = lirLowerMirOperand(l, rv.right, rv.right.typ, argType)
+    let resType = if lirMirBinaryIsComparison(rv.binaryOp) {
+        lirIntType(1)
+    } else {
+        argType
+    }
+    let opcode = lirMirBinaryOpcode(rv.binaryOp, argType, lirPrimitiveTypeIsUnsigned(rv.arg.typ))
+    if opcode == "" {
+        lirLowerError(l, LirDiagUnsupported, "unsupported MIR binary op", "binary")
+        return lirOperandInvalid()
+    }
+    let dest = lirFresh(l)
+    l.instrs.push(lirBinary(dest, opcode, argType, left.value, right.value))
+    lirOperand(resType, dest)
+}
+fn lirLowerMirCast(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
+    let fromType = lirLowerMirType(l, rv.castFrom)
+    let toType = if rv.castTo != "" {
+        lirLowerMirType(l, rv.castTo)
+    } else {
+        hint
+    }
+    let value = lirLowerMirOperand(l, rv.arg, rv.castFrom, fromType)
+    let unsigned = lirPrimitiveTypeIsUnsigned(rv.castFrom) || lirPrimitiveTypeIsUnsigned(rv.castTo)
+    let mut opcode = ""
+    match rv.castKind {
+        MirCastIntResize -> {
+            opcode = lirPlanScalarCastOpcode(fromType, toType, unsigned)
+        },
+        MirCastIntToFloat -> {
+            opcode = lirPlanScalarCastOpcode(fromType, toType, unsigned)
+        },
+        MirCastFloatToInt -> {
+            opcode = lirPlanScalarCastOpcode(fromType, toType, unsigned)
+        },
+        MirCastFloatResize -> {
+            opcode = lirPlanScalarCastOpcode(fromType, toType, unsigned)
+        },
+        MirCastBitcast -> {
+            opcode = "bitcast"
+        },
+        _ -> {
+            lirLowerError(l, LirDiagUnsupported, "unsupported MIR cast kind", "cast")
+            return lirOperandInvalid()
+        },
+    }
+    if opcode == "" {
+        return lirOperand(toType, value.value)
+    }
+    lirCastMirOperand(l, value, opcode, toType)
+}
+fn lirLowerMirAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
+    let aggregateType = if lirTypeIsZero(hint) {
+        lirLowerMirType(l, rv.typ)
+    } else {
+        hint
+    }
+    let mut current = lirOperand(aggregateType, "undef")
+    let mut i = 0
+    for field in rv.aggFields {
+        let fieldType = lirLowerMirType(l, field.typ)
+        let mut value = lirLowerMirOperand(l, field, field.typ, fieldType)
+        if value.typ.llvm != fieldType.llvm {
+            value = lirCoerceMirOperand(l, value, field.typ, fieldType, "aggregate field")
+        }
+        let dest = lirFresh(l)
+        l.instrs.push(lirInsertValue(dest, aggregateType, current.value, value, [i]))
+        current = lirOperand(aggregateType, dest)
+        i = i + 1
+    }
+    current
+}
+fn lirLowerMirOperand(l: LirMirFunctionLowerer, op: MirOperand, hintName: String, hint: LirType) -> LirOperand {
+    match op.kind {
+        MirOpCopy -> lirLoadMirPlace(l, op.place),
+        MirOpMove -> lirLoadMirPlace(l, op.place),
+        MirOpConst -> lirLowerMirConst(l, op.const, hintName, hint),
+        _ -> {
+            lirLowerError(l, LirDiagUnsupported, "unsupported MIR operand kind", "operand")
+            lirOperandInvalid()
+        },
+    }
+}
+fn lirLoadMirPlace(l: LirMirFunctionLowerer, place: MirPlace) -> LirOperand {
+    let base = lirLoadMirLocal(l, place.local)
+    if place.projections.len() == 0 {
+        return base
+    }
+    lirProjectMirOperand(l, base, place.projections)
+}
+fn lirLoadMirLocal(l: LirMirFunctionLowerer, id: Int) -> LirOperand {
+    let slot = lirMirLocalSlot(l, id)
+    if slot.slot == "" {
+        let loc = mirFunctionLocal(l.fn_, id)
+        if loc.id < 0 {
+            lirLowerError(l, LirDiagInvalidInput, "local out of range: " + lirIntToString(id), "local")
+            return lirOperandInvalid()
+        }
+        let typ = lirLowerMirType(l, loc.typ)
+        if lirTypeIsVoid(typ) {
+            return lirOperand(typ, "")
+        }
+        lirLowerError(l, LirDiagValidation, "local has no LIR slot: " + lirIntToString(id), "local")
+        return lirOperandInvalid()
+    }
+    let dest = lirFresh(l)
+    l.instrs.push(lirLoad(dest, slot.typ, slot.slot, 0))
+    lirOperand(slot.typ, dest)
+}
+fn lirProjectMirOperand(l: LirMirFunctionLowerer, value: LirOperand, projections: List<MirProjection>) -> LirOperand {
+    let mut current = value
+    for proj in projections {
+        let step = lirProjectionStepFromMir(l, proj)
+        if step.kind == LirProjInvalid {
+            lirLowerError(l, LirDiagUnsupported, "unsupported MIR projection", "projection")
+            return lirOperandInvalid()
+        }
+        let dest = lirFresh(l)
+        l.instrs.push(lirExtractValue(dest, current.typ, current.value, [step.index]))
+        current = lirOperand(step.typ, dest)
+    }
+    current
+}
+fn lirLowerMirConst(l: LirMirFunctionLowerer, c: MirConst, hintName: String, hint: LirType) -> LirOperand {
+    match c.kind {
+        MirConstInt -> lirOperand(lirLowerMirType(l, if c.typ == "" {
+            hintName
+        } else {
+            c.typ
+        }), lirIntToString(c.intValue)),
+        MirConstBool -> lirBoolOperand(c.boolValue),
+        MirConstFloat -> lirOperand(lirLowerMirType(l, if c.typ == "" {
+            hintName
+        } else {
+            c.typ
+        }), c.floatText),
+        MirConstString -> {
+            let symbol = lirStringPoolInternKnown(l.out.stringPool, c.strValue, lirCStringEncodeBasic(c.strValue), c.strValue.len() + 1)
+            lirOperand(lirPtrType(), symbol)
+        },
+        MirConstChar -> lirOperand(lirIntType(32), lirIntToString(c.charValue)),
+        MirConstByte -> lirOperand(lirIntType(8), lirIntToString(c.byteValue)),
+        MirConstUnit -> lirOperand(lirVoidType(), ""),
+        MirConstNull -> lirOperand(lirPtrType(), "null"),
+        MirConstFn -> lirOperand(lirPtrType(), "@" + c.fnSymbol),
+        _ -> {
+            lirLowerError(l, LirDiagUnsupported, "unsupported MIR const kind", "const")
+            lirOperandInvalid()
+        },
+    }
+}
+fn lirBoolOperand(value: Bool) -> LirOperand {
+    if value {
+        return lirOperand(lirIntType(1), "1")
+    }
+    lirOperand(lirIntType(1), "0")
+}
+fn lirCoerceMirOperand(l: LirMirFunctionLowerer, value: LirOperand, fromName: String, to: LirType, context: String) -> LirOperand {
+    if value.typ.llvm == to.llvm {
+        return lirOperand(to, value.value)
+    }
+    let op = lirPlanSameFamilyCoercionOpcode(value.typ, to, lirPrimitiveTypeIsUnsigned(fromName))
+    if op == "" {
+        lirLowerError(l, LirDiagUnsupported, context + " coercion is not supported", context)
+        return lirOperandInvalid()
+    }
+    lirCastMirOperand(l, value, op, to)
+}
+fn lirCastMirOperand(l: LirMirFunctionLowerer, value: LirOperand, op: String, to: LirType) -> LirOperand {
+    let dest = lirFresh(l)
+    l.instrs.push(lirCast(dest, op, value, to))
+    lirOperand(to, dest)
+}
+fn lirLowerMirType(l: LirMirFunctionLowerer, name: String) -> LirType {
+    let primitive = lirLowerPrimitiveTypeName(name)
+    if !(lirTypeIsZero(primitive)) {
+        return primitive
+    }
+    for layout in l.mirModule.layouts.structs {
+        if layout.name == name || layout.mangled == name {
+            let typeName = "%" + if layout.mangled == "" {
+                layout.name
+            } else {
+                layout.mangled
+            }
+            let mut parts: List<String> = []
+            for field in layout.fields {
+                let fieldType = lirLowerMirType(l, field.typ)
+                if lirTypeIsZero(fieldType) || lirTypeIsVoid(fieldType) {
+                    return lirTypeInvalid()
+                }
+                parts.push(lirTypeString(fieldType))
+            }
+            lirModuleDeclareTypeDef(l.out, lirTypeDef(typeName, "\{ " + strings.join(parts, ", ") + " \}"))
+            return lirAggregateType(typeName)
+        }
+    }
+    for layout in l.mirModule.layouts.tuples {
+        if layout.key == name || layout.mangled == name {
+            let typeName = "%" + if layout.mangled == "" {
+                layout.key
+            } else {
+                layout.mangled
+            }
+            let mut parts: List<String> = []
+            for field in layout.fields {
+                let fieldType = lirLowerMirType(l, field.typ)
+                if lirTypeIsZero(fieldType) || lirTypeIsVoid(fieldType) {
+                    return lirTypeInvalid()
+                }
+                parts.push(lirTypeString(fieldType))
+            }
+            lirModuleDeclareTypeDef(l.out, lirTypeDef(typeName, "\{ " + strings.join(parts, ", ") + " \}"))
+            return lirAggregateType(typeName)
+        }
+    }
+    if strings.contains(name, "(") {
+        return lirFunctionType(name)
+    }
+    lirTypeInvalid()
+}
+fn lirModuleDeclareTypeDef(m: LirModule, td: LirTypeDef) -> Bool {
+    if td.name == "" {
+        return false
+    }
+    for existing in m.typeDefs {
+        if existing.name == td.name {
+            return false
+        }
+    }
+    m.typeDefs.push(td)
+    true
+}
+fn lirLookupMirFunction(m: MirModule, symbol: String) -> MirFunction {
+    for fn_ in m.functions {
+        if fn_.name == symbol || fn_.exportSymbol == symbol {
+            return fn_
+        }
+    }
+    mirFunction("", "", mirNoSpan())
+}
+fn lirLowerHasErrorDiagnostics(diags: List<LirDiagnostic>) -> Bool {
+    for d in diags {
+        if d.severity == LirSeverityError {
+            return true
+        }
+    }
+    false
+}
+fn lirMirBinaryIsComparison(op: MirBinaryOp) -> Bool {
+    match op {
+        MirBinEq -> true,
+        MirBinNeq -> true,
+        MirBinLt -> true,
+        MirBinLeq -> true,
+        MirBinGt -> true,
+        MirBinGeq -> true,
+        _ -> false,
+    }
+}
+fn lirMirBinaryOpcode(op: MirBinaryOp, typ: LirType, unsigned: Bool) -> String {
+    let isFloat = typ.className == LirTypeFloat
+    match op {
+        MirBinAdd -> if isFloat {
+            "fadd"
+        } else {
+            "add"
+        },
+        MirBinSub -> if isFloat {
+            "fsub"
+        } else {
+            "sub"
+        },
+        MirBinMul -> if isFloat {
+            "fmul"
+        } else {
+            "mul"
+        },
+        MirBinDiv -> {
+            if isFloat {
+                return "fdiv"
+            }
+            if unsigned {
+                return "udiv"
+            }
+            "sdiv"
+        },
+        MirBinMod -> {
+            if isFloat {
+                return "frem"
+            }
+            if unsigned {
+                return "urem"
+            }
+            "srem"
+        },
+        MirBinEq -> if isFloat {
+            "fcmp oeq"
+        } else {
+            "icmp eq"
+        },
+        MirBinNeq -> if isFloat {
+            "fcmp one"
+        } else {
+            "icmp ne"
+        },
+        MirBinLt -> lirMirCompareOpcode("lt", isFloat, unsigned),
+        MirBinLeq -> lirMirCompareOpcode("le", isFloat, unsigned),
+        MirBinGt -> lirMirCompareOpcode("gt", isFloat, unsigned),
+        MirBinGeq -> lirMirCompareOpcode("ge", isFloat, unsigned),
+        MirBinAnd -> "and",
+        MirBinOr -> "or",
+        MirBinBitAnd -> "and",
+        MirBinBitOr -> "or",
+        MirBinBitXor -> "xor",
+        MirBinShl -> "shl",
+        MirBinShr -> if unsigned {
+            "lshr"
+        } else {
+            "ashr"
+        },
+        _ -> "",
+    }
+}
+fn lirMirCompareOpcode(op: String, isFloat: Bool, unsigned: Bool) -> String {
+    if isFloat {
+        if op == "lt" {
+            return "fcmp olt"
+        }
+        if op == "le" {
+            return "fcmp ole"
+        }
+        if op == "gt" {
+            return "fcmp ogt"
+        }
+        return "fcmp oge"
+    }
+    let prefix = if unsigned {
+        "u"
+    } else {
+        "s"
+    }
+    "icmp " + prefix + op
+}
+fn lirZeroValue(typ: LirType) -> String {
+    if typ.llvm == "ptr" {
+        return "null"
+    }
+    if typ.className == LirTypeFloat {
+        return "0.0"
+    }
+    if typ.llvm == "i1" {
+        return "0"
+    }
+    "0"
+}
+fn lirCStringEncodeBasic(text: String) -> String {
+    let slash = strings.replaceAll(text, "\\", "\\5C")
+    let quote = strings.replaceAll(slash, "\"", "\\22")
+    let newline = strings.replaceAll(quote, "\n", "\\0A")
+    newline + "\\00"
+}
+// ====================================================================
+// Small local helpers
+// ====================================================================
+pub fn lirIntToString(n: Int) -> String {
+    if n == 0 {
+        return "0"
+    }
+    let mut value = n
+    let mut negative = false
+    if value < 0 {
+        negative = true
+        value = -value
+    }
+    let mut digits: List<Int> = []
+    for _d in 0..40 {
+        if value == 0 {
+            break
+        }
+        digits.push(value % 10)
+        value = value / 10
+    }
+    let mut out = ""
+    if negative {
+        out = "-"
+    }
+    let mut i = digits.len() - 1
+    for _j in 0..digits.len() {
+        if i < 0 {
+            break
+        }
+        out = out + lirDigitChar(digits[i])
+        i = i - 1
+    }
+    out
+}
+fn lirDigitChar(d: Int) -> String {
+    match d {
+        0 -> "0",
+        1 -> "1",
+        2 -> "2",
+        3 -> "3",
+        4 -> "4",
+        5 -> "5",
+        6 -> "6",
+        7 -> "7",
+        8 -> "8",
+        9 -> "9",
+        _ -> "?",
+    }
+}
