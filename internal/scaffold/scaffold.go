@@ -60,6 +60,20 @@
 //	├── README.md
 //	└── .gitignore
 //
+//	# Windows WebView2 GUI app project (--gui webview2)
+//	NAME/
+//	├── osty.toml           # [gui] metadata + Windows target link hints
+//	├── src/
+//	│   ├── main.osty       # std.gui.webview2 app shell
+//	│   └── main_test.osty  # options/bridge smoke tests
+//	├── ui/
+//	│   ├── index.html
+//	│   ├── app.css
+//	│   └── app.js
+//	├── assets/
+//	│   └── .gitkeep
+//	└── .gitignore
+//
 // The --cli and --service variants are still binary packages (they
 // build a `fn main`), but their starter source replaces the bare
 // "Hello, Osty!" with a small but realistic skeleton split across
@@ -121,6 +135,10 @@ const (
 	// KindGUIQtQuick scaffolds a binary package wired to std.gui and
 	// a short Qt Quick/QML entry file.
 	KindGUIQtQuick
+	// KindGUIWebView2 scaffolds a Windows WebView2 desktop app. It is
+	// still a binary package, but uses a src/ entry point plus ui/
+	// assets and manifest metadata consumed by GUI-aware tooling.
+	KindGUIWebView2
 )
 
 // CurrentEdition is the spec version the scaffolder records in
@@ -360,6 +378,17 @@ func expectedPaths(dir string, opts Options) []string {
 			filepath.Join(dir, "README.md"),
 			filepath.Join(dir, ".gitignore"),
 		}
+	case KindGUIWebView2:
+		return []string{
+			filepath.Join(dir, "osty.toml"),
+			filepath.Join(dir, "src", "main.osty"),
+			filepath.Join(dir, "src", "main_test.osty"),
+			filepath.Join(dir, "ui", "index.html"),
+			filepath.Join(dir, "ui", "app.css"),
+			filepath.Join(dir, "ui", "app.js"),
+			filepath.Join(dir, "assets", ".gitkeep"),
+			filepath.Join(dir, ".gitignore"),
+		}
 	default: // KindBin
 		return []string{
 			filepath.Join(dir, "osty.toml"),
@@ -435,6 +464,25 @@ func writeLayout(tx *writeTx, dir string, opts Options) *diag.Diagnostic {
 			{filepath.Join(dir, "main.osty"), guiQtQuickMainTemplate},
 			{filepath.Join(uiDir, "main.qml"), guiQtQuickQMLTemplate},
 			{filepath.Join(dir, "README.md"), renderGUIQtQuickReadme(opts.Name)},
+			{filepath.Join(dir, ".gitignore"), gitignoreTemplate},
+		})
+	case KindGUIWebView2:
+		srcDir := filepath.Join(dir, "src")
+		uiDir := filepath.Join(dir, "ui")
+		assetsDir := filepath.Join(dir, "assets")
+		for _, subdir := range []string{srcDir, uiDir, assetsDir} {
+			if err := tx.mkdir(subdir); err != nil {
+				return ioErr(subdir, err)
+			}
+		}
+		return tx.writeFiles([]fileSpec{
+			{filepath.Join(dir, "osty.toml"), renderGUIWebView2Manifest(opts.Name, edition)},
+			{filepath.Join(srcDir, "main.osty"), webview2MainTemplate},
+			{filepath.Join(srcDir, "main_test.osty"), webview2TestTemplate},
+			{filepath.Join(uiDir, "index.html"), webview2IndexTemplate},
+			{filepath.Join(uiDir, "app.css"), webview2CSSTemplate},
+			{filepath.Join(uiDir, "app.js"), webview2JSTemplate},
+			{filepath.Join(assetsDir, ".gitkeep"), ""},
 			{filepath.Join(dir, ".gitignore"), gitignoreTemplate},
 		})
 	default: // KindBin
@@ -546,6 +594,8 @@ func RenderSource(k Kind) string {
 		return serviceMainTemplate
 	case KindGUIQtQuick:
 		return guiQtQuickMainTemplate
+	case KindGUIWebView2:
+		return webview2MainTemplate
 	default:
 		return binSourceTemplate
 	}
@@ -566,6 +616,8 @@ func RenderTestSource(k Kind) string {
 		return serviceRoutesTestTemplate
 	case KindGUIQtQuick:
 		return ""
+	case KindGUIWebView2:
+		return webview2TestTemplate
 	default:
 		return binTestTemplate
 	}
@@ -588,6 +640,8 @@ func renderManifest(name, edition string, k Kind) string {
 		header = "# HTTP service project; main.osty defines Request/Response and a handle() core."
 	case KindGUIQtQuick:
 		header = "# Qt Quick GUI app project; main.osty owns state/events and ui/main.qml owns layout."
+	case KindGUIWebView2:
+		header = "# WebView2 GUI app project; src/main.osty opens ui/index.html through std.gui.webview2."
 	}
 	return fmt.Sprintf(`%s
 
@@ -600,6 +654,33 @@ edition = "%s"
 # Add dependencies here, for example:
 # json-ext = { path = "../json-ext" }
 `, header, name, edition)
+}
+
+func renderGUIWebView2Manifest(name, edition string) string {
+	return fmt.Sprintf(`# WebView2 GUI app project; src/main.osty opens ui/index.html through std.gui.webview2.
+
+[package]
+name = "%s"
+version = "0.1.0"
+edition = "%s"
+
+[dependencies]
+
+[bin]
+path = "src/main.osty"
+
+[gui]
+backend = "webview2"
+entry = "ui/index.html"
+
+[gui.webview2]
+devtools = true
+runtime = "evergreen"
+
+[target.amd64-windows]
+cgo = true
+link = ["osty_webview2", "WebView2Loader", "user32", "ole32"]
+`, name, edition)
 }
 
 func renderGUIQtQuickManifest(name, edition string) string {
@@ -1022,6 +1103,204 @@ ApplicationWindow {
             }
         }
     }
+}
+`
+
+// webview2MainTemplate is a small but functional desktop loop: native
+// WebView2 owns the window, ui/app.js emits events, and Osty remains
+// the application state/control owner.
+const webview2MainTemplate = `use std.gui.webview2 as webview2
+
+fn main() -> Result<(), Error> {
+    let app = webview2.app("Osty WebView2")?
+    let mut options = webview2.defaultWindowOptions("Osty WebView2", "ui/index.html")
+    options.devtools = true
+
+    let window = app.window(options)?
+    window.setState(initialStateJson())?
+    window.show()?
+
+    for app.poll() {
+        for event in app.events() {
+            if event.name == "quit" {
+                app.quit()
+            } else if event.name == "set-title" {
+                window.setTitle("Osty WebView2 - updated")?
+            } else if event.name == "ping" {
+                window.setState("\{\"status\":\"pong\",\"detail\":\"handled in Osty\"\}")?
+            } else if event.name == "state" {
+                window.setState(event.payload)?
+            }
+        }
+    }
+
+    window.close()
+    app.close()
+    Ok(())
+}
+
+pub fn initialStateJson() -> String {
+    "\{\"status\":\"ready\",\"detail\":\"Osty controls this state\"\}"
+}
+`
+
+const webview2TestTemplate = `use std.gui.webview2 as webview2
+
+fn testDefaultWindowOptions() {
+    let options = webview2.defaultWindowOptions("Demo", "ui/index.html")
+    let _ = options.title
+    let _ = options.entry
+}
+
+fn testInitialStateJsonExists() {
+    let _ = initialStateJson()
+}
+
+fn testBridgeScriptExists() {
+    let _ = webview2.bridgeScript()
+}
+`
+
+const webview2IndexTemplate = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Osty WebView2</title>
+  <link rel="stylesheet" href="./app.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="status">
+      <p class="eyebrow">Osty + WebView2</p>
+      <h1>Desktop app shell</h1>
+      <p id="detail">Waiting for Osty state...</p>
+      <output id="state">not connected</output>
+    </section>
+    <nav class="actions" aria-label="Window actions">
+      <button id="ping" type="button">Ping Osty</button>
+      <button id="title" type="button">Set Title</button>
+      <button id="quit" type="button">Quit</button>
+    </nav>
+  </main>
+  <script src="./app.js"></script>
+</body>
+</html>
+`
+
+const webview2CSSTemplate = `:root {
+  color-scheme: light;
+  font-family: Inter, "Segoe UI", system-ui, sans-serif;
+  background: #f6f7f9;
+  color: #1d232a;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+}
+
+.shell {
+  width: min(720px, calc(100vw - 48px));
+  display: grid;
+  gap: 24px;
+}
+
+.status {
+  border: 1px solid #d7dde4;
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 28px;
+  box-shadow: 0 18px 50px rgba(20, 30, 40, 0.08);
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: #496477;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0 0 10px;
+  font-size: 32px;
+  line-height: 1.15;
+}
+
+p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+output {
+  display: block;
+  margin-top: 18px;
+  padding: 14px;
+  border-radius: 6px;
+  background: #edf3f7;
+  color: #163041;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  overflow-wrap: anywhere;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+button {
+  min-width: 120px;
+  border: 1px solid #c1cbd6;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #1d232a;
+  padding: 10px 14px;
+  font: inherit;
+  font-weight: 700;
+}
+
+button:hover {
+  border-color: #3478a9;
+}
+`
+
+const webview2JSTemplate = `const stateOut = document.querySelector("#state");
+const detail = document.querySelector("#detail");
+
+function renderState(state) {
+  stateOut.textContent = JSON.stringify(state);
+  if (state && state.detail) {
+    detail.textContent = state.detail;
+  }
+}
+
+function emit(name, payload) {
+  if (window.osty) {
+    window.osty.emit(name, payload || {});
+  }
+}
+
+document.querySelector("#ping").addEventListener("click", () => {
+  emit("ping", { at: Date.now() });
+});
+
+document.querySelector("#title").addEventListener("click", () => {
+  emit("set-title", {});
+});
+
+document.querySelector("#quit").addEventListener("click", () => {
+  emit("quit", {});
+});
+
+if (window.osty) {
+  window.osty.onState(renderState);
+} else {
+  renderState({ status: "preview", detail: "Open this through osty run on Windows." });
 }
 `
 

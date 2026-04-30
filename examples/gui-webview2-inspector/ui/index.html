@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Osty Inspector</title>
+  <link rel="stylesheet" href="./app.css">
+</head>
+<body>
+  <main class="shell">
+    <section class="panel">
+      <p class="eyebrow">std.gui.webview2</p>
+      <h1>Inspector</h1>
+      <p id="detail">Waiting for Osty state...</p>
+      <output id="state">not connected</output>
+    </section>
+    <nav class="actions" aria-label="Inspector actions">
+      <button id="refresh" type="button">Refresh</button>
+      <button id="inspect" type="button">DevTools</button>
+      <button id="quit" type="button">Quit</button>
+    </nav>
+  </main>
+  <script src="./app.js"></script>
+</body>
+</html>

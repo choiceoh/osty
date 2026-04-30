@@ -222,6 +222,63 @@ runtime = "true"
 	}
 }
 
+func TestParseGuiWebView2Section(t *testing.T) {
+	src := []byte(`
+[package]
+name = "demo"
+version = "1.0.0"
+edition = "0.5"
+
+[gui]
+backend = "webview2"
+entry = "ui/index.html"
+
+[gui.webview2]
+devtools = true
+runtime = "evergreen"
+`)
+	m, err := Parse(src)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if m.GUI == nil {
+		t.Fatal("GUI = nil, want parsed [gui] section")
+	}
+	if m.GUI.Backend != "webview2" || m.GUI.Entry != "ui/index.html" {
+		t.Fatalf("GUI = %#v, want webview2 ui/index.html", m.GUI)
+	}
+	if m.GUI.WebView2 == nil || !m.GUI.WebView2.DevTools || !m.GUI.WebView2.HasDevTools || m.GUI.WebView2.Runtime != "evergreen" {
+		t.Fatalf("GUI.WebView2 = %#v, want devtools evergreen", m.GUI.WebView2)
+	}
+	out := string(Marshal(m))
+	for _, want := range []string{
+		"[gui]\nbackend = \"webview2\"\nentry = \"ui/index.html\"\n",
+		"[gui.webview2]\ndevtools = true\nruntime = \"evergreen\"\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("Marshal missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestParseGuiWebView2RejectsBadShape(t *testing.T) {
+	_, err := Parse([]byte(`
+[package]
+name = "demo"
+version = "1.0.0"
+edition = "0.5"
+
+[gui.webview2]
+devtools = "yes"
+`))
+	if err == nil {
+		t.Fatal("Parse succeeded, want non-bool gui.webview2.devtools error")
+	}
+	if !strings.Contains(err.Error(), "gui.webview2.devtools") {
+		t.Fatalf("error = %q, want gui.webview2.devtools", err)
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

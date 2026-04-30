@@ -47,6 +47,7 @@ type Manifest struct {
 	Workspace       *Workspace // non-nil when [workspace] is present
 	Lint            *Lint      // nil when [lint] absent; defaults apply
 	Capabilities    *Capabilities
+	GUI             *GUI // nil when [gui] absent; desktop/frontend app metadata
 
 	// Profiles are the `[profile.<name>]` tables — custom build
 	// profile overrides or new profiles inheriting from the built-in
@@ -123,6 +124,26 @@ type Lint struct {
 // sublanguage unless this table says so.
 type Capabilities struct {
 	Runtime bool
+}
+
+// GUI is the optional `[gui]` section for app-style packages. It is
+// metadata-only: build/profile code can decide how to consume a backend
+// like "webview2" without changing package identity.
+type GUI struct {
+	Backend  string
+	Entry    string
+	WebView2 *GUIWebView2
+	Pos      token.Pos
+}
+
+// GUIWebView2 mirrors `[gui.webview2]`, carrying WebView2-specific
+// starter/runtime preferences while keeping Windows link libraries in
+// the existing `[target.<triple>].link` surface.
+type GUIWebView2 struct {
+	DevTools    bool
+	HasDevTools bool
+	Runtime     string
+	Pos         token.Pos
 }
 
 // Profile mirrors one `[profile.<name>]` table. The Has* flags
@@ -425,6 +446,17 @@ func Parse(src []byte) (*Manifest, error) {
 		}
 		m.Capabilities = caps
 	}
+	// [gui] / [gui.webview2]
+	if guiV, ok := root.get("gui"); ok {
+		if guiV.Tbl == nil {
+			return nil, fmt.Errorf("osty.toml:%d: [gui] must be a table", guiV.Line)
+		}
+		gui, err := parseGUISection(guiV.Tbl)
+		if err != nil {
+			return nil, err
+		}
+		m.GUI = gui
+	}
 	// [profile.<name>]
 	if profV, ok := root.get("profile"); ok {
 		if profV.Tbl == nil {
@@ -480,6 +512,63 @@ func Parse(src []byte) (*Manifest, error) {
 		}
 	}
 	return m, nil
+}
+
+// parseGUISection extracts `[gui]` and nested backend tables such as
+// `[gui.webview2]`. Unknown keys are rejected so misspelled GUI metadata
+// fails early instead of silently changing scaffold behavior.
+func parseGUISection(t *tomlTable) (*GUI, error) {
+	gui := &GUI{Pos: token.Pos{Line: t.Line, Column: 1}}
+	for _, k := range t.keys {
+		v, _ := t.get(k)
+		switch k {
+		case "backend":
+			if v.Str == nil {
+				return nil, fmt.Errorf("osty.toml:%d: gui.backend must be a string", v.Line)
+			}
+			gui.Backend = *v.Str
+		case "entry":
+			if v.Str == nil {
+				return nil, fmt.Errorf("osty.toml:%d: gui.entry must be a string", v.Line)
+			}
+			gui.Entry = *v.Str
+		case "webview2":
+			if v.Tbl == nil {
+				return nil, fmt.Errorf("osty.toml:%d: gui.webview2 must be a table", v.Line)
+			}
+			wv, err := parseGUIWebView2Section(v.Tbl)
+			if err != nil {
+				return nil, err
+			}
+			gui.WebView2 = wv
+		default:
+			return nil, fmt.Errorf("osty.toml:%d: unknown key `%s` in [gui]", v.Line, k)
+		}
+	}
+	return gui, nil
+}
+
+func parseGUIWebView2Section(t *tomlTable) (*GUIWebView2, error) {
+	wv := &GUIWebView2{Pos: token.Pos{Line: t.Line, Column: 1}}
+	for _, k := range t.keys {
+		v, _ := t.get(k)
+		switch k {
+		case "devtools":
+			if v.Bool == nil {
+				return nil, fmt.Errorf("osty.toml:%d: gui.webview2.devtools must be a bool", v.Line)
+			}
+			wv.DevTools = *v.Bool
+			wv.HasDevTools = true
+		case "runtime":
+			if v.Str == nil {
+				return nil, fmt.Errorf("osty.toml:%d: gui.webview2.runtime must be a string", v.Line)
+			}
+			wv.Runtime = *v.Str
+		default:
+			return nil, fmt.Errorf("osty.toml:%d: unknown key `%s` in gui.webview2", v.Line, k)
+		}
+	}
+	return wv, nil
 }
 
 // parseProfileSection extracts a [profile.<name>] table. Each known
@@ -958,6 +1047,24 @@ func Marshal(m *Manifest) []byte {
 	if m.Capabilities != nil {
 		b.WriteString("\n[capabilities]\n")
 		writeBool(&b, "runtime", m.Capabilities.Runtime)
+	}
+	if m.GUI != nil {
+		b.WriteString("\n[gui]\n")
+		if m.GUI.Backend != "" {
+			writeString(&b, "backend", m.GUI.Backend)
+		}
+		if m.GUI.Entry != "" {
+			writeString(&b, "entry", m.GUI.Entry)
+		}
+		if m.GUI.WebView2 != nil {
+			b.WriteString("\n[gui.webview2]\n")
+			if m.GUI.WebView2.HasDevTools {
+				writeBool(&b, "devtools", m.GUI.WebView2.DevTools)
+			}
+			if m.GUI.WebView2.Runtime != "" {
+				writeString(&b, "runtime", m.GUI.WebView2.Runtime)
+			}
+		}
 	}
 	return []byte(b.String())
 }

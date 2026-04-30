@@ -1,0 +1,21 @@
+# WebView2 GUI example; src/main.osty opens ui/index.html through std.gui.webview2.
+
+[package]
+name = "gui-webview2-inspector"
+version = "0.1.0"
+edition = "0.5"
+
+[bin]
+path = "src/main.osty"
+
+[gui]
+backend = "webview2"
+entry = "ui/index.html"
+
+[gui.webview2]
+devtools = true
+runtime = "evergreen"
+
+[target.amd64-windows]
+cgo = true
+link = ["osty_webview2", "WebView2Loader", "user32", "ole32"]

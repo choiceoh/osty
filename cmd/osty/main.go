@@ -1198,8 +1198,8 @@ func printScopeNode(s *resolve.Scope, depth int) {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: osty [flags] (parse|tokens|resolve|check|typecheck|lint|fmt|airepair|gen) FILE")
-	fmt.Fprintln(os.Stderr, "       osty new [--bin|--lib|--workspace|--cli|--service|--gui qtquick] [--member NAME] NAME")
-	fmt.Fprintln(os.Stderr, "       osty init [--bin|--lib|--workspace|--cli|--service|--gui qtquick] [--name NAME] [--member NAME]")
+	fmt.Fprintln(os.Stderr, "       osty new [--bin|--lib|--workspace|--cli|--service|--gui BACKEND] [--member NAME] NAME")
+	fmt.Fprintln(os.Stderr, "       osty init [--bin|--lib|--workspace|--cli|--service|--gui BACKEND] [--name NAME] [--member NAME]")
 	fmt.Fprintln(os.Stderr, "       osty build [DIR]          (manifest + deps + front end + backend artifacts)")
 	fmt.Fprintln(os.Stderr, "       osty add NAME[@VER]       (add a dependency; also --path, --git)")
 	fmt.Fprintln(os.Stderr, "       osty update [NAME...]     (refresh osty.lock)")
@@ -1277,7 +1277,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  --workspace        scaffold a virtual workspace with one default member")
 	fmt.Fprintln(os.Stderr, "  --cli              scaffold a multi-file CLI app starter")
 	fmt.Fprintln(os.Stderr, "  --service          scaffold a multi-file HTTP service starter")
-	fmt.Fprintln(os.Stderr, "  --gui BACKEND      scaffold a GUI app starter (supported: qtquick)")
+	fmt.Fprintln(os.Stderr, "  --gui BACKEND      scaffold a GUI app starter (supported: qtquick, webview2)")
 	fmt.Fprintln(os.Stderr, "  --member NAME      workspace member directory name (default: core)")
 	fmt.Fprintln(os.Stderr, "add-specific flags (after the subcommand):")
 	fmt.Fprintln(os.Stderr, "  --path DIR         local-path dependency (no network)")
@@ -1828,7 +1828,7 @@ func parseGenEmitFile(pkg *resolve.Package) (*ast.File, []byte, error) {
 func runNew(args []string) {
 	fs := flag.NewFlagSet("new", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty new [--bin|--lib|--workspace|--cli|--service|--gui qtquick] [--member NAME] NAME")
+		fmt.Fprintln(os.Stderr, "usage: osty new [--bin|--lib|--workspace|--cli|--service|--gui BACKEND] [--member NAME] NAME")
 	}
 	var libMode, binMode, wsMode, cliMode, svcMode bool
 	var member, guiBackend string
@@ -1837,7 +1837,7 @@ func runNew(args []string) {
 	fs.BoolVar(&wsMode, "workspace", false, "scaffold a virtual workspace with one default member")
 	fs.BoolVar(&cliMode, "cli", false, "scaffold a CLI app (Args struct + run() core)")
 	fs.BoolVar(&svcMode, "service", false, "scaffold an HTTP service (Request/Response + handle())")
-	fs.StringVar(&guiBackend, "gui", "", "scaffold a GUI app for backend (qtquick)")
+	fs.StringVar(&guiBackend, "gui", "", "scaffold a GUI app for backend (qtquick or webview2)")
 	fs.StringVar(&member, "member", "core", "default-member directory name when --workspace is set")
 	_ = fs.Parse(args)
 	if fs.NArg() != 1 {
@@ -1868,7 +1868,7 @@ func runNew(args []string) {
 func runInit(args []string) {
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
 	fs.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: osty init [--bin|--lib|--workspace|--cli|--service|--gui qtquick] [--name NAME] [--member NAME]")
+		fmt.Fprintln(os.Stderr, "usage: osty init [--bin|--lib|--workspace|--cli|--service|--gui BACKEND] [--name NAME] [--member NAME]")
 	}
 	var libMode, binMode, wsMode, cliMode, svcMode bool
 	var name, member, guiBackend string
@@ -1877,7 +1877,7 @@ func runInit(args []string) {
 	fs.BoolVar(&wsMode, "workspace", false, "scaffold a virtual workspace with one default member")
 	fs.BoolVar(&cliMode, "cli", false, "scaffold a CLI app (Args struct + run() core)")
 	fs.BoolVar(&svcMode, "service", false, "scaffold an HTTP service (Request/Response + handle())")
-	fs.StringVar(&guiBackend, "gui", "", "scaffold a GUI app for backend (qtquick)")
+	fs.StringVar(&guiBackend, "gui", "", "scaffold a GUI app for backend (qtquick or webview2)")
 	fs.StringVar(&name, "name", "", "project name (defaults to current directory basename)")
 	fs.StringVar(&member, "member", "core", "default-member directory name when --workspace is set")
 	_ = fs.Parse(args)
@@ -1933,8 +1933,14 @@ func pickScaffoldKind(libMode, binMode, wsMode, cliMode, svcMode bool, guiBacken
 	if count > 1 {
 		return 0, "--bin, --lib, --workspace, --cli, --service, and --gui are mutually exclusive"
 	}
-	if guiBackend != "" && guiBackend != "qtquick" {
-		return 0, "--gui supports only qtquick"
+	switch guiBackend {
+	case "":
+	case "qtquick":
+		return scaffold.KindGUIQtQuick, ""
+	case "webview2":
+		return scaffold.KindGUIWebView2, ""
+	default:
+		return 0, fmt.Sprintf("unknown --gui backend %q (want qtquick or webview2)", guiBackend)
 	}
 	switch {
 	case libMode:
@@ -1945,8 +1951,6 @@ func pickScaffoldKind(libMode, binMode, wsMode, cliMode, svcMode bool, guiBacken
 		return scaffold.KindCli, ""
 	case svcMode:
 		return scaffold.KindService, ""
-	case guiBackend == "qtquick":
-		return scaffold.KindGUIQtQuick, ""
 	default:
 		return scaffold.KindBin, ""
 	}
@@ -1966,6 +1970,8 @@ func kindLabel(k scaffold.Kind) string {
 		return "HTTP service project"
 	case scaffold.KindGUIQtQuick:
 		return "Qt Quick GUI app project"
+	case scaffold.KindGUIWebView2:
+		return "WebView2 GUI app project"
 	default:
 		return "binary project"
 	}

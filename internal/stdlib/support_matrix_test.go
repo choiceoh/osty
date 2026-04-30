@@ -16,7 +16,7 @@ type stdlibSupportMatrix struct {
 }
 
 // std.runtime.raw is intentionally internal support surface. It is bundled
-// beside public modules but is not counted in STDLIB_MATRIX.md's 52 rows.
+// beside public modules but is not counted in STDLIB_MATRIX.md's public rows.
 var stdlibSupportMatrixInternalModules = []string{
 	"runtime.raw",
 }
