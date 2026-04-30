@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 68 공개 모듈. 분류 기준:
+총 69 공개 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (64 / 68 = 94%)
+### ⭐⭐⭐⭐⭐ Production (65 / 69 = 94%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -45,7 +45,8 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | metrics | 48 | pure Osty | Deneb-style labeled counter snapshots without a metrics backend |
 | net | 1084 | net 40 runtime | TCP/UDP, IPv4/IPv6, parseSocketAddr, tcpListen |
 | fmt | 926 | (surface heavy) | graphem-aware width, format spec engine |
-| json | 629 | (parser self) | generic encode<T> / decode<T>, UTF-8 / surrogate pair |
+| json | 662 | (parser self) | generic encode<T> / decode<T>, UTF-8 / surrogate pair, value constructors |
+| config | 1253 | pure Osty + json/fs/env | TOML / YAML / INI / .env parse, read/load/readAuto/loadAuto, repeated objects, default merge, schema coercion + validation |
 | table | 1112 | pure Osty + csv | small dataframe: CSV/TSV read-write, type inference, schema validation/coercion, typed sort, group aggregation, indexed join |
 | url | 592 | — | parse / join / format |
 | io | 541 | shim 171 | Reader/Writer 프로토콜, Buffer, copyN, readExact |
@@ -95,7 +96,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (4 / 68 = 6%)
+### ⭐⭐⭐⭐ Production-adjacent (4 / 69 = 6%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
@@ -123,6 +124,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 |---|---|---|
 | HTTP 웹 서버 | ✅ 즉시 가능 | http + io + json + net |
 | CLI 도구 | ✅ 즉시 가능 | os + fs + io + fmt + env |
+| 설정 파일 로딩 | ✅ 즉시 가능 | config + json + fs + env |
 | 데이터 처리 (CSV / TSV / JSON / tables) | ✅ 즉시 가능 | table + csv + json + collections + iter + fmt |
 | 파일 변환기 / 아카이브 | ✅ 가능 | fs + io + tar + compress (gzip 만) + fmt |
 | 암호화 / 해시 | ✅ 가능 | crypto (sha256 / hmac / random / constantTimeEq) |
@@ -181,7 +183,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 45 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, aiagents, redact, media, security, search, markdown, report, tokenest, httpretry, jsonl, shortid, metrics, net, fmt, json, table, url, io, collections, email, db, grid, gui, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
+- 46 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, aiagents, redact, media, security, search, markdown, report, tokenest, httpretry, jsonl, shortid, metrics, net, fmt, json, config, table, url, io, collections, email, db, grid, gui, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
 - 6 모듈은 Phase A 충실 + Phase B declaration-only (fs, env, random, os, crypto, compress)
 - 나머지는 의도된 범위에서 surface 만으로 완성 (cli, math, cmp, hint, debug, ref, process, log, time, error, sync, thread, regex, testing, uuid)
 
