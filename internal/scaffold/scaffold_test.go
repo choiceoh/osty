@@ -126,6 +126,51 @@ func TestCreateWebView2GuiProject(t *testing.T) {
 	}
 }
 
+func TestRenderPolyglotUsesKnownPreset(t *testing.T) {
+	src, d := RenderPolyglot(PolyglotOptions{
+		Name:      "bridge",
+		Primary:   "osty",
+		Secondary: "rust",
+		Protocol:  "json",
+	})
+	if d != nil {
+		t.Fatalf("RenderPolyglot returned diagnostic: %v", d)
+	}
+	for _, want := range []string{
+		"use std.polyglot",
+		"pub fn bridgeWorkspace(primaryRoot: String, secondaryRoot: String) -> Result<polyglot.Workspace, Error>",
+		"ostyRustCore(primaryRoot, secondaryRoot)",
+		"doctorRun(ws).render()",
+	} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("polyglot scaffold missing %q:\n%s", want, src)
+		}
+	}
+}
+
+func TestWritePolyglotCreatesRailFile(t *testing.T) {
+	parent := t.TempDir()
+	path, d := WritePolyglot(parent, PolyglotOptions{
+		Name:      "bridge",
+		Primary:   "go",
+		Secondary: "rust",
+		Protocol:  "json",
+	})
+	if d != nil {
+		t.Fatalf("WritePolyglot returned diagnostic: %v", d)
+	}
+	if filepath.Base(path) != "bridge_polyglot.osty" {
+		t.Fatalf("path = %q, want bridge_polyglot.osty", path)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read generated polyglot rail: %v", err)
+	}
+	if !strings.Contains(string(raw), "goRustCAbi(primaryRoot, secondaryRoot)") {
+		t.Fatalf("generated rail missing Go/Rust preset:\n%s", raw)
+	}
+}
+
 // TestCreateRollbackOnMkdirFailure verifies that when MkdirAll fails
 // (read-only parent dir) no partial outer directory is left behind.
 func TestCreateRollbackOnMkdirFailure(t *testing.T) {

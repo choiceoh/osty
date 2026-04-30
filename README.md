@@ -310,7 +310,7 @@ osty profiles          # list build profiles (debug, release, profile, test, ...
 osty targets           # list declared cross-compilation targets
 osty features          # list declared opt-in features
 osty cache [ls|clean|info] # inspect or prune backend build caches
-osty scaffold <kind>   # one-off generators (fixture / schema / ffi)
+osty scaffold <kind>   # one-off generators (fixture / schema / ffi / polyglot)
 osty lsp               # run the language server on stdio
 osty explain [CODE]    # describe a diagnostic (Exxxx/Wxxxx/Lxxxx); no arg lists every code
 osty pipeline FILE|DIR # run every front-end phase; per-stage timing
