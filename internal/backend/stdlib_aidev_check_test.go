@@ -9,7 +9,7 @@ import (
 
 func TestStdlibCheckResultAidev(t *testing.T) {
 	reg := stdlib.LoadCached()
-	for _, module := range []string{"aidev", "aidev.osty", "aidev.prompt", "aidev.corpus", "aidev.verify"} {
+	for _, module := range []string{"aidev", "aidev.osty", "aidev.prompt", "aidev.corpus", "aidev.verify", "aidev.workflow"} {
 		t.Run(module, func(t *testing.T) {
 			chk := stdlibCheckResult(reg, module)
 			if chk == nil {

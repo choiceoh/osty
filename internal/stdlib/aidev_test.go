@@ -259,6 +259,55 @@ func TestAidevVerifyModuleSurface(t *testing.T) {
 	}
 }
 
+func TestAidevWorkflowModuleSurface(t *testing.T) {
+	reg := LoadCached()
+	mod := reg.Modules["aidev.workflow"]
+	if mod == nil || mod.Package == nil || mod.Package.PkgScope == nil {
+		t.Fatalf("std.aidev.workflow not loaded with package scope; registry diagnostics:\n%s", stdlibRebindDiagSummary(reg))
+	}
+
+	for _, tc := range []struct {
+		name string
+		kind resolve.SymbolKind
+	}{
+		{"WorkflowStage", resolve.SymEnum},
+		{"WorkflowStatus", resolve.SymEnum},
+		{"WorkflowStep", resolve.SymStruct},
+		{"WorkflowDraft", resolve.SymStruct},
+		{"WorkflowProposal", resolve.SymStruct},
+		{"WorkflowRun", resolve.SymStruct},
+	} {
+		sym := mod.Package.PkgScope.LookupLocal(tc.name)
+		if sym == nil {
+			t.Fatalf("std.aidev.workflow missing type %q", tc.name)
+		}
+		if sym.Kind != tc.kind {
+			t.Fatalf("std.aidev.workflow.%s kind = %s, want %s", tc.name, sym.Kind, tc.kind)
+		}
+		if !sym.Pub {
+			t.Fatalf("std.aidev.workflow.%s not public", tc.name)
+		}
+	}
+
+	for _, name := range []string{
+		"step", "startDefault", "start", "buildContext", "defaultVerifyPlan",
+		"propose", "proposalFromResult", "complete", "completeWithReport",
+		"recordAttempt", "statusForDecision", "isOstyFile", "sourceHabit",
+		"summarizeDraft", "summarizeProposal", "summarizeRun", "formatSteps",
+	} {
+		sym := mod.Package.PkgScope.LookupLocal(name)
+		if sym == nil {
+			t.Fatalf("std.aidev.workflow missing export %q", name)
+		}
+		if sym.Kind != resolve.SymFn {
+			t.Fatalf("std.aidev.workflow.%s kind = %s, want fn", name, sym.Kind)
+		}
+		if !sym.Pub {
+			t.Fatalf("std.aidev.workflow.%s not public", name)
+		}
+	}
+}
+
 func TestAidevSourcePinsAgentCodingLoopPrimitives(t *testing.T) {
 	src := aidevModuleSource(t)
 	for _, want := range []string{
@@ -360,6 +409,29 @@ func TestAidevSourcePinsAgentCodingLoopPrimitives(t *testing.T) {
 			t.Fatalf("std.aidev.verify source missing %q", want)
 		}
 	}
+
+	workflowSrc := aidevWorkflowModuleSource(t)
+	for _, want := range []string{
+		"end-to-end AI coding workflow records",
+		"diagnostics -> prompt -> patch ->",
+		"pub enum WorkflowStage",
+		"pub enum WorkflowStatus",
+		"pub struct WorkflowDraft",
+		"pub struct WorkflowProposal",
+		"pub struct WorkflowRun",
+		"pub fn startDefault",
+		"pub fn propose",
+		"pub fn complete",
+		"pub fn recordAttempt",
+		"pub fn summarizeRun",
+		"prompt.buildFixPrompt",
+		"verify.buildReport",
+		"corpus.repairAttempt",
+	} {
+		if !strings.Contains(workflowSrc, want) {
+			t.Fatalf("std.aidev.workflow source missing %q", want)
+		}
+	}
 }
 
 func TestAidevImportsResolveMVPWorkflow(t *testing.T) {
@@ -369,6 +441,7 @@ use std.aidev.osty as ostydev
 use std.aidev.prompt as prompt
 use std.aidev.corpus as corpus
 use std.aidev.verify as verify
+use std.aidev.workflow as workflow
 
 pub fn demo() -> prompt.PromptBundle {
     let file = aidev.sourceFile("main.osty", "osty", "println old")
@@ -386,6 +459,10 @@ pub fn demo() -> prompt.PromptBundle {
     let vplan = verify.stdlibAidevPlan()
     let report = verify.buildReport(vplan, [verify.passed("gotest:./internal/stdlib:TestAidev")], [diag], [], applied)
     let _ = verify.summarizeReport(report)
+    let draft = workflow.startDefault("case_0002", "workflow unknown symbol", file, [diag])
+    let proposal = workflow.propose(draft, p)
+    let run = workflow.complete(proposal, [verify.passed("tokens:main.osty"), verify.passed("check:main.osty")], [], [], "")
+    let _ = workflow.summarizeRun(run)
     prompt.buildFixPromptDefault(context)
 }
 `
@@ -448,6 +525,16 @@ func aidevVerifyModuleSource(t *testing.T) string {
 	mod := reg.Modules["aidev.verify"]
 	if mod == nil {
 		t.Fatal("stdlib aidev.verify module missing")
+	}
+	return string(mod.Source)
+}
+
+func aidevWorkflowModuleSource(t *testing.T) string {
+	t.Helper()
+	reg := LoadCached()
+	mod := reg.Modules["aidev.workflow"]
+	if mod == nil {
+		t.Fatal("stdlib aidev.workflow module missing")
 	}
 	return string(mod.Source)
 }
