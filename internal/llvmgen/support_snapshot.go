@@ -596,7 +596,82 @@ func llvmGcRootRelease(emitter *LlvmEmitter, value *LlvmValue) {
 	llvmCallVoid(emitter, "osty.gc.root_release_v1", []*LlvmValue{value})
 }
 
-// Osty: toolchain/llvmgen.osty:460:5
+// Osty: toolchain/llvmgen.osty:456:5
+func llvmGcRuntimeFrameSlotKind() int {
+	return 5
+}
+
+// Osty: toolchain/llvmgen.osty:465:5
+func llvmValueNeedsManagedRoot(gcManaged bool, listElemTyp string, mapKeyTyp string, setElemTyp string) bool {
+	return gcManaged || listElemTyp != "" || mapKeyTyp != "" || setElemTyp != ""
+}
+
+// Osty: toolchain/llvmgen.osty:480:5
+func llvmShouldBindLocalToSlot(mutable bool, typ string, gcManaged bool, listElemTyp string, mapKeyTyp string, setElemTyp string, rootPathCount int) bool {
+	return mutable || (typ == "ptr" && llvmValueNeedsManagedRoot(gcManaged, listElemTyp, mapKeyTyp, setElemTyp)) || rootPathCount > 0
+}
+
+// Osty: toolchain/llvmgen.osty:504:5
+func llvmNeedsSafepointProtection(pointer bool, typ string, gcManaged bool, rootPathCount int) bool {
+	// Osty: toolchain/llvmgen.osty:510:5
+	if pointer {
+		// Osty: toolchain/llvmgen.osty:511:9
+		return false
+	}
+	return (typ == "ptr" && gcManaged) || rootPathCount > 0
+}
+
+// Osty: toolchain/llvmgen.osty:518:5
+func llvmGcMarkSlotSymbol() string {
+	return "osty.gc.mark_slot_v1"
+}
+
+// Osty: toolchain/llvmgen.osty:526:5
+func llvmTraceCallbackDirectSymbol(typ string, rootPathCount int) string {
+	// Osty: toolchain/llvmgen.osty:527:5
+	if typ == "" {
+		// Osty: toolchain/llvmgen.osty:528:9
+		return "null"
+	}
+	// Osty: toolchain/llvmgen.osty:530:5
+	if typ == "ptr" {
+		// Osty: toolchain/llvmgen.osty:531:9
+		return llvmGcMarkSlotSymbol()
+	}
+	// Osty: toolchain/llvmgen.osty:533:5
+	if rootPathCount <= 0 {
+		// Osty: toolchain/llvmgen.osty:534:9
+		return "null"
+	}
+	return ""
+}
+
+// Osty: toolchain/llvmgen.osty:543:5
+func llvmTraceHelperCacheKey(typ string, rootPathsText string) string {
+	return typ + ":" + rootPathsText
+}
+
+// Osty: toolchain/llvmgen.osty:547:5
+func llvmTraceHelperSymbol(index int) string {
+	return fmt.Sprintf("osty_rt_trace_%s", ostyToString(index))
+}
+
+// Osty: toolchain/llvmgen.osty:551:5
+func llvmTraceCallbackParamName() string {
+	return "value.addr"
+}
+
+// Osty: toolchain/llvmgen.osty:553:5
+func llvmTraceCallbackParamRef() string {
+	return "%value.addr"
+}
+
+// Osty: toolchain/llvmgen.osty:555:5
+func llvmTraceFieldTempName(step int, fieldIndex int) string {
+	return fmt.Sprintf("%%trace.field.%s.%s", ostyToString(step), ostyToString(fieldIndex))
+}
+
+// Osty: toolchain/llvmgen.osty:560:5
 func llvmSafepointKindUnspecified() int {
 	return 0
 }
