@@ -88,6 +88,30 @@ func collectStdNetAliases(file *ast.File) map[string]bool {
 	return out
 }
 
+func stdBytesArgNoun(n int) string {
+	if n == 1 {
+		return "argument"
+	}
+	return "arguments"
+}
+
+func (g *generator) emitStdBytesDescriptorArg(arg *ast.Arg, name string, index int) (value, error) {
+	switch llvmStdBytesCallParamKind(name, index) {
+	case llvmRuntimeFfiKindBytes():
+		return g.emitStdBytesArg(arg, name, index)
+	case llvmRuntimeFfiKindInt():
+		return g.emitStdBytesIntArg(arg, name, index)
+	case llvmRuntimeFfiKindString():
+		return g.emitStdBytesStringArg(arg, name, index)
+	case llvmRuntimeFfiKindListByte():
+		return g.emitStdBytesListArg(arg, name, index)
+	case llvmRuntimeFfiKindListBytes():
+		return g.emitStdBytesListOfBytesArg(arg, name, index)
+	default:
+		return value{}, unsupportedf("call", "bytes.%s arg %d has unknown descriptor kind", name, index+1)
+	}
+}
+
 func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 	if call == nil || len(g.stdBytesAliases) == 0 {
 		return value{}, false, nil
@@ -100,12 +124,17 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 	if !ok || !g.stdBytesAliases[alias.Name] {
 		return value{}, false, nil
 	}
-	switch field.Name {
+	name := llvmStdBytesCallCanonicalName(field.Name)
+	expected := llvmStdBytesCallArgCount(name)
+	if expected == 0 {
+		return value{}, false, nil
+	}
+	if len(call.Args) != expected {
+		return value{}, true, unsupportedf("call", "bytes.%s expects %d %s, got %d", name, expected, stdBytesArgNoun(expected), len(call.Args))
+	}
+	switch name {
 	case "from":
-		if len(call.Args) != 1 {
-			return value{}, true, unsupportedf("call", "bytes.from expects 1 argument, got %d", len(call.Args))
-		}
-		items, err := g.emitStdBytesListArg(call.Args[0], "from", 0)
+		items, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -115,14 +144,11 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "split":
-		if len(call.Args) != 2 {
-			return value{}, true, unsupportedf("call", "bytes.split expects 2 arguments, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "split", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
-		sep, err := g.emitStdBytesArg(call.Args[1], "split", 1)
+		sep, err := g.emitStdBytesDescriptorArg(call.Args[1], name, 1)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -132,14 +158,11 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "join":
-		if len(call.Args) != 2 {
-			return value{}, true, unsupportedf("call", "bytes.join expects 2 arguments, got %d", len(call.Args))
-		}
-		parts, err := g.emitStdBytesListOfBytesArg(call.Args[0], "join", 0)
+		parts, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
-		sep, err := g.emitStdBytesArg(call.Args[1], "join", 1)
+		sep, err := g.emitStdBytesDescriptorArg(call.Args[1], name, 1)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -149,14 +172,11 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "concat":
-		if len(call.Args) != 2 {
-			return value{}, true, unsupportedf("call", "bytes.concat expects 2 arguments, got %d", len(call.Args))
-		}
-		left, err := g.emitStdBytesArg(call.Args[0], "concat", 0)
+		left, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
-		right, err := g.emitStdBytesArg(call.Args[1], "concat", 1)
+		right, err := g.emitStdBytesDescriptorArg(call.Args[1], name, 1)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -166,14 +186,11 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "repeat":
-		if len(call.Args) != 2 {
-			return value{}, true, unsupportedf("call", "bytes.repeat expects 2 arguments, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "repeat", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
-		n, err := g.emitStdBytesIntArg(call.Args[1], "repeat", 1)
+		n, err := g.emitStdBytesDescriptorArg(call.Args[1], name, 1)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -183,18 +200,15 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "replace":
-		if len(call.Args) != 3 {
-			return value{}, true, unsupportedf("call", "bytes.replace expects 3 arguments, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "replace", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
-		oldValue, err := g.emitStdBytesArg(call.Args[1], "replace", 1)
+		oldValue, err := g.emitStdBytesDescriptorArg(call.Args[1], name, 1)
 		if err != nil {
 			return value{}, true, err
 		}
-		newValue, err := g.emitStdBytesArg(call.Args[2], "replace", 2)
+		newValue, err := g.emitStdBytesDescriptorArg(call.Args[2], name, 2)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -204,18 +218,15 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "replaceAll":
-		if len(call.Args) != 3 {
-			return value{}, true, unsupportedf("call", "bytes.replaceAll expects 3 arguments, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "replaceAll", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
-		oldValue, err := g.emitStdBytesArg(call.Args[1], "replaceAll", 1)
+		oldValue, err := g.emitStdBytesDescriptorArg(call.Args[1], name, 1)
 		if err != nil {
 			return value{}, true, err
 		}
-		newValue, err := g.emitStdBytesArg(call.Args[2], "replaceAll", 2)
+		newValue, err := g.emitStdBytesDescriptorArg(call.Args[2], name, 2)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -225,14 +236,11 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "trimLeft":
-		if len(call.Args) != 2 {
-			return value{}, true, unsupportedf("call", "bytes.trimLeft expects 2 arguments, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "trimLeft", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
-		strip, err := g.emitStdBytesArg(call.Args[1], "trimLeft", 1)
+		strip, err := g.emitStdBytesDescriptorArg(call.Args[1], name, 1)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -242,14 +250,11 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "trimRight":
-		if len(call.Args) != 2 {
-			return value{}, true, unsupportedf("call", "bytes.trimRight expects 2 arguments, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "trimRight", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
-		strip, err := g.emitStdBytesArg(call.Args[1], "trimRight", 1)
+		strip, err := g.emitStdBytesDescriptorArg(call.Args[1], name, 1)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -259,14 +264,11 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "trim":
-		if len(call.Args) != 2 {
-			return value{}, true, unsupportedf("call", "bytes.trim expects 2 arguments, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "trim", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
-		strip, err := g.emitStdBytesArg(call.Args[1], "trim", 1)
+		strip, err := g.emitStdBytesDescriptorArg(call.Args[1], name, 1)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -276,10 +278,7 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "trimSpace":
-		if len(call.Args) != 1 {
-			return value{}, true, unsupportedf("call", "bytes.trimSpace expects 1 argument, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "trimSpace", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -289,10 +288,7 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "toUpper":
-		if len(call.Args) != 1 {
-			return value{}, true, unsupportedf("call", "bytes.toUpper expects 1 argument, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "toUpper", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -302,10 +298,7 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "toLower":
-		if len(call.Args) != 1 {
-			return value{}, true, unsupportedf("call", "bytes.toLower expects 1 argument, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "toLower", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -315,10 +308,7 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "toHex":
-		if len(call.Args) != 1 {
-			return value{}, true, unsupportedf("call", "bytes.toHex expects 1 argument, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "toHex", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -328,10 +318,7 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "fromHex":
-		if len(call.Args) != 1 {
-			return value{}, true, unsupportedf("call", "bytes.fromHex expects 1 argument, got %d", len(call.Args))
-		}
-		s, err := g.emitStdBytesStringArg(call.Args[0], "fromHex", 0)
+		s, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -341,14 +328,11 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "contains":
-		if len(call.Args) != 2 {
-			return value{}, true, unsupportedf("call", "bytes.contains expects 2 arguments, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "contains", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
-		sub, err := g.emitStdBytesArg(call.Args[1], "contains", 1)
+		sub, err := g.emitStdBytesDescriptorArg(call.Args[1], name, 1)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -358,14 +342,11 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "startsWith":
-		if len(call.Args) != 2 {
-			return value{}, true, unsupportedf("call", "bytes.startsWith expects 2 arguments, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "startsWith", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
-		prefix, err := g.emitStdBytesArg(call.Args[1], "startsWith", 1)
+		prefix, err := g.emitStdBytesDescriptorArg(call.Args[1], name, 1)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -375,14 +356,11 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "endsWith":
-		if len(call.Args) != 2 {
-			return value{}, true, unsupportedf("call", "bytes.endsWith expects 2 arguments, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "endsWith", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
-		suffix, err := g.emitStdBytesArg(call.Args[1], "endsWith", 1)
+		suffix, err := g.emitStdBytesDescriptorArg(call.Args[1], name, 1)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -392,14 +370,11 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "indexOf":
-		if len(call.Args) != 2 {
-			return value{}, true, unsupportedf("call", "bytes.indexOf expects 2 arguments, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "indexOf", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
-		sub, err := g.emitStdBytesArg(call.Args[1], "indexOf", 1)
+		sub, err := g.emitStdBytesDescriptorArg(call.Args[1], name, 1)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -409,14 +384,11 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "lastIndexOf":
-		if len(call.Args) != 2 {
-			return value{}, true, unsupportedf("call", "bytes.lastIndexOf expects 2 arguments, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "lastIndexOf", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
-		sub, err := g.emitStdBytesArg(call.Args[1], "lastIndexOf", 1)
+		sub, err := g.emitStdBytesDescriptorArg(call.Args[1], name, 1)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -426,18 +398,15 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "slice":
-		if len(call.Args) != 3 {
-			return value{}, true, unsupportedf("call", "bytes.slice expects 3 arguments, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "slice", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
-		start, err := g.emitStdBytesIntArg(call.Args[1], "slice", 1)
+		start, err := g.emitStdBytesDescriptorArg(call.Args[1], name, 1)
 		if err != nil {
 			return value{}, true, err
 		}
-		end, err := g.emitStdBytesIntArg(call.Args[2], "slice", 2)
+		end, err := g.emitStdBytesDescriptorArg(call.Args[2], name, 2)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -447,10 +416,7 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "toString":
-		if len(call.Args) != 1 {
-			return value{}, true, unsupportedf("call", "bytes.toString expects 1 argument, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "toString", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -460,10 +426,7 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "len":
-		if len(call.Args) != 1 {
-			return value{}, true, unsupportedf("call", "bytes.len expects 1 argument, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "len", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -474,10 +437,7 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		g.takeOstyEmitter(emitter)
 		return fromOstyValue(out), true, nil
 	case "isEmpty":
-		if len(call.Args) != 1 {
-			return value{}, true, unsupportedf("call", "bytes.isEmpty expects 1 argument, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "isEmpty", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -488,14 +448,11 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		g.takeOstyEmitter(emitter)
 		return fromOstyValue(out), true, nil
 	case "get":
-		if len(call.Args) != 2 {
-			return value{}, true, unsupportedf("call", "bytes.get expects 2 arguments, got %d", len(call.Args))
-		}
-		b, err := g.emitStdBytesArg(call.Args[0], "get", 0)
+		b, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
-		index, err := g.emitStdBytesIntArg(call.Args[1], "get", 1)
+		index, err := g.emitStdBytesDescriptorArg(call.Args[1], name, 1)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -505,10 +462,7 @@ func (g *generator) emitStdBytesCall(call *ast.CallExpr) (value, bool, error) {
 		}
 		return out, true, nil
 	case "fromString":
-		if len(call.Args) != 1 {
-			return value{}, true, unsupportedf("call", "bytes.fromString expects 1 argument, got %d", len(call.Args))
-		}
-		s, err := g.emitStdBytesStringArg(call.Args[0], "fromString", 0)
+		s, err := g.emitStdBytesDescriptorArg(call.Args[0], name, 0)
 		if err != nil {
 			return value{}, true, err
 		}
@@ -747,14 +701,12 @@ func (g *generator) stdBytesCallStaticResult(call *ast.CallExpr) (value, bool) {
 	if !ok || !g.stdBytesAliases[alias.Name] {
 		return value{}, false
 	}
-	switch field.Name {
-	case "len":
+	switch llvmStdBytesCallReturnKind(field.Name) {
+	case llvmRuntimeFfiKindInt():
 		return value{typ: "i64"}, true
-	case "isEmpty":
+	case llvmRuntimeFfiKindBool():
 		return value{typ: "i1"}, true
-	case "contains", "startsWith", "endsWith":
-		return value{typ: "i1"}, true
-	case "indexOf", "lastIndexOf":
+	case llvmStdBytesResultKindOptionInt():
 		return value{
 			typ:       "ptr",
 			gcManaged: true,
@@ -762,7 +714,7 @@ func (g *generator) stdBytesCallStaticResult(call *ast.CallExpr) (value, bool) {
 				Inner: &ast.NamedType{Path: []string{"Int"}},
 			},
 		}, true
-	case "get":
+	case llvmStdBytesResultKindOptionByte():
 		return value{
 			typ:       "ptr",
 			gcManaged: true,
@@ -770,22 +722,18 @@ func (g *generator) stdBytesCallStaticResult(call *ast.CallExpr) (value, bool) {
 				Inner: &ast.NamedType{Path: []string{"Byte"}},
 			},
 		}, true
-	case "fromString":
+	case llvmRuntimeFfiKindBytes():
 		return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"Bytes"}}}, true
-	case "from":
-		return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"Bytes"}}}, true
-	case "split":
+	case llvmRuntimeFfiKindListBytes():
 		return value{typ: "ptr", gcManaged: true, listElemTyp: "ptr", sourceType: bytesListSourceType()}, true
-	case "concat", "join", "repeat", "replace", "replaceAll", "trimLeft", "trimRight", "trim", "trimSpace", "toUpper", "toLower", "slice":
-		return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"Bytes"}}}, true
-	case "toHex":
+	case llvmRuntimeFfiKindString():
 		return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"String"}}}, true
-	case "fromHex":
+	case llvmStdBytesResultKindResultBytesError():
 		if info, ok := builtinResultTypeFromAST(bytesFromHexResultSourceType(), g.typeEnv()); ok {
 			return value{typ: info.typ, sourceType: bytesFromHexResultSourceType(), rootPaths: g.rootPathsForType(info.typ)}, true
 		}
 		return value{}, false
-	case "toString":
+	case llvmStdBytesResultKindResultStringError():
 		if info, ok := builtinResultTypeFromAST(bytesToStringResultSourceType(), g.typeEnv()); ok {
 			return value{typ: info.typ, sourceType: bytesToStringResultSourceType(), rootPaths: g.rootPathsForType(info.typ)}, true
 		}
