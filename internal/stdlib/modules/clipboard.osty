@@ -1,0 +1,126 @@
+// std.clipboard - host clipboard text I/O for small workflow tools.
+//
+// The implementation deliberately stays in pure Osty and delegates the host
+// boundary to std.os process execution. It tries the common desktop clipboard
+// commands used by macOS, Wayland, X11, PowerShell, and WSL, returning an Error
+// when none of them is available or succeeds.
+
+use std.error
+use std.os
+
+fn timeoutMillis() -> Int {
+    5000
+}
+
+fn emptyEnv() -> Map<String, String> {
+    {:}
+}
+
+fn clipboardError(action: String) -> Error {
+    error.new("clipboard: no supported clipboard {action} command succeeded")
+}
+
+fn outputOk(out: os.ExecOutput) -> Bool {
+    out.exitCode == 0 && !out.timedOut
+}
+
+fn tryRun(program: String, args: List<String>) -> os.ExecOutput? {
+    match os.execWith(program, args, "", emptyEnv(), timeoutMillis()) {
+        Ok(out) -> {
+            if outputOk(out) {
+                Some(out)
+            } else {
+                None
+            }
+        },
+        Err(_) -> None,
+    }
+}
+
+fn tryRead(program: String, args: List<String>) -> String? {
+    let out = tryRun(program, args)
+    if out.isSome() {
+        return Some(out.unwrap().stdout)
+    }
+    None
+}
+
+fn tryWrite(program: String, args: List<String>) -> Bool {
+    tryRun(program, args).isSome()
+}
+
+pub fn readText() -> Result<String, Error> {
+    let pbpaste = tryRead("pbpaste", [])
+    if pbpaste.isSome() {
+        return Ok(pbpaste.unwrap())
+    }
+    let wayland = tryRead("wl-paste", ["--no-newline"])
+    if wayland.isSome() {
+        return Ok(wayland.unwrap())
+    }
+    let xclip = tryRead("xclip", ["-selection", "clipboard", "-out"])
+    if xclip.isSome() {
+        return Ok(xclip.unwrap())
+    }
+    let xsel = tryRead("xsel", ["--clipboard", "--output"])
+    if xsel.isSome() {
+        return Ok(xsel.unwrap())
+    }
+    let osascript = tryRead("osascript", ["-e", "the clipboard as text"])
+    if osascript.isSome() {
+        return Ok(osascript.unwrap())
+    }
+    let powershellExe = tryRead("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Console]::Out.Write((Get-Clipboard -Raw))"])
+    if powershellExe.isSome() {
+        return Ok(powershellExe.unwrap())
+    }
+    let powershell = tryRead("powershell", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Console]::Out.Write((Get-Clipboard -Raw))"])
+    if powershell.isSome() {
+        return Ok(powershell.unwrap())
+    }
+    let pwsh = tryRead("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Console]::Out.Write((Get-Clipboard -Raw))"])
+    if pwsh.isSome() {
+        return Ok(pwsh.unwrap())
+    }
+    Err(clipboardError("read"))
+}
+
+pub fn writeText(text: String) -> Result<(), Error> {
+    if tryWrite("sh", ["-c", "printf %s \"$1\" | pbcopy", "osty-clipboard", text]) {
+        return Ok(())
+    }
+    if tryWrite("sh", ["-c", "printf %s \"$1\" | wl-copy", "osty-clipboard", text]) {
+        return Ok(())
+    }
+    if tryWrite("sh", ["-c", "printf %s \"$1\" | xclip -selection clipboard", "osty-clipboard", text]) {
+        return Ok(())
+    }
+    if tryWrite("sh", ["-c", "printf %s \"$1\" | xsel --clipboard --input", "osty-clipboard", text]) {
+        return Ok(())
+    }
+    if tryWrite("osascript", ["-e", "set the clipboard to (item 1 of argv)", "--", text]) {
+        return Ok(())
+    }
+    if tryWrite("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Set-Clipboard -Value $args[0]", text]) {
+        return Ok(())
+    }
+    if tryWrite("powershell", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Set-Clipboard -Value $args[0]", text]) {
+        return Ok(())
+    }
+    if tryWrite("pwsh", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "Set-Clipboard -Value $args[0]", text]) {
+        return Ok(())
+    }
+    Err(clipboardError("write"))
+}
+
+pub fn read() -> Result<String, Error> {
+    readText()
+}
+
+pub fn write(text: String) -> Result<(), Error> {
+    writeText(text)
+}
+
+pub fn clear() -> Result<(), Error> {
+    writeText("")
+}

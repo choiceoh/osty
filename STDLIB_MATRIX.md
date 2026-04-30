@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 83 공개 모듈. 분류 기준:
+총 84 공개 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (79 / 83 = 95%)
+### ⭐⭐⭐⭐⭐ Production (80 / 84 = 95%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -84,6 +84,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | cli | 260 | pure Osty + env | flag / option spec, parse / parseEnv / usage |
 | cmd | 214 | os shim + runtime | command builder, cwd/env/timeout, captured output, POSIX shell escaping, pipeline rendering |
 | watch | 535 | pure Osty + fs/time/cmd | polling file watcher: fs.watch snapshot parsing, typed create/modify/remove diff, debounce, hidden/build-dir filters, transform/sync command tasks |
+| clipboard | 125 | pure Osty + os | host clipboard text read/write via pbpaste/pbcopy, Wayland, X11, AppleScript, PowerShell |
 | graphql | 224 | pure Osty | document / field / argument builders + request JSON body encoding |
 | template | 148 | pure Osty | escaped/raw `{{name}}` 렌더링 + HTML escape / stripTags |
 | i18n | 136 | pure Osty | Locale / MessageCatalog / fallbackTags / pluralCategory / placeholder format |
@@ -111,7 +112,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (4 / 83 = 5%)
+### ⭐⭐⭐⭐ Production-adjacent (4 / 84 = 5%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
@@ -127,7 +128,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 
 | 구분 | 갭 |
 |---|---|
-| 없는 모듈 | 없음 (`db`, `smtp`, `zip`, `image`, `schedule`, `dialog`, `watch`, `scan`, `print` surface 는 존재) |
+| 없는 모듈 | 없음 (`db`, `smtp`, `zip`, `image`, `schedule`, `dialog`, `watch`, `scan`, `print`, `clipboard` surface 는 존재) |
 | 남은 runtime/deep 기능 | `db driver/runtime`, `smtp TLS/socket execution`, `zip deflate`, `image pixel decode` |
 | 부분 구현 | `compress` 는 gzip 만 있음. deflate/zstd 계열 없음 |
 | 문서/코드 드리프트 | 일부 README/매트릭스 문구가 과거 G18 stub 정책을 아직 과장해서 남김 |
@@ -142,6 +143,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | 데이터 처리 (CSV / TSV / JSON / tables) | ✅ 즉시 가능 | table + csv + json + collections + iter + fmt |
 | 파일 변환기 / 아카이브 | ✅ 가능 | fs + io + tar + compress (gzip 만) + fmt |
 | 파일 변경 감시 / 자동 변환 | ✅ 가능 | watch + fs + time + cmd |
+| 클립보드 업무 도구 | ✅ 가능 | clipboard + os (host clipboard command adapters) |
 | 암호화 / 해시 | ✅ 가능 | crypto (sha256 / hmac / random / constantTimeEq) |
 | 랜덤 게임 / 시뮬레이션 | ✅ 가능 | random (seeded RNG) + math |
 | 수치 계산 | ✅ 가능 | math (sin / cos / log / exp / sqrt / pow / floor / ceil / clamp / hypot) |
@@ -205,7 +207,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 59 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, schedule, jsonl, kv, shortid, metrics, net, fmt, json, config, table, url, io, collections, email, db, polyglot, grid, gui, dialog, tar, sql, xml, tui, image, ocr, scan, smtp, result, option, csv, encoding, zip, term, websocket, watch, graphql, template, i18n, char, iter, bytes)
+- 60 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, schedule, jsonl, kv, shortid, metrics, net, fmt, json, config, table, url, io, collections, email, db, polyglot, grid, gui, dialog, tar, sql, xml, tui, image, ocr, scan, smtp, result, option, csv, encoding, zip, term, websocket, watch, clipboard, graphql, template, i18n, char, iter, bytes)
 - 5 모듈은 Phase A 충실 + Phase B declaration-only (env, random, os, crypto, compress)
 - fs 는 Phase A 충실 + 확장된 tool-facing declaration surface (walk/glob/watch/atomicWrite/lockFile/hashFile/copyDir/diffFiles)
 - print 는 기존 `std.os` host process bridge 위에서 CUPS/Windows/custom spooler 실행 계획을 제공한다. 실제 출력은 가능하지만 프린터별 capability discovery 는 production-adjacent 로 남긴다.
