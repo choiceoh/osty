@@ -6,6 +6,7 @@
 // Qt Quick spike surface.
 
 use std.error
+use std.strings
 use c "osty_qt" as qt {
     fn osty_qt_abi_version() -> String
     fn osty_qt_has_qt() -> Bool
@@ -16,11 +17,13 @@ use c "osty_qt" as qt {
     fn osty_qt_app_poll(app: Int) -> Bool
     fn osty_qt_app_quit(app: Int)
     fn osty_qt_app_set_state_json(app: Int, stateJson: String) -> Bool
+    fn osty_qt_app_add_import_path(app: Int, path: String) -> Bool
     fn osty_qt_window_new(app: Int, title: String, width: Int, height: Int, qml: String) -> Int
     fn osty_qt_window_show(window: Int) -> Bool
     fn osty_qt_window_close(window: Int)
     fn osty_qt_window_set_title(window: Int, title: String) -> Bool
     fn osty_qt_window_set_state_json(window: Int, stateJson: String) -> Bool
+    fn osty_qt_window_reload(window: Int) -> Bool
     fn osty_qt_event_count(app: Int) -> Int
     fn osty_qt_event_name(app: Int, index: Int) -> String
     fn osty_qt_event_payload(app: Int, index: Int) -> String
@@ -49,6 +52,14 @@ pub struct App {
         }
     }
 
+    pub fn addImportPath(self, path: String) -> Result<(), Error> {
+        if qt.osty_qt_app_add_import_path(self.handle, path) {
+            Ok(())
+        } else {
+            Err(backendError())
+        }
+    }
+
     pub fn poll(self) -> Bool {
         qt.osty_qt_app_poll(self.handle)
     }
@@ -58,8 +69,8 @@ pub struct App {
         let mut out: List<Event> = []
         for i in 0..n {
             out.push(Event {
-                name: qt.osty_qt_event_name(self.handle, i),
-                payload: qt.osty_qt_event_payload(self.handle, i),
+                name: copyString(qt.osty_qt_event_name(self.handle, i)),
+                payload: copyString(qt.osty_qt_event_payload(self.handle, i)),
             })
         }
         qt.osty_qt_event_clear(self.handle)
@@ -112,6 +123,14 @@ pub struct Window {
         }
     }
 
+    pub fn reload(self) -> Result<(), Error> {
+        if qt.osty_qt_window_reload(self.handle) {
+            Ok(())
+        } else {
+            Err(backendError())
+        }
+    }
+
     pub fn close(self) {
         qt.osty_qt_window_close(self.handle)
         return
@@ -139,22 +158,55 @@ pub fn windowOptions(title: String, width: Int, height: Int, qml: String) -> Win
     }
 }
 
+pub fn defaultWindowOptions(title: String, qml: String) -> WindowOptions {
+    WindowOptions {
+        title: title,
+        width: 1100,
+        height: 720,
+        qml: qml,
+    }
+}
+
 pub struct RuntimeInfo {
     pub abiVersion: String,
     pub available: Bool,
     pub lastError: String,
 }
 
+pub struct RuntimeDiagnostic {
+    pub available: Bool,
+    pub abiVersion: String,
+    pub message: String,
+    pub lastError: String,
+}
+
 pub fn runtimeInfo() -> RuntimeInfo {
     RuntimeInfo {
-        abiVersion: qt.osty_qt_abi_version(),
+        abiVersion: copyString(qt.osty_qt_abi_version()),
         available: qt.osty_qt_has_qt(),
-        lastError: qt.osty_qt_last_error(),
+        lastError: lastErrorMessage(),
+    }
+}
+
+pub fn runtimeDiagnostic() -> RuntimeDiagnostic {
+    let available = qt.osty_qt_has_qt()
+    let abi = copyString(qt.osty_qt_abi_version())
+    let last = lastErrorMessage()
+    let message = if available {
+        "Qt Quick runtime bridge available: {abi}"
+    } else {
+        "Qt Quick runtime bridge was built without Qt support. Build libosty_qt with Qt Quick/QML installed or run osty gui doctor qtquick."
+    }
+    RuntimeDiagnostic {
+        available,
+        abiVersion: abi,
+        message,
+        lastError: last,
     }
 }
 
 pub fn abiVersion() -> String {
-    qt.osty_qt_abi_version()
+    copyString(qt.osty_qt_abi_version())
 }
 
 pub fn available() -> Bool {
@@ -162,7 +214,7 @@ pub fn available() -> Bool {
 }
 
 pub fn lastError() -> String {
-    qt.osty_qt_last_error()
+    lastErrorMessage()
 }
 
 pub fn app(name: String) -> Result<App, Error> {
@@ -173,11 +225,19 @@ pub fn app(name: String) -> Result<App, Error> {
     Ok(App { handle })
 }
 
+pub fn lastErrorMessage() -> String {
+    copyString(qt.osty_qt_last_error())
+}
+
 fn backendError() -> Error {
-    let msg = qt.osty_qt_last_error()
+    let msg = lastErrorMessage()
     if msg == "" {
         error.new("gui.qtquick: Qt backend failed without a diagnostic")
     } else {
         error.new(msg)
     }
+}
+
+fn copyString(s: String) -> String {
+    strings.concat(s, "")
 }

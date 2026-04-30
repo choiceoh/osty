@@ -6,6 +6,10 @@ description = "Osty Inspector demo built on std.gui and Qt Quick."
 
 [dependencies]
 
+[gui]
+backend = "qtquick"
+entry = "ui/main.qml"
+
 [target.arm64-darwin]
 link = ["osty_qt"]
 

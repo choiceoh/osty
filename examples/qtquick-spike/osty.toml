@@ -6,6 +6,10 @@ description = "Direct libosty_qt C ABI spike."
 
 [dependencies]
 
+[gui]
+backend = "qtquick"
+entry = "ui/main.qml"
+
 [target.arm64-darwin]
 link = ["osty_qt"]
 
