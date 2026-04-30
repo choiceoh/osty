@@ -17,6 +17,7 @@ type Name string
 
 const (
 	NameLLVM Name = "llvm"
+	NameONB  Name = "onb"
 )
 
 // ParseName converts a CLI/config backend name into a Name.
@@ -24,8 +25,10 @@ func ParseName(s string) (Name, error) {
 	switch Name(s) {
 	case NameLLVM:
 		return NameLLVM, nil
+	case NameONB:
+		return NameONB, nil
 	default:
-		return "", fmt.Errorf("unknown backend %q (want llvm)", s)
+		return "", fmt.Errorf("unknown backend %q (want llvm or onb)", s)
 	}
 }
 
@@ -34,7 +37,7 @@ func (n Name) String() string { return string(n) }
 // Valid reports whether n is a known backend name.
 func (n Name) Valid() bool {
 	switch n {
-	case NameLLVM:
+	case NameLLVM, NameONB:
 		return true
 	default:
 		return false
@@ -46,6 +49,7 @@ type EmitMode string
 
 const (
 	EmitLLVMIR EmitMode = "llvm-ir"
+	EmitASM    EmitMode = "asm"
 	EmitObject EmitMode = "object"
 	EmitBinary EmitMode = "binary"
 )
@@ -55,12 +59,14 @@ func ParseEmitMode(s string) (EmitMode, error) {
 	switch EmitMode(s) {
 	case EmitLLVMIR:
 		return EmitLLVMIR, nil
+	case EmitASM:
+		return EmitASM, nil
 	case EmitObject:
 		return EmitObject, nil
 	case EmitBinary:
 		return EmitBinary, nil
 	default:
-		return "", fmt.Errorf("unknown emit mode %q (want llvm-ir, object, or binary)", s)
+		return "", fmt.Errorf("unknown emit mode %q (want llvm-ir, asm, object, or binary)", s)
 	}
 }
 
@@ -69,7 +75,7 @@ func (m EmitMode) String() string { return string(m) }
 // Valid reports whether m is a known emit mode.
 func (m EmitMode) Valid() bool {
 	switch m {
-	case EmitLLVMIR, EmitObject, EmitBinary:
+	case EmitLLVMIR, EmitASM, EmitObject, EmitBinary:
 		return true
 	default:
 		return false
@@ -81,6 +87,8 @@ func (m EmitMode) ValidFor(n Name) bool {
 	switch n {
 	case NameLLVM:
 		return m == EmitLLVMIR || m == EmitObject || m == EmitBinary
+	case NameONB:
+		return m == EmitASM || m == EmitObject || m == EmitBinary
 	default:
 		return false
 	}

@@ -61,6 +61,30 @@ document is the shared landing target: any perf / correctness change
 to the MIR emitter should ship alongside (or instead of) the Osty
 counterpart here.
 
+## Relationship to ONB
+
+This document is **not** the ONB implementation plan. It tracks the
+self-hosting of the existing LLVM MIR emitter: LLVM text builders,
+support checks, instruction/intrinsic routing, and the Go glue that still
+delegates to `internal/llvmgen/mir_generator.go`.
+
+[`ONB_DESIGN.md`](./ONB_DESIGN.md) is the source of truth for the LLVM
+complementary dev/debug backend. ONB consumes the same MIR meaning but
+lowers it through its own native pipeline (minimal opt, aarch64 LIR,
+register allocation, object writer, DWARF, and lld). LLVM remains the
+reference/release backend; ONB remains the fast dev/debug backend.
+
+Use this split when choosing work:
+
+- If the change improves the existing LLVM IR emitter or moves that
+  emitter's behavior into `toolchain/mir_generator.osty`, track it here.
+- If the change creates or advances the separate fast dev/debug backend
+  used by `osty run`, `osty test`, or watch loops, track it in
+  `ONB_DESIGN.md`.
+- If both backends touch the same MIR semantic case, keep LLVM as the
+  reference and add ONB cross-validation rather than treating this port
+  document as the ONB roadmap.
+
 ## Workflow (post-#854)
 
 The bootstrap-transpile flow described in the historical "Pipeline"

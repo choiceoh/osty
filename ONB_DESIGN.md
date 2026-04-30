@@ -1,6 +1,17 @@
 # ONB 설계 — Osty Native Backend
 
-> **Status: Paper design (2026-04-27).** 33개 설계 결정 통합. 구현 전 단계.
+> **Status: Phase 0 scaffold started (2026-04-30).** 33개 설계 결정 통합.
+> `internal/onb` + `--backend onb` 등록까지 착수했고, `fn main() {}`의 MIR를
+> ONB Program으로 낮춘 뒤 첫 aarch64 LIR (`mov w0, #0`; `ret`)까지 생성하는
+> Phase 1.0 slice가 구현됐다. ONB assembly text artifact (`main.s`) 렌더링과
+> 최소 Mach-O relocatable object (`main.o`) emission이 가능하다. Binary emit은
+> ONB object를 host linker에 넘겨 실행 파일을 만들며, darwin/aarch64
+> `fn main() {}` smoke는 exit 0까지 확인됐다. 다음 slice로
+> `println("literal")` MIR intrinsic을 ONB LIR + assembly text까지 낮추며
+> `_puts` 호출과 `__cstring` 섹션을 렌더링하고, Mach-O `PAGE21` / `PAGEOFF12`
+> / `BR26` relocation을 포함한 object emission까지 확장했다. 이어서
+> `println(123)` 같은 정수 리터럴 출력도 `_printf("%lld\n", value)` 경로로
+> lowering/object/binary smoke까지 통과한다.
 > 본 문서는 결정 lock-in이며, 후속 의제(예: aarch64 LIR opcode 카탈로그,
 > cross-validation harness, simple inliner 도입 검토)는 별도 문서로 분기한다.
 
@@ -10,6 +21,29 @@ ONB는 **LLVM과 ABI·의미 100% 호환되는 단순 dev 백엔드**. Non-SSA M
 입력으로 받아 aarch64 LIR을 거쳐 lld로 darwin/linux binary를 emit. Full
 DWARF 디버그, 옵티마이저는 4-pass minimal, vectorize·SIMD·incremental GC는
 LLVM에 **영구 위임**한다.
+
+---
+
+## 0. 관련 문서와 경계
+
+이 문서가 **LLVM 보완용 dev/debug 백엔드(ONB)** 의 주 설계 문서다.
+실행 속도, 디버그 경험, `osty run` / `osty test` / watch loop의 기본 개발
+경로, 그리고 "무엇을 하지 않을지"는 여기 결정이 우선한다.
+
+[`MIR_EMITTER_PORT.md`](./MIR_EMITTER_PORT.md)는 별도 보조 트랙이다. 그 문서는
+기존 LLVM emitter (`internal/llvmgen/mir_generator.go`)의 LLVM 텍스트 생성
+의미를 `toolchain/mir_generator.osty` 쪽으로 옮기는 포팅 현황표이지,
+ONB 구현 계획이 아니다. ONB는 LLVM IR을 더 self-host로 잘 생성하는 작업이
+아니라, 같은 MIR 의미를 입력으로 받는 **별도 dev backend**다.
+
+판단 규칙:
+- 새 작업이 `osty run` / `osty test` / watch loop를 더 빠르고 디버그하기
+  쉽게 만드는 별도 backend 구현이면 이 문서를 따른다.
+- 새 작업이 기존 LLVM IR emitter의 문자열 builder, 지원성 검사, intrinsic
+  lowering을 Osty 소유로 옮기는 일이면 `MIR_EMITTER_PORT.md`를 따른다.
+- ONB와 LLVM emitter가 같은 의미를 다루는 경우 LLVM은 reference/release
+  backend, ONB는 dev/debug backend로 두고 cross-validation으로 동등성을
+  확인한다.
 
 ---
 

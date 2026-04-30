@@ -51,7 +51,7 @@ func runRun(args []string, cliF cliFlags) {
 	registerAIRepairCommandFlags(fs, &cliF.aiRepair, &aiRepairModeName)
 	var backendName string
 	var emitName string
-	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (llvm)")
+	fs.StringVar(&backendName, "backend", defaultBackendName(), "code generation backend (llvm, onb)")
 	fs.StringVar(&emitName, "emit", "", "artifact mode to execute (binary)")
 	var pf profileFlags
 	pf.register(fs)

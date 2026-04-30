@@ -195,6 +195,9 @@ func ToolEmitCompat(tool, backend, emit string) *Diag {
 		if backend == "llvm" && emit != "llvm-ir" {
 			return toolEmitMismatch(tool, backend, emit, "llvm-ir", "R0011")
 		}
+		if backend == "onb" && emit != "asm" {
+			return toolEmitMismatch(tool, backend, emit, "asm", "R0013")
+		}
 	}
 	if tool == "run" || tool == "test" {
 		if emit != "binary" {
