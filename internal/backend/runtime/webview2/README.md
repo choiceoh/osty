@@ -12,6 +12,11 @@ the HTML/CSS/JS bundle on one stable local origin, denies cross-origin resource
 access by default, and lets the navigation allow-list block external websites
 without breaking relative asset loads.
 
+The injected JavaScript bridge also forwards `console.debug/log/info/warn/error`
+as normal Osty events named `console.<level>`. App code can inspect those with
+`std.gui.webview2.isConsoleEvent` and `consoleEventLevel` while keeping the
+original browser console behavior intact.
+
 Example Windows build shape:
 
 ```powershell

@@ -6,6 +6,7 @@ function renderState(state) {
   if (state && state.detail) {
     detail.textContent = state.detail;
   }
+  console.info("state rendered", state);
 }
 
 function emit(name, payload) {
@@ -15,14 +16,17 @@ function emit(name, payload) {
 }
 
 document.querySelector("#refresh").addEventListener("click", () => {
+  console.log("refresh requested");
   emit("refresh", {});
 });
 
 document.querySelector("#inspect").addEventListener("click", () => {
+  console.warn("opening WebView2 devtools");
   emit("inspect", {});
 });
 
 document.querySelector("#quit").addEventListener("click", () => {
+  console.log("quit requested");
   emit("quit", {});
 });
 

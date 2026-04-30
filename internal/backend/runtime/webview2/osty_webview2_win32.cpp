@@ -247,6 +247,19 @@ std::wstring bridge_script() {
     window.chrome.webview.postMessage(JSON.stringify(message));
     return true;
   };
+  const consoleArg = (value) => {
+    if (typeof value === 'string') return value;
+    try {
+      const encoded = JSON.stringify(value);
+      return encoded === undefined ? String(value) : encoded;
+    } catch (_) {
+      return String(value);
+    }
+  };
+  const emitConsole = (level, args) => {
+    const rendered = Array.from(args, consoleArg);
+    post({ type: 'event', name: `console.${level}`, payload: { level, message: rendered.join(' '), args: rendered } });
+  };
   const api = {
     __ostyWebView2Bridge: true,
     platform: 'windows-webview2',
@@ -262,6 +275,16 @@ std::wstring bridge_script() {
     }
   };
   Object.defineProperty(window, 'osty', { value: Object.freeze(api), configurable: false, writable: false });
+  for (const level of ['debug', 'log', 'info', 'warn', 'error']) {
+    const original = console[level] && console[level].bind(console);
+    if (!original) continue;
+    try {
+      console[level] = (...args) => {
+        original(...args);
+        emitConsole(level, args);
+      };
+    } catch (_) {}
+  }
   if (window.chrome && window.chrome.webview) {
     window.chrome.webview.addEventListener('message', (event) => {
       if (!event.data || event.data.type !== 'state') return;

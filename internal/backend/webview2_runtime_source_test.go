@@ -29,6 +29,8 @@ func TestWebView2RuntimeHardensBridgeAndLifetime(t *testing.T) {
 		"Object.freeze(api)",
 		"queueMicrotask(() => handler(lastState))",
 		"typeof name !== 'string'",
+		"name: `console.${level}`",
+		"rendered.join(' ')",
 		"w->controller.Reset()",
 		"w->webview.Reset()",
 		"g_windows.erase(id)",

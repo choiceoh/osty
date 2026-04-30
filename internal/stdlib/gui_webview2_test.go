@@ -18,6 +18,9 @@ func TestGuiWebView2ModuleSurface(t *testing.T) {
 	for _, name := range []string{
 		"app",
 		"defaultWindowOptions",
+		"consoleEventName",
+		"isConsoleEvent",
+		"consoleEventLevel",
 		"runtimeDiagnostic",
 		"bridgeScript",
 		"lastErrorMessage",
@@ -74,6 +77,8 @@ func TestGuiWebView2SourcePinsBridgeAndCABI(t *testing.T) {
 		"Object.freeze(api)",
 		"queueMicrotask(() => handler(lastState))",
 		"typeof name !== 'string'",
+		"name: `console.${level}`",
+		"rendered.join(' ')",
 		"Object.defineProperty(window, 'osty'",
 		"copyString(wv.osty_wv2_event_name",
 		`strings.concat(s, "")`,
@@ -98,7 +103,9 @@ pub fn demo() -> Result<(), Error> {
     window.show()?
     window.setState("\{\"status\":\"ready\"\}")?
     for event in app.events() {
-        if event.name == "run" {
+        if webview2.isConsoleEvent(event) {
+            let _ = webview2.consoleEventLevel(event)
+        } else if event.name == "run" {
             window.setState(event.payload)?
         }
     }
