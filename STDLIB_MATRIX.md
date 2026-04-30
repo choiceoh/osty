@@ -45,6 +45,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | net | 1084 | net 40 runtime | TCP/UDP, IPv4/IPv6, parseSocketAddr, tcpListen |
 | fmt | 926 | (surface heavy) | graphem-aware width, format spec engine |
 | json | 629 | (parser self) | generic encode<T> / decode<T>, UTF-8 / surrogate pair |
+| table | 1112 | pure Osty + csv | small dataframe: CSV/TSV read-write, type inference, schema validation/coercion, typed sort, group aggregation, indexed join |
 | url | 592 | — | parse / join / format |
 | io | 541 | shim 171 | Reader/Writer 프로토콜, Buffer, copyN, readExact |
 | collections | 509 | list 68 + map 42 + set 17 | 30+ List 메서드, groupBy, windowed, zip3 |
@@ -61,7 +62,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | smtp | 358 | pure Osty + email/encoding | SMTP commands / AUTH payloads / reply parsing / transaction scripts |
 | result | 357 | — | composition (map / mapErr / and / or / collect) |
 | option | 356 | — | flatten / transpose / traverse / map2 / map3 |
-| csv | 351 | — | options-driven, header-aware decode |
+| csv | 376 | — | options-driven, header-aware decode plus TSV convenience wrappers |
 | encoding | 329 | pure Osty + bytes | Base64 / Base64Url / Hex / URL percent-encoding 구현 |
 | zip | 327 | pure Osty + bytes | ZIP stored-entry encode/decode/list/extract + CRC32 |
 | term | 320 | host-backed + pure ANSI | terminal mode/size/input declarations + ANSI sequence builders |
@@ -121,7 +122,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 |---|---|---|
 | HTTP 웹 서버 | ✅ 즉시 가능 | http + io + json + net |
 | CLI 도구 | ✅ 즉시 가능 | os + fs + io + fmt + env |
-| 데이터 처리 (CSV / JSON) | ✅ 즉시 가능 | csv + json + collections + iter + fmt |
+| 데이터 처리 (CSV / TSV / JSON / tables) | ✅ 즉시 가능 | table + csv + json + collections + iter + fmt |
 | 파일 변환기 / 아카이브 | ✅ 가능 | fs + io + tar + compress (gzip 만) + fmt |
 | 암호화 / 해시 | ✅ 가능 | crypto (sha256 / hmac / random / constantTimeEq) |
 | 랜덤 게임 / 시뮬레이션 | ✅ 가능 | random (seeded RNG) + math |
@@ -178,7 +179,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 43 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, aiagents, redact, media, security, search, markdown, tokenest, httpretry, jsonl, shortid, metrics, net, fmt, json, url, io, collections, email, db, grid, gui, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
+- 44 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, aiagents, redact, media, security, search, markdown, tokenest, httpretry, jsonl, shortid, metrics, net, fmt, json, table, url, io, collections, email, db, grid, gui, tar, sql, xml, tui, image, ocr, smtp, result, option, csv, encoding, zip, term, websocket, graphql, template, i18n, char, iter, bytes)
 - 6 모듈은 Phase A 충실 + Phase B declaration-only (fs, env, random, os, crypto, compress)
 - 나머지는 의도된 범위에서 surface 만으로 완성 (cli, math, cmp, hint, debug, ref, process, log, time, error, sync, thread, regex, testing, uuid)
 

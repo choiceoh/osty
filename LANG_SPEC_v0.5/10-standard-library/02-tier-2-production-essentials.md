@@ -19,6 +19,8 @@
 - `std.url` — URL parsing and building
 - `std.math` — mathematical functions and constants
 - `std.csv` — CSV read/write
+- `std.table` — small dataframe helpers for CSV/TSV-scale table work:
+  type inference, schema validation/coercion, typed sort, aggregation, join
 - `std.compress` — gzip compression
 - `std.term` — terminal mode, ANSI control, size, and key input
 - `std.tui` — retained terminal frame buffers and diff rendering

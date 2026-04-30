@@ -22,6 +22,10 @@ pub fn encode(rows: List<List<String>>) -> String {
     encodeWith(rows, CsvOptions {})
 }
 
+pub fn encodeTsv(rows: List<List<String>>) -> String {
+    encodeWith(rows, tsvOptions())
+}
+
 pub fn encodeWith(rows: List<List<String>>, options: CsvOptions) -> String {
     abortInvalidOptions(options)
 
@@ -39,6 +43,10 @@ pub fn encodeWith(rows: List<List<String>>, options: CsvOptions) -> String {
 
 pub fn decode(text: String) -> Result<List<List<String>>, Error> {
     decodeWith(text, CsvOptions {})
+}
+
+pub fn decodeTsv(text: String) -> Result<List<List<String>>, Error> {
+    decodeWith(text, tsvOptions())
 }
 
 pub fn decodeWith(text: String, options: CsvOptions) -> Result<List<List<String>>, Error> {
@@ -183,6 +191,25 @@ pub fn decodeWith(text: String, options: CsvOptions) -> Result<List<List<String>
 
 pub fn decodeHeaders(text: String) -> Result<List<Map<String, String>>, Error> {
     let rows = decode(text)?
+    recordsFromHeaderRows(rows)
+}
+
+pub fn decodeTsvHeaders(text: String) -> Result<List<Map<String, String>>, Error> {
+    let rows = decodeTsv(text)?
+    recordsFromHeaderRows(rows)
+}
+
+pub fn tsvOptions() -> CsvOptions {
+    CsvOptions {
+        delimiter: '\t',
+        quote: '"',
+        trimSpace: false,
+    }
+}
+
+// Internal helpers ────────────────────────────────────────────────────────────
+
+fn recordsFromHeaderRows(rows: List<List<String>>) -> Result<List<Map<String, String>>, Error> {
     if rows.len() == 0 {
         return Ok([])
     }
@@ -212,8 +239,6 @@ pub fn decodeHeaders(text: String) -> Result<List<Map<String, String>>, Error> {
     }
     Ok(records)
 }
-
-// Internal helpers ────────────────────────────────────────────────────────────
 
 fn encodeRow(row: List<String>, options: CsvOptions) -> String {
     let mut out = ""

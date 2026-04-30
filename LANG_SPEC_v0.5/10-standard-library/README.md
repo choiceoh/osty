@@ -49,3 +49,4 @@ lowering remains implementation backlog.
 - [§10.34 Deneb-Derived Utilities (`std.redact`, `std.security`,
   `std.search`, `std.markdown`, `std.media`, `std.httpretry`, `std.jsonl`,
   `std.tokenest`, `std.shortid`, `std.metrics`)](./34-deneb-utilities.md)
+- [§10.35 Tables (`std.table`)](./35-table.md)

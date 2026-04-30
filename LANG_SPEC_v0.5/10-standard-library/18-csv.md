@@ -12,6 +12,7 @@ let text = csv.encode([
 ])
 
 let rows: List<List<String>> = csv.decode(text)?
+let tsvRows: List<List<String>> = csv.decodeTsv("name\tage\nalice\t30")?
 
 // With headers
 let records: List<Map<String, String>> = csv.decodeHeaders(text)?
@@ -24,11 +25,15 @@ API:
 
 ```
 csv.encode(rows: List<List<String>>) -> String
+csv.encodeTsv(rows: List<List<String>>) -> String
 csv.encodeWith(rows: List<List<String>>, options: CsvOptions) -> String
 
 csv.decode(text: String) -> Result<List<List<String>>, Error>
+csv.decodeTsv(text: String) -> Result<List<List<String>>, Error>
 csv.decodeHeaders(text: String) -> Result<List<Map<String, String>>, Error>
+csv.decodeTsvHeaders(text: String) -> Result<List<Map<String, String>>, Error>
 csv.decodeWith(text: String, options: CsvOptions) -> Result<List<List<String>>, Error>
+csv.tsvOptions() -> CsvOptions
 
 pub struct CsvOptions {
     pub delimiter: Char = ',',
