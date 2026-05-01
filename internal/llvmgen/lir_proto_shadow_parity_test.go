@@ -413,6 +413,11 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualListToSetStringFixture", []string{"declare ptr @osty_rt_list_to_set_string(ptr)", "call ptr @osty_rt_list_to_set_string(", "ret ptr"}},
 		{"lirParityManualStringFieldsFixture", []string{"declare ptr @osty_rt_strings_Fields(ptr)", "call ptr @osty_rt_strings_Fields(", "ret ptr"}},
 		{"lirParityManualStringSplitNFixture", []string{"declare ptr @osty_rt_strings_SplitN(ptr, ptr, i64)", "call ptr @osty_rt_strings_SplitN(", "ret ptr"}},
+		// ----- Option/Result Unwrap + UnwrapOr -----
+		{"lirParityManualOptionUnwrapFixture", []string{"%Option.Int = type", "declare void @osty_rt_option_unwrap_none()", "extractvalue %Option.Int", "icmp eq i64", "call void @osty_rt_option_unwrap_none()", "unreachable", "ret i64"}},
+		{"lirParityManualOptionUnwrapOrFixture", []string{"%Option.Int = type", "extractvalue %Option.Int", "icmp eq i64", "alloca i64", "ret i64"}},
+		{"lirParityManualResultUnwrapFixture", []string{"%Result.Int_Error = type", "declare void @osty_rt_result_unwrap_err()", "extractvalue %Result.Int_Error", "icmp eq i64", "call void @osty_rt_result_unwrap_err()", "unreachable", "ret i64"}},
+		{"lirParityManualResultUnwrapOrFixture", []string{"%Result.Int_Error = type", "extractvalue %Result.Int_Error", "icmp eq i64", "alloca i64", "ret i64"}},
 	}
 
 	for _, tt := range want {

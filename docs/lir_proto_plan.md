@@ -898,6 +898,44 @@ correctly), `string_fields` (no-arg `Fields` call returning a
 List<String>), and `string_split_n` (3-arg `SplitN` call with
 String/String/Int param signature).
 
+Design decision: the next batch lands the four Unwrap variants
+(`OptionUnwrap` / `OptionUnwrapOr` / `ResultUnwrap` /
+`ResultUnwrapOr`) plus two new lowering helpers they share:
+
+- `lirNarrowI64ToType(l, i64Reg, target)` — inverse of
+  `lirParseResultPayloadAsI64`. Casts the i64-encoded payload
+  back to the declared payload type via `bitcast` (double),
+  `inttoptr` (ptr), `trunc` (sub-word int), or pass-through
+  for i64. Mirrors production `fromI64Slot`.
+- `lirCutBlockUnreachable(l, nextLabel)` — counterpart of
+  `lirCutBlockBr` / `lirCutBlockCondBr` for diverging arms. The
+  unwrap-on-absent panic helpers (`osty_rt_option_unwrap_none` /
+  `osty_rt_result_unwrap_err`) are noreturn so the absent arm's
+  block must terminate with `unreachable` rather than fall
+  through to a branch.
+
+`lirLowerMirAlgebraicUnwrap(l, instr, abortSym, label)` covers
+both Option.unwrap and Result.unwrap — the sole variation is
+the panic-helper symbol (`osty_rt_option_unwrap_none` vs
+`osty_rt_result_unwrap_err`). `lirLowerMirAlgebraicUnwrapOr(l,
+instr, label)` covers both fallback variants — the absent arm
+evaluates `instr.args[1]` (the fallback operand) instead of
+calling a panic helper, and merges through the same alloca-backed
+slot pattern already used by `lirWrapOptionFromI64Sentinel` and
+`lirLowerMirListFirstOrLast`. Production uses a phi node here;
+the alloca shape is equivalent and matches existing LIR Proto
+sites.
+
+Four Phase-4 fixtures pin the new shapes, each scoped to scalar
+Int payload (the simplest narrowing path — pass-through):
+`option_unwrap` / `result_unwrap` pin disc extract + icmp eq +
+panic helper decl/call + unreachable + payload extract + ret;
+`option_unwrap_or` / `result_unwrap_or` pin alloca-merge slot +
+both arm stores + ret. The narrowing helper's other branches
+(double / ptr / sub-word) stay covered by the existing IndexOf
+/ FirstOrLast / parse fixtures that already exercise the
+i64-payload boxing direction.
+
 ## Phase 0: lock the boundary
 
 Deliverables:
