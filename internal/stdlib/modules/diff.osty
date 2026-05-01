@@ -1,0 +1,392 @@
+// std.diff - pure Osty text and line diff helpers.
+//
+// The module is intentionally line-oriented. It keeps the runtime surface
+// small, produces stable unified diffs for source review tools, and exposes
+// structured changes for higher-level patch, report, and agent workflows.
+
+use std.strings
+
+pub enum ChangeKind {
+    Equal,
+    Delete,
+    Insert,
+
+    pub fn marker(self) -> String {
+        match self {
+            Equal  -> " ",
+            Delete -> "-",
+            Insert -> "+",
+        }
+    }
+
+    pub fn label(self) -> String {
+        match self {
+            Equal  -> "equal",
+            Delete -> "delete",
+            Insert -> "insert",
+        }
+    }
+
+    pub fn isChange(self) -> Bool {
+        self != Equal
+    }
+}
+
+pub struct Change {
+    pub kind: ChangeKind,
+    pub oldLine: Int,
+    pub newLine: Int,
+    pub text: String,
+
+    pub fn marker(self) -> String {
+        self.kind.marker()
+    }
+
+    pub fn isChange(self) -> Bool {
+        self.kind.isChange()
+    }
+
+    pub fn format(self) -> String {
+        "{self.kind.marker()}{self.text}"
+    }
+}
+
+pub struct Stats {
+    pub equal: Int,
+    pub deleted: Int,
+    pub inserted: Int,
+
+    pub fn changed(self) -> Bool {
+        self.deleted > 0 || self.inserted > 0
+    }
+
+    pub fn total(self) -> Int {
+        self.equal + self.deleted + self.inserted
+    }
+
+    pub fn summary(self) -> String {
+        "{self.inserted} insertions, {self.deleted} deletions"
+    }
+}
+
+pub struct Hunk {
+    pub oldStart: Int,
+    pub oldLen: Int,
+    pub newStart: Int,
+    pub newLen: Int,
+    pub changes: List<Change>,
+
+    pub fn isEmpty(self) -> Bool {
+        self.changes.isEmpty()
+    }
+
+    pub fn header(self) -> String {
+        "@@ -{rangeText(self.oldStart, self.oldLen)} +{rangeText(self.newStart, self.newLen)} @@"
+    }
+
+    pub fn format(self) -> String {
+        let mut lines: List<String> = [self.header()]
+        for change in self.changes {
+            lines.push(change.format())
+        }
+        strings.join(lines, "\n")
+    }
+}
+
+pub struct UnifiedOptions {
+    pub fromFile: String = "before",
+    pub toFile: String = "after",
+    pub context: Int = 3,
+
+    pub fn withPaths(mut self, fromFile: String, toFile: String) -> UnifiedOptions {
+        self.fromFile = fromFile
+        self.toFile = toFile
+        self
+    }
+
+    pub fn withContext(mut self, context: Int) -> UnifiedOptions {
+        self.context = maxInt(0, context)
+        self
+    }
+}
+
+pub fn options() -> UnifiedOptions {
+    UnifiedOptions {}
+}
+
+pub fn lines(text: String) -> List<String> {
+    strings.splitLines(text)
+}
+
+pub fn diffText(before: String, after: String) -> List<Change> {
+    diffLines(lines(before), lines(after))
+}
+
+pub fn diffLines(before: List<String>, after: List<String>) -> List<Change> {
+    let table = lcsTable(before, after)
+    let mut out: List<Change> = []
+    let mut i = 0
+    let mut j = 0
+
+    for i < before.len() || j < after.len() {
+        if i < before.len() && j < after.len() && before[i] == after[j] {
+            out.push(Change { kind: Equal, oldLine: i + 1, newLine: j + 1, text: before[i] })
+            i = i + 1
+            j = j + 1
+        } else if j < after.len() && (i >= before.len() || table[i][j + 1] > table[i + 1][j]) {
+            out.push(Change { kind: Insert, oldLine: i + 1, newLine: j + 1, text: after[j] })
+            j = j + 1
+        } else {
+            out.push(Change { kind: Delete, oldLine: i + 1, newLine: j + 1, text: before[i] })
+            i = i + 1
+        }
+    }
+
+    out
+}
+
+pub fn hunks(changes: List<Change>, context: Int) -> List<Hunk> {
+    let ctx = maxInt(0, context)
+    let mut out: List<Hunk> = []
+    let mut i = 0
+
+    for i < changes.len() {
+        for i < changes.len() && changes[i].kind == Equal {
+            i = i + 1
+        }
+        if i >= changes.len() {
+            break
+        }
+
+        let start = maxInt(0, i - ctx)
+        let mut end = i
+        let mut trailing = 0
+        for end < changes.len() {
+            if changes[end].kind == Equal {
+                trailing = trailing + 1
+                if trailing > ctx {
+                    break
+                }
+            } else {
+                trailing = 0
+            }
+            end = end + 1
+        }
+
+        let h = hunkFromRange(changes, start, end)
+        if !h.isEmpty() {
+            out.push(h)
+        }
+        i = end
+    }
+
+    out
+}
+
+pub fn stats(changes: List<Change>) -> Stats {
+    let mut out = Stats { equal: 0, deleted: 0, inserted: 0 }
+    for change in changes {
+        if change.kind == Equal {
+            out.equal = out.equal + 1
+        } else if change.kind == Delete {
+            out.deleted = out.deleted + 1
+        } else {
+            out.inserted = out.inserted + 1
+        }
+    }
+    out
+}
+
+pub fn changed(changes: List<Change>) -> Bool {
+    stats(changes).changed()
+}
+
+pub fn summary(changes: List<Change>) -> String {
+    stats(changes).summary()
+}
+
+pub fn addedLines(changes: List<Change>) -> List<String> {
+    let mut out: List<String> = []
+    for change in changes {
+        if change.kind == Insert {
+            out.push(change.text)
+        }
+    }
+    out
+}
+
+pub fn deletedLines(changes: List<Change>) -> List<String> {
+    let mut out: List<String> = []
+    for change in changes {
+        if change.kind == Delete {
+            out.push(change.text)
+        }
+    }
+    out
+}
+
+pub fn applyLines(before: List<String>, changes: List<Change>) -> List<String> {
+    let mut out: List<String> = []
+    let mut beforeIndex = 0
+    for change in changes {
+        if change.kind == Equal {
+            out.push(change.text)
+            beforeIndex = beforeIndex + 1
+        } else if change.kind == Delete {
+            beforeIndex = beforeIndex + 1
+        } else {
+            out.push(change.text)
+        }
+    }
+    if beforeIndex < before.len() {
+        for i in beforeIndex..before.len() {
+            out.push(before[i])
+        }
+    }
+    out
+}
+
+pub fn applyText(before: String, changes: List<Change>) -> String {
+    strings.join(applyLines(lines(before), changes), "\n")
+}
+
+pub fn unified(before: String, after: String) -> String {
+    unifiedText("before", "after", before, after, 3)
+}
+
+pub fn unifiedWithContext(before: String, after: String, context: Int) -> String {
+    unifiedText("before", "after", before, after, context)
+}
+
+pub fn unifiedText(fromFile: String, toFile: String, before: String, after: String, context: Int) -> String {
+    unifiedLines(fromFile, toFile, lines(before), lines(after), context)
+}
+
+pub fn unifiedLines(fromFile: String, toFile: String, before: List<String>, after: List<String>, context: Int) -> String {
+    let changes = diffLines(before, after)
+    formatUnified(hunks(changes, context), UnifiedOptions { fromFile: fromFile, toFile: toFile, context: maxInt(0, context) })
+}
+
+pub fn formatUnified(items: List<Hunk>, opts: UnifiedOptions) -> String {
+    if items.isEmpty() {
+        return ""
+    }
+
+    let mut lines: List<String> = ["--- {opts.fromFile}", "+++ {opts.toFile}"]
+    for h in items {
+        lines.push(h.header())
+        for change in h.changes {
+            lines.push(change.format())
+        }
+    }
+    "{strings.join(lines, "\n")}\n"
+}
+
+fn lcsTable(before: List<String>, after: List<String>) -> List<List<Int>> {
+    let rowCount = before.len() + 1
+    let colCount = after.len() + 1
+    let mut table: List<List<Int>> = []
+    for unusedRow in 0..rowCount {
+        table.push(zeroRow(colCount))
+    }
+
+    let mut i = before.len()
+    for i > 0 {
+        i = i - 1
+        let mut row = table[i]
+        let mut j = after.len()
+        for j > 0 {
+            j = j - 1
+            if before[i] == after[j] {
+                row[j] = table[i + 1][j + 1] + 1
+            } else {
+                row[j] = maxInt(table[i + 1][j], row[j + 1])
+            }
+        }
+        table[i] = row
+    }
+
+    table
+}
+
+fn zeroRow(width: Int) -> List<Int> {
+    let mut row: List<Int> = []
+    for unusedCol in 0..width {
+        row.push(0)
+    }
+    row
+}
+
+fn hunkFromRange(changes: List<Change>, start: Int, end: Int) -> Hunk {
+    let mut chunk: List<Change> = []
+    let mut i = start
+    for i < end {
+        chunk.push(changes[i])
+        i = i + 1
+    }
+    Hunk {
+        oldStart: firstOldLine(chunk),
+        oldLen: oldLineCount(chunk),
+        newStart: firstNewLine(chunk),
+        newLen: newLineCount(chunk),
+        changes: chunk,
+    }
+}
+
+fn firstOldLine(changes: List<Change>) -> Int {
+    for change in changes {
+        if change.kind != Insert {
+            return change.oldLine
+        }
+    }
+    if changes.isEmpty() {
+        1
+    } else {
+        changes[0].oldLine
+    }
+}
+
+fn firstNewLine(changes: List<Change>) -> Int {
+    for change in changes {
+        if change.kind != Delete {
+            return change.newLine
+        }
+    }
+    if changes.isEmpty() {
+        1
+    } else {
+        changes[0].newLine
+    }
+}
+
+fn oldLineCount(changes: List<Change>) -> Int {
+    let mut n = 0
+    for change in changes {
+        if change.kind != Insert {
+            n = n + 1
+        }
+    }
+    n
+}
+
+fn newLineCount(changes: List<Change>) -> Int {
+    let mut n = 0
+    for change in changes {
+        if change.kind != Delete {
+            n = n + 1
+        }
+    }
+    n
+}
+
+fn rangeText(start: Int, len: Int) -> String {
+    if len == 1 {
+        start.toString()
+    } else {
+        "{start},{len}"
+    }
+}
+
+fn maxInt(a: Int, b: Int) -> Int {
+    if a > b { a } else { b }
+}
