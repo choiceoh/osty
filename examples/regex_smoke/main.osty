@@ -1,0 +1,71 @@
+use std.regex
+
+fn report(label: String, matched: Bool) {
+    if matched {
+        println("{label}: yes")
+    } else {
+        println("{label}: no")
+    }
+}
+
+fn main() {
+    match regex.compile(r"^\d{3}-\d{4}$") {
+        Ok(re) -> {
+            report("123-4567 vs phone", re.matches("123-4567"))
+            report("12-3456  vs phone", re.matches("12-3456"))
+            report("123-45678 vs phone", re.matches("123-45678"))
+        },
+        Err(_) -> println("phone compile failed"),
+    }
+
+    match regex.compile(r"\bfoo\w*") {
+        Ok(_) -> println("escape \\b currently unsupported (expected this branch)"),
+        Err(_) -> println("\\b rejected as expected (Phase 1)"),
+    }
+
+    match regex.compile(r"hello|world") {
+        Ok(re) -> {
+            report("hello   vs alt", re.matches("say hello"))
+            report("world   vs alt", re.matches("worldwide"))
+            report("foo     vs alt", re.matches("foo bar"))
+        },
+        Err(_) -> println("alt compile failed"),
+    }
+
+    match regex.compile(r"a(bc)+d") {
+        Ok(re) -> {
+            report("abcd      vs grp", re.matches("abcd"))
+            report("abcbcd    vs grp", re.matches("abcbcd"))
+            report("ad        vs grp", re.matches("ad"))
+        },
+        Err(_) -> println("grp compile failed"),
+    }
+
+    match regex.compile(r"[A-Za-z_]\w*") {
+        Ok(re) -> {
+            report("ident_42 vs ident", re.matches("hello_42"))
+            report("42abc    vs ident", re.matches("123abc"))
+        },
+        Err(_) -> println("ident compile failed"),
+    }
+
+    match regex.compile(r"colou?r") {
+        Ok(re) -> {
+            report("color  vs ?", re.matches("color"))
+            report("colour vs ?", re.matches("colour"))
+            report("colr   vs ?", re.matches("colr"))
+        },
+        Err(_) -> println("? compile failed"),
+    }
+
+    match regex.compile(r"a{2,4}b") {
+        Ok(re) -> {
+            report("ab    vs {2,4}", re.matches("ab"))
+            report("aab   vs {2,4}", re.matches("aab"))
+            report("aaab  vs {2,4}", re.matches("aaab"))
+            report("aaaab vs {2,4}", re.matches("aaaab"))
+            report("aaaaab vs {2,4}", re.matches("aaaaab"))
+        },
+        Err(_) -> println("{2,4} compile failed"),
+    }
+}
