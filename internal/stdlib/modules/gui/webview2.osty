@@ -244,27 +244,27 @@ pub fn bridgeScript() -> String {
     }
   };
   Object.defineProperty(window, 'osty', { value: Object.freeze(api), configurable: false, writable: false });
-  for (const level of ['debug', 'log', 'info', 'warn', 'error']) {
+  ['debug', 'log', 'info', 'warn', 'error'].forEach((level) => {
     const original = console[level] && console[level].bind(console);
-    if (!original) continue;
+    if (!original) return;
     try {
       console[level] = (...args) => {
         original(...args);
         emitConsole(level, args);
       };
     } catch (_) {}
-  }
+  });
   if (window.chrome && window.chrome.webview) {
     window.chrome.webview.addEventListener('message', (event) => {
       if (!event.data) return;
       if (event.data.type === 'command') {
-        for (const handler of commandHandlers) handler(event.data.name, event.data.payload);
+        commandHandlers.forEach((handler) => handler(event.data.name, event.data.payload));
         return;
       }
       if (event.data.type !== 'state') return;
       hasState = true;
       lastState = event.data.payload;
-      for (const handler of stateHandlers) handler(event.data.payload);
+      stateHandlers.forEach((handler) => handler(event.data.payload));
     });
   }
 })();
