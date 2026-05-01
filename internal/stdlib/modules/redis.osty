@@ -1,0 +1,1115 @@
+// std.redis - Redis command builders, RESP2 codec, and small TCP request helpers.
+//
+// The core surface is pure Osty: command construction, safe key/options
+// validation, RESP2 rendering/parsing, and pipeline/transaction planning.
+// The optional Client helper uses std.net for small request/response exchanges;
+// long-lived pooling, TLS, Pub/Sub loops, and cluster routing are intentionally
+// left to a runtime-backed driver.
+
+use std.bytes
+use std.error
+use std.net
+use std.strings
+
+pub enum Resp {
+    SimpleString(String),
+    ErrorReply(String),
+    Integer(Int),
+    BulkString(String),
+    NullBulkString,
+    Array(List<Resp>),
+    NullArray,
+}
+
+pub enum SetMode {
+    SetAlways,
+    SetIfExists,
+    SetIfMissing,
+}
+
+pub struct Config {
+    pub host: String,
+    pub port: Int,
+    pub username: String? = None,
+    pub password: String? = None,
+    pub database: Int? = None,
+    pub tls: Bool = false,
+    pub connectTimeoutMs: Int = 30000,
+    pub responseMaxBytes: Int = 1048576,
+}
+
+pub struct Client {
+    pub config: Config,
+    conn: net.TcpConn,
+}
+
+pub struct Command {
+    pub name: String,
+    pub args: List<String>,
+}
+
+pub struct Pipeline {
+    pub commands: List<Command>,
+}
+
+pub struct Parsed {
+    pub value: Resp,
+    pub next: Int,
+}
+
+struct ByteParsed {
+    value: Resp,
+    next: Int,
+}
+
+pub struct SetOptions {
+    pub expireSeconds: Int? = None,
+    pub expireMs: Int? = None,
+    pub keepTtl: Bool = false,
+    pub mode: SetMode,
+    pub getOldValue: Bool = false,
+}
+
+pub struct ScanOptions {
+    pub pattern: String? = None,
+    pub count: Int? = None,
+    pub typ: String? = None,
+}
+
+pub fn defaultPort() -> Int {
+    6379
+}
+
+pub fn config(host: String, port: Int) -> Result<Config, Error> {
+    let cleanHost = strings.trimSpace(host)
+    if cleanHost.isEmpty() {
+        return Err(error.new("redis: host is empty"))
+    }
+    if port <= 0 || port > 65535 {
+        return Err(error.new("redis: port out of range"))
+    }
+    Ok(Config {
+        host: cleanHost,
+        port: port,
+    })
+}
+
+pub fn localhost() -> Config {
+    config("127.0.0.1", defaultPort()).unwrap()
+}
+
+pub fn withAuth(cfg: Config, password: String) -> Result<Config, Error> {
+    let clean = strings.trimSpace(password)
+    if clean.isEmpty() {
+        return Err(error.new("redis: password is empty"))
+    }
+    Ok(Config {
+        host: cfg.host,
+        port: cfg.port,
+        username: cfg.username,
+        password: Some(password),
+        database: cfg.database,
+        tls: cfg.tls,
+        connectTimeoutMs: cfg.connectTimeoutMs,
+        responseMaxBytes: cfg.responseMaxBytes,
+    })
+}
+
+pub fn withUserAuth(cfg: Config, username: String, password: String) -> Result<Config, Error> {
+    let user = strings.trimSpace(username)
+    if user.isEmpty() {
+        return Err(error.new("redis: username is empty"))
+    }
+    let withPassword = withAuth(cfg, password)?
+    Ok(Config {
+        host: withPassword.host,
+        port: withPassword.port,
+        username: Some(user),
+        password: withPassword.password,
+        database: withPassword.database,
+        tls: withPassword.tls,
+        connectTimeoutMs: withPassword.connectTimeoutMs,
+        responseMaxBytes: withPassword.responseMaxBytes,
+    })
+}
+
+pub fn withDatabase(cfg: Config, database: Int) -> Result<Config, Error> {
+    if database < 0 {
+        return Err(error.new("redis: database must not be negative"))
+    }
+    Ok(Config {
+        host: cfg.host,
+        port: cfg.port,
+        username: cfg.username,
+        password: cfg.password,
+        database: Some(database),
+        tls: cfg.tls,
+        connectTimeoutMs: cfg.connectTimeoutMs,
+        responseMaxBytes: cfg.responseMaxBytes,
+    })
+}
+
+pub fn withTls(cfg: Config, enabled: Bool) -> Config {
+    Config {
+        host: cfg.host,
+        port: cfg.port,
+        username: cfg.username,
+        password: cfg.password,
+        database: cfg.database,
+        tls: enabled,
+        connectTimeoutMs: cfg.connectTimeoutMs,
+        responseMaxBytes: cfg.responseMaxBytes,
+    }
+}
+
+pub fn withConnectTimeout(cfg: Config, ms: Int) -> Result<Config, Error> {
+    if ms < 0 {
+        return Err(error.new("redis: connect timeout must not be negative"))
+    }
+    Ok(Config {
+        host: cfg.host,
+        port: cfg.port,
+        username: cfg.username,
+        password: cfg.password,
+        database: cfg.database,
+        tls: cfg.tls,
+        connectTimeoutMs: ms,
+        responseMaxBytes: cfg.responseMaxBytes,
+    })
+}
+
+pub fn withResponseMaxBytes(cfg: Config, bytes: Int) -> Result<Config, Error> {
+    if bytes <= 0 {
+        return Err(error.new("redis: response max bytes must be positive"))
+    }
+    Ok(Config {
+        host: cfg.host,
+        port: cfg.port,
+        username: cfg.username,
+        password: cfg.password,
+        database: cfg.database,
+        tls: cfg.tls,
+        connectTimeoutMs: cfg.connectTimeoutMs,
+        responseMaxBytes: bytes,
+    })
+}
+
+pub fn addr(cfg: Config) -> String {
+    if strings.contains(cfg.host, ":") && !strings.startsWith(cfg.host, "[") {
+        "[{cfg.host}]:{cfg.port}"
+    } else {
+        "{cfg.host}:{cfg.port}"
+    }
+}
+
+pub fn url(cfg: Config) -> String {
+    let scheme = if cfg.tls { "rediss" } else { "redis" }
+    let authPart = match cfg.password {
+        Some(password) -> match cfg.username {
+            Some(username) -> "{escapeUrlUserinfo(username)}:{escapeUrlUserinfo(password)}@",
+            None           -> ":{escapeUrlUserinfo(password)}@",
+        },
+        None -> "",
+    }
+    let dbPart = match cfg.database {
+        Some(db) -> "/{db}",
+        None     -> "",
+    }
+    "{scheme}://{authPart}{addr(cfg)}{dbPart}"
+}
+
+pub fn redactedUrl(cfg: Config) -> String {
+    let scheme = if cfg.tls { "rediss" } else { "redis" }
+    let authPart = match cfg.password {
+        Some(_) -> match cfg.username {
+            Some(username) -> "{escapeUrlUserinfo(username)}:***@",
+            None           -> ":***@",
+        },
+        None -> "",
+    }
+    let dbPart = match cfg.database {
+        Some(db) -> "/{db}",
+        None     -> "",
+    }
+    "{scheme}://{authPart}{addr(cfg)}{dbPart}"
+}
+
+pub fn command(name: String, args: List<String>) -> Result<Command, Error> {
+    let clean = strings.toUpper(strings.trimSpace(name))
+    validateCommandName(clean)?
+    Ok(Command { name: clean, args: args })
+}
+
+pub fn rawCommand(name: String) -> Result<Command, Error> {
+    command(name, [])
+}
+
+pub fn withArg(cmd: Command, value: String) -> Command {
+    let mut args = cmd.args
+    args.push(value)
+    Command { name: cmd.name, args: args }
+}
+
+pub fn withArgs(cmd: Command, values: List<String>) -> Command {
+    let mut args = cmd.args
+    for value in values {
+        args.push(value)
+    }
+    Command { name: cmd.name, args: args }
+}
+
+pub fn parts(cmd: Command) -> List<String> {
+    let mut out: List<String> = [cmd.name]
+    for arg in cmd.args {
+        out.push(arg)
+    }
+    out
+}
+
+pub fn pipeline(commands: List<Command>) -> Pipeline {
+    Pipeline { commands: commands }
+}
+
+pub fn emptyPipeline() -> Pipeline {
+    Pipeline { commands: [] }
+}
+
+pub fn append(pipe: Pipeline, cmd: Command) -> Pipeline {
+    let mut commands = pipe.commands
+    commands.push(cmd)
+    Pipeline { commands: commands }
+}
+
+pub fn transaction(commands: List<Command>) -> Pipeline {
+    let mut out: List<Command> = [rawCommand("MULTI").unwrap()]
+    for cmd in commands {
+        out.push(cmd)
+    }
+    out.push(rawCommand("EXEC").unwrap())
+    Pipeline { commands: out }
+}
+
+pub fn renderCommand(cmd: Command) -> String {
+    renderBulkArray(parts(cmd))
+}
+
+pub fn renderCommandBytes(cmd: Command) -> Bytes {
+    bytes.fromString(renderCommand(cmd))
+}
+
+pub fn renderPipeline(pipe: Pipeline) -> String {
+    let mut out = ""
+    for cmd in pipe.commands {
+        out = "{out}{renderCommand(cmd)}"
+    }
+    out
+}
+
+pub fn renderPipelineBytes(pipe: Pipeline) -> Bytes {
+    bytes.fromString(renderPipeline(pipe))
+}
+
+pub fn simpleString(value: String) -> Result<Resp, Error> {
+    validateLineValue(value)?
+    Ok(SimpleString(value))
+}
+
+pub fn errorReply(value: String) -> Result<Resp, Error> {
+    validateLineValue(value)?
+    Ok(ErrorReply(value))
+}
+
+pub fn integer(value: Int) -> Resp {
+    Integer(value)
+}
+
+pub fn bulkString(value: String) -> Resp {
+    BulkString(value)
+}
+
+pub fn nullBulkString() -> Resp {
+    NullBulkString
+}
+
+pub fn array(values: List<Resp>) -> Resp {
+    Array(values)
+}
+
+pub fn nullArray() -> Resp {
+    NullArray
+}
+
+pub fn render(resp: Resp) -> Result<String, Error> {
+    match resp {
+        SimpleString(value) -> {
+            validateLineValue(value)?
+            Ok("+{value}{crlf()}")
+        },
+        ErrorReply(value) -> {
+            validateLineValue(value)?
+            Ok("-{value}{crlf()}")
+        },
+        Integer(value) -> Ok(":{value}{crlf()}"),
+        BulkString(value) -> Ok("${value.bytes().len()}{crlf()}{value}{crlf()}"),
+        NullBulkString -> Ok("$-1{crlf()}"),
+        Array(values) -> {
+            let mut out = "*{values.len()}{crlf()}"
+            for value in values {
+                out = "{out}{render(value)?}"
+            }
+            Ok(out)
+        },
+        NullArray -> Ok("*-1{crlf()}"),
+    }
+}
+
+pub fn parse(text: String) -> Result<Resp, Error> {
+    parseBytes(bytes.fromString(text))
+}
+
+pub fn parsePrefix(text: String) -> Result<Parsed, Error> {
+    parseBytesPrefix(bytes.fromString(text))
+}
+
+pub fn parseComplete(text: String) -> Result<Resp, Error> {
+    let data = bytes.fromString(text)
+    let parsed = parseBytesAt(data, 0)?
+    if parsed.next != data.len() {
+        return Err(error.new("redis: trailing RESP data"))
+    }
+    Ok(parsed.value)
+}
+
+pub fn parseMany(text: String) -> Result<List<Resp>, Error> {
+    parseManyBytes(bytes.fromString(text))
+}
+
+pub fn parseBytes(data: Bytes) -> Result<Resp, Error> {
+    let parsed = parseBytesAt(data, 0)?
+    Ok(parsed.value)
+}
+
+pub fn parseBytesPrefix(data: Bytes) -> Result<Parsed, Error> {
+    let parsed = parseBytesAt(data, 0)?
+    Ok(Parsed { value: parsed.value, next: parsed.next })
+}
+
+pub fn parseManyBytes(data: Bytes) -> Result<List<Resp>, Error> {
+    let mut out: List<Resp> = []
+    let mut pos = 0
+    for pos < data.len() {
+        let parsed = parseBytesAt(data, pos)?
+        out.push(parsed.value)
+        pos = parsed.next
+    }
+    Ok(out)
+}
+
+pub fn parseCommand(text: String) -> Result<Command, Error> {
+    commandFromResp(parseComplete(text)?)
+}
+
+pub fn commandFromResp(value: Resp) -> Result<Command, Error> {
+    match value {
+        Array(items) -> {
+            if items.isEmpty() {
+                return Err(error.new("redis: empty command array"))
+            }
+            let name = respText(items[0])?
+            let mut args: List<String> = []
+            let mut i = 1
+            for i < items.len() {
+                args.push(respText(items[i])?)
+                i = i + 1
+            }
+            command(name, args)
+        },
+        _ -> Err(error.new("redis: command must be a RESP array")),
+    }
+}
+
+pub fn stringValue(value: Resp) -> Result<String, Error> {
+    match value {
+        SimpleString(text) -> Ok(text),
+        BulkString(text)   -> Ok(text),
+        ErrorReply(text)   -> Err(error.new("redis: error reply: {text}")),
+        NullBulkString     -> Err(error.new("redis: null bulk string")),
+        _                  -> Err(error.new("redis: expected string reply")),
+    }
+}
+
+pub fn intValue(value: Resp) -> Result<Int, Error> {
+    match value {
+        Integer(n)       -> Ok(n),
+        SimpleString(s)  -> strings.toInt(s),
+        BulkString(s)    -> strings.toInt(s),
+        ErrorReply(text) -> Err(error.new("redis: error reply: {text}")),
+        _                -> Err(error.new("redis: expected integer reply")),
+    }
+}
+
+pub fn boolValue(value: Resp) -> Result<Bool, Error> {
+    match value {
+        Integer(n) -> Ok(n != 0),
+        SimpleString(s) -> {
+            let v = strings.toLower(strings.trimSpace(s))
+            Ok(v == "ok" || v == "true" || v == "1")
+        },
+        BulkString(s) -> {
+            let v = strings.toLower(strings.trimSpace(s))
+            Ok(v == "ok" || v == "true" || v == "1")
+        },
+        ErrorReply(text) -> Err(error.new("redis: error reply: {text}")),
+        _                -> Err(error.new("redis: expected bool-like reply")),
+    }
+}
+
+pub fn expectOk(value: Resp) -> Result<(), Error> {
+    match value {
+        SimpleString(text) -> {
+            if strings.toUpper(strings.trimSpace(text)) == "OK" {
+                return Ok(())
+            }
+            Err(error.new("redis: expected OK, got {text}"))
+        },
+        ErrorReply(text) -> Err(error.new("redis: error reply: {text}")),
+        _                -> Err(error.new("redis: expected OK reply")),
+    }
+}
+
+pub fn ping() -> Command {
+    rawCommand("PING").unwrap()
+}
+
+pub fn pingMessage(message: String) -> Result<Command, Error> {
+    command("PING", [message])
+}
+
+pub fn auth(password: String) -> Result<Command, Error> {
+    command("AUTH", [password])
+}
+
+pub fn authUser(username: String, password: String) -> Result<Command, Error> {
+    let clean = strings.trimSpace(username)
+    if clean.isEmpty() {
+        return Err(error.new("redis: username is empty"))
+    }
+    command("AUTH", [clean, password])
+}
+
+pub fn hello(version: Int) -> Result<Command, Error> {
+    if version != 2 && version != 3 {
+        return Err(error.new("redis: HELLO version must be 2 or 3"))
+    }
+    command("HELLO", [version.toString()])
+}
+
+pub fn selectDb(database: Int) -> Result<Command, Error> {
+    if database < 0 {
+        return Err(error.new("redis: database must not be negative"))
+    }
+    command("SELECT", [database.toString()])
+}
+
+pub fn get(key: String) -> Result<Command, Error> {
+    keyCommand("GET", key)
+}
+
+pub fn set(key: String, value: String) -> Result<Command, Error> {
+    command("SET", [validateKey(key)?, value])
+}
+
+pub fn setOptions() -> SetOptions {
+    SetOptions {
+        mode: SetAlways,
+    }
+}
+
+pub fn setWithOptions(key: String, value: String, opts: SetOptions) -> Result<Command, Error> {
+    if optionIntIsSome(opts.expireSeconds) && optionIntIsSome(opts.expireMs) {
+        return Err(error.new("redis: SET can use EX or PX, not both"))
+    }
+    if opts.keepTtl && (optionIntIsSome(opts.expireSeconds) || optionIntIsSome(opts.expireMs)) {
+        return Err(error.new("redis: SET KEEPTTL cannot be combined with EX or PX"))
+    }
+    let mut args: List<String> = [validateKey(key)?, value]
+    match opts.expireSeconds {
+        Some(seconds) -> {
+            if seconds <= 0 {
+                return Err(error.new("redis: SET EX must be positive"))
+            }
+            args.push("EX")
+            args.push(seconds.toString())
+        },
+        None -> {},
+    }
+    match opts.expireMs {
+        Some(ms) -> {
+            if ms <= 0 {
+                return Err(error.new("redis: SET PX must be positive"))
+            }
+            args.push("PX")
+            args.push(ms.toString())
+        },
+        None -> {},
+    }
+    if opts.keepTtl {
+        args.push("KEEPTTL")
+    }
+    match opts.mode {
+        SetAlways    -> {},
+        SetIfExists  -> args.push("XX"),
+        SetIfMissing -> args.push("NX"),
+    }
+    if opts.getOldValue {
+        args.push("GET")
+    }
+    command("SET", args)
+}
+
+pub fn withExpireSeconds(opts: SetOptions, seconds: Int) -> Result<SetOptions, Error> {
+    if seconds <= 0 {
+        return Err(error.new("redis: expire seconds must be positive"))
+    }
+    Ok(SetOptions {
+        expireSeconds: Some(seconds),
+        expireMs: opts.expireMs,
+        keepTtl: opts.keepTtl,
+        mode: opts.mode,
+        getOldValue: opts.getOldValue,
+    })
+}
+
+pub fn withExpireMs(opts: SetOptions, ms: Int) -> Result<SetOptions, Error> {
+    if ms <= 0 {
+        return Err(error.new("redis: expire milliseconds must be positive"))
+    }
+    Ok(SetOptions {
+        expireSeconds: opts.expireSeconds,
+        expireMs: Some(ms),
+        keepTtl: opts.keepTtl,
+        mode: opts.mode,
+        getOldValue: opts.getOldValue,
+    })
+}
+
+pub fn setKeepTtl(opts: SetOptions) -> SetOptions {
+    SetOptions {
+        expireSeconds: opts.expireSeconds,
+        expireMs: opts.expireMs,
+        keepTtl: true,
+        mode: opts.mode,
+        getOldValue: opts.getOldValue,
+    }
+}
+
+pub fn setIfExists(opts: SetOptions) -> SetOptions {
+    SetOptions {
+        expireSeconds: opts.expireSeconds,
+        expireMs: opts.expireMs,
+        keepTtl: opts.keepTtl,
+        mode: SetIfExists,
+        getOldValue: opts.getOldValue,
+    }
+}
+
+pub fn setIfMissing(opts: SetOptions) -> SetOptions {
+    SetOptions {
+        expireSeconds: opts.expireSeconds,
+        expireMs: opts.expireMs,
+        keepTtl: opts.keepTtl,
+        mode: SetIfMissing,
+        getOldValue: opts.getOldValue,
+    }
+}
+
+pub fn setGetOldValue(opts: SetOptions) -> SetOptions {
+    SetOptions {
+        expireSeconds: opts.expireSeconds,
+        expireMs: opts.expireMs,
+        keepTtl: opts.keepTtl,
+        mode: opts.mode,
+        getOldValue: true,
+    }
+}
+
+pub fn del(keys: List<String>) -> Result<Command, Error> {
+    keysCommand("DEL", keys)
+}
+
+pub fn exists(keys: List<String>) -> Result<Command, Error> {
+    keysCommand("EXISTS", keys)
+}
+
+pub fn expire(key: String, seconds: Int) -> Result<Command, Error> {
+    if seconds < 0 {
+        return Err(error.new("redis: expire seconds must not be negative"))
+    }
+    command("EXPIRE", [validateKey(key)?, seconds.toString()])
+}
+
+pub fn pexpire(key: String, ms: Int) -> Result<Command, Error> {
+    if ms < 0 {
+        return Err(error.new("redis: pexpire milliseconds must not be negative"))
+    }
+    command("PEXPIRE", [validateKey(key)?, ms.toString()])
+}
+
+pub fn ttl(key: String) -> Result<Command, Error> {
+    keyCommand("TTL", key)
+}
+
+pub fn incr(key: String) -> Result<Command, Error> {
+    keyCommand("INCR", key)
+}
+
+pub fn incrBy(key: String, delta: Int) -> Result<Command, Error> {
+    command("INCRBY", [validateKey(key)?, delta.toString()])
+}
+
+pub fn decr(key: String) -> Result<Command, Error> {
+    keyCommand("DECR", key)
+}
+
+pub fn hget(key: String, field: String) -> Result<Command, Error> {
+    command("HGET", [validateKey(key)?, validateKey(field)?])
+}
+
+pub fn hset(key: String, field: String, value: String) -> Result<Command, Error> {
+    command("HSET", [validateKey(key)?, validateKey(field)?, value])
+}
+
+pub fn hdel(key: String, fields: List<String>) -> Result<Command, Error> {
+    let mut args: List<String> = [validateKey(key)?]
+    for field in fields {
+        args.push(validateKey(field)?)
+    }
+    if args.len() == 1 {
+        return Err(error.new("redis: HDEL needs at least one field"))
+    }
+    command("HDEL", args)
+}
+
+pub fn lpush(key: String, values: List<String>) -> Result<Command, Error> {
+    keyValuesCommand("LPUSH", key, values)
+}
+
+pub fn rpush(key: String, values: List<String>) -> Result<Command, Error> {
+    keyValuesCommand("RPUSH", key, values)
+}
+
+pub fn lpop(key: String) -> Result<Command, Error> {
+    keyCommand("LPOP", key)
+}
+
+pub fn rpop(key: String) -> Result<Command, Error> {
+    keyCommand("RPOP", key)
+}
+
+pub fn sadd(key: String, members: List<String>) -> Result<Command, Error> {
+    keyValuesCommand("SADD", key, members)
+}
+
+pub fn srem(key: String, members: List<String>) -> Result<Command, Error> {
+    keyValuesCommand("SREM", key, members)
+}
+
+pub fn smembers(key: String) -> Result<Command, Error> {
+    keyCommand("SMEMBERS", key)
+}
+
+pub fn publish(channel: String, message: String) -> Result<Command, Error> {
+    command("PUBLISH", [validateKey(channel)?, message])
+}
+
+pub fn subscribe(channels: List<String>) -> Result<Command, Error> {
+    keysCommand("SUBSCRIBE", channels)
+}
+
+pub fn scanOptions() -> ScanOptions {
+    ScanOptions {}
+}
+
+pub fn scanWithPattern(opts: ScanOptions, pattern: String) -> Result<ScanOptions, Error> {
+    let clean = strings.trimSpace(pattern)
+    if clean.isEmpty() {
+        return Err(error.new("redis: scan pattern is empty"))
+    }
+    Ok(ScanOptions {
+        pattern: Some(clean),
+        count: opts.count,
+        typ: opts.typ,
+    })
+}
+
+pub fn scanWithCount(opts: ScanOptions, count: Int) -> Result<ScanOptions, Error> {
+    if count <= 0 {
+        return Err(error.new("redis: scan count must be positive"))
+    }
+    Ok(ScanOptions {
+        pattern: opts.pattern,
+        count: Some(count),
+        typ: opts.typ,
+    })
+}
+
+pub fn scanWithType(opts: ScanOptions, typ: String) -> Result<ScanOptions, Error> {
+    let clean = strings.trimSpace(typ)
+    if clean.isEmpty() {
+        return Err(error.new("redis: scan type is empty"))
+    }
+    Ok(ScanOptions {
+        pattern: opts.pattern,
+        count: opts.count,
+        typ: Some(clean),
+    })
+}
+
+pub fn scan(cursor: Int, opts: ScanOptions) -> Result<Command, Error> {
+    if cursor < 0 {
+        return Err(error.new("redis: scan cursor must not be negative"))
+    }
+    let mut args: List<String> = [cursor.toString()]
+    match opts.pattern {
+        Some(pattern) -> {
+            args.push("MATCH")
+            args.push(pattern)
+        },
+        None -> {},
+    }
+    match opts.count {
+        Some(count) -> {
+            args.push("COUNT")
+            args.push(count.toString())
+        },
+        None -> {},
+    }
+    match opts.typ {
+        Some(typ) -> {
+            args.push("TYPE")
+            args.push(typ)
+        },
+        None -> {},
+    }
+    command("SCAN", args)
+}
+
+pub fn xadd(stream: String, id: String, fields: Map<String, String>) -> Result<Command, Error> {
+    let cleanStream = validateKey(stream)?
+    let cleanId = strings.trimSpace(id)
+    if cleanId.isEmpty() {
+        return Err(error.new("redis: stream id is empty"))
+    }
+    if fields.isEmpty() {
+        return Err(error.new("redis: XADD needs at least one field"))
+    }
+    let mut args: List<String> = [cleanStream, cleanId]
+    for key in fields.keys().sorted() {
+        args.push(validateKey(key)?)
+        args.push(fields.get(key).unwrap())
+    }
+    command("XADD", args)
+}
+
+pub fn xread(stream: String, id: String, count: Int?) -> Result<Command, Error> {
+    let mut args: List<String> = []
+    match count {
+        Some(n) -> {
+            if n <= 0 {
+                return Err(error.new("redis: XREAD count must be positive"))
+            }
+            args.push("COUNT")
+            args.push(n.toString())
+        },
+        None -> {},
+    }
+    args.push("STREAMS")
+    args.push(validateKey(stream)?)
+    args.push(strings.trimSpace(id))
+    command("XREAD", args)
+}
+
+pub fn bootstrapCommands(cfg: Config) -> Result<Pipeline, Error> {
+    let mut commands: List<Command> = []
+    match cfg.password {
+        Some(password) -> match cfg.username {
+            Some(username) -> commands.push(authUser(username, password)?),
+            None           -> commands.push(auth(password)?),
+        },
+        None -> {},
+    }
+    match cfg.database {
+        Some(database) -> commands.push(selectDb(database)?),
+        None           -> {},
+    }
+    Ok(Pipeline { commands: commands })
+}
+
+pub fn connect(cfg: Config) -> Result<Client, Error> {
+    if cfg.tls {
+        return Err(error.new("redis: TLS requires a TLS-capable transport"))
+    }
+    let conn = net.connectTimeout(addr(cfg), cfg.connectTimeoutMs)?
+    let client = Client { config: cfg, conn: conn }
+    let setup = bootstrapCommands(client.config)?
+    for cmd in setup.commands {
+        expectOk(request(client, cmd)?)?
+    }
+    Ok(client)
+}
+
+pub fn request(client: Client, cmd: Command) -> Result<Resp, Error> {
+    client.conn.writeAll(renderCommandBytes(cmd))?
+    let data = client.conn.read(client.config.responseMaxBytes)?
+    parseBytes(data)
+}
+
+pub fn requestPipeline(client: Client, pipe: Pipeline) -> Result<List<Resp>, Error> {
+    client.conn.writeAll(renderPipelineBytes(pipe))?
+    let data = client.conn.read(client.config.responseMaxBytes)?
+    parseMany(bytes.toString(data)?)
+}
+
+pub fn close(client: Client) -> Result<(), Error> {
+    client.conn.close()
+}
+
+pub fn getString(client: Client, key: String) -> Result<String?, Error> {
+    match request(client, get(key)?)? {
+        BulkString(value) -> Ok(Some(value)),
+        NullBulkString   -> Ok(noneString()),
+        ErrorReply(text) -> Err(error.new("redis: error reply: {text}")),
+        _                -> Err(error.new("redis: GET returned a non-string reply")),
+    }
+}
+
+pub fn setString(client: Client, key: String, value: String) -> Result<(), Error> {
+    expectOk(request(client, set(key, value)?)?)
+}
+
+pub fn setStringWithOptions(client: Client, key: String, value: String, opts: SetOptions) -> Result<Resp, Error> {
+    request(client, setWithOptions(key, value, opts)?)
+}
+
+pub fn deleteKeys(client: Client, keys: List<String>) -> Result<Int, Error> {
+    intValue(request(client, del(keys)?)?)
+}
+
+pub fn existsKeys(client: Client, keys: List<String>) -> Result<Int, Error> {
+    intValue(request(client, exists(keys)?)?)
+}
+
+pub fn expireKey(client: Client, key: String, seconds: Int) -> Result<Bool, Error> {
+    boolValue(request(client, expire(key, seconds)?)?)
+}
+
+fn parseBytesAt(data: Bytes, start: Int) -> Result<ByteParsed, Error> {
+    if start >= data.len() {
+        return Err(error.new("redis: incomplete RESP value"))
+    }
+    let marker = byteAt(data, start)
+    if marker == '+'.toInt() {
+        let line = readLineBytes(data, start + 1)?
+        return Ok(ByteParsed { value: SimpleString(line.0), next: line.1 })
+    }
+    if marker == '-'.toInt() {
+        let line = readLineBytes(data, start + 1)?
+        return Ok(ByteParsed { value: ErrorReply(line.0), next: line.1 })
+    }
+    if marker == ':'.toInt() {
+        let line = readLineBytes(data, start + 1)?
+        return Ok(ByteParsed { value: Integer(strings.toInt(line.0)?), next: line.1 })
+    }
+    if marker == '$'.toInt() {
+        return parseBulkBytes(data, start)
+    }
+    if marker == '*'.toInt() {
+        return parseArrayBytes(data, start)
+    }
+    Err(error.new("redis: unknown RESP marker byte: {marker}"))
+}
+
+fn parseBulkBytes(data: Bytes, start: Int) -> Result<ByteParsed, Error> {
+    let line = readLineBytes(data, start + 1)?
+    let n = strings.toInt(line.0)?
+    if n == -1 {
+        return Ok(ByteParsed { value: NullBulkString, next: line.1 })
+    }
+    if n < -1 {
+        return Err(error.new("redis: invalid bulk string length"))
+    }
+    let bodyStart = line.1
+    let bodyEnd = bodyStart + n
+    if bodyEnd + 1 >= data.len() {
+        return Err(error.new("redis: incomplete bulk string body"))
+    }
+    if byteAt(data, bodyEnd) != '\r'.toInt() || byteAt(data, bodyEnd + 1) != '\n'.toInt() {
+        return Err(error.new("redis: bulk string missing terminator"))
+    }
+    Ok(ByteParsed { value: BulkString(bytes.toString(bytesSlice(data, bodyStart, bodyEnd))?), next: bodyEnd + 2 })
+}
+
+fn parseArrayBytes(data: Bytes, start: Int) -> Result<ByteParsed, Error> {
+    let line = readLineBytes(data, start + 1)?
+    let n = strings.toInt(line.0)?
+    if n == -1 {
+        return Ok(ByteParsed { value: NullArray, next: line.1 })
+    }
+    if n < -1 {
+        return Err(error.new("redis: invalid array length"))
+    }
+    let mut values: List<Resp> = []
+    let mut pos = line.1
+    let mut i = 0
+    for i < n {
+        let parsed = parseBytesAt(data, pos)?
+        values.push(parsed.value)
+        pos = parsed.next
+        i = i + 1
+    }
+    Ok(ByteParsed { value: Array(values), next: pos })
+}
+
+fn readLineBytes(data: Bytes, start: Int) -> Result<(String, Int), Error> {
+    let mut out: List<Byte> = []
+    let mut i = start
+    for i + 1 < data.len() {
+        if byteAt(data, i) == '\r'.toInt() && byteAt(data, i + 1) == '\n'.toInt() {
+            return Ok((bytes.toString(bytes.from(out))?, i + 2))
+        }
+        out.push(data.get(i).unwrap())
+        i = i + 1
+    }
+    Err(error.new("redis: missing CRLF"))
+}
+
+fn bytesSlice(data: Bytes, start: Int, end: Int) -> Bytes {
+    let mut out: List<Byte> = []
+    let mut i = start
+    for i < end {
+        out.push(data.get(i).unwrap())
+        i = i + 1
+    }
+    bytes.from(out)
+}
+
+fn byteAt(data: Bytes, index: Int) -> Int {
+    data.get(index).unwrap().toInt()
+}
+
+fn renderBulkArray(items: List<String>) -> String {
+    let mut out = "*{items.len()}{crlf()}"
+    for item in items {
+        out = "{out}${item.bytes().len()}{crlf()}{item}{crlf()}"
+    }
+    out
+}
+
+fn respText(value: Resp) -> Result<String, Error> {
+    match value {
+        SimpleString(text) -> Ok(text),
+        BulkString(text)   -> Ok(text),
+        _                  -> Err(error.new("redis: command element must be a string")),
+    }
+}
+
+fn keyCommand(name: String, key: String) -> Result<Command, Error> {
+    command(name, [validateKey(key)?])
+}
+
+fn keysCommand(name: String, keys: List<String>) -> Result<Command, Error> {
+    if keys.isEmpty() {
+        return Err(error.new("redis: command needs at least one key"))
+    }
+    let mut args: List<String> = []
+    for key in keys {
+        args.push(validateKey(key)?)
+    }
+    command(name, args)
+}
+
+fn keyValuesCommand(name: String, key: String, values: List<String>) -> Result<Command, Error> {
+    if values.isEmpty() {
+        return Err(error.new("redis: command needs at least one value"))
+    }
+    let mut args: List<String> = [validateKey(key)?]
+    for value in values {
+        args.push(value)
+    }
+    command(name, args)
+}
+
+fn validateKey(key: String) -> Result<String, Error> {
+    if key.isEmpty() {
+        return Err(error.new("redis: key is empty"))
+    }
+    for c in key.chars() {
+        if c.toInt() == 0 {
+            return Err(error.new("redis: key contains NUL"))
+        }
+    }
+    Ok(key)
+}
+
+fn validateCommandName(name: String) -> Result<(), Error> {
+    if name.isEmpty() {
+        return Err(error.new("redis: command name is empty"))
+    }
+    for c in name.chars() {
+        if c.toInt() <= 0x20 || c == '\r' || c == '\n' {
+            return Err(error.new("redis: invalid command name"))
+        }
+    }
+    Ok(())
+}
+
+fn validateLineValue(value: String) -> Result<(), Error> {
+    for c in value.chars() {
+        if c == '\r' || c == '\n' {
+            return Err(error.new("redis: RESP line value contains newline"))
+        }
+    }
+    Ok(())
+}
+
+fn optionIntIsSome(value: Int?) -> Bool {
+    match value {
+        Some(_) -> true,
+        None    -> false,
+    }
+}
+
+fn noneString() -> String? {
+    None
+}
+
+fn escapeUrlUserinfo(value: String) -> String {
+    let mut out = ""
+    for b in value.bytes() {
+        let n = b.toInt()
+        if isUrlUserinfoByte(n) {
+            out = "{out}{b.toChar()}"
+        } else {
+            out = "{out}%{hex2(n)}"
+        }
+    }
+    out
+}
+
+fn isUrlUserinfoByte(n: Int) -> Bool {
+    (n >= 'a'.toInt() && n <= 'z'.toInt()) ||
+    (n >= 'A'.toInt() && n <= 'Z'.toInt()) ||
+    (n >= '0'.toInt() && n <= '9'.toInt()) ||
+    n == '-'.toInt() || n == '.'.toInt() || n == '_'.toInt() || n == '~'.toInt()
+}
+
+fn hex2(value: Int) -> String {
+    let digits = "0123456789ABCDEF"
+    let hi = digits[(value >> 4) & 0x0F]
+    let lo = digits[value & 0x0F]
+    "{hi}{lo}"
+}
+
+fn crlf() -> String {
+    "\r\n"
+}
