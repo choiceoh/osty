@@ -1675,8 +1675,105 @@ func (g *mirGen) emitStdRegexCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, err
 			return true, err
 		}
 		return true, g.emitRuntimeCallToDest(c, ostyRtRegexSplitSymbol, "ptr", []mirRuntimeArg{recv, text})
+	case "find":
+		return g.emitStdRegexFindMIR(c)
 	}
 	return false, nil
+}
+
+// emitStdRegexFindMIR lowers `Regex.find(text) -> Match?`. Mirrors the
+// os.exec → Result<Output, Error> pattern: the runtime returns a raw
+// xmalloc'd `{ptr, i64, i64}` (NULL on no match), the shim loads the
+// three fields off the raw pointer, frees it, lifts them into the
+// synthetic `__osty_std_regex_Match` aggregate, then boxes the
+// aggregate onto the GC heap so the i64 payload of `Option<Match>`
+// can hold a ptrtoint of the box.
+func (g *mirGen) emitStdRegexFindMIR(c *mir.CallInstr) (bool, error) {
+	if len(c.Args) != 2 {
+		return true, unsupported("mir-mvp", "Regex.find requires receiver and text")
+	}
+	recv, err := g.evalTypedArg(c.Args[0], c.Args[0].Type())
+	if err != nil {
+		return true, err
+	}
+	text, err := g.evalTypedArg(c.Args[1], c.Args[1].Type())
+	if err != nil {
+		return true, err
+	}
+
+	g.declareRuntime(ostyRtRegexFindSymbol, mirRuntimeDeclareLine("ptr", ostyRtRegexFindSymbol, "ptr, ptr"))
+	g.declareRuntime(ostyRtRegexMatchFreeSymbol, mirRuntimeDeclareLine("void", ostyRtRegexMatchFreeSymbol, "ptr"))
+	raw := g.fresh()
+	g.fnBuf.WriteString(mirCallValueLine(raw, "ptr", ostyRtRegexFindSymbol, mirRuntimeArgList([]mirRuntimeArg{recv, text})))
+
+	if c.Dest == nil {
+		// Result discarded — still need to free the raw pointer so the
+		// xmalloc doesn't leak. Issue free guarded by NULL check.
+		g.emitStdRegexFindFreeIfNonNull(raw)
+		return true, nil
+	}
+	destLoc := g.fn.Local(c.Dest.Local)
+	if destLoc == nil {
+		return true, fmt.Errorf("mir-mvp: Regex.find dest into unknown local %d", c.Dest.Local)
+	}
+	optT, ok := destLoc.Type.(*ir.OptionalType)
+	if !ok {
+		return true, unsupported("mir-mvp", "Regex.find dest must be Option<Match>")
+	}
+	matchT := optT.Inner
+	optLLVM := g.llvmType(optT)
+
+	isNull := g.fresh()
+	g.fnBuf.WriteString(mirICmpEqLine(isNull, "ptr", raw, "null"))
+	noneLabel := g.freshLabel("regex.find.none")
+	someLabel := g.freshLabel("regex.find.some")
+	contLabel := g.freshLabel("regex.find.cont")
+	g.fnBuf.WriteString(mirBrCondLine(isNull, noneLabel, someLabel))
+
+	g.fnBuf.WriteString(mirLabelLine(noneLabel))
+	noneValue := g.emitOptionValue(optLLVM, false, "0")
+	g.fnBuf.WriteString(mirBrUncondLine(contLabel))
+
+	g.fnBuf.WriteString(mirLabelLine(someLabel))
+	textField := g.emitRecordFieldLoad(raw, stdRegexMatchRuntimeRecordLLVMType, "ptr", 0)
+	startField := g.emitRecordFieldLoad(raw, stdRegexMatchRuntimeRecordLLVMType, "i64", 1)
+	endField := g.emitRecordFieldLoad(raw, stdRegexMatchRuntimeRecordLLVMType, "i64", 2)
+	g.fnBuf.WriteString(mirCallVoidLine(ostyRtRegexMatchFreeSymbol, mirArgSlotPtr(raw)))
+	matchValue, err := g.buildAggregateValue(matchT, []mirRuntimeArg{
+		{typ: "ptr", val: textField},
+		{typ: "i64", val: startField},
+		{typ: "i64", val: endField},
+	})
+	if err != nil {
+		return true, err
+	}
+	payload, err := g.toI64Slot(matchValue, matchT)
+	if err != nil {
+		return true, err
+	}
+	someValue := g.emitOptionValue(optLLVM, true, payload)
+	g.fnBuf.WriteString(mirBrUncondLine(contLabel))
+
+	g.fnBuf.WriteString(mirLabelLine(contLabel))
+	phi := g.fresh()
+	g.fnBuf.WriteString(mirPhiTwoLine(phi, optLLVM, noneValue, noneLabel, someValue, someLabel))
+	g.fnBuf.WriteString(mirStoreLine(optLLVM, phi, g.localSlots[c.Dest.Local]))
+	return true, nil
+}
+
+// emitStdRegexFindFreeIfNonNull guards the match_free call with a
+// NULL check — used when the call result is discarded. Without this
+// the runtime would crash on no-match (NULL passed to free).
+func (g *mirGen) emitStdRegexFindFreeIfNonNull(raw string) {
+	isNull := g.fresh()
+	g.fnBuf.WriteString(mirICmpEqLine(isNull, "ptr", raw, "null"))
+	skipLabel := g.freshLabel("regex.find.skip")
+	freeLabel := g.freshLabel("regex.find.free")
+	g.fnBuf.WriteString(mirBrCondLine(isNull, skipLabel, freeLabel))
+	g.fnBuf.WriteString(mirLabelLine(freeLabel))
+	g.fnBuf.WriteString(mirCallVoidLine(ostyRtRegexMatchFreeSymbol, mirArgSlotPtr(raw)))
+	g.fnBuf.WriteString(mirBrUncondLine(skipLabel))
+	g.fnBuf.WriteString(mirLabelLine(skipLabel))
 }
 
 // emitStdRegexReplaceMIR shares the lowering for replace/replaceAll —

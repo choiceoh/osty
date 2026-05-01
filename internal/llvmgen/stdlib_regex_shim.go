@@ -14,7 +14,22 @@ const (
 	ostyRtRegexReplaceSymbol      = "osty_rt_regex_replace"
 	ostyRtRegexReplaceAllSymbol   = "osty_rt_regex_replace_all"
 	ostyRtRegexSplitSymbol        = "osty_rt_regex_split"
+	ostyRtRegexFindSymbol         = "osty_rt_regex_find"
+	ostyRtRegexMatchFreeSymbol    = "osty_rt_regex_match_free"
 )
+
+// Synthetic struct name mirroring the user-facing `Match` shape from
+// regex.osty (`{text: String, start: Int, end: Int}`). MIR allocates
+// it as a value-typed aggregate; Option<Match> boxes the aggregate
+// onto the GC heap and stores ptrtoint(box) into the enum payload —
+// same pattern os.exec uses for Result<Output, Error>.
+const stdRegexSyntheticMatchTypeName = "__osty_std_regex_Match"
+
+// stdRegexMatchRuntimeRecordLLVMType is the inline {ptr, i64, i64}
+// layout the runtime allocates via xmalloc. The MIR shim does
+// getelementptr/load on the three offsets before freeing the raw
+// pointer and lifting the values into the synthetic Match aggregate.
+const stdRegexMatchRuntimeRecordLLVMType = "{ ptr, i64, i64 }"
 
 var stdRegexStringListSourceTypeSingleton ast.Type = &ast.NamedType{
 	Path: []string{"List"},
