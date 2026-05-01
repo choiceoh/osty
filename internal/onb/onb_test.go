@@ -406,3 +406,244 @@ func intPrintlnMainMIR(value int64) *mir.Function {
 	})
 	return fn
 }
+
+// addLocalsMIR builds the MIR that the front-end emits for
+//
+//	fn main() {
+//	    let x = 10
+//	    let y = 32
+//	    println(x + y)
+//	}
+//
+// after const-folding x and y. The named locals are elided, leaving a single
+// temp local that holds the binary-op result and feeds into println.
+func addLocalsMIR() *mir.Function {
+	fn := &mir.Function{
+		Name:        "main",
+		ReturnType:  mir.TUnit,
+		ReturnLocal: 0,
+		Entry:       0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "$ret", Type: mir.TUnit, IsReturn: true},
+			{ID: 1, Name: "tmp", Type: mir.TInt},
+		},
+	}
+	block := fn.NewBlock(mir.Span{})
+	fn.Block(block).Instrs = []mir.Instr{
+		&mir.AssignInstr{
+			Dest: mir.Place{Local: 1},
+			Src: &mir.BinaryRV{
+				Op:    mir.BinAdd,
+				Left:  &mir.ConstOp{Const: &mir.IntConst{Value: 10, T: mir.TInt}, T: mir.TInt},
+				Right: &mir.ConstOp{Const: &mir.IntConst{Value: 32, T: mir.TInt}, T: mir.TInt},
+				T:     mir.TInt,
+			},
+		},
+		&mir.IntrinsicInstr{
+			Kind: mir.IntrinsicPrintln,
+			Args: []mir.Operand{&mir.CopyOp{Place: mir.Place{Local: 1}, T: mir.TInt}},
+		},
+	}
+	fn.Block(block).SetTerminator(&mir.ReturnTerm{})
+	return fn
+}
+
+// chainMIR builds the MIR for `let a = 10; let b = 3; println(a - b * 2)` —
+// the multiplication folds into a temp (local2), then the subtraction reads
+// that temp via Copy and feeds the result (local1) into println.
+func chainMIR() *mir.Function {
+	fn := &mir.Function{
+		Name:        "main",
+		ReturnType:  mir.TUnit,
+		ReturnLocal: 0,
+		Entry:       0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "$ret", Type: mir.TUnit, IsReturn: true},
+			{ID: 1, Name: "outer", Type: mir.TInt},
+			{ID: 2, Name: "inner", Type: mir.TInt},
+		},
+	}
+	block := fn.NewBlock(mir.Span{})
+	fn.Block(block).Instrs = []mir.Instr{
+		&mir.AssignInstr{
+			Dest: mir.Place{Local: 2},
+			Src: &mir.BinaryRV{
+				Op:    mir.BinMul,
+				Left:  &mir.ConstOp{Const: &mir.IntConst{Value: 3, T: mir.TInt}, T: mir.TInt},
+				Right: &mir.ConstOp{Const: &mir.IntConst{Value: 2, T: mir.TInt}, T: mir.TInt},
+				T:     mir.TInt,
+			},
+		},
+		&mir.AssignInstr{
+			Dest: mir.Place{Local: 1},
+			Src: &mir.BinaryRV{
+				Op:    mir.BinSub,
+				Left:  &mir.ConstOp{Const: &mir.IntConst{Value: 10, T: mir.TInt}, T: mir.TInt},
+				Right: &mir.CopyOp{Place: mir.Place{Local: 2}, T: mir.TInt},
+				T:     mir.TInt,
+			},
+		},
+		&mir.IntrinsicInstr{
+			Kind: mir.IntrinsicPrintln,
+			Args: []mir.Operand{&mir.CopyOp{Place: mir.Place{Local: 1}, T: mir.TInt}},
+		},
+	}
+	fn.Block(block).SetTerminator(&mir.ReturnTerm{})
+	return fn
+}
+
+func TestLowerMIRAssignsSlotsForReadLocalsOnly(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(&mir.Module{
+		Functions: []*mir.Function{addLocalsMIR()},
+	}, Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR() returned error: %v", err)
+	}
+	fn := program.Functions[0]
+	if fn.FrameSize == 0 {
+		t.Fatalf("FrameSize = 0, want non-zero (printf vararg + 1 local + FP/LR)")
+	}
+	if fn.FrameSize%16 != 0 {
+		t.Fatalf("FrameSize = %d, want multiple of 16", fn.FrameSize)
+	}
+}
+
+func TestLowerMIRLowersAddBetweenConstants(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(&mir.Module{
+		Functions: []*mir.Function{addLocalsMIR()},
+	}, Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR() returned error: %v", err)
+	}
+	instrs := program.Functions[0].Blocks[0].Instrs
+	var sawMov10, sawMov32, sawAdd, sawStore, sawLoadForPrintf bool
+	for _, instr := range instrs {
+		switch i := instr.(type) {
+		case *MovImm64:
+			if i.Imm == 10 {
+				sawMov10 = true
+			}
+			if i.Imm == 32 {
+				sawMov32 = true
+			}
+		case *AddReg:
+			sawAdd = true
+		case *Store64Stack:
+			if i.Offset != 0 {
+				sawStore = true // local store, not vararg
+			}
+		case *Load64Stack:
+			if i.Dst == RegX1 {
+				sawLoadForPrintf = true
+			}
+		}
+	}
+	if !sawMov10 || !sawMov32 {
+		t.Fatalf("expected mov #10 and mov #32; instrs=%+v", instrs)
+	}
+	if !sawAdd {
+		t.Fatalf("expected AddReg; instrs=%+v", instrs)
+	}
+	if !sawStore {
+		t.Fatalf("expected Store64Stack at local slot; instrs=%+v", instrs)
+	}
+	if !sawLoadForPrintf {
+		t.Fatalf("expected Load64Stack into x1 for printf; instrs=%+v", instrs)
+	}
+}
+
+func TestLowerMIRLowersSubMulChain(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(&mir.Module{
+		Functions: []*mir.Function{chainMIR()},
+	}, Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR() returned error: %v", err)
+	}
+	instrs := program.Functions[0].Blocks[0].Instrs
+	var sawMul, sawSub bool
+	for _, instr := range instrs {
+		switch instr.(type) {
+		case *MulReg:
+			sawMul = true
+		case *SubReg:
+			sawSub = true
+		}
+	}
+	if !sawMul {
+		t.Fatalf("expected MulReg; instrs=%+v", instrs)
+	}
+	if !sawSub {
+		t.Fatalf("expected SubReg; instrs=%+v", instrs)
+	}
+}
+
+func TestRenderAssemblyRendersArithFrame(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(&mir.Module{
+		Functions: []*mir.Function{addLocalsMIR()},
+	}, Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR() returned error: %v", err)
+	}
+	asm, err := RenderAssembly(program)
+	if err != nil {
+		t.Fatalf("RenderAssembly() returned error: %v", err)
+	}
+	text := string(asm)
+	for _, want := range []string{
+		"\tsub sp, sp,",
+		"\tstp x29, x30, [sp, #",
+		"\tmovz x9, #10",
+		"\tmovz x10, #32",
+		"\tadd x9, x9, x10",
+		"\tldr x1, [sp,",
+		"\tbl _printf",
+		"\tldp x29, x30, [sp, #",
+		"\tadd sp, sp, #",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("assembly missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestEmitObjectWritesMachOArithRelocations(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(&mir.Module{
+		Functions: []*mir.Function{addLocalsMIR()},
+	}, Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR() returned error: %v", err)
+	}
+	obj, err := EmitObject(program)
+	if err != nil {
+		t.Fatalf("EmitObject() returned error: %v", err)
+	}
+	f, err := macho.NewFile(bytes.NewReader(obj))
+	if err != nil {
+		t.Fatalf("macho.NewFile() returned error: %v", err)
+	}
+	if len(f.Sections) != 2 || f.Sections[0].Name != "__text" {
+		t.Fatalf("Mach-O sections = %+v", f.Sections)
+	}
+	if f.Symtab == nil {
+		t.Fatal("Mach-O symtab is nil")
+	}
+	var sawPrintf bool
+	for _, sym := range f.Symtab.Syms {
+		if sym.Name == "_printf" {
+			sawPrintf = true
+		}
+	}
+	if !sawPrintf {
+		t.Fatalf("Mach-O symbols = %+v, want _printf for vararg println", f.Symtab.Syms)
+	}
+}

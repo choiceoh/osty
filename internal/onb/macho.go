@@ -40,8 +40,17 @@ const (
 )
 
 func emitMachOObject(program *Program) ([]byte, error) {
-	if len(program.CStrings) == 0 {
+	// The minimal path only knows how to encode `mov w0, #0; ret` — it has
+	// neither prologue/epilogue nor any of Phase A2's new opcodes. The
+	// cstring-relocs path handles the full opcode set. Use the minimal path
+	// only for the legacy `fn main() {}` shape (no cstrings, no frame).
+	if len(program.CStrings) == 0 && len(program.Functions) == 1 && program.Functions[0].FrameSize == 0 {
 		return emitMinimalMachOObject(program)
+	}
+	if len(program.CStrings) == 0 {
+		// Still no cstrings but we have a frame — synthesise an empty
+		// cstring-relocs encoding so the prologue path takes over.
+		return emitMachOObjectWithCStringRelocs(program)
 	}
 	return emitMachOObjectWithCStringRelocs(program)
 }
@@ -295,16 +304,28 @@ func encodeMachOTextWithRelocs(program *Program, cstringIndex map[string]uint32)
 	}
 	externalIndex := map[string]uint32{}
 	var enc machoTextEncoding
-	needsFrame := functionNeedsFrame(fn)
-	needsStackArgs := functionNeedsStackArgs(fn)
-	if needsFrame {
-		if needsStackArgs {
-			enc.code = appendU32LE(enc.code, 0xd10083ff) // sub sp, sp, #32
-			enc.code = appendU32LE(enc.code, 0xa9017bfd) // stp x29, x30, [sp, #16]
-			enc.code = appendU32LE(enc.code, 0x910043fd) // add x29, sp, #16
-		} else {
+	frameSize := functionFrameSize(fn)
+	fpOffset := functionFPOffset(fn)
+	if frameSize > 0 {
+		if fpOffset < 0 {
 			enc.code = appendU32LE(enc.code, 0xa9bf7bfd) // stp x29, x30, [sp, #-16]!
 			enc.code = appendU32LE(enc.code, 0x910003fd) // mov x29, sp
+		} else {
+			subWord, err := encodeAddSubImm(0xd1000000, RegSP, RegSP, uint64(frameSize))
+			if err != nil {
+				return machoTextEncoding{}, fmt.Errorf("onb: prologue sub sp: %w", err)
+			}
+			enc.code = appendU32LE(enc.code, subWord)
+			stpWord, err := encodeStpFPLR(uint32(fpOffset))
+			if err != nil {
+				return machoTextEncoding{}, fmt.Errorf("onb: prologue stp: %w", err)
+			}
+			enc.code = appendU32LE(enc.code, stpWord)
+			addWord, err := encodeAddSubImm(0x91000000, RegX29, RegSP, uint64(fpOffset))
+			if err != nil {
+				return machoTextEncoding{}, fmt.Errorf("onb: prologue fp: %w", err)
+			}
+			enc.code = appendU32LE(enc.code, addWord)
 		}
 	}
 	for _, instr := range fn.Blocks[0].Instrs {
@@ -349,19 +370,57 @@ func encodeMachOTextWithRelocs(program *Program, cstringIndex map[string]uint32)
 			for _, word := range words {
 				enc.code = appendU32LE(enc.code, word)
 			}
+		case *MovRegReg:
+			word, err := encodeMachOMovRegReg(i.Dst, i.Src)
+			if err != nil {
+				return machoTextEncoding{}, err
+			}
+			enc.code = appendU32LE(enc.code, word)
 		case *Store64Stack:
 			word, err := encodeMachOStore64Stack(i)
 			if err != nil {
 				return machoTextEncoding{}, err
 			}
 			enc.code = appendU32LE(enc.code, word)
+		case *Load64Stack:
+			word, err := encodeMachOLoad64Stack(i)
+			if err != nil {
+				return machoTextEncoding{}, err
+			}
+			enc.code = appendU32LE(enc.code, word)
+		case *AddReg:
+			word, err := encodeMachOArithReg(0x8b000000, i.Dst, i.Lhs, i.Rhs)
+			if err != nil {
+				return machoTextEncoding{}, err
+			}
+			enc.code = appendU32LE(enc.code, word)
+		case *SubReg:
+			word, err := encodeMachOArithReg(0xcb000000, i.Dst, i.Lhs, i.Rhs)
+			if err != nil {
+				return machoTextEncoding{}, err
+			}
+			enc.code = appendU32LE(enc.code, word)
+		case *MulReg:
+			word, err := encodeMachOMulReg(i.Dst, i.Lhs, i.Rhs)
+			if err != nil {
+				return machoTextEncoding{}, err
+			}
+			enc.code = appendU32LE(enc.code, word)
 		case *Ret:
-			if needsFrame {
-				if needsStackArgs {
-					enc.code = appendU32LE(enc.code, 0xa9417bfd) // ldp x29, x30, [sp, #16]
-					enc.code = appendU32LE(enc.code, 0x910083ff) // add sp, sp, #32
-				} else {
+			if frameSize > 0 {
+				if fpOffset < 0 {
 					enc.code = appendU32LE(enc.code, 0xa8c17bfd) // ldp x29, x30, [sp], #16
+				} else {
+					ldpWord, err := encodeLdpFPLR(uint32(fpOffset))
+					if err != nil {
+						return machoTextEncoding{}, fmt.Errorf("onb: epilogue ldp: %w", err)
+					}
+					enc.code = appendU32LE(enc.code, ldpWord)
+					addWord, err := encodeAddSubImm(0x91000000, RegSP, RegSP, uint64(frameSize))
+					if err != nil {
+						return machoTextEncoding{}, fmt.Errorf("onb: epilogue add sp: %w", err)
+					}
+					enc.code = appendU32LE(enc.code, addWord)
 				}
 			}
 			enc.code = append(enc.code, 0xc0, 0x03, 0x5f, 0xd6)
@@ -385,6 +444,131 @@ func encodeMachOStore64Stack(instr *Store64Stack) (uint32, error) {
 		return 0, fmt.Errorf("%w: Mach-O stack store offset %d", ErrNotImplemented, instr.Offset)
 	}
 	return 0xf90003e0 | (scaled << 10) | reg, nil
+}
+
+func encodeMachOLoad64Stack(instr *Load64Stack) (uint32, error) {
+	if instr.Offset < 0 || instr.Offset%8 != 0 {
+		return 0, fmt.Errorf("%w: Mach-O stack load offset %d", ErrNotImplemented, instr.Offset)
+	}
+	reg, ok := xRegisterNumber(instr.Dst)
+	if !ok {
+		return 0, fmt.Errorf("%w: Mach-O stack load dest %s", ErrNotImplemented, instr.Dst)
+	}
+	scaled := uint32(instr.Offset / 8)
+	if scaled > 0xfff {
+		return 0, fmt.Errorf("%w: Mach-O stack load offset %d", ErrNotImplemented, instr.Offset)
+	}
+	// LDR Xt, [SP, #imm]: 0xf94003e0 | (imm12 << 10) | Rt
+	return 0xf94003e0 | (scaled << 10) | reg, nil
+}
+
+func encodeMachOMovRegReg(dst, src Reg) (uint32, error) {
+	dstNum, ok := xRegisterNumber(dst)
+	if !ok {
+		return 0, fmt.Errorf("%w: Mach-O mov dst %s", ErrNotImplemented, dst)
+	}
+	srcNum, ok := xRegisterNumber(src)
+	if !ok {
+		return 0, fmt.Errorf("%w: Mach-O mov src %s", ErrNotImplemented, src)
+	}
+	// MOV Xd, Xm is the alias for ORR Xd, XZR, Xm:
+	// 0xaa0003e0 | (Xm << 16) | Xd. XZR encodes as 31.
+	return 0xaa0003e0 | (srcNum << 16) | dstNum, nil
+}
+
+// encodeMachOArithReg encodes ADD/SUB (shifted register) for 64-bit registers
+// with no shift. Base is 0x8b000000 (ADD) or 0xcb000000 (SUB).
+//
+//	ADD Xd, Xn, Xm : sf=1, op=0, S=0, shift=0, imm6=0
+//	SUB Xd, Xn, Xm : sf=1, op=1, S=0
+//	layout: base | (Rm << 16) | (Rn << 5) | Rd
+func encodeMachOArithReg(base uint32, dst, lhs, rhs Reg) (uint32, error) {
+	d, ok := xRegisterNumber(dst)
+	if !ok {
+		return 0, fmt.Errorf("%w: Mach-O arith dst %s", ErrNotImplemented, dst)
+	}
+	n, ok := xRegisterNumber(lhs)
+	if !ok {
+		return 0, fmt.Errorf("%w: Mach-O arith lhs %s", ErrNotImplemented, lhs)
+	}
+	m, ok := xRegisterNumber(rhs)
+	if !ok {
+		return 0, fmt.Errorf("%w: Mach-O arith rhs %s", ErrNotImplemented, rhs)
+	}
+	return base | (m << 16) | (n << 5) | d, nil
+}
+
+// encodeMachOMulReg encodes MUL Xd, Xn, Xm — alias for MADD Xd, Xn, Xm, XZR.
+//
+//	layout: 0x9b007c00 | (Rm << 16) | (Rn << 5) | Rd  (Ra = 31 = XZR)
+func encodeMachOMulReg(dst, lhs, rhs Reg) (uint32, error) {
+	d, ok := xRegisterNumber(dst)
+	if !ok {
+		return 0, fmt.Errorf("%w: Mach-O mul dst %s", ErrNotImplemented, dst)
+	}
+	n, ok := xRegisterNumber(lhs)
+	if !ok {
+		return 0, fmt.Errorf("%w: Mach-O mul lhs %s", ErrNotImplemented, lhs)
+	}
+	m, ok := xRegisterNumber(rhs)
+	if !ok {
+		return 0, fmt.Errorf("%w: Mach-O mul rhs %s", ErrNotImplemented, rhs)
+	}
+	return 0x9b007c00 | (m << 16) | (n << 5) | d, nil
+}
+
+// encodeAddSubImm encodes ADD/SUB (immediate) for 64-bit registers with no
+// left-shift. Base is 0x91000000 (ADD) or 0xd1000000 (SUB). imm must fit in
+// 12 unsigned bits.
+//
+//	layout: base | (imm12 << 10) | (Rn << 5) | Rd
+//
+// Accepts SP / X29 / X30 in addition to the regular X registers because the
+// prologue and epilogue plumb FP/SP through these helpers.
+func encodeAddSubImm(base uint32, dst, src Reg, imm uint64) (uint32, error) {
+	if imm > 0xfff {
+		return 0, fmt.Errorf("%w: imm %d does not fit in 12 bits", ErrNotImplemented, imm)
+	}
+	d, ok := aarch64RegEncoding(dst)
+	if !ok {
+		return 0, fmt.Errorf("%w: addsub dst %s", ErrNotImplemented, dst)
+	}
+	n, ok := aarch64RegEncoding(src)
+	if !ok {
+		return 0, fmt.Errorf("%w: addsub src %s", ErrNotImplemented, src)
+	}
+	return base | (uint32(imm) << 10) | (n << 5) | d, nil
+}
+
+// encodeStpFPLR encodes STP X29, X30, [SP, #fpOffset] (signed offset variant).
+// fpOffset must be a non-negative multiple of 8 in [0, 504].
+//
+//	layout: 0xa9000000 | (imm7 << 15) | (X30 << 10) | (SP << 5) | X29
+//	      = 0xa9007bfd | (imm7 << 15)
+func encodeStpFPLR(fpOffset uint32) (uint32, error) {
+	if fpOffset%8 != 0 {
+		return 0, fmt.Errorf("%w: stp offset %d not 8-aligned", ErrNotImplemented, fpOffset)
+	}
+	imm := fpOffset / 8
+	if imm > 0x3f {
+		return 0, fmt.Errorf("%w: stp offset %d exceeds signed-7-bit range", ErrNotImplemented, fpOffset)
+	}
+	return 0xa9007bfd | (imm << 15), nil
+}
+
+// encodeLdpFPLR encodes LDP X29, X30, [SP, #fpOffset] (signed offset variant).
+//
+//	layout: 0xa9400000 | (imm7 << 15) | (X30 << 10) | (SP << 5) | X29
+//	      = 0xa9407bfd | (imm7 << 15)
+func encodeLdpFPLR(fpOffset uint32) (uint32, error) {
+	if fpOffset%8 != 0 {
+		return 0, fmt.Errorf("%w: ldp offset %d not 8-aligned", ErrNotImplemented, fpOffset)
+	}
+	imm := fpOffset / 8
+	if imm > 0x3f {
+		return 0, fmt.Errorf("%w: ldp offset %d exceeds signed-7-bit range", ErrNotImplemented, fpOffset)
+	}
+	return 0xa9407bfd | (imm << 15), nil
 }
 
 func encodeMachOMovImm64(dst Reg, imm uint64) ([]uint32, error) {

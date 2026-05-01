@@ -17,9 +17,15 @@ type CStringLiteral struct {
 }
 
 // Function is one lowered ONB function.
+//
+// FrameSize is the total stack frame size in bytes (multiple of 16). 0 means
+// the function uses no stack — a leaf function with no locals and no stack
+// arguments. The lowerer fills this in at the end of lowering once it knows
+// how many local slots and whether a printf vararg slot are needed.
 type Function struct {
-	Name   string
-	Blocks []Block
+	Name      string
+	Blocks    []Block
+	FrameSize int64
 }
 
 // Block is a linear basic block.
@@ -37,9 +43,14 @@ type Instr interface {
 type Reg string
 
 const (
-	RegX0 Reg = "x0"
-	RegX1 Reg = "x1"
-	RegW0 Reg = "w0"
+	RegX0  Reg = "x0"
+	RegX1  Reg = "x1"
+	RegX9  Reg = "x9"
+	RegX10 Reg = "x10"
+	RegX29 Reg = "x29"
+	RegX30 Reg = "x30"
+	RegSP  Reg = "sp"
+	RegW0  Reg = "w0"
 )
 
 // MovImm32 lowers a small integer immediate into a 32-bit destination
@@ -60,14 +71,63 @@ type MovImm64 struct {
 
 func (*MovImm64) instrNode() {}
 
-// Store64Stack stores a 64-bit register into the current call frame. Darwin
-// aarch64 uses this for C varargs such as printf's integer argument area.
+// MovRegReg copies one 64-bit register into another (`mov Xd, Xs`).
+// Used to plumb a value into x0/x1 for printf, or to refresh a scratch
+// register before an arithmetic op.
+type MovRegReg struct {
+	Dst Reg
+	Src Reg
+}
+
+func (*MovRegReg) instrNode() {}
+
+// Store64Stack stores a 64-bit register into the current call frame. Used
+// both for printf's vararg integer slot and for spilling a local variable
+// to its assigned stack slot.
 type Store64Stack struct {
 	Src    Reg
 	Offset int64
 }
 
 func (*Store64Stack) instrNode() {}
+
+// Load64Stack loads a 64-bit slot from the current call frame into an x
+// register. Used to materialise a local's value into a scratch register
+// before consuming it.
+type Load64Stack struct {
+	Dst    Reg
+	Offset int64
+}
+
+func (*Load64Stack) instrNode() {}
+
+// AddReg / SubReg / MulReg are the three Int binary ops Slice A2 covers:
+// `<op> Xd, Xn, Xm`. The lowerer emits these between scratch registers
+// (typically x9/x10), with operands previously materialised via Load64Stack
+// or MovImm64.
+type AddReg struct {
+	Dst Reg
+	Lhs Reg
+	Rhs Reg
+}
+
+func (*AddReg) instrNode() {}
+
+type SubReg struct {
+	Dst Reg
+	Lhs Reg
+	Rhs Reg
+}
+
+func (*SubReg) instrNode() {}
+
+type MulReg struct {
+	Dst Reg
+	Lhs Reg
+	Rhs Reg
+}
+
+func (*MulReg) instrNode() {}
 
 // LoadCStringAddress materializes the address of a C string literal into a
 // register using the platform's PC-relative addressing form.
@@ -92,6 +152,9 @@ type Ret struct{}
 func (*Ret) instrNode() {}
 
 func functionNeedsFrame(fn Function) bool {
+	if fn.FrameSize > 0 {
+		return true
+	}
 	for _, block := range fn.Blocks {
 		for _, instr := range block.Instrs {
 			if _, ok := instr.(*BranchLink); ok {
@@ -100,6 +163,38 @@ func functionNeedsFrame(fn Function) bool {
 		}
 	}
 	return false
+}
+
+// functionFrameSize returns the explicit FrameSize when set, otherwise the
+// legacy 16/32-byte hello-world layout (16 for leaf-with-call, 32 for
+// printf-with-vararg). Asm and Mach-O encoders use this single source of
+// truth to compute prologue/epilogue offsets.
+func functionFrameSize(fn Function) int64 {
+	if fn.FrameSize > 0 {
+		return fn.FrameSize
+	}
+	if !functionNeedsFrame(fn) {
+		return 0
+	}
+	if functionNeedsStackArgs(fn) {
+		return 32
+	}
+	return 16
+}
+
+// functionFPOffset returns the byte offset from sp where (x29, x30) live in
+// the prologue/epilogue. For the legacy `[sp, #-16]!` layout this is "use the
+// pre-decrement form", signalled by returning -1.
+func functionFPOffset(fn Function) int64 {
+	size := functionFrameSize(fn)
+	if size == 0 {
+		return -1
+	}
+	if fn.FrameSize == 0 && !functionNeedsStackArgs(fn) {
+		// legacy `stp x29, x30, [sp, #-16]!` form
+		return -1
+	}
+	return size - 16
 }
 
 func functionNeedsStackArgs(fn Function) bool {
