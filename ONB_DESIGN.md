@@ -35,7 +35,20 @@
 > 할당, 모든 operand가 x9/x10 scratch register를 거침. 프레임 layout:
 > `[sp+0..16] vararg slot (printf int용) → [sp+V..V+8N] locals → [sp+frameSize-16] FP/LR`.
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
-> Week 2 의제.
+> 후속 의제로 유예.
+>
+> **Slice A2 Week 2 (사용자 함수 호출, 2026-05-02)** — 단일 모듈 내 helper
+> 함수 + AAPCS64 호출 규약 추가. 패턴 `fn add(a: Int, b: Int) -> Int { a + b };
+> fn main() { println(add(40, 2)) }`이 native path로 통과. 모든 Int 파라미터
+> 지원 (최대 8개, x0..x7). 변경:
+> - `LowerMIR`이 모든 함수를 순회 (main 외 helper 포함). main이 항상 첫 번째
+> - 함수 진입 시 prologue가 AAPCS64 인자 register를 stack slot으로 shuffle
+> - 비-main 함수의 `ReturnTerm`은 `_return` slot을 x0에 load 후 ret
+> - `CallInstr` (FnRef 한정) lowering: 인자를 x0..x7에 배치 → `bl <symbol>`
+>   → 결과 register x0를 dest slot에 저장
+> - Mach-O encoder가 multi-function: 각 함수가 자기 symbol entry + text
+>   offset, `bl _add` 같은 local fn 호출은 local symtab slot으로 reloc해서
+>   `_add`가 defined와 undefined로 중복 등장하는 문제 방지
 >
 > 본 문서는 결정 lock-in이며, 후속 의제(예: aarch64 LIR opcode 카탈로그,
 > cross-validation harness, simple inliner 도입 검토)는 별도 문서로 분기한다.

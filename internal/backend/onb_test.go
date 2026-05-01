@@ -312,6 +312,65 @@ func TestONBBackendBinaryRunsArithOnDarwinARM64(t *testing.T) {
 	}
 }
 
+// TestONBBackendBinaryRunsUserFunctionCallOnDarwinARM64 exercises the Phase
+// A2 Week 2 user-fn slice end-to-end: a helper function with two Int
+// parameters and Int return that main calls and prints. OSTY_ONB_STRICT=1
+// guards against silent fallback regression.
+func TestONBBackendBinaryRunsUserFunctionCallOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("ONB user-fn executable smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "add_call",
+			src: `fn add(a: Int, b: Int) -> Int { a + b }
+fn main() { println(add(40, 2)) }`,
+			want: "42\n",
+		},
+		{
+			name: "double_call",
+			src: `fn double(n: Int) -> Int { n * 2 }
+fn main() { println(double(21)) }`,
+			want: "42\n",
+		},
+		{
+			name: "sub_call",
+			src: `fn sub(a: Int, b: Int) -> Int { a - b }
+fn main() { println(sub(50, 8)) }`,
+			want: "42\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(onb.EnvStrict, "1")
+			req := newBackendRequest(t, EmitBinary, tc.src)
+			req.Layout.Target = "aarch64-apple-darwin"
+			result, err := ONBBackend{}.Emit(context.Background(), req)
+			if err != nil {
+				t.Fatalf("ONBBackend.Emit returned error: %v", err)
+			}
+			if result == nil || result.Artifacts.Binary == "" {
+				t.Fatalf("missing binary artifact: %+v", result)
+			}
+			out, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+			if err != nil {
+				t.Fatalf("binary returned error: %v\n%s", err, out)
+			}
+			if string(out) != tc.want {
+				t.Fatalf("binary output = %q, want %q", out, tc.want)
+			}
+		})
+	}
+}
+
 // recordingBackend captures Emit calls so we can assert that ONB delegated to
 // LLVM exactly when expected, without dragging the real LLVM lowering pipeline
 // into these unit tests.
@@ -357,8 +416,11 @@ func onbDevTestEnv(t *testing.T, strict bool, timing bool) {
 func TestONBBackendFallsBackToLLVMOnUnsupportedShape(t *testing.T) {
 	onbDevTestEnv(t, false, false)
 
-	req := newBackendRequest(t, EmitObject, `fn add(a: Int, b: Int) -> Int { a + b }
-fn main() { println(add(1, 2)) }`)
+	req := newBackendRequest(t, EmitObject, `fn main() {
+    let mut v: List<Int> = []
+    v.push(1)
+    println(v.len())
+}`)
 	req.Layout.Target = "aarch64-apple-darwin"
 	fallbackArtifacts := req.Artifacts(NameLLVM)
 	fake := &recordingBackend{
@@ -396,8 +458,11 @@ fn main() { println(add(1, 2)) }`)
 func TestONBBackendStrictModeSurfacesShapeError(t *testing.T) {
 	onbDevTestEnv(t, true, false)
 
-	req := newBackendRequest(t, EmitObject, `fn add(a: Int, b: Int) -> Int { a + b }
-fn main() { println(add(1, 2)) }`)
+	req := newBackendRequest(t, EmitObject, `fn main() {
+    let mut v: List<Int> = []
+    v.push(1)
+    println(v.len())
+}`)
 	req.Layout.Target = "aarch64-apple-darwin"
 	fake := &recordingBackend{name: NameLLVM}
 	_, err := ONBBackend{llvmFallback: fake}.Emit(context.Background(), req)
@@ -415,8 +480,11 @@ fn main() { println(add(1, 2)) }`)
 func TestONBBackendASMEmitDoesNotFallback(t *testing.T) {
 	onbDevTestEnv(t, false, false)
 
-	req := newBackendRequest(t, EmitASM, `fn add(a: Int, b: Int) -> Int { a + b }
-fn main() { println(add(1, 2)) }`)
+	req := newBackendRequest(t, EmitASM, `fn main() {
+    let mut v: List<Int> = []
+    v.push(1)
+    println(v.len())
+}`)
 	req.Layout.Target = "aarch64-apple-darwin"
 	fake := &recordingBackend{name: NameLLVM}
 	_, err := ONBBackend{llvmFallback: fake}.Emit(context.Background(), req)
@@ -453,8 +521,11 @@ func TestONBBackendTimingLogged(t *testing.T) {
 func TestONBBackendTimingLogsFallback(t *testing.T) {
 	onbDevTestEnv(t, false, true)
 
-	req := newBackendRequest(t, EmitObject, `fn add(a: Int, b: Int) -> Int { a + b }
-fn main() { println(add(1, 2)) }`)
+	req := newBackendRequest(t, EmitObject, `fn main() {
+    let mut v: List<Int> = []
+    v.push(1)
+    println(v.len())
+}`)
 	req.Layout.Target = "aarch64-apple-darwin"
 	fake := &recordingBackend{
 		name: NameLLVM,
@@ -472,7 +543,7 @@ fn main() { println(add(1, 2)) }`)
 	if !strings.Contains(got, "fallback to llvm") {
 		t.Fatalf("timing log = %q, want fallback marker", got)
 	}
-	if !strings.Contains(got, "instruction") {
+	if !strings.Contains(got, "rvalue") && !strings.Contains(got, "instruction") && !strings.Contains(got, "outside phase") {
 		t.Fatalf("timing log = %q, want quoted shape reason", got)
 	}
 }

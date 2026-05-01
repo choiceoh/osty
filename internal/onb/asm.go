@@ -215,6 +215,18 @@ func xRegisterNumber(reg Reg) (uint32, bool) {
 		return 0, true
 	case RegX1:
 		return 1, true
+	case RegX2:
+		return 2, true
+	case RegX3:
+		return 3, true
+	case RegX4:
+		return 4, true
+	case RegX5:
+		return 5, true
+	case RegX6:
+		return 6, true
+	case RegX7:
+		return 7, true
 	case RegX9:
 		return 9, true
 	case RegX10:
