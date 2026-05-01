@@ -322,8 +322,6 @@ func stdlibSingletonReceiverExpr(module, path, typeName string, fallback ir.Expr
 		return stdlibStructLit(module, "Gzip", span)
 	case module == "crypto" && path == "hmac" && typeName == "Hmac":
 		return stdlibStructLit(module, "Hmac", span)
-	case module == "os" && path == "path" && typeName == "Path":
-		return stdlibStructLit(module, "Path", span)
 	case module == "net" && typeName == "Ipv4Addr":
 		switch path {
 		case "LOCALHOST_V4":

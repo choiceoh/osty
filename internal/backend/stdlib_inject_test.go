@@ -174,7 +174,6 @@ func TestReachableStdlibValuePathReceiversMatchBackendSpecialCases(t *testing.T)
 		{name: "encoding url", module: "encoding", path: []string{"url"}, valuePath: "url", method: "encode", typeName: "UrlEncoding"},
 		{name: "compress gzip", module: "compress", path: []string{"gzip"}, valuePath: "gzip", method: "encode", typeName: "Gzip"},
 		{name: "crypto hmac", module: "crypto", path: []string{"hmac"}, valuePath: "hmac", method: "sha256", typeName: "Hmac"},
-		{name: "os path", module: "os", path: []string{"path"}, valuePath: "path", method: "basename", typeName: "Path"},
 		{
 			name:      "net localhost v4",
 			module:    "net",

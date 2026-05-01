@@ -8,6 +8,7 @@ use std.error
 use std.fs
 use std.json
 use std.os
+use std.path
 use std.strings
 pub enum Engine {
     PaddleOCR,
@@ -389,9 +390,9 @@ pub fn paddleJsonPath(imagePath: String, savePath: String) -> Result<String, Err
     if strings.endsWith(strings.toLower(cleanSavePath), ".json") {
         return Ok(cleanSavePath)
     }
-    let base = os.path.basename(imagePath)
+    let base = path.basename(imagePath)
     let stem = fileStem(base)
-    Ok(os.path.join([cleanSavePath, "{stem}_res.json"]))
+    Ok(path.join([cleanSavePath, "{stem}_res.json"]))
 }
 pub fn parseOutput(text: String, source: String, options: Options) -> Result<Document, Error> {
     match options.outputFormat {
@@ -1052,8 +1053,8 @@ fn paddleBool(value: Bool) -> String {
         "False"
     }
 }
-fn fileStem(path: String) -> String {
-    let base = os.path.basename(path)
+fn fileStem(rawPath: String) -> String {
+    let base = path.basename(rawPath)
     match strings.lastIndexOf(base, ".") {
         Some(i) -> if i > 0 {
             strings.slice(base, 0, i)

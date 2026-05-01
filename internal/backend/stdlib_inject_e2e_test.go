@@ -387,16 +387,15 @@ func TestInjectReachableStdlibBodiesSkipsBodylessRuntimeBackedDecls(t *testing.T
 			{Value: irString("hello")},
 		},
 	}
-	osCall := &ir.MethodCall{
-		Receiver: &ir.Ident{Name: "path", T: &ir.NamedType{Package: "os", Name: "Path"}},
-		Name:     "dirname",
-		Args:     []ir.Arg{{Value: irString("one/two")}},
+	pathCall := &ir.CallExpr{
+		Callee: &ir.FieldExpr{X: &ir.Ident{Name: "path"}, Name: "absolute"},
+		Args:   []ir.Arg{{Value: irString("one/two")}},
 	}
 	mod := &ir.Module{
 		Package: "main",
 		Script: []ir.Stmt{
 			&ir.ExprStmt{X: fsCall},
-			&ir.ExprStmt{X: osCall},
+			&ir.ExprStmt{X: pathCall},
 		},
 	}
 	injected, issues := injectReachableStdlibBodies(mod, reg)
@@ -409,8 +408,8 @@ func TestInjectReachableStdlibBodiesSkipsBodylessRuntimeBackedDecls(t *testing.T
 	if _, ok := fsCall.Callee.(*ir.FieldExpr); !ok {
 		t.Fatalf("fs.writeString callsite was rewritten; want runtime-backed call left intact")
 	}
-	if osCall.Name != "dirname" {
-		t.Fatalf("os.Path.dirname method call was rewritten; want runtime-backed method left intact")
+	if field, ok := pathCall.Callee.(*ir.FieldExpr); !ok || field.Name != "absolute" {
+		t.Fatalf("path.absolute callsite was rewritten; want runtime-backed function left intact")
 	}
 }
 

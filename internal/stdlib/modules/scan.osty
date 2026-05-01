@@ -10,6 +10,7 @@ use std.fs
 use std.image
 use std.ocr
 use std.os
+use std.path
 use std.strings
 
 pub enum Backend {
@@ -227,7 +228,7 @@ pub fn plannedPaths(options: Options) -> List<String> {
 }
 
 pub fn pagePath(outputDir: String, prefix: String, index: Int, format: ScanFormat) -> String {
-    os.path.join([outputDir, "{normalizedPrefix(prefix)}-{padLeft(index.toString(), 3, "0")}.{formatExtension(format)}"])
+    path.join([outputDir, "{normalizedPrefix(prefix)}-{padLeft(index.toString(), 3, "0")}.{formatExtension(format)}"])
 }
 
 pub fn plan(options: Options) -> Result<CommandPlan, Error> {
@@ -534,7 +535,7 @@ fn between(text: String, startMarker: String, endMarker: String) -> String {
 }
 
 fn batchPattern(options: Options) -> String {
-    os.path.join([options.outputDir, "{normalizedPrefix(options.filePrefix)}-%03d.{formatExtension(options.format)}"])
+    path.join([options.outputDir, "{normalizedPrefix(options.filePrefix)}-%03d.{formatExtension(options.format)}"])
 }
 
 fn scanimageSource(options: Options) -> String {
