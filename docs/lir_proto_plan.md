@@ -426,6 +426,48 @@ Go-side `TestLIRProtoManualFixtureCatalog` is the single pin so a missed
 runtime symbol on either the Osty or the production side surfaces as a
 test failure.
 
+Design decision: a Phase-4 deferred slice adds Option<Int> wrapping for
+the IndexOf-family intrinsics (`StringIndexOf`, `StringLastIndexOf`,
+`BytesIndexOf`, `BytesLastIndexOf`). Two pieces of new infrastructure:
+
+- **Basic-block splitting in the lowerer.** `LirMirFunctionLowerer`
+  grows `currentBlockLabel`, `extraBlocks`, and `auxLabel`, plus
+  `lirCutBlockBr` / `lirCutBlockCondBr` helpers that close the active
+  sub-block with the requested terminator and start a fresh one. The
+  MIR-block lowering loop splices `extraBlocks` ahead of the final block
+  before pushing — the MIR terminator always lands on whichever sub-
+  block is current at the end of the MIR block. Production uses a phi
+  node here; the alloca shape that LIR Proto picks (slot in the entry
+  block, store in each arm, load on the join sub-block) is equivalent
+  for correctness and avoids extending the LIR instruction vocabulary
+  for one site.
+- **Algebraic 2-i64 type lowering.** `lirLowerMirType` now emits a
+  named `%Option.<T> = type { i64, i64 }` (and the matching `%Result.*`
+  / `%Maybe.*`) typedef when it sees the corresponding type-name prefix.
+  `lirMangleAlgebraicTypeName` strips angle brackets / commas / spaces
+  so nested generics like `Result<Option<Int>, Error>` produce a valid
+  identifier without colliding. Production uses the same `{ i64, i64 }`
+  shape (`mir_generator_snapshot.go::mirOkAggregateLines /
+  mirNoneAggregateLines`).
+
+`lirEmitOptionNone` / `lirEmitOptionSome` / `lirEmitResultOk` /
+`lirEmitResultErr` produce the canonical insertvalue chain;
+`lirWrapOptionFromI64Sentinel` glues them together with the sentinel
+test for the IndexOf shape (sge 0 → present). `lirLowerMirIndexOf`
+checks the destination local's type and routes Option-typed dests
+through the wrapper, raw-Int dests through the bare i64 store.
+
+Three Phase-4 fixtures pin the new shape — raw-i64 destination (no
+wrap), Option<Int> destination on `String.indexOf`, Option<Int> on
+`Bytes.indexOf` — through `TestLIRProtoManualFixtureCatalog`.
+
+The remaining Option-returning safe forms (`MapGet`, `ListFirst`,
+`ListLast`, `BytesGet`, `ListGet` safe form, `ListPop`,
+`StringToInt`/`ToFloat` Result wrapping) need different sentinel
+shapes (out-pointer + i1 present, len-bounds check, runtime parser
+status, etc.) — each is its own follow-up slice that reuses the
+basic-block-splitting + Option/Result aggregate helpers added here.
+
 ## Phase 0: lock the boundary
 
 Deliverables:

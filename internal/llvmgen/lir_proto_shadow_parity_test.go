@@ -331,6 +331,10 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualFnAttrHotPureFixture", []string{" hot ", " readnone "}},
 		{"lirParityManualFnAttrTargetFeaturesFixture", []string{"\"target-features\"=\"+avx512f,+avx512bw\""}},
 		{"lirParityManualFnAttrNoaliasFixture", []string{"ptr noalias %p1", "ptr noalias %p2"}},
+		// ----- Phase 4 deferred slice: IndexOf-family Option<Int> wrapping -----
+		{"lirParityManualStringIndexOfRawFixture", []string{"declare i64 @osty_rt_strings_IndexOf(ptr, ptr)", "call i64 @osty_rt_strings_IndexOf(", "ret i64"}},
+		{"lirParityManualStringIndexOfOptionFixture", []string{"%Option.Int = type", "declare i64 @osty_rt_strings_IndexOf(ptr, ptr)", "icmp sge i64", "alloca %Option.Int", "insertvalue %Option.Int undef, i64 1, 0", "insertvalue %Option.Int undef, i64 0, 0", "load %Option.Int", "ret %Option.Int"}},
+		{"lirParityManualBytesIndexOfOptionFixture", []string{"%Option.Int = type", "declare i64 @osty_rt_bytes_index_of(ptr, ptr)", "icmp sge i64", "ret %Option.Int"}},
 	}
 
 	for _, tt := range want {
