@@ -251,6 +251,118 @@ func (f lirProtoShadowFixture) hasTag(tag string) bool {
 	return false
 }
 
+// TestLIRProtoManualFixtureCatalog pins the Phase 4 runtime ABI fixture
+// catalog (String/Bytes from 4a, List/Map/Set/Concurrency from 4b). It
+// does not execute the Osty-side `lirLowerMirModule` — production wiring
+// is gated on Phase 7 — but it does load the parity catalog and assert
+// each fixture is present with the expected runtime symbol needles, so a
+// silent catalog truncation or a runtime-symbol typo surfaces as a Go
+// test failure even before the production switch lands.
+func TestLIRProtoManualFixtureCatalog(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	path := filepath.Join(root, "toolchain", "lir_proto_parity.osty")
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	file, diags := parser.ParseDiagnostics(src)
+	if len(diags) != 0 {
+		t.Fatalf("parse %s diagnostics = %v", path, diags)
+	}
+
+	manualFixtures := map[string]lirProtoShadowFixture{}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FnDecl)
+		if !ok {
+			continue
+		}
+		if !strings.HasPrefix(fn.Name, "lirParityManual") || !strings.HasSuffix(fn.Name, "Fixture") {
+			continue
+		}
+		fixture, ok := parseLIRProtoManualFixtureDecl(t, fn)
+		if !ok {
+			continue
+		}
+		manualFixtures[fn.Name] = fixture
+	}
+
+	want := []struct {
+		name    string
+		needles []string
+	}{
+		{"lirParityManualStringByteLenFixture", []string{"declare i64 @osty_rt_strings_ByteLen(ptr)", "call i64 @osty_rt_strings_ByteLen("}},
+		{"lirParityManualStringIsEmptyFixture", []string{"declare i64 @osty_rt_strings_ByteLen(ptr)", "icmp eq i64"}},
+		{"lirParityManualStringConcatBinaryFixture", []string{"declare ptr @osty_rt_strings_Concat(ptr, ptr)", "call ptr @osty_rt_strings_Concat("}},
+		{"lirParityManualStringConcatNFixture", []string{"declare ptr @osty_rt_strings_ConcatN(i64, ptr)", "alloca [3 x ptr]", "call ptr @osty_rt_strings_ConcatN(i64 3,"}},
+		{"lirParityManualStringContainsFixture", []string{"declare i1 @osty_rt_strings_Contains(ptr, ptr)", "call i1 @osty_rt_strings_Contains("}},
+		{"lirParityManualStringTrimSpaceFixture", []string{"declare ptr @osty_rt_strings_TrimSpace(ptr)", "call ptr @osty_rt_strings_TrimSpace("}},
+		{"lirParityManualStringRepeatFixture", []string{"declare ptr @osty_rt_strings_Repeat(ptr, i64)", "call ptr @osty_rt_strings_Repeat("}},
+		{"lirParityManualStringSubstringFixture", []string{"declare ptr @osty_rt_strings_Slice(ptr, i64, i64)", "call ptr @osty_rt_strings_Slice("}},
+		{"lirParityManualStringReplaceAllFixture", []string{"declare ptr @osty_rt_strings_ReplaceAll(ptr, ptr, ptr)", "call ptr @osty_rt_strings_ReplaceAll("}},
+		{"lirParityManualBytesLenFixture", []string{"declare i64 @osty_rt_bytes_len(ptr)", "call i64 @osty_rt_bytes_len("}},
+		{"lirParityManualBytesConcatFixture", []string{"declare ptr @osty_rt_bytes_concat(ptr, ptr)", "call ptr @osty_rt_bytes_concat("}},
+		{"lirParityManualBytesSliceFixture", []string{"declare ptr @osty_rt_bytes_slice(ptr, i64, i64)", "call ptr @osty_rt_bytes_slice("}},
+		// ----- Phase 4b: List / Map / Set / Concurrency runtime ABI -----
+		{"lirParityManualListPushIntFixture", []string{"declare void @osty_rt_list_push_i64(ptr, i64)", "call void @osty_rt_list_push_i64("}},
+		{"lirParityManualListPushStringFixture", []string{"declare void @osty_rt_list_push_string(ptr, ptr)", "call void @osty_rt_list_push_string("}},
+		{"lirParityManualListLenFixture", []string{"declare i64 @osty_rt_list_len(ptr)", "call i64 @osty_rt_list_len("}},
+		{"lirParityManualListIsEmptyFixture", []string{"declare i64 @osty_rt_list_len(ptr)", "icmp eq i64"}},
+		{"lirParityManualListGetFloatFixture", []string{"declare double @osty_rt_list_get_f64(ptr, i64)", "call double @osty_rt_list_get_f64("}},
+		{"lirParityManualListSortedI64Fixture", []string{"declare ptr @osty_rt_list_sorted_i64(ptr)", "call ptr @osty_rt_list_sorted_i64("}},
+		{"lirParityManualListReversedFixture", []string{"declare ptr @osty_rt_list_reversed(ptr)", "call ptr @osty_rt_list_reversed("}},
+		{"lirParityManualListClearFixture", []string{"declare void @osty_rt_list_clear(ptr)", "call void @osty_rt_list_clear("}},
+		{"lirParityManualMapNewFixture", []string{"declare ptr @osty_rt_map_new()", "call ptr @osty_rt_map_new()"}},
+		{"lirParityManualMapInsertStringIntFixture", []string{"declare void @osty_rt_map_insert_string(ptr, ptr, i64)", "call void @osty_rt_map_insert_string("}},
+		{"lirParityManualMapContainsI64Fixture", []string{"declare i1 @osty_rt_map_contains_i64(ptr, i64)", "call i1 @osty_rt_map_contains_i64("}},
+		{"lirParityManualMapKeysFixture", []string{"declare ptr @osty_rt_map_keys(ptr)", "call ptr @osty_rt_map_keys("}},
+		{"lirParityManualMapLenFixture", []string{"declare i64 @osty_rt_map_len(ptr)", "call i64 @osty_rt_map_len("}},
+		{"lirParityManualSetInsertStringFixture", []string{"declare void @osty_rt_set_insert_string(ptr, ptr)", "call void @osty_rt_set_insert_string("}},
+		{"lirParityManualSetContainsI64Fixture", []string{"declare i1 @osty_rt_set_contains_i64(ptr, i64)", "call i1 @osty_rt_set_contains_i64("}},
+		{"lirParityManualSetToListFixture", []string{"declare ptr @osty_rt_set_to_list(ptr)", "call ptr @osty_rt_set_to_list("}},
+		{"lirParityManualChanCloseFixture", []string{"declare void @osty_rt_chan_close(ptr)", "call void @osty_rt_chan_close("}},
+		{"lirParityManualYieldFixture", []string{"declare void @osty_rt_task_yield()", "call void @osty_rt_task_yield()"}},
+		{"lirParityManualIsCancelledFixture", []string{"declare i1 @osty_rt_cancel_is_cancelled()", "call i1 @osty_rt_cancel_is_cancelled()"}},
+	}
+
+	for _, tt := range want {
+		fixture, ok := manualFixtures[tt.name]
+		if !ok {
+			t.Fatalf("Phase 4 fixture %s missing from parity catalog", tt.name)
+		}
+		joined := strings.Join(fixture.Needles, "|")
+		for _, needle := range tt.needles {
+			if !strings.Contains(joined, needle) {
+				t.Fatalf("%s missing needle %q (have: %v)", tt.name, needle, fixture.Needles)
+			}
+		}
+	}
+}
+
+func parseLIRProtoManualFixtureDecl(t *testing.T, fn *ast.FnDecl) (lirProtoShadowFixture, bool) {
+	t.Helper()
+	if fn.Body == nil || len(fn.Body.Stmts) == 0 {
+		return lirProtoShadowFixture{}, false
+	}
+	expr := blockFinalExpr(fn.Body)
+	call, ok := expr.(*ast.CallExpr)
+	if !ok || exprName(call.Fn) != "lirParityFixture" || len(call.Args) != 7 {
+		return lirProtoShadowFixture{}, false
+	}
+	if exprName(call.Args[1].Value) != "LirParityManualMIR" {
+		return lirProtoShadowFixture{}, false
+	}
+	name := stringArg(t, fn.Name, call.Args[0].Value)
+	tags := stringListArg(t, fn.Name, call.Args[5].Value)
+	needles := needleListArg(t, fn.Name, call.Args[6].Value)
+	if name == "" || len(needles) == 0 {
+		return lirProtoShadowFixture{}, false
+	}
+	return lirProtoShadowFixture{Name: name, Tags: tags, Needles: needles}, true
+}
+
 func lowerLIRProtoShadowSourceToMIR(t *testing.T, src string) *mir.Module {
 	t.Helper()
 	source := []byte(src)
