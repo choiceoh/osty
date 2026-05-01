@@ -468,6 +468,23 @@ shapes (out-pointer + i1 present, len-bounds check, runtime parser
 status, etc.) — each is its own follow-up slice that reuses the
 basic-block-splitting + Option/Result aggregate helpers added here.
 
+Design decision: a follow-up Phase-4 slice replaces the Turn-2
+hardcoded `osty_rt_chan_close` symbol with the canonical
+`osty_rt_thread_chan_close` from `toolchain/llvmgen.osty`'s
+`llvmChanRuntime*` resolver family, then adds `MirIntrinsicChanMake`,
+`ChanIsClosed`, `ChanSend` (per-element-lane resolution mirroring
+List/Map/Set), and `ChanRecv` (whose runtime helper already returns
+the `{i64, i64}` Option<T> aggregate, so the LIR side just declares
+the lane-specific symbol and stores the call result into the dest).
+Composite element types route through a structured unsupported
+diagnostic — the bytes-v1 channel fallback is a separate slice
+because it shares its alloca + sizeof shape with the same fallback
+already deferred for List push/get.
+
+Five Phase-4 fixtures pin the new shape: corrected `chan_close`,
+`chan_make`, `chan_is_closed`, `chan_send_int` (i64 lane),
+`chan_recv_int` (returns `%Option.Int`).
+
 ## Phase 0: lock the boundary
 
 Deliverables:
