@@ -84,6 +84,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | result | 357 | — | composition (map / mapErr / and / or / collect) |
 | option | 356 | — | flatten / transpose / traverse / map2 / map3 |
 | csv | 376 | — | options-driven, header-aware decode plus TSV convenience wrappers |
+| diff | 392 | pure Osty | line-oriented LCS diff, structured changes/stats, hunk grouping, unified diff rendering, apply helpers |
 | encoding | 329 | pure Osty + bytes | Base64 / Base64Url / Hex / URL percent-encoding 구현 |
 | zip | 327 | pure Osty + bytes | ZIP stored-entry encode/decode/list/extract + CRC32 |
 | term | 320 | host-backed + pure ANSI | terminal mode/size/input declarations + ANSI sequence builders |
@@ -199,6 +200,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | AI code assist loop | ✅ 가능 | aidev + aidev.osty + aidev.prompt + aidev.corpus + aidev.verify + aidev.workflow (diagnostic model / source spans / fix context / patch validation / Osty source-habit hints / compact prompt material / repair corpus records / verification plans and decisions / end-to-end run records) |
 | Agent-safe logs/transcripts | ✅ 가능 | redact + security + tokenest + aiagents |
 | Local document search | ✅ 가능 | search + markdown + media + jsonl |
+| 소스/텍스트 변경 리뷰 | ✅ 가능 | diff + fs + fmt/report (structured line changes, hunks, unified diff output) |
 | 사람이 읽는 리포트 산출물 | ✅ 가능 | report + markdown/jsonl/csv |
 | PDF/이미지 인쇄 | ✅ 가능 | print + fs/media/os (기본 CUPS `lp`, `lpr`, Windows shell print, custom command plan) |
 | LLM retry/compaction loop | ✅ 가능 | ai + httpretry + schedule + tokenest + aiagents |
@@ -232,7 +234,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 71 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, webhook, schedule, jsonl, kv, shortid, metrics, observability, sentry, net, fmt, json, config, table, xlsx, url, io, collections, email, db, polyglot, grid, gui, dialog, tar, sql, xml, tui, image, pdf, ocr, rpa, scan, barcode, qr, smtp, result, option, csv, encoding, zip, term, websocket, watch, clipboard, graphql, github, supabase, cloudflare, template, i18n, char, iter, bytes)
+- 72 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, webhook, schedule, jsonl, kv, shortid, metrics, observability, sentry, net, fmt, json, config, table, xlsx, url, io, collections, email, db, polyglot, grid, gui, dialog, tar, sql, xml, tui, image, pdf, ocr, rpa, scan, barcode, qr, smtp, result, option, csv, diff, encoding, zip, term, websocket, watch, clipboard, graphql, github, supabase, cloudflare, template, i18n, char, iter, bytes)
 - 5 모듈은 Phase A 충실 + Phase B declaration-only (env, random, os, crypto, compress)
 - keychain/secrets 는 macOS/Windows Phase A+B 연결 완료, Linux Secret Service backend 대기
 - fs 는 Phase A 충실 + 확장된 tool-facing declaration surface (walk/glob/watch/atomicWrite/lockFile/hashFile/copyDir/diffFiles)
