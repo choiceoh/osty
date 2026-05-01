@@ -15972,6 +15972,61 @@ void osty_rt_regex_match_free(void *raw) {
     free(raw);
 }
 
+/* Phase 3b — findAll runtime contract:
+ *
+ * `osty_rt_regex_find_all(re, text)` returns a `List<Match>` where
+ * each element is the synthetic Match struct (`{ptr text, i64 start,
+ * i64 end}`) stored inline in the list's data buffer. The list
+ * runtime is configured with elem_size=24 and gc_offsets=[0] so the
+ * tracer marks each element's text field on each cycle.
+ *
+ * Empty matches advance the cursor by one byte to avoid infinite
+ * loops (mirrors `replace_all` / `captures_all`). Non-overlapping
+ * left-to-right semantics. Returns an empty `List<Match>` on no match.
+ */
+void *osty_rt_regex_find_all(void *raw_re, const char *text) {
+    if (raw_re == NULL) {
+        osty_rt_abort("runtime.regex.find_all: nil Regex");
+    }
+    osty_regex_compiled *re = (osty_regex_compiled *)raw_re;
+    char inline_buf[8];
+    const char *src = text == NULL ? "" : text;
+    osty_rt_string_decode_to_buf_if_inline(&src, inline_buf);
+    int len = (int)strlen(src);
+
+    void *list = osty_rt_list_new();
+    /* Match has one managed pointer (text) at offset 0; the list's
+     * tracer needs that single offset to keep the String alive across
+     * GC cycles while the Match sits in the list's heap buffer. */
+    static const int64_t match_gc_offsets[1] = { 0 };
+
+    int32_t slots[OSTY_RE_MAX_CAP_SLOTS];
+    int slot_count = 2 * re->ngroups;
+    int start = 0;
+    while (start <= len) {
+        for (int i = 0; i < slot_count; i++) slots[i] = -1;
+        if (!osty_re_match_from(re, src, len, start, slots)) {
+            break;
+        }
+        int32_t match_start = slots[0];
+        int32_t match_end = slots[1];
+        if (match_start < 0 || match_end < 0 || match_end > len || match_start < start) {
+            break;
+        }
+        osty_rt_regex_match_raw entry;
+        entry.text = osty_rt_string_dup_site(src + match_start, (size_t)(match_end - match_start), "runtime.regex.find_all.text");
+        entry.start = (int64_t)match_start;
+        entry.end = (int64_t)match_end;
+        osty_rt_list_push_bytes_roots_v1(list, &entry, (int64_t)sizeof(entry), match_gc_offsets, 1);
+        if (match_end > match_start) {
+            start = match_end;
+        } else {
+            start = match_start + 1;
+        }
+    }
+    return list;
+}
+
 /* Phase 4 — replace / replaceAll / split helpers.
  *
  * `replace` / `replaceAll` produce a fresh String with non-overlapping

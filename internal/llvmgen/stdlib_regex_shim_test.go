@@ -191,6 +191,43 @@ fn main() {
 	}
 }
 
+func TestStdRegexFindAllRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.regex
+
+fn run(re: Regex) -> Int {
+    re.findAll("alpha beta").len()
+}
+
+fn main() {
+    match regex.compile(r"\w+") {
+        Ok(re) -> {
+            let n = run(re)
+            println("count")
+        },
+        Err(_) -> println("compile failed"),
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_regex_find_all.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_regex_find_all(ptr, ptr)",
+		"call ptr @osty_rt_regex_find_all",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestStdRegexCapturesNamedRoutesToRuntime(t *testing.T) {
 	file := parseLLVMGenFile(t, `use std.regex
 

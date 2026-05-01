@@ -1677,6 +1677,23 @@ func (g *mirGen) emitStdRegexCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, err
 		return true, g.emitRuntimeCallToDest(c, ostyRtRegexSplitSymbol, "ptr", []mirRuntimeArg{recv, text})
 	case "find":
 		return g.emitStdRegexFindMIR(c)
+	case "findAll":
+		if len(c.Args) != 2 {
+			return true, unsupported("mir-mvp", "Regex.findAll requires receiver and text")
+		}
+		recv, err := g.evalTypedArg(c.Args[0], c.Args[0].Type())
+		if err != nil {
+			return true, err
+		}
+		text, err := g.evalTypedArg(c.Args[1], c.Args[1].Type())
+		if err != nil {
+			return true, err
+		}
+		// Runtime returns List<Match> (always non-null; empty list if no
+		// matches). Element layout (elem_size=24, gc_offsets=[0]) is
+		// configured at first push inside the runtime — IR-side just
+		// receives the list pointer.
+		return true, g.emitRuntimeCallToDest(c, ostyRtRegexFindAllSymbol, "ptr", []mirRuntimeArg{recv, text})
 	}
 	return false, nil
 }
