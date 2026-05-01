@@ -37,6 +37,19 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 3 (control flow, 2026-05-02)** — `if/else` + 6개 비교
+> 연산자 (`==`, `!=`, `<`, `<=`, `>`, `>=`) 분기 코드가 native path로 통과.
+> 패턴 `let x = K; if x > 0 { println(1) } else { println(0) }` 모두 OSTY_ONB_STRICT
+> 으로 동작 (80–180ms). 추가:
+> - `Cmp` / `Cset` opcode + 6개 `Cond` 상수 (CondEq/Ne/Lt/Le/Gt/Ge)
+> - `Branch` (unconditional) + `BranchCondNotZero` (cbnz) — block index를
+>   target으로 들고, 인코더가 fixup pass에서 PC-relative imm26 / imm19로 패치
+> - Multi-block 함수 지원: `Block.OriginalIndex`로 MIR BlockID를 보존,
+>   entry block first 정책으로 emit slot 0이 항상 entry
+> - `BoolConst` materialisation (`mov #0` / `#1`)
+> - `collectTerminatorReads`로 BranchTerm.Cond 같은 terminator-level 읽기를
+>   slot allocation에 반영
+>
 > **Slice A2 Week 2 (사용자 함수 호출, 2026-05-02)** — 단일 모듈 내 helper
 > 함수 + AAPCS64 호출 규약 추가. 패턴 `fn add(a: Int, b: Int) -> Int { a + b };
 > fn main() { println(add(40, 2)) }`이 native path로 통과. 모든 Int 파라미터

@@ -49,8 +49,13 @@ func renderFunctionAssembly(b *strings.Builder, target Target, fn Function) erro
 		}
 	}
 	for _, block := range fn.Blocks {
+		// Per-function block label so multiple functions in the same .s file
+		// don't collide on bare `bb0`/`bb1` names. The encoder doesn't care
+		// — it tracks block offsets internally — but readable assembly
+		// matters for debugging.
+		fmt.Fprintf(b, "%s:\n", asmBlockLabel(target, fn.Name, block.OriginalIndex))
 		for _, instr := range block.Instrs {
-			if err := renderInstrAssembly(b, target, instr, frameSize, fpOffset); err != nil {
+			if err := renderInstrAssembly(b, target, fn, instr, frameSize, fpOffset); err != nil {
 				return err
 			}
 		}
@@ -61,7 +66,15 @@ func renderFunctionAssembly(b *strings.Builder, target Target, fn Function) erro
 	return nil
 }
 
-func renderInstrAssembly(b *strings.Builder, target Target, instr Instr, frameSize int64, fpOffset int64) error {
+func asmBlockLabel(target Target, fnName string, blockIdx int) string {
+	prefix := "L"
+	if target.ObjectFormat == "elf" {
+		prefix = ".L"
+	}
+	return fmt.Sprintf("%s_%s_bb%d", prefix, fnName, blockIdx)
+}
+
+func renderInstrAssembly(b *strings.Builder, target Target, fn Function, instr Instr, frameSize int64, fpOffset int64) error {
 	switch i := instr.(type) {
 	case *LoadCStringAddress:
 		label := asmCStringLabel(target, i.Label)
@@ -103,6 +116,14 @@ func renderInstrAssembly(b *strings.Builder, target Target, instr Instr, frameSi
 		fmt.Fprintf(b, "\tsub %s, %s, %s\n", i.Dst, i.Lhs, i.Rhs)
 	case *MulReg:
 		fmt.Fprintf(b, "\tmul %s, %s, %s\n", i.Dst, i.Lhs, i.Rhs)
+	case *Cmp:
+		fmt.Fprintf(b, "\tcmp %s, %s\n", i.Lhs, i.Rhs)
+	case *Cset:
+		fmt.Fprintf(b, "\tcset %s, %s\n", i.Dst, i.Cond.AsmName())
+	case *Branch:
+		fmt.Fprintf(b, "\tb %s\n", asmBlockLabel(target, fn.Name, i.Target))
+	case *BranchCondNotZero:
+		fmt.Fprintf(b, "\tcbnz %s, %s\n", i.Src, asmBlockLabel(target, fn.Name, i.Target))
 	case *Ret:
 		if frameSize > 0 {
 			if fpOffset < 0 {

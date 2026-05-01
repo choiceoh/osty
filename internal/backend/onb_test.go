@@ -312,6 +312,85 @@ func TestONBBackendBinaryRunsArithOnDarwinARM64(t *testing.T) {
 	}
 }
 
+// TestONBBackendBinaryRunsIfElseOnDarwinARM64 exercises the Phase A2 Week 3
+// control-flow slice end-to-end. The MIR builder shapes `if cond { ... } else
+// { ... }` into 4 basic blocks (entry → cmp+branch, then, else, merge) plus
+// `cmp` / `cset` / `cbnz` / `b` opcodes, and the encoder must lay them out
+// with the right PC-relative offsets — wrong fixup math shows up as a wrong
+// branch target / segfault, not a compile-time error.
+func TestONBBackendBinaryRunsIfElseOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("ONB if/else executable smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "gt_taken",
+			src: `fn main() {
+    let x = 5
+    if x > 0 {
+        println(1)
+    } else {
+        println(0)
+    }
+}`,
+			want: "1\n",
+		},
+		{
+			name: "gt_not_taken",
+			src: `fn main() {
+    let x = -3
+    if x > 0 {
+        println(1)
+    } else {
+        println(0)
+    }
+}`,
+			want: "0\n",
+		},
+		{
+			name: "eq_taken",
+			src: `fn main() {
+    let x = 7
+    if x == 7 {
+        println(100)
+    } else {
+        println(99)
+    }
+}`,
+			want: "100\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(onb.EnvStrict, "1")
+			req := newBackendRequest(t, EmitBinary, tc.src)
+			req.Layout.Target = "aarch64-apple-darwin"
+			result, err := ONBBackend{}.Emit(context.Background(), req)
+			if err != nil {
+				t.Fatalf("ONBBackend.Emit returned error: %v", err)
+			}
+			if result == nil || result.Artifacts.Binary == "" {
+				t.Fatalf("missing binary artifact: %+v", result)
+			}
+			out, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+			if err != nil {
+				t.Fatalf("binary returned error: %v\n%s", err, out)
+			}
+			if string(out) != tc.want {
+				t.Fatalf("binary output = %q, want %q", out, tc.want)
+			}
+		})
+	}
+}
+
 // TestONBBackendBinaryRunsUserFunctionCallOnDarwinARM64 exercises the Phase
 // A2 Week 2 user-fn slice end-to-end: a helper function with two Int
 // parameters and Int return that main calls and prints. OSTY_ONB_STRICT=1

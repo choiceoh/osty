@@ -678,6 +678,152 @@ func addAndCallMIR() *mir.Module {
 	return &mir.Module{Functions: []*mir.Function{addFn, mainFn}}
 }
 
+// ifElseGtZeroMIR builds the MIR that lowers `let x = K; if x > 0 { thenK }
+// else { elseK }; ` after the front-end has emitted the canonical
+// 4-block shape: bb0 (compare → branch), bb1 (then), bb2 (else), bb3
+// (merge → return).
+func ifElseGtZeroMIR(xValue, thenValue, elseValue int64) *mir.Module {
+	fn := &mir.Function{
+		Name:        "main",
+		ReturnType:  mir.TUnit,
+		ReturnLocal: 0,
+		Entry:       0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "$ret", Type: mir.TUnit, IsReturn: true},
+			{ID: 1, Name: "x", Type: mir.TInt},
+			{ID: 2, Name: "cmp", Type: mir.TBool},
+		},
+	}
+	bb0 := fn.NewBlock(mir.Span{})
+	bb1 := fn.NewBlock(mir.Span{})
+	bb2 := fn.NewBlock(mir.Span{})
+	bb3 := fn.NewBlock(mir.Span{})
+
+	fn.Block(bb0).Instrs = []mir.Instr{
+		&mir.AssignInstr{
+			Dest: mir.Place{Local: 2},
+			Src: &mir.BinaryRV{
+				Op:    mir.BinGt,
+				Left:  &mir.ConstOp{Const: &mir.IntConst{Value: xValue, T: mir.TInt}, T: mir.TInt},
+				Right: &mir.ConstOp{Const: &mir.IntConst{Value: 0, T: mir.TInt}, T: mir.TInt},
+				T:     mir.TBool,
+			},
+		},
+	}
+	fn.Block(bb0).SetTerminator(&mir.BranchTerm{
+		Cond: &mir.CopyOp{Place: mir.Place{Local: 2}, T: mir.TBool},
+		Then: bb1,
+		Else: bb2,
+	})
+	fn.Block(bb1).Instrs = []mir.Instr{
+		&mir.IntrinsicInstr{
+			Kind: mir.IntrinsicPrintln,
+			Args: []mir.Operand{&mir.ConstOp{Const: &mir.IntConst{Value: thenValue, T: mir.TInt}, T: mir.TInt}},
+		},
+	}
+	fn.Block(bb1).SetTerminator(&mir.GotoTerm{Target: bb3})
+	fn.Block(bb2).Instrs = []mir.Instr{
+		&mir.IntrinsicInstr{
+			Kind: mir.IntrinsicPrintln,
+			Args: []mir.Operand{&mir.ConstOp{Const: &mir.IntConst{Value: elseValue, T: mir.TInt}, T: mir.TInt}},
+		},
+	}
+	fn.Block(bb2).SetTerminator(&mir.GotoTerm{Target: bb3})
+	fn.Block(bb3).SetTerminator(&mir.ReturnTerm{})
+
+	return &mir.Module{Functions: []*mir.Function{fn}}
+}
+
+func TestLowerMIRLowersIfElseToBranchInstrs(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(ifElseGtZeroMIR(5, 1, 0), Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR() returned error: %v", err)
+	}
+	fn := program.Functions[0]
+	if len(fn.Blocks) != 4 {
+		t.Fatalf("Blocks = %d, want 4", len(fn.Blocks))
+	}
+	var sawCmp, sawCset, sawCbnz, sawUncond bool
+	for _, block := range fn.Blocks {
+		for _, instr := range block.Instrs {
+			switch instr.(type) {
+			case *Cmp:
+				sawCmp = true
+			case *Cset:
+				sawCset = true
+			case *BranchCondNotZero:
+				sawCbnz = true
+			case *Branch:
+				sawUncond = true
+			}
+		}
+	}
+	if !sawCmp || !sawCset {
+		t.Fatalf("expected cmp + cset for `>` comparison; instrs=%+v", fn.Blocks)
+	}
+	if !sawCbnz {
+		t.Fatalf("expected cbnz for branch-on-bool; instrs=%+v", fn.Blocks)
+	}
+	if !sawUncond {
+		t.Fatalf("expected unconditional b for goto/else; instrs=%+v", fn.Blocks)
+	}
+}
+
+func TestLowerMIRPlacesEntryBlockFirst(t *testing.T) {
+	t.Parallel()
+
+	// Synthesise a function whose entry is bb1 (not bb0). The lowerer
+	// should still emit bb1 at slot 0 in the LIR so execution starts at the
+	// entry block.
+	fn := &mir.Function{
+		Name:        "main",
+		ReturnType:  mir.TUnit,
+		ReturnLocal: 0,
+		Entry:       0, // we'll override below
+		Locals: []*mir.Local{
+			{ID: 0, Name: "$ret", Type: mir.TUnit, IsReturn: true},
+		},
+	}
+	dead := fn.NewBlock(mir.Span{}) // bb0
+	live := fn.NewBlock(mir.Span{}) // bb1
+	fn.Entry = live
+	fn.Block(dead).SetTerminator(&mir.GotoTerm{Target: live})
+	fn.Block(live).SetTerminator(&mir.ReturnTerm{})
+
+	program, err := LowerMIR(&mir.Module{Functions: []*mir.Function{fn}}, Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR() returned error: %v", err)
+	}
+	if program.Functions[0].Blocks[0].OriginalIndex != int(live) {
+		t.Fatalf("first emitted block = bb%d, want entry bb%d", program.Functions[0].Blocks[0].OriginalIndex, live)
+	}
+}
+
+func TestEmitObjectIfElseProducesValidMachO(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(ifElseGtZeroMIR(5, 1, 0), Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR() returned error: %v", err)
+	}
+	obj, err := EmitObject(program)
+	if err != nil {
+		t.Fatalf("EmitObject() returned error: %v", err)
+	}
+	f, err := macho.NewFile(bytes.NewReader(obj))
+	if err != nil {
+		t.Fatalf("macho.NewFile() returned error: %v", err)
+	}
+	if f.Type != macho.TypeObj {
+		t.Fatalf("Mach-O type = %v, want object", f.Type)
+	}
+	if f.Symtab == nil {
+		t.Fatal("Mach-O symtab is nil")
+	}
+}
+
 func TestLowerMIREmitsBothFunctions(t *testing.T) {
 	t.Parallel()
 

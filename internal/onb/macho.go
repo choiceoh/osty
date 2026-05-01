@@ -335,13 +335,36 @@ func encodeMachOTextWithRelocs(program *Program, cstringIndex map[string]uint32)
 	return enc, nil
 }
 
+// machoBranchFixup records a placeholder branch instruction's location and
+// the original (MIR) block index it should jump to. The encoder writes a
+// zero-immediate branch first, walks all blocks to learn each block's start
+// offset, then patches the immediates in a second pass.
+type machoBranchFixup struct {
+	codeOffset  uint32 // byte offset within enc.code where the branch lives
+	targetBlock int    // original MIR block index of the jump target
+	kind        machoBranchKind
+}
+
+type machoBranchKind uint8
+
+const (
+	machoBranchUncond      machoBranchKind = iota // `b imm26`
+	machoBranchCondNotZero                        // `cbnz Xt, imm19`
+)
+
 // encodeMachOFunction appends one lowered function's prologue, body, and
 // epilogue to enc.code, threading any new relocations through enc.relocs and
-// any new external symbols through enc.externalSymbols + externalIndex.
+// any new external symbols through enc.externalSymbols + externalIndex. It
+// also performs the branch-fixup pass: each `Branch` / `BranchCondNotZero`
+// emits a placeholder instruction word and a fixup record, then a final
+// pass patches the immediate using the recorded per-block start offset.
 func encodeMachOFunction(enc *machoTextEncoding, fn Function, cstringIndex, localFnIndex, externalIndex map[string]uint32, totalFns int) error {
-	if len(fn.Blocks) != 1 {
-		return fmt.Errorf("%w: Mach-O encoder requires one block per function", ErrUnsupportedShape)
+	if len(fn.Blocks) == 0 {
+		return fmt.Errorf("%w: Mach-O encoder requires at least one block", ErrUnsupportedShape)
 	}
+	fnStart := uint32(len(enc.code))
+	blockOffsets := map[int]uint32{}
+	var fixups []machoBranchFixup
 	frameSize := functionFrameSize(fn)
 	fpOffset := functionFPOffset(fn)
 	if frameSize > 0 {
@@ -366,111 +389,242 @@ func encodeMachOFunction(enc *machoTextEncoding, fn Function, cstringIndex, loca
 			enc.code = appendU32LE(enc.code, addWord)
 		}
 	}
-	for _, instr := range fn.Blocks[0].Instrs {
-		switch i := instr.(type) {
-		case *LoadCStringAddress:
-			if i.Dst != RegX0 {
-				return fmt.Errorf("%w: Mach-O encoder only supports cstring loads into x0", ErrNotImplemented)
-			}
-			sym, ok := cstringIndex[i.Label]
-			if !ok {
-				return fmt.Errorf("onb: unknown Mach-O string literal label %q", i.Label)
-			}
-			addr := uint32(len(enc.code))
-			enc.code = appendU32LE(enc.code, 0x90000000)
-			enc.relocs = append(enc.relocs, machoReloc{address: addr, symbolnum: sym, pcrel: true, length: 2, extern: true, typ: machoARM64RelocPage21})
-			addr = uint32(len(enc.code))
-			enc.code = appendU32LE(enc.code, 0x91000000)
-			enc.relocs = append(enc.relocs, machoReloc{address: addr, symbolnum: sym, length: 2, extern: true, typ: machoARM64RelocPageOff12})
-		case *BranchLink:
-			if i.Symbol == "" {
-				return fmt.Errorf("onb: Mach-O branch without symbol")
-			}
-			sym, isLocal := localFnIndex[i.Symbol]
-			if !isLocal {
-				ext, ok := externalIndex[i.Symbol]
+	for _, block := range fn.Blocks {
+		blockOffsets[block.OriginalIndex] = uint32(len(enc.code))
+		for _, instr := range block.Instrs {
+			switch i := instr.(type) {
+			case *LoadCStringAddress:
+				if i.Dst != RegX0 {
+					return fmt.Errorf("%w: Mach-O encoder only supports cstring loads into x0", ErrNotImplemented)
+				}
+				sym, ok := cstringIndex[i.Label]
 				if !ok {
-					ext = uint32(len(cstringIndex) + totalFns + len(enc.externalSymbols))
-					externalIndex[i.Symbol] = ext
-					enc.externalSymbols = append(enc.externalSymbols, i.Symbol)
+					return fmt.Errorf("onb: unknown Mach-O string literal label %q", i.Label)
 				}
-				sym = ext
-			}
-			addr := uint32(len(enc.code))
-			enc.code = appendU32LE(enc.code, 0x94000000)
-			enc.relocs = append(enc.relocs, machoReloc{address: addr, symbolnum: sym, pcrel: true, length: 2, extern: true, typ: machoARM64RelocBranch26})
-		case *MovImm32:
-			if i.Dst != RegW0 || i.Imm != 0 {
-				return fmt.Errorf("onb: Mach-O phase 1 only supports mov w0, #0")
-			}
-			enc.code = append(enc.code, 0x00, 0x00, 0x80, 0x52)
-		case *MovImm64:
-			words, err := encodeMachOMovImm64(i.Dst, uint64(i.Imm))
-			if err != nil {
-				return err
-			}
-			for _, word := range words {
+				addr := uint32(len(enc.code))
+				enc.code = appendU32LE(enc.code, 0x90000000)
+				enc.relocs = append(enc.relocs, machoReloc{address: addr, symbolnum: sym, pcrel: true, length: 2, extern: true, typ: machoARM64RelocPage21})
+				addr = uint32(len(enc.code))
+				enc.code = appendU32LE(enc.code, 0x91000000)
+				enc.relocs = append(enc.relocs, machoReloc{address: addr, symbolnum: sym, length: 2, extern: true, typ: machoARM64RelocPageOff12})
+			case *BranchLink:
+				if i.Symbol == "" {
+					return fmt.Errorf("onb: Mach-O branch without symbol")
+				}
+				sym, isLocal := localFnIndex[i.Symbol]
+				if !isLocal {
+					ext, ok := externalIndex[i.Symbol]
+					if !ok {
+						ext = uint32(len(cstringIndex) + totalFns + len(enc.externalSymbols))
+						externalIndex[i.Symbol] = ext
+						enc.externalSymbols = append(enc.externalSymbols, i.Symbol)
+					}
+					sym = ext
+				}
+				addr := uint32(len(enc.code))
+				enc.code = appendU32LE(enc.code, 0x94000000)
+				enc.relocs = append(enc.relocs, machoReloc{address: addr, symbolnum: sym, pcrel: true, length: 2, extern: true, typ: machoARM64RelocBranch26})
+			case *MovImm32:
+				if i.Dst != RegW0 || i.Imm != 0 {
+					return fmt.Errorf("onb: Mach-O phase 1 only supports mov w0, #0")
+				}
+				enc.code = append(enc.code, 0x00, 0x00, 0x80, 0x52)
+			case *MovImm64:
+				words, err := encodeMachOMovImm64(i.Dst, uint64(i.Imm))
+				if err != nil {
+					return err
+				}
+				for _, word := range words {
+					enc.code = appendU32LE(enc.code, word)
+				}
+			case *MovRegReg:
+				word, err := encodeMachOMovRegReg(i.Dst, i.Src)
+				if err != nil {
+					return err
+				}
 				enc.code = appendU32LE(enc.code, word)
-			}
-		case *MovRegReg:
-			word, err := encodeMachOMovRegReg(i.Dst, i.Src)
-			if err != nil {
-				return err
-			}
-			enc.code = appendU32LE(enc.code, word)
-		case *Store64Stack:
-			word, err := encodeMachOStore64Stack(i)
-			if err != nil {
-				return err
-			}
-			enc.code = appendU32LE(enc.code, word)
-		case *Load64Stack:
-			word, err := encodeMachOLoad64Stack(i)
-			if err != nil {
-				return err
-			}
-			enc.code = appendU32LE(enc.code, word)
-		case *AddReg:
-			word, err := encodeMachOArithReg(0x8b000000, i.Dst, i.Lhs, i.Rhs)
-			if err != nil {
-				return err
-			}
-			enc.code = appendU32LE(enc.code, word)
-		case *SubReg:
-			word, err := encodeMachOArithReg(0xcb000000, i.Dst, i.Lhs, i.Rhs)
-			if err != nil {
-				return err
-			}
-			enc.code = appendU32LE(enc.code, word)
-		case *MulReg:
-			word, err := encodeMachOMulReg(i.Dst, i.Lhs, i.Rhs)
-			if err != nil {
-				return err
-			}
-			enc.code = appendU32LE(enc.code, word)
-		case *Ret:
-			if frameSize > 0 {
-				if fpOffset < 0 {
-					enc.code = appendU32LE(enc.code, 0xa8c17bfd) // ldp x29, x30, [sp], #16
-				} else {
-					ldpWord, err := encodeLdpFPLR(uint32(fpOffset))
-					if err != nil {
-						return fmt.Errorf("onb: epilogue ldp: %w", err)
-					}
-					enc.code = appendU32LE(enc.code, ldpWord)
-					addWord, err := encodeAddSubImm(0x91000000, RegSP, RegSP, uint64(frameSize))
-					if err != nil {
-						return fmt.Errorf("onb: epilogue add sp: %w", err)
-					}
-					enc.code = appendU32LE(enc.code, addWord)
+			case *Store64Stack:
+				word, err := encodeMachOStore64Stack(i)
+				if err != nil {
+					return err
 				}
+				enc.code = appendU32LE(enc.code, word)
+			case *Load64Stack:
+				word, err := encodeMachOLoad64Stack(i)
+				if err != nil {
+					return err
+				}
+				enc.code = appendU32LE(enc.code, word)
+			case *AddReg:
+				word, err := encodeMachOArithReg(0x8b000000, i.Dst, i.Lhs, i.Rhs)
+				if err != nil {
+					return err
+				}
+				enc.code = appendU32LE(enc.code, word)
+			case *SubReg:
+				word, err := encodeMachOArithReg(0xcb000000, i.Dst, i.Lhs, i.Rhs)
+				if err != nil {
+					return err
+				}
+				enc.code = appendU32LE(enc.code, word)
+			case *MulReg:
+				word, err := encodeMachOMulReg(i.Dst, i.Lhs, i.Rhs)
+				if err != nil {
+					return err
+				}
+				enc.code = appendU32LE(enc.code, word)
+			case *Cmp:
+				word, err := encodeMachOCmp(i.Lhs, i.Rhs)
+				if err != nil {
+					return err
+				}
+				enc.code = appendU32LE(enc.code, word)
+			case *Cset:
+				word, err := encodeMachOCset(i.Dst, i.Cond)
+				if err != nil {
+					return err
+				}
+				enc.code = appendU32LE(enc.code, word)
+			case *Branch:
+				fixups = append(fixups, machoBranchFixup{
+					codeOffset:  uint32(len(enc.code)),
+					targetBlock: i.Target,
+					kind:        machoBranchUncond,
+				})
+				enc.code = appendU32LE(enc.code, 0x14000000) // placeholder b imm26=0
+			case *BranchCondNotZero:
+				fixups = append(fixups, machoBranchFixup{
+					codeOffset:  uint32(len(enc.code)),
+					targetBlock: i.Target,
+					kind:        machoBranchCondNotZero,
+				})
+				cbnzWord, err := encodeMachOCbnzPlaceholder(i.Src)
+				if err != nil {
+					return err
+				}
+				enc.code = appendU32LE(enc.code, cbnzWord)
+			case *Ret:
+				if frameSize > 0 {
+					if fpOffset < 0 {
+						enc.code = appendU32LE(enc.code, 0xa8c17bfd) // ldp x29, x30, [sp], #16
+					} else {
+						ldpWord, err := encodeLdpFPLR(uint32(fpOffset))
+						if err != nil {
+							return fmt.Errorf("onb: epilogue ldp: %w", err)
+						}
+						enc.code = appendU32LE(enc.code, ldpWord)
+						addWord, err := encodeAddSubImm(0x91000000, RegSP, RegSP, uint64(frameSize))
+						if err != nil {
+							return fmt.Errorf("onb: epilogue add sp: %w", err)
+						}
+						enc.code = appendU32LE(enc.code, addWord)
+					}
+				}
+				enc.code = append(enc.code, 0xc0, 0x03, 0x5f, 0xd6)
+			default:
+				return fmt.Errorf("%w: Mach-O encoder does not support %T", ErrNotImplemented, instr)
 			}
-			enc.code = append(enc.code, 0xc0, 0x03, 0x5f, 0xd6)
-		default:
-			return fmt.Errorf("%w: Mach-O encoder does not support %T", ErrNotImplemented, instr)
 		}
 	}
+	// Branch fixup pass — every placeholder branch now knows its target's
+	// byte offset and we can patch the immediate in place.
+	for _, fx := range fixups {
+		target, ok := blockOffsets[fx.targetBlock]
+		if !ok {
+			return fmt.Errorf("onb: branch target block %d not found in fn %s", fx.targetBlock, fn.Name)
+		}
+		displacement := int32(target) - int32(fx.codeOffset)
+		if err := patchMachOBranch(enc.code, fx, displacement); err != nil {
+			return err
+		}
+	}
+	_ = fnStart
 	return nil
+}
+
+// patchMachOBranch rewrites the placeholder branch instruction at fx.codeOffset
+// with the correct PC-relative immediate.
+func patchMachOBranch(code []byte, fx machoBranchFixup, displacement int32) error {
+	if displacement%4 != 0 {
+		return fmt.Errorf("onb: branch displacement %d is not 4-aligned", displacement)
+	}
+	imm := displacement / 4
+	off := fx.codeOffset
+	switch fx.kind {
+	case machoBranchUncond:
+		// b imm26 — 26-bit signed immediate
+		if imm < -(1<<25) || imm >= (1<<25) {
+			return fmt.Errorf("onb: b imm26 out of range (%d)", imm)
+		}
+		word := uint32(0x14000000) | (uint32(imm) & 0x03ffffff)
+		writeU32LE(code, off, word)
+	case machoBranchCondNotZero:
+		// cbnz Xt, imm19 — 19-bit signed immediate
+		if imm < -(1<<18) || imm >= (1<<18) {
+			return fmt.Errorf("onb: cbnz imm19 out of range (%d)", imm)
+		}
+		// Preserve the Xt field (lower 5 bits) emitted earlier; only the
+		// imm19 field at bits [23:5] needs patching.
+		old := readU32LE(code, off)
+		word := (old &^ (uint32(0x7ffff) << 5)) | ((uint32(imm) & 0x7ffff) << 5)
+		writeU32LE(code, off, word)
+	default:
+		return fmt.Errorf("onb: unknown branch fixup kind %d", fx.kind)
+	}
+	return nil
+}
+
+func writeU32LE(buf []byte, off uint32, v uint32) {
+	buf[off] = byte(v)
+	buf[off+1] = byte(v >> 8)
+	buf[off+2] = byte(v >> 16)
+	buf[off+3] = byte(v >> 24)
+}
+
+func readU32LE(buf []byte, off uint32) uint32 {
+	return uint32(buf[off]) | uint32(buf[off+1])<<8 | uint32(buf[off+2])<<16 | uint32(buf[off+3])<<24
+}
+
+// encodeMachOCmp encodes `cmp Xn, Xm` (alias for SUBS XZR, Xn, Xm).
+//
+//	layout: 0xeb00001f | (Rm << 16) | (Rn << 5)
+func encodeMachOCmp(lhs, rhs Reg) (uint32, error) {
+	n, ok := xRegisterNumber(lhs)
+	if !ok {
+		return 0, fmt.Errorf("%w: Mach-O cmp lhs %s", ErrNotImplemented, lhs)
+	}
+	m, ok := xRegisterNumber(rhs)
+	if !ok {
+		return 0, fmt.Errorf("%w: Mach-O cmp rhs %s", ErrNotImplemented, rhs)
+	}
+	return 0xeb00001f | (m << 16) | (n << 5), nil
+}
+
+// encodeMachOCset encodes `cset Xd, <cond>` (alias for CSINC Xd, XZR, XZR, !cond).
+//
+//	layout: 0x9a9f07e0 | ((cond ^ 1) << 12) | Rd
+//
+// The condition field is inverted because CSINC writes Xn when cond holds
+// and Xm+1 otherwise; with both source registers as XZR (= 31), the result
+// is 0 when cond holds and 1 otherwise. To get 1-when-cond we invert.
+func encodeMachOCset(dst Reg, cond Cond) (uint32, error) {
+	d, ok := xRegisterNumber(dst)
+	if !ok {
+		return 0, fmt.Errorf("%w: Mach-O cset dst %s", ErrNotImplemented, dst)
+	}
+	return 0x9a9f07e0 | ((uint32(cond) ^ 1) << 12) | d, nil
+}
+
+// encodeMachOCbnzPlaceholder emits `cbnz Xt, #0` — the imm19 stays zero
+// until the fixup pass patches it.
+//
+//	layout: 0xb5000000 | (imm19 << 5) | Rt
+func encodeMachOCbnzPlaceholder(src Reg) (uint32, error) {
+	t, ok := xRegisterNumber(src)
+	if !ok {
+		return 0, fmt.Errorf("%w: Mach-O cbnz src %s", ErrNotImplemented, src)
+	}
+	return 0xb5000000 | t, nil
 }
 
 func encodeMachOStore64Stack(instr *Store64Stack) (uint32, error) {
