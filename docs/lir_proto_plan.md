@@ -869,6 +869,35 @@ shape with Result.Int_Error aggregate), and `raw_null` (no
 params → returns RawPtr, pins `define ptr @rawNull()` +
 `store ptr null` + `ret ptr`).
 
+Design decision: the next batch lands four more MIR intrinsics
+that previously fell through the unsupported wildcard, all of
+which reduce to runtime ABI calls with no extra logic:
+
+- `MirIntrinsicListSlice` → `osty_rt_list_slice(ptr, i64, i64)`.
+  Element-agnostic (memcpy by elem_size) so a single dispatch
+  case via `lirLowerMirStringRuntimeCall` (the existing
+  fixed-signature runtime call helper) covers every `List<T>`.
+- `MirIntrinsicListToSet` → per-element-lane runtime
+  (`osty_rt_list_to_set_<i64|i1|f64|ptr|string>`). Picked by
+  `llvmListRuntimeToSetSymbol(elemLLVM, isString)` from
+  `toolchain/llvmgen.osty` — same selector production uses.
+  A small `lirLowerMirListToSet` helper extracts the element
+  type via `lirLowerMirContainerReceiver` then emits one ptr
+  call.
+- `MirIntrinsicStringFields` → `osty_rt_strings_Fields(ptr) → ptr`.
+  Whitespace-split-into-words: trivial 1-arg ptr call.
+- `MirIntrinsicStringSplitN` → `osty_rt_strings_SplitN(ptr, ptr, i64) → ptr`.
+  Limited-N split: 3-arg call returning `List<String>`.
+
+Five Phase-4 fixtures pin each shape:
+`list_slice` (List<Int> sliced [0..3) → pins runtime decl + call
++ `ret ptr`), `list_to_set_i64` and `list_to_set_string` (the
+two most common `llvmListRuntimeToSetSymbol` branches —
+enforces both the scalar and string-lane symbols are emitted
+correctly), `string_fields` (no-arg `Fields` call returning a
+List<String>), and `string_split_n` (3-arg `SplitN` call with
+String/String/Int param signature).
+
 ## Phase 0: lock the boundary
 
 Deliverables:
