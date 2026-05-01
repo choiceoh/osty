@@ -2130,7 +2130,11 @@ fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
         MirIntrinsicSetInsert -> lirLowerMirSetInsert(l, instr),
         MirIntrinsicSetContains -> lirLowerMirSetContains(l, instr),
         MirIntrinsicSetRemove -> lirLowerMirSetRemove(l, instr),
-        MirIntrinsicChanClose -> lirLowerMirStringRuntimeCall(l, instr, "osty_rt_chan_close", lirVoidType(), [lirPtrType()], "chan.close"),
+        MirIntrinsicChanMake -> lirLowerMirStringRuntimeCall(l, instr, llvmChanRuntimeMakeSymbol(), lirPtrType(), [lirIntType(64)], "chan.make"),
+        MirIntrinsicChanClose -> lirLowerMirStringRuntimeCall(l, instr, llvmChanRuntimeCloseSymbol(), lirVoidType(), [lirPtrType()], "chan.close"),
+        MirIntrinsicChanIsClosed -> lirLowerMirStringRuntimeCall(l, instr, llvmChanRuntimeIsClosedSymbol(), lirIntType(1), [lirPtrType()], "chan.isClosed"),
+        MirIntrinsicChanSend -> lirLowerMirChanSend(l, instr),
+        MirIntrinsicChanRecv -> lirLowerMirChanRecv(l, instr),
         MirIntrinsicYield -> lirLowerMirStringRuntimeCall(l, instr, "osty_rt_task_yield", lirVoidType(), [], "task.yield"),
         MirIntrinsicIsCancelled -> lirLowerMirStringRuntimeCall(l, instr, "osty_rt_cancel_is_cancelled", lirIntType(1), [], "cancel.isCancelled"),
         MirIntrinsicStringIndexOf -> lirLowerMirIndexOf(l, instr, mirRtStringSymbol("IndexOf"), [lirPtrType(), lirPtrType()], "string.indexOf"),
@@ -2936,6 +2940,97 @@ fn lirLowerMirIndexOf(l: LirMirFunctionLowerer, instr: MirInstr, symbol: String,
 // names already arrive from the monomorphizer with stable spellings.
 fn lirIsOptionTypeName(name: String) -> Bool {
     strings.startsWith(name, "Option<") || strings.startsWith(name, "Maybe<")
+}
+// Channel<T> send/recv lowering. Like List/Map/Set, the runtime splits
+// the helper symbol by element-type lane:
+// `osty_rt_thread_chan_send_<lane>` / `_recv_<lane>`. The composite
+// element fallback (`bytes_v1`) needs alloca + sizeof, which the
+// scalar-only LIR Proto path skips for now and surfaces as a structured
+// unsupported diagnostic.
+fn lirChannelElementTypeName(name: String) -> String {
+    if strings.startsWith(name, "Channel<") {
+        return lirContainerInnerArg(name, "Channel<")
+    }
+    ""
+}
+fn lirLowerMirChanSend(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 2 {
+        lirLowerError(l, LirDiagInvalidInput, "chan.send expects (channel, value)", "chan.send")
+        return
+    }
+    let elemName = lirChannelElementTypeName(instr.args[0].typ)
+    if elemName == "" {
+        lirLowerError(l, LirDiagUnsupported, "chan.send could not extract element type from `" + instr.args[0].typ + "`", "chan.send")
+        return
+    }
+    let elemLir = lirContainerElemLaneType(elemName)
+    if lirTypeIsZero(elemLir) {
+        lirLowerError(l, LirDiagUnsupported, "chan.send element type `" + elemName + "` has no LIR runtime lane", "chan.send")
+        return
+    }
+    if !(llvmListUsesTypedRuntime(elemLir.llvm)) {
+        lirLowerError(l, LirDiagUnsupported, "chan.send composite element type `" + elemName + "` needs the bytes-v1 runtime fallback (deferred)", "chan.send")
+        return
+    }
+    let chReg = lirLowerCoercedOperand(l, instr.args[0], instr.args[0].typ, lirPtrType(), "chan.send channel")
+    if chReg.value == "" {
+        return
+    }
+    let value = lirLowerCoercedOperand(l, instr.args[1], elemName, elemLir, "chan.send value")
+    if value.value == "" {
+        return
+    }
+    let symbol = llvmChanRuntimeSendSymbol(llvmListElementSuffix(elemLir.llvm))
+    lirEmitContainerCall(l, instr, symbol, lirVoidType(), [lirPtrType(), elemLir], [lirOperand(lirPtrType(), chReg.value), lirOperand(elemLir, value.value)], "", "chan.send")
+}
+// Channel recv returns the runtime's `{i64 disc, i64 payload}` shape
+// that already matches the `%Option.<T>` aggregate layout — disc=0 for
+// closed/cancelled, disc=1 for received value. The runtime helper does
+// the wrapping itself, so the LIR side only needs to declare the
+// recv-by-lane symbol and store the call result into the dest.
+fn lirLowerMirChanRecv(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 1 {
+        lirLowerError(l, LirDiagInvalidInput, "chan.recv expects (channel)", "chan.recv")
+        return
+    }
+    let elemName = lirChannelElementTypeName(instr.args[0].typ)
+    if elemName == "" {
+        lirLowerError(l, LirDiagUnsupported, "chan.recv could not extract element type from `" + instr.args[0].typ + "`", "chan.recv")
+        return
+    }
+    let elemLir = lirContainerElemLaneType(elemName)
+    if lirTypeIsZero(elemLir) {
+        lirLowerError(l, LirDiagUnsupported, "chan.recv element type `" + elemName + "` has no LIR runtime lane", "chan.recv")
+        return
+    }
+    if !(llvmListUsesTypedRuntime(elemLir.llvm)) {
+        lirLowerError(l, LirDiagUnsupported, "chan.recv composite element type `" + elemName + "` needs the bytes-v1 runtime fallback (deferred)", "chan.recv")
+        return
+    }
+    let chReg = lirLowerCoercedOperand(l, instr.args[0], instr.args[0].typ, lirPtrType(), "chan.recv channel")
+    if chReg.value == "" {
+        return
+    }
+    let symbol = llvmChanRuntimeRecvSymbol(llvmChanElementSuffix(elemLir.llvm))
+    if !(instr.hasDest) {
+        lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirRawType("\{ i64, i64 \}"), [lirPtrType()], false))
+        l.instrs.push(lirCall("", lirRawType("\{ i64, i64 \}"), "@" + symbol, [lirOperand(lirPtrType(), chReg.value)]))
+        return
+    }
+    let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+    if loc.id < 0 {
+        lirLowerError(l, LirDiagInvalidInput, "chan.recv destination local out of range", "chan.recv")
+        return
+    }
+    let destType = lirLowerMirType(l, loc.typ)
+    if lirTypeIsZero(destType) {
+        lirLowerError(l, LirDiagUnsupported, "chan.recv dest type `" + loc.typ + "` is not implemented", "chan.recv")
+        return
+    }
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, destType, [lirPtrType()], false))
+    let dest = lirFresh(l)
+    l.instrs.push(lirCall(dest, destType, "@" + symbol, [lirOperand(lirPtrType(), chReg.value)]))
+    lirStoreMirResult(l, instr.dest, lirOperand(destType, dest), loc.typ, "chan.recv result")
 }
 fn lirIsResultTypeName(name: String) -> Bool {
     strings.startsWith(name, "Result<")

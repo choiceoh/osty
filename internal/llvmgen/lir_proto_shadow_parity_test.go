@@ -322,7 +322,7 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualSetInsertStringFixture", []string{"declare void @osty_rt_set_insert_string(ptr, ptr)", "call void @osty_rt_set_insert_string("}},
 		{"lirParityManualSetContainsI64Fixture", []string{"declare i1 @osty_rt_set_contains_i64(ptr, i64)", "call i1 @osty_rt_set_contains_i64("}},
 		{"lirParityManualSetToListFixture", []string{"declare ptr @osty_rt_set_to_list(ptr)", "call ptr @osty_rt_set_to_list("}},
-		{"lirParityManualChanCloseFixture", []string{"declare void @osty_rt_chan_close(ptr)", "call void @osty_rt_chan_close("}},
+		{"lirParityManualChanCloseFixture", []string{"declare void @osty_rt_thread_chan_close(ptr)", "call void @osty_rt_thread_chan_close("}},
 		{"lirParityManualYieldFixture", []string{"declare void @osty_rt_task_yield()", "call void @osty_rt_task_yield()"}},
 		{"lirParityManualIsCancelledFixture", []string{"declare i1 @osty_rt_cancel_is_cancelled()", "call i1 @osty_rt_cancel_is_cancelled()"}},
 		// ----- Phase 5: GC entry safepoint + function/parameter attributes -----
@@ -335,6 +335,11 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualStringIndexOfRawFixture", []string{"declare i64 @osty_rt_strings_IndexOf(ptr, ptr)", "call i64 @osty_rt_strings_IndexOf(", "ret i64"}},
 		{"lirParityManualStringIndexOfOptionFixture", []string{"%Option.Int = type", "declare i64 @osty_rt_strings_IndexOf(ptr, ptr)", "icmp sge i64", "alloca %Option.Int", "insertvalue %Option.Int undef, i64 1, 0", "insertvalue %Option.Int undef, i64 0, 0", "load %Option.Int", "ret %Option.Int"}},
 		{"lirParityManualBytesIndexOfOptionFixture", []string{"%Option.Int = type", "declare i64 @osty_rt_bytes_index_of(ptr, ptr)", "icmp sge i64", "ret %Option.Int"}},
+		// ----- Slice B: Channel send/recv per-element ABI -----
+		{"lirParityManualChanMakeFixture", []string{"declare ptr @osty_rt_thread_chan_make(i64)", "call ptr @osty_rt_thread_chan_make("}},
+		{"lirParityManualChanIsClosedFixture", []string{"declare i1 @osty_rt_thread_chan_is_closed(ptr)", "call i1 @osty_rt_thread_chan_is_closed("}},
+		{"lirParityManualChanSendIntFixture", []string{"declare void @osty_rt_thread_chan_send_i64(ptr, i64)", "call void @osty_rt_thread_chan_send_i64("}},
+		{"lirParityManualChanRecvIntFixture", []string{"%Option.Int = type", "declare %Option.Int @osty_rt_thread_chan_recv_i64(ptr)", "call %Option.Int @osty_rt_thread_chan_recv_i64(", "ret %Option.Int"}},
 	}
 
 	for _, tt := range want {
