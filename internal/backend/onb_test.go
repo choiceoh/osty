@@ -267,34 +267,23 @@ func (r *recordingBackend) Emit(_ context.Context, req Request) (*Result, error)
 	return nil, r.err
 }
 
-// onbDevTestEnv guards the OSTY_ONB_* env vars so each test starts from a
-// known-clean baseline regardless of what the developer has exported in
-// their shell. Using t.Setenv would conflict with t.Parallel here.
+// onbDevTestEnv pins OSTY_ONB_* to known values for one test. t.Setenv handles
+// snapshot/restore via t.Cleanup; the previous hand-rolled save/restore here
+// existed because we anticipated t.Parallel, but none of the dev-loop tests
+// run in parallel (the backend lifecycle is serialised by Go's test runner
+// for env var safety anyway).
 func onbDevTestEnv(t *testing.T, strict bool, timing bool) {
 	t.Helper()
-	prevStrict := os.Getenv(onb.EnvStrict)
-	prevTiming := os.Getenv(onb.EnvTiming)
-	set := func(key, val string) {
-		if val == "" {
-			os.Unsetenv(key)
-			return
-		}
-		os.Setenv(key, val)
-	}
 	if strict {
-		set(onb.EnvStrict, "1")
+		t.Setenv(onb.EnvStrict, "1")
 	} else {
-		set(onb.EnvStrict, "")
+		t.Setenv(onb.EnvStrict, "")
 	}
 	if timing {
-		set(onb.EnvTiming, "1")
+		t.Setenv(onb.EnvTiming, "1")
 	} else {
-		set(onb.EnvTiming, "")
+		t.Setenv(onb.EnvTiming, "")
 	}
-	t.Cleanup(func() {
-		set(onb.EnvStrict, prevStrict)
-		set(onb.EnvTiming, prevTiming)
-	})
 }
 
 func TestONBBackendFallsBackToLLVMOnUnsupportedShape(t *testing.T) {
