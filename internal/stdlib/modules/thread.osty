@@ -7,12 +7,28 @@
 
 use std.time
 
+pub struct Handle<T> {
+    pub fn join(self) -> T
+}
+
 pub struct Group {
     pub fn spawn<T>(self, body: fn() -> T) -> Handle<T>
 
     pub fn cancel(self) {}
 
     pub fn isCancelled(self) -> Bool
+}
+
+pub struct Channel<T> {
+    pub fn close(self)
+
+    pub fn recv(self) -> T?
+
+    pub fn send(self, value: T)
+
+    pub fn len(self) -> Int
+
+    pub fn isClosed(self) -> Bool
 }
 
 pub struct Select {
