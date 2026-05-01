@@ -1,0 +1,26 @@
+use std.uuid
+
+fn main() {
+    let nil = uuid.nil()
+    println(nil.toString())
+
+    let parsed = match uuid.parse("00000000-0000-0000-0000-000000000000") {
+        Ok(u) -> u.toString(),
+        Err(_) -> "parse-failed",
+    }
+    println(parsed)
+
+    let bad = match uuid.parse("not-a-uuid") {
+        Ok(_) -> "should-not-happen",
+        Err(_) -> "bad-rejected",
+    }
+    println(bad)
+
+    let v = uuid.v4()
+    let s = v.toString()
+    let _ = v.toBytes()
+    println(s)
+
+    let w = uuid.v7()
+    println(w.toString())
+}

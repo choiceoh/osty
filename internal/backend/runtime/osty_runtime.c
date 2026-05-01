@@ -14451,6 +14451,1324 @@ bool osty_rt_crypto_constant_time_eq(void *raw_a, void *raw_b) {
     return diff == 0;
 }
 
+/* std.uuid runtime — spec §10.13. A Uuid value is a 16-byte payload stored
+ * in an `osty_rt_bytes` (len=16). Reusing the bytes layout dodges a custom
+ * GC kind; the language type system keeps Uuid and Bytes apart, and
+ * `toBytes()` returns a fresh copy so mutations don't alias the original
+ * Uuid. Random fill comes from `osty_rt_crypto_fill_random`, which already
+ * routes through the platform CSPRNG. */
+
+static void *osty_rt_uuid_alloc(unsigned char bytes[16], const char *site) {
+    return osty_rt_bytes_dup_site(bytes, 16, site);
+}
+
+static const unsigned char *osty_rt_uuid_view(void *raw_uuid, const char *err) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_uuid;
+    if (b == NULL || b->len != 16 || b->data == NULL) {
+        osty_rt_abort(err);
+    }
+    return b->data;
+}
+
+void *osty_rt_uuid_v4(void) {
+    unsigned char buf[16];
+
+    osty_rt_crypto_require_selftest();
+    osty_rt_crypto_fill_random(buf, sizeof(buf));
+    /* RFC 4122 §4.4: set version=4 and variant=10. */
+    buf[6] = (unsigned char)((buf[6] & 0x0FU) | 0x40U);
+    buf[8] = (unsigned char)((buf[8] & 0x3FU) | 0x80U);
+    return osty_rt_uuid_alloc(buf, "runtime.uuid.v4");
+}
+
+static uint64_t osty_rt_uuid_unix_ms(void) {
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    /* Windows FILETIME is 100ns ticks since 1601-01-01. Subtract the
+     * 11644473600-second offset to land on 1970 unix epoch. */
+    FILETIME ft;
+    ULARGE_INTEGER li;
+    GetSystemTimeAsFileTime(&ft);
+    li.LowPart = ft.dwLowDateTime;
+    li.HighPart = ft.dwHighDateTime;
+    if (li.QuadPart < 116444736000000000ULL) {
+        return 0;
+    }
+    return (uint64_t)((li.QuadPart - 116444736000000000ULL) / 10000ULL);
+#else
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+        return 0;
+    }
+    return (uint64_t)ts.tv_sec * 1000ULL + (uint64_t)(ts.tv_nsec / 1000000L);
+#endif
+}
+
+void *osty_rt_uuid_v7(void) {
+    unsigned char buf[16];
+    unsigned char rand_tail[10];
+    uint64_t ts;
+
+    osty_rt_crypto_require_selftest();
+    ts = osty_rt_uuid_unix_ms();
+    /* RFC 9562 §5.7: 48-bit big-endian unix-ms timestamp, then 6 bits
+     * of version=7 + 74 bits of randomness, with the 2-bit variant=10
+     * fixed in byte 8. */
+    buf[0] = (unsigned char)((ts >> 40) & 0xFFU);
+    buf[1] = (unsigned char)((ts >> 32) & 0xFFU);
+    buf[2] = (unsigned char)((ts >> 24) & 0xFFU);
+    buf[3] = (unsigned char)((ts >> 16) & 0xFFU);
+    buf[4] = (unsigned char)((ts >> 8) & 0xFFU);
+    buf[5] = (unsigned char)(ts & 0xFFU);
+    osty_rt_crypto_fill_random(rand_tail, sizeof(rand_tail));
+    memcpy(buf + 6, rand_tail, sizeof(rand_tail));
+    buf[6] = (unsigned char)((buf[6] & 0x0FU) | 0x70U);
+    buf[8] = (unsigned char)((buf[8] & 0x3FU) | 0x80U);
+    return osty_rt_uuid_alloc(buf, "runtime.uuid.v7");
+}
+
+void *osty_rt_uuid_nil(void) {
+    unsigned char buf[16];
+    memset(buf, 0, sizeof(buf));
+    return osty_rt_uuid_alloc(buf, "runtime.uuid.nil");
+}
+
+const char *osty_rt_uuid_to_string(void *raw_uuid) {
+    static const char hex[] = "0123456789abcdef";
+    const unsigned char *b;
+    char buf[36];
+    size_t out_idx = 0;
+    size_t i;
+
+    b = osty_rt_uuid_view(raw_uuid, "runtime.uuid.to_string: invalid Uuid");
+    /* Canonical 8-4-4-4-12 lowercase form (36 chars, no NUL). */
+    for (i = 0; i < 16; i++) {
+        if (i == 4 || i == 6 || i == 8 || i == 10) {
+            buf[out_idx++] = '-';
+        }
+        buf[out_idx++] = hex[(b[i] >> 4) & 0x0FU];
+        buf[out_idx++] = hex[b[i] & 0x0FU];
+    }
+    return osty_rt_string_dup_site(buf, sizeof(buf), "runtime.uuid.to_string");
+}
+
+void *osty_rt_uuid_to_bytes(void *raw_uuid) {
+    const unsigned char *b;
+
+    b = osty_rt_uuid_view(raw_uuid, "runtime.uuid.to_bytes: invalid Uuid");
+    return osty_rt_bytes_dup_site(b, 16, "runtime.uuid.to_bytes");
+}
+
+static int osty_rt_uuid_hex_value(unsigned char ch, unsigned char *out) {
+    if (ch >= '0' && ch <= '9') {
+        *out = (unsigned char)(ch - '0');
+        return 0;
+    }
+    if (ch >= 'a' && ch <= 'f') {
+        *out = (unsigned char)(10 + (ch - 'a'));
+        return 0;
+    }
+    if (ch >= 'A' && ch <= 'F') {
+        *out = (unsigned char)(10 + (ch - 'A'));
+        return 0;
+    }
+    return -1;
+}
+
+void *osty_rt_uuid_parse(const char *raw_text) {
+    /* Accepts canonical 8-4-4-4-12 form (36 chars). Returns NULL on any
+     * malformed input; the Osty shim wraps NULL into Result::Err. The
+     * inline-tagged String calling convention is handled by the
+     * runtime's string-decode helpers in callers; here we expect a
+     * heap-resident C string view. */
+    unsigned char out[16];
+    size_t i;
+    size_t pos = 0;
+    static const size_t dash_positions[4] = {8, 13, 18, 23};
+    size_t dash_idx = 0;
+
+    if (raw_text == NULL) {
+        return NULL;
+    }
+    if (osty_rt_string_is_inline(raw_text)) {
+        /* Canonical Uuid strings are 36 bytes — too long for SSO. Any
+         * inline-tagged input must be malformed; reject. */
+        return NULL;
+    }
+    /* Verify length is exactly 36 (no NUL counted). */
+    {
+        size_t len = strlen(raw_text);
+        if (len != 36) {
+            return NULL;
+        }
+    }
+    for (i = 0; i < 36; i++) {
+        unsigned char ch = (unsigned char)raw_text[i];
+        if (dash_idx < 4 && i == dash_positions[dash_idx]) {
+            if (ch != '-') {
+                return NULL;
+            }
+            dash_idx++;
+            continue;
+        }
+        unsigned char hi;
+        unsigned char lo;
+        if (osty_rt_uuid_hex_value(ch, &hi) != 0) {
+            return NULL;
+        }
+        i++;
+        if (i >= 36) {
+            return NULL;
+        }
+        if (osty_rt_uuid_hex_value((unsigned char)raw_text[i], &lo) != 0) {
+            return NULL;
+        }
+        out[pos++] = (unsigned char)((hi << 4) | lo);
+    }
+    if (pos != 16) {
+        return NULL;
+    }
+    return osty_rt_uuid_alloc(out, "runtime.uuid.parse");
+}
+
+void *osty_rt_uuid_parse_error(void) {
+    /* Companion to `osty_rt_uuid_parse`: invoked by the emitter on the
+     * NULL branch to materialize the Result::Err payload. We don't
+     * preserve which dash position or hex byte was malformed — the spec
+     * only commits to "Result<Uuid, Error>" granularity. */
+    static const char message[] = "uuid: invalid canonical 8-4-4-4-12 form";
+    return osty_rt_string_dup_site(message, sizeof(message) - 1, "runtime.uuid.parse.error");
+}
+
+/* ============================================================
+ * std.regex runtime — RE2-flavor subset (spec §10.9), Phase 1.
+ *
+ * Engine: Thompson NFA + Pike's parallel-state VM. Linear time
+ * guarantee; no backtracking, no ReDoS. Designed to grow into the
+ * full RE2 surface without rewriting the matcher core.
+ *
+ * Phase 1 surface exposed to Osty:
+ *   regex.compile(pattern)     -> opaque ptr  (NULL on parse error)
+ *   regex.compile_error()      -> last parse error message
+ *   Regex.matches(text)        -> Bool        (search anywhere in text)
+ *
+ * Phase 1 syntax:
+ *   - literal bytes (ASCII; UTF-8 sequences match byte-wise)
+ *   - '.' (any byte except '\n')
+ *   - quantifiers '*' '+' '?' '{n}' '{n,}' '{n,m}' (greedy)
+ *   - alternation 'a|b'
+ *   - non-capturing groups '(...)'
+ *   - char classes '[abc]' '[a-z]' '[^abc]'
+ *   - shorthand classes \d \w \s and inverses \D \W \S
+ *   - anchors '^' (start of input) and '$' (end of input)
+ *   - escapes \\ \. \* \+ \? \( \) \[ \] \{ \} \^ \$ \| \n \t \r \0
+ *
+ * Deferred (will land in subsequent phases):
+ *   - capturing groups, find / findAll / captures
+ *   - replace / replaceAll / split
+ *   - named captures (?P<name>...)
+ *   - case-insensitive flag (?i), multi-line ^/$
+ *   - full Unicode classes \p{L} etc.
+ *   - lazy quantifiers '*?' '+?'
+ *   - word-boundary '\b' / '\B'
+ *
+ * Memory layout of compiled Regex:
+ *   One contiguous GC-managed blob; the header points into its own
+ *   tail. Mirrors the osty_rt_bytes pattern. No destroy callback —
+ *   the GC reclaims the whole blob in one shot. Object kind GENERIC
+ *   with NULL trace/destroy (see osty_rt_bytes_dup_site for the
+ *   precedent). */
+
+#define OSTY_RE_MAX_PROG     16384
+#define OSTY_RE_MAX_CLASSES  256
+#define OSTY_RE_MAX_REPEAT   1024
+
+typedef enum {
+    OSTY_RE_OP_CHAR   = 1,  /* match byte == c */
+    OSTY_RE_OP_ANY    = 2,  /* match any byte except '\n' */
+    OSTY_RE_OP_CCLASS = 3,  /* match byte against classes[x] */
+    OSTY_RE_OP_MATCH  = 4,  /* accept */
+    OSTY_RE_OP_JMP    = 5,  /* unconditional jump to x */
+    OSTY_RE_OP_SPLIT  = 6,  /* split: try x first, then y */
+    OSTY_RE_OP_BOL    = 7,  /* assert pos == 0 */
+    OSTY_RE_OP_EOL    = 8,  /* assert pos == len */
+    OSTY_RE_OP_SAVE   = 9,  /* record current sp into caps[x] (Phase 2) */
+} osty_re_op_t;
+
+typedef struct {
+    uint8_t op;
+    uint8_t c;
+    int32_t x;
+    int32_t y;
+} osty_re_inst;
+
+typedef struct {
+    uint8_t bits[32];
+} osty_re_cclass;
+
+/* Public header — embedded inline in the GC blob. The runtime never
+ * mutates a compiled regex after construction, so callers can share
+ * the pointer freely across threads. */
+typedef struct osty_regex_compiled {
+    osty_re_inst *prog;
+    int32_t prog_len;
+    osty_re_cclass *classes;
+    int32_t class_count;
+    int32_t ngroups;       /* including implicit group 0 (whole match);
+                            * Phase 2 captures = 2 * ngroups slots */
+} osty_regex_compiled;
+
+/* Captures handle returned from regex.captures(). Self-contained GC
+ * blob — original input text is copied inline so no managed pointers
+ * leak into the payload (kind GENERIC, NULL trace/destroy). Layout:
+ *   [osty_regex_captures header]
+ *   [char text[text_len]]
+ *   [int32_t slots[2 * ngroups]]   (-1 for unset)  */
+typedef struct osty_regex_captures {
+    int32_t ngroups;
+    int32_t text_len;
+} osty_regex_captures;
+
+static inline const char *osty_re_captures_text(const osty_regex_captures *c) {
+    return (const char *)(c + 1);
+}
+
+static inline int32_t *osty_re_captures_slots(const osty_regex_captures *c) {
+    return (int32_t *)((const char *)(c + 1) + c->text_len);
+}
+
+/* Parser scratch state. The growing instruction / class buffers live
+ * in malloc/free territory during parse; we copy into a single
+ * GC-managed blob at the end so the compiled object has no GC-time
+ * destroy hook. */
+typedef struct {
+    const char *p;
+    const char *end;
+    osty_re_inst *prog;
+    int32_t prog_len;
+    int32_t prog_cap;
+    osty_re_cclass *classes;
+    int32_t class_count;
+    int32_t class_cap;
+    int32_t ngroups;       /* incremented per '(...)' (excludes '(?:...)') */
+    int error_set;
+    char errmsg[160];
+} osty_re_parser;
+
+/* Module-static error slot for the most recent failed compile. The
+ * Osty `Result<Regex, RegexError>` lowering reads this on the NULL
+ * branch. Single-threaded compile is the assumed call shape; if a
+ * future caller compiles regexes concurrently this needs to move to
+ * TLS. */
+static OSTY_RT_TLS char osty_rt_regex_last_error[160];
+
+static void osty_rt_regex_set_last_error(const char *msg) {
+    if (msg == NULL) {
+        osty_rt_regex_last_error[0] = '\0';
+        return;
+    }
+    size_t n = strlen(msg);
+    if (n >= sizeof(osty_rt_regex_last_error)) {
+        n = sizeof(osty_rt_regex_last_error) - 1;
+    }
+    memcpy(osty_rt_regex_last_error, msg, n);
+    osty_rt_regex_last_error[n] = '\0';
+}
+
+static void osty_re_parser_set_error(osty_re_parser *ps, const char *msg) {
+    if (ps->error_set) {
+        return;
+    }
+    ps->error_set = 1;
+    size_t n = strlen(msg);
+    if (n >= sizeof(ps->errmsg)) {
+        n = sizeof(ps->errmsg) - 1;
+    }
+    memcpy(ps->errmsg, msg, n);
+    ps->errmsg[n] = '\0';
+}
+
+static int osty_re_grow_prog(osty_re_parser *ps, int32_t need) {
+    if (need <= ps->prog_cap) {
+        return 0;
+    }
+    int32_t new_cap = ps->prog_cap == 0 ? 32 : ps->prog_cap;
+    while (new_cap < need) {
+        if (new_cap > OSTY_RE_MAX_PROG / 2) {
+            new_cap = OSTY_RE_MAX_PROG;
+            break;
+        }
+        new_cap *= 2;
+    }
+    if (new_cap > OSTY_RE_MAX_PROG) {
+        osty_re_parser_set_error(ps, "regex: program too large");
+        return -1;
+    }
+    osty_re_inst *grown = (osty_re_inst *)realloc(ps->prog, sizeof(osty_re_inst) * (size_t)new_cap);
+    if (grown == NULL) {
+        osty_re_parser_set_error(ps, "regex: out of memory (program)");
+        return -1;
+    }
+    ps->prog = grown;
+    ps->prog_cap = new_cap;
+    return 0;
+}
+
+static int osty_re_emit(osty_re_parser *ps, osty_re_op_t op, int c, int x, int y) {
+    if (ps->error_set) {
+        return -1;
+    }
+    if (ps->prog_len >= OSTY_RE_MAX_PROG) {
+        osty_re_parser_set_error(ps, "regex: program too large");
+        return -1;
+    }
+    if (osty_re_grow_prog(ps, ps->prog_len + 1) != 0) {
+        return -1;
+    }
+    int idx = ps->prog_len++;
+    osty_re_inst *ins = &ps->prog[idx];
+    ins->op = (uint8_t)op;
+    ins->c = (uint8_t)c;
+    ins->x = (int32_t)x;
+    ins->y = (int32_t)y;
+    return idx;
+}
+
+static int osty_re_class_alloc(osty_re_parser *ps) {
+    if (ps->error_set) {
+        return -1;
+    }
+    if (ps->class_count >= OSTY_RE_MAX_CLASSES) {
+        osty_re_parser_set_error(ps, "regex: too many character classes");
+        return -1;
+    }
+    if (ps->class_count >= ps->class_cap) {
+        int32_t new_cap = ps->class_cap == 0 ? 8 : ps->class_cap * 2;
+        if (new_cap > OSTY_RE_MAX_CLASSES) {
+            new_cap = OSTY_RE_MAX_CLASSES;
+        }
+        osty_re_cclass *grown = (osty_re_cclass *)realloc(ps->classes, sizeof(osty_re_cclass) * (size_t)new_cap);
+        if (grown == NULL) {
+            osty_re_parser_set_error(ps, "regex: out of memory (classes)");
+            return -1;
+        }
+        ps->classes = grown;
+        ps->class_cap = new_cap;
+    }
+    int idx = ps->class_count++;
+    memset(&ps->classes[idx], 0, sizeof(osty_re_cclass));
+    return idx;
+}
+
+static void osty_re_class_set(osty_re_cclass *cls, int byte) {
+    int idx = (byte >> 3) & 31;
+    int bit = byte & 7;
+    cls->bits[idx] |= (uint8_t)(1U << bit);
+}
+
+static void osty_re_class_set_range(osty_re_cclass *cls, int lo, int hi) {
+    if (lo < 0) lo = 0;
+    if (hi > 255) hi = 255;
+    for (int b = lo; b <= hi; b++) {
+        osty_re_class_set(cls, b);
+    }
+}
+
+static int osty_re_class_test(const osty_re_cclass *cls, unsigned char byte) {
+    return (cls->bits[(byte >> 3) & 31] >> (byte & 7)) & 1;
+}
+
+static void osty_re_class_invert_full(osty_re_cclass *cls) {
+    for (int i = 0; i < 32; i++) {
+        cls->bits[i] = (uint8_t)~cls->bits[i];
+    }
+    /* Even when negated, RE2 character classes do not match '\n' by
+     * default. Phase 1 does not expose the (?s) "dotall" flag for
+     * '.', and similarly we keep '[^...]' newline-clearing here so
+     * common patterns like `[^"]*` don't accidentally bridge lines. */
+    cls->bits[(int)('\n' >> 3) & 31] &= (uint8_t)~(1U << ('\n' & 7));
+}
+
+static void osty_re_class_add_digit(osty_re_cclass *cls) {
+    osty_re_class_set_range(cls, '0', '9');
+}
+
+static void osty_re_class_add_word(osty_re_cclass *cls) {
+    osty_re_class_set_range(cls, 'a', 'z');
+    osty_re_class_set_range(cls, 'A', 'Z');
+    osty_re_class_set_range(cls, '0', '9');
+    osty_re_class_set(cls, '_');
+}
+
+static void osty_re_class_add_space(osty_re_cclass *cls) {
+    osty_re_class_set(cls, ' ');
+    osty_re_class_set(cls, '\t');
+    osty_re_class_set(cls, '\n');
+    osty_re_class_set(cls, '\r');
+    osty_re_class_set(cls, '\f');
+    osty_re_class_set(cls, '\v');
+}
+
+/* Forward decls — alternation -> concat -> repeat -> atom. */
+static int osty_re_parse_alt(osty_re_parser *ps);
+
+/* Resolve a parsed escape into a literal byte or a class-emit hint.
+ * Returns the byte for literal-style escapes (\n, \t, \\, \., etc.).
+ * For shorthand classes (\d \w \s \D \W \S) sets *out_class_kind to
+ * a non-zero tag (1=\d, 2=\D, 3=\w, 4=\W, 5=\s, 6=\S) and returns 0.
+ * Returns -1 on unknown escape. */
+static int osty_re_decode_escape(unsigned char ch, int *out_class_kind) {
+    *out_class_kind = 0;
+    switch (ch) {
+    case 'n': return '\n';
+    case 't': return '\t';
+    case 'r': return '\r';
+    case 'f': return '\f';
+    case 'v': return '\v';
+    case '0': return '\0';
+    case '\\': case '.': case '*': case '+': case '?':
+    case '(': case ')': case '[': case ']': case '{': case '}':
+    case '^': case '$': case '|': case '/': case '-':
+        return (int)ch;
+    case 'd': *out_class_kind = 1; return 0;
+    case 'D': *out_class_kind = 2; return 0;
+    case 'w': *out_class_kind = 3; return 0;
+    case 'W': *out_class_kind = 4; return 0;
+    case 's': *out_class_kind = 5; return 0;
+    case 'S': *out_class_kind = 6; return 0;
+    default:  return -1;
+    }
+}
+
+/* Emit a CCLASS instruction whose class is filled per the shorthand
+ * kind (1=\d ... 6=\S). Returns -1 on emit failure. */
+static int osty_re_emit_shorthand_class(osty_re_parser *ps, int kind) {
+    int cidx = osty_re_class_alloc(ps);
+    if (cidx < 0) return -1;
+    osty_re_cclass *cls = &ps->classes[cidx];
+    switch (kind) {
+    case 1: osty_re_class_add_digit(cls); break;
+    case 2: osty_re_class_add_digit(cls); osty_re_class_invert_full(cls); break;
+    case 3: osty_re_class_add_word(cls); break;
+    case 4: osty_re_class_add_word(cls); osty_re_class_invert_full(cls); break;
+    case 5: osty_re_class_add_space(cls); break;
+    case 6: osty_re_class_add_space(cls); osty_re_class_invert_full(cls); break;
+    default: osty_re_parser_set_error(ps, "regex: internal shorthand kind"); return -1;
+    }
+    return osty_re_emit(ps, OSTY_RE_OP_CCLASS, 0, cidx, 0);
+}
+
+/* Parse a [...] character class. Cursor points just past the opening
+ * '['. On return, cursor is just past the closing ']'. */
+static int osty_re_parse_bracket(osty_re_parser *ps) {
+    int negated = 0;
+    if (ps->p < ps->end && *ps->p == '^') {
+        negated = 1;
+        ps->p++;
+    }
+    int cidx = osty_re_class_alloc(ps);
+    if (cidx < 0) return -1;
+    osty_re_cclass *cls = &ps->classes[cidx];
+    int produced = 0;
+    /* RE2 allows ']' as the first character to mean a literal. */
+    while (ps->p < ps->end) {
+        unsigned char ch = (unsigned char)*ps->p;
+        if (ch == ']' && produced > 0) {
+            ps->p++;
+            if (negated) {
+                osty_re_class_invert_full(cls);
+            }
+            return osty_re_emit(ps, OSTY_RE_OP_CCLASS, 0, cidx, 0);
+        }
+        if (ch == '\\') {
+            if (ps->p + 1 >= ps->end) {
+                osty_re_parser_set_error(ps, "regex: trailing backslash in class");
+                return -1;
+            }
+            unsigned char esc = (unsigned char)ps->p[1];
+            int kind = 0;
+            int b = osty_re_decode_escape(esc, &kind);
+            if (kind != 0) {
+                /* Embedded shorthand class. */
+                switch (kind) {
+                case 1: osty_re_class_add_digit(cls); break;
+                case 2: { osty_re_cclass tmp; memset(&tmp, 0, sizeof(tmp)); osty_re_class_add_digit(&tmp); osty_re_class_invert_full(&tmp); for (int i = 0; i < 32; i++) cls->bits[i] |= tmp.bits[i]; break; }
+                case 3: osty_re_class_add_word(cls); break;
+                case 4: { osty_re_cclass tmp; memset(&tmp, 0, sizeof(tmp)); osty_re_class_add_word(&tmp); osty_re_class_invert_full(&tmp); for (int i = 0; i < 32; i++) cls->bits[i] |= tmp.bits[i]; break; }
+                case 5: osty_re_class_add_space(cls); break;
+                case 6: { osty_re_cclass tmp; memset(&tmp, 0, sizeof(tmp)); osty_re_class_add_space(&tmp); osty_re_class_invert_full(&tmp); for (int i = 0; i < 32; i++) cls->bits[i] |= tmp.bits[i]; break; }
+                }
+                ps->p += 2;
+                produced++;
+                continue;
+            }
+            if (b < 0) {
+                osty_re_parser_set_error(ps, "regex: unknown escape in class");
+                return -1;
+            }
+            ps->p += 2;
+            /* Range like \n-\r or a-z continues here. */
+            if (ps->p + 1 < ps->end && *ps->p == '-' && ps->p[1] != ']') {
+                ps->p++;
+                int hi;
+                if (*ps->p == '\\') {
+                    if (ps->p + 1 >= ps->end) { osty_re_parser_set_error(ps, "regex: trailing backslash in class range"); return -1; }
+                    int kind2 = 0;
+                    hi = osty_re_decode_escape((unsigned char)ps->p[1], &kind2);
+                    if (kind2 != 0 || hi < 0) { osty_re_parser_set_error(ps, "regex: invalid range upper bound"); return -1; }
+                    ps->p += 2;
+                } else {
+                    hi = (unsigned char)*ps->p++;
+                }
+                if (b > hi) { osty_re_parser_set_error(ps, "regex: inverted character range"); return -1; }
+                osty_re_class_set_range(cls, b, hi);
+            } else {
+                osty_re_class_set(cls, b);
+            }
+            produced++;
+            continue;
+        }
+        ps->p++;
+        if (ps->p + 1 < ps->end && *ps->p == '-' && ps->p[1] != ']') {
+            ps->p++;
+            int hi;
+            if (*ps->p == '\\') {
+                if (ps->p + 1 >= ps->end) { osty_re_parser_set_error(ps, "regex: trailing backslash in class range"); return -1; }
+                int kind2 = 0;
+                hi = osty_re_decode_escape((unsigned char)ps->p[1], &kind2);
+                if (kind2 != 0 || hi < 0) { osty_re_parser_set_error(ps, "regex: invalid range upper bound"); return -1; }
+                ps->p += 2;
+            } else {
+                hi = (unsigned char)*ps->p++;
+            }
+            if ((int)ch > hi) { osty_re_parser_set_error(ps, "regex: inverted character range"); return -1; }
+            osty_re_class_set_range(cls, (int)ch, hi);
+        } else {
+            osty_re_class_set(cls, (int)ch);
+        }
+        produced++;
+    }
+    osty_re_parser_set_error(ps, "regex: unterminated character class");
+    return -1;
+}
+
+/* Parse a single atom (one repeatable unit). Returns the start index
+ * of the emitted block, or -1 on error. */
+static int osty_re_parse_atom(osty_re_parser *ps) {
+    if (ps->error_set || ps->p >= ps->end) {
+        osty_re_parser_set_error(ps, "regex: expected atom");
+        return -1;
+    }
+    unsigned char ch = (unsigned char)*ps->p;
+    if (ch == '|' || ch == ')' || ch == '*' || ch == '+' || ch == '?' || ch == '{') {
+        osty_re_parser_set_error(ps, "regex: unexpected metacharacter");
+        return -1;
+    }
+    int start = ps->prog_len;
+    if (ch == '(') {
+        ps->p++;
+        int capturing = 1;
+        /* '(?:...)' is the RE2 non-capturing form. Other '(?...' forms
+         * (named captures (?P<name>...), flags (?i)) are deferred to
+         * later phases — reject explicitly so the parser doesn't
+         * silently treat them as literal '?'. */
+        if (ps->p < ps->end && *ps->p == '?') {
+            if (ps->p + 1 < ps->end && ps->p[1] == ':') {
+                capturing = 0;
+                ps->p += 2;
+            } else {
+                osty_re_parser_set_error(ps, "regex: only '(?:...)' is supported in Phase 2");
+                return -1;
+            }
+        }
+        int group_idx = -1;
+        if (capturing) {
+            group_idx = ps->ngroups++;
+            if (osty_re_emit(ps, OSTY_RE_OP_SAVE, 0, 2 * group_idx, 0) < 0) return -1;
+        }
+        if (osty_re_parse_alt(ps) < 0) return -1;
+        if (ps->p >= ps->end || *ps->p != ')') {
+            osty_re_parser_set_error(ps, "regex: missing ')'");
+            return -1;
+        }
+        ps->p++;
+        if (capturing) {
+            if (osty_re_emit(ps, OSTY_RE_OP_SAVE, 0, 2 * group_idx + 1, 0) < 0) return -1;
+        }
+        return start;
+    }
+    if (ch == '.') {
+        ps->p++;
+        if (osty_re_emit(ps, OSTY_RE_OP_ANY, 0, 0, 0) < 0) return -1;
+        return start;
+    }
+    if (ch == '^') {
+        ps->p++;
+        if (osty_re_emit(ps, OSTY_RE_OP_BOL, 0, 0, 0) < 0) return -1;
+        return start;
+    }
+    if (ch == '$') {
+        ps->p++;
+        if (osty_re_emit(ps, OSTY_RE_OP_EOL, 0, 0, 0) < 0) return -1;
+        return start;
+    }
+    if (ch == '[') {
+        ps->p++;
+        if (osty_re_parse_bracket(ps) < 0) return -1;
+        return start;
+    }
+    if (ch == '\\') {
+        if (ps->p + 1 >= ps->end) {
+            osty_re_parser_set_error(ps, "regex: trailing backslash");
+            return -1;
+        }
+        unsigned char esc = (unsigned char)ps->p[1];
+        int kind = 0;
+        int b = osty_re_decode_escape(esc, &kind);
+        ps->p += 2;
+        if (kind != 0) {
+            if (osty_re_emit_shorthand_class(ps, kind) < 0) return -1;
+            return start;
+        }
+        if (b < 0) {
+            osty_re_parser_set_error(ps, "regex: unknown escape");
+            return -1;
+        }
+        if (osty_re_emit(ps, OSTY_RE_OP_CHAR, b, 0, 0) < 0) return -1;
+        return start;
+    }
+    /* Plain literal byte. */
+    ps->p++;
+    if (osty_re_emit(ps, OSTY_RE_OP_CHAR, (int)ch, 0, 0) < 0) return -1;
+    return start;
+}
+
+/* Apply postfix '*'/'+'/'?' to the atom block [start..end). The '{n,m}'
+ * variant is handled in osty_re_parse_unit which calls
+ * osty_re_expand_repeat directly (it needs the parsed n/m/has_m). */
+static int osty_re_apply_quantifier(osty_re_parser *ps, int start) {
+    if (ps->p >= ps->end) return 0;
+    unsigned char ch = (unsigned char)*ps->p;
+    if (ch != '*' && ch != '+' && ch != '?') {
+        return 0;
+    }
+    int end = ps->prog_len;
+    if (ch == '*') {
+        ps->p++;
+        /* Layout: SPLIT(atom, end) ; <atom> ; JMP(split) ; ... */
+        int split_idx = osty_re_emit(ps, OSTY_RE_OP_SPLIT, 0, 0, 0);
+        if (split_idx < 0) return -1;
+        osty_re_inst split_ins = ps->prog[split_idx];
+        for (int i = end; i > start; i--) {
+            ps->prog[i] = ps->prog[i - 1];
+        }
+        split_ins.x = start + 1;
+        split_ins.y = end + 2;
+        ps->prog[start] = split_ins;
+        if (osty_re_emit(ps, OSTY_RE_OP_JMP, 0, start, 0) < 0) return -1;
+        return 0;
+    }
+    if (ch == '+') {
+        ps->p++;
+        /* <atom> ; SPLIT(atom, after) */
+        if (osty_re_emit(ps, OSTY_RE_OP_SPLIT, 0, start, ps->prog_len + 1) < 0) return -1;
+        return 0;
+    }
+    /* '?' */
+    ps->p++;
+    int split_idx = osty_re_emit(ps, OSTY_RE_OP_SPLIT, 0, 0, 0);
+    if (split_idx < 0) return -1;
+    osty_re_inst split_ins = ps->prog[split_idx];
+    for (int i = ps->prog_len - 1; i > start; i--) {
+        ps->prog[i] = ps->prog[i - 1];
+    }
+    split_ins.x = start + 1;
+    split_ins.y = ps->prog_len;
+    ps->prog[start] = split_ins;
+    return 0;
+}
+
+/* Properly expand {n,m} — replaces the naive logic above. We compute
+ * the original atom span once, then emit copies in order:
+ *   - (n-1) mandatory clones: just clone the atom span
+ *   - if m == -1 (open-ended): clone once with a SPLIT-back loop
+ *   - else: (m - n) optional clones, each wrapped in SPLIT(atom, end)
+ *
+ * Returns 0 on success, -1 on error.
+ *
+ * Caller invokes this *after* the original atom block has been
+ * emitted at [start..end). The function is invoked with the cursor
+ * past the closing '}' (and after n, m, has_m have been parsed).
+ */
+static int osty_re_expand_repeat(osty_re_parser *ps, int start, int orig_end, int n, int m, int has_m) {
+    int orig_span = orig_end - start;
+    if (orig_span <= 0) {
+        osty_re_parser_set_error(ps, "regex: empty atom in repeat");
+        return -1;
+    }
+    if (n == 0) {
+        /* Drop mandatory copies first. */
+        ps->prog_len = start;
+        if (!has_m) {
+            /* {0,}: this is the same as `*` on a phantom atom — but
+             * we have no original to repeat. Treat as no-op. */
+            return 0;
+        }
+        if (m < 0) m = 0;
+        /* We need m optional copies — each is a SPLIT-wrapped clone
+         * of the *original* atom. But the original was truncated; we
+         * need to keep a stash. Do that here by holding the bytes. */
+        if (orig_span > 0 && m > 0) {
+            osty_re_inst *stash = (osty_re_inst *)malloc(sizeof(osty_re_inst) * (size_t)orig_span);
+            if (stash == NULL) {
+                osty_re_parser_set_error(ps, "regex: out of memory (repeat stash)");
+                return -1;
+            }
+            memcpy(stash, ps->prog + start, sizeof(osty_re_inst) * (size_t)orig_span);
+            for (int i = 0; i < m; i++) {
+                int blk = ps->prog_len;
+                if (osty_re_grow_prog(ps, ps->prog_len + orig_span + 1) != 0) { free(stash); return -1; }
+                int split_idx = ps->prog_len++;
+                ps->prog[split_idx].op = (uint8_t)OSTY_RE_OP_SPLIT;
+                ps->prog[split_idx].c = 0;
+                /* Place clone after the SPLIT. */
+                int clone_start = ps->prog_len;
+                int delta = clone_start - start;
+                for (int j = 0; j < orig_span; j++) {
+                    osty_re_inst src = stash[j];
+                    if (src.op == OSTY_RE_OP_JMP || src.op == OSTY_RE_OP_SPLIT) {
+                        if (src.x >= start && src.x < orig_end) src.x += delta;
+                        if (src.op == OSTY_RE_OP_SPLIT && src.y >= start && src.y < orig_end) src.y += delta;
+                    }
+                    ps->prog[ps->prog_len++] = src;
+                }
+                ps->prog[split_idx].x = clone_start;
+                ps->prog[split_idx].y = ps->prog_len;
+                (void)blk;
+            }
+            free(stash);
+        }
+        return 0;
+    }
+    /* n >= 1: clone original (n-1) times into the tail. */
+    if (n > 1) {
+        osty_re_inst *stash = (osty_re_inst *)malloc(sizeof(osty_re_inst) * (size_t)orig_span);
+        if (stash == NULL) {
+            osty_re_parser_set_error(ps, "regex: out of memory (repeat stash)");
+            return -1;
+        }
+        memcpy(stash, ps->prog + start, sizeof(osty_re_inst) * (size_t)orig_span);
+        for (int i = 1; i < n; i++) {
+            int clone_start = ps->prog_len;
+            if (osty_re_grow_prog(ps, ps->prog_len + orig_span) != 0) { free(stash); return -1; }
+            int delta = clone_start - start;
+            for (int j = 0; j < orig_span; j++) {
+                osty_re_inst src = stash[j];
+                if (src.op == OSTY_RE_OP_JMP || src.op == OSTY_RE_OP_SPLIT) {
+                    if (src.x >= start && src.x < orig_end) src.x += delta;
+                    if (src.op == OSTY_RE_OP_SPLIT && src.y >= start && src.y < orig_end) src.y += delta;
+                }
+                ps->prog[ps->prog_len++] = src;
+            }
+        }
+        free(stash);
+    }
+    /* Optional tail. */
+    if (!has_m) {
+        return 0; /* exact {n}: done */
+    }
+    if (m < 0) {
+        /* {n,}: tack on a Kleene star on a single clone of the atom. */
+        osty_re_inst *stash = (osty_re_inst *)malloc(sizeof(osty_re_inst) * (size_t)orig_span);
+        if (stash == NULL) {
+            osty_re_parser_set_error(ps, "regex: out of memory (repeat stash)");
+            return -1;
+        }
+        memcpy(stash, ps->prog + start, sizeof(osty_re_inst) * (size_t)orig_span);
+        int loop_split = ps->prog_len;
+        if (osty_re_grow_prog(ps, ps->prog_len + orig_span + 2) != 0) { free(stash); return -1; }
+        ps->prog[ps->prog_len++].op = (uint8_t)OSTY_RE_OP_SPLIT;
+        int clone_start = ps->prog_len;
+        int delta = clone_start - start;
+        for (int j = 0; j < orig_span; j++) {
+            osty_re_inst src = stash[j];
+            if (src.op == OSTY_RE_OP_JMP || src.op == OSTY_RE_OP_SPLIT) {
+                if (src.x >= start && src.x < orig_end) src.x += delta;
+                if (src.op == OSTY_RE_OP_SPLIT && src.y >= start && src.y < orig_end) src.y += delta;
+            }
+            ps->prog[ps->prog_len++] = src;
+        }
+        int jmp_idx = ps->prog_len;
+        ps->prog[ps->prog_len].op = (uint8_t)OSTY_RE_OP_JMP;
+        ps->prog[ps->prog_len].x = loop_split;
+        ps->prog_len++;
+        ps->prog[loop_split].x = clone_start;
+        ps->prog[loop_split].y = jmp_idx + 1;
+        free(stash);
+        return 0;
+    }
+    /* {n,m}: append (m - n) optional clones, each SPLIT-wrapped. */
+    int extra = m - n;
+    if (extra <= 0) return 0;
+    osty_re_inst *stash = (osty_re_inst *)malloc(sizeof(osty_re_inst) * (size_t)orig_span);
+    if (stash == NULL) {
+        osty_re_parser_set_error(ps, "regex: out of memory (repeat stash)");
+        return -1;
+    }
+    memcpy(stash, ps->prog + start, sizeof(osty_re_inst) * (size_t)orig_span);
+    for (int i = 0; i < extra; i++) {
+        if (osty_re_grow_prog(ps, ps->prog_len + orig_span + 1) != 0) { free(stash); return -1; }
+        int split_idx = ps->prog_len++;
+        ps->prog[split_idx].op = (uint8_t)OSTY_RE_OP_SPLIT;
+        int clone_start = ps->prog_len;
+        int delta = clone_start - start;
+        for (int j = 0; j < orig_span; j++) {
+            osty_re_inst src = stash[j];
+            if (src.op == OSTY_RE_OP_JMP || src.op == OSTY_RE_OP_SPLIT) {
+                if (src.x >= start && src.x < orig_end) src.x += delta;
+                if (src.op == OSTY_RE_OP_SPLIT && src.y >= start && src.y < orig_end) src.y += delta;
+            }
+            ps->prog[ps->prog_len++] = src;
+        }
+        ps->prog[split_idx].x = clone_start;
+        ps->prog[split_idx].y = ps->prog_len;
+    }
+    free(stash);
+    return 0;
+}
+
+/* Glue: parse atom, then handle quantifier (including {n,m}). */
+static int osty_re_parse_unit(osty_re_parser *ps) {
+    int start = osty_re_parse_atom(ps);
+    if (start < 0) return -1;
+    int end = ps->prog_len;
+    if (ps->p < ps->end) {
+        unsigned char qc = (unsigned char)*ps->p;
+        if (qc == '*' || qc == '+' || qc == '?') {
+            return osty_re_apply_quantifier(ps, start);
+        }
+        if (qc == '{') {
+            ps->p++;
+            int n = 0, m = -1, has_m = 0;
+            if (ps->p >= ps->end || *ps->p < '0' || *ps->p > '9') {
+                osty_re_parser_set_error(ps, "regex: '{' must be followed by digit");
+                return -1;
+            }
+            while (ps->p < ps->end && *ps->p >= '0' && *ps->p <= '9') {
+                n = n * 10 + (*ps->p - '0');
+                if (n > OSTY_RE_MAX_REPEAT) {
+                    osty_re_parser_set_error(ps, "regex: {n} too large");
+                    return -1;
+                }
+                ps->p++;
+            }
+            if (ps->p < ps->end && *ps->p == ',') {
+                ps->p++;
+                has_m = 1;
+                if (ps->p < ps->end && *ps->p >= '0' && *ps->p <= '9') {
+                    m = 0;
+                    while (ps->p < ps->end && *ps->p >= '0' && *ps->p <= '9') {
+                        m = m * 10 + (*ps->p - '0');
+                        if (m > OSTY_RE_MAX_REPEAT) {
+                            osty_re_parser_set_error(ps, "regex: {n,m} upper too large");
+                            return -1;
+                        }
+                        ps->p++;
+                    }
+                }
+            } else {
+                m = n;
+            }
+            if (ps->p >= ps->end || *ps->p != '}') {
+                osty_re_parser_set_error(ps, "regex: missing '}' for {n,m}");
+                return -1;
+            }
+            ps->p++;
+            if (has_m && m >= 0 && m < n) {
+                osty_re_parser_set_error(ps, "regex: {n,m} with m < n");
+                return -1;
+            }
+            return osty_re_expand_repeat(ps, start, end, n, m, has_m);
+        }
+    }
+    return 0;
+}
+
+/* Concatenation: parse one or more units until '|' or ')' or end. */
+static int osty_re_parse_concat(osty_re_parser *ps) {
+    while (!ps->error_set && ps->p < ps->end && *ps->p != '|' && *ps->p != ')') {
+        if (osty_re_parse_unit(ps) < 0) return -1;
+    }
+    return 0;
+}
+
+/* Alternation: a|b|c becomes
+ *   SPLIT L1 L2 ; <a> ; JMP END ; L1: SPLIT L3 L4 ; <b> ; JMP END ; L3: <c> ; END
+ * For simplicity, chain pairwise: parse first branch, then while '|',
+ * splice in a SPLIT before the existing branch and a JMP after, parse
+ * next branch.
+ */
+static int osty_re_parse_alt(osty_re_parser *ps) {
+    int branch_start = ps->prog_len;
+    if (osty_re_parse_concat(ps) < 0) return -1;
+    while (!ps->error_set && ps->p < ps->end && *ps->p == '|') {
+        ps->p++;
+        int branch_end = ps->prog_len;
+        /* Insert SPLIT at branch_start, JMP at branch_end. */
+        if (osty_re_grow_prog(ps, ps->prog_len + 2) != 0) return -1;
+        /* Shift [branch_start..branch_end) by 1 to make room for SPLIT. */
+        for (int i = branch_end; i > branch_start; i--) {
+            ps->prog[i] = ps->prog[i - 1];
+        }
+        ps->prog_len++;
+        /* Adjust internal jumps in the shifted block. */
+        for (int i = branch_start + 1; i <= branch_end; i++) {
+            osty_re_inst *ins = &ps->prog[i];
+            if (ins->op == OSTY_RE_OP_JMP || ins->op == OSTY_RE_OP_SPLIT) {
+                if (ins->x >= branch_start && ins->x < branch_end) ins->x++;
+                if (ins->op == OSTY_RE_OP_SPLIT && ins->y >= branch_start && ins->y < branch_end) ins->y++;
+            }
+        }
+        /* Place JMP after the shifted block. */
+        int jmp_idx = ps->prog_len;
+        if (osty_re_grow_prog(ps, ps->prog_len + 1) != 0) return -1;
+        ps->prog[jmp_idx].op = (uint8_t)OSTY_RE_OP_JMP;
+        ps->prog[jmp_idx].x = 0;  /* patched after second branch parses */
+        ps->prog_len++;
+        int second_start = ps->prog_len;
+        ps->prog[branch_start].op = (uint8_t)OSTY_RE_OP_SPLIT;
+        ps->prog[branch_start].x = branch_start + 1;
+        ps->prog[branch_start].y = second_start;
+        if (osty_re_parse_concat(ps) < 0) return -1;
+        ps->prog[jmp_idx].x = ps->prog_len;
+        /* branch_start stays as the head of the combined alternation
+         * for further chaining. */
+    }
+    return 0;
+}
+
+/* Pike VM matcher state, Phase 2. Each "thread" is (pc, capture_slots).
+ * Capture slots are int32_t arrays of length 2 * ngroups; an unset
+ * slot is -1. Buffers reused across input positions; deduplication
+ * by generation bitmap on PC. SAVE / JMP / SPLIT / BOL / EOL resolve
+ * during add() so the active set only contains real consume-or-match
+ * instructions.
+ *
+ * Group cap: OSTY_RE_MAX_GROUPS = 32. Stack-frame caps copies during
+ * recursion are bounded at 256 bytes/frame to keep recursion safe on
+ * default 1 MB stacks.
+ *
+ * The recursion depth is bounded by prog_len since seen_gen prevents
+ * revisits. Pathological inputs with huge programs may still stress
+ * the stack — we accept that for Phase 2. */
+
+#define OSTY_RE_MAX_GROUPS    32
+#define OSTY_RE_MAX_CAP_SLOTS (2 * OSTY_RE_MAX_GROUPS)
+
+typedef struct {
+    int prog_len;
+    int slots_per_thread;
+    int text_len;
+    int generation;
+    int *cur_pc;
+    int *nxt_pc;
+    int32_t *cur_caps;     /* row-major: row i = cur_caps[i * slots_per_thread ..] */
+    int32_t *nxt_caps;
+    int *seen_gen;
+    int cur_len;
+    int nxt_len;
+    int matched;
+    int32_t match_caps[OSTY_RE_MAX_CAP_SLOTS];
+} osty_re_vm;
+
+static void osty_re_add_thread_caps(osty_re_vm *vm, const osty_re_inst *prog, int pc, int sp, const int32_t *caps) {
+    if (pc < 0 || pc >= vm->prog_len) return;
+    if (vm->seen_gen[pc] == vm->generation) return;
+    vm->seen_gen[pc] = vm->generation;
+    osty_re_inst ins = prog[pc];
+    if (ins.op == OSTY_RE_OP_JMP) {
+        osty_re_add_thread_caps(vm, prog, ins.x, sp, caps);
+        return;
+    }
+    if (ins.op == OSTY_RE_OP_SPLIT) {
+        osty_re_add_thread_caps(vm, prog, ins.x, sp, caps);
+        osty_re_add_thread_caps(vm, prog, ins.y, sp, caps);
+        return;
+    }
+    if (ins.op == OSTY_RE_OP_SAVE) {
+        int32_t local[OSTY_RE_MAX_CAP_SLOTS];
+        memcpy(local, caps, sizeof(int32_t) * (size_t)vm->slots_per_thread);
+        if (ins.x >= 0 && ins.x < vm->slots_per_thread) {
+            local[ins.x] = sp;
+        }
+        osty_re_add_thread_caps(vm, prog, pc + 1, sp, local);
+        return;
+    }
+    if (ins.op == OSTY_RE_OP_BOL) {
+        if (sp == 0) {
+            osty_re_add_thread_caps(vm, prog, pc + 1, sp, caps);
+        }
+        return;
+    }
+    if (ins.op == OSTY_RE_OP_EOL) {
+        if (sp == vm->text_len) {
+            osty_re_add_thread_caps(vm, prog, pc + 1, sp, caps);
+        }
+        return;
+    }
+    /* Real instruction: park in nxt set. */
+    int slot = vm->nxt_len++;
+    vm->nxt_pc[slot] = pc;
+    memcpy(vm->nxt_caps + (size_t)slot * (size_t)vm->slots_per_thread,
+           caps, sizeof(int32_t) * (size_t)vm->slots_per_thread);
+}
+
+/* Run the matcher against text. If `out_caps` is non-NULL, on match it
+ * receives 2 * ngroups int32_t slots (-1 = unset). Returns 1 on match,
+ * 0 on no match. */
+static int osty_re_match(const osty_regex_compiled *re, const char *text, int text_len, int32_t *out_caps) {
+    if (re->ngroups > OSTY_RE_MAX_GROUPS) {
+        return 0;
+    }
+    osty_re_vm vm;
+    memset(&vm, 0, sizeof(vm));
+    vm.prog_len = re->prog_len;
+    vm.slots_per_thread = 2 * re->ngroups;
+    vm.text_len = text_len;
+    size_t row_bytes = sizeof(int32_t) * (size_t)vm.slots_per_thread;
+    vm.cur_pc = (int *)malloc(sizeof(int) * (size_t)vm.prog_len);
+    vm.nxt_pc = (int *)malloc(sizeof(int) * (size_t)vm.prog_len);
+    vm.cur_caps = (int32_t *)malloc(row_bytes * (size_t)vm.prog_len);
+    vm.nxt_caps = (int32_t *)malloc(row_bytes * (size_t)vm.prog_len);
+    vm.seen_gen = (int *)calloc((size_t)vm.prog_len, sizeof(int));
+    if (!vm.cur_pc || !vm.nxt_pc || !vm.cur_caps || !vm.nxt_caps || !vm.seen_gen) {
+        free(vm.cur_pc); free(vm.nxt_pc); free(vm.cur_caps); free(vm.nxt_caps); free(vm.seen_gen);
+        return 0;
+    }
+    int32_t seed_caps[OSTY_RE_MAX_CAP_SLOTS];
+    for (int i = 0; i < vm.slots_per_thread; i++) seed_caps[i] = -1;
+
+    for (int sp = 0; sp <= text_len; sp++) {
+        /* Promote nxt -> cur. */
+        int *swap_pc = vm.cur_pc; vm.cur_pc = vm.nxt_pc; vm.nxt_pc = swap_pc;
+        int32_t *swap_caps = vm.cur_caps; vm.cur_caps = vm.nxt_caps; vm.nxt_caps = swap_caps;
+        vm.cur_len = vm.nxt_len;
+        vm.nxt_len = 0;
+        /* Search semantics: re-seed start state at every position so
+         * the pattern can match anywhere in the input.  We seed by
+         * "adding to nxt" then absorbing into cur (cheap because
+         * generation tracking dedupes). Don't reseed if we already
+         * have a match — extending it via reseeding would shift the
+         * left edge to a later position and lose greedy correctness. */
+        if (!vm.matched) {
+            vm.generation++;
+            osty_re_add_thread_caps(&vm, re->prog, 0, sp, seed_caps);
+            /* Absorb seeded threads into cur. */
+            for (int i = 0; i < vm.nxt_len; i++) {
+                vm.cur_pc[vm.cur_len] = vm.nxt_pc[i];
+                memcpy(vm.cur_caps + (size_t)vm.cur_len * (size_t)vm.slots_per_thread,
+                       vm.nxt_caps + (size_t)i * (size_t)vm.slots_per_thread, row_bytes);
+                vm.cur_len++;
+            }
+            vm.nxt_len = 0;
+        }
+        if (vm.cur_len == 0) {
+            /* Nothing alive — and either we never seeded (we have a
+             * match) or we did and got nothing. End of input. */
+            break;
+        }
+        vm.generation++;
+        unsigned char ch = (sp < text_len) ? (unsigned char)text[sp] : 0;
+        int hit_match_this_step = 0;
+        for (int i = 0; i < vm.cur_len; i++) {
+            int pc = vm.cur_pc[i];
+            const int32_t *caps = vm.cur_caps + (size_t)i * (size_t)vm.slots_per_thread;
+            osty_re_inst ins = re->prog[pc];
+            if (ins.op == OSTY_RE_OP_MATCH) {
+                vm.matched = 1;
+                memcpy(vm.match_caps, caps, row_bytes);
+                /* Greedy semantics: a match by a lower-priority thread
+                 * shouldn't override a higher-priority one already
+                 * recorded this step, but should overwrite stale
+                 * matches from earlier steps. We process cur in
+                 * priority order, so first MATCH wins this step. */
+                hit_match_this_step = 1;
+                /* Lower-priority threads in cur after a MATCH cannot
+                 * produce a higher-priority match — they were less
+                 * preferred when SPLIT ordered them. Stop processing
+                 * cur for this step. */
+                break;
+            }
+            if (sp >= text_len) continue;
+            if (ins.op == OSTY_RE_OP_CHAR) {
+                if (ch == ins.c) osty_re_add_thread_caps(&vm, re->prog, pc + 1, sp + 1, caps);
+            } else if (ins.op == OSTY_RE_OP_ANY) {
+                if (ch != '\n') osty_re_add_thread_caps(&vm, re->prog, pc + 1, sp + 1, caps);
+            } else if (ins.op == OSTY_RE_OP_CCLASS) {
+                if (osty_re_class_test(&re->classes[ins.x], ch)) {
+                    osty_re_add_thread_caps(&vm, re->prog, pc + 1, sp + 1, caps);
+                }
+            }
+        }
+        (void)hit_match_this_step;
+        /* If we matched and nxt is empty, no extension is possible —
+         * stop here with the current best caps. Otherwise keep going:
+         * a higher-priority thread parked in nxt may extend the
+         * match on the next step. */
+        if (vm.matched && vm.nxt_len == 0) {
+            break;
+        }
+    }
+    if (vm.matched && out_caps != NULL) {
+        memcpy(out_caps, vm.match_caps, row_bytes);
+    }
+    free(vm.cur_pc); free(vm.nxt_pc); free(vm.cur_caps); free(vm.nxt_caps); free(vm.seen_gen);
+    return vm.matched;
+}
+
+/* Public entry — compile a pattern. Returns NULL on parse error and
+ * sets osty_rt_regex_last_error for the Result::Err lowering. */
+void *osty_rt_regex_compile(const char *pattern) {
+    if (pattern == NULL) {
+        osty_rt_regex_set_last_error("regex: pattern is null");
+        return NULL;
+    }
+    /* The caller may pass an SSO-tagged pointer; decode if needed. */
+    char inline_buf[8];
+    const char *src = pattern;
+    osty_rt_string_decode_to_buf_if_inline(&src, inline_buf);
+    size_t pattern_len = strlen(src);
+    osty_re_parser ps;
+    memset(&ps, 0, sizeof(ps));
+    ps.p = src;
+    ps.end = src + pattern_len;
+    /* Reserve group 0 as the implicit whole-match group. SAVE 0 at the
+     * very start, SAVE 1 just before MATCH. User capturing groups
+     * begin at index 1. */
+    ps.ngroups = 1;
+    if (osty_re_emit(&ps, OSTY_RE_OP_SAVE, 0, 0, 0) < 0 || ps.error_set) {
+        osty_rt_regex_set_last_error(ps.errmsg[0] ? ps.errmsg : "regex: emit SAVE 0 failed");
+        free(ps.prog);
+        free(ps.classes);
+        return NULL;
+    }
+    if (osty_re_parse_alt(&ps) != 0 || ps.error_set) {
+        osty_rt_regex_set_last_error(ps.errmsg[0] ? ps.errmsg : "regex: parse error");
+        free(ps.prog);
+        free(ps.classes);
+        return NULL;
+    }
+    if (ps.p != ps.end) {
+        osty_rt_regex_set_last_error("regex: trailing characters after pattern");
+        free(ps.prog);
+        free(ps.classes);
+        return NULL;
+    }
+    /* Close implicit whole-match group, then append final MATCH. */
+    if (osty_re_emit(&ps, OSTY_RE_OP_SAVE, 0, 1, 0) < 0 || ps.error_set) {
+        osty_rt_regex_set_last_error(ps.errmsg[0] ? ps.errmsg : "regex: emit SAVE 1 failed");
+        free(ps.prog);
+        free(ps.classes);
+        return NULL;
+    }
+    if (osty_re_emit(&ps, OSTY_RE_OP_MATCH, 0, 0, 0) < 0 || ps.error_set) {
+        osty_rt_regex_set_last_error(ps.errmsg[0] ? ps.errmsg : "regex: emit MATCH failed");
+        free(ps.prog);
+        free(ps.classes);
+        return NULL;
+    }
+    /* Allocate one contiguous GC blob: header + prog + classes. */
+    size_t hdr = sizeof(osty_regex_compiled);
+    size_t prog_bytes = sizeof(osty_re_inst) * (size_t)ps.prog_len;
+    size_t class_bytes = sizeof(osty_re_cclass) * (size_t)ps.class_count;
+    size_t total = hdr + prog_bytes + class_bytes;
+    osty_regex_compiled *re = (osty_regex_compiled *)osty_gc_allocate_managed(total, OSTY_GC_KIND_GENERIC, "runtime.regex.compile", NULL, NULL);
+    re->prog = (osty_re_inst *)((char *)re + hdr);
+    re->prog_len = ps.prog_len;
+    re->classes = (osty_re_cclass *)((char *)re + hdr + prog_bytes);
+    re->class_count = ps.class_count;
+    re->ngroups = ps.ngroups;
+    if (ps.prog_len > 0) memcpy(re->prog, ps.prog, prog_bytes);
+    if (ps.class_count > 0) memcpy(re->classes, ps.classes, class_bytes);
+    free(ps.prog);
+    free(ps.classes);
+    osty_rt_regex_set_last_error("");
+    return re;
+}
+
+void *osty_rt_regex_compile_error(void) {
+    const char *msg = osty_rt_regex_last_error[0] ? osty_rt_regex_last_error : "regex: unknown parse error";
+    return osty_rt_string_dup_site(msg, strlen(msg), "runtime.regex.compile.error");
+}
+
+bool osty_rt_regex_matches(void *raw_re, const char *text) {
+    if (raw_re == NULL) {
+        osty_rt_abort("runtime.regex.matches: nil Regex");
+    }
+    osty_regex_compiled *re = (osty_regex_compiled *)raw_re;
+    char inline_buf[8];
+    const char *src = text;
+    if (src == NULL) src = "";
+    osty_rt_string_decode_to_buf_if_inline(&src, inline_buf);
+    int len = (int)strlen(src);
+    return osty_re_match(re, src, len, NULL) ? true : false;
+}
+
+/* regex.captures(text) -> Captures? */
+void *osty_rt_regex_captures(void *raw_re, const char *text) {
+    if (raw_re == NULL) {
+        osty_rt_abort("runtime.regex.captures: nil Regex");
+    }
+    osty_regex_compiled *re = (osty_regex_compiled *)raw_re;
+    char inline_buf[8];
+    const char *src = text;
+    if (src == NULL) src = "";
+    osty_rt_string_decode_to_buf_if_inline(&src, inline_buf);
+    int len = (int)strlen(src);
+    int32_t slots[OSTY_RE_MAX_CAP_SLOTS];
+    int slot_count = 2 * re->ngroups;
+    for (int i = 0; i < slot_count; i++) slots[i] = -1;
+    if (!osty_re_match(re, src, len, slots)) {
+        return NULL;
+    }
+    /* Build self-contained Captures blob: header + text bytes + slot ints. */
+    size_t hdr = sizeof(osty_regex_captures);
+    size_t text_bytes = (size_t)len;
+    size_t slot_bytes = sizeof(int32_t) * (size_t)slot_count;
+    size_t total = hdr + text_bytes + slot_bytes;
+    osty_regex_captures *caps = (osty_regex_captures *)osty_gc_allocate_managed(total, OSTY_GC_KIND_GENERIC, "runtime.regex.captures", NULL, NULL);
+    caps->ngroups = re->ngroups;
+    caps->text_len = (int32_t)len;
+    if (text_bytes > 0) {
+        memcpy((char *)(caps + 1), src, text_bytes);
+    }
+    int32_t *out_slots = osty_re_captures_slots(caps);
+    memcpy(out_slots, slots, slot_bytes);
+    return caps;
+}
+
+/* Captures.get(i) -> String?  Returns NULL when i is out of range or
+ * the group did not participate in the match (e.g. an alternation
+ * arm that wasn't taken). The Osty shim wraps NULL into Option::None
+ * and a String pointer into Option::Some. */
+void *osty_rt_regex_captures_get(void *raw_caps, int64_t i) {
+    if (raw_caps == NULL) {
+        osty_rt_abort("runtime.regex.captures_get: nil Captures");
+    }
+    osty_regex_captures *caps = (osty_regex_captures *)raw_caps;
+    if (i < 0 || i >= (int64_t)caps->ngroups) {
+        return NULL;
+    }
+    int32_t *slots = osty_re_captures_slots(caps);
+    int32_t start = slots[2 * i];
+    int32_t end = slots[2 * i + 1];
+    if (start < 0 || end < 0 || end < start || end > caps->text_len) {
+        return NULL;
+    }
+    const char *text = osty_re_captures_text(caps);
+    size_t span = (size_t)(end - start);
+    return osty_rt_string_dup_site(text + start, span, "runtime.regex.captures_get");
+}
+
 void *osty_gc_alloc_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_v1"));
 void *osty_gc_alloc_pinned_v1(int64_t object_kind, int64_t byte_size, const char *site) __asm__(OSTY_GC_SYMBOL("osty.gc.alloc_pinned_v1"));
 void osty_gc_pre_write_v1(void *owner, void *old_value, int64_t slot_kind) __asm__(OSTY_GC_SYMBOL("osty.gc.pre_write_v1"));

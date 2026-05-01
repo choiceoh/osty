@@ -7944,6 +7944,12 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitStdRandomCall(call); found || err != nil {
 		return g.finishCallResult(call, v, err)
 	}
+	if v, found, err := g.emitStdUuidCall(call); found || err != nil {
+		return g.finishCallResult(call, v, err)
+	}
+	if v, found, err := g.emitStdRegexCall(call); found || err != nil {
+		return g.finishCallResult(call, v, err)
+	}
 	if v, found, err := g.emitPtrBackedErrorCall(call); found || err != nil {
 		return g.finishCallResult(call, v, err)
 	}
@@ -7988,6 +7994,12 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 		return g.finishCallResult(call, v, err)
 	}
 	if v, found, err := g.emitStdRandomMethodCall(call); found || err != nil {
+		return g.finishCallResult(call, v, err)
+	}
+	if v, found, err := g.emitStdUuidMethodCall(call); found || err != nil {
+		return g.finishCallResult(call, v, err)
+	}
+	if v, found, err := g.emitStdRegexMethodCall(call); found || err != nil {
 		return g.finishCallResult(call, v, err)
 	}
 	if v, found, err := g.emitDerivedToStringCall(call); found || err != nil {

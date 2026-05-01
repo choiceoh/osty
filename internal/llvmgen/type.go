@@ -506,6 +506,18 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 		if src, ok := g.staticStdTermCallSourceType(e); ok {
 			return src, true
 		}
+		if src, ok := g.staticStdUuidCallSourceType(e); ok {
+			return src, true
+		}
+		if src, ok := g.staticStdUuidMethodSourceType(e); ok {
+			return src, true
+		}
+		if src, ok := g.staticStdRegexCallSourceType(e); ok {
+			return src, true
+		}
+		if src, ok := g.staticStdRegexMethodSourceType(e); ok {
+			return src, true
+		}
 		if src, ok := g.staticPtrBackedErrorCallSourceType(e); ok {
 			return src, true
 		}
@@ -1044,6 +1056,18 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 			return out, true
 		}
 		if out, ok := g.stdTermCallStaticResult(e); ok {
+			return out, true
+		}
+		if out, ok := g.stdUuidCallStaticResult(e); ok {
+			return out, true
+		}
+		if out, ok := g.stdUuidMethodStaticResult(e); ok {
+			return out, true
+		}
+		if out, ok := g.stdRegexCallStaticResult(e); ok {
+			return out, true
+		}
+		if out, ok := g.stdRegexMethodStaticResult(e); ok {
 			return out, true
 		}
 	case *ast.FieldExpr:
@@ -2069,6 +2093,15 @@ func llvmType(t ast.Type, env typeEnv) (string, error) {
 			return typ, nil
 		}
 		if len(tt.Path) == 1 && len(tt.Args) == 0 && tt.Path[0] == "Rng" {
+			return "ptr", nil
+		}
+		if len(tt.Path) == 1 && len(tt.Args) == 0 && tt.Path[0] == "Uuid" {
+			return "ptr", nil
+		}
+		if len(tt.Path) == 1 && len(tt.Args) == 0 && tt.Path[0] == "Regex" {
+			return "ptr", nil
+		}
+		if len(tt.Path) == 1 && len(tt.Args) == 0 && tt.Path[0] == "Captures" {
 			return "ptr", nil
 		}
 		return "", unsupportedf("type-system", "type %q", strings.Join(tt.Path, "."))

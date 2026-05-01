@@ -1,0 +1,4 @@
+[package]
+name = "uuid_smoke"
+version = "0.1.0"
+edition = "0.5"

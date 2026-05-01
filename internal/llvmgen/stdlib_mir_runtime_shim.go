@@ -1523,3 +1523,152 @@ func (g *mirGen) emitMapUpdateCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, er
 	g.fnBuf.WriteString(mirCallVoidLine(unlockSym, mirArgSlotPtr(mapReg)))
 	return true, g.storeUnitDestIfAny(c)
 }
+
+func (g *mirGen) emitStdUuidCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
+	symbol := fnRef.Symbol
+	method := ""
+	switch {
+	case strings.HasPrefix(symbol, "std.uuid."):
+		method = strings.TrimPrefix(symbol, "std.uuid.")
+	case strings.HasPrefix(symbol, "Uuid__"):
+		method = strings.TrimPrefix(symbol, "Uuid__")
+	default:
+		return false, nil
+	}
+	switch method {
+	case "v4":
+		if len(c.Args) != 0 {
+			return true, unsupported("mir-mvp", "std.uuid.v4 takes no arguments")
+		}
+		return true, g.emitRuntimeCallToDest(c, ostyRtUuidV4Symbol, "ptr", nil)
+	case "v7":
+		if len(c.Args) != 0 {
+			return true, unsupported("mir-mvp", "std.uuid.v7 takes no arguments")
+		}
+		return true, g.emitRuntimeCallToDest(c, ostyRtUuidV7Symbol, "ptr", nil)
+	case "nil":
+		if len(c.Args) != 0 {
+			return true, unsupported("mir-mvp", "std.uuid.nil takes no arguments")
+		}
+		return true, g.emitRuntimeCallToDest(c, ostyRtUuidNilSymbol, "ptr", nil)
+	case "toString":
+		if len(c.Args) != 1 {
+			return true, unsupported("mir-mvp", "Uuid.toString requires receiver")
+		}
+		recv, err := g.evalTypedArg(c.Args[0], c.Args[0].Type())
+		if err != nil {
+			return true, err
+		}
+		return true, g.emitRuntimeCallToDest(c, ostyRtUuidToStringSymbol, "ptr", []mirRuntimeArg{recv})
+	case "toBytes":
+		if len(c.Args) != 1 {
+			return true, unsupported("mir-mvp", "Uuid.toBytes requires receiver")
+		}
+		recv, err := g.evalTypedArg(c.Args[0], c.Args[0].Type())
+		if err != nil {
+			return true, err
+		}
+		return true, g.emitRuntimeCallToDest(c, ostyRtUuidToBytesSymbol, "ptr", []mirRuntimeArg{recv})
+	case "parse":
+		if len(c.Args) != 1 {
+			return true, unsupported("mir-mvp", "std.uuid.parse requires one String argument")
+		}
+		text, err := g.evalTypedArg(c.Args[0], c.Args[0].Type())
+		if err != nil {
+			return true, err
+		}
+		if text.typ != "ptr" {
+			return true, unsupported("mir-mvp", "std.uuid.parse arg 1 must be a String pointer")
+		}
+		// Result<Uuid, Error> — both arms ptr-backed. Reuse the fs
+		// helper since it is generic over (valueSymbol, errorSymbol)
+		// and only differs in the freshLabel hint.
+		return true, g.emitStdFsPtrResultMIRArgs(c, "uuid.parse", ostyRtUuidParseSymbol, ostyRtUuidParseErrorSymbol, []string{mirArgSlotPtr(text.val)})
+	}
+	return false, nil
+}
+
+func (g *mirGen) emitStdRegexCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
+	symbol := fnRef.Symbol
+	method := ""
+	switch {
+	case strings.HasPrefix(symbol, "std.regex."):
+		method = strings.TrimPrefix(symbol, "std.regex.")
+	case strings.HasPrefix(symbol, "Regex__"):
+		method = strings.TrimPrefix(symbol, "Regex__")
+	default:
+		return false, nil
+	}
+	switch method {
+	case "compile":
+		if len(c.Args) != 1 {
+			return true, unsupported("mir-mvp", "std.regex.compile requires one String argument")
+		}
+		pattern, err := g.evalTypedArg(c.Args[0], c.Args[0].Type())
+		if err != nil {
+			return true, err
+		}
+		if pattern.typ != "ptr" {
+			return true, unsupported("mir-mvp", "std.regex.compile arg 1 must be a String pointer")
+		}
+		return true, g.emitStdFsPtrResultMIRArgs(c, "regex.compile", ostyRtRegexCompileSymbol, ostyRtRegexCompileErrorSymbol, []string{mirArgSlotPtr(pattern.val)})
+	case "matches":
+		if len(c.Args) != 2 {
+			return true, unsupported("mir-mvp", "Regex.matches requires receiver and text")
+		}
+		recv, err := g.evalTypedArg(c.Args[0], c.Args[0].Type())
+		if err != nil {
+			return true, err
+		}
+		text, err := g.evalTypedArg(c.Args[1], c.Args[1].Type())
+		if err != nil {
+			return true, err
+		}
+		return true, g.emitRuntimeCallToDest(c, ostyRtRegexMatchesSymbol, "i1", []mirRuntimeArg{recv, text})
+	case "captures":
+		if len(c.Args) != 2 {
+			return true, unsupported("mir-mvp", "Regex.captures requires receiver and text")
+		}
+		recv, err := g.evalTypedArg(c.Args[0], c.Args[0].Type())
+		if err != nil {
+			return true, err
+		}
+		text, err := g.evalTypedArg(c.Args[1], c.Args[1].Type())
+		if err != nil {
+			return true, err
+		}
+		// Runtime returns ptr (NULL = no match). Wrap into Option<Captures>.
+		g.declareRuntime(ostyRtRegexCapturesSymbol, mirRuntimeDeclareLine("ptr", ostyRtRegexCapturesSymbol, "ptr, ptr"))
+		args := []mirRuntimeArg{recv, text}
+		argList := mirRuntimeArgList(args)
+		nullable := g.fresh()
+		g.fnBuf.WriteString(mirCallValueLine(nullable, "ptr", ostyRtRegexCapturesSymbol, argList))
+		return true, g.storeOptionPtrFromNullable(c, nullable)
+	}
+	return false, nil
+}
+
+func (g *mirGen) emitStdRegexCapturesMethod(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
+	method := strings.TrimPrefix(fnRef.Symbol, "Captures__")
+	switch method {
+	case "get":
+		if len(c.Args) != 2 {
+			return true, unsupported("mir-mvp", "Captures.get requires receiver and index")
+		}
+		recv, err := g.evalTypedArg(c.Args[0], c.Args[0].Type())
+		if err != nil {
+			return true, err
+		}
+		idx, err := g.evalIntArg(c.Args[1], "Captures.get", 0)
+		if err != nil {
+			return true, err
+		}
+		g.declareRuntime(ostyRtRegexCapturesGetSymbol, mirRuntimeDeclareLine("ptr", ostyRtRegexCapturesGetSymbol, "ptr, i64"))
+		args := []mirRuntimeArg{recv, idx}
+		argList := mirRuntimeArgList(args)
+		nullable := g.fresh()
+		g.fnBuf.WriteString(mirCallValueLine(nullable, "ptr", ostyRtRegexCapturesGetSymbol, argList))
+		return true, g.storeOptionPtrFromNullable(c, nullable)
+	}
+	return false, nil
+}

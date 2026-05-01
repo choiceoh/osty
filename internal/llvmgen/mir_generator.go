@@ -683,7 +683,7 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 		// doesn't need a declared layout for them. These match what
 		// the runtime ABI hands back from chan_make / spawn / etc.
 		switch x.Name {
-		case "Channel", "Handle", "Group", "TaskGroup", "Select", "Duration", "Rng", "Gen", "Never":
+		case "Channel", "Handle", "Group", "TaskGroup", "Select", "Duration", "Rng", "Gen", "Uuid", "Regex", "Captures", "Never":
 			return true
 		case "Range":
 			// Range<T> is a prelude type but the Go-side resolver
@@ -3314,6 +3314,21 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 	}
 	if strings.HasPrefix(fnRef.Symbol, "std.random.") || strings.HasPrefix(fnRef.Symbol, "Rng__") {
 		if handled, err := g.emitStdRandomCall(c, fnRef); handled {
+			return err
+		}
+	}
+	if strings.HasPrefix(fnRef.Symbol, "std.uuid.") || strings.HasPrefix(fnRef.Symbol, "Uuid__") {
+		if handled, err := g.emitStdUuidCall(c, fnRef); handled {
+			return err
+		}
+	}
+	if strings.HasPrefix(fnRef.Symbol, "std.regex.") || strings.HasPrefix(fnRef.Symbol, "Regex__") {
+		if handled, err := g.emitStdRegexCall(c, fnRef); handled {
+			return err
+		}
+	}
+	if strings.HasPrefix(fnRef.Symbol, "Captures__") {
+		if handled, err := g.emitStdRegexCapturesMethod(c, fnRef); handled {
 			return err
 		}
 	}
@@ -10560,7 +10575,7 @@ func (g *mirGen) llvmType(t mir.Type) string {
 				return s
 			}
 		}
-		if x.Name == "Rng" || x.Name == "Gen" {
+		if x.Name == "Rng" || x.Name == "Gen" || x.Name == "Uuid" || x.Name == "Regex" || x.Name == "Captures" {
 			return "ptr"
 		}
 		if isStdlibModuleMarkerTypeName(x.Name) {

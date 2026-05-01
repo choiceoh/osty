@@ -1,0 +1,112 @@
+use std.regex
+
+fn main() {
+    // Whole-match group only.
+    match regex.compile(r"\d+") {
+        Ok(re) -> {
+            match re.captures("hello 123 world 456") {
+                Some(c) -> {
+                    match c.get(0) {
+                        Some(s) -> println("digits[0]={s}"),
+                        None    -> println("digits[0]=<unset>"),
+                    }
+                },
+                None -> println("digits: no match"),
+            }
+        },
+        Err(_) -> println("digits compile failed"),
+    }
+
+    // Two capturing groups (group 0 = whole, 1 = area, 2 = local).
+    match regex.compile(r"(\d{3})-(\d{4})") {
+        Ok(re) -> {
+            match re.captures("phone: 555-1234 and 555-5678") {
+                Some(c) -> {
+                    match c.get(0) {
+                        Some(s) -> println("phone[0]={s}"),
+                        None    -> println("phone[0]=<unset>"),
+                    }
+                    match c.get(1) {
+                        Some(s) -> println("phone[1]={s}"),
+                        None    -> println("phone[1]=<unset>"),
+                    }
+                    match c.get(2) {
+                        Some(s) -> println("phone[2]={s}"),
+                        None    -> println("phone[2]=<unset>"),
+                    }
+                },
+                None -> println("phone: no match"),
+            }
+        },
+        Err(_) -> println("phone compile failed"),
+    }
+
+    // Non-capturing group + capturing group.
+    match regex.compile(r"(?:Mr|Mrs)\.\s+(\w+)") {
+        Ok(re) -> {
+            match re.captures("hello Mr. Smith and Mrs. Jones") {
+                Some(c) -> {
+                    match c.get(0) {
+                        Some(s) -> println("title[0]={s}"),
+                        None    -> println("title[0]=<unset>"),
+                    }
+                    match c.get(1) {
+                        Some(s) -> println("title[1]={s}"),
+                        None    -> println("title[1]=<unset>"),
+                    }
+                },
+                None -> println("title: no match"),
+            }
+        },
+        Err(_) -> println("title compile failed"),
+    }
+
+    // Alternation: only one group participates per match.
+    match regex.compile(r"(\d+)|([a-z]+)") {
+        Ok(re) -> {
+            match re.captures("abc") {
+                Some(c) -> {
+                    match c.get(1) {
+                        Some(s) -> println("alt-letters[1]={s}"),
+                        None    -> println("alt-letters[1]=<unset>"),
+                    }
+                    match c.get(2) {
+                        Some(s) -> println("alt-letters[2]={s}"),
+                        None    -> println("alt-letters[2]=<unset>"),
+                    }
+                },
+                None -> println("alt-letters: no match"),
+            }
+            match re.captures("42") {
+                Some(c) -> {
+                    match c.get(1) {
+                        Some(s) -> println("alt-digits[1]={s}"),
+                        None    -> println("alt-digits[1]=<unset>"),
+                    }
+                    match c.get(2) {
+                        Some(s) -> println("alt-digits[2]={s}"),
+                        None    -> println("alt-digits[2]=<unset>"),
+                    }
+                },
+                None -> println("alt-digits: no match"),
+            }
+        },
+        Err(_) -> println("alt compile failed"),
+    }
+
+    // Out-of-range access returns None.
+    match regex.compile(r"(\w+)") {
+        Ok(re) -> {
+            match re.captures("hi") {
+                Some(c) -> {
+                    match c.get(99) {
+                        Some(s) -> println("oob: surprise {s}"),
+                        None    -> println("oob: out-of-range correctly None"),
+                    }
+                },
+                None -> println("oob: no match"),
+            }
+        },
+        Err(_) -> println("oob compile failed"),
+    }
+}

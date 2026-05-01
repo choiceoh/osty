@@ -64,6 +64,8 @@ type generator struct {
 	stdCryptoAliases     map[string]bool
 	stdOsAliases         map[string]bool
 	stdTermAliases       map[string]bool
+	stdUuidAliases       map[string]bool
+	stdRegexAliases      map[string]bool
 	runtimeDecls         map[string]runtimeDecl
 	runtimeDeclOrder     []string
 	traceHelpers         map[string]string
