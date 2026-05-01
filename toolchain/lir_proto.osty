@@ -2267,6 +2267,10 @@ fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
         MirIntrinsicResultIsOk -> lirLowerMirAlgebraicTagCheck(l, instr, "ne", "result.isOk"),
         MirIntrinsicResultIsErr -> lirLowerMirAlgebraicTagCheck(l, instr, "eq", "result.isErr"),
         MirIntrinsicRawNull -> lirLowerMirRawNull(l, instr),
+        MirIntrinsicListSlice -> lirLowerMirStringRuntimeCall(l, instr, mirRtListSymbol("slice"), lirPtrType(), [lirPtrType(), lirIntType(64), lirIntType(64)], "list.slice"),
+        MirIntrinsicListToSet -> lirLowerMirListToSet(l, instr),
+        MirIntrinsicStringFields -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Fields"), lirPtrType(), [lirPtrType()], "string.fields"),
+        MirIntrinsicStringSplitN -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("SplitN"), lirPtrType(), [lirPtrType(), lirPtrType(), lirIntType(64)], "string.splitN"),
         _ -> lirLowerError(l, LirDiagUnsupported, "unsupported MIR intrinsic `" + mirIntrinsicName(instr.intrinsic) + "`", "intrinsic"),
     }
 }
@@ -4084,6 +4088,36 @@ fn lirLowerMirRawNull(l: LirMirFunctionLowerer, instr: MirInstr) {
         return
     }
     lirStoreMirResult(l, instr.dest, lirOperand(lirPtrType(), "null"), "RawPtr", "raw.null result")
+}
+// `lirLowerMirListToSet` selects the per-element-lane runtime entry
+// (`osty_rt_list_to_set_<i64|i1|f64|ptr|string>`) and emits a single
+// `ptr` call. Production picks the same symbol via
+// `listRuntimeToSetSymbol`/`llvmListRuntimeToSetSymbol`
+// (toolchain/llvmgen.osty:3172). The receiver-type extraction reuses
+// `lirLowerMirContainerReceiver` so the `List<T>` element name parsing
+// path is shared with every other List intrinsic.
+fn lirLowerMirListToSet(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 1 {
+        lirLowerError(l, LirDiagInvalidInput, "list.toSet expects (list)", "list.toSet")
+        return
+    }
+    let recv = lirLowerMirContainerReceiver(l, instr, "list.toSet", "list.elem")
+    if !(recv.ok) {
+        return
+    }
+    let symbol = llvmListRuntimeToSetSymbol(recv.elemLir.llvm, recv.isString)
+    if symbol == "" {
+        lirLowerError(l, LirDiagUnsupported, "list.toSet element type `" + recv.elemTypeName + "` has no runtime conversion", "list.toSet")
+        return
+    }
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirPtrType(), [lirPtrType()], false))
+    if !(instr.hasDest) {
+        l.instrs.push(lirCall("", lirPtrType(), "@" + symbol, [lirOperand(lirPtrType(), recv.receiverReg)]))
+        return
+    }
+    let dest = lirFresh(l)
+    l.instrs.push(lirCall(dest, lirPtrType(), "@" + symbol, [lirOperand(lirPtrType(), recv.receiverReg)]))
+    lirStoreMirResult(l, instr.dest, lirOperand(lirPtrType(), dest), "Set<" + recv.elemTypeName + ">", "list.toSet result")
 }
 // Widen a parsed scalar (i64 / double / i32 / i8 / i1) into the i64
 // the Ok payload slot uses. Production widens the same way

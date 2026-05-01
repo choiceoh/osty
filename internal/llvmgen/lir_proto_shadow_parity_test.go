@@ -407,6 +407,12 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualResultIsOkFixture", []string{"%Result.Int_Error = type", "extractvalue %Result.Int_Error", "icmp ne i64", "ret i1"}},
 		{"lirParityManualResultIsErrFixture", []string{"%Result.Int_Error = type", "extractvalue %Result.Int_Error", "icmp eq i64", "ret i1"}},
 		{"lirParityManualRawNullFixture", []string{"define ptr @rawNull()", "store ptr null", "ret ptr"}},
+		// ----- Element-agnostic List runtime + per-lane List.toSet + String split/fields -----
+		{"lirParityManualListSliceFixture", []string{"declare ptr @osty_rt_list_slice(ptr, i64, i64)", "call ptr @osty_rt_list_slice(", "ret ptr"}},
+		{"lirParityManualListToSetI64Fixture", []string{"declare ptr @osty_rt_list_to_set_i64(ptr)", "call ptr @osty_rt_list_to_set_i64(", "ret ptr"}},
+		{"lirParityManualListToSetStringFixture", []string{"declare ptr @osty_rt_list_to_set_string(ptr)", "call ptr @osty_rt_list_to_set_string(", "ret ptr"}},
+		{"lirParityManualStringFieldsFixture", []string{"declare ptr @osty_rt_strings_Fields(ptr)", "call ptr @osty_rt_strings_Fields(", "ret ptr"}},
+		{"lirParityManualStringSplitNFixture", []string{"declare ptr @osty_rt_strings_SplitN(ptr, ptr, i64)", "call ptr @osty_rt_strings_SplitN(", "ret ptr"}},
 	}
 
 	for _, tt := range want {
