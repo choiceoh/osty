@@ -423,6 +423,10 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualMapGetOrFixture", []string{"declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)", "alloca i64", "call i1 @osty_rt_map_get_string(", "ret i64"}},
 		{"lirParityManualStringSplitIntoFixture", []string{"declare void @osty_rt_strings_SplitInto(ptr, ptr, ptr)", "call void @osty_rt_strings_SplitInto("}},
 		{"lirParityManualStringNthSegmentFixture", []string{"declare ptr @osty_rt_strings_NthSegment(ptr, ptr, i64)", "call ptr @osty_rt_strings_NthSegment(", "ret ptr"}},
+		// ----- MapIncr + ListContains + ListIndexOf -----
+		{"lirParityManualMapIncrStringFixture", []string{"declare i64 @osty_rt_map_incr_i64_string(ptr, ptr, i64)", "call i64 @osty_rt_map_incr_i64_string(", "ret i64"}},
+		{"lirParityManualListContainsI64Fixture", []string{"declare i64 @osty_rt_list_len(ptr)", "declare i64 @osty_rt_list_get_i64(ptr, i64)", "alloca i1", "alloca i64", "icmp slt i64", "icmp eq i64", "ret i1"}},
+		{"lirParityManualListIndexOfStringFixture", []string{"%Option.Int = type", "declare ptr @osty_rt_list_get_string(ptr, i64)", "declare i1 @osty_rt_strings_Equal(ptr, ptr)", "alloca %Option.Int", "call i1 @osty_rt_strings_Equal(", "ret %Option.Int"}},
 	}
 
 	for _, tt := range want {
