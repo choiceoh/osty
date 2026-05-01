@@ -57,3 +57,4 @@ lowering remains implementation backlog.
 - [§10.40 XLSX (`std.xlsx`)](./40-xlsx.md)
 - [§10.41 Keychain / Secrets (`std.keychain`, `std.secrets`)](./41-keychain-secrets.md)
 - [§10.42 PDF (`std.pdf`)](./42-pdf.md)
+- [§10.43 Supabase (`std.supabase`)](./43-supabase.md)
