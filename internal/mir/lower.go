@@ -5170,7 +5170,12 @@ func concurrencyIntrinsicForFree(qualifier, name string) IntrinsicKind {
 			return IntrinsicYield
 		}
 	case "sleep":
-		if threadNs {
+		// `time.sleep(d)` (spec §10.20) and `thread.sleep(d)` share
+		// the same IntrinsicSleep lowering — both end up calling the
+		// runtime's `osty_rt_thread_sleep(int64_t)` so the user-facing
+		// time module API stays the canonical form while keeping the
+		// thread-namespace alias working too.
+		if threadNs || qualifier == "time" || qualifier == "std.time" {
 			return IntrinsicSleep
 		}
 	}

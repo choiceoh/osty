@@ -92,7 +92,7 @@ Instant.since(self, earlier: Instant) -> Duration
 `Duration` is `Equal`, `Ordered`, `Hashable`. It supports `+`, `-`,
 `*` (by `Int`), `/` (by `Int`).
 
-**Duration literals.** The forms `5.s`, `100.ms`, `1.h`, `30.min`,
+**Duration literals.** The forms `5.s`, `100.ms`, `1.h`, `30.minutes`,
 `7.days` are **not special syntax**. They are ordinary method calls on
 integer literals. The compiler recognizes the following methods on the
 `Int` type as Duration-producing constructors (defined in `std.time`):
@@ -103,10 +103,13 @@ integer literals. The compiler recognizes the following methods on the
 | `Int.us(self)` | `Duration` (microseconds) |
 | `Int.ms(self)` | `Duration` (milliseconds) |
 | `Int.s(self)`  | `Duration` (seconds) |
-| `Int.min(self)` | `Duration` (minutes) |
+| `Int.minutes(self)` | `Duration` (minutes) |
 | `Int.h(self)`  | `Duration` (hours) |
 | `Int.days(self)` | `Duration` (days, 24h) |
 | `Int.weeks(self)` | `Duration` (weeks, 7d) |
+
+The minutes constructor is named `minutes` rather than `min` to avoid
+shadowing `Int.min(self, other) -> Self` from §10.5.
 
 These are compile-time recognized so they do not require an explicit
 `use std.time` to appear in source — but they desugar to method calls

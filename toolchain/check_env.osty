@@ -2093,6 +2093,18 @@ fn registerStdTimeAliasFns(env: CheckEnv, alias: String) {
         paramNames: ["duration"], paramTys: [tDuration],
         generics: [], genericBounds: [],
     })
+    // Bridge the qualified `<alias>.Duration` head a user types in source
+    // (the parser concatenates `time.Duration` into a single qualified
+    // name during type-ref parsing) to the bare `Duration` builtin so
+    // assignments like `let d: time.Duration = 100.ms()` and arguments
+    // to `time.sleep(...)` see the same type identity. Without this
+    // alias the checker reports `expected time.Duration, found Duration`
+    // even though both are the prelude builtin.
+    checkRegisterAlias(env, CheckAliasSig {
+        name: "{alias}.Duration",
+        ty: tDuration,
+        generics: [],
+    })
 }
 
 /// registerStdMathAliasSurface exposes the `std.math` constants and
@@ -2281,22 +2293,35 @@ fn checkInstallChannelIntrinsics(env: CheckEnv) {
         paramTys: [tFnUnitT],
         generics: gT, genericBounds: [],
     })
-    // Int duration suffixes: `5.s`, `30.ms`, `100.us`, `1000.ns`.
-    // Spec exercises these as postfix-dot property chains; register
-    // them as zero-arg methods on Int returning Duration.
-    let tIntTy = tInt(env.tys)
-    let durationFromInt = CheckFnSig {
-        name: "s", owner: "Int", receiverTy: tIntTy, hasReceiver: true, retTy: tDuration_,
-        paramNames: [], paramTys: [],
-        generics: [], genericBounds: [],
-    }
-    let _ = durationFromInt
-    for suffix in ["s", "ms", "us", "ns"] {
-        checkRegisterFn(env, CheckFnSig {
-            name: suffix, owner: "Int", receiverTy: tIntTy, hasReceiver: true, retTy: tDuration_,
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
+    // Int duration suffixes (spec §10.20). `5.s`, `30.minutes`,
+    // `1000.ns`, etc. — zero-arg methods on every integer kind returning
+    // Duration. Mirrors `internal/selfhost/primitive_arith_register.go::registerDurationConstructors`
+    // so the future LLVM-built native checker stays in sync with the
+    // Go-side surface.
+    let durationOwners = [
+        ("Int", tInt(env.tys)),
+        ("Int8", tInt8(env.tys)),
+        ("Int16", tInt16(env.tys)),
+        ("Int32", tInt32(env.tys)),
+        ("Int64", tInt64(env.tys)),
+        ("UInt8", tUInt8(env.tys)),
+        ("UInt16", tUInt16(env.tys)),
+        ("UInt32", tUInt32(env.tys)),
+        ("UInt64", tUInt64(env.tys)),
+        ("Byte", tByte(env.tys)),
+        ("Float", tFloat(env.tys)),
+        ("Float32", tFloat32(env.tys)),
+        ("Float64", tFloat64(env.tys)),
+    ]
+    for (ownerName, ownerTy) in durationOwners {
+        for suffix in ["ns", "us", "ms", "s", "minutes", "h", "days", "weeks"] {
+            checkRegisterFn(env, CheckFnSig {
+                name: suffix, owner: ownerName, receiverTy: ownerTy,
+                hasReceiver: true, retTy: tDuration_,
+                paramNames: [], paramTys: [],
+                generics: [], genericBounds: [],
+            })
+        }
     }
     // Group.spawn(body: fn() -> T) -> Handle<T> — structural concurrency
     // helper that spawns a scoped task inside a `taskGroup(|g| { ... })`

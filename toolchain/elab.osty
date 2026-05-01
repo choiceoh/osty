@@ -2636,6 +2636,20 @@ fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
             let owner = tyHeadAt(cx.env.tys, lookupTy)
             let fieldSig = checkLookupField(cx.env, owner, fieldName)
             if fieldSig.name == "" {
+                // Paren-less nullary-method fallback. Spec §10.20
+                // Duration constructors (`5.s`, `100.ms`, …) and the
+                // general getter-style ergonomics ride a single rule:
+                // a field-access whose name resolves to a registered
+                // nullary method on the receiver desugars to a method
+                // call. Mirrored in
+                // `internal/selfhost/generated.go::elabNullaryMethodFallback`.
+                let methodResult = elabNullaryMethodFallback(
+                    cx, recv.node, owner, fieldName, isOptionalChain,
+                    node.start, node.end,
+                )
+                if methodResult.node >= 0 {
+                    return methodResult
+                }
                 let hint = diagDidYouMean(
                     checkSuggestSimilar(checkFieldNamesOf(cx.env, owner), fieldName),
                 )
@@ -2658,6 +2672,23 @@ fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
             ElabResult { node: coreIdx, ty: resultTy }
         },
         _ -> {
+            // Paren-less nullary-method fallback for Prim / Optional
+            // receivers — mirrors the TkNamed branch above.
+            // `5.ms` (UntypedInt) and `(1.5).s` (UntypedFloat) ride
+            // through here; elabOwnerNameForReceiver promotes the
+            // literal-polymorphic primitives to their canonical
+            // owners ("Int", "Float") so the registered nullary
+            // method resolves.
+            let recvOwner = elabOwnerNameForReceiver(cx.env.tys, lookupTy)
+            if recvOwner != "" {
+                let methodResult = elabNullaryMethodFallback(
+                    cx, recv.node, recvOwner, fieldName, isOptionalChain,
+                    node.start, node.end,
+                )
+                if methodResult.node >= 0 {
+                    return methodResult
+                }
+            }
             cx.env.local.diagnostics.push(diagUnknownField(
                 tyToString(cx.env.tys, lookupTy),
                 fieldName,
@@ -2667,6 +2698,43 @@ fn elabInferField(cx: ElabCx, node: AstNode) -> ElabResult {
             elabPoisonResult(cx, node.start, node.end)
         },
     }
+}
+
+/// elabNullaryMethodFallback implements the paren-less call rule
+/// referenced by `elabInferField`. Returns an ElabResult whose `node`
+/// is the synthesized method-call core node when `fieldName` resolves
+/// to a registered nullary method on `owner`, or an
+/// `elabPoisonResult`-shaped sentinel (node = -1) so the caller can
+/// emit its own E0702 diagnostic. Spec §10.20 Duration constructors
+/// and the broader getter-style ergonomics ride this rule.
+fn elabNullaryMethodFallback(
+    cx: ElabCx,
+    recvNode: Int,
+    owner: String,
+    fieldName: String,
+    isOptionalChain: Bool,
+    start: Int,
+    end: Int,
+) -> ElabResult {
+    if owner == "" {
+        return ElabResult { node: -1, ty: -1 }
+    }
+    let fnSig = checkLookupMethod(cx.env, owner, fieldName)
+    if fnSig.name == "" {
+        return ElabResult { node: -1, ty: -1 }
+    }
+    if !fnSig.hasReceiver {
+        return ElabResult { node: -1, ty: -1 }
+    }
+    if checkIntListLenHelper(fnSig.paramTys) != 0 {
+        return ElabResult { node: -1, ty: -1 }
+    }
+    let resultTy = elabWrapOptionalChain(cx, isOptionalChain, fnSig.retTy)
+    let coreIdx = coreMethodCall(
+        cx.core, recvNode, fieldName, owner, [], [],
+        resultTy, start, end,
+    )
+    ElabResult { node: coreIdx, ty: resultTy }
 }
 
 /// elabWrapOptionalChain wraps `ty` in a fresh `T?` when the current
