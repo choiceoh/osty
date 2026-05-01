@@ -532,6 +532,22 @@ string-key dispatch) and `map_get_i64_string`
 (`Map<Int, String>` → `%Option.String`, exercises both i64-key and
 ptr-value lane resolutions plus the ptrtoint payload coercion).
 
+Design decision: a follow-up Phase-4 slice wires `List.first()` /
+`List.last() -> Option<T>` through the same Option-aggregate
+machinery. Production has no bespoke `_first` / `_last` runtime —
+both compose `osty_rt_list_len` + `osty_rt_list_get_<lane>` and
+gate on `len == 0` (mir_generator.go::IntrinsicListFirst|Last). LIR
+Proto mirrors that composition: call len, icmp eq with 0, on
+non-empty branch call get with `idx=0` (first) or `idx=len-1` (last),
+widen the loaded value via `lirParseResultPayloadAsI64`, build
+Option.Some; on empty branch build Option.None.
+
+Two Phase-4 fixtures pin the shape: `list_first_int`
+(`List<Int>` → `%Option.Int`, idx=0, exercises the i64 element lane)
+and `list_last_float` (`List<Float>` → `%Option.Float`, idx=len-1,
+exercises the f64 element lane and the sub-from-len idx
+computation plus the bitcast double-to-i64 payload coercion).
+
 ## Phase 0: lock the boundary
 
 Deliverables:

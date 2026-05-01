@@ -346,6 +346,9 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		// ----- Map.get → Option<V> -----
 		{"lirParityManualMapGetStringIntFixture", []string{"%Option.Int = type", "declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)", "alloca i64", "call i1 @osty_rt_map_get_string(", "alloca %Option.Int", "load i64", "insertvalue %Option.Int undef, i64 1, 0", "insertvalue %Option.Int undef, i64 0, 0", "ret %Option.Int"}},
 		{"lirParityManualMapGetI64StringFixture", []string{"%Option.String = type", "declare i1 @osty_rt_map_get_i64(ptr, i64, ptr)", "alloca ptr", "call i1 @osty_rt_map_get_i64(", "ptrtoint ptr", "ret %Option.String"}},
+		// ----- List.first / List.last → Option<T> -----
+		{"lirParityManualListFirstIntFixture", []string{"%Option.Int = type", "declare i64 @osty_rt_list_len(ptr)", "declare i64 @osty_rt_list_get_i64(ptr, i64)", "icmp eq i64", "alloca %Option.Int", "call i64 @osty_rt_list_get_i64(", "insertvalue %Option.Int undef, i64 1, 0", "insertvalue %Option.Int undef, i64 0, 0", "ret %Option.Int"}},
+		{"lirParityManualListLastFloatFixture", []string{"%Option.Float = type", "declare i64 @osty_rt_list_len(ptr)", "declare double @osty_rt_list_get_f64(ptr, i64)", "sub i64", "call double @osty_rt_list_get_f64(", "bitcast double", "ret %Option.Float"}},
 	}
 
 	for _, tt := range want {
