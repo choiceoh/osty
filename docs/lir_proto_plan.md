@@ -513,6 +513,25 @@ sentinel pattern the basic-block-splitting infrastructure was added
 to support: i64 sge sentinel for the IndexOf family, i1 boolean
 present-flag for the parse family.
 
+Design decision: a follow-up Phase-4 slice wires `Map.get(key) ->
+Option<V>` through the same Option-aggregate machinery. Production
+calls `osty_rt_map_get_<keysuf>(map, key, out_ptr) -> i1` — the
+runtime memcpys the value into `out_ptr` on hit and returns true; on
+miss it returns false and leaves `out_ptr` untouched. The Some arm
+loads from the out-slot, widens to i64 via `lirParseResultPayloadAsI64`
+(reused from the parse slice), and builds Option.Some; the None arm
+builds Option.None. Both arms store into an alloca-backed merge slot.
+
+Composite value types (struct / tuple values) need the bytes-v1
+runtime fallback that List/Map/Set/Channel composite elements all
+share — that's a separate slice.
+
+Two Phase-4 fixtures pin the shape: `map_get_string_int`
+(`Map<String, Int>` → `%Option.Int`, exercises the most common
+string-key dispatch) and `map_get_i64_string`
+(`Map<Int, String>` → `%Option.String`, exercises both i64-key and
+ptr-value lane resolutions plus the ptrtoint payload coercion).
+
 ## Phase 0: lock the boundary
 
 Deliverables:
