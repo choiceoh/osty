@@ -1,0 +1,191 @@
+// std.path - host-neutral path string helpers.
+//
+// This module owns lexical path manipulation. It accepts both Unix and
+// Windows separators for parsing, and emits "/" when it needs to join
+// path components. Host filesystem resolution stays behind the
+// body-less `absolute` and `canonical` declarations.
+
+use std.strings
+
+pub fn join(parts: List<String>) -> String {
+    let mut out = ""
+    for part in parts {
+        if part.isEmpty() {
+            continue
+        }
+        let clean = if out.isEmpty() { part } else { trimLeadingSeparators(part) }
+        if clean.isEmpty() {
+            continue
+        }
+        if out.isEmpty() {
+            out = clean
+        } else if endsWithSeparator(out) {
+            out = "{out}{clean}"
+        } else {
+            out = "{out}/{clean}"
+        }
+    }
+    out
+}
+
+pub fn split(p: String) -> List<String> {
+    let chars = p.chars()
+    let mut out: List<String> = []
+    let mut start = 0
+    let mut i = 0
+    for i < chars.len() {
+        if isSeparator(chars[i]) {
+            if i > start {
+                out.push(strings.slice(p, start, i))
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    if start < chars.len() {
+        out.push(strings.slice(p, start, chars.len()))
+    }
+    out
+}
+
+pub fn extension(p: String) -> String {
+    let base = basename(p)
+    match strings.lastIndexOf(base, ".") {
+        Some(i) -> {
+            if i <= 0 || i + 1 >= base.len() {
+                ""
+            } else {
+                strings.slice(base, i, base.len())
+            }
+        },
+        None -> "",
+    }
+}
+
+pub fn dirname(p: String) -> String {
+    if p.isEmpty() {
+        return "."
+    }
+    let trimmed = trimTrailingSeparatorsExceptRoot(p)
+    if trimmed.isEmpty() {
+        return "."
+    }
+    let sep = lastSeparatorIndex(trimmed)
+    if sep < 0 {
+        return "."
+    }
+    if sep == 0 {
+        return strings.slice(trimmed, 0, 1)
+    }
+    let dir = strings.slice(trimmed, 0, sep)
+    let clean = trimTrailingSeparatorsExceptRoot(dir)
+    if clean.isEmpty() {
+        "."
+    } else {
+        clean
+    }
+}
+
+pub fn basename(p: String) -> String {
+    if p.isEmpty() {
+        return "."
+    }
+    let trimmed = trimTrailingSeparatorsExceptRoot(p)
+    if trimmed.isEmpty() {
+        return separator()
+    }
+    let sep = lastSeparatorIndex(trimmed)
+    if sep < 0 {
+        trimmed
+    } else if sep + 1 >= trimmed.len() {
+        separator()
+    } else {
+        strings.slice(trimmed, sep + 1, trimmed.len())
+    }
+}
+
+pub fn absolute(p: String) -> Result<String, Error>
+
+pub fn canonical(p: String) -> Result<String, Error>
+
+pub fn isAbsolute(p: String) -> Bool {
+    if p.isEmpty() {
+        return false
+    }
+    let chars = p.chars()
+    if chars.len() > 0 && isSeparator(chars[0]) {
+        return true
+    }
+    chars.len() >= 3 && isAsciiLetter(chars[0]) && chars[1] == ':' && isSeparator(chars[2])
+}
+
+pub fn separator() -> String {
+    "/"
+}
+
+fn trimLeadingSeparators(p: String) -> String {
+    let chars = p.chars()
+    let mut i = 0
+    for i < chars.len() && isSeparator(chars[i]) {
+        i = i + 1
+    }
+    if i <= 0 {
+        p
+    } else if i >= chars.len() {
+        ""
+    } else {
+        strings.slice(p, i, chars.len())
+    }
+}
+
+fn trimTrailingSeparatorsExceptRoot(p: String) -> String {
+    let chars = p.chars()
+    let mut end = chars.len()
+    for end > rootLength(chars) && isSeparator(chars[end - 1]) {
+        end = end - 1
+    }
+    if end == chars.len() {
+        p
+    } else {
+        strings.slice(p, 0, end)
+    }
+}
+
+fn rootLength(chars: List<Char>) -> Int {
+    if chars.len() == 0 {
+        return 0
+    }
+    if isSeparator(chars[0]) {
+        return 1
+    }
+    if chars.len() >= 3 && isAsciiLetter(chars[0]) && chars[1] == ':' && isSeparator(chars[2]) {
+        return 3
+    }
+    0
+}
+
+fn lastSeparatorIndex(p: String) -> Int {
+    let chars = p.chars()
+    let mut out = -1
+    let mut i = 0
+    for i < chars.len() {
+        if isSeparator(chars[i]) {
+            out = i
+        }
+        i = i + 1
+    }
+    out
+}
+
+fn endsWithSeparator(p: String) -> Bool {
+    let chars = p.chars()
+    chars.len() > 0 && isSeparator(chars[chars.len() - 1])
+}
+
+fn isSeparator(c: Char) -> Bool {
+    c == '/' || c == '\\'
+}
+
+fn isAsciiLetter(c: Char) -> Bool {
+    (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+}

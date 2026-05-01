@@ -1,39 +1,8 @@
-// std.os — process, environment, signals, and path helpers.
+// std.os - process, environment, and signals.
 //
-// `Path` primitives and process-control entries are body-less; the
-// backend lowers each call to the host-OS runtime. `basename` is a
-// pure derivation from `split` and stays as Osty code.
-
-use std.strings
-
-pub let path: Path = Path {}
-
-pub struct Path {
-    pub fn join(self, parts: List<String>) -> String
-
-    pub fn split(self, p: String) -> List<String>
-
-    pub fn extension(self, p: String) -> String
-
-    pub fn dirname(self, p: String) -> String
-
-    pub fn basename(self, p: String) -> String {
-        let parts = self.split(p)
-        if parts.len() == 0 {
-            ""
-        } else {
-            parts[parts.len() - 1]
-        }
-    }
-
-    pub fn absolute(self, p: String) -> Result<String, Error>
-
-    pub fn canonical(self, p: String) -> Result<String, Error>
-
-    pub fn isAbsolute(self, p: String) -> Bool
-
-    pub fn separator(self) -> String
-}
+// Lexical path manipulation lives in std.path. The process-control
+// entries here are body-less; the backend lowers each call to the
+// host-OS runtime.
 
 pub struct Output {
     pub exitCode: Int,

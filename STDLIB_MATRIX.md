@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 97 공개 모듈. 분류 기준:
+총 98 공개 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (91 / 97 = 94%)
+### ⭐⭐⭐⭐⭐ Production (92 / 98 = 94%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -75,9 +75,9 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | xml | 391 | pure Osty | escape / unescape / tag builder / tokenizer |
 | tui | 383 | pure Osty + term | retained frame buffers, ANSI render/diff helpers |
 | image | 372 | pure Osty + bytes | PNG / JPEG / GIF / BMP / WebP format + dimension metadata parser |
-| ocr | 1136 | pure Osty + os/fs/json | PaddleOCR v5 / Tesseract command adapters, fast/accurate presets, batch JSON ingestion, confidence review queues, search, key-value extraction, RAG-friendly chunks |
+| ocr | 1136 | pure Osty + os/fs/json/path | PaddleOCR v5 / Tesseract command adapters, fast/accurate presets, batch JSON ingestion, confidence review queues, search, key-value extraction, RAG-friendly chunks |
 | rpa | 1089 | pure Osty + os/strings | Desktop RPA command plans: mouse move/click/drag/scroll, keyboard typing/hotkeys/paste, window query/focus/wait, script repeat/delay, macOS cliclick+osascript / Linux xdotool / Windows PowerShell adapters |
-| scan | 670 | pure Osty + os/fs/image/ocr | SANE `scanimage` / custom scanner command planning, device-list parsing, batch page paths, image metadata probe, manifest generation, scan→OCR indexed document handoff |
+| scan | 670 | pure Osty + os/fs/image/ocr/path | SANE `scanimage` / custom scanner command planning, device-list parsing, batch page paths, image metadata probe, manifest generation, scan→OCR indexed document handoff |
 | barcode | 709 | pure Osty + os | Code39 / EAN-13 / UPC-A native renderers, SVG/ASCII output, scanner command adapters, ZBar/ZXing output parsing, inventory/shipment/access label helpers |
 | qr | 564 | pure Osty + os | QR payload builders, matrix/SVG render helpers, qrencode generation plans, ZBar/ZXing recognition plans and result parsing |
 | smtp | 358 | pure Osty + email/encoding | SMTP commands / AUTH payloads / reply parsing / transaction scripts |
@@ -110,7 +110,8 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | testing_gen | 168 | test property lowering + runtime | property generators: int/intRange/bool/float/char/byte/asciiString/list/listOfSize/option/result/pair/triple/oneOf/oneOfGens/map/filter/constant |
 | log | 133 | — | Level + Handler + TextHandler / JsonHandler + value/level constructors — slog 동급 |
 | regex | 74 | — | compile / matches / find / findAll / replace / split |
-| os | 71 | shim + runtime | exec / execShell / execWith / execShellWith / exit / pid / hostname / onSignal |
+| path | 172 | pure Osty + runtime boundary | lexical join/split/extension/dirname/basename/isAbsolute/separator; absolute/canonical stay host-runtime backed |
+| os | 43 | shim + runtime | exec / execShell / execWith / execShellWith / exit / pid / hostname / onSignal |
 | thread | 59 | thread 16 + chan 10 + select 22 | spawn / race / chan / select / cancel — 구조적 동시성 |
 | math | 42 | float 40 runtime | sin/cos/tan/asin/acos/atan/atan2/sinh/cosh/tanh/exp/log/log2/log10/sqrt/cbrt/pow/floor/ceil/round/trunc/abs/min/max/hypot/clamp/fract/signum + libm 매핑 |
 | fs | 29 | shim 685 + runtime 21 | read/write/exists/create/remove/rename/copy/mkdir/mkdirAll — 11 API |
@@ -124,7 +125,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (6 / 97 = 6%)
+### ⭐⭐⭐⭐ Production-adjacent (6 / 98 = 6%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
