@@ -2141,10 +2141,11 @@ fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
         MirIntrinsicStringLastIndexOf -> lirLowerMirIndexOf(l, instr, mirRtStringSymbol("LastIndexOf"), [lirPtrType(), lirPtrType()], "string.lastIndexOf"),
         MirIntrinsicBytesIndexOf -> lirLowerMirIndexOf(l, instr, mirRtBytesSymbol("index_of"), [lirPtrType(), lirPtrType()], "bytes.indexOf"),
         MirIntrinsicBytesLastIndexOf -> lirLowerMirIndexOf(l, instr, mirRtBytesSymbol("last_index_of"), [lirPtrType(), lirPtrType()], "bytes.lastIndexOf"),
+        MirIntrinsicStringToInt -> lirLowerMirStringParse(l, instr, mirRtStringIsValidIntSymbol(), mirRtStringToIntSymbol(), lirIntType(64), "string.toInt"),
+        MirIntrinsicStringToFloat -> lirLowerMirStringParse(l, instr, mirRtStringIsValidFloatSymbol(), mirRtStringToFloatSymbol(), lirFloatType("double"), "string.toFloat"),
         _ -> lirLowerError(l, LirDiagUnsupported, "unsupported MIR intrinsic `" + mirIntrinsicName(instr.intrinsic) + "`", "intrinsic"),
     }
 }
-// ----- IndexOf-family Option<Int> wrapping (Phase 4 deferred slice) -----
 fn lirLowerMirPrintIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr, newline: Bool, stderr: Bool) {
     if instr.args.len() != 1 {
         lirLowerError(l, LirDiagInvalidInput, "print intrinsic expects exactly one argument", "intrinsic.print")
@@ -2932,6 +2933,93 @@ fn lirLowerMirIndexOf(l: LirMirFunctionLowerer, instr: MirInstr, symbol: String,
         return
     }
     lirStoreMirResult(l, instr.dest, lirOperand(lirIntType(64), indexReg), "Int", label + " result")
+}
+// String parse → Result<T, Error> lowering: validate-call (i1) gates
+// the parse-call (i64 / double). On valid, the parsed value is widened
+// to i64 and wrapped in Ok; on invalid, the Err arm constructs an
+// Err(0) placeholder. Production uses a phi node at the merge point;
+// LIR Proto reuses the alloca-backed shape established by
+// `lirWrapOptionFromI64Sentinel` so the LIR instruction vocabulary
+// stays unchanged. Destination MUST be a `Result<...>` aggregate;
+// callers that pass a non-Result dest get a structured unsupported
+// diagnostic rather than a silent miscompile.
+fn lirLowerMirStringParse(l: LirMirFunctionLowerer, instr: MirInstr, validateSym: String, parseSym: String, parsedType: LirType, label: String) {
+    if instr.args.len() != 1 {
+        lirLowerError(l, LirDiagInvalidInput, label + " expects (string)", label)
+        return
+    }
+    if !(instr.hasDest) {
+        lirLowerError(l, LirDiagInvalidInput, label + " requires a destination (Result<T, Error>)", label)
+        return
+    }
+    let strReg = lirLowerCoercedOperand(l, instr.args[0], "String", lirPtrType(), label + " string")
+    if strReg.value == "" {
+        return
+    }
+    let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+    if loc.id < 0 {
+        lirLowerError(l, LirDiagInvalidInput, label + " destination local out of range", label)
+        return
+    }
+    if !(lirIsResultTypeName(loc.typ)) {
+        lirLowerError(l, LirDiagUnsupported, label + " destination must be Result<...>, got `" + loc.typ + "`", label)
+        return
+    }
+    let resultType = lirLowerMirType(l, loc.typ)
+    if lirTypeIsZero(resultType) {
+        lirLowerError(l, LirDiagUnsupported, label + " destination type `" + loc.typ + "` is not implemented", label)
+        return
+    }
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(validateSym, lirIntType(1), [lirPtrType()], false))
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(parseSym, parsedType, [lirPtrType()], false))
+    let validReg = lirFresh(l)
+    l.instrs.push(lirCall(validReg, lirIntType(1), "@" + validateSym, [lirOperand(lirPtrType(), strReg.value)]))
+    let slot = lirFresh(l)
+    l.instrs.push(lirAlloca(slot, resultType, 0))
+    let okLabel = lirFreshAuxLabel(l, label + ".ok")
+    let errLabel = lirFreshAuxLabel(l, label + ".err")
+    let endLabel = lirFreshAuxLabel(l, label + ".end")
+    lirCutBlockCondBr(l, validReg, okLabel, errLabel, okLabel)
+    let parsedReg = lirFresh(l)
+    l.instrs.push(lirCall(parsedReg, parsedType, "@" + parseSym, [lirOperand(lirPtrType(), strReg.value)]))
+    let payloadReg = lirParseResultPayloadAsI64(l, parsedReg, parsedType)
+    let okValue = lirEmitResultOk(l, resultType, payloadReg)
+    l.instrs.push(lirStore(lirOperand(resultType, okValue), slot, 0))
+    lirCutBlockBr(l, endLabel)
+    l.currentBlockLabel = errLabel
+    let errValue = lirEmitResultErr(l, resultType, "0")
+    l.instrs.push(lirStore(lirOperand(resultType, errValue), slot, 0))
+    lirCutBlockBr(l, endLabel)
+    let merged = lirFresh(l)
+    l.instrs.push(lirLoad(merged, resultType, slot, 0))
+    lirStoreMirResult(l, instr.dest, lirOperand(resultType, merged), loc.typ, label + " result")
+}
+// Widen a parsed scalar (i64 / double / i32 / i8 / i1) into the i64
+// the Ok payload slot uses. Production widens the same way
+// (mir_generator.go::toI64Slot): integers zext/sext to i64; floats
+// bitcast through `bitcast double %x to i64` so the bit pattern is
+// preserved. Returns the i64 register name.
+fn lirParseResultPayloadAsI64(l: LirMirFunctionLowerer, valueReg: String, valueType: LirType) -> String {
+    if valueType.llvm == "i64" {
+        return valueReg
+    }
+    let dest = lirFresh(l)
+    if valueType.llvm == "double" {
+        l.instrs.push(lirCast(dest, "bitcast", lirOperand(valueType, valueReg), lirIntType(64)))
+        return dest
+    }
+    if valueType.className == LirTypeFloat {
+        let widened = lirFresh(l)
+        l.instrs.push(lirCast(widened, "fpext", lirOperand(valueType, valueReg), lirFloatType("double")))
+        l.instrs.push(lirCast(dest, "bitcast", lirOperand(lirFloatType("double"), widened), lirIntType(64)))
+        return dest
+    }
+    if valueType.className == LirTypePtr {
+        l.instrs.push(lirCast(dest, "ptrtoint", lirOperand(valueType, valueReg), lirIntType(64)))
+        return dest
+    }
+    l.instrs.push(lirCast(dest, "zext", lirOperand(valueType, valueReg), lirIntType(64)))
+    dest
 }
 // `Option<...>` / `Maybe<...>` are the canonical 2-i64 aggregate types
 // production lowers Option-returning intrinsics into. The check is a

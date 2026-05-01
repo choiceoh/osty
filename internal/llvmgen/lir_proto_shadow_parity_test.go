@@ -340,6 +340,9 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualChanIsClosedFixture", []string{"declare i1 @osty_rt_thread_chan_is_closed(ptr)", "call i1 @osty_rt_thread_chan_is_closed("}},
 		{"lirParityManualChanSendIntFixture", []string{"declare void @osty_rt_thread_chan_send_i64(ptr, i64)", "call void @osty_rt_thread_chan_send_i64("}},
 		{"lirParityManualChanRecvIntFixture", []string{"%Option.Int = type", "declare %Option.Int @osty_rt_thread_chan_recv_i64(ptr)", "call %Option.Int @osty_rt_thread_chan_recv_i64(", "ret %Option.Int"}},
+		// ----- String parse → Result<T, Error> -----
+		{"lirParityManualStringToIntFixture", []string{"%Result.Int_Error = type", "declare i1 @osty_rt_strings_IsValidInt(ptr)", "declare i64 @osty_rt_strings_ToInt(ptr)", "alloca %Result.Int_Error", "insertvalue %Result.Int_Error undef, i64 1, 0", "insertvalue %Result.Int_Error undef, i64 0, 0", "load %Result.Int_Error", "ret %Result.Int_Error"}},
+		{"lirParityManualStringToFloatFixture", []string{"%Result.Float_Error = type", "declare i1 @osty_rt_strings_IsValidFloat(ptr)", "declare double @osty_rt_strings_ToFloat(ptr)", "bitcast double", "ret %Result.Float_Error"}},
 	}
 
 	for _, tt := range want {
