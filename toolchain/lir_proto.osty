@@ -163,9 +163,13 @@ pub fn lirGlobal(name: String, typ: LirType, init: String) -> LirGlobal {
 pub struct LirParam {
     pub name: String,
     pub typ: LirType,
+    pub attrs: List<String>,
 }
 pub fn lirParam(name: String, typ: LirType) -> LirParam {
-    LirParam {name, typ}
+    LirParam {name, typ, attrs: []}
+}
+pub fn lirParamWithAttrs(name: String, typ: LirType, attrs: List<String>) -> LirParam {
+    LirParam {name, typ, attrs}
 }
 /// LirInstr is a sealed-by-convention flat variant. The `kind` field selects
 /// which payload fields are live. Keeping this as one struct mirrors the rest
@@ -734,10 +738,14 @@ pub fn lirRenderFunction(fn_: LirFunction) -> String {
 pub fn lirRenderParams(params: List<LirParam>) -> String {
     let mut out: List<String> = []
     for p in params {
+        let mut head = lirTypeString(p.typ)
+        for attr in p.attrs {
+            head = head + " " + attr
+        }
         if p.name == "" {
-            out.push(lirTypeString(p.typ))
+            out.push(head)
         } else {
-            out.push(lirTypeString(p.typ) + " " + p.name)
+            out.push(head + " " + p.name)
         }
     }
     strings.join(out, ", ")
@@ -1628,6 +1636,7 @@ pub struct LirMirFunctionLowerer {
     pub slots: List<LirLocalSlot>,
     pub labels: List<LirBlockLabel>,
     pub temp: Int,
+    pub safepointSerial: Int,
 }
 pub fn lirLowerMirModule(cfg: LirLowerConfig, mir: MirModule) -> LirLowerResult {
     let packageName = if cfg.packageName == "" {
@@ -1669,7 +1678,7 @@ pub fn lirLowerMirModule(cfg: LirLowerConfig, mir: MirModule) -> LirLowerResult 
     LirLowerResult {module: out, diagnostics: diags}
 }
 pub fn lirLowerMirFunction(cfg: LirLowerConfig, mir: MirModule, module: LirModule, fn_: MirFunction) -> LirLowerResult {
-    let mut l = LirMirFunctionLowerer {cfg, mirModule: mir, fn_, out: lirModule(module.packageName, module.sourcePath, module.target), diagnostics: [], prologue: [], instrs: [], slots: [], labels: [], temp: 0}
+    let mut l = LirMirFunctionLowerer {cfg, mirModule: mir, fn_, out: lirModule(module.packageName, module.sourcePath, module.target), diagnostics: [], prologue: [], instrs: [], slots: [], labels: [], temp: 0, safepointSerial: 0}
     l.out.typeDefs = module.typeDefs
     l.out.runtimeDecls = module.runtimeDecls
     l.out.stringPool = module.stringPool
@@ -1700,13 +1709,23 @@ pub fn lirLowerMirFunction(cfg: LirLowerConfig, mir: MirModule, module: LirModul
             lirLowerError(l, LirDiagUnsupported, "unsupported param type `" + loc.typ + "`", name)
             continue
         }
-        params.push(lirParam(lirMirParamName(id), typ))
+        let attrs = lirParamAttrsFromMir(fn_, typ)
+        params.push(lirParamWithAttrs(lirMirParamName(id), typ, attrs))
     }
     lirLowerMirLocals(l)
+    let mut entryPrologue: List<LirInstr> = []
+    let savedInstrs = l.instrs
+    l.instrs = entryPrologue
+    lirEmitGcSafepointEntry(l)
+    entryPrologue = l.instrs
+    l.instrs = savedInstrs
     let mut blocks: List<LirBlock> = []
     for bb in lirOrderedMirBlocks(fn_) {
         l.instrs = []
         if bb.id == fn_.entry {
+            for s in entryPrologue {
+                l.instrs.push(s)
+            }
             for p in l.prologue {
                 l.instrs.push(p)
             }
@@ -1721,6 +1740,7 @@ pub fn lirLowerMirFunction(cfg: LirLowerConfig, mir: MirModule, module: LirModul
         let mut outFn = lirFunction(name, ret)
         outFn.params = params
         outFn.blocks = blocks
+        outFn.attrs = lirFnAttrsFromMir(fn_)
         if fn_.cAbi {
             outFn.callingConv = "ccc"
         }
@@ -1728,6 +1748,10 @@ pub fn lirLowerMirFunction(cfg: LirLowerConfig, mir: MirModule, module: LirModul
     }
     LirLowerResult {module: l.out, diagnostics: l.diagnostics}
 }
+// Function-entry safepoint sits at the very front of the prologue so
+// every entered function gets one poll regardless of which MIR block
+// is `fn_.entry`. Production runs the same emit order
+// (LANG_SPEC §3.8.6 + RUNTIME_GC_DELTA §10.1).
 fn lirLowerError(l: LirMirFunctionLowerer, kind: LirDiagnosticKind, message: String, path: String) {
     l.diagnostics.push(lirDiagnosticError(kind, message, path))
 }
@@ -2174,6 +2198,91 @@ fn lirLowerMirIntegerConversionIntrinsic(l: LirMirFunctionLowerer, instr: MirIns
     if instr.hasDest {
         lirStoreMirResult(l, instr.dest, result, toName, "intrinsic conversion result")
     }
+}
+// ====================================================================
+// Phase 5: GC safepoint emission and function/parameter attributes
+// ====================================================================
+//
+// Safepoint encoding mirrors production
+// (`internal/llvmgen/generator.go::encodeSafepointID`): the i64 id packs
+// the safepoint kind into the top 8 bits and a per-function serial into
+// the low 56 bits. Reusing the helpers from `toolchain/llvmgen.osty`
+// keeps the encoding aligned with the runtime
+// (`OSTY_GC_SAFEPOINT_KIND_*` in `internal/backend/runtime/osty_runtime.c`).
+fn lirGcSafepointSymbol() -> String {
+    "osty.gc.safepoint_v1"
+}
+fn lirGcSafepointDecl() -> LirRuntimeDecl {
+    lirRuntimeDecl(lirGcSafepointSymbol(), lirVoidType(), [lirIntType(64), lirPtrType(), lirIntType(64)], false)
+}
+// `lirEmitGcSafepoint` records the runtime declaration once and pushes a
+// `call void @osty.gc.safepoint_v1(i64 id, ptr null, i64 0)` into the
+// current instruction buffer. The roots-empty form covers the function-
+// entry case (no managed locals are visible yet) and the per-call follow-
+// up site that every Phase-4 lowering should bracket once root-tracking
+// lands. Per-function serials let the runtime distinguish
+// kind-of-safepoint counters cheaply in profiles.
+fn lirEmitGcSafepoint(l: LirMirFunctionLowerer, kind: Int) {
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirGcSafepointDecl())
+    let serial = l.safepointSerial
+    l.safepointSerial = l.safepointSerial + 1
+    let id = llvmEncodeSafepointId(kind, serial)
+    l.instrs.push(lirCall("", lirVoidType(), "@" + lirGcSafepointSymbol(), [lirOperand(lirIntType(64), lirIntToString(id)), lirOperand(lirPtrType(), "null"), lirOperand(lirIntType(64), "0")]))
+}
+// Convenience wrappers — the kinds are the only thing call sites care
+// about, so spelling them out at the call site beats threading magic
+// integers through the pipeline.
+fn lirEmitGcSafepointEntry(l: LirMirFunctionLowerer) {
+    lirEmitGcSafepoint(l, llvmSafepointKindEntry())
+}
+fn lirEmitGcSafepointCall(l: LirMirFunctionLowerer) {
+    lirEmitGcSafepoint(l, llvmSafepointKindCall())
+}
+// Derive LLVM function-attribute strings from the MIR function's
+// annotation flags. Mirrors production's per-flag mapping
+// (LANG_SPEC v0.6 A8 inline / A9 hot+cold / A10 target-features /
+// A13 pure). `noaliasAll` is handled separately on parameters since
+// `noalias` is a parameter attribute.
+fn lirFnAttrsFromMir(fn_: MirFunction) -> List<String> {
+    let mut attrs: List<String> = []
+    match fn_.inlineMode {
+        MirInlineSoft -> attrs.push("inlinehint"),
+        MirInlineAlways -> attrs.push("alwaysinline"),
+        MirInlineNever -> attrs.push("noinline"),
+        _ -> {
+        },
+    }
+    if fn_.hot {
+        attrs.push("hot")
+    }
+    if fn_.cold {
+        attrs.push("cold")
+    }
+    if fn_.pure {
+        attrs.push("readnone")
+    }
+    if fn_.targetFeatures.len() > 0 {
+        let mut spec: List<String> = []
+        for feature in fn_.targetFeatures {
+            spec.push("+" + feature)
+        }
+        attrs.push("\"target-features\"=\"" + strings.join(spec, ",") + "\"")
+    }
+    attrs
+}
+// Param attrs derive from `noaliasAll` (LANG_SPEC v0.6 A11) — every
+// pointer-typed parameter gets `noalias`. The parameter-level form of
+// the annotation (`#[noalias(p1, p2)]` selecting only specific params)
+// is deliberately deferred because it needs MIR to keep param-name
+// metadata that today only the HIR/AST tier preserves.
+fn lirParamAttrsFromMir(fn_: MirFunction, paramType: LirType) -> List<String> {
+    if !(fn_.noaliasAll) {
+        return []
+    }
+    if paramType.className != LirTypePtr {
+        return []
+    }
+    ["noalias"]
 }
 // Generic Phase-4 runtime call lowering. Handles String / Bytes intrinsics
 // whose ABI is "0..N coerced operand args returning one scalar or pointer

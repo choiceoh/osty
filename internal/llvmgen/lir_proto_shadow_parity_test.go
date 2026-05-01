@@ -325,6 +325,12 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualChanCloseFixture", []string{"declare void @osty_rt_chan_close(ptr)", "call void @osty_rt_chan_close("}},
 		{"lirParityManualYieldFixture", []string{"declare void @osty_rt_task_yield()", "call void @osty_rt_task_yield()"}},
 		{"lirParityManualIsCancelledFixture", []string{"declare i1 @osty_rt_cancel_is_cancelled()", "call i1 @osty_rt_cancel_is_cancelled()"}},
+		// ----- Phase 5: GC entry safepoint + function/parameter attributes -----
+		{"lirParityManualEntrySafepointFixture", []string{"declare void @osty.gc.safepoint_v1(i64, ptr, i64)", "call void @osty.gc.safepoint_v1(i64 72057594037927936, ptr null, i64 0)"}},
+		{"lirParityManualFnAttrInlineAlwaysFixture", []string{"alwaysinline"}},
+		{"lirParityManualFnAttrHotPureFixture", []string{" hot ", " readnone "}},
+		{"lirParityManualFnAttrTargetFeaturesFixture", []string{"\"target-features\"=\"+avx512f,+avx512bw\""}},
+		{"lirParityManualFnAttrNoaliasFixture", []string{"ptr noalias %p1", "ptr noalias %p2"}},
 	}
 
 	for _, tt := range want {
