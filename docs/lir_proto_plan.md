@@ -846,6 +846,29 @@ deliberately identical — variation lives entirely in
 `lirNextLoopMD` property selection surfaces in exactly one
 fixture each.
 
+Design decision: the disc-tag inspection intrinsics
+(`OptionIsSome`, `OptionIsNone`, `ResultIsOk`, `ResultIsErr`)
+plus `RawNull` (LANG_SPEC §19) land as a paired LIR Proto +
+fixture batch. The four disc checks all reduce to the same
+shape — `extractvalue %Algebraic.<...>, 0` on the i64 disc
+field then `icmp ne` (present-tag) or `icmp eq` (absent-tag)
+against `0` — so a single helper `lirLowerMirAlgebraicTagCheck(l,
+instr, cmp, label)` covers all four; the dispatcher passes
+`"ne"` for IsSome/IsOk and `"eq"` for IsNone/IsErr. `RawNull`
+is the trivial constant case: no operand, no extractvalue, no
+compare — just `store ptr null` into the dest local. Mirrors
+production `emitOptionIntrinsic` / `emitResultIntrinsic` /
+`emitRuntimeRawNull`.
+
+Five Phase-4 fixtures pin the new shape:
+`option_is_some` / `option_is_none` (each takes `Option<Int>`
+param → returns Bool, pin Option.Int aggregate def + extractvalue
++ correct icmp predicate), `result_is_ok` / `result_is_err`
+(each takes `Result<Int, Error>` param → returns Bool, same
+shape with Result.Int_Error aggregate), and `raw_null` (no
+params → returns RawPtr, pins `define ptr @rawNull()` +
+`store ptr null` + `ret ptr`).
+
 ## Phase 0: lock the boundary
 
 Deliverables:

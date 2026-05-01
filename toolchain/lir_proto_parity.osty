@@ -148,7 +148,7 @@ pub fn lirParityBuiltinFixtures() -> List<LirParityFixture> {
     out
 }
 pub fn lirParityManualMIRFixtures() -> List<LirParityFixture> {
-    [lirParityManualConstReturnFixture(), lirParityManualDirectCallFixture(), lirParityManualBranchFixture(), lirParityManualSwitchFixture(), lirParityManualPrintlnStringFixture(), lirParityManualCastIntResizeFixture(), lirParityManualCastFloatResizeFixture(), lirParityManualCastIntToFloatFixture(), lirParityManualDirectCallArgCoercionFixture(), lirParityManualPrimitiveIntToByteFixture(), lirParityManualPrimitiveByteToCharFixture(), lirParityManualTupleLiteralReadFixture(), lirParityManualStructLiteralReadFixture(), lirParityManualNestedProjectedAssignFixture(), lirParityManualProjectedCallResultFixture(), lirParityManualProjectedIntrinsicResultFixture(), lirParityManualStringByteLenFixture(), lirParityManualStringIsEmptyFixture(), lirParityManualStringConcatBinaryFixture(), lirParityManualStringConcatNFixture(), lirParityManualStringContainsFixture(), lirParityManualStringTrimSpaceFixture(), lirParityManualStringRepeatFixture(), lirParityManualStringSubstringFixture(), lirParityManualStringReplaceAllFixture(), lirParityManualBytesLenFixture(), lirParityManualBytesConcatFixture(), lirParityManualBytesSliceFixture(), lirParityManualListPushIntFixture(), lirParityManualListPushStringFixture(), lirParityManualListLenFixture(), lirParityManualListIsEmptyFixture(), lirParityManualListGetFloatFixture(), lirParityManualListSortedI64Fixture(), lirParityManualListReversedFixture(), lirParityManualListClearFixture(), lirParityManualMapNewFixture(), lirParityManualMapInsertStringIntFixture(), lirParityManualMapContainsI64Fixture(), lirParityManualMapKeysFixture(), lirParityManualMapLenFixture(), lirParityManualSetInsertStringFixture(), lirParityManualSetContainsI64Fixture(), lirParityManualSetToListFixture(), lirParityManualChanCloseFixture(), lirParityManualYieldFixture(), lirParityManualIsCancelledFixture(), lirParityManualEntrySafepointFixture(), lirParityManualFnAttrInlineAlwaysFixture(), lirParityManualFnAttrHotPureFixture(), lirParityManualFnAttrTargetFeaturesFixture(), lirParityManualFnAttrNoaliasFixture(), lirParityManualStringIndexOfRawFixture(), lirParityManualStringIndexOfOptionFixture(), lirParityManualBytesIndexOfOptionFixture(), lirParityManualChanMakeFixture(), lirParityManualChanIsClosedFixture(), lirParityManualChanSendIntFixture(), lirParityManualChanRecvIntFixture(), lirParityManualStringToIntFixture(), lirParityManualStringToFloatFixture(), lirParityManualMapGetStringIntFixture(), lirParityManualMapGetI64StringFixture(), lirParityManualListFirstIntFixture(), lirParityManualListLastFloatFixture(), lirParityManualListPopIntFixture(), lirParityManualBytesGetFixture(), lirParityManualListToStringIntFixture(), lirParityManualMapToStringFixture(), lirParityManualSetToStringFixture(), lirParityManualCheckCancelledFixture(), lirParityManualListPushBytesV1Fixture(), lirParityManualHandleJoinIntFixture(), lirParityManualGroupCancelFixture(), lirParityManualGroupIsCancelledFixture(), lirParityManualSleepFixture(), lirParityManualMapKeysSortedI64Fixture(), lirParityManualBytesFromStringFixture(), lirParityManualBytesFromListFixture(), lirParityManualBytesToStringFixture(), lirParityManualBytesFromHexFixture(), lirParityManualListGetBytesV1Fixture(), lirParityManualListInsertBytesV1Fixture(), lirParityManualChanSendBytesV1Fixture(), lirParityManualSetRemoveI1Fixture(), lirParityManualTaskGroupUnitFixture(), lirParityManualSpawnDetachedFixture(), lirParityManualSpawnGroupedFixture(), lirParityManualSelectFixture(), lirParityManualSelectRecvFixture(), lirParityManualSelectSendIntFixture(), lirParityManualSelectTimeoutFixture(), lirParityManualSelectDefaultFixture(), lirParityManualParallelFixture(), lirParityManualRaceFixture(), lirParityManualCollectAllFixture(), lirParityManualGcRootBindReleaseFixture(), lirParityManualGcRootMultipleSlotsFixture(), lirParityManualGcRootScalarOnlyFixture(), lirParityManualLoopMDVectorizeFixture(), lirParityManualLoopMDUnrollCountFixture(), lirParityManualLoopMDPlainNoMDFixture(), lirParityManualParallelAccessGroupFixture(), lirParityManualParallelLoopWithAccessGroupFixture(), lirParityManualLoopMDVectorizeWidthFixture(), lirParityManualLoopMDVectorizeFullFixture(), lirParityManualLoopMDUnrollEnableBareFixture(), lirParityManualLoopMDCombinedVectorizeUnrollFixture(), lirParityManualLoopMDParallelOnlyFixture()]
+    [lirParityManualConstReturnFixture(), lirParityManualDirectCallFixture(), lirParityManualBranchFixture(), lirParityManualSwitchFixture(), lirParityManualPrintlnStringFixture(), lirParityManualCastIntResizeFixture(), lirParityManualCastFloatResizeFixture(), lirParityManualCastIntToFloatFixture(), lirParityManualDirectCallArgCoercionFixture(), lirParityManualPrimitiveIntToByteFixture(), lirParityManualPrimitiveByteToCharFixture(), lirParityManualTupleLiteralReadFixture(), lirParityManualStructLiteralReadFixture(), lirParityManualNestedProjectedAssignFixture(), lirParityManualProjectedCallResultFixture(), lirParityManualProjectedIntrinsicResultFixture(), lirParityManualStringByteLenFixture(), lirParityManualStringIsEmptyFixture(), lirParityManualStringConcatBinaryFixture(), lirParityManualStringConcatNFixture(), lirParityManualStringContainsFixture(), lirParityManualStringTrimSpaceFixture(), lirParityManualStringRepeatFixture(), lirParityManualStringSubstringFixture(), lirParityManualStringReplaceAllFixture(), lirParityManualBytesLenFixture(), lirParityManualBytesConcatFixture(), lirParityManualBytesSliceFixture(), lirParityManualListPushIntFixture(), lirParityManualListPushStringFixture(), lirParityManualListLenFixture(), lirParityManualListIsEmptyFixture(), lirParityManualListGetFloatFixture(), lirParityManualListSortedI64Fixture(), lirParityManualListReversedFixture(), lirParityManualListClearFixture(), lirParityManualMapNewFixture(), lirParityManualMapInsertStringIntFixture(), lirParityManualMapContainsI64Fixture(), lirParityManualMapKeysFixture(), lirParityManualMapLenFixture(), lirParityManualSetInsertStringFixture(), lirParityManualSetContainsI64Fixture(), lirParityManualSetToListFixture(), lirParityManualChanCloseFixture(), lirParityManualYieldFixture(), lirParityManualIsCancelledFixture(), lirParityManualEntrySafepointFixture(), lirParityManualFnAttrInlineAlwaysFixture(), lirParityManualFnAttrHotPureFixture(), lirParityManualFnAttrTargetFeaturesFixture(), lirParityManualFnAttrNoaliasFixture(), lirParityManualStringIndexOfRawFixture(), lirParityManualStringIndexOfOptionFixture(), lirParityManualBytesIndexOfOptionFixture(), lirParityManualChanMakeFixture(), lirParityManualChanIsClosedFixture(), lirParityManualChanSendIntFixture(), lirParityManualChanRecvIntFixture(), lirParityManualStringToIntFixture(), lirParityManualStringToFloatFixture(), lirParityManualMapGetStringIntFixture(), lirParityManualMapGetI64StringFixture(), lirParityManualListFirstIntFixture(), lirParityManualListLastFloatFixture(), lirParityManualListPopIntFixture(), lirParityManualBytesGetFixture(), lirParityManualListToStringIntFixture(), lirParityManualMapToStringFixture(), lirParityManualSetToStringFixture(), lirParityManualCheckCancelledFixture(), lirParityManualListPushBytesV1Fixture(), lirParityManualHandleJoinIntFixture(), lirParityManualGroupCancelFixture(), lirParityManualGroupIsCancelledFixture(), lirParityManualSleepFixture(), lirParityManualMapKeysSortedI64Fixture(), lirParityManualBytesFromStringFixture(), lirParityManualBytesFromListFixture(), lirParityManualBytesToStringFixture(), lirParityManualBytesFromHexFixture(), lirParityManualListGetBytesV1Fixture(), lirParityManualListInsertBytesV1Fixture(), lirParityManualChanSendBytesV1Fixture(), lirParityManualSetRemoveI1Fixture(), lirParityManualTaskGroupUnitFixture(), lirParityManualSpawnDetachedFixture(), lirParityManualSpawnGroupedFixture(), lirParityManualSelectFixture(), lirParityManualSelectRecvFixture(), lirParityManualSelectSendIntFixture(), lirParityManualSelectTimeoutFixture(), lirParityManualSelectDefaultFixture(), lirParityManualParallelFixture(), lirParityManualRaceFixture(), lirParityManualCollectAllFixture(), lirParityManualGcRootBindReleaseFixture(), lirParityManualGcRootMultipleSlotsFixture(), lirParityManualGcRootScalarOnlyFixture(), lirParityManualLoopMDVectorizeFixture(), lirParityManualLoopMDUnrollCountFixture(), lirParityManualLoopMDPlainNoMDFixture(), lirParityManualParallelAccessGroupFixture(), lirParityManualParallelLoopWithAccessGroupFixture(), lirParityManualLoopMDVectorizeWidthFixture(), lirParityManualLoopMDVectorizeFullFixture(), lirParityManualLoopMDUnrollEnableBareFixture(), lirParityManualLoopMDCombinedVectorizeUnrollFixture(), lirParityManualLoopMDParallelOnlyFixture(), lirParityManualOptionIsSomeFixture(), lirParityManualOptionIsNoneFixture(), lirParityManualResultIsOkFixture(), lirParityManualResultIsErrFixture(), lirParityManualRawNullFixture()]
 }
 pub fn lirParitySourceFixtures() -> List<LirParityFixture> {
     [lirParitySourceScalarArithmeticFixture(), lirParitySourceScalarBranchFixture(), lirParitySourcePrimitiveByteToCharFixture(), lirParitySourceDirectCallFixture(), lirParitySourceTupleLiteralReadFixture(), lirParitySourceStructLiteralReadFixture(), lirParitySourceNestedProjectedAssignFixture(), lirParitySourceProjectedCallResultFixture(), lirParitySourceProjectedIntrinsicResultFixture(), lirParitySourcePrintlnIntFixture()]
@@ -602,6 +602,21 @@ pub fn lirParityBuildManualModule(name: String) -> MirModule {
     }
     if name == "loop_md_parallel_only" {
         return lirParityBuildLoopMDParallelOnlyModule()
+    }
+    if name == "option_is_some" {
+        return lirParityBuildOptionIsSomeModule()
+    }
+    if name == "option_is_none" {
+        return lirParityBuildOptionIsNoneModule()
+    }
+    if name == "result_is_ok" {
+        return lirParityBuildResultIsOkModule()
+    }
+    if name == "result_is_err" {
+        return lirParityBuildResultIsErrModule()
+    }
+    if name == "raw_null" {
+        return lirParityBuildRawNullModule()
     }
     mirModule("main")
 }
@@ -1981,5 +1996,74 @@ pub fn lirParityBuildLoopMDParallelOnlyModule() -> MirModule {
     let body = mirFunctionNewBlock(fn_, mirNoSpan())
     mirFunctionTerminate(fn_, entry, mirGotoTerm(body, mirNoSpan()))
     mirFunctionTerminate(fn_, body, mirGotoBackEdgeTerm(body, mirNoSpan()))
+    lirParityModule([fn_])
+}
+// ====================================================================
+// Option / Result inspection intrinsics + RawNull
+// ====================================================================
+//
+// Five fixtures pin the disc-tag inspection intrinsics
+// (OptionIsSome / IsNone / ResultIsOk / IsErr) plus the
+// LANG_SPEC §19 raw.null() constant intrinsic.
+//
+// The four disc checks all share the same shape: extract the i64
+// at index 0 of the `%Option.<T>` / `%Result.<T>_<E>` aggregate and
+// icmp `ne 0` (IsSome / IsOk) or `eq 0` (IsNone / IsErr). raw.null
+// degenerates to a `store ptr null` with no extract or compare.
+pub fn lirParityManualOptionIsSomeFixture() -> LirParityFixture {
+    lirParityFixture("option_is_some", LirParityManualMIR, "/tmp/lir_proto_parity_option_is_some.osty", "", "phase4-option", ["option", "is-some"], [lirParityNeedle("%Option.Int = type", "Option<Int> aggregate def"), lirParityNeedle("extractvalue %Option.Int", "extract disc field"), lirParityNeedle("icmp ne i64", "ne-against-zero compare for present-tag"), lirParityNeedle("ret i1", "Bool return")])
+}
+pub fn lirParityManualOptionIsNoneFixture() -> LirParityFixture {
+    lirParityFixture("option_is_none", LirParityManualMIR, "/tmp/lir_proto_parity_option_is_none.osty", "", "phase4-option", ["option", "is-none"], [lirParityNeedle("%Option.Int = type", "Option<Int> aggregate def"), lirParityNeedle("extractvalue %Option.Int", "extract disc field"), lirParityNeedle("icmp eq i64", "eq-against-zero compare for absent-tag"), lirParityNeedle("ret i1", "Bool return")])
+}
+pub fn lirParityManualResultIsOkFixture() -> LirParityFixture {
+    lirParityFixture("result_is_ok", LirParityManualMIR, "/tmp/lir_proto_parity_result_is_ok.osty", "", "phase4-result", ["result", "is-ok"], [lirParityNeedle("%Result.Int_Error = type", "Result<Int,Error> aggregate def"), lirParityNeedle("extractvalue %Result.Int_Error", "extract disc field"), lirParityNeedle("icmp ne i64", "ne-against-zero compare for present-tag"), lirParityNeedle("ret i1", "Bool return")])
+}
+pub fn lirParityManualResultIsErrFixture() -> LirParityFixture {
+    lirParityFixture("result_is_err", LirParityManualMIR, "/tmp/lir_proto_parity_result_is_err.osty", "", "phase4-result", ["result", "is-err"], [lirParityNeedle("%Result.Int_Error = type", "Result<Int,Error> aggregate def"), lirParityNeedle("extractvalue %Result.Int_Error", "extract disc field"), lirParityNeedle("icmp eq i64", "eq-against-zero compare for absent-tag"), lirParityNeedle("ret i1", "Bool return")])
+}
+pub fn lirParityManualRawNullFixture() -> LirParityFixture {
+    lirParityFixture("raw_null", LirParityManualMIR, "/tmp/lir_proto_parity_raw_null.osty", "", "phase4-raw", ["raw", "null"], [lirParityNeedle("define ptr @rawNull()", "raw.null returning ptr"), lirParityNeedle("store ptr null", "null pointer constant stored to slot"), lirParityNeedle("ret ptr", "raw pointer return")])
+}
+// Module builders — each takes an Option<Int> / Result<Int,Error>
+// param and returns Bool, except raw.null which takes nothing and
+// returns a RawPtr.
+pub fn lirParityBuildOptionIsSomeModule() -> MirModule {
+    let mut fn_ = lirParityFunction("optIsSome", "Bool")
+    let opt = lirParityParam(fn_, "o", "Option<Int>")
+    let entry = lirParityEntry(fn_)
+    mirFunctionAppend(fn_, entry, mirIntrinsicInstr(true, mirPlace(fn_.returnLocal), MirIntrinsicOptionIsSome, [mirOperandCopy(mirPlace(opt), "Option<Int>")], mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    lirParityModule([fn_])
+}
+pub fn lirParityBuildOptionIsNoneModule() -> MirModule {
+    let mut fn_ = lirParityFunction("optIsNone", "Bool")
+    let opt = lirParityParam(fn_, "o", "Option<Int>")
+    let entry = lirParityEntry(fn_)
+    mirFunctionAppend(fn_, entry, mirIntrinsicInstr(true, mirPlace(fn_.returnLocal), MirIntrinsicOptionIsNone, [mirOperandCopy(mirPlace(opt), "Option<Int>")], mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    lirParityModule([fn_])
+}
+pub fn lirParityBuildResultIsOkModule() -> MirModule {
+    let mut fn_ = lirParityFunction("resIsOk", "Bool")
+    let r = lirParityParam(fn_, "r", "Result<Int, Error>")
+    let entry = lirParityEntry(fn_)
+    mirFunctionAppend(fn_, entry, mirIntrinsicInstr(true, mirPlace(fn_.returnLocal), MirIntrinsicResultIsOk, [mirOperandCopy(mirPlace(r), "Result<Int, Error>")], mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    lirParityModule([fn_])
+}
+pub fn lirParityBuildResultIsErrModule() -> MirModule {
+    let mut fn_ = lirParityFunction("resIsErr", "Bool")
+    let r = lirParityParam(fn_, "r", "Result<Int, Error>")
+    let entry = lirParityEntry(fn_)
+    mirFunctionAppend(fn_, entry, mirIntrinsicInstr(true, mirPlace(fn_.returnLocal), MirIntrinsicResultIsErr, [mirOperandCopy(mirPlace(r), "Result<Int, Error>")], mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    lirParityModule([fn_])
+}
+pub fn lirParityBuildRawNullModule() -> MirModule {
+    let mut fn_ = lirParityFunction("rawNull", "RawPtr")
+    let entry = lirParityEntry(fn_)
+    mirFunctionAppend(fn_, entry, mirIntrinsicInstr(true, mirPlace(fn_.returnLocal), MirIntrinsicRawNull, [], mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
     lirParityModule([fn_])
 }

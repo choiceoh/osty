@@ -2262,6 +2262,11 @@ fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
         MirIntrinsicBytesLastIndexOf -> lirLowerMirIndexOf(l, instr, mirRtBytesSymbol("last_index_of"), [lirPtrType(), lirPtrType()], "bytes.lastIndexOf"),
         MirIntrinsicStringToInt -> lirLowerMirStringParse(l, instr, mirRtStringIsValidIntSymbol(), mirRtStringToIntSymbol(), lirIntType(64), "string.toInt"),
         MirIntrinsicStringToFloat -> lirLowerMirStringParse(l, instr, mirRtStringIsValidFloatSymbol(), mirRtStringToFloatSymbol(), lirFloatType("double"), "string.toFloat"),
+        MirIntrinsicOptionIsSome -> lirLowerMirAlgebraicTagCheck(l, instr, "ne", "option.isSome"),
+        MirIntrinsicOptionIsNone -> lirLowerMirAlgebraicTagCheck(l, instr, "eq", "option.isNone"),
+        MirIntrinsicResultIsOk -> lirLowerMirAlgebraicTagCheck(l, instr, "ne", "result.isOk"),
+        MirIntrinsicResultIsErr -> lirLowerMirAlgebraicTagCheck(l, instr, "eq", "result.isErr"),
+        MirIntrinsicRawNull -> lirLowerMirRawNull(l, instr),
         _ -> lirLowerError(l, LirDiagUnsupported, "unsupported MIR intrinsic `" + mirIntrinsicName(instr.intrinsic) + "`", "intrinsic"),
     }
 }
@@ -4034,6 +4039,51 @@ fn lirLowerMirStringParse(l: LirMirFunctionLowerer, instr: MirInstr, validateSym
     let merged = lirFresh(l)
     l.instrs.push(lirLoad(merged, resultType, slot, 0))
     lirStoreMirResult(l, instr.dest, lirOperand(resultType, merged), loc.typ, label + " result")
+}
+// `lirLowerMirAlgebraicTagCheck` lowers Option / Result discriminator
+// inspection (`is_some` / `is_none` / `is_ok` / `is_err`). The four
+// intrinsics share the same shape: extract the i64 disc field at index
+// 0 of the `%Option.<T>` / `%Result.<T>_<E>` aggregate and icmp it
+// against `0`. `cmp` is `"ne"` for the present-tag intrinsics
+// (IsSome / IsOk; disc==1 → true) and `"eq"` for the absent-tag
+// intrinsics (IsNone / IsErr; disc==0 → true). Mirrors production
+// `emitOptionIntrinsic` / `emitResultIntrinsic`
+// (mir_generator.go:5283-5294 / similar Result block).
+fn lirLowerMirAlgebraicTagCheck(l: LirMirFunctionLowerer, instr: MirInstr, cmp: String, label: String) {
+    if instr.args.len() != 1 {
+        lirLowerError(l, LirDiagInvalidInput, label + " expects (option|result)", label)
+        return
+    }
+    let aggType = lirLowerMirType(l, instr.args[0].typ)
+    if lirTypeIsZero(aggType) {
+        lirLowerError(l, LirDiagUnsupported, label + " operand type `" + instr.args[0].typ + "` is not implemented", label)
+        return
+    }
+    let aggValue = lirLowerMirOperand(l, instr.args[0], instr.args[0].typ, aggType)
+    if aggValue.value == "" {
+        return
+    }
+    let discReg = lirFresh(l)
+    l.instrs.push(lirExtractValue(discReg, aggType, aggValue.value, [0]))
+    let cmpDest = lirFresh(l)
+    l.instrs.push(lirBinary(cmpDest, "icmp " + cmp, lirIntType(64), discReg, "0"))
+    if instr.hasDest {
+        lirStoreMirResult(l, instr.dest, lirOperand(lirIntType(1), cmpDest), "Bool", label + " result")
+    }
+}
+// `lirLowerMirRawNull` lowers LANG_SPEC §19's `raw.null()` to the LLVM
+// `ptr null` constant. No runtime call, no extra instructions —
+// just store `null` of `ptr` type into the dest local. Mirrors
+// production `emitRuntimeRawNull` (mir_generator.go:10956-10961).
+fn lirLowerMirRawNull(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 0 {
+        lirLowerError(l, LirDiagInvalidInput, "raw.null() takes no arguments", "raw.null")
+        return
+    }
+    if !(instr.hasDest) {
+        return
+    }
+    lirStoreMirResult(l, instr.dest, lirOperand(lirPtrType(), "null"), "RawPtr", "raw.null result")
 }
 // Widen a parsed scalar (i64 / double / i32 / i8 / i1) into the i64
 // the Ok payload slot uses. Production widens the same way

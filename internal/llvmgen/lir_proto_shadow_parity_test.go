@@ -401,6 +401,12 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualLoopMDUnrollEnableBareFixture", []string{"!{!\"llvm.loop.unroll.enable\", i1 true}", ", !llvm.loop !"}},
 		{"lirParityManualLoopMDCombinedVectorizeUnrollFixture", []string{"!{!\"llvm.loop.vectorize.enable\", i1 true}", "!{!\"llvm.loop.unroll.count\", i32 2}", ", !llvm.loop !"}},
 		{"lirParityManualLoopMDParallelOnlyFixture", []string{"= distinct !{}", "!{!\"llvm.loop.parallel_accesses\", !", ", !llvm.loop !"}},
+		// ----- Option / Result inspection intrinsics + RawNull -----
+		{"lirParityManualOptionIsSomeFixture", []string{"%Option.Int = type", "extractvalue %Option.Int", "icmp ne i64", "ret i1"}},
+		{"lirParityManualOptionIsNoneFixture", []string{"%Option.Int = type", "extractvalue %Option.Int", "icmp eq i64", "ret i1"}},
+		{"lirParityManualResultIsOkFixture", []string{"%Result.Int_Error = type", "extractvalue %Result.Int_Error", "icmp ne i64", "ret i1"}},
+		{"lirParityManualResultIsErrFixture", []string{"%Result.Int_Error = type", "extractvalue %Result.Int_Error", "icmp eq i64", "ret i1"}},
+		{"lirParityManualRawNullFixture", []string{"define ptr @rawNull()", "store ptr null", "ret ptr"}},
 	}
 
 	for _, tt := range want {
