@@ -1,0 +1,927 @@
+// std.supabase - Supabase HTTP request builders.
+//
+// This module deliberately stays on top of std.http. It knows the stable
+// Supabase gateway paths, PostgREST query conventions, API-key/session
+// headers, Auth password-token requests, Storage object URLs, Edge Function
+// invocation, and GraphQL endpoint shape. The actual transport remains
+// std.http.request.
+
+use std.bytes
+use std.encoding
+use std.error
+use std.http
+use std.json
+use std.strings
+
+pub type QueryValues = http.QueryValues
+pub type Headers = http.Headers
+
+pub enum CountMode {
+    CountNone,
+    CountExact,
+    CountPlanned,
+    CountEstimated,
+
+    pub fn toPrefer(self) -> String {
+        match self {
+            CountNone      -> "",
+            CountExact     -> "count=exact",
+            CountPlanned   -> "count=planned",
+            CountEstimated -> "count=estimated",
+        }
+    }
+}
+
+pub enum ReturningMode {
+    ReturnDefault,
+    ReturnMinimal,
+    ReturnRepresentation,
+
+    pub fn toPrefer(self) -> String {
+        match self {
+            ReturnDefault        -> "",
+            ReturnMinimal        -> "return=minimal",
+            ReturnRepresentation -> "return=representation",
+        }
+    }
+}
+
+pub enum ResolutionMode {
+    ResolveDefault,
+    MergeDuplicates,
+    IgnoreDuplicates,
+
+    pub fn toPrefer(self) -> String {
+        match self {
+            ResolveDefault   -> "",
+            MergeDuplicates  -> "resolution=merge-duplicates",
+            IgnoreDuplicates -> "resolution=ignore-duplicates",
+        }
+    }
+}
+
+pub enum OrderDirection {
+    Asc,
+    Desc,
+
+    pub fn toString(self) -> String {
+        match self {
+            Asc  -> "asc",
+            Desc -> "desc",
+        }
+    }
+}
+
+pub enum NullOrdering {
+    NullsDefault,
+    NullsFirst,
+    NullsLast,
+
+    pub fn toOrderSuffix(self) -> String {
+        match self {
+            NullsDefault -> "",
+            NullsFirst   -> ".nullsfirst",
+            NullsLast    -> ".nullslast",
+        }
+    }
+}
+
+pub struct Prefer {
+    pub count: CountMode,
+    pub returning: ReturningMode,
+    pub resolution: ResolutionMode,
+    pub missingDefault: Bool = false,
+
+    pub fn withCount(mut self, count: CountMode) -> Prefer {
+        self.count = count
+        self
+    }
+
+    pub fn withReturning(mut self, returning: ReturningMode) -> Prefer {
+        self.returning = returning
+        self
+    }
+
+    pub fn withResolution(mut self, resolution: ResolutionMode) -> Prefer {
+        self.resolution = resolution
+        self
+    }
+
+    pub fn withMissingDefault(mut self, enabled: Bool) -> Prefer {
+        self.missingDefault = enabled
+        self
+    }
+
+    pub fn headerValue(self) -> String {
+        preferHeaderValue(self)
+    }
+}
+
+pub struct Client {
+    pub baseUrl: String,
+    pub apiKey: String,
+    pub bearerToken: String = "",
+    pub schema: String = "public",
+    pub clientInfo: String = "osty-stdlib-supabase",
+    pub extraHeaders: Headers = {:},
+
+    pub fn withAccessToken(mut self, token: String) -> Client {
+        self.bearerToken = token
+        self
+    }
+
+    pub fn withServiceRoleKey(mut self, key: String) -> Client {
+        self.apiKey = key
+        self.bearerToken = key
+        self
+    }
+
+    pub fn withSchema(mut self, schema: String) -> Result<Client, Error> {
+        let clean = cleanName("schema", schema)?
+        self.schema = clean
+        Ok(self)
+    }
+
+    pub fn withClientInfo(mut self, value: String) -> Client {
+        self.clientInfo = strings.trimSpace(value)
+        self
+    }
+
+    pub fn withHeader(mut self, name: String, value: String) -> Client {
+        self.extraHeaders.insert(name, value)
+        self
+    }
+
+    pub fn resolvedBearer(self) -> String {
+        let token = strings.trimSpace(self.bearerToken)
+        if !token.isEmpty() {
+            return token
+        }
+        strings.trimSpace(self.apiKey)
+    }
+}
+
+pub struct TableQuery {
+    pub table: String,
+    pub params: QueryValues = {:},
+    pub prefer: Prefer,
+    pub accept: String = "application/json",
+
+    pub fn select(mut self, columns: String) -> TableQuery {
+        self.params = setParam(self.params, "select", if strings.trimSpace(columns).isEmpty() { "*" } else { strings.trimSpace(columns) })
+        self
+    }
+
+    pub fn withParam(mut self, name: String, value: String) -> Result<TableQuery, Error> {
+        self.params = appendParam(self.params, cleanQueryName(name)?, value)
+        Ok(self)
+    }
+
+    pub fn filter(mut self, column: String, op: String, value: String) -> Result<TableQuery, Error> {
+        let cleanColumn = cleanColumnName(column)?
+        let cleanOp = cleanOperator(op)?
+        self.params = appendParam(self.params, cleanColumn, "{cleanOp}.{value}")
+        Ok(self)
+    }
+
+    pub fn eq(self, column: String, value: String) -> Result<TableQuery, Error> {
+        self.filter(column, "eq", value)
+    }
+
+    pub fn neq(self, column: String, value: String) -> Result<TableQuery, Error> {
+        self.filter(column, "neq", value)
+    }
+
+    pub fn gt(self, column: String, value: String) -> Result<TableQuery, Error> {
+        self.filter(column, "gt", value)
+    }
+
+    pub fn gte(self, column: String, value: String) -> Result<TableQuery, Error> {
+        self.filter(column, "gte", value)
+    }
+
+    pub fn lt(self, column: String, value: String) -> Result<TableQuery, Error> {
+        self.filter(column, "lt", value)
+    }
+
+    pub fn lte(self, column: String, value: String) -> Result<TableQuery, Error> {
+        self.filter(column, "lte", value)
+    }
+
+    pub fn like(self, column: String, pattern: String) -> Result<TableQuery, Error> {
+        self.filter(column, "like", pattern)
+    }
+
+    pub fn ilike(self, column: String, pattern: String) -> Result<TableQuery, Error> {
+        self.filter(column, "ilike", pattern)
+    }
+
+    pub fn isNull(self, column: String) -> Result<TableQuery, Error> {
+        self.filter(column, "is", "null")
+    }
+
+    pub fn inList(self, column: String, values: List<String>) -> Result<TableQuery, Error> {
+        self.filter(column, "in", "({strings.join(values, \",\")})")
+    }
+
+    pub fn contains(self, column: String, value: String) -> Result<TableQuery, Error> {
+        self.filter(column, "cs", value)
+    }
+
+    pub fn containedBy(self, column: String, value: String) -> Result<TableQuery, Error> {
+        self.filter(column, "cd", value)
+    }
+
+    pub fn overlaps(self, column: String, value: String) -> Result<TableQuery, Error> {
+        self.filter(column, "ov", value)
+    }
+
+    pub fn textSearch(self, column: String, query: String) -> Result<TableQuery, Error> {
+        self.filter(column, "fts", query)
+    }
+
+    pub fn order(mut self, column: String, direction: OrderDirection, nulls: NullOrdering) -> Result<TableQuery, Error> {
+        let cleanColumn = cleanColumnName(column)?
+        let item = "{cleanColumn}.{direction.toString()}{nulls.toOrderSuffix()}"
+        self.params = appendOrder(self.params, item)
+        Ok(self)
+    }
+
+    pub fn orderAsc(self, column: String) -> Result<TableQuery, Error> {
+        self.order(column, Asc, NullsDefault)
+    }
+
+    pub fn orderDesc(self, column: String) -> Result<TableQuery, Error> {
+        self.order(column, Desc, NullsDefault)
+    }
+
+    pub fn limit(mut self, n: Int) -> Result<TableQuery, Error> {
+        if n < 0 {
+            return Err(error.new("supabase: limit must not be negative"))
+        }
+        self.params = setParam(self.params, "limit", n.toString())
+        Ok(self)
+    }
+
+    pub fn offset(mut self, n: Int) -> Result<TableQuery, Error> {
+        if n < 0 {
+            return Err(error.new("supabase: offset must not be negative"))
+        }
+        self.params = setParam(self.params, "offset", n.toString())
+        Ok(self)
+    }
+
+    pub fn range(mut self, from: Int, to: Int) -> Result<TableQuery, Error> {
+        if from < 0 || to < from {
+            return Err(error.new("supabase: invalid range {from}..{to}"))
+        }
+        self.params = setParam(self.params, "offset", from.toString())
+        self.params = setParam(self.params, "limit", (to - from + 1).toString())
+        Ok(self)
+    }
+
+    pub fn withCount(mut self, count: CountMode) -> TableQuery {
+        self.prefer = self.prefer.withCount(count)
+        self
+    }
+
+    pub fn withPrefer(mut self, prefer: Prefer) -> TableQuery {
+        self.prefer = prefer
+        self
+    }
+
+    pub fn returning(mut self, returning: ReturningMode) -> TableQuery {
+        self.prefer = self.prefer.withReturning(returning)
+        self
+    }
+
+    pub fn resolveDuplicates(mut self, resolution: ResolutionMode) -> TableQuery {
+        self.prefer = self.prefer.withResolution(resolution)
+        self
+    }
+
+    pub fn single(mut self) -> TableQuery {
+        self.accept = "application/vnd.pgrst.object+json"
+        self
+    }
+
+    pub fn csv(mut self) -> TableQuery {
+        self.accept = "text/csv"
+        self
+    }
+}
+
+pub struct ApiError {
+    pub status: Int,
+    pub code: String = "",
+    pub message: String = "",
+    pub details: String = "",
+    pub hint: String = "",
+    pub rawJson: String = "",
+
+    pub fn summary(self) -> String {
+        let msg = if strings.trimSpace(self.message).isEmpty() { "request failed" } else { strings.trimSpace(self.message) }
+        let code = if strings.trimSpace(self.code).isEmpty() { "" } else { " ({strings.trimSpace(self.code)})" }
+        let hint = if strings.trimSpace(self.hint).isEmpty() { "" } else { ": {strings.trimSpace(self.hint)}" }
+        "supabase: HTTP {self.status}: {msg}{code}{hint}"
+    }
+}
+
+pub fn prefer() -> Prefer {
+    Prefer {
+        count: CountNone,
+        returning: ReturnDefault,
+        resolution: ResolveDefault,
+    }
+}
+
+pub fn preferRepresentation() -> Prefer {
+    Prefer {
+        count: CountNone,
+        returning: ReturnRepresentation,
+        resolution: ResolveDefault,
+    }
+}
+
+pub fn preferMinimal() -> Prefer {
+    Prefer {
+        count: CountNone,
+        returning: ReturnMinimal,
+        resolution: ResolveDefault,
+    }
+}
+
+pub fn client(baseUrl: String, apiKey: String) -> Result<Client, Error> {
+    let cleanBase = stripTrailingSlash(strings.trimSpace(baseUrl))
+    if cleanBase.isEmpty() {
+        return Err(error.new("supabase: base URL is empty"))
+    }
+    if strings.trimSpace(apiKey).isEmpty() {
+        return Err(error.new("supabase: API key is empty"))
+    }
+    Ok(Client {
+        baseUrl: cleanBase,
+        apiKey: strings.trimSpace(apiKey),
+    })
+}
+
+pub fn project(projectRef: String, apiKey: String) -> Result<Client, Error> {
+    let clean = cleanProjectRef(projectRef)?
+    client("https://{clean}.supabase.co", apiKey)
+}
+
+pub fn local(apiKey: String) -> Result<Client, Error> {
+    client("http://127.0.0.1:54321", apiKey)
+}
+
+pub fn from(table: String) -> Result<TableQuery, Error> {
+    Ok(TableQuery {
+        table: cleanName("table", table)?,
+        params: {"select": ["*"]},
+        prefer: prefer(),
+    })
+}
+
+pub fn headers(client: Client) -> Headers {
+    dataHeaders(client, "")
+}
+
+pub fn authHeaders(client: Client) -> Headers {
+    baseHeaders(client, false, "application/json")
+}
+
+pub fn storageHeaders(client: Client, contentType: String = "") -> Headers {
+    baseHeaders(client, false, contentType)
+}
+
+pub fn restUrl(client: Client) -> String {
+    joinUrl(client.baseUrl, "/rest/v1")
+}
+
+pub fn tableUrl(client: Client, table: String) -> Result<String, Error> {
+    Ok(joinUrl(restUrl(client), "/{encodePathSegment(cleanName(\"table\", table)?)}"))
+}
+
+pub fn rpcUrl(client: Client, functionName: String) -> Result<String, Error> {
+    Ok(joinUrl(restUrl(client), "/rpc/{encodePathSegment(cleanName(\"function\", functionName)?)}"))
+}
+
+pub fn authUrl(client: Client, path: String) -> Result<String, Error> {
+    Ok(joinUrl(client.baseUrl, "/auth/v1/{cleanRelativePath(path)?}"))
+}
+
+pub fn storageUrl(client: Client, path: String) -> Result<String, Error> {
+    Ok(joinUrl(client.baseUrl, "/storage/v1/{cleanRelativePath(path)?}"))
+}
+
+pub fn functionsUrl(client: Client, functionName: String) -> Result<String, Error> {
+    Ok(joinUrl(client.baseUrl, "/functions/v1/{encodePathSegment(cleanName(\"function\", functionName)?)}"))
+}
+
+pub fn graphqlUrl(client: Client) -> String {
+    joinUrl(client.baseUrl, "/graphql/v1")
+}
+
+pub fn selectHttpRequest(client: Client, query: TableQuery) -> Result<http.Request, Error> {
+    validateClient(client)?
+    validateQuery(query)?
+    Ok(http.newRequest(http.Get, tableUrl(client, query.table)?)
+        .withHeaders(queryHeaders(client, query, false))
+        .withQuery(query.params))
+}
+
+pub fn insertHttpRequest<T>(client: Client, table: String, value: T) -> Result<http.Request, Error> {
+    insertWithPreferHttpRequest(client, table, value, preferRepresentation())
+}
+
+pub fn insertWithPreferHttpRequest<T>(client: Client, table: String, value: T, prefer: Prefer) -> Result<http.Request, Error> {
+    validateClient(client)?
+    let query = TableQuery {
+        table: cleanName("table", table)?,
+        prefer: prefer,
+    }
+    Ok(http.newRequest(http.Post, tableUrl(client, query.table)?)
+        .withHeaders(queryHeaders(client, query, true))
+        .withJson(value))
+}
+
+pub fn upsertHttpRequest<T>(client: Client, table: String, value: T) -> Result<http.Request, Error> {
+    upsertWithPreferHttpRequest(client, table, value, preferRepresentation().withResolution(MergeDuplicates))
+}
+
+pub fn upsertWithPreferHttpRequest<T>(client: Client, table: String, value: T, prefer: Prefer) -> Result<http.Request, Error> {
+    insertWithPreferHttpRequest(client, table, value, prefer)
+}
+
+pub fn updateHttpRequest<T>(client: Client, query: TableQuery, value: T) -> Result<http.Request, Error> {
+    validateClient(client)?
+    validateQuery(query)?
+    Ok(http.newRequest(http.Patch, tableUrl(client, query.table)?)
+        .withHeaders(queryHeaders(client, query, true))
+        .withQuery(query.params)
+        .withJson(value))
+}
+
+pub fn deleteHttpRequest(client: Client, query: TableQuery) -> Result<http.Request, Error> {
+    validateClient(client)?
+    validateQuery(query)?
+    Ok(http.newRequest(http.Delete, tableUrl(client, query.table)?)
+        .withHeaders(queryHeaders(client, query, true))
+        .withQuery(query.params))
+}
+
+pub fn rpcHttpRequest<T>(client: Client, functionName: String, args: T) -> Result<http.Request, Error> {
+    rpcWithPreferHttpRequest(client, functionName, args, preferRepresentation())
+}
+
+pub fn rpcWithPreferHttpRequest<T>(client: Client, functionName: String, args: T, prefer: Prefer) -> Result<http.Request, Error> {
+    validateClient(client)?
+    let query = TableQuery {
+        table: cleanName("function", functionName)?,
+        prefer: prefer,
+    }
+    Ok(http.newRequest(http.Post, rpcUrl(client, query.table)?)
+        .withHeaders(queryHeaders(client, query, true))
+        .withJson(args))
+}
+
+pub fn rpcValueHttpRequest(client: Client, functionName: String, args: json.Json) -> Result<http.Request, Error> {
+    rpcHttpRequest(client, functionName, args)
+}
+
+pub fn rpcValueWithPreferHttpRequest(client: Client, functionName: String, args: json.Json, prefer: Prefer) -> Result<http.Request, Error> {
+    rpcWithPreferHttpRequest(client, functionName, args, prefer)
+}
+
+pub fn signUpHttpRequest(client: Client, email: String, password: String) -> Result<http.Request, Error> {
+    authJsonRequest(client, "signup", authPasswordBody(email, password))
+}
+
+pub fn passwordTokenHttpRequest(client: Client, email: String, password: String) -> Result<http.Request, Error> {
+    validateClient(client)?
+    Ok(http.newRequest(http.Post, "{authUrl(client, \"token\")?}?grant_type=password")
+        .withHeaders(authHeaders(client))
+        .withText(authPasswordBody(email, password))
+        .withContentType("application/json"))
+}
+
+pub fn refreshTokenHttpRequest(client: Client, refreshToken: String) -> Result<http.Request, Error> {
+    validateClient(client)?
+    Ok(http.newRequest(http.Post, "{authUrl(client, \"token\")?}?grant_type=refresh_token")
+        .withHeaders(authHeaders(client))
+        .withText(object([prop("refresh_token", quote(strings.trimSpace(refreshToken)))]))
+        .withContentType("application/json"))
+}
+
+pub fn logoutHttpRequest(client: Client) -> Result<http.Request, Error> {
+    validateClient(client)?
+    Ok(http.newRequest(http.Post, authUrl(client, "logout")?)
+        .withHeaders(authHeaders(client)))
+}
+
+pub fn publicObjectUrl(client: Client, bucket: String, path: String) -> Result<String, Error> {
+    Ok(storageUrl(client, "object/public/{encodePathSegment(cleanName(\"bucket\", bucket)?)}" +
+        "/{encodeObjectPath(path)?}")?)
+}
+
+pub fn authenticatedObjectUrl(client: Client, bucket: String, path: String) -> Result<String, Error> {
+    Ok(storageUrl(client, "object/authenticated/{encodePathSegment(cleanName(\"bucket\", bucket)?)}" +
+        "/{encodeObjectPath(path)?}")?)
+}
+
+pub fn objectUrl(client: Client, bucket: String, path: String) -> Result<String, Error> {
+    Ok(storageUrl(client, "object/{encodePathSegment(cleanName(\"bucket\", bucket)?)}" +
+        "/{encodeObjectPath(path)?}")?)
+}
+
+pub fn authenticatedObjectHttpRequest(client: Client, bucket: String, path: String) -> Result<http.Request, Error> {
+    validateClient(client)?
+    Ok(http.newRequest(http.Get, authenticatedObjectUrl(client, bucket, path)?)
+        .withHeaders(storageHeaders(client)))
+}
+
+pub fn downloadObjectHttpRequest(client: Client, bucket: String, path: String) -> Result<http.Request, Error> {
+    validateClient(client)?
+    Ok(http.newRequest(http.Get, objectUrl(client, bucket, path)?)
+        .withHeaders(storageHeaders(client)))
+}
+
+pub fn uploadObjectHttpRequest(client: Client, bucket: String, path: String, body: Bytes, contentType: String, upsert: Bool = false) -> Result<http.Request, Error> {
+    validateClient(client)?
+    let mut h = storageHeaders(client, if strings.trimSpace(contentType).isEmpty() { "application/octet-stream" } else { strings.trimSpace(contentType) })
+    if upsert {
+        h.insert("x-upsert", "true")
+    }
+    Ok(http.newRequest(http.Post, objectUrl(client, bucket, path)?)
+        .withHeaders(h)
+        .withBody(body))
+}
+
+pub fn updateObjectHttpRequest(client: Client, bucket: String, path: String, body: Bytes, contentType: String) -> Result<http.Request, Error> {
+    validateClient(client)?
+    Ok(http.newRequest(http.Put, objectUrl(client, bucket, path)?)
+        .withHeaders(storageHeaders(client, if strings.trimSpace(contentType).isEmpty() { "application/octet-stream" } else { strings.trimSpace(contentType) }))
+        .withBody(body))
+}
+
+pub fn removeObjectHttpRequest(client: Client, bucket: String, paths: List<String>) -> Result<http.Request, Error> {
+    validateClient(client)?
+    if paths.isEmpty() {
+        return Err(error.new("supabase: storage delete paths are empty"))
+    }
+    let mut items: List<String> = []
+    for path in paths {
+        items.push(quote(cleanObjectPath(path)?))
+    }
+    let body = object([prop("prefixes", array(items))])
+    Ok(http.newRequest(http.Delete, storageUrl(client, "object/{encodePathSegment(cleanName(\"bucket\", bucket)?)}")?)
+        .withHeaders(storageHeaders(client, "application/json"))
+        .withText(body)
+        .withContentType("application/json"))
+}
+
+pub fn invokeFunctionHttpRequest<T>(client: Client, functionName: String, payload: T) -> Result<http.Request, Error> {
+    validateClient(client)?
+    Ok(http.newRequest(http.Post, functionsUrl(client, functionName)?)
+        .withHeaders(authHeaders(client))
+        .withJson(payload))
+}
+
+pub fn graphqlHttpRequest(client: Client, bodyJson: String) -> Result<http.Request, Error> {
+    validateClient(client)?
+    Ok(http.newRequest(http.Post, graphqlUrl(client))
+        .withHeaders(authHeaders(client))
+        .withText(normalizedJsonObject(bodyJson))
+        .withContentType("application/json"))
+}
+
+pub fn sendSelect<T>(client: Client, query: TableQuery) -> Result<T, Error> {
+    let res = http.request(selectHttpRequest(client, query)?)?
+    requireSuccess(res)?.json::<T>()
+}
+
+pub fn sendInsert<T, U>(client: Client, table: String, value: T) -> Result<U, Error> {
+    let res = http.request(insertHttpRequest(client, table, value)?)?
+    requireSuccess(res)?.json::<U>()
+}
+
+pub fn sendInsertWithPrefer<T, U>(client: Client, table: String, value: T, prefer: Prefer) -> Result<U, Error> {
+    let res = http.request(insertWithPreferHttpRequest(client, table, value, prefer)?)?
+    requireSuccess(res)?.json::<U>()
+}
+
+pub fn sendUpdate<T, U>(client: Client, query: TableQuery, value: T) -> Result<U, Error> {
+    let res = http.request(updateHttpRequest(client, query, value)?)?
+    requireSuccess(res)?.json::<U>()
+}
+
+pub fn sendDelete<T>(client: Client, query: TableQuery) -> Result<T, Error> {
+    let res = http.request(deleteHttpRequest(client, query)?)?
+    requireSuccess(res)?.json::<T>()
+}
+
+pub fn sendRpc<T, U>(client: Client, functionName: String, args: T) -> Result<U, Error> {
+    let res = http.request(rpcHttpRequest(client, functionName, args)?)?
+    requireSuccess(res)?.json::<U>()
+}
+
+pub fn sendRpcWithPrefer<T, U>(client: Client, functionName: String, args: T, prefer: Prefer) -> Result<U, Error> {
+    let res = http.request(rpcWithPreferHttpRequest(client, functionName, args, prefer)?)?
+    requireSuccess(res)?.json::<U>()
+}
+
+pub fn parseApiError(response: http.Response) -> ApiError {
+    let text = response.text() ?? ""
+    let mut out = ApiError {
+        status: response.status,
+        rawJson: text,
+    }
+    match json.parseValue(text) {
+        Ok(value) -> match json.asObject(value) {
+            Ok(obj) -> {
+                out.code = stringField(obj, "code")
+                out.message = stringField(obj, "message")
+                out.details = stringField(obj, "details")
+                out.hint = stringField(obj, "hint")
+            },
+            Err(_) -> {},
+        },
+        Err(_) -> {
+            out.message = strings.trimSpace(text)
+        },
+    }
+    out
+}
+
+pub fn requireSuccess(response: http.Response) -> Result<http.Response, Error> {
+    if response.isSuccess() {
+        return Ok(response)
+    }
+    Err(error.new(parseApiError(response).summary()))
+}
+
+fn validateClient(client: Client) -> Result<(), Error> {
+    if strings.trimSpace(client.baseUrl).isEmpty() {
+        return Err(error.new("supabase: base URL is empty"))
+    }
+    if strings.trimSpace(client.apiKey).isEmpty() {
+        return Err(error.new("supabase: API key is empty"))
+    }
+    Ok(())
+}
+
+fn validateQuery(query: TableQuery) -> Result<(), Error> {
+    let _ = cleanName("table", query.table)?
+    Ok(())
+}
+
+fn baseHeaders(client: Client, includeProfile: Bool, contentType: String) -> Headers {
+    let mut out: Headers = {:}
+    if !strings.trimSpace(client.apiKey).isEmpty() {
+        out.insert("apikey", strings.trimSpace(client.apiKey))
+    }
+    let bearer = client.resolvedBearer()
+    if !strings.trimSpace(bearer).isEmpty() {
+        out.insert("Authorization", "Bearer {strings.trimSpace(bearer)}")
+    }
+    if !strings.trimSpace(contentType).isEmpty() {
+        out.insert("Content-Type", strings.trimSpace(contentType))
+    }
+    if !strings.trimSpace(client.clientInfo).isEmpty() {
+        out.insert("X-Client-Info", strings.trimSpace(client.clientInfo))
+    }
+    if includeProfile && !strings.trimSpace(client.schema).isEmpty() && strings.trimSpace(client.schema) != "public" {
+        out.insert("Accept-Profile", strings.trimSpace(client.schema))
+        out.insert("Content-Profile", strings.trimSpace(client.schema))
+    }
+    for (name, value) in client.extraHeaders {
+        out.insert(name, value)
+    }
+    out
+}
+
+fn dataHeaders(client: Client, accept: String) -> Headers {
+    let mut out = baseHeaders(client, true, "application/json")
+    out.insert("Accept", if strings.trimSpace(accept).isEmpty() { "application/json" } else { strings.trimSpace(accept) })
+    out
+}
+
+fn queryHeaders(client: Client, query: TableQuery, mutation: Bool) -> Headers {
+    let mut out = dataHeaders(client, query.accept)
+    let prefer = query.prefer.headerValue()
+    if !prefer.isEmpty() {
+        out.insert("Prefer", prefer)
+    } else if mutation {
+        out.insert("Prefer", "return=representation")
+    }
+    out
+}
+
+fn authJsonRequest(client: Client, path: String, body: String) -> Result<http.Request, Error> {
+    validateClient(client)?
+    Ok(http.newRequest(http.Post, authUrl(client, path)?)
+        .withHeaders(authHeaders(client))
+        .withText(body)
+        .withContentType("application/json"))
+}
+
+fn authPasswordBody(email: String, password: String) -> String {
+    object([
+        prop("email", quote(strings.trimSpace(email))),
+        prop("password", quote(password)),
+    ])
+}
+
+fn preferHeaderValue(prefer: Prefer) -> String {
+    let mut parts: List<String> = []
+    let count = prefer.count.toPrefer()
+    if !count.isEmpty() {
+        parts.push(count)
+    }
+    let returning = prefer.returning.toPrefer()
+    if !returning.isEmpty() {
+        parts.push(returning)
+    }
+    let resolution = prefer.resolution.toPrefer()
+    if !resolution.isEmpty() {
+        parts.push(resolution)
+    }
+    if prefer.missingDefault {
+        parts.push("missing=default")
+    }
+    strings.join(parts, ",")
+}
+
+fn setParam(values: QueryValues, key: String, value: String) -> QueryValues {
+    let mut out = values
+    out.insert(key, [value])
+    out
+}
+
+fn appendParam(values: QueryValues, key: String, value: String) -> QueryValues {
+    let mut out = values
+    out.update(key, |existing| {
+        let mut items = existing ?? []
+        items.push(value)
+        items
+    })
+    out
+}
+
+fn appendOrder(values: QueryValues, item: String) -> QueryValues {
+    let mut out = values
+    let current = out.get("order") ?? []
+    if current.isEmpty() {
+        out.insert("order", [item])
+        return out
+    }
+    out.insert("order", ["{current[0]},{item}"])
+    out
+}
+
+fn cleanProjectRef(value: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(value)
+    if clean.isEmpty() {
+        return Err(error.new("supabase: project ref is empty"))
+    }
+    for c in clean.chars() {
+        if !isProjectRefChar(c) {
+            return Err(error.new("supabase: invalid project ref: {value}"))
+        }
+    }
+    Ok(clean)
+}
+
+fn cleanName(kind: String, value: String) -> Result<String, Error> {
+    let clean = strings.trim(strings.trimSpace(value))
+    if clean.isEmpty() {
+        return Err(error.new("supabase: {kind} is empty"))
+    }
+    if strings.contains(clean, "/") || strings.contains(clean, "?") || strings.contains(clean, "#") {
+        return Err(error.new("supabase: invalid {kind}: {value}"))
+    }
+    Ok(clean)
+}
+
+fn cleanQueryName(value: String) -> Result<String, Error> {
+    cleanName("query parameter", value)
+}
+
+fn cleanColumnName(value: String) -> Result<String, Error> {
+    let clean = cleanName("column", value)?
+    if strings.contains(clean, " ") || strings.contains(clean, "\t") || strings.contains(clean, "\n") {
+        return Err(error.new("supabase: invalid column: {value}"))
+    }
+    Ok(clean)
+}
+
+fn cleanOperator(value: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(value)
+    if clean.isEmpty() || strings.contains(clean, ".") || strings.contains(clean, "/") {
+        return Err(error.new("supabase: invalid filter operator: {value}"))
+    }
+    Ok(clean)
+}
+
+fn cleanRelativePath(value: String) -> Result<String, Error> {
+    let clean = strings.trimPrefix(strings.trimSpace(value), "/")
+    if clean.isEmpty() {
+        return Err(error.new("supabase: path is empty"))
+    }
+    if strings.contains(clean, "..") || strings.contains(clean, "?") || strings.contains(clean, "#") {
+        return Err(error.new("supabase: unsafe path: {value}"))
+    }
+    Ok(clean)
+}
+
+fn cleanObjectPath(value: String) -> Result<String, Error> {
+    let clean = strings.trimPrefix(strings.trimSpace(value), "/")
+    if clean.isEmpty() {
+        return Err(error.new("supabase: storage object path is empty"))
+    }
+    if strings.contains(clean, "..") || strings.contains(clean, "?") || strings.contains(clean, "#") {
+        return Err(error.new("supabase: unsafe storage object path: {value}"))
+    }
+    Ok(clean)
+}
+
+fn encodeObjectPath(path: String) -> Result<String, Error> {
+    let clean = cleanObjectPath(path)?
+    let mut parts: List<String> = []
+    for part in strings.split(clean, "/") {
+        if strings.trimSpace(part).isEmpty() {
+            return Err(error.new("supabase: storage object path contains an empty segment"))
+        }
+        parts.push(encodePathSegment(part))
+    }
+    Ok(strings.join(parts, "/"))
+}
+
+fn encodePathSegment(segment: String) -> String {
+    encoding.url.encode(segment)
+}
+
+fn stripTrailingSlash(value: String) -> String {
+    let mut out = strings.trimSpace(value)
+    for strings.endsWith(out, "/") {
+        out = strings.trimSuffix(out, "/")
+    }
+    out
+}
+
+fn joinUrl(base: String, path: String) -> String {
+    let cleanBase = stripTrailingSlash(base)
+    if strings.startsWith(path, "/") {
+        "{cleanBase}{path}"
+    } else {
+        "{cleanBase}/{path}"
+    }
+}
+
+fn isProjectRefChar(c: Char) -> Bool {
+    (c >= 'a' && c <= 'z') ||
+    (c >= '0' && c <= '9') ||
+    c == '-'
+}
+
+fn normalizedJsonObject(text: String) -> String {
+    let raw = strings.trimSpace(text)
+    if raw.isEmpty() {
+        return "\{\}"
+    }
+    match json.parseValue(raw) {
+        Ok(value) -> match json.asObject(value) {
+            Ok(_)  -> json.stringifyValue(value),
+            Err(_) -> "\{\}",
+        },
+        Err(_) -> "\{\}",
+    }
+}
+
+fn stringField(obj: json.JsonObject, key: String) -> String {
+    match obj.get(key) {
+        Some(value) -> match json.asString(value) {
+            Ok(text) -> text,
+            Err(_)   -> "",
+        },
+        None -> "",
+    }
+}
+
+fn object(props: List<String>) -> String {
+    let open = 123.toChar()
+    let close = 125.toChar()
+    "{open}{strings.join(props, \",\")}{close}"
+}
+
+fn array(items: List<String>) -> String {
+    "[{strings.join(items, \",\")}]"
+}
+
+fn prop(name: String, value: String) -> String {
+    "{quote(name)}:{value}"
+}
+
+fn quote(text: String) -> String {
+    json.stringifyValue(json.string(text))
+}
