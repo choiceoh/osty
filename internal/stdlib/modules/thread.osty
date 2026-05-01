@@ -5,7 +5,7 @@
 // runtime. `collectAll` is a real Osty helper over `Group.spawn` +
 // `Handle.join`.
 
-pub struct Duration {}
+use std.time
 
 pub struct Group {
     pub fn spawn<T>(self, body: fn() -> T) -> Handle<T>
@@ -24,7 +24,7 @@ pub struct Select {
         self
     }
 
-    pub fn timeout(self, duration: Duration, f: fn() -> ()) -> Select {
+    pub fn timeout(self, duration: time.Duration, f: fn() -> ()) -> Select {
         self
     }
 
@@ -48,7 +48,7 @@ pub fn race<T>(body: fn(Group) -> List<Handle<T>>) -> Result<T, Error>
 
 pub fn chan<T>(capacity: Int = 0) -> Channel<T>
 
-pub fn sleep(duration: Duration) -> Result<(), Error>
+pub fn sleep(duration: time.Duration) -> Result<(), Error>
 
 pub fn yield() {}
 
