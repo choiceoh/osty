@@ -102,17 +102,46 @@ func (s *lowerState) lowerFunction(fn *mir.Function) (Function, error) {
 		return Function{}, err
 	}
 	out := Function{Name: fn.Name, FrameSize: s.frameSize}
-	for blockIdx, block := range fn.Blocks {
-		lowered, err := s.lowerBlock(fn, block, blockIdx == 0)
+	// Emit blocks with the entry block first so the encoded function starts
+	// at the right instruction. Branches reference target blocks by their
+	// fn.Blocks index, so we keep the index→Block mapping stable.
+	order := blockEmitOrder(fn)
+	out.Blocks = make([]Block, len(order))
+	for slot, blockIdx := range order {
+		block := fn.Blocks[blockIdx]
+		lowered, err := s.lowerBlock(fn, block, blockIdx == int(fn.Entry))
 		if err != nil {
 			return Function{}, err
 		}
-		out.Blocks = append(out.Blocks, lowered)
+		out.Blocks[slot] = lowered
 	}
 	if len(out.Blocks) == 0 {
 		return Function{}, fmt.Errorf("onb: %s has no basic blocks", fn.Name)
 	}
 	return out, nil
+}
+
+// blockEmitOrder returns a permutation of fn.Blocks indices with the entry
+// block first. Other blocks keep their original relative order so MIR builder
+// hints (e.g. `then` adjacent to its branch) survive into emitted code.
+//
+// The returned slice's i-th element is the original fn.Blocks index that
+// should be emitted in slot i. Branch targets always reference original
+// indices (since lower.go's LIR Branch{Target: int} stores them) — the
+// encoder maps original indices to byte offsets via blockOffsets[].
+func blockEmitOrder(fn *mir.Function) []int {
+	order := make([]int, 0, len(fn.Blocks))
+	entry := int(fn.Entry)
+	if entry >= 0 && entry < len(fn.Blocks) {
+		order = append(order, entry)
+	}
+	for i := range fn.Blocks {
+		if i == entry {
+			continue
+		}
+		order = append(order, i)
+	}
+	return order
 }
 
 // assignLocalSlots gives every local that is *read* by the function body a
@@ -128,6 +157,7 @@ func (s *lowerState) assignLocalSlots(fn *mir.Function) error {
 		for _, instr := range block.Instrs {
 			collectReadLocals(instr, read)
 		}
+		collectTerminatorReads(block.Term, read)
 	}
 	delete(read, fn.ReturnLocal)
 	s.localSlots = map[mir.LocalID]int64{}
@@ -186,16 +216,41 @@ func (s *lowerState) lowerBlock(fn *mir.Function, block *mir.BasicBlock, isEntry
 		}
 		instrs = append(instrs, lowered...)
 	}
-	switch block.Term.(type) {
+	switch term := block.Term.(type) {
 	case *mir.ReturnTerm:
 		instrs = append(instrs, s.epilogue(fn)...)
-		return Block{
-			Label:  blockLabel(block.ID),
-			Instrs: instrs,
-		}, nil
+	case *mir.GotoTerm:
+		instrs = append(instrs, &Branch{Target: int(term.Target)})
+	case *mir.BranchTerm:
+		condInstrs, err := s.lowerBranchTerm(term)
+		if err != nil {
+			return Block{}, err
+		}
+		instrs = append(instrs, condInstrs...)
 	default:
 		return Block{}, fmt.Errorf("%w: terminator %T is outside phase 1", ErrUnsupportedShape, block.Term)
 	}
+	return Block{
+		Label:         blockLabel(block.ID),
+		OriginalIndex: int(block.ID),
+		Instrs:        instrs,
+	}, nil
+}
+
+// lowerBranchTerm lowers `BranchTerm{Cond, Then, Else}` into a load + cbnz
+// + b sequence. The cond operand is a Bool, which lower.go's BinaryRV
+// comparison path materialises as 0 / 1 in a stack slot.
+func (s *lowerState) lowerBranchTerm(term *mir.BranchTerm) ([]Instr, error) {
+	mat, err := s.materialiseOperand(term.Cond, RegX9)
+	if err != nil {
+		return nil, err
+	}
+	out := append([]Instr(nil), mat...)
+	out = append(out,
+		&BranchCondNotZero{Src: RegX9, Target: int(term.Then)},
+		&Branch{Target: int(term.Else)},
+	)
+	return out, nil
 }
 
 // paramShuffle copies every read parameter from its AAPCS64 argument register
@@ -315,6 +370,9 @@ func (s *lowerState) allocateReturnSlot(fn *mir.Function) int64 {
 }
 
 func (s *lowerState) lowerBinaryAssign(rv *mir.BinaryRV, destSlot int64) ([]Instr, error) {
+	if cond, isCmp := comparisonCond(rv.Op); isCmp {
+		return s.lowerComparisonAssign(rv, cond, destSlot)
+	}
 	switch rv.Op {
 	case mir.BinAdd, mir.BinSub, mir.BinMul:
 	default:
@@ -339,6 +397,48 @@ func (s *lowerState) lowerBinaryAssign(rv *mir.BinaryRV, destSlot int64) ([]Inst
 		out = append(out, &MulReg{Dst: RegX9, Lhs: RegX9, Rhs: RegX10})
 	}
 	out = append(out, &Store64Stack{Src: RegX9, Offset: destSlot})
+	return out, nil
+}
+
+// comparisonCond maps a MIR comparison op to its aarch64 condition code.
+// Returns ok=false for non-comparison ops.
+func comparisonCond(op mir.BinaryOp) (Cond, bool) {
+	switch op {
+	case mir.BinEq:
+		return CondEq, true
+	case mir.BinNeq:
+		return CondNe, true
+	case mir.BinLt:
+		return CondLt, true
+	case mir.BinLeq:
+		return CondLe, true
+	case mir.BinGt:
+		return CondGt, true
+	case mir.BinGeq:
+		return CondGe, true
+	default:
+		return 0, false
+	}
+}
+
+// lowerComparisonAssign emits `cmp lhs, rhs; cset Xd, <cond>` storing the
+// boolean result (0 or 1) into the destination slot.
+func (s *lowerState) lowerComparisonAssign(rv *mir.BinaryRV, cond Cond, destSlot int64) ([]Instr, error) {
+	lhs, err := s.materialiseOperand(rv.Left, RegX9)
+	if err != nil {
+		return nil, err
+	}
+	rhs, err := s.materialiseOperand(rv.Right, RegX10)
+	if err != nil {
+		return nil, err
+	}
+	out := append([]Instr{}, lhs...)
+	out = append(out, rhs...)
+	out = append(out,
+		&Cmp{Lhs: RegX9, Rhs: RegX10},
+		&Cset{Dst: RegX9, Cond: cond},
+		&Store64Stack{Src: RegX9, Offset: destSlot},
+	)
 	return out, nil
 }
 
@@ -377,11 +477,18 @@ func (s *lowerState) lowerCall(fn *mir.Function, instr *mir.CallInstr) ([]Instr,
 func (s *lowerState) materialiseOperand(op mir.Operand, dst Reg) ([]Instr, error) {
 	switch o := op.(type) {
 	case *mir.ConstOp:
-		c, ok := o.Const.(*mir.IntConst)
-		if !ok {
+		switch c := o.Const.(type) {
+		case *mir.IntConst:
+			return []Instr{&MovImm64{Dst: dst, Imm: c.Value}}, nil
+		case *mir.BoolConst:
+			imm := int64(0)
+			if c.Value {
+				imm = 1
+			}
+			return []Instr{&MovImm64{Dst: dst, Imm: imm}}, nil
+		default:
 			return nil, fmt.Errorf("%w: const %T as operand", ErrUnsupportedShape, o.Const)
 		}
-		return []Instr{&MovImm64{Dst: dst, Imm: c.Value}}, nil
 	case *mir.CopyOp:
 		return s.loadPlaceIntoReg(o.Place, dst)
 	case *mir.MoveOp:
@@ -561,6 +668,16 @@ func collectOperandLocals(op mir.Operand, out map[mir.LocalID]bool) {
 		out[o.Place.Local] = true
 	case *mir.MoveOp:
 		out[o.Place.Local] = true
+	}
+}
+
+// collectTerminatorReads handles the branch-/switch-style terminators that
+// read locals through their condition operand. ReturnTerm and GotoTerm
+// don't read user locals at the terminator level.
+func collectTerminatorReads(term mir.Terminator, out map[mir.LocalID]bool) {
+	switch t := term.(type) {
+	case *mir.BranchTerm:
+		collectOperandLocals(t.Cond, out)
 	}
 }
 

@@ -1,5 +1,7 @@
 package onb
 
+import "fmt"
+
 // Program is ONB's first native-owned lowering product. It is deliberately
 // smaller than the final backend IR, but it already speaks in aarch64-shaped
 // instructions so the pipeline can grow toward object emission one opcode at a
@@ -29,9 +31,14 @@ type Function struct {
 }
 
 // Block is a linear basic block.
+//
+// OriginalIndex is the function-relative MIR block ID this LIR block was
+// lowered from. Branches reference targets by this index; the encoder maps
+// original indices to byte offsets while it walks the emit order.
 type Block struct {
-	Label  string
-	Instrs []Instr
+	Label         string
+	OriginalIndex int
+	Instrs        []Instr
 }
 
 // Instr is one ONB aarch64 LIR instruction.
@@ -134,6 +141,78 @@ type MulReg struct {
 }
 
 func (*MulReg) instrNode() {}
+
+// Cond is an aarch64 condition code as used by `b.cond`, `cset`, `csel`,
+// etc. Only the conditions Phase A2 Week 3 emits are named here; any
+// future op may extend this enum.
+type Cond uint8
+
+const (
+	CondEq Cond = 0  // equal — Z set
+	CondNe Cond = 1  // not equal — Z clear
+	CondGe Cond = 10 // signed greater-or-equal — N == V
+	CondLt Cond = 11 // signed less-than — N != V
+	CondGt Cond = 12 // signed greater-than — Z clear and N == V
+	CondLe Cond = 13 // signed less-or-equal — !(Z clear and N == V)
+)
+
+// AsmName returns the assembler mnemonic suffix (e.g. `eq`, `lt`).
+func (c Cond) AsmName() string {
+	switch c {
+	case CondEq:
+		return "eq"
+	case CondNe:
+		return "ne"
+	case CondGe:
+		return "ge"
+	case CondLt:
+		return "lt"
+	case CondGt:
+		return "gt"
+	case CondLe:
+		return "le"
+	default:
+		return fmt.Sprintf("cond%d", c)
+	}
+}
+
+// Cmp encodes `cmp Xn, Xm` (alias for SUBS XZR, Xn, Xm). Used as the
+// flag-setting half of the comparison-into-bool pattern: `cmp lhs, rhs;
+// cset dst, <cond>` produces 1 if the condition holds, else 0.
+type Cmp struct {
+	Lhs Reg
+	Rhs Reg
+}
+
+func (*Cmp) instrNode() {}
+
+// Cset materialises the boolean result of a flags-setting operation into a
+// register: `cset Xd, <cond>` writes 1 if cond holds, else 0.
+type Cset struct {
+	Dst  Reg
+	Cond Cond
+}
+
+func (*Cset) instrNode() {}
+
+// Branch is an unconditional branch to a target block within the same
+// function. The integer is the target's index in fn.Blocks. The encoder
+// resolves it to a PC-relative imm26 in the second pass.
+type Branch struct {
+	Target int
+}
+
+func (*Branch) instrNode() {}
+
+// BranchCondNotZero is `cbnz Xn, <block>` — branch to the target block
+// when the source register is non-zero. Used directly on a materialised
+// boolean local for the BranchTerm lowering.
+type BranchCondNotZero struct {
+	Src    Reg
+	Target int
+}
+
+func (*BranchCondNotZero) instrNode() {}
 
 // LoadCStringAddress materializes the address of a C string literal into a
 // register using the platform's PC-relative addressing form.
