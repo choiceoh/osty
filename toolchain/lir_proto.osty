@@ -3638,8 +3638,8 @@ fn lirLowerMirHandleJoin(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, retType, [lirPtrType()], false))
     if !(instr.hasDest) {
-        let _ignored = lirFresh(l)
-        l.instrs.push(lirCall(_ignored, retType, "@" + symbol, [lirOperand(lirPtrType(), handle.value)]))
+        let ignored = lirFresh(l)
+        l.instrs.push(lirCall(ignored, retType, "@" + symbol, [lirOperand(lirPtrType(), handle.value)]))
         return
     }
     let dest = lirFresh(l)
@@ -3714,8 +3714,8 @@ fn lirLowerMirSpawn(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirPtrType(), paramTypes, false))
     if !(instr.hasDest) {
-        let _ignored = lirFresh(l)
-        l.instrs.push(lirCall(_ignored, lirPtrType(), "@" + symbol, args))
+        let ignored = lirFresh(l)
+        l.instrs.push(lirCall(ignored, lirPtrType(), "@" + symbol, args))
         return
     }
     let dest = lirFresh(l)
