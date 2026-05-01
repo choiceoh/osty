@@ -15,6 +15,7 @@ const (
 	ostyRtRegexReplaceAllSymbol   = "osty_rt_regex_replace_all"
 	ostyRtRegexSplitSymbol        = "osty_rt_regex_split"
 	ostyRtRegexFindSymbol         = "osty_rt_regex_find"
+	ostyRtRegexFindAllSymbol      = "osty_rt_regex_find_all"
 	ostyRtRegexMatchFreeSymbol    = "osty_rt_regex_match_free"
 	ostyRtRegexCapturesNamedSymbol = "osty_rt_regex_captures_named"
 )
@@ -56,6 +57,15 @@ var stdRegexStringOptionSourceTypeSingleton ast.Type = &ast.OptionalType{
 var stdRegexCapturesListSourceTypeSingleton ast.Type = &ast.NamedType{
 	Path: []string{"List"},
 	Args: []ast.Type{stdRegexCapturesSourceTypeSingleton},
+}
+
+var stdRegexMatchSourceTypeSingleton ast.Type = &ast.NamedType{
+	Path: []string{stdRegexSyntheticMatchTypeName},
+}
+
+var stdRegexMatchListSourceTypeSingleton ast.Type = &ast.NamedType{
+	Path: []string{"List"},
+	Args: []ast.Type{stdRegexMatchSourceTypeSingleton},
 }
 
 var stdRegexCompileResultSourceTypeSingleton ast.Type = &ast.NamedType{
@@ -242,6 +252,8 @@ func (g *generator) emitStdRegexMethodCall(call *ast.CallExpr) (value, bool, err
 			return g.emitStdRegexReplaceCall(call, field, true)
 		case "split":
 			return g.emitStdRegexSplitCall(call, field)
+		case "findAll":
+			return g.emitStdRegexFindAllCall(call, field)
 		}
 		return value{}, false, nil
 	}
@@ -285,6 +297,13 @@ func (g *generator) stdRegexMethodStaticResult(call *ast.CallExpr) (value, bool)
 				listElemString: true,
 				sourceType:     stdRegexStringListSourceTypeSingleton,
 			}, true
+		case "findAll":
+			return value{
+				typ:         "ptr",
+				gcManaged:   true,
+				listElemTyp: llvmStructTypeName(stdRegexSyntheticMatchTypeName),
+				sourceType:  stdRegexMatchListSourceTypeSingleton,
+			}, true
 		}
 		return value{}, false
 	}
@@ -317,6 +336,8 @@ func (g *generator) staticStdRegexMethodSourceType(call *ast.CallExpr) (ast.Type
 			return stringSourceTypeSingleton, true
 		case "split":
 			return stdRegexStringListSourceTypeSingleton, true
+		case "findAll":
+			return stdRegexMatchListSourceTypeSingleton, true
 		}
 		return nil, false
 	}
@@ -701,4 +722,36 @@ func (g *generator) emitStdRegexStringArg(arg *ast.Arg, method string, index int
 		return value{}, unsupportedf("type-system", "%s arg %d type %s, want String", method, index+1, loaded.typ)
 	}
 	return loaded, nil
+}
+
+func (g *generator) emitStdRegexFindAllCall(call *ast.CallExpr, field *ast.FieldExpr) (value, bool, error) {
+	if len(call.Args) != 1 {
+		return value{}, true, unsupportedf("call", "Regex.findAll expects 1 argument, got %d", len(call.Args))
+	}
+	recv, err := g.emitExpr(field.X)
+	if err != nil {
+		return value{}, true, err
+	}
+	recv, err = g.loadIfPointer(recv)
+	if err != nil {
+		return value{}, true, err
+	}
+	if recv.typ != "ptr" {
+		return value{}, true, unsupportedf("type-system", "Regex receiver type %s", recv.typ)
+	}
+	text, err := g.emitStdRegexStringArg(call.Args[0], "Regex.findAll", 0, "regex.findAll.arg")
+	if err != nil {
+		return value{}, true, err
+	}
+	g.declareRuntimeSymbol(ostyRtRegexFindAllSymbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	g.emitCallSafepointIfNeeded(emitter)
+	out := llvmCall(emitter, "ptr", ostyRtRegexFindAllSymbol, []*LlvmValue{toOstyValue(recv), toOstyValue(text)})
+	g.takeOstyEmitter(emitter)
+	v := fromOstyValue(out)
+	v.gcManaged = true
+	v.listElemTyp = llvmStructTypeName(stdRegexSyntheticMatchTypeName)
+	v.sourceType = stdRegexMatchListSourceTypeSingleton
+	v.rootPaths = g.rootPathsForType(v.typ)
+	return v, true, nil
 }

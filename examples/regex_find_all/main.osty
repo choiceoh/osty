@@ -1,0 +1,68 @@
+use std.regex
+
+fn main() {
+    // Multiple non-overlapping word matches.
+    match regex.compile(r"\w+") {
+        Ok(re) -> {
+            let list = re.findAll("alpha beta gamma 42")
+            let n = list.len()
+            println("words: {n} match(es)")
+            let mut i = 0
+            while i < n {
+                let m = list[i]
+                let t = m.text
+                let s = m.start
+                let e = m.end
+                println("  [{i}] '{t}' [{s}..{e})")
+                i += 1
+            }
+        },
+        Err(_) -> println("words compile failed"),
+    }
+
+    // No match: empty list.
+    match regex.compile(r"\d+") {
+        Ok(re) -> {
+            let list = re.findAll("hello world")
+            let n = list.len()
+            println("nomatch: {n} match(es)")
+        },
+        Err(_) -> println("nomatch compile failed"),
+    }
+
+    // Anchored: only one match max.
+    match regex.compile(r"^\w+") {
+        Ok(re) -> {
+            let list = re.findAll("hello world tail")
+            let n = list.len()
+            println("anchored: {n} match(es)")
+            if n > 0 {
+                let m = list[0]
+                let t = m.text
+                let s = m.start
+                let e = m.end
+                println("  [0] '{t}' [{s}..{e})")
+            }
+        },
+        Err(_) -> println("anchored compile failed"),
+    }
+
+    // Greedy quantifier: each match takes as much as possible.
+    match regex.compile(r"a+") {
+        Ok(re) -> {
+            let list = re.findAll("aaabbaab a aaaa")
+            let n = list.len()
+            println("greedy: {n} match(es)")
+            let mut i = 0
+            while i < n {
+                let m = list[i]
+                let t = m.text
+                let s = m.start
+                let e = m.end
+                println("  [{i}] '{t}' [{s}..{e})")
+                i += 1
+            }
+        },
+        Err(_) -> println("greedy compile failed"),
+    }
+}
