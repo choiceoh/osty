@@ -197,14 +197,20 @@ pub struct LirInstr {
     pub gepIndices: List<LirOperand>,
     pub inbounds: Bool,
     pub text: String,
+    // Per-instruction LLVM metadata trailers — currently `, !llvm.access.group !N`
+    // attached to load/store inside `#[parallel]` functions
+    // (LANG_SPEC v0.6 A6). Each entry is the full trailer text after
+    // the comma, e.g. `!llvm.access.group !3`. Empty list = no trailer.
+    pub metadata: List<String>,
 }
 // Common result/value fields.
 // Binary/unary/cast fields.
 // Call fields.
 // Aggregate/GEP fields.
 // Comment payload.
+// Metadata trailer.
 pub fn lirInstrInvalid() -> LirInstr {
-    LirInstr {kind: LirInstrInvalid, dest: "", typ: lirTypeInvalid(), align: 0, ptr: "", value: lirOperandInvalid(), op: "", left: "", right: "", from: lirOperandInvalid(), toType: lirTypeInvalid(), returnType: lirTypeInvalid(), callee: "", args: [], callingConv: "", attrs: [], aggregate: "", indices: [], elemType: lirTypeInvalid(), gepIndices: [], inbounds: false, text: ""}
+    LirInstr {kind: LirInstrInvalid, dest: "", typ: lirTypeInvalid(), align: 0, ptr: "", value: lirOperandInvalid(), op: "", left: "", right: "", from: lirOperandInvalid(), toType: lirTypeInvalid(), returnType: lirTypeInvalid(), callee: "", args: [], callingConv: "", attrs: [], aggregate: "", indices: [], elemType: lirTypeInvalid(), gepIndices: [], inbounds: false, text: "", metadata: []}
 }
 pub fn lirAlloca(dest: String, typ: LirType, align: Int) -> LirInstr {
     let mut i = lirInstrInvalid()
@@ -758,7 +764,7 @@ pub fn lirRenderParams(params: List<LirParam>) -> String {
     strings.join(out, ", ")
 }
 pub fn lirRenderInstr(i: LirInstr) -> String {
-    match i.kind {
+    let base = match i.kind {
         LirInstrAlloca -> lirAppendAlign(i.dest + " = alloca " + lirTypeString(i.typ), i.align),
         LirInstrLoad -> lirAppendAlign(i.dest + " = load " + lirTypeString(i.typ) + ", ptr " + i.ptr, i.align),
         LirInstrStore -> lirAppendAlign("store " + lirOperandString(i.value) + ", ptr " + i.ptr, i.align),
@@ -772,6 +778,14 @@ pub fn lirRenderInstr(i: LirInstr) -> String {
         LirInstrComment -> lirRenderComment(i.text),
         _ -> "",
     }
+    if base == "" || i.metadata.len() == 0 {
+        return base
+    }
+    let mut out = base
+    for md in i.metadata {
+        out = out + ", " + md
+    }
+    out
 }
 fn lirRenderCallInstr(i: LirInstr) -> String {
     let ret = if lirTypeIsZero(i.returnType) {
@@ -1652,6 +1666,12 @@ pub struct LirMirFunctionLowerer {
     pub extraBlocks: List<LirBlock>,
     pub auxLabel: Int,
     pub gcRootSlots: List<String>,
+    // `parallelAccessGroupRef` lazily caches the `!N` access-group
+    // metadata reference for the current function. Populated on first
+    // demand inside `#[parallel]` functions and reused by both the
+    // per-loop `parallel_accesses` property and the per-instruction
+    // `!llvm.access.group` trailers.
+    pub parallelAccessGroupRef: String,
 }
 pub fn lirLowerMirModule(cfg: LirLowerConfig, mir: MirModule) -> LirLowerResult {
     let packageName = if cfg.packageName == "" {
@@ -1693,7 +1713,7 @@ pub fn lirLowerMirModule(cfg: LirLowerConfig, mir: MirModule) -> LirLowerResult 
     LirLowerResult {module: out, diagnostics: diags}
 }
 pub fn lirLowerMirFunction(cfg: LirLowerConfig, mir: MirModule, module: LirModule, fn_: MirFunction) -> LirLowerResult {
-    let mut l = LirMirFunctionLowerer {cfg, mirModule: mir, fn_, out: lirModule(module.packageName, module.sourcePath, module.target), diagnostics: [], prologue: [], instrs: [], slots: [], labels: [], temp: 0, safepointSerial: 0, currentBlockLabel: "", extraBlocks: [], auxLabel: 0, gcRootSlots: []}
+    let mut l = LirMirFunctionLowerer {cfg, mirModule: mir, fn_, out: lirModule(module.packageName, module.sourcePath, module.target), diagnostics: [], prologue: [], instrs: [], slots: [], labels: [], temp: 0, safepointSerial: 0, currentBlockLabel: "", extraBlocks: [], auxLabel: 0, gcRootSlots: [], parallelAccessGroupRef: ""}
     l.out.typeDefs = module.typeDefs
     l.out.runtimeDecls = module.runtimeDecls
     l.out.stringPool = module.stringPool
@@ -1757,6 +1777,12 @@ pub fn lirLowerMirFunction(cfg: LirLowerConfig, mir: MirModule, module: LirModul
         blocks.push(LirBlock {label: l.currentBlockLabel, instrs: l.instrs, term})
     }
     if l.diagnostics.len() == 0 {
+        // `#[parallel]` attaches `!llvm.access.group !N` to every
+        // load/store after all blocks are assembled. Post-processing
+        // here (rather than at each push site) keeps every existing
+        // intrinsic lowering ignorant of the per-instruction MD
+        // surface — they only ever push raw load/store instrs.
+        lirAttachParallelAccessGroup(l, blocks)
         let mut outFn = lirFunction(name, ret)
         outFn.params = params
         outFn.blocks = blocks
@@ -2430,6 +2456,10 @@ fn lirNextLoopMD(l: LirMirFunctionLowerer, fn_: MirFunction) -> String {
             propRefs.push(lirAllocMetadata(l, "!\{!\"llvm.loop.vectorize.predicate.enable\", i1 true\}"))
         }
     }
+    if fn_.parallel {
+        let groupRef = lirParallelAccessGroupRef(l)
+        propRefs.push(lirAllocMetadata(l, "!\{!\"llvm.loop.parallel_accesses\", " + groupRef + "\}"))
+    }
     if fn_.unroll {
         if fn_.unrollCount > 0 {
             propRefs.push(lirAllocMetadata(l, "!\{!\"llvm.loop.unroll.count\", i32 " + lirIntToString(fn_.unrollCount) + "\}"))
@@ -2453,6 +2483,40 @@ fn lirAllocMetadata(l: LirMirFunctionLowerer, body: String) -> String {
     let ref = "!" + lirIntToString(l.out.metadata.len())
     l.out.metadata.push(ref + " = " + body)
     ref
+}
+// `lirParallelAccessGroupRef` lazily allocates the function-wide
+// `!N = distinct !{}` access group used by `#[parallel]`. The same
+// `!N` is referenced both by the loop's `parallel_accesses` property
+// and by every load/store inside the function — that pairing is what
+// tells the LLVM alias analyzer the memory ops carry no
+// loop-carried dependency. Production allocates exactly one group
+// per parallel function (generator.go::allocParallelAccessGroup).
+fn lirParallelAccessGroupRef(l: LirMirFunctionLowerer) -> String {
+    if l.parallelAccessGroupRef != "" {
+        return l.parallelAccessGroupRef
+    }
+    let ref = lirAllocMetadata(l, "distinct !\{\}")
+    l.parallelAccessGroupRef = ref
+    ref
+}
+// `lirAttachParallelAccessGroup` post-processes a function's blocks,
+// appending `, !llvm.access.group !N` to every `load` / `store`
+// instruction so the LLVM alias analyzer treats them as members of
+// the function's parallel access group. No-op for non-parallel
+// functions; lazy-allocates the access group on first call.
+fn lirAttachParallelAccessGroup(l: LirMirFunctionLowerer, blocks: List<LirBlock>) {
+    if !(l.fn_.parallel) {
+        return
+    }
+    let groupRef = lirParallelAccessGroupRef(l)
+    let trailer = "!llvm.access.group " + groupRef
+    for block in blocks {
+        for instr in block.instrs {
+            if instr.kind == LirInstrLoad || instr.kind == LirInstrStore {
+                instr.metadata.push(trailer)
+            }
+        }
+    }
 }
 // ====================================================================
 // Basic-block splitting + Option<T> aggregate construction

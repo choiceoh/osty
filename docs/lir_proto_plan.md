@@ -760,6 +760,56 @@ i32 4), and `loop_md_plain_no_md` (infinite loop without any
 annotations — back-edge MUST NOT carry metadata, enforced by the
 absence of `!llvm.loop` in the rendered text).
 
+Design decision: per-instruction `!llvm.access.group` metadata for
+`#[parallel]` functions builds on the loop-metadata infrastructure
+above (LANG_SPEC v0.6 A6). The pair lifts the alias-analysis
+restriction that would otherwise block vectorisation of memory ops
+inside parallel loops.
+
+**LIR side**: `LirInstr` grows `metadata: List<String>` (empty by
+default). `lirRenderInstr` appends each entry as a comma-separated
+trailer (`, !llvm.access.group !N`) after the rendered instruction
+body. `LirMirFunctionLowerer` grows
+`parallelAccessGroupRef: String` (empty until first use).
+
+When lowering a function whose `MirFunction.parallel` is true,
+`lirLowerMirFunction` runs a final pass —
+`lirAttachParallelAccessGroup(l, blocks)` — that walks every
+load/store in every block and pushes the function-wide access-group
+ref onto `instr.metadata`. The ref is allocated lazily by
+`lirParallelAccessGroupRef(l)`, which records a `distinct !{}` node
+in `LirModule.metadata` on first call. This keeps non-parallel
+functions free of any metadata churn and ensures every load/store
+inside a parallel function picks up the SAME group ref (alias-set
+membership is per-function in the v0.6 design).
+
+The cross-link with loop metadata: when `MirFunction.parallel` is
+true AND a back-edge is being given a `!llvm.loop` node,
+`lirNextLoopMD` appends an extra property — `!{!"llvm.loop.parallel_accesses",
+!N}` — pointing at the same access-group ref. LLVM's loop alias
+analyser uses this property to recognise that the marked memory
+ops can be reordered across loop iterations even when standard
+alias analysis cannot prove independence.
+
+The Go-side `internal/llvmgen/generator.go` is intentionally NOT
+touched — production today does not emit access-group metadata
+(LANG_SPEC v0.6 A6 ships with the LIR Proto migration), and the
+shadow runner is gated behind Phase 7 so neither the LLVM text
+diff nor the bench backstop sees the new metadata until the flip
+lands.
+
+Two Phase-5 fixtures pin the new shape:
+`parallel_access_group` (one-block parallel function with a param-
+to-return identity → store/load both carry `, !llvm.access.group !N`,
+the function-wide `= distinct !{}` def is emitted) and
+`parallel_loop_with_access_group` (parallel function with a
+back-edge → access-group def + loop md `parallel_accesses`
+property + load/store carry the group trailer + back-edge carries
+`!llvm.loop`). A non-parallel function exercising loads/stores has
+no fixture entry — the absence is enforced by the existing
+`gc_root_scalar_only` and other non-parallel fixtures, none of
+which contain `!llvm.access.group` in their needles.
+
 ## Phase 0: lock the boundary
 
 Deliverables:

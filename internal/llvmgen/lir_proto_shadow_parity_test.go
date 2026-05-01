@@ -392,6 +392,9 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualLoopMDVectorizeFixture", []string{"!{!\"llvm.loop.vectorize.enable\", i1 true}", "= distinct !{", ", !llvm.loop !"}},
 		{"lirParityManualLoopMDUnrollCountFixture", []string{"!{!\"llvm.loop.unroll.count\", i32 4}", "= distinct !{", ", !llvm.loop !"}},
 		{"lirParityManualLoopMDPlainNoMDFixture", []string{"define void @plainLoop()", "br label %bb0"}},
+		// ----- Per-instruction !llvm.access.group metadata (#[parallel]) -----
+		{"lirParityManualParallelAccessGroupFixture", []string{"= distinct !{}", "store i64", ", !llvm.access.group !", " = load i64"}},
+		{"lirParityManualParallelLoopWithAccessGroupFixture", []string{"= distinct !{}", "!{!\"llvm.loop.parallel_accesses\", !", ", !llvm.loop !", ", !llvm.access.group !"}},
 	}
 
 	for _, tt := range want {
