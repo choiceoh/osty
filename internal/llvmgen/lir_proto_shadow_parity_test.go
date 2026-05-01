@@ -361,12 +361,88 @@ func parseLIRProtoManualFixtureDecl(t *testing.T, fn *ast.FnDecl) (lirProtoShado
 		return lirProtoShadowFixture{}, false
 	}
 	name := stringArg(t, fn.Name, call.Args[0].Value)
+	sourcePath := stringArg(t, fn.Name, call.Args[2].Value)
 	tags := stringListArg(t, fn.Name, call.Args[5].Value)
 	needles := needleListArg(t, fn.Name, call.Args[6].Value)
 	if name == "" || len(needles) == 0 {
 		return lirProtoShadowFixture{}, false
 	}
-	return lirProtoShadowFixture{Name: name, Tags: tags, Needles: needles}, true
+	return lirProtoShadowFixture{Name: name, SourcePath: sourcePath, Tags: tags, Needles: needles}, true
+}
+
+// TestLIRProtoFixtureCatalogShape (Phase 6) is a single Go-side pin
+// that walks every parity fixture in toolchain/lir_proto_parity.osty
+// and asserts the catalog-wide invariants the Osty self-test only
+// checks indirectly: every fixture has a non-empty name, source path,
+// and at least one needle, every source fixture is tagged with either
+// `current-generator` or `lir-only` so the shadow parity loader can
+// route it, and no fixture name appears twice. Acts as an early-warning
+// for catalog drift before either the manual-MIR or source-fixture
+// runners would surface the problem at slice-add time.
+func TestLIRProtoFixtureCatalogShape(t *testing.T) {
+	t.Parallel()
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	path := filepath.Join(root, "toolchain", "lir_proto_parity.osty")
+	src, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	file, diags := parser.ParseDiagnostics(src)
+	if len(diags) != 0 {
+		t.Fatalf("parse %s diagnostics = %v", path, diags)
+	}
+
+	manualCount := 0
+	sourceCount := 0
+	seen := map[string]string{}
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FnDecl)
+		if !ok {
+			continue
+		}
+		var fixture lirProtoShadowFixture
+		var ok2 bool
+		if strings.HasPrefix(fn.Name, "lirParityManual") && strings.HasSuffix(fn.Name, "Fixture") {
+			fixture, ok2 = parseLIRProtoManualFixtureDecl(t, fn)
+			if ok2 {
+				manualCount++
+			}
+		}
+		if strings.HasPrefix(fn.Name, "lirParitySource") && strings.HasSuffix(fn.Name, "Fixture") {
+			fixture, ok2 = parseLIRProtoSourceFixtureDecl(t, fn)
+			if ok2 {
+				sourceCount++
+				if !fixture.hasTag("current-generator") && !fixture.hasTag("lir-only") {
+					t.Fatalf("source fixture %s must carry either `current-generator` or `lir-only` tag (have %v)", fn.Name, fixture.Tags)
+				}
+			}
+		}
+		if !ok2 {
+			continue
+		}
+		if fixture.Name == "" {
+			t.Fatalf("%s: fixture name is empty", fn.Name)
+		}
+		if fixture.SourcePath == "" {
+			t.Fatalf("%s: fixture source path is empty (catalog requires a stable anchor for diagnostics)", fn.Name)
+		}
+		if len(fixture.Needles) == 0 {
+			t.Fatalf("%s: fixture has zero needles — must pin at least one rendered shape", fn.Name)
+		}
+		if owner, dup := seen[fixture.Name]; dup {
+			t.Fatalf("duplicate fixture name %q: defined in both %s and %s", fixture.Name, owner, fn.Name)
+		}
+		seen[fixture.Name] = fn.Name
+	}
+	if manualCount < 16 {
+		t.Fatalf("manual fixture count = %d, want >= 16 (Phase-3 baseline)", manualCount)
+	}
+	if sourceCount < 9 {
+		t.Fatalf("source fixture count = %d, want >= 9 (Phase-3 source-parity baseline)", sourceCount)
+	}
 }
 
 func lowerLIRProtoShadowSourceToMIR(t *testing.T, src string) *mir.Module {

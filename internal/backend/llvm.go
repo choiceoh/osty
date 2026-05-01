@@ -159,6 +159,18 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 		return nil, nil, fmt.Errorf("llvm backend: missing lowered IR entry")
 	}
 	warnings := append([]error(nil), entry.IRIssues...)
+	// Phase-7 gate. OSTY_LLVM_LIR_PROTO=1 selects the LIR Proto path
+	// at this dispatcher entry. The Go-side runner that would call
+	// into toolchain/lir_proto.osty does not exist yet, so we attach
+	// ErrLIRProtoNotWired as a warning and then continue with whichever
+	// fallback path the existing dispatcher would have chosen
+	// (native-owned fast path or MIR-direct). Flipping the gate on
+	// stays safe before the runner lands — production output is
+	// unchanged but the selection is visible in build logs.
+	if llvmgen.LIRProtoSelected() {
+		traceLLVMDispatch("lir-proto-gate selected package=%s source=%s — falling back: %v", entry.PackageName, entry.SourcePath, llvmgen.ErrLIRProtoNotWired)
+		warnings = append(warnings, llvmgen.ErrLIRProtoNotWired)
+	}
 	opts := llvmgen.Options{
 		PackageName: entry.PackageName,
 		SourcePath:  entry.SourcePath,
@@ -174,12 +186,15 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 	}
 	if capabilities.CanRoute(llvmDispatchNativeOwned) {
 		traceLLVMDispatch("%s try package=%s source=%s emit=%s target=%s", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath, emit, target)
-		if out, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(entry, target); err != nil {
+		if out, ok, nativeWarnings, err := TryEmitNativeOwnedLLVMIRText(entry, target); err != nil {
 			traceLLVMDispatch("%s error: %v", llvmDispatchNativeOwned, err)
-			return nil, warnings, err
+			return nil, append(warnings, nativeWarnings...), err
 		} else if ok {
 			traceLLVMDispatch("%s covered package=%s source=%s", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath)
-			return out, warnings, nil
+			// Carry both the outer warnings (entry IRIssues + Phase-7
+			// gate) and the native-owned path's warnings forward so
+			// neither is silently dropped.
+			return out, append(warnings, nativeWarnings...), nil
 		}
 		traceLLVMDispatch("%s declined package=%s source=%s", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath)
 	} else {
@@ -194,6 +209,7 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 	// emitter. MIR refusal now surfaces as the normal unsupported
 	// skeleton diagnostic; the LLVM backend no longer retries the
 	// legacy HIR bridge behind the user's back.
+	//
 	route := capabilities.DispatchRoute()
 	traceLLVMDispatch("%s emit package=%s source=%s emit=%s target=%s", route, entry.PackageName, entry.SourcePath, emit, target)
 	if diag, row, ok := capabilities.RouteBlockingDiagnostic(route); ok {
