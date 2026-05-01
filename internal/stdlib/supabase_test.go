@@ -20,9 +20,12 @@ func TestSupabaseModuleSurface(t *testing.T) {
 		{"ResolutionMode", resolve.SymEnum},
 		{"OrderDirection", resolve.SymEnum},
 		{"NullOrdering", resolve.SymEnum},
+		{"StorageSort", resolve.SymStruct},
 		{"Prefer", resolve.SymStruct},
 		{"Client", resolve.SymStruct},
 		{"TableQuery", resolve.SymStruct},
+		{"PageInfo", resolve.SymStruct},
+		{"Page", resolve.SymStruct},
 		{"ApiError", resolve.SymStruct},
 	} {
 		sym := mod.Package.PkgScope.LookupLocal(tc.name)
@@ -39,7 +42,7 @@ func TestSupabaseModuleSurface(t *testing.T) {
 
 	for _, name := range []string{
 		"prefer", "preferRepresentation", "preferMinimal",
-		"client", "project", "local", "from",
+		"client", "project", "local", "fromEnv", "serviceRoleFromEnv", "fromEnvNames", "from",
 		"headers", "authHeaders", "storageHeaders",
 		"restUrl", "tableUrl", "rpcUrl", "authUrl", "storageUrl", "functionsUrl", "graphqlUrl",
 		"selectHttpRequest", "insertHttpRequest", "insertWithPreferHttpRequest",
@@ -49,9 +52,11 @@ func TestSupabaseModuleSurface(t *testing.T) {
 		"publicObjectUrl", "authenticatedObjectUrl", "objectUrl",
 		"authenticatedObjectHttpRequest", "downloadObjectHttpRequest", "uploadObjectHttpRequest",
 		"updateObjectHttpRequest", "removeObjectHttpRequest",
+		"storageSort", "signedObjectUrlHttpRequest", "signedObjectUrlWithTransformHttpRequest", "signedObjectsHttpRequest",
+		"listObjectsHttpRequest", "listObjectsSortedHttpRequest", "searchObjectsHttpRequest",
 		"invokeFunctionHttpRequest", "graphqlHttpRequest",
-		"sendSelect", "sendInsert", "sendInsertWithPrefer", "sendUpdate", "sendDelete", "sendRpc", "sendRpcWithPrefer",
-		"parseApiError", "requireSuccess",
+		"sendSelect", "sendSelectPage", "sendInsert", "sendInsertWithPrefer", "sendUpdate", "sendDelete", "sendRpc", "sendRpcWithPrefer",
+		"parseApiError", "requireSuccess", "parseContentRange", "pageInfo", "responseCount",
 	} {
 		sym := mod.Package.PkgScope.LookupLocal(name)
 		if sym == nil {
@@ -77,6 +82,7 @@ func TestSupabaseModuleMethodsAreBodied(t *testing.T) {
 		{"ResolutionMode", []string{"toPrefer"}},
 		{"OrderDirection", []string{"toString"}},
 		{"NullOrdering", []string{"toOrderSuffix"}},
+		{"StorageSort", []string{"toJson"}},
 		{"Prefer", []string{"withCount", "withReturning", "withResolution", "withMissingDefault", "headerValue"}},
 		{"Client", []string{"withAccessToken", "withServiceRoleKey", "withSchema", "withClientInfo", "withHeader", "resolvedBearer"}},
 		{"TableQuery", []string{
@@ -85,6 +91,8 @@ func TestSupabaseModuleMethodsAreBodied(t *testing.T) {
 			"textSearch", "order", "orderAsc", "orderDesc", "limit", "offset", "range", "withCount", "withPrefer",
 			"returning", "resolveDuplicates", "single", "csv",
 		}},
+		{"PageInfo", []string{"returned", "isEmpty", "hasTotal", "hasNext"}},
+		{"Page", []string{"count", "hasNext"}},
 		{"ApiError", []string{"summary"}},
 	} {
 		for _, method := range tc.methods {
@@ -109,6 +117,8 @@ func TestSupabaseModulePinsEndpointAndHeaderBehavior(t *testing.T) {
 		`joinUrl(client.baseUrl, "/storage/v1/{cleanRelativePath(path)?}")`,
 		`joinUrl(client.baseUrl, "/functions/v1/{encodePathSegment(cleanName(\"function\", functionName)?)}")`,
 		`joinUrl(client.baseUrl, "/graphql/v1")`,
+		`env.require("SUPABASE_URL")`,
+		`env.require("SUPABASE_SERVICE_ROLE_KEY")`,
 		`out.insert("apikey", strings.trimSpace(client.apiKey))`,
 		`out.insert("Authorization", "Bearer {strings.trimSpace(bearer)}")`,
 		`out.insert("Accept-Profile", strings.trimSpace(client.schema))`,
@@ -123,6 +133,12 @@ func TestSupabaseModulePinsEndpointAndHeaderBehavior(t *testing.T) {
 		`"/{encodeObjectPath(path)?}"`,
 		`h.insert("x-upsert", "true")`,
 		`prop("prefixes", array(items))`,
+		`object/sign/{encodePathSegment(cleanName(\"bucket\", bucket)?)}"`,
+		`object/list/{encodePathSegment(cleanName(\"bucket\", bucket)?)}"`,
+		`prop("expiresIn", expiresInSeconds.toString())`,
+		`prop("sortBy", value.toJson())`,
+		`response.header("Content-Range")`,
+		`Ok(Page<T> {`,
 		`normalizedJsonObject(bodyJson)`,
 		`parseApiError(response).summary()`,
 	} {

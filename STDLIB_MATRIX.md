@@ -94,7 +94,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | watch | 535 | pure Osty + fs/time/cmd | polling file watcher: fs.watch snapshot parsing, typed create/modify/remove diff, debounce, hidden/build-dir filters, transform/sync command tasks |
 | clipboard | 125 | pure Osty + os | host clipboard text read/write via pbpaste/pbcopy, Wayland, X11, AppleScript, PowerShell |
 | graphql | 224 | pure Osty | document / field / argument builders + request JSON body encoding |
-| supabase | 927 | pure Osty + http/json | Supabase PostgREST/Auth/Storage/Functions/GraphQL request builders, API-key/session headers, filters, Prefer headers, storage object URLs, and response error helpers |
+| supabase | 1214 | pure Osty + http/json/env | Supabase PostgREST/Auth/Storage/Functions/GraphQL request builders, env-backed config, API-key/session headers, filters, Prefer/count headers, typed select pages, Content-Range metadata, signed Storage URLs, storage listing/search, object URLs, and response error helpers |
 | github | 1127 | pure Osty + http/json/crypto | GitHub REST request builders for issues, PRs, Actions, releases, release asset upload, typed error parsing, and webhook HMAC/constant-time verification |
 | template | 148 | pure Osty | escaped/raw `{{name}}` 렌더링 + HTML escape / stripTags |
 | i18n | 136 | pure Osty | Locale / MessageCatalog / fallbackTags / pluralCategory / placeholder format |
@@ -186,7 +186,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | QR / 바코드 문서 | ✅ 가능 | qr + barcode (QR payload/qrencode 계획, ZBar/ZXing 인식 파싱, Code39/EAN-13/UPC-A SVG 렌더링) |
 | SQL 쿼리 조립 | ✅ 가능 | sql (identifier quoting / value literals / dialect placeholders / CRUD builders) |
 | DB 설정/마이그레이션 계획 | ✅ 가능 | db + sql (DSN / pool / tx options / result rows / migration helpers) |
-| Supabase 앱 백엔드 연결 | ✅ 가능 | supabase + http/json/secrets (PostgREST filters/mutations/RPC, Auth password-token requests, Storage object URLs/uploads, Edge Function/GraphQL requests) |
+| Supabase 앱 백엔드 연결 | ✅ 가능 | supabase + http/json/env/secrets (env-backed clients, PostgREST filters/mutations/RPC/count metadata, Auth password-token requests, Storage object URLs/uploads/signed URLs/listing, Edge Function/GraphQL requests) |
 | GitHub 개발 자동화 | ✅ 가능 | github + http/json/crypto (issue/PR request builders, Actions dispatch/runs/jobs/artifacts, release/create/upload, webhook HMAC verification) |
 | 두 언어 앱 / repo 경계 | ✅ 가능 | polyglot + os + env + fs + `osty scaffold polyglot` (Osty+Go/Rust/Python/Node 등 역할 분리, 빌드/테스트/경계 계약, doctorRun/check runner) |
 | AI agent shell / chat mode | ✅ 가능 | ai + aiagents + http/json/log/thread |
