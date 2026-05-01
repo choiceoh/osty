@@ -388,6 +388,10 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualGcRootBindReleaseFixture", []string{"declare void @osty.gc.root_bind_v1(ptr)", "declare void @osty.gc.root_release_v1(ptr)", "call void @osty.gc.root_bind_v1(", "call void @osty.gc.root_release_v1("}},
 		{"lirParityManualGcRootMultipleSlotsFixture", []string{"call void @osty.gc.root_bind_v1(ptr %l1)", "call void @osty.gc.root_bind_v1(ptr %l2)", "call void @osty.gc.root_release_v1(ptr %l2)", "call void @osty.gc.root_release_v1(ptr %l1)"}},
 		{"lirParityManualGcRootScalarOnlyFixture", []string{"define i64 @scalarOnly(i64", "ret i64"}},
+		// ----- Loop metadata (back-edge → !llvm.loop) -----
+		{"lirParityManualLoopMDVectorizeFixture", []string{"!{!\"llvm.loop.vectorize.enable\", i1 true}", "= distinct !{", ", !llvm.loop !"}},
+		{"lirParityManualLoopMDUnrollCountFixture", []string{"!{!\"llvm.loop.unroll.count\", i32 4}", "= distinct !{", ", !llvm.loop !"}},
+		{"lirParityManualLoopMDPlainNoMDFixture", []string{"define void @plainLoop()", "br label %bb0"}},
 	}
 
 	for _, tt := range want {

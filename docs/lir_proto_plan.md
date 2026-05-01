@@ -708,6 +708,58 @@ that must NOT emit root binding — implicitly enforced by the
 catalog-shape pin since the function envelope and `ret i64` needles
 match without any GC declares).
 
+Design decision: per-loop `!llvm.loop.*` metadata lands as a paired
+MIR + LIR change.
+
+**MIR side**: `MirTerm` grows a `loopBackEdge: Bool` field
+(default `false`). The HIR→MIR loop lowerers in
+`toolchain/mir_lower.osty` (`mirLowerForInfinite` / `forWhile` /
+`forRange` / `forInList` / `forInChannel`) replace the body-end
+`mirGotoTerm(header, span)` with the new
+`mirGotoBackEdgeTerm(header, span)` constructor at the five back-
+edge sites — the only Goto/Branch terminators in those lowerers
+that close one iteration of an enclosing loop. Other Gotos in those
+loop shapes (entry → header, body → step) keep the false default
+because they are loop-internal forward edges, not back-edges.
+
+The Go-side `internal/mir/mir.go` is intentionally NOT touched —
+production's MIR generator emits loop metadata via a different
+mechanism (text-rewriting the most-recent `br` line in
+`generator.go::attachVectorizeMD`) and does not need a back-edge
+flag in MIR. Adding the flag only on the Osty side keeps the
+existing Go path quiet while LIR Proto gets a structured
+back-edge signal.
+
+**LIR side**: `LirTerm` grows `loopMDRef: String` (empty by default
+= no metadata). `lirRenderTerm` appends `, !llvm.loop !N` after the
+base terminator text when the ref is set. `lirNextLoopMD(l, fn_)`
+allocates a fresh `!N` distinct loop node plus the property nodes
+the function's annotations request:
+
+- `#[vectorize]` → `!{!"llvm.loop.vectorize.enable", i1 true}` plus
+  optional `vectorize.width`, `vectorize.scalable.enable`,
+  `vectorize.predicate.enable` per the LANG_SPEC v0.6 A5/A5.1
+  surface.
+- `#[unroll]` / `#[unroll(count = N)]` → `!{!"llvm.loop.unroll.count",
+  i32 N}` (when count > 0) or `!{!"llvm.loop.unroll.enable",
+  i1 true}` (bare).
+
+`lirLowerMirTerm` for `MirTermGoto` / `MirTermBranch` checks
+`term.loopBackEdge && lirFnHasLoopHints(l.fn_)` and calls
+`lirNextLoopMD` to allocate the metadata, attaching the resulting
+`!N` to `LirTerm.loopMDRef`. Nodes accumulate in
+`LirModule.metadata` and the renderer emits them at the end of the
+module text — same shape as production
+(`generator.go::nextLoopMD`).
+
+Three Phase-5 fixtures pin the new shape: `loop_md_vectorize`
+(infinite loop with `vectorize=true` → back-edge carries metadata
+ref), `loop_md_unroll_count` (infinite loop with `unroll=true,
+unrollCount=4` → property node renders as `unroll.count`,
+i32 4), and `loop_md_plain_no_md` (infinite loop without any
+annotations — back-edge MUST NOT carry metadata, enforced by the
+absence of `!llvm.loop` in the rendered text).
+
 ## Phase 0: lock the boundary
 
 Deliverables:
