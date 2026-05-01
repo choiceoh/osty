@@ -1,0 +1,1127 @@
+// std.github - GitHub REST request builders and webhook helpers.
+//
+// The module stays transport-light: it builds ready-to-send std.http requests
+// for issues, pull requests, Actions, releases, and webhook verification. Hosts
+// still own token storage, network execution, and webhook routing.
+
+use std.bytes
+use std.crypto
+use std.encoding
+use std.error
+use std.http
+use std.json
+use std.strings
+
+pub type Headers = http.Headers
+pub type QueryValues = http.QueryValues
+
+pub enum IssueState {
+    IssueOpen,
+    IssueClosed,
+    IssueAll,
+
+    pub fn toString(self) -> String {
+        match self {
+            IssueOpen   -> "open",
+            IssueClosed -> "closed",
+            IssueAll    -> "all",
+        }
+    }
+}
+
+pub enum PullState {
+    PullOpen,
+    PullClosed,
+    PullAll,
+
+    pub fn toString(self) -> String {
+        match self {
+            PullOpen   -> "open",
+            PullClosed -> "closed",
+            PullAll    -> "all",
+        }
+    }
+}
+
+pub enum ReviewEvent {
+    ReviewComment,
+    ReviewApprove,
+    ReviewRequestChanges,
+
+    pub fn toString(self) -> String {
+        match self {
+            ReviewComment        -> "COMMENT",
+            ReviewApprove        -> "APPROVE",
+            ReviewRequestChanges -> "REQUEST_CHANGES",
+        }
+    }
+}
+
+pub enum MergeMethod {
+    MergeCommit,
+    MergeSquash,
+    MergeRebase,
+
+    pub fn toString(self) -> String {
+        match self {
+            MergeCommit -> "merge",
+            MergeSquash -> "squash",
+            MergeRebase -> "rebase",
+        }
+    }
+}
+
+pub struct Client {
+    pub baseUrl: String = "https://api.github.com",
+    pub uploadBaseUrl: String = "https://uploads.github.com",
+    pub token: String = "",
+    pub apiVersion: String = "2022-11-28",
+    pub userAgent: String = "osty-stdlib-github",
+    pub extraHeaders: Headers = {:},
+
+    pub fn withToken(mut self, token: String) -> Client {
+        self.token = strings.trimSpace(token)
+        self
+    }
+
+    pub fn withApiVersion(mut self, version: String) -> Client {
+        self.apiVersion = strings.trimSpace(version)
+        self
+    }
+
+    pub fn withUserAgent(mut self, value: String) -> Client {
+        self.userAgent = strings.trimSpace(value)
+        self
+    }
+
+    pub fn withHeader(mut self, name: String, value: String) -> Client {
+        self.extraHeaders.insert(name, value)
+        self
+    }
+}
+
+pub struct Repository {
+    pub owner: String,
+    pub name: String,
+
+    pub fn fullName(self) -> String {
+        "{self.owner}/{self.name}"
+    }
+
+    pub fn apiPath(self) -> String {
+        "/repos/{encodePathSegment(self.owner)}/{encodePathSegment(self.name)}"
+    }
+}
+
+pub struct Pagination {
+    pub perPage: Int = 30,
+    pub page: Int = 1,
+}
+
+pub struct IssueQuery {
+    pub state: IssueState,
+    pub labels: List<String> = [],
+    pub assignee: String = "",
+    pub creator: String = "",
+    pub mentioned: String = "",
+    pub milestone: String = "",
+    pub since: String = "",
+    pub sort: String = "",
+    pub direction: String = "",
+    pub pagination: Pagination,
+}
+
+pub struct IssueDraft {
+    pub title: String,
+    pub body: String = "",
+    pub labels: List<String> = [],
+    pub assignees: List<String> = [],
+    pub milestone: Int? = None,
+}
+
+pub struct IssuePatch {
+    pub title: String? = None,
+    pub body: String? = None,
+    pub state: IssueState? = None,
+    pub labels: List<String> = [],
+    pub assignees: List<String> = [],
+    pub milestone: Int? = None,
+}
+
+pub struct PullRequestQuery {
+    pub state: PullState,
+    pub head: String = "",
+    pub base: String = "",
+    pub sort: String = "",
+    pub direction: String = "",
+    pub pagination: Pagination,
+}
+
+pub struct PullRequestDraft {
+    pub title: String,
+    pub head: String,
+    pub base: String,
+    pub body: String = "",
+    pub draft: Bool = false,
+    pub maintainerCanModify: Bool = true,
+}
+
+pub struct PullRequestPatch {
+    pub title: String? = None,
+    pub body: String? = None,
+    pub state: PullState? = None,
+    pub base: String? = None,
+    pub maintainerCanModify: Bool? = None,
+}
+
+pub struct ReviewDraft {
+    pub event: ReviewEvent,
+    pub body: String = "",
+    pub commitId: String = "",
+}
+
+pub struct MergeOptions {
+    pub commitTitle: String = "",
+    pub commitMessage: String = "",
+    pub sha: String = "",
+    pub method: MergeMethod,
+}
+
+pub struct WorkflowRunQuery {
+    pub branch: String = "",
+    pub event: String = "",
+    pub status: String = "",
+    pub actor: String = "",
+    pub created: String = "",
+    pub headSha: String = "",
+    pub pagination: Pagination,
+}
+
+pub struct WorkflowDispatch {
+    pub ref: String,
+    pub inputsJson: String = "",
+}
+
+pub struct ReleaseDraft {
+    pub tagName: String,
+    pub targetCommitish: String = "",
+    pub name: String = "",
+    pub body: String = "",
+    pub draft: Bool = false,
+    pub prerelease: Bool = false,
+    pub generateReleaseNotes: Bool = false,
+    pub makeLatest: String = "",
+}
+
+pub struct ReleaseNotesOptions {
+    pub tagName: String,
+    pub targetCommitish: String = "",
+    pub previousTagName: String = "",
+}
+
+pub struct WebhookDelivery {
+    pub event: String,
+    pub deliveryId: String,
+    pub hookId: String,
+    pub signature256: String,
+    pub body: Bytes,
+}
+
+pub struct WebhookDecision {
+    pub valid: Bool,
+    pub event: String,
+    pub deliveryId: String,
+    pub reason: String,
+}
+
+pub struct ApiError {
+    pub status: Int,
+    pub message: String = "",
+    pub documentationUrl: String = "",
+    pub rawJson: String = "",
+
+    pub fn summary(self) -> String {
+        let msg = if strings.trimSpace(self.message).isEmpty() { "request failed" } else { strings.trimSpace(self.message) }
+        let doc = if strings.trimSpace(self.documentationUrl).isEmpty() { "" } else { ": {strings.trimSpace(self.documentationUrl)}" }
+        "github: HTTP {self.status}: {msg}{doc}"
+    }
+}
+
+pub fn anonymous() -> Client {
+    Client {}
+}
+
+pub fn client(token: String) -> Client {
+    Client {
+        token: strings.trimSpace(token),
+    }
+}
+
+pub fn enterprise(baseUrl: String, uploadBaseUrl: String, token: String) -> Result<Client, Error> {
+    let api = stripTrailingSlash(strings.trimSpace(baseUrl))
+    let upload = stripTrailingSlash(strings.trimSpace(uploadBaseUrl))
+    if api.isEmpty() {
+        return Err(error.new("github: base URL is empty"))
+    }
+    if upload.isEmpty() {
+        return Err(error.new("github: upload base URL is empty"))
+    }
+    Ok(Client {
+        baseUrl: api,
+        uploadBaseUrl: upload,
+        token: strings.trimSpace(token),
+    })
+}
+
+pub fn repo(owner: String, name: String) -> Result<Repository, Error> {
+    Ok(Repository {
+        owner: cleanPathSegment("owner", owner)?,
+        name: cleanPathSegment("repo", name)?,
+    })
+}
+
+pub fn parseRepo(fullName: String) -> Result<Repository, Error> {
+    let parts = strings.split(strings.trimSpace(fullName), "/")
+    if parts.len() != 2 {
+        return Err(error.new("github: repository must be owner/name: {fullName}"))
+    }
+    repo(parts[0], parts[1])
+}
+
+pub fn pagination() -> Pagination {
+    Pagination { perPage: 30, page: 1 }
+}
+
+pub fn page(perPage: Int, pageNumber: Int) -> Pagination {
+    Pagination { perPage: perPage, page: pageNumber }
+}
+
+pub fn issueQuery() -> IssueQuery {
+    IssueQuery {
+        state: IssueOpen,
+        pagination: pagination(),
+    }
+}
+
+pub fn issueDraft(title: String) -> IssueDraft {
+    IssueDraft { title: title }
+}
+
+pub fn issuePatch() -> IssuePatch {
+    IssuePatch {}
+}
+
+pub fn pullRequestQuery() -> PullRequestQuery {
+    PullRequestQuery {
+        state: PullOpen,
+        pagination: pagination(),
+    }
+}
+
+pub fn pullRequestDraft(title: String, head: String, base: String) -> PullRequestDraft {
+    PullRequestDraft { title: title, head: head, base: base }
+}
+
+pub fn pullRequestPatch() -> PullRequestPatch {
+    PullRequestPatch {}
+}
+
+pub fn workflowRunQuery() -> WorkflowRunQuery {
+    WorkflowRunQuery {
+        pagination: pagination(),
+    }
+}
+
+pub fn workflowDispatch(ref: String) -> WorkflowDispatch {
+    WorkflowDispatch { ref: ref }
+}
+
+pub fn review(event: ReviewEvent, body: String = "") -> ReviewDraft {
+    ReviewDraft { event: event, body: body }
+}
+
+pub fn mergeOptions() -> MergeOptions {
+    MergeOptions { method: MergeSquash }
+}
+
+pub fn mergeOptionsWithMethod(method: MergeMethod) -> MergeOptions {
+    MergeOptions { method: method }
+}
+
+pub fn releaseDraft(tagName: String) -> ReleaseDraft {
+    ReleaseDraft { tagName: tagName }
+}
+
+pub fn releaseNotesOptions(tagName: String) -> ReleaseNotesOptions {
+    ReleaseNotesOptions { tagName: tagName }
+}
+
+pub fn headers(client: Client) -> Headers {
+    let mut out: Headers = {:}
+    out.insert("Accept", "application/vnd.github+json")
+    if !strings.trimSpace(client.apiVersion).isEmpty() {
+        out.insert("X-GitHub-Api-Version", strings.trimSpace(client.apiVersion))
+    }
+    if !strings.trimSpace(client.userAgent).isEmpty() {
+        out.insert("User-Agent", strings.trimSpace(client.userAgent))
+    }
+    if !strings.trimSpace(client.token).isEmpty() {
+        out.insert("Authorization", "Bearer {strings.trimSpace(client.token)}")
+    }
+    for (name, value) in client.extraHeaders {
+        out.insert(name, value)
+    }
+    out
+}
+
+pub fn apiUrl(client: Client, path: String) -> Result<String, Error> {
+    validateClient(client)?
+    Ok(joinUrl(client.baseUrl, cleanApiPath(path)?))
+}
+
+pub fn uploadUrl(client: Client, path: String) -> Result<String, Error> {
+    validateClient(client)?
+    Ok(joinUrl(client.uploadBaseUrl, cleanApiPath(path)?))
+}
+
+pub fn repoUrl(client: Client, repository: Repository) -> Result<String, Error> {
+    apiUrl(client, repository.apiPath())
+}
+
+pub fn issuesUrl(client: Client, repository: Repository) -> Result<String, Error> {
+    apiUrl(client, "{repository.apiPath()}/issues")
+}
+
+pub fn issueUrl(client: Client, repository: Repository, number: Int) -> Result<String, Error> {
+    let base = issuesUrl(client, repository)?
+    let n = positiveNumber("issue", number)?
+    Ok("{base}/{n}")
+}
+
+pub fn issueCommentsUrl(client: Client, repository: Repository, number: Int) -> Result<String, Error> {
+    Ok("{issueUrl(client, repository, number)?}/comments")
+}
+
+pub fn pullsUrl(client: Client, repository: Repository) -> Result<String, Error> {
+    apiUrl(client, "{repository.apiPath()}/pulls")
+}
+
+pub fn pullUrl(client: Client, repository: Repository, number: Int) -> Result<String, Error> {
+    let base = pullsUrl(client, repository)?
+    let n = positiveNumber("pull request", number)?
+    Ok("{base}/{n}")
+}
+
+pub fn pullFilesUrl(client: Client, repository: Repository, number: Int) -> Result<String, Error> {
+    Ok("{pullUrl(client, repository, number)?}/files")
+}
+
+pub fn pullReviewsUrl(client: Client, repository: Repository, number: Int) -> Result<String, Error> {
+    Ok("{pullUrl(client, repository, number)?}/reviews")
+}
+
+pub fn actionsRunsUrl(client: Client, repository: Repository) -> Result<String, Error> {
+    apiUrl(client, "{repository.apiPath()}/actions/runs")
+}
+
+pub fn workflowRunsUrl(client: Client, repository: Repository, workflowId: String) -> Result<String, Error> {
+    let workflow = encodePathSegment(cleanPathSegment("workflow", workflowId)?)
+    apiUrl(client, "{repository.apiPath()}/actions/workflows/{workflow}/runs")
+}
+
+pub fn releasesUrl(client: Client, repository: Repository) -> Result<String, Error> {
+    apiUrl(client, "{repository.apiPath()}/releases")
+}
+
+pub fn releaseUrl(client: Client, repository: Repository, releaseId: Int) -> Result<String, Error> {
+    let base = releasesUrl(client, repository)?
+    let id = positiveNumber("release", releaseId)?
+    Ok("{base}/{id}")
+}
+
+pub fn listIssuesHttpRequest(client: Client, repository: Repository) -> Result<http.Request, Error> {
+    listIssuesWithQueryHttpRequest(client, repository, issueQuery())
+}
+
+pub fn listIssuesWithQueryHttpRequest(client: Client, repository: Repository, query: IssueQuery) -> Result<http.Request, Error> {
+    let req = githubRequest(client, http.Get, "{repository.apiPath()}/issues")?
+    Ok(withQuery(req, issueQueryValues(query)?))
+}
+
+pub fn getIssueHttpRequest(client: Client, repository: Repository, number: Int) -> Result<http.Request, Error> {
+    let n = positiveNumber("issue", number)?
+    githubRequest(client, http.Get, "{repository.apiPath()}/issues/{n}")
+}
+
+pub fn createIssueHttpRequest(client: Client, repository: Repository, draft: IssueDraft) -> Result<http.Request, Error> {
+    githubJsonRequest(client, http.Post, "{repository.apiPath()}/issues", renderIssueDraft(draft)?)
+}
+
+pub fn updateIssueHttpRequest(client: Client, repository: Repository, number: Int, patch: IssuePatch) -> Result<http.Request, Error> {
+    let n = positiveNumber("issue", number)?
+    githubJsonRequest(client, http.Patch, "{repository.apiPath()}/issues/{n}", renderIssuePatch(patch)?)
+}
+
+pub fn closeIssueHttpRequest(client: Client, repository: Repository, number: Int) -> Result<http.Request, Error> {
+    let n = positiveNumber("issue", number)?
+    githubJsonRequest(client, http.Patch, "{repository.apiPath()}/issues/{n}", object([prop("state", quote("closed"))]))
+}
+
+pub fn commentIssueHttpRequest(client: Client, repository: Repository, number: Int, body: String) -> Result<http.Request, Error> {
+    let n = positiveNumber("issue", number)?
+    githubJsonRequest(client, http.Post, "{repository.apiPath()}/issues/{n}/comments", object([prop("body", quote(body))]))
+}
+
+pub fn listPullRequestsHttpRequest(client: Client, repository: Repository) -> Result<http.Request, Error> {
+    listPullRequestsWithQueryHttpRequest(client, repository, pullRequestQuery())
+}
+
+pub fn listPullRequestsWithQueryHttpRequest(client: Client, repository: Repository, query: PullRequestQuery) -> Result<http.Request, Error> {
+    let req = githubRequest(client, http.Get, "{repository.apiPath()}/pulls")?
+    Ok(withQuery(req, pullRequestQueryValues(query)?))
+}
+
+pub fn getPullRequestHttpRequest(client: Client, repository: Repository, number: Int) -> Result<http.Request, Error> {
+    let n = positiveNumber("pull request", number)?
+    githubRequest(client, http.Get, "{repository.apiPath()}/pulls/{n}")
+}
+
+pub fn createPullRequestHttpRequest(client: Client, repository: Repository, draft: PullRequestDraft) -> Result<http.Request, Error> {
+    githubJsonRequest(client, http.Post, "{repository.apiPath()}/pulls", renderPullRequestDraft(draft)?)
+}
+
+pub fn updatePullRequestHttpRequest(client: Client, repository: Repository, number: Int, patch: PullRequestPatch) -> Result<http.Request, Error> {
+    let n = positiveNumber("pull request", number)?
+    githubJsonRequest(client, http.Patch, "{repository.apiPath()}/pulls/{n}", renderPullRequestPatch(patch)?)
+}
+
+pub fn listPullRequestFilesHttpRequest(client: Client, repository: Repository, number: Int) -> Result<http.Request, Error> {
+    listPullRequestFilesPageHttpRequest(client, repository, number, pagination())
+}
+
+pub fn listPullRequestFilesPageHttpRequest(client: Client, repository: Repository, number: Int, pagination: Pagination) -> Result<http.Request, Error> {
+    let n = positiveNumber("pull request", number)?
+    let req = githubRequest(client, http.Get, "{repository.apiPath()}/pulls/{n}/files")?
+    Ok(withQuery(req, paginationQueryValues(pagination)?))
+}
+
+pub fn createPullRequestReviewHttpRequest(client: Client, repository: Repository, number: Int, review: ReviewDraft) -> Result<http.Request, Error> {
+    let n = positiveNumber("pull request", number)?
+    githubJsonRequest(client, http.Post, "{repository.apiPath()}/pulls/{n}/reviews", renderReviewDraft(review))
+}
+
+pub fn requestPullRequestReviewersHttpRequest(client: Client, repository: Repository, number: Int, reviewers: List<String>, teamReviewers: List<String> = []) -> Result<http.Request, Error> {
+    if reviewers.isEmpty() && teamReviewers.isEmpty() {
+        return Err(error.new("github: reviewer request is empty"))
+    }
+    let n = positiveNumber("pull request", number)?
+    githubJsonRequest(
+        client,
+        http.Post,
+        "{repository.apiPath()}/pulls/{n}/requested_reviewers",
+        object([
+            prop("reviewers", stringArray(reviewers)),
+            prop("team_reviewers", stringArray(teamReviewers)),
+        ]),
+    )
+}
+
+pub fn mergePullRequestHttpRequest(client: Client, repository: Repository, number: Int) -> Result<http.Request, Error> {
+    mergePullRequestWithOptionsHttpRequest(client, repository, number, mergeOptions())
+}
+
+pub fn mergePullRequestWithOptionsHttpRequest(client: Client, repository: Repository, number: Int, options: MergeOptions) -> Result<http.Request, Error> {
+    let n = positiveNumber("pull request", number)?
+    githubJsonRequest(client, http.Put, "{repository.apiPath()}/pulls/{n}/merge", renderMergeOptions(options))
+}
+
+pub fn listWorkflowRunsHttpRequest(client: Client, repository: Repository) -> Result<http.Request, Error> {
+    listWorkflowRunsWithQueryHttpRequest(client, repository, workflowRunQuery())
+}
+
+pub fn listWorkflowRunsWithQueryHttpRequest(client: Client, repository: Repository, query: WorkflowRunQuery) -> Result<http.Request, Error> {
+    let req = githubRequest(client, http.Get, "{repository.apiPath()}/actions/runs")?
+    Ok(withQuery(req, workflowRunQueryValues(query)?))
+}
+
+pub fn listWorkflowRunsForWorkflowHttpRequest(client: Client, repository: Repository, workflowId: String) -> Result<http.Request, Error> {
+    listWorkflowRunsForWorkflowWithQueryHttpRequest(client, repository, workflowId, workflowRunQuery())
+}
+
+pub fn listWorkflowRunsForWorkflowWithQueryHttpRequest(client: Client, repository: Repository, workflowId: String, query: WorkflowRunQuery) -> Result<http.Request, Error> {
+    let workflow = encodePathSegment(cleanPathSegment("workflow", workflowId)?)
+    let req = githubRequest(client, http.Get, "{repository.apiPath()}/actions/workflows/{workflow}/runs")?
+    Ok(withQuery(req, workflowRunQueryValues(query)?))
+}
+
+pub fn getWorkflowRunHttpRequest(client: Client, repository: Repository, runId: Int) -> Result<http.Request, Error> {
+    let id = positiveNumber("workflow run", runId)?
+    githubRequest(client, http.Get, "{repository.apiPath()}/actions/runs/{id}")
+}
+
+pub fn listWorkflowJobsHttpRequest(client: Client, repository: Repository, runId: Int) -> Result<http.Request, Error> {
+    listWorkflowJobsPageHttpRequest(client, repository, runId, pagination())
+}
+
+pub fn listWorkflowJobsPageHttpRequest(client: Client, repository: Repository, runId: Int, paginationValue: Pagination) -> Result<http.Request, Error> {
+    let id = positiveNumber("workflow run", runId)?
+    let req = githubRequest(client, http.Get, "{repository.apiPath()}/actions/runs/{id}/jobs")?
+    Ok(withQuery(req, paginationQueryValues(paginationValue)?))
+}
+
+pub fn workflowDispatchHttpRequest(client: Client, repository: Repository, workflowId: String, dispatch: WorkflowDispatch) -> Result<http.Request, Error> {
+    let cleanRef = strings.trimSpace(dispatch.ref)
+    if cleanRef.isEmpty() {
+        return Err(error.new("github: workflow dispatch ref is empty"))
+    }
+    let workflow = encodePathSegment(cleanPathSegment("workflow", workflowId)?)
+    githubJsonRequest(
+        client,
+        http.Post,
+        "{repository.apiPath()}/actions/workflows/{workflow}/dispatches",
+        object([
+            prop("ref", quote(cleanRef)),
+            prop("inputs", normalizedJsonObject(dispatch.inputsJson)),
+        ]),
+    )
+}
+
+pub fn rerunWorkflowRunHttpRequest(client: Client, repository: Repository, runId: Int) -> Result<http.Request, Error> {
+    let id = positiveNumber("workflow run", runId)?
+    githubRequest(client, http.Post, "{repository.apiPath()}/actions/runs/{id}/rerun")
+}
+
+pub fn cancelWorkflowRunHttpRequest(client: Client, repository: Repository, runId: Int) -> Result<http.Request, Error> {
+    let id = positiveNumber("workflow run", runId)?
+    githubRequest(client, http.Post, "{repository.apiPath()}/actions/runs/{id}/cancel")
+}
+
+pub fn listArtifactsHttpRequest(client: Client, repository: Repository) -> Result<http.Request, Error> {
+    listArtifactsPageHttpRequest(client, repository, pagination())
+}
+
+pub fn listArtifactsPageHttpRequest(client: Client, repository: Repository, paginationValue: Pagination) -> Result<http.Request, Error> {
+    let req = githubRequest(client, http.Get, "{repository.apiPath()}/actions/artifacts")?
+    Ok(withQuery(req, paginationQueryValues(paginationValue)?))
+}
+
+pub fn downloadArtifactHttpRequest(client: Client, repository: Repository, artifactId: Int, archiveFormat: String = "zip") -> Result<http.Request, Error> {
+    let id = positiveNumber("artifact", artifactId)?
+    let format = encodePathSegment(cleanPathSegment("archive format", archiveFormat)?)
+    githubRequest(
+        client,
+        http.Get,
+        "{repository.apiPath()}/actions/artifacts/{id}/{format}",
+    )
+}
+
+pub fn listReleasesHttpRequest(client: Client, repository: Repository) -> Result<http.Request, Error> {
+    listReleasesPageHttpRequest(client, repository, pagination())
+}
+
+pub fn listReleasesPageHttpRequest(client: Client, repository: Repository, paginationValue: Pagination) -> Result<http.Request, Error> {
+    let req = githubRequest(client, http.Get, "{repository.apiPath()}/releases")?
+    Ok(withQuery(req, paginationQueryValues(paginationValue)?))
+}
+
+pub fn latestReleaseHttpRequest(client: Client, repository: Repository) -> Result<http.Request, Error> {
+    githubRequest(client, http.Get, "{repository.apiPath()}/releases/latest")
+}
+
+pub fn getReleaseHttpRequest(client: Client, repository: Repository, releaseId: Int) -> Result<http.Request, Error> {
+    let id = positiveNumber("release", releaseId)?
+    githubRequest(client, http.Get, "{repository.apiPath()}/releases/{id}")
+}
+
+pub fn getReleaseByTagHttpRequest(client: Client, repository: Repository, tagName: String) -> Result<http.Request, Error> {
+    let tag = encodePathSegment(cleanPathSegment("tag", tagName)?)
+    githubRequest(client, http.Get, "{repository.apiPath()}/releases/tags/{tag}")
+}
+
+pub fn createReleaseHttpRequest(client: Client, repository: Repository, draft: ReleaseDraft) -> Result<http.Request, Error> {
+    githubJsonRequest(client, http.Post, "{repository.apiPath()}/releases", renderReleaseDraft(draft)?)
+}
+
+pub fn updateReleaseHttpRequest(client: Client, repository: Repository, releaseId: Int, draft: ReleaseDraft) -> Result<http.Request, Error> {
+    let id = positiveNumber("release", releaseId)?
+    githubJsonRequest(client, http.Patch, "{repository.apiPath()}/releases/{id}", renderReleaseDraft(draft)?)
+}
+
+pub fn deleteReleaseHttpRequest(client: Client, repository: Repository, releaseId: Int) -> Result<http.Request, Error> {
+    let id = positiveNumber("release", releaseId)?
+    githubRequest(client, http.Delete, "{repository.apiPath()}/releases/{id}")
+}
+
+pub fn generateReleaseNotesHttpRequest(client: Client, repository: Repository, options: ReleaseNotesOptions) -> Result<http.Request, Error> {
+    githubJsonRequest(client, http.Post, "{repository.apiPath()}/releases/generate-notes", renderReleaseNotesOptions(options)?)
+}
+
+pub fn uploadReleaseAssetHttpRequest(client: Client, repository: Repository, releaseId: Int, name: String, body: Bytes, contentType: String = "application/octet-stream") -> Result<http.Request, Error> {
+    let cleanName = cleanAssetName(name)?
+    let id = positiveNumber("release", releaseId)?
+    let path = "{repository.apiPath()}/releases/{id}/assets"
+    let encodedName = encoding.url.encode(cleanName)
+    let url = "{uploadUrl(client, path)?}?name={encodedName}"
+    Ok(http.newRequest(http.Post, url)
+        .withHeaders(headers(client))
+        .withContentType(if strings.trimSpace(contentType).isEmpty() { "application/octet-stream" } else { strings.trimSpace(contentType) })
+        .withBody(body))
+}
+
+pub fn execute(req: http.Request) -> Result<http.Response, Error> {
+    requireSuccess(http.request(req)?)
+}
+
+pub fn executeJson<T>(req: http.Request) -> Result<T, Error> {
+    execute(req)?.json::<T>()
+}
+
+pub fn parseApiError(response: http.Response) -> ApiError {
+    let text = response.text() ?? ""
+    let mut out = ApiError {
+        status: response.status,
+        rawJson: text,
+    }
+    match json.parseValue(text) {
+        Ok(value) -> match json.asObject(value) {
+            Ok(obj) -> {
+                out.message = stringField(obj, "message")
+                out.documentationUrl = stringField(obj, "documentation_url")
+            },
+            Err(_) -> {},
+        },
+        Err(_) -> {
+            out.message = strings.trimSpace(text)
+        },
+    }
+    out
+}
+
+pub fn requireSuccess(response: http.Response) -> Result<http.Response, Error> {
+    if response.isSuccess() {
+        return Ok(response)
+    }
+    Err(error.new(parseApiError(response).summary()))
+}
+
+pub fn webhookSignature(secret: String, body: Bytes) -> String {
+    let digest = crypto.hmac.sha256(bytes.fromString(secret), body)
+    "sha256={encoding.hex.encode(digest)}"
+}
+
+pub fn verifyWebhookSignature(secret: String, body: Bytes, signatureHeader: String) -> Bool {
+    let clean = strings.trimSpace(signatureHeader)
+    if strings.trimSpace(secret).isEmpty() || clean.isEmpty() || !strings.startsWith(clean, "sha256=") {
+        return false
+    }
+    crypto.constantTimeEq(bytes.fromString(webhookSignature(secret, body)), bytes.fromString(clean))
+}
+
+pub fn webhookDelivery(request: http.Request) -> WebhookDelivery {
+    WebhookDelivery {
+        event: request.headerOr("X-GitHub-Event", ""),
+        deliveryId: request.headerOr("X-GitHub-Delivery", ""),
+        hookId: request.headerOr("X-GitHub-Hook-ID", ""),
+        signature256: request.headerOr("X-Hub-Signature-256", ""),
+        body: request.body,
+    }
+}
+
+pub fn verifyWebhookRequest(request: http.Request, secret: String) -> WebhookDecision {
+    let delivery = webhookDelivery(request)
+    if delivery.deliveryId.isEmpty() {
+        return WebhookDecision { valid: false, event: delivery.event, deliveryId: delivery.deliveryId, reason: "missing X-GitHub-Delivery" }
+    }
+    if delivery.signature256.isEmpty() {
+        return WebhookDecision { valid: false, event: delivery.event, deliveryId: delivery.deliveryId, reason: "missing X-Hub-Signature-256" }
+    }
+    if verifyWebhookSignature(secret, delivery.body, delivery.signature256) {
+        WebhookDecision { valid: true, event: delivery.event, deliveryId: delivery.deliveryId, reason: "ok" }
+    } else {
+        WebhookDecision { valid: false, event: delivery.event, deliveryId: delivery.deliveryId, reason: "signature mismatch" }
+    }
+}
+
+pub fn parseWebhookPayload(request: http.Request) -> Result<json.Json, Error> {
+    json.parseValue(request.text()?)
+}
+
+pub fn webhookAction(body: Bytes) -> String? {
+    match bytes.toString(body) {
+        Ok(text) -> match json.parseValue(text) {
+            Ok(value) -> match json.asObject(value) {
+                Ok(obj) -> {
+                    let action = stringField(obj, "action")
+                    if action.isEmpty() { None } else { Some(action) }
+                },
+                Err(_) -> None,
+            },
+            Err(_) -> None,
+        },
+        Err(_) -> None,
+    }
+}
+
+pub fn isWebhookEvent(request: http.Request, eventName: String) -> Bool {
+    request.headerOr("X-GitHub-Event", "") == strings.trimSpace(eventName)
+}
+
+pub fn webhookAck(message: String = "ok") -> http.Response {
+    http.okText(message)
+}
+
+fn githubRequest(client: Client, method: http.Method, path: String) -> Result<http.Request, Error> {
+    Ok(http.newRequest(method, apiUrl(client, path)?)
+        .withHeaders(headers(client)))
+}
+
+fn githubJsonRequest(client: Client, method: http.Method, path: String, body: String) -> Result<http.Request, Error> {
+    Ok(http.newRequest(method, apiUrl(client, path)?)
+        .withHeaders(headers(client))
+        .withText(body)
+        .withContentType("application/json"))
+}
+
+fn withQuery(request: http.Request, values: QueryValues) -> http.Request {
+    if values.keys().isEmpty() {
+        return request
+    }
+    request.withQuery(values)
+}
+
+fn issueQueryValues(query: IssueQuery) -> Result<QueryValues, Error> {
+    let mut out = paginationQueryValues(query.pagination)?
+    out.insert("state", [query.state.toString()])
+    addStringParam(out, "assignee", query.assignee)
+    addStringParam(out, "creator", query.creator)
+    addStringParam(out, "mentioned", query.mentioned)
+    addStringParam(out, "milestone", query.milestone)
+    addStringParam(out, "since", query.since)
+    addStringParam(out, "sort", query.sort)
+    addStringParam(out, "direction", query.direction)
+    if !query.labels.isEmpty() {
+        out.insert("labels", [strings.join(query.labels, ",")])
+    }
+    Ok(out)
+}
+
+fn pullRequestQueryValues(query: PullRequestQuery) -> Result<QueryValues, Error> {
+    let mut out = paginationQueryValues(query.pagination)?
+    out.insert("state", [query.state.toString()])
+    addStringParam(out, "head", query.head)
+    addStringParam(out, "base", query.base)
+    addStringParam(out, "sort", query.sort)
+    addStringParam(out, "direction", query.direction)
+    Ok(out)
+}
+
+fn workflowRunQueryValues(query: WorkflowRunQuery) -> Result<QueryValues, Error> {
+    let mut out = paginationQueryValues(query.pagination)?
+    addStringParam(out, "branch", query.branch)
+    addStringParam(out, "event", query.event)
+    addStringParam(out, "status", query.status)
+    addStringParam(out, "actor", query.actor)
+    addStringParam(out, "created", query.created)
+    addStringParam(out, "head_sha", query.headSha)
+    Ok(out)
+}
+
+fn paginationQueryValues(pagination: Pagination) -> Result<QueryValues, Error> {
+    let mut out: QueryValues = {:}
+    if pagination.perPage < 0 || pagination.perPage > 100 {
+        return Err(error.new("github: per_page must be between 0 and 100"))
+    }
+    if pagination.page < 0 {
+        return Err(error.new("github: page must not be negative"))
+    }
+    if pagination.perPage > 0 {
+        out.insert("per_page", [pagination.perPage.toString()])
+    }
+    if pagination.page > 0 {
+        out.insert("page", [pagination.page.toString()])
+    }
+    Ok(out)
+}
+
+fn addStringParam(values: QueryValues, key: String, value: String) {
+    let clean = strings.trimSpace(value)
+    if !clean.isEmpty() {
+        values.insert(key, [clean])
+    }
+}
+
+fn renderIssueDraft(draft: IssueDraft) -> Result<String, Error> {
+    let title = requiredText("issue title", draft.title)?
+    let mut props = [prop("title", quote(title))]
+    addOptionalStringProp(props, "body", draft.body)
+    addStringArrayProp(props, "labels", draft.labels)
+    addStringArrayProp(props, "assignees", draft.assignees)
+    match draft.milestone {
+        Some(value) -> props.push(prop("milestone", value.toString())),
+        None        -> {},
+    }
+    Ok(object(props))
+}
+
+fn renderIssuePatch(patch: IssuePatch) -> Result<String, Error> {
+    let mut props: List<String> = []
+    match patch.title {
+        Some(value) -> props.push(prop("title", quote(requiredText("issue title", value)?))),
+        None        -> {},
+    }
+    match patch.body {
+        Some(value) -> props.push(prop("body", quote(value))),
+        None        -> {},
+    }
+    match patch.state {
+        Some(state) -> {
+            if state == IssueAll {
+                return Err(error.new("github: IssueAll cannot be used as an update state"))
+            }
+            props.push(prop("state", quote(state.toString())))
+        },
+        None -> {},
+    }
+    addStringArrayProp(props, "labels", patch.labels)
+    addStringArrayProp(props, "assignees", patch.assignees)
+    match patch.milestone {
+        Some(value) -> props.push(prop("milestone", value.toString())),
+        None        -> {},
+    }
+    if props.isEmpty() {
+        return Err(error.new("github: issue patch is empty"))
+    }
+    Ok(object(props))
+}
+
+fn renderPullRequestDraft(draft: PullRequestDraft) -> Result<String, Error> {
+    let mut props = [
+        prop("title", quote(requiredText("pull request title", draft.title)?)),
+        prop("head", quote(requiredText("pull request head", draft.head)?)),
+        prop("base", quote(requiredText("pull request base", draft.base)?)),
+        prop("draft", boolValue(draft.draft)),
+        prop("maintainer_can_modify", boolValue(draft.maintainerCanModify)),
+    ]
+    addOptionalStringProp(props, "body", draft.body)
+    Ok(object(props))
+}
+
+fn renderPullRequestPatch(patch: PullRequestPatch) -> Result<String, Error> {
+    let mut props: List<String> = []
+    match patch.title {
+        Some(value) -> props.push(prop("title", quote(requiredText("pull request title", value)?))),
+        None        -> {},
+    }
+    match patch.body {
+        Some(value) -> props.push(prop("body", quote(value))),
+        None        -> {},
+    }
+    match patch.state {
+        Some(state) -> {
+            if state == PullAll {
+                return Err(error.new("github: PullAll cannot be used as an update state"))
+            }
+            props.push(prop("state", quote(state.toString())))
+        },
+        None -> {},
+    }
+    match patch.base {
+        Some(value) -> props.push(prop("base", quote(requiredText("pull request base", value)?))),
+        None        -> {},
+    }
+    match patch.maintainerCanModify {
+        Some(value) -> props.push(prop("maintainer_can_modify", boolValue(value))),
+        None        -> {},
+    }
+    if props.isEmpty() {
+        return Err(error.new("github: pull request patch is empty"))
+    }
+    Ok(object(props))
+}
+
+fn renderReviewDraft(review: ReviewDraft) -> String {
+    let mut props = [prop("event", quote(review.event.toString()))]
+    addOptionalStringProp(props, "body", review.body)
+    addOptionalStringProp(props, "commit_id", review.commitId)
+    object(props)
+}
+
+fn renderMergeOptions(options: MergeOptions) -> String {
+    let mut props = [prop("merge_method", quote(options.method.toString()))]
+    addOptionalStringProp(props, "commit_title", options.commitTitle)
+    addOptionalStringProp(props, "commit_message", options.commitMessage)
+    addOptionalStringProp(props, "sha", options.sha)
+    object(props)
+}
+
+fn renderReleaseDraft(draft: ReleaseDraft) -> Result<String, Error> {
+    let mut props = [
+        prop("tag_name", quote(requiredText("release tag", draft.tagName)?)),
+        prop("draft", boolValue(draft.draft)),
+        prop("prerelease", boolValue(draft.prerelease)),
+        prop("generate_release_notes", boolValue(draft.generateReleaseNotes)),
+    ]
+    addOptionalStringProp(props, "target_commitish", draft.targetCommitish)
+    addOptionalStringProp(props, "name", draft.name)
+    addOptionalStringProp(props, "body", draft.body)
+    addOptionalStringProp(props, "make_latest", draft.makeLatest)
+    Ok(object(props))
+}
+
+fn renderReleaseNotesOptions(options: ReleaseNotesOptions) -> Result<String, Error> {
+    let mut props = [prop("tag_name", quote(requiredText("release tag", options.tagName)?))]
+    addOptionalStringProp(props, "target_commitish", options.targetCommitish)
+    addOptionalStringProp(props, "previous_tag_name", options.previousTagName)
+    Ok(object(props))
+}
+
+fn addOptionalStringProp(props: List<String>, name: String, value: String) {
+    let clean = strings.trimSpace(value)
+    if !clean.isEmpty() {
+        props.push(prop(name, quote(clean)))
+    }
+}
+
+fn addStringArrayProp(props: List<String>, name: String, values: List<String>) {
+    if !values.isEmpty() {
+        props.push(prop(name, stringArray(values)))
+    }
+}
+
+fn stringArray(values: List<String>) -> String {
+    let mut items: List<String> = []
+    for value in values {
+        let clean = strings.trimSpace(value)
+        if !clean.isEmpty() {
+            items.push(quote(clean))
+        }
+    }
+    array(items)
+}
+
+fn requiredText(kind: String, value: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(value)
+    if clean.isEmpty() {
+        return Err(error.new("github: {kind} is empty"))
+    }
+    Ok(clean)
+}
+
+fn validateClient(client: Client) -> Result<(), Error> {
+    if strings.trimSpace(client.baseUrl).isEmpty() {
+        return Err(error.new("github: base URL is empty"))
+    }
+    if strings.trimSpace(client.uploadBaseUrl).isEmpty() {
+        return Err(error.new("github: upload base URL is empty"))
+    }
+    Ok(())
+}
+
+fn cleanApiPath(value: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(value)
+    if clean.isEmpty() {
+        return Err(error.new("github: API path is empty"))
+    }
+    if strings.contains(clean, "?") || strings.contains(clean, "#") || strings.contains(clean, "..") {
+        return Err(error.new("github: unsafe API path: {value}"))
+    }
+    if strings.startsWith(clean, "/") {
+        return Ok(clean)
+    }
+    Ok("/{clean}")
+}
+
+fn cleanPathSegment(kind: String, value: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(value)
+    if clean.isEmpty() {
+        return Err(error.new("github: {kind} is empty"))
+    }
+    if strings.contains(clean, "/") || strings.contains(clean, "?") || strings.contains(clean, "#") {
+        return Err(error.new("github: invalid {kind}: {value}"))
+    }
+    Ok(clean)
+}
+
+fn cleanAssetName(value: String) -> Result<String, Error> {
+    let clean = cleanPathSegment("asset name", value)?
+    if strings.contains(clean, "\\") {
+        return Err(error.new("github: invalid asset name: {value}"))
+    }
+    Ok(clean)
+}
+
+fn positiveNumber(kind: String, value: Int) -> Result<Int, Error> {
+    if value <= 0 {
+        return Err(error.new("github: {kind} number must be positive"))
+    }
+    Ok(value)
+}
+
+fn encodePathSegment(segment: String) -> String {
+    encoding.url.encode(segment)
+}
+
+fn stripTrailingSlash(value: String) -> String {
+    let mut out = strings.trimSpace(value)
+    for strings.endsWith(out, "/") {
+        out = strings.trimSuffix(out, "/")
+    }
+    out
+}
+
+fn joinUrl(base: String, path: String) -> String {
+    let cleanBase = stripTrailingSlash(base)
+    if strings.startsWith(path, "/") {
+        "{cleanBase}{path}"
+    } else {
+        "{cleanBase}/{path}"
+    }
+}
+
+fn normalizedJsonObject(text: String) -> String {
+    let raw = strings.trimSpace(text)
+    if raw.isEmpty() {
+        return "\{\}"
+    }
+    match json.parseValue(raw) {
+        Ok(value) -> match json.asObject(value) {
+            Ok(_)  -> json.stringifyValue(value),
+            Err(_) -> "\{\}",
+        },
+        Err(_) -> "\{\}",
+    }
+}
+
+fn stringField(obj: json.JsonObject, key: String) -> String {
+    match obj.get(key) {
+        Some(value) -> match json.asString(value) {
+            Ok(text) -> text,
+            Err(_)   -> "",
+        },
+        None -> "",
+    }
+}
+
+fn object(props: List<String>) -> String {
+    let open = 123.toChar()
+    let close = 125.toChar()
+    let joined = strings.join(props, ",")
+    "{open}{joined}{close}"
+}
+
+fn array(items: List<String>) -> String {
+    let joined = strings.join(items, ",")
+    "[{joined}]"
+}
+
+fn prop(name: String, value: String) -> String {
+    "{quote(name)}:{value}"
+}
+
+fn quote(text: String) -> String {
+    json.stringifyValue(json.string(text))
+}
+
+fn boolValue(value: Bool) -> String {
+    if value { "true" } else { "false" }
+}
