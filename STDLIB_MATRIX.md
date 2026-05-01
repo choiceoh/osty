@@ -18,19 +18,19 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 93 공개 모듈. 분류 기준:
+총 95 공개 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (87 / 93 = 94%)
+### ⭐⭐⭐⭐⭐ Production (89 / 95 = 94%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
 | strings | 7242 | string 17 + bytes 29 runtime | 압도적. UTF-8 / casefold / normalize / grapheme |
-| http | 1468 | net 40 runtime | Router + Cookie + MediaType + Form + Query + dispatch |
+| http | 1588 | net 40 runtime | Router + Cookie + MediaType + Form + Query + dispatch |
 | ai | 1793 | pure Osty + http/json | OpenAI-compatible / OpenRouter / Anthropic / Gemini / local-runtime chat requests, headers, structured tool calls/results, response parsing, models, embeddings, SSE data helpers |
 | aiagents | 736 | pure Osty | Deneb-derived agent/session/message types, tool presets, safety boundary, RankLines / TruncateHeadTail compaction |
 | aidev | 701 | pure Osty | AI coding-loop data model: SourceFile / SourceSpan / Diagnostic / Patch / FixContext, source excerpts, non-overlap validation, safe text patch application |
@@ -53,6 +53,8 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | redis | 1439 | pure Osty + net/bytes | Redis integration helpers: Config/auth/DB selection, RESP2 byte-stream reader, command builders for strings/hash/list/set/pubsub/scan/streams, pipelines/transactions, typed reply converters, and convenience client helpers |
 | shortid | 65 | pure Osty | Deneb-style `prefix_0000` deterministic short id generator |
 | metrics | 48 | pure Osty | Deneb-style labeled counter snapshots without a metrics backend |
+| observability | 602 | pure Osty + log/metrics/json/redact | Backend-neutral telemetry layer: resource/trace/span/breadcrumb/metric/event builders, traceparent+baggage headers, redacted JSON/log records, counter snapshots |
+| sentry | 650 | pure Osty + observability/http | Sentry DSN parsing, envelope/auth/header generation, event/exception/transaction payloads, HTTP request/send helpers, trace propagation |
 | net | 1084 | net 40 runtime | TCP/UDP, IPv4/IPv6, parseSocketAddr, tcpListen |
 | fmt | 926 | (surface heavy) | graphem-aware width, format spec engine |
 | json | 662 | (parser self) | generic encode<T> / decode<T>, UTF-8 / surrogate pair, value constructors |
@@ -104,7 +106,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | time | 89 | (검색 필요) | Duration / Instant / Zone / Weekday / ZonedTime |
 | testing | 88 | test 5 + bench 7 | assert + benchmark + snapshot + property runner entrypoints |
 | testing_gen | 168 | test property lowering + runtime | property generators: int/intRange/bool/float/char/byte/asciiString/list/listOfSize/option/result/pair/triple/oneOf/oneOfGens/map/filter/constant |
-| log | 85 | — | Level + Handler + TextHandler / JsonHandler — slog 동급 |
+| log | 133 | — | Level + Handler + TextHandler / JsonHandler + value/level constructors — slog 동급 |
 | regex | 74 | — | compile / matches / find / findAll / replace / split |
 | os | 71 | shim + runtime | exec / execShell / execWith / execShellWith / exit / pid / hostname / onSignal |
 | thread | 59 | thread 16 + chan 10 + select 22 | spawn / race / chan / select / cancel — 구조적 동시성 |
@@ -120,7 +122,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (6 / 93 = 6%)
+### ⭐⭐⭐⭐ Production-adjacent (6 / 95 = 6%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
@@ -138,7 +140,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 
 | 구분 | 갭 |
 |---|---|
-| 없는 모듈 | 없음 (`db`, `smtp`, `zip`, `image`, `xlsx`, `pdf`, `schedule`, `dialog`, `watch`, `scan`, `rpa`, `barcode`, `qr`, `print`, `clipboard`, `keychain`, `secrets`, `supabase` surface 는 존재) |
+| 없는 모듈 | 없음 (`db`, `smtp`, `zip`, `image`, `xlsx`, `pdf`, `schedule`, `dialog`, `watch`, `scan`, `rpa`, `barcode`, `qr`, `print`, `clipboard`, `keychain`, `secrets`, `supabase`, `observability`, `sentry` surface 는 존재) |
 | 남은 runtime/deep 기능 | `db driver/runtime`, `smtp TLS/socket execution`, `zip deflate`, `image pixel decode`, `keychain Linux Secret Service` |
 | 부분 구현 | `compress` 는 gzip 만 있음. deflate/zstd 계열 없음 |
 | 문서/코드 드리프트 | 일부 README/매트릭스 문구가 과거 G18 stub 정책을 아직 과장해서 남김 |
@@ -161,6 +163,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | Regex 매칭 | ✅ 가능 | regex (compile / find / replace / split) |
 | Property-based testing | ✅ 가능 | testing (Gen<T> / property / propertySeeded) |
 | Structured logging | ✅ 가능 | log (Handler / TextHandler / JsonHandler) |
+| Error reporting / tracing / performance monitoring | ✅ 가능 | observability + sentry + http/log/metrics/redact (trace headers, breadcrumbs, transactions, Sentry envelopes) |
 | 동시성 (구조적) | ✅ 가능 | thread (spawn / race / chan / select / cancel) |
 | 예약 작업 / 재시도 | ✅ 가능 | schedule (cron / interval / daily / due tick / retry backoff) |
 | HTML 템플릿 | ✅ 가능 | template (escaped/raw placeholder render) |
@@ -224,7 +227,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 66 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, schedule, jsonl, kv, shortid, metrics, net, fmt, json, config, table, xlsx, url, io, collections, email, db, polyglot, grid, gui, dialog, tar, sql, xml, tui, image, pdf, ocr, rpa, scan, barcode, qr, smtp, result, option, csv, encoding, zip, term, websocket, watch, clipboard, graphql, supabase, template, i18n, char, iter, bytes)
+- 69 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, schedule, jsonl, kv, shortid, metrics, observability, sentry, net, fmt, json, config, table, xlsx, url, io, collections, email, db, polyglot, grid, gui, dialog, tar, sql, xml, tui, image, pdf, ocr, rpa, scan, barcode, qr, smtp, result, option, csv, encoding, zip, term, websocket, watch, clipboard, graphql, github, supabase, template, i18n, char, iter, bytes)
 - 5 모듈은 Phase A 충실 + Phase B declaration-only (env, random, os, crypto, compress)
 - keychain/secrets 는 macOS/Windows Phase A+B 연결 완료, Linux Secret Service backend 대기
 - fs 는 Phase A 충실 + 확장된 tool-facing declaration surface (walk/glob/watch/atomicWrite/lockFile/hashFile/copyDir/diffFiles)
