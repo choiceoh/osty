@@ -14692,6 +14692,8 @@ typedef enum {
     OSTY_RE_OP_BOL    = 7,  /* assert pos == 0 */
     OSTY_RE_OP_EOL    = 8,  /* assert pos == len */
     OSTY_RE_OP_SAVE   = 9,  /* record current sp into caps[x] (Phase 2) */
+    OSTY_RE_OP_WB     = 10, /* assert word boundary (\b)  — Phase 6 */
+    OSTY_RE_OP_NWB    = 11, /* assert NOT word boundary (\B) — Phase 6 */
 } osty_re_op_t;
 
 typedef struct {
@@ -15261,6 +15263,18 @@ static int osty_re_parse_atom(osty_re_parser *ps) {
             return -1;
         }
         unsigned char esc = (unsigned char)ps->p[1];
+        /* Word-boundary anchors are zero-width assertions, not literal
+         * bytes — intercept before the literal/class decode path. */
+        if (esc == 'b') {
+            ps->p += 2;
+            if (osty_re_emit(ps, OSTY_RE_OP_WB, 0, 0, 0) < 0) return -1;
+            return start;
+        }
+        if (esc == 'B') {
+            ps->p += 2;
+            if (osty_re_emit(ps, OSTY_RE_OP_NWB, 0, 0, 0) < 0) return -1;
+            return start;
+        }
         int kind = 0;
         int b = osty_re_decode_escape(esc, &kind);
         ps->p += 2;
@@ -15607,6 +15621,7 @@ typedef struct {
     int prog_len;
     int slots_per_thread;
     int text_len;
+    const char *text;     /* Phase 6 — needed by \b / \B word-boundary asserts */
     int generation;
     int *cur_pc;
     int *nxt_pc;
@@ -15618,6 +15633,23 @@ typedef struct {
     int matched;
     int32_t match_caps[OSTY_RE_MAX_CAP_SLOTS];
 } osty_re_vm;
+
+/* Word-character predicate for \b / \B (Phase 6). Mirrors \w —
+ * `[A-Za-z0-9_]` ASCII set. UTF-8 byte sequences fall outside this
+ * set, so multi-byte chars are treated as non-word, which is the
+ * standard ASCII-only word-boundary semantics. */
+static inline int osty_re_is_word_byte(unsigned char ch) {
+    return (ch >= 'a' && ch <= 'z')
+        || (ch >= 'A' && ch <= 'Z')
+        || (ch >= '0' && ch <= '9')
+        || ch == '_';
+}
+
+static int osty_re_at_word_boundary(const osty_re_vm *vm, int sp) {
+    int prev_word = (sp > 0) ? osty_re_is_word_byte((unsigned char)vm->text[sp - 1]) : 0;
+    int next_word = (sp < vm->text_len) ? osty_re_is_word_byte((unsigned char)vm->text[sp]) : 0;
+    return prev_word != next_word;
+}
 
 static void osty_re_add_thread_caps(osty_re_vm *vm, const osty_re_inst *prog, int pc, int sp, const int32_t *caps) {
     if (pc < 0 || pc >= vm->prog_len) return;
@@ -15654,6 +15686,18 @@ static void osty_re_add_thread_caps(osty_re_vm *vm, const osty_re_inst *prog, in
         }
         return;
     }
+    if (ins.op == OSTY_RE_OP_WB) {
+        if (osty_re_at_word_boundary(vm, sp)) {
+            osty_re_add_thread_caps(vm, prog, pc + 1, sp, caps);
+        }
+        return;
+    }
+    if (ins.op == OSTY_RE_OP_NWB) {
+        if (!osty_re_at_word_boundary(vm, sp)) {
+            osty_re_add_thread_caps(vm, prog, pc + 1, sp, caps);
+        }
+        return;
+    }
     /* Real instruction: park in nxt set. */
     int slot = vm->nxt_len++;
     vm->nxt_pc[slot] = pc;
@@ -15678,6 +15722,7 @@ static int osty_re_match_from(const osty_regex_compiled *re, const char *text, i
     vm.prog_len = re->prog_len;
     vm.slots_per_thread = 2 * re->ngroups;
     vm.text_len = text_len;
+    vm.text = text;
     size_t row_bytes = sizeof(int32_t) * (size_t)vm.slots_per_thread;
     vm.cur_pc = (int *)malloc(sizeof(int) * (size_t)vm.prog_len);
     vm.nxt_pc = (int *)malloc(sizeof(int) * (size_t)vm.prog_len);
@@ -15715,11 +15760,14 @@ static int osty_re_match_from(const osty_regex_compiled *re, const char *text, i
             }
             vm.nxt_len = 0;
         }
-        if (vm.cur_len == 0) {
-            /* Nothing alive — and either we never seeded (we have a
-             * match) or we did and got nothing. End of input. */
-            break;
-        }
+        /* Used to break when cur_len == 0 here as a perf shortcut for
+         * "anchored pattern, no further match possible" — but that's
+         * wrong for any prefix-zero-width assertion that can succeed
+         * at non-zero positions (most importantly `\b`/`\B`, which
+         * binds to the boundary between words rather than a fixed
+         * position). The loop always rolls forward through every sp
+         * up to text_len now; perf-conscious patterns should anchor
+         * with `^` if they want to bail at sp == 0. */
         vm.generation++;
         unsigned char ch = (sp < text_len) ? (unsigned char)text[sp] : 0;
         int hit_match_this_step = 0;
@@ -16106,9 +16154,53 @@ static void *osty_rt_regex_replace_impl(void *raw_re, const char *text, const ch
             osty_re_buffer_free(&buf);
             osty_rt_abort("runtime.regex.replace: out of memory");
         }
-        if (osty_re_buffer_append(&buf, repl, repl_len) != 0) {
-            osty_re_buffer_free(&buf);
-            osty_rt_abort("runtime.regex.replace: out of memory");
+        /* Walk `replacement` byte-by-byte, expanding `$N` (N = 0..9) to
+         * the matched text of group N (group 0 = whole match) and `$$`
+         * to a literal `$`. Unrecognized `$X` (X is not digit/`$`)
+         * passes through verbatim — same forgiving rule Python uses. */
+        for (size_t ri = 0; ri < repl_len; ) {
+            unsigned char rc = (unsigned char)repl[ri];
+            if (rc == '$' && ri + 1 < repl_len) {
+                unsigned char next = (unsigned char)repl[ri + 1];
+                if (next == '$') {
+                    if (osty_re_buffer_append(&buf, "$", 1) != 0) {
+                        osty_re_buffer_free(&buf);
+                        osty_rt_abort("runtime.regex.replace: out of memory");
+                    }
+                    ri += 2;
+                    continue;
+                }
+                if (next >= '0' && next <= '9') {
+                    int gnum = next - '0';
+                    if (gnum < re->ngroups) {
+                        int32_t gs = slots[2 * gnum];
+                        int32_t ge = slots[2 * gnum + 1];
+                        if (gs >= 0 && ge >= gs && ge <= len) {
+                            if (osty_re_buffer_append(&buf, src + gs, (size_t)(ge - gs)) != 0) {
+                                osty_re_buffer_free(&buf);
+                                osty_rt_abort("runtime.regex.replace: out of memory");
+                            }
+                        }
+                        /* Group didn't participate (alternation arm)
+                         * → expand to empty. */
+                    } else {
+                        /* Out-of-range group ref → pass through both
+                         * bytes verbatim, mirroring Python's lenient
+                         * fallback. */
+                        if (osty_re_buffer_append(&buf, repl + ri, 2) != 0) {
+                            osty_re_buffer_free(&buf);
+                            osty_rt_abort("runtime.regex.replace: out of memory");
+                        }
+                    }
+                    ri += 2;
+                    continue;
+                }
+            }
+            if (osty_re_buffer_append(&buf, &repl[ri], 1) != 0) {
+                osty_re_buffer_free(&buf);
+                osty_rt_abort("runtime.regex.replace: out of memory");
+            }
+            ri++;
         }
         substituted++;
         if (match_end > match_start) {
