@@ -2474,7 +2474,7 @@ fn mirLowerForInfinite(bs: MirLowerBodyState, s: HirStmt) {
 
     bs.cur = body
     mirLowerForBodyWithFrames(bs, s.forBody, header, exit)
-    mirLowerTerminate(bs, mirGotoTerm(header, span))
+    mirLowerTerminate(bs, mirGotoBackEdgeTerm(header, span))
 
     bs.cur = exit
 }
@@ -2496,7 +2496,7 @@ fn mirLowerForWhile(bs: MirLowerBodyState, s: HirStmt) {
 
     bs.cur = body
     mirLowerForBodyWithFrames(bs, s.forBody, header, exit)
-    mirLowerTerminate(bs, mirGotoTerm(header, span))
+    mirLowerTerminate(bs, mirGotoBackEdgeTerm(header, span))
 
     bs.cur = exit
 }
@@ -2554,7 +2554,7 @@ fn mirLowerForRange(bs: MirLowerBodyState, s: HirStmt) {
         "Int",
     )
     mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(idx), stepRV, span))
-    mirLowerTerminate(bs, mirGotoTerm(header, span))
+    mirLowerTerminate(bs, mirGotoBackEdgeTerm(header, span))
 
     bs.cur = exit
 }
@@ -2688,7 +2688,7 @@ fn mirLowerForInList(
         "Int",
     )
     mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(idx), stepRV, span))
-    mirLowerTerminate(bs, mirGotoTerm(header, span))
+    mirLowerTerminate(bs, mirGotoBackEdgeTerm(header, span))
 
     bs.cur = exit
 }
@@ -2774,7 +2774,7 @@ fn mirLowerForInChannel(
     mirLowerTerminate(bs, mirGotoTerm(step, span))
 
     bs.cur = step
-    mirLowerTerminate(bs, mirGotoTerm(header, span))
+    mirLowerTerminate(bs, mirGotoBackEdgeTerm(header, span))
     bs.cur = exit
 }
 

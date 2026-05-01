@@ -328,9 +328,16 @@ pub struct LirTerm {
     pub switchScrutinee: String,
     pub switchDefault: String,
     pub cases: List<LirSwitchCase>,
+    pub loopMDRef: String,
 }
+// `loopMDRef` is the `!N` metadata reference attached to this
+// terminator's `br` instruction. Empty when no loop metadata
+// applies. Populated by the lowerer when a MIR back-edge
+// terminator coincides with an active `#[vectorize]` /
+// `#[unroll]` / `#[parallel]` annotation on the enclosing
+// function (LANG_SPEC v0.6 A5/A6/A7).
 pub fn lirTermInvalid() -> LirTerm {
-    LirTerm {kind: LirTermInvalid, retType: lirTypeInvalid(), retValue: "", target: "", cond: "", thenLabel: "", elseLabel: "", switchType: lirTypeInvalid(), switchScrutinee: "", switchDefault: "", cases: []}
+    LirTerm {kind: LirTermInvalid, retType: lirTypeInvalid(), retValue: "", target: "", cond: "", thenLabel: "", elseLabel: "", switchType: lirTypeInvalid(), switchScrutinee: "", switchDefault: "", cases: [], loopMDRef: ""}
 }
 pub fn lirRetVoid() -> LirTerm {
     let mut t = lirTermInvalid()
@@ -806,15 +813,15 @@ fn lirRenderComment(text: String) -> String {
     "; " + text
 }
 pub fn lirRenderTerm(t: LirTerm) -> String {
-    match t.kind {
+    let base = match t.kind {
         LirTermRet -> {
             if lirTypeIsZero(t.retType) && t.retValue == "" {
-                return "ret void"
+                "ret void"
+            } else if lirTypeIsVoid(t.retType) && t.retValue == "" {
+                "ret void"
+            } else {
+                "ret " + lirTypeString(t.retType) + " " + t.retValue
             }
-            if lirTypeIsVoid(t.retType) && t.retValue == "" {
-                return "ret void"
-            }
-            "ret " + lirTypeString(t.retType) + " " + t.retValue
         },
         LirTermBr -> "br label %" + lirTrimLabelPercent(t.target),
         LirTermCondBr -> "br i1 " + t.cond + ", label %" + lirTrimLabelPercent(t.thenLabel) + ", label %" + lirTrimLabelPercent(t.elseLabel),
@@ -822,6 +829,10 @@ pub fn lirRenderTerm(t: LirTerm) -> String {
         LirTermUnreachable -> "unreachable",
         _ -> "",
     }
+    if t.loopMDRef != "" {
+        return base + ", !llvm.loop " + t.loopMDRef
+    }
+    base
 }
 fn lirRenderSwitchTerm(t: LirTerm) -> String {
     let typ = lirTypeString(t.switchType)
@@ -2388,6 +2399,60 @@ fn lirParamAttrsFromMir(fn_: MirFunction, paramType: LirType) -> List<String> {
         return []
     }
     ["noalias"]
+}
+// `lirFnHasLoopHints` reports whether the MIR function carries any of
+// the v0.6 loop optimisation annotations
+// (`#[vectorize(...)]` / `#[parallel]` / `#[unroll(...)]`). When true,
+// each MIR back-edge terminator gets a fresh `!llvm.loop` metadata
+// node attached so LLVM picks up the hint at exactly the back-edge.
+fn lirFnHasLoopHints(fn_: MirFunction) -> Bool {
+    fn_.vectorize || fn_.parallel || fn_.unroll
+}
+// `lirNextLoopMD` allocates a fresh `!N` metadata reference plus the
+// `!N = distinct !{!N, ...properties}` definition for the current
+// function's combined loop hints. Property nodes
+// (`!{!"llvm.loop.vectorize.enable", i1 true}`, etc.) are also
+// allocated as separate `!M` references and threaded into the loop
+// node. Mirrors production's `nextLoopMD`
+// (generator.go::nextLoopMD) so the LLVM verifier sees an identical
+// metadata shape regardless of which path emitted the function.
+fn lirNextLoopMD(l: LirMirFunctionLowerer, fn_: MirFunction) -> String {
+    let mut propRefs: List<String> = []
+    if fn_.vectorize {
+        propRefs.push(lirAllocMetadata(l, "!\{!\"llvm.loop.vectorize.enable\", i1 true\}"))
+        if fn_.vectorizeWidth > 0 {
+            propRefs.push(lirAllocMetadata(l, "!\{!\"llvm.loop.vectorize.width\", i32 " + lirIntToString(fn_.vectorizeWidth) + "\}"))
+        }
+        if fn_.vectorizeScalable {
+            propRefs.push(lirAllocMetadata(l, "!\{!\"llvm.loop.vectorize.scalable.enable\", i1 true\}"))
+        }
+        if fn_.vectorizePredicate {
+            propRefs.push(lirAllocMetadata(l, "!\{!\"llvm.loop.vectorize.predicate.enable\", i1 true\}"))
+        }
+    }
+    if fn_.unroll {
+        if fn_.unrollCount > 0 {
+            propRefs.push(lirAllocMetadata(l, "!\{!\"llvm.loop.unroll.count\", i32 " + lirIntToString(fn_.unrollCount) + "\}"))
+        } else {
+            propRefs.push(lirAllocMetadata(l, "!\{!\"llvm.loop.unroll.enable\", i1 true\}"))
+        }
+    }
+    let loopRef = "!" + lirIntToString(l.out.metadata.len())
+    let mut body = loopRef
+    for prop in propRefs {
+        body = body + ", " + prop
+    }
+    l.out.metadata.push(loopRef + " = distinct !\{" + body + "\}")
+    loopRef
+}
+// `lirAllocMetadata` interns a metadata definition line into the
+// module's `metadata` table and returns its `!N` reference. Each
+// definition is unique per emit (we don't dedupe yet — the same
+// `!{i1 true}` may appear twice if two loops have the same hints).
+fn lirAllocMetadata(l: LirMirFunctionLowerer, body: String) -> String {
+    let ref = "!" + lirIntToString(l.out.metadata.len())
+    l.out.metadata.push(ref + " = " + body)
+    ref
 }
 // ====================================================================
 // Basic-block splitting + Option<T> aggregate construction
@@ -4095,14 +4160,24 @@ fn lirLowerMirTerm(l: LirMirFunctionLowerer, term: MirTerm, ret: LirType) -> Lir
             lirEmitGcRootReleases(l)
             return lirRetValue(value.typ, value.value)
         },
-        MirTermGoto -> lirBr(lirLabelForMirBlock(l, term.target)),
+        MirTermGoto -> {
+            let mut t = lirBr(lirLabelForMirBlock(l, term.target))
+            if term.loopBackEdge && lirFnHasLoopHints(l.fn_) {
+                t.loopMDRef = lirNextLoopMD(l, l.fn_)
+            }
+            return t
+        },
         MirTermBranch -> {
             let cond = lirLowerMirOperand(l, term.cond, "Bool", lirIntType(1))
             if cond.typ.llvm != "i1" {
                 lirLowerError(l, LirDiagUnsupported, "branch condition requires i1, got `" + cond.typ.llvm + "`", "term.branch")
                 return lirUnreachable()
             }
-            return lirCondBr(cond.value, lirLabelForMirBlock(l, term.thenBlock), lirLabelForMirBlock(l, term.elseBlock))
+            let mut t = lirCondBr(cond.value, lirLabelForMirBlock(l, term.thenBlock), lirLabelForMirBlock(l, term.elseBlock))
+            if term.loopBackEdge && lirFnHasLoopHints(l.fn_) {
+                t.loopMDRef = lirNextLoopMD(l, l.fn_)
+            }
+            return t
         },
         MirTermSwitchInt -> {
             let scrutinee = lirLowerMirOperand(l, term.cond, term.cond.typ, lirTypeInvalid())

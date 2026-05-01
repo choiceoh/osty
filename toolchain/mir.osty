@@ -931,6 +931,14 @@ pub fn mirSwitchCase(value: Int, target: Int, label: String) -> MirSwitchCase {
 
 /// MirTerm is the control-flow edge leaving a basic block. Every block
 /// has exactly one after lowering is complete.
+///
+/// `loopBackEdge` marks a terminator that jumps from a loop body back
+/// to the loop header. The HIR→MIR loop lowerers (`mirLowerForInfinite`
+/// / `forWhile` / `forRange` / `forIn*`) set the flag on the body-end
+/// `Goto` so backends can attach loop optimization metadata
+/// (`!llvm.loop.vectorize.enable`, `unroll.enable`, etc.) at exactly
+/// the back-edge `br` instead of recomputing dominators. Default
+/// false; only the loop-emit sites flip it on.
 pub struct MirTerm {
     pub kind: MirTermKind,
     pub span: MirSpan,
@@ -943,6 +951,10 @@ pub struct MirTerm {
 
     // Branch / SwitchInt scrutinee
     pub cond: MirOperand,
+
+    // Loop-back-edge marker: true when this terminator closes one
+    // iteration of an enclosing loop (body → header).
+    pub loopBackEdge: Bool,
 }
 
 pub fn mirTermInvalid() -> MirTerm {
@@ -954,6 +966,7 @@ pub fn mirTermInvalid() -> MirTerm {
         elseBlock: -1,
         cases: [],
         cond: mirOperandInvalid(),
+        loopBackEdge: false,
     }
 }
 
@@ -962,6 +975,16 @@ pub fn mirGotoTerm(target: Int, span: MirSpan) -> MirTerm {
     t.kind = MirTermGoto
     t.target = target
     t.span = span
+    t
+}
+
+/// Goto terminator that closes one iteration of an enclosing loop. The
+/// LIR-Proto backend attaches `!llvm.loop` metadata to the resulting
+/// `br label %header` so vectorize / unroll / parallel hints land on
+/// the correct back-edge.
+pub fn mirGotoBackEdgeTerm(target: Int, span: MirSpan) -> MirTerm {
+    let mut t = mirGotoTerm(target, span)
+    t.loopBackEdge = true
     t
 }
 
