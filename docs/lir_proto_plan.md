@@ -585,6 +585,54 @@ Exit criteria:
 - Return-value load and root release ordering matches current behavior.
 - The plan remains render-only after construction.
 
+Design decision: the first Phase-5 slice covers function-entry GC
+safepoints plus the always-on function/parameter attribute surface
+(`#[inline(always|never)]`, `#[hot]`, `#[cold]`, `#[pure]`,
+`#[target_feature]`, `#[noalias]`). MIR already carries every flag on
+`MirFunction` (toolchain/mir.osty:1090–1104), so this slice just
+translates them into LLVM strings:
+
+- `lirEmitGcSafepoint(l, kind)` records `osty.gc.safepoint_v1` exactly
+  once per module and pushes a `call void @osty.gc.safepoint_v1(i64 id,
+  ptr null, i64 0)` whose `id` is `llvmEncodeSafepointId(kind, serial)`.
+  Per-function `LirMirFunctionLowerer.safepointSerial` bumps so each
+  emit gets a fresh low-56-bit slot while sharing the high-8 kind
+  byte, matching production's encoding (mir_generator_test.go:3469
+  pins the entry kind id `72057594037927936 = 1 << 56`).
+- `lirLowerMirFunction` emits one entry safepoint at the very front of
+  the prologue — before any local `alloca` / projection store — so
+  every entered function can be observed by the runtime regardless of
+  which MIR block is `fn_.entry`.
+- `lirFnAttrsFromMir(fn_)` derives the function-header attribute list:
+  `inlinehint` / `alwaysinline` / `noinline` from `MirInlineMode`,
+  `hot` / `cold` from the matching flags, `readnone` from `pure`, and
+  `"target-features"="+f1,+f2"` from `targetFeatures`.
+- `lirParamAttrsFromMir(fn_, paramType)` adds `noalias` to every `ptr`
+  parameter when `noaliasAll` is set; the per-param `#[noalias(p1, p2)]`
+  selector form is deferred because MIR drops the per-name metadata
+  today.
+
+The matching parity fixtures (`entry_safepoint`, four `fn_attr_*`)
+pin the rendered LLVM line shape from Go via
+`TestLIRProtoManualFixtureCatalog`, so a regression in the runtime
+declare line, the entry id encoding, or any attribute spelling
+surfaces without needing a production wiring switch.
+
+Deliberately deferred to a later Phase-5 slice:
+
+- Per-call follow-up safepoints around runtime calls (need root
+  visibility tracking before the empty-roots form is replaced).
+- GC root binding / release pairs (`osty.gc.root_bind_v1` /
+  `osty.gc.root_release_v1`) — depend on the same root-visibility pass.
+- Per-instruction `!llvm.access.group` and per-loop `!llvm.loop.*`
+  metadata — need MIR loop-back-edge classification before LIR can
+  attach the metadata to the right `br` terminator.
+- `#[noalias(p1, p2)]` selector form — MIR needs to preserve the
+  per-parameter name list first.
+- Per-loop `vectorize.enable` / `unroll.enable` / `unroll.count`
+  metadata — the `MirFunction.vectorize` / `unroll` flags arrive but
+  there is no MIR loop tag yet to attach them to.
+
 ## Phase 6: full parity harness
 
 Deliverables:
