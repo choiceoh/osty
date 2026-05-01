@@ -427,6 +427,11 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualMapIncrStringFixture", []string{"declare i64 @osty_rt_map_incr_i64_string(ptr, ptr, i64)", "call i64 @osty_rt_map_incr_i64_string(", "ret i64"}},
 		{"lirParityManualListContainsI64Fixture", []string{"declare i64 @osty_rt_list_len(ptr)", "declare i64 @osty_rt_list_get_i64(ptr, i64)", "alloca i1", "alloca i64", "icmp slt i64", "icmp eq i64", "ret i1"}},
 		{"lirParityManualListIndexOfStringFixture", []string{"%Option.Int = type", "declare ptr @osty_rt_list_get_string(ptr, i64)", "declare i1 @osty_rt_strings_Equal(ptr, ptr)", "alloca %Option.Int", "call i1 @osty_rt_strings_Equal(", "ret %Option.Int"}},
+		// ----- lirNarrowI64ToType per-branch coverage -----
+		{"lirParityManualOptionUnwrapStringFixture", []string{"%Option.String = type", "declare void @osty_rt_option_unwrap_none()", "extractvalue %Option.String", "inttoptr i64", "ret ptr"}},
+		{"lirParityManualOptionUnwrapFloatFixture", []string{"%Option.Float = type", "declare void @osty_rt_option_unwrap_none()", "extractvalue %Option.Float", "bitcast i64", "ret double"}},
+		{"lirParityManualOptionUnwrapBoolFixture", []string{"%Option.Bool = type", "declare void @osty_rt_option_unwrap_none()", "extractvalue %Option.Bool", "trunc i64", "ret i1"}},
+		{"lirParityManualOptionUnwrapOrStringFixture", []string{"%Option.String = type", "extractvalue %Option.String", "alloca ptr", "inttoptr i64", "ret ptr"}},
 	}
 
 	for _, tt := range want {
