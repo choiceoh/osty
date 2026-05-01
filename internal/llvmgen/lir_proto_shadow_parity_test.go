@@ -372,6 +372,18 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualListInsertBytesV1Fixture", []string{"%Cell = type", "declare void @osty_rt_list_insert_bytes_v1(ptr, i64, ptr, i64)", "alloca %Cell", "call void @osty_rt_list_insert_bytes_v1("}},
 		{"lirParityManualChanSendBytesV1Fixture", []string{"%Cell = type", "declare void @osty_rt_thread_chan_send_bytes_v1(ptr, ptr, i64)", "alloca %Cell", "call void @osty_rt_thread_chan_send_bytes_v1("}},
 		{"lirParityManualSetRemoveI1Fixture", []string{"declare i1 @osty_rt_set_remove_i64(ptr, i64)", "call i1 @osty_rt_set_remove_i64("}},
+		// ----- Concurrency closure-env intrinsics -----
+		{"lirParityManualTaskGroupUnitFixture", []string{"declare void @osty_rt_task_group_root(ptr)", "call void @osty_rt_task_group_root("}},
+		{"lirParityManualSpawnDetachedFixture", []string{"declare ptr @osty_rt_task_spawn(ptr)", "call ptr @osty_rt_task_spawn("}},
+		{"lirParityManualSpawnGroupedFixture", []string{"declare ptr @osty_rt_task_group_spawn(ptr, ptr)", "call ptr @osty_rt_task_group_spawn("}},
+		{"lirParityManualSelectFixture", []string{"declare void @osty_rt_select(ptr)", "call void @osty_rt_select("}},
+		{"lirParityManualSelectRecvFixture", []string{"declare void @osty_rt_select_recv(ptr, ptr, ptr)", "call void @osty_rt_select_recv("}},
+		{"lirParityManualSelectSendIntFixture", []string{"declare void @osty_rt_select_send_i64(ptr, ptr, i64, ptr)", "call void @osty_rt_select_send_i64("}},
+		{"lirParityManualSelectTimeoutFixture", []string{"declare void @osty_rt_select_timeout(ptr, ptr, ptr)", "call void @osty_rt_select_timeout("}},
+		{"lirParityManualSelectDefaultFixture", []string{"declare void @osty_rt_select_default(ptr, ptr)", "call void @osty_rt_select_default("}},
+		{"lirParityManualParallelFixture", []string{"declare ptr @osty_rt_parallel(ptr, i64, ptr)", "call ptr @osty_rt_parallel("}},
+		{"lirParityManualRaceFixture", []string{"%Result.Int_Error = type", "declare { i64, i64 } @osty_rt_task_race(ptr)", "call { i64, i64 } @osty_rt_task_race("}},
+		{"lirParityManualCollectAllFixture", []string{"declare ptr @osty_rt_task_collect_all(ptr)", "call ptr @osty_rt_task_collect_all("}},
 	}
 
 	for _, tt := range want {

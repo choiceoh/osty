@@ -2148,6 +2148,16 @@ fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
         MirIntrinsicGroupCancel -> lirLowerMirStringRuntimeCall(l, instr, mirRtTaskGroupCancelSymbol(), lirVoidType(), [lirPtrType()], "group.cancel"),
         MirIntrinsicGroupIsCancelled -> lirLowerMirStringRuntimeCall(l, instr, mirRtTaskGroupIsCancelledSymbol(), lirIntType(1), [lirPtrType()], "group.isCancelled"),
         MirIntrinsicHandleJoin -> lirLowerMirHandleJoin(l, instr),
+        MirIntrinsicTaskGroup -> lirLowerMirTaskGroup(l, instr),
+        MirIntrinsicSpawn -> lirLowerMirSpawn(l, instr),
+        MirIntrinsicSelect -> lirLowerMirStringRuntimeCall(l, instr, mirRtSelectSymbol(), lirVoidType(), [lirPtrType()], "select"),
+        MirIntrinsicSelectRecv -> lirLowerMirStringRuntimeCall(l, instr, mirRtSelectRecvSymbol(), lirVoidType(), [lirPtrType(), lirPtrType(), lirPtrType()], "select.recv"),
+        MirIntrinsicSelectTimeout -> lirLowerMirStringRuntimeCall(l, instr, mirRtSelectTimeoutSymbol(), lirVoidType(), [lirPtrType(), lirPtrType(), lirPtrType()], "select.timeout"),
+        MirIntrinsicSelectDefault -> lirLowerMirStringRuntimeCall(l, instr, mirRtSelectDefaultSymbol(), lirVoidType(), [lirPtrType(), lirPtrType()], "select.default"),
+        MirIntrinsicSelectSend -> lirLowerMirSelectSend(l, instr),
+        MirIntrinsicParallel -> lirLowerMirStringRuntimeCall(l, instr, mirRtParallelSymbol(), lirPtrType(), [lirPtrType(), lirIntType(64), lirPtrType()], "parallel"),
+        MirIntrinsicRace -> lirLowerMirRace(l, instr),
+        MirIntrinsicCollectAll -> lirLowerMirStringRuntimeCall(l, instr, mirRtTaskCollectAllSymbol(), lirPtrType(), [lirPtrType()], "collectAll"),
         MirIntrinsicMapKeysSorted -> lirLowerMirMapKeysSorted(l, instr),
         MirIntrinsicBytesFromList -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesFromListSymbol(), lirPtrType(), [lirPtrType()], "bytes.fromList"),
         MirIntrinsicBytesFromString -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringToBytesSymbol(), lirPtrType(), [lirPtrType()], "bytes.fromString"),
@@ -3435,6 +3445,181 @@ fn lirLowerMirHandleJoin(l: LirMirFunctionLowerer, instr: MirInstr) {
     l.instrs.push(lirCall(dest, retType, "@" + symbol, [lirOperand(lirPtrType(), handle.value)]))
     let loc = mirFunctionLocal(l.fn_, instr.dest.local)
     lirStoreMirResult(l, instr.dest, lirOperand(retType, dest), loc.typ, "handle.join result")
+}
+// `taskGroup(body) -> T` lowering. Production reads the return type
+// off the destination local so the runtime can return an arbitrary
+// value through the spawned closure (mir_generator.go::IntrinsicTaskGroup).
+// Default return is void when there is no dest or the dest is Unit;
+// otherwise the runtime declaration matches the dest type.
+fn lirLowerMirTaskGroup(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 1 {
+        lirLowerError(l, LirDiagInvalidInput, "taskGroup expects (body)", "taskGroup")
+        return
+    }
+    let body = lirLowerCoercedOperand(l, instr.args[0], instr.args[0].typ, lirPtrType(), "taskGroup body")
+    if body.value == "" {
+        return
+    }
+    let symbol = mirRtTaskGroupRootSymbol()
+    let mut retType = lirVoidType()
+    if instr.hasDest {
+        let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+        if loc.id < 0 {
+            lirLowerError(l, LirDiagInvalidInput, "taskGroup destination local out of range", "taskGroup")
+            return
+        }
+        let lowered = lirLowerMirType(l, loc.typ)
+        if !(lirTypeIsZero(lowered)) && !(lirTypeIsVoid(lowered)) {
+            retType = lowered
+        }
+    }
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, retType, [lirPtrType()], false))
+    if lirTypeIsVoid(retType) {
+        l.instrs.push(lirCall("", retType, "@" + symbol, [lirOperand(lirPtrType(), body.value)]))
+        if instr.hasDest {
+            lirCheckVoidMirDestination(l, instr.hasDest, instr.dest, "taskGroup")
+        }
+        return
+    }
+    let dest = lirFresh(l)
+    l.instrs.push(lirCall(dest, retType, "@" + symbol, [lirOperand(lirPtrType(), body.value)]))
+    let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+    lirStoreMirResult(l, instr.dest, lirOperand(retType, dest), loc.typ, "taskGroup result")
+}
+// `spawn(body)` (1 arg) detached form vs `g.spawn(body)` (2 args)
+// group-scoped form. Both return a `Handle<T>` ptr; production picks
+// `osty_rt_task_spawn(ptr) -> ptr` for 1-arg and
+// `osty_rt_task_group_spawn(ptr group, ptr body) -> ptr` for 2-arg
+// (mir_generator.go::IntrinsicSpawn).
+fn lirLowerMirSpawn(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 1 && instr.args.len() != 2 {
+        lirLowerError(l, LirDiagInvalidInput, "spawn expects 1 or 2 arguments", "spawn")
+        return
+    }
+    let symbol = if instr.args.len() == 2 {
+        mirRtTaskGroupSpawnSymbol()
+    } else {
+        mirRtTaskSpawnSymbol()
+    }
+    let mut paramTypes: List<LirType> = []
+    let mut args: List<LirOperand> = []
+    for arg in instr.args {
+        let value = lirLowerCoercedOperand(l, arg, arg.typ, lirPtrType(), "spawn arg")
+        if value.value == "" {
+            return
+        }
+        paramTypes.push(lirPtrType())
+        args.push(lirOperand(lirPtrType(), value.value))
+    }
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirPtrType(), paramTypes, false))
+    if !(instr.hasDest) {
+        let _ignored = lirFresh(l)
+        l.instrs.push(lirCall(_ignored, lirPtrType(), "@" + symbol, args))
+        return
+    }
+    let dest = lirFresh(l)
+    l.instrs.push(lirCall(dest, lirPtrType(), "@" + symbol, args))
+    let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+    lirStoreMirResult(l, instr.dest, lirOperand(lirPtrType(), dest), loc.typ, "spawn result")
+}
+// `s.send(ch, value, arm)` select arm. Like ChanSend, lane-resolves
+// per channel element type. Composite element types route through
+// the bytes-v1 fallback (osty_rt_select_send_bytes_v1).
+fn lirLowerMirSelectSend(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 4 {
+        lirLowerError(l, LirDiagInvalidInput, "select.send expects (builder, channel, value, arm)", "select.send")
+        return
+    }
+    let elemName = lirChannelElementTypeName(instr.args[1].typ)
+    if elemName == "" {
+        lirLowerError(l, LirDiagUnsupported, "select.send could not extract element type from channel `" + instr.args[1].typ + "`", "select.send")
+        return
+    }
+    let elemLir = lirContainerElemLaneType(elemName)
+    let builder = lirLowerCoercedOperand(l, instr.args[0], instr.args[0].typ, lirPtrType(), "select.send builder")
+    if builder.value == "" {
+        return
+    }
+    let chReg = lirLowerCoercedOperand(l, instr.args[1], instr.args[1].typ, lirPtrType(), "select.send channel")
+    if chReg.value == "" {
+        return
+    }
+    let armReg = lirLowerCoercedOperand(l, instr.args[3], instr.args[3].typ, lirPtrType(), "select.send arm")
+    if armReg.value == "" {
+        return
+    }
+    if lirTypeIsZero(elemLir) || !(llvmListUsesTypedRuntime(elemLir.llvm)) {
+        let elemType = lirLowerMirType(l, elemName)
+        if lirTypeIsZero(elemType) || lirTypeIsVoid(elemType) {
+            lirLowerError(l, LirDiagUnsupported, "select.send composite element type `" + elemName + "` has no MIR layout", "select.send")
+            return
+        }
+        let value = lirLowerMirOperand(l, instr.args[2], elemName, elemType)
+        if value.value == "" {
+            return
+        }
+        let slot = lirFresh(l)
+        l.instrs.push(lirAlloca(slot, elemType, 0))
+        l.instrs.push(lirStore(lirOperand(elemType, value.value), slot, 0))
+        let sizeReg = lirEmitSizeOf(l, elemType)
+        let symbol = mirRtSelectSendBytesV1Symbol()
+        lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirVoidType(), [lirPtrType(), lirPtrType(), lirPtrType(), lirIntType(64), lirPtrType()], false))
+        l.instrs.push(lirCall("", lirVoidType(), "@" + symbol, [lirOperand(lirPtrType(), builder.value), lirOperand(lirPtrType(), chReg.value), lirOperand(lirPtrType(), slot), lirOperand(lirIntType(64), sizeReg), lirOperand(lirPtrType(), armReg.value)]))
+        if instr.hasDest {
+            lirCheckVoidMirDestination(l, instr.hasDest, instr.dest, "select.send")
+        }
+        return
+    }
+    let value = lirLowerCoercedOperand(l, instr.args[2], elemName, elemLir, "select.send value")
+    if value.value == "" {
+        return
+    }
+    let symbol = mirRtSelectSendSuffixSymbol(llvmListElementSuffix(elemLir.llvm))
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirVoidType(), [lirPtrType(), lirPtrType(), elemLir, lirPtrType()], false))
+    l.instrs.push(lirCall("", lirVoidType(), "@" + symbol, [lirOperand(lirPtrType(), builder.value), lirOperand(lirPtrType(), chReg.value), lirOperand(elemLir, value.value), lirOperand(lirPtrType(), armReg.value)]))
+    if instr.hasDest {
+        lirCheckVoidMirDestination(l, instr.hasDest, instr.dest, "select.send")
+    }
+}
+// Composite path: spill value, declare bytes-v1, call.
+// `race(body) -> Result<T, Error>`. Runtime returns the canonical
+// `{ i64, i64 }` Result aggregate directly (production parity with
+// chan_recv / check_cancelled). LIR Proto stores at the raw type
+// since the dest's named `%Result.<T>_<E>` is structurally identical.
+fn lirLowerMirRace(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 1 {
+        lirLowerError(l, LirDiagInvalidInput, "race expects (body)", "race")
+        return
+    }
+    let body = lirLowerCoercedOperand(l, instr.args[0], instr.args[0].typ, lirPtrType(), "race body")
+    if body.value == "" {
+        return
+    }
+    let symbol = mirRtTaskRaceSymbol()
+    let rawType = lirRawType("\{ i64, i64 \}")
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, rawType, [lirPtrType()], false))
+    if !(instr.hasDest) {
+        l.instrs.push(lirCall("", rawType, "@" + symbol, [lirOperand(lirPtrType(), body.value)]))
+        return
+    }
+    let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+    if loc.id < 0 {
+        lirLowerError(l, LirDiagInvalidInput, "race destination local out of range", "race")
+        return
+    }
+    if !(lirIsResultTypeName(loc.typ)) {
+        lirLowerError(l, LirDiagUnsupported, "race destination must be Result<...>, got `" + loc.typ + "`", "race")
+        return
+    }
+    lirLowerMirType(l, loc.typ)
+    let dest = lirFresh(l)
+    l.instrs.push(lirCall(dest, rawType, "@" + symbol, [lirOperand(lirPtrType(), body.value)]))
+    let slot = lirMirLocalSlot(l, loc.id)
+    if slot.slot == "" {
+        lirLowerError(l, LirDiagLoweringBug, "race destination has no LIR slot", "race")
+        return
+    }
+    l.instrs.push(lirStore(lirOperand(rawType, dest), slot.slot, 0))
 }
 // `Map.keys().sorted()` fused → single per-key-lane runtime call.
 // Production picks `osty_rt_map_keys_sorted_<i64|string>` based on
