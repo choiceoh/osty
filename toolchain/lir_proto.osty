@@ -2275,6 +2275,10 @@ fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
         MirIntrinsicOptionUnwrapOr -> lirLowerMirAlgebraicUnwrapOr(l, instr, "option.unwrapOr"),
         MirIntrinsicResultUnwrap -> lirLowerMirAlgebraicUnwrap(l, instr, mirRtResultUnwrapErrSymbol(), "result.unwrap"),
         MirIntrinsicResultUnwrapOr -> lirLowerMirAlgebraicUnwrapOr(l, instr, "result.unwrapOr"),
+        MirIntrinsicStringSplitInto -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSplitIntoSymbol(), lirVoidType(), [lirPtrType(), lirPtrType(), lirPtrType()], "string.splitInto"),
+        MirIntrinsicStringNthSegment -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringNthSegmentSymbol(), lirPtrType(), [lirPtrType(), lirPtrType(), lirIntType(64)], "string.nthSegment"),
+        MirIntrinsicListRemoveAt -> lirLowerMirListRemoveAt(l, instr),
+        MirIntrinsicMapGetOr -> lirLowerMirMapGetOr(l, instr),
         _ -> lirLowerError(l, LirDiagUnsupported, "unsupported MIR intrinsic `" + mirIntrinsicName(instr.intrinsic) + "`", "intrinsic"),
     }
 }
@@ -4283,6 +4287,112 @@ fn lirLowerMirAlgebraicUnwrapOr(l: LirMirFunctionLowerer, instr: MirInstr, label
     let merged = lirFresh(l)
     l.instrs.push(lirLoad(merged, destType, mergeSlot, 0))
     lirStoreMirResult(l, instr.dest, lirOperand(destType, merged), loc.typ, label + " result")
+}
+// `lirLowerMirListRemoveAt` lowers `list.removeAt(idx) -> T` as a
+// 2-step pattern: per-lane `osty_rt_list_get_<suffix>(list, idx)`
+// captures the element at `idx` BEFORE the runtime splice drops it,
+// then `osty_rt_list_remove_at_discard(list, idx)` shifts the tail
+// left by one slot. Mirrors production
+// (mir_generator.go::IntrinsicListRemoveAt) — the load-before-discard
+// ordering is required for correctness because the discard helper
+// reuses the slot.
+fn lirLowerMirListRemoveAt(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 2 {
+        lirLowerError(l, LirDiagInvalidInput, "list.removeAt expects (list, idx)", "list.removeAt")
+        return
+    }
+    let recv = lirLowerMirContainerReceiver(l, instr, "list.removeAt", "list.elem")
+    if !(recv.ok) {
+        return
+    }
+    if !(llvmListUsesTypedRuntime(recv.elemLir.llvm)) {
+        lirLowerError(l, LirDiagUnsupported, "list.removeAt composite element type `" + recv.elemTypeName + "` needs the bytes-v1 runtime fallback (deferred)", "list.removeAt")
+        return
+    }
+    let idx = lirLowerCoercedOperand(l, instr.args[1], "Int", lirIntType(64), "list.removeAt idx")
+    if idx.value == "" {
+        return
+    }
+    let getSym = llvmListRuntimeGetSymbolFor(recv.elemLir.llvm, recv.isString)
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(getSym, recv.elemLir, [lirPtrType(), lirIntType(64)], false))
+    let elemReg = lirFresh(l)
+    l.instrs.push(lirCall(elemReg, recv.elemLir, "@" + getSym, [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(lirIntType(64), idx.value)]))
+    let spliceSym = mirRtListRemoveAtDiscardSymbol()
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(spliceSym, lirVoidType(), [lirPtrType(), lirIntType(64)], false))
+    l.instrs.push(lirCall("", lirVoidType(), "@" + spliceSym, [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(lirIntType(64), idx.value)]))
+    if instr.hasDest {
+        lirStoreMirResult(l, instr.dest, lirOperand(recv.elemLir, elemReg), recv.elemTypeName, "list.removeAt result")
+    }
+}
+// `lirLowerMirMapGetOr` lowers `m.getOr(k, default) -> V` to the
+// allocation-free probe pattern: `osty_rt_map_get_<keysuf>(m, k, slot)`
+// returns i1 + memcpys V into `slot` on hit; the hit arm loads V from
+// the slot, the miss arm evaluates the fallback operand, and both
+// arms merge through an alloca-backed slot. Mirrors production
+// `emitMapGetIntrinsic` IntrinsicMapGetOr branch (mir_generator.go:6224)
+// — production uses a phi node, alloca-merge is equivalent and matches
+// the existing LIR Proto sites (lirWrapOptionFromI64Sentinel etc).
+fn lirLowerMirMapGetOr(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 3 {
+        lirLowerError(l, LirDiagInvalidInput, "map.getOr expects (map, key, default)", "map.getOr")
+        return
+    }
+    if !(instr.hasDest) {
+        lirLowerError(l, LirDiagInvalidInput, "map.getOr requires a destination", "map.getOr")
+        return
+    }
+    let recv = lirLowerMirContainerReceiver(l, instr, "map.getOr", "map.kv")
+    if !(recv.ok) {
+        return
+    }
+    if !(llvmListUsesTypedRuntime(recv.valueLir.llvm)) {
+        lirLowerError(l, LirDiagUnsupported, "map.getOr composite value type `" + recv.valueTypeName + "` needs the bytes-v1 runtime fallback (deferred)", "map.getOr")
+        return
+    }
+    let key = lirLowerCoercedOperand(l, instr.args[1], recv.elemTypeName, recv.elemLir, "map.getOr key")
+    if key.value == "" {
+        return
+    }
+    let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+    if loc.id < 0 {
+        lirLowerError(l, LirDiagInvalidInput, "map.getOr destination local out of range", "map.getOr")
+        return
+    }
+    let destType = lirLowerMirType(l, loc.typ)
+    if lirTypeIsZero(destType) {
+        lirLowerError(l, LirDiagUnsupported, "map.getOr destination type `" + loc.typ + "` is not implemented", "map.getOr")
+        return
+    }
+    if destType.llvm != recv.valueLir.llvm {
+        lirLowerError(l, LirDiagUnsupported, "map.getOr destination type `" + loc.typ + "` does not match value type `" + recv.valueTypeName + "`", "map.getOr")
+        return
+    }
+    let symbol = mirRtMapSymbol("get_" + llvmMapKeySuffix(recv.elemLir.llvm, recv.isString))
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirIntType(1), [lirPtrType(), recv.elemLir, lirPtrType()], false))
+    let outSlot = lirFresh(l)
+    l.instrs.push(lirAlloca(outSlot, recv.valueLir, 0))
+    let presentReg = lirFresh(l)
+    l.instrs.push(lirCall(presentReg, lirIntType(1), "@" + symbol, [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, key.value), lirOperand(lirPtrType(), outSlot)]))
+    let mergeSlot = lirFresh(l)
+    l.instrs.push(lirAlloca(mergeSlot, destType, 0))
+    let hitLabel = lirFreshAuxLabel(l, "map.getOr.hit")
+    let missLabel = lirFreshAuxLabel(l, "map.getOr.miss")
+    let endLabel = lirFreshAuxLabel(l, "map.getOr.end")
+    lirCutBlockCondBr(l, presentReg, hitLabel, missLabel, hitLabel)
+    let loaded = lirFresh(l)
+    l.instrs.push(lirLoad(loaded, recv.valueLir, outSlot, 0))
+    l.instrs.push(lirStore(lirOperand(destType, loaded), mergeSlot, 0))
+    lirCutBlockBr(l, endLabel)
+    l.currentBlockLabel = missLabel
+    let fallback = lirLowerMirOperand(l, instr.args[2], loc.typ, destType)
+    if fallback.value == "" {
+        return
+    }
+    l.instrs.push(lirStore(lirOperand(destType, fallback.value), mergeSlot, 0))
+    lirCutBlockBr(l, endLabel)
+    let merged = lirFresh(l)
+    l.instrs.push(lirLoad(merged, destType, mergeSlot, 0))
+    lirStoreMirResult(l, instr.dest, lirOperand(destType, merged), loc.typ, "map.getOr result")
 }
 // Widen a parsed scalar (i64 / double / i32 / i8 / i1) into the i64
 // the Ok payload slot uses. Production widens the same way

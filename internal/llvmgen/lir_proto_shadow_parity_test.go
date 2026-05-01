@@ -418,6 +418,11 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualOptionUnwrapOrFixture", []string{"%Option.Int = type", "extractvalue %Option.Int", "icmp eq i64", "alloca i64", "ret i64"}},
 		{"lirParityManualResultUnwrapFixture", []string{"%Result.Int_Error = type", "declare void @osty_rt_result_unwrap_err()", "extractvalue %Result.Int_Error", "icmp eq i64", "call void @osty_rt_result_unwrap_err()", "unreachable", "ret i64"}},
 		{"lirParityManualResultUnwrapOrFixture", []string{"%Result.Int_Error = type", "extractvalue %Result.Int_Error", "icmp eq i64", "alloca i64", "ret i64"}},
+		// ----- ListRemoveAt + MapGetOr + StringSplitInto + StringNthSegment -----
+		{"lirParityManualListRemoveAtFixture", []string{"declare i64 @osty_rt_list_get_i64(ptr, i64)", "declare void @osty_rt_list_remove_at_discard(ptr, i64)", "call i64 @osty_rt_list_get_i64(", "call void @osty_rt_list_remove_at_discard(", "ret i64"}},
+		{"lirParityManualMapGetOrFixture", []string{"declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)", "alloca i64", "call i1 @osty_rt_map_get_string(", "ret i64"}},
+		{"lirParityManualStringSplitIntoFixture", []string{"declare void @osty_rt_strings_SplitInto(ptr, ptr, ptr)", "call void @osty_rt_strings_SplitInto("}},
+		{"lirParityManualStringNthSegmentFixture", []string{"declare ptr @osty_rt_strings_NthSegment(ptr, ptr, i64)", "call ptr @osty_rt_strings_NthSegment(", "ret ptr"}},
 	}
 
 	for _, tt := range want {

@@ -936,6 +936,40 @@ both arm stores + ret. The narrowing helper's other branches
 / FirstOrLast / parse fixtures that already exercise the
 i64-payload boxing direction.
 
+Design decision: the next batch lands four MIR intrinsics that
+each compose existing primitives (per-lane gets, probe runtime,
+fixed-signature ABI calls):
+
+- `MirIntrinsicListRemoveAt` — `list.removeAt(idx) -> T`. Two
+  calls in strict order: `osty_rt_list_get_<lane>(list, idx)`
+  captures the element BEFORE the slot is dropped, then
+  `osty_rt_list_remove_at_discard(list, idx)` shifts the tail.
+  Mirrors production `IntrinsicListRemoveAt` — load-before-discard
+  is required for correctness.
+- `MirIntrinsicMapGetOr` — `m.getOr(k, default) -> V`. Probe
+  `osty_rt_map_get_<keysuf>(map, key, slot)` returns `i1` and
+  memcpys V into `slot` on hit. Hit arm loads V from the slot,
+  miss arm evaluates the fallback operand, both merge through
+  alloca-backed slot. Reuses the same probe helpers `lirLowerMirMapGet`
+  uses, just without the Option<V> wrap.
+- `MirIntrinsicStringSplitInto` → `osty_rt_strings_SplitInto(out,
+  val, sep)`. Statement-only (no dest); the void runtime call
+  rebuilds `out` in place — used by the
+  `hoistNonEscapingSplitInLoops` MIR pass to avoid per-iteration
+  List<String> allocations.
+- `MirIntrinsicStringNthSegment` →
+  `osty_rt_strings_NthSegment(value, sep, idx) -> ptr`. Direct
+  fused `expr.split(sep)[K]` — runtime walks past the first K
+  separators and dups the segment after, never materialising the
+  intermediate List<String>. Produced by the
+  `fuseNonEscapingSplitNth` MIR pass.
+
+Four Phase-4 fixtures pin the shapes:
+- `list_remove_at` — runtime decls + load-before-discard ordering.
+- `map_get_or` — probe decl + alloca slot + i1 + ret V.
+- `string_split_into` — void 3-ptr decl + call (no return).
+- `string_nth_segment` — 3-arg ptr decl + call + ret String.
+
 ## Phase 0: lock the boundary
 
 Deliverables:
