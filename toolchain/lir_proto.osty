@@ -1637,6 +1637,9 @@ pub struct LirMirFunctionLowerer {
     pub labels: List<LirBlockLabel>,
     pub temp: Int,
     pub safepointSerial: Int,
+    pub currentBlockLabel: String,
+    pub extraBlocks: List<LirBlock>,
+    pub auxLabel: Int,
 }
 pub fn lirLowerMirModule(cfg: LirLowerConfig, mir: MirModule) -> LirLowerResult {
     let packageName = if cfg.packageName == "" {
@@ -1678,7 +1681,7 @@ pub fn lirLowerMirModule(cfg: LirLowerConfig, mir: MirModule) -> LirLowerResult 
     LirLowerResult {module: out, diagnostics: diags}
 }
 pub fn lirLowerMirFunction(cfg: LirLowerConfig, mir: MirModule, module: LirModule, fn_: MirFunction) -> LirLowerResult {
-    let mut l = LirMirFunctionLowerer {cfg, mirModule: mir, fn_, out: lirModule(module.packageName, module.sourcePath, module.target), diagnostics: [], prologue: [], instrs: [], slots: [], labels: [], temp: 0, safepointSerial: 0}
+    let mut l = LirMirFunctionLowerer {cfg, mirModule: mir, fn_, out: lirModule(module.packageName, module.sourcePath, module.target), diagnostics: [], prologue: [], instrs: [], slots: [], labels: [], temp: 0, safepointSerial: 0, currentBlockLabel: "", extraBlocks: [], auxLabel: 0}
     l.out.typeDefs = module.typeDefs
     l.out.runtimeDecls = module.runtimeDecls
     l.out.stringPool = module.stringPool
@@ -1722,6 +1725,8 @@ pub fn lirLowerMirFunction(cfg: LirLowerConfig, mir: MirModule, module: LirModul
     let mut blocks: List<LirBlock> = []
     for bb in lirOrderedMirBlocks(fn_) {
         l.instrs = []
+        l.extraBlocks = []
+        l.currentBlockLabel = lirLabelForMirBlock(l, bb.id)
         if bb.id == fn_.entry {
             for s in entryPrologue {
                 l.instrs.push(s)
@@ -1734,7 +1739,10 @@ pub fn lirLowerMirFunction(cfg: LirLowerConfig, mir: MirModule, module: LirModul
             lirLowerMirInstr(l, instr)
         }
         let term = lirLowerMirTerm(l, bb.term, ret)
-        blocks.push(LirBlock {label: lirLabelForMirBlock(l, bb.id), instrs: l.instrs, term})
+        for extra in l.extraBlocks {
+            blocks.push(extra)
+        }
+        blocks.push(LirBlock {label: l.currentBlockLabel, instrs: l.instrs, term})
     }
     if l.diagnostics.len() == 0 {
         let mut outFn = lirFunction(name, ret)
@@ -1748,6 +1756,11 @@ pub fn lirLowerMirFunction(cfg: LirLowerConfig, mir: MirModule, module: LirModul
     }
     LirLowerResult {module: l.out, diagnostics: l.diagnostics}
 }
+// Splice in any sub-blocks an instr lowering created (Option/Result
+// wrapping, safe-form intrinsics, etc.) before pushing the final
+// block. The MIR block's terminator always lives on the last
+// sub-block since `currentBlockLabel` advances each time a cut
+// happens.
 // Function-entry safepoint sits at the very front of the prologue so
 // every entered function gets one poll regardless of which MIR block
 // is `fn_.entry`. Production runs the same emit order
@@ -2120,9 +2133,14 @@ fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
         MirIntrinsicChanClose -> lirLowerMirStringRuntimeCall(l, instr, "osty_rt_chan_close", lirVoidType(), [lirPtrType()], "chan.close"),
         MirIntrinsicYield -> lirLowerMirStringRuntimeCall(l, instr, "osty_rt_task_yield", lirVoidType(), [], "task.yield"),
         MirIntrinsicIsCancelled -> lirLowerMirStringRuntimeCall(l, instr, "osty_rt_cancel_is_cancelled", lirIntType(1), [], "cancel.isCancelled"),
+        MirIntrinsicStringIndexOf -> lirLowerMirIndexOf(l, instr, mirRtStringSymbol("IndexOf"), [lirPtrType(), lirPtrType()], "string.indexOf"),
+        MirIntrinsicStringLastIndexOf -> lirLowerMirIndexOf(l, instr, mirRtStringSymbol("LastIndexOf"), [lirPtrType(), lirPtrType()], "string.lastIndexOf"),
+        MirIntrinsicBytesIndexOf -> lirLowerMirIndexOf(l, instr, mirRtBytesSymbol("index_of"), [lirPtrType(), lirPtrType()], "bytes.indexOf"),
+        MirIntrinsicBytesLastIndexOf -> lirLowerMirIndexOf(l, instr, mirRtBytesSymbol("last_index_of"), [lirPtrType(), lirPtrType()], "bytes.lastIndexOf"),
         _ -> lirLowerError(l, LirDiagUnsupported, "unsupported MIR intrinsic `" + mirIntrinsicName(instr.intrinsic) + "`", "intrinsic"),
     }
 }
+// ----- IndexOf-family Option<Int> wrapping (Phase 4 deferred slice) -----
 fn lirLowerMirPrintIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr, newline: Bool, stderr: Bool) {
     if instr.args.len() != 1 {
         lirLowerError(l, LirDiagInvalidInput, "print intrinsic expects exactly one argument", "intrinsic.print")
@@ -2283,6 +2301,100 @@ fn lirParamAttrsFromMir(fn_: MirFunction, paramType: LirType) -> List<String> {
         return []
     }
     ["noalias"]
+}
+// ====================================================================
+// Basic-block splitting + Option<T> aggregate construction
+// ====================================================================
+//
+// Some MIR intrinsics (StringIndexOf, ListIndexOf, BytesGet, MapGet,
+// etc.) lower to a runtime call followed by a Some/None branch — the
+// result is an Option<T> aggregate stored into the destination. To
+// emit those as legal LLVM, the LIR block they live in must split
+// across new sub-blocks (some/none/end), each with its own terminator.
+//
+// `lirCutBlockBr` / `lirCutBlockCondBr` close the current block with
+// the requested terminator, push it into l.extraBlocks, then start a
+// fresh sub-block whose label `currentBlockLabel` advances to. The
+// MIR block's "real" terminator always lands on whichever sub-block
+// is current when the MIR-block lowering finishes.
+fn lirFreshAuxLabel(l: LirMirFunctionLowerer, hint: String) -> String {
+    let id = l.auxLabel
+    l.auxLabel = l.auxLabel + 1
+    l.currentBlockLabel + "." + hint + "." + lirIntToString(id)
+}
+fn lirCutBlockBr(l: LirMirFunctionLowerer, target: String) {
+    l.extraBlocks.push(LirBlock {label: l.currentBlockLabel, instrs: l.instrs, term: lirBr(target)})
+    l.instrs = []
+    l.currentBlockLabel = target
+}
+fn lirCutBlockCondBr(l: LirMirFunctionLowerer, cond: String, thenLabel: String, elseLabel: String, nextLabel: String) {
+    l.extraBlocks.push(LirBlock {label: l.currentBlockLabel, instrs: l.instrs, term: lirCondBr(cond, thenLabel, elseLabel)})
+    l.instrs = []
+    l.currentBlockLabel = nextLabel
+}
+// `lirEmitOptionNone` / `lirEmitOptionSome` build the canonical 2-i64
+// `{i64 disc, i64 payload}` aggregate production uses for every
+// Option<T> at the LLVM boundary
+// (mir_generator_snapshot.go::mirNoneAggregateLines /
+// mirSomeAggregateLines / mirOkAggregateLines / mirErrAggregateLines).
+// `payloadI64` must already be the i64-encoded form of the payload —
+// the caller is responsible for zext / ptrtoint / bitcast as
+// appropriate. Returns the temporary holding the constructed aggregate.
+fn lirEmitOptionNone(l: LirMirFunctionLowerer, optType: LirType) -> String {
+    let step = lirFresh(l)
+    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "0"), [0]))
+    let value = lirFresh(l)
+    l.instrs.push(lirInsertValue(value, optType, step, lirOperand(lirIntType(64), "0"), [1]))
+    value
+}
+fn lirEmitOptionSome(l: LirMirFunctionLowerer, optType: LirType, payloadI64: String) -> String {
+    let step = lirFresh(l)
+    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "1"), [0]))
+    let value = lirFresh(l)
+    l.instrs.push(lirInsertValue(value, optType, step, lirOperand(lirIntType(64), payloadI64), [1]))
+    value
+}
+fn lirEmitResultOk(l: LirMirFunctionLowerer, resultType: LirType, payloadI64: String) -> String {
+    let step = lirFresh(l)
+    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), "1"), [0]))
+    let value = lirFresh(l)
+    l.instrs.push(lirInsertValue(value, resultType, step, lirOperand(lirIntType(64), payloadI64), [1]))
+    value
+}
+fn lirEmitResultErr(l: LirMirFunctionLowerer, resultType: LirType, payloadI64: String) -> String {
+    let step = lirFresh(l)
+    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), "0"), [0]))
+    let value = lirFresh(l)
+    l.instrs.push(lirInsertValue(value, resultType, step, lirOperand(lirIntType(64), payloadI64), [1]))
+    value
+}
+// `lirWrapOptionFromI64Sentinel` lowers the IndexOf-family
+// `i64 → Option<Int>` shape: test the i64 against -1 (sge), branch to
+// some/none, materialize the Option aggregate in each arm, and merge
+// through an alloca-backed slot so the merged value is loadable on
+// the join sub-block. Production uses a phi node here; the alloca
+// shape is equivalent for correctness and avoids extending the LIR
+// instruction vocabulary just for this site. Returns the temporary
+// holding the merged Option<Int> value on the join sub-block.
+fn lirWrapOptionFromI64Sentinel(l: LirMirFunctionLowerer, indexReg: String, optType: LirType, hint: String) -> String {
+    let presentReg = lirFresh(l)
+    l.instrs.push(lirBinary(presentReg, "icmp sge", lirIntType(64), indexReg, "0"))
+    let slot = lirFresh(l)
+    l.instrs.push(lirAlloca(slot, optType, 0))
+    let someLabel = lirFreshAuxLabel(l, hint + ".some")
+    let noneLabel = lirFreshAuxLabel(l, hint + ".none")
+    let endLabel = lirFreshAuxLabel(l, hint + ".end")
+    lirCutBlockCondBr(l, presentReg, someLabel, noneLabel, someLabel)
+    let someValue = lirEmitOptionSome(l, optType, indexReg)
+    l.instrs.push(lirStore(lirOperand(optType, someValue), slot, 0))
+    lirCutBlockBr(l, endLabel)
+    l.currentBlockLabel = noneLabel
+    let noneValue = lirEmitOptionNone(l, optType)
+    l.instrs.push(lirStore(lirOperand(optType, noneValue), slot, 0))
+    lirCutBlockBr(l, endLabel)
+    let merged = lirFresh(l)
+    l.instrs.push(lirLoad(merged, optType, slot, 0))
+    merged
 }
 // Generic Phase-4 runtime call lowering. Handles String / Bytes intrinsics
 // whose ABI is "0..N coerced operand args returning one scalar or pointer
@@ -2776,6 +2888,81 @@ fn lirLowerMirSetRemove(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     lirEmitContainerCall(l, instr, llvmSetRuntimeRemoveSymbol(recv.elemLir.llvm, recv.isString), lirVoidType(), [lirPtrType(), recv.elemLir], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, elem.value)], "", "set.remove")
 }
+// IndexOf-family lowering: 2-ptr runtime returning i64 with -1 sentinel
+// for "not found". When the destination local is `Option<Int>` (or any
+// 2-i64 aggregate type — production also accepts `Maybe<Int>`), wrap
+// the result through `lirWrapOptionFromI64Sentinel`. Otherwise store
+// the raw i64 — useful for fused MIR call sites that consume the
+// sentinel directly.
+fn lirLowerMirIndexOf(l: LirMirFunctionLowerer, instr: MirInstr, symbol: String, paramTypes: List<LirType>, label: String) {
+    if instr.args.len() != paramTypes.len() {
+        lirLowerError(l, LirDiagInvalidInput, label + " expects " + lirIntToString(paramTypes.len()) + " arguments", label)
+        return
+    }
+    let mut args: List<LirOperand> = []
+    let mut i = 0
+    for arg in instr.args {
+        let pt = paramTypes[i]
+        let value = lirLowerCoercedOperand(l, arg, arg.typ, pt, label + " arg " + lirIntToString(i))
+        if value.value == "" {
+            return
+        }
+        args.push(lirOperand(pt, value.value))
+        i = i + 1
+    }
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirIntType(64), paramTypes, false))
+    let indexReg = lirFresh(l)
+    l.instrs.push(lirCall(indexReg, lirIntType(64), "@" + symbol, args))
+    if !(instr.hasDest) {
+        return
+    }
+    let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+    if loc.id < 0 {
+        lirLowerError(l, LirDiagInvalidInput, label + " destination local out of range", label)
+        return
+    }
+    let destType = lirLowerMirType(l, loc.typ)
+    if lirIsOptionTypeName(loc.typ) && !lirTypeIsZero(destType) {
+        let merged = lirWrapOptionFromI64Sentinel(l, indexReg, destType, label)
+        lirStoreMirResult(l, instr.dest, lirOperand(destType, merged), loc.typ, label + " result")
+        return
+    }
+    lirStoreMirResult(l, instr.dest, lirOperand(lirIntType(64), indexReg), "Int", label + " result")
+}
+// `Option<...>` / `Maybe<...>` are the canonical 2-i64 aggregate types
+// production lowers Option-returning intrinsics into. The check is a
+// string-prefix sniff because LIR Proto's type lowering does not carry
+// nominal-vs-structural shape distinctions yet — the canonical type
+// names already arrive from the monomorphizer with stable spellings.
+fn lirIsOptionTypeName(name: String) -> Bool {
+    strings.startsWith(name, "Option<") || strings.startsWith(name, "Maybe<")
+}
+fn lirIsResultTypeName(name: String) -> Bool {
+    strings.startsWith(name, "Result<")
+}
+// `lirMangleAlgebraicTypeName` produces a stable LLVM identifier from a
+// canonical Osty type name like "Option<Int>" or "Result<String, Error>".
+// Replaces `<`, `>`, `,`, ` ` with `.` / `_` / `_` so the result reads
+// naturally in LLVM IR (`%Option.Int`, `%Result.String_Error`) and stays
+// a valid identifier even for nested generics (`%Option.List_Int_`).
+fn lirMangleAlgebraicTypeName(name: String) -> String {
+    let mut out = ""
+    let chars = strings.chars(name)
+    for ch in chars {
+        if ch == '<' {
+            out = out + "."
+        } else if ch == '>' {
+            out = out + ""
+        } else if ch == ',' {
+            out = out + "_"
+        } else if ch == ' ' {
+            out = out + ""
+        } else {
+            out = out + strings.fromChar(ch)
+        }
+    }
+    out
+}
 fn lirLowerMirTerm(l: LirMirFunctionLowerer, term: MirTerm, ret: LirType) -> LirTerm {
     match term.kind {
         MirTermReturn -> {
@@ -3141,6 +3328,11 @@ fn lirLowerMirType(l: LirMirFunctionLowerer, name: String) -> LirType {
     if lirIsRefBuiltinTypeName(name) {
         return lirPtrType()
     }
+    if lirIsOptionTypeName(name) || lirIsResultTypeName(name) {
+        let typeName = "%" + lirMangleAlgebraicTypeName(name)
+        lirModuleDeclareTypeDef(l.out, lirTypeDef(typeName, "\{ i64, i64 \}"))
+        return lirAggregateType(typeName)
+    }
     for layout in l.mirModule.layouts.structs {
         if lirMirStructLayoutMatches(layout, name) {
             let typeName = "%" + if layout.mangled == "" {
@@ -3184,6 +3376,12 @@ fn lirLowerMirType(l: LirMirFunctionLowerer, name: String) -> LirType {
     }
     lirTypeInvalid()
 }
+// Option<T> / Maybe<T> / Result<T, E> all lower to the canonical
+// `{ i64 disc, i64 payload }` aggregate production uses for every
+// 2-i64 algebraic type at the LLVM boundary
+// (mir_generator_snapshot.go::mirNoneAggregate / mirOkAggregate).
+// The mangled name strips angle brackets and commas so it stays a
+// valid LLVM identifier; the layout itself does not vary per-T.
 // Reference-shaped builtin generics (List/Map/Set/Channel/Handle/Box)
 // and the structured-task surfaces all reach LLVM as opaque ptr. The
 // monomorphizer keeps the printed type name intact so we just sniff
