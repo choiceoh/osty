@@ -675,6 +675,39 @@ classification), per-instruction `!llvm.access.group` metadata, the
 Phase-7 actual runner (Osty↔Go bridge), and the Phase-8 default-on
 flip.
 
+Design decision: GC root binding lands as a frame-lifetime pass in
+the MIR-function lowerer. `lirLowerMirLocals` now inspects each
+local's MIR type via the new `lirTypeNameIsGCManaged(name)`
+predicate (true for `String`, `Bytes`, and every reference-shaped
+builtin: `List<T>` / `Map<K,V>` / `Set<T>` / `Channel<T>` /
+`Handle<T>` / `Box<T>` / `TaskGroup` / `Select`); when the slot
+holds a managed reference, the prologue emits
+`call void @osty.gc.root_bind_v1(ptr %slot)` immediately after the
+alloca and (when the local is a parameter) the param-store, then
+records the slot in `LirMirFunctionLowerer.gcRootSlots`.
+
+Each `MirTermReturn` arm in `lirLowerMirTerm` now invokes
+`lirEmitGcRootReleases(l)` immediately before the `ret`, walking
+`gcRootSlots` in REVERSE insertion order. That mirrors production's
+LIFO discipline (`generator.go::releaseGCRoots`) so the runtime
+sees the same bind/release nesting as the existing MIR emitter.
+
+`RawPtr` is intentionally excluded from the managed predicate — it's
+the user's escape hatch for foreign pointers and binding it would
+attribute non-GC memory to the collector. Composite struct/tuple
+locals also do not currently bind: their slot type is the aggregate
+value, not a managed pointer, so they are scanned through the
+`%struct.<T>` field walk inside the safepoint runtime instead of a
+dedicated bind/release pair (matching production today).
+
+Three Phase-5 fixtures pin the new shape: `gc_root_bind_release`
+(single managed param + bind/release pair), `gc_root_multiple_slots`
+(two managed params with explicit `%l1`/`%l2` slot names and LIFO
+release order), and `gc_root_scalar_only` (scalar-only function
+that must NOT emit root binding — implicitly enforced by the
+catalog-shape pin since the function envelope and `ret i64` needles
+match without any GC declares).
+
 ## Phase 0: lock the boundary
 
 Deliverables:
