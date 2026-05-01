@@ -151,6 +151,11 @@ type machoTextEncoding struct {
 	code            []byte
 	relocs          []machoReloc
 	externalSymbols []string
+	// fnOffsets is the byte offset within __text where each lowered
+	// function's code starts. Used by the symbol table emitter to point
+	// each defined function symbol at its body. Order tracks
+	// program.Functions so the symtab stays deterministic.
+	fnOffsets []uint64
 }
 
 func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
@@ -178,7 +183,7 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 	cstringData, cstringAddrs := encodeMachOCStrings(program.CStrings, uint64(len(enc.code)))
 	relocOffset := alignUp(cstringOffset+uint32(len(cstringData)), 4)
 	symoff := relocOffset + uint32(len(enc.relocs))*machoRelocSize
-	nsyms := uint32(len(program.CStrings) + 1 + len(enc.externalSymbols))
+	nsyms := uint32(len(program.CStrings) + len(program.Functions) + len(enc.externalSymbols))
 	stroff := symoff + nsyms*machoNlist64Size
 	strtab := newMachOStringTable()
 
@@ -245,8 +250,8 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 	writeU32(&b, 0)
 	writeU32(&b, uint32(len(program.CStrings)))
 	writeU32(&b, uint32(len(program.CStrings)))
-	writeU32(&b, 1)
-	writeU32(&b, uint32(len(program.CStrings)+1))
+	writeU32(&b, uint32(len(program.Functions)))
+	writeU32(&b, uint32(len(program.CStrings)+len(program.Functions)))
 	writeU32(&b, uint32(len(enc.externalSymbols)))
 	for i := 0; i < 12; i++ {
 		writeU32(&b, 0)
@@ -270,7 +275,13 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 	for _, cstr := range program.CStrings {
 		writeMachONlist64(&b, strtab.add(asmCStringLabel(program.Target, cstr.Label)), machoNSect, machoCStringSectionNumber, 0, cstringAddrs[cstr.Label])
 	}
-	writeMachONlist64(&b, strtab.add(asmSymbolName(program.Target, "main")), machoNExt|machoNSect, machoTextSectionNumber, 0, 0)
+	for i, fn := range program.Functions {
+		var fnOffset uint64
+		if i < len(enc.fnOffsets) {
+			fnOffset = enc.fnOffsets[i]
+		}
+		writeMachONlist64(&b, strtab.add(asmSymbolName(program.Target, fn.Name)), machoNExt|machoNSect, machoTextSectionNumber, 0, fnOffset)
+	}
 	for _, symbol := range enc.externalSymbols {
 		writeMachONlist64(&b, strtab.add(asmSymbolName(program.Target, symbol)), machoNExt, 0, 0, 0)
 	}
@@ -295,15 +306,42 @@ func encodeMachOCStrings(cstrings []CStringLiteral, baseAddr uint64) ([]byte, ma
 }
 
 func encodeMachOTextWithRelocs(program *Program, cstringIndex map[string]uint32) (machoTextEncoding, error) {
-	if len(program.Functions) != 1 || program.Functions[0].Name != "main" {
-		return machoTextEncoding{}, fmt.Errorf("onb: Mach-O phase 1 only supports main")
+	if len(program.Functions) == 0 {
+		return machoTextEncoding{}, fmt.Errorf("onb: Mach-O encoder requires at least one function")
 	}
-	fn := program.Functions[0]
-	if len(fn.Blocks) != 1 {
-		return machoTextEncoding{}, fmt.Errorf("onb: Mach-O phase 1 only supports one block")
+	if program.Functions[0].Name != "main" {
+		return machoTextEncoding{}, fmt.Errorf("onb: Mach-O encoder requires main as the first function")
+	}
+	// Pre-build the local-function symbol index. BranchLink targets that
+	// resolve here use the local symtab slot; only truly external symbols
+	// (printf, puts, ...) flow into externalSymbols. Without this guard a
+	// `bl _add` would create both a defined symbol (from the function) and
+	// an undefined symbol (from the branch reloc), which Mach-O rejects.
+	localFnIndex := map[string]uint32{}
+	for i, fn := range program.Functions {
+		// nextdefsym order matches program.Functions order: cstrings come
+		// first in the symtab, so each fn slot is len(cstrings) + i.
+		localFnIndex[fn.Name] = uint32(len(cstringIndex) + i)
 	}
 	externalIndex := map[string]uint32{}
 	var enc machoTextEncoding
+	for _, fn := range program.Functions {
+		startOffset := uint64(len(enc.code))
+		enc.fnOffsets = append(enc.fnOffsets, startOffset)
+		if err := encodeMachOFunction(&enc, fn, cstringIndex, localFnIndex, externalIndex, len(program.Functions)); err != nil {
+			return machoTextEncoding{}, err
+		}
+	}
+	return enc, nil
+}
+
+// encodeMachOFunction appends one lowered function's prologue, body, and
+// epilogue to enc.code, threading any new relocations through enc.relocs and
+// any new external symbols through enc.externalSymbols + externalIndex.
+func encodeMachOFunction(enc *machoTextEncoding, fn Function, cstringIndex, localFnIndex, externalIndex map[string]uint32, totalFns int) error {
+	if len(fn.Blocks) != 1 {
+		return fmt.Errorf("%w: Mach-O encoder requires one block per function", ErrUnsupportedShape)
+	}
 	frameSize := functionFrameSize(fn)
 	fpOffset := functionFPOffset(fn)
 	if frameSize > 0 {
@@ -313,17 +351,17 @@ func encodeMachOTextWithRelocs(program *Program, cstringIndex map[string]uint32)
 		} else {
 			subWord, err := encodeAddSubImm(0xd1000000, RegSP, RegSP, uint64(frameSize))
 			if err != nil {
-				return machoTextEncoding{}, fmt.Errorf("onb: prologue sub sp: %w", err)
+				return fmt.Errorf("onb: prologue sub sp: %w", err)
 			}
 			enc.code = appendU32LE(enc.code, subWord)
 			stpWord, err := encodeStpFPLR(uint32(fpOffset))
 			if err != nil {
-				return machoTextEncoding{}, fmt.Errorf("onb: prologue stp: %w", err)
+				return fmt.Errorf("onb: prologue stp: %w", err)
 			}
 			enc.code = appendU32LE(enc.code, stpWord)
 			addWord, err := encodeAddSubImm(0x91000000, RegX29, RegSP, uint64(fpOffset))
 			if err != nil {
-				return machoTextEncoding{}, fmt.Errorf("onb: prologue fp: %w", err)
+				return fmt.Errorf("onb: prologue fp: %w", err)
 			}
 			enc.code = appendU32LE(enc.code, addWord)
 		}
@@ -332,11 +370,11 @@ func encodeMachOTextWithRelocs(program *Program, cstringIndex map[string]uint32)
 		switch i := instr.(type) {
 		case *LoadCStringAddress:
 			if i.Dst != RegX0 {
-				return machoTextEncoding{}, fmt.Errorf("%w: Mach-O encoder only supports cstring loads into x0", ErrNotImplemented)
+				return fmt.Errorf("%w: Mach-O encoder only supports cstring loads into x0", ErrNotImplemented)
 			}
 			sym, ok := cstringIndex[i.Label]
 			if !ok {
-				return machoTextEncoding{}, fmt.Errorf("onb: unknown Mach-O string literal label %q", i.Label)
+				return fmt.Errorf("onb: unknown Mach-O string literal label %q", i.Label)
 			}
 			addr := uint32(len(enc.code))
 			enc.code = appendU32LE(enc.code, 0x90000000)
@@ -346,26 +384,30 @@ func encodeMachOTextWithRelocs(program *Program, cstringIndex map[string]uint32)
 			enc.relocs = append(enc.relocs, machoReloc{address: addr, symbolnum: sym, length: 2, extern: true, typ: machoARM64RelocPageOff12})
 		case *BranchLink:
 			if i.Symbol == "" {
-				return machoTextEncoding{}, fmt.Errorf("onb: Mach-O branch without symbol")
+				return fmt.Errorf("onb: Mach-O branch without symbol")
 			}
-			sym, ok := externalIndex[i.Symbol]
-			if !ok {
-				sym = uint32(len(cstringIndex) + 1 + len(enc.externalSymbols))
-				externalIndex[i.Symbol] = sym
-				enc.externalSymbols = append(enc.externalSymbols, i.Symbol)
+			sym, isLocal := localFnIndex[i.Symbol]
+			if !isLocal {
+				ext, ok := externalIndex[i.Symbol]
+				if !ok {
+					ext = uint32(len(cstringIndex) + totalFns + len(enc.externalSymbols))
+					externalIndex[i.Symbol] = ext
+					enc.externalSymbols = append(enc.externalSymbols, i.Symbol)
+				}
+				sym = ext
 			}
 			addr := uint32(len(enc.code))
 			enc.code = appendU32LE(enc.code, 0x94000000)
 			enc.relocs = append(enc.relocs, machoReloc{address: addr, symbolnum: sym, pcrel: true, length: 2, extern: true, typ: machoARM64RelocBranch26})
 		case *MovImm32:
 			if i.Dst != RegW0 || i.Imm != 0 {
-				return machoTextEncoding{}, fmt.Errorf("onb: Mach-O phase 1 only supports mov w0, #0")
+				return fmt.Errorf("onb: Mach-O phase 1 only supports mov w0, #0")
 			}
 			enc.code = append(enc.code, 0x00, 0x00, 0x80, 0x52)
 		case *MovImm64:
 			words, err := encodeMachOMovImm64(i.Dst, uint64(i.Imm))
 			if err != nil {
-				return machoTextEncoding{}, err
+				return err
 			}
 			for _, word := range words {
 				enc.code = appendU32LE(enc.code, word)
@@ -373,37 +415,37 @@ func encodeMachOTextWithRelocs(program *Program, cstringIndex map[string]uint32)
 		case *MovRegReg:
 			word, err := encodeMachOMovRegReg(i.Dst, i.Src)
 			if err != nil {
-				return machoTextEncoding{}, err
+				return err
 			}
 			enc.code = appendU32LE(enc.code, word)
 		case *Store64Stack:
 			word, err := encodeMachOStore64Stack(i)
 			if err != nil {
-				return machoTextEncoding{}, err
+				return err
 			}
 			enc.code = appendU32LE(enc.code, word)
 		case *Load64Stack:
 			word, err := encodeMachOLoad64Stack(i)
 			if err != nil {
-				return machoTextEncoding{}, err
+				return err
 			}
 			enc.code = appendU32LE(enc.code, word)
 		case *AddReg:
 			word, err := encodeMachOArithReg(0x8b000000, i.Dst, i.Lhs, i.Rhs)
 			if err != nil {
-				return machoTextEncoding{}, err
+				return err
 			}
 			enc.code = appendU32LE(enc.code, word)
 		case *SubReg:
 			word, err := encodeMachOArithReg(0xcb000000, i.Dst, i.Lhs, i.Rhs)
 			if err != nil {
-				return machoTextEncoding{}, err
+				return err
 			}
 			enc.code = appendU32LE(enc.code, word)
 		case *MulReg:
 			word, err := encodeMachOMulReg(i.Dst, i.Lhs, i.Rhs)
 			if err != nil {
-				return machoTextEncoding{}, err
+				return err
 			}
 			enc.code = appendU32LE(enc.code, word)
 		case *Ret:
@@ -413,22 +455,22 @@ func encodeMachOTextWithRelocs(program *Program, cstringIndex map[string]uint32)
 				} else {
 					ldpWord, err := encodeLdpFPLR(uint32(fpOffset))
 					if err != nil {
-						return machoTextEncoding{}, fmt.Errorf("onb: epilogue ldp: %w", err)
+						return fmt.Errorf("onb: epilogue ldp: %w", err)
 					}
 					enc.code = appendU32LE(enc.code, ldpWord)
 					addWord, err := encodeAddSubImm(0x91000000, RegSP, RegSP, uint64(frameSize))
 					if err != nil {
-						return machoTextEncoding{}, fmt.Errorf("onb: epilogue add sp: %w", err)
+						return fmt.Errorf("onb: epilogue add sp: %w", err)
 					}
 					enc.code = appendU32LE(enc.code, addWord)
 				}
 			}
 			enc.code = append(enc.code, 0xc0, 0x03, 0x5f, 0xd6)
 		default:
-			return machoTextEncoding{}, fmt.Errorf("%w: Mach-O encoder does not support %T", ErrNotImplemented, instr)
+			return fmt.Errorf("%w: Mach-O encoder does not support %T", ErrNotImplemented, instr)
 		}
 	}
-	return enc, nil
+	return nil
 }
 
 func encodeMachOStore64Stack(instr *Store64Stack) (uint32, error) {

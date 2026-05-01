@@ -45,6 +45,12 @@ type Reg string
 const (
 	RegX0  Reg = "x0"
 	RegX1  Reg = "x1"
+	RegX2  Reg = "x2"
+	RegX3  Reg = "x3"
+	RegX4  Reg = "x4"
+	RegX5  Reg = "x5"
+	RegX6  Reg = "x6"
+	RegX7  Reg = "x7"
 	RegX9  Reg = "x9"
 	RegX10 Reg = "x10"
 	RegX29 Reg = "x29"

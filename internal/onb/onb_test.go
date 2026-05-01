@@ -614,6 +614,191 @@ func TestRenderAssemblyRendersArithFrame(t *testing.T) {
 	}
 }
 
+// addAndCallMIR builds the MIR for
+//
+//	fn add(a: Int, b: Int) -> Int { a + b }
+//	fn main() { println(add(40, 2)) }
+//
+// — the simplest user-defined function shape: two Int parameters, an Int
+// return, and a single CallInstr in main feeding into println.
+func addAndCallMIR() *mir.Module {
+	addFn := &mir.Function{
+		Name:        "add",
+		ReturnType:  mir.TInt,
+		ReturnLocal: 0,
+		Entry:       0,
+		Params:      []mir.LocalID{1, 2},
+		Locals: []*mir.Local{
+			{ID: 0, Name: "$ret", Type: mir.TInt, IsReturn: true},
+			{ID: 1, Name: "a", Type: mir.TInt},
+			{ID: 2, Name: "b", Type: mir.TInt},
+		},
+	}
+	addBlock := addFn.NewBlock(mir.Span{})
+	addFn.Block(addBlock).Instrs = []mir.Instr{
+		&mir.AssignInstr{
+			Dest: mir.Place{Local: 0},
+			Src: &mir.BinaryRV{
+				Op:    mir.BinAdd,
+				Left:  &mir.CopyOp{Place: mir.Place{Local: 1}, T: mir.TInt},
+				Right: &mir.CopyOp{Place: mir.Place{Local: 2}, T: mir.TInt},
+				T:     mir.TInt,
+			},
+		},
+	}
+	addFn.Block(addBlock).SetTerminator(&mir.ReturnTerm{})
+
+	mainFn := &mir.Function{
+		Name:        "main",
+		ReturnType:  mir.TUnit,
+		ReturnLocal: 0,
+		Entry:       0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "$ret", Type: mir.TUnit, IsReturn: true},
+			{ID: 1, Name: "tmp", Type: mir.TInt},
+		},
+	}
+	mainBlock := mainFn.NewBlock(mir.Span{})
+	mainFn.Block(mainBlock).Instrs = []mir.Instr{
+		&mir.CallInstr{
+			Dest:   &mir.Place{Local: 1},
+			Callee: &mir.FnRef{Symbol: "add", Type: mir.TInt},
+			Args: []mir.Operand{
+				&mir.ConstOp{Const: &mir.IntConst{Value: 40, T: mir.TInt}, T: mir.TInt},
+				&mir.ConstOp{Const: &mir.IntConst{Value: 2, T: mir.TInt}, T: mir.TInt},
+			},
+		},
+		&mir.IntrinsicInstr{
+			Kind: mir.IntrinsicPrintln,
+			Args: []mir.Operand{&mir.CopyOp{Place: mir.Place{Local: 1}, T: mir.TInt}},
+		},
+	}
+	mainFn.Block(mainBlock).SetTerminator(&mir.ReturnTerm{})
+
+	return &mir.Module{Functions: []*mir.Function{addFn, mainFn}}
+}
+
+func TestLowerMIREmitsBothFunctions(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(addAndCallMIR(), Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR() returned error: %v", err)
+	}
+	if len(program.Functions) != 2 {
+		t.Fatalf("Functions = %d, want 2", len(program.Functions))
+	}
+	if program.Functions[0].Name != "main" {
+		t.Fatalf("first function = %q, want main (callers expect _main at offset 0)", program.Functions[0].Name)
+	}
+	if program.Functions[1].Name != "add" {
+		t.Fatalf("second function = %q, want add", program.Functions[1].Name)
+	}
+}
+
+func TestLowerMIRLowersCallInstr(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(addAndCallMIR(), Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR() returned error: %v", err)
+	}
+	mainInstrs := program.Functions[0].Blocks[0].Instrs
+	var sawMov40, sawMov2, sawBlAdd, sawStoreReturn bool
+	for _, instr := range mainInstrs {
+		switch i := instr.(type) {
+		case *MovImm64:
+			if i.Dst == RegX0 && i.Imm == 40 {
+				sawMov40 = true
+			}
+			if i.Dst == RegX1 && i.Imm == 2 {
+				sawMov2 = true
+			}
+		case *BranchLink:
+			if i.Symbol == "add" {
+				sawBlAdd = true
+			}
+		case *Store64Stack:
+			if i.Src == RegX0 && i.Offset != 0 {
+				sawStoreReturn = true
+			}
+		}
+	}
+	if !sawMov40 || !sawMov2 {
+		t.Fatalf("expected mov x0,#40 + mov x1,#2 (AAPCS64 args); instrs=%+v", mainInstrs)
+	}
+	if !sawBlAdd {
+		t.Fatalf("expected bl _add; instrs=%+v", mainInstrs)
+	}
+	if !sawStoreReturn {
+		t.Fatalf("expected return value (x0) stored to slot; instrs=%+v", mainInstrs)
+	}
+}
+
+func TestLowerMIRShufflesParamsToSlots(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(addAndCallMIR(), Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR() returned error: %v", err)
+	}
+	addInstrs := program.Functions[1].Blocks[0].Instrs
+	var sawStoreX0, sawStoreX1 bool
+	for _, instr := range addInstrs[:2] {
+		store, ok := instr.(*Store64Stack)
+		if !ok {
+			continue
+		}
+		if store.Src == RegX0 {
+			sawStoreX0 = true
+		}
+		if store.Src == RegX1 {
+			sawStoreX1 = true
+		}
+	}
+	if !sawStoreX0 || !sawStoreX1 {
+		t.Fatalf("expected param shuffle store x0/x1 to slots at fn entry; instrs=%+v", addInstrs)
+	}
+}
+
+func TestEmitObjectWritesMachOMultipleFnSymbols(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(addAndCallMIR(), Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR() returned error: %v", err)
+	}
+	obj, err := EmitObject(program)
+	if err != nil {
+		t.Fatalf("EmitObject() returned error: %v", err)
+	}
+	f, err := macho.NewFile(bytes.NewReader(obj))
+	if err != nil {
+		t.Fatalf("macho.NewFile() returned error: %v", err)
+	}
+	if f.Symtab == nil {
+		t.Fatal("Mach-O symtab is nil")
+	}
+	var sawMain, sawAdd, sawAddDuplicate bool
+	for _, sym := range f.Symtab.Syms {
+		switch sym.Name {
+		case "_main":
+			sawMain = true
+		case "_add":
+			if sawAdd {
+				sawAddDuplicate = true
+			}
+			sawAdd = true
+		}
+	}
+	if !sawMain || !sawAdd {
+		t.Fatalf("Mach-O symbols = %+v, want both _main and _add", f.Symtab.Syms)
+	}
+	if sawAddDuplicate {
+		t.Fatalf("Mach-O has duplicate _add symbol (defined + undefined?); syms=%+v", f.Symtab.Syms)
+	}
+}
+
 func TestEmitObjectWritesMachOArithRelocations(t *testing.T) {
 	t.Parallel()
 
