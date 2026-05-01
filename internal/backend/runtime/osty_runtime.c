@@ -15522,13 +15522,18 @@ static void osty_re_add_thread_caps(osty_re_vm *vm, const osty_re_inst *prog, in
            caps, sizeof(int32_t) * (size_t)vm->slots_per_thread);
 }
 
-/* Run the matcher against text. If `out_caps` is non-NULL, on match it
- * receives 2 * ngroups int32_t slots (-1 = unset). Returns 1 on match,
- * 0 on no match. */
-static int osty_re_match(const osty_regex_compiled *re, const char *text, int text_len, int32_t *out_caps) {
+/* Run the matcher against text starting at `start_offset` (Phase 2b:
+ * exposed so capturesAll can scan past prior matches). `^` still
+ * binds to absolute position 0 — start_offset only shifts the search
+ * loop, BOL inside add_thread_caps continues to compare against 0.
+ * If `out_caps` is non-NULL, on match it receives 2 * ngroups int32_t
+ * slots (-1 = unset). Returns 1 on match, 0 on no match. */
+static int osty_re_match_from(const osty_regex_compiled *re, const char *text, int text_len, int start_offset, int32_t *out_caps) {
     if (re->ngroups > OSTY_RE_MAX_GROUPS) {
         return 0;
     }
+    if (start_offset < 0) start_offset = 0;
+    if (start_offset > text_len) return 0;
     osty_re_vm vm;
     memset(&vm, 0, sizeof(vm));
     vm.prog_len = re->prog_len;
@@ -15547,7 +15552,7 @@ static int osty_re_match(const osty_regex_compiled *re, const char *text, int te
     int32_t seed_caps[OSTY_RE_MAX_CAP_SLOTS];
     for (int i = 0; i < vm.slots_per_thread; i++) seed_caps[i] = -1;
 
-    for (int sp = 0; sp <= text_len; sp++) {
+    for (int sp = start_offset; sp <= text_len; sp++) {
         /* Promote nxt -> cur. */
         int *swap_pc = vm.cur_pc; vm.cur_pc = vm.nxt_pc; vm.nxt_pc = swap_pc;
         int32_t *swap_caps = vm.cur_caps; vm.cur_caps = vm.nxt_caps; vm.nxt_caps = swap_caps;
@@ -15710,7 +15715,30 @@ bool osty_rt_regex_matches(void *raw_re, const char *text) {
     if (src == NULL) src = "";
     osty_rt_string_decode_to_buf_if_inline(&src, inline_buf);
     int len = (int)strlen(src);
-    return osty_re_match(re, src, len, NULL) ? true : false;
+    return osty_re_match_from(re, src, len, 0, NULL) ? true : false;
+}
+
+/* Build a self-contained Captures GC blob from a successful match.
+ * Layout: [header][full input bytes][2 * ngroups int32 slots]. The
+ * input is copied inline so the Captures has no external GC refs;
+ * Captures.get returns slices into the inlined copy. The whole-input
+ * copy is wasteful but makes capturesAll trivial — every Captures
+ * stays valid even if the caller mutates the input afterwards.  */
+static void *osty_re_build_captures(int ngroups, const char *text, int text_len, const int32_t *slots) {
+    int slot_count = 2 * ngroups;
+    size_t hdr = sizeof(osty_regex_captures);
+    size_t text_bytes = (size_t)text_len;
+    size_t slot_bytes = sizeof(int32_t) * (size_t)slot_count;
+    size_t total = hdr + text_bytes + slot_bytes;
+    osty_regex_captures *caps = (osty_regex_captures *)osty_gc_allocate_managed(total, OSTY_GC_KIND_GENERIC, "runtime.regex.captures", NULL, NULL);
+    caps->ngroups = ngroups;
+    caps->text_len = text_len;
+    if (text_bytes > 0) {
+        memcpy((char *)(caps + 1), text, text_bytes);
+    }
+    int32_t *out_slots = osty_re_captures_slots(caps);
+    memcpy(out_slots, slots, slot_bytes);
+    return caps;
 }
 
 /* regex.captures(text) -> Captures? */
@@ -15727,23 +15755,55 @@ void *osty_rt_regex_captures(void *raw_re, const char *text) {
     int32_t slots[OSTY_RE_MAX_CAP_SLOTS];
     int slot_count = 2 * re->ngroups;
     for (int i = 0; i < slot_count; i++) slots[i] = -1;
-    if (!osty_re_match(re, src, len, slots)) {
+    if (!osty_re_match_from(re, src, len, 0, slots)) {
         return NULL;
     }
-    /* Build self-contained Captures blob: header + text bytes + slot ints. */
-    size_t hdr = sizeof(osty_regex_captures);
-    size_t text_bytes = (size_t)len;
-    size_t slot_bytes = sizeof(int32_t) * (size_t)slot_count;
-    size_t total = hdr + text_bytes + slot_bytes;
-    osty_regex_captures *caps = (osty_regex_captures *)osty_gc_allocate_managed(total, OSTY_GC_KIND_GENERIC, "runtime.regex.captures", NULL, NULL);
-    caps->ngroups = re->ngroups;
-    caps->text_len = (int32_t)len;
-    if (text_bytes > 0) {
-        memcpy((char *)(caps + 1), src, text_bytes);
+    return osty_re_build_captures(re->ngroups, src, len, slots);
+}
+
+/* regex.capturesAll(text) -> List<Captures>. Walks the input collecting
+ * non-overlapping matches in left-to-right order. Empty matches advance
+ * the cursor by one byte to avoid an infinite loop. Anchors continue
+ * to bind to absolute positions: `^` only matches at offset 0, so a
+ * pattern like `^foo` yields at most one entry; `\bfoo\b` (when the
+ * word-boundary lands) yields multiple. Returns an empty List<Captures>
+ * if no match is found. */
+void *osty_rt_regex_captures_all(void *raw_re, const char *text) {
+    if (raw_re == NULL) {
+        osty_rt_abort("runtime.regex.captures_all: nil Regex");
     }
-    int32_t *out_slots = osty_re_captures_slots(caps);
-    memcpy(out_slots, slots, slot_bytes);
-    return caps;
+    osty_regex_compiled *re = (osty_regex_compiled *)raw_re;
+    char inline_buf[8];
+    const char *src = text;
+    if (src == NULL) src = "";
+    osty_rt_string_decode_to_buf_if_inline(&src, inline_buf);
+    int len = (int)strlen(src);
+    void *list = osty_rt_list_new();
+    int32_t slots[OSTY_RE_MAX_CAP_SLOTS];
+    int slot_count = 2 * re->ngroups;
+    int start = 0;
+    while (start <= len) {
+        for (int i = 0; i < slot_count; i++) slots[i] = -1;
+        if (!osty_re_match_from(re, src, len, start, slots)) {
+            break;
+        }
+        int32_t match_start = slots[0];
+        int32_t match_end = slots[1];
+        if (match_start < 0 || match_end < 0 || match_end > len || match_start > match_end) {
+            /* Defensive: malformed slots from the matcher. Stop to
+             * avoid spinning. */
+            break;
+        }
+        void *caps = osty_re_build_captures(re->ngroups, src, len, slots);
+        osty_rt_list_push_ptr(list, caps);
+        if (match_end > match_start) {
+            start = match_end;
+        } else {
+            /* Empty match — bump by one to make progress. */
+            start = match_start + 1;
+        }
+    }
+    return list;
 }
 
 /* Captures.get(i) -> String?  Returns NULL when i is out of range or

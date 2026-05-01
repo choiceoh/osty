@@ -1644,6 +1644,20 @@ func (g *mirGen) emitStdRegexCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, err
 		nullable := g.fresh()
 		g.fnBuf.WriteString(mirCallValueLine(nullable, "ptr", ostyRtRegexCapturesSymbol, argList))
 		return true, g.storeOptionPtrFromNullable(c, nullable)
+	case "capturesAll":
+		if len(c.Args) != 2 {
+			return true, unsupported("mir-mvp", "Regex.capturesAll requires receiver and text")
+		}
+		recv, err := g.evalTypedArg(c.Args[0], c.Args[0].Type())
+		if err != nil {
+			return true, err
+		}
+		text, err := g.evalTypedArg(c.Args[1], c.Args[1].Type())
+		if err != nil {
+			return true, err
+		}
+		// Runtime returns List<Captures> ptr (always non-null; empty list if no matches).
+		return true, g.emitRuntimeCallToDest(c, ostyRtRegexCapturesAllSymbol, "ptr", []mirRuntimeArg{recv, text})
 	}
 	return false, nil
 }

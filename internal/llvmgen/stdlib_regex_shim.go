@@ -9,6 +9,7 @@ const (
 	ostyRtRegexCompileErrorSymbol = "osty_rt_regex_compile_error"
 	ostyRtRegexMatchesSymbol      = "osty_rt_regex_matches"
 	ostyRtRegexCapturesSymbol     = "osty_rt_regex_captures"
+	ostyRtRegexCapturesAllSymbol  = "osty_rt_regex_captures_all"
 	ostyRtRegexCapturesGetSymbol  = "osty_rt_regex_captures_get"
 )
 
@@ -26,6 +27,11 @@ var stdRegexCapturesOptionSourceTypeSingleton ast.Type = &ast.OptionalType{
 
 var stdRegexStringOptionSourceTypeSingleton ast.Type = &ast.OptionalType{
 	Inner: stringSourceTypeSingleton,
+}
+
+var stdRegexCapturesListSourceTypeSingleton ast.Type = &ast.NamedType{
+	Path: []string{"List"},
+	Args: []ast.Type{stdRegexCapturesSourceTypeSingleton},
 }
 
 var stdRegexCompileResultSourceTypeSingleton ast.Type = &ast.NamedType{
@@ -204,6 +210,8 @@ func (g *generator) emitStdRegexMethodCall(call *ast.CallExpr) (value, bool, err
 			return g.emitStdRegexMatchesCall(call, field)
 		case "captures":
 			return g.emitStdRegexCapturesCall(call, field)
+		case "capturesAll":
+			return g.emitStdRegexCapturesAllCall(call, field)
 		}
 		return value{}, false, nil
 	}
@@ -228,6 +236,13 @@ func (g *generator) stdRegexMethodStaticResult(call *ast.CallExpr) (value, bool)
 			return value{typ: "i1", sourceType: boolSourceTypeSingleton}, true
 		case "captures":
 			return value{typ: "ptr", gcManaged: true, sourceType: stdRegexCapturesOptionSourceTypeSingleton}, true
+		case "capturesAll":
+			return value{
+				typ:         "ptr",
+				gcManaged:   true,
+				listElemTyp: "ptr",
+				sourceType:  stdRegexCapturesListSourceTypeSingleton,
+			}, true
 		}
 		return value{}, false
 	}
@@ -252,6 +267,8 @@ func (g *generator) staticStdRegexMethodSourceType(call *ast.CallExpr) (ast.Type
 			return boolSourceTypeSingleton, true
 		case "captures":
 			return stdRegexCapturesOptionSourceTypeSingleton, true
+		case "capturesAll":
+			return stdRegexCapturesListSourceTypeSingleton, true
 		}
 		return nil, false
 	}
@@ -379,6 +396,58 @@ func (g *generator) emitStdRegexCapturesCall(call *ast.CallExpr, field *ast.Fiel
 	v := fromOstyValue(out)
 	v.gcManaged = true
 	v.sourceType = stdRegexCapturesOptionSourceTypeSingleton
+	v.rootPaths = g.rootPathsForType(v.typ)
+	return v, true, nil
+}
+
+func (g *generator) emitStdRegexCapturesAllCall(call *ast.CallExpr, field *ast.FieldExpr) (value, bool, error) {
+	if len(call.Args) != 1 {
+		return value{}, true, unsupportedf("call", "Regex.capturesAll expects 1 argument, got %d", len(call.Args))
+	}
+	arg := call.Args[0]
+	if arg == nil || arg.Name != "" || arg.Value == nil {
+		return value{}, true, unsupported("call", "Regex.capturesAll requires one positional String argument")
+	}
+	src, ok := g.staticExprSourceType(arg.Value)
+	if !ok {
+		return value{}, true, unsupported("type-system", "Regex.capturesAll arg 1 source type unknown, want String")
+	}
+	resolved, err := llvmResolveAliasType(src, g.typeEnv(), map[string]bool{})
+	if err != nil || !llvmNamedTypeIsString(resolved) {
+		return value{}, true, unsupported("type-system", "Regex.capturesAll arg 1 source type is not String")
+	}
+	recv, err := g.emitExpr(field.X)
+	if err != nil {
+		return value{}, true, err
+	}
+	recv, err = g.loadIfPointer(recv)
+	if err != nil {
+		return value{}, true, err
+	}
+	if recv.typ != "ptr" {
+		return value{}, true, unsupportedf("type-system", "Regex receiver type %s", recv.typ)
+	}
+	text, err := g.emitExpr(arg.Value)
+	if err != nil {
+		return value{}, true, err
+	}
+	text = g.protectManagedTemporary("regex.capturesAll.arg", text)
+	textLoaded, err := g.loadIfPointer(text)
+	if err != nil {
+		return value{}, true, err
+	}
+	if textLoaded.typ != "ptr" {
+		return value{}, true, unsupportedf("type-system", "Regex.capturesAll arg 1 type %s, want String", textLoaded.typ)
+	}
+	g.declareRuntimeSymbol(ostyRtRegexCapturesAllSymbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	g.emitCallSafepointIfNeeded(emitter)
+	out := llvmCall(emitter, "ptr", ostyRtRegexCapturesAllSymbol, []*LlvmValue{toOstyValue(recv), toOstyValue(textLoaded)})
+	g.takeOstyEmitter(emitter)
+	v := fromOstyValue(out)
+	v.gcManaged = true
+	v.listElemTyp = "ptr"
+	v.sourceType = stdRegexCapturesListSourceTypeSingleton
 	v.rootPaths = g.rootPathsForType(v.typ)
 	return v, true, nil
 }
