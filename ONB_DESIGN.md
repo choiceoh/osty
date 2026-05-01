@@ -37,6 +37,17 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 4 (loops + match, 2026-05-02)** — `while` / `for ... in 0..N`
+> / 중첩 루프 / `match`(non-const scrutinee 포함)이 모두 native path로 통과.
+> 핵심 발견: while/for/단순 match는 Week 3 multi-block + branch fixup
+> 인프라로 이미 동작 — 별도 lowering 없이도 native. 추가된 것은
+> SwitchIntTerm 한 가지 (non-const scrutinee가 있는 일반 match가 사용):
+> - `BranchCond { Cond, Target }` LIR opcode + Mach-O fixup (`b.cond imm19`)
+> - `lowerSwitchIntTerm`: scrutinee를 x9에 load, 각 case는 `mov x10, #imm;
+>   cmp x9, x10; b.eq case_target`, 마지막에 `b default`
+> - `collectTerminatorReads`가 `SwitchIntTerm.Scrutinee`도 walk
+> 부수: `_ = fnStart` 미사용 변수 정리 (simplify 리뷰 피드백).
+>
 > **Slice A2 Week 3 (control flow, 2026-05-02)** — `if/else` + 6개 비교
 > 연산자 (`==`, `!=`, `<`, `<=`, `>`, `>=`) 분기 코드가 native path로 통과.
 > 패턴 `let x = K; if x > 0 { println(1) } else { println(0) }` 모두 OSTY_ONB_STRICT

@@ -227,6 +227,12 @@ func (s *lowerState) lowerBlock(fn *mir.Function, block *mir.BasicBlock, isEntry
 			return Block{}, err
 		}
 		instrs = append(instrs, condInstrs...)
+	case *mir.SwitchIntTerm:
+		switchInstrs, err := s.lowerSwitchIntTerm(term)
+		if err != nil {
+			return Block{}, err
+		}
+		instrs = append(instrs, switchInstrs...)
 	default:
 		return Block{}, fmt.Errorf("%w: terminator %T is outside phase 1", ErrUnsupportedShape, block.Term)
 	}
@@ -235,6 +241,30 @@ func (s *lowerState) lowerBlock(fn *mir.Function, block *mir.BasicBlock, isEntry
 		OriginalIndex: int(block.ID),
 		Instrs:        instrs,
 	}, nil
+}
+
+// lowerSwitchIntTerm lowers `match scrutinee { case0, case1, ..., _ ->
+// default }` into a linear chain of `cmp + b.eq` per case followed by an
+// unconditional branch to the default block. Cases are tried in MIR order.
+//
+// This is the textbook decision-tree-as-list dispatch — fine for matches
+// up to a handful of cases. A future slice can graduate it to a jump
+// table when case density / count justifies it.
+func (s *lowerState) lowerSwitchIntTerm(term *mir.SwitchIntTerm) ([]Instr, error) {
+	mat, err := s.materialiseOperand(term.Scrutinee, RegX9)
+	if err != nil {
+		return nil, err
+	}
+	out := append([]Instr(nil), mat...)
+	for _, c := range term.Cases {
+		out = append(out,
+			&MovImm64{Dst: RegX10, Imm: c.Value},
+			&Cmp{Lhs: RegX9, Rhs: RegX10},
+			&BranchCond{Cond: CondEq, Target: int(c.Target)},
+		)
+	}
+	out = append(out, &Branch{Target: int(term.Default)})
+	return out, nil
 }
 
 // lowerBranchTerm lowers `BranchTerm{Cond, Then, Else}` into a load + cbnz
@@ -672,12 +702,14 @@ func collectOperandLocals(op mir.Operand, out map[mir.LocalID]bool) {
 }
 
 // collectTerminatorReads handles the branch-/switch-style terminators that
-// read locals through their condition operand. ReturnTerm and GotoTerm
-// don't read user locals at the terminator level.
+// read locals through their condition or scrutinee operand. ReturnTerm and
+// GotoTerm don't read user locals at the terminator level.
 func collectTerminatorReads(term mir.Terminator, out map[mir.LocalID]bool) {
 	switch t := term.(type) {
 	case *mir.BranchTerm:
 		collectOperandLocals(t.Cond, out)
+	case *mir.SwitchIntTerm:
+		collectOperandLocals(t.Scrutinee, out)
 	}
 }
 
