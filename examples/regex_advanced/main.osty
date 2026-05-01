@@ -1,0 +1,143 @@
+use std.regex
+
+fn main() {
+    // ── Lazy quantifiers ──────────────────────────────────────────
+    // Greedy <.*> on '<a><b>' → '<a><b>' (whole)
+    match regex.compile(r"<.*>") {
+        Ok(re) -> {
+            match re.find("<a><b>") {
+                Some(m) -> {
+                    let t = m.text
+                    println("greedy <.*>: '{t}'")
+                },
+                None -> println("greedy <.*>: no match"),
+            }
+        },
+        Err(_) -> println("greedy compile failed"),
+    }
+    // Lazy <.*?> on '<a><b>' → '<a>'
+    match regex.compile(r"<.*?>") {
+        Ok(re) -> {
+            match re.find("<a><b>") {
+                Some(m) -> {
+                    let t = m.text
+                    println("lazy <.*?>: '{t}'")
+                },
+                None -> println("lazy <.*?>: no match"),
+            }
+        },
+        Err(_) -> println("lazy compile failed"),
+    }
+    // Lazy +? collects one
+    match regex.compile(r"a+?") {
+        Ok(re) -> {
+            match re.find("aaa") {
+                Some(m) -> {
+                    let t = m.text
+                    println("lazy a+?: '{t}'")
+                },
+                None -> println("lazy a+?: no match"),
+            }
+        },
+        Err(_) -> println("a+? compile failed"),
+    }
+    // Lazy {n,m}? takes minimum
+    match regex.compile(r"a{2,4}?") {
+        Ok(re) -> {
+            match re.find("aaaa") {
+                Some(m) -> {
+                    let t = m.text
+                    println("lazy a{2,4}?: '{t}'")
+                },
+                None -> println("lazy a{2,4}?: no match"),
+            }
+        },
+        Err(_) -> println("a{2,4}? compile failed"),
+    }
+
+    // ── (?i) case-insensitive flag ────────────────────────────────
+    match regex.compile(r"(?i)hello") {
+        Ok(re) -> {
+            let h1 = re.matches("HELLO")
+            let h2 = re.matches("Hello")
+            let h3 = re.matches("world")
+            if h1 { println("(?i)hello vs HELLO: yes") } else { println("(?i)hello vs HELLO: no") }
+            if h2 { println("(?i)hello vs Hello: yes") } else { println("(?i)hello vs Hello: no") }
+            if h3 { println("(?i)hello vs world: yes") } else { println("(?i)hello vs world: no") }
+        },
+        Err(_) -> println("(?i) compile failed"),
+    }
+    // Bracket class also case-folds
+    match regex.compile(r"(?i)[a-c]+") {
+        Ok(re) -> {
+            match re.find("XBCAY") {
+                Some(m) -> {
+                    let t = m.text
+                    println("(?i)[a-c]+ on XBCAY: '{t}'")
+                },
+                None -> println("(?i)[a-c]+: no match"),
+            }
+        },
+        Err(_) -> println("(?i)[a-c]+ compile failed"),
+    }
+    // (?-i) cancels
+    match regex.compile(r"(?i)Hello(?-i) World") {
+        Ok(re) -> {
+            let h1 = re.matches("HELLO World")
+            let h2 = re.matches("HELLO WORLD")
+            if h1 { println("mixed vs 'HELLO World': yes") } else { println("mixed vs 'HELLO World': no") }
+            if h2 { println("mixed vs 'HELLO WORLD': yes") } else { println("mixed vs 'HELLO WORLD': no") }
+        },
+        Err(_) -> println("(?-i) compile failed"),
+    }
+
+    // ── \p{X} ASCII-fallback Unicode properties ───────────────────
+    match regex.compile(r"\p{L}+") {
+        Ok(re) -> {
+            match re.find("123abc456") {
+                Some(m) -> {
+                    let t = m.text
+                    println("Letter+: '{t}'")
+                },
+                None -> println("\\p{L}+: no match"),
+            }
+        },
+        Err(_) -> println("\\p{L} compile failed"),
+    }
+    match regex.compile(r"\p{Lu}+") {
+        Ok(re) -> {
+            match re.find("aaaBCDeee") {
+                Some(m) -> {
+                    let t = m.text
+                    println("Upper+: '{t}'")
+                },
+                None -> println("\\p{Lu}+: no match"),
+            }
+        },
+        Err(_) -> println("\\p{Lu} compile failed"),
+    }
+    match regex.compile(r"\p{Nd}+") {
+        Ok(re) -> {
+            match re.find("foo42bar") {
+                Some(m) -> {
+                    let t = m.text
+                    println("Digit+: '{t}'")
+                },
+                None -> println("\\p{Nd}+: no match"),
+            }
+        },
+        Err(_) -> println("\\p{Nd} compile failed"),
+    }
+    match regex.compile(r"\P{Nd}+") {
+        Ok(re) -> {
+            match re.find("42abc99") {
+                Some(m) -> {
+                    let t = m.text
+                    println("NonDigit+: '{t}'")
+                },
+                None -> println("\\P{Nd}+: no match"),
+            }
+        },
+        Err(_) -> println("\\P{Nd} compile failed"),
+    }
+}

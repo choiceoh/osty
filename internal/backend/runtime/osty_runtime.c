@@ -14809,6 +14809,10 @@ typedef struct {
     char *name_data;
     int32_t name_data_len;
     int32_t name_data_cap;
+    /* Phase 7 — `(?i)` global flag stack. Entered via `(?i)` /
+     * `(?-i)` groups in the pattern. Affects how CHAR / CCLASS
+     * letters are emitted: when set, letters fold both cases. */
+    int case_insensitive;
     int error_set;
     char errmsg[160];
 } osty_re_parser;
@@ -15070,6 +15074,131 @@ static int osty_re_emit_shorthand_class(osty_re_parser *ps, int kind) {
     return osty_re_emit(ps, OSTY_RE_OP_CCLASS, 0, cidx, 0);
 }
 
+/* Phase 8 — `\p{Category}` Unicode property classes (ASCII-fallback).
+ *
+ * Full Unicode UCD tables are deferred — embedding them adds 50–200KB
+ * of byte data that the runtime doesn't carry yet. Until then, the
+ * supported category names match the standard one- and two-letter
+ * UCD short names but populate ASCII-equivalent ranges only:
+ *
+ *   L / Letter        → [A-Za-z]
+ *   Lu                → [A-Z]
+ *   Ll                → [a-z]
+ *   N / Number / Nd   → [0-9]
+ *   Z / Separator     → ASCII whitespace ([ \t\n\r\f\v])
+ *   P / Punctuation   → common ASCII punctuation set
+ *   S / Symbol        → ASCII operator/sign set
+ *   C / Other / Cc    → ASCII control bytes (0..31, 127)
+ *   ASCII / Alpha     → Letter alias
+ *   Alnum             → [A-Za-z0-9]
+ *   Digit             → [0-9]
+ *
+ * Returns 0 on success, -1 on unknown category. The caller is the
+ * place that needs to know whether negation (`\P{...}`) was used.
+ */
+static int osty_re_class_add_property(osty_re_cclass *cls, const char *name, int32_t name_len) {
+    /* Compare-by-length helper — names are short, branch chains
+     * preferred over a hash. */
+    #define CAT_IS(s) (name_len == (int32_t)(sizeof(s) - 1) && memcmp(name, s, name_len) == 0)
+    if (CAT_IS("L") || CAT_IS("Letter") || CAT_IS("Alpha")) {
+        osty_re_class_set_range(cls, 'A', 'Z');
+        osty_re_class_set_range(cls, 'a', 'z');
+    } else if (CAT_IS("Lu")) {
+        osty_re_class_set_range(cls, 'A', 'Z');
+    } else if (CAT_IS("Ll")) {
+        osty_re_class_set_range(cls, 'a', 'z');
+    } else if (CAT_IS("N") || CAT_IS("Number") || CAT_IS("Nd") || CAT_IS("Digit")) {
+        osty_re_class_set_range(cls, '0', '9');
+    } else if (CAT_IS("Alnum")) {
+        osty_re_class_set_range(cls, 'A', 'Z');
+        osty_re_class_set_range(cls, 'a', 'z');
+        osty_re_class_set_range(cls, '0', '9');
+    } else if (CAT_IS("Z") || CAT_IS("Separator") || CAT_IS("Space") || CAT_IS("Zs")) {
+        osty_re_class_set(cls, ' ');
+        osty_re_class_set(cls, '\t');
+        osty_re_class_set(cls, '\n');
+        osty_re_class_set(cls, '\r');
+        osty_re_class_set(cls, '\f');
+        osty_re_class_set(cls, '\v');
+    } else if (CAT_IS("P") || CAT_IS("Punctuation")) {
+        const char *punct = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
+        for (const char *q = punct; *q; q++) osty_re_class_set(cls, (unsigned char)*q);
+    } else if (CAT_IS("S") || CAT_IS("Symbol")) {
+        const char *sym = "+-*/=<>$%^&|~";
+        for (const char *q = sym; *q; q++) osty_re_class_set(cls, (unsigned char)*q);
+    } else if (CAT_IS("C") || CAT_IS("Other") || CAT_IS("Cc") || CAT_IS("Control")) {
+        for (int b = 0; b <= 31; b++) osty_re_class_set(cls, b);
+        osty_re_class_set(cls, 127);
+    } else if (CAT_IS("ASCII")) {
+        osty_re_class_set_range(cls, 0, 127);
+    } else {
+        return -1;
+    }
+    #undef CAT_IS
+    return 0;
+}
+
+/* Emit a CCLASS instruction for a `\p{X}` property at the current
+ * cursor. Cursor must point to `{` (just past the `\p`). On success
+ * cursor moves past `}`. `inverted` toggles `\P{X}`. Returns 0 / -1. */
+static int osty_re_emit_property_class(osty_re_parser *ps, int inverted) {
+    if (ps->p >= ps->end || *ps->p != '{') {
+        osty_re_parser_set_error(ps, "regex: \\p must be followed by '{Category}'");
+        return -1;
+    }
+    ps->p++;
+    const char *name_start = ps->p;
+    while (ps->p < ps->end && *ps->p != '}') ps->p++;
+    if (ps->p >= ps->end) {
+        osty_re_parser_set_error(ps, "regex: missing '}' for \\p{...}");
+        return -1;
+    }
+    int32_t name_len = (int32_t)(ps->p - name_start);
+    ps->p++;
+    if (name_len == 0) {
+        osty_re_parser_set_error(ps, "regex: empty \\p{} category");
+        return -1;
+    }
+    int cidx = osty_re_class_alloc(ps);
+    if (cidx < 0) return -1;
+    osty_re_cclass *cls = &ps->classes[cidx];
+    if (osty_re_class_add_property(cls, name_start, name_len) != 0) {
+        osty_re_parser_set_error(ps, "regex: unknown \\p{} category (ASCII-only fallback active)");
+        return -1;
+    }
+    if (inverted) {
+        osty_re_class_invert_full(cls);
+    }
+    return osty_re_emit(ps, OSTY_RE_OP_CCLASS, 0, cidx, 0);
+}
+
+/* Phase 7 — emit a single-byte atom, honoring `(?i)` case folding.
+ * For ASCII letters under ci, emits a 2-element CCLASS containing
+ * both cases; otherwise emits a plain CHAR. ASCII-only fold (no
+ * Unicode case-folding tables yet). */
+static int osty_re_emit_byte_atom(osty_re_parser *ps, int b) {
+    if (ps->case_insensitive) {
+        int upper = -1;
+        int lower = -1;
+        if (b >= 'a' && b <= 'z') {
+            lower = b;
+            upper = b - 0x20;
+        } else if (b >= 'A' && b <= 'Z') {
+            upper = b;
+            lower = b + 0x20;
+        }
+        if (upper >= 0) {
+            int cidx = osty_re_class_alloc(ps);
+            if (cidx < 0) return -1;
+            osty_re_cclass *cls = &ps->classes[cidx];
+            osty_re_class_set(cls, lower);
+            osty_re_class_set(cls, upper);
+            return osty_re_emit(ps, OSTY_RE_OP_CCLASS, 0, cidx, 0);
+        }
+    }
+    return osty_re_emit(ps, OSTY_RE_OP_CHAR, b, 0, 0);
+}
+
 /* Parse a [...] character class. Cursor points just past the opening
  * '['. On return, cursor is just past the closing ']'. */
 static int osty_re_parse_bracket(osty_re_parser *ps) {
@@ -15087,6 +15216,22 @@ static int osty_re_parse_bracket(osty_re_parser *ps) {
         unsigned char ch = (unsigned char)*ps->p;
         if (ch == ']' && produced > 0) {
             ps->p++;
+            /* Phase 7 — under `(?i)`, fold every ASCII letter member
+             * to also include its opposite case BEFORE applying the
+             * `[^...]` inversion. So `[a-z]` under ci becomes
+             * `[A-Za-z]`, and `[^a-z]` excludes both cases. */
+            if (ps->case_insensitive) {
+                for (int letter = 'a'; letter <= 'z'; letter++) {
+                    if (osty_re_class_test(cls, (unsigned char)letter)) {
+                        osty_re_class_set(cls, letter - 0x20);
+                    }
+                }
+                for (int letter = 'A'; letter <= 'Z'; letter++) {
+                    if (osty_re_class_test(cls, (unsigned char)letter)) {
+                        osty_re_class_set(cls, letter + 0x20);
+                    }
+                }
+            }
             if (negated) {
                 osty_re_class_invert_full(cls);
             }
@@ -15275,6 +15420,15 @@ static int osty_re_parse_atom(osty_re_parser *ps) {
             if (osty_re_emit(ps, OSTY_RE_OP_NWB, 0, 0, 0) < 0) return -1;
             return start;
         }
+        /* `\p{Category}` / `\P{Category}` — ASCII-fallback Unicode
+         * properties. Intercept before the literal/class decode path
+         * so `p`/`P` aren't treated as unknown escapes. */
+        if (esc == 'p' || esc == 'P') {
+            int inverted = (esc == 'P') ? 1 : 0;
+            ps->p += 2;
+            if (osty_re_emit_property_class(ps, inverted) < 0) return -1;
+            return start;
+        }
         int kind = 0;
         int b = osty_re_decode_escape(esc, &kind);
         ps->p += 2;
@@ -15286,18 +15440,24 @@ static int osty_re_parse_atom(osty_re_parser *ps) {
             osty_re_parser_set_error(ps, "regex: unknown escape");
             return -1;
         }
-        if (osty_re_emit(ps, OSTY_RE_OP_CHAR, b, 0, 0) < 0) return -1;
+        if (osty_re_emit_byte_atom(ps, b) < 0) return -1;
         return start;
     }
     /* Plain literal byte. */
     ps->p++;
-    if (osty_re_emit(ps, OSTY_RE_OP_CHAR, (int)ch, 0, 0) < 0) return -1;
+    if (osty_re_emit_byte_atom(ps, (int)ch) < 0) return -1;
     return start;
 }
 
 /* Apply postfix '*'/'+'/'?' to the atom block [start..end). The '{n,m}'
  * variant is handled in osty_re_parse_unit which calls
- * osty_re_expand_repeat directly (it needs the parsed n/m/has_m). */
+ * osty_re_expand_repeat directly (it needs the parsed n/m/has_m).
+ *
+ * Lazy variants (`*?`, `+?`, `??`): emitted with the SPLIT branch
+ * priorities swapped — try-skip first, atom second. Pike VM picks the
+ * higher-priority thread on each step, so reversing the SPLIT.x / .y
+ * pair flips greedy → lazy. This means the matcher prefers the
+ * shortest match that still satisfies the rest of the pattern. */
 static int osty_re_apply_quantifier(osty_re_parser *ps, int start) {
     if (ps->p >= ps->end) return 0;
     unsigned char ch = (unsigned char)*ps->p;
@@ -15305,37 +15465,59 @@ static int osty_re_apply_quantifier(osty_re_parser *ps, int start) {
         return 0;
     }
     int end = ps->prog_len;
+    /* Detect lazy form: a `?` directly after the quantifier. We can't
+     * conflate this with `??` (zero-or-one with greedy preference) —
+     * `??` is itself the lazy form of `?`, so consuming a trailing `?`
+     * after `?` always means lazy. */
     if (ch == '*') {
         ps->p++;
-        /* Layout: SPLIT(atom, end) ; <atom> ; JMP(split) ; ... */
+        int lazy = (ps->p < ps->end && *ps->p == '?') ? (ps->p++, 1) : 0;
+        /* Layout: SPLIT(atom, end) ; <atom> ; JMP(split) ; ...      (greedy)
+         *         SPLIT(end, atom) ; <atom> ; JMP(split) ; ...      (lazy)  */
         int split_idx = osty_re_emit(ps, OSTY_RE_OP_SPLIT, 0, 0, 0);
         if (split_idx < 0) return -1;
         osty_re_inst split_ins = ps->prog[split_idx];
         for (int i = end; i > start; i--) {
             ps->prog[i] = ps->prog[i - 1];
         }
-        split_ins.x = start + 1;
-        split_ins.y = end + 2;
+        if (lazy) {
+            split_ins.x = end + 2;          /* try skip first */
+            split_ins.y = start + 1;
+        } else {
+            split_ins.x = start + 1;
+            split_ins.y = end + 2;
+        }
         ps->prog[start] = split_ins;
         if (osty_re_emit(ps, OSTY_RE_OP_JMP, 0, start, 0) < 0) return -1;
         return 0;
     }
     if (ch == '+') {
         ps->p++;
-        /* <atom> ; SPLIT(atom, after) */
-        if (osty_re_emit(ps, OSTY_RE_OP_SPLIT, 0, start, ps->prog_len + 1) < 0) return -1;
+        int lazy = (ps->p < ps->end && *ps->p == '?') ? (ps->p++, 1) : 0;
+        /* <atom> ; SPLIT(atom, after)   (greedy)
+         * <atom> ; SPLIT(after, atom)   (lazy)  */
+        int after = ps->prog_len + 1;
+        int x = lazy ? after : start;
+        int y = lazy ? start : after;
+        if (osty_re_emit(ps, OSTY_RE_OP_SPLIT, 0, x, y) < 0) return -1;
         return 0;
     }
-    /* '?' */
+    /* '?' (zero-or-one).  Lazy form `??` flips priorities. */
     ps->p++;
+    int lazy = (ps->p < ps->end && *ps->p == '?') ? (ps->p++, 1) : 0;
     int split_idx = osty_re_emit(ps, OSTY_RE_OP_SPLIT, 0, 0, 0);
     if (split_idx < 0) return -1;
     osty_re_inst split_ins = ps->prog[split_idx];
     for (int i = ps->prog_len - 1; i > start; i--) {
         ps->prog[i] = ps->prog[i - 1];
     }
-    split_ins.x = start + 1;
-    split_ins.y = ps->prog_len;
+    if (lazy) {
+        split_ins.x = ps->prog_len;     /* try skip first */
+        split_ins.y = start + 1;
+    } else {
+        split_ins.x = start + 1;
+        split_ins.y = ps->prog_len;
+    }
     ps->prog[start] = split_ins;
     return 0;
 }
@@ -15352,7 +15534,7 @@ static int osty_re_apply_quantifier(osty_re_parser *ps, int start) {
  * emitted at [start..end). The function is invoked with the cursor
  * past the closing '}' (and after n, m, has_m have been parsed).
  */
-static int osty_re_expand_repeat(osty_re_parser *ps, int start, int orig_end, int n, int m, int has_m) {
+static int osty_re_expand_repeat(osty_re_parser *ps, int start, int orig_end, int n, int m, int has_m, int lazy) {
     int orig_span = orig_end - start;
     if (orig_span <= 0) {
         osty_re_parser_set_error(ps, "regex: empty atom in repeat");
@@ -15394,8 +15576,13 @@ static int osty_re_expand_repeat(osty_re_parser *ps, int start, int orig_end, in
                     }
                     ps->prog[ps->prog_len++] = src;
                 }
-                ps->prog[split_idx].x = clone_start;
-                ps->prog[split_idx].y = ps->prog_len;
+                if (lazy) {
+                    ps->prog[split_idx].x = ps->prog_len;       /* try skip first */
+                    ps->prog[split_idx].y = clone_start;
+                } else {
+                    ps->prog[split_idx].x = clone_start;
+                    ps->prog[split_idx].y = ps->prog_len;
+                }
                 (void)blk;
             }
             free(stash);
@@ -15454,8 +15641,13 @@ static int osty_re_expand_repeat(osty_re_parser *ps, int start, int orig_end, in
         ps->prog[ps->prog_len].op = (uint8_t)OSTY_RE_OP_JMP;
         ps->prog[ps->prog_len].x = loop_split;
         ps->prog_len++;
-        ps->prog[loop_split].x = clone_start;
-        ps->prog[loop_split].y = jmp_idx + 1;
+        if (lazy) {
+            ps->prog[loop_split].x = jmp_idx + 1;     /* try exit first */
+            ps->prog[loop_split].y = clone_start;
+        } else {
+            ps->prog[loop_split].x = clone_start;
+            ps->prog[loop_split].y = jmp_idx + 1;
+        }
         free(stash);
         return 0;
     }
@@ -15482,8 +15674,13 @@ static int osty_re_expand_repeat(osty_re_parser *ps, int start, int orig_end, in
             }
             ps->prog[ps->prog_len++] = src;
         }
-        ps->prog[split_idx].x = clone_start;
-        ps->prog[split_idx].y = ps->prog_len;
+        if (lazy) {
+            ps->prog[split_idx].x = ps->prog_len;     /* try skip first */
+            ps->prog[split_idx].y = clone_start;
+        } else {
+            ps->prog[split_idx].x = clone_start;
+            ps->prog[split_idx].y = ps->prog_len;
+        }
     }
     free(stash);
     return 0;
@@ -15540,15 +15737,42 @@ static int osty_re_parse_unit(osty_re_parser *ps) {
                 osty_re_parser_set_error(ps, "regex: {n,m} with m < n");
                 return -1;
             }
-            return osty_re_expand_repeat(ps, start, end, n, m, has_m);
+            int lazy = (ps->p < ps->end && *ps->p == '?') ? (ps->p++, 1) : 0;
+            return osty_re_expand_repeat(ps, start, end, n, m, has_m, lazy);
         }
     }
     return 0;
 }
 
-/* Concatenation: parse one or more units until '|' or ')' or end. */
+/* Phase 7 — try to consume a `(?i)` / `(?-i)` global flag group at
+ * the current cursor. Returns 1 if consumed, 0 if no flag group, -1
+ * on parse error. Flag groups produce no instructions; they only
+ * mutate `ps->case_insensitive`. */
+static int osty_re_consume_flag_group(osty_re_parser *ps) {
+    if (ps->p + 3 >= ps->end) return 0;
+    if (ps->p[0] != '(' || ps->p[1] != '?') return 0;
+    if (ps->p[2] == 'i' && ps->p[3] == ')') {
+        ps->p += 4;
+        ps->case_insensitive = 1;
+        return 1;
+    }
+    if (ps->p + 4 < ps->end && ps->p[2] == '-' && ps->p[3] == 'i' && ps->p[4] == ')') {
+        ps->p += 5;
+        ps->case_insensitive = 0;
+        return 1;
+    }
+    return 0;
+}
+
+/* Concatenation: parse one or more units until '|' or ')' or end.
+ * Flag-only groups (`(?i)` / `(?-i)`) are absorbed inline since they
+ * carry no atom — they just toggle the case-insensitive flag for
+ * subsequent units in this concat. */
 static int osty_re_parse_concat(osty_re_parser *ps) {
     while (!ps->error_set && ps->p < ps->end && *ps->p != '|' && *ps->p != ')') {
+        int flag = osty_re_consume_flag_group(ps);
+        if (flag < 0) return -1;
+        if (flag == 1) continue;
         if (osty_re_parse_unit(ps) < 0) return -1;
     }
     return 0;
