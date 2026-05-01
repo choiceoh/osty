@@ -1,0 +1,87 @@
+use std.regex
+
+fn main() {
+    // First-match replace.
+    match regex.compile(r"\d+") {
+        Ok(re) -> {
+            let r1 = re.replace("a 1 b 22 c 333", "N")
+            println("replace once: {r1}")
+            let r2 = re.replaceAll("a 1 b 22 c 333", "N")
+            println("replace all : {r2}")
+        },
+        Err(_) -> println("digits compile failed"),
+    }
+
+    // Whitespace collapse.
+    match regex.compile(r"\s+") {
+        Ok(re) -> {
+            let r = re.replaceAll("  hello   world\t\n42", " ")
+            println("collapse    : {r}")
+        },
+        Err(_) -> println("ws compile failed"),
+    }
+
+    // Empty replacement (delete).
+    match regex.compile(r"[aeiou]") {
+        Ok(re) -> {
+            let r = re.replaceAll("Programming", "")
+            println("devowel     : {r}")
+        },
+        Err(_) -> println("vowel compile failed"),
+    }
+
+    // No-match: returns original.
+    match regex.compile(r"xyz") {
+        Ok(re) -> {
+            let r = re.replaceAll("hello world", "?")
+            println("no-match    : {r}")
+        },
+        Err(_) -> println("xyz compile failed"),
+    }
+
+    // Split on comma+space.
+    match regex.compile(r",\s*") {
+        Ok(re) -> {
+            let parts = re.split("a, b,c, d ,e")
+            let n = parts.len()
+            println("split count: {n}")
+            let mut i = 0
+            while i < n {
+                let p = parts[i]
+                println("  [{i}]={p}")
+                i += 1
+            }
+        },
+        Err(_) -> println("split compile failed"),
+    }
+
+    // Split with no match: single-element list (whole input).
+    match regex.compile(r"\d+") {
+        Ok(re) -> {
+            let parts = re.split("hello world")
+            let n = parts.len()
+            println("nosplit count: {n}")
+            if n > 0 {
+                let p0 = parts[0]
+                println("  [0]={p0}")
+            }
+        },
+        Err(_) -> println("ns compile failed"),
+    }
+
+    // Split keeps empty fragments between adjacent matches.
+    match regex.compile(r",") {
+        Ok(re) -> {
+            let parts = re.split(",a,,b,")
+            let n = parts.len()
+            println("empties count: {n}")
+            let mut i = 0
+            while i < n {
+                let p = parts[i]
+                println("  [{i}]='{p}'")
+                i += 1
+            }
+        },
+        Err(_) -> println("empties compile failed"),
+    }
+}

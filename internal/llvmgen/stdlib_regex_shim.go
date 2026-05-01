@@ -11,7 +11,15 @@ const (
 	ostyRtRegexCapturesSymbol     = "osty_rt_regex_captures"
 	ostyRtRegexCapturesAllSymbol  = "osty_rt_regex_captures_all"
 	ostyRtRegexCapturesGetSymbol  = "osty_rt_regex_captures_get"
+	ostyRtRegexReplaceSymbol      = "osty_rt_regex_replace"
+	ostyRtRegexReplaceAllSymbol   = "osty_rt_regex_replace_all"
+	ostyRtRegexSplitSymbol        = "osty_rt_regex_split"
 )
+
+var stdRegexStringListSourceTypeSingleton ast.Type = &ast.NamedType{
+	Path: []string{"List"},
+	Args: []ast.Type{stringSourceTypeSingleton},
+}
 
 var stdRegexRegexSourceTypeSingleton ast.Type = &ast.NamedType{
 	Path: []string{"Regex"},
@@ -212,6 +220,12 @@ func (g *generator) emitStdRegexMethodCall(call *ast.CallExpr) (value, bool, err
 			return g.emitStdRegexCapturesCall(call, field)
 		case "capturesAll":
 			return g.emitStdRegexCapturesAllCall(call, field)
+		case "replace":
+			return g.emitStdRegexReplaceCall(call, field, false)
+		case "replaceAll":
+			return g.emitStdRegexReplaceCall(call, field, true)
+		case "split":
+			return g.emitStdRegexSplitCall(call, field)
 		}
 		return value{}, false, nil
 	}
@@ -243,6 +257,16 @@ func (g *generator) stdRegexMethodStaticResult(call *ast.CallExpr) (value, bool)
 				listElemTyp: "ptr",
 				sourceType:  stdRegexCapturesListSourceTypeSingleton,
 			}, true
+		case "replace", "replaceAll":
+			return value{typ: "ptr", gcManaged: true, sourceType: stringSourceTypeSingleton}, true
+		case "split":
+			return value{
+				typ:            "ptr",
+				gcManaged:      true,
+				listElemTyp:    "ptr",
+				listElemString: true,
+				sourceType:     stdRegexStringListSourceTypeSingleton,
+			}, true
 		}
 		return value{}, false
 	}
@@ -269,6 +293,10 @@ func (g *generator) staticStdRegexMethodSourceType(call *ast.CallExpr) (ast.Type
 			return stdRegexCapturesOptionSourceTypeSingleton, true
 		case "capturesAll":
 			return stdRegexCapturesListSourceTypeSingleton, true
+		case "replace", "replaceAll":
+			return stringSourceTypeSingleton, true
+		case "split":
+			return stdRegexStringListSourceTypeSingleton, true
 		}
 		return nil, false
 	}
@@ -492,4 +520,112 @@ func (g *generator) emitStdRegexCapturesGetCall(call *ast.CallExpr, field *ast.F
 	v.sourceType = stdRegexStringOptionSourceTypeSingleton
 	v.rootPaths = g.rootPathsForType(v.typ)
 	return v, true, nil
+}
+
+// emitStdRegexReplaceCall lowers Regex.replace / Regex.replaceAll. Both
+// share the same shape — three String args (receiver, text, replacement)
+// returning a single String — so the dispatch picks the runtime symbol
+// via the `all` flag.
+func (g *generator) emitStdRegexReplaceCall(call *ast.CallExpr, field *ast.FieldExpr, all bool) (value, bool, error) {
+	method := "Regex.replace"
+	symbol := ostyRtRegexReplaceSymbol
+	if all {
+		method = "Regex.replaceAll"
+		symbol = ostyRtRegexReplaceAllSymbol
+	}
+	if len(call.Args) != 2 {
+		return value{}, true, unsupportedf("call", "%s expects 2 arguments, got %d", method, len(call.Args))
+	}
+	recv, err := g.emitExpr(field.X)
+	if err != nil {
+		return value{}, true, err
+	}
+	recv, err = g.loadIfPointer(recv)
+	if err != nil {
+		return value{}, true, err
+	}
+	if recv.typ != "ptr" {
+		return value{}, true, unsupportedf("type-system", "Regex receiver type %s", recv.typ)
+	}
+	text, err := g.emitStdRegexStringArg(call.Args[0], method, 0, "regex.replace.text")
+	if err != nil {
+		return value{}, true, err
+	}
+	repl, err := g.emitStdRegexStringArg(call.Args[1], method, 1, "regex.replace.replacement")
+	if err != nil {
+		return value{}, true, err
+	}
+	g.declareRuntimeSymbol(symbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	g.emitCallSafepointIfNeeded(emitter)
+	out := llvmCall(emitter, "ptr", symbol, []*LlvmValue{toOstyValue(recv), toOstyValue(text), toOstyValue(repl)})
+	g.takeOstyEmitter(emitter)
+	v := fromOstyValue(out)
+	v.gcManaged = true
+	v.sourceType = stringSourceTypeSingleton
+	v.rootPaths = g.rootPathsForType(v.typ)
+	return v, true, nil
+}
+
+func (g *generator) emitStdRegexSplitCall(call *ast.CallExpr, field *ast.FieldExpr) (value, bool, error) {
+	if len(call.Args) != 1 {
+		return value{}, true, unsupportedf("call", "Regex.split expects 1 argument, got %d", len(call.Args))
+	}
+	recv, err := g.emitExpr(field.X)
+	if err != nil {
+		return value{}, true, err
+	}
+	recv, err = g.loadIfPointer(recv)
+	if err != nil {
+		return value{}, true, err
+	}
+	if recv.typ != "ptr" {
+		return value{}, true, unsupportedf("type-system", "Regex receiver type %s", recv.typ)
+	}
+	text, err := g.emitStdRegexStringArg(call.Args[0], "Regex.split", 0, "regex.split.text")
+	if err != nil {
+		return value{}, true, err
+	}
+	g.declareRuntimeSymbol(ostyRtRegexSplitSymbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	g.emitCallSafepointIfNeeded(emitter)
+	out := llvmCall(emitter, "ptr", ostyRtRegexSplitSymbol, []*LlvmValue{toOstyValue(recv), toOstyValue(text)})
+	g.takeOstyEmitter(emitter)
+	v := fromOstyValue(out)
+	v.gcManaged = true
+	v.listElemTyp = "ptr"
+	v.listElemString = true
+	v.sourceType = stdRegexStringListSourceTypeSingleton
+	v.rootPaths = g.rootPathsForType(v.typ)
+	return v, true, nil
+}
+
+// emitStdRegexStringArg validates an argument is statically a String,
+// emits its expression, parks managed temporaries against safepoints,
+// and returns the loaded ptr value. Shared by replace/replaceAll/split.
+func (g *generator) emitStdRegexStringArg(arg *ast.Arg, method string, index int, parkSite string) (value, error) {
+	if arg == nil || arg.Name != "" || arg.Value == nil {
+		return value{}, unsupportedf("call", "%s requires positional String arguments", method)
+	}
+	src, ok := g.staticExprSourceType(arg.Value)
+	if !ok {
+		return value{}, unsupportedf("type-system", "%s arg %d source type unknown, want String", method, index+1)
+	}
+	resolved, err := llvmResolveAliasType(src, g.typeEnv(), map[string]bool{})
+	if err != nil || !llvmNamedTypeIsString(resolved) {
+		return value{}, unsupportedf("type-system", "%s arg %d source type is not String", method, index+1)
+	}
+	v, err := g.emitExpr(arg.Value)
+	if err != nil {
+		return value{}, err
+	}
+	v = g.protectManagedTemporary(parkSite, v)
+	loaded, err := g.loadIfPointer(v)
+	if err != nil {
+		return value{}, err
+	}
+	if loaded.typ != "ptr" {
+		return value{}, unsupportedf("type-system", "%s arg %d type %s, want String", method, index+1, loaded.typ)
+	}
+	return loaded, nil
 }
