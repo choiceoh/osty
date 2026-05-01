@@ -214,6 +214,17 @@ type BranchCondNotZero struct {
 
 func (*BranchCondNotZero) instrNode() {}
 
+// BranchCond is `b.<cond> <block>` — branch to the target block when the
+// flag-setting predecessor (typically a Cmp) leaves the flags consistent
+// with the named condition. Used by the SwitchIntTerm lowering: each case
+// is `cmp scrutinee, immediate; b.eq case_target`.
+type BranchCond struct {
+	Cond   Cond
+	Target int
+}
+
+func (*BranchCond) instrNode() {}
+
 // LoadCStringAddress materializes the address of a C string literal into a
 // register using the platform's PC-relative addressing form.
 type LoadCStringAddress struct {

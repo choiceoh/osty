@@ -312,6 +312,127 @@ func TestONBBackendBinaryRunsArithOnDarwinARM64(t *testing.T) {
 	}
 }
 
+// TestONBBackendBinaryRunsLoopsAndMatchOnDarwinARM64 exercises the Phase A2
+// Week 4 control-flow expansion: `while`, `for ... in 0..N`, nested loops,
+// and `match` (incl. SwitchIntTerm-shaped lowering on non-const scrutinees).
+// Most of these patterns already worked once Week 3 multi-block + branch
+// fixups landed; the new SwitchIntTerm lowering is what unlocks the last
+// `match` shape via b.cond.
+func TestONBBackendBinaryRunsLoopsAndMatchOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("ONB loop/match executable smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "while_count_up",
+			src: `fn main() {
+    let mut i = 0
+    while i < 3 {
+        println(i)
+        i = i + 1
+    }
+}`,
+			want: "0\n1\n2\n",
+		},
+		{
+			name: "for_range",
+			src: `fn main() {
+    for i in 0..3 {
+        println(i)
+    }
+}`,
+			want: "0\n1\n2\n",
+		},
+		{
+			name: "nested_for",
+			src: `fn main() {
+    for i in 0..2 {
+        for j in 0..2 {
+            println(i * 10 + j)
+        }
+    }
+}`,
+			want: "0\n1\n10\n11\n",
+		},
+		{
+			name: "while_calls_helper",
+			src: `fn double(n: Int) -> Int { n * 2 }
+fn main() {
+    let mut i = 1
+    while i <= 4 {
+        println(double(i))
+        i = i + 1
+    }
+}`,
+			want: "2\n4\n6\n8\n",
+		},
+		{
+			name: "match_via_fn",
+			src: `fn label(n: Int) -> Int {
+    match n {
+        1 -> 10,
+        2 -> 20,
+        3 -> 30,
+        _ -> 0,
+    }
+}
+fn main() {
+    println(label(1))
+    println(label(2))
+    println(label(3))
+    println(label(4))
+}`,
+			want: "10\n20\n30\n0\n",
+		},
+		{
+			name: "sum_to_n",
+			src: `fn sumTo(n: Int) -> Int {
+    let mut sum = 0
+    let mut i = 1
+    while i <= n {
+        sum = sum + i
+        i = i + 1
+    }
+    sum
+}
+fn main() {
+    println(sumTo(5))
+    println(sumTo(10))
+}`,
+			want: "15\n55\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(onb.EnvStrict, "1")
+			req := newBackendRequest(t, EmitBinary, tc.src)
+			req.Layout.Target = "aarch64-apple-darwin"
+			result, err := ONBBackend{}.Emit(context.Background(), req)
+			if err != nil {
+				t.Fatalf("ONBBackend.Emit returned error: %v", err)
+			}
+			if result == nil || result.Artifacts.Binary == "" {
+				t.Fatalf("missing binary artifact: %+v", result)
+			}
+			out, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+			if err != nil {
+				t.Fatalf("binary returned error: %v\n%s", err, out)
+			}
+			if string(out) != tc.want {
+				t.Fatalf("binary output = %q, want %q", out, tc.want)
+			}
+		})
+	}
+}
+
 // TestONBBackendBinaryRunsIfElseOnDarwinARM64 exercises the Phase A2 Week 3
 // control-flow slice end-to-end. The MIR builder shapes `if cond { ... } else
 // { ... }` into 4 basic blocks (entry → cmp+branch, then, else, merge) plus

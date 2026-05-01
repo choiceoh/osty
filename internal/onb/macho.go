@@ -343,6 +343,7 @@ type machoBranchFixup struct {
 	codeOffset  uint32 // byte offset within enc.code where the branch lives
 	targetBlock int    // original MIR block index of the jump target
 	kind        machoBranchKind
+	cond        Cond // populated for machoBranchCond, ignored otherwise
 }
 
 type machoBranchKind uint8
@@ -350,6 +351,7 @@ type machoBranchKind uint8
 const (
 	machoBranchUncond      machoBranchKind = iota // `b imm26`
 	machoBranchCondNotZero                        // `cbnz Xt, imm19`
+	machoBranchCond                               // `b.<cond> imm19`
 )
 
 // encodeMachOFunction appends one lowered function's prologue, body, and
@@ -362,7 +364,6 @@ func encodeMachOFunction(enc *machoTextEncoding, fn Function, cstringIndex, loca
 	if len(fn.Blocks) == 0 {
 		return fmt.Errorf("%w: Mach-O encoder requires at least one block", ErrUnsupportedShape)
 	}
-	fnStart := uint32(len(enc.code))
 	blockOffsets := map[int]uint32{}
 	var fixups []machoBranchFixup
 	frameSize := functionFrameSize(fn)
@@ -503,6 +504,14 @@ func encodeMachOFunction(enc *machoTextEncoding, fn Function, cstringIndex, loca
 					return err
 				}
 				enc.code = appendU32LE(enc.code, cbnzWord)
+			case *BranchCond:
+				fixups = append(fixups, machoBranchFixup{
+					codeOffset:  uint32(len(enc.code)),
+					targetBlock: i.Target,
+					kind:        machoBranchCond,
+					cond:        i.Cond,
+				})
+				enc.code = appendU32LE(enc.code, encodeMachOBcondPlaceholder(i.Cond))
 			case *Ret:
 				if frameSize > 0 {
 					if fpOffset < 0 {
@@ -538,7 +547,6 @@ func encodeMachOFunction(enc *machoTextEncoding, fn Function, cstringIndex, loca
 			return err
 		}
 	}
-	_ = fnStart
 	return nil
 }
 
@@ -565,6 +573,16 @@ func patchMachOBranch(code []byte, fx machoBranchFixup, displacement int32) erro
 		}
 		// Preserve the Xt field (lower 5 bits) emitted earlier; only the
 		// imm19 field at bits [23:5] needs patching.
+		old := readU32LE(code, off)
+		word := (old &^ (uint32(0x7ffff) << 5)) | ((uint32(imm) & 0x7ffff) << 5)
+		writeU32LE(code, off, word)
+	case machoBranchCond:
+		// b.cond imm19 — 19-bit signed immediate
+		if imm < -(1<<18) || imm >= (1<<18) {
+			return fmt.Errorf("onb: b.cond imm19 out of range (%d)", imm)
+		}
+		// Preserve the cond field (low 4 bits + bit 4 = 0 reserved); only
+		// imm19 at bits [23:5] needs patching.
 		old := readU32LE(code, off)
 		word := (old &^ (uint32(0x7ffff) << 5)) | ((uint32(imm) & 0x7ffff) << 5)
 		writeU32LE(code, off, word)
@@ -625,6 +643,15 @@ func encodeMachOCbnzPlaceholder(src Reg) (uint32, error) {
 		return 0, fmt.Errorf("%w: Mach-O cbnz src %s", ErrNotImplemented, src)
 	}
 	return 0xb5000000 | t, nil
+}
+
+// encodeMachOBcondPlaceholder emits `b.<cond> #0`. The imm19 stays zero
+// until the fixup pass patches it; the condition field at bits [3:0] is
+// already correct.
+//
+//	layout: 0x54000000 | (imm19 << 5) | cond
+func encodeMachOBcondPlaceholder(cond Cond) uint32 {
+	return 0x54000000 | uint32(cond)
 }
 
 func encodeMachOStore64Stack(instr *Store64Stack) (uint32, error) {

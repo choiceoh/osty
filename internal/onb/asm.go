@@ -124,6 +124,8 @@ func renderInstrAssembly(b *strings.Builder, target Target, fn Function, instr I
 		fmt.Fprintf(b, "\tb %s\n", asmBlockLabel(target, fn.Name, i.Target))
 	case *BranchCondNotZero:
 		fmt.Fprintf(b, "\tcbnz %s, %s\n", i.Src, asmBlockLabel(target, fn.Name, i.Target))
+	case *BranchCond:
+		fmt.Fprintf(b, "\tb.%s %s\n", i.Cond.AsmName(), asmBlockLabel(target, fn.Name, i.Target))
 	case *Ret:
 		if frameSize > 0 {
 			if fpOffset < 0 {
