@@ -1,0 +1,95 @@
+use std.regex
+
+fn report(label: String, ok: Bool) {
+    if ok {
+        println("{label}: yes")
+    } else {
+        println("{label}: no")
+    }
+}
+
+fn main() {
+    // ── Word boundary \b ──────────────────────────────────────────
+    match regex.compile(r"\bfoo\b") {
+        Ok(re) -> {
+            report("\\bfoo\\b in 'foo bar foofoo'", re.matches("foo bar foofoo"))
+            report("\\bfoo\\b in 'food bar'      ", re.matches("food bar"))
+            report("\\bfoo\\b in 'see foo!'      ", re.matches("see foo!"))
+            report("\\bfoo\\b in 'foofoo'        ", re.matches("foofoo"))
+
+            let list = re.findAll("foo food refoo foo!end")
+            let n = list.len()
+            println("findAll: {n} match(es)")
+            let mut i = 0
+            while i < n {
+                let m = list[i]
+                let t = m.text
+                let s = m.start
+                let e = m.end
+                println("  [{i}] '{t}' [{s}..{e})")
+                i += 1
+            }
+        },
+        Err(_) -> println("\\b compile failed"),
+    }
+
+    // ── Non-word boundary \B ──────────────────────────────────────
+    match regex.compile(r"a\Bb") {
+        Ok(re) -> {
+            report("a\\Bb in 'aab'", re.matches("aab"))
+            report("a\\Bb in 'a b'", re.matches("a b"))
+        },
+        Err(_) -> println("\\B compile failed"),
+    }
+
+    // ── Backref $N ────────────────────────────────────────────────
+    match regex.compile(r"(\w+)=(\w+)") {
+        Ok(re) -> {
+            let r = re.replaceAll("foo=1, bar=baz", "$2:$1")
+            println("swap: {r}")
+
+            let r2 = re.replaceAll("foo=1, bar=baz", "[$1]")
+            println("brack: {r2}")
+
+            let r3 = re.replaceAll("foo=1", "$0")
+            println("g0: {r3}")
+        },
+        Err(_) -> println("backref compile failed"),
+    }
+
+    // ── $$ literal escape ─────────────────────────────────────────
+    match regex.compile(r"\d+") {
+        Ok(re) -> {
+            let r = re.replaceAll("price 42 and 99", "$$$0")
+            println("dollar-prefix: {r}")
+        },
+        Err(_) -> println("$$ compile failed"),
+    }
+
+    // ── Out-of-range group ref → verbatim passthrough ─────────────
+    match regex.compile(r"(\w+)") {
+        Ok(re) -> {
+            let r = re.replaceAll("hi", "$5/$1")
+            println("oor-group: {r}")
+        },
+        Err(_) -> println("oor compile failed"),
+    }
+
+    // ── Literal $ when no following digit ─────────────────────────
+    match regex.compile(r"x") {
+        Ok(re) -> {
+            let r = re.replaceAll("axc", "y$z")
+            println("lit-dollar: {r}")
+        },
+        Err(_) -> println("lit-dollar compile failed"),
+    }
+
+    // ── Combined: \b + backref ────────────────────────────────────
+    match regex.compile(r"\b(\w+)\b") {
+        Ok(re) -> {
+            let r = re.replaceAll("hello world", "<$1>")
+            println("wrap-words: {r}")
+        },
+        Err(_) -> println("combined compile failed"),
+    }
+}
