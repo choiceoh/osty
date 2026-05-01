@@ -315,6 +315,117 @@ aggregate projection records, result diagnostic helpers, and a self-hosted
 `MirModule -> LirModule` lowerer shell. This still does not alter production
 dispatch.
 
+Design decision: the first Phase-4 slice covers the String and Bytes runtime
+ABI. The intrinsic dispatch in `lirLowerMirIntrinsic` now routes
+`MirIntrinsicString*` and `MirIntrinsicBytes*` (excluding the few that wrap
+into Option/Result) through a generic `lirLowerMirStringRuntimeCall(symbol,
+returnType, paramTypes, label)` helper. That helper coerces each argument
+to its parameter LIR type, declares the runtime symbol exactly once via
+`lirRuntimeDeclsDeclare`, emits the call, and stores the result through the
+existing projected-assignment path so the Phase-3 destination machinery is
+reused. Two operations carry custom shapes:
+
+- `MirIntrinsicStringIsEmpty` reuses `osty_rt_strings_ByteLen` plus an
+  `icmp eq i64 ..., 0` instead of a non-existent runtime helper, matching
+  production. The optimiser sees a plain integer compare so chained
+  `s.isEmpty()` checks fold the same way LLVM already folds them in the
+  current path.
+- `MirIntrinsicStringConcat` distinguishes its 2-arg case (single
+  `osty_rt_strings_Concat(ptr, ptr)` call) from the N>=3 case
+  (`alloca [N x ptr]` + per-slot `getelementptr inbounds` + `store ptr` +
+  `osty_rt_strings_ConcatN(i64 count, ptr parts)`). The chain shape stays
+  in one place so it cannot drift from the production allocator.
+
+`lirLowerMirBinary` also intercepts `BinAdd` on two String-typed operands
+and lowers it through the same Concat helper. The MIR layer's
+`flattenStringConcatChain` already collapses 3+-leaf chains into
+`MirIntrinsicStringConcat`, so this binary intercept only has to handle
+the residual two-operand case.
+
+Fixture coverage: `lirParityManualMIRFixtures` grows by twelve Phase-4a
+fixtures pinning the runtime declare line and the call site for ByteLen,
+IsEmpty, Concat (binary + ConcatN), Contains, TrimSpace, Repeat, Slice,
+ReplaceAll, plus three Bytes shapes (len, concat, slice). A new Go-side
+`TestLIRProtoPhase4aManualFixtureCatalog` re-parses
+`toolchain/lir_proto_parity.osty`, finds each Phase-4a fixture, and asserts
+the runtime symbol needles are present, so the production binary fails its
+own tests if the Osty catalog is truncated or a runtime symbol is renamed
+on one side without the other.
+
+Design decision: builtin reference-shaped generics (`List<T>`, `Map<K,V>`,
+`Set<T>`, `Channel<T>`, `Handle<T>`, `Box<T>`, plus `TaskGroup` and
+`Select`) lower to plain `ptr` in `lirLowerMirType` via the new
+`lirIsRefBuiltinTypeName` predicate. Without this, Phase-4 intrinsics like
+`StringChars -> List<Char>` and `StringSplit -> List<String>` could not
+store their results because the destination local type would lower to
+`LirTypeInvalid`. The check is intentionally a string-prefix sniff so the
+LIR Proto surface does not need its own generic type AST yet; the canonical
+type names already arrive from the monomorphizer with stable spellings.
+
+Design decision: the second Phase-4 slice covers the typed-lane List, Map,
+and Set runtime ABI plus three argument-free concurrency primitives
+(`ChanClose`, `Yield`, `IsCancelled`). Element-type lane resolution is the
+new piece — production splits the runtime symbols by LLVM lane
+(`osty_rt_list_push_<i64|i1|f64|ptr|string>`,
+`osty_rt_map_insert_<i64|i1|f64|ptr|string>`,
+`osty_rt_set_insert_<lane>`), so LIR Proto adds:
+
+- `lirContainerInnerArg(typeName, prefix)` — extracts the inner argument
+  string from a generic type name (`"List<Int>"` → `"Int"`).
+- `lirMapKeyTypeName` / `lirMapValueTypeName` — split `Map<K, V>` on the
+  outer `,`, using `lirFirstTopLevelComma` to track nested generic depth
+  so `Map<String, List<Int>>` cuts cleanly at the outer comma.
+- `lirContainerElemLaneLLVM(typeName)` — translates an MIR primitive type
+  name to the LLVM lane suffix production already uses.
+- `LirContainerReceiver` + `lirLowerMirContainerReceiver` — pulls the
+  receiver register, element-type name, lane suffix, and the
+  string-special-case flag out of the intrinsic in one place so each
+  intrinsic lowering reads as a four-line scaffold (resolve receiver,
+  resolve symbol, declare runtime, emit call + optional store).
+- `lirLirTypeForLane(lane)` — reverse-translates the lane back into the
+  `LirType` used to spell the runtime parameter type for the
+  element-typed argument.
+
+The runtime symbol resolvers themselves (`llvmListRuntimePushSymbolFor`,
+`llvmMapRuntimeInsertSymbol`, `llvmSetRuntimeContainsSymbol`, ...) live in
+`toolchain/llvmgen.osty`; the new lowerings call them directly so LIR
+Proto and the production MIR generator stay on one source of truth for
+runtime symbol names.
+
+Coverage in this slice:
+
+- List: Push, Get, Insert, Sorted (typed lane); Len, IsEmpty (Len + icmp),
+  Reverse, Reversed, PopDiscard, Clear (lane-agnostic).
+- Map: New, Insert, Contains, Remove (typed key lane); Len, Keys, Values,
+  Clear (lane-agnostic).
+- Set: Insert, Contains, Remove (typed elem lane); New, Len, ToList,
+  Clear (lane-agnostic).
+- Concurrency: ChanClose, Yield, IsCancelled (zero-/one-arg primitives).
+
+Deliberately deferred to a later slice:
+
+- Composite element types (the production bytes-v1 fallback path that
+  needs `alloca` + `sizeof` per element).
+- `MapGet` / `ListGet` Option-returning safe forms (need Option<T>
+  construction, which is a separate Phase-4 slice).
+- `MapKeysSorted` / `MapToString` / `ListToString` (per-element-kind
+  formatter dispatch lives in the runtime; the LIR side just emits the
+  call but currently picks the wrong helper for non-default element
+  kinds).
+- All channel send/receive (per-element ABI; Channel<T> sends need the
+  value lane resolved off the channel's element type).
+- TaskGroup / Spawn / HandleJoin / Parallel / Race / CollectAll / Select*
+  (closure-env ABI; Phase 5 introduces the GC root/bind machinery these
+  need to bracket the spawned closure).
+- `CheckCancelled` (returns `Result<(), Error>` — Result lowering slice).
+- `Sleep` (Duration argument lowering is unspecified at MIR level today).
+
+The Phase-4 fixture catalog grows to 47 manual entries
+(`lirParityManualMIRFixtures`) with 19 new Phase-4b fixtures; the existing
+Go-side `TestLIRProtoManualFixtureCatalog` is the single pin so a missed
+runtime symbol on either the Osty or the production side surfaces as a
+test failure.
+
 ## Phase 0: lock the boundary
 
 Deliverables:

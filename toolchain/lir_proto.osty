@@ -1247,6 +1247,9 @@ pub fn lirLowerPrimitiveTypeName(name: String) -> LirType {
 pub fn lirPrimitiveTypeSupported(name: String) -> Bool {
     !(lirTypeIsZero(lirLowerPrimitiveTypeName(name)))
 }
+pub fn lirIsRefBuiltinTypeName(name: String) -> Bool {
+    name == "TaskGroup" || name == "Select" || strings.startsWith(name, "List<") || strings.startsWith(name, "Map<") || strings.startsWith(name, "Set<") || strings.startsWith(name, "Channel<") || strings.startsWith(name, "Handle<") || strings.startsWith(name, "Box<") || strings.startsWith(name, "TaskGroup<") || strings.startsWith(name, "Select<")
+}
 pub fn lirPrimitiveTypeIsUnsigned(name: String) -> Bool {
     name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Byte"
 }
@@ -1456,6 +1459,46 @@ pub fn lirRuntimeToStringSymbolForType(typ: LirType) -> String {
         return "osty_rt_byte_to_string"
     }
     ""
+}
+// Two LirRuntimeDecl shapes are reused beyond their single Phase-4 emit
+// site (StringIsEmpty's ByteLen + StringConcatBinary's Concat); inline
+// `lirRuntimeDecl(symbol, retType, paramTypes, false)` is used directly
+// for one-off shapes so the dispatch table at lirLowerMirIntrinsic stays
+// the only catalog of Phase-4 ABI signatures.
+pub fn lirRuntimeDeclI64FromPtr(symbol: String) -> LirRuntimeDecl {
+    lirRuntimeDecl(symbol, lirIntType(64), [lirPtrType()], false)
+}
+pub fn lirRuntimeDeclPtrFromTwoPtr(symbol: String) -> LirRuntimeDecl {
+    lirRuntimeDecl(symbol, lirPtrType(), [lirPtrType(), lirPtrType()], false)
+}
+// Map an LIR scalar return type back to the canonical MIR type name so
+// `lirStoreMirResult` can run its same-family coercion path. Pointers
+// and aggregates map to "" so the storer treats them as opaque ptr
+// (no further coercion). Driven by `LirTypeClass` + bit-width rather
+// than raw `t.llvm` strings so changes to LIR type spelling do not silently
+// drop runtime-result coercion.
+pub fn lirRuntimeReturnTypeName(t: LirType) -> String {
+    match t.className {
+        LirTypeInt -> {
+            if t.llvm == "i1" {
+                return "Bool"
+            }
+            if t.llvm == "i8" {
+                return "Byte"
+            }
+            if t.llvm == "i32" {
+                return "Char"
+            }
+            return "Int"
+        },
+        LirTypeFloat -> {
+            if t.llvm == "float" {
+                return "Float32"
+            }
+            return "Float"
+        },
+        _ -> "",
+    }
 }
 // ====================================================================
 // Aggregate and projection planning helpers
@@ -1984,6 +2027,75 @@ fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
         MirIntrinsicIntToChar -> lirLowerMirIntegerConversionIntrinsic(l, instr, "Int", "Char", "trunc"),
         MirIntrinsicByteToChar -> lirLowerMirIntegerConversionIntrinsic(l, instr, "Byte", "Char", "zext"),
         MirIntrinsicCharToByte -> lirLowerMirIntegerConversionIntrinsic(l, instr, "Char", "Byte", "trunc"),
+        MirIntrinsicStringLen -> lirLowerMirStringLen(l, instr),
+        MirIntrinsicStringIsEmpty -> lirLowerMirStringIsEmpty(l, instr),
+        MirIntrinsicStringContains -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Contains"), lirIntType(1), [lirPtrType(), lirPtrType()], "string.contains"),
+        MirIntrinsicStringStartsWith -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("HasPrefix"), lirIntType(1), [lirPtrType(), lirPtrType()], "string.startsWith"),
+        MirIntrinsicStringEndsWith -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("HasSuffix"), lirIntType(1), [lirPtrType(), lirPtrType()], "string.endsWith"),
+        MirIntrinsicStringCount -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Count"), lirIntType(64), [lirPtrType(), lirPtrType()], "string.count"),
+        MirIntrinsicStringTrim -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("TrimSpace"), lirPtrType(), [lirPtrType()], "string.trim"),
+        MirIntrinsicStringTrimStart -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("TrimStart"), lirPtrType(), [lirPtrType()], "string.trimStart"),
+        MirIntrinsicStringTrimEnd -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("TrimEnd"), lirPtrType(), [lirPtrType()], "string.trimEnd"),
+        MirIntrinsicStringTrimPrefix -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("TrimPrefix"), lirPtrType(), [lirPtrType(), lirPtrType()], "string.trimPrefix"),
+        MirIntrinsicStringTrimSuffix -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("TrimSuffix"), lirPtrType(), [lirPtrType(), lirPtrType()], "string.trimSuffix"),
+        MirIntrinsicStringToUpper -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("ToUpper"), lirPtrType(), [lirPtrType()], "string.toUpper"),
+        MirIntrinsicStringToLower -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("ToLower"), lirPtrType(), [lirPtrType()], "string.toLower"),
+        MirIntrinsicStringChars -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Chars"), lirPtrType(), [lirPtrType()], "string.chars"),
+        MirIntrinsicStringBytes -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Bytes"), lirPtrType(), [lirPtrType()], "string.bytes"),
+        MirIntrinsicStringSplit -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Split"), lirPtrType(), [lirPtrType(), lirPtrType()], "string.split"),
+        MirIntrinsicStringJoin -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Join"), lirPtrType(), [lirPtrType(), lirPtrType()], "string.join"),
+        MirIntrinsicStringRepeat -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Repeat"), lirPtrType(), [lirPtrType(), lirIntType(64)], "string.repeat"),
+        MirIntrinsicStringSubstring -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Slice"), lirPtrType(), [lirPtrType(), lirIntType(64), lirIntType(64)], "string.substring"),
+        MirIntrinsicStringReplace -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Replace"), lirPtrType(), [lirPtrType(), lirPtrType(), lirPtrType()], "string.replace"),
+        MirIntrinsicStringReplaceAll -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("ReplaceAll"), lirPtrType(), [lirPtrType(), lirPtrType(), lirPtrType()], "string.replaceAll"),
+        MirIntrinsicStringConcat -> lirLowerMirStringConcat(l, instr),
+        MirIntrinsicBytesLen -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("len"), lirIntType(64), [lirPtrType()], "bytes.len"),
+        MirIntrinsicBytesIsEmpty -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("is_empty"), lirIntType(1), [lirPtrType()], "bytes.isEmpty"),
+        MirIntrinsicBytesContains -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("contains"), lirIntType(1), [lirPtrType(), lirPtrType()], "bytes.contains"),
+        MirIntrinsicBytesStartsWith -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("starts_with"), lirIntType(1), [lirPtrType(), lirPtrType()], "bytes.startsWith"),
+        MirIntrinsicBytesEndsWith -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("ends_with"), lirIntType(1), [lirPtrType(), lirPtrType()], "bytes.endsWith"),
+        MirIntrinsicBytesConcat -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("concat"), lirPtrType(), [lirPtrType(), lirPtrType()], "bytes.concat"),
+        MirIntrinsicBytesJoin -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("join"), lirPtrType(), [lirPtrType(), lirPtrType()], "bytes.join"),
+        MirIntrinsicBytesSplit -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("split"), lirPtrType(), [lirPtrType(), lirPtrType()], "bytes.split"),
+        MirIntrinsicBytesRepeat -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("repeat"), lirPtrType(), [lirPtrType(), lirIntType(64)], "bytes.repeat"),
+        MirIntrinsicBytesSlice -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("slice"), lirPtrType(), [lirPtrType(), lirIntType(64), lirIntType(64)], "bytes.slice"),
+        MirIntrinsicBytesReplace -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("replace"), lirPtrType(), [lirPtrType(), lirPtrType(), lirPtrType()], "bytes.replace"),
+        MirIntrinsicBytesReplaceAll -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("replace_all"), lirPtrType(), [lirPtrType(), lirPtrType(), lirPtrType()], "bytes.replaceAll"),
+        MirIntrinsicBytesTrim -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("trim"), lirPtrType(), [lirPtrType(), lirPtrType()], "bytes.trim"),
+        MirIntrinsicBytesTrimLeft -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("trim_left"), lirPtrType(), [lirPtrType(), lirPtrType()], "bytes.trimLeft"),
+        MirIntrinsicBytesTrimRight -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("trim_right"), lirPtrType(), [lirPtrType(), lirPtrType()], "bytes.trimRight"),
+        MirIntrinsicBytesTrimSpace -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("trim_space"), lirPtrType(), [lirPtrType()], "bytes.trimSpace"),
+        MirIntrinsicBytesToUpper -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("to_upper"), lirPtrType(), [lirPtrType()], "bytes.toUpper"),
+        MirIntrinsicBytesToLower -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("to_lower"), lirPtrType(), [lirPtrType()], "bytes.toLower"),
+        MirIntrinsicBytesToHex -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("to_hex"), lirPtrType(), [lirPtrType()], "bytes.toHex"),
+        MirIntrinsicListPush -> lirLowerMirListPush(l, instr),
+        MirIntrinsicListLen -> lirLowerMirStringRuntimeCall(l, instr, llvmListRuntimeLenSymbol(), lirIntType(64), [lirPtrType()], "list.len"),
+        MirIntrinsicListIsEmpty -> lirLowerMirListIsEmpty(l, instr),
+        MirIntrinsicListGet -> lirLowerMirListGet(l, instr),
+        MirIntrinsicListClear -> lirLowerMirStringRuntimeCall(l, instr, mirRtListClearSymbol(), lirVoidType(), [lirPtrType()], "list.clear"),
+        MirIntrinsicListReverse -> lirLowerMirStringRuntimeCall(l, instr, mirRtListReverseSymbol(), lirVoidType(), [lirPtrType()], "list.reverse"),
+        MirIntrinsicListReversed -> lirLowerMirStringRuntimeCall(l, instr, mirRtListReversedSymbol(), lirPtrType(), [lirPtrType()], "list.reversed"),
+        MirIntrinsicListPop -> lirLowerMirStringRuntimeCall(l, instr, mirRtListPopDiscardSymbol(), lirVoidType(), [lirPtrType()], "list.pop"),
+        MirIntrinsicListSorted -> lirLowerMirListSorted(l, instr),
+        MirIntrinsicListInsert -> lirLowerMirListInsert(l, instr),
+        MirIntrinsicMapNew -> lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeNewSymbol(), lirPtrType(), [], "map.new"),
+        MirIntrinsicMapLen -> lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeLenSymbol(), lirIntType(64), [lirPtrType()], "map.len"),
+        MirIntrinsicMapKeys -> lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeKeysSymbol(), lirPtrType(), [lirPtrType()], "map.keys"),
+        MirIntrinsicMapValues -> lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeValuesSymbol(), lirPtrType(), [lirPtrType()], "map.values"),
+        MirIntrinsicMapClear -> lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeClearSymbol(), lirVoidType(), [lirPtrType()], "map.clear"),
+        MirIntrinsicMapSet -> lirLowerMirMapInsert(l, instr),
+        MirIntrinsicMapContains -> lirLowerMirMapContains(l, instr),
+        MirIntrinsicMapRemove -> lirLowerMirMapRemove(l, instr),
+        MirIntrinsicSetNew -> lirLowerMirStringRuntimeCall(l, instr, llvmSetRuntimeNewSymbol(), lirPtrType(), [], "set.new"),
+        MirIntrinsicSetLen -> lirLowerMirStringRuntimeCall(l, instr, llvmSetRuntimeLenSymbol(), lirIntType(64), [lirPtrType()], "set.len"),
+        MirIntrinsicSetToList -> lirLowerMirStringRuntimeCall(l, instr, llvmSetRuntimeToListSymbol(), lirPtrType(), [lirPtrType()], "set.toList"),
+        MirIntrinsicSetClear -> lirLowerMirStringRuntimeCall(l, instr, llvmSetRuntimeClearSymbol(), lirVoidType(), [lirPtrType()], "set.clear"),
+        MirIntrinsicSetInsert -> lirLowerMirSetInsert(l, instr),
+        MirIntrinsicSetContains -> lirLowerMirSetContains(l, instr),
+        MirIntrinsicSetRemove -> lirLowerMirSetRemove(l, instr),
+        MirIntrinsicChanClose -> lirLowerMirStringRuntimeCall(l, instr, "osty_rt_chan_close", lirVoidType(), [lirPtrType()], "chan.close"),
+        MirIntrinsicYield -> lirLowerMirStringRuntimeCall(l, instr, "osty_rt_task_yield", lirVoidType(), [], "task.yield"),
+        MirIntrinsicIsCancelled -> lirLowerMirStringRuntimeCall(l, instr, "osty_rt_cancel_is_cancelled", lirIntType(1), [], "cancel.isCancelled"),
         _ -> lirLowerError(l, LirDiagUnsupported, "unsupported MIR intrinsic `" + mirIntrinsicName(instr.intrinsic) + "`", "intrinsic"),
     }
 }
@@ -2062,6 +2174,498 @@ fn lirLowerMirIntegerConversionIntrinsic(l: LirMirFunctionLowerer, instr: MirIns
     if instr.hasDest {
         lirStoreMirResult(l, instr.dest, result, toName, "intrinsic conversion result")
     }
+}
+// Generic Phase-4 runtime call lowering. Handles String / Bytes intrinsics
+// whose ABI is "0..N coerced operand args returning one scalar or pointer
+// value", emits the runtime decl exactly once per module, lowers each arg
+// with same-family coercion, and stores the result into the destination
+// place when one is present. Void-return intrinsics use lirVoidType()
+// for retType.
+fn lirLowerMirStringRuntimeCall(l: LirMirFunctionLowerer, instr: MirInstr, symbol: String, retType: LirType, paramTypes: List<LirType>, label: String) {
+    if instr.args.len() != paramTypes.len() {
+        lirLowerError(l, LirDiagInvalidInput, label + " expects " + lirIntToString(paramTypes.len()) + " arguments", label)
+        return
+    }
+    let mut args: List<LirOperand> = []
+    let mut i = 0
+    for arg in instr.args {
+        let pt = paramTypes[i]
+        let mut value = lirLowerMirOperand(l, arg, arg.typ, pt)
+        if value.value == "" {
+            return
+        }
+        if value.typ.llvm != pt.llvm {
+            value = lirCoerceMirOperand(l, value, arg.typ, pt, label + " arg " + lirIntToString(i))
+            if value.value == "" {
+                return
+            }
+        }
+        args.push(lirOperand(pt, value.value))
+        i = i + 1
+    }
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, retType, paramTypes, false))
+    if lirTypeIsVoid(retType) {
+        l.instrs.push(lirCall("", retType, "@" + symbol, args))
+        if instr.hasDest {
+            lirCheckVoidMirDestination(l, instr.hasDest, instr.dest, label)
+        }
+        return
+    }
+    let dest = lirFresh(l)
+    l.instrs.push(lirCall(dest, retType, "@" + symbol, args))
+    if instr.hasDest {
+        let typeName = lirRuntimeReturnTypeName(retType)
+        lirStoreMirResult(l, instr.dest, lirOperand(retType, dest), typeName, label)
+    }
+}
+// `String.len` reuses the runtime ByteLen helper rather than mapping to a
+// non-existent `Len` symbol, matching production
+// (mir_generator.go::IntrinsicStringLen).
+fn lirLowerMirStringLen(l: LirMirFunctionLowerer, instr: MirInstr) {
+    lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("ByteLen"), lirIntType(64), [lirPtrType()], "string.len")
+}
+// `String.isEmpty` emits ByteLen + icmp eq 0 instead of a dedicated runtime
+// helper. Production keeps the same shape so the optimiser can see through
+// chained `s.isEmpty()` checks as plain integer compares.
+fn lirLowerMirStringIsEmpty(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 1 {
+        lirLowerError(l, LirDiagInvalidInput, "string.isEmpty expects one argument", "string.isEmpty")
+        return
+    }
+    let arg = lirLowerMirOperand(l, instr.args[0], "String", lirPtrType())
+    if arg.value == "" {
+        return
+    }
+    let symbol = mirRtStringSymbol("ByteLen")
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDeclI64FromPtr(symbol))
+    let lenDest = lirFresh(l)
+    l.instrs.push(lirCall(lenDest, lirIntType(64), "@" + symbol, [lirOperand(lirPtrType(), arg.value)]))
+    let cmpDest = lirFresh(l)
+    l.instrs.push(lirBinary(cmpDest, "icmp eq", lirIntType(64), lenDest, "0"))
+    if instr.hasDest {
+        lirStoreMirResult(l, instr.dest, lirOperand(lirIntType(1), cmpDest), "Bool", "string.isEmpty result")
+    }
+}
+// String concat lowering. The 2-operand case maps to `osty_rt_strings_Concat`,
+// the N>=3 case to `osty_rt_strings_ConcatN(i64 count, ptr parts_ptr)` with
+// an alloca'd `[N x ptr]` array — matching production's
+// `emitStringConcatN`. ConcatN exists so a `"a" + b + c` site allocates one
+// fresh String instead of N-1 intermediate String buffers.
+fn lirLowerMirStringConcat(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() < 2 {
+        lirLowerError(l, LirDiagInvalidInput, "string.concat expects at least two arguments", "string.concat")
+        return
+    }
+    if instr.args.len() == 2 {
+        lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Concat"), lirPtrType(), [lirPtrType(), lirPtrType()], "string.concat")
+        return
+    }
+    let mut parts: List<LirOperand> = []
+    for arg in instr.args {
+        let mut value = lirLowerMirOperand(l, arg, arg.typ, lirPtrType())
+        if value.value == "" {
+            return
+        }
+        if value.typ.className != LirTypePtr {
+            value = lirCoerceMirOperand(l, value, arg.typ, lirPtrType(), "string.concat part")
+            if value.value == "" {
+                return
+            }
+        }
+        parts.push(lirOperand(lirPtrType(), value.value))
+    }
+    let count = parts.len()
+    let countText = lirIntToString(count)
+    let arrayElemType = lirRawType("[" + countText + " x ptr]")
+    let arrayPtr = lirFresh(l)
+    l.instrs.push(lirAlloca(arrayPtr, arrayElemType, 8))
+    let mut i = 0
+    for part in parts {
+        let slot = lirFresh(l)
+        l.instrs.push(lirGep(slot, arrayElemType, arrayPtr, [lirOperand(lirIntType(64), "0"), lirOperand(lirIntType(64), lirIntToString(i))], true))
+        l.instrs.push(lirStore(part, slot, 8))
+        i = i + 1
+    }
+    let symbol = mirRtStringSymbol("ConcatN")
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirPtrType(), [lirIntType(64), lirPtrType()], false))
+    let dest = lirFresh(l)
+    l.instrs.push(lirCall(dest, lirPtrType(), "@" + symbol, [lirOperand(lirIntType(64), countText), lirOperand(lirPtrType(), arrayPtr)]))
+    if instr.hasDest {
+        lirStoreMirResult(l, instr.dest, lirOperand(lirPtrType(), dest), "String", "string.concat result")
+    }
+}
+// ====================================================================
+// Phase 4b: container element-type lane resolution
+// ====================================================================
+//
+// MIR carries receiver types as canonical strings ("List<Int>",
+// "Map<String, Int>", "Set<Float>"). Production resolves the runtime
+// symbol suffix off the LLVM lane (i64 / i1 / double / ptr / string).
+// Mirror that here so LIR Proto and the production MIR generator agree
+// on which `osty_rt_<container>_<op>_<lane>` to call.
+fn lirContainerInnerArg(typeName: String, prefix: String) -> String {
+    if !(strings.startsWith(typeName, prefix)) {
+        return ""
+    }
+    if !(strings.endsWith(typeName, ">")) {
+        return ""
+    }
+    strings.slice(typeName, prefix.len(), typeName.len() - 1)
+}
+// Element type name for List<T>/Set<T> ("List<Int>" -> "Int").
+fn lirListElemTypeName(typeName: String) -> String {
+    if strings.startsWith(typeName, "List<") {
+        return lirContainerInnerArg(typeName, "List<")
+    }
+    if strings.startsWith(typeName, "Set<") {
+        return lirContainerInnerArg(typeName, "Set<")
+    }
+    ""
+}
+// Key/value type names for Map<K, V> ("Map<String, Int>" -> "String"/"Int").
+fn lirMapKeyTypeName(typeName: String) -> String {
+    let inner = lirContainerInnerArg(typeName, "Map<")
+    if inner == "" {
+        return ""
+    }
+    let comma = lirFirstTopLevelComma(inner)
+    if comma < 0 {
+        return ""
+    }
+    strings.trimSpace(strings.slice(inner, 0, comma))
+}
+fn lirMapValueTypeName(typeName: String) -> String {
+    let inner = lirContainerInnerArg(typeName, "Map<")
+    if inner == "" {
+        return ""
+    }
+    let comma = lirFirstTopLevelComma(inner)
+    if comma < 0 {
+        return ""
+    }
+    strings.trimSpace(strings.slice(inner, comma + 1, inner.len()))
+}
+// Locate the comma that separates Map<K, V>'s K from V at depth 0.
+// Nested generic args (`Map<String, List<Int>>`) need depth tracking
+// so the outer comma is the one we cut at.
+fn lirFirstTopLevelComma(s: String) -> Int {
+    let mut depth = 0
+    let mut i = 0
+    let chars = strings.chars(s)
+    for ch in chars {
+        if ch == '<' {
+            depth = depth + 1
+        } else if ch == '>' {
+            depth = depth - 1
+        } else if ch == ',' && depth == 0 {
+            return i
+        }
+        i = i + 1
+    }
+    -1
+}
+// Lane LIR type for a primitive/builtin type name. Returns the same
+// LirType `lirLowerPrimitiveTypeName` produces (whose `.llvm` is the
+// lane suffix production already speaks: `"i64"` / `"i1"` / `"double"` /
+// `"ptr"` / `"i8"` / etc.) plus a ptr fallback for reference-shaped
+// builtins (List/Map/Set/Channel/Handle/Box). Returning a LirType keeps
+// the lane string and the parameter LirType in sync — production's
+// `llvmListRuntimePushSymbolFor(lane, isString)` uses the string form to
+// look up the symbol while the matching parameter spelling falls out of
+// the same source of truth.
+fn lirContainerElemLaneType(typeName: String) -> LirType {
+    let primitive = lirLowerPrimitiveTypeName(typeName)
+    if !(lirTypeIsZero(primitive)) && !(lirTypeIsVoid(primitive)) {
+        return primitive
+    }
+    if lirIsRefBuiltinTypeName(typeName) {
+        return lirPtrType()
+    }
+    lirTypeInvalid()
+}
+fn lirContainerElemIsString(typeName: String) -> Bool {
+    typeName == "String"
+}
+// LirContainerReceiver carries everything an intrinsic lowering needs
+// from one shared parse of the container receiver type. For Map<K, V>
+// the value-side fields are populated too so `map.set` does not re-parse
+// the type string after `lirLowerMirContainerReceiver` returns. For
+// List<T>/Set<T> the value-side fields stay empty.
+pub struct LirContainerReceiver {
+    pub receiverReg: String,
+    pub elemTypeName: String,
+    pub elemLir: LirType,
+    pub isString: Bool,
+    pub valueTypeName: String,
+    pub valueLir: LirType,
+    pub valueIsString: Bool,
+    pub ok: Bool,
+}
+fn lirContainerReceiverInvalid() -> LirContainerReceiver {
+    LirContainerReceiver {receiverReg: "", elemTypeName: "", elemLir: lirTypeInvalid(), isString: false, valueTypeName: "", valueLir: lirTypeInvalid(), valueIsString: false, ok: false}
+}
+// kind selects which slice of the receiver type to extract:
+//   "list.elem" / "set.elem" → element type (List<T>, Set<T>)
+//   "map.key" → key type only (`map.contains`/`map.remove` callers)
+//   "map.kv"  → both key and value (`map.set` callers)
+fn lirLowerMirContainerReceiver(l: LirMirFunctionLowerer, instr: MirInstr, label: String, kind: String) -> LirContainerReceiver {
+    if instr.args.len() < 1 {
+        lirLowerError(l, LirDiagInvalidInput, label + " requires a receiver", label)
+        return lirContainerReceiverInvalid()
+    }
+    let recv = lirLowerMirOperand(l, instr.args[0], instr.args[0].typ, lirPtrType())
+    if recv.value == "" {
+        return lirContainerReceiverInvalid()
+    }
+    let elemName = if kind == "map.key" || kind == "map.kv" {
+        lirMapKeyTypeName(instr.args[0].typ)
+    } else {
+        lirListElemTypeName(instr.args[0].typ)
+    }
+    if elemName == "" {
+        lirLowerError(l, LirDiagUnsupported, label + " could not extract element type from receiver `" + instr.args[0].typ + "`", label)
+        return lirContainerReceiverInvalid()
+    }
+    let elemLir = lirContainerElemLaneType(elemName)
+    if lirTypeIsZero(elemLir) {
+        lirLowerError(l, LirDiagUnsupported, label + " element type `" + elemName + "` has no LIR runtime lane", label)
+        return lirContainerReceiverInvalid()
+    }
+    let mut out = LirContainerReceiver {receiverReg: recv.value, elemTypeName: elemName, elemLir, isString: lirContainerElemIsString(elemName), valueTypeName: "", valueLir: lirTypeInvalid(), valueIsString: false, ok: true}
+    if kind == "map.kv" {
+        let valueName = lirMapValueTypeName(instr.args[0].typ)
+        if valueName == "" {
+            lirLowerError(l, LirDiagUnsupported, label + " could not extract value type from receiver `" + instr.args[0].typ + "`", label)
+            return lirContainerReceiverInvalid()
+        }
+        let valueLir = lirContainerElemLaneType(valueName)
+        if lirTypeIsZero(valueLir) {
+            lirLowerError(l, LirDiagUnsupported, label + " value type `" + valueName + "` has no LIR runtime lane", label)
+            return lirContainerReceiverInvalid()
+        }
+        out.valueTypeName = valueName
+        out.valueLir = valueLir
+        out.valueIsString = lirContainerElemIsString(valueName)
+    }
+    out
+}
+// `lirLowerCoercedOperand` lowers one MIR operand and same-family-coerces
+// it to the requested LIR type in one pass, returning `lirOperandInvalid()`
+// on failure. Folds the four-line "lower + early-return + coerce + early-
+// return" boilerplate that used to repeat in every container intrinsic.
+fn lirLowerCoercedOperand(l: LirMirFunctionLowerer, op: MirOperand, hintName: String, hint: LirType, label: String) -> LirOperand {
+    let value = lirLowerMirOperand(l, op, hintName, hint)
+    if value.value == "" {
+        return lirOperandInvalid()
+    }
+    if value.typ.llvm == hint.llvm {
+        return value
+    }
+    lirCoerceMirOperand(l, value, op.typ, hint, label)
+}
+// `lirEmitContainerCall` emits the closing scaffold every container
+// intrinsic shares: declare the runtime symbol, emit the `call`, and
+// either store the scalar result into `instr.dest` or assert a void-only
+// destination. `args[0]` must be the receiver pointer; `paramTypes[0]`
+// must be `lirPtrType()`. Returns nothing — diagnostics flow through `l`.
+fn lirEmitContainerCall(l: LirMirFunctionLowerer, instr: MirInstr, symbol: String, retLir: LirType, paramTypes: List<LirType>, args: List<LirOperand>, resultTypeName: String, label: String) {
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, retLir, paramTypes, false))
+    if lirTypeIsVoid(retLir) {
+        l.instrs.push(lirCall("", retLir, "@" + symbol, args))
+        if instr.hasDest {
+            lirCheckVoidMirDestination(l, instr.hasDest, instr.dest, label)
+        }
+        return
+    }
+    let dest = lirFresh(l)
+    l.instrs.push(lirCall(dest, retLir, "@" + symbol, args))
+    if instr.hasDest {
+        lirStoreMirResult(l, instr.dest, lirOperand(retLir, dest), resultTypeName, label + " result")
+    }
+}
+// ----- List intrinsic lowerings (typed lane) -----
+fn lirLowerMirListPush(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 2 {
+        lirLowerError(l, LirDiagInvalidInput, "list.push expects (list, elem)", "list.push")
+        return
+    }
+    let recv = lirLowerMirContainerReceiver(l, instr, "list.push", "list.elem")
+    if !(recv.ok) {
+        return
+    }
+    let value = lirLowerCoercedOperand(l, instr.args[1], recv.elemTypeName, recv.elemLir, "list.push elem")
+    if value.value == "" {
+        return
+    }
+    lirEmitContainerCall(l, instr, llvmListRuntimePushSymbolFor(recv.elemLir.llvm, recv.isString), lirVoidType(), [lirPtrType(), recv.elemLir], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, value.value)], "", "list.push")
+}
+fn lirLowerMirListGet(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 2 {
+        lirLowerError(l, LirDiagInvalidInput, "list.get expects (list, idx)", "list.get")
+        return
+    }
+    let recv = lirLowerMirContainerReceiver(l, instr, "list.get", "list.elem")
+    if !(recv.ok) {
+        return
+    }
+    let idx = lirLowerCoercedOperand(l, instr.args[1], "Int", lirIntType(64), "list.get idx")
+    if idx.value == "" {
+        return
+    }
+    lirEmitContainerCall(l, instr, llvmListRuntimeGetSymbolFor(recv.elemLir.llvm, recv.isString), recv.elemLir, [lirPtrType(), lirIntType(64)], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(lirIntType(64), idx.value)], recv.elemTypeName, "list.get")
+}
+fn lirLowerMirListInsert(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 3 {
+        lirLowerError(l, LirDiagInvalidInput, "list.insert expects (list, idx, elem)", "list.insert")
+        return
+    }
+    let recv = lirLowerMirContainerReceiver(l, instr, "list.insert", "list.elem")
+    if !(recv.ok) {
+        return
+    }
+    let idx = lirLowerCoercedOperand(l, instr.args[1], "Int", lirIntType(64), "list.insert idx")
+    if idx.value == "" {
+        return
+    }
+    let value = lirLowerCoercedOperand(l, instr.args[2], recv.elemTypeName, recv.elemLir, "list.insert elem")
+    if value.value == "" {
+        return
+    }
+    lirEmitContainerCall(l, instr, llvmListRuntimeInsertSymbolFor(recv.elemLir.llvm, recv.isString), lirVoidType(), [lirPtrType(), lirIntType(64), recv.elemLir], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(lirIntType(64), idx.value), lirOperand(recv.elemLir, value.value)], "", "list.insert")
+}
+fn lirLowerMirListSorted(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 1 {
+        lirLowerError(l, LirDiagInvalidInput, "list.sorted expects (list)", "list.sorted")
+        return
+    }
+    let recv = lirLowerMirContainerReceiver(l, instr, "list.sorted", "list.elem")
+    if !(recv.ok) {
+        return
+    }
+    let symbol = llvmListRuntimeSortedSymbol(recv.elemLir.llvm, recv.isString)
+    if symbol == "" {
+        lirLowerError(l, LirDiagUnsupported, "list.sorted has no runtime helper for lane `" + recv.elemLir.llvm + "`", "list.sorted")
+        return
+    }
+    lirEmitContainerCall(l, instr, symbol, lirPtrType(), [lirPtrType()], [lirOperand(lirPtrType(), recv.receiverReg)], instr.args[0].typ, "list.sorted")
+}
+// `list.isEmpty` lowers to `len(list) == 0`, matching production
+// (mir_generator.go::IntrinsicListIsEmpty). Runtime has no IsEmpty
+// helper for List; reuse Len.
+fn lirLowerMirListIsEmpty(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 1 {
+        lirLowerError(l, LirDiagInvalidInput, "list.isEmpty expects (list)", "list.isEmpty")
+        return
+    }
+    let recv = lirLowerMirOperand(l, instr.args[0], instr.args[0].typ, lirPtrType())
+    if recv.value == "" {
+        return
+    }
+    let symbol = llvmListRuntimeLenSymbol()
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDeclI64FromPtr(symbol))
+    let lenDest = lirFresh(l)
+    l.instrs.push(lirCall(lenDest, lirIntType(64), "@" + symbol, [lirOperand(lirPtrType(), recv.value)]))
+    let cmpDest = lirFresh(l)
+    l.instrs.push(lirBinary(cmpDest, "icmp eq", lirIntType(64), lenDest, "0"))
+    if instr.hasDest {
+        lirStoreMirResult(l, instr.dest, lirOperand(lirIntType(1), cmpDest), "Bool", "list.isEmpty result")
+    }
+}
+// ----- Map intrinsic lowerings (typed key lane) -----
+fn lirLowerMirMapInsert(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 3 {
+        lirLowerError(l, LirDiagInvalidInput, "map.set expects (map, key, value)", "map.set")
+        return
+    }
+    let recv = lirLowerMirContainerReceiver(l, instr, "map.set", "map.kv")
+    if !(recv.ok) {
+        return
+    }
+    let key = lirLowerCoercedOperand(l, instr.args[1], recv.elemTypeName, recv.elemLir, "map.set key")
+    if key.value == "" {
+        return
+    }
+    let value = lirLowerCoercedOperand(l, instr.args[2], recv.valueTypeName, recv.valueLir, "map.set value")
+    if value.value == "" {
+        return
+    }
+    lirEmitContainerCall(l, instr, llvmMapRuntimeInsertSymbol(recv.elemLir.llvm, recv.isString), lirVoidType(), [lirPtrType(), recv.elemLir, recv.valueLir], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, key.value), lirOperand(recv.valueLir, value.value)], "", "map.set")
+}
+fn lirLowerMirMapContains(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 2 {
+        lirLowerError(l, LirDiagInvalidInput, "map.contains expects (map, key)", "map.contains")
+        return
+    }
+    let recv = lirLowerMirContainerReceiver(l, instr, "map.contains", "map.key")
+    if !(recv.ok) {
+        return
+    }
+    let key = lirLowerCoercedOperand(l, instr.args[1], recv.elemTypeName, recv.elemLir, "map.contains key")
+    if key.value == "" {
+        return
+    }
+    lirEmitContainerCall(l, instr, llvmMapRuntimeContainsSymbol(recv.elemLir.llvm, recv.isString), lirIntType(1), [lirPtrType(), recv.elemLir], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, key.value)], "Bool", "map.contains")
+}
+fn lirLowerMirMapRemove(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 2 {
+        lirLowerError(l, LirDiagInvalidInput, "map.remove expects (map, key)", "map.remove")
+        return
+    }
+    let recv = lirLowerMirContainerReceiver(l, instr, "map.remove", "map.key")
+    if !(recv.ok) {
+        return
+    }
+    let key = lirLowerCoercedOperand(l, instr.args[1], recv.elemTypeName, recv.elemLir, "map.remove key")
+    if key.value == "" {
+        return
+    }
+    lirEmitContainerCall(l, instr, llvmMapRuntimeRemoveSymbol(recv.elemLir.llvm, recv.isString), lirVoidType(), [lirPtrType(), recv.elemLir], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, key.value)], "", "map.remove")
+}
+// ----- Set intrinsic lowerings (typed elem lane) -----
+fn lirLowerMirSetInsert(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 2 {
+        lirLowerError(l, LirDiagInvalidInput, "set.insert expects (set, elem)", "set.insert")
+        return
+    }
+    let recv = lirLowerMirContainerReceiver(l, instr, "set.insert", "set.elem")
+    if !(recv.ok) {
+        return
+    }
+    let elem = lirLowerCoercedOperand(l, instr.args[1], recv.elemTypeName, recv.elemLir, "set.insert elem")
+    if elem.value == "" {
+        return
+    }
+    lirEmitContainerCall(l, instr, llvmSetRuntimeInsertSymbol(recv.elemLir.llvm, recv.isString), lirVoidType(), [lirPtrType(), recv.elemLir], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, elem.value)], "", "set.insert")
+}
+fn lirLowerMirSetContains(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 2 {
+        lirLowerError(l, LirDiagInvalidInput, "set.contains expects (set, elem)", "set.contains")
+        return
+    }
+    let recv = lirLowerMirContainerReceiver(l, instr, "set.contains", "set.elem")
+    if !(recv.ok) {
+        return
+    }
+    let elem = lirLowerCoercedOperand(l, instr.args[1], recv.elemTypeName, recv.elemLir, "set.contains elem")
+    if elem.value == "" {
+        return
+    }
+    lirEmitContainerCall(l, instr, llvmSetRuntimeContainsSymbol(recv.elemLir.llvm, recv.isString), lirIntType(1), [lirPtrType(), recv.elemLir], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, elem.value)], "Bool", "set.contains")
+}
+fn lirLowerMirSetRemove(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 2 {
+        lirLowerError(l, LirDiagInvalidInput, "set.remove expects (set, elem)", "set.remove")
+        return
+    }
+    let recv = lirLowerMirContainerReceiver(l, instr, "set.remove", "set.elem")
+    if !(recv.ok) {
+        return
+    }
+    let elem = lirLowerCoercedOperand(l, instr.args[1], recv.elemTypeName, recv.elemLir, "set.remove elem")
+    if elem.value == "" {
+        return
+    }
+    lirEmitContainerCall(l, instr, llvmSetRuntimeRemoveSymbol(recv.elemLir.llvm, recv.isString), lirVoidType(), [lirPtrType(), recv.elemLir], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, elem.value)], "", "set.remove")
 }
 fn lirLowerMirTerm(l: LirMirFunctionLowerer, term: MirTerm, ret: LirType) -> LirTerm {
     match term.kind {
@@ -2142,6 +2746,9 @@ fn lirLowerMirUnary(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, h
     lirOperand(typ, dest)
 }
 fn lirLowerMirBinary(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
+    if rv.binaryOp == MirBinAdd && rv.arg.typ == "String" && rv.right.typ == "String" {
+        return lirLowerMirStringConcatBinary(l, rv, hintName, hint)
+    }
     let argType = if lirTypeIsZero(hint) {
         lirLowerMirType(l, rv.arg.typ)
     } else {
@@ -2162,6 +2769,27 @@ fn lirLowerMirBinary(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, 
     let dest = lirFresh(l)
     l.instrs.push(lirBinary(dest, opcode, argType, left.value, right.value))
     lirOperand(resType, dest)
+}
+// Binary `+` on two-leaf String operands lowers through the runtime
+// Concat helper. MIR's `flattenStringConcatChain` rewrites 3+ leaves
+// into `MirIntrinsicStringConcat` so they hit ConcatN instead, but
+// the 2-leaf case stays as a `BinaryRV{op: BinAdd, T: String}` and
+// must be intercepted here so the runtime sees Concat rather than an
+// invalid `add ptr, ptr`.
+fn lirLowerMirStringConcatBinary(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
+    let left = lirLowerMirOperand(l, rv.arg, "String", lirPtrType())
+    if left.value == "" {
+        return lirOperandInvalid()
+    }
+    let right = lirLowerMirOperand(l, rv.right, "String", lirPtrType())
+    if right.value == "" {
+        return lirOperandInvalid()
+    }
+    let symbol = mirRtStringSymbol("Concat")
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDeclPtrFromTwoPtr(symbol))
+    let dest = lirFresh(l)
+    l.instrs.push(lirCall(dest, lirPtrType(), "@" + symbol, [lirOperand(lirPtrType(), left.value), lirOperand(lirPtrType(), right.value)]))
+    lirOperand(lirPtrType(), dest)
 }
 fn lirLowerMirCast(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
     let fromType = lirLowerMirType(l, rv.castFrom)
@@ -2401,6 +3029,9 @@ fn lirLowerMirType(l: LirMirFunctionLowerer, name: String) -> LirType {
     if !(lirTypeIsZero(primitive)) {
         return primitive
     }
+    if lirIsRefBuiltinTypeName(name) {
+        return lirPtrType()
+    }
     for layout in l.mirModule.layouts.structs {
         if lirMirStructLayoutMatches(layout, name) {
             let typeName = "%" + if layout.mangled == "" {
@@ -2444,6 +3075,10 @@ fn lirLowerMirType(l: LirMirFunctionLowerer, name: String) -> LirType {
     }
     lirTypeInvalid()
 }
+// Reference-shaped builtin generics (List/Map/Set/Channel/Handle/Box)
+// and the structured-task surfaces all reach LLVM as opaque ptr. The
+// monomorphizer keeps the printed type name intact so we just sniff
+// the canonical prefix instead of dragging the full Osty type AST in.
 fn lirFindMirStructLayout(l: LirMirFunctionLowerer, name: String) -> MirStructLayout {
     for layout in l.mirModule.layouts.structs {
         if lirMirStructLayoutMatches(layout, name) {
