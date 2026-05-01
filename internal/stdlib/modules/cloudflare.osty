@@ -1,0 +1,1437 @@
+// std.cloudflare - Cloudflare edge service request builders.
+//
+// This module stays transport-light and composes with std.http/std.json. It
+// covers the common web-service jobs: Turnstile server validation, KV, R2,
+// Queues, DNS records, cache purge, and direct Worker invocation. R2 object
+// calls include the small AWS SigV4 signer needed by Cloudflare's S3-compatible
+// API; callers provide deterministic signing dates so the surface stays pure.
+
+use std.bytes
+use std.crypto
+use std.encoding
+use std.error
+use std.http
+use std.json
+use std.strings
+
+pub type Headers = http.Headers
+pub type QueryValues = http.QueryValues
+pub type FormValues = http.FormValues
+
+pub enum R2Jurisdiction {
+    R2Default,
+    R2Eu,
+    R2Fedramp,
+
+    pub fn toString(self) -> String {
+        match self {
+            R2Default  -> "default",
+            R2Eu       -> "eu",
+            R2Fedramp  -> "fedramp",
+        }
+    }
+}
+
+pub enum R2StorageClass {
+    R2Standard,
+    R2InfrequentAccess,
+
+    pub fn toString(self) -> String {
+        match self {
+            R2Standard         -> "Standard",
+            R2InfrequentAccess -> "InfrequentAccess",
+        }
+    }
+}
+
+pub enum R2Permission {
+    AdminReadWrite,
+    AdminReadOnly,
+    ObjectReadWrite,
+    ObjectReadOnly,
+
+    pub fn toString(self) -> String {
+        match self {
+            AdminReadWrite  -> "admin-read-write",
+            AdminReadOnly   -> "admin-read-only",
+            ObjectReadWrite -> "object-read-write",
+            ObjectReadOnly  -> "object-read-only",
+        }
+    }
+}
+
+pub enum DnsRecordKind {
+    DnsA,
+    DnsAAAA,
+    DnsCNAME,
+    DnsTXT,
+    DnsMX,
+    DnsNS,
+    DnsSRV,
+    DnsCAA,
+
+    pub fn toString(self) -> String {
+        match self {
+            DnsA     -> "A",
+            DnsAAAA  -> "AAAA",
+            DnsCNAME -> "CNAME",
+            DnsTXT   -> "TXT",
+            DnsMX    -> "MX",
+            DnsNS    -> "NS",
+            DnsSRV   -> "SRV",
+            DnsCAA   -> "CAA",
+        }
+    }
+}
+
+pub struct Client {
+    pub apiBaseUrl: String = "https://api.cloudflare.com/client/v4",
+    pub accountId: String = "",
+    pub zoneId: String = "",
+    pub apiToken: String,
+    pub clientInfo: String = "osty-stdlib-cloudflare",
+    pub extraHeaders: Headers = {:},
+
+    pub fn withAccountId(mut self, accountId: String) -> Result<Client, Error> {
+        self.accountId = cleanIdentifier("account ID", accountId)?
+        Ok(self)
+    }
+
+    pub fn withZoneId(mut self, zoneId: String) -> Result<Client, Error> {
+        self.zoneId = cleanIdentifier("zone ID", zoneId)?
+        Ok(self)
+    }
+
+    pub fn withBaseUrl(mut self, baseUrl: String) -> Result<Client, Error> {
+        let clean = stripTrailingSlash(strings.trimSpace(baseUrl))
+        if clean.isEmpty() {
+            return Err(error.new("cloudflare: API base URL is empty"))
+        }
+        self.apiBaseUrl = clean
+        Ok(self)
+    }
+
+    pub fn withClientInfo(mut self, value: String) -> Client {
+        self.clientInfo = strings.trimSpace(value)
+        self
+    }
+
+    pub fn withHeader(mut self, name: String, value: String) -> Client {
+        self.extraHeaders.insert(name, value)
+        self
+    }
+}
+
+pub struct TurnstileChallenge {
+    pub secret: String,
+    pub response: String,
+    pub remoteIp: String = "",
+    pub idempotencyKey: String = "",
+
+    pub fn withRemoteIp(mut self, ip: String) -> TurnstileChallenge {
+        self.remoteIp = strings.trimSpace(ip)
+        self
+    }
+
+    pub fn withIdempotencyKey(mut self, key: String) -> TurnstileChallenge {
+        self.idempotencyKey = strings.trimSpace(key)
+        self
+    }
+}
+
+pub struct TurnstileResult {
+    pub success: Bool,
+    pub challengeTs: String = "",
+    pub hostname: String = "",
+    pub action: String = "",
+    pub cdata: String = "",
+    pub errorCodes: List<String> = [],
+    pub rawJson: String = "",
+
+    pub fn summary(self) -> String {
+        if self.success {
+            let host = if self.hostname.isEmpty() { "unknown host" } else { self.hostname }
+            return "cloudflare: turnstile accepted for {host}"
+        }
+        let codes = if self.errorCodes.isEmpty() { "unknown-error" } else { strings.join(self.errorCodes, ",") }
+        "cloudflare: turnstile rejected: {codes}"
+    }
+}
+
+pub struct ApiError {
+    pub status: Int,
+    pub code: String = "",
+    pub message: String = "",
+    pub rawJson: String = "",
+
+    pub fn summary(self) -> String {
+        let msg = if strings.trimSpace(self.message).isEmpty() { "request failed" } else { strings.trimSpace(self.message) }
+        let code = if strings.trimSpace(self.code).isEmpty() { "" } else { " ({strings.trimSpace(self.code)})" }
+        "cloudflare: HTTP {self.status}: {msg}{code}"
+    }
+}
+
+pub struct KvPutOptions {
+    pub expiration: Int = 0,
+    pub expirationTtl: Int = 0,
+
+    pub fn withExpiration(mut self, unixSeconds: Int) -> Result<KvPutOptions, Error> {
+        if unixSeconds < 0 {
+            return Err(error.new("cloudflare: KV expiration must not be negative"))
+        }
+        self.expiration = unixSeconds
+        Ok(self)
+    }
+
+    pub fn withExpirationTtl(mut self, seconds: Int) -> Result<KvPutOptions, Error> {
+        if seconds < 0 {
+            return Err(error.new("cloudflare: KV expiration_ttl must not be negative"))
+        }
+        self.expirationTtl = seconds
+        Ok(self)
+    }
+}
+
+pub struct QueueMessage {
+    pub bodyJson: String,
+    pub contentType: String = "json",
+    pub delaySeconds: Int = 0,
+
+    pub fn withDelay(mut self, seconds: Int) -> Result<QueueMessage, Error> {
+        if seconds < 0 {
+            return Err(error.new("cloudflare: queue delay must not be negative"))
+        }
+        self.delaySeconds = seconds
+        Ok(self)
+    }
+}
+
+pub struct QueuePullOptions {
+    pub batchSize: Int = 1,
+    pub visibilityTimeoutMs: Int = 30000,
+
+    pub fn withBatchSize(mut self, size: Int) -> Result<QueuePullOptions, Error> {
+        if size <= 0 {
+            return Err(error.new("cloudflare: queue batch size must be positive"))
+        }
+        self.batchSize = size
+        Ok(self)
+    }
+
+    pub fn withVisibilityTimeout(mut self, ms: Int) -> Result<QueuePullOptions, Error> {
+        if ms <= 0 {
+            return Err(error.new("cloudflare: queue visibility timeout must be positive"))
+        }
+        self.visibilityTimeoutMs = ms
+        Ok(self)
+    }
+}
+
+pub struct R2BucketOptions {
+    pub jurisdiction: R2Jurisdiction,
+    pub storageClass: R2StorageClass,
+}
+
+pub struct R2TemporaryCredentials {
+    pub bucket: String,
+    pub parentAccessKeyId: String,
+    pub permission: R2Permission,
+    pub ttlSeconds: Int,
+    pub objects: List<String> = [],
+    pub prefixes: List<String> = [],
+}
+
+pub struct R2Signer {
+    pub accountId: String,
+    pub accessKeyId: String,
+    pub secretAccessKey: String,
+    pub sessionToken: String = "",
+
+    pub fn withSessionToken(mut self, token: String) -> R2Signer {
+        self.sessionToken = strings.trimSpace(token)
+        self
+    }
+}
+
+pub struct R2SigningDates {
+    pub amzDate: String,
+    pub shortDate: String,
+}
+
+pub struct DnsRecord {
+    pub typ: DnsRecordKind,
+    pub name: String,
+    pub content: String,
+    pub ttl: Int = 1,
+    pub proxied: Bool = false,
+    pub comment: String = "",
+    pub priority: Int = 0,
+}
+
+pub struct CachePurge {
+    pub purgeEverything: Bool = false,
+    pub files: List<String> = [],
+    pub tags: List<String> = [],
+    pub hosts: List<String> = [],
+    pub prefixes: List<String> = [],
+
+    pub fn withFile(mut self, url: String) -> CachePurge {
+        self.files.push(strings.trimSpace(url))
+        self
+    }
+
+    pub fn withTag(mut self, tag: String) -> CachePurge {
+        self.tags.push(strings.trimSpace(tag))
+        self
+    }
+
+    pub fn withHost(mut self, host: String) -> CachePurge {
+        self.hosts.push(strings.trimSpace(host))
+        self
+    }
+
+    pub fn withPrefix(mut self, prefix: String) -> CachePurge {
+        self.prefixes.push(strings.trimSpace(prefix))
+        self
+    }
+}
+
+pub fn apiBaseUrl() -> String {
+    "https://api.cloudflare.com/client/v4"
+}
+
+pub fn client(apiToken: String) -> Result<Client, Error> {
+    let token = strings.trimSpace(apiToken)
+    if token.isEmpty() {
+        return Err(error.new("cloudflare: API token is empty"))
+    }
+    Ok(Client { apiToken: token })
+}
+
+pub fn account(accountId: String, apiToken: String) -> Result<Client, Error> {
+    let c = client(apiToken)?
+    c.withAccountId(accountId)
+}
+
+pub fn zone(zoneId: String, apiToken: String) -> Result<Client, Error> {
+    let c = client(apiToken)?
+    c.withZoneId(zoneId)
+}
+
+pub fn accountZone(accountId: String, zoneId: String, apiToken: String) -> Result<Client, Error> {
+    let c = account(accountId, apiToken)?
+    c.withZoneId(zoneId)
+}
+
+pub fn headers(client: Client) -> Headers {
+    baseHeaders(client, "")
+}
+
+pub fn jsonHeaders(client: Client) -> Headers {
+    baseHeaders(client, "application/json")
+}
+
+pub fn turnstile(secret: String, response: String) -> Result<TurnstileChallenge, Error> {
+    let cleanSecret = strings.trimSpace(secret)
+    let cleanResponse = strings.trimSpace(response)
+    if cleanSecret.isEmpty() {
+        return Err(error.new("cloudflare: Turnstile secret is empty"))
+    }
+    if cleanResponse.isEmpty() {
+        return Err(error.new("cloudflare: Turnstile response is empty"))
+    }
+    if cleanResponse.charCount() > 2048 {
+        return Err(error.new("cloudflare: Turnstile response is too long"))
+    }
+    Ok(TurnstileChallenge {
+        secret: cleanSecret,
+        response: cleanResponse,
+    })
+}
+
+pub fn turnstileSiteverifyUrl() -> String {
+    "https://challenges.cloudflare.com/turnstile/v0/siteverify"
+}
+
+pub fn turnstileJsonBody(challenge: TurnstileChallenge) -> String {
+    let mut props = [
+        prop("secret", quote(challenge.secret)),
+        prop("response", quote(challenge.response)),
+    ]
+    if !strings.trimSpace(challenge.remoteIp).isEmpty() {
+        props.push(prop("remoteip", quote(strings.trimSpace(challenge.remoteIp))))
+    }
+    if !strings.trimSpace(challenge.idempotencyKey).isEmpty() {
+        props.push(prop("idempotency_key", quote(strings.trimSpace(challenge.idempotencyKey))))
+    }
+    object(props)
+}
+
+pub fn turnstileFormValues(challenge: TurnstileChallenge) -> FormValues {
+    let mut form: FormValues = {
+        "secret": [challenge.secret],
+        "response": [challenge.response],
+    }
+    if !strings.trimSpace(challenge.remoteIp).isEmpty() {
+        form.insert("remoteip", [strings.trimSpace(challenge.remoteIp)])
+    }
+    if !strings.trimSpace(challenge.idempotencyKey).isEmpty() {
+        form.insert("idempotency_key", [strings.trimSpace(challenge.idempotencyKey)])
+    }
+    form
+}
+
+pub fn turnstileSiteverifyJsonRequest(challenge: TurnstileChallenge) -> Result<http.Request, Error> {
+    validateTurnstile(challenge)?
+    Ok(http.newRequest(Post, turnstileSiteverifyUrl())
+        .withText(turnstileJsonBody(challenge))
+        .withContentType("application/json"))
+}
+
+pub fn turnstileSiteverifyFormRequest(challenge: TurnstileChallenge) -> Result<http.Request, Error> {
+    validateTurnstile(challenge)?
+    Ok(http.newRequest(Post, turnstileSiteverifyUrl())
+        .withForm(turnstileFormValues(challenge)))
+}
+
+pub fn sendTurnstile(challenge: TurnstileChallenge) -> Result<TurnstileResult, Error> {
+    let response = http.request(turnstileSiteverifyJsonRequest(challenge)?)?
+    Ok(parseTurnstileResult(response))
+}
+
+pub fn parseTurnstileResult(response: http.Response) -> TurnstileResult {
+    let text = response.text().unwrapOr("")
+    let mut out = TurnstileResult {
+        success: false,
+        rawJson: text,
+    }
+    match json.parseValue(text) {
+        Ok(root) -> {
+            out.success = boolField(root, "success")
+            out.challengeTs = stringField(root, "challenge_ts")
+            out.hostname = stringField(root, "hostname")
+            out.action = stringField(root, "action")
+            out.cdata = stringField(root, "cdata")
+            out.errorCodes = stringArrayField(root, "error-codes")
+        },
+        Err(_) -> {},
+    }
+    out
+}
+
+pub fn accountUrl(client: Client, path: String) -> Result<String, Error> {
+    validateClient(client)?
+    let accountId = cleanIdentifier("account ID", client.accountId)?
+    Ok(apiUrl(client, "/accounts/{accountId}/{cleanRelativePath(path)?}"))
+}
+
+pub fn zoneUrl(client: Client, path: String) -> Result<String, Error> {
+    validateClient(client)?
+    let zoneId = cleanIdentifier("zone ID", client.zoneId)?
+    Ok(apiUrl(client, "/zones/{zoneId}/{cleanRelativePath(path)?}"))
+}
+
+pub fn kvNamespacesUrl(client: Client) -> Result<String, Error> {
+    accountUrl(client, "storage/kv/namespaces")
+}
+
+pub fn kvNamespaceUrl(client: Client, namespaceId: String) -> Result<String, Error> {
+    let ns = cleanIdentifier("KV namespace ID", namespaceId)?
+    accountUrl(client, "storage/kv/namespaces/{ns}")
+}
+
+pub fn kvValueUrl(client: Client, namespaceId: String, key: String) -> Result<String, Error> {
+    let ns = cleanIdentifier("KV namespace ID", namespaceId)?
+    accountUrl(client, "storage/kv/namespaces/{ns}/values/{encodeKeyName(key)?}")
+}
+
+pub fn listKvNamespacesHttpRequest(client: Client) -> Result<http.Request, Error> {
+    Ok(http.newRequest(Get, kvNamespacesUrl(client)?)
+        .withHeaders(headers(client)))
+}
+
+pub fn createKvNamespaceHttpRequest(client: Client, title: String) -> Result<http.Request, Error> {
+    let clean = cleanName("KV namespace title", title)?
+    Ok(http.newRequest(Post, kvNamespacesUrl(client)?)
+        .withHeaders(jsonHeaders(client))
+        .withText(object([prop("title", quote(clean))]))
+        .withContentType("application/json"))
+}
+
+pub fn renameKvNamespaceHttpRequest(client: Client, namespaceId: String, title: String) -> Result<http.Request, Error> {
+    let clean = cleanName("KV namespace title", title)?
+    Ok(http.newRequest(Put, kvNamespaceUrl(client, namespaceId)?)
+        .withHeaders(jsonHeaders(client))
+        .withText(object([prop("title", quote(clean))]))
+        .withContentType("application/json"))
+}
+
+pub fn deleteKvNamespaceHttpRequest(client: Client, namespaceId: String) -> Result<http.Request, Error> {
+    Ok(http.newRequest(Delete, kvNamespaceUrl(client, namespaceId)?)
+        .withHeaders(headers(client)))
+}
+
+pub fn getKvValueHttpRequest(client: Client, namespaceId: String, key: String) -> Result<http.Request, Error> {
+    Ok(http.newRequest(Get, kvValueUrl(client, namespaceId, key)?)
+        .withHeaders(headers(client)))
+}
+
+pub fn putKvValueHttpRequest(client: Client, namespaceId: String, key: String, value: Bytes) -> Result<http.Request, Error> {
+    putKvValueWithOptionsHttpRequest(client, namespaceId, key, value, KvPutOptions {})
+}
+
+pub fn putKvValueWithOptionsHttpRequest(client: Client, namespaceId: String, key: String, value: Bytes, opts: KvPutOptions) -> Result<http.Request, Error> {
+    let mut req = http.newRequest(Put, kvValueUrl(client, namespaceId, key)?)
+        .withHeaders(headers(client))
+        .withBody(value)
+    let query = kvPutQuery(opts)?
+    if !query.isEmpty() {
+        req = req.withQuery(query)
+    }
+    Ok(req)
+}
+
+pub fn deleteKvValueHttpRequest(client: Client, namespaceId: String, key: String) -> Result<http.Request, Error> {
+    Ok(http.newRequest(Delete, kvValueUrl(client, namespaceId, key)?)
+        .withHeaders(headers(client)))
+}
+
+pub fn kvBulkEntryText(key: String, value: String) -> Result<String, Error> {
+    kvBulkEntryTextWithOptions(key, value, 0, "")
+}
+
+pub fn kvBulkEntryTextWithOptions(key: String, value: String, expirationTtl: Int, metadataJson: String) -> Result<String, Error> {
+    let clean = cleanKeyName(key)?
+    let mut props = [
+        prop("key", quote(clean)),
+        prop("value", quote(value)),
+    ]
+    if expirationTtl > 0 {
+        props.push(prop("expiration_ttl", expirationTtl.toString()))
+    }
+    let metadata = normalizedJsonObject(metadataJson)
+    if metadata != "\{\}" {
+        props.push(prop("metadata", metadata))
+    }
+    Ok(object(props))
+}
+
+pub fn kvBulkPutHttpRequest(client: Client, namespaceId: String, entriesJson: List<String>) -> Result<http.Request, Error> {
+    if entriesJson.isEmpty() {
+        return Err(error.new("cloudflare: KV bulk entries are empty"))
+    }
+    let ns = cleanIdentifier("KV namespace ID", namespaceId)?
+    Ok(http.newRequest(Put, accountUrl(client, "storage/kv/namespaces/{ns}/bulk")?)
+        .withHeaders(jsonHeaders(client))
+        .withText(array(entriesJson))
+        .withContentType("application/json"))
+}
+
+pub fn kvBulkDeleteHttpRequest(client: Client, namespaceId: String, keys: List<String>) -> Result<http.Request, Error> {
+    if keys.isEmpty() {
+        return Err(error.new("cloudflare: KV bulk delete keys are empty"))
+    }
+    let mut items: List<String> = []
+    for key in keys {
+        items.push(quote(cleanKeyName(key)?))
+    }
+    let ns = cleanIdentifier("KV namespace ID", namespaceId)?
+    Ok(http.newRequest(Post, accountUrl(client, "storage/kv/namespaces/{ns}/bulk/delete")?)
+        .withHeaders(jsonHeaders(client))
+        .withText(array(items))
+        .withContentType("application/json"))
+}
+
+pub fn r2BucketsUrl(client: Client) -> Result<String, Error> {
+    accountUrl(client, "r2/buckets")
+}
+
+pub fn r2BucketUrl(client: Client, bucket: String) -> Result<String, Error> {
+    accountUrl(client, "r2/buckets/{encodePathSegment(cleanBucketName(bucket)?)}")
+}
+
+pub fn listR2BucketsHttpRequest(client: Client) -> Result<http.Request, Error> {
+    Ok(http.newRequest(Get, r2BucketsUrl(client)?)
+        .withHeaders(headers(client)))
+}
+
+pub fn getR2BucketHttpRequest(client: Client, bucket: String) -> Result<http.Request, Error> {
+    Ok(http.newRequest(Get, r2BucketUrl(client, bucket)?)
+        .withHeaders(headers(client)))
+}
+
+pub fn r2BucketOptions() -> R2BucketOptions {
+    R2BucketOptions {
+        jurisdiction: R2Default,
+        storageClass: R2Standard,
+    }
+}
+
+pub fn createR2BucketHttpRequest(client: Client, bucket: String) -> Result<http.Request, Error> {
+    createR2BucketWithOptionsHttpRequest(client, bucket, r2BucketOptions())
+}
+
+pub fn createR2BucketWithOptionsHttpRequest(client: Client, bucket: String, opts: R2BucketOptions) -> Result<http.Request, Error> {
+    let body = object([
+        prop("name", quote(cleanBucketName(bucket)?)),
+        prop("jurisdiction", quote(opts.jurisdiction.toString())),
+        prop("storage_class", quote(opts.storageClass.toString())),
+    ])
+    Ok(http.newRequest(Post, r2BucketsUrl(client)?)
+        .withHeaders(jsonHeaders(client))
+        .withText(body)
+        .withContentType("application/json"))
+}
+
+pub fn deleteR2BucketHttpRequest(client: Client, bucket: String) -> Result<http.Request, Error> {
+    Ok(http.newRequest(Delete, r2BucketUrl(client, bucket)?)
+        .withHeaders(headers(client)))
+}
+
+pub fn r2TempCredentialsHttpRequest(client: Client, spec: R2TemporaryCredentials) -> Result<http.Request, Error> {
+    if spec.ttlSeconds <= 0 || spec.ttlSeconds > 604800 {
+        return Err(error.new("cloudflare: R2 temporary credentials ttl must be 1..604800 seconds"))
+    }
+    let mut props = [
+        prop("bucket", quote(cleanBucketName(spec.bucket)?)),
+        prop("parentAccessKeyId", quote(cleanName("R2 access key ID", spec.parentAccessKeyId)?)),
+        prop("permission", quote(spec.permission.toString())),
+        prop("ttlSeconds", spec.ttlSeconds.toString()),
+    ]
+    if !spec.objects.isEmpty() {
+        props.push(prop("objects", quoteList(cleanObjectList(spec.objects)?)))
+    }
+    if !spec.prefixes.isEmpty() {
+        props.push(prop("prefixes", quoteList(cleanObjectList(spec.prefixes)?)))
+    }
+    Ok(http.newRequest(Post, accountUrl(client, "r2/temp-access-credentials")?)
+        .withHeaders(jsonHeaders(client))
+        .withText(object(props))
+        .withContentType("application/json"))
+}
+
+pub fn r2S3Endpoint(accountId: String) -> Result<String, Error> {
+    let account = cleanIdentifier("account ID", accountId)?
+    Ok("https://{account}.r2.cloudflarestorage.com")
+}
+
+pub fn r2ObjectUrl(accountId: String, bucket: String, key: String) -> Result<String, Error> {
+    Ok("{r2S3Endpoint(accountId)?}/{encodePathSegment(cleanBucketName(bucket)?)}" +
+        "/{encodeObjectPath(key)?}")
+}
+
+pub fn r2Signer(accountId: String, accessKeyId: String, secretAccessKey: String) -> Result<R2Signer, Error> {
+    let cleanAccount = cleanIdentifier("account ID", accountId)?
+    let cleanAccess = cleanName("R2 access key ID", accessKeyId)?
+    let cleanSecret = strings.trimSpace(secretAccessKey)
+    if cleanSecret.isEmpty() {
+        return Err(error.new("cloudflare: R2 secret access key is empty"))
+    }
+    Ok(R2Signer {
+        accountId: cleanAccount,
+        accessKeyId: cleanAccess,
+        secretAccessKey: cleanSecret,
+    })
+}
+
+pub fn r2SigningDates(amzDate: String) -> Result<R2SigningDates, Error> {
+    let clean = strings.trimSpace(amzDate)
+    if clean.charCount() < 8 {
+        return Err(error.new("cloudflare: invalid AWS date"))
+    }
+    Ok(R2SigningDates {
+        amzDate: clean,
+        shortDate: strings.slice(clean, 0, 8),
+    })
+}
+
+pub fn r2PutObjectHttpRequest(signer: R2Signer, bucket: String, key: String, body: Bytes, contentType: String, dates: R2SigningDates) -> Result<http.Request, Error> {
+    let mediaType = if strings.trimSpace(contentType).isEmpty() { "application/octet-stream" } else { strings.trimSpace(contentType) }
+    let payloadHash = sha256Hex(body)
+    let signed = r2SignedHeaders(signer, "PUT", bucket, key, payloadHash, mediaType, dates)?
+    Ok(http.newRequest(Put, r2ObjectUrl(signer.accountId, bucket, key)?)
+        .withHeaders(signed)
+        .withBody(body)
+        .withContentType(mediaType))
+}
+
+pub fn r2GetObjectHttpRequest(signer: R2Signer, bucket: String, key: String, dates: R2SigningDates) -> Result<http.Request, Error> {
+    let payloadHash = sha256Hex(bytes.fromString(""))
+    let signed = r2SignedHeaders(signer, "GET", bucket, key, payloadHash, "", dates)?
+    Ok(http.newRequest(Get, r2ObjectUrl(signer.accountId, bucket, key)?)
+        .withHeaders(signed))
+}
+
+pub fn r2DeleteObjectHttpRequest(signer: R2Signer, bucket: String, key: String, dates: R2SigningDates) -> Result<http.Request, Error> {
+    let payloadHash = sha256Hex(bytes.fromString(""))
+    let signed = r2SignedHeaders(signer, "DELETE", bucket, key, payloadHash, "", dates)?
+    Ok(http.newRequest(Delete, r2ObjectUrl(signer.accountId, bucket, key)?)
+        .withHeaders(signed))
+}
+
+pub fn queueBaseUrl(client: Client, queueId: String) -> Result<String, Error> {
+    queueUrl(client, queueId, "")
+}
+
+pub fn queueUrl(client: Client, queueId: String, path: String) -> Result<String, Error> {
+    let queue = cleanIdentifier("queue ID", queueId)?
+    let base = "queues/{queue}"
+    let suffix = strings.trimPrefix(strings.trimSpace(path), "/")
+    if suffix.isEmpty() {
+        return accountUrl(client, base)
+    }
+    if strings.contains(suffix, "..") || strings.contains(suffix, "?") || strings.contains(suffix, "#") {
+        return Err(error.new("cloudflare: unsafe queue path: {path}"))
+    }
+    accountUrl(client, "{base}/{suffix}")
+}
+
+pub fn listQueuesHttpRequest(client: Client) -> Result<http.Request, Error> {
+    Ok(http.newRequest(Get, accountUrl(client, "queues")?)
+        .withHeaders(headers(client)))
+}
+
+pub fn createQueueHttpRequest(client: Client, name: String) -> Result<http.Request, Error> {
+    Ok(http.newRequest(Post, accountUrl(client, "queues")?)
+        .withHeaders(jsonHeaders(client))
+        .withText(object([prop("queue_name", quote(cleanName("queue name", name)?))]))
+        .withContentType("application/json"))
+}
+
+pub fn queueTextMessage(body: String) -> QueueMessage {
+    QueueMessage {
+        bodyJson: quote(body),
+        contentType: "text",
+    }
+}
+
+pub fn queueJsonMessage(bodyJson: String) -> QueueMessage {
+    QueueMessage {
+        bodyJson: normalizedJsonValue(bodyJson),
+        contentType: "json",
+    }
+}
+
+pub fn queueMessageJson(message: QueueMessage) -> String {
+    let mut props = [
+        prop("body", message.bodyJson),
+        prop("content_type", quote(message.contentType)),
+    ]
+    if message.delaySeconds > 0 {
+        props.push(prop("delay_seconds", message.delaySeconds.toString()))
+    }
+    object(props)
+}
+
+pub fn pushQueueMessageHttpRequest(client: Client, queueId: String, message: QueueMessage) -> Result<http.Request, Error> {
+    Ok(http.newRequest(Post, queueUrl(client, queueId, "messages")?)
+        .withHeaders(jsonHeaders(client))
+        .withText(queueMessageJson(message))
+        .withContentType("application/json"))
+}
+
+pub fn pushQueueBatchHttpRequest(client: Client, queueId: String, messages: List<QueueMessage>) -> Result<http.Request, Error> {
+    pushQueueBatchWithDelayHttpRequest(client, queueId, messages, 0)
+}
+
+pub fn pushQueueBatchWithDelayHttpRequest(client: Client, queueId: String, messages: List<QueueMessage>, delaySeconds: Int) -> Result<http.Request, Error> {
+    if messages.isEmpty() {
+        return Err(error.new("cloudflare: queue batch is empty"))
+    }
+    if delaySeconds < 0 {
+        return Err(error.new("cloudflare: queue batch delay must not be negative"))
+    }
+    let mut items: List<String> = []
+    for message in messages {
+        items.push(queueMessageJson(message))
+    }
+    let mut props = [prop("messages", array(items))]
+    if delaySeconds > 0 {
+        props.push(prop("delay_seconds", delaySeconds.toString()))
+    }
+    Ok(http.newRequest(Post, queueUrl(client, queueId, "messages/batch")?)
+        .withHeaders(jsonHeaders(client))
+        .withText(object(props))
+        .withContentType("application/json"))
+}
+
+pub fn queuePullOptions() -> QueuePullOptions {
+    QueuePullOptions {}
+}
+
+pub fn pullQueueMessagesHttpRequest(client: Client, queueId: String) -> Result<http.Request, Error> {
+    pullQueueMessagesWithOptionsHttpRequest(client, queueId, queuePullOptions())
+}
+
+pub fn pullQueueMessagesWithOptionsHttpRequest(client: Client, queueId: String, opts: QueuePullOptions) -> Result<http.Request, Error> {
+    if opts.batchSize <= 0 || opts.visibilityTimeoutMs <= 0 {
+        return Err(error.new("cloudflare: invalid queue pull options"))
+    }
+    let body = object([
+        prop("batch_size", opts.batchSize.toString()),
+        prop("visibility_timeout_ms", opts.visibilityTimeoutMs.toString()),
+    ])
+    Ok(http.newRequest(Post, queueUrl(client, queueId, "messages/pull")?)
+        .withHeaders(jsonHeaders(client))
+        .withText(body)
+        .withContentType("application/json"))
+}
+
+pub fn ackQueueMessagesHttpRequest(client: Client, queueId: String, ackLeaseIds: List<String>) -> Result<http.Request, Error> {
+    ackRetryQueueMessagesHttpRequest(client, queueId, ackLeaseIds, [])
+}
+
+pub fn ackRetryQueueMessagesHttpRequest(client: Client, queueId: String, ackLeaseIds: List<String>, retryLeaseIds: List<String>) -> Result<http.Request, Error> {
+    if ackLeaseIds.isEmpty() && retryLeaseIds.isEmpty() {
+        return Err(error.new("cloudflare: queue ack request has no lease IDs"))
+    }
+    let body = object([
+        prop("acks", quoteList(cleanIdentifierList("lease ID", ackLeaseIds)?)),
+        prop("retries", quoteList(cleanIdentifierList("lease ID", retryLeaseIds)?)),
+    ])
+    Ok(http.newRequest(Post, queueUrl(client, queueId, "messages/ack")?)
+        .withHeaders(jsonHeaders(client))
+        .withText(body)
+        .withContentType("application/json"))
+}
+
+pub fn purgeQueueHttpRequest(client: Client, queueId: String) -> Result<http.Request, Error> {
+    Ok(http.newRequest(Post, queueUrl(client, queueId, "purge")?)
+        .withHeaders(jsonHeaders(client))
+        .withText("\{\}")
+        .withContentType("application/json"))
+}
+
+pub fn dnsRecordsUrl(client: Client) -> Result<String, Error> {
+    zoneUrl(client, "dns_records")
+}
+
+pub fn dnsRecordUrl(client: Client, recordId: String) -> Result<String, Error> {
+    let cleanRecordId = cleanIdentifier("DNS record ID", recordId)?
+    zoneUrl(client, "dns_records/{cleanRecordId}")
+}
+
+pub fn dnsRecord(kind: DnsRecordKind, name: String, content: String) -> Result<DnsRecord, Error> {
+    Ok(DnsRecord {
+        typ: kind,
+        name: cleanName("DNS record name", name)?,
+        content: cleanName("DNS record content", content)?,
+    })
+}
+
+pub fn listDnsRecordsHttpRequest(client: Client) -> Result<http.Request, Error> {
+    Ok(http.newRequest(Get, dnsRecordsUrl(client)?)
+        .withHeaders(headers(client)))
+}
+
+pub fn listDnsRecordsFilteredHttpRequest(client: Client, typ: String, name: String) -> Result<http.Request, Error> {
+    let mut req = http.newRequest(Get, dnsRecordsUrl(client)?)
+        .withHeaders(headers(client))
+    let mut query: QueryValues = {:}
+    if !strings.trimSpace(typ).isEmpty() {
+        query.insert("type", [strings.toUpper(strings.trimSpace(typ))])
+    }
+    if !strings.trimSpace(name).isEmpty() {
+        query.insert("name", [strings.trimSpace(name)])
+    }
+    if !query.isEmpty() {
+        req = req.withQuery(query)
+    }
+    Ok(req)
+}
+
+pub fn createDnsRecordHttpRequest(client: Client, record: DnsRecord) -> Result<http.Request, Error> {
+    Ok(http.newRequest(Post, dnsRecordsUrl(client)?)
+        .withHeaders(jsonHeaders(client))
+        .withText(dnsRecordBody(record))
+        .withContentType("application/json"))
+}
+
+pub fn updateDnsRecordHttpRequest(client: Client, recordId: String, record: DnsRecord) -> Result<http.Request, Error> {
+    Ok(http.newRequest(Put, dnsRecordUrl(client, recordId)?)
+        .withHeaders(jsonHeaders(client))
+        .withText(dnsRecordBody(record))
+        .withContentType("application/json"))
+}
+
+pub fn deleteDnsRecordHttpRequest(client: Client, recordId: String) -> Result<http.Request, Error> {
+    Ok(http.newRequest(Delete, dnsRecordUrl(client, recordId)?)
+        .withHeaders(headers(client)))
+}
+
+pub fn purgeEverything() -> CachePurge {
+    CachePurge { purgeEverything: true }
+}
+
+pub fn purgeFiles(files: List<String>) -> CachePurge {
+    CachePurge { files: files }
+}
+
+pub fn purgeTags(tags: List<String>) -> CachePurge {
+    CachePurge { tags: tags }
+}
+
+pub fn purgeHosts(hosts: List<String>) -> CachePurge {
+    CachePurge { hosts: hosts }
+}
+
+pub fn purgePrefixes(prefixes: List<String>) -> CachePurge {
+    CachePurge { prefixes: prefixes }
+}
+
+pub fn cachePurgeHttpRequest(client: Client, purge: CachePurge) -> Result<http.Request, Error> {
+    validatePurge(purge)?
+    Ok(http.newRequest(Post, zoneUrl(client, "purge_cache")?)
+        .withHeaders(jsonHeaders(client))
+        .withText(cachePurgeBody(purge))
+        .withContentType("application/json"))
+}
+
+pub fn workerUrl(subdomain: String, scriptName: String) -> Result<String, Error> {
+    let cleanSubdomain = cleanWorkerSubdomain(subdomain)?
+    let cleanScript = cleanWorkerScriptName(scriptName)?
+    Ok("https://{cleanScript}.{cleanSubdomain}.workers.dev")
+}
+
+pub fn workerInvokeEmptyHttpRequest(url: String, method: http.Method) -> Result<http.Request, Error> {
+    workerInvokeHttpRequest(url, method, bytes.fromString(""))
+}
+
+pub fn workerInvokeEmptyWithTokenHttpRequest(url: String, method: http.Method, bearerToken: String) -> Result<http.Request, Error> {
+    workerInvokeWithTokenHttpRequest(url, method, bytes.fromString(""), bearerToken)
+}
+
+pub fn workerInvokeHttpRequest(url: String, method: http.Method, body: Bytes) -> Result<http.Request, Error> {
+    workerInvokeWithTokenHttpRequest(url, method, body, "")
+}
+
+pub fn workerInvokeWithTokenHttpRequest(url: String, method: http.Method, body: Bytes, bearerToken: String) -> Result<http.Request, Error> {
+    let cleanUrl = strings.trimSpace(url)
+    if cleanUrl.isEmpty() {
+        return Err(error.new("cloudflare: Worker URL is empty"))
+    }
+    let mut req = http.newRequest(method, cleanUrl).withBody(body)
+    if !strings.trimSpace(bearerToken).isEmpty() {
+        req = req.withBearerToken(strings.trimSpace(bearerToken))
+    }
+    Ok(req)
+}
+
+pub fn workerInvokeJsonHttpRequest<T>(url: String, payload: T) -> Result<http.Request, Error> {
+    workerInvokeJsonWithTokenHttpRequest(url, payload, "")
+}
+
+pub fn workerInvokeJsonWithTokenHttpRequest<T>(url: String, payload: T, bearerToken: String) -> Result<http.Request, Error> {
+    let cleanUrl = strings.trimSpace(url)
+    if cleanUrl.isEmpty() {
+        return Err(error.new("cloudflare: Worker URL is empty"))
+    }
+    let mut req = http.newRequest(Post, cleanUrl).withJson(payload)
+    if !strings.trimSpace(bearerToken).isEmpty() {
+        req = req.withBearerToken(strings.trimSpace(bearerToken))
+    }
+    Ok(req)
+}
+
+pub fn workerScriptUrl(client: Client, scriptName: String) -> Result<String, Error> {
+    accountUrl(client, "workers/scripts/{encodePathSegment(cleanWorkerScriptName(scriptName)?)}")
+}
+
+pub fn getWorkerScriptHttpRequest(client: Client, scriptName: String) -> Result<http.Request, Error> {
+    Ok(http.newRequest(Get, workerScriptUrl(client, scriptName)?)
+        .withHeaders(headers(client)))
+}
+
+pub fn deleteWorkerScriptHttpRequest(client: Client, scriptName: String) -> Result<http.Request, Error> {
+    Ok(http.newRequest(Delete, workerScriptUrl(client, scriptName)?)
+        .withHeaders(headers(client)))
+}
+
+pub fn sendJson<T>(request: http.Request) -> Result<T, Error> {
+    let response = http.request(request)?
+    let ok = requireSuccess(response)?
+    ok.json::<T>()
+}
+
+pub fn requireSuccess(response: http.Response) -> Result<http.Response, Error> {
+    if response.isSuccess() {
+        return Ok(response)
+    }
+    Err(error.new(parseApiError(response).summary()))
+}
+
+pub fn parseApiError(response: http.Response) -> ApiError {
+    let text = response.text().unwrapOr("")
+    let mut out = ApiError { status: response.status, rawJson: text }
+    match json.parseValue(text) {
+        Ok(root) -> {
+            match firstError(root) {
+                Some(err) -> {
+                    out.code = numberOrStringField(err, "code")
+                    out.message = stringField(err, "message")
+                },
+                None -> {
+                    out.code = numberOrStringField(root, "code")
+                    out.message = stringField(root, "message")
+                },
+            }
+        },
+        Err(_) -> {
+            out.message = strings.trimSpace(text)
+        },
+    }
+    out
+}
+
+fn validateClient(client: Client) -> Result<(), Error> {
+    if strings.trimSpace(client.apiBaseUrl).isEmpty() {
+        return Err(error.new("cloudflare: API base URL is empty"))
+    }
+    if strings.trimSpace(client.apiToken).isEmpty() {
+        return Err(error.new("cloudflare: API token is empty"))
+    }
+    Ok(())
+}
+
+fn validateTurnstile(challenge: TurnstileChallenge) -> Result<(), Error> {
+    let _ = turnstile(challenge.secret, challenge.response)?
+    Ok(())
+}
+
+fn baseHeaders(client: Client, contentType: String) -> Headers {
+    let mut out: Headers = {:}
+    if !strings.trimSpace(client.apiToken).isEmpty() {
+        out.insert("Authorization", "Bearer {strings.trimSpace(client.apiToken)}")
+    }
+    if !strings.trimSpace(contentType).isEmpty() {
+        out.insert("Content-Type", strings.trimSpace(contentType))
+    }
+    if !strings.trimSpace(client.clientInfo).isEmpty() {
+        out.insert("User-Agent", strings.trimSpace(client.clientInfo))
+    }
+    for (name, value) in client.extraHeaders {
+        out.insert(name, value)
+    }
+    out
+}
+
+fn apiUrl(client: Client, path: String) -> String {
+    joinUrl(client.apiBaseUrl, path)
+}
+
+fn kvPutQuery(opts: KvPutOptions) -> Result<QueryValues, Error> {
+    if opts.expiration < 0 || opts.expirationTtl < 0 {
+        return Err(error.new("cloudflare: KV expiration values must not be negative"))
+    }
+    let mut query: QueryValues = {:}
+    if opts.expiration > 0 {
+        query.insert("expiration", [opts.expiration.toString()])
+    }
+    if opts.expirationTtl > 0 {
+        query.insert("expiration_ttl", [opts.expirationTtl.toString()])
+    }
+    Ok(query)
+}
+
+fn r2SignedHeaders(signer: R2Signer, method: String, bucket: String, key: String, payloadHash: String, contentType: String, dates: R2SigningDates) -> Result<Headers, Error> {
+    let cleanBucket = cleanBucketName(bucket)?
+    let encodedKey = encodeObjectPath(key)?
+    let host = "{signer.accountId}.r2.cloudflarestorage.com"
+    let scope = "{dates.shortDate}/auto/s3/aws4_request"
+    let canonicalUri = "/{encodePathSegment(cleanBucket)}/{encodedKey}"
+    let canonicalHeaders = r2CanonicalHeaders(host, contentType, payloadHash, dates.amzDate, signer.sessionToken)
+    let signedHeaders = r2SignedHeaderNames(contentType, signer.sessionToken)
+    let canonicalRequest = "{strings.toUpper(method)}\n{canonicalUri}\n\n{canonicalHeaders}\n{signedHeaders}\n{payloadHash}"
+    let stringToSign = "AWS4-HMAC-SHA256\n{dates.amzDate}\n{scope}\n{sha256Hex(bytes.fromString(canonicalRequest))}"
+    let signature = r2SignatureHex(signer.secretAccessKey, dates.shortDate, stringToSign)
+    let authorization = "AWS4-HMAC-SHA256 Credential={signer.accessKeyId}/{scope}, SignedHeaders={signedHeaders}, Signature={signature}"
+    let mut out: Headers = {
+        "Host": host,
+        "x-amz-content-sha256": payloadHash,
+        "x-amz-date": dates.amzDate,
+        "Authorization": authorization,
+    }
+    if !strings.trimSpace(contentType).isEmpty() {
+        out.insert("Content-Type", strings.trimSpace(contentType))
+    }
+    if !strings.trimSpace(signer.sessionToken).isEmpty() {
+        out.insert("x-amz-security-token", strings.trimSpace(signer.sessionToken))
+    }
+    Ok(out)
+}
+
+fn r2CanonicalHeaders(host: String, contentType: String, payloadHash: String, amzDate: String, sessionToken: String) -> String {
+    let mut out = ""
+    if !strings.trimSpace(contentType).isEmpty() {
+        out = "{out}content-type:{strings.trimSpace(contentType)}\n"
+    }
+    out = "{out}host:{strings.trimSpace(host)}\n"
+    out = "{out}x-amz-content-sha256:{payloadHash}\n"
+    out = "{out}x-amz-date:{strings.trimSpace(amzDate)}\n"
+    if !strings.trimSpace(sessionToken).isEmpty() {
+        out = "{out}x-amz-security-token:{strings.trimSpace(sessionToken)}\n"
+    }
+    out
+}
+
+fn r2SignedHeaderNames(contentType: String, sessionToken: String) -> String {
+    let mut names: List<String> = []
+    if !strings.trimSpace(contentType).isEmpty() {
+        names.push("content-type")
+    }
+    names.push("host")
+    names.push("x-amz-content-sha256")
+    names.push("x-amz-date")
+    if !strings.trimSpace(sessionToken).isEmpty() {
+        names.push("x-amz-security-token")
+    }
+    strings.join(names, ";")
+}
+
+fn r2SignatureHex(secret: String, shortDate: String, stringToSign: String) -> String {
+    let kDate = crypto.hmac.sha256(bytes.fromString("AWS4{secret}"), bytes.fromString(shortDate))
+    let kRegion = crypto.hmac.sha256(kDate, bytes.fromString("auto"))
+    let kService = crypto.hmac.sha256(kRegion, bytes.fromString("s3"))
+    let kSigning = crypto.hmac.sha256(kService, bytes.fromString("aws4_request"))
+    encoding.hex.encode(crypto.hmac.sha256(kSigning, bytes.fromString(stringToSign)))
+}
+
+fn sha256Hex(data: Bytes) -> String {
+    encoding.hex.encode(crypto.sha256(data))
+}
+
+fn dnsRecordBody(record: DnsRecord) -> String {
+    let mut props = [
+        prop("type", quote(record.typ.toString())),
+        prop("name", quote(strings.trimSpace(record.name))),
+        prop("content", quote(strings.trimSpace(record.content))),
+        prop("ttl", record.ttl.toString()),
+        prop("proxied", boolJson(record.proxied)),
+    ]
+    if !strings.trimSpace(record.comment).isEmpty() {
+        props.push(prop("comment", quote(strings.trimSpace(record.comment))))
+    }
+    if record.priority > 0 {
+        props.push(prop("priority", record.priority.toString()))
+    }
+    object(props)
+}
+
+fn cachePurgeBody(purge: CachePurge) -> String {
+    if purge.purgeEverything {
+        return object([prop("purge_everything", "true")])
+    }
+    let mut props: List<String> = []
+    if !purge.files.isEmpty() {
+        props.push(prop("files", quoteList(cleanStringList("cache file", purge.files))))
+    }
+    if !purge.tags.isEmpty() {
+        props.push(prop("tags", quoteList(cleanStringList("cache tag", purge.tags))))
+    }
+    if !purge.hosts.isEmpty() {
+        props.push(prop("hosts", quoteList(cleanStringList("cache host", purge.hosts))))
+    }
+    if !purge.prefixes.isEmpty() {
+        props.push(prop("prefixes", quoteList(cleanStringList("cache prefix", purge.prefixes))))
+    }
+    object(props)
+}
+
+fn validatePurge(purge: CachePurge) -> Result<(), Error> {
+    if purge.purgeEverything {
+        return Ok(())
+    }
+    if purge.files.isEmpty() && purge.tags.isEmpty() && purge.hosts.isEmpty() && purge.prefixes.isEmpty() {
+        return Err(error.new("cloudflare: cache purge target is empty"))
+    }
+    Ok(())
+}
+
+fn cleanIdentifier(kind: String, value: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(value)
+    if clean.isEmpty() {
+        return Err(error.new("cloudflare: {kind} is empty"))
+    }
+    if clean.charCount() > 128 {
+        return Err(error.new("cloudflare: {kind} is too long"))
+    }
+    if strings.containsAny(clean, "/?# \t\r\n") {
+        return Err(error.new("cloudflare: invalid {kind}: {value}"))
+    }
+    Ok(clean)
+}
+
+fn cleanIdentifierList(kind: String, items: List<String>) -> Result<List<String>, Error> {
+    let mut out: List<String> = []
+    for item in items {
+        out.push(cleanIdentifier(kind, item)?)
+    }
+    Ok(out)
+}
+
+fn cleanName(kind: String, value: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(value)
+    if clean.isEmpty() {
+        return Err(error.new("cloudflare: {kind} is empty"))
+    }
+    if strings.containsAny(clean, "\r\n") {
+        return Err(error.new("cloudflare: invalid {kind}: {value}"))
+    }
+    Ok(clean)
+}
+
+fn cleanBucketName(value: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(value)
+    if clean.charCount() < 3 || clean.charCount() > 64 {
+        return Err(error.new("cloudflare: R2 bucket name must be 3..64 characters"))
+    }
+    if strings.containsAny(clean, "/?# \t\r\n") {
+        return Err(error.new("cloudflare: invalid R2 bucket name: {value}"))
+    }
+    Ok(clean)
+}
+
+fn cleanKeyName(value: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(value)
+    if clean.isEmpty() {
+        return Err(error.new("cloudflare: KV key is empty"))
+    }
+    if clean.bytes().len() > 512 {
+        return Err(error.new("cloudflare: KV key is too long"))
+    }
+    if strings.containsAny(clean, "\r\n\t ") {
+        return Err(error.new("cloudflare: invalid KV key: {value}"))
+    }
+    Ok(clean)
+}
+
+fn encodeKeyName(value: String) -> Result<String, Error> {
+    Ok(encoding.url.encode(cleanKeyName(value)?))
+}
+
+fn cleanRelativePath(value: String) -> Result<String, Error> {
+    let clean = strings.trimPrefix(strings.trimSpace(value), "/")
+    if clean.isEmpty() {
+        return Err(error.new("cloudflare: path is empty"))
+    }
+    if strings.contains(clean, "..") || strings.contains(clean, "?") || strings.contains(clean, "#") {
+        return Err(error.new("cloudflare: unsafe path: {value}"))
+    }
+    Ok(clean)
+}
+
+fn cleanObjectPath(value: String) -> Result<String, Error> {
+    let clean = strings.trimPrefix(strings.trimSpace(value), "/")
+    if clean.isEmpty() {
+        return Err(error.new("cloudflare: object path is empty"))
+    }
+    if strings.contains(clean, "..") || strings.contains(clean, "?") || strings.contains(clean, "#") {
+        return Err(error.new("cloudflare: unsafe object path: {value}"))
+    }
+    Ok(clean)
+}
+
+fn cleanObjectList(items: List<String>) -> Result<List<String>, Error> {
+    let mut out: List<String> = []
+    for item in items {
+        out.push(cleanObjectPath(item)?)
+    }
+    Ok(out)
+}
+
+fn encodeObjectPath(path: String) -> Result<String, Error> {
+    let clean = cleanObjectPath(path)?
+    let mut parts: List<String> = []
+    for part in strings.split(clean, "/") {
+        if strings.trimSpace(part).isEmpty() {
+            return Err(error.new("cloudflare: object path contains an empty segment"))
+        }
+        parts.push(encodePathSegment(part))
+    }
+    Ok(strings.join(parts, "/"))
+}
+
+fn cleanWorkerSubdomain(value: String) -> Result<String, Error> {
+    let clean = strings.trimSuffix(strings.trimSpace(value), ".workers.dev")
+    if clean.isEmpty() {
+        return Err(error.new("cloudflare: Worker subdomain is empty"))
+    }
+    if strings.containsAny(clean, "/?# \t\r\n") {
+        return Err(error.new("cloudflare: invalid Worker subdomain: {value}"))
+    }
+    Ok(clean)
+}
+
+fn cleanWorkerScriptName(value: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(value)
+    if clean.isEmpty() {
+        return Err(error.new("cloudflare: Worker script name is empty"))
+    }
+    if strings.containsAny(clean, "/?# \t\r\n") {
+        return Err(error.new("cloudflare: invalid Worker script name: {value}"))
+    }
+    Ok(clean)
+}
+
+fn cleanStringList(kind: String, items: List<String>) -> List<String> {
+    let mut out: List<String> = []
+    for item in items {
+        let clean = strings.trimSpace(item)
+        if !clean.isEmpty() {
+            out.push(clean)
+        }
+    }
+    out
+}
+
+fn encodePathSegment(segment: String) -> String {
+    encoding.url.encode(segment)
+}
+
+fn stripTrailingSlash(value: String) -> String {
+    let mut out = strings.trimSpace(value)
+    for strings.endsWith(out, "/") {
+        out = strings.trimSuffix(out, "/")
+    }
+    out
+}
+
+fn joinUrl(base: String, path: String) -> String {
+    let cleanBase = stripTrailingSlash(base)
+    if strings.startsWith(path, "/") {
+        "{cleanBase}{path}"
+    } else {
+        "{cleanBase}/{path}"
+    }
+}
+
+fn normalizedJsonObject(text: String) -> String {
+    let raw = strings.trimSpace(text)
+    if raw.isEmpty() {
+        return "\{\}"
+    }
+    match json.parseValue(raw) {
+        Ok(value) -> match json.asObject(value) {
+            Ok(_)  -> json.stringifyValue(value),
+            Err(_) -> "\{\}",
+        },
+        Err(_) -> "\{\}",
+    }
+}
+
+fn normalizedJsonValue(text: String) -> String {
+    let raw = strings.trimSpace(text)
+    if raw.isEmpty() {
+        return "null"
+    }
+    match json.parseValue(raw) {
+        Ok(value) -> json.stringifyValue(value),
+        Err(_)    -> quote(raw),
+    }
+}
+
+fn field(obj: json.Json, key: String) -> json.Json? {
+    match json.getField(obj, key) {
+        Ok(value) -> Some(value),
+        Err(_)    -> None,
+    }
+}
+
+fn stringField(obj: json.Json, key: String) -> String {
+    match field(obj, key) {
+        Some(value) -> match json.asString(value) {
+            Ok(text) -> text,
+            Err(_)   -> "",
+        },
+        None -> "",
+    }
+}
+
+fn numberOrStringField(obj: json.Json, key: String) -> String {
+    match field(obj, key) {
+        Some(value) -> match json.asString(value) {
+            Ok(text) -> text,
+            Err(_)   -> match json.asNumber(value) {
+                Ok(number) -> number.toInt().toString(),
+                Err(_)     -> "",
+            },
+        },
+        None -> "",
+    }
+}
+
+fn boolField(obj: json.Json, key: String) -> Bool {
+    match field(obj, key) {
+        Some(value) -> match json.asBool(value) {
+            Ok(flag) -> flag,
+            Err(_)   -> false,
+        },
+        None -> false,
+    }
+}
+
+fn stringArrayField(obj: json.Json, key: String) -> List<String> {
+    match field(obj, key) {
+        Some(value) -> match json.asArray(value) {
+            Ok(items) -> {
+                let mut out: List<String> = []
+                for item in items {
+                    match json.asString(item) {
+                        Ok(text) -> out.push(text),
+                        Err(_)   -> {},
+                    }
+                }
+                out
+            },
+            Err(_) -> [],
+        },
+        None -> [],
+    }
+}
+
+fn firstError(root: json.Json) -> json.Json? {
+    match field(root, "errors") {
+        Some(value) -> match json.asArray(value) {
+            Ok(items) -> {
+                if items.isEmpty() {
+                    return None
+                }
+                Some(items[0])
+            },
+            Err(_) -> None,
+        },
+        None -> None,
+    }
+}
+
+fn object(props: List<String>) -> String {
+    let open = 123.toChar()
+    let close = 125.toChar()
+    let sep = ","
+    "{open}{strings.join(props, sep)}{close}"
+}
+
+fn array(items: List<String>) -> String {
+    let sep = ","
+    "[{strings.join(items, sep)}]"
+}
+
+fn prop(name: String, value: String) -> String {
+    "{quote(name)}:{value}"
+}
+
+fn quoteList(items: List<String>) -> String {
+    let mut out: List<String> = []
+    for item in items {
+        out.push(quote(item))
+    }
+    array(out)
+}
+
+fn quote(text: String) -> String {
+    json.stringifyValue(json.string(text))
+}
+
+fn boolJson(value: Bool) -> String {
+    if value { "true" } else { "false" }
+}

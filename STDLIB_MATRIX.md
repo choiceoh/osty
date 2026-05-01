@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 96 공개 모듈. 분류 기준:
+총 97 공개 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (90 / 96 = 94%)
+### ⭐⭐⭐⭐⭐ Production (91 / 97 = 94%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -97,6 +97,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | supabase | 1214 | pure Osty + http/json/env | Supabase PostgREST/Auth/Storage/Functions/GraphQL request builders, env-backed config, API-key/session headers, filters, Prefer/count headers, typed select pages, Content-Range metadata, signed Storage URLs, storage listing/search, object URLs, and response error helpers |
 | github | 1127 | pure Osty + http/json/crypto | GitHub REST request builders for issues, PRs, Actions, releases, release asset upload, typed error parsing, and webhook HMAC/constant-time verification |
 | webhook | 696 | pure Osty + http/crypto/json/time | Stripe/GitHub/Slack/Supabase-style HMAC verification, Discord Ed25519-modeled externally-verified path, replay-window checks, idempotency store, and retry-safe dispatch |
+| cloudflare | 1437 | pure Osty + http/json/crypto | Cloudflare edge request builders: Turnstile siteverify, KV namespace/value/bulk helpers, R2 bucket/temp-credential management plus S3 SigV4 object requests, Queues push/pull/ack/batch/purge, DNS records, cache purge, Worker invoke/script helpers |
 | template | 148 | pure Osty | escaped/raw `{{name}}` 렌더링 + HTML escape / stripTags |
 | i18n | 136 | pure Osty | Locale / MessageCatalog / fallbackTags / pluralCategory / placeholder format |
 | char | 219 | — | Unicode / ASCII methods |
@@ -123,7 +124,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (6 / 96 = 6%)
+### ⭐⭐⭐⭐ Production-adjacent (6 / 97 = 6%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
@@ -141,7 +142,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 
 | 구분 | 갭 |
 |---|---|
-| 없는 모듈 | 없음 (`db`, `smtp`, `zip`, `image`, `xlsx`, `pdf`, `schedule`, `dialog`, `watch`, `scan`, `rpa`, `barcode`, `qr`, `print`, `clipboard`, `keychain`, `secrets`, `supabase`, `github`, `observability`, `sentry`, `webhook` surface 는 존재) |
+| 없는 모듈 | 없음 (`db`, `smtp`, `zip`, `image`, `xlsx`, `pdf`, `schedule`, `dialog`, `watch`, `scan`, `rpa`, `barcode`, `qr`, `print`, `clipboard`, `keychain`, `secrets`, `supabase`, `github`, `observability`, `sentry`, `webhook`, `cloudflare` surface 는 존재) |
 | 남은 runtime/deep 기능 | `db driver/runtime`, `smtp TLS/socket execution`, `zip deflate`, `image pixel decode`, `keychain Linux Secret Service` |
 | 부분 구현 | `compress` 는 gzip 만 있음. deflate/zstd 계열 없음 |
 | 문서/코드 드리프트 | 일부 README/매트릭스 문구가 과거 G18 stub 정책을 아직 과장해서 남김 |
@@ -190,6 +191,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | Supabase 앱 백엔드 연결 | ✅ 가능 | supabase + http/json/env/secrets (env-backed clients, PostgREST filters/mutations/RPC/count metadata, Auth password-token requests, Storage object URLs/uploads/signed URLs/listing, Edge Function/GraphQL requests) |
 | GitHub 개발 자동화 | ✅ 가능 | github + http/json/crypto (issue/PR request builders, Actions dispatch/runs/jobs/artifacts, release/create/upload, webhook HMAC verification) |
 | 외부 서비스 webhook intake | ✅ 가능 | webhook + http/crypto/json/time (Stripe/GitHub/Slack/Supabase-style HMAC verify, replay-window checks, idempotency, retry-safe dispatch) |
+| Cloudflare edge 보완 | ✅ 가능 | cloudflare + http/json/crypto/secrets (Turnstile bot 방어, KV, R2 파일 저장/SigV4 object requests, Queues durable queue, DNS, cache purge, Worker 호출) |
 | 두 언어 앱 / repo 경계 | ✅ 가능 | polyglot + os + env + fs + `osty scaffold polyglot` (Osty+Go/Rust/Python/Node 등 역할 분리, 빌드/테스트/경계 계약, doctorRun/check runner) |
 | AI agent shell / chat mode | ✅ 가능 | ai + aiagents + http/json/log/thread |
 | Local KV / 설정 DB | ✅ 즉시 가능 | kv + fs + json (JSONL append-log, compact, typed getters/setters) |
@@ -229,7 +231,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 **의도된 우선순위**: Phase A 먼저, Phase B 나중. runtime support 없이 surface 만 만들면 *컴파일은 되지만 실행 못 함* 함정. backend 먼저 → wrapper 나중 순서가 정직.
 
 **현재 상태**:
-- 70 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, webhook, schedule, jsonl, kv, shortid, metrics, observability, sentry, net, fmt, json, config, table, xlsx, url, io, collections, email, db, polyglot, grid, gui, dialog, tar, sql, xml, tui, image, pdf, ocr, rpa, scan, barcode, qr, smtp, result, option, csv, encoding, zip, term, websocket, watch, clipboard, graphql, github, supabase, template, i18n, char, iter, bytes)
+- 71 모듈은 Phase A + Phase B 둘 다 충실 (strings, http, ai, aiagents, aidev, aidev.osty, aidev.prompt, aidev.corpus, aidev.verify, aidev.workflow, redact, media, security, search, markdown, report, tokenest, httpretry, webhook, schedule, jsonl, kv, shortid, metrics, observability, sentry, net, fmt, json, config, table, xlsx, url, io, collections, email, db, polyglot, grid, gui, dialog, tar, sql, xml, tui, image, pdf, ocr, rpa, scan, barcode, qr, smtp, result, option, csv, encoding, zip, term, websocket, watch, clipboard, graphql, github, supabase, cloudflare, template, i18n, char, iter, bytes)
 - 5 모듈은 Phase A 충실 + Phase B declaration-only (env, random, os, crypto, compress)
 - keychain/secrets 는 macOS/Windows Phase A+B 연결 완료, Linux Secret Service backend 대기
 - fs 는 Phase A 충실 + 확장된 tool-facing declaration surface (walk/glob/watch/atomicWrite/lockFile/hashFile/copyDir/diffFiles)
