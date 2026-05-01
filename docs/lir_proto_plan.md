@@ -548,6 +548,31 @@ and `list_last_float` (`List<Float>` → `%Option.Float`, idx=len-1,
 exercises the f64 element lane and the sub-from-len idx
 computation plus the bitcast double-to-i64 payload coercion).
 
+Design decision: a batched Phase-4 slice covers the remaining
+straightforward Option/Result-returning intrinsics in one PR:
+`ListPop` (Option<T> with `len-1 → get → discard` capture order),
+`BytesGet` (Option<Byte> with `idx >= 0 && idx < len` AND'd
+in-bounds check), `ListToString` (per-elem-kind dispatch into
+`osty_rt_list_to_string_<i64|f64|i1|char|byte|string>`),
+`MapToString` and `SetToString` (both single-call entries — the
+runtime carries `key_kind` / `elem_kind` set at allocation time so
+the per-kind formatter is picked inside C, lowering just emits the
+call), and `CheckCancelled` (`Result<(), Error>` returned as the raw
+`{ i64, i64 }` aggregate from the runtime — declares and stores at
+the raw type since the dest slot's named `%Result.Unit_Error` type
+is structurally identical and LLVM accepts the direct store).
+
+Six Phase-4 fixtures pin the shape: `list_pop_int`,
+`bytes_get`, `list_to_string_int`, `map_to_string`,
+`set_to_string`, `check_cancelled`.
+
+This closes the bulk of the Option/Result-returning intrinsic gap.
+The remaining Option-related work is the bytes-v1 fallback path for
+composite element types (List/Map/Set/Channel push/get/insert all
+need the same alloca + sizeof shape), plus the closure-env
+intrinsics (TaskGroup/Spawn/HandleJoin/Parallel/Race/CollectAll/
+Select*) that depend on the GC root-binding pass.
+
 ## Phase 0: lock the boundary
 
 Deliverables:

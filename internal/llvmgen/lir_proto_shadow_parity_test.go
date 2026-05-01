@@ -349,6 +349,13 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		// ----- List.first / List.last → Option<T> -----
 		{"lirParityManualListFirstIntFixture", []string{"%Option.Int = type", "declare i64 @osty_rt_list_len(ptr)", "declare i64 @osty_rt_list_get_i64(ptr, i64)", "icmp eq i64", "alloca %Option.Int", "call i64 @osty_rt_list_get_i64(", "insertvalue %Option.Int undef, i64 1, 0", "insertvalue %Option.Int undef, i64 0, 0", "ret %Option.Int"}},
 		{"lirParityManualListLastFloatFixture", []string{"%Option.Float = type", "declare i64 @osty_rt_list_len(ptr)", "declare double @osty_rt_list_get_f64(ptr, i64)", "sub i64", "call double @osty_rt_list_get_f64(", "bitcast double", "ret %Option.Float"}},
+		// ----- Batched: ListPop / BytesGet / ToString / CheckCancelled -----
+		{"lirParityManualListPopIntFixture", []string{"%Option.Int = type", "declare void @osty_rt_list_pop_discard(ptr)", "declare i64 @osty_rt_list_get_i64(ptr, i64)", "icmp eq i64", "sub i64", "call i64 @osty_rt_list_get_i64(", "call void @osty_rt_list_pop_discard(", "ret %Option.Int"}},
+		{"lirParityManualBytesGetFixture", []string{"%Option.Byte = type", "declare i64 @osty_rt_bytes_len(ptr)", "declare i8 @osty_rt_bytes_get(ptr, i64)", "icmp sge i64", "icmp slt i64", "and i1", "call i8 @osty_rt_bytes_get(", "zext i8", "ret %Option.Byte"}},
+		{"lirParityManualListToStringIntFixture", []string{"declare ptr @osty_rt_list_to_string_i64(ptr)", "call ptr @osty_rt_list_to_string_i64("}},
+		{"lirParityManualMapToStringFixture", []string{"declare ptr @osty_rt_map_to_string(ptr)", "call ptr @osty_rt_map_to_string("}},
+		{"lirParityManualSetToStringFixture", []string{"declare ptr @osty_rt_set_to_string(ptr)", "call ptr @osty_rt_set_to_string("}},
+		{"lirParityManualCheckCancelledFixture", []string{"declare { i64, i64 } @osty_rt_cancel_check_cancelled()", "call { i64, i64 } @osty_rt_cancel_check_cancelled()"}},
 	}
 
 	for _, tt := range want {

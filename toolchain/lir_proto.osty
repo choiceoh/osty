@@ -2114,7 +2114,12 @@ fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
         MirIntrinsicListFirst -> lirLowerMirListFirstOrLast(l, instr, false),
         MirIntrinsicListLast -> lirLowerMirListFirstOrLast(l, instr, true),
         MirIntrinsicListReversed -> lirLowerMirStringRuntimeCall(l, instr, mirRtListReversedSymbol(), lirPtrType(), [lirPtrType()], "list.reversed"),
-        MirIntrinsicListPop -> lirLowerMirStringRuntimeCall(l, instr, mirRtListPopDiscardSymbol(), lirVoidType(), [lirPtrType()], "list.pop"),
+        MirIntrinsicListPop -> lirLowerMirListPop(l, instr),
+        MirIntrinsicListToString -> lirLowerMirListToString(l, instr),
+        MirIntrinsicBytesGet -> lirLowerMirBytesGet(l, instr),
+        MirIntrinsicMapToString -> lirLowerMirStringRuntimeCall(l, instr, "osty_rt_map_to_string", lirPtrType(), [lirPtrType()], "map.toString"),
+        MirIntrinsicSetToString -> lirLowerMirStringRuntimeCall(l, instr, "osty_rt_set_to_string", lirPtrType(), [lirPtrType()], "set.toString"),
+        MirIntrinsicCheckCancelled -> lirLowerMirCheckCancelled(l, instr),
         MirIntrinsicListSorted -> lirLowerMirListSorted(l, instr),
         MirIntrinsicListInsert -> lirLowerMirListInsert(l, instr),
         MirIntrinsicMapNew -> lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeNewSymbol(), lirPtrType(), [], "map.new"),
@@ -3006,6 +3011,235 @@ fn lirLowerMirListFirstOrLast(l: LirMirFunctionLowerer, instr: MirInstr, isLast:
 }
 // isEmpty=true → none arm; isEmpty=false → some arm. Match
 // production's `mirBrCondLine(isEmpty, noneLabel, someLabel)`.
+// `List.pop() -> Option<T>` lowering. Production captures the
+// last element via `osty_rt_list_get_<lane>(list, len-1)` BEFORE
+// calling the discard helper `osty_rt_list_pop_discard(list)` so
+// the value is read out of the slot before the runtime drops the
+// tail. Empty list returns Option.None without touching the discard
+// helper. Statement-position pop (no dest) falls back to a bare
+// discard call.
+fn lirLowerMirListPop(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 1 {
+        lirLowerError(l, LirDiagInvalidInput, "list.pop expects (list)", "list.pop")
+        return
+    }
+    if !(instr.hasDest) {
+        let recv = lirLowerMirOperand(l, instr.args[0], instr.args[0].typ, lirPtrType())
+        if recv.value == "" {
+            return
+        }
+        let symbol = mirRtListPopDiscardSymbol()
+        lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirVoidType(), [lirPtrType()], false))
+        l.instrs.push(lirCall("", lirVoidType(), "@" + symbol, [lirOperand(lirPtrType(), recv.value)]))
+        return
+    }
+    let recv = lirLowerMirContainerReceiver(l, instr, "list.pop", "list.elem")
+    if !(recv.ok) {
+        return
+    }
+    if !(llvmListUsesTypedRuntime(recv.elemLir.llvm)) {
+        lirLowerError(l, LirDiagUnsupported, "list.pop composite element type `" + recv.elemTypeName + "` needs the bytes-v1 runtime fallback (deferred)", "list.pop")
+        return
+    }
+    let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+    if loc.id < 0 {
+        lirLowerError(l, LirDiagInvalidInput, "list.pop destination local out of range", "list.pop")
+        return
+    }
+    if !(lirIsOptionTypeName(loc.typ)) {
+        lirLowerError(l, LirDiagUnsupported, "list.pop destination must be Option<T>, got `" + loc.typ + "`", "list.pop")
+        return
+    }
+    let optType = lirLowerMirType(l, loc.typ)
+    if lirTypeIsZero(optType) {
+        lirLowerError(l, LirDiagUnsupported, "list.pop destination type `" + loc.typ + "` is not implemented", "list.pop")
+        return
+    }
+    let lenSym = llvmListRuntimeLenSymbol()
+    let getSym = llvmListRuntimeGetSymbolFor(recv.elemLir.llvm, recv.isString)
+    let discardSym = mirRtListPopDiscardSymbol()
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDeclI64FromPtr(lenSym))
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(getSym, recv.elemLir, [lirPtrType(), lirIntType(64)], false))
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(discardSym, lirVoidType(), [lirPtrType()], false))
+    let lenReg = lirFresh(l)
+    l.instrs.push(lirCall(lenReg, lirIntType(64), "@" + lenSym, [lirOperand(lirPtrType(), recv.receiverReg)]))
+    let isEmpty = lirFresh(l)
+    l.instrs.push(lirBinary(isEmpty, "icmp eq", lirIntType(64), lenReg, "0"))
+    let mergeSlot = lirFresh(l)
+    l.instrs.push(lirAlloca(mergeSlot, optType, 0))
+    let someLabel = lirFreshAuxLabel(l, "list.pop.some")
+    let noneLabel = lirFreshAuxLabel(l, "list.pop.none")
+    let endLabel = lirFreshAuxLabel(l, "list.pop.end")
+    lirCutBlockCondBr(l, isEmpty, noneLabel, someLabel, noneLabel)
+    let noneValue = lirEmitOptionNone(l, optType)
+    l.instrs.push(lirStore(lirOperand(optType, noneValue), mergeSlot, 0))
+    lirCutBlockBr(l, endLabel)
+    l.currentBlockLabel = someLabel
+    let lastIdx = lirFresh(l)
+    l.instrs.push(lirBinary(lastIdx, "sub", lirIntType(64), lenReg, "1"))
+    let elemReg = lirFresh(l)
+    l.instrs.push(lirCall(elemReg, recv.elemLir, "@" + getSym, [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(lirIntType(64), lastIdx)]))
+    l.instrs.push(lirCall("", lirVoidType(), "@" + discardSym, [lirOperand(lirPtrType(), recv.receiverReg)]))
+    let payloadI64 = lirParseResultPayloadAsI64(l, elemReg, recv.elemLir)
+    let someValue = lirEmitOptionSome(l, optType, payloadI64)
+    l.instrs.push(lirStore(lirOperand(optType, someValue), mergeSlot, 0))
+    lirCutBlockBr(l, endLabel)
+    let merged = lirFresh(l)
+    l.instrs.push(lirLoad(merged, optType, mergeSlot, 0))
+    lirStoreMirResult(l, instr.dest, lirOperand(optType, merged), loc.typ, "list.pop result")
+}
+// Discard form: just drop the last element. Production aborts on
+// empty (the runtime's contract); we keep the same behavior by
+// routing through the same symbol.
+// `Bytes.get(idx) -> Option<Byte>` lowering. Tests `idx >= 0 && idx
+// < len(bytes)` before calling `osty_rt_bytes_get(ptr, i64) -> i8`.
+// In-bounds → Some(byte zext to i64); out-of-bounds → None. Mirrors
+// the production shape (mir_generator.go::IntrinsicBytesGet).
+fn lirLowerMirBytesGet(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 2 {
+        lirLowerError(l, LirDiagInvalidInput, "bytes.get expects (bytes, idx)", "bytes.get")
+        return
+    }
+    if !(instr.hasDest) {
+        lirLowerError(l, LirDiagInvalidInput, "bytes.get requires a destination (Option<Byte>)", "bytes.get")
+        return
+    }
+    let bytesReg = lirLowerCoercedOperand(l, instr.args[0], "Bytes", lirPtrType(), "bytes.get bytes")
+    if bytesReg.value == "" {
+        return
+    }
+    let idxReg = lirLowerCoercedOperand(l, instr.args[1], "Int", lirIntType(64), "bytes.get idx")
+    if idxReg.value == "" {
+        return
+    }
+    let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+    if loc.id < 0 {
+        lirLowerError(l, LirDiagInvalidInput, "bytes.get destination local out of range", "bytes.get")
+        return
+    }
+    if !(lirIsOptionTypeName(loc.typ)) {
+        lirLowerError(l, LirDiagUnsupported, "bytes.get destination must be Option<Byte>, got `" + loc.typ + "`", "bytes.get")
+        return
+    }
+    let optType = lirLowerMirType(l, loc.typ)
+    if lirTypeIsZero(optType) {
+        lirLowerError(l, LirDiagUnsupported, "bytes.get destination type `" + loc.typ + "` is not implemented", "bytes.get")
+        return
+    }
+    let lenSym = mirRtBytesLenSymbolName()
+    let getSym = mirRtBytesGetSymbol()
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDeclI64FromPtr(lenSym))
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(getSym, lirIntType(8), [lirPtrType(), lirIntType(64)], false))
+    let lenReg = lirFresh(l)
+    l.instrs.push(lirCall(lenReg, lirIntType(64), "@" + lenSym, [lirOperand(lirPtrType(), bytesReg.value)]))
+    let nonNeg = lirFresh(l)
+    l.instrs.push(lirBinary(nonNeg, "icmp sge", lirIntType(64), idxReg.value, "0"))
+    let beforeEnd = lirFresh(l)
+    l.instrs.push(lirBinary(beforeEnd, "icmp slt", lirIntType(64), idxReg.value, lenReg))
+    let inRange = lirFresh(l)
+    l.instrs.push(lirBinary(inRange, "and", lirIntType(1), nonNeg, beforeEnd))
+    let mergeSlot = lirFresh(l)
+    l.instrs.push(lirAlloca(mergeSlot, optType, 0))
+    let someLabel = lirFreshAuxLabel(l, "bytes.get.some")
+    let noneLabel = lirFreshAuxLabel(l, "bytes.get.none")
+    let endLabel = lirFreshAuxLabel(l, "bytes.get.end")
+    lirCutBlockCondBr(l, inRange, someLabel, noneLabel, someLabel)
+    let byteReg = lirFresh(l)
+    l.instrs.push(lirCall(byteReg, lirIntType(8), "@" + getSym, [lirOperand(lirPtrType(), bytesReg.value), lirOperand(lirIntType(64), idxReg.value)]))
+    let payloadI64 = lirParseResultPayloadAsI64(l, byteReg, lirIntType(8))
+    let someValue = lirEmitOptionSome(l, optType, payloadI64)
+    l.instrs.push(lirStore(lirOperand(optType, someValue), mergeSlot, 0))
+    lirCutBlockBr(l, endLabel)
+    l.currentBlockLabel = noneLabel
+    let noneValue = lirEmitOptionNone(l, optType)
+    l.instrs.push(lirStore(lirOperand(optType, noneValue), mergeSlot, 0))
+    lirCutBlockBr(l, endLabel)
+    let merged = lirFresh(l)
+    l.instrs.push(lirLoad(merged, optType, mergeSlot, 0))
+    lirStoreMirResult(l, instr.dest, lirOperand(optType, merged), loc.typ, "bytes.get result")
+}
+// `List.toString() -> String` lowering. Per-element-kind dispatch:
+// `osty_rt_list_to_string_<i64|f64|i1|char|byte|string>`. The
+// runtime ships a separate formatter per ABI lane; lowering picks
+// the right symbol off the receiver's element LLVM type. Composite
+// element types (struct / enum / nested collection) surface as
+// unsupported until a callback-driven runtime entry lands.
+fn lirLowerMirListToString(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 1 {
+        lirLowerError(l, LirDiagInvalidInput, "list.toString expects (list)", "list.toString")
+        return
+    }
+    let recv = lirLowerMirContainerReceiver(l, instr, "list.toString", "list.elem")
+    if !(recv.ok) {
+        return
+    }
+    let symbol = lirListToStringSymbolForLane(recv.elemLir.llvm, recv.isString)
+    if symbol == "" {
+        lirLowerError(l, LirDiagUnsupported, "list.toString has no runtime helper for element type `" + recv.elemTypeName + "`", "list.toString")
+        return
+    }
+    lirEmitContainerCall(l, instr, symbol, lirPtrType(), [lirPtrType()], [lirOperand(lirPtrType(), recv.receiverReg)], "String", "list.toString")
+}
+fn lirListToStringSymbolForLane(elemLLVM: String, isString: Bool) -> String {
+    if isString {
+        return "osty_rt_list_to_string_string"
+    }
+    if elemLLVM == "i64" {
+        return "osty_rt_list_to_string_i64"
+    }
+    if elemLLVM == "double" {
+        return "osty_rt_list_to_string_f64"
+    }
+    if elemLLVM == "i1" {
+        return "osty_rt_list_to_string_i1"
+    }
+    if elemLLVM == "i32" {
+        return "osty_rt_list_to_string_char"
+    }
+    if elemLLVM == "i8" {
+        return "osty_rt_list_to_string_byte"
+    }
+    ""
+}
+// `checkCancelled() -> Result<(), Error>` lowering. Runtime helper
+// returns the raw `{ i64, i64 }` aggregate (production:
+// mir_generator.go::IntrinsicCheckCancelled). LIR Proto declares
+// and calls with the same raw shape; the destination's named
+// `%Result.Unit_Error` type is structurally identical so a direct
+// store works without any bitcast at the LLVM level.
+fn lirLowerMirCheckCancelled(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 0 {
+        lirLowerError(l, LirDiagInvalidInput, "checkCancelled expects no arguments", "cancel.check")
+        return
+    }
+    let symbol = mirRtCancelCheckCancelledSymbol()
+    let rawType = lirRawType("\{ i64, i64 \}")
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, rawType, [], false))
+    if !(instr.hasDest) {
+        l.instrs.push(lirCall("", rawType, "@" + symbol, []))
+        return
+    }
+    let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+    if loc.id < 0 {
+        lirLowerError(l, LirDiagInvalidInput, "checkCancelled destination local out of range", "cancel.check")
+        return
+    }
+    if !(lirIsResultTypeName(loc.typ)) {
+        lirLowerError(l, LirDiagUnsupported, "checkCancelled destination must be Result<...>, got `" + loc.typ + "`", "cancel.check")
+        return
+    }
+    lirLowerMirType(l, loc.typ)
+    let dest = lirFresh(l)
+    l.instrs.push(lirCall(dest, rawType, "@" + symbol, []))
+    let slot = lirMirLocalSlot(l, loc.id)
+    if slot.slot == "" {
+        lirLowerError(l, LirDiagLoweringBug, "cancel.check destination has no LIR slot", "cancel.check")
+        return
+    }
+    l.instrs.push(lirStore(lirOperand(rawType, dest), slot.slot, 0))
+}
+// Force the named aggregate typedef to be registered so the dest
+// slot's element type is a known module-level definition.
 // ----- Set intrinsic lowerings (typed elem lane) -----
 fn lirLowerMirSetInsert(l: LirMirFunctionLowerer, instr: MirInstr) {
     if instr.args.len() != 2 {
