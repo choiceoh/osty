@@ -1818,6 +1818,24 @@ func (g *mirGen) emitStdRegexCapturesMethod(c *mir.CallInstr, fnRef *mir.FnRef) 
 		nullable := g.fresh()
 		g.fnBuf.WriteString(mirCallValueLine(nullable, "ptr", ostyRtRegexCapturesGetSymbol, argList))
 		return true, g.storeOptionPtrFromNullable(c, nullable)
+	case "named":
+		if len(c.Args) != 2 {
+			return true, unsupported("mir-mvp", "Captures.named requires receiver and name")
+		}
+		recv, err := g.evalTypedArg(c.Args[0], c.Args[0].Type())
+		if err != nil {
+			return true, err
+		}
+		name, err := g.evalTypedArg(c.Args[1], c.Args[1].Type())
+		if err != nil {
+			return true, err
+		}
+		g.declareRuntime(ostyRtRegexCapturesNamedSymbol, mirRuntimeDeclareLine("ptr", ostyRtRegexCapturesNamedSymbol, "ptr, ptr"))
+		args := []mirRuntimeArg{recv, name}
+		argList := mirRuntimeArgList(args)
+		nullable := g.fresh()
+		g.fnBuf.WriteString(mirCallValueLine(nullable, "ptr", ostyRtRegexCapturesNamedSymbol, argList))
+		return true, g.storeOptionPtrFromNullable(c, nullable)
 	}
 	return false, nil
 }

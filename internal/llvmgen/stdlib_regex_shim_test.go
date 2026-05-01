@@ -190,3 +190,43 @@ fn main() {
 		}
 	}
 }
+
+func TestStdRegexCapturesNamedRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.regex
+
+fn main() {
+    match regex.compile(r"(?P<area>\d+)") {
+        Ok(re) -> {
+            match re.captures("42") {
+                Some(c) -> {
+                    match c.named("area") {
+                        Some(s) -> println(s),
+                        None    -> println("none"),
+                    }
+                },
+                None -> println("nm"),
+            }
+        },
+        Err(_) -> println("compile failed"),
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_regex_captures_named.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_regex_captures_named(ptr, ptr)",
+		"call ptr @osty_rt_regex_captures_named",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}

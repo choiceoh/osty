@@ -14715,17 +14715,44 @@ typedef struct osty_regex_compiled {
     int32_t class_count;
     int32_t ngroups;       /* including implicit group 0 (whole match);
                             * Phase 2 captures = 2 * ngroups slots */
+    int32_t name_count;    /* Phase 5: count of (?P<name>) bindings */
+    int32_t name_data_len; /* total bytes of concatenated names */
+    /* Inline tail (Phase 5 layout):
+     *   prog[prog_len], classes[class_count],
+     *   osty_re_name_entry name_table[name_count],
+     *   char name_data[name_data_len]
+     * `name_table` and `name_data` only present when name_count > 0;
+     * the layout ends right after classes for unnamed regexes. */
 } osty_regex_compiled;
+
+/* Phase 5 — named-capture binding stored inline at the end of a
+ * compiled regex / Captures blob. group_idx is the index into the
+ * 2 * ngroups slot array (so the captured span is slots[2 * idx ..
+ * 2 * idx + 1]). name_offset / name_len point into the trailing
+ * name_data byte buffer. */
+typedef struct osty_re_name_entry {
+    int32_t group_idx;
+    int32_t name_offset;
+    int32_t name_len;
+    int32_t _pad;          /* keep 16-byte alignment for the array */
+} osty_re_name_entry;
 
 /* Captures handle returned from regex.captures(). Self-contained GC
  * blob — original input text is copied inline so no managed pointers
  * leak into the payload (kind GENERIC, NULL trace/destroy). Layout:
- *   [osty_regex_captures header]
+ *   [osty_regex_captures header (4 i32s)]
  *   [char text[text_len]]
- *   [int32_t slots[2 * ngroups]]   (-1 for unset)  */
+ *   [int32_t slots[2 * ngroups]]   (-1 for unset)
+ *   [osty_re_name_entry name_table[name_count]]   (Phase 5)
+ *   [char name_data[name_data_len]]               (Phase 5)
+ * Names are copied from the source Regex at construction time so
+ * Captures can resolve `Captures.named(name)` without holding a
+ * managed reference back to the Regex. */
 typedef struct osty_regex_captures {
     int32_t ngroups;
     int32_t text_len;
+    int32_t name_count;
+    int32_t name_data_len;
 } osty_regex_captures;
 
 static inline const char *osty_re_captures_text(const osty_regex_captures *c) {
@@ -14734,6 +14761,27 @@ static inline const char *osty_re_captures_text(const osty_regex_captures *c) {
 
 static inline int32_t *osty_re_captures_slots(const osty_regex_captures *c) {
     return (int32_t *)((const char *)(c + 1) + c->text_len);
+}
+
+static inline osty_re_name_entry *osty_re_captures_name_table(const osty_regex_captures *c) {
+    return (osty_re_name_entry *)((const char *)osty_re_captures_slots(c)
+        + (size_t)c->ngroups * 2 * sizeof(int32_t));
+}
+
+static inline const char *osty_re_captures_name_data(const osty_regex_captures *c) {
+    return (const char *)osty_re_captures_name_table(c)
+        + (size_t)c->name_count * sizeof(osty_re_name_entry);
+}
+
+static inline osty_re_name_entry *osty_re_compiled_name_table(const osty_regex_compiled *re) {
+    return (osty_re_name_entry *)((const char *)(re + 1)
+        + (size_t)re->prog_len * sizeof(osty_re_inst)
+        + (size_t)re->class_count * sizeof(osty_re_cclass));
+}
+
+static inline const char *osty_re_compiled_name_data(const osty_regex_compiled *re) {
+    return (const char *)osty_re_compiled_name_table(re)
+        + (size_t)re->name_count * sizeof(osty_re_name_entry);
 }
 
 /* Parser scratch state. The growing instruction / class buffers live
@@ -14750,6 +14798,15 @@ typedef struct {
     int32_t class_count;
     int32_t class_cap;
     int32_t ngroups;       /* incremented per '(...)' (excludes '(?:...)') */
+    /* Phase 5 — named captures collected during parse. The names
+     * heap-buffer grows like `prog`/`classes` and is finalized into
+     * the compiled regex blob after parsing. */
+    osty_re_name_entry *names;
+    int32_t name_count;
+    int32_t name_cap;
+    char *name_data;
+    int32_t name_data_len;
+    int32_t name_data_cap;
     int error_set;
     char errmsg[160];
 } osty_re_parser;
@@ -14831,6 +14888,60 @@ static int osty_re_emit(osty_re_parser *ps, osty_re_op_t op, int c, int x, int y
     ins->x = (int32_t)x;
     ins->y = (int32_t)y;
     return idx;
+}
+
+/* Phase 5 — record a named-capture binding. `name` lives in the
+ * pattern source buffer (not NUL-terminated); we copy `name_len`
+ * bytes into the parser's growing name_data arena and append an
+ * entry to the names table. Returns 0 on success, -1 on error. */
+static int osty_re_record_name(osty_re_parser *ps, int group_idx, const char *name, int32_t name_len) {
+    if (ps->error_set) return -1;
+    if (name_len <= 0 || name_len > 64) {
+        osty_re_parser_set_error(ps, "regex: capture name must be 1..64 bytes");
+        return -1;
+    }
+    /* Reject duplicate names — RE2 does too. Linear scan is fine for
+     * the small N typical in real patterns. */
+    for (int32_t i = 0; i < ps->name_count; i++) {
+        const osty_re_name_entry *e = &ps->names[i];
+        if (e->name_len != name_len) continue;
+        if (memcmp(ps->name_data + e->name_offset, name, (size_t)name_len) == 0) {
+            osty_re_parser_set_error(ps, "regex: duplicate capture name");
+            return -1;
+        }
+    }
+    if (ps->name_count >= ps->name_cap) {
+        int32_t new_cap = ps->name_cap == 0 ? 4 : ps->name_cap * 2;
+        osty_re_name_entry *grown = (osty_re_name_entry *)realloc(ps->names,
+            sizeof(osty_re_name_entry) * (size_t)new_cap);
+        if (grown == NULL) {
+            osty_re_parser_set_error(ps, "regex: out of memory (names)");
+            return -1;
+        }
+        ps->names = grown;
+        ps->name_cap = new_cap;
+    }
+    int32_t need = ps->name_data_len + name_len;
+    if (need > ps->name_data_cap) {
+        int32_t new_cap = ps->name_data_cap == 0 ? 32 : ps->name_data_cap;
+        while (new_cap < need) new_cap *= 2;
+        char *grown = (char *)realloc(ps->name_data, (size_t)new_cap);
+        if (grown == NULL) {
+            osty_re_parser_set_error(ps, "regex: out of memory (name data)");
+            return -1;
+        }
+        ps->name_data = grown;
+        ps->name_data_cap = new_cap;
+    }
+    int32_t offset = ps->name_data_len;
+    memcpy(ps->name_data + offset, name, (size_t)name_len);
+    ps->name_data_len += name_len;
+    osty_re_name_entry *e = &ps->names[ps->name_count++];
+    e->group_idx = (int32_t)group_idx;
+    e->name_offset = offset;
+    e->name_len = name_len;
+    e->_pad = 0;
+    return 0;
 }
 
 static int osty_re_class_alloc(osty_re_parser *ps) {
@@ -15067,22 +15178,50 @@ static int osty_re_parse_atom(osty_re_parser *ps) {
     if (ch == '(') {
         ps->p++;
         int capturing = 1;
-        /* '(?:...)' is the RE2 non-capturing form. Other '(?...' forms
-         * (named captures (?P<name>...), flags (?i)) are deferred to
-         * later phases — reject explicitly so the parser doesn't
-         * silently treat them as literal '?'. */
+        const char *name_start = NULL;
+        int32_t name_len = 0;
+        /* RE2-flavored group prefixes:
+         *   '(?:...)'      — non-capturing
+         *   '(?P<name>...)' — named capture (Phase 5)
+         * Other '(?...' forms (flags `(?i)`, lookarounds `(?=...)`)
+         * are out of RE2 scope or deferred; reject explicitly. */
         if (ps->p < ps->end && *ps->p == '?') {
             if (ps->p + 1 < ps->end && ps->p[1] == ':') {
                 capturing = 0;
                 ps->p += 2;
+            } else if (ps->p + 2 < ps->end && ps->p[1] == 'P' && ps->p[2] == '<') {
+                ps->p += 3;
+                name_start = ps->p;
+                while (ps->p < ps->end && *ps->p != '>') {
+                    unsigned char nc = (unsigned char)*ps->p;
+                    if (!((nc >= 'a' && nc <= 'z') || (nc >= 'A' && nc <= 'Z') ||
+                          (nc >= '0' && nc <= '9') || nc == '_')) {
+                        osty_re_parser_set_error(ps, "regex: capture name must be [A-Za-z0-9_]+");
+                        return -1;
+                    }
+                    ps->p++;
+                }
+                if (ps->p >= ps->end || *ps->p != '>') {
+                    osty_re_parser_set_error(ps, "regex: missing '>' in (?P<name>...)");
+                    return -1;
+                }
+                name_len = (int32_t)(ps->p - name_start);
+                if (name_len == 0) {
+                    osty_re_parser_set_error(ps, "regex: empty capture name");
+                    return -1;
+                }
+                ps->p++;  /* consume '>' */
             } else {
-                osty_re_parser_set_error(ps, "regex: only '(?:...)' is supported in Phase 2");
+                osty_re_parser_set_error(ps, "regex: only '(?:...)' and '(?P<name>...)' are supported");
                 return -1;
             }
         }
         int group_idx = -1;
         if (capturing) {
             group_idx = ps->ngroups++;
+            if (name_start != NULL) {
+                if (osty_re_record_name(ps, group_idx, name_start, name_len) != 0) return -1;
+            }
             if (osty_re_emit(ps, OSTY_RE_OP_SAVE, 0, 2 * group_idx, 0) < 0) return -1;
         }
         if (osty_re_parse_alt(ps) < 0) return -1;
@@ -15654,18 +15793,24 @@ void *osty_rt_regex_compile(const char *pattern) {
         osty_rt_regex_set_last_error(ps.errmsg[0] ? ps.errmsg : "regex: emit SAVE 0 failed");
         free(ps.prog);
         free(ps.classes);
+        free(ps.names);
+        free(ps.name_data);
         return NULL;
     }
     if (osty_re_parse_alt(&ps) != 0 || ps.error_set) {
         osty_rt_regex_set_last_error(ps.errmsg[0] ? ps.errmsg : "regex: parse error");
         free(ps.prog);
         free(ps.classes);
+        free(ps.names);
+        free(ps.name_data);
         return NULL;
     }
     if (ps.p != ps.end) {
         osty_rt_regex_set_last_error("regex: trailing characters after pattern");
         free(ps.prog);
         free(ps.classes);
+        free(ps.names);
+        free(ps.name_data);
         return NULL;
     }
     /* Close implicit whole-match group, then append final MATCH. */
@@ -15673,29 +15818,45 @@ void *osty_rt_regex_compile(const char *pattern) {
         osty_rt_regex_set_last_error(ps.errmsg[0] ? ps.errmsg : "regex: emit SAVE 1 failed");
         free(ps.prog);
         free(ps.classes);
+        free(ps.names);
+        free(ps.name_data);
         return NULL;
     }
     if (osty_re_emit(&ps, OSTY_RE_OP_MATCH, 0, 0, 0) < 0 || ps.error_set) {
         osty_rt_regex_set_last_error(ps.errmsg[0] ? ps.errmsg : "regex: emit MATCH failed");
         free(ps.prog);
         free(ps.classes);
+        free(ps.names);
+        free(ps.name_data);
         return NULL;
     }
-    /* Allocate one contiguous GC blob: header + prog + classes. */
+    /* Allocate one contiguous GC blob: header + prog + classes + name table + name data. */
     size_t hdr = sizeof(osty_regex_compiled);
     size_t prog_bytes = sizeof(osty_re_inst) * (size_t)ps.prog_len;
     size_t class_bytes = sizeof(osty_re_cclass) * (size_t)ps.class_count;
-    size_t total = hdr + prog_bytes + class_bytes;
+    size_t name_table_bytes = sizeof(osty_re_name_entry) * (size_t)ps.name_count;
+    size_t name_data_bytes = (size_t)ps.name_data_len;
+    size_t total = hdr + prog_bytes + class_bytes + name_table_bytes + name_data_bytes;
     osty_regex_compiled *re = (osty_regex_compiled *)osty_gc_allocate_managed(total, OSTY_GC_KIND_GENERIC, "runtime.regex.compile", NULL, NULL);
     re->prog = (osty_re_inst *)((char *)re + hdr);
     re->prog_len = ps.prog_len;
     re->classes = (osty_re_cclass *)((char *)re + hdr + prog_bytes);
     re->class_count = ps.class_count;
     re->ngroups = ps.ngroups;
+    re->name_count = ps.name_count;
+    re->name_data_len = ps.name_data_len;
     if (ps.prog_len > 0) memcpy(re->prog, ps.prog, prog_bytes);
     if (ps.class_count > 0) memcpy(re->classes, ps.classes, class_bytes);
+    if (ps.name_count > 0) {
+        memcpy(osty_re_compiled_name_table(re), ps.names, name_table_bytes);
+    }
+    if (ps.name_data_len > 0) {
+        memcpy((char *)osty_re_compiled_name_data(re), ps.name_data, name_data_bytes);
+    }
     free(ps.prog);
     free(ps.classes);
+    free(ps.names);
+    free(ps.name_data);
     osty_rt_regex_set_last_error("");
     return re;
 }
@@ -15719,25 +15880,38 @@ bool osty_rt_regex_matches(void *raw_re, const char *text) {
 }
 
 /* Build a self-contained Captures GC blob from a successful match.
- * Layout: [header][full input bytes][2 * ngroups int32 slots]. The
- * input is copied inline so the Captures has no external GC refs;
- * Captures.get returns slices into the inlined copy. The whole-input
- * copy is wasteful but makes capturesAll trivial — every Captures
- * stays valid even if the caller mutates the input afterwards.  */
-static void *osty_re_build_captures(int ngroups, const char *text, int text_len, const int32_t *slots) {
+ * Layout: [header][text bytes][int32 slots][name_table][name_data].
+ * The input text and the name table are copied inline so the
+ * Captures has no external GC refs; Captures.get / Captures.named
+ * resolve everything from the blob alone (no managed reference back
+ * to the source Regex needed). The whole-input copy is wasteful but
+ * makes capturesAll trivial — every Captures stays valid even if
+ * the caller mutates the input afterwards. */
+static void *osty_re_build_captures(const osty_regex_compiled *re, const char *text, int text_len, const int32_t *slots) {
+    int ngroups = re->ngroups;
     int slot_count = 2 * ngroups;
     size_t hdr = sizeof(osty_regex_captures);
     size_t text_bytes = (size_t)text_len;
     size_t slot_bytes = sizeof(int32_t) * (size_t)slot_count;
-    size_t total = hdr + text_bytes + slot_bytes;
+    size_t name_table_bytes = sizeof(osty_re_name_entry) * (size_t)re->name_count;
+    size_t name_data_bytes = (size_t)re->name_data_len;
+    size_t total = hdr + text_bytes + slot_bytes + name_table_bytes + name_data_bytes;
     osty_regex_captures *caps = (osty_regex_captures *)osty_gc_allocate_managed(total, OSTY_GC_KIND_GENERIC, "runtime.regex.captures", NULL, NULL);
     caps->ngroups = ngroups;
     caps->text_len = text_len;
+    caps->name_count = re->name_count;
+    caps->name_data_len = re->name_data_len;
     if (text_bytes > 0) {
         memcpy((char *)(caps + 1), text, text_bytes);
     }
     int32_t *out_slots = osty_re_captures_slots(caps);
     memcpy(out_slots, slots, slot_bytes);
+    if (name_table_bytes > 0) {
+        memcpy(osty_re_captures_name_table(caps), osty_re_compiled_name_table(re), name_table_bytes);
+    }
+    if (name_data_bytes > 0) {
+        memcpy((char *)osty_re_captures_name_data(caps), osty_re_compiled_name_data(re), name_data_bytes);
+    }
     return caps;
 }
 
@@ -15986,7 +16160,7 @@ void *osty_rt_regex_captures(void *raw_re, const char *text) {
     if (!osty_re_match_from(re, src, len, 0, slots)) {
         return NULL;
     }
-    return osty_re_build_captures(re->ngroups, src, len, slots);
+    return osty_re_build_captures(re, src, len, slots);
 }
 
 /* regex.capturesAll(text) -> List<Captures>. Walks the input collecting
@@ -16022,7 +16196,7 @@ void *osty_rt_regex_captures_all(void *raw_re, const char *text) {
              * avoid spinning. */
             break;
         }
-        void *caps = osty_re_build_captures(re->ngroups, src, len, slots);
+        void *caps = osty_re_build_captures(re, src, len, slots);
         osty_rt_list_push_ptr(list, caps);
         if (match_end > match_start) {
             start = match_end;
@@ -16032,6 +16206,47 @@ void *osty_rt_regex_captures_all(void *raw_re, const char *text) {
         }
     }
     return list;
+}
+
+/* Captures.named(name) -> String?  Linear search through the inline
+ * name table. Returns NULL when the name is unknown or its group
+ * didn't participate in the match. */
+void *osty_rt_regex_captures_named(void *raw_caps, const char *name) {
+    if (raw_caps == NULL) {
+        osty_rt_abort("runtime.regex.captures_named: nil Captures");
+    }
+    if (name == NULL) {
+        return NULL;
+    }
+    osty_regex_captures *caps = (osty_regex_captures *)raw_caps;
+    char inline_buf[8];
+    const char *needle = name;
+    osty_rt_string_decode_to_buf_if_inline(&needle, inline_buf);
+    size_t needle_len = strlen(needle);
+    if (caps->name_count <= 0) {
+        return NULL;
+    }
+    osty_re_name_entry *table = osty_re_captures_name_table(caps);
+    const char *data = osty_re_captures_name_data(caps);
+    int32_t group_idx = -1;
+    for (int32_t i = 0; i < caps->name_count; i++) {
+        if ((size_t)table[i].name_len != needle_len) continue;
+        if (memcmp(data + table[i].name_offset, needle, needle_len) == 0) {
+            group_idx = table[i].group_idx;
+            break;
+        }
+    }
+    if (group_idx < 0 || group_idx >= caps->ngroups) {
+        return NULL;
+    }
+    int32_t *slots = osty_re_captures_slots(caps);
+    int32_t start = slots[2 * group_idx];
+    int32_t end = slots[2 * group_idx + 1];
+    if (start < 0 || end < 0 || end < start || end > caps->text_len) {
+        return NULL;
+    }
+    const char *text = osty_re_captures_text(caps);
+    return osty_rt_string_dup_site(text + start, (size_t)(end - start), "runtime.regex.captures_named");
 }
 
 /* Captures.get(i) -> String?  Returns NULL when i is out of range or

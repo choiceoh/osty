@@ -1,0 +1,84 @@
+use std.regex
+
+fn main() {
+    // Phone with named groups: area code + local.
+    match regex.compile(r"(?P<area>\d{3})-(?P<local>\d{4})") {
+        Ok(re) -> {
+            match re.captures("phone: 555-1234") {
+                Some(c) -> {
+                    match c.named("area") {
+                        Some(s) -> println("area={s}"),
+                        None    -> println("area=<unset>"),
+                    }
+                    match c.named("local") {
+                        Some(s) -> println("local={s}"),
+                        None    -> println("local=<unset>"),
+                    }
+                    // Index access still works for the same groups.
+                    match c.get(1) {
+                        Some(s) -> println("get(1)={s}"),
+                        None    -> println("get(1)=<unset>"),
+                    }
+                },
+                None -> println("phone: no match"),
+            }
+        },
+        Err(_) -> println("phone compile failed"),
+    }
+
+    // Mix of named + non-capturing.
+    match regex.compile(r"(?P<title>Mr|Mrs)\.\s+(?P<name>\w+)") {
+        Ok(re) -> {
+            match re.captures("hello Mrs. Jones") {
+                Some(c) -> {
+                    match c.named("title") {
+                        Some(s) -> println("title={s}"),
+                        None    -> println("title=<unset>"),
+                    }
+                    match c.named("name") {
+                        Some(s) -> println("name={s}"),
+                        None    -> println("name=<unset>"),
+                    }
+                },
+                None -> println("title: no match"),
+            }
+        },
+        Err(_) -> println("title compile failed"),
+    }
+
+    // Unknown name returns None.
+    match regex.compile(r"(?P<a>\d+)") {
+        Ok(re) -> {
+            match re.captures("42") {
+                Some(c) -> {
+                    match c.named("nonexistent") {
+                        Some(s) -> println("unk: should not be {s}"),
+                        None    -> println("unk: correctly None"),
+                    }
+                },
+                None -> println("unk: no match"),
+            }
+        },
+        Err(_) -> println("unk compile failed"),
+    }
+
+    // Alternation: one named branch active per match.
+    match regex.compile(r"(?P<num>\d+)|(?P<word>[a-z]+)") {
+        Ok(re) -> {
+            match re.captures("hello") {
+                Some(c) -> {
+                    match c.named("num") {
+                        Some(s) -> println("alt-letters num={s}"),
+                        None    -> println("alt-letters num=<unset>"),
+                    }
+                    match c.named("word") {
+                        Some(s) -> println("alt-letters word={s}"),
+                        None    -> println("alt-letters word=<unset>"),
+                    }
+                },
+                None -> println("alt: no match"),
+            }
+        },
+        Err(_) -> println("alt compile failed"),
+    }
+}
