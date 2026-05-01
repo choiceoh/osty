@@ -50,6 +50,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | schedule | 637 | pure Osty | cron parser/matcher, interval/daily next-run planning, task state, due/tick helpers, and retry backoff |
 | jsonl | 117 | pure Osty + json | Deneb-style JSON Lines parse/append/compact helpers |
 | kv | 459 | pure Osty + fs/json | JSONL append-log local KV: file-backed cache/history/settings store, string-first typed getters/setters, tombstone delete, compact rewrite, JSON convenience helpers |
+| redis | 1115 | pure Osty + net/bytes | Redis integration helpers: Config/auth/DB selection, RESP2 encode/decode, command builders for strings/hash/list/set/pubsub/scan/streams, pipelines/transactions, small TCP request helpers |
 | shortid | 65 | pure Osty | Deneb-style `prefix_0000` deterministic short id generator |
 | metrics | 48 | pure Osty | Deneb-style labeled counter snapshots without a metrics backend |
 | net | 1084 | net 40 runtime | TCP/UDP, IPv4/IPv6, parseSocketAddr, tcpListen |
@@ -118,7 +119,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (6 / 91 = 7%)
+### ⭐⭐⭐⭐ Production-adjacent (6 / 92 = 7%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
