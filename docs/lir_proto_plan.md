@@ -573,6 +573,46 @@ need the same alloca + sizeof shape), plus the closure-env
 intrinsics (TaskGroup/Spawn/HandleJoin/Parallel/Race/CollectAll/
 Select*) that depend on the GC root-binding pass.
 
+Design decision: a five-slice batch covers the bytes-v1 fallback
+infrastructure plus several straightforward intrinsic
+groups in one PR:
+
+- **bytes-v1 fallback for List push (composite element)**:
+  `lirEmitSizeOf` materialises the runtime byte size via the canonical
+  `getelementptr inbounds %T, ptr null, i32 1` + `ptrtoint` idiom,
+  matching production's `llvmSizeOf`. `lirLowerMirListPush` now
+  detects composite element types up front (no LIR runtime lane) and
+  routes through `lirLowerMirListPushBytesV1` which spills the value
+  into a stack slot and calls
+  `osty_rt_list_push_bytes_v1(list, slot, size)`. The other composite
+  paths (List get/insert/set, Map insert/get composite value, Set
+  insert/contains/remove composite elem, Channel send composite) all
+  share the same shape and reuse `lirEmitSizeOf` in follow-up slices.
+
+- **Concurrency primitives** without closure-env: `Sleep`,
+  `GroupCancel`, `GroupIsCancelled` lower as plain runtime calls
+  through the existing `lirLowerMirStringRuntimeCall` helper.
+  `HandleJoin` reads its return type off the destination local
+  (production picks the LLVM type from `i.Dest.Local.Type`).
+
+- **`MapKeysSorted`**: per-key-lane symbol
+  `osty_rt_map_keys_sorted_<i64|string>` selected via the existing
+  `LirContainerReceiver` key-lane info.
+
+- **Bytes ↔ String/List conversions**: `BytesFromString`,
+  `BytesFromList` are simple ptr→ptr calls through the existing
+  helper. `BytesToString` and `BytesFromHex` use the new
+  `lirLowerMirBytesValidatedResult` which mirrors the
+  `lirLowerMirStringParse` shape but with ptr success values
+  (production:
+  mir_generator.go::emitBytesValidatedResult).
+
+Eleven Phase-4 fixtures pin every shape: `list_push_bytes_v1`,
+`handle_join_int`, `group_cancel`, `group_is_cancelled`, `sleep`,
+`map_keys_sorted_i64`, `bytes_from_string`, `bytes_from_list`,
+`bytes_to_string`, `bytes_from_hex` (10 new + the existing
+`check_cancelled` reuse).
+
 ## Phase 0: lock the boundary
 
 Deliverables:

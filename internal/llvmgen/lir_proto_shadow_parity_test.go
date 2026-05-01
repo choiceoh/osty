@@ -356,6 +356,17 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualMapToStringFixture", []string{"declare ptr @osty_rt_map_to_string(ptr)", "call ptr @osty_rt_map_to_string("}},
 		{"lirParityManualSetToStringFixture", []string{"declare ptr @osty_rt_set_to_string(ptr)", "call ptr @osty_rt_set_to_string("}},
 		{"lirParityManualCheckCancelledFixture", []string{"declare { i64, i64 } @osty_rt_cancel_check_cancelled()", "call { i64, i64 } @osty_rt_cancel_check_cancelled()"}},
+		// ----- Batched: bytes-v1 / concurrency / Map fused / Bytes conversions -----
+		{"lirParityManualListPushBytesV1Fixture", []string{"%Cell = type", "declare void @osty_rt_list_push_bytes_v1(ptr, ptr, i64)", "alloca %Cell", "getelementptr inbounds %Cell, ptr null, i32 1", "ptrtoint ptr", "call void @osty_rt_list_push_bytes_v1("}},
+		{"lirParityManualHandleJoinIntFixture", []string{"declare i64 @osty_rt_task_handle_join(ptr)", "call i64 @osty_rt_task_handle_join("}},
+		{"lirParityManualGroupCancelFixture", []string{"declare void @osty_rt_task_group_cancel(ptr)", "call void @osty_rt_task_group_cancel("}},
+		{"lirParityManualGroupIsCancelledFixture", []string{"declare i1 @osty_rt_task_group_is_cancelled(ptr)", "call i1 @osty_rt_task_group_is_cancelled("}},
+		{"lirParityManualSleepFixture", []string{"declare void @osty_rt_thread_sleep(ptr)", "call void @osty_rt_thread_sleep("}},
+		{"lirParityManualMapKeysSortedI64Fixture", []string{"declare ptr @osty_rt_map_keys_sorted_i64(ptr)", "call ptr @osty_rt_map_keys_sorted_i64("}},
+		{"lirParityManualBytesFromStringFixture", []string{"declare ptr @osty_rt_strings_ToBytes(ptr)", "call ptr @osty_rt_strings_ToBytes("}},
+		{"lirParityManualBytesFromListFixture", []string{"declare ptr @osty_rt_bytes_from_list(ptr)", "call ptr @osty_rt_bytes_from_list("}},
+		{"lirParityManualBytesToStringFixture", []string{"%Result.String_Error = type", "declare i1 @osty_rt_bytes_is_valid_utf8(ptr)", "declare ptr @osty_rt_bytes_to_string(ptr)", "ptrtoint ptr", "ret %Result.String_Error"}},
+		{"lirParityManualBytesFromHexFixture", []string{"%Result.Bytes_Error = type", "declare i1 @osty_rt_bytes_is_valid_hex(ptr)", "declare ptr @osty_rt_bytes_from_hex(ptr)", "ret %Result.Bytes_Error"}},
 	}
 
 	for _, tt := range want {
