@@ -1,6 +1,7 @@
 # ONB 설계 — Osty Native Backend
 
-> **Status: Phase 0 scaffold started (2026-04-30).** 33개 설계 결정 통합.
+> **Status: Phase 0 scaffold started (2026-04-30); dev-loop integration
+> (Slice A1) landed (2026-05-01).** 33개 설계 결정 통합.
 > `internal/onb` + `--backend onb` 등록까지 착수했고, `fn main() {}`의 MIR를
 > ONB Program으로 낮춘 뒤 첫 aarch64 LIR (`mov w0, #0`; `ret`)까지 생성하는
 > Phase 1.0 slice가 구현됐다. ONB assembly text artifact (`main.s`) 렌더링과
@@ -12,6 +13,19 @@
 > / `BR26` relocation을 포함한 object emission까지 확장했다. 이어서
 > `println(123)` 같은 정수 리터럴 출력도 `_printf("%lld\n", value)` 경로로
 > lowering/object/binary smoke까지 통과한다.
+>
+> **Slice A1 (dev-loop integration)** — 실제 개발자가 `osty run --backend onb`
+> 를 켜둔 채 작업할 수 있도록 두 축이 추가됐다. (1) `internal/onb`가 미지원
+> MIR shape를 만나면 `ErrUnsupportedShape` sentinel을 반환하고, `ONBBackend`
+> 가 `EmitObject` / `EmitBinary` 모드에서 자동으로 LLVM 백엔드에 위임한다
+> (`--emit asm`은 사용자가 ONB asm을 명시적으로 원했다고 보고 hard-fail
+> 유지). 결과 binary는 `.osty/out/llvm/`에 떨어지며 `osty run`이 그대로
+> 실행한다. (2) `OSTY_ONB_TIMING=1`이면 stderr에 한 줄 요약을 찍는다 —
+> `onb: emit 312ms [native: aarch64-apple-darwin]` 또는
+> `onb: emit 1.82s [fallback to llvm: instruction *mir.CallInstr is outside phase 1]`.
+> Cross-validation 흐름은 `OSTY_ONB_STRICT=1`로 fallback을 끄면 raw 거부
+> 에러를 받을 수 있다.
+>
 > 본 문서는 결정 lock-in이며, 후속 의제(예: aarch64 LIR opcode 카탈로그,
 > cross-validation harness, simple inliner 도입 검토)는 별도 문서로 분기한다.
 

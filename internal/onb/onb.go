@@ -22,6 +22,15 @@ var (
 
 	// ErrUnsupportedTarget marks a target outside ONB's initial aarch64 scope.
 	ErrUnsupportedTarget = errors.New("onb target is outside phase 1.0 scope")
+
+	// ErrUnsupportedShape marks MIR shapes that ONB's current slice cannot
+	// lower yet. The backend layer uses errors.Is(err, ErrUnsupportedShape)
+	// to decide whether to fall back to the LLVM reference backend so the
+	// developer's `osty run --backend onb` keeps working through the rough
+	// edges of phase 1.x coverage. Construction sites wrap the sentinel
+	// with %w plus a per-site detail string so the fallback log can quote
+	// exactly which MIR construct triggered the fallback.
+	ErrUnsupportedShape = errors.New("onb: unsupported mir shape")
 )
 
 // Request is the backend-owned half of a build request. Host-facing CLI and
