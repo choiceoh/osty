@@ -214,6 +214,7 @@ type mirGen struct {
 	stdCmdCommandTouched   bool // synthetic std.cmd Command payload used by MIR
 	stdCmdRunOutputTouched bool // synthetic std.cmd RunOutput payload used by MIR
 	stdCmdPipelineTouched  bool // synthetic std.cmd Pipeline payload used by MIR
+	stdRegexMatchTouched   bool // synthetic std.regex Match payload used by MIR
 
 	// Closure-env thunks generated on demand when a bare `FnConst`
 	// (top-level fn used as a value) reaches an indirect-call site.
@@ -727,7 +728,8 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 			g.isStdOsExecOutputType(x) ||
 			g.isStdCmdCommandType(x) ||
 			g.isStdCmdRunOutputType(x) ||
-			g.isStdCmdPipelineType(x) {
+			g.isStdCmdPipelineType(x) ||
+			g.isStdRegexMatchType(x) {
 			return true
 		}
 		if strings.Contains(x.QualifiedName(), ".") {
@@ -1626,7 +1628,8 @@ func (g *mirGen) emitTypeDefs() {
 		!g.stdOsExecOutputTouched &&
 		!g.stdCmdCommandTouched &&
 		!g.stdCmdRunOutputTouched &&
-		!g.stdCmdPipelineTouched {
+		!g.stdCmdPipelineTouched &&
+		!g.stdRegexMatchTouched {
 		return
 	}
 
@@ -1656,6 +1659,9 @@ func (g *mirGen) emitTypeDefs() {
 	}
 	if g.stdOsExecOutputTouched {
 		block.WriteString(mirLlvmStructTypeDefLine(stdOsSyntheticExecOutputTypeName, "i64, ptr, ptr, i1"))
+	}
+	if g.stdRegexMatchTouched {
+		block.WriteString(mirLlvmStructTypeDefLine(stdRegexSyntheticMatchTypeName, "ptr, i64, i64"))
 	}
 	if g.stdCmdCommandTouched {
 		block.WriteString(mirLlvmStructTypeDefLine(stdCmdSyntheticCommandTypeName, "ptr, ptr, ptr, ptr, i64, i1"))
@@ -9582,6 +9588,8 @@ func (g *mirGen) syntheticStdlibStructElementTypes(nt *ir.NamedType) ([]mir.Type
 		return []mir.Type{ir.TInt, ir.TString, ir.TString, ir.TBool}, true
 	case g.isStdCmdPipelineType(nt):
 		return []mir.Type{stdCmdCommandListType(), ir.TString, stdCmdStringMapType(), ir.TInt}, true
+	case g.isStdRegexMatchType(nt):
+		return []mir.Type{ir.TString, ir.TInt, ir.TInt}, true
 	default:
 		return nil, false
 	}
@@ -10126,6 +10134,16 @@ func (g *mirGen) projectionIndexForType(base mir.Type, p mir.Projection) (int, b
 					return 3, true
 				}
 			}
+			if g.isStdRegexMatchType(nt) {
+				switch fp.Name {
+				case "text":
+					return 0, true
+				case "start":
+					return 1, true
+				case "end":
+					return 2, true
+				}
+			}
 		}
 	}
 	return projectionIndex(p)
@@ -10635,6 +10653,10 @@ func (g *mirGen) llvmType(t mir.Type) string {
 			g.stdCmdPipelineTouched = true
 			return "%" + stdCmdSyntheticPipelineTypeName
 		}
+		if g.isStdRegexMatchType(x) {
+			g.stdRegexMatchTouched = true
+			return "%" + stdRegexSyntheticMatchTypeName
+		}
 		// Prelude Option / Maybe / Result. Mint an anonymous
 		// `%Option.<T>` / `%Result.<T>.<E>` so the IR carries the
 		// element type in its name — mimicking how the legacy
@@ -10754,6 +10776,23 @@ func (g *mirGen) isStdCmdPipelineType(t *ir.NamedType) bool {
 	}
 	q := t.QualifiedName()
 	return q == "Pipeline" || q == "std.cmd.Pipeline" || q == "cmd.Pipeline"
+}
+
+// isStdRegexMatchType recognises the user-facing `Match` struct from
+// regex.osty. A real user-declared struct elsewhere with the same name
+// (registered in Layouts.Structs) takes precedence; only the bare
+// stdlib variant routes through the synthetic Match aggregate.
+func (g *mirGen) isStdRegexMatchType(t *ir.NamedType) bool {
+	if t == nil || t.Name != "Match" {
+		return false
+	}
+	if g.mod != nil && g.mod.Layouts != nil {
+		if _, ok := g.mod.Layouts.Structs[mirNamedTypeLayoutKey(t)]; ok {
+			return false
+		}
+	}
+	q := t.QualifiedName()
+	return q == "Match" || q == "std.regex.Match" || q == "regex.Match"
 }
 
 // ==== enum layout helpers ====

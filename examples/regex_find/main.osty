@@ -1,0 +1,65 @@
+use std.regex
+
+fn main() {
+    // Found match — fields populated.
+    match regex.compile(r"\d+") {
+        Ok(re) -> {
+            match re.find("hello 123 world 456") {
+                Some(m) -> {
+                    let t = m.text
+                    let s = m.start
+                    let e = m.end
+                    println("found: text='{t}' start={s} end={e}")
+                },
+                None -> println("found: no match"),
+            }
+        },
+        Err(_) -> println("digits compile failed"),
+    }
+
+    // No match — None branch.
+    match regex.compile(r"xyz") {
+        Ok(re) -> {
+            match re.find("hello world") {
+                Some(m) -> {
+                    let t = m.text
+                    println("nomatch: should not happen — got '{t}'")
+                },
+                None -> println("nomatch: correctly None"),
+            }
+        },
+        Err(_) -> println("xyz compile failed"),
+    }
+
+    // Anchored: matches at start only.
+    match regex.compile(r"^\w+") {
+        Ok(re) -> {
+            match re.find("hello world") {
+                Some(m) -> {
+                    let t = m.text
+                    let s = m.start
+                    let e = m.end
+                    println("anchored: text='{t}' start={s} end={e}")
+                },
+                None -> println("anchored: no match"),
+            }
+        },
+        Err(_) -> println("anchored compile failed"),
+    }
+
+    // Greedy: matches longest run.
+    match regex.compile(r"a+") {
+        Ok(re) -> {
+            match re.find("xxxaaaayy") {
+                Some(m) -> {
+                    let t = m.text
+                    let s = m.start
+                    let e = m.end
+                    println("greedy: text='{t}' start={s} end={e}")
+                },
+                None -> println("greedy: no match"),
+            }
+        },
+        Err(_) -> println("greedy compile failed"),
+    }
+}

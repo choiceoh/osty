@@ -15741,6 +15741,63 @@ static void *osty_re_build_captures(int ngroups, const char *text, int text_len,
     return caps;
 }
 
+/* Phase 3a — find runtime contract:
+ *
+ * `osty_rt_regex_find(re, text)` returns a pointer to a 3-field xmalloc'd
+ * struct on match (NULL on no match). The struct mirrors the user-visible
+ * Match shape `{text: String, start: Int, end: Int}` exactly so the MIR
+ * shim can lift it into the synthetic `__osty_std_regex_Match` aggregate
+ * by loading three fields, then immediately calling
+ * `osty_rt_regex_match_free` to release the raw pointer.
+ *
+ * The raw struct is NOT GC-managed; the embedded String pointer IS
+ * (`osty_rt_string_dup_site` returns a GC string), but it must stay
+ * live only across the call/extract window before the shim parks it
+ * in a GC root. This mirrors the os.exec → ExecOutput pattern.
+ */
+typedef struct osty_rt_regex_match_raw {
+    void *text;
+    int64_t start;
+    int64_t end;
+} osty_rt_regex_match_raw;
+
+/* xmalloc lives further down (~line 20780) but is `static`; forward
+ * declare so the regex section, which sits earlier in the translation
+ * unit, can call it. */
+static void *osty_rt_xmalloc(size_t n, const char *site);
+
+void *osty_rt_regex_find(void *raw_re, const char *text) {
+    if (raw_re == NULL) {
+        osty_rt_abort("runtime.regex.find: nil Regex");
+    }
+    osty_regex_compiled *re = (osty_regex_compiled *)raw_re;
+    char inline_buf[8];
+    const char *src = text;
+    if (src == NULL) src = "";
+    osty_rt_string_decode_to_buf_if_inline(&src, inline_buf);
+    int len = (int)strlen(src);
+    int32_t slots[OSTY_RE_MAX_CAP_SLOTS];
+    int slot_count = 2 * re->ngroups;
+    for (int i = 0; i < slot_count; i++) slots[i] = -1;
+    if (!osty_re_match_from(re, src, len, 0, slots)) {
+        return NULL;
+    }
+    int32_t start = slots[0];
+    int32_t end = slots[1];
+    if (start < 0 || end < 0 || end < start || end > len) {
+        return NULL;
+    }
+    osty_rt_regex_match_raw *out = (osty_rt_regex_match_raw *)osty_rt_xmalloc(sizeof(*out), "runtime.regex.find.raw");
+    out->text = osty_rt_string_dup_site(src + start, (size_t)(end - start), "runtime.regex.find.text");
+    out->start = (int64_t)start;
+    out->end = (int64_t)end;
+    return out;
+}
+
+void osty_rt_regex_match_free(void *raw) {
+    free(raw);
+}
+
 /* Phase 4 — replace / replaceAll / split helpers.
  *
  * `replace` / `replaceAll` produce a fresh String with non-overlapping
