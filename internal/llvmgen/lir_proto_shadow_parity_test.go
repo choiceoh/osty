@@ -315,11 +315,11 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualListReversedFixture", []string{"declare ptr @osty_rt_list_reversed(ptr)", "call ptr @osty_rt_list_reversed("}},
 		{"lirParityManualListClearFixture", []string{"declare void @osty_rt_list_clear(ptr)", "call void @osty_rt_list_clear("}},
 		{"lirParityManualMapNewFixture", []string{"declare ptr @osty_rt_map_new()", "call ptr @osty_rt_map_new()"}},
-		{"lirParityManualMapInsertStringIntFixture", []string{"declare void @osty_rt_map_insert_string(ptr, ptr, i64)", "call void @osty_rt_map_insert_string("}},
+		{"lirParityManualMapInsertStringIntFixture", []string{"declare void @osty_rt_map_insert_string(ptr, ptr, ptr)", "alloca i64", "call void @osty_rt_map_insert_string("}},
 		{"lirParityManualMapContainsI64Fixture", []string{"declare i1 @osty_rt_map_contains_i64(ptr, i64)", "call i1 @osty_rt_map_contains_i64("}},
 		{"lirParityManualMapKeysFixture", []string{"declare ptr @osty_rt_map_keys(ptr)", "call ptr @osty_rt_map_keys("}},
 		{"lirParityManualMapLenFixture", []string{"declare i64 @osty_rt_map_len(ptr)", "call i64 @osty_rt_map_len("}},
-		{"lirParityManualSetInsertStringFixture", []string{"declare void @osty_rt_set_insert_string(ptr, ptr)", "call void @osty_rt_set_insert_string("}},
+		{"lirParityManualSetInsertStringFixture", []string{"declare i1 @osty_rt_set_insert_string(ptr, ptr)", "call i1 @osty_rt_set_insert_string("}},
 		{"lirParityManualSetContainsI64Fixture", []string{"declare i1 @osty_rt_set_contains_i64(ptr, i64)", "call i1 @osty_rt_set_contains_i64("}},
 		{"lirParityManualSetToListFixture", []string{"declare ptr @osty_rt_set_to_list(ptr)", "call ptr @osty_rt_set_to_list("}},
 		{"lirParityManualChanCloseFixture", []string{"declare void @osty_rt_thread_chan_close(ptr)", "call void @osty_rt_thread_chan_close("}},
@@ -367,6 +367,11 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualBytesFromListFixture", []string{"declare ptr @osty_rt_bytes_from_list(ptr)", "call ptr @osty_rt_bytes_from_list("}},
 		{"lirParityManualBytesToStringFixture", []string{"%Result.String_Error = type", "declare i1 @osty_rt_bytes_is_valid_utf8(ptr)", "declare ptr @osty_rt_bytes_to_string(ptr)", "ptrtoint ptr", "ret %Result.String_Error"}},
 		{"lirParityManualBytesFromHexFixture", []string{"%Result.Bytes_Error = type", "declare i1 @osty_rt_bytes_is_valid_hex(ptr)", "declare ptr @osty_rt_bytes_from_hex(ptr)", "ret %Result.Bytes_Error"}},
+		// ----- Batched: bytes-v1 expand + Set i1 return type pin -----
+		{"lirParityManualListGetBytesV1Fixture", []string{"%Cell = type", "declare void @osty_rt_list_get_bytes_v1(ptr, i64, ptr, i64)", "alloca %Cell", "getelementptr inbounds %Cell, ptr null, i32 1", "call void @osty_rt_list_get_bytes_v1(", "load %Cell"}},
+		{"lirParityManualListInsertBytesV1Fixture", []string{"%Cell = type", "declare void @osty_rt_list_insert_bytes_v1(ptr, i64, ptr, i64)", "alloca %Cell", "call void @osty_rt_list_insert_bytes_v1("}},
+		{"lirParityManualChanSendBytesV1Fixture", []string{"%Cell = type", "declare void @osty_rt_thread_chan_send_bytes_v1(ptr, ptr, i64)", "alloca %Cell", "call void @osty_rt_thread_chan_send_bytes_v1("}},
+		{"lirParityManualSetRemoveI1Fixture", []string{"declare i1 @osty_rt_set_remove_i64(ptr, i64)", "call i1 @osty_rt_set_remove_i64("}},
 	}
 
 	for _, tt := range want {
