@@ -11,18 +11,19 @@ ready-to-send HTTP requests for Supabase's stable gateway paths:
 - GraphQL under `/graphql/v1`
 
 ```osty
-use std.env
 use std.supabase
 
-let sb = supabase.project(env.require("SUPABASE_PROJECT_REF")?, env.require("SUPABASE_ANON_KEY")?)?
+let sb = supabase.fromEnv()?
 let q = supabase.from("todos")?
     .select("id,title,completed")
     .eq("completed", "false")?
     .orderDesc("created_at")?
+    .withCount(supabase.CountExact)
     .range(0, 19)?
 
-let req = supabase.selectHttpRequest(sb, q)?
-let rows = supabase.sendSelect::<List<Todo>>(sb, q)?
+let page = supabase.sendSelectPage::<List<Todo>>(sb, q)?
+let rows = page.value
+let total = page.count()
 ```
 
 Core types:
@@ -31,6 +32,9 @@ Core types:
 pub struct Client
 pub struct TableQuery
 pub struct Prefer
+pub struct StorageSort
+pub struct PageInfo
+pub struct Page<T>
 pub struct ApiError
 
 pub enum CountMode { CountNone, CountExact, CountPlanned, CountEstimated }
@@ -46,6 +50,9 @@ Configuration:
 supabase.client(baseUrl, apiKey) -> Result<Client, Error>
 supabase.project(projectRef, apiKey) -> Result<Client, Error>
 supabase.local(apiKey) -> Result<Client, Error>
+supabase.fromEnv() -> Result<Client, Error>
+supabase.serviceRoleFromEnv() -> Result<Client, Error>
+supabase.fromEnvNames(urlName, keyName) -> Result<Client, Error>
 
 client.withAccessToken(jwt)
 client.withServiceRoleKey(key)
@@ -58,6 +65,12 @@ client.withHeader(name, value)
 When no session token is configured, the bearer value is the API key itself so
 the value exactly matches the `apikey` header. Non-`public` schemas add
 `Accept-Profile` and `Content-Profile`.
+
+`fromEnv()` reads `SUPABASE_URL` and `SUPABASE_ANON_KEY`.
+`serviceRoleFromEnv()` reads `SUPABASE_URL` and
+`SUPABASE_SERVICE_ROLE_KEY`, and configures the service role key as both the
+`apikey` and bearer token. `fromEnvNames()` is the same pattern with custom
+environment variable names.
 
 PostgREST query helpers:
 
@@ -92,6 +105,23 @@ query.single()
 query.csv()
 ```
 
+Pagination metadata:
+
+```osty
+supabase.parseContentRange(value) -> Result<PageInfo, Error>
+supabase.pageInfo(response) -> Result<PageInfo?, Error>
+supabase.responseCount(response) -> Result<Int?, Error>
+
+page.returned()
+page.isEmpty()
+page.hasTotal()
+page.hasNext()
+```
+
+`PageInfo` parses PostgREST `Content-Range` headers such as `0-19/123`
+or `0-19/*`. It is intended to pair with `query.withCount(CountExact)`,
+`CountPlanned`, or `CountEstimated`.
+
 Requests:
 
 ```osty
@@ -113,6 +143,7 @@ Convenience senders execute those requests through `std.http.request`, require
 
 ```osty
 supabase.sendSelect<T>(client, query)
+supabase.sendSelectPage<T>(client, query)
 supabase.sendInsert<T, U>(client, table, value)
 supabase.sendInsertWithPrefer<T, U>(client, table, value, prefer)
 supabase.sendUpdate<T, U>(client, query, value)
@@ -141,10 +172,22 @@ supabase.downloadObjectHttpRequest(client, bucket, path)
 supabase.uploadObjectHttpRequest(client, bucket, path, body, contentType, upsert)
 supabase.updateObjectHttpRequest(client, bucket, path, body, contentType)
 supabase.removeObjectHttpRequest(client, bucket, paths)
+supabase.signedObjectUrlHttpRequest(client, bucket, path, expiresInSeconds)
+supabase.signedObjectUrlWithTransformHttpRequest(client, bucket, path, expiresInSeconds, transformJson)
+supabase.signedObjectsHttpRequest(client, bucket, paths, expiresInSeconds)
+supabase.storageSort(column, direction)
+supabase.listObjectsHttpRequest(client, bucket, prefix, limit, offset)
+supabase.listObjectsSortedHttpRequest(client, bucket, prefix, limit, offset, sort)
+supabase.searchObjectsHttpRequest(client, bucket, prefix, search, limit, offset)
 
 supabase.invokeFunctionHttpRequest(client, functionName, payload)
 supabase.graphqlHttpRequest(client, bodyJson)
 ```
+
+Signed download requests follow Supabase Storage's `/object/sign/...`
+endpoints. List/search requests target `/object/list/{bucket}` and emit the
+documented `prefix`, `limit`, `offset`, optional `sortBy`, and optional
+`search` JSON fields.
 
 Errors:
 

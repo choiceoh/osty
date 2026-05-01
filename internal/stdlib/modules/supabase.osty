@@ -8,6 +8,7 @@
 
 use std.bytes
 use std.encoding
+use std.env
 use std.error
 use std.http
 use std.json
@@ -83,6 +84,18 @@ pub enum NullOrdering {
             NullsFirst   -> ".nullsfirst",
             NullsLast    -> ".nullslast",
         }
+    }
+}
+
+pub struct StorageSort {
+    pub column: String,
+    pub direction: OrderDirection,
+
+    pub fn toJson(self) -> String {
+        object([
+            prop("column", quote(strings.trimSpace(self.column))),
+            prop("order", quote(self.direction.toString())),
+        ])
     }
 }
 
@@ -311,6 +324,54 @@ pub struct TableQuery {
     }
 }
 
+pub struct PageInfo {
+    pub from: Int,
+    pub to: Int,
+    pub total: Int? = None,
+    pub contentRange: String = "",
+
+    pub fn returned(self) -> Int {
+        if self.to < self.from {
+            return 0
+        }
+        self.to - self.from + 1
+    }
+
+    pub fn isEmpty(self) -> Bool {
+        self.returned() == 0
+    }
+
+    pub fn hasTotal(self) -> Bool {
+        self.total.isSome()
+    }
+
+    pub fn hasNext(self) -> Bool {
+        match self.total {
+            Some(total) -> self.to >= self.from && self.to + 1 < total,
+            None        -> false,
+        }
+    }
+}
+
+pub struct Page<T> {
+    pub value: T,
+    pub info: PageInfo? = None,
+
+    pub fn count(self) -> Int? {
+        match self.info {
+            Some(info) -> info.total,
+            None       -> noneInt(),
+        }
+    }
+
+    pub fn hasNext(self) -> Bool {
+        match self.info {
+            Some(info) -> info.hasNext(),
+            None       -> false,
+        }
+    }
+}
+
 pub struct ApiError {
     pub status: Int,
     pub code: String = "",
@@ -372,6 +433,22 @@ pub fn project(projectRef: String, apiKey: String) -> Result<Client, Error> {
 
 pub fn local(apiKey: String) -> Result<Client, Error> {
     client("http://127.0.0.1:54321", apiKey)
+}
+
+pub fn fromEnv() -> Result<Client, Error> {
+    fromEnvNames("SUPABASE_URL", "SUPABASE_ANON_KEY")
+}
+
+pub fn serviceRoleFromEnv() -> Result<Client, Error> {
+    let url = env.require("SUPABASE_URL")?
+    let key = env.require("SUPABASE_SERVICE_ROLE_KEY")?
+    Ok(client(url, key)?.withServiceRoleKey(key))
+}
+
+pub fn fromEnvNames(urlName: String, keyName: String) -> Result<Client, Error> {
+    let url = env.require(cleanEnvName(urlName)?)?
+    let key = env.require(cleanEnvName(keyName)?)?
+    client(url, key)
 }
 
 pub fn from(table: String) -> Result<TableQuery, Error> {
@@ -580,6 +657,66 @@ pub fn removeObjectHttpRequest(client: Client, bucket: String, paths: List<Strin
         .withContentType("application/json"))
 }
 
+pub fn storageSort(column: String, direction: OrderDirection) -> Result<StorageSort, Error> {
+    Ok(StorageSort {
+        column: cleanName("storage sort column", column)?,
+        direction: direction,
+    })
+}
+
+pub fn signedObjectUrlHttpRequest(client: Client, bucket: String, path: String, expiresInSeconds: Int) -> Result<http.Request, Error> {
+    validateClient(client)?
+    let body = signedUrlBody(expiresInSeconds, "")?
+    Ok(http.newRequest(http.Post, storageUrl(client, "object/sign/{encodePathSegment(cleanName(\"bucket\", bucket)?)}" +
+        "/{encodeObjectPath(path)?}")?)
+        .withHeaders(storageHeaders(client, "application/json"))
+        .withText(body)
+        .withContentType("application/json"))
+}
+
+pub fn signedObjectUrlWithTransformHttpRequest(client: Client, bucket: String, path: String, expiresInSeconds: Int, transformJson: String) -> Result<http.Request, Error> {
+    validateClient(client)?
+    let transform = jsonObjectOrError("storage transform", transformJson)?
+    let body = signedUrlBody(expiresInSeconds, transform)?
+    Ok(http.newRequest(http.Post, storageUrl(client, "object/sign/{encodePathSegment(cleanName(\"bucket\", bucket)?)}" +
+        "/{encodeObjectPath(path)?}")?)
+        .withHeaders(storageHeaders(client, "application/json"))
+        .withText(body)
+        .withContentType("application/json"))
+}
+
+pub fn signedObjectsHttpRequest(client: Client, bucket: String, paths: List<String>, expiresInSeconds: Int) -> Result<http.Request, Error> {
+    validateClient(client)?
+    validateExpiresIn(expiresInSeconds)?
+    if paths.isEmpty() {
+        return Err(error.new("supabase: signed URL paths are empty"))
+    }
+    let mut items: List<String> = []
+    for path in paths {
+        items.push(quote(cleanObjectPath(path)?))
+    }
+    let body = object([
+        prop("expiresIn", expiresInSeconds.toString()),
+        prop("paths", array(items)),
+    ])
+    Ok(http.newRequest(http.Post, storageUrl(client, "object/sign/{encodePathSegment(cleanName(\"bucket\", bucket)?)}")?)
+        .withHeaders(storageHeaders(client, "application/json"))
+        .withText(body)
+        .withContentType("application/json"))
+}
+
+pub fn listObjectsHttpRequest(client: Client, bucket: String, prefix: String = "", limit: Int = 100, offset: Int = 0) -> Result<http.Request, Error> {
+    listObjectsRequest(client, bucket, prefix, limit, offset, None, "")
+}
+
+pub fn listObjectsSortedHttpRequest(client: Client, bucket: String, prefix: String, limit: Int, offset: Int, sort: StorageSort) -> Result<http.Request, Error> {
+    listObjectsRequest(client, bucket, prefix, limit, offset, Some(sort), "")
+}
+
+pub fn searchObjectsHttpRequest(client: Client, bucket: String, prefix: String, search: String, limit: Int = 100, offset: Int = 0) -> Result<http.Request, Error> {
+    listObjectsRequest(client, bucket, prefix, limit, offset, None, search)
+}
+
 pub fn invokeFunctionHttpRequest<T>(client: Client, functionName: String, payload: T) -> Result<http.Request, Error> {
     validateClient(client)?
     Ok(http.newRequest(http.Post, functionsUrl(client, functionName)?)
@@ -598,6 +735,16 @@ pub fn graphqlHttpRequest(client: Client, bodyJson: String) -> Result<http.Reque
 pub fn sendSelect<T>(client: Client, query: TableQuery) -> Result<T, Error> {
     let res = http.request(selectHttpRequest(client, query)?)?
     requireSuccess(res)?.json::<T>()
+}
+
+pub fn sendSelectPage<T>(client: Client, query: TableQuery) -> Result<Page<T>, Error> {
+    let res = requireSuccess(http.request(selectHttpRequest(client, query)?)?)?
+    let info = pageInfo(res)?
+    let value = res.json::<T>()?
+    Ok(Page<T> {
+        value: value,
+        info: info,
+    })
 }
 
 pub fn sendInsert<T, U>(client: Client, table: String, value: T) -> Result<U, Error> {
@@ -660,6 +807,56 @@ pub fn requireSuccess(response: http.Response) -> Result<http.Response, Error> {
     Err(error.new(parseApiError(response).summary()))
 }
 
+pub fn parseContentRange(value: String) -> Result<PageInfo, Error> {
+    let clean = strings.trimSpace(value)
+    if clean.isEmpty() {
+        return Err(error.new("supabase: Content-Range header is empty"))
+    }
+    let parts = strings.split(clean, "/")
+    if parts.len() != 2 {
+        return Err(error.new("supabase: invalid Content-Range header: {value}"))
+    }
+    let rangePart = strings.trimSpace(parts[0])
+    let total = parseContentRangeTotal(parts[1])?
+    if rangePart == "*" {
+        return Ok(PageInfo {
+            from: 0,
+            to: -1,
+            total: total,
+            contentRange: clean,
+        })
+    }
+    let bounds = strings.split(rangePart, "-")
+    if bounds.len() != 2 {
+        return Err(error.new("supabase: invalid Content-Range range: {value}"))
+    }
+    let from = strings.trimSpace(bounds[0]).toInt()?
+    let to = strings.trimSpace(bounds[1]).toInt()?
+    if from < 0 || to < from {
+        return Err(error.new("supabase: invalid Content-Range bounds: {value}"))
+    }
+    Ok(PageInfo {
+        from: from,
+        to: to,
+        total: total,
+        contentRange: clean,
+    })
+}
+
+pub fn pageInfo(response: http.Response) -> Result<PageInfo?, Error> {
+    match response.header("Content-Range") {
+        Some(value) -> Ok(Some(parseContentRange(value)?)),
+        None        -> Ok(None),
+    }
+}
+
+pub fn responseCount(response: http.Response) -> Result<Int?, Error> {
+    match pageInfo(response)? {
+        Some(info) -> Ok(info.total),
+        None       -> Ok(None),
+    }
+}
+
 fn validateClient(client: Client) -> Result<(), Error> {
     if strings.trimSpace(client.baseUrl).isEmpty() {
         return Err(error.new("supabase: base URL is empty"))
@@ -670,8 +867,26 @@ fn validateClient(client: Client) -> Result<(), Error> {
     Ok(())
 }
 
+fn cleanEnvName(value: String) -> Result<String, Error> {
+    let clean = strings.trimSpace(value)
+    if clean.isEmpty() {
+        return Err(error.new("supabase: environment variable name is empty"))
+    }
+    if strings.contains(clean, "=") || strings.contains(clean, "\n") || strings.contains(clean, "\t") {
+        return Err(error.new("supabase: invalid environment variable name: {value}"))
+    }
+    Ok(clean)
+}
+
 fn validateQuery(query: TableQuery) -> Result<(), Error> {
     let _ = cleanName("table", query.table)?
+    Ok(())
+}
+
+fn validateExpiresIn(value: Int) -> Result<(), Error> {
+    if value <= 0 {
+        return Err(error.new("supabase: expiresIn must be positive"))
+    }
     Ok(())
 }
 
@@ -717,6 +932,33 @@ fn queryHeaders(client: Client, query: TableQuery, mutation: Bool) -> Headers {
     out
 }
 
+fn listObjectsRequest(client: Client, bucket: String, prefix: String, limit: Int, offset: Int, sort: StorageSort?, search: String) -> Result<http.Request, Error> {
+    validateClient(client)?
+    if limit < 0 {
+        return Err(error.new("supabase: storage list limit must not be negative"))
+    }
+    if offset < 0 {
+        return Err(error.new("supabase: storage list offset must not be negative"))
+    }
+    let mut props: List<String> = [
+        prop("prefix", quote(cleanObjectPrefix(prefix)?)),
+        prop("limit", limit.toString()),
+        prop("offset", offset.toString()),
+    ]
+    match sort {
+        Some(value) -> props.push(prop("sortBy", value.toJson())),
+        None        -> {},
+    }
+    let term = strings.trimSpace(search)
+    if !term.isEmpty() {
+        props.push(prop("search", quote(term)))
+    }
+    Ok(http.newRequest(http.Post, storageUrl(client, "object/list/{encodePathSegment(cleanName(\"bucket\", bucket)?)}")?)
+        .withHeaders(storageHeaders(client, "application/json"))
+        .withText(object(props))
+        .withContentType("application/json"))
+}
+
 fn authJsonRequest(client: Client, path: String, body: String) -> Result<http.Request, Error> {
     validateClient(client)?
     Ok(http.newRequest(http.Post, authUrl(client, path)?)
@@ -725,11 +967,32 @@ fn authJsonRequest(client: Client, path: String, body: String) -> Result<http.Re
         .withContentType("application/json"))
 }
 
+fn signedUrlBody(expiresInSeconds: Int, transform: String) -> Result<String, Error> {
+    validateExpiresIn(expiresInSeconds)?
+    let mut props: List<String> = [prop("expiresIn", expiresInSeconds.toString())]
+    if !strings.trimSpace(transform).isEmpty() {
+        props.push(prop("transform", transform))
+    }
+    Ok(object(props))
+}
+
 fn authPasswordBody(email: String, password: String) -> String {
     object([
         prop("email", quote(strings.trimSpace(email))),
         prop("password", quote(password)),
     ])
+}
+
+fn parseContentRangeTotal(value: String) -> Result<Int?, Error> {
+    let clean = strings.trimSpace(value)
+    if clean == "*" {
+        return Ok(noneInt())
+    }
+    let total = clean.toInt()?
+    if total < 0 {
+        return Err(error.new("supabase: invalid Content-Range total: {value}"))
+    }
+    Ok(Some(total))
 }
 
 fn preferHeaderValue(prefer: Prefer) -> String {
@@ -845,6 +1108,14 @@ fn cleanObjectPath(value: String) -> Result<String, Error> {
     Ok(clean)
 }
 
+fn cleanObjectPrefix(value: String) -> Result<String, Error> {
+    let clean = strings.trimPrefix(strings.trimSpace(value), "/")
+    if strings.contains(clean, "..") || strings.contains(clean, "?") || strings.contains(clean, "#") {
+        return Err(error.new("supabase: unsafe storage object prefix: {value}"))
+    }
+    Ok(clean)
+}
+
 fn encodeObjectPath(path: String) -> Result<String, Error> {
     let clean = cleanObjectPath(path)?
     let mut parts: List<String> = []
@@ -882,6 +1153,18 @@ fn isProjectRefChar(c: Char) -> Bool {
     (c >= 'a' && c <= 'z') ||
     (c >= '0' && c <= '9') ||
     c == '-'
+}
+
+fn jsonObjectOrError(kind: String, text: String) -> Result<String, Error> {
+    let raw = strings.trimSpace(text)
+    if raw.isEmpty() {
+        return Err(error.new("supabase: {kind} JSON is empty"))
+    }
+    let value = json.parseValue(raw)?
+    match json.asObject(value) {
+        Ok(_)  -> Ok(json.stringifyValue(value)),
+        Err(_) -> Err(error.new("supabase: {kind} JSON must be an object")),
+    }
 }
 
 fn normalizedJsonObject(text: String) -> String {
@@ -924,4 +1207,8 @@ fn prop(name: String, value: String) -> String {
 
 fn quote(text: String) -> String {
     json.stringifyValue(json.string(text))
+}
+
+fn noneInt() -> Int? {
+    None
 }
