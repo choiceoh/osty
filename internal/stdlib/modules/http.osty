@@ -68,6 +68,26 @@ pub enum Method {
     }
 }
 
+pub fn getMethod() -> Method {
+    Get
+}
+
+pub fn postMethod() -> Method {
+    Post
+}
+
+pub fn putMethod() -> Method {
+    Put
+}
+
+pub fn patchMethod() -> Method {
+    Patch
+}
+
+pub fn deleteMethod() -> Method {
+    Delete
+}
+
 pub enum SameSite {
     Strict,
     Lax,

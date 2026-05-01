@@ -1,0 +1,650 @@
+// std.sentry - Sentry envelope and HTTP request helpers.
+//
+// This module sits on std.observability and std.http. It parses DSNs, builds
+// Sentry-compatible event/transaction payloads, serializes envelopes, and can
+// hand the final request to std.http.request. The transport remains explicit.
+
+use std.error
+use std.http
+use std.json
+use std.observability
+use std.redact
+use std.strings
+use std.time
+use std.uuid
+
+pub type Attributes = observability.Attributes
+pub type Tags = observability.Tags
+pub type Headers = http.Headers
+
+pub let SDK_NAME: String = "osty.std.sentry"
+pub let SDK_VERSION: String = "0.1.0"
+pub let SENTRY_VERSION: String = "7"
+
+pub struct Dsn {
+    pub raw: String,
+    pub scheme: String,
+    pub publicKey: String,
+    pub secretKey: String = "",
+    pub authority: String,
+    pub pathPrefix: String = "",
+    pub projectId: String,
+
+    pub fn baseUrl(self) -> String {
+        if self.pathPrefix.isEmpty() {
+            return "{self.scheme}://{self.authority}"
+        }
+        "{self.scheme}://{self.authority}{self.pathPrefix}"
+    }
+
+    pub fn envelopeUrl(self) -> String {
+        "{self.baseUrl()}/api/{self.projectId}/envelope/"
+    }
+}
+
+pub struct Client {
+    pub dsn: Dsn,
+    pub environment: String = "",
+    pub release: String = "",
+    pub serverName: String = "",
+    pub sampleRate: Float = 1.0,
+    pub tracesSampleRate: Float = 0.0,
+    pub sendDefaultPii: Bool = false,
+    pub extraHeaders: Headers = {:},
+
+    pub fn withEnvironment(mut self, environment: String) -> Client {
+        self.environment = strings.trimSpace(environment)
+        self
+    }
+
+    pub fn withRelease(mut self, release: String) -> Client {
+        self.release = strings.trimSpace(release)
+        self
+    }
+
+    pub fn withServerName(mut self, serverName: String) -> Client {
+        self.serverName = strings.trimSpace(serverName)
+        self
+    }
+
+    pub fn withSampleRate(mut self, sampleRate: Float) -> Client {
+        self.sampleRate = clampFloat(sampleRate, 0.0, 1.0)
+        self
+    }
+
+    pub fn withTracesSampleRate(mut self, sampleRate: Float) -> Client {
+        self.tracesSampleRate = clampFloat(sampleRate, 0.0, 1.0)
+        self
+    }
+
+    pub fn withSendDefaultPii(mut self, enabled: Bool) -> Client {
+        self.sendDefaultPii = enabled
+        self
+    }
+
+    pub fn withHeader(mut self, name: String, value: String) -> Client {
+        self.extraHeaders.insert(strings.trimSpace(name), value)
+        self
+    }
+}
+
+pub struct User {
+    pub id: String = "",
+    pub username: String = "",
+    pub email: String = "",
+    pub ipAddress: String = "",
+}
+
+pub struct Scope {
+    pub user: User? = None,
+    pub tags: Tags = {:},
+    pub extra: Attributes = {:},
+    pub contexts: Attributes = {:},
+    pub breadcrumbs: List<observability.Breadcrumb> = [],
+    pub fingerprint: List<String> = [],
+
+    pub fn withUser(mut self, user: User) -> Scope {
+        self.user = Some(user)
+        self
+    }
+
+    pub fn withTag(mut self, key: String, value: String) -> Scope {
+        self.tags.insert(cleanKey(key), strings.trimSpace(value))
+        self
+    }
+
+    pub fn withExtra(mut self, key: String, value: json.Json) -> Scope {
+        self.extra.insert(cleanKey(key), value)
+        self
+    }
+
+    pub fn withContext(mut self, key: String, value: json.Json) -> Scope {
+        self.contexts.insert(cleanKey(key), value)
+        self
+    }
+
+    pub fn withBreadcrumb(mut self, crumb: observability.Breadcrumb) -> Scope {
+        self.breadcrumbs.push(crumb)
+        self
+    }
+
+    pub fn withFingerprint(mut self, value: String) -> Scope {
+        self.fingerprint.push(strings.trimSpace(value))
+        self
+    }
+}
+
+pub struct CaptureOptions {
+    pub eventId: String = "",
+    pub timestamp: String = "",
+    pub handled: Bool = true,
+    pub mechanism: String = "generic",
+    pub scope: Scope,
+
+    pub fn withEventId(mut self, eventId: String) -> CaptureOptions {
+        self.eventId = eventId
+        self
+    }
+
+    pub fn withTimestampIfEmpty(mut self, timestamp: String) -> CaptureOptions {
+        if strings.trimSpace(self.timestamp).isEmpty() {
+            self.timestamp = strings.trimSpace(timestamp)
+        }
+        self
+    }
+}
+
+pub fn parseDsn(raw: String) -> Result<Dsn, Error> {
+    let text = strings.trimSpace(raw)
+    if text.isEmpty() {
+        return Err(error.new("sentry: DSN is empty"))
+    }
+    let (scheme, rest) = splitScheme(text)?
+    if scheme != "https" && scheme != "http" {
+        return Err(error.new("sentry: DSN scheme must be http or https"))
+    }
+    let atOpt = strings.indexOf(rest, "@")
+    if atOpt.isNone() {
+        return Err(error.new("sentry: DSN missing public key"))
+    }
+    let at = atOpt.unwrap()
+    let userinfo = strings.slice(rest, 0, at)
+    let afterAt = strings.slice(rest, at + 1, rest.len())
+    let (publicKey, secretKey) = splitUserinfo(userinfo)?
+    let (authority, path) = splitAuthorityPath(afterAt)?
+    let (prefix, projectId) = splitProjectPath(path)?
+    Ok(Dsn {
+        raw: text,
+        scheme: scheme,
+        publicKey: publicKey,
+        secretKey: secretKey,
+        authority: authority,
+        pathPrefix: prefix,
+        projectId: projectId,
+    })
+}
+
+pub fn client(rawDsn: String) -> Result<Client, Error> {
+    Ok(Client { dsn: parseDsn(rawDsn)? })
+}
+
+pub fn scope() -> Scope {
+    Scope {}
+}
+
+pub fn options() -> CaptureOptions {
+    CaptureOptions { scope: Scope {} }
+}
+
+pub fn user(id: String, username: String, email: String) -> User {
+    User {
+        id: strings.trimSpace(id),
+        username: strings.trimSpace(username),
+        email: strings.trimSpace(email),
+    }
+}
+
+pub fn endpointUrl(client: Client) -> String {
+    client.dsn.envelopeUrl()
+}
+
+pub fn sentryTraceHeader(trace: observability.TraceContext) -> String {
+    let sampled = if trace.sampled { "1" } else { "0" }
+    "{trace.traceId}-{trace.spanId}-{sampled}"
+}
+
+pub fn traceHeaders(trace: observability.TraceContext) -> Headers {
+    let mut out: Headers = {:}
+    out.insert("sentry-trace", sentryTraceHeader(trace))
+    let bag = observability.baggage(trace)
+    if !bag.isEmpty() {
+        out.insert("baggage", bag)
+    }
+    out
+}
+
+pub fn authHeader(client: Client) -> String {
+    let mut parts: List<String> = [
+        "sentry_version={SENTRY_VERSION}",
+        "sentry_client={SDK_NAME}/{SDK_VERSION}",
+        "sentry_key={client.dsn.publicKey}",
+    ]
+    if !client.dsn.secretKey.isEmpty() {
+        parts.push("sentry_secret={client.dsn.secretKey}")
+    }
+    let sep = ", "
+    "Sentry {strings.join(parts, sep)}"
+}
+
+pub fn headers(client: Client) -> Headers {
+    let mut out: Headers = {:}
+    out.insert("Content-Type", "application/x-sentry-envelope")
+    out.insert("User-Agent", "{SDK_NAME}/{SDK_VERSION}")
+    out.insert("X-Sentry-Auth", authHeader(client))
+    for (name, value) in client.extraHeaders {
+        out.insert(name, value)
+    }
+    out
+}
+
+pub fn captureMessageHttpRequest(client: Client, message: String, level: observability.Severity) -> http.Request {
+    eventHttpRequest(client, observability.messageEvent(message, level, observability.defaultResource()), options())
+}
+
+pub fn captureExceptionHttpRequest(client: Client, err: Error, opts: CaptureOptions) -> http.Request {
+    eventHttpRequest(client, observability.errorEvent(err, observability.defaultResource()), opts)
+}
+
+pub fn captureEventHttpRequest(client: Client, event: observability.Event, opts: CaptureOptions) -> http.Request {
+    eventHttpRequest(client, event, opts)
+}
+
+pub fn captureTransactionHttpRequest(client: Client, span: observability.Span, opts: CaptureOptions) -> http.Request {
+    transactionHttpRequest(client, span, opts)
+}
+
+pub fn captureMessage(client: Client, message: String, level: observability.Severity) -> Result<http.Response, Error> {
+    http.request(captureMessageHttpRequest(client, message, level))
+}
+
+pub fn captureException(client: Client, err: Error, opts: CaptureOptions) -> Result<http.Response, Error> {
+    http.request(captureExceptionHttpRequest(client, err, opts))
+}
+
+pub fn captureEvent(client: Client, event: observability.Event, opts: CaptureOptions) -> Result<http.Response, Error> {
+    http.request(captureEventHttpRequest(client, event, opts))
+}
+
+pub fn captureTransaction(client: Client, span: observability.Span, opts: CaptureOptions) -> Result<http.Response, Error> {
+    http.request(captureTransactionHttpRequest(client, span, opts))
+}
+
+pub fn eventPayload(client: Client, event: observability.Event, opts: CaptureOptions) -> String {
+    let eventId = eventIdOrNew(opts.eventId)
+    let mergedScope = mergeScope(event, opts.scope)
+    let mut props: List<String> = [
+        prop("event_id", quote(eventId)),
+        prop("platform", quote("osty")),
+        prop("level", quote(event.level.toString())),
+        prop("message", quote(redact.redact(event.message))),
+        prop("environment", quote(client.environment)),
+        prop("release", quote(client.release)),
+        prop("server_name", quote(client.serverName)),
+        prop("sdk", sdkJson()),
+        prop("tags", observability.tagsJson(mergedScope.tags)),
+        prop("extra", observability.attrsJson(mergedScope.extra)),
+        prop("breadcrumbs", sentryBreadcrumbsJson(mergedScope.breadcrumbs)),
+        prop("contexts", contextsJson(client, event, mergedScope)),
+        prop("fingerprint", stringArrayJson(mergedScope.fingerprint)),
+    ]
+    if !opts.timestamp.isEmpty() {
+        props.push(prop("timestamp", quote(opts.timestamp)))
+    }
+    if event.kind.toString() == "error" {
+        props.push(prop("exception", exceptionJson(event, opts)))
+    }
+    match mergedScope.user {
+        Some(u) -> {
+            if client.sendDefaultPii {
+                props.push(prop("user", userJson(u)))
+            }
+        },
+        None -> {},
+    }
+    object(props)
+}
+
+pub fn transactionPayload(client: Client, span: observability.Span, opts: CaptureOptions) -> String {
+    let eventId = eventIdOrNew(opts.eventId)
+    let event = observability.spanEvent(span, observability.defaultResource())
+    let mergedScope = mergeScope(event, opts.scope)
+    let mut props: List<String> = [
+        prop("event_id", quote(eventId)),
+        prop("type", quote("transaction")),
+        prop("transaction", quote(span.name)),
+        prop("platform", quote("osty")),
+        prop("level", quote("info")),
+        prop("environment", quote(client.environment)),
+        prop("release", quote(client.release)),
+        prop("server_name", quote(client.serverName)),
+        prop("sdk", sdkJson()),
+        prop("contexts", contextsJson(client, event, mergedScope)),
+        prop("tags", observability.tagsJson(mergedScope.tags)),
+        prop("extra", observability.attrsJson(mergedScope.extra)),
+        prop("measurements", measurementsJson(event.metrics)),
+    ]
+    if !opts.timestamp.isEmpty() {
+        props.push(prop("timestamp", quote(opts.timestamp)))
+    }
+    if span.startUnixMs > 0 {
+        props.push(prop("start_timestamp", unixMsToSeconds(span.startUnixMs)))
+    }
+    object(props)
+}
+
+pub fn envelopeForEvent(client: Client, event: observability.Event, opts: CaptureOptions) -> String {
+    let eventId = eventIdOrNew(opts.eventId)
+    let payload = eventPayload(client, event, opts.withEventId(eventId))
+    envelope(client, eventId, "event", payload, opts.timestamp)
+}
+
+pub fn envelopeForTransaction(client: Client, span: observability.Span, opts: CaptureOptions) -> String {
+    let eventId = eventIdOrNew(opts.eventId)
+    let payload = transactionPayload(client, span, opts.withEventId(eventId))
+    envelope(client, eventId, "transaction", payload, opts.timestamp)
+}
+
+pub fn envelope(client: Client, eventId: String, itemType: String, payload: String, sentAt: String) -> String {
+    let header = envelopeHeader(client, eventId, sentAt)
+    let item = envelopeItem(itemType, payload)
+    "{header}\n{item}\n"
+}
+
+pub fn envelopeHeader(client: Client, eventId: String, sentAt: String) -> String {
+    let mut props: List<String> = [
+        prop("event_id", quote(eventId)),
+        prop("dsn", quote(client.dsn.raw)),
+        prop("sdk", sdkJson()),
+    ]
+    if !sentAt.isEmpty() {
+        props.push(prop("sent_at", quote(sentAt)))
+    }
+    object(props)
+}
+
+pub fn envelopeItem(itemType: String, payload: String) -> String {
+    let header = object([
+        prop("type", quote(itemType)),
+        prop("length", payload.bytes().len().toString()),
+        prop("content_type", quote("application/json")),
+    ])
+    "{header}\n{payload}"
+}
+
+pub fn eventHttpRequest(client: Client, event: observability.Event, opts: CaptureOptions) -> http.Request {
+    let eventId = eventIdOrNew(opts.eventId)
+    let nextOpts = opts.withEventId(eventId).withTimestampIfEmpty(sentAtNow())
+    let body = envelopeForEvent(client, event, nextOpts)
+    http.newRequest(http.postMethod(), endpointUrl(client))
+        .withHeaders(headers(client))
+        .withText(body)
+        .withContentType("application/x-sentry-envelope")
+}
+
+pub fn transactionHttpRequest(client: Client, span: observability.Span, opts: CaptureOptions) -> http.Request {
+    let eventId = eventIdOrNew(opts.eventId)
+    let nextOpts = opts.withEventId(eventId).withTimestampIfEmpty(sentAtNow())
+    let body = envelopeForTransaction(client, span, nextOpts)
+    http.newRequest(http.postMethod(), endpointUrl(client))
+        .withHeaders(headers(client))
+        .withText(body)
+        .withContentType("application/x-sentry-envelope")
+}
+
+pub fn sentAtNow() -> String {
+    time.now().format(time.RFC_3339)
+}
+
+pub fn isSampled(sampleRate: Float, n: Float) -> Bool {
+    n >= 0.0 && n <= clampFloat(sampleRate, 0.0, 1.0)
+}
+
+pub fn disabledClient(rawDsn: String) -> Result<Client, Error> {
+    let c = client(rawDsn)?
+    Ok(c.withSampleRate(0.0).withTracesSampleRate(0.0))
+}
+
+pub fn normalizeEventId(eventId: String) -> String {
+    let clean = strings.replaceAll(strings.trimSpace(eventId), "-", "")
+    if clean.isEmpty() {
+        return strings.replaceAll(uuid.v4().toString(), "-", "")
+    }
+    clean
+}
+
+pub fn eventIdOrNew(eventId: String) -> String {
+    normalizeEventId(eventId)
+}
+
+fn splitScheme(text: String) -> Result<(String, String), Error> {
+    match strings.indexOf(text, "://") {
+        Some(i) -> Ok((strings.toLower(strings.slice(text, 0, i)), strings.slice(text, i + 3, text.len()))),
+        None    -> Err(error.new("sentry: DSN missing scheme")),
+    }
+}
+
+fn splitUserinfo(userinfo: String) -> Result<(String, String), Error> {
+    if strings.trimSpace(userinfo).isEmpty() {
+        return Err(error.new("sentry: DSN public key is empty"))
+    }
+    match strings.indexOf(userinfo, ":") {
+        Some(i) -> {
+            let publicKey = strings.trimSpace(strings.slice(userinfo, 0, i))
+            if publicKey.isEmpty() {
+                return Err(error.new("sentry: DSN public key is empty"))
+            }
+            Ok((publicKey, strings.trimSpace(strings.slice(userinfo, i + 1, userinfo.len()))))
+        },
+        None -> Ok((strings.trimSpace(userinfo), "")),
+    }
+}
+
+fn splitAuthorityPath(text: String) -> Result<(String, String), Error> {
+    match strings.indexOf(text, "/") {
+        Some(i) -> {
+            let authority = strings.trimSpace(strings.slice(text, 0, i))
+            if authority.isEmpty() {
+                return Err(error.new("sentry: DSN host is empty"))
+            }
+            Ok((authority, strings.slice(text, i + 1, text.len())))
+        },
+        None -> Err(error.new("sentry: DSN missing project id")),
+    }
+}
+
+fn splitProjectPath(path: String) -> Result<(String, String), Error> {
+    let clean = strings.trimChars(strings.trimSpace(path), "/")
+    if clean.isEmpty() {
+        return Err(error.new("sentry: DSN project id is empty"))
+    }
+    let parts = strings.split(clean, "/")
+    let projectId = parts[parts.len() - 1]
+    if strings.trimSpace(projectId).isEmpty() {
+        return Err(error.new("sentry: DSN project id is empty"))
+    }
+    if parts.len() == 1 {
+        return Ok(("", projectId))
+    }
+    let mut prefixParts: List<String> = []
+    let mut i = 0
+    for i < parts.len() - 1 {
+        prefixParts.push(parts[i])
+        i = i + 1
+    }
+    let slash = "/"
+    Ok(("/{strings.join(prefixParts, slash)}", projectId))
+}
+
+fn mergeScope(event: observability.Event, scope: Scope) -> Scope {
+    let mut out = scope
+    for (key, value) in event.tags {
+        out.tags.insert(key, value)
+    }
+    for (key, value) in event.attributes {
+        out.extra.insert(key, value)
+    }
+    for crumb in event.breadcrumbs {
+        out.breadcrumbs.push(crumb)
+    }
+    for fp in event.fingerprint {
+        out.fingerprint.push(fp)
+    }
+    out
+}
+
+fn contextsJson(client: Client, event: observability.Event, scope: Scope) -> String {
+    let mut props: List<String> = [
+        prop("runtime", object([
+            prop("name", quote("osty")),
+            prop("sdk", quote("{SDK_NAME}/{SDK_VERSION}")),
+        ])),
+        prop("client", object([
+            prop("sample_rate", client.sampleRate.toString()),
+            prop("traces_sample_rate", client.tracesSampleRate.toString()),
+        ])),
+    ]
+    match event.trace {
+        Some(trace) -> props.push(prop("trace", sentryTraceContextJson(trace, event.span))),
+        None        -> {},
+    }
+    let keys = scope.contexts.keys().sorted()
+    for key in keys {
+        props.push(prop(key, json.stringifyValue(scope.contexts.get(key).unwrap())))
+    }
+    object(props)
+}
+
+fn sentryTraceContextJson(trace: observability.TraceContext, span: observability.Span?) -> String {
+    let mut props: List<String> = [
+        prop("trace_id", quote(trace.traceId)),
+        prop("span_id", quote(trace.spanId)),
+        prop("parent_span_id", quote(trace.parentSpanId)),
+        prop("sampled", if trace.sampled { "true" } else { "false" }),
+    ]
+    match span {
+        Some(s) -> {
+            props.push(prop("op", quote(s.op)))
+            props.push(prop("description", quote(s.description)))
+            props.push(prop("status", quote(s.status.toString())))
+        },
+        None -> {},
+    }
+    object(props)
+}
+
+fn exceptionJson(event: observability.Event, opts: CaptureOptions) -> String {
+    let chain = if event.errorChain.isEmpty() { [event.errorMessage] } else { event.errorChain }
+    let mut values: List<String> = []
+    for msg in chain {
+        values.push(object([
+            prop("type", quote("Error")),
+            prop("value", quote(redact.redact(msg))),
+            prop("mechanism", object([
+                prop("type", quote(opts.mechanism)),
+                prop("handled", if opts.handled { "true" } else { "false" }),
+            ])),
+        ]))
+    }
+    object([prop("values", array(values))])
+}
+
+fn sentryBreadcrumbsJson(items: List<observability.Breadcrumb>) -> String {
+    let mut values: List<String> = []
+    for item in items {
+        values.push(object([
+            prop("category", quote(item.category)),
+            prop("message", quote(redact.redact(item.message))),
+            prop("level", quote(item.level.toString())),
+            prop("timestamp", item.timestampUnixMs.toString()),
+            prop("data", observability.attrsJson(item.data)),
+        ]))
+    }
+    object([prop("values", array(values))])
+}
+
+fn measurementsJson(items: List<observability.Metric>) -> String {
+    let mut props: List<String> = []
+    for item in items {
+        props.push(prop(item.name, object([
+            prop("value", item.value.toString()),
+            prop("unit", quote(item.unit)),
+        ])))
+    }
+    object(props)
+}
+
+fn userJson(user: User) -> String {
+    object([
+        prop("id", quote(user.id)),
+        prop("username", quote(redact.redact(user.username))),
+        prop("email", quote(redact.redact(user.email))),
+        prop("ip_address", quote(user.ipAddress)),
+    ])
+}
+
+fn sdkJson() -> String {
+    object([
+        prop("name", quote(SDK_NAME)),
+        prop("version", quote(SDK_VERSION)),
+    ])
+}
+
+fn unixMsToSeconds(ms: Int) -> String {
+    (ms.toFloat() / 1000.0).toString()
+}
+
+fn clampFloat(value: Float, min: Float, max: Float) -> Float {
+    if value < min {
+        return min
+    }
+    if value > max {
+        return max
+    }
+    value
+}
+
+fn cleanKey(key: String) -> String {
+    let clean = strings.trimSpace(key)
+    if clean.isEmpty() {
+        return "unknown"
+    }
+    strings.replaceAll(strings.replaceAll(clean, " ", "_"), "\n", "_")
+}
+
+fn stringArrayJson(items: List<String>) -> String {
+    let mut out: List<String> = []
+    for item in items {
+        out.push(quote(item))
+    }
+    array(out)
+}
+
+fn object(props: List<String>) -> String {
+    let open = 123.toChar()
+    let close = 125.toChar()
+    let sep = ","
+    "{open}{strings.join(props, sep)}{close}"
+}
+
+fn array(items: List<String>) -> String {
+    let sep = ","
+    "[{strings.join(items, sep)}]"
+}
+
+fn prop(name: String, value: String) -> String {
+    "{quote(name)}:{value}"
+}
+
+fn quote(text: String) -> String {
+    json.stringifyValue(json.string(text))
+}

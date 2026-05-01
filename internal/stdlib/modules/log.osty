@@ -54,6 +54,54 @@ pub fn fields() -> Fields {
     {:}
 }
 
+pub fn debugLevel() -> Level {
+    Debug
+}
+
+pub fn infoLevel() -> Level {
+    Info
+}
+
+pub fn warnLevel() -> Level {
+    Warn
+}
+
+pub fn errorLevel() -> Level {
+    Error
+}
+
+pub fn nullValue() -> LogValue {
+    Null
+}
+
+pub fn boolValue(value: Bool) -> LogValue {
+    Bool(value)
+}
+
+pub fn intValue(value: Int) -> LogValue {
+    Int(value)
+}
+
+pub fn floatValue(value: Float) -> LogValue {
+    Float(value)
+}
+
+pub fn stringValue(value: String) -> LogValue {
+    String(value)
+}
+
+pub fn bytesValue(value: Bytes) -> LogValue {
+    Bytes(value)
+}
+
+pub fn listValue(value: LogValueList) -> LogValue {
+    List(value)
+}
+
+pub fn mapValue(value: Fields) -> LogValue {
+    Map(value)
+}
+
 fn write(level: String, msg: String, fields: Fields) {
     println(msg)
 }

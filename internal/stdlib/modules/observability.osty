@@ -1,0 +1,602 @@
+// std.observability - errors, traces, breadcrumbs, and performance events.
+//
+// The module is intentionally backend-neutral. It builds normalized telemetry
+// records that can be logged, counted, serialized as JSON, or handed to a
+// vendor adapter such as std.sentry.
+
+use std.error
+use std.json
+use std.log
+use std.metrics
+use std.redact
+use std.strings
+
+pub type Attributes = Map<String, json.Json>
+pub type Tags = Map<String, String>
+
+pub enum Severity {
+    DebugSeverity,
+    InfoSeverity,
+    WarningSeverity,
+    ErrorSeverity,
+    FatalSeverity,
+
+    pub fn toString(self) -> String {
+        match self {
+            DebugSeverity   -> "debug",
+            InfoSeverity    -> "info",
+            WarningSeverity -> "warning",
+            ErrorSeverity   -> "error",
+            FatalSeverity   -> "fatal",
+        }
+    }
+
+    pub fn toLogLevel(self) -> log.Level {
+        match self {
+            DebugSeverity   -> log.debugLevel(),
+            InfoSeverity    -> log.infoLevel(),
+            WarningSeverity -> log.warnLevel(),
+            ErrorSeverity   -> log.errorLevel(),
+            FatalSeverity   -> log.errorLevel(),
+        }
+    }
+}
+
+pub enum SignalKind {
+    MessageSignal,
+    ErrorSignal,
+    SpanSignal,
+    MetricSignal,
+    BreadcrumbSignal,
+
+    pub fn toString(self) -> String {
+        match self {
+            MessageSignal    -> "message",
+            ErrorSignal      -> "error",
+            SpanSignal       -> "span",
+            MetricSignal     -> "metric",
+            BreadcrumbSignal -> "breadcrumb",
+        }
+    }
+}
+
+pub enum SpanStatus {
+    StatusUnset,
+    StatusOk,
+    StatusError,
+    StatusCancelled,
+    StatusDeadlineExceeded,
+    StatusNotFound,
+    StatusPermissionDenied,
+    StatusResourceExhausted,
+    StatusUnavailable,
+
+    pub fn toString(self) -> String {
+        match self {
+            StatusUnset             -> "unset",
+            StatusOk                -> "ok",
+            StatusError             -> "error",
+            StatusCancelled         -> "cancelled",
+            StatusDeadlineExceeded  -> "deadline_exceeded",
+            StatusNotFound          -> "not_found",
+            StatusPermissionDenied  -> "permission_denied",
+            StatusResourceExhausted -> "resource_exhausted",
+            StatusUnavailable       -> "unavailable",
+        }
+    }
+}
+
+pub struct Resource {
+    pub serviceName: String,
+    pub serviceVersion: String = "",
+    pub environment: String = "",
+    pub release: String = "",
+    pub instanceId: String = "",
+    pub attributes: Attributes = {:},
+
+    pub fn withVersion(mut self, version: String) -> Resource {
+        self.serviceVersion = strings.trimSpace(version)
+        self
+    }
+
+    pub fn withEnvironment(mut self, environment: String) -> Resource {
+        self.environment = strings.trimSpace(environment)
+        self
+    }
+
+    pub fn withRelease(mut self, release: String) -> Resource {
+        self.release = strings.trimSpace(release)
+        self
+    }
+
+    pub fn withInstance(mut self, instanceId: String) -> Resource {
+        self.instanceId = strings.trimSpace(instanceId)
+        self
+    }
+
+    pub fn withAttribute(mut self, key: String, value: json.Json) -> Resource {
+        self.attributes.insert(cleanKey(key), value)
+        self
+    }
+}
+
+pub struct TraceContext {
+    pub traceId: String,
+    pub spanId: String,
+    pub parentSpanId: String = "",
+    pub sampled: Bool = true,
+    pub baggage: Tags = {:},
+
+    pub fn child(mut self, spanId: String) -> TraceContext {
+        self.parentSpanId = self.spanId
+        self.spanId = strings.trimSpace(spanId)
+        self
+    }
+
+    pub fn withSampled(mut self, sampled: Bool) -> TraceContext {
+        self.sampled = sampled
+        self
+    }
+
+    pub fn withBaggage(mut self, key: String, value: String) -> TraceContext {
+        self.baggage.insert(cleanKey(key), strings.trimSpace(value))
+        self
+    }
+}
+
+pub struct Span {
+    pub name: String,
+    pub op: String = "",
+    pub description: String = "",
+    pub trace: TraceContext,
+    pub status: SpanStatus,
+    pub startUnixMs: Int = 0,
+    pub endUnixMs: Int = 0,
+    pub durationMs: Int = 0,
+    pub attributes: Attributes = {:},
+
+    pub fn withDescription(mut self, description: String) -> Span {
+        self.description = strings.trimSpace(description)
+        self
+    }
+
+    pub fn withStatus(mut self, status: SpanStatus) -> Span {
+        self.status = status
+        self
+    }
+
+    pub fn withAttribute(mut self, key: String, value: json.Json) -> Span {
+        self.attributes.insert(cleanKey(key), value)
+        self
+    }
+
+    pub fn finish(mut self, endUnixMs: Int, status: SpanStatus) -> Span {
+        finishSpan(self, endUnixMs, status)
+    }
+}
+
+pub struct Breadcrumb {
+    pub category: String,
+    pub message: String,
+    pub level: Severity,
+    pub timestampUnixMs: Int = 0,
+    pub data: Attributes = {:},
+}
+
+pub struct Metric {
+    pub name: String,
+    pub value: Float,
+    pub unit: String = "",
+    pub timestampUnixMs: Int = 0,
+    pub tags: Tags = {:},
+}
+
+pub struct Event {
+    pub kind: SignalKind,
+    pub level: Severity,
+    pub message: String,
+    pub errorMessage: String = "",
+    pub errorChain: List<String> = [],
+    pub fingerprint: List<String> = [],
+    pub resource: Resource,
+    pub trace: TraceContext? = None,
+    pub span: Span? = None,
+    pub attributes: Attributes = {:},
+    pub tags: Tags = {:},
+    pub breadcrumbs: List<Breadcrumb> = [],
+    pub metrics: List<Metric> = [],
+    pub timestampUnixMs: Int = 0,
+
+    pub fn withTrace(mut self, trace: TraceContext) -> Event {
+        self.trace = Some(trace)
+        self
+    }
+
+    pub fn withSpan(mut self, span: Span) -> Event {
+        self.trace = Some(span.trace)
+        self.span = Some(span)
+        self
+    }
+
+    pub fn withAttribute(mut self, key: String, value: json.Json) -> Event {
+        self.attributes.insert(cleanKey(key), value)
+        self
+    }
+
+    pub fn withTag(mut self, key: String, value: String) -> Event {
+        self.tags.insert(cleanKey(key), strings.trimSpace(value))
+        self
+    }
+
+    pub fn withBreadcrumb(mut self, crumb: Breadcrumb) -> Event {
+        self.breadcrumbs.push(crumb)
+        self
+    }
+
+    pub fn withMetric(mut self, metric: Metric) -> Event {
+        self.metrics.push(metric)
+        self
+    }
+
+    pub fn redacted(mut self) -> Event {
+        self.message = redact.redact(self.message)
+        self.errorMessage = redact.redact(self.errorMessage)
+        let mut chain: List<String> = []
+        for item in self.errorChain {
+            chain.push(redact.redact(item))
+        }
+        self.errorChain = chain
+        self
+    }
+}
+
+pub fn resource(serviceName: String) -> Resource {
+    Resource { serviceName: strings.trimSpace(serviceName) }
+}
+
+pub fn defaultResource() -> Resource {
+    resource("osty-app")
+}
+
+pub fn attributes() -> Attributes {
+    {:}
+}
+
+pub fn tags() -> Tags {
+    {:}
+}
+
+pub fn attrString(value: String) -> json.Json {
+    json.string(value)
+}
+
+pub fn attrInt(value: Int) -> json.Json {
+    json.int(value)
+}
+
+pub fn attrFloat(value: Float) -> json.Json {
+    json.number(value)
+}
+
+pub fn attrBool(value: Bool) -> json.Json {
+    json.bool(value)
+}
+
+pub fn traceContext(traceId: String, spanId: String) -> TraceContext {
+    TraceContext {
+        traceId: strings.trimSpace(traceId),
+        spanId: strings.trimSpace(spanId),
+    }
+}
+
+pub fn childTrace(parent: TraceContext, spanId: String) -> TraceContext {
+    parent.child(spanId)
+}
+
+pub fn traceparent(trace: TraceContext) -> String {
+    let sampled = if trace.sampled { "01" } else { "00" }
+    "00-{strings.trimSpace(trace.traceId)}-{strings.trimSpace(trace.spanId)}-{sampled}"
+}
+
+pub fn baggage(trace: TraceContext) -> String {
+    let keys = trace.baggage.keys().sorted()
+    let mut pairs: List<String> = []
+    for key in keys {
+        pairs.push("{key}={trace.baggage.get(key).unwrap()}")
+    }
+    strings.join(pairs, ",")
+}
+
+pub fn traceHeaders(trace: TraceContext) -> Map<String, String> {
+    let mut out: Map<String, String> = {:}
+    out.insert("traceparent", traceparent(trace))
+    let bag = baggage(trace)
+    if !bag.isEmpty() {
+        out.insert("baggage", bag)
+    }
+    out
+}
+
+pub fn startSpan(name: String, op: String, trace: TraceContext, startUnixMs: Int) -> Span {
+    Span {
+        name: strings.trimSpace(name),
+        op: strings.trimSpace(op),
+        trace: trace,
+        status: StatusUnset,
+        startUnixMs: startUnixMs,
+    }
+}
+
+pub fn finishSpan(mut span: Span, endUnixMs: Int, status: SpanStatus) -> Span {
+    span.endUnixMs = endUnixMs
+    span.status = status
+    if endUnixMs >= span.startUnixMs {
+        span.durationMs = endUnixMs - span.startUnixMs
+    }
+    span
+}
+
+pub fn breadcrumb(category: String, message: String, level: Severity) -> Breadcrumb {
+    Breadcrumb {
+        category: strings.trimSpace(category),
+        message: message,
+        level: level,
+    }
+}
+
+pub fn metric(name: String, value: Float, unit: String) -> Metric {
+    Metric {
+        name: cleanKey(name),
+        value: value,
+        unit: strings.trimSpace(unit),
+    }
+}
+
+pub fn metricFromSample(sample: metrics.Sample) -> Metric {
+    let mut tagMap: Tags = {:}
+    let mut i = 0
+    for i < sample.labels.len() {
+        tagMap.insert("label{i.toString()}", sample.labels[i])
+        i = i + 1
+    }
+    Metric {
+        name: sample.key,
+        value: sample.value.toFloat(),
+        unit: "count",
+        tags: tagMap,
+    }
+}
+
+pub fn counterMetrics(counter: metrics.Counter) -> List<Metric> {
+    let mut out: List<Metric> = []
+    for sample in metrics.snapshot(counter) {
+        out.push(metricFromSample(sample))
+    }
+    out
+}
+
+pub fn messageEvent(message: String, level: Severity, res: Resource) -> Event {
+    Event {
+        kind: MessageSignal,
+        level: level,
+        message: message,
+        resource: res,
+    }
+}
+
+pub fn errorEvent(err: Error, res: Resource) -> Event {
+    let chain = errorChain(err)
+    Event {
+        kind: ErrorSignal,
+        level: ErrorSeverity,
+        message: err.message(),
+        errorMessage: err.message(),
+        errorChain: chain,
+        resource: res,
+    }
+}
+
+pub fn spanEvent(span: Span, res: Resource) -> Event {
+    Event {
+        kind: SpanSignal,
+        level: if span.status == StatusError { ErrorSeverity } else { InfoSeverity },
+        message: span.name,
+        resource: res,
+        trace: Some(span.trace),
+        span: Some(span),
+    }
+}
+
+pub fn metricEvent(metric: Metric, res: Resource) -> Event {
+    Event {
+        kind: MetricSignal,
+        level: InfoSeverity,
+        message: metric.name,
+        resource: res,
+        metrics: [metric],
+    }
+}
+
+pub fn logRecord(event: Event) -> log.Record {
+    let mut fields = log.fields()
+    fields.insert("kind", log.stringValue(event.kind.toString()))
+    fields.insert("service", log.stringValue(event.resource.serviceName))
+    fields.insert("level", log.stringValue(event.level.toString()))
+    match event.trace {
+        Some(trace) -> {
+            fields.insert("trace_id", log.stringValue(trace.traceId))
+            fields.insert("span_id", log.stringValue(trace.spanId))
+        },
+        None -> {},
+    }
+    log.Record {
+        level: event.level.toLogLevel(),
+        message: event.message,
+        fields: fields,
+    }
+}
+
+pub fn eventJson(event: Event) -> String {
+    let mut props: List<String> = [
+        prop("kind", quote(event.kind.toString())),
+        prop("level", quote(event.level.toString())),
+        prop("message", quote(redact.redact(event.message))),
+        prop("resource", resourceJson(event.resource)),
+        prop("attributes", attrsJson(event.attributes)),
+        prop("tags", tagsJson(event.tags)),
+        prop("breadcrumbs", breadcrumbsJson(event.breadcrumbs)),
+        prop("metrics", metricsJson(event.metrics)),
+    ]
+    if !event.errorMessage.isEmpty() {
+        props.push(prop("error_message", quote(redact.redact(event.errorMessage))))
+        props.push(prop("error_chain", stringArrayJson(redactList(event.errorChain))))
+    }
+    if !event.fingerprint.isEmpty() {
+        props.push(prop("fingerprint", stringArrayJson(event.fingerprint)))
+    }
+    if event.timestampUnixMs > 0 {
+        props.push(prop("timestamp_unix_ms", event.timestampUnixMs.toString()))
+    }
+    match event.trace {
+        Some(trace) -> props.push(prop("trace", traceJson(trace))),
+        None        -> {},
+    }
+    match event.span {
+        Some(span) -> props.push(prop("span", spanJson(span))),
+        None       -> {},
+    }
+    object(props)
+}
+
+pub fn spanJson(span: Span) -> String {
+    object([
+        prop("name", quote(span.name)),
+        prop("op", quote(span.op)),
+        prop("description", quote(span.description)),
+        prop("status", quote(span.status.toString())),
+        prop("start_unix_ms", span.startUnixMs.toString()),
+        prop("end_unix_ms", span.endUnixMs.toString()),
+        prop("duration_ms", span.durationMs.toString()),
+        prop("trace", traceJson(span.trace)),
+        prop("attributes", attrsJson(span.attributes)),
+    ])
+}
+
+pub fn traceJson(trace: TraceContext) -> String {
+    object([
+        prop("trace_id", quote(trace.traceId)),
+        prop("span_id", quote(trace.spanId)),
+        prop("parent_span_id", quote(trace.parentSpanId)),
+        prop("sampled", if trace.sampled { "true" } else { "false" }),
+        prop("baggage", tagsJson(trace.baggage)),
+    ])
+}
+
+pub fn attrsJson(attrs: Attributes) -> String {
+    let keys = attrs.keys().sorted()
+    let mut props: List<String> = []
+    for key in keys {
+        props.push(prop(key, json.stringifyValue(attrs.get(key).unwrap())))
+    }
+    object(props)
+}
+
+pub fn tagsJson(tagMap: Tags) -> String {
+    let keys = tagMap.keys().sorted()
+    let mut props: List<String> = []
+    for key in keys {
+        props.push(prop(key, quote(tagMap.get(key).unwrap())))
+    }
+    object(props)
+}
+
+fn resourceJson(res: Resource) -> String {
+    object([
+        prop("service_name", quote(res.serviceName)),
+        prop("service_version", quote(res.serviceVersion)),
+        prop("environment", quote(res.environment)),
+        prop("release", quote(res.release)),
+        prop("instance_id", quote(res.instanceId)),
+        prop("attributes", attrsJson(res.attributes)),
+    ])
+}
+
+fn breadcrumbsJson(items: List<Breadcrumb>) -> String {
+    let mut out: List<String> = []
+    for item in items {
+        out.push(object([
+            prop("category", quote(item.category)),
+            prop("message", quote(redact.redact(item.message))),
+            prop("level", quote(item.level.toString())),
+            prop("timestamp_unix_ms", item.timestampUnixMs.toString()),
+            prop("data", attrsJson(item.data)),
+        ]))
+    }
+    array(out)
+}
+
+fn metricsJson(items: List<Metric>) -> String {
+    let mut out: List<String> = []
+    for item in items {
+        out.push(object([
+            prop("name", quote(item.name)),
+            prop("value", item.value.toString()),
+            prop("unit", quote(item.unit)),
+            prop("timestamp_unix_ms", item.timestampUnixMs.toString()),
+            prop("tags", tagsJson(item.tags)),
+        ]))
+    }
+    array(out)
+}
+
+fn errorChain(err: Error) -> List<String> {
+    let mut out: List<String> = []
+    for item in err.chain() {
+        out.push(item.message())
+    }
+    out
+}
+
+fn redactList(items: List<String>) -> List<String> {
+    let mut out: List<String> = []
+    for item in items {
+        out.push(redact.redact(item))
+    }
+    out
+}
+
+fn cleanKey(key: String) -> String {
+    let clean = strings.trimSpace(key)
+    if clean.isEmpty() {
+        return "unknown"
+    }
+    strings.replaceAll(strings.replaceAll(clean, " ", "_"), "\n", "_")
+}
+
+fn stringArrayJson(items: List<String>) -> String {
+    let mut out: List<String> = []
+    for item in items {
+        out.push(quote(item))
+    }
+    array(out)
+}
+
+fn object(props: List<String>) -> String {
+    let open = 123.toChar()
+    let close = 125.toChar()
+    let sep = ","
+    "{open}{strings.join(props, sep)}{close}"
+}
+
+fn array(items: List<String>) -> String {
+    let sep = ","
+    "[{strings.join(items, sep)}]"
+}
+
+fn prop(name: String, value: String) -> String {
+    "{quote(name)}:{value}"
+}
+
+fn quote(text: String) -> String {
+    json.stringifyValue(json.string(text))
+}
