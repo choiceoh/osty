@@ -2121,6 +2121,7 @@ fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
         MirIntrinsicMapValues -> lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeValuesSymbol(), lirPtrType(), [lirPtrType()], "map.values"),
         MirIntrinsicMapClear -> lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeClearSymbol(), lirVoidType(), [lirPtrType()], "map.clear"),
         MirIntrinsicMapSet -> lirLowerMirMapInsert(l, instr),
+        MirIntrinsicMapGet -> lirLowerMirMapGet(l, instr),
         MirIntrinsicMapContains -> lirLowerMirMapContains(l, instr),
         MirIntrinsicMapRemove -> lirLowerMirMapRemove(l, instr),
         MirIntrinsicSetNew -> lirLowerMirStringRuntimeCall(l, instr, llvmSetRuntimeNewSymbol(), lirPtrType(), [], "set.new"),
@@ -2846,6 +2847,79 @@ fn lirLowerMirMapRemove(l: LirMirFunctionLowerer, instr: MirInstr) {
         return
     }
     lirEmitContainerCall(l, instr, llvmMapRuntimeRemoveSymbol(recv.elemLir.llvm, recv.isString), lirVoidType(), [lirPtrType(), recv.elemLir], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, key.value)], "", "map.remove")
+}
+// `Map.get(key) -> Option<V>` lowering. Production calls
+// `osty_rt_map_get_<keysuf>(map, key, out_ptr) -> i1` where the runtime
+// memcpys the value into `out_ptr` on hit and returns true; on miss
+// it returns false and leaves `out_ptr` untouched. The Some arm loads
+// from the out-slot, widens to i64 the same way the parse-Result
+// helper does, and builds the canonical `%Option.<V>` aggregate. The
+// None arm builds Option.None. Both arms store into an alloca-backed
+// merge slot and the end-block loads the merged Option<V>.
+//
+// Composite element types (struct / tuple values) need the bytes-v1
+// runtime fallback, which is the same alloca + sizeof shape List/Map/
+// Set/Channel composite elements all share — that's a separate slice.
+fn lirLowerMirMapGet(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 2 {
+        lirLowerError(l, LirDiagInvalidInput, "map.get expects (map, key)", "map.get")
+        return
+    }
+    if !(instr.hasDest) {
+        lirLowerError(l, LirDiagInvalidInput, "map.get requires a destination (Option<V>)", "map.get")
+        return
+    }
+    let recv = lirLowerMirContainerReceiver(l, instr, "map.get", "map.kv")
+    if !(recv.ok) {
+        return
+    }
+    if !(llvmListUsesTypedRuntime(recv.valueLir.llvm)) {
+        lirLowerError(l, LirDiagUnsupported, "map.get composite value type `" + recv.valueTypeName + "` needs the bytes-v1 runtime fallback (deferred)", "map.get")
+        return
+    }
+    let key = lirLowerCoercedOperand(l, instr.args[1], recv.elemTypeName, recv.elemLir, "map.get key")
+    if key.value == "" {
+        return
+    }
+    let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+    if loc.id < 0 {
+        lirLowerError(l, LirDiagInvalidInput, "map.get destination local out of range", "map.get")
+        return
+    }
+    if !(lirIsOptionTypeName(loc.typ)) {
+        lirLowerError(l, LirDiagUnsupported, "map.get destination must be Option<V>, got `" + loc.typ + "`", "map.get")
+        return
+    }
+    let optType = lirLowerMirType(l, loc.typ)
+    if lirTypeIsZero(optType) {
+        lirLowerError(l, LirDiagUnsupported, "map.get destination type `" + loc.typ + "` is not implemented", "map.get")
+        return
+    }
+    let symbol = mirRtMapSymbol("get_" + llvmMapKeySuffix(recv.elemLir.llvm, recv.isString))
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirIntType(1), [lirPtrType(), recv.elemLir, lirPtrType()], false))
+    let outSlot = lirFresh(l)
+    l.instrs.push(lirAlloca(outSlot, recv.valueLir, 0))
+    let presentReg = lirFresh(l)
+    l.instrs.push(lirCall(presentReg, lirIntType(1), "@" + symbol, [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, key.value), lirOperand(lirPtrType(), outSlot)]))
+    let mergeSlot = lirFresh(l)
+    l.instrs.push(lirAlloca(mergeSlot, optType, 0))
+    let someLabel = lirFreshAuxLabel(l, "map.get.some")
+    let noneLabel = lirFreshAuxLabel(l, "map.get.none")
+    let endLabel = lirFreshAuxLabel(l, "map.get.end")
+    lirCutBlockCondBr(l, presentReg, someLabel, noneLabel, someLabel)
+    let loaded = lirFresh(l)
+    l.instrs.push(lirLoad(loaded, recv.valueLir, outSlot, 0))
+    let payloadI64 = lirParseResultPayloadAsI64(l, loaded, recv.valueLir)
+    let someValue = lirEmitOptionSome(l, optType, payloadI64)
+    l.instrs.push(lirStore(lirOperand(optType, someValue), mergeSlot, 0))
+    lirCutBlockBr(l, endLabel)
+    l.currentBlockLabel = noneLabel
+    let noneValue = lirEmitOptionNone(l, optType)
+    l.instrs.push(lirStore(lirOperand(optType, noneValue), mergeSlot, 0))
+    lirCutBlockBr(l, endLabel)
+    let merged = lirFresh(l)
+    l.instrs.push(lirLoad(merged, optType, mergeSlot, 0))
+    lirStoreMirResult(l, instr.dest, lirOperand(optType, merged), loc.typ, "map.get result")
 }
 // ----- Set intrinsic lowerings (typed elem lane) -----
 fn lirLowerMirSetInsert(l: LirMirFunctionLowerer, instr: MirInstr) {

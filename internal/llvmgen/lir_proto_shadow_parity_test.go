@@ -343,6 +343,9 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		// ----- String parse → Result<T, Error> -----
 		{"lirParityManualStringToIntFixture", []string{"%Result.Int_Error = type", "declare i1 @osty_rt_strings_IsValidInt(ptr)", "declare i64 @osty_rt_strings_ToInt(ptr)", "alloca %Result.Int_Error", "insertvalue %Result.Int_Error undef, i64 1, 0", "insertvalue %Result.Int_Error undef, i64 0, 0", "load %Result.Int_Error", "ret %Result.Int_Error"}},
 		{"lirParityManualStringToFloatFixture", []string{"%Result.Float_Error = type", "declare i1 @osty_rt_strings_IsValidFloat(ptr)", "declare double @osty_rt_strings_ToFloat(ptr)", "bitcast double", "ret %Result.Float_Error"}},
+		// ----- Map.get → Option<V> -----
+		{"lirParityManualMapGetStringIntFixture", []string{"%Option.Int = type", "declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)", "alloca i64", "call i1 @osty_rt_map_get_string(", "alloca %Option.Int", "load i64", "insertvalue %Option.Int undef, i64 1, 0", "insertvalue %Option.Int undef, i64 0, 0", "ret %Option.Int"}},
+		{"lirParityManualMapGetI64StringFixture", []string{"%Option.String = type", "declare i1 @osty_rt_map_get_i64(ptr, i64, ptr)", "alloca ptr", "call i1 @osty_rt_map_get_i64(", "ptrtoint ptr", "ret %Option.String"}},
 	}
 
 	for _, tt := range want {

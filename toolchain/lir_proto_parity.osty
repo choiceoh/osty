@@ -148,7 +148,7 @@ pub fn lirParityBuiltinFixtures() -> List<LirParityFixture> {
     out
 }
 pub fn lirParityManualMIRFixtures() -> List<LirParityFixture> {
-    [lirParityManualConstReturnFixture(), lirParityManualDirectCallFixture(), lirParityManualBranchFixture(), lirParityManualSwitchFixture(), lirParityManualPrintlnStringFixture(), lirParityManualCastIntResizeFixture(), lirParityManualCastFloatResizeFixture(), lirParityManualCastIntToFloatFixture(), lirParityManualDirectCallArgCoercionFixture(), lirParityManualPrimitiveIntToByteFixture(), lirParityManualPrimitiveByteToCharFixture(), lirParityManualTupleLiteralReadFixture(), lirParityManualStructLiteralReadFixture(), lirParityManualNestedProjectedAssignFixture(), lirParityManualProjectedCallResultFixture(), lirParityManualProjectedIntrinsicResultFixture(), lirParityManualStringByteLenFixture(), lirParityManualStringIsEmptyFixture(), lirParityManualStringConcatBinaryFixture(), lirParityManualStringConcatNFixture(), lirParityManualStringContainsFixture(), lirParityManualStringTrimSpaceFixture(), lirParityManualStringRepeatFixture(), lirParityManualStringSubstringFixture(), lirParityManualStringReplaceAllFixture(), lirParityManualBytesLenFixture(), lirParityManualBytesConcatFixture(), lirParityManualBytesSliceFixture(), lirParityManualListPushIntFixture(), lirParityManualListPushStringFixture(), lirParityManualListLenFixture(), lirParityManualListIsEmptyFixture(), lirParityManualListGetFloatFixture(), lirParityManualListSortedI64Fixture(), lirParityManualListReversedFixture(), lirParityManualListClearFixture(), lirParityManualMapNewFixture(), lirParityManualMapInsertStringIntFixture(), lirParityManualMapContainsI64Fixture(), lirParityManualMapKeysFixture(), lirParityManualMapLenFixture(), lirParityManualSetInsertStringFixture(), lirParityManualSetContainsI64Fixture(), lirParityManualSetToListFixture(), lirParityManualChanCloseFixture(), lirParityManualYieldFixture(), lirParityManualIsCancelledFixture(), lirParityManualEntrySafepointFixture(), lirParityManualFnAttrInlineAlwaysFixture(), lirParityManualFnAttrHotPureFixture(), lirParityManualFnAttrTargetFeaturesFixture(), lirParityManualFnAttrNoaliasFixture(), lirParityManualStringIndexOfRawFixture(), lirParityManualStringIndexOfOptionFixture(), lirParityManualBytesIndexOfOptionFixture(), lirParityManualChanMakeFixture(), lirParityManualChanIsClosedFixture(), lirParityManualChanSendIntFixture(), lirParityManualChanRecvIntFixture(), lirParityManualStringToIntFixture(), lirParityManualStringToFloatFixture()]
+    [lirParityManualConstReturnFixture(), lirParityManualDirectCallFixture(), lirParityManualBranchFixture(), lirParityManualSwitchFixture(), lirParityManualPrintlnStringFixture(), lirParityManualCastIntResizeFixture(), lirParityManualCastFloatResizeFixture(), lirParityManualCastIntToFloatFixture(), lirParityManualDirectCallArgCoercionFixture(), lirParityManualPrimitiveIntToByteFixture(), lirParityManualPrimitiveByteToCharFixture(), lirParityManualTupleLiteralReadFixture(), lirParityManualStructLiteralReadFixture(), lirParityManualNestedProjectedAssignFixture(), lirParityManualProjectedCallResultFixture(), lirParityManualProjectedIntrinsicResultFixture(), lirParityManualStringByteLenFixture(), lirParityManualStringIsEmptyFixture(), lirParityManualStringConcatBinaryFixture(), lirParityManualStringConcatNFixture(), lirParityManualStringContainsFixture(), lirParityManualStringTrimSpaceFixture(), lirParityManualStringRepeatFixture(), lirParityManualStringSubstringFixture(), lirParityManualStringReplaceAllFixture(), lirParityManualBytesLenFixture(), lirParityManualBytesConcatFixture(), lirParityManualBytesSliceFixture(), lirParityManualListPushIntFixture(), lirParityManualListPushStringFixture(), lirParityManualListLenFixture(), lirParityManualListIsEmptyFixture(), lirParityManualListGetFloatFixture(), lirParityManualListSortedI64Fixture(), lirParityManualListReversedFixture(), lirParityManualListClearFixture(), lirParityManualMapNewFixture(), lirParityManualMapInsertStringIntFixture(), lirParityManualMapContainsI64Fixture(), lirParityManualMapKeysFixture(), lirParityManualMapLenFixture(), lirParityManualSetInsertStringFixture(), lirParityManualSetContainsI64Fixture(), lirParityManualSetToListFixture(), lirParityManualChanCloseFixture(), lirParityManualYieldFixture(), lirParityManualIsCancelledFixture(), lirParityManualEntrySafepointFixture(), lirParityManualFnAttrInlineAlwaysFixture(), lirParityManualFnAttrHotPureFixture(), lirParityManualFnAttrTargetFeaturesFixture(), lirParityManualFnAttrNoaliasFixture(), lirParityManualStringIndexOfRawFixture(), lirParityManualStringIndexOfOptionFixture(), lirParityManualBytesIndexOfOptionFixture(), lirParityManualChanMakeFixture(), lirParityManualChanIsClosedFixture(), lirParityManualChanSendIntFixture(), lirParityManualChanRecvIntFixture(), lirParityManualStringToIntFixture(), lirParityManualStringToFloatFixture(), lirParityManualMapGetStringIntFixture(), lirParityManualMapGetI64StringFixture()]
 }
 pub fn lirParitySourceFixtures() -> List<LirParityFixture> {
     [lirParitySourceScalarArithmeticFixture(), lirParitySourceScalarBranchFixture(), lirParitySourcePrimitiveByteToCharFixture(), lirParitySourceDirectCallFixture(), lirParitySourceTupleLiteralReadFixture(), lirParitySourceStructLiteralReadFixture(), lirParitySourceNestedProjectedAssignFixture(), lirParitySourceProjectedCallResultFixture(), lirParitySourceProjectedIntrinsicResultFixture(), lirParitySourcePrintlnIntFixture()]
@@ -458,6 +458,12 @@ pub fn lirParityBuildManualModule(name: String) -> MirModule {
     }
     if name == "string_to_float" {
         return lirParityBuildStringToFloatModule()
+    }
+    if name == "map_get_string_int" {
+        return lirParityBuildMapGetStringIntModule()
+    }
+    if name == "map_get_i64_string" {
+        return lirParityBuildMapGetI64StringModule()
     }
     mirModule("main")
 }
@@ -1184,6 +1190,38 @@ pub fn lirParityBuildStringToFloatModule() -> MirModule {
     let s = lirParityParam(fn_, "s", "String")
     let entry = lirParityEntry(fn_)
     mirFunctionAppend(fn_, entry, mirIntrinsicInstr(true, mirPlace(fn_.returnLocal), MirIntrinsicStringToFloat, [mirOperandCopy(mirPlace(s), "String")], mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    lirParityModule([fn_])
+}
+// ====================================================================
+// Map.get → Option<V> fixtures
+// ====================================================================
+//
+// Two fixtures pin the out-pointer + i1 present pattern: Map<String,
+// Int> (string-key + i64 value) and Map<Int, String> (i64-key + ptr
+// value). The string-key form exercises the most common dispatch
+// (osty_rt_map_get_string), and the i64-key/string-value form covers
+// both lane resolutions in one fixture.
+pub fn lirParityManualMapGetStringIntFixture() -> LirParityFixture {
+    lirParityFixture("map_get_string_int", LirParityManualMIR, "/tmp/lir_proto_parity_map_get_string_int.osty", "", "phase4-option", ["option", "map", "get", "key-string"], [lirParityNeedle("%Option.Int = type \{ i64, i64 \}", "Option<Int> aggregate type"), lirParityNeedle("declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)", "string-key get runtime"), lirParityNeedle("alloca i64", "out-slot for value"), lirParityNeedle("call i1 @osty_rt_map_get_string(", "get call site"), lirParityNeedle("alloca %Option.Int", "merge slot"), lirParityNeedle("load i64", "value load on Some arm"), lirParityNeedle("insertvalue %Option.Int undef, i64 1, 0", "Some disc"), lirParityNeedle("insertvalue %Option.Int undef, i64 0, 0", "None disc"), lirParityNeedle("ret %Option.Int", "Option<V> return")])
+}
+pub fn lirParityManualMapGetI64StringFixture() -> LirParityFixture {
+    lirParityFixture("map_get_i64_string", LirParityManualMIR, "/tmp/lir_proto_parity_map_get_i64_string.osty", "", "phase4-option", ["option", "map", "get", "key-i64", "value-ptr"], [lirParityNeedle("%Option.String = type \{ i64, i64 \}", "Option<String> aggregate type"), lirParityNeedle("declare i1 @osty_rt_map_get_i64(ptr, i64, ptr)", "i64-key get runtime"), lirParityNeedle("alloca ptr", "out-slot for ptr value"), lirParityNeedle("call i1 @osty_rt_map_get_i64(", "get call site"), lirParityNeedle("ptrtoint ptr", "ptr-to-i64 payload coercion"), lirParityNeedle("ret %Option.String", "Option<String> return")])
+}
+pub fn lirParityBuildMapGetStringIntModule() -> MirModule {
+    let mut fn_ = lirParityFunction("lookup", "Option<Int>")
+    let m = lirParityParam(fn_, "m", "Map<String, Int>")
+    let k = lirParityParam(fn_, "k", "String")
+    let entry = lirParityEntry(fn_)
+    mirFunctionAppend(fn_, entry, mirIntrinsicInstr(true, mirPlace(fn_.returnLocal), MirIntrinsicMapGet, [mirOperandCopy(mirPlace(m), "Map<String, Int>"), mirOperandCopy(mirPlace(k), "String")], mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    lirParityModule([fn_])
+}
+pub fn lirParityBuildMapGetI64StringModule() -> MirModule {
+    let mut fn_ = lirParityFunction("lookupName", "Option<String>")
+    let m = lirParityParam(fn_, "m", "Map<Int, String>")
+    let entry = lirParityEntry(fn_)
+    mirFunctionAppend(fn_, entry, mirIntrinsicInstr(true, mirPlace(fn_.returnLocal), MirIntrinsicMapGet, [mirOperandCopy(mirPlace(m), "Map<Int, String>"), mirOperandConst(mirConstInt(7, "Int"))], mirNoSpan()))
     mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
     lirParityModule([fn_])
 }
