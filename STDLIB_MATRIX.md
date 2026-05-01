@@ -18,14 +18,14 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 
 ## 1. 4-tier 분류
 
-총 92 공개 모듈. 분류 기준:
+총 93 공개 모듈. 분류 기준:
 
 - **⭐⭐⭐⭐⭐ Production**: surface + backend 모두 풀 커버. 외부 사용자에게 추천 가능
 - **⭐⭐⭐⭐ Production-adjacent**: 사용 가능. 일부 helper 미흡 또는 surface 부풀림 다음 라운드
 - **⭐⭐⭐ Functional**: 기본 사용 가능, 깊이는 부족
 - **🚧 Skeleton / Empty**: 작업 안 됨
 
-### ⭐⭐⭐⭐⭐ Production (86 / 92 = 93%)
+### ⭐⭐⭐⭐⭐ Production (87 / 93 = 94%)
 
 | 모듈 | Surface (LOC) | Backend | 비고 |
 |---|---|---|---|
@@ -93,6 +93,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | clipboard | 125 | pure Osty + os | host clipboard text read/write via pbpaste/pbcopy, Wayland, X11, AppleScript, PowerShell |
 | graphql | 224 | pure Osty | document / field / argument builders + request JSON body encoding |
 | supabase | 927 | pure Osty + http/json | Supabase PostgREST/Auth/Storage/Functions/GraphQL request builders, API-key/session headers, filters, Prefer headers, storage object URLs, and response error helpers |
+| github | 1127 | pure Osty + http/json/crypto | GitHub REST request builders for issues, PRs, Actions, releases, release asset upload, typed error parsing, and webhook HMAC/constant-time verification |
 | template | 148 | pure Osty | escaped/raw `{{name}}` 렌더링 + HTML escape / stripTags |
 | i18n | 136 | pure Osty | Locale / MessageCatalog / fallbackTags / pluralCategory / placeholder format |
 | char | 219 | — | Unicode / ASCII methods |
@@ -119,7 +120,7 @@ Osty 표준 라이브러리 모듈별 production-ready 상태 매트릭스.
 | debug | 10 | — | dbg<T>(v) — Rust dbg! 매크로 |
 | ref | 9 | — | same<T>(a, b) — reference identity 비교 |
 
-### ⭐⭐⭐⭐ Production-adjacent (6 / 92 = 7%)
+### ⭐⭐⭐⭐ Production-adjacent (6 / 93 = 6%)
 
 | 모듈 | Surface (LOC) | 갭 |
 |---|---|---|
@@ -183,6 +184,7 @@ runtime 또는 LLVM bridge 로 실제 동작하는 표면은 stub 로 세지 않
 | SQL 쿼리 조립 | ✅ 가능 | sql (identifier quoting / value literals / dialect placeholders / CRUD builders) |
 | DB 설정/마이그레이션 계획 | ✅ 가능 | db + sql (DSN / pool / tx options / result rows / migration helpers) |
 | Supabase 앱 백엔드 연결 | ✅ 가능 | supabase + http/json/secrets (PostgREST filters/mutations/RPC, Auth password-token requests, Storage object URLs/uploads, Edge Function/GraphQL requests) |
+| GitHub 개발 자동화 | ✅ 가능 | github + http/json/crypto (issue/PR request builders, Actions dispatch/runs/jobs/artifacts, release/create/upload, webhook HMAC verification) |
 | 두 언어 앱 / repo 경계 | ✅ 가능 | polyglot + os + env + fs + `osty scaffold polyglot` (Osty+Go/Rust/Python/Node 등 역할 분리, 빌드/테스트/경계 계약, doctorRun/check runner) |
 | AI agent shell / chat mode | ✅ 가능 | ai + aiagents + http/json/log/thread |
 | Local KV / 설정 DB | ✅ 즉시 가능 | kv + fs + json (JSONL append-log, compact, typed getters/setters) |
