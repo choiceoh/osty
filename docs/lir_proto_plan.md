@@ -970,6 +970,44 @@ Four Phase-4 fixtures pin the shapes:
 - `string_split_into` — void 3-ptr decl + call (no return).
 - `string_nth_segment` — 3-arg ptr decl + call + ret String.
 
+Design decision: closing out the remaining intrinsic dispatch
+gaps lands `MapIncr`, `ListContains`, and `ListIndexOf` —
+the latter two share a single helper `lirLowerMirListLinearScan`
+since `Bool` and `Option<Int>` versions diverge only in the
+result-merge slot (i1 init=`false` + match-store=`true` vs
+`%Option.Int` init=None + match-store=Some(idx)). Production
+emits the same inline scan for both
+(mir_generator.go::IntrinsicListIndexOf|ListContains).
+
+- `MirIntrinsicMapIncr` → `osty_rt_map_incr_i64_<keysuf>(map,
+  key, delta) -> i64`. Single-call fused `m[k] += delta` from
+  the `fuseMapInsertGetOrAdd` MIR pass. Returns the new value
+  (statement form discards via `ignored` register, expression
+  form stores into dest).
+- `MirIntrinsicListContains` / `MirIntrinsicListIndexOf` —
+  inline linear scan: head/body/match/cont/end CFG with
+  alloca-merge result slot. Pre-initialise the slot (false /
+  None), iterate `0..len`, compare each element via
+  `icmp eq`/`fcmp oeq`/`osty_rt_strings_Equal` depending on
+  element-LLVM-type, overwrite slot + jump to end on match,
+  fall through to end after `len` iterations otherwise. The
+  String-equal runtime path exists in production because raw
+  pointer compare would reject equal-content separate
+  allocations.
+
+Three Phase-4 fixtures pin the shapes:
+- `map_incr_string` — string-key incr runtime decl + call + ret i64.
+- `list_contains_i64` — len/get decls + alloca i1 + alloca i64 +
+  loop continue/eq checks + ret i1.
+- `list_index_of_string` — Option.Int aggregate def + string-lane
+  get (returns ptr) + Equal runtime + alloca %Option.Int +
+  ret %Option.Int. Exercises the String comparison path the i64
+  scan skips.
+
+Composite element types (struct/enum/non-typed) take the
+`bytes-v1 fallback (deferred)` diagnostic path, same as
+`list.first`/`list.pop` do today.
+
 ## Phase 0: lock the boundary
 
 Deliverables:

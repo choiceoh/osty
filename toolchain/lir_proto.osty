@@ -2279,6 +2279,9 @@ fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
         MirIntrinsicStringNthSegment -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringNthSegmentSymbol(), lirPtrType(), [lirPtrType(), lirPtrType(), lirIntType(64)], "string.nthSegment"),
         MirIntrinsicListRemoveAt -> lirLowerMirListRemoveAt(l, instr),
         MirIntrinsicMapGetOr -> lirLowerMirMapGetOr(l, instr),
+        MirIntrinsicMapIncr -> lirLowerMirMapIncr(l, instr),
+        MirIntrinsicListContains -> lirLowerMirListLinearScan(l, instr, false),
+        MirIntrinsicListIndexOf -> lirLowerMirListLinearScan(l, instr, true),
         _ -> lirLowerError(l, LirDiagUnsupported, "unsupported MIR intrinsic `" + mirIntrinsicName(instr.intrinsic) + "`", "intrinsic"),
     }
 }
@@ -4393,6 +4396,155 @@ fn lirLowerMirMapGetOr(l: LirMirFunctionLowerer, instr: MirInstr) {
     let merged = lirFresh(l)
     l.instrs.push(lirLoad(merged, destType, mergeSlot, 0))
     lirStoreMirResult(l, instr.dest, lirOperand(destType, merged), loc.typ, "map.getOr result")
+}
+// `lirLowerMirMapIncr` lowers the fused `m[k] = m.getOr(k, 0) +
+// delta` produced by `fuseMapInsertGetOrAdd`. Single runtime call
+// `osty_rt_map_incr_i64_<keysuf>(map, key, delta) -> i64` probes
+// once, updates in place on hit, falls through to insert on miss.
+// Returns the new map value; MIR may discard it (counter benchmarks
+// only need the side effect) but the runtime declaration must
+// match. Mirrors production `IntrinsicMapIncr`
+// (mir_generator.go:6308).
+fn lirLowerMirMapIncr(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 3 {
+        lirLowerError(l, LirDiagInvalidInput, "map.incr expects (map, key, delta)", "map.incr")
+        return
+    }
+    let recv = lirLowerMirContainerReceiver(l, instr, "map.incr", "map.kv")
+    if !(recv.ok) {
+        return
+    }
+    let key = lirLowerCoercedOperand(l, instr.args[1], recv.elemTypeName, recv.elemLir, "map.incr key")
+    if key.value == "" {
+        return
+    }
+    let delta = lirLowerCoercedOperand(l, instr.args[2], "Int", lirIntType(64), "map.incr delta")
+    if delta.value == "" {
+        return
+    }
+    let symbol = "osty_rt_map_incr_i64_" + llvmMapKeySuffix(recv.elemLir.llvm, recv.isString)
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirIntType(64), [lirPtrType(), recv.elemLir, lirIntType(64)], false))
+    if !(instr.hasDest) {
+        let ignored = lirFresh(l)
+        l.instrs.push(lirCall(ignored, lirIntType(64), "@" + symbol, [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, key.value), lirOperand(lirIntType(64), delta.value)]))
+        return
+    }
+    let dest = lirFresh(l)
+    l.instrs.push(lirCall(dest, lirIntType(64), "@" + symbol, [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, key.value), lirOperand(lirIntType(64), delta.value)]))
+    lirStoreMirResult(l, instr.dest, lirOperand(lirIntType(64), dest), "Int", "map.incr result")
+}
+// `lirLowerMirListLinearScan` lowers `list.contains(x) -> Bool` and
+// `list.indexOf(x) -> Int?` as inline scan loops. Both share the same
+// CFG shape — head/body/match/cont/end — and only differ in:
+//
+//   * `wantIndex=false`: dest is i1; pre-store `false` and overwrite
+//     with `true` on first match, jump to end.
+//   * `wantIndex=true`: dest is %Option.Int; pre-store None and
+//     overwrite with Some(idx) on first match, jump to end.
+//
+// Avoids per-elem-type runtime helpers — the runtime ships per-lane
+// `osty_rt_list_get_<suffix>` and (for String elements) the
+// `osty_rt_strings_Equal` helper, but no `list_contains_*` or
+// `list_index_of_*` symbols exist; production also emits the loop
+// inline (mir_generator.go::IntrinsicListIndexOf|ListContains).
+//
+// Composite element types (struct / enum / non-typed) need the
+// bytes-v1 fallback the same way `list.first` / `list.pop` do — the
+// scan can't generate a comparator. Those paths return a structured
+// unsupported diagnostic.
+fn lirLowerMirListLinearScan(l: LirMirFunctionLowerer, instr: MirInstr, wantIndex: Bool) {
+    let label = if wantIndex {
+        "list.indexOf"
+    } else {
+        "list.contains"
+    }
+    if instr.args.len() != 2 {
+        lirLowerError(l, LirDiagInvalidInput, label + " expects (list, needle)", label)
+        return
+    }
+    if !(instr.hasDest) {
+        lirLowerError(l, LirDiagInvalidInput, label + " requires a destination", label)
+        return
+    }
+    let recv = lirLowerMirContainerReceiver(l, instr, label, "list.elem")
+    if !(recv.ok) {
+        return
+    }
+    if !(llvmListUsesTypedRuntime(recv.elemLir.llvm)) {
+        lirLowerError(l, LirDiagUnsupported, label + " composite element type `" + recv.elemTypeName + "` needs the bytes-v1 runtime fallback (deferred)", label)
+        return
+    }
+    let needle = lirLowerCoercedOperand(l, instr.args[1], recv.elemTypeName, recv.elemLir, label + " needle")
+    if needle.value == "" {
+        return
+    }
+    let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+    if loc.id < 0 {
+        lirLowerError(l, LirDiagInvalidInput, label + " destination local out of range", label)
+        return
+    }
+    let destType = lirLowerMirType(l, loc.typ)
+    if lirTypeIsZero(destType) {
+        lirLowerError(l, LirDiagUnsupported, label + " destination type `" + loc.typ + "` is not implemented", label)
+        return
+    }
+    let lenSym = llvmListRuntimeLenSymbol()
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDeclI64FromPtr(lenSym))
+    let getSym = llvmListRuntimeGetSymbolFor(recv.elemLir.llvm, recv.isString)
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(getSym, recv.elemLir, [lirPtrType(), lirIntType(64)], false))
+    let lenReg = lirFresh(l)
+    l.instrs.push(lirCall(lenReg, lirIntType(64), "@" + lenSym, [lirOperand(lirPtrType(), recv.receiverReg)]))
+    let mergeSlot = lirFresh(l)
+    l.instrs.push(lirAlloca(mergeSlot, destType, 0))
+    if wantIndex {
+        let noneValue = lirEmitOptionNone(l, destType)
+        l.instrs.push(lirStore(lirOperand(destType, noneValue), mergeSlot, 0))
+    } else {
+        l.instrs.push(lirStore(lirOperand(lirIntType(1), "false"), mergeSlot, 0))
+    }
+    let iSlot = lirFresh(l)
+    l.instrs.push(lirAlloca(iSlot, lirIntType(64), 0))
+    l.instrs.push(lirStore(lirOperand(lirIntType(64), "0"), iSlot, 0))
+    let headLabel = lirFreshAuxLabel(l, label + ".head")
+    let bodyLabel = lirFreshAuxLabel(l, label + ".body")
+    let matchLabel = lirFreshAuxLabel(l, label + ".match")
+    let contLabel = lirFreshAuxLabel(l, label + ".cont")
+    let endLabel = lirFreshAuxLabel(l, label + ".end")
+    lirCutBlockBr(l, headLabel)
+    let iReg = lirFresh(l)
+    l.instrs.push(lirLoad(iReg, lirIntType(64), iSlot, 0))
+    let cont = lirFresh(l)
+    l.instrs.push(lirBinary(cont, "icmp slt", lirIntType(64), iReg, lenReg))
+    lirCutBlockCondBr(l, cont, bodyLabel, endLabel, bodyLabel)
+    let elemReg = lirFresh(l)
+    l.instrs.push(lirCall(elemReg, recv.elemLir, "@" + getSym, [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(lirIntType(64), iReg)]))
+    let eqReg = lirFresh(l)
+    if recv.isString {
+        let eqSym = llvmStringRuntimeEqualSymbol()
+        lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(eqSym, lirIntType(1), [lirPtrType(), lirPtrType()], false))
+        l.instrs.push(lirCall(eqReg, lirIntType(1), "@" + eqSym, [lirOperand(recv.elemLir, elemReg), lirOperand(recv.elemLir, needle.value)]))
+    } else if recv.elemLir.llvm == "double" {
+        l.instrs.push(lirBinary(eqReg, "fcmp oeq", recv.elemLir, elemReg, needle.value))
+    } else {
+        l.instrs.push(lirBinary(eqReg, "icmp eq", recv.elemLir, elemReg, needle.value))
+    }
+    lirCutBlockCondBr(l, eqReg, matchLabel, contLabel, matchLabel)
+    if wantIndex {
+        let someValue = lirEmitOptionSome(l, destType, iReg)
+        l.instrs.push(lirStore(lirOperand(destType, someValue), mergeSlot, 0))
+    } else {
+        l.instrs.push(lirStore(lirOperand(lirIntType(1), "true"), mergeSlot, 0))
+    }
+    lirCutBlockBr(l, endLabel)
+    l.currentBlockLabel = contLabel
+    let nextI = lirFresh(l)
+    l.instrs.push(lirBinary(nextI, "add", lirIntType(64), iReg, "1"))
+    l.instrs.push(lirStore(lirOperand(lirIntType(64), nextI), iSlot, 0))
+    lirCutBlockBr(l, headLabel)
+    l.currentBlockLabel = endLabel
+    let merged = lirFresh(l)
+    l.instrs.push(lirLoad(merged, destType, mergeSlot, 0))
+    lirStoreMirResult(l, instr.dest, lirOperand(destType, merged), loc.typ, label + " result")
 }
 // Widen a parsed scalar (i64 / double / i32 / i8 / i1) into the i64
 // the Ok payload slot uses. Production widens the same way
