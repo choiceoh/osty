@@ -635,6 +635,46 @@ a comparator callback to compare composite elements. Map composite
 value types now route through the spill path correctly; Map composite
 key types are still unsupported on both sides.
 
+Design decision: a follow-up batch covers the concurrency closure-env
+intrinsics — the runtime callbacks pass through as opaque ptr at the
+LLVM boundary (closures lower to ptr at the function-value boundary
+already), so LIR Proto can emit the per-intrinsic runtime call shape
+without needing a new closure-env ABI surface. The eleven new
+lowerings:
+
+- `TaskGroup(body)` — return type read off the destination local
+  (defaults to void). Matches production's
+  `osty_rt_task_group_root(ptr) -> retType`.
+- `Spawn(body)` (1 arg, detached) and `Spawn(group, body)` (2 args,
+  group-scoped) → `osty_rt_task_spawn(ptr) -> ptr` /
+  `osty_rt_task_group_spawn(ptr, ptr) -> ptr`.
+- `Select(body)`, `SelectRecv(builder, ch, callback)`,
+  `SelectTimeout(builder, duration, callback)`,
+  `SelectDefault(builder, callback)` — all-ptr arg shapes through the
+  existing simple-runtime-call helper.
+- `SelectSend(builder, ch, value, arm)` — per-channel-element-lane
+  dispatch like ChanSend (typed `osty_rt_select_send_<lane>` for
+  scalar, `osty_rt_select_send_bytes_v1` with spill+sizeof for
+  composite values).
+- `Parallel(items, concurrency, f)` →
+  `osty_rt_parallel(ptr, i64, ptr) -> ptr`.
+- `Race(body)` returns `Result<T, Error>` as the raw
+  `{ i64, i64 }` aggregate — same direct-store shape as
+  `CheckCancelled`.
+- `CollectAll(body)` → `osty_rt_task_collect_all(ptr) -> ptr`.
+
+Eleven new fixtures pin every shape: `task_group_unit`,
+`spawn_detached`, `spawn_grouped`, `select`, `select_recv`,
+`select_send_int`, `select_timeout`, `select_default`, `parallel`,
+`race`, `collect_all`.
+
+What stays deferred: the actual GC root binding pass (the closure
+envs are passed by ptr but no per-call root_bind/release pair is
+emitted today), per-loop `!llvm.loop.*` metadata (needs MIR loop
+classification), per-instruction `!llvm.access.group` metadata, the
+Phase-7 actual runner (Osty↔Go bridge), and the Phase-8 default-on
+flip.
+
 ## Phase 0: lock the boundary
 
 Deliverables:
