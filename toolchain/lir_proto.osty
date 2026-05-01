@@ -2144,6 +2144,15 @@ fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
         MirIntrinsicChanSend -> lirLowerMirChanSend(l, instr),
         MirIntrinsicChanRecv -> lirLowerMirChanRecv(l, instr),
         MirIntrinsicYield -> lirLowerMirStringRuntimeCall(l, instr, "osty_rt_task_yield", lirVoidType(), [], "task.yield"),
+        MirIntrinsicSleep -> lirLowerMirStringRuntimeCall(l, instr, mirRtThreadSleepSymbol(), lirVoidType(), [lirPtrType()], "task.sleep"),
+        MirIntrinsicGroupCancel -> lirLowerMirStringRuntimeCall(l, instr, mirRtTaskGroupCancelSymbol(), lirVoidType(), [lirPtrType()], "group.cancel"),
+        MirIntrinsicGroupIsCancelled -> lirLowerMirStringRuntimeCall(l, instr, mirRtTaskGroupIsCancelledSymbol(), lirIntType(1), [lirPtrType()], "group.isCancelled"),
+        MirIntrinsicHandleJoin -> lirLowerMirHandleJoin(l, instr),
+        MirIntrinsicMapKeysSorted -> lirLowerMirMapKeysSorted(l, instr),
+        MirIntrinsicBytesFromList -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesFromListSymbol(), lirPtrType(), [lirPtrType()], "bytes.fromList"),
+        MirIntrinsicBytesFromString -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringToBytesSymbol(), lirPtrType(), [lirPtrType()], "bytes.fromString"),
+        MirIntrinsicBytesToString -> lirLowerMirBytesValidatedResult(l, instr, mirRtBytesIsValidUTF8Symbol(), mirRtBytesToStringSymbol(), "bytes.toString"),
+        MirIntrinsicBytesFromHex -> lirLowerMirBytesValidatedResult(l, instr, mirRtBytesIsValidHexSymbol(), mirRtBytesFromHexSymbol(), "bytes.fromHex"),
         MirIntrinsicIsCancelled -> lirLowerMirStringRuntimeCall(l, instr, "osty_rt_cancel_is_cancelled", lirIntType(1), [], "cancel.isCancelled"),
         MirIntrinsicStringIndexOf -> lirLowerMirIndexOf(l, instr, mirRtStringSymbol("IndexOf"), [lirPtrType(), lirPtrType()], "string.indexOf"),
         MirIntrinsicStringLastIndexOf -> lirLowerMirIndexOf(l, instr, mirRtStringSymbol("LastIndexOf"), [lirPtrType(), lirPtrType()], "string.lastIndexOf"),
@@ -2723,6 +2732,16 @@ fn lirLowerMirListPush(l: LirMirFunctionLowerer, instr: MirInstr) {
         lirLowerError(l, LirDiagInvalidInput, "list.push expects (list, elem)", "list.push")
         return
     }
+    let elemName = lirListElemTypeName(instr.args[0].typ)
+    if elemName == "" {
+        lirLowerError(l, LirDiagUnsupported, "list.push could not extract element type from receiver `" + instr.args[0].typ + "`", "list.push")
+        return
+    }
+    let elemLane = lirContainerElemLaneType(elemName)
+    if lirTypeIsZero(elemLane) {
+        lirLowerMirListPushBytesV1(l, instr, elemName)
+        return
+    }
     let recv = lirLowerMirContainerReceiver(l, instr, "list.push", "list.elem")
     if !(recv.ok) {
         return
@@ -2732,6 +2751,53 @@ fn lirLowerMirListPush(l: LirMirFunctionLowerer, instr: MirInstr) {
         return
     }
     lirEmitContainerCall(l, instr, llvmListRuntimePushSymbolFor(recv.elemLir.llvm, recv.isString), lirVoidType(), [lirPtrType(), recv.elemLir], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, value.value)], "", "list.push")
+}
+// Composite element type: route through the bytes-v1 fallback
+// (alloca + sizeof + osty_rt_list_push_bytes_v1) instead of the
+// typed-lane path. Production shares the same shape across List/
+// Map/Set/Channel composite element ABIs (mir_generator.go).
+// `lirLowerMirListPushBytesV1` lowers a composite-element List.push
+// through the bytes-v1 runtime ABI. Production uses the same shape
+// (mir_generator.go::emitListPushOperand bytes branch): spill the
+// value into a stack slot, compute the element size via the
+// `getelementptr null` idiom, and call
+// `osty_rt_list_push_bytes_v1(list, slot, size)`.
+fn lirLowerMirListPushBytesV1(l: LirMirFunctionLowerer, instr: MirInstr, elemName: String) {
+    let elemType = lirLowerMirType(l, elemName)
+    if lirTypeIsZero(elemType) || lirTypeIsVoid(elemType) {
+        lirLowerError(l, LirDiagUnsupported, "list.push composite element type `" + elemName + "` has no MIR layout", "list.push")
+        return
+    }
+    let recv = lirLowerMirOperand(l, instr.args[0], instr.args[0].typ, lirPtrType())
+    if recv.value == "" {
+        return
+    }
+    let value = lirLowerMirOperand(l, instr.args[1], elemName, elemType)
+    if value.value == "" {
+        return
+    }
+    let slot = lirFresh(l)
+    l.instrs.push(lirAlloca(slot, elemType, 0))
+    l.instrs.push(lirStore(lirOperand(elemType, value.value), slot, 0))
+    let sizeReg = lirEmitSizeOf(l, elemType)
+    let symbol = mirRtListSymbol("push_bytes_v1")
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirVoidType(), [lirPtrType(), lirPtrType(), lirIntType(64)], false))
+    l.instrs.push(lirCall("", lirVoidType(), "@" + symbol, [lirOperand(lirPtrType(), recv.value), lirOperand(lirPtrType(), slot), lirOperand(lirIntType(64), sizeReg)]))
+    if instr.hasDest {
+        lirCheckVoidMirDestination(l, instr.hasDest, instr.dest, "list.push")
+    }
+}
+// `lirEmitSizeOf` materialises the runtime byte size of a composite
+// type via the canonical `getelementptr inbounds %T, ptr null, i32 1`
+// + `ptrtoint` idiom. Production uses the same idiom
+// (`llvmSizeOf` in toolchain/llvmgen.osty). Returns the i64 register
+// holding the size.
+fn lirEmitSizeOf(l: LirMirFunctionLowerer, typ: LirType) -> String {
+    let endPtr = lirFresh(l)
+    l.instrs.push(lirGep(endPtr, typ, "null", [lirOperand(lirIntType(32), "1")], true))
+    let sizeReg = lirFresh(l)
+    l.instrs.push(lirCast(sizeReg, "ptrtoint", lirOperand(lirPtrType(), endPtr), lirIntType(64)))
+    sizeReg
 }
 fn lirLowerMirListGet(l: LirMirFunctionLowerer, instr: MirInstr) {
     if instr.args.len() != 2 {
@@ -3240,6 +3306,121 @@ fn lirLowerMirCheckCancelled(l: LirMirFunctionLowerer, instr: MirInstr) {
 }
 // Force the named aggregate typedef to be registered so the dest
 // slot's element type is a known module-level definition.
+// `Handle<T>.join() -> T` lowering. The runtime helper returns the
+// value the spawned task produced; the LIR side picks the LLVM
+// return type off the destination local (production:
+// mir_generator.go::IntrinsicHandleJoin). When the dest is Unit (or
+// missing) the call returns ptr that gets discarded.
+fn lirLowerMirHandleJoin(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 1 {
+        lirLowerError(l, LirDiagInvalidInput, "handle.join expects (handle)", "handle.join")
+        return
+    }
+    let handle = lirLowerCoercedOperand(l, instr.args[0], instr.args[0].typ, lirPtrType(), "handle.join handle")
+    if handle.value == "" {
+        return
+    }
+    let symbol = mirRtTaskHandleJoinSymbol()
+    let mut retType = lirPtrType()
+    if instr.hasDest {
+        let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+        if loc.id < 0 {
+            lirLowerError(l, LirDiagInvalidInput, "handle.join destination local out of range", "handle.join")
+            return
+        }
+        let lowered = lirLowerMirType(l, loc.typ)
+        if !(lirTypeIsZero(lowered)) && !(lirTypeIsVoid(lowered)) {
+            retType = lowered
+        }
+    }
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, retType, [lirPtrType()], false))
+    if !(instr.hasDest) {
+        let _ignored = lirFresh(l)
+        l.instrs.push(lirCall(_ignored, retType, "@" + symbol, [lirOperand(lirPtrType(), handle.value)]))
+        return
+    }
+    let dest = lirFresh(l)
+    l.instrs.push(lirCall(dest, retType, "@" + symbol, [lirOperand(lirPtrType(), handle.value)]))
+    let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+    lirStoreMirResult(l, instr.dest, lirOperand(retType, dest), loc.typ, "handle.join result")
+}
+// `Map.keys().sorted()` fused → single per-key-lane runtime call.
+// Production picks `osty_rt_map_keys_sorted_<i64|string>` based on
+// the receiver's key lane (mir_generator.go::IntrinsicMapKeysSorted).
+fn lirLowerMirMapKeysSorted(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 1 {
+        lirLowerError(l, LirDiagInvalidInput, "map.keysSorted expects (map)", "map.keysSorted")
+        return
+    }
+    let recv = lirLowerMirContainerReceiver(l, instr, "map.keysSorted", "map.key")
+    if !(recv.ok) {
+        return
+    }
+    let suffix = if recv.isString {
+        "string"
+    } else {
+        llvmMapKeySuffix(recv.elemLir.llvm, false)
+    }
+    let symbol = mirRtMapSymbol("keys_sorted_" + suffix)
+    lirEmitContainerCall(l, instr, symbol, lirPtrType(), [lirPtrType()], [lirOperand(lirPtrType(), recv.receiverReg)], "List", "map.keysSorted")
+}
+// `Bytes.toString() -> Result<String, Error>` /
+// `Bytes.fromHex() -> Result<Bytes, Error>` lowering. Same
+// validate-then-call shape as `lirLowerMirStringParse`, except both
+// the validate input and the success result are ptr (instead of
+// String→i64/double). The Ok arm wraps the success ptr via ptrtoint
+// into the i64 payload slot; the Err arm wraps Err(0).
+fn lirLowerMirBytesValidatedResult(l: LirMirFunctionLowerer, instr: MirInstr, validateSym: String, successSym: String, label: String) {
+    if instr.args.len() != 1 {
+        lirLowerError(l, LirDiagInvalidInput, label + " expects (bytes)", label)
+        return
+    }
+    if !(instr.hasDest) {
+        lirLowerError(l, LirDiagInvalidInput, label + " requires a destination (Result<...>)", label)
+        return
+    }
+    let inputReg = lirLowerCoercedOperand(l, instr.args[0], instr.args[0].typ, lirPtrType(), label + " input")
+    if inputReg.value == "" {
+        return
+    }
+    let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+    if loc.id < 0 {
+        lirLowerError(l, LirDiagInvalidInput, label + " destination local out of range", label)
+        return
+    }
+    if !(lirIsResultTypeName(loc.typ)) {
+        lirLowerError(l, LirDiagUnsupported, label + " destination must be Result<...>, got `" + loc.typ + "`", label)
+        return
+    }
+    let resultType = lirLowerMirType(l, loc.typ)
+    if lirTypeIsZero(resultType) {
+        lirLowerError(l, LirDiagUnsupported, label + " destination type `" + loc.typ + "` is not implemented", label)
+        return
+    }
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(validateSym, lirIntType(1), [lirPtrType()], false))
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(successSym, lirPtrType(), [lirPtrType()], false))
+    let validReg = lirFresh(l)
+    l.instrs.push(lirCall(validReg, lirIntType(1), "@" + validateSym, [lirOperand(lirPtrType(), inputReg.value)]))
+    let slot = lirFresh(l)
+    l.instrs.push(lirAlloca(slot, resultType, 0))
+    let okLabel = lirFreshAuxLabel(l, label + ".ok")
+    let errLabel = lirFreshAuxLabel(l, label + ".err")
+    let endLabel = lirFreshAuxLabel(l, label + ".end")
+    lirCutBlockCondBr(l, validReg, okLabel, errLabel, okLabel)
+    let successReg = lirFresh(l)
+    l.instrs.push(lirCall(successReg, lirPtrType(), "@" + successSym, [lirOperand(lirPtrType(), inputReg.value)]))
+    let payloadReg = lirParseResultPayloadAsI64(l, successReg, lirPtrType())
+    let okValue = lirEmitResultOk(l, resultType, payloadReg)
+    l.instrs.push(lirStore(lirOperand(resultType, okValue), slot, 0))
+    lirCutBlockBr(l, endLabel)
+    l.currentBlockLabel = errLabel
+    let errValue = lirEmitResultErr(l, resultType, "0")
+    l.instrs.push(lirStore(lirOperand(resultType, errValue), slot, 0))
+    lirCutBlockBr(l, endLabel)
+    let merged = lirFresh(l)
+    l.instrs.push(lirLoad(merged, resultType, slot, 0))
+    lirStoreMirResult(l, instr.dest, lirOperand(resultType, merged), loc.typ, label + " result")
+}
 // ----- Set intrinsic lowerings (typed elem lane) -----
 fn lirLowerMirSetInsert(l: LirMirFunctionLowerer, instr: MirInstr) {
     if instr.args.len() != 2 {
