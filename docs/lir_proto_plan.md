@@ -485,6 +485,34 @@ Five Phase-4 fixtures pin the new shape: corrected `chan_close`,
 `chan_make`, `chan_is_closed`, `chan_send_int` (i64 lane),
 `chan_recv_int` (returns `%Option.Int`).
 
+Design decision: a follow-up Phase-4 slice wires `String.toInt` /
+`String.toFloat` through the Result<T, Error> aggregate helpers added
+in the IndexOf-Option slice. `lirLowerMirStringParse` runs the
+validate-call (`osty_rt_strings_IsValidInt` / `IsValidFloat`,
+returning i1), branches on validity, and on the Ok arm calls
+`osty_rt_strings_ToInt` / `ToFloat` (returning i64 / double),
+widens / bitcasts the parsed value into the i64 payload slot, and
+constructs the Ok aggregate. The Err arm constructs an Err(0)
+placeholder. Production uses a phi node at the merge point; LIR Proto
+keeps the alloca shape from the IndexOf slice for the same
+"no-new-instruction-vocabulary" reason.
+
+`lirParseResultPayloadAsI64` widens parsed scalars into the i64
+payload slot exactly the way production's `toI64Slot` does:
+- i64 passes through.
+- double bitcasts to i64 (preserves the bit pattern).
+- float zero-extends to double then bitcasts.
+- ptr ptrtoints to i64.
+- narrower ints zext to i64.
+
+Two Phase-4 fixtures pin the shape: `string_to_int` (returns
+`%Result.Int_Error`) and `string_to_float` (returns
+`%Result.Float_Error` with the double-to-i64 bitcast on the Ok arm).
+Together with the IndexOf-Option fixtures, this exercises every
+sentinel pattern the basic-block-splitting infrastructure was added
+to support: i64 sge sentinel for the IndexOf family, i1 boolean
+present-flag for the parse family.
+
 ## Phase 0: lock the boundary
 
 Deliverables:
