@@ -1,0 +1,93 @@
+use std.regex
+
+fn main() {
+    // Multiple non-overlapping digit runs.
+    match regex.compile(r"\d+") {
+        Ok(re) -> {
+            let list = re.capturesAll("a 1 b 22 c 333 d")
+            let n = list.len()
+            println("digits: {n} match(es)")
+            let mut i = 0
+            while i < n {
+                let c = list[i]
+                match c.get(0) {
+                    Some(s) -> println("  whole: {s}"),
+                    None    -> println("  whole: <unset>"),
+                }
+                i += 1
+            }
+        },
+        Err(_) -> println("digits compile failed"),
+    }
+
+    // Group capture across multiple matches.
+    match regex.compile(r"(\w+)=(\w+)") {
+        Ok(re) -> {
+            let list = re.capturesAll("foo=1, bar=baz, qux=42")
+            let n = list.len()
+            println("kv: {n} match(es)")
+            let mut i = 0
+            while i < n {
+                let c = list[i]
+                match c.get(1) {
+                    Some(s) -> println("  k={s}"),
+                    None    -> {},
+                }
+                match c.get(2) {
+                    Some(s) -> println("  v={s}"),
+                    None    -> {},
+                }
+                i += 1
+            }
+        },
+        Err(_) -> println("kv compile failed"),
+    }
+
+    // Anchored pattern: `^` only at offset 0, so capturesAll yields ≤ 1.
+    match regex.compile(r"^\w+") {
+        Ok(re) -> {
+            let list = re.capturesAll("hello world")
+            let n = list.len()
+            println("anchored: {n} match(es)")
+            let mut i = 0
+            while i < n {
+                let c = list[i]
+                match c.get(0) {
+                    Some(s) -> println("  {s}"),
+                    None    -> {},
+                }
+                i += 1
+            }
+        },
+        Err(_) -> println("anchored compile failed"),
+    }
+
+    // No match at all: empty list.
+    match regex.compile(r"xyz\d+") {
+        Ok(re) -> {
+            let list = re.capturesAll("hello world")
+            let n = list.len()
+            println("nomatch: {n} match(es)")
+        },
+        Err(_) -> println("nomatch compile failed"),
+    }
+
+    // Alternation: only one group participates per match.
+    match regex.compile(r"(\d+)|([a-z]+)") {
+        Ok(re) -> {
+            let list = re.capturesAll("abc 12 def 345")
+            let n = list.len()
+            println("alt: {n} match(es)")
+            let mut i = 0
+            while i < n {
+                let c = list[i]
+                match c.get(0) {
+                    Some(s) -> println("  whole={s}"),
+                    None    -> {},
+                }
+                i += 1
+            }
+        },
+        Err(_) -> println("alt compile failed"),
+    }
+}

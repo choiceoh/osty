@@ -76,3 +76,40 @@ fn main() {
 		}
 	}
 }
+
+func TestStdRegexCapturesAllRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.regex
+
+fn run(re: Regex) -> List<Captures> {
+    re.capturesAll("a 1 b 22 c 333")
+}
+
+fn main() {
+    match regex.compile(r"\d+") {
+        Ok(re) -> {
+            let _ = run(re)
+            println("ok")
+        },
+        Err(_) -> println("compile failed"),
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_regex_captures_all.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_regex_captures_all(ptr, ptr)",
+		"call ptr @osty_rt_regex_captures_all",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
