@@ -1,6 +1,7 @@
 package onb
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -24,14 +25,18 @@ const EnvTiming = "OSTY_ONB_TIMING"
 // silently delegate to the LLVM backend. Reading the env on every call keeps
 // the toggle responsive to inline `OSTY_ONB_STRICT=1 osty run ...` invocations
 // without process restart.
-func StrictMode() bool { return envTrue(os.Getenv(EnvStrict)) }
+func StrictMode() bool { return EnvTrue(os.Getenv(EnvStrict)) }
 
 // TimingEnabled mirrors StrictMode for the timing log. Two separate env vars
 // keep the strict cross-validation flow independent from the dev-loop perf
 // telemetry.
-func TimingEnabled() bool { return envTrue(os.Getenv(EnvTiming)) }
+func TimingEnabled() bool { return EnvTrue(os.Getenv(EnvTiming)) }
 
-func envTrue(s string) bool {
+// EnvTrue reports whether the env-var-style string s should be treated as
+// "enabled". Exported so other backend toggles (`OSTY_BACKEND_TRACE`, future
+// debug flags) can reuse the same parsing rules — keeping accepted spellings
+// in lockstep across packages.
+func EnvTrue(s string) bool {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "1", "true", "yes", "on":
 		return true
@@ -40,12 +45,21 @@ func envTrue(s string) bool {
 	}
 }
 
+// TimingPath names which build path actually ran for one ONB emit attempt.
+// Typed instead of bare strings so a typo in a future call site is a compile
+// error rather than a silent default-branch in LogTiming.
+type TimingPath string
+
+const (
+	TimingPathNative       TimingPath = "native"
+	TimingPathLLVMFallback TimingPath = "llvm-fallback"
+	TimingPathError        TimingPath = "error"
+)
+
 // TimingEvent describes one ONB build path so callers can render a stable log
-// line. Path is "native" when ONB lowered the MIR end-to-end, "llvm-fallback"
-// when the backend layer delegated to LLVM after a shape rejection, or
-// "error" when neither path produced an artifact.
+// line.
 type TimingEvent struct {
-	Path     string
+	Path     TimingPath
 	Target   string
 	Elapsed  time.Duration
 	Reason   string
@@ -63,26 +77,44 @@ func LogTiming(w io.Writer, ev TimingEvent) {
 	if target == "" {
 		target = "host"
 	}
-	suffix := ""
+	var suffix string
 	switch ev.Path {
-	case "native":
+	case TimingPathNative:
 		suffix = fmt.Sprintf("[native: %s]", target)
-	case "llvm-fallback":
+	case TimingPathLLVMFallback:
 		reason := ev.Reason
 		if reason == "" {
 			reason = "shape unsupported"
 		}
 		suffix = fmt.Sprintf("[fallback to llvm: %s]", reason)
-	case "error":
+	case TimingPathError:
 		reason := ev.Reason
 		if reason == "" {
 			reason = "rejected"
 		}
 		suffix = fmt.Sprintf("[error: %s]", reason)
 	default:
-		suffix = "[" + ev.Path + "]"
+		suffix = "[" + string(ev.Path) + "]"
 	}
 	fmt.Fprintf(w, "onb: emit %s %s\n", formatElapsed(ev.Elapsed), suffix)
+}
+
+// UnsupportedShapeReason peels the ErrUnsupportedShape sentinel off so callers
+// can quote the specific MIR construct that triggered the fallback without
+// also surfacing the generic sentinel message. Returns the input error's
+// string verbatim when the sentinel is not present.
+//
+// Owning the prefix-strip here keeps the sentinel's textual format private to
+// the onb package — backend/onb.go consumed to do this manually, which made
+// the message text an implicit ABI between the two packages.
+func UnsupportedShapeReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	if !errors.Is(err, ErrUnsupportedShape) {
+		return err.Error()
+	}
+	return strings.TrimPrefix(err.Error(), ErrUnsupportedShape.Error()+": ")
 }
 
 func formatElapsed(d time.Duration) string {

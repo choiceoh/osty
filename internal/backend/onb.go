@@ -45,45 +45,36 @@ func (b ONBBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 	if err := ValidateEmit(NameONB, req.Emit); err != nil {
 		return nil, err
 	}
+
 	started := time.Now()
-	target, _ := onb.ResolveTarget(req.Layout.Target)
-	logSink := b.timingSink()
 	timingOn := onb.TimingEnabled()
+	ev := onb.TimingEvent{}
+	if timingOn {
+		target, _ := onb.ResolveTarget(req.Layout.Target)
+		ev.Target = target.Triple
+		defer func() {
+			ev.Elapsed = time.Since(started)
+			onb.LogTiming(b.timingSink(), ev)
+		}()
+	}
+
 	result, err := b.emitNative(ctx, req)
 	if err == nil {
-		if timingOn {
-			onb.LogTiming(logSink, onb.TimingEvent{
-				Path:     "native",
-				Target:   target.Triple,
-				Elapsed:  time.Since(started),
-				BinaryAt: result.Artifacts.Binary,
-			})
-		}
+		ev.Path = onb.TimingPathNative
+		ev.BinaryAt = result.Artifacts.Binary
 		return result, nil
 	}
 	if !b.shouldFallback(req, err) {
-		if timingOn {
-			onb.LogTiming(logSink, onb.TimingEvent{
-				Path:    "error",
-				Target:  target.Triple,
-				Elapsed: time.Since(started),
-				Reason:  fallbackReason(err),
-			})
-		}
+		ev.Path = onb.TimingPathError
+		ev.Reason = onb.UnsupportedShapeReason(err)
 		return result, err
 	}
 	fallback, fallbackErr := b.runLLVMFallback(ctx, req, err)
-	if timingOn {
-		path := "llvm-fallback"
-		if fallbackErr != nil {
-			path = "error"
-		}
-		onb.LogTiming(logSink, onb.TimingEvent{
-			Path:    path,
-			Target:  target.Triple,
-			Elapsed: time.Since(started),
-			Reason:  fallbackReason(err),
-		})
+	ev.Reason = onb.UnsupportedShapeReason(err)
+	if fallbackErr != nil {
+		ev.Path = onb.TimingPathError
+	} else {
+		ev.Path = onb.TimingPathLLVMFallback
 	}
 	return fallback, fallbackErr
 }
@@ -176,8 +167,7 @@ func (b ONBBackend) shouldFallback(req Request, err error) bool {
 func (b ONBBackend) runLLVMFallback(ctx context.Context, req Request, onbErr error) (*Result, error) {
 	llvm := b.llvmBackend()
 	result, err := llvm.Emit(ctx, req)
-	reason := fallbackReason(onbErr)
-	note := fmt.Errorf("onb fallback: lowering delegated to llvm (%s)", reason)
+	note := fmt.Errorf("onb fallback: lowering delegated to llvm (%s)", onb.UnsupportedShapeReason(onbErr))
 	if result == nil {
 		return result, err
 	}
@@ -204,20 +194,4 @@ func (b ONBBackend) timingSink() io.Writer {
 		return b.logSink
 	}
 	return os.Stderr
-}
-
-// fallbackReason peels the onb sentinel off so the log line and the warning
-// note both quote a short user-readable string rather than the wrapped error
-// chain. The shape sentinel's message is generic, so we strip it when there
-// is a more specific wrapped detail.
-func fallbackReason(err error) string {
-	if err == nil {
-		return ""
-	}
-	msg := err.Error()
-	prefix := onb.ErrUnsupportedShape.Error() + ": "
-	if len(msg) > len(prefix) && msg[:len(prefix)] == prefix {
-		return msg[len(prefix):]
-	}
-	return msg
 }
