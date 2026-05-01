@@ -810,6 +810,42 @@ no fixture entry — the absence is enforced by the existing
 `gc_root_scalar_only` and other non-parallel fixtures, none of
 which contain `!llvm.access.group` in their needles.
 
+Design decision: the loop-metadata tuning properties already wired
+inside `lirNextLoopMD` (`vectorize.width`, `vectorize.scalable.enable`,
+`vectorize.predicate.enable`, `unroll.enable` bare, combined
+vectorize+unroll, parallel-only) get five focused fixtures so the
+LANG_SPEC v0.6 A5/A5.1/A7 surface is pinned individually rather than
+implicitly through the original `loop_md_vectorize` /
+`loop_md_unroll_count` pair.
+
+- `loop_md_vectorize_width` — `vectorize=true` + `vectorizeWidth=4`.
+  Pins both the base `vectorize.enable` property and the
+  `vectorize.width, i32 4` companion.
+- `loop_md_vectorize_full` — all three vectorize tuning args at
+  once (`vectorizeWidth=8`, `vectorizeScalable=true`,
+  `vectorizePredicate=true`). Pins all four properties so a future
+  refactor that drops one would surface here.
+- `loop_md_unroll_enable_bare` — `unroll=true` + `unrollCount=0`.
+  Pins the `unroll.enable, i1 true` form (the else branch of the
+  unroll-count conditional) which the existing `unroll_count`
+  fixture cannot cover by construction.
+- `loop_md_combined_vectorize_unroll` — `vectorize=true` +
+  `unroll=true, unrollCount=2`. Pins that BOTH annotations land
+  in the SAME `!N = distinct !{}` loop md node when applied to
+  the same loop.
+- `loop_md_parallel_only` — `parallel=true` only (no vectorize,
+  no unroll). Pins that `parallel_accesses` works as a standalone
+  loop md property — the access-group def is still emitted, but
+  no `vectorize.enable` / `unroll.*` companion properties appear.
+
+Each fixture uses the same one-block-then-back-edge CFG as the
+existing loop_md fixtures so the back-edge terminator is the only
+`br` that picks up `, !llvm.loop !N`. The CFG shape stays
+deliberately identical — variation lives entirely in
+`MirFunction` annotation flags — so a regression in
+`lirNextLoopMD` property selection surfaces in exactly one
+fixture each.
+
 ## Phase 0: lock the boundary
 
 Deliverables:

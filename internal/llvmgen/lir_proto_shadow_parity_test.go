@@ -395,6 +395,12 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		// ----- Per-instruction !llvm.access.group metadata (#[parallel]) -----
 		{"lirParityManualParallelAccessGroupFixture", []string{"= distinct !{}", "store i64", ", !llvm.access.group !", " = load i64"}},
 		{"lirParityManualParallelLoopWithAccessGroupFixture", []string{"= distinct !{}", "!{!\"llvm.loop.parallel_accesses\", !", ", !llvm.loop !", ", !llvm.access.group !"}},
+		// ----- Loop md tuning property fixtures -----
+		{"lirParityManualLoopMDVectorizeWidthFixture", []string{"!{!\"llvm.loop.vectorize.enable\", i1 true}", "!{!\"llvm.loop.vectorize.width\", i32 4}", ", !llvm.loop !"}},
+		{"lirParityManualLoopMDVectorizeFullFixture", []string{"!{!\"llvm.loop.vectorize.enable\", i1 true}", "!{!\"llvm.loop.vectorize.width\", i32 8}", "!{!\"llvm.loop.vectorize.scalable.enable\", i1 true}", "!{!\"llvm.loop.vectorize.predicate.enable\", i1 true}"}},
+		{"lirParityManualLoopMDUnrollEnableBareFixture", []string{"!{!\"llvm.loop.unroll.enable\", i1 true}", ", !llvm.loop !"}},
+		{"lirParityManualLoopMDCombinedVectorizeUnrollFixture", []string{"!{!\"llvm.loop.vectorize.enable\", i1 true}", "!{!\"llvm.loop.unroll.count\", i32 2}", ", !llvm.loop !"}},
+		{"lirParityManualLoopMDParallelOnlyFixture", []string{"= distinct !{}", "!{!\"llvm.loop.parallel_accesses\", !", ", !llvm.loop !"}},
 	}
 
 	for _, tt := range want {
