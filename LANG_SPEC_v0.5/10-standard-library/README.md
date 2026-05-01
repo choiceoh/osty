@@ -59,3 +59,4 @@ lowering remains implementation backlog.
 - [§10.42 PDF (`std.pdf`)](./42-pdf.md)
 - [§10.43 Supabase (`std.supabase`)](./43-supabase.md)
 - [§10.44 GitHub (`std.github`)](./44-github.md)
+- [§10.45 Webhooks (`std.webhook`)](./45-webhook.md)

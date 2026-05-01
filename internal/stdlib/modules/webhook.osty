@@ -1,0 +1,696 @@
+// std.webhook - verified webhook intake and retry-safe dispatch.
+//
+// The module keeps provider-specific signature rules close to the common
+// intake path: raw-body verification, timestamp replay windows, stable
+// delivery ids, idempotency state, and handler dispatch decisions.
+
+use std.bytes
+use std.crypto
+use std.encoding
+use std.error
+use std.http
+use std.json
+use std.strings
+use std.time
+
+pub type Headers = http.Headers
+pub type Handler = fn(Event) -> Result<DispatchDecision, Error>
+
+pub enum Provider {
+    Stripe,
+    GitHub,
+    Supabase,
+    Slack,
+    Discord,
+    Custom,
+}
+
+pub enum SignatureScheme {
+    StripeV1,
+    GitHubSha256,
+    SlackV0,
+    SupabaseSha256,
+    HmacSha256Hex,
+    HmacSha256Base64,
+    DiscordEd25519,
+    ExternallyVerified,
+}
+
+pub enum VerificationCode {
+    Verified,
+    MissingSecret,
+    MissingSignature,
+    InvalidSignature,
+    MissingTimestamp,
+    InvalidTimestamp,
+    ReplayWindowExceeded,
+    UnsupportedSignature,
+}
+
+pub enum DispatchStatus {
+    Handled,
+    Duplicate,
+    InFlight,
+    Rejected,
+    RetryLater,
+    Failed,
+}
+
+pub struct Policy {
+    pub provider: Provider,
+    pub scheme: SignatureScheme,
+    pub secret: String = "",
+    pub signatureHeader: String = "",
+    pub timestampHeader: String = "",
+    pub eventIdHeader: String = "",
+    pub eventTypeHeader: String = "",
+    pub toleranceSeconds: Int = 300,
+    pub requireSignature: Bool = true,
+    pub requireTimestamp: Bool = false,
+    pub nowUnixSeconds: Int = 0,
+
+    pub fn withTolerance(mut self, seconds: Int) -> Policy {
+        self.toleranceSeconds = seconds
+        self
+    }
+
+    pub fn withClock(mut self, unixSeconds: Int) -> Policy {
+        self.nowUnixSeconds = unixSeconds
+        self
+    }
+
+    pub fn withSignatureHeader(mut self, name: String) -> Policy {
+        self.signatureHeader = name
+        self
+    }
+
+    pub fn withTimestampHeader(mut self, name: String) -> Policy {
+        self.timestampHeader = name
+        self.requireTimestamp = true
+        self
+    }
+
+    pub fn withEventIdHeader(mut self, name: String) -> Policy {
+        self.eventIdHeader = name
+        self
+    }
+
+    pub fn withEventTypeHeader(mut self, name: String) -> Policy {
+        self.eventTypeHeader = name
+        self
+    }
+
+    pub fn externallyVerified(mut self) -> Policy {
+        self.scheme = ExternallyVerified
+        self.requireSignature = false
+        self
+    }
+}
+
+pub struct Verification {
+    pub provider: Provider,
+    pub accepted: Bool,
+    pub code: VerificationCode,
+    pub reason: String = "",
+    pub signature: String = "",
+    pub timestamp: Int? = None,
+}
+
+pub struct Event {
+    pub provider: Provider,
+    pub id: String,
+    pub eventType: String,
+    pub headers: Headers,
+    pub body: Bytes,
+    pub timestamp: Int? = None,
+    pub payload: json.Json? = None,
+    pub verification: Verification,
+}
+
+pub struct Store {
+    pub processed: Map<String, Bool> = {:},
+    pub inFlight: Map<String, Bool> = {:},
+}
+
+pub struct DispatchDecision {
+    pub status: Int = 200,
+    pub message: String = "ok",
+    pub retryable: Bool = false,
+    pub markProcessed: Bool = true,
+}
+
+pub struct DispatchOutcome {
+    pub status: DispatchStatus,
+    pub event: Event? = None,
+    pub response: http.Response,
+    pub store: Store,
+    pub retryable: Bool = false,
+    pub reason: String = "",
+}
+
+pub fn stripe(secret: String) -> Policy {
+    Policy {
+        provider: Stripe,
+        scheme: StripeV1,
+        secret: secret,
+        signatureHeader: "Stripe-Signature",
+        toleranceSeconds: 300,
+        requireSignature: true,
+        requireTimestamp: true,
+    }
+}
+
+pub fn github(secret: String) -> Policy {
+    Policy {
+        provider: GitHub,
+        scheme: GitHubSha256,
+        secret: secret,
+        signatureHeader: "X-Hub-Signature-256",
+        eventIdHeader: "X-GitHub-Delivery",
+        eventTypeHeader: "X-GitHub-Event",
+        requireSignature: true,
+    }
+}
+
+pub fn supabase(secret: String) -> Policy {
+    Policy {
+        provider: Supabase,
+        scheme: SupabaseSha256,
+        secret: secret,
+        signatureHeader: "x-supabase-signature",
+        eventIdHeader: "x-supabase-event-id",
+        requireSignature: true,
+    }
+}
+
+pub fn slack(secret: String) -> Policy {
+    Policy {
+        provider: Slack,
+        scheme: SlackV0,
+        secret: secret,
+        signatureHeader: "X-Slack-Signature",
+        timestampHeader: "X-Slack-Request-Timestamp",
+        toleranceSeconds: 300,
+        requireSignature: true,
+        requireTimestamp: true,
+    }
+}
+
+pub fn discord(publicKey: String) -> Policy {
+    Policy {
+        provider: Discord,
+        scheme: DiscordEd25519,
+        secret: publicKey,
+        signatureHeader: "X-Signature-Ed25519",
+        timestampHeader: "X-Signature-Timestamp",
+        toleranceSeconds: 300,
+        requireSignature: true,
+        requireTimestamp: true,
+    }
+}
+
+pub fn hmacSha256Hex(secret: String, header: String) -> Policy {
+    Policy {
+        provider: Custom,
+        scheme: HmacSha256Hex,
+        secret: secret,
+        signatureHeader: header,
+        requireSignature: true,
+    }
+}
+
+pub fn hmacSha256Base64(secret: String, header: String) -> Policy {
+    Policy {
+        provider: Custom,
+        scheme: HmacSha256Base64,
+        secret: secret,
+        signatureHeader: header,
+        requireSignature: true,
+    }
+}
+
+pub fn unsigned(provider: Provider) -> Policy {
+    Policy {
+        provider: provider,
+        scheme: ExternallyVerified,
+        requireSignature: false,
+    }
+}
+
+pub fn emptyStore() -> Store {
+    Store {}
+}
+
+pub fn ack() -> DispatchDecision {
+    DispatchDecision {}
+}
+
+pub fn retryLater(message: String) -> DispatchDecision {
+    DispatchDecision { status: 503, message: message, retryable: true, markProcessed: false }
+}
+
+pub fn reject(status: Int, message: String) -> DispatchDecision {
+    DispatchDecision { status: status, message: message, retryable: false, markProcessed: false }
+}
+
+pub fn verifyRequest(request: http.Request, policy: Policy) -> Verification {
+    verify(policy, request.headers, request.body)
+}
+
+pub fn verify(policy: Policy, headers: Headers, body: Bytes) -> Verification {
+    match policy.scheme {
+        StripeV1          -> verifyStripe(policy, headers, body),
+        GitHubSha256     -> verifyHmacHex(policy, headers, body, "sha256=", body),
+        SlackV0          -> verifySlack(policy, headers, body),
+        SupabaseSha256   -> verifyHmacHex(policy, headers, body, "", body),
+        HmacSha256Hex    -> verifyHmacHex(policy, headers, body, "", body),
+        HmacSha256Base64 -> verifyHmacBase64(policy, headers, body, body),
+        DiscordEd25519   -> fail(policy, UnsupportedSignature, "webhook: Discord Ed25519 verification requires a host crypto verifier"),
+        ExternallyVerified -> Verification { provider: policy.provider, accepted: true, code: Verified, reason: "externally verified" },
+    }
+}
+
+pub fn eventFromRequest(request: http.Request, policy: Policy, verification: Verification) -> Event {
+    let payload = parsePayload(request.body)
+    let id = eventId(policy, request.headers, request.body, payload)
+    let typ = eventType(policy, request.headers, payload)
+    Event {
+        provider: policy.provider,
+        id: id,
+        eventType: typ,
+        headers: request.headers,
+        body: request.body,
+        timestamp: verification.timestamp,
+        payload: payload,
+        verification: verification,
+    }
+}
+
+pub fn dispatch(request: http.Request, policy: Policy, store: Store, handler: Handler) -> DispatchOutcome {
+    let verification = verifyRequest(request, policy)
+    if !verification.accepted {
+        return DispatchOutcome {
+            status: Rejected,
+            response: http.textResponse(400, verification.reason, {:}),
+            store: store,
+            retryable: false,
+            reason: verification.reason,
+        }
+    }
+
+    let event = eventFromRequest(request, policy, verification)
+    let key = idempotencyKey(event)
+    if wasProcessed(store, key) {
+        return DispatchOutcome {
+            status: Duplicate,
+            event: Some(event),
+            response: http.textResponse(200, "duplicate delivery ignored", {:}),
+            store: store,
+            retryable: false,
+            reason: "duplicate delivery",
+        }
+    }
+    if isInFlight(store, key) {
+        return DispatchOutcome {
+            status: InFlight,
+            event: Some(event),
+            response: http.textResponse(202, "delivery already in flight", {:}),
+            store: store,
+            retryable: true,
+            reason: "delivery in flight",
+        }
+    }
+
+    let working = markInFlight(store, key)
+    match handler(event) {
+        Ok(decision) -> finishDispatch(event, key, working, decision),
+        Err(err) -> DispatchOutcome {
+            status: Failed,
+            event: Some(event),
+            response: http.textResponse(500, err.message(), {:}),
+            store: clearInFlight(working, key),
+            retryable: true,
+            reason: err.message(),
+        },
+    }
+}
+
+pub fn idempotencyKey(event: Event) -> String {
+    "{providerName(event.provider)}:{event.id}"
+}
+
+pub fn wasProcessed(store: Store, key: String) -> Bool {
+    store.processed.get(key) ?? false
+}
+
+pub fn isInFlight(store: Store, key: String) -> Bool {
+    store.inFlight.get(key) ?? false
+}
+
+pub fn markInFlight(mut store: Store, key: String) -> Store {
+    store.inFlight.insert(key, true)
+    store
+}
+
+pub fn markProcessed(mut store: Store, key: String) -> Store {
+    store.inFlight.remove(key)
+    store.processed.insert(key, true)
+    store
+}
+
+pub fn clearInFlight(mut store: Store, key: String) -> Store {
+    store.inFlight.remove(key)
+    store
+}
+
+pub fn header(headers: Headers, name: String) -> String? {
+    let target = canonicalHeaderName(name)
+    for key in headers.keys() {
+        if canonicalHeaderName(key) == target {
+            return headers.get(key)
+        }
+    }
+    None
+}
+
+pub fn bodyFingerprint(body: Bytes) -> String {
+    encoding.hex.encode(crypto.sha256(body))
+}
+
+fn verifyStripe(policy: Policy, headers: Headers, body: Bytes) -> Verification {
+    let maybeRaw = header(headers, policy.signatureHeader)
+    if maybeRaw.isNone() {
+        return fail(policy, MissingSignature, "webhook: missing Stripe-Signature header")
+    }
+    let raw = maybeRaw.unwrap()
+    if policy.secret.isEmpty() {
+        return fail(policy, MissingSecret, "webhook: missing signing secret")
+    }
+    let maybeTimestampText = firstStripeValue(raw, "t")
+    if maybeTimestampText.isNone() {
+        return fail(policy, MissingTimestamp, "webhook: missing Stripe timestamp")
+    }
+    let timestampText = maybeTimestampText.unwrap()
+    let parsedTimestamp = parseTimestamp(timestampText)
+    if parsedTimestamp.isErr() {
+        return fail(policy, InvalidTimestamp, "webhook: invalid Stripe timestamp")
+    }
+    let timestamp = parsedTimestamp.unwrap()
+    if !withinReplayWindow(policy, timestamp) {
+        return failWithTimestamp(policy, ReplayWindowExceeded, "webhook: Stripe timestamp outside replay window", timestamp)
+    }
+    let signedPayload = bytes.concat(bytes.fromString("{timestampText}."), body)
+    let expected = hmacSha256HexText(policy.secret, signedPayload)
+    for candidate in stripeValues(raw, "v1") {
+        if constantTimeStringEq(strings.toLower(candidate), expected) {
+            return okWithTimestamp(policy, raw, timestamp)
+        }
+    }
+    failWithTimestamp(policy, InvalidSignature, "webhook: invalid Stripe signature", timestamp)
+}
+
+fn verifySlack(policy: Policy, headers: Headers, body: Bytes) -> Verification {
+    let maybeRaw = header(headers, policy.signatureHeader)
+    if maybeRaw.isNone() {
+        return fail(policy, MissingSignature, "webhook: missing Slack signature header")
+    }
+    let raw = maybeRaw.unwrap()
+    if policy.secret.isEmpty() {
+        return fail(policy, MissingSecret, "webhook: missing signing secret")
+    }
+    let maybeTimestampText = header(headers, policy.timestampHeader)
+    if maybeTimestampText.isNone() {
+        return fail(policy, MissingTimestamp, "webhook: missing Slack timestamp header")
+    }
+    let timestampText = strings.trimSpace(maybeTimestampText.unwrap())
+    let parsedTimestamp = parseTimestamp(timestampText)
+    if parsedTimestamp.isErr() {
+        return fail(policy, InvalidTimestamp, "webhook: invalid Slack timestamp")
+    }
+    let timestamp = parsedTimestamp.unwrap()
+    if !withinReplayWindow(policy, timestamp) {
+        return failWithTimestamp(policy, ReplayWindowExceeded, "webhook: Slack timestamp outside replay window", timestamp)
+    }
+    let signedPayload = bytes.concat(bytes.fromString("v0:{timestampText}:"), body)
+    let expected = "v0={hmacSha256HexText(policy.secret, signedPayload)}"
+    if constantTimeStringEq(strings.toLower(raw), expected) {
+        return okWithTimestamp(policy, raw, timestamp)
+    }
+    failWithTimestamp(policy, InvalidSignature, "webhook: invalid Slack signature", timestamp)
+}
+
+fn verifyHmacHex(policy: Policy, headers: Headers, body: Bytes, prefix: String, signedPayload: Bytes) -> Verification {
+    let timestampResult = checkTimestamp(policy, headers)
+    if timestampResult.isErr() {
+        return timestampResult.unwrapErr()
+    }
+    let timestamp = timestampResult.unwrap()
+    let maybeRaw = header(headers, policy.signatureHeader)
+    if maybeRaw.isNone() {
+        return fail(policy, MissingSignature, "webhook: missing signature header")
+    }
+    let raw = maybeRaw.unwrap()
+    if policy.secret.isEmpty() {
+        return fail(policy, MissingSecret, "webhook: missing signing secret")
+    }
+    let expected = "{prefix}{hmacSha256HexText(policy.secret, signedPayload)}"
+    if constantTimeStringEq(strings.toLower(strings.trimSpace(raw)), expected) {
+        return okWithOptionalTimestamp(policy, raw, timestamp)
+    }
+    failWithOptionalTimestamp(policy, InvalidSignature, "webhook: invalid signature", timestamp)
+}
+
+fn verifyHmacBase64(policy: Policy, headers: Headers, body: Bytes, signedPayload: Bytes) -> Verification {
+    let timestampResult = checkTimestamp(policy, headers)
+    if timestampResult.isErr() {
+        return timestampResult.unwrapErr()
+    }
+    let timestamp = timestampResult.unwrap()
+    let maybeRaw = header(headers, policy.signatureHeader)
+    if maybeRaw.isNone() {
+        return fail(policy, MissingSignature, "webhook: missing signature header")
+    }
+    let raw = strings.trimSpace(maybeRaw.unwrap())
+    if policy.secret.isEmpty() {
+        return fail(policy, MissingSecret, "webhook: missing signing secret")
+    }
+    let expected = encoding.base64.encode(crypto.hmac.sha256(bytes.fromString(policy.secret), signedPayload))
+    if constantTimeStringEq(raw, expected) {
+        return okWithOptionalTimestamp(policy, raw, timestamp)
+    }
+    failWithOptionalTimestamp(policy, InvalidSignature, "webhook: invalid signature", timestamp)
+}
+
+fn checkTimestamp(policy: Policy, headers: Headers) -> Result<Int?, Verification> {
+    if policy.timestampHeader.isEmpty() {
+        if policy.requireTimestamp {
+            return Err(fail(policy, MissingTimestamp, "webhook: missing timestamp policy header"))
+        }
+        return Ok(None)
+    }
+    let maybeRaw = header(headers, policy.timestampHeader)
+    if maybeRaw.isNone() {
+        if policy.requireTimestamp {
+            return Err(fail(policy, MissingTimestamp, "webhook: missing timestamp header"))
+        }
+        return Ok(None)
+    }
+    let raw = strings.trimSpace(maybeRaw.unwrap())
+    let parsedTimestamp = parseTimestamp(raw)
+    if parsedTimestamp.isErr() {
+        return Err(fail(policy, InvalidTimestamp, "webhook: invalid timestamp"))
+    }
+    let timestamp = parsedTimestamp.unwrap()
+    if !withinReplayWindow(policy, timestamp) {
+        return Err(failWithTimestamp(policy, ReplayWindowExceeded, "webhook: timestamp outside replay window", timestamp))
+    }
+    Ok(Some(timestamp))
+}
+
+fn finishDispatch(event: Event, key: String, store: Store, decision: DispatchDecision) -> DispatchOutcome {
+    let nextStore = if decision.markProcessed { markProcessed(store, key) } else { clearInFlight(store, key) }
+    if decision.retryable {
+        return DispatchOutcome {
+            status: RetryLater,
+            event: Some(event),
+            response: http.textResponse(decision.status, decision.message, {:}),
+            store: nextStore,
+            retryable: true,
+            reason: decision.message,
+        }
+    }
+    if decision.status >= 500 {
+        return DispatchOutcome {
+            status: Failed,
+            event: Some(event),
+            response: http.textResponse(decision.status, decision.message, {:}),
+            store: nextStore,
+            retryable: true,
+            reason: decision.message,
+        }
+    }
+    DispatchOutcome {
+        status: Handled,
+        event: Some(event),
+        response: http.textResponse(decision.status, decision.message, {:}),
+        store: nextStore,
+        retryable: false,
+        reason: decision.message,
+    }
+}
+
+fn eventId(policy: Policy, headers: Headers, body: Bytes, payload: json.Json?) -> String {
+    if !policy.eventIdHeader.isEmpty() {
+        let maybeHeader = header(headers, policy.eventIdHeader)
+        if maybeHeader.isSome() {
+            let clean = strings.trimSpace(maybeHeader.unwrap())
+            if !clean.isEmpty() {
+                return clean
+            }
+        }
+    }
+    match policy.provider {
+        Stripe | Discord -> {
+            let maybeId = stringField(payload, "id")
+            if maybeId.isSome() {
+                return maybeId.unwrap()
+            }
+        },
+        Slack -> {
+            let maybeEventId = stringField(payload, "event_id")
+            if maybeEventId.isSome() {
+                return maybeEventId.unwrap()
+            }
+            let maybeTriggerId = stringField(payload, "trigger_id")
+            if maybeTriggerId.isSome() {
+                return maybeTriggerId.unwrap()
+            }
+        },
+        _ -> {},
+    }
+    bodyFingerprint(body)
+}
+
+fn eventType(policy: Policy, headers: Headers, payload: json.Json?) -> String {
+    if !policy.eventTypeHeader.isEmpty() {
+        let maybeHeader = header(headers, policy.eventTypeHeader)
+        if maybeHeader.isSome() {
+            let clean = strings.trimSpace(maybeHeader.unwrap())
+            if !clean.isEmpty() {
+                return clean
+            }
+        }
+    }
+    match stringField(payload, "type") {
+        Some(value) -> value,
+        None        -> providerName(policy.provider),
+    }
+}
+
+fn parsePayload(body: Bytes) -> json.Json? {
+    let textResult = bytes.toString(body)
+    if textResult.isErr() {
+        return None
+    }
+    let parsed = json.parseValue(textResult.unwrap())
+    if parsed.isErr() {
+        return None
+    }
+    Some(parsed.unwrap())
+}
+
+fn stringField(payload: json.Json?, key: String) -> String? {
+    if payload.isNone() {
+        return None
+    }
+    let fieldResult = json.getField(payload.unwrap(), key)
+    if fieldResult.isErr() {
+        return None
+    }
+    let textResult = json.asString(fieldResult.unwrap())
+    if textResult.isErr() {
+        return None
+    }
+    Some(textResult.unwrap())
+}
+
+fn firstStripeValue(headerValue: String, key: String) -> String? {
+    let values = stripeValues(headerValue, key)
+    if values.isEmpty() {
+        None
+    } else {
+        Some(values[0])
+    }
+}
+
+fn stripeValues(headerValue: String, key: String) -> List<String> {
+    let mut out: List<String> = []
+    for part in strings.split(headerValue, ",") {
+        let pieces = strings.splitN(strings.trimSpace(part), "=", 2)
+        if pieces.len() == 2 && strings.trimSpace(pieces[0]) == key {
+            out.push(strings.trimSpace(pieces[1]))
+        }
+    }
+    out
+}
+
+fn hmacSha256HexText(secret: String, payload: Bytes) -> String {
+    encoding.hex.encode(crypto.hmac.sha256(bytes.fromString(secret), payload))
+}
+
+fn constantTimeStringEq(a: String, b: String) -> Bool {
+    crypto.constantTimeEq(bytes.fromString(a), bytes.fromString(b))
+}
+
+fn parseTimestamp(value: String) -> Result<Int, Error> {
+    strings.toInt(strings.trimSpace(value))
+}
+
+fn withinReplayWindow(policy: Policy, timestamp: Int) -> Bool {
+    let tolerance = if policy.toleranceSeconds <= 0 { 300 } else { policy.toleranceSeconds }
+    let delta = (nowUnixSeconds(policy) - timestamp).abs()
+    delta <= tolerance
+}
+
+fn nowUnixSeconds(policy: Policy) -> Int {
+    if policy.nowUnixSeconds > 0 {
+        return policy.nowUnixSeconds
+    }
+    let nanosPerSecond: Int64 = 1000000000
+    (time.now().unixNanos / nanosPerSecond).toInt()
+}
+
+fn okWithTimestamp(policy: Policy, signature: String, timestamp: Int) -> Verification {
+    Verification { provider: policy.provider, accepted: true, code: Verified, reason: "verified", signature: signature, timestamp: Some(timestamp) }
+}
+
+fn okWithOptionalTimestamp(policy: Policy, signature: String, timestamp: Int?) -> Verification {
+    Verification { provider: policy.provider, accepted: true, code: Verified, reason: "verified", signature: signature, timestamp: timestamp }
+}
+
+fn fail(policy: Policy, code: VerificationCode, reason: String) -> Verification {
+    Verification { provider: policy.provider, accepted: false, code: code, reason: reason }
+}
+
+fn failWithTimestamp(policy: Policy, code: VerificationCode, reason: String, timestamp: Int) -> Verification {
+    Verification { provider: policy.provider, accepted: false, code: code, reason: reason, timestamp: Some(timestamp) }
+}
+
+fn failWithOptionalTimestamp(policy: Policy, code: VerificationCode, reason: String, timestamp: Int?) -> Verification {
+    Verification { provider: policy.provider, accepted: false, code: code, reason: reason, timestamp: timestamp }
+}
+
+fn canonicalHeaderName(name: String) -> String {
+    strings.toLower(strings.trimSpace(name))
+}
+
+fn providerName(provider: Provider) -> String {
+    match provider {
+        Stripe   -> "stripe",
+        GitHub   -> "github",
+        Supabase -> "supabase",
+        Slack    -> "slack",
+        Discord  -> "discord",
+        Custom   -> "custom",
+    }
+}

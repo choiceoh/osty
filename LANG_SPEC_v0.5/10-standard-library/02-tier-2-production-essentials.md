@@ -50,6 +50,9 @@
   `MEDIA:` token parsing
 - `std.httpretry` — retry/backoff decisions, provider-code/message
   classification, quota/context disambiguation, and LLM-specific retry flags
+- `std.webhook` — verified external callback intake for Stripe, GitHub, Slack,
+  Supabase-style HMAC hooks, and Discord externally verified/Ed25519-modeled
+  hooks, with replay-window checks, idempotency keys, and retry-safe dispatch
 - `std.jsonl` — JSON Lines parsing and append-only record helpers
 - `std.tokenest` — model-family-aware multilingual token estimation with
   explicit calibration state
