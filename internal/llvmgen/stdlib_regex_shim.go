@@ -16,6 +16,7 @@ const (
 	ostyRtRegexSplitSymbol        = "osty_rt_regex_split"
 	ostyRtRegexFindSymbol         = "osty_rt_regex_find"
 	ostyRtRegexMatchFreeSymbol    = "osty_rt_regex_match_free"
+	ostyRtRegexCapturesNamedSymbol = "osty_rt_regex_captures_named"
 )
 
 // Synthetic struct name mirroring the user-facing `Match` shape from
@@ -248,6 +249,8 @@ func (g *generator) emitStdRegexMethodCall(call *ast.CallExpr) (value, bool, err
 		switch field.Name {
 		case "get":
 			return g.emitStdRegexCapturesGetCall(call, field)
+		case "named":
+			return g.emitStdRegexCapturesNamedCall(call, field)
 		}
 		return value{}, false, nil
 	}
@@ -289,6 +292,8 @@ func (g *generator) stdRegexMethodStaticResult(call *ast.CallExpr) (value, bool)
 		switch field.Name {
 		case "get":
 			return value{typ: "ptr", gcManaged: true, sourceType: stdRegexStringOptionSourceTypeSingleton}, true
+		case "named":
+			return value{typ: "ptr", gcManaged: true, sourceType: stdRegexStringOptionSourceTypeSingleton}, true
 		}
 		return value{}, false
 	}
@@ -318,6 +323,8 @@ func (g *generator) staticStdRegexMethodSourceType(call *ast.CallExpr) (ast.Type
 	if g.isStdRegexCapturesValueExpr(field.X) {
 		switch field.Name {
 		case "get":
+			return stdRegexStringOptionSourceTypeSingleton, true
+		case "named":
 			return stdRegexStringOptionSourceTypeSingleton, true
 		}
 		return nil, false
@@ -529,6 +536,57 @@ func (g *generator) emitStdRegexCapturesGetCall(call *ast.CallExpr, field *ast.F
 	emitter := g.toOstyEmitter()
 	g.emitCallSafepointIfNeeded(emitter)
 	out := llvmCall(emitter, "ptr", ostyRtRegexCapturesGetSymbol, []*LlvmValue{toOstyValue(recv), toOstyValue(idx)})
+	g.takeOstyEmitter(emitter)
+	v := fromOstyValue(out)
+	v.gcManaged = true
+	v.sourceType = stdRegexStringOptionSourceTypeSingleton
+	v.rootPaths = g.rootPathsForType(v.typ)
+	return v, true, nil
+}
+
+func (g *generator) emitStdRegexCapturesNamedCall(call *ast.CallExpr, field *ast.FieldExpr) (value, bool, error) {
+	if len(call.Args) != 1 {
+		return value{}, true, unsupportedf("call", "Captures.named expects 1 argument, got %d", len(call.Args))
+	}
+	arg := call.Args[0]
+	if arg == nil || arg.Name != "" || arg.Value == nil {
+		return value{}, true, unsupported("call", "Captures.named requires one positional String argument")
+	}
+	src, ok := g.staticExprSourceType(arg.Value)
+	if !ok {
+		return value{}, true, unsupported("type-system", "Captures.named arg 1 source type unknown, want String")
+	}
+	resolved, err := llvmResolveAliasType(src, g.typeEnv(), map[string]bool{})
+	if err != nil || !llvmNamedTypeIsString(resolved) {
+		return value{}, true, unsupported("type-system", "Captures.named arg 1 source type is not String")
+	}
+	recv, err := g.emitExpr(field.X)
+	if err != nil {
+		return value{}, true, err
+	}
+	recv, err = g.loadIfPointer(recv)
+	if err != nil {
+		return value{}, true, err
+	}
+	if recv.typ != "ptr" {
+		return value{}, true, unsupportedf("type-system", "Captures receiver type %s", recv.typ)
+	}
+	name, err := g.emitExpr(arg.Value)
+	if err != nil {
+		return value{}, true, err
+	}
+	name = g.protectManagedTemporary("regex.captures_named.arg", name)
+	nameLoaded, err := g.loadIfPointer(name)
+	if err != nil {
+		return value{}, true, err
+	}
+	if nameLoaded.typ != "ptr" {
+		return value{}, true, unsupportedf("type-system", "Captures.named arg 1 type %s, want String", nameLoaded.typ)
+	}
+	g.declareRuntimeSymbol(ostyRtRegexCapturesNamedSymbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	g.emitCallSafepointIfNeeded(emitter)
+	out := llvmCall(emitter, "ptr", ostyRtRegexCapturesNamedSymbol, []*LlvmValue{toOstyValue(recv), toOstyValue(nameLoaded)})
 	g.takeOstyEmitter(emitter)
 	v := fromOstyValue(out)
 	v.gcManaged = true
