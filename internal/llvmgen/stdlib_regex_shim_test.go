@@ -77,6 +77,83 @@ fn main() {
 	}
 }
 
+func TestStdRegexReplaceRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.regex
+
+fn run(re: Regex) -> String {
+    re.replace("hello world", "X")
+}
+
+fn main() {
+    match regex.compile(r"\w+") {
+        Ok(re) -> println(run(re)),
+        Err(_) -> println("compile failed"),
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_regex_replace.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_regex_replace(ptr, ptr, ptr)",
+		"call ptr @osty_rt_regex_replace",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStdRegexReplaceAllAndSplitRouteToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.regex
+
+fn run(re: Regex) -> String {
+    re.replaceAll("a-b-c", ".")
+}
+
+fn parts(re: Regex) -> List<String> {
+    re.split("a-b-c-d")
+}
+
+fn main() {
+    match regex.compile(r"-") {
+        Ok(re) -> {
+            println(run(re))
+            let _ = parts(re)
+        },
+        Err(_) -> println("compile failed"),
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_regex_replace_all_split.osty",
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_regex_replace_all(ptr, ptr, ptr)",
+		"call ptr @osty_rt_regex_replace_all",
+		"declare ptr @osty_rt_regex_split(ptr, ptr)",
+		"call ptr @osty_rt_regex_split",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestStdRegexCapturesAllRoutesToRuntime(t *testing.T) {
 	file := parseLLVMGenFile(t, `use std.regex
 

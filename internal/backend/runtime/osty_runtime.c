@@ -15741,6 +15741,177 @@ static void *osty_re_build_captures(int ngroups, const char *text, int text_len,
     return caps;
 }
 
+/* Phase 4 — replace / replaceAll / split helpers.
+ *
+ * `replace` / `replaceAll` produce a fresh String with non-overlapping
+ * matches substituted by the literal `replacement` string. No backref
+ * (`$1`) interpolation in Phase 4; the replacement is emitted byte for
+ * byte. `split` returns a `List<String>` of the gaps between matches.
+ *
+ * Empty matches advance the cursor by one byte to avoid infinite loops
+ * (mirrors the rule in `osty_rt_regex_captures_all`). */
+
+typedef struct osty_re_buffer {
+    char *data;
+    size_t len;
+    size_t cap;
+} osty_re_buffer;
+
+static int osty_re_buffer_reserve(osty_re_buffer *buf, size_t need) {
+    if (need <= buf->cap) return 0;
+    size_t next = buf->cap == 0 ? 64 : buf->cap;
+    while (next < need) {
+        if (next > SIZE_MAX / 2) return -1;
+        next *= 2;
+    }
+    char *grown = (char *)realloc(buf->data, next);
+    if (grown == NULL) return -1;
+    buf->data = grown;
+    buf->cap = next;
+    return 0;
+}
+
+static int osty_re_buffer_append(osty_re_buffer *buf, const char *src, size_t n) {
+    if (n == 0) return 0;
+    if (osty_re_buffer_reserve(buf, buf->len + n) != 0) return -1;
+    memcpy(buf->data + buf->len, src, n);
+    buf->len += n;
+    return 0;
+}
+
+static void osty_re_buffer_free(osty_re_buffer *buf) {
+    free(buf->data);
+    buf->data = NULL;
+    buf->len = 0;
+    buf->cap = 0;
+}
+
+static void *osty_rt_regex_replace_impl(void *raw_re, const char *text, const char *replacement, int replace_all) {
+    if (raw_re == NULL) {
+        osty_rt_abort("runtime.regex.replace: nil Regex");
+    }
+    osty_regex_compiled *re = (osty_regex_compiled *)raw_re;
+    char text_inline[8];
+    char repl_inline[8];
+    const char *src = text == NULL ? "" : text;
+    const char *repl = replacement == NULL ? "" : replacement;
+    osty_rt_string_decode_to_buf_if_inline(&src, text_inline);
+    osty_rt_string_decode_to_buf_if_inline(&repl, repl_inline);
+    int len = (int)strlen(src);
+    size_t repl_len = strlen(repl);
+
+    osty_re_buffer buf;
+    memset(&buf, 0, sizeof(buf));
+    int32_t slots[OSTY_RE_MAX_CAP_SLOTS];
+    int slot_count = 2 * re->ngroups;
+    int start = 0;
+    int substituted = 0;
+    while (start <= len) {
+        for (int i = 0; i < slot_count; i++) slots[i] = -1;
+        if (!osty_re_match_from(re, src, len, start, slots)) {
+            break;
+        }
+        int32_t match_start = slots[0];
+        int32_t match_end = slots[1];
+        if (match_start < 0 || match_end < 0 || match_end > len || match_start < start) {
+            break;
+        }
+        if (osty_re_buffer_append(&buf, src + start, (size_t)(match_start - start)) != 0) {
+            osty_re_buffer_free(&buf);
+            osty_rt_abort("runtime.regex.replace: out of memory");
+        }
+        if (osty_re_buffer_append(&buf, repl, repl_len) != 0) {
+            osty_re_buffer_free(&buf);
+            osty_rt_abort("runtime.regex.replace: out of memory");
+        }
+        substituted++;
+        if (match_end > match_start) {
+            start = match_end;
+        } else {
+            /* Empty match — emit the next byte verbatim and advance. */
+            if (start < len) {
+                if (osty_re_buffer_append(&buf, src + start, 1) != 0) {
+                    osty_re_buffer_free(&buf);
+                    osty_rt_abort("runtime.regex.replace: out of memory");
+                }
+            }
+            start++;
+        }
+        if (!replace_all) break;
+    }
+    /* Tail: anything past the last consumed byte. */
+    if (start < len) {
+        if (osty_re_buffer_append(&buf, src + start, (size_t)(len - start)) != 0) {
+            osty_re_buffer_free(&buf);
+            osty_rt_abort("runtime.regex.replace: out of memory");
+        }
+    }
+    void *out;
+    if (substituted == 0) {
+        /* No match: return the original text unchanged. */
+        out = osty_rt_string_dup_site(src, (size_t)len, "runtime.regex.replace.unchanged");
+    } else {
+        out = osty_rt_string_dup_site(buf.data == NULL ? "" : buf.data, buf.len, "runtime.regex.replace");
+    }
+    osty_re_buffer_free(&buf);
+    return out;
+}
+
+void *osty_rt_regex_replace(void *raw_re, const char *text, const char *replacement) {
+    return osty_rt_regex_replace_impl(raw_re, text, replacement, 0);
+}
+
+void *osty_rt_regex_replace_all(void *raw_re, const char *text, const char *replacement) {
+    return osty_rt_regex_replace_impl(raw_re, text, replacement, 1);
+}
+
+/* regex.split(text) -> List<String>. Splits at every non-overlapping
+ * match. Behaves like Go's regexp.Split or Python's re.split (default,
+ * maxsplit=-1): empty fragments between adjacent matches are kept;
+ * the trailing fragment after the last match is appended. An empty
+ * pattern match between every byte position is a degenerate but
+ * valid case — the implementation steps past empties to avoid an
+ * infinite loop, just like replace. */
+void *osty_rt_regex_split(void *raw_re, const char *text) {
+    if (raw_re == NULL) {
+        osty_rt_abort("runtime.regex.split: nil Regex");
+    }
+    osty_regex_compiled *re = (osty_regex_compiled *)raw_re;
+    char inline_buf[8];
+    const char *src = text == NULL ? "" : text;
+    osty_rt_string_decode_to_buf_if_inline(&src, inline_buf);
+    int len = (int)strlen(src);
+
+    void *list = osty_rt_list_new();
+    int32_t slots[OSTY_RE_MAX_CAP_SLOTS];
+    int slot_count = 2 * re->ngroups;
+    int start = 0;
+    while (start <= len) {
+        for (int i = 0; i < slot_count; i++) slots[i] = -1;
+        if (!osty_re_match_from(re, src, len, start, slots)) {
+            break;
+        }
+        int32_t match_start = slots[0];
+        int32_t match_end = slots[1];
+        if (match_start < 0 || match_end < 0 || match_end > len || match_start < start) {
+            break;
+        }
+        void *piece = osty_rt_string_dup_site(src + start, (size_t)(match_start - start), "runtime.regex.split.piece");
+        osty_rt_list_push_ptr(list, piece);
+        if (match_end > match_start) {
+            start = match_end;
+        } else {
+            /* Empty match: the slot at `match_start` produced nothing,
+             * advance by 1 to ensure forward progress. */
+            start = match_start + 1;
+        }
+    }
+    /* Trailing piece (or the whole input if no matches). */
+    void *tail = osty_rt_string_dup_site(src + start, (size_t)(len - start), "runtime.regex.split.tail");
+    osty_rt_list_push_ptr(list, tail);
+    return list;
+}
+
 /* regex.captures(text) -> Captures? */
 void *osty_rt_regex_captures(void *raw_re, const char *text) {
     if (raw_re == NULL) {

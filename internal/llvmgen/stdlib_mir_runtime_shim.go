@@ -1658,8 +1658,46 @@ func (g *mirGen) emitStdRegexCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, err
 		}
 		// Runtime returns List<Captures> ptr (always non-null; empty list if no matches).
 		return true, g.emitRuntimeCallToDest(c, ostyRtRegexCapturesAllSymbol, "ptr", []mirRuntimeArg{recv, text})
+	case "replace":
+		return g.emitStdRegexReplaceMIR(c, ostyRtRegexReplaceSymbol)
+	case "replaceAll":
+		return g.emitStdRegexReplaceMIR(c, ostyRtRegexReplaceAllSymbol)
+	case "split":
+		if len(c.Args) != 2 {
+			return true, unsupported("mir-mvp", "Regex.split requires receiver and text")
+		}
+		recv, err := g.evalTypedArg(c.Args[0], c.Args[0].Type())
+		if err != nil {
+			return true, err
+		}
+		text, err := g.evalTypedArg(c.Args[1], c.Args[1].Type())
+		if err != nil {
+			return true, err
+		}
+		return true, g.emitRuntimeCallToDest(c, ostyRtRegexSplitSymbol, "ptr", []mirRuntimeArg{recv, text})
 	}
 	return false, nil
+}
+
+// emitStdRegexReplaceMIR shares the lowering for replace/replaceAll —
+// both take (receiver, text, replacement) and return a String ptr.
+func (g *mirGen) emitStdRegexReplaceMIR(c *mir.CallInstr, symbol string) (bool, error) {
+	if len(c.Args) != 3 {
+		return true, unsupported("mir-mvp", "Regex.replace/replaceAll requires receiver, text, replacement")
+	}
+	recv, err := g.evalTypedArg(c.Args[0], c.Args[0].Type())
+	if err != nil {
+		return true, err
+	}
+	text, err := g.evalTypedArg(c.Args[1], c.Args[1].Type())
+	if err != nil {
+		return true, err
+	}
+	repl, err := g.evalTypedArg(c.Args[2], c.Args[2].Type())
+	if err != nil {
+		return true, err
+	}
+	return true, g.emitRuntimeCallToDest(c, symbol, "ptr", []mirRuntimeArg{recv, text, repl})
 }
 
 func (g *mirGen) emitStdRegexCapturesMethod(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
