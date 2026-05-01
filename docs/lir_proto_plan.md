@@ -613,6 +613,28 @@ Eleven Phase-4 fixtures pin every shape: `list_push_bytes_v1`,
 `bytes_to_string`, `bytes_from_hex` (10 new + the existing
 `check_cancelled` reuse).
 
+Design decision: a follow-up batch extends the bytes-v1 fallback to
+List get / List insert / Channel send composite paths, fixes the
+production-divergent `Set.insert` / `Set.remove` LLVM signature
+(was declared `void`, runtime is `i1` newly-added/removed flag), and
+fixes `Map.set` to spill the value into a stack slot regardless of
+value type — production declares `osty_rt_map_insert_<keysuf>(ptr,
+<keyLLVM>, ptr) -> void` and memcpys `value_size` bytes from the
+pointer, so the typed-i64 form LIR Proto used previously was both a
+linker mismatch and a wrong-bitpattern bug for non-i64 values.
+
+Four new fixtures pin the new shapes: `list_get_bytes_v1`,
+`list_insert_bytes_v1`, `chan_send_bytes_v1`, `set_remove_i1`. Two
+existing fixtures (`map_insert_string_int`, `set_insert_string`)
+update to pin the corrected ABI. The bytes-v1 helper
+`lirEmitSizeOf` is reused unchanged from the prior batch.
+
+Set composite element types remain unsupported — production has no
+bytes-v1 set runtime entry today and the runtime helper would need
+a comparator callback to compare composite elements. Map composite
+value types now route through the spill path correctly; Map composite
+key types are still unsupported on both sides.
+
 ## Phase 0: lock the boundary
 
 Deliverables:

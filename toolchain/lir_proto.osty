@@ -2804,6 +2804,15 @@ fn lirLowerMirListGet(l: LirMirFunctionLowerer, instr: MirInstr) {
         lirLowerError(l, LirDiagInvalidInput, "list.get expects (list, idx)", "list.get")
         return
     }
+    let elemName = lirListElemTypeName(instr.args[0].typ)
+    if elemName == "" {
+        lirLowerError(l, LirDiagUnsupported, "list.get could not extract element type from receiver `" + instr.args[0].typ + "`", "list.get")
+        return
+    }
+    if lirTypeIsZero(lirContainerElemLaneType(elemName)) {
+        lirLowerMirListGetBytesV1(l, instr, elemName)
+        return
+    }
     let recv = lirLowerMirContainerReceiver(l, instr, "list.get", "list.elem")
     if !(recv.ok) {
         return
@@ -2814,9 +2823,48 @@ fn lirLowerMirListGet(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     lirEmitContainerCall(l, instr, llvmListRuntimeGetSymbolFor(recv.elemLir.llvm, recv.isString), recv.elemLir, [lirPtrType(), lirIntType(64)], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(lirIntType(64), idx.value)], recv.elemTypeName, "list.get")
 }
+// Composite-element List.get via the bytes-v1 runtime: alloca a slot
+// of the element type, ask the runtime to memcpy into it, load the
+// composite back and store into the destination. Mirrors production
+// (mir_generator.go::emitListGetBytes).
+fn lirLowerMirListGetBytesV1(l: LirMirFunctionLowerer, instr: MirInstr, elemName: String) {
+    let elemType = lirLowerMirType(l, elemName)
+    if lirTypeIsZero(elemType) || lirTypeIsVoid(elemType) {
+        lirLowerError(l, LirDiagUnsupported, "list.get composite element type `" + elemName + "` has no MIR layout", "list.get")
+        return
+    }
+    let recv = lirLowerMirOperand(l, instr.args[0], instr.args[0].typ, lirPtrType())
+    if recv.value == "" {
+        return
+    }
+    let idx = lirLowerCoercedOperand(l, instr.args[1], "Int", lirIntType(64), "list.get idx")
+    if idx.value == "" {
+        return
+    }
+    let slot = lirFresh(l)
+    l.instrs.push(lirAlloca(slot, elemType, 0))
+    let sizeReg = lirEmitSizeOf(l, elemType)
+    let symbol = mirRtListGetBytesV1Symbol()
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirVoidType(), [lirPtrType(), lirIntType(64), lirPtrType(), lirIntType(64)], false))
+    l.instrs.push(lirCall("", lirVoidType(), "@" + symbol, [lirOperand(lirPtrType(), recv.value), lirOperand(lirIntType(64), idx.value), lirOperand(lirPtrType(), slot), lirOperand(lirIntType(64), sizeReg)]))
+    if instr.hasDest {
+        let loaded = lirFresh(l)
+        l.instrs.push(lirLoad(loaded, elemType, slot, 0))
+        lirStoreMirResult(l, instr.dest, lirOperand(elemType, loaded), elemName, "list.get result")
+    }
+}
 fn lirLowerMirListInsert(l: LirMirFunctionLowerer, instr: MirInstr) {
     if instr.args.len() != 3 {
         lirLowerError(l, LirDiagInvalidInput, "list.insert expects (list, idx, elem)", "list.insert")
+        return
+    }
+    let elemName = lirListElemTypeName(instr.args[0].typ)
+    if elemName == "" {
+        lirLowerError(l, LirDiagUnsupported, "list.insert could not extract element type from receiver `" + instr.args[0].typ + "`", "list.insert")
+        return
+    }
+    if lirTypeIsZero(lirContainerElemLaneType(elemName)) {
+        lirLowerMirListInsertBytesV1(l, instr, elemName)
         return
     }
     let recv = lirLowerMirContainerReceiver(l, instr, "list.insert", "list.elem")
@@ -2832,6 +2880,39 @@ fn lirLowerMirListInsert(l: LirMirFunctionLowerer, instr: MirInstr) {
         return
     }
     lirEmitContainerCall(l, instr, llvmListRuntimeInsertSymbolFor(recv.elemLir.llvm, recv.isString), lirVoidType(), [lirPtrType(), lirIntType(64), recv.elemLir], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(lirIntType(64), idx.value), lirOperand(recv.elemLir, value.value)], "", "list.insert")
+}
+// Composite-element List.insert via the bytes-v1 runtime: spill the
+// value into a stack slot, compute the element size via the
+// `getelementptr null` idiom, and call
+// `osty_rt_list_insert_bytes_v1(list, idx, slot, size)`.
+fn lirLowerMirListInsertBytesV1(l: LirMirFunctionLowerer, instr: MirInstr, elemName: String) {
+    let elemType = lirLowerMirType(l, elemName)
+    if lirTypeIsZero(elemType) || lirTypeIsVoid(elemType) {
+        lirLowerError(l, LirDiagUnsupported, "list.insert composite element type `" + elemName + "` has no MIR layout", "list.insert")
+        return
+    }
+    let recv = lirLowerMirOperand(l, instr.args[0], instr.args[0].typ, lirPtrType())
+    if recv.value == "" {
+        return
+    }
+    let idx = lirLowerCoercedOperand(l, instr.args[1], "Int", lirIntType(64), "list.insert idx")
+    if idx.value == "" {
+        return
+    }
+    let value = lirLowerMirOperand(l, instr.args[2], elemName, elemType)
+    if value.value == "" {
+        return
+    }
+    let slot = lirFresh(l)
+    l.instrs.push(lirAlloca(slot, elemType, 0))
+    l.instrs.push(lirStore(lirOperand(elemType, value.value), slot, 0))
+    let sizeReg = lirEmitSizeOf(l, elemType)
+    let symbol = mirRtListSymbol("insert_bytes_v1")
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirVoidType(), [lirPtrType(), lirIntType(64), lirPtrType(), lirIntType(64)], false))
+    l.instrs.push(lirCall("", lirVoidType(), "@" + symbol, [lirOperand(lirPtrType(), recv.value), lirOperand(lirIntType(64), idx.value), lirOperand(lirPtrType(), slot), lirOperand(lirIntType(64), sizeReg)]))
+    if instr.hasDest {
+        lirCheckVoidMirDestination(l, instr.hasDest, instr.dest, "list.insert")
+    }
 }
 fn lirLowerMirListSorted(l: LirMirFunctionLowerer, instr: MirInstr) {
     if instr.args.len() != 1 {
@@ -2872,6 +2953,13 @@ fn lirLowerMirListIsEmpty(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
 }
 // ----- Map intrinsic lowerings (typed key lane) -----
+// Map.set always passes the value by spilled-slot pointer regardless
+// of value type. Production declares
+// `osty_rt_map_insert_<keysuf>(ptr, <keyLLVM>, ptr) -> void` so the
+// runtime can memcpy `value_size` bytes — the same shape works for
+// scalar and composite values, sidesteps the wrong-bitpattern bug
+// the typed-i64 form would produce on non-i64 values, and matches
+// production exactly.
 fn lirLowerMirMapInsert(l: LirMirFunctionLowerer, instr: MirInstr) {
     if instr.args.len() != 3 {
         lirLowerError(l, LirDiagInvalidInput, "map.set expects (map, key, value)", "map.set")
@@ -2889,7 +2977,11 @@ fn lirLowerMirMapInsert(l: LirMirFunctionLowerer, instr: MirInstr) {
     if value.value == "" {
         return
     }
-    lirEmitContainerCall(l, instr, llvmMapRuntimeInsertSymbol(recv.elemLir.llvm, recv.isString), lirVoidType(), [lirPtrType(), recv.elemLir, recv.valueLir], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, key.value), lirOperand(recv.valueLir, value.value)], "", "map.set")
+    let slot = lirFresh(l)
+    l.instrs.push(lirAlloca(slot, recv.valueLir, 0))
+    l.instrs.push(lirStore(lirOperand(recv.valueLir, value.value), slot, 0))
+    let symbol = llvmMapRuntimeInsertSymbol(recv.elemLir.llvm, recv.isString)
+    lirEmitContainerCall(l, instr, symbol, lirVoidType(), [lirPtrType(), recv.elemLir, lirPtrType()], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, key.value), lirOperand(lirPtrType(), slot)], "", "map.set")
 }
 fn lirLowerMirMapContains(l: LirMirFunctionLowerer, instr: MirInstr) {
     if instr.args.len() != 2 {
@@ -3435,8 +3527,11 @@ fn lirLowerMirSetInsert(l: LirMirFunctionLowerer, instr: MirInstr) {
     if elem.value == "" {
         return
     }
-    lirEmitContainerCall(l, instr, llvmSetRuntimeInsertSymbol(recv.elemLir.llvm, recv.isString), lirVoidType(), [lirPtrType(), recv.elemLir], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, elem.value)], "", "set.insert")
+    lirEmitContainerCall(l, instr, llvmSetRuntimeInsertSymbol(recv.elemLir.llvm, recv.isString), lirIntType(1), [lirPtrType(), recv.elemLir], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, elem.value)], "Bool", "set.insert")
 }
+// Production declares set_insert as `i1 (...)` (returns true when a
+// newly-added element). MIR discards the flag at most call sites
+// but the function-type must match the runtime to link cleanly.
 fn lirLowerMirSetContains(l: LirMirFunctionLowerer, instr: MirInstr) {
     if instr.args.len() != 2 {
         lirLowerError(l, LirDiagInvalidInput, "set.contains expects (set, elem)", "set.contains")
@@ -3465,8 +3560,11 @@ fn lirLowerMirSetRemove(l: LirMirFunctionLowerer, instr: MirInstr) {
     if elem.value == "" {
         return
     }
-    lirEmitContainerCall(l, instr, llvmSetRuntimeRemoveSymbol(recv.elemLir.llvm, recv.isString), lirVoidType(), [lirPtrType(), recv.elemLir], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, elem.value)], "", "set.remove")
+    lirEmitContainerCall(l, instr, llvmSetRuntimeRemoveSymbol(recv.elemLir.llvm, recv.isString), lirIntType(1), [lirPtrType(), recv.elemLir], [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, elem.value)], "Bool", "set.remove")
 }
+// Production declares set_remove as `i1 (...)` (returns true when an
+// element was actually removed). The function-type must match the
+// runtime declaration to link cleanly even if MIR discards the flag.
 // IndexOf-family lowering: 2-ptr runtime returning i64 with -1 sentinel
 // for "not found". When the destination local is `Option<Int>` (or any
 // 2-i64 aggregate type — production also accepts `Maybe<Int>`), wrap
@@ -3626,12 +3724,8 @@ fn lirLowerMirChanSend(l: LirMirFunctionLowerer, instr: MirInstr) {
         return
     }
     let elemLir = lirContainerElemLaneType(elemName)
-    if lirTypeIsZero(elemLir) {
-        lirLowerError(l, LirDiagUnsupported, "chan.send element type `" + elemName + "` has no LIR runtime lane", "chan.send")
-        return
-    }
-    if !(llvmListUsesTypedRuntime(elemLir.llvm)) {
-        lirLowerError(l, LirDiagUnsupported, "chan.send composite element type `" + elemName + "` needs the bytes-v1 runtime fallback (deferred)", "chan.send")
+    if lirTypeIsZero(elemLir) || !(llvmListUsesTypedRuntime(elemLir.llvm)) {
+        lirLowerMirChanSendBytesV1(l, instr, elemName)
         return
     }
     let chReg = lirLowerCoercedOperand(l, instr.args[0], instr.args[0].typ, lirPtrType(), "chan.send channel")
@@ -3644,6 +3738,36 @@ fn lirLowerMirChanSend(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     let symbol = llvmChanRuntimeSendSymbol(llvmListElementSuffix(elemLir.llvm))
     lirEmitContainerCall(l, instr, symbol, lirVoidType(), [lirPtrType(), elemLir], [lirOperand(lirPtrType(), chReg.value), lirOperand(elemLir, value.value)], "", "chan.send")
+}
+// Composite element: bytes-v1 fallback. Mirrors production
+// (mir_generator.go::IntrinsicChanSend bytes branch).
+// Composite-element Channel.send via the bytes-v1 runtime: spill the
+// value into a stack slot, compute the element size, and call
+// `osty_rt_thread_chan_send_bytes_v1(ch, slot, size)`.
+fn lirLowerMirChanSendBytesV1(l: LirMirFunctionLowerer, instr: MirInstr, elemName: String) {
+    let elemType = lirLowerMirType(l, elemName)
+    if lirTypeIsZero(elemType) || lirTypeIsVoid(elemType) {
+        lirLowerError(l, LirDiagUnsupported, "chan.send composite element type `" + elemName + "` has no MIR layout", "chan.send")
+        return
+    }
+    let chReg = lirLowerCoercedOperand(l, instr.args[0], instr.args[0].typ, lirPtrType(), "chan.send channel")
+    if chReg.value == "" {
+        return
+    }
+    let value = lirLowerMirOperand(l, instr.args[1], elemName, elemType)
+    if value.value == "" {
+        return
+    }
+    let slot = lirFresh(l)
+    l.instrs.push(lirAlloca(slot, elemType, 0))
+    l.instrs.push(lirStore(lirOperand(elemType, value.value), slot, 0))
+    let sizeReg = lirEmitSizeOf(l, elemType)
+    let symbol = llvmChanRuntimeSendBytesSymbol()
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirVoidType(), [lirPtrType(), lirPtrType(), lirIntType(64)], false))
+    l.instrs.push(lirCall("", lirVoidType(), "@" + symbol, [lirOperand(lirPtrType(), chReg.value), lirOperand(lirPtrType(), slot), lirOperand(lirIntType(64), sizeReg)]))
+    if instr.hasDest {
+        lirCheckVoidMirDestination(l, instr.hasDest, instr.dest, "chan.send")
+    }
 }
 // Channel recv returns the runtime's `{i64 disc, i64 payload}` shape
 // that already matches the `%Option.<T>` aggregate layout — disc=0 for
