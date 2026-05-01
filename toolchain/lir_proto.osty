@@ -1640,6 +1640,7 @@ pub struct LirMirFunctionLowerer {
     pub currentBlockLabel: String,
     pub extraBlocks: List<LirBlock>,
     pub auxLabel: Int,
+    pub gcRootSlots: List<String>,
 }
 pub fn lirLowerMirModule(cfg: LirLowerConfig, mir: MirModule) -> LirLowerResult {
     let packageName = if cfg.packageName == "" {
@@ -1681,7 +1682,7 @@ pub fn lirLowerMirModule(cfg: LirLowerConfig, mir: MirModule) -> LirLowerResult 
     LirLowerResult {module: out, diagnostics: diags}
 }
 pub fn lirLowerMirFunction(cfg: LirLowerConfig, mir: MirModule, module: LirModule, fn_: MirFunction) -> LirLowerResult {
-    let mut l = LirMirFunctionLowerer {cfg, mirModule: mir, fn_, out: lirModule(module.packageName, module.sourcePath, module.target), diagnostics: [], prologue: [], instrs: [], slots: [], labels: [], temp: 0, safepointSerial: 0, currentBlockLabel: "", extraBlocks: [], auxLabel: 0}
+    let mut l = LirMirFunctionLowerer {cfg, mirModule: mir, fn_, out: lirModule(module.packageName, module.sourcePath, module.target), diagnostics: [], prologue: [], instrs: [], slots: [], labels: [], temp: 0, safepointSerial: 0, currentBlockLabel: "", extraBlocks: [], auxLabel: 0, gcRootSlots: []}
     l.out.typeDefs = module.typeDefs
     l.out.runtimeDecls = module.runtimeDecls
     l.out.stringPool = module.stringPool
@@ -1834,6 +1835,60 @@ fn lirLowerMirLocals(l: LirMirFunctionLowerer) {
         if loc.isParam {
             l.prologue.push(lirStore(lirOperand(typ, lirMirParamName(loc.id)), slot, 0))
         }
+        if lirTypeNameIsGCManaged(loc.typ) {
+            lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirGcRootBindDecl())
+            l.prologue.push(lirCall("", lirVoidType(), "@" + lirGcRootBindSymbol(), [lirOperand(lirPtrType(), slot)]))
+            l.gcRootSlots.push(slot)
+        }
+    }
+}
+// GC root binding: slots holding managed reference values
+// (List/Map/Set/Channel/Handle/Box/String/Bytes/TaskGroup/
+// Select) get registered with the runtime so the safepoint
+// collector can scan them. Production binds at slot
+// initialization (generator.go::bindGCRootIfManagedPointer).
+// The release pair is emitted before each `ret` terminator.
+// `lirTypeNameIsGCManaged` reports whether a local with this MIR
+// type name needs the runtime root-binding pair around its slot.
+// Mirrors production's `gcManaged` flag: anything reference-shaped
+// (List<T>, Map<K,V>, Set<T>, Channel<T>, Handle<T>, Box<T>,
+// TaskGroup, Select) plus the runtime-allocated String / Bytes
+// surfaces. RawPtr is intentionally excluded — it's the user's
+// escape hatch for unmanaged pointers and binding it would attribute
+// foreign memory to the GC.
+fn lirTypeNameIsGCManaged(name: String) -> Bool {
+    if name == "String" || name == "Bytes" {
+        return true
+    }
+    lirIsRefBuiltinTypeName(name)
+}
+fn lirGcRootBindSymbol() -> String {
+    "osty.gc.root_bind_v1"
+}
+fn lirGcRootReleaseSymbol() -> String {
+    "osty.gc.root_release_v1"
+}
+fn lirGcRootBindDecl() -> LirRuntimeDecl {
+    lirRuntimeDecl(lirGcRootBindSymbol(), lirVoidType(), [lirPtrType()], false)
+}
+fn lirGcRootReleaseDecl() -> LirRuntimeDecl {
+    lirRuntimeDecl(lirGcRootReleaseSymbol(), lirVoidType(), [lirPtrType()], false)
+}
+// Emit `osty.gc.root_release_v1(slot)` for every recorded root slot in
+// reverse insertion order. Called immediately before each `ret`
+// terminator so the collector frees roots in the inverse of the
+// binding order — the same LIFO discipline production uses
+// (generator.go::releaseGCRoots).
+fn lirEmitGcRootReleases(l: LirMirFunctionLowerer) {
+    if l.gcRootSlots.len() == 0 {
+        return
+    }
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirGcRootReleaseDecl())
+    let mut i = l.gcRootSlots.len() - 1
+    for _ in 0..l.gcRootSlots.len() {
+        let slot = l.gcRootSlots[i]
+        l.instrs.push(lirCall("", lirVoidType(), "@" + lirGcRootReleaseSymbol(), [lirOperand(lirPtrType(), slot)]))
+        i = i - 1
     }
 }
 fn lirMirLocalSlot(l: LirMirFunctionLowerer, id: Int) -> LirLocalSlot {
@@ -4033,9 +4088,11 @@ fn lirLowerMirTerm(l: LirMirFunctionLowerer, term: MirTerm, ret: LirType) -> Lir
     match term.kind {
         MirTermReturn -> {
             if lirTypeIsVoid(ret) {
+                lirEmitGcRootReleases(l)
                 return lirRetVoid()
             }
             let value = lirLoadMirLocal(l, l.fn_.returnLocal)
+            lirEmitGcRootReleases(l)
             return lirRetValue(value.typ, value.value)
         },
         MirTermGoto -> lirBr(lirLabelForMirBlock(l, term.target)),
@@ -4066,6 +4123,11 @@ fn lirLowerMirTerm(l: LirMirFunctionLowerer, term: MirTerm, ret: LirType) -> Lir
         },
     }
 }
+// Load the return value before releasing roots. The value
+// is already in a register at the point of release, so the
+// root_release calls cannot disturb it. Production
+// (generator.go::releaseGCRoots) uses the same order:
+// value materialization, then LIFO root release, then ret.
 fn lirLowerMirRValue(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
     match rv.kind {
         MirRVUse -> lirLowerMirOperand(l, rv.arg, hintName, hint),

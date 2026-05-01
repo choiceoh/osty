@@ -384,6 +384,10 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualParallelFixture", []string{"declare ptr @osty_rt_parallel(ptr, i64, ptr)", "call ptr @osty_rt_parallel("}},
 		{"lirParityManualRaceFixture", []string{"%Result.Int_Error = type", "declare { i64, i64 } @osty_rt_task_race(ptr)", "call { i64, i64 } @osty_rt_task_race("}},
 		{"lirParityManualCollectAllFixture", []string{"declare ptr @osty_rt_task_collect_all(ptr)", "call ptr @osty_rt_task_collect_all("}},
+		// ----- GC root binding -----
+		{"lirParityManualGcRootBindReleaseFixture", []string{"declare void @osty.gc.root_bind_v1(ptr)", "declare void @osty.gc.root_release_v1(ptr)", "call void @osty.gc.root_bind_v1(", "call void @osty.gc.root_release_v1("}},
+		{"lirParityManualGcRootMultipleSlotsFixture", []string{"call void @osty.gc.root_bind_v1(ptr %l1)", "call void @osty.gc.root_bind_v1(ptr %l2)", "call void @osty.gc.root_release_v1(ptr %l2)", "call void @osty.gc.root_release_v1(ptr %l1)"}},
+		{"lirParityManualGcRootScalarOnlyFixture", []string{"define i64 @scalarOnly(i64", "ret i64"}},
 	}
 
 	for _, tt := range want {
