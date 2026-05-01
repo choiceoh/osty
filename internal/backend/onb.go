@@ -2,8 +2,11 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"time"
 
 	"github.com/osty/osty/internal/onb"
 )
@@ -19,8 +22,18 @@ type onbLinker interface {
 // ONBBackend is the LLVM-complementary dev/debug backend. It consumes MIR and
 // emits native aarch64 objects directly; LLVM remains the reference/release
 // backend.
+//
+// To make `osty run --backend onb` actually usable on a developer's daily
+// dev loop the backend silently falls back to LLVMBackend whenever ONB's MIR
+// coverage rejects a shape. The fallback only fires for emit modes that
+// produce a runnable artifact (object / binary) — `--emit asm` keeps its
+// hard-fail behaviour because the user is asking specifically for ONB's
+// readable assembly. Setting OSTY_ONB_STRICT=1 disables the fallback so
+// cross-validation harnesses see the raw rejection.
 type ONBBackend struct {
-	linker onbLinker
+	linker       onbLinker
+	llvmFallback Backend
+	logSink      io.Writer
 }
 
 func (ONBBackend) Name() Name { return NameONB }
@@ -32,11 +45,58 @@ func (b ONBBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 	if err := ValidateEmit(NameONB, req.Emit); err != nil {
 		return nil, err
 	}
+	started := time.Now()
+	target, _ := onb.ResolveTarget(req.Layout.Target)
+	logSink := b.timingSink()
+	timingOn := onb.TimingEnabled()
+	result, err := b.emitNative(ctx, req)
+	if err == nil {
+		if timingOn {
+			onb.LogTiming(logSink, onb.TimingEvent{
+				Path:     "native",
+				Target:   target.Triple,
+				Elapsed:  time.Since(started),
+				BinaryAt: result.Artifacts.Binary,
+			})
+		}
+		return result, nil
+	}
+	if !b.shouldFallback(req, err) {
+		if timingOn {
+			onb.LogTiming(logSink, onb.TimingEvent{
+				Path:    "error",
+				Target:  target.Triple,
+				Elapsed: time.Since(started),
+				Reason:  fallbackReason(err),
+			})
+		}
+		return result, err
+	}
+	fallback, fallbackErr := b.runLLVMFallback(ctx, req, err)
+	if timingOn {
+		path := "llvm-fallback"
+		if fallbackErr != nil {
+			path = "error"
+		}
+		onb.LogTiming(logSink, onb.TimingEvent{
+			Path:    path,
+			Target:  target.Triple,
+			Elapsed: time.Since(started),
+			Reason:  fallbackReason(err),
+		})
+	}
+	return fallback, fallbackErr
+}
+
+// emitNative runs the native ONB pipeline. It returns ErrUnsupportedShape (or
+// a wrapping error) when the dev backend cannot lower the MIR — the public
+// Emit method then decides whether to fall back to LLVM.
+func (b ONBBackend) emitNative(ctx context.Context, req Request) (*Result, error) {
 	artifacts := req.Artifacts(NameONB)
 	if err := os.MkdirAll(artifacts.OutputDir, 0o755); err != nil {
 		return nil, err
 	}
-	plan, err := onb.BuildPlan(onb.Request{
+	plan, planErr := onb.BuildPlan(onb.Request{
 		Module:       req.Entry.MIR,
 		TargetTriple: req.Layout.Target,
 		EmitMode:     req.Emit.String(),
@@ -53,8 +113,8 @@ func (b ONBBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 		Artifacts: artifacts,
 		Warnings:  warnings,
 	}
-	if err != nil {
-		return result, err
+	if planErr != nil {
+		return result, planErr
 	}
 	asm, err := onb.RenderAssembly(plan.Program)
 	if err != nil {
@@ -91,9 +151,73 @@ func (b ONBBackend) Emit(ctx context.Context, req Request) (*Result, error) {
 	return result, nil
 }
 
+// shouldFallback decides whether an ONB lowering failure should silently
+// delegate to LLVM. We only fall back for emit modes that produce a runnable
+// artifact, and only when the failure is an "unsupported MIR shape" sentinel.
+// OSTY_ONB_STRICT=1 disables the fallback entirely.
+func (b ONBBackend) shouldFallback(req Request, err error) bool {
+	if err == nil {
+		return false
+	}
+	if onb.StrictMode() {
+		return false
+	}
+	if req.Emit != EmitObject && req.Emit != EmitBinary {
+		return false
+	}
+	return errors.Is(err, onb.ErrUnsupportedShape)
+}
+
+// runLLVMFallback drives LLVM with the same Request, then attaches a warning
+// describing why ONB declined so callers can surface the reason without
+// burying it in stderr. Result.Backend on the fallback path reflects LLVM —
+// honest about what actually built the artifact — and the binary path lives
+// under .osty/out/llvm/, which is what `osty run` will execute.
+func (b ONBBackend) runLLVMFallback(ctx context.Context, req Request, onbErr error) (*Result, error) {
+	llvm := b.llvmBackend()
+	result, err := llvm.Emit(ctx, req)
+	reason := fallbackReason(onbErr)
+	note := fmt.Errorf("onb fallback: lowering delegated to llvm (%s)", reason)
+	if result == nil {
+		return result, err
+	}
+	result.Warnings = append([]error{note}, result.Warnings...)
+	return result, err
+}
+
 func (b ONBBackend) onbLinker() onbLinker {
 	if b.linker != nil {
 		return b.linker
 	}
 	return clangToolchain{}
+}
+
+func (b ONBBackend) llvmBackend() Backend {
+	if b.llvmFallback != nil {
+		return b.llvmFallback
+	}
+	return LLVMBackend{}
+}
+
+func (b ONBBackend) timingSink() io.Writer {
+	if b.logSink != nil {
+		return b.logSink
+	}
+	return os.Stderr
+}
+
+// fallbackReason peels the onb sentinel off so the log line and the warning
+// note both quote a short user-readable string rather than the wrapped error
+// chain. The shape sentinel's message is generic, so we strip it when there
+// is a more specific wrapped detail.
+func fallbackReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	prefix := onb.ErrUnsupportedShape.Error() + ": "
+	if len(msg) > len(prefix) && msg[:len(prefix)] == prefix {
+		return msg[len(prefix):]
+	}
+	return msg
 }

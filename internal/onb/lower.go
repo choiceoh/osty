@@ -16,7 +16,7 @@ func LowerMIR(mod *mir.Module, target Target) (*Program, error) {
 	}
 	mainFn := mod.LookupFunction("main")
 	if mainFn == nil {
-		return nil, fmt.Errorf("onb: missing main function")
+		return nil, fmt.Errorf("%w: missing main function", ErrUnsupportedShape)
 	}
 	state := &lowerState{target: target}
 	fn, err := state.lowerMainFunction(mainFn)
@@ -40,10 +40,10 @@ func (s *lowerState) lowerMainFunction(fn *mir.Function) (Function, error) {
 		return Function{}, fmt.Errorf("onb: nil main function")
 	}
 	if len(fn.Params) != 0 {
-		return Function{}, fmt.Errorf("onb: main parameters are outside phase 1")
+		return Function{}, fmt.Errorf("%w: main parameters are outside phase 1", ErrUnsupportedShape)
 	}
 	if fn.ReturnType != mir.TUnit {
-		return Function{}, fmt.Errorf("onb: main return type %s is outside phase 1", fn.ReturnType)
+		return Function{}, fmt.Errorf("%w: main return type %s is outside phase 1", ErrUnsupportedShape, fn.ReturnType)
 	}
 	out := Function{Name: fn.Name}
 	for _, block := range fn.Blocks {
@@ -82,7 +82,7 @@ func (s *lowerState) lowerBlock(fn *mir.Function, block *mir.BasicBlock) (Block,
 			Instrs: instrs,
 		}, nil
 	default:
-		return Block{}, fmt.Errorf("onb: terminator %T is outside phase 1", block.Term)
+		return Block{}, fmt.Errorf("%w: terminator %T is outside phase 1", ErrUnsupportedShape, block.Term)
 	}
 }
 
@@ -101,7 +101,7 @@ func (s *lowerState) lowerInstr(fn *mir.Function, instr mir.Instr) ([]Instr, err
 	case *mir.IntrinsicInstr:
 		return s.lowerIntrinsic(i)
 	}
-	return nil, fmt.Errorf("onb: instruction %T is outside phase 1", instr)
+	return nil, fmt.Errorf("%w: instruction %T is outside phase 1", ErrUnsupportedShape, instr)
 }
 
 func (s *lowerState) lowerIntrinsic(instr *mir.IntrinsicInstr) ([]Instr, error) {
@@ -126,9 +126,9 @@ func (s *lowerState) lowerIntrinsic(instr *mir.IntrinsicInstr) ([]Instr, error) 
 			out = append(out, &BranchLink{Symbol: "printf"})
 			return out, nil
 		}
-		return nil, fmt.Errorf("onb: println currently requires one string or int literal argument")
+		return nil, fmt.Errorf("%w: println currently requires one string or int literal argument", ErrUnsupportedShape)
 	default:
-		return nil, fmt.Errorf("onb: intrinsic %s is outside phase 1", instr.Kind)
+		return nil, fmt.Errorf("%w: intrinsic %s is outside phase 1", ErrUnsupportedShape, instr.Kind)
 	}
 }
 
