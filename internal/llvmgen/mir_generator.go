@@ -3805,6 +3805,35 @@ func (g *mirGen) emitPrimitiveMethodCall(c *mir.CallInstr, fnRef *mir.FnRef) (bo
 		resultReg = g.fresh()
 		body += "  " + resultReg + " = call ptr @" + mirRtIntToStringSymbol() + "(i64 " + extReg + ")\n"
 
+	case "ns", "us", "ms", "s", "minutes", "h", "days", "weeks":
+		// Duration constructors (§10.20). Receiver is an integer
+		// kind (Float receivers route through emitFloatPrimitiveMethodCall
+		// before reaching this switch). Multiply by the unit factor
+		// and wrap the resulting i64 nanosecond count as a Duration
+		// `ptr` (Duration's LLVM ABI is an opaque ptr that
+		// `osty_rt_thread_sleep(int64_t)` accepts via 64-bit ABI
+		// compatibility).
+		factor, ok := durationUnitFactor(method)
+		if !ok {
+			return false, nil
+		}
+		// Widen narrow integer receivers to i64 (sext for signed,
+		// zext for unsigned) before scaling so 8/16/32-bit kinds
+		// round-trip the full nanosecond range.
+		selfI64 := recv
+		if llvmTy != "i64" {
+			selfI64 = g.fresh()
+			ext := "sext"
+			if !isSigned {
+				ext = "zext"
+			}
+			body = "  " + selfI64 + " = " + ext + " " + llvmTy + " " + recv + " to i64\n"
+		}
+		nanosI64 := g.fresh()
+		body += mirMulI64Line(nanosI64, selfI64, strconv.FormatInt(factor, 10))
+		resultReg = g.fresh()
+		body += mirIntToPtrLine(resultReg, "i64", nanosI64)
+
 	default:
 		return false, nil
 	}
@@ -3876,6 +3905,42 @@ func (g *mirGen) emitCharPrimitiveMethodCall(c *mir.CallInstr, method, recv stri
 	}
 	g.fnBuf.WriteString(body)
 	return g.storePrimitiveResult(c, resultReg)
+}
+
+// llvmDoubleLiteral renders an integer factor as an LLVM IR `double`
+// constant. LLVM rejects bare exponents like `1e+09` (the constant must
+// have integer or floating type but no implicit cast applies in
+// `fmul`); appending `.0` keeps every duration unit factor in range
+// since they all fit losslessly in double.
+func llvmDoubleLiteral(n int64) string {
+	return strconv.FormatInt(n, 10) + ".0"
+}
+
+// durationUnitFactor returns the nanosecond multiplier for each
+// `Int.<unit>` / `Float.<unit>` Duration constructor declared in
+// `internal/stdlib/primitives/{int,float}.osty` and the §10.20 spec
+// table. Centralizes the unit conversion table so the LLVM lowering
+// here and the toolchain port stay in sync.
+func durationUnitFactor(method string) (int64, bool) {
+	switch method {
+	case "ns":
+		return 1, true
+	case "us":
+		return 1_000, true
+	case "ms":
+		return 1_000_000, true
+	case "s":
+		return 1_000_000_000, true
+	case "minutes":
+		return 60 * 1_000_000_000, true
+	case "h":
+		return 60 * 60 * 1_000_000_000, true
+	case "days":
+		return 24 * 60 * 60 * 1_000_000_000, true
+	case "weeks":
+		return 7 * 24 * 60 * 60 * 1_000_000_000, true
+	}
+	return 0, false
 }
 
 // storePrimitiveResult stores the intrinsic result register into the

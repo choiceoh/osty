@@ -36741,6 +36741,11 @@ func registerStdTimeAliasFns(env *CheckEnv, alias string) {
 	_ = tDuration
 	// Osty: /tmp/selfhost_merged.osty:16154:5
 	checkRegisterFn(env, &CheckFnSig{name: "sleep", owner: alias, receiverTy: -1, retTy: tUnit_, paramNames: []string{"duration"}, paramTys: []int{tDuration}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// Bridge `<alias>.Duration` (parser concatenates qualified type
+	// names) to the bare `Duration` builtin so `let d:
+	// time.Duration = 100.ms()` and `time.sleep(d)` see the same type.
+	// Mirrors `toolchain/check_env.osty::registerStdTimeAliasFns`.
+	checkRegisterAlias(env, &CheckAliasSig{name: alias + ".Duration", ty: tDuration, generics: make([]string, 0, 1)})
 }
 
 // Osty: /tmp/selfhost_merged.osty:16164:1
@@ -42356,6 +42361,16 @@ func elabInferField(cx *ElabCx, node *AstNode) *ElabResult {
 			_ = fieldSig
 			// Osty: /tmp/selfhost_merged.osty:20221:13
 			if fieldSig.name == "" {
+				// Paren-less nullary method fallback. Spec §10.20
+				// Duration constructors (`5.s`, `100.ms`, …) and the
+				// general getter-style call ergonomics ride a single
+				// rule: a field-access whose name resolves to a
+				// registered nullary method on the receiver desugars
+				// to that method call. Mirrors
+				// `toolchain/elab.osty::elabInferField`.
+				if methodResult := elabNullaryMethodFallback(cx, recv.node, owner, fieldName, isOptionalChain, node.start, node.end); methodResult != nil {
+					return methodResult
+				}
 				// Osty: /tmp/selfhost_merged.osty:20222:17
 				hint := diagDidYouMean(checkSuggestSimilar(checkFieldNamesOf(cx.env, owner), fieldName))
 				_ = hint
@@ -42392,6 +42407,15 @@ func elabInferField(cx *ElabCx, node *AstNode) *ElabResult {
 		}
 		{
 			// Osty: /tmp/selfhost_merged.osty:20244:13
+			// Same paren-less nullary-method fallback as the TkNamed
+			// branch, but routed through elabOwnerNameForReceiver so
+			// `5.s` / `(1.5).s` work when the receiver is still a
+			// primitive (UntypedInt promotes to Int internally).
+			if owner := elabOwnerNameForReceiver(cx.env.tys, lookupTy); owner != "" {
+				if methodResult := elabNullaryMethodFallback(cx, recv.node, owner, fieldName, isOptionalChain, node.start, node.end); methodResult != nil {
+					return methodResult
+				}
+			}
 			func() struct{} {
 				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagUnknownField(tyToString(cx.env.tys, lookupTy), fieldName, node.start, node.end))
 				return struct{}{}
@@ -42399,6 +42423,32 @@ func elabInferField(cx *ElabCx, node *AstNode) *ElabResult {
 			return elabPoisonResult(cx, node.start, node.end)
 		}
 	}()
+}
+
+// elabNullaryMethodFallback implements the paren-less call rule
+// referenced by elabInferField above. Returns a non-nil ElabResult when
+// `fieldName` resolves to a registered nullary method on `owner`, or
+// nil to let the caller emit its E0702 diagnostic. Lives next to the
+// frozen seed because spec §10.20 Duration constructors and the
+// general getter-style ergonomics need it before the toolchain port
+// gains a regen path.
+func elabNullaryMethodFallback(cx *ElabCx, recvNode int, owner, fieldName string, isOptionalChain bool, start, end int) *ElabResult {
+	if owner == "" {
+		return nil
+	}
+	fnSig := checkLookupMethod(cx.env, owner, fieldName)
+	if fnSig == nil || fnSig.name == "" {
+		return nil
+	}
+	if !fnSig.hasReceiver {
+		return nil
+	}
+	if checkIntListLenHelper(fnSig.paramTys) != 0 {
+		return nil
+	}
+	resultTy := elabWrapOptionalChain(cx, isOptionalChain, fnSig.retTy)
+	coreIdx := coreMethodCall(cx.core, recvNode, fieldName, owner, make([]int, 0, 1), make([]int, 0, 1), resultTy, start, end)
+	return &ElabResult{node: coreIdx, ty: resultTy}
 }
 
 // Osty: /tmp/selfhost_merged.osty:20265:1
@@ -48240,6 +48290,12 @@ func registerStdThreadAliasFns(env *CheckEnv, alias string) {
 	checkRegisterFn(env, &CheckFnSig{name: "chan", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tChanT, paramNames: []string{"capacity"}, paramTys: []int{tInt_}, generics: gT, genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:23670:5
 	checkRegisterFn(env, &CheckFnSig{name: "sleep", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tResUnit, paramNames: []string{"duration"}, paramTys: []int{tyNamed(tys, "Duration", make([]int, 0, 1))}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// `thread.Duration` (the parser-concatenated qualified head) →
+	// bare `Duration` builtin alias, parallel to the `time.Duration`
+	// bridge in registerStdTimeAliasFns. Without it `thread.sleep(...)`
+	// rejects `5.s()` arguments with `expected thread.Duration, found
+	// Duration`.
+	checkRegisterAlias(env, &CheckAliasSig{name: alias + ".Duration", ty: tyNamed(tys, "Duration", make([]int, 0, 1)), generics: make([]string, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:23675:5
 	checkRegisterFn(env, &CheckFnSig{name: "yield", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_, paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:23680:5
@@ -54660,12 +54716,12 @@ func srSymbolFound(sym *SelfSymbol) bool {
 
 // Osty: /tmp/selfhost_merged.osty:28147:1
 func srIsBuiltinName(name string) bool {
-	return name == "true" || name == "false" || name == "None" || name == "Some" || name == "Ok" || name == "Err" || name == "print" || name == "println" || name == "eprint" || name == "eprintln" || name == "dbg" || name == "panic" || name == "spawn" || name == "parallel" || name == "taskGroup" || name == "thread" || name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Byte" || name == "Float" || name == "Float32" || name == "Float64" || name == "Bool" || name == "String" || name == "Bytes" || name == "Char" || name == "Never" || name == "RawPtr" || name == "List" || name == "Map" || name == "Set" || name == "Chan" || name == "Channel" || name == "Handle" || name == "TaskGroup" || name == "Option" || name == "Result" || name == "Error" || name == "Unit" || name == "Equal" || name == "Ordered" || name == "Hashable" || name == "ToString" || name == "Pod"
+	return name == "true" || name == "false" || name == "None" || name == "Some" || name == "Ok" || name == "Err" || name == "print" || name == "println" || name == "eprint" || name == "eprintln" || name == "dbg" || name == "panic" || name == "spawn" || name == "parallel" || name == "taskGroup" || name == "thread" || name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Byte" || name == "Float" || name == "Float32" || name == "Float64" || name == "Bool" || name == "String" || name == "Bytes" || name == "Char" || name == "Never" || name == "RawPtr" || name == "List" || name == "Map" || name == "Set" || name == "Chan" || name == "Channel" || name == "Handle" || name == "TaskGroup" || name == "Option" || name == "Result" || name == "Error" || name == "Duration" || name == "Unit" || name == "Equal" || name == "Ordered" || name == "Hashable" || name == "ToString" || name == "Pod"
 }
 
 // Osty: /tmp/selfhost_merged.osty:28151:1
 func srIsBuiltinTypeName(name string) bool {
-	return name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Byte" || name == "Float" || name == "Float32" || name == "Float64" || name == "Bool" || name == "String" || name == "Bytes" || name == "Char" || name == "Never" || name == "RawPtr" || name == "List" || name == "Map" || name == "Set" || name == "Chan" || name == "Channel" || name == "Handle" || name == "TaskGroup" || name == "Option" || name == "Result" || name == "Error" || name == "Unit" || name == "Equal" || name == "Ordered" || name == "Hashable" || name == "ToString" || name == "Pod"
+	return name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Byte" || name == "Float" || name == "Float32" || name == "Float64" || name == "Bool" || name == "String" || name == "Bytes" || name == "Char" || name == "Never" || name == "RawPtr" || name == "List" || name == "Map" || name == "Set" || name == "Chan" || name == "Channel" || name == "Handle" || name == "TaskGroup" || name == "Option" || name == "Result" || name == "Error" || name == "Duration" || name == "Unit" || name == "Equal" || name == "Ordered" || name == "Hashable" || name == "ToString" || name == "Pod"
 }
 
 // Osty: /tmp/selfhost_merged.osty:28155:1

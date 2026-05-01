@@ -1095,6 +1095,23 @@ func (g *mirGen) emitFloatPrimitiveMethodCall(c *mir.CallInstr, method, recv, re
 			return true, g.emitFloatRuntimeCallToDest(c, ostyRtFloatToBits32Symbol, "i64", []mirRuntimeArg{{typ: "float", val: recv}})
 		}
 		return true, g.emitFloatRuntimeCallToDest(c, ostyRtFloatToBits64Symbol, "i64", []mirRuntimeArg{{typ: "double", val: recvDouble}})
+	case "ns", "us", "ms", "s", "minutes", "h", "days", "weeks":
+		// Duration constructors on Float receivers (§10.20). `1.5.s()`,
+		// `0.25.h()`, etc. — multiply as `double`, truncate toward zero
+		// to i64 nanoseconds, then wrap as a Duration `ptr` (the same
+		// opaque-ptr ABI the integer constructors use in
+		// emitPrimitiveMethodCall).
+		factor, ok := durationUnitFactor(method)
+		if !ok {
+			return false, nil
+		}
+		scaled := g.fresh()
+		g.fnBuf.WriteString("  " + scaled + " = fmul double " + recvDouble + ", " + llvmDoubleLiteral(factor) + "\n")
+		nanosI64 := g.fresh()
+		g.fnBuf.WriteString("  " + nanosI64 + " = fptosi double " + scaled + " to i64\n")
+		resultReg := g.fresh()
+		g.fnBuf.WriteString(mirIntToPtrLine(resultReg, "i64", nanosI64))
+		return g.storePrimitiveResult(c, resultReg)
 	}
 	return false, nil
 }

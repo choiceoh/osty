@@ -3097,6 +3097,21 @@ func (l *lowerer) lowerFieldExpr(e *ast.FieldExpr) Expr {
 			SpanV: nodeSpan(e),
 		}
 	}
+	// Paren-less nullary-method fallback. Spec §10.20 Duration
+	// constructors (`5.s`, `100.ms`, etc.) parse as field-access but
+	// desugar to nullary method calls. The selfhost checker accepts
+	// them via elabNullaryMethodFallback; this branch routes the same
+	// shape into a MethodCall HIR node so the LLVM backend reuses the
+	// existing primitive-method intercept (`emitPrimitiveMethodCall`)
+	// instead of a degenerate field access on an i64 receiver.
+	if isParenlessDurationMethod(e.Name) {
+		return &MethodCall{
+			Receiver: l.lowerExpr(e.X),
+			Name:     e.Name,
+			T:        l.exprType(e),
+			SpanV:    nodeSpan(e),
+		}
+	}
 	x := l.lowerExpr(e.X)
 	t := l.exprType(e)
 	if t == ErrTypeVal || t == nil {
@@ -3120,6 +3135,24 @@ func (l *lowerer) lowerFieldExpr(e *ast.FieldExpr) Expr {
 		T:        t,
 		SpanV:    nodeSpan(e),
 	}
+}
+
+// isParenlessDurationMethod reports whether `name` is one of the
+// paren-less Duration constructors from §10.20. The checker side
+// already accepts the FieldExpr shape as a method call via
+// `elabNullaryMethodFallback`; this list lets the lowerer mirror the
+// same dispatch on the Go-host side without re-querying the primitive
+// method table for every field access. Limiting it to the
+// duration-constructor names keeps every other field/property access
+// on its existing path so this fallback can stay narrow until the
+// checker exposes a structured "this FieldExpr is actually a method
+// call" signal.
+func isParenlessDurationMethod(name string) bool {
+	switch name {
+	case "ns", "us", "ms", "s", "minutes", "h", "days", "weeks":
+		return true
+	}
+	return false
 }
 
 // recoverFieldType resolves a field access `receiverType.fieldName`

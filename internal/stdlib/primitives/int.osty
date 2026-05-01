@@ -66,4 +66,19 @@ pub struct __IntMethods {
     pub fn toChar(self) -> Char { '\0' }
 
     pub fn toString(self) -> String { "" }
+
+    // Duration constructors (§10.20). The compiler recognizes these as
+    // Duration-producing nullary methods even when `std.time` is not
+    // imported. Signatures are surfaced through
+    // `internal/selfhost/primitive_arith_register.go`; this stub keeps
+    // the surface visible to legacy host-side stdlib consumers, so
+    // bodies are placeholders just like the rest of the file.
+    pub fn ns(self) -> Duration
+    pub fn us(self) -> Duration
+    pub fn ms(self) -> Duration
+    pub fn s(self) -> Duration
+    pub fn minutes(self) -> Duration
+    pub fn h(self) -> Duration
+    pub fn days(self) -> Duration
+    pub fn weeks(self) -> Duration
 }

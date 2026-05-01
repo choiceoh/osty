@@ -53,4 +53,17 @@ pub struct __FloatMethods {
     pub fn toFloat64(self) -> Float64 { 0.0 }
 
     pub fn toString(self) -> String { "" }
+
+    // Duration constructors (§10.20). `1.5.s`, `0.25.h`, etc. — the
+    // float forms are analogous to the integer versions; the backend
+    // converts the receiver to nanoseconds via `f * factor` and rounds
+    // toward zero before storing in `Duration.nanoseconds`.
+    pub fn ns(self) -> Duration
+    pub fn us(self) -> Duration
+    pub fn ms(self) -> Duration
+    pub fn s(self) -> Duration
+    pub fn minutes(self) -> Duration
+    pub fn h(self) -> Duration
+    pub fn days(self) -> Duration
+    pub fn weeks(self) -> Duration
 }

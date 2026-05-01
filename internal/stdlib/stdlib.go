@@ -123,6 +123,7 @@ var builtinTypeSurfaces = []BuiltinTypeSurface{
 	{Name: "Option", Module: "option", Kind: BuiltinTypeEnum, GenericParams: []string{"T"}, Injectable: true},
 	{Name: "Result", Module: "result", Kind: BuiltinTypeEnum, GenericParams: []string{"T", "E"}, Injectable: true},
 	{Name: "Error", Module: "error", Kind: BuiltinTypeInterface},
+	{Name: "Duration", Module: "time", Kind: BuiltinTypeStruct},
 }
 
 // BuiltinTypeSurfaces returns the canonical stdlib-owned surfaces for

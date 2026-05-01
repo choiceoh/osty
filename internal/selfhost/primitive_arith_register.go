@@ -72,6 +72,7 @@ func installPrimitiveArithMethods(env *CheckEnv) {
 		// `E0703 no method on type Int8` despite the lowering being
 		// ready.
 		registerToString(env, k.owner, k.ty)
+		registerDurationConstructors(env, k.owner, k.ty)
 	}
 	registerSupplementalStdlibSurface(env)
 
@@ -116,6 +117,29 @@ func installPrimitiveArithMethods(env *CheckEnv) {
 		registerPlainReturnNullary(env, k.owner, k.ty, "toFloat32", tFloat32(tys))
 		registerPlainReturnNullary(env, k.owner, k.ty, "toFloat64", tFloat64(tys))
 		registerToString(env, k.owner, k.ty)
+		registerDurationConstructors(env, k.owner, k.ty)
+	}
+}
+
+// registerDurationConstructors registers the Duration-producing nullary
+// methods declared in `primitives/{int,float}.osty` (§10.20). The
+// receiver is each integer / float kind; the return type is always the
+// prelude `Duration` builtin so call sites see the same struct identity
+// regardless of whether `std.time` is imported.
+func registerDurationConstructors(env *CheckEnv, owner string, ty int) {
+	tDuration := tyNamed(env.tys, "Duration", make([]int, 0, 1))
+	for _, name := range []string{"ns", "us", "ms", "s", "minutes", "h", "days", "weeks"} {
+		checkRegisterFn(env, &CheckFnSig{
+			name:          name,
+			owner:         owner,
+			receiverTy:    ty,
+			hasReceiver:   true,
+			retTy:         tDuration,
+			paramNames:    make([]string, 0, 1),
+			paramTys:      make([]int, 0, 1),
+			generics:      make([]string, 0, 1),
+			genericBounds: make([]*CheckGenericBound, 0, 1),
+		})
 	}
 }
 

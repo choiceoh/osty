@@ -51,6 +51,12 @@ var preludeNames = []struct {
 	{"Result", SymBuiltin},
 	{"Error", SymBuiltin},
 
+	// Duration (§10.20). Surfaced as a prelude builtin so that
+	// `Int.ns/.us/.ms/.s/.minutes/.h/.days/.weeks` (Duration
+	// constructors) can be declared on primitive types without
+	// requiring `use std.time` to appear in source.
+	{"Duration", SymBuiltin},
+
 	// Variants of Option/Result, used as expressions and in patterns.
 	{"Some", SymBuiltin},
 	{"None", SymBuiltin},

@@ -902,6 +902,13 @@ fn registerStdThreadAliasFns(env: CheckEnv, alias: String) {
         paramNames: ["duration"], paramTys: [tyNamed(tys, "Duration", [])],
         generics: [], genericBounds: [],
     })
+    // Bridge `<alias>.Duration` (parser-concatenated qualified head) to
+    // the bare `Duration` builtin, parallel to registerStdTimeAliasFns.
+    checkRegisterAlias(env, CheckAliasSig {
+        name: "{alias}.Duration",
+        ty: tyNamed(tys, "Duration", []),
+        generics: [],
+    })
     checkRegisterFn(env, CheckFnSig {
         name: "yield", owner: alias, receiverTy: -1, hasReceiver: false, retTy: tUnit_,
         paramNames: [], paramTys: [],
