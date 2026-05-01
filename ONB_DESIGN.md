@@ -26,6 +26,17 @@
 > Cross-validation 흐름은 `OSTY_ONB_STRICT=1`로 fallback을 끄면 raw 거부
 > 에러를 받을 수 있다.
 >
+> **Slice A2 Week 1 (Int 산술 + locals, 2026-05-02)** — ONB native path의 첫
+> 의미 있는 커버리지 확장. 패턴: `let mut n = 1; n = n + 5; println(n)`,
+> `let x = 10; let y = 32; println(x + y)`, `let a = 10; let b = 3; println(a - b * 2)`
+> 모두 native path로 통과 (각 50–150ms wall-clock, LLVM 대비 5–10×).
+> 추가된 LIR opcode: `Load64Stack`, `MovRegReg`, `AddReg` / `SubReg` / `MulReg`.
+> 모델: **stack-everything** — RA 없이 모든 read 대상 local에 고정 stack slot
+> 할당, 모든 operand가 x9/x10 scratch register를 거침. 프레임 layout:
+> `[sp+0..16] vararg slot (printf int용) → [sp+V..V+8N] locals → [sp+frameSize-16] FP/LR`.
+> dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
+> Week 2 의제.
+>
 > 본 문서는 결정 lock-in이며, 후속 의제(예: aarch64 LIR opcode 카탈로그,
 > cross-validation harness, simple inliner 도입 검토)는 별도 문서로 분기한다.
 

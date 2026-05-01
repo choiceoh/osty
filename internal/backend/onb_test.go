@@ -244,6 +244,74 @@ func TestONBBackendBinaryRunsPrintlnIntLiteralOnDarwinARM64(t *testing.T) {
 	}
 }
 
+// TestONBBackendBinaryRunsArithOnDarwinARM64 exercises the Phase A2 arithmetic
+// + locals slice end-to-end. Each table case keeps `OSTY_ONB_STRICT=1` set so
+// the test fails loudly if ONB's MIR coverage regresses and silently falls
+// back to LLVM.
+func TestONBBackendBinaryRunsArithOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("ONB arith executable smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "two_locals_add",
+			src: `fn main() {
+    let x = 10
+    let y = 32
+    println(x + y)
+}`,
+			want: "42\n",
+		},
+		{
+			name: "mut_add",
+			src: `fn main() {
+    let mut n = 1
+    n = n + 5
+    println(n)
+}`,
+			want: "6\n",
+		},
+		{
+			name: "expr_chain",
+			src: `fn main() {
+    let a = 10
+    let b = 3
+    println(a - b * 2)
+}`,
+			want: "4\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(onb.EnvStrict, "1")
+			req := newBackendRequest(t, EmitBinary, tc.src)
+			req.Layout.Target = "aarch64-apple-darwin"
+			result, err := ONBBackend{}.Emit(context.Background(), req)
+			if err != nil {
+				t.Fatalf("ONBBackend.Emit returned error: %v", err)
+			}
+			if result == nil || result.Artifacts.Binary == "" {
+				t.Fatalf("missing binary artifact: %+v", result)
+			}
+			out, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+			if err != nil {
+				t.Fatalf("binary returned error: %v\n%s", err, out)
+			}
+			if string(out) != tc.want {
+				t.Fatalf("binary output = %q, want %q", out, tc.want)
+			}
+		})
+	}
+}
+
 // recordingBackend captures Emit calls so we can assert that ONB delegated to
 // LLVM exactly when expected, without dragging the real LLVM lowering pipeline
 // into these unit tests.

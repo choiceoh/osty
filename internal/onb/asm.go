@@ -36,21 +36,21 @@ func renderFunctionAssembly(b *strings.Builder, target Target, fn Function) erro
 		fmt.Fprintf(b, ".globl %s\n.p2align 2\n", sym)
 	}
 	fmt.Fprintf(b, "%s:\n", sym)
-	needsFrame := functionNeedsFrame(fn)
-	needsStackArgs := functionNeedsStackArgs(fn)
-	if needsFrame {
-		if needsStackArgs {
-			b.WriteString("\tsub sp, sp, #32\n")
-			b.WriteString("\tstp x29, x30, [sp, #16]\n")
-			b.WriteString("\tadd x29, sp, #16\n")
-		} else {
+	frameSize := functionFrameSize(fn)
+	fpOffset := functionFPOffset(fn)
+	if frameSize > 0 {
+		if fpOffset < 0 {
 			b.WriteString("\tstp x29, x30, [sp, #-16]!\n")
 			b.WriteString("\tmov x29, sp\n")
+		} else {
+			fmt.Fprintf(b, "\tsub sp, sp, #%d\n", frameSize)
+			fmt.Fprintf(b, "\tstp x29, x30, [sp, #%d]\n", fpOffset)
+			fmt.Fprintf(b, "\tadd x29, sp, #%d\n", fpOffset)
 		}
 	}
 	for _, block := range fn.Blocks {
 		for _, instr := range block.Instrs {
-			if err := renderInstrAssembly(b, target, instr, needsFrame, needsStackArgs); err != nil {
+			if err := renderInstrAssembly(b, target, instr, frameSize, fpOffset); err != nil {
 				return err
 			}
 		}
@@ -61,7 +61,7 @@ func renderFunctionAssembly(b *strings.Builder, target Target, fn Function) erro
 	return nil
 }
 
-func renderInstrAssembly(b *strings.Builder, target Target, instr Instr, needsFrame, needsStackArgs bool) error {
+func renderInstrAssembly(b *strings.Builder, target Target, instr Instr, frameSize int64, fpOffset int64) error {
 	switch i := instr.(type) {
 	case *LoadCStringAddress:
 		label := asmCStringLabel(target, i.Label)
@@ -83,19 +83,33 @@ func renderInstrAssembly(b *strings.Builder, target Target, instr Instr, needsFr
 		if err := renderMovImm64Assembly(b, i.Dst, uint64(i.Imm)); err != nil {
 			return err
 		}
+	case *MovRegReg:
+		fmt.Fprintf(b, "\tmov %s, %s\n", i.Dst, i.Src)
 	case *Store64Stack:
 		if i.Offset == 0 {
 			fmt.Fprintf(b, "\tstr %s, [sp]\n", i.Src)
 		} else {
 			fmt.Fprintf(b, "\tstr %s, [sp, #%d]\n", i.Src, i.Offset)
 		}
+	case *Load64Stack:
+		if i.Offset == 0 {
+			fmt.Fprintf(b, "\tldr %s, [sp]\n", i.Dst)
+		} else {
+			fmt.Fprintf(b, "\tldr %s, [sp, #%d]\n", i.Dst, i.Offset)
+		}
+	case *AddReg:
+		fmt.Fprintf(b, "\tadd %s, %s, %s\n", i.Dst, i.Lhs, i.Rhs)
+	case *SubReg:
+		fmt.Fprintf(b, "\tsub %s, %s, %s\n", i.Dst, i.Lhs, i.Rhs)
+	case *MulReg:
+		fmt.Fprintf(b, "\tmul %s, %s, %s\n", i.Dst, i.Lhs, i.Rhs)
 	case *Ret:
-		if needsFrame {
-			if needsStackArgs {
-				b.WriteString("\tldp x29, x30, [sp, #16]\n")
-				b.WriteString("\tadd sp, sp, #32\n")
-			} else {
+		if frameSize > 0 {
+			if fpOffset < 0 {
 				b.WriteString("\tldp x29, x30, [sp], #16\n")
+			} else {
+				fmt.Fprintf(b, "\tldp x29, x30, [sp, #%d]\n", fpOffset)
+				fmt.Fprintf(b, "\tadd sp, sp, #%d\n", frameSize)
 			}
 		}
 		b.WriteString("\tret\n")
@@ -201,6 +215,29 @@ func xRegisterNumber(reg Reg) (uint32, bool) {
 		return 0, true
 	case RegX1:
 		return 1, true
+	case RegX9:
+		return 9, true
+	case RegX10:
+		return 10, true
+	default:
+		return 0, false
+	}
+}
+
+// aarch64RegEncoding extends xRegisterNumber to also recognise SP, X29, and
+// X30. It is used by the Mach-O encoder for prologue/epilogue ops where SP
+// and the frame-pointer pair are first-class operands.
+func aarch64RegEncoding(reg Reg) (uint32, bool) {
+	if n, ok := xRegisterNumber(reg); ok {
+		return n, true
+	}
+	switch reg {
+	case RegSP:
+		return 31, true
+	case RegX29:
+		return 29, true
+	case RegX30:
+		return 30, true
 	default:
 		return 0, false
 	}
