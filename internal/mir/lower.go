@@ -6047,22 +6047,24 @@ func isStringReceiverType(t ir.Type) bool {
 }
 
 // lowerStringSliceRValue emits `s[a..b]` as an IntrinsicStringSubstring
-// call, returning the RValue that reads the resulting temp. Requires
-// both bounds to be concrete exprs on the RangeLit — the unbounded
-// `s[..b]` / `s[a..]` / `s[..]` shapes still fall through to the
-// generic IndexProj path (for now that routes through the same broken
-// Range-in-value lowering, so callers should emit explicit bounds).
-// `..=` inclusive ranges also fall through; the runtime API takes
-// half-open [start, end) offsets so supporting `..=` cleanly would
-// mean bumping `end` by one byte which conflicts with the multi-byte
-// char boundary invariant the runtime enforces.
+// call, returning the RValue that reads the resulting temp. Open-ended
+// shapes synthesise the missing bound:
+//
+//	s[..]   →  s[0..s.byteLen()]
+//	s[a..]  →  s[a..s.byteLen()]
+//	s[..b]  →  s[0..b]
+//
+// Inclusive `..=` ranges fall through unchanged: the runtime API takes
+// half-open [start, end) byte offsets and bumping `end` by one byte
+// conflicts with the multi-byte char boundary invariant the runtime
+// enforces for non-ASCII strings.
 func (bs *bodyState) lowerStringSliceRValue(x *ir.IndexExpr, rng *ir.RangeLit) (RValue, bool) {
-	if rng.Start == nil || rng.End == nil || rng.Inclusive {
+	if rng.Inclusive {
 		return nil, false
 	}
 	recvOp := bs.lowerExprAsOperand(x.X)
-	startOp := bs.lowerExprAsOperand(rng.Start)
-	endOp := bs.lowerExprAsOperand(rng.End)
+	startOp := bs.synthSliceStart(rng, exprSpan(x))
+	endOp := bs.synthStringSliceEnd(rng, recvOp, exprSpan(x))
 	tmp := bs.freshTemp(ir.TString, exprSpan(x))
 	bs.emit(&IntrinsicInstr{
 		Dest:  &Place{Local: tmp},
@@ -6073,21 +6075,49 @@ func (bs *bodyState) lowerStringSliceRValue(x *ir.IndexExpr, rng *ir.RangeLit) (
 	return &UseRV{Op: &CopyOp{Place: Place{Local: tmp}, T: ir.TString}}, true
 }
 
+// synthSliceStart returns the start operand for a slice — the explicit
+// expression when present, or the integer literal 0 for `..b` / `..`.
+func (bs *bodyState) synthSliceStart(rng *ir.RangeLit, sp Span) Operand {
+	if rng.Start != nil {
+		return bs.lowerExprAsOperand(rng.Start)
+	}
+	return &ConstOp{Const: &IntConst{Value: 0, T: TInt}, T: TInt}
+}
+
+// synthStringSliceEnd returns the end operand for a String slice. When
+// the RangeLit's End is missing (`a..` / `..`), emits an
+// IntrinsicStringLen on the receiver and returns its temp; the runtime
+// helper returns the byte count which is exactly what
+// `osty_rt_strings_Substring` expects as the upper bound.
+func (bs *bodyState) synthStringSliceEnd(rng *ir.RangeLit, recvOp Operand, sp Span) Operand {
+	if rng.End != nil {
+		return bs.lowerExprAsOperand(rng.End)
+	}
+	tmp := bs.freshTemp(TInt, sp)
+	bs.emit(&IntrinsicInstr{
+		Dest:  &Place{Local: tmp},
+		Kind:  IntrinsicStringLen,
+		Args:  []Operand{recvOp},
+		SpanV: sp,
+	})
+	return &CopyOp{Place: Place{Local: tmp}, T: TInt}
+}
+
 // lowerListSliceRValue emits `list[a..b]` / `list[a..=b]` as an
 // IntrinsicListSlice call, returning the RValue that reads the
-// freshly-allocated List<T>. Requires both bounds to be concrete
-// exprs; open-ended ranges are unsupported (MIR has no Range
-// first-class value). Inclusive `..=` ranges are normalised to a
-// half-open `[start, end+1)` at lowering time — unlike the String
-// path, lists have no multi-byte boundary concerns so the +1 is
-// unambiguous.
+// freshly-allocated List<T>. Open-ended shapes synthesise the
+// missing bound (`list[..]` → `list[0..list.len()]`, etc.).
+// Inclusive `..=` ranges are normalised to a half-open `[start,
+// end+1)` at lowering time — unlike the String path, lists have no
+// multi-byte boundary concerns so the +1 is unambiguous. `..=` with
+// a missing End is impossible (parser rejects it).
 func (bs *bodyState) lowerListSliceRValue(x *ir.IndexExpr, rng *ir.RangeLit) (RValue, bool) {
-	if rng.Start == nil || rng.End == nil {
+	if rng.Inclusive && rng.End == nil {
 		return nil, false
 	}
 	recvOp := bs.lowerExprAsOperand(x.X)
-	startOp := bs.lowerExprAsOperand(rng.Start)
-	endOp := bs.lowerExprAsOperand(rng.End)
+	startOp := bs.synthSliceStart(rng, exprSpan(x))
+	endOp := bs.synthListSliceEnd(rng, recvOp, exprSpan(x))
 	if rng.Inclusive {
 		endTmp := bs.freshTemp(ir.TInt, exprSpan(rng))
 		bs.emit(&AssignInstr{
@@ -6111,6 +6141,23 @@ func (bs *bodyState) lowerListSliceRValue(x *ir.IndexExpr, rng *ir.RangeLit) (RV
 		SpanV: exprSpan(x),
 	})
 	return &UseRV{Op: &CopyOp{Place: Place{Local: tmp}, T: listT}}, true
+}
+
+// synthListSliceEnd returns the end operand for a List slice. When
+// the RangeLit's End is missing (`a..` / `..`), emits an
+// IntrinsicListLen on the receiver and returns its temp.
+func (bs *bodyState) synthListSliceEnd(rng *ir.RangeLit, recvOp Operand, sp Span) Operand {
+	if rng.End != nil {
+		return bs.lowerExprAsOperand(rng.End)
+	}
+	tmp := bs.freshTemp(TInt, sp)
+	bs.emit(&IntrinsicInstr{
+		Dest:  &Place{Local: tmp},
+		Kind:  IntrinsicListLen,
+		Args:  []Operand{recvOp},
+		SpanV: sp,
+	})
+	return &CopyOp{Place: Place{Local: tmp}, T: TInt}
 }
 
 // emitStringFreeFnIntrinsic lowers each arg in source order and

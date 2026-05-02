@@ -5983,6 +5983,90 @@ func TestGenerateFromMIRListSliceInclusive(t *testing.T) {
 	}
 }
 
+// TestGenerateFromMIRListSliceOpenHigh — `xs[a..]` synthesises the
+// missing upper bound by emitting an IntrinsicListLen call before the
+// slice. Regression guard for the open-ended slice support that
+// unblocks std.fmt / std.strings bodies under
+// `OSTY_STDLIB_BODY_LOWER=1`.
+func TestGenerateFromMIRListSliceOpenHigh(t *testing.T) {
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := &ir.FnDecl{
+		Name:   "tail",
+		Return: listInt,
+		Params: []*ir.Param{
+			{Name: "xs", Type: listInt},
+			{Name: "a", Type: ir.TInt},
+		},
+		Body: &ir.Block{
+			Result: &ir.IndexExpr{
+				X: &ir.Ident{Name: "xs", Kind: ir.IdentParam, T: listInt},
+				Index: &ir.RangeLit{
+					Start: &ir.Ident{Name: "a", Kind: ir.IdentParam, T: ir.TInt},
+					T:     &ir.NamedType{Name: "Range", Args: []ir.Type{ir.TInt}, Builtin: true},
+				},
+				T: listInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/list_slice_open_high_mir.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"declare i64 @osty_rt_list_len(ptr)",
+		"call i64 @osty_rt_list_len(",
+		"call ptr @osty_rt_list_slice(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
+// TestGenerateFromMIRStringSliceOpenHigh — `s[a..]` synthesises the
+// missing upper bound by emitting an IntrinsicStringLen call before
+// the substring intrinsic. Mirrors the List variant; together they
+// close the open-ended slice gap that fmt.osty's `body[1..]` /
+// `s[1..]` patterns hit.
+func TestGenerateFromMIRStringSliceOpenHigh(t *testing.T) {
+	fn := &ir.FnDecl{
+		Name:   "tail",
+		Return: ir.TString,
+		Params: []*ir.Param{
+			{Name: "s", Type: ir.TString},
+			{Name: "a", Type: ir.TInt},
+		},
+		Body: &ir.Block{
+			Result: &ir.IndexExpr{
+				X: &ir.Ident{Name: "s", Kind: ir.IdentParam, T: ir.TString},
+				Index: &ir.RangeLit{
+					Start: &ir.Ident{Name: "a", Kind: ir.IdentParam, T: ir.TInt},
+					T:     &ir.NamedType{Name: "Range", Args: []ir.Type{ir.TInt}, Builtin: true},
+				},
+				T: ir.TString,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/string_slice_open_high_mir.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"@osty_rt_strings_ByteLen",
+		"@osty_rt_strings_Slice",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateFromMIRBytesSlice verifies Bytes.slice() dispatches
 // through `osty_rt_bytes_slice(ptr, i64, i64) -> ptr`.
 func TestGenerateFromMIRBytesSlice(t *testing.T) {
