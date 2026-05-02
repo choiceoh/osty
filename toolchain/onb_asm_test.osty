@@ -1,0 +1,93 @@
+// onb_asm_test.osty — assembly text renderer round-trip tests.
+//
+// Each case constructs an `OnbInstr` and checks the rendered
+// asm text matches what `internal/onb/asm.go` produces.
+use std.testing
+
+fn assertAsmEq(actual: String, expected: String) {
+    testing.assertEq(actual, expected)
+}
+
+fn machoTarget() -> OnbTarget { onbTargetMachoArm64() }
+
+// === Naming helpers =================================================
+
+fn testOnbAsmSymbolNameMacho() {
+    assertAsmEq(onbAsmSymbolName(machoTarget(), "main"), "_main")
+    assertAsmEq(onbAsmSymbolName(machoTarget(), "puts"), "_puts")
+}
+
+fn testOnbAsmCStringLabelMacho() {
+    assertAsmEq(onbAsmCStringLabel(machoTarget(), "str0"), "L_.str0")
+}
+
+fn testOnbAsmBlockLabel() {
+    assertAsmEq(onbAsmBlockLabel(machoTarget(), "main", 1), "L_main_bb1")
+}
+
+// === C-string escape ================================================
+
+fn testOnbAsmCStringLiteralPlain() {
+    assertAsmEq(onbAsmCStringLiteral("hello"), "\"hello\"")
+}
+
+fn testOnbAsmCStringLiteralWithNewline() {
+    assertAsmEq(onbAsmCStringLiteral("hi\n"), "\"hi\\n\"")
+}
+
+fn testOnbAsmCStringLiteralWithBackslash() {
+    assertAsmEq(onbAsmCStringLiteral("\\"), "\"\\\\\"")
+}
+
+// === Per-instruction rendering =====================================
+
+fn testOnbAsmRenderRet() {
+    let actual = onbAsmRenderInstr(machoTarget(), onbInstrRet())
+    assertAsmEq(actual, "\tret\n")
+}
+
+fn testOnbAsmRenderAddReg() {
+    let actual = onbAsmRenderInstr(machoTarget(), onbInstrAddReg("x9", "x9", "x10"))
+    assertAsmEq(actual, "\tadd x9, x9, x10\n")
+}
+
+fn testOnbAsmRenderCmpAndCset() {
+    let cmp = onbAsmRenderInstr(machoTarget(), onbInstrCmp("x9", "x10"))
+    assertAsmEq(cmp, "\tcmp x9, x10\n")
+    let cset = onbAsmRenderInstr(machoTarget(), onbInstrCset("x9", OnbCond.OnbCondEq))
+    assertAsmEq(cset, "\tcset x9, eq\n")
+}
+
+fn testOnbAsmRenderBranchLink() {
+    let actual = onbAsmRenderInstr(machoTarget(), onbInstrBranchLink("puts"))
+    assertAsmEq(actual, "\tbl _puts\n")
+}
+
+fn testOnbAsmRenderLoadCStringAddress() {
+    let actual = onbAsmRenderInstr(machoTarget(), onbInstrLoadCStringAddress("x0", "str0"))
+    assertAsmEq(actual, "\tadrp x0, L_.str0@PAGE\n\tadd x0, x0, L_.str0@PAGEOFF\n")
+}
+
+fn testOnbAsmRenderFPArith() {
+    let actual = onbAsmRenderInstr(machoTarget(), onbInstrFaddReg("d8", "d8", "d9"))
+    assertAsmEq(actual, "\tfadd d8, d8, d9\n")
+}
+
+fn testOnbAsmRenderBrk() {
+    let actual = onbAsmRenderInstr(machoTarget(), onbInstrBrk(1))
+    assertAsmEq(actual, "\tbrk #1\n")
+}
+
+// === C-string section =============================================
+
+fn testOnbAsmCStringSectionEmpty() {
+    let actual = onbAsmRenderCStringSection(machoTarget(), [])
+    assertAsmEq(actual, "")
+}
+
+fn testOnbAsmCStringSectionMacho() {
+    let mut cs: List<OnbCStringLiteral> = []
+    cs.push(onbCStringLiteral("str0", "hello"))
+    let actual = onbAsmRenderCStringSection(machoTarget(), cs)
+    assertAsmEq(actual, ".section __TEXT,__cstring,cstring_literals\nL_.str0:\n\t.asciz \"hello\"\n")
+}
