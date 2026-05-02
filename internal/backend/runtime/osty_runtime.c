@@ -8341,6 +8341,17 @@ void osty_rt_list_set_bytes(void *raw_list, int64_t index, const void *value, in
     osty_rt_list_set_raw(raw_list, index, value, (size_t)elem_size, trace_elem);
 }
 
+/* Mirror of `osty_rt_list_get_bytes_v1` for the write side. The MIR
+ * emitter routes `xs[i] = value` (composite element type) and
+ * `xs[i].field = v` (composite field through indexed write) through
+ * this `_v1` symbol; without it, programs that update list elements
+ * by field link-fail with "Undefined symbol _osty_rt_list_set_bytes_v1".
+ * Thin wrapper around `osty_rt_list_set_bytes` — same signature,
+ * same body, just the canonical name production code emits. */
+void osty_rt_list_set_bytes_v1(void *raw_list, int64_t index, const void *value, int64_t elem_size, osty_rt_trace_slot_fn trace_elem) {
+    osty_rt_list_set_bytes(raw_list, index, value, elem_size, trace_elem);
+}
+
 static int osty_rt_compare_i64_ascending(const void *left, const void *right) {
     const int64_t left_value = *(const int64_t *)left;
     const int64_t right_value = *(const int64_t *)right;
