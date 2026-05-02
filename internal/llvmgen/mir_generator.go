@@ -1371,6 +1371,8 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 	switch k {
 	case mir.IntrinsicPrintln, mir.IntrinsicPrint, mir.IntrinsicEprint, mir.IntrinsicEprintln:
 		return true
+	case mir.IntrinsicAbort:
+		return true
 	case mir.IntrinsicListPush, mir.IntrinsicListLen, mir.IntrinsicListGet,
 		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet,
 		mir.IntrinsicListPop, mir.IntrinsicListFirst, mir.IntrinsicListLast,
@@ -5188,6 +5190,8 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		return g.emitStdIoWriteIntrinsic(i, "eprint")
 	case mir.IntrinsicEprintln:
 		return g.emitStdIoWriteIntrinsic(i, "eprintln")
+	case mir.IntrinsicAbort:
+		return g.emitAbortIntrinsic(i)
 	case mir.IntrinsicListPush, mir.IntrinsicListLen, mir.IntrinsicListGet,
 		mir.IntrinsicListIsEmpty, mir.IntrinsicListSorted, mir.IntrinsicListToSet,
 		mir.IntrinsicListPop, mir.IntrinsicListFirst, mir.IntrinsicListLast,
@@ -10958,6 +10962,28 @@ func (g *mirGen) emitRuntimeRawNull(i *mir.IntrinsicInstr) error {
 		return unsupported("mir-mvp", "raw.null() takes no arguments")
 	}
 	return g.storeIntrinsicResult(i, &LlvmValue{typ: "ptr", name: "null"})
+}
+
+// emitAbortIntrinsic lowers `panic(message: String)` from the prelude.
+// `IntrinsicAbort` carries a single String operand; we evaluate it,
+// declare `osty_rt_panic` as a noreturn cold helper, then emit
+// `call void @osty_rt_panic(ptr msg)` followed by `unreachable` so
+// LLVM treats everything after the panic as dead code. Mirrors the
+// same call-then-unreachable shape `emitOptionIntrinsic` uses on the
+// None branch of `Option.unwrap()`.
+func (g *mirGen) emitAbortIntrinsic(i *mir.IntrinsicInstr) error {
+	if len(i.Args) != 1 {
+		return unsupported("mir-mvp", "panic intrinsic requires a single message arg")
+	}
+	msg, err := g.evalOperand(i.Args[0], i.Args[0].Type())
+	if err != nil {
+		return err
+	}
+	panicSym := mirRtPanicSymbol()
+	g.declareRuntime(panicSym, mirRuntimeDeclareNoReturn("void", panicSym, "ptr", true))
+	g.fnBuf.WriteString(mirCallVoidPanicMessageLine(msg))
+	g.fnBuf.WriteString(mirUnreachableLine())
+	return nil
 }
 
 // ==== helpers ====
