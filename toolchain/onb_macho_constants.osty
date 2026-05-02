@@ -1,0 +1,78 @@
+// onb_macho_constants.osty — Mach-O wire format constants for the
+// ONB writer. Phase 8/Slice B of the ONB self-host port. Mirror of
+// the constant block at the top of `internal/onb/macho.go`.
+//
+// Each constant is a `pub fn () -> Int` so call sites read like
+// regular function calls (matches the rest of the toolchain's
+// encoding-constant style). Section / segment names stay String
+// returns.
+
+// === Magic / CPU =================================================
+
+pub fn onbMachoMagic64() -> Int { 0xfeedfacf }
+pub fn onbMachoCPUTypeARM64() -> Int { 0x0100000c }
+pub fn onbMachoCPUSubtypeARM64All() -> Int { 0 }
+pub fn onbMachoFileTypeObject() -> Int { 1 }
+
+// === Load commands ===============================================
+
+pub fn onbMachoLCSegment64() -> Int { 0x19 }
+pub fn onbMachoLCSymtab() -> Int { 0x2 }
+pub fn onbMachoLCDysymtab() -> Int { 0xb }
+
+// === MH_* flags ==================================================
+
+pub fn onbMachoMHSubsectionsViaSyms() -> Int { 0x2000 }
+
+// === VM protection bits ==========================================
+
+pub fn onbMachoVMProtRead() -> Int { 0x1 }
+pub fn onbMachoVMProtExecute() -> Int { 0x4 }
+
+// === Section flags ==============================================
+
+pub fn onbMachoSectionRegular() -> Int { 0x0 }
+pub fn onbMachoSectionCStringLiterals() -> Int { 0x2 }
+pub fn onbMachoSectionDebug() -> Int { 0x02000000 }
+pub fn onbMachoSectionSomeInstr() -> Int { 0x00000400 }
+pub fn onbMachoSectionPureInstr() -> Int { 0x80000000 }
+
+// === N-list (symbol table entry) flags ==========================
+
+pub fn onbMachoNExt() -> Int { 0x01 }
+pub fn onbMachoNSect() -> Int { 0x0e }
+
+// === Wire-format struct sizes ===================================
+//
+// The Mach-O writer pre-computes section file offsets from these
+// constant struct sizes. Mirror of the `machoXxxSize` const block.
+
+pub fn onbMachoHeader64Size() -> Int { 32 }
+pub fn onbMachoSegment64Size() -> Int { 72 }
+pub fn onbMachoSection64Size() -> Int { 80 }
+pub fn onbMachoSymtabCommandSize() -> Int { 24 }
+pub fn onbMachoDysymtabCommandSize() -> Int { 80 }
+pub fn onbMachoNlist64Size() -> Int { 16 }
+pub fn onbMachoRelocSize() -> Int { 8 }
+
+// === Section / symbol number conventions =======================
+
+pub fn onbMachoTextAlignPower() -> Int { 2 }
+pub fn onbMachoTextSectionNumber() -> Int { 1 }
+pub fn onbMachoCStringSectionNumber() -> Int { 2 }
+
+// === Segment / section names ===================================
+//
+// Centralised so the segment LC and section header agree
+// byte-for-byte. Names are 16-byte fixed fields in the wire
+// format; the writer NUL-pads.
+
+pub fn onbMachoSegnameText() -> String { "__TEXT" }
+pub fn onbMachoSegnameDWARF() -> String { "__DWARF" }
+pub fn onbMachoSegnameLinkedit() -> String { "__LINKEDIT" }
+pub fn onbMachoSectnameText() -> String { "__text" }
+pub fn onbMachoSectnameCString() -> String { "__cstring" }
+pub fn onbMachoSectnameLine() -> String { "__debug_line" }
+pub fn onbMachoSectnameInfo() -> String { "__debug_info" }
+pub fn onbMachoSectnameAbbrev() -> String { "__debug_abbrev" }
+pub fn onbMachoSectnameStr() -> String { "__debug_str" }

@@ -1,0 +1,265 @@
+// onb_macho_writer.osty — low-level Mach-O wire writers + the
+// header / segment / section command emitters. Phase 8/Slice B of
+// the ONB self-host port. Mirror of `writeMachOReloc`,
+// `writeMachONlist64`, `writeName16`, `writeU16/U32/U64`, plus the
+// header / segment / section structures from
+// `internal/onb/macho.go`.
+//
+// Style: every helper takes a `List<Int>` accumulator (byte
+// values) and returns the extended buffer. Same pattern as the
+// LEB128 / DWARF byte writers. Multi-byte fields go little-endian.
+
+// === Primitive byte writers =====================================
+//
+// onb_dwarf_line.osty already exposes onbWriteU8 / onbWriteU16LE /
+// onbWriteU32LE / onbWriteU64LE — they're file-private but Osty's
+// toolchain/ is one package so this file can call into them
+// directly. The Mach-O writer doesn't need a fresh copy.
+
+// onbMachoWriteName16 writes a 16-byte fixed-width name field.
+// NUL-pads the right side; truncates names longer than 16 bytes
+// (the Mach-O ABI doesn't allow longer names anyway).
+pub fn onbMachoWriteName16(out: List<Int>, name: String) -> List<Int> {
+    let mut buf = out
+    let mut written = 0
+    for b in name.bytes() {
+        if written >= 16 {
+            // Stop at 16 bytes; the rest is implicit truncation.
+            // Matches Go's `copy(buf[:], []byte(name))` behaviour.
+        } else {
+            buf.push(b.toInt())
+            written = written + 1
+        }
+    }
+    for pad in written..16 {
+        buf.push(0)
+    }
+    buf
+}
+
+// === Reloc + Nlist64 wire writers ===============================
+
+// onbMachoWriteReloc serialises a single Mach-O relocation entry
+// (8 bytes total: u32 address + u32 packed flags).
+//
+//   bits  0-23 : symbol number (extern) or section number (local)
+//   bit   24   : pcrel
+//   bits  25-26: length (0 = 1B, 1 = 2B, 2 = 4B, 3 = 8B)
+//   bit   27   : extern flag
+//   bits  28-31: reloc type
+//
+// Mirror of `writeMachOReloc` in `internal/onb/macho.go`.
+pub fn onbMachoWriteReloc(out: List<Int>, reloc: OnbReloc, symbolnum: Int, lengthCode: Int, extern: Bool) -> List<Int> {
+    let mut buf = out
+    buf = onbWriteU32LE(buf, reloc.codeOffset)
+    let mut word = symbolnum & 0x00ffffff
+    if reloc.pcrel {
+        word = word | (1 << 24)
+    }
+    word = word | ((lengthCode & 0x3) << 25)
+    if extern {
+        word = word | (1 << 27)
+    }
+    word = word | ((onbRelocKindMachoTyp(reloc.kind) & 0xf) << 28)
+    buf = onbWriteU32LE(buf, word)
+    buf
+}
+
+// onbMachoWriteNlist64 writes a single symbol-table entry (16
+// bytes total). Matches the layout `writeMachONlist64` produces.
+//
+//   strx  : u32 — offset into __LINKEDIT string table
+//   typ   : u8  — N_TYPE / N_EXT / N_SECT bits
+//   sect  : u8  — 1-based section number (0 if undefined)
+//   desc  : u16 — flags / library ordinal
+//   value : u64 — address inside the named section
+pub fn onbMachoWriteNlist64(out: List<Int>, strx: Int, typ: Int, sect: Int, desc: Int, value: Int) -> List<Int> {
+    let mut buf = out
+    buf = onbWriteU32LE(buf, strx)
+    buf = onbWriteU8(buf, typ)
+    buf = onbWriteU8(buf, sect)
+    buf = onbWriteU16LE(buf, desc)
+    buf = onbWriteU64LE(buf, value)
+    buf
+}
+
+// === Mach-O header (32 bytes) ===================================
+//
+// `mach_header_64` layout:
+//   magic       u32   = 0xfeedfacf
+//   cputype     u32   = ARM64
+//   cpusubtype  u32   = 0
+//   filetype    u32   = MH_OBJECT (1)
+//   ncmds       u32
+//   sizeofcmds  u32
+//   flags       u32   = MH_SUBSECTIONS_VIA_SYMS
+//   reserved    u32   = 0
+
+pub struct OnbMachoHeader {
+    pub ncmds: Int,
+    pub sizeOfCmds: Int,
+}
+
+pub fn onbMachoWriteHeader(out: List<Int>, hdr: OnbMachoHeader) -> List<Int> {
+    let mut buf = out
+    buf = onbWriteU32LE(buf, onbMachoMagic64())
+    buf = onbWriteU32LE(buf, onbMachoCPUTypeARM64())
+    buf = onbWriteU32LE(buf, onbMachoCPUSubtypeARM64All())
+    buf = onbWriteU32LE(buf, onbMachoFileTypeObject())
+    buf = onbWriteU32LE(buf, hdr.ncmds)
+    buf = onbWriteU32LE(buf, hdr.sizeOfCmds)
+    buf = onbWriteU32LE(buf, onbMachoMHSubsectionsViaSyms())
+    buf = onbWriteU32LE(buf, 0) // reserved
+    buf
+}
+
+// === Segment command 64 (72 bytes) =============================
+//
+// `segment_command_64` layout:
+//   cmd       u32
+//   cmdsize   u32
+//   segname   [16]byte
+//   vmaddr    u64
+//   vmsize    u64
+//   fileoff   u64
+//   filesize  u64
+//   maxprot   i32 (vm_prot_t)
+//   initprot  i32
+//   nsects    u32
+//   flags     u32
+
+pub struct OnbMachoSegmentCommand {
+    pub segname: String,
+    pub vmAddr: Int,
+    pub vmSize: Int,
+    pub fileOff: Int,
+    pub fileSize: Int,
+    pub maxProt: Int,
+    pub initProt: Int,
+    pub nsects: Int,
+    pub flags: Int,
+}
+
+pub fn onbMachoWriteSegmentCommand(out: List<Int>, seg: OnbMachoSegmentCommand) -> List<Int> {
+    let mut buf = out
+    buf = onbWriteU32LE(buf, onbMachoLCSegment64())
+    let cmdsize = onbMachoSegment64Size() + (seg.nsects * onbMachoSection64Size())
+    buf = onbWriteU32LE(buf, cmdsize)
+    buf = onbMachoWriteName16(buf, seg.segname)
+    buf = onbWriteU64LE(buf, seg.vmAddr)
+    buf = onbWriteU64LE(buf, seg.vmSize)
+    buf = onbWriteU64LE(buf, seg.fileOff)
+    buf = onbWriteU64LE(buf, seg.fileSize)
+    buf = onbWriteU32LE(buf, seg.maxProt)
+    buf = onbWriteU32LE(buf, seg.initProt)
+    buf = onbWriteU32LE(buf, seg.nsects)
+    buf = onbWriteU32LE(buf, seg.flags)
+    buf
+}
+
+// === Section 64 (80 bytes) =====================================
+//
+// `section_64` layout:
+//   sectname     [16]byte
+//   segname      [16]byte
+//   addr         u64
+//   size         u64
+//   offset       u32
+//   align        u32 (power-of-2 exponent)
+//   reloff       u32
+//   nreloc       u32
+//   flags        u32
+//   reserved1    u32
+//   reserved2    u32
+//   reserved3    u32
+
+pub struct OnbMachoSection {
+    pub sectname: String,
+    pub segname: String,
+    pub addr: Int,
+    pub size: Int,
+    pub fileOff: Int,
+    pub align: Int,
+    pub relOff: Int,
+    pub nReloc: Int,
+    pub flags: Int,
+}
+
+pub fn onbMachoWriteSection(out: List<Int>, s: OnbMachoSection) -> List<Int> {
+    let mut buf = out
+    buf = onbMachoWriteName16(buf, s.sectname)
+    buf = onbMachoWriteName16(buf, s.segname)
+    buf = onbWriteU64LE(buf, s.addr)
+    buf = onbWriteU64LE(buf, s.size)
+    buf = onbWriteU32LE(buf, s.fileOff)
+    buf = onbWriteU32LE(buf, s.align)
+    buf = onbWriteU32LE(buf, s.relOff)
+    buf = onbWriteU32LE(buf, s.nReloc)
+    buf = onbWriteU32LE(buf, s.flags)
+    buf = onbWriteU32LE(buf, 0) // reserved1
+    buf = onbWriteU32LE(buf, 0) // reserved2
+    buf = onbWriteU32LE(buf, 0) // reserved3
+    buf
+}
+
+// === Symtab command (24 bytes) =================================
+//
+// `symtab_command` layout:
+//   cmd       u32 (= LC_SYMTAB)
+//   cmdsize   u32 (= 24)
+//   symoff    u32
+//   nsyms     u32
+//   stroff    u32
+//   strsize   u32
+
+pub struct OnbMachoSymtabCommand {
+    pub symOff: Int,
+    pub nsyms: Int,
+    pub strOff: Int,
+    pub strSize: Int,
+}
+
+pub fn onbMachoWriteSymtabCommand(out: List<Int>, c: OnbMachoSymtabCommand) -> List<Int> {
+    let mut buf = out
+    buf = onbWriteU32LE(buf, onbMachoLCSymtab())
+    buf = onbWriteU32LE(buf, onbMachoSymtabCommandSize())
+    buf = onbWriteU32LE(buf, c.symOff)
+    buf = onbWriteU32LE(buf, c.nsyms)
+    buf = onbWriteU32LE(buf, c.strOff)
+    buf = onbWriteU32LE(buf, c.strSize)
+    buf
+}
+
+// === Dysymtab command (80 bytes) ===============================
+//
+// Required for `LC_SYMTAB` to be valid even when no dynamic
+// linking happens. Most fields stay 0; only the local /
+// extdef / undef counts and indices vary per .o.
+
+pub struct OnbMachoDysymtabCommand {
+    pub iLocalSym: Int,
+    pub nLocalSym: Int,
+    pub iExtDefSym: Int,
+    pub nExtDefSym: Int,
+    pub iUndefSym: Int,
+    pub nUndefSym: Int,
+}
+
+pub fn onbMachoWriteDysymtabCommand(out: List<Int>, c: OnbMachoDysymtabCommand) -> List<Int> {
+    let mut buf = out
+    buf = onbWriteU32LE(buf, onbMachoLCDysymtab())
+    buf = onbWriteU32LE(buf, onbMachoDysymtabCommandSize())
+    buf = onbWriteU32LE(buf, c.iLocalSym)
+    buf = onbWriteU32LE(buf, c.nLocalSym)
+    buf = onbWriteU32LE(buf, c.iExtDefSym)
+    buf = onbWriteU32LE(buf, c.nExtDefSym)
+    buf = onbWriteU32LE(buf, c.iUndefSym)
+    buf = onbWriteU32LE(buf, c.nUndefSym)
+    // The remaining 14 fields (toc / module table / extref /
+    // indirect symbols / extreloc / locreloc) are all zero in
+    // our object file, so we just pad with 14 u32 zeros.
+    for i in 0..14 {
+        buf = onbWriteU32LE(buf, 0)
+    }
+    buf
+}

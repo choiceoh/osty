@@ -1,0 +1,181 @@
+// onb_macho_test.osty — round-trip tests for the Mach-O wire
+// writer modules (Slices B + C).
+//
+// Each case constructs a small Mach-O struct and asserts the
+// resulting byte stream matches the canonical layout the Go-side
+// `internal/onb/macho.go` writer produces (verified against
+// `internal/onb/onb_macho_parity_test.go`).
+use std.testing
+
+fn assertMachoBytesEq(actual: List<Int>, expected: List<Int>) {
+    testing.assertEq(actual.len(), expected.len())
+    for i in 0..expected.len() {
+        testing.assertEq(actual[i], expected[i])
+    }
+}
+
+// === Header (32 bytes) ============================================
+
+fn testOnbMachoHeader64() {
+    let hdr = OnbMachoHeader { ncmds: 3, sizeOfCmds: 100 }
+    let buf = onbMachoWriteHeader([], hdr)
+    testing.assertEq(buf.len(), onbMachoHeader64Size())
+    // magic 0xfeedfacf little-endian → cf fa ed fe
+    testing.assertEq(buf[0], 0xcf)
+    testing.assertEq(buf[1], 0xfa)
+    testing.assertEq(buf[2], 0xed)
+    testing.assertEq(buf[3], 0xfe)
+    // cputype ARM64 0x0100000c → 0c 00 00 01
+    testing.assertEq(buf[4], 0x0c)
+    testing.assertEq(buf[5], 0x00)
+    testing.assertEq(buf[6], 0x00)
+    testing.assertEq(buf[7], 0x01)
+    // filetype = MH_OBJECT (1) at bytes 12..15
+    testing.assertEq(buf[12], 0x01)
+    testing.assertEq(buf[13], 0x00)
+    // ncmds = 3 at bytes 16..19
+    testing.assertEq(buf[16], 0x03)
+    // sizeOfCmds = 100 at bytes 20..23
+    testing.assertEq(buf[20], 100)
+    // flags = MH_SUBSECTIONS_VIA_SYMS (0x2000) at bytes 24..27
+    testing.assertEq(buf[24], 0x00)
+    testing.assertEq(buf[25], 0x20)
+}
+
+// === Name16 padding ===============================================
+
+fn testOnbMachoWriteName16Padding() {
+    let buf = onbMachoWriteName16([], "__text")
+    testing.assertEq(buf.len(), 16)
+    testing.assertEq(buf[0], 0x5f)  // '_'
+    testing.assertEq(buf[1], 0x5f)  // '_'
+    testing.assertEq(buf[2], 0x74)  // 't'
+    testing.assertEq(buf[3], 0x65)  // 'e'
+    testing.assertEq(buf[4], 0x78)  // 'x'
+    testing.assertEq(buf[5], 0x74)  // 't'
+    // Bytes 6..15 are NUL padding.
+    for i in 6..16 {
+        testing.assertEq(buf[i], 0)
+    }
+}
+
+fn testOnbMachoWriteName16Truncation() {
+    // A name longer than 16 bytes is silently truncated. Mach-O
+    // doesn't allow longer names anyway, so this matches what
+    // Go's `copy(buf[:], []byte(name))` does.
+    let buf = onbMachoWriteName16([], "this_is_a_really_long_name")
+    testing.assertEq(buf.len(), 16)
+    testing.assertEq(buf[0], 0x74)  // 't'
+    testing.assertEq(buf[15], 0x6c) // 'l' — the 16th char
+}
+
+// === Section_64 (80 bytes) =======================================
+
+fn testOnbMachoWriteSection() {
+    let sect = OnbMachoSection {
+        sectname: "__text",
+        segname: "__TEXT",
+        addr: 0,
+        size: 0x40,
+        fileOff: 0x1f0,
+        align: onbMachoTextAlignPower(),
+        relOff: 0x230,
+        nReloc: 2,
+        flags: onbMachoSectionPureInstr() | onbMachoSectionSomeInstr(),
+    }
+    let buf = onbMachoWriteSection([], sect)
+    testing.assertEq(buf.len(), onbMachoSection64Size())
+    // sectname "__text" + 10 NUL pad = bytes 0..15
+    testing.assertEq(buf[0], 0x5f)
+    // segname "__TEXT" + 10 NUL pad = bytes 16..31
+    testing.assertEq(buf[16], 0x5f)
+    testing.assertEq(buf[18], 0x54)  // 'T'
+    // addr = 0 at bytes 32..39
+    testing.assertEq(buf[32], 0)
+    // size = 0x40 at bytes 40..47
+    testing.assertEq(buf[40], 0x40)
+    // align = 2 at bytes 56..59
+    testing.assertEq(buf[56], 2)
+    // nReloc = 2 at bytes 64..67
+    testing.assertEq(buf[64], 2)
+}
+
+// === Reloc serialization ==========================================
+
+fn testOnbMachoWriteRelocBranch26() {
+    // Reloc shape: 4-byte address + 4-byte packed flags. For an
+    // extern Branch26 reloc at codeOffset 0x18 with symbolnum 5:
+    //   address = 0x18
+    //   word = sym(5) | pcrel(1<<24) | length(2 << 25) |
+    //          extern(1<<27) | type(2 << 28)
+    //        = 0x05 | 0x01000000 | 0x04000000 | 0x08000000 | 0x20000000
+    //        = 0x2d000005
+    let reloc = onbRelocBranch26(0x18, "puts")
+    let buf = onbMachoWriteReloc([], reloc, 5, 2, true)
+    testing.assertEq(buf.len(), onbMachoRelocSize())
+    // address LE
+    testing.assertEq(buf[0], 0x18)
+    testing.assertEq(buf[1], 0x00)
+    testing.assertEq(buf[2], 0x00)
+    testing.assertEq(buf[3], 0x00)
+    // word LE = 0x2d000005 → 05 00 00 2d
+    testing.assertEq(buf[4], 0x05)
+    testing.assertEq(buf[5], 0x00)
+    testing.assertEq(buf[6], 0x00)
+    testing.assertEq(buf[7], 0x2d)
+}
+
+fn testOnbMachoWriteRelocPageOff12NotPCRel() {
+    // PageOff12 is the only kind that's NOT pcrel.
+    let reloc = onbRelocPageOff12(0x4, "str0")
+    let buf = onbMachoWriteReloc([], reloc, 7, 2, true)
+    // word = sym(7) | length(2 << 25) | extern(1<<27) | type(4 << 28)
+    //      = 0x07 | 0x04000000 | 0x08000000 | 0x40000000
+    //      = 0x4c000007
+    // Note the pcrel bit (24) is NOT set.
+    testing.assertEq(buf[4], 0x07)
+    testing.assertEq(buf[5], 0x00)
+    testing.assertEq(buf[6], 0x00)
+    testing.assertEq(buf[7], 0x4c)
+}
+
+// === Nlist64 (16 bytes) =========================================
+
+fn testOnbMachoWriteNlist64ExtSect() {
+    // External function symbol: typeBits = N_EXT | N_SECT, sect =
+    // 1 (text). value = byte offset inside __text.
+    let buf = onbMachoWriteNlist64([], 5, onbMachoNExt() | onbMachoNSect(), 1, 0, 0x18)
+    testing.assertEq(buf.len(), onbMachoNlist64Size())
+    // strx LE = 5 → 05 00 00 00
+    testing.assertEq(buf[0], 5)
+    // typeBits = 0x0f
+    testing.assertEq(buf[4], 0x0f)
+    // sect = 1
+    testing.assertEq(buf[5], 1)
+    // desc LE = 0 → 00 00
+    testing.assertEq(buf[6], 0)
+    testing.assertEq(buf[7], 0)
+    // value LE = 0x18 → 18 00 ...
+    testing.assertEq(buf[8], 0x18)
+}
+
+// === Symbol table builder =======================================
+
+fn testOnbMachoStringTableLeadingNul() {
+    let table = onbNewMachoStringTable()
+    testing.assertEq(table.bytes.len(), 1)
+    testing.assertEq(table.bytes[0], 0)
+}
+
+fn testOnbMachoStringTableSequentialOffsets() {
+    let table = onbNewMachoStringTable()
+    let off1 = onbMachoStringTableAdd(table, "_main")
+    testing.assertEq(off1, 1)
+    // After "_main" + NUL, buffer is 7 bytes.
+    testing.assertEq(table.bytes.len(), 7)
+    let off2 = onbMachoStringTableAdd(table, "_puts")
+    testing.assertEq(off2, 7)
+    // Mach-O strtab doesn't dedupe; re-adding gets a new offset.
+    let off3 = onbMachoStringTableAdd(table, "_main")
+    testing.assertEq(off3, 13)
+}
