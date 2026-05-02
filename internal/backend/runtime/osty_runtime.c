@@ -15850,12 +15850,22 @@ static int osty_re_parse_alt(osty_re_parser *ps) {
             ps->prog[i] = ps->prog[i - 1];
         }
         ps->prog_len++;
-        /* Adjust internal jumps in the shifted block. */
+        /* Adjust internal jumps in the shifted block. Use the inclusive
+         * upper bound `<= branch_end`: the JMP that closed the previous
+         * branch was patched at end of the prior iteration to
+         * ps->prog_len, which is exactly branch_end here. After the
+         * shift, "branch_end" in old coords is "branch_end + 1" in new
+         * coords (the next free slot, where the new JMP will land), so
+         * that target needs the +1 too. Strict `<` left those
+         * past-end-of-block targets unbumped, which after the shift
+         * pointed at the stray last-instruction byte of the previously
+         * added branch — corrupting every alternation with three or
+         * more branches. */
         for (int i = branch_start + 1; i <= branch_end; i++) {
             osty_re_inst *ins = &ps->prog[i];
             if (ins->op == OSTY_RE_OP_JMP || ins->op == OSTY_RE_OP_SPLIT) {
-                if (ins->x >= branch_start && ins->x < branch_end) ins->x++;
-                if (ins->op == OSTY_RE_OP_SPLIT && ins->y >= branch_start && ins->y < branch_end) ins->y++;
+                if (ins->x >= branch_start && ins->x <= branch_end) ins->x++;
+                if (ins->op == OSTY_RE_OP_SPLIT && ins->y >= branch_start && ins->y <= branch_end) ins->y++;
             }
         }
         /* Place JMP after the shifted block. */

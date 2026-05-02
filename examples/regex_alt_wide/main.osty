@@ -1,0 +1,63 @@
+use std.regex
+
+// Regression: wide flat alternations under a `+` quantifier (and bare
+// alternations with three or more branches). Earlier the parser's
+// shift-and-bump pass in osty_re_parse_alt used a strict `<` upper
+// bound, so the JMP that closed the previously parsed branch — patched
+// to ps->prog_len, exactly equal to the next iteration's branch_end —
+// was left unbumped. After the shift it pointed at the stray last
+// instruction of the most recently added branch, breaking every
+// branch except the last two. Tokenizer-style alternations are common
+// (URL schemes, keyword sets) so this matters for real callers.
+
+fn main() {
+    // 24-branch alt under `+`. Expect every match to land:
+    //   abx [0..3), aby [4..7), aby [8..11), abz [12..15),
+    //   abk [19..22), abkabq [23..29).
+    match regex.compile(r"(abc|abd|abe|abf|abg|abh|abi|abj|abk|abl|abm|abn|abo|abp|abq|abr|abs|abt|abu|abv|abw|abx|aby|abz)+") {
+        Ok(re) -> {
+            let list = re.findAll("abx aby aby abz NO abk abkabq")
+            let n = list.len()
+            println("wide+: {n}")
+            let mut i = 0
+            for _ in 0..n {
+                let m = list[i]
+                let t = m.text
+                let s = m.start
+                let e = m.end
+                println("  [{i}] '{t}' [{s}..{e})")
+                i += 1
+            }
+            // Captures path: one `+`-driven match spanning three branches.
+            match re.captures("xxabkabxabq yy") {
+                Some(c) -> match c.get(0) {
+                    Some(s) -> println("captures: '{s}'"),
+                    None    -> println("captures: group 0 unset"),
+                },
+                None -> println("captures: no match"),
+            }
+        },
+        Err(_) -> println("wide+ compile failed"),
+    }
+
+    // Bare 5-way alt (no quantifier). All five branches must match.
+    // (`https` is listed before `http` so the leftmost-priority Pike VM
+    // doesn't match `https` as the shorter `http`.)
+    match regex.compile(r"(https|http|ftp|ssh|file)") {
+        Ok(re) -> {
+            let list = re.findAll("http ssh nope ftp https file")
+            let n = list.len()
+            println("scheme: {n}")
+            let mut i = 0
+            for _ in 0..n {
+                let m = list[i]
+                let t = m.text
+                let s = m.start
+                let e = m.end
+                println("  [{i}] '{t}' [{s}..{e})")
+                i += 1
+            }
+        },
+        Err(_) -> println("scheme compile failed"),
+    }
+}
