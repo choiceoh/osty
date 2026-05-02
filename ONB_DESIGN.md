@@ -37,6 +37,74 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 24 (ONB self-host port — Phase 1 leaf modules,
+> 2026-05-02)** — ONB Go 구현의 Osty 포팅 첫 슬라이스. **Tier 1 native
+> 기능 확장은 일단락**, 이제부터 `internal/onb/`의 Go 코드를
+> `toolchain/onb_*.osty`로 옮기는 self-host 포팅 트랙으로 전환.
+>
+> 패턴 (lir_proto.osty 선례 따름):
+> - Osty source = future-canonical 단일 소스
+> - Go 구현 = 현재 production (LLVM self-host LLVMgen이 ONB를 컴파일할
+>   수 있을 때까지)
+> - Go-side 페어리티 테스트가 두 표현이 byte-for-byte 일치하도록 잠금
+> - `generated.go` 재생성 경로는 #854 이후 frozen이라 Osty 코드는
+>   현재 dev-time runtime에 직접 닿지 않음 — `osty check toolchain` smoke
+>   가 syntactic/typecheck만 검증
+>
+> Phase 1 (이번 슬라이스, MIR/LIR 의존성 없는 leaf 모듈 3개):
+>
+> 1. `toolchain/onb_encoding.osty` — pure aarch64 instruction encoders
+>    - `onbXRegisterNumber` / `onbDRegisterNumber` — 레지스터명 → 0..31 인코딩
+>    - `onbEncodeBrk` (UnreachableTerm trap)
+>    - `onbEncodeFmovDFromX` / `onbEncodeFmovXFromD` (FP↔Int 비트캐스트)
+>    - `onbEncodeFPArith(base, ...)` (fadd/fsub/fmul/fdiv 공통)
+>    - `onbEncodeBlr` (closure indirect call)
+>    - `onbEncodeRet`
+>    - `onbEncodeFPStack(base, reg, off)` (str/ldr d, [sp])
+>    - `onbEncodeLoadStoreReg(base, t, n, off)` (str/ldr x, [reg])
+>    - `onbEncodeMovRegReg`
+>
+> 2. `toolchain/onb_runtime_symbols.osty` — 런타임 심볼 테이블
+>    - `onbAbiKind*` 5종 상수 + `onbAbiKindFor`-슈도 헬퍼
+>    - `onbRuntimeSym*` String/List/Map/Closure 심볼 상수
+>    - `onbListPushSymbolForKind` / `onbListGetSymbolForKind`
+>    - `onbMapInsert/Get/Contains/RemoveSymbolForKeyKind` (5개 dispatch table)
+>
+> 3. `toolchain/onb_layouts.osty` — 슬롯/객체 layout 헬퍼
+>    - `onbClosureEnvCapturesOffset()` (= 24, 런타임 헤더 크기)
+>    - `onbClosureEnvFieldByteOffset(index)` — index 0 → 0 (fn ptr),
+>      index N≥1 → 24 + (N-1)*8 (capture N-1)
+>    - `onbEnumPayloadOffset(fieldIdx)` / `onbEnumDiscriminantOffset()`
+>    - `onbStructFieldByteOffset(index)`
+>    - `onbAbiSmallStructRegLimit()` / `onbAbiIndirectStructFieldLimit()`
+>      / `onbAbiPointerRegSlotBytes()`
+>
+> 4. `toolchain/onb_encoding_test.osty` — Osty-side parity 테이블 (14 케이스)
+>
+> 5. `internal/onb/onb_osty_parity_test.go` — Go-side parity gate. Go
+>    encoder가 produce하는 32-bit word를 Osty 테스트의 expected hex와
+>    한 줄씩 비교. 두 표현 사이 drift는 PR 리뷰에서 양쪽 expected
+>    column 수정으로 surface.
+>
+> 한계 (이번 슬라이스에서 명시적으로 보류):
+> - **runtime wire 없음** — Osty 함수는 dead code 상태. 실제 production은
+>   여전히 `internal/onb/{lower,macho,asm,dwarf}.go`. LLVM self-host
+>   LLVMgen이 ONB를 컴파일할 수 있게 되면 그때 `selfhost.ONBRunner` 같은
+>   인터페이스로 wire (lir_proto_runner.go 패턴 참조).
+> - MIR/LIR 타입 의존하는 함수 (abiRegSlots, lookupStructLayout, lower*Assign)
+>   는 Phase 2+. 먼저 LIR opcode + Reg를 Osty enum으로 미러해야 함.
+> - DWARF 인코더 / 라인 프로그램 / Mach-O 헤더는 Phase 6+ 별도 슬라이스.
+>
+> 검증:
+> - `go run ./cmd/osty check ./toolchain` — exit 0 (4 새 파일 syntactic
+>   + typecheck 통과)
+> - `go test ./internal/onb -run TestEncoderParityVsOstyTable` — Go encoder
+>   가 Osty 테이블의 14개 expected hex값과 byte-for-byte 일치
+>
+> **다음 phase 후보**: LIR Opcode + Reg를 Osty enum으로 (Phase 2),
+> 또는 ABI 헬퍼 (`abiRegSlots` 등)를 MIR Type 의존 minimal subset으로
+> 시작 (Phase 3a).
+>
 > **Slice A2 Week 23 (Map<K,V> — get / containsKey / remove, 2026-05-02)** —
 > Map의 핵심 lookup 3종을 native lowering. Week 22의 new/insert/len과
 > 결합하면 Map 일상 사용 (캐시, 인덱스, 빈도 카운트)이 fallback 없이
