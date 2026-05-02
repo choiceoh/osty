@@ -37,6 +37,36 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 12 (struct lowering v1 — literals + field reads, 2026-05-02)** —
+> ONB가 처음으로 struct를 lower. `struct Point { x: Int, y: Int }` 같은
+> 모든-스칼라 struct 한정. 작동:
+> - `let p = Point { x: 3, y: 4 }` → 16바이트 슬롯 (필드별 8바이트) 할당,
+>   각 필드를 slot+offset에 write
+> - `p.x` → `Copy(local projs=[FieldProj{Index:0}])` → `Load64Stack` at
+>   slot + `Index * 8`
+> - `println(p.x)` 정상 동작
+>
+> 추가:
+> - `lowerState.mod` 필드 — 모듈-범위 layout 조회용
+> - `localTypeSize`: 가변 슬롯 크기 (Unit 0, scalar 8, struct N×8, builtin
+>   pointer 기본 8)
+> - `lookupStructLayout` / `fieldByteOffset` / `placeProjectionOffset`
+>   helpers — Type → layout → 바이트 offset 변환
+> - `lowerStructLiteralAssign`: `AggregateRV(struct)` 처리, 각 필드를
+>   slot+i*8에 store
+> - `loadPlaceIntoReg`가 projection을 받아 slot+offset에서 load
+> - `assignLocalSlots`가 `localTypeSize` 사용 (이전 hardcoded 8)
+>
+> 한계 (이번 슬라이스에서 명시적으로 보류):
+> - struct fn param / return (AAPCS64 small-struct passing 2-reg / indirect)
+> - DWARF struct 변수 인스펙션 (`frame variable p`) — B.5 infra는 깔려
+>   있으나 lower→encoder 와이어링은 별도 슬라이스
+> - struct 필드 mutation (`p.x = 5`) — projection-as-write 미지원
+> - 중첩 struct
+>
+> 다음 슬라이스 후보: AAPCS64 small-struct passing → struct를 fn 경계에서
+> 사용 가능 → DWARF 변수 인스펙션과 묶어서 진행.
+>
 > **Slice A2 Week 11 (DWARF B.5 infra — struct/member DIEs, 2026-05-02)** —
 > 인코더 인프라만 추가. ONB가 struct를 lower하지 않으므로 dead code지만,
 > 향후 struct lowering 슬라이스가 들어올 때 DWARF 측은 더 이상 막히지 않음.
