@@ -156,9 +156,16 @@ pub struct LirGlobal {
     pub typ: LirType,
     pub init: String,
     pub attrs: List<String>,
+    // `linkage` slot is rendered between `=` and `global` when set.
+    // Used for `appending` (e.g. `@llvm.global_ctors`), `private`,
+    // `external`, etc.
+    pub linkage: String,
 }
 pub fn lirGlobal(name: String, typ: LirType, init: String) -> LirGlobal {
-    LirGlobal {name, typ, init, attrs: []}
+    LirGlobal {name, typ, init, attrs: [], linkage: ""}
+}
+pub fn lirGlobalWithLinkage(name: String, typ: LirType, init: String, linkage: String) -> LirGlobal {
+    LirGlobal {name, typ, init, attrs: [], linkage}
 }
 pub struct LirParam {
     pub name: String,
@@ -686,7 +693,13 @@ pub fn lirRenderGlobal(g: LirGlobal) -> String {
     } else {
         g.init
     }
-    let mut parts: List<String> = [g.name, "=", "global", lirTypeString(g.typ), init]
+    let mut parts: List<String> = [g.name, "="]
+    if g.linkage != "" {
+        parts.push(g.linkage)
+    }
+    parts.push("global")
+    parts.push(lirTypeString(g.typ))
+    parts.push(init)
     for attr in g.attrs {
         parts.push(attr)
     }
@@ -1673,6 +1686,86 @@ pub struct LirMirFunctionLowerer {
     // `!llvm.access.group` trailers.
     pub parallelAccessGroupRef: String,
 }
+// `lirEmitMirGlobals` mirrors production `emitGlobalVars`
+// (mir_generator.go:1508). Pushes:
+//   1. `@<name> = global <T> zeroinitializer` for each MIR global.
+//   2. A synthetic `define private void @__osty_init_globals()` ctor
+//      that calls each init fn and stores its return into the global.
+//      Skipped if no global has an init.
+//   3. `@llvm.global_ctors = appending global [...]` registration so
+//      the ctor runs before main.
+// When `mir.globals` is empty nothing is emitted — same as production.
+fn lirEmitMirGlobals(out: LirModule, mir: MirModule) {
+    if mir.globals.len() == 0 {
+        return
+    }
+    for glob in mir.globals {
+        let typ = lirLowerMirType_module(out, mir, glob.typ)
+        out.globals.push(lirGlobal("@" + glob.name, typ, ""))
+    }
+    let mut hasInit = false
+    for glob in mir.globals {
+        if glob.hasInit && glob.initSymbol != "" {
+            hasInit = true
+        }
+    }
+    if !(hasInit) {
+        // No init functions: skip ctor + global_ctors registration.
+        // Programs whose globals are zero-initialised are correct
+        // without a ctor (LLVM zeros them at module load).
+        return
+    }
+    let ctor = lirBuildInitGlobalsCtor(out, mir)
+    out.functions.push(ctor)
+    out.globals.push(lirGlobalWithLinkage("@llvm.global_ctors", lirRawType("[1 x \{ i32, ptr, ptr \}]"), "[\{ i32, ptr, ptr \} \{ i32 65535, ptr @__osty_init_globals, ptr null \}]", "appending"))
+}
+// Module-context type lowering for a top-level type name. The normal
+// `lirLowerMirType` requires a `LirMirFunctionLowerer`; for
+// module-level globals we don't have one. Reproduce the relevant
+// portion (primitives + Option/Result/struct/tuple shape).
+fn lirLowerMirType_module(out: LirModule, mir: MirModule, name: String) -> LirType {
+    let primitive = lirLowerPrimitiveTypeName(name)
+    if !(lirTypeIsZero(primitive)) {
+        return primitive
+    }
+    if lirIsRefBuiltinTypeName(name) {
+        return lirPtrType()
+    }
+    if lirIsOptionTypeName(name) || lirIsResultTypeName(name) {
+        let typeName = "%" + lirMangleAlgebraicTypeName(name)
+        lirModuleDeclareTypeDef(out, lirTypeDef(typeName, "\{ i64, i64 \}"))
+        return lirAggregateType(typeName)
+    }
+    // Composite layout — only resolve those already in the MIR module.
+    for layout in mir.layouts.structs {
+        if lirMirStructLayoutMatches(layout, name) {
+            let typeName = "%" + if layout.mangled == "" { layout.name } else { layout.mangled }
+            return lirAggregateType(typeName)
+        }
+    }
+    lirTypeInvalid()
+}
+// `lirBuildInitGlobalsCtor` synthesises the
+// `define private void @__osty_init_globals()` function that, for
+// each global with `hasInit`, calls the init fn and stores into the
+// global. Mirrors production `mirInitGlobalsCtorHeader / Footer /
+// StoreSequence` (mir_generator_snapshot.go).
+fn lirBuildInitGlobalsCtor(out: LirModule, mir: MirModule) -> LirFunction {
+    let mut fn_ = lirFunction("__osty_init_globals", lirVoidType())
+    fn_.linkage = "private"
+    let mut entry = lirBlock("entry", lirRetVoid())
+    for glob in mir.globals {
+        if !(glob.hasInit) || glob.initSymbol == "" {
+            continue
+        }
+        let initRet = lirLowerMirType_module(out, mir, glob.typ)
+        let tmp = "%v" + glob.name
+        entry.instrs.push(lirCall(tmp, initRet, "@" + glob.initSymbol, []))
+        entry.instrs.push(lirStore(lirOperand(initRet, tmp), "@" + glob.name, 0))
+    }
+    fn_.blocks.push(entry)
+    fn_
+}
 pub fn lirLowerMirModule(cfg: LirLowerConfig, mir: MirModule) -> LirLowerResult {
     let packageName = if cfg.packageName == "" {
         mir.packageName
@@ -1681,9 +1774,13 @@ pub fn lirLowerMirModule(cfg: LirLowerConfig, mir: MirModule) -> LirLowerResult 
     }
     let mut out = lirModule(packageName, cfg.sourcePath, cfg.target)
     let mut diags: List<LirDiagnostic> = []
-    if mir.globals.len() > 0 {
-        diags.push(lirDiagnosticError(LirDiagUnsupported, "MIR globals are not implemented in LIR Proto lowering", "module.globals"))
-    }
+    // Module-level globals: emit `@<name> = global <T> zeroinitializer`,
+    // build a `@__osty_init_globals` ctor that calls each init fn and
+    // stores into the global, and register the ctor via
+    // `@llvm.global_ctors`. Mirrors production `emitGlobalVars`
+    // (mir_generator.go:1508). When MIR has no globals nothing is
+    // emitted — same as production.
+    lirEmitMirGlobals(out, mir)
     if mir.uses.len() > 0 {
         diags.push(lirDiagnosticError(LirDiagUnsupported, "MIR uses/imports are not implemented in LIR Proto lowering", "module.uses"))
     }
@@ -5054,6 +5151,7 @@ fn lirLowerMirRValue(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, 
         MirRVDiscriminant -> lirLowerMirDiscriminant(l, rv, hintName, hint),
         MirRVLen -> lirLowerMirLenRV(l, rv, hintName, hint),
         MirRVNullary -> lirLowerMirNullaryRV(l, rv, hintName, hint),
+        MirRVGlobalRef -> lirLowerMirGlobalRefRV(l, rv, hintName, hint),
         _ -> {
             lirLowerError(l, LirDiagUnsupported, "unsupported MIR rvalue kind", "rvalue")
             lirOperandInvalid()
@@ -5083,6 +5181,29 @@ fn lirLowerMirNullaryRV(l: LirMirFunctionLowerer, rv: MirRValue, hintName: Strin
     }
     let value = lirEmitOptionNone(l, target)
     lirOperand(target, value)
+}
+// `lirLowerMirGlobalRefRV` lowers `MirRVGlobalRef` to a `load <T>,
+// ptr @<name>` of the declared global type. Mirrors production
+// `case *mir.GlobalRefRV` (mir_generator.go:8897). The ctor (emitted
+// at module scope) ensures `@<name>` holds a valid value before any
+// user code runs.
+fn lirLowerMirGlobalRefRV(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
+    if rv.globalName == "" {
+        lirLowerError(l, LirDiagInvalidInput, "global ref rvalue requires a global name", "rvalue.globalRef")
+        return lirOperandInvalid()
+    }
+    let target = if rv.typ != "" {
+        lirLowerMirType(l, rv.typ)
+    } else {
+        hint
+    }
+    if lirTypeIsZero(target) {
+        lirLowerError(l, LirDiagUnsupported, "global ref rvalue has no target type — `" + rv.typ + "`", "rvalue.globalRef")
+        return lirOperandInvalid()
+    }
+    let dest = lirFresh(l)
+    l.instrs.push(lirLoad(dest, target, "@" + rv.globalName, 0))
+    lirOperand(target, dest)
 }
 // `lirLowerMirDiscriminant` lowers the `MirRVDiscriminant` rvalue —
 // reads field 0 of an Option/Result/enum aggregate as an i64. Used by

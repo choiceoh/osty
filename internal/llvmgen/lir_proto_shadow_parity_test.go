@@ -455,6 +455,10 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualExternalMirFnDeclareFixture", []string{"declare ptr @go_open(ptr)", "define "}},
 		{"lirParityManualCrossModuleDirectCallFixture", []string{"declare i64 @other.pkg.compute(i64, i64)", "call i64 @other.pkg.compute(i64", "ret i64"}},
 		{"lirParityManualIndirectCallViaEnvFixture", []string{"define i64 @apply(ptr", "load ptr", "call i64 %t", "ret i64"}},
+		// ----- MIR-level globals (pre-implementation; production stage 5) -----
+		{"lirParityManualMirGlobalZeroInitFixture", []string{"@counter = global i64 zeroinitializer", "define void @noop()"}},
+		{"lirParityManualMirGlobalWithInitCtorFixture", []string{"@counter = global i64 zeroinitializer", "@llvm.global_ctors = appending global", "@__osty_init_globals", "define private void @__osty_init_globals()", "call i64 @initCounter()", "store i64 %vcounter, ptr @counter"}},
+		{"lirParityManualGlobalRefRValueLoadFixture", []string{"@counter = global i64 zeroinitializer", "define i64 @readCounter()", "load i64, ptr @counter", "ret i64"}},
 	}
 
 	for _, tt := range want {
