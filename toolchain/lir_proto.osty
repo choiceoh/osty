@@ -5021,8 +5021,13 @@ fn lirLowerMirAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: Strin
 }
 // `lirLowerMirListAggregate` builds a `List<T>` literal — the shape
 // emitted for `[1, 2, 3]` source. Calls `osty_rt_list_new()` to get
-// the empty list, then `osty_rt_list_push_<lane>` per field. Mirrors
-// production `emitListLiteral` (mir_generator.go:9348).
+// the empty list, then dispatches per-element by lane:
+//   * Typed runtime lane (i64/i1/f64/ptr/string) → osty_rt_list_push_<lane>
+//   * Composite element (struct/tuple/enum) → bytes-v1 fallback:
+//     alloca slot + store value + sizeof gep idiom +
+//     osty_rt_list_push_bytes_v1(list, slot, size).
+// Mirrors production `emitListLiteral` + `emitListPushOperand`
+// (mir_generator.go:9348).
 fn lirLowerMirListAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
     let typeName = if rv.typ == "" {
         hintName
@@ -5034,16 +5039,33 @@ fn lirLowerMirListAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: S
         lirLowerError(l, LirDiagUnsupported, "list aggregate target `" + typeName + "` is not a List<T>", "aggregate.list")
         return lirOperandInvalid()
     }
-    let elemLir = lirContainerElemLaneType(elemName)
-    if lirTypeIsZero(elemLir) {
-        lirLowerError(l, LirDiagUnsupported, "list aggregate element type `" + elemName + "` has no LIR runtime lane", "aggregate.list")
-        return lirOperandInvalid()
-    }
-    let isString = lirContainerElemIsString(elemName)
     let newSym = llvmListRuntimeNewSymbol()
     lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(newSym, lirPtrType(), [], false))
     let listReg = lirFresh(l)
     l.instrs.push(lirCall(listReg, lirPtrType(), "@" + newSym, []))
+    let elemLir = lirContainerElemLaneType(elemName)
+    if lirTypeIsZero(elemLir) {
+        let elemType = lirLowerMirType(l, elemName)
+        if lirTypeIsZero(elemType) || lirTypeIsVoid(elemType) {
+            lirLowerError(l, LirDiagUnsupported, "list aggregate composite element type `" + elemName + "` has no MIR layout", "aggregate.list")
+            return lirOperandInvalid()
+        }
+        let pushBytesSym = mirRtListSymbol("push_bytes_v1")
+        lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(pushBytesSym, lirVoidType(), [lirPtrType(), lirPtrType(), lirIntType(64)], false))
+        for field in rv.aggFields {
+            let value = lirLowerMirOperand(l, field, elemName, elemType)
+            if value.value == "" {
+                return lirOperandInvalid()
+            }
+            let slot = lirFresh(l)
+            l.instrs.push(lirAlloca(slot, elemType, 0))
+            l.instrs.push(lirStore(lirOperand(elemType, value.value), slot, 0))
+            let sizeReg = lirEmitSizeOf(l, elemType)
+            l.instrs.push(lirCall("", lirVoidType(), "@" + pushBytesSym, [lirOperand(lirPtrType(), listReg), lirOperand(lirPtrType(), slot), lirOperand(lirIntType(64), sizeReg)]))
+        }
+        return lirOperand(lirPtrType(), listReg)
+    }
+    let isString = lirContainerElemIsString(elemName)
     let pushSym = llvmListRuntimePushSymbolFor(elemLir.llvm, isString)
     lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(pushSym, lirVoidType(), [lirPtrType(), elemLir], false))
     for field in rv.aggFields {
