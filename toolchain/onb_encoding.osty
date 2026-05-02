@@ -185,3 +185,136 @@ pub fn onbEncodeMovRegReg(dst: String, src: String) -> Int? {
     // 0xaa0003e0 | (Xm << 16) | Xd. XZR encodes as 31 in the Rn slot.
     Some(0xaa0003e0 | (m << 16) | d)
 }
+
+// onbEncodeArithReg encodes ADD / SUB (shifted register) for 64-bit
+// registers with no shift. Layout: `base | (Rm << 16) | (Rn << 5) | Rd`.
+// Base values:
+//
+//   ADD = 0x8b000000
+//   SUB = 0xcb000000
+//
+// Mirror of `encodeMachOArithReg` in `internal/onb/macho.go`.
+pub fn onbEncodeArithReg(base: Int, dst: String, lhs: String, rhs: String) -> Int? {
+    let d = onbXRegisterNumber(dst)
+    let n = onbXRegisterNumber(lhs)
+    let m = onbXRegisterNumber(rhs)
+    if d < 0 || n < 0 || m < 0 {
+        None
+    } else {
+        Some(base | (m << 16) | (n << 5) | d)
+    }
+}
+
+// onbEncodeMulReg encodes `MUL Xd, Xn, Xm` — alias for
+// `MADD Xd, Xn, Xm, XZR`. Layout: 0x9b007c00 | (Rm << 16) | (Rn << 5) | Rd
+// with Ra = 31 (XZR).
+pub fn onbEncodeMulReg(dst: String, lhs: String, rhs: String) -> Int? {
+    let d = onbXRegisterNumber(dst)
+    let n = onbXRegisterNumber(lhs)
+    let m = onbXRegisterNumber(rhs)
+    if d < 0 || n < 0 || m < 0 {
+        None
+    } else {
+        Some(0x9b007c00 | (m << 16) | (n << 5) | d)
+    }
+}
+
+// onbEncodeCmp encodes `CMP Xn, Xm` — alias for `SUBS XZR, Xn, Xm`.
+// Layout: 0xeb00001f | (Rm << 16) | (Rn << 5). Rd is hard-wired to
+// XZR (=31), so the destination slot is `0x1f`.
+pub fn onbEncodeCmp(lhs: String, rhs: String) -> Int? {
+    let n = onbXRegisterNumber(lhs)
+    let m = onbXRegisterNumber(rhs)
+    if n < 0 || m < 0 {
+        None
+    } else {
+        Some(0xeb00001f | (m << 16) | (n << 5))
+    }
+}
+
+// onbCondCode maps the Osty-side condition enum to the aarch64
+// condition encoding. Mirrors the Go `Cond` constants in
+// `internal/onb/lir.go` — values are bit fields, not source order.
+pub fn onbCondCodeEq() -> Int { 0 }
+pub fn onbCondCodeNe() -> Int { 1 }
+pub fn onbCondCodeGe() -> Int { 10 }
+pub fn onbCondCodeLt() -> Int { 11 }
+pub fn onbCondCodeGt() -> Int { 12 }
+pub fn onbCondCodeLe() -> Int { 13 }
+
+// onbEncodeCset encodes `CSET Xd, <cond>` — write 1 to Xd if
+// condition holds (after a flag-setting predecessor like CMP),
+// else 0. Internally an alias for `CSINC Xd, XZR, XZR, !cond`.
+// Layout: 0x9a9f07e0 | (cond ^ 1) << 12 | Rd. The ^1 flips the
+// condition (CSINC writes 1 when cond is *false*).
+pub fn onbEncodeCset(dst: String, cond: Int) -> Int? {
+    let d = onbXRegisterNumber(dst)
+    if d < 0 {
+        return None
+    }
+    if cond < 0 || cond > 15 {
+        return None
+    }
+    Some(0x9a9f07e0 | ((cond ^ 1) << 12) | d)
+}
+
+// onbEncodeStackLoad / onbEncodeStackStore encode the SP-relative
+// 64-bit transfer family used by the local-slot lowering. Base
+// values:
+//
+//   LDR Xt, [SP, #imm12] = 0xf94003e0
+//   STR Xt, [SP, #imm12] = 0xf90003e0
+//
+// imm is 8-byte scaled. SP is hard-wired in the Rn field (=31)
+// already in the base, so we only OR Rt and the scaled offset.
+pub fn onbEncodeStackLoad(t: String, offset: Int) -> Int? {
+    if offset < 0 || (offset % 8) != 0 {
+        return None
+    }
+    let r = onbXRegisterNumber(t)
+    if r < 0 {
+        return None
+    }
+    let scaled = offset / 8
+    if scaled > 0xfff {
+        return None
+    }
+    Some(0xf94003e0 | (scaled << 10) | r)
+}
+
+pub fn onbEncodeStackStore(t: String, offset: Int) -> Int? {
+    if offset < 0 || (offset % 8) != 0 {
+        return None
+    }
+    let r = onbXRegisterNumber(t)
+    if r < 0 {
+        return None
+    }
+    let scaled = offset / 8
+    if scaled > 0xfff {
+        return None
+    }
+    Some(0xf90003e0 | (scaled << 10) | r)
+}
+
+// onbEncodeAddImm encodes `ADD Xd, Xn, #imm12` for an unshifted
+// immediate (so imm <= 0xfff). Used by `LoadStackAddress`
+// (`add Xd, sp, #N`). Layout: 0x91000000 | (imm12 << 10) | (Rn << 5) | Rd.
+//
+// imm12 supports an optional 12-bit left-shift via the `sh` bit;
+// the Go encoder uses it for offsets in the 0xfff..0xfff000 range.
+// Here we expose only the base unshifted form — bigger offsets need
+// the shifted variant which Phase 2b can add when a real call site
+// requires it.
+pub fn onbEncodeAddImm(dst: String, src: String, imm: Int) -> Int? {
+    if imm < 0 || imm > 0xfff {
+        return None
+    }
+    let d = onbXRegisterNumber(dst)
+    let n = onbXRegisterNumber(src)
+    if d < 0 || n < 0 {
+        None
+    } else {
+        Some(0x91000000 | (imm << 10) | (n << 5) | d)
+    }
+}

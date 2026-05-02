@@ -1,0 +1,260 @@
+// onb_lir.osty — LIR opcode + condition mirror for the Osty Native
+// Backend. Phase 2a: single-word instructions only (every encoded
+// opcode produces exactly one 4-byte aarch64 word). Multi-word
+// shapes — `MovImm64` (movz/movk chain), `LoadCStringAddress`,
+// `LoadSymbolAddress` (adrp+add), branches with link-time fixups —
+// land in Phase 2b alongside the encoder fixup pass.
+//
+// Mirror of the relevant slice of `internal/onb/lir.go`. The Go
+// side uses one struct per opcode + an `Instr` interface; Osty
+// uses a flat `OnbInstr` struct with a `kind` discriminator. Both
+// shapes are accepted by `onbEncodeInstr` below — this gives a
+// straight-line `(Instr → Int?)` dispatch that mirrors the macho
+// encoder's switch.
+//
+// Constructor convention: each opcode gets a focused builder
+// (`onbInstrBrk`, `onbInstrAddReg`, ...) that fills only the
+// relevant fields and zeros the rest. Unused fields stay sentinel
+// (empty string / 0 / OnbCondEq) — `onbEncodeInstr` only reads the
+// fields its kind branch cares about.
+
+// === Condition codes ====================================================
+//
+// The aarch64 `cond` 4-bit encoding values that ONB's `Cset` /
+// `BranchCond` opcodes carry. Mirror of the `Cond` enum in
+// `internal/onb/lir.go` — note the values are bit-pattern
+// constants, not source order.
+pub enum OnbCond {
+    OnbCondEq,
+    OnbCondNe,
+    OnbCondGe,
+    OnbCondLt,
+    OnbCondGt,
+    OnbCondLe,
+}
+
+// onbCondToCode maps the OnbCond enum to its aarch64 4-bit code.
+pub fn onbCondToCode(c: OnbCond) -> Int {
+    match c {
+        OnbCond.OnbCondEq -> onbCondCodeEq(),
+        OnbCond.OnbCondNe -> onbCondCodeNe(),
+        OnbCond.OnbCondGe -> onbCondCodeGe(),
+        OnbCond.OnbCondLt -> onbCondCodeLt(),
+        OnbCond.OnbCondGt -> onbCondCodeGt(),
+        OnbCond.OnbCondLe -> onbCondCodeLe(),
+    }
+}
+
+// === Debug type kinds ===================================================
+//
+// The DWARF emitter's view of a local's primitive type. Mirrors
+// `DebugTypeKind` in `internal/onb/lir.go` — kept in this file so
+// it sits alongside the other LIR data types rather than scattered
+// across the encoder/runtime modules.
+pub enum OnbDebugTypeKind {
+    OnbDebugTypeNone,
+    OnbDebugTypeInt,
+    OnbDebugTypeBool,
+    OnbDebugTypeFloat,
+    OnbDebugTypeString,
+    OnbDebugTypeStruct,
+}
+
+// === LIR opcode kind enum ==============================================
+//
+// The single-word opcode set Phase 2a covers. Multi-word /
+// fixup-bearing opcodes (MovImm64, LoadCStringAddress,
+// LoadSymbolAddress, BranchLink, Branch, BranchCond,
+// BranchCondNotZero) are deliberately absent — Phase 2b
+// introduces them along with the variable-length encode return
+// type and the link-time fixup recorder.
+pub enum OnbInstrKind {
+    OnbInstrInvalid,
+    OnbInstrBrk,
+    OnbInstrRet,
+    OnbInstrAddReg,
+    OnbInstrSubReg,
+    OnbInstrMulReg,
+    OnbInstrCmp,
+    OnbInstrCset,
+    OnbInstrStore64Stack,
+    OnbInstrLoad64Stack,
+    OnbInstrMovRegReg,
+    OnbInstrLoadStackAddress,
+    OnbInstrLoadFromReg,
+    OnbInstrStoreToReg,
+    OnbInstrLoadFloat64Stack,
+    OnbInstrStoreFloat64Stack,
+    OnbInstrFmovDFromX,
+    OnbInstrFmovXFromD,
+    OnbInstrFaddReg,
+    OnbInstrFsubReg,
+    OnbInstrFmulReg,
+    OnbInstrFdivReg,
+    OnbInstrBranchLinkReg,
+}
+
+// === LIR instruction record ============================================
+//
+// Flat record with named fields per role. Each constructor below
+// fills the kind tag plus the relevant subset; unused fields stay
+// at their sentinel defaults. The shape is intentionally wider
+// than any single opcode needs — narrowness costs branching at
+// the encoder switch, and the constructor cost is near-zero.
+pub struct OnbInstr {
+    pub kind: OnbInstrKind,
+    pub dst: String,
+    pub src: String,
+    pub lhs: String,
+    pub rhs: String,
+    pub base: String,
+    pub imm: Int,
+    pub offset: Int,
+    pub cond: OnbCond,
+}
+
+// emptyOnbInstr returns a zero-valued instruction record. Internal
+// helper — every public `onbInstr*` constructor builds on top of
+// it so the field-initialiser surface lives in one place.
+fn emptyOnbInstr() -> OnbInstr {
+    OnbInstr {
+        kind: OnbInstrKind.OnbInstrInvalid,
+        dst: "",
+        src: "",
+        lhs: "",
+        rhs: "",
+        base: "",
+        imm: 0,
+        offset: 0,
+        cond: OnbCond.OnbCondEq,
+    }
+}
+
+// === Constructors ======================================================
+
+pub fn onbInstrBrk(imm: Int) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrBrk, imm: imm }
+}
+
+pub fn onbInstrRet() -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrRet }
+}
+
+pub fn onbInstrAddReg(dst: String, lhs: String, rhs: String) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrAddReg, dst: dst, lhs: lhs, rhs: rhs }
+}
+
+pub fn onbInstrSubReg(dst: String, lhs: String, rhs: String) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrSubReg, dst: dst, lhs: lhs, rhs: rhs }
+}
+
+pub fn onbInstrMulReg(dst: String, lhs: String, rhs: String) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrMulReg, dst: dst, lhs: lhs, rhs: rhs }
+}
+
+pub fn onbInstrCmp(lhs: String, rhs: String) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrCmp, lhs: lhs, rhs: rhs }
+}
+
+pub fn onbInstrCset(dst: String, cond: OnbCond) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrCset, dst: dst, cond: cond }
+}
+
+pub fn onbInstrStore64Stack(src: String, offset: Int) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrStore64Stack, src: src, offset: offset }
+}
+
+pub fn onbInstrLoad64Stack(dst: String, offset: Int) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrLoad64Stack, dst: dst, offset: offset }
+}
+
+pub fn onbInstrMovRegReg(dst: String, src: String) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrMovRegReg, dst: dst, src: src }
+}
+
+pub fn onbInstrLoadStackAddress(dst: String, offset: Int) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrLoadStackAddress, dst: dst, offset: offset }
+}
+
+pub fn onbInstrLoadFromReg(dst: String, src: String, offset: Int) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrLoadFromReg, dst: dst, src: src, offset: offset }
+}
+
+pub fn onbInstrStoreToReg(src: String, base: String, offset: Int) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrStoreToReg, src: src, base: base, offset: offset }
+}
+
+pub fn onbInstrLoadFloat64Stack(dst: String, offset: Int) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrLoadFloat64Stack, dst: dst, offset: offset }
+}
+
+pub fn onbInstrStoreFloat64Stack(src: String, offset: Int) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrStoreFloat64Stack, src: src, offset: offset }
+}
+
+pub fn onbInstrFmovDFromX(dst: String, src: String) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrFmovDFromX, dst: dst, src: src }
+}
+
+pub fn onbInstrFmovXFromD(dst: String, src: String) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrFmovXFromD, dst: dst, src: src }
+}
+
+pub fn onbInstrFaddReg(dst: String, lhs: String, rhs: String) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrFaddReg, dst: dst, lhs: lhs, rhs: rhs }
+}
+
+pub fn onbInstrFsubReg(dst: String, lhs: String, rhs: String) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrFsubReg, dst: dst, lhs: lhs, rhs: rhs }
+}
+
+pub fn onbInstrFmulReg(dst: String, lhs: String, rhs: String) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrFmulReg, dst: dst, lhs: lhs, rhs: rhs }
+}
+
+pub fn onbInstrFdivReg(dst: String, lhs: String, rhs: String) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrFdivReg, dst: dst, lhs: lhs, rhs: rhs }
+}
+
+pub fn onbInstrBranchLinkReg(reg: String) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrBranchLinkReg, src: reg }
+}
+
+// === Single-word encoder dispatch =====================================
+//
+// `onbEncodeInstr` mirrors the encoder switch in
+// `internal/onb/macho.go`'s `case *<Opcode>` arms — each branch
+// reads the same fields the Go counterpart reads and returns the
+// produced 4-byte word.
+//
+// Returns `None` for opcodes outside Phase 2a's coverage. The
+// encoded word is `Int` (i64) — callers that need a concrete u32
+// truncate at the I/O boundary, mirroring the Go convention of
+// holding raw aarch64 words in `uint32`.
+pub fn onbEncodeInstr(instr: OnbInstr) -> Int? {
+    match instr.kind {
+        OnbInstrKind.OnbInstrBrk -> onbEncodeBrk(instr.imm),
+        OnbInstrKind.OnbInstrRet -> Some(onbEncodeRet()),
+        OnbInstrKind.OnbInstrAddReg -> onbEncodeArithReg(0x8b000000, instr.dst, instr.lhs, instr.rhs),
+        OnbInstrKind.OnbInstrSubReg -> onbEncodeArithReg(0xcb000000, instr.dst, instr.lhs, instr.rhs),
+        OnbInstrKind.OnbInstrMulReg -> onbEncodeMulReg(instr.dst, instr.lhs, instr.rhs),
+        OnbInstrKind.OnbInstrCmp -> onbEncodeCmp(instr.lhs, instr.rhs),
+        OnbInstrKind.OnbInstrCset -> onbEncodeCset(instr.dst, onbCondToCode(instr.cond)),
+        OnbInstrKind.OnbInstrStore64Stack -> onbEncodeStackStore(instr.src, instr.offset),
+        OnbInstrKind.OnbInstrLoad64Stack -> onbEncodeStackLoad(instr.dst, instr.offset),
+        OnbInstrKind.OnbInstrMovRegReg -> onbEncodeMovRegReg(instr.dst, instr.src),
+        OnbInstrKind.OnbInstrLoadStackAddress -> onbEncodeAddImm(instr.dst, "sp", instr.offset),
+        OnbInstrKind.OnbInstrLoadFromReg -> onbEncodeLoadStoreReg(0xf9400000, instr.dst, instr.src, instr.offset),
+        OnbInstrKind.OnbInstrStoreToReg -> onbEncodeLoadStoreReg(0xf9000000, instr.src, instr.base, instr.offset),
+        OnbInstrKind.OnbInstrLoadFloat64Stack -> onbEncodeFPStack(0xfd400000, instr.dst, instr.offset),
+        OnbInstrKind.OnbInstrStoreFloat64Stack -> onbEncodeFPStack(0xfd000000, instr.src, instr.offset),
+        OnbInstrKind.OnbInstrFmovDFromX -> onbEncodeFmovDFromX(instr.dst, instr.src),
+        OnbInstrKind.OnbInstrFmovXFromD -> onbEncodeFmovXFromD(instr.dst, instr.src),
+        OnbInstrKind.OnbInstrFaddReg -> onbEncodeFPArith(0x1e602800, instr.dst, instr.lhs, instr.rhs),
+        OnbInstrKind.OnbInstrFsubReg -> onbEncodeFPArith(0x1e603800, instr.dst, instr.lhs, instr.rhs),
+        OnbInstrKind.OnbInstrFmulReg -> onbEncodeFPArith(0x1e600800, instr.dst, instr.lhs, instr.rhs),
+        OnbInstrKind.OnbInstrFdivReg -> onbEncodeFPArith(0x1e601800, instr.dst, instr.lhs, instr.rhs),
+        OnbInstrKind.OnbInstrBranchLinkReg -> onbEncodeBlr(instr.src),
+        OnbInstrKind.OnbInstrInvalid -> None,
+    }
+}

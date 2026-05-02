@@ -37,6 +37,55 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 25 (ONB self-host port — Phase 2a single-word LIR
+> mirror, 2026-05-03)** — LIR opcode 21종을 Osty 측 enum + flat
+> struct + per-opcode constructor + dispatch encoder로 미러. Phase 1
+> 의 인코딩 헬퍼들이 이제 Osty-side LIR record로 driving 되며,
+> `OnbInstr → Int?` 디스패처가 Go의 `*<Opcode>` switch를 직접 미러.
+>
+> 신규 Osty 파일:
+>
+> 1. `toolchain/onb_lir.osty` — 단일-word LIR opcode 미러
+>    - `OnbCond` enum (Eq/Ne/Ge/Lt/Gt/Le) + `onbCondToCode` 매퍼
+>    - `OnbDebugTypeKind` enum (5개 + Struct)
+>    - `OnbInstrKind` enum (21개 단일-word opcode)
+>    - `OnbInstr` flat struct (kind + dst/src/lhs/rhs/base/imm/offset/cond)
+>    - per-opcode constructors (`onbInstrAddReg(...)`, `onbInstrCmp(...)` ...)
+>    - `onbEncodeInstr(instr) -> Int?` — Phase 1 인코더로 디스패치
+>
+> 2. `toolchain/onb_lir_test.osty` — 21개 round-trip 케이스 (constructor →
+>    encoder → expected hex)
+>
+> 3. `toolchain/onb_encoding.osty` 확장 — 5개 인코더 추가
+>    (`onbEncodeArithReg`, `onbEncodeMulReg`, `onbEncodeCmp`,
+>    `onbEncodeCset`, `onbEncodeStackLoad/Store`, `onbEncodeAddImm`)
+>
+> 4. `internal/onb/onb_lir_parity_test.go` — Go-side parity gate.
+>    Phase 1 gate에 더해 ADD/SUB/MUL/CMP/CSET/stack 트래픽까지
+>    Go encoder 출력 vs Osty 테이블 비교
+>
+> 한계 (이번 슬라이스에서 명시적으로 보류):
+> - **Multi-word opcodes** — `MovImm64` (1-4 movz/movk),
+>   `LoadCStringAddress` (adrp+add), `LoadSymbolAddress` (adrp+add)는
+>   variable-length 출력이 필요해 Phase 2b. 그 phase는 fixup pass
+>   (블록 ID → byte offset 매핑) + 외부 심볼 reloc 표 만들기까지 묶음.
+> - **Branch family** — `Branch` / `BranchCond` / `BranchCondNotZero` /
+>   `BranchLink`도 link-time fixup이 필요해 Phase 2b
+> - **Instr이 아닌 LIR 데이터 타입** (`Function`, `Block`,
+>   `Program`, `LineSpan`, `CStringLiteral`, `DebugLocal`,
+>   `DebugStructField`)은 Phase 2c
+>
+> 검증:
+> - `osty check toolchain` exit 0 (`onb_lir.osty`,
+>   `onb_lir_test.osty`, 확장된 `onb_encoding.osty` 모두 통과)
+> - `go test ./internal/onb -run TestLirOpcodeParityVsOstyTable` —
+>   21개 expected hex 값이 Go encoder와 일치
+> - `go test ./internal/onb -short` — 0 회귀
+>
+> **다음 phase 후보**: Phase 2b (multi-word + branch fixups), 또는
+> Phase 3a (ABI predicates `isABIScalarType` / `abiKindFor`로 진입,
+> MIR Type 의존성 도입).
+>
 > **Slice A2 Week 24 (ONB self-host port — Phase 1 leaf modules,
 > 2026-05-02)** — ONB Go 구현의 Osty 포팅 첫 슬라이스. **Tier 1 native
 > 기능 확장은 일단락**, 이제부터 `internal/onb/`의 Go 코드를
