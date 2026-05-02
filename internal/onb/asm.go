@@ -138,6 +138,12 @@ func renderInstrAssembly(b *strings.Builder, target Target, fn Function, instr I
 		b.WriteString("\tret\n")
 	case *Brk:
 		fmt.Fprintf(b, "\tbrk #%d\n", i.Imm)
+	case *LoadStackAddress:
+		fmt.Fprintf(b, "\tadd %s, sp, #%d\n", i.Dst, i.Offset)
+	case *LoadFromReg:
+		fmt.Fprintf(b, "\tldr %s, [%s, #%d]\n", i.Dst, i.Src, i.Offset)
+	case *StoreToReg:
+		fmt.Fprintf(b, "\tstr %s, [%s, #%d]\n", i.Src, i.Base, i.Offset)
 	case *LoadFloat64Stack:
 		fmt.Fprintf(b, "\tldr %s, [sp, #%d]\n", i.Dst, i.Offset)
 	case *StoreFloat64Stack:
@@ -271,6 +277,8 @@ func xRegisterNumber(reg Reg) (uint32, bool) {
 		return 6, true
 	case RegX7:
 		return 7, true
+	case regX8:
+		return 8, true
 	case RegX9:
 		return 9, true
 	case RegX10:

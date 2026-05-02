@@ -1142,6 +1142,101 @@ fn main() {
 	}
 }
 
+// TestONBBackendBinaryRunsLargeStructSretOnDarwinARM64 covers Phase
+// A2 Week 19: structs >16B (3- to 4-field all-scalar) ride the
+// AAPCS64 indirect (sret) ABI. The caller allocates the return
+// buffer and passes its address in x8; the callee writes each field
+// through x8 at epilogue. Indirect arguments use the same model on
+// the integer register cursor — the caller passes `add Xt, sp,
+// #slot` and the callee's prologue copies field-by-field into the
+// param's local slot.
+//
+// Cases:
+//   - **make_v3**: `make() -> V3 { V3 { 10, 20, 30 } }` returns 24B
+//     via x8.
+//   - **sum_v3**: `sum(v: V3) -> Int { v.x + v.y + v.z }` reads all
+//     three fields after the prologue copy.
+//   - **roundtrip_v3**: composes the two — confirms the caller's
+//     dest slot doubles as the sret buffer and is consumed by the
+//     subsequent indirect-arg call without an extra copy.
+//   - **make_v4**: 4-field struct (32B) — exercises the upper end
+//     of the abiIndirectStructFieldLimit cap.
+func TestONBBackendBinaryRunsLargeStructSretOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("ONB sret executable smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	cases := []struct {
+		name, src, want string
+	}{
+		{
+			name: "make_v3",
+			src: `struct V3 { x: Int, y: Int, z: Int }
+fn make() -> V3 { V3 { x: 10, y: 20, z: 30 } }
+fn main() {
+    let v = make()
+    println(v.x)
+    println(v.y)
+    println(v.z)
+}`,
+			want: "10\n20\n30\n",
+		},
+		{
+			name: "sum_v3",
+			src: `struct V3 { x: Int, y: Int, z: Int }
+fn sum(v: V3) -> Int { v.x + v.y + v.z }
+fn main() {
+    let v = V3 { x: 4, y: 5, z: 6 }
+    println(sum(v))
+}`,
+			want: "15\n",
+		},
+		{
+			name: "roundtrip_v3",
+			src: `struct V3 { x: Int, y: Int, z: Int }
+fn make() -> V3 { V3 { x: 100, y: 200, z: 300 } }
+fn sum(v: V3) -> Int { v.x + v.y + v.z }
+fn main() {
+    let v = make()
+    println(sum(v))
+}`,
+			want: "600\n",
+		},
+		{
+			name: "make_v4",
+			src: `struct V4 { a: Int, b: Int, c: Int, d: Int }
+fn make() -> V4 { V4 { a: 1, b: 2, c: 3, d: 4 } }
+fn main() {
+    let v = make()
+    println(v.a + v.b + v.c + v.d)
+}`,
+			want: "10\n",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(onb.EnvStrict, "1")
+			req := newBackendRequest(t, EmitBinary, tc.src)
+			req.Layout.Target = "aarch64-apple-darwin"
+			result, err := ONBBackend{}.Emit(context.Background(), req)
+			if err != nil {
+				t.Fatalf("ONBBackend.Emit returned error: %v", err)
+			}
+			out, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+			if err != nil {
+				t.Fatalf("binary returned error: %v\n%s", err, out)
+			}
+			if got := string(out); got != tc.want {
+				t.Fatalf("binary output = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestONBBackendBinaryRunsStringAndListOnDarwinARM64 exercises Phase A2's
 // runtime-call slice: String concatenation and `List<Int>` push/len. These
 // shapes lower to `bl _osty_rt_strings_Concat`, `bl _osty_rt_list_new`,
