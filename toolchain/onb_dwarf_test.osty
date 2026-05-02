@@ -155,6 +155,86 @@ fn testOnbEmitDwarfLineHeaderLayoutBytes() {
     testing.assertEq(header[7], 1)
 }
 
+// === String table ===================================================
+
+fn testOnbDwarfStringTableSeed() {
+    let table = onbNewDwarfStringTable()
+    testing.assertEq(table.bytes.len(), 1)
+    testing.assertEq(table.bytes[0], 0)
+    testing.assertEq(onbDwarfStringTableLookupOrZero(table, ""), 0)
+}
+
+fn testOnbDwarfStringTableInsertion() {
+    let table = onbNewDwarfStringTable()
+    let off1 = onbDwarfStringTableAdd(table, "Int")
+    testing.assertEq(off1, 1)
+    // Buffer now: [0, 'I', 'n', 't', 0]
+    testing.assertEq(table.bytes.len(), 5)
+    testing.assertEq(table.bytes[1], 0x49)  // 'I'
+    testing.assertEq(table.bytes[4], 0)
+
+    let off2 = onbDwarfStringTableAdd(table, "Bool")
+    testing.assertEq(off2, 5)
+    testing.assertEq(table.bytes.len(), 10)
+
+    // Re-adding "Int" returns the same offset; no buffer growth.
+    let off1Again = onbDwarfStringTableAdd(table, "Int")
+    testing.assertEq(off1Again, 1)
+    testing.assertEq(table.bytes.len(), 10)
+}
+
+// === Info section ===================================================
+
+fn testOnbEmitDwarfInfoBareCU() {
+    let strings = onbNewDwarfStringTable()
+    let nameOff = onbDwarfStringTableAdd(strings, "main.osty")
+    let compDirOff = onbDwarfStringTableAdd(strings, "/tmp")
+    let producerOff = onbDwarfStringTableAdd(strings, "osty (onb)")
+    let cu = OnbDwarfCompileUnitInputs {
+        nameStrOffset: nameOff,
+        compDirStrOffset: compDirOff,
+        producerStrOffset: producerOff,
+        lowPC: 0,
+        highPCSize: 0x40,
+        stmtListOffset: 0,
+        language: onbDwarfLangC99(),
+        strings: strings,
+    }
+    let encoded = onbEmitDwarfInfo(cu, [], [])
+    testing.assert(encoded.bytes.len() > 11)
+    let version = encoded.bytes[4] | (encoded.bytes[5] << 8)
+    testing.assertEq(version, onbDwarfVersion())
+    testing.assertEq(encoded.bytes[10], onbDwarfAddressSize())
+    // CU's own low_pc is the only reloc anchor when no subprograms
+    // are present.
+    testing.assertEq(encoded.lowPCOffsets.len(), 1)
+}
+
+fn testOnbEmitDwarfInfoWithSubprograms() {
+    let strings = onbNewDwarfStringTable()
+    let nameOff = onbDwarfStringTableAdd(strings, "main.osty")
+    let compDirOff = onbDwarfStringTableAdd(strings, "/tmp")
+    let producerOff = onbDwarfStringTableAdd(strings, "osty (onb)")
+    let mainOff = onbDwarfStringTableAdd(strings, "main")
+    let helperOff = onbDwarfStringTableAdd(strings, "helper")
+    let cu = OnbDwarfCompileUnitInputs {
+        nameStrOffset: nameOff,
+        compDirStrOffset: compDirOff,
+        producerStrOffset: producerOff,
+        lowPC: 0,
+        highPCSize: 0x80,
+        stmtListOffset: 0,
+        language: onbDwarfLangC99(),
+        strings: strings,
+    }
+    let mut subs: List<OnbDwarfSubprogramInput> = []
+    subs.push(onbDwarfSubprogramInput(mainOff, 0, 0x40))
+    subs.push(onbDwarfSubprogramInput(helperOff, 0x40, 0x40))
+    let encoded = onbEmitDwarfInfo(cu, subs, [])
+    // CU low_pc + 2 subprogram low_pcs.
+    testing.assertEq(encoded.lowPCOffsets.len(), 3)
+}
+
 fn testOnbEmitDwarfAbbrevContainsAllSevenCodes() {
     // The abbrev table emits codes 1..7 in order. Each code
     // appears exactly once at the start of its entry.

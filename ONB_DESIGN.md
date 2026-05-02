@@ -37,6 +37,15 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 30 (ONB self-host port — Phase 6.3 DWARF info
+> section + string table, 2026-05-03)** — DWARF series 마무리.
+> `__debug_str` 테이블 + `__debug_info` section emitter (CU DIE +
+> base type / pointer type / structure type / subprogram / variable
+> DIEs) 모두 Osty 측 착륙. Go-side `dwarf.go`의 100% logical mirror
+> 달성. 신규: `onb_dwarf_strings.osty` (55), `onb_dwarf_info.osty`
+> (389), 5 새 Osty 테스트, 2 새 Go parity 테스트
+> (`TestDwarfInfoParityVsOstyTable` 외).
+>
 > **Slice A2 Week 29 (ONB self-host port — Phase 6.1 + 6.2 LEB128 +
 > DWARF abbrev + line program, 2026-05-03)** — DWARF 이미터 진입.
 > 1k 라인 슬라이스로 LEB128 byte-stream 인코더, DWARF 4 상수 (tags /

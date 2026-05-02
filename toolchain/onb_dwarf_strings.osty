@@ -1,0 +1,55 @@
+// onb_dwarf_strings.osty — `__debug_str` table builder. Phase 6.3
+// of the ONB self-host port. Mirror of `dwarfStringTable` in
+// `internal/onb/dwarf.go`.
+//
+// The table is a NUL-terminated byte buffer + a `Map<String, Int>`
+// for offset lookup. The empty string lives at offset 0 by
+// convention so a `0` slot in any DIE attribute means "no name".
+
+pub struct OnbDwarfStringTable {
+    pub bytes: List<Int>,
+    pub offs: Map<String, Int>,
+}
+
+// onbNewDwarfStringTable seeds the table with the empty-string
+// invariant: byte buffer = `[0]`, lookup map = `{"": 0}`.
+pub fn onbNewDwarfStringTable() -> OnbDwarfStringTable {
+    let mut bytes: List<Int> = []
+    bytes.push(0)
+    let mut offs: Map<String, Int> = {:}
+    offs.insert("", 0)
+    OnbDwarfStringTable { bytes: bytes, offs: offs }
+}
+
+// onbDwarfStringTableAdd returns the byte offset of `s` inside the
+// `bytes` buffer, appending the string + a NUL terminator if it
+// isn't already there. Re-adding an existing string returns the
+// stable offset — callers can rely on offsets being insertion-
+// stable across the table's lifetime.
+//
+// The function takes the table by reference (Osty `Map<K,V>` and
+// `List<T>` are mutable) so the caller's table grows in place.
+pub fn onbDwarfStringTableAdd(table: OnbDwarfStringTable, s: String) -> Int {
+    match table.offs.get(s) {
+        Some(off) -> off,
+        None -> {
+            let off = table.bytes.len()
+            for b in s.bytes() {
+                table.bytes.push(b.toInt())
+            }
+            table.bytes.push(0)
+            table.offs.insert(s, off)
+            off
+        },
+    }
+}
+
+// onbDwarfStringTableLookupOrZero returns the offset for a lookup
+// without insertion. Mirrors the Go-side default-on-miss pattern
+// where a nil table or unknown string both produce offset 0.
+pub fn onbDwarfStringTableLookupOrZero(table: OnbDwarfStringTable, s: String) -> Int {
+    match table.offs.get(s) {
+        Some(off) -> off,
+        None -> 0,
+    }
+}
