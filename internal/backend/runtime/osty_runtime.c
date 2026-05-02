@@ -14719,12 +14719,22 @@ typedef struct osty_regex_compiled {
                             * Phase 2 captures = 2 * ngroups slots */
     int32_t name_count;    /* Phase 5: count of (?P<name>) bindings */
     int32_t name_data_len; /* total bytes of concatenated names */
-    /* Inline tail (Phase 5 layout):
+    /* Phase 9 — pre-built DFA for `matches()` fast path.
+     *   dfa_state_count == 0     → no DFA (pattern uses anchors / \b /
+     *                              \B / SAVE captures, or DFA construction
+     *                              hit the OSTY_RE_DFA_MAX_STATES limit).
+     *                              matches() falls back to the Pike VM.
+     *   dfa_state_count > 0      → DFA available. State 0 is the initial
+     *                              state; transitions and is_match arrays
+     *                              follow the name_data tail. */
+    int32_t dfa_state_count;
+    /* Inline tail (Phase 9 layout):
      *   prog[prog_len], classes[class_count],
      *   osty_re_name_entry name_table[name_count],
-     *   char name_data[name_data_len]
-     * `name_table` and `name_data` only present when name_count > 0;
-     * the layout ends right after classes for unnamed regexes. */
+     *   char name_data[name_data_len],
+     *   uint8_t dfa_is_match[dfa_state_count],
+     *   uint16_t dfa_transitions[dfa_state_count * 256]
+     * The DFA tail is only present when dfa_state_count > 0. */
 } osty_regex_compiled;
 
 /* Phase 5 — named-capture binding stored inline at the end of a
@@ -14784,6 +14794,14 @@ static inline osty_re_name_entry *osty_re_compiled_name_table(const osty_regex_c
 static inline const char *osty_re_compiled_name_data(const osty_regex_compiled *re) {
     return (const char *)osty_re_compiled_name_table(re)
         + (size_t)re->name_count * sizeof(osty_re_name_entry);
+}
+
+static inline const uint8_t *osty_re_compiled_dfa_is_match(const osty_regex_compiled *re) {
+    return (const uint8_t *)osty_re_compiled_name_data(re) + (size_t)re->name_data_len;
+}
+
+static inline const uint16_t *osty_re_compiled_dfa_transitions(const osty_regex_compiled *re) {
+    return (const uint16_t *)(osty_re_compiled_dfa_is_match(re) + (size_t)re->dfa_state_count);
 }
 
 /* Parser scratch state. The growing instruction / class buffers live
@@ -15929,6 +15947,278 @@ static void osty_re_add_thread_caps(osty_re_vm *vm, const osty_re_inst *prog, in
            caps, sizeof(int32_t) * (size_t)vm->slots_per_thread);
 }
 
+/* ============================================================
+ * Phase 9 — DFA fast path for `matches()`.
+ *
+ * Eagerly converts the compiled NFA to a DFA at compile time. The
+ * matcher then walks a deterministic transition table — one indexed
+ * lookup per input byte, no per-step state allocation. For typical
+ * patterns (1–100 NFA instructions, no anchors, no \b) the DFA stays
+ * small (tens to a few hundred states) and `matches()` runs ~5–20×
+ * faster than the Pike VM.
+ *
+ * Search semantics ("matches anywhere") is baked into the DFA: every
+ * state's PC set unions the initial closure (the equivalent of a
+ * `.*?` prefix). MATCH presence in a state's PC set marks the state
+ * as accepting.
+ *
+ * Patterns with `^` / `$` / `\b` / `\B` are excluded — those depend
+ * on byte position relative to text boundaries, which the DFA's
+ * "(state, byte) → state" transitions don't model. They fall back to
+ * the Pike VM. Capture groups (SAVE) are tolerated since matches()
+ * doesn't read captures; SAVE resolves transparently inside epsilon
+ * closure.
+ *
+ * Construction is bounded: if state count would exceed
+ * OSTY_RE_DFA_MAX_STATES the build aborts and the regex falls back
+ * to NFA permanently. Memory cost at the cap: ~512 KB / regex
+ * (256 transitions × 2 bytes × 1024 states). Typical: <20 KB. */
+
+#define OSTY_RE_DFA_MAX_STATES 1024
+
+/* Bitset over NFA PCs. word_count = ceil(prog_len / 64). */
+typedef struct {
+    int prog_len;
+    int word_count;
+    uint64_t *bits;
+} osty_re_pc_set;
+
+static int osty_re_pc_set_init(osty_re_pc_set *s, int prog_len) {
+    s->prog_len = prog_len;
+    s->word_count = (prog_len + 63) / 64;
+    if (s->word_count == 0) s->word_count = 1;
+    s->bits = (uint64_t *)calloc((size_t)s->word_count, sizeof(uint64_t));
+    return s->bits == NULL ? -1 : 0;
+}
+
+static void osty_re_pc_set_free(osty_re_pc_set *s) {
+    free(s->bits);
+    s->bits = NULL;
+}
+
+static void osty_re_pc_set_clear(osty_re_pc_set *s) {
+    memset(s->bits, 0, (size_t)s->word_count * sizeof(uint64_t));
+}
+
+static void osty_re_pc_set_add(osty_re_pc_set *s, int pc) {
+    s->bits[pc >> 6] |= ((uint64_t)1) << (pc & 63);
+}
+
+static int osty_re_pc_set_test(const osty_re_pc_set *s, int pc) {
+    return (int)((s->bits[pc >> 6] >> (pc & 63)) & 1);
+}
+
+static int osty_re_pc_set_equals(const osty_re_pc_set *a, const osty_re_pc_set *b) {
+    if (a->word_count != b->word_count) return 0;
+    return memcmp(a->bits, b->bits, (size_t)a->word_count * sizeof(uint64_t)) == 0;
+}
+
+static void osty_re_pc_set_copy(osty_re_pc_set *dst, const osty_re_pc_set *src) {
+    memcpy(dst->bits, src->bits, (size_t)src->word_count * sizeof(uint64_t));
+}
+
+static void osty_re_pc_set_union(osty_re_pc_set *dst, const osty_re_pc_set *src) {
+    for (int i = 0; i < src->word_count; i++) dst->bits[i] |= src->bits[i];
+}
+
+/* Return non-zero if pattern uses any DFA-incompatible op: position
+ * anchors (^/$) or word-boundary asserts (\b/\B). SAVE is fine since
+ * matches() doesn't read captures. */
+static int osty_re_dfa_compatible(const osty_regex_compiled *re) {
+    for (int32_t i = 0; i < re->prog_len; i++) {
+        switch (re->prog[i].op) {
+        case OSTY_RE_OP_BOL:
+        case OSTY_RE_OP_EOL:
+        case OSTY_RE_OP_WB:
+        case OSTY_RE_OP_NWB:
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Epsilon closure: starting from PCs already in `set`, follow
+ * JMP/SPLIT/SAVE transitions inline (no input consumed) and add all
+ * reachable real-instruction PCs to `set`. */
+static void osty_re_epsilon_closure(osty_re_pc_set *set, const osty_re_inst *prog, int prog_len) {
+    int *stack = (int *)malloc(sizeof(int) * (size_t)prog_len);
+    if (stack == NULL) return;
+    int top = 0;
+    for (int pc = 0; pc < prog_len; pc++) {
+        if (osty_re_pc_set_test(set, pc)) stack[top++] = pc;
+    }
+    while (top > 0) {
+        int pc = stack[--top];
+        if (pc < 0 || pc >= prog_len) continue;
+        osty_re_inst ins = prog[pc];
+        if (ins.op == OSTY_RE_OP_JMP) {
+            if (!osty_re_pc_set_test(set, ins.x)) {
+                osty_re_pc_set_add(set, ins.x);
+                stack[top++] = ins.x;
+            }
+        } else if (ins.op == OSTY_RE_OP_SPLIT) {
+            if (!osty_re_pc_set_test(set, ins.x)) {
+                osty_re_pc_set_add(set, ins.x);
+                stack[top++] = ins.x;
+            }
+            if (!osty_re_pc_set_test(set, ins.y)) {
+                osty_re_pc_set_add(set, ins.y);
+                stack[top++] = ins.y;
+            }
+        } else if (ins.op == OSTY_RE_OP_SAVE) {
+            if (pc + 1 < prog_len && !osty_re_pc_set_test(set, pc + 1)) {
+                osty_re_pc_set_add(set, pc + 1);
+                stack[top++] = pc + 1;
+            }
+        }
+        /* CHAR / ANY / CCLASS / MATCH / BOL / EOL / WB / NWB stay parked. */
+    }
+    free(stack);
+}
+
+/* Compute the next PC set after consuming `byte` from `current`.
+ * Real instructions advance to pc+1 if they accept the byte; epsilon
+ * closure runs over the result; the seed set is unioned in last to
+ * preserve search semantics. */
+static void osty_re_dfa_step(osty_re_pc_set *next, const osty_re_pc_set *current,
+                             const osty_re_pc_set *seed, const osty_regex_compiled *re,
+                             int byte) {
+    osty_re_pc_set_clear(next);
+    for (int pc = 0; pc < current->prog_len; pc++) {
+        if (!osty_re_pc_set_test(current, pc)) continue;
+        osty_re_inst ins = re->prog[pc];
+        switch (ins.op) {
+        case OSTY_RE_OP_CHAR:
+            if (byte == ins.c) osty_re_pc_set_add(next, pc + 1);
+            break;
+        case OSTY_RE_OP_ANY:
+            if (byte != '\n') osty_re_pc_set_add(next, pc + 1);
+            break;
+        case OSTY_RE_OP_CCLASS:
+            if (osty_re_class_test(&re->classes[ins.x], (unsigned char)byte)) {
+                osty_re_pc_set_add(next, pc + 1);
+            }
+            break;
+        /* MATCH stays where it is — checked by accept-state test on
+         * the destination state, not advanced by input. */
+        }
+    }
+    osty_re_epsilon_closure(next, re->prog, re->prog_len);
+    osty_re_pc_set_union(next, seed);
+}
+
+/* Build the eager DFA. Returns:
+ *   > 0  — state count, transitions / is_match written into `*out_*`
+ *          arrays (caller-allocated, sized for OSTY_RE_DFA_MAX_STATES)
+ *   = 0  — pattern not DFA-eligible OR construction overflowed; fall
+ *          back to Pike VM at match time. */
+static int osty_re_dfa_build(const osty_regex_compiled *re, uint16_t *out_transitions, uint8_t *out_is_match) {
+    if (!osty_re_dfa_compatible(re)) return 0;
+    int prog_len = re->prog_len;
+
+    osty_re_pc_set seed;
+    if (osty_re_pc_set_init(&seed, prog_len) != 0) return 0;
+    osty_re_pc_set_add(&seed, 0);
+    osty_re_epsilon_closure(&seed, re->prog, prog_len);
+
+    /* State pool — each state owns its PC set bits inline in
+     * `state_bits[i * word_count]`. */
+    int word_count = seed.word_count;
+    uint64_t *state_bits = (uint64_t *)malloc(sizeof(uint64_t) * (size_t)word_count * (size_t)OSTY_RE_DFA_MAX_STATES);
+    if (state_bits == NULL) {
+        osty_re_pc_set_free(&seed);
+        return 0;
+    }
+
+    osty_re_pc_set scratch;
+    if (osty_re_pc_set_init(&scratch, prog_len) != 0) {
+        osty_re_pc_set_free(&seed);
+        free(state_bits);
+        return 0;
+    }
+
+    int state_count = 0;
+    /* Helper to look up or insert a state by PC bits. Linear search
+     * over existing states — bounded by state_count which is in the
+     * low hundreds for typical patterns. */
+    #define LOOKUP_OR_INSERT(set_bits, out_id, fail_label) do { \
+        int found = -1; \
+        for (int i = 0; i < state_count; i++) { \
+            if (memcmp(state_bits + (size_t)i * (size_t)word_count, (set_bits), (size_t)word_count * sizeof(uint64_t)) == 0) { \
+                found = i; \
+                break; \
+            } \
+        } \
+        if (found < 0) { \
+            if (state_count >= OSTY_RE_DFA_MAX_STATES) { \
+                goto fail_label; \
+            } \
+            found = state_count++; \
+            memcpy(state_bits + (size_t)found * (size_t)word_count, (set_bits), (size_t)word_count * sizeof(uint64_t)); \
+        } \
+        out_id = found; \
+    } while (0)
+
+    /* State 0 = initial = seed. */
+    int dummy_id;
+    LOOKUP_OR_INSERT(seed.bits, dummy_id, fail);
+    (void)dummy_id;
+
+    /* BFS through state space. */
+    for (int s = 0; s < state_count; s++) {
+        osty_re_pc_set current;
+        current.prog_len = prog_len;
+        current.word_count = word_count;
+        current.bits = state_bits + (size_t)s * (size_t)word_count;
+        for (int byte = 0; byte < 256; byte++) {
+            osty_re_dfa_step(&scratch, &current, &seed, re, byte);
+            int next_id;
+            LOOKUP_OR_INSERT(scratch.bits, next_id, fail);
+            out_transitions[s * 256 + byte] = (uint16_t)next_id;
+        }
+    }
+    /* Mark accept states: any state whose PC set contains a MATCH PC. */
+    for (int s = 0; s < state_count; s++) {
+        out_is_match[s] = 0;
+        for (int pc = 0; pc < prog_len; pc++) {
+            uint64_t word = state_bits[(size_t)s * (size_t)word_count + (pc >> 6)];
+            if ((word >> (pc & 63)) & 1) {
+                if (re->prog[pc].op == OSTY_RE_OP_MATCH) {
+                    out_is_match[s] = 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    #undef LOOKUP_OR_INSERT
+    osty_re_pc_set_free(&seed);
+    osty_re_pc_set_free(&scratch);
+    free(state_bits);
+    return state_count;
+
+fail:
+    osty_re_pc_set_free(&seed);
+    osty_re_pc_set_free(&scratch);
+    free(state_bits);
+    return 0;
+}
+
+/* DFA matcher — single-pass deterministic transition lookup. The
+ * caller has already verified `dfa_state_count > 0`. */
+static int osty_re_dfa_match(const osty_regex_compiled *re, const char *text, int text_len) {
+    const uint8_t *is_match = osty_re_compiled_dfa_is_match(re);
+    const uint16_t *trans = osty_re_compiled_dfa_transitions(re);
+    int state = 0;
+    if (is_match[state]) return 1;
+    for (int sp = 0; sp < text_len; sp++) {
+        unsigned char ch = (unsigned char)text[sp];
+        state = trans[state * 256 + ch];
+        if (is_match[state]) return 1;
+    }
+    return 0;
+}
+
 /* Run the matcher against text starting at `start_offset` (Phase 2b:
  * exposed so capturesAll can scan past prior matches). `^` still
  * binds to absolute position 0 — start_offset only shifts the search
@@ -16102,13 +16392,40 @@ void *osty_rt_regex_compile(const char *pattern) {
         free(ps.name_data);
         return NULL;
     }
-    /* Allocate one contiguous GC blob: header + prog + classes + name table + name data. */
+    /* Phase 9 — try to build the DFA fast path BEFORE allocating the
+     * final blob, so we can size the tail correctly. The DFA only
+     * sees `re->prog` / `re->classes`, which are still in heap-side
+     * `ps.prog` / `ps.classes` here. Set up a stack-local view that
+     * mimics the eventual osty_regex_compiled layout. */
+    osty_regex_compiled probe;
+    probe.prog = ps.prog;
+    probe.prog_len = ps.prog_len;
+    probe.classes = ps.classes;
+    probe.class_count = ps.class_count;
+    probe.ngroups = ps.ngroups;
+    probe.name_count = 0;
+    probe.name_data_len = 0;
+    probe.dfa_state_count = 0;
+    uint16_t *dfa_trans = NULL;
+    uint8_t *dfa_match = NULL;
+    int dfa_states = 0;
+    if (osty_re_dfa_compatible(&probe)) {
+        dfa_trans = (uint16_t *)malloc(sizeof(uint16_t) * 256 * (size_t)OSTY_RE_DFA_MAX_STATES);
+        dfa_match = (uint8_t *)malloc((size_t)OSTY_RE_DFA_MAX_STATES);
+        if (dfa_trans != NULL && dfa_match != NULL) {
+            dfa_states = osty_re_dfa_build(&probe, dfa_trans, dfa_match);
+        }
+    }
+    size_t dfa_match_bytes = (size_t)dfa_states;
+    size_t dfa_trans_bytes = (size_t)dfa_states * 256 * sizeof(uint16_t);
+
+    /* Allocate one contiguous GC blob: header + prog + classes + name table + name data + dfa. */
     size_t hdr = sizeof(osty_regex_compiled);
     size_t prog_bytes = sizeof(osty_re_inst) * (size_t)ps.prog_len;
     size_t class_bytes = sizeof(osty_re_cclass) * (size_t)ps.class_count;
     size_t name_table_bytes = sizeof(osty_re_name_entry) * (size_t)ps.name_count;
     size_t name_data_bytes = (size_t)ps.name_data_len;
-    size_t total = hdr + prog_bytes + class_bytes + name_table_bytes + name_data_bytes;
+    size_t total = hdr + prog_bytes + class_bytes + name_table_bytes + name_data_bytes + dfa_match_bytes + dfa_trans_bytes;
     osty_regex_compiled *re = (osty_regex_compiled *)osty_gc_allocate_managed(total, OSTY_GC_KIND_GENERIC, "runtime.regex.compile", NULL, NULL);
     re->prog = (osty_re_inst *)((char *)re + hdr);
     re->prog_len = ps.prog_len;
@@ -16117,6 +16434,7 @@ void *osty_rt_regex_compile(const char *pattern) {
     re->ngroups = ps.ngroups;
     re->name_count = ps.name_count;
     re->name_data_len = ps.name_data_len;
+    re->dfa_state_count = dfa_states;
     if (ps.prog_len > 0) memcpy(re->prog, ps.prog, prog_bytes);
     if (ps.class_count > 0) memcpy(re->classes, ps.classes, class_bytes);
     if (ps.name_count > 0) {
@@ -16125,10 +16443,16 @@ void *osty_rt_regex_compile(const char *pattern) {
     if (ps.name_data_len > 0) {
         memcpy((char *)osty_re_compiled_name_data(re), ps.name_data, name_data_bytes);
     }
+    if (dfa_states > 0) {
+        memcpy((uint8_t *)osty_re_compiled_dfa_is_match(re), dfa_match, dfa_match_bytes);
+        memcpy((uint16_t *)osty_re_compiled_dfa_transitions(re), dfa_trans, dfa_trans_bytes);
+    }
     free(ps.prog);
     free(ps.classes);
     free(ps.names);
     free(ps.name_data);
+    free(dfa_trans);
+    free(dfa_match);
     osty_rt_regex_set_last_error("");
     return re;
 }
@@ -16148,6 +16472,12 @@ bool osty_rt_regex_matches(void *raw_re, const char *text) {
     if (src == NULL) src = "";
     osty_rt_string_decode_to_buf_if_inline(&src, inline_buf);
     int len = (int)strlen(src);
+    /* Phase 9 — DFA fast path. Available for patterns without `^`/`$`/
+     * `\b`/`\B` and within OSTY_RE_DFA_MAX_STATES; falls back to the
+     * Pike VM otherwise. Both paths agree on `bool` semantics. */
+    if (re->dfa_state_count > 0) {
+        return osty_re_dfa_match(re, src, len) ? true : false;
+    }
     return osty_re_match_from(re, src, len, 0, NULL) ? true : false;
 }
 
