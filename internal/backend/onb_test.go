@@ -162,8 +162,12 @@ func TestONBBackendEmitBinaryInvokesHostLinker(t *testing.T) {
 	if len(linker.links) != 1 {
 		t.Fatalf("link calls = %d, want 1", len(linker.links))
 	}
-	if got := linker.links[0].objectPaths; len(got) != 1 || got[0] != result.Artifacts.Object {
-		t.Fatalf("link object paths = %v, want [%s]", got, result.Artifacts.Object)
+	got := linker.links[0].objectPaths
+	if len(got) != 2 || got[0] != result.Artifacts.Object {
+		t.Fatalf("link object paths = %v, want [%s, <runtime>]", got, result.Artifacts.Object)
+	}
+	if !strings.HasSuffix(got[1], "osty_runtime.o") {
+		t.Fatalf("second link object = %q, want runtime .o (osty_runtime.o suffix)", got[1])
 	}
 }
 
@@ -287,6 +291,88 @@ func TestONBBackendBinaryRunsArithOnDarwinARM64(t *testing.T) {
     println(a - b * 2)
 }`,
 			want: "4\n",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(onb.EnvStrict, "1")
+			req := newBackendRequest(t, EmitBinary, tc.src)
+			req.Layout.Target = "aarch64-apple-darwin"
+			result, err := ONBBackend{}.Emit(context.Background(), req)
+			if err != nil {
+				t.Fatalf("ONBBackend.Emit returned error: %v", err)
+			}
+			if result == nil || result.Artifacts.Binary == "" {
+				t.Fatalf("missing binary artifact: %+v", result)
+			}
+			out, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+			if err != nil {
+				t.Fatalf("binary returned error: %v\n%s", err, out)
+			}
+			if string(out) != tc.want {
+				t.Fatalf("binary output = %q, want %q", out, tc.want)
+			}
+		})
+	}
+}
+
+// TestONBBackendBinaryRunsStringAndListOnDarwinARM64 exercises Phase A2's
+// runtime-call slice: String concatenation and `List<Int>` push/len. These
+// shapes lower to `bl _osty_rt_strings_Concat`, `bl _osty_rt_list_new`,
+// `bl _osty_rt_list_push_i64`, `bl _osty_rt_list_len`, all of which need
+// the bundled runtime object on the linker command line.
+func TestONBBackendBinaryRunsStringAndListOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("ONB string/list executable smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{
+			name: "string_concat_with_local",
+			src: `fn main() {
+    let name = "world"
+    println("hello, " + name)
+}`,
+			want: "hello, world\n",
+		},
+		{
+			name: "string_concat_via_helper",
+			src: `fn greet(name: String) -> String {
+    "hello, " + name
+}
+fn main() {
+    println(greet("alice"))
+}`,
+			want: "hello, alice\n",
+		},
+		{
+			name: "list_push_len",
+			src: `fn main() {
+    let mut v: List<Int> = []
+    v.push(10)
+    v.push(20)
+    v.push(30)
+    println(v.len())
+}`,
+			want: "3\n",
+		},
+		{
+			name: "list_built_in_loop",
+			src: `fn main() {
+    let mut v: List<Int> = []
+    for i in 0..5 {
+        v.push(i)
+    }
+    println(v.len())
+}`,
+			want: "5\n",
 		},
 	}
 	for _, tc := range cases {
@@ -617,9 +703,9 @@ func TestONBBackendFallsBackToLLVMOnUnsupportedShape(t *testing.T) {
 	onbDevTestEnv(t, false, false)
 
 	req := newBackendRequest(t, EmitObject, `fn main() {
-    let mut v: List<Int> = []
-    v.push(1)
-    println(v.len())
+    let mut m: Map<String, Int> = {:}
+    m.insert("a", 1)
+    println(m.len())
 }`)
 	req.Layout.Target = "aarch64-apple-darwin"
 	fallbackArtifacts := req.Artifacts(NameLLVM)
@@ -659,9 +745,9 @@ func TestONBBackendStrictModeSurfacesShapeError(t *testing.T) {
 	onbDevTestEnv(t, true, false)
 
 	req := newBackendRequest(t, EmitObject, `fn main() {
-    let mut v: List<Int> = []
-    v.push(1)
-    println(v.len())
+    let mut m: Map<String, Int> = {:}
+    m.insert("a", 1)
+    println(m.len())
 }`)
 	req.Layout.Target = "aarch64-apple-darwin"
 	fake := &recordingBackend{name: NameLLVM}
@@ -681,9 +767,9 @@ func TestONBBackendASMEmitDoesNotFallback(t *testing.T) {
 	onbDevTestEnv(t, false, false)
 
 	req := newBackendRequest(t, EmitASM, `fn main() {
-    let mut v: List<Int> = []
-    v.push(1)
-    println(v.len())
+    let mut m: Map<String, Int> = {:}
+    m.insert("a", 1)
+    println(m.len())
 }`)
 	req.Layout.Target = "aarch64-apple-darwin"
 	fake := &recordingBackend{name: NameLLVM}
@@ -722,9 +808,9 @@ func TestONBBackendTimingLogsFallback(t *testing.T) {
 	onbDevTestEnv(t, false, true)
 
 	req := newBackendRequest(t, EmitObject, `fn main() {
-    let mut v: List<Int> = []
-    v.push(1)
-    println(v.len())
+    let mut m: Map<String, Int> = {:}
+    m.insert("a", 1)
+    println(m.len())
 }`)
 	req.Layout.Target = "aarch64-apple-darwin"
 	fake := &recordingBackend{

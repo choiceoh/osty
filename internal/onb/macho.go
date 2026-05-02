@@ -38,6 +38,16 @@ const (
 	machoTextAlignPower         uint32 = 2
 	machoCStringSectionNumber   uint8  = 2
 	machoTextSectionNumber      uint8  = 1
+
+	// Mach-O segment / section names. Centralised so future renames
+	// (e.g., `__debug_info` when DWARF B.1 lands) don't accidentally
+	// drift between the segment LC and its section header.
+	machoSegnameText     = "__TEXT"
+	machoSegnameDWARF    = "__DWARF"
+	machoSegnameLinkedit = "__LINKEDIT"
+	machoSectnameText    = "__text"
+	machoSectnameCString = "__cstring"
+	machoSectnameLine    = "__debug_line"
 )
 
 func emitMachOObject(program *Program) ([]byte, error) {
@@ -90,8 +100,8 @@ func emitMinimalMachOObject(program *Program) ([]byte, error) {
 	writeU32(&b, 1)
 	writeU32(&b, 0)
 
-	writeName16(&b, "__text")
-	writeName16(&b, "__TEXT")
+	writeName16(&b, machoSectnameText)
+	writeName16(&b, machoSegnameText)
 	writeU64(&b, 0)
 	writeU64(&b, uint64(len(code)))
 	writeU32(&b, textOffset)
@@ -232,7 +242,6 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 	strtabEnd := stroff + uint32(len(strtab.data))
 	linkeditOffset := relocOffset
 	linkeditSize := strtabEnd - relocOffset
-	_ = dwarfSegmentSections // referenced below when writing the LC
 
 	var b bytes.Buffer
 	writeU32(&b, machoMagic64)
@@ -262,8 +271,8 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 	writeU32(&b, 2)
 	writeU32(&b, 0)
 
-	writeName16(&b, "__text")
-	writeName16(&b, "__TEXT")
+	writeName16(&b, machoSectnameText)
+	writeName16(&b, machoSegnameText)
 	writeU64(&b, 0)
 	writeU64(&b, uint64(len(enc.code)))
 	writeU32(&b, textOffset)
@@ -275,8 +284,8 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 	writeU32(&b, 0)
 	writeU32(&b, 0)
 
-	writeName16(&b, "__cstring")
-	writeName16(&b, "__TEXT")
+	writeName16(&b, machoSectnameCString)
+	writeName16(&b, machoSegnameText)
 	writeU64(&b, uint64(len(enc.code)))
 	writeU64(&b, uint64(len(cstringData)))
 	writeU32(&b, cstringOffset)
@@ -297,7 +306,7 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 		// the arithmetic.
 		writeU32(&b, machoLCSegment64)
 		writeU32(&b, dwarfSegmentSize)
-		writeName16(&b, "__DWARF")
+		writeName16(&b, machoSegnameDWARF)
 		writeU64(&b, dwarfVmaddr)
 		writeU64(&b, dwarfVmsize)
 		writeU64(&b, uint64(debugLineOffset))
@@ -307,8 +316,8 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 		writeU32(&b, dwarfSegmentSections)
 		writeU32(&b, 0) // segment flags
 
-		writeName16(&b, "__debug_line")
-		writeName16(&b, "__DWARF")
+		writeName16(&b, machoSectnameLine)
+		writeName16(&b, machoSegnameDWARF)
 		writeU64(&b, dwarfVmaddr)
 		writeU64(&b, uint64(len(debugLine)))
 		writeU32(&b, debugLineOffset)
@@ -330,7 +339,7 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 	}
 	writeU32(&b, machoLCSegment64)
 	writeU32(&b, machoSegment64Size)
-	writeName16(&b, "__LINKEDIT")
+	writeName16(&b, machoSegnameLinkedit)
 	writeU64(&b, linkeditVmaddr)
 	writeU64(&b, uint64(linkeditSize))
 	writeU64(&b, uint64(linkeditOffset))
@@ -387,14 +396,13 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 		writeMachONlist64(&b, symStrx[symIdx], machoNSect, machoCStringSectionNumber, 0, cstringAddrs[cstr.Label])
 		symIdx++
 	}
-	for i, fn := range program.Functions {
+	for i := range program.Functions {
 		var fnOffset uint64
 		if i < len(enc.fnOffsets) {
 			fnOffset = enc.fnOffsets[i]
 		}
 		writeMachONlist64(&b, symStrx[symIdx], machoNExt|machoNSect, machoTextSectionNumber, 0, fnOffset)
 		symIdx++
-		_ = fn
 	}
 	for range enc.externalSymbols {
 		writeMachONlist64(&b, symStrx[symIdx], machoNExt, 0, 0, 0)
@@ -571,18 +579,22 @@ func encodeMachOFunction(enc *machoTextEncoding, fn Function, cstringIndex, loca
 		for _, instr := range block.Instrs {
 			switch i := instr.(type) {
 			case *LoadCStringAddress:
-				if i.Dst != RegX0 {
-					return fmt.Errorf("%w: Mach-O encoder only supports cstring loads into x0", ErrNotImplemented)
+				dstReg, ok := xRegisterNumber(i.Dst)
+				if !ok {
+					return fmt.Errorf("%w: Mach-O cstring load dst %s", ErrNotImplemented, i.Dst)
 				}
 				sym, ok := cstringIndex[i.Label]
 				if !ok {
 					return fmt.Errorf("onb: unknown Mach-O string literal label %q", i.Label)
 				}
+				// adrp Xd, label@PAGE — 0x90000000 | (immlo<<29) | (immhi<<5) | Xd
+				// add  Xd, Xd, label@PAGEOFF — 0x91000000 | (imm12<<10) | (Xn<<5) | Xd
+				// Both relocations carry the immediate; we only fill in Rd here.
 				addr := uint32(len(enc.code))
-				enc.code = appendU32LE(enc.code, 0x90000000)
+				enc.code = appendU32LE(enc.code, 0x90000000|dstReg)
 				enc.relocs = append(enc.relocs, machoReloc{address: addr, symbolnum: sym, pcrel: true, length: 2, extern: true, typ: machoARM64RelocPage21})
 				addr = uint32(len(enc.code))
-				enc.code = appendU32LE(enc.code, 0x91000000)
+				enc.code = appendU32LE(enc.code, 0x91000000|(dstReg<<5)|dstReg)
 				enc.relocs = append(enc.relocs, machoReloc{address: addr, symbolnum: sym, length: 2, extern: true, typ: machoARM64RelocPageOff12})
 			case *BranchLink:
 				if i.Symbol == "" {
