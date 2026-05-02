@@ -488,6 +488,31 @@ func (r *Registry) LookupFnDecl(module, name string) *ast.FnDecl {
 	return nil
 }
 
+// LookupLetDecl returns the top-level `pub let NAME = ...` declaration
+// inside the stdlib module, or nil if the module or let is missing.
+// Mirrors LookupFnDecl. The body-injection pipeline uses this to pull
+// in stdlib globals that injected fn bodies reference (e.g. std.strings'
+// `graphemeBreakCR` Int constant referenced by `graphemeBreakProperty`).
+func (r *Registry) LookupLetDecl(module, name string) *ast.LetDecl {
+	if r == nil || module == "" || name == "" {
+		return nil
+	}
+	mod, ok := r.Modules[module]
+	if !ok || mod == nil || mod.File == nil {
+		return nil
+	}
+	for _, decl := range mod.File.Decls {
+		ld, ok := decl.(*ast.LetDecl)
+		if !ok || ld == nil {
+			continue
+		}
+		if ld.Name == name {
+			return ld
+		}
+	}
+	return nil
+}
+
 // LookupMethodDecl returns the method declaration named methodName on
 // the type typeName inside the stdlib module, or nil if any of the
 // module / type / method is missing.

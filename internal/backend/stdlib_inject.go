@@ -402,6 +402,7 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 			out = append(out, lowered)
 			rewriteBareIdentCalls(next.fn, callName, lowered.Name)
 			queue = append(queue, loweredFromModule{module: next.module, fn: lowered})
+			loweredFreeFns = append(loweredFreeFns, loweredFromModule{module: next.module, fn: lowered})
 		}
 		for _, ref := range sortedQualifiedStdlibCallRefs(next.fn) {
 			calleeModule := stdlibModuleNameFromQualifier(ref.Qualifier)
@@ -434,6 +435,7 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 			out = append(out, lowered)
 			rewriteQualifiedStdlibCalls(next.fn, ref.Qualifier, ref.Name, lowered.Name)
 			queue = append(queue, loweredFromModule{module: calleeModule, fn: lowered})
+			loweredFreeFns = append(loweredFreeFns, loweredFromModule{module: calleeModule, fn: lowered})
 		}
 		for _, m := range reachableStdlibMethodsInFn(next.fn, reg) {
 			if m.Fn == nil || m.Fn.Body == nil {
@@ -457,10 +459,83 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 			out = append(out, freeFn)
 			rewriteStdlibMethodCallsitesInFn(next.fn, []ReachableStdlibMethod{m})
 			queue = append(queue, loweredFromModule{module: m.Module, fn: freeFn})
+			loweredFreeFns = append(loweredFreeFns, loweredFromModule{module: m.Module, fn: freeFn})
+		}
+	}
+	// Globals closure: every injected fn body that reads a stdlib
+	// top-level `let` (e.g. std.strings' `graphemeBreakCR` Int
+	// constant referenced by `graphemeBreakProperty`) needs the
+	// matching definition in the user module — otherwise the LLVM
+	// emitter emits an unresolved `@<name>` reference and clang fails
+	// at link time. The pass mirrors the fn closure: walk each
+	// injected body, find IdentGlobal references whose Name maps to a
+	// stdlib `pub let`, lower the let, mangle to
+	// `osty_std_<module>__<name>`, append, and rewrite the body's
+	// reference. Globals can transitively reference other globals
+	// through their initialiser, so the discovery loops to a fixed
+	// point.
+	type letKey struct{ module, name string }
+	injectedLet := map[letKey]bool{}
+	letQueue := append([]loweredFromModule(nil), loweredFreeFns...)
+	for len(letQueue) > 0 {
+		next := letQueue[0]
+		letQueue = letQueue[1:]
+		for _, name := range sortedBareIdentGlobalReadNames(next.fn) {
+			letDecl := reg.LookupLetDecl(next.module, name)
+			if letDecl == nil {
+				continue
+			}
+			k := letKey{module: next.module, name: name}
+			mangled := StdlibSymbol(next.module, name)
+			if injectedLet[k] {
+				rewriteBareIdentGlobalReads(next.fn, name, mangled)
+				continue
+			}
+			injectedLet[k] = true
+			res := stdlibResolveResult(reg, next.module)
+			chk := stdlibCheckResult(reg, next.module)
+			lowered, ldIssues := ir.LowerLetDecl(mod.Package, letDecl, res, chk)
+			issues = append(issues, ldIssues...)
+			if lowered == nil {
+				continue
+			}
+			lowered.Name = mangled
+			out = append(out, lowered)
+			rewriteBareIdentGlobalReads(next.fn, name, mangled)
+			// Globals' initialisers can reference other lets in the
+			// same module — wrap the LetDecl in a synthetic FnDecl
+			// shape just enough to drive the same scanner.
+			if lowered.Value != nil {
+				letQueue = append(letQueue, loweredFromModule{
+					module: next.module,
+					fn:     letInitAsFnShim(lowered),
+				})
+			}
 		}
 	}
 	qualifyStdlibCallsiteTypes(mod, out)
 	return out, issues
+}
+
+// letInitAsFnShim wraps a LetDecl's initialiser in a synthetic FnDecl
+// so the existing fn-shaped scanners (sortedBareIdentGlobalReadNames /
+// rewriteBareIdentGlobalReads) can walk it. The wrapper isn't appended
+// to the user module — it only exists so the discovery loop can
+// transitively scan a global's initialiser the same way it scans
+// injected fn bodies.
+func letInitAsFnShim(ld *ir.LetDecl) *ir.FnDecl {
+	if ld == nil || ld.Value == nil {
+		return nil
+	}
+	return &ir.FnDecl{
+		Name: ld.Name,
+		Body: &ir.Block{
+			Stmts:  []ir.Stmt{&ir.ExprStmt{X: ld.Value}},
+			Result: ld.Value,
+			SpanV:  ld.SpanV,
+		},
+		SpanV: ld.SpanV,
+	}
 }
 
 func bodyfulStdlibFns(in []ReachableStdlibFn) []ReachableStdlibFn {
@@ -832,6 +907,56 @@ func rewriteBareIdentCalls(fn *ir.FnDecl, oldName, newName string) {
 		}
 		ident.Name = newName
 		ident.Kind = ir.IdentFn
+		return true
+	}), fn.Body)
+}
+
+// sortedBareIdentGlobalReadNames returns the set of distinct names
+// referenced by `Ident{Kind: IdentGlobal}` reads inside a function
+// body, in deterministic order. Idents in call-callee position are
+// excluded — those are the fn-closure path. The result drives the
+// globals-closure step: each name is checked against
+// `Registry.LookupLetDecl` to confirm it's a stdlib top-level let
+// before injection.
+func sortedBareIdentGlobalReadNames(fn *ir.FnDecl) []string {
+	if fn == nil || fn.Body == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		ident, ok := n.(*ir.Ident)
+		if !ok || ident == nil || ident.Kind != ir.IdentGlobal || ident.Name == "" {
+			return true
+		}
+		seen[ident.Name] = struct{}{}
+		return true
+	}), fn.Body)
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for name := range seen {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// rewriteBareIdentGlobalReads renames every `Ident{Kind: IdentGlobal,
+// Name: oldName}` inside fn.Body to newName. Mirrors
+// `rewriteBareIdentCalls` but for value reads instead of call
+// callees. The Kind stays IdentGlobal so the MIR lowerer keeps
+// emitting GlobalRefRV for the rewritten name.
+func rewriteBareIdentGlobalReads(fn *ir.FnDecl, oldName, newName string) {
+	if fn == nil || fn.Body == nil || oldName == "" || newName == "" || oldName == newName {
+		return
+	}
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		ident, ok := n.(*ir.Ident)
+		if !ok || ident == nil || ident.Kind != ir.IdentGlobal || ident.Name != oldName {
+			return true
+		}
+		ident.Name = newName
 		return true
 	}), fn.Body)
 }
