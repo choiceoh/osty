@@ -990,6 +990,40 @@ func encodeMachOFunction(enc *machoTextEncoding, fn Function, cstringIndex, loca
 					return fmt.Errorf("onb: stack-address add: %w", err)
 				}
 				enc.code = appendU32LE(enc.code, word)
+			case *LoadSymbolAddress:
+				dstReg, ok := xRegisterNumber(i.Dst)
+				if !ok {
+					return fmt.Errorf("%w: Mach-O symbol-address dst %s", ErrNotImplemented, i.Dst)
+				}
+				if i.Symbol == "" {
+					return fmt.Errorf("onb: Mach-O symbol-address without symbol")
+				}
+				sym, isLocal := localFnIndex[i.Symbol]
+				if !isLocal {
+					ext, ok := externalIndex[i.Symbol]
+					if !ok {
+						ext = uint32(len(cstringIndex) + 1 + totalFns + len(enc.externalSymbols))
+						externalIndex[i.Symbol] = ext
+						enc.externalSymbols = append(enc.externalSymbols, i.Symbol)
+					}
+					sym = ext
+				}
+				// adrp Xd, sym@PAGE + add Xd, Xd, sym@PAGEOFF — same
+				// reloc shape the cstring path uses, just pointed at
+				// a function/data symbol instead.
+				addr := uint32(len(enc.code))
+				enc.code = appendU32LE(enc.code, 0x90000000|dstReg)
+				enc.relocs = append(enc.relocs, machoReloc{address: addr, symbolnum: sym, pcrel: true, length: 2, extern: true, typ: machoARM64RelocPage21})
+				addr = uint32(len(enc.code))
+				enc.code = appendU32LE(enc.code, 0x91000000|(dstReg<<5)|dstReg)
+				enc.relocs = append(enc.relocs, machoReloc{address: addr, symbolnum: sym, length: 2, extern: true, typ: machoARM64RelocPageOff12})
+			case *BranchLinkReg:
+				n, ok := xRegisterNumber(i.Reg)
+				if !ok {
+					return fmt.Errorf("%w: Mach-O blr reg %s", ErrNotImplemented, i.Reg)
+				}
+				// blr Xn — 0xd63f0000 | (n << 5)
+				enc.code = appendU32LE(enc.code, 0xd63f0000|(n<<5))
 			case *LoadFromReg:
 				word, err := encodeLoadStoreReg(0xf9400000, i.Dst, i.Src, i.Offset)
 				if err != nil {

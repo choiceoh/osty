@@ -458,6 +458,8 @@ func instructionByteSize(instr Instr) uint64 {
 		return uint64(movImm64WordCount(i.Imm)) * 4
 	case *LoadCStringAddress:
 		return 8 // adrp + add (Mach-O variant) / adrp + add (ELF)
+	case *LoadSymbolAddress:
+		return 8 // adrp + add — same shape as LoadCStringAddress
 	default:
 		return 4
 	}

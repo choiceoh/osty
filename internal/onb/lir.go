@@ -322,6 +322,33 @@ type BranchLink struct {
 
 func (*BranchLink) instrNode() {}
 
+// BranchLinkReg is the indirect call form: `blr Xn`. Reads the target
+// PC from the named register, pushes the return address into x30, and
+// branches. The dev backend uses this for closure dispatch — the env
+// pointer's first slot holds the lifted-fn address; we load it into a
+// scratch register and `blr` into it. The closure ABI also requires
+// the env pointer itself to be in x0 before the branch (per the Phase
+// A4 fn-value runtime contract); the lowerer stages that explicitly.
+type BranchLinkReg struct {
+	Reg Reg
+}
+
+func (*BranchLinkReg) instrNode() {}
+
+// LoadSymbolAddress materialises the runtime address of a symbol
+// (function or data) into an x-register via the platform's
+// PC-relative addressing form (`adrp` + `add` on Mach-O/ELF). Used
+// to land the lifted fn pointer at offset 0 of a freshly-allocated
+// closure env. Distinct from `LoadCStringAddress` because that one
+// is hard-wired to `__cstring` entries; symbols here can be local
+// fns or runtime exports.
+type LoadSymbolAddress struct {
+	Dst    Reg
+	Symbol string
+}
+
+func (*LoadSymbolAddress) instrNode() {}
+
 // Ret returns to the platform entry trampoline. For `main`, the return code is
 // already in w0.
 type Ret struct{}

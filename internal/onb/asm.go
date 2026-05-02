@@ -144,6 +144,11 @@ func renderInstrAssembly(b *strings.Builder, target Target, fn Function, instr I
 		fmt.Fprintf(b, "\tldr %s, [%s, #%d]\n", i.Dst, i.Src, i.Offset)
 	case *StoreToReg:
 		fmt.Fprintf(b, "\tstr %s, [%s, #%d]\n", i.Src, i.Base, i.Offset)
+	case *LoadSymbolAddress:
+		fmt.Fprintf(b, "\tadrp %s, %s@PAGE\n", i.Dst, asmSymbolName(target, i.Symbol))
+		fmt.Fprintf(b, "\tadd %s, %s, %s@PAGEOFF\n", i.Dst, i.Dst, asmSymbolName(target, i.Symbol))
+	case *BranchLinkReg:
+		fmt.Fprintf(b, "\tblr %s\n", i.Reg)
 	case *LoadFloat64Stack:
 		fmt.Fprintf(b, "\tldr %s, [sp, #%d]\n", i.Dst, i.Offset)
 	case *StoreFloat64Stack:
