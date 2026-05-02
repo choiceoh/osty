@@ -37,6 +37,64 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 21 (stdlib intrinsics + builtin pointer ABI, 2026-05-02)** —
+> 작은 lift, 큰 unlock. Builtin generic 컨테이너 (List/Map/Set/Channel
+> /Bytes/Handle)가 ABI에서 1-reg 포인터로 분류되도록 확장 + String /
+> List / Option의 `.len()` / `.isEmpty()` / `.isSome()` / `.isNone()`
+> 인트린식 lowering 추가. 결과적으로 **제네릭 함수가 fallback 없이
+> 통과** — 모노모피제이션은 이미 front end가 처리하고 있어서 ONB는
+> 그저 `List<T>` 인자를 받아주기만 하면 됨.
+>
+> 작동:
+>
+> ```osty
+> fn first<T>(xs: List<T>) -> T? {
+>     if xs.len() == 0 { None } else { Some(xs[0]) }
+> }
+> fn main() {
+>     let mut xs: List<Int> = []
+>     xs.push(42)
+>     let r = first(xs)               // List<Int>가 x0로 통과
+>     match r {
+>         Some(x) -> println(x),       // 42
+>         None -> println(-1),
+>     }
+> }
+> ```
+>
+> 추가:
+> - `isBuiltinPointerType(t)` — `NamedType{Builtin: true}` 중 `List` /
+>   `Map` / `Set` / `Channel` / `Bytes` / `Handle`을 1-reg 포인터로 인식
+> - `isABIScalarType`이 위 predicate를 포함하도록 확장 → `abiRegSlots`
+>   가 `List<Int>` / `Map<K,V>` 같은 타입을 fn arg/return으로 받음
+> - `runtimeSymStringByteLen = "osty_rt_strings_ByteLen"` — String
+>   .len()의 런타임 심볼
+> - `lowerStringLen` — `osty_rt_strings_ByteLen` 직접 호출
+> - `lowerStringIsEmpty` / `lowerListIsEmpty` — len 호출 + `cmp + cset eq`
+> - `lowerOptionIsSome` / `lowerOptionIsNone` — disc 슬롯 (옵션 슬롯 + 0)
+>   읽고 1과 비교 (`Some` 태그 = 1)
+> - `lowerOptionDiscriminantCompare` 헬퍼 — isSome/isNone 공유 본체
+>
+> 검증:
+> - E2E binary smoke 5개 (`TestONBBackendBinaryRunsStdlibIntrinsicsOnDarwinARM64`):
+>   string_len ("hello".len() → 5), string_is_empty ("".isEmpty() → 1),
+>   list_is_empty (push 전후), option_is_some_none (Some(7) + None
+>   각각의 isSome/isNone), generic_fn_first (first<T> 호출 → 42)
+>
+> 한계 (이번 슬라이스에서 명시적으로 보류):
+> - **Map intrinsics** 여전히 fallback — `osty_rt_map_new`은 `(key_kind,
+>   value_kind, value_size, trace_fn)` 4 인자가 필요하고 set/get은 value
+>   를 포인터로 전달 (스택 scratch 슬롯 필요). 별도 슬라이스로 보류
+> - String 메서드: `.split` / `.contains` / `.compare` / 슬라이싱 등 미구현
+> - Option 메서드: `.unwrap()` / `.unwrapOr(d)` 미구현
+> - List 메서드: `.pop()` / `.contains()` / `.indexOf()` 미구현
+> - Bool println은 여전히 0/1로 출력 (`%lld` 포맷). 사용자가 `true` /
+>   `false` 문자열을 원하면 명시적 toString 필요
+> - GC pointer_bitmap 정확도 (Week 20 그대로)
+>
+> 다음 슬라이스 후보: Map<K,V> 인트린식, 추가 String/Option/List 메서드,
+> Float 비교 / 캐스트.
+>
 > **Slice A2 Week 20 (closures — value + indirect call, 2026-05-02)** —
 > ONB가 처음으로 클로저를 native lowering. `let f = |x| x + n`,
 > `xs.filter(|x| x > 0)` 같은 패턴이 fallback 없이 통과 (filter 자체는
