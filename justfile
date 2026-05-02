@@ -27,7 +27,11 @@ build-checker:
     mkdir -p .osty/bin
     go build -o {{checker_bin}} ./cmd/osty-native-checker
 
-build-all: build build-checker
+build-lirproto:
+    mkdir -p .osty/bin
+    go build -o .osty/bin/osty-native-lirproto ./cmd/osty-native-lirproto
+
+build-all: build build-checker build-lirproto
 
 # Cross-compile osty (+ native-checker) for every supported host triple.
 # Targets: linux/{amd64,arm64}, darwin/{amd64,arm64}, windows/{amd64,arm64}.
