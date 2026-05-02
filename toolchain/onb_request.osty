@@ -1,0 +1,350 @@
+// onb_request.osty — backend request + plan + target resolution
+// for the ONB self-host port. Slice J of the port. Mirror of the
+// `Request / Target / Stage / Plan / ResolveTarget / BuildPlan /
+// Compile / NextPlannedStage / StageSummary` cluster in
+// `internal/onb/onb.go`.
+//
+// The bridge between the host CLI (`internal/backend/onb.go`) and
+// the ONB pipeline. Today the Osty mirror skeletons the planner —
+// `onbBuildPlan` validates the request shape and routes target
+// resolution through `onbResolveTarget`; the actual MIR-to-binary
+// lowering still lives on the Go side until the LLVM self-host
+// LLVMgen catches up.
+
+// === Request =======================================================
+
+// OnbRequest is the backend-owned half of a build request. The
+// `mir.Module` reference comes from the front-end pipeline; the
+// rest are paths + flags from the CLI parser.
+//
+// Mirror of `Request` in onb.go. Module is referenced by name
+// (`String`) since cross-module pointers don't traverse the
+// bootstrap boundary cleanly — the bridge layer hands a real
+// `*mir.Module` over once Osty self-host LLVMgen takes over the
+// build.
+pub struct OnbRequest {
+    pub moduleName: String,
+    pub targetTriple: String,
+    pub emitMode: String,
+    pub objectPath: String,
+    pub binaryPath: String,
+    pub sourcePath: String,
+    pub packageName: String,
+}
+
+pub fn onbRequest(moduleName: String, targetTriple: String, emitMode: String) -> OnbRequest {
+    OnbRequest {
+        moduleName: moduleName,
+        targetTriple: targetTriple,
+        emitMode: emitMode,
+        objectPath: "",
+        binaryPath: "",
+        sourcePath: "",
+        packageName: "",
+    }
+}
+
+// === Target resolution =============================================
+
+// OnbBuildTarget is the dev-integration target descriptor. Wider
+// than `OnbTarget` (asm/encoder side) — adds OS + arch fields the
+// build planner needs to pick object format / linker flags.
+// Mirror of `Target` in onb.go.
+pub struct OnbBuildTarget {
+    pub triple: String,
+    pub os: String,
+    pub arch: String,
+    pub objectFormat: String,
+}
+
+// OnbResolveTargetResult bundles the resolved target with an `ok`
+// flag + diagnostic. Mirror of Go's `(Target, error)` return.
+pub struct OnbResolveTargetResult {
+    pub target: OnbBuildTarget,
+    pub ok: Bool,
+    pub err: String,
+}
+
+// onbResolveTarget validates a target triple, falling back to the
+// host platform when the triple is empty. ONB Phase 1.0 is
+// aarch64-only — non-aarch64 triples yield ok=false with an
+// explanatory error string. Mirror of `ResolveTarget`.
+//
+// Host inference takes a `hostTriple` parameter so the Osty side
+// stays pure (the bridge layer in `internal/onb/onb.go` reads
+// `runtime.GOOS / GOARCH` and threads the result through).
+pub fn onbResolveTarget(triple: String, hostTriple: String) -> OnbResolveTargetResult {
+    let raw = if onbDevStrTrim(triple) == "" { hostTriple } else { onbDevStrTrim(triple) }
+    let lower = onbDevStrToLower(raw)
+    if !onbIsAarch64Triple(lower) {
+        let err = "{onbErrUnsupportedTarget()}: \"{raw}\" (want darwin/aarch64 or linux/aarch64)"
+        return OnbResolveTargetResult {
+            target: OnbBuildTarget { triple: "", os: "", arch: "", objectFormat: "" },
+            ok: false,
+            err: err,
+        }
+    }
+    if onbDevStrContains(lower, "darwin") || onbDevStrContains(lower, "apple") {
+        return OnbResolveTargetResult {
+            target: OnbBuildTarget {
+                triple: raw,
+                os: "darwin",
+                arch: "aarch64",
+                objectFormat: "mach-o",
+            },
+            ok: true,
+            err: "",
+        }
+    }
+    if onbDevStrContains(lower, "linux") {
+        return OnbResolveTargetResult {
+            target: OnbBuildTarget {
+                triple: raw,
+                os: "linux",
+                arch: "aarch64",
+                objectFormat: "elf",
+            },
+            ok: true,
+            err: "",
+        }
+    }
+    OnbResolveTargetResult {
+        target: OnbBuildTarget { triple: "", os: "", arch: "", objectFormat: "" },
+        ok: false,
+        err: "{onbErrUnsupportedTarget()}: \"{raw}\" (want darwin/aarch64 or linux/aarch64)",
+    }
+}
+
+// onbErrUnsupportedTarget is the sentinel string Go's
+// `ErrUnsupportedTarget` carries. Mirror this constant so error
+// strings stay byte-identical across the boundary.
+pub fn onbErrUnsupportedTarget() -> String { "onb target is outside phase 1.0 scope" }
+
+// onbErrNotImplemented is the sentinel string Go's
+// `ErrNotImplemented` carries. Used by `Compile` to signal a
+// pipeline stage that hasn't been implemented yet.
+pub fn onbErrNotImplemented() -> String { "onb phase slice is not implemented" }
+
+// onbIsAarch64Triple tests for the aarch64 / arm64 prefix on a
+// lowercased triple string.
+pub fn onbIsAarch64Triple(lower: String) -> Bool {
+    onbDevStartsWithStr(lower, "aarch64-") || onbDevStartsWithStr(lower, "arm64-")
+}
+
+// === Stages + Plan ==================================================
+
+// OnbStage names a planned ONB pipeline stage and its current
+// implementation status. Mirror of `Stage`. Status is one of
+// "implemented", "implemented (line program only)", "planned",
+// or "" (no specific status).
+pub struct OnbStage {
+    pub name: String,
+    pub status: String,
+}
+
+pub fn onbStage(name: String, status: String) -> OnbStage {
+    OnbStage { name: name, status: status }
+}
+
+// OnbPlan is the executable ONB phase boundary. Mirror of `Plan`.
+// Today it records the pipeline that must exist before emission
+// can succeed; later phases replace the scaffolded stages with
+// real data flowing between them.
+pub struct OnbPlan {
+    pub target: OnbBuildTarget,
+    pub emit: String,
+    pub sourcePath: String,
+    pub packageName: String,
+    pub stages: List<OnbStage>,
+}
+
+// onbPlanStages assembles the canonical 9-stage list. The two
+// status mutations are object-format-dependent: Mach-O has the
+// writer + reloc + DWARF sub-pipelines implemented; ELF lists
+// them as planned. Mirror of `BuildPlan`'s stage assembly.
+pub fn onbPlanStages(target: OnbBuildTarget) -> List<OnbStage> {
+    let objStatus = if target.objectFormat == "mach-o" { "implemented" } else { "planned" }
+    let relocStatus = if target.objectFormat == "mach-o" { "implemented" } else { "planned" }
+    let dwarfStatus = if target.objectFormat == "mach-o" { "implemented (line program only)" } else { "planned" }
+    let mut stages: List<OnbStage> = []
+    stages.push(onbStage("MIR consumer", "implemented"))
+    stages.push(onbStage("4-pass minimal optimizer", "planned"))
+    stages.push(onbStage("aarch64 LIR lowerer", "implemented"))
+    stages.push(onbStage("aarch64 assembly renderer", "implemented"))
+    stages.push(onbStage("linear register allocation", "planned"))
+    stages.push(onbStage("{target.objectFormat} object writer", objStatus))
+    stages.push(onbStage("string/puts relocations", relocStatus))
+    stages.push(onbStage("DWARF .debug_line", dwarfStatus))
+    stages.push(onbStage("host linker", "implemented"))
+    stages
+}
+
+// OnbBuildPlanResult bundles the rebuilt plan with the routing
+// flags. `ok = false` means request validation failed; the err
+// field carries the diagnostic.
+pub struct OnbBuildPlanResult {
+    pub plan: OnbPlan,
+    pub ok: Bool,
+    pub err: String,
+}
+
+// onbBuildPlan validates the request shape and produces the phase
+// 1.0 pipeline plan. Mirror of `BuildPlan`. The host bridge layer
+// supplies the `hostTriple` so this stays pure — the Go side
+// composes the runtime.GOOS lookup and threads it through.
+pub fn onbBuildPlan(req: OnbRequest, hostTriple: String) -> OnbBuildPlanResult {
+    if req.moduleName == "" {
+        return OnbBuildPlanResult {
+            plan: onbEmptyPlan(),
+            ok: false,
+            err: "onb: missing MIR module",
+        }
+    }
+    let resolved = onbResolveTarget(req.targetTriple, hostTriple)
+    if !resolved.ok {
+        return OnbBuildPlanResult {
+            plan: onbEmptyPlan(),
+            ok: false,
+            err: resolved.err,
+        }
+    }
+    let plan = OnbPlan {
+        target: resolved.target,
+        emit: req.emitMode,
+        sourcePath: req.sourcePath,
+        packageName: req.packageName,
+        stages: onbPlanStages(resolved.target),
+    }
+    OnbBuildPlanResult { plan: plan, ok: true, err: "" }
+}
+
+fn onbEmptyPlan() -> OnbPlan {
+    OnbPlan {
+        target: OnbBuildTarget { triple: "", os: "", arch: "", objectFormat: "" },
+        emit: "",
+        sourcePath: "",
+        packageName: "",
+        stages: [],
+    }
+}
+
+// onbNextPlannedStage returns the first stage name still waiting
+// for implementation. Mirror of `NextPlannedStage`. Empty string
+// if every stage is done.
+pub fn onbNextPlannedStage(plan: OnbPlan) -> String {
+    for stage in plan.stages {
+        if stage.status == "planned" { return stage.name }
+    }
+    ""
+}
+
+// onbStageSummary returns a compact comma-joined "<name>=<status>"
+// list for diagnostics. Mirror of `StageSummary`. Stages with an
+// empty status emit just the name.
+pub fn onbStageSummary(plan: OnbPlan) -> String {
+    let mut out = ""
+    let mut first = true
+    for stage in plan.stages {
+        let part = if stage.status == "" { stage.name } else { "{stage.name}={stage.status}" }
+        if first {
+            out = part
+            first = false
+        } else {
+            out = out + ", " + part
+        }
+    }
+    out
+}
+
+// === Local string helpers ==========================================
+//
+// Same dependency-graph rationale as the helpers in onb_dev.osty —
+// keep `std.strings` out so the future LLVM self-host LLVMgen has
+// a leaner front door. Each helper is namespaced `onbDevStr*` so
+// it doesn't collide with the `onbStringStartsWith` / `onbDev*`
+// helpers in sister modules.
+
+fn onbDevStrTrim(s: String) -> String {
+    let mut chars: List<String> = []
+    for ch in s.chars() { chars.push("{ch}") }
+    let mut start = 0
+    let mut endIdx = chars.len()
+    for start < endIdx {
+        if chars[start] != " " && chars[start] != "\t" { break }
+        start = start + 1
+    }
+    for endIdx > start {
+        let last = chars[endIdx - 1]
+        if last != " " && last != "\t" { break }
+        endIdx = endIdx - 1
+    }
+    let mut out = ""
+    for i in start..endIdx {
+        out = out + chars[i]
+    }
+    out
+}
+
+fn onbDevStrToLower(s: String) -> String {
+    let mut bytes: List<Int> = []
+    for b in s.bytes() { bytes.push(b.toInt()) }
+    let mut chars: List<String> = []
+    for ch in s.chars() { chars.push("{ch}") }
+    if bytes.len() != chars.len() { return s }  // multi-byte — leave alone
+    let mut out = ""
+    for i in 0..bytes.len() {
+        let b = bytes[i]
+        if b >= 65 && b <= 90 {
+            // ASCII uppercase → lowercase. Look up the corresponding
+            // lowercase character via the printable-ASCII table.
+            let lower = b + 32
+            out = out + onbDevStrAsciiToString(lower)
+        } else {
+            out = out + chars[i]
+        }
+    }
+    out
+}
+
+fn onbDevStrAsciiToString(b: Int) -> String {
+    let lookup = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+    if b < 32 || b > 126 { return " " }
+    let idx = b - 32
+    let mut chars: List<String> = []
+    for ch in lookup.chars() { chars.push("{ch}") }
+    if idx < 0 || idx >= chars.len() { return " " }
+    chars[idx]
+}
+
+fn onbDevStrContains(s: String, needle: String) -> Bool {
+    let mut sBytes: List<Int> = []
+    for b in s.bytes() { sBytes.push(b.toInt()) }
+    let mut nBytes: List<Int> = []
+    for b in needle.bytes() { nBytes.push(b.toInt()) }
+    if nBytes.len() == 0 { return true }
+    if nBytes.len() > sBytes.len() { return false }
+    let limit = sBytes.len() - nBytes.len() + 1
+    for i in 0..limit {
+        let mut matched = true
+        for j in 0..nBytes.len() {
+            if sBytes[i + j] != nBytes[j] {
+                matched = false
+                break
+            }
+        }
+        if matched { return true }
+    }
+    false
+}
+
+fn onbDevStartsWithStr(s: String, prefix: String) -> Bool {
+    let mut sBytes: List<Int> = []
+    for b in s.bytes() { sBytes.push(b.toInt()) }
+    let mut pBytes: List<Int> = []
+    for b in prefix.bytes() { pBytes.push(b.toInt()) }
+    if pBytes.len() > sBytes.len() { return false }
+    for i in 0..pBytes.len() {
+        if sBytes[i] != pBytes[i] { return false }
+    }
+    true
+}
