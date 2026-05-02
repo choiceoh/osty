@@ -175,6 +175,17 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"osty_rt_strings_Contains",
 				"osty_rt_strings_HasPrefix",
 				"osty_rt_strings_HasSuffix",
+				// Phase 1j — module-level sections.
+				"pub fn mirEmitRuntimeDeclarationsSection(",
+				"pub fn mirEmitGlobalsSection(",
+				"mirEmitRuntimeDeclarationsSection()",
+				"mirEmitGlobalsSection(m)",
+				"mirEmitGlobalLine(",
+				"mirEmitGlobalLLVMType(",
+				"mirEmitGlobalInitializer(",
+				"declare void @osty_rt_io_write",
+				"declare ptr @osty_rt_int_to_string",
+				"declare i64 @osty_rt_list_len",
 			},
 		},
 		{

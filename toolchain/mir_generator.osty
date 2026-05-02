@@ -18890,6 +18890,8 @@ pub fn mirEmitOpts(packageName: String, sourcePath: String, target: String) -> M
 /// correctly until the per-block instruction emit lands here.
 pub fn mirEmitModule(m: MirModule, opts: MirEmitOpts) -> String {
     let mut out = mirEmitHeaderBlock(opts.sourcePath, opts.target)
+    out = out + mirEmitRuntimeDeclarationsSection()
+    out = out + mirEmitGlobalsSection(m)
     for func in m.functions {
         if func.isExternal {
             continue
@@ -20117,4 +20119,115 @@ fn mirEmitStringPredicateIntrinsic(func: MirFunction, instr: MirInstr, runtimeSy
     let rhs = mirEmitOperand(instr.args[1])
     let dest = mirEmitLocalRegName(instr.dest.local)
     "  " + dest + " = call i1 @" + runtimeSym + "(ptr " + lhs + ", ptr " + rhs + ")\n"
+}
+
+
+// ====================================================================
+// Phase 1j — Module-level sections (runtime decls + globals)
+// ====================================================================
+//
+// Phase 0-1i lowered function bodies; Phase 1j adds the surrounding
+// module sections so the IR text is structurally complete:
+//
+//   - Runtime declarations: every `osty_rt_*` external the per-fn
+//     emitters reference must have a `declare` line at module
+//     scope. Phase 1j emits a fixed catalog of every symbol Phases
+//     1d-1i can produce. Future phases that introduce new runtime
+//     calls add a line here in the same PR.
+//
+//   - Globals: each `MirGlobal` becomes `@<name> = global <ty>
+//     zeroinitializer` (or `constant` for immutable). `hasInit`
+//     records that an init constructor exists; Phase 1k will emit
+//     the actual init fn + call from a module-init dispatcher.
+//
+//   - String pool: tracked separately because it requires walking
+//     every string-constant operand to collect literals before
+//     the section can be sized. Stubs at TODO Phase 1k.
+
+/// mirEmitRuntimeDeclarationsSection renders one `declare` line per
+/// runtime symbol the per-fn emitters can reference. Fixed catalog;
+/// new runtime calls land here in the same PR that adds them.
+pub fn mirEmitRuntimeDeclarationsSection() -> String {
+    let mut out = mirModuleSectionDirective("runtime declarations")
+    out = out + "declare void @osty_rt_io_write(ptr, i1, i1)\n"
+    out = out + "declare void @osty_rt_abort(ptr)\n"
+    out = out + "declare ptr @osty_rt_int_to_string(i64)\n"
+    out = out + "declare ptr @osty_rt_bool_to_string(i1)\n"
+    out = out + "declare ptr @osty_rt_char_to_string(i32)\n"
+    out = out + "declare ptr @osty_rt_float_to_string(double)\n"
+    out = out + "declare i64 @osty_rt_list_len(ptr)\n"
+    out = out + "declare i64 @osty_rt_map_len(ptr)\n"
+    out = out + "declare i64 @osty_rt_set_len(ptr)\n"
+    out = out + "declare i64 @osty_rt_string_byte_len(ptr)\n"
+    out = out + "declare i64 @osty_rt_bytes_len(ptr)\n"
+    out = out + "declare i64 @osty_rt_list_get_i64(ptr, i64)\n"
+    out = out + "declare i1 @osty_rt_list_get_i1(ptr, i64)\n"
+    out = out + "declare ptr @osty_rt_list_get_ptr(ptr, i64)\n"
+    out = out + "declare double @osty_rt_list_get_f64(ptr, i64)\n"
+    out = out + "declare void @osty_rt_list_push_i64(ptr, i64)\n"
+    out = out + "declare void @osty_rt_list_push_i1(ptr, i1)\n"
+    out = out + "declare void @osty_rt_list_push_ptr(ptr, ptr)\n"
+    out = out + "declare void @osty_rt_list_push_f64(ptr, double)\n"
+    out = out + "declare i1 @osty_rt_strings_Contains(ptr, ptr)\n"
+    out = out + "declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)\n"
+    out = out + "declare i1 @osty_rt_strings_HasSuffix(ptr, ptr)\n"
+    out + "\n"
+}
+
+/// mirEmitGlobalsSection renders one `@<name> = global <ty>
+/// zeroinitializer` (or `constant`) per `m.globals` entry. `hasInit`
+/// records that an init fn exists; Phase 1k materialises the init
+/// dispatcher. No-op (returns empty string) when the module has no
+/// globals so the section header doesn't pollute trivial inputs.
+pub fn mirEmitGlobalsSection(m: MirModule) -> String {
+    if m.globals.len() == 0 {
+        return ""
+    }
+    let mut out = mirModuleSectionDirective("globals")
+    for g in m.globals {
+        out = out + mirEmitGlobalLine(g)
+    }
+    out + "\n"
+}
+
+/// mirEmitGlobalLine renders one global declaration. Mutability
+/// picks between `global` (mutable) and `constant` (immutable).
+/// Init-bearing globals get a TODO comment so Phase 1k's init
+/// dispatcher knows to wire them in.
+fn mirEmitGlobalLine(g: MirGlobal) -> String {
+    let llvmTy = mirEmitGlobalLLVMType(g.typ)
+    let storage = if g.mutable { "global" } else { "constant" }
+    let initText = mirEmitGlobalInitializer(llvmTy)
+    let mut out = "@" + g.name + " = " + storage + " " + llvmTy + " " + initText + "\n"
+    if g.hasInit {
+        out = out + "; TODO Phase 1k init constructor: " + g.initSymbol + "\n"
+    }
+    out
+}
+
+/// mirEmitGlobalLLVMType resolves the global's source-level type
+/// to an LLVM type. Non-primitive types fall back to `ptr` (the
+/// canonical handle shape for collections / boxed values).
+fn mirEmitGlobalLLVMType(typeName: String) -> String {
+    let prim = mirLlvmTypeForPrim(typeName)
+    if prim != "" {
+        return prim
+    }
+    "ptr"
+}
+
+/// mirEmitGlobalInitializer picks a zero-equivalent initializer for
+/// each LLVM type. Mirrors the per-type defaults the LLVM verifier
+/// expects on global definitions.
+fn mirEmitGlobalInitializer(llvmTy: String) -> String {
+    if llvmTy == "ptr" {
+        return "null"
+    }
+    if llvmTy == "double" || llvmTy == "float" {
+        return "0.0"
+    }
+    if llvmTy == "i1" {
+        return "false"
+    }
+    "0"
 }
