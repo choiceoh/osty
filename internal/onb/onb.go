@@ -35,12 +35,19 @@ var (
 
 // Request is the backend-owned half of a build request. Host-facing CLI and
 // artifact layout stay in internal/backend; ONB starts from MIR.
+//
+// SourcePath is the absolute path to the primary source file. The DWARF
+// line-number program reads it so debuggers (lldb / gdb) can show
+// `<file>:<line>` in backtraces. PackageName mirrors the front-end's notion
+// of the unit name and seeds the DWARF compile-unit DIE.
 type Request struct {
 	Module       *mir.Module
 	TargetTriple string
 	EmitMode     string
 	ObjectPath   string
 	BinaryPath   string
+	SourcePath   string
+	PackageName  string
 }
 
 // Target is the ONB-normalized target contract for phase 1.0.
@@ -120,11 +127,17 @@ func BuildPlan(req Request) (*Plan, error) {
 	if err != nil {
 		return nil, err
 	}
+	if program != nil {
+		program.SourcePath = req.SourcePath
+		program.Package = req.PackageName
+	}
 	objectWriterStatus := "planned"
 	relocationStatus := "planned"
+	dwarfStatus := "planned"
 	if target.ObjectFormat == "mach-o" {
 		objectWriterStatus = "implemented"
 		relocationStatus = "implemented"
+		dwarfStatus = "implemented (line program only)"
 	}
 	return &Plan{
 		Target:  target,
@@ -138,7 +151,7 @@ func BuildPlan(req Request) (*Plan, error) {
 			{Name: "linear register allocation", Status: "planned"},
 			{Name: target.ObjectFormat + " object writer", Status: objectWriterStatus},
 			{Name: "string/puts relocations", Status: relocationStatus},
-			{Name: "DWARF .debug_line", Status: "planned"},
+			{Name: "DWARF .debug_line", Status: dwarfStatus},
 			{Name: "host linker", Status: "implemented"},
 		},
 	}, nil
