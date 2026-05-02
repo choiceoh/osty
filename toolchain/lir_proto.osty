@@ -5012,11 +5012,48 @@ fn lirLowerMirAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: Strin
         MirAggTuple -> lirLowerMirTupleAggregate(l, rv, hintName, hint),
         MirAggStruct -> lirLowerMirStructAggregate(l, rv, hintName, hint),
         MirAggEnumVariant -> lirLowerMirEnumVariantAggregate(l, rv, hintName, hint),
+        MirAggList -> lirLowerMirListAggregate(l, rv, hintName, hint),
         _ -> {
             lirLowerError(l, LirDiagUnsupported, "aggregate kind is not implemented in LIR Proto aggregate lowering", "aggregate")
             lirOperandInvalid()
         },
     }
+}
+// `lirLowerMirListAggregate` builds a `List<T>` literal — the shape
+// emitted for `[1, 2, 3]` source. Calls `osty_rt_list_new()` to get
+// the empty list, then `osty_rt_list_push_<lane>` per field. Mirrors
+// production `emitListLiteral` (mir_generator.go:9348).
+fn lirLowerMirListAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
+    let typeName = if rv.typ == "" {
+        hintName
+    } else {
+        rv.typ
+    }
+    let elemName = lirListElemTypeName(typeName)
+    if elemName == "" {
+        lirLowerError(l, LirDiagUnsupported, "list aggregate target `" + typeName + "` is not a List<T>", "aggregate.list")
+        return lirOperandInvalid()
+    }
+    let elemLir = lirContainerElemLaneType(elemName)
+    if lirTypeIsZero(elemLir) {
+        lirLowerError(l, LirDiagUnsupported, "list aggregate element type `" + elemName + "` has no LIR runtime lane", "aggregate.list")
+        return lirOperandInvalid()
+    }
+    let isString = lirContainerElemIsString(elemName)
+    let newSym = llvmListRuntimeNewSymbol()
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(newSym, lirPtrType(), [], false))
+    let listReg = lirFresh(l)
+    l.instrs.push(lirCall(listReg, lirPtrType(), "@" + newSym, []))
+    let pushSym = llvmListRuntimePushSymbolFor(elemLir.llvm, isString)
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(pushSym, lirVoidType(), [lirPtrType(), elemLir], false))
+    for field in rv.aggFields {
+        let value = lirLowerCoercedOperand(l, field, elemName, elemLir, "list aggregate elem")
+        if value.value == "" {
+            return lirOperandInvalid()
+        }
+        l.instrs.push(lirCall("", lirVoidType(), "@" + pushSym, [lirOperand(lirPtrType(), listReg), lirOperand(elemLir, value.value)]))
+    }
+    lirOperand(lirPtrType(), listReg)
 }
 // `lirLowerMirEnumVariantAggregate` builds the canonical
 // `{ i64 disc, i64 payload }` aggregate for an enum variant. Disc is

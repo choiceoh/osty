@@ -440,6 +440,8 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualCastOptionalWrapPassthroughFixture", []string{"define i64 @wrapId(i64", "ret i64"}},
 		// ----- MirAggEnumVariant aggregate -----
 		{"lirParityManualAggEnumVariantSomeIntFixture", []string{"%Option.Int = type", "define %Option.Int @wrapSome(i64", "insertvalue %Option.Int undef, i64 1, 0", "insertvalue %Option.Int", "ret %Option.Int"}},
+		// ----- MirAggList aggregate -----
+		{"lirParityManualAggListIntLiteralFixture", []string{"declare ptr @osty_rt_list_new()", "declare void @osty_rt_list_push_i64(ptr, i64)", "call ptr @osty_rt_list_new()", "call void @osty_rt_list_push_i64(", "ret ptr"}},
 	}
 
 	for _, tt := range want {
