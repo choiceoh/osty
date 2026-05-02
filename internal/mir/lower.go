@@ -4204,13 +4204,14 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 			bs.emit(&StorageLiveInstr{Local: valueLocal, SpanV: c.SpanV})
 			bs.lowerExprInto(arg, valueLocal, argT)
 			msgLocal := bs.freshTemp(TString, c.SpanV)
+			prefix, suffix := dbgMessageBookends(arg)
 			bs.emit(&IntrinsicInstr{
 				Dest: &Place{Local: msgLocal},
 				Kind: IntrinsicStringConcat,
 				Args: []Operand{
-					&ConstOp{Const: &StringConst{Value: "[dbg] "}, T: TString},
+					&ConstOp{Const: &StringConst{Value: prefix}, T: TString},
 					&CopyOp{Place: Place{Local: valueLocal}, T: argT},
-					&ConstOp{Const: &StringConst{Value: "\n"}, T: TString},
+					&ConstOp{Const: &StringConst{Value: suffix}, T: TString},
 				},
 				SpanV: c.SpanV,
 			})
@@ -4447,6 +4448,66 @@ func (bs *bodyState) builtinFreeCallIntrinsic(name string, args []ir.Arg) Intrin
 		return IntrinsicInvalid
 	}
 	return builtinFreeCallIntrinsicForReceiver(bs.recoveredTypeOf(args[0].Value), name)
+}
+
+// dbgMessageBookends returns the static prefix and suffix that
+// surround the runtime-rendered value in a `dbg(expr)` eprint message.
+// Format follows LANG_SPEC §A.10 (`[file:line] expr = value\n`) as
+// closely as the lowerer can without source bytes — file path is
+// elided (Options.SourcePath isn't threaded into mir.Lower today),
+// expression text is reconstructed via `dbgExprSourceText` for the
+// shapes the IR can render losslessly.
+func dbgMessageBookends(arg ir.Expr) (prefix, suffix string) {
+	line := arg.At().Start.Line
+	exprText := dbgExprSourceText(arg)
+	switch {
+	case line > 0 && exprText != "":
+		prefix = fmt.Sprintf("[dbg:%d] %s = ", line, exprText)
+	case line > 0:
+		prefix = fmt.Sprintf("[dbg:%d] ", line)
+	case exprText != "":
+		prefix = fmt.Sprintf("[dbg] %s = ", exprText)
+	default:
+		prefix = "[dbg] "
+	}
+	suffix = "\n"
+	return prefix, suffix
+}
+
+// dbgExprSourceText reconstructs a short textual form of `expr` for
+// the [dbg] message prefix. The IR drops the original source bytes,
+// so the lowerer pieces things back together from the field values
+// that survive — Idents return their name, literals their text form,
+// FieldExpr / TupleAccess / IndexExpr recurse into their receiver.
+// Returns "" for shapes the lowerer can't render losslessly; callers
+// fall back to the no-expr-text prefix.
+func dbgExprSourceText(expr ir.Expr) string {
+	switch x := expr.(type) {
+	case *ir.Ident:
+		return x.Name
+	case *ir.IntLit:
+		return x.Text
+	case *ir.FloatLit:
+		return x.Text
+	case *ir.BoolLit:
+		if x.Value {
+			return "true"
+		}
+		return "false"
+	case *ir.FieldExpr:
+		if base := dbgExprSourceText(x.X); base != "" {
+			sep := "."
+			if x.Optional {
+				sep = "?."
+			}
+			return base + sep + x.Name
+		}
+	case *ir.TupleAccess:
+		if base := dbgExprSourceText(x.X); base != "" {
+			return base + "." + strconv.Itoa(x.Index)
+		}
+	}
+	return ""
 }
 
 // dbgCanStringify reports whether `dbg(value)` can render the

@@ -1510,13 +1510,13 @@ func TestGenerateFromMIRDivergingBuiltinsLowerThroughPanic(t *testing.T) {
 }
 
 // TestGenerateFromMIRDbgPrintsAndPassesThrough pins the prelude
-// diagnostic builtin `dbg<T>(value: T) -> T` (LANG_SPEC §A.10). For
-// stringifiable primitives (Int / Float / Bool / Char / Byte / String)
-// the lowerer emits `eprint("[dbg] " + value + "\n")` — using the
-// existing string_concat path which auto-boxes scalars via
-// `emitStringConcatBoxed` — and identity-passes the value into the
-// destination so callers see it unchanged. No `@dbg` call survives;
-// the value reaches the destination directly.
+// diagnostic builtin `dbg<T>(value: T) -> T` (LANG_SPEC §A.10).
+// Stringifiable primitives flow through `string_concat` boxing →
+// eprint, then identity-pass into the destination. The static
+// prefix encodes the call-site line and reconstructed expression
+// text (`[dbg:LINE] expr = ` for Ident/literal/field shapes,
+// `[dbg] expr = ` when no span is available, plain `[dbg] ` when
+// neither is recoverable).
 func TestGenerateFromMIRDbgPrintsAndPassesThrough(t *testing.T) {
 	// fn check(n: Int) -> Int {
 	//     let x = dbg(n)
@@ -1533,8 +1533,13 @@ func TestGenerateFromMIRDbgPrintsAndPassesThrough(t *testing.T) {
 					Type: ir.TInt,
 					Value: &ir.CallExpr{
 						Callee: &ir.Ident{Name: "dbg", Kind: ir.IdentBuiltin, T: &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TInt}},
-						Args:   []ir.Arg{{Value: &ir.Ident{Name: "n", Kind: ir.IdentParam, T: ir.TInt}}},
-						T:      ir.TInt,
+						Args: []ir.Arg{{Value: &ir.Ident{
+							Name:  "n",
+							Kind:  ir.IdentParam,
+							T:     ir.TInt,
+							SpanV: ir.Span{Start: ir.Pos{Line: 7}},
+						}}},
+						T: ir.TInt,
 					},
 				},
 			},
@@ -1560,7 +1565,7 @@ func TestGenerateFromMIRDbgPrintsAndPassesThrough(t *testing.T) {
 		t.Fatalf("output still contains unresolved-symbol diagnostic:\n%s", got)
 	}
 	for _, want := range []string{
-		"c\"[dbg] \\00\"",                  // prefix in string pool
+		"c\"[dbg:7] n = \\00\"",            // prefix carries call-site line + reconstructed Ident name
 		"c\"\\0A\\00\"",                    // newline literal in string pool
 		"call ptr @osty_rt_int_to_string(", // Int boxed via toString
 		"@osty_rt_strings_ConcatN(",        // 3-piece concat
