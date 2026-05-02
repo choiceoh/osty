@@ -33,6 +33,21 @@ func LowerFnDecl(pkgName string, fn *ast.FnDecl, res *resolve.Result, chk *check
 	return out, l.issues
 }
 
+// LowerLetDecl lowers a single `pub let NAME = value` declaration.
+// Mirrors LowerFnDecl in shape — the body-injection pipeline uses it
+// to pull in stdlib globals that injected fn bodies reference.
+//
+// Returns the lowered LetDecl plus any non-fatal lowering issues. A
+// nil input returns (nil, nil).
+func LowerLetDecl(pkgName string, ld *ast.LetDecl, res *resolve.Result, chk *check.Result) (*LetDecl, []error) {
+	if ld == nil {
+		return nil, nil
+	}
+	l := &lowerer{pkgName: pkgName, res: res, chk: chk}
+	out := l.lowerLetDecl(ld)
+	return out, l.issues
+}
+
 // Lower converts a type-checked Osty file into an independent IR Module.
 //
 // pkgName is the module's package name (e.g. "main"). res and chk may be

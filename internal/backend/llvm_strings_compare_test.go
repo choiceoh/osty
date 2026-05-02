@@ -143,3 +143,67 @@ fn main() {
 		t.Fatalf("user callsite not rewritten: still have strings.%v in IR", leftover)
 	}
 }
+
+// TestPrepareEntryInjectsStdlibGlobalsWhenFlagOn verifies that the
+// body-injection pipeline pulls in stdlib `pub let` definitions
+// (top-level globals) referenced by injected fn bodies. Concrete case:
+// `strings.graphemes` chains through `graphemeBreakProperty` which
+// reads `graphemeBreakCR` (a `pub let`) — without this pass the
+// emitted `.ll` references `@graphemeBreakCR` undefined and clang
+// fails at link time.
+//
+// The verification is structural: after PrepareEntry, the user
+// module's IR must contain at least one mangled
+// `osty_std_strings__graphemeBreak*` LetDecl, and no injected fn
+// body may still carry a bare `Ident{Kind: IdentGlobal, Name:
+// "graphemeBreakCR"}` — every reference must resolve to the
+// mangled name.
+func TestPrepareEntryInjectsStdlibGlobalsWhenFlagOn(t *testing.T) {
+	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
+	req := newBackendRequest(t, EmitBinary, `use std.strings
+
+fn main() {
+    let n = strings.graphemes("hi").len()
+    println(n)
+}
+`)
+	if req.Entry.IR == nil {
+		t.Fatalf("entry.IR is nil")
+	}
+	letNames := map[string]bool{}
+	for _, d := range req.Entry.IR.Decls {
+		ld, ok := d.(*ir.LetDecl)
+		if !ok || ld == nil {
+			continue
+		}
+		letNames[ld.Name] = true
+	}
+	foundMangledLet := false
+	for n := range letNames {
+		if strings.HasPrefix(n, "osty_std_strings__graphemeBreak") {
+			foundMangledLet = true
+			break
+		}
+	}
+	if !foundMangledLet {
+		names := make([]string, 0, len(letNames))
+		for n := range letNames {
+			names = append(names, n)
+		}
+		t.Fatalf("expected at least one osty_std_strings__graphemeBreak* LetDecl in entry.IR; have lets: %v", names)
+	}
+	var unmangled []string
+	ir.Walk(ir.VisitorFunc(func(n ir.Node) bool {
+		id, ok := n.(*ir.Ident)
+		if !ok || id == nil || id.Kind != ir.IdentGlobal {
+			return true
+		}
+		if strings.HasPrefix(id.Name, "graphemeBreak") && !strings.HasPrefix(id.Name, "osty_std_strings__graphemeBreak") {
+			unmangled = append(unmangled, id.Name)
+		}
+		return true
+	}), req.Entry.IR)
+	if len(unmangled) > 0 {
+		t.Fatalf("injected bodies still carry unmangled global Idents: %v", unmangled)
+	}
+}
