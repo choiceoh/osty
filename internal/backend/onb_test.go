@@ -483,6 +483,47 @@ func TestONBBackendLldbResolvesSourceLineOnDarwinARM64(t *testing.T) {
 	}
 }
 
+// TestONBBackendBinaryRunsStructLiteralOnDarwinARM64 covers the first
+// half of struct lowering: a struct literal local plus field reads via
+// place projection. The MIR shape is `let p = Point { x, y };
+// println(p.x)` — the slot allocator reserves 16 bytes for the struct,
+// the literal write stamps each field into its own 8-byte slot, and
+// the println intrinsic reads the value through DW_TAG_member-style
+// offset arithmetic. Struct param/return passing (AAPCS64 small-struct
+// in two regs) lands in a follow-up slice.
+func TestONBBackendBinaryRunsStructLiteralOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("ONB struct executable smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	t.Setenv(onb.EnvStrict, "1")
+	src := `struct Point { x: Int, y: Int }
+fn main() {
+    let p = Point { x: 3, y: 4 }
+    println(p.x)
+    println(p.y)
+}`
+	req := newBackendRequest(t, EmitBinary, src)
+	req.Layout.Target = "aarch64-apple-darwin"
+	result, err := ONBBackend{}.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ONBBackend.Emit returned error: %v", err)
+	}
+	if result == nil || result.Artifacts.Binary == "" {
+		t.Fatalf("missing binary artifact: %+v", result)
+	}
+	out, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("binary returned error: %v\n%s", err, out)
+	}
+	if got, want := string(out), "3\n4\n"; got != want {
+		t.Fatalf("binary output = %q, want %q", got, want)
+	}
+}
+
 // TestONBBackendBinaryRunsStringAndListOnDarwinARM64 exercises Phase A2's
 // runtime-call slice: String concatenation and `List<Int>` push/len. These
 // shapes lower to `bl _osty_rt_strings_Concat`, `bl _osty_rt_list_new`,

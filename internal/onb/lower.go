@@ -2,7 +2,9 @@ package onb
 
 import (
 	"fmt"
+	"strings"
 
+	"github.com/osty/osty/internal/ir"
 	"github.com/osty/osty/internal/mir"
 )
 
@@ -41,7 +43,7 @@ func LowerMIR(mod *mir.Module, target Target) (*Program, error) {
 	if mainFn == nil {
 		return nil, fmt.Errorf("%w: missing main function", ErrUnsupportedShape)
 	}
-	state := &lowerState{target: target}
+	state := &lowerState{target: target, mod: mod}
 	out := &Program{Target: target}
 
 	// Lower main first — its layout decisions (vararg slot, etc.) drive the
@@ -69,6 +71,7 @@ func LowerMIR(mod *mir.Module, target Target) (*Program, error) {
 type lowerState struct {
 	target   Target
 	cstrings []CStringLiteral
+	mod      *mir.Module // module-scope layouts for struct size lookup
 
 	// per-function state, reset by lowerFunction
 	fn          *mir.Function
@@ -187,11 +190,12 @@ func (s *lowerState) assignLocalSlots(fn *mir.Function) error {
 		if !read[loc.ID] {
 			continue
 		}
-		if loc.Type == mir.TUnit {
+		size := s.localTypeSize(loc.Type)
+		if size == 0 {
 			continue
 		}
 		s.localSlots[loc.ID] = off
-		off += 8
+		off += size
 	}
 	if off == varargBase && !s.needsVararg && fn.ReturnType == mir.TUnit {
 		s.frameSize = 0
@@ -425,16 +429,49 @@ func (s *lowerState) lowerAssign(fn *mir.Function, instr *mir.AssignInstr) ([]In
 // `osty_rt_list_new`; future slices will extend this to non-empty lists,
 // tuples, structs, and enum variants.
 func (s *lowerState) lowerAggregateAssign(rv *mir.AggregateRV, destSlot int64) ([]Instr, error) {
-	if rv.Kind != mir.AggList {
+	switch rv.Kind {
+	case mir.AggList:
+		if len(rv.Fields) != 0 {
+			return nil, fmt.Errorf("%w: non-empty list literal", ErrUnsupportedShape)
+		}
+		return []Instr{
+			&BranchLink{Symbol: runtimeSymListNew},
+			&Store64Stack{Src: RegX0, Offset: destSlot},
+		}, nil
+	case mir.AggStruct:
+		return s.lowerStructLiteralAssign(rv, destSlot)
+	default:
 		return nil, fmt.Errorf("%w: aggregate kind %v", ErrUnsupportedShape, rv.Kind)
 	}
-	if len(rv.Fields) != 0 {
-		return nil, fmt.Errorf("%w: non-empty list literal", ErrUnsupportedShape)
+}
+
+// lowerStructLiteralAssign writes each scalar field of a struct literal
+// into its slot offset. Phase B.5 v1 only supports all-scalar structs;
+// the slot allocator already sized the destination to fit. Fields are
+// materialised one at a time through x9 to avoid burning x10 on a temp
+// — there's no register pressure issue because each field write is
+// independent.
+func (s *lowerState) lowerStructLiteralAssign(rv *mir.AggregateRV, destSlot int64) ([]Instr, error) {
+	layout := s.lookupStructLayout(rv.T)
+	if layout == nil {
+		return nil, fmt.Errorf("%w: unknown struct layout for %s", ErrUnsupportedShape, rv.T)
 	}
-	return []Instr{
-		&BranchLink{Symbol: runtimeSymListNew},
-		&Store64Stack{Src: RegX0, Offset: destSlot},
-	}, nil
+	if len(rv.Fields) != len(layout.Fields) {
+		return nil, fmt.Errorf("%w: struct %s field count mismatch (%d vs %d)", ErrUnsupportedShape, rv.T, len(rv.Fields), len(layout.Fields))
+	}
+	var out []Instr
+	for i, field := range rv.Fields {
+		if !isABIScalarType(layout.Fields[i].Type) {
+			return nil, fmt.Errorf("%w: struct %s field %s has non-scalar type %s", ErrUnsupportedShape, rv.T, layout.Fields[i].Name, layout.Fields[i].Type)
+		}
+		mat, err := s.materialiseOperand(field, RegX9)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, mat...)
+		out = append(out, &Store64Stack{Src: RegX9, Offset: destSlot + int64(i)*8})
+	}
+	return out, nil
 }
 
 // isABIScalarType reports whether a MIR type fits cleanly in one AAPCS64
@@ -443,6 +480,79 @@ func (s *lowerState) lowerAggregateAssign(rv *mir.AggregateRV, destSlot int64) (
 // future slice.
 func isABIScalarType(t mir.Type) bool {
 	return t == mir.TInt || t == mir.TBool || t == mir.TString
+}
+
+// lookupStructLayout resolves a NamedType to its `mod.Layouts.Structs`
+// entry. Returns nil for non-named types or layouts the front end didn't
+// register. The lowerer uses this to size struct slots and to compute
+// per-field offsets — Phase B.5 v1 only handles all-scalar structs so a
+// straightforward `field_index * 8` is enough.
+func (s *lowerState) lookupStructLayout(t mir.Type) *mir.StructLayout {
+	if s.mod == nil || s.mod.Layouts == nil {
+		return nil
+	}
+	nt, ok := t.(*ir.NamedType)
+	if !ok || nt == nil {
+		return nil
+	}
+	if !structLayoutSupported(nt) {
+		return nil
+	}
+	key := nt.Name
+	if nt.Package != "" && !nt.Builtin {
+		key = strings.TrimPrefix(nt.Package, "std.") + "." + nt.Name
+	}
+	return s.mod.Layouts.Structs[key]
+}
+
+// structLayoutSupported reports whether the named type is a Phase B.5 v1
+// candidate — built-in types (List, Map, etc.) are still routed through
+// runtime calls, so we explicitly opt them out.
+func structLayoutSupported(nt *ir.NamedType) bool {
+	if nt == nil || nt.Builtin {
+		return false
+	}
+	return true
+}
+
+// localTypeSize returns the on-stack byte size for a local. Scalars and
+// builtin pointer-shaped types (List<T>, Map<K,V>, Option<T>, Result<T,E>)
+// share one 8-byte slot. User-defined structs with all-scalar fields get
+// one slot per field. Unit-typed locals report 0 — the slot allocator
+// skips them entirely.
+func (s *lowerState) localTypeSize(t mir.Type) int64 {
+	if t == mir.TUnit {
+		return 0
+	}
+	if isABIScalarType(t) {
+		return 8
+	}
+	if sl := s.lookupStructLayout(t); sl != nil {
+		// Each field reserves one 8-byte slot. >16-byte structs still
+		// fit because we don't try to pass them in registers yet — the
+		// slot just grows. Mixed scalar/composite fields fall through
+		// to "treat as opaque pointer" so pre-existing List/Map locals
+		// keep their 8-byte slot.
+		for _, f := range sl.Fields {
+			if !isABIScalarType(f.Type) {
+				return 8
+			}
+		}
+		return int64(len(sl.Fields)) * 8
+	}
+	// Anything else (builtin generics, raw pointer wrappers, opaque
+	// runtime handles) lives at the ABI as a single 8-byte pointer.
+	return 8
+}
+
+// fieldByteOffset returns the byte offset of `index`-th field inside the
+// struct described by t. Returns -1 if t isn't a recognised struct so
+// callers can short-circuit before generating bad code.
+func (s *lowerState) fieldByteOffset(t mir.Type, index int) int64 {
+	if s.lookupStructLayout(t) == nil {
+		return -1
+	}
+	return int64(index) * 8
 }
 
 // mirTypeToDebugKind maps a MIR primitive type to the LIR-side debug kind
@@ -673,14 +783,46 @@ func (s *lowerState) materialiseOperand(op mir.Operand, dst Reg) ([]Instr, error
 }
 
 func (s *lowerState) loadPlaceIntoReg(place mir.Place, dst Reg) ([]Instr, error) {
-	if place.HasProjections() {
-		return nil, fmt.Errorf("%w: place projection in operand", ErrUnsupportedShape)
-	}
 	slot, ok := s.localSlots[place.Local]
 	if !ok {
 		return nil, fmt.Errorf("%w: read of local%d without slot", ErrUnsupportedShape, place.Local)
 	}
-	return []Instr{&Load64Stack{Dst: dst, Offset: slot}}, nil
+	off, err := s.placeProjectionOffset(place)
+	if err != nil {
+		return nil, err
+	}
+	return []Instr{&Load64Stack{Dst: dst, Offset: slot + off}}, nil
+}
+
+// placeProjectionOffset reduces a Place's projection chain to a single
+// byte offset relative to the local's slot. Phase B.5 v1 only handles
+// FieldProj over scalar-typed fields — index/deref projections still
+// fall through to the unsupported-shape sentinel so the LLVM fallback
+// picks them up. The offset is independent of which field type lives
+// at that position because every scalar field consumes 8 bytes.
+func (s *lowerState) placeProjectionOffset(place mir.Place) (int64, error) {
+	if !place.HasProjections() {
+		return 0, nil
+	}
+	loc := lookupLocal(s.fn, place.Local)
+	if loc == nil {
+		return 0, fmt.Errorf("%w: missing local%d for projection", ErrUnsupportedShape, place.Local)
+	}
+	currentType := loc.Type
+	off := int64(0)
+	for _, p := range place.Projections {
+		fp, ok := p.(*mir.FieldProj)
+		if !ok {
+			return 0, fmt.Errorf("%w: projection %T", ErrUnsupportedShape, p)
+		}
+		fieldOff := s.fieldByteOffset(currentType, fp.Index)
+		if fieldOff < 0 {
+			return 0, fmt.Errorf("%w: field projection on non-struct %s", ErrUnsupportedShape, currentType)
+		}
+		off += fieldOff
+		currentType = fp.Type
+	}
+	return off, nil
 }
 
 func (s *lowerState) lowerIntrinsic(instr *mir.IntrinsicInstr) ([]Instr, error) {
