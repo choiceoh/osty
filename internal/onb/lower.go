@@ -26,8 +26,22 @@ var fpArgRegs = []Reg{RegD0, RegD1, RegD2, RegD3, RegD4, RegD5, RegD6, RegD7}
 // abiSmallStructRegLimit is the AAPCS64 cutoff for "small struct" handling:
 // up to two integer registers. Sizes ≤ 8 bytes consume one register, sizes
 // 9–16 bytes consume two adjacent registers, anything bigger goes through
-// indirect (sret-style) passing which Phase A2 doesn't lower yet.
+// indirect (sret-style) passing.
 const abiSmallStructRegLimit = 2
+
+// abiIndirectStructFieldLimit caps the size of structs the dev backend
+// will pass / return by reference. The MVP supports 3- and 4-field
+// all-scalar structs (24B / 32B); broader sizes need a memcpy-class
+// approach the slice doesn't ship. Larger structs fall back to the
+// LLVM backend.
+const abiIndirectStructFieldLimit = 4
+
+// regX8 is the AAPCS64 indirect-result register. The caller stores
+// the address of the caller-allocated return buffer here before
+// branching to the callee, and the callee writes the return value
+// through it. ONB's epilogue copies the local `$ret` slot's bytes
+// into [x8 + offset] for sret-returning functions.
+const regX8 Reg = "x8"
 
 // Runtime symbol names. ONB calls into the same `osty_runtime.c` the LLVM
 // backend bundles, so these strings have to match the C function names
@@ -385,8 +399,12 @@ func (s *lowerState) lowerBranchTerm(term *mir.BranchTerm) ([]Instr, error) {
 // landing at slot+N*8 to match the field-projection offsets the rest
 // of the body expects. Float params consume one FP register (d0..d7)
 // from the independent FP cursor — AAPCS64 doesn't merge integer and
-// FP register usage. Parameters that are never read still advance the
-// cursor so subsequent params see the right register.
+// FP register usage. Indirect-passed structs (>16B all-scalar) take
+// one integer register — a *pointer* to a caller-allocated buffer —
+// and the prologue copies the struct's bytes through x9 into the
+// param's local slot so the rest of the body sees the value as if
+// it were locally constructed. Parameters that are never read still
+// advance the cursor so subsequent params see the right register.
 func (s *lowerState) paramShuffle(fn *mir.Function) []Instr {
 	var out []Instr
 	regCursor := 0
@@ -402,6 +420,20 @@ func (s *lowerState) paramShuffle(fn *mir.Function) []Instr {
 				out = append(out, &StoreFloat64Stack{Src: fpArgRegs[fpCursor], Offset: slot})
 			}
 			fpCursor++
+			continue
+		}
+		if s.abiUsesIndirectStruct(loc.Type) {
+			if hasSlot && regCursor < len(argRegs) {
+				size := s.indirectStructByteSize(loc.Type)
+				ptrReg := argRegs[regCursor]
+				for off := int64(0); off < size; off += 8 {
+					out = append(out,
+						&LoadFromReg{Dst: RegX9, Src: ptrReg, Offset: off},
+						&Store64Stack{Src: RegX9, Offset: slot + off},
+					)
+				}
+			}
+			regCursor++
 			continue
 		}
 		slots, ok := s.abiRegSlots(loc.Type)
@@ -448,6 +480,24 @@ func (s *lowerState) epilogue(fn *mir.Function) []Instr {
 			&LoadFloat64Stack{Dst: RegD0, Offset: slot},
 			&Ret{},
 		}
+	}
+	if s.abiUsesIndirectStruct(fn.ReturnType) {
+		// Sret return: the body wrote $ret into its local slot;
+		// copy each 8-byte half through the caller's buffer
+		// pointer in x8. The MVP assumes x8 wasn't clobbered by
+		// the body — make()-style constructors with no
+		// intermediate calls satisfy that. A follow-up that adds
+		// save/restore at the prologue will lift the restriction.
+		size := s.indirectStructByteSize(fn.ReturnType)
+		out := make([]Instr, 0, int(size/8)*2+1)
+		for off := int64(0); off < size; off += 8 {
+			out = append(out,
+				&Load64Stack{Dst: RegX9, Offset: slot + off},
+				&StoreToReg{Src: RegX9, Base: regX8, Offset: off},
+			)
+		}
+		out = append(out, &Ret{})
+		return out
 	}
 	slots, _ := s.abiRegSlots(fn.ReturnType)
 	if slots == 0 {
@@ -846,18 +896,30 @@ func (s *lowerState) abiRegSlots(t mir.Type) (int, bool) {
 		return 1, true
 	}
 	if layout := s.lookupStructLayout(t); layout != nil {
-		// Confirm every field is scalar; mixed structs need a different
-		// strategy (HFA / sret) the dev backend doesn't implement.
 		for _, f := range layout.Fields {
 			if !isABIScalarType(f.Type) {
 				return 0, false
 			}
 		}
 		n := len(layout.Fields)
-		if n == 0 || n > abiSmallStructRegLimit {
+		if n == 0 {
 			return 0, false
 		}
-		return n, true
+		// Small structs (≤2 regs) ride the direct register path
+		// established in Week 13. Larger all-scalar structs go
+		// through the indirect (sret) path: the caller passes a
+		// pointer in one integer register (or x8 for returns) and
+		// the callee dereferences. Indirect uses 1 regular arg
+		// register slot (the pointer), so we report 1 here. The
+		// caller distinguishes direct vs indirect via
+		// abiUsesIndirectStruct(t).
+		if n <= abiSmallStructRegLimit {
+			return n, true
+		}
+		if n <= abiIndirectStructFieldLimit {
+			return 1, true
+		}
+		return 0, false
 	}
 	if layout := s.lookupEnumLayout(t); layout != nil {
 		size := s.enumSlotSize(layout)
@@ -883,6 +945,36 @@ func (s *lowerState) isABIPassableType(t mir.Type) bool {
 	}
 	_, ok := s.abiRegSlots(t)
 	return ok
+}
+
+// abiUsesIndirectStruct reports whether a struct/enum type t passes
+// or returns through the AAPCS64 indirect (sret) ABI: the value is
+// laid out in a caller-allocated buffer whose address rides in a
+// regular argument register (for params) or x8 (for returns). Phase
+// A2 supports 3- to 4-field all-scalar structs this way; up to 16B
+// (1- or 2-field) takes the direct register path.
+func (s *lowerState) abiUsesIndirectStruct(t mir.Type) bool {
+	layout := s.lookupStructLayout(t)
+	if layout == nil {
+		return false
+	}
+	for _, f := range layout.Fields {
+		if !isABIScalarType(f.Type) {
+			return false
+		}
+	}
+	n := len(layout.Fields)
+	return n > abiSmallStructRegLimit && n <= abiIndirectStructFieldLimit
+}
+
+// indirectStructByteSize returns the byte size of an indirect-passed
+// struct slot — n × 8. Caller pre-checks abiUsesIndirectStruct.
+func (s *lowerState) indirectStructByteSize(t mir.Type) int64 {
+	layout := s.lookupStructLayout(t)
+	if layout == nil {
+		return 0
+	}
+	return int64(len(layout.Fields)) * 8
 }
 
 // lookupStructLayout resolves a NamedType to its `mod.Layouts.Structs`
@@ -1384,6 +1476,19 @@ func (s *lowerState) lowerCall(fn *mir.Function, instr *mir.CallInstr) ([]Instr,
 	var out []Instr
 	regCursor := 0
 	fpCursor := 0
+	// Sret-style return: callee writes the return value through
+	// x8 into a buffer the caller allocates. The dest local's slot
+	// is that buffer — we just stage `add x8, sp, #destSlot` before
+	// the bl and skip the post-call capture entirely.
+	sretDestSlot := int64(-1)
+	if instr.Dest != nil && !instr.Dest.HasProjections() {
+		destType := s.destType(instr.Dest.Local)
+		if s.abiUsesIndirectStruct(destType) {
+			if slot, ok := s.localSlots[instr.Dest.Local]; ok {
+				sretDestSlot = slot
+			}
+		}
+	}
 	for _, arg := range instr.Args {
 		argType := arg.Type()
 		if isFloatABIType(argType) {
@@ -1396,6 +1501,19 @@ func (s *lowerState) lowerCall(fn *mir.Function, instr *mir.CallInstr) ([]Instr,
 			}
 			out = append(out, mat...)
 			fpCursor++
+			continue
+		}
+		if s.abiUsesIndirectStruct(argType) {
+			// Pass &(srcLocal_slot) in argRegs[regCursor]. The arg
+			// is always a Copy / Move of a local — front-end never
+			// emits struct literals as call arguments — so we
+			// resolve to a slot and emit `add Xt, sp, #slot`.
+			ptrInstrs, err := s.indirectArgAddress(arg, argRegs[regCursor])
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, ptrInstrs...)
+			regCursor++
 			continue
 		}
 		slots, ok := s.abiRegSlots(argType)
@@ -1424,8 +1542,16 @@ func (s *lowerState) lowerCall(fn *mir.Function, instr *mir.CallInstr) ([]Instr,
 		}
 		regCursor += slots
 	}
+	// Stage x8 = &destSlot last so the address materialisation
+	// happens after every other arg-reg setup — this matches the
+	// AAPCS64 convention and avoids accidentally clobbering x8 with
+	// an arg materialiser that happens to use it as scratch (none
+	// today, but keeps the slot order future-proof).
+	if sretDestSlot >= 0 {
+		out = append(out, &LoadStackAddress{Dst: regX8, Offset: sretDestSlot})
+	}
 	out = append(out, &BranchLink{Symbol: ref.Symbol})
-	if instr.Dest != nil && !instr.Dest.HasProjections() {
+	if instr.Dest != nil && !instr.Dest.HasProjections() && sretDestSlot < 0 {
 		if slot, ok := s.localSlots[instr.Dest.Local]; ok {
 			destType := s.destType(instr.Dest.Local)
 			if isFloatABIType(destType) {
@@ -1444,6 +1570,32 @@ func (s *lowerState) lowerCall(fn *mir.Function, instr *mir.CallInstr) ([]Instr,
 	}
 	return out, nil
 }
+
+// indirectArgAddress produces the instructions that land &(src_slot)
+// in the destination argument register. Indirect args are always
+// passed as a Copy or Move of a stack-allocated local; struct
+// literals in argument position would need a pre-materialise pass we
+// don't ship yet.
+func (s *lowerState) indirectArgAddress(arg mir.Operand, dst Reg) ([]Instr, error) {
+	var place mir.Place
+	switch o := arg.(type) {
+	case *mir.CopyOp:
+		place = o.Place
+	case *mir.MoveOp:
+		place = o.Place
+	default:
+		return nil, fmt.Errorf("%w: indirect struct arg operand %T", ErrUnsupportedShape, arg)
+	}
+	if place.HasProjections() {
+		return nil, fmt.Errorf("%w: indirect struct arg with projection", ErrUnsupportedShape)
+	}
+	slot, ok := s.localSlots[place.Local]
+	if !ok {
+		return nil, fmt.Errorf("%w: indirect struct arg from local%d without slot", ErrUnsupportedShape, place.Local)
+	}
+	return []Instr{&LoadStackAddress{Dst: dst, Offset: slot}}, nil
+}
+
 
 // destType returns the MIR type of a local in the current function. The
 // caller already knows the local is a Dest of a CallInstr, so a missing

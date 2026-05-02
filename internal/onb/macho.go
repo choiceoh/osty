@@ -984,6 +984,24 @@ func encodeMachOFunction(enc *machoTextEncoding, fn Function, cstringIndex, loca
 					return fmt.Errorf("onb: brk encoding: %w", err)
 				}
 				enc.code = appendU32LE(enc.code, word)
+			case *LoadStackAddress:
+				word, err := encodeAddSubImm(0x91000000, i.Dst, RegSP, uint64(i.Offset))
+				if err != nil {
+					return fmt.Errorf("onb: stack-address add: %w", err)
+				}
+				enc.code = appendU32LE(enc.code, word)
+			case *LoadFromReg:
+				word, err := encodeLoadStoreReg(0xf9400000, i.Dst, i.Src, i.Offset)
+				if err != nil {
+					return err
+				}
+				enc.code = appendU32LE(enc.code, word)
+			case *StoreToReg:
+				word, err := encodeLoadStoreReg(0xf9000000, i.Src, i.Base, i.Offset)
+				if err != nil {
+					return err
+				}
+				enc.code = appendU32LE(enc.code, word)
 			case *LoadFloat64Stack:
 				word, err := encodeFPStack(0xfd400000, i.Dst, i.Offset)
 				if err != nil {
@@ -1387,6 +1405,30 @@ func encodeFmovXFromD(dst, src Reg) (uint32, error) {
 		return 0, fmt.Errorf("%w: fmov src %s", ErrNotImplemented, src)
 	}
 	return 0x9e660000 | (n << 5) | d, nil
+}
+
+// encodeLoadStoreReg encodes `LDR Xt, [Xn, #imm]` (base 0xf9400000)
+// or `STR Xt, [Xn, #imm]` (base 0xf9000000) for 64-bit register-
+// relative loads and stores. Used by the indirect-ABI prologue and
+// epilogue to memcpy through caller-provided pointers. The immediate
+// is 8-byte scaled (so the addressable range is 0..32760).
+func encodeLoadStoreReg(base uint32, t, n Reg, offset int64) (uint32, error) {
+	if offset < 0 || offset%8 != 0 {
+		return 0, fmt.Errorf("%w: load/store reg offset %d", ErrNotImplemented, offset)
+	}
+	tNum, ok := xRegisterNumber(t)
+	if !ok {
+		return 0, fmt.Errorf("%w: load/store reg target %s", ErrNotImplemented, t)
+	}
+	nNum, ok := xRegisterNumber(n)
+	if !ok {
+		return 0, fmt.Errorf("%w: load/store reg base %s", ErrNotImplemented, n)
+	}
+	scaled := uint32(offset / 8)
+	if scaled > 0xfff {
+		return 0, fmt.Errorf("%w: load/store offset %d too large", ErrNotImplemented, offset)
+	}
+	return base | (scaled << 10) | (nNum << 5) | tNum, nil
 }
 
 // encodeFPArith encodes the FP binary arithmetic family

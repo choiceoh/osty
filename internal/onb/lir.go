@@ -339,6 +339,42 @@ type Brk struct {
 
 func (*Brk) instrNode() {}
 
+// LoadStackAddress materialises the address of a stack slot into an
+// x-register: `add Xd, sp, #imm`. The dev backend uses this for the
+// AAPCS64 indirect (sret) ABI — the caller stages the address of the
+// caller-allocated return buffer or the address of an
+// indirect-by-reference argument slot here before branching.
+type LoadStackAddress struct {
+	Dst    Reg
+	Offset int64
+}
+
+func (*LoadStackAddress) instrNode() {}
+
+// LoadFromReg loads a 64-bit word from `[Src + Offset]` into Dst
+// (`ldr Xt, [Xn, #imm]`). The dev backend uses this for the indirect
+// ABI's caller-side memcpy: the prologue receives a pointer in an arg
+// register, then loads each field through it before storing back into
+// the local slot.
+type LoadFromReg struct {
+	Dst    Reg
+	Src    Reg
+	Offset int64
+}
+
+func (*LoadFromReg) instrNode() {}
+
+// StoreToReg stores a 64-bit word from Src into `[Base + Offset]`
+// (`str Xt, [Xn, #imm]`). Used by sret epilogues to write each
+// return-slot half through the caller's buffer pointer in x8.
+type StoreToReg struct {
+	Src    Reg
+	Base   Reg
+	Offset int64
+}
+
+func (*StoreToReg) instrNode() {}
+
 // LoadFloat64Stack loads a Float64 (8-byte slot) from the call frame
 // into a d-register. The encoder picks the `ldr d, [sp, #N]` form
 // when N is 8-byte aligned and ≤ 32760.

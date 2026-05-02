@@ -37,6 +37,60 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 19 (struct >16B sret-style indirect passing, 2026-05-02)** —
+> ONB가 16B 초과 (3-4 필드) all-scalar struct를 AAPCS64 indirect ABI로
+> 처리. `make() -> V3` 같은 함수가 fallback 없이 통과.
+>
+> 작동:
+>
+> ```osty
+> struct V3 { x: Int, y: Int, z: Int }     // 24B
+> fn make() -> V3 { V3 { 10, 20, 30 } }    // sret via x8
+> fn sum(v: V3) -> Int { v.x + v.y + v.z } // indirect arg via x0
+> fn main() {
+>     let v = make()                       // x8 = &v_slot, callee writes through it
+>     println(sum(v))                       // x0 = &v_slot, callee copies into local
+> }
+> ```
+>
+> ABI:
+> - **반환** (sret): caller가 dest slot 할당 → `add x8, sp, #destSlot`
+>   → `bl _callee` → callee가 x8 통해 결과 stamp → caller는 capture 안 함
+> - **인자** (indirect): caller가 `add Xn, sp, #srcSlot` → `bl _callee`
+>   → callee의 prologue가 `[Xn + i*8] → [sp + slot + i*8]`로 필드별 복사
+>
+> 추가:
+> - `abiUsesIndirectStruct(t)` predicate — 3-4 필드 all-scalar struct
+>   에서 true
+> - `abiRegSlots`이 indirect struct에 대해 1을 반환 (포인터 1 reg)
+> - `abiIndirectStructFieldLimit = 4` — 5+ 필드는 여전히 fallback
+> - 새 LIR opcodes: `LoadStackAddress` (`add Xt, sp, #imm`),
+>   `LoadFromReg` (`ldr Xt, [Xn, #imm]`), `StoreToReg` (`str Xt, [Xn, #imm]`)
+> - `paramShuffle` indirect 분기 — argReg를 포인터로 보고 x9 경유 복사
+> - `lowerCall` sret/indirect 분기 — destSlot 자동 할당 + x8 / argReg 세팅
+> - `epilogue` sret 분기 — local $ret slot을 `[x8 + offset]`로 복사
+> - `regX8` 상수 + `xRegisterNumber`이 x8 인식
+> - 새 Mach-O encoder: `encodeLoadStoreReg`
+>
+> 검증:
+> - E2E binary smoke 4개 (`TestONBBackendBinaryRunsLargeStructSretOnDarwinARM64`):
+>   make_v3 (24B sret return), sum_v3 (indirect arg), roundtrip_v3
+>   (make→sum 결합 — caller dest slot이 sret 버퍼 + indirect arg
+>   소스로 양쪽 역할), make_v4 (32B 4-필드 상한 케이스)
+>
+> 한계 (이번 슬라이스에서 명시적으로 보류):
+> - 5+ 필드 / 32B 초과 struct — `abiIndirectStructFieldLimit` 캡
+> - struct payload를 가진 enum (Some(V3) 같은) — payload 자체가 indirect
+> - sret 함수 body가 중간에 다른 함수를 호출하는 경우 — x8 save/restore
+>   미구현 (`make()` 같은 leaf 패턴에는 해당 없음)
+> - struct/enum의 indirect 필드 (외부 struct 안에 큰 struct 중첩)
+> - DWARF struct DIE for >16B struct — 작동은 하지만 lldb로
+>   `frame variable v` 출력은 검증 안 함 (small struct 경로와 동일
+>   layout이라 likely OK이지만 회귀 테스트 미작성)
+>
+> 다음 슬라이스 후보: list_set_* (`xs[i] = v`), Float 비교 / 캐스트
+> (fcmpe / fcvtzs / scvtf), 또는 callee-side x8 save/restore.
+>
 > **Slice A2 Week 18 (struct field mutation, 2026-05-02)** —
 > ONB가 `p.x = 5` 같은 projection-as-Dest 어사인을 native lowering.
 > Week 12에서 `p.x` read는 통과했지만 write는 fallback 사유였음. 이번
