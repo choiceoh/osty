@@ -1,0 +1,318 @@
+// onb_dwarf_line.osty — `__debug_line` section builder for the
+// ONB DWARF emitter. Phase 6.2. Mirror of `emitDwarfLine` and its
+// header / body subroutines in `internal/onb/dwarf.go`.
+//
+// The line program maps PC ranges to (file, line, column) tuples
+// via a state machine. Standard opcodes (DW_LNS_*) advance the
+// machine; extended opcodes (DW_LNE_*) handle absolute addresses
+// and end-of-sequence markers.
+//
+// The Osty side mirrors the Go encoder byte-for-byte. Output is
+// `OnbDwarfLineEncoded { bytes, setAddressOffset }` — the
+// `setAddressOffset` is the section-relative offset of the first
+// `DW_LNE_set_address`'s 8-byte address operand, which the
+// Mach-O writer needs for the relocation that maps zero into the
+// `__text` start address at link time.
+
+// === Types =========================================================
+
+// OnbDwarfLineFile is one entry in the file table.
+//   name     : NUL-terminated source filename
+//   dirIndex : 1-based include-directory index (0 = compilation
+//              directory)
+//   mtime    : modification time (always 0 in ONB output)
+//   size     : file size (always 0 in ONB output)
+pub struct OnbDwarfLineFile {
+    pub name: String,
+    pub dirIndex: Int,
+    pub mtime: Int,
+    pub size: Int,
+}
+
+pub fn onbDwarfLineFile(name: String, dirIndex: Int) -> OnbDwarfLineFile {
+    OnbDwarfLineFile { name: name, dirIndex: dirIndex, mtime: 0, size: 0 }
+}
+
+// OnbDwarfLineRow is a single (PC, file, line, column) point.
+// `line == 0` is the "no source info" sentinel — the encoder
+// skips zero-line rows so the previous mapping stays in force.
+pub struct OnbDwarfLineRow {
+    pub pc: Int,
+    pub file: Int,
+    pub line: Int,
+    pub column: Int,
+}
+
+pub fn onbDwarfLineRow(pc: Int, file: Int, line: Int, column: Int) -> OnbDwarfLineRow {
+    OnbDwarfLineRow { pc: pc, file: file, line: line, column: column }
+}
+
+// OnbDwarfLineProgram is the per-CU input to the encoder. Caller
+// is responsible for sorting `rows` by PC; the encoder rejects
+// out-of-order rows via `outcome.ok = false`.
+pub struct OnbDwarfLineProgram {
+    pub includeDirs: List<String>,
+    pub files: List<OnbDwarfLineFile>,
+    pub rows: List<OnbDwarfLineRow>,
+    pub textSize: Int,
+}
+
+// OnbDwarfLineEncoded carries the byte stream + the offset where
+// the first set_address's 8-byte payload sits, relative to the
+// start of `bytes`. Sentinel `setAddressOffset = -1` marks an
+// encode failure.
+pub struct OnbDwarfLineEncoded {
+    pub bytes: List<Int>,
+    pub setAddressOffset: Int,
+    pub ok: Bool,
+}
+
+// === Byte writers ==================================================
+
+// onbWriteByte / onbWriteU16LE / onbWriteU32LE / onbWriteU64LE
+// push raw bytes to a `List<Int>` accumulator, modelling the Go
+// encoder's `bytes.Buffer` + `binary.Write(.., LittleEndian, ..)`
+// pair. Each helper masks before pushing so signed Int inputs
+// sign-extended into Osty's i64 don't leak into the byte stream.
+fn onbWriteU8(out: List<Int>, v: Int) -> List<Int> {
+    let mut buf = out
+    buf.push(v & 0xff)
+    buf
+}
+
+fn onbWriteU16LE(out: List<Int>, v: Int) -> List<Int> {
+    let mut buf = out
+    buf.push(v & 0xff)
+    buf.push((v >> 8) & 0xff)
+    buf
+}
+
+fn onbWriteU32LE(out: List<Int>, v: Int) -> List<Int> {
+    let mut buf = out
+    buf.push(v & 0xff)
+    buf.push((v >> 8) & 0xff)
+    buf.push((v >> 16) & 0xff)
+    buf.push((v >> 24) & 0xff)
+    buf
+}
+
+fn onbWriteU64LE(out: List<Int>, v: Int) -> List<Int> {
+    let mut buf = out
+    buf.push(v & 0xff)
+    buf.push((v >> 8) & 0xff)
+    buf.push((v >> 16) & 0xff)
+    buf.push((v >> 24) & 0xff)
+    buf.push((v >> 32) & 0xff)
+    buf.push((v >> 40) & 0xff)
+    buf.push((v >> 48) & 0xff)
+    buf.push((v >> 56) & 0xff)
+    buf
+}
+
+// onbWriteCString pushes the byte values of `s` (assumed ASCII
+// for our DWARF use-case) followed by a NUL terminator.
+fn onbWriteCString(out: List<Int>, s: String) -> List<Int> {
+    let mut buf = out
+    for b in s.bytes() {
+        buf.push(b.toInt())
+    }
+    buf.push(0)
+    buf
+}
+
+// === Standard opcode lengths ======================================
+//
+// `dwarfStdOpcodeLengths` byte table indexed by `opcode - 1`. We
+// expose it as a builder rather than a constant because Osty
+// doesn't have static array literals at module scope today.
+fn onbDwarfStdOpcodeLengths(out: List<Int>) -> List<Int> {
+    let mut buf = out
+    buf.push(0) // 0x01 DW_LNS_copy
+    buf.push(1) // 0x02 DW_LNS_advance_pc
+    buf.push(1) // 0x03 DW_LNS_advance_line
+    buf.push(1) // 0x04 DW_LNS_set_file
+    buf.push(1) // 0x05 DW_LNS_set_column
+    buf.push(0) // 0x06 DW_LNS_negate_stmt
+    buf.push(0) // 0x07 DW_LNS_set_basic_block
+    buf.push(0) // 0x08 DW_LNS_const_add_pc
+    buf.push(1) // 0x09 DW_LNS_fixed_advance_pc
+    buf.push(0) // 0x0a DW_LNS_set_prologue_end
+    buf.push(0) // 0x0b DW_LNS_set_epilogue_begin
+    buf.push(1) // 0x0c DW_LNS_set_isa
+    buf
+}
+
+// === Extended op writers ==========================================
+
+// writeDwarfExtendedSetAddress emits `0x00 <ULEB128(9)>
+// DW_LNE_set_address <8-byte LE addr>`. Length = 1 (opcode) + 8
+// (address) = 9.
+fn writeDwarfExtendedSetAddress(out: List<Int>, addr: Int) -> List<Int> {
+    let mut buf = onbWriteU8(out, onbDwarfLNSExtendedOp())
+    buf = onbWriteULEB128(buf, 1 + onbDwarfAddressSize())
+    buf = onbWriteU8(buf, onbDwarfLNESetAddress())
+    buf = onbWriteU64LE(buf, addr)
+    buf
+}
+
+// writeDwarfExtendedEndSequence emits `0x00 <ULEB128(1)>
+// DW_LNE_end_sequence`. Length = 1 (opcode only).
+fn writeDwarfExtendedEndSequence(out: List<Int>) -> List<Int> {
+    let mut buf = onbWriteU8(out, onbDwarfLNSExtendedOp())
+    buf = onbWriteULEB128(buf, 1)
+    buf = onbWriteU8(buf, onbDwarfLNEEndSequence())
+    buf
+}
+
+// === Header encoder ===============================================
+//
+// Header layout per DWARF 4 §6.2.4. The result is the bytes
+// **between** `header_length` and the start of the line program
+// — i.e. what `header_length` itself measures.
+
+pub fn onbEncodeDwarfLineHeader(prog: OnbDwarfLineProgram) -> List<Int> {
+    let mut buf: List<Int> = []
+    buf = onbWriteU8(buf, onbDwarfMinInstLength())
+    buf = onbWriteU8(buf, onbDwarfMaxOpsPerInst())
+    buf = onbWriteU8(buf, onbDwarfDefaultIsStmt())
+    buf = onbWriteU8(buf, onbDwarfLineBaseByte())
+    buf = onbWriteU8(buf, onbDwarfLineRange())
+    buf = onbWriteU8(buf, onbDwarfOpcodeBase())
+    buf = onbDwarfStdOpcodeLengths(buf)
+    for dir in prog.includeDirs {
+        buf = onbWriteCString(buf, dir)
+    }
+    buf.push(0) // include_directories terminator
+    for file in prog.files {
+        buf = onbWriteCString(buf, file.name)
+        buf = onbWriteULEB128(buf, file.dirIndex)
+        buf = onbWriteULEB128(buf, file.mtime)
+        buf = onbWriteULEB128(buf, file.size)
+    }
+    buf.push(0) // file_names terminator
+    buf
+}
+
+// === Body encoder =================================================
+//
+// Walks rows, advancing the state machine. Returns the encoded
+// body + the body-relative offset where the 8-byte address of the
+// first set_address sits (callers thread that through to Mach-O
+// reloc). On out-of-order rows or other failures, returns
+// `setAddressOffset = -1` and an empty byte list.
+
+pub struct OnbDwarfLineBodyEncoded {
+    pub bytes: List<Int>,
+    pub setAddressOffset: Int,
+    pub ok: Bool,
+}
+
+pub fn onbEncodeDwarfLineBody(prog: OnbDwarfLineProgram) -> OnbDwarfLineBodyEncoded {
+    let mut buf: List<Int> = []
+    if prog.rows.len() == 0 {
+        // Empty function — emit a single end_sequence anchored at
+        // address 0. set_address payload starts at body offset 3
+        // (escape + length + opcode).
+        buf = writeDwarfExtendedSetAddress(buf, 0)
+        buf = writeDwarfExtendedEndSequence(buf)
+        return OnbDwarfLineBodyEncoded { bytes: buf, setAddressOffset: 3, ok: true }
+    }
+
+    let mut statePC = 0
+    let mut stateLine = 1
+    let mut stateFile = 1
+    let mut setAddressOff = 0
+    let mut emittedSetAddress = false
+    let mut prevPC = 0
+    let mut firstRow = true
+    let mut ok = true
+
+    for row in prog.rows {
+        if !firstRow && row.pc < prevPC {
+            ok = false
+            return OnbDwarfLineBodyEncoded { bytes: buf, setAddressOffset: 0 - 1, ok: false }
+        }
+        firstRow = false
+        prevPC = row.pc
+        if row.line == 0 {
+            // Skip — preserve previous mapping for prologue / epilogue.
+            continue
+        }
+        if !emittedSetAddress {
+            // The 8-byte address payload sits 3 bytes after the
+            // current buffer cursor (escape + length + opcode).
+            setAddressOff = buf.len() + 3
+            buf = writeDwarfExtendedSetAddress(buf, row.pc)
+            statePC = row.pc
+            emittedSetAddress = true
+        } else if row.pc > statePC {
+            buf = onbWriteU8(buf, onbDwarfLNSAdvancePC())
+            buf = onbWriteULEB128(buf, row.pc - statePC)
+            statePC = row.pc
+        }
+        if row.file != stateFile {
+            buf = onbWriteU8(buf, onbDwarfLNSSetFile())
+            buf = onbWriteULEB128(buf, row.file)
+            stateFile = row.file
+        }
+        if row.line != stateLine {
+            buf = onbWriteU8(buf, onbDwarfLNSAdvanceLine())
+            buf = onbWriteSLEB128(buf, row.line - stateLine)
+            stateLine = row.line
+        }
+        if row.column != 0 {
+            buf = onbWriteU8(buf, onbDwarfLNSSetColumn())
+            buf = onbWriteULEB128(buf, row.column)
+        }
+        buf = onbWriteU8(buf, onbDwarfLNSCopy())
+    }
+    // Pad PC out to TextSize so the final row's PC range covers
+    // the rest of the text section.
+    if prog.textSize > statePC {
+        buf = onbWriteU8(buf, onbDwarfLNSAdvancePC())
+        buf = onbWriteULEB128(buf, prog.textSize - statePC)
+    }
+    buf = writeDwarfExtendedEndSequence(buf)
+    let _ = ok
+    OnbDwarfLineBodyEncoded { bytes: buf, setAddressOffset: setAddressOff, ok: true }
+}
+
+// === Top-level encoder ============================================
+
+// onbEmitDwarfLine composes the full line-section unit:
+//
+//   unit_length         (4 bytes, 32-bit form, excludes itself)
+//   version             (2 bytes)
+//   debug_abbrev_offset (4 bytes — for line, this is header_length)
+//   header              (variable)
+//   body                (variable)
+//
+// Returns the full byte stream + the section-relative offset of
+// the first set_address's 8-byte payload (Mach-O reloc target).
+pub fn onbEmitDwarfLine(prog: OnbDwarfLineProgram) -> OnbDwarfLineEncoded {
+    if prog.files.len() == 0 {
+        return OnbDwarfLineEncoded { bytes: [], setAddressOffset: 0 - 1, ok: false }
+    }
+    let header = onbEncodeDwarfLineHeader(prog)
+    let body = onbEncodeDwarfLineBody(prog)
+    if !body.ok {
+        return OnbDwarfLineEncoded { bytes: [], setAddressOffset: 0 - 1, ok: false }
+    }
+    // unit_length excludes itself: 2 (version) + 4 (header_length)
+    // + headerLen + bodyLen.
+    let unitLen = 2 + 4 + header.len() + body.bytes.len()
+    let mut out: List<Int> = []
+    out = onbWriteU32LE(out, unitLen)
+    out = onbWriteU16LE(out, onbDwarfVersion())
+    out = onbWriteU32LE(out, header.len())
+    for byte in header {
+        out.push(byte)
+    }
+    for byte in body.bytes {
+        out.push(byte)
+    }
+    // Section-relative offset = 4 (unit_length) + 2 (version) + 4
+    // (header_length) + headerLen + bodyOffset.
+    let setAddrOff = 4 + 2 + 4 + header.len() + body.setAddressOffset
+    OnbDwarfLineEncoded { bytes: out, setAddressOffset: setAddrOff, ok: true }
+}

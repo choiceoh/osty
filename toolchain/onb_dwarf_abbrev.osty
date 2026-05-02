@@ -1,0 +1,123 @@
+// onb_dwarf_abbrev.osty — `__debug_abbrev` section builder for
+// the ONB DWARF emitter. Mirror of `emitDwarfAbbrev` in
+// `internal/onb/dwarf.go`.
+//
+// The abbreviation table tells the linker how to interpret each
+// DIE shape: which abbreviation code maps to which (tag, has-
+// children, [(attr, form)...]) tuple. ONB's CU emits seven shapes
+// today — compile unit, subprogram, variable, base type, pointer
+// type, structure type, and member.
+//
+// Each abbreviation entry is the byte sequence:
+//
+//   ULEB128(code)        // > 0
+//   ULEB128(tag)
+//   byte(has_children)
+//   [ULEB128(attr) ULEB128(form)]+
+//   ULEB128(0) ULEB128(0)   // attribute-list terminator
+//
+// The whole table ends with a `ULEB128(0)` (= "no more codes").
+
+// onbEmitDwarfAbbrev returns the full `__debug_abbrev` byte
+// stream the Mach-O writer drops into the section. Output is a
+// `List<Int>` of byte values; callers serialise via the Mach-O
+// section writer.
+pub fn onbEmitDwarfAbbrev() -> List<Int> {
+    let mut buf: List<Int> = []
+
+    // === Code 1: DW_TAG_compile_unit (has children) ============
+    //
+    // The CU is the root DIE. Children are subprograms, base
+    // types, and structure types — all share this single CU
+    // parent.
+    buf = onbWriteULEB128(buf, onbDwarfAbbrevCompileUnit())
+    buf = onbWriteULEB128(buf, onbDwarfTagCompileUnit())
+    buf.push(onbDwarfChildrenYes())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtProducer(), onbDwarfFormStrp())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtLanguage(), onbDwarfFormData1())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtName(), onbDwarfFormStrp())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtCompDir(), onbDwarfFormStrp())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtLowPC(), onbDwarfFormAddr())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtHighPC(), onbDwarfFormData8())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtStmtList(), onbDwarfFormSecOffset())
+    buf = onbWriteULEB128(buf, 0)
+    buf = onbWriteULEB128(buf, 0)
+
+    // === Code 2: DW_TAG_subprogram (has children) =============
+    //
+    // Subprograms own variable DIEs as children. The frame_base
+    // expression points at sp via DW_OP_breg31.
+    buf = onbWriteULEB128(buf, onbDwarfAbbrevSubprogram())
+    buf = onbWriteULEB128(buf, onbDwarfTagSubprogram())
+    buf.push(onbDwarfChildrenYes())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtName(), onbDwarfFormStrp())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtLowPC(), onbDwarfFormAddr())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtHighPC(), onbDwarfFormData8())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtFrameBase(), onbDwarfFormExprloc())
+    buf = onbWriteULEB128(buf, 0)
+    buf = onbWriteULEB128(buf, 0)
+
+    // === Code 3: DW_TAG_variable (no children) ================
+    buf = onbWriteULEB128(buf, onbDwarfAbbrevVariable())
+    buf = onbWriteULEB128(buf, onbDwarfTagVariable())
+    buf.push(onbDwarfChildrenNo())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtName(), onbDwarfFormStrp())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtType(), onbDwarfFormRef4())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtLocation(), onbDwarfFormExprloc())
+    buf = onbWriteULEB128(buf, 0)
+    buf = onbWriteULEB128(buf, 0)
+
+    // === Code 4: DW_TAG_base_type (no children) ==============
+    buf = onbWriteULEB128(buf, onbDwarfAbbrevBaseType())
+    buf = onbWriteULEB128(buf, onbDwarfTagBaseType())
+    buf.push(onbDwarfChildrenNo())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtName(), onbDwarfFormStrp())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtByteSize(), onbDwarfFormData1())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtEncoding(), onbDwarfFormData1())
+    buf = onbWriteULEB128(buf, 0)
+    buf = onbWriteULEB128(buf, 0)
+
+    // === Code 5: DW_TAG_pointer_type (no children) ===========
+    //
+    // Used for String, which sits at the ABI boundary as a pointer
+    // to UTF-8 char data. Pairs with a `char` base_type DIE the
+    // emitter generates alongside.
+    buf = onbWriteULEB128(buf, onbDwarfAbbrevPointerType())
+    buf = onbWriteULEB128(buf, onbDwarfTagPointerType())
+    buf.push(onbDwarfChildrenNo())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtType(), onbDwarfFormRef4())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtByteSize(), onbDwarfFormData1())
+    buf = onbWriteULEB128(buf, 0)
+    buf = onbWriteULEB128(buf, 0)
+
+    // === Code 6: DW_TAG_structure_type (has children) ========
+    //
+    // Phase B.5 introduces struct DIEs alongside their members
+    // (code 7). The byte_size attribute uses `DW_FORM_udata` so
+    // any aligned offset fits in a single uleb128.
+    buf = onbWriteULEB128(buf, onbDwarfAbbrevStructureType())
+    buf = onbWriteULEB128(buf, onbDwarfTagStructureType())
+    buf.push(onbDwarfChildrenYes())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtName(), onbDwarfFormStrp())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtByteSize(), onbDwarfFormUdata())
+    buf = onbWriteULEB128(buf, 0)
+    buf = onbWriteULEB128(buf, 0)
+
+    // === Code 7: DW_TAG_member (no children) =================
+    //
+    // One per struct field. `DW_AT_data_member_location` uses
+    // `DW_FORM_udata` so the byte offset fits in a single
+    // uleb128 even for offsets > 127.
+    buf = onbWriteULEB128(buf, onbDwarfAbbrevMember())
+    buf = onbWriteULEB128(buf, onbDwarfTagMember())
+    buf.push(onbDwarfChildrenNo())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtName(), onbDwarfFormStrp())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtType(), onbDwarfFormRef4())
+    buf = onbWriteULEB128Pair(buf, onbDwarfAtDataMemberLocation(), onbDwarfFormUdata())
+    buf = onbWriteULEB128(buf, 0)
+    buf = onbWriteULEB128(buf, 0)
+
+    // End-of-table marker.
+    buf = onbWriteULEB128(buf, 0)
+    buf
+}
