@@ -3156,6 +3156,25 @@ func (g *mirGen) emitAssign(a *mir.AssignInstr) error {
 		if ip, ok := projs[len(projs)-1].(*mir.IndexProj); ok {
 			return g.emitIndexedWrite(a, destLoc, ip)
 		}
+		if indexPos, ip, ok := firstIndexProjection(projs); ok && indexPos < len(projs)-1 {
+			// Mid-chain IndexProj (e.g. `agg.field[i].subfield = v`) —
+			// the result-write side already grew a recursive helper
+			// for this shape (`emitIndexedElementResultWrite`); route
+			// the assign through it after evaluating the rvalue. The
+			// helper expects an LlvmValue, so we eval first and hand
+			// it the leaf register.
+			leafT := projectionType(projs[len(projs)-1])
+			if leafT == nil {
+				return unsupported("mir-mvp", "mid-index assign with missing leaf type")
+			}
+			leafLLVM := g.llvmType(leafT)
+			newLeafReg, err := g.evalRValue(a.Src, leafT)
+			if err != nil {
+				return err
+			}
+			return g.emitIndexedElementResultWrite(a.Dest, destLoc, indexPos, ip,
+				&LlvmValue{typ: leafLLVM, name: newLeafReg}, "assign-mid-index")
+		}
 	}
 	// Projected write: read-modify-write. Load the whole aggregate,
 	// insertvalue the new element, store back. For nested
@@ -7657,6 +7676,16 @@ func (g *mirGen) emitStringConcatBoxed(op mir.Operand) (*LlvmValue, error) {
 	t := op.Type()
 	if t == nil {
 		return nil, nil
+	}
+	if _, ok := t.(*ir.ErrType); ok {
+		// ErrType operand — IR / monomorph type recovery couldn't
+		// reconstruct a usable type for this interpolation slot.
+		// Falling back to `<error>` lets generation succeed (the
+		// resulting program emits the literal marker at runtime,
+		// which is at least observable). Tracked by
+		// TestNativeToolchainMergedMIRErrTypeFloor — every reduction
+		// in that count shrinks how often this fallback fires.
+		return &LlvmValue{typ: "ptr", name: g.stringLiteral("<error>")}, nil
 	}
 	if _, ok := t.(*ir.FnType); ok {
 		return g.emitFunctionStringConcatBoxed(op), nil
