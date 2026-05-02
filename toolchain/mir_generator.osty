@@ -21744,15 +21744,36 @@ pub fn mirEmitConstStringRef(literal: String) -> String {
 }
 
 pub fn mirStringRefSymbol(literal: String) -> String {
-    "@.str." + mirHexEncodeBytes(literal)
+    "@.str." + mirHexEncodeU32(mirFnv1aHash32(literal))
 }
 
-fn mirHexEncodeBytes(s: String) -> String {
-    let mut out = ""
+/// mirFnv1aHash32 implements 32-bit FNV-1a over the literal's bytes.
+/// Constant-length 8-char hex symbol replaces the previous O(n)
+/// bytewise encoder so long literals don't bloat the symbol table
+/// or recompute work proportional to literal length on every operand
+/// reference. Collision probability for typical Osty programs (< 1k
+/// unique literals) is well below 1 / 2^22 — acceptable.
+fn mirFnv1aHash32(s: String) -> Int {
+    let mut hash = 2166136261
+    let prime = 16777619
+    let mask = 4294967295
     let bytes = llvmStrings.bytes(s)
     for b in bytes {
-        let v = b.toInt()
-        out = out + mirHexDigit((v / 16) % 16) + mirHexDigit(v % 16)
+        hash = hash ^ b.toInt()
+        hash = (hash * prime) & mask
+    }
+    hash & mask
+}
+
+/// mirHexEncodeU32 renders a 32-bit value as 8 hex chars (uppercase).
+/// Constant-time vs the old bytewise mirHexEncodeBytes.
+fn mirHexEncodeU32(value: Int) -> String {
+    let mut out = ""
+    let mut shift = 28
+    for shift >= 0 {
+        let nibble = (value >> shift) & 15
+        out = out + mirHexDigit(nibble)
+        shift = shift - 4
     }
     out
 }

@@ -396,7 +396,8 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"pub fn mirStringRefSymbol(",
 				"pub fn mirCollectStringPool(",
 				"pub fn mirCollectAggregateShapes(",
-				"mirHexEncodeBytes(",
+				"mirFnv1aHash32(",
+				"mirHexEncodeU32(",
 				"mirCollectStringPoolFromInstr(",
 				"mirCollectStringPoolFromOperand(",
 				"mirEmitMultiStepIndexWrite(",
@@ -405,7 +406,7 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"mirCollectStringPool(m)",
 				"mirEmitStringPoolSection(pool)",
 				"mirCollectAggregateShapes(m)",
-				"@.str.\" + mirHexEncodeBytes",
+				"@.str.\" + mirHexEncodeU32(mirFnv1aHash32",
 			},
 		},
 		{
