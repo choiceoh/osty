@@ -37,6 +37,62 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 13 (AAPCS64 small-struct passing + DWARF struct
+> wiring, 2026-05-02)** — ONB가 처음으로 struct를 함수 경계에서 사용 가능.
+> `≤16B` 모든-스칼라 struct가 AAPCS64 small-struct ABI로 2-reg pair에 실려
+> 전달되며, lldb의 `frame variable`이 struct 필드를 풀어서 보여준다.
+>
+> 작동 (canonical 예제):
+>
+> ```osty
+> struct Point { x: Int, y: Int }
+> fn make() -> Point { Point { x: 5, y: 6 } }
+> fn px(p: Point) -> Int { p.x }
+> fn main() {
+>     let p = make()           // {x0, x1} → slot+0 / slot+8
+>     println(px(p))           // slot+0 / slot+8 → {x0, x1}
+> }
+> ```
+>
+> 추가:
+> - `abiRegSlots(t)` / `isABIPassableType(t)` — ABI 슬롯 카운트 (스칼라 1,
+>   ≤16B all-scalar struct N=ceil(size/8), 그 외 0/false)
+> - `paramShuffle`이 register-cursor 모델로 multi-reg struct param을 처리:
+>   regs[i..i+N) → slot+0 / slot+8 / …
+> - `lowerCall`이 struct 인자를 `materialiseStructOperand`로 슬롯에서 N개의
+>   인자 레지스터에 적재; 반환 값이 struct이면 x0, x1을 dest+0 / dest+8에 캡처
+> - `epilogue`가 struct 반환 시 `_return` 슬롯에서 x0/x1을 로드
+> - `assignLocalSlots`가 struct 반환 함수에서 `$ret`를 강제로 read 셋에
+>   추가 (스칼라/Unit는 기존대로 x0 직통)
+> - `lowerFunction` ABI guard가 struct 파라미터 / 반환을 허용 (>16B 또는
+>   composite 필드는 여전히 fallback)
+> - DWARF: `DebugTypeStruct` enum 값과 `DebugLocal.{StructName, StructFields}`
+>   추가; `macho.go`의 `collectStructTypeInputs`가 distinct struct 타입을
+>   첫-등장 순서로 수집해 `dwarfStructTypeInput` 리스트로 `emitDwarfInfo`에
+>   전달; 변수 DIE는 `StructTypeIndex`로 struct DIE를 가리킴
+>
+> 검증:
+> - 단위 테스트 4개 (`TestLowerMIRStruct*`, `TestEmitObjectIncludesStructDIE*`)
+>   — paramShuffle multi-reg, epilogue multi-reg, call site materialise +
+>   capture, DebugLocal에 struct 필드 노출, `__debug_info`에 struct/member DIE
+> - E2E binary smoke (`TestONBBackendBinaryRunsStructParamAndReturnOnDarwinARM64`)
+>   — `make() -> Point` + `px(p)` / `py(p)` 호출 체인이 darwin/arm64에서
+>   `5\n6\n` 출력
+> - LLDB integration (`TestONBBackendLldbFrameVariableShowsStructOnDarwinARM64`)
+>   — `frame variable`이 `(Point) p = (x = 7, y = 11)` 표시
+>
+> 한계 (이번 슬라이스에서 명시적으로 보류):
+> - >16B struct (3+ scalar 필드) — indirect/sret-style passing 미구현
+> - 비-스칼라 필드를 가진 struct (List/String 포함) — HFA / 복합 분류 필요
+> - struct 필드 mutation (`p.x = 5`) — projection-as-write 미지원, 여전히
+>   fallback
+> - 중첩 struct
+> - struct 생성을 인자로 직접 (`px(Point { x: 1, y: 2 })`) — Aggregate-as-arg
+>   는 fallback
+>
+> 다음 슬라이스 후보: enum lowering v1 (struct payload 없는 단순 enum
+> variant), 또는 list element 일반화 (List<Bool> / List<Float64>).
+>
 > **Slice A2 Week 12 (struct lowering v1 — literals + field reads, 2026-05-02)** —
 > ONB가 처음으로 struct를 lower. `struct Point { x: Int, y: Int }` 같은
 > 모든-스칼라 struct 한정. 작동:

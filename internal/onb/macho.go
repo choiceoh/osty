@@ -209,6 +209,11 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 			meta.CU.StmtListOffset = 0 // single CU; line program starts at section offset 0
 			meta.CU.StringTable = meta.Strings
 			fnSizes := computeFnSizes(enc, uint64(len(enc.code)))
+			// Pre-pass: collect distinct struct types so the variable
+			// loop can resolve StructName → struct list index. Order
+			// is the first-seen order across functions, which keeps
+			// the section deterministic for golden testing.
+			structInputs, structIndex := collectStructTypeInputs(program, meta.Strings)
 			subs := make([]dwarfSubprogramInput, 0, len(program.Functions))
 			for i, fn := range program.Functions {
 				if i >= len(enc.fnOffsets) || i >= len(fnSizes) {
@@ -216,6 +221,19 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 				}
 				vars := make([]dwarfVariableInput, 0, len(fn.DebugLocals))
 				for _, dl := range fn.DebugLocals {
+					if dl.TypeKind == DebugTypeStruct {
+						idx, ok := structIndex[dl.StructName]
+						if !ok {
+							continue
+						}
+						vars = append(vars, dwarfVariableInput{
+							NameStrOffset:   meta.Strings.Add(dl.Name),
+							SlotOffset:      dl.SlotOffset,
+							TypeKind:        dwarfBaseTypeNone,
+							StructTypeIndex: idx,
+						})
+						continue
+					}
 					kind := debugTypeToDwarfKind(dl.TypeKind)
 					if kind == dwarfBaseTypeNone {
 						continue
@@ -235,11 +253,7 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 				})
 			}
 			debugAbbrev = emitDwarfAbbrev()
-			// Phase B.5: struct list passes empty until lower.go starts
-			// surfacing struct programs. The encoder still wires the
-			// path so a future caller can pass dwarfStructTypeInput
-			// entries without changing callers.
-			infoEnc = emitDwarfInfo(meta.CU, subs, nil)
+			infoEnc = emitDwarfInfo(meta.CU, subs, structInputs)
 			debugInfo = infoEnc.Bytes
 			debugStr = meta.Strings.buf
 		}
@@ -704,6 +718,50 @@ func debugTypeToDwarfKind(k DebugTypeKind) dwarfBaseTypeKind {
 	default:
 		return dwarfBaseTypeNone
 	}
+}
+
+// collectStructTypeInputs walks every function's DebugLocals and builds
+// the per-CU struct DIE list. Each struct name appears at most once;
+// subsequent locals of the same struct point at the first occurrence's
+// index. The companion `index` map gives the variable loop an O(1)
+// StructName → list-index lookup. Field types are resolved through
+// debugTypeToDwarfKind so the struct DIE shares the CU's primitive
+// base-type DIEs rather than minting fresh ones per struct.
+func collectStructTypeInputs(program *Program, strs *dwarfStringTable) ([]dwarfStructTypeInput, map[string]int) {
+	if program == nil || strs == nil {
+		return nil, nil
+	}
+	index := map[string]int{}
+	var inputs []dwarfStructTypeInput
+	for _, fn := range program.Functions {
+		for _, dl := range fn.DebugLocals {
+			if dl.TypeKind != DebugTypeStruct || dl.StructName == "" {
+				continue
+			}
+			if _, seen := index[dl.StructName]; seen {
+				continue
+			}
+			members := make([]dwarfStructMemberInput, 0, len(dl.StructFields))
+			for i, f := range dl.StructFields {
+				kind := debugTypeToDwarfKind(f.FieldKind)
+				if kind == dwarfBaseTypeNone {
+					continue
+				}
+				members = append(members, dwarfStructMemberInput{
+					NameStrOffset: strs.Add(f.Name),
+					TypeKind:      kind,
+					Offset:        uint64(i) * 8,
+				})
+			}
+			index[dl.StructName] = len(inputs)
+			inputs = append(inputs, dwarfStructTypeInput{
+				NameStrOffset: strs.Add(dl.StructName),
+				ByteSize:      uint64(len(dl.StructFields)) * 8,
+				Members:       members,
+			})
+		}
+	}
+	return inputs, index
 }
 
 func hasAnySourceLine(program *Program) bool {

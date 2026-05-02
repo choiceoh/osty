@@ -524,6 +524,118 @@ fn main() {
 	}
 }
 
+// TestONBBackendBinaryRunsStructParamAndReturnOnDarwinARM64 exercises the
+// AAPCS64 small-struct ABI both directions: a function returns a struct
+// in {x0, x1}, the caller captures it into a stack slot, then passes
+// that whole struct to a second function that consumes it via two
+// argument registers. The end-to-end output drives both the
+// `materialiseStructOperand` (load slot → 2 arg regs) and the
+// struct-return epilogue (load slot → x0/x1) paths through real
+// generated code that gets executed.
+//
+// Source program:
+//
+//	struct Point { x: Int, y: Int }
+//	fn make() -> Point { Point { x: 5, y: 6 } }
+//	fn px(p: Point) -> Int { p.x }
+//	fn py(p: Point) -> Int { p.y }
+//	fn main() {
+//	    let p = make()
+//	    println(px(p))
+//	    println(py(p))
+//	}
+func TestONBBackendBinaryRunsStructParamAndReturnOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("ONB struct ABI executable smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	t.Setenv(onb.EnvStrict, "1")
+	src := `struct Point { x: Int, y: Int }
+fn make() -> Point { Point { x: 5, y: 6 } }
+fn px(p: Point) -> Int { p.x }
+fn py(p: Point) -> Int { p.y }
+fn main() {
+    let p = make()
+    println(px(p))
+    println(py(p))
+}`
+	req := newBackendRequest(t, EmitBinary, src)
+	req.Layout.Target = "aarch64-apple-darwin"
+	result, err := ONBBackend{}.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ONBBackend.Emit returned error: %v", err)
+	}
+	if result == nil || result.Artifacts.Binary == "" {
+		t.Fatalf("missing binary artifact: %+v", result)
+	}
+	out, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("binary returned error: %v\n%s", err, out)
+	}
+	if got, want := string(out), "5\n6\n"; got != want {
+		t.Fatalf("binary output = %q, want %q", got, want)
+	}
+}
+
+// TestONBBackendLldbFrameVariableShowsStructOnDarwinARM64 verifies the
+// DWARF wiring half of small-struct support: a struct local appears in
+// `frame variable` with its field names and values rendered through a
+// DW_TAG_structure_type DIE plus DW_TAG_member children. Without the
+// member DIEs lldb would fall back to "(Point) p =" with no field
+// breakdown, which is what regressions on the type-DIE wiring look
+// like. The breakpoint is set on the println line so the param shuffle
+// in `px` has run and the struct slot is fully populated.
+func TestONBBackendLldbFrameVariableShowsStructOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("lldb struct DWARF integration smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+	if _, err := exec.LookPath("lldb"); err != nil {
+		t.Skip("lldb not found on PATH")
+	}
+	if _, err := exec.LookPath("dsymutil"); err != nil {
+		t.Skip("dsymutil not found on PATH")
+	}
+
+	t.Setenv(onb.EnvStrict, "1")
+	src := `struct Point { x: Int, y: Int }
+fn px(p: Point) -> Int { p.x }
+fn main() {
+    let p = Point { x: 7, y: 11 }
+    println(px(p))
+}`
+	req := newBackendRequest(t, EmitBinary, src)
+	req.Layout.Target = "aarch64-apple-darwin"
+	result, err := ONBBackend{}.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ONBBackend.Emit returned error: %v", err)
+	}
+	if out, err := exec.Command("dsymutil", result.Artifacts.Binary).CombinedOutput(); err != nil {
+		t.Fatalf("dsymutil failed: %v\n%s", err, out)
+	}
+	out, err := exec.Command("lldb",
+		"-o", "br set -f main.osty -l 2",
+		"-o", "run",
+		"-o", "frame variable",
+		"-o", "exit",
+		"--", result.Artifacts.Binary,
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("lldb returned error: %v\n%s", err, out)
+	}
+	text := string(out)
+	for _, want := range []string{"(Point)", "x = 7", "y = 11"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("lldb frame variable missing %q:\n%s", want, text)
+		}
+	}
+}
+
 // TestONBBackendBinaryRunsStringAndListOnDarwinARM64 exercises Phase A2's
 // runtime-call slice: String concatenation and `List<Int>` push/len. These
 // shapes lower to `bl _osty_rt_strings_Concat`, `bl _osty_rt_list_new`,

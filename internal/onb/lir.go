@@ -46,10 +46,27 @@ type Function struct {
 // DebugLocal binds a user-readable name to an stack-slot offset and a
 // primitive type kind. Anonymous compiler temps are excluded — they
 // would clutter `frame variable` output without helping the user.
+//
+// StructName / StructFields populate when TypeKind == DebugTypeStruct;
+// the DWARF emitter de-duplicates struct types by StructName across
+// every function in a CU. StructFields lists each field's name and
+// primitive kind in source order — only all-scalar structs are
+// describable today, which matches what the lowerer accepts.
 type DebugLocal struct {
-	Name       string
-	SlotOffset int64
-	TypeKind   DebugTypeKind
+	Name         string
+	SlotOffset   int64
+	TypeKind     DebugTypeKind
+	StructName   string
+	StructFields []DebugStructField
+}
+
+// DebugStructField is one entry inside DebugLocal.StructFields.
+// FieldKind enumerates the same primitive kinds DebugTypeKind covers; a
+// nested struct field would need an additional path that points back at
+// another struct type, which the lowerer doesn't lower today.
+type DebugStructField struct {
+	Name      string
+	FieldKind DebugTypeKind
 }
 
 // DebugTypeKind enumerates the primitive types the DWARF emitter can
@@ -63,6 +80,7 @@ const (
 	DebugTypeBool
 	DebugTypeFloat  // Float / Float64 (IEEE 754 double)
 	DebugTypeString // String — pointer to UTF-8 bytes at the ABI boundary
+	DebugTypeStruct // user-defined small struct described via DebugLocal.StructName/Fields
 )
 
 // Block is a linear basic block.
