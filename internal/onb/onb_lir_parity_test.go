@@ -99,6 +99,75 @@ func TestLirOpcodeParityVsOstyTable(t *testing.T) {
 	}
 }
 
+// TestLirBranchParityVsOstyTable pins the patched 32-bit word the
+// Go-side branch fixup pass produces against the canonical hex
+// values asserted in `toolchain/onb_fixups_test.osty`. Each case
+// covers a different branch family member (b / b.cond / cbnz)
+// and a representative displacement.
+//
+// BranchLink (`bl`, calls into runtime/local symbols) routes
+// through the Mach-O reloc table rather than this block-relative
+// fixup pass; Phase 2c handles it together with adrp+add.
+func TestLirBranchParityVsOstyTable(t *testing.T) {
+	t.Parallel()
+
+	check := func(name string, got uint32, want uint32) {
+		t.Helper()
+		if got != want {
+			t.Errorf("%s: Go = 0x%08x; Osty = 0x%08x", name, got, want)
+		}
+	}
+
+	// b +4 (imm26 = 1) — forward branch by one instruction word.
+	{
+		fx := machoBranchFixup{codeOffset: 0, kind: machoBranchUncond}
+		code := make([]byte, 8)
+		writeU32LE(code, 0, 0x14000000) // placeholder
+		if err := patchMachOBranch(code, fx, 4); err != nil {
+			t.Fatalf("b +4 patch: %v", err)
+		}
+		check("b +4", readU32LE(code, 0), 0x14000001)
+	}
+
+	// b -4 (imm26 = -1) — backward loop branch.
+	{
+		fx := machoBranchFixup{codeOffset: 4, kind: machoBranchUncond}
+		code := make([]byte, 8)
+		writeU32LE(code, 4, 0x14000000)
+		if err := patchMachOBranch(code, fx, -4); err != nil {
+			t.Fatalf("b -4 patch: %v", err)
+		}
+		check("b -4", readU32LE(code, 4), 0x17ffffff)
+	}
+
+	// b.eq +8 (imm19 = 2, cond = 0).
+	{
+		placeholder := encodeMachOBcondPlaceholder(CondEq)
+		code := make([]byte, 4)
+		writeU32LE(code, 0, placeholder)
+		fx := machoBranchFixup{codeOffset: 0, kind: machoBranchCond, cond: CondEq}
+		if err := patchMachOBranch(code, fx, 8); err != nil {
+			t.Fatalf("b.eq +8 patch: %v", err)
+		}
+		check("b.eq +8", readU32LE(code, 0), 0x54000040)
+	}
+
+	// cbnz x9, +4 (imm19 = 1, Rt = 9).
+	{
+		placeholder, err := encodeMachOCbnzPlaceholder(RegX9)
+		if err != nil {
+			t.Fatalf("cbnz placeholder: %v", err)
+		}
+		code := make([]byte, 4)
+		writeU32LE(code, 0, placeholder)
+		fx := machoBranchFixup{codeOffset: 0, kind: machoBranchCondNotZero}
+		if err := patchMachOBranch(code, fx, 4); err != nil {
+			t.Fatalf("cbnz +4 patch: %v", err)
+		}
+		check("cbnz x9 +4", readU32LE(code, 0), 0xb5000029)
+	}
+}
+
 // TestLirMultiWordParityVsOstyTable pins the variable-length encoder
 // outputs (Phase 2b) against the Osty-side `onbEncodeMovImm64Words`
 // table. Each MovImm64 case verifies both the word count and the

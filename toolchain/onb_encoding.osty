@@ -448,6 +448,147 @@ pub fn onbEncodeMovImm32Word(dst: String, imm: Int) -> Int? {
     onbEncodeMovzW(dst, 0, imm)
 }
 
+// === Branch family — displacement, placeholder, and patch =============
+//
+// The branch family takes PC-relative immediates. ONB's encoder
+// emits placeholder words at branch sites (imm = 0) and records a
+// fixup. After every block has been laid out, a resolve pass
+// converts each fixup's `(branch_byte_offset, target_block_id)`
+// pair into a 4-aligned displacement and patches the placeholder.
+//
+// Range / encoding cheat-sheet (mirror of `patchMachOBranch`):
+//
+//   b   imm26        : 0x14000000 | (imm26 & 0x3ffffff)
+//                      imm26 is signed, range [-2^25, 2^25)
+//   b.cond imm19     : 0x54000000 | ((imm19 & 0x7ffff) << 5) | cond
+//                      imm19 is signed, range [-2^18, 2^18)
+//   cbnz Xt, imm19   : 0xb5000000 | ((imm19 & 0x7ffff) << 5) | Rt
+//
+// The signed immediate is the byte-displacement divided by 4.
+
+// onbBranchImm26Min / Max are the inclusive lower and exclusive
+// upper bounds of imm26 (scaled by 4 = displacement bytes / 4).
+pub fn onbBranchImm26Min() -> Int { 0 - (1 << 25) }
+pub fn onbBranchImm26Max() -> Int { 1 << 25 }
+pub fn onbBranchImm19Min() -> Int { 0 - (1 << 18) }
+pub fn onbBranchImm19Max() -> Int { 1 << 18 }
+
+// onbEncodeBranchDisplacement encodes `b imm26` for an already-known
+// 4-aligned byte displacement. Returns None on misalignment or
+// out-of-range. Used by the fixup resolve pass after blocks are
+// laid out.
+pub fn onbEncodeBranchDisplacement(displacement: Int) -> Int? {
+    if (displacement % 4) != 0 {
+        return None
+    }
+    let imm = displacement / 4
+    if imm < onbBranchImm26Min() || imm >= onbBranchImm26Max() {
+        return None
+    }
+    Some(0x14000000 | (imm & 0x3ffffff))
+}
+
+// onbEncodeBranchCondDisplacement encodes `b.<cond> imm19`. The
+// condition is the aarch64 4-bit code (use `onbCondCode*()` for
+// well-known conditions).
+pub fn onbEncodeBranchCondDisplacement(cond: Int, displacement: Int) -> Int? {
+    if (displacement % 4) != 0 {
+        return None
+    }
+    if cond < 0 || cond > 15 {
+        return None
+    }
+    let imm = displacement / 4
+    if imm < onbBranchImm19Min() || imm >= onbBranchImm19Max() {
+        return None
+    }
+    Some(0x54000000 | ((imm & 0x7ffff) << 5) | cond)
+}
+
+// onbEncodeCbnzDisplacement encodes `cbnz Xt, imm19`. The src
+// register lives in bits [4:0]; imm19 in bits [23:5].
+pub fn onbEncodeCbnzDisplacement(src: String, displacement: Int) -> Int? {
+    let t = onbXRegisterNumber(src)
+    if t < 0 {
+        return None
+    }
+    if (displacement % 4) != 0 {
+        return None
+    }
+    let imm = displacement / 4
+    if imm < onbBranchImm19Min() || imm >= onbBranchImm19Max() {
+        return None
+    }
+    Some(0xb5000000 | ((imm & 0x7ffff) << 5) | t)
+}
+
+// onbEncodeBranchPlaceholder produces the displacement-zero `b 0`
+// word the emit-time encoder lays down before fixups resolve.
+// Equivalent to `onbEncodeBranchDisplacement(0)` but kept distinct
+// so the call site documents intent.
+pub fn onbEncodeBranchPlaceholder() -> Int { 0x14000000 }
+
+// onbEncodeBranchCondPlaceholder produces `b.cond #0` with the
+// caller-supplied condition baked in. Mirror of
+// `encodeMachOBcondPlaceholder` in `internal/onb/macho.go`.
+pub fn onbEncodeBranchCondPlaceholder(cond: Int) -> Int? {
+    if cond < 0 || cond > 15 {
+        return None
+    }
+    Some(0x54000000 | cond)
+}
+
+// onbEncodeCbnzPlaceholder produces `cbnz Xt, #0` with imm19 as
+// zero. The fixup pass overwrites bits [23:5] later; the Rt and
+// header bits stay intact.
+pub fn onbEncodeCbnzPlaceholder(src: String) -> Int? {
+    let t = onbXRegisterNumber(src)
+    if t < 0 {
+        return None
+    }
+    Some(0xb5000000 | t)
+}
+
+// onbPatchBranchUnconditional rewrites a `b 0` placeholder with the
+// final displacement. Returns the patched 32-bit word.
+pub fn onbPatchBranchUnconditional(displacement: Int) -> Int? {
+    onbEncodeBranchDisplacement(displacement)
+}
+
+// onbPatchBranchCond rewrites a `b.cond` placeholder with the
+// final displacement. Preserves the cond field (lower 4 bits + bit
+// 4 reserved zero) carried in the placeholder word.
+//
+// The placeholder is built with imm19 = 0, so OR-ing the new
+// value into the imm19 slot is sufficient — no clear pass needed.
+// This invariant matches `onbEncodeBranchCondPlaceholder` and
+// keeps the patch logic free of bitwise-NOT (Osty doesn't have a
+// `~` operator surface today).
+pub fn onbPatchBranchCond(placeholder: Int, displacement: Int) -> Int? {
+    if (displacement % 4) != 0 {
+        return None
+    }
+    let imm = displacement / 4
+    if imm < onbBranchImm19Min() || imm >= onbBranchImm19Max() {
+        return None
+    }
+    Some(placeholder | ((imm & 0x7ffff) << 5))
+}
+
+// onbPatchCbnz rewrites a `cbnz Xt, #0` placeholder. Same shape as
+// onbPatchBranchCond — only the imm19 bits change; Rt at bits [4:0]
+// is preserved by the input placeholder.
+pub fn onbPatchCbnz(placeholder: Int, displacement: Int) -> Int? {
+    if (displacement % 4) != 0 {
+        return None
+    }
+    let imm = displacement / 4
+    if imm < onbBranchImm19Min() || imm >= onbBranchImm19Max() {
+        return None
+    }
+    Some(placeholder | ((imm & 0x7ffff) << 5))
+}
+
 // onbEncodeAddImm encodes `ADD Xd, Xn, #imm12` for an unshifted
 // immediate (so imm <= 0xfff). Used by `LoadStackAddress`
 // (`add Xd, sp, #N`). Layout: 0x91000000 | (imm12 << 10) | (Rn << 5) | Rd.

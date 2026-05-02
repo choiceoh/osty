@@ -37,6 +37,81 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 27 (ONB self-host port — Phase 2d branch family +
+> fixup pass, 2026-05-03)** — Block-relative 분기 encoder + placeholder
+> + fixup resolve pass 일체. Branch instruction의 알고리즘적 핵심
+> (placeholder 작성 → 블록 byte offset 계산 → displacement 패치) 가
+> 한 슬라이스에 묶임. `b` / `b.cond` / `cbnz` 모두 커버.
+>
+> 추가:
+>
+> - `toolchain/onb_encoding.osty` 확장:
+>   - `onbEncodeBranchDisplacement(disp) -> Int?` — `b imm26`,
+>     signed 26-bit (range ±2^25 words)
+>   - `onbEncodeBranchCondDisplacement(cond, disp) -> Int?` —
+>     `b.cond imm19`, signed 19-bit
+>   - `onbEncodeCbnzDisplacement(src, disp) -> Int?` — `cbnz Xt, imm19`
+>   - `onbEncodeBranchPlaceholder/CondPlaceholder/CbnzPlaceholder` —
+>     emit-time placeholder (imm = 0)
+>   - `onbPatchBranchUnconditional/Cond/Cbnz(placeholder, disp)` —
+>     fixup pass의 패치 헬퍼
+>   - `onbBranchImm26Min/Max`, `onbBranchImm19Min/Max` 상수
+>
+> - `toolchain/onb_fixups.osty` (새 파일):
+>   - `OnbBranchFixupKind` enum (Uncond / Cond / Cbnz)
+>   - `OnbBranchFixup` struct (codeOffset / targetBlock / kind)
+>   - `OnbResolveOutcome` struct (words + ok flag)
+>   - `onbResolveBranchFixups(words, fixups, blockOffsets)` —
+>     fixup 리스트를 walk, 각 fixup의 displacement 계산, placeholder
+>     워드를 patched 워드로 교체
+>   - `onbPatchBranchByKind` — kind별 dispatch
+>
+> - `toolchain/onb_lir.osty` 확장:
+>   - `OnbInstrKind`에 `OnbInstrBranch`, `OnbInstrBranchCond`,
+>     `OnbInstrBranchCondNotZero` 추가
+>   - `OnbInstr.targetBlock: Int` 필드 (-1 default for non-branch)
+>   - constructors: `onbInstrBranch`, `onbInstrBranchCond`,
+>     `onbInstrBranchCondNotZero`
+>   - `OnbBranchEmit` struct (words + fixups)
+>   - `onbEmitInstr(instr, codeOffset) -> OnbBranchEmit` — 모든
+>     opcode를 통합한 emitter. 분기는 placeholder + fixup record를
+>     반환, non-branch는 빈 fixups 리스트
+>   - `onbEncodeInstr` 분기 가지: 분기는 None 반환 (multi-step path
+>     표시; 단일 워드 fast path 유지)
+>
+> - `toolchain/onb_fixups_test.osty` (새 파일):
+>   - 5 round-trip 케이스: forward branch (b +4), backward loop
+>     (b -4), conditional (b.eq +8), cbnz (+4), 그리고 out-of-range
+>     blockId 실패 케이스
+>   - `emitBlocks(blocks)` 헬퍼 — block 리스트를 walk해 word stream +
+>     fixups + blockOffsets 만듦 (byte 단위)
+>   - 각 case: emit → resolve → expected hex 비교
+>
+> - `internal/onb/onb_lir_parity_test.go` 확장:
+>   - `TestLirBranchParityVsOstyTable` — Go의 `patchMachOBranch`가
+>     b/+4, b/-4, b.eq/+8, cbnz/+4 4 케이스에서 Osty 테스트가
+>     주장하는 동일한 hex 워드를 produce하는지 검증
+>
+> 검증:
+> - `osty check toolchain` exit 0
+> - 4개 parity 테스트 (Encoder + LirOpcode + LirMultiWord + LirBranch)
+>   모두 통과
+> - `go test ./internal/onb -short` 0 회귀
+>
+> 한계 (Phase 2c+로 분리):
+> - **BranchLink (`bl symbol`)** — 분기 displacement가 아닌 Mach-O
+>   reloc 표 의존. Phase 2c가 adrp+add와 함께 처리
+> - **Block walker / Function emitter** — 현재 emit 헬퍼는 단일 instr
+>   레벨. 전체 함수를 emit하는 walker (line span tracking, prologue/
+>   epilogue placement, reloc collection 포함) 는 Phase 2e와 함께
+> - **Branch optimization** — fall-through 후속 블록으로의 무조건
+>   분기 elide, mutual rewriting (b → b.cond) 같은 최적화는 lowering
+>   레이어 (Phase 4-5) 의 책임
+>
+> **다음 phase 후보**: Phase 2c (BranchLink + adrp+add + Mach-O reloc
+> 표 model), Phase 2e (Function/Block/Program container types), 또는
+> Phase 3a (MIR Type 의존 ABI predicates).
+>
 > **Slice A2 Week 26 (ONB self-host port — Phase 2b multi-word
 > constant materialisation, 2026-05-03)** — Variable-length
 > encoding 도입. `MovImm64`가 1–4개의 32-bit word를 produce하는
