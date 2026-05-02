@@ -19492,6 +19492,25 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
         MirIntrinsicIsCancelled -> mirEmitIsCancelledIntrinsic(func, instr),
         MirIntrinsicCheckCancelled -> mirEmitCheckCancelledIntrinsic(),
         MirIntrinsicStringConcat -> mirEmitStringConcatIntrinsic(func, instr),
+        MirIntrinsicTaskGroup -> mirEmitTaskGroupIntrinsic(func, instr),
+        MirIntrinsicGroupCancel -> mirEmitGroupCancelIntrinsic(instr),
+        MirIntrinsicGroupIsCancelled -> mirEmitGroupIsCancelledIntrinsic(func, instr),
+        MirIntrinsicParallel -> mirEmitParallelIntrinsic(func, instr),
+        MirIntrinsicRace -> mirEmitRaceIntrinsic(func, instr),
+        MirIntrinsicCollectAll -> mirEmitCollectAllIntrinsic(func, instr),
+        MirIntrinsicSelect -> mirEmitSelectIntrinsic(func, instr),
+        MirIntrinsicSelectRecv -> mirEmitSelectRecvIntrinsic(instr),
+        MirIntrinsicSelectSend -> mirEmitSelectSendIntrinsic(instr),
+        MirIntrinsicSelectTimeout -> mirEmitSelectTimeoutIntrinsic(instr),
+        MirIntrinsicSelectDefault -> mirEmitSelectDefaultIntrinsic(instr),
+        MirIntrinsicBytesLen -> mirEmitContainerLenIntrinsic(func, instr, "osty_rt_bytes_len"),
+        MirIntrinsicBytesIsEmpty -> mirEmitBytesIsEmptyIntrinsic(func, instr),
+        MirIntrinsicBytesGet -> mirEmitBytesGetIntrinsic(func, instr),
+        MirIntrinsicBytesContains -> mirEmitStringPredicateIntrinsic(func, instr, "osty_rt_bytes_contains"),
+        MirIntrinsicBytesStartsWith -> mirEmitStringPredicateIntrinsic(func, instr, "osty_rt_bytes_has_prefix"),
+        MirIntrinsicBytesEndsWith -> mirEmitStringPredicateIntrinsic(func, instr, "osty_rt_bytes_has_suffix"),
+        MirIntrinsicBytesIndexOf -> mirEmitBytesIndexOfIntrinsic(func, instr),
+        MirIntrinsicBytesSplit -> mirEmitBytesSplitIntrinsic(func, instr),
         _ -> "  ; TODO MirIntrinsic " + mirGenIntToString(instr.args.len()) + " arg(s)\n",
     }
 }
@@ -19583,9 +19602,9 @@ fn mirEmitRValueAggregate(dest: String, rv: MirRValue) -> String {
         MirAggTuple -> mirEmitTupleAggregate(dest, rv),
         MirAggStruct -> mirEmitStructAggregate(dest, rv),
         MirAggEnumVariant -> mirEmitEnumVariantAggregate(dest, rv),
-        MirAggList -> "  ; TODO Phase 1e MirAggList (runtime alloc)\n",
-        MirAggMap -> "  ; TODO Phase 1e MirAggMap (runtime alloc)\n",
-        MirAggClosure -> "  ; TODO Phase 1e MirAggClosure\n",
+        MirAggList -> mirEmitListAggregate(dest, rv),
+        MirAggMap -> mirEmitMapAggregate(dest, rv),
+        MirAggClosure -> mirEmitClosureAggregate(dest, rv),
         MirAggInvalid -> "  ; TODO invalid aggregate kind\n",
     }
 }
@@ -20305,6 +20324,29 @@ pub fn mirEmitRuntimeDeclarationsSection() -> String {
     out = out + "declare void @osty_rt_check_cancelled()\n"
     out = out + "declare void @llvm.lifetime.start.p0(i64, ptr)\n"
     out = out + "declare void @llvm.lifetime.end.p0(i64, ptr)\n"
+    // Phase 1m additions
+    out = out + "declare i64 @osty_rt_task_group(ptr)\n"
+    out = out + "declare void @osty_rt_group_cancel(ptr)\n"
+    out = out + "declare i1 @osty_rt_group_is_cancelled(ptr)\n"
+    out = out + "declare ptr @osty_rt_parallel(ptr, i64)\n"
+    out = out + "declare ptr @osty_rt_race(ptr)\n"
+    out = out + "declare ptr @osty_rt_collect_all(ptr)\n"
+    out = out + "declare i64 @osty_rt_select_begin(i64)\n"
+    out = out + "declare i1 @osty_rt_select_recv(i64, ptr, ptr)\n"
+    out = out + "declare i1 @osty_rt_select_send(i64, ptr, ptr)\n"
+    out = out + "declare i1 @osty_rt_select_timeout(i64, i64)\n"
+    out = out + "declare void @osty_rt_select_default(i64)\n"
+    out = out + "declare i8 @osty_rt_bytes_get(ptr, i64)\n"
+    out = out + "declare i1 @osty_rt_bytes_contains(ptr, ptr)\n"
+    out = out + "declare i1 @osty_rt_bytes_has_prefix(ptr, ptr)\n"
+    out = out + "declare i1 @osty_rt_bytes_has_suffix(ptr, ptr)\n"
+    out = out + "declare i64 @osty_rt_bytes_indexOf(ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_bytes_split(ptr, ptr)\n"
+    out = out + "declare void @osty_rt_set_insert_i1(ptr, i1)\n"
+    out = out + "declare void @osty_rt_set_insert_f64(ptr, double)\n"
+    out = out + "declare ptr @osty_rt_make_closure(ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_list_new()\n"
+    out = out + "declare ptr @osty_rt_map_new(i64, i64, i64, ptr)\n"
     out + "\n"
 }
 
@@ -20461,12 +20503,61 @@ fn mirEmitProjectIndexLineFrom(target: String, src: String, proj: MirProjection,
 /// holder local. Multi-step writes (`s.f.g = x`) and Index/Deref
 /// writes stub at TODO.
 fn mirEmitAssignIntoProjection(func: MirFunction, instr: MirInstr) -> String {
-    if instr.dest.projections.len() != 1 {
-        return "  ; TODO multi-step write projection (depth=" + mirGenIntToString(instr.dest.projections.len()) + ")\n"
+    let n = instr.dest.projections.len()
+    if n == 1 {
+        return mirEmitAssignIntoSingleProjection(func, instr)
     }
+    // Multi-step write: read each projection step into intermediate
+    // registers, write the new value at the deepest level, then
+    // insertvalue back up the chain. Phase 1m supports Field / Tuple
+    // projections only; Index / Deref / Variant write-back stays
+    // TODO until alloca-based addressing lands.
+    for proj in instr.dest.projections {
+        if proj.kind != MirProjField && proj.kind != MirProjTuple {
+            return "  ; TODO multi-step write through " + mirProjectionKindName(proj.kind) + "\n"
+        }
+    }
+    let baseReg = mirEmitLocalRegName(instr.dest.local)
+    let mut out = ""
+    // Pass 1: read intermediate aggregates `<base>.r0`, `<base>.r1`, ...
+    let mut prev = baseReg
+    let mut i = 0
+    for proj in instr.dest.projections {
+        if i == n - 1 {
+            // last step is the write target; stop here.
+            i = i + 1
+            continue
+        }
+        let target = baseReg + ".r" + mirGenIntToString(i)
+        out = out + "  " + target + " = extractvalue \{ i64, i64 \} " + prev + ", " + mirGenIntToString(proj.index) + "\n"
+        prev = target
+        i = i + 1
+    }
+    // Compute the new value into a fresh register.
+    let valueDest = baseReg + ".wv"
+    out = out + mirEmitRValue(valueDest, instr.src)
+    let valueTy = mirEmitRValueLLVMType(instr.src)
+    // Pass 2: insertvalue back from deepest to outermost.
+    let lastIdx = instr.dest.projections[n - 1].index
+    let mut writeBack = "  " + baseReg + ".w" + mirGenIntToString(n - 1) + " = insertvalue \{ i64, i64 \} " + prev + ", " + valueTy + " " + valueDest + ", " + mirGenIntToString(lastIdx) + "\n"
+    out = out + writeBack
+    let mut nested = baseReg + ".w" + mirGenIntToString(n - 1)
+    let mut j = n - 2
+    for j >= 0 {
+        let outer = if j == 0 { baseReg } else { baseReg + ".r" + mirGenIntToString(j - 1) }
+        let target = if j == 0 { baseReg } else { baseReg + ".w" + mirGenIntToString(j) }
+        let outerIdx = instr.dest.projections[j].index
+        out = out + "  " + target + " = insertvalue \{ i64, i64 \} " + outer + ", \{ i64, i64 \} " + nested + ", " + mirGenIntToString(outerIdx) + "\n"
+        nested = target
+        j = j - 1
+    }
+    out
+}
+
+fn mirEmitAssignIntoSingleProjection(func: MirFunction, instr: MirInstr) -> String {
     let proj = instr.dest.projections[0]
     if proj.kind != MirProjField && proj.kind != MirProjTuple {
-        return "  ; TODO write through " + mirGenIntToString(proj.index) + "-th " + mirProjectionKindName(proj.kind) + "\n"
+        return "  ; TODO write through 1-step " + mirProjectionKindName(proj.kind) + "\n"
     }
     let baseReg = mirEmitLocalRegName(instr.dest.local)
     let valueDest = baseReg + ".w" + mirGenIntToString(proj.index)
@@ -20921,12 +21012,26 @@ fn mirEmitSetInsertIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let s = mirEmitOperand(instr.args[0])
     let item = mirEmitOperand(instr.args[1])
     let itemTy = mirEmitOperandLLVMType(instr.args[1])
-    let sym = if itemTy == "i64" { "osty_rt_set_insert_i64" } else { "osty_rt_set_insert_ptr" }
+    let sym = mirSetInsertSymbolFor(itemTy)
+    if sym == "" {
+        return "  ; TODO set insert for elem type \"" + itemTy + "\"\n"
+    }
     if instr.hasDest {
         let dest = mirEmitLocalRegName(instr.dest.local)
         return "  " + dest + " = call i1 @" + sym + "(ptr " + s + ", " + itemTy + " " + item + ")\n"
     }
     "  call i1 @" + sym + "(ptr " + s + ", " + itemTy + " " + item + ")\n"
+}
+
+/// mirSetInsertSymbolFor returns the runtime helper for set insert
+/// keyed by element LLVM type. Phase 1m extends Phase 1l's i64-only
+/// dispatch with i1 / ptr / double / string variants.
+fn mirSetInsertSymbolFor(itemTy: String) -> String {
+    if itemTy == "i64" { return "osty_rt_set_insert_i64" }
+    if itemTy == "i1" { return "osty_rt_set_insert_i1" }
+    if itemTy == "ptr" { return "osty_rt_set_insert_ptr" }
+    if itemTy == "double" { return "osty_rt_set_insert_f64" }
+    ""
 }
 
 fn mirEmitSetContainsIntrinsic(func: MirFunction, instr: MirInstr) -> String {
@@ -21066,4 +21171,237 @@ fn mirEmitStorageLifetimeLine(intrinsicSym: String, instr: MirInstr) -> String {
     }
     let regName = mirEmitLocalRegName(instr.storageLocal)
     "  call void @" + intrinsicSym + "(i64 -1, ptr " + regName + ")\n"
+}
+
+
+// ====================================================================
+// Phase 1m — Closures, task family, multi-step write, bytes
+// ====================================================================
+//
+// Phase 1l closed the bulk of the per-call intrinsic catalog; Phase
+// 1m fills in the rest:
+//   - MirAggClosure → `{ ptr fn, env_fields... }` insertvalue chain.
+//   - MirAggList / MirAggMap → empty container alloc via runtime,
+//     then push for each initial element.
+//   - TaskGroup / GroupCancel / GroupIsCancelled / Parallel / Race
+//     / CollectAll runtime call wrappers. Closure body is a ptr
+//     argument the runtime invokes.
+//   - Select family — emit a runtime-assisted protocol; Phase 1m
+//     handles the per-arm helpers but defers the full `select { }`
+//     CFG to Phase 1n once the lowering surface is settled.
+//   - Bytes intrinsics: Get / IsEmpty / IndexOf / Split + the
+//     contains / starts / ends predicates (already routed through
+//     the string-predicate emit shape with bytes runtime symbols).
+//   - Multi-step WRITE projection (Field / Tuple): chained
+//     extractvalue down + insertvalue back.
+//   - Set insert per-elem dispatch: i1 / ptr / double on top of
+//     Phase 1l's i64.
+
+// -------- Aggregate: closure / list / map --------
+
+/// mirEmitClosureAggregate emits `{ ptr fn, <env...> }` as an
+/// insertvalue chain. First field is the fn pointer; subsequent
+/// fields are captured environment values (already resolved to
+/// LLVM operands by the rvalue lowerer).
+fn mirEmitClosureAggregate(dest: String, rv: MirRValue) -> String {
+    let n = rv.aggFields.len()
+    if n == 0 {
+        return "  " + dest + " = bitcast {} undef to {}\n"
+    }
+    let aggTy = mirEmitTupleTypeText(rv.aggFields)
+    let mut out = ""
+    let mut prev = "undef"
+    let mut i = 0
+    for field in rv.aggFields {
+        let fieldTy = mirEmitOperandLLVMType(field)
+        let fieldOp = mirEmitOperand(field)
+        let target = if i == n - 1 { dest } else { dest + ".c" + mirGenIntToString(i) }
+        out = out + "  " + target + " = insertvalue " + aggTy + " " + prev
+        out = out + ", " + fieldTy + " " + fieldOp + ", " + mirGenIntToString(i) + "\n"
+        prev = target
+        i = i + 1
+    }
+    out
+}
+
+/// mirEmitListAggregate creates a runtime list and pushes each
+/// initial element. Result is the list's ptr handle in `dest`.
+/// Per-elem push routes through `mirEmitListPushSymbol`.
+fn mirEmitListAggregate(dest: String, rv: MirRValue) -> String {
+    let mut out = "  " + dest + " = call ptr @osty_rt_list_new()\n"
+    for field in rv.aggFields {
+        let fieldTy = mirEmitOperandLLVMType(field)
+        let pushSym = mirEmitListPushSymbol(fieldTy)
+        if pushSym == "" {
+            out = out + "  ; TODO list aggregate push for elem type \"" + fieldTy + "\"\n"
+            continue
+        }
+        let fieldOp = mirEmitOperand(field)
+        out = out + "  call void @" + pushSym + "(ptr " + dest + ", " + fieldTy + " " + fieldOp + ")\n"
+    }
+    out
+}
+
+/// mirEmitMapAggregate creates an empty map (key+val kinds derived
+/// from the aggregate's variant tag carried in `rv.aggVariantTag`
+/// — Phase 1n threads the real key/val type info through; Phase 1m
+/// uses i64 / i64 default which the runtime tolerates with a TODO).
+/// Initial key-value pairs would land via insertvalue + insert
+/// runtime calls; today the empty alloc is enough.
+fn mirEmitMapAggregate(dest: String, rv: MirRValue) -> String {
+    let mut out = "  " + dest + " = call ptr @osty_rt_map_new(i64 0, i64 0, i64 8, ptr null)\n"
+    if rv.aggFields.len() > 0 {
+        out = out + "  ; TODO Phase 1n map aggregate initial elements (count=" + mirGenIntToString(rv.aggFields.len()) + ")\n"
+    }
+    out
+}
+
+// -------- Task / cancellation / collective --------
+
+fn mirEmitTaskGroupIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 1 {
+        return "  ; TODO taskGroup intrinsic\n"
+    }
+    let body = mirEmitOperand(instr.args[0])
+    if instr.hasDest {
+        let dest = mirEmitLocalRegName(instr.dest.local)
+        return "  " + dest + " = call i64 @osty_rt_task_group(ptr " + body + ")\n"
+    }
+    "  call i64 @osty_rt_task_group(ptr " + body + ")\n"
+}
+
+fn mirEmitGroupCancelIntrinsic(instr: MirInstr) -> String {
+    if instr.args.len() != 1 {
+        return "  ; TODO group cancel intrinsic\n"
+    }
+    let g = mirEmitOperand(instr.args[0])
+    "  call void @osty_rt_group_cancel(ptr " + g + ")\n"
+}
+
+fn mirEmitGroupIsCancelledIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 1 || instr.hasDest == false {
+        return "  ; TODO group isCancelled intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let g = mirEmitOperand(instr.args[0])
+    "  " + dest + " = call i1 @osty_rt_group_is_cancelled(ptr " + g + ")\n"
+}
+
+fn mirEmitParallelIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() < 1 || instr.hasDest == false {
+        return "  ; TODO parallel intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let body = mirEmitOperand(instr.args[0])
+    let bound = if instr.args.len() >= 2 { mirEmitOperand(instr.args[1]) } else { "0" }
+    "  " + dest + " = call ptr @osty_rt_parallel(ptr " + body + ", i64 " + bound + ")\n"
+}
+
+fn mirEmitRaceIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 1 || instr.hasDest == false {
+        return "  ; TODO race intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let bodies = mirEmitOperand(instr.args[0])
+    "  " + dest + " = call ptr @osty_rt_race(ptr " + bodies + ")\n"
+}
+
+fn mirEmitCollectAllIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 1 || instr.hasDest == false {
+        return "  ; TODO collectAll intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let bodies = mirEmitOperand(instr.args[0])
+    "  " + dest + " = call ptr @osty_rt_collect_all(ptr " + bodies + ")\n"
+}
+
+// -------- Select family --------
+
+fn mirEmitSelectIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.hasDest == false {
+        return "  ; TODO select intrinsic without dest\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let armCount = if instr.args.len() >= 1 { mirEmitOperand(instr.args[0]) } else { "0" }
+    "  " + dest + " = call i64 @osty_rt_select_begin(i64 " + armCount + ")\n"
+}
+
+fn mirEmitSelectRecvIntrinsic(instr: MirInstr) -> String {
+    if instr.args.len() != 3 {
+        return "  ; TODO select recv arm\n"
+    }
+    let token = mirEmitOperand(instr.args[0])
+    let chan = mirEmitOperand(instr.args[1])
+    let body = mirEmitOperand(instr.args[2])
+    "  call i1 @osty_rt_select_recv(i64 " + token + ", ptr " + chan + ", ptr " + body + ")\n"
+}
+
+fn mirEmitSelectSendIntrinsic(instr: MirInstr) -> String {
+    if instr.args.len() != 3 {
+        return "  ; TODO select send arm\n"
+    }
+    let token = mirEmitOperand(instr.args[0])
+    let chan = mirEmitOperand(instr.args[1])
+    let body = mirEmitOperand(instr.args[2])
+    "  call i1 @osty_rt_select_send(i64 " + token + ", ptr " + chan + ", ptr " + body + ")\n"
+}
+
+fn mirEmitSelectTimeoutIntrinsic(instr: MirInstr) -> String {
+    if instr.args.len() != 2 {
+        return "  ; TODO select timeout arm\n"
+    }
+    let token = mirEmitOperand(instr.args[0])
+    let ms = mirEmitOperand(instr.args[1])
+    "  call i1 @osty_rt_select_timeout(i64 " + token + ", i64 " + ms + ")\n"
+}
+
+fn mirEmitSelectDefaultIntrinsic(instr: MirInstr) -> String {
+    if instr.args.len() != 1 {
+        return "  ; TODO select default arm\n"
+    }
+    let token = mirEmitOperand(instr.args[0])
+    "  call void @osty_rt_select_default(i64 " + token + ")\n"
+}
+
+// -------- Bytes --------
+
+fn mirEmitBytesIsEmptyIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 1 || instr.hasDest == false {
+        return "  ; TODO bytes isEmpty\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let arg = mirEmitOperand(instr.args[0])
+    let lenReg = dest + ".bl"
+    let mut out = "  " + lenReg + " = call i64 @osty_rt_bytes_len(ptr " + arg + ")\n"
+    out + "  " + dest + " = icmp eq i64 " + lenReg + ", 0\n"
+}
+
+fn mirEmitBytesGetIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 2 || instr.hasDest == false {
+        return "  ; TODO bytes get\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let bs = mirEmitOperand(instr.args[0])
+    let idx = mirEmitOperand(instr.args[1])
+    "  " + dest + " = call i8 @osty_rt_bytes_get(ptr " + bs + ", i64 " + idx + ")\n"
+}
+
+fn mirEmitBytesIndexOfIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 2 || instr.hasDest == false {
+        return "  ; TODO bytes indexOf\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let lhs = mirEmitOperand(instr.args[0])
+    let rhs = mirEmitOperand(instr.args[1])
+    "  " + dest + " = call i64 @osty_rt_bytes_indexOf(ptr " + lhs + ", ptr " + rhs + ")\n"
+}
+
+fn mirEmitBytesSplitIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 2 || instr.hasDest == false {
+        return "  ; TODO bytes split\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let lhs = mirEmitOperand(instr.args[0])
+    let sep = mirEmitOperand(instr.args[1])
+    "  " + dest + " = call ptr @osty_rt_bytes_split(ptr " + lhs + ", ptr " + sep + ")\n"
 }
