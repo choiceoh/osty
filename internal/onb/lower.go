@@ -34,10 +34,13 @@ const abiSmallStructRegLimit = 2
 // exactly. The Mach-O `bl` encoder prepends the leading underscore for
 // darwin's symbol mangling.
 const (
-	runtimeSymStringConcat = "osty_rt_strings_Concat"
-	runtimeSymListNew      = "osty_rt_list_new"
-	runtimeSymListPushI64  = "osty_rt_list_push_i64"
-	runtimeSymListLen      = "osty_rt_list_len"
+	runtimeSymStringConcat   = "osty_rt_strings_Concat"
+	runtimeSymListNew        = "osty_rt_list_new"
+	runtimeSymListPushI64    = "osty_rt_list_push_i64"
+	runtimeSymListPushI1     = "osty_rt_list_push_i1"
+	runtimeSymListPushF64    = "osty_rt_list_push_f64"
+	runtimeSymListPushString = "osty_rt_list_push_string"
+	runtimeSymListLen        = "osty_rt_list_len"
 )
 
 // LowerMIR lowers the supported MIR slice into ONB's own LIR. Phase 1.0
@@ -1534,8 +1537,11 @@ func (s *lowerState) lowerIntrinsic(instr *mir.IntrinsicInstr) ([]Instr, error) 
 }
 
 // lowerListPush lowers `IntrinsicListPush(list, value)` into a runtime
-// call. The current slice only handles `List<Int>` — push on i1/f64 lists
-// would call different runtime symbols and is left for the next slice.
+// call. The runtime ships type-specific entry points for the four
+// scalar element widths Osty lists encounter today — i64, i1, f64,
+// and string-pointer — so we dispatch by the value operand's MIR
+// type and route Float values through d0 (the AAPCS64 FP arg slot)
+// instead of x1.
 func (s *lowerState) lowerListPush(instr *mir.IntrinsicInstr) ([]Instr, error) {
 	if len(instr.Args) != 2 {
 		return nil, fmt.Errorf("%w: list_push expects 2 args, got %d", ErrUnsupportedShape, len(instr.Args))
@@ -1544,13 +1550,41 @@ func (s *lowerState) lowerListPush(instr *mir.IntrinsicInstr) ([]Instr, error) {
 	if err != nil {
 		return nil, err
 	}
-	value, err := s.materialiseOperand(instr.Args[1], RegX1)
-	if err != nil {
-		return nil, err
-	}
+	value := instr.Args[1]
+	valueT := value.Type()
 	out := append([]Instr(nil), list...)
-	out = append(out, value...)
-	out = append(out, &BranchLink{Symbol: runtimeSymListPushI64})
+	switch {
+	case valueT == mir.TInt:
+		mat, err := s.materialiseOperand(value, RegX1)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, mat...)
+		out = append(out, &BranchLink{Symbol: runtimeSymListPushI64})
+	case valueT == mir.TBool:
+		mat, err := s.materialiseOperand(value, RegX1)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, mat...)
+		out = append(out, &BranchLink{Symbol: runtimeSymListPushI1})
+	case isFloatABIType(valueT):
+		mat, err := s.materialiseFloatOperand(value, RegD0)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, mat...)
+		out = append(out, &BranchLink{Symbol: runtimeSymListPushF64})
+	case valueT == mir.TString:
+		mat, err := s.materialiseOperand(value, RegX1)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, mat...)
+		out = append(out, &BranchLink{Symbol: runtimeSymListPushString})
+	default:
+		return nil, fmt.Errorf("%w: list_push value type %s", ErrUnsupportedShape, valueT)
+	}
 	return out, nil
 }
 

@@ -37,6 +37,47 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 16 (List<T> 일반화 — Bool/Float64/String, 2026-05-02)** —
+> ONB가 List<Int> 외의 element type에 대해 push/len을 native lowering.
+> 런타임은 이미 `osty_rt_list_push_i64` 외에 `_i1`/`_f64`/`_string`을
+> 노출하고 있어서 dispatch만 추가하면 됨.
+>
+> 작동:
+>
+> ```osty
+> let mut bools: List<Bool> = []
+> bools.push(true)             // osty_rt_list_push_i1
+>
+> let mut floats: List<Float64> = []
+> floats.push(3.14)            // osty_rt_list_push_f64 — value in d0
+>
+> let mut strs: List<String> = []
+> strs.push("hi")              // osty_rt_list_push_string
+> ```
+>
+> 추가:
+> - 새 runtime symbol 상수: `runtimeSymListPushI1`, `runtimeSymListPushF64`,
+>   `runtimeSymListPushString`
+> - `lowerListPush`이 `value.Type()`로 디스패치 — Int/Bool/String은
+>   x1, Float은 d0 (AAPCS64 FP arg cursor)
+>
+> 검증:
+> - E2E binary smoke 3개 (`TestONBBackendBinaryRunsListGenericsOnDarwinARM64`):
+>   list_bool (3 push → len 3), list_float (2 push → len 2),
+>   list_string (4 push → len 4)
+>
+> 한계 (이번 슬라이스에서 명시적으로 보류):
+> - `list[i]` 인덱스 read/write — `osty_rt_list_get_*` / `_set_*`
+>   디스패치 미구현
+> - `list_pop()` — runtime symbol 다양함, 미구현
+> - 비-empty list literal `[1, 2, 3]` — `AggregateRV(list)` non-empty
+>   case 미구현 (현재 빈 리스트만)
+> - `for x in list` — iterator protocol 미구현
+> - struct/enum element type — `osty_rt_list_push_bytes` 경로 필요
+>
+> 다음 슬라이스 후보: for-in 루프 native lowering (List<T> + 인덱스 read
+> 결합), 또는 struct field mutation.
+>
 > **Slice A2 Week 15 (Float64 + IEEE 산술 + AAPCS64 FP ABI, 2026-05-02)** —
 > ONB가 처음으로 Float64를 native lowering. `let x: Float64 = 3.14` /
 > `(a + b) * 3.0` / `fn double(x: Float64) -> Float64` 같은 코드가
