@@ -18932,8 +18932,13 @@ fn mirEmitFunctionStub(func: MirFunction) -> String {
         let isEntry = block.id == func.entry
         let label = mirBlockLabelName(isEntry, mirGenIntToString(block.id))
         out = out + mirBlockHeaderLine(label)
+        if isEntry {
+            out = out + mirEmitParamBindingPrologue(func)
+        }
+        let mut instrIdx = 0
         for instr in block.instrs {
-            out = out + mirEmitInstruction(func, instr)
+            out = out + mirEmitInstruction(func, block.id, instrIdx, instr)
+            instrIdx = instrIdx + 1
         }
         out = out + mirEmitTerminatorLine(func, block.term, block.hasTerm)
     }
@@ -19150,12 +19155,12 @@ fn mirEmitReturnStub(returnType: String) -> String {
 /// mirEmitInstruction renders one MirInstr as zero or more LLVM
 /// instruction lines. Unsupported shapes degrade to a `; TODO`
 /// comment so the IR text stays parseable.
-fn mirEmitInstruction(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitInstruction(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
     match instr.kind {
         MirInstrInvalid -> "  ; TODO invalid MIR instruction\n",
         MirInstrAssign -> mirEmitAssignInstr(func, instr),
         MirInstrCall -> mirEmitCallInstr(func, instr),
-        MirInstrIntrinsic -> mirEmitIntrinsicInstr(func, instr),
+        MirInstrIntrinsic -> mirEmitIntrinsicInstr(func, blockId, instrIdx, instr),
         MirInstrStorageLive -> "",
         MirInstrStorageDead -> "",
     }
@@ -19334,22 +19339,41 @@ fn mirEmitOperandLLVMType(op: MirOperand) -> String {
 /// callees stub with TODO. The return type comes from `func.locals`
 /// when `hasDest` so the call signature matches the dest slot.
 fn mirEmitCallInstr(func: MirFunction, instr: MirInstr) -> String {
-    if instr.calleeKind != MirCalleeFn {
-        return "  ; TODO Phase 1e indirect / unknown call kind\n"
+    if instr.calleeKind == MirCalleeNone {
+        return "  ; TODO unknown call kind (calleeKind=None)\n"
     }
     let argList = mirEmitCallArgList(instr.args)
+    let calleeText = if instr.calleeKind == MirCalleeIndirect {
+        mirEmitOperand(instr.calleeOperand)
+    } else {
+        "@" + instr.calleeSymbol
+    }
     if instr.hasDest {
         if mirPlaceHasProjections(instr.dest) {
-            return "  ; TODO Phase 1e call-into-projection dest\n"
+            return "  ; TODO Phase 1f call-into-projection dest\n"
         }
         let dest = mirEmitLocalRegName(instr.dest.local)
         let retTy = mirEmitCallReturnType(func, instr)
         if retTy == "void" {
-            return mirCallVoidLine(instr.calleeSymbol, argList)
+            return mirEmitCallStmtLine(calleeText, argList)
         }
-        return mirCallValueLine(dest, retTy, instr.calleeSymbol, argList)
+        return mirEmitCallValueLine(dest, retTy, calleeText, argList)
     }
-    mirCallVoidLine(instr.calleeSymbol, argList)
+    mirEmitCallStmtLine(calleeText, argList)
+}
+
+/// mirEmitCallStmtLine renders `  call void @<sym>(<args>)` or
+/// `  call void %<reg>(<args>)`. Generalises `mirCallVoidLine` to
+/// accept a pre-formatted callee text (with leading `@` or `%`) so
+/// indirect calls share the same emit shape.
+fn mirEmitCallStmtLine(calleeText: String, argList: String) -> String {
+    "  call void " + calleeText + "(" + argList + ")\n"
+}
+
+/// mirEmitCallValueLine renders `  <dest> = call <ret> <callee>(<args>)`.
+/// Generalises `mirCallValueLine` over direct/indirect callee text.
+fn mirEmitCallValueLine(dest: String, retTy: String, calleeText: String, argList: String) -> String {
+    "  " + dest + " = call " + retTy + " " + calleeText + "(" + argList + ")\n"
 }
 
 /// mirEmitCallReturnType resolves the return type of a call. With
@@ -19389,14 +19413,14 @@ fn mirEmitCallArgList(args: List<MirOperand>) -> String {
 /// operands route through the runtime IO write helper. Abort routes
 /// through `osty_rt_abort`. Everything else stubs with TODO so the
 /// verifier surfaces the next gap.
-fn mirEmitIntrinsicInstr(func: MirFunction, instr: MirInstr) -> String {
+fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: MirInstr) -> String {
     match instr.intrinsic {
-        MirIntrinsicPrintln -> mirEmitIoWriteIntrinsic(instr, true, false),
-        MirIntrinsicPrint -> mirEmitIoWriteIntrinsic(instr, false, false),
-        MirIntrinsicEprintln -> mirEmitIoWriteIntrinsic(instr, true, true),
-        MirIntrinsicEprint -> mirEmitIoWriteIntrinsic(instr, false, true),
+        MirIntrinsicPrintln -> mirEmitIoWriteIntrinsic(blockId, instrIdx, instr, true, false),
+        MirIntrinsicPrint -> mirEmitIoWriteIntrinsic(blockId, instrIdx, instr, false, false),
+        MirIntrinsicEprintln -> mirEmitIoWriteIntrinsic(blockId, instrIdx, instr, true, true),
+        MirIntrinsicEprint -> mirEmitIoWriteIntrinsic(blockId, instrIdx, instr, false, true),
         MirIntrinsicAbort -> mirEmitAbortIntrinsic(instr),
-        _ -> "  ; TODO Phase 1e MirIntrinsic " + mirGenIntToString(instr.args.len()) + " arg(s)\n",
+        _ -> "  ; TODO Phase 1f MirIntrinsic " + mirGenIntToString(instr.args.len()) + " arg(s)\n",
     }
 }
 
@@ -19405,18 +19429,59 @@ fn mirEmitIntrinsicInstr(func: MirFunction, instr: MirInstr) -> String {
 /// pretty-printers (Int, Bool, …) are Phase 1e (the Go side dispatches
 /// on operand type via printf format specifiers; mirroring that takes
 /// the per-type table). Non-String args stub with TODO.
-fn mirEmitIoWriteIntrinsic(instr: MirInstr, newline: Bool, stderr: Bool) -> String {
+fn mirEmitIoWriteIntrinsic(blockId: Int, instrIdx: Int, instr: MirInstr, newline: Bool, stderr: Bool) -> String {
     if instr.args.len() != 1 {
-        return "  ; TODO Phase 1e print-family with " + mirGenIntToString(instr.args.len()) + " args\n"
+        return "  ; TODO Phase 1f print-family with " + mirGenIntToString(instr.args.len()) + " args\n"
     }
     let arg = instr.args[0]
-    if arg.typ != "String" {
-        return "  ; TODO Phase 1e print-family of " + arg.typ + " (printf-style dispatch)\n"
-    }
-    let argText = mirEmitOperand(arg)
     let nlLit = if newline { "true" } else { "false" }
     let errLit = if stderr { "true" } else { "false" }
-    "  call void @osty_rt_io_write(ptr " + argText + ", i1 " + nlLit + ", i1 " + errLit + ")\n"
+    if arg.typ == "String" {
+        let argText = mirEmitOperand(arg)
+        return "  call void @osty_rt_io_write(ptr " + argText + ", i1 " + nlLit + ", i1 " + errLit + ")\n"
+    }
+    let toStringSym = mirEmitToStringSymbol(arg.typ)
+    if toStringSym == "" {
+        return "  ; TODO Phase 1f print of " + arg.typ + " (no to_string runtime helper)\n"
+    }
+    let llvmTy = mirEmitOperandLLVMType(arg)
+    let argText = mirEmitOperand(arg)
+    let textReg = mirEmitFreshTempName(blockId, instrIdx)
+    let mut out = "  " + textReg + " = call ptr @" + toStringSym + "(" + llvmTy + " " + argText + ")\n"
+    out = out + "  call void @osty_rt_io_write(ptr " + textReg + ", i1 " + nlLit + ", i1 " + errLit + ")\n"
+    out
+}
+
+/// mirEmitToStringSymbol returns the runtime helper that converts a
+/// primitive value to a managed string. Empty result means "no
+/// dispatch known"; the caller should stub with TODO. Mirrors the
+/// Go-side per-type printf branch in `emitPrintlnLike` but routes
+/// through the runtime to keep the IR free of module-level format
+/// globals (Phase 1e).
+fn mirEmitToStringSymbol(typeName: String) -> String {
+    if typeName == "Int" || typeName == "Int64" || typeName == "UInt64" {
+        return "osty_rt_int_to_string"
+    }
+    if typeName == "Bool" {
+        return "osty_rt_bool_to_string"
+    }
+    if typeName == "Char" {
+        return "osty_rt_char_to_string"
+    }
+    if typeName == "Float" || typeName == "Float64" {
+        return "osty_rt_float_to_string"
+    }
+    ""
+}
+
+/// mirEmitFreshTempName produces a deterministic intermediate
+/// register name from (blockId, instrIdx). Threading these two
+/// indices through `mirEmitInstruction` avoids the per-function
+/// SSA counter that would otherwise have to share state across
+/// the entire emit pass — sufficient for Phase 1e's intrinsic
+/// indirection where each call instr needs at most one temp.
+fn mirEmitFreshTempName(blockId: Int, instrIdx: Int) -> String {
+    "%t.b" + mirGenIntToString(blockId) + ".i" + mirGenIntToString(instrIdx)
 }
 
 /// mirEmitAbortIntrinsic emits `call void @osty_rt_abort(ptr <msg>)`
@@ -19495,4 +19560,64 @@ fn mirEmitTupleTypeText(fields: List<MirOperand>) -> String {
         i = i + 1
     }
     out + " \}"
+}
+
+
+// ====================================================================
+// Phase 1e — Parameter binding prologue
+// ====================================================================
+//
+// Phase 1d (#1275) wired direct calls + simple intrinsics + tuple
+// aggregates, but every `%v<paramLocal>` referenced from a fn body
+// was dangling — the call signature exposed `%p<i>` slots, and the
+// body referenced `%v<paramLocal>` registers, with nothing connecting
+// the two. Phase 1e adds an entry-block prologue that copies each
+// `%p<i>` into its `%v<paramLocal>` so downstream uses resolve.
+//
+// The copy uses the same add-with-zero idiom Phase 1c's MirRVUse
+// established (no plain SSA copy in LLVM); type-specific variants
+// (fadd 0.0, or i1 0, select i1 true ptr) keep the LLVM verifier
+// happy across primitives. ptr / String params route through the
+// `select i1 true, ptr op, ptr op` form so the LLVM type stays
+// `ptr` without a bitcast detour.
+
+/// mirEmitParamBindingPrologue emits one copy line per parameter
+/// local at the start of the entry block. No-op when the function
+/// has no parameters. Mirrors the Phase 1c Use-rvalue idiom so the
+/// emitted shape stays consistent across the emitter.
+fn mirEmitParamBindingPrologue(func: MirFunction) -> String {
+    let mut out = ""
+    let mut i = 0
+    for paramLocal in func.params {
+        if paramLocal < 0 || paramLocal >= func.locals.len() {
+            i = i + 1
+            continue
+        }
+        let dest = mirEmitLocalRegName(paramLocal)
+        let src = "%p" + mirGenIntToString(i)
+        let ty = mirEmitParamType(func, paramLocal)
+        out = out + mirEmitParamCopyLine(dest, ty, src)
+        i = i + 1
+    }
+    out
+}
+
+/// mirEmitParamCopyLine renders one `<dest> = <opcode> <ty> <zero>, <src>`
+/// (or the equivalent for ptr / float / i1) line. Same idiom as
+/// `mirEmitRValueUse` but operating on raw `%p<i>` LLVM-side names
+/// rather than MirOperand-shaped inputs. Extracted so future Phase
+/// 1f passes (e.g. inserting safepoint polls into the prologue) can
+/// share the copy emitter without re-duplicating the per-type
+/// branches.
+fn mirEmitParamCopyLine(dest: String, ty: String, src: String) -> String {
+    if ty == "ptr" {
+        return "  " + dest + " = select i1 true, ptr " + src + ", ptr " + src + "\n"
+    }
+    if ty == "double" || ty == "float" {
+        return "  " + dest + " = fadd " + ty + " 0.0, " + src + "\n"
+    }
+    if ty == "i1" {
+        return "  " + dest + " = or i1 0, " + src + "\n"
+    }
+    "  " + dest + " = add " + ty + " 0, " + src + "\n"
 }
