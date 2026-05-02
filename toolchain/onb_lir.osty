@@ -92,6 +92,12 @@ pub enum OnbInstrKind {
     OnbInstrFmulReg,
     OnbInstrFdivReg,
     OnbInstrBranchLinkReg,
+    // Phase 2b: multi-word constant materialisation. These produce
+    // 1..4 32-bit words rather than a single Int, and route through
+    // `onbEncodeInstrWords` instead of the single-word
+    // `onbEncodeInstr` dispatcher.
+    OnbInstrMovImm32,
+    OnbInstrMovImm64,
 }
 
 // === LIR instruction record ============================================
@@ -220,6 +226,14 @@ pub fn onbInstrBranchLinkReg(reg: String) -> OnbInstr {
     OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrBranchLinkReg, src: reg }
 }
 
+pub fn onbInstrMovImm32(dst: String, imm: Int) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrMovImm32, dst: dst, imm: imm }
+}
+
+pub fn onbInstrMovImm64(dst: String, imm: Int) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrMovImm64, dst: dst, imm: imm }
+}
+
 // === Single-word encoder dispatch =====================================
 //
 // `onbEncodeInstr` mirrors the encoder switch in
@@ -227,10 +241,10 @@ pub fn onbInstrBranchLinkReg(reg: String) -> OnbInstr {
 // reads the same fields the Go counterpart reads and returns the
 // produced 4-byte word.
 //
-// Returns `None` for opcodes outside Phase 2a's coverage. The
-// encoded word is `Int` (i64) — callers that need a concrete u32
-// truncate at the I/O boundary, mirroring the Go convention of
-// holding raw aarch64 words in `uint32`.
+// Returns `None` for opcodes outside the single-word path
+// (multi-word instructions route through `onbEncodeInstrWords`).
+// The encoded word is `Int` (i64) — callers that need a concrete
+// u32 truncate at the I/O boundary, mirroring the Go convention.
 pub fn onbEncodeInstr(instr: OnbInstr) -> Int? {
     match instr.kind {
         OnbInstrKind.OnbInstrBrk -> onbEncodeBrk(instr.imm),
@@ -255,6 +269,30 @@ pub fn onbEncodeInstr(instr: OnbInstr) -> Int? {
         OnbInstrKind.OnbInstrFmulReg -> onbEncodeFPArith(0x1e600800, instr.dst, instr.lhs, instr.rhs),
         OnbInstrKind.OnbInstrFdivReg -> onbEncodeFPArith(0x1e601800, instr.dst, instr.lhs, instr.rhs),
         OnbInstrKind.OnbInstrBranchLinkReg -> onbEncodeBlr(instr.src),
+        OnbInstrKind.OnbInstrMovImm32 -> onbEncodeMovImm32Word(instr.dst, instr.imm),
+        OnbInstrKind.OnbInstrMovImm64 -> None,
         OnbInstrKind.OnbInstrInvalid -> None,
+    }
+}
+
+// === Multi-word encoder dispatch ======================================
+//
+// `onbEncodeInstrWords` returns the full word stream for any
+// supported opcode — single-word instructions produce a 1-element
+// list, multi-word ones (MovImm64) produce up to 4 words. The
+// motivation is to let downstream code emit instructions through
+// a single function regardless of length, mirroring the Go
+// encoder's switch which appends to a shared byte buffer.
+pub fn onbEncodeInstrWords(instr: OnbInstr) -> List<Int> {
+    match instr.kind {
+        OnbInstrKind.OnbInstrMovImm64 -> onbEncodeMovImm64Words(instr.dst, instr.imm),
+        _ -> {
+            let mut out: List<Int> = []
+            match onbEncodeInstr(instr) {
+                Some(word) -> out.push(word),
+                None -> {},
+            }
+            out
+        },
     }
 }

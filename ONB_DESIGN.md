@@ -37,6 +37,59 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 26 (ONB self-host port — Phase 2b multi-word
+> constant materialisation, 2026-05-03)** — Variable-length
+> encoding 도입. `MovImm64`가 1–4개의 32-bit word를 produce하는
+> movz/movk chain으로 lower되며, `onbEncodeInstrWords` dispatcher가
+> single-word / multi-word를 통합한 `List<Int>` 출력으로 노출.
+>
+> 추가:
+>
+> - `toolchain/onb_encoding.osty` 확장:
+>   - `onbEncodeMovz(dst, hw, imm16)` — 64-bit MOVZ
+>   - `onbEncodeMovk(dst, hw, imm16)` — 64-bit MOVK
+>   - `onbEncodeMovzW(dst, hw, imm16)` — W-register MOVZ + 내부
+>     `onbWToXAlias` (w0..w7 → x0..x7 인덱스 공유)
+>   - `onbEncodeMovImm64Words(dst, imm) -> List<Int>` — 4개 hw
+>     position을 unconditional iteration으로 walk, 첫 chunk는
+>     MOVZ로 강제 (다른 비트 zero 화), 이후 chunk가 0이면 MOVK 생략
+>   - `onbEncodeMovImm32Word(dst, imm) -> Int?` — `mov w0, #0`
+>     스타일의 단일 word
+>
+> - `toolchain/onb_lir.osty`:
+>   - `OnbInstrKind`에 `OnbInstrMovImm32`, `OnbInstrMovImm64` 추가
+>   - 대응 constructors `onbInstrMovImm32`, `onbInstrMovImm64`
+>   - `onbEncodeInstr` dispatcher가 MovImm32 단일 word 처리,
+>     MovImm64는 None (multi-word path 표시)
+>   - 새 `onbEncodeInstrWords(instr) -> List<Int>` — 모든 opcode 통합.
+>     단일 word는 1-element list로 wrap, MovImm64는 chain 그대로
+>
+> - `toolchain/onb_lir_test.osty` 확장:
+>   - `assertOnbInstrWordsEq` helper — word count + per-position 비교
+>   - mov x0/x9 #0 / #100 / #65535 / #0x12345678 케이스 (1-2 word
+>     chains)
+>
+> - `internal/onb/onb_lir_parity_test.go` 확장:
+>   - `TestLirMultiWordParityVsOstyTable` — Go `encodeMachOMovImm64`
+>     출력을 Osty 테이블과 word-by-word 비교
+>
+> 한계 (Phase 2c+로 분리):
+> - **adrp + add 페어** (`LoadCStringAddress`, `LoadSymbolAddress`)
+>   는 reloc 표 의존이라 Mach-O writer 진입까지 미룸
+> - **Branch family** (`Branch`, `BranchCond`, `BranchCondNotZero`,
+>   `BranchLink`) — link-time fixup pass 필요. Phase 2d
+> - **Container types** — Phase 2e
+>
+> 검증:
+> - `osty check toolchain` exit 0
+> - `go test ./internal/onb -run TestLirMultiWordParity` — 4
+>   MovImm64 케이스가 word-by-word 일치
+> - `go test ./internal/onb -short` — 0 회귀
+>
+> **다음 phase 후보**: Phase 2c (adrp+add skeletons, Mach-O reloc
+> hooks), Phase 2d (branch fixups), 또는 Phase 3a (MIR Type 의존성
+> 도입).
+>
 > **Slice A2 Week 25 (ONB self-host port — Phase 2a single-word LIR
 > mirror, 2026-05-03)** — LIR opcode 21종을 Osty 측 enum + flat
 > struct + per-opcode constructor + dispatch encoder로 미러. Phase 1
