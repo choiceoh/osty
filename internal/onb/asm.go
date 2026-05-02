@@ -138,6 +138,25 @@ func renderInstrAssembly(b *strings.Builder, target Target, fn Function, instr I
 		b.WriteString("\tret\n")
 	case *Brk:
 		fmt.Fprintf(b, "\tbrk #%d\n", i.Imm)
+	case *LoadFloat64Stack:
+		fmt.Fprintf(b, "\tldr %s, [sp, #%d]\n", i.Dst, i.Offset)
+	case *StoreFloat64Stack:
+		fmt.Fprintf(b, "\tstr %s, [sp, #%d]\n", i.Src, i.Offset)
+	case *FmovDFromX, *FmovXFromD:
+		switch v := instr.(type) {
+		case *FmovDFromX:
+			fmt.Fprintf(b, "\tfmov %s, %s\n", v.Dst, v.Src)
+		case *FmovXFromD:
+			fmt.Fprintf(b, "\tfmov %s, %s\n", v.Dst, v.Src)
+		}
+	case *FaddReg:
+		fmt.Fprintf(b, "\tfadd %s, %s, %s\n", i.Dst, i.Lhs, i.Rhs)
+	case *FsubReg:
+		fmt.Fprintf(b, "\tfsub %s, %s, %s\n", i.Dst, i.Lhs, i.Rhs)
+	case *FmulReg:
+		fmt.Fprintf(b, "\tfmul %s, %s, %s\n", i.Dst, i.Lhs, i.Rhs)
+	case *FdivReg:
+		fmt.Fprintf(b, "\tfdiv %s, %s, %s\n", i.Dst, i.Lhs, i.Rhs)
 	default:
 		return fmt.Errorf("onb: assembly renderer does not support %T", instr)
 	}

@@ -2,6 +2,7 @@ package onb
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/osty/osty/internal/ir"
@@ -14,6 +15,13 @@ import (
 // adjacent register slots (e.g. {x0, x1}), so a function that takes a
 // `Point` plus a scalar uses three slots, not two.
 var argRegs = []Reg{RegX0, RegX1, RegX2, RegX3, RegX4, RegX5, RegX6, RegX7}
+
+// fpArgRegs is the AAPCS64 floating-point-argument register sequence.
+// AAPCS64 keeps two independent register cursors (integer + FP), so a
+// `fn mix(a: Int, x: Float64, b: Int)` takes a in x0, x in d0, b in
+// x1 — not the often-mistaken x0 / x1 / x2 mapping. The dev backend
+// follows that rule for both `paramShuffle` and `lowerCall`.
+var fpArgRegs = []Reg{RegD0, RegD1, RegD2, RegD3, RegD4, RegD5, RegD6, RegD7}
 
 // abiSmallStructRegLimit is the AAPCS64 cutoff for "small struct" handling:
 // up to two integer registers. Sizes ≤ 8 bytes consume one register, sizes
@@ -364,25 +372,35 @@ func (s *lowerState) lowerBranchTerm(term *mir.BranchTerm) ([]Instr, error) {
 }
 
 // paramShuffle copies every read parameter from its AAPCS64 argument
-// register(s) into its assigned stack slot. Scalar params consume one
-// register; small structs consume one or two adjacent registers, with
-// register N landing at slot+N*8 to match the field-projection offsets
-// the rest of the body expects. Parameters that are never read get no
-// slot, but the register cursor still advances so subsequent params
-// see the right register.
+// register(s) into its assigned stack slot. Scalar Int / Bool / String
+// / pointer params consume one integer register; small structs and
+// enums consume one or two adjacent integer registers, with register N
+// landing at slot+N*8 to match the field-projection offsets the rest
+// of the body expects. Float params consume one FP register (d0..d7)
+// from the independent FP cursor — AAPCS64 doesn't merge integer and
+// FP register usage. Parameters that are never read still advance the
+// cursor so subsequent params see the right register.
 func (s *lowerState) paramShuffle(fn *mir.Function) []Instr {
 	var out []Instr
 	regCursor := 0
+	fpCursor := 0
 	for _, paramID := range fn.Params {
 		loc := lookupLocal(fn, paramID)
 		if loc == nil {
+			continue
+		}
+		slot, hasSlot := s.localSlots[paramID]
+		if isFloatABIType(loc.Type) {
+			if hasSlot && fpCursor < len(fpArgRegs) {
+				out = append(out, &StoreFloat64Stack{Src: fpArgRegs[fpCursor], Offset: slot})
+			}
+			fpCursor++
 			continue
 		}
 		slots, ok := s.abiRegSlots(loc.Type)
 		if !ok {
 			continue
 		}
-		slot, hasSlot := s.localSlots[paramID]
 		for i := 0; i < slots; i++ {
 			if hasSlot {
 				out = append(out, &Store64Stack{Src: argRegs[regCursor+i], Offset: slot + int64(i)*8})
@@ -415,6 +433,12 @@ func (s *lowerState) epilogue(fn *mir.Function) []Instr {
 		// loud if it changes.
 		return []Instr{
 			&MovImm64{Dst: RegX0, Imm: 0},
+			&Ret{},
+		}
+	}
+	if isFloatABIType(fn.ReturnType) {
+		return []Instr{
+			&LoadFloat64Stack{Dst: RegD0, Offset: slot},
 			&Ret{},
 		}
 	}
@@ -500,10 +524,19 @@ func (s *lowerState) lowerAssign(fn *mir.Function, instr *mir.AssignInstr) ([]In
 // passed via the AAPCS64 small-struct rule) need a per-slot copy so
 // the payload byte isn't clipped. The destination's local type drives
 // the slot count; the operand's type matches by construction (the
-// front end never emits cross-shape Use rvalues).
+// front end never emits cross-shape Use rvalues). Float locals route
+// through the d-register path so the bit pattern survives any
+// future store-byte fusing the integer path might pick up.
 func (s *lowerState) lowerUseAssign(fn *mir.Function, rv *mir.UseRV, destID mir.LocalID, destSlot int64) ([]Instr, error) {
 	destLoc := lookupLocal(fn, destID)
 	if destLoc != nil {
+		if isFloatABIType(destLoc.Type) {
+			mat, err := s.materialiseFloatOperand(rv.Op, RegD8)
+			if err != nil {
+				return nil, err
+			}
+			return append(mat, &StoreFloat64Stack{Src: RegD8, Offset: destSlot}), nil
+		}
 		if slots, ok := s.abiRegSlots(destLoc.Type); ok && slots > 1 {
 			return s.lowerUseAssignMulti(rv, slots, destSlot)
 		}
@@ -684,11 +717,19 @@ func (s *lowerState) lowerStructLiteralAssign(rv *mir.AggregateRV, destSlot int6
 }
 
 // isABIScalarType reports whether a MIR type fits cleanly in one AAPCS64
-// integer register. Phase A2 accepts Int (i64), Bool (i1), and String
-// (ptr). Lists and structs need indirect passing and are deferred to a
-// future slice.
+// integer register. Phase A2 accepts Int (i64), Bool (i1), String (ptr),
+// and Float (Float / Float64 — IEEE 754 double, lives in a d-register at
+// the call boundary but counts as a scalar for slot allocation). Lists
+// and structs need indirect passing and are deferred to a future slice.
 func isABIScalarType(t mir.Type) bool {
-	return t == mir.TInt || t == mir.TBool || t == mir.TString
+	return t == mir.TInt || t == mir.TBool || t == mir.TString || isFloatABIType(t)
+}
+
+// isFloatABIType reports whether t is a Float / Float64 — values that
+// occupy a d-register on AAPCS64 calls and need fmov / fadd opcodes
+// rather than the integer-side str / add lowerings.
+func isFloatABIType(t mir.Type) bool {
+	return t == mir.TFloat || t == mir.TFloat64
 }
 
 // abiRegSlots reports how many AAPCS64 integer-argument registers an ABI
@@ -1097,6 +1138,9 @@ func (s *lowerState) lowerBinaryAssign(rv *mir.BinaryRV, destSlot int64) ([]Inst
 	if rv.Op == mir.BinAdd && rv.T == mir.TString {
 		return s.lowerStringConcatAssign(rv, destSlot)
 	}
+	if isFloatABIType(rv.T) {
+		return s.lowerFloatBinaryAssign(rv, destSlot)
+	}
 	switch rv.Op {
 	case mir.BinAdd, mir.BinSub, mir.BinMul:
 	default:
@@ -1121,6 +1165,39 @@ func (s *lowerState) lowerBinaryAssign(rv *mir.BinaryRV, destSlot int64) ([]Inst
 		out = append(out, &MulReg{Dst: RegX9, Lhs: RegX9, Rhs: RegX10})
 	}
 	out = append(out, &Store64Stack{Src: RegX9, Offset: destSlot})
+	return out, nil
+}
+
+// lowerFloatBinaryAssign lowers `dest = lhs <op> rhs` for two Float
+// operands. The two operands materialise into d8/d9, then `f<op> d8,
+// d8, d9` produces the result, which a `str d8, [sp, #destSlot]`
+// commits back. d8/d9 are AAPCS64 callee-saved — using them as the
+// scratch pair means a follow-up that adds a register allocator can
+// keep them around across calls without extra spills.
+func (s *lowerState) lowerFloatBinaryAssign(rv *mir.BinaryRV, destSlot int64) ([]Instr, error) {
+	lhs, err := s.materialiseFloatOperand(rv.Left, RegD8)
+	if err != nil {
+		return nil, err
+	}
+	rhs, err := s.materialiseFloatOperand(rv.Right, RegD9)
+	if err != nil {
+		return nil, err
+	}
+	out := append([]Instr(nil), lhs...)
+	out = append(out, rhs...)
+	switch rv.Op {
+	case mir.BinAdd:
+		out = append(out, &FaddReg{Dst: RegD8, Lhs: RegD8, Rhs: RegD9})
+	case mir.BinSub:
+		out = append(out, &FsubReg{Dst: RegD8, Lhs: RegD8, Rhs: RegD9})
+	case mir.BinMul:
+		out = append(out, &FmulReg{Dst: RegD8, Lhs: RegD8, Rhs: RegD9})
+	case mir.BinDiv:
+		out = append(out, &FdivReg{Dst: RegD8, Lhs: RegD8, Rhs: RegD9})
+	default:
+		return nil, fmt.Errorf("%w: float binary op %v is outside phase 1", ErrUnsupportedShape, rv.Op)
+	}
+	out = append(out, &StoreFloat64Stack{Src: RegD8, Offset: destSlot})
 	return out, nil
 }
 
@@ -1189,12 +1266,14 @@ func (s *lowerState) lowerComparisonAssign(rv *mir.BinaryRV, cond Cond, destSlot
 	return out, nil
 }
 
-// lowerCall emits an AAPCS64 direct call: each argument materialises into
-// x0..x7 in order, then `bl _<name>`, then (if the call has a destination
-// place backed by a slot) the return value(s) in x0/x1 are stored into
-// that slot. Small structs (≤ 16B) consume two adjacent argument registers
-// and, on return, the receiver captures both x0 and x1 into slot+0/+8.
-// FnRef-only — indirect calls and parameter types outside ABI fall back.
+// lowerCall emits an AAPCS64 direct call. Integer / pointer / struct
+// args land in x0..x7 (with structs consuming two adjacent x slots);
+// Float64 args land in d0..d7 from the independent FP cursor. After
+// `bl _<name>`, the return value moves into the destination slot:
+// scalar integer returns capture x0, scalar Float returns capture d0
+// via `str d0`, small struct returns capture {x0, x1} into
+// dest+0/+8. FnRef-only — indirect calls and parameter types outside
+// ABI fall back.
 func (s *lowerState) lowerCall(fn *mir.Function, instr *mir.CallInstr) ([]Instr, error) {
 	ref, ok := instr.Callee.(*mir.FnRef)
 	if !ok {
@@ -1202,8 +1281,21 @@ func (s *lowerState) lowerCall(fn *mir.Function, instr *mir.CallInstr) ([]Instr,
 	}
 	var out []Instr
 	regCursor := 0
+	fpCursor := 0
 	for _, arg := range instr.Args {
 		argType := arg.Type()
+		if isFloatABIType(argType) {
+			if fpCursor >= len(fpArgRegs) {
+				return nil, fmt.Errorf("%w: call to %s needs more than %d FP argument registers", ErrUnsupportedShape, ref.Symbol, len(fpArgRegs))
+			}
+			mat, err := s.materialiseFloatOperand(arg, fpArgRegs[fpCursor])
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, mat...)
+			fpCursor++
+			continue
+		}
 		slots, ok := s.abiRegSlots(argType)
 		if !ok {
 			return nil, fmt.Errorf("%w: call argument has type %s outside ABI", ErrUnsupportedShape, argType)
@@ -1233,13 +1325,18 @@ func (s *lowerState) lowerCall(fn *mir.Function, instr *mir.CallInstr) ([]Instr,
 	out = append(out, &BranchLink{Symbol: ref.Symbol})
 	if instr.Dest != nil && !instr.Dest.HasProjections() {
 		if slot, ok := s.localSlots[instr.Dest.Local]; ok {
-			retSlots, _ := s.abiRegSlots(s.destType(instr.Dest.Local))
-			if retSlots == 0 {
-				retSlots = 1
-			}
-			retRegs := []Reg{RegX0, RegX1}
-			for i := 0; i < retSlots && i < len(retRegs); i++ {
-				out = append(out, &Store64Stack{Src: retRegs[i], Offset: slot + int64(i)*8})
+			destType := s.destType(instr.Dest.Local)
+			if isFloatABIType(destType) {
+				out = append(out, &StoreFloat64Stack{Src: RegD0, Offset: slot})
+			} else {
+				retSlots, _ := s.abiRegSlots(destType)
+				if retSlots == 0 {
+					retSlots = 1
+				}
+				retRegs := []Reg{RegX0, RegX1}
+				for i := 0; i < retSlots && i < len(retRegs); i++ {
+					out = append(out, &Store64Stack{Src: retRegs[i], Offset: slot + int64(i)*8})
+				}
 			}
 		}
 	}
@@ -1289,7 +1386,8 @@ func (s *lowerState) materialiseStructOperand(op mir.Operand, regs []Reg) ([]Ins
 // materialiseOperand emits the instruction sequence that lands the operand's
 // value in dst. Supports Int / Bool / String constants and Copy/Move of
 // locals that have a stack slot. String constants land in dst as a pointer
-// to their `__cstring` entry.
+// to their `__cstring` entry. Float operands take a separate path via
+// materialiseFloatOperand because they need d-register destinations.
 func (s *lowerState) materialiseOperand(op mir.Operand, dst Reg) ([]Instr, error) {
 	switch o := op.(type) {
 	case *mir.ConstOp:
@@ -1315,6 +1413,63 @@ func (s *lowerState) materialiseOperand(op mir.Operand, dst Reg) ([]Instr, error
 	default:
 		return nil, fmt.Errorf("%w: operand %T", ErrUnsupportedShape, op)
 	}
+}
+
+// materialiseFloatOperand emits the instruction sequence that lands a
+// Float64-typed operand in `dst` (a d-register). Supports FloatConst
+// (movz/movk into a scratch x register + fmov d, x) and Copy/Move of
+// Float-typed locals (ldr d, [sp, #N]). The IntConst path covers the
+// MIR shape `const 2 Float` that the front end emits when an integer
+// literal appears in a float context — we promote the integer to a
+// Float64 bit pattern at compile time.
+func (s *lowerState) materialiseFloatOperand(op mir.Operand, dst Reg) ([]Instr, error) {
+	switch o := op.(type) {
+	case *mir.ConstOp:
+		switch c := o.Const.(type) {
+		case *mir.FloatConst:
+			return floatConstInstrs(dst, c.Value), nil
+		case *mir.IntConst:
+			// `const 2 Float` form — promote to float bit pattern.
+			return floatConstInstrs(dst, float64(c.Value)), nil
+		default:
+			return nil, fmt.Errorf("%w: float const %T as operand", ErrUnsupportedShape, o.Const)
+		}
+	case *mir.CopyOp:
+		return s.loadFloatPlaceIntoReg(o.Place, dst)
+	case *mir.MoveOp:
+		return s.loadFloatPlaceIntoReg(o.Place, dst)
+	default:
+		return nil, fmt.Errorf("%w: float operand %T", ErrUnsupportedShape, op)
+	}
+}
+
+// floatConstInstrs emits `movz/movk` into x9 followed by `fmov dst,
+// x9` to deposit a Float64 immediate into a d-register. The dev
+// backend always uses x9 as the FP-immediate scratch — choosing the
+// same register every time keeps the lowering simple and lets the
+// asm renderer print a uniform sequence.
+func floatConstInstrs(dst Reg, value float64) []Instr {
+	bits := int64(math.Float64bits(value))
+	return []Instr{
+		&MovImm64{Dst: RegX9, Imm: bits},
+		&FmovDFromX{Dst: dst, Src: RegX9},
+	}
+}
+
+// loadFloatPlaceIntoReg materialises a Float-typed local into a
+// d-register via `ldr d, [sp, #slot+offset]`. Uses the same
+// projection machinery as scalars so future struct-of-Float lowerings
+// keep working without special casing.
+func (s *lowerState) loadFloatPlaceIntoReg(place mir.Place, dst Reg) ([]Instr, error) {
+	slot, ok := s.localSlots[place.Local]
+	if !ok {
+		return nil, fmt.Errorf("%w: read of float local%d without slot", ErrUnsupportedShape, place.Local)
+	}
+	off, err := s.placeProjectionOffset(place)
+	if err != nil {
+		return nil, err
+	}
+	return []Instr{&LoadFloat64Stack{Dst: dst, Offset: slot + off}}, nil
 }
 
 func (s *lowerState) loadPlaceIntoReg(place mir.Place, dst Reg) ([]Instr, error) {
@@ -1439,12 +1594,33 @@ func (s *lowerState) lowerPrintln(instr *mir.IntrinsicInstr) ([]Instr, error) {
 		out = append(out, &BranchLink{Symbol: "puts"})
 		return out, nil
 	}
+	if mat, ok, err := s.loadFloatPrintArg(arg); err != nil || ok {
+		if err != nil {
+			return nil, err
+		}
+		// Darwin/aarch64 vararg ABI: every variadic argument lands
+		// on the stack regardless of register class. We materialise
+		// the Float64 in d9, bitcast it to x1 via `fmov`, then drop
+		// it at [sp+0] alongside the format-string pointer in x0.
+		// `%g` is the printf format that matches Osty's println for
+		// floats so trailing zeros stay quiet (matches LLVM
+		// backend's choice).
+		label := s.addCString("%g\n")
+		out := []Instr{&LoadCStringAddress{Dst: RegX0, Label: label}}
+		out = append(out, mat...)
+		out = append(out, &FmovXFromD{Dst: RegX1, Src: RegD9})
+		if s.target.ObjectFormat == "mach-o" {
+			out = append(out, &Store64Stack{Src: RegX1, Offset: 0})
+		}
+		out = append(out, &BranchLink{Symbol: "printf"})
+		return out, nil
+	}
 	loadValue, ok, err := s.loadIntPrintArg(arg)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
-		return nil, fmt.Errorf("%w: println currently requires a string, int literal, Int local, or String local", ErrUnsupportedShape)
+		return nil, fmt.Errorf("%w: println currently requires a string, int literal, Int local, String local, or Float local", ErrUnsupportedShape)
 	}
 	label := s.addCString("%lld\n")
 	out := []Instr{&LoadCStringAddress{Dst: RegX0, Label: label}}
@@ -1454,6 +1630,20 @@ func (s *lowerState) lowerPrintln(instr *mir.IntrinsicInstr) ([]Instr, error) {
 	}
 	out = append(out, &BranchLink{Symbol: "printf"})
 	return out, nil
+}
+
+// loadFloatPrintArg materialises a Float-typed operand into d9 so the
+// caller can finish the printf shuffle. Returns ok=false when the
+// operand isn't a Float — the caller falls through to the int path.
+func (s *lowerState) loadFloatPrintArg(op mir.Operand) ([]Instr, bool, error) {
+	if !isFloatABIType(op.Type()) {
+		return nil, false, nil
+	}
+	instrs, err := s.materialiseFloatOperand(op, RegD9)
+	if err != nil {
+		return nil, false, err
+	}
+	return instrs, true, nil
 }
 
 // loadStringPrintArg materialises a string-typed operand into x0 so a

@@ -37,6 +37,72 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 15 (Float64 + IEEE 산술 + AAPCS64 FP ABI, 2026-05-02)** —
+> ONB가 처음으로 Float64를 native lowering. `let x: Float64 = 3.14` /
+> `(a + b) * 3.0` / `fn double(x: Float64) -> Float64` 같은 코드가
+> fallback 없이 통과.
+>
+> 작동:
+>
+> ```osty
+> fn double(x: Float64) -> Float64 { x * 2.0 }       // d0 in / d0 out
+> fn add(n: Int, f: Float64) -> Float64 { f + 1.0 }  // n in x0, f in d0
+> fn main() {
+>     let a: Float64 = 1.5
+>     let b: Float64 = 2.5
+>     let c = (a + b) * 3.0
+>     println(c)                                      // %g format
+>     println(double(3.5))
+>     println(add(10, 2.5))
+> }
+> ```
+>
+> 모델: scalar-everything 모델 유지 + d-register 클래스 추가. d8/d9를
+> FP scratch (mirroring x9/x10), d0-d7을 AAPCS64 FP-arg cursor로 사용.
+> Float64 const는 `movz/movk x9 + fmov d, x9` 시퀀스로 materialise.
+> Mixed Int+Float fn signature은 두 개의 독립 cursor (regCursor +
+> fpCursor)로 처리 — `fn(n: Int, f: Float64)`는 n→x0, f→d0 (자주
+> 잘못 매핑되는 x0/x1이 아님).
+>
+> 추가:
+> - 새 LIR opcodes: `LoadFloat64Stack`, `StoreFloat64Stack`,
+>   `FmovDFromX` / `FmovXFromD`, `FaddReg` / `FsubReg` / `FmulReg` /
+>   `FdivReg`, d0–d9 register names
+> - `isFloatABIType(t)` predicate (Float / Float64), `isABIScalarType`
+>   가 이를 포함하도록 확장
+> - `materialiseFloatOperand` — FloatConst 또는 Float local → d 레지스터
+>   (FloatConst는 `floatConstInstrs` helper로 movz/movk + fmov 시퀀스)
+> - `lowerFloatBinaryAssign` — d8/d9 페어로 fadd/fsub/fmul/fdiv
+> - `lowerUseAssign` Float 분기 — Float local 복사는 d 레지스터 경유
+> - `lowerPrintln`이 Float 인자에 `%g\n` + fmov x1, d9 + str x1, [sp]
+>   (darwin 변동인자 ABI는 모든 vararg가 stack)
+> - `paramShuffle` / `lowerCall` / `epilogue`가 fpCursor로 d0-d7 사용
+> - 새 Mach-O encoders: `dRegisterNumber`, `encodeFPStack` (str/ldr d),
+>   `encodeFmovDFromX` / `encodeFmovXFromD`, `encodeFPArith` (fadd 외)
+> - 자동 surface: `DebugTypeFloat`은 dwarf.go에 이미 있었던 dead path
+>   였는데 이번 슬라이스에서 첫 사용자 등장
+>
+> 검증:
+> - 단위 테스트 2개 (`internal/onb/onb_test.go`) — 1.5 + 2.5 패턴이
+>   FmovDFromX + FaddReg + StoreFloat64Stack + FmovXFromD를 모두 emit
+>   하는지, Float local이 DWARF DebugLocal로 surface되는지
+> - E2E binary smoke 4개 (`TestONBBackendBinaryRunsFloat64OnDarwinARM64`):
+>   const_print (3.14), arith ((1.5+2.5)*3.0=12), fn_param_ret
+>   (double(3.5)=7), mixed_int_float_args (add(10,2.5)=3.5 — Int/Float
+>   cursor 분리 회귀 테스트)
+>
+> 한계 (이번 슬라이스에서 명시적으로 보류):
+> - Float 비교 연산 (`a < b`, `a == b`) — fcmpe + cset / b.cond 미구현
+> - Float32 — 모든 경로가 d 레지스터 (Float64) 가정
+> - Int↔Float 변환 (`n.toFloat64()`, `f.toInt()`) — fcvtzs / scvtf 미구현
+> - Float을 struct/enum payload로 — abiRegSlots는 1-reg로 분류하지만
+>   field write/read 코드 경로는 d 레지스터를 인식 못 함
+> - Float DWARF (`frame variable c` 시 값 표시) — DebugTypeFloat은
+>   surface되나 lldb 통합 테스트는 별도 슬라이스
+>
+> 다음 슬라이스 후보: List<T> 일반화 (`List<Bool>` / `List<Float64>` /
+>  `List<String>` 런타임 디스패치) → for-in 루프 native.
+>
 > **Slice A2 Week 14 (Enum lowering v1 — Color / Option / Result + `?`,
 > 2026-05-02)** — ONB가 처음으로 enum을 native lowering. Option/Result가
 > prelude라 거의 모든 의미 있는 Osty 코드가 fallback에서 풀려나옴.

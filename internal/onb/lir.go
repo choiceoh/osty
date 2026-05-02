@@ -130,6 +130,21 @@ const (
 	RegX30 Reg = "x30"
 	RegSP  Reg = "sp"
 	RegW0  Reg = "w0"
+
+	// AAPCS64 floating-point argument registers d0..d7 are used for
+	// Float64 arguments and return values. d8/d9 act as the
+	// stack-everything model's FP scratch slot, mirroring x9/x10 on
+	// the integer side.
+	RegD0 Reg = "d0"
+	RegD1 Reg = "d1"
+	RegD2 Reg = "d2"
+	RegD3 Reg = "d3"
+	RegD4 Reg = "d4"
+	RegD5 Reg = "d5"
+	RegD6 Reg = "d6"
+	RegD7 Reg = "d7"
+	RegD8 Reg = "d8"
+	RegD9 Reg = "d9"
 )
 
 // MovImm32 lowers a small integer immediate into a 32-bit destination
@@ -323,6 +338,81 @@ type Brk struct {
 }
 
 func (*Brk) instrNode() {}
+
+// LoadFloat64Stack loads a Float64 (8-byte slot) from the call frame
+// into a d-register. The encoder picks the `ldr d, [sp, #N]` form
+// when N is 8-byte aligned and ≤ 32760.
+type LoadFloat64Stack struct {
+	Dst    Reg
+	Offset int64
+}
+
+func (*LoadFloat64Stack) instrNode() {}
+
+// StoreFloat64Stack stores a d-register's 8 bytes into the call frame.
+// Mirrors `Store64Stack` for FP values.
+type StoreFloat64Stack struct {
+	Src    Reg
+	Offset int64
+}
+
+func (*StoreFloat64Stack) instrNode() {}
+
+// FmovDFromX bitcasts a 64-bit integer register into a d-register
+// (`fmov d, x`). Used to materialise an arbitrary Float64 immediate:
+// the encoder emits a movz/movk chain into x9 followed by `fmov d9, x9`.
+type FmovDFromX struct {
+	Dst Reg // a d register
+	Src Reg // an x register
+}
+
+func (*FmovDFromX) instrNode() {}
+
+// FmovXFromD bitcasts a d-register into a 64-bit integer register
+// (`fmov x, d`). Used to land a Float64 value into the printf vararg
+// slot, which on darwin/aarch64 reads from the integer x register
+// stored at [sp+0].
+type FmovXFromD struct {
+	Dst Reg
+	Src Reg
+}
+
+func (*FmovXFromD) instrNode() {}
+
+// FaddReg / FsubReg / FmulReg / FdivReg are the four IEEE 754 binary
+// ops the dev backend covers today: `f<op> Dd, Dn, Dm`. Operands are
+// already in d-registers via LoadFloat64Stack or FmovDFromX.
+type FaddReg struct {
+	Dst Reg
+	Lhs Reg
+	Rhs Reg
+}
+
+func (*FaddReg) instrNode() {}
+
+type FsubReg struct {
+	Dst Reg
+	Lhs Reg
+	Rhs Reg
+}
+
+func (*FsubReg) instrNode() {}
+
+type FmulReg struct {
+	Dst Reg
+	Lhs Reg
+	Rhs Reg
+}
+
+func (*FmulReg) instrNode() {}
+
+type FdivReg struct {
+	Dst Reg
+	Lhs Reg
+	Rhs Reg
+}
+
+func (*FdivReg) instrNode() {}
 
 func functionNeedsFrame(fn Function) bool {
 	if fn.FrameSize > 0 {
