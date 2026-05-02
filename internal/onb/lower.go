@@ -41,6 +41,10 @@ const (
 	runtimeSymListPushF64    = "osty_rt_list_push_f64"
 	runtimeSymListPushString = "osty_rt_list_push_string"
 	runtimeSymListLen        = "osty_rt_list_len"
+	runtimeSymListGetI64     = "osty_rt_list_get_i64"
+	runtimeSymListGetI1      = "osty_rt_list_get_i1"
+	runtimeSymListGetF64     = "osty_rt_list_get_f64"
+	runtimeSymListGetString  = "osty_rt_list_get_string"
 )
 
 // LowerMIR lowers the supported MIR slice into ONB's own LIR. Phase 1.0
@@ -516,9 +520,30 @@ func (s *lowerState) lowerAssign(fn *mir.Function, instr *mir.AssignInstr) ([]In
 		return s.lowerNullaryAssign(rv, slot)
 	case *mir.DiscriminantRV:
 		return s.lowerDiscriminantAssign(rv, slot)
+	case *mir.LenRV:
+		return s.lowerLenAssign(rv, slot)
 	default:
 		return nil, fmt.Errorf("%w: rvalue %T is outside phase 1", ErrUnsupportedShape, instr.Src)
 	}
+}
+
+// lowerLenAssign lowers `dest = len <place>` for List operands. The
+// runtime call returns the length in x0; we capture it into the
+// destination slot. Used by the `for x in list` lowering, which
+// stages `_len = len _iter` as the upper bound of an indexed loop.
+func (s *lowerState) lowerLenAssign(rv *mir.LenRV, destSlot int64) ([]Instr, error) {
+	if rv.Place.HasProjections() {
+		return nil, fmt.Errorf("%w: len of projected place", ErrUnsupportedShape)
+	}
+	srcSlot, ok := s.localSlots[rv.Place.Local]
+	if !ok {
+		return nil, fmt.Errorf("%w: len of local%d without slot", ErrUnsupportedShape, rv.Place.Local)
+	}
+	return []Instr{
+		&Load64Stack{Dst: RegX0, Offset: srcSlot},
+		&BranchLink{Symbol: runtimeSymListLen},
+		&Store64Stack{Src: RegX0, Offset: destSlot},
+	}, nil
 }
 
 // lowerUseAssign handles `Assign dest := Use(operand)`. The common case
@@ -1410,12 +1435,123 @@ func (s *lowerState) materialiseOperand(op mir.Operand, dst Reg) ([]Instr, error
 			return nil, fmt.Errorf("%w: const %T as operand", ErrUnsupportedShape, o.Const)
 		}
 	case *mir.CopyOp:
+		if hasIndexProjection(o.Place) {
+			return s.loadIndexedPlaceIntoIntReg(o.Place, dst)
+		}
 		return s.loadPlaceIntoReg(o.Place, dst)
 	case *mir.MoveOp:
+		if hasIndexProjection(o.Place) {
+			return s.loadIndexedPlaceIntoIntReg(o.Place, dst)
+		}
 		return s.loadPlaceIntoReg(o.Place, dst)
 	default:
 		return nil, fmt.Errorf("%w: operand %T", ErrUnsupportedShape, op)
 	}
+}
+
+// hasIndexProjection reports whether the place's projection chain
+// contains an IndexProj — `place[idx]`. Used by the operand
+// materialiser to switch from the static slot+offset path to a
+// runtime list_get_* call.
+func hasIndexProjection(place mir.Place) bool {
+	for _, p := range place.Projections {
+		if _, ok := p.(*mir.IndexProj); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// loadIndexedPlaceIntoIntReg lowers `local[idx]` into a runtime call
+// to `osty_rt_list_get_*`, capturing x0 (or the appropriate result
+// register) into `dst`. The destination must be an integer register;
+// Float reads route through `loadIndexedPlaceIntoFloatReg`. The
+// helper assumes the projection chain is exactly one IndexProj — no
+// nested struct/variant chasing — which matches every for-in lowering
+// and direct `list[i]` read the front end emits today.
+func (s *lowerState) loadIndexedPlaceIntoIntReg(place mir.Place, dst Reg) ([]Instr, error) {
+	prefix, idxProj, err := s.indexCallPrefix(place, mir.TInt)
+	if err != nil {
+		return nil, err
+	}
+	sym, err := listGetSymbol(idxProj.ElemType)
+	if err != nil {
+		return nil, err
+	}
+	out := append([]Instr(nil), prefix...)
+	out = append(out, &BranchLink{Symbol: sym})
+	if dst != RegX0 {
+		out = append(out, &MovRegReg{Dst: dst, Src: RegX0})
+	}
+	return out, nil
+}
+
+// loadIndexedPlaceIntoFloatReg is the FP twin of
+// loadIndexedPlaceIntoIntReg — it stages `osty_rt_list_get_f64` and
+// the result already arrives in d0, so we only need a final fmov if
+// the caller asked for a different d-register.
+func (s *lowerState) loadIndexedPlaceIntoFloatReg(place mir.Place, dst Reg) ([]Instr, error) {
+	prefix, idxProj, err := s.indexCallPrefix(place, mir.TInt)
+	if err != nil {
+		return nil, err
+	}
+	if !isFloatABIType(idxProj.ElemType) {
+		return nil, fmt.Errorf("%w: indexed float load on non-float list element %s", ErrUnsupportedShape, idxProj.ElemType)
+	}
+	out := append([]Instr(nil), prefix...)
+	out = append(out, &BranchLink{Symbol: runtimeSymListGetF64})
+	if dst != RegD0 {
+		// Bitcast d0 → x9 → dst keeps us within the existing opcode
+		// catalogue — full d-to-d moves aren't surfaced as a LIR
+		// node yet because no other code path needs them.
+		out = append(out,
+			&FmovXFromD{Dst: RegX9, Src: RegD0},
+			&FmovDFromX{Dst: dst, Src: RegX9},
+		)
+	}
+	return out, nil
+}
+
+// indexCallPrefix materialises the list pointer into x0 and the
+// index value into x1, then returns the IndexProj so the caller can
+// route to the right runtime symbol. Used by both the int and float
+// indexed-load paths so list/index plumbing only lives in one place.
+func (s *lowerState) indexCallPrefix(place mir.Place, indexExpected mir.Type) ([]Instr, *mir.IndexProj, error) {
+	if len(place.Projections) != 1 {
+		return nil, nil, fmt.Errorf("%w: indexed place with %d projections", ErrUnsupportedShape, len(place.Projections))
+	}
+	idxProj, ok := place.Projections[0].(*mir.IndexProj)
+	if !ok {
+		return nil, nil, fmt.Errorf("%w: expected IndexProj, got %T", ErrUnsupportedShape, place.Projections[0])
+	}
+	listSlot, ok := s.localSlots[place.Local]
+	if !ok {
+		return nil, nil, fmt.Errorf("%w: indexed read of local%d without slot", ErrUnsupportedShape, place.Local)
+	}
+	idxInstrs, err := s.materialiseOperand(idxProj.Index, RegX1)
+	if err != nil {
+		return nil, nil, err
+	}
+	out := append([]Instr(nil), &Load64Stack{Dst: RegX0, Offset: listSlot})
+	out = append(out, idxInstrs...)
+	return out, idxProj, nil
+}
+
+// listGetSymbol picks the runtime list_get entry point for an element
+// type. Symmetric with the dispatch in lowerListPush; new element
+// types add an entry here together with their runtime symbol.
+func listGetSymbol(elem mir.Type) (string, error) {
+	switch {
+	case elem == mir.TInt:
+		return runtimeSymListGetI64, nil
+	case elem == mir.TBool:
+		return runtimeSymListGetI1, nil
+	case elem == mir.TString:
+		return runtimeSymListGetString, nil
+	case isFloatABIType(elem):
+		return runtimeSymListGetF64, nil
+	}
+	return "", fmt.Errorf("%w: list element type %s", ErrUnsupportedShape, elem)
 }
 
 // materialiseFloatOperand emits the instruction sequence that lands a
@@ -1438,8 +1574,14 @@ func (s *lowerState) materialiseFloatOperand(op mir.Operand, dst Reg) ([]Instr, 
 			return nil, fmt.Errorf("%w: float const %T as operand", ErrUnsupportedShape, o.Const)
 		}
 	case *mir.CopyOp:
+		if hasIndexProjection(o.Place) {
+			return s.loadIndexedPlaceIntoFloatReg(o.Place, dst)
+		}
 		return s.loadFloatPlaceIntoReg(o.Place, dst)
 	case *mir.MoveOp:
+		if hasIndexProjection(o.Place) {
+			return s.loadIndexedPlaceIntoFloatReg(o.Place, dst)
+		}
 		return s.loadFloatPlaceIntoReg(o.Place, dst)
 	default:
 		return nil, fmt.Errorf("%w: float operand %T", ErrUnsupportedShape, op)
@@ -1877,6 +2019,11 @@ func collectRValueLocals(rv mir.RValue, out map[mir.LocalID]bool) {
 		// though the place itself isn't an Operand. Force it in so
 		// the slot allocator reserves a slot for the enum value.
 		out[r.Place.Local] = true
+	case *mir.LenRV:
+		// `len _list` reads the list local. Same reasoning as
+		// DiscriminantRV — the place isn't an Operand, so we have
+		// to surface the local explicitly.
+		out[r.Place.Local] = true
 	}
 }
 
@@ -1884,8 +2031,24 @@ func collectOperandLocals(op mir.Operand, out map[mir.LocalID]bool) {
 	switch o := op.(type) {
 	case *mir.CopyOp:
 		out[o.Place.Local] = true
+		collectPlaceProjectionLocals(o.Place, out)
 	case *mir.MoveOp:
 		out[o.Place.Local] = true
+		collectPlaceProjectionLocals(o.Place, out)
+	}
+}
+
+// collectPlaceProjectionLocals walks a place's projection chain for
+// IndexProj entries and records their index operand's locals — the
+// index local has to live in a stack slot so the lowerer can load it
+// into x1 before the runtime list_get_* call.
+func collectPlaceProjectionLocals(place mir.Place, out map[mir.LocalID]bool) {
+	for _, p := range place.Projections {
+		ip, ok := p.(*mir.IndexProj)
+		if !ok {
+			continue
+		}
+		collectOperandLocals(ip.Index, out)
 	}
 }
 
