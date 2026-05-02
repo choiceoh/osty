@@ -216,10 +216,7 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 				}
 				vars := make([]dwarfVariableInput, 0, len(fn.DebugLocals))
 				for _, dl := range fn.DebugLocals {
-					kind := dwarfBaseTypeNone
-					if dl.TypeKind == DebugTypeInt {
-						kind = dwarfBaseTypeInt
-					}
+					kind := debugTypeToDwarfKind(dl.TypeKind)
 					if kind == dwarfBaseTypeNone {
 						continue
 					}
@@ -684,6 +681,24 @@ func buildDwarfLine(program *Program, enc machoTextEncoding) dwarfLineEncoded {
 		return dwarfLineEncoded{}
 	}
 	return out
+}
+
+// debugTypeToDwarfKind translates the LIR-level kind to the DWARF
+// emitter's enum. Keeping the mapping in macho.go (the only caller)
+// avoids importing DWARF constants into lir.go.
+func debugTypeToDwarfKind(k DebugTypeKind) dwarfBaseTypeKind {
+	switch k {
+	case DebugTypeInt:
+		return dwarfBaseTypeInt
+	case DebugTypeBool:
+		return dwarfBaseTypeBool
+	case DebugTypeFloat:
+		return dwarfBaseTypeFloat
+	case DebugTypeString:
+		return dwarfBaseTypeString
+	default:
+		return dwarfBaseTypeNone
+	}
 }
 
 func hasAnySourceLine(program *Program) bool {
