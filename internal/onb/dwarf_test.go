@@ -87,6 +87,50 @@ func TestEmitDwarfLineProducesValidPrologue(t *testing.T) {
 	}
 }
 
+// TestEmitDwarfAbbrevHasCompileUnitEntry verifies the abbrev table starts
+// with the expected DW_TAG_compile_unit + DW_CHILDREN_no header so the CU
+// DIE encoder agrees with the abbrev format.
+func TestEmitDwarfAbbrevHasCompileUnitEntry(t *testing.T) {
+	t.Parallel()
+
+	out := emitDwarfAbbrev()
+	if len(out) == 0 {
+		t.Fatal("emitDwarfAbbrev returned empty bytes")
+	}
+	// First byte is the abbrev code (uleb128 == 1 for our CU entry), then
+	// the tag (uleb128 == 0x11 for DW_TAG_compile_unit).
+	if out[0] != byte(dwarfAbbrevCompileUnit) {
+		t.Fatalf("abbrev code = %d, want %d", out[0], dwarfAbbrevCompileUnit)
+	}
+	if out[1] != byte(dwarfTagCompileUnit) {
+		t.Fatalf("tag = %#x, want %#x (DW_TAG_compile_unit)", out[1], dwarfTagCompileUnit)
+	}
+	if out[2] != dwarfChildrenNo {
+		t.Fatalf("has_children = %d, want DW_CHILDREN_no", out[2])
+	}
+}
+
+// TestDwarfStringTableDeduplicates verifies the table returns the same
+// offset for repeated inserts of the same string. Skipping dedup would
+// break DIE attribute references that expect a stable offset.
+func TestDwarfStringTableDeduplicates(t *testing.T) {
+	t.Parallel()
+
+	tbl := newDwarfStringTable()
+	if off := tbl.Add(""); off != 0 {
+		t.Fatalf("empty string offset = %d, want 0", off)
+	}
+	a := tbl.Add("alpha")
+	b := tbl.Add("alpha")
+	if a != b {
+		t.Fatalf("dedup failed: %d != %d", a, b)
+	}
+	c := tbl.Add("beta")
+	if c == a {
+		t.Fatalf("distinct strings collided at offset %d", c)
+	}
+}
+
 // TestEmitObjectIncludesDwarfLineSection exercises the full ONB pipeline
 // and checks the produced Mach-O has a __DWARF segment carrying a
 // non-empty __debug_line section.
@@ -136,6 +180,130 @@ func TestEmitObjectIncludesDwarfLineSection(t *testing.T) {
 	}
 	if !sawDebugLine {
 		t.Fatalf("Mach-O sections missing __DWARF/__debug_line: %+v", f.Sections)
+	}
+}
+
+// TestEmitObjectIncludesAllDwarfSections verifies that the four DWARF
+// sections lldb expects (`__debug_line`, `__debug_info`, `__debug_abbrev`,
+// `__debug_str`) all land in the `__DWARF` segment with non-empty content
+// so an external debugger has the full prologue chain to walk.
+func TestEmitObjectIncludesAllDwarfSections(t *testing.T) {
+	t.Parallel()
+
+	mod := &mir.Module{
+		Functions: []*mir.Function{intPrintlnMainMIR(42)},
+	}
+	target := Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"}
+	program, err := LowerMIR(mod, target)
+	if err != nil {
+		t.Fatalf("LowerMIR returned error: %v", err)
+	}
+	program.SourcePath = "/tmp/main.osty"
+	program.Package = "main"
+	for fi := range program.Functions {
+		for bi := range program.Functions[fi].Blocks {
+			for i := range program.Functions[fi].Blocks[bi].LineSpans {
+				program.Functions[fi].Blocks[bi].LineSpans[i] = LineSpan{Line: 1, Column: 1}
+			}
+		}
+	}
+	obj, err := EmitObject(program)
+	if err != nil {
+		t.Fatalf("EmitObject returned error: %v", err)
+	}
+	f, err := macho.NewFile(bytes.NewReader(obj))
+	if err != nil {
+		t.Fatalf("macho.NewFile returned error: %v", err)
+	}
+	want := map[string]bool{
+		"__debug_line":   false,
+		"__debug_info":   false,
+		"__debug_abbrev": false,
+		"__debug_str":    false,
+	}
+	for _, sec := range f.Sections {
+		if sec.Seg != "__DWARF" {
+			continue
+		}
+		if _, ok := want[sec.Name]; !ok {
+			continue
+		}
+		data, err := sec.Data()
+		if err != nil {
+			t.Fatalf("%s Data() error: %v", sec.Name, err)
+		}
+		if len(data) == 0 {
+			t.Fatalf("%s section is empty", sec.Name)
+		}
+		want[sec.Name] = true
+	}
+	for name, sawIt := range want {
+		if !sawIt {
+			t.Fatalf("Mach-O missing __DWARF/%s section", name)
+		}
+	}
+}
+
+// TestDwarfdumpAcceptsCompileUnitInfo runs `dwarfdump --debug-info` on the
+// emitted Mach-O and verifies the CU DIE contains the producer / language
+// / name / low_pc / high_pc / stmt_list attributes wired to non-default
+// values. dwarfdump warnings are treated as failures so a half-baked
+// abbrev table or off-by-one DIE encoding fails fast.
+func TestDwarfdumpAcceptsCompileUnitInfo(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("dwarfdump validation requires darwin/arm64 host")
+	}
+	if _, err := exec.LookPath("dwarfdump"); err != nil {
+		t.Skip("dwarfdump not on PATH")
+	}
+
+	mod := &mir.Module{
+		Functions: []*mir.Function{intPrintlnMainMIR(42)},
+	}
+	target := Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"}
+	program, err := LowerMIR(mod, target)
+	if err != nil {
+		t.Fatalf("LowerMIR returned error: %v", err)
+	}
+	program.SourcePath = "/tmp/main.osty"
+	program.Package = "main"
+	for fi := range program.Functions {
+		for bi := range program.Functions[fi].Blocks {
+			for i := range program.Functions[fi].Blocks[bi].LineSpans {
+				program.Functions[fi].Blocks[bi].LineSpans[i] = LineSpan{Line: 1, Column: 1}
+			}
+		}
+	}
+	obj, err := EmitObject(program)
+	if err != nil {
+		t.Fatalf("EmitObject returned error: %v", err)
+	}
+	dir := t.TempDir()
+	objPath := filepath.Join(dir, "main.o")
+	if err := writeObjectFile(objPath, obj); err != nil {
+		t.Fatalf("write object: %v", err)
+	}
+	out, err := exec.Command("dwarfdump", "--debug-info", objPath).CombinedOutput()
+	if err != nil {
+		t.Fatalf("dwarfdump returned error: %v\n%s", err, out)
+	}
+	text := string(out)
+	if strings.Contains(text, "warning") {
+		t.Fatalf("dwarfdump emitted warnings (likely malformed DIE):\n%s", text)
+	}
+	for _, want := range []string{
+		"DW_TAG_compile_unit",
+		"DW_AT_producer",
+		"DW_AT_language",
+		"DW_AT_name",
+		"DW_AT_low_pc",
+		"DW_AT_high_pc",
+		"DW_AT_stmt_list",
+		"main.osty",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("dwarfdump missing %q:\n%s", want, text)
+		}
 	}
 }
 
