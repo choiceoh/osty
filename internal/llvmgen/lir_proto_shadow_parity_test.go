@@ -451,6 +451,10 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualListFirstStructBytesV1Fixture", []string{"%Pair = type { i64, i64 }", "%Option.Pair = type", "declare i64 @osty_rt_list_len(ptr)", "declare void @osty_rt_list_get_bytes_v1(ptr, i64, ptr, i64)", "declare ptr @osty.gc.alloc_v1(i64, i64, ptr)", "call void @osty_rt_list_get_bytes_v1(", "call ptr @osty.gc.alloc_v1(i64 1, i64", "ret %Option.Pair"}},
 		// ----- MirAggClosure aggregate -----
 		{"lirParityManualAggClosureIntCaptureFixture", []string{"%ClosureEnv.ptr.i64 = type { ptr, i64 }", "alloca %ClosureEnv.ptr.i64", "getelementptr inbounds %ClosureEnv.ptr.i64", "store ptr @liftedFn", "store i64", "ret ptr"}},
+		// ----- 4 call gaps closed: external/intrinsic, cross-module, indirect -----
+		{"lirParityManualExternalMirFnDeclareFixture", []string{"declare ptr @go_open(ptr)", "define "}},
+		{"lirParityManualCrossModuleDirectCallFixture", []string{"declare i64 @other.pkg.compute(i64, i64)", "call i64 @other.pkg.compute(i64", "ret i64"}},
+		{"lirParityManualIndirectCallViaEnvFixture", []string{"define i64 @apply(ptr", "load ptr", "call i64 %t", "ret i64"}},
 	}
 
 	for _, tt := range want {
