@@ -538,6 +538,23 @@ type bodyState struct {
 	// Each frame holds HIR blocks in *source* order; replay inlines
 	// them in LIFO at the appropriate exit point.
 	deferFrames [][]*ir.Block
+
+	// rangeBindings tracks `let r = START..END` (or `..=`) shaped
+	// lets where the RHS is a literal Range<Int>. Range isn't a
+	// first-class MIR value yet, but a let binding that's only ever
+	// iterated through `for-in` can be lowered as a pseudo-binding:
+	// the lit's start/end land in two real Int locals, and `for-in r`
+	// resolves through this map to the same counter loop a direct
+	// `for i in 0..n` would emit. Eliminates the "range literal in
+	// value position not lowered to MIR" diagnostic for this common
+	// shape.
+	rangeBindings map[LocalID]rangePseudoBinding
+}
+
+type rangePseudoBinding struct {
+	startLocal LocalID
+	endLocal   LocalID
+	inclusive  bool
 }
 
 type ownerContext struct {
@@ -566,7 +583,7 @@ type loopFrame struct {
 }
 
 func newBodyState(l *lowerer, fn *Function) *bodyState {
-	bs := &bodyState{l: l, fn: fn, cur: fn.Entry}
+	bs := &bodyState{l: l, fn: fn, cur: fn.Entry, rangeBindings: map[LocalID]rangePseudoBinding{}}
 	bs.pushScope()
 	// Function-level defer frame. Stays for the lifetime of the
 	// function and is replayed on every exit edge (return, `?`
@@ -824,6 +841,30 @@ func (bs *bodyState) lowerLet(let *ir.LetStmt) {
 	case let.Pattern != nil:
 		bs.lowerLetPattern(let.Pattern, let.Value, t, let.SpanV)
 	case let.Name != "":
+		// Range pseudo-binding fast path: `let r = start..end` keeps the
+		// bounds in two real Int locals + a unit sentinel. The sentinel
+		// preserves the user-visible name so `bind` works, but the
+		// actual bounds flow through `rangeBindings`. The for-in lowerer
+		// (and only the for-in lowerer) reads back through that map —
+		// other uses of `r` will surface as the existing
+		// "range literal in value position" diagnostic, unchanged.
+		if rng, ok := let.Value.(*ir.RangeLit); ok && isRangeIntType(t) && rng.Start != nil && rng.End != nil {
+			startLocal := bs.newLocal("_rstart", TInt, false, let.SpanV)
+			bs.emit(&StorageLiveInstr{Local: startLocal, SpanV: let.SpanV})
+			bs.lowerExprInto(rng.Start, startLocal, TInt)
+			endLocal := bs.newLocal("_rend", TInt, false, let.SpanV)
+			bs.emit(&StorageLiveInstr{Local: endLocal, SpanV: let.SpanV})
+			bs.lowerExprInto(rng.End, endLocal, TInt)
+			sentinel := bs.newLocal(let.Name, ir.TUnit, let.Mut, let.SpanV)
+			bs.emit(&StorageLiveInstr{Local: sentinel, SpanV: let.SpanV})
+			bs.rangeBindings[sentinel] = rangePseudoBinding{
+				startLocal: startLocal,
+				endLocal:   endLocal,
+				inclusive:  rng.Inclusive,
+			}
+			bs.bind(let.Name, sentinel)
+			return
+		}
 		id := bs.newLocal(let.Name, t, let.Mut, let.SpanV)
 		bs.emit(&StorageLiveInstr{Local: id, SpanV: let.SpanV})
 		if let.Value != nil {
@@ -833,6 +874,20 @@ func (bs *bodyState) lowerLet(let *ir.LetStmt) {
 	default:
 		bs.l.noteIssue("let stmt with neither name nor pattern")
 	}
+}
+
+// isRangeIntType reports whether `t` is a `Range<Int>` (the only
+// instantiation the pseudo-binding fast path supports today).
+// Other Range<T> shapes still hit the standard "range literal in
+// value position" fallback until Range becomes a first-class MIR
+// value.
+func isRangeIntType(t Type) bool {
+	nt, ok := t.(*ir.NamedType)
+	if !ok || nt.Name != "Range" || len(nt.Args) != 1 {
+		return false
+	}
+	pt, ok := nt.Args[0].(*ir.PrimType)
+	return ok && pt.Kind == ir.PrimInt
 }
 
 func isPoisonType(t Type) bool {
@@ -1454,6 +1509,78 @@ func (bs *bodyState) lowerForRange(f *ir.ForStmt) {
 	bs.cur = exit
 }
 
+// lowerForRangePseudoBinding emits the same counter-loop shape as
+// `lowerForRange`, but reads start/end from the locals stored on the
+// pseudo-binding instead of expressions on the ForStmt. Lets
+// `for i in r` where `r` was bound via the Range pseudo-binding fast
+// path lower exactly like a direct `for i in start..end`.
+func (bs *bodyState) lowerForRangePseudoBinding(f *ir.ForStmt, rb rangePseudoBinding) {
+	idx := bs.newLocal(f.Var, TInt, true, f.SpanV)
+	bs.emit(&StorageLiveInstr{Local: idx, SpanV: f.SpanV})
+	bs.emit(&AssignInstr{
+		Dest:  Place{Local: idx},
+		Src:   &UseRV{Op: &CopyOp{Place: Place{Local: rb.startLocal}, T: TInt}},
+		SpanV: f.SpanV,
+	})
+	bs.bind(f.Var, idx)
+	header := bs.newBlock(f.SpanV)
+	body := bs.newBlock(f.SpanV)
+	step := bs.newBlock(f.SpanV)
+	exit := bs.newBlock(f.SpanV)
+	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
+	bs.cur = header
+	cmpOp := BinLt
+	if rb.inclusive {
+		cmpOp = BinLeq
+	}
+	cmp := bs.freshTemp(TBool, f.SpanV)
+	bs.emit(&AssignInstr{
+		Dest: Place{Local: cmp},
+		Src: &BinaryRV{
+			Op:    cmpOp,
+			Left:  &CopyOp{Place: Place{Local: idx}, T: TInt},
+			Right: &CopyOp{Place: Place{Local: rb.endLocal}, T: TInt},
+			T:     TBool,
+		},
+		SpanV: f.SpanV,
+	})
+	bs.terminate(&BranchTerm{
+		Cond:  &CopyOp{Place: Place{Local: cmp}, T: TBool},
+		Then:  body,
+		Else:  exit,
+		SpanV: f.SpanV,
+	})
+	bs.cur = body
+	bs.pushScope()
+	bs.pushDeferScope()
+	bs.loopStack = append(bs.loopStack, &loopFrame{
+		label:      f.Label,
+		breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
+	})
+	bs.bind(f.Var, idx)
+	for _, s := range f.Body.Stmts {
+		bs.lowerStmt(s)
+	}
+	bs.replayTopFrame(f.Body.SpanV)
+	bs.loopStack = bs.loopStack[:len(bs.loopStack)-1]
+	bs.popDeferScope()
+	bs.popScope()
+	bs.terminate(&GotoTerm{Target: step, SpanV: f.SpanV})
+	bs.cur = step
+	bs.emit(&AssignInstr{
+		Dest: Place{Local: idx},
+		Src: &BinaryRV{
+			Op:    BinAdd,
+			Left:  &CopyOp{Place: Place{Local: idx}, T: TInt},
+			Right: &ConstOp{Const: &IntConst{Value: 1, T: TInt}, T: TInt},
+			T:     TInt,
+		},
+		SpanV: f.SpanV,
+	})
+	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
+	bs.cur = exit
+}
+
 func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 	iterT := bs.recoveredTypeOf(f.Iter)
 	if isChannelType(iterT) {
@@ -1463,6 +1590,18 @@ func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 	if bs.l.isMapType(iterT) {
 		bs.lowerForInMap(f, iterT)
 		return
+	}
+	// Range pseudo-binding fast path: `for i in r` where r was bound
+	// from a Range<Int> literal at let time. Reads the recorded
+	// start/end locals and emits the same counter-loop shape
+	// `lowerForRange` produces for a direct `for i in 0..n`.
+	if id, ok := f.Iter.(*ir.Ident); ok {
+		if local, found := bs.lookup(id.Name); found {
+			if rb, ok := bs.rangeBindings[local]; ok {
+				bs.lowerForRangePseudoBinding(f, rb)
+				return
+			}
+		}
 	}
 	if !bs.l.isListType(iterT) {
 		bs.l.noteIssue("for-in over non-List/Map/Channel iterable is not lowered to MIR yet: %s", typeString(iterT))

@@ -1509,6 +1509,87 @@ func TestGenerateFromMIRDivergingBuiltinsLowerThroughPanic(t *testing.T) {
 	}
 }
 
+// TestGenerateFromMIRForInRangePseudoBindingLowers pins the
+// `let r = 0..n; for i in r { ... }` Range-pseudo-binding fast path.
+// Without it, RangeLit in value position used to surface as
+// "range literal in value position not lowered to MIR" + a
+// downstream "for-in over Range<Int>" diagnostic. With the fast
+// path the let stores start/end into `_rstart` / `_rend` Int
+// locals and the `for-in` reads them through the same counter-loop
+// shape `for i in 0..n` would emit.
+func TestGenerateFromMIRForInRangePseudoBindingLowers(t *testing.T) {
+	rangeT := &ir.NamedType{Name: "Range", Args: []ir.Type{ir.TInt}}
+	// fn check() -> Int {
+	//     let r = 0..5
+	//     let mut sum = 0
+	//     for i in r { sum = sum + i }
+	//     sum
+	// }
+	body := &ir.Block{
+		Stmts: []ir.Stmt{
+			&ir.LetStmt{
+				Name: "r",
+				Type: rangeT,
+				Value: &ir.RangeLit{
+					Start: &ir.IntLit{Text: "0", T: ir.TInt},
+					End:   &ir.IntLit{Text: "5", T: ir.TInt},
+					T:     rangeT,
+				},
+			},
+			&ir.LetStmt{
+				Name:  "sum",
+				Type:  ir.TInt,
+				Mut:   true,
+				Value: &ir.IntLit{Text: "0", T: ir.TInt},
+			},
+			&ir.ForStmt{
+				Kind: ir.ForIn,
+				Var:  "i",
+				Iter: &ir.Ident{Name: "r", Kind: ir.IdentLocal, T: rangeT},
+				Body: &ir.Block{
+					Stmts: []ir.Stmt{
+						&ir.AssignStmt{
+							Op:      ir.AssignEq,
+							Targets: []ir.Expr{&ir.Ident{Name: "sum", Kind: ir.IdentLocal, T: ir.TInt}},
+							Value: &ir.BinaryExpr{
+								Op:    ir.BinAdd,
+								Left:  &ir.Ident{Name: "sum", Kind: ir.IdentLocal, T: ir.TInt},
+								Right: &ir.Ident{Name: "i", Kind: ir.IdentLocal, T: ir.TInt},
+								T:     ir.TInt,
+							},
+						},
+					},
+				},
+			},
+		},
+		Result: &ir.Ident{Name: "sum", Kind: ir.IdentLocal, T: ir.TInt},
+	}
+	fn := &ir.FnDecl{Name: "check", Return: ir.TInt, Body: body}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/range_pseudo.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	if strings.Contains(got, "range literal in value position") {
+		t.Fatalf("emitter still surfaces the range-in-value-position diagnostic:\n%s", got)
+	}
+	if strings.Contains(got, "for-in over non-List/Map/Channel iterable") {
+		t.Fatalf("emitter still surfaces the for-in-over-Range fallback:\n%s", got)
+	}
+	for _, want := range []string{
+		"define i64 @check()",
+		"icmp slt i64", // exclusive upper-bound compare
+		"add i64",      // accumulator + step
+		"ret i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateFromMIRDbgPrintsAndPassesThrough pins the prelude
 // diagnostic builtin `dbg<T>(value: T) -> T` (LANG_SPEC §A.10).
 // Stringifiable primitives flow through `string_concat` boxing →
