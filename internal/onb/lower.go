@@ -48,18 +48,29 @@ const regX8 Reg = "x8"
 // exactly. The Mach-O `bl` encoder prepends the leading underscore for
 // darwin's symbol mangling.
 const (
-	runtimeSymStringConcat   = "osty_rt_strings_Concat"
-	runtimeSymListNew        = "osty_rt_list_new"
-	runtimeSymListPushI64    = "osty_rt_list_push_i64"
-	runtimeSymListPushI1     = "osty_rt_list_push_i1"
-	runtimeSymListPushF64    = "osty_rt_list_push_f64"
-	runtimeSymListPushString = "osty_rt_list_push_string"
-	runtimeSymListLen        = "osty_rt_list_len"
-	runtimeSymListGetI64     = "osty_rt_list_get_i64"
-	runtimeSymListGetI1      = "osty_rt_list_get_i1"
-	runtimeSymListGetF64     = "osty_rt_list_get_f64"
-	runtimeSymListGetString  = "osty_rt_list_get_string"
+	runtimeSymStringConcat       = "osty_rt_strings_Concat"
+	runtimeSymListNew            = "osty_rt_list_new"
+	runtimeSymListPushI64        = "osty_rt_list_push_i64"
+	runtimeSymListPushI1         = "osty_rt_list_push_i1"
+	runtimeSymListPushF64        = "osty_rt_list_push_f64"
+	runtimeSymListPushString     = "osty_rt_list_push_string"
+	runtimeSymListLen            = "osty_rt_list_len"
+	runtimeSymListGetI64         = "osty_rt_list_get_i64"
+	runtimeSymListGetI1          = "osty_rt_list_get_i1"
+	runtimeSymListGetF64         = "osty_rt_list_get_f64"
+	runtimeSymListGetString      = "osty_rt_list_get_string"
+	// closure_env_alloc_v2 is exported by the runtime under the dotted
+	// (LLVM-shaped) name via __asm__("osty.rt..."). Mach-O symbol
+	// encoding prepends the leading underscore, matching the call site.
+	runtimeSymClosureEnvAllocV2 = "osty.rt.closure_env_alloc_v2"
 )
+
+// closureEnvCapturesOffset is the byte offset within an
+// `osty_rt_closure_env` where the captures array begins. The runtime
+// header is `{ ptr fn (8B); i64 capture_count (8B); u64
+// pointer_bitmap (8B); ptr captures[] }`. Kept in sync with the LLVM
+// backend's matching constant by sharing the layout in C.
+const closureEnvCapturesOffset = 24
 
 // LowerMIR lowers the supported MIR slice into ONB's own LIR. Phase 1.0
 // handled hello world; Phase A2 Week 1 added local Int variables and binary
@@ -750,9 +761,85 @@ func (s *lowerState) lowerAggregateAssign(rv *mir.AggregateRV, destSlot int64) (
 		return s.lowerStructLiteralAssign(rv, destSlot)
 	case mir.AggEnumVariant:
 		return s.lowerEnumVariantAssign(rv, destSlot)
+	case mir.AggClosure:
+		return s.lowerClosureLiteralAssign(rv, destSlot)
 	default:
 		return nil, fmt.Errorf("%w: aggregate kind %v", ErrUnsupportedShape, rv.Kind)
 	}
+}
+
+// lowerClosureLiteralAssign lowers `dest = aggregate closure(<fnConst>,
+// <captures...>)`. Layout:
+//
+//  1. Allocate env via osty_rt_closure_env_alloc_v2(N, site, bitmap).
+//     Returns the env pointer in x0.
+//  2. Move env to x10 so we can stage the fn-pointer + captures
+//     without losing the base.
+//  3. Load lifted-fn address into x9 via adrp/add and store at
+//     [x10 + 0].
+//  4. For each capture i, materialise the value and store at
+//     [x10 + 24 + i*8]. Captures are scalar / pointer types; Float
+//     captures route through d8 + StoreToReg via x9 bitcast.
+//  5. Store the env pointer (still in x10) into the destination
+//     slot.
+//
+// The MVP keeps `pointer_bitmap` at 0 — the GC may then false-retain
+// integer-sized scalar captures that happen to look like pointers.
+// That's a known limitation; the LLVM backend computes a real
+// bitmap by inspecting capture types (see `internal/llvmgen/fn_value.go`).
+// For ONB's dev path this is acceptable trade-off; bitmap accuracy
+// becomes important when GC-stress tests start flagging false roots.
+func (s *lowerState) lowerClosureLiteralAssign(rv *mir.AggregateRV, destSlot int64) ([]Instr, error) {
+	if len(rv.Fields) == 0 {
+		return nil, fmt.Errorf("%w: closure literal needs at least the fn-const field", ErrUnsupportedShape)
+	}
+	fnConst, ok := rv.Fields[0].(*mir.ConstOp)
+	if !ok {
+		return nil, fmt.Errorf("%w: closure literal field 0 is %T, want ConstOp", ErrUnsupportedShape, rv.Fields[0])
+	}
+	fc, ok := fnConst.Const.(*mir.FnConst)
+	if !ok || fc.Symbol == "" {
+		return nil, fmt.Errorf("%w: closure literal field 0 is %T, want FnConst", ErrUnsupportedShape, fnConst.Const)
+	}
+	captureCount := int64(len(rv.Fields) - 1)
+	siteLabel := s.addCString("onb.closure.env")
+	out := []Instr{
+		// alloc_v2(capture_count, site, bitmap=0)
+		&MovImm64{Dst: RegX0, Imm: captureCount},
+		&LoadCStringAddress{Dst: RegX1, Label: siteLabel},
+		&MovImm64{Dst: RegX2, Imm: 0},
+		&BranchLink{Symbol: runtimeSymClosureEnvAllocV2},
+		// stash env pointer in x10 so subsequent stores can use a
+		// stable base — x9 is reused as the value scratch.
+		&MovRegReg{Dst: RegX10, Src: RegX0},
+		// fn pointer at [env + 0]
+		&LoadSymbolAddress{Dst: RegX9, Symbol: fc.Symbol},
+		&StoreToReg{Src: RegX9, Base: RegX10, Offset: 0},
+	}
+	for i, capture := range rv.Fields[1:] {
+		captureOffset := int64(closureEnvCapturesOffset + i*8)
+		captureT := capture.Type()
+		if isFloatABIType(captureT) {
+			mat, err := s.materialiseFloatOperand(capture, RegD8)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, mat...)
+			out = append(out,
+				&FmovXFromD{Dst: RegX9, Src: RegD8},
+				&StoreToReg{Src: RegX9, Base: RegX10, Offset: captureOffset},
+			)
+			continue
+		}
+		mat, err := s.materialiseOperand(capture, RegX9)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, mat...)
+		out = append(out, &StoreToReg{Src: RegX9, Base: RegX10, Offset: captureOffset})
+	}
+	out = append(out, &Store64Stack{Src: RegX10, Offset: destSlot})
+	return out, nil
 }
 
 // lowerEnumVariantAssign writes an enum literal: discriminant value
@@ -870,11 +957,32 @@ func (s *lowerState) lowerStructLiteralAssign(rv *mir.AggregateRV, destSlot int6
 
 // isABIScalarType reports whether a MIR type fits cleanly in one AAPCS64
 // integer register. Phase A2 accepts Int (i64), Bool (i1), String (ptr),
-// and Float (Float / Float64 — IEEE 754 double, lives in a d-register at
-// the call boundary but counts as a scalar for slot allocation). Lists
-// and structs need indirect passing and are deferred to a future slice.
+// Float (Float / Float64 — d-register at the call boundary, scalar for
+// slot allocation), and pointer-shaped types (FnType / ClosureEnv —
+// closure environments live on the heap; the local holds an 8-byte
+// pointer to them).
 func isABIScalarType(t mir.Type) bool {
-	return t == mir.TInt || t == mir.TBool || t == mir.TString || isFloatABIType(t)
+	if t == mir.TInt || t == mir.TBool || t == mir.TString {
+		return true
+	}
+	if isFloatABIType(t) {
+		return true
+	}
+	return isClosureScalarType(t)
+}
+
+// isClosureScalarType reports whether t is a closure-shaped pointer
+// — a function value (`fn(A) -> R`) or the lifted body's first-arg
+// `ClosureEnv` builtin. Both are 8 bytes at the ABI boundary.
+func isClosureScalarType(t mir.Type) bool {
+	if _, ok := t.(*ir.FnType); ok {
+		return true
+	}
+	nt, ok := t.(*ir.NamedType)
+	if !ok || nt == nil {
+		return false
+	}
+	return nt.Builtin && nt.Name == "ClosureEnv"
 }
 
 // isFloatABIType reports whether t is a Float / Float64 — values that
@@ -1469,9 +1577,12 @@ func (s *lowerState) lowerComparisonAssign(rv *mir.BinaryRV, cond Cond, destSlot
 // dest+0/+8. FnRef-only — indirect calls and parameter types outside
 // ABI fall back.
 func (s *lowerState) lowerCall(fn *mir.Function, instr *mir.CallInstr) ([]Instr, error) {
+	if ind, ok := instr.Callee.(*mir.IndirectCall); ok {
+		return s.lowerIndirectCall(fn, instr, ind)
+	}
 	ref, ok := instr.Callee.(*mir.FnRef)
 	if !ok {
-		return nil, fmt.Errorf("%w: indirect call", ErrUnsupportedShape)
+		return nil, fmt.Errorf("%w: callee shape %T", ErrUnsupportedShape, instr.Callee)
 	}
 	var out []Instr
 	regCursor := 0
@@ -1571,6 +1682,75 @@ func (s *lowerState) lowerCall(fn *mir.Function, instr *mir.CallInstr) ([]Instr,
 	return out, nil
 }
 
+// lowerIndirectCall lowers `call *<closure_local>(args...)`. The
+// closure value is an env-pointer; per the Phase A4 fn-value runtime
+// contract the lifted body's signature is `(env, args...)`, so the
+// lowering stages the env in x0, the user args in x1.., d0..d7, and
+// loads the fn pointer from the env's first slot before `blr`.
+//
+// The fn pointer load goes into x9 — neither the caller nor the
+// callee can rely on x9 surviving across the call, so we don't need
+// to spill it. The env pointer in x0 is consumed by the call as the
+// ClosureEnv argument.
+func (s *lowerState) lowerIndirectCall(fn *mir.Function, instr *mir.CallInstr, ind *mir.IndirectCall) ([]Instr, error) {
+	if len(instr.Args) > len(argRegs)-1 {
+		return nil, fmt.Errorf("%w: indirect call user-arg count %d exceeds limit", ErrUnsupportedShape, len(instr.Args))
+	}
+	envInstrs, err := s.materialiseOperand(ind.Callee, RegX0)
+	if err != nil {
+		return nil, err
+	}
+	out := append([]Instr(nil), envInstrs...)
+	regCursor := 1 // x0 reserved for env
+	fpCursor := 0
+	for _, arg := range instr.Args {
+		argType := arg.Type()
+		if isFloatABIType(argType) {
+			if fpCursor >= len(fpArgRegs) {
+				return nil, fmt.Errorf("%w: indirect call needs more than %d FP arg regs", ErrUnsupportedShape, len(fpArgRegs))
+			}
+			mat, err := s.materialiseFloatOperand(arg, fpArgRegs[fpCursor])
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, mat...)
+			fpCursor++
+			continue
+		}
+		if regCursor >= len(argRegs) {
+			return nil, fmt.Errorf("%w: indirect call needs more than %d int arg regs", ErrUnsupportedShape, len(argRegs)-1)
+		}
+		slots, ok := s.abiRegSlots(argType)
+		if !ok || slots != 1 {
+			return nil, fmt.Errorf("%w: indirect call arg type %s not supported", ErrUnsupportedShape, argType)
+		}
+		mat, err := s.materialiseOperand(arg, argRegs[regCursor])
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, mat...)
+		regCursor++
+	}
+	// Load fn pointer from env+0 into x9 then `blr x9`. The env
+	// pointer is already in x0 from the materialise above and stays
+	// there through the branch.
+	out = append(out,
+		&LoadFromReg{Dst: RegX9, Src: RegX0, Offset: 0},
+		&BranchLinkReg{Reg: RegX9},
+	)
+	if instr.Dest != nil && !instr.Dest.HasProjections() {
+		if slot, ok := s.localSlots[instr.Dest.Local]; ok {
+			destType := s.destType(instr.Dest.Local)
+			if isFloatABIType(destType) {
+				out = append(out, &StoreFloat64Stack{Src: RegD0, Offset: slot})
+			} else {
+				out = append(out, &Store64Stack{Src: RegX0, Offset: slot})
+			}
+		}
+	}
+	return out, nil
+}
+
 // indirectArgAddress produces the instructions that land &(src_slot)
 // in the destination argument register. Indirect args are always
 // passed as a Copy or Move of a stack-allocated local; struct
@@ -1664,10 +1844,16 @@ func (s *lowerState) materialiseOperand(op mir.Operand, dst Reg) ([]Instr, error
 		if hasIndexProjection(o.Place) {
 			return s.loadIndexedPlaceIntoIntReg(o.Place, dst)
 		}
+		if hasEnvDerefProjection(s, o.Place) {
+			return s.loadEnvProjection(o.Place, dst)
+		}
 		return s.loadPlaceIntoReg(o.Place, dst)
 	case *mir.MoveOp:
 		if hasIndexProjection(o.Place) {
 			return s.loadIndexedPlaceIntoIntReg(o.Place, dst)
+		}
+		if hasEnvDerefProjection(s, o.Place) {
+			return s.loadEnvProjection(o.Place, dst)
 		}
 		return s.loadPlaceIntoReg(o.Place, dst)
 	default:
@@ -1856,12 +2042,13 @@ func (s *lowerState) loadPlaceIntoReg(place mir.Place, dst Reg) ([]Instr, error)
 }
 
 // placeProjectionOffset reduces a Place's projection chain to a single
-// byte offset relative to the local's slot. Handles FieldProj
-// (struct-shaped) and VariantProj (enum payload) over scalar-typed
-// fields. Index/deref projections still fall through to the
-// unsupported-shape sentinel so the LLVM fallback picks them up. The
-// offset is independent of which scalar type lives at that position
-// because every scalar field consumes 8 bytes.
+// byte offset relative to the local's slot, but **only** when the
+// chain stays inside the slot. Closure-env projections (`*` then a
+// FieldProj on a ClosureEnv) need a runtime indirection: the slot
+// holds a pointer, so the lowerer dereferences before reading. Such
+// places are handled by `loadPlaceIntoReg` directly via
+// `loadEnvProjection` — this helper returns ok=false to signal
+// "this isn't a slot-local read" and the caller routes accordingly.
 func (s *lowerState) placeProjectionOffset(place mir.Place) (int64, error) {
 	if !place.HasProjections() {
 		return 0, nil
@@ -1889,6 +2076,79 @@ func (s *lowerState) placeProjectionOffset(place mir.Place) (int64, error) {
 		}
 	}
 	return off, nil
+}
+
+// hasEnvDerefProjection reports whether the place's first projection
+// is a Deref on a closure-shaped pointer (ClosureEnv / FnType). Such
+// places need to be loaded through a runtime indirection rather than
+// summed to a static slot offset.
+func hasEnvDerefProjection(s *lowerState, place mir.Place) bool {
+	if len(place.Projections) == 0 {
+		return false
+	}
+	if _, ok := place.Projections[0].(*mir.DerefProj); !ok {
+		return false
+	}
+	loc := lookupLocal(s.fn, place.Local)
+	if loc == nil {
+		return false
+	}
+	return isClosureScalarType(loc.Type)
+}
+
+// loadEnvProjection lowers `<env>.*.{i}` reads — the lifted body's
+// access to a closure capture or to the fn-pointer slot. The MIR
+// uses TupleProj (or occasionally FieldProj) on the second leg of
+// the chain; both index into the env layout. Layout:
+//
+//	field 0 → env+0     (the lifted fn pointer)
+//	field i → env+24 + (i-1)*8   (the (i-1)-th capture)
+//
+// Trailing chains beyond two entries are unsupported; the lifted
+// body never produces them today.
+func (s *lowerState) loadEnvProjection(place mir.Place, dst Reg) ([]Instr, error) {
+	if len(place.Projections) != 2 {
+		return nil, fmt.Errorf("%w: env projection chain length %d", ErrUnsupportedShape, len(place.Projections))
+	}
+	idx, ok := envProjectionIndex(place.Projections[1])
+	if !ok {
+		return nil, fmt.Errorf("%w: env projection second entry %T", ErrUnsupportedShape, place.Projections[1])
+	}
+	envSlot, ok := s.localSlots[place.Local]
+	if !ok {
+		return nil, fmt.Errorf("%w: env local%d without slot", ErrUnsupportedShape, place.Local)
+	}
+	off := closureEnvFieldByteOffset(idx)
+	return []Instr{
+		&Load64Stack{Dst: RegX9, Offset: envSlot},
+		&LoadFromReg{Dst: dst, Src: RegX9, Offset: off},
+	}, nil
+}
+
+// envProjectionIndex extracts the MIR-level index from either a
+// FieldProj or a TupleProj — the front end uses TupleProj for
+// closure captures (the env captures array is conceptually a
+// tuple), while struct-shaped envs would emit FieldProj. Both shapes
+// reduce to the same env layout offset.
+func envProjectionIndex(p mir.Projection) (int, bool) {
+	switch v := p.(type) {
+	case *mir.FieldProj:
+		return v.Index, true
+	case *mir.TupleProj:
+		return v.Index, true
+	}
+	return 0, false
+}
+
+// closureEnvFieldByteOffset maps an MIR-level FieldProj index on a
+// ClosureEnv pointee to the runtime layout offset. Index 0 is the
+// fn-pointer slot (offset 0); index N>=1 is capture N-1 starting at
+// `closureEnvCapturesOffset`.
+func closureEnvFieldByteOffset(index int) int64 {
+	if index <= 0 {
+		return 0
+	}
+	return int64(closureEnvCapturesOffset) + int64(index-1)*8
 }
 
 func (s *lowerState) lowerIntrinsic(instr *mir.IntrinsicInstr) ([]Instr, error) {
@@ -2221,6 +2481,13 @@ func collectReadLocals(instr mir.Instr, out map[mir.LocalID]bool) {
 	case *mir.CallInstr:
 		for _, arg := range i.Args {
 			collectOperandLocals(arg, out)
+		}
+		// Indirect-call closures read the closure local through the
+		// callee operand. Without surfacing it here, the slot
+		// allocator drops the local and the lowerer fails with a
+		// missing-slot error at the indirect-call site.
+		if ind, ok := i.Callee.(*mir.IndirectCall); ok {
+			collectOperandLocals(ind.Callee, out)
 		}
 	}
 }

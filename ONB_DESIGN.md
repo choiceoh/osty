@@ -37,6 +37,65 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 20 (closures — value + indirect call, 2026-05-02)** —
+> ONB가 처음으로 클로저를 native lowering. `let f = |x| x + n`,
+> `xs.filter(|x| x > 0)` 같은 패턴이 fallback 없이 통과 (filter 자체는
+> 메서드 디스패치 별도). Tier 1의 단일-최대 unlock — Osty stdlib API의
+> 대부분이 클로저를 받기 때문.
+>
+> 작동:
+>
+> ```osty
+> fn main() {
+>     let n = 100
+>     let f = |x: Int| x + n           // env 할당, n을 capture[0]에 stamp
+>     println(f(10))                    // x0 = env, x1 = 10, blr [env+0] → 110
+> }
+> ```
+>
+> 추가:
+> - `runtimeSymClosureEnvAllocV2 = "osty.rt.closure_env_alloc_v2"` —
+>   런타임이 `__asm__("osty.rt....")`로 export한 dotted symbol
+> - `closureEnvCapturesOffset = 24` — 런타임 env 헤더 (`fn_ptr` 8B +
+>   `capture_count` 8B + `pointer_bitmap` 8B) 다음부터 captures 시작
+> - 새 LIR opcodes:
+>   - `BranchLinkReg{Reg}` — `blr Xn` 간접 호출
+>   - `LoadSymbolAddress{Dst, Symbol}` — `adrp + add` 함수/데이터 심볼
+>     주소 materialise (LoadCStringAddress의 일반화)
+> - `isClosureScalarType(t)` — `*ir.FnType` + `NamedType{ClosureEnv,
+>   Builtin}` 둘 다 1-reg 포인터로 분류
+> - `lowerClosureLiteralAssign` — alloc_v2 호출 → x10에 env stash →
+>   fn pointer를 [env+0]에 store → 각 capture를 [env+24+i*8]에 store →
+>   env pointer를 dest slot에 store
+> - `lowerIndirectCall` — closure local → x0, user args → x1.., d0..,
+>   `ldr x9, [x0, #0]` (fn ptr load) → `blr x9` → 반환 캡처
+> - `loadEnvProjection` — `_env.*.{i}` MIR 패턴 lowering. Field 0 →
+>   offset 0 (fn pointer), Field N (N≥1) → 24 + (N-1)*8 (capture N-1).
+>   FieldProj와 TupleProj 둘 다 받음 (front end가 capture에 대해
+>   TupleProj 사용)
+> - `collectReadLocals`이 `IndirectCall.Callee`를 walk해 closure local이
+>   slot을 받도록 보장
+>
+> 검증:
+> - E2E binary smoke 3개 (`TestONBBackendBinaryRunsClosuresOnDarwinARM64`):
+>   no_capture (`|x| x + 1` 두 번 호출), single_capture (`|x| x + n`
+>   with n=100), two_captures (`|x| x + a + b` with a=10, b=20)
+>
+> 한계 (이번 슬라이스에서 명시적으로 보류):
+> - **pointer_bitmap = 0 고정** — GC가 capture를 모두 ptr로 trace하지
+>   못해 false retention 가능. LLVM 백엔드는 capture 타입을 보고 정확한
+>   bitmap을 계산. ONB는 dev path이므로 trade-off는 수용 가능하나,
+>   GC stress 테스트가 false root를 잡아내면 작업 필요
+> - **Float capture** — 코드 경로는 있지만 e2e 검증 안 함
+> - **String/List/struct/enum capture** — pointer 1-reg에 들어가지만
+>   정확한 GC tracing 미구현
+> - **고차 함수의 클로저 리턴** (`fn make_adder(n: Int) -> fn(Int) -> Int`)
+>   — 동작해야 하지만 미검증
+> - **클로저를 인자로 다른 클로저에 전달** — 미검증
+>
+> 다음 슬라이스 후보: Map<K,V> intrinsics, 메서드 디스패치, String
+> 메서드, 제네릭 함수 검증.
+>
 > **Slice A2 Week 19 (struct >16B sret-style indirect passing, 2026-05-02)** —
 > ONB가 16B 초과 (3-4 필드) all-scalar struct를 AAPCS64 indirect ABI로
 > 처리. `make() -> V3` 같은 함수가 fallback 없이 통과.

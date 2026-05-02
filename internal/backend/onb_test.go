@@ -1237,6 +1237,83 @@ fn main() {
 	}
 }
 
+// TestONBBackendBinaryRunsClosuresOnDarwinARM64 covers Phase A2 Week
+// 20: closure values and indirect call lowering. The runtime allocates
+// the env via `osty.rt.closure_env_alloc_v2`; the lowerer stores the
+// lifted-fn pointer at offset 0 and each capture at offset 24+i*8;
+// indirect call loads the fn pointer from the env's first slot and
+// `blr`s into it with the env riding x0 as the closure-env arg.
+//
+// Cases:
+//   - **no_capture**: a closure that reads only its user arg —
+//     drives the alloc + indirect-call paths without any env-deref
+//     reads.
+//   - **single_capture**: captures one Int — exercises the
+//     alloc/store/load chain through the env's capture region (offset
+//     24 → MIR's `_env.*.1` projection, lowered via `loadEnvProjection`).
+//   - **two_captures**: captures two Ints — verifies the per-capture
+//     stride matches the runtime layout (offset 32 for capture[1]).
+func TestONBBackendBinaryRunsClosuresOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("ONB closure executable smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	cases := []struct {
+		name, src, want string
+	}{
+		{
+			name: "no_capture",
+			src: `fn main() {
+    let f = |x: Int| x + 1
+    println(f(10))
+    println(f(99))
+}`,
+			want: "11\n100\n",
+		},
+		{
+			name: "single_capture",
+			src: `fn main() {
+    let n = 100
+    let f = |x: Int| x + n
+    println(f(10))
+}`,
+			want: "110\n",
+		},
+		{
+			name: "two_captures",
+			src: `fn main() {
+    let a = 10
+    let b = 20
+    let f = |x: Int| x + a + b
+    println(f(5))
+}`,
+			want: "35\n",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(onb.EnvStrict, "1")
+			req := newBackendRequest(t, EmitBinary, tc.src)
+			req.Layout.Target = "aarch64-apple-darwin"
+			result, err := ONBBackend{}.Emit(context.Background(), req)
+			if err != nil {
+				t.Fatalf("ONBBackend.Emit returned error: %v", err)
+			}
+			out, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+			if err != nil {
+				t.Fatalf("binary returned error: %v\n%s", err, out)
+			}
+			if got := string(out); got != tc.want {
+				t.Fatalf("binary output = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestONBBackendBinaryRunsStringAndListOnDarwinARM64 exercises Phase A2's
 // runtime-call slice: String concatenation and `List<Int>` push/len. These
 // shapes lower to `bl _osty_rt_strings_Concat`, `bl _osty_rt_list_new`,
