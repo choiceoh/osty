@@ -834,6 +834,13 @@ const (
 	// Dest nil. Appended at the tail to preserve historical enum
 	// values for every previously-emitted intrinsic.
 	IntrinsicSetClear
+	// IntrinsicTimeNow reads the current wall-clock time. Args: [].
+	// Dest receives an Instant (single-Int64 wrapper, §10.20). The
+	// LLVM lowering calls `osty_rt_time_now_nanos` and `inttoptr`s
+	// the i64 nanoseconds into Instant's opaque-ptr ABI (the same
+	// shape Duration uses). Appended at the tail to preserve every
+	// historical enum integer value.
+	IntrinsicTimeNow
 )
 
 // StorageLiveInstr marks a local as alive. Optional; backends that do
@@ -1658,6 +1665,8 @@ func (k IntrinsicKind) String() string {
 		return "yield"
 	case IntrinsicSleep:
 		return "sleep"
+	case IntrinsicTimeNow:
+		return "time_now"
 	case IntrinsicListPush:
 		return "list_push"
 	case IntrinsicListLen:

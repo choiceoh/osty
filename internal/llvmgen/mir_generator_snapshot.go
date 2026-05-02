@@ -83,7 +83,7 @@ func mirLlvmTypeForOpaqueNamed(name string) string {
 		return "ptr"
 	}
 	// Osty: toolchain/mir_generator.osty:83:5
-	if name == "Channel" || name == "Handle" || name == "Group" || name == "TaskGroup" || name == "Select" || name == "Duration" {
+	if name == "Channel" || name == "Handle" || name == "Group" || name == "TaskGroup" || name == "Select" || name == "Duration" || name == "Instant" {
 		// Osty: toolchain/mir_generator.osty:85:9
 		return "ptr"
 	}
@@ -161,7 +161,7 @@ func mirTupleTagForNamed(name string, builtin bool) string {
 		}
 	}
 	// Osty: toolchain/mir_generator.osty:160:5
-	if name == "Channel" || name == "Handle" || name == "Group" || name == "TaskGroup" || name == "Select" || name == "Duration" {
+	if name == "Channel" || name == "Handle" || name == "Group" || name == "TaskGroup" || name == "Select" || name == "Duration" || name == "Instant" {
 		// Osty: toolchain/mir_generator.osty:162:9
 		return "ptr"
 	}
@@ -6068,6 +6068,10 @@ func mirRtThreadYieldSymbol() string { return mirRtThreadSymbol("yield") }
 func mirRtThreadSleepSymbol() string { return mirRtThreadSymbol("sleep") }
 func mirRtThreadSpawnSymbol() string { return mirRtThreadSymbol("spawn") }
 
+// Osty: mirRtTime* fixed-symbols
+func mirRtTimeSymbol(suffix string) string { return "osty_rt_time_" + suffix }
+func mirRtTimeNowNanosSymbol() string      { return mirRtTimeSymbol("now_nanos") }
+
 // Osty: mirRtBench* fixed-symbols
 func mirRtBenchNowNanosSymbol() string { return mirRtBenchSymbol("now_nanos") }
 func mirRtBenchTargetNsSymbol() string { return mirRtBenchSymbol("target_ns") }
@@ -9392,6 +9396,8 @@ func mirIntrinsicKindLabelFull(kind int, kindFallback string) string {
 		return "map.clear"
 	case 137:
 		return "set.clear"
+	case 138:
+		return "time_now"
 	}
 	return kindFallback
 }

@@ -5236,6 +5236,14 @@ func concurrencyIntrinsicForFree(qualifier, name string) IntrinsicKind {
 		if threadNs || qualifier == "time" || qualifier == "std.time" {
 			return IntrinsicSleep
 		}
+	case "now":
+		// `time.now()` returns an `Instant` (struct `{ i64 unixNanos }`).
+		// Lowered to the runtime helper `osty_rt_time_now_nanos`, then
+		// wrapped as the Instant aggregate at the LLVM emit site so the
+		// public Osty API stays a regular value type.
+		if qualifier == "time" || qualifier == "std.time" {
+			return IntrinsicTimeNow
+		}
 	}
 	return IntrinsicInvalid
 }

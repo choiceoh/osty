@@ -683,8 +683,12 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 		// Concurrency runtime types are opaque pointers — the emitter
 		// doesn't need a declared layout for them. These match what
 		// the runtime ABI hands back from chan_make / spawn / etc.
+		// `Instant` joins the list because std.time models it as a
+		// single-Int64 wrapper (§10.20) — same shape as Duration —
+		// and `time.now()` lowers to a `osty_rt_time_now_nanos` i64
+		// wrapped via `inttoptr`.
 		switch x.Name {
-		case "Channel", "Handle", "Group", "TaskGroup", "Select", "Duration", "Rng", "Gen", "Uuid", "Regex", "Captures", "Never":
+		case "Channel", "Handle", "Group", "TaskGroup", "Select", "Duration", "Instant", "Rng", "Gen", "Uuid", "Regex", "Captures", "Never":
 			return true
 		case "Range":
 			// Range<T> is a prelude type but the Go-side resolver
@@ -1422,7 +1426,7 @@ func isSupportedIntrinsic(k mir.IntrinsicKind) bool {
 		mir.IntrinsicSelectTimeout, mir.IntrinsicSelectDefault:
 		return true
 	case mir.IntrinsicIsCancelled, mir.IntrinsicCheckCancelled,
-		mir.IntrinsicYield, mir.IntrinsicSleep:
+		mir.IntrinsicYield, mir.IntrinsicSleep, mir.IntrinsicTimeNow:
 		return true
 	case mir.IntrinsicParallel, mir.IntrinsicRace, mir.IntrinsicCollectAll:
 		return true
@@ -5236,7 +5240,7 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 		mir.IntrinsicSelectTimeout, mir.IntrinsicSelectDefault:
 		return g.emitSelectIntrinsic(i)
 	case mir.IntrinsicIsCancelled, mir.IntrinsicCheckCancelled,
-		mir.IntrinsicYield, mir.IntrinsicSleep:
+		mir.IntrinsicYield, mir.IntrinsicSleep, mir.IntrinsicTimeNow:
 		return g.emitCancelIntrinsic(i)
 	case mir.IntrinsicParallel, mir.IntrinsicRace, mir.IntrinsicCollectAll:
 		return g.emitConcurrencyHelperIntrinsic(i)
@@ -8378,6 +8382,25 @@ func (g *mirGen) emitCancelIntrinsic(i *mir.IntrinsicInstr) error {
 		sym := mirRtThreadSleepSymbol()
 		g.declareRuntime(sym, mirRuntimeDeclareVoidFromPtrLine(sym))
 		g.fnBuf.WriteString(mirCallVoidPtrLine(sym, dur))
+		return nil
+	case mir.IntrinsicTimeNow:
+		if len(i.Args) != 0 {
+			return unsupported("mir-mvp", "time.now arity")
+		}
+		sym := mirRtTimeNowNanosSymbol()
+		g.declareRuntime(sym, mirRuntimeDeclareI64NoArgsLine(sym))
+		nanos := g.fresh()
+		g.fnBuf.WriteString(mirCallValueNoArgsLine(nanos, "i64", sym))
+		if i.Dest == nil {
+			return nil
+		}
+		// Instant shares Duration's opaque-ptr ABI (single Int64
+		// payload, §10.20) — wrap the runtime i64 with `inttoptr`
+		// before storing into the dest slot so the value flows like
+		// any other Instant produced by Osty source.
+		instReg := g.fresh()
+		g.fnBuf.WriteString(mirIntToPtrLine(instReg, "i64", nanos))
+		g.fnBuf.WriteString(mirStoreLine("ptr", instReg, g.localSlots[i.Dest.Local]))
 		return nil
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("cancel intrinsic kind %d", i.Kind))

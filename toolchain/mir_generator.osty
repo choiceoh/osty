@@ -67,8 +67,12 @@ pub fn mirLlvmTypeForOpaqueNamed(name: String) -> String {
         return "ptr"
     }
     // Concurrency runtime values: same deal — opaque handles.
+    // `Instant` (std.time §10.20) joins the list as the single-Int64
+    // wall-clock value type — same opaque-ptr ABI as Duration so
+    // `time.now()` can return a runtime i64 via `inttoptr`.
     if name == "Channel" || name == "Handle" || name == "Group" ||
-       name == "TaskGroup" || name == "Select" || name == "Duration" {
+       name == "TaskGroup" || name == "Select" || name == "Duration" ||
+       name == "Instant" {
         return "ptr"
     }
     // Closure environment struct — always passed as a pointer to the
@@ -143,9 +147,12 @@ pub fn mirTupleTagForNamed(name: String, builtin: Bool) -> String {
     }
     // Concurrency runtime handle types are always opaque pointers,
     // regardless of the Builtin flag — the Go source also skips the
-    // guard here, so we keep the same relaxation.
+    // guard here, so we keep the same relaxation. `Instant` joins
+    // the same opaque-ptr club so it composes inside `Tuple`/`Result`
+    // mangled names.
     if name == "Channel" || name == "Handle" || name == "Group" ||
-       name == "TaskGroup" || name == "Select" || name == "Duration" {
+       name == "TaskGroup" || name == "Select" || name == "Duration" ||
+       name == "Instant" {
         return "ptr"
     }
     name

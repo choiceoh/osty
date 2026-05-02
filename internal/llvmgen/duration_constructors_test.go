@@ -180,3 +180,27 @@ fn main() {
 		}
 	}
 }
+
+// `time.now()` returns an Instant, the spec-canonical wall-clock entry
+// point (LANG_SPEC §10.20). The LLVM lowering threads through
+// IntrinsicTimeNow → `osty_rt_time_now_nanos` (i64) → `inttoptr` into
+// the opaque-ptr Instant ABI (same shape Duration uses for its
+// Int64-payload value type). Without the intrinsic the call falls
+// through to "call to unresolved symbol std.time.now".
+func TestTimeNowLowersToRuntimeCallAndInstantPtrWrap(t *testing.T) {
+	got := emitDurationLLVM(t, `use std.time
+
+fn main() {
+    let x = time.now()
+}
+`)
+	for _, want := range []string{
+		"declare i64 @osty_rt_time_now_nanos()",
+		"call i64 @osty_rt_time_now_nanos()",
+		"inttoptr i64 ",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("time.now() missing %q in IR:\n%s", want, got)
+		}
+	}
+}

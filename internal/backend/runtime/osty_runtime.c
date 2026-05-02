@@ -22317,6 +22317,60 @@ void osty_rt_thread_sleep(int64_t nanos) {
     osty_rt_sleep_ns((uint64_t)nanos);
 }
 
+/* std.time.now wall-clock source. Returns nanoseconds since the Unix
+ * epoch, the i64 payload of an Osty `Instant`. `clock_gettime` /
+ * `GetSystemTimeAsFileTime` give whole-nanosecond precision on all
+ * supported targets; the saturating fallback when the platform call
+ * fails keeps the contract "result is monotonic-ish, never negative". */
+int64_t osty_rt_time_now_nanos(void) {
+#if defined(_WIN32)
+    FILETIME ft;
+    ULARGE_INTEGER li;
+    GetSystemTimeAsFileTime(&ft);
+    li.LowPart = ft.dwLowDateTime;
+    li.HighPart = ft.dwHighDateTime;
+    /* FILETIME is 100ns ticks since 1601-01-01; subtract the offset to
+     * 1970-01-01 (11644473600 seconds = 116444736000000000 ticks). */
+    if (li.QuadPart < 116444736000000000ULL) {
+        return 0;
+    }
+    return (int64_t)((li.QuadPart - 116444736000000000ULL) * 100ULL);
+#else
+    struct timespec ts;
+    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+        return 0;
+    }
+    return (int64_t)ts.tv_sec * 1000000000LL + (int64_t)ts.tv_nsec;
+#endif
+}
+
+/* std.time.local local-zone offset in seconds east of UTC. Captures
+ * DST as observed at call time so callers can rebuild a `Zone` with
+ * the right wall-clock skew. POSIX `localtime_r` populates `tm_gmtoff`
+ * directly; on Windows we derive it from `GetTimeZoneInformation`
+ * (Bias is in minutes west of UTC, so we negate to seconds east). */
+int64_t osty_rt_time_local_offset_seconds(void) {
+#if defined(_WIN32)
+    TIME_ZONE_INFORMATION tz;
+    DWORD r = GetTimeZoneInformation(&tz);
+    LONG bias = tz.Bias;
+    if (r == TIME_ZONE_ID_DAYLIGHT) {
+        bias += tz.DaylightBias;
+    } else if (r == TIME_ZONE_ID_STANDARD) {
+        bias += tz.StandardBias;
+    }
+    /* Bias is minutes west of UTC; offset east is -bias * 60. */
+    return -(int64_t)bias * 60LL;
+#else
+    time_t now = time(NULL);
+    struct tm tm_local;
+    if (localtime_r(&now, &tm_local) == NULL) {
+        return 0;
+    }
+    return (int64_t)tm_local.tm_gmtoff;
+#endif
+}
+
 /* ---- Channels: bounded ring buffer, mutex + two condition variables.
  *
  * Every channel slot is an int64_t holding either a scalar (i64/i1/f64
