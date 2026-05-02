@@ -2,17 +2,15 @@
 
 _Auto-generated. Refresh with `just airepair-capture` (or rerun in CI)._
 
-**Scanned:** 402 `.osty` file(s)  
-**Captured:** 217 residual case(s) — **1** AI-slip(s) airepair rewrote, **216** untouched (toolchain self-host / backend gap, not airepair's job)  
+**Scanned:** 418 `.osty` file(s)  
+**Captured:** 217 residual case(s) — **0** AI-slip(s) airepair rewrote, **217** untouched (toolchain self-host / backend gap, not airepair's job)  
 **Corpus coverage:** 16 promoted case(s)
 
 ## AI-slip backlog (changed=true)
 
-```
-learning priorities:
-  1. javascript_for_of_loop -> E0703  score=135 cases=1 residual_errors=1 stage=check action=promote_and_fix_check representative=webview2 corpus=uncovered
-     next: promote webview2 into the corpus, then investigate the check-stage residual for javascript_for_of_loop -> E0703
-```
+_No new AI slips this run — airepair didn't need to rewrite anything._
+
+If `Captured` is non-zero above, it's domain code that fails the checker for unrelated reasons (self-host / backend coverage).
 
 ## Workflow
 
