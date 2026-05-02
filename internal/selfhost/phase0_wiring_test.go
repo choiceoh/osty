@@ -69,6 +69,23 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"mirEmitLocalRegName(",
 				"MirOpConst -> mirEmitConstOperand",
 				"MirConstInt -> mirGenIntToString",
+				// Phase 1c — per-instruction emission. The block walk
+				// now visits `block.instrs` and dispatches each
+				// MirInstrAssign through the rvalue arms (Use, Unary,
+				// Binary covered today; rest stub-with-TODO). Loss of
+				// either the walk hookup or the rvalue dispatch would
+				// silently regress to the empty-body Phase 1b shape
+				// where every fn produced ret-stub-only IR.
+				"for instr in block.instrs {",
+				"mirEmitInstruction(func, instr)",
+				"mirEmitAssignInstr(",
+				"mirEmitRValue(",
+				"mirEmitRValueUse(",
+				"mirEmitRValueUnary(",
+				"mirEmitRValueBinary(",
+				"mirBinaryOpSymbol(",
+				"MirInstrAssign -> mirEmitAssignInstr",
+				"MirRVBinary -> mirEmitRValueBinary",
 			},
 		},
 		{
