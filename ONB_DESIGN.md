@@ -37,6 +37,56 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 22 (Map<K,V> — new + insert + len, 2026-05-02)** —
+> Map가 native path로 들어옴. 가장 흔한 패턴 `Map<String, Int>`,
+> `Map<Int, Int>` 의 생성·삽입·길이 쿼리가 fallback 없이 통과.
+>
+> 작동:
+>
+> ```osty
+> let mut m: Map<String, Int> = {:}
+> m.insert("a", 1)
+> m.insert("b", 2)
+> println(m.len())                 // 2
+> ```
+>
+> 추가:
+> - 새 런타임 심볼: `runtimeSymMapNew/Len` + key kind별 insert
+>   (`_i64`, `_i1`, `_f64`, `_ptr`, `_string`)
+> - `abiKindI64/I1/F64/Ptr/String` 상수 + `abiKindFor(t)` — 런타임의
+>   `OSTY_RT_ABI_*` 태그 enum과 동일
+> - **Per-function map scratch slot** — `osty_rt_map_insert_*`은 value를
+>   포인터로 받기 때문에 8B 스택 공간이 필요. `functionUsesMapValueScratch`
+>   가 `IntrinsicMapSet`을 감지하면 vararg 슬롯과 user locals 사이에
+>   8B 예약. `mapScratchOffset` 필드로 각 map_set 호출이 같은 슬롯 재사용
+> - `lowerMapNew` — `(key_kind, value_kind, 8, NULL)` 4-인자 호출,
+>   결과 ptr를 dest slot에 capture
+> - `lowerMapSet` — 값을 scratch에 stamp → `LoadStackAddress`로
+>   `&scratch`를 x2에 → key kind에 따라 insert 심볼 디스패치
+> - `lowerMapLen` — 단순 런타임 호출
+> - `mapKeyValueTypes(t)` helper — `Map<K,V>` NamedType에서 K, V 추출
+> - `mapInsertSymbolForKeyKind(kind)` — kind → 런타임 심볼 매핑
+>
+> 검증:
+> - E2E binary smoke 3개 (`TestONBBackendBinaryRunsMapNewInsertLenOnDarwinARM64`):
+>   map_string_int_three_keys (3 insert → len 3),
+>   map_int_int_two_keys (Int 키), map_string_int_overwrite (같은 키
+>   재삽입 → len 1)
+>
+> 한계 (이번 슬라이스에서 명시적으로 보류):
+> - `m.get(k) -> V?` — 런타임이 ptr-out 컨벤션 (`out_value` 인자)을
+>   사용하므로 별도 stack slot + Option<V> 구성 필요. **fallback 테스트
+>   가 이 패턴 사용** (`m.get("a").isSome()`)
+> - `m.contains(k) -> Bool`, `m.remove(k) -> Bool` — 마찬가지 ptr-out
+> - `m.update(k, |v| ...)` — 클로저 + map_get 결합
+> - `m.keys()` / `m.values()` / `for (k, v) in m` — iterator 별도
+> - struct/enum value 타입 (8B 초과) — `value_size`가 8 hardcoded
+> - GC trace fn pointer는 NULL — pointer 값 (String, List 등)이 map에
+>   들어가면 GC가 참조 못 잡을 위험. 정확한 trace 함수는 follow-up
+>
+> 다음 슬라이스 후보: Map.get / Map.contains, 추가 String/Option/List
+> 메서드, Float 비교 / 캐스트, 클로저 GC bitmap.
+>
 > **Slice A2 Week 21 (stdlib intrinsics + builtin pointer ABI, 2026-05-02)** —
 > 작은 lift, 큰 unlock. Builtin generic 컨테이너 (List/Map/Set/Channel
 > /Bytes/Handle)가 ABI에서 1-reg 포인터로 분류되도록 확장 + String /

@@ -64,7 +64,46 @@ const (
 	// encoding prepends the leading underscore, matching the call site.
 	runtimeSymClosureEnvAllocV2 = "osty.rt.closure_env_alloc_v2"
 	runtimeSymStringByteLen     = "osty_rt_strings_ByteLen"
+	runtimeSymMapNew            = "osty_rt_map_new"
+	runtimeSymMapLen            = "osty_rt_map_len"
+	runtimeSymMapInsertI64      = "osty_rt_map_insert_i64"
+	runtimeSymMapInsertI1       = "osty_rt_map_insert_i1"
+	runtimeSymMapInsertF64      = "osty_rt_map_insert_f64"
+	runtimeSymMapInsertPtr      = "osty_rt_map_insert_ptr"
+	runtimeSymMapInsertString   = "osty_rt_map_insert_string"
 )
+
+// containerAbiKind enumerates the integer "kind" tag the runtime uses
+// to identify a map's key/value class. Mirrors the LLVM backend's
+// `llvmContainerAbiKind` and the `OSTY_RT_ABI_*` enum in the C
+// runtime.
+const (
+	abiKindI64    = 1
+	abiKindI1     = 2
+	abiKindF64    = 3
+	abiKindPtr    = 4
+	abiKindString = 5
+)
+
+// abiKindFor returns the runtime kind tag for a MIR type. Unknown
+// types fall through to the pointer kind so the runtime treats them
+// as opaque GC-managed pointers; that matches the LLVM backend's
+// behaviour for List<struct>-class collections.
+func abiKindFor(t mir.Type) int {
+	if t == mir.TString {
+		return abiKindString
+	}
+	if t == mir.TInt {
+		return abiKindI64
+	}
+	if t == mir.TBool {
+		return abiKindI1
+	}
+	if isFloatABIType(t) {
+		return abiKindF64
+	}
+	return abiKindPtr
+}
 
 // closureEnvCapturesOffset is the byte offset within an
 // `osty_rt_closure_env` where the captures array begins. The runtime
@@ -123,10 +162,12 @@ type lowerState struct {
 	mod      *mir.Module // module-scope layouts for struct size lookup
 
 	// per-function state, reset by lowerFunction
-	fn          *mir.Function
-	localSlots  map[mir.LocalID]int64
-	needsVararg bool
-	frameSize   int64
+	fn               *mir.Function
+	localSlots       map[mir.LocalID]int64
+	needsVararg      bool
+	needsMapScratch  bool
+	mapScratchOffset int64
+	frameSize        int64
 }
 
 // lowerFunction lowers one MIR function into LIR. The same path serves main
@@ -173,6 +214,7 @@ func (s *lowerState) lowerFunction(fn *mir.Function) (Function, error) {
 	}
 	s.fn = fn
 	s.needsVararg = functionUsesIntPrintln(fn) && s.target.ObjectFormat == "mach-o"
+	s.needsMapScratch = functionUsesMapValueScratch(fn)
 	if err := s.assignLocalSlots(fn); err != nil {
 		return Function{}, err
 	}
@@ -257,6 +299,17 @@ func (s *lowerState) assignLocalSlots(fn *mir.Function) error {
 	if s.needsVararg {
 		varargBase = 16
 	}
+	// Map operations pass values via pointer; the lowerer keeps a
+	// dedicated 8-byte scratch slot for that pointer's pointee. The
+	// slot sits between the vararg slot (if any) and the regular
+	// locals so its address is a fixed stack offset. Reserved only
+	// when the function actually contains a map_set / map_get etc.
+	mapScratchOffset := int64(0)
+	if s.needsMapScratch {
+		mapScratchOffset = varargBase
+		varargBase += 8
+	}
+	s.mapScratchOffset = mapScratchOffset
 	off := varargBase
 	for _, loc := range fn.Locals {
 		if !read[loc.ID] {
@@ -2195,9 +2248,149 @@ func (s *lowerState) lowerIntrinsic(instr *mir.IntrinsicInstr) ([]Instr, error) 
 		return s.lowerOptionIsSome(instr)
 	case mir.IntrinsicOptionIsNone:
 		return s.lowerOptionIsNone(instr)
+	case mir.IntrinsicMapNew:
+		return s.lowerMapNew(instr)
+	case mir.IntrinsicMapSet:
+		return s.lowerMapSet(instr)
+	case mir.IntrinsicMapLen:
+		return s.lowerMapLen(instr)
 	default:
 		return nil, fmt.Errorf("%w: intrinsic %s is outside phase 1", ErrUnsupportedShape, instr.Kind)
 	}
+}
+
+// lowerMapNew lowers `m = intrinsic map_new()` to a call to the
+// runtime's `osty_rt_map_new(key_kind, value_kind, value_size, trace)`
+// constructor. K/V types come from the destination local's
+// `Map<K, V>` parameterisation; `trace` stays NULL for the
+// scalar-element map slice. Mixed-pointer values would need a real
+// trace fn, but those fall back to LLVM until a follow-up adds the
+// wiring.
+func (s *lowerState) lowerMapNew(instr *mir.IntrinsicInstr) ([]Instr, error) {
+	if instr.Dest == nil || instr.Dest.HasProjections() {
+		return nil, fmt.Errorf("%w: map_new requires a non-projected dest", ErrUnsupportedShape)
+	}
+	destLoc := lookupLocal(s.fn, instr.Dest.Local)
+	if destLoc == nil {
+		return nil, fmt.Errorf("%w: map_new dest local missing", ErrUnsupportedShape)
+	}
+	keyT, valT := mapKeyValueTypes(destLoc.Type)
+	if keyT == nil || valT == nil {
+		return nil, fmt.Errorf("%w: map_new dest type %s isn't Map<K,V>", ErrUnsupportedShape, destLoc.Type)
+	}
+	out := []Instr{
+		&MovImm64{Dst: RegX0, Imm: int64(abiKindFor(keyT))},
+		&MovImm64{Dst: RegX1, Imm: int64(abiKindFor(valT))},
+		&MovImm64{Dst: RegX2, Imm: 8}, // value_size — every supported value is 8B
+		&MovImm64{Dst: RegX3, Imm: 0}, // trace fn pointer (NULL)
+		&BranchLink{Symbol: runtimeSymMapNew},
+	}
+	if slot, ok := s.localSlots[instr.Dest.Local]; ok {
+		out = append(out, &Store64Stack{Src: RegX0, Offset: slot})
+	}
+	return out, nil
+}
+
+// lowerMapSet lowers `intrinsic map_set(map, key, value)`. The runtime
+// passes value via a const-pointer parameter, so we stash the value
+// in the per-function map scratch slot first and pass `&scratch` in
+// x2. Key dispatches by abiKindFor: string keys go through
+// osty_rt_map_insert_string; scalars + pointers route to the matching
+// suffix.
+func (s *lowerState) lowerMapSet(instr *mir.IntrinsicInstr) ([]Instr, error) {
+	if len(instr.Args) != 3 {
+		return nil, fmt.Errorf("%w: map_set expects 3 args", ErrUnsupportedShape)
+	}
+	if !s.needsMapScratch {
+		return nil, fmt.Errorf("%w: map_set without scratch reservation", ErrUnsupportedShape)
+	}
+	mapInstrs, err := s.materialiseOperand(instr.Args[0], RegX0)
+	if err != nil {
+		return nil, err
+	}
+	keyT := instr.Args[1].Type()
+	keyKind := abiKindFor(keyT)
+	keySym, err := mapInsertSymbolForKeyKind(keyKind)
+	if err != nil {
+		return nil, err
+	}
+	keyInstrs, err := s.materialiseOperand(instr.Args[1], RegX1)
+	if err != nil {
+		return nil, err
+	}
+	// Materialise value into x9 (or d8 for floats) → store at the
+	// scratch slot → pass &scratch in x2.
+	valueT := instr.Args[2].Type()
+	out := append([]Instr(nil), mapInstrs...)
+	out = append(out, keyInstrs...)
+	if isFloatABIType(valueT) {
+		mat, err := s.materialiseFloatOperand(instr.Args[2], RegD8)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, mat...)
+		out = append(out, &StoreFloat64Stack{Src: RegD8, Offset: s.mapScratchOffset})
+	} else {
+		mat, err := s.materialiseOperand(instr.Args[2], RegX9)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, mat...)
+		out = append(out, &Store64Stack{Src: RegX9, Offset: s.mapScratchOffset})
+	}
+	out = append(out,
+		&LoadStackAddress{Dst: RegX2, Offset: s.mapScratchOffset},
+		&BranchLink{Symbol: keySym},
+	)
+	return out, nil
+}
+
+// lowerMapLen lowers `_n = intrinsic map_len(m)` — direct runtime
+// call returning the count in x0.
+func (s *lowerState) lowerMapLen(instr *mir.IntrinsicInstr) ([]Instr, error) {
+	if len(instr.Args) != 1 {
+		return nil, fmt.Errorf("%w: map_len expects 1 arg", ErrUnsupportedShape)
+	}
+	receiver, err := s.materialiseOperand(instr.Args[0], RegX0)
+	if err != nil {
+		return nil, err
+	}
+	out := append([]Instr(nil), receiver...)
+	out = append(out, &BranchLink{Symbol: runtimeSymMapLen})
+	if instr.Dest != nil && !instr.Dest.HasProjections() {
+		if slot, ok := s.localSlots[instr.Dest.Local]; ok {
+			out = append(out, &Store64Stack{Src: RegX0, Offset: slot})
+		}
+	}
+	return out, nil
+}
+
+// mapKeyValueTypes extracts the K, V parameterisation from a
+// `Map<K,V>` named type. Returns (nil, nil) for non-map types.
+func mapKeyValueTypes(t mir.Type) (mir.Type, mir.Type) {
+	nt, ok := t.(*ir.NamedType)
+	if !ok || nt == nil || !nt.Builtin || nt.Name != "Map" || len(nt.Args) < 2 {
+		return nil, nil
+	}
+	return nt.Args[0], nt.Args[1]
+}
+
+// mapInsertSymbolForKeyKind picks the runtime insert symbol from a
+// container ABI key kind. Symmetric with abiKindFor.
+func mapInsertSymbolForKeyKind(kind int) (string, error) {
+	switch kind {
+	case abiKindI64:
+		return runtimeSymMapInsertI64, nil
+	case abiKindI1:
+		return runtimeSymMapInsertI1, nil
+	case abiKindF64:
+		return runtimeSymMapInsertF64, nil
+	case abiKindString:
+		return runtimeSymMapInsertString, nil
+	case abiKindPtr:
+		return runtimeSymMapInsertPtr, nil
+	}
+	return "", fmt.Errorf("%w: map_set key kind %d", ErrUnsupportedShape, kind)
 }
 
 // lowerStringIsEmpty composes `osty_rt_strings_ByteLen(s) == 0` and
@@ -2574,6 +2767,26 @@ func stringConstFromOperand(op mir.Operand) (string, bool) {
 		return "", false
 	}
 	return s.Value, true
+}
+
+// functionUsesMapValueScratch reports whether the function contains
+// any map intrinsic that needs an 8-byte stack scratch slot to pass a
+// value pointer to the runtime. Currently true when map_set appears;
+// map_get / map_contains will join once their lowering lands.
+func functionUsesMapValueScratch(fn *mir.Function) bool {
+	for _, block := range fn.Blocks {
+		for _, instr := range block.Instrs {
+			intr, ok := instr.(*mir.IntrinsicInstr)
+			if !ok {
+				continue
+			}
+			switch intr.Kind {
+			case mir.IntrinsicMapSet:
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // functionUsesIntPrintln reports whether the function calls println with an

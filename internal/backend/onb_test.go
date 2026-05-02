@@ -1418,6 +1418,82 @@ fn main() {
 	}
 }
 
+// TestONBBackendBinaryRunsMapNewInsertLenOnDarwinARM64 covers Phase
+// A2 Week 22: `Map<K, V>` construction, insertion, and length
+// queries. Lookup (`Map.get`), `Map.contains`, and `Map.remove` all
+// pass values via the runtime's pointer-out convention; that path
+// isn't lowered yet and stays in fallback.
+//
+// Cases exercise the three most common key kinds: String, Int, and
+// — once a Float-keyed map is realistic — Float64. Each calls
+// `osty_rt_map_new` with the right (key_kind, value_kind, 8, NULL)
+// tuple, stamps the value into the per-function scratch slot before
+// `osty_rt_map_insert_<key_suffix>(map, key, &scratch)`, and queries
+// `osty_rt_map_len(map)` for the final count.
+func TestONBBackendBinaryRunsMapNewInsertLenOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("ONB Map<K,V> executable smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	cases := []struct {
+		name, src, want string
+	}{
+		{
+			name: "map_string_int_three_keys",
+			src: `fn main() {
+    let mut m: Map<String, Int> = {:}
+    m.insert("a", 1)
+    m.insert("b", 2)
+    m.insert("c", 3)
+    println(m.len())
+}`,
+			want: "3\n",
+		},
+		{
+			name: "map_int_int_two_keys",
+			src: `fn main() {
+    let mut m: Map<Int, Int> = {:}
+    m.insert(10, 100)
+    m.insert(20, 200)
+    println(m.len())
+}`,
+			want: "2\n",
+		},
+		{
+			name: "map_string_int_overwrite",
+			src: `fn main() {
+    let mut m: Map<String, Int> = {:}
+    m.insert("k", 1)
+    m.insert("k", 2)        // overwrite; len stays 1
+    println(m.len())
+}`,
+			want: "1\n",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(onb.EnvStrict, "1")
+			req := newBackendRequest(t, EmitBinary, tc.src)
+			req.Layout.Target = "aarch64-apple-darwin"
+			result, err := ONBBackend{}.Emit(context.Background(), req)
+			if err != nil {
+				t.Fatalf("ONBBackend.Emit returned error: %v", err)
+			}
+			out, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+			if err != nil {
+				t.Fatalf("binary returned error: %v\n%s", err, out)
+			}
+			if got := string(out); got != tc.want {
+				t.Fatalf("binary output = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestONBBackendBinaryRunsStringAndListOnDarwinARM64 exercises Phase A2's
 // runtime-call slice: String concatenation and `List<Int>` push/len. These
 // shapes lower to `bl _osty_rt_strings_Concat`, `bl _osty_rt_list_new`,
@@ -1807,7 +1883,8 @@ func TestONBBackendFallsBackToLLVMOnUnsupportedShape(t *testing.T) {
 	req := newBackendRequest(t, EmitObject, `fn main() {
     let mut m: Map<String, Int> = {:}
     m.insert("a", 1)
-    println(m.len())
+    let v = m.get("a")
+    println(v.isSome())
 }`)
 	req.Layout.Target = "aarch64-apple-darwin"
 	fallbackArtifacts := req.Artifacts(NameLLVM)
@@ -1849,7 +1926,8 @@ func TestONBBackendStrictModeSurfacesShapeError(t *testing.T) {
 	req := newBackendRequest(t, EmitObject, `fn main() {
     let mut m: Map<String, Int> = {:}
     m.insert("a", 1)
-    println(m.len())
+    let v = m.get("a")
+    println(v.isSome())
 }`)
 	req.Layout.Target = "aarch64-apple-darwin"
 	fake := &recordingBackend{name: NameLLVM}
@@ -1871,7 +1949,8 @@ func TestONBBackendASMEmitDoesNotFallback(t *testing.T) {
 	req := newBackendRequest(t, EmitASM, `fn main() {
     let mut m: Map<String, Int> = {:}
     m.insert("a", 1)
-    println(m.len())
+    let v = m.get("a")
+    println(v.isSome())
 }`)
 	req.Layout.Target = "aarch64-apple-darwin"
 	fake := &recordingBackend{name: NameLLVM}
@@ -1912,7 +1991,8 @@ func TestONBBackendTimingLogsFallback(t *testing.T) {
 	req := newBackendRequest(t, EmitObject, `fn main() {
     let mut m: Map<String, Int> = {:}
     m.insert("a", 1)
-    println(m.len())
+    let v = m.get("a")
+    println(v.isSome())
 }`)
 	req.Layout.Target = "aarch64-apple-darwin"
 	fake := &recordingBackend{
