@@ -83,6 +83,55 @@ fn testOnbInstrBranchLinkReg() {
     assertOnbInstrEncodedEq("blr x9", onbInstrBranchLinkReg("x9"), 0xd63f0120)
 }
 
+// === Phase 2c: adrp+add + bl placeholders + reloc records ============
+
+fn testOnbEmitLoadCStringAddress() {
+    // adrp x0, str0@PAGE  ; add x0, x0, str0@PAGEOFF
+    // adrp x0 placeholder = 0x90000000 | 0 = 0x90000000
+    // add  x0, x0, #0     = 0x91000000 | (0 << 5) | 0 = 0x91000000
+    let emit = onbEmitInstr(onbInstrLoadCStringAddress("x0", "str0"), 12)
+    testing.assertEq(emit.words.len(), 2)
+    testing.assertEq(emit.words[0], 0x90000000)
+    testing.assertEq(emit.words[1], 0x91000000)
+    testing.assertEq(emit.fixups.len(), 0)
+    testing.assertEq(emit.relocs.len(), 2)
+    testing.assertEq(emit.relocs[0].codeOffset, 12)
+    testing.assertEq(emit.relocs[0].symbol, "str0")
+    testing.assert(emit.relocs[0].pcrel)
+    testing.assertEq(onbRelocKindMachoTyp(emit.relocs[0].kind), 3)
+    testing.assertEq(emit.relocs[1].codeOffset, 16)
+    testing.assertEq(emit.relocs[1].symbol, "str0")
+    testing.assert(!emit.relocs[1].pcrel)
+    testing.assertEq(onbRelocKindMachoTyp(emit.relocs[1].kind), 4)
+}
+
+fn testOnbEmitLoadSymbolAddressForFunctionThunk() {
+    // adrp x9, my_func@PAGE  ; add x9, x9, my_func@PAGEOFF
+    // dst x9 → reg 9
+    // adrp = 0x90000000 | 9 = 0x90000009
+    // add  = 0x91000000 | (9 << 5) | 9 = 0x91000129
+    let emit = onbEmitInstr(onbInstrLoadSymbolAddress("x9", "my_func"), 0)
+    testing.assertEq(emit.words.len(), 2)
+    testing.assertEq(emit.words[0], 0x90000009)
+    testing.assertEq(emit.words[1], 0x91000129)
+    testing.assertEq(emit.relocs.len(), 2)
+    testing.assertEq(emit.relocs[0].symbol, "my_func")
+    testing.assertEq(emit.relocs[1].symbol, "my_func")
+}
+
+fn testOnbEmitBranchLink() {
+    // bl puts — placeholder = 0x94000000, reloc kind Branch26.
+    let emit = onbEmitInstr(onbInstrBranchLink("puts"), 24)
+    testing.assertEq(emit.words.len(), 1)
+    testing.assertEq(emit.words[0], 0x94000000)
+    testing.assertEq(emit.fixups.len(), 0)
+    testing.assertEq(emit.relocs.len(), 1)
+    testing.assertEq(emit.relocs[0].codeOffset, 24)
+    testing.assertEq(emit.relocs[0].symbol, "puts")
+    testing.assert(emit.relocs[0].pcrel)
+    testing.assertEq(onbRelocKindMachoTyp(emit.relocs[0].kind), 2)
+}
+
 // === Phase 2b: multi-word constant materialisation ===================
 
 fn assertOnbInstrWordsEq(label: String, instr: OnbInstr, expected: List<Int>) {
@@ -135,6 +184,8 @@ fn testOnbInstrInvalidReturnsNone() {
         offset: 0,
         cond: OnbCond.OnbCondEq,
         targetBlock: -1,
+        symbol: "",
+        label: "",
     }
     testing.assert(onbEncodeInstr(bogus).isNone())
 }

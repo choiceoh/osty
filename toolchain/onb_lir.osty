@@ -104,6 +104,12 @@ pub enum OnbInstrKind {
     OnbInstrBranch,
     OnbInstrBranchCond,
     OnbInstrBranchCondNotZero,
+    // Phase 2c: symbol-relative addressing + calls. These emit
+    // placeholder words paired with Mach-O reloc records (the
+    // linker patches the imm field at link time).
+    OnbInstrLoadCStringAddress, // adrp + add → label@PAGE / @PAGEOFF
+    OnbInstrLoadSymbolAddress,  // adrp + add → fn / data symbol
+    OnbInstrBranchLink,         // bl symbol  → external / local fn call
 }
 
 // === LIR instruction record ============================================
@@ -127,6 +133,13 @@ pub struct OnbInstr {
     // opcodes (Phase 2d). -1 for non-branch instructions, where
     // the field is ignored.
     pub targetBlock: Int,
+    // symbol is the link-time target name for adrp+add /
+    // bl-shaped opcodes (Phase 2c). Empty string for ops that
+    // don't reference a symbol.
+    pub symbol: String,
+    // label is the `__cstring` label for `LoadCStringAddress`
+    // (Phase 2c). Empty for non-cstring opcodes.
+    pub label: String,
 }
 
 // emptyOnbInstr returns a zero-valued instruction record. Internal
@@ -144,6 +157,8 @@ fn emptyOnbInstr() -> OnbInstr {
         offset: 0,
         cond: OnbCond.OnbCondEq,
         targetBlock: -1,
+        symbol: "",
+        label: "",
     }
 }
 
@@ -265,15 +280,35 @@ pub fn onbInstrBranchCondNotZero(src: String, targetBlock: Int) -> OnbInstr {
     OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrBranchCondNotZero, src: src, targetBlock: targetBlock }
 }
 
-// === Phase 2d emit helpers ==========================================
+// === Phase 2c branch-link / symbol-address constructors ==============
 
-// OnbBranchEmit bundles a placeholder word with the fixup record
-// the resolve pass needs. Non-branch opcodes return an empty fixup
-// list via `onbEmitInstr`'s `fixups` field — the structure stays
-// uniform across opcode kinds.
+pub fn onbInstrLoadCStringAddress(dst: String, label: String) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrLoadCStringAddress, dst: dst, label: label }
+}
+
+pub fn onbInstrLoadSymbolAddress(dst: String, symbol: String) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrLoadSymbolAddress, dst: dst, symbol: symbol }
+}
+
+pub fn onbInstrBranchLink(symbol: String) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrBranchLink, symbol: symbol }
+}
+
+// === Phase 2d / 2c emit helpers ======================================
+
+// OnbBranchEmit bundles every per-instruction emit product:
+//   - words   : the encoded skeleton (placeholder for branches /
+//               adrp+add / bl, or final word for already-resolved
+//               opcodes)
+//   - fixups  : block-relative branch fixups (Phase 2d)
+//   - relocs  : Mach-O symbol relocations (Phase 2c)
+//
+// Non-branch / non-symbol opcodes return empty fixup + reloc lists.
+// The shape stays uniform so block walkers can concat freely.
 pub struct OnbBranchEmit {
     pub words: List<Int>,
     pub fixups: List<OnbBranchFixup>,
+    pub relocs: List<OnbReloc>,
 }
 
 // onbEmitInstr produces the encoded word(s) plus any fixup records
@@ -292,8 +327,15 @@ pub fn onbEmitInstr(instr: OnbInstr, codeOffset: Int) -> OnbBranchEmit {
         OnbInstrKind.OnbInstrBranch -> onbEmitBranchPlaceholder(instr, codeOffset),
         OnbInstrKind.OnbInstrBranchCond -> onbEmitBranchCondPlaceholder(instr, codeOffset),
         OnbInstrKind.OnbInstrBranchCondNotZero -> onbEmitCbnzPlaceholder(instr, codeOffset),
-        _ -> OnbBranchEmit { words: onbEncodeInstrWords(instr), fixups: [] },
+        OnbInstrKind.OnbInstrLoadCStringAddress -> onbEmitAdrpAddPair(instr.dst, instr.label, codeOffset),
+        OnbInstrKind.OnbInstrLoadSymbolAddress -> onbEmitAdrpAddPair(instr.dst, instr.symbol, codeOffset),
+        OnbInstrKind.OnbInstrBranchLink -> onbEmitBranchLinkPlaceholder(instr.symbol, codeOffset),
+        _ -> OnbBranchEmit { words: onbEncodeInstrWords(instr), fixups: [], relocs: [] },
     }
+}
+
+fn emptyBranchEmit() -> OnbBranchEmit {
+    OnbBranchEmit { words: [], fixups: [], relocs: [] }
 }
 
 fn onbEmitBranchPlaceholder(instr: OnbInstr, codeOffset: Int) -> OnbBranchEmit {
@@ -301,7 +343,7 @@ fn onbEmitBranchPlaceholder(instr: OnbInstr, codeOffset: Int) -> OnbBranchEmit {
     words.push(onbEncodeBranchPlaceholder())
     let mut fixups: List<OnbBranchFixup> = []
     fixups.push(onbBranchFixup(codeOffset, instr.targetBlock, OnbBranchFixupKind.OnbBranchFixupUncond))
-    OnbBranchEmit { words: words, fixups: fixups }
+    OnbBranchEmit { words: words, fixups: fixups, relocs: [] }
 }
 
 fn onbEmitBranchCondPlaceholder(instr: OnbInstr, codeOffset: Int) -> OnbBranchEmit {
@@ -314,7 +356,7 @@ fn onbEmitBranchCondPlaceholder(instr: OnbInstr, codeOffset: Int) -> OnbBranchEm
         },
         None -> {},
     }
-    OnbBranchEmit { words: words, fixups: fixups }
+    OnbBranchEmit { words: words, fixups: fixups, relocs: [] }
 }
 
 fn onbEmitCbnzPlaceholder(instr: OnbInstr, codeOffset: Int) -> OnbBranchEmit {
@@ -327,7 +369,50 @@ fn onbEmitCbnzPlaceholder(instr: OnbInstr, codeOffset: Int) -> OnbBranchEmit {
         },
         None -> {},
     }
-    OnbBranchEmit { words: words, fixups: fixups }
+    OnbBranchEmit { words: words, fixups: fixups, relocs: [] }
+}
+
+// onbEmitAdrpAddPair lays down the canonical adrp+add skeleton and
+// emits two relocs (PAGE21 + PageOff12) targeting the same symbol.
+// Used for both `LoadCStringAddress` (label) and
+// `LoadSymbolAddress` (function/data symbol) — the wire format
+// doesn't distinguish, so the higher layer just picks the right
+// symbol name.
+//
+// On encoder failure (unknown destination register) the emit
+// produces an empty result; downstream walkers see a 0-word
+// emit and surface a diagnostic via the `ok` flag pattern in
+// the resolve pass.
+fn onbEmitAdrpAddPair(dst: String, symbol: String, codeOffset: Int) -> OnbBranchEmit {
+    let adrp = onbEncodeAdrpPlaceholder(dst)
+    let addImm = onbEncodeAddPageOffPlaceholder(dst)
+    let mut words: List<Int> = []
+    let mut relocs: List<OnbReloc> = []
+    match adrp {
+        Some(w) -> {
+            words.push(w)
+            relocs.push(onbRelocPage21(codeOffset, symbol))
+        },
+        None -> {},
+    }
+    match addImm {
+        Some(w) -> {
+            words.push(w)
+            relocs.push(onbRelocPageOff12(codeOffset + 4, symbol))
+        },
+        None -> {},
+    }
+    OnbBranchEmit { words: words, fixups: [], relocs: relocs }
+}
+
+// onbEmitBranchLinkPlaceholder emits `bl 0` + a Branch26 reloc.
+// The linker resolves the symbol and patches imm26 in place.
+fn onbEmitBranchLinkPlaceholder(symbol: String, codeOffset: Int) -> OnbBranchEmit {
+    let mut words: List<Int> = []
+    let mut relocs: List<OnbReloc> = []
+    words.push(onbEncodeBlPlaceholder())
+    relocs.push(onbRelocBranch26(codeOffset, symbol))
+    OnbBranchEmit { words: words, fixups: [], relocs: relocs }
 }
 
 // === Single-word encoder dispatch =====================================
@@ -376,6 +461,12 @@ pub fn onbEncodeInstr(instr: OnbInstr) -> Int? {
         OnbInstrKind.OnbInstrBranch -> None,
         OnbInstrKind.OnbInstrBranchCond -> None,
         OnbInstrKind.OnbInstrBranchCondNotZero -> None,
+        // adrp+add pairs and bl-symbol calls produce multiple
+        // words plus reloc records — `onbEmitInstr` is the right
+        // entry point.
+        OnbInstrKind.OnbInstrLoadCStringAddress -> None,
+        OnbInstrKind.OnbInstrLoadSymbolAddress -> None,
+        OnbInstrKind.OnbInstrBranchLink -> None,
         OnbInstrKind.OnbInstrInvalid -> None,
     }
 }

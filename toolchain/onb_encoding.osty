@@ -448,6 +448,47 @@ pub fn onbEncodeMovImm32Word(dst: String, imm: Int) -> Int? {
     onbEncodeMovzW(dst, 0, imm)
 }
 
+// === Symbol-relative encoders (adrp + add + bl placeholders) ==========
+//
+// Symbol references are resolved at link time via Mach-O relocs,
+// not within the function emitter. The encoder lays down the
+// instruction skeleton with imm = 0 and the linker fills the
+// PC-relative immediate from the matching reloc record.
+//
+// Layouts:
+//   adrp Xd, label@PAGE       : 0x90000000 | Rd
+//   add  Xd, Xd, label@PAGEOFF: 0x91000000 | (Rd << 5) | Rd
+//   bl   imm26                : 0x94000000 | (imm26 & 0x3ffffff)
+
+// onbEncodeAdrpPlaceholder produces `adrp Xd, 0` — the high half
+// of an `adrp + add` symbol-address materialisation. Pairs with a
+// PAGE21 reloc on the resulting code offset.
+pub fn onbEncodeAdrpPlaceholder(dst: String) -> Int? {
+    let r = onbXRegisterNumber(dst)
+    if r < 0 {
+        None
+    } else {
+        Some(0x90000000 | r)
+    }
+}
+
+// onbEncodeAddPageOffPlaceholder produces `add Xd, Xd, #0` — the
+// low half of an `adrp + add` pair. The encoder reuses dst as the
+// source register so a single reloc on the offset patches the
+// in-place register's low bits. Pairs with a PageOff12 reloc.
+pub fn onbEncodeAddPageOffPlaceholder(dst: String) -> Int? {
+    let r = onbXRegisterNumber(dst)
+    if r < 0 {
+        None
+    } else {
+        Some(0x91000000 | (r << 5) | r)
+    }
+}
+
+// onbEncodeBlPlaceholder produces `bl 0` — the call-into-symbol
+// placeholder. The linker patches the imm26 from a Branch26 reloc.
+pub fn onbEncodeBlPlaceholder() -> Int { 0x94000000 }
+
 // === Branch family — displacement, placeholder, and patch =============
 //
 // The branch family takes PC-relative immediates. ONB's encoder

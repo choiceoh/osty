@@ -1,0 +1,152 @@
+// onb_program_test.osty — round-trip tests for the function
+// emitter. Phase 2e.
+//
+// Each case constructs a tiny `OnbFunction`, runs it through
+// `onbEmitFunctionResolved`, and pins both the patched word
+// stream and the collected reloc / blockOffset metadata. The
+// walker exercises the same per-instruction emit path the
+// hand-rolled `emitBlocks` helper in `onb_fixups_test.osty` uses,
+// just packaged with line-span tracking and reloc collection on
+// top.
+use std.testing
+
+fn assertWordsListEq(actual: List<Int>, expected: List<Int>) {
+    testing.assertEq(actual.len(), expected.len())
+    for i in 0..expected.len() {
+        testing.assertEq(actual[i], expected[i])
+    }
+}
+
+// === Trivial leaf function: ret only =================================
+
+fn testOnbEmitFunctionLeafRet() {
+    let mut instrs: List<OnbInstr> = []
+    instrs.push(onbInstrRet())
+    let mut blocks: List<OnbBlock> = []
+    blocks.push(onbBlock("entry", 0, instrs, []))
+    let func = onbFunction("leaf", blocks, 0, [])
+
+    let resolved = onbEmitFunctionResolved(func)
+    testing.assert(resolved.ok)
+    let mut expected: List<Int> = []
+    expected.push(0xd65f03c0)
+    assertWordsListEq(resolved.words, expected)
+    testing.assertEq(resolved.relocs.len(), 0)
+    testing.assertEq(resolved.blockOffsets.len(), 1)
+    testing.assertEq(resolved.blockOffsets[0], 0)
+}
+
+// === Conditional + fall-through pattern ==============================
+
+fn testOnbEmitFunctionConditionalFallthrough() {
+    // bb0: b.eq bb2
+    // bb1: ret              (fall-through)
+    // bb2: ret
+    let mut instrs0: List<OnbInstr> = []
+    instrs0.push(onbInstrBranchCond(OnbCond.OnbCondEq, 2))
+    let mut instrs1: List<OnbInstr> = []
+    instrs1.push(onbInstrRet())
+    let mut instrs2: List<OnbInstr> = []
+    instrs2.push(onbInstrRet())
+    let mut blocks: List<OnbBlock> = []
+    blocks.push(onbBlock("bb0", 0, instrs0, []))
+    blocks.push(onbBlock("bb1", 1, instrs1, []))
+    blocks.push(onbBlock("bb2", 2, instrs2, []))
+    let func = onbFunction("guarded_ret", blocks, 0, [])
+
+    let resolved = onbEmitFunctionResolved(func)
+    testing.assert(resolved.ok)
+    // Same expected hex as the Phase 2d test
+    // (`b.eq bb2 ; ret ; ret`).
+    let mut expected: List<Int> = []
+    expected.push(0x54000040) // b.eq +8 (cond=eq, imm19=2)
+    expected.push(0xd65f03c0) // ret
+    expected.push(0xd65f03c0) // ret
+    assertWordsListEq(resolved.words, expected)
+
+    let mut expectedOffsets: List<Int> = []
+    expectedOffsets.push(0)
+    expectedOffsets.push(4)
+    expectedOffsets.push(8)
+    assertWordsListEq(resolved.blockOffsets, expectedOffsets)
+}
+
+// === println-style call: load c-string + bl puts ====================
+
+fn testOnbEmitFunctionPrintlnSkeleton() {
+    // entry:
+    //   adrp x0, str0@PAGE
+    //   add  x0, x0, str0@PAGEOFF
+    //   bl   _puts
+    //   mov  w0, #0
+    //   ret
+    let mut instrs: List<OnbInstr> = []
+    instrs.push(onbInstrLoadCStringAddress("x0", "str0"))
+    instrs.push(onbInstrBranchLink("puts"))
+    instrs.push(onbInstrMovImm32("w0", 0))
+    instrs.push(onbInstrRet())
+    let mut blocks: List<OnbBlock> = []
+    blocks.push(onbBlock("entry", 0, instrs, []))
+    let func = onbFunction("main", blocks, 0, [])
+
+    let resolved = onbEmitFunctionResolved(func)
+    testing.assert(resolved.ok)
+    // adrp x0 (1 word) + add x0 (1 word) + bl 0 (1 word) + mov w0,#0
+    // (1 word) + ret (1 word) = 5 words.
+    testing.assertEq(resolved.words.len(), 5)
+    testing.assertEq(resolved.words[0], 0x90000000) // adrp x0, 0
+    testing.assertEq(resolved.words[1], 0x91000000) // add  x0, x0, #0
+    testing.assertEq(resolved.words[2], 0x94000000) // bl   0
+    testing.assertEq(resolved.words[3], 0x52800000) // mov  w0, #0
+    testing.assertEq(resolved.words[4], 0xd65f03c0) // ret
+
+    // Three relocs: PAGE21 + PageOff12 for the cstring, Branch26
+    // for the bl call.
+    testing.assertEq(resolved.relocs.len(), 3)
+    testing.assertEq(resolved.relocs[0].symbol, "str0")
+    testing.assertEq(resolved.relocs[0].codeOffset, 0)
+    testing.assertEq(onbRelocKindMachoTyp(resolved.relocs[0].kind), 3)
+    testing.assertEq(resolved.relocs[1].symbol, "str0")
+    testing.assertEq(resolved.relocs[1].codeOffset, 4)
+    testing.assertEq(onbRelocKindMachoTyp(resolved.relocs[1].kind), 4)
+    testing.assertEq(resolved.relocs[2].symbol, "puts")
+    testing.assertEq(resolved.relocs[2].codeOffset, 8)
+    testing.assertEq(onbRelocKindMachoTyp(resolved.relocs[2].kind), 2)
+}
+
+// === Multi-word op spanning a block boundary ========================
+//
+// `mov x9, #0x12345678` produces 2 words; the second block
+// continues from the byte offset *after* the chain. This pins the
+// walker's PC tracking through variable-length ops.
+
+fn testOnbEmitFunctionMultiWordOp() {
+    let mut instrs0: List<OnbInstr> = []
+    instrs0.push(onbInstrMovImm64("x9", 0x12345678))
+    instrs0.push(onbInstrBranch(1))
+    let mut instrs1: List<OnbInstr> = []
+    instrs1.push(onbInstrRet())
+    let mut blocks: List<OnbBlock> = []
+    blocks.push(onbBlock("bb0", 0, instrs0, []))
+    blocks.push(onbBlock("bb1", 1, instrs1, []))
+    let func = onbFunction("multi", blocks, 0, [])
+
+    let resolved = onbEmitFunctionResolved(func)
+    testing.assert(resolved.ok)
+    // bb0: 2 words (movz/movk chain) + 1 word (b bb1) = 3 words
+    // bb1: 1 word (ret)
+    // Total 4 words.
+    testing.assertEq(resolved.words.len(), 4)
+    testing.assertEq(resolved.words[0], 0xd28acf09) // movz x9, #0x5678
+    testing.assertEq(resolved.words[1], 0xf2a24689) // movk x9, #0x1234, lsl 16
+
+    // The branch sits at byte 8; bb1 is at byte 12. Displacement
+    // = 4 → imm26 = 1. Patched word = 0x14000001.
+    testing.assertEq(resolved.words[2], 0x14000001)
+    testing.assertEq(resolved.words[3], 0xd65f03c0) // ret
+
+    let mut expectedOffsets: List<Int> = []
+    expectedOffsets.push(0)
+    expectedOffsets.push(12)
+    assertWordsListEq(resolved.blockOffsets, expectedOffsets)
+}

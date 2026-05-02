@@ -37,6 +37,93 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 28 (ONB self-host port — Phase 2c + 2e symbol
+> reloc + container types + function emitter, 2026-05-03)** — 1k+
+> 줄 슬라이스. adrp+add + bl 심볼 reloc 모델 + Function/Block/Program
+> 컨테이너 타입 + per-function 워커가 한 번에 착륙. **Phase 2 시리즈
+> 마무리**: Osty 측이 단일 instr부터 완전한 함수 emit (워드 + 분기
+> fixup + 심볼 reloc + 블록 오프셋 + 라인 스팬) 까지 표현.
+>
+> 추가 Osty 파일:
+>
+> - `toolchain/onb_relocs.osty` (84줄, 신규):
+>   - `OnbRelocKind` enum (Branch26 / Page21 / PageOff12)
+>   - `OnbReloc { codeOffset, symbol, pcrel, kind }` 레코드
+>   - `onbRelocKindMachoTyp(kind)` — Mach-O 와이어 type 바이트 매핑
+>   - 편의 builder: `onbRelocPage21/PageOff12/Branch26`
+>
+> - `toolchain/onb_program.osty` (250줄, 신규):
+>   - `OnbLineSpan` (line + column)
+>   - `OnbDebugStructField`, `OnbDebugLocal`, `OnbDebugLocalStruct`
+>     constructor
+>   - `OnbBlock` (label / originalIndex / instrs / lineSpans)
+>   - `OnbFunction` (name / blocks / frameSize / debugLocals)
+>   - `OnbCStringLiteral`, `OnbProgram`
+>   - `OnbEmittedFunction { words, fixups, relocs, blockOffsets,
+>     blockLineSpans }` + `onbEmitFunction(func)` walker — 블록을
+>     순회하며 PC 바이트 오프셋 추적, 모든 emit 산출물 (워드+fixup+
+>     reloc+offset) 을 collect
+>   - `onbEmitFunctionResolved(func)` — emit + branch fixup 패스를
+>     하나로 묶음. `OnbResolvedFunction { words, relocs,
+>     blockOffsets, blockLineSpans, ok }` 반환
+>
+> - `toolchain/onb_program_test.osty` (152줄, 신규):
+>   - 4 round-trip 케이스: leaf ret, conditional fall-through,
+>     println-style (adrp+add+bl+mov+ret with 3 relocs), multi-word
+>     op + branch (block 경계가 movz/movk chain 길이로 변하는 경우)
+>
+> - `toolchain/onb_encoding.osty` 확장:
+>   - `onbEncodeAdrpPlaceholder(dst)` — `adrp Xd, 0`
+>   - `onbEncodeAddPageOffPlaceholder(dst)` — `add Xd, Xd, #0`
+>   - `onbEncodeBlPlaceholder()` — `bl 0`
+>
+> - `toolchain/onb_lir.osty` 확장:
+>   - 3 새 opcode (`OnbInstrLoadCStringAddress`,
+>     `OnbInstrLoadSymbolAddress`, `OnbInstrBranchLink`)
+>   - `OnbInstr`에 `symbol`, `label` 두 필드 추가
+>   - 3 새 constructor + emit helpers (`onbEmitAdrpAddPair`,
+>     `onbEmitBranchLinkPlaceholder`)
+>   - `OnbBranchEmit`에 `relocs: List<OnbReloc>` 필드 추가 — emit
+>     결과의 통합 surface
+>   - `onbEncodeInstr` switch에 3 새 None 가지 (multi-step opcode
+>     표시)
+>
+> - `internal/onb/onb_lir_parity_test.go` 확장:
+>   - `TestLirSymbolReferenceParityVsOstyTable` — adrp/add/bl
+>     placeholder 비트 패턴 검증 (x0/x9 / 0/9 두 슬롯)
+>
+> 검증:
+> - `osty check toolchain` exit 0 (총 2,804줄 Osty source +
+>   Go-side parity)
+> - 5개 parity 테스트 모두 통과 (Encoder, LirOpcode, LirMultiWord,
+>   LirBranch, LirSymbolReference)
+> - `go test ./internal/onb ./internal/backend -short` — 0 회귀
+>
+> Phase 2 시리즈 LOC 누적 (Osty + Go-side):
+>
+> | 파일 | 라인 |
+> |------|---:|
+> | `onb_encoding.osty` | 653 |
+> | `onb_encoding_test.osty` | 103 |
+> | `onb_fixups.osty` | 114 |
+> | `onb_fixups_test.osty` | 180 |
+> | `onb_layouts.osty` | 81 |
+> | `onb_lir.osty` | 494 |
+> | `onb_lir_test.osty` | 191 |
+> | `onb_program.osty` | 250 |
+> | `onb_program_test.osty` | 152 |
+> | `onb_relocs.osty` | 84 |
+> | `onb_runtime_symbols.osty` | 158 |
+> | `onb_lir_parity_test.go` | 257 |
+> | `onb_osty_parity_test.go` | 87 |
+> | **합계** | **2,804** |
+>
+> **다음 phase 후보**: Phase 3a — MIR Type 의존 ABI predicates
+> (`isABIScalarType`, `abiKindFor`, `abiRegSlots`). 첫 MIR 진입.
+> 또는 Phase 6 (DWARF 라인 프로그램 + 변수 DIE emit). DWARF는
+> Phase 2e의 `blockLineSpans`/`debugLocals` 필드를 소비하므로
+> 자연스러운 다음 슬라이스.
+>
 > **Slice A2 Week 27 (ONB self-host port — Phase 2d branch family +
 > fixup pass, 2026-05-03)** — Block-relative 분기 encoder + placeholder
 > + fixup resolve pass 일체. Branch instruction의 알고리즘적 핵심

@@ -168,6 +168,47 @@ func TestLirBranchParityVsOstyTable(t *testing.T) {
 	}
 }
 
+// TestLirSymbolReferenceParityVsOstyTable verifies the adrp+add and
+// bl placeholder words match the Osty-side encoders. The Mach-O
+// reloc records that pair with these placeholders are checked
+// inside the Osty test (`toolchain/onb_lir_test.osty` covers
+// reloc kind tags + offsets); this gate just pins the raw bytes.
+//
+// adrp Xd, _: 0x90000000 | Rd
+// add  Xd, Xd, _PAGEOFF: 0x91000000 | (Rd << 5) | Rd
+// bl   _: 0x94000000
+func TestLirSymbolReferenceParityVsOstyTable(t *testing.T) {
+	t.Parallel()
+
+	check := func(name string, got uint32, want uint32) {
+		t.Helper()
+		if got != want {
+			t.Errorf("%s: Go = 0x%08x; Osty = 0x%08x", name, got, want)
+		}
+	}
+
+	// adrp x0, _ — register slot 0.
+	if r, ok := xRegisterNumber(RegX0); ok {
+		check("adrp x0", uint32(0x90000000)|r, 0x90000000)
+	} else {
+		t.Errorf("xRegisterNumber(x0) failed")
+	}
+
+	// add x0, x0, _PAGEOFF
+	if r, ok := xRegisterNumber(RegX0); ok {
+		check("add x0, x0, off", uint32(0x91000000)|(r<<5)|r, 0x91000000)
+	}
+
+	// adrp x9 + add x9, x9, off — register slot 9.
+	if r, ok := xRegisterNumber(RegX9); ok {
+		check("adrp x9", uint32(0x90000000)|r, 0x90000009)
+		check("add x9, x9, off", uint32(0x91000000)|(r<<5)|r, 0x91000129)
+	}
+
+	// bl placeholder — always 0x94000000 with imm26 = 0.
+	check("bl placeholder", uint32(0x94000000), 0x94000000)
+}
+
 // TestLirMultiWordParityVsOstyTable pins the variable-length encoder
 // outputs (Phase 2b) against the Osty-side `onbEncodeMovImm64Words`
 // table. Each MovImm64 case verifies both the word count and the
