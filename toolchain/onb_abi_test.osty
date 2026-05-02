@@ -1,0 +1,76 @@
+// onb_abi_test.osty — ABI predicate round-trip tests.
+use std.testing
+
+fn testOnbIsFloatAbiType() {
+    testing.assert(onbIsFloatAbiType("Float"))
+    testing.assert(onbIsFloatAbiType("Float64"))
+    testing.assert(!onbIsFloatAbiType("Int"))
+    testing.assert(!onbIsFloatAbiType("Float32"))  // Phase A2 only handles 64-bit
+}
+
+fn testOnbIsScalarPrimitive() {
+    testing.assert(onbIsScalarPrimitive("Int"))
+    testing.assert(onbIsScalarPrimitive("Bool"))
+    testing.assert(onbIsScalarPrimitive("String"))
+    testing.assert(onbIsScalarPrimitive("Float"))
+    testing.assert(onbIsScalarPrimitive("Float64"))
+    testing.assert(!onbIsScalarPrimitive("List<Int>"))
+    testing.assert(!onbIsScalarPrimitive("Point"))
+}
+
+fn testOnbIsClosureScalarType() {
+    testing.assert(onbIsClosureEnvType("ClosureEnv"))
+    testing.assert(onbIsFnTypeRepr("fn(Int) -> Int"))
+    testing.assert(onbIsFnTypeRepr("fn() -> ()"))
+    testing.assert(!onbIsFnTypeRepr("Function"))
+    testing.assert(onbIsClosureScalarType("ClosureEnv"))
+    testing.assert(onbIsClosureScalarType("fn(Int, Float) -> Bool"))
+    testing.assert(!onbIsClosureScalarType("Int"))
+}
+
+fn testOnbIsBuiltinPointerType() {
+    testing.assert(onbIsBuiltinPointerType("List<Int>"))
+    testing.assert(onbIsBuiltinPointerType("List<String>"))
+    testing.assert(onbIsBuiltinPointerType("Map<String, Int>"))
+    testing.assert(onbIsBuiltinPointerType("Set<Int>"))
+    testing.assert(onbIsBuiltinPointerType("Channel<Int>"))
+    testing.assert(onbIsBuiltinPointerType("Bytes"))
+    testing.assert(onbIsBuiltinPointerType("Handle"))
+    testing.assert(!onbIsBuiltinPointerType("Int"))
+    testing.assert(!onbIsBuiltinPointerType("Point"))
+    // No exact-match edge: "List" without args isn't a List<T>.
+    testing.assert(!onbIsBuiltinPointerType("List"))
+}
+
+fn testOnbIsAbiScalarType() {
+    testing.assert(onbIsAbiScalarType("Int"))
+    testing.assert(onbIsAbiScalarType("Bool"))
+    testing.assert(onbIsAbiScalarType("String"))
+    testing.assert(onbIsAbiScalarType("Float"))
+    testing.assert(onbIsAbiScalarType("Float64"))
+    testing.assert(onbIsAbiScalarType("ClosureEnv"))
+    testing.assert(onbIsAbiScalarType("fn(Int) -> Int"))
+    testing.assert(onbIsAbiScalarType("List<Int>"))
+    testing.assert(onbIsAbiScalarType("Map<String, Int>"))
+    testing.assert(!onbIsAbiScalarType("Point"))
+}
+
+fn testOnbAbiKindFor() {
+    testing.assertEq(onbAbiKindFor("Int"), onbAbiKindI64())
+    testing.assertEq(onbAbiKindFor("Bool"), onbAbiKindI1())
+    testing.assertEq(onbAbiKindFor("Float"), onbAbiKindF64())
+    testing.assertEq(onbAbiKindFor("Float64"), onbAbiKindF64())
+    testing.assertEq(onbAbiKindFor("String"), onbAbiKindString())
+    // List / Map / closure are pointer-class.
+    testing.assertEq(onbAbiKindFor("List<Int>"), onbAbiKindPtr())
+    testing.assertEq(onbAbiKindFor("ClosureEnv"), onbAbiKindPtr())
+    testing.assertEq(onbAbiKindFor("Point"), onbAbiKindPtr())
+}
+
+fn testOnbIsAbiWordType() {
+    // Phase E approximation: scalar/pointer types are 1-word; user
+    // structs fall through (Slice F adds layout-aware refinement).
+    testing.assert(onbIsAbiWordType("Int"))
+    testing.assert(onbIsAbiWordType("List<Int>"))
+    testing.assert(!onbIsAbiWordType("Point"))
+}
