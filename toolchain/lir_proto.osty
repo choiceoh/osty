@@ -4787,11 +4787,40 @@ fn lirLowerMirRValue(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, 
         MirRVAggregate -> lirLowerMirAggregate(l, rv, hintName, hint),
         MirRVDiscriminant -> lirLowerMirDiscriminant(l, rv, hintName, hint),
         MirRVLen -> lirLowerMirLenRV(l, rv, hintName, hint),
+        MirRVNullary -> lirLowerMirNullaryRV(l, rv, hintName, hint),
         _ -> {
             lirLowerError(l, LirDiagUnsupported, "unsupported MIR rvalue kind", "rvalue")
             lirOperandInvalid()
         },
     }
+}
+// `lirLowerMirNullaryRV` lowers the `MirRVNullary` rvalue. Currently
+// only `MirNullaryNone` is defined — it materialises an `Option<T>`
+// `{ 0, 0 }` aggregate. Mirrors production `emitNullaryRV`
+// (mir_generator.go:8983). The target type for the aggregate falls
+// through `rv.typ` first, then the `hint` parameter (lowerMatch /
+// lowerForIn etc. set the hint when the dest local is known).
+fn lirLowerMirNullaryRV(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
+    if rv.nullaryKind != MirNullaryNone {
+        lirLowerError(l, LirDiagUnsupported, "unsupported nullary rvalue kind", "rvalue.nullary")
+        return lirOperandInvalid()
+    }
+    let typeName = if rv.typ != "" {
+        rv.typ
+    } else {
+        hintName
+    }
+    let target = if typeName != "" {
+        lirLowerMirType(l, typeName)
+    } else {
+        hint
+    }
+    if lirTypeIsZero(target) {
+        lirLowerError(l, LirDiagUnsupported, "nullary None has no target type — `" + typeName + "`", "rvalue.nullary")
+        return lirOperandInvalid()
+    }
+    let value = lirEmitOptionNone(l, target)
+    lirOperand(target, value)
 }
 // `lirLowerMirDiscriminant` lowers the `MirRVDiscriminant` rvalue —
 // reads field 0 of an Option/Result/enum aggregate as an i64. Used by
@@ -4956,6 +4985,17 @@ fn lirLowerMirCast(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hi
         },
         MirCastBitcast -> {
             opcode = "bitcast"
+        },
+        MirCastOptionalWrap -> {
+            // Identity at this stage — the MIR lowerer normally
+            // materialises wrap via AggregateRV{EnumVariant}, so a bare
+            // CastRV{OptionalWrap} is a passthrough. Mirrors production
+            // (mir_generator.go:9045).
+        },
+        MirCastOptionalUnwrap -> {
+            // Identity at this stage — the MIR lowerer normally
+            // materialises unwrap via VariantProj, so a bare
+            // CastRV{OptionalUnwrap} is a passthrough.
         },
         _ -> {
             lirLowerError(l, LirDiagUnsupported, "unsupported MIR cast kind", "cast")
