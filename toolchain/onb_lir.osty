@@ -98,6 +98,12 @@ pub enum OnbInstrKind {
     // `onbEncodeInstr` dispatcher.
     OnbInstrMovImm32,
     OnbInstrMovImm64,
+    // Phase 2d: block-relative branches. Encoded as placeholder
+    // words at emit time + a fixup record that the per-function
+    // resolve pass patches once block byte offsets are known.
+    OnbInstrBranch,
+    OnbInstrBranchCond,
+    OnbInstrBranchCondNotZero,
 }
 
 // === LIR instruction record ============================================
@@ -117,6 +123,10 @@ pub struct OnbInstr {
     pub imm: Int,
     pub offset: Int,
     pub cond: OnbCond,
+    // targetBlock is the destination block index for branch
+    // opcodes (Phase 2d). -1 for non-branch instructions, where
+    // the field is ignored.
+    pub targetBlock: Int,
 }
 
 // emptyOnbInstr returns a zero-valued instruction record. Internal
@@ -133,6 +143,7 @@ fn emptyOnbInstr() -> OnbInstr {
         imm: 0,
         offset: 0,
         cond: OnbCond.OnbCondEq,
+        targetBlock: -1,
     }
 }
 
@@ -234,6 +245,91 @@ pub fn onbInstrMovImm64(dst: String, imm: Int) -> OnbInstr {
     OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrMovImm64, dst: dst, imm: imm }
 }
 
+// === Phase 2d branch constructors ===================================
+//
+// Branch instructions store their target block index in
+// `targetBlock`. The src/cond/imm fields carry the opcode-specific
+// payload (cbnz's register; b.cond's condition). The encoder
+// helpers below produce the placeholder word + fixup record pair
+// that the per-function resolve pass needs.
+
+pub fn onbInstrBranch(targetBlock: Int) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrBranch, targetBlock: targetBlock }
+}
+
+pub fn onbInstrBranchCond(cond: OnbCond, targetBlock: Int) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrBranchCond, cond: cond, targetBlock: targetBlock }
+}
+
+pub fn onbInstrBranchCondNotZero(src: String, targetBlock: Int) -> OnbInstr {
+    OnbInstr { ..emptyOnbInstr(), kind: OnbInstrKind.OnbInstrBranchCondNotZero, src: src, targetBlock: targetBlock }
+}
+
+// === Phase 2d emit helpers ==========================================
+
+// OnbBranchEmit bundles a placeholder word with the fixup record
+// the resolve pass needs. Non-branch opcodes return an empty fixup
+// list via `onbEmitInstr`'s `fixups` field — the structure stays
+// uniform across opcode kinds.
+pub struct OnbBranchEmit {
+    pub words: List<Int>,
+    pub fixups: List<OnbBranchFixup>,
+}
+
+// onbEmitInstr produces the encoded word(s) plus any fixup records
+// for a single instruction at byte offset `codeOffset` (the offset
+// where the first word will land). For branch instructions the
+// returned `words` is the placeholder skeleton and `fixups`
+// contains exactly one record. For non-branch instructions
+// `fixups` is empty.
+//
+// Returning a struct rather than re-using `onbEncodeInstrWords`
+// means downstream block walkers can handle every opcode through
+// one signature, then concatenate `words` into the function's
+// code stream and `fixups` into the per-function fixup list.
+pub fn onbEmitInstr(instr: OnbInstr, codeOffset: Int) -> OnbBranchEmit {
+    match instr.kind {
+        OnbInstrKind.OnbInstrBranch -> onbEmitBranchPlaceholder(instr, codeOffset),
+        OnbInstrKind.OnbInstrBranchCond -> onbEmitBranchCondPlaceholder(instr, codeOffset),
+        OnbInstrKind.OnbInstrBranchCondNotZero -> onbEmitCbnzPlaceholder(instr, codeOffset),
+        _ -> OnbBranchEmit { words: onbEncodeInstrWords(instr), fixups: [] },
+    }
+}
+
+fn onbEmitBranchPlaceholder(instr: OnbInstr, codeOffset: Int) -> OnbBranchEmit {
+    let mut words: List<Int> = []
+    words.push(onbEncodeBranchPlaceholder())
+    let mut fixups: List<OnbBranchFixup> = []
+    fixups.push(onbBranchFixup(codeOffset, instr.targetBlock, OnbBranchFixupKind.OnbBranchFixupUncond))
+    OnbBranchEmit { words: words, fixups: fixups }
+}
+
+fn onbEmitBranchCondPlaceholder(instr: OnbInstr, codeOffset: Int) -> OnbBranchEmit {
+    let mut words: List<Int> = []
+    let mut fixups: List<OnbBranchFixup> = []
+    match onbEncodeBranchCondPlaceholder(onbCondToCode(instr.cond)) {
+        Some(w) -> {
+            words.push(w)
+            fixups.push(onbBranchFixup(codeOffset, instr.targetBlock, OnbBranchFixupKind.OnbBranchFixupCond))
+        },
+        None -> {},
+    }
+    OnbBranchEmit { words: words, fixups: fixups }
+}
+
+fn onbEmitCbnzPlaceholder(instr: OnbInstr, codeOffset: Int) -> OnbBranchEmit {
+    let mut words: List<Int> = []
+    let mut fixups: List<OnbBranchFixup> = []
+    match onbEncodeCbnzPlaceholder(instr.src) {
+        Some(w) -> {
+            words.push(w)
+            fixups.push(onbBranchFixup(codeOffset, instr.targetBlock, OnbBranchFixupKind.OnbBranchFixupCbnz))
+        },
+        None -> {},
+    }
+    OnbBranchEmit { words: words, fixups: fixups }
+}
+
 // === Single-word encoder dispatch =====================================
 //
 // `onbEncodeInstr` mirrors the encoder switch in
@@ -271,6 +367,15 @@ pub fn onbEncodeInstr(instr: OnbInstr) -> Int? {
         OnbInstrKind.OnbInstrBranchLinkReg -> onbEncodeBlr(instr.src),
         OnbInstrKind.OnbInstrMovImm32 -> onbEncodeMovImm32Word(instr.dst, instr.imm),
         OnbInstrKind.OnbInstrMovImm64 -> None,
+        // Branch family is multi-step (placeholder word + fixup
+        // record) so the single-word path can't represent it. The
+        // higher-level emitter routes branches through
+        // `onbEmitInstr` which produces both a placeholder word
+        // and a fixup. Returning None here keeps the fast path
+        // closed.
+        OnbInstrKind.OnbInstrBranch -> None,
+        OnbInstrKind.OnbInstrBranchCond -> None,
+        OnbInstrKind.OnbInstrBranchCondNotZero -> None,
         OnbInstrKind.OnbInstrInvalid -> None,
     }
 }

@@ -1,0 +1,114 @@
+// onb_fixups.osty — block-relative branch fixup model and resolve
+// pass. Mirror of `machoBranchFixup` + `patchMachOBranch` in
+// `internal/onb/macho.go`. Phase 2d of the ONB self-host port.
+//
+// Branch instructions emit placeholder words (with imm19 / imm26
+// = 0) at their byte offset and append a fixup record to a
+// per-function fixup list. Once every block in the function has
+// been laid out — so each block ID has a known byte offset — the
+// resolve pass walks the fixup list, computes
+// `displacement = block_byte_offset[fx.targetBlock] - fx.codeOffset`,
+// and patches the placeholder via the encoder helpers in
+// `onb_encoding.osty`.
+//
+// Failure modes (any of which produces a `None` return from the
+// resolve pass and surfaces in tests as a guard violation):
+//   - target block ID outside `blockOffsets`'s range
+//   - displacement out of imm19 / imm26 range
+//   - placeholder offset isn't a multiple of 4 (fixup misaligned)
+
+// === Fixup record ====================================================
+
+// OnbBranchFixupKind enumerates the placeholder shapes the fixup
+// pass knows how to patch. Add a new kind only when a new
+// placeholder encoder lands in `onb_encoding.osty`; the resolve
+// pass's match must stay exhaustive.
+pub enum OnbBranchFixupKind {
+    OnbBranchFixupUncond,
+    OnbBranchFixupCond,
+    OnbBranchFixupCbnz,
+}
+
+// OnbBranchFixup records a single pending placeholder.
+//   - codeOffset: byte offset of the placeholder word inside the
+//     function's emitted code (always 4-aligned)
+//   - targetBlock: 0-based block index in the function's block list
+//   - kind: which placeholder shape to patch
+pub struct OnbBranchFixup {
+    pub codeOffset: Int,
+    pub targetBlock: Int,
+    pub kind: OnbBranchFixupKind,
+}
+
+pub fn onbBranchFixup(codeOffset: Int, targetBlock: Int, kind: OnbBranchFixupKind) -> OnbBranchFixup {
+    OnbBranchFixup { codeOffset: codeOffset, targetBlock: targetBlock, kind: kind }
+}
+
+// === Resolve pass ===================================================
+
+// OnbResolveOutcome bundles the patched word stream with a flag
+// distinguishing "all fixups applied" from "some fixup failed
+// (range / unknown block / misalignment)". Returning a struct
+// rather than `Option<List<Int>>` lets future versions surface
+// per-fixup error indices for diagnostics without breaking the
+// signature.
+pub struct OnbResolveOutcome {
+    pub words: List<Int>,
+    pub ok: Bool,
+}
+
+// onbResolveBranchFixups walks the fixup list and patches each
+// placeholder word in-place (well, in the returned list — the
+// original `words` is consumed but Osty's List<Int> is mutable).
+//
+// `words` is the function's code as a flat list of 32-bit words,
+// in emit order. `blockOffsets` maps a block index to its byte
+// offset within `words` (must be 4-aligned). Both lists outlive
+// the call; the returned `outcome.words` is a fresh list.
+//
+// On failure (out-of-range displacement, unknown block, etc.) the
+// pass returns the in-progress word list with `ok = false` so
+// callers can render a diagnostic and bail. Successive fixups
+// after the failure are skipped.
+pub fn onbResolveBranchFixups(words: List<Int>, fixups: List<OnbBranchFixup>, blockOffsets: List<Int>) -> OnbResolveOutcome {
+    let mut out: List<Int> = []
+    for w in words {
+        out.push(w)
+    }
+    for fx in fixups {
+        if fx.targetBlock < 0 || fx.targetBlock >= blockOffsets.len() {
+            return OnbResolveOutcome { words: out, ok: false }
+        }
+        if (fx.codeOffset % 4) != 0 {
+            return OnbResolveOutcome { words: out, ok: false }
+        }
+        let targetByte = blockOffsets[fx.targetBlock]
+        let displacement = targetByte - fx.codeOffset
+        let wordIndex = fx.codeOffset / 4
+        if wordIndex < 0 || wordIndex >= out.len() {
+            return OnbResolveOutcome { words: out, ok: false }
+        }
+        let placeholder = out[wordIndex]
+        let patched = onbPatchBranchByKind(placeholder, fx.kind, displacement)
+        match patched {
+            Some(w) -> {
+                out[wordIndex] = w
+            },
+            None -> {
+                return OnbResolveOutcome { words: out, ok: false }
+            },
+        }
+    }
+    OnbResolveOutcome { words: out, ok: true }
+}
+
+// onbPatchBranchByKind dispatches to the right encoder helper.
+// Pulled out so the resolve pass stays linear and the per-kind
+// patch story lives in one switch.
+pub fn onbPatchBranchByKind(placeholder: Int, kind: OnbBranchFixupKind, displacement: Int) -> Int? {
+    match kind {
+        OnbBranchFixupKind.OnbBranchFixupUncond -> onbPatchBranchUnconditional(displacement),
+        OnbBranchFixupKind.OnbBranchFixupCond -> onbPatchBranchCond(placeholder, displacement),
+        OnbBranchFixupKind.OnbBranchFixupCbnz -> onbPatchCbnz(placeholder, displacement),
+    }
+}

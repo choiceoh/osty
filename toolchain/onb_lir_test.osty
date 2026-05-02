@@ -134,6 +134,7 @@ fn testOnbInstrInvalidReturnsNone() {
         imm: 0,
         offset: 0,
         cond: OnbCond.OnbCondEq,
+        targetBlock: -1,
     }
     testing.assert(onbEncodeInstr(bogus).isNone())
 }
