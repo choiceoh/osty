@@ -37,6 +37,26 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 7 (DWARF B.1 — CU DIE, 2026-05-02)** — `__debug_info` +
+> `__debug_abbrev` + `__debug_str` 세 섹션이 추가되어 DWARF 인프라 완비.
+> CU DIE는 `DW_TAG_compile_unit` 1개에 7개 attribute (producer, language=C99,
+> name, comp_dir, low_pc, high_pc, stmt_list). DW_AT_stmt_list가 line program을
+> 가리키므로 DWARF 파서가 컴파일 유닛 → 라인 프로그램 traversal 가능.
+> `dwarfdump --debug-info / --debug-abbrev / --debug-str` 모두 zero-warning.
+>
+> 추가:
+>   - DWARF tag/attr/form 상수 (DW_TAG_compile_unit, DW_AT_producer 등)
+>   - `dwarfStringTable`: dedup string storage with stable byte offsets
+>   - `emitDwarfAbbrev`: abbrev table 1개 entry (compile_unit + 7 attrs)
+>   - `emitDwarfInfo`: CU header + DIE encoder
+>   - Mach-O writer가 `__DWARF` 세그먼트에 4 sections (line/info/abbrev/str)
+>   - 새 section name 상수 (`machoSectnameInfo` / `Abbrev` / `Str`)
+>
+> 한계 — lldb 자동 인식은 아직: dsymutil이 .o의 Mach-O Stab debug symbols
+> (N_OSO/N_FUN/N_BNSYM) 을 walk해서 .dSYM 번들을 만드는데, 우리는 아직 Stabs를
+> emit 안 함. dwarfdump는 DWARF 섹션을 직접 읽어 모두 검증되지만, lldb가
+> `bt`에서 `main.osty:42` 표시하려면 Phase B.2 (Stabs)이 추가로 필요.
+>
 > **Slice A2 Week 6 (String concat + List<Int>, 2026-05-02)** — ONB native
 > path가 처음으로 런타임 호출 경로를 사용. `osty_runtime.c` 가 link 단계에
 > 같이 들어오며 다음 패턴이 native로 통과:

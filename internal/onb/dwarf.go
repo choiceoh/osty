@@ -7,13 +7,19 @@ import (
 	"path/filepath"
 )
 
-// DWARF 4 line-number program emitter — Phase B.0 of the ONB DWARF rollout.
+// DWARF 4 emitter — Phase B.0/B.1 of the ONB DWARF rollout.
 //
-// This file owns ONLY the `.debug_line` section: a per-compile-unit byte
-// stream that maps native PC offsets back to source `<file>:<line>:<col>`
-// triples. lldb / gdb both read it directly; for full lldb integration on
-// darwin the `.dSYM` workflow also wants `.debug_info` + `.debug_abbrev`
-// + `.debug_str`, which a follow-up slice will add.
+// This file owns the four sections lldb needs to discover an Osty
+// compilation unit and resolve PC → `<file>:<line>:<col>` for it:
+//
+//   `.debug_line`  — per-CU PC→source row state machine (B.0)
+//   `.debug_info`  — one DW_TAG_compile_unit DIE (B.1)
+//   `.debug_abbrev` — abbreviation table for the CU DIE (B.1)
+//   `.debug_str`   — string storage for filenames / producer / comp_dir (B.1)
+//
+// dwarfdump can read `.debug_line` standalone, but lldb only auto-loads a
+// CU when `.debug_info` references the line program through DW_AT_stmt_list
+// — that's the value B.1 unlocks.
 //
 // The encoder skips the special opcodes (DWARF spec §6.2.5.1) for now and
 // always uses the "extended_op + advance_pc + advance_line + copy"
@@ -60,6 +66,41 @@ const (
 // the byte form is what the header actually emits.
 const dwarfLineBase int8 = -5
 const dwarfLineBaseByte byte = 0xFB
+
+// DWARF tag / attribute / form constants used by the compile-unit DIE.
+// Values are from the DWARF 4 spec, Appendix A. Only the ones the emitter
+// actually writes are listed here — adding more later is fine, but every
+// new attribute also needs a slot in the abbreviation table below.
+const (
+	dwarfTagCompileUnit = 0x11
+
+	dwarfChildrenNo  byte = 0
+	dwarfChildrenYes byte = 1
+
+	dwarfAtName     = 0x03
+	dwarfAtStmtList = 0x10
+	dwarfAtLowPC    = 0x11
+	dwarfAtHighPC   = 0x12
+	dwarfAtLanguage = 0x13
+	dwarfAtCompDir  = 0x1b
+	dwarfAtProducer = 0x25
+
+	dwarfFormAddr      = 0x01
+	dwarfFormData8     = 0x07
+	dwarfFormData1     = 0x0b
+	dwarfFormStrp      = 0x0e
+	dwarfFormSecOffset = 0x17
+
+	// DW_LANG_C99 is the closest spec-blessed language code for "C-like
+	// imperative with statement-line attribution semantics that match
+	// what Osty currently emits". A future slice can register a real
+	// DW_LANG_Osty (0x8001+ vendor range) once the toolchain wants its
+	// own debugger UX.
+	dwarfLangC99 byte = 0x0c
+
+	// abbrev codes used by the compile unit. Code 1 = the CU DIE itself.
+	dwarfAbbrevCompileUnit uint64 = 1
+)
 
 // dwarfStdOpcodeLengths is the per-opcode operand-count table the line
 // header advertises. Indexed by `opcode - 1` because opcode 0 is the
@@ -401,4 +442,140 @@ func dwarfIncludeDir(program *Program) string {
 		return ""
 	}
 	return filepath.Dir(program.SourcePath)
+}
+
+// dwarfStringTable accumulates NUL-terminated strings for the `.debug_str`
+// section while handing back stable byte offsets that the emitter writes
+// into DIE attribute slots. The empty string sits at offset 0 by
+// convention so DW_AT_name = 0 means "absent" rather than "empty".
+type dwarfStringTable struct {
+	buf  []byte
+	offs map[string]uint32
+}
+
+func newDwarfStringTable() *dwarfStringTable {
+	return &dwarfStringTable{
+		buf:  []byte{0},
+		offs: map[string]uint32{"": 0},
+	}
+}
+
+// Add returns the offset of `s` in the string table, appending it if it
+// isn't already there. Empty strings map to offset 0.
+func (t *dwarfStringTable) Add(s string) uint32 {
+	if off, ok := t.offs[s]; ok {
+		return off
+	}
+	off := uint32(len(t.buf))
+	t.buf = append(t.buf, s...)
+	t.buf = append(t.buf, 0)
+	t.offs[s] = off
+	return off
+}
+
+// dwarfCompileUnitInputs collects the metadata the CU DIE needs. Strings
+// are pre-resolved into `__debug_str` offsets so the encoder can write
+// raw uint32s without re-traversing the table.
+type dwarfCompileUnitInputs struct {
+	NameStrOffset     uint32
+	CompDirStrOffset  uint32
+	ProducerStrOffset uint32
+	LowPC             uint64
+	HighPCSize        uint64 // DWARF 4 high_pc as constant offset from low_pc
+	StmtListOffset    uint32
+	Language          byte
+}
+
+// emitDwarfAbbrev returns the byte stream for `__debug_abbrev`. Only one
+// abbreviation entry exists today — the compile unit DIE — but the format
+// is extensible: future slices that add subprogram or variable DIEs just
+// register a new code with its own attribute spec list.
+func emitDwarfAbbrev() []byte {
+	var b bytes.Buffer
+	// Code 1: DW_TAG_compile_unit, no children.
+	writeULEB128(&b, dwarfAbbrevCompileUnit)
+	writeULEB128(&b, dwarfTagCompileUnit)
+	b.WriteByte(dwarfChildrenNo)
+	// Attribute spec list. Order MUST match the DIE encoder.
+	writeULEB128AttrPair(&b, dwarfAtProducer, dwarfFormStrp)
+	writeULEB128AttrPair(&b, dwarfAtLanguage, dwarfFormData1)
+	writeULEB128AttrPair(&b, dwarfAtName, dwarfFormStrp)
+	writeULEB128AttrPair(&b, dwarfAtCompDir, dwarfFormStrp)
+	writeULEB128AttrPair(&b, dwarfAtLowPC, dwarfFormAddr)
+	writeULEB128AttrPair(&b, dwarfAtHighPC, dwarfFormData8)
+	writeULEB128AttrPair(&b, dwarfAtStmtList, dwarfFormSecOffset)
+	// End of attribute list.
+	writeULEB128(&b, 0)
+	writeULEB128(&b, 0)
+	// End of abbreviation table.
+	writeULEB128(&b, 0)
+	return b.Bytes()
+}
+
+// writeULEB128AttrPair is a helper that writes one (attribute, form) pair.
+func writeULEB128AttrPair(b *bytes.Buffer, attr, form uint64) {
+	writeULEB128(b, attr)
+	writeULEB128(b, form)
+}
+
+// emitDwarfInfo returns the byte stream for `__debug_info`. The unit
+// header layout (DWARF 4 §7.5.1.1):
+//
+//	unit_length         (4 bytes, 32-bit form)
+//	version             (2 bytes)
+//	debug_abbrev_offset (4 bytes, sec_offset into __debug_abbrev)
+//	address_size        (1 byte = 8 for aarch64)
+//
+// then DIEs. Our single DIE is the compile unit, written in the attribute
+// order that emitDwarfAbbrev declared.
+func emitDwarfInfo(cu dwarfCompileUnitInputs) []byte {
+	var die bytes.Buffer
+	writeULEB128(&die, dwarfAbbrevCompileUnit)
+	binary.Write(&die, binary.LittleEndian, cu.ProducerStrOffset)
+	die.WriteByte(cu.Language)
+	binary.Write(&die, binary.LittleEndian, cu.NameStrOffset)
+	binary.Write(&die, binary.LittleEndian, cu.CompDirStrOffset)
+	binary.Write(&die, binary.LittleEndian, cu.LowPC)
+	binary.Write(&die, binary.LittleEndian, cu.HighPCSize)
+	binary.Write(&die, binary.LittleEndian, cu.StmtListOffset)
+
+	var unit bytes.Buffer
+	unitLen := uint32(2 /*version*/ + 4 /*abbrev_offset*/ + 1 /*addr_size*/ + die.Len())
+	binary.Write(&unit, binary.LittleEndian, unitLen)
+	binary.Write(&unit, binary.LittleEndian, uint16(dwarfVersion))
+	binary.Write(&unit, binary.LittleEndian, uint32(0)) // abbrev offset (this CU starts at 0)
+	unit.WriteByte(dwarfAddressSize)
+	unit.Write(die.Bytes())
+	return unit.Bytes()
+}
+
+// dwarfCompileUnitMeta packages the three string-table inputs along with
+// the resolved `__debug_str` table so the macho writer can later emit the
+// section content. Used by the macho integration only.
+type dwarfCompileUnitMeta struct {
+	Strings *dwarfStringTable
+	CU      dwarfCompileUnitInputs
+}
+
+// buildDwarfCompileUnitMeta resolves the program's metadata into a
+// pre-baked string table and CU input record. Callers fill in HighPCSize
+// and StmtListOffset later (those depend on the line program size and the
+// `__debug_line` section's file offset).
+func buildDwarfCompileUnitMeta(program *Program) *dwarfCompileUnitMeta {
+	if program == nil {
+		return nil
+	}
+	strs := newDwarfStringTable()
+	name := dwarfFileEntry(program).Name
+	compDir := dwarfIncludeDir(program)
+	producer := "osty (onb dev backend)"
+	return &dwarfCompileUnitMeta{
+		Strings: strs,
+		CU: dwarfCompileUnitInputs{
+			NameStrOffset:     strs.Add(name),
+			CompDirStrOffset:  strs.Add(compDir),
+			ProducerStrOffset: strs.Add(producer),
+			Language:          dwarfLangC99,
+		},
+	}
 }

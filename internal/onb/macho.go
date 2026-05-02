@@ -48,6 +48,9 @@ const (
 	machoSectnameText    = "__text"
 	machoSectnameCString = "__cstring"
 	machoSectnameLine    = "__debug_line"
+	machoSectnameInfo    = "__debug_info"
+	machoSectnameAbbrev  = "__debug_abbrev"
+	machoSectnameStr     = "__debug_str"
 )
 
 func emitMachOObject(program *Program) ([]byte, error) {
@@ -212,12 +215,33 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 		debugLine = dwarfPayload
 	}
 
+	// DWARF B.1: __debug_info / __debug_abbrev / __debug_str complete the
+	// trio that lldb needs to auto-discover the compile unit. They live
+	// alongside __debug_line in the __DWARF segment. The section bodies
+	// only get populated when the line program itself is non-empty —
+	// otherwise there's nothing to point at and shipping empty sections
+	// just bloats the .o.
+	var debugAbbrev, debugInfo, debugStr []byte
 	hasDwarf := len(debugLine) > 0
-	dwarfSegmentSize := uint32(0)
-	dwarfSegmentSections := uint32(0)
 	if hasDwarf {
-		dwarfSegmentSections = 1
-		dwarfSegmentSize = machoSegment64Size + machoSection64Size
+		meta := buildDwarfCompileUnitMeta(program)
+		if meta != nil {
+			meta.CU.LowPC = 0
+			meta.CU.HighPCSize = uint64(len(enc.code))
+			meta.CU.StmtListOffset = 0 // single CU; line program starts at section offset 0
+			debugAbbrev = emitDwarfAbbrev()
+			debugInfo = emitDwarfInfo(meta.CU)
+			debugStr = meta.Strings.buf
+		}
+	}
+
+	dwarfSectionCount := uint32(0)
+	if hasDwarf {
+		dwarfSectionCount = 4
+	}
+	dwarfSegmentSize := uint32(0)
+	if hasDwarf {
+		dwarfSegmentSize = machoSegment64Size + dwarfSectionCount*machoSection64Size
 	}
 
 	// LC layout: __TEXT segment + __DWARF segment (optional) + __LINKEDIT
@@ -225,7 +249,7 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 	// any debug segment because ld64 expects every multi-segment object
 	// to delimit its symtab/strtab/relocs region explicitly.
 	sizeofcmds := uint32(machoSegment64Size + 2*machoSection64Size + // __TEXT + 2 sections
-		dwarfSegmentSize + // __DWARF + (1 section if present)
+		dwarfSegmentSize + // __DWARF + (4 sections if present)
 		machoSegment64Size + // __LINKEDIT (no sections)
 		machoSymtabCommandSize +
 		machoDysymtabCommandSize)
@@ -233,9 +257,14 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 	cstringData, cstringAddrs := encodeMachOCStrings(program.CStrings, uint64(len(enc.code)))
 	cstringOffset := textOffset + uint32(len(enc.code))
 	// File layout order (contiguous so each segment claims a clean range):
-	//   __text → __cstring → __debug_line (optional) → relocs → symtab → strtab
+	//   __text → __cstring → __debug_line → __debug_info → __debug_abbrev →
+	//   __debug_str → relocs → symtab → strtab
 	debugLineOffset := cstringOffset + uint32(len(cstringData))
-	relocOffset := alignUp(debugLineOffset+uint32(len(debugLine)), 4)
+	debugInfoOffset := debugLineOffset + uint32(len(debugLine))
+	debugAbbrevOffset := debugInfoOffset + uint32(len(debugInfo))
+	debugStrOffset := debugAbbrevOffset + uint32(len(debugAbbrev))
+	debugEnd := debugStrOffset + uint32(len(debugStr))
+	relocOffset := alignUp(debugEnd, 4)
 	symoff := relocOffset + uint32(len(enc.relocs))*machoRelocSize
 	nsyms := uint32(len(program.CStrings) + len(program.Functions) + len(enc.externalSymbols))
 	stroff := symoff + nsyms*machoNlist64Size
@@ -298,33 +327,81 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 	writeU32(&b, 0)
 
 	dwarfVmaddr := segmentSize
-	dwarfVmsize := uint64(len(debugLine))
+	dwarfVmsize := uint64(len(debugLine) + len(debugInfo) + len(debugAbbrev) + len(debugStr))
 	if hasDwarf {
-		// __DWARF segment: one section (`__debug_line`). vmaddr starts
-		// where __TEXT ends so segment ranges don't overlap; debug
-		// segments don't get loaded at runtime, but ld64 still validates
-		// the arithmetic.
+		// __DWARF segment: 4 sections (`__debug_line`, `__debug_info`,
+		// `__debug_abbrev`, `__debug_str`). vmaddr starts where __TEXT
+		// ends so segment ranges don't overlap; debug segments don't
+		// get loaded at runtime, but ld64 still validates the
+		// arithmetic, and lldb walks the segment by vmaddr range.
 		writeU32(&b, machoLCSegment64)
 		writeU32(&b, dwarfSegmentSize)
 		writeName16(&b, machoSegnameDWARF)
 		writeU64(&b, dwarfVmaddr)
 		writeU64(&b, dwarfVmsize)
 		writeU64(&b, uint64(debugLineOffset))
-		writeU64(&b, uint64(len(debugLine)))
+		writeU64(&b, dwarfVmsize)
 		writeU32(&b, 0) // maxprot — debug-only
 		writeU32(&b, 0) // initprot
-		writeU32(&b, dwarfSegmentSections)
+		writeU32(&b, dwarfSectionCount)
 		writeU32(&b, 0) // segment flags
 
+		// __debug_line
+		lineAddr := dwarfVmaddr
 		writeName16(&b, machoSectnameLine)
 		writeName16(&b, machoSegnameDWARF)
-		writeU64(&b, dwarfVmaddr)
+		writeU64(&b, lineAddr)
 		writeU64(&b, uint64(len(debugLine)))
 		writeU32(&b, debugLineOffset)
 		writeU32(&b, 0) // align
 		writeU32(&b, 0) // reloff
 		writeU32(&b, 0) // nreloc
 		writeU32(&b, machoSectionRegular|machoSectionDebug)
+		writeU32(&b, 0)
+		writeU32(&b, 0)
+		writeU32(&b, 0)
+
+		// __debug_info
+		infoAddr := lineAddr + uint64(len(debugLine))
+		writeName16(&b, machoSectnameInfo)
+		writeName16(&b, machoSegnameDWARF)
+		writeU64(&b, infoAddr)
+		writeU64(&b, uint64(len(debugInfo)))
+		writeU32(&b, debugInfoOffset)
+		writeU32(&b, 0)
+		writeU32(&b, 0)
+		writeU32(&b, 0)
+		writeU32(&b, machoSectionRegular|machoSectionDebug)
+		writeU32(&b, 0)
+		writeU32(&b, 0)
+		writeU32(&b, 0)
+
+		// __debug_abbrev
+		abbrevAddr := infoAddr + uint64(len(debugInfo))
+		writeName16(&b, machoSectnameAbbrev)
+		writeName16(&b, machoSegnameDWARF)
+		writeU64(&b, abbrevAddr)
+		writeU64(&b, uint64(len(debugAbbrev)))
+		writeU32(&b, debugAbbrevOffset)
+		writeU32(&b, 0)
+		writeU32(&b, 0)
+		writeU32(&b, 0)
+		writeU32(&b, machoSectionRegular|machoSectionDebug)
+		writeU32(&b, 0)
+		writeU32(&b, 0)
+		writeU32(&b, 0)
+
+		// __debug_str
+		strAddr := abbrevAddr + uint64(len(debugAbbrev))
+		writeName16(&b, machoSectnameStr)
+		writeName16(&b, machoSegnameDWARF)
+		writeU64(&b, strAddr)
+		writeU64(&b, uint64(len(debugStr)))
+		writeU32(&b, debugStrOffset)
+		writeU32(&b, 0)
+		writeU32(&b, 0)
+		writeU32(&b, 0)
+		writeU32(&b, machoSectionRegular|machoSectionDebug|machoSectionCStringLiterals)
 		writeU32(&b, 0)
 		writeU32(&b, 0)
 		writeU32(&b, 0)
@@ -380,6 +457,18 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 			return nil, fmt.Errorf("onb: internal Mach-O layout mismatch: dwarf=%d debugLineOffset=%d", b.Len(), debugLineOffset)
 		}
 		b.Write(debugLine)
+		if b.Len() != int(debugInfoOffset) {
+			return nil, fmt.Errorf("onb: internal Mach-O layout mismatch: dwarf info=%d expected=%d", b.Len(), debugInfoOffset)
+		}
+		b.Write(debugInfo)
+		if b.Len() != int(debugAbbrevOffset) {
+			return nil, fmt.Errorf("onb: internal Mach-O layout mismatch: dwarf abbrev=%d expected=%d", b.Len(), debugAbbrevOffset)
+		}
+		b.Write(debugAbbrev)
+		if b.Len() != int(debugStrOffset) {
+			return nil, fmt.Errorf("onb: internal Mach-O layout mismatch: dwarf str=%d expected=%d", b.Len(), debugStrOffset)
+		}
+		b.Write(debugStr)
 	}
 	writePadding(&b, int(relocOffset)-b.Len())
 	if b.Len() != int(relocOffset) {
