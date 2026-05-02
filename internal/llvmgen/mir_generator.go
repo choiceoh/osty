@@ -3555,6 +3555,8 @@ func (g *mirGen) emitStdStringsCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, e
 	switch name {
 	case "compare", "Compare":
 		return true, g.emitStdStringsRuntimeCall(c, llvmStringRuntimeCompareSymbol(), "i64", []mir.Type{ir.TString, ir.TString})
+	case "fromChar":
+		return true, g.emitStdStringsRuntimeCall(c, mirRtCharToStringSymbol(), "ptr", []mir.Type{ir.TChar})
 	}
 	return false, nil
 }
