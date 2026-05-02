@@ -978,6 +978,98 @@ func TestONBBackendBinaryRunsListGenericsOnDarwinARM64(t *testing.T) {
 	}
 }
 
+// TestONBBackendBinaryRunsForInLoopOnDarwinARM64 covers Phase A2 Week
+// 17: `for x in list` and `for i in range` lowered natively. Range
+// loops were already covered by Week 1 (counter + comparison + branch),
+// but list iteration required two new MIR vocab items: `LenRV` (the
+// loop's upper bound) and `IndexProj` (the per-iteration element
+// load). Both route through the type-specific runtime symbols added
+// in Week 16 (`osty_rt_list_len`, `osty_rt_list_get_*`).
+func TestONBBackendBinaryRunsForInLoopOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("ONB for-in executable smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	cases := []struct {
+		name, src, want string
+	}{
+		{
+			// Range loop: 0+1+2+...+9 = 45. Front end lowers to a
+			// counter loop with BinaryRV comparisons and assignments
+			// — pure stack-everything arithmetic with no runtime
+			// calls. Acts as a sanity gate that the for-in regression
+			// only affects list iteration, not the simpler Range case.
+			name: "range_sum",
+			src: `fn main() {
+    let mut sum = 0
+    for i in 0..10 {
+        sum = sum + i
+    }
+    println(sum)
+}`,
+			want: "45\n",
+		},
+		{
+			// List<Int>: drives osty_rt_list_len + osty_rt_list_get_i64.
+			name: "list_int_sum",
+			src: `fn main() {
+    let mut v: List<Int> = []
+    v.push(10)
+    v.push(20)
+    v.push(30)
+    let mut sum = 0
+    for x in v {
+        sum = sum + x
+    }
+    println(sum)
+}`,
+			want: "60\n",
+		},
+		{
+			// List<String>: drives osty_rt_list_get_string. The
+			// payload itself isn't summed — we only assert iteration
+			// happens by counting elements through a side-channel
+			// integer accumulator.
+			name: "list_string_count",
+			src: `fn main() {
+    let mut v: List<String> = []
+    v.push("a")
+    v.push("b")
+    v.push("c")
+    v.push("d")
+    let mut count = 0
+    for s in v {
+        count = count + 1
+    }
+    println(count)
+}`,
+			want: "4\n",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(onb.EnvStrict, "1")
+			req := newBackendRequest(t, EmitBinary, tc.src)
+			req.Layout.Target = "aarch64-apple-darwin"
+			result, err := ONBBackend{}.Emit(context.Background(), req)
+			if err != nil {
+				t.Fatalf("ONBBackend.Emit returned error: %v", err)
+			}
+			out, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+			if err != nil {
+				t.Fatalf("binary returned error: %v\n%s", err, out)
+			}
+			if got := string(out); got != tc.want {
+				t.Fatalf("binary output = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestONBBackendBinaryRunsStringAndListOnDarwinARM64 exercises Phase A2's
 // runtime-call slice: String concatenation and `List<Int>` push/len. These
 // shapes lower to `bl _osty_rt_strings_Concat`, `bl _osty_rt_list_new`,

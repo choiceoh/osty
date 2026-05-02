@@ -37,6 +37,68 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 17 (`for x in list` native lowering, 2026-05-02)** —
+> ONB가 `for x in list` 루프를 native lowering. 이전에는 List 인덱스
+> read가 fallback 사유였는데, `LenRV` + `IndexProj` 두 vocab item을
+> 추가해서 모든 element type (Int/Bool/Float64/String) 의 list가 통과.
+>
+> 작동:
+>
+> ```osty
+> let mut v: List<Int> = []
+> v.push(10); v.push(20); v.push(30)
+> let mut sum = 0
+> for x in v {
+>     sum = sum + x
+> }
+> println(sum)                 // 60
+>
+> for i in 0..10 { sum = sum + i }    // Range는 카운터 루프로
+>                                      // lowering — Week 1부터 통과
+> ```
+>
+> Front end MIR 셰이프 (counter + bounded loop):
+>
+> ```
+> _len = len _iter           // LenRV → osty_rt_list_len
+> _idx = const 0
+> bb1: cond = _idx < _len
+> branch cond -> [bb2 (body), bb4 (exit)]
+> bb2: _elem = use _iter[_idx]   // IndexProj → osty_rt_list_get_*
+>      sum = sum + _elem
+> bb3: _idx = _idx + 1
+>      goto bb1
+> ```
+>
+> 추가:
+> - 새 runtime symbol 상수: `runtimeSymListGetI64` / `_I1` / `_F64` /
+>   `_String`
+> - `lowerLenAssign` (LenRV → osty_rt_list_len + capture x0)
+> - `loadIndexedPlaceIntoIntReg` / `loadIndexedPlaceIntoFloatReg` —
+>   IndexProj 감지 시 list_get_* 디스패치 (element type 기준)
+> - `indexCallPrefix` helper — list pointer → x0, index → x1
+> - `listGetSymbol(elem)` — Int/Bool/String/Float dispatch
+> - `materialiseOperand` / `materialiseFloatOperand`이 IndexProj가
+>   있으면 indexed-load 경로로 우회
+> - `collectRValueLocals`이 LenRV.Place를 read로 표시
+> - `collectOperandLocals`이 IndexProj.Index 안의 locals도 수집
+>   (인덱스 local이 slot을 못 받는 회귀 방지)
+>
+> 검증:
+> - E2E binary smoke 3개 (`TestONBBackendBinaryRunsForInLoopOnDarwinARM64`):
+>   range_sum (0..10 sum=45), list_int_sum (10+20+30=60),
+>   list_string_count (4 strings → 4)
+>
+> 한계 (이번 슬라이스에서 명시적으로 보류):
+> - `list[i] = v` write — IndexProj as Dest 미구현
+> - `list.pop()` — runtime symbol 다양 (Option<T> 반환), 미구현
+> - struct/enum element type을 가진 List — push/get_bytes 경로 필요
+> - `for (k, v) in map` — Map iterator 별도
+> - `for x in iter()` — 사용자 정의 Iterable 프로토콜 미구현
+>
+> 다음 슬라이스 후보: struct field mutation (`p.x = 5`) → struct >16B
+> sret-style passing.
+>
 > **Slice A2 Week 16 (List<T> 일반화 — Bool/Float64/String, 2026-05-02)** —
 > ONB가 List<Int> 외의 element type에 대해 push/len을 native lowering.
 > 런타임은 이미 `osty_rt_list_push_i64` 외에 `_i1`/`_f64`/`_string`을
