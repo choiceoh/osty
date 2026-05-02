@@ -445,6 +445,10 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualAggListStructBytesV1Fixture", []string{"%Pair = type { i64, i64 }", "declare ptr @osty_rt_list_new()", "declare void @osty_rt_list_push_bytes_v1(ptr, ptr, i64)", "call ptr @osty_rt_list_new()", "alloca %Pair", "store %Pair", "getelementptr inbounds %Pair, ptr null, i32 1", "ptrtoint ptr", "call void @osty_rt_list_push_bytes_v1(", "ret ptr"}},
 		{"lirParityManualListRemoveAtStructBytesV1Fixture", []string{"%Pair = type { i64, i64 }", "declare void @osty_rt_list_get_bytes_v1(ptr, i64, ptr, i64)", "declare void @osty_rt_list_remove_at_discard(ptr, i64)", "alloca %Pair", "getelementptr inbounds %Pair, ptr null, i32 1", "ptrtoint ptr", "call void @osty_rt_list_get_bytes_v1(", "load %Pair", "call void @osty_rt_list_remove_at_discard(", "ret %Pair"}},
 		{"lirParityManualMapGetOrStructBytesV1Fixture", []string{"%Pair = type { i64, i64 }", "declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)", "alloca %Pair", "call i1 @osty_rt_map_get_string(", "load %Pair", "store %Pair", "ret %Pair"}},
+		// ----- Option-of-composite payload boxing/unboxing -----
+		{"lirParityManualAggEnumVariantSomeStructFixture", []string{"%Pair = type { i64, i64 }", "%Option.Pair = type", "declare ptr @osty.gc.alloc_v1(i64, i64, ptr)", "getelementptr inbounds %Pair, ptr null, i32 1", "ptrtoint ptr", "call ptr @osty.gc.alloc_v1(i64 1, i64", "store %Pair", "insertvalue %Option.Pair undef, i64 1, 0", "ret %Option.Pair"}},
+		{"lirParityManualOptionUnwrapStructFixture", []string{"%Pair = type { i64, i64 }", "%Option.Pair = type", "declare void @osty_rt_option_unwrap_none()", "extractvalue %Option.Pair", "icmp eq i64", "inttoptr i64", "load %Pair", "ret %Pair"}},
+		{"lirParityManualListFirstStructBytesV1Fixture", []string{"%Pair = type { i64, i64 }", "%Option.Pair = type", "declare i64 @osty_rt_list_len(ptr)", "declare void @osty_rt_list_get_bytes_v1(ptr, i64, ptr, i64)", "declare ptr @osty.gc.alloc_v1(i64, i64, ptr)", "call void @osty_rt_list_get_bytes_v1(", "call ptr @osty.gc.alloc_v1(i64 1, i64", "ret %Option.Pair"}},
 	}
 
 	for _, tt := range want {
