@@ -18900,7 +18900,7 @@ pub fn mirEmitModule(m: MirModule, opts: MirEmitOpts) -> String {
     // matching the names emitted here, so same literal → same
     // symbol on both sides without state plumbing.
     let pool = mirCollectStringPool(m)
-    out = out + mirEmitStringPoolSectionPopulated(pool)
+    out = out + mirEmitStringPoolSection(pool)
     out = out + mirEmitModuleInitDispatcher(m)
     for func in m.functions {
         if func.isExternal {
@@ -20561,10 +20561,10 @@ fn mirEmitAssignIntoProjection(func: MirFunction, instr: MirInstr) -> String {
     }
     let lastProj = instr.dest.projections[lastIdx]
     if lastProj.kind == MirProjIndex {
-        return mirEmitMultiStepIndexWrite(func, instr)
+        return mirEmitMultiStepIndexWrite(instr)
     }
     if lastProj.kind == MirProjDeref {
-        return mirEmitMultiStepDerefWrite(func, instr)
+        return mirEmitMultiStepDerefWrite(instr)
     }
     if lastProj.kind != MirProjField && lastProj.kind != MirProjTuple {
         return "  ; TODO multi-step write ending in " + mirProjectionKindName(lastProj.kind) + "\n"
@@ -21612,29 +21612,6 @@ pub fn mirEmitModuleInitDispatcher(m: MirModule) -> String {
 // emit). Phase 1p threads MirStringPool through the per-fn emit
 // chain; Phase 1o establishes the helpers.
 
-/// mirEmitStringPoolSection renders the string-pool block by
-/// walking the existing `MirStringPool` (defined earlier in this
-/// file). Phase 1o ships the section emitter; Phase 1p threads
-/// the pool through the per-fn emit chain so MirConstString
-/// operands actually intern their literal here.
-///
-/// Today this entry takes a pool argument so callers can wire the
-/// section once per module emission. With an empty pool (the
-/// default in single-pass mode) it returns an empty string.
-pub fn mirEmitStringPoolSection(pool: MirStringPool) -> String {
-    if pool.isEmpty() {
-        return ""
-    }
-    let mut out = mirModuleSectionDirective("string pool")
-    for literal in pool.orderedKeys() {
-        let sym = pool.symbol(literal)
-        let encoded = mirEncodeStringLiteral(literal)
-        let lengthDigits = mirGenIntToString(literal.len() + 1)
-        out = out + sym + " = private constant [" + lengthDigits + " x i8] c\"" + encoded + "\\00\", align 1\n"
-    }
-    out + "\n"
-}
-
 /// mirEncodeStringLiteral converts a String into the LLVM `c"..."`
 /// escape form. Phase 1o handles ASCII printable, newline, tab,
 /// backslash, double-quote — non-printable codepoints route through
@@ -21667,23 +21644,10 @@ fn mirHexEscape(byte: Int) -> String {
 }
 
 fn mirHexDigit(value: Int) -> String {
-    if value == 0 { return "0" }
-    if value == 1 { return "1" }
-    if value == 2 { return "2" }
-    if value == 3 { return "3" }
-    if value == 4 { return "4" }
-    if value == 5 { return "5" }
-    if value == 6 { return "6" }
-    if value == 7 { return "7" }
-    if value == 8 { return "8" }
-    if value == 9 { return "9" }
-    if value == 10 { return "A" }
-    if value == 11 { return "B" }
-    if value == 12 { return "C" }
-    if value == 13 { return "D" }
-    if value == 14 { return "E" }
-    if value == 15 { return "F" }
-    "0"
+    if value < 0 || value > 15 {
+        return "0"
+    }
+    llvmStrings.slice("0123456789ABCDEF", value, value + 1)
 }
 
 // -------- Type defs section --------
@@ -21724,15 +21688,15 @@ pub fn mirEmitIndexOrDerefWrite(func: MirFunction, instr: MirInstr) -> String {
     }
     let proj = instr.dest.projections[0]
     if proj.kind == MirProjIndex {
-        return mirEmitIndexWriteLine(func, instr, proj)
+        return mirEmitIndexWriteLine(instr, proj)
     }
     if proj.kind == MirProjDeref {
-        return mirEmitDerefWriteLine(func, instr, proj)
+        return mirEmitDerefWriteLine(instr, proj)
     }
     ""
 }
 
-fn mirEmitIndexWriteLine(func: MirFunction, instr: MirInstr, proj: MirProjection) -> String {
+fn mirEmitIndexWriteLine(instr: MirInstr, proj: MirProjection) -> String {
     let baseReg = mirEmitLocalRegName(instr.dest.local)
     let valueDest = baseReg + ".iw"
     let mut out = mirEmitRValue(valueDest, instr.src)
@@ -21750,7 +21714,7 @@ fn mirEmitIndexWriteLine(func: MirFunction, instr: MirInstr, proj: MirProjection
     out + "  call void @" + setSym + "(ptr " + baseReg + ", i64 " + idxOp + ", " + valueTy + " " + valueDest + ")\n"
 }
 
-fn mirEmitDerefWriteLine(func: MirFunction, instr: MirInstr, proj: MirProjection) -> String {
+fn mirEmitDerefWriteLine(instr: MirInstr, proj: MirProjection) -> String {
     let baseReg = mirEmitLocalRegName(instr.dest.local)
     let valueDest = baseReg + ".dw"
     let mut out = mirEmitRValue(valueDest, instr.src)
@@ -21794,9 +21758,8 @@ fn mirHexEncodeBytes(s: String) -> String {
 }
 
 pub fn mirCollectStringPool(m: MirModule) -> MirStringPool {
-    let mut emptyByContent: Map<String, String> = {:}
     let mut pool = MirStringPool {
-        byContent: emptyByContent,
+        byContent: {:},
         order: [],
     }
     for func in m.functions {
@@ -21836,7 +21799,7 @@ fn mirCollectStringPoolFromOperand(pool: MirStringPool, op: MirOperand) {
     pool.intern(op.const.strValue)
 }
 
-pub fn mirEmitStringPoolSectionPopulated(pool: MirStringPool) -> String {
+pub fn mirEmitStringPoolSection(pool: MirStringPool) -> String {
     if pool.isEmpty() {
         return ""
     }
@@ -21868,7 +21831,7 @@ pub fn mirCollectAggregateShapes(m: MirModule) -> List<String> {
                     continue
                 }
                 let shape = mirEmitTupleTypeText(instr.src.aggFields)
-                if mirShapeListContains(out, shape) == false {
+                if out.contains(shape) == false {
                     out.push(shape)
                 }
             }
@@ -21877,45 +21840,18 @@ pub fn mirCollectAggregateShapes(m: MirModule) -> List<String> {
     out
 }
 
-fn mirShapeListContains(shapes: List<String>, target: String) -> Bool {
-    for s in shapes {
-        if s == target {
-            return true
-        }
-    }
-    false
-}
-
-fn mirEmitMultiStepIndexWrite(func: MirFunction, instr: MirInstr) -> String {
-    let baseReg = mirEmitLocalRegName(instr.dest.local)
+fn mirEmitMultiStepIndexWrite(instr: MirInstr) -> String {
     let lastIdx = instr.dest.projections.len() - 1
-    let lastProj = instr.dest.projections[lastIdx]
     if lastIdx > 0 {
         return "  ; TODO Phase 1q multi-step write through Field+Index chain (depth=" + mirGenIntToString(lastIdx + 1) + ")\n"
     }
-    let valueDest = baseReg + ".iw"
-    let mut out = mirEmitRValue(valueDest, instr.src)
-    let valueTy = mirEmitRValueLLVMType(instr.src)
-    let idxOp = if lastProj.indexLocal >= 0 {
-        mirEmitLocalRegName(lastProj.indexLocal)
-    } else {
-        mirGenIntToString(lastProj.indexConst)
-    }
-    let setSym = mirEmitListSetSymbol(valueTy)
-    if setSym == "" {
-        return out + "  ; TODO list_set for elem type \"" + valueTy + "\"\n"
-    }
-    out + "  call void @" + setSym + "(ptr " + baseReg + ", i64 " + idxOp + ", " + valueTy + " " + valueDest + ")\n"
+    mirEmitIndexWriteLine(instr, instr.dest.projections[lastIdx])
 }
 
-fn mirEmitMultiStepDerefWrite(func: MirFunction, instr: MirInstr) -> String {
-    let baseReg = mirEmitLocalRegName(instr.dest.local)
+fn mirEmitMultiStepDerefWrite(instr: MirInstr) -> String {
     let lastIdx = instr.dest.projections.len() - 1
     if lastIdx > 0 {
         return "  ; TODO Phase 1q multi-step write through Field+Deref chain (depth=" + mirGenIntToString(lastIdx + 1) + ")\n"
     }
-    let valueDest = baseReg + ".dw"
-    let mut out = mirEmitRValue(valueDest, instr.src)
-    let valueTy = mirEmitRValueLLVMType(instr.src)
-    out + "  store " + valueTy + " " + valueDest + ", ptr " + baseReg + "\n"
+    mirEmitDerefWriteLine(instr, instr.dest.projections[lastIdx])
 }

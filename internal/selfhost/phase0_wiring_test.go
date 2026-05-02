@@ -386,11 +386,6 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"mirEmitDerefWriteLine(",
 				"mirEmitListSetSymbol(",
 				"mirEmitTypeDefsSection(m)",
-				// Phase 1o emitted mirEmitStringPoolSection(pool);
-				// Phase 1p replaced it with the Populated variant
-				// that uses the deterministic hex-suffix symbol
-				// scheme. Keep the base helper as a needle since
-				// Phase 1o still defines it.
 				"pub fn mirEmitStringPoolSection(",
 				"declare void @osty_rt_list_set_i64",
 				"declare void @osty_rt_list_set_ptr",
@@ -400,17 +395,15 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"pub fn mirEmitConstStringRef(",
 				"pub fn mirStringRefSymbol(",
 				"pub fn mirCollectStringPool(",
-				"pub fn mirEmitStringPoolSectionPopulated(",
 				"pub fn mirCollectAggregateShapes(",
 				"mirHexEncodeBytes(",
 				"mirCollectStringPoolFromInstr(",
 				"mirCollectStringPoolFromOperand(",
-				"mirShapeListContains(",
 				"mirEmitMultiStepIndexWrite(",
 				"mirEmitMultiStepDerefWrite(",
 				"MirConstString -> mirEmitConstStringRef",
 				"mirCollectStringPool(m)",
-				"mirEmitStringPoolSectionPopulated(pool)",
+				"mirEmitStringPoolSection(pool)",
 				"mirCollectAggregateShapes(m)",
 				"@.str.\" + mirHexEncodeBytes",
 			},
