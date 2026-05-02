@@ -1,0 +1,99 @@
+// onb_lir_test.osty — round-trip parity for the LIR opcode mirror.
+// Each case constructs an `OnbInstr` value, runs it through the
+// shared `onbEncodeInstr` dispatcher, and pins the produced
+// 4-byte word against the same canonical hex the Go encoder
+// produces (verified by
+// `internal/onb/onb_osty_parity_test.go::TestEncoderParityVsOstyTable`
+// and the Phase 2 follow-up below).
+use std.testing
+
+fn assertOnbInstrEncodedEq(label: String, instr: OnbInstr, expected: Int) {
+    match onbEncodeInstr(instr) {
+        Some(word) -> testing.assertEq(word, expected),
+        None -> testing.assert(false),
+    }
+}
+
+fn testOnbInstrBrkRoundtrip() {
+    assertOnbInstrEncodedEq("brk #1", onbInstrBrk(1), 0xd4200020)
+    assertOnbInstrEncodedEq("brk #0xffff", onbInstrBrk(0xffff), 0xd43fffe0)
+}
+
+fn testOnbInstrRet() {
+    assertOnbInstrEncodedEq("ret", onbInstrRet(), 0xd65f03c0)
+}
+
+fn testOnbInstrArithFamily() {
+    // add x9, x9, x10 — the canonical Int +.
+    assertOnbInstrEncodedEq("add x9,x9,x10", onbInstrAddReg("x9", "x9", "x10"), 0x8b0a0129)
+    // sub x9, x9, x10
+    assertOnbInstrEncodedEq("sub x9,x9,x10", onbInstrSubReg("x9", "x9", "x10"), 0xcb0a0129)
+    // mul x9, x9, x10
+    assertOnbInstrEncodedEq("mul x9,x9,x10", onbInstrMulReg("x9", "x9", "x10"), 0x9b0a7d29)
+}
+
+fn testOnbInstrCmpAndCset() {
+    // cmp x9, x10
+    assertOnbInstrEncodedEq("cmp x9,x10", onbInstrCmp("x9", "x10"), 0xeb0a013f)
+    // cset x9, eq — comparison-into-bool half. (Encoded with the
+    // CSINC alias's flipped condition: eq becomes ne in the wire
+    // bits, so the constant comes out as 0x9a9f17e9, NOT
+    // 0x9a9f07e9.)
+    assertOnbInstrEncodedEq("cset x9, eq", onbInstrCset("x9", OnbCond.OnbCondEq), 0x9a9f17e9)
+    // cset x9, lt — surface a different condition path.
+    assertOnbInstrEncodedEq("cset x9, lt", onbInstrCset("x9", OnbCond.OnbCondLt), 0x9a9fa7e9)
+}
+
+fn testOnbInstrStackTraffic() {
+    // str x9, [sp, #0]
+    assertOnbInstrEncodedEq("str x9 [sp,0]", onbInstrStore64Stack("x9", 0), 0xf90003e9)
+    // ldr x9, [sp, #16]
+    assertOnbInstrEncodedEq("ldr x9 [sp,16]", onbInstrLoad64Stack("x9", 16), 0xf9400be9)
+    // mov x10, x0
+    assertOnbInstrEncodedEq("mov x10, x0", onbInstrMovRegReg("x10", "x0"), 0xaa0003ea)
+}
+
+fn testOnbInstrAddressFamily() {
+    // add x8, sp, #0
+    assertOnbInstrEncodedEq("add x8, sp, #0", onbInstrLoadStackAddress("x8", 0), 0x910003e8)
+    // ldr x9, [x0, #0]
+    assertOnbInstrEncodedEq("ldr x9 [x0,0]", onbInstrLoadFromReg("x9", "x0", 0), 0xf9400009)
+    // str x9, [x8, #16]
+    assertOnbInstrEncodedEq("str x9 [x8,16]", onbInstrStoreToReg("x9", "x8", 16), 0xf9000909)
+}
+
+fn testOnbInstrFPFamily() {
+    // ldr d8, [sp, #0]
+    assertOnbInstrEncodedEq("ldr d8 [sp,0]", onbInstrLoadFloat64Stack("d8", 0), 0xfd4003e8)
+    // str d8, [sp, #0]
+    assertOnbInstrEncodedEq("str d8 [sp,0]", onbInstrStoreFloat64Stack("d8", 0), 0xfd0003e8)
+    // fmov d8, x9
+    assertOnbInstrEncodedEq("fmov d8, x9", onbInstrFmovDFromX("d8", "x9"), 0x9e670128)
+    // fmov x1, d9
+    assertOnbInstrEncodedEq("fmov x1, d9", onbInstrFmovXFromD("x1", "d9"), 0x9e660121)
+    // fadd d8, d8, d9
+    assertOnbInstrEncodedEq("fadd d8,d8,d9", onbInstrFaddReg("d8", "d8", "d9"), 0x1e692908)
+    assertOnbInstrEncodedEq("fsub d8,d8,d9", onbInstrFsubReg("d8", "d8", "d9"), 0x1e693908)
+    assertOnbInstrEncodedEq("fmul d8,d8,d9", onbInstrFmulReg("d8", "d8", "d9"), 0x1e690908)
+    assertOnbInstrEncodedEq("fdiv d8,d8,d9", onbInstrFdivReg("d8", "d8", "d9"), 0x1e691908)
+}
+
+fn testOnbInstrBranchLinkReg() {
+    // blr x9 — closure indirect call.
+    assertOnbInstrEncodedEq("blr x9", onbInstrBranchLinkReg("x9"), 0xd63f0120)
+}
+
+fn testOnbInstrInvalidReturnsNone() {
+    let bogus = OnbInstr {
+        kind: OnbInstrKind.OnbInstrInvalid,
+        dst: "",
+        src: "",
+        lhs: "",
+        rhs: "",
+        base: "",
+        imm: 0,
+        offset: 0,
+        cond: OnbCond.OnbCondEq,
+    }
+    testing.assert(onbEncodeInstr(bogus).isNone())
+}
