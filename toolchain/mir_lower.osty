@@ -1839,26 +1839,42 @@ fn mirLowerFloatLitOperand(e: HirExpr) -> MirOperand {
     mirOperandConst(mirConstFloat(text, typeText))
 }
 
-/// mirLowerStringLitOperand handles literal-only StringLit (no
-/// interpolation). Interpolated forms record a Stage 4e TODO and
-/// return an empty-string const so downstream consumers can continue.
+/// mirLowerStringLitOperand lowers a StringLit. Literal-only forms
+/// fold to a single StringConst operand; interpolated forms emit a
+/// `string_concat` intrinsic call against operands recursively
+/// lowered from each part — matches Go's `lowerStringLit`
+/// (internal/mir/lower.go).
 fn mirLowerStringLitOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
-    let mut buf: List<String> = []
     let mut hasInterpolation = false
     for part in e.strParts {
-        if part.isLit {
-            buf.push(part.lit)
-        } else {
+        if !part.isLit {
             hasInterpolation = true
         }
     }
-    if hasInterpolation {
-        mirLowerNoteIssue(
-            bs.l,
-            "mir_lower Stage 4e TODO: interpolated StringLit — using literal fragments only",
-        )
+    if !hasInterpolation {
+        let mut buf: List<String> = []
+        for part in e.strParts {
+            if part.isLit {
+                buf.push(part.lit)
+            }
+        }
+        return mirOperandConst(mirConstString(strings.join(buf, "")))
     }
-    mirOperandConst(mirConstString(strings.join(buf, "")))
+    let mut args: List<MirOperand> = []
+    for part in e.strParts {
+        if part.isLit {
+            args.push(mirOperandConst(mirConstString(part.lit)))
+        } else if part.expr.len() > 0 {
+            args.push(mirLowerExprAsOperand(bs, part.expr[0]))
+        }
+    }
+    let span = mirSpanFromHir(e.span)
+    let tmp = mirLowerNewLocal(bs, "_strconcat", e.typ, false, span)
+    mirLowerEmitInstr(
+        bs,
+        mirIntrinsicInstr(true, mirPlace(tmp), MirIntrinsicStringConcat, args, span),
+    )
+    mirOperandCopy(mirPlace(tmp), "String")
 }
 
 /// mirLowerIdentOperand lowers an ident reference to an operand.
@@ -2007,12 +2023,10 @@ fn mirLowerIdentUnsupported(bs: MirLowerBodyState, e: HirExpr, kindName: String)
 // ---- Place-carrying expression operands (Stage 4d) -----------------
 
 fn mirLowerFieldExprOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
+    // Optional field chains spill into a temp + lowerExprIntoPlace,
+    // matching Go's lowerExprAsOperand fallback for FieldExpr.
     if e.fieldOptional {
-        mirLowerNoteIssue(
-            bs.l,
-            "mir_lower Stage 4e TODO: optional field chain as operand",
-        )
-        return mirOperandConst(mirConstUnit())
+        return mirLowerExprAsOperandFallback(bs, e)
     }
     let place = mirLowerFieldExprPlace(bs, e)
     if !mirLowerPlaceIsValid(place) {
@@ -3198,6 +3212,13 @@ fn mirLowerExprIntoPlaceImpl(
         HirExprMapLit -> mirLowerMapLitInto(bs, e, dest, destT),
         // Kinds deferred to Stage 4f:
         HirExprMatch -> mirLowerMatchExprInto(bs, e, dest, destT),
+        HirExprField -> {
+            if e.fieldOptional {
+                mirLowerOptionalFieldInto(bs, e, dest, destT)
+            } else {
+                mirLowerExprIntoPlaceRValue(bs, e, dest, destT)
+            }
+        },
         _ -> mirLowerExprIntoPlaceRValue(bs, e, dest, destT),
     }
 }
@@ -3290,12 +3311,12 @@ fn mirLowerBinaryRValue(bs: MirLowerBodyState, e: HirExpr) -> MirRValue {
 }
 
 fn mirLowerFieldRValue(bs: MirLowerBodyState, e: HirExpr) -> MirRValue {
+    // Optional field chains route through the operand fallback (temp +
+    // lowerExprIntoPlace → lowerOptionalFieldInto). Matches Go's
+    // lowerExprToRValue: it logs a noteIssue because the caller should
+    // have routed via lowerExprIntoPlace, but we recover gracefully.
     if e.fieldOptional {
-        mirLowerNoteIssue(
-            bs.l,
-            "mir_lower Stage 4e TODO: optional FieldExpr in rvalue position",
-        )
-        return mirRVUse(mirOperandConst(mirConstUnit()))
+        return mirRVUse(mirLowerExprAsOperandFallback(bs, e))
     }
     mirRVUse(mirLowerFieldExprOperand(bs, e))
 }
@@ -3606,6 +3627,81 @@ pub fn mirLowerCoalesceExprInto(
 
     bs.cur = merge
     mirLowerPopScope(bs)
+}
+
+/// mirLowerOptionalFieldInto lowers `recv?.field` directly into
+/// `dest`. Reads the discriminant of recv, branches:
+///   - Some tag (1) → project the inner payload's field, wrap back in
+///     Some via an EnumVariant aggregate
+///   - None tag (0) / default → emit a None nullary into dest
+///
+/// Matches Go's `lowerOptionalFieldInto` (internal/mir/lower.go).
+fn mirLowerOptionalFieldInto(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    dest: MirPlace,
+    destT: HirType,
+) {
+    let span = mirSpanFromHir(e.span)
+    if e.fieldTarget.len() == 0 {
+        mirLowerNoteIssue(bs.l, "mir_lower: optional FieldExpr with no receiver")
+        let rv = mirRVNullary(MirNullaryNone, hirTypeString(destT))
+        mirLowerEmitInstr(bs, mirAssignInstr(dest, rv, span))
+        return
+    }
+    let recv = e.fieldTarget[0]
+    let recvT = if hirTypeIsValid(recv.typ) && !hirTypeIsErr(recv.typ) {
+        recv.typ
+    } else {
+        mirLowerRecoveredExprType(bs, recv)
+    }
+    let recvLocal = mirLowerNewLocal(bs, "_opt", recvT, false, span)
+    mirLowerEmitInstr(bs, mirStorageLiveInstr(recvLocal, span))
+    mirLowerExprInto(bs, recv, recvLocal, recvT)
+
+    let disc = mirLowerFreshTemp(bs, hirTInt(), span)
+    let discRV = mirRVDiscriminant(mirPlace(recvLocal), "Int")
+    mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(disc), discRV, span))
+
+    let someBB = mirLowerNewBlock(bs, span)
+    let noneBB = mirLowerNewBlock(bs, span)
+    let merge = mirLowerNewBlock(bs, span)
+
+    let discOp = mirOperandCopy(mirPlace(disc), "Int")
+    let mut cases: List<MirSwitchCase> = []
+    cases.push(mirSwitchCase(1, someBB, "Some"))
+    mirLowerTerminate(bs, mirSwitchIntTerm(discOp, cases, noneBB, span))
+
+    // Some path: project payload → field, wrap as Some(field).
+    bs.cur = someBB
+    let innerT = if recvT.kind == HirTypeOptional && recvT.optionalInner.len() > 0 {
+        recvT.optionalInner[0]
+    } else {
+        hirTypeInvalid()
+    }
+    let innerTypeText = hirTypeString(innerT)
+    let payloadProj = mirVariantProj(1, "Some", 0, innerTypeText)
+    let payloadPlace = mirPlaceProject(mirPlace(recvLocal), payloadProj)
+    let structName = hirTypeNameOf(innerT)
+    let fieldIdx = mirLowerStructFieldIndex(bs.l, structName, e.fieldName)
+    let fieldT = mirLowerStructFieldType(bs.l, structName, e.fieldName)
+    let fieldTypeText = hirTypeString(fieldT)
+    let fieldProj = mirFieldProj(fieldIdx, e.fieldName, fieldTypeText)
+    let fieldPlace = mirPlaceProject(payloadPlace, fieldProj)
+    let fieldOp = mirOperandCopy(fieldPlace, fieldTypeText)
+    let mut someFields: List<MirOperand> = []
+    someFields.push(fieldOp)
+    let someRV = mirRVVariant(1, "Some", someFields, hirTypeString(destT))
+    mirLowerEmitInstr(bs, mirAssignInstr(dest, someRV, span))
+    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+
+    // None path: emit None into dest.
+    bs.cur = noneBB
+    let noneRV = mirRVNullary(MirNullaryNone, hirTypeString(destT))
+    mirLowerEmitInstr(bs, mirAssignInstr(dest, noneRV, span))
+    mirLowerTerminate(bs, mirGotoTerm(merge, span))
+
+    bs.cur = merge
 }
 
 // ====================================================================
