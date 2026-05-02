@@ -110,7 +110,12 @@ const (
 
 	// DW_ATE_* base-type encoding kinds — used by `__debug_info` to
 	// describe how a variable's bytes should be interpreted.
-	dwarfATESigned byte = 0x05
+	dwarfATEBoolean    byte = 0x02
+	dwarfATEFloat      byte = 0x04
+	dwarfATESigned     byte = 0x05
+	dwarfATESignedChar byte = 0x06
+
+	dwarfTagPointerType = 0x0f
 
 	// DW_OP_* expression opcodes.
 	dwarfOpBreg31 byte = 0x8f // sp-based frame address
@@ -118,12 +123,14 @@ const (
 
 	// abbrev codes. The compile unit is code 1; each function is a
 	// DW_TAG_subprogram child encoded with abbrev code 2; locals get
-	// DW_TAG_variable as code 3; their type sits at code 4 once per
-	// distinct base type (only `Int` for Phase B.3 v1).
+	// DW_TAG_variable as code 3; primitive types use abbrev 4
+	// (DW_TAG_base_type) and String adds 5 (DW_TAG_pointer_type that
+	// references a `char` base type).
 	dwarfAbbrevCompileUnit uint64 = 1
 	dwarfAbbrevSubprogram  uint64 = 2
 	dwarfAbbrevVariable    uint64 = 3
 	dwarfAbbrevBaseType    uint64 = 4
+	dwarfAbbrevPointerType uint64 = 5
 )
 
 // dwarfStdOpcodeLengths is the per-opcode operand-count table the line
@@ -588,6 +595,16 @@ func emitDwarfAbbrev() []byte {
 	writeULEB128(&b, 0)
 	writeULEB128(&b, 0)
 
+	// Code 5: DW_TAG_pointer_type, no children. Used for String, which
+	// sits at the ABI boundary as a pointer to UTF-8 char data.
+	writeULEB128(&b, dwarfAbbrevPointerType)
+	writeULEB128(&b, dwarfTagPointerType)
+	b.WriteByte(dwarfChildrenNo)
+	writeULEB128AttrPair(&b, dwarfAtType, dwarfFormRef4)
+	writeULEB128AttrPair(&b, dwarfAtByteSize, dwarfFormData1)
+	writeULEB128(&b, 0)
+	writeULEB128(&b, 0)
+
 	// End of abbreviation table.
 	writeULEB128(&b, 0)
 	return b.Bytes()
@@ -628,15 +645,19 @@ type dwarfVariableInput struct {
 	TypeKind      dwarfBaseTypeKind
 }
 
-// dwarfBaseTypeKind enumerates the primitive ABI-level types Phase B.3
-// can describe to lldb. Adding String / Bool / Float etc. is a follow-up
-// slice — each new kind needs an entry here plus a row in the type DIE
-// emitter below.
+// dwarfBaseTypeKind enumerates the primitive ABI-level types the DWARF
+// emitter can describe to lldb. Each kind owns a single DIE in the CU's
+// type list — except String, which is encoded as a `DW_TAG_pointer_type`
+// pointing at a `DW_TAG_base_type "char"` so lldb prints the contents
+// instead of just the address.
 type dwarfBaseTypeKind int
 
 const (
 	dwarfBaseTypeNone dwarfBaseTypeKind = iota
 	dwarfBaseTypeInt
+	dwarfBaseTypeBool
+	dwarfBaseTypeFloat
+	dwarfBaseTypeString
 )
 
 // emitDwarfInfo returns the byte stream for `__debug_info`. The unit
@@ -675,15 +696,50 @@ func emitDwarfInfo(cu dwarfCompileUnitInputs, subs []dwarfSubprogramInput) dwarf
 	binary.Write(&die, binary.LittleEndian, cu.StmtListOffset)
 
 	// Type DIEs first so variable DIEs can reference them by stable
-	// CU-relative offset. Currently only `Int` is described — adding
-	// String/Bool/etc. is mechanical (extend dwarfBaseTypeKind enum,
-	// emit one more DIE here, return its offset alongside intTypeOff).
-	intTypeStrx := stringTableLookupOrAdd(cu.StringTable, "Int")
-	intTypeOff := headerLen + uint32(die.Len())
-	writeULEB128(&die, dwarfAbbrevBaseType)
-	binary.Write(&die, binary.LittleEndian, intTypeStrx)
-	die.WriteByte(8) // byte_size
-	die.WriteByte(dwarfATESigned)
+	// CU-relative offset. We register every kind a variable in this CU
+	// references; unused kinds stay out so the .o doesn't carry dead
+	// debug info.
+	used := collectUsedTypeKinds(subs)
+	typeOff := map[dwarfBaseTypeKind]uint32{}
+
+	emitBaseType := func(kind dwarfBaseTypeKind, name string, byteSize byte, encoding byte) {
+		strx := stringTableLookupOrAdd(cu.StringTable, name)
+		typeOff[kind] = headerLen + uint32(die.Len())
+		writeULEB128(&die, dwarfAbbrevBaseType)
+		binary.Write(&die, binary.LittleEndian, strx)
+		die.WriteByte(byteSize)
+		die.WriteByte(encoding)
+	}
+
+	if used[dwarfBaseTypeInt] {
+		emitBaseType(dwarfBaseTypeInt, "Int", 8, dwarfATESigned)
+	}
+	if used[dwarfBaseTypeBool] {
+		// DWARF spec encodes Bool as byte_size 1 with DW_ATE_boolean;
+		// lldb refuses any larger boolean and falls back to "void".
+		// Our slot is 8 bytes wide but the value lives in the low byte,
+		// so reading 1 byte from the slot's address is correct.
+		emitBaseType(dwarfBaseTypeBool, "Bool", 1, dwarfATEBoolean)
+	}
+	if used[dwarfBaseTypeFloat] {
+		emitBaseType(dwarfBaseTypeFloat, "Float", 8, dwarfATEFloat)
+	}
+	if used[dwarfBaseTypeString] {
+		// String is a pointer to UTF-8 char data. Two DIEs: a `char`
+		// base type (byte_size 1, signed_char) plus a pointer DIE that
+		// references it. lldb prints the pointee as a C string.
+		charStrx := stringTableLookupOrAdd(cu.StringTable, "char")
+		charOff := headerLen + uint32(die.Len())
+		writeULEB128(&die, dwarfAbbrevBaseType)
+		binary.Write(&die, binary.LittleEndian, charStrx)
+		die.WriteByte(1)
+		die.WriteByte(dwarfATESignedChar)
+
+		typeOff[dwarfBaseTypeString] = headerLen + uint32(die.Len())
+		writeULEB128(&die, dwarfAbbrevPointerType)
+		binary.Write(&die, binary.LittleEndian, charOff)
+		die.WriteByte(8) // pointer width on aarch64
+	}
 
 	subLowPCDieOffs := make([]uint32, 0, len(subs))
 	for _, sub := range subs {
@@ -698,14 +754,18 @@ func emitDwarfInfo(cu dwarfCompileUnitInputs, subs []dwarfSubprogramInput) dwarf
 		die.WriteByte(dwarfOpBreg31)
 		writeSLEB128(&die, 0)
 
-		// Variable DIE children. Phase B.3 v1 only emits Int locals.
+		// Variable DIE children — one per local whose type the encoder
+		// has registered above. Unsupported kinds (DebugTypeNone or
+		// composite) are silently skipped so they don't confuse lldb
+		// with half-described variables.
 		for _, v := range sub.Variables {
-			if v.TypeKind != dwarfBaseTypeInt {
+			off, ok := typeOff[v.TypeKind]
+			if !ok {
 				continue
 			}
 			writeULEB128(&die, dwarfAbbrevVariable)
 			binary.Write(&die, binary.LittleEndian, v.NameStrOffset)
-			binary.Write(&die, binary.LittleEndian, intTypeOff)
+			binary.Write(&die, binary.LittleEndian, off)
 			// location: DW_OP_fbreg <sleb128 slotOffset>
 			var loc bytes.Buffer
 			loc.WriteByte(dwarfOpFbreg)
@@ -731,6 +791,23 @@ func emitDwarfInfo(cu dwarfCompileUnitInputs, subs []dwarfSubprogramInput) dwarf
 		lowPCs = append(lowPCs, headerLen+off)
 	}
 	return dwarfInfoEncoded{Bytes: unit.Bytes(), LowPCOffsets: lowPCs}
+}
+
+// collectUsedTypeKinds walks every variable across every subprogram and
+// records the set of base-type kinds the CU's type DIE list needs to
+// publish. Skipping unused kinds keeps the .o lean and lets future
+// composite-type slices add new kinds without paying their cost on
+// programs that don't use them.
+func collectUsedTypeKinds(subs []dwarfSubprogramInput) map[dwarfBaseTypeKind]bool {
+	used := map[dwarfBaseTypeKind]bool{}
+	for _, sub := range subs {
+		for _, v := range sub.Variables {
+			if v.TypeKind != dwarfBaseTypeNone {
+				used[v.TypeKind] = true
+			}
+		}
+	}
+	return used
 }
 
 // stringTableLookupOrAdd returns the offset of `s` in the supplied table,

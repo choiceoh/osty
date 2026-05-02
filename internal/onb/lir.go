@@ -60,6 +60,9 @@ type DebugTypeKind int
 const (
 	DebugTypeNone DebugTypeKind = iota
 	DebugTypeInt
+	DebugTypeBool
+	DebugTypeFloat  // Float / Float64 (IEEE 754 double)
+	DebugTypeString // String — pointer to UTF-8 bytes at the ABI boundary
 )
 
 // Block is a linear basic block.

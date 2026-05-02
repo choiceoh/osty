@@ -170,6 +170,12 @@ func (s *lowerState) assignLocalSlots(fn *mir.Function) error {
 		}
 		collectTerminatorReads(block.Term, read)
 	}
+	// Parameters always need a slot — even unread ones — so lldb's
+	// `frame variable` can show them and the param shuffle has somewhere
+	// to land the AAPCS64 argument registers.
+	for _, paramID := range fn.Params {
+		read[paramID] = true
+	}
 	delete(read, fn.ReturnLocal)
 	s.localSlots = map[mir.LocalID]int64{}
 	varargBase := int64(0)
@@ -439,6 +445,24 @@ func isABIScalarType(t mir.Type) bool {
 	return t == mir.TInt || t == mir.TBool || t == mir.TString
 }
 
+// mirTypeToDebugKind maps a MIR primitive type to the LIR-side debug kind
+// the DWARF emitter can describe. Unsupported types (List / Map / struct
+// / Option / etc.) collapse to DebugTypeNone so the encoder skips them.
+func mirTypeToDebugKind(t mir.Type) DebugTypeKind {
+	switch t {
+	case mir.TInt:
+		return DebugTypeInt
+	case mir.TBool:
+		return DebugTypeBool
+	case mir.TString:
+		return DebugTypeString
+	case mir.TFloat, mir.TFloat64:
+		return DebugTypeFloat
+	default:
+		return DebugTypeNone
+	}
+}
+
 // debugLocals returns one DebugLocal per user-named local that ended up
 // with a stack slot. Anonymous compiler temporaries (Name == "" or "$ret")
 // and locals without slots are omitted so DWARF doesn't expose synthetic
@@ -461,10 +485,7 @@ func (s *lowerState) debugLocals(fn *mir.Function) []DebugLocal {
 		if !ok {
 			continue
 		}
-		kind := DebugTypeNone
-		if loc.Type == mir.TInt {
-			kind = DebugTypeInt
-		}
+		kind := mirTypeToDebugKind(loc.Type)
 		if kind == DebugTypeNone {
 			continue
 		}

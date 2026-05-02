@@ -316,6 +316,59 @@ func TestONBBackendBinaryRunsArithOnDarwinARM64(t *testing.T) {
 	}
 }
 
+// TestONBBackendLldbFrameVariableShowsBoolAndStringOnDarwinARM64
+// extends Phase B.3 to non-Int scalars. Bool requires byte_size 1 in
+// the DWARF base type (lldb refuses byte_size 8 + DW_ATE_boolean) and
+// String is encoded as DW_TAG_pointer_type → DW_TAG_base_type "char"
+// so lldb prints the pointee. The test uses a function whose body
+// reads only one parameter, exercising the "param always gets a slot"
+// rule that keeps unused params visible to the debugger.
+func TestONBBackendLldbFrameVariableShowsBoolAndStringOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("lldb DWARF integration smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+	if _, err := exec.LookPath("lldb"); err != nil {
+		t.Skip("lldb not found on PATH")
+	}
+	if _, err := exec.LookPath("dsymutil"); err != nil {
+		t.Skip("dsymutil not found on PATH")
+	}
+
+	t.Setenv(onb.EnvStrict, "1")
+	src := `fn first(a: Int, b: Bool, c: String) -> Int { a }
+fn main() {
+    println(first(42, true, "hi"))
+}`
+	req := newBackendRequest(t, EmitBinary, src)
+	req.Layout.Target = "aarch64-apple-darwin"
+	result, err := ONBBackend{}.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ONBBackend.Emit returned error: %v", err)
+	}
+	if out, err := exec.Command("dsymutil", result.Artifacts.Binary).CombinedOutput(); err != nil {
+		t.Fatalf("dsymutil failed: %v\n%s", err, out)
+	}
+	out, err := exec.Command("lldb",
+		"-o", "br set -f main.osty -l 1",
+		"-o", "run",
+		"-o", "frame variable",
+		"-o", "exit",
+		"--", result.Artifacts.Binary,
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("lldb returned error: %v\n%s", err, out)
+	}
+	text := string(out)
+	for _, want := range []string{"a = 42", "b = true", `c = `, `"hi"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("lldb frame variable missing %q:\n%s", want, text)
+		}
+	}
+}
+
 // TestONBBackendLldbFrameVariableShowsLocalsOnDarwinARM64 covers Phase
 // B.3: the DWARF emitter publishes one DW_TAG_variable DIE per named
 // Int local with a DW_OP_fbreg location, and lldb's `frame variable`

@@ -37,6 +37,31 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 10 (DWARF B.4 — Bool/String var inspection, 2026-05-02)** —
+> Phase B.3의 variable inspection을 Int 외 ABI-scalar 두 종류로 확장. Bool은
+> `byte_size 1` + `DW_ATE_boolean` (lldb는 byte_size 8 + boolean을 거부하고
+> "void"로 표시), String은 `DW_TAG_pointer_type` → `DW_TAG_base_type "char"`
+> 체인 (lldb가 pointee를 C 문자열로 표시).
+>
+> 검증: `fn first(a: Int, b: Bool, c: String) -> Int { a }` 함수 진입 시점에
+> `frame variable`이 다음을 표시:
+> - `(long) a = 42`
+> - `(bool) b = true`
+> - `(char *) c = 0x... "hi"`
+>
+> 추가:
+> - `DebugTypeBool` / `DebugTypeString` / `DebugTypeFloat` enum entries
+>   (Float은 ONB lowering이 D-reg 미지원이라 dead code, future-ready)
+> - `dwarfBaseTypeBool` / `Float` / `String` + `dwarfAbbrevPointerType`
+> - `collectUsedTypeKinds`로 변수에서 참조된 타입만 emit (CU dead 타입 X)
+> - `emitDwarfInfo`가 String일 때 char base_type + pointer_type 두 DIE
+> - `mirTypeToDebugKind` helper로 MIR type → debug kind 단일 source
+> - **Param 슬롯이 read 여부와 무관하게 항상 할당** — unused param도
+>   `frame variable`에 표시되도록 (이전엔 unused면 슬롯 없어 invisible)
+>
+> 한계: Float은 ONB native가 아직 처리 못 함 (Float 인자/반환 → fallback to
+> LLVM). struct/list/Map composite 타입은 후속 슬라이스.
+>
 > **Slice A2 Week 9 (DWARF B.3 — variable inspection, 2026-05-02)** —
 > lldb `frame variable` 가 ONB 빌드 결과에서 named Int local의 현재 값을
 > 보여줌. 추가:
