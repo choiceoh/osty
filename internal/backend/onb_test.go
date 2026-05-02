@@ -905,6 +905,79 @@ fn main() {
 	}
 }
 
+// TestONBBackendBinaryRunsListGenericsOnDarwinARM64 covers Phase A2
+// Week 16: `List<T>` runtime-call dispatch for T ∈ {Bool, Float64,
+// String}. Every case calls `_osty_rt_list_new`, pushes two scalar
+// values via the type-specific runtime symbol, then prints the list
+// length. Failures point at the wrong runtime symbol or a register
+// mis-routing: a List<Float64> push that goes through x1 instead of
+// d0 would crash the runtime as it reads garbage bits.
+func TestONBBackendBinaryRunsListGenericsOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("ONB List<T> executable smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	cases := []struct {
+		name, src, want string
+	}{
+		{
+			name: "list_bool",
+			src: `fn main() {
+    let mut v: List<Bool> = []
+    v.push(true)
+    v.push(false)
+    v.push(true)
+    println(v.len())
+}`,
+			want: "3\n",
+		},
+		{
+			name: "list_float",
+			src: `fn main() {
+    let mut v: List<Float64> = []
+    v.push(3.14)
+    v.push(2.71)
+    println(v.len())
+}`,
+			want: "2\n",
+		},
+		{
+			name: "list_string",
+			src: `fn main() {
+    let mut v: List<String> = []
+    v.push("hi")
+    v.push("yo")
+    v.push("hey")
+    v.push("bye")
+    println(v.len())
+}`,
+			want: "4\n",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(onb.EnvStrict, "1")
+			req := newBackendRequest(t, EmitBinary, tc.src)
+			req.Layout.Target = "aarch64-apple-darwin"
+			result, err := ONBBackend{}.Emit(context.Background(), req)
+			if err != nil {
+				t.Fatalf("ONBBackend.Emit returned error: %v", err)
+			}
+			out, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+			if err != nil {
+				t.Fatalf("binary returned error: %v\n%s", err, out)
+			}
+			if got := string(out); got != tc.want {
+				t.Fatalf("binary output = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestONBBackendBinaryRunsStringAndListOnDarwinARM64 exercises Phase A2's
 // runtime-call slice: String concatenation and `List<Int>` push/len. These
 // shapes lower to `bl _osty_rt_strings_Concat`, `bl _osty_rt_list_new`,
