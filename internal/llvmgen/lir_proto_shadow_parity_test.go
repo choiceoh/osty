@@ -435,6 +435,9 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		// ----- MirRVDiscriminant + MirRVLen rvalue dispatch -----
 		{"lirParityManualDiscriminantExtractIntFixture", []string{"%Option.Int = type", "define i64 @whichTag(", "extractvalue %Option.Int", ", 0", "ret i64"}},
 		{"lirParityManualLenRValueListIntFixture", []string{"declare i64 @osty_rt_list_len(ptr)", "define i64 @lenViaRV(ptr", "call i64 @osty_rt_list_len(", "ret i64"}},
+		// ----- MirRVNullary + MirCastOptionalWrap/Unwrap -----
+		{"lirParityManualNullaryNoneOptionIntFixture", []string{"%Option.Int = type", "define %Option.Int @noneRV()", "insertvalue %Option.Int undef, i64 0, 0", "insertvalue %Option.Int", "ret %Option.Int"}},
+		{"lirParityManualCastOptionalWrapPassthroughFixture", []string{"define i64 @wrapId(i64", "ret i64"}},
 	}
 
 	for _, tt := range want {
