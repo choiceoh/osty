@@ -14747,21 +14747,35 @@ typedef struct osty_regex_compiled {
      *                                through to the Pike VM. The flag
      *                                is set at compile time once;
      *                                runtime allocations are cheap
-     *                                relative to a long-input scan. */
+     *                                relative to a long-input scan.
+     *   preds_total >= 0           → predecessor table embedded inline
+     *                                in the GC blob (Phase 9e). Built
+     *                                once at compile time when the
+     *                                eager backward DFA overflows so
+     *                                the per-call lazy backward DFA
+     *                                init can skip a two-pass walk
+     *                                over `prog`. preds_total == -1
+     *                                means "not embedded" (eager
+     *                                backward DFA succeeded, so lazy
+     *                                backward isn't needed). */
     int32_t dfa_state_count;
     int32_t dfa_back_state_count;
     int32_t dfa_lazy_eligible;
-    /* Inline tail (Phase 9c layout):
+    int32_t preds_total;
+    /* Inline tail (Phase 9e layout):
      *   prog[prog_len], classes[class_count],
      *   osty_re_name_entry name_table[name_count],
      *   char name_data[name_data_len],
      *   uint8_t dfa_is_match[dfa_state_count],
      *   uint16_t dfa_transitions[dfa_state_count * 256],
      *   uint8_t dfa_back_is_match[dfa_back_state_count],
-     *   uint16_t dfa_back_transitions[dfa_back_state_count * 256]
-     * Tails are only present when their state_count > 0. The lazy DFA
-     * has no tail bytes — its state cache lives in stack/heap memory
-     * for the duration of one entry-function call. */
+     *   uint16_t dfa_back_transitions[dfa_back_state_count * 256],
+     *   int32_t preds_offsets[prog_len + 1]   (preds_total >= 0)
+     *   int32_t preds_flat[preds_total]       (preds_total >= 0)
+     * Tails are only present when their counts are > 0 (or, for preds,
+     * when preds_total >= 0). The lazy DFA itself has no tail bytes —
+     * its state cache lives in stack/heap memory for the duration of
+     * one entry-function call. */
 } osty_regex_compiled;
 
 /* Phase 5 — named-capture binding stored inline at the end of a
@@ -14837,6 +14851,19 @@ static inline const uint8_t *osty_re_compiled_dfa_back_is_match(const osty_regex
 
 static inline const uint16_t *osty_re_compiled_dfa_back_transitions(const osty_regex_compiled *re) {
     return (const uint16_t *)(osty_re_compiled_dfa_back_is_match(re) + (size_t)re->dfa_back_state_count);
+}
+
+/* Phase 9e — embedded preds tail. Only present when preds_total >= 0;
+ * callers must check the flag before reading. The arrays sit
+ * immediately after the backward-DFA transitions, sized by prog_len+1
+ * (offsets) and preds_total (flat). */
+static inline const int32_t *osty_re_compiled_preds_offsets(const osty_regex_compiled *re) {
+    return (const int32_t *)(osty_re_compiled_dfa_back_transitions(re)
+        + (size_t)re->dfa_back_state_count * 256);
+}
+
+static inline const int32_t *osty_re_compiled_preds_flat(const osty_regex_compiled *re) {
+    return osty_re_compiled_preds_offsets(re) + (size_t)re->prog_len + 1;
 }
 
 /* Parser scratch state. The growing instruction / class buffers live
@@ -16634,8 +16661,13 @@ typedef struct osty_re_lazy_dfa {
     int match_pc;         /* forward: first MATCH PC in prog (cached so
                            * is_match check is O(1) per state insert
                            * instead of O(prog_len)) */
-    osty_re_preds preds;  /* backward direction only */
+    osty_re_preds preds;  /* backward direction only — points into the
+                           * regex blob's embedded preds tail when
+                           * available (preds_owned == 0), otherwise
+                           * malloc'd here as a fallback. */
     int has_preds;
+    int preds_owned;      /* 1 = malloc'd here, must free on teardown;
+                           * 0 = view onto the regex blob, do not free. */
     int initial_state;
     osty_re_lazy_state states[OSTY_RE_LAZY_DFA_CAP];
     uint64_t *bits_pool;  /* OSTY_RE_LAZY_DFA_CAP * word_count uint64s */
@@ -16805,16 +16837,29 @@ static int osty_re_lazy_get_or_insert(osty_re_lazy_dfa *L, const uint64_t *bits)
 }
 
 static void osty_re_lazy_dfa_free(osty_re_lazy_dfa *L) {
-    if (L->has_preds) {
+    if (L->has_preds && L->preds_owned) {
         osty_re_preds_free(&L->preds);
-        L->has_preds = 0;
     }
+    L->has_preds = 0;
+    L->preds_owned = 0;
     if (L->scratch.bits) osty_re_pc_set_free(&L->scratch);
     if (L->seed.bits) osty_re_pc_set_free(&L->seed);
     if (L->bits_pool) {
         free(L->bits_pool);
         L->bits_pool = NULL;
     }
+}
+
+/* Phase 9e — fill `out` with a non-owning view onto the regex blob's
+ * embedded preds tail. The caller must NOT free `out`. Returns 0 if
+ * preds are embedded (preds_total >= 0); -1 otherwise (caller falls
+ * back to malloc'd preds_build). */
+static int osty_re_preds_view_embedded(const osty_regex_compiled *re, osty_re_preds *out) {
+    if (re->preds_total < 0) return -1;
+    out->offsets = (int32_t *)osty_re_compiled_preds_offsets(re);
+    out->flat = (int32_t *)osty_re_compiled_preds_flat(re);
+    out->total = re->preds_total;
+    return 0;
 }
 
 static int osty_re_lazy_dfa_init(osty_re_lazy_dfa *L, const osty_regex_compiled *re, int forward) {
@@ -16847,7 +16892,12 @@ static int osty_re_lazy_dfa_init(osty_re_lazy_dfa *L, const osty_regex_compiled 
         osty_re_pc_set_add(&L->seed, 0);
         osty_re_epsilon_closure(&L->seed, re->prog, re->prog_len);
     } else {
-        if (osty_re_preds_build(re, &L->preds) != 0) goto fail;
+        if (osty_re_preds_view_embedded(re, &L->preds) == 0) {
+            L->preds_owned = 0;  /* view onto blob; do not free */
+        } else {
+            if (osty_re_preds_build(re, &L->preds) != 0) goto fail;
+            L->preds_owned = 1;
+        }
         L->has_preds = 1;
         int match_pc = OSTY_RE_LAZY_NIL;
         for (int p = 0; p < re->prog_len; p++) {
@@ -17215,6 +17265,7 @@ void *osty_rt_regex_compile(const char *pattern) {
     probe.dfa_state_count = 0;
     probe.dfa_back_state_count = 0;
     probe.dfa_lazy_eligible = 0;
+    probe.preds_total = -1;
     uint16_t *dfa_trans = NULL;
     uint8_t *dfa_match = NULL;
     uint16_t *dfa_back_trans = NULL;
@@ -17251,18 +17302,35 @@ void *osty_rt_regex_compile(const char *pattern) {
     if (dfa_compatible && (dfa_states == 0 || dfa_back_states == 0)) {
         dfa_lazy_eligible = 1;
     }
+    /* Phase 9e — when the lazy backward DFA is reachable (eager
+     * backward overflowed AND pattern is DFA-compatible), build the
+     * predecessor table now so each entry-function call can skip the
+     * two-pass walk over `prog`. preds_total stays -1 otherwise; the
+     * lazy-DFA backward init checks the flag before reading the
+     * embedded arrays. */
+    osty_re_preds embedded_preds = (osty_re_preds){0};
+    int has_embedded_preds = 0;
+    if (dfa_compatible && dfa_back_states == 0 && ps.prog_len > 0) {
+        if (osty_re_preds_build(&probe, &embedded_preds) == 0) {
+            has_embedded_preds = 1;
+        }
+    }
     size_t dfa_match_bytes = (size_t)dfa_states;
     size_t dfa_trans_bytes = (size_t)dfa_states * 256 * sizeof(uint16_t);
     size_t dfa_back_match_bytes = (size_t)dfa_back_states;
     size_t dfa_back_trans_bytes = (size_t)dfa_back_states * 256 * sizeof(uint16_t);
+    size_t preds_offsets_bytes = has_embedded_preds ? sizeof(int32_t) * ((size_t)ps.prog_len + 1) : 0;
+    size_t preds_flat_bytes = has_embedded_preds ? sizeof(int32_t) * (size_t)embedded_preds.total : 0;
 
-    /* Allocate one contiguous GC blob: header + prog + classes + name table + name data + dfa + back-dfa. */
+    /* Allocate one contiguous GC blob: header + prog + classes + name table + name data + dfa + back-dfa + preds. */
     size_t hdr = sizeof(osty_regex_compiled);
     size_t prog_bytes = sizeof(osty_re_inst) * (size_t)ps.prog_len;
     size_t class_bytes = sizeof(osty_re_cclass) * (size_t)ps.class_count;
     size_t name_table_bytes = sizeof(osty_re_name_entry) * (size_t)ps.name_count;
     size_t name_data_bytes = (size_t)ps.name_data_len;
-    size_t total = hdr + prog_bytes + class_bytes + name_table_bytes + name_data_bytes + dfa_match_bytes + dfa_trans_bytes + dfa_back_match_bytes + dfa_back_trans_bytes;
+    size_t total = hdr + prog_bytes + class_bytes + name_table_bytes + name_data_bytes
+        + dfa_match_bytes + dfa_trans_bytes + dfa_back_match_bytes + dfa_back_trans_bytes
+        + preds_offsets_bytes + preds_flat_bytes;
     osty_regex_compiled *re = (osty_regex_compiled *)osty_gc_allocate_managed(total, OSTY_GC_KIND_GENERIC, "runtime.regex.compile", NULL, NULL);
     re->prog = (osty_re_inst *)((char *)re + hdr);
     re->prog_len = ps.prog_len;
@@ -17274,6 +17342,7 @@ void *osty_rt_regex_compile(const char *pattern) {
     re->dfa_state_count = dfa_states;
     re->dfa_back_state_count = dfa_back_states;
     re->dfa_lazy_eligible = dfa_lazy_eligible;
+    re->preds_total = has_embedded_preds ? embedded_preds.total : -1;
     if (ps.prog_len > 0) memcpy(re->prog, ps.prog, prog_bytes);
     if (ps.class_count > 0) memcpy(re->classes, ps.classes, class_bytes);
     if (ps.name_count > 0) {
@@ -17289,6 +17358,13 @@ void *osty_rt_regex_compile(const char *pattern) {
     if (dfa_back_states > 0) {
         memcpy((uint8_t *)osty_re_compiled_dfa_back_is_match(re), dfa_back_match, dfa_back_match_bytes);
         memcpy((uint16_t *)osty_re_compiled_dfa_back_transitions(re), dfa_back_trans, dfa_back_trans_bytes);
+    }
+    if (has_embedded_preds) {
+        memcpy((int32_t *)osty_re_compiled_preds_offsets(re), embedded_preds.offsets, preds_offsets_bytes);
+        if (preds_flat_bytes > 0) {
+            memcpy((int32_t *)osty_re_compiled_preds_flat(re), embedded_preds.flat, preds_flat_bytes);
+        }
+        osty_re_preds_free(&embedded_preds);
     }
     free(ps.prog);
     free(ps.classes);
