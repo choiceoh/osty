@@ -444,6 +444,7 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualAggListIntLiteralFixture", []string{"declare ptr @osty_rt_list_new()", "declare void @osty_rt_list_push_i64(ptr, i64)", "call ptr @osty_rt_list_new()", "call void @osty_rt_list_push_i64(", "ret ptr"}},
 		{"lirParityManualAggListStructBytesV1Fixture", []string{"%Pair = type { i64, i64 }", "declare ptr @osty_rt_list_new()", "declare void @osty_rt_list_push_bytes_v1(ptr, ptr, i64)", "call ptr @osty_rt_list_new()", "alloca %Pair", "store %Pair", "getelementptr inbounds %Pair, ptr null, i32 1", "ptrtoint ptr", "call void @osty_rt_list_push_bytes_v1(", "ret ptr"}},
 		{"lirParityManualListRemoveAtStructBytesV1Fixture", []string{"%Pair = type { i64, i64 }", "declare void @osty_rt_list_get_bytes_v1(ptr, i64, ptr, i64)", "declare void @osty_rt_list_remove_at_discard(ptr, i64)", "alloca %Pair", "getelementptr inbounds %Pair, ptr null, i32 1", "ptrtoint ptr", "call void @osty_rt_list_get_bytes_v1(", "load %Pair", "call void @osty_rt_list_remove_at_discard(", "ret %Pair"}},
+		{"lirParityManualMapGetOrStructBytesV1Fixture", []string{"%Pair = type { i64, i64 }", "declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)", "alloca %Pair", "call i1 @osty_rt_map_get_string(", "load %Pair", "store %Pair", "ret %Pair"}},
 	}
 
 	for _, tt := range want {

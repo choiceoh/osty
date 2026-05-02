@@ -4368,10 +4368,6 @@ fn lirLowerMirMapGetOr(l: LirMirFunctionLowerer, instr: MirInstr) {
     if !(recv.ok) {
         return
     }
-    if !(llvmListUsesTypedRuntime(recv.valueLir.llvm)) {
-        lirLowerError(l, LirDiagUnsupported, "map.getOr composite value type `" + recv.valueTypeName + "` needs the bytes-v1 runtime fallback (deferred)", "map.getOr")
-        return
-    }
     let key = lirLowerCoercedOperand(l, instr.args[1], recv.elemTypeName, recv.elemLir, "map.getOr key")
     if key.value == "" {
         return
@@ -4386,14 +4382,29 @@ fn lirLowerMirMapGetOr(l: LirMirFunctionLowerer, instr: MirInstr) {
         lirLowerError(l, LirDiagUnsupported, "map.getOr destination type `" + loc.typ + "` is not implemented", "map.getOr")
         return
     }
-    if destType.llvm != recv.valueLir.llvm {
+    // valueType: typed-lane for scalar (i64/i1/double/ptr/string), or
+    // the lowered MIR layout (`%Pair` etc.) for composite. The runtime
+    // probe `osty_rt_map_get_<keysuf>` is element-agnostic on the value
+    // side (memcpy of map->value_size into the out-slot), so the same
+    // probe symbol works for both.
+    let valueType = if llvmListUsesTypedRuntime(recv.valueLir.llvm) {
+        recv.valueLir
+    } else {
+        let composite = lirLowerMirType(l, recv.valueTypeName)
+        if lirTypeIsZero(composite) || lirTypeIsVoid(composite) {
+            lirLowerError(l, LirDiagUnsupported, "map.getOr composite value type `" + recv.valueTypeName + "` has no MIR layout", "map.getOr")
+            return
+        }
+        composite
+    }
+    if destType.llvm != valueType.llvm {
         lirLowerError(l, LirDiagUnsupported, "map.getOr destination type `" + loc.typ + "` does not match value type `" + recv.valueTypeName + "`", "map.getOr")
         return
     }
     let symbol = mirRtMapSymbol("get_" + llvmMapKeySuffix(recv.elemLir.llvm, recv.isString))
     lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirIntType(1), [lirPtrType(), recv.elemLir, lirPtrType()], false))
     let outSlot = lirFresh(l)
-    l.instrs.push(lirAlloca(outSlot, recv.valueLir, 0))
+    l.instrs.push(lirAlloca(outSlot, valueType, 0))
     let presentReg = lirFresh(l)
     l.instrs.push(lirCall(presentReg, lirIntType(1), "@" + symbol, [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(recv.elemLir, key.value), lirOperand(lirPtrType(), outSlot)]))
     let mergeSlot = lirFresh(l)
@@ -4403,7 +4414,7 @@ fn lirLowerMirMapGetOr(l: LirMirFunctionLowerer, instr: MirInstr) {
     let endLabel = lirFreshAuxLabel(l, "map.getOr.end")
     lirCutBlockCondBr(l, presentReg, hitLabel, missLabel, hitLabel)
     let loaded = lirFresh(l)
-    l.instrs.push(lirLoad(loaded, recv.valueLir, outSlot, 0))
+    l.instrs.push(lirLoad(loaded, valueType, outSlot, 0))
     l.instrs.push(lirStore(lirOperand(destType, loaded), mergeSlot, 0))
     lirCutBlockBr(l, endLabel)
     l.currentBlockLabel = missLabel
