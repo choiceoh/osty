@@ -91,18 +91,22 @@ func firstN(b []byte, n int) string {
 // TestNativeToolchainMergedMIRErrTypeFloor locks the current MIR
 // ErrType leak count as a progress floor. After the operand-based
 // type recovery in ir.Lower (lowerBinary / lowerIfExpr / lowerCall /
-// lowerQualifiedCall), the merged native toolchain carries only a
-// small handful of ErrType locals into MIR. Regressions that increase
-// that count
-// (e.g. a new checker-coverage gap or a reverted recovery helper)
-// will re-expand cascading ErrType propagation and fail this gate.
+// lowerQualifiedCall) — and the follow-up sweeps that closed
+// iflet/coalesce/q/opt and partial-struct field lookup (#948, #1054,
+// #1085, #1093) — the merged native toolchain now carries **zero**
+// ErrType locals into MIR. The floor is set to 0 so any new
+// checker-coverage gap or reverted recovery helper fails the gate
+// immediately rather than silently re-expanding cascading ErrType
+// propagation.
 //
-// When the number drops below the floor, tighten it.
+// If a future change legitimately needs to admit ErrType locals
+// again, raise the floor with the same care you'd take to lower it:
+// document the source pattern that's regressing.
 func TestNativeToolchainMergedMIRErrTypeFloor(t *testing.T) {
 	if testing.Short() {
 		t.Skip("slow; skipped in -short")
 	}
-	const floor = 8
+	const floor = 0
 	root, err := filepath.Abs("../..")
 	if err != nil {
 		t.Fatalf("abs root: %v", err)
@@ -149,8 +153,5 @@ func TestNativeToolchainMergedMIRErrTypeFloor(t *testing.T) {
 	}
 	if errCount > floor {
 		t.Fatalf("ErrType local count regressed: got %d, floor %d — a checker-coverage gap or a reverted recovery helper likely leaked typing back into MIR", errCount, floor)
-	}
-	if errCount+10 < floor {
-		t.Logf("ErrType count %d is well below floor %d — consider tightening the floor to catch future regressions sooner", errCount, floor)
 	}
 }
