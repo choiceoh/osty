@@ -4182,6 +4182,20 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 			})
 			return
 		}
+		// `dbg<T>(value: T) -> T` — diagnostic prelude builtin
+		// (LANG_SPEC §A.10). Today: identity passthrough — assign
+		// the argument operand into the destination. A future
+		// refinement adds the eprintln (location + expr text + value)
+		// shape; the identity step keeps user programs compiling now.
+		if id.Name == "dbg" && len(c.Args) == 1 && dest != nil {
+			valueOp := bs.lowerExprAsOperand(c.Args[0].Value)
+			bs.emit(&AssignInstr{
+				Dest:  *dest,
+				Src:   &UseRV{Op: valueOp},
+				SpanV: c.SpanV,
+			})
+			return
+		}
 		if module, name, ok := loweredStdlibFreeSymbol(id.Name); ok {
 			switch module {
 			case "bytes":

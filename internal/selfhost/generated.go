@@ -36651,6 +36651,14 @@ func checkInstallPrelude(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "unreachable", owner: "", receiverTy: -1, retTy: tNever(env.tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	checkRegisterFn(env, &CheckFnSig{name: "todo", owner: "", receiverTy: -1, retTy: tNever(env.tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	checkRegisterFn(env, &CheckFnSig{name: "abort", owner: "", receiverTy: -1, retTy: tNever(env.tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// `dbg<T>(value: T) -> T` — diagnostic builtin (LANG_SPEC §A.10
+	// `dbg(expr)`). The MIR lowerer treats it as an identity
+	// passthrough today; a future refinement adds the eprintln
+	// (location + expr text + value) shape.
+	{
+		tDbgT := tyNamed(env.tys, "T", make([]int, 0, 1))
+		checkRegisterFn(env, &CheckFnSig{name: "dbg", owner: "", receiverTy: -1, retTy: tDbgT, paramNames: []string{"value"}, paramTys: []int{tDbgT}, generics: []string{"T"}, genericBounds: make([]*CheckGenericBound, 0, 1)})
+	}
 	// Osty: /tmp/selfhost_merged.osty:16088:5
 	tUnit_ := tUnit(env.tys)
 	_ = tUnit_

@@ -3763,6 +3763,17 @@ pub fn mirLowerCallExprInto(
             )
             return
         }
+        // 1b. `dbg<T>(value: T) -> T` — diagnostic prelude builtin
+        //     (LANG_SPEC §A.10). Today: identity passthrough — assign
+        //     the argument operand into the destination so the value
+        //     flows through unchanged. A future refinement adds the
+        //     eprintln (location + expr text + value) shape; the
+        //     identity step keeps user programs compiling now.
+        if callee.identName == "dbg" && e.callArgs.len() == 1 {
+            let valueOp = mirLowerExprAsOperand(bs, e.callArgs[0].value)
+            mirLowerEmitInstr(bs, mirAssignInstr(dest, mirRVUse(valueOp), span))
+            return
+        }
         let bk = mirLowerBuiltinFreeCallIntrinsic(bs, callee.identName, e.callArgs)
         match bk {
             MirIntrinsicInvalid -> {},

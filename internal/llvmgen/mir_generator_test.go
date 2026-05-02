@@ -1509,6 +1509,68 @@ func TestGenerateFromMIRDivergingBuiltinsLowerThroughPanic(t *testing.T) {
 	}
 }
 
+// TestGenerateFromMIRDbgLowersAsIdentity pins the prelude diagnostic
+// builtin `dbg<T>(value: T) -> T` (LANG_SPEC §A.10). The current
+// implementation lowers `dbg(x)` as identity passthrough — the
+// destination receives the operand directly with no runtime call.
+// Closes the LLVM000 "unresolved symbol dbg" gap that previously
+// rejected any program calling `dbg(...)`. A future refinement adds
+// the eprintln (location + expr text + value) shape.
+func TestGenerateFromMIRDbgLowersAsIdentity(t *testing.T) {
+	// fn check(n: Int) -> Int {
+	//     let x = dbg(n)
+	//     x + 1
+	// }
+	fn := &ir.FnDecl{
+		Name:   "check",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "n", Type: ir.TInt}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Name: "x",
+					Type: ir.TInt,
+					Value: &ir.CallExpr{
+						Callee: &ir.Ident{Name: "dbg", Kind: ir.IdentBuiltin, T: &ir.FnType{Params: []ir.Type{ir.TInt}, Return: ir.TInt}},
+						Args:   []ir.Arg{{Value: &ir.Ident{Name: "n", Kind: ir.IdentParam, T: ir.TInt}}},
+						T:      ir.TInt,
+					},
+				},
+			},
+			Result: &ir.BinaryExpr{
+				Op:    ir.BinAdd,
+				Left:  &ir.Ident{Name: "x", Kind: ir.IdentLocal, T: ir.TInt},
+				Right: &ir.IntLit{Text: "1", T: ir.TInt},
+				T:     ir.TInt,
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/dbg_lower.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	// Identity passthrough means no `@dbg` call survives — the
+	// argument flows straight into the next instruction.
+	if strings.Contains(got, "@dbg(") {
+		t.Fatalf("dbg should lower as identity (no @dbg call), got:\n%s", got)
+	}
+	if strings.Contains(got, "unresolved symbol dbg") {
+		t.Fatalf("output still contains unresolved-symbol diagnostic:\n%s", got)
+	}
+	for _, want := range []string{
+		"define i64 @check(i64",
+		"add i64",
+		"ret i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateFromMIROptionUnwrapLowers pins the MIR emitter for the four
 // Option<T> method intrinsics (isSome, isNone, unwrap, unwrapOr). The
 // underlying lowering keeps Option<T> as `{ i64 disc, i64 payload }`
