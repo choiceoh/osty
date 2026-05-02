@@ -25,7 +25,7 @@ type lirProtoShadowFixture struct {
 
 func TestLIRProtoCurrentGeneratorSourceFixturesShadowParity(t *testing.T) {
 	fixtures := loadLIRProtoCurrentGeneratorSourceFixtures(t)
-	if got, want := len(fixtures), 37; got != want {
+	if got, want := len(fixtures), 41; got != want {
 		t.Fatalf("current-generator fixture count = %d, want %d", got, want)
 	}
 
