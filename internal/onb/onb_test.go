@@ -1589,6 +1589,100 @@ func TestLowerMIROptionVariantStoresTagAndPayload(t *testing.T) {
 	}
 }
 
+// floatArithModule mirrors `let c = 1.5 + 2.5; println(c)` so the
+// Float64 lowering paths can be exercised in a unit test without
+// bringing the full pipeline. The fixture pins the BinaryRV with
+// FloatConst operands path the front end emits, so a lowering
+// regression (e.g. FAdd routed to integer AddReg) shows up as a
+// concrete instruction-class mismatch.
+func floatArithModule() *mir.Module {
+	mainFn := &mir.Function{
+		Name:        "main",
+		ReturnType:  mir.TUnit,
+		ReturnLocal: 0,
+		Entry:       0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "$ret", Type: mir.TUnit, IsReturn: true},
+			{ID: 1, Name: "c", Type: mir.TFloat64},
+		},
+	}
+	bb := mainFn.NewBlock(mir.Span{})
+	mainFn.Block(bb).Instrs = []mir.Instr{
+		&mir.AssignInstr{
+			Dest: mir.Place{Local: 1},
+			Src: &mir.BinaryRV{
+				Op:    mir.BinAdd,
+				Left:  &mir.ConstOp{Const: &mir.FloatConst{Value: 1.5, T: mir.TFloat64}, T: mir.TFloat64},
+				Right: &mir.ConstOp{Const: &mir.FloatConst{Value: 2.5, T: mir.TFloat64}, T: mir.TFloat64},
+				T:     mir.TFloat64,
+			},
+		},
+		&mir.IntrinsicInstr{Kind: mir.IntrinsicPrintln, Args: []mir.Operand{&mir.CopyOp{Place: mir.Place{Local: 1}, T: mir.TFloat64}}},
+	}
+	mainFn.Block(bb).SetTerminator(&mir.ReturnTerm{})
+	return &mir.Module{Functions: []*mir.Function{mainFn}, Layouts: mir.NewLayoutTable()}
+}
+
+func TestLowerMIRFloatAdditionEmitsFaddReg(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(floatArithModule(), Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR(floatArithModule) returned error: %v", err)
+	}
+	mainFn := &program.Functions[0]
+	var sawFmovD, sawFadd, sawStoreFloat, sawFmovX bool
+	for _, blk := range mainFn.Blocks {
+		for _, instr := range blk.Instrs {
+			switch instr.(type) {
+			case *FmovDFromX:
+				sawFmovD = true
+			case *FaddReg:
+				sawFadd = true
+			case *StoreFloat64Stack:
+				sawStoreFloat = true
+			case *FmovXFromD:
+				sawFmovX = true
+			}
+		}
+	}
+	if !sawFmovD {
+		t.Fatalf("expected FmovDFromX (float const materialisation); instrs=%+v", mainFn.Blocks[0].Instrs)
+	}
+	if !sawFadd {
+		t.Fatalf("expected FaddReg for float +; instrs=%+v", mainFn.Blocks[0].Instrs)
+	}
+	if !sawStoreFloat {
+		t.Fatalf("expected StoreFloat64Stack for binary result; instrs=%+v", mainFn.Blocks[0].Instrs)
+	}
+	if !sawFmovX {
+		t.Fatalf("expected FmovXFromD for printf vararg slot; instrs=%+v", mainFn.Blocks[0].Instrs)
+	}
+}
+
+func TestLowerMIRFloatLocalSurfacesAsDebugFloat(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(floatArithModule(), Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR(floatArithModule) returned error: %v", err)
+	}
+	mainFn := &program.Functions[0]
+	var cLocal *DebugLocal
+	for i := range mainFn.DebugLocals {
+		if mainFn.DebugLocals[i].Name == "c" {
+			cLocal = &mainFn.DebugLocals[i]
+			break
+		}
+	}
+	if cLocal == nil {
+		t.Fatalf("expected DebugLocal for `c`; got %+v", mainFn.DebugLocals)
+	}
+	if cLocal.TypeKind != DebugTypeFloat {
+		t.Fatalf("c TypeKind = %v, want DebugTypeFloat", cLocal.TypeKind)
+	}
+}
+
 func TestEmitObjectIncludesStructDIEForPointModule(t *testing.T) {
 	t.Parallel()
 

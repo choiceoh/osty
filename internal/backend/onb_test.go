@@ -814,6 +814,97 @@ fn main() {
 	}
 }
 
+// TestONBBackendBinaryRunsFloat64OnDarwinARM64 covers Phase A2 Week 15:
+// Float64 const materialisation, IEEE arithmetic, println via printf
+// "%g\n", and the AAPCS64 d0..d7 / d0 FP-arg + return convention.
+//
+// Cases:
+//   - **const_print**: tests `let x: Float64 = 3.14; println(x)` —
+//     drives floatConstInstrs (movz/movk + fmov d, x) + the printf
+//     vararg slot Float path.
+//   - **arith**: `(1.5 + 2.5) * 3.0` — exercises FAdd + FMul +
+//     intermediate float local store/load.
+//   - **fn_param_ret**: `fn double(x: Float64) -> Float64 { x * 2.0 }`
+//     drives the d0 param shuffle + d0 return epilogue and proves
+//     the AAPCS64 FP cursor works at call boundaries.
+//   - **mixed_int_float**: `fn scale(n: Int, f: Float64) -> Float64
+//     { f * n.toFloat64() }` — actually we keep this simpler: just
+//     pass an Int and a Float to verify the two cursors stay
+//     independent. The Int local goes to x0 and the Float local
+//     to d0, not x0/x1 (a regression on cursor isolation would
+//     mis-route the Float through x1).
+func TestONBBackendBinaryRunsFloat64OnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("ONB Float64 executable smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	cases := []struct {
+		name, src, want string
+	}{
+		{
+			name: "const_print",
+			src: `fn main() {
+    let x: Float64 = 3.14
+    println(x)
+}`,
+			want: "3.14\n",
+		},
+		{
+			name: "arith",
+			src: `fn main() {
+    let a: Float64 = 1.5
+    let b: Float64 = 2.5
+    let c = (a + b) * 3.0
+    println(c)
+}`,
+			want: "12\n",
+		},
+		{
+			name: "fn_param_ret",
+			src: `fn double(x: Float64) -> Float64 { x * 2.0 }
+fn main() {
+    let v = double(3.5)
+    println(v)
+}`,
+			want: "7\n",
+		},
+		{
+			name: "mixed_int_float_args",
+			src: `fn add(n: Int, f: Float64) -> Float64 { f + 1.0 }
+fn main() {
+    let v = add(10, 2.5)
+    println(v)
+}`,
+			want: "3.5\n",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(onb.EnvStrict, "1")
+			req := newBackendRequest(t, EmitBinary, tc.src)
+			req.Layout.Target = "aarch64-apple-darwin"
+			result, err := ONBBackend{}.Emit(context.Background(), req)
+			if err != nil {
+				t.Fatalf("ONBBackend.Emit returned error: %v", err)
+			}
+			if result == nil || result.Artifacts.Binary == "" {
+				t.Fatalf("missing binary artifact: %+v", result)
+			}
+			out, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+			if err != nil {
+				t.Fatalf("binary returned error: %v\n%s", err, out)
+			}
+			if got := string(out); got != tc.want {
+				t.Fatalf("binary output = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestONBBackendBinaryRunsStringAndListOnDarwinARM64 exercises Phase A2's
 // runtime-call slice: String concatenation and `List<Int>` push/len. These
 // shapes lower to `bl _osty_rt_strings_Concat`, `bl _osty_rt_list_new`,

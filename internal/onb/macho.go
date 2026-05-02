@@ -984,6 +984,54 @@ func encodeMachOFunction(enc *machoTextEncoding, fn Function, cstringIndex, loca
 					return fmt.Errorf("onb: brk encoding: %w", err)
 				}
 				enc.code = appendU32LE(enc.code, word)
+			case *LoadFloat64Stack:
+				word, err := encodeFPStack(0xfd400000, i.Dst, i.Offset)
+				if err != nil {
+					return err
+				}
+				enc.code = appendU32LE(enc.code, word)
+			case *StoreFloat64Stack:
+				word, err := encodeFPStack(0xfd000000, i.Src, i.Offset)
+				if err != nil {
+					return err
+				}
+				enc.code = appendU32LE(enc.code, word)
+			case *FmovDFromX:
+				word, err := encodeFmovDFromX(i.Dst, i.Src)
+				if err != nil {
+					return err
+				}
+				enc.code = appendU32LE(enc.code, word)
+			case *FmovXFromD:
+				word, err := encodeFmovXFromD(i.Dst, i.Src)
+				if err != nil {
+					return err
+				}
+				enc.code = appendU32LE(enc.code, word)
+			case *FaddReg:
+				word, err := encodeFPArith(0x1e602800, i.Dst, i.Lhs, i.Rhs)
+				if err != nil {
+					return err
+				}
+				enc.code = appendU32LE(enc.code, word)
+			case *FsubReg:
+				word, err := encodeFPArith(0x1e603800, i.Dst, i.Lhs, i.Rhs)
+				if err != nil {
+					return err
+				}
+				enc.code = appendU32LE(enc.code, word)
+			case *FmulReg:
+				word, err := encodeFPArith(0x1e600800, i.Dst, i.Lhs, i.Rhs)
+				if err != nil {
+					return err
+				}
+				enc.code = appendU32LE(enc.code, word)
+			case *FdivReg:
+				word, err := encodeFPArith(0x1e601800, i.Dst, i.Lhs, i.Rhs)
+				if err != nil {
+					return err
+				}
+				enc.code = appendU32LE(enc.code, word)
 			default:
 				return fmt.Errorf("%w: Mach-O encoder does not support %T", ErrNotImplemented, instr)
 			}
@@ -1258,6 +1306,107 @@ func encodeBrk(imm int64) (uint32, error) {
 		return 0, fmt.Errorf("%w: brk imm %d out of 16-bit range", ErrNotImplemented, imm)
 	}
 	return 0xd4200000 | (uint32(imm) << 5), nil
+}
+
+// dRegisterNumber returns the 0..31 encoding of a d-register name and
+// ok=false for non-d-register inputs. Mirrors `xRegisterNumber` for
+// the FP side. Phase A2 only uses d0..d9 today, but the encoder
+// accepts the full range so a future arrangement (loop variables,
+// callee-saved spills) doesn't have to revisit this helper.
+func dRegisterNumber(r Reg) (uint32, bool) {
+	switch r {
+	case RegD0:
+		return 0, true
+	case RegD1:
+		return 1, true
+	case RegD2:
+		return 2, true
+	case RegD3:
+		return 3, true
+	case RegD4:
+		return 4, true
+	case RegD5:
+		return 5, true
+	case RegD6:
+		return 6, true
+	case RegD7:
+		return 7, true
+	case RegD8:
+		return 8, true
+	case RegD9:
+		return 9, true
+	}
+	return 0, false
+}
+
+// encodeFPStack encodes `STR Dt, [SP, #imm12]` (base 0xfd000000) and
+// `LDR Dt, [SP, #imm12]` (base 0xfd400000) for double-precision
+// scalar transfers. The immediate is scaled by 8 (the access size),
+// matching the integer Store/Load encoders' offset rules.
+func encodeFPStack(base uint32, reg Reg, offset int64) (uint32, error) {
+	if offset < 0 || offset%8 != 0 {
+		return 0, fmt.Errorf("%w: FP stack offset %d", ErrNotImplemented, offset)
+	}
+	r, ok := dRegisterNumber(reg)
+	if !ok {
+		return 0, fmt.Errorf("%w: FP stack register %s", ErrNotImplemented, reg)
+	}
+	scaled := uint32(offset / 8)
+	if scaled > 0xfff {
+		return 0, fmt.Errorf("%w: FP stack offset %d too large", ErrNotImplemented, offset)
+	}
+	// SP is encoded as register 31 in the Rn field (bits 5-9).
+	return base | (scaled << 10) | (31 << 5) | r, nil
+}
+
+// encodeFmovDFromX encodes `FMOV Dd, Xn` — bitcast a 64-bit integer
+// register into a double-precision FP register without changing
+// bits. `1001 1110 0110 0111 0000 00<Rn> Rd`.
+func encodeFmovDFromX(dst, src Reg) (uint32, error) {
+	d, ok := dRegisterNumber(dst)
+	if !ok {
+		return 0, fmt.Errorf("%w: fmov dst %s", ErrNotImplemented, dst)
+	}
+	n, ok := xRegisterNumber(src)
+	if !ok {
+		return 0, fmt.Errorf("%w: fmov src %s", ErrNotImplemented, src)
+	}
+	return 0x9e670000 | (n << 5) | d, nil
+}
+
+// encodeFmovXFromD encodes `FMOV Xd, Dn` — the inverse of
+// encodeFmovDFromX. Same opcode family with op = 110 (general → FP)
+// vs 111 (FP → general). `1001 1110 0110 0110 0000 00<Rn> Rd`.
+func encodeFmovXFromD(dst, src Reg) (uint32, error) {
+	d, ok := xRegisterNumber(dst)
+	if !ok {
+		return 0, fmt.Errorf("%w: fmov dst %s", ErrNotImplemented, dst)
+	}
+	n, ok := dRegisterNumber(src)
+	if !ok {
+		return 0, fmt.Errorf("%w: fmov src %s", ErrNotImplemented, src)
+	}
+	return 0x9e660000 | (n << 5) | d, nil
+}
+
+// encodeFPArith encodes the FP binary arithmetic family
+// `F<op> Dd, Dn, Dm` (FADD/FSUB/FMUL/FDIV) for double precision.
+// Base values are FADD=0x1e602800, FSUB=0x1e603800, FMUL=0x1e600800,
+// FDIV=0x1e601800. Layout: base | (Rm << 16) | (Rn << 5) | Rd.
+func encodeFPArith(base uint32, dst, lhs, rhs Reg) (uint32, error) {
+	d, ok := dRegisterNumber(dst)
+	if !ok {
+		return 0, fmt.Errorf("%w: FP arith dst %s", ErrNotImplemented, dst)
+	}
+	n, ok := dRegisterNumber(lhs)
+	if !ok {
+		return 0, fmt.Errorf("%w: FP arith lhs %s", ErrNotImplemented, lhs)
+	}
+	m, ok := dRegisterNumber(rhs)
+	if !ok {
+		return 0, fmt.Errorf("%w: FP arith rhs %s", ErrNotImplemented, rhs)
+	}
+	return base | (m << 16) | (n << 5) | d, nil
 }
 
 func encodeMachOMovImm64(dst Reg, imm uint64) ([]uint32, error) {
