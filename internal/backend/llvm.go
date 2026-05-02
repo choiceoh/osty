@@ -160,16 +160,30 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 	}
 	warnings := append([]error(nil), entry.IRIssues...)
 	// Phase-7 gate. OSTY_LLVM_LIR_PROTO=1 selects the LIR Proto path
-	// at this dispatcher entry. The Go-side runner that would call
-	// into toolchain/lir_proto.osty does not exist yet, so we attach
-	// ErrLIRProtoNotWired as a warning and then continue with whichever
-	// fallback path the existing dispatcher would have chosen
+	// at this dispatcher entry. The dispatcher invokes the registered
+	// LIRProtoRunner (defaults to a "not-wired" stub returning
+	// ErrLIRProtoNotWired); on success the runner's bytes are
+	// returned directly. Any non-nil error is treated as a structured
+	// fall-back signal: warning attached, continue with whichever
+	// legacy path the existing dispatcher would have chosen
 	// (native-owned fast path or MIR-direct). Flipping the gate on
-	// stays safe before the runner lands — production output is
+	// stays safe before a real runner lands — production output is
 	// unchanged but the selection is visible in build logs.
 	if llvmgen.LIRProtoSelected() {
-		traceLLVMDispatch("lir-proto-gate selected package=%s source=%s — falling back: %v", entry.PackageName, entry.SourcePath, llvmgen.ErrLIRProtoNotWired)
-		warnings = append(warnings, llvmgen.ErrLIRProtoNotWired)
+		traceLLVMDispatch("lir-proto-gate selected package=%s source=%s", entry.PackageName, entry.SourcePath)
+		req := llvmgen.LIRProtoRequest{
+			PackageName: entry.PackageName,
+			SourcePath:  entry.SourcePath,
+			Source:      entry.Source,
+			Target:      target,
+		}
+		if out, err := llvmgen.InvokeLIRProtoRunner(req); err == nil && out != nil {
+			traceLLVMDispatch("lir-proto-runner covered package=%s source=%s", entry.PackageName, entry.SourcePath)
+			return out, warnings, nil
+		} else {
+			traceLLVMDispatch("lir-proto-runner declined package=%s source=%s — falling back: %v", entry.PackageName, entry.SourcePath, err)
+			warnings = append(warnings, err)
+		}
 	}
 	opts := llvmgen.Options{
 		PackageName: entry.PackageName,
