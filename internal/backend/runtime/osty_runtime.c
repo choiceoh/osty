@@ -14757,12 +14757,24 @@ typedef struct osty_regex_compiled {
      *                                over `prog`. preds_total == -1
      *                                means "not embedded" (eager
      *                                backward DFA succeeded, so lazy
-     *                                backward isn't needed). */
+     *                                backward isn't needed).
+     *   literal_prefix_len > 0     → pattern starts with a fixed byte
+     *                                literal (Phase 9f). Every match
+     *                                must begin with this exact
+     *                                sequence, so each entry function
+     *                                runs `memmem` from its current
+     *                                start cursor to find the next
+     *                                candidate position before
+     *                                dispatching to the DFA / NFA.
+     *                                Skips entire spans of input that
+     *                                cannot contain a match. The
+     *                                bytes live inline in the tail. */
     int32_t dfa_state_count;
     int32_t dfa_back_state_count;
     int32_t dfa_lazy_eligible;
     int32_t preds_total;
-    /* Inline tail (Phase 9e layout):
+    int32_t literal_prefix_len;
+    /* Inline tail (Phase 9f layout):
      *   prog[prog_len], classes[class_count],
      *   osty_re_name_entry name_table[name_count],
      *   char name_data[name_data_len],
@@ -14772,6 +14784,7 @@ typedef struct osty_regex_compiled {
      *   uint16_t dfa_back_transitions[dfa_back_state_count * 256],
      *   int32_t preds_offsets[prog_len + 1]   (preds_total >= 0)
      *   int32_t preds_flat[preds_total]       (preds_total >= 0)
+     *   char literal_prefix[literal_prefix_len] (when > 0)
      * Tails are only present when their counts are > 0 (or, for preds,
      * when preds_total >= 0). The lazy DFA itself has no tail bytes —
      * its state cache lives in stack/heap memory for the duration of
@@ -14864,6 +14877,17 @@ static inline const int32_t *osty_re_compiled_preds_offsets(const osty_regex_com
 
 static inline const int32_t *osty_re_compiled_preds_flat(const osty_regex_compiled *re) {
     return osty_re_compiled_preds_offsets(re) + (size_t)re->prog_len + 1;
+}
+
+/* Phase 9f — embedded literal prefix tail. Only present when
+ * literal_prefix_len > 0; sits after the preds tail (or after the
+ * back-DFA tail when preds aren't embedded). */
+static inline const char *osty_re_compiled_literal_prefix(const osty_regex_compiled *re) {
+    const int32_t *preds_end = osty_re_compiled_preds_offsets(re);
+    if (re->preds_total >= 0) {
+        preds_end = osty_re_compiled_preds_flat(re) + (size_t)re->preds_total;
+    }
+    return (const char *)preds_end;
 }
 
 /* Parser scratch state. The growing instruction / class buffers live
@@ -16048,6 +16072,34 @@ static void osty_re_add_thread_caps(osty_re_vm *vm, const osty_re_inst *prog, in
 
 #define OSTY_RE_DFA_MAX_STATES 1024
 
+/* Phase 9f — cap on extracted literal prefix bytes. Patterns with
+ * longer literal prefixes are truncated; the DFA still verifies the
+ * full match, so truncation is purely a storage / scan-cost tradeoff.
+ * 64 bytes covers virtually every real-world prefix (URL schemes,
+ * error tags, log line markers, etc.) while bounding worst-case
+ * memmem cost. */
+#define OSTY_RE_LITERAL_PREFIX_MAX 64
+
+/* Portable substring search. Falls back from glibc / BSD memmem so the
+ * runtime stays buildable on Windows MSVC. Single-byte needle uses
+ * memchr (SIMD-vectorized in modern libcs); larger needles use a
+ * naive loop, which is fine for short literal prefixes. */
+static const char *osty_rt_memmem(const char *haystack, size_t hlen, const char *needle, size_t nlen) {
+    if (nlen == 0) return haystack;
+    if (nlen > hlen) return NULL;
+    if (nlen == 1) return (const char *)memchr(haystack, (unsigned char)needle[0], hlen);
+    unsigned char first = (unsigned char)needle[0];
+    size_t scan_limit = hlen - nlen + 1;
+    size_t i = 0;
+    while (i < scan_limit) {
+        const char *seek = (const char *)memchr(haystack + i, first, scan_limit - i);
+        if (seek == NULL) return NULL;
+        if (memcmp(seek, needle, nlen) == 0) return seek;
+        i = (size_t)(seek - haystack) + 1;
+    }
+    return NULL;
+}
+
 /* Bitset over NFA PCs. word_count = ceil(prog_len / 64). */
 typedef struct {
     int prog_len;
@@ -17046,6 +17098,30 @@ static int osty_re_dfa_or_lazy_find_match_start(const osty_regex_compiled *re,
     return -1;
 }
 
+/* Phase 9f — advance `start` to the next position where the pattern's
+ * literal prefix could begin. When the regex has no literal prefix
+ * (most patterns starting with metachars or alternations), returns
+ * `start` unchanged so the caller proceeds with normal DFA / NFA
+ * scan. Returns -1 when memmem rules out any further match — the
+ * entry function's outer loop should `break` (or return no-match).
+ *
+ * Soundness rests on: every match's first byte is the prefix's first
+ * byte, by construction of the compile-time extractor. So no match
+ * can begin before the leftmost prefix occurrence at or after
+ * `start`, and skipping ahead is safe for both leftmost-match
+ * (find/captures) and non-overlapping iteration (findAll/etc.). */
+static int osty_re_advance_to_literal_prefix(const osty_regex_compiled *re,
+                                                const char *text, int text_len, int start) {
+    if (re->literal_prefix_len <= 0) return start;
+    if (start < 0) start = 0;
+    if (start > text_len) return -1;
+    const char *prefix = osty_re_compiled_literal_prefix(re);
+    const char *hit = osty_rt_memmem(text + start, (size_t)(text_len - start),
+                                      prefix, (size_t)re->literal_prefix_len);
+    if (hit == NULL) return -1;
+    return (int)(hit - text);
+}
+
 /* Phase 9b — DFA-driven boundary scan for find/findAll/captures/etc.
  *
  * Returns the FIRST sp at which the search DFA enters an accept state
@@ -17266,6 +17342,7 @@ void *osty_rt_regex_compile(const char *pattern) {
     probe.dfa_back_state_count = 0;
     probe.dfa_lazy_eligible = 0;
     probe.preds_total = -1;
+    probe.literal_prefix_len = 0;
     uint16_t *dfa_trans = NULL;
     uint8_t *dfa_match = NULL;
     uint16_t *dfa_back_trans = NULL;
@@ -17315,12 +17392,32 @@ void *osty_rt_regex_compile(const char *pattern) {
             has_embedded_preds = 1;
         }
     }
+    /* Phase 9f — extract any literal prefix the pattern starts with.
+     * Walk forward from PC 0, skip zero-width SAVE instructions, and
+     * collect consecutive CHAR bytes. Stop at the first non-CHAR /
+     * non-SAVE op (CCLASS, ANY, SPLIT, JMP, anchor, MATCH). Bounded
+     * by OSTY_RE_LITERAL_PREFIX_MAX so the inline tail stays small.
+     * Patterns with no leading literal (`\d+`, `[a-z]+`, `(?i)foo`,
+     * `(foo|bar)`, `\bword`, ...) yield length 0 and silently skip
+     * the optimization. */
+    char literal_prefix_buf[OSTY_RE_LITERAL_PREFIX_MAX];
+    int literal_prefix_len = 0;
+    for (int pc = 0; pc < ps.prog_len && literal_prefix_len < OSTY_RE_LITERAL_PREFIX_MAX; pc++) {
+        osty_re_inst ins = ps.prog[pc];
+        if (ins.op == OSTY_RE_OP_SAVE) continue;
+        if (ins.op == OSTY_RE_OP_CHAR) {
+            literal_prefix_buf[literal_prefix_len++] = (char)ins.c;
+            continue;
+        }
+        break;
+    }
     size_t dfa_match_bytes = (size_t)dfa_states;
     size_t dfa_trans_bytes = (size_t)dfa_states * 256 * sizeof(uint16_t);
     size_t dfa_back_match_bytes = (size_t)dfa_back_states;
     size_t dfa_back_trans_bytes = (size_t)dfa_back_states * 256 * sizeof(uint16_t);
     size_t preds_offsets_bytes = has_embedded_preds ? sizeof(int32_t) * ((size_t)ps.prog_len + 1) : 0;
     size_t preds_flat_bytes = has_embedded_preds ? sizeof(int32_t) * (size_t)embedded_preds.total : 0;
+    size_t literal_prefix_bytes = (size_t)literal_prefix_len;
 
     /* Allocate one contiguous GC blob: header + prog + classes + name table + name data + dfa + back-dfa + preds. */
     size_t hdr = sizeof(osty_regex_compiled);
@@ -17330,7 +17427,7 @@ void *osty_rt_regex_compile(const char *pattern) {
     size_t name_data_bytes = (size_t)ps.name_data_len;
     size_t total = hdr + prog_bytes + class_bytes + name_table_bytes + name_data_bytes
         + dfa_match_bytes + dfa_trans_bytes + dfa_back_match_bytes + dfa_back_trans_bytes
-        + preds_offsets_bytes + preds_flat_bytes;
+        + preds_offsets_bytes + preds_flat_bytes + literal_prefix_bytes;
     osty_regex_compiled *re = (osty_regex_compiled *)osty_gc_allocate_managed(total, OSTY_GC_KIND_GENERIC, "runtime.regex.compile", NULL, NULL);
     re->prog = (osty_re_inst *)((char *)re + hdr);
     re->prog_len = ps.prog_len;
@@ -17343,6 +17440,7 @@ void *osty_rt_regex_compile(const char *pattern) {
     re->dfa_back_state_count = dfa_back_states;
     re->dfa_lazy_eligible = dfa_lazy_eligible;
     re->preds_total = has_embedded_preds ? embedded_preds.total : -1;
+    re->literal_prefix_len = literal_prefix_len;
     if (ps.prog_len > 0) memcpy(re->prog, ps.prog, prog_bytes);
     if (ps.class_count > 0) memcpy(re->classes, ps.classes, class_bytes);
     if (ps.name_count > 0) {
@@ -17365,6 +17463,9 @@ void *osty_rt_regex_compile(const char *pattern) {
             memcpy((int32_t *)osty_re_compiled_preds_flat(re), embedded_preds.flat, preds_flat_bytes);
         }
         osty_re_preds_free(&embedded_preds);
+    }
+    if (literal_prefix_len > 0) {
+        memcpy((char *)osty_re_compiled_literal_prefix(re), literal_prefix_buf, literal_prefix_bytes);
     }
     free(ps.prog);
     free(ps.classes);
@@ -17393,6 +17494,13 @@ bool osty_rt_regex_matches(void *raw_re, const char *text) {
     if (src == NULL) src = "";
     osty_rt_string_decode_to_buf_if_inline(&src, inline_buf);
     int len = (int)strlen(src);
+    /* Phase 9f — if the pattern has a literal prefix, no match can
+     * exist unless that prefix appears somewhere in the input. Fast
+     * memmem rejection avoids spinning up a DFA / NFA at all. */
+    if (re->literal_prefix_len > 0
+            && osty_re_advance_to_literal_prefix(re, src, len, 0) < 0) {
+        return false;
+    }
     /* Phase 9 — DFA fast path. Available for patterns without `^`/`$`/
      * `\b`/`\B` and within OSTY_RE_DFA_MAX_STATES; Phase 9d adds a
      * per-call lazy DFA for compatible patterns whose state space
@@ -17496,15 +17604,20 @@ void *osty_rt_regex_find(void *raw_re, const char *text) {
      * per-call lazy DFA + LRU runs the same protocol. */
     osty_re_lazy_pair pair;
     osty_re_lazy_pair_init(&pair, re);
-    int nfa_start = 0;
     void *out = NULL;
-    int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, pair.fwd, src, len, 0);
+    /* Phase 9f — fast-skip to the leftmost literal-prefix occurrence
+     * (no-op when the pattern has no extracted prefix). */
+    int nfa_start = osty_re_advance_to_literal_prefix(re, src, len, 0);
+    if (nfa_start < 0) {
+        goto find_done;
+    }
+    int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, pair.fwd, src, len, nfa_start);
     if (dfa_end == -1) {
         goto find_done;
     }
     if (dfa_end >= 0) {
         int dfa_start = osty_re_dfa_or_lazy_find_match_start(re, pair.back, src, dfa_end);
-        if (dfa_start >= 0 && dfa_start <= dfa_end) {
+        if (dfa_start >= nfa_start && dfa_start <= dfa_end) {
             nfa_start = dfa_start;
         }
     }
@@ -17567,6 +17680,11 @@ void *osty_rt_regex_find_all(void *raw_re, const char *text) {
     osty_re_lazy_pair_init(&pair, re);
     while (start <= len) {
         for (int i = 0; i < slot_count; i++) slots[i] = -1;
+        /* Phase 9f — bump cursor to the next literal-prefix candidate
+         * before any DFA work. memmem returning -1 means "no more
+         * matches possible past this point" — break cleanly. */
+        start = osty_re_advance_to_literal_prefix(re, src, len, start);
+        if (start < 0) break;
         int nfa_start = start;
         int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, pair.fwd, src, len, start);
         if (dfa_end == -1) {
@@ -17670,14 +17788,20 @@ static void *osty_rt_regex_replace_impl(void *raw_re, const char *text, const ch
     osty_re_lazy_pair_init(&pair, re);
     while (start <= len) {
         for (int i = 0; i < slot_count; i++) slots[i] = -1;
-        int nfa_start = start;
-        int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, pair.fwd, src, len, start);
+        /* Phase 9f — `cursor` is the literal-prefix-advanced search
+         * position; `start` stays at the byte just past the previous
+         * match so the unmatched span between matches is emitted
+         * verbatim into the output buffer. */
+        int cursor = osty_re_advance_to_literal_prefix(re, src, len, start);
+        if (cursor < 0) break;
+        int nfa_start = cursor;
+        int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, pair.fwd, src, len, cursor);
         if (dfa_end == -1) {
             break;
         }
         if (dfa_end >= 0) {
             int dfa_start = osty_re_dfa_or_lazy_find_match_start(re, pair.back, src, dfa_end);
-            if (dfa_start > start && dfa_start <= dfa_end) {
+            if (dfa_start > cursor && dfa_start <= dfa_end) {
                 nfa_start = dfa_start;
             }
         }
@@ -17808,14 +17932,19 @@ void *osty_rt_regex_split(void *raw_re, const char *text) {
     osty_re_lazy_pair_init(&pair, re);
     while (start <= len) {
         for (int i = 0; i < slot_count; i++) slots[i] = -1;
-        int nfa_start = start;
-        int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, pair.fwd, src, len, start);
+        /* Phase 9f — `start` stays at the byte just past the previous
+         * match so each split piece keeps the unmatched span verbatim;
+         * `cursor` is the literal-prefix-advanced search position. */
+        int cursor = osty_re_advance_to_literal_prefix(re, src, len, start);
+        if (cursor < 0) break;
+        int nfa_start = cursor;
+        int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, pair.fwd, src, len, cursor);
         if (dfa_end == -1) {
             break;
         }
         if (dfa_end >= 0) {
             int dfa_start = osty_re_dfa_or_lazy_find_match_start(re, pair.back, src, dfa_end);
-            if (dfa_start > start && dfa_start <= dfa_end) {
+            if (dfa_start > cursor && dfa_start <= dfa_end) {
                 nfa_start = dfa_start;
             }
         }
@@ -17863,15 +17992,18 @@ void *osty_rt_regex_captures(void *raw_re, const char *text) {
      * nfa_start. */
     osty_re_lazy_pair pair;
     osty_re_lazy_pair_init(&pair, re);
-    int nfa_start = 0;
     void *out = NULL;
-    int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, pair.fwd, src, len, 0);
+    int nfa_start = osty_re_advance_to_literal_prefix(re, src, len, 0);
+    if (nfa_start < 0) {
+        goto captures_done;
+    }
+    int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, pair.fwd, src, len, nfa_start);
     if (dfa_end == -1) {
         goto captures_done;
     }
     if (dfa_end >= 0) {
         int dfa_start = osty_re_dfa_or_lazy_find_match_start(re, pair.back, src, dfa_end);
-        if (dfa_start >= 0 && dfa_start <= dfa_end) {
+        if (dfa_start >= nfa_start && dfa_start <= dfa_end) {
             nfa_start = dfa_start;
         }
     }
@@ -17909,6 +18041,12 @@ void *osty_rt_regex_captures_all(void *raw_re, const char *text) {
     osty_re_lazy_pair_init(&pair, re);
     while (start <= len) {
         for (int i = 0; i < slot_count; i++) slots[i] = -1;
+        /* Phase 9f — bump the search cursor to the next literal-prefix
+         * candidate. captures_all collects everything from the input
+         * directly so it's safe to mutate `start` here (no unmatched-
+         * span emission like replace / split). */
+        start = osty_re_advance_to_literal_prefix(re, src, len, start);
+        if (start < 0) break;
         int nfa_start = start;
         int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, pair.fwd, src, len, start);
         if (dfa_end == -1) {

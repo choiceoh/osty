@@ -1,0 +1,119 @@
+use std.regex
+
+fn main() {
+    // ── Bare literal: every match must equal "foo".
+    match regex.compile(r"foo") {
+        Ok(re) -> {
+            match re.find("aaaaaaaaaaaaaaaaaaaaaaafooBBB") {
+                Some(m) -> {
+                    let s = m.start
+                    let e = m.end
+                    println("bare-literal: [{s}..{e})")
+                },
+                None -> println("bare-literal: no match"),
+            }
+            let absent = re.matches("aaaaaaaaaaaaaaaaaaaa")
+            println("bare-literal-absent: {absent}")
+        },
+        Err(_) -> println("bare-literal compile failed"),
+    }
+
+    // ── Literal prefix + quantifier: prefix is "foo", body is \d+.
+    //    memmem skips ahead to "foo" candidates; DFA verifies digits.
+    match regex.compile(r"foo\d+") {
+        Ok(re) -> {
+            let list = re.findAll("xx foo123 yy fooABC zz foo7 ww")
+            let n = list.len()
+            println("prefix+quantifier: {n}")
+            let mut i = 0
+            for _ in 0..n {
+                let m = list[i]
+                let t = m.text
+                println("  [{i}] '{t}'")
+                i += 1
+            }
+        },
+        Err(_) -> println("prefix+quantifier compile failed"),
+    }
+
+    // ── Literal prefix that doesn't lead to a match: "foo" present
+    //    but \d+ doesn't follow. memmem still finds candidates;
+    //    DFA correctly rules them out.
+    match regex.compile(r"foo\d+") {
+        Ok(re) -> {
+            let r = re.matches("fooABC fooXYZ")
+            println("prefix-nomatch: {r}")
+        },
+        Err(_) -> println("prefix-nomatch compile failed"),
+    }
+
+    // ── Long literal prefix.
+    match regex.compile(r"https://example") {
+        Ok(re) -> {
+            match re.find("see https://example.com for details") {
+                Some(m) -> {
+                    let s = m.start
+                    let e = m.end
+                    println("long-literal: [{s}..{e})")
+                },
+                None -> println("long-literal: no match"),
+            }
+        },
+        Err(_) -> println("long-literal compile failed"),
+    }
+
+    // ── replaceAll exercises the cursor-vs-start split: unmatched
+    //    spans between matches must be preserved verbatim, even
+    //    when memmem skips over them.
+    match regex.compile(r"err:\w+") {
+        Ok(re) -> {
+            let r = re.replaceAll("note ok ok err:foo more ok err:bar end", "[E]")
+            println("replace-with-prefix: {r}")
+        },
+        Err(_) -> println("replace-with-prefix compile failed"),
+    }
+
+    // ── split with literal prefix.
+    match regex.compile(r"<sep>") {
+        Ok(re) -> {
+            let parts = re.split("aaa<sep>bbb<sep>ccc")
+            let n = parts.len()
+            println("split: {n}")
+            let mut i = 0
+            for _ in 0..n {
+                let p = parts[i]
+                println("  [{i}] '{p}'")
+                i += 1
+            }
+        },
+        Err(_) -> println("split compile failed"),
+    }
+
+    // ── No literal prefix (alternation at top level): optimization
+    //    silently disabled, normal DFA / NFA path runs.
+    match regex.compile(r"\d+") {
+        Ok(re) -> {
+            let list = re.findAll("a 12 b 345 c")
+            let n = list.len()
+            println("no-prefix: {n}")
+        },
+        Err(_) -> println("no-prefix compile failed"),
+    }
+
+    // ── \b prefix: walker stops at WB instruction, so no literal
+    //    prefix is extracted. NFA fallback must still work.
+    match regex.compile(r"\bword\b") {
+        Ok(re) -> {
+            match re.find("a word in sentence") {
+                Some(m) -> {
+                    let t = m.text
+                    let s = m.start
+                    let e = m.end
+                    println("wb-prefix: '{t}' [{s}..{e})")
+                },
+                None -> println("wb-prefix: no match"),
+            }
+        },
+        Err(_) -> println("wb compile failed"),
+    }
+}
