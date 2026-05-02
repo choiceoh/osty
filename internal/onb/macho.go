@@ -221,9 +221,10 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 						continue
 					}
 					vars = append(vars, dwarfVariableInput{
-						NameStrOffset: meta.Strings.Add(dl.Name),
-						SlotOffset:    dl.SlotOffset,
-						TypeKind:      kind,
+						NameStrOffset:   meta.Strings.Add(dl.Name),
+						SlotOffset:      dl.SlotOffset,
+						TypeKind:        kind,
+						StructTypeIndex: -1,
 					})
 				}
 				subs = append(subs, dwarfSubprogramInput{
@@ -234,7 +235,11 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 				})
 			}
 			debugAbbrev = emitDwarfAbbrev()
-			infoEnc = emitDwarfInfo(meta.CU, subs)
+			// Phase B.5: struct list passes empty until lower.go starts
+			// surfacing struct programs. The encoder still wires the
+			// path so a future caller can pass dwarfStructTypeInput
+			// entries without changing callers.
+			infoEnc = emitDwarfInfo(meta.CU, subs, nil)
 			debugInfo = infoEnc.Bytes
 			debugStr = meta.Strings.buf
 		}
