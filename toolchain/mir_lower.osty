@@ -2153,7 +2153,7 @@ pub fn mirLowerLetStmt(bs: MirLowerBodyState, s: HirStmt) {
     // `rangeBindings` to emit a counter loop instead of failing on
     // "range literal in value position". Mirror of the same fast
     // path in `internal/mir/lower.go::lowerLet`.
-    if s.letHasValue && s.letValue.kind == HirExprRange && mirLowerIsRangeIntType(t)
+    if s.letHasValue && s.letValue.kind == HirExprRange && mirLowerIsRangeIntOrCharType(t)
         && s.letValue.rangeStart.len() > 0 && s.letValue.rangeEnd.len() > 0 {
         let intT = hirTInt()
         let startLocal = mirLowerNewLocal(bs, "_rstart", intT, false, span)
@@ -2732,10 +2732,15 @@ fn mirLowerForRangePseudoBinding(
     bs.cur = exit
 }
 
-/// mirLowerIsRangeIntType reports whether `t` is `Range<Int>` (the
-/// only instantiation the pseudo-binding fast path supports today).
-/// Mirror of `isRangeIntType` in `internal/mir/lower.go`.
-fn mirLowerIsRangeIntType(t: HirType) -> Bool {
+/// mirLowerIsRangeIntOrCharType reports whether `t` is `Range<Int>`
+/// or `Range<Char>`. The checker only accepts `..` over Int and
+/// Char today, so those are the two instantiations the pseudo-
+/// binding fast path can encounter. Both flow through the same Int
+/// counter loop (Char ranges convert codepoints to Int at
+/// construction — matches the inline `for c in 'a'..='z'` shape
+/// that `mirLowerForRange` already produces). Mirror of
+/// `isRangeIntOrCharType` in `internal/mir/lower.go`.
+fn mirLowerIsRangeIntOrCharType(t: HirType) -> Bool {
     if t.kind != HirTypeNamed {
         return false
     }
@@ -2746,7 +2751,10 @@ fn mirLowerIsRangeIntType(t: HirType) -> Bool {
         return false
     }
     let inner = t.namedArgs[0]
-    inner.kind == HirTypePrim && inner.primKind == HirPrimInt
+    if inner.kind != HirTypePrim {
+        return false
+    }
+    inner.primKind == HirPrimInt || inner.primKind == HirPrimChar
 }
 
 fn mirLowerForInList(
