@@ -1,4 +1,5 @@
 use std.env
+use std.fs
 use std.os
 use std.process
 use std.strings
@@ -96,9 +97,38 @@ fn runSelfhostDoctor() -> Int {
     }
     println("osty-self mode: self-rebuild")
     println("osty-self host compiler: disabled")
-    println("osty-self source compiler: missing")
-    println("osty-self missing stage: MIR-to-LLVM module emitter")
-    2
+    println("osty-self source compiler: phase 0 (module skeleton only)")
+    println("osty-self pipeline: source -> HIR -> Mono -> MIR -> LLVM IR (function bodies stubbed)")
+    println("osty-self missing stage: per-instruction body emission (Phase 1+)")
+    0
+}
+
+/// runCompile is the Phase 0 self-host pipeline entry: read a source
+/// file, run it through the toolchain pipeline (HIR lower, monomorph,
+/// MIR lower, MIR emit), and print the resulting LLVM IR text to
+/// stdout. Function bodies are stubbed at structural validity (see
+/// `mirEmitModule` doc); Phase 1+ replaces the stubs with real
+/// per-instruction lowering.
+fn runCompile(args: List<String>) -> Int {
+    if args.len() < 2 {
+        eprint("osty-self compile: missing <file> argument\n")
+        eprint("usage: osty-self compile <file.osty>\n")
+        return 2
+    }
+    let path = args[1]
+    let source = match fs.readToString(path) {
+        Ok(s) -> s,
+        Err(_) -> {
+            eprint("osty-self compile: cannot read source: " + path + "\n")
+            return 2
+        },
+    }
+    let hir = hirLowerSource("main", source)
+    let mir = mirLowerModule(hir)
+    let opts = mirEmitOpts("main", path, "")
+    let irText = mirEmitModule(mir, opts)
+    print(irText)
+    0
 }
 
 fn main() {
@@ -110,9 +140,13 @@ fn main() {
     if hasSelfhostCommand(args, "--selfhost-doctor") {
         os.exit(runSelfhostDoctor())
     }
+    if hasSelfhostCommand(args, "compile") {
+        os.exit(runCompile(args))
+    }
     if isSelfRebuildBuild(args) {
         os.exit(runSelfRebuild(args))
     }
     eprint("osty-self: unsupported command; host compiler forwarding is disabled\n")
-    process.abort("osty-self cannot rebuild until the Osty-owned MIR-to-LLVM module emitter is wired")
+    eprint("supported subcommands: compile <file.osty>, --selfhost-doctor\n")
+    process.abort("osty-self cannot rebuild end-to-end until per-instruction MIR body emission lands (Phase 1+)")
 }
