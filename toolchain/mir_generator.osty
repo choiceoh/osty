@@ -18892,6 +18892,7 @@ pub fn mirEmitModule(m: MirModule, opts: MirEmitOpts) -> String {
     let mut out = mirEmitHeaderBlock(opts.sourcePath, opts.target)
     out = out + mirEmitRuntimeDeclarationsSection()
     out = out + mirEmitGlobalsSection(m)
+    out = out + mirEmitModuleInitDispatcher(m)
     for func in m.functions {
         if func.isExternal {
             continue
@@ -19503,6 +19504,8 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
         MirIntrinsicSelectSend -> mirEmitSelectSendIntrinsic(instr),
         MirIntrinsicSelectTimeout -> mirEmitSelectTimeoutIntrinsic(instr),
         MirIntrinsicSelectDefault -> mirEmitSelectDefaultIntrinsic(instr),
+        MirIntrinsicMapSet -> mirEmitMapSetIntrinsic(func, instr),
+        MirIntrinsicMapGet -> mirEmitMapGetIntrinsic(func, instr),
         MirIntrinsicBytesLen -> mirEmitContainerLenIntrinsic(func, instr, "osty_rt_bytes_len"),
         MirIntrinsicBytesIsEmpty -> mirEmitBytesIsEmptyIntrinsic(func, instr),
         MirIntrinsicBytesGet -> mirEmitBytesGetIntrinsic(func, instr),
@@ -20007,10 +20010,25 @@ fn mirEmitProjectFieldLine(dest: String, baseReg: String, idx: Int) -> String {
 /// covers `variantField == -1` (whole-payload read); per-field
 /// unwrap inside the payload is Phase 1h.
 fn mirEmitProjectVariantLine(dest: String, baseReg: String, proj: MirProjection) -> String {
-    if proj.variantField >= 0 {
-        return "  ; TODO Phase 1h enum payload field unwrap (variantField=" + mirGenIntToString(proj.variantField) + ")\n"
+    if proj.variantField < 0 {
+        return "  " + dest + " = extractvalue \{ i64, i64 \} " + baseReg + ", 1\n"
     }
-    "  " + dest + " = extractvalue \{ i64, i64 \} " + baseReg + ", 1\n"
+    // Per-field unwrap: variant payload is itself an aggregate
+    // `{ i64, i64, ... }`. Phase 1n extracts first the payload at
+    // index 1, then the requested field. Two-step emit using a
+    // deterministic intermediate `<dest>.vp` for the payload.
+    let payloadReg = dest + ".vp"
+    let mut out = "  " + payloadReg + " = extractvalue \{ i64, i64 \} " + baseReg + ", 1\n"
+    out + "  " + dest + " = extractvalue \{ i64, i64 \} " + payloadReg + ", " + mirGenIntToString(proj.variantField) + "\n"
+}
+
+fn mirEmitProjectVariantLineFromHelper(target: String, src: String, proj: MirProjection) -> String {
+    if proj.variantField < 0 {
+        return "  " + target + " = extractvalue \{ i64, i64 \} " + src + ", 1\n"
+    }
+    let payloadReg = target + ".vp"
+    let mut out = "  " + payloadReg + " = extractvalue \{ i64, i64 \} " + src + ", 1\n"
+    out + "  " + target + " = extractvalue \{ i64, i64 \} " + payloadReg + ", " + mirGenIntToString(proj.variantField) + "\n"
 }
 
 /// mirEmitProjectIndexLine routes a `list[i]` projection through the
@@ -20347,6 +20365,16 @@ pub fn mirEmitRuntimeDeclarationsSection() -> String {
     out = out + "declare ptr @osty_rt_make_closure(ptr, ptr)\n"
     out = out + "declare ptr @osty_rt_list_new()\n"
     out = out + "declare ptr @osty_rt_map_new(i64, i64, i64, ptr)\n"
+    // Phase 1n additions
+    out = out + "declare i1 @osty_rt_set_contains_i1(ptr, i1)\n"
+    out = out + "declare i1 @osty_rt_set_contains_f64(ptr, double)\n"
+    out = out + "declare i1 @osty_rt_set_remove_i1(ptr, i1)\n"
+    out = out + "declare i1 @osty_rt_set_remove_ptr(ptr, ptr)\n"
+    out = out + "declare i1 @osty_rt_set_remove_f64(ptr, double)\n"
+    out = out + "declare void @osty_rt_map_insert_i64(ptr, i64, i64)\n"
+    out = out + "declare void @osty_rt_map_insert_string(ptr, ptr, ptr)\n"
+    out = out + "declare i1 @osty_rt_map_get_i64(ptr, i64, ptr)\n"
+    out = out + "declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)\n"
     out + "\n"
 }
 
@@ -20477,10 +20505,7 @@ fn mirEmitProjectFieldLineFrom(target: String, src: String, idx: Int) -> String 
 }
 
 fn mirEmitProjectVariantLineFrom(target: String, src: String, proj: MirProjection) -> String {
-    if proj.variantField >= 0 {
-        return "  ; TODO enum payload field unwrap (variantField=" + mirGenIntToString(proj.variantField) + ")\n"
-    }
-    "  " + target + " = extractvalue \{ i64, i64 \} " + src + ", 1\n"
+    mirEmitProjectVariantLineFromHelper(target, src, proj)
 }
 
 fn mirEmitProjectIndexLineFrom(target: String, src: String, proj: MirProjection, resultLLVM: String) -> String {
@@ -20734,10 +20759,16 @@ fn mirEmitListContainsIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     if instr.args.len() != 2 || instr.hasDest == false {
         return "  ; TODO list contains intrinsic\n"
     }
-    // Implementation routes through indexOf >= 0 — keeps Phase 1k
-    // dispatcher simple. A dedicated runtime helper exists; future
-    // optimization PR can switch to it.
-    "  ; TODO Phase 1l list_contains via osty_rt_list_indexOf\n"
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let list = mirEmitOperand(instr.args[0])
+    let item = mirEmitOperand(instr.args[1])
+    let itemTy = mirEmitOperandLLVMType(instr.args[1])
+    if itemTy != "i64" {
+        return "  ; TODO list contains for elem type \"" + itemTy + "\"\n"
+    }
+    let idxReg = dest + ".ix"
+    let mut out = "  " + idxReg + " = call i64 @osty_rt_list_indexOf_i64(ptr " + list + ", i64 " + item + ")\n"
+    out + "  " + dest + " = icmp sge i64 " + idxReg + ", 0\n"
 }
 
 fn mirEmitMapClearIntrinsic(instr: MirInstr) -> String {
@@ -21042,8 +21073,19 @@ fn mirEmitSetContainsIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let s = mirEmitOperand(instr.args[0])
     let item = mirEmitOperand(instr.args[1])
     let itemTy = mirEmitOperandLLVMType(instr.args[1])
-    let sym = if itemTy == "i64" { "osty_rt_set_contains_i64" } else { "osty_rt_set_contains_ptr" }
+    let sym = mirSetContainsSymbolFor(itemTy)
+    if sym == "" {
+        return "  ; TODO set contains for elem type \"" + itemTy + "\"\n"
+    }
     "  " + dest + " = call i1 @" + sym + "(ptr " + s + ", " + itemTy + " " + item + ")\n"
+}
+
+fn mirSetContainsSymbolFor(itemTy: String) -> String {
+    if itemTy == "i64" { return "osty_rt_set_contains_i64" }
+    if itemTy == "i1" { return "osty_rt_set_contains_i1" }
+    if itemTy == "ptr" { return "osty_rt_set_contains_ptr" }
+    if itemTy == "double" { return "osty_rt_set_contains_f64" }
+    ""
 }
 
 fn mirEmitSetRemoveIntrinsic(func: MirFunction, instr: MirInstr) -> String {
@@ -21053,14 +21095,23 @@ fn mirEmitSetRemoveIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let s = mirEmitOperand(instr.args[0])
     let item = mirEmitOperand(instr.args[1])
     let itemTy = mirEmitOperandLLVMType(instr.args[1])
-    if itemTy != "i64" {
+    let sym = mirSetRemoveSymbolFor(itemTy)
+    if sym == "" {
         return "  ; TODO set remove for elem type \"" + itemTy + "\"\n"
     }
     if instr.hasDest {
         let dest = mirEmitLocalRegName(instr.dest.local)
-        return "  " + dest + " = call i1 @osty_rt_set_remove_i64(ptr " + s + ", i64 " + item + ")\n"
+        return "  " + dest + " = call i1 @" + sym + "(ptr " + s + ", " + itemTy + " " + item + ")\n"
     }
-    "  call i1 @osty_rt_set_remove_i64(ptr " + s + ", i64 " + item + ")\n"
+    "  call i1 @" + sym + "(ptr " + s + ", " + itemTy + " " + item + ")\n"
+}
+
+fn mirSetRemoveSymbolFor(itemTy: String) -> String {
+    if itemTy == "i64" { return "osty_rt_set_remove_i64" }
+    if itemTy == "i1" { return "osty_rt_set_remove_i1" }
+    if itemTy == "ptr" { return "osty_rt_set_remove_ptr" }
+    if itemTy == "double" { return "osty_rt_set_remove_f64" }
+    ""
 }
 
 fn mirEmitSetToStringIntrinsic(func: MirFunction, instr: MirInstr) -> String {
@@ -21404,4 +21455,111 @@ fn mirEmitBytesSplitIntrinsic(func: MirFunction, instr: MirInstr) -> String {
     let lhs = mirEmitOperand(instr.args[0])
     let sep = mirEmitOperand(instr.args[1])
     "  " + dest + " = call ptr @osty_rt_bytes_split(ptr " + lhs + ", ptr " + sep + ")\n"
+}
+
+
+// ====================================================================
+// Phase 1n — Misc gap closures + module init
+// ====================================================================
+//
+// Continues the mass push by closing the smaller-grain gaps:
+//   - Variant per-field unwrap (proj.variantField >= 0) — 2-step
+//     extractvalue (payload at 1, then field at variantField).
+//   - List contains via indexOf composition (call + icmp sge).
+//   - Set / Map per-elem dispatch coverage extensions (i1 / double
+//     for set, string keys for map insert/get).
+//   - Module init dispatcher: emit @osty_module_init that calls
+//     each global's init constructor in declaration order. Wired
+//     into mirEmitModule after the globals section.
+//   - mirEmitMapSet / mirEmitMapGet — the previously-unhandled
+//     entries on the intrinsic dispatcher.
+
+// -------- Map intrinsics (insert / get with key dispatch) --------
+
+/// mirEmitMapSetIntrinsic lowers `m.insert(k, v)`. Dispatch by key
+/// LLVM type — i64 / string supported today; others stub TODO.
+fn mirEmitMapSetIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 3 {
+        return "  ; TODO map insert/set intrinsic (args=" + mirGenIntToString(instr.args.len()) + ")\n"
+    }
+    let m = mirEmitOperand(instr.args[0])
+    let k = mirEmitOperand(instr.args[1])
+    let kTy = mirEmitOperandLLVMType(instr.args[1])
+    let v = mirEmitOperand(instr.args[2])
+    let vTy = mirEmitOperandLLVMType(instr.args[2])
+    let sym = mirMapInsertSymbolFor(kTy)
+    if sym == "" {
+        return "  ; TODO map insert for key type \"" + kTy + "\"\n"
+    }
+    "  call void @" + sym + "(ptr " + m + ", " + kTy + " " + k + ", " + vTy + " " + v + ")\n"
+}
+
+/// mirEmitMapGetIntrinsic lowers `m.get(k) -> V?`. The runtime
+/// returns a present flag plus an out-pointer via osty_rt_map_get_*.
+/// For Phase 1n we synthesise a 2-line shape: call the runtime,
+/// store the result (an i1 present flag) into the dest register.
+/// The Option<V> wrap of the value lives in the lowering layer
+/// upstream; this entry just lowers the predicate.
+fn mirEmitMapGetIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 2 || instr.hasDest == false {
+        return "  ; TODO map get intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let m = mirEmitOperand(instr.args[0])
+    let k = mirEmitOperand(instr.args[1])
+    let kTy = mirEmitOperandLLVMType(instr.args[1])
+    let sym = mirMapGetSymbolFor(kTy)
+    if sym == "" {
+        return "  ; TODO map get for key type \"" + kTy + "\"\n"
+    }
+    // Emit a slot that the runtime fills in.
+    let slot = dest + ".slot"
+    let mut out = "  " + slot + " = alloca i64, align 8\n"
+    out = out + "  " + dest + " = call i1 @" + sym + "(ptr " + m + ", " + kTy + " " + k + ", ptr " + slot + ")\n"
+    out
+}
+
+fn mirMapInsertSymbolFor(kTy: String) -> String {
+    if kTy == "i64" { return "osty_rt_map_insert_i64" }
+    if kTy == "ptr" { return "osty_rt_map_insert_string" }
+    ""
+}
+
+fn mirMapGetSymbolFor(kTy: String) -> String {
+    if kTy == "i64" { return "osty_rt_map_get_i64" }
+    if kTy == "ptr" { return "osty_rt_map_get_string" }
+    ""
+}
+
+// -------- Module init dispatcher --------
+
+/// mirEmitModuleInitDispatcher emits `@osty_module_init` — a void
+/// function that calls each global's `initSymbol` in declaration
+/// order. The runtime wraps this around `main` so module-scope
+/// `let X = expr` initializers run before user code.
+///
+/// No-op (returns empty string) when the module has no globals
+/// with `hasInit == true` so trivial inputs (`fn main() {}`) don't
+/// pick up a useless empty initializer.
+pub fn mirEmitModuleInitDispatcher(m: MirModule) -> String {
+    let mut hasAny = false
+    for g in m.globals {
+        if g.hasInit && g.initSymbol != "" {
+            hasAny = true
+        }
+    }
+    if hasAny == false {
+        return ""
+    }
+    let mut out = mirModuleSectionDirective("module init")
+    out = out + "define void @osty_module_init() \{\n"
+    out = out + "entry:\n"
+    for g in m.globals {
+        if g.hasInit && g.initSymbol != "" {
+            out = out + "  call void @" + g.initSymbol + "()\n"
+        }
+    }
+    out = out + "  ret void\n"
+    out = out + "\}\n\n"
+    out
 }

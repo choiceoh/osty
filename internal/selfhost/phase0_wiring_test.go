@@ -353,6 +353,27 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"declare ptr @osty_rt_make_closure",
 				"declare ptr @osty_rt_list_new",
 				"declare ptr @osty_rt_map_new",
+				// Phase 1n — variant per-field unwrap, list contains
+				// via indexOf, set/map per-elem expansion, module
+				// init dispatcher.
+				"mirEmitProjectVariantLineFromHelper(",
+				"mirSetRemoveSymbolFor(",
+				"mirSetContainsSymbolFor(",
+				"mirEmitMapSetIntrinsic(",
+				"mirEmitMapGetIntrinsic(",
+				"mirMapInsertSymbolFor(",
+				"mirMapGetSymbolFor(",
+				"mirEmitModuleInitDispatcher(",
+				"MirIntrinsicMapSet -> mirEmitMapSetIntrinsic",
+				"MirIntrinsicMapGet -> mirEmitMapGetIntrinsic",
+				"mirEmitModuleInitDispatcher(m)",
+				"@osty_module_init",
+				"declare void @osty_rt_map_insert_i64",
+				"declare void @osty_rt_map_insert_string",
+				"declare i1 @osty_rt_map_get_i64",
+				"declare i1 @osty_rt_map_get_string",
+				"declare i1 @osty_rt_set_remove_ptr",
+				"declare i1 @osty_rt_set_contains_i1",
 			},
 		},
 		{
