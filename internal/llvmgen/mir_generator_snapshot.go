@@ -5544,22 +5544,18 @@ func mirCallValueGCAllocatedBytesLine(reg string) string {
 	return "  " + reg + " = " + mirInstrCall() + " i64 @osty_rt_gc_allocated_bytes()\n"
 }
 
-// §6 panic / abort runtime helper call shapes.
+// §6 panic / abort runtime helper call shapes. The
+// `unreachable` / `todo` / `abort` prelude builtins all route through
+// the same `MirIntrinsicAbort` lowering as `panic` since #1282, so
+// the only call shape the emitter actually produces is the
+// `osty_rt_panic(ptr msg)` one. The dedicated `_unreachable` /
+// `_todo` / `_abort` line + symbol helpers were dead code (their
+// targets aren't even defined as public symbols in the runtime —
+// see `static void osty_rt_abort` in `osty_runtime.c`).
 
-// Osty: mirCallVoidPanicMessageLine / mirCallVoidUnreachableUncheckedLine /
-//
-//	mirCallVoidTodoLine / mirCallVoidAbortLine
+// Osty: mirCallVoidPanicMessageLine
 func mirCallVoidPanicMessageLine(messagePtr string) string {
 	return "  " + mirInstrCallVoid() + " void @osty_rt_panic(ptr " + messagePtr + ")\n"
-}
-func mirCallVoidUnreachableUncheckedLine() string {
-	return "  " + mirInstrCallVoid() + " void @osty_rt_unreachable()\n"
-}
-func mirCallVoidTodoLine() string {
-	return "  " + mirInstrCallVoid() + " void @osty_rt_todo()\n"
-}
-func mirCallVoidAbortLine() string {
-	return "  " + mirInstrCallVoid() + " void @osty_rt_abort()\n"
 }
 
 // §6 standard math runtime call shapes.
@@ -6080,11 +6076,11 @@ func mirRtTestContextExitSymbol() string  { return mirRtTestSymbol("context_exit
 func mirRtTestExpectOkSymbol() string     { return mirRtTestSymbol("expect_ok") }
 func mirRtTestExpectErrorSymbol() string  { return mirRtTestSymbol("expect_error") }
 
-// Osty: bare runtime symbols
-func mirRtPanicSymbol() string       { return mirRtSymbol("panic") }
-func mirRtUnreachableSymbol() string { return mirRtSymbol("unreachable") }
-func mirRtTodoSymbol() string        { return mirRtSymbol("todo") }
-func mirRtAbortSymbol() string       { return mirRtSymbol("abort") }
+// Osty: bare runtime symbols.
+// `panic` / `unreachable` / `todo` / `abort` all route through
+// `MirIntrinsicAbort` → `osty_rt_panic`, so only the panic symbol
+// helper survives.
+func mirRtPanicSymbol() string { return mirRtSymbol("panic") }
 
 // Osty: option / result panic-helper symbols
 func mirRtOptionUnwrapNoneSymbol() string { return mirRtSymbol("option_unwrap_none") }
@@ -8033,20 +8029,11 @@ func mirCallTaskRaceLine(reg, bodyReg string) string {
 	return mirCallValuePtrFromPtrLine(reg, mirRtTaskRaceSymbol(), bodyReg)
 }
 
-// §17 LLVM-text typed runtime-callable panic / abort helpers.
+// §17 LLVM-text typed runtime-callable panic helper.
 
-// Osty: mirCall{Panic,Unreachable,Todo,Abort}Line / mirCall{OptionUnwrapNone,ResultUnwrapErr,ExpectFailed}Line
+// Osty: mirCallPanicLine / mirCall{OptionUnwrapNone,ResultUnwrapErr,ExpectFailed}Line
 func mirCallPanicLine(messagePtr string) string {
 	return mirCallVoidPtrLine(mirRtPanicSymbol(), messagePtr)
-}
-func mirCallUnreachableLine() string {
-	return mirCallVoidNoArgsLine(mirRtUnreachableSymbol())
-}
-func mirCallTodoLine() string {
-	return mirCallVoidNoArgsLine(mirRtTodoSymbol())
-}
-func mirCallAbortLine() string {
-	return mirCallVoidNoArgsLine(mirRtAbortSymbol())
 }
 func mirCallOptionUnwrapNoneLine() string {
 	return mirCallVoidNoArgsLine(mirRtOptionUnwrapNoneSymbol())
