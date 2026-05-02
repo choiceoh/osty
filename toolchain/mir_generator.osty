@@ -19974,7 +19974,11 @@ fn mirStringStartsWith(s: String, prefix: String) -> Bool {
 /// load / runtime calls).
 fn mirEmitProjectedRead(dest: String, place: MirPlace, resultType: String) -> String {
     if place.projections.len() != 1 {
-        return "  ; TODO Phase 1h multi-step projection chain (depth=" + mirGenIntToString(place.projections.len()) + ")\n"
+        // Multi-step is handled by `mirEmitProjectedReadChain`; this
+        // single-step entry is only legal when chain delegates with
+        // n==1. A different caller is an ICE — the verifier flags
+        // the comment so we notice rather than emit wrong IR.
+        return "  ; ICE: mirEmitProjectedRead invoked with depth=" + mirGenIntToString(place.projections.len()) + " — use mirEmitProjectedReadChain\n"
     }
     let proj = place.projections[0]
     let baseReg = mirEmitLocalRegName(place.local)
@@ -20410,17 +20414,14 @@ pub fn mirEmitGlobalsSection(m: MirModule) -> String {
 
 /// mirEmitGlobalLine renders one global declaration. Mutability
 /// picks between `global` (mutable) and `constant` (immutable).
-/// Init-bearing globals get a TODO comment so Phase 1k's init
-/// dispatcher knows to wire them in.
+/// Init-bearing globals are wired into `@osty_module_init` by
+/// `mirEmitModuleInitDispatcher`; the per-global line itself only
+/// needs the storage declaration.
 fn mirEmitGlobalLine(g: MirGlobal) -> String {
     let llvmTy = mirEmitGlobalLLVMType(g.typ)
     let storage = if g.mutable { "global" } else { "constant" }
     let initText = mirEmitGlobalInitializer(llvmTy)
-    let mut out = "@" + g.name + " = " + storage + " " + llvmTy + " " + initText + "\n"
-    if g.hasInit {
-        out = out + "; TODO Phase 1k init constructor: " + g.initSymbol + "\n"
-    }
-    out
+    "@" + g.name + " = " + storage + " " + llvmTy + " " + initText + "\n"
 }
 
 /// mirEmitGlobalLLVMType resolves the global's source-level type
@@ -21324,16 +21325,38 @@ fn mirEmitListAggregate(dest: String, rv: MirRValue) -> String {
     out
 }
 
-/// mirEmitMapAggregate creates an empty map (key+val kinds derived
-/// from the aggregate's variant tag carried in `rv.aggVariantTag`
-/// — Phase 1n threads the real key/val type info through; Phase 1m
-/// uses i64 / i64 default which the runtime tolerates with a TODO).
-/// Initial key-value pairs would land via insertvalue + insert
-/// runtime calls; today the empty alloc is enough.
+/// mirEmitMapAggregate creates an empty map and inserts each
+/// initial key-value pair. `rv.aggFields` interleaves keys and
+/// values (k0, v0, k1, v1, ...) — Phase 1r walks the pairs and
+/// emits one `osty_rt_map_insert_<keyTy>` per entry. Key-type
+/// dispatch reuses `mirMapInsertSymbolFor` (i64 / string today);
+/// unsupported keys stub TODO so the verifier flags the runtime
+/// catalog gap.
 fn mirEmitMapAggregate(dest: String, rv: MirRValue) -> String {
     let mut out = "  " + dest + " = call ptr @osty_rt_map_new(i64 0, i64 0, i64 8, ptr null)\n"
-    if rv.aggFields.len() > 0 {
-        out = out + "  ; TODO Phase 1n map aggregate initial elements (count=" + mirGenIntToString(rv.aggFields.len()) + ")\n"
+    let n = rv.aggFields.len()
+    if n == 0 {
+        return out
+    }
+    if n % 2 != 0 {
+        out = out + "  ; ICE: map aggregate has odd field count " + mirGenIntToString(n) + "\n"
+        return out
+    }
+    let mut i = 0
+    for i + 1 < n {
+        let kOp = rv.aggFields[i]
+        let vOp = rv.aggFields[i + 1]
+        let kTy = mirEmitOperandLLVMType(kOp)
+        let vTy = mirEmitOperandLLVMType(vOp)
+        let kText = mirEmitOperand(kOp)
+        let vText = mirEmitOperand(vOp)
+        let sym = mirMapInsertSymbolFor(kTy)
+        if sym == "" {
+            out = out + "  ; TODO map aggregate insert for key type \"" + kTy + "\"\n"
+        } else {
+            out = out + "  call void @" + sym + "(ptr " + dest + ", " + kTy + " " + kText + ", " + vTy + " " + vText + ")\n"
+        }
+        i = i + 2
     }
     out
 }
@@ -21861,18 +21884,73 @@ pub fn mirCollectAggregateShapes(m: MirModule) -> List<String> {
     out
 }
 
+/// mirEmitMultiStepIndexWrite lowers `agg.f0.f1[i] = v`. Caller has
+/// already validated that intermediate steps are Field/Tuple and the
+/// final step is Index. The chain walks extractvalue through the
+/// field/tuple intermediates to land on the inner list ptr, then
+/// invokes the per-elem `osty_rt_list_set_<ty>` helper. Lists are
+/// heap-allocated, so writing through the extracted ptr mutates the
+/// same underlying storage the holding aggregate references.
 fn mirEmitMultiStepIndexWrite(instr: MirInstr) -> String {
-    let lastIdx = instr.dest.projections.len() - 1
-    if lastIdx > 0 {
-        return "  ; TODO Phase 1q multi-step write through Field+Index chain (depth=" + mirGenIntToString(lastIdx + 1) + ")\n"
+    let n = instr.dest.projections.len()
+    let lastProj = instr.dest.projections[n - 1]
+    if n == 1 {
+        return mirEmitIndexWriteLine(instr, lastProj)
     }
-    mirEmitIndexWriteLine(instr, instr.dest.projections[lastIdx])
+    let baseReg = mirEmitLocalRegName(instr.dest.local)
+    let mut out = ""
+    let mut prev = baseReg
+    let mut i = 0
+    for proj in instr.dest.projections {
+        if i == n - 1 {
+            i = i + 1
+            continue
+        }
+        let target = baseReg + ".r" + mirGenIntToString(i)
+        out = out + "  " + target + " = extractvalue \{ i64, i64 \} " + prev + ", " + mirGenIntToString(proj.index) + "\n"
+        prev = target
+        i = i + 1
+    }
+    let valueDest = baseReg + ".iw"
+    out = out + mirEmitRValue(valueDest, instr.src)
+    let valueTy = mirEmitRValueLLVMType(instr.src)
+    let idxOp = if lastProj.indexLocal >= 0 {
+        mirEmitLocalRegName(lastProj.indexLocal)
+    } else {
+        mirGenIntToString(lastProj.indexConst)
+    }
+    let setSym = mirEmitListSetSymbol(valueTy)
+    if setSym == "" {
+        out = out + "  ; TODO list_set for elem type \"" + valueTy + "\"\n"
+        return out
+    }
+    out + "  call void @" + setSym + "(ptr " + prev + ", i64 " + idxOp + ", " + valueTy + " " + valueDest + ")\n"
 }
 
+/// mirEmitMultiStepDerefWrite lowers `agg.f0.f1.* = v`. Same chain
+/// shape as the Index variant but the final step is `store` through
+/// the extracted ptr.
 fn mirEmitMultiStepDerefWrite(instr: MirInstr) -> String {
-    let lastIdx = instr.dest.projections.len() - 1
-    if lastIdx > 0 {
-        return "  ; TODO Phase 1q multi-step write through Field+Deref chain (depth=" + mirGenIntToString(lastIdx + 1) + ")\n"
+    let n = instr.dest.projections.len()
+    if n == 1 {
+        return mirEmitDerefWriteLine(instr, instr.dest.projections[n - 1])
     }
-    mirEmitDerefWriteLine(instr, instr.dest.projections[lastIdx])
+    let baseReg = mirEmitLocalRegName(instr.dest.local)
+    let mut out = ""
+    let mut prev = baseReg
+    let mut i = 0
+    for proj in instr.dest.projections {
+        if i == n - 1 {
+            i = i + 1
+            continue
+        }
+        let target = baseReg + ".r" + mirGenIntToString(i)
+        out = out + "  " + target + " = extractvalue \{ i64, i64 \} " + prev + ", " + mirGenIntToString(proj.index) + "\n"
+        prev = target
+        i = i + 1
+    }
+    let valueDest = baseReg + ".dw"
+    out = out + mirEmitRValue(valueDest, instr.src)
+    let valueTy = mirEmitRValueLLVMType(instr.src)
+    out + "  store " + valueTy + " " + valueDest + ", ptr " + prev + "\n"
 }
