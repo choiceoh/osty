@@ -1,0 +1,250 @@
+// onb_asm.osty — assembly text renderer for the ONB LIR. Slice D
+// of the ONB self-host port. Mirror of `internal/onb/asm.go`.
+//
+// Style: each helper appends to a `String` accumulator (Osty
+// strings are concatenable; the `+` operator is the natural
+// pattern). The output is human-readable aarch64 assembly that
+// the host toolchain (clang / gas) can re-assemble.
+//
+// Object-format scope: only Mach-O is mirrored here. ELF rendering
+// would add a parallel naming + section switch; ONB's production
+// ABI today is darwin/aarch64, so the Osty port stays focused.
+
+// === Target abstraction =============================================
+//
+// `OnbTarget` mirrors `internal/onb/onb.go`'s `Target` struct (just
+// the object-format axis since that's all `asm.go` reads).
+
+pub struct OnbTarget {
+    pub triple: String,
+    pub objectFormat: String,
+}
+
+pub fn onbTargetMachoArm64() -> OnbTarget {
+    OnbTarget { triple: "aarch64-apple-darwin", objectFormat: "mach-o" }
+}
+
+pub fn onbTargetIsMacho(t: OnbTarget) -> Bool {
+    t.objectFormat == "mach-o"
+}
+
+// === Naming helpers =================================================
+
+// onbAsmSymbolName prefixes function names with `_` on Mach-O so
+// `main` becomes `_main` (darwin's symbol mangling). ELF leaves
+// names bare. Mirror of `asmSymbolName`.
+pub fn onbAsmSymbolName(target: OnbTarget, name: String) -> String {
+    if onbTargetIsMacho(target) {
+        "_" + name
+    } else {
+        name
+    }
+}
+
+// onbAsmCStringLabel prefixes c-string pool labels per the
+// platform's local-symbol convention. Mirror of `asmCStringLabel`.
+pub fn onbAsmCStringLabel(target: OnbTarget, label: String) -> String {
+    if onbTargetIsMacho(target) {
+        "L_." + label
+    } else {
+        ".L." + label
+    }
+}
+
+// onbAsmBlockLabel produces a per-function block label so the
+// `b bbN` and `b.cond bbN` instructions don't collide across
+// functions. Mirror of `asmBlockLabel`.
+pub fn onbAsmBlockLabel(target: OnbTarget, fnName: String, blockIdx: Int) -> String {
+    let prefix = if onbTargetIsMacho(target) {
+        "L"
+    } else {
+        ".L"
+    }
+    "{prefix}_{fnName}_bb{blockIdx}"
+}
+
+// === C-string escape ================================================
+
+// onbAsmCStringLiteral renders a String value as a quoted asm
+// directive payload (`"..."`). Non-printable bytes go through
+// the standard escape forms (`\n`, `\r`, `\t`, `\\`, `\"`) or
+// fall through to `\NNN` octal for everything else.
+//
+// Mirror of `asmCStringLiteral`. The Osty version walks bytes via
+// `String.bytes()` since the Go side iterates by char index; both
+// produce the same byte-level output for ASCII / common UTF-8
+// payloads.
+pub fn onbAsmCStringLiteral(s: String) -> String {
+    let mut out = "\""
+    for byte in s.bytes() {
+        let c = byte.toInt()
+        if c == 0x5c {            // backslash
+            out = out + "\\\\"
+        } else if c == 0x22 {     // double quote
+            out = out + "\\\""
+        } else if c == 0x0a {     // \n
+            out = out + "\\n"
+        } else if c == 0x0d {     // \r
+            out = out + "\\r"
+        } else if c == 0x09 {     // \t
+            out = out + "\\t"
+        } else if c >= 0x20 && c <= 0x7e {
+            // Printable ASCII — push the byte directly. Osty
+            // doesn't have a byte-to-char primitive that's safe
+            // for arbitrary bytes, so we route through
+            // `onbAsmHexAsciiOrOctal` which handles the printable
+            // case + falls through to octal.
+            out = out + onbAsmAsciiByteToString(c)
+        } else {
+            out = out + onbAsmOctalEscape(c)
+        }
+    }
+    out + "\""
+}
+
+// onbAsmAsciiByteToString renders a single printable ASCII byte
+// (0x20..0x7e) as its 1-char String. Uses a 95-char lookup string
+// indexed by `c - 0x20` — the order is the standard ASCII layout
+// from space (0x20) up through tilde (0x7e). Outside that range
+// the helper returns the octal escape so callers don't have to
+// branch a second time.
+fn onbAsmAsciiByteToString(c: Int) -> String {
+    if c < 0x20 || c > 0x7e {
+        return onbAsmOctalEscape(c)
+    }
+    let table = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+    onbAsmStringCharAt(table, c - 0x20)
+}
+
+// onbAsmStringCharAt returns the i-th char of `s` as a 1-char
+// String. Used by the printable-ASCII lookup. Walks the string
+// once — Osty's String API today doesn't surface direct byte
+// indexing, so we iterate.
+fn onbAsmStringCharAt(s: String, i: Int) -> String {
+    let mut idx = 0
+    let mut out = ""
+    for ch in s.chars() {
+        if idx == i {
+            out = "{ch}"
+        }
+        idx = idx + 1
+    }
+    out
+}
+
+// onbAsmOctalEscape renders a non-printable byte as `\NNN` (octal,
+// 3 digits). The aarch64 GAS / clang asm assembler accepts this
+// form across both Mach-O and ELF.
+fn onbAsmOctalEscape(c: Int) -> String {
+    let high = (c / 64) % 8
+    let mid = (c / 8) % 8
+    let low = c % 8
+    "\\{high}{mid}{low}"
+}
+
+// === Per-instruction rendering ====================================
+//
+// `onbAsmRenderInstr` writes the asm text for a single LIR
+// instruction. The signature mirrors the Go-side
+// `renderInstrAssembly` switch: dispatches on `OnbInstr.kind`,
+// returning the rendered text (with leading tab + trailing
+// newline, matching the Go encoder).
+//
+// Note: prologue / epilogue rendering for `Ret` (the stp/ldp pair
+// + sp adjust) lives in the function-level renderer, not here —
+// the `Ret` instruction itself just emits `ret`.
+
+pub fn onbAsmRenderInstr(target: OnbTarget, instr: OnbInstr) -> String {
+    match instr.kind {
+        OnbInstrKind.OnbInstrBrk -> "\tbrk #{instr.imm}\n",
+        OnbInstrKind.OnbInstrRet -> "\tret\n",
+        OnbInstrKind.OnbInstrAddReg -> "\tadd {instr.dst}, {instr.lhs}, {instr.rhs}\n",
+        OnbInstrKind.OnbInstrSubReg -> "\tsub {instr.dst}, {instr.lhs}, {instr.rhs}\n",
+        OnbInstrKind.OnbInstrMulReg -> "\tmul {instr.dst}, {instr.lhs}, {instr.rhs}\n",
+        OnbInstrKind.OnbInstrCmp -> "\tcmp {instr.lhs}, {instr.rhs}\n",
+        OnbInstrKind.OnbInstrCset -> "\tcset {instr.dst}, {onbCondAsmName(instr.cond)}\n",
+        OnbInstrKind.OnbInstrStore64Stack -> "\tstr {instr.src}, [sp, #{instr.offset}]\n",
+        OnbInstrKind.OnbInstrLoad64Stack -> "\tldr {instr.dst}, [sp, #{instr.offset}]\n",
+        OnbInstrKind.OnbInstrMovRegReg -> "\tmov {instr.dst}, {instr.src}\n",
+        OnbInstrKind.OnbInstrLoadStackAddress -> "\tadd {instr.dst}, sp, #{instr.offset}\n",
+        OnbInstrKind.OnbInstrLoadFromReg -> "\tldr {instr.dst}, [{instr.src}, #{instr.offset}]\n",
+        OnbInstrKind.OnbInstrStoreToReg -> "\tstr {instr.src}, [{instr.base}, #{instr.offset}]\n",
+        OnbInstrKind.OnbInstrLoadFloat64Stack -> "\tldr {instr.dst}, [sp, #{instr.offset}]\n",
+        OnbInstrKind.OnbInstrStoreFloat64Stack -> "\tstr {instr.src}, [sp, #{instr.offset}]\n",
+        OnbInstrKind.OnbInstrFmovDFromX -> "\tfmov {instr.dst}, {instr.src}\n",
+        OnbInstrKind.OnbInstrFmovXFromD -> "\tfmov {instr.dst}, {instr.src}\n",
+        OnbInstrKind.OnbInstrFaddReg -> "\tfadd {instr.dst}, {instr.lhs}, {instr.rhs}\n",
+        OnbInstrKind.OnbInstrFsubReg -> "\tfsub {instr.dst}, {instr.lhs}, {instr.rhs}\n",
+        OnbInstrKind.OnbInstrFmulReg -> "\tfmul {instr.dst}, {instr.lhs}, {instr.rhs}\n",
+        OnbInstrKind.OnbInstrFdivReg -> "\tfdiv {instr.dst}, {instr.lhs}, {instr.rhs}\n",
+        OnbInstrKind.OnbInstrBranchLinkReg -> "\tblr {instr.src}\n",
+        OnbInstrKind.OnbInstrMovImm32 -> "\tmovz {instr.dst}, #{instr.imm}\n",
+        OnbInstrKind.OnbInstrMovImm64 -> "\t<MovImm64 multi-word; renderer needs onbAsmRenderMovImm64>\n",
+        OnbInstrKind.OnbInstrBranch -> "\tb <unresolved-target>\n",
+        OnbInstrKind.OnbInstrBranchCond -> "\tb.{onbCondAsmName(instr.cond)} <unresolved-target>\n",
+        OnbInstrKind.OnbInstrBranchCondNotZero -> "\tcbnz {instr.src}, <unresolved-target>\n",
+        OnbInstrKind.OnbInstrLoadCStringAddress -> onbAsmRenderLoadCStringAddress(target, instr),
+        OnbInstrKind.OnbInstrLoadSymbolAddress -> onbAsmRenderLoadSymbolAddress(target, instr),
+        OnbInstrKind.OnbInstrBranchLink -> "\tbl {onbAsmSymbolName(target, instr.symbol)}\n",
+        OnbInstrKind.OnbInstrInvalid -> "\t<invalid>\n",
+    }
+}
+
+// onbCondAsmName returns the GAS mnemonic suffix for a condition
+// code. Mirror of `Cond.AsmName` in `internal/onb/lir.go`.
+pub fn onbCondAsmName(c: OnbCond) -> String {
+    match c {
+        OnbCond.OnbCondEq -> "eq",
+        OnbCond.OnbCondNe -> "ne",
+        OnbCond.OnbCondGe -> "ge",
+        OnbCond.OnbCondLt -> "lt",
+        OnbCond.OnbCondGt -> "gt",
+        OnbCond.OnbCondLe -> "le",
+    }
+}
+
+// onbAsmRenderLoadCStringAddress emits the adrp/add pair for a
+// `__cstring` label. Mach-O uses `@PAGE`/`@PAGEOFF` suffixes; ELF
+// uses bare label / `:lo12:label`.
+fn onbAsmRenderLoadCStringAddress(target: OnbTarget, instr: OnbInstr) -> String {
+    let label = onbAsmCStringLabel(target, instr.label)
+    if onbTargetIsMacho(target) {
+        "\tadrp {instr.dst}, {label}@PAGE\n\tadd {instr.dst}, {instr.dst}, {label}@PAGEOFF\n"
+    } else {
+        "\tadrp {instr.dst}, {label}\n\tadd {instr.dst}, {instr.dst}, :lo12:{label}\n"
+    }
+}
+
+// onbAsmRenderLoadSymbolAddress emits the adrp/add pair for a
+// non-cstring symbol (function or data). Same shape as the
+// cstring helper but routes the symbol through
+// `onbAsmSymbolName` instead of the cstring label decoration.
+fn onbAsmRenderLoadSymbolAddress(target: OnbTarget, instr: OnbInstr) -> String {
+    let sym = onbAsmSymbolName(target, instr.symbol)
+    if onbTargetIsMacho(target) {
+        "\tadrp {instr.dst}, {sym}@PAGE\n\tadd {instr.dst}, {instr.dst}, {sym}@PAGEOFF\n"
+    } else {
+        "\tadrp {instr.dst}, {sym}\n\tadd {instr.dst}, {instr.dst}, :lo12:{sym}\n"
+    }
+}
+
+// === Section / function rendering =================================
+
+// onbAsmRenderCStringSection renders the `__cstring` literal pool
+// at the end of the .s file. Mirror of `renderCStringSection`.
+pub fn onbAsmRenderCStringSection(target: OnbTarget, cstrings: List<OnbCStringLiteral>) -> String {
+    if cstrings.len() == 0 {
+        return ""
+    }
+    let mut out = if onbTargetIsMacho(target) {
+        ".section __TEXT,__cstring,cstring_literals\n"
+    } else {
+        ".section .rodata\n"
+    }
+    for cstr in cstrings {
+        let label = onbAsmCStringLabel(target, cstr.label)
+        let lit = onbAsmCStringLiteral(cstr.value)
+        out = out + "{label}:\n\t.asciz {lit}\n"
+    }
+    out
+}
