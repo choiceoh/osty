@@ -19154,8 +19154,8 @@ fn mirEmitInstruction(func: MirFunction, instr: MirInstr) -> String {
     match instr.kind {
         MirInstrInvalid -> "  ; TODO invalid MIR instruction\n",
         MirInstrAssign -> mirEmitAssignInstr(func, instr),
-        MirInstrCall -> "  ; TODO Phase 1d MirInstrCall\n",
-        MirInstrIntrinsic -> "  ; TODO Phase 1d MirInstrIntrinsic\n",
+        MirInstrCall -> mirEmitCallInstr(func, instr),
+        MirInstrIntrinsic -> mirEmitIntrinsicInstr(func, instr),
         MirInstrStorageLive -> "",
         MirInstrStorageDead -> "",
     }
@@ -19181,7 +19181,7 @@ fn mirEmitRValue(dest: String, rv: MirRValue) -> String {
         MirRVUse -> mirEmitRValueUse(dest, rv),
         MirRVUnary -> mirEmitRValueUnary(dest, rv),
         MirRVBinary -> mirEmitRValueBinary(dest, rv),
-        MirRVAggregate -> "  ; TODO Phase 1d MirRVAggregate\n",
+        MirRVAggregate -> mirEmitRValueAggregate(dest, rv),
         MirRVDiscriminant -> "  ; TODO Phase 1d MirRVDiscriminant\n",
         MirRVLen -> "  ; TODO Phase 1d MirRVLen\n",
         MirRVCast -> "  ; TODO Phase 1d MirRVCast\n",
@@ -19301,4 +19301,198 @@ fn mirEmitOperandLLVMType(op: MirOperand) -> String {
         return prim
     }
     "i64"
+}
+
+
+// ====================================================================
+// Phase 1d — Calls, Intrinsics, and Tuple aggregates
+// ====================================================================
+//
+// Phase 1c (#1273) covered MirInstrAssign with Use/Unary/Binary
+// rvalues but stubbed the call/intrinsic/aggregate arms. Phase 1d
+// fills those in:
+//
+//   - MirInstrCall (direct only)         — `[%dest =] call <ret> @<sym>(<args>)`.
+//                                          Indirect (calleeOperand) stays
+//                                          stubbed at Phase 1e.
+//   - MirInstrIntrinsic                  — print / println / eprint /
+//                                          eprintln of String operands
+//                                          and abort. Other intrinsics
+//                                          (collections, channels,
+//                                          string ops, …) get a TODO
+//                                          comment so the verifier
+//                                          flags the next gap.
+//   - MirRVAggregate (Tuple only)        — `insertvalue` chain with
+//                                          deterministic intermediate
+//                                          names (`%v<dest>.t<i>`).
+//                                          Struct / EnumVariant /
+//                                          List / Map / Closure stay
+//                                          stubbed.
+
+/// mirEmitCallInstr lowers `[%dest =] call <ret> @<sym>(<args>)`.
+/// Direct calls only (calleeKind == MirCalleeFn). Indirect / unknown
+/// callees stub with TODO. The return type comes from `func.locals`
+/// when `hasDest` so the call signature matches the dest slot.
+fn mirEmitCallInstr(func: MirFunction, instr: MirInstr) -> String {
+    if instr.calleeKind != MirCalleeFn {
+        return "  ; TODO Phase 1e indirect / unknown call kind\n"
+    }
+    let argList = mirEmitCallArgList(instr.args)
+    if instr.hasDest {
+        if mirPlaceHasProjections(instr.dest) {
+            return "  ; TODO Phase 1e call-into-projection dest\n"
+        }
+        let dest = mirEmitLocalRegName(instr.dest.local)
+        let retTy = mirEmitCallReturnType(func, instr)
+        if retTy == "void" {
+            return mirCallVoidLine(instr.calleeSymbol, argList)
+        }
+        return mirCallValueLine(dest, retTy, instr.calleeSymbol, argList)
+    }
+    mirCallVoidLine(instr.calleeSymbol, argList)
+}
+
+/// mirEmitCallReturnType resolves the return type of a call. With
+/// `hasDest` the dest local's typ wins (most reliable); otherwise we
+/// fall back to `void` so the call statement compiles.
+fn mirEmitCallReturnType(func: MirFunction, instr: MirInstr) -> String {
+    if instr.hasDest && instr.dest.local >= 0 && instr.dest.local < func.locals.len() {
+        let loc = func.locals[instr.dest.local]
+        let prim = mirLlvmTypeForPrim(loc.typ)
+        if prim != "" {
+            return prim
+        }
+        return "ptr"
+    }
+    "void"
+}
+
+/// mirEmitCallArgList renders `<ty> <op>, <ty> <op>, ...` for the
+/// call's argument list. Each operand's source-level type is
+/// translated through `mirEmitOperandLLVMType`.
+fn mirEmitCallArgList(args: List<MirOperand>) -> String {
+    let mut out = ""
+    let mut i = 0
+    for op in args {
+        if i > 0 {
+            out = out + ", "
+        }
+        let ty = mirEmitOperandLLVMType(op)
+        out = out + ty + " " + mirEmitOperand(op)
+        i = i + 1
+    }
+    out
+}
+
+/// mirEmitIntrinsicInstr lowers MirIntrinsicKind shapes the Phase 1d
+/// emitter understands. Print / println / eprint / eprintln of String
+/// operands route through the runtime IO write helper. Abort routes
+/// through `osty_rt_abort`. Everything else stubs with TODO so the
+/// verifier surfaces the next gap.
+fn mirEmitIntrinsicInstr(func: MirFunction, instr: MirInstr) -> String {
+    match instr.intrinsic {
+        MirIntrinsicPrintln -> mirEmitIoWriteIntrinsic(instr, true, false),
+        MirIntrinsicPrint -> mirEmitIoWriteIntrinsic(instr, false, false),
+        MirIntrinsicEprintln -> mirEmitIoWriteIntrinsic(instr, true, true),
+        MirIntrinsicEprint -> mirEmitIoWriteIntrinsic(instr, false, true),
+        MirIntrinsicAbort -> mirEmitAbortIntrinsic(instr),
+        _ -> "  ; TODO Phase 1e MirIntrinsic " + mirGenIntToString(instr.args.len()) + " arg(s)\n",
+    }
+}
+
+/// mirEmitIoWriteIntrinsic emits the runtime call for print-family
+/// intrinsics. Phase 1d only lowers String args verbatim — typed
+/// pretty-printers (Int, Bool, …) are Phase 1e (the Go side dispatches
+/// on operand type via printf format specifiers; mirroring that takes
+/// the per-type table). Non-String args stub with TODO.
+fn mirEmitIoWriteIntrinsic(instr: MirInstr, newline: Bool, stderr: Bool) -> String {
+    if instr.args.len() != 1 {
+        return "  ; TODO Phase 1e print-family with " + mirGenIntToString(instr.args.len()) + " args\n"
+    }
+    let arg = instr.args[0]
+    if arg.typ != "String" {
+        return "  ; TODO Phase 1e print-family of " + arg.typ + " (printf-style dispatch)\n"
+    }
+    let argText = mirEmitOperand(arg)
+    let nlLit = if newline { "true" } else { "false" }
+    let errLit = if stderr { "true" } else { "false" }
+    "  call void @osty_rt_io_write(ptr " + argText + ", i1 " + nlLit + ", i1 " + errLit + ")\n"
+}
+
+/// mirEmitAbortIntrinsic emits `call void @osty_rt_abort(ptr <msg>)`
+/// followed by `unreachable` so the verifier knows control flow ends.
+/// Mirrors the Go-side emitter's pairing.
+fn mirEmitAbortIntrinsic(instr: MirInstr) -> String {
+    let msg = if instr.args.len() >= 1 {
+        mirEmitOperand(instr.args[0])
+    } else {
+        "null"
+    }
+    let mut out = "  call void @osty_rt_abort(ptr " + msg + ")\n"
+    out = out + "  unreachable\n"
+    out
+}
+
+/// mirEmitRValueAggregate lowers an aggregate construction. Phase 1d
+/// covers MirAggTuple via an `insertvalue` chain anchored at the
+/// dest register. Intermediate names are derived deterministically
+/// from the dest (`<dest>.t<i>`) so no SSA counter has to thread
+/// through the rvalue dispatcher. Other aggregate kinds (Struct,
+/// EnumVariant, List, Map, Closure) stub with TODO.
+fn mirEmitRValueAggregate(dest: String, rv: MirRValue) -> String {
+    match rv.aggKind {
+        MirAggTuple -> mirEmitTupleAggregate(dest, rv),
+        MirAggStruct -> "  ; TODO Phase 1e MirAggStruct\n",
+        MirAggEnumVariant -> "  ; TODO Phase 1e MirAggEnumVariant\n",
+        MirAggList -> "  ; TODO Phase 1e MirAggList (runtime alloc)\n",
+        MirAggMap -> "  ; TODO Phase 1e MirAggMap (runtime alloc)\n",
+        MirAggClosure -> "  ; TODO Phase 1e MirAggClosure\n",
+        MirAggInvalid -> "  ; TODO invalid aggregate kind\n",
+    }
+}
+
+/// mirEmitTupleAggregate emits `<dest> = insertvalue { ty, ty } ...,
+/// ty <op>, <i>` chained for each field. Deterministic intermediate
+/// names: `<dest>.t0`, `<dest>.t1`, …, with the last insertvalue
+/// landing on `<dest>` itself. Empty-tuple (Unit) collapses to a
+/// no-op `%dest = bitcast {} undef to {}` so the SSA dest is still
+/// defined.
+fn mirEmitTupleAggregate(dest: String, rv: MirRValue) -> String {
+    let tupleTy = mirEmitTupleTypeText(rv.aggFields)
+    let n = rv.aggFields.len()
+    if n == 0 {
+        return "  " + dest + " = bitcast " + tupleTy + " undef to " + tupleTy + "\n"
+    }
+    let mut out = ""
+    let mut prev = "undef"
+    let mut i = 0
+    for field in rv.aggFields {
+        let fieldTy = mirEmitOperandLLVMType(field)
+        let fieldOp = mirEmitOperand(field)
+        let target = if i == n - 1 { dest } else { dest + ".t" + mirGenIntToString(i) }
+        out = out + "  " + target + " = insertvalue " + tupleTy + " " + prev
+        out = out + ", " + fieldTy + " " + fieldOp + ", " + mirGenIntToString(i) + "\n"
+        prev = target
+        i = i + 1
+    }
+    out
+}
+
+/// mirEmitTupleTypeText renders `{ <ty>, <ty>, ... }` for a tuple's
+/// LLVM aggregate type. Empty tuple becomes `{}`. Field types are
+/// resolved through `mirEmitOperandLLVMType`.
+fn mirEmitTupleTypeText(fields: List<MirOperand>) -> String {
+    if fields.len() == 0 {
+        return "\{\}"
+    }
+    let mut out = "\{ "
+    let mut i = 0
+    for f in fields {
+        if i > 0 {
+            out = out + ", "
+        }
+        out = out + mirEmitOperandLLVMType(f)
+        i = i + 1
+    }
+    out + " \}"
 }
