@@ -19203,6 +19203,9 @@ fn mirEmitRValue(dest: String, rv: MirRValue) -> String {
 /// For bool/i1 we use `or i1 0, op`; for ptr we fall through to
 /// `select i1 true, ptr op, ptr op` so the type stays right.
 fn mirEmitRValueUse(dest: String, rv: MirRValue) -> String {
+    if mirOperandHasProjections(rv.arg) {
+        return mirEmitProjectedRead(dest, rv.arg.place, rv.typ)
+    }
     let ty = mirEmitRValueLLVMType(rv)
     let op = mirEmitOperand(rv.arg)
     if ty == "ptr" {
@@ -19215,6 +19218,17 @@ fn mirEmitRValueUse(dest: String, rv: MirRValue) -> String {
         return "  " + dest + " = or i1 0, " + op + "\n"
     }
     "  " + dest + " = add " + ty + " 0, " + op + "\n"
+}
+
+/// mirOperandHasProjections returns true when `op` is a place read
+/// (Copy/Move) with one or more projections. Operand-position
+/// constants and bare-local reads short-circuit through the
+/// existing single-string `mirEmitOperand` path.
+fn mirOperandHasProjections(op: MirOperand) -> Bool {
+    if op.kind != MirOpCopy && op.kind != MirOpMove {
+        return false
+    }
+    mirPlaceHasProjections(op.place)
 }
 
 /// mirEmitRValueUnary lowers Neg / Not / BitNot / Plus on numeric
@@ -19831,4 +19845,122 @@ fn mirEmitLenSymbol(typeName: String) -> String {
 /// file's other String inspection sites.
 fn mirStringStartsWith(s: String, prefix: String) -> Bool {
     llvmStrings.startsWith(s, prefix)
+}
+
+
+// ====================================================================
+// Phase 1g — Projection chains (READ side, single-step)
+// ====================================================================
+//
+// Phase 1f closed SwitchInt + Cast + Discriminant + Len but every
+// place with one or more projections (`s.field`, `arr[i]`,
+// `Some(x).0`, `*p`) still stubbed at TODO. Phase 1g lands the
+// READ side at single-projection depth so the most common shapes
+// resolve. Multi-step chains (`Some(x).0.field`) and WRITE-side
+// projections (assigning into a field) stay TODO for Phase 1h.
+//
+// The helper emits lines such that the LAST line writes to `dest`
+// directly — no intermediate-name plumbing required at this depth.
+//
+// Type assumptions (Phase 1g):
+//   - Field / Tuple aggregate type → `{ i64, i64 }` (the canonical
+//     2-tuple after monomorph; Phase 1h widens via the type-defs
+//     section once that lands).
+//   - Variant aggregate type → `{ i64 disc, i64 payload }`. Whole-
+//     payload extraction (variantField == -1) reads index 1.
+//     Per-field unwrap inside the payload still TODO.
+//   - Index → routes through per-elem `osty_rt_list_get_<llvmTy>`
+//     when the runtime has a dispatcher for the element type.
+//   - Deref → `load <elemTy>, ptr <src>`.
+
+/// mirEmitProjectedRead lowers a single-step projection on a MirPlace
+/// such that `dest` holds the projected value. `resultType` is the
+/// rvalue's source-level type name (used to derive the LLVM type for
+/// load / runtime calls).
+fn mirEmitProjectedRead(dest: String, place: MirPlace, resultType: String) -> String {
+    if place.projections.len() != 1 {
+        return "  ; TODO Phase 1h multi-step projection chain (depth=" + mirGenIntToString(place.projections.len()) + ")\n"
+    }
+    let proj = place.projections[0]
+    let baseReg = mirEmitLocalRegName(place.local)
+    let resultLLVM = mirEmitProjectionResultLLVM(resultType, proj)
+    match proj.kind {
+        MirProjField -> mirEmitProjectFieldLine(dest, baseReg, proj.index),
+        MirProjTuple -> mirEmitProjectFieldLine(dest, baseReg, proj.index),
+        MirProjVariant -> mirEmitProjectVariantLine(dest, baseReg, proj),
+        MirProjIndex -> mirEmitProjectIndexLine(dest, baseReg, proj, resultLLVM),
+        MirProjDeref -> "  " + dest + " = load " + resultLLVM + ", ptr " + baseReg + "\n",
+        MirProjInvalid -> "  ; TODO invalid projection\n",
+    }
+}
+
+/// mirEmitProjectionResultLLVM prefers the projection's own `typ`
+/// (set by the lowerer to the post-projection type) and falls back
+/// to the rvalue's resultType when missing. Last-resort i64 keeps
+/// the IR text well-formed for the verifier to flag.
+fn mirEmitProjectionResultLLVM(resultType: String, proj: MirProjection) -> String {
+    let projPrim = mirLlvmTypeForPrim(proj.typ)
+    if projPrim != "" {
+        return projPrim
+    }
+    let resultPrim = mirLlvmTypeForPrim(resultType)
+    if resultPrim != "" {
+        return resultPrim
+    }
+    "i64"
+}
+
+/// mirEmitProjectFieldLine renders `<dest> = extractvalue { i64, i64 }
+/// <baseReg>, <idx>`. Aggregate type heuristic: 2-element i64 tuple,
+/// the canonical post-monomorph shape for Tuple / Struct field
+/// reads at this Phase. Phase 1h replaces the heuristic with a
+/// real type lookup once the type-defs section is wired.
+fn mirEmitProjectFieldLine(dest: String, baseReg: String, idx: Int) -> String {
+    "  " + dest + " = extractvalue \{ i64, i64 \} " + baseReg + ", " + mirGenIntToString(idx) + "\n"
+}
+
+/// mirEmitProjectVariantLine reads the payload of an enum at index 1
+/// (the canonical `{ i64 disc, i64 payload }` shape). Phase 1g only
+/// covers `variantField == -1` (whole-payload read); per-field
+/// unwrap inside the payload is Phase 1h.
+fn mirEmitProjectVariantLine(dest: String, baseReg: String, proj: MirProjection) -> String {
+    if proj.variantField >= 0 {
+        return "  ; TODO Phase 1h enum payload field unwrap (variantField=" + mirGenIntToString(proj.variantField) + ")\n"
+    }
+    "  " + dest + " = extractvalue \{ i64, i64 \} " + baseReg + ", 1\n"
+}
+
+/// mirEmitProjectIndexLine routes a `list[i]` projection through the
+/// per-elem-type runtime helper. Element type comes from
+/// `resultLLVM`; Phase 1g supports i64 / ptr / i1 / double dispatch.
+fn mirEmitProjectIndexLine(dest: String, baseReg: String, proj: MirProjection, resultLLVM: String) -> String {
+    let elemSym = mirEmitListGetSymbol(resultLLVM)
+    if elemSym == "" {
+        return "  ; TODO Phase 1h list_get for elem type \"" + resultLLVM + "\"\n"
+    }
+    let idxOp = if proj.indexLocal >= 0 {
+        mirEmitLocalRegName(proj.indexLocal)
+    } else {
+        mirGenIntToString(proj.indexConst)
+    }
+    "  " + dest + " = call " + resultLLVM + " @" + elemSym + "(ptr " + baseReg + ", i64 " + idxOp + ")\n"
+}
+
+/// mirEmitListGetSymbol picks the runtime helper for `list[i]` per
+/// element LLVM type. Returns `""` for unsupported element shapes
+/// (e.g. composite element bytes-v1) so the caller stubs with TODO.
+fn mirEmitListGetSymbol(elemLLVM: String) -> String {
+    if elemLLVM == "i64" {
+        return "osty_rt_list_get_i64"
+    }
+    if elemLLVM == "i1" {
+        return "osty_rt_list_get_i1"
+    }
+    if elemLLVM == "ptr" {
+        return "osty_rt_list_get_ptr"
+    }
+    if elemLLVM == "double" {
+        return "osty_rt_list_get_f64"
+    }
+    ""
 }

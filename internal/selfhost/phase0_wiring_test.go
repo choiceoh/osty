@@ -138,6 +138,23 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"osty_rt_list_len",
 				"osty_rt_map_len",
 				"osty_rt_set_len",
+				// Phase 1g — single-step projection chains in
+				// READ-side rvalues (Use of projected operand).
+				// Loss of any of these would silently regress to
+				// the Phase 1f stub-`0` operand path.
+				"mirOperandHasProjections(",
+				"mirEmitProjectedRead(",
+				"mirEmitProjectFieldLine(",
+				"mirEmitProjectVariantLine(",
+				"mirEmitProjectIndexLine(",
+				"mirEmitListGetSymbol(",
+				"MirProjField -> mirEmitProjectFieldLine",
+				"MirProjTuple -> mirEmitProjectFieldLine",
+				"MirProjIndex -> mirEmitProjectIndexLine",
+				"MirProjDeref ->",
+				"osty_rt_list_get_i64",
+				"osty_rt_list_get_ptr",
+				"osty_rt_list_get_f64",
 			},
 		},
 		{
