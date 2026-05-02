@@ -3763,41 +3763,39 @@ pub fn mirLowerCallExprInto(
             )
             return
         }
-        // 1b. `dbg<T>(value: T) -> T` — diagnostic prelude builtin
-        //     (LANG_SPEC §A.10). For stringifiable primitive types,
-        //     emit `eprint("[dbg] " + value + "\n")` via the existing
-        //     string_concat path (which auto-boxes Int/Float/Bool/...
-        //     via `emitStringConcatBoxed`). Then identity-passthrough
-        //     the value into the destination so callers see it
-        //     unchanged. Non-stringifiable types skip the print and
-        //     fall back to identity-only — keeps dbg() a safe no-op
-        //     for shapes the runtime can't render.
+        // 1b. `dbg<T>(value: T) -> T` — LANG_SPEC §A.10 diagnostic
+        //     builtin. Stringifiable primitives flow through the
+        //     existing string_concat boxing path; other shapes
+        //     degrade silently to identity-only.
         if callee.identName == "dbg" && e.callArgs.len() == 1 {
             let arg = e.callArgs[0].value
-            // Spill into a temp so the value is read once, then
-            // referenced from both the eprint chain and the identity
-            // assign without re-evaluating side effects.
+            if !mirLowerDbgCanStringify(arg.typ) {
+                let identityOp = mirLowerExprAsOperand(bs, arg)
+                mirLowerEmitInstr(bs, mirAssignInstr(dest, mirRVUse(identityOp), span))
+                return
+            }
+            // Spill once so the value reaches both the eprint chain
+            // and the identity assign without re-emitting any
+            // side-effecting subexpression.
             let valueLocal = mirLowerNewLocal(bs, "_dbg_val", arg.typ, false, span)
             mirLowerEmitInstr(bs, mirStorageLiveInstr(valueLocal, span))
             mirLowerExprInto(bs, arg, valueLocal, arg.typ)
             let valueTypeText = hirTypeString(arg.typ)
-            if mirLowerDbgCanStringify(arg.typ) {
-                let mut concatArgs: List<MirOperand> = []
-                concatArgs.push(mirOperandConst(mirConstString("[dbg] ")))
-                concatArgs.push(mirOperandCopy(mirPlace(valueLocal), valueTypeText))
-                concatArgs.push(mirOperandConst(mirConstString("\n")))
-                let msgLocal = mirLowerNewLocal(bs, "_dbg_msg", hirTString(), false, span)
-                mirLowerEmitInstr(
-                    bs,
-                    mirIntrinsicInstr(true, mirPlace(msgLocal), MirIntrinsicStringConcat, concatArgs, span),
-                )
-                let mut eprintArgs: List<MirOperand> = []
-                eprintArgs.push(mirOperandCopy(mirPlace(msgLocal), "String"))
-                mirLowerEmitInstr(
-                    bs,
-                    mirIntrinsicInstr(false, mirPlace(-1), MirIntrinsicEprint, eprintArgs, span),
-                )
-            }
+            let mut concatArgs: List<MirOperand> = []
+            concatArgs.push(mirOperandConst(mirConstString("[dbg] ")))
+            concatArgs.push(mirOperandCopy(mirPlace(valueLocal), valueTypeText))
+            concatArgs.push(mirOperandConst(mirConstString("\n")))
+            let msgLocal = mirLowerNewLocal(bs, "_dbg_msg", hirTString(), false, span)
+            mirLowerEmitInstr(
+                bs,
+                mirIntrinsicInstr(true, mirPlace(msgLocal), MirIntrinsicStringConcat, concatArgs, span),
+            )
+            let mut eprintArgs: List<MirOperand> = []
+            eprintArgs.push(mirOperandCopy(mirPlace(msgLocal), "String"))
+            mirLowerEmitInstr(
+                bs,
+                mirIntrinsicInstr(false, mirPlace(-1), MirIntrinsicEprint, eprintArgs, span),
+            )
             mirLowerEmitInstr(
                 bs,
                 mirAssignInstr(dest, mirRVUse(mirOperandCopy(mirPlace(valueLocal), valueTypeText)), span),
@@ -5956,31 +5954,19 @@ pub fn mirLowerDivergingBuiltinMessage(name: String) -> String {
 }
 
 /// mirLowerDbgCanStringify reports whether `dbg(value)` can render the
-/// argument via the existing `string_concat` boxing path. Today that
-/// covers every primitive scalar plus String — anything else falls
-/// back to identity-only so `dbg(struct)` stays a safe no-op until a
-/// generic ToString protocol lands.
+/// argument via `emitStringConcatBoxed`'s scalar-boxing path. Anything
+/// else routes to identity-only until a generic ToString protocol
+/// lands.
 pub fn mirLowerDbgCanStringify(t: HirType) -> Bool {
     if t.kind != HirTypePrim {
         return false
     }
     match t.primKind {
-        HirPrimInt -> true,
-        HirPrimInt8 -> true,
-        HirPrimInt16 -> true,
-        HirPrimInt32 -> true,
-        HirPrimInt64 -> true,
-        HirPrimUInt8 -> true,
-        HirPrimUInt16 -> true,
-        HirPrimUInt32 -> true,
-        HirPrimUInt64 -> true,
-        HirPrimByte -> true,
-        HirPrimChar -> true,
-        HirPrimFloat -> true,
-        HirPrimFloat32 -> true,
-        HirPrimFloat64 -> true,
-        HirPrimBool -> true,
-        HirPrimString -> true,
+        HirPrimInt | HirPrimInt8 | HirPrimInt16 | HirPrimInt32 | HirPrimInt64
+        | HirPrimUInt8 | HirPrimUInt16 | HirPrimUInt32 | HirPrimUInt64
+        | HirPrimByte | HirPrimChar
+        | HirPrimFloat | HirPrimFloat32 | HirPrimFloat64
+        | HirPrimBool | HirPrimString -> true,
         _ -> false,
     }
 }
