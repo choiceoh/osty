@@ -316,6 +316,64 @@ func TestONBBackendBinaryRunsArithOnDarwinARM64(t *testing.T) {
 	}
 }
 
+// TestONBBackendLldbFrameVariableShowsLocalsOnDarwinARM64 covers Phase
+// B.3: the DWARF emitter publishes one DW_TAG_variable DIE per named
+// Int local with a DW_OP_fbreg location, and lldb's `frame variable`
+// recovers the value from the stack slot the lowerer wrote it to.
+//
+// The test stops at the first source line of a helper function so the
+// param shuffle has run, then asks lldb for the parameter values. A
+// regression that misaligns frame_base or skips the variable DIEs
+// surfaces as wrong values rather than missing variables, so the assert
+// checks both presence AND content.
+func TestONBBackendLldbFrameVariableShowsLocalsOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("lldb DWARF integration smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+	if _, err := exec.LookPath("lldb"); err != nil {
+		t.Skip("lldb not found on PATH")
+	}
+	if _, err := exec.LookPath("dsymutil"); err != nil {
+		t.Skip("dsymutil not found on PATH")
+	}
+
+	t.Setenv(onb.EnvStrict, "1")
+	src := `fn add(a: Int, b: Int) -> Int { a + b }
+fn main() {
+    let x = 10
+    let y = 32
+    println(add(x, y))
+}`
+	req := newBackendRequest(t, EmitBinary, src)
+	req.Layout.Target = "aarch64-apple-darwin"
+	result, err := ONBBackend{}.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ONBBackend.Emit returned error: %v", err)
+	}
+	if out, err := exec.Command("dsymutil", result.Artifacts.Binary).CombinedOutput(); err != nil {
+		t.Fatalf("dsymutil failed: %v\n%s", err, out)
+	}
+	out, err := exec.Command("lldb",
+		"-o", "br set -f main.osty -l 1",
+		"-o", "run",
+		"-o", "frame variable",
+		"-o", "exit",
+		"--", result.Artifacts.Binary,
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("lldb returned error: %v\n%s", err, out)
+	}
+	text := string(out)
+	for _, want := range []string{"a = 10", "b = 32"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("lldb frame variable missing %q:\n%s", want, text)
+		}
+	}
+}
+
 // TestONBBackendLldbResolvesSourceLineOnDarwinARM64 verifies the full
 // debugger integration: dsymutil bundles the .dSYM, lldb auto-loads it,
 // and `breakpoint set --file <src> --line N` resolves to a concrete PC

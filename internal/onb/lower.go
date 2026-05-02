@@ -112,7 +112,7 @@ func (s *lowerState) lowerFunction(fn *mir.Function) (Function, error) {
 	if err := s.assignLocalSlots(fn); err != nil {
 		return Function{}, err
 	}
-	out := Function{Name: fn.Name, FrameSize: s.frameSize}
+	out := Function{Name: fn.Name, FrameSize: s.frameSize, DebugLocals: s.debugLocals(fn)}
 	// Emit blocks with the entry block first so the encoded function starts
 	// at the right instruction. Branches reference target blocks by their
 	// fn.Blocks index, so we keep the index→Block mapping stable.
@@ -225,13 +225,12 @@ func (s *lowerState) lowerBlock(fn *mir.Function, block *mir.BasicBlock, isEntry
 		}
 	}
 	if isEntry && fn.Name != "main" {
-		// Param shuffle inherits the function's first instruction span so
-		// debuggers don't show the prologue jump as an unmapped row.
-		var shuffleSpan LineSpan
-		if len(block.Instrs) > 0 {
-			shuffleSpan = spanFromMIR(block.Instrs[0].At())
-		}
-		emit(s.paramShuffle(fn), shuffleSpan)
+		// Param shuffle gets a zero LineSpan so the DWARF emitter skips
+		// these rows. With the shuffle attributed to the body's first
+		// source line, lldb would stop *before* the params hit their
+		// stack slots and `frame variable` would read uninitialised
+		// stack — see Phase B.3 notes.
+		emit(s.paramShuffle(fn), LineSpan{})
 	}
 	for _, instr := range block.Instrs {
 		lowered, err := s.lowerInstr(fn, instr)
@@ -438,6 +437,40 @@ func (s *lowerState) lowerAggregateAssign(rv *mir.AggregateRV, destSlot int64) (
 // future slice.
 func isABIScalarType(t mir.Type) bool {
 	return t == mir.TInt || t == mir.TBool || t == mir.TString
+}
+
+// debugLocals returns one DebugLocal per user-named local that ended up
+// with a stack slot. Anonymous compiler temporaries (Name == "" or "$ret")
+// and locals without slots are omitted so DWARF doesn't expose synthetic
+// MIR plumbing to the developer's `frame variable` view.
+//
+// Today only Int locals get DebugTypeInt — String / Bool are surfaced as
+// DebugTypeNone and the DWARF encoder skips them. Adding richer type
+// support is a follow-up that grows the DebugTypeKind enum and the type
+// DIE list in `dwarf.go` together.
+func (s *lowerState) debugLocals(fn *mir.Function) []DebugLocal {
+	if fn == nil || s.localSlots == nil {
+		return nil
+	}
+	var out []DebugLocal
+	for _, loc := range fn.Locals {
+		if loc == nil || loc.Name == "" || loc.Name == "$ret" {
+			continue
+		}
+		slot, ok := s.localSlots[loc.ID]
+		if !ok {
+			continue
+		}
+		kind := DebugTypeNone
+		if loc.Type == mir.TInt {
+			kind = DebugTypeInt
+		}
+		if kind == DebugTypeNone {
+			continue
+		}
+		out = append(out, DebugLocal{Name: loc.Name, SlotOffset: slot, TypeKind: kind})
+	}
+	return out
 }
 
 // allocateReturnSlot makes room for the return local on functions that didn't

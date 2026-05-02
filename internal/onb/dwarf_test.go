@@ -183,6 +183,53 @@ func TestEmitObjectIncludesDwarfLineSection(t *testing.T) {
 	}
 }
 
+// TestEmitDwarfInfoEmitsVariableDIEs verifies that each subprogram with
+// named Int locals carries one variable DIE per local. The locations
+// reference the function's frame_base via `DW_OP_fbreg <slot>`, which
+// lldb evaluates as `sp + slot` thanks to DW_AT_frame_base = breg31 0.
+func TestEmitDwarfInfoEmitsVariableDIEs(t *testing.T) {
+	t.Parallel()
+
+	strs := newDwarfStringTable()
+	cu := dwarfCompileUnitInputs{
+		ProducerStrOffset: strs.Add("p"),
+		Language:          dwarfLangC99,
+		NameStrOffset:     strs.Add("main.osty"),
+		CompDirStrOffset:  strs.Add("/tmp"),
+		LowPC:             0,
+		HighPCSize:        0x40,
+		StmtListOffset:    0,
+		StringTable:       strs,
+	}
+	subs := []dwarfSubprogramInput{
+		{
+			NameStrOffset: strs.Add("add"),
+			LowPC:         0,
+			SizeBytes:     0x40,
+			Variables: []dwarfVariableInput{
+				{NameStrOffset: strs.Add("a"), SlotOffset: 0, TypeKind: dwarfBaseTypeInt},
+				{NameStrOffset: strs.Add("b"), SlotOffset: 8, TypeKind: dwarfBaseTypeInt},
+			},
+		},
+	}
+	enc := emitDwarfInfo(cu, subs)
+	// 1 CU low_pc + 1 subprogram low_pc — variable DIEs use form_ref4 to
+	// the type, not addr-form, so they don't show up in LowPCOffsets.
+	if got, want := len(enc.LowPCOffsets), 2; got != want {
+		t.Fatalf("low_pc count = %d, want %d", got, want)
+	}
+	// The encoded bytes must contain `Int` type's encoding byte (signed).
+	// Searching for the literal byte sequence is brittle; instead verify
+	// the output is non-trivially larger than a no-variable CU. A CU with
+	// 0 vars + 1 subprogram is ~30 bytes; with 2 var DIEs it grows by
+	// roughly 2 × (1 abbrev + 4 name + 4 type + 1 expr-len + 2 expr-bytes)
+	// ≈ 24 bytes. The exact threshold isn't load-bearing — we just want
+	// to catch a regression that drops the variable DIEs entirely.
+	if len(enc.Bytes) < 50 {
+		t.Fatalf("debug_info too small (%d bytes); variable DIEs likely missing", len(enc.Bytes))
+	}
+}
+
 // TestEmitDwarfInfoEmitsSubprogramDIEPerFunction verifies the encoder
 // stamps one DW_TAG_subprogram low_pc relocation per function. dsymutil
 // silently rejects CUs without subprogram children, so this is a load-
