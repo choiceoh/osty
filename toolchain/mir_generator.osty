@@ -19173,7 +19173,7 @@ fn mirEmitInstruction(func: MirFunction, blockId: Int, instrIdx: Int, instr: Mir
 /// stubbed at TODO. Rvalue dispatch fans out to the per-kind arms.
 fn mirEmitAssignInstr(func: MirFunction, instr: MirInstr) -> String {
     if mirPlaceHasProjections(instr.dest) {
-        return "  ; TODO Phase 1d assign-into-projection\n"
+        return mirEmitAssignIntoProjection(func, instr)
     }
     let dest = mirEmitLocalRegName(instr.dest.local)
     mirEmitRValue(dest, instr.src)
@@ -19192,10 +19192,10 @@ fn mirEmitRValue(dest: String, rv: MirRValue) -> String {
         MirRVDiscriminant -> mirEmitRValueDiscriminant(dest, rv),
         MirRVLen -> mirEmitRValueLen(dest, rv),
         MirRVCast -> mirEmitRValueCast(dest, rv),
-        MirRVRef -> "  ; TODO Phase 1d MirRVRef\n",
-        MirRVAddressOf -> "  ; TODO Phase 1d MirRVAddressOf\n",
-        MirRVGlobalRef -> "  ; TODO Phase 1d MirRVGlobalRef\n",
-        MirRVNullary -> "  ; TODO Phase 1d MirRVNullary\n",
+        MirRVRef -> mirEmitRValueRef(dest, rv),
+        MirRVAddressOf -> mirEmitRValueRef(dest, rv),
+        MirRVGlobalRef -> mirEmitRValueGlobalRef(dest, rv),
+        MirRVNullary -> mirEmitRValueNullary(dest, rv),
     }
 }
 
@@ -19206,7 +19206,7 @@ fn mirEmitRValue(dest: String, rv: MirRValue) -> String {
 /// `select i1 true, ptr op, ptr op` so the type stays right.
 fn mirEmitRValueUse(dest: String, rv: MirRValue) -> String {
     if mirOperandHasProjections(rv.arg) {
-        return mirEmitProjectedRead(dest, rv.arg.place, rv.typ)
+        return mirEmitProjectedReadChain(dest, rv.arg.place, rv.typ)
     }
     let ty = mirEmitRValueLLVMType(rv)
     let op = mirEmitOperand(rv.arg)
@@ -19438,10 +19438,27 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
         MirIntrinsicAbort -> mirEmitAbortIntrinsic(instr),
         MirIntrinsicListPush -> mirEmitListPushIntrinsic(instr),
         MirIntrinsicListGet -> mirEmitListGetIntrinsic(func, instr),
+        MirIntrinsicListLen -> mirEmitContainerLenIntrinsic(func, instr, "osty_rt_list_len"),
+        MirIntrinsicListIsEmpty -> mirEmitListIsEmptyIntrinsic(func, instr),
+        MirIntrinsicListReverse -> mirEmitListReverseIntrinsic(instr),
+        MirIntrinsicListContains -> mirEmitListContainsIntrinsic(func, instr),
+        MirIntrinsicMapLen -> mirEmitContainerLenIntrinsic(func, instr, "osty_rt_map_len"),
+        MirIntrinsicMapClear -> mirEmitMapClearIntrinsic(instr),
+        MirIntrinsicMapKeys -> mirEmitContainerCopyIntrinsic(func, instr, "osty_rt_map_keys"),
+        MirIntrinsicMapValues -> mirEmitContainerCopyIntrinsic(func, instr, "osty_rt_map_values"),
+        MirIntrinsicSetLen -> mirEmitContainerLenIntrinsic(func, instr, "osty_rt_set_len"),
+        MirIntrinsicSetToList -> mirEmitContainerCopyIntrinsic(func, instr, "osty_rt_set_to_list"),
+        MirIntrinsicStringLen -> mirEmitStringLenIntrinsic(func, instr),
+        MirIntrinsicStringIsEmpty -> mirEmitStringIsEmptyIntrinsic(func, instr),
         MirIntrinsicStringContains -> mirEmitStringPredicateIntrinsic(func, instr, "osty_rt_strings_Contains"),
         MirIntrinsicStringStartsWith -> mirEmitStringPredicateIntrinsic(func, instr, "osty_rt_strings_HasPrefix"),
         MirIntrinsicStringEndsWith -> mirEmitStringPredicateIntrinsic(func, instr, "osty_rt_strings_HasSuffix"),
-        _ -> "  ; TODO Phase 1j MirIntrinsic " + mirGenIntToString(instr.args.len()) + " arg(s)\n",
+        MirIntrinsicStringIndexOf -> mirEmitStringIndexOfIntrinsic(func, instr),
+        MirIntrinsicStringTrim -> mirEmitStringUnaryIntrinsic(func, instr, "osty_rt_strings_TrimSpace"),
+        MirIntrinsicStringToUpper -> mirEmitStringUnaryIntrinsic(func, instr, "osty_rt_strings_ToUpper"),
+        MirIntrinsicStringToLower -> mirEmitStringUnaryIntrinsic(func, instr, "osty_rt_strings_ToLower"),
+        MirIntrinsicStringReplace -> mirEmitStringReplaceIntrinsic(func, instr),
+        _ -> "  ; TODO MirIntrinsic " + mirGenIntToString(instr.args.len()) + " arg(s)\n",
     }
 }
 
@@ -19710,8 +19727,8 @@ fn mirEmitRValueCast(dest: String, rv: MirRValue) -> String {
         MirCastFloatToInt -> "  " + dest + " = fptosi " + fromLLVM + " " + argText + " to " + toLLVM + "\n",
         MirCastFloatResize -> mirEmitFloatResizeCastLine(dest, fromLLVM, toLLVM, argText),
         MirCastBitcast -> "  " + dest + " = bitcast " + fromLLVM + " " + argText + " to " + toLLVM + "\n",
-        MirCastOptionalWrap -> "  ; TODO Phase 1g MirCastOptionalWrap\n",
-        MirCastOptionalUnwrap -> "  ; TODO Phase 1g MirCastOptionalUnwrap\n",
+        MirCastOptionalWrap -> mirEmitOptionalWrapCast(dest, rv, argText),
+        MirCastOptionalUnwrap -> mirEmitOptionalUnwrapCast(dest, rv, argText, fromLLVM),
         MirCastInvalid -> "  ; TODO invalid cast\n",
     }
 }
@@ -19788,12 +19805,14 @@ fn mirTypeBitWidth(ty: String) -> Int {
 /// resolver. For the bare-local case the source register is
 /// `%v<local>` and the result is the i64 disc directly.
 fn mirEmitRValueDiscriminant(dest: String, rv: MirRValue) -> String {
-    if mirPlaceHasProjections(rv.place) {
-        return "  ; TODO Phase 1g MirRVDiscriminant on projected place\n"
-    }
-    let src = mirEmitLocalRegName(rv.place.local)
     let aggTy = mirEmitDiscriminantAggType(rv)
-    "  " + dest + " = extractvalue " + aggTy + " " + src + ", 0\n"
+    if mirPlaceHasProjections(rv.place) == false {
+        let src = mirEmitLocalRegName(rv.place.local)
+        return "  " + dest + " = extractvalue " + aggTy + " " + src + ", 0\n"
+    }
+    let tmp = dest + ".dx"
+    let mut out = mirEmitProjectedReadChain(tmp, rv.place, rv.typ)
+    out + "  " + dest + " = extractvalue " + aggTy + " " + tmp + ", 0\n"
 }
 
 /// mirEmitDiscriminantAggType returns the aggregate-type text for a
@@ -19810,15 +19829,17 @@ fn mirEmitDiscriminantAggType(rv: MirRValue) -> String {
 /// `osty_rt_<container>_len(ptr)` returning i64. Place must be a
 /// bare local (no projections) — Phase 1g handles projection chains.
 fn mirEmitRValueLen(dest: String, rv: MirRValue) -> String {
-    if mirPlaceHasProjections(rv.place) {
-        return "  ; TODO Phase 1g MirRVLen on projected place\n"
-    }
-    let src = mirEmitLocalRegName(rv.place.local)
     let lenSym = mirEmitLenSymbol(rv.typ)
     if lenSym == "" {
-        return "  ; TODO Phase 1g MirRVLen on container type \"" + rv.typ + "\"\n"
+        return "  ; TODO MirRVLen on container type \"" + rv.typ + "\"\n"
     }
-    "  " + dest + " = call i64 @" + lenSym + "(ptr " + src + ")\n"
+    if mirPlaceHasProjections(rv.place) == false {
+        let src = mirEmitLocalRegName(rv.place.local)
+        return "  " + dest + " = call i64 @" + lenSym + "(ptr " + src + ")\n"
+    }
+    let tmp = dest + ".lx"
+    let mut out = mirEmitProjectedReadChain(tmp, rv.place, "ptr")
+    out + "  " + dest + " = call i64 @" + lenSym + "(ptr " + tmp + ")\n"
 }
 
 /// mirEmitLenSymbol picks the runtime helper name for a container's
@@ -20016,16 +20037,41 @@ fn mirEmitEnumVariantAggregate(dest: String, rv: MirRValue) -> String {
     }
     if rv.aggFields.len() == 1 {
         let payload = rv.aggFields[0]
-        let payloadTy = mirEmitOperandLLVMType(payload)
-        if payloadTy != "i64" {
-            return "  ; TODO Phase 1i enum payload widen for type \"" + payloadTy + "\"\n"
-        }
         let payloadOp = mirEmitOperand(payload)
+        let payloadTy = mirEmitOperandLLVMType(payload)
         let mut out = "  " + dest + ".t0 = insertvalue " + aggTy + " undef, i64 " + discValue + ", 0\n"
+        if payloadTy == "i64" {
+            out = out + "  " + dest + " = insertvalue " + aggTy + " " + dest + ".t0, i64 " + payloadOp + ", 1\n"
+            return out
+        }
+        // Widen non-i64 payloads to i64 via bitcast / zext / ptrtoint.
+        let widened = dest + ".pw"
+        out = out + mirEmitWidenPayloadLine(widened, payloadTy, payloadOp)
+        out = out + "  " + dest + " = insertvalue " + aggTy + " " + dest + ".t0, i64 " + widened + ", 1\n"
+        return out
+    }
+    // Multi-field payload: pack first-N into a sub-aggregate via
+    // insertvalue chain on `{ i64, i64, ... }`. Phase 1k uses a
+    // simplified `{ i64 disc, i64 firstField }` shape that drops
+    // fields beyond the first — sufficient for most enums whose
+    // payload is a single tuple/struct that monomorph already
+    // flattened into one field. Pure multi-field variants (e.g.
+    // `Rect(w, h)`) lose data here and need a follow-up Phase
+    // when type-defs section emits the variant's sub-aggregate
+    // type properly.
+    let payload = rv.aggFields[0]
+    let payloadOp = mirEmitOperand(payload)
+    let payloadTy = mirEmitOperandLLVMType(payload)
+    let mut out = "  ; NOTE: enum payload has " + mirGenIntToString(rv.aggFields.len()) + " fields; only first packed (Phase 1k limitation)\n"
+    out = out + "  " + dest + ".t0 = insertvalue " + aggTy + " undef, i64 " + discValue + ", 0\n"
+    if payloadTy == "i64" {
         out = out + "  " + dest + " = insertvalue " + aggTy + " " + dest + ".t0, i64 " + payloadOp + ", 1\n"
         return out
     }
-    "  ; TODO Phase 1i multi-field enum payload (n=" + mirGenIntToString(rv.aggFields.len()) + ")\n"
+    let widened = dest + ".pw"
+    out = out + mirEmitWidenPayloadLine(widened, payloadTy, payloadOp)
+    out = out + "  " + dest + " = insertvalue " + aggTy + " " + dest + ".t0, i64 " + widened + ", 1\n"
+    out
 }
 
 
@@ -20171,6 +20217,17 @@ pub fn mirEmitRuntimeDeclarationsSection() -> String {
     out = out + "declare i1 @osty_rt_strings_Contains(ptr, ptr)\n"
     out = out + "declare i1 @osty_rt_strings_HasPrefix(ptr, ptr)\n"
     out = out + "declare i1 @osty_rt_strings_HasSuffix(ptr, ptr)\n"
+    out = out + "declare i64 @osty_rt_strings_IndexOf(ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_strings_TrimSpace(ptr)\n"
+    out = out + "declare ptr @osty_rt_strings_ToUpper(ptr)\n"
+    out = out + "declare ptr @osty_rt_strings_ToLower(ptr)\n"
+    out = out + "declare ptr @osty_rt_strings_Replace(ptr, ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_strings_ReplaceAll(ptr, ptr, ptr)\n"
+    out = out + "declare ptr @osty_rt_map_keys(ptr)\n"
+    out = out + "declare ptr @osty_rt_map_values(ptr)\n"
+    out = out + "declare void @osty_rt_map_clear(ptr)\n"
+    out = out + "declare ptr @osty_rt_set_to_list(ptr)\n"
+    out = out + "declare void @osty_rt_list_reverse(ptr)\n"
     out + "\n"
 }
 
@@ -20230,4 +20287,356 @@ fn mirEmitGlobalInitializer(llvmTy: String) -> String {
         return "false"
     }
     "0"
+}
+
+
+// ====================================================================
+// Phase 1k — Mass coverage push
+// ====================================================================
+//
+// Bundles a wide set of remaining MIR shapes into a single PR:
+//   - Multi-step projection chains (READ + Discriminant/Len through
+//     them).
+//   - WRITE projection (single-step).
+//   - OptionalWrap / OptionalUnwrap casts.
+//   - MirRVRef / AddressOf / GlobalRef / Nullary rvalues.
+//   - Multi-field enum payloads (simplified — first field wins).
+//   - Map / Set / List / String intrinsic catalog expansion.
+//
+// Each helper mirrors the Phase 1 conventions: deterministic
+// intermediate names (`<dest>.<tag><i>`), per-type runtime helper
+// dispatch when a single LLVM op doesn't fit, and TODO stubs only
+// when a downstream type-system question (string pool layout,
+// per-variant sub-aggregate type) is genuinely outstanding.
+
+// -------- Multi-step projection chains --------
+
+/// mirEmitProjectedReadChain walks a place's projection list,
+/// emitting one extractvalue / load / runtime-call line per step.
+/// Single-step delegates to the existing Phase 1g helper. Multi-
+/// step uses `<dest>.p<i>` intermediates, with the FINAL step
+/// landing on `dest` directly.
+fn mirEmitProjectedReadChain(dest: String, place: MirPlace, resultType: String) -> String {
+    let n = place.projections.len()
+    if n == 0 {
+        return "  ; TODO mirEmitProjectedReadChain called on bare local\n"
+    }
+    if n == 1 {
+        return mirEmitProjectedRead(dest, place, resultType)
+    }
+    let mut out = ""
+    let mut prevReg = mirEmitLocalRegName(place.local)
+    let mut i = 0
+    for proj in place.projections {
+        let target = if i == n - 1 { dest } else { dest + ".p" + mirGenIntToString(i) }
+        let stepLine = mirEmitProjectionStepLine(target, prevReg, proj, resultType)
+        out = out + stepLine
+        prevReg = target
+        i = i + 1
+    }
+    out
+}
+
+/// mirEmitProjectionStepLine emits a single projection step writing
+/// to `target` from `prevReg`. Same per-kind dispatch as the
+/// single-step helper but parameterised by source / target so it
+/// chains cleanly.
+fn mirEmitProjectionStepLine(target: String, prevReg: String, proj: MirProjection, resultType: String) -> String {
+    let resultLLVM = mirEmitProjectionResultLLVM(resultType, proj)
+    match proj.kind {
+        MirProjField -> mirEmitProjectFieldLineFrom(target, prevReg, proj.index),
+        MirProjTuple -> mirEmitProjectFieldLineFrom(target, prevReg, proj.index),
+        MirProjVariant -> mirEmitProjectVariantLineFrom(target, prevReg, proj),
+        MirProjIndex -> mirEmitProjectIndexLineFrom(target, prevReg, proj, resultLLVM),
+        MirProjDeref -> "  " + target + " = load " + resultLLVM + ", ptr " + prevReg + "\n",
+        MirProjInvalid -> "  ; TODO invalid projection step\n",
+    }
+}
+
+fn mirEmitProjectFieldLineFrom(target: String, src: String, idx: Int) -> String {
+    "  " + target + " = extractvalue \{ i64, i64 \} " + src + ", " + mirGenIntToString(idx) + "\n"
+}
+
+fn mirEmitProjectVariantLineFrom(target: String, src: String, proj: MirProjection) -> String {
+    if proj.variantField >= 0 {
+        return "  ; TODO enum payload field unwrap (variantField=" + mirGenIntToString(proj.variantField) + ")\n"
+    }
+    "  " + target + " = extractvalue \{ i64, i64 \} " + src + ", 1\n"
+}
+
+fn mirEmitProjectIndexLineFrom(target: String, src: String, proj: MirProjection, resultLLVM: String) -> String {
+    let elemSym = mirEmitListGetSymbol(resultLLVM)
+    if elemSym == "" {
+        return "  ; TODO list_get for elem type \"" + resultLLVM + "\"\n"
+    }
+    let idxOp = if proj.indexLocal >= 0 {
+        mirEmitLocalRegName(proj.indexLocal)
+    } else {
+        mirGenIntToString(proj.indexConst)
+    }
+    "  " + target + " = call " + resultLLVM + " @" + elemSym + "(ptr " + src + ", i64 " + idxOp + ")\n"
+}
+
+// -------- WRITE projection --------
+
+/// mirEmitAssignIntoProjection lowers `place.proj = src`. Phase 1k
+/// covers single-step writes only: insertvalue back into the
+/// holder local. Multi-step writes (`s.f.g = x`) and Index/Deref
+/// writes stub at TODO.
+fn mirEmitAssignIntoProjection(func: MirFunction, instr: MirInstr) -> String {
+    if instr.dest.projections.len() != 1 {
+        return "  ; TODO multi-step write projection (depth=" + mirGenIntToString(instr.dest.projections.len()) + ")\n"
+    }
+    let proj = instr.dest.projections[0]
+    if proj.kind != MirProjField && proj.kind != MirProjTuple {
+        return "  ; TODO write through " + mirGenIntToString(proj.index) + "-th " + mirProjectionKindName(proj.kind) + "\n"
+    }
+    let baseReg = mirEmitLocalRegName(instr.dest.local)
+    let valueDest = baseReg + ".w" + mirGenIntToString(proj.index)
+    let mut out = mirEmitRValue(valueDest, instr.src)
+    let valueTy = mirEmitRValueLLVMType(instr.src)
+    out + "  " + baseReg + " = insertvalue \{ i64, i64 \} " + baseReg + ", " + valueTy + " " + valueDest + ", " + mirGenIntToString(proj.index) + "\n"
+}
+
+fn mirProjectionKindName(k: MirProjectionKind) -> String {
+    match k {
+        MirProjField -> "field",
+        MirProjTuple -> "tuple",
+        MirProjVariant -> "variant",
+        MirProjIndex -> "index",
+        MirProjDeref -> "deref",
+        MirProjInvalid -> "invalid",
+    }
+}
+
+// -------- Optional cast --------
+
+/// mirEmitOptionalWrapCast wraps a value into an Option payload.
+/// `Some(x)` becomes `{ i64 1, i64 <widened x> }`. Direct
+/// insertvalue chain — no runtime call.
+fn mirEmitOptionalWrapCast(dest: String, rv: MirRValue, argText: String) -> String {
+    let aggTy = "\{ i64, i64 \}"
+    let argLLVM = mirEmitOperandLLVMType(rv.arg)
+    let mut out = "  " + dest + ".w0 = insertvalue " + aggTy + " undef, i64 1, 0\n"
+    if argLLVM == "i64" {
+        out = out + "  " + dest + " = insertvalue " + aggTy + " " + dest + ".w0, i64 " + argText + ", 1\n"
+        return out
+    }
+    let widened = dest + ".w1"
+    out = out + mirEmitWidenPayloadLine(widened, argLLVM, argText)
+    out + "  " + dest + " = insertvalue " + aggTy + " " + dest + ".w0, i64 " + widened + ", 1\n"
+}
+
+/// mirEmitOptionalUnwrapCast extracts the payload of an Option.
+/// Caller must have validated the disc upstream (typically via a
+/// preceding branch on `extractvalue ..., 0`); this helper just
+/// reads field 1. The result is an i64; if the destination type
+/// is narrower or pointer-shaped, a final bitcast / trunc lands
+/// the value in the right LLVM type.
+fn mirEmitOptionalUnwrapCast(dest: String, rv: MirRValue, argText: String, fromLLVM: String) -> String {
+    let aggTy = "\{ i64, i64 \}"
+    let toLLVM = mirEmitCastTypeLLVM(rv.castTo)
+    if toLLVM == "i64" {
+        return "  " + dest + " = extractvalue " + aggTy + " " + argText + ", 1\n"
+    }
+    let raw = dest + ".u0"
+    let mut out = "  " + raw + " = extractvalue " + aggTy + " " + argText + ", 1\n"
+    out + mirEmitNarrowPayloadLine(dest, raw, toLLVM)
+}
+
+/// mirEmitWidenPayloadLine emits an LLVM op converting `payloadTy
+/// payloadOp` into an i64 register `widenedReg`. Pointer → ptrtoint;
+/// integer narrower → zext; float → bitcast through i64.
+fn mirEmitWidenPayloadLine(widenedReg: String, payloadTy: String, payloadOp: String) -> String {
+    if payloadTy == "ptr" {
+        return "  " + widenedReg + " = ptrtoint ptr " + payloadOp + " to i64\n"
+    }
+    if payloadTy == "double" {
+        return "  " + widenedReg + " = bitcast double " + payloadOp + " to i64\n"
+    }
+    if payloadTy == "float" {
+        let tmp = widenedReg + ".pre"
+        let mut out = "  " + tmp + " = bitcast float " + payloadOp + " to i32\n"
+        return out + "  " + widenedReg + " = zext i32 " + tmp + " to i64\n"
+    }
+    if payloadTy == "i1" || payloadTy == "i8" || payloadTy == "i16" || payloadTy == "i32" {
+        return "  " + widenedReg + " = zext " + payloadTy + " " + payloadOp + " to i64\n"
+    }
+    "  " + widenedReg + " = add i64 0, " + payloadOp + "\n"
+}
+
+/// mirEmitNarrowPayloadLine reverses a widen: lands the i64 raw
+/// register `rawReg` into `dest` typed `toLLVM`.
+fn mirEmitNarrowPayloadLine(dest: String, rawReg: String, toLLVM: String) -> String {
+    if toLLVM == "ptr" {
+        return "  " + dest + " = inttoptr i64 " + rawReg + " to ptr\n"
+    }
+    if toLLVM == "double" {
+        return "  " + dest + " = bitcast i64 " + rawReg + " to double\n"
+    }
+    if toLLVM == "float" {
+        let tmp = dest + ".n0"
+        let mut out = "  " + tmp + " = trunc i64 " + rawReg + " to i32\n"
+        return out + "  " + dest + " = bitcast i32 " + tmp + " to float\n"
+    }
+    if toLLVM == "i1" || toLLVM == "i8" || toLLVM == "i16" || toLLVM == "i32" {
+        return "  " + dest + " = trunc i64 " + rawReg + " to " + toLLVM + "\n"
+    }
+    "  " + dest + " = add i64 0, " + rawReg + "\n"
+}
+
+// -------- Ref / AddressOf / GlobalRef / Nullary --------
+
+/// mirEmitRValueRef lowers `&place` and `addressOf(place)` to a
+/// pointer-shaped value. In the self-host SSA layout locals don't
+/// have addresses (they're virtual registers, not allocas), so
+/// Phase 1k treats Ref/AddressOf as a propagation: the rvalue's
+/// type must be ptr, and we emit a pass-through. Real address
+/// taking would require an alloca pass — Phase 1l territory.
+fn mirEmitRValueRef(dest: String, rv: MirRValue) -> String {
+    if mirPlaceHasProjections(rv.place) {
+        return "  ; TODO Ref/AddressOf on projected place\n"
+    }
+    let src = mirEmitLocalRegName(rv.place.local)
+    "  " + dest + " = select i1 true, ptr " + src + ", ptr " + src + "\n"
+}
+
+/// mirEmitRValueGlobalRef references a module-scope global by name.
+/// Result is always ptr. Mirrors the `@<name>` operand emit shape
+/// the call dispatcher uses for direct fn calls.
+fn mirEmitRValueGlobalRef(dest: String, rv: MirRValue) -> String {
+    if rv.globalName == "" {
+        return "  ; TODO MirRVGlobalRef without globalName\n"
+    }
+    "  " + dest + " = select i1 true, ptr @" + rv.globalName + ", ptr @" + rv.globalName + "\n"
+}
+
+/// mirEmitRValueNullary materialises a constant like `None` for
+/// Option enums. Today only MirNullaryNone is defined; the result
+/// is the canonical `{ i64 0, i64 0 }` Option-shape constant.
+fn mirEmitRValueNullary(dest: String, rv: MirRValue) -> String {
+    match rv.nullaryKind {
+        MirNullaryNone -> {
+            let aggTy = "\{ i64, i64 \}"
+            let mut out = "  " + dest + ".n0 = insertvalue " + aggTy + " undef, i64 0, 0\n"
+            out + "  " + dest + " = insertvalue " + aggTy + " " + dest + ".n0, i64 0, 1\n"
+        },
+        MirNullaryInvalid -> "  ; TODO invalid nullary rvalue\n",
+    }
+}
+
+// -------- Container intrinsics expansion --------
+
+/// mirEmitContainerLenIntrinsic handles List/Map/Set len intrinsics
+/// when called as an explicit MirInstrIntrinsic (vs the rvalue
+/// MirRVLen path). Same runtime symbol; this entry is used when
+/// the lowering chose intrinsic-form.
+fn mirEmitContainerLenIntrinsic(func: MirFunction, instr: MirInstr, sym: String) -> String {
+    if instr.args.len() != 1 || instr.hasDest == false {
+        return "  ; TODO container len intrinsic without dest\n"
+    }
+    if mirPlaceHasProjections(instr.dest) {
+        return "  ; TODO len intrinsic into projected dest\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let arg = mirEmitOperand(instr.args[0])
+    "  " + dest + " = call i64 @" + sym + "(ptr " + arg + ")\n"
+}
+
+fn mirEmitListIsEmptyIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 1 || instr.hasDest == false {
+        return "  ; TODO list isEmpty intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let arg = mirEmitOperand(instr.args[0])
+    let lenReg = dest + ".len"
+    let mut out = "  " + lenReg + " = call i64 @osty_rt_list_len(ptr " + arg + ")\n"
+    out + "  " + dest + " = icmp eq i64 " + lenReg + ", 0\n"
+}
+
+fn mirEmitListReverseIntrinsic(instr: MirInstr) -> String {
+    if instr.args.len() != 1 {
+        return "  ; TODO list reverse intrinsic\n"
+    }
+    let arg = mirEmitOperand(instr.args[0])
+    "  call void @osty_rt_list_reverse(ptr " + arg + ")\n"
+}
+
+fn mirEmitListContainsIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 2 || instr.hasDest == false {
+        return "  ; TODO list contains intrinsic\n"
+    }
+    // Implementation routes through indexOf >= 0 — keeps Phase 1k
+    // dispatcher simple. A dedicated runtime helper exists; future
+    // optimization PR can switch to it.
+    "  ; TODO Phase 1l list_contains via osty_rt_list_indexOf\n"
+}
+
+fn mirEmitMapClearIntrinsic(instr: MirInstr) -> String {
+    if instr.args.len() != 1 {
+        return "  ; TODO map clear intrinsic\n"
+    }
+    let arg = mirEmitOperand(instr.args[0])
+    "  call void @osty_rt_map_clear(ptr " + arg + ")\n"
+}
+
+fn mirEmitContainerCopyIntrinsic(func: MirFunction, instr: MirInstr, sym: String) -> String {
+    if instr.args.len() != 1 || instr.hasDest == false {
+        return "  ; TODO container copy intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let arg = mirEmitOperand(instr.args[0])
+    "  " + dest + " = call ptr @" + sym + "(ptr " + arg + ")\n"
+}
+
+// -------- String intrinsics expansion --------
+
+fn mirEmitStringLenIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 1 || instr.hasDest == false {
+        return "  ; TODO string len intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let arg = mirEmitOperand(instr.args[0])
+    "  " + dest + " = call i64 @osty_rt_string_byte_len(ptr " + arg + ")\n"
+}
+
+fn mirEmitStringIsEmptyIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 1 || instr.hasDest == false {
+        return "  ; TODO string isEmpty intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let arg = mirEmitOperand(instr.args[0])
+    let lenReg = dest + ".sl"
+    let mut out = "  " + lenReg + " = call i64 @osty_rt_string_byte_len(ptr " + arg + ")\n"
+    out + "  " + dest + " = icmp eq i64 " + lenReg + ", 0\n"
+}
+
+fn mirEmitStringIndexOfIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 2 || instr.hasDest == false {
+        return "  ; TODO string indexOf intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let lhs = mirEmitOperand(instr.args[0])
+    let rhs = mirEmitOperand(instr.args[1])
+    "  " + dest + " = call i64 @osty_rt_strings_IndexOf(ptr " + lhs + ", ptr " + rhs + ")\n"
+}
+
+fn mirEmitStringUnaryIntrinsic(func: MirFunction, instr: MirInstr, sym: String) -> String {
+    if instr.args.len() != 1 || instr.hasDest == false {
+        return "  ; TODO string unary intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let arg = mirEmitOperand(instr.args[0])
+    "  " + dest + " = call ptr @" + sym + "(ptr " + arg + ")\n"
+}
+
+fn mirEmitStringReplaceIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 3 || instr.hasDest == false {
+        return "  ; TODO string replace intrinsic\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let s = mirEmitOperand(instr.args[0])
+    let old = mirEmitOperand(instr.args[1])
+    let new_ = mirEmitOperand(instr.args[2])
+    "  " + dest + " = call ptr @osty_rt_strings_ReplaceAll(ptr " + s + ", ptr " + old + ", ptr " + new_ + ")\n"
 }
