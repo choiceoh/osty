@@ -5149,11 +5149,90 @@ fn lirLowerMirAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: Strin
         MirAggStruct -> lirLowerMirStructAggregate(l, rv, hintName, hint),
         MirAggEnumVariant -> lirLowerMirEnumVariantAggregate(l, rv, hintName, hint),
         MirAggList -> lirLowerMirListAggregate(l, rv, hintName, hint),
+        MirAggClosure -> lirLowerMirClosureAggregate(l, rv, hintName, hint),
         _ -> {
             lirLowerError(l, LirDiagUnsupported, "aggregate kind is not implemented in LIR Proto aggregate lowering", "aggregate")
             lirOperandInvalid()
         },
     }
+}
+// `lirLowerMirClosureAggregate` boxes a closure into a stack alloca
+// shaped as `%ClosureEnv.<tag>.<tag>...` where slot 0 is the lifted
+// closure fn pointer (`@symbol`) and slots 1..N are captured operand
+// values in order. Returns the alloca ptr — callers (or the lifted
+// closure body itself) read `env[0]` to dispatch and `env[i]` to
+// access captures. Mirrors production `emitClosureEnv`
+// (mir_generator.go:9293).
+//
+// **Stage limit**: closures escaping the enclosing frame (e.g.
+// returned from a function or stored into a heap-rooted struct)
+// currently break with stack-allocated env. Production marks this
+// at docs/mir_design.md Stage 3.8; LIR Proto matches. A heap-alloc
+// fallback is on the roadmap.
+fn lirLowerMirClosureAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
+    if rv.aggFields.len() < 1 {
+        lirLowerError(l, LirDiagInvalidInput, "closure aggregate requires at least one field (the lifted fn pointer)", "aggregate.closure")
+        return lirOperandInvalid()
+    }
+    let mut elemTypes: List<LirType> = []
+    elemTypes.push(lirPtrType())
+    let mut i = 1
+    for field in rv.aggFields {
+        if i >= 1 {
+            let captureType = lirLowerMirType(l, field.typ)
+            if lirTypeIsZero(captureType) || lirTypeIsVoid(captureType) {
+                lirLowerError(l, LirDiagUnsupported, "closure capture type `" + field.typ + "` has no MIR layout", "aggregate.closure")
+                return lirOperandInvalid()
+            }
+            elemTypes.push(captureType)
+        }
+        i = i + 1
+    }
+    let envTypeName = lirClosureEnvTypeName(elemTypes)
+    let mut bodyParts: List<String> = []
+    for et in elemTypes {
+        bodyParts.push(lirTypeString(et))
+    }
+    lirModuleDeclareTypeDef(l.out, lirTypeDef(envTypeName, "\{ " + strings.join(bodyParts, ", ") + " \}"))
+    let envType = lirAggregateType(envTypeName)
+    let slot = lirFresh(l)
+    l.instrs.push(lirAlloca(slot, envType, 0))
+    let mut idx = 0
+    for field in rv.aggFields {
+        let elemType = elemTypes[idx]
+        let value = if idx == 0 {
+            lirLowerMirOperand(l, field, field.typ, lirPtrType())
+        } else {
+            lirLowerMirOperand(l, field, field.typ, elemType)
+        }
+        if value.value == "" {
+            return lirOperandInvalid()
+        }
+        let gep = lirFresh(l)
+        l.instrs.push(lirGep(gep, envType, slot, [lirOperand(lirIntType(32), "0"), lirOperand(lirIntType(32), lirIntToString(idx))], true))
+        l.instrs.push(lirStore(lirOperand(elemType, value.value), gep, 0))
+        idx = idx + 1
+    }
+    lirOperand(lirPtrType(), slot)
+}
+// `lirClosureEnvTypeName` builds the `%ClosureEnv.<tag>.<tag>...`
+// deterministic name shared across closures with identical env
+// layout. Mirrors production `closureEnvTypeName`
+// (mir_generator.go:9336). The first tag is always `ptr` (fn slot);
+// remaining tags come from the LirType.llvm spelling so two closures
+// capturing `[i64, ptr]` share one env type.
+fn lirClosureEnvTypeName(elemTypes: List<LirType>) -> String {
+    let mut tags: List<String> = []
+    for t in elemTypes {
+        tags.push(lirClosureEnvTag(t))
+    }
+    "%ClosureEnv." + strings.join(tags, ".")
+}
+fn lirClosureEnvTag(t: LirType) -> String {
+    if t.className == LirTypeAggregate {
+        return lirStripPercent(t.llvm)
+    }
+    t.llvm
 }
 // `lirLowerMirListAggregate` builds a `List<T>` literal — the shape
 // emitted for `[1, 2, 3]` source. Calls `osty_rt_list_new()` to get
