@@ -1,0 +1,128 @@
+// onb_aggregate.osty — aggregate rvalue lowering for the ONB
+// self-host port. Slice H of the port. Mirror of
+// `lowerAggregateAssign / lowerStructLiteralAssign /
+// lowerEnumVariantAssign` from `internal/onb/lower.go`.
+//
+// Aggregate rvalues construct compound values directly into the
+// destination slot:
+//
+//   - Empty `List<T>` literal — runtime call to `osty_rt_list_new`.
+//     Non-empty list literals fall back to LLVM (slow-path
+//     element-by-element push isn't worth the dev backend's
+//     complexity budget yet).
+//   - All-scalar struct literal — per-field operand materialise +
+//     store at the field's slot offset.
+//   - Small enum variant — write the discriminant tag at offset 0
+//     then each payload field at `8 + i*8`.
+//   - Closure literal — deferred to Slice I (closure_env_alloc_v2 +
+//     fn-pointer + capture writes; needs the runtime symbol +
+//     adrp/add for the lifted-fn address).
+//   - Map literal — out of scope for the ONB dev backend; falls
+//     back to LLVM.
+
+// === Top-level dispatch =============================================
+
+// onbLowerAggregateAssign routes by aggregate kind. Mirror of
+// `lowerAggregateAssign`.
+pub fn onbLowerAggregateAssign(state: OnbLowerState, rv: MirRValue, destSlot: Int) -> OnbMaterialiseResult {
+    match rv.aggKind {
+        MirAggregateKind.MirAggList -> onbLowerListLiteralAssign(state, rv, destSlot),
+        MirAggregateKind.MirAggStruct -> onbLowerStructLiteralAssign(state, rv, destSlot),
+        MirAggregateKind.MirAggEnumVariant -> onbLowerEnumVariantAssign(state, rv, destSlot),
+        _ -> onbMaterialiseErr(state, "aggregate kind outside slice H"),
+    }
+}
+
+// === Empty list literal =============================================
+
+// onbLowerListLiteralAssign covers `dest = []` — runtime
+// `osty_rt_list_new` returns a fresh empty list pointer in x0
+// which we store into the dest slot. Non-empty list literals
+// (`[1, 2, 3]`) require a per-element push loop and route to
+// the LLVM fallback.
+pub fn onbLowerListLiteralAssign(state: OnbLowerState, rv: MirRValue, destSlot: Int) -> OnbMaterialiseResult {
+    if rv.aggFields.len() != 0 {
+        return onbMaterialiseErr(state, "non-empty list literal outside slice H")
+    }
+    let mut out: List<OnbInstr> = []
+    out.push(onbInstrBranchLink(onbRuntimeSymListNew()))
+    out.push(onbInstrStore64Stack("x0", destSlot))
+    onbMaterialiseOk(state, out)
+}
+
+// === Struct literal =================================================
+
+// onbLowerStructLiteralAssign writes each scalar field of a struct
+// literal into its slot offset. Phase B.5 v1 only supports
+// all-scalar structs; the slot allocator already sized the
+// destination to fit. Fields are materialised one at a time
+// through x9 to avoid burning x10 on a temp — there's no
+// register-pressure issue because each field write is independent.
+// Mirror of `lowerStructLiteralAssign`.
+pub fn onbLowerStructLiteralAssign(state: OnbLowerState, rv: MirRValue, destSlot: Int) -> OnbMaterialiseResult {
+    let head = onbExtractTypeName(rv.typ)
+    match onbLookupStructLayout(state.layouts, head) {
+        Some(layout) -> {
+            if rv.aggFields.len() != layout.fields.len() {
+                return onbMaterialiseErr(state, "struct field count mismatch")
+            }
+            let mut working = state
+            let mut out: List<OnbInstr> = []
+            let mut i = 0
+            for field in rv.aggFields {
+                if !onbIsAbiScalarType(layout.fields[i].typ) {
+                    return onbMaterialiseErr(working, "struct field has non-scalar type")
+                }
+                let r = onbMaterialiseOperand(working, field, "x9")
+                if !r.ok { return r }
+                working = r.state
+                for instr in r.instrs { out.push(instr) }
+                out.push(onbInstrStore64Stack("x9", destSlot + i * 8))
+                i = i + 1
+            }
+            onbMaterialiseOk(working, out)
+        },
+        None -> onbMaterialiseErr(state, "unknown struct layout"),
+    }
+}
+
+// === Enum variant ===================================================
+
+// onbLowerEnumVariantAssign writes the discriminant tag at offset 0
+// then each payload field at `8 + i*8`. Mirror of
+// `lowerEnumVariantAssign`. Variants with non-scalar payload fall
+// back; the front end already gates this on the payload-shape
+// check during MIR construction.
+pub fn onbLowerEnumVariantAssign(state: OnbLowerState, rv: MirRValue, destSlot: Int) -> OnbMaterialiseResult {
+    let head = onbExtractTypeName(rv.typ)
+    match onbLookupEnumLayout(state.layouts, head) {
+        Some(layout) -> {
+            if rv.aggVariantIdx < 0 || rv.aggVariantIdx >= layout.variants.len() {
+                return onbMaterialiseErr(state, "variant index out of range")
+            }
+            let variant = layout.variants[rv.aggVariantIdx]
+            if !onbEnumPayloadAllScalar(variant.payload) {
+                return onbMaterialiseErr(state, "variant has non-scalar payload")
+            }
+            if rv.aggFields.len() != variant.payload.len() {
+                return onbMaterialiseErr(state, "variant field count mismatch")
+            }
+            let tag = onbEnumDiscriminantValue(layout, rv.aggVariantIdx)
+            let mut working = state
+            let mut out: List<OnbInstr> = []
+            out.push(onbInstrMovImm64("x9", tag))
+            out.push(onbInstrStore64Stack("x9", destSlot))
+            let mut i = 0
+            for field in rv.aggFields {
+                let r = onbMaterialiseOperand(working, field, "x9")
+                if !r.ok { return r }
+                working = r.state
+                for instr in r.instrs { out.push(instr) }
+                out.push(onbInstrStore64Stack("x9", destSlot + onbEnumPayloadOffset(i)))
+                i = i + 1
+            }
+            onbMaterialiseOk(working, out)
+        },
+        None -> onbMaterialiseErr(state, "unknown enum layout"),
+    }
+}
