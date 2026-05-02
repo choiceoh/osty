@@ -18932,6 +18932,9 @@ fn mirEmitFunctionStub(func: MirFunction) -> String {
         let isEntry = block.id == func.entry
         let label = mirBlockLabelName(isEntry, mirGenIntToString(block.id))
         out = out + mirBlockHeaderLine(label)
+        for instr in block.instrs {
+            out = out + mirEmitInstruction(func, instr)
+        }
         out = out + mirEmitTerminatorLine(func, block.term, block.hasTerm)
     }
     out + mirFunctionDefineFooter()
@@ -19107,4 +19110,195 @@ fn mirEmitReturnStub(returnType: String) -> String {
         return mirRetLine("double", "0.0")
     }
     "  unreachable\n"
+}
+
+
+// ====================================================================
+// Phase 1c — Per-instruction emission (MirInstrAssign + rvalue arms)
+// ====================================================================
+//
+// Phase 1b (#1271) wired terminator operands; the consumer side of
+// every Branch / Return-with-value pointed at `%v<local>` registers
+// that nothing produced. Phase 1c lands the producer: each block's
+// `instrs` list is walked, and `MirInstrAssign` materialises an
+// LLVM SSA register defined by the rvalue's lowered shape.
+//
+// Coverage today (rvalue arms):
+//   - MirRVUse        : `%dest = add <ty> 0, <op>` (LLVM has no
+//                        plain copy; the add-with-zero idiom keeps
+//                        the producer side honest without a `select`
+//                        round-trip).
+//   - MirRVBinary     : `%dest = <opcode> <ty> <left>, <right>` for
+//                        every MirBinaryOp covered by mirBinaryOpcode.
+//                        Bool-result comparisons emit i1 directly.
+//   - MirRVUnary      : MirUnNeg / MirUnNot / MirUnBitNot translate
+//                        to the LLVM no-fneg integer idioms; MirUnPlus
+//                        is a copy.
+//   - MirRVNullary    : stub `0` placeholder per kind (Phase 1d).
+//   - everything else : `; TODO` comment line so the verifier surfaces
+//                        the missing producer rather than emitting a
+//                        malformed register.
+//
+// Instruction kinds:
+//   - MirInstrAssign            : full rvalue dispatch (above).
+//   - MirInstrCall / Intrinsic  : `; TODO Phase 1d` comment.
+//   - MirInstrStorageLive/Dead  : empty (LLVM lifetime intrinsics
+//                                  are optional and don't affect
+//                                  correctness).
+//   - MirInstrInvalid           : `; TODO invalid instr` comment.
+
+/// mirEmitInstruction renders one MirInstr as zero or more LLVM
+/// instruction lines. Unsupported shapes degrade to a `; TODO`
+/// comment so the IR text stays parseable.
+fn mirEmitInstruction(func: MirFunction, instr: MirInstr) -> String {
+    match instr.kind {
+        MirInstrInvalid -> "  ; TODO invalid MIR instruction\n",
+        MirInstrAssign -> mirEmitAssignInstr(func, instr),
+        MirInstrCall -> "  ; TODO Phase 1d MirInstrCall\n",
+        MirInstrIntrinsic -> "  ; TODO Phase 1d MirInstrIntrinsic\n",
+        MirInstrStorageLive -> "",
+        MirInstrStorageDead -> "",
+    }
+}
+
+/// mirEmitAssignInstr lowers `dest = rvalue`. The dest must be a
+/// no-projection MirPlace today (`%v<local>`); projection chains are
+/// stubbed at TODO. Rvalue dispatch fans out to the per-kind arms.
+fn mirEmitAssignInstr(func: MirFunction, instr: MirInstr) -> String {
+    if mirPlaceHasProjections(instr.dest) {
+        return "  ; TODO Phase 1d assign-into-projection\n"
+    }
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    mirEmitRValue(dest, instr.src)
+}
+
+/// mirEmitRValue dispatches the rvalue arms onto LLVM instruction
+/// lines. The destination register name `dest` is pre-resolved by
+/// the assign emitter; the rvalue's `typ` carries the result type.
+fn mirEmitRValue(dest: String, rv: MirRValue) -> String {
+    match rv.kind {
+        MirRVInvalid -> "  ; TODO invalid rvalue\n",
+        MirRVUse -> mirEmitRValueUse(dest, rv),
+        MirRVUnary -> mirEmitRValueUnary(dest, rv),
+        MirRVBinary -> mirEmitRValueBinary(dest, rv),
+        MirRVAggregate -> "  ; TODO Phase 1d MirRVAggregate\n",
+        MirRVDiscriminant -> "  ; TODO Phase 1d MirRVDiscriminant\n",
+        MirRVLen -> "  ; TODO Phase 1d MirRVLen\n",
+        MirRVCast -> "  ; TODO Phase 1d MirRVCast\n",
+        MirRVRef -> "  ; TODO Phase 1d MirRVRef\n",
+        MirRVAddressOf -> "  ; TODO Phase 1d MirRVAddressOf\n",
+        MirRVGlobalRef -> "  ; TODO Phase 1d MirRVGlobalRef\n",
+        MirRVNullary -> "  ; TODO Phase 1d MirRVNullary\n",
+    }
+}
+
+/// mirEmitRValueUse lowers a Use rvalue (`dest = use op`). LLVM has
+/// no plain copy SSA op, so we use the canonical add-with-zero
+/// idiom: `dest = add <ty> 0, op` (or `fadd 0.0, op` for floats).
+/// For bool/i1 we use `or i1 0, op`; for ptr we fall through to
+/// `select i1 true, ptr op, ptr op` so the type stays right.
+fn mirEmitRValueUse(dest: String, rv: MirRValue) -> String {
+    let ty = mirEmitRValueLLVMType(rv)
+    let op = mirEmitOperand(rv.arg)
+    if ty == "ptr" {
+        return "  " + dest + " = select i1 true, ptr " + op + ", ptr " + op + "\n"
+    }
+    if ty == "double" || ty == "float" {
+        return "  " + dest + " = fadd " + ty + " 0.0, " + op + "\n"
+    }
+    if ty == "i1" {
+        return "  " + dest + " = or i1 0, " + op + "\n"
+    }
+    "  " + dest + " = add " + ty + " 0, " + op + "\n"
+}
+
+/// mirEmitRValueUnary lowers Neg / Not / BitNot / Plus on numeric
+/// or bool operands. Plus is a Use-shaped copy.
+fn mirEmitRValueUnary(dest: String, rv: MirRValue) -> String {
+    let ty = mirEmitRValueLLVMType(rv)
+    let op = mirEmitOperand(rv.arg)
+    match rv.unaryOp {
+        MirUnNeg -> {
+            if ty == "double" || ty == "float" {
+                "  " + dest + " = fneg " + ty + " " + op + "\n"
+            } else {
+                "  " + dest + " = sub " + ty + " 0, " + op + "\n"
+            }
+        },
+        MirUnPlus -> mirEmitRValueUse(dest, rv),
+        MirUnNot -> "  " + dest + " = xor i1 " + op + ", true\n",
+        MirUnBitNot -> "  " + dest + " = xor " + ty + " " + op + ", -1\n",
+        MirUnInvalid -> "  ; TODO invalid unary op\n",
+    }
+}
+
+/// mirEmitRValueBinary lowers arithmetic / comparison / logical /
+/// bitwise binary operations. The opcode comes from the existing
+/// `mirBinaryOpcode` symbol-table; operand type is derived from the
+/// left operand (left and right must agree post-monomorph).
+fn mirEmitRValueBinary(dest: String, rv: MirRValue) -> String {
+    let symbol = mirBinaryOpSymbol(rv.binaryOp)
+    if symbol == "" {
+        return "  ; TODO unknown binary op\n"
+    }
+    let argTy = mirEmitOperandLLVMType(rv.arg)
+    let isFloat = argTy == "double" || argTy == "float"
+    let opcode = mirBinaryOpcode(symbol, isFloat)
+    if opcode == "" {
+        return "  ; TODO no opcode for binary op " + symbol + "\n"
+    }
+    let opTy = if mirBinaryForcesI1Type(symbol) { "i1" } else { argTy }
+    let left = mirEmitOperand(rv.arg)
+    let right = mirEmitOperand(rv.right)
+    "  " + dest + " = " + opcode + " " + opTy + " " + left + ", " + right + "\n"
+}
+
+/// mirBinaryOpSymbol mirrors the (private) `mirBinaryOpName` in
+/// `toolchain/mir.osty` so the generator can look up the symbol
+/// without needing the latter to be `pub`. Kept in sync by the
+/// Phase 1c structural test (`MirBinAdd ->` etc. needles).
+fn mirBinaryOpSymbol(op: MirBinaryOp) -> String {
+    match op {
+        MirBinAdd -> "+",
+        MirBinSub -> "-",
+        MirBinMul -> "*",
+        MirBinDiv -> "/",
+        MirBinMod -> "%",
+        MirBinEq -> "==",
+        MirBinNeq -> "!=",
+        MirBinLt -> "<",
+        MirBinLeq -> "<=",
+        MirBinGt -> ">",
+        MirBinGeq -> ">=",
+        MirBinAnd -> "&&",
+        MirBinOr -> "||",
+        MirBinBitAnd -> "&",
+        MirBinBitOr -> "|",
+        MirBinBitXor -> "^",
+        MirBinShl -> "<<",
+        MirBinShr -> ">>",
+        MirBinInvalid -> "",
+    }
+}
+
+/// mirEmitRValueLLVMType resolves the LLVM type for an rvalue's
+/// result. Falls back to i64 when the source-level name doesn't
+/// match a known primitive — defensive only.
+fn mirEmitRValueLLVMType(rv: MirRValue) -> String {
+    let prim = mirLlvmTypeForPrim(rv.typ)
+    if prim != "" {
+        return prim
+    }
+    "i64"
+}
+
+/// mirEmitOperandLLVMType resolves the LLVM type for an operand.
+/// Used by the binary-op emitter to decide between integer and
+/// float opcodes.
+fn mirEmitOperandLLVMType(op: MirOperand) -> String {
+    let prim = mirLlvmTypeForPrim(op.typ)
+    if prim != "" {
+        return prim
+    }
+    "i64"
 }
