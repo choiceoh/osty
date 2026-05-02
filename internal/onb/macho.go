@@ -207,16 +207,33 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 			meta.CU.LowPC = 0
 			meta.CU.HighPCSize = uint64(len(enc.code))
 			meta.CU.StmtListOffset = 0 // single CU; line program starts at section offset 0
+			meta.CU.StringTable = meta.Strings
 			fnSizes := computeFnSizes(enc, uint64(len(enc.code)))
 			subs := make([]dwarfSubprogramInput, 0, len(program.Functions))
 			for i, fn := range program.Functions {
 				if i >= len(enc.fnOffsets) || i >= len(fnSizes) {
 					break
 				}
+				vars := make([]dwarfVariableInput, 0, len(fn.DebugLocals))
+				for _, dl := range fn.DebugLocals {
+					kind := dwarfBaseTypeNone
+					if dl.TypeKind == DebugTypeInt {
+						kind = dwarfBaseTypeInt
+					}
+					if kind == dwarfBaseTypeNone {
+						continue
+					}
+					vars = append(vars, dwarfVariableInput{
+						NameStrOffset: meta.Strings.Add(dl.Name),
+						SlotOffset:    dl.SlotOffset,
+						TypeKind:      kind,
+					})
+				}
 				subs = append(subs, dwarfSubprogramInput{
 					NameStrOffset: meta.Strings.Add(fn.Name),
 					LowPC:         enc.fnOffsets[i],
 					SizeBytes:     fnSizes[i],
+					Variables:     vars,
 				})
 			}
 			debugAbbrev = emitDwarfAbbrev()

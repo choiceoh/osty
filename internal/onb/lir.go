@@ -31,11 +31,36 @@ type CStringLiteral struct {
 // the function uses no stack — a leaf function with no locals and no stack
 // arguments. The lowerer fills this in at the end of lowering once it knows
 // how many local slots and whether a printf vararg slot are needed.
+//
+// DebugLocals lists user-named locals (parameters + `let` bindings) that
+// the lowerer placed in stack slots. The DWARF emitter uses this to
+// produce one DW_TAG_variable DIE per local so lldb's `frame variable`
+// can recover the value.
 type Function struct {
-	Name      string
-	Blocks    []Block
-	FrameSize int64
+	Name        string
+	Blocks      []Block
+	FrameSize   int64
+	DebugLocals []DebugLocal
 }
+
+// DebugLocal binds a user-readable name to an stack-slot offset and a
+// primitive type kind. Anonymous compiler temps are excluded — they
+// would clutter `frame variable` output without helping the user.
+type DebugLocal struct {
+	Name       string
+	SlotOffset int64
+	TypeKind   DebugTypeKind
+}
+
+// DebugTypeKind enumerates the primitive types the DWARF emitter can
+// describe today. The order matches dwarfBaseTypeKind in dwarf.go and
+// keeps the LIR layer free of DWARF-spec constants.
+type DebugTypeKind int
+
+const (
+	DebugTypeNone DebugTypeKind = iota
+	DebugTypeInt
+)
 
 // Block is a linear basic block.
 //

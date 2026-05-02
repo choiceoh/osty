@@ -73,24 +73,33 @@ const dwarfLineBaseByte byte = 0xFB
 // new attribute also needs a slot in the abbreviation table below.
 const (
 	dwarfTagCompileUnit = 0x11
+	dwarfTagBaseType    = 0x24
 	dwarfTagSubprogram  = 0x2e
+	dwarfTagVariable    = 0x34
 
 	dwarfChildrenNo  byte = 0
 	dwarfChildrenYes byte = 1
 
-	dwarfAtName     = 0x03
-	dwarfAtStmtList = 0x10
-	dwarfAtLowPC    = 0x11
-	dwarfAtHighPC   = 0x12
-	dwarfAtLanguage = 0x13
-	dwarfAtCompDir  = 0x1b
-	dwarfAtProducer = 0x25
+	dwarfAtName      = 0x03
+	dwarfAtByteSize  = 0x0b
+	dwarfAtStmtList  = 0x10
+	dwarfAtLowPC     = 0x11
+	dwarfAtHighPC    = 0x12
+	dwarfAtLanguage  = 0x13
+	dwarfAtCompDir   = 0x1b
+	dwarfAtEncoding  = 0x3e
+	dwarfAtProducer  = 0x25
+	dwarfAtFrameBase = 0x40
+	dwarfAtLocation  = 0x02
+	dwarfAtType      = 0x49
 
 	dwarfFormAddr      = 0x01
 	dwarfFormData8     = 0x07
 	dwarfFormData1     = 0x0b
 	dwarfFormStrp      = 0x0e
+	dwarfFormRef4      = 0x13
 	dwarfFormSecOffset = 0x17
+	dwarfFormExprloc   = 0x18
 
 	// DW_LANG_C99 is the closest spec-blessed language code for "C-like
 	// imperative with statement-line attribution semantics that match
@@ -99,10 +108,22 @@ const (
 	// own debugger UX.
 	dwarfLangC99 byte = 0x0c
 
+	// DW_ATE_* base-type encoding kinds — used by `__debug_info` to
+	// describe how a variable's bytes should be interpreted.
+	dwarfATESigned byte = 0x05
+
+	// DW_OP_* expression opcodes.
+	dwarfOpBreg31 byte = 0x8f // sp-based frame address
+	dwarfOpFbreg  byte = 0x91 // frame_base + sleb128
+
 	// abbrev codes. The compile unit is code 1; each function is a
-	// DW_TAG_subprogram child encoded with abbrev code 2.
+	// DW_TAG_subprogram child encoded with abbrev code 2; locals get
+	// DW_TAG_variable as code 3; their type sits at code 4 once per
+	// distinct base type (only `Int` for Phase B.3 v1).
 	dwarfAbbrevCompileUnit uint64 = 1
 	dwarfAbbrevSubprogram  uint64 = 2
+	dwarfAbbrevVariable    uint64 = 3
+	dwarfAbbrevBaseType    uint64 = 4
 )
 
 // dwarfStdOpcodeLengths is the per-opcode operand-count table the line
@@ -501,7 +522,9 @@ func (t *dwarfStringTable) Add(s string) uint32 {
 
 // dwarfCompileUnitInputs collects the metadata the CU DIE needs. Strings
 // are pre-resolved into `__debug_str` offsets so the encoder can write
-// raw uint32s without re-traversing the table.
+// raw uint32s without re-traversing the table — except the type-name
+// strings, which the encoder adds opportunistically as it discovers new
+// base types (so the caller hands over the live table via StringTable).
 type dwarfCompileUnitInputs struct {
 	NameStrOffset     uint32
 	CompDirStrOffset  uint32
@@ -510,16 +533,17 @@ type dwarfCompileUnitInputs struct {
 	HighPCSize        uint64 // DWARF 4 high_pc as constant offset from low_pc
 	StmtListOffset    uint32
 	Language          byte
+	StringTable       *dwarfStringTable
 }
 
-// emitDwarfAbbrev returns the byte stream for `__debug_abbrev`. Two
-// entries today — the compile unit DIE (code 1) and a subprogram DIE
-// (code 2) for each user function. Subprograms are children of the CU,
-// which is why the CU declares DW_CHILDREN_yes and the encoder writes a
-// 0-byte sentinel after the last subprogram to close the child list.
+// emitDwarfAbbrev returns the byte stream for `__debug_abbrev`. Four
+// entries today — CU (1), subprogram (2), variable (3), base type (4).
+// Subprograms own variable DIEs as children; types live as siblings of
+// subprograms under the CU. Each DIE list is closed by a 0-byte sentinel
+// when its abbrev declared DW_CHILDREN_yes.
 func emitDwarfAbbrev() []byte {
 	var b bytes.Buffer
-	// Code 1: DW_TAG_compile_unit, has children (the subprograms).
+	// Code 1: DW_TAG_compile_unit, has children (subprograms + types).
 	writeULEB128(&b, dwarfAbbrevCompileUnit)
 	writeULEB128(&b, dwarfTagCompileUnit)
 	b.WriteByte(dwarfChildrenYes)
@@ -533,13 +557,34 @@ func emitDwarfAbbrev() []byte {
 	writeULEB128(&b, 0)
 	writeULEB128(&b, 0)
 
-	// Code 2: DW_TAG_subprogram, no children.
+	// Code 2: DW_TAG_subprogram, has children (variable DIEs).
 	writeULEB128(&b, dwarfAbbrevSubprogram)
 	writeULEB128(&b, dwarfTagSubprogram)
-	b.WriteByte(dwarfChildrenNo)
+	b.WriteByte(dwarfChildrenYes)
 	writeULEB128AttrPair(&b, dwarfAtName, dwarfFormStrp)
 	writeULEB128AttrPair(&b, dwarfAtLowPC, dwarfFormAddr)
 	writeULEB128AttrPair(&b, dwarfAtHighPC, dwarfFormData8)
+	writeULEB128AttrPair(&b, dwarfAtFrameBase, dwarfFormExprloc)
+	writeULEB128(&b, 0)
+	writeULEB128(&b, 0)
+
+	// Code 3: DW_TAG_variable, no children.
+	writeULEB128(&b, dwarfAbbrevVariable)
+	writeULEB128(&b, dwarfTagVariable)
+	b.WriteByte(dwarfChildrenNo)
+	writeULEB128AttrPair(&b, dwarfAtName, dwarfFormStrp)
+	writeULEB128AttrPair(&b, dwarfAtType, dwarfFormRef4)
+	writeULEB128AttrPair(&b, dwarfAtLocation, dwarfFormExprloc)
+	writeULEB128(&b, 0)
+	writeULEB128(&b, 0)
+
+	// Code 4: DW_TAG_base_type, no children.
+	writeULEB128(&b, dwarfAbbrevBaseType)
+	writeULEB128(&b, dwarfTagBaseType)
+	b.WriteByte(dwarfChildrenNo)
+	writeULEB128AttrPair(&b, dwarfAtName, dwarfFormStrp)
+	writeULEB128AttrPair(&b, dwarfAtByteSize, dwarfFormData1)
+	writeULEB128AttrPair(&b, dwarfAtEncoding, dwarfFormData1)
 	writeULEB128(&b, 0)
 	writeULEB128(&b, 0)
 
@@ -570,7 +615,29 @@ type dwarfSubprogramInput struct {
 	NameStrOffset uint32
 	LowPC         uint64
 	SizeBytes     uint64 // DWARF 4 high_pc as constant offset from low_pc
+	Variables     []dwarfVariableInput
 }
+
+// dwarfVariableInput describes one local variable visible to lldb's
+// `frame variable` command. SlotOffset is the byte offset from the
+// function's frame base (which Phase B.3 sets to the current sp value)
+// where the value lives.
+type dwarfVariableInput struct {
+	NameStrOffset uint32
+	SlotOffset    int64
+	TypeKind      dwarfBaseTypeKind
+}
+
+// dwarfBaseTypeKind enumerates the primitive ABI-level types Phase B.3
+// can describe to lldb. Adding String / Bool / Float etc. is a follow-up
+// slice — each new kind needs an entry here plus a row in the type DIE
+// emitter below.
+type dwarfBaseTypeKind int
+
+const (
+	dwarfBaseTypeNone dwarfBaseTypeKind = iota
+	dwarfBaseTypeInt
+)
 
 // emitDwarfInfo returns the byte stream for `__debug_info`. The unit
 // header layout (DWARF 4 §7.5.1.1):
@@ -580,10 +647,23 @@ type dwarfSubprogramInput struct {
 //	debug_abbrev_offset (4 bytes, sec_offset into __debug_abbrev)
 //	address_size        (1 byte = 8 for aarch64)
 //
-// then DIEs in tree order. The CU DIE owns one DW_TAG_subprogram child
-// per user function, terminated by a 0-byte sentinel.
+// then DIEs in tree order:
+//
+//	CU
+//	├── base_type Int
+//	├── subprogram f
+//	│   ├── variable v1
+//	│   └── variable v2
+//	└── subprogram g
+//
+// The base_type comes first so subsequent DW_AT_type ref4 fields can use
+// its CU-relative offset. Each tree level with DW_CHILDREN_yes ends with
+// a 0-byte sentinel.
 func emitDwarfInfo(cu dwarfCompileUnitInputs, subs []dwarfSubprogramInput) dwarfInfoEncoded {
+	const headerLen = 11 // 4 + 2 + 4 + 1
 	var die bytes.Buffer
+
+	// CU DIE
 	writeULEB128(&die, dwarfAbbrevCompileUnit)
 	binary.Write(&die, binary.LittleEndian, cu.ProducerStrOffset)
 	die.WriteByte(cu.Language)
@@ -594,6 +674,17 @@ func emitDwarfInfo(cu dwarfCompileUnitInputs, subs []dwarfSubprogramInput) dwarf
 	binary.Write(&die, binary.LittleEndian, cu.HighPCSize)
 	binary.Write(&die, binary.LittleEndian, cu.StmtListOffset)
 
+	// Type DIEs first so variable DIEs can reference them by stable
+	// CU-relative offset. Currently only `Int` is described — adding
+	// String/Bool/etc. is mechanical (extend dwarfBaseTypeKind enum,
+	// emit one more DIE here, return its offset alongside intTypeOff).
+	intTypeStrx := stringTableLookupOrAdd(cu.StringTable, "Int")
+	intTypeOff := headerLen + uint32(die.Len())
+	writeULEB128(&die, dwarfAbbrevBaseType)
+	binary.Write(&die, binary.LittleEndian, intTypeStrx)
+	die.WriteByte(8) // byte_size
+	die.WriteByte(dwarfATESigned)
+
 	subLowPCDieOffs := make([]uint32, 0, len(subs))
 	for _, sub := range subs {
 		writeULEB128(&die, dwarfAbbrevSubprogram)
@@ -601,26 +692,57 @@ func emitDwarfInfo(cu dwarfCompileUnitInputs, subs []dwarfSubprogramInput) dwarf
 		subLowPCDieOffs = append(subLowPCDieOffs, uint32(die.Len()))
 		binary.Write(&die, binary.LittleEndian, sub.LowPC)
 		binary.Write(&die, binary.LittleEndian, sub.SizeBytes)
+		// frame_base = DW_OP_breg31 0 (current sp). Locals encode their
+		// own slot offsets via DW_OP_fbreg <slot>.
+		writeULEB128(&die, 2) // exprloc length
+		die.WriteByte(dwarfOpBreg31)
+		writeSLEB128(&die, 0)
+
+		// Variable DIE children. Phase B.3 v1 only emits Int locals.
+		for _, v := range sub.Variables {
+			if v.TypeKind != dwarfBaseTypeInt {
+				continue
+			}
+			writeULEB128(&die, dwarfAbbrevVariable)
+			binary.Write(&die, binary.LittleEndian, v.NameStrOffset)
+			binary.Write(&die, binary.LittleEndian, intTypeOff)
+			// location: DW_OP_fbreg <sleb128 slotOffset>
+			var loc bytes.Buffer
+			loc.WriteByte(dwarfOpFbreg)
+			writeSLEB128(&loc, v.SlotOffset)
+			writeULEB128(&die, uint64(loc.Len()))
+			die.Write(loc.Bytes())
+		}
+		die.WriteByte(0) // close subprogram children
 	}
-	// Terminate the CU's children list (DW_CHILDREN_yes was set in the
-	// abbrev, so we close with a 0-byte sentinel).
-	die.WriteByte(0)
+	die.WriteByte(0) // close CU children
 
 	var unit bytes.Buffer
-	unitLen := uint32(2 /*version*/ + 4 /*abbrev_offset*/ + 1 /*addr_size*/ + die.Len())
+	unitLen := uint32(2 + 4 + 1 + die.Len())
 	binary.Write(&unit, binary.LittleEndian, unitLen)
 	binary.Write(&unit, binary.LittleEndian, uint16(dwarfVersion))
 	binary.Write(&unit, binary.LittleEndian, uint32(0))
 	unit.WriteByte(dwarfAddressSize)
 	unit.Write(die.Bytes())
 
-	const headerLen = 11 // 4 + 2 + 4 + 1
 	lowPCs := make([]uint32, 0, 1+len(subLowPCDieOffs))
 	lowPCs = append(lowPCs, headerLen+cuLowPCDieOff)
 	for _, off := range subLowPCDieOffs {
 		lowPCs = append(lowPCs, headerLen+off)
 	}
 	return dwarfInfoEncoded{Bytes: unit.Bytes(), LowPCOffsets: lowPCs}
+}
+
+// stringTableLookupOrAdd returns the offset of `s` in the supplied table,
+// adding it if missing. We can't import dwarfStringTable from inside the
+// type definition above (Go's order-of-declaration rules) so this helper
+// shim keeps the encoder readable while the table itself stays in its
+// existing location.
+func stringTableLookupOrAdd(t *dwarfStringTable, s string) uint32 {
+	if t == nil {
+		return 0
+	}
+	return t.Add(s)
 }
 
 // dwarfCompileUnitMeta packages the three string-table inputs along with

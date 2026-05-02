@@ -37,6 +37,26 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 9 (DWARF B.3 — variable inspection, 2026-05-02)** —
+> lldb `frame variable` 가 ONB 빌드 결과에서 named Int local의 현재 값을
+> 보여줌. 추가:
+> - `DW_TAG_base_type` DIE for Int (byte_size 8, encoding DW_ATE_signed)
+> - `DW_TAG_variable` DIE per named Int local: `DW_AT_name` + `DW_AT_type`
+>   (ref4 to base_type) + `DW_AT_location` (DW_OP_fbreg sleb128(slot))
+> - Subprogram DIE에 `DW_AT_frame_base = DW_OP_breg31 0` (sp-relative)
+> - Abbrev table 4 entries: CU, subprogram(children), variable, base_type
+> - LIR Function에 `DebugLocals []DebugLocal` 필드 — 이름·slot·type 캐리
+> - lower.go가 named Int local만 (`_return` / 익명 temp 제외) 추출
+> - **Param shuffle instrs는 LineSpan zero**: shuffle PC가 source line으로
+>   매핑되면 lldb가 prologue 끝/shuffle 시작 사이에 stop해서 uninitialised
+>   슬롯을 읽는 문제 — line program이 shuffle 행을 skip하도록 수정
+>
+> 검증: `lldb -o "br set -f main.osty -l 1" ./app` → `frame variable`
+> → `(long) a = 10`, `(long) b = 32`. 변수 이름·값 모두 정확.
+>
+> 한계: 현재는 Int만 (DW_ATE_signed). String/Bool/Float/List 등은
+> DebugTypeKind 확장 + 대응 base_type/pointer_type DIE 추가가 필요.
+>
 > **Slice A2 Week 8 (DWARF B.2 — lldb integration, 2026-05-02)** — DWARF
 > 파이프라인이 lldb 자동 인식까지 도달. `dsymutil`이 .o의 DWARF를 .dSYM으로
 > 번들링하고, `lldb`가 `br set -f main.osty -l 4` 같은 source-level breakpoint
