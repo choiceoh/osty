@@ -37,6 +37,29 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 11 (DWARF B.5 infra — struct/member DIEs, 2026-05-02)** —
+> 인코더 인프라만 추가. ONB가 struct를 lower하지 않으므로 dead code지만,
+> 향후 struct lowering 슬라이스가 들어올 때 DWARF 측은 더 이상 막히지 않음.
+> 구체적으로:
+> - `DW_TAG_structure_type` (abbrev 6, has children) + `DW_TAG_member`
+>   (abbrev 7) 추가
+> - `DW_AT_data_member_location` 속성 + `DW_FORM_udata` form
+> - `dwarfStructTypeInput` / `dwarfStructMemberInput` 입력 타입
+> - `emitDwarfInfo`가 `structs []dwarfStructTypeInput` 인자 추가 (callers
+>   pass nil 으로 변동 없음)
+> - 구조체 멤버가 base 타입을 참조하면 같은 CU의 base_type DIE를 공유
+>   (`collectUsedTypeKinds`가 멤버까지 union)
+> - `dwarfVariableInput.StructTypeIndex int` (–1 = base type 사용,
+>   ≥0 = struct list 인덱스 — `variableTypeOffset` helper로 분기)
+>
+> 검증: 단위 테스트 3개 — abbrev 테이블에 struct/member 코드 존재,
+> 인코더가 struct 입력을 받으면 DIE 바이트가 늘어남, variable이
+> StructTypeIndex로 struct DIE를 가리킬 수 있음.
+>
+> 한계: dwarfdump round-trip은 macho.go가 struct를 받지 않아 ScaleHole.
+> 실제 사용은 lowering 들어올 때 (struct AggregateRV + place projection
+> + AAPCS64 small-struct passing).
+>
 > **Slice A2 Week 10 (DWARF B.4 — Bool/String var inspection, 2026-05-02)** —
 > Phase B.3의 variable inspection을 Int 외 ABI-scalar 두 종류로 확장. Bool은
 > `byte_size 1` + `DW_ATE_boolean` (lldb는 byte_size 8 + boolean을 거부하고

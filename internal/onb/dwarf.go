@@ -72,26 +72,29 @@ const dwarfLineBaseByte byte = 0xFB
 // actually writes are listed here — adding more later is fine, but every
 // new attribute also needs a slot in the abbreviation table below.
 const (
-	dwarfTagCompileUnit = 0x11
-	dwarfTagBaseType    = 0x24
-	dwarfTagSubprogram  = 0x2e
-	dwarfTagVariable    = 0x34
+	dwarfTagCompileUnit   = 0x11
+	dwarfTagBaseType      = 0x24
+	dwarfTagSubprogram    = 0x2e
+	dwarfTagVariable      = 0x34
+	dwarfTagStructureType = 0x13
+	dwarfTagMember        = 0x0d
 
 	dwarfChildrenNo  byte = 0
 	dwarfChildrenYes byte = 1
 
-	dwarfAtName      = 0x03
-	dwarfAtByteSize  = 0x0b
-	dwarfAtStmtList  = 0x10
-	dwarfAtLowPC     = 0x11
-	dwarfAtHighPC    = 0x12
-	dwarfAtLanguage  = 0x13
-	dwarfAtCompDir   = 0x1b
-	dwarfAtEncoding  = 0x3e
-	dwarfAtProducer  = 0x25
-	dwarfAtFrameBase = 0x40
-	dwarfAtLocation  = 0x02
-	dwarfAtType      = 0x49
+	dwarfAtName               = 0x03
+	dwarfAtByteSize           = 0x0b
+	dwarfAtStmtList           = 0x10
+	dwarfAtLowPC              = 0x11
+	dwarfAtHighPC             = 0x12
+	dwarfAtLanguage           = 0x13
+	dwarfAtCompDir            = 0x1b
+	dwarfAtEncoding           = 0x3e
+	dwarfAtProducer           = 0x25
+	dwarfAtFrameBase          = 0x40
+	dwarfAtLocation           = 0x02
+	dwarfAtType               = 0x49
+	dwarfAtDataMemberLocation = 0x38
 
 	dwarfFormAddr      = 0x01
 	dwarfFormData8     = 0x07
@@ -100,6 +103,7 @@ const (
 	dwarfFormRef4      = 0x13
 	dwarfFormSecOffset = 0x17
 	dwarfFormExprloc   = 0x18
+	dwarfFormUdata     = 0x0f
 
 	// DW_LANG_C99 is the closest spec-blessed language code for "C-like
 	// imperative with statement-line attribution semantics that match
@@ -125,12 +129,17 @@ const (
 	// DW_TAG_subprogram child encoded with abbrev code 2; locals get
 	// DW_TAG_variable as code 3; primitive types use abbrev 4
 	// (DW_TAG_base_type) and String adds 5 (DW_TAG_pointer_type that
-	// references a `char` base type).
-	dwarfAbbrevCompileUnit uint64 = 1
-	dwarfAbbrevSubprogram  uint64 = 2
-	dwarfAbbrevVariable    uint64 = 3
-	dwarfAbbrevBaseType    uint64 = 4
-	dwarfAbbrevPointerType uint64 = 5
+	// references a `char` base type). Composite types (Phase B.5
+	// infrastructure) use 6 for DW_TAG_structure_type and 7 for
+	// DW_TAG_member — the variable wiring is wired but no caller
+	// emits structs yet because ONB doesn't lower struct programs.
+	dwarfAbbrevCompileUnit   uint64 = 1
+	dwarfAbbrevSubprogram    uint64 = 2
+	dwarfAbbrevVariable      uint64 = 3
+	dwarfAbbrevBaseType      uint64 = 4
+	dwarfAbbrevPointerType   uint64 = 5
+	dwarfAbbrevStructureType uint64 = 6
+	dwarfAbbrevMember        uint64 = 7
 )
 
 // dwarfStdOpcodeLengths is the per-opcode operand-count table the line
@@ -605,6 +614,32 @@ func emitDwarfAbbrev() []byte {
 	writeULEB128(&b, 0)
 	writeULEB128(&b, 0)
 
+	// Code 6: DW_TAG_structure_type, has children (member DIEs). Phase
+	// B.5 infrastructure — no caller emits these today because ONB
+	// doesn't lower struct programs yet, but the abbrev sits in every
+	// .o anyway because dsymutil parses the abbrev table eagerly and
+	// having the entry ready costs only a handful of bytes.
+	writeULEB128(&b, dwarfAbbrevStructureType)
+	writeULEB128(&b, dwarfTagStructureType)
+	b.WriteByte(dwarfChildrenYes)
+	writeULEB128AttrPair(&b, dwarfAtName, dwarfFormStrp)
+	writeULEB128AttrPair(&b, dwarfAtByteSize, dwarfFormUdata)
+	writeULEB128(&b, 0)
+	writeULEB128(&b, 0)
+
+	// Code 7: DW_TAG_member, no children. One per struct field. The
+	// member's DW_AT_data_member_location uses DW_FORM_udata so the
+	// emitter can write the byte offset as a single uleb128, which
+	// also handles offsets >127 without bumping to a 4-byte form.
+	writeULEB128(&b, dwarfAbbrevMember)
+	writeULEB128(&b, dwarfTagMember)
+	b.WriteByte(dwarfChildrenNo)
+	writeULEB128AttrPair(&b, dwarfAtName, dwarfFormStrp)
+	writeULEB128AttrPair(&b, dwarfAtType, dwarfFormRef4)
+	writeULEB128AttrPair(&b, dwarfAtDataMemberLocation, dwarfFormUdata)
+	writeULEB128(&b, 0)
+	writeULEB128(&b, 0)
+
 	// End of abbreviation table.
 	writeULEB128(&b, 0)
 	return b.Bytes()
@@ -639,10 +674,38 @@ type dwarfSubprogramInput struct {
 // `frame variable` command. SlotOffset is the byte offset from the
 // function's frame base (which Phase B.3 sets to the current sp value)
 // where the value lives.
+//
+// StructTypeIndex >= 0 means the variable's type is the N-th entry in
+// the program's struct list (see emitDwarfInfo). When set, TypeKind is
+// ignored — the variable DIE references the struct DIE's offset instead
+// of any base-type DIE. -1 / unset = the variable uses TypeKind path.
 type dwarfVariableInput struct {
+	NameStrOffset   uint32
+	SlotOffset      int64
+	TypeKind        dwarfBaseTypeKind
+	StructTypeIndex int
+}
+
+// dwarfStructTypeInput describes one user-defined struct type the CU
+// publishes via DW_TAG_structure_type with one DW_TAG_member child per
+// field. Phase B.5 ships this infrastructure but no caller populates
+// it yet — ONB still rejects struct programs at the lowering stage.
+//
+// Members reference the same dwarfBaseTypeKind enum the variable path
+// uses, which keeps the encoder logic uniform: a struct field of type
+// `Int` shares the CU's single Int base_type DIE rather than minting a
+// fresh one.
+type dwarfStructTypeInput struct {
 	NameStrOffset uint32
-	SlotOffset    int64
+	ByteSize      uint64
+	Members       []dwarfStructMemberInput
+}
+
+// dwarfStructMemberInput is one field inside a struct.
+type dwarfStructMemberInput struct {
+	NameStrOffset uint32
 	TypeKind      dwarfBaseTypeKind
+	Offset        uint64 // byte offset within the enclosing struct
 }
 
 // dwarfBaseTypeKind enumerates the primitive ABI-level types the DWARF
@@ -680,7 +743,7 @@ const (
 // The base_type comes first so subsequent DW_AT_type ref4 fields can use
 // its CU-relative offset. Each tree level with DW_CHILDREN_yes ends with
 // a 0-byte sentinel.
-func emitDwarfInfo(cu dwarfCompileUnitInputs, subs []dwarfSubprogramInput) dwarfInfoEncoded {
+func emitDwarfInfo(cu dwarfCompileUnitInputs, subs []dwarfSubprogramInput, structs []dwarfStructTypeInput) dwarfInfoEncoded {
 	const headerLen = 11 // 4 + 2 + 4 + 1
 	var die bytes.Buffer
 
@@ -698,8 +761,16 @@ func emitDwarfInfo(cu dwarfCompileUnitInputs, subs []dwarfSubprogramInput) dwarf
 	// Type DIEs first so variable DIEs can reference them by stable
 	// CU-relative offset. We register every kind a variable in this CU
 	// references; unused kinds stay out so the .o doesn't carry dead
-	// debug info.
+	// debug info. Struct fields can reference base types too, so the
+	// `used` set unions reads from variables and struct members both.
 	used := collectUsedTypeKinds(subs)
+	for _, s := range structs {
+		for _, m := range s.Members {
+			if m.TypeKind != dwarfBaseTypeNone {
+				used[m.TypeKind] = true
+			}
+		}
+	}
 	typeOff := map[dwarfBaseTypeKind]uint32{}
 
 	emitBaseType := func(kind dwarfBaseTypeKind, name string, byteSize byte, encoding byte) {
@@ -741,6 +812,34 @@ func emitDwarfInfo(cu dwarfCompileUnitInputs, subs []dwarfSubprogramInput) dwarf
 		die.WriteByte(8) // pointer width on aarch64
 	}
 
+	// Struct type DIEs sit after the base types so DW_AT_type ref4 from
+	// any DW_TAG_member can resolve to a base type that is already
+	// registered. structOff is indexed by position in `structs` and
+	// retained so dwarfVariableInput.StructTypeIndex can resolve to a
+	// CU-relative offset later.
+	structOff := make([]uint32, len(structs))
+	for i, s := range structs {
+		structOff[i] = headerLen + uint32(die.Len())
+		writeULEB128(&die, dwarfAbbrevStructureType)
+		binary.Write(&die, binary.LittleEndian, s.NameStrOffset)
+		writeULEB128(&die, s.ByteSize)
+		for _, m := range s.Members {
+			memberTypeOff, ok := typeOff[m.TypeKind]
+			if !ok {
+				// Skip members whose type wasn't registered (e.g.
+				// composite-of-composite, which Phase B.5 v1 doesn't
+				// surface). The struct DIE stays well-formed because
+				// DW_TAG_member is optional under DW_TAG_structure_type.
+				continue
+			}
+			writeULEB128(&die, dwarfAbbrevMember)
+			binary.Write(&die, binary.LittleEndian, m.NameStrOffset)
+			binary.Write(&die, binary.LittleEndian, memberTypeOff)
+			writeULEB128(&die, m.Offset)
+		}
+		die.WriteByte(0) // close struct's member list
+	}
+
 	subLowPCDieOffs := make([]uint32, 0, len(subs))
 	for _, sub := range subs {
 		writeULEB128(&die, dwarfAbbrevSubprogram)
@@ -756,10 +855,11 @@ func emitDwarfInfo(cu dwarfCompileUnitInputs, subs []dwarfSubprogramInput) dwarf
 
 		// Variable DIE children — one per local whose type the encoder
 		// has registered above. Unsupported kinds (DebugTypeNone or
-		// composite) are silently skipped so they don't confuse lldb
-		// with half-described variables.
+		// composite without a registered struct entry) are silently
+		// skipped so they don't confuse lldb with half-described
+		// variables.
 		for _, v := range sub.Variables {
-			off, ok := typeOff[v.TypeKind]
+			off, ok := variableTypeOffset(v, typeOff, structOff)
 			if !ok {
 				continue
 			}
@@ -791,6 +891,20 @@ func emitDwarfInfo(cu dwarfCompileUnitInputs, subs []dwarfSubprogramInput) dwarf
 		lowPCs = append(lowPCs, headerLen+off)
 	}
 	return dwarfInfoEncoded{Bytes: unit.Bytes(), LowPCOffsets: lowPCs}
+}
+
+// variableTypeOffset resolves a variable input to the CU-relative byte
+// offset of its type DIE. Struct refs win over base-type kinds: a
+// caller that sets StructTypeIndex >= 0 wants the struct DIE even if
+// TypeKind happens to be set, which keeps the common base-type path
+// (StructTypeIndex defaults to 0) unaffected since callers using base
+// types initialise `StructTypeIndex` to -1 explicitly.
+func variableTypeOffset(v dwarfVariableInput, baseOffs map[dwarfBaseTypeKind]uint32, structOffs []uint32) (uint32, bool) {
+	if v.StructTypeIndex >= 0 && v.StructTypeIndex < len(structOffs) {
+		return structOffs[v.StructTypeIndex], true
+	}
+	off, ok := baseOffs[v.TypeKind]
+	return off, ok
 }
 
 // collectUsedTypeKinds walks every variable across every subprogram and

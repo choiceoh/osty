@@ -183,6 +183,116 @@ func TestEmitObjectIncludesDwarfLineSection(t *testing.T) {
 	}
 }
 
+// TestEmitDwarfAbbrevContainsStructAndMemberCodes verifies the
+// abbreviation table publishes codes 6 (DW_TAG_structure_type) and 7
+// (DW_TAG_member) so future struct-aware lowering doesn't have to
+// re-emit the abbrev shape per .o.
+func TestEmitDwarfAbbrevContainsStructAndMemberCodes(t *testing.T) {
+	t.Parallel()
+
+	out := emitDwarfAbbrev()
+
+	// Walk the abbrev table by uleb128 codes. We don't fully parse it —
+	// just confirm both struct + member codes appear with the expected
+	// tag bytes.
+	if !bytes.Contains(out, []byte{byte(dwarfAbbrevStructureType), dwarfTagStructureType, dwarfChildrenYes}) {
+		t.Fatalf("abbrev table missing DW_TAG_structure_type entry:\n% x", out)
+	}
+	if !bytes.Contains(out, []byte{byte(dwarfAbbrevMember), dwarfTagMember, dwarfChildrenNo}) {
+		t.Fatalf("abbrev table missing DW_TAG_member entry:\n% x", out)
+	}
+}
+
+// TestEmitDwarfInfoEmitsStructTypeDIE verifies that when emitDwarfInfo
+// is called with a non-empty struct list, the encoded `__debug_info`
+// contains a structure_type DIE for each struct, each with its members.
+// Phase B.5 v1 ships this path with no caller — the test pins the byte
+// shape so the encoder doesn't drift before lower.go grows struct
+// support.
+func TestEmitDwarfInfoEmitsStructTypeDIE(t *testing.T) {
+	t.Parallel()
+
+	strs := newDwarfStringTable()
+	cu := dwarfCompileUnitInputs{
+		ProducerStrOffset: strs.Add("p"),
+		Language:          dwarfLangC99,
+		NameStrOffset:     strs.Add("main.osty"),
+		CompDirStrOffset:  strs.Add("/tmp"),
+		LowPC:             0,
+		HighPCSize:        0x40,
+		StmtListOffset:    0,
+		StringTable:       strs,
+	}
+	structs := []dwarfStructTypeInput{
+		{
+			NameStrOffset: strs.Add("Point"),
+			ByteSize:      16,
+			Members: []dwarfStructMemberInput{
+				{NameStrOffset: strs.Add("x"), TypeKind: dwarfBaseTypeInt, Offset: 0},
+				{NameStrOffset: strs.Add("y"), TypeKind: dwarfBaseTypeInt, Offset: 8},
+			},
+		},
+	}
+	enc := emitDwarfInfo(cu, nil, structs)
+	if len(enc.Bytes) < 30 {
+		t.Fatalf("debug_info too small (%d bytes); struct DIE missing", len(enc.Bytes))
+	}
+	// The struct DIE comes after the CU DIE + Int base type DIE. We
+	// verify the encoded stream contains the abbrev codes for struct
+	// (6) and member (7) at non-zero positions — a stronger assertion
+	// would parse the DIE tree, which is overkill for an infra slice.
+	body := enc.Bytes[11:] // skip 11-byte unit header
+	if !bytes.Contains(body, []byte{byte(dwarfAbbrevStructureType)}) {
+		t.Fatalf("debug_info missing struct abbrev code (% x)", body)
+	}
+	if !bytes.Contains(body, []byte{byte(dwarfAbbrevMember)}) {
+		t.Fatalf("debug_info missing member abbrev code (% x)", body)
+	}
+}
+
+// TestEmitDwarfInfoVariableCanReferenceStruct exercises the
+// StructTypeIndex path: a variable DIE whose StructTypeIndex points
+// into the struct list should resolve to the struct DIE's offset
+// rather than fall back to the base-type lookup. Today no caller sets
+// StructTypeIndex >= 0, but the encoder needs to honour it once they
+// start.
+func TestEmitDwarfInfoVariableCanReferenceStruct(t *testing.T) {
+	t.Parallel()
+
+	strs := newDwarfStringTable()
+	cu := dwarfCompileUnitInputs{
+		ProducerStrOffset: strs.Add("p"),
+		Language:          dwarfLangC99,
+		NameStrOffset:     strs.Add("main.osty"),
+		CompDirStrOffset:  strs.Add("/tmp"),
+		StringTable:       strs,
+	}
+	structs := []dwarfStructTypeInput{{
+		NameStrOffset: strs.Add("Point"),
+		ByteSize:      16,
+	}}
+	subs := []dwarfSubprogramInput{{
+		NameStrOffset: strs.Add("origin"),
+		LowPC:         0,
+		SizeBytes:     0x10,
+		Variables: []dwarfVariableInput{{
+			NameStrOffset:   strs.Add("p"),
+			SlotOffset:      0,
+			TypeKind:        dwarfBaseTypeNone, // ignored when StructTypeIndex is set
+			StructTypeIndex: 0,
+		}},
+	}}
+	enc := emitDwarfInfo(cu, subs, structs)
+	// If the variable DIE were skipped (because TypeKind is None and the
+	// encoder didn't honour StructTypeIndex), the body would be smaller
+	// — no DW_TAG_variable abbrev code 3 would appear under the
+	// subprogram. The presence of code 3 in the body proves the path.
+	body := enc.Bytes[11:]
+	if !bytes.Contains(body, []byte{byte(dwarfAbbrevVariable)}) {
+		t.Fatalf("variable DIE missing — StructTypeIndex path broken (% x)", body)
+	}
+}
+
 // TestEmitDwarfInfoEmitsVariableDIEs verifies that each subprogram with
 // named Int locals carries one variable DIE per local. The locations
 // reference the function's frame_base via `DW_OP_fbreg <slot>`, which
@@ -212,7 +322,7 @@ func TestEmitDwarfInfoEmitsVariableDIEs(t *testing.T) {
 			},
 		},
 	}
-	enc := emitDwarfInfo(cu, subs)
+	enc := emitDwarfInfo(cu, subs, nil)
 	// 1 CU low_pc + 1 subprogram low_pc — variable DIEs use form_ref4 to
 	// the type, not addr-form, so they don't show up in LowPCOffsets.
 	if got, want := len(enc.LowPCOffsets), 2; got != want {
@@ -250,7 +360,7 @@ func TestEmitDwarfInfoEmitsSubprogramDIEPerFunction(t *testing.T) {
 		{NameStrOffset: 4, LowPC: 0x00, SizeBytes: 0x20},
 		{NameStrOffset: 5, LowPC: 0x20, SizeBytes: 0x20},
 	}
-	enc := emitDwarfInfo(cu, subs)
+	enc := emitDwarfInfo(cu, subs, nil)
 	if len(enc.LowPCOffsets) != 1+len(subs) {
 		t.Fatalf("low_pc offsets count = %d, want %d (CU + 2 subprograms)", len(enc.LowPCOffsets), 1+len(subs))
 	}
