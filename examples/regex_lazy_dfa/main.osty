@@ -1,0 +1,177 @@
+use std.regex
+
+fn main() {
+    // ── State-explosion: ".*a.{12}" — DFA must track every position
+    //    in the trailing 13-char window that could have been an 'a'.
+    //    Subset construction balloons past the eager 1024-state cap;
+    //    the per-call lazy DFA + LRU (Phase 9d) absorbs the working
+    //    set on demand without falling all the way to the Pike VM.
+
+    match regex.compile(r".*a.{12}") {
+        Ok(re) -> {
+            // 'a' is at offset 20; need 12 more chars to match end.
+            // Greedy `.*` extends the leftmost match end to the input
+            // end, so end = 33 (full input length).
+            let input = "                    aXXXXXXXXXXXX"
+            match re.find(input) {
+                Some(m) -> {
+                    let s = m.start
+                    let e = m.end
+                    println("explosion-find: [{s}..{e})")
+                },
+                None -> println("explosion-find: no match"),
+            }
+
+            let yes = re.matches(input)
+            println("explosion-matches-yes: {yes}")
+
+            // No 'a' anywhere — confirms the lazy DFA correctly
+            // walks the entire input and reports no-match.
+            let nope = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+            let no = re.matches(nope)
+            println("explosion-matches-no: {no}")
+        },
+        Err(_) -> println("explosion compile failed"),
+    }
+
+    // ── Long input + sparse match. Lazy DFA cache evictions kick in
+    //    if the working set exceeds OSTY_RE_LAZY_DFA_CAP (256). The
+    //    `.*a.{8}` pattern still requires correctness for sparse
+    //    matches at the end of long inputs.
+    match regex.compile(r".*a.{8}") {
+        Ok(re) -> {
+            let mut buf = ""
+            let mut i = 0
+            for _ in 0..200 {
+                buf = buf + "xxxxxxxxxx"
+                i += 1
+            }
+            buf = buf + "aZZZZZZZZ"
+            let total = buf.len()
+            match re.find(buf) {
+                Some(m) -> {
+                    let s = m.start
+                    let e = m.end
+                    println("long-input: [{s}..{e}) total={total}")
+                },
+                None -> println("long-input: no match"),
+            }
+        },
+        Err(_) -> println("long compile failed"),
+    }
+
+    // ── findAll over multiple sparse matches in moderate input. Each
+    //    iteration's boundary scan goes through the lazy DFA + LRU.
+    //    Pattern uses `.{4}` to require a 5-char window starting at
+    //    'a' — multiple non-overlapping matches.
+    match regex.compile(r"a.{4}") {
+        Ok(re) -> {
+            let list = re.findAll("aXXXX-aYYYY-aZZZZ")
+            let n = list.len()
+            println("findAll: {n}")
+            let mut i = 0
+            for _ in 0..n {
+                let m = list[i]
+                let t = m.text
+                println("  [{i}] '{t}'")
+                i += 1
+            }
+        },
+        Err(_) -> println("findAll compile failed"),
+    }
+
+    // ── replaceAll under lazy DFA path. Several short matches + a
+    //    backref expansion, exercising the captures-aware NFA pass
+    //    that runs after the boundary scan.
+    match regex.compile(r"a(.{3})") {
+        Ok(re) -> {
+            let r = re.replaceAll("aBBBxaCCCy", "[$1]")
+            println("repl: {r}")
+        },
+        Err(_) -> println("repl compile failed"),
+    }
+
+    // ── split under lazy DFA. Verifies the boundary scan produces
+    //    correct piece boundaries when the pattern explodes.
+    match regex.compile(r" *a.{3} *") {
+        Ok(re) -> {
+            let parts = re.split("xxx aBBB yyy aCCC zzz")
+            let n = parts.len()
+            println("split: {n}")
+            let mut i = 0
+            for _ in 0..n {
+                let p = parts[i]
+                println("  [{i}] '{p}'")
+                i += 1
+            }
+        },
+        Err(_) -> println("split compile failed"),
+    }
+
+    // ── Captures under the same exploding pattern. Lazy DFA finds
+    //    boundaries; NFA fills slots; captures.get(0) returns the
+    //    full leftmost-longest match.
+    match regex.compile(r"a(.{4})") {
+        Ok(re) -> {
+            match re.captures("xxxaWXYZ-tail") {
+                Some(c) -> {
+                    match c.get(0) {
+                        Some(s) -> println("captures-g0: '{s}'"),
+                        None    -> println("captures-g0: missing"),
+                    }
+                    match c.get(1) {
+                        Some(s) -> println("captures-g1: '{s}'"),
+                        None    -> println("captures-g1: missing"),
+                    }
+                },
+                None -> println("captures: no match"),
+            }
+        },
+        Err(_) -> println("captures compile failed"),
+    }
+
+    // ── DFA-incompatible pattern (uses \b) — must still take the
+    //    Pike VM fallback. lazy_eligible should be 0 here so no
+    //    lazy DFA is constructed; the test asserts the fallback
+    //    still works correctly alongside the new code path.
+    match regex.compile(r"\bword\b") {
+        Ok(re) -> {
+            match re.find("a word in sentence") {
+                Some(m) -> {
+                    let t = m.text
+                    let s = m.start
+                    let e = m.end
+                    println("nfa-fallback: '{t}' [{s}..{e})")
+                },
+                None -> println("nfa-fallback: no match"),
+            }
+        },
+        Err(_) -> println("nfa-fallback compile failed"),
+    }
+
+    // ── Heavier explosion + LRU eviction: ".*a.{40}" with a long,
+    //    diverse input forces the boundary scanner past 256 distinct
+    //    cached states. The lazy DFA evicts the least-recently-used
+    //    state and recomputes — correctness must survive eviction.
+    match regex.compile(r".*a.{40}") {
+        Ok(re) -> {
+            // Build a long input full of 'a's at varying offsets so the
+            // 41-char trailing window stays in flux through the scan.
+            let mut buf = ""
+            for _ in 0..50 {
+                buf = buf + "abcaXabcdXaYabcaXYZab"
+            }
+            buf = buf + "aZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
+            match re.find(buf) {
+                Some(m) -> {
+                    let s = m.start
+                    let e = m.end
+                    let total = buf.len()
+                    println("heavy-explosion: [{s}..{e}) total={total}")
+                },
+                None -> println("heavy-explosion: no match"),
+            }
+        },
+        Err(_) -> println("heavy compile failed"),
+    }
+}
