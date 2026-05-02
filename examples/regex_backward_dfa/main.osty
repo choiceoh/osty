@@ -1,0 +1,104 @@
+use std.regex
+
+fn main() {
+    // Backward DFA가 정확한 leftmost-longest start를 찾는지 검증.
+
+    // ── Sparse 매치: 매치가 입력 끝쪽에 있음. 백워드 DFA가 start를
+    //    바로 찾으면 NFA scan은 매치 영역만 좁게.
+    match regex.compile(r"\d+") {
+        Ok(re) -> {
+            match re.find("aaaaaaaaaaaaaaaaaaaa12345aaaaaaaaa") {
+                Some(m) -> {
+                    let t = m.text
+                    let s = m.start
+                    let e = m.end
+                    println("sparse-end: '{t}' [{s}..{e})")
+                },
+                None -> println("sparse-end: no match"),
+            }
+        },
+        Err(_) -> println("sparse-end compile failed"),
+    }
+
+    // ── findAll로 여러 sparse 매치. 각 매치의 boundary가 정확해야.
+    match regex.compile(r"\d+") {
+        Ok(re) -> {
+            let list = re.findAll("xxx 12 yyy 345 zzz 6789 end")
+            let n = list.len()
+            println("multi-sparse: {n}")
+            let mut i = 0
+            while i < n {
+                let m = list[i]
+                let t = m.text
+                let s = m.start
+                let e = m.end
+                println("  [{i}] '{t}' [{s}..{e})")
+                i += 1
+            }
+        },
+        Err(_) -> println("multi compile failed"),
+    }
+
+    // ── 그룹 캡처도 backward DFA 경로에서 정확해야.
+    match regex.compile(r"(\w+):(\d+)") {
+        Ok(re) -> {
+            match re.captures("                              host:8080") {
+                Some(c) -> {
+                    match c.get(1) {
+                        Some(s) -> println("g1='{s}'"),
+                        None    -> println("g1=<none>"),
+                    }
+                    match c.get(2) {
+                        Some(s) -> println("g2='{s}'"),
+                        None    -> println("g2=<none>"),
+                    }
+                },
+                None -> println("captures: no match"),
+            }
+        },
+        Err(_) -> println("captures compile failed"),
+    }
+
+    // ── 백워드 DFA가 절대 leftmost를 찾되, iter cursor 너머는
+    //    가지 않아야 (clamp). Overlapping pattern test.
+    match regex.compile(r"a+") {
+        Ok(re) -> {
+            let list = re.findAll("xxxaaaayyyaaaazzz")
+            let n = list.len()
+            println("clamp: {n}")
+            let mut i = 0
+            while i < n {
+                let m = list[i]
+                let t = m.text
+                let s = m.start
+                let e = m.end
+                println("  [{i}] '{t}' [{s}..{e})")
+                i += 1
+            }
+        },
+        Err(_) -> println("clamp compile failed"),
+    }
+
+    // ── replaceAll backref: 각 매치의 boundary 정확성.
+    match regex.compile(r"(\w+)") {
+        Ok(re) -> {
+            let r = re.replaceAll("alpha beta gamma", "<$1>")
+            println("repl: {r}")
+        },
+        Err(_) -> println("repl compile failed"),
+    }
+
+    // ── 매치가 0개일 때 backward DFA 경로도 빨라야.
+    match regex.compile(r"\d+") {
+        Ok(re) -> {
+            match re.find("no digits here at all just letters and spaces") {
+                Some(m) -> {
+                    let t = m.text
+                    println("nomatch: surprise '{t}'")
+                },
+                None -> println("nomatch: correctly None"),
+            }
+        },
+        Err(_) -> println("nomatch compile failed"),
+    }
+}

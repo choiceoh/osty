@@ -14719,22 +14719,35 @@ typedef struct osty_regex_compiled {
                             * Phase 2 captures = 2 * ngroups slots */
     int32_t name_count;    /* Phase 5: count of (?P<name>) bindings */
     int32_t name_data_len; /* total bytes of concatenated names */
-    /* Phase 9 — pre-built DFA for `matches()` fast path.
-     *   dfa_state_count == 0     → no DFA (pattern uses anchors / \b /
-     *                              \B / SAVE captures, or DFA construction
-     *                              hit the OSTY_RE_DFA_MAX_STATES limit).
-     *                              matches() falls back to the Pike VM.
-     *   dfa_state_count > 0      → DFA available. State 0 is the initial
-     *                              state; transitions and is_match arrays
-     *                              follow the name_data tail. */
+    /* Phase 9 — pre-built DFAs for `matches()` and boundary finding.
+     *   dfa_state_count == 0       → no forward DFA (pattern uses
+     *                                anchors / \b / \B, or build hit
+     *                                the OSTY_RE_DFA_MAX_STATES limit).
+     *                                matches() and find/captures fall
+     *                                back to the Pike VM.
+     *   dfa_state_count > 0        → forward DFA available. State 0
+     *                                is the initial; tail holds
+     *                                is_match[state_count] +
+     *                                trans[state_count * 256].
+     *   dfa_back_state_count > 0   → backward DFA available (Phase 9c).
+     *                                Built from reversed-direction
+     *                                interpretation of the same NFA;
+     *                                lets find/captures jump directly
+     *                                to the match START given a
+     *                                forward-DFA-discovered END,
+     *                                shrinking the NFA capture-extract
+     *                                window to the matched substring. */
     int32_t dfa_state_count;
-    /* Inline tail (Phase 9 layout):
+    int32_t dfa_back_state_count;
+    /* Inline tail (Phase 9c layout):
      *   prog[prog_len], classes[class_count],
      *   osty_re_name_entry name_table[name_count],
      *   char name_data[name_data_len],
      *   uint8_t dfa_is_match[dfa_state_count],
-     *   uint16_t dfa_transitions[dfa_state_count * 256]
-     * The DFA tail is only present when dfa_state_count > 0. */
+     *   uint16_t dfa_transitions[dfa_state_count * 256],
+     *   uint8_t dfa_back_is_match[dfa_back_state_count],
+     *   uint16_t dfa_back_transitions[dfa_back_state_count * 256]
+     * Tails are only present when their state_count > 0. */
 } osty_regex_compiled;
 
 /* Phase 5 — named-capture binding stored inline at the end of a
@@ -14802,6 +14815,14 @@ static inline const uint8_t *osty_re_compiled_dfa_is_match(const osty_regex_comp
 
 static inline const uint16_t *osty_re_compiled_dfa_transitions(const osty_regex_compiled *re) {
     return (const uint16_t *)(osty_re_compiled_dfa_is_match(re) + (size_t)re->dfa_state_count);
+}
+
+static inline const uint8_t *osty_re_compiled_dfa_back_is_match(const osty_regex_compiled *re) {
+    return (const uint8_t *)(osty_re_compiled_dfa_transitions(re) + (size_t)re->dfa_state_count * 256);
+}
+
+static inline const uint16_t *osty_re_compiled_dfa_back_transitions(const osty_regex_compiled *re) {
+    return (const uint16_t *)(osty_re_compiled_dfa_back_is_match(re) + (size_t)re->dfa_back_state_count);
 }
 
 /* Parser scratch state. The growing instruction / class buffers live
@@ -16219,39 +16240,335 @@ static int osty_re_dfa_match(const osty_regex_compiled *re, const char *text, in
     return 0;
 }
 
+/* ============================================================
+ * Phase 9c — Backward DFA for boundary START detection.
+ *
+ * RE2's two-pass approach: forward DFA finds match END E, backward
+ * DFA scans text right-to-left from E to find match START S, then
+ * the (slow but precise) Pike NFA only runs over text[S..E) to fill
+ * captures. Without the backward DFA, the NFA has to scan from the
+ * iteration's `start` cursor forward through (potentially long)
+ * non-matching prefix until it finds the match — wasteful when
+ * matches are sparse in long inputs.
+ *
+ * Implementation: instead of emitting a separate reversed bytecode,
+ * we interpret the original NFA bytecode in reverse direction. Each
+ * PC in the forward graph has a set of incoming PCs (predecessors);
+ * the backward step at byte b finds predecessors q of the current
+ * state's PCs whose op (CHAR/CCLASS/ANY) at q→pc consumes byte b.
+ * Backward epsilon closure walks SAVE/JMP/SPLIT predecessor edges.
+ *
+ * Backward DFA "accept" = state contains the original PC=0 (the
+ * source of the forward graph). When backward simulation lands a
+ * thread on PC=0 it has reconstructed a path back to the start of
+ * the pattern, so the corresponding sp is a valid match start.
+ * Leftmost-longest = earliest accept during the right-to-left scan. */
+
+typedef struct {
+    int32_t *flat;        /* concatenated predecessor PCs */
+    int32_t *offsets;     /* prog_len + 1; preds(pc) = flat[offsets[pc] .. offsets[pc+1]) */
+    int32_t total;
+} osty_re_preds;
+
+static void osty_re_preds_free(osty_re_preds *p) {
+    free(p->flat);
+    free(p->offsets);
+    p->flat = NULL;
+    p->offsets = NULL;
+    p->total = 0;
+}
+
+/* Two-pass count + populate. For each forward edge (p → q) record p
+ * in preds(q). Edges:
+ *   CHAR/CCLASS/ANY/SAVE/BOL/EOL/WB/NWB at p → p+1
+ *   JMP at p → p.x
+ *   SPLIT at p → p.x and p.y
+ *   MATCH: terminal, no outgoing. */
+static int osty_re_preds_build(const osty_regex_compiled *re, osty_re_preds *out) {
+    int prog_len = re->prog_len;
+    out->flat = NULL;
+    out->offsets = (int32_t *)calloc((size_t)prog_len + 1, sizeof(int32_t));
+    if (out->offsets == NULL) return -1;
+    /* Pass 1: counts (stored temporarily into offsets[1..]). */
+    for (int p = 0; p < prog_len; p++) {
+        osty_re_inst ins = re->prog[p];
+        switch (ins.op) {
+        case OSTY_RE_OP_CHAR:
+        case OSTY_RE_OP_ANY:
+        case OSTY_RE_OP_CCLASS:
+        case OSTY_RE_OP_SAVE:
+        case OSTY_RE_OP_BOL:
+        case OSTY_RE_OP_EOL:
+        case OSTY_RE_OP_WB:
+        case OSTY_RE_OP_NWB:
+            if (p + 1 < prog_len) out->offsets[p + 2]++;
+            break;
+        case OSTY_RE_OP_JMP:
+            if (ins.x >= 0 && ins.x < prog_len) out->offsets[ins.x + 1]++;
+            break;
+        case OSTY_RE_OP_SPLIT:
+            if (ins.x >= 0 && ins.x < prog_len) out->offsets[ins.x + 1]++;
+            if (ins.y >= 0 && ins.y < prog_len) out->offsets[ins.y + 1]++;
+            break;
+        case OSTY_RE_OP_MATCH:
+            break;
+        }
+    }
+    /* Prefix sum → starts. */
+    for (int i = 0; i < prog_len; i++) {
+        out->offsets[i + 1] += out->offsets[i];
+    }
+    out->total = out->offsets[prog_len];
+    out->flat = (int32_t *)malloc(sizeof(int32_t) * (size_t)(out->total > 0 ? out->total : 1));
+    if (out->flat == NULL) {
+        osty_re_preds_free(out);
+        return -1;
+    }
+    /* Pass 2: write. */
+    int32_t *write_pos = (int32_t *)malloc(sizeof(int32_t) * (size_t)prog_len);
+    if (write_pos == NULL) {
+        osty_re_preds_free(out);
+        return -1;
+    }
+    memcpy(write_pos, out->offsets, sizeof(int32_t) * (size_t)prog_len);
+    for (int p = 0; p < prog_len; p++) {
+        osty_re_inst ins = re->prog[p];
+        int target_a = -1, target_b = -1;
+        switch (ins.op) {
+        case OSTY_RE_OP_CHAR:
+        case OSTY_RE_OP_ANY:
+        case OSTY_RE_OP_CCLASS:
+        case OSTY_RE_OP_SAVE:
+        case OSTY_RE_OP_BOL:
+        case OSTY_RE_OP_EOL:
+        case OSTY_RE_OP_WB:
+        case OSTY_RE_OP_NWB:
+            target_a = (p + 1 < prog_len) ? p + 1 : -1;
+            break;
+        case OSTY_RE_OP_JMP:
+            target_a = (ins.x >= 0 && ins.x < prog_len) ? ins.x : -1;
+            break;
+        case OSTY_RE_OP_SPLIT:
+            target_a = (ins.x >= 0 && ins.x < prog_len) ? ins.x : -1;
+            target_b = (ins.y >= 0 && ins.y < prog_len) ? ins.y : -1;
+            break;
+        case OSTY_RE_OP_MATCH:
+            break;
+        }
+        if (target_a >= 0) out->flat[write_pos[target_a]++] = p;
+        if (target_b >= 0) out->flat[write_pos[target_b]++] = p;
+    }
+    free(write_pos);
+    return 0;
+}
+
+/* Backward epsilon closure: from each PC currently in `set`, walk
+ * predecessors via NON-CONSUMING ops (JMP/SPLIT/SAVE/anchors) and
+ * add them to the set. CHAR/CCLASS/ANY predecessors are CONSUMING —
+ * those advance via input, not closure. */
+static void osty_re_epsilon_closure_backward(osty_re_pc_set *set, const osty_re_preds *preds, const osty_re_inst *prog, int prog_len) {
+    int *stack = (int *)malloc(sizeof(int) * (size_t)prog_len);
+    if (stack == NULL) return;
+    int top = 0;
+    for (int pc = 0; pc < prog_len; pc++) {
+        if (osty_re_pc_set_test(set, pc)) stack[top++] = pc;
+    }
+    while (top > 0) {
+        int pc = stack[--top];
+        for (int32_t i = preds->offsets[pc]; i < preds->offsets[pc + 1]; i++) {
+            int q = preds->flat[i];
+            if (osty_re_pc_set_test(set, q)) continue;
+            uint8_t op = prog[q].op;
+            int non_consuming = (op == OSTY_RE_OP_JMP) || (op == OSTY_RE_OP_SPLIT)
+                || (op == OSTY_RE_OP_SAVE) || (op == OSTY_RE_OP_BOL)
+                || (op == OSTY_RE_OP_EOL) || (op == OSTY_RE_OP_WB)
+                || (op == OSTY_RE_OP_NWB);
+            if (non_consuming) {
+                osty_re_pc_set_add(set, q);
+                stack[top++] = q;
+            }
+        }
+    }
+    free(stack);
+}
+
+/* Backward step: consume one byte going right-to-left. For each pc
+ * in `current`, look at its predecessors q in the original graph; if
+ * q's op is consuming and matches `byte`, add q to `next`. Then run
+ * backward epsilon closure on the result. */
+static void osty_re_dfa_step_backward(osty_re_pc_set *next, const osty_re_pc_set *current,
+                                       const osty_re_preds *preds, const osty_regex_compiled *re,
+                                       int byte) {
+    osty_re_pc_set_clear(next);
+    for (int pc = 0; pc < current->prog_len; pc++) {
+        if (!osty_re_pc_set_test(current, pc)) continue;
+        for (int32_t i = preds->offsets[pc]; i < preds->offsets[pc + 1]; i++) {
+            int q = preds->flat[i];
+            osty_re_inst ins = re->prog[q];
+            switch (ins.op) {
+            case OSTY_RE_OP_CHAR:
+                if (byte == ins.c) osty_re_pc_set_add(next, q);
+                break;
+            case OSTY_RE_OP_ANY:
+                if (byte != '\n') osty_re_pc_set_add(next, q);
+                break;
+            case OSTY_RE_OP_CCLASS:
+                if (osty_re_class_test(&re->classes[ins.x], (unsigned char)byte)) {
+                    osty_re_pc_set_add(next, q);
+                }
+                break;
+            }
+        }
+    }
+    osty_re_epsilon_closure_backward(next, preds, re->prog, re->prog_len);
+}
+
+/* Build the backward DFA. State 0 = backward closure of {MATCH PC}.
+ * Accept state = state's PC set contains PC 0 (the source of the
+ * original program). Returns state count, or 0 on overflow / setup
+ * failure (caller falls back to forward-DFA-only or NFA). */
+static int osty_re_dfa_build_backward(const osty_regex_compiled *re, uint16_t *out_transitions, uint8_t *out_is_match) {
+    if (!osty_re_dfa_compatible(re)) return 0;
+    int prog_len = re->prog_len;
+
+    osty_re_preds preds;
+    if (osty_re_preds_build(re, &preds) != 0) return 0;
+
+    /* Find the MATCH PC. There should be exactly one. */
+    int match_pc = -1;
+    for (int p = 0; p < prog_len; p++) {
+        if (re->prog[p].op == OSTY_RE_OP_MATCH) { match_pc = p; break; }
+    }
+    if (match_pc < 0) {
+        osty_re_preds_free(&preds);
+        return 0;
+    }
+
+    osty_re_pc_set seed;
+    if (osty_re_pc_set_init(&seed, prog_len) != 0) {
+        osty_re_preds_free(&preds);
+        return 0;
+    }
+    osty_re_pc_set_add(&seed, match_pc);
+    osty_re_epsilon_closure_backward(&seed, &preds, re->prog, prog_len);
+
+    int word_count = seed.word_count;
+    uint64_t *state_bits = (uint64_t *)malloc(sizeof(uint64_t) * (size_t)word_count * (size_t)OSTY_RE_DFA_MAX_STATES);
+    osty_re_pc_set scratch;
+    int scratch_ok = osty_re_pc_set_init(&scratch, prog_len) == 0;
+    if (state_bits == NULL || !scratch_ok) {
+        if (scratch_ok) osty_re_pc_set_free(&scratch);
+        osty_re_pc_set_free(&seed);
+        free(state_bits);
+        osty_re_preds_free(&preds);
+        return 0;
+    }
+
+    int state_count = 0;
+    #define LOOKUP_OR_INSERT_BACK(set_bits, out_id, fail_label) do { \
+        int found = -1; \
+        for (int i = 0; i < state_count; i++) { \
+            if (memcmp(state_bits + (size_t)i * (size_t)word_count, (set_bits), (size_t)word_count * sizeof(uint64_t)) == 0) { \
+                found = i; \
+                break; \
+            } \
+        } \
+        if (found < 0) { \
+            if (state_count >= OSTY_RE_DFA_MAX_STATES) { \
+                goto fail_label; \
+            } \
+            found = state_count++; \
+            memcpy(state_bits + (size_t)found * (size_t)word_count, (set_bits), (size_t)word_count * sizeof(uint64_t)); \
+        } \
+        out_id = found; \
+    } while (0)
+
+    int dummy_id;
+    LOOKUP_OR_INSERT_BACK(seed.bits, dummy_id, fail);
+    (void)dummy_id;
+
+    for (int s = 0; s < state_count; s++) {
+        osty_re_pc_set current;
+        current.prog_len = prog_len;
+        current.word_count = word_count;
+        current.bits = state_bits + (size_t)s * (size_t)word_count;
+        for (int byte = 0; byte < 256; byte++) {
+            osty_re_dfa_step_backward(&scratch, &current, &preds, re, byte);
+            int next_id;
+            LOOKUP_OR_INSERT_BACK(scratch.bits, next_id, fail);
+            out_transitions[s * 256 + byte] = (uint16_t)next_id;
+        }
+    }
+    /* Mark accept states: state contains the source PC (0). */
+    for (int s = 0; s < state_count; s++) {
+        uint64_t word = state_bits[(size_t)s * (size_t)word_count + 0];
+        out_is_match[s] = (word & 1ULL) ? 1 : 0;
+    }
+
+    #undef LOOKUP_OR_INSERT_BACK
+    osty_re_pc_set_free(&seed);
+    osty_re_pc_set_free(&scratch);
+    free(state_bits);
+    osty_re_preds_free(&preds);
+    return state_count;
+
+fail:
+    osty_re_pc_set_free(&seed);
+    osty_re_pc_set_free(&scratch);
+    free(state_bits);
+    osty_re_preds_free(&preds);
+    return 0;
+}
+
+/* Backward DFA matcher: scan text right-to-left from `end_pos - 1`
+ * down to 0. Returns the LEFTMOST sp where the backward DFA reached
+ * an accept state — that's the start of the leftmost-longest match
+ * ending at `end_pos`. Returns -1 if no accept reached (shouldn't
+ * happen when end_pos was discovered by the forward DFA). */
+static int osty_re_dfa_find_match_start_backward(const osty_regex_compiled *re, const char *text, int end_pos) {
+    if (re->dfa_back_state_count <= 0) return -1;
+    const uint8_t *is_match = osty_re_compiled_dfa_back_is_match(re);
+    const uint16_t *trans = osty_re_compiled_dfa_back_transitions(re);
+    int state = 0;
+    int last_accept = is_match[state] ? end_pos : -1;
+    for (int sp = end_pos - 1; sp >= 0; sp--) {
+        unsigned char ch = (unsigned char)text[sp];
+        state = trans[state * 256 + ch];
+        if (is_match[state]) {
+            last_accept = sp;
+        }
+    }
+    return last_accept;
+}
+
 /* Phase 9b — DFA-driven boundary scan for find/findAll/captures/etc.
  *
- * Returns the leftmost-longest match end position (one past the last
- * consumed byte) for a match starting at or after `start_offset`, or
- * -1 when no match exists. Caller has already verified
- * `dfa_state_count > 0`.
+ * Returns the FIRST sp at which the search DFA enters an accept state
+ * scanning forward from `start_offset`, or -1 when no match exists.
  *
- * Greedy semantics under the search DFA: the DFA enters an accept
- * state at the EARLIEST sp where the pattern can complete, and stays
- * in accept while the match keeps extending (e.g., `\d+` over
- * "12345"). The match END is the LAST sp before the DFA leaves accept
- * — exactly what leftmost-longest wants. Once we leave accept, the
- * first match is sealed; later positions belong to a separate match
- * which subsequent calls (with advanced start_offset) will pick up.
+ * Why "first accept" instead of "last accept in the run": adjacent
+ * matches keep the seed-bearing search DFA in accept across separate
+ * match boundaries (consider `,` on ",a,,b,"; the runs at sp=2 and
+ * sp=3 stay accepted continuously). Returning the run's last sp
+ * silently merges the two matches into one and breaks split /
+ * findAll. First-accept gives a correct upper bound on the leftmost
+ * match's end; the NFA then scans full input from a tightened
+ * start (via the backward DFA) to find the actual leftmost-longest
+ * match. Greedy extensions like `\d+` over "12345" are recovered by
+ * the NFA — first accept reports end=1 here, NFA from start=0
+ * finds (0, 5) naturally.
  */
 static int osty_re_dfa_find_first_end_from(const osty_regex_compiled *re, const char *text, int text_len, int start_offset) {
     const uint8_t *is_match = osty_re_compiled_dfa_is_match(re);
     const uint16_t *trans = osty_re_compiled_dfa_transitions(re);
     int state = 0;
-    int last_accept = is_match[state] ? start_offset : -1;
-    int seen_accept = is_match[state];
+    if (is_match[state]) return start_offset;
     for (int sp = start_offset; sp < text_len; sp++) {
         unsigned char ch = (unsigned char)text[sp];
         state = trans[state * 256 + ch];
-        if (is_match[state]) {
-            last_accept = sp + 1;
-            seen_accept = 1;
-        } else if (seen_accept) {
-            /* Just left accept run — first match complete. */
-            return last_accept;
-        }
+        if (is_match[state]) return sp + 1;
     }
-    return last_accept;
+    return -1;
 }
 
 /* Run the matcher against text starting at `start_offset` (Phase 2b:
@@ -16443,24 +16760,39 @@ void *osty_rt_regex_compile(const char *pattern) {
     probe.dfa_state_count = 0;
     uint16_t *dfa_trans = NULL;
     uint8_t *dfa_match = NULL;
+    uint16_t *dfa_back_trans = NULL;
+    uint8_t *dfa_back_match = NULL;
     int dfa_states = 0;
+    int dfa_back_states = 0;
     if (osty_re_dfa_compatible(&probe)) {
         dfa_trans = (uint16_t *)malloc(sizeof(uint16_t) * 256 * (size_t)OSTY_RE_DFA_MAX_STATES);
         dfa_match = (uint8_t *)malloc((size_t)OSTY_RE_DFA_MAX_STATES);
         if (dfa_trans != NULL && dfa_match != NULL) {
             dfa_states = osty_re_dfa_build(&probe, dfa_trans, dfa_match);
         }
+        /* Phase 9c — only build the backward DFA when the forward DFA
+         * succeeded; otherwise the pattern is being routed to NFA
+         * fallback and the backward tables would never be consulted. */
+        if (dfa_states > 0) {
+            dfa_back_trans = (uint16_t *)malloc(sizeof(uint16_t) * 256 * (size_t)OSTY_RE_DFA_MAX_STATES);
+            dfa_back_match = (uint8_t *)malloc((size_t)OSTY_RE_DFA_MAX_STATES);
+            if (dfa_back_trans != NULL && dfa_back_match != NULL) {
+                dfa_back_states = osty_re_dfa_build_backward(&probe, dfa_back_trans, dfa_back_match);
+            }
+        }
     }
     size_t dfa_match_bytes = (size_t)dfa_states;
     size_t dfa_trans_bytes = (size_t)dfa_states * 256 * sizeof(uint16_t);
+    size_t dfa_back_match_bytes = (size_t)dfa_back_states;
+    size_t dfa_back_trans_bytes = (size_t)dfa_back_states * 256 * sizeof(uint16_t);
 
-    /* Allocate one contiguous GC blob: header + prog + classes + name table + name data + dfa. */
+    /* Allocate one contiguous GC blob: header + prog + classes + name table + name data + dfa + back-dfa. */
     size_t hdr = sizeof(osty_regex_compiled);
     size_t prog_bytes = sizeof(osty_re_inst) * (size_t)ps.prog_len;
     size_t class_bytes = sizeof(osty_re_cclass) * (size_t)ps.class_count;
     size_t name_table_bytes = sizeof(osty_re_name_entry) * (size_t)ps.name_count;
     size_t name_data_bytes = (size_t)ps.name_data_len;
-    size_t total = hdr + prog_bytes + class_bytes + name_table_bytes + name_data_bytes + dfa_match_bytes + dfa_trans_bytes;
+    size_t total = hdr + prog_bytes + class_bytes + name_table_bytes + name_data_bytes + dfa_match_bytes + dfa_trans_bytes + dfa_back_match_bytes + dfa_back_trans_bytes;
     osty_regex_compiled *re = (osty_regex_compiled *)osty_gc_allocate_managed(total, OSTY_GC_KIND_GENERIC, "runtime.regex.compile", NULL, NULL);
     re->prog = (osty_re_inst *)((char *)re + hdr);
     re->prog_len = ps.prog_len;
@@ -16470,6 +16802,7 @@ void *osty_rt_regex_compile(const char *pattern) {
     re->name_count = ps.name_count;
     re->name_data_len = ps.name_data_len;
     re->dfa_state_count = dfa_states;
+    re->dfa_back_state_count = dfa_back_states;
     if (ps.prog_len > 0) memcpy(re->prog, ps.prog, prog_bytes);
     if (ps.class_count > 0) memcpy(re->classes, ps.classes, class_bytes);
     if (ps.name_count > 0) {
@@ -16482,12 +16815,18 @@ void *osty_rt_regex_compile(const char *pattern) {
         memcpy((uint8_t *)osty_re_compiled_dfa_is_match(re), dfa_match, dfa_match_bytes);
         memcpy((uint16_t *)osty_re_compiled_dfa_transitions(re), dfa_trans, dfa_trans_bytes);
     }
+    if (dfa_back_states > 0) {
+        memcpy((uint8_t *)osty_re_compiled_dfa_back_is_match(re), dfa_back_match, dfa_back_match_bytes);
+        memcpy((uint16_t *)osty_re_compiled_dfa_back_transitions(re), dfa_back_trans, dfa_back_trans_bytes);
+    }
     free(ps.prog);
     free(ps.classes);
     free(ps.names);
     free(ps.name_data);
     free(dfa_trans);
     free(dfa_match);
+    free(dfa_back_trans);
+    free(dfa_back_match);
     osty_rt_regex_set_last_error("");
     return re;
 }
@@ -16590,21 +16929,29 @@ void *osty_rt_regex_find(void *raw_re, const char *text) {
     int32_t slots[OSTY_RE_MAX_CAP_SLOTS];
     int slot_count = 2 * re->ngroups;
     for (int i = 0; i < slot_count; i++) slots[i] = -1;
-    /* Phase 9b — DFA boundary precheck. When the DFA is built and says
-     * no match exists, skip the NFA scan entirely (typical no-match
-     * inputs were the dominant Pike VM cost). When the DFA says a
-     * match ends at `dfa_end`, bound the NFA's text_len to that — the
-     * NFA only needs to verify and extract captures within the known
-     * matched region. */
-    int nfa_text_len = len;
+    /* Phase 9b/9c — DFA-driven boundary detection. Forward DFA's
+     * first-accept end (E) caps where the leftmost match could
+     * complete; backward DFA scans backward from E to recover the
+     * leftmost match start (S). NFA runs from sp=S over the full
+     * input — bounding text_len would clip greedy extensions (e.g.
+     * `\d+` whose true match end is past first-accept E), so we keep
+     * NFA's natural leftmost-longest scan and let it discover the
+     * real end. The backward DFA only tightens the START cursor; the
+     * forward DFA only confirms that a match exists. */
+    int nfa_start = 0;
     if (re->dfa_state_count > 0) {
         int dfa_end = osty_re_dfa_find_first_end_from(re, src, len, 0);
         if (dfa_end < 0) {
             return NULL;
         }
-        nfa_text_len = dfa_end;
+        if (re->dfa_back_state_count > 0) {
+            int dfa_start = osty_re_dfa_find_match_start_backward(re, src, dfa_end);
+            if (dfa_start >= 0 && dfa_start <= dfa_end) {
+                nfa_start = dfa_start;
+            }
+        }
     }
-    if (!osty_re_match_from(re, src, nfa_text_len, 0, slots)) {
+    if (!osty_re_match_from(re, src, len, nfa_start, slots)) {
         return NULL;
     }
     int32_t start = slots[0];
@@ -16656,20 +17003,24 @@ void *osty_rt_regex_find_all(void *raw_re, const char *text) {
     int start = 0;
     while (start <= len) {
         for (int i = 0; i < slot_count; i++) slots[i] = -1;
-        /* Phase 9b — DFA boundary precheck. Cuts NFA scans over
-         * non-matching tail regions (the dominant cost when matches
-         * are sparse). NFA's text_len gets bounded to the DFA-known
-         * match end so capture extraction stays in the matched
-         * region. */
-        int nfa_text_len = len;
+        /* Phase 9b/9c — forward DFA confirms a match exists, backward
+         * DFA tightens nfa_start to the leftmost match start. NFA
+         * scans full input from nfa_start to find leftmost-longest
+         * (greedy extensions go past forward DFA's first-accept end). */
+        int nfa_start = start;
         if (re->dfa_state_count > 0) {
             int dfa_end = osty_re_dfa_find_first_end_from(re, src, len, start);
             if (dfa_end < 0) {
                 break;
             }
-            nfa_text_len = dfa_end;
+            if (re->dfa_back_state_count > 0) {
+                int dfa_start = osty_re_dfa_find_match_start_backward(re, src, dfa_end);
+                if (dfa_start > start && dfa_start <= dfa_end) {
+                    nfa_start = dfa_start;
+                }
+            }
         }
-        if (!osty_re_match_from(re, src, nfa_text_len, start, slots)) {
+        if (!osty_re_match_from(re, src, len, nfa_start, slots)) {
             break;
         }
         int32_t match_start = slots[0];
@@ -16758,16 +17109,27 @@ static void *osty_rt_regex_replace_impl(void *raw_re, const char *text, const ch
     int substituted = 0;
     while (start <= len) {
         for (int i = 0; i < slot_count; i++) slots[i] = -1;
-        /* Phase 9b — DFA boundary precheck (see find_all comment). */
-        int nfa_text_len = len;
+        /* Phase 9b/9c — forward DFA confirms a leftmost match exists
+         * at or after `start` (returns first-accept end E). Backward
+         * DFA from E finds the leftmost match START S (clamped to
+         * >= start so we never revisit a region the previous
+         * iteration already consumed). NFA from S over the FULL
+         * input text_len then finds the leftmost-longest match,
+         * recovering greedy extensions that go past E. */
+        int nfa_start = start;
         if (re->dfa_state_count > 0) {
             int dfa_end = osty_re_dfa_find_first_end_from(re, src, len, start);
             if (dfa_end < 0) {
                 break;
             }
-            nfa_text_len = dfa_end;
+            if (re->dfa_back_state_count > 0) {
+                int dfa_start = osty_re_dfa_find_match_start_backward(re, src, dfa_end);
+                if (dfa_start > start && dfa_start <= dfa_end) {
+                    nfa_start = dfa_start;
+                }
+            }
         }
-        if (!osty_re_match_from(re, src, nfa_text_len, start, slots)) {
+        if (!osty_re_match_from(re, src, len, nfa_start, slots)) {
             break;
         }
         int32_t match_start = slots[0];
@@ -16891,16 +17253,27 @@ void *osty_rt_regex_split(void *raw_re, const char *text) {
     int start = 0;
     while (start <= len) {
         for (int i = 0; i < slot_count; i++) slots[i] = -1;
-        /* Phase 9b — DFA boundary precheck (see find_all comment). */
-        int nfa_text_len = len;
+        /* Phase 9b/9c — forward DFA confirms a leftmost match exists
+         * at or after `start` (returns first-accept end E). Backward
+         * DFA from E finds the leftmost match START S (clamped to
+         * >= start so we never revisit a region the previous
+         * iteration already consumed). NFA from S over the FULL
+         * input text_len then finds the leftmost-longest match,
+         * recovering greedy extensions that go past E. */
+        int nfa_start = start;
         if (re->dfa_state_count > 0) {
             int dfa_end = osty_re_dfa_find_first_end_from(re, src, len, start);
             if (dfa_end < 0) {
                 break;
             }
-            nfa_text_len = dfa_end;
+            if (re->dfa_back_state_count > 0) {
+                int dfa_start = osty_re_dfa_find_match_start_backward(re, src, dfa_end);
+                if (dfa_start > start && dfa_start <= dfa_end) {
+                    nfa_start = dfa_start;
+                }
+            }
         }
-        if (!osty_re_match_from(re, src, nfa_text_len, start, slots)) {
+        if (!osty_re_match_from(re, src, len, nfa_start, slots)) {
             break;
         }
         int32_t match_start = slots[0];
@@ -16938,16 +17311,22 @@ void *osty_rt_regex_captures(void *raw_re, const char *text) {
     int32_t slots[OSTY_RE_MAX_CAP_SLOTS];
     int slot_count = 2 * re->ngroups;
     for (int i = 0; i < slot_count; i++) slots[i] = -1;
-    /* Phase 9b — DFA boundary precheck (see find_all comment). */
-    int nfa_text_len = len;
+    /* Phase 9b/9c — forward DFA confirms a match, backward DFA gives
+     * the leftmost start. NFA scans full input from nfa_start. */
+    int nfa_start = 0;
     if (re->dfa_state_count > 0) {
         int dfa_end = osty_re_dfa_find_first_end_from(re, src, len, 0);
         if (dfa_end < 0) {
             return NULL;
         }
-        nfa_text_len = dfa_end;
+        if (re->dfa_back_state_count > 0) {
+            int dfa_start = osty_re_dfa_find_match_start_backward(re, src, dfa_end);
+            if (dfa_start >= 0 && dfa_start <= dfa_end) {
+                nfa_start = dfa_start;
+            }
+        }
     }
-    if (!osty_re_match_from(re, src, nfa_text_len, 0, slots)) {
+    if (!osty_re_match_from(re, src, len, nfa_start, slots)) {
         return NULL;
     }
     return osty_re_build_captures(re, src, len, slots);
@@ -16976,16 +17355,27 @@ void *osty_rt_regex_captures_all(void *raw_re, const char *text) {
     int start = 0;
     while (start <= len) {
         for (int i = 0; i < slot_count; i++) slots[i] = -1;
-        /* Phase 9b — DFA boundary precheck (see find_all comment). */
-        int nfa_text_len = len;
+        /* Phase 9b/9c — forward DFA confirms a leftmost match exists
+         * at or after `start` (returns first-accept end E). Backward
+         * DFA from E finds the leftmost match START S (clamped to
+         * >= start so we never revisit a region the previous
+         * iteration already consumed). NFA from S over the FULL
+         * input text_len then finds the leftmost-longest match,
+         * recovering greedy extensions that go past E. */
+        int nfa_start = start;
         if (re->dfa_state_count > 0) {
             int dfa_end = osty_re_dfa_find_first_end_from(re, src, len, start);
             if (dfa_end < 0) {
                 break;
             }
-            nfa_text_len = dfa_end;
+            if (re->dfa_back_state_count > 0) {
+                int dfa_start = osty_re_dfa_find_match_start_backward(re, src, dfa_end);
+                if (dfa_start > start && dfa_start <= dfa_end) {
+                    nfa_start = dfa_start;
+                }
+            }
         }
-        if (!osty_re_match_from(re, src, nfa_text_len, start, slots)) {
+        if (!osty_re_match_from(re, src, len, nfa_start, slots)) {
             break;
         }
         int32_t match_start = slots[0];
