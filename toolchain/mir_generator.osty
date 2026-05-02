@@ -19434,7 +19434,12 @@ fn mirEmitIntrinsicInstr(func: MirFunction, blockId: Int, instrIdx: Int, instr: 
         MirIntrinsicEprintln -> mirEmitIoWriteIntrinsic(blockId, instrIdx, instr, true, true),
         MirIntrinsicEprint -> mirEmitIoWriteIntrinsic(blockId, instrIdx, instr, false, true),
         MirIntrinsicAbort -> mirEmitAbortIntrinsic(instr),
-        _ -> "  ; TODO Phase 1f MirIntrinsic " + mirGenIntToString(instr.args.len()) + " arg(s)\n",
+        MirIntrinsicListPush -> mirEmitListPushIntrinsic(instr),
+        MirIntrinsicListGet -> mirEmitListGetIntrinsic(func, instr),
+        MirIntrinsicStringContains -> mirEmitStringPredicateIntrinsic(func, instr, "osty_rt_strings_Contains"),
+        MirIntrinsicStringStartsWith -> mirEmitStringPredicateIntrinsic(func, instr, "osty_rt_strings_HasPrefix"),
+        MirIntrinsicStringEndsWith -> mirEmitStringPredicateIntrinsic(func, instr, "osty_rt_strings_HasSuffix"),
+        _ -> "  ; TODO Phase 1j MirIntrinsic " + mirGenIntToString(instr.args.len()) + " arg(s)\n",
     }
 }
 
@@ -20019,4 +20024,97 @@ fn mirEmitEnumVariantAggregate(dest: String, rv: MirRValue) -> String {
         return out
     }
     "  ; TODO Phase 1i multi-field enum payload (n=" + mirGenIntToString(rv.aggFields.len()) + ")\n"
+}
+
+
+// ====================================================================
+// Phase 1i — More intrinsics (List push/get, String predicates)
+// ====================================================================
+//
+// Phase 1d's intrinsic dispatcher covered print + abort. Phase 1i
+// adds the next layer of common shapes: container mutation (List
+// push), container reads (List get), and string predicates
+// (contains / startsWith / endsWith). Each is a single runtime
+// call with no boxing — Option-returning intrinsics (MapGet,
+// ListFirst/Last, …) stay TODO for Phase 1j when the Option
+// runtime layout question is settled.
+
+/// mirEmitListPushIntrinsic lowers `list.push(value)` to
+/// `call void @osty_rt_list_push_<elemTy>(ptr <list>, <ty> <val>)`.
+/// Element type is read from the value operand. Unsupported elem
+/// LLVM types (e.g. composite element bytes-v1) stub with TODO.
+fn mirEmitListPushIntrinsic(instr: MirInstr) -> String {
+    if instr.args.len() != 2 {
+        return "  ; TODO list.push expects 2 args\n"
+    }
+    let listOp = instr.args[0]
+    let valueOp = instr.args[1]
+    let elemTy = mirEmitOperandLLVMType(valueOp)
+    let pushSym = mirEmitListPushSymbol(elemTy)
+    if pushSym == "" {
+        return "  ; TODO Phase 1j list_push for elem type \"" + elemTy + "\"\n"
+    }
+    let listText = mirEmitOperand(listOp)
+    let valueText = mirEmitOperand(valueOp)
+    "  call void @" + pushSym + "(ptr " + listText + ", " + elemTy + " " + valueText + ")\n"
+}
+
+/// mirEmitListPushSymbol picks the runtime helper for
+/// `list.push(<elem>)` per LLVM element type. Mirrors the per-elem
+/// tracer dispatch the runtime uses for `osty_rt_list_get_<ty>`.
+fn mirEmitListPushSymbol(elemLLVM: String) -> String {
+    if elemLLVM == "i64" {
+        return "osty_rt_list_push_i64"
+    }
+    if elemLLVM == "i1" {
+        return "osty_rt_list_push_i1"
+    }
+    if elemLLVM == "ptr" {
+        return "osty_rt_list_push_ptr"
+    }
+    if elemLLVM == "double" {
+        return "osty_rt_list_push_f64"
+    }
+    ""
+}
+
+/// mirEmitListGetIntrinsic lowers `list.get(i)` as the intrinsic
+/// form of the same call Phase 1g uses for `arr[i]` projection.
+/// The intrinsic shape carries args = [list, index] and an optional
+/// dest. Phase 1i emits the call only when the dest local's type
+/// resolves to one of the per-elem dispatch shapes.
+fn mirEmitListGetIntrinsic(func: MirFunction, instr: MirInstr) -> String {
+    if instr.args.len() != 2 {
+        return "  ; TODO list.get expects 2 args\n"
+    }
+    if instr.hasDest == false || mirPlaceHasProjections(instr.dest) {
+        return "  ; TODO list.get without simple dest\n"
+    }
+    let listText = mirEmitOperand(instr.args[0])
+    let idxText = mirEmitOperand(instr.args[1])
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    let destLLVM = mirEmitParamType(func, instr.dest.local)
+    let getSym = mirEmitListGetSymbol(destLLVM)
+    if getSym == "" {
+        return "  ; TODO Phase 1j list_get for dest type \"" + destLLVM + "\"\n"
+    }
+    "  " + dest + " = call " + destLLVM + " @" + getSym + "(ptr " + listText + ", i64 " + idxText + ")\n"
+}
+
+/// mirEmitStringPredicateIntrinsic lowers `s.<pred>(other)` as
+/// `<dest> = call i1 @<runtime>(ptr <s>, ptr <other>)`. Used for
+/// the String predicate trio (contains, startsWith, endsWith).
+/// The runtime symbol is passed in by the caller so a single
+/// helper covers all three intrinsics.
+fn mirEmitStringPredicateIntrinsic(func: MirFunction, instr: MirInstr, runtimeSym: String) -> String {
+    if instr.args.len() != 2 {
+        return "  ; TODO string predicate expects 2 args\n"
+    }
+    if instr.hasDest == false || mirPlaceHasProjections(instr.dest) {
+        return "  ; TODO string predicate without simple dest\n"
+    }
+    let lhs = mirEmitOperand(instr.args[0])
+    let rhs = mirEmitOperand(instr.args[1])
+    let dest = mirEmitLocalRegName(instr.dest.local)
+    "  " + dest + " = call i1 @" + runtimeSym + "(ptr " + lhs + ", ptr " + rhs + ")\n"
 }
