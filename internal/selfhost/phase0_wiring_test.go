@@ -86,6 +86,22 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"mirBinaryOpSymbol(",
 				"MirInstrAssign -> mirEmitAssignInstr",
 				"MirRVBinary -> mirEmitRValueBinary",
+				// Phase 1d — Call, Intrinsic, Aggregate (Tuple).
+				// Loss of any of these would silently regress the
+				// instruction dispatcher to its Phase 1c TODO stub.
+				"mirEmitCallInstr(",
+				"mirEmitCallReturnType(",
+				"mirEmitCallArgList(",
+				"mirEmitIntrinsicInstr(",
+				"mirEmitIoWriteIntrinsic(",
+				"mirEmitAbortIntrinsic(",
+				"mirEmitRValueAggregate(",
+				"mirEmitTupleAggregate(",
+				"mirEmitTupleTypeText(",
+				"MirInstrCall -> mirEmitCallInstr",
+				"MirInstrIntrinsic -> mirEmitIntrinsicInstr",
+				"MirIntrinsicPrintln -> mirEmitIoWriteIntrinsic",
+				"MirAggTuple -> mirEmitTupleAggregate",
 			},
 		},
 		{
