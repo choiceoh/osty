@@ -978,6 +978,12 @@ func encodeMachOFunction(enc *machoTextEncoding, fn Function, cstringIndex, loca
 					}
 				}
 				enc.code = append(enc.code, 0xc0, 0x03, 0x5f, 0xd6)
+			case *Brk:
+				word, err := encodeBrk(i.Imm)
+				if err != nil {
+					return fmt.Errorf("onb: brk encoding: %w", err)
+				}
+				enc.code = appendU32LE(enc.code, word)
 			default:
 				return fmt.Errorf("%w: Mach-O encoder does not support %T", ErrNotImplemented, instr)
 			}
@@ -1240,6 +1246,18 @@ func encodeLdpFPLR(fpOffset uint32) (uint32, error) {
 		return 0, fmt.Errorf("%w: ldp offset %d exceeds signed-7-bit range", ErrNotImplemented, fpOffset)
 	}
 	return 0xa9407bfd | (imm << 15), nil
+}
+
+// encodeBrk produces the 32-bit aarch64 word for `brk #imm16`. The
+// instruction encoding is `1101 0100 001<imm16> 000 00`. The dev
+// backend uses this for `mir.UnreachableTerm` lowering — match
+// exhaustiveness inserts an unreachable default arm whose PC must
+// trap rather than fall through.
+func encodeBrk(imm int64) (uint32, error) {
+	if imm < 0 || imm > 0xffff {
+		return 0, fmt.Errorf("%w: brk imm %d out of 16-bit range", ErrNotImplemented, imm)
+	}
+	return 0xd4200000 | (uint32(imm) << 5), nil
 }
 
 func encodeMachOMovImm64(dst Reg, imm uint64) ([]uint32, error) {

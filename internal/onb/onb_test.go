@@ -1292,6 +1292,303 @@ func TestLowerMIRStructLocalEmitsDebugStruct(t *testing.T) {
 	}
 }
 
+// colorEnumModule builds a MIR module mirroring:
+//
+//	enum Color { Red, Green, Blue }
+//	fn pick() -> Color { Color.Green }
+//	fn main() {
+//	    let c = pick()
+//	    let n = match c {
+//	        Color.Red -> 0,
+//	        Color.Green -> 1,
+//	        Color.Blue -> 2,
+//	    }
+//	    println(n)
+//	}
+//
+// The fixture pins the MIR shape the front end emits so unit tests
+// can assert specific lowering decisions (no-payload variant write,
+// discriminant read, switchInt dispatch) without round-tripping
+// through the full pipeline.
+func colorEnumModule() *mir.Module {
+	colorT := &ir.NamedType{Name: "Color"}
+	colorLayout := &mir.EnumLayout{
+		Name:         "Color",
+		Discriminant: mir.TInt,
+		Variants: []mir.VariantLayout{
+			{Index: 0, Name: "Red"},
+			{Index: 1, Name: "Green"},
+			{Index: 2, Name: "Blue"},
+		},
+	}
+
+	pickFn := &mir.Function{
+		Name:        "pick",
+		ReturnType:  colorT,
+		ReturnLocal: 0,
+		Entry:       0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "$ret", Type: colorT, IsReturn: true},
+		},
+	}
+	pickBlock := pickFn.NewBlock(mir.Span{})
+	pickFn.Block(pickBlock).Instrs = []mir.Instr{
+		&mir.AssignInstr{
+			Dest: mir.Place{Local: 0},
+			Src: &mir.AggregateRV{
+				Kind:       mir.AggEnumVariant,
+				T:          colorT,
+				VariantIdx: 1,
+				VariantTag: "Green",
+			},
+		},
+	}
+	pickFn.Block(pickBlock).SetTerminator(&mir.ReturnTerm{})
+
+	mainFn := &mir.Function{
+		Name:        "main",
+		ReturnType:  mir.TUnit,
+		ReturnLocal: 0,
+		Entry:       0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "$ret", Type: mir.TUnit, IsReturn: true},
+			{ID: 1, Name: "c", Type: colorT},
+			{ID: 2, Name: "n", Type: mir.TInt},
+			{ID: 3, Name: "_scrut", Type: colorT},
+			{ID: 4, Name: "_disc", Type: mir.TInt},
+		},
+	}
+	bb0 := mainFn.NewBlock(mir.Span{})
+	bbRed := mainFn.NewBlock(mir.Span{})
+	bbGreen := mainFn.NewBlock(mir.Span{})
+	bbBlue := mainFn.NewBlock(mir.Span{})
+	bbDefault := mainFn.NewBlock(mir.Span{})
+	bbPrint := mainFn.NewBlock(mir.Span{})
+
+	mainFn.Block(bb0).Instrs = []mir.Instr{
+		&mir.CallInstr{Dest: &mir.Place{Local: 1}, Callee: &mir.FnRef{Symbol: "pick", Type: colorT}},
+		&mir.AssignInstr{Dest: mir.Place{Local: 3}, Src: &mir.UseRV{Op: &mir.CopyOp{Place: mir.Place{Local: 1}, T: colorT}}},
+		&mir.AssignInstr{Dest: mir.Place{Local: 4}, Src: &mir.DiscriminantRV{Place: mir.Place{Local: 3}, T: mir.TInt}},
+	}
+	mainFn.Block(bb0).SetTerminator(&mir.SwitchIntTerm{
+		Scrutinee: &mir.CopyOp{Place: mir.Place{Local: 4}, T: mir.TInt},
+		Cases: []mir.SwitchCase{
+			{Value: 0, Target: bbRed, Label: "Red"},
+			{Value: 1, Target: bbGreen, Label: "Green"},
+			{Value: 2, Target: bbBlue, Label: "Blue"},
+		},
+		Default: bbDefault,
+	})
+	mainFn.Block(bbRed).Instrs = []mir.Instr{
+		&mir.AssignInstr{Dest: mir.Place{Local: 2}, Src: &mir.UseRV{Op: &mir.ConstOp{Const: &mir.IntConst{Value: 0, T: mir.TInt}, T: mir.TInt}}},
+	}
+	mainFn.Block(bbRed).SetTerminator(&mir.GotoTerm{Target: bbPrint})
+	mainFn.Block(bbGreen).Instrs = []mir.Instr{
+		&mir.AssignInstr{Dest: mir.Place{Local: 2}, Src: &mir.UseRV{Op: &mir.ConstOp{Const: &mir.IntConst{Value: 1, T: mir.TInt}, T: mir.TInt}}},
+	}
+	mainFn.Block(bbGreen).SetTerminator(&mir.GotoTerm{Target: bbPrint})
+	mainFn.Block(bbBlue).Instrs = []mir.Instr{
+		&mir.AssignInstr{Dest: mir.Place{Local: 2}, Src: &mir.UseRV{Op: &mir.ConstOp{Const: &mir.IntConst{Value: 2, T: mir.TInt}, T: mir.TInt}}},
+	}
+	mainFn.Block(bbBlue).SetTerminator(&mir.GotoTerm{Target: bbPrint})
+	mainFn.Block(bbDefault).SetTerminator(&mir.UnreachableTerm{})
+	mainFn.Block(bbPrint).Instrs = []mir.Instr{
+		&mir.IntrinsicInstr{Kind: mir.IntrinsicPrintln, Args: []mir.Operand{&mir.CopyOp{Place: mir.Place{Local: 2}, T: mir.TInt}}},
+	}
+	mainFn.Block(bbPrint).SetTerminator(&mir.ReturnTerm{})
+
+	mod := &mir.Module{
+		Functions: []*mir.Function{pickFn, mainFn},
+		Layouts:   mir.NewLayoutTable(),
+	}
+	mod.Layouts.Enums["Color"] = colorLayout
+	return mod
+}
+
+func TestLowerMIRColorEnumStoresDiscriminantTag(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(colorEnumModule(), Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR(colorEnumModule) returned error: %v", err)
+	}
+	var pickFn *Function
+	for i := range program.Functions {
+		if program.Functions[i].Name == "pick" {
+			pickFn = &program.Functions[i]
+			break
+		}
+	}
+	if pickFn == nil {
+		t.Fatalf("expected pick function, got %+v", program.Functions)
+	}
+	// Look for `MovImm64{Imm: 1}` (Green tag) followed by Store64Stack
+	// — the literal write of the discriminant value to slot+0.
+	var sawTag bool
+	instrs := pickFn.Blocks[0].Instrs
+	for i := 0; i+1 < len(instrs); i++ {
+		mov, isMov := instrs[i].(*MovImm64)
+		if !isMov || mov.Imm != 1 {
+			continue
+		}
+		_, isStore := instrs[i+1].(*Store64Stack)
+		if isStore {
+			sawTag = true
+			break
+		}
+	}
+	if !sawTag {
+		t.Fatalf("expected MovImm64{Imm:1} + Store64Stack pair (Green tag write); instrs=%+v", instrs)
+	}
+}
+
+func TestLowerMIREnumSwitchEmitsBrkForUnreachableDefault(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(colorEnumModule(), Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR(colorEnumModule) returned error: %v", err)
+	}
+	var mainFn *Function
+	for i := range program.Functions {
+		if program.Functions[i].Name == "main" {
+			mainFn = &program.Functions[i]
+			break
+		}
+	}
+	if mainFn == nil {
+		t.Fatalf("expected main function, got %+v", program.Functions)
+	}
+	var sawBrk bool
+	for _, blk := range mainFn.Blocks {
+		for _, instr := range blk.Instrs {
+			if _, ok := instr.(*Brk); ok {
+				sawBrk = true
+				break
+			}
+		}
+	}
+	if !sawBrk {
+		t.Fatalf("expected Brk in main blocks (UnreachableTerm lowering); got %+v", mainFn.Blocks)
+	}
+}
+
+// optionIntModule mirrors `Some(5)` / `None` construction + match.
+// The fixture covers the Option synthetic layout (None=0, Some=1)
+// and the VariantProj{FieldIdx:0} payload read.
+func optionIntModule() *mir.Module {
+	optT := &ir.OptionalType{Inner: mir.TInt}
+
+	mainFn := &mir.Function{
+		Name:        "main",
+		ReturnType:  mir.TUnit,
+		ReturnLocal: 0,
+		Entry:       0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "$ret", Type: mir.TUnit, IsReturn: true},
+			{ID: 1, Name: "r", Type: optT},
+			{ID: 2, Name: "v", Type: mir.TInt},
+			{ID: 3, Name: "_disc", Type: mir.TInt},
+		},
+	}
+	bb0 := mainFn.NewBlock(mir.Span{})
+	bbSome := mainFn.NewBlock(mir.Span{})
+	bbNone := mainFn.NewBlock(mir.Span{})
+	bbDefault := mainFn.NewBlock(mir.Span{})
+	bbPrint := mainFn.NewBlock(mir.Span{})
+
+	mainFn.Block(bb0).Instrs = []mir.Instr{
+		&mir.AssignInstr{
+			Dest: mir.Place{Local: 1},
+			Src: &mir.AggregateRV{
+				Kind:       mir.AggEnumVariant,
+				T:          optT,
+				VariantIdx: 1,
+				VariantTag: "Some",
+				Fields:     []mir.Operand{&mir.ConstOp{Const: &mir.IntConst{Value: 5, T: mir.TInt}, T: mir.TInt}},
+			},
+		},
+		&mir.AssignInstr{Dest: mir.Place{Local: 3}, Src: &mir.DiscriminantRV{Place: mir.Place{Local: 1}, T: mir.TInt}},
+	}
+	mainFn.Block(bb0).SetTerminator(&mir.SwitchIntTerm{
+		Scrutinee: &mir.CopyOp{Place: mir.Place{Local: 3}, T: mir.TInt},
+		Cases: []mir.SwitchCase{
+			{Value: 1, Target: bbSome, Label: "Some"},
+		},
+		Default: bbNone,
+	})
+	mainFn.Block(bbSome).Instrs = []mir.Instr{
+		&mir.AssignInstr{
+			Dest: mir.Place{Local: 2},
+			Src: &mir.UseRV{
+				Op: &mir.CopyOp{
+					Place: mir.Place{
+						Local:       1,
+						Projections: []mir.Projection{&mir.VariantProj{Variant: 1, Name: "Some", FieldIdx: 0, Type: mir.TInt}},
+					},
+					T: mir.TInt,
+				},
+			},
+		},
+	}
+	mainFn.Block(bbSome).SetTerminator(&mir.GotoTerm{Target: bbPrint})
+	mainFn.Block(bbNone).Instrs = []mir.Instr{
+		&mir.AssignInstr{Dest: mir.Place{Local: 2}, Src: &mir.UseRV{Op: &mir.ConstOp{Const: &mir.IntConst{Value: -1, T: mir.TInt}, T: mir.TInt}}},
+	}
+	mainFn.Block(bbNone).SetTerminator(&mir.GotoTerm{Target: bbPrint})
+	mainFn.Block(bbDefault).SetTerminator(&mir.UnreachableTerm{})
+	mainFn.Block(bbPrint).Instrs = []mir.Instr{
+		&mir.IntrinsicInstr{Kind: mir.IntrinsicPrintln, Args: []mir.Operand{&mir.CopyOp{Place: mir.Place{Local: 2}, T: mir.TInt}}},
+	}
+	mainFn.Block(bbPrint).SetTerminator(&mir.ReturnTerm{})
+
+	return &mir.Module{
+		Functions: []*mir.Function{mainFn},
+		Layouts:   mir.NewLayoutTable(),
+	}
+}
+
+func TestLowerMIROptionVariantStoresTagAndPayload(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(optionIntModule(), Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR(optionIntModule) returned error: %v", err)
+	}
+	mainFn := &program.Functions[0]
+	instrs := mainFn.Blocks[0].Instrs
+	// Look for two stores 8 bytes apart originating from MovImm64 with
+	// Imm=1 (Some tag) and Imm=5 (payload).
+	var tagSlot int64 = -1
+	var payloadSlot int64 = -1
+	for i := 0; i+1 < len(instrs); i++ {
+		mov, isMov := instrs[i].(*MovImm64)
+		if !isMov {
+			continue
+		}
+		store, isStore := instrs[i+1].(*Store64Stack)
+		if !isStore {
+			continue
+		}
+		switch mov.Imm {
+		case 1:
+			if tagSlot < 0 {
+				tagSlot = store.Offset
+			}
+		case 5:
+			if payloadSlot < 0 {
+				payloadSlot = store.Offset
+			}
+		}
+	}
+	if tagSlot < 0 || payloadSlot < 0 {
+		t.Fatalf("expected both Some tag (Imm=1) and payload (Imm=5) writes; instrs=%+v", instrs)
+	}
+	if payloadSlot-tagSlot != 8 {
+		t.Fatalf("payload should land 8 bytes past tag; tag=%d payload=%d", tagSlot, payloadSlot)
+	}
+}
+
 func TestEmitObjectIncludesStructDIEForPointModule(t *testing.T) {
 	t.Parallel()
 
