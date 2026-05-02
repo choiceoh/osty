@@ -2829,6 +2829,24 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 				},
 			}
 		}
+	case "toString":
+		// Primitive `.toString()` returns String for every numeric kind,
+		// Bool, Char, and Byte. The MIR-direct backend's
+		// `emitPrimitiveMethodCall` routes the lowered `Type__toString`
+		// symbol to the matching `osty_rt_*_to_string` runtime helper,
+		// but that lowering only fires once the call's destination
+		// local has a concrete String type. Without this arm, an
+		// injected stdlib body that calls e.g. `fill.toString()` (where
+		// `fill: Char`) ended up with an ErrType local that the LLVM
+		// emitter rejected with "unsupported local type <error>".
+		if isPrim(rt, PrimChar) || isPrim(rt, PrimByte) || isPrim(rt, PrimInt) ||
+			isPrim(rt, PrimFloat) || isPrim(rt, PrimBool) {
+			return TString
+		}
+		// String.toString is identity.
+		if isPrim(rt, PrimString) {
+			return TString
+		}
 	}
 	// Element-type returns: List<T>.first / .last / .get → T?, .push → Unit.
 	if nt, ok := rt.(*NamedType); ok && nt.Builtin && nt.Name == "List" && len(nt.Args) == 1 {

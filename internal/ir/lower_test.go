@@ -744,3 +744,34 @@ func TestLowerUseDeclRecoversBuiltinGenericTypesWithoutResolverTypeRefs(t *testi
 		t.Fatalf("return inner = %v, want TString", ret.Args[0])
 	}
 }
+
+// TestRecoverMethodReturnTypeToStringOnPrimitives — `Char.toString()`,
+// `Int.toString()`, `Float.toString()`, `Byte.toString()`,
+// `Bool.toString()` must all recover to `String`. Without this arm,
+// a stdlib body injected under `OSTY_STDLIB_BODY_LOWER=1` that calls
+// e.g. `fill.toString()` (Char receiver) ends up with an ErrType
+// destination local that the LLVM emitter rejects with
+// "unsupported local type <error> ... written by call Char__toString".
+// The MIR backend's `emitPrimitiveMethodCall` already routes the
+// mangled `Type__toString` symbol to the matching runtime helper —
+// it just needs the call's destination local to carry the right type
+// so the function can be checkFunctionSupported-clean.
+func TestRecoverMethodReturnTypeToStringOnPrimitives(t *testing.T) {
+	cases := []struct {
+		name string
+		in   Type
+	}{
+		{"Char", TChar},
+		{"Byte", TByte},
+		{"Int", TInt},
+		{"Float", TFloat},
+		{"Bool", TBool},
+		{"String", TString},
+	}
+	for _, tc := range cases {
+		got := recoverMethodReturnTypeFromType("toString", tc.in)
+		if got != TString {
+			t.Errorf("recoverMethodReturnTypeFromType(toString, %s) = %v, want TString", tc.name, got)
+		}
+	}
+}
