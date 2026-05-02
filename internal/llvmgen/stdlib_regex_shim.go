@@ -5,18 +5,18 @@ import (
 )
 
 const (
-	ostyRtRegexCompileSymbol      = "osty_rt_regex_compile"
-	ostyRtRegexCompileErrorSymbol = "osty_rt_regex_compile_error"
-	ostyRtRegexMatchesSymbol      = "osty_rt_regex_matches"
-	ostyRtRegexCapturesSymbol     = "osty_rt_regex_captures"
-	ostyRtRegexCapturesAllSymbol  = "osty_rt_regex_captures_all"
-	ostyRtRegexCapturesGetSymbol  = "osty_rt_regex_captures_get"
-	ostyRtRegexReplaceSymbol      = "osty_rt_regex_replace"
-	ostyRtRegexReplaceAllSymbol   = "osty_rt_regex_replace_all"
-	ostyRtRegexSplitSymbol        = "osty_rt_regex_split"
-	ostyRtRegexFindSymbol         = "osty_rt_regex_find"
-	ostyRtRegexFindAllSymbol      = "osty_rt_regex_find_all"
-	ostyRtRegexMatchFreeSymbol    = "osty_rt_regex_match_free"
+	ostyRtRegexCompileSymbol       = "osty_rt_regex_compile"
+	ostyRtRegexCompileErrorSymbol  = "osty_rt_regex_compile_error"
+	ostyRtRegexMatchesSymbol       = "osty_rt_regex_matches"
+	ostyRtRegexCapturesSymbol      = "osty_rt_regex_captures"
+	ostyRtRegexCapturesAllSymbol   = "osty_rt_regex_captures_all"
+	ostyRtRegexCapturesGetSymbol   = "osty_rt_regex_captures_get"
+	ostyRtRegexReplaceSymbol       = "osty_rt_regex_replace"
+	ostyRtRegexReplaceAllSymbol    = "osty_rt_regex_replace_all"
+	ostyRtRegexSplitSymbol         = "osty_rt_regex_split"
+	ostyRtRegexFindSymbol          = "osty_rt_regex_find"
+	ostyRtRegexFindAllSymbol       = "osty_rt_regex_find_all"
+	ostyRtRegexMatchFreeSymbol     = "osty_rt_regex_match_free"
 	ostyRtRegexCapturesNamedSymbol = "osty_rt_regex_captures_named"
 )
 
