@@ -1,0 +1,167 @@
+// onb_binary.osty — binary rvalue lowering for the ONB self-host
+// port. Slice H of the port. Mirror of `lowerBinaryAssign /
+// lowerComparisonAssign / lowerStringConcatAssign /
+// lowerFloatBinaryAssign / comparisonCond` from
+// `internal/onb/lower.go`.
+//
+// Binary rvalues divide into four shapes:
+//
+//   - Comparisons (==, !=, <, ≤, >, ≥) — `cmp lhs, rhs; cset Xd, <cond>`
+//     with the result stored as a 0/1 boolean in the dest slot.
+//   - String concat (`a + b` where T = String) — runtime call to
+//     `osty_rt_strings_Concat` with both operands in x0/x1.
+//   - Float arithmetic (T = Float / Float64) — d8/d9 scratch + per-op
+//     `f<op>` instruction.
+//   - Integer arithmetic (Add / Sub / Mul today) — x9/x10 scratch +
+//     per-op `<op> Xd, Xn, Xm` instruction.
+
+// === Comparison cond mapping =======================================
+
+// onbBinaryComparisonCond maps a MIR binary op to its aarch64
+// condition code. Returns the condition + an `ok` flag — non-comparison
+// ops yield ok=false.
+pub struct OnbBinaryCondResult {
+    pub cond: OnbCond,
+    pub ok: Bool,
+}
+
+pub fn onbBinaryComparisonCond(op: MirBinaryOp) -> OnbBinaryCondResult {
+    match op {
+        MirBinaryOp.MirBinEq -> OnbBinaryCondResult { cond: OnbCond.OnbCondEq, ok: true },
+        MirBinaryOp.MirBinNeq -> OnbBinaryCondResult { cond: OnbCond.OnbCondNe, ok: true },
+        MirBinaryOp.MirBinLt -> OnbBinaryCondResult { cond: OnbCond.OnbCondLt, ok: true },
+        MirBinaryOp.MirBinLeq -> OnbBinaryCondResult { cond: OnbCond.OnbCondLe, ok: true },
+        MirBinaryOp.MirBinGt -> OnbBinaryCondResult { cond: OnbCond.OnbCondGt, ok: true },
+        MirBinaryOp.MirBinGeq -> OnbBinaryCondResult { cond: OnbCond.OnbCondGe, ok: true },
+        _ -> OnbBinaryCondResult { cond: OnbCond.OnbCondEq, ok: false },
+    }
+}
+
+// === Top-level binary dispatch ======================================
+
+// onbLowerBinaryAssign routes by RV shape: comparison → cset path,
+// String + → runtime call, Float arith → d-register path, Int
+// arith → x9/x10 path. Mirror of `lowerBinaryAssign`.
+pub fn onbLowerBinaryAssign(state: OnbLowerState, rv: MirRValue, destSlot: Int) -> OnbMaterialiseResult {
+    let cmp = onbBinaryComparisonCond(rv.binaryOp)
+    if cmp.ok {
+        return onbLowerComparisonAssign(state, rv, cmp.cond, destSlot)
+    }
+    if rv.binaryOp == MirBinaryOp.MirBinAdd && rv.typ == "String" {
+        return onbLowerStringConcatAssign(state, rv, destSlot)
+    }
+    if onbIsFloatAbiType(rv.typ) {
+        return onbLowerFloatBinaryAssign(state, rv, destSlot)
+    }
+    onbLowerIntBinaryAssign(state, rv, destSlot)
+}
+
+// === Comparison path ================================================
+
+// onbLowerComparisonAssign emits `cmp lhs, rhs; cset Xd, <cond>;
+// str Xd, [sp, #destSlot]`. Mirror of `lowerComparisonAssign`.
+pub fn onbLowerComparisonAssign(state: OnbLowerState, rv: MirRValue, cond: OnbCond, destSlot: Int) -> OnbMaterialiseResult {
+    let lhs = onbMaterialiseOperand(state, rv.arg, "x9")
+    if !lhs.ok { return lhs }
+    let rhs = onbMaterialiseOperand(lhs.state, rv.right, "x10")
+    if !rhs.ok { return rhs }
+    let mut out: List<OnbInstr> = []
+    for i in lhs.instrs { out.push(i) }
+    for i in rhs.instrs { out.push(i) }
+    out.push(onbInstrCmp("x9", "x10"))
+    out.push(onbInstrCset("x9", cond))
+    out.push(onbInstrStore64Stack("x9", destSlot))
+    onbMaterialiseOk(rhs.state, out)
+}
+
+// === String concat path =============================================
+
+// onbLowerStringConcatAssign lowers `dest = lhs + rhs` for two
+// String operands into an AAPCS64 call to the runtime's two-arg
+// concat helper. Both operands materialise into x0/x1 (a string
+// is a heap pointer at the ABI boundary), the runtime returns a
+// fresh ptr in x0, and we store that into the destination slot.
+// Mirror of `lowerStringConcatAssign`.
+pub fn onbLowerStringConcatAssign(state: OnbLowerState, rv: MirRValue, destSlot: Int) -> OnbMaterialiseResult {
+    let lhs = onbMaterialiseOperand(state, rv.arg, "x0")
+    if !lhs.ok { return lhs }
+    let rhs = onbMaterialiseOperand(lhs.state, rv.right, "x1")
+    if !rhs.ok { return rhs }
+    let mut out: List<OnbInstr> = []
+    for i in lhs.instrs { out.push(i) }
+    for i in rhs.instrs { out.push(i) }
+    out.push(onbInstrBranchLink(onbRuntimeSymStringConcat()))
+    out.push(onbInstrStore64Stack("x0", destSlot))
+    onbMaterialiseOk(rhs.state, out)
+}
+
+// === Float arithmetic path ==========================================
+
+// onbLowerFloatBinaryAssign lowers `dest = lhs <op> rhs` for two
+// Float operands. Operands materialise into d8/d9, then `f<op>`
+// produces the result, which `str d8` commits back. d8/d9 are
+// AAPCS64 callee-saved — using them as the scratch pair means a
+// register-allocator follow-up can keep them live across calls.
+// Mirror of `lowerFloatBinaryAssign`.
+pub fn onbLowerFloatBinaryAssign(state: OnbLowerState, rv: MirRValue, destSlot: Int) -> OnbMaterialiseResult {
+    let lhs = onbMaterialiseFloatOperand(state, rv.arg, "d8")
+    if !lhs.ok { return lhs }
+    let rhs = onbMaterialiseFloatOperand(lhs.state, rv.right, "d9")
+    if !rhs.ok { return rhs }
+    let mut out: List<OnbInstr> = []
+    for i in lhs.instrs { out.push(i) }
+    for i in rhs.instrs { out.push(i) }
+    let opInstrResult = onbFloatBinaryOpInstr(rv.binaryOp)
+    if !opInstrResult.ok {
+        return onbMaterialiseErr(rhs.state, "float binary op outside slice H")
+    }
+    out.push(opInstrResult.instr)
+    out.push(onbInstrStoreFloat64Stack("d8", destSlot))
+    onbMaterialiseOk(rhs.state, out)
+}
+
+// onbFloatBinaryOpInstr maps a MIR binary op to the aarch64 FP
+// instruction. Returns ok=false for ops outside Add/Sub/Mul/Div.
+pub struct OnbFloatOpResult {
+    pub instr: OnbInstr,
+    pub ok: Bool,
+}
+
+pub fn onbFloatBinaryOpInstr(op: MirBinaryOp) -> OnbFloatOpResult {
+    match op {
+        MirBinaryOp.MirBinAdd -> OnbFloatOpResult { instr: onbInstrFaddReg("d8", "d8", "d9"), ok: true },
+        MirBinaryOp.MirBinSub -> OnbFloatOpResult { instr: onbInstrFsubReg("d8", "d8", "d9"), ok: true },
+        MirBinaryOp.MirBinMul -> OnbFloatOpResult { instr: onbInstrFmulReg("d8", "d8", "d9"), ok: true },
+        MirBinaryOp.MirBinDiv -> OnbFloatOpResult { instr: onbInstrFdivReg("d8", "d8", "d9"), ok: true },
+        _ -> OnbFloatOpResult { instr: onbInstrRet(), ok: false },
+    }
+}
+
+// === Integer arithmetic path ========================================
+
+// onbLowerIntBinaryAssign lowers `dest = lhs <op> rhs` for two
+// integer operands. Phase 1 supports Add/Sub/Mul; Div / Mod / bit
+// ops fall back. Mirror of `lowerBinaryAssign`'s integer arm.
+pub fn onbLowerIntBinaryAssign(state: OnbLowerState, rv: MirRValue, destSlot: Int) -> OnbMaterialiseResult {
+    let opOk = rv.binaryOp == MirBinaryOp.MirBinAdd
+        || rv.binaryOp == MirBinaryOp.MirBinSub
+        || rv.binaryOp == MirBinaryOp.MirBinMul
+    if !opOk {
+        return onbMaterialiseErr(state, "binary op outside phase 1")
+    }
+    let lhs = onbMaterialiseOperand(state, rv.arg, "x9")
+    if !lhs.ok { return lhs }
+    let rhs = onbMaterialiseOperand(lhs.state, rv.right, "x10")
+    if !rhs.ok { return rhs }
+    let mut out: List<OnbInstr> = []
+    for i in lhs.instrs { out.push(i) }
+    for i in rhs.instrs { out.push(i) }
+    match rv.binaryOp {
+        MirBinaryOp.MirBinAdd -> out.push(onbInstrAddReg("x9", "x9", "x10")),
+        MirBinaryOp.MirBinSub -> out.push(onbInstrSubReg("x9", "x9", "x10")),
+        MirBinaryOp.MirBinMul -> out.push(onbInstrMulReg("x9", "x9", "x10")),
+        _ -> {},
+    }
+    out.push(onbInstrStore64Stack("x9", destSlot))
+    onbMaterialiseOk(rhs.state, out)
+}
