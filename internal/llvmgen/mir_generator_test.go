@@ -1509,14 +1509,15 @@ func TestGenerateFromMIRDivergingBuiltinsLowerThroughPanic(t *testing.T) {
 	}
 }
 
-// TestGenerateFromMIRDbgLowersAsIdentity pins the prelude diagnostic
-// builtin `dbg<T>(value: T) -> T` (LANG_SPEC §A.10). The current
-// implementation lowers `dbg(x)` as identity passthrough — the
-// destination receives the operand directly with no runtime call.
-// Closes the LLVM000 "unresolved symbol dbg" gap that previously
-// rejected any program calling `dbg(...)`. A future refinement adds
-// the eprintln (location + expr text + value) shape.
-func TestGenerateFromMIRDbgLowersAsIdentity(t *testing.T) {
+// TestGenerateFromMIRDbgPrintsAndPassesThrough pins the prelude
+// diagnostic builtin `dbg<T>(value: T) -> T` (LANG_SPEC §A.10). For
+// stringifiable primitives (Int / Float / Bool / Char / Byte / String)
+// the lowerer emits `eprint("[dbg] " + value + "\n")` — using the
+// existing string_concat path which auto-boxes scalars via
+// `emitStringConcatBoxed` — and identity-passes the value into the
+// destination so callers see it unchanged. No `@dbg` call survives;
+// the value reaches the destination directly.
+func TestGenerateFromMIRDbgPrintsAndPassesThrough(t *testing.T) {
 	// fn check(n: Int) -> Int {
 	//     let x = dbg(n)
 	//     x + 1
@@ -1552,18 +1553,21 @@ func TestGenerateFromMIRDbgLowersAsIdentity(t *testing.T) {
 		t.Fatalf("GenerateFromMIR: %v", err)
 	}
 	got := string(out)
-	// Identity passthrough means no `@dbg` call survives — the
-	// argument flows straight into the next instruction.
 	if strings.Contains(got, "@dbg(") {
-		t.Fatalf("dbg should lower as identity (no @dbg call), got:\n%s", got)
+		t.Fatalf("dbg should not produce a literal @dbg call, got:\n%s", got)
 	}
 	if strings.Contains(got, "unresolved symbol dbg") {
 		t.Fatalf("output still contains unresolved-symbol diagnostic:\n%s", got)
 	}
 	for _, want := range []string{
-		"define i64 @check(i64",
-		"add i64",
-		"ret i64",
+		"c\"[dbg] \\00\"",                  // prefix in string pool
+		"c\"\\0A\\00\"",                    // newline literal in string pool
+		"call ptr @osty_rt_int_to_string(", // Int boxed via toString
+		"@osty_rt_strings_ConcatN(",        // 3-piece concat
+		"call void @osty_rt_io_write(",     // eprint write
+		"define i64 @check(i64",            // function envelope preserved
+		"add i64",                          // identity-passthrough enables `+ 1`
+		"ret i64",                          // value returned unchanged
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("missing %q in:\n%s", want, got)

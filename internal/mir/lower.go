@@ -4183,15 +4183,42 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 			return
 		}
 		// `dbg<T>(value: T) -> T` — diagnostic prelude builtin
-		// (LANG_SPEC §A.10). Today: identity passthrough — assign
-		// the argument operand into the destination. A future
-		// refinement adds the eprintln (location + expr text + value)
-		// shape; the identity step keeps user programs compiling now.
+		// (LANG_SPEC §A.10). For stringifiable primitive types,
+		// emit `eprint("[dbg] " + value + "\n")` via the existing
+		// string_concat path (which auto-boxes Int/Float/Bool/...
+		// via emitStringConcatBoxed). Then identity-passthrough the
+		// value into the destination so callers see it unchanged.
+		// Non-stringifiable types skip the print and fall back to
+		// identity-only.
 		if id.Name == "dbg" && len(c.Args) == 1 && dest != nil {
-			valueOp := bs.lowerExprAsOperand(c.Args[0].Value)
+			arg := c.Args[0].Value
+			argT := arg.Type()
+			// Spill into a temp so the value is read once, then
+			// referenced from both the eprint chain and the identity
+			// assign without re-evaluating side effects.
+			valueLocal := bs.newLocal("_dbg_val", argT, false, c.SpanV)
+			bs.emit(&StorageLiveInstr{Local: valueLocal, SpanV: c.SpanV})
+			bs.lowerExprInto(arg, valueLocal, argT)
+			if dbgCanStringify(argT) {
+				prefix := &ConstOp{Const: &StringConst{Value: "[dbg] "}, T: TString}
+				suffix := &ConstOp{Const: &StringConst{Value: "\n"}, T: TString}
+				valueOp := &CopyOp{Place: Place{Local: valueLocal}, T: argT}
+				msgLocal := bs.freshTemp(TString, c.SpanV)
+				bs.emit(&IntrinsicInstr{
+					Dest:  &Place{Local: msgLocal},
+					Kind:  IntrinsicStringConcat,
+					Args:  []Operand{prefix, valueOp, suffix},
+					SpanV: c.SpanV,
+				})
+				bs.emit(&IntrinsicInstr{
+					Kind:  IntrinsicEprint,
+					Args:  []Operand{&CopyOp{Place: Place{Local: msgLocal}, T: TString}},
+					SpanV: c.SpanV,
+				})
+			}
 			bs.emit(&AssignInstr{
 				Dest:  *dest,
-				Src:   &UseRV{Op: valueOp},
+				Src:   &UseRV{Op: &CopyOp{Place: Place{Local: valueLocal}, T: argT}},
 				SpanV: c.SpanV,
 			})
 			return
@@ -4417,6 +4444,29 @@ func (bs *bodyState) builtinFreeCallIntrinsic(name string, args []ir.Arg) Intrin
 		return IntrinsicInvalid
 	}
 	return builtinFreeCallIntrinsicForReceiver(bs.recoveredTypeOf(args[0].Value), name)
+}
+
+// dbgCanStringify reports whether `dbg(value)` can render the
+// argument via the existing `string_concat` boxing path
+// (`emitStringConcatBoxed`). Today that covers every primitive
+// scalar plus String — anything else falls back to identity-only so
+// `dbg(struct)` stays a safe no-op until a generic ToString
+// protocol lands. Mirror of `mirLowerDbgCanStringify` in
+// `toolchain/mir_lower.osty`.
+func dbgCanStringify(t Type) bool {
+	pt, ok := t.(*ir.PrimType)
+	if !ok {
+		return false
+	}
+	switch pt.Kind {
+	case ir.PrimInt, ir.PrimInt8, ir.PrimInt16, ir.PrimInt32, ir.PrimInt64,
+		ir.PrimUInt8, ir.PrimUInt16, ir.PrimUInt32, ir.PrimUInt64,
+		ir.PrimByte, ir.PrimChar,
+		ir.PrimFloat, ir.PrimFloat32, ir.PrimFloat64,
+		ir.PrimBool, ir.PrimString:
+		return true
+	}
+	return false
 }
 
 // divergingBuiltinMessage returns the canonical runtime message for the
