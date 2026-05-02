@@ -4308,20 +4308,40 @@ fn lirLowerMirListRemoveAt(l: LirMirFunctionLowerer, instr: MirInstr) {
     if !(recv.ok) {
         return
     }
-    if !(llvmListUsesTypedRuntime(recv.elemLir.llvm)) {
-        lirLowerError(l, LirDiagUnsupported, "list.removeAt composite element type `" + recv.elemTypeName + "` needs the bytes-v1 runtime fallback (deferred)", "list.removeAt")
-        return
-    }
     let idx = lirLowerCoercedOperand(l, instr.args[1], "Int", lirIntType(64), "list.removeAt idx")
     if idx.value == "" {
+        return
+    }
+    let spliceSym = mirRtListRemoveAtDiscardSymbol()
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(spliceSym, lirVoidType(), [lirPtrType(), lirIntType(64)], false))
+    if !(llvmListUsesTypedRuntime(recv.elemLir.llvm)) {
+        // Composite element: bytes-v1 GET into a stack slot, then splice.
+        // The loaded value stays in the slot as a `%T` register; production
+        // does the same shape (emitListLoadElement bytes-v1 branch +
+        // emit_list_remove_at_discard).
+        let elemType = lirLowerMirType(l, recv.elemTypeName)
+        if lirTypeIsZero(elemType) || lirTypeIsVoid(elemType) {
+            lirLowerError(l, LirDiagUnsupported, "list.removeAt composite element type `" + recv.elemTypeName + "` has no MIR layout", "list.removeAt")
+            return
+        }
+        let slot = lirFresh(l)
+        l.instrs.push(lirAlloca(slot, elemType, 0))
+        let sizeReg = lirEmitSizeOf(l, elemType)
+        let getBytesSym = mirRtListSymbol("get_bytes_v1")
+        lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(getBytesSym, lirVoidType(), [lirPtrType(), lirIntType(64), lirPtrType(), lirIntType(64)], false))
+        l.instrs.push(lirCall("", lirVoidType(), "@" + getBytesSym, [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(lirIntType(64), idx.value), lirOperand(lirPtrType(), slot), lirOperand(lirIntType(64), sizeReg)]))
+        let loaded = lirFresh(l)
+        l.instrs.push(lirLoad(loaded, elemType, slot, 0))
+        l.instrs.push(lirCall("", lirVoidType(), "@" + spliceSym, [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(lirIntType(64), idx.value)]))
+        if instr.hasDest {
+            lirStoreMirResult(l, instr.dest, lirOperand(elemType, loaded), recv.elemTypeName, "list.removeAt result")
+        }
         return
     }
     let getSym = llvmListRuntimeGetSymbolFor(recv.elemLir.llvm, recv.isString)
     lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(getSym, recv.elemLir, [lirPtrType(), lirIntType(64)], false))
     let elemReg = lirFresh(l)
     l.instrs.push(lirCall(elemReg, recv.elemLir, "@" + getSym, [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(lirIntType(64), idx.value)]))
-    let spliceSym = mirRtListRemoveAtDiscardSymbol()
-    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(spliceSym, lirVoidType(), [lirPtrType(), lirIntType(64)], false))
     l.instrs.push(lirCall("", lirVoidType(), "@" + spliceSym, [lirOperand(lirPtrType(), recv.receiverReg), lirOperand(lirIntType(64), idx.value)]))
     if instr.hasDest {
         lirStoreMirResult(l, instr.dest, lirOperand(recv.elemLir, elemReg), recv.elemTypeName, "list.removeAt result")
