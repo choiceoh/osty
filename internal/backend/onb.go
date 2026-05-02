@@ -93,6 +93,8 @@ func (b ONBBackend) emitNative(ctx context.Context, req Request) (*Result, error
 		EmitMode:     req.Emit.String(),
 		ObjectPath:   artifacts.Object,
 		BinaryPath:   artifacts.Binary,
+		SourcePath:   req.Entry.SourcePath,
+		PackageName:  req.Entry.PackageName,
 	})
 	warnings := append([]error(nil), req.Entry.MIRIssues...)
 	if plan != nil {

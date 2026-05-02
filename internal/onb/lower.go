@@ -206,33 +206,47 @@ func (s *lowerState) lowerBlock(fn *mir.Function, block *mir.BasicBlock, isEntry
 		return Block{}, fmt.Errorf("onb: nil basic block")
 	}
 	var instrs []Instr
+	var lineSpans []LineSpan
+	emit := func(emitted []Instr, span LineSpan) {
+		for _, instr := range emitted {
+			instrs = append(instrs, instr)
+			lineSpans = append(lineSpans, span)
+		}
+	}
 	if isEntry && fn.Name != "main" {
-		instrs = append(instrs, s.paramShuffle(fn)...)
+		// Param shuffle inherits the function's first instruction span so
+		// debuggers don't show the prologue jump as an unmapped row.
+		var shuffleSpan LineSpan
+		if len(block.Instrs) > 0 {
+			shuffleSpan = spanFromMIR(block.Instrs[0].At())
+		}
+		emit(s.paramShuffle(fn), shuffleSpan)
 	}
 	for _, instr := range block.Instrs {
 		lowered, err := s.lowerInstr(fn, instr)
 		if err != nil {
 			return Block{}, err
 		}
-		instrs = append(instrs, lowered...)
+		emit(lowered, spanFromMIR(instr.At()))
 	}
+	termSpan := spanFromMIR(block.Term.At())
 	switch term := block.Term.(type) {
 	case *mir.ReturnTerm:
-		instrs = append(instrs, s.epilogue(fn)...)
+		emit(s.epilogue(fn), termSpan)
 	case *mir.GotoTerm:
-		instrs = append(instrs, &Branch{Target: int(term.Target)})
+		emit([]Instr{&Branch{Target: int(term.Target)}}, termSpan)
 	case *mir.BranchTerm:
 		condInstrs, err := s.lowerBranchTerm(term)
 		if err != nil {
 			return Block{}, err
 		}
-		instrs = append(instrs, condInstrs...)
+		emit(condInstrs, termSpan)
 	case *mir.SwitchIntTerm:
 		switchInstrs, err := s.lowerSwitchIntTerm(term)
 		if err != nil {
 			return Block{}, err
 		}
-		instrs = append(instrs, switchInstrs...)
+		emit(switchInstrs, termSpan)
 	default:
 		return Block{}, fmt.Errorf("%w: terminator %T is outside phase 1", ErrUnsupportedShape, block.Term)
 	}
@@ -240,7 +254,15 @@ func (s *lowerState) lowerBlock(fn *mir.Function, block *mir.BasicBlock, isEntry
 		Label:         blockLabel(block.ID),
 		OriginalIndex: int(block.ID),
 		Instrs:        instrs,
+		LineSpans:     lineSpans,
 	}, nil
+}
+
+// spanFromMIR converts a MIR span into the ONB-side LineSpan record. We
+// drop the End position because the line program records points, not
+// ranges. Zero line means "no source info" — the encoder skips the row.
+func spanFromMIR(sp mir.Span) LineSpan {
+	return LineSpan{Line: sp.Start.Line, Column: sp.Start.Column}
 }
 
 // lowerSwitchIntTerm lowers `match scrutinee { case0, case1, ..., _ ->

@@ -37,6 +37,25 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 5 (DWARF .debug_line, 2026-05-02)** — ONB가 처음으로 디버그
+> 메타데이터를 emit. `__debug_line` 섹션이 Mach-O `__DWARF` 세그먼트로 들어감.
+> `dwarfdump --debug-line foo.o`가 정상 파싱하며 PC→source `<file>:<line>:<col>`
+> 매핑이 모든 실행 경로에서 정확. 추가:
+> - DWARF 4 line-program 인코더 (`internal/onb/dwarf.go`): leb128/uleb128 +
+>   prologue + state machine. Special opcode는 안 쓰고 `set_address +
+>   advance_pc + advance_line + copy + end_sequence` 시퀀스로 단순화
+> - `Block.LineSpans` 필드 + `lowerBlock`이 각 LIR 명령마다 source position 부착.
+>   Dead-store / 중복 행은 `appendLineRow`가 코얼레스
+> - Mach-O writer가 `__DWARF` + `__LINKEDIT` 세그먼트 추가. 파일 레이아웃은
+>   `text → cstring → debug_line → relocs → symtab → strtab` 순서로 segment
+>   range overlap 없이 배치. ld64가 multi-segment .o를 받아들이려면 LINKEDIT가
+>   필수 (이전엔 단일 __TEXT 세그먼트라 LINKEDIT 없어도 통과)
+> - `Request.SourcePath` / `PackageName`이 `Program`까지 흐르면서 file table에
+>   소스 경로가 채워짐
+>
+> 후속: `__debug_info` + `__debug_abbrev` + `__debug_str`이 들어와야 lldb가
+> 자동 인식. dsymutil 통합도 추가 슬라이스로 분리.
+>
 > **Slice A2 Week 4 (loops + match, 2026-05-02)** — `while` / `for ... in 0..N`
 > / 중첩 루프 / `match`(non-const scrutinee 포함)이 모두 native path로 통과.
 > 핵심 발견: while/for/단순 match는 Week 3 multi-block + branch fixup

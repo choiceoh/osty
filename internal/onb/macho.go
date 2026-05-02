@@ -20,6 +20,7 @@ const (
 	machoVMProtExecute                 = 0x4
 	machoSectionRegular                = 0x0
 	machoSectionCStringLiterals        = 0x2
+	machoSectionDebug                  = 0x02000000
 	machoSectionSomeInstr              = 0x00000400
 	machoSectionPureInstr              = 0x80000000
 	machoARM64RelocBranch26            = 2
@@ -177,22 +178,73 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 		return enc.relocs[i].address > enc.relocs[j].address
 	})
 
-	sizeofcmds := uint32(machoSegment64Size + 2*machoSection64Size + machoSymtabCommandSize + machoDysymtabCommandSize)
+	// Build the symbol/strtab pre-pass so we know strtab size up front and
+	// can place the optional __debug_line section after the strtab in the
+	// final file layout. Symbols are added in the same order the writer
+	// uses below: cstrings → user functions → external symbols.
+	strtab := newMachOStringTable()
+	symStrx := make([]uint32, 0, len(program.CStrings)+len(program.Functions)+len(enc.externalSymbols))
+	for _, cstr := range program.CStrings {
+		symStrx = append(symStrx, strtab.add(asmCStringLabel(program.Target, cstr.Label)))
+	}
+	for _, fn := range program.Functions {
+		symStrx = append(symStrx, strtab.add(asmSymbolName(program.Target, fn.Name)))
+	}
+	for _, symbol := range enc.externalSymbols {
+		symStrx = append(symStrx, strtab.add(asmSymbolName(program.Target, symbol)))
+	}
+
+	// DWARF line program: optional, only emitted on darwin/aarch64 with at
+	// least one function. Placed at the end of the file so its absence
+	// doesn't perturb earlier offsets when the line emitter degenerates.
+	var debugLine []byte
+	if dwarfPayload := buildDwarfLine(program, enc); dwarfPayload != nil {
+		debugLine = dwarfPayload
+	}
+
+	hasDwarf := len(debugLine) > 0
+	dwarfSegmentSize := uint32(0)
+	dwarfSegmentSections := uint32(0)
+	if hasDwarf {
+		dwarfSegmentSections = 1
+		dwarfSegmentSize = machoSegment64Size + machoSection64Size
+	}
+
+	// LC layout: __TEXT segment + __DWARF segment (optional) + __LINKEDIT
+	// segment + symtab + dysymtab. __LINKEDIT is mandatory once we have
+	// any debug segment because ld64 expects every multi-segment object
+	// to delimit its symtab/strtab/relocs region explicitly.
+	sizeofcmds := uint32(machoSegment64Size + 2*machoSection64Size + // __TEXT + 2 sections
+		dwarfSegmentSize + // __DWARF + (1 section if present)
+		machoSegment64Size + // __LINKEDIT (no sections)
+		machoSymtabCommandSize +
+		machoDysymtabCommandSize)
 	textOffset := uint32(machoHeader64Size) + sizeofcmds
-	cstringOffset := textOffset + uint32(len(enc.code))
 	cstringData, cstringAddrs := encodeMachOCStrings(program.CStrings, uint64(len(enc.code)))
-	relocOffset := alignUp(cstringOffset+uint32(len(cstringData)), 4)
+	cstringOffset := textOffset + uint32(len(enc.code))
+	// File layout order (contiguous so each segment claims a clean range):
+	//   __text → __cstring → __debug_line (optional) → relocs → symtab → strtab
+	debugLineOffset := cstringOffset + uint32(len(cstringData))
+	relocOffset := alignUp(debugLineOffset+uint32(len(debugLine)), 4)
 	symoff := relocOffset + uint32(len(enc.relocs))*machoRelocSize
 	nsyms := uint32(len(program.CStrings) + len(program.Functions) + len(enc.externalSymbols))
 	stroff := symoff + nsyms*machoNlist64Size
-	strtab := newMachOStringTable()
+	strtabEnd := stroff + uint32(len(strtab.data))
+	linkeditOffset := relocOffset
+	linkeditSize := strtabEnd - relocOffset
+	_ = dwarfSegmentSections // referenced below when writing the LC
 
 	var b bytes.Buffer
 	writeU32(&b, machoMagic64)
 	writeU32(&b, machoCPUTypeARM64)
 	writeU32(&b, machoCPUSubtypeARM64All)
 	writeU32(&b, machoFileTypeObject)
-	writeU32(&b, 3)
+	// __TEXT + __LINKEDIT + symtab + dysymtab + (optional __DWARF)
+	ncmds := uint32(4)
+	if hasDwarf {
+		ncmds++
+	}
+	writeU32(&b, ncmds)
 	writeU32(&b, sizeofcmds)
 	writeU32(&b, machoMHSubsectionsViaSyms)
 	writeU32(&b, 0)
@@ -236,6 +288,58 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 	writeU32(&b, 0)
 	writeU32(&b, 0)
 
+	dwarfVmaddr := segmentSize
+	dwarfVmsize := uint64(len(debugLine))
+	if hasDwarf {
+		// __DWARF segment: one section (`__debug_line`). vmaddr starts
+		// where __TEXT ends so segment ranges don't overlap; debug
+		// segments don't get loaded at runtime, but ld64 still validates
+		// the arithmetic.
+		writeU32(&b, machoLCSegment64)
+		writeU32(&b, dwarfSegmentSize)
+		writeName16(&b, "__DWARF")
+		writeU64(&b, dwarfVmaddr)
+		writeU64(&b, dwarfVmsize)
+		writeU64(&b, uint64(debugLineOffset))
+		writeU64(&b, uint64(len(debugLine)))
+		writeU32(&b, 0) // maxprot — debug-only
+		writeU32(&b, 0) // initprot
+		writeU32(&b, dwarfSegmentSections)
+		writeU32(&b, 0) // segment flags
+
+		writeName16(&b, "__debug_line")
+		writeName16(&b, "__DWARF")
+		writeU64(&b, dwarfVmaddr)
+		writeU64(&b, uint64(len(debugLine)))
+		writeU32(&b, debugLineOffset)
+		writeU32(&b, 0) // align
+		writeU32(&b, 0) // reloff
+		writeU32(&b, 0) // nreloc
+		writeU32(&b, machoSectionRegular|machoSectionDebug)
+		writeU32(&b, 0)
+		writeU32(&b, 0)
+		writeU32(&b, 0)
+	}
+
+	// __LINKEDIT segment: covers relocs + symtab + strtab. ld64 needs
+	// this to be the last loadable region so it can pin its file extent
+	// when stripping or rewriting the object.
+	linkeditVmaddr := dwarfVmaddr
+	if hasDwarf {
+		linkeditVmaddr += dwarfVmsize
+	}
+	writeU32(&b, machoLCSegment64)
+	writeU32(&b, machoSegment64Size)
+	writeName16(&b, "__LINKEDIT")
+	writeU64(&b, linkeditVmaddr)
+	writeU64(&b, uint64(linkeditSize))
+	writeU64(&b, uint64(linkeditOffset))
+	writeU64(&b, uint64(linkeditSize))
+	writeU32(&b, machoVMProtRead)
+	writeU32(&b, machoVMProtRead)
+	writeU32(&b, 0) // no sections
+	writeU32(&b, 0)
+
 	writeU32(&b, machoLCSymtab)
 	writeU32(&b, machoSymtabCommandSize)
 	writeU32(&b, symoff)
@@ -262,6 +366,12 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 	}
 	b.Write(enc.code)
 	b.Write(cstringData)
+	if hasDwarf {
+		if b.Len() != int(debugLineOffset) {
+			return nil, fmt.Errorf("onb: internal Mach-O layout mismatch: dwarf=%d debugLineOffset=%d", b.Len(), debugLineOffset)
+		}
+		b.Write(debugLine)
+	}
 	writePadding(&b, int(relocOffset)-b.Len())
 	if b.Len() != int(relocOffset) {
 		return nil, fmt.Errorf("onb: internal Mach-O layout mismatch: reloc=%d relocOffset=%d", b.Len(), relocOffset)
@@ -272,18 +382,23 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 	if b.Len() != int(symoff) {
 		return nil, fmt.Errorf("onb: internal Mach-O layout mismatch: sym=%d symoff=%d", b.Len(), symoff)
 	}
+	symIdx := 0
 	for _, cstr := range program.CStrings {
-		writeMachONlist64(&b, strtab.add(asmCStringLabel(program.Target, cstr.Label)), machoNSect, machoCStringSectionNumber, 0, cstringAddrs[cstr.Label])
+		writeMachONlist64(&b, symStrx[symIdx], machoNSect, machoCStringSectionNumber, 0, cstringAddrs[cstr.Label])
+		symIdx++
 	}
 	for i, fn := range program.Functions {
 		var fnOffset uint64
 		if i < len(enc.fnOffsets) {
 			fnOffset = enc.fnOffsets[i]
 		}
-		writeMachONlist64(&b, strtab.add(asmSymbolName(program.Target, fn.Name)), machoNExt|machoNSect, machoTextSectionNumber, 0, fnOffset)
+		writeMachONlist64(&b, symStrx[symIdx], machoNExt|machoNSect, machoTextSectionNumber, 0, fnOffset)
+		symIdx++
+		_ = fn
 	}
-	for _, symbol := range enc.externalSymbols {
-		writeMachONlist64(&b, strtab.add(asmSymbolName(program.Target, symbol)), machoNExt, 0, 0, 0)
+	for range enc.externalSymbols {
+		writeMachONlist64(&b, symStrx[symIdx], machoNExt, 0, 0, 0)
+		symIdx++
 	}
 	if b.Len() != int(stroff) {
 		return nil, fmt.Errorf("onb: internal Mach-O layout mismatch: str=%d stroff=%d", b.Len(), stroff)
@@ -344,6 +459,67 @@ type machoBranchFixup struct {
 	targetBlock int    // original MIR block index of the jump target
 	kind        machoBranchKind
 	cond        Cond // populated for machoBranchCond, ignored otherwise
+}
+
+// buildDwarfLine assembles the Phase B.0 `.debug_line` section bytes from a
+// fully encoded Mach-O text. Returns nil when the program has no source
+// metadata or the encoder doesn't have per-function size info — both cases
+// degrade to "no debug info" rather than failing the whole emission.
+func buildDwarfLine(program *Program, enc machoTextEncoding) []byte {
+	if program == nil || len(program.Functions) == 0 || len(enc.fnOffsets) != len(program.Functions) {
+		return nil
+	}
+	if !hasAnySourceLine(program) {
+		return nil
+	}
+	fnSizes := computeFnSizes(enc, uint64(len(enc.code)))
+	includeDir := dwarfIncludeDir(program)
+	includeDirs := []string{}
+	dirIdx := uint32(0)
+	if includeDir != "" {
+		includeDirs = append(includeDirs, includeDir)
+		dirIdx = 1
+	}
+	file := dwarfFileEntry(program)
+	file.Dir = dirIdx
+	prog := dwarfLineProgram{
+		IncludeDirs: includeDirs,
+		Files:       []dwarfLineFile{file},
+		Rows:        programLineRows(program, 1, fnSizes),
+		TextSize:    uint64(len(enc.code)),
+	}
+	out, err := emitDwarfLine(prog)
+	if err != nil {
+		// Don't sink the whole emit on a malformed line program — the
+		// rest of the .o is still useful.
+		return nil
+	}
+	return out
+}
+
+func hasAnySourceLine(program *Program) bool {
+	for _, fn := range program.Functions {
+		for _, blk := range fn.Blocks {
+			for _, span := range blk.LineSpans {
+				if span.Line > 0 {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func computeFnSizes(enc machoTextEncoding, totalCode uint64) []uint64 {
+	out := make([]uint64, len(enc.fnOffsets))
+	for i, start := range enc.fnOffsets {
+		end := totalCode
+		if i+1 < len(enc.fnOffsets) {
+			end = enc.fnOffsets[i+1]
+		}
+		out[i] = end - start
+	}
+	return out
 }
 
 type machoBranchKind uint8

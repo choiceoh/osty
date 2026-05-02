@@ -6,10 +6,17 @@ import "fmt"
 // smaller than the final backend IR, but it already speaks in aarch64-shaped
 // instructions so the pipeline can grow toward object emission one opcode at a
 // time.
+//
+// SourcePath and Package carry the source-of-record metadata the DWARF
+// emitter needs for the line-program file table and the compile-unit DIE.
+// Both stay empty when the front end didn't supply them — the line emitter
+// then falls back to a synthetic `<unknown>` filename.
 type Program struct {
-	Target    Target
-	Functions []Function
-	CStrings  []CStringLiteral
+	Target     Target
+	Functions  []Function
+	CStrings   []CStringLiteral
+	SourcePath string
+	Package    string
 }
 
 // CStringLiteral is a null-terminated string payload referenced by ONB code.
@@ -35,10 +42,23 @@ type Function struct {
 // OriginalIndex is the function-relative MIR block ID this LIR block was
 // lowered from. Branches reference targets by this index; the encoder maps
 // original indices to byte offsets while it walks the emit order.
+//
+// LineSpans, when populated, parallels Instrs: LineSpans[i] is the source
+// position the i-th LIR instruction was lowered from. The DWARF line
+// emitter consumes this to produce one PC→source row per change in line.
 type Block struct {
 	Label         string
 	OriginalIndex int
 	Instrs        []Instr
+	LineSpans     []LineSpan
+}
+
+// LineSpan captures one source-position record per emitted LIR instruction.
+// Zero Line means "no source info" — the encoder treats it as
+// unchanged-from-previous, preserving the previous mapping.
+type LineSpan struct {
+	Line   int
+	Column int
 }
 
 // Instr is one ONB aarch64 LIR instruction.
