@@ -1314,6 +1314,110 @@ func TestONBBackendBinaryRunsClosuresOnDarwinARM64(t *testing.T) {
 	}
 }
 
+// TestONBBackendBinaryRunsStdlibIntrinsicsOnDarwinARM64 covers Phase
+// A2 Week 21 — a batch of stdlib intrinsics that the front end emits
+// for `.len()`, `.isEmpty()`, `.isSome()`, `.isNone()` on String /
+// List / Option, plus the implicit "builtin generic types pass as
+// pointers at the ABI" extension that lets `fn first<T>(xs:
+// List<T>)` compile to a native call (the monomorphized name is just
+// another FnRef once the pointer-shaped arg is accepted).
+//
+// Bool println currently routes through `printf "%lld\n"` so true /
+// false render as 1 / 0 — that's consistent with Week 4 and isn't
+// changed by this slice.
+func TestONBBackendBinaryRunsStdlibIntrinsicsOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("ONB stdlib-intrinsic smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	cases := []struct {
+		name, src, want string
+	}{
+		{
+			name: "string_len",
+			src: `fn main() {
+    println("hello".len())
+    println("".len())
+}`,
+			want: "5\n0\n",
+		},
+		{
+			name: "string_is_empty",
+			src: `fn main() {
+    println("".isEmpty())
+    println("x".isEmpty())
+}`,
+			want: "1\n0\n",
+		},
+		{
+			name: "list_is_empty",
+			src: `fn main() {
+    let mut xs: List<Int> = []
+    println(xs.isEmpty())
+    xs.push(1)
+    println(xs.isEmpty())
+}`,
+			want: "1\n0\n",
+		},
+		{
+			name: "option_is_some_none",
+			src: `fn main() {
+    let a: Int? = Some(7)
+    let b: Int? = None
+    println(a.isSome())
+    println(a.isNone())
+    println(b.isSome())
+    println(b.isNone())
+}`,
+			want: "1\n0\n0\n1\n",
+		},
+		{
+			// Generic monomorphized fn — the body uses everything ONB
+			// already supports (LenRV, IndexProj, AggEnumVariant,
+			// NullaryRV); the call-site needed `List<Int>` to be
+			// accepted as a 1-reg pointer ABI param, which Week 21
+			// unlocks via `isBuiltinPointerType`.
+			name: "generic_fn_first",
+			src: `fn first<T>(xs: List<T>) -> T? {
+    if xs.len() == 0 { None } else { Some(xs[0]) }
+}
+fn main() {
+    let mut xs: List<Int> = []
+    xs.push(42)
+    let r = first(xs)
+    let v = match r {
+        Some(x) -> x,
+        None -> -1,
+    }
+    println(v)
+}`,
+			want: "42\n",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(onb.EnvStrict, "1")
+			req := newBackendRequest(t, EmitBinary, tc.src)
+			req.Layout.Target = "aarch64-apple-darwin"
+			result, err := ONBBackend{}.Emit(context.Background(), req)
+			if err != nil {
+				t.Fatalf("ONBBackend.Emit returned error: %v", err)
+			}
+			out, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+			if err != nil {
+				t.Fatalf("binary returned error: %v\n%s", err, out)
+			}
+			if got := string(out); got != tc.want {
+				t.Fatalf("binary output = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestONBBackendBinaryRunsStringAndListOnDarwinARM64 exercises Phase A2's
 // runtime-call slice: String concatenation and `List<Int>` push/len. These
 // shapes lower to `bl _osty_rt_strings_Concat`, `bl _osty_rt_list_new`,

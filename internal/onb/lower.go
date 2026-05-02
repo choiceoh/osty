@@ -63,6 +63,7 @@ const (
 	// (LLVM-shaped) name via __asm__("osty.rt..."). Mach-O symbol
 	// encoding prepends the leading underscore, matching the call site.
 	runtimeSymClosureEnvAllocV2 = "osty.rt.closure_env_alloc_v2"
+	runtimeSymStringByteLen     = "osty_rt_strings_ByteLen"
 )
 
 // closureEnvCapturesOffset is the byte offset within an
@@ -968,7 +969,10 @@ func isABIScalarType(t mir.Type) bool {
 	if isFloatABIType(t) {
 		return true
 	}
-	return isClosureScalarType(t)
+	if isClosureScalarType(t) {
+		return true
+	}
+	return isBuiltinPointerType(t)
 }
 
 // isClosureScalarType reports whether t is a closure-shaped pointer
@@ -983,6 +987,28 @@ func isClosureScalarType(t mir.Type) bool {
 		return false
 	}
 	return nt.Builtin && nt.Name == "ClosureEnv"
+}
+
+// isBuiltinPointerType reports whether t is a builtin generic
+// container that's represented as a heap pointer at the ABI
+// boundary. Lists, Maps, Sets, Channels, and similar runtime-
+// managed values all fit this shape — the local holds an 8-byte
+// pointer to the runtime data structure regardless of element
+// type. Lets `abiRegSlots` accept these as 1-reg pointer args /
+// returns without enumerating each builtin.
+func isBuiltinPointerType(t mir.Type) bool {
+	nt, ok := t.(*ir.NamedType)
+	if !ok || nt == nil {
+		return false
+	}
+	if !nt.Builtin {
+		return false
+	}
+	switch nt.Name {
+	case "List", "Map", "Set", "Channel", "Bytes", "Handle":
+		return true
+	}
+	return false
 }
 
 // isFloatABIType reports whether t is a Float / Float64 — values that
@@ -2159,9 +2185,143 @@ func (s *lowerState) lowerIntrinsic(instr *mir.IntrinsicInstr) ([]Instr, error) 
 		return s.lowerListPush(instr)
 	case mir.IntrinsicListLen:
 		return s.lowerListLen(instr)
+	case mir.IntrinsicStringLen:
+		return s.lowerStringLen(instr)
+	case mir.IntrinsicStringIsEmpty:
+		return s.lowerStringIsEmpty(instr)
+	case mir.IntrinsicListIsEmpty:
+		return s.lowerListIsEmpty(instr)
+	case mir.IntrinsicOptionIsSome:
+		return s.lowerOptionIsSome(instr)
+	case mir.IntrinsicOptionIsNone:
+		return s.lowerOptionIsNone(instr)
 	default:
 		return nil, fmt.Errorf("%w: intrinsic %s is outside phase 1", ErrUnsupportedShape, instr.Kind)
 	}
+}
+
+// lowerStringIsEmpty composes `osty_rt_strings_ByteLen(s) == 0` and
+// stores the bool result. The runtime returns the byte count in x0;
+// `cmp x0, #0` + `cset Xd, eq` materialises the bool without going
+// through a stack round-trip for the intermediate length.
+func (s *lowerState) lowerStringIsEmpty(instr *mir.IntrinsicInstr) ([]Instr, error) {
+	if len(instr.Args) != 1 {
+		return nil, fmt.Errorf("%w: string_is_empty expects 1 arg", ErrUnsupportedShape)
+	}
+	receiver, err := s.materialiseOperand(instr.Args[0], RegX0)
+	if err != nil {
+		return nil, err
+	}
+	out := append([]Instr(nil), receiver...)
+	out = append(out,
+		&BranchLink{Symbol: runtimeSymStringByteLen},
+		&MovImm64{Dst: RegX9, Imm: 0},
+		&Cmp{Lhs: RegX0, Rhs: RegX9},
+		&Cset{Dst: RegX9, Cond: CondEq},
+	)
+	if instr.Dest != nil && !instr.Dest.HasProjections() {
+		if slot, ok := s.localSlots[instr.Dest.Local]; ok {
+			out = append(out, &Store64Stack{Src: RegX9, Offset: slot})
+		}
+	}
+	return out, nil
+}
+
+// lowerListIsEmpty composes `osty_rt_list_len(xs) == 0` similarly.
+func (s *lowerState) lowerListIsEmpty(instr *mir.IntrinsicInstr) ([]Instr, error) {
+	if len(instr.Args) != 1 {
+		return nil, fmt.Errorf("%w: list_is_empty expects 1 arg", ErrUnsupportedShape)
+	}
+	receiver, err := s.materialiseOperand(instr.Args[0], RegX0)
+	if err != nil {
+		return nil, err
+	}
+	out := append([]Instr(nil), receiver...)
+	out = append(out,
+		&BranchLink{Symbol: runtimeSymListLen},
+		&MovImm64{Dst: RegX9, Imm: 0},
+		&Cmp{Lhs: RegX0, Rhs: RegX9},
+		&Cset{Dst: RegX9, Cond: CondEq},
+	)
+	if instr.Dest != nil && !instr.Dest.HasProjections() {
+		if slot, ok := s.localSlots[instr.Dest.Local]; ok {
+			out = append(out, &Store64Stack{Src: RegX9, Offset: slot})
+		}
+	}
+	return out, nil
+}
+
+// lowerOptionIsSome / lowerOptionIsNone read the option's
+// discriminant (slot+0 of the enum local) and compare to the Some
+// tag (= 1). The Option layout is the synthetic one from Week 14 so
+// these always look at offset 0 regardless of the inner type.
+func (s *lowerState) lowerOptionIsSome(instr *mir.IntrinsicInstr) ([]Instr, error) {
+	return s.lowerOptionDiscriminantCompare(instr, CondEq)
+}
+
+func (s *lowerState) lowerOptionIsNone(instr *mir.IntrinsicInstr) ([]Instr, error) {
+	return s.lowerOptionDiscriminantCompare(instr, CondNe)
+}
+
+// lowerOptionDiscriminantCompare emits the shared isSome/isNone body:
+// load the discriminant byte (option slot + 0) into x9, compare to
+// the Some tag (1), and `cset` with the caller-chosen condition.
+// CondEq → isSome (x9 == 1); CondNe → isNone (x9 != 1).
+func (s *lowerState) lowerOptionDiscriminantCompare(instr *mir.IntrinsicInstr, cond Cond) ([]Instr, error) {
+	if len(instr.Args) != 1 {
+		return nil, fmt.Errorf("%w: option discriminant compare expects 1 arg", ErrUnsupportedShape)
+	}
+	op := instr.Args[0]
+	var place mir.Place
+	switch o := op.(type) {
+	case *mir.CopyOp:
+		place = o.Place
+	case *mir.MoveOp:
+		place = o.Place
+	default:
+		return nil, fmt.Errorf("%w: option discriminant operand %T", ErrUnsupportedShape, op)
+	}
+	if place.HasProjections() {
+		return nil, fmt.Errorf("%w: option discriminant on projected place", ErrUnsupportedShape)
+	}
+	srcSlot, ok := s.localSlots[place.Local]
+	if !ok {
+		return nil, fmt.Errorf("%w: option discriminant of local%d without slot", ErrUnsupportedShape, place.Local)
+	}
+	out := []Instr{
+		&Load64Stack{Dst: RegX9, Offset: srcSlot},
+		&MovImm64{Dst: RegX10, Imm: 1}, // Some tag
+		&Cmp{Lhs: RegX9, Rhs: RegX10},
+		&Cset{Dst: RegX9, Cond: cond},
+	}
+	if instr.Dest != nil && !instr.Dest.HasProjections() {
+		if slot, ok := s.localSlots[instr.Dest.Local]; ok {
+			out = append(out, &Store64Stack{Src: RegX9, Offset: slot})
+		}
+	}
+	return out, nil
+}
+
+// lowerStringLen lowers `s.len()` on a String operand into a runtime
+// call to `osty_rt_strings_ByteLen`. Receiver lives in x0; the
+// runtime returns a byte count in x0 which we capture into the
+// destination slot.
+func (s *lowerState) lowerStringLen(instr *mir.IntrinsicInstr) ([]Instr, error) {
+	if len(instr.Args) != 1 {
+		return nil, fmt.Errorf("%w: string_len expects 1 arg, got %d", ErrUnsupportedShape, len(instr.Args))
+	}
+	receiver, err := s.materialiseOperand(instr.Args[0], RegX0)
+	if err != nil {
+		return nil, err
+	}
+	out := append([]Instr(nil), receiver...)
+	out = append(out, &BranchLink{Symbol: runtimeSymStringByteLen})
+	if instr.Dest != nil && !instr.Dest.HasProjections() {
+		if slot, ok := s.localSlots[instr.Dest.Local]; ok {
+			out = append(out, &Store64Stack{Src: RegX0, Offset: slot})
+		}
+	}
+	return out, nil
 }
 
 // lowerListPush lowers `IntrinsicListPush(list, value)` into a runtime
