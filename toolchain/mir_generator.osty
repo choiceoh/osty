@@ -19521,8 +19521,8 @@ fn mirEmitAbortIntrinsic(instr: MirInstr) -> String {
 fn mirEmitRValueAggregate(dest: String, rv: MirRValue) -> String {
     match rv.aggKind {
         MirAggTuple -> mirEmitTupleAggregate(dest, rv),
-        MirAggStruct -> "  ; TODO Phase 1e MirAggStruct\n",
-        MirAggEnumVariant -> "  ; TODO Phase 1e MirAggEnumVariant\n",
+        MirAggStruct -> mirEmitStructAggregate(dest, rv),
+        MirAggEnumVariant -> mirEmitEnumVariantAggregate(dest, rv),
         MirAggList -> "  ; TODO Phase 1e MirAggList (runtime alloc)\n",
         MirAggMap -> "  ; TODO Phase 1e MirAggMap (runtime alloc)\n",
         MirAggClosure -> "  ; TODO Phase 1e MirAggClosure\n",
@@ -19963,4 +19963,60 @@ fn mirEmitListGetSymbol(elemLLVM: String) -> String {
         return "osty_rt_list_get_f64"
     }
     ""
+}
+
+
+// ====================================================================
+// Phase 1h — Struct + EnumVariant aggregates
+// ====================================================================
+//
+// Phase 1d's tuple emitter handles `(a, b)` shapes; Phase 1h reuses
+// the same insertvalue-chain approach for struct construction and
+// adds an enum-variant emitter that lays out the canonical
+// `{ i64 disc, i64 payload }` form.
+//
+// Type assumptions (Phase 1h, simplified):
+//   - Struct aggregate type → `{ <field0_ty>, <field1_ty>, ... }`
+//     derived from the field operands' types. Same shape as tuple.
+//   - EnumVariant aggregate type → `{ i64, i64 }`. Disc value comes
+//     from `rv.aggVariantIdx`. Payload is first field widened to
+//     i64 (or 0 when no fields). Multi-field payloads stub with
+//     TODO Phase 1i — they need the type-defs section to lay out
+//     a sub-aggregate.
+
+/// mirEmitStructAggregate emits the insertvalue chain for a struct
+/// rvalue. Identical shape to `mirEmitTupleAggregate` — Phase 1h
+/// reuses the same intermediate-naming scheme (`<dest>.t<i>`).
+fn mirEmitStructAggregate(dest: String, rv: MirRValue) -> String {
+    mirEmitTupleAggregate(dest, rv)
+}
+
+/// mirEmitEnumVariantAggregate emits the canonical enum aggregate:
+/// `{ i64 disc, i64 payload }`. Phase 1h covers:
+///   - 0 fields: disc = variantIdx, payload = 0.
+///   - 1 field: disc = variantIdx, payload = field value (i64).
+///     Fields whose LLVM type isn't i64 stub with TODO so the
+///     verifier flags the bitcast / widening dependency.
+/// Multi-field payloads (struct-shaped variant) stub at TODO until
+/// the type-defs section can lay out the sub-aggregate type.
+fn mirEmitEnumVariantAggregate(dest: String, rv: MirRValue) -> String {
+    let aggTy = "\{ i64, i64 \}"
+    let discValue = mirGenIntToString(rv.aggVariantIdx)
+    if rv.aggFields.len() == 0 {
+        let mut out = "  " + dest + ".t0 = insertvalue " + aggTy + " undef, i64 " + discValue + ", 0\n"
+        out = out + "  " + dest + " = insertvalue " + aggTy + " " + dest + ".t0, i64 0, 1\n"
+        return out
+    }
+    if rv.aggFields.len() == 1 {
+        let payload = rv.aggFields[0]
+        let payloadTy = mirEmitOperandLLVMType(payload)
+        if payloadTy != "i64" {
+            return "  ; TODO Phase 1i enum payload widen for type \"" + payloadTy + "\"\n"
+        }
+        let payloadOp = mirEmitOperand(payload)
+        let mut out = "  " + dest + ".t0 = insertvalue " + aggTy + " undef, i64 " + discValue + ", 0\n"
+        out = out + "  " + dest + " = insertvalue " + aggTy + " " + dest + ".t0, i64 " + payloadOp + ", 1\n"
+        return out
+    }
+    "  ; TODO Phase 1i multi-field enum payload (n=" + mirGenIntToString(rv.aggFields.len()) + ")\n"
 }
