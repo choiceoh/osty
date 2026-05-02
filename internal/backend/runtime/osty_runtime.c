@@ -16219,6 +16219,41 @@ static int osty_re_dfa_match(const osty_regex_compiled *re, const char *text, in
     return 0;
 }
 
+/* Phase 9b — DFA-driven boundary scan for find/findAll/captures/etc.
+ *
+ * Returns the leftmost-longest match end position (one past the last
+ * consumed byte) for a match starting at or after `start_offset`, or
+ * -1 when no match exists. Caller has already verified
+ * `dfa_state_count > 0`.
+ *
+ * Greedy semantics under the search DFA: the DFA enters an accept
+ * state at the EARLIEST sp where the pattern can complete, and stays
+ * in accept while the match keeps extending (e.g., `\d+` over
+ * "12345"). The match END is the LAST sp before the DFA leaves accept
+ * — exactly what leftmost-longest wants. Once we leave accept, the
+ * first match is sealed; later positions belong to a separate match
+ * which subsequent calls (with advanced start_offset) will pick up.
+ */
+static int osty_re_dfa_find_first_end_from(const osty_regex_compiled *re, const char *text, int text_len, int start_offset) {
+    const uint8_t *is_match = osty_re_compiled_dfa_is_match(re);
+    const uint16_t *trans = osty_re_compiled_dfa_transitions(re);
+    int state = 0;
+    int last_accept = is_match[state] ? start_offset : -1;
+    int seen_accept = is_match[state];
+    for (int sp = start_offset; sp < text_len; sp++) {
+        unsigned char ch = (unsigned char)text[sp];
+        state = trans[state * 256 + ch];
+        if (is_match[state]) {
+            last_accept = sp + 1;
+            seen_accept = 1;
+        } else if (seen_accept) {
+            /* Just left accept run — first match complete. */
+            return last_accept;
+        }
+    }
+    return last_accept;
+}
+
 /* Run the matcher against text starting at `start_offset` (Phase 2b:
  * exposed so capturesAll can scan past prior matches). `^` still
  * binds to absolute position 0 — start_offset only shifts the search
@@ -16555,7 +16590,21 @@ void *osty_rt_regex_find(void *raw_re, const char *text) {
     int32_t slots[OSTY_RE_MAX_CAP_SLOTS];
     int slot_count = 2 * re->ngroups;
     for (int i = 0; i < slot_count; i++) slots[i] = -1;
-    if (!osty_re_match_from(re, src, len, 0, slots)) {
+    /* Phase 9b — DFA boundary precheck. When the DFA is built and says
+     * no match exists, skip the NFA scan entirely (typical no-match
+     * inputs were the dominant Pike VM cost). When the DFA says a
+     * match ends at `dfa_end`, bound the NFA's text_len to that — the
+     * NFA only needs to verify and extract captures within the known
+     * matched region. */
+    int nfa_text_len = len;
+    if (re->dfa_state_count > 0) {
+        int dfa_end = osty_re_dfa_find_first_end_from(re, src, len, 0);
+        if (dfa_end < 0) {
+            return NULL;
+        }
+        nfa_text_len = dfa_end;
+    }
+    if (!osty_re_match_from(re, src, nfa_text_len, 0, slots)) {
         return NULL;
     }
     int32_t start = slots[0];
@@ -16607,7 +16656,20 @@ void *osty_rt_regex_find_all(void *raw_re, const char *text) {
     int start = 0;
     while (start <= len) {
         for (int i = 0; i < slot_count; i++) slots[i] = -1;
-        if (!osty_re_match_from(re, src, len, start, slots)) {
+        /* Phase 9b — DFA boundary precheck. Cuts NFA scans over
+         * non-matching tail regions (the dominant cost when matches
+         * are sparse). NFA's text_len gets bounded to the DFA-known
+         * match end so capture extraction stays in the matched
+         * region. */
+        int nfa_text_len = len;
+        if (re->dfa_state_count > 0) {
+            int dfa_end = osty_re_dfa_find_first_end_from(re, src, len, start);
+            if (dfa_end < 0) {
+                break;
+            }
+            nfa_text_len = dfa_end;
+        }
+        if (!osty_re_match_from(re, src, nfa_text_len, start, slots)) {
             break;
         }
         int32_t match_start = slots[0];
@@ -16696,7 +16758,16 @@ static void *osty_rt_regex_replace_impl(void *raw_re, const char *text, const ch
     int substituted = 0;
     while (start <= len) {
         for (int i = 0; i < slot_count; i++) slots[i] = -1;
-        if (!osty_re_match_from(re, src, len, start, slots)) {
+        /* Phase 9b — DFA boundary precheck (see find_all comment). */
+        int nfa_text_len = len;
+        if (re->dfa_state_count > 0) {
+            int dfa_end = osty_re_dfa_find_first_end_from(re, src, len, start);
+            if (dfa_end < 0) {
+                break;
+            }
+            nfa_text_len = dfa_end;
+        }
+        if (!osty_re_match_from(re, src, nfa_text_len, start, slots)) {
             break;
         }
         int32_t match_start = slots[0];
@@ -16820,7 +16891,16 @@ void *osty_rt_regex_split(void *raw_re, const char *text) {
     int start = 0;
     while (start <= len) {
         for (int i = 0; i < slot_count; i++) slots[i] = -1;
-        if (!osty_re_match_from(re, src, len, start, slots)) {
+        /* Phase 9b — DFA boundary precheck (see find_all comment). */
+        int nfa_text_len = len;
+        if (re->dfa_state_count > 0) {
+            int dfa_end = osty_re_dfa_find_first_end_from(re, src, len, start);
+            if (dfa_end < 0) {
+                break;
+            }
+            nfa_text_len = dfa_end;
+        }
+        if (!osty_re_match_from(re, src, nfa_text_len, start, slots)) {
             break;
         }
         int32_t match_start = slots[0];
@@ -16858,7 +16938,16 @@ void *osty_rt_regex_captures(void *raw_re, const char *text) {
     int32_t slots[OSTY_RE_MAX_CAP_SLOTS];
     int slot_count = 2 * re->ngroups;
     for (int i = 0; i < slot_count; i++) slots[i] = -1;
-    if (!osty_re_match_from(re, src, len, 0, slots)) {
+    /* Phase 9b — DFA boundary precheck (see find_all comment). */
+    int nfa_text_len = len;
+    if (re->dfa_state_count > 0) {
+        int dfa_end = osty_re_dfa_find_first_end_from(re, src, len, 0);
+        if (dfa_end < 0) {
+            return NULL;
+        }
+        nfa_text_len = dfa_end;
+    }
+    if (!osty_re_match_from(re, src, nfa_text_len, 0, slots)) {
         return NULL;
     }
     return osty_re_build_captures(re, src, len, slots);
@@ -16887,7 +16976,16 @@ void *osty_rt_regex_captures_all(void *raw_re, const char *text) {
     int start = 0;
     while (start <= len) {
         for (int i = 0; i < slot_count; i++) slots[i] = -1;
-        if (!osty_re_match_from(re, src, len, start, slots)) {
+        /* Phase 9b — DFA boundary precheck (see find_all comment). */
+        int nfa_text_len = len;
+        if (re->dfa_state_count > 0) {
+            int dfa_end = osty_re_dfa_find_first_end_from(re, src, len, start);
+            if (dfa_end < 0) {
+                break;
+            }
+            nfa_text_len = dfa_end;
+        }
+        if (!osty_re_match_from(re, src, nfa_text_len, start, slots)) {
             break;
         }
         int32_t match_start = slots[0];

@@ -1,0 +1,117 @@
+use std.regex
+
+fn main() {
+    // ── DFA boundary correctness: longer match must extend through
+    //    accept run, not stop at first accept.
+    match regex.compile(r"\d+") {
+        Ok(re) -> {
+            match re.find("12345abc") {
+                Some(m) -> {
+                    let t = m.text
+                    let s = m.start
+                    let e = m.end
+                    println("digits: '{t}' [{s}..{e})")
+                },
+                None -> println("digits: no match"),
+            }
+        },
+        Err(_) -> println("digits compile failed"),
+    }
+
+    // ── findAll: each iteration's DFA-bounded NFA must find correct
+    //    boundaries.
+    match regex.compile(r"[a-z]+") {
+        Ok(re) -> {
+            let list = re.findAll("foo 123 bar 456 baz")
+            let n = list.len()
+            println("words: {n}")
+            let mut i = 0
+            while i < n {
+                let m = list[i]
+                let t = m.text
+                let s = m.start
+                let e = m.end
+                println("  [{i}] '{t}' [{s}..{e})")
+                i += 1
+            }
+        },
+        Err(_) -> println("words compile failed"),
+    }
+
+    // ── Sparse-match findAll: most input is non-matching tail.
+    match regex.compile(r"x+") {
+        Ok(re) -> {
+            let list = re.findAll("aaaaaaaaaaxxxbbbbbbbbbbbb")
+            let n = list.len()
+            println("sparse: {n}")
+            if n > 0 {
+                let m = list[0]
+                let t = m.text
+                let s = m.start
+                let e = m.end
+                println("  '{t}' [{s}..{e})")
+            }
+        },
+        Err(_) -> println("sparse compile failed"),
+    }
+
+    // ── Replace with backref under DFA precheck.
+    match regex.compile(r"(\w+)=(\d+)") {
+        Ok(re) -> {
+            let r = re.replaceAll("a=1, b=22, c=333", "[$1->$2]")
+            println("backref: {r}")
+        },
+        Err(_) -> println("backref compile failed"),
+    }
+
+    // ── Split where pattern doesn't match → single piece.
+    match regex.compile(r"\d+") {
+        Ok(re) -> {
+            let parts = re.split("hello world")
+            let n = parts.len()
+            println("split-nomatch: {n}")
+            if n > 0 {
+                let p = parts[0]
+                println("  '{p}'")
+            }
+        },
+        Err(_) -> println("split compile failed"),
+    }
+
+    // ── Captures with named groups under DFA precheck.
+    match regex.compile(r"(?P<host>\w+):(?P<port>\d+)") {
+        Ok(re) -> {
+            match re.captures("server:8080") {
+                Some(c) -> {
+                    match c.named("host") {
+                        Some(s) -> println("host: {s}"),
+                        None    -> println("host: <none>"),
+                    }
+                    match c.named("port") {
+                        Some(s) -> println("port: {s}"),
+                        None    -> println("port: <none>"),
+                    }
+                },
+                None -> println("hostport: no match"),
+            }
+        },
+        Err(_) -> println("hostport compile failed"),
+    }
+
+    // ── \b pattern: DFA NOT eligible — must use NFA path
+    //    (verifies our fallback still works correctly).
+    match regex.compile(r"\bword\b") {
+        Ok(re) -> {
+            match re.find("a word in sentence") {
+                Some(m) -> {
+                    let t = m.text
+                    let s = m.start
+                    let e = m.end
+                    println("\\bword\\b: '{t}' [{s}..{e})")
+                },
+                None -> println("\\bword\\b: no match"),
+            }
+        },
+        Err(_) -> println("\\b compile failed"),
+    }
+}
