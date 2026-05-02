@@ -1008,6 +1008,28 @@ Composite element types (struct/enum/non-typed) take the
 `bytes-v1 fallback (deferred)` diagnostic path, same as
 `list.first`/`list.pop` do today.
 
+Design decision: closing two more `lirLowerMirRValue` wildcard
+fall-throughs by adding direct dispatch for `MirRVDiscriminant`
+and `MirRVLen`. Production HIR→MIR emits these via `lowerMatch` /
+`lowerIfLet` (Discriminant) and `lowerForIn` (Len), so any source
+that pattern-matches an Option/Result or iterates a List would
+have hit the unsupported diagnostic in LIR Proto.
+
+- `lirLowerMirDiscriminant` — load the aggregate, `extractvalue`
+  index 0, return as i64. Mirrors production `emitDiscriminantRV`.
+  Deliberately rejects projection-carrying places (production also
+  bails on those at Stage 3.2).
+- `lirLowerMirLenRV` — runtime symbol picked by the place's local
+  type: `osty_rt_list_len` / `osty_rt_map_len` / `osty_rt_set_len` /
+  `osty_rt_strings_ByteLen` / `osty_rt_bytes_len`. Mirrors
+  production `emitLenRV` runtime selection.
+
+Two Phase-4 fixtures pin the new shapes:
+- `discriminant_extract_int` — Option<Int> param → i64 disc via
+  `extractvalue %Option.Int ..., 0`.
+- `len_rvalue_list_int` — List<Int> param → i64 via
+  `call i64 @osty_rt_list_len`.
+
 ## Phase 0: lock the boundary
 
 Deliverables:
