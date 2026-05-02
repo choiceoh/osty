@@ -1721,11 +1721,23 @@ pub fn lirLowerMirFunction(cfg: LirLowerConfig, mir: MirModule, module: LirModul
     if name == "" {
         lirLowerError(l, LirDiagInvalidInput, "MIR function has empty name", "function.name")
     }
-    if fn_.isExternal {
-        lirLowerError(l, LirDiagUnsupported, "external MIR functions are not implemented in LIR Proto lowering", name)
-    }
-    if fn_.isIntrinsic {
-        lirLowerError(l, LirDiagUnsupported, "intrinsic MIR functions are not implemented in LIR Proto lowering", name)
+    // External / intrinsic MIR functions: emit `declare <ret> @<name>(<params>)`
+    // and skip body. These are FFI imports (`use go "..."`), declared
+    // intrinsics, or stdlib stubs whose body lives outside the local
+    // MIR module. Mirrors production `emitDirectCall` runtime FFI path
+    // — production declares the symbol on first call site.
+    if fn_.isExternal || fn_.isIntrinsic {
+        let externRet = lirLowerMirType(l, fn_.returnType)
+        let mut externParams: List<LirType> = []
+        for id in fn_.params {
+            let loc = mirFunctionLocal(fn_, id)
+            if loc.id < 0 {
+                continue
+            }
+            externParams.push(lirLowerMirType(l, loc.typ))
+        }
+        lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(name, externRet, externParams, false))
+        return LirLowerResult {module: l.out, diagnostics: l.diagnostics}
     }
     if fn_.blocks.len() == 0 {
         lirLowerError(l, LirDiagUnsupported, "MIR function has no blocks", name)
@@ -2067,8 +2079,12 @@ fn lirMirProjectionLeafType(projections: List<MirProjection>) -> String {
     projections[projections.len() - 1].typ
 }
 fn lirLowerMirCall(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.calleeKind == MirCalleeIndirect {
+        lirLowerMirIndirectCall(l, instr)
+        return
+    }
     if instr.calleeKind != MirCalleeFn {
-        lirLowerError(l, LirDiagUnsupported, "indirect calls are not implemented in LIR Proto lowering", "call")
+        lirLowerError(l, LirDiagUnsupported, "unsupported MIR callee kind", "call")
         return
     }
     if instr.calleeSymbol == "" {
@@ -2077,7 +2093,13 @@ fn lirLowerMirCall(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
     let callee = lirLookupMirFunction(l.mirModule, instr.calleeSymbol)
     if callee.name == "" {
-        lirLowerError(l, LirDiagUnsupported, "direct call target `" + instr.calleeSymbol + "` is not in this MIR module", "call")
+        // Cross-module direct call: callee body is in another module
+        // (FFI extern, stdlib helper, separately-compiled package).
+        // Infer signature from operand types + dest local type, then
+        // emit a `declare` line and the call. Production does the same
+        // via `runtimeDecls`-style declares for any callee not in the
+        // local module.
+        lirLowerMirCrossModuleCall(l, instr)
         return
     }
     let retType = lirLowerMirType(l, callee.returnType)
@@ -2098,6 +2120,107 @@ fn lirLowerMirCall(l: LirMirFunctionLowerer, instr: MirInstr) {
     l.instrs.push(lirCall(destName, retType, "@" + lirRenderedMirFunctionName(callee), args))
     if instr.hasDest {
         lirStoreMirResult(l, instr.dest, lirOperand(retType, destName), callee.returnType, "call result")
+    }
+}
+// `lirLowerMirCrossModuleCall` handles direct calls whose target is
+// not in the local MIR module. Signature comes from the call site:
+// return type from `instr.dest` local (or void if no dest), param
+// types from each arg's declared type. Declares the symbol via
+// runtimeDecls so the renderer emits a top-level `declare` line.
+fn lirLowerMirCrossModuleCall(l: LirMirFunctionLowerer, instr: MirInstr) {
+    let retType = if instr.hasDest {
+        let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+        if loc.id < 0 {
+            lirLowerError(l, LirDiagInvalidInput, "cross-module call destination local out of range", "call.cross")
+            return
+        }
+        lirLowerMirType(l, loc.typ)
+    } else {
+        lirVoidType()
+    }
+    let mut paramTypes: List<LirType> = []
+    let mut args: List<LirOperand> = []
+    for arg in instr.args {
+        let paramType = lirLowerMirType(l, arg.typ)
+        if lirTypeIsZero(paramType) {
+            lirLowerError(l, LirDiagUnsupported, "cross-module call arg type `" + arg.typ + "` is not implemented", "call.cross")
+            return
+        }
+        let value = lirLowerMirOperand(l, arg, arg.typ, paramType)
+        if value.value == "" {
+            return
+        }
+        paramTypes.push(paramType)
+        args.push(lirOperand(paramType, value.value))
+    }
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(instr.calleeSymbol, retType, paramTypes, false))
+    if lirTypeIsVoid(retType) {
+        l.instrs.push(lirCall("", retType, "@" + instr.calleeSymbol, args))
+        lirCheckVoidMirDestination(l, instr.hasDest, instr.dest, "void call `" + instr.calleeSymbol + "`")
+        return
+    }
+    let destName = if instr.hasDest {
+        lirFresh(l)
+    } else {
+        ""
+    }
+    l.instrs.push(lirCall(destName, retType, "@" + instr.calleeSymbol, args))
+    if instr.hasDest {
+        let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+        lirStoreMirResult(l, instr.dest, lirOperand(retType, destName), loc.typ, "cross-module call result")
+    }
+}
+// `lirLowerMirIndirectCall` handles a call through a function-value
+// operand. The MIR shape: `instr.calleeOperand` evaluates to a
+// closure env ptr (slot 0 = lifted fn ptr, slots 1..N = captures).
+// We load env[0] to get the fn ptr, then call it with env as the
+// implicit first arg. Mirrors production `emitIndirectCall`
+// (mir_generator.go:3995).
+fn lirLowerMirIndirectCall(l: LirMirFunctionLowerer, instr: MirInstr) {
+    let envValue = lirLowerMirOperand(l, instr.calleeOperand, instr.calleeOperand.typ, lirPtrType())
+    if envValue.value == "" {
+        return
+    }
+    let fnPtrReg = lirFresh(l)
+    l.instrs.push(lirLoad(fnPtrReg, lirPtrType(), envValue.value, 0))
+    let retType = if instr.hasDest {
+        let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+        if loc.id < 0 {
+            lirLowerError(l, LirDiagInvalidInput, "indirect call destination local out of range", "call.indirect")
+            return
+        }
+        lirLowerMirType(l, loc.typ)
+    } else {
+        lirVoidType()
+    }
+    let mut args: List<LirOperand> = []
+    args.push(lirOperand(lirPtrType(), envValue.value))
+    for arg in instr.args {
+        let paramType = lirLowerMirType(l, arg.typ)
+        if lirTypeIsZero(paramType) {
+            lirLowerError(l, LirDiagUnsupported, "indirect call arg type `" + arg.typ + "` is not implemented", "call.indirect")
+            return
+        }
+        let value = lirLowerMirOperand(l, arg, arg.typ, paramType)
+        if value.value == "" {
+            return
+        }
+        args.push(lirOperand(paramType, value.value))
+    }
+    if lirTypeIsVoid(retType) {
+        l.instrs.push(lirCall("", retType, fnPtrReg, args))
+        lirCheckVoidMirDestination(l, instr.hasDest, instr.dest, "void indirect call")
+        return
+    }
+    let destName = if instr.hasDest {
+        lirFresh(l)
+    } else {
+        ""
+    }
+    l.instrs.push(lirCall(destName, retType, fnPtrReg, args))
+    if instr.hasDest {
+        let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+        lirStoreMirResult(l, instr.dest, lirOperand(retType, destName), loc.typ, "indirect call result")
     }
 }
 fn lirLowerMirCallArgs(l: LirMirFunctionLowerer, args: List<MirOperand>, callee: MirFunction) -> List<LirOperand> {
