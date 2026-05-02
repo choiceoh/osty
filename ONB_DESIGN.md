@@ -37,6 +37,60 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 23 (Map<K,V> — get / containsKey / remove, 2026-05-02)** —
+> Map의 핵심 lookup 3종을 native lowering. Week 22의 new/insert/len과
+> 결합하면 Map 일상 사용 (캐시, 인덱스, 빈도 카운트)이 fallback 없이
+> 통과.
+>
+> 작동:
+>
+> ```osty
+> let mut m: Map<String, Int> = {:}
+> m.insert("k", 42)
+> match m.get("k") {                  // V? 반환 — Some(42)
+>     Some(x) -> println(x),
+>     None -> println(-1),
+> }
+> println(m.containsKey("k"))         // 1 (Bool, true)
+> m.remove("k")                        // Bool 반환 (찾았는지)
+> println(m.len())                     // 0
+> ```
+>
+> 추가:
+> - 새 런타임 심볼: `runtimeSymMapGet/Contains/Remove` × 5 key kinds
+>   (i64/i1/f64/ptr/string)
+> - `lowerMapGet` — Week 22 scratch 슬롯을 `out_value`로 재사용 →
+>   런타임 호출 → x0 (None=0/Some=1 디스크리미넌트) → dest+0,
+>   scratch 값 → dest+8 (None일 땐 stale이지만 디스크리미넌트로 차단)
+> - `lowerMapContains` / `lowerMapRemove` — `lowerMapBoolReturn` 헬퍼로
+>   공유. 런타임이 bool을 x0로 반환, dest slot에 직접 capture
+> - `mapGet/Contains/RemoveSymbolForKeyKind` 디스패치 테이블
+> - `functionUsesMapValueScratch`이 `IntrinsicMapGet`도 감지해
+>   scratch 슬롯 예약
+>
+> 검증:
+> - E2E binary smoke 4개 (`TestONBBackendBinaryRunsMapGetContainsRemoveOnDarwinARM64`):
+>   map_get_hit / map_get_miss (Some/None 분기), map_contains_int_keys
+>   (Int 키), map_remove_shrinks_len (insert→remove→len)
+> - 기존 fallback 테스트 4개의 sentinel을 `taskGroup(|g| g.spawn(|| 42))`
+>   로 변경 (Map.get은 이제 native라 더 이상 fallback 사유 아님)
+>
+> 한계 (이번 슬라이스에서 명시적으로 보류):
+> - `m.update(k, |v| ...)` — 클로저 + Map.get + Map.set 조합. front
+>   end가 어떻게 lowering하는지에 따라 추가 작업 필요할 수 있음
+> - `m.getOr(k, default)` — IntrinsicMapGetOr 별도
+> - `m.keys()` / `m.values()` — `List<K>` 반환, 미구현
+> - `for (k, v) in m` — Map iterator 미구현
+> - GC pointer_bitmap 정확도는 Week 22 그대로 — pointer-typed values
+>   는 GC false-retain 위험
+>
+> **Tier 1 마무리 상태**: ONB가 일반적인 Osty 코드 패턴의 대부분을
+> native path로 처리. 클로저 (Week 20), 제네릭 함수 (Week 21),
+> Map<K,V> CRUD + len + lookup (Week 22 + 23), 메서드 디스패치 (intrinsic
+> 경유, Week 22), String .len/.isEmpty + Option .isSome/.isNone +
+> List .isEmpty (Week 21) 모두 통과. 남은 Tier 1 잔여물은 작은 String
+> 메서드 (.split/.contains/.compare) 정도로 follow-up.
+>
 > **Slice A2 Week 22 (Map<K,V> — new + insert + len, 2026-05-02)** —
 > Map가 native path로 들어옴. 가장 흔한 패턴 `Map<String, Int>`,
 > `Map<Int, Int>` 의 생성·삽입·길이 쿼리가 fallback 없이 통과.

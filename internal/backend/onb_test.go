@@ -1494,6 +1494,100 @@ func TestONBBackendBinaryRunsMapNewInsertLenOnDarwinARM64(t *testing.T) {
 	}
 }
 
+// TestONBBackendBinaryRunsMapGetContainsRemoveOnDarwinARM64 covers
+// Phase A2 Week 23: Map lookup (`m.get(k) -> V?`), membership
+// (`m.containsKey(k) -> Bool`), and removal (`m.remove(k) -> Bool`).
+// All three lean on the per-function map scratch slot from Week 22 —
+// `get` writes the value through it, `contains/remove` skip the
+// scratch but reuse the key-kind dispatch table.
+//
+// The Option<V> construction for `get` is straight-line: the runtime
+// returns 0/1 in x0 (which conveniently doubles as the None/Some
+// discriminant), and the value lands in scratch on Some hits — the
+// lowering stores both halves unconditionally. None-hits leave a
+// stale payload in dest+8 but readers gated by the discriminant
+// never observe it.
+func TestONBBackendBinaryRunsMapGetContainsRemoveOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("ONB Map<K,V> get/contains/remove smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	cases := []struct {
+		name, src, want string
+	}{
+		{
+			name: "map_get_hit",
+			src: `fn main() {
+    let mut m: Map<String, Int> = {:}
+    m.insert("k", 42)
+    let v = m.get("k")
+    match v {
+        Some(x) -> println(x),
+        None -> println(-1),
+    }
+}`,
+			want: "42\n",
+		},
+		{
+			name: "map_get_miss",
+			src: `fn main() {
+    let mut m: Map<String, Int> = {:}
+    m.insert("k", 42)
+    let v = m.get("missing")
+    match v {
+        Some(x) -> println(x),
+        None -> println(-1),
+    }
+}`,
+			want: "-1\n",
+		},
+		{
+			name: "map_contains_int_keys",
+			src: `fn main() {
+    let mut m: Map<Int, Int> = {:}
+    m.insert(7, 70)
+    println(m.containsKey(7))
+    println(m.containsKey(99))
+}`,
+			want: "1\n0\n",
+		},
+		{
+			name: "map_remove_shrinks_len",
+			src: `fn main() {
+    let mut m: Map<Int, Int> = {:}
+    m.insert(1, 10)
+    m.insert(2, 20)
+    println(m.len())
+    m.remove(1)
+    println(m.len())
+}`,
+			want: "2\n1\n",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(onb.EnvStrict, "1")
+			req := newBackendRequest(t, EmitBinary, tc.src)
+			req.Layout.Target = "aarch64-apple-darwin"
+			result, err := ONBBackend{}.Emit(context.Background(), req)
+			if err != nil {
+				t.Fatalf("ONBBackend.Emit returned error: %v", err)
+			}
+			out, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+			if err != nil {
+				t.Fatalf("binary returned error: %v\n%s", err, out)
+			}
+			if got := string(out); got != tc.want {
+				t.Fatalf("binary output = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestONBBackendBinaryRunsStringAndListOnDarwinARM64 exercises Phase A2's
 // runtime-call slice: String concatenation and `List<Int>` push/len. These
 // shapes lower to `bl _osty_rt_strings_Concat`, `bl _osty_rt_list_new`,
@@ -1881,10 +1975,11 @@ func TestONBBackendFallsBackToLLVMOnUnsupportedShape(t *testing.T) {
 	onbDevTestEnv(t, false, false)
 
 	req := newBackendRequest(t, EmitObject, `fn main() {
-    let mut m: Map<String, Int> = {:}
-    m.insert("a", 1)
-    let v = m.get("a")
-    println(v.isSome())
+    let v = taskGroup(|g| {
+        let h = g.spawn(|| 42)
+        h.join()
+    })
+    println(v)
 }`)
 	req.Layout.Target = "aarch64-apple-darwin"
 	fallbackArtifacts := req.Artifacts(NameLLVM)
@@ -1924,10 +2019,11 @@ func TestONBBackendStrictModeSurfacesShapeError(t *testing.T) {
 	onbDevTestEnv(t, true, false)
 
 	req := newBackendRequest(t, EmitObject, `fn main() {
-    let mut m: Map<String, Int> = {:}
-    m.insert("a", 1)
-    let v = m.get("a")
-    println(v.isSome())
+    let v = taskGroup(|g| {
+        let h = g.spawn(|| 42)
+        h.join()
+    })
+    println(v)
 }`)
 	req.Layout.Target = "aarch64-apple-darwin"
 	fake := &recordingBackend{name: NameLLVM}
@@ -1947,10 +2043,11 @@ func TestONBBackendASMEmitDoesNotFallback(t *testing.T) {
 	onbDevTestEnv(t, false, false)
 
 	req := newBackendRequest(t, EmitASM, `fn main() {
-    let mut m: Map<String, Int> = {:}
-    m.insert("a", 1)
-    let v = m.get("a")
-    println(v.isSome())
+    let v = taskGroup(|g| {
+        let h = g.spawn(|| 42)
+        h.join()
+    })
+    println(v)
 }`)
 	req.Layout.Target = "aarch64-apple-darwin"
 	fake := &recordingBackend{name: NameLLVM}
@@ -1989,10 +2086,11 @@ func TestONBBackendTimingLogsFallback(t *testing.T) {
 	onbDevTestEnv(t, false, true)
 
 	req := newBackendRequest(t, EmitObject, `fn main() {
-    let mut m: Map<String, Int> = {:}
-    m.insert("a", 1)
-    let v = m.get("a")
-    println(v.isSome())
+    let v = taskGroup(|g| {
+        let h = g.spawn(|| 42)
+        h.join()
+    })
+    println(v)
 }`)
 	req.Layout.Target = "aarch64-apple-darwin"
 	fake := &recordingBackend{
