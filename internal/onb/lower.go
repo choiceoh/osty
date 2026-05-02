@@ -9,9 +9,17 @@ import (
 )
 
 // argRegs is the AAPCS64 integer-argument register sequence. Phase A2 caps
-// at 8 arguments — anything beyond that needs stack passing which the dev
-// backend defers to a later slice.
+// at 8 register slots — anything beyond that needs stack passing which the
+// dev backend defers to a later slice. Small structs (≤16B) consume two
+// adjacent register slots (e.g. {x0, x1}), so a function that takes a
+// `Point` plus a scalar uses three slots, not two.
 var argRegs = []Reg{RegX0, RegX1, RegX2, RegX3, RegX4, RegX5, RegX6, RegX7}
+
+// abiSmallStructRegLimit is the AAPCS64 cutoff for "small struct" handling:
+// up to two integer registers. Sizes ≤ 8 bytes consume one register, sizes
+// 9–16 bytes consume two adjacent registers, anything bigger goes through
+// indirect (sret-style) passing which Phase A2 doesn't lower yet.
+const abiSmallStructRegLimit = 2
 
 // Runtime symbol names. ONB calls into the same `osty_runtime.c` the LLVM
 // backend bundles, so these strings have to match the C function names
@@ -97,16 +105,28 @@ func (s *lowerState) lowerFunction(fn *mir.Function) (Function, error) {
 			return Function{}, fmt.Errorf("%w: main return type %s is outside phase 1", ErrUnsupportedShape, fn.ReturnType)
 		}
 	} else {
-		if len(fn.Params) > len(argRegs) {
-			return Function{}, fmt.Errorf("%w: %s takes %d params (max %d)", ErrUnsupportedShape, fn.Name, len(fn.Params), len(argRegs))
-		}
+		// Walk the parameter list with a register-cursor: each scalar
+		// param consumes one register, each small struct consumes one
+		// or two. Anything beyond x7 fails the guard until stack-arg
+		// passing lands in a future slice. abiRegSlots reads the
+		// module's StructLayout via s.mod, so the guard works even
+		// before s.fn is set below.
+		regCursor := 0
 		for _, paramID := range fn.Params {
 			loc := lookupLocal(fn, paramID)
-			if loc == nil || !isABIScalarType(loc.Type) {
-				return Function{}, fmt.Errorf("%w: %s parameter %v has non-scalar type", ErrUnsupportedShape, fn.Name, paramID)
+			if loc == nil {
+				return Function{}, fmt.Errorf("%w: %s parameter %v missing local entry", ErrUnsupportedShape, fn.Name, paramID)
 			}
+			slots, ok := s.abiRegSlots(loc.Type)
+			if !ok || slots == 0 {
+				return Function{}, fmt.Errorf("%w: %s parameter %s has type %s outside ABI", ErrUnsupportedShape, fn.Name, loc.Name, loc.Type)
+			}
+			if regCursor+slots > len(argRegs) {
+				return Function{}, fmt.Errorf("%w: %s parameter %s would overflow argument registers", ErrUnsupportedShape, fn.Name, loc.Name)
+			}
+			regCursor += slots
 		}
-		if !isABIScalarType(fn.ReturnType) && fn.ReturnType != mir.TUnit {
+		if fn.ReturnType != mir.TUnit && !s.isABIPassableType(fn.ReturnType) {
 			return Function{}, fmt.Errorf("%w: %s return type %s is outside phase 1", ErrUnsupportedShape, fn.Name, fn.ReturnType)
 		}
 	}
@@ -179,7 +199,18 @@ func (s *lowerState) assignLocalSlots(fn *mir.Function) error {
 	for _, paramID := range fn.Params {
 		read[paramID] = true
 	}
-	delete(read, fn.ReturnLocal)
+	// Scalar / Unit returns travel through x0 — no stack slot needed
+	// for `$ret` in the common case, and skipping it keeps leaf helpers
+	// frame-less. Small struct returns are different: even though no
+	// instruction *reads* $ret (it's purely a write target), the
+	// AggregateRV writer needs a slot to stamp each field into, and
+	// the epilogue needs that same slot to load slot+0 → x0 and
+	// slot+8 → x1. Force the slot in by inserting $ret into `read`.
+	if fn.ReturnType == mir.TUnit || isABIScalarType(fn.ReturnType) {
+		delete(read, fn.ReturnLocal)
+	} else {
+		read[fn.ReturnLocal] = true
+	}
 	s.localSlots = map[mir.LocalID]int64{}
 	varargBase := int64(0)
 	if s.needsVararg {
@@ -325,25 +356,42 @@ func (s *lowerState) lowerBranchTerm(term *mir.BranchTerm) ([]Instr, error) {
 	return out, nil
 }
 
-// paramShuffle copies every read parameter from its AAPCS64 argument register
-// into its assigned stack slot. Parameters that are never read get no slot
-// and no shuffle — their argument register is simply left untouched.
+// paramShuffle copies every read parameter from its AAPCS64 argument
+// register(s) into its assigned stack slot. Scalar params consume one
+// register; small structs consume one or two adjacent registers, with
+// register N landing at slot+N*8 to match the field-projection offsets
+// the rest of the body expects. Parameters that are never read get no
+// slot, but the register cursor still advances so subsequent params
+// see the right register.
 func (s *lowerState) paramShuffle(fn *mir.Function) []Instr {
 	var out []Instr
-	for i, paramID := range fn.Params {
-		slot, ok := s.localSlots[paramID]
+	regCursor := 0
+	for _, paramID := range fn.Params {
+		loc := lookupLocal(fn, paramID)
+		if loc == nil {
+			continue
+		}
+		slots, ok := s.abiRegSlots(loc.Type)
 		if !ok {
 			continue
 		}
-		out = append(out, &Store64Stack{Src: argRegs[i], Offset: slot})
+		slot, hasSlot := s.localSlots[paramID]
+		for i := 0; i < slots; i++ {
+			if hasSlot {
+				out = append(out, &Store64Stack{Src: argRegs[regCursor+i], Offset: slot + int64(i)*8})
+			}
+		}
+		regCursor += slots
 	}
 	return out
 }
 
-// epilogue emits the function exit sequence. main returns process exit code
-// 0 in w0; user functions load their _return slot into x0 (Int return) or
-// nothing (Unit return) before falling through to Ret, which itself emits
-// the FP/LR restore + ret.
+// epilogue emits the function exit sequence. main returns process exit
+// code 0 in w0; user functions load their _return slot into x0 (and x1
+// for small struct returns) or nothing (Unit return) before falling
+// through to Ret, which itself emits the FP/LR restore + ret. Small
+// structs (≤ 16B) follow AAPCS64's 2-register return convention: slot+0
+// → x0, slot+8 → x1.
 func (s *lowerState) epilogue(fn *mir.Function) []Instr {
 	if fn.Name == "main" {
 		return []Instr{&MovImm32{Dst: RegW0, Imm: 0}, &Ret{}}
@@ -351,21 +399,29 @@ func (s *lowerState) epilogue(fn *mir.Function) []Instr {
 	if fn.ReturnType == mir.TUnit {
 		return []Instr{&Ret{}}
 	}
-	if slot, ok := s.localSlots[fn.ReturnLocal]; ok {
+	slot, ok := s.localSlots[fn.ReturnLocal]
+	if !ok {
+		// _return was never read locally. This path is rarely exercised
+		// today — the front end usually emits Assign _return := <expr>
+		// followed by ReturnTerm, which marks the local as both written
+		// and read — but we keep a safe default so the regression is
+		// loud if it changes.
 		return []Instr{
-			&Load64Stack{Dst: RegX0, Offset: slot},
+			&MovImm64{Dst: RegX0, Imm: 0},
 			&Ret{},
 		}
 	}
-	// _return was never read locally (e.g. body is a single Bin assigned to
-	// _return — which is itself a write, not a read). Allocate a slot
-	// retroactively and load it. This path is unreachable today because
-	// every Int-returning helper writes to _return and then ReturnTerm —
-	// but we keep an explicit error so the regression is loud if it changes.
-	return []Instr{
-		&MovImm64{Dst: RegX0, Imm: 0}, // safe default; caller will see 0
-		&Ret{},
+	slots, _ := s.abiRegSlots(fn.ReturnType)
+	if slots == 0 {
+		slots = 1
 	}
+	retRegs := []Reg{RegX0, RegX1}
+	out := make([]Instr, 0, slots+1)
+	for i := 0; i < slots && i < len(retRegs); i++ {
+		out = append(out, &Load64Stack{Dst: retRegs[i], Offset: slot + int64(i)*8})
+	}
+	out = append(out, &Ret{})
+	return out
 }
 
 func blockLabel(id mir.BlockID) string {
@@ -482,6 +538,46 @@ func isABIScalarType(t mir.Type) bool {
 	return t == mir.TInt || t == mir.TBool || t == mir.TString
 }
 
+// abiRegSlots reports how many AAPCS64 integer-argument registers an ABI
+// value of type t consumes. Scalars are 1, small structs (≤ 16B with all
+// scalar fields) are ceil(size/8), Unit is 0 (callers should skip), and
+// anything else returns 0 with ok=false to signal the lowerer should bail.
+func (s *lowerState) abiRegSlots(t mir.Type) (int, bool) {
+	if t == mir.TUnit {
+		return 0, true
+	}
+	if isABIScalarType(t) {
+		return 1, true
+	}
+	if layout := s.lookupStructLayout(t); layout != nil {
+		// Confirm every field is scalar; mixed structs need a different
+		// strategy (HFA / sret) the dev backend doesn't implement.
+		for _, f := range layout.Fields {
+			if !isABIScalarType(f.Type) {
+				return 0, false
+			}
+		}
+		n := len(layout.Fields)
+		if n == 0 || n > abiSmallStructRegLimit {
+			return 0, false
+		}
+		return n, true
+	}
+	return 0, false
+}
+
+// isABIPassableType reports whether t is something the ABI guards can
+// accept as a parameter or return type. Scalars and small structs are in;
+// builtin generics (List<T>, Map<K,V>, etc.) and large structs stay out
+// until a follow-up slice teaches the lowerer about indirect passing.
+func (s *lowerState) isABIPassableType(t mir.Type) bool {
+	if isABIScalarType(t) {
+		return true
+	}
+	_, ok := s.abiRegSlots(t)
+	return ok
+}
+
 // lookupStructLayout resolves a NamedType to its `mod.Layouts.Structs`
 // entry. Returns nil for non-named types or layouts the front end didn't
 // register. The lowerer uses this to size struct slots and to compute
@@ -578,10 +674,13 @@ func mirTypeToDebugKind(t mir.Type) DebugTypeKind {
 // and locals without slots are omitted so DWARF doesn't expose synthetic
 // MIR plumbing to the developer's `frame variable` view.
 //
-// Today only Int locals get DebugTypeInt — String / Bool are surfaced as
-// DebugTypeNone and the DWARF encoder skips them. Adding richer type
-// support is a follow-up that grows the DebugTypeKind enum and the type
-// DIE list in `dwarf.go` together.
+// Scalars (Int, Bool, String) get their primitive DebugTypeKind. Small
+// structs (≤ 16B with all-scalar fields) get DebugTypeStruct plus the
+// struct's name and field list, which the macho writer threads into a
+// DW_TAG_structure_type + DW_TAG_member tree so lldb can pretty-print
+// `frame variable` rows like `(Point) p = (x = 3, y = 4)`. Mixed or
+// composite structs collapse to DebugTypeNone so they stay invisible
+// rather than confusing the debugger with half-described aggregates.
 func (s *lowerState) debugLocals(fn *mir.Function) []DebugLocal {
 	if fn == nil || s.localSlots == nil {
 		return nil
@@ -595,6 +694,10 @@ func (s *lowerState) debugLocals(fn *mir.Function) []DebugLocal {
 		if !ok {
 			continue
 		}
+		if dl, ok := s.debugLocalForStruct(loc, slot); ok {
+			out = append(out, dl)
+			continue
+		}
 		kind := mirTypeToDebugKind(loc.Type)
 		if kind == DebugTypeNone {
 			continue
@@ -602,6 +705,37 @@ func (s *lowerState) debugLocals(fn *mir.Function) []DebugLocal {
 		out = append(out, DebugLocal{Name: loc.Name, SlotOffset: slot, TypeKind: kind})
 	}
 	return out
+}
+
+// debugLocalForStruct produces a DebugLocal entry for a small struct
+// local. Returns ok=false when the local isn't a recognised small
+// struct so the caller can fall through to the scalar path. Only
+// all-scalar small structs surface — anything with a non-scalar field
+// would need either a recursive struct DIE or pointer-DIE plumbing
+// neither of which the dev backend ships yet.
+func (s *lowerState) debugLocalForStruct(loc *mir.Local, slot int64) (DebugLocal, bool) {
+	layout := s.lookupStructLayout(loc.Type)
+	if layout == nil {
+		return DebugLocal{}, false
+	}
+	if len(layout.Fields) == 0 {
+		return DebugLocal{}, false
+	}
+	fields := make([]DebugStructField, 0, len(layout.Fields))
+	for _, f := range layout.Fields {
+		kind := mirTypeToDebugKind(f.Type)
+		if kind == DebugTypeNone {
+			return DebugLocal{}, false
+		}
+		fields = append(fields, DebugStructField{Name: f.Name, FieldKind: kind})
+	}
+	return DebugLocal{
+		Name:         loc.Name,
+		SlotOffset:   slot,
+		TypeKind:     DebugTypeStruct,
+		StructName:   layout.Name,
+		StructFields: fields,
+	}, true
 }
 
 // allocateReturnSlot makes room for the return local on functions that didn't
@@ -724,29 +858,97 @@ func (s *lowerState) lowerComparisonAssign(rv *mir.BinaryRV, cond Cond, destSlot
 
 // lowerCall emits an AAPCS64 direct call: each argument materialises into
 // x0..x7 in order, then `bl _<name>`, then (if the call has a destination
-// place backed by a slot) the return value in x0 is stored into that slot.
-// FnRef-only — indirect calls and non-Int parameter types fall back.
+// place backed by a slot) the return value(s) in x0/x1 are stored into
+// that slot. Small structs (≤ 16B) consume two adjacent argument registers
+// and, on return, the receiver captures both x0 and x1 into slot+0/+8.
+// FnRef-only — indirect calls and parameter types outside ABI fall back.
 func (s *lowerState) lowerCall(fn *mir.Function, instr *mir.CallInstr) ([]Instr, error) {
 	ref, ok := instr.Callee.(*mir.FnRef)
 	if !ok {
 		return nil, fmt.Errorf("%w: indirect call", ErrUnsupportedShape)
 	}
-	if len(instr.Args) > len(argRegs) {
-		return nil, fmt.Errorf("%w: %d args (max %d)", ErrUnsupportedShape, len(instr.Args), len(argRegs))
-	}
 	var out []Instr
-	for i, arg := range instr.Args {
-		mat, err := s.materialiseOperand(arg, argRegs[i])
-		if err != nil {
-			return nil, err
+	regCursor := 0
+	for _, arg := range instr.Args {
+		argType := arg.Type()
+		slots, ok := s.abiRegSlots(argType)
+		if !ok {
+			return nil, fmt.Errorf("%w: call argument has type %s outside ABI", ErrUnsupportedShape, argType)
 		}
-		out = append(out, mat...)
+		if regCursor+slots > len(argRegs) {
+			return nil, fmt.Errorf("%w: call to %s needs more than %d argument registers", ErrUnsupportedShape, ref.Symbol, len(argRegs))
+		}
+		if slots > 1 {
+			// Multi-register struct argument. Today's slow-path only
+			// supports a whole-struct Copy/Move out of a stack slot —
+			// FieldProj-of-struct-arg or struct-literal-as-arg are
+			// not lowered yet.
+			mat, err := s.materialiseStructOperand(arg, argRegs[regCursor:regCursor+slots])
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, mat...)
+		} else {
+			mat, err := s.materialiseOperand(arg, argRegs[regCursor])
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, mat...)
+		}
+		regCursor += slots
 	}
 	out = append(out, &BranchLink{Symbol: ref.Symbol})
 	if instr.Dest != nil && !instr.Dest.HasProjections() {
 		if slot, ok := s.localSlots[instr.Dest.Local]; ok {
-			out = append(out, &Store64Stack{Src: RegX0, Offset: slot})
+			retSlots, _ := s.abiRegSlots(s.destType(instr.Dest.Local))
+			if retSlots == 0 {
+				retSlots = 1
+			}
+			retRegs := []Reg{RegX0, RegX1}
+			for i := 0; i < retSlots && i < len(retRegs); i++ {
+				out = append(out, &Store64Stack{Src: retRegs[i], Offset: slot + int64(i)*8})
+			}
 		}
+	}
+	return out, nil
+}
+
+// destType returns the MIR type of a local in the current function. The
+// caller already knows the local is a Dest of a CallInstr, so a missing
+// entry is only possible for malformed MIR — we fall back to TInt so the
+// 1-register capture path keeps working.
+func (s *lowerState) destType(id mir.LocalID) mir.Type {
+	if loc := lookupLocal(s.fn, id); loc != nil {
+		return loc.Type
+	}
+	return mir.TInt
+}
+
+// materialiseStructOperand loads a whole-struct operand into N consecutive
+// argument registers. Slot+0 lands in regs[0], slot+8 in regs[1], etc.
+// Only Copy/Move from a stack-slot-backed local with no projection are
+// handled; FieldProj-of-struct or struct-literal-as-arg patterns return
+// the unsupported sentinel so the LLVM fallback owns them.
+func (s *lowerState) materialiseStructOperand(op mir.Operand, regs []Reg) ([]Instr, error) {
+	var place mir.Place
+	switch o := op.(type) {
+	case *mir.CopyOp:
+		place = o.Place
+	case *mir.MoveOp:
+		place = o.Place
+	default:
+		return nil, fmt.Errorf("%w: struct argument operand %T", ErrUnsupportedShape, op)
+	}
+	if place.HasProjections() {
+		return nil, fmt.Errorf("%w: struct argument with projection", ErrUnsupportedShape)
+	}
+	slot, ok := s.localSlots[place.Local]
+	if !ok {
+		return nil, fmt.Errorf("%w: struct argument from local%d without slot", ErrUnsupportedShape, place.Local)
+	}
+	out := make([]Instr, 0, len(regs))
+	for i, r := range regs {
+		out = append(out, &Load64Stack{Dst: r, Offset: slot + int64(i)*8})
 	}
 	return out, nil
 }

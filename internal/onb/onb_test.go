@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/osty/osty/internal/ir"
 	"github.com/osty/osty/internal/mir"
 )
 
@@ -976,5 +977,379 @@ func TestEmitObjectWritesMachOArithRelocations(t *testing.T) {
 	}
 	if !sawPrintf {
 		t.Fatalf("Mach-O symbols = %+v, want _printf for vararg println", f.Symtab.Syms)
+	}
+}
+
+// pointModule builds a MIR module with three functions exercising
+// AAPCS64 small-struct passing:
+//
+//   - `make() -> Point` — small struct return, populates {x0, x1}.
+//   - `px(p: Point) -> Int` — small struct param, reads field via
+//     FieldProj on the param local.
+//   - `main()` — calls `make` to capture a Point return value into a
+//     local, then passes that local to `px` to drive both the struct
+//     return capture and struct argument materialisation paths.
+//
+// The fixture mirrors the MIR shape the front end produces for:
+//
+//	struct Point { x: Int, y: Int }
+//	fn make() -> Point { Point { x: 5, y: 6 } }
+//	fn px(p: Point) -> Int { p.x }
+//	fn main() { let p = make(); println(px(p)) }
+func pointModule() *mir.Module {
+	pointT := &ir.NamedType{Name: "Point"}
+	pointLayout := &mir.StructLayout{
+		Name: "Point",
+		Fields: []mir.FieldLayout{
+			{Index: 0, Name: "x", Type: mir.TInt},
+			{Index: 1, Name: "y", Type: mir.TInt},
+		},
+	}
+
+	makeFn := &mir.Function{
+		Name:        "make",
+		ReturnType:  pointT,
+		ReturnLocal: 0,
+		Entry:       0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "$ret", Type: pointT, IsReturn: true},
+		},
+	}
+	makeBlock := makeFn.NewBlock(mir.Span{})
+	makeFn.Block(makeBlock).Instrs = []mir.Instr{
+		&mir.AssignInstr{
+			Dest: mir.Place{Local: 0},
+			Src: &mir.AggregateRV{
+				Kind: mir.AggStruct,
+				T:    pointT,
+				Fields: []mir.Operand{
+					&mir.ConstOp{Const: &mir.IntConst{Value: 5, T: mir.TInt}, T: mir.TInt},
+					&mir.ConstOp{Const: &mir.IntConst{Value: 6, T: mir.TInt}, T: mir.TInt},
+				},
+			},
+		},
+	}
+	makeFn.Block(makeBlock).SetTerminator(&mir.ReturnTerm{})
+
+	pxFn := &mir.Function{
+		Name:        "px",
+		ReturnType:  mir.TInt,
+		ReturnLocal: 0,
+		Entry:       0,
+		Params:      []mir.LocalID{1},
+		Locals: []*mir.Local{
+			{ID: 0, Name: "$ret", Type: mir.TInt, IsReturn: true},
+			{ID: 1, Name: "p", Type: pointT},
+		},
+	}
+	pxBlock := pxFn.NewBlock(mir.Span{})
+	pxFn.Block(pxBlock).Instrs = []mir.Instr{
+		&mir.AssignInstr{
+			Dest: mir.Place{Local: 0},
+			Src: &mir.UseRV{
+				Op: &mir.CopyOp{
+					Place: mir.Place{
+						Local:       1,
+						Projections: []mir.Projection{&mir.FieldProj{Index: 0, Type: mir.TInt}},
+					},
+					T: mir.TInt,
+				},
+			},
+		},
+	}
+	pxFn.Block(pxBlock).SetTerminator(&mir.ReturnTerm{})
+
+	mainFn := &mir.Function{
+		Name:        "main",
+		ReturnType:  mir.TUnit,
+		ReturnLocal: 0,
+		Entry:       0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "$ret", Type: mir.TUnit, IsReturn: true},
+			{ID: 1, Name: "p", Type: pointT},
+			{ID: 2, Name: "n", Type: mir.TInt},
+		},
+	}
+	mainBlock := mainFn.NewBlock(mir.Span{})
+	mainFn.Block(mainBlock).Instrs = []mir.Instr{
+		&mir.CallInstr{
+			Dest:   &mir.Place{Local: 1},
+			Callee: &mir.FnRef{Symbol: "make", Type: pointT},
+		},
+		&mir.CallInstr{
+			Dest:   &mir.Place{Local: 2},
+			Callee: &mir.FnRef{Symbol: "px", Type: mir.TInt},
+			Args: []mir.Operand{
+				&mir.CopyOp{Place: mir.Place{Local: 1}, T: pointT},
+			},
+		},
+		&mir.IntrinsicInstr{
+			Kind: mir.IntrinsicPrintln,
+			Args: []mir.Operand{&mir.CopyOp{Place: mir.Place{Local: 2}, T: mir.TInt}},
+		},
+	}
+	mainFn.Block(mainBlock).SetTerminator(&mir.ReturnTerm{})
+
+	mod := &mir.Module{
+		Functions: []*mir.Function{makeFn, pxFn, mainFn},
+		Layouts:   mir.NewLayoutTable(),
+	}
+	mod.Layouts.Structs["Point"] = pointLayout
+	return mod
+}
+
+func TestLowerMIRStructParamPassesTwoRegistersIntoSlot(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(pointModule(), Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR(pointModule) returned error: %v", err)
+	}
+	var pxFn *Function
+	for i := range program.Functions {
+		if program.Functions[i].Name == "px" {
+			pxFn = &program.Functions[i]
+			break
+		}
+	}
+	if pxFn == nil {
+		t.Fatalf("expected px function in lowered program, got %+v", program.Functions)
+	}
+	instrs := pxFn.Blocks[0].Instrs
+	if len(instrs) < 2 {
+		t.Fatalf("expected at least 2 prologue stores, got %+v", instrs)
+	}
+	first, ok := instrs[0].(*Store64Stack)
+	if !ok || first.Src != RegX0 {
+		t.Fatalf("expected first instr to be Store64Stack{Src=x0}, got %+v", instrs[0])
+	}
+	second, ok := instrs[1].(*Store64Stack)
+	if !ok || second.Src != RegX1 {
+		t.Fatalf("expected second instr to be Store64Stack{Src=x1}, got %+v", instrs[1])
+	}
+	if second.Offset-first.Offset != 8 {
+		t.Fatalf("expected struct param halves to land 8 bytes apart, got first=%d second=%d", first.Offset, second.Offset)
+	}
+}
+
+func TestLowerMIRStructReturnEpilogueLoadsTwoRegisters(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(pointModule(), Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR(pointModule) returned error: %v", err)
+	}
+	var makeFn *Function
+	for i := range program.Functions {
+		if program.Functions[i].Name == "make" {
+			makeFn = &program.Functions[i]
+			break
+		}
+	}
+	if makeFn == nil {
+		t.Fatalf("expected make function, got %+v", program.Functions)
+	}
+	instrs := makeFn.Blocks[0].Instrs
+	var loadX0, loadX1 *Load64Stack
+	for _, instr := range instrs {
+		ld, ok := instr.(*Load64Stack)
+		if !ok {
+			continue
+		}
+		switch ld.Dst {
+		case RegX0:
+			loadX0 = ld
+		case RegX1:
+			loadX1 = ld
+		}
+	}
+	if loadX0 == nil || loadX1 == nil {
+		t.Fatalf("expected struct return epilogue to load x0/x1; instrs=%+v", instrs)
+	}
+	if loadX1.Offset-loadX0.Offset != 8 {
+		t.Fatalf("expected struct return halves 8 bytes apart, got x0@%d x1@%d", loadX0.Offset, loadX1.Offset)
+	}
+}
+
+func TestLowerMIRCallStructArgLoadsTwoRegisters(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(pointModule(), Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR(pointModule) returned error: %v", err)
+	}
+	var mainFn *Function
+	for i := range program.Functions {
+		if program.Functions[i].Name == "main" {
+			mainFn = &program.Functions[i]
+			break
+		}
+	}
+	if mainFn == nil {
+		t.Fatalf("expected main function, got %+v", program.Functions)
+	}
+	instrs := mainFn.Blocks[0].Instrs
+	// Sequence we care about (in order):
+	//   bl _make
+	//   str x0, [sp, #pSlot+0]
+	//   str x1, [sp, #pSlot+8]
+	//   ldr x0, [sp, #pSlot+0]
+	//   ldr x1, [sp, #pSlot+8]
+	//   bl _px
+	//   str x0, [sp, #nSlot]
+	var sawMake, sawPx bool
+	var capX0, capX1 *Store64Stack
+	var loadArg0, loadArg1 *Load64Stack
+	state := "before-make"
+	for _, instr := range instrs {
+		switch v := instr.(type) {
+		case *BranchLink:
+			if v.Symbol == "make" {
+				sawMake = true
+				state = "after-make"
+			}
+			if v.Symbol == "px" {
+				sawPx = true
+			}
+		case *Store64Stack:
+			if state == "after-make" {
+				if v.Src == RegX0 && capX0 == nil {
+					capX0 = v
+					continue
+				}
+				if v.Src == RegX1 && capX1 == nil {
+					capX1 = v
+					state = "before-px"
+				}
+			}
+		case *Load64Stack:
+			if state == "before-px" {
+				if v.Dst == RegX0 && loadArg0 == nil {
+					loadArg0 = v
+					continue
+				}
+				if v.Dst == RegX1 && loadArg1 == nil {
+					loadArg1 = v
+				}
+			}
+		}
+	}
+	if !sawMake || !sawPx {
+		t.Fatalf("expected bl _make and bl _px in main; instrs=%+v", instrs)
+	}
+	if capX0 == nil || capX1 == nil {
+		t.Fatalf("expected struct return capture to store x0/x1 after bl _make; instrs=%+v", instrs)
+	}
+	if loadArg0 == nil || loadArg1 == nil {
+		t.Fatalf("expected struct argument materialisation to load x0/x1 before bl _px; instrs=%+v", instrs)
+	}
+	if capX1.Offset-capX0.Offset != 8 || loadArg1.Offset-loadArg0.Offset != 8 {
+		t.Fatalf("expected 8-byte stride for struct halves; capture x0@%d x1@%d, load x0@%d x1@%d", capX0.Offset, capX1.Offset, loadArg0.Offset, loadArg1.Offset)
+	}
+	if capX0.Offset != loadArg0.Offset {
+		t.Fatalf("struct slot drift between capture and load: capture@%d load@%d", capX0.Offset, loadArg0.Offset)
+	}
+}
+
+func TestLowerMIRStructLocalEmitsDebugStruct(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(pointModule(), Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR(pointModule) returned error: %v", err)
+	}
+	var pxFn *Function
+	for i := range program.Functions {
+		if program.Functions[i].Name == "px" {
+			pxFn = &program.Functions[i]
+			break
+		}
+	}
+	if pxFn == nil {
+		t.Fatalf("expected px function, got %+v", program.Functions)
+	}
+	var pLocal *DebugLocal
+	for i := range pxFn.DebugLocals {
+		if pxFn.DebugLocals[i].Name == "p" {
+			pLocal = &pxFn.DebugLocals[i]
+			break
+		}
+	}
+	if pLocal == nil {
+		t.Fatalf("expected DebugLocal entry for `p`, got %+v", pxFn.DebugLocals)
+	}
+	if pLocal.TypeKind != DebugTypeStruct {
+		t.Fatalf("p TypeKind = %v, want DebugTypeStruct", pLocal.TypeKind)
+	}
+	if pLocal.StructName != "Point" {
+		t.Fatalf("p StructName = %q, want Point", pLocal.StructName)
+	}
+	if len(pLocal.StructFields) != 2 {
+		t.Fatalf("p StructFields = %+v, want 2 fields", pLocal.StructFields)
+	}
+	if pLocal.StructFields[0].Name != "x" || pLocal.StructFields[1].Name != "y" {
+		t.Fatalf("p StructFields names = %+v, want [x y]", pLocal.StructFields)
+	}
+}
+
+func TestEmitObjectIncludesStructDIEForPointModule(t *testing.T) {
+	t.Parallel()
+
+	program, err := LowerMIR(pointModule(), Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"})
+	if err != nil {
+		t.Fatalf("LowerMIR(pointModule) returned error: %v", err)
+	}
+	// Source attribution ensures the DWARF emitter is engaged. Without
+	// a non-zero LineSpan in any block, hasAnySourceLine returns false
+	// and the emitter skips __debug_info entirely.
+	for i := range program.Functions {
+		fn := &program.Functions[i]
+		for j := range fn.Blocks {
+			blk := &fn.Blocks[j]
+			if blk.LineSpans == nil {
+				blk.LineSpans = make([]LineSpan, len(blk.Instrs))
+			}
+			for k := range blk.LineSpans {
+				if blk.LineSpans[k].Line == 0 {
+					blk.LineSpans[k] = LineSpan{Line: 1, Column: 1}
+				}
+			}
+		}
+	}
+	program.SourcePath = "main.osty"
+	obj, err := EmitObject(program)
+	if err != nil {
+		t.Fatalf("EmitObject() returned error: %v", err)
+	}
+	f, err := macho.NewFile(bytes.NewReader(obj))
+	if err != nil {
+		t.Fatalf("macho.NewFile() returned error: %v", err)
+	}
+	infoSec := f.Section("__debug_info")
+	if infoSec == nil {
+		t.Fatal("Mach-O object missing __debug_info section")
+	}
+	infoBytes, err := infoSec.Data()
+	if err != nil {
+		t.Fatalf("infoSec.Data() returned error: %v", err)
+	}
+	strSec := f.Section("__debug_str")
+	if strSec == nil {
+		t.Fatal("Mach-O object missing __debug_str section")
+	}
+	strBytes, err := strSec.Data()
+	if err != nil {
+		t.Fatalf("strSec.Data() returned error: %v", err)
+	}
+	if !bytes.Contains(strBytes, []byte("Point\x00")) {
+		t.Fatalf("expected __debug_str to contain Point\\0; got % x", strBytes)
+	}
+	// dwarfAbbrevStructureType byte appears at the start of a struct
+	// DIE; presence guarantees the encoder reached the struct list path.
+	if !bytes.Contains(infoBytes, []byte{byte(dwarfAbbrevStructureType)}) {
+		t.Fatalf("expected __debug_info to contain DW_TAG_structure_type abbrev marker (% x)", infoBytes)
+	}
+	if !bytes.Contains(infoBytes, []byte{byte(dwarfAbbrevMember)}) {
+		t.Fatalf("expected __debug_info to contain DW_TAG_member abbrev marker (% x)", infoBytes)
 	}
 }
