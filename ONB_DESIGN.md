@@ -37,6 +37,32 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 6 (String concat + List<Int>, 2026-05-02)** — ONB native
+> path가 처음으로 런타임 호출 경로를 사용. `osty_runtime.c` 가 link 단계에
+> 같이 들어오며 다음 패턴이 native로 통과:
+>
+>   - `let name = "world"; println("hello, " + name)` (String concat with local)
+>   - `fn greet(name: String) -> String { "hello, " + name }` (String param/return)
+>   - `let mut v: List<Int> = []; v.push(10); println(v.len())` (list ops)
+>   - `for i in 0..5 { v.push(i) }` (list build via loop)
+>
+> 추가:
+>   - 런타임 심볼: `osty_rt_strings_Concat`, `osty_rt_list_new`,
+>     `osty_rt_list_push_i64`, `osty_rt_list_len` — 모두 `BranchLink`로 호출
+>   - `materialiseOperand`가 `StringConst` → `LoadCStringAddress` 경로 추가
+>   - `lowerStringConcatAssign`: `BinaryAdd` + `T == TString` → 두 args를
+>     x0/x1에 띄우고 runtime concat 호출, 결과 ptr를 dest slot에 저장
+>   - `lowerAggregateAssign`: 빈 list literal → `osty_rt_list_new`
+>   - `lowerListPush` / `lowerListLen`: 새 intrinsic dispatch
+>   - `lowerPrintln`이 String local도 처리 (`puts(string ptr)` 경로)
+>   - `LoadCStringAddress`가 임의 X register dst 지원 (이전엔 x0 only)
+>   - `isABIScalarType` helper로 user fn param/return을 Int/Bool/String 모두 허용
+>   - Backend가 매 빌드에 `EnsureRuntimeObject` 호출해서 runtime.o를 link 인자로 추가
+>
+> 부수 (직전 Week 5 cleanup): `_ = fnStart` / `_ = dwarfSegmentSections` 제거,
+> `functionPrologueWords`를 lir.go로 이동 (single source of truth),
+> Mach-O 세그먼트/섹션 이름 상수화.
+>
 > **Slice A2 Week 5 (DWARF .debug_line, 2026-05-02)** — ONB가 처음으로 디버그
 > 메타데이터를 emit. `__debug_line` 섹션이 Mach-O `__DWARF` 세그먼트로 들어감.
 > `dwarfdump --debug-line foo.o`가 정상 파싱하며 PC→source `<file>:<line>:<col>`

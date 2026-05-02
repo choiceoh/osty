@@ -323,3 +323,19 @@ func functionNeedsStackArgs(fn Function) bool {
 	}
 	return false
 }
+
+// functionPrologueWords returns the number of 4-byte prologue instructions
+// the encoder inserts at the start of a function. Lives next to its
+// frame-size siblings so any future change to the prologue layout is
+// expressed in one place — both the Mach-O encoder (which emits the
+// prologue) and the DWARF line emitter (which has to step past it for
+// PC→source rows) read this single source of truth.
+func functionPrologueWords(fn Function) int {
+	if functionFrameSize(fn) == 0 {
+		return 0
+	}
+	if functionFPOffset(fn) < 0 {
+		return 2 // stp x29, x30, [sp, #-16]!  +  mov x29, sp
+	}
+	return 3 // sub sp, sp, #N  +  stp x29, x30, [sp, #N-16]  +  add x29, sp, #N-16
+}

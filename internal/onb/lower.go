@@ -11,6 +11,17 @@ import (
 // backend defers to a later slice.
 var argRegs = []Reg{RegX0, RegX1, RegX2, RegX3, RegX4, RegX5, RegX6, RegX7}
 
+// Runtime symbol names. ONB calls into the same `osty_runtime.c` the LLVM
+// backend bundles, so these strings have to match the C function names
+// exactly. The Mach-O `bl` encoder prepends the leading underscore for
+// darwin's symbol mangling.
+const (
+	runtimeSymStringConcat = "osty_rt_strings_Concat"
+	runtimeSymListNew      = "osty_rt_list_new"
+	runtimeSymListPushI64  = "osty_rt_list_push_i64"
+	runtimeSymListLen      = "osty_rt_list_len"
+)
+
 // LowerMIR lowers the supported MIR slice into ONB's own LIR. Phase 1.0
 // handled hello world; Phase A2 Week 1 added local Int variables and binary
 // arithmetic; Phase A2 Week 2 introduces user-defined functions with up to
@@ -88,11 +99,11 @@ func (s *lowerState) lowerFunction(fn *mir.Function) (Function, error) {
 		}
 		for _, paramID := range fn.Params {
 			loc := lookupLocal(fn, paramID)
-			if loc == nil || loc.Type != mir.TInt {
-				return Function{}, fmt.Errorf("%w: %s parameter %v is not Int", ErrUnsupportedShape, fn.Name, paramID)
+			if loc == nil || !isABIScalarType(loc.Type) {
+				return Function{}, fmt.Errorf("%w: %s parameter %v has non-scalar type", ErrUnsupportedShape, fn.Name, paramID)
 			}
 		}
-		if fn.ReturnType != mir.TInt && fn.ReturnType != mir.TUnit {
+		if !isABIScalarType(fn.ReturnType) && fn.ReturnType != mir.TUnit {
 			return Function{}, fmt.Errorf("%w: %s return type %s is outside phase 1", ErrUnsupportedShape, fn.Name, fn.ReturnType)
 		}
 	}
@@ -379,7 +390,7 @@ func (s *lowerState) lowerAssign(fn *mir.Function, instr *mir.AssignInstr) ([]In
 	// take the slot if there is one.
 	slot, hasSlot := s.localSlots[instr.Dest.Local]
 	if !hasSlot {
-		if instr.Dest.Local == fn.ReturnLocal && fn.ReturnType == mir.TInt {
+		if instr.Dest.Local == fn.ReturnLocal && isABIScalarType(fn.ReturnType) {
 			// allocate a synthetic slot at frame's tail
 			slot = s.allocateReturnSlot(fn)
 			hasSlot = true
@@ -397,9 +408,36 @@ func (s *lowerState) lowerAssign(fn *mir.Function, instr *mir.AssignInstr) ([]In
 		return append(mat, &Store64Stack{Src: RegX9, Offset: slot}), nil
 	case *mir.BinaryRV:
 		return s.lowerBinaryAssign(rv, slot)
+	case *mir.AggregateRV:
+		return s.lowerAggregateAssign(rv, slot)
 	default:
 		return nil, fmt.Errorf("%w: rvalue %T is outside phase 1", ErrUnsupportedShape, instr.Src)
 	}
+}
+
+// lowerAggregateAssign currently covers only the empty-list literal
+// (`let v: List<Int> = []`). The runtime allocates the list eagerly via
+// `osty_rt_list_new`; future slices will extend this to non-empty lists,
+// tuples, structs, and enum variants.
+func (s *lowerState) lowerAggregateAssign(rv *mir.AggregateRV, destSlot int64) ([]Instr, error) {
+	if rv.Kind != mir.AggList {
+		return nil, fmt.Errorf("%w: aggregate kind %v", ErrUnsupportedShape, rv.Kind)
+	}
+	if len(rv.Fields) != 0 {
+		return nil, fmt.Errorf("%w: non-empty list literal", ErrUnsupportedShape)
+	}
+	return []Instr{
+		&BranchLink{Symbol: runtimeSymListNew},
+		&Store64Stack{Src: RegX0, Offset: destSlot},
+	}, nil
+}
+
+// isABIScalarType reports whether a MIR type fits cleanly in one AAPCS64
+// integer register. Phase A2 accepts Int (i64), Bool (i1), and String
+// (ptr). Lists and structs need indirect passing and are deferred to a
+// future slice.
+func isABIScalarType(t mir.Type) bool {
+	return t == mir.TInt || t == mir.TBool || t == mir.TString
 }
 
 // allocateReturnSlot makes room for the return local on functions that didn't
@@ -424,6 +462,9 @@ func (s *lowerState) allocateReturnSlot(fn *mir.Function) int64 {
 func (s *lowerState) lowerBinaryAssign(rv *mir.BinaryRV, destSlot int64) ([]Instr, error) {
 	if cond, isCmp := comparisonCond(rv.Op); isCmp {
 		return s.lowerComparisonAssign(rv, cond, destSlot)
+	}
+	if rv.Op == mir.BinAdd && rv.T == mir.TString {
+		return s.lowerStringConcatAssign(rv, destSlot)
 	}
 	switch rv.Op {
 	case mir.BinAdd, mir.BinSub, mir.BinMul:
@@ -471,6 +512,29 @@ func comparisonCond(op mir.BinaryOp) (Cond, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// lowerStringConcatAssign lowers `dest = lhs + rhs` for two String operands
+// into an AAPCS64 call to the bundled runtime's two-arg concat helper.
+// Both operands materialise into x0/x1 (a string is a heap pointer at the
+// ABI boundary), the runtime returns a fresh ptr in x0, and we store that
+// ptr into the destination slot.
+func (s *lowerState) lowerStringConcatAssign(rv *mir.BinaryRV, destSlot int64) ([]Instr, error) {
+	lhs, err := s.materialiseOperand(rv.Left, RegX0)
+	if err != nil {
+		return nil, err
+	}
+	rhs, err := s.materialiseOperand(rv.Right, RegX1)
+	if err != nil {
+		return nil, err
+	}
+	out := append([]Instr(nil), lhs...)
+	out = append(out, rhs...)
+	out = append(out,
+		&BranchLink{Symbol: runtimeSymStringConcat},
+		&Store64Stack{Src: RegX0, Offset: destSlot},
+	)
+	return out, nil
 }
 
 // lowerComparisonAssign emits `cmp lhs, rhs; cset Xd, <cond>` storing the
@@ -524,8 +588,9 @@ func (s *lowerState) lowerCall(fn *mir.Function, instr *mir.CallInstr) ([]Instr,
 }
 
 // materialiseOperand emits the instruction sequence that lands the operand's
-// value in dst. Supports Int constants and Copy/Move of locals that have a
-// stack slot.
+// value in dst. Supports Int / Bool / String constants and Copy/Move of
+// locals that have a stack slot. String constants land in dst as a pointer
+// to their `__cstring` entry.
 func (s *lowerState) materialiseOperand(op mir.Operand, dst Reg) ([]Instr, error) {
 	switch o := op.(type) {
 	case *mir.ConstOp:
@@ -538,6 +603,9 @@ func (s *lowerState) materialiseOperand(op mir.Operand, dst Reg) ([]Instr, error
 				imm = 1
 			}
 			return []Instr{&MovImm64{Dst: dst, Imm: imm}}, nil
+		case *mir.StringConst:
+			label := s.addCString(c.Value)
+			return []Instr{&LoadCStringAddress{Dst: dst, Label: label}}, nil
 		default:
 			return nil, fmt.Errorf("%w: const %T as operand", ErrUnsupportedShape, o.Const)
 		}
@@ -565,9 +633,54 @@ func (s *lowerState) lowerIntrinsic(instr *mir.IntrinsicInstr) ([]Instr, error) 
 	switch instr.Kind {
 	case mir.IntrinsicPrintln:
 		return s.lowerPrintln(instr)
+	case mir.IntrinsicListPush:
+		return s.lowerListPush(instr)
+	case mir.IntrinsicListLen:
+		return s.lowerListLen(instr)
 	default:
 		return nil, fmt.Errorf("%w: intrinsic %s is outside phase 1", ErrUnsupportedShape, instr.Kind)
 	}
+}
+
+// lowerListPush lowers `IntrinsicListPush(list, value)` into a runtime
+// call. The current slice only handles `List<Int>` — push on i1/f64 lists
+// would call different runtime symbols and is left for the next slice.
+func (s *lowerState) lowerListPush(instr *mir.IntrinsicInstr) ([]Instr, error) {
+	if len(instr.Args) != 2 {
+		return nil, fmt.Errorf("%w: list_push expects 2 args, got %d", ErrUnsupportedShape, len(instr.Args))
+	}
+	list, err := s.materialiseOperand(instr.Args[0], RegX0)
+	if err != nil {
+		return nil, err
+	}
+	value, err := s.materialiseOperand(instr.Args[1], RegX1)
+	if err != nil {
+		return nil, err
+	}
+	out := append([]Instr(nil), list...)
+	out = append(out, value...)
+	out = append(out, &BranchLink{Symbol: runtimeSymListPushI64})
+	return out, nil
+}
+
+// lowerListLen lowers `IntrinsicListLen(list) -> Int` by calling the
+// runtime helper and capturing x0 into the destination slot.
+func (s *lowerState) lowerListLen(instr *mir.IntrinsicInstr) ([]Instr, error) {
+	if len(instr.Args) != 1 {
+		return nil, fmt.Errorf("%w: list_len expects 1 arg, got %d", ErrUnsupportedShape, len(instr.Args))
+	}
+	list, err := s.materialiseOperand(instr.Args[0], RegX0)
+	if err != nil {
+		return nil, err
+	}
+	out := append([]Instr(nil), list...)
+	out = append(out, &BranchLink{Symbol: runtimeSymListLen})
+	if instr.Dest != nil && !instr.Dest.HasProjections() {
+		if slot, ok := s.localSlots[instr.Dest.Local]; ok {
+			out = append(out, &Store64Stack{Src: RegX0, Offset: slot})
+		}
+	}
+	return out, nil
 }
 
 func (s *lowerState) lowerPrintln(instr *mir.IntrinsicInstr) ([]Instr, error) {
@@ -582,12 +695,20 @@ func (s *lowerState) lowerPrintln(instr *mir.IntrinsicInstr) ([]Instr, error) {
 			&BranchLink{Symbol: "puts"},
 		}, nil
 	}
+	if mat, ok, err := s.loadStringPrintArg(arg); err != nil || ok {
+		if err != nil {
+			return nil, err
+		}
+		out := append([]Instr(nil), mat...)
+		out = append(out, &BranchLink{Symbol: "puts"})
+		return out, nil
+	}
 	loadValue, ok, err := s.loadIntPrintArg(arg)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
-		return nil, fmt.Errorf("%w: println currently requires a string, int literal, or Int local", ErrUnsupportedShape)
+		return nil, fmt.Errorf("%w: println currently requires a string, int literal, Int local, or String local", ErrUnsupportedShape)
 	}
 	label := s.addCString("%lld\n")
 	out := []Instr{&LoadCStringAddress{Dst: RegX0, Label: label}}
@@ -597,6 +718,46 @@ func (s *lowerState) lowerPrintln(instr *mir.IntrinsicInstr) ([]Instr, error) {
 	}
 	out = append(out, &BranchLink{Symbol: "printf"})
 	return out, nil
+}
+
+// loadStringPrintArg materialises a string-typed operand into x0 so a
+// subsequent `bl _puts` can print it. Returns ok=false when the operand
+// isn't a String — the caller falls through to the int-print path.
+func (s *lowerState) loadStringPrintArg(op mir.Operand) ([]Instr, bool, error) {
+	switch o := op.(type) {
+	case *mir.CopyOp:
+		if !s.localIsString(o.Place.Local) {
+			return nil, false, nil
+		}
+		instrs, err := s.loadPlaceIntoReg(o.Place, RegX0)
+		if err != nil {
+			return nil, false, err
+		}
+		return instrs, true, nil
+	case *mir.MoveOp:
+		if !s.localIsString(o.Place.Local) {
+			return nil, false, nil
+		}
+		instrs, err := s.loadPlaceIntoReg(o.Place, RegX0)
+		if err != nil {
+			return nil, false, err
+		}
+		return instrs, true, nil
+	default:
+		return nil, false, nil
+	}
+}
+
+func (s *lowerState) localIsString(id mir.LocalID) bool {
+	if s.fn == nil {
+		return false
+	}
+	for _, loc := range s.fn.Locals {
+		if loc != nil && loc.ID == id {
+			return loc.Type == mir.TString
+		}
+	}
+	return false
 }
 
 // loadIntPrintArg materialises the integer argument for printf into x1.
@@ -668,7 +829,9 @@ func stringConstFromOperand(op mir.Operand) (string, bool) {
 }
 
 // functionUsesIntPrintln reports whether the function calls println with an
-// integer-valued argument.
+// integer-valued argument — which on darwin/aarch64 lands the value on the
+// printf vararg slot at [sp+0]. String prints go through `puts` instead and
+// don't need the vararg slot, so they shouldn't force one.
 func functionUsesIntPrintln(fn *mir.Function) bool {
 	for _, block := range fn.Blocks {
 		for _, instr := range block.Instrs {
@@ -676,10 +839,40 @@ func functionUsesIntPrintln(fn *mir.Function) bool {
 			if !ok || intr.Kind != mir.IntrinsicPrintln || len(intr.Args) != 1 {
 				continue
 			}
-			if _, isString := stringConstFromOperand(intr.Args[0]); isString {
+			arg := intr.Args[0]
+			if _, isString := stringConstFromOperand(arg); isString {
+				continue
+			}
+			if isStringTypedOperand(fn, arg) {
 				continue
 			}
 			return true
+		}
+	}
+	return false
+}
+
+// isStringTypedOperand reports whether op refers to a String-typed local
+// (via Copy or Move). Const string operands are handled by the caller via
+// stringConstFromOperand. Used by functionUsesIntPrintln to keep the
+// printf vararg slot from being reserved when only `puts(stringLocal)`
+// fires.
+func isStringTypedOperand(fn *mir.Function, op mir.Operand) bool {
+	if fn == nil {
+		return false
+	}
+	var id mir.LocalID
+	switch o := op.(type) {
+	case *mir.CopyOp:
+		id = o.Place.Local
+	case *mir.MoveOp:
+		id = o.Place.Local
+	default:
+		return false
+	}
+	for _, loc := range fn.Locals {
+		if loc != nil && loc.ID == id {
+			return loc.Type == mir.TString
 		}
 	}
 	return false

@@ -138,7 +138,21 @@ func (b ONBBackend) emitNative(ctx context.Context, req Request) (*Result, error
 	if artifacts.Binary == "" {
 		return result, fmt.Errorf("onb backend: missing binary artifact path")
 	}
-	if err := b.onbLinker().LinkBinary(ctx, []string{artifacts.Object}, artifacts.Binary, req.Layout.Target, req.LinkLibraries); err != nil {
+	objects := []string{artifacts.Object}
+	// String concat / List ops lower to calls into `osty_runtime.c`, so
+	// the linker needs the runtime object on its command line. We pull it
+	// in unconditionally — even hello-world binaries that don't reference
+	// any runtime symbol pay only a small link-time cost (the runtime is
+	// already cached after the first build), and unconditional linkage
+	// keeps the dev loop predictable.
+	runtimeObject, err := EnsureRuntimeObject(ctx, artifacts, req.Layout.Target)
+	if err != nil {
+		return result, err
+	}
+	if runtimeObject != "" {
+		objects = append(objects, runtimeObject)
+	}
+	if err := b.onbLinker().LinkBinary(ctx, objects, artifacts.Binary, req.Layout.Target, req.LinkLibraries); err != nil {
 		return result, err
 	}
 	return result, nil
