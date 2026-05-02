@@ -14751,7 +14751,6 @@ typedef struct osty_regex_compiled {
     int32_t dfa_state_count;
     int32_t dfa_back_state_count;
     int32_t dfa_lazy_eligible;
-    int32_t _reserved_dfa;
     /* Inline tail (Phase 9c layout):
      *   prog[prog_len], classes[class_count],
      *   osty_re_name_entry name_table[name_count],
@@ -16597,17 +16596,24 @@ static int osty_re_dfa_find_first_end_from(const osty_regex_compiled *re, const 
  * concurrency story trivial at the cost of warming up each call. */
 
 #define OSTY_RE_LAZY_DFA_CAP 256
+/* Hash bucket count is 2× the slot cap (and a power of 2 so the modulo
+ * narrows cleanly): keeps load factor < 0.5 even when the cache is
+ * full, so chained lookups stay short. */
 #define OSTY_RE_LAZY_DFA_HASH_BUCKETS 512
 #define OSTY_RE_LAZY_NOT_COMPUTED ((int16_t)-1)
+/* Sentinel for absent index slots — applies uniformly to LRU links
+ * (prev_lru / next_lru / lru_head / lru_tail), hash chain links
+ * (hash_next / hash_bucket), and the initial-state cache. A slot is
+ * "live" iff hash_bucket >= 0 (initial = -1, post-eviction = -1). */
+#define OSTY_RE_LAZY_NIL (-1)
 
 typedef struct osty_re_lazy_state {
     int16_t transitions[256];
     int prev_lru;
     int next_lru;
     int hash_next;
-    int hash_bucket;
+    int hash_bucket;     /* -1 = unused; >= 0 = bucket index in dfa->hash_buckets */
     uint8_t is_match;
-    uint8_t in_use;
 } osty_re_lazy_state;
 
 typedef struct osty_re_lazy_dfa {
@@ -16615,6 +16621,9 @@ typedef struct osty_re_lazy_dfa {
     int prog_len;
     int word_count;
     int forward;          /* 1 = forward, 0 = backward */
+    int match_pc;         /* forward: first MATCH PC in prog (cached so
+                           * is_match check is O(1) per state insert
+                           * instead of O(prog_len)) */
     osty_re_preds preds;  /* backward direction only */
     int has_preds;
     int initial_state;
@@ -16629,8 +16638,23 @@ typedef struct osty_re_lazy_dfa {
                            * backward initial seed (closure of {MATCH PC}). */
 } osty_re_lazy_dfa;
 
+/* FNV-1a-64 over a packed bitset. The string-cache hash sites in this
+ * file inline the same algorithm with a different byte source — they
+ * stay inlined to keep the per-string-lookup loop tight; this version
+ * exists as a function because the lazy DFA hashes whole bitsets at
+ * a much lower frequency. */
 static uint64_t osty_re_bits_fnv1a(const uint64_t *bits, int word_count) {
     uint64_t h = 1469598103934665603ULL;
+    /* Hot fast path: regexes whose prog_len ≤ 64 (the common case)
+     * pack into a single word, so we hash the 8 bytes directly. */
+    if (word_count == 1) {
+        uint64_t w = bits[0];
+        for (int i = 0; i < 8; i++) {
+            h ^= (uint64_t)(uint8_t)(w >> (i * 8));
+            h *= 1099511628211ULL;
+        }
+        return h;
+    }
     const uint8_t *p = (const uint8_t *)bits;
     size_t n = (size_t)word_count * sizeof(uint64_t);
     for (size_t i = 0; i < n; i++) {
@@ -16647,14 +16671,12 @@ static inline uint64_t *osty_re_lazy_bits(osty_re_lazy_dfa *L, int slot) {
 static int osty_re_lazy_compute_is_match(osty_re_lazy_dfa *L, int slot) {
     uint64_t *bits = osty_re_lazy_bits(L, slot);
     if (L->forward) {
-        const osty_re_inst *prog = L->re->prog;
-        int prog_len = L->re->prog_len;
-        for (int pc = 0; pc < prog_len; pc++) {
-            if ((bits[pc >> 6] >> (pc & 63)) & 1ULL) {
-                if (prog[pc].op == OSTY_RE_OP_MATCH) return 1;
-            }
-        }
-        return 0;
+        /* Cached MATCH PC means a single bit test instead of a full
+         * prog_len walk per state insert. Patterns with multiple
+         * MATCH ops would need a list, but our compiler only emits
+         * one (the final MATCH after the implicit SAVE 1). */
+        int pc = L->match_pc;
+        return (int)((bits[pc >> 6] >> (pc & 63)) & 1ULL);
     }
     /* Backward accept: state contains source PC 0. */
     return (int)(bits[0] & 1ULL);
@@ -16662,24 +16684,24 @@ static int osty_re_lazy_compute_is_match(osty_re_lazy_dfa *L, int slot) {
 
 static void osty_re_lazy_lru_unlink(osty_re_lazy_dfa *L, int slot) {
     osty_re_lazy_state *s = &L->states[slot];
-    if (s->prev_lru >= 0) L->states[s->prev_lru].next_lru = s->next_lru;
+    if (s->prev_lru != OSTY_RE_LAZY_NIL) L->states[s->prev_lru].next_lru = s->next_lru;
     else L->lru_head = s->next_lru;
-    if (s->next_lru >= 0) L->states[s->next_lru].prev_lru = s->prev_lru;
+    if (s->next_lru != OSTY_RE_LAZY_NIL) L->states[s->next_lru].prev_lru = s->prev_lru;
     else L->lru_tail = s->prev_lru;
-    s->prev_lru = -1;
-    s->next_lru = -1;
+    s->prev_lru = OSTY_RE_LAZY_NIL;
+    s->next_lru = OSTY_RE_LAZY_NIL;
 }
 
 static void osty_re_lazy_lru_push_front(osty_re_lazy_dfa *L, int slot) {
     osty_re_lazy_state *s = &L->states[slot];
-    s->prev_lru = -1;
+    s->prev_lru = OSTY_RE_LAZY_NIL;
     s->next_lru = L->lru_head;
-    if (L->lru_head >= 0) L->states[L->lru_head].prev_lru = slot;
+    if (L->lru_head != OSTY_RE_LAZY_NIL) L->states[L->lru_head].prev_lru = slot;
     L->lru_head = slot;
-    if (L->lru_tail < 0) L->lru_tail = slot;
+    if (L->lru_tail == OSTY_RE_LAZY_NIL) L->lru_tail = slot;
 }
 
-static void osty_re_lazy_touch(osty_re_lazy_dfa *L, int slot) {
+static inline void osty_re_lazy_touch(osty_re_lazy_dfa *L, int slot) {
     if (L->lru_head == slot) return;
     osty_re_lazy_lru_unlink(L, slot);
     osty_re_lazy_lru_push_front(L, slot);
@@ -16691,16 +16713,16 @@ static void osty_re_lazy_hash_unlink(osty_re_lazy_dfa *L, int slot) {
     if (b < 0) return;
     int *head_ptr = &L->hash_buckets[b];
     int cur = *head_ptr;
-    int prev = -1;
-    while (cur >= 0 && cur != slot) {
+    int prev = OSTY_RE_LAZY_NIL;
+    while (cur != OSTY_RE_LAZY_NIL && cur != slot) {
         prev = cur;
         cur = L->states[cur].hash_next;
     }
-    if (cur < 0) return;
-    if (prev < 0) *head_ptr = s->hash_next;
+    if (cur == OSTY_RE_LAZY_NIL) return;
+    if (prev == OSTY_RE_LAZY_NIL) *head_ptr = s->hash_next;
     else L->states[prev].hash_next = s->hash_next;
-    s->hash_next = -1;
-    s->hash_bucket = -1;
+    s->hash_next = OSTY_RE_LAZY_NIL;
+    s->hash_bucket = OSTY_RE_LAZY_NIL;
 }
 
 /* When a slot is evicted, every other live slot may hold a cached
@@ -16710,7 +16732,7 @@ static void osty_re_lazy_hash_unlink(osty_re_lazy_dfa *L, int slot) {
  * one. Bounded O(CAP * 256) ≈ 65k ops per eviction. */
 static void osty_re_lazy_invalidate_transitions_to(osty_re_lazy_dfa *L, int evicted) {
     for (int i = 0; i < OSTY_RE_LAZY_DFA_CAP; i++) {
-        if (!L->states[i].in_use || i == evicted) continue;
+        if (L->states[i].hash_bucket < 0 || i == evicted) continue;
         int16_t *t = L->states[i].transitions;
         for (int b = 0; b < 256; b++) {
             if (t[b] == (int16_t)evicted) t[b] = OSTY_RE_LAZY_NOT_COMPUTED;
@@ -16720,126 +16742,56 @@ static void osty_re_lazy_invalidate_transitions_to(osty_re_lazy_dfa *L, int evic
 
 static int osty_re_lazy_hash_find(osty_re_lazy_dfa *L, const uint64_t *bits, int bucket) {
     int cur = L->hash_buckets[bucket];
-    while (cur >= 0) {
+    while (cur != OSTY_RE_LAZY_NIL) {
         if (memcmp(osty_re_lazy_bits(L, cur), bits,
                    (size_t)L->word_count * sizeof(uint64_t)) == 0) {
             return cur;
         }
         cur = L->states[cur].hash_next;
     }
-    return -1;
+    return OSTY_RE_LAZY_NIL;
 }
 
 /* Look up a state by canonical bits, inserting if not present. Touches
- * the resulting slot in LRU. May evict OSTY_OTHER slot (never the
+ * the resulting slot in LRU. May evict any OTHER slot (never the
  * caller's "current" slot, as long as the caller touches that slot
  * before calling here — see osty_re_lazy_step). Returns slot >= 0 on
  * success; -1 only on impossible internal corruption. */
 static int osty_re_lazy_get_or_insert(osty_re_lazy_dfa *L, const uint64_t *bits) {
     uint64_t h = osty_re_bits_fnv1a(bits, L->word_count);
-    int bucket = (int)(h % (uint64_t)OSTY_RE_LAZY_DFA_HASH_BUCKETS);
+    int bucket = (int)(h & (uint64_t)(OSTY_RE_LAZY_DFA_HASH_BUCKETS - 1));
     int existing = osty_re_lazy_hash_find(L, bits, bucket);
     if (existing >= 0) {
         osty_re_lazy_touch(L, existing);
         return existing;
     }
-    int slot = -1;
+    int slot = OSTY_RE_LAZY_NIL;
     if (L->count < OSTY_RE_LAZY_DFA_CAP) {
         for (int i = 0; i < OSTY_RE_LAZY_DFA_CAP; i++) {
-            if (!L->states[i].in_use) { slot = i; break; }
+            if (L->states[i].hash_bucket < 0) { slot = i; break; }
         }
     } else {
         slot = L->lru_tail;
-        if (slot < 0) return -1;
+        if (slot < 0) return OSTY_RE_LAZY_NIL;
         osty_re_lazy_hash_unlink(L, slot);
         osty_re_lazy_lru_unlink(L, slot);
-        L->states[slot].in_use = 0;
         L->count--;
         osty_re_lazy_invalidate_transitions_to(L, slot);
     }
-    if (slot < 0) return -1;
+    if (slot < 0) return OSTY_RE_LAZY_NIL;
     osty_re_lazy_state *s = &L->states[slot];
     memcpy(osty_re_lazy_bits(L, slot), bits,
            (size_t)L->word_count * sizeof(uint64_t));
     for (int b = 0; b < 256; b++) s->transitions[b] = OSTY_RE_LAZY_NOT_COMPUTED;
-    s->in_use = 1;
     s->hash_bucket = bucket;
     s->hash_next = L->hash_buckets[bucket];
     L->hash_buckets[bucket] = slot;
-    s->prev_lru = -1;
-    s->next_lru = -1;
+    s->prev_lru = OSTY_RE_LAZY_NIL;
+    s->next_lru = OSTY_RE_LAZY_NIL;
     osty_re_lazy_lru_push_front(L, slot);
     L->count++;
     s->is_match = (uint8_t)osty_re_lazy_compute_is_match(L, slot);
     return slot;
-}
-
-static int osty_re_lazy_dfa_init(osty_re_lazy_dfa *L, const osty_regex_compiled *re, int forward) {
-    memset(L, 0, sizeof(*L));
-    L->re = re;
-    L->prog_len = re->prog_len;
-    L->word_count = (re->prog_len + 63) / 64;
-    if (L->word_count == 0) L->word_count = 1;
-    L->forward = forward;
-    L->count = 0;
-    L->lru_head = -1;
-    L->lru_tail = -1;
-    L->initial_state = -1;
-    for (int i = 0; i < OSTY_RE_LAZY_DFA_HASH_BUCKETS; i++) L->hash_buckets[i] = -1;
-    for (int i = 0; i < OSTY_RE_LAZY_DFA_CAP; i++) {
-        L->states[i].in_use = 0;
-        L->states[i].prev_lru = -1;
-        L->states[i].next_lru = -1;
-        L->states[i].hash_next = -1;
-        L->states[i].hash_bucket = -1;
-    }
-    L->bits_pool = (uint64_t *)calloc((size_t)OSTY_RE_LAZY_DFA_CAP * (size_t)L->word_count, sizeof(uint64_t));
-    if (L->bits_pool == NULL) return -1;
-    if (osty_re_pc_set_init(&L->scratch, L->prog_len) != 0) {
-        free(L->bits_pool); L->bits_pool = NULL;
-        return -1;
-    }
-    if (osty_re_pc_set_init(&L->seed, L->prog_len) != 0) {
-        osty_re_pc_set_free(&L->scratch);
-        free(L->bits_pool); L->bits_pool = NULL;
-        return -1;
-    }
-    if (forward) {
-        osty_re_pc_set_add(&L->seed, 0);
-        osty_re_epsilon_closure(&L->seed, re->prog, re->prog_len);
-    } else {
-        if (osty_re_preds_build(re, &L->preds) != 0) {
-            osty_re_pc_set_free(&L->scratch);
-            osty_re_pc_set_free(&L->seed);
-            free(L->bits_pool); L->bits_pool = NULL;
-            return -1;
-        }
-        L->has_preds = 1;
-        int match_pc = -1;
-        for (int p = 0; p < re->prog_len; p++) {
-            if (re->prog[p].op == OSTY_RE_OP_MATCH) { match_pc = p; break; }
-        }
-        if (match_pc < 0) {
-            osty_re_preds_free(&L->preds);
-            L->has_preds = 0;
-            osty_re_pc_set_free(&L->scratch);
-            osty_re_pc_set_free(&L->seed);
-            free(L->bits_pool); L->bits_pool = NULL;
-            return -1;
-        }
-        osty_re_pc_set_add(&L->seed, match_pc);
-        osty_re_epsilon_closure_backward(&L->seed, &L->preds, re->prog, re->prog_len);
-    }
-    int s0 = osty_re_lazy_get_or_insert(L, L->seed.bits);
-    if (s0 < 0) {
-        if (L->has_preds) { osty_re_preds_free(&L->preds); L->has_preds = 0; }
-        osty_re_pc_set_free(&L->scratch);
-        osty_re_pc_set_free(&L->seed);
-        free(L->bits_pool); L->bits_pool = NULL;
-        return -1;
-    }
-    L->initial_state = s0;
-    return 0;
 }
 
 static void osty_re_lazy_dfa_free(osty_re_lazy_dfa *L) {
@@ -16855,18 +16807,69 @@ static void osty_re_lazy_dfa_free(osty_re_lazy_dfa *L) {
     }
 }
 
+static int osty_re_lazy_dfa_init(osty_re_lazy_dfa *L, const osty_regex_compiled *re, int forward) {
+    memset(L, 0, sizeof(*L));
+    L->re = re;
+    L->prog_len = re->prog_len;
+    L->word_count = (re->prog_len + 63) / 64;
+    if (L->word_count == 0) L->word_count = 1;
+    L->forward = forward;
+    L->lru_head = OSTY_RE_LAZY_NIL;
+    L->lru_tail = OSTY_RE_LAZY_NIL;
+    L->initial_state = OSTY_RE_LAZY_NIL;
+    L->match_pc = OSTY_RE_LAZY_NIL;
+    for (int i = 0; i < OSTY_RE_LAZY_DFA_HASH_BUCKETS; i++) L->hash_buckets[i] = OSTY_RE_LAZY_NIL;
+    for (int i = 0; i < OSTY_RE_LAZY_DFA_CAP; i++) {
+        L->states[i].prev_lru = OSTY_RE_LAZY_NIL;
+        L->states[i].next_lru = OSTY_RE_LAZY_NIL;
+        L->states[i].hash_next = OSTY_RE_LAZY_NIL;
+        L->states[i].hash_bucket = OSTY_RE_LAZY_NIL;
+    }
+    L->bits_pool = (uint64_t *)calloc((size_t)OSTY_RE_LAZY_DFA_CAP * (size_t)L->word_count, sizeof(uint64_t));
+    if (L->bits_pool == NULL) goto fail;
+    if (osty_re_pc_set_init(&L->scratch, L->prog_len) != 0) goto fail;
+    if (osty_re_pc_set_init(&L->seed, L->prog_len) != 0) goto fail;
+    if (forward) {
+        for (int p = 0; p < re->prog_len; p++) {
+            if (re->prog[p].op == OSTY_RE_OP_MATCH) { L->match_pc = p; break; }
+        }
+        if (L->match_pc < 0) goto fail;
+        osty_re_pc_set_add(&L->seed, 0);
+        osty_re_epsilon_closure(&L->seed, re->prog, re->prog_len);
+    } else {
+        if (osty_re_preds_build(re, &L->preds) != 0) goto fail;
+        L->has_preds = 1;
+        int match_pc = OSTY_RE_LAZY_NIL;
+        for (int p = 0; p < re->prog_len; p++) {
+            if (re->prog[p].op == OSTY_RE_OP_MATCH) { match_pc = p; break; }
+        }
+        if (match_pc < 0) goto fail;
+        osty_re_pc_set_add(&L->seed, match_pc);
+        osty_re_epsilon_closure_backward(&L->seed, &L->preds, re->prog, re->prog_len);
+    }
+    int s0 = osty_re_lazy_get_or_insert(L, L->seed.bits);
+    if (s0 < 0) goto fail;
+    L->initial_state = s0;
+    return 0;
+fail:
+    osty_re_lazy_dfa_free(L);
+    return -1;
+}
+
 /* Step from slot `s` consuming `byte`. Caches the transition. Touches
- * `s` first so the subsequent get_or_insert eviction never targets it.
- * Returns successor slot on success, -1 on internal failure (treated
- * as "lazy DFA can't help — fall through to NFA" upstream). */
+ * `s` first so the subsequent get_or_insert eviction never targets it
+ * — eviction always picks lru_tail, and `s` is now at lru_head. */
 static int osty_re_lazy_step(osty_re_lazy_dfa *L, int s, int byte) {
     int b = byte & 0xFF;
     int16_t cached = L->states[s].transitions[b];
     if (cached != OSTY_RE_LAZY_NOT_COMPUTED) {
-        osty_re_lazy_touch(L, s);
+        /* Inline the head-check: cache-hit path runs once per input
+         * byte on the dominant control flow, so the call overhead for
+         * the no-op touch case isn't free. */
+        if (L->lru_head != s) osty_re_lazy_touch(L, s);
         return (int)cached;
     }
-    osty_re_lazy_touch(L, s);
+    if (L->lru_head != s) osty_re_lazy_touch(L, s);
     osty_re_pc_set current;
     current.prog_len = L->prog_len;
     current.word_count = L->word_count;
@@ -16877,7 +16880,7 @@ static int osty_re_lazy_step(osty_re_lazy_dfa *L, int s, int byte) {
         osty_re_dfa_step_backward(&L->scratch, &current, &L->preds, L->re, b);
     }
     int next_id = osty_re_lazy_get_or_insert(L, L->scratch.bits);
-    if (next_id < 0) return -1;
+    if (next_id < 0) return OSTY_RE_LAZY_NIL;
     L->states[s].transitions[b] = (int16_t)next_id;
     return next_id;
 }
@@ -16924,6 +16927,34 @@ static int osty_re_lazy_dfa_match(osty_re_lazy_dfa *L, const char *text, int tex
     return 0;
 }
 
+/* Per-call lazy DFA pair shared by every regex entry function. Wraps
+ * the (forward, backward) lazy-DFA setup/teardown that was previously
+ * open-coded at every call site. NULL fields mean "no lazy DFA
+ * available" (either the eager build covered this direction, or
+ * lazy init failed mid-allocation — both are silent fallbacks). */
+typedef struct osty_re_lazy_pair {
+    osty_re_lazy_dfa fwd_storage;
+    osty_re_lazy_dfa back_storage;
+    osty_re_lazy_dfa *fwd;   /* NULL when not initialized */
+    osty_re_lazy_dfa *back;  /* NULL when not initialized */
+} osty_re_lazy_pair;
+
+static void osty_re_lazy_pair_init(osty_re_lazy_pair *p, const osty_regex_compiled *re) {
+    p->fwd = NULL;
+    p->back = NULL;
+    if (re->dfa_state_count == 0 && re->dfa_lazy_eligible) {
+        if (osty_re_lazy_dfa_init(&p->fwd_storage, re, 1) == 0) p->fwd = &p->fwd_storage;
+    }
+    if (re->dfa_back_state_count == 0 && re->dfa_lazy_eligible) {
+        if (osty_re_lazy_dfa_init(&p->back_storage, re, 0) == 0) p->back = &p->back_storage;
+    }
+}
+
+static void osty_re_lazy_pair_free(osty_re_lazy_pair *p) {
+    if (p->fwd) { osty_re_lazy_dfa_free(p->fwd); p->fwd = NULL; }
+    if (p->back) { osty_re_lazy_dfa_free(p->back); p->back = NULL; }
+}
+
 /* Helpers used by the entry functions to pick eager DFA vs lazy DFA vs
  * "no DFA available". Returning -1 means "DFA confirmed no match" (only
  * meaningful when a DFA is available); -2 means "no DFA result, run
@@ -16932,24 +16963,24 @@ static int osty_re_lazy_dfa_match(osty_re_lazy_dfa *L, const char *text, int tex
  * `if (dfa_end >= 0) { tighten via backward DFA }` for the success
  * path, fall-through otherwise. */
 static int osty_re_dfa_or_lazy_find_first_end(const osty_regex_compiled *re,
-                                                osty_re_lazy_dfa *lazy_fwd, int has_lazy_fwd,
+                                                osty_re_lazy_dfa *lazy_fwd,
                                                 const char *text, int text_len, int start_offset) {
     if (re->dfa_state_count > 0) {
         return osty_re_dfa_find_first_end_from(re, text, text_len, start_offset);
     }
-    if (has_lazy_fwd) {
+    if (lazy_fwd != NULL) {
         return osty_re_lazy_dfa_find_first_end_from(lazy_fwd, text, text_len, start_offset);
     }
     return -2;
 }
 
 static int osty_re_dfa_or_lazy_find_match_start(const osty_regex_compiled *re,
-                                                  osty_re_lazy_dfa *lazy_back, int has_lazy_back,
+                                                  osty_re_lazy_dfa *lazy_back,
                                                   const char *text, int end_pos) {
     if (re->dfa_back_state_count > 0) {
         return osty_re_dfa_find_match_start_backward(re, text, end_pos);
     }
-    if (has_lazy_back) {
+    if (lazy_back != NULL) {
         return osty_re_lazy_dfa_find_match_start_backward(lazy_back, text, end_pos);
     }
     return -1;
@@ -17174,7 +17205,6 @@ void *osty_rt_regex_compile(const char *pattern) {
     probe.dfa_state_count = 0;
     probe.dfa_back_state_count = 0;
     probe.dfa_lazy_eligible = 0;
-    probe._reserved_dfa = 0;
     uint16_t *dfa_trans = NULL;
     uint8_t *dfa_match = NULL;
     uint16_t *dfa_back_trans = NULL;
@@ -17234,7 +17264,6 @@ void *osty_rt_regex_compile(const char *pattern) {
     re->dfa_state_count = dfa_states;
     re->dfa_back_state_count = dfa_back_states;
     re->dfa_lazy_eligible = dfa_lazy_eligible;
-    re->_reserved_dfa = 0;
     if (ps.prog_len > 0) memcpy(re->prog, ps.prog, prog_bytes);
     if (ps.class_count > 0) memcpy(re->classes, ps.classes, class_bytes);
     if (ps.name_count > 0) {
@@ -17291,8 +17320,7 @@ bool osty_rt_regex_matches(void *raw_re, const char *text) {
         if (osty_re_lazy_dfa_init(&lfwd, re, 1) == 0) {
             int r = osty_re_lazy_dfa_match(&lfwd, src, len);
             osty_re_lazy_dfa_free(&lfwd);
-            if (r == 0) return false;
-            if (r == 1) return true;
+            if (r >= 0) return r ? true : false;
             /* r == -1: lazy step failed, fall through to NFA. */
         }
     }
@@ -17373,33 +17401,23 @@ void *osty_rt_regex_find(void *raw_re, const char *text) {
     int32_t slots[OSTY_RE_MAX_CAP_SLOTS];
     int slot_count = 2 * re->ngroups;
     for (int i = 0; i < slot_count; i++) slots[i] = -1;
-    /* Phase 9b/9c/9d — DFA-driven boundary detection. Forward DFA's
-     * first-accept end (E) caps where the leftmost match could
-     * complete; backward DFA scans backward from E to recover the
-     * leftmost match start (S). NFA runs from sp=S over the full
-     * input — bounding text_len would clip greedy extensions (e.g.
-     * `\d+` whose true match end is past first-accept E), so we keep
-     * NFA's natural leftmost-longest scan and let it discover the
-     * real end. The backward DFA only tightens the START cursor; the
-     * forward DFA only confirms that a match exists. When the eager
-     * DFA wasn't built but the pattern is lazy-eligible, a per-call
-     * lazy DFA + LRU runs the same protocol. */
-    osty_re_lazy_dfa lfwd, lback;
-    int has_lfwd = 0, has_lback = 0;
-    if (re->dfa_state_count == 0 && re->dfa_lazy_eligible) {
-        has_lfwd = (osty_re_lazy_dfa_init(&lfwd, re, 1) == 0);
-    }
-    if (re->dfa_back_state_count == 0 && re->dfa_lazy_eligible) {
-        has_lback = (osty_re_lazy_dfa_init(&lback, re, 0) == 0);
-    }
+    /* Phase 9b/9c/9d — forward DFA's first-accept end (E) caps where
+     * the leftmost match could complete; backward DFA scans backward
+     * from E to recover the leftmost match start (S); NFA runs from
+     * sp=S over the FULL input. (text_len bound would clip greedy
+     * extensions like `\d+` whose true match end is past E.) When the
+     * eager DFA isn't built but the pattern is lazy-eligible, a
+     * per-call lazy DFA + LRU runs the same protocol. */
+    osty_re_lazy_pair pair;
+    osty_re_lazy_pair_init(&pair, re);
     int nfa_start = 0;
     void *out = NULL;
-    int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, &lfwd, has_lfwd, src, len, 0);
+    int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, pair.fwd, src, len, 0);
     if (dfa_end == -1) {
         goto find_done;
     }
     if (dfa_end >= 0) {
-        int dfa_start = osty_re_dfa_or_lazy_find_match_start(re, &lback, has_lback, src, dfa_end);
+        int dfa_start = osty_re_dfa_or_lazy_find_match_start(re, pair.back, src, dfa_end);
         if (dfa_start >= 0 && dfa_start <= dfa_end) {
             nfa_start = dfa_start;
         }
@@ -17420,8 +17438,7 @@ void *osty_rt_regex_find(void *raw_re, const char *text) {
         out = m;
     }
 find_done:
-    if (has_lfwd) osty_re_lazy_dfa_free(&lfwd);
-    if (has_lback) osty_re_lazy_dfa_free(&lback);
+    osty_re_lazy_pair_free(&pair);
     return out;
 }
 
@@ -17460,29 +17477,17 @@ void *osty_rt_regex_find_all(void *raw_re, const char *text) {
     int32_t slots[OSTY_RE_MAX_CAP_SLOTS];
     int slot_count = 2 * re->ngroups;
     int start = 0;
-    osty_re_lazy_dfa lfwd, lback;
-    int has_lfwd = 0, has_lback = 0;
-    if (re->dfa_state_count == 0 && re->dfa_lazy_eligible) {
-        has_lfwd = (osty_re_lazy_dfa_init(&lfwd, re, 1) == 0);
-    }
-    if (re->dfa_back_state_count == 0 && re->dfa_lazy_eligible) {
-        has_lback = (osty_re_lazy_dfa_init(&lback, re, 0) == 0);
-    }
+    osty_re_lazy_pair pair;
+    osty_re_lazy_pair_init(&pair, re);
     while (start <= len) {
         for (int i = 0; i < slot_count; i++) slots[i] = -1;
-        /* Phase 9b/9c/9d — forward DFA (eager or lazy) confirms a match
-         * exists, backward DFA tightens nfa_start to the leftmost match
-         * start. NFA scans full input from nfa_start to find leftmost-
-         * longest (greedy extensions go past forward DFA's first-accept
-         * end). When no DFA path is available we let the NFA scan from
-         * `start` directly. */
         int nfa_start = start;
-        int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, &lfwd, has_lfwd, src, len, start);
+        int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, pair.fwd, src, len, start);
         if (dfa_end == -1) {
             break;
         }
         if (dfa_end >= 0) {
-            int dfa_start = osty_re_dfa_or_lazy_find_match_start(re, &lback, has_lback, src, dfa_end);
+            int dfa_start = osty_re_dfa_or_lazy_find_match_start(re, pair.back, src, dfa_end);
             if (dfa_start > start && dfa_start <= dfa_end) {
                 nfa_start = dfa_start;
             }
@@ -17506,8 +17511,7 @@ void *osty_rt_regex_find_all(void *raw_re, const char *text) {
             start = match_start + 1;
         }
     }
-    if (has_lfwd) osty_re_lazy_dfa_free(&lfwd);
-    if (has_lback) osty_re_lazy_dfa_free(&lback);
+    osty_re_lazy_pair_free(&pair);
     return list;
 }
 
@@ -17576,31 +17580,17 @@ static void *osty_rt_regex_replace_impl(void *raw_re, const char *text, const ch
     int slot_count = 2 * re->ngroups;
     int start = 0;
     int substituted = 0;
-    osty_re_lazy_dfa lfwd, lback;
-    int has_lfwd = 0, has_lback = 0;
-    if (re->dfa_state_count == 0 && re->dfa_lazy_eligible) {
-        has_lfwd = (osty_re_lazy_dfa_init(&lfwd, re, 1) == 0);
-    }
-    if (re->dfa_back_state_count == 0 && re->dfa_lazy_eligible) {
-        has_lback = (osty_re_lazy_dfa_init(&lback, re, 0) == 0);
-    }
+    osty_re_lazy_pair pair;
+    osty_re_lazy_pair_init(&pair, re);
     while (start <= len) {
         for (int i = 0; i < slot_count; i++) slots[i] = -1;
-        /* Phase 9b/9c/9d — forward DFA (eager or lazy) confirms a
-         * leftmost match exists at or after `start` (returns first-
-         * accept end E). Backward DFA from E finds the leftmost match
-         * START S (clamped to >= start so we never revisit a region
-         * the previous iteration already consumed). NFA from S over
-         * the FULL input text_len then finds the leftmost-longest
-         * match, recovering greedy extensions that go past E. When no
-         * DFA is available the NFA scans from `start` directly. */
         int nfa_start = start;
-        int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, &lfwd, has_lfwd, src, len, start);
+        int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, pair.fwd, src, len, start);
         if (dfa_end == -1) {
             break;
         }
         if (dfa_end >= 0) {
-            int dfa_start = osty_re_dfa_or_lazy_find_match_start(re, &lback, has_lback, src, dfa_end);
+            int dfa_start = osty_re_dfa_or_lazy_find_match_start(re, pair.back, src, dfa_end);
             if (dfa_start > start && dfa_start <= dfa_end) {
                 nfa_start = dfa_start;
             }
@@ -17695,8 +17685,7 @@ static void *osty_rt_regex_replace_impl(void *raw_re, const char *text, const ch
         out = osty_rt_string_dup_site(buf.data == NULL ? "" : buf.data, buf.len, "runtime.regex.replace");
     }
     osty_re_buffer_free(&buf);
-    if (has_lfwd) osty_re_lazy_dfa_free(&lfwd);
-    if (has_lback) osty_re_lazy_dfa_free(&lback);
+    osty_re_lazy_pair_free(&pair);
     return out;
 }
 
@@ -17729,30 +17718,17 @@ void *osty_rt_regex_split(void *raw_re, const char *text) {
     int32_t slots[OSTY_RE_MAX_CAP_SLOTS];
     int slot_count = 2 * re->ngroups;
     int start = 0;
-    osty_re_lazy_dfa lfwd, lback;
-    int has_lfwd = 0, has_lback = 0;
-    if (re->dfa_state_count == 0 && re->dfa_lazy_eligible) {
-        has_lfwd = (osty_re_lazy_dfa_init(&lfwd, re, 1) == 0);
-    }
-    if (re->dfa_back_state_count == 0 && re->dfa_lazy_eligible) {
-        has_lback = (osty_re_lazy_dfa_init(&lback, re, 0) == 0);
-    }
+    osty_re_lazy_pair pair;
+    osty_re_lazy_pair_init(&pair, re);
     while (start <= len) {
         for (int i = 0; i < slot_count; i++) slots[i] = -1;
-        /* Phase 9b/9c/9d — forward DFA (eager or lazy) confirms a
-         * leftmost match exists at or after `start` (returns first-
-         * accept end E). Backward DFA from E finds the leftmost match
-         * START S (clamped to >= start so we never revisit a region
-         * the previous iteration already consumed). NFA from S over
-         * the FULL input text_len then finds the leftmost-longest
-         * match, recovering greedy extensions that go past E. */
         int nfa_start = start;
-        int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, &lfwd, has_lfwd, src, len, start);
+        int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, pair.fwd, src, len, start);
         if (dfa_end == -1) {
             break;
         }
         if (dfa_end >= 0) {
-            int dfa_start = osty_re_dfa_or_lazy_find_match_start(re, &lback, has_lback, src, dfa_end);
+            int dfa_start = osty_re_dfa_or_lazy_find_match_start(re, pair.back, src, dfa_end);
             if (dfa_start > start && dfa_start <= dfa_end) {
                 nfa_start = dfa_start;
             }
@@ -17778,8 +17754,7 @@ void *osty_rt_regex_split(void *raw_re, const char *text) {
     /* Trailing piece (or the whole input if no matches). */
     void *tail = osty_rt_string_dup_site(src + start, (size_t)(len - start), "runtime.regex.split.tail");
     osty_rt_list_push_ptr(list, tail);
-    if (has_lfwd) osty_re_lazy_dfa_free(&lfwd);
-    if (has_lback) osty_re_lazy_dfa_free(&lback);
+    osty_re_lazy_pair_free(&pair);
     return list;
 }
 
@@ -17800,22 +17775,16 @@ void *osty_rt_regex_captures(void *raw_re, const char *text) {
     /* Phase 9b/9c/9d — forward DFA (eager or lazy) confirms a match,
      * backward DFA gives the leftmost start. NFA scans full input from
      * nfa_start. */
-    osty_re_lazy_dfa lfwd, lback;
-    int has_lfwd = 0, has_lback = 0;
-    if (re->dfa_state_count == 0 && re->dfa_lazy_eligible) {
-        has_lfwd = (osty_re_lazy_dfa_init(&lfwd, re, 1) == 0);
-    }
-    if (re->dfa_back_state_count == 0 && re->dfa_lazy_eligible) {
-        has_lback = (osty_re_lazy_dfa_init(&lback, re, 0) == 0);
-    }
+    osty_re_lazy_pair pair;
+    osty_re_lazy_pair_init(&pair, re);
     int nfa_start = 0;
     void *out = NULL;
-    int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, &lfwd, has_lfwd, src, len, 0);
+    int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, pair.fwd, src, len, 0);
     if (dfa_end == -1) {
         goto captures_done;
     }
     if (dfa_end >= 0) {
-        int dfa_start = osty_re_dfa_or_lazy_find_match_start(re, &lback, has_lback, src, dfa_end);
+        int dfa_start = osty_re_dfa_or_lazy_find_match_start(re, pair.back, src, dfa_end);
         if (dfa_start >= 0 && dfa_start <= dfa_end) {
             nfa_start = dfa_start;
         }
@@ -17825,8 +17794,7 @@ void *osty_rt_regex_captures(void *raw_re, const char *text) {
     }
     out = osty_re_build_captures(re, src, len, slots);
 captures_done:
-    if (has_lfwd) osty_re_lazy_dfa_free(&lfwd);
-    if (has_lback) osty_re_lazy_dfa_free(&lback);
+    osty_re_lazy_pair_free(&pair);
     return out;
 }
 
@@ -17851,30 +17819,17 @@ void *osty_rt_regex_captures_all(void *raw_re, const char *text) {
     int32_t slots[OSTY_RE_MAX_CAP_SLOTS];
     int slot_count = 2 * re->ngroups;
     int start = 0;
-    osty_re_lazy_dfa lfwd, lback;
-    int has_lfwd = 0, has_lback = 0;
-    if (re->dfa_state_count == 0 && re->dfa_lazy_eligible) {
-        has_lfwd = (osty_re_lazy_dfa_init(&lfwd, re, 1) == 0);
-    }
-    if (re->dfa_back_state_count == 0 && re->dfa_lazy_eligible) {
-        has_lback = (osty_re_lazy_dfa_init(&lback, re, 0) == 0);
-    }
+    osty_re_lazy_pair pair;
+    osty_re_lazy_pair_init(&pair, re);
     while (start <= len) {
         for (int i = 0; i < slot_count; i++) slots[i] = -1;
-        /* Phase 9b/9c/9d — forward DFA (eager or lazy) confirms a
-         * leftmost match exists at or after `start` (returns first-
-         * accept end E). Backward DFA from E finds the leftmost match
-         * START S (clamped to >= start so we never revisit a region
-         * the previous iteration already consumed). NFA from S over
-         * the FULL input text_len then finds the leftmost-longest
-         * match, recovering greedy extensions that go past E. */
         int nfa_start = start;
-        int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, &lfwd, has_lfwd, src, len, start);
+        int dfa_end = osty_re_dfa_or_lazy_find_first_end(re, pair.fwd, src, len, start);
         if (dfa_end == -1) {
             break;
         }
         if (dfa_end >= 0) {
-            int dfa_start = osty_re_dfa_or_lazy_find_match_start(re, &lback, has_lback, src, dfa_end);
+            int dfa_start = osty_re_dfa_or_lazy_find_match_start(re, pair.back, src, dfa_end);
             if (dfa_start > start && dfa_start <= dfa_end) {
                 nfa_start = dfa_start;
             }
@@ -17898,8 +17853,7 @@ void *osty_rt_regex_captures_all(void *raw_re, const char *text) {
             start = match_start + 1;
         }
     }
-    if (has_lfwd) osty_re_lazy_dfa_free(&lfwd);
-    if (has_lback) osty_re_lazy_dfa_free(&lback);
+    osty_re_lazy_pair_free(&pair);
     return list;
 }
 
