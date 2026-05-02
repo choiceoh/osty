@@ -73,6 +73,7 @@ const dwarfLineBaseByte byte = 0xFB
 // new attribute also needs a slot in the abbreviation table below.
 const (
 	dwarfTagCompileUnit = 0x11
+	dwarfTagSubprogram  = 0x2e
 
 	dwarfChildrenNo  byte = 0
 	dwarfChildrenYes byte = 1
@@ -98,8 +99,10 @@ const (
 	// own debugger UX.
 	dwarfLangC99 byte = 0x0c
 
-	// abbrev codes used by the compile unit. Code 1 = the CU DIE itself.
+	// abbrev codes. The compile unit is code 1; each function is a
+	// DW_TAG_subprogram child encoded with abbrev code 2.
 	dwarfAbbrevCompileUnit uint64 = 1
+	dwarfAbbrevSubprogram  uint64 = 2
 )
 
 // dwarfStdOpcodeLengths is the per-opcode operand-count table the line
@@ -150,16 +153,26 @@ type dwarfLineProgram struct {
 	TextSize    uint64 // total __text size in bytes — used for end_sequence PC
 }
 
+// dwarfLineEncoded carries the byte stream for `__debug_line` plus the
+// section-relative offsets where address fields appear. Callers (the
+// Mach-O writer in particular) thread `SetAddressOffset` into a
+// relocation that retargets the value at link time — without it,
+// dsymutil treats the section as orphan debug data and skips the .o.
+type dwarfLineEncoded struct {
+	Bytes            []byte
+	SetAddressOffset uint32 // section-relative byte offset of the 8-byte address arg of the first DW_LNE_set_address
+}
+
 // emitDwarfLine encodes one CU's line-number program as a flat byte slice
 // suitable for the `__debug_line` Mach-O section.
-func emitDwarfLine(prog dwarfLineProgram) ([]byte, error) {
+func emitDwarfLine(prog dwarfLineProgram) (dwarfLineEncoded, error) {
 	if len(prog.Files) == 0 {
-		return nil, fmt.Errorf("onb: dwarf line program needs at least one file entry")
+		return dwarfLineEncoded{}, fmt.Errorf("onb: dwarf line program needs at least one file entry")
 	}
 	header := encodeDwarfLineHeader(prog)
-	body, err := encodeDwarfLineBody(prog)
+	body, setAddressBodyOffset, err := encodeDwarfLineBody(prog)
 	if err != nil {
-		return nil, err
+		return dwarfLineEncoded{}, err
 	}
 	// Compose the unit. unit_length excludes the 4-byte length field
 	// itself (DWARF 4 32-bit form).
@@ -170,7 +183,10 @@ func emitDwarfLine(prog dwarfLineProgram) ([]byte, error) {
 	binary.Write(&out, binary.LittleEndian, uint32(len(header)))
 	out.Write(header)
 	out.Write(body)
-	return out.Bytes(), nil
+	// 4 (unit_length) + 2 (version) + 4 (header_length) + headerLen +
+	// setAddressBodyOffset = absolute section offset of the 8-byte address.
+	setAddrOff := uint32(4+2+4+len(header)) + setAddressBodyOffset
+	return dwarfLineEncoded{Bytes: out.Bytes(), SetAddressOffset: setAddrOff}, nil
 }
 
 // encodeDwarfLineHeader returns just the bytes between header_length and
@@ -216,14 +232,18 @@ func encodeDwarfLineHeader(prog dwarfLineProgram) []byte {
 // `extended end_sequence` per contiguous PC range. The encoder always uses
 // extended `set_address` for the first row so we don't have to teach the
 // reader about "implicit zero base" semantics.
-func encodeDwarfLineBody(prog dwarfLineProgram) ([]byte, error) {
+//
+// Returns the body bytes and the body-relative offset of the 8-byte
+// address argument of the first set_address (needed for relocation).
+func encodeDwarfLineBody(prog dwarfLineProgram) ([]byte, uint32, error) {
 	var b bytes.Buffer
 	if len(prog.Rows) == 0 {
 		// Even an empty function still needs an end_sequence so the
-		// section is well-formed.
+		// section is well-formed. The set_address payload bytes start
+		// after the 3-byte extended-op preamble (0x00, length, opcode).
 		writeDwarfExtendedSetAddress(&b, 0)
 		writeDwarfExtendedEndSequence(&b)
-		return b.Bytes(), nil
+		return b.Bytes(), 3, nil
 	}
 	state := struct {
 		PC   uint64
@@ -233,9 +253,11 @@ func encodeDwarfLineBody(prog dwarfLineProgram) ([]byte, error) {
 		Line: 1,
 		File: 1,
 	}
+	var setAddressOff uint32
+	emittedSetAddress := false
 	for i, row := range prog.Rows {
 		if i > 0 && row.PC < prog.Rows[i-1].PC {
-			return nil, fmt.Errorf("onb: dwarf line rows out of order at index %d", i)
+			return nil, 0, fmt.Errorf("onb: dwarf line rows out of order at index %d", i)
 		}
 		if row.Line == 0 {
 			// Skip rows the lowerer couldn't attribute to a source line —
@@ -243,9 +265,13 @@ func encodeDwarfLineBody(prog dwarfLineProgram) ([]byte, error) {
 			// debuggers expect for prologue/epilogue boilerplate.
 			continue
 		}
-		if i == 0 {
+		if !emittedSetAddress {
+			// Body offset where the 8-byte address payload starts: current
+			// buffer length (extended op header) + 3 (escape, length, opcode).
+			setAddressOff = uint32(b.Len()) + 3
 			writeDwarfExtendedSetAddress(&b, row.PC)
 			state.PC = row.PC
+			emittedSetAddress = true
 		} else if row.PC > state.PC {
 			b.WriteByte(dwarfLNSAdvancePC)
 			writeULEB128(&b, row.PC-state.PC)
@@ -274,7 +300,7 @@ func encodeDwarfLineBody(prog dwarfLineProgram) ([]byte, error) {
 		writeULEB128(&b, prog.TextSize-state.PC)
 	}
 	writeDwarfExtendedEndSequence(&b)
-	return b.Bytes(), nil
+	return b.Bytes(), setAddressOff, nil
 }
 
 // writeDwarfExtendedSetAddress emits the variable-length extended opcode
@@ -486,17 +512,17 @@ type dwarfCompileUnitInputs struct {
 	Language          byte
 }
 
-// emitDwarfAbbrev returns the byte stream for `__debug_abbrev`. Only one
-// abbreviation entry exists today — the compile unit DIE — but the format
-// is extensible: future slices that add subprogram or variable DIEs just
-// register a new code with its own attribute spec list.
+// emitDwarfAbbrev returns the byte stream for `__debug_abbrev`. Two
+// entries today — the compile unit DIE (code 1) and a subprogram DIE
+// (code 2) for each user function. Subprograms are children of the CU,
+// which is why the CU declares DW_CHILDREN_yes and the encoder writes a
+// 0-byte sentinel after the last subprogram to close the child list.
 func emitDwarfAbbrev() []byte {
 	var b bytes.Buffer
-	// Code 1: DW_TAG_compile_unit, no children.
+	// Code 1: DW_TAG_compile_unit, has children (the subprograms).
 	writeULEB128(&b, dwarfAbbrevCompileUnit)
 	writeULEB128(&b, dwarfTagCompileUnit)
-	b.WriteByte(dwarfChildrenNo)
-	// Attribute spec list. Order MUST match the DIE encoder.
+	b.WriteByte(dwarfChildrenYes)
 	writeULEB128AttrPair(&b, dwarfAtProducer, dwarfFormStrp)
 	writeULEB128AttrPair(&b, dwarfAtLanguage, dwarfFormData1)
 	writeULEB128AttrPair(&b, dwarfAtName, dwarfFormStrp)
@@ -504,9 +530,19 @@ func emitDwarfAbbrev() []byte {
 	writeULEB128AttrPair(&b, dwarfAtLowPC, dwarfFormAddr)
 	writeULEB128AttrPair(&b, dwarfAtHighPC, dwarfFormData8)
 	writeULEB128AttrPair(&b, dwarfAtStmtList, dwarfFormSecOffset)
-	// End of attribute list.
 	writeULEB128(&b, 0)
 	writeULEB128(&b, 0)
+
+	// Code 2: DW_TAG_subprogram, no children.
+	writeULEB128(&b, dwarfAbbrevSubprogram)
+	writeULEB128(&b, dwarfTagSubprogram)
+	b.WriteByte(dwarfChildrenNo)
+	writeULEB128AttrPair(&b, dwarfAtName, dwarfFormStrp)
+	writeULEB128AttrPair(&b, dwarfAtLowPC, dwarfFormAddr)
+	writeULEB128AttrPair(&b, dwarfAtHighPC, dwarfFormData8)
+	writeULEB128(&b, 0)
+	writeULEB128(&b, 0)
+
 	// End of abbreviation table.
 	writeULEB128(&b, 0)
 	return b.Bytes()
@@ -518,6 +554,24 @@ func writeULEB128AttrPair(b *bytes.Buffer, attr, form uint64) {
 	writeULEB128(b, form)
 }
 
+// dwarfInfoEncoded carries the byte stream for `__debug_info` plus the
+// section-relative offsets of every DW_AT_low_pc value. The Mach-O writer
+// attaches a relocation at each offset so dsymutil can rewrite the
+// addresses to the binary's runtime base. Without these relocations
+// dsymutil treats the DWARF as orphan and skips the .o.
+type dwarfInfoEncoded struct {
+	Bytes        []byte
+	LowPCOffsets []uint32 // section-relative offsets of every 8-byte DW_AT_low_pc
+}
+
+// dwarfSubprogramInput is the per-function metadata the encoder needs to
+// emit a `DW_TAG_subprogram` DIE underneath the compile unit.
+type dwarfSubprogramInput struct {
+	NameStrOffset uint32
+	LowPC         uint64
+	SizeBytes     uint64 // DWARF 4 high_pc as constant offset from low_pc
+}
+
 // emitDwarfInfo returns the byte stream for `__debug_info`. The unit
 // header layout (DWARF 4 §7.5.1.1):
 //
@@ -526,27 +580,47 @@ func writeULEB128AttrPair(b *bytes.Buffer, attr, form uint64) {
 //	debug_abbrev_offset (4 bytes, sec_offset into __debug_abbrev)
 //	address_size        (1 byte = 8 for aarch64)
 //
-// then DIEs. Our single DIE is the compile unit, written in the attribute
-// order that emitDwarfAbbrev declared.
-func emitDwarfInfo(cu dwarfCompileUnitInputs) []byte {
+// then DIEs in tree order. The CU DIE owns one DW_TAG_subprogram child
+// per user function, terminated by a 0-byte sentinel.
+func emitDwarfInfo(cu dwarfCompileUnitInputs, subs []dwarfSubprogramInput) dwarfInfoEncoded {
 	var die bytes.Buffer
 	writeULEB128(&die, dwarfAbbrevCompileUnit)
 	binary.Write(&die, binary.LittleEndian, cu.ProducerStrOffset)
 	die.WriteByte(cu.Language)
 	binary.Write(&die, binary.LittleEndian, cu.NameStrOffset)
 	binary.Write(&die, binary.LittleEndian, cu.CompDirStrOffset)
+	cuLowPCDieOff := uint32(die.Len())
 	binary.Write(&die, binary.LittleEndian, cu.LowPC)
 	binary.Write(&die, binary.LittleEndian, cu.HighPCSize)
 	binary.Write(&die, binary.LittleEndian, cu.StmtListOffset)
+
+	subLowPCDieOffs := make([]uint32, 0, len(subs))
+	for _, sub := range subs {
+		writeULEB128(&die, dwarfAbbrevSubprogram)
+		binary.Write(&die, binary.LittleEndian, sub.NameStrOffset)
+		subLowPCDieOffs = append(subLowPCDieOffs, uint32(die.Len()))
+		binary.Write(&die, binary.LittleEndian, sub.LowPC)
+		binary.Write(&die, binary.LittleEndian, sub.SizeBytes)
+	}
+	// Terminate the CU's children list (DW_CHILDREN_yes was set in the
+	// abbrev, so we close with a 0-byte sentinel).
+	die.WriteByte(0)
 
 	var unit bytes.Buffer
 	unitLen := uint32(2 /*version*/ + 4 /*abbrev_offset*/ + 1 /*addr_size*/ + die.Len())
 	binary.Write(&unit, binary.LittleEndian, unitLen)
 	binary.Write(&unit, binary.LittleEndian, uint16(dwarfVersion))
-	binary.Write(&unit, binary.LittleEndian, uint32(0)) // abbrev offset (this CU starts at 0)
+	binary.Write(&unit, binary.LittleEndian, uint32(0))
 	unit.WriteByte(dwarfAddressSize)
 	unit.Write(die.Bytes())
-	return unit.Bytes()
+
+	const headerLen = 11 // 4 + 2 + 4 + 1
+	lowPCs := make([]uint32, 0, 1+len(subLowPCDieOffs))
+	lowPCs = append(lowPCs, headerLen+cuLowPCDieOff)
+	for _, off := range subLowPCDieOffs {
+		lowPCs = append(lowPCs, headerLen+off)
+	}
+	return dwarfInfoEncoded{Bytes: unit.Bytes(), LowPCOffsets: lowPCs}
 }
 
 // dwarfCompileUnitMeta packages the three string-table inputs along with

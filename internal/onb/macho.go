@@ -191,48 +191,65 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 		return enc.relocs[i].address > enc.relocs[j].address
 	})
 
-	// Build the symbol/strtab pre-pass so we know strtab size up front and
-	// can place the optional __debug_line section after the strtab in the
-	// final file layout. Symbols are added in the same order the writer
-	// uses below: cstrings → user functions → external symbols.
-	strtab := newMachOStringTable()
-	symStrx := make([]uint32, 0, len(program.CStrings)+len(program.Functions)+len(enc.externalSymbols))
-	for _, cstr := range program.CStrings {
-		symStrx = append(symStrx, strtab.add(asmCStringLabel(program.Target, cstr.Label)))
-	}
-	for _, fn := range program.Functions {
-		symStrx = append(symStrx, strtab.add(asmSymbolName(program.Target, fn.Name)))
-	}
-	for _, symbol := range enc.externalSymbols {
-		symStrx = append(symStrx, strtab.add(asmSymbolName(program.Target, symbol)))
-	}
-
-	// DWARF line program: optional, only emitted on darwin/aarch64 with at
-	// least one function. Placed at the end of the file so its absence
-	// doesn't perturb earlier offsets when the line emitter degenerates.
-	var debugLine []byte
-	if dwarfPayload := buildDwarfLine(program, enc); dwarfPayload != nil {
-		debugLine = dwarfPayload
-	}
-
-	// DWARF B.1: __debug_info / __debug_abbrev / __debug_str complete the
-	// trio that lldb needs to auto-discover the compile unit. They live
-	// alongside __debug_line in the __DWARF segment. The section bodies
-	// only get populated when the line program itself is non-empty —
-	// otherwise there's nothing to point at and shipping empty sections
-	// just bloats the .o.
+	// DWARF: emit when source-line metadata is present. Phase B.0 was the
+	// line program; Phase B.1 added the CU DIE / abbrev / string table;
+	// Phase B.2 attaches Mach-O relocations to the address bytes inside
+	// `__debug_line` and `__debug_info` so dsymutil can rewrite them to
+	// the binary's runtime addresses after link.
+	lineEnc := buildDwarfLine(program, enc)
+	debugLine := lineEnc.Bytes
 	var debugAbbrev, debugInfo, debugStr []byte
 	hasDwarf := len(debugLine) > 0
+	var infoEnc dwarfInfoEncoded
 	if hasDwarf {
 		meta := buildDwarfCompileUnitMeta(program)
 		if meta != nil {
 			meta.CU.LowPC = 0
 			meta.CU.HighPCSize = uint64(len(enc.code))
 			meta.CU.StmtListOffset = 0 // single CU; line program starts at section offset 0
+			fnSizes := computeFnSizes(enc, uint64(len(enc.code)))
+			subs := make([]dwarfSubprogramInput, 0, len(program.Functions))
+			for i, fn := range program.Functions {
+				if i >= len(enc.fnOffsets) || i >= len(fnSizes) {
+					break
+				}
+				subs = append(subs, dwarfSubprogramInput{
+					NameStrOffset: meta.Strings.Add(fn.Name),
+					LowPC:         enc.fnOffsets[i],
+					SizeBytes:     fnSizes[i],
+				})
+			}
 			debugAbbrev = emitDwarfAbbrev()
-			debugInfo = emitDwarfInfo(meta.CU)
+			infoEnc = emitDwarfInfo(meta.CU, subs)
+			debugInfo = infoEnc.Bytes
 			debugStr = meta.Strings.buf
 		}
+	}
+
+	// Build the symbol/strtab pre-pass so we know strtab size up front and
+	// can place sections at deterministic file offsets. Symbol order is
+	// fixed: cstrings → ltmp0 → user functions → external symbols. The
+	// `ltmp0` slot is reserved unconditionally (even when DWARF is off)
+	// so the encoder's external-symbol slot calculation can use a single
+	// constant offset instead of branching on hasDwarf.
+	//
+	// `ltmp0` is the local "start of __text" anchor: DWARF address relocs
+	// in `__debug_info`/`__debug_line` point at it so the linker can
+	// shift the embedded zero-addresses to the binary's runtime base.
+	const ltmp0Name = "ltmp0"
+	strtab := newMachOStringTable()
+	totalSyms := len(program.CStrings) + 1 + len(program.Functions) + len(enc.externalSymbols)
+	symStrx := make([]uint32, 0, totalSyms)
+	for _, cstr := range program.CStrings {
+		symStrx = append(symStrx, strtab.add(asmCStringLabel(program.Target, cstr.Label)))
+	}
+	ltmp0SymIdx := uint32(len(symStrx))
+	symStrx = append(symStrx, strtab.add(ltmp0Name))
+	for _, fn := range program.Functions {
+		symStrx = append(symStrx, strtab.add(asmSymbolName(program.Target, fn.Name)))
+	}
+	for _, symbol := range enc.externalSymbols {
+		symStrx = append(symStrx, strtab.add(asmSymbolName(program.Target, symbol)))
 	}
 
 	dwarfSectionCount := uint32(0)
@@ -258,15 +275,25 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 	cstringOffset := textOffset + uint32(len(enc.code))
 	// File layout order (contiguous so each segment claims a clean range):
 	//   __text → __cstring → __debug_line → __debug_info → __debug_abbrev →
-	//   __debug_str → relocs → symtab → strtab
+	//   __debug_str → relocs (text → __debug_info → __debug_line) → symtab → strtab
 	debugLineOffset := cstringOffset + uint32(len(cstringData))
 	debugInfoOffset := debugLineOffset + uint32(len(debugLine))
 	debugAbbrevOffset := debugInfoOffset + uint32(len(debugInfo))
 	debugStrOffset := debugAbbrevOffset + uint32(len(debugAbbrev))
 	debugEnd := debugStrOffset + uint32(len(debugStr))
 	relocOffset := alignUp(debugEnd, 4)
-	symoff := relocOffset + uint32(len(enc.relocs))*machoRelocSize
-	nsyms := uint32(len(program.CStrings) + len(program.Functions) + len(enc.externalSymbols))
+	textRelocsBytes := uint32(len(enc.relocs)) * machoRelocSize
+	dwarfInfoRelocOffset := relocOffset + textRelocsBytes
+	dwarfInfoRelocCount := uint32(0)
+	dwarfLineRelocCount := uint32(0)
+	if hasDwarf {
+		dwarfInfoRelocCount = uint32(len(infoEnc.LowPCOffsets))
+		dwarfLineRelocCount = 1
+	}
+	dwarfLineRelocOffset := dwarfInfoRelocOffset + dwarfInfoRelocCount*machoRelocSize
+	dwarfRelocsBytes := (dwarfInfoRelocCount + dwarfLineRelocCount) * machoRelocSize
+	symoff := relocOffset + textRelocsBytes + dwarfRelocsBytes
+	nsyms := uint32(len(symStrx))
 	stroff := symoff + nsyms*machoNlist64Size
 	strtabEnd := stroff + uint32(len(strtab.data))
 	linkeditOffset := relocOffset
@@ -354,8 +381,8 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 		writeU64(&b, uint64(len(debugLine)))
 		writeU32(&b, debugLineOffset)
 		writeU32(&b, 0) // align
-		writeU32(&b, 0) // reloff
-		writeU32(&b, 0) // nreloc
+		writeU32(&b, dwarfLineRelocOffset)
+		writeU32(&b, dwarfLineRelocCount)
 		writeU32(&b, machoSectionRegular|machoSectionDebug)
 		writeU32(&b, 0)
 		writeU32(&b, 0)
@@ -369,8 +396,8 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 		writeU64(&b, uint64(len(debugInfo)))
 		writeU32(&b, debugInfoOffset)
 		writeU32(&b, 0)
-		writeU32(&b, 0)
-		writeU32(&b, 0)
+		writeU32(&b, dwarfInfoRelocOffset)
+		writeU32(&b, dwarfInfoRelocCount)
 		writeU32(&b, machoSectionRegular|machoSectionDebug)
 		writeU32(&b, 0)
 		writeU32(&b, 0)
@@ -437,11 +464,15 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 
 	writeU32(&b, machoLCDysymtab)
 	writeU32(&b, machoDysymtabCommandSize)
+	// dysymtab ranges: locals = cstrings + ltmp0; ext-defs = fns;
+	// undefs = externals. Each `len(*)` matches the symbol-write order
+	// the writer follows below.
+	localCount := uint32(len(program.CStrings) + 1) // +1 for ltmp0
 	writeU32(&b, 0)
-	writeU32(&b, uint32(len(program.CStrings)))
-	writeU32(&b, uint32(len(program.CStrings)))
+	writeU32(&b, localCount)
+	writeU32(&b, localCount)
 	writeU32(&b, uint32(len(program.Functions)))
-	writeU32(&b, uint32(len(program.CStrings)+len(program.Functions)))
+	writeU32(&b, localCount+uint32(len(program.Functions)))
 	writeU32(&b, uint32(len(enc.externalSymbols)))
 	for i := 0; i < 12; i++ {
 		writeU32(&b, 0)
@@ -477,6 +508,44 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 	for _, reloc := range enc.relocs {
 		writeMachOReloc(&b, reloc)
 	}
+	// DWARF address relocs (`__debug_info` first, then `__debug_line`).
+	// Both reference the `__text` section by number (extern=false,
+	// symbolnum=1), matching what clang emits for compiler-driven .o.
+	// dsymutil only honours non-extern UNSIGNED relocs in DWARF
+	// sections — externally-keyed relocs against a local symbol like
+	// `ltmp0` are silently rejected with "No valid relocations found".
+	if hasDwarf {
+		if b.Len() != int(dwarfInfoRelocOffset) {
+			return nil, fmt.Errorf("onb: internal Mach-O layout mismatch: dwarfInfoReloc=%d expected=%d", b.Len(), dwarfInfoRelocOffset)
+		}
+		// Mach-O relocs are emitted highest-address-first within their
+		// section, matching the convention dsymutil expects when it
+		// walks a section's reloc list.
+		ordered := make([]uint32, len(infoEnc.LowPCOffsets))
+		copy(ordered, infoEnc.LowPCOffsets)
+		sort.Slice(ordered, func(i, j int) bool { return ordered[i] > ordered[j] })
+		for _, off := range ordered {
+			writeMachOReloc(&b, machoReloc{
+				address:   off,
+				symbolnum: uint32(machoTextSectionNumber),
+				pcrel:     false,
+				length:    3,
+				extern:    false,
+				typ:       0, // ARM64_RELOC_UNSIGNED
+			})
+		}
+		if b.Len() != int(dwarfLineRelocOffset) {
+			return nil, fmt.Errorf("onb: internal Mach-O layout mismatch: dwarfLineReloc=%d expected=%d", b.Len(), dwarfLineRelocOffset)
+		}
+		writeMachOReloc(&b, machoReloc{
+			address:   lineEnc.SetAddressOffset,
+			symbolnum: uint32(machoTextSectionNumber),
+			pcrel:     false,
+			length:    3,
+			extern:    false,
+			typ:       0,
+		})
+	}
 	if b.Len() != int(symoff) {
 		return nil, fmt.Errorf("onb: internal Mach-O layout mismatch: sym=%d symoff=%d", b.Len(), symoff)
 	}
@@ -485,6 +554,11 @@ func emitMachOObjectWithCStringRelocs(program *Program) ([]byte, error) {
 		writeMachONlist64(&b, symStrx[symIdx], machoNSect, machoCStringSectionNumber, 0, cstringAddrs[cstr.Label])
 		symIdx++
 	}
+	// ltmp0: local symbol pinned at __text offset 0. DWARF address relocs
+	// reference it; ld translates to the binary's runtime base address.
+	writeMachONlist64(&b, symStrx[symIdx], machoNSect, machoTextSectionNumber, 0, 0)
+	symIdx++
+	_ = ltmp0SymIdx
 	for i := range program.Functions {
 		var fnOffset uint64
 		if i < len(enc.fnOffsets) {
@@ -531,9 +605,10 @@ func encodeMachOTextWithRelocs(program *Program, cstringIndex map[string]uint32)
 	// an undefined symbol (from the branch reloc), which Mach-O rejects.
 	localFnIndex := map[string]uint32{}
 	for i, fn := range program.Functions {
-		// nextdefsym order matches program.Functions order: cstrings come
-		// first in the symtab, so each fn slot is len(cstrings) + i.
-		localFnIndex[fn.Name] = uint32(len(cstringIndex) + i)
+		// Symtab order is cstrings + ltmp0 + fns + externals. ltmp0 is
+		// always reserved (see emitMachOObjectWithCStringRelocs's
+		// pre-pass) so the +1 shift is unconditional.
+		localFnIndex[fn.Name] = uint32(len(cstringIndex) + 1 + i)
 	}
 	externalIndex := map[string]uint32{}
 	var enc machoTextEncoding
@@ -559,15 +634,15 @@ type machoBranchFixup struct {
 }
 
 // buildDwarfLine assembles the Phase B.0 `.debug_line` section bytes from a
-// fully encoded Mach-O text. Returns nil when the program has no source
-// metadata or the encoder doesn't have per-function size info — both cases
-// degrade to "no debug info" rather than failing the whole emission.
-func buildDwarfLine(program *Program, enc machoTextEncoding) []byte {
+// fully encoded Mach-O text. Returns an empty result when the program has
+// no source metadata or the encoder doesn't have per-function size info —
+// both cases degrade to "no debug info" rather than failing the whole emit.
+func buildDwarfLine(program *Program, enc machoTextEncoding) dwarfLineEncoded {
 	if program == nil || len(program.Functions) == 0 || len(enc.fnOffsets) != len(program.Functions) {
-		return nil
+		return dwarfLineEncoded{}
 	}
 	if !hasAnySourceLine(program) {
-		return nil
+		return dwarfLineEncoded{}
 	}
 	fnSizes := computeFnSizes(enc, uint64(len(enc.code)))
 	includeDir := dwarfIncludeDir(program)
@@ -589,7 +664,7 @@ func buildDwarfLine(program *Program, enc machoTextEncoding) []byte {
 	if err != nil {
 		// Don't sink the whole emit on a malformed line program — the
 		// rest of the .o is still useful.
-		return nil
+		return dwarfLineEncoded{}
 	}
 	return out
 }
@@ -693,7 +768,8 @@ func encodeMachOFunction(enc *machoTextEncoding, fn Function, cstringIndex, loca
 				if !isLocal {
 					ext, ok := externalIndex[i.Symbol]
 					if !ok {
-						ext = uint32(len(cstringIndex) + totalFns + len(enc.externalSymbols))
+						// Symtab tail layout: cstrings + ltmp0 (1) + fns + externals.
+						ext = uint32(len(cstringIndex) + 1 + totalFns + len(enc.externalSymbols))
 						externalIndex[i.Symbol] = ext
 						enc.externalSymbols = append(enc.externalSymbols, i.Symbol)
 					}

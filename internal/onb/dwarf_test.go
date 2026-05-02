@@ -76,12 +76,12 @@ func TestEmitDwarfLineProducesValidPrologue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("emitDwarfLine returned error: %v", err)
 	}
-	if len(out) < 12 {
-		t.Fatalf("emitDwarfLine output too short: %d bytes", len(out))
+	if len(out.Bytes) < 12 {
+		t.Fatalf("emitDwarfLine output too short: %d bytes", len(out.Bytes))
 	}
 	// unit_length excludes the 4-byte length field itself; verify the
 	// header reports a sane DWARF 4 prologue.
-	version := uint16(out[4]) | uint16(out[5])<<8
+	version := uint16(out.Bytes[4]) | uint16(out.Bytes[5])<<8
 	if version != 4 {
 		t.Fatalf("dwarf version = %d, want 4", version)
 	}
@@ -105,8 +105,8 @@ func TestEmitDwarfAbbrevHasCompileUnitEntry(t *testing.T) {
 	if out[1] != byte(dwarfTagCompileUnit) {
 		t.Fatalf("tag = %#x, want %#x (DW_TAG_compile_unit)", out[1], dwarfTagCompileUnit)
 	}
-	if out[2] != dwarfChildrenNo {
-		t.Fatalf("has_children = %d, want DW_CHILDREN_no", out[2])
+	if out[2] != dwarfChildrenYes {
+		t.Fatalf("has_children = %d, want DW_CHILDREN_yes (CU owns subprogram DIEs)", out[2])
 	}
 }
 
@@ -180,6 +180,84 @@ func TestEmitObjectIncludesDwarfLineSection(t *testing.T) {
 	}
 	if !sawDebugLine {
 		t.Fatalf("Mach-O sections missing __DWARF/__debug_line: %+v", f.Sections)
+	}
+}
+
+// TestEmitDwarfInfoEmitsSubprogramDIEPerFunction verifies the encoder
+// stamps one DW_TAG_subprogram low_pc relocation per function. dsymutil
+// silently rejects CUs without subprogram children, so this is a load-
+// bearing invariant.
+func TestEmitDwarfInfoEmitsSubprogramDIEPerFunction(t *testing.T) {
+	t.Parallel()
+
+	cu := dwarfCompileUnitInputs{
+		ProducerStrOffset: 1,
+		Language:          dwarfLangC99,
+		NameStrOffset:     2,
+		CompDirStrOffset:  3,
+		LowPC:             0,
+		HighPCSize:        0x40,
+		StmtListOffset:    0,
+	}
+	subs := []dwarfSubprogramInput{
+		{NameStrOffset: 4, LowPC: 0x00, SizeBytes: 0x20},
+		{NameStrOffset: 5, LowPC: 0x20, SizeBytes: 0x20},
+	}
+	enc := emitDwarfInfo(cu, subs)
+	if len(enc.LowPCOffsets) != 1+len(subs) {
+		t.Fatalf("low_pc offsets count = %d, want %d (CU + 2 subprograms)", len(enc.LowPCOffsets), 1+len(subs))
+	}
+	for i := 1; i < len(enc.LowPCOffsets); i++ {
+		if enc.LowPCOffsets[i] <= enc.LowPCOffsets[i-1] {
+			t.Fatalf("low_pc offsets not monotonic at %d: %v", i, enc.LowPCOffsets)
+		}
+	}
+}
+
+// TestEmitObjectIncludesDwarfRelocations checks that the Mach-O writer
+// emits non-extern UNSIGNED relocations for both `__debug_info` and
+// `__debug_line` DWARF sections. clang-emitted .o uses this exact
+// pattern; dsymutil rejects external (symbol-based) relocs in DWARF
+// sections with "No valid relocations found".
+func TestEmitObjectIncludesDwarfRelocations(t *testing.T) {
+	t.Parallel()
+
+	mod := &mir.Module{
+		Functions: []*mir.Function{intPrintlnMainMIR(42)},
+	}
+	target := Target{Triple: "aarch64-apple-darwin", OS: "darwin", Arch: "aarch64", ObjectFormat: "mach-o"}
+	program, err := LowerMIR(mod, target)
+	if err != nil {
+		t.Fatalf("LowerMIR returned error: %v", err)
+	}
+	program.SourcePath = "/tmp/main.osty"
+	program.Package = "main"
+	for fi := range program.Functions {
+		for bi := range program.Functions[fi].Blocks {
+			for i := range program.Functions[fi].Blocks[bi].LineSpans {
+				program.Functions[fi].Blocks[bi].LineSpans[i] = LineSpan{Line: 1, Column: 1}
+			}
+		}
+	}
+	obj, err := EmitObject(program)
+	if err != nil {
+		t.Fatalf("EmitObject returned error: %v", err)
+	}
+	f, err := macho.NewFile(bytes.NewReader(obj))
+	if err != nil {
+		t.Fatalf("macho.NewFile returned error: %v", err)
+	}
+	for _, sec := range f.Sections {
+		switch {
+		case sec.Seg == "__DWARF" && sec.Name == "__debug_info":
+			if len(sec.Relocs) == 0 {
+				t.Fatalf("__debug_info has 0 relocs; dsymutil will skip the .o")
+			}
+		case sec.Seg == "__DWARF" && sec.Name == "__debug_line":
+			if len(sec.Relocs) != 1 {
+				t.Fatalf("__debug_line relocs = %d, want 1 (set_address)", len(sec.Relocs))
+			}
+		}
 	}
 }
 

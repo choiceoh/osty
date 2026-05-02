@@ -37,6 +37,26 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 8 (DWARF B.2 — lldb integration, 2026-05-02)** — DWARF
+> 파이프라인이 lldb 자동 인식까지 도달. `dsymutil`이 .o의 DWARF를 .dSYM으로
+> 번들링하고, `lldb`가 `br set -f main.osty -l 4` 같은 source-level breakpoint
+> 를 PC로 해상하며 source view까지 표시한다. 추가:
+> - `DW_TAG_subprogram` DIE per user function (CU의 child DIE; CU는
+>   `DW_CHILDREN_yes`로 변경) — dsymutil이 child 없는 CU를 빈 것으로 처리하던
+>   문제 해결
+> - `__debug_info` + `__debug_line` 섹션에 **non-extern UNSIGNED 릴로케이션**
+>   (extern=false, symbolnum=__text section number) — clang의 패턴과 동일.
+>   extern symbol-rel 릴로케이션은 dsymutil이 silently 거부함
+> - `dwarfInfoEncoded.LowPCOffsets` / `dwarfLineEncoded.SetAddressOffset`로
+>   인코더가 reloc 위치를 호출자에게 전달
+> - Mach-O writer가 `__text` reloc 다음에 DWARF section reloc들을 배치
+>   (highest-address-first 정렬)
+> - `ltmp0` local symbol (당시엔 reloc target으로 의도했으나 결국 section-rel
+>   reloc으로 갔으므로 unused; 향후 cleanup 가능)
+>
+> 검증: `lldb -o "br set -f main.osty -l 4" ./app` 실행 시
+> `Breakpoint 1: where = app\`main + 56 at main.osty:4:9` + source 5라인 표시.
+>
 > **Slice A2 Week 7 (DWARF B.1 — CU DIE, 2026-05-02)** — `__debug_info` +
 > `__debug_abbrev` + `__debug_str` 세 섹션이 추가되어 DWARF 인프라 완비.
 > CU DIE는 `DW_TAG_compile_unit` 1개에 7개 attribute (producer, language=C99,

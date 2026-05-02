@@ -316,6 +316,62 @@ func TestONBBackendBinaryRunsArithOnDarwinARM64(t *testing.T) {
 	}
 }
 
+// TestONBBackendLldbResolvesSourceLineOnDarwinARM64 verifies the full
+// debugger integration: dsymutil bundles the .dSYM, lldb auto-loads it,
+// and `breakpoint set --file <src> --line N` resolves to a concrete PC
+// inside the function. This covers Phase B.0 (line program) + B.1
+// (CU DIE / abbrev / str) + B.2 (DWARF relocs + subprogram DIEs).
+func TestONBBackendLldbResolvesSourceLineOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("lldb DWARF integration smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+	if _, err := exec.LookPath("lldb"); err != nil {
+		t.Skip("lldb not found on PATH")
+	}
+	if _, err := exec.LookPath("dsymutil"); err != nil {
+		t.Skip("dsymutil not found on PATH")
+	}
+
+	t.Setenv(onb.EnvStrict, "1")
+	src := `fn main() {
+    let mut i = 0
+    while i < 3 {
+        println(i)
+        i = i + 1
+    }
+}`
+	req := newBackendRequest(t, EmitBinary, src)
+	req.Layout.Target = "aarch64-apple-darwin"
+	result, err := ONBBackend{}.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("ONBBackend.Emit returned error: %v", err)
+	}
+	if result == nil || result.Artifacts.Binary == "" {
+		t.Fatalf("missing binary artifact: %+v", result)
+	}
+	if out, err := exec.Command("dsymutil", result.Artifacts.Binary).CombinedOutput(); err != nil {
+		t.Fatalf("dsymutil failed: %v\n%s", err, out)
+	}
+	out, err := exec.Command("lldb",
+		"-o", "br set -f main.osty -l 4",
+		"-o", "exit",
+		"--", result.Artifacts.Binary,
+	).CombinedOutput()
+	if err != nil {
+		t.Fatalf("lldb returned error: %v\n%s", err, out)
+	}
+	text := string(out)
+	if strings.Contains(text, "Unable to resolve breakpoint") {
+		t.Fatalf("lldb failed to resolve source breakpoint:\n%s", text)
+	}
+	if !strings.Contains(text, "main.osty:4") {
+		t.Fatalf("lldb output missing 'main.osty:4' source location:\n%s", text)
+	}
+}
+
 // TestONBBackendBinaryRunsStringAndListOnDarwinARM64 exercises Phase A2's
 // runtime-call slice: String concatenation and `List<Int>` push/len. These
 // shapes lower to `bl _osty_rt_strings_Concat`, `bl _osty_rt_list_new`,
