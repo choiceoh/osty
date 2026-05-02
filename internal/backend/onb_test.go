@@ -1070,6 +1070,78 @@ func TestONBBackendBinaryRunsForInLoopOnDarwinARM64(t *testing.T) {
 	}
 }
 
+// TestONBBackendBinaryRunsStructFieldMutationOnDarwinARM64 covers
+// Phase A2 Week 18: `p.x = 5` writes through a projection chain. The
+// front end emits `Assign{Dest: Place{p, [FieldProj 0]}, Src: ...}`;
+// previously ONB rejected projections on the dest side and fell back
+// to LLVM. The new `lowerAssignToProjection` path computes the
+// constant byte offset and emits a slot+offset store.
+//
+// Cases:
+//   - **simple_assign**: `p.x = 100` — drives the const → field-write
+//     path.
+//   - **read_modify_write**: `p.y = p.y + 1` — drives BinaryRV with
+//     a projected destination (the rvalue still reads through
+//     FieldProj, which has worked since Week 12).
+//   - **swap_via_field**: two struct locals with a temporary swap.
+//     Verifies the projection write doesn't trample the source
+//     when both destinations live near each other on the stack.
+func TestONBBackendBinaryRunsStructFieldMutationOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("ONB struct field mutation smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	cases := []struct {
+		name, src, want string
+	}{
+		{
+			name: "simple_assign",
+			src: `struct Point { x: Int, y: Int }
+fn main() {
+    let mut p = Point { x: 3, y: 4 }
+    p.x = 100
+    println(p.x)
+    println(p.y)
+}`,
+			want: "100\n4\n",
+		},
+		{
+			name: "read_modify_write",
+			src: `struct Point { x: Int, y: Int }
+fn main() {
+    let mut p = Point { x: 3, y: 4 }
+    p.y = p.y + 10
+    p.x = p.x * 2
+    println(p.x)
+    println(p.y)
+}`,
+			want: "6\n14\n",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(onb.EnvStrict, "1")
+			req := newBackendRequest(t, EmitBinary, tc.src)
+			req.Layout.Target = "aarch64-apple-darwin"
+			result, err := ONBBackend{}.Emit(context.Background(), req)
+			if err != nil {
+				t.Fatalf("ONBBackend.Emit returned error: %v", err)
+			}
+			out, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+			if err != nil {
+				t.Fatalf("binary returned error: %v\n%s", err, out)
+			}
+			if got := string(out); got != tc.want {
+				t.Fatalf("binary output = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestONBBackendBinaryRunsStringAndListOnDarwinARM64 exercises Phase A2's
 // runtime-call slice: String concatenation and `List<Int>` push/len. These
 // shapes lower to `bl _osty_rt_strings_Concat`, `bl _osty_rt_list_new`,

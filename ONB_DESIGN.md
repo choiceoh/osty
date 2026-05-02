@@ -37,6 +37,33 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 18 (struct field mutation, 2026-05-02)** —
+> ONB가 `p.x = 5` 같은 projection-as-Dest 어사인을 native lowering.
+> Week 12에서 `p.x` read는 통과했지만 write는 fallback 사유였음. 이번
+> 슬라이스로 `let mut p = Point { x: 3, y: 4 }; p.x = 100;
+> p.y = p.y + 1` 패턴이 fallback 없이 통과.
+>
+> 추가:
+> - `lowerAssignToProjection` — Dest의 projection chain (FieldProj /
+>   VariantProj)을 byte offset으로 변환해 slot+offset에 store
+> - `projectionEndType` helper — projection chain 끝의 MIR 타입 반환
+>   (Float field write는 d8 경유, 그 외는 x9 경유)
+> - 기존 가드 `if instr.Dest.HasProjections()` 제거 — 새 경로로 라우팅
+>
+> 검증:
+> - E2E binary smoke 2개 (`TestONBBackendBinaryRunsStructFieldMutationOnDarwinARM64`):
+>   simple_assign (`p.x = 100; println p.x = 100, p.y = 4`),
+>   read_modify_write (`p.y = p.y + 10; p.x = p.x * 2`)
+>
+> 한계 (이번 슬라이스에서 명시적으로 보류):
+> - `xs[i] = v` (IndexProj-as-Dest) — runtime list_set_* 디스패치 필요
+> - `Some(p).x = ...` 같은 nested projection 후 write — 흔치 않음
+> - struct/enum 타입의 field write (e.g. `outer.inner = Point {...}`) —
+>   multi-slot store 미구현
+>
+> 다음 슬라이스 후보: struct >16B sret-style passing, 또는 list_set_*
+> 디스패치 (xs[i] = v).
+>
 > **Slice A2 Week 17 (`for x in list` native lowering, 2026-05-02)** —
 > ONB가 `for x in list` 루프를 native lowering. 이전에는 List 인덱스
 > read가 fallback 사유였는데, `LenRV` + `IndexProj` 두 vocab item을

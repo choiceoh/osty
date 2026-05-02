@@ -485,7 +485,7 @@ func (s *lowerState) lowerAssign(fn *mir.Function, instr *mir.AssignInstr) ([]In
 		return nil, nil
 	}
 	if instr.Dest.HasProjections() {
-		return nil, fmt.Errorf("%w: place projection on assign dest", ErrUnsupportedShape)
+		return s.lowerAssignToProjection(instr)
 	}
 	// Allow writes to a non-Unit return local even if it has no slot — the
 	// epilogue will read x0 directly. Stage the write into x0 so the
@@ -544,6 +544,80 @@ func (s *lowerState) lowerLenAssign(rv *mir.LenRV, destSlot int64) ([]Instr, err
 		&BranchLink{Symbol: runtimeSymListLen},
 		&Store64Stack{Src: RegX0, Offset: destSlot},
 	}, nil
+}
+
+// lowerAssignToProjection covers `dest.field = rvalue` patterns where
+// the destination has a projection chain. Today's coverage is limited
+// to FieldProj on a struct local (`p.x = 5`) and VariantProj on an
+// enum local — both reduce to a static byte-offset write inside the
+// local's stack slot. IndexProj writes (`xs[i] = v`) and dest-side
+// VariantProj-with-payload don't lower yet because they need a
+// runtime call (the former) or a discriminant check (the latter).
+//
+// The rvalue path mirrors `lowerAssign` for non-projected dests but
+// scoped to a single 8-byte slot — we don't try to cover struct or
+// enum-typed field writes (which would need multi-slot stores).
+func (s *lowerState) lowerAssignToProjection(instr *mir.AssignInstr) ([]Instr, error) {
+	dest := instr.Dest
+	for _, p := range dest.Projections {
+		switch p.(type) {
+		case *mir.FieldProj, *mir.VariantProj:
+		default:
+			return nil, fmt.Errorf("%w: assign-to-projection of %T", ErrUnsupportedShape, p)
+		}
+	}
+	baseSlot, ok := s.localSlots[dest.Local]
+	if !ok {
+		return nil, fmt.Errorf("%w: assign-to-projection on local%d without slot", ErrUnsupportedShape, dest.Local)
+	}
+	off, err := s.placeProjectionOffset(dest)
+	if err != nil {
+		return nil, err
+	}
+	slot := baseSlot + off
+	switch rv := instr.Src.(type) {
+	case *mir.UseRV:
+		// Detect Float dest by walking the projection chain to its
+		// final type. The MIR carries the field's type on the
+		// FieldProj / VariantProj node; we can use that without
+		// re-resolving through the layout table.
+		fieldT := projectionEndType(dest)
+		if isFloatABIType(fieldT) {
+			mat, err := s.materialiseFloatOperand(rv.Op, RegD8)
+			if err != nil {
+				return nil, err
+			}
+			return append(mat, &StoreFloat64Stack{Src: RegD8, Offset: slot}), nil
+		}
+		mat, err := s.materialiseOperand(rv.Op, RegX9)
+		if err != nil {
+			return nil, err
+		}
+		return append(mat, &Store64Stack{Src: RegX9, Offset: slot}), nil
+	case *mir.BinaryRV:
+		return s.lowerBinaryAssign(rv, slot)
+	default:
+		return nil, fmt.Errorf("%w: assign-to-projection rvalue %T", ErrUnsupportedShape, instr.Src)
+	}
+}
+
+// projectionEndType returns the MIR type that lives at the end of a
+// projection chain. FieldProj.Type / VariantProj.Type carry the
+// field's declared type, so the helper just reads the last
+// projection's `Type` field. Empty chains return TUnit (caller is
+// responsible for not asking that question).
+func projectionEndType(place mir.Place) mir.Type {
+	if len(place.Projections) == 0 {
+		return mir.TUnit
+	}
+	last := place.Projections[len(place.Projections)-1]
+	switch p := last.(type) {
+	case *mir.FieldProj:
+		return p.Type
+	case *mir.VariantProj:
+		return p.Type
+	}
+	return mir.TUnit
 }
 
 // lowerUseAssign handles `Assign dest := Use(operand)`. The common case
