@@ -298,6 +298,13 @@ func (s *lowerState) lowerBlock(fn *mir.Function, block *mir.BasicBlock, isEntry
 			return Block{}, err
 		}
 		emit(switchInstrs, termSpan)
+	case *mir.UnreachableTerm:
+		// `match` exhaustiveness adds an unreachable trap as the
+		// switch default. Reaching this PC is a compiler bug or UB,
+		// so the safest lowering is `brk #1` (aarch64 software
+		// breakpoint) — the process aborts immediately rather than
+		// fall through into the next function.
+		emit([]Instr{&Brk{Imm: 1}}, termSpan)
 	default:
 		return Block{}, fmt.Errorf("%w: terminator %T is outside phase 1", ErrUnsupportedShape, block.Term)
 	}
@@ -466,24 +473,84 @@ func (s *lowerState) lowerAssign(fn *mir.Function, instr *mir.AssignInstr) ([]In
 	}
 	switch rv := instr.Src.(type) {
 	case *mir.UseRV:
-		mat, err := s.materialiseOperand(rv.Op, RegX9)
-		if err != nil {
-			return nil, err
-		}
-		return append(mat, &Store64Stack{Src: RegX9, Offset: slot}), nil
+		// Whole-enum / whole-struct copy through `use _local`: the
+		// scrutinee in `match m { … }` lowers to `_scrut = use m`,
+		// and that local is later read by `discriminant _scrut` and
+		// `_scrut@Some` projections. A 1-register copy would clip
+		// the payload byte for an Option<scalar>; route multi-slot
+		// reads through a per-half copy so every byte ends up in
+		// the destination slot.
+		return s.lowerUseAssign(fn, rv, instr.Dest.Local, slot)
 	case *mir.BinaryRV:
 		return s.lowerBinaryAssign(rv, slot)
 	case *mir.AggregateRV:
 		return s.lowerAggregateAssign(rv, slot)
+	case *mir.NullaryRV:
+		return s.lowerNullaryAssign(rv, slot)
+	case *mir.DiscriminantRV:
+		return s.lowerDiscriminantAssign(rv, slot)
 	default:
 		return nil, fmt.Errorf("%w: rvalue %T is outside phase 1", ErrUnsupportedShape, instr.Src)
 	}
 }
 
-// lowerAggregateAssign currently covers only the empty-list literal
-// (`let v: List<Int> = []`). The runtime allocates the list eagerly via
-// `osty_rt_list_new`; future slices will extend this to non-empty lists,
-// tuples, structs, and enum variants.
+// lowerUseAssign handles `Assign dest := Use(operand)`. The common case
+// is a single 8-byte slot copy through x9, but assignments where the
+// destination local takes more than one ABI register (struct / enum
+// passed via the AAPCS64 small-struct rule) need a per-slot copy so
+// the payload byte isn't clipped. The destination's local type drives
+// the slot count; the operand's type matches by construction (the
+// front end never emits cross-shape Use rvalues).
+func (s *lowerState) lowerUseAssign(fn *mir.Function, rv *mir.UseRV, destID mir.LocalID, destSlot int64) ([]Instr, error) {
+	destLoc := lookupLocal(fn, destID)
+	if destLoc != nil {
+		if slots, ok := s.abiRegSlots(destLoc.Type); ok && slots > 1 {
+			return s.lowerUseAssignMulti(rv, slots, destSlot)
+		}
+	}
+	mat, err := s.materialiseOperand(rv.Op, RegX9)
+	if err != nil {
+		return nil, err
+	}
+	return append(mat, &Store64Stack{Src: RegX9, Offset: destSlot}), nil
+}
+
+// lowerUseAssignMulti copies an N-slot value (struct / small enum)
+// from a Copy/Move source slot to the destination slot a half at a
+// time. Const operands aren't valid for multi-slot copies — the front
+// end constructs them via AggregateRV instead — so we reject them
+// with the unsupported sentinel.
+func (s *lowerState) lowerUseAssignMulti(rv *mir.UseRV, slots int, destSlot int64) ([]Instr, error) {
+	var place mir.Place
+	switch o := rv.Op.(type) {
+	case *mir.CopyOp:
+		place = o.Place
+	case *mir.MoveOp:
+		place = o.Place
+	default:
+		return nil, fmt.Errorf("%w: multi-slot use operand %T", ErrUnsupportedShape, rv.Op)
+	}
+	if place.HasProjections() {
+		return nil, fmt.Errorf("%w: multi-slot use with projection", ErrUnsupportedShape)
+	}
+	srcSlot, ok := s.localSlots[place.Local]
+	if !ok {
+		return nil, fmt.Errorf("%w: multi-slot use of local%d without slot", ErrUnsupportedShape, place.Local)
+	}
+	out := make([]Instr, 0, slots*2)
+	for i := 0; i < slots; i++ {
+		out = append(out,
+			&Load64Stack{Dst: RegX9, Offset: srcSlot + int64(i)*8},
+			&Store64Stack{Src: RegX9, Offset: destSlot + int64(i)*8},
+		)
+	}
+	return out, nil
+}
+
+// lowerAggregateAssign currently covers the empty-list literal,
+// all-scalar struct literals, and small enum variants. The runtime
+// allocates the list eagerly via `osty_rt_list_new`; struct + enum
+// literals are stamped directly into the destination slot.
 func (s *lowerState) lowerAggregateAssign(rv *mir.AggregateRV, destSlot int64) ([]Instr, error) {
 	switch rv.Kind {
 	case mir.AggList:
@@ -496,9 +563,95 @@ func (s *lowerState) lowerAggregateAssign(rv *mir.AggregateRV, destSlot int64) (
 		}, nil
 	case mir.AggStruct:
 		return s.lowerStructLiteralAssign(rv, destSlot)
+	case mir.AggEnumVariant:
+		return s.lowerEnumVariantAssign(rv, destSlot)
 	default:
 		return nil, fmt.Errorf("%w: aggregate kind %v", ErrUnsupportedShape, rv.Kind)
 	}
+}
+
+// lowerEnumVariantAssign writes an enum literal: discriminant value
+// to slot+0, then each payload field to slot+8 + i*8. Backends with
+// a niche optimisation could fold the discriminant into the payload
+// for some shapes, but the dev backend always uses the same layout
+// to keep `frame variable` predictable.
+func (s *lowerState) lowerEnumVariantAssign(rv *mir.AggregateRV, destSlot int64) ([]Instr, error) {
+	layout := s.lookupEnumLayout(rv.T)
+	if layout == nil {
+		return nil, fmt.Errorf("%w: unknown enum layout for %s", ErrUnsupportedShape, rv.T)
+	}
+	if rv.VariantIdx < 0 || rv.VariantIdx >= len(layout.Variants) {
+		return nil, fmt.Errorf("%w: variant index %d out of range for %s", ErrUnsupportedShape, rv.VariantIdx, rv.T)
+	}
+	variant := layout.Variants[rv.VariantIdx]
+	if !s.payloadAllScalar(variant.Payload) {
+		return nil, fmt.Errorf("%w: variant %s.%s has non-scalar payload", ErrUnsupportedShape, rv.T, variant.Name)
+	}
+	if len(rv.Fields) != len(variant.Payload) {
+		return nil, fmt.Errorf("%w: variant %s.%s field count mismatch (%d vs %d)", ErrUnsupportedShape, rv.T, variant.Name, len(rv.Fields), len(variant.Payload))
+	}
+	tag := s.enumDiscriminantValue(layout, rv.VariantIdx)
+	out := []Instr{
+		&MovImm64{Dst: RegX9, Imm: tag},
+		&Store64Stack{Src: RegX9, Offset: destSlot},
+	}
+	for i, field := range rv.Fields {
+		mat, err := s.materialiseOperand(field, RegX9)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, mat...)
+		out = append(out, &Store64Stack{Src: RegX9, Offset: destSlot + s.enumPayloadOffset(i)})
+	}
+	return out, nil
+}
+
+// lowerNullaryAssign covers `dest = none T?` — write the None tag (0)
+// to slot+0 and leave the payload undefined. Other nullary rvalues
+// don't exist in MIR today; new entries land here as the enum extends.
+func (s *lowerState) lowerNullaryAssign(rv *mir.NullaryRV, destSlot int64) ([]Instr, error) {
+	if rv.Kind != mir.NullaryNone {
+		return nil, fmt.Errorf("%w: nullary kind %v", ErrUnsupportedShape, rv.Kind)
+	}
+	layout := s.lookupEnumLayout(rv.T)
+	if layout == nil {
+		return nil, fmt.Errorf("%w: nullary none on non-enum type %s", ErrUnsupportedShape, rv.T)
+	}
+	// Find the None variant; for synthetic Option layouts it's at
+	// index 0 by construction. For user enums that re-use `none`
+	// (none today) this would walk Variants for Name == "None".
+	noneIdx := 0
+	for i, v := range layout.Variants {
+		if v.Name == "None" {
+			noneIdx = i
+			break
+		}
+	}
+	tag := s.enumDiscriminantValue(layout, noneIdx)
+	return []Instr{
+		&MovImm64{Dst: RegX9, Imm: tag},
+		&Store64Stack{Src: RegX9, Offset: destSlot},
+	}, nil
+}
+
+// lowerDiscriminantAssign reads the discriminant tag of an enum local
+// into the destination slot. The discriminant always sits at offset 0
+// of the source slot, so this is just `ldr x9, [sp+src]; str x9,
+// [sp+dest]`. Place projections on the source aren't supported — the
+// front end always emits `discriminant <local>` rather than
+// `discriminant <local>.field`.
+func (s *lowerState) lowerDiscriminantAssign(rv *mir.DiscriminantRV, destSlot int64) ([]Instr, error) {
+	if rv.Place.HasProjections() {
+		return nil, fmt.Errorf("%w: discriminant of projected place", ErrUnsupportedShape)
+	}
+	srcSlot, ok := s.localSlots[rv.Place.Local]
+	if !ok {
+		return nil, fmt.Errorf("%w: discriminant of local%d without slot", ErrUnsupportedShape, rv.Place.Local)
+	}
+	return []Instr{
+		&Load64Stack{Dst: RegX9, Offset: srcSlot},
+		&Store64Stack{Src: RegX9, Offset: destSlot},
+	}, nil
 }
 
 // lowerStructLiteralAssign writes each scalar field of a struct literal
@@ -563,6 +716,17 @@ func (s *lowerState) abiRegSlots(t mir.Type) (int, bool) {
 		}
 		return n, true
 	}
+	if layout := s.lookupEnumLayout(t); layout != nil {
+		size := s.enumSlotSize(layout)
+		if size == 0 {
+			return 0, false
+		}
+		// Discriminant (1 reg) + at most one payload reg fits the
+		// AAPCS64 small-struct convention. enumSlotSize already
+		// caps at 16B so the divide here can't exceed
+		// abiSmallStructRegLimit.
+		return int(size / 8), true
+	}
 	return 0, false
 }
 
@@ -611,11 +775,175 @@ func structLayoutSupported(nt *ir.NamedType) bool {
 	return true
 }
 
+// lookupEnumLayout resolves a MIR type to the enum layout the front end
+// registered. User-defined enums (`enum Color { Red, Green, Blue }`)
+// live in `mod.Layouts.Enums` keyed by the enum's name. Optional types
+// (`T?`) use a synthetic layout the lowerer fabricates on the fly so
+// the rest of the enum codegen path can speak in the same vocabulary
+// — there's no separate Option entry in the layout table because the
+// surface form is `OptionalType` rather than a NamedType.
+//
+// The synthetic Option layout uses the canonical convention from
+// `internal/llvmgen` and `internal/mir/lower.go`: discriminant 0 ==
+// None, 1 == Some, with the inner type as the Some payload. Result
+// types are surfaced as `NamedType{Name: "Result"}` and do live in
+// `mod.Layouts.Enums` after the front end's `buildLayouts` pass, so
+// they take the user-defined branch.
+func (s *lowerState) lookupEnumLayout(t mir.Type) *mir.EnumLayout {
+	if s.mod == nil {
+		return nil
+	}
+	if opt, ok := t.(*ir.OptionalType); ok && opt != nil {
+		return s.syntheticOptionLayout(opt.Inner)
+	}
+	nt, ok := t.(*ir.NamedType)
+	if !ok || nt == nil {
+		return nil
+	}
+	// Builtin Option / Maybe / Result types use synthetic layouts
+	// (None=0/Some=1, Err=0/Ok=1) the front end doesn't bother
+	// registering into `mod.Layouts.Enums`. The MIR layer canonicalises
+	// `T?` references to `NamedType{Name: "Option", Args: [T],
+	// Builtin: true}` (notably AggregateRV.T for `Some(...)` calls)
+	// so the lowerer must recognise both shapes.
+	if nt.Builtin {
+		switch nt.Name {
+		case "Option", "Maybe":
+			if len(nt.Args) >= 1 {
+				return s.syntheticOptionLayout(nt.Args[0])
+			}
+		case "Result":
+			if len(nt.Args) >= 2 {
+				return s.syntheticResultLayout(nt.Args[0], nt.Args[1])
+			}
+		}
+	}
+	if s.mod.Layouts == nil {
+		return nil
+	}
+	return s.mod.Layouts.Enums[nt.Name]
+}
+
+// syntheticOptionLayout builds the canonical 2-variant enum layout
+// (None=0 / Some(inner)=1) used wherever the front end emits an
+// optional type without registering it into `mod.Layouts.Enums`. Kept
+// out of `lookupEnumLayout` so the OptionalType and NamedType paths
+// share the same shape.
+func (s *lowerState) syntheticOptionLayout(inner mir.Type) *mir.EnumLayout {
+	return &mir.EnumLayout{
+		Name:         "Option",
+		Discriminant: mir.TInt,
+		Variants: []mir.VariantLayout{
+			{Index: 0, Name: "None"},
+			{Index: 1, Name: "Some", Payload: []mir.FieldLayout{{Index: 0, Name: "value", Type: inner}}},
+		},
+	}
+}
+
+// syntheticResultLayout builds the 2-variant enum layout (Err=0 /
+// Ok=1) for `Result<T, E>`. The Err arm carries one E-typed payload
+// field; the Ok arm carries one T-typed field. Each variant has a
+// single payload register so the whole Result fits in 16 bytes (1
+// disc + 1 payload), which keeps it eligible for AAPCS64
+// small-struct passing. The Err and Ok payload types live in
+// different variants — `enumSlotSize` reports the maximum payload
+// reg count across all variants, so a Result whose Err half needs
+// 2 regs would stop being eligible.
+func (s *lowerState) syntheticResultLayout(okT, errT mir.Type) *mir.EnumLayout {
+	return &mir.EnumLayout{
+		Name:         "Result",
+		Discriminant: mir.TInt,
+		Variants: []mir.VariantLayout{
+			{Index: 0, Name: "Err", Payload: []mir.FieldLayout{{Index: 0, Name: "error", Type: errT}}},
+			{Index: 1, Name: "Ok", Payload: []mir.FieldLayout{{Index: 0, Name: "value", Type: okT}}},
+		},
+	}
+}
+
+// enumSlotSize returns the on-stack byte size for an enum-typed local.
+// The layout is `[disc 8B][payload N×8B]` where N is the maximum
+// payload field count across all variants. Discriminant lives at slot
+// offset 0, payload starts at slot offset 8. Phase A2 caps total size
+// at 16B (1 disc reg + 1 payload reg) so the value fits the AAPCS64
+// small-struct ABI; larger payloads return 0 to signal "fall back".
+func (s *lowerState) enumSlotSize(layout *mir.EnumLayout) int64 {
+	if layout == nil {
+		return 0
+	}
+	maxPayload := 0
+	for _, v := range layout.Variants {
+		if !s.payloadAllScalar(v.Payload) {
+			return 0
+		}
+		if len(v.Payload) > maxPayload {
+			maxPayload = len(v.Payload)
+		}
+	}
+	// Discriminant + payload, capped at 2 registers total.
+	total := int64(8 + maxPayload*8)
+	if total > 16 {
+		return 0
+	}
+	return total
+}
+
+// payloadAllScalar reports whether every payload field fits in one
+// 8-byte ABI register. Scalars (Int / Bool / String) qualify
+// directly; no-payload enums (`MyError` etc.) also pass because their
+// slot is just the discriminant. Multi-register payloads (large
+// struct, deep enum) bail out so the lowerer keeps the whole enum
+// inside a 16-byte 2-register window.
+//
+// Naming kept for git-blame continuity — the predicate now accepts
+// any 1-register type, not strictly scalars.
+func (s *lowerState) payloadAllScalar(fields []mir.FieldLayout) bool {
+	for _, f := range fields {
+		if !s.isABIWordType(f.Type) {
+			return false
+		}
+	}
+	return true
+}
+
+// isABIWordType reports whether t consumes exactly one 8-byte ABI
+// register (and therefore can sit in an enum payload slot). Scalars
+// and no-payload enums qualify; structs always need ≥1 register
+// per field so a struct with 1 scalar field also passes.
+func (s *lowerState) isABIWordType(t mir.Type) bool {
+	if isABIScalarType(t) {
+		return true
+	}
+	slots, ok := s.abiRegSlots(t)
+	return ok && slots == 1
+}
+
+// enumPayloadOffset returns the byte offset of the FieldIdx-th payload
+// element relative to the enum's slot. Discriminant lives at offset 0,
+// payload starts at offset 8.
+func (s *lowerState) enumPayloadOffset(fieldIdx int) int64 {
+	if fieldIdx < 0 {
+		return 8 // "whole payload tuple" — start of payload region
+	}
+	return int64(8 + fieldIdx*8)
+}
+
+// enumDiscriminantValue returns the integer tag for a variant. Most
+// enums simply use the variant index, but the synthetic Option layout
+// keeps None=0 / Some=1 explicit so the sequence matches the rest of
+// the toolchain's convention.
+func (s *lowerState) enumDiscriminantValue(layout *mir.EnumLayout, variantIdx int) int64 {
+	if layout == nil || variantIdx < 0 || variantIdx >= len(layout.Variants) {
+		return int64(variantIdx)
+	}
+	return int64(layout.Variants[variantIdx].Index)
+}
+
 // localTypeSize returns the on-stack byte size for a local. Scalars and
-// builtin pointer-shaped types (List<T>, Map<K,V>, Option<T>, Result<T,E>)
-// share one 8-byte slot. User-defined structs with all-scalar fields get
-// one slot per field. Unit-typed locals report 0 — the slot allocator
-// skips them entirely.
+// builtin pointer-shaped types (List<T>, Map<K,V>) share one 8-byte
+// slot. User-defined structs with all-scalar fields get one slot per
+// field. Enum-typed locals (user enums + Option<scalar> + Result with
+// scalar arms) get `[disc 8B][payload N×8B]` layout up to 16B total.
+// Unit-typed locals report 0 — the slot allocator skips them entirely.
 func (s *lowerState) localTypeSize(t mir.Type) int64 {
 	if t == mir.TUnit {
 		return 0
@@ -635,6 +963,11 @@ func (s *lowerState) localTypeSize(t mir.Type) int64 {
 			}
 		}
 		return int64(len(sl.Fields)) * 8
+	}
+	if el := s.lookupEnumLayout(t); el != nil {
+		if size := s.enumSlotSize(el); size > 0 {
+			return size
+		}
 	}
 	// Anything else (builtin generics, raw pointer wrappers, opaque
 	// runtime handles) lives at the ABI as a single 8-byte pointer.
@@ -997,11 +1330,12 @@ func (s *lowerState) loadPlaceIntoReg(place mir.Place, dst Reg) ([]Instr, error)
 }
 
 // placeProjectionOffset reduces a Place's projection chain to a single
-// byte offset relative to the local's slot. Phase B.5 v1 only handles
-// FieldProj over scalar-typed fields — index/deref projections still
-// fall through to the unsupported-shape sentinel so the LLVM fallback
-// picks them up. The offset is independent of which field type lives
-// at that position because every scalar field consumes 8 bytes.
+// byte offset relative to the local's slot. Handles FieldProj
+// (struct-shaped) and VariantProj (enum payload) over scalar-typed
+// fields. Index/deref projections still fall through to the
+// unsupported-shape sentinel so the LLVM fallback picks them up. The
+// offset is independent of which scalar type lives at that position
+// because every scalar field consumes 8 bytes.
 func (s *lowerState) placeProjectionOffset(place mir.Place) (int64, error) {
 	if !place.HasProjections() {
 		return 0, nil
@@ -1013,16 +1347,20 @@ func (s *lowerState) placeProjectionOffset(place mir.Place) (int64, error) {
 	currentType := loc.Type
 	off := int64(0)
 	for _, p := range place.Projections {
-		fp, ok := p.(*mir.FieldProj)
-		if !ok {
+		switch proj := p.(type) {
+		case *mir.FieldProj:
+			fieldOff := s.fieldByteOffset(currentType, proj.Index)
+			if fieldOff < 0 {
+				return 0, fmt.Errorf("%w: field projection on non-struct %s", ErrUnsupportedShape, currentType)
+			}
+			off += fieldOff
+			currentType = proj.Type
+		case *mir.VariantProj:
+			off += s.enumPayloadOffset(proj.FieldIdx)
+			currentType = proj.Type
+		default:
 			return 0, fmt.Errorf("%w: projection %T", ErrUnsupportedShape, p)
 		}
-		fieldOff := s.fieldByteOffset(currentType, fp.Index)
-		if fieldOff < 0 {
-			return 0, fmt.Errorf("%w: field projection on non-struct %s", ErrUnsupportedShape, currentType)
-		}
-		off += fieldOff
-		currentType = fp.Type
 	}
 	return off, nil
 }
@@ -1302,6 +1640,19 @@ func collectRValueLocals(rv mir.RValue, out map[mir.LocalID]bool) {
 	case *mir.BinaryRV:
 		collectOperandLocals(r.Left, out)
 		collectOperandLocals(r.Right, out)
+	case *mir.AggregateRV:
+		// Each payload field is an operand; struct / enum / list /
+		// tuple literals all flow through here. Without this, locals
+		// captured into struct/enum literals would lose their slot
+		// when no other instruction also reads them.
+		for _, f := range r.Fields {
+			collectOperandLocals(f, out)
+		}
+	case *mir.DiscriminantRV:
+		// The scrutinee local is read by `discriminant _scrut` even
+		// though the place itself isn't an Operand. Force it in so
+		// the slot allocator reserves a slot for the enum value.
+		out[r.Place.Local] = true
 	}
 }
 

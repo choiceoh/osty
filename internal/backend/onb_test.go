@@ -636,6 +636,184 @@ fn main() {
 	}
 }
 
+// TestONBBackendBinaryRunsEnumPatternsOnDarwinARM64 exercises Phase A2
+// Week 14's enum lowering. Three shapes exercise the relevant paths:
+//
+//   - **No-payload enum**: `enum Color { Red, Green, Blue }` plus a
+//     `match` that picks an Int per arm. Drives `AggEnumVariant`
+//     (no payload) + `DiscriminantRV` + `SwitchIntTerm`.
+//   - **Option<Int>**: `Some(n)` / `None` construction + match
+//     destructuring `Some(x)`. Drives `AggEnumVariant` (1 scalar
+//     payload) + `NullaryRV(None)` + `VariantProj` payload read.
+//   - **Result<Int, String>**: `Ok(v)` / `Err(msg)` construction + match
+//     destructuring on both arms. Drives the same machinery with a
+//     real user-defined enum (no Optional shortcut), and verifies
+//     the discriminant convention (Err=0, Ok=1) survives end-to-end.
+//
+// Each case runs the produced binary and checks stdout. Failures point
+// at one of the three lowering paths above without needing dwarfdump.
+func TestONBBackendBinaryRunsEnumPatternsOnDarwinARM64(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("ONB enum executable smoke is darwin/arm64-only")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
+
+	cases := []struct {
+		name, src, want string
+	}{
+		{
+			name: "no_payload_enum",
+			src: `enum Color { Red, Green, Blue }
+fn pick() -> Color { Color.Green }
+fn main() {
+    let c = pick()
+    let n = match c {
+        Color.Red -> 0,
+        Color.Green -> 1,
+        Color.Blue -> 2,
+    }
+    println(n)
+}`,
+			want: "1\n",
+		},
+		{
+			name: "option_some",
+			src: `fn first(n: Int) -> Int? { if n > 0 { Some(n) } else { None } }
+fn main() {
+    let r = first(5)
+    let v = match r {
+        Some(x) -> x,
+        None -> -1,
+    }
+    println(v)
+}`,
+			want: "5\n",
+		},
+		{
+			name: "option_none",
+			src: `fn first(n: Int) -> Int? { if n > 0 { Some(n) } else { None } }
+fn main() {
+    let r = first(0)
+    let v = match r {
+        Some(x) -> x,
+        None -> -1,
+    }
+    println(v)
+}`,
+			want: "-1\n",
+		},
+		{
+			// Result with a scalar Ok payload and a no-payload enum
+			// Err payload. Exercises the synthetic Result layout
+			// (Err=0/Ok=1) and an enum-typed payload — `MyError` is
+			// itself an enum so the Err slot copies its 8-byte
+			// discriminant into the Result's payload register. The
+			// match destructures Ok(v) and reads v through
+			// VariantProj{FieldIdx:0}.
+			name: "result_ok",
+			src: `enum MyError { Empty, BadInt }
+fn parseSign(n: Int) -> Result<Int, MyError> {
+    if n == 0 { Err(MyError.Empty) } else { Ok(n) }
+}
+fn main() {
+    let r = parseSign(7)
+    let v = match r {
+        Ok(x) -> x,
+        Err(_) -> -1,
+    }
+    println(v)
+}`,
+			want: "7\n",
+		},
+		{
+			name: "result_err",
+			src: `enum MyError { Empty, BadInt }
+fn parseSign(n: Int) -> Result<Int, MyError> {
+    if n == 0 { Err(MyError.Empty) } else { Ok(n) }
+}
+fn main() {
+    let r = parseSign(0)
+    let v = match r {
+        Ok(x) -> x,
+        Err(_) -> -1,
+    }
+    println(v)
+}`,
+			want: "-1\n",
+		},
+		{
+			// `?` propagation. The front end lowers `parseSign(n)?` to
+			// SwitchIntTerm{Ok => take payload; default => return Err
+			// as-is}. The Err arm's `_0 = use _3` is the multi-slot
+			// copy the new lowerUseAssignMulti path handles; without
+			// it, only the discriminant byte would survive and the
+			// caller's match would crash.
+			name: "result_question_op_ok",
+			src: `enum MyError { Empty, BadInt }
+fn parseSign(n: Int) -> Result<Int, MyError> {
+    if n == 0 { Err(MyError.Empty) } else { Ok(n) }
+}
+fn parseAndDouble(n: Int) -> Result<Int, MyError> {
+    let v = parseSign(n)?
+    Ok(v * 2)
+}
+fn main() {
+    let r = parseAndDouble(5)
+    let v = match r {
+        Ok(x) -> x,
+        Err(_) -> -1,
+    }
+    println(v)
+}`,
+			want: "10\n",
+		},
+		{
+			name: "result_question_op_err",
+			src: `enum MyError { Empty, BadInt }
+fn parseSign(n: Int) -> Result<Int, MyError> {
+    if n == 0 { Err(MyError.Empty) } else { Ok(n) }
+}
+fn parseAndDouble(n: Int) -> Result<Int, MyError> {
+    let v = parseSign(n)?
+    Ok(v * 2)
+}
+fn main() {
+    let r = parseAndDouble(0)
+    let v = match r {
+        Ok(x) -> x,
+        Err(_) -> -1,
+    }
+    println(v)
+}`,
+			want: "-1\n",
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(onb.EnvStrict, "1")
+			req := newBackendRequest(t, EmitBinary, tc.src)
+			req.Layout.Target = "aarch64-apple-darwin"
+			result, err := ONBBackend{}.Emit(context.Background(), req)
+			if err != nil {
+				t.Fatalf("ONBBackend.Emit returned error: %v", err)
+			}
+			if result == nil || result.Artifacts.Binary == "" {
+				t.Fatalf("missing binary artifact: %+v", result)
+			}
+			out, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+			if err != nil {
+				t.Fatalf("binary returned error: %v\n%s", err, out)
+			}
+			if got := string(out); got != tc.want {
+				t.Fatalf("binary output = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestONBBackendBinaryRunsStringAndListOnDarwinARM64 exercises Phase A2's
 // runtime-call slice: String concatenation and `List<Int>` push/len. These
 // shapes lower to `bl _osty_rt_strings_Concat`, `bl _osty_rt_list_new`,

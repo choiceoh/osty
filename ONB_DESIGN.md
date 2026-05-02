@@ -37,6 +37,79 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 14 (Enum lowering v1 — Color / Option / Result + `?`,
+> 2026-05-02)** — ONB가 처음으로 enum을 native lowering. Option/Result가
+> prelude라 거의 모든 의미 있는 Osty 코드가 fallback에서 풀려나옴.
+>
+> 작동 (canonical 예제):
+>
+> ```osty
+> enum Color { Red, Green, Blue }                // no-payload enum
+> fn pick() -> Color { Color.Green }
+>
+> fn first(n: Int) -> Int? {                      // Option<scalar>
+>     if n > 0 { Some(n) } else { None }
+> }
+>
+> enum MyError { Empty, BadInt }
+> fn parseSign(n: Int) -> Result<Int, MyError> {  // Result + ? operator
+>     if n == 0 { Err(MyError.Empty) } else { Ok(n) }
+> }
+> fn parseAndDouble(n: Int) -> Result<Int, MyError> {
+>     let v = parseSign(n)?
+>     Ok(v * 2)
+> }
+> ```
+>
+> 슬롯 레이아웃: `[disc 8B][payload N×8B]`, 16B로 캡 (1 disc reg +
+> 1 payload reg, AAPCS64 small-struct ABI 재사용). no-payload enum은
+> 8바이트, Option<scalar>·Result<scalar, scalar>·Result<scalar, no-payload-enum>
+> 은 16바이트.
+>
+> 추가:
+> - `lookupEnumLayout(t)` — user enum (`mod.Layouts.Enums[name]`) +
+>   합성 레이아웃 (`OptionalType`, `NamedType{Option/Maybe/Result, Builtin}`)
+> - `syntheticOptionLayout` (None=0/Some=1) + `syntheticResultLayout`
+>   (Err=0/Ok=1) — 컨벤션은 `internal/llvmgen` + `mir/lower.go`와 동일
+> - `enumSlotSize(layout)` / `enumPayloadOffset(fieldIdx)` /
+>   `enumDiscriminantValue(layout, idx)` 헬퍼
+> - `payloadAllScalar`이 `isABIWordType`로 일반화 — scalar OR
+>   1-register-slot 타입 (no-payload enum 같은) 허용 → `Result<Int,
+>   MyError>` 가능
+> - `lowerAggregateAssign`이 `AggEnumVariant` 처리 — discriminant를
+>   slot+0에, payload를 slot+8+i*8에 stamp
+> - 새 rvalue lowering: `*mir.NullaryRV` (None tag write),
+>   `*mir.DiscriminantRV` (slot+0 → dest slot)
+> - `placeProjectionOffset`이 `*mir.VariantProj` 처리 — payload는
+>   slot+8 부터 (FieldIdx=-1은 "전체 payload tuple" → slot+8 시작)
+> - `collectRValueLocals`가 `AggregateRV.Fields` + `DiscriminantRV.Place`
+>   를 스캔해 enum scrutinee local이 slot을 받도록 보장
+> - `lowerUseAssignMulti` — multi-slot copy (`_q = use _result`처럼
+>   `?` 연산자가 fallback 분기에서 전체 enum을 복사할 때 필요).
+>   destination type이 2-reg일 때 자동 선택; 1-byte clipping 회피
+> - 새 LIR opcode `Brk{Imm}` + Mach-O 인코딩 (`brk #1`) — match
+>   exhaustiveness가 추가하는 `mir.UnreachableTerm`을 안전하게 trap
+>
+> 검증:
+> - 단위 테스트 3개 (`internal/onb/onb_test.go`) — Color enum 태그
+>   write, UnreachableTerm → Brk lowering, Option<Int> Some 분기의
+>   tag+payload 8B 간격
+> - E2E binary smoke 7개 (`TestONBBackendBinaryRunsEnumPatternsOnDarwinARM64`,
+>   darwin/arm64): no-payload enum, Option Some, Option None, Result
+>   Ok, Result Err, `?` Ok 전파, `?` Err 전파 — 모두 native path 통과
+>
+> 한계 (이번 슬라이스에서 명시적으로 보류):
+> - struct payload를 가진 enum variant — payload 1-reg 캡 때문에
+>   `Some(Point)` 같은 형태는 fallback (Point가 2-reg)
+> - 2개 이상 payload field를 가진 variant — `Some((a, b))` 같은 튜플 페이로드
+> - `match` arm에서 `_4@Some.0` 같은 nested projection 외 (struct
+>   payload + field projection 조합)
+> - enum DWARF DIE — `frame variable` 출력에는 여전히 안 잡힘
+>   (B.5 abbrev infra는 이미 있음, lower→encoder 와이어링은 별도 슬라이스)
+>
+> 다음 슬라이스 후보: Float64 + IEEE 산술 (Week 15) → List<T>
+> 일반화 → for-in 루프 native lowering.
+>
 > **Slice A2 Week 13 (AAPCS64 small-struct passing + DWARF struct
 > wiring, 2026-05-02)** — ONB가 처음으로 struct를 함수 경계에서 사용 가능.
 > `≤16B` 모든-스칼라 struct가 AAPCS64 small-struct ABI로 2-reg pair에 실려

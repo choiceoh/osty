@@ -136,6 +136,8 @@ func renderInstrAssembly(b *strings.Builder, target Target, fn Function, instr I
 			}
 		}
 		b.WriteString("\tret\n")
+	case *Brk:
+		fmt.Fprintf(b, "\tbrk #%d\n", i.Imm)
 	default:
 		return fmt.Errorf("onb: assembly renderer does not support %T", instr)
 	}

@@ -313,6 +313,17 @@ type Ret struct{}
 
 func (*Ret) instrNode() {}
 
+// Brk emits the aarch64 `brk #imm16` software breakpoint. The lowerer
+// uses this for `mir.UnreachableTerm` — match exhaustiveness adds an
+// unreachable default arm whose PC must abort rather than fall through
+// into the next function. `brk #1` is the conventional "trap" value;
+// userspace receives SIGTRAP / SIGILL depending on the platform.
+type Brk struct {
+	Imm int64 // 16-bit unsigned immediate (0..65535)
+}
+
+func (*Brk) instrNode() {}
+
 func functionNeedsFrame(fn Function) bool {
 	if fn.FrameSize > 0 {
 		return true
