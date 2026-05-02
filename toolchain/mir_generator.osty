@@ -18840,3 +18840,129 @@ pub fn mirCoerceVoidArmStatus(aType: String, bType: String) -> Int {
 pub fn mirClosureMakerName(idDigits: String) -> String {
     "__osty_make_closure_" + idDigits
 }
+
+// ====================================================================
+// Phase 0 — Module-level orchestration
+// ====================================================================
+//
+// `mirEmitModule` is the self-host port of `internal/llvmgen/mir_generator.go::GenerateFromMIR`.
+// It walks a fully-lowered (and monomorphized) MirModule and renders a
+// complete LLVM IR text module. The Go side has accumulated several
+// thousand lines of per-instruction lowering; this Phase 0 entry only
+// renders enough scaffolding for trivial inputs (`func main() {}`) to
+// produce structurally-valid IR. Function bodies, runtime
+// declarations, type defs, string pools, and global vars are stubbed
+// at the safest valid form and tracked for Phase 1+ expansion.
+//
+// Once richer lowering lands the entry signature stays stable; only
+// internal dispatch grows. Callers (notably `osty-self compile`) bind
+// to `mirEmitModule(m, opts)` and treat the returned String as the
+// final IR payload.
+
+/// MirEmitOpts is the per-call configuration for `mirEmitModule`.
+/// Mirrors `internal/llvmgen.Options` minus runtime concerns the
+/// self-host path doesn't expose yet (Source, EmitGC, …).
+pub struct MirEmitOpts {
+    pub packageName: String,
+    pub sourcePath: String,
+    pub target: String,
+}
+
+pub fn mirEmitOpts(packageName: String, sourcePath: String, target: String) -> MirEmitOpts {
+    MirEmitOpts { packageName, sourcePath, target }
+}
+
+/// mirEmitModule renders a fully-lowered MirModule as LLVM IR text.
+///
+/// Phase 0 scope:
+///   - Header: `; Code generated`, `source_filename`, `target triple`.
+///   - For each non-external function: define-header + `entry:` block
+///     + a return stub matched to `returnType` (void → `ret void`,
+///     scalar → zero-value, anything else → `unreachable`).
+///   - Globals / type defs / runtime declarations / string pools are
+///     intentionally skipped — Phase 1 fills them in as their bodies
+///     come online.
+///
+/// The output is structurally valid LLVM IR: `llc` accepts it and a
+/// trivial `func main() {}` source compiles + links + runs as a no-op
+/// process. Anything beyond that requires Phase 1 instruction
+/// lowering — a compiled binary will not call user functions
+/// correctly until the per-block instruction emit lands here.
+pub fn mirEmitModule(m: MirModule, opts: MirEmitOpts) -> String {
+    let mut out = mirEmitHeaderBlock(opts.sourcePath, opts.target)
+    for func in m.functions {
+        if func.isExternal {
+            continue
+        }
+        out = out + mirEmitFunctionStub(func)
+    }
+    out
+}
+
+/// mirEmitFunctionStub emits a structurally-valid `define` block with
+/// a single `entry:` label and a return stub. Phase 1 will replace
+/// the stub with real per-block instruction lowering driven by
+/// `func.blocks` + `func.locals`; today the stub keeps the IR verifier
+/// happy while the body-lowering helpers come online incrementally.
+fn mirEmitFunctionStub(func: MirFunction) -> String {
+    let paramListJoined = mirEmitParamListJoined(func)
+    let mut out = mirFunctionDefineHeader("", func.returnType, func.name, paramListJoined, "")
+    out = out + "entry:\n"
+    out = out + mirEmitReturnStub(func.returnType)
+    out + mirFunctionDefineFooter()
+}
+
+/// mirEmitParamListJoined renders the comma-separated `<ty> %p<i>`
+/// parameter list. Phase 0 derives types from `func.locals[paramLocal]`
+/// and falls back to `i64` for any local whose llvmType cannot be
+/// determined (defensive — keeps the emitter from producing an
+/// invalid `(  )` signature on locals leftover from a partial lower).
+fn mirEmitParamListJoined(func: MirFunction) -> String {
+    let mut out = ""
+    let mut i = 0
+    for paramLocal in func.params {
+        if i > 0 {
+            out = out + ", "
+        }
+        let ty = mirEmitParamType(func, paramLocal)
+        out = out + ty + " %p" + mirGenIntToString(i)
+        i = i + 1
+    }
+    out
+}
+
+fn mirEmitParamType(func: MirFunction, paramLocal: Int) -> String {
+    if paramLocal < 0 || paramLocal >= func.locals.len() {
+        return "i64"
+    }
+    let loc = func.locals[paramLocal]
+    let prim = mirLlvmTypeForPrim(loc.typ)
+    if prim != "" {
+        return prim
+    }
+    "i64"
+}
+
+/// mirEmitReturnStub emits the safest valid `ret` line for a given
+/// LLVM return type. `void` → `ret void`; integer / pointer types →
+/// zero / null; anything else → `unreachable` so the verifier
+/// flags a missing Phase 1 case rather than silently emitting a
+/// type-mismatched return.
+fn mirEmitReturnStub(returnType: String) -> String {
+    if returnType == "void" {
+        return mirRetVoidLine()
+    }
+    if returnType == "i64" || returnType == "i32" || returnType == "i16" || returnType == "i8" {
+        return mirRetLine(returnType, "0")
+    }
+    if returnType == "i1" {
+        return mirRetLine("i1", "false")
+    }
+    if returnType == "ptr" {
+        return mirRetLine("ptr", "null")
+    }
+    if returnType == "double" {
+        return mirRetLine("double", "0.0")
+    }
+    "  unreachable\n"
+}
