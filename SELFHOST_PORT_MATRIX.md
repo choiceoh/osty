@@ -27,8 +27,8 @@ Pipeline-Clean timeout 도 풀렸다 (5분+ → 246s 정상 종료, 다음 wall 
 | `TestProbeWholeToolchainMerged` (AST-only) | 2.4s | ✅ 통과 |
 | `TestProbeNativeToolchainMerged` (AST, ci.osty 제외) | 2.3s | ✅ 통과 |
 | `TestProbeNativeToolchainMergedMIR` (full MIR, info-only) | ~280s | ✅ 통과 (info log only) |
-| `TestNativeToolchainMergedMIRPipelineIsClean` | ~210s | ⚠️ FAIL — `LLVM016 name: unknown identifier "None"` (legacy fallback wall, LLVM011 default-value walls 모두 해소 후 다음 wall 진입) |
-| `TestNativeToolchainMergedMIRErrTypeFloor` | 242s | ⚠️ FAIL — 374 ErrType locals (이전 474 → -100; floor=40 까지는 334 잔여) |
+| `TestNativeToolchainMergedMIRPipelineIsClean` | ~70s | ✅ 통과 — string_concat ErrType 폴백 + mid-chain IndexProj write (#1314) 후 양쪽 wall 모두 닫힘 |
+| `TestNativeToolchainMergedMIRErrTypeFloor` | ~32s | ✅ 통과 — 0 ErrType locals (#948/#1054/#1085/#1093 sweep 후), floor 0 으로 타이트닝 |
 
 ### 해소된 Phase 0 항목 (2026-04-26 착륙)
 
@@ -49,57 +49,16 @@ Pipeline-Clean timeout 도 풀렸다 (5분+ → 246s 정상 종료, 다음 wall 
 ### 잔여 walls
 
 - ~~**LLVM011 CheckFnSig.hasReceiver default value**~~ — **Phase 4a 착륙
-  (2026-04-26)**. `pub hasReceiver: Bool = false` default 를 제거하고 251 개
-  CheckFnSig literal 사이트 (`toolchain/check.osty` 57 + `toolchain/check_env.osty`
-  189 + `toolchain/elab.osty` 5) 모두 명시적 `hasReceiver: false/true`
-  지정 — 값은 `receiverTy: -1` 이면 `false`, 아니면 `true`.
-  `checkSpecializeMethodSelf` 는 입력 sig 의 hasReceiver 를 그대로 전달
-  (`hasReceiver: sig.hasReceiver`). `CheckFieldSig.exported` 도 같은 패턴
-  으로 default 제거 (`emptyCheckFieldSig` 1 사이트만 영향). 다음 legacy
-  fallback wall 은 **LLVM016 unknown identifier "None"** (Option/Result
-  builtin variant name resolution — 별 카테고리, 별 PR).
-- **374 ErrType locals (floor=40)** — Phase 0 가 PR #921 의 12개 type-error
-  중 11개를 제거하고 (474 → 426), Phase 3a 가 추가로 -52 (426 → 374,
-  `lowerMatch` scrutinee recovery). 잔여 ~334 leaks 는 **checker 가 통과한
-  소스인데 ir.Lower / ir.Monomorphize 에서 타입을 못 잡는 사이트** 다 (`osty
-  check toolchain` 자체는 EXIT=0).
-
-  Phase 3a 분포 (probe 결과 상위 10개, 167 functions affected):
-
-  | count | function |
-  |---:|---|
-  | 29 | `hirOptimizeVisitExpr` |
-  | 22 | `monoScanExpr` |
-  | 12 | `llvmNativeEmitStmt` |
-  | 10 | `hirOptimizeVisitModule` |
-  | 9  | `hirReachExpr` |
-  | 7  | `llvmNativeEmitFieldAssign` |
-  | 7  | `hirReachExprAsMethods` |
-  | 6  | `mirDeadAssignElimBlock` |
-  | 6  | `hirWalkVisitExpr` |
-  | 6  | `monoScanRoots` |
-
-  공통 패턴: 큰 `match expr.kind` 디스패치에서 `let folded = call(...)` 또는
-  `let kind = e.field` 이 ErrType 으로 떨어진다. Phase 3a (`lowerMatch`
-  scrutinee recovery) 가 cascade 의 seed (`_scrut` local) 를 차단했지만,
-  arm 안의 사용자 정의 enum variant ident 와 chained field/index access 의
-  recovery 는 아직 미흡. 단일 파일 머지가 만드는 generic instantiation
-  context 에서 monomorph 이 inference 를 못 하는 케이스로 추정. 실제
-  multi-file 컴파일에서는 발생 안 함.
-
-  Phase 3b 후보 (추가 진입 비용 낮음):
-  - `identTypeFromDecl` (`internal/ir/lower.go`) 에 `*ast.Variant` case 추가
-    — 현재 nil 반환 → 부모 enum 이름으로 `&ast.NamedType` 합성. 변수
-    `let mut kind = HirSwitchUnknown` 같은 bare variant ident 가 ErrType
-    으로 안 떨어지게 된다. (resolver 가 Variant Symbol 에 부모 enum 백포인터
-    를 안 보존하므로 lookup 헬퍼 신설 필요.)
-  - `bindingTypeFromAST` (`internal/ir/lower.go`) 가 `StructLit/ParenExpr`
-    만 처리 — `CallExpr` (recoverFnDeclReturnType 재사용), `IfExpr` (양쪽
-    branch 결과 type), `FieldExpr` (recoverFieldType 재사용), `IndexExpr`
-    (List<T>[i]→T) 추가.
-
-이 두 wall 은 현재 Phase 1 (E0553) 또는 1c.5 (Go resolver 삭제) 와는 독립이라
-별도 트랙으로 추적.
+  (2026-04-26)**. 자세한 패턴은 위 표 참조.
+- ~~**LLVM016 unknown identifier "None"** + 후속 Pipeline-Clean walls~~ —
+  **2026-05-03 닫힘**. PR #1314 (string_concat ErrType 폴백 +
+  mid-chain IndexProj write → `emitIndexedElementResultWrite` 재사용)
+  으로 `TestNativeToolchainMergedMIRPipelineIsClean` 가 PASS. 다음 wall
+  은 등장 시점에 새로 기록.
+- ~~**ErrType floor 374**~~ — **2026-05-03 닫힘**. PR #948/#1054/#1085/#1093
+  sweep 이 iflet/coalesce/q/opt + partial-struct field lookup + struct-field-
+  default + IR-value type recovery 를 모두 메우면서 누적 폐기. 현재 count 0,
+  floor 0 으로 타이트닝.
 
 ## 2026-04-24 — Phase 1c.5 code state (historical snapshot)
 
