@@ -4706,6 +4706,19 @@ fn lirParseResultPayloadAsI64(l: LirMirFunctionLowerer, valueReg: String, valueT
 fn lirIsOptionTypeName(name: String) -> Bool {
     strings.startsWith(name, "Option<") || strings.startsWith(name, "Maybe<")
 }
+// `lirAggTypeNameFromRV` resolves the target type name for an
+// aggregate / nullary rvalue: prefer `rv.typ` (set by the HIR→MIR
+// lowerer); fall back to `hintName` (passed down from the assign
+// dest's local type) when the rv's own slot is empty. Returns ""
+// when both are empty — caller emits a structured unsupported
+// diagnostic. Centralises a fallback pattern repeated across every
+// aggregate kind (Tuple/Struct/Enum/List) plus NullaryRV.
+fn lirAggTypeNameFromRV(rv: MirRValue, hintName: String) -> String {
+    if rv.typ != "" {
+        return rv.typ
+    }
+    hintName
+}
 // Channel<T> send/recv lowering. Like List/Map/Set, the runtime splits
 // the helper symbol by element-type lane:
 // `osty_rt_thread_chan_send_<lane>` / `_recv_<lane>`. The composite
@@ -4932,11 +4945,7 @@ fn lirLowerMirNullaryRV(l: LirMirFunctionLowerer, rv: MirRValue, hintName: Strin
         lirLowerError(l, LirDiagUnsupported, "unsupported nullary rvalue kind", "rvalue.nullary")
         return lirOperandInvalid()
     }
-    let typeName = if rv.typ != "" {
-        rv.typ
-    } else {
-        hintName
-    }
+    let typeName = lirAggTypeNameFromRV(rv, hintName)
     let target = if typeName != "" {
         lirLowerMirType(l, typeName)
     } else {
@@ -5156,11 +5165,7 @@ fn lirLowerMirAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: Strin
 // Mirrors production `emitListLiteral` + `emitListPushOperand`
 // (mir_generator.go:9348).
 fn lirLowerMirListAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
-    let typeName = if rv.typ == "" {
-        hintName
-    } else {
-        rv.typ
-    }
+    let typeName = lirAggTypeNameFromRV(rv, hintName)
     let elemName = lirListElemTypeName(typeName)
     if elemName == "" {
         lirLowerError(l, LirDiagUnsupported, "list aggregate target `" + typeName + "` is not a List<T>", "aggregate.list")
@@ -5212,11 +5217,7 @@ fn lirLowerMirListAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: S
 // fill the slot with literal 0. Mirrors production `emitEnumVariant`
 // (mir_generator.go:9148).
 fn lirLowerMirEnumVariantAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
-    let typeName = if rv.typ == "" {
-        hintName
-    } else {
-        rv.typ
-    }
+    let typeName = lirAggTypeNameFromRV(rv, hintName)
     let aggType = if typeName != "" {
         lirLowerMirType(l, typeName)
     } else {
@@ -5248,11 +5249,7 @@ fn lirLowerMirEnumVariantAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hint
     lirOperand(aggType, value)
 }
 fn lirLowerMirTupleAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
-    let tupleName = if rv.typ == "" {
-        hintName
-    } else {
-        rv.typ
-    }
+    let tupleName = lirAggTypeNameFromRV(rv, hintName)
     let layout = lirFindMirTupleLayout(l, tupleName)
     if layout.key == "" && layout.mangled == "" {
         lirLowerError(l, LirDiagUnsupported, "tuple aggregate type `" + tupleName + "` has no MIR layout", "aggregate.tuple")
@@ -5291,11 +5288,7 @@ fn lirLowerMirTupleAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: 
     current
 }
 fn lirLowerMirStructAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
-    let structName = if rv.typ == "" {
-        hintName
-    } else {
-        rv.typ
-    }
+    let structName = lirAggTypeNameFromRV(rv, hintName)
     let layout = lirFindMirStructLayout(l, structName)
     if layout.name == "" && layout.mangled == "" {
         lirLowerError(l, LirDiagUnsupported, "struct aggregate type `" + structName + "` has no MIR layout", "aggregate.struct")
