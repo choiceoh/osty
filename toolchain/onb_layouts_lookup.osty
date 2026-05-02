@@ -1,0 +1,235 @@
+// onb_layouts_lookup.osty — struct / enum layout lookups + the
+// layout-aware ABI classification helpers. Slice F of the ONB
+// self-host port. Mirror of `lookupStructLayout` /
+// `lookupEnumLayout` / `enumSlotSize` / `abiRegSlots` /
+// `abiUsesIndirectStruct` / `isABIPassableType` /
+// `payloadAllScalar` from `internal/onb/lower.go`.
+//
+// MIR layouts already exist in `toolchain/mir.osty`
+// (`MirStructLayout`, `MirEnumLayout`). The lookup helpers walk
+// the layout table's lists by name; the ABI helpers compose the
+// result with the predicates from `onb_abi.osty` to decide which
+// register-class an arbitrary MIR type rides at the call boundary.
+
+// === Lookup =========================================================
+
+// onbLookupStructLayout finds the layout entry for `typeName`
+// in the module's layout table. Returns `None` for unknown names
+// or a malformed table. Mirror of `lookupStructLayout` —
+// performance-wise linear in the number of struct types, which
+// matches the Go side's map lookup amortised cost on small CUs.
+pub fn onbLookupStructLayout(table: MirLayoutTable, typeName: String) -> MirStructLayout? {
+    for s in table.structs {
+        if s.name == typeName {
+            return Some(s)
+        }
+    }
+    None
+}
+
+pub fn onbLookupEnumLayout(table: MirLayoutTable, typeName: String) -> MirEnumLayout? {
+    for e in table.enums {
+        if e.name == typeName {
+            return Some(e)
+        }
+    }
+    None
+}
+
+// onbExtractTypeName extracts the head name of a MIR type repr.
+// E.g. `"Point"` → `"Point"`, `"List<Int>"` → `"List"`,
+// `"Map<String, Int>"` → `"Map"`. Used by the layout lookup
+// helpers to bridge the type-repr string into the layout
+// table's `name` field.
+pub fn onbExtractTypeName(typ: String) -> String {
+    let mut head = ""
+    let mut done = false
+    for ch in typ.chars() {
+        if !done {
+            let s = "{ch}"
+            if s == "<" || s == " " {
+                done = true
+            } else {
+                head = head + s
+            }
+        }
+    }
+    head
+}
+
+// === Field / payload classification ================================
+
+// onbStructLayoutAllScalar reports whether every field of a
+// struct fits in one ABI register. Used by the small-struct path
+// to gate which structs ride the AAPCS64 register convention.
+pub fn onbStructLayoutAllScalar(layout: MirStructLayout) -> Bool {
+    for f in layout.fields {
+        if !onbIsAbiWordType(f.typ) {
+            return false
+        }
+    }
+    true
+}
+
+// onbEnumPayloadAllScalar reports whether every payload field of
+// a single enum variant is a 1-reg type. Mirror of
+// `payloadAllScalar` in lower.go.
+pub fn onbEnumPayloadAllScalar(payload: List<MirFieldLayout>) -> Bool {
+    for f in payload {
+        if !onbIsAbiWordType(f.typ) {
+            return false
+        }
+    }
+    true
+}
+
+// onbEnumLayoutAllScalar reports whether every variant of an
+// enum has all-scalar payloads. Required for the small-enum
+// register path; mixed payloads fall back to the LLVM backend.
+pub fn onbEnumLayoutAllScalar(layout: MirEnumLayout) -> Bool {
+    for v in layout.variants {
+        if !onbEnumPayloadAllScalar(v.payload) {
+            return false
+        }
+    }
+    true
+}
+
+// === Slot sizes ====================================================
+
+// onbStructLayoutByteSize returns the on-stack byte size for a
+// struct local. Each scalar field reserves one 8-byte slot; the
+// total is `len(fields) * 8`. Mirror of the relevant branch in
+// `localTypeSize`.
+pub fn onbStructLayoutByteSize(layout: MirStructLayout) -> Int {
+    layout.fields.len() * 8
+}
+
+// onbEnumSlotSize returns the on-stack byte size for an enum
+// local: 8 (discriminant) + maxPayload * 8. Capped at 16 — past
+// that the AAPCS64 small-struct ABI doesn't apply and the value
+// goes indirect.
+//
+// Returns 0 for an enum with non-scalar payload (caller falls
+// back to the LLVM backend). Mirror of `enumSlotSize`.
+pub fn onbEnumSlotSize(layout: MirEnumLayout) -> Int {
+    let mut maxPayload = 0
+    for v in layout.variants {
+        if !onbEnumPayloadAllScalar(v.payload) {
+            return 0
+        }
+        if v.payload.len() > maxPayload {
+            maxPayload = v.payload.len()
+        }
+    }
+    let total = 8 + (maxPayload * 8)
+    if total > 16 {
+        return 0
+    }
+    total
+}
+
+// === Layout-aware ABI register-slot count =========================
+
+// onbAbiRegSlotsResult is the (count, ok) pair `abiRegSlots`
+// returns. `ok = false` means "this type isn't ABI-passable
+// today"; the lowering layer routes such types through the LLVM
+// fallback.
+pub struct OnbAbiRegSlotsResult {
+    pub slots: Int,
+    pub ok: Bool,
+}
+
+pub fn onbAbiRegSlotsResult(slots: Int, ok: Bool) -> OnbAbiRegSlotsResult {
+    OnbAbiRegSlotsResult { slots: slots, ok: ok }
+}
+
+// onbAbiRegSlots returns how many registers an ABI value of type
+// `typ` consumes. Mirror of `abiRegSlots`. Resolution order:
+//
+//   1. Unit / Float / scalar / pointer-shaped → 1 reg (or 0 for
+//      Unit).
+//   2. Named struct in the layout table → either 1 / 2 (small
+//      struct via direct registers) or 1 (indirect via pointer
+//      to caller-allocated buffer).
+//   3. Named enum in the layout table → ceil(slot / 8) registers.
+//   4. Anything else → ok = false.
+pub fn onbAbiRegSlots(table: MirLayoutTable, typ: String) -> OnbAbiRegSlotsResult {
+    if typ == "()" {
+        return onbAbiRegSlotsResult(0, true)
+    }
+    if onbIsAbiScalarType(typ) {
+        return onbAbiRegSlotsResult(1, true)
+    }
+    let head = onbExtractTypeName(typ)
+    match onbLookupStructLayout(table, head) {
+        Some(layout) -> {
+            if !onbStructLayoutAllScalar(layout) {
+                return onbAbiRegSlotsResult(0, false)
+            }
+            let n = layout.fields.len()
+            if n == 0 {
+                return onbAbiRegSlotsResult(0, false)
+            }
+            if n <= onbAbiSmallStructRegLimit() {
+                return onbAbiRegSlotsResult(n, true)
+            }
+            if n <= onbAbiIndirectStructFieldLimit() {
+                return onbAbiRegSlotsResult(1, true)
+            }
+            return onbAbiRegSlotsResult(0, false)
+        },
+        None -> {},
+    }
+    match onbLookupEnumLayout(table, head) {
+        Some(layout) -> {
+            let size = onbEnumSlotSize(layout)
+            if size == 0 {
+                return onbAbiRegSlotsResult(0, false)
+            }
+            return onbAbiRegSlotsResult(size / 8, true)
+        },
+        None -> {},
+    }
+    onbAbiRegSlotsResult(0, false)
+}
+
+// onbAbiUsesIndirectStruct reports whether type `typ` rides the
+// AAPCS64 indirect (sret) ABI: a pointer to a caller-allocated
+// buffer in one regular argument register (params) or x8
+// (returns). Mirror of `abiUsesIndirectStruct`.
+pub fn onbAbiUsesIndirectStruct(table: MirLayoutTable, typ: String) -> Bool {
+    let head = onbExtractTypeName(typ)
+    match onbLookupStructLayout(table, head) {
+        Some(layout) -> {
+            if !onbStructLayoutAllScalar(layout) {
+                return false
+            }
+            let n = layout.fields.len()
+            n > onbAbiSmallStructRegLimit() && n <= onbAbiIndirectStructFieldLimit()
+        },
+        None -> false,
+    }
+}
+
+// onbAbiIndirectStructByteSize returns the byte size of an
+// indirect-passed struct's slot — `n * 8` where n is the field
+// count. Caller pre-checks `onbAbiUsesIndirectStruct`.
+pub fn onbAbiIndirectStructByteSize(table: MirLayoutTable, typ: String) -> Int {
+    let head = onbExtractTypeName(typ)
+    match onbLookupStructLayout(table, head) {
+        Some(layout) -> layout.fields.len() * 8,
+        None -> 0,
+    }
+}
+
+// onbAbiIsPassableType reports whether `typ` is something the
+// function-boundary ABI guards accept as a parameter or return
+// type. Mirror of `isABIPassableType`.
+pub fn onbAbiIsPassableType(table: MirLayoutTable, typ: String) -> Bool {
+    if onbIsAbiScalarType(typ) {
+        return true
+    }
+    let result = onbAbiRegSlots(table, typ)
+    result.ok
+}

@@ -1,0 +1,191 @@
+// onb_layouts_lookup_test.osty — layout-aware ABI tests.
+use std.testing
+
+// === Helpers =======================================================
+
+fn fieldI64(idx: Int, name: String) -> MirFieldLayout {
+    MirFieldLayout { index: idx, name: name, typ: "Int" }
+}
+
+fn structPoint() -> MirStructLayout {
+    let mut fields: List<MirFieldLayout> = []
+    fields.push(fieldI64(0, "x"))
+    fields.push(fieldI64(1, "y"))
+    MirStructLayout { name: "Point", mangled: "Point", fields: fields, size: 16, align: 8 }
+}
+
+fn structV3() -> MirStructLayout {
+    let mut fields: List<MirFieldLayout> = []
+    fields.push(fieldI64(0, "x"))
+    fields.push(fieldI64(1, "y"))
+    fields.push(fieldI64(2, "z"))
+    MirStructLayout { name: "V3", mangled: "V3", fields: fields, size: 24, align: 8 }
+}
+
+fn enumColor() -> MirEnumLayout {
+    let mut variants: List<MirVariantLayout> = []
+    variants.push(MirVariantLayout { index: 0, name: "Red", payload: [] })
+    variants.push(MirVariantLayout { index: 1, name: "Green", payload: [] })
+    variants.push(MirVariantLayout { index: 2, name: "Blue", payload: [] })
+    MirEnumLayout { name: "Color", mangled: "Color", discriminant: "Int", variants: variants }
+}
+
+fn enumOptionInt() -> MirEnumLayout {
+    let mut variants: List<MirVariantLayout> = []
+    variants.push(MirVariantLayout { index: 0, name: "None", payload: [] })
+    let mut someFields: List<MirFieldLayout> = []
+    someFields.push(fieldI64(0, "value"))
+    variants.push(MirVariantLayout { index: 1, name: "Some", payload: someFields })
+    MirEnumLayout { name: "Option", mangled: "Option", discriminant: "Int", variants: variants }
+}
+
+fn buildTable() -> MirLayoutTable {
+    let mut table = mirLayoutTable()
+    table.structs.push(structPoint())
+    table.structs.push(structV3())
+    table.enums.push(enumColor())
+    table.enums.push(enumOptionInt())
+    table
+}
+
+// === Lookup ========================================================
+
+fn testOnbLookupStructLayoutHit() {
+    let table = buildTable()
+    match onbLookupStructLayout(table, "Point") {
+        Some(layout) -> testing.assertEq(layout.name, "Point"),
+        None -> testing.assert(false),
+    }
+}
+
+fn testOnbLookupStructLayoutMiss() {
+    let table = buildTable()
+    testing.assert(onbLookupStructLayout(table, "Unknown").isNone())
+}
+
+fn testOnbLookupEnumLayoutHit() {
+    let table = buildTable()
+    match onbLookupEnumLayout(table, "Color") {
+        Some(layout) -> testing.assertEq(layout.variants.len(), 3),
+        None -> testing.assert(false),
+    }
+}
+
+// === Type-name extraction =========================================
+
+fn testOnbExtractTypeNameSimple() {
+    testing.assertEq(onbExtractTypeName("Point"), "Point")
+    testing.assertEq(onbExtractTypeName("Int"), "Int")
+}
+
+fn testOnbExtractTypeNameGeneric() {
+    testing.assertEq(onbExtractTypeName("List<Int>"), "List")
+    testing.assertEq(onbExtractTypeName("Map<String, Int>"), "Map")
+    testing.assertEq(onbExtractTypeName("Option<List<Int>>"), "Option")
+}
+
+// === Slot size helpers =============================================
+
+fn testOnbStructLayoutByteSize() {
+    testing.assertEq(onbStructLayoutByteSize(structPoint()), 16)
+    testing.assertEq(onbStructLayoutByteSize(structV3()), 24)
+}
+
+fn testOnbEnumSlotSizeNoPayload() {
+    // Color: 3 no-payload variants → slot = 8 bytes (disc only).
+    testing.assertEq(onbEnumSlotSize(enumColor()), 8)
+}
+
+fn testOnbEnumSlotSizeOptionInt() {
+    // Option<Int>: max 1 payload field → slot = 16 bytes (8 disc
+    // + 8 payload). Fits within the small-struct cap.
+    testing.assertEq(onbEnumSlotSize(enumOptionInt()), 16)
+}
+
+fn testOnbEnumLayoutAllScalar() {
+    testing.assert(onbEnumLayoutAllScalar(enumColor()))
+    testing.assert(onbEnumLayoutAllScalar(enumOptionInt()))
+}
+
+fn testOnbStructLayoutAllScalar() {
+    testing.assert(onbStructLayoutAllScalar(structPoint()))
+    testing.assert(onbStructLayoutAllScalar(structV3()))
+}
+
+// === abiRegSlots =================================================
+
+fn testOnbAbiRegSlotsScalar() {
+    let table = buildTable()
+    let intResult = onbAbiRegSlots(table, "Int")
+    testing.assert(intResult.ok)
+    testing.assertEq(intResult.slots, 1)
+
+    let unitResult = onbAbiRegSlots(table, "()")
+    testing.assert(unitResult.ok)
+    testing.assertEq(unitResult.slots, 0)
+}
+
+fn testOnbAbiRegSlotsSmallStruct() {
+    let table = buildTable()
+    // Point is 2-field all-scalar → 2 regs (small-struct path).
+    let r = onbAbiRegSlots(table, "Point")
+    testing.assert(r.ok)
+    testing.assertEq(r.slots, 2)
+}
+
+fn testOnbAbiRegSlotsIndirectStruct() {
+    let table = buildTable()
+    // V3 is 3-field all-scalar → 1 reg (pointer; indirect).
+    let r = onbAbiRegSlots(table, "V3")
+    testing.assert(r.ok)
+    testing.assertEq(r.slots, 1)
+}
+
+fn testOnbAbiRegSlotsEnumNoPayload() {
+    let table = buildTable()
+    // Color slot = 8 → 1 reg.
+    let r = onbAbiRegSlots(table, "Color")
+    testing.assert(r.ok)
+    testing.assertEq(r.slots, 1)
+}
+
+fn testOnbAbiRegSlotsEnumWithPayload() {
+    let table = buildTable()
+    // Option slot = 16 → 2 regs.
+    let r = onbAbiRegSlots(table, "Option")
+    testing.assert(r.ok)
+    testing.assertEq(r.slots, 2)
+}
+
+fn testOnbAbiRegSlotsUnknown() {
+    let table = buildTable()
+    // Unknown type → ok = false.
+    let r = onbAbiRegSlots(table, "Unknown")
+    testing.assert(!r.ok)
+}
+
+// === abiUsesIndirectStruct =======================================
+
+fn testOnbAbiUsesIndirectStruct() {
+    let table = buildTable()
+    testing.assert(!onbAbiUsesIndirectStruct(table, "Point"))   // 2 fields → direct
+    testing.assert(onbAbiUsesIndirectStruct(table, "V3"))       // 3 fields → indirect
+}
+
+fn testOnbAbiIndirectStructByteSize() {
+    let table = buildTable()
+    testing.assertEq(onbAbiIndirectStructByteSize(table, "V3"), 24)
+}
+
+// === abiIsPassableType ==========================================
+
+fn testOnbAbiIsPassableType() {
+    let table = buildTable()
+    testing.assert(onbAbiIsPassableType(table, "Int"))
+    testing.assert(onbAbiIsPassableType(table, "Point"))
+    testing.assert(onbAbiIsPassableType(table, "V3"))
+    testing.assert(onbAbiIsPassableType(table, "Color"))
+    testing.assert(onbAbiIsPassableType(table, "Option"))
+    testing.assert(onbAbiIsPassableType(table, "List<Int>"))
+    testing.assert(!onbAbiIsPassableType(table, "Unknown"))
+}
