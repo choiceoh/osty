@@ -48,17 +48,17 @@ const regX8 Reg = "x8"
 // exactly. The Mach-O `bl` encoder prepends the leading underscore for
 // darwin's symbol mangling.
 const (
-	runtimeSymStringConcat       = "osty_rt_strings_Concat"
-	runtimeSymListNew            = "osty_rt_list_new"
-	runtimeSymListPushI64        = "osty_rt_list_push_i64"
-	runtimeSymListPushI1         = "osty_rt_list_push_i1"
-	runtimeSymListPushF64        = "osty_rt_list_push_f64"
-	runtimeSymListPushString     = "osty_rt_list_push_string"
-	runtimeSymListLen            = "osty_rt_list_len"
-	runtimeSymListGetI64         = "osty_rt_list_get_i64"
-	runtimeSymListGetI1          = "osty_rt_list_get_i1"
-	runtimeSymListGetF64         = "osty_rt_list_get_f64"
-	runtimeSymListGetString      = "osty_rt_list_get_string"
+	runtimeSymStringConcat   = "osty_rt_strings_Concat"
+	runtimeSymListNew        = "osty_rt_list_new"
+	runtimeSymListPushI64    = "osty_rt_list_push_i64"
+	runtimeSymListPushI1     = "osty_rt_list_push_i1"
+	runtimeSymListPushF64    = "osty_rt_list_push_f64"
+	runtimeSymListPushString = "osty_rt_list_push_string"
+	runtimeSymListLen        = "osty_rt_list_len"
+	runtimeSymListGetI64     = "osty_rt_list_get_i64"
+	runtimeSymListGetI1      = "osty_rt_list_get_i1"
+	runtimeSymListGetF64     = "osty_rt_list_get_f64"
+	runtimeSymListGetString  = "osty_rt_list_get_string"
 	// closure_env_alloc_v2 is exported by the runtime under the dotted
 	// (LLVM-shaped) name via __asm__("osty.rt..."). Mach-O symbol
 	// encoding prepends the leading underscore, matching the call site.
@@ -1775,7 +1775,6 @@ func (s *lowerState) indirectArgAddress(arg mir.Operand, dst Reg) ([]Instr, erro
 	}
 	return []Instr{&LoadStackAddress{Dst: dst, Offset: slot}}, nil
 }
-
 
 // destType returns the MIR type of a local in the current function. The
 // caller already knows the local is a Dest of a CallInstr, so a missing
