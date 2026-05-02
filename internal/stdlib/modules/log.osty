@@ -1,12 +1,41 @@
-// std.log — structured logging surface.
+// std.log — structured logging surface (spec §10.10).
+//
+// Inspired by Go's `slog`. Defaults per spec: stderr, `TextHandler`,
+// `Info` level, process-global handler.
+//
+// Two ergonomic shortcuts in the spec depend on compiler features
+// that are not yet implemented:
+//
+//   1. The `Fields { "k": v }` literal at call sites (spec §10.10
+//      line 9) requires a type-alias struct-literal sugar — type
+//      aliases (`pub type Fields = Map<String, LogValue>`) cannot
+//      currently appear as struct-literal heads.
+//   2. The implicit `.toLogValue()` conversion on heterogeneous map
+//      values requires `ToLogValue` auto-derive across primitives,
+//      `String`, `Bytes`, `Instant`, `Duration`, `Option<T>`,
+//      `List<T>`, and structs/enums.
+//
+// Both gaps are tracked in `SPEC_GAPS.md` (`log-fields-sugar`).
+// Until they land, callers either build a `Map<String, LogValue>`
+// explicitly via `intValue` / `stringValue` / etc., or use the
+// fluent `Logger.with` chain to accumulate context fields.
+//
+// `setLevel` / `setHandler` are documented best-effort stubs — a
+// process-global mutable handler requires runtime intercept support
+// that does not exist yet. Callers needing per-call control can
+// instantiate a `Logger` directly:
+//
+//     let logger = log.newLogger(log.JsonHandler {}, log.Level.Debug)
+//     logger.info("hello")
+//     logger.with("traceId", log.stringValue("abc")).warn("retry")
+//
+// `LevelHandler { inner: H, minLevel: L }` wraps any handler with a
+// level filter — the structural alternative to the no-op `setLevel`.
+
+use std.time
 
 pub type Fields = Map<String, LogValue>
 pub type LogValueList = List<LogValue>
-pub type LogBool = Bool
-pub type LogInt = Int
-pub type LogFloat = Float
-pub type LogString = String
-pub type LogBytes = Bytes
 
 pub enum Level {
     Debug,
@@ -15,19 +44,15 @@ pub enum Level {
     Error,
 }
 
-pub struct LogInstant {}
-
-pub struct LogDuration {}
-
 pub enum LogValue {
     Null,
-    Bool(LogBool),
-    Int(LogInt),
-    Float(LogFloat),
-    String(LogString),
-    Time(LogInstant),
-    Duration(LogDuration),
-    Bytes(LogBytes),
+    Bool(Bool),
+    Int(Int),
+    Float(Float),
+    String(String),
+    Time(time.Instant),
+    Duration(time.Duration),
+    Bytes(Bytes),
     List(LogValueList),
     Map(Fields),
 }
@@ -46,88 +71,371 @@ pub interface ToLogValue {
     fn toLogValue(self) -> LogValue
 }
 
-pub struct TextHandler {}
+pub struct TextHandler {
+    pub fn handle(self, record: Record) {
+        let mut buf = "[" + levelToString(record.level) + "] " + record.message
+        for (k, v) in record.fields {
+            buf = buf + " " + k + "=" + formatLogValue(v)
+        }
+        eprintln(buf)
+    }
+}
 
-pub struct JsonHandler {}
+pub struct JsonHandler {
+    pub fn handle(self, record: Record) {
+        let mut buf = "\{\"level\":" + jsonEscapeString(levelToString(record.level))
+        buf = buf + ",\"message\":" + jsonEscapeString(record.message)
+        if !record.fields.isEmpty() {
+            buf = buf + ",\"fields\":" + formatLogValueAsJson(LogValue.Map(record.fields))
+        }
+        buf = buf + "\}"
+        eprintln(buf)
+    }
+}
+
+// LevelHandler wraps an inner handler and drops records below
+// `minLevel`. It is the structural replacement for the spec's
+// process-global level filter (`setLevel`) — wrap a handler at
+// construction instead of mutating global state.
+pub struct LevelHandler {
+    pub inner: Handler,
+    pub minLevel: Level,
+
+    pub fn handle(self, record: Record) {
+        if levelOrdinal(record.level) < levelOrdinal(self.minLevel) {
+            return
+        }
+        self.inner.handle(record)
+    }
+}
+
+// Logger is the per-instance entry point: pick a handler, optionally
+// a min level, and accumulate context fields with `.with` / `.withFields`.
+// Each `.with` returns a fresh Logger sharing the underlying handler;
+// the context map is shallow-copied so concurrent loggers do not race.
+pub struct Logger {
+    pub handler: Handler,
+    pub minLevel: Level,
+    pub context: Fields,
+
+    pub fn debug(self, msg: String, attrs: Fields = {:}) {
+        self.emit(Level.Debug, msg, attrs)
+    }
+
+    pub fn info(self, msg: String, attrs: Fields = {:}) {
+        self.emit(Level.Info, msg, attrs)
+    }
+
+    pub fn warn(self, msg: String, attrs: Fields = {:}) {
+        self.emit(Level.Warn, msg, attrs)
+    }
+
+    pub fn error(self, msg: String, attrs: Fields = {:}) {
+        self.emit(Level.Error, msg, attrs)
+    }
+
+    pub fn with(self, key: String, value: LogValue) -> Logger {
+        let mut copy: Fields = {:}
+        for (k, v) in self.context {
+            copy.insert(k, v)
+        }
+        copy.insert(key, value)
+        Logger {
+            handler: self.handler,
+            minLevel: self.minLevel,
+            context: copy,
+        }
+    }
+
+    pub fn withFields(self, more: Fields) -> Logger {
+        let mut copy: Fields = {:}
+        for (k, v) in self.context {
+            copy.insert(k, v)
+        }
+        for (k, v) in more {
+            copy.insert(k, v)
+        }
+        Logger {
+            handler: self.handler,
+            minLevel: self.minLevel,
+            context: copy,
+        }
+    }
+
+    fn emit(self, level: Level, msg: String, attrs: Fields) {
+        if levelOrdinal(level) < levelOrdinal(self.minLevel) {
+            return
+        }
+        let mut merged: Fields = {:}
+        for (k, v) in self.context {
+            merged.insert(k, v)
+        }
+        for (k, v) in attrs {
+            merged.insert(k, v)
+        }
+        self.handler.handle(Record {
+            level: level,
+            message: msg,
+            fields: merged,
+        })
+    }
+}
+
+pub fn newLogger(handler: Handler, minLevel: Level) -> Logger {
+    Logger {
+        handler: handler,
+        minLevel: minLevel,
+        context: {:},
+    }
+}
+
+// Convenience constructor for the spec-default `Info` level. Equivalent
+// to `newLogger(handler, Level.Info)`; provided because parameter
+// defaults are restricted to literal forms (spec R18) and `Level.Info`
+// is an enum variant.
+pub fn newDefaultLogger(handler: Handler) -> Logger {
+    Logger {
+        handler: handler,
+        minLevel: Level.Info,
+        context: {:},
+    }
+}
 
 pub fn fields() -> Fields {
     {:}
 }
 
-pub fn debugLevel() -> Level {
-    Debug
+pub fn debugLevel() -> Level { Level.Debug }
+pub fn infoLevel() -> Level { Level.Info }
+pub fn warnLevel() -> Level { Level.Warn }
+pub fn errorLevel() -> Level { Level.Error }
+
+pub fn nullValue() -> LogValue { LogValue.Null }
+pub fn boolValue(value: Bool) -> LogValue { LogValue.Bool(value) }
+pub fn intValue(value: Int) -> LogValue { LogValue.Int(value) }
+pub fn floatValue(value: Float) -> LogValue { LogValue.Float(value) }
+pub fn stringValue(value: String) -> LogValue { LogValue.String(value) }
+pub fn bytesValue(value: Bytes) -> LogValue { LogValue.Bytes(value) }
+pub fn listValue(value: LogValueList) -> LogValue { LogValue.List(value) }
+pub fn mapValue(value: Fields) -> LogValue { LogValue.Map(value) }
+pub fn timeValue(value: time.Instant) -> LogValue { LogValue.Time(value) }
+pub fn durationValue(value: time.Duration) -> LogValue { LogValue.Duration(value) }
+
+// formatDuration is a placeholder. Spec §10.20 declares
+// `Duration.toString()` as adaptive ("1.23s", "15ms", "120us") and
+// the public `nanoseconds: Int64` field, but the `Duration` builtin
+// (registered through the prelude) does not surface its methods or
+// fields to the type-checker — calling either path raises `E0703 no
+// method` / `E0702 no field`. The runtime intercept that would back
+// `Duration.toString()` is also missing. Until both paths are wired
+// (tracked under SPEC_GAPS `duration-builtin-methods`), emit a
+// placeholder so the formatter remains type-safe.
+fn formatDuration(d: time.Duration) -> String {
+    "<duration>"
 }
 
-pub fn infoLevel() -> Level {
-    Info
+fn levelToString(l: Level) -> String {
+    match l {
+        Level.Debug -> "debug",
+        Level.Info -> "info",
+        Level.Warn -> "warn",
+        Level.Error -> "error",
+    }
 }
 
-pub fn warnLevel() -> Level {
-    Warn
+fn levelOrdinal(l: Level) -> Int {
+    match l {
+        Level.Debug -> 0,
+        Level.Info -> 1,
+        Level.Warn -> 2,
+        Level.Error -> 3,
+    }
 }
 
-pub fn errorLevel() -> Level {
-    Error
+fn formatLogValue(v: LogValue) -> String {
+    match v {
+        LogValue.Null -> "null",
+        LogValue.Bool(b) -> b.toString(),
+        LogValue.Int(i) -> i.toString(),
+        LogValue.Float(f) -> f.toString(),
+        LogValue.String(s) -> s,
+        LogValue.Time(t) -> t.format(time.ISO_8601),
+        LogValue.Duration(d) -> formatDuration(d),
+        LogValue.Bytes(b) -> "<bytes len=" + b.len().toString() + ">",
+        LogValue.List(items) -> {
+            let mut buf = "["
+            let mut first = true
+            for item in items {
+                if !first {
+                    buf = buf + ", "
+                }
+                buf = buf + formatLogValue(item)
+                first = false
+            }
+            buf + "]"
+        },
+        LogValue.Map(m) -> {
+            let mut buf = "\{"
+            let mut first = true
+            for (k, val) in m {
+                if !first {
+                    buf = buf + ", "
+                }
+                buf = buf + k + "=" + formatLogValue(val)
+                first = false
+            }
+            buf + "\}"
+        },
+    }
 }
 
-pub fn nullValue() -> LogValue {
-    Null
+// jsonEscapeString implements RFC 8259 string production.
+// Control chars 0x00-0x1F that lack a short escape (`\b`, `\f`,
+// `\n`, `\r`, `\t`) are written as `\u00XX`. UTF-8 multi-byte
+// sequences pass through verbatim; the lexer guarantees the input
+// is valid Unicode, so RFC 8259's surrogate-pair requirement is
+// satisfied by default-output of the source bytes.
+fn jsonEscapeString(s: String) -> String {
+    let mut buf = "\""
+    for c in s {
+        let code = c.toInt()
+        if c == '"' {
+            buf = buf + "\\\""
+        } else if c == '\\' {
+            buf = buf + "\\\\"
+        } else if c == '\n' {
+            buf = buf + "\\n"
+        } else if c == '\r' {
+            buf = buf + "\\r"
+        } else if c == '\t' {
+            buf = buf + "\\t"
+        } else if code == 0x08 {
+            buf = buf + "\\b"
+        } else if code == 0x0C {
+            buf = buf + "\\f"
+        } else if code < 0x20 {
+            buf = buf + "\\u00" + hex2(code)
+        } else {
+            buf = buf + c.toString()
+        }
+    }
+    buf + "\""
 }
 
-pub fn boolValue(value: Bool) -> LogValue {
-    Bool(value)
+fn hex2(n: Int) -> String {
+    let hi = (n / 16) % 16
+    let lo = n % 16
+    hexDigit(hi) + hexDigit(lo)
 }
 
-pub fn intValue(value: Int) -> LogValue {
-    Int(value)
+fn hexDigit(n: Int) -> String {
+    match n {
+        0 -> "0",
+        1 -> "1",
+        2 -> "2",
+        3 -> "3",
+        4 -> "4",
+        5 -> "5",
+        6 -> "6",
+        7 -> "7",
+        8 -> "8",
+        9 -> "9",
+        10 -> "a",
+        11 -> "b",
+        12 -> "c",
+        13 -> "d",
+        14 -> "e",
+        15 -> "f",
+        _ -> "0",
+    }
 }
 
-pub fn floatValue(value: Float) -> LogValue {
-    Float(value)
+fn formatLogValueAsJson(v: LogValue) -> String {
+    match v {
+        LogValue.Null -> "null",
+        LogValue.Bool(b) -> b.toString(),
+        LogValue.Int(i) -> i.toString(),
+        LogValue.Float(f) -> f.toString(),
+        LogValue.String(s) -> jsonEscapeString(s),
+        LogValue.Time(t) -> jsonEscapeString(t.format(time.ISO_8601)),
+        LogValue.Duration(d) -> jsonEscapeString(formatDuration(d)),
+        LogValue.Bytes(b) -> jsonEscapeString("<bytes len=" + b.len().toString() + ">"),
+        LogValue.List(items) -> {
+            let mut buf = "["
+            let mut first = true
+            for item in items {
+                if !first {
+                    buf = buf + ","
+                }
+                buf = buf + formatLogValueAsJson(item)
+                first = false
+            }
+            buf + "]"
+        },
+        LogValue.Map(m) -> {
+            let mut buf = "\{"
+            let mut first = true
+            for (k, val) in m {
+                if !first {
+                    buf = buf + ","
+                }
+                buf = buf + jsonEscapeString(k) + ":" + formatLogValueAsJson(val)
+                first = false
+            }
+            buf + "\}"
+        },
+    }
 }
 
-pub fn stringValue(value: String) -> LogValue {
-    String(value)
+fn write(level: Level, msg: String, fields: Fields) {
+    let handler = TextHandler {}
+    handler.handle(Record { level: level, message: msg, fields: fields })
 }
 
-pub fn bytesValue(value: Bytes) -> LogValue {
-    Bytes(value)
+// `debug` / `info` / `warn` / `error` keep the spec signature with a
+// `attrs: Fields = {:}` default. Currently the resolver does not bind
+// defaulted parameters into the function body (SPEC_GAPS
+// `default-arg-resolve`), so the body cannot reference `attrs`
+// directly without raising E0745 — which in turn blocks LLVM lowering
+// of any caller. The bodies therefore route through `writeAt` with no
+// reference to the defaulted parameter; per-call structured fields go
+// through the `Logger` instance API or the `writeFields` helper below.
+pub fn debug(msg: String, attrs: Fields = {:}) {
+    writeAt(Level.Debug, msg)
 }
 
-pub fn listValue(value: LogValueList) -> LogValue {
-    List(value)
+pub fn info(msg: String, attrs: Fields = {:}) {
+    writeAt(Level.Info, msg)
 }
 
-pub fn mapValue(value: Fields) -> LogValue {
-    Map(value)
+pub fn warn(msg: String, attrs: Fields = {:}) {
+    writeAt(Level.Warn, msg)
 }
 
-fn write(level: String, msg: String, fields: Fields) {
-    println(msg)
+pub fn error(msg: String, attrs: Fields = {:}) {
+    writeAt(Level.Error, msg)
 }
 
-pub fn debug(msg: String, fields: Fields = {:}) {
-    write("debug", msg, fields)
+// `writeFields` accepts the structured-fields map without relying on a
+// defaulted parameter — workaround for `default-arg-resolve`.
+pub fn writeFields(level: Level, msg: String, fields: Fields) {
+    write(level, msg, fields)
 }
 
-pub fn info(msg: String, fields: Fields = {:}) {
-    write("info", msg, fields)
-}
-
-pub fn warn(msg: String, fields: Fields = {:}) {
-    write("warn", msg, fields)
-}
-
-pub fn error(msg: String, fields: Fields = {:}) {
-    write("error", msg, fields)
+fn writeAt(level: Level, msg: String) {
+    eprintln("[" + levelToString(level) + "] " + msg)
 }
 
 pub fn setLevel(level: Level) {
-    // The pure Osty fallback logs every message. Host runtimes can
-    // replace this with process-wide filtering.
+    // Spec §10.10 mandates a process-global level filter. Without
+    // a runtime intercept this remains a best-effort stub. Callers
+    // needing real filtering should construct a `Logger` with the
+    // desired `minLevel`, or wrap a handler in `LevelHandler`.
 }
 
 pub fn setHandler(handler: Handler) {
-    // The pure Osty fallback writes text through println. Host runtimes
-    // can install richer handlers.
+    // Spec §10.10 mandates a process-global handler swap. Without
+    // a runtime intercept this remains a no-op stub. Callers needing
+    // a non-default handler should construct a `Logger` with the
+    // desired handler instead of relying on the global.
 }

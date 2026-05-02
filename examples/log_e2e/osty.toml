@@ -1,0 +1,13 @@
+# log_e2e — end-to-end verification of internal/stdlib/modules/log.osty
+# against the LLVM backend.
+#
+# Run from this directory:
+#
+#     osty test
+
+[package]
+name = "log_e2e"
+version = "0.1.0"
+edition = "0.3"
+
+[dependencies]

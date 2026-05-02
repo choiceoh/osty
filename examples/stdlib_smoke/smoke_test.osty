@@ -1,0 +1,42 @@
+// stdlib_smoke — per-module 1-call smoke harness for the
+// STDLIB_MATRIX 5★ Production list.
+//
+// Multiple tests in a single file currently trip the
+// "Closure: param[0] nil Type" wall (same as `examples/fmt_e2e/`),
+// so this file is intentionally a single test that just imports
+// each public 5★ module surface — failure here means a module
+// can't even resolve. Per-module behavioural tests that actually
+// invoke a function live next to this directory:
+//
+//   examples/log_e2e/   — log.{debug,info,warn,error}
+//   examples/uuid_e2e/  — uuid.{v4,v7,nil,toString,parse}
+//   examples/regex_e2e/ — regex.{compile,matches,replaceAll,err}
+//
+// The full audit (which 5★ modules pass / partially pass / fail
+// LLVM E2E) lives in `STDLIB_MATRIX.md` §2.1.A.
+
+use std.testing
+use std.strings
+use std.bytes
+use std.encoding
+use std.crypto
+use std.math
+use std.fs
+use std.env
+use std.os
+use std.random
+use std.compress
+use std.io
+use std.url
+use std.json
+use std.option
+use std.result
+use std.iter
+use std.collections
+use std.uuid
+use std.regex
+use std.log
+
+fn testAllImportsResolve() {
+    testing.assertTrue(true)
+}

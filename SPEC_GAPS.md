@@ -103,6 +103,129 @@ call 로 lower. Annotation 과 달리 새로운 builtin symbol 을 언어 surfac
 
 빌트인 함수 접근이 가장 부담이 적음. 별도 PR 에서 scope 결정 후 착륙.
 
+### `log-fields-sugar` — `Fields { "k": v }` 리터럴 + `ToLogValue` 자동 derive (spec §10.10)
+
+**상태:** spec §10.10 line 9 의 canonical 호출 형태
+`log.info("msg", Fields { "userId": 42, "ip": "1.2.3.4" })` 가
+컴파일 안 됨. 두 가지 컴파일러 기능이 누락:
+
+1. **Type-alias struct-literal sugar.** `pub type Fields =
+   Map<String, LogValue>` 는 type alias 인데, `Fields { ... }` 의
+   struct-literal head 위치에서 alias 가 허용되지 않아 parser 가
+   `E0204 expected ), got {` 로 거부. 또는 alias 로 해석되지 않아
+   `E0745 cannot find Fields in this scope` 발화.
+2. **`ToLogValue` 자동 derive.** §10.10 line 56-67 은 `Fields` 리터럴
+   값 위치마다 컴파일러가 implicit `.toLogValue()` 변환을 삽입한다고
+   명시. `ToLogValue` 는 모든 primitive / `String` / `Bytes` /
+   `Instant` / `Duration` / `Option<T> where T: ToLogValue` /
+   `List<T> where T: ToLogValue` / `Map<String, V> where V: ToLogValue`
+   에 자동 구현돼야 하지만 현재 컴파일러에 derive 경로 없음.
+   `internal/check`, `internal/resolve`, `internal/llvmgen` 어디에도
+   `ToLogValue` 토큰 등장 안 함.
+
+**현재 워크어라운드.** 호출자가 explicit constructor 사용:
+```osty
+let f: Map<String, log.LogValue> = {
+    "userId": log.intValue(42),
+    "ip": log.stringValue("1.2.3.4"),
+}
+log.info("user logged in", f)
+```
+
+**구현 규모.**
+- (1) parser 에서 type-alias 를 struct-literal head 로 허용. resolver
+  가 alias target (`Map<K,V>`) 으로 unwrap 하고 map literal 로 해석.
+- (2) checker 에서 `ToLogValue` 자동 derive — `cmp.Equal/Ordered/Hashable`
+  자동 derive (§2.6.5) 와 동일 메커니즘. `Fields` 값 위치에서 implicit
+  conversion 삽입은 별도 hook.
+
+**연관.** `internal/stdlib/modules/log.osty` 본문은 spec 명시 동작
+(stderr, level prefix, fields rendering, JSON handler)을 갖췄지만
+canonical caller 가 위 두 갭 때문에 호출 안 됨. 갭 해소 시 즉시
+spec 동급 동작.
+
+### `stdlib-body-llvm-wall` — pure-Osty stdlib 본문이 LLVM 백엔드에서 lower 안 됨
+
+**상태:** STDLIB_MATRIX 5★ 22 모듈 중 14개만 LLVM E2E 통과 (2026-05-02 audit, §2.1.A 참조). 진정 5★ 가 아닌 모듈:
+
+| 모듈 | 실패 패턴 |
+|---|---|
+| compress | `gzip.encode(bytes)` body lower 실패 |
+| url | `url.parse(s)` body lower 실패 — 다중 분기 / `List<String>` 의존 의심 |
+| json | `json.parse(s)` body lower 실패 |
+| encoding | `hexEncode(b)` 가장 단순 케이스 실패 |
+| iter | `iter.map(xs, \|x\| ...)` closure body 실패 |
+| option / result combinator | `.map(\|x\| ...)` 등 closure 통과 함수 실패 |
+| crypto | `sha256(b)` body lower 실패 (`randomBytes(n)` 는 OK) |
+| bytes | `b"abc"` 인자 위치 parser 거부 (사전 결합 필요) |
+
+공통 패턴: pure-Osty 본문이 (a) closure 인자, (b) `List<String>` 메서드, (c) 복잡한 enum match 분기 같은 LLVM 백엔드 미지원 구문을 사용. body 자체는 spec 동급으로 작성됐지만 backend가 monomorphize 시 실패.
+
+**해소 경로 (모듈별 분리 작업):**
+1. **백엔드 확장**: closure / List<String> / recursive enum match 를 LLVM-route lower 가능하게 — multi-day backend 작업, 기반 영향 큼.
+2. **LLVM shim 추가** (log 패턴): 모듈마다 `internal/llvmgen/stdlib_<m>_shim.go` 작성해 본문 우회 — 한 모듈당 ~200 LOC, 자체 cycle.
+3. **본문 단순화**: closure / List 의존 제거 — body_truthful 평가 점수 낮아짐.
+
+`log` 가 5★ 도달한 경로는 (2). 같은 패턴으로 compress / encoding / url / json / iter 도 차례로 5★ 가능.
+
+### `duration-builtin-methods` — `Duration` builtin 의 메서드/필드 미등록
+
+**상태:** spec §10.20 line 78 mandates `Duration.toString(self) -> String`
+("1.23s" / "15ms" / "120µs" 적응형) and `Duration.nanoseconds: Int64`
+public field. 현재 `internal/resolve/prelude.go:58` 이 `Duration` 을
+prelude builtin 으로 등록하면서 정의 본체 (`internal/stdlib/modules/time.osty:12-35`)
+의 메서드 / 필드를 **체커가 인지하지 못함**:
+
+```osty
+let d: time.Duration = 5.s
+let _ = d.toString()       // E0703: no method `toString` on type `Duration`
+let _ = d.nanoseconds      // E0702: no field `nanoseconds` on type `Duration`
+```
+
+`Instant` 는 prelude 가 아니라 `std.time` 모듈 정의를 그대로 쓰는데
+`Instant.format(layout)` 가 정상 동작하는 것과 대비. **builtin 등록과
+모듈 본체 사이의 정합 갭**.
+
+`internal/stdlib/modules/log.osty` 의 `formatLogValue(LogValue.Duration(d))`
+가 이 갭 때문에 `<duration>` placeholder 를 출력. 해소되면 spec §10.20
+의 adaptive shape 출력 가능.
+
+**구현 규모.** prelude registration 시 (또는 stdlib 로드 후) `Duration`
+builtin 의 method/field table 을 `internal/stdlib/modules/time.osty`
+의 struct 정의에서 흡수. `primitive_arith_register.go` 의 fan-out
+패턴이 참고가 될 수 있음. 또는 prelude 등록을 제거하고 사용자 코드는
+`use std.time` 명시.
+
+### `default-arg-resolve` — defaulted parameter 가 함수 scope 에 등록 안 됨
+
+**상태:** spec §3 (declarations) 에 명시된 default-arg surface
+(`fn fetch(url: String, timeout: Int = 30, retries: Int = 3)`) 의
+parser/resolver 결함. **default 가 붙은 파라미터가 함수 body 의
+scope 에 등록되지 않아 `E0745 cannot find <param>` 발화**.
+
+**재현 (현재 HEAD):**
+```osty
+fn fetch(url: String, timeout: Int = 30) -> Int {
+    timeout + 1   // error[E0745]: cannot find `timeout` in this scope
+}
+```
+
+CLAUDE.md A.7 / §10.10 default 시그니처 / `internal/stdlib/modules/`
+다수 모듈 (`fmt.osty`, `log.osty` 등) 이 모두 영향받음. stdlib
+loader 는 diagnostic 누적만 하고 fail 하지 않아서 모듈 로딩은
+통과하지만, 사용자가 `osty check` 로 모듈 파일을 직접 검증하면
+대량의 E0745 발화. `.bin/osty check` 사용자 코드도 default-arg
+정의된 함수 본문 작성 시 영향.
+
+**진단:** `internal/resolve` 에서 default expression 처리가 파라미터
+binding 보다 먼저 시도되어 scope 진입이 누락되는 것으로 추정. 또는
+default 가 있는 case 만 다른 declare-pass 경로를 타고 있음.
+
+**구현 규모.** resolver 의 function declaration 처리에서 파라미터
+binding 순서 점검. default expression 은 caller scope 에서 평가
+(default 가 다른 파라미터 참조 불가; 리터럴 only 가 spec 결정).
+파라미터 자체는 항상 함수 body scope 에 등록되어야 함.
+
 **운영 정책.** 새 gap 은 기존 처리 절차대로 G 번호를 부여해 `Open Gaps`
 섹션에서 추적. 버그 수정 / 명확화 / 성능 최적화 / 의미 중립 변경은
 G 번호 없이 일반 이슈 트래커에서 처리. 언어 surface 변경은 정식 버전
