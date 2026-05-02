@@ -3130,8 +3130,11 @@ fn lirLowerMirListPushBytesV1(l: LirMirFunctionLowerer, instr: MirInstr, elemNam
 // (`llvmSizeOf` in toolchain/llvmgen.osty). Returns the i64 register
 // holding the size.
 fn lirEmitSizeOf(l: LirMirFunctionLowerer, typ: LirType) -> String {
+    // production `llvmSizeOf` (toolchain/llvmgen.osty:302) emits the
+    // `getelementptr null, i32 1` form WITHOUT `inbounds`. LIR Proto
+    // matches to keep shadow-parity LLVM text identical.
     let endPtr = lirFresh(l)
-    l.instrs.push(lirGep(endPtr, typ, "null", [lirOperand(lirIntType(32), "1")], true))
+    l.instrs.push(lirGep(endPtr, typ, "null", [lirOperand(lirIntType(32), "1")], false))
     let sizeReg = lirFresh(l)
     l.instrs.push(lirCast(sizeReg, "ptrtoint", lirOperand(lirPtrType(), endPtr), lirIntType(64)))
     sizeReg
