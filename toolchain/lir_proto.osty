@@ -5011,11 +5011,55 @@ fn lirLowerMirAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: Strin
     match rv.aggKind {
         MirAggTuple -> lirLowerMirTupleAggregate(l, rv, hintName, hint),
         MirAggStruct -> lirLowerMirStructAggregate(l, rv, hintName, hint),
+        MirAggEnumVariant -> lirLowerMirEnumVariantAggregate(l, rv, hintName, hint),
         _ -> {
             lirLowerError(l, LirDiagUnsupported, "aggregate kind is not implemented in LIR Proto aggregate lowering", "aggregate")
             lirOperandInvalid()
         },
     }
+}
+// `lirLowerMirEnumVariantAggregate` builds the canonical
+// `{ i64 disc, i64 payload }` aggregate for an enum variant. Disc is
+// the variant index (e.g. 0 for None / Err, 1 for Some / Ok). Payload
+// is i64-encoded via `lirParseResultPayloadAsI64` (the boxing helper
+// already used by IndexOf and List.first/last). Bare 0-arity variants
+// fill the slot with literal 0. Mirrors production `emitEnumVariant`
+// (mir_generator.go:9148).
+fn lirLowerMirEnumVariantAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
+    let typeName = if rv.typ == "" {
+        hintName
+    } else {
+        rv.typ
+    }
+    let aggType = if typeName != "" {
+        lirLowerMirType(l, typeName)
+    } else {
+        hint
+    }
+    if lirTypeIsZero(aggType) {
+        lirLowerError(l, LirDiagUnsupported, "enum variant aggregate has no target type — `" + typeName + "`", "aggregate.enum")
+        return lirOperandInvalid()
+    }
+    let discText = lirIntToString(rv.aggVariantIdx)
+    let step1 = lirFresh(l)
+    l.instrs.push(lirInsertValue(step1, aggType, "undef", lirOperand(lirIntType(64), discText), [0]))
+    let payloadI64 = if rv.aggFields.len() == 0 {
+        "0"
+    } else if rv.aggFields.len() == 1 {
+        let arg = rv.aggFields[0]
+        let argHint = lirLowerMirType(l, arg.typ)
+        let value = lirLowerMirOperand(l, arg, arg.typ, argHint)
+        if value.value == "" {
+            return lirOperandInvalid()
+        }
+        lirParseResultPayloadAsI64(l, value.value, value.typ)
+    } else {
+        lirLowerError(l, LirDiagUnsupported, "enum variant with " + lirIntToString(rv.aggFields.len()) + " payload fields (only scalar / 0-arity supported)", "aggregate.enum")
+        return lirOperandInvalid()
+    }
+    let value = lirFresh(l)
+    l.instrs.push(lirInsertValue(value, aggType, step1, lirOperand(lirIntType(64), payloadI64), [1]))
+    lirOperand(aggType, value)
 }
 fn lirLowerMirTupleAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
     let tupleName = if rv.typ == "" {
