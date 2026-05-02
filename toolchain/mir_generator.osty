@@ -8477,26 +8477,12 @@ pub fn mirCallVoidPanicMessageLine(messagePtr: String) -> String {
     "  " + mirInstrCallVoid() + " void @osty_rt_panic(ptr " + messagePtr + ")\n"
 }
 
-/// mirCallVoidUnreachableUnchecked renders the canonical
-/// unreachable-unchecked call (when the user explicitly asks for
-/// it via `unreachable!`).
-pub fn mirCallVoidUnreachableUncheckedLine() -> String {
-    "  " + mirInstrCallVoid() + " void @osty_rt_unreachable()\n"
-}
-
-/// mirCallVoidTodoLine renders the canonical todo!() call.
-pub fn mirCallVoidTodoLine() -> String {
-    "  " + mirInstrCallVoid() + " void @osty_rt_todo()\n"
-}
-
-/// mirCallVoidAbortLine renders the canonical abort!() call (LLVM
-/// noreturn helper, used when the program decides to terminate).
-pub fn mirCallVoidAbortLine() -> String {
-    "  " + mirInstrCallVoid() + " void @osty_rt_abort()\n"
-}
-
 /// §6 standard math runtime call shapes (libm / runtime helpers
-/// that aren't direct LLVM intrinsics).
+/// that aren't direct LLVM intrinsics). The dedicated
+/// `unreachable_unchecked` / `todo` / `abort` line helpers were
+/// removed — `panic` / `unreachable` / `todo` / `abort` all route
+/// through `MirIntrinsicAbort` → `osty_rt_panic` since #1282, so
+/// only `mirCallVoidPanicMessageLine` is exercised in production.
 
 /// mirCallValueStdMathFloorLine / Ceil / Round / Trunc / Mod render
 /// the canonical libm-style math runtime shapes.
@@ -9561,22 +9547,14 @@ pub fn mirRtTestExpectErrorSymbol() -> String {
     mirRtTestSymbol("expect_error")
 }
 
-/// mirRtPanicSymbol / mirRtUnreachableSymbol / mirRtTodoSymbol /
-/// mirRtAbortSymbol — bare runtime symbols.
+/// mirRtPanicSymbol — the only bare diverging runtime symbol the
+/// emitter still produces. `unreachable` / `todo` / `abort` route
+/// through the same `MirIntrinsicAbort` → `osty_rt_panic` path
+/// since #1282, so dedicated symbol helpers were dead code (their
+/// targets aren't even defined as public symbols in the runtime —
+/// see `static void osty_rt_abort` in `osty_runtime.c`).
 pub fn mirRtPanicSymbol() -> String {
     mirRtSymbol("panic")
-}
-
-pub fn mirRtUnreachableSymbol() -> String {
-    mirRtSymbol("unreachable")
-}
-
-pub fn mirRtTodoSymbol() -> String {
-    mirRtSymbol("todo")
-}
-
-pub fn mirRtAbortSymbol() -> String {
-    mirRtSymbol("abort")
 }
 
 /// mirRtOptionUnwrapNoneSymbol / mirRtResultUnwrapErrSymbol /
@@ -13095,26 +13073,16 @@ pub fn mirCallTaskRaceLine(reg: String, bodyReg: String) -> String {
     mirCallValuePtrFromPtrLine(reg, mirRtTaskRaceSymbol(), bodyReg)
 }
 
-/// §17 LLVM-text typed runtime-callable panic / abort helpers.
+/// §17 LLVM-text typed runtime-callable panic helper.
 
-/// mirCallPanicLine renders the canonical panic call.
+/// mirCallPanicLine renders the canonical panic call. The
+/// `mirCallUnreachableLine` / `mirCallTodoLine` / `mirCallAbortLine`
+/// siblings were dead code — none of those bare runtime symbols
+/// are defined in the C runtime, and #1282 routed all four
+/// diverging prelude builtins through `MirIntrinsicAbort` →
+/// `osty_rt_panic` instead.
 pub fn mirCallPanicLine(messagePtr: String) -> String {
     mirCallVoidPtrLine(mirRtPanicSymbol(), messagePtr)
-}
-
-/// mirCallUnreachableLine renders the canonical unreachable call.
-pub fn mirCallUnreachableLine() -> String {
-    mirCallVoidNoArgsLine(mirRtUnreachableSymbol())
-}
-
-/// mirCallTodoLine renders the canonical todo!() call.
-pub fn mirCallTodoLine() -> String {
-    mirCallVoidNoArgsLine(mirRtTodoSymbol())
-}
-
-/// mirCallAbortLine renders the canonical abort!() call.
-pub fn mirCallAbortLine() -> String {
-    mirCallVoidNoArgsLine(mirRtAbortSymbol())
 }
 
 /// mirCallOptionUnwrapNoneLine renders the canonical Option-unwrap-None
