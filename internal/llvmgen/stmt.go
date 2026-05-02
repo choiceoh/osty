@@ -1269,6 +1269,9 @@ func (g *generator) emitExprStmt(expr ast.Expr) error {
 	if emitted, err := g.emitStdIoCallStmt(call); emitted || err != nil {
 		return err
 	}
+	if emitted, err := g.emitStdLogCallStmt(call); emitted || err != nil {
+		return err
+	}
 	if emitted, err := g.emitStdRandomCallStmt(call); emitted || err != nil {
 		return err
 	}

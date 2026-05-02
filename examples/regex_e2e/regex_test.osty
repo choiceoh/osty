@@ -1,0 +1,40 @@
+use std.testing
+use std.regex
+
+fn testCompileBasic() {
+    match regex.compile("a+") {
+        Ok(_) -> testing.assertTrue(true),
+        Err(_) -> testing.assertTrue(false),
+    }
+}
+
+fn testMatchesPositive() {
+    match regex.compile("hello") {
+        Ok(re) -> testing.assertTrue(re.matches("hello world")),
+        Err(_) -> testing.assertTrue(false),
+    }
+}
+
+fn testMatchesNegative() {
+    match regex.compile("xyz") {
+        Ok(re) -> testing.assertTrue(!re.matches("hello world")),
+        Err(_) -> testing.assertTrue(false),
+    }
+}
+
+fn testReplaceAll() {
+    match regex.compile("a") {
+        Ok(re) -> {
+            let out = re.replaceAll("banana", "X")
+            testing.assertEq(out, "bXnXnX")
+        },
+        Err(_) -> testing.assertTrue(false),
+    }
+}
+
+fn testCompileError() {
+    match regex.compile("(") {
+        Ok(_) -> testing.assertTrue(false),
+        Err(_) -> testing.assertTrue(true),
+    }
+}

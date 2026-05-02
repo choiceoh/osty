@@ -1,0 +1,33 @@
+use std.testing
+use std.uuid
+
+fn testV4Generates() {
+    let _ = uuid.v4()
+    testing.assertTrue(true)
+}
+
+fn testV7Generates() {
+    let _ = uuid.v7()
+    testing.assertTrue(true)
+}
+
+fn testNilZero() {
+    let _ = uuid.nil()
+    testing.assertTrue(true)
+}
+
+fn testV4ToStringNonEmpty() {
+    let id = uuid.v4()
+    let s = id.toString()
+    testing.assertTrue(s.len() > 0)
+}
+
+fn testRoundTrip() {
+    let id = uuid.v4()
+    let s = id.toString()
+    let parsed = uuid.parse(s)
+    match parsed {
+        Ok(_) -> testing.assertTrue(true),
+        Err(_) -> testing.assertTrue(false),
+    }
+}

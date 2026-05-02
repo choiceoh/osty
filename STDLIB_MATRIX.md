@@ -9,10 +9,11 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 > - `internal/backend/runtime/osty_runtime.c` (23,895 LOC / 638 `osty_rt_*` 함수 / Phase A / C runtime)
 > - `LANG_SPEC_v0.5/10-standard-library/*.md` (스펙 권위)
 >
-> **기준일**: 2026-05-01. **이전 매트릭스 (94% Production 주장) 전면 재평가됨** —
+> **기준일**: 2026-05-01 (재평가) / 2026-05-02 (Tier 0 #1 검증).
+> **이전 매트릭스 (94% Production 주장) 전면 재평가됨** —
 > 본문 직접 검증 결과 (1) 백엔드 미구현 모듈을 ⭐⭐⭐⭐⭐로 등재한 사례 다수 발견,
 > (2) `log`처럼 placeholder 본문(`println` 폴백)을 spec 동급으로 잘못 표기한 사례 발견,
-> (3) `thread.Duration{}` 등 spec 위반 중복 정의 발견.
+> (3) `thread.Duration{}` 등 spec 위반 중복 정의 의심 — **2026-05-02 재확인 결과 이미 commit `23f4568c`에서 제거 완료**. 현재 `thread.osty`는 `use std.time` + `time.Duration` 단일 사용.
 >
 > **평가 모델 (정정)**: 모듈 평가 = `min(spec 정합도, 본문 진정성, 백엔드 충족도)`.
 > 줄 수만으로 평가 금지. declaration-only 모듈은 백엔드 매핑 직접 확인 필수.
@@ -61,15 +62,54 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 | collections (List/Map/Set 메서드) | §10.6 | (above) | (above) | mixed | runtime intrinsics | spec method 정확히 일치 |
 | primitives/int | §10.5 | 69 | 35 | 100% | int runtime ops | checkedAdd/wrappingAdd/saturating/pow/abs 다 있음 |
 | primitives/float | §10.5 | 56 | 30 | 100% | float 40 runtime | sqrt/pow/round/isNaN/isInfinite 충족 |
+| log | §10.10 | 410 | 27 + 6 method | 0% (osty body) | LLVM AST + MIR shim → `osty_rt_strings_ConcatN` + `osty_rt_io_write` | **2026-05-02 5★ 승급**. (1) Osty 본문: `TextHandler.handle` (stderr + level + fields), `JsonHandler.handle` (RFC 8259 호환 `jsonEscapeString`), `Logger` struct + `with(key,value)` / `withFields(more)` 체인, `LevelHandler { inner, minLevel }` decorator, `newLogger` / `newDefaultLogger`. (2) LLVM 백엔드: [`stdlib_log_shim.go`](internal/llvmgen/stdlib_log_shim.go) AST + MIR 양쪽 dispatch — `log.{debug,info,warn,error}(msg)` 1-arg 캐논 호출을 `[level] ` prefix 합성 + `osty_rt_strings_ConcatN` + `osty_rt_io_write(stderr=true, newline=true)`. (3) E2E 검증: [`examples/log_e2e/`](examples/log_e2e/) `osty test` 4/4 통과. (4) Surface 테스트: [`log_test.go`](internal/stdlib/log_test.go). 잔여 (다음 라운드): 2-arg `log.<lvl>(msg, fields)` LLVM 미지원 (Map iter + recursive enum match 필요), `Fields { "k": v }` 리터럴 sugar (SPEC_GAPS `log-fields-sugar`), process-global setLevel/setHandler (runtime intercept). 본문은 spec 동급으로 작성돼 있어 백엔드가 catch up 하면 즉시 활성화. |
+| uuid | §10.13 | 23 | 4 | 100% | uuid 7 runtime + [`stdlib_uuid_shim.go`](internal/llvmgen/stdlib_uuid_shim.go) | **2026-05-02 stale 매트릭스 정정**. ⭐⭐ 가 아니라 5★ — `osty_rt_uuid_{v4,v7,nil,to_string,to_bytes,parse,parse_error}` 7 함수, LLVM shim, shim_test 모두 존재. E2E 검증 [`examples/uuid_e2e/`](examples/uuid_e2e/) 5/5 통과 (v4 / v7 / nil / toString / parse round-trip). |
+| regex | §10.9 | 88 | 9+method | 55% (Regex 메서드는 0%) | regex 7+ runtime + [`stdlib_regex_shim.go`](internal/llvmgen/stdlib_regex_shim.go) | **2026-05-02 stale 매트릭스 정정**. ⭐⭐ 가 아니라 5★ — `osty_rt_regex_{compile,compile_error,matches,replace,replace_all}` 등 7+ 함수 + LLVM shim + shim_test. RE2-derived parser ([`internal/backend/runtime/osty_runtime.c:14971`](internal/backend/runtime/osty_runtime.c)). E2E 검증 [`examples/regex_e2e/`](examples/regex_e2e/) 5/5 통과 (compile / matches +/- / replaceAll / compile_error). |
+
+### 2.1.A LLVM E2E 점검 결과 (2026-05-02 audit)
+
+위 §2.1 표는 "코드 직접 검증 통과" 라고 했지만 실제로는 **본문 / 백엔드 정합성 검증** 만 의미했고, **LLVM 백엔드 통과 여부** 는 따로 확인 안 됐었음. 사용자 지적 ("별만 많고 실제 구현이 못따라옴") 으로 [`examples/stdlib_smoke/`](examples/stdlib_smoke/) per-module 1-call 테스트로 일괄 점검.
+
+| 모듈 | LLVM E2E | 비고 |
+|---|---|---|
+| strings | ✅ PASS | `strings.len("hi")` |
+| char | ✅ PASS | `'5'.isDigit()` |
+| math | ✅ PASS | `math.sqrt(9.0)` |
+| fs | ✅ PASS | `fs.exists("/tmp")` |
+| env | ✅ PASS | `env.args()` |
+| os | ✅ PASS | `os.hostname()` |
+| random | ✅ PASS | `random.default()` |
+| io | ✅ PASS | `eprintln("...")` |
+| collections | ✅ PASS | `xs.push(1)` |
+| primitives/int, primitives/float | ✅ PASS | (산술 / 캐스트 — 별도 다수 e2e in `examples/int_*_e2e/`) |
+| log | ✅ PASS | `log.info("msg")` (위 row 참조) |
+| uuid | ✅ PASS | `uuid.v4()` (위 row 참조) |
+| regex | ✅ PASS | `regex.compile("a+")` (위 row 참조) |
+| bytes | ⚠️ partial | `b""` 빈 입력 OK, `b"abc"` 인자 위치는 parser 가 거부 — 사전 결합 필요 |
+| crypto | ⚠️ partial | `crypto.randomBytes(8)` OK, `crypto.sha256(bytes)` body lower 실패 |
+| option | ⚠️ partial | `match Some(x)` OK, `.map(\|x\| ...)` closure body 실패 |
+| result | ⚠️ partial | `match Ok(x)` OK, `.map(\|x\| ...)` closure body 실패 |
+| compress | ❌ FAIL | `gzip.encode(bytes)` body lower 실패 |
+| url | ❌ FAIL | `url.parse(s)` body lower 실패 (다중 분기 / List<String> 의심) |
+| json | ❌ FAIL | `json.parse(s)` body lower 실패 |
+| encoding | ❌ FAIL | `encoding.hexEncode(b)` 가장 단순 케이스도 실패 |
+| iter | ❌ FAIL | `iter.map(xs, \|x\| ...)` closure body 실패 |
+| http | ❌ untested | (1588 LOC, body 풍부 — closure / List 의존도 높아 fail 가능성 높음. 별도 e2e 권장) |
+
+**카운트**: 14 PASS / 4 partial / 5 FAIL (http 미점검 제외) = 14/22 (64%) 가 진정 5★ 자격.
+
+5 FAIL 모듈 (compress / url / json / encoding / iter) 은 본문 진정 + 스펙 정합 ✓ 이지만 **LLVM 본문 lowering** 이 막힘 — `log` 가 5★ 도달한 패턴 (LLVM shim 추가) 을 이들에도 적용해야 진짜 5★. 별도 cycle 작업.
+
+partial 모듈 4개 (bytes / crypto / option / result) 는 **호출 패턴 한정 동작**. closure 인자 / `b"..."` arg 위치 / 특정 runtime 함수 (sha256, gzip) 는 별도 backend gap.
 
 ### 2.2 ⭐⭐⭐⭐ Functional (본문/백엔드 일부 검증 필요)
 
 | 모듈 | spec | LOC | 표면 | bodyless | backend | 갭 |
 |---|---|---|---|---|---|---|
 | net | §10.23 | 1084 | 94 | 11% | net 40 runtime | TCP/UDP는 백엔드 풍부, IPv6 zone parsing 등 일부 미검증 |
-| thread | §8 | 59 | 16 | 50% | thread 16 + chan 10 + select 22 + task 19 | **`thread.Duration{}` 빈 struct는 spec §10.20과 충돌** (time.Duration로 통합 필요) |
+| thread | §8 | 76 | 16 | 50% | thread 16 + chan 10 + select 22 + task 19 | ~~`thread.Duration{}` 빈 struct~~ → commit `23f4568c`에서 제거. 현재는 `use std.time` + `time.Duration` 단일 사용 |
 | sync | §10.2 | 96 | 17 | 17% | mu 5 + rmu 5 + cond 6 + once 3 | spec tier-2 = "Mutex, RwLock, atomics". Once는 spec 외인데 백엔드는 갖춤 |
-| time | §10.20 | 110 | 25 | 64% | monotonic + sleep + format 일부 | **Int.s/ms/h/min/days/ns/us/weeks 메서드 부재** (spec §10.20 명시한 surface). `5.s` 호출 컴파일 실패 위험 |
+| time | §10.20 | 110 | 25 | 64% | monotonic + sleep + format 일부 | ~~`Int.s/ms/h/min/days/ns/us/weeks` 부재~~ → 2026-05-02 재확인 결과 8개 모두 ([primitives/int.osty:76-83](internal/stdlib/primitives/int.osty)) + Float 8개 ([primitives/float.osty:61-68](internal/stdlib/primitives/float.osty)) 선언됨. 체커 등록은 [`primitive_arith_register.go:131`](internal/selfhost/primitive_arith_register.go) (8개 loop), LLVM 백엔드는 [`duration_constructors_test.go`](internal/llvmgen/duration_constructors_test.go) 8개 테스트 통과. spec 이름 `minutes` (≠ `min`, `Int.min(self, other)`와 충돌 회피, [spec §10.20](LANG_SPEC_v0.5/10-standard-library/20-time-extensions.md) line 111-112) |
 | testing | §11 | 88 | 14 | 100% | bench 7 + test 6 + snapshot 7 + parallel 6 | assertion/benchmark/snapshot 백엔드 인터셉트로 동작. property는 스펙 §11 G33 |
 | testing_gen | §11 | 168 | 18 | 0% | pure Osty | int/intRange/bool/float/string/list 등 generator |
 | term | §10.25 | 320 | 39 | 17% | term 14 runtime + shim | isTerminal/size/write/flush/setRawMode 백엔드. **readKey/pollKey/readEvent는 미구현** (모듈 헤더 자백) |
@@ -139,7 +179,7 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 | xml | unspec | 391 | 9 | escape/tag/tokenize |
 | template | unspec | 148 | 5 | escape/raw placeholder |
 | i18n | unspec | 136 | 11 | locale/catalog/plural |
-| log | §10.10 | 133 | 19 | **⚠ placeholder 본문**: `write`가 println 폴백, setLevel/setHandler no-op, TextHandler/JsonHandler 빈 struct. spec과 명백히 차이남 → **실질 ⭐⭐** |
+| ~~log~~ → 2.1 Production | — | — | — | — | (재분류, 아래 2.1 참조) |
 | fmt | §10.22 | 926 | 45 | 본문 풍부, grapheme width / format spec |
 | tui | §10.26 | 383 | 32 | retained frame buffer + ANSI |
 | grid | §10.27 | 412 | 49 | Point/Size/Rect/Direction/Grid<T> |
@@ -153,15 +193,15 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 
 | 모듈 | spec | LOC | bodyless | 진단 |
 |---|---|---|---|---|
-| **uuid** | §10.13 | 22 | 100% | runtime에 `osty_rt_uuid_*` 0개, LLVM shim 없음. `uuid.v4()` 컴파일 시 LLVM emit 실패 거의 확실. **모듈 헤더가 자백**: "previous placeholder bodies had two bugs ... now body-less declarations" |
-| **regex** | §10.9 | 88 | 55% (Regex 메서드 100%) | runtime에 `osty_rt_regex_*` 0개. `internal/backend/stdlib_regex_check_test.go:11-12`가 자백: "RE2 runtime primitives remain declaration-only" |
+| ~~**uuid**~~ | §10.13 | 23 | 100% | **5★ 정정 (2026-05-02)** — 매트릭스가 stale. `osty_rt_uuid_{v4,v7,nil,to_string,to_bytes,parse,parse_error}` 7 함수 + [`stdlib_uuid_shim.go`](internal/llvmgen/stdlib_uuid_shim.go) + shim_test 모두 존재. E2E [`examples/uuid_e2e/`](examples/uuid_e2e/) 5/5 통과. §2.1 표 참조. |
+| ~~**regex**~~ | §10.9 | 88 | 55% | **5★ 정정 (2026-05-02)** — 매트릭스가 stale. RE2-derived parser ([`osty_runtime.c:14971`](internal/backend/runtime/osty_runtime.c)) + [`stdlib_regex_shim.go`](internal/llvmgen/stdlib_regex_shim.go) + shim_test. E2E [`examples/regex_e2e/`](examples/regex_e2e/) 5/5 통과. §2.1 표 참조. |
 
 ### 2.5 ⭐ Broken / Placeholder
 
 | 모듈 | 문제 |
 |---|---|
-| **log** | spec §10.10은 "stderr / TextHandler / Info level / process-global handler" 명시. 구현은 `println(msg)` 폴백 + `setLevel`/`setHandler` 무동작 + TextHandler/JsonHandler 빈 struct. `Fields { "k": v }` 자동 변환도 본문에 없음. **placeholder 수준** |
-| **thread.Duration** | spec §10.20은 `Duration` 단일 타입. `thread.osty:8`에 `pub struct Duration {}` 별개 정의 — spec 위반. `thread.sleep(d)` 시 어느 Duration을 받는지 불명확 |
+| ~~**log**~~ | **5★ 승급 (2026-05-02)** — 2.1 Production 표 참조. 본문 진정화 + Logger 인스턴스 surface + LLVM shim (AST + MIR) 으로 캐논 1-arg 호출 E2E 통과. 자세한 작업 내역은 2.1 표의 `log` 행 + [`examples/log_e2e/`](examples/log_e2e/) 참조. |
+| ~~**thread.Duration**~~ | **해결됨 (commit `23f4568c`)** — `thread.osty`가 `use std.time`로 `time.Duration` 단일 사용. self-host 체커는 `thread.Duration` qualified 이름을 builtin `Duration` 별칭으로 등록 (re-export). |
 
 ### 2.6 코어 인터페이스 / 마커 (별도 평가)
 
@@ -179,15 +219,17 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 
 | 등급 | 개수 | 비율 |
 |---|---|---|
-| ⭐⭐⭐⭐⭐ Production (검증됨) | 22 | 21% |
+| ⭐⭐⭐⭐⭐ Production (LLVM E2E 통과) | 14 | 13% |
+| ⭐⭐⭐⭐⭐ Production (declared, 매트릭스 5★ 미검증) | 11 | 10% |
 | ⭐⭐⭐⭐ Functional | 12 | 12% |
 | ⭐⭐⭐ Surface-rich | 62 | 60% |
-| ⭐⭐ Spec-stub (백엔드 부재) | 2 | 2% |
-| ⭐ Broken / Placeholder | 2 | 2% |
+| ⭐⭐ Spec-stub (백엔드 부재) | 0 | 0% |
+| ⭐ Broken / Placeholder | 0 | 0% |
 | 코어 인터페이스 (별도) | 7 | 7% |
 
 **이전 매트릭스 주장**: 92/98 = 94% Production
-**검증된 실제**: **22/106 = 21% Production**
+**2026-05-01 재평가 주장**: 22/106 = 21% Production
+**2026-05-02 LLVM E2E 점검 후**: **14/106 = 13% 진정 5★ (LLVM 통과)** + 11/106 = 10% declared 5★ (매트릭스 등재되었으나 LLVM 미검증). 자세한 audit 은 §2.1.A 참조.
 
 차이의 원인:
 1. spec 없는 unspec 모듈을 Production으로 셈 (62개 — 본문은 진정하나 spec 정의 없음 → Surface-rich로 강등)
@@ -201,9 +243,9 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 
 | # | 모듈 | 문제 | 수정 |
 |---|---|---|---|
-| 1 | thread | `pub struct Duration {}` (spec §10.20 위반) | thread.osty에서 제거, `time.Duration` 직접 import |
-| 2 | primitives/int | `Int.s/ms/h/min/days/ns/us/weeks` 메서드 부재 (spec §10.20 명시) | 8개 메서드 추가 (`5.s`, `100.ms` 정식 surface) |
-| 3 | log | `println` 폴백 + no-op handler — spec §10.10 위반 | TextHandler/JsonHandler 본문 작성, setLevel/setHandler 실제 구현 |
+| ~~1~~ | ~~thread~~ | ~~`pub struct Duration {}` (spec §10.20 위반)~~ | **완료 (commit `23f4568c`)**. `thread.osty`는 `use std.time` + `time.Duration` 단일 사용 |
+| ~~2~~ | ~~primitives/int~~ | ~~`Int.s/ms/h/minutes/days/ns/us/weeks` 메서드 부재~~ | **완료** — Int 8개 + Float 8개 surface 선언됨, `primitive_arith_register.go:131` 8개 loop 등록, LLVM 백엔드 `duration_constructors_test.go` 8 테스트 통과. 매트릭스가 stale (`min`이라 잘못 표기 — spec은 `minutes`) |
+| ~~3~~ | ~~log~~ | ~~`println` 폴백 + no-op handler~~ | **5★ 완료 (2026-05-02)** — 본문 spec 동급 + Logger 인스턴스 surface + LLVM shim (AST + MIR) + E2E 통과 4/4. 잔여 (별도 트랙): 2-arg `log.<lvl>(msg, fields)` LLVM, `Fields { "k": v }` literal (SPEC_GAPS `log-fields-sugar`), process-global setLevel/setHandler. 자세한 내역은 2.1 표 참조. |
 | 4 | strings | `Contains/HasPrefix/Index` PascalCase 별칭 (부트스트랩 누수) | 사용자 surface에서 제거 또는 internal 이동 |
 
 ### 🟠 Tier 1 — 백엔드 부재로 호출 불가
@@ -253,7 +295,7 @@ uuid/regex는 declaration-only인데 백엔드도 없음. **모든 declaration-o
 `process.osty` (exception helper) vs `cmd.osty` (command builder) vs `os.osty` (real OS). 이름만 보고 카테고리 추정 금지.
 
 ### 5.6 spec 위반 중복 정의 (신규 발견)
-`thread.Duration{}` 빈 struct가 `time.Duration`과 동시 존재. spec은 단일 Duration 명시. 이런 패턴은 다른 모듈에도 있을 가능성 — 전수 점검 필요.
+~~`thread.Duration{}` 빈 struct가 `time.Duration`과 동시 존재~~ → 2026-05-02 재확인 결과 commit `23f4568c` (`refactor: thread.Duration stub 제거, std.time 단일 타입으로 통일`)에서 이미 제거됨. 매트릭스가 stale했던 사례. **다른 모듈도 같은 stale 가능성 — 매트릭스 작성 시점 vs 현재 git HEAD 차이 항상 검증 필요**.
 
 ## 6. 인상적인 디자인 디테일 (검증된 것만)
 

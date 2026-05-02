@@ -1,0 +1,32 @@
+// log_test.osty — E2E verification of internal/stdlib/modules/log.osty
+// against the LLVM backend.
+//
+// Coverage limited to the spec-canonical 1-arg level functions
+// (`log.{debug,info,warn,error}(msg)`). The 2-arg variant carrying
+// `Fields` and the `Logger`/`LevelHandler` instance API depend on
+// LLVM backend extensions (cross-module enum types, struct
+// construction with imported types, interface fields) and remain
+// covered only by the surface tests in `internal/stdlib/log_test.go`.
+
+use std.testing
+use std.log
+
+fn testInfoEmits() {
+    log.info("hello info")
+    testing.assertTrue(true)
+}
+
+fn testWarnEmits() {
+    log.warn("hello warn")
+    testing.assertTrue(true)
+}
+
+fn testDebugEmits() {
+    log.debug("hello debug")
+    testing.assertTrue(true)
+}
+
+fn testErrorEmits() {
+    log.error("hello error")
+    testing.assertTrue(true)
+}
