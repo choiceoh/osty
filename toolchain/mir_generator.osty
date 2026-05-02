@@ -18891,7 +18891,23 @@ pub fn mirEmitOpts(packageName: String, sourcePath: String, target: String) -> M
 pub fn mirEmitModule(m: MirModule, opts: MirEmitOpts) -> String {
     let mut out = mirEmitHeaderBlock(opts.sourcePath, opts.target)
     out = out + mirEmitRuntimeDeclarationsSection()
+    out = out + mirEmitTypeDefsSection(m)
     out = out + mirEmitGlobalsSection(m)
+    // String pool section — Phase 1o emits an empty section header
+    // when no literals have been interned yet; the per-fn emit
+    // doesn't yet thread MirStringPool through (Phase 1p), so the
+    // pool stays empty in single-pass mode. Header is still emitted
+    // so the section ordering is stable for the future flip.
+    // String pool is wired here so the section ordering matches
+    // future Phase 1p threading. Pool stays empty in single-pass
+    // mode; constructor uses the existing MirStringPool struct
+    // shape.
+    let mut emptyByContent: Map<String, String> = {:}
+    let pool = MirStringPool {
+        byContent: emptyByContent,
+        order: [],
+    }
+    out = out + mirEmitStringPoolSection(pool)
     out = out + mirEmitModuleInitDispatcher(m)
     for func in m.functions {
         if func.isExternal {
@@ -20375,6 +20391,11 @@ pub fn mirEmitRuntimeDeclarationsSection() -> String {
     out = out + "declare void @osty_rt_map_insert_string(ptr, ptr, ptr)\n"
     out = out + "declare i1 @osty_rt_map_get_i64(ptr, i64, ptr)\n"
     out = out + "declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)\n"
+    // Phase 1o additions
+    out = out + "declare void @osty_rt_list_set_i64(ptr, i64, i64)\n"
+    out = out + "declare void @osty_rt_list_set_i1(ptr, i64, i1)\n"
+    out = out + "declare void @osty_rt_list_set_ptr(ptr, i64, ptr)\n"
+    out = out + "declare void @osty_rt_list_set_f64(ptr, i64, double)\n"
     out + "\n"
 }
 
@@ -20581,6 +20602,10 @@ fn mirEmitAssignIntoProjection(func: MirFunction, instr: MirInstr) -> String {
 
 fn mirEmitAssignIntoSingleProjection(func: MirFunction, instr: MirInstr) -> String {
     let proj = instr.dest.projections[0]
+    let idOrDeref = mirEmitIndexOrDerefWrite(func, instr)
+    if idOrDeref != "" {
+        return idOrDeref
+    }
     if proj.kind != MirProjField && proj.kind != MirProjTuple {
         return "  ; TODO write through 1-step " + mirProjectionKindName(proj.kind) + "\n"
     }
@@ -21562,4 +21587,171 @@ pub fn mirEmitModuleInitDispatcher(m: MirModule) -> String {
     out = out + "  ret void\n"
     out = out + "\}\n\n"
     out
+}
+
+
+// ====================================================================
+// Phase 1o — String pool + type defs section + I/D write
+// ====================================================================
+//
+// String pool: walk the module collecting MirConstString operands.
+// Emit `@.str.<i> = constant [N x i8] c"...\\00"` per literal in
+// the module's string section, then operand emit references via
+// `getelementptr`. The collection pass runs before the per-fn
+// emit so the global table is fully sized when fn bodies start.
+// Phase 1o ships the COLLECTION + GLOBAL EMISSION; the operand-
+// rewriting hook (`mirEmitConstStringWithPool`) lands here too,
+// but the dispatcher in `mirEmitConstOperand` doesn't yet route
+// through it because that path lacks pool context (single-fn
+// emit). Phase 1p threads MirStringPool through the per-fn emit
+// chain; Phase 1o establishes the helpers.
+
+/// mirEmitStringPoolSection renders the string-pool block by
+/// walking the existing `MirStringPool` (defined earlier in this
+/// file). Phase 1o ships the section emitter; Phase 1p threads
+/// the pool through the per-fn emit chain so MirConstString
+/// operands actually intern their literal here.
+///
+/// Today this entry takes a pool argument so callers can wire the
+/// section once per module emission. With an empty pool (the
+/// default in single-pass mode) it returns an empty string.
+pub fn mirEmitStringPoolSection(pool: MirStringPool) -> String {
+    if pool.isEmpty() {
+        return ""
+    }
+    let mut out = mirModuleSectionDirective("string pool")
+    for literal in pool.orderedKeys() {
+        let sym = pool.symbol(literal)
+        let encoded = mirEncodeStringLiteral(literal)
+        let lengthDigits = mirGenIntToString(literal.len() + 1)
+        out = out + sym + " = private constant [" + lengthDigits + " x i8] c\"" + encoded + "\\00\", align 1\n"
+    }
+    out + "\n"
+}
+
+/// mirEncodeStringLiteral converts a String into the LLVM `c"..."`
+/// escape form. Phase 1o handles ASCII printable, newline, tab,
+/// backslash, double-quote — non-printable codepoints route through
+/// `\\NN` hex escapes via mirHexEscape.
+fn mirEncodeStringLiteral(s: String) -> String {
+    // Defensive empty-input handling.
+    if s.len() == 0 {
+        return ""
+    }
+    // Phase 1o conservative: route everything through hex escapes
+    // so the encoder is byte-stable regardless of source-level
+    // multibyte characters. Optimisation pass can switch to mixed
+    // ASCII + escape later.
+    let mut out = ""
+    let bytes = llvmStrings.bytes(s)
+    for b in bytes {
+        // Byte → Int — use existing toInt method on Byte if available,
+        // else manual via b's character API. The toolchain wraps this
+        // pattern in stdlib; here we cast through the Char path which
+        // is supported by the self-host stdlib subset.
+        let bv: Int = b.toInt()
+        out = out + mirHexEscape(bv)
+    }
+    out
+}
+
+/// mirHexEscape renders `\\NN` for a byte 0..255.
+fn mirHexEscape(byte: Int) -> String {
+    "\\" + mirHexDigit((byte / 16) % 16) + mirHexDigit(byte % 16)
+}
+
+fn mirHexDigit(value: Int) -> String {
+    if value == 0 { return "0" }
+    if value == 1 { return "1" }
+    if value == 2 { return "2" }
+    if value == 3 { return "3" }
+    if value == 4 { return "4" }
+    if value == 5 { return "5" }
+    if value == 6 { return "6" }
+    if value == 7 { return "7" }
+    if value == 8 { return "8" }
+    if value == 9 { return "9" }
+    if value == 10 { return "A" }
+    if value == 11 { return "B" }
+    if value == 12 { return "C" }
+    if value == 13 { return "D" }
+    if value == 14 { return "E" }
+    if value == 15 { return "F" }
+    "0"
+}
+
+// -------- Type defs section --------
+
+/// mirEmitTypeDefsSection renders module-scope `%TypeName = type
+/// { ... }` declarations. Phase 1o ships a stub-only header — the
+/// MirModule doesn't yet expose a structured type table, so the
+/// emit is a comment placeholder until a follow-up wires the
+/// monomorphizer's struct/enum registry in.
+pub fn mirEmitTypeDefsSection(m: MirModule) -> String {
+    if m.functions.len() == 0 {
+        return ""
+    }
+    let mut out = mirModuleSectionDirective("type defs")
+    out + "; TODO Phase 1p — surface monomorphizer struct/enum registry as MirTypeDefs\n\n"
+}
+
+// -------- Multi-step Index / Deref WRITE projection --------
+// Address-taking writes (`arr[i] = v`, `*p = v`) lower to
+// `getelementptr + store` / `store`. Phase 1o adds an emit that
+// covers single-step shapes; multi-step (e.g. `arr[i].field = v`)
+// chains projections then writes through the deepest pointer.
+// Wired into mirEmitAssignIntoProjection's fall-through arm so
+// the existing Field/Tuple-only path now routes Index/Deref too.
+
+/// mirEmitIndexOrDerefWrite handles the single-step Index or
+/// Deref write case. Returns "" when the projection isn't one of
+/// these so the caller can fall through to the field-tuple shape.
+pub fn mirEmitIndexOrDerefWrite(func: MirFunction, instr: MirInstr) -> String {
+    if instr.dest.projections.len() != 1 {
+        return ""
+    }
+    let proj = instr.dest.projections[0]
+    if proj.kind == MirProjIndex {
+        return mirEmitIndexWriteLine(func, instr, proj)
+    }
+    if proj.kind == MirProjDeref {
+        return mirEmitDerefWriteLine(func, instr, proj)
+    }
+    ""
+}
+
+fn mirEmitIndexWriteLine(func: MirFunction, instr: MirInstr, proj: MirProjection) -> String {
+    let baseReg = mirEmitLocalRegName(instr.dest.local)
+    let valueDest = baseReg + ".iw"
+    let mut out = mirEmitRValue(valueDest, instr.src)
+    let valueTy = mirEmitRValueLLVMType(instr.src)
+    let idxOp = if proj.indexLocal >= 0 {
+        mirEmitLocalRegName(proj.indexLocal)
+    } else {
+        mirGenIntToString(proj.indexConst)
+    }
+    let setSym = mirEmitListSetSymbol(valueTy)
+    if setSym == "" {
+        out = out + "  ; TODO list_set for elem type \"" + valueTy + "\"\n"
+        return out
+    }
+    out + "  call void @" + setSym + "(ptr " + baseReg + ", i64 " + idxOp + ", " + valueTy + " " + valueDest + ")\n"
+}
+
+fn mirEmitDerefWriteLine(func: MirFunction, instr: MirInstr, proj: MirProjection) -> String {
+    let baseReg = mirEmitLocalRegName(instr.dest.local)
+    let valueDest = baseReg + ".dw"
+    let mut out = mirEmitRValue(valueDest, instr.src)
+    let valueTy = mirEmitRValueLLVMType(instr.src)
+    out + "  store " + valueTy + " " + valueDest + ", ptr " + baseReg + "\n"
+}
+
+/// mirEmitListSetSymbol picks the runtime helper for `list[i] = v`
+/// per element LLVM type.
+fn mirEmitListSetSymbol(elemLLVM: String) -> String {
+    if elemLLVM == "i64" { return "osty_rt_list_set_i64" }
+    if elemLLVM == "i1" { return "osty_rt_list_set_i1" }
+    if elemLLVM == "ptr" { return "osty_rt_list_set_ptr" }
+    if elemLLVM == "double" { return "osty_rt_list_set_f64" }
+    ""
 }

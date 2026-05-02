@@ -374,6 +374,21 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"declare i1 @osty_rt_map_get_string",
 				"declare i1 @osty_rt_set_remove_ptr",
 				"declare i1 @osty_rt_set_contains_i1",
+				// Phase 1o — string pool emit + type defs section
+				// + Index/Deref WRITE projection.
+				"pub fn mirEmitStringPoolSection(",
+				"pub fn mirEmitTypeDefsSection(",
+				"pub fn mirEmitIndexOrDerefWrite(",
+				"mirEncodeStringLiteral(",
+				"mirHexEscape(",
+				"mirHexDigit(",
+				"mirEmitIndexWriteLine(",
+				"mirEmitDerefWriteLine(",
+				"mirEmitListSetSymbol(",
+				"mirEmitTypeDefsSection(m)",
+				"mirEmitStringPoolSection(pool)",
+				"declare void @osty_rt_list_set_i64",
+				"declare void @osty_rt_list_set_ptr",
 			},
 		},
 		{
