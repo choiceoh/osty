@@ -1782,6 +1782,19 @@ void osty_rt_option_unwrap_none(void) {
     osty_rt_abort("called unwrap on None");
 }
 
+// Public panic helper called from LLVM IR when source code invokes
+// the prelude `panic(message: String) -> Never`. The MIR `IntrinsicAbort`
+// lowerer emits `call void @osty_rt_panic(ptr msg) + unreachable`.
+// `message` arrives as a NUL-terminated UTF-8 String pool entry —
+// see `osty_rt_abort` for the actual stderr + abort() sequence.
+void osty_rt_panic(const char *message) {
+    if (message == NULL) {
+        osty_rt_abort("panic with null message");
+        return;
+    }
+    osty_rt_abort(message);
+}
+
 // Noreturn OOB helper used by the List<scalar> fast-path writer. The
 // fast-path emits `icmp ult idx, snapshot_len` and only hits this on
 // verified out-of-range indices; calling a dedicated noreturn helper

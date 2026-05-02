@@ -4156,6 +4156,19 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 			bs.emitConcurrencyIntrinsic(kind, c.Args, dest, destT, c.SpanV)
 			return
 		}
+		// `panic(message: String) -> Never` — prelude-visible diverging
+		// builtin. Lowers to `IntrinsicAbort` with the message operand;
+		// the MIR generator emits `call void @osty_rt_panic(ptr msg) +
+		// unreachable`.
+		if id.Name == "panic" && len(c.Args) == 1 {
+			args := []Operand{bs.lowerExprAsOperand(c.Args[0].Value)}
+			bs.emit(&IntrinsicInstr{
+				Kind:  IntrinsicAbort,
+				Args:  args,
+				SpanV: c.SpanV,
+			})
+			return
+		}
 		if module, name, ok := loweredStdlibFreeSymbol(id.Name); ok {
 			switch module {
 			case "bytes":

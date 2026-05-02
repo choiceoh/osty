@@ -1408,6 +1408,52 @@ func TestGenerateFromMIROptionalNoneConstruction(t *testing.T) {
 	}
 }
 
+// TestGenerateFromMIRPanicLowers pins the MIR emitter for the prelude
+// `panic(message: String) -> Never` builtin. Source `panic("...")`
+// lowers to `IntrinsicAbort` carrying the message operand, which the
+// generator emits as a `osty_rt_panic` noreturn call followed by
+// `unreachable`. This closes the LLVM000 "unresolved symbol panic"
+// gap that previously rejected any program calling `panic(...)`.
+func TestGenerateFromMIRPanicLowers(t *testing.T) {
+	// fn boom() -> Int {
+	//     panic("nope")
+	// }
+	fn := &ir.FnDecl{
+		Name:   "boom",
+		Return: ir.TInt,
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.ExprStmt{X: &ir.CallExpr{
+					Callee: &ir.Ident{Name: "panic", Kind: ir.IdentBuiltin, T: &ir.FnType{Params: []ir.Type{ir.TString}, Return: ir.TNever}},
+					Args:   []ir.Arg{{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "nope"}}}}},
+					T:      ir.TNever,
+				}},
+			},
+		},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/panic_lower.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"@.str.0 = private unnamed_addr constant [5 x i8] c\"nope\\00\"",
+		"declare void @osty_rt_panic(ptr) noreturn cold",
+		"call void @osty_rt_panic(ptr @.str.0)",
+		"unreachable",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+	// Sanity: no unresolved-symbol diagnostic should appear.
+	if strings.Contains(got, "unresolved symbol panic") {
+		t.Fatalf("output still contains unresolved-symbol diagnostic:\n%s", got)
+	}
+}
+
 // TestGenerateFromMIROptionUnwrapLowers pins the MIR emitter for the four
 // Option<T> method intrinsics (isSome, isNone, unwrap, unwrapOr). The
 // underlying lowering keeps Option<T> as `{ i64 disc, i64 payload }`
