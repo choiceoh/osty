@@ -1,4 +1,4 @@
-// mir_lower.osty — self-hosted HIR → MIR lowering (Stage 4a).
+// mir_lower.osty — self-hosted HIR → MIR lowering.
 //
 // This is the Osty port of `internal/mir/lower.go`. It consumes a
 // monomorphic `HirModule` (see `hir.osty`) and produces a `MirModule`
@@ -6,26 +6,28 @@
 // `toolchain/monomorph.osty` equivalent — the lowerer rejects generic
 // declarations and records them as issues.
 //
-// Scope splits so the Osty port can land incrementally (matching how
-// the Go side grew):
+// File layout (preserved from how the port grew on the Go side, in
+// case future readers cross-reference internal/mir/lower.go):
 //
-//   Stage 4a (this file): entry + signatures + layouts + use
-//                         passthrough + function shell (empty body)
-//                         + global shell (initialiser stub).
-//                         No stmt / expr lowering yet.
-//   Stage 4b: body lowerer state + lowerStmt for simple kinds
-//             (Block / Let / ExprStmt / Return / Break / Continue).
-//   Stage 4c: control flow (If / For / Match / Defer).
-//   Stage 4d: expression lowering into places / operands / rvalues.
-//   Stage 4e: concurrency + stdlib intrinsics + closures.
-//   Stage 4f: projection walk + variant/struct layout lookup.
+//   - Pass 1 (entry + signatures + layouts + use passthrough + global
+//     shell + function shell)
+//   - Pass 2 (per-function body lowering — driven by `mirLowerStmt`
+//     and `mirLowerExprIntoPlace` / `mirLowerExprToRValue` /
+//     `mirLowerExprAsOperand`)
+//   - Statement lowering (Block / Let / ExprStmt / Return / Break /
+//     Continue / Defer / If / For / Match / ChanSend / Assign)
+//   - Expression lowering (literals / Ident / Field / Tuple / Index +
+//     Unary / Binary / Call / Method / Closure / Range / Question /
+//     Coalesce / IfLet / StructLit / VariantLit / MapLit / Match)
+//   - Stdlib + concurrency + runtime intrinsic dispatch tables
+//   - Decision-tree walker (Leaf / Fail / Bind / Guard / Switch over
+//     Variant / Bool / Lit / Tuple)
 //
-// Until 4b lands, every emitted function carries an empty body — the
-// returned MIR is structurally valid (it has a return local + entry
-// block + a placeholder terminator) but cannot yet be fed through
-// `mir.Validate` / the MIR emitter. Callers that need an end-to-end
-// probe should keep using Go's `mir.Lower` via the Go-side bridge;
-// this file is the Osty surface that future stages extend.
+// Every emitted function now carries a real lowered body; the returned
+// MIR is fed straight through `mir.Validate` / the MIR emitter. The
+// Phase-7 self-host runner (`internal/llvmgen/lir_proto_runner.go`)
+// is the eventual production caller of this lowerer; today it returns
+// `ErrLIRProtoNotWired` and production still uses Go's `mir.Lower`.
 //
 // Type representation: MIR operates on name-level type strings
 // (`MirLocal.typ: String` etc.), so this lowerer emits MIR-facing
@@ -44,8 +46,9 @@ use std.strings as strings
 /// struct / enum name. `symbol` is the mangled MIR symbol name (pass
 /// through `mangleMethodSymbol` for methods, bare `name` for free fns).
 ///
-/// Stage 4d will use `params` + `retType` to order call arguments
-/// (keyword → positional), resolve default values, and check arities.
+/// `params` + `retType` drive `mirLowerOrderCallArgs` (keyword →
+/// positional reordering, default-value materialisation, arity check)
+/// at every direct call site that resolves to a known signature.
 pub struct MirLowerFnSignature {
     pub name: String,
     pub owner: String,
@@ -303,18 +306,14 @@ pub fn mirLowerLookupUseAlias(l: MirLowerer, alias: String) -> Int {
 
 /// mirLowerModule is the public entry: HIR → MIR. The returned
 /// MirModule is always non-nil (even on heavy input errors); non-fatal
-/// issues surface via `out.issues`. Callers that want structural
-/// validation should follow up with `mirValidateModule` once Stage 4b
-/// fills in function bodies.
+/// issues surface via `l.issues` on the lowerer. Callers should run
+/// `mirValidateModule` next to confirm the module is well-formed.
 pub fn mirLowerModule(src: HirModule) -> MirModule {
     let mono = hirMonomorphizeModule(src)
     let l = mirLowerer(mono)
     mirLowerRun(l)
     // Lowering issues live on the lowerer (`l.issues`) — downstream
-    // consumers read them there. MirModule has no `issues` field,
-    // so the previous copy loop was a leftover from the Stage 4b
-    // scaffold and tried to call hirModuleAddIssue with a MirModule
-    // receiver (type mismatch under selfhost check). Removed.
+    // consumers read them there. MirModule has no `issues` field.
     l.out
 }
 
@@ -608,18 +607,18 @@ pub fn mirLowerEmitScript(l: MirLowerer) {
 }
 
 // ====================================================================
-// Pass 2: per-function lowering (shell only for Stage 4a)
+// Pass 2: per-function lowering
 // ====================================================================
 
-/// mirLowerFunction emits a MIR function shell from one HIR FnDecl.
-/// Stage 4a creates the return slot, parameter locals, entry block,
-/// and an `Unreachable` placeholder terminator; Stage 4b replaces the
-/// placeholder with real body lowering.
+/// mirLowerFunction emits a MIR function from one HIR FnDecl: return
+/// slot + parameter locals + entry block + real body lowering driven
+/// by `mirLowerFunctionBody`.
 ///
 /// External stubs (functions with an empty body AND no scripted
 /// content — used for FFI `use go` decls) set `isExternal = true`
 /// and carry zero blocks, matching the MIR validator's shape
-/// requirement.
+/// requirement. Intrinsic fns get a placeholder body — backends
+/// supply the real IR sequence at each call site (v0.6 §19.5/§19.7).
 pub fn mirLowerFunction(
     l: MirLowerer,
     decl: HirFnDecl,
@@ -660,9 +659,8 @@ pub fn mirLowerFunction(
         return out
     }
 
-    // Emit a shell. Stage 4b replaces the placeholder terminator with
-    // real body lowering. External fns (empty body, no script) keep
-    // zero blocks per MIR validator rules.
+    // External fns (empty body, no script) keep zero blocks per MIR
+    // validator rules; everything else gets a real lowered body.
     if mirLowerFunctionIsExternal(decl) {
         out.isExternal = true
         return out
@@ -673,11 +671,11 @@ pub fn mirLowerFunction(
     out
 }
 
-/// mirLowerFunctionBody drives the real body lowering. Stage 4b wires
-/// simple statement kinds (Block / Let / ExprStmt / Return / Break /
-/// Continue / Defer); the rest (If / For / Match / ChanSend / full
-/// expression lowering) land in subsequent stages and fall through to
-/// `mirLowerNoteIssue` with a "Stage 4x TODO" message.
+/// mirLowerFunctionBody drives body lowering: every HirStmt kind
+/// (Block / Let / ExprStmt / Return / Break / Continue / Defer / If /
+/// For / Match / ChanSend / Assign) is wired through `mirLowerStmt`
+/// and every HirExpr kind reaches a real RValue / IntoPlace path
+/// through `mirLowerExprIntoPlaceImpl` and `mirLowerExprToRValue`.
 ///
 /// On exit, if the cursor block has no terminator the lowerer runs
 /// any outstanding defers and either emits Return (unit-returning
@@ -827,10 +825,10 @@ pub fn mirLowerSeedFunction(
     out.entry = entry
 }
 
-/// mirLowerFinishPlaceholder installs an Unreachable terminator on the
-/// entry block so the function shell passes the MIR validator's
-/// "every block has a terminator" check before Stage 4b fills in
-/// proper control flow.
+/// mirLowerFinishPlaceholder installs an Unreachable terminator on
+/// the entry block. Used for intrinsic fns whose real IR sequence is
+/// supplied by backends at each call site, so the MIR validator's
+/// "every block has a terminator" check still passes.
 pub fn mirLowerFinishPlaceholder(out: MirFunction, span: MirSpan) {
     if out.blocks.len() == 0 {
         return
@@ -844,8 +842,8 @@ pub fn mirLowerFinishPlaceholder(out: MirFunction, span: MirSpan) {
 
 /// mirLowerGlobal emits a MIR global entry. When the source carried
 /// an initialiser, a zero-arg `_init_<name>` MIR function is minted
-/// alongside (Stage 4b fills its body; Stage 4a leaves it as a
-/// placeholder `Unreachable`).
+/// alongside with the lowered initialiser as its body — the LLVM
+/// emitter wires that init fn into `@llvm.global_ctors`.
 pub fn mirLowerGlobal(l: MirLowerer, let_: HirLetDecl) -> MirGlobal {
     let typ = if hirTypeIsValid(let_.typ) {
         let_.typ
@@ -868,9 +866,8 @@ pub fn mirLowerGlobal(l: MirLowerer, let_: HirLetDecl) -> MirGlobal {
         let mut initFn = mirFunction(initName, hirTypeString(typ), span)
         mirLowerSeedFunction(initFn, [], typ, span)
         // Lower the initialiser into the return slot and terminate
-        // with Return. The expression lowerer currently emits a
-        // unit-const placeholder (Stage 4d); once real expr lowering
-        // lands, this path produces the actual initialiser value.
+        // with Return — the resulting `_init_<name>` function gets
+        // registered in `@llvm.global_ctors` by the LLVM emitter.
         let bs = mirLowerBodyState(l, initFn, typ)
         mirLowerExprInto(bs, let_.value, initFn.returnLocal, typ)
         mirLowerRunDefers(bs, span)
@@ -990,9 +987,8 @@ pub fn hirTypeSecondArg(t: HirType) -> HirType {
 // Operator bridging (HIR ops → MIR ops)
 // ====================================================================
 //
-// Stage 4d will route HIR Unary/Binary expressions through these
-// converters when lowering to MIR RValue. They are defined here so
-// Stage 4b can install them for simple passthrough cases earlier.
+// HIR Unary/Binary expressions reach MIR via these converters when
+// `mirLowerExprToRValue` builds a UnaryRV / BinaryRV.
 
 /// hirUnOpToMir maps HIR unary-op kinds to MIR's enum. Returns
 /// `MirUnInvalid` for the Osty-side `HirUnInvalid`.
@@ -1108,9 +1104,10 @@ pub fn mirLowerScopeFrame() -> MirLowerScopeFrame {
 }
 
 /// MirLowerLoopFrame is one active loop's break/continue targets +
-/// the defer / scope depth captured at loop entry. Used by Stage 4c
-/// when For / While lowerers push frames; defined here so break and
-/// continue can land in 4b without a second source edit.
+/// the defer / scope depth captured at loop entry. `For` lowering
+/// pushes a frame on entry, pops on exit; `break` and `continue`
+/// stmts read the top frame to find the goto target and replay the
+/// right defer prefix.
 pub struct MirLowerLoopFrame {
     pub breakBlock: Int,
     pub continueBlock: Int,
@@ -1508,34 +1505,36 @@ pub fn mirLowerFinishNoReturn(bs: MirLowerBodyState, span: MirSpan) {
 }
 
 // ====================================================================
-// Expression lowering stubs (Stage 4b)
+// Expression lowering — operand / place / rvalue dispatchers
 // ====================================================================
 //
-// Real expression lowering lands in Stage 4d. For now, every
-// operand/place/into path emits a conservative placeholder (unit
-// const operand, no-op Into) and records a one-shot issue so the
-// output module flags the shape the caller tried to lower. Once 4d
-// lands, these stubs get replaced with a full operand/place/rvalue
-// dispatcher driven by HirExprKind.
+// The three entry points (`mirLowerExprAsOperand`,
+// `mirLowerExprToPlace`, `mirLowerExprIntoPlace`) form the public
+// surface for lowering an HirExpr. Every HirExprKind reaches a real
+// lowering — the dispatchers branch on `e.kind` and call into per-
+// kind helpers below. Mirror of Go's `lowerExprAsOperand` /
+// `lowerExprToPlace` / `lowerExprInto` in internal/mir/lower.go.
 
 /// mirLowerExprAsOperand lowers an expression and returns an operand
 /// holding its value. Used for call arguments, conditions, and any
-/// other read-only read site. Stage 4d covers:
+/// other read-only read site. Direct operand kinds:
 ///
 ///   - Literals (Int / Float / Bool / Char / Byte / Unit) — direct
 ///     MirConst operand
-///   - StringLit (literal-only, no interpolation) — string const
+///   - StringLit — StringConst (literal-only) or `string_concat`
+///     intrinsic + Copy from temp (interpolated)
 ///   - Ident (Local / Param) — Copy from the resolved local
-///   - FieldExpr (non-optional) — receiver place + FieldProj
+///   - FieldExpr (non-optional) — receiver place + FieldProj; optional
+///     forms route through `mirLowerExprAsOperandFallback` to land on
+///     `mirLowerOptionalFieldInto`
 ///   - TupleAccess — receiver place + TupleProj
 ///   - IndexExpr — receiver place + IndexProj
-///   - Anything else — allocate a temp, dispatch via mirLowerExprInto,
-///     return Copy from the temp. This covers TupleLit / ListLit /
-///     Unary / Binary etc. without duplicating per-kind code.
 ///
-/// Kinds that need dedicated dispatch (control flow, calls, closures,
-/// etc.) route through the temp-allocation fallback plus whatever
-/// mirLowerExprIntoPlace implements — Stage 4e/4f fills those in.
+/// Anything else routes to `mirLowerExprAsOperandFallback`: allocate a
+/// temp, dispatch via `mirLowerExprIntoPlace`, return Copy from the
+/// temp. That covers control flow, calls, closures, aggregate
+/// literals, ranges, question propagation, etc. without duplicating
+/// per-kind code.
 pub fn mirLowerExprAsOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
     if !hirExprIsValid(e) {
         return mirOperandConst(mirConstUnit())
@@ -1800,9 +1799,9 @@ fn hirTypeContainsVar(t: HirType) -> Bool {
 
 /// mirLowerExprInto lowers `e` and stores the produced value into
 /// `dest` (a bare local). Thin wrapper that forwards to
-/// mirLowerExprIntoPlaceImpl — kept separate so Stage 4b's scope
-/// helpers and stmt lowerers can use the simpler local-only path
-/// without constructing MirPlace values.
+/// mirLowerExprIntoPlaceImpl — kept separate so scope helpers and
+/// stmt lowerers can use the simpler local-only path without
+/// constructing MirPlace values.
 pub fn mirLowerExprInto(
     bs: MirLowerBodyState,
     e: HirExpr,
@@ -2056,9 +2055,8 @@ fn mirLowerIndexExprOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
 // ====================================================================
 
 /// mirLowerStmt dispatches on HirStmtKind and routes to the
-/// appropriate handler. Kinds not yet covered by Stage 4b/4c record
-/// a `"Stage 4c TODO: <kind>"` issue and fall through without
-/// emitting instructions.
+/// appropriate handler. The match is exhaustive (G17): every
+/// `HirStmtKind` lands on a handler.
 pub fn mirLowerStmt(bs: MirLowerBodyState, s: HirStmt) {
     match s.kind {
         HirStmtInvalid -> {},
@@ -2101,8 +2099,10 @@ pub fn mirLowerBlockStmt(bs: MirLowerBodyState, b: HirBlock) {
     mirLowerPopScope(bs)
 }
 
-/// mirLowerLetStmt handles `let NAME [: T] = value` + `let mut ...`.
-/// Destructuring-pattern lets are deferred to Stage 4c.
+/// mirLowerLetStmt handles `let NAME [: T] = value`, `let mut ...`,
+/// and destructuring lets (`let (a, b) = pair`) — the destructuring
+/// path lowers the RHS into a scratch then drives `mirLowerBindPattern`
+/// to bind each leaf identifier.
 pub fn mirLowerLetStmt(bs: MirLowerBodyState, s: HirStmt) {
     // Pick the binding type: declared → value-type → ErrType fallback.
     let mut t = s.letTyp
@@ -2186,15 +2186,13 @@ pub fn mirLowerContinueStmt(bs: MirLowerBodyState, s: HirStmt) {
 }
 
 // ====================================================================
-// Control flow (Stage 4c)
+// Control flow + assignment statement lowering
 // ====================================================================
 //
-// Stage 4c lowers if / for / match / assign / chan-send. Expression
-// operands are still produced by the Stage 4b stubs — operand typing
-// on BranchTerm.cond / comparison RHS / loop step isn't meaningful
-// until Stage 4d replaces the stubs with real RValues. The emitted
-// CFG shape is correct regardless, which is what downstream passes
-// like `mirValidateModule` actually inspect.
+// Lowers if / for / match / assign / chan-send statements onto the
+// MIR CFG. Conditions and assignment values reach this section as
+// real operands / RValues via the expression dispatchers above —
+// `mirValidateModule` accepts the resulting CFG end-to-end.
 
 // ---- Fresh temps + place extraction --------------------------------
 
@@ -2206,11 +2204,10 @@ pub fn mirLowerFreshTemp(bs: MirLowerBodyState, t: HirType, span: MirSpan) -> In
 }
 
 /// mirLowerExprToPlace maps an HIR expression onto a MirPlace suitable
-/// for the LHS of an assign. Stage 4c only supports bare identifiers
-/// (resolved via scope lookup); field / index / tuple-access targets
-/// land in Stage 4d when the projection walk arrives. Returns
-/// `(place, ok)` — the Bool flag lets callers record a targeted
-/// diagnostic without guessing at sentinel values.
+/// for the LHS of an assign. Supports the four lvalue kinds the
+/// checker accepts: Ident (scope lookup), FieldExpr, TupleAccess,
+/// IndexExpr — every other kind returns the invalid-place sentinel
+/// for callers to handle defensively.
 ///
 /// Since Osty doesn't have tuple returns in our style yet, we return a
 /// MirPlace with `local == -1` on failure and callers check the local.
@@ -2256,8 +2253,10 @@ fn mirLowerIdentPlace(bs: MirLowerBodyState, e: HirExpr) -> MirPlace {
 }
 
 /// mirLowerFieldExprPlace lowers `x.name` into a MirPlace:
-/// receiver-as-place + FieldProj. Optional chains (`x?.name`) are
-/// Stage 4e and fail here (invalid Place).
+/// receiver-as-place + FieldProj. Optional chains (`x?.name`) cannot
+/// project into a place (the result depends on the discriminant); we
+/// return the invalid-place sentinel here and operand/rvalue callers
+/// route through `mirLowerOptionalFieldInto` instead.
 pub fn mirLowerFieldExprPlace(bs: MirLowerBodyState, e: HirExpr) -> MirPlace {
     if e.fieldOptional {
         return mirPlace(-1)
@@ -2388,9 +2387,9 @@ pub fn mirLowerPlaceIsValid(p: MirPlace) -> Bool {
 
 /// mirLowerStructFieldIndex looks up a field's positional index on a
 /// struct layout by name. Returns -1 when the struct isn't in the
-/// layout table or the field isn't present. Built from the layouts
-/// seeded during `mirLowerBuildLayouts` (pass 1b) so the Stage 4d
-/// lowering path doesn't need to re-walk the HIR.
+/// layout table or the field isn't present. Reads from the layouts
+/// seeded during `mirLowerBuildLayouts` (pass 1b) so expression
+/// lowering doesn't need to re-walk the HIR for every projection.
 pub fn mirLowerStructFieldIndex(l: MirLowerer, structName: String, fieldName: String) -> Int {
     if structName == "" {
         return -1
@@ -3046,9 +3045,10 @@ fn mirLowerPopLoopFrame(bs: MirLowerBodyState) {
 // ---- Assign --------------------------------------------------------
 
 /// mirLowerAssignStmt lowers `target = value`, compound assigns
-/// (`target op= value`), and multi-target `(a, b) = rhs`. Non-ident
-/// targets fall back to a diagnostic at Stage 4c; Stage 4d adds
-/// field / index / tuple-access Place extraction.
+/// (`target op= value`), and multi-target `(a, b) = rhs`. Targets
+/// resolve to MirPlaces via `mirLowerExprToPlace`, which supports
+/// Ident / FieldExpr / TupleAccess / IndexExpr; checker-rejected
+/// kinds reach the defensive guards on each branch.
 pub fn mirLowerAssignStmt(bs: MirLowerBodyState, s: HirStmt) {
     if s.assignTargets.len() == 0 {
         return
@@ -3079,15 +3079,18 @@ pub fn mirLowerAssignStmt(bs: MirLowerBodyState, s: HirStmt) {
         mirLowerMultiAssign(bs, s)
         return
     }
-    // Single-target `=`.
+    // Single-target `=`. The checker rejects non-lvalue targets
+    // (Ident / Field / TupleAccess / Index are the only valid kinds —
+    // E0502 / E0503), so an invalid place here means we've reached MIR
+    // with a poisoned tree. Defensive: log + skip.
     let target = s.assignTargets[0]
     let dst = mirLowerExprToPlace(bs, target)
     if !mirLowerPlaceIsValid(dst) {
         mirLowerNoteIssue(
             bs.l,
-            "mir_lower Stage 4d TODO: assign target kind "
+            "mir_lower: invalid assign target kind "
                 + hirExprKindName(target.kind)
-                + " — skipped",
+                + " — skipped (checker bug?)",
         )
         return
     }
@@ -3098,9 +3101,11 @@ fn mirLowerCompoundAssign(bs: MirLowerBodyState, s: HirStmt) {
     let target = s.assignTargets[0]
     let dst = mirLowerExprToPlace(bs, target)
     if !mirLowerPlaceIsValid(dst) {
+        // Same defensive guard as mirLowerAssignStmt — checker
+        // already rejects non-lvalue compound-assign targets.
         mirLowerNoteIssue(
             bs.l,
-            "mir_lower Stage 4d TODO: compound assign target kind "
+            "mir_lower: invalid compound assign target kind "
                 + hirExprKindName(target.kind),
         )
         return
@@ -3144,9 +3149,11 @@ fn mirLowerMultiAssign(bs: MirLowerBodyState, s: HirStmt) {
     for target in s.assignTargets {
         let dst = mirLowerExprToPlace(bs, target)
         if !mirLowerPlaceIsValid(dst) {
+            // Defensive: checker rejects non-lvalue multi-assign
+            // targets, so an invalid place here implies poisoned HIR.
             mirLowerNoteIssue(
                 bs.l,
-                "mir_lower Stage 4d TODO: multi-assign target kind "
+                "mir_lower: invalid multi-assign target kind "
                     + hirExprKindName(target.kind),
             )
             i = i + 1
@@ -3176,9 +3183,8 @@ fn mirLowerMultiAssign(bs: MirLowerBodyState, s: HirStmt) {
 /// Place (projection-free or projected — the MIR builder accepts
 /// both).
 ///
-/// Stage 4d-1 implements the RValue path. Stage 4e fills in the
-/// control-flow / call kinds that this file currently routes to
-/// `mirLowerExprIntoPlaceStub`.
+/// Control-flow / call / aggregate-literal kinds short-circuit
+/// before that and emit their lowering directly into `dest`.
 pub fn mirLowerExprIntoPlace(
     bs: MirLowerBodyState,
     e: HirExpr,
@@ -3210,7 +3216,7 @@ fn mirLowerExprIntoPlaceImpl(
         HirExprIfLet -> mirLowerIfLetExprInto(bs, e, dest, destT),
         HirExprMethod -> mirLowerMethodCallInto(bs, e, dest, destT),
         HirExprMapLit -> mirLowerMapLitInto(bs, e, dest, destT),
-        // Kinds deferred to Stage 4f:
+        // Match drives the decision-tree walker further down the file.
         HirExprMatch -> mirLowerMatchExprInto(bs, e, dest, destT),
         HirExprField -> {
             if e.fieldOptional {
@@ -3235,25 +3241,6 @@ fn mirLowerExprIntoPlaceRValue(
 ) {
     let rv = mirLowerExprToRValue(bs, e, destT)
     mirLowerEmitInstr(bs, mirAssignInstr(dest, rv, mirSpanFromHir(e.span)))
-}
-
-/// mirLowerExprIntoPlaceStub records a Stage 4e TODO issue and emits
-/// a unit-const Assign into `dest` so downstream consumers still see
-/// a well-formed Assign instruction (just with placeholder content).
-fn mirLowerExprIntoPlaceStub(
-    bs: MirLowerBodyState,
-    e: HirExpr,
-    dest: MirPlace,
-    destT: HirType,
-    kindLabel: String,
-) {
-    mirLowerNoteIssue(
-        bs.l,
-        "mir_lower Stage 4e TODO: " + kindLabel + " into place — unit-const placeholder",
-    )
-    let rv = mirRVUse(mirOperandConst(mirConstUnit()))
-    mirLowerEmitInstr(bs, mirAssignInstr(dest, rv, mirSpanFromHir(e.span)))
-    let _ = destT
 }
 
 // ====================================================================
@@ -3708,8 +3695,14 @@ fn mirLowerOptionalFieldInto(
 // Stage 4e-1: CallExpr / IntrinsicCall
 // ====================================================================
 
-/// mirLowerCallExprInto lowers a free-function call. Stage 4e-1
-/// scope:
+/// mirLowerCallExprInto lowers a free-function call:
+///   - Concurrency-intrinsic prelude names (`taskGroup`, `parallel`,
+///     `race`, `collectAll`) → direct IntrinsicInstr
+///   - Builtin free-call intrinsics (`println`, `panic`, etc.) →
+///     direct IntrinsicInstr via the builtin dispatch table
+///   - Use-alias qualifier on a FieldExpr callee (`thread.spawn(f)`,
+///     `strings.split(s, ",")`) → either intrinsic emission or a
+///     qualified direct FnRef call
 ///   - Bare Ident callee with IdentFn → direct FnRef call
 ///   - Bare Ident callee with IdentLocal / IdentParam → indirect call
 ///     against an operand holding the callable value
@@ -3718,9 +3711,6 @@ fn mirLowerOptionalFieldInto(
 ///   - Keyword / default args are ordered from the signature table
 ///     when the callee is known; indirect calls preserve source order
 ///     while still threading positional type hints from FnType.
-///
-/// Concurrency / runtime / stdlib intrinsic dispatch is left for
-/// Stage 4e-2 / 4g to keep this PR focused on the call shape itself.
 pub fn mirLowerCallExprInto(
     bs: MirLowerBodyState,
     e: HirExpr,
@@ -4126,9 +4116,14 @@ fn mirLowerCallUnsupported(
     span: MirSpan,
     reason: String,
 ) {
+    // Mirrors Go's `noteIssue("unsupported call: callee %T")` in
+    // `lowerCallExprInto` — a real surface gap, not a planned TODO.
+    // Today this trips on non-Ident callees (parenthesized fn values,
+    // call-of-call) and on exotic ident kinds the dispatcher above
+    // doesn't enumerate (HirIdentInvalid, non-prelude builtins, etc.).
     mirLowerNoteIssue(
         bs.l,
-        "mir_lower Stage 4e-2 TODO: CallExpr — " + reason,
+        "mir_lower: unsupported CallExpr — " + reason,
     )
     mirLowerEmitInstr(
         bs,
@@ -4718,9 +4713,8 @@ fn mirLowerMatchCore(
 // ---- Channel send --------------------------------------------------
 
 /// mirLowerChanSendStmt lowers `ch <- value` as an IntrinsicChanSend
-/// instruction. Both operands go through the Stage 4b operand stub;
-/// real channel + value lowering arrives with Stage 4e's concurrency
-/// intrinsics when the runtime ABI is wired end-to-end.
+/// instruction with channel and value operands lowered via the
+/// regular operand dispatcher.
 pub fn mirLowerChanSendStmt(bs: MirLowerBodyState, s: HirStmt) {
     let span = mirSpanFromHir(s.span)
     let chOp = mirLowerExprAsOperand(bs, s.chanChannel)
@@ -5343,22 +5337,21 @@ fn mirLowerResultOkType(t: HirType) -> HirType {
 
 /// mirLowerMethodCallInto lowers `receiver.method(args)`.
 ///
-/// Stage 4e-3 scope:
+/// Dispatch order:
 ///   1. Use-alias qualified calls (`pkg.fn(...)` where receiver is a
 ///      package alias) → direct FnRef with the qualified symbol. No
 ///      synthetic `self` is inserted.
-///   2. User method via pass-1 method signature table → direct
+///   2. Concurrency / runtime / stdlib intrinsic fast paths (e.g.
+///      `ch.recv()`, `xs.len()`, `s.split(sep)`) → IntrinsicInstr via
+///      the dispatch tables below.
+///   3. User method via pass-1 method signature table → direct
 ///      CallInstr with mangled `TypeName__method` symbol + receiver
-///      as first arg. Signature-driven keyword/default arg ordering
-///      is deferred to Stage 4e-4 (positional only for now).
-///   3. Method with no signature → best-effort mangled symbol
+///      as first arg, with signature-driven keyword/default arg
+///      ordering.
+///   4. Method with no signature → best-effort mangled symbol
 ///      (`TypeName__method` via receiver type name), receiver as
-///      first arg. Unknown-type receivers fall through to a TODO.
-///
-/// Concurrency / runtime / stdlib intrinsic fast paths (e.g.
-/// `ch.recv()`, `xs.len()`, `s.split(sep)`) stay on the Stage 4e-4
-/// backlog — they need the full intrinsic-dispatch table and are
-/// orthogonal to the core dispatch shape this PR establishes.
+///      first arg. Unknown-type receivers note an issue and fall
+///      through to a unit-const placeholder.
 pub fn mirLowerMethodCallInto(
     bs: MirLowerBodyState,
     e: HirExpr,
@@ -5497,8 +5490,9 @@ fn mirLowerUseAliasIndexForReceiver(l: MirLowerer, recv: HirExpr) -> Int {
 /// a direct Fn call against the qualified symbol `pkg.fn` — no
 /// synthetic `self` argument is inserted.
 ///
-/// Concurrency / runtime intrinsic detection is deferred to Stage
-/// 4e-4; qualified calls land here as plain FnRef calls for now.
+/// Keyword args in qualified calls degrade to plain operand lowering
+/// (no per-position type hint) — matches production's
+/// `orderArgsByTypes` behavior for stdlib free-fn dispatch.
 fn mirLowerMethodCallQualified(
     bs: MirLowerBodyState,
     e: HirExpr,
@@ -5507,13 +5501,6 @@ fn mirLowerMethodCallQualified(
     destT: HirType,
     span: MirSpan,
 ) {
-    if mirLowerCallArgsHaveKeyword(e.methodArgs) {
-        mirLowerNoteIssue(
-            bs.l,
-            "mir_lower Stage 4e-4 TODO: keyword args in qualified call to \""
-                + use_.alias + "." + e.methodName + "\"",
-        )
-    }
     mirLowerEmitQualifiedCall(bs, e.methodArgs, use_, e.methodName, e.typ, dest, destT, span)
 }
 
@@ -6572,9 +6559,9 @@ pub fn mirLowerNextClosureSymbol(l: MirLowerer, parent: String) -> String {
 // terminators (Guard / Switch) + continues into sub-blocks.
 //
 // Matches Go's `matchContext` + `lowerTree` + `lowerSwitch` verbatim
-// in algorithmic structure. Stage 4f-1 covers Leaf / Fail / Bind /
-// Guard and Variant / Bool switches; Lit + Tuple switches record a
-// Stage 4f-2 TODO and fall through to an Unreachable terminator.
+// in algorithmic structure. All five decision-node kinds (Leaf /
+// Fail / Bind / Guard / Switch) and all four switch kinds (Variant /
+// Bool / Lit / Tuple) are wired through real lowering paths.
 
 /// MirLowerMatchContext carries the match-specific state that the
 /// decision-tree walker threads through each recursive call.
