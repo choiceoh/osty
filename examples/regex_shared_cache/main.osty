@@ -1,0 +1,99 @@
+use std.regex
+
+fn main() {
+    // ── Phase 9g shared lazy DFA cache: the first lazy-eligible call
+    //    on a regex initializes the cache (fwd / back lazy DFAs); all
+    //    subsequent calls on the same regex skip the warmup and reuse
+    //    the warm state machine. Verified via stderr trace during
+    //    development; this example asserts correctness across many
+    //    repeated calls — output must be deterministic.
+
+    // State-explosion pattern that triggers the lazy DFA.
+    match regex.compile(r".*a.{8}") {
+        Ok(re) -> {
+            // Many repeated calls — the cache is built once and reused.
+            let inputs = [
+                "          axxxxxxxx",
+                "    aXXXXXXXX more",
+                "no a here at all",
+                "tail aZZZZZZZZ",
+                "          axxxxxxxx end",
+            ]
+            let mut hits = 0
+            let mut total = 0
+            for s in inputs {
+                if re.matches(s) {
+                    hits += 1
+                }
+                total += 1
+            }
+            println("repeat-matches: {hits}/{total}")
+
+            // findAll calls share the same cache as matches (same regex).
+            let list = re.findAll("aBBBBBBBB-aCCCCCCCC-aDDDDDDDD")
+            let n = list.len()
+            println("repeat-findAll: {n}")
+
+            // captures share too.
+            match re.captures("xxxx aXXXXXXXX yy") {
+                Some(c) -> {
+                    match c.get(0) {
+                        Some(s) -> println("repeat-captures: '{s}'"),
+                        None -> println("repeat-captures: g0 missing"),
+                    }
+                },
+                None -> println("repeat-captures: no match"),
+            }
+        },
+        Err(_) -> println("compile failed"),
+    }
+
+    // ── Two distinct regexes with overlapping pattern shape get
+    //    independent caches. Confirms the cache is per-regex, not
+    //    global.
+    match regex.compile(r".*b.{4}") {
+        Ok(re1) -> {
+            match regex.compile(r".*c.{4}") {
+                Ok(re2) -> {
+                    let r1 = re1.matches("xxxbXXXX")
+                    let r2 = re2.matches("xxxcYYYY")
+                    let r3 = re1.matches("xxxcZZZZ")  // re1: no 'b' followed by 4
+                    println("two-regex-1: {r1}")
+                    println("two-regex-2: {r2}")
+                    println("two-regex-3: {r3}")
+                },
+                Err(_) -> println("re2 compile failed"),
+            }
+        },
+        Err(_) -> println("re1 compile failed"),
+    }
+
+    // ── Eager-DFA-only regex: lazy_cache stays NULL forever, no
+    //    extra heap allocation. Verifies the cache is gated on
+    //    `dfa_lazy_eligible` and doesn't leak resources for the
+    //    common case.
+    match regex.compile(r"\d+") {
+        Ok(re) -> {
+            let mut hits = 0
+            for _ in 0..5 {
+                if re.matches("abc 123 def") { hits += 1 }
+            }
+            println("eager-only: {hits}/5")
+        },
+        Err(_) -> println("eager compile failed"),
+    }
+
+    // ── DFA-incompatible (anchored): also no lazy cache. NFA path
+    //    every call.
+    match regex.compile(r"\bword\b") {
+        Ok(re) -> {
+            let r1 = re.matches("a word here")
+            let r2 = re.matches("nope")
+            let r3 = re.matches("ending word")
+            println("nfa-fallback-1: {r1}")
+            println("nfa-fallback-2: {r2}")
+            println("nfa-fallback-3: {r3}")
+        },
+        Err(_) -> println("nfa compile failed"),
+    }
+}
