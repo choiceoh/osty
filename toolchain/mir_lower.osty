@@ -3781,8 +3781,9 @@ pub fn mirLowerCallExprInto(
             mirLowerEmitInstr(bs, mirStorageLiveInstr(valueLocal, span))
             mirLowerExprInto(bs, arg, valueLocal, arg.typ)
             let valueTypeText = hirTypeString(arg.typ)
+            let prefixText = mirLowerDbgMessagePrefix(arg)
             let mut concatArgs: List<MirOperand> = []
-            concatArgs.push(mirOperandConst(mirConstString("[dbg] ")))
+            concatArgs.push(mirOperandConst(mirConstString(prefixText)))
             concatArgs.push(mirOperandCopy(mirPlace(valueLocal), valueTypeText))
             concatArgs.push(mirOperandConst(mirConstString("\n")))
             let msgLocal = mirLowerNewLocal(bs, "_dbg_msg", hirTString(), false, span)
@@ -5951,6 +5952,68 @@ pub fn mirLowerDivergingBuiltinMessage(name: String) -> String {
         return "abort called"
     }
     ""
+}
+
+/// mirLowerDbgMessagePrefix returns the static prefix that surrounds
+/// the runtime-rendered value in a `dbg(expr)` eprint message. Tracks
+/// LANG_SPEC §A.10 (`[file:line] expr = value\n`) as closely as the
+/// lowerer can without source bytes — file path is elided (no
+/// SourcePath threaded through MIR lowering today), expression text
+/// reconstructed via `mirLowerDbgExprSourceText` for shapes the IR
+/// can render losslessly. Mirror of `dbgMessageBookends` in
+/// `internal/mir/lower.go`.
+pub fn mirLowerDbgMessagePrefix(arg: HirExpr) -> String {
+    let line = arg.span.start.line
+    let exprText = mirLowerDbgExprSourceText(arg)
+    if line > 0 && exprText != "" {
+        return "[dbg:" + mirLowerIntToString(line) + "] " + exprText + " = "
+    }
+    if line > 0 {
+        return "[dbg:" + mirLowerIntToString(line) + "] "
+    }
+    if exprText != "" {
+        return "[dbg] " + exprText + " = "
+    }
+    "[dbg] "
+}
+
+/// mirLowerDbgExprSourceText reconstructs a short textual form of
+/// `expr` for the [dbg] message prefix. The IR drops original source
+/// bytes, so the lowerer pieces things back together from the field
+/// values that survive — Idents return their name, literals their
+/// text form, FieldExpr / TupleAccess recurse into their receiver.
+/// Returns "" for shapes the lowerer can't render losslessly.
+pub fn mirLowerDbgExprSourceText(e: HirExpr) -> String {
+    match e.kind {
+        HirExprIdent -> e.identName,
+        HirExprIntLit -> e.numText,
+        HirExprFloatLit -> e.numText,
+        HirExprBoolLit -> {
+            if e.boolValue { "true" } else { "false" }
+        },
+        HirExprField -> {
+            if e.fieldTarget.len() == 0 {
+                return ""
+            }
+            let base = mirLowerDbgExprSourceText(e.fieldTarget[0])
+            if base == "" {
+                return ""
+            }
+            let sep = if e.fieldOptional { "?." } else { "." }
+            base + sep + e.fieldName
+        },
+        HirExprTupleAccess -> {
+            if e.tupleAccessTarget.len() == 0 {
+                return ""
+            }
+            let base = mirLowerDbgExprSourceText(e.tupleAccessTarget[0])
+            if base == "" {
+                return ""
+            }
+            base + "." + mirLowerIntToString(e.tupleAccessIndex)
+        },
+        _ -> "",
+    }
 }
 
 /// mirLowerDbgCanStringify reports whether `dbg(value)` can render the
