@@ -77,7 +77,12 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				// silently regress to the empty-body Phase 1b shape
 				// where every fn produced ret-stub-only IR.
 				"for instr in block.instrs {",
-				"mirEmitInstruction(func, instr)",
+				// Phase 1c original signature; Phase 1e widened it
+				// to (func, blockId, instrIdx, instr) so intrinsics
+				// can mint deterministic temp names. Either shape
+				// satisfies the dispatcher contract — assert just the
+				// dispatcher name.
+				"mirEmitInstruction(func, ",
 				"mirEmitAssignInstr(",
 				"mirEmitRValue(",
 				"mirEmitRValueUse(",
@@ -102,6 +107,19 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"MirInstrIntrinsic -> mirEmitIntrinsicInstr",
 				"MirIntrinsicPrintln -> mirEmitIoWriteIntrinsic",
 				"MirAggTuple -> mirEmitTupleAggregate",
+				// Phase 1e — parameter binding prologue, indirect
+				// calls, typed print dispatch.
+				"mirEmitParamBindingPrologue(func)",
+				"mirEmitParamCopyLine(",
+				"mirEmitToStringSymbol(",
+				"mirEmitFreshTempName(",
+				"mirEmitCallStmtLine(",
+				"mirEmitCallValueLine(",
+				"MirCalleeIndirect",
+				"osty_rt_int_to_string",
+				"osty_rt_bool_to_string",
+				"osty_rt_float_to_string",
+				"osty_rt_char_to_string",
 			},
 		},
 		{
