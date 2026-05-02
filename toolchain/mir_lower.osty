@@ -1153,6 +1153,21 @@ pub struct MirLowerBodyState {
     // Defer frames. Index 0 is the function-level frame (seeded by
     // the constructor); each block push adds a new frame on top.
     pub deferFrames: List<List<HirBlock>>,
+
+    // Range pseudo-bindings. `let r = 0..n` shaped lets land here
+    // with their start / end stored in two real Int locals; the user-
+    // visible name is bound to a unit sentinel. `for-in r` looks up
+    // the binding to emit a counter loop instead of failing on
+    // "range literal in value position". Mirror of `rangeBindings`
+    // in `internal/mir/lower.go`.
+    pub rangeBindings: List<MirLowerRangePseudoBinding>,
+}
+
+pub struct MirLowerRangePseudoBinding {
+    pub sentinel: Int,
+    pub startLocal: Int,
+    pub endLocal: Int,
+    pub inclusive: Bool,
 }
 
 /// mirLowerBodyState constructs a bodyState seeded from `out`'s
@@ -1174,6 +1189,7 @@ pub fn mirLowerBodyState(
         self: mirLowerOwnerNone(),
         loopStack: [],
         deferFrames: [],
+        rangeBindings: [],
     }
     // Function-level scope.
     bs.scopes.push(mirLowerScopeFrame())
@@ -2131,6 +2147,32 @@ pub fn mirLowerLetStmt(bs: MirLowerBodyState, s: HirStmt) {
         mirLowerNoteIssue(bs.l, "mir_lower: let stmt with neither name nor pattern")
         return
     }
+    // Range pseudo-binding fast path: `let r = start..end` over
+    // Range<Int>. Stores start/end in two Int locals + a unit sentinel
+    // for the user-visible name; `for-in r` later reads through
+    // `rangeBindings` to emit a counter loop instead of failing on
+    // "range literal in value position". Mirror of the same fast
+    // path in `internal/mir/lower.go::lowerLet`.
+    if s.letHasValue && s.letValue.kind == HirExprRange && mirLowerIsRangeIntType(t)
+        && s.letValue.rangeStart.len() > 0 && s.letValue.rangeEnd.len() > 0 {
+        let intT = hirTInt()
+        let startLocal = mirLowerNewLocal(bs, "_rstart", intT, false, span)
+        mirLowerEmitInstr(bs, mirStorageLiveInstr(startLocal, span))
+        mirLowerExprInto(bs, s.letValue.rangeStart[0], startLocal, intT)
+        let endLocal = mirLowerNewLocal(bs, "_rend", intT, false, span)
+        mirLowerEmitInstr(bs, mirStorageLiveInstr(endLocal, span))
+        mirLowerExprInto(bs, s.letValue.rangeEnd[0], endLocal, intT)
+        let sentinel = mirLowerNewLocal(bs, s.letName, hirTUnit(), s.letMut, span)
+        mirLowerEmitInstr(bs, mirStorageLiveInstr(sentinel, span))
+        bs.rangeBindings.push(MirLowerRangePseudoBinding {
+            sentinel,
+            startLocal,
+            endLocal,
+            inclusive: s.letValue.rangeInclusive,
+        })
+        mirLowerBindName(bs, s.letName, sentinel)
+        return
+    }
     let id = mirLowerNewLocal(bs, s.letName, t, s.letMut, span)
     mirLowerEmitInstr(bs, mirStorageLiveInstr(id, span))
     if s.letHasValue {
@@ -2592,6 +2634,17 @@ fn mirLowerForIn(bs: MirLowerBodyState, s: HirStmt) {
         mirLowerForInChannel(bs, s, iterT, span)
         return
     }
+    // Range pseudo-binding fast path: `for i in r` where r was bound
+    // from a Range<Int> literal at let time. Reads start/end from the
+    // recorded locals and emits the same counter-loop shape
+    // mirLowerForRange produces for `for i in 0..n`.
+    if s.forIter.kind == HirExprIdent {
+        let rb = mirLowerLookupRangeBinding(bs, s.forIter.identName)
+        if rb.sentinel >= 0 {
+            mirLowerForRangePseudoBinding(bs, s, rb, span)
+            return
+        }
+    }
     if hirTypeIsList(iterT) {
         mirLowerForInList(bs, s, iterT, span)
         return
@@ -2606,6 +2659,94 @@ fn mirLowerForIn(bs: MirLowerBodyState, s: HirStmt) {
             + hirTypeString(iterT)
             + " is not lowered to MIR yet",
     )
+}
+
+/// mirLowerLookupRangeBinding finds the pseudo-binding for `name`, or
+/// returns a sentinel binding (with `sentinel == -1`) when no such
+/// binding exists. `for-in` resolves through this map before falling
+/// back to the List / Channel iterator paths.
+fn mirLowerLookupRangeBinding(bs: MirLowerBodyState, name: String) -> MirLowerRangePseudoBinding {
+    let id = mirLowerLookupName(bs, name)
+    if id < 0 {
+        return MirLowerRangePseudoBinding { sentinel: -1, startLocal: -1, endLocal: -1, inclusive: false }
+    }
+    for rb in bs.rangeBindings {
+        if rb.sentinel == id {
+            return rb
+        }
+    }
+    MirLowerRangePseudoBinding { sentinel: -1, startLocal: -1, endLocal: -1, inclusive: false }
+}
+
+/// mirLowerForRangePseudoBinding emits the same counter-loop shape as
+/// `mirLowerForRange`, but reads start/end from the locals stored on
+/// the pseudo-binding instead of expressions on the ForStmt. Lets
+/// `for i in r` where r was bound via the Range pseudo-binding fast
+/// path lower exactly like a direct `for i in start..end`.
+fn mirLowerForRangePseudoBinding(
+    bs: MirLowerBodyState,
+    s: HirStmt,
+    rb: MirLowerRangePseudoBinding,
+    span: MirSpan,
+) {
+    let intT = hirTInt()
+    let idx = mirLowerNewLocal(bs, s.forVar, intT, true, span)
+    mirLowerEmitInstr(bs, mirStorageLiveInstr(idx, span))
+    let startCopy = mirOperandCopy(mirPlace(rb.startLocal), "Int")
+    mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(idx), mirRVUse(startCopy), span))
+    mirLowerBindName(bs, s.forVar, idx)
+
+    let header = mirLowerNewBlock(bs, span)
+    let body = mirLowerNewBlock(bs, span)
+    let step = mirLowerNewBlock(bs, span)
+    let exit = mirLowerNewBlock(bs, span)
+
+    mirLowerTerminate(bs, mirGotoTerm(header, span))
+    bs.cur = header
+
+    let cmpOp = if rb.inclusive { MirBinLeq } else { MirBinLt }
+    let cmp = mirLowerFreshTemp(bs, hirTBool(), span)
+    let leftOp = mirOperandCopy(mirPlace(idx), "Int")
+    let rightOp = mirOperandCopy(mirPlace(rb.endLocal), "Int")
+    let rv = mirRVBinary(cmpOp, leftOp, rightOp, "Bool")
+    mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(cmp), rv, span))
+    let condOp = mirOperandCopy(mirPlace(cmp), "Bool")
+    mirLowerTerminate(bs, mirBranchTerm(condOp, body, exit, span))
+
+    bs.cur = body
+    mirLowerBindName(bs, s.forVar, idx)
+    mirLowerForBodyWithFramesStep(bs, s.forBody, step, exit)
+    mirLowerTerminate(bs, mirGotoTerm(step, span))
+
+    bs.cur = step
+    let oneOp = mirOperandConst(mirConstInt(1, "Int"))
+    let stepRV = mirRVBinary(
+        MirBinAdd,
+        mirOperandCopy(mirPlace(idx), "Int"),
+        oneOp,
+        "Int",
+    )
+    mirLowerEmitInstr(bs, mirAssignInstr(mirPlace(idx), stepRV, span))
+    mirLowerTerminate(bs, mirGotoBackEdgeTerm(header, span))
+
+    bs.cur = exit
+}
+
+/// mirLowerIsRangeIntType reports whether `t` is `Range<Int>` (the
+/// only instantiation the pseudo-binding fast path supports today).
+/// Mirror of `isRangeIntType` in `internal/mir/lower.go`.
+fn mirLowerIsRangeIntType(t: HirType) -> Bool {
+    if t.kind != HirTypeNamed {
+        return false
+    }
+    if t.namedName != "Range" {
+        return false
+    }
+    if t.namedArgs.len() != 1 {
+        return false
+    }
+    let inner = t.namedArgs[0]
+    inner.kind == HirTypePrim && inner.primKind == HirPrimInt
 }
 
 fn mirLowerForInList(
