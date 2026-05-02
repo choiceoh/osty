@@ -1,0 +1,84 @@
+// onb_relocs.osty — Mach-O ARM64 relocation record model. Phase
+// 2c of the ONB self-host port. Mirror of `machoReloc` in
+// `internal/onb/macho.go`.
+//
+// Relocs differ from branch fixups (Phase 2d) in two ways:
+//
+//   1. Targets are **symbols** (function or data) rather than
+//      block indices. Resolution happens at link time, not within
+//      the function emitter.
+//   2. Layout is fixed by the Mach-O ABI — each reloc maps to one
+//      8-byte entry in the `__text` section's reloc list. The
+//      emitter never patches the placeholder word itself; the
+//      linker fills the imm field once symbol addresses are
+//      known.
+//
+// The Osty side records `OnbReloc` values during the function
+// walk; the Go-side Mach-O writer translates them to wire format.
+// (No need for an Osty-side wire encoder yet — the Mach-O writer
+// is firmly in the host-Go layer until Phase 6.)
+
+// === Reloc kind enum =================================================
+//
+// Three kinds cover every reloc ONB emits today. Adding a new kind
+// (e.g. GOT load, TLV access) requires both a new enum variant and
+// a matching `typ` byte in the Go-side wire writer.
+pub enum OnbRelocKind {
+    OnbRelocBranch26,    // bl Xd        — imm26 PC-relative, scaled by 4
+    OnbRelocPage21,      // adrp Xd      — imm21 PC-relative page address
+    OnbRelocPageOff12,   // add Xd, Xd, #imm12 PAGEOFF
+}
+
+// onbRelocKindMachoTyp maps the Osty enum to the Mach-O wire byte
+// that identifies the reloc type in the relocation entry header.
+// Mirror of `machoARM64Reloc*` constants in `internal/onb/macho.go`.
+pub fn onbRelocKindMachoTyp(kind: OnbRelocKind) -> Int {
+    match kind {
+        OnbRelocKind.OnbRelocBranch26 -> 2,
+        OnbRelocKind.OnbRelocPage21 -> 3,
+        OnbRelocKind.OnbRelocPageOff12 -> 4,
+    }
+}
+
+// === Reloc record =====================================================
+//
+// Mirror of `machoReloc`:
+//   - codeOffset: byte offset inside the function's emitted code
+//     where the placeholder word lives
+//   - symbol: target symbol name (e.g. "puts", "ltmp0", a local
+//     fn, or a `__cstring` label)
+//   - pcrel: true for adrp/bl PAGE21 + Branch26, false for
+//     PageOff12
+//   - kind: which reloc shape the linker should apply
+//
+// The Mach-O `length` field (which the wire format uses) is always
+// 2 (= 4 bytes) for the kinds ONB emits, so we don't expose it on
+// the Osty record. The wire writer fills it from `kind`.
+pub struct OnbReloc {
+    pub codeOffset: Int,
+    pub symbol: String,
+    pub pcrel: Bool,
+    pub kind: OnbRelocKind,
+}
+
+pub fn onbReloc(codeOffset: Int, symbol: String, pcrel: Bool, kind: OnbRelocKind) -> OnbReloc {
+    OnbReloc { codeOffset: codeOffset, symbol: symbol, pcrel: pcrel, kind: kind }
+}
+
+// onbRelocPage21 builds the canonical PAGE21 reloc paired with an
+// adrp instruction at `codeOffset`. PC-relative.
+pub fn onbRelocPage21(codeOffset: Int, symbol: String) -> OnbReloc {
+    onbReloc(codeOffset, symbol, true, OnbRelocKind.OnbRelocPage21)
+}
+
+// onbRelocPageOff12 builds the PageOff12 reloc paired with the
+// add instruction that follows an adrp. NOT PC-relative — the
+// linker fills the absolute low-12-bit offset.
+pub fn onbRelocPageOff12(codeOffset: Int, symbol: String) -> OnbReloc {
+    onbReloc(codeOffset, symbol, false, OnbRelocKind.OnbRelocPageOff12)
+}
+
+// onbRelocBranch26 builds the bl reloc. PC-relative, scaled by 4.
+pub fn onbRelocBranch26(codeOffset: Int, symbol: String) -> OnbReloc {
+    onbReloc(codeOffset, symbol, true, OnbRelocKind.OnbRelocBranch26)
+}
