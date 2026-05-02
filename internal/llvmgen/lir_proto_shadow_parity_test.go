@@ -432,6 +432,9 @@ func TestLIRProtoManualFixtureCatalog(t *testing.T) {
 		{"lirParityManualOptionUnwrapFloatFixture", []string{"%Option.Float = type", "declare void @osty_rt_option_unwrap_none()", "extractvalue %Option.Float", "bitcast i64", "ret double"}},
 		{"lirParityManualOptionUnwrapBoolFixture", []string{"%Option.Bool = type", "declare void @osty_rt_option_unwrap_none()", "extractvalue %Option.Bool", "trunc i64", "ret i1"}},
 		{"lirParityManualOptionUnwrapOrStringFixture", []string{"%Option.String = type", "extractvalue %Option.String", "alloca ptr", "inttoptr i64", "ret ptr"}},
+		// ----- MirRVDiscriminant + MirRVLen rvalue dispatch -----
+		{"lirParityManualDiscriminantExtractIntFixture", []string{"%Option.Int = type", "define i64 @whichTag(", "extractvalue %Option.Int", ", 0", "ret i64"}},
+		{"lirParityManualLenRValueListIntFixture", []string{"declare i64 @osty_rt_list_len(ptr)", "define i64 @lenViaRV(ptr", "call i64 @osty_rt_list_len(", "ret i64"}},
 	}
 
 	for _, tt := range want {

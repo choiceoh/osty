@@ -4785,11 +4785,77 @@ fn lirLowerMirRValue(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, 
         MirRVBinary -> lirLowerMirBinary(l, rv, hintName, hint),
         MirRVCast -> lirLowerMirCast(l, rv, hintName, hint),
         MirRVAggregate -> lirLowerMirAggregate(l, rv, hintName, hint),
+        MirRVDiscriminant -> lirLowerMirDiscriminant(l, rv, hintName, hint),
+        MirRVLen -> lirLowerMirLenRV(l, rv, hintName, hint),
         _ -> {
             lirLowerError(l, LirDiagUnsupported, "unsupported MIR rvalue kind", "rvalue")
             lirOperandInvalid()
         },
     }
+}
+// `lirLowerMirDiscriminant` lowers the `MirRVDiscriminant` rvalue —
+// reads field 0 of an Option/Result/enum aggregate as an i64. Used by
+// HIR→MIR's match-scrutinee path (lowerMatch / lowerIfLet) to test
+// the disc tag without going through the OptionIsSome / IsNone
+// intrinsics. Mirrors production `emitDiscriminantRV`
+// (mir_generator.go:8911).
+fn lirLowerMirDiscriminant(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
+    if !(rv.hasPlace) {
+        lirLowerError(l, LirDiagInvalidInput, "discriminant rvalue requires a place", "rvalue.discriminant")
+        return lirOperandInvalid()
+    }
+    if rv.place.projections.len() > 0 {
+        lirLowerError(l, LirDiagUnsupported, "discriminant through projections is not implemented", "rvalue.discriminant")
+        return lirOperandInvalid()
+    }
+    let agg = lirLoadMirLocal(l, rv.place.local)
+    if agg.value == "" {
+        return lirOperandInvalid()
+    }
+    let discReg = lirFresh(l)
+    l.instrs.push(lirExtractValue(discReg, agg.typ, agg.value, [0]))
+    lirOperand(lirIntType(64), discReg)
+}
+// `lirLowerMirLenRV` lowers the `MirRVLen` rvalue — reads the length
+// of a List/Map/Set/String into an i64 via the same runtime symbols
+// the corresponding `*Len` intrinsics use. Used by lowerForIn to keep
+// list iteration on the MIR path. Mirrors production `emitLenRV`
+// (mir_generator.go:8935).
+fn lirLowerMirLenRV(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
+    if !(rv.hasPlace) {
+        lirLowerError(l, LirDiagInvalidInput, "len rvalue requires a place", "rvalue.len")
+        return lirOperandInvalid()
+    }
+    let local = mirFunctionLocal(l.fn_, rv.place.local)
+    if local.id < 0 {
+        lirLowerError(l, LirDiagInvalidInput, "len rvalue place local out of range", "rvalue.len")
+        return lirOperandInvalid()
+    }
+    let value = lirLoadMirPlace(l, rv.place)
+    if value.value == "" {
+        return lirOperandInvalid()
+    }
+    let symbol = if strings.startsWith(local.typ, "List<") {
+        llvmListRuntimeLenSymbol()
+    } else if strings.startsWith(local.typ, "Map<") {
+        llvmMapRuntimeLenSymbol()
+    } else if strings.startsWith(local.typ, "Set<") {
+        llvmSetRuntimeLenSymbol()
+    } else if local.typ == "String" {
+        mirRtStringSymbol("ByteLen")
+    } else if local.typ == "Bytes" {
+        mirRtBytesSymbol("len")
+    } else {
+        ""
+    }
+    if symbol == "" {
+        lirLowerError(l, LirDiagUnsupported, "len rvalue on type `" + local.typ + "` is not implemented", "rvalue.len")
+        return lirOperandInvalid()
+    }
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDeclI64FromPtr(symbol))
+    let dest = lirFresh(l)
+    l.instrs.push(lirCall(dest, lirIntType(64), "@" + symbol, [lirOperand(lirPtrType(), value.value)]))
+    lirOperand(lirIntType(64), dest)
 }
 fn lirLowerMirUnary(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
     let arg = lirLowerMirOperand(l, rv.arg, hintName, hint)
