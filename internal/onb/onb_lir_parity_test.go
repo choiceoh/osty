@@ -98,3 +98,50 @@ func TestLirOpcodeParityVsOstyTable(t *testing.T) {
 		t.Errorf("ret literal mismatch")
 	}
 }
+
+// TestLirMultiWordParityVsOstyTable pins the variable-length encoder
+// outputs (Phase 2b) against the Osty-side `onbEncodeMovImm64Words`
+// table. Each MovImm64 case verifies both the word count and the
+// per-position hex values — drift in either dimension surfaces as
+// a reviewable diff.
+//
+// MovImm32 isn't covered here because Go's `internal/onb/macho.go`
+// only encodes the hard-wired `mov w0, #0` form (process exit-code
+// stamp). When that path generalises, mirror the new shape on both
+// sides and add the matching assertions.
+func TestLirMultiWordParityVsOstyTable(t *testing.T) {
+	t.Parallel()
+
+	checkWords := func(name string, got []uint32, err error, want []uint32) {
+		t.Helper()
+		if err != nil {
+			t.Errorf("%s: Go encode err %v", name, err)
+			return
+		}
+		if len(got) != len(want) {
+			t.Errorf("%s: word count Go=%d Osty=%d", name, len(got), len(want))
+			return
+		}
+		for i := range got {
+			if got[i] != want[i] {
+				t.Errorf("%s[%d]: Go = 0x%08x; Osty = 0x%08x", name, i, got[i], want[i])
+			}
+		}
+	}
+
+	// mov x0, #0 — single MOVZ, register clears.
+	w, err := encodeMachOMovImm64(RegX0, 0)
+	checkWords("mov x0, #0", w, err, []uint32{0xd2800000})
+
+	// mov x9, #100 — single chunk in low 16 bits.
+	w, err = encodeMachOMovImm64(RegX9, 100)
+	checkWords("mov x9, #100", w, err, []uint32{0xd2800c89})
+
+	// mov x9, #65535 — boundary of the low chunk.
+	w, err = encodeMachOMovImm64(RegX9, 0xffff)
+	checkWords("mov x9, #65535", w, err, []uint32{0xd29fffe9})
+
+	// mov x9, #0x12345678 — two chunks (low + mid). MOVZ then MOVK.
+	w, err = encodeMachOMovImm64(RegX9, 0x12345678)
+	checkWords("mov x9, #0x12345678", w, err, []uint32{0xd28acf09, 0xf2a24689})
+}

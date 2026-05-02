@@ -83,6 +83,46 @@ fn testOnbInstrBranchLinkReg() {
     assertOnbInstrEncodedEq("blr x9", onbInstrBranchLinkReg("x9"), 0xd63f0120)
 }
 
+// === Phase 2b: multi-word constant materialisation ===================
+
+fn assertOnbInstrWordsEq(label: String, instr: OnbInstr, expected: List<Int>) {
+    let actual = onbEncodeInstrWords(instr)
+    testing.assertEq(actual.len(), expected.len())
+    for i in 0..expected.len() {
+        testing.assertEq(actual[i], expected[i])
+    }
+}
+
+fn testOnbInstrMovImm32() {
+    // mov w0, #0 — the canonical main-fn exit-code stamp. ONB
+    // emits this as the first word of every `main` epilogue.
+    assertOnbInstrEncodedEq("mov w0, #0", onbInstrMovImm32("w0", 0), 0x52800000)
+    // mov w1, #1
+    assertOnbInstrEncodedEq("mov w1, #1", onbInstrMovImm32("w1", 1), 0x52800021)
+}
+
+fn testOnbInstrMovImm64Zero() {
+    // mov x0, #0 — single MOVZ word. The first chunk emits MOVZ
+    // unconditionally so the register's other 48 bits get cleared.
+    assertOnbInstrWordsEq("mov x0, #0", onbInstrMovImm64("x0", 0), [0xd2800000])
+}
+
+fn testOnbInstrMovImm64Small() {
+    // mov x9, #100 — single chunk, fits in the low 16 bits.
+    // 0xd2800000 | (100 << 5) | 9 = 0xd2800c89
+    assertOnbInstrWordsEq("mov x9, #100", onbInstrMovImm64("x9", 100), [0xd2800c89])
+    // mov x9, #65535 — boundary of the low chunk.
+    // 0xd2800000 | (0xffff << 5) | 9 = 0xd29fffe9
+    assertOnbInstrWordsEq("mov x9, #65535", onbInstrMovImm64("x9", 0xffff), [0xd29fffe9])
+}
+
+fn testOnbInstrMovImm64MultiChunk() {
+    // mov x9, #0x1234_5678 — two non-zero chunks (low + mid).
+    // chunk0 = 0x5678 → MOVZ x9, #0x5678, lsl 0 = 0xd2800000 | (0x5678 << 5) | 9 = 0xd28acf09
+    // chunk1 = 0x1234 → MOVK x9, #0x1234, lsl 16 = 0xf2800000 | (1 << 21) | (0x1234 << 5) | 9 = 0xf2a24689
+    assertOnbInstrWordsEq("mov x9, #0x12345678", onbInstrMovImm64("x9", 0x12345678), [0xd28acf09, 0xf2a24689])
+}
+
 fn testOnbInstrInvalidReturnsNone() {
     let bogus = OnbInstr {
         kind: OnbInstrKind.OnbInstrInvalid,

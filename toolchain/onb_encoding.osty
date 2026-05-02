@@ -297,6 +297,157 @@ pub fn onbEncodeStackStore(t: String, offset: Int) -> Int? {
     Some(0xf90003e0 | (scaled << 10) | r)
 }
 
+// === Multi-word constant materialisation ============================
+//
+// Movz/Movk chains and the W-register movz form. These produce
+// **lists of 32-bit words** rather than a single Int — variable
+// length encoding is the price of materialising arbitrary 64-bit
+// immediates without a literal pool.
+
+// onbEncodeMovz encodes `MOVZ Xd, #imm16, lsl #(hw*16)`. Layout:
+// 0xd2800000 | (hw << 21) | (imm16 << 5) | Rd. hw is 0..3 for a
+// 64-bit register; the caller's chunking pass decides where in the
+// destination register the immediate lands.
+pub fn onbEncodeMovz(dst: String, hw: Int, imm16: Int) -> Int? {
+    if hw < 0 || hw > 3 {
+        return None
+    }
+    if imm16 < 0 || imm16 > 0xffff {
+        return None
+    }
+    let r = onbXRegisterNumber(dst)
+    if r < 0 {
+        return None
+    }
+    Some(0xd2800000 | (hw << 21) | (imm16 << 5) | r)
+}
+
+// onbEncodeMovk encodes `MOVK Xd, #imm16, lsl #(hw*16)`. Same field
+// layout as MOVZ with bit 30 flipped (op=11 vs op=10) — so the
+// base mask is 0xf2800000 instead of 0xd2800000. MOVK preserves
+// the existing register bits outside its 16-bit slot, so the
+// chunking pass uses MOVK after the first MOVZ has cleared the
+// register.
+pub fn onbEncodeMovk(dst: String, hw: Int, imm16: Int) -> Int? {
+    if hw < 0 || hw > 3 {
+        return None
+    }
+    if imm16 < 0 || imm16 > 0xffff {
+        return None
+    }
+    let r = onbXRegisterNumber(dst)
+    if r < 0 {
+        return None
+    }
+    Some(0xf2800000 | (hw << 21) | (imm16 << 5) | r)
+}
+
+// onbEncodeMovzW encodes `MOVZ Wd, #imm16, lsl #(hw*16)` — the
+// W-register variant. Same layout as the X form with bit 31
+// cleared (sf=0): base 0x52800000 instead of 0xd2800000. ONB
+// today only emits the `mov w0, #0` flavour (process exit code)
+// but a general MOVZ surface keeps this future-proof.
+pub fn onbEncodeMovzW(dst: String, hw: Int, imm16: Int) -> Int? {
+    if hw < 0 || hw > 1 {
+        return None
+    }
+    if imm16 < 0 || imm16 > 0xffff {
+        return None
+    }
+    // W-registers share their numeric encoding with the X
+    // counterpart at the same index.
+    let r = onbXRegisterNumber(onbWToXAlias(dst))
+    if r < 0 {
+        return None
+    }
+    Some(0x52800000 | (hw << 21) | (imm16 << 5) | r)
+}
+
+// onbWToXAlias rewrites a w-register name ("w0" / "w1" / ...) into
+// the matching x-name so xRegisterNumber can encode it. This
+// matches the aarch64 convention where `Wn` and `Xn` share the
+// same 5-bit register index. Unknown names pass through; xRegister
+// returns -1 so the caller still sees the failure.
+fn onbWToXAlias(name: String) -> String {
+    if name == "w0" {
+        "x0"
+    } else if name == "w1" {
+        "x1"
+    } else if name == "w2" {
+        "x2"
+    } else if name == "w3" {
+        "x3"
+    } else if name == "w4" {
+        "x4"
+    } else if name == "w5" {
+        "x5"
+    } else if name == "w6" {
+        "x6"
+    } else if name == "w7" {
+        "x7"
+    } else {
+        name
+    }
+}
+
+// onbEncodeMovImm64Words materialises an arbitrary 64-bit
+// immediate into Xd via a movz/movk chain. Returns a list of 1..4
+// 32-bit words covering the non-zero 16-bit chunks, with the
+// first chunk emitted as MOVZ (zeroing the register) and
+// subsequent chunks as MOVK (preserving prior bits).
+//
+// `imm == 0` collapses to a single `MOVZ Xd, #0, lsl 0`. Negative
+// inputs come from sign-extended Int values; the caller-side mask
+// preserves only the low 64 bits when chunking.
+//
+// Mirror of `encodeMachOMovImm64` in `internal/onb/macho.go`. The
+// loop walks all four 16-bit chunks unconditionally so the
+// iteration count is fixed (4 hw positions); chunks that come up
+// zero after the first emitted MOVZ are skipped via the
+// `chunkIsZeroSkip` predicate rather than a `continue` statement.
+pub fn onbEncodeMovImm64Words(dst: String, imm: Int) -> List<Int> {
+    let mut out: List<Int> = []
+    for hw in 0..4 {
+        let shift = hw * 16
+        let chunk = (imm >> shift) & 0xffff
+        let isFirst = out.isEmpty()
+        if isFirst {
+            // First chunk MUST be emitted (as MOVZ) so the
+            // register's other bits get cleared. Subsequent zero
+            // chunks are skipped because MOVK would leave the
+            // register's existing bits intact.
+            match onbEncodeMovz(dst, hw, chunk) {
+                Some(w) -> out.push(w),
+                None -> {},
+            }
+        } else if chunk != 0 {
+            match onbEncodeMovk(dst, hw, chunk) {
+                Some(w) -> out.push(w),
+                None -> {},
+            }
+        }
+    }
+    if out.isEmpty() {
+        // Defensive fallback when the destination register name
+        // wasn't recognised — every encode call returned None.
+        // Producing an empty list signals failure to the dispatcher.
+    }
+    out
+}
+
+// onbEncodeMovImm32Word emits a single MOVZ-flavoured word for a
+// 16-bit immediate destined for a W-register. ONB's only call
+// site is `mov w0, #0` (the process exit-code stamp at the top of
+// every `main` epilogue) — a more general 32-bit immediate would
+// need its own movk chain, which we defer until a real call site
+// requires it.
+pub fn onbEncodeMovImm32Word(dst: String, imm: Int) -> Int? {
+    if imm < 0 || imm > 0xffff {
+        return None
+    }
+    onbEncodeMovzW(dst, 0, imm)
+}
+
 // onbEncodeAddImm encodes `ADD Xd, Xn, #imm12` for an unshifted
 // immediate (so imm <= 0xfff). Used by `LoadStackAddress`
 // (`add Xd, sp, #N`). Layout: 0x91000000 | (imm12 << 10) | (Rn << 5) | Rd.
