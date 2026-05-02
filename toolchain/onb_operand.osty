@@ -1,0 +1,150 @@
+// onb_operand.osty — operand materialiser for the ONB self-host
+// port. Slice G of the port. Mirror of `materialiseOperand /
+// materialiseFloatOperand / loadPlaceIntoReg / loadFloatPlaceIntoReg`
+// from `internal/onb/lower.go`.
+//
+// "Materialise" means: take a MIR operand (Const / Copy / Move) and
+// emit the LIR sequence that lands its value in `dst`. This slice
+// covers the simple cases the call boundary needs:
+//
+//   - Const Int / Bool / String — single mov / mov + mov+adrp+add
+//   - Copy / Move of a non-projected local — single ldr off sp
+//   - Copy / Move of a Float-typed non-projected local — single ldr d
+//
+// The complex projection cases (`hasIndexProjection`, struct/enum
+// FieldProj, ClosureEnv deref, FloatConst → bits encoding) are
+// deferred to Slice H along with `lowerInstr` / `lowerAssign` / the
+// rvalue dispatcher — they have non-trivial dependencies on
+// runtime-symbol lookup (List/Map intrinsics) and field-offset
+// resolution that pull the slice's surface area past the 1k-line
+// budget.
+
+// === Result type ====================================================
+
+// OnbMaterialiseResult bundles every output of one operand
+// materialisation: the emitted instructions, the new state (the
+// cstring intern table may have grown), an `ok` flag, and an
+// error message for unsupported operand shapes. Mirror of Go's
+// `([]Instr, error)` return — Osty keeps the state-rebuild
+// explicit so call sites thread the new state forward.
+pub struct OnbMaterialiseResult {
+    pub instrs: List<OnbInstr>,
+    pub state: OnbLowerState,
+    pub ok: Bool,
+    pub err: String,
+}
+
+pub fn onbMaterialiseOk(state: OnbLowerState, instrs: List<OnbInstr>) -> OnbMaterialiseResult {
+    OnbMaterialiseResult { instrs: instrs, state: state, ok: true, err: "" }
+}
+
+pub fn onbMaterialiseErr(state: OnbLowerState, err: String) -> OnbMaterialiseResult {
+    OnbMaterialiseResult { instrs: [], state: state, ok: false, err: err }
+}
+
+// === Const materialisation ==========================================
+
+// onbMaterialiseIntConst lands a 64-bit integer immediate in `dst`
+// via the multi-word `MovImm64` opcode. The encoder later expands
+// it to a `movz/movk` chain.
+pub fn onbMaterialiseIntConst(dst: String, value: Int) -> List<OnbInstr> {
+    let mut out: List<OnbInstr> = []
+    out.push(onbInstrMovImm64(dst, value))
+    out
+}
+
+// onbMaterialiseBoolConst lands 0 or 1 in `dst`. Bool is one
+// 8-byte slot at the ABI level; the runtime treats nonzero as
+// true.
+pub fn onbMaterialiseBoolConst(dst: String, value: Bool) -> List<OnbInstr> {
+    let imm = if value { 1 } else { 0 }
+    let mut out: List<OnbInstr> = []
+    out.push(onbInstrMovImm64(dst, imm))
+    out
+}
+
+// onbMaterialiseStringConst interns the literal value (or reuses
+// an existing entry) and emits the `adrp + add` pair that lands
+// `&__cstring[label]` in `dst`. Returns the rebuilt state along
+// with the instruction list — the cstring intern table grows for
+// every novel literal.
+pub fn onbMaterialiseStringConst(state: OnbLowerState, dst: String, value: String) -> OnbMaterialiseResult {
+    let added = onbAddCString(state, value)
+    let mut out: List<OnbInstr> = []
+    out.push(onbInstrLoadCStringAddress(dst, added.label))
+    onbMaterialiseOk(added.state, out)
+}
+
+// === Place loads (no projections) ==================================
+
+// onbLoadPlaceIntoReg emits `ldr dst, [sp, #slot]` for a local
+// without projections. Mirror of the no-projection branch of
+// `loadPlaceIntoReg`. Projection-bearing places fall through to
+// the unsupported sentinel — Slice H wires up the
+// `placeProjectionOffset` walker.
+pub fn onbLoadPlaceIntoReg(state: OnbLowerState, place: MirPlace, dst: String) -> OnbMaterialiseResult {
+    if mirPlaceHasProjections(place) {
+        return onbMaterialiseErr(state, "place projection in slice G")
+    }
+    let slot = onbLocalSlotLookup(state, place.local)
+    if !slot.found {
+        return onbMaterialiseErr(state, "read of local without slot")
+    }
+    let mut out: List<OnbInstr> = []
+    out.push(onbInstrLoad64Stack(dst, slot.offset))
+    onbMaterialiseOk(state, out)
+}
+
+// onbLoadFloatPlaceIntoReg emits `ldr dst, [sp, #slot]` into a
+// d-register for a Float-typed local without projections. Mirror
+// of `loadFloatPlaceIntoReg`'s no-projection branch.
+pub fn onbLoadFloatPlaceIntoReg(state: OnbLowerState, place: MirPlace, dst: String) -> OnbMaterialiseResult {
+    if mirPlaceHasProjections(place) {
+        return onbMaterialiseErr(state, "float place projection in slice G")
+    }
+    let slot = onbLocalSlotLookup(state, place.local)
+    if !slot.found {
+        return onbMaterialiseErr(state, "read of float local without slot")
+    }
+    let mut out: List<OnbInstr> = []
+    out.push(onbInstrLoadFloat64Stack(dst, slot.offset))
+    onbMaterialiseOk(state, out)
+}
+
+// === Operand dispatch ===============================================
+
+// onbMaterialiseOperand routes a MirOperand to the right
+// materialisation branch. Mirror of `materialiseOperand` —
+// handles Const Int/Bool/String + Copy/Move of non-projected
+// locals. Other Const kinds (Float, Char, Byte, Unit, Null, Fn)
+// and projection-bearing places return the unsupported sentinel;
+// Slice H expands the surface.
+pub fn onbMaterialiseOperand(state: OnbLowerState, op: MirOperand, dst: String) -> OnbMaterialiseResult {
+    match op.kind {
+        MirOperandKind.MirOpConst -> {
+            match op.const.kind {
+                MirConstKind.MirConstInt -> onbMaterialiseOk(state, onbMaterialiseIntConst(dst, op.const.intValue)),
+                MirConstKind.MirConstBool -> onbMaterialiseOk(state, onbMaterialiseBoolConst(dst, op.const.boolValue)),
+                MirConstKind.MirConstString -> onbMaterialiseStringConst(state, dst, op.const.strValue),
+                _ -> onbMaterialiseErr(state, "const kind not in slice G"),
+            }
+        },
+        MirOperandKind.MirOpCopy -> onbLoadPlaceIntoReg(state, op.place, dst),
+        MirOperandKind.MirOpMove -> onbLoadPlaceIntoReg(state, op.place, dst),
+        _ -> onbMaterialiseErr(state, "operand kind invalid"),
+    }
+}
+
+// onbMaterialiseFloatOperand routes Float-typed operands to a
+// d-register. Const FloatConst is deferred to Slice H (needs
+// floatText → IEEE 754 bit-pattern conversion); Copy/Move of a
+// Float local without projections is supported via
+// `onbLoadFloatPlaceIntoReg`.
+pub fn onbMaterialiseFloatOperand(state: OnbLowerState, op: MirOperand, dst: String) -> OnbMaterialiseResult {
+    match op.kind {
+        MirOperandKind.MirOpConst -> onbMaterialiseErr(state, "float const not in slice G"),
+        MirOperandKind.MirOpCopy -> onbLoadFloatPlaceIntoReg(state, op.place, dst),
+        MirOperandKind.MirOpMove -> onbLoadFloatPlaceIntoReg(state, op.place, dst),
+        _ -> onbMaterialiseErr(state, "float operand kind invalid"),
+    }
+}

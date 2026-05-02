@@ -1,0 +1,453 @@
+// onb_call_test.osty — call-boundary lowering tests.
+use std.testing
+
+// === Layout helpers (shared with onb_layouts_lookup_test) ==========
+
+fn callFieldI64(idx: Int, name: String) -> MirFieldLayout {
+    MirFieldLayout { index: idx, name: name, typ: "Int" }
+}
+
+fn callStructPoint() -> MirStructLayout {
+    let mut fields: List<MirFieldLayout> = []
+    fields.push(callFieldI64(0, "x"))
+    fields.push(callFieldI64(1, "y"))
+    MirStructLayout { name: "Point", mangled: "Point", fields: fields, size: 16, align: 8 }
+}
+
+fn callStructV3() -> MirStructLayout {
+    let mut fields: List<MirFieldLayout> = []
+    fields.push(callFieldI64(0, "x"))
+    fields.push(callFieldI64(1, "y"))
+    fields.push(callFieldI64(2, "z"))
+    MirStructLayout { name: "V3", mangled: "V3", fields: fields, size: 24, align: 8 }
+}
+
+fn callBuildLayouts() -> MirLayoutTable {
+    let mut t = mirLayoutTable()
+    t.structs.push(callStructPoint())
+    t.structs.push(callStructV3())
+    t
+}
+
+// === Function builders ==============================================
+
+fn callBuildFunc(name: String, returnType: String) -> MirFunction {
+    mirFunction(name, returnType, mirNoSpan())
+}
+
+// === Lowering state setup ===========================================
+
+fn newState(func: MirFunction) -> OnbLowerState {
+    onbNewLowerState(func, callBuildLayouts())
+}
+
+// === Local-slot map tests ===========================================
+
+fn testOnbLocalSlotInsertAndLookup() {
+    let func = callBuildFunc("f", "Int")
+    let s0 = newState(func)
+    let s1 = onbLocalSlotInsert(s0, 0, 16)
+    let s2 = onbLocalSlotInsert(s1, 1, 24)
+    let r0 = onbLocalSlotLookup(s2, 0)
+    testing.assert(r0.found)
+    testing.assertEq(r0.offset, 16)
+    let r1 = onbLocalSlotLookup(s2, 1)
+    testing.assert(r1.found)
+    testing.assertEq(r1.offset, 24)
+    let rMiss = onbLocalSlotLookup(s2, 99)
+    testing.assert(!rMiss.found)
+}
+
+fn testOnbLocalSlotReplace() {
+    let func = callBuildFunc("f", "Int")
+    let s0 = newState(func)
+    let s1 = onbLocalSlotInsert(s0, 0, 16)
+    let s2 = onbLocalSlotInsert(s1, 0, 32) // replace
+    let r = onbLocalSlotLookup(s2, 0)
+    testing.assert(r.found)
+    testing.assertEq(r.offset, 32)
+    testing.assertEq(s2.localSlots.len(), 1)
+}
+
+// === CString intern tests ===========================================
+
+fn testOnbAddCStringAssignsLabels() {
+    let func = callBuildFunc("f", "Int")
+    let s0 = newState(func)
+    let r1 = onbAddCString(s0, "hello")
+    testing.assertEq(r1.label, "str0")
+    let r2 = onbAddCString(r1.state, "world")
+    testing.assertEq(r2.label, "str1")
+    let r3 = onbAddCString(r2.state, "hello")  // dedup
+    testing.assertEq(r3.label, "str0")
+    testing.assertEq(r3.state.cstrings.len(), 2)
+}
+
+// === paramShuffle tests =============================================
+
+fn buildScalarParam(typ: String) -> OnbLowerState {
+    let func = callBuildFunc("f", "Int")
+    let id = mirFunctionNewLocal(func, "x", typ, false, mirNoSpan())
+    func.params.push(id)
+    let s = newState(func)
+    onbLocalSlotInsert(s, id, 0)
+}
+
+fn testOnbParamShuffleScalarInt() {
+    let s = buildScalarParam("Int")
+    let out = onbParamShuffle(s)
+    testing.assertEq(out.len(), 1)
+    testing.assertEq(out[0].kind, OnbInstrKind.OnbInstrStore64Stack)
+    testing.assertEq(out[0].src, "x0")
+    testing.assertEq(out[0].offset, 0)
+}
+
+fn testOnbParamShuffleScalarFloat() {
+    let s = buildScalarParam("Float")
+    let out = onbParamShuffle(s)
+    testing.assertEq(out.len(), 1)
+    testing.assertEq(out[0].kind, OnbInstrKind.OnbInstrStoreFloat64Stack)
+    testing.assertEq(out[0].src, "d0")
+    testing.assertEq(out[0].offset, 0)
+}
+
+fn testOnbParamShuffleSmallStruct() {
+    // fn f(p: Point) → str x0, [sp]; str x1, [sp, #8]
+    let func = callBuildFunc("f", "Int")
+    let id = mirFunctionNewLocal(func, "p", "Point", false, mirNoSpan())
+    func.params.push(id)
+    let s = onbLocalSlotInsert(newState(func), id, 0)
+    let out = onbParamShuffle(s)
+    testing.assertEq(out.len(), 2)
+    testing.assertEq(out[0].kind, OnbInstrKind.OnbInstrStore64Stack)
+    testing.assertEq(out[0].src, "x0")
+    testing.assertEq(out[0].offset, 0)
+    testing.assertEq(out[1].src, "x1")
+    testing.assertEq(out[1].offset, 8)
+}
+
+fn testOnbParamShuffleIndirectStruct() {
+    // fn f(v: V3) → 3 × (ldr x9, [x0, #i*8]; str x9, [sp, #i*8])
+    let func = callBuildFunc("f", "Int")
+    let id = mirFunctionNewLocal(func, "v", "V3", false, mirNoSpan())
+    func.params.push(id)
+    let s = onbLocalSlotInsert(newState(func), id, 0)
+    let out = onbParamShuffle(s)
+    testing.assertEq(out.len(), 6) // 3 fields × (load + store)
+    testing.assertEq(out[0].kind, OnbInstrKind.OnbInstrLoadFromReg)
+    testing.assertEq(out[0].src, "x0")
+    testing.assertEq(out[0].offset, 0)
+    testing.assertEq(out[1].kind, OnbInstrKind.OnbInstrStore64Stack)
+    testing.assertEq(out[1].offset, 0)
+    testing.assertEq(out[4].kind, OnbInstrKind.OnbInstrLoadFromReg)
+    testing.assertEq(out[4].offset, 16)
+    testing.assertEq(out[5].kind, OnbInstrKind.OnbInstrStore64Stack)
+    testing.assertEq(out[5].offset, 16)
+}
+
+fn testOnbParamShuffleMixedIntFloat() {
+    // fn f(a: Int, b: Float, c: Int) → x0/d0/x1, slots 0/8/16
+    let func = callBuildFunc("f", "Int")
+    let a = mirFunctionNewLocal(func, "a", "Int", false, mirNoSpan())
+    let b = mirFunctionNewLocal(func, "b", "Float", false, mirNoSpan())
+    let c = mirFunctionNewLocal(func, "c", "Int", false, mirNoSpan())
+    func.params.push(a)
+    func.params.push(b)
+    func.params.push(c)
+    let mut s = newState(func)
+    s = onbLocalSlotInsert(s, a, 0)
+    s = onbLocalSlotInsert(s, b, 8)
+    s = onbLocalSlotInsert(s, c, 16)
+    let out = onbParamShuffle(s)
+    testing.assertEq(out.len(), 3)
+    testing.assertEq(out[0].src, "x0")  // a
+    testing.assertEq(out[0].offset, 0)
+    testing.assertEq(out[1].src, "d0")  // b
+    testing.assertEq(out[1].offset, 8)
+    testing.assertEq(out[2].src, "x1")  // c — second integer arg
+    testing.assertEq(out[2].offset, 16)
+}
+
+// === epilogue tests =================================================
+
+fn testOnbEpilogueMain() {
+    let func = callBuildFunc("main", "()")
+    let s = newState(func)
+    let out = onbEpilogue(s)
+    testing.assertEq(out.len(), 2)
+    testing.assertEq(out[0].kind, OnbInstrKind.OnbInstrMovImm32)
+    testing.assertEq(out[0].dst, "w0")
+    testing.assertEq(out[0].imm, 0)
+    testing.assertEq(out[1].kind, OnbInstrKind.OnbInstrRet)
+}
+
+fn testOnbEpilogueUnit() {
+    let func = callBuildFunc("f", "()")
+    let s = newState(func)
+    let out = onbEpilogue(s)
+    testing.assertEq(out.len(), 1)
+    testing.assertEq(out[0].kind, OnbInstrKind.OnbInstrRet)
+}
+
+fn testOnbEpilogueIntReturn() {
+    let func = callBuildFunc("f", "Int")
+    let r = mirFunctionNewLocal(func, "_return", "Int", true, mirNoSpan())
+    func.returnLocal = r
+    let s = onbLocalSlotInsert(newState(func), r, 24)
+    let out = onbEpilogue(s)
+    testing.assertEq(out.len(), 2)
+    testing.assertEq(out[0].kind, OnbInstrKind.OnbInstrLoad64Stack)
+    testing.assertEq(out[0].dst, "x0")
+    testing.assertEq(out[0].offset, 24)
+    testing.assertEq(out[1].kind, OnbInstrKind.OnbInstrRet)
+}
+
+fn testOnbEpilogueFloatReturn() {
+    let func = callBuildFunc("f", "Float")
+    let r = mirFunctionNewLocal(func, "_return", "Float", true, mirNoSpan())
+    func.returnLocal = r
+    let s = onbLocalSlotInsert(newState(func), r, 16)
+    let out = onbEpilogue(s)
+    testing.assertEq(out.len(), 2)
+    testing.assertEq(out[0].kind, OnbInstrKind.OnbInstrLoadFloat64Stack)
+    testing.assertEq(out[0].dst, "d0")
+    testing.assertEq(out[0].offset, 16)
+}
+
+fn testOnbEpilogueSmallStructReturn() {
+    let func = callBuildFunc("f", "Point")
+    let r = mirFunctionNewLocal(func, "_return", "Point", true, mirNoSpan())
+    func.returnLocal = r
+    let s = onbLocalSlotInsert(newState(func), r, 0)
+    let out = onbEpilogue(s)
+    testing.assertEq(out.len(), 3) // ldr x0; ldr x1; ret
+    testing.assertEq(out[0].dst, "x0")
+    testing.assertEq(out[0].offset, 0)
+    testing.assertEq(out[1].dst, "x1")
+    testing.assertEq(out[1].offset, 8)
+    testing.assertEq(out[2].kind, OnbInstrKind.OnbInstrRet)
+}
+
+fn testOnbEpilogueIndirectStructReturn() {
+    // V3 → for each 8B: ldr x9, [sp, #N+i]; str x9, [x8, #i]; then ret
+    let func = callBuildFunc("f", "V3")
+    let r = mirFunctionNewLocal(func, "_return", "V3", true, mirNoSpan())
+    func.returnLocal = r
+    let s = onbLocalSlotInsert(newState(func), r, 0)
+    let out = onbEpilogue(s)
+    testing.assertEq(out.len(), 7) // 3 × (ldr + str) + ret
+    testing.assertEq(out[0].kind, OnbInstrKind.OnbInstrLoad64Stack)
+    testing.assertEq(out[0].offset, 0)
+    testing.assertEq(out[1].kind, OnbInstrKind.OnbInstrStoreToReg)
+    testing.assertEq(out[1].base, "x8")
+    testing.assertEq(out[1].offset, 0)
+    testing.assertEq(out[6].kind, OnbInstrKind.OnbInstrRet)
+}
+
+// === materialiseOperand tests =======================================
+
+fn testOnbMaterialiseConstInt() {
+    let s = newState(callBuildFunc("f", "Int"))
+    let op = mirOperandConst(mirConstInt(42, "Int"))
+    let r = onbMaterialiseOperand(s, op, "x0")
+    testing.assert(r.ok)
+    testing.assertEq(r.instrs.len(), 1)
+    testing.assertEq(r.instrs[0].kind, OnbInstrKind.OnbInstrMovImm64)
+    testing.assertEq(r.instrs[0].dst, "x0")
+    testing.assertEq(r.instrs[0].imm, 42)
+}
+
+fn testOnbMaterialiseConstBool() {
+    let s = newState(callBuildFunc("f", "Int"))
+    let r = onbMaterialiseOperand(s, mirOperandConst(mirConstBool(true)), "x0")
+    testing.assert(r.ok)
+    testing.assertEq(r.instrs[0].imm, 1)
+    let r2 = onbMaterialiseOperand(s, mirOperandConst(mirConstBool(false)), "x0")
+    testing.assertEq(r2.instrs[0].imm, 0)
+}
+
+fn testOnbMaterialiseConstString() {
+    let s = newState(callBuildFunc("f", "Int"))
+    let r = onbMaterialiseOperand(s, mirOperandConst(mirConstString("hi")), "x0")
+    testing.assert(r.ok)
+    testing.assertEq(r.instrs.len(), 1)
+    testing.assertEq(r.instrs[0].kind, OnbInstrKind.OnbInstrLoadCStringAddress)
+    testing.assertEq(r.instrs[0].label, "str0")
+    testing.assertEq(r.state.cstrings.len(), 1)
+}
+
+fn testOnbMaterialiseCopyLocal() {
+    let func = callBuildFunc("f", "Int")
+    let id = mirFunctionNewLocal(func, "x", "Int", false, mirNoSpan())
+    let s = onbLocalSlotInsert(newState(func), id, 16)
+    let op = mirOperandCopy(mirPlace(id), "Int")
+    let r = onbMaterialiseOperand(s, op, "x0")
+    testing.assert(r.ok)
+    testing.assertEq(r.instrs.len(), 1)
+    testing.assertEq(r.instrs[0].kind, OnbInstrKind.OnbInstrLoad64Stack)
+    testing.assertEq(r.instrs[0].dst, "x0")
+    testing.assertEq(r.instrs[0].offset, 16)
+}
+
+fn testOnbMaterialiseFloatCopyLocal() {
+    let func = callBuildFunc("f", "Float")
+    let id = mirFunctionNewLocal(func, "x", "Float", false, mirNoSpan())
+    let s = onbLocalSlotInsert(newState(func), id, 0)
+    let op = mirOperandCopy(mirPlace(id), "Float")
+    let r = onbMaterialiseFloatOperand(s, op, "d0")
+    testing.assert(r.ok)
+    testing.assertEq(r.instrs.len(), 1)
+    testing.assertEq(r.instrs[0].kind, OnbInstrKind.OnbInstrLoadFloat64Stack)
+    testing.assertEq(r.instrs[0].dst, "d0")
+}
+
+// === lowerCall tests ================================================
+
+fn testOnbLowerCallTwoIntArgs() {
+    // f(1, 2) — no dest, two int consts
+    let func = callBuildFunc("caller", "()")
+    let mut args: List<MirOperand> = []
+    args.push(mirOperandConst(mirConstInt(1, "Int")))
+    args.push(mirOperandConst(mirConstInt(2, "Int")))
+    let instr = mirCallInstr(false, mirPlace(-1), "f", "fn(Int, Int) -> ()", args, mirNoSpan())
+    let s = newState(func)
+    let r = onbLowerCall(s, instr)
+    testing.assert(r.ok)
+    testing.assertEq(r.instrs.len(), 3) // mov x0; mov x1; bl _f
+    testing.assertEq(r.instrs[0].dst, "x0")
+    testing.assertEq(r.instrs[0].imm, 1)
+    testing.assertEq(r.instrs[1].dst, "x1")
+    testing.assertEq(r.instrs[1].imm, 2)
+    testing.assertEq(r.instrs[2].kind, OnbInstrKind.OnbInstrBranchLink)
+    testing.assertEq(r.instrs[2].symbol, "f")
+}
+
+fn testOnbLowerCallSretIndirectStruct() {
+    // dest = makeV3() — V3 is 3-field indirect → x8 = &dest_slot; bl _makeV3
+    let func = callBuildFunc("caller", "()")
+    let destId = mirFunctionNewLocal(func, "v", "V3", true, mirNoSpan())
+    let s = onbLocalSlotInsert(newState(func), destId, 32)
+    let args: List<MirOperand> = []
+    let instr = mirCallInstr(true, mirPlace(destId), "makeV3", "fn() -> V3", args, mirNoSpan())
+    let r = onbLowerCall(s, instr)
+    testing.assert(r.ok)
+    testing.assertEq(r.instrs.len(), 2) // add x8, sp, #32; bl _makeV3
+    testing.assertEq(r.instrs[0].kind, OnbInstrKind.OnbInstrLoadStackAddress)
+    testing.assertEq(r.instrs[0].dst, "x8")
+    testing.assertEq(r.instrs[0].offset, 32)
+    testing.assertEq(r.instrs[1].kind, OnbInstrKind.OnbInstrBranchLink)
+}
+
+fn testOnbLowerCallReturnCaptureInt() {
+    // dest = f() → bl _f; str x0, [sp, #destSlot]
+    let func = callBuildFunc("caller", "()")
+    let destId = mirFunctionNewLocal(func, "r", "Int", true, mirNoSpan())
+    let s = onbLocalSlotInsert(newState(func), destId, 8)
+    let instr = mirCallInstr(true, mirPlace(destId), "f", "fn() -> Int", [], mirNoSpan())
+    let r = onbLowerCall(s, instr)
+    testing.assert(r.ok)
+    testing.assertEq(r.instrs.len(), 2)
+    testing.assertEq(r.instrs[0].kind, OnbInstrKind.OnbInstrBranchLink)
+    testing.assertEq(r.instrs[1].kind, OnbInstrKind.OnbInstrStore64Stack)
+    testing.assertEq(r.instrs[1].src, "x0")
+    testing.assertEq(r.instrs[1].offset, 8)
+}
+
+fn testOnbLowerCallReturnCaptureFloat() {
+    let func = callBuildFunc("caller", "()")
+    let destId = mirFunctionNewLocal(func, "r", "Float", true, mirNoSpan())
+    let s = onbLocalSlotInsert(newState(func), destId, 16)
+    let instr = mirCallInstr(true, mirPlace(destId), "f", "fn() -> Float", [], mirNoSpan())
+    let r = onbLowerCall(s, instr)
+    testing.assert(r.ok)
+    testing.assertEq(r.instrs.len(), 2)
+    testing.assertEq(r.instrs[0].kind, OnbInstrKind.OnbInstrBranchLink)
+    testing.assertEq(r.instrs[1].kind, OnbInstrKind.OnbInstrStoreFloat64Stack)
+    testing.assertEq(r.instrs[1].src, "d0")
+    testing.assertEq(r.instrs[1].offset, 16)
+}
+
+fn testOnbLowerCallSmallStructArg() {
+    // f(p: Point) where p is local — multi-reg load
+    let func = callBuildFunc("caller", "()")
+    let pId = mirFunctionNewLocal(func, "p", "Point", false, mirNoSpan())
+    let s = onbLocalSlotInsert(newState(func), pId, 0)
+    let mut args: List<MirOperand> = []
+    args.push(mirOperandCopy(mirPlace(pId), "Point"))
+    let instr = mirCallInstr(false, mirPlace(-1), "f", "fn(Point) -> ()", args, mirNoSpan())
+    let r = onbLowerCall(s, instr)
+    testing.assert(r.ok)
+    testing.assertEq(r.instrs.len(), 3) // ldr x0; ldr x1; bl _f
+    testing.assertEq(r.instrs[0].kind, OnbInstrKind.OnbInstrLoad64Stack)
+    testing.assertEq(r.instrs[0].dst, "x0")
+    testing.assertEq(r.instrs[1].dst, "x1")
+    testing.assertEq(r.instrs[1].offset, 8)
+}
+
+fn testOnbLowerCallIndirectArg() {
+    // f(v: V3) where v is local — pass &v_slot
+    let func = callBuildFunc("caller", "()")
+    let vId = mirFunctionNewLocal(func, "v", "V3", false, mirNoSpan())
+    let s = onbLocalSlotInsert(newState(func), vId, 8)
+    let mut args: List<MirOperand> = []
+    args.push(mirOperandCopy(mirPlace(vId), "V3"))
+    let instr = mirCallInstr(false, mirPlace(-1), "f", "fn(V3) -> ()", args, mirNoSpan())
+    let r = onbLowerCall(s, instr)
+    testing.assert(r.ok)
+    testing.assertEq(r.instrs.len(), 2) // add x0, sp, #8; bl _f
+    testing.assertEq(r.instrs[0].kind, OnbInstrKind.OnbInstrLoadStackAddress)
+    testing.assertEq(r.instrs[0].dst, "x0")
+    testing.assertEq(r.instrs[0].offset, 8)
+}
+
+// === lowerIndirectCall tests ========================================
+
+fn testOnbLowerIndirectCallSimple() {
+    // dest = (env)(1) — env in x0, arg 1 in x1, ldr x9, [x0]; blr x9
+    let func = callBuildFunc("caller", "()")
+    let envId = mirFunctionNewLocal(func, "env", "ClosureEnv", false, mirNoSpan())
+    let destId = mirFunctionNewLocal(func, "r", "Int", true, mirNoSpan())
+    let mut s = newState(func)
+    s = onbLocalSlotInsert(s, envId, 0)
+    s = onbLocalSlotInsert(s, destId, 8)
+    let mut args: List<MirOperand> = []
+    args.push(mirOperandConst(mirConstInt(1, "Int")))
+    let instr = mirIndirectCallInstr(
+        true,
+        mirPlace(destId),
+        mirOperandCopy(mirPlace(envId), "ClosureEnv"),
+        args,
+        mirNoSpan(),
+    )
+    let r = onbLowerIndirectCall(s, instr)
+    testing.assert(r.ok)
+    // Sequence: ldr x0, [sp, #0]      (env)
+    //           mov x1, #1            (arg)
+    //           ldr x9, [x0, #0]      (fn ptr)
+    //           blr x9
+    //           str x0, [sp, #8]      (capture return)
+    testing.assertEq(r.instrs.len(), 5)
+    testing.assertEq(r.instrs[0].kind, OnbInstrKind.OnbInstrLoad64Stack)
+    testing.assertEq(r.instrs[0].dst, "x0")
+    testing.assertEq(r.instrs[1].kind, OnbInstrKind.OnbInstrMovImm64)
+    testing.assertEq(r.instrs[1].dst, "x1")
+    testing.assertEq(r.instrs[2].kind, OnbInstrKind.OnbInstrLoadFromReg)
+    testing.assertEq(r.instrs[2].dst, "x9")
+    testing.assertEq(r.instrs[2].src, "x0")
+    testing.assertEq(r.instrs[3].kind, OnbInstrKind.OnbInstrBranchLinkReg)
+    testing.assertEq(r.instrs[3].src, "x9")
+    testing.assertEq(r.instrs[4].kind, OnbInstrKind.OnbInstrStore64Stack)
+    testing.assertEq(r.instrs[4].src, "x0")
+    testing.assertEq(r.instrs[4].offset, 8)
+}
+
+// === Misc ===========================================================
+
+fn testOnbDestType() {
+    let func = callBuildFunc("f", "Int")
+    let id = mirFunctionNewLocal(func, "x", "Bool", false, mirNoSpan())
+    let s = newState(func)
+    testing.assertEq(onbDestType(s, id), "Bool")
+    // Missing local → "Int" fallback.
+    testing.assertEq(onbDestType(s, 99), "Int")
+}
