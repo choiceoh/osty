@@ -100,6 +100,80 @@ func TestDwarfLineParityVsOstyTable(t *testing.T) {
 	}
 }
 
+// TestDwarfInfoParityVsOstyTable verifies the Go info-section
+// emitter produces the canonical header (version + abbrev_offset
+// + address_size) the Osty `onbEmitDwarfInfo` test asserts. The
+// per-DIE byte sequences depend on string offsets that vary with
+// table insertion order, so this gate stays focused on the
+// invariant unit-header prefix + the count of reloc anchors.
+func TestDwarfInfoParityVsOstyTable(t *testing.T) {
+	t.Parallel()
+
+	strs := newDwarfStringTable()
+	cu := dwarfCompileUnitInputs{
+		ProducerStrOffset: strs.Add("osty (onb)"),
+		Language:          dwarfLangC99,
+		NameStrOffset:     strs.Add("main.osty"),
+		CompDirStrOffset:  strs.Add("/tmp"),
+		LowPC:             0,
+		HighPCSize:        0x40,
+		StmtListOffset:    0,
+		StringTable:       strs,
+	}
+	got := emitDwarfInfo(cu, nil, nil)
+
+	if len(got.Bytes) < 11 {
+		t.Fatalf("info section too short: %d bytes", len(got.Bytes))
+	}
+	// Version word is bytes 4-5 (LE u16) = 4
+	version := uint16(got.Bytes[4]) | uint16(got.Bytes[5])<<8
+	if version != dwarfVersion {
+		t.Errorf("version = %d, want %d", version, dwarfVersion)
+	}
+	// debug_abbrev_offset is bytes 6-9 (LE u32) = 0
+	abbrevOff := uint32(got.Bytes[6]) | uint32(got.Bytes[7])<<8 |
+		uint32(got.Bytes[8])<<16 | uint32(got.Bytes[9])<<24
+	if abbrevOff != 0 {
+		t.Errorf("debug_abbrev_offset = %d, want 0", abbrevOff)
+	}
+	// address_size is byte 10 = 8 (aarch64)
+	if got.Bytes[10] != dwarfAddressSize {
+		t.Errorf("address_size = %d, want %d", got.Bytes[10], dwarfAddressSize)
+	}
+	// CU's own low_pc anchor is the only reloc target when no
+	// subprograms participate.
+	if len(got.LowPCOffsets) != 1 {
+		t.Errorf("lowPCOffsets count = %d, want 1", len(got.LowPCOffsets))
+	}
+}
+
+// TestDwarfInfoParityWithSubprograms pins the count of low_pc
+// reloc anchors when the CU carries multiple subprograms — one
+// per subprogram + the CU's own.
+func TestDwarfInfoParityWithSubprograms(t *testing.T) {
+	t.Parallel()
+
+	strs := newDwarfStringTable()
+	cu := dwarfCompileUnitInputs{
+		ProducerStrOffset: strs.Add("osty (onb)"),
+		Language:          dwarfLangC99,
+		NameStrOffset:     strs.Add("main.osty"),
+		CompDirStrOffset:  strs.Add("/tmp"),
+		LowPC:             0,
+		HighPCSize:        0x80,
+		StmtListOffset:    0,
+		StringTable:       strs,
+	}
+	subs := []dwarfSubprogramInput{
+		{NameStrOffset: strs.Add("main"), LowPC: 0, SizeBytes: 0x40},
+		{NameStrOffset: strs.Add("helper"), LowPC: 0x40, SizeBytes: 0x40},
+	}
+	got := emitDwarfInfo(cu, subs, nil)
+	if len(got.LowPCOffsets) != 3 {
+		t.Errorf("lowPCOffsets count = %d, want 3 (1 CU + 2 subs)", len(got.LowPCOffsets))
+	}
+}
+
 // TestDwarfAbbrevParityVsOstyTable pins the first three bytes of the
 // abbrev table (compile-unit code + tag + has-children flag) the
 // way the Osty test asserts. A full byte-by-byte comparison would

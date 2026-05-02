@@ -1,0 +1,389 @@
+// onb_dwarf_info.osty — `__debug_info` section builder. Phase
+// 6.3 of the ONB self-host port. Mirror of `emitDwarfInfo` and
+// its helpers in `internal/onb/dwarf.go`.
+//
+// The `__debug_info` section is a tree of DIEs (Debugging
+// Information Entries) keyed off the abbreviation table that
+// `onb_dwarf_abbrev.osty` produces. Layout:
+//
+//   unit_length         (4 bytes, 32-bit form, excludes itself)
+//   version             (2 bytes, = 4)
+//   debug_abbrev_offset (4 bytes, sec_offset into __debug_abbrev)
+//   address_size        (1 byte, = 8 for aarch64)
+//   DIEs                (in tree order, each prefixed with its
+//                        ULEB128 abbrev code)
+//
+// CU children: base type DIEs (Int / Bool / Float / char + pointer
+// to char for String) → struct DIEs (one per declared type, with
+// member children) → subprogram DIEs (one per function, with
+// variable children).
+
+// === Inputs ========================================================
+//
+// Mirror of the Go-side `dwarfCompileUnitInputs`,
+// `dwarfSubprogramInput`, `dwarfVariableInput`,
+// `dwarfStructTypeInput`, and `dwarfStructMemberInput` records.
+// The string-offset fields are pre-resolved against the
+// `OnbDwarfStringTable` so the encoder writes raw u32s without
+// re-traversing the table.
+
+// OnbDwarfBaseTypeKind enumerates the primitive types the encoder
+// can describe. Mirror of `dwarfBaseTypeKind` in dwarf.go. Order
+// MUST match `OnbDebugTypeKind` so the variable lookup map keys
+// align — that's an assumption the lookup helper depends on.
+pub enum OnbDwarfBaseTypeKind {
+    OnbDwarfBaseTypeNone,
+    OnbDwarfBaseTypeInt,
+    OnbDwarfBaseTypeBool,
+    OnbDwarfBaseTypeFloat,
+    OnbDwarfBaseTypeString,
+}
+
+pub fn onbDwarfBaseTypeKindOrdinal(k: OnbDwarfBaseTypeKind) -> Int {
+    match k {
+        OnbDwarfBaseTypeKind.OnbDwarfBaseTypeNone -> 0,
+        OnbDwarfBaseTypeKind.OnbDwarfBaseTypeInt -> 1,
+        OnbDwarfBaseTypeKind.OnbDwarfBaseTypeBool -> 2,
+        OnbDwarfBaseTypeKind.OnbDwarfBaseTypeFloat -> 3,
+        OnbDwarfBaseTypeKind.OnbDwarfBaseTypeString -> 4,
+    }
+}
+
+// onbDebugTypeKindToDwarf maps the LIR-visible enum (used in
+// `OnbDebugLocal.typeKind`) to the DWARF-side kind. Same shape
+// as the Go-side `debugTypeToDwarfKind` in `internal/onb/macho.go`.
+pub fn onbDebugTypeKindToDwarf(k: OnbDebugTypeKind) -> OnbDwarfBaseTypeKind {
+    match k {
+        OnbDebugTypeKind.OnbDebugTypeInt -> OnbDwarfBaseTypeKind.OnbDwarfBaseTypeInt,
+        OnbDebugTypeKind.OnbDebugTypeBool -> OnbDwarfBaseTypeKind.OnbDwarfBaseTypeBool,
+        OnbDebugTypeKind.OnbDebugTypeFloat -> OnbDwarfBaseTypeKind.OnbDwarfBaseTypeFloat,
+        OnbDebugTypeKind.OnbDebugTypeString -> OnbDwarfBaseTypeKind.OnbDwarfBaseTypeString,
+        _ -> OnbDwarfBaseTypeKind.OnbDwarfBaseTypeNone,
+    }
+}
+
+// OnbDwarfVariableInput describes one local visible to lldb's
+// `frame variable`. SlotOffset is the byte offset from the
+// function's frame base. StructTypeIndex >= 0 means "look up the
+// struct DIE in the program's struct list at that index"; -1 falls
+// back to the base-type kind.
+pub struct OnbDwarfVariableInput {
+    pub nameStrOffset: Int,
+    pub slotOffset: Int,
+    pub typeKind: OnbDwarfBaseTypeKind,
+    pub structTypeIndex: Int,
+}
+
+pub fn onbDwarfVariableInput(nameStrOffset: Int, slotOffset: Int, typeKind: OnbDwarfBaseTypeKind) -> OnbDwarfVariableInput {
+    OnbDwarfVariableInput {
+        nameStrOffset: nameStrOffset,
+        slotOffset: slotOffset,
+        typeKind: typeKind,
+        structTypeIndex: 0 - 1,
+    }
+}
+
+pub fn onbDwarfVariableInputForStruct(nameStrOffset: Int, slotOffset: Int, structIndex: Int) -> OnbDwarfVariableInput {
+    OnbDwarfVariableInput {
+        nameStrOffset: nameStrOffset,
+        slotOffset: slotOffset,
+        typeKind: OnbDwarfBaseTypeKind.OnbDwarfBaseTypeNone,
+        structTypeIndex: structIndex,
+    }
+}
+
+// OnbDwarfSubprogramInput is the per-function DIE input.
+pub struct OnbDwarfSubprogramInput {
+    pub nameStrOffset: Int,
+    pub lowPC: Int,
+    pub sizeBytes: Int,
+    pub variables: List<OnbDwarfVariableInput>,
+}
+
+pub fn onbDwarfSubprogramInput(nameStrOffset: Int, lowPC: Int, sizeBytes: Int) -> OnbDwarfSubprogramInput {
+    OnbDwarfSubprogramInput { nameStrOffset: nameStrOffset, lowPC: lowPC, sizeBytes: sizeBytes, variables: [] }
+}
+
+// OnbDwarfStructMemberInput is one field inside a struct DIE.
+pub struct OnbDwarfStructMemberInput {
+    pub nameStrOffset: Int,
+    pub typeKind: OnbDwarfBaseTypeKind,
+    pub offset: Int,
+}
+
+pub fn onbDwarfStructMemberInput(nameStrOffset: Int, typeKind: OnbDwarfBaseTypeKind, offset: Int) -> OnbDwarfStructMemberInput {
+    OnbDwarfStructMemberInput { nameStrOffset: nameStrOffset, typeKind: typeKind, offset: offset }
+}
+
+// OnbDwarfStructTypeInput describes one user-defined struct.
+pub struct OnbDwarfStructTypeInput {
+    pub nameStrOffset: Int,
+    pub byteSize: Int,
+    pub members: List<OnbDwarfStructMemberInput>,
+}
+
+pub fn onbDwarfStructTypeInput(nameStrOffset: Int, byteSize: Int) -> OnbDwarfStructTypeInput {
+    OnbDwarfStructTypeInput { nameStrOffset: nameStrOffset, byteSize: byteSize, members: [] }
+}
+
+// OnbDwarfCompileUnitInputs collects the metadata the CU DIE
+// needs. The string offsets reference into the live
+// `OnbDwarfStringTable` the encoder shares with the caller.
+pub struct OnbDwarfCompileUnitInputs {
+    pub nameStrOffset: Int,
+    pub compDirStrOffset: Int,
+    pub producerStrOffset: Int,
+    pub lowPC: Int,
+    pub highPCSize: Int,
+    pub stmtListOffset: Int,
+    pub language: Int,
+    pub strings: OnbDwarfStringTable,
+}
+
+// === Output ========================================================
+
+// OnbDwarfInfoEncoded carries the byte stream for the section + the
+// section-relative offsets of every DW_AT_low_pc value. The Mach-O
+// writer attaches a relocation at each offset so dsymutil can
+// rewrite addresses to the binary's runtime base; without these
+// relocations dsymutil treats the DWARF as orphan.
+pub struct OnbDwarfInfoEncoded {
+    pub bytes: List<Int>,
+    pub lowPCOffsets: List<Int>,
+}
+
+// === Encoder =======================================================
+//
+// Strategy mirrors `emitDwarfInfo`:
+//
+//   1. Build the DIE buffer from the CU body forward (CU header
+//      attribute block first, then base types, struct types,
+//      subprograms with their variable children).
+//   2. Track CU-relative offsets of every DIE that other DIEs
+//      need to reference (base types, struct types — for ref4
+//      DW_AT_type) and of every DW_AT_low_pc field (so the wire
+//      writer can attach relocs).
+//   3. Compose the unit: 4-byte unit_length + 2-byte version + 4-
+//      byte debug_abbrev_offset + 1-byte address_size + DIE buffer.
+//
+// The header is constant 11 bytes (4+2+4+1) so DIE-relative offsets
+// translate to section-relative offsets via `+ headerLen`.
+
+fn onbDwarfInfoHeaderLen() -> Int { 11 }
+
+// onbCollectUsedBaseTypes walks every variable + struct member and
+// records which base-type kinds the CU will need to publish. The
+// caller can then emit only the base types that are actually
+// referenced. Returns a `List<Bool>` indexed by the base-type
+// kind ordinal (None / Int / Bool / Float / String → 0..4).
+fn onbCollectUsedBaseTypes(subs: List<OnbDwarfSubprogramInput>, structs: List<OnbDwarfStructTypeInput>) -> List<Bool> {
+    let mut used: List<Bool> = []
+    for i in 0..5 {
+        used.push(false)
+    }
+    for sub in subs {
+        for v in sub.variables {
+            let ord = onbDwarfBaseTypeKindOrdinal(v.typeKind)
+            if ord > 0 {
+                used[ord] = true
+            }
+        }
+    }
+    for s in structs {
+        for m in s.members {
+            let ord = onbDwarfBaseTypeKindOrdinal(m.typeKind)
+            if ord > 0 {
+                used[ord] = true
+            }
+        }
+    }
+    used
+}
+
+// onbEmitDwarfInfo composes the full section byte stream + the
+// list of section-relative DW_AT_low_pc offsets. Caller pairs
+// each lowPCOffset with a Mach-O reloc that anchors `__text` at
+// runtime address.
+pub fn onbEmitDwarfInfo(cu: OnbDwarfCompileUnitInputs, subs: List<OnbDwarfSubprogramInput>, structs: List<OnbDwarfStructTypeInput>) -> OnbDwarfInfoEncoded {
+    let mut die: List<Int> = []
+    let headerLen = onbDwarfInfoHeaderLen()
+
+    // CU DIE — the root. Layout per abbrev code 1:
+    //   ULEB128(1)         abbrev code
+    //   u32                producer strp
+    //   u8                 language
+    //   u32                name strp
+    //   u32                comp_dir strp
+    //   u64                low_pc (← reloc anchor)
+    //   u64                high_pc (constant size)
+    //   u32                stmt_list (sec_offset)
+    die = onbWriteULEB128(die, onbDwarfAbbrevCompileUnit())
+    die = onbWriteU32LE(die, cu.producerStrOffset)
+    die = onbWriteU8(die, cu.language)
+    die = onbWriteU32LE(die, cu.nameStrOffset)
+    die = onbWriteU32LE(die, cu.compDirStrOffset)
+    let cuLowPCDieOff = die.len()
+    die = onbWriteU64LE(die, cu.lowPC)
+    die = onbWriteU64LE(die, cu.highPCSize)
+    die = onbWriteU32LE(die, cu.stmtListOffset)
+
+    // Base types come before subprograms so the variable DIEs'
+    // ref4 DW_AT_type fields can resolve to a stable
+    // CU-relative offset.
+    let used = onbCollectUsedBaseTypes(subs, structs)
+    let mut baseOff: List<Int> = []
+    for i in 0..5 {
+        baseOff.push(0)
+    }
+
+    if used[onbDwarfBaseTypeKindOrdinal(OnbDwarfBaseTypeKind.OnbDwarfBaseTypeInt)] {
+        let strx = onbDwarfStringTableAdd(cu.strings, "Int")
+        baseOff[onbDwarfBaseTypeKindOrdinal(OnbDwarfBaseTypeKind.OnbDwarfBaseTypeInt)] = headerLen + die.len()
+        die = onbWriteULEB128(die, onbDwarfAbbrevBaseType())
+        die = onbWriteU32LE(die, strx)
+        die = onbWriteU8(die, 8)
+        die = onbWriteU8(die, onbDwarfATESigned())
+    }
+    if used[onbDwarfBaseTypeKindOrdinal(OnbDwarfBaseTypeKind.OnbDwarfBaseTypeBool)] {
+        // Bool needs byte_size 1 + DW_ATE_boolean — lldb refuses
+        // any larger boolean and falls back to "void". The slot
+        // is 8 bytes wide but the value lives in the low byte,
+        // so a 1-byte read at the slot's address is correct.
+        let strx = onbDwarfStringTableAdd(cu.strings, "Bool")
+        baseOff[onbDwarfBaseTypeKindOrdinal(OnbDwarfBaseTypeKind.OnbDwarfBaseTypeBool)] = headerLen + die.len()
+        die = onbWriteULEB128(die, onbDwarfAbbrevBaseType())
+        die = onbWriteU32LE(die, strx)
+        die = onbWriteU8(die, 1)
+        die = onbWriteU8(die, onbDwarfATEBoolean())
+    }
+    if used[onbDwarfBaseTypeKindOrdinal(OnbDwarfBaseTypeKind.OnbDwarfBaseTypeFloat)] {
+        let strx = onbDwarfStringTableAdd(cu.strings, "Float")
+        baseOff[onbDwarfBaseTypeKindOrdinal(OnbDwarfBaseTypeKind.OnbDwarfBaseTypeFloat)] = headerLen + die.len()
+        die = onbWriteULEB128(die, onbDwarfAbbrevBaseType())
+        die = onbWriteU32LE(die, strx)
+        die = onbWriteU8(die, 8)
+        die = onbWriteU8(die, onbDwarfATEFloat())
+    }
+    if used[onbDwarfBaseTypeKindOrdinal(OnbDwarfBaseTypeKind.OnbDwarfBaseTypeString)] {
+        // String is a pointer to UTF-8 char data. Two DIEs: a
+        // `char` base type (byte_size 1, signed_char) plus a
+        // pointer DIE that references the char's CU-relative
+        // offset. lldb prints the pointee as a C string.
+        let charStrx = onbDwarfStringTableAdd(cu.strings, "char")
+        let charOff = headerLen + die.len()
+        die = onbWriteULEB128(die, onbDwarfAbbrevBaseType())
+        die = onbWriteU32LE(die, charStrx)
+        die = onbWriteU8(die, 1)
+        die = onbWriteU8(die, onbDwarfATESignedChar())
+
+        baseOff[onbDwarfBaseTypeKindOrdinal(OnbDwarfBaseTypeKind.OnbDwarfBaseTypeString)] = headerLen + die.len()
+        die = onbWriteULEB128(die, onbDwarfAbbrevPointerType())
+        die = onbWriteU32LE(die, charOff)
+        die = onbWriteU8(die, 8)
+    }
+
+    // Struct DIEs — one per program-level struct. Each struct's
+    // member DIEs reference a base-type DIE via ref4 DW_AT_type;
+    // members whose type isn't registered are skipped silently
+    // (DW_TAG_member is optional under DW_TAG_structure_type, so
+    // the struct still parses).
+    let mut structOff: List<Int> = []
+    for s in structs {
+        let off = headerLen + die.len()
+        structOff.push(off)
+        die = onbWriteULEB128(die, onbDwarfAbbrevStructureType())
+        die = onbWriteU32LE(die, s.nameStrOffset)
+        die = onbWriteULEB128(die, s.byteSize)
+        for m in s.members {
+            let ord = onbDwarfBaseTypeKindOrdinal(m.typeKind)
+            let memberTypeOff = baseOff[ord]
+            if memberTypeOff == 0 {
+                continue
+            }
+            die = onbWriteULEB128(die, onbDwarfAbbrevMember())
+            die = onbWriteU32LE(die, m.nameStrOffset)
+            die = onbWriteU32LE(die, memberTypeOff)
+            die = onbWriteULEB128(die, m.offset)
+        }
+        die.push(0) // close struct's member list
+    }
+
+    // Subprogram DIEs — one per function, each with variable
+    // children. The variable's DW_AT_type ref4 resolves to either
+    // a base type (kind > 0 + structTypeIndex < 0) or a struct
+    // type (structTypeIndex >= 0).
+    let mut subLowPCDieOffs: List<Int> = []
+    for sub in subs {
+        die = onbWriteULEB128(die, onbDwarfAbbrevSubprogram())
+        die = onbWriteU32LE(die, sub.nameStrOffset)
+        subLowPCDieOffs.push(die.len())
+        die = onbWriteU64LE(die, sub.lowPC)
+        die = onbWriteU64LE(die, sub.sizeBytes)
+        // frame_base = DW_OP_breg31 0 (sp). Locals encode their
+        // own slot offsets via DW_OP_fbreg <slot>.
+        die = onbWriteULEB128(die, 2) // exprloc length
+        die = onbWriteU8(die, onbDwarfOpBreg31())
+        die = onbWriteSLEB128(die, 0)
+
+        for v in sub.variables {
+            // Resolve the variable's type DIE offset. Struct
+            // refs (structTypeIndex >= 0) win over base-type
+            // kinds — the lookup helper documents that.
+            let mut typeOff = 0
+            let mut hasType = false
+            if v.structTypeIndex >= 0 && v.structTypeIndex < structOff.len() {
+                typeOff = structOff[v.structTypeIndex]
+                hasType = true
+            } else {
+                let ord = onbDwarfBaseTypeKindOrdinal(v.typeKind)
+                if ord > 0 && baseOff[ord] != 0 {
+                    typeOff = baseOff[ord]
+                    hasType = true
+                }
+            }
+            if !hasType {
+                // Skip variables whose type the encoder can't
+                // describe — emitting a half-described variable
+                // would confuse lldb's `frame variable`.
+                continue
+            }
+            die = onbWriteULEB128(die, onbDwarfAbbrevVariable())
+            die = onbWriteU32LE(die, v.nameStrOffset)
+            die = onbWriteU32LE(die, typeOff)
+            // location: DW_OP_fbreg <sleb128 slotOffset>. Build
+            // the sub-buffer first so we can prefix the ULEB128
+            // length the exprloc form requires.
+            let mut loc: List<Int> = []
+            loc = onbWriteU8(loc, onbDwarfOpFbreg())
+            loc = onbWriteSLEB128(loc, v.slotOffset)
+            die = onbWriteULEB128(die, loc.len())
+            for byte in loc {
+                die.push(byte)
+            }
+        }
+        die.push(0) // close subprogram children
+    }
+    die.push(0) // close CU children
+
+    // Compose the unit: 4-byte unit_length (excludes itself) + 2-
+    // byte version + 4-byte debug_abbrev_offset + 1-byte
+    // address_size + DIE buffer.
+    let unitLen = 2 + 4 + 1 + die.len()
+    let mut unit: List<Int> = []
+    unit = onbWriteU32LE(unit, unitLen)
+    unit = onbWriteU16LE(unit, onbDwarfVersion())
+    unit = onbWriteU32LE(unit, 0) // debug_abbrev_offset (single CU)
+    unit = onbWriteU8(unit, onbDwarfAddressSize())
+    for byte in die {
+        unit.push(byte)
+    }
+
+    // Translate DIE-relative low_pc offsets to section-relative
+    // offsets by adding the header length.
+    let mut lowPCs: List<Int> = []
+    lowPCs.push(headerLen + cuLowPCDieOff)
+    for off in subLowPCDieOffs {
+        lowPCs.push(headerLen + off)
+    }
+    OnbDwarfInfoEncoded { bytes: unit, lowPCOffsets: lowPCs }
+}
