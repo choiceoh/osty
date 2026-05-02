@@ -19503,16 +19503,18 @@ fn mirEmitFreshTempName(blockId: Int, instrIdx: Int) -> String {
     "%t.b" + mirGenIntToString(blockId) + ".i" + mirGenIntToString(instrIdx)
 }
 
-/// mirEmitAbortIntrinsic emits `call void @osty_rt_abort(ptr <msg>)`
+/// mirEmitAbortIntrinsic emits `call void @osty_rt_panic(ptr <msg>)`
 /// followed by `unreachable` so the verifier knows control flow ends.
-/// Mirrors the Go-side emitter's pairing.
+/// Mirrors the Go-side `emitAbortIntrinsic` shape — the runtime
+/// helper symbol is `osty_rt_panic` (LANG_SPEC §A.6 prelude
+/// `panic / unreachable / todo / abort` all route here).
 fn mirEmitAbortIntrinsic(instr: MirInstr) -> String {
     let msg = if instr.args.len() >= 1 {
         mirEmitOperand(instr.args[0])
     } else {
         "null"
     }
-    let mut out = "  call void @osty_rt_abort(ptr " + msg + ")\n"
+    let mut out = "  call void @osty_rt_panic(ptr " + msg + ")\n"
     out = out + "  unreachable\n"
     out
 }

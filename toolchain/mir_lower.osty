@@ -3738,6 +3738,31 @@ pub fn mirLowerCallExprInto(
                 return
             },
         }
+        // 1a. Diverging prelude builtins (LANG_SPEC §A.6):
+        //   - `panic(message: String) -> Never` carries the source-supplied
+        //     message through directly.
+        //   - `unreachable() / todo() / abort()` synthesize canonical
+        //     messages and route through the same `MirIntrinsicAbort`
+        //     path so backends share `osty_rt_panic`.
+        if callee.identName == "panic" && e.callArgs.len() == 1 {
+            let mut args: List<MirOperand> = []
+            args.push(mirLowerExprAsOperand(bs, e.callArgs[0].value))
+            mirLowerEmitInstr(
+                bs,
+                mirIntrinsicInstr(false, mirPlace(-1), MirIntrinsicAbort, args, span),
+            )
+            return
+        }
+        let divergingMsg = mirLowerDivergingBuiltinMessage(callee.identName)
+        if divergingMsg != "" && e.callArgs.len() == 0 {
+            let mut args: List<MirOperand> = []
+            args.push(mirOperandConst(mirConstString(divergingMsg)))
+            mirLowerEmitInstr(
+                bs,
+                mirIntrinsicInstr(false, mirPlace(-1), MirIntrinsicAbort, args, span),
+            )
+            return
+        }
         let bk = mirLowerBuiltinFreeCallIntrinsic(bs, callee.identName, e.callArgs)
         match bk {
             MirIntrinsicInvalid -> {},
@@ -5867,6 +5892,26 @@ fn mirLowerResultStdlibMethod(name: String) -> MirIntrinsicKind {
     if name == "unwrap" { return MirIntrinsicResultUnwrap }
     if name == "unwrapOr" { return MirIntrinsicResultUnwrapOr }
     MirIntrinsicInvalid
+}
+
+/// mirLowerDivergingBuiltinMessage returns the canonical runtime
+/// message for the no-arg diverging prelude builtins
+/// (`unreachable() / todo() / abort()`, LANG_SPEC §A.6). Returns the
+/// empty string when the name doesn't match — callers treat that as
+/// "not a diverging builtin" and continue routing. Mirrors the
+/// production-side `divergingBuiltinMessage` in
+/// `internal/mir/lower.go`.
+pub fn mirLowerDivergingBuiltinMessage(name: String) -> String {
+    if name == "unreachable" {
+        return "entered unreachable code"
+    }
+    if name == "todo" {
+        return "not yet implemented"
+    }
+    if name == "abort" {
+        return "abort called"
+    }
+    ""
 }
 
 /// mirLowerBuiltinFreeCallIntrinsic recognises prelude-shaped free
