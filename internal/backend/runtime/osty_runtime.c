@@ -778,7 +778,15 @@ enum {
     OSTY_GC_GENERIC_NONE = 0,
     OSTY_GC_GENERIC_ENUM_PTR = 1,
     OSTY_GC_GENERIC_TASK_HANDLE = 2,
+    /* Phase 9g — compiled regexes that own a shared lazy DFA cache
+     * outside the GC blob. The destroy hook frees the cache (mutex +
+     * lazy DFA storage) when the regex is collected. */
+    OSTY_GC_GENERIC_REGEX = 3,
 };
+
+/* Forward declaration — defined alongside the regex runtime, far below
+ * in the file. The pattern table needs the function pointer here. */
+static void osty_rt_regex_destroy(void *payload);
 
 static const osty_gc_kind_descriptor osty_gc_generic_patterns[] = {
     /* NONE — opaque payload, cheney handles it as raw bytes. */
@@ -801,6 +809,16 @@ static const osty_gc_kind_descriptor osty_gc_generic_patterns[] = {
      * This row is parity-only for the headerful fallback dispatch. */
     [OSTY_GC_GENERIC_TASK_HANDLE] = {
         .destroy = osty_rt_task_handle_destroy,
+        .trace_lockfree_safe = true,
+    },
+    /* Phase 9g — compiled regex with shared lazy DFA cache outside the
+     * GC blob. No managed pointers in the cache, so trace stays NULL;
+     * destroy frees the cache memory + mutex. Not young-eligible
+     * because long-lived regexes (often module-level constants)
+     * benefit from skipping minor GC churn, and the small cost of
+     * direct OLD allocation is dwarfed by the cache's per-call win. */
+    [OSTY_GC_GENERIC_REGEX] = {
+        .destroy = osty_rt_regex_destroy,
         .trace_lockfree_safe = true,
     },
 };
@@ -14768,12 +14786,23 @@ typedef struct osty_regex_compiled {
      *                                dispatching to the DFA / NFA.
      *                                Skips entire spans of input that
      *                                cannot contain a match. The
-     *                                bytes live inline in the tail. */
+     *                                bytes live inline in the tail.
+     *   lazy_cache != NULL         → shared lazy DFA cache lives at
+     *                                `*lazy_cache` outside the GC
+     *                                blob (Phase 9g). Lazily allocated
+     *                                via CAS on the first lazy-DFA
+     *                                entry call; freed by the
+     *                                OSTY_GC_GENERIC_REGEX destroy
+     *                                hook on collection. Reads /
+     *                                writes to the cache structs are
+     *                                serialized by `cache->mutex`. */
     int32_t dfa_state_count;
     int32_t dfa_back_state_count;
     int32_t dfa_lazy_eligible;
     int32_t preds_total;
     int32_t literal_prefix_len;
+    int32_t _pad_;
+    void *lazy_cache;
     /* Inline tail (Phase 9f layout):
      *   prog[prog_len], classes[class_count],
      *   osty_re_name_entry name_table[name_count],
@@ -17039,32 +17068,106 @@ static int osty_re_lazy_dfa_match(osty_re_lazy_dfa *L, const char *text, int tex
     return 0;
 }
 
-/* Per-call lazy DFA pair shared by every regex entry function. Wraps
- * the (forward, backward) lazy-DFA setup/teardown that was previously
- * open-coded at every call site. NULL fields mean "no lazy DFA
- * available" (either the eager build covered this direction, or
- * lazy init failed mid-allocation — both are silent fallbacks). */
+/* Phase 9g — shared lazy DFA cache. Lives on the heap (one per regex,
+ * lazily allocated on first use); freed by the regex blob's GC
+ * destroy hook on collection. The cache is concurrency-correct via a
+ * single mutex held for the full duration of each entry call. Two
+ * threads matching against the same regex serialize on this mutex —
+ * acceptable because real workloads use a regex from one thread, and
+ * the alternative (per-call re-warmup) is much worse for the common
+ * `for line in lines { re.matches(line) }` shape. Threads that need
+ * parallelism on the same pattern compile independent regex copies. */
+typedef struct osty_re_lazy_cache {
+    osty_rt_mu_t mutex;
+    osty_re_lazy_dfa fwd;
+    osty_re_lazy_dfa back;
+    int fwd_inited;
+    int back_inited;
+    int fwd_failed;     /* sticky — don't retry init that's already failed */
+    int back_failed;
+} osty_re_lazy_cache;
+
+static void osty_re_lazy_cache_destroy(osty_re_lazy_cache *cache) {
+    if (cache == NULL) return;
+    if (cache->fwd_inited) osty_re_lazy_dfa_free(&cache->fwd);
+    if (cache->back_inited) osty_re_lazy_dfa_free(&cache->back);
+    osty_rt_mu_destroy(&cache->mutex);
+    free(cache);
+}
+
+/* Get-or-init the regex's shared lazy cache. CAS-based: the first
+ * thread to install a freshly-allocated cache wins; losers free their
+ * local copy and read the winner. Returns NULL only if allocation
+ * itself failed (caller falls through to NFA). */
+static osty_re_lazy_cache *osty_re_get_or_init_cache(osty_regex_compiled *re) {
+    osty_re_lazy_cache *cache = (osty_re_lazy_cache *)__atomic_load_n(&re->lazy_cache, __ATOMIC_ACQUIRE);
+    if (cache != NULL) return cache;
+    cache = (osty_re_lazy_cache *)calloc(1, sizeof(*cache));
+    if (cache == NULL) return NULL;
+    if (osty_rt_mu_init(&cache->mutex) != 0) {
+        free(cache);
+        return NULL;
+    }
+    void *expected = NULL;
+    if (__atomic_compare_exchange_n(&re->lazy_cache, &expected, cache,
+                                     false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        return cache;
+    }
+    /* Lost the race; clean up and use the winner. */
+    osty_rt_mu_destroy(&cache->mutex);
+    free(cache);
+    return (osty_re_lazy_cache *)expected;
+}
+
+/* Per-entry-call handle on the shared cache. `cache` is non-NULL iff
+ * we hold its mutex; the caller must call `osty_re_lazy_pair_free` to
+ * release it. `fwd` / `back` point into the cache when their direction
+ * is initialized, NULL otherwise (either the eager DFA covers this
+ * direction, lazy_eligible is false, or init failed sticky). */
 typedef struct osty_re_lazy_pair {
-    osty_re_lazy_dfa fwd_storage;
-    osty_re_lazy_dfa back_storage;
-    osty_re_lazy_dfa *fwd;   /* NULL when not initialized */
-    osty_re_lazy_dfa *back;  /* NULL when not initialized */
+    osty_re_lazy_cache *cache;
+    osty_re_lazy_dfa *fwd;
+    osty_re_lazy_dfa *back;
 } osty_re_lazy_pair;
 
-static void osty_re_lazy_pair_init(osty_re_lazy_pair *p, const osty_regex_compiled *re) {
+static void osty_re_lazy_pair_init(osty_re_lazy_pair *p, const osty_regex_compiled *re_const) {
+    p->cache = NULL;
     p->fwd = NULL;
     p->back = NULL;
-    if (re->dfa_state_count == 0 && re->dfa_lazy_eligible) {
-        if (osty_re_lazy_dfa_init(&p->fwd_storage, re, 1) == 0) p->fwd = &p->fwd_storage;
+    int need_fwd = re_const->dfa_state_count == 0 && re_const->dfa_lazy_eligible;
+    int need_back = re_const->dfa_back_state_count == 0 && re_const->dfa_lazy_eligible;
+    if (!need_fwd && !need_back) return;
+    /* The cache mutates the regex header (atomic CAS on lazy_cache),
+     * but the cache fields themselves stay logically immutable across
+     * threads under the mutex. Cast away const for the CAS path. */
+    osty_regex_compiled *re = (osty_regex_compiled *)re_const;
+    osty_re_lazy_cache *cache = osty_re_get_or_init_cache(re);
+    if (cache == NULL) return;
+    osty_rt_mu_lock(&cache->mutex);
+    p->cache = cache;
+    if (need_fwd && !cache->fwd_failed) {
+        if (!cache->fwd_inited) {
+            if (osty_re_lazy_dfa_init(&cache->fwd, re, 1) == 0) cache->fwd_inited = 1;
+            else cache->fwd_failed = 1;
+        }
+        if (cache->fwd_inited) p->fwd = &cache->fwd;
     }
-    if (re->dfa_back_state_count == 0 && re->dfa_lazy_eligible) {
-        if (osty_re_lazy_dfa_init(&p->back_storage, re, 0) == 0) p->back = &p->back_storage;
+    if (need_back && !cache->back_failed) {
+        if (!cache->back_inited) {
+            if (osty_re_lazy_dfa_init(&cache->back, re, 0) == 0) cache->back_inited = 1;
+            else cache->back_failed = 1;
+        }
+        if (cache->back_inited) p->back = &cache->back;
     }
 }
 
 static void osty_re_lazy_pair_free(osty_re_lazy_pair *p) {
-    if (p->fwd) { osty_re_lazy_dfa_free(p->fwd); p->fwd = NULL; }
-    if (p->back) { osty_re_lazy_dfa_free(p->back); p->back = NULL; }
+    if (p->cache != NULL) {
+        osty_rt_mu_unlock(&p->cache->mutex);
+        p->cache = NULL;
+    }
+    p->fwd = NULL;
+    p->back = NULL;
 }
 
 /* Helpers used by the entry functions to pick eager DFA vs lazy DFA vs
@@ -17264,6 +17367,22 @@ static int osty_re_match_from(const osty_regex_compiled *re, const char *text, i
     return vm.matched;
 }
 
+/* Phase 9g — GC destroy hook for compiled regex blobs. The blob's
+ * inline tail (prog/classes/DFA tables/preds/literal-prefix) is
+ * reclaimed by the surrounding allocator; we only need to free the
+ * shared lazy cache that lives on the malloc heap. Called by the
+ * GC when the regex header transitions to white in a sweep cycle —
+ * no managed pointers in the cache, so no extra trace work. */
+static void osty_rt_regex_destroy(void *payload) {
+    if (payload == NULL) return;
+    osty_regex_compiled *re = (osty_regex_compiled *)payload;
+    osty_re_lazy_cache *cache = (osty_re_lazy_cache *)__atomic_load_n(&re->lazy_cache, __ATOMIC_ACQUIRE);
+    if (cache != NULL) {
+        osty_re_lazy_cache_destroy(cache);
+        __atomic_store_n(&re->lazy_cache, (void *)NULL, __ATOMIC_RELEASE);
+    }
+}
+
 /* Public entry — compile a pattern. Returns NULL on parse error and
  * sets osty_rt_regex_last_error for the Result::Err lowering. */
 void *osty_rt_regex_compile(const char *pattern) {
@@ -17343,6 +17462,8 @@ void *osty_rt_regex_compile(const char *pattern) {
     probe.dfa_lazy_eligible = 0;
     probe.preds_total = -1;
     probe.literal_prefix_len = 0;
+    probe._pad_ = 0;
+    probe.lazy_cache = NULL;
     uint16_t *dfa_trans = NULL;
     uint8_t *dfa_match = NULL;
     uint16_t *dfa_back_trans = NULL;
@@ -17428,7 +17549,13 @@ void *osty_rt_regex_compile(const char *pattern) {
     size_t total = hdr + prog_bytes + class_bytes + name_table_bytes + name_data_bytes
         + dfa_match_bytes + dfa_trans_bytes + dfa_back_match_bytes + dfa_back_trans_bytes
         + preds_offsets_bytes + preds_flat_bytes + literal_prefix_bytes;
-    osty_regex_compiled *re = (osty_regex_compiled *)osty_gc_allocate_managed(total, OSTY_GC_KIND_GENERIC, "runtime.regex.compile", NULL, NULL);
+    /* Phase 9g — register the regex with the GENERIC_REGEX pattern so
+     * the destroy hook frees the lazy cache (held outside the GC blob)
+     * on collection. The destroy fn is forward-declared at the
+     * `osty_gc_generic_patterns[]` definition near the top of the
+     * file; passing it here causes `osty_gc_pattern_of` to resolve to
+     * OSTY_GC_GENERIC_REGEX. */
+    osty_regex_compiled *re = (osty_regex_compiled *)osty_gc_allocate_managed(total, OSTY_GC_KIND_GENERIC, "runtime.regex.compile", NULL, osty_rt_regex_destroy);
     re->prog = (osty_re_inst *)((char *)re + hdr);
     re->prog_len = ps.prog_len;
     re->classes = (osty_re_cclass *)((char *)re + hdr + prog_bytes);
@@ -17441,6 +17568,8 @@ void *osty_rt_regex_compile(const char *pattern) {
     re->dfa_lazy_eligible = dfa_lazy_eligible;
     re->preds_total = has_embedded_preds ? embedded_preds.total : -1;
     re->literal_prefix_len = literal_prefix_len;
+    re->_pad_ = 0;
+    re->lazy_cache = NULL;
     if (ps.prog_len > 0) memcpy(re->prog, ps.prog, prog_bytes);
     if (ps.class_count > 0) memcpy(re->classes, ps.classes, class_bytes);
     if (ps.name_count > 0) {
@@ -17510,12 +17639,15 @@ bool osty_rt_regex_matches(void *raw_re, const char *text) {
         return osty_re_dfa_match(re, src, len) ? true : false;
     }
     if (re->dfa_lazy_eligible) {
-        osty_re_lazy_dfa lfwd;
-        if (osty_re_lazy_dfa_init(&lfwd, re, 1) == 0) {
-            int r = osty_re_lazy_dfa_match(&lfwd, src, len);
-            osty_re_lazy_dfa_free(&lfwd);
+        osty_re_lazy_pair pair;
+        osty_re_lazy_pair_init(&pair, re);
+        if (pair.fwd != NULL) {
+            int r = osty_re_lazy_dfa_match(pair.fwd, src, len);
+            osty_re_lazy_pair_free(&pair);
             if (r >= 0) return r ? true : false;
             /* r == -1: lazy step failed, fall through to NFA. */
+        } else {
+            osty_re_lazy_pair_free(&pair);
         }
     }
     return osty_re_match_from(re, src, len, 0, NULL) ? true : false;
