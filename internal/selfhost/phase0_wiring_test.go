@@ -155,6 +155,11 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"osty_rt_list_get_i64",
 				"osty_rt_list_get_ptr",
 				"osty_rt_list_get_f64",
+				// Phase 1h — Struct + EnumVariant aggregates.
+				"mirEmitStructAggregate(",
+				"mirEmitEnumVariantAggregate(",
+				"MirAggStruct -> mirEmitStructAggregate",
+				"MirAggEnumVariant -> mirEmitEnumVariantAggregate",
 			},
 		},
 		{
