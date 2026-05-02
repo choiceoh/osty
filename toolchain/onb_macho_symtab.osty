@@ -1,0 +1,127 @@
+// onb_macho_symtab.osty — Mach-O `__LINKEDIT` symbol + string
+// table builders. Phase 8/Slice C of the ONB self-host port.
+// Mirror of `machoStringTable` and the symbol-emission loop in
+// `internal/onb/macho.go`.
+
+// === String table ==================================================
+
+// OnbMachoStringTable is the `__LINKEDIT` string pool. Mach-O
+// requires a leading NUL byte (offset 0 = empty string) so
+// `n_strx = 0` means "no name". Each subsequent entry is the
+// symbol name + a trailing NUL.
+pub struct OnbMachoStringTable {
+    pub bytes: List<Int>,
+}
+
+pub fn onbNewMachoStringTable() -> OnbMachoStringTable {
+    let mut bytes: List<Int> = []
+    bytes.push(0)
+    OnbMachoStringTable { bytes: bytes }
+}
+
+// onbMachoStringTableAdd appends `name + NUL` and returns the
+// offset where the name begins. Unlike the DWARF string table,
+// this one doesn't dedupe — Mach-O's `LC_SYMTAB` builder feeds
+// each symbol exactly once so there's no benefit to a lookup
+// map. Mirror of `machoStringTable.add`.
+pub fn onbMachoStringTableAdd(table: OnbMachoStringTable, name: String) -> Int {
+    let off = table.bytes.len()
+    for b in name.bytes() {
+        table.bytes.push(b.toInt())
+    }
+    table.bytes.push(0)
+    off
+}
+
+// === Symbol records =================================================
+//
+// `OnbMachoSymbol` is the in-memory shape the symbol-table
+// builder works with. The wire layout is delegated to
+// `onbMachoWriteNlist64` in `onb_macho_writer.osty`.
+//
+//   strx   : offset into the string table
+//   typeBits : N_TYPE | N_EXT bits
+//   sect   : 1-based section number (0 if undefined)
+//   desc   : library ordinal / flags (always 0 for ONB)
+//   value  : byte offset within the named section
+
+pub struct OnbMachoSymbol {
+    pub strx: Int,
+    pub typeBits: Int,
+    pub sect: Int,
+    pub desc: Int,
+    pub value: Int,
+}
+
+pub fn onbMachoSymbol(strx: Int, typeBits: Int, sect: Int, value: Int) -> OnbMachoSymbol {
+    OnbMachoSymbol { strx: strx, typeBits: typeBits, sect: sect, desc: 0, value: value }
+}
+
+// onbMachoSymbolLocalCString builds a symbol record for a `__cstring`
+// pool entry. typeBits = N_SECT (no N_EXT — internal label).
+pub fn onbMachoSymbolLocalCString(strx: Int, value: Int) -> OnbMachoSymbol {
+    onbMachoSymbol(strx, onbMachoNSect(), onbMachoCStringSectionNumber(), value)
+}
+
+// onbMachoSymbolExtDefFn builds a symbol record for an external
+// function definition (e.g. `_main`). typeBits = N_EXT | N_SECT.
+pub fn onbMachoSymbolExtDefFn(strx: Int, value: Int) -> OnbMachoSymbol {
+    onbMachoSymbol(strx, onbMachoNExt() | onbMachoNSect(), onbMachoTextSectionNumber(), value)
+}
+
+// onbMachoSymbolUndef builds a symbol record for an undefined
+// external (e.g. `_puts` — resolved at link time). typeBits = N_EXT
+// only, sect = 0.
+pub fn onbMachoSymbolUndef(strx: Int) -> OnbMachoSymbol {
+    onbMachoSymbol(strx, onbMachoNExt(), 0, 0)
+}
+
+// onbMachoSymbolLocalSection builds an internal anchor symbol like
+// `ltmp0` (start of __text). typeBits = N_SECT, no N_EXT.
+pub fn onbMachoSymbolLocalSection(strx: Int, sectionNumber: Int) -> OnbMachoSymbol {
+    onbMachoSymbol(strx, onbMachoNSect(), sectionNumber, 0)
+}
+
+// === Symbol table writer ==========================================
+
+// onbMachoWriteSymbols serialises a `List<OnbMachoSymbol>` into
+// the byte stream the `symoff` field of the symtab command points
+// at. Each symbol is `onbMachoNlist64Size()` bytes (16 for the
+// 64-bit ABI).
+pub fn onbMachoWriteSymbols(out: List<Int>, symbols: List<OnbMachoSymbol>) -> List<Int> {
+    let mut buf = out
+    for sym in symbols {
+        buf = onbMachoWriteNlist64(buf, sym.strx, sym.typeBits, sym.sect, sym.desc, sym.value)
+    }
+    buf
+}
+
+// === Reloc table writer (per-section) ==============================
+//
+// Reloc tables sit immediately after the section data, indexed by
+// `reloff` in each `section_64`. Each reloc is 8 bytes (4-byte
+// address + 4-byte packed flags).
+//
+// `onbMachoWriteRelocSection` walks a `List<OnbReloc>` along with
+// a parallel `List<Int>` of resolved symbol numbers (the index
+// into the symtab). This separation lets the upstream pass do
+// symbol resolution once, then hand the encoder a flat numeric
+// list.
+pub fn onbMachoWriteRelocSection(out: List<Int>, relocs: List<OnbReloc>, symbolNumbers: List<Int>) -> List<Int> {
+    let mut buf = out
+    let n = relocs.len()
+    if n != symbolNumbers.len() {
+        // Length mismatch → silently emit nothing; the wire format
+        // is invalid so callers must validate beforehand.
+        return buf
+    }
+    for i in 0..n {
+        let reloc = relocs[i]
+        let symNum = symbolNumbers[i]
+        // length code 2 = 4 bytes (one instruction word). All
+        // reloc kinds ONB emits are extern (target is a symbol,
+        // not a section).
+        buf = onbMachoWriteReloc(buf, reloc, symNum, 2, true)
+    }
+    buf
+}

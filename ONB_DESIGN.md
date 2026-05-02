@@ -37,6 +37,13 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 31 (ONB self-host port — Mach-O wire writer
+> Slices B+C, 2026-05-03)** — Mach-O 직렬화 layer 착륙. 신규 4
+> 파일 (constants 78 + writer 265 + symtab 127 + test 181) +
+> Go parity 125 = ~776줄. Header / segment / section / symtab /
+> dysymtab / reloc / nlist64 / strtab 모두 mirror. Go macho.go
+> wire-format 부분 100% 미러 달성.
+>
 > **Slice A2 Week 30 (ONB self-host port — Phase 6.3 DWARF info
 > section + string table, 2026-05-03)** — DWARF series 마무리.
 > `__debug_str` 테이블 + `__debug_info` section emitter (CU DIE +
