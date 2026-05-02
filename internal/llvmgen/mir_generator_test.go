@@ -1454,6 +1454,61 @@ func TestGenerateFromMIRPanicLowers(t *testing.T) {
 	}
 }
 
+// TestGenerateFromMIRDivergingBuiltinsLowerThroughPanic pins the
+// no-arg diverging prelude builtins (`unreachable() / todo() / abort()`,
+// LANG_SPEC §A.6). Each one synthesises a canonical message string and
+// reuses the panic emit path — same `osty_rt_panic` runtime decl,
+// same `call + unreachable` shape. Regression guard against a future
+// refactor that splits them onto separate intrinsics or symbols.
+func TestGenerateFromMIRDivergingBuiltinsLowerThroughPanic(t *testing.T) {
+	cases := []struct {
+		name    string
+		callee  string
+		message string
+	}{
+		{"unreachable", "unreachable", "entered unreachable code"},
+		{"todo", "todo", "not yet implemented"},
+		{"abort", "abort", "abort called"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			fn := &ir.FnDecl{
+				Name:   "boom",
+				Return: ir.TInt,
+				Body: &ir.Block{
+					Stmts: []ir.Stmt{
+						&ir.ExprStmt{X: &ir.CallExpr{
+							Callee: &ir.Ident{Name: tc.callee, Kind: ir.IdentBuiltin, T: &ir.FnType{Return: ir.TNever}},
+							T:      ir.TNever,
+						}},
+					},
+				},
+			}
+			hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+			m := buildMIRModuleFromHIR(t, hir)
+			out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/diverge_" + tc.name + ".osty"})
+			if err != nil {
+				t.Fatalf("GenerateFromMIR: %v", err)
+			}
+			got := string(out)
+			for _, want := range []string{
+				"c\"" + tc.message + "\\00\"",
+				"declare void @osty_rt_panic(ptr) noreturn cold",
+				"call void @osty_rt_panic(ptr @.str.0)",
+				"unreachable",
+			} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("missing %q in:\n%s", want, got)
+				}
+			}
+			if strings.Contains(got, "unresolved symbol "+tc.callee) {
+				t.Fatalf("output still contains unresolved-symbol diagnostic for %s:\n%s", tc.callee, got)
+			}
+		})
+	}
+}
+
 // TestGenerateFromMIROptionUnwrapLowers pins the MIR emitter for the four
 // Option<T> method intrinsics (isSome, isNone, unwrap, unwrapOr). The
 // underlying lowering keeps Option<T> as `{ i64 disc, i64 payload }`

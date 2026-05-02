@@ -36645,6 +36645,12 @@ func checkInstallPrelude(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "eprintln", owner: "", receiverTy: -1, retTy: tUnit(env.tys), paramNames: []string{"s"}, paramTys: []int{tString(env.tys)}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16074:5
 	checkRegisterFn(env, &CheckFnSig{name: "panic", owner: "", receiverTy: -1, retTy: tNever(env.tys), paramNames: []string{"message"}, paramTys: []int{tString(env.tys)}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// unreachable() / todo() / abort() — diverging prelude builtins
+	// (LANG_SPEC §A.6). Like panic, they return Never and skip defers.
+	// No source-level message arg; the runtime helper synthesizes one.
+	checkRegisterFn(env, &CheckFnSig{name: "unreachable", owner: "", receiverTy: -1, retTy: tNever(env.tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "todo", owner: "", receiverTy: -1, retTy: tNever(env.tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "abort", owner: "", receiverTy: -1, retTy: tNever(env.tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:16088:5
 	tUnit_ := tUnit(env.tys)
 	_ = tUnit_
@@ -54716,7 +54722,7 @@ func srSymbolFound(sym *SelfSymbol) bool {
 
 // Osty: /tmp/selfhost_merged.osty:28147:1
 func srIsBuiltinName(name string) bool {
-	return name == "true" || name == "false" || name == "None" || name == "Some" || name == "Ok" || name == "Err" || name == "print" || name == "println" || name == "eprint" || name == "eprintln" || name == "dbg" || name == "panic" || name == "spawn" || name == "parallel" || name == "taskGroup" || name == "thread" || name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Byte" || name == "Float" || name == "Float32" || name == "Float64" || name == "Bool" || name == "String" || name == "Bytes" || name == "Char" || name == "Never" || name == "RawPtr" || name == "List" || name == "Map" || name == "Set" || name == "Chan" || name == "Channel" || name == "Handle" || name == "TaskGroup" || name == "Option" || name == "Result" || name == "Error" || name == "Duration" || name == "Unit" || name == "Equal" || name == "Ordered" || name == "Hashable" || name == "ToString" || name == "Pod"
+	return name == "true" || name == "false" || name == "None" || name == "Some" || name == "Ok" || name == "Err" || name == "print" || name == "println" || name == "eprint" || name == "eprintln" || name == "dbg" || name == "panic" || name == "unreachable" || name == "todo" || name == "abort" || name == "spawn" || name == "parallel" || name == "taskGroup" || name == "thread" || name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Byte" || name == "Float" || name == "Float32" || name == "Float64" || name == "Bool" || name == "String" || name == "Bytes" || name == "Char" || name == "Never" || name == "RawPtr" || name == "List" || name == "Map" || name == "Set" || name == "Chan" || name == "Channel" || name == "Handle" || name == "TaskGroup" || name == "Option" || name == "Result" || name == "Error" || name == "Duration" || name == "Unit" || name == "Equal" || name == "Ordered" || name == "Hashable" || name == "ToString" || name == "Pod"
 }
 
 // Osty: /tmp/selfhost_merged.osty:28151:1

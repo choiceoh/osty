@@ -4169,6 +4169,19 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 			})
 			return
 		}
+		// `unreachable() / todo() / abort()` — diverging prelude builtins
+		// (LANG_SPEC §A.6) with no source-level message. Synthesize a
+		// canonical message string and route through `IntrinsicAbort` so
+		// backends share the panic emit path.
+		if msg, ok := divergingBuiltinMessage(id.Name); ok && len(c.Args) == 0 {
+			args := []Operand{&ConstOp{Const: &StringConst{Value: msg}, T: TString}}
+			bs.emit(&IntrinsicInstr{
+				Kind:  IntrinsicAbort,
+				Args:  args,
+				SpanV: c.SpanV,
+			})
+			return
+		}
 		if module, name, ok := loweredStdlibFreeSymbol(id.Name); ok {
 			switch module {
 			case "bytes":
@@ -4390,6 +4403,24 @@ func (bs *bodyState) builtinFreeCallIntrinsic(name string, args []ir.Arg) Intrin
 		return IntrinsicInvalid
 	}
 	return builtinFreeCallIntrinsicForReceiver(bs.recoveredTypeOf(args[0].Value), name)
+}
+
+// divergingBuiltinMessage returns the canonical runtime message for the
+// no-arg diverging prelude builtins (`unreachable() / todo() / abort()`,
+// LANG_SPEC §A.6). Each one routes through `IntrinsicAbort` with this
+// constant string so the LLVM backend can share `osty_rt_panic`.
+// `panic(msg)` does NOT use this — it carries its source-supplied
+// message through directly.
+func divergingBuiltinMessage(name string) (string, bool) {
+	switch name {
+	case "unreachable":
+		return "entered unreachable code", true
+	case "todo":
+		return "not yet implemented", true
+	case "abort":
+		return "abort called", true
+	}
+	return "", false
 }
 
 func builtinFreeCallIntrinsicForReceiver(receiverType Type, name string) IntrinsicKind {
