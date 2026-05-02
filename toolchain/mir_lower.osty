@@ -673,11 +673,11 @@ pub fn mirLowerFunction(
     out
 }
 
-/// mirLowerFunctionBody drives the real body lowering. Stage 4b wires
-/// simple statement kinds (Block / Let / ExprStmt / Return / Break /
-/// Continue / Defer); the rest (If / For / Match / ChanSend / full
-/// expression lowering) land in subsequent stages and fall through to
-/// `mirLowerNoteIssue` with a "Stage 4x TODO" message.
+/// mirLowerFunctionBody drives body lowering: every HirStmt kind
+/// (Block / Let / ExprStmt / Return / Break / Continue / Defer / If /
+/// For / Match / ChanSend / Assign) is wired through `mirLowerStmt`
+/// and every HirExpr kind reaches a real RValue / IntoPlace path
+/// through `mirLowerExprIntoPlaceImpl` and `mirLowerExprToRValue`.
 ///
 /// On exit, if the cursor block has no terminator the lowerer runs
 /// any outstanding defers and either emits Return (unit-returning
@@ -2056,9 +2056,8 @@ fn mirLowerIndexExprOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
 // ====================================================================
 
 /// mirLowerStmt dispatches on HirStmtKind and routes to the
-/// appropriate handler. Kinds not yet covered by Stage 4b/4c record
-/// a `"Stage 4c TODO: <kind>"` issue and fall through without
-/// emitting instructions.
+/// appropriate handler. The match is exhaustive (G17): every
+/// `HirStmtKind` lands on a handler.
 pub fn mirLowerStmt(bs: MirLowerBodyState, s: HirStmt) {
     match s.kind {
         HirStmtInvalid -> {},
@@ -3079,15 +3078,18 @@ pub fn mirLowerAssignStmt(bs: MirLowerBodyState, s: HirStmt) {
         mirLowerMultiAssign(bs, s)
         return
     }
-    // Single-target `=`.
+    // Single-target `=`. The checker rejects non-lvalue targets
+    // (Ident / Field / TupleAccess / Index are the only valid kinds —
+    // E0502 / E0503), so an invalid place here means we've reached MIR
+    // with a poisoned tree. Defensive: log + skip.
     let target = s.assignTargets[0]
     let dst = mirLowerExprToPlace(bs, target)
     if !mirLowerPlaceIsValid(dst) {
         mirLowerNoteIssue(
             bs.l,
-            "mir_lower Stage 4d TODO: assign target kind "
+            "mir_lower: invalid assign target kind "
                 + hirExprKindName(target.kind)
-                + " — skipped",
+                + " — skipped (checker bug?)",
         )
         return
     }
@@ -3098,9 +3100,11 @@ fn mirLowerCompoundAssign(bs: MirLowerBodyState, s: HirStmt) {
     let target = s.assignTargets[0]
     let dst = mirLowerExprToPlace(bs, target)
     if !mirLowerPlaceIsValid(dst) {
+        // Same defensive guard as mirLowerAssignStmt — checker
+        // already rejects non-lvalue compound-assign targets.
         mirLowerNoteIssue(
             bs.l,
-            "mir_lower Stage 4d TODO: compound assign target kind "
+            "mir_lower: invalid compound assign target kind "
                 + hirExprKindName(target.kind),
         )
         return
@@ -3144,9 +3148,11 @@ fn mirLowerMultiAssign(bs: MirLowerBodyState, s: HirStmt) {
     for target in s.assignTargets {
         let dst = mirLowerExprToPlace(bs, target)
         if !mirLowerPlaceIsValid(dst) {
+            // Defensive: checker rejects non-lvalue multi-assign
+            // targets, so an invalid place here implies poisoned HIR.
             mirLowerNoteIssue(
                 bs.l,
-                "mir_lower Stage 4d TODO: multi-assign target kind "
+                "mir_lower: invalid multi-assign target kind "
                     + hirExprKindName(target.kind),
             )
             i = i + 1
@@ -3176,9 +3182,8 @@ fn mirLowerMultiAssign(bs: MirLowerBodyState, s: HirStmt) {
 /// Place (projection-free or projected — the MIR builder accepts
 /// both).
 ///
-/// Stage 4d-1 implements the RValue path. Stage 4e fills in the
-/// control-flow / call kinds that this file currently routes to
-/// `mirLowerExprIntoPlaceStub`.
+/// Control-flow / call / aggregate-literal kinds short-circuit
+/// before that and emit their lowering directly into `dest`.
 pub fn mirLowerExprIntoPlace(
     bs: MirLowerBodyState,
     e: HirExpr,
@@ -3235,25 +3240,6 @@ fn mirLowerExprIntoPlaceRValue(
 ) {
     let rv = mirLowerExprToRValue(bs, e, destT)
     mirLowerEmitInstr(bs, mirAssignInstr(dest, rv, mirSpanFromHir(e.span)))
-}
-
-/// mirLowerExprIntoPlaceStub records a Stage 4e TODO issue and emits
-/// a unit-const Assign into `dest` so downstream consumers still see
-/// a well-formed Assign instruction (just with placeholder content).
-fn mirLowerExprIntoPlaceStub(
-    bs: MirLowerBodyState,
-    e: HirExpr,
-    dest: MirPlace,
-    destT: HirType,
-    kindLabel: String,
-) {
-    mirLowerNoteIssue(
-        bs.l,
-        "mir_lower Stage 4e TODO: " + kindLabel + " into place — unit-const placeholder",
-    )
-    let rv = mirRVUse(mirOperandConst(mirConstUnit()))
-    mirLowerEmitInstr(bs, mirAssignInstr(dest, rv, mirSpanFromHir(e.span)))
-    let _ = destT
 }
 
 // ====================================================================
@@ -4126,9 +4112,14 @@ fn mirLowerCallUnsupported(
     span: MirSpan,
     reason: String,
 ) {
+    // Mirrors Go's `noteIssue("unsupported call: callee %T")` in
+    // `lowerCallExprInto` — a real surface gap, not a planned TODO.
+    // Today this trips on non-Ident callees (parenthesized fn values,
+    // call-of-call) and on exotic ident kinds the dispatcher above
+    // doesn't enumerate (HirIdentInvalid, non-prelude builtins, etc.).
     mirLowerNoteIssue(
         bs.l,
-        "mir_lower Stage 4e-2 TODO: CallExpr — " + reason,
+        "mir_lower: unsupported CallExpr — " + reason,
     )
     mirLowerEmitInstr(
         bs,
@@ -5343,22 +5334,21 @@ fn mirLowerResultOkType(t: HirType) -> HirType {
 
 /// mirLowerMethodCallInto lowers `receiver.method(args)`.
 ///
-/// Stage 4e-3 scope:
+/// Dispatch order:
 ///   1. Use-alias qualified calls (`pkg.fn(...)` where receiver is a
 ///      package alias) → direct FnRef with the qualified symbol. No
 ///      synthetic `self` is inserted.
-///   2. User method via pass-1 method signature table → direct
+///   2. Concurrency / runtime / stdlib intrinsic fast paths (e.g.
+///      `ch.recv()`, `xs.len()`, `s.split(sep)`) → IntrinsicInstr via
+///      the dispatch tables below.
+///   3. User method via pass-1 method signature table → direct
 ///      CallInstr with mangled `TypeName__method` symbol + receiver
-///      as first arg. Signature-driven keyword/default arg ordering
-///      is deferred to Stage 4e-4 (positional only for now).
-///   3. Method with no signature → best-effort mangled symbol
+///      as first arg, with signature-driven keyword/default arg
+///      ordering.
+///   4. Method with no signature → best-effort mangled symbol
 ///      (`TypeName__method` via receiver type name), receiver as
-///      first arg. Unknown-type receivers fall through to a TODO.
-///
-/// Concurrency / runtime / stdlib intrinsic fast paths (e.g.
-/// `ch.recv()`, `xs.len()`, `s.split(sep)`) stay on the Stage 4e-4
-/// backlog — they need the full intrinsic-dispatch table and are
-/// orthogonal to the core dispatch shape this PR establishes.
+///      first arg. Unknown-type receivers note an issue and fall
+///      through to a unit-const placeholder.
 pub fn mirLowerMethodCallInto(
     bs: MirLowerBodyState,
     e: HirExpr,
@@ -5497,8 +5487,9 @@ fn mirLowerUseAliasIndexForReceiver(l: MirLowerer, recv: HirExpr) -> Int {
 /// a direct Fn call against the qualified symbol `pkg.fn` — no
 /// synthetic `self` argument is inserted.
 ///
-/// Concurrency / runtime intrinsic detection is deferred to Stage
-/// 4e-4; qualified calls land here as plain FnRef calls for now.
+/// Keyword args in qualified calls degrade to plain operand lowering
+/// (no per-position type hint) — matches production's
+/// `orderArgsByTypes` behavior for stdlib free-fn dispatch.
 fn mirLowerMethodCallQualified(
     bs: MirLowerBodyState,
     e: HirExpr,
@@ -5507,13 +5498,6 @@ fn mirLowerMethodCallQualified(
     destT: HirType,
     span: MirSpan,
 ) {
-    if mirLowerCallArgsHaveKeyword(e.methodArgs) {
-        mirLowerNoteIssue(
-            bs.l,
-            "mir_lower Stage 4e-4 TODO: keyword args in qualified call to \""
-                + use_.alias + "." + e.methodName + "\"",
-        )
-    }
     mirLowerEmitQualifiedCall(bs, e.methodArgs, use_, e.methodName, e.typ, dest, destT, span)
 }
 
@@ -6572,9 +6556,9 @@ pub fn mirLowerNextClosureSymbol(l: MirLowerer, parent: String) -> String {
 // terminators (Guard / Switch) + continues into sub-blocks.
 //
 // Matches Go's `matchContext` + `lowerTree` + `lowerSwitch` verbatim
-// in algorithmic structure. Stage 4f-1 covers Leaf / Fail / Bind /
-// Guard and Variant / Bool switches; Lit + Tuple switches record a
-// Stage 4f-2 TODO and fall through to an Unreachable terminator.
+// in algorithmic structure. All five decision-node kinds (Leaf /
+// Fail / Bind / Guard / Switch) and all four switch kinds (Variant /
+// Bool / Lit / Tuple) are wired through real lowering paths.
 
 /// MirLowerMatchContext carries the match-specific state that the
 /// decision-tree walker threads through each recursive call.
