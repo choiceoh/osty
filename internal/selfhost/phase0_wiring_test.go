@@ -44,6 +44,20 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"pub fn mirEmitModule(",
 				"pub fn mirEmitOpts(",
 				"pub struct MirEmitOpts ",
+				// Phase 1a — multi-block walk + terminator dispatch.
+				// The earlier Phase 0 emitter handled only a single
+				// `entry:` stub; Phase 1a iterates `func.blocks` and
+				// translates each MirTermKind. Loss of either the
+				// per-block iteration or the terminator dispatch
+				// would silently fall back to the old stub and
+				// produce malformed IR for any function with > 1
+				// block (loops, branches, …).
+				"for block in func.blocks {",
+				"mirEmitTerminatorLine(",
+				"mirEmitBlockTargetLabel(",
+				"MirTermReturn ->",
+				"MirTermGoto ->",
+				"MirTermUnreachable ->",
 			},
 		},
 		{

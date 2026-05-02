@@ -18899,17 +18899,82 @@ pub fn mirEmitModule(m: MirModule, opts: MirEmitOpts) -> String {
     out
 }
 
-/// mirEmitFunctionStub emits a structurally-valid `define` block with
-/// a single `entry:` label and a return stub. Phase 1 will replace
-/// the stub with real per-block instruction lowering driven by
-/// `func.blocks` + `func.locals`; today the stub keeps the IR verifier
-/// happy while the body-lowering helpers come online incrementally.
+/// mirEmitFunctionStub emits a structurally-valid `define` block.
+///
+/// Phase 1a (this iteration): walks `func.blocks`, emits each block's
+/// label (`entry:` for the entry block, `bb<N>:` for the rest), then
+/// emits the block's terminator. Instruction bodies stay empty —
+/// per-instruction emission lands in Phase 1b. Block label names use
+/// `mirBlockLabelName` so they round-trip through the same scheme the
+/// per-instruction emitters will use later.
+///
+/// Terminator coverage today:
+///   - `MirTermReturn` → `ret void` (or `ret <ty> 0` stub; Phase 1b
+///     loads the actual returnLocal value).
+///   - `MirTermGoto` → `br label %<targetName>`.
+///   - `MirTermUnreachable` → `unreachable`.
+///   - `MirTermBranch` / `MirTermSwitchInt` / `MirTermInvalid` →
+///     `unreachable` with a TODO comment so the verifier flags Phase
+///     1c-and-beyond emissions instead of silently producing a
+///     malformed `br`.
+///
+/// When `func.blocks` is empty (e.g. a synthetic decl that never got
+/// a body), falls back to the Phase 0 single-`entry:`+stub form.
 fn mirEmitFunctionStub(func: MirFunction) -> String {
     let paramListJoined = mirEmitParamListJoined(func)
     let mut out = mirFunctionDefineHeader("", func.returnType, func.name, paramListJoined, "")
-    out = out + "entry:\n"
-    out = out + mirEmitReturnStub(func.returnType)
+    if func.blocks.len() == 0 {
+        out = out + "entry:\n"
+        out = out + mirEmitReturnStub(func.returnType)
+        return out + mirFunctionDefineFooter()
+    }
+    for block in func.blocks {
+        let isEntry = block.id == func.entry
+        let label = mirBlockLabelName(isEntry, mirGenIntToString(block.id))
+        out = out + mirBlockHeaderLine(label)
+        out = out + mirEmitTerminatorLine(func, block.term, block.hasTerm)
+    }
     out + mirFunctionDefineFooter()
+}
+
+/// mirEmitTerminatorLine renders one MIR terminator as an LLVM
+/// terminator instruction. Phase 1a covers the operand-free shapes
+/// (Return-void, Goto, Unreachable) and stubs the rest with
+/// `unreachable + ; TODO Phase 1b` so the verifier surfaces the gap
+/// rather than emitting malformed IR.
+///
+/// The `MirTermReturn` case ignores `func.returnLocal` for now — Phase
+/// 1b will load the slot and emit `ret <ty> %v`. Today non-void
+/// returns become `ret <ty> 0` (or zero-equivalent), which produces
+/// valid IR but leaks no actual return value into the caller. Trivial
+/// `fn main() {}` and `fn f() -> Int { 0 }` both compile structurally;
+/// only the latter behaves incorrectly at runtime.
+fn mirEmitTerminatorLine(func: MirFunction, term: MirTerm, hasTerm: Bool) -> String {
+    if hasTerm == false {
+        return "  unreachable ; TODO Phase 1b: missing terminator\n"
+    }
+    match term.kind {
+        MirTermReturn -> mirEmitReturnStub(func.returnType),
+        MirTermGoto -> mirBrUncondLine(mirEmitBlockTargetLabel(func, term.target)),
+        MirTermUnreachable -> mirUnreachableLine(),
+        MirTermBranch -> "  unreachable ; TODO Phase 1b: branch terminator needs operand resolution\n",
+        MirTermSwitchInt -> "  unreachable ; TODO Phase 1c: switch terminator\n",
+        MirTermInvalid -> "  unreachable ; TODO: invalid terminator (lowering bug)\n",
+    }
+}
+
+/// mirEmitBlockTargetLabel resolves a MIR block-ID target into its
+/// LLVM label name by scanning `func.blocks` for a matching `id`.
+/// Falls back to `bb<targetID>` when no block matches (defensive —
+/// keeps the IR syntactically valid even on a stale terminator).
+fn mirEmitBlockTargetLabel(func: MirFunction, target: Int) -> String {
+    for block in func.blocks {
+        if block.id == target {
+            let isEntry = block.id == func.entry
+            return mirBlockLabelName(isEntry, mirGenIntToString(block.id))
+        }
+    }
+    "bb" + mirGenIntToString(target)
 }
 
 /// mirEmitParamListJoined renders the comma-separated `<ty> %p<i>`
