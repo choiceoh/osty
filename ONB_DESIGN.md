@@ -37,6 +37,84 @@
 > dead-store는 자동 elide (slot 할당이 read 기준). Linear scan RA 도입은
 > 후속 의제로 유예.
 >
+> **Slice A2 Week 29 (ONB self-host port — Phase 6.1 + 6.2 LEB128 +
+> DWARF abbrev + line program, 2026-05-03)** — DWARF 이미터 진입.
+> 1k 라인 슬라이스로 LEB128 byte-stream 인코더, DWARF 4 상수 (tags /
+> attrs / forms / opcodes / ATE / DW_OP / abbrev codes), 7개 abbrev
+> 코드 (CU / subprogram / variable / base type / pointer type /
+> structure type / member) 의 abbreviation 테이블, 그리고 완전한 line
+> program 인코더 (header + body 상태 머신 + extended opcodes) 가
+> Osty 측에 착륙.
+>
+> 신규 Osty 파일:
+>
+> - `toolchain/onb_leb128.osty` (89줄): `onbWriteULEB128`,
+>   `onbWriteSLEB128`, `onbWriteULEB128Pair`. Osty의 `for ... in
+>   range`로 16-iteration 고정 chunking 구현 (osty엔 `break`/
+>   `continue`가 expression-position에서 깔끔하지 않으므로
+>   `done` flag로 skip-rest invariant)
+>
+> - `toolchain/onb_dwarf_constants.osty` (128줄): `onbDwarfVersion`,
+>   `onbDwarfTagCompileUnit`, `onbDwarfAtName`, `onbDwarfFormStrp`,
+>   `onbDwarfATESigned`, `onbDwarfOpFbreg`, `onbDwarfAbbrevSubprogram`
+>   등 ~50개 상수를 `pub fn () -> Int`로 노출
+>
+> - `toolchain/onb_dwarf_abbrev.osty` (123줄): `onbEmitDwarfAbbrev()
+>   -> List<Int>` — 7 abbreviation entries + table terminator를
+>   ULEB128 인코딩으로 byte stream 생성
+>
+> - `toolchain/onb_dwarf_line.osty` (318줄):
+>   - `OnbDwarfLineFile` / `OnbDwarfLineRow` / `OnbDwarfLineProgram`
+>     데이터 타입
+>   - `onbWriteU8/U16LE/U32LE/U64LE` byte writers (Osty의 `List<Int>`
+>     누적 패턴, Go의 `bytes.Buffer + binary.Write` 미러)
+>   - `onbWriteCString` (NUL-terminated)
+>   - `onbDwarfStdOpcodeLengths` 12바이트 standard opcode 길이 테이블
+>   - `writeDwarfExtended{SetAddress, EndSequence}` extended op 헬퍼
+>   - `onbEncodeDwarfLineHeader(prog)` — DWARF 4 §6.2.4 헤더 layout
+>   - `onbEncodeDwarfLineBody(prog)` — 행 스테이트 머신 워클 (file
+>     /line/column/PC 변경 시 적절한 standard op + ULEB128/SLEB128
+>     인자 emit). 첫 행은 extended set_address로 PC 초기화. 행이
+>     PC 순서 어긋나면 `outcome.ok = false`. 마지막에 textSize까지
+>     advance + extended end_sequence
+>   - `onbEmitDwarfLine(prog)` — unit_length + version +
+>     header_length + header + body 합성. `setAddressOffset` 반환
+>     (Mach-O reloc target)
+>
+> - `toolchain/onb_dwarf_test.osty` (181줄): ULEB128 단일/다중 바이트
+>   경계, SLEB128 양수/음수 경계, abbreviation 첫 3바이트 +
+>   end-of-table 마커, line program 빈 행 well-formed 검증, 헤더
+>   metadata block 6바이트 일치
+>
+> - `internal/onb/onb_dwarf_parity_test.go` (131줄):
+>   - `TestDwarfLEB128ParityVsOstyTable` — ULEB/SLEB 12 케이스
+>   - `TestDwarfLineParityVsOstyTable` — line section header 메타데이터
+>     6바이트 (minInstLen / maxOpsPerInst / defaultIsStmt /
+>     lineBaseByte / lineRange / opcodeBase) + version 일치
+>   - `TestDwarfAbbrevParityVsOstyTable` — abbreviation 테이블 첫
+>     3바이트 (compile-unit code + tag + has-children) + 표 종료자
+>     + 최소 사이즈
+>
+> 검증:
+> - `osty check toolchain` exit 0
+> - `go test ./internal/onb -run TestDwarf` — 4 case 모두 통과
+> - `go test ./internal/onb ./internal/backend -short` — 0 회귀
+>
+> Phase 6 시리즈 진행도:
+> - 6.1 (LEB128) ✅
+> - 6.2 (line program) ✅ (이번 슬라이스)
+> - 6.3 (CU DIE + subprogram DIE + base type / pointer type /
+>   structure type DIE 이미터) — 다음 슬라이스
+>
+> 누적 Osty self-host LOC: 3,774 (이전 2,804 + 970 이번 슬라이스).
+>
+> **다음 phase 후보**:
+> - Phase 6.3 — `__debug_info` section emitter, `__debug_str` 테이블,
+>   per-function subprogram DIE + variable DIE generation. DWARF
+>   시리즈 마무리. ~700줄 예상.
+> - Phase 3a — MIR Type 의존 ABI predicates 첫 진입. 새로운 표면
+>   (toolchain/mir.osty의 Type enum 소비) — 별도 디자인 필요.
+>
 > **Slice A2 Week 28 (ONB self-host port — Phase 2c + 2e symbol
 > reloc + container types + function emitter, 2026-05-03)** — 1k+
 > 줄 슬라이스. adrp+add + bl 심볼 reloc 모델 + Function/Block/Program
