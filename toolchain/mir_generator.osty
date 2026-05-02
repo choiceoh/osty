@@ -18951,15 +18951,92 @@ fn mirEmitFunctionStub(func: MirFunction) -> String {
 /// only the latter behaves incorrectly at runtime.
 fn mirEmitTerminatorLine(func: MirFunction, term: MirTerm, hasTerm: Bool) -> String {
     if hasTerm == false {
-        return "  unreachable ; TODO Phase 1b: missing terminator\n"
+        return "  unreachable ; TODO Phase 1c: missing terminator\n"
     }
     match term.kind {
-        MirTermReturn -> mirEmitReturnStub(func.returnType),
+        MirTermReturn -> mirEmitReturnTerminator(func),
         MirTermGoto -> mirBrUncondLine(mirEmitBlockTargetLabel(func, term.target)),
         MirTermUnreachable -> mirUnreachableLine(),
-        MirTermBranch -> "  unreachable ; TODO Phase 1b: branch terminator needs operand resolution\n",
+        MirTermBranch -> mirEmitBranchTerminator(func, term),
         MirTermSwitchInt -> "  unreachable ; TODO Phase 1c: switch terminator\n",
         MirTermInvalid -> "  unreachable ; TODO: invalid terminator (lowering bug)\n",
+    }
+}
+
+/// mirEmitReturnTerminator renders the `ret` instruction. Phase 1b
+/// uses the function's `returnLocal` register name when the return
+/// type is non-void, replacing the Phase 1a literal-zero stub with a
+/// real `%v<returnLocal>` reference. The producer side (Phase 1c
+/// instruction emit) will define the register; until then the
+/// reference is dangling but the IR text is structurally correct.
+/// Void-returning functions still emit `ret void` directly.
+fn mirEmitReturnTerminator(func: MirFunction) -> String {
+    if func.returnType == "void" {
+        return mirRetVoidLine()
+    }
+    if func.returnLocal < 0 {
+        return mirEmitReturnStub(func.returnType)
+    }
+    mirRetLine(func.returnType, mirEmitLocalRegName(func.returnLocal))
+}
+
+/// mirEmitBranchTerminator renders the conditional branch shape
+/// `br i1 %cond, label %then, label %else`. The cond operand is
+/// resolved through `mirEmitOperand`; targets through
+/// `mirEmitBlockTargetLabel`. When the cond resolves to a stub
+/// (uncovered operand kind), the verifier surfaces the dangling
+/// reference rather than the emitter producing a malformed `br`.
+fn mirEmitBranchTerminator(func: MirFunction, term: MirTerm) -> String {
+    let cond = mirEmitOperand(term.cond)
+    let thenLabel = mirEmitBlockTargetLabel(func, term.thenBlock)
+    let elseLabel = mirEmitBlockTargetLabel(func, term.elseBlock)
+    "  br i1 " + cond + ", label %" + thenLabel + ", label %" + elseLabel + "\n"
+}
+
+/// mirEmitLocalRegName returns the LLVM SSA register name for a MIR
+/// local index. The `%v<id>` scheme matches what the future
+/// instruction emitter (Phase 1c) will use when defining locals,
+/// so terminator references resolve to the producer once both sides
+/// land.
+fn mirEmitLocalRegName(local: Int) -> String {
+    "%v" + mirGenIntToString(local)
+}
+
+/// mirEmitOperand renders a MirOperand as an LLVM operand text
+/// fragment (no leading type, no trailing whitespace). Coverage
+/// today: Use/Move place reads (no projections), and Const Int /
+/// Bool / Char / Byte / Float / Null. Projection chains, string
+/// constants, and function-symbol constants are stubbed at `0` /
+/// `null` with a TODO so Phase 1c-and-beyond hits a verifier
+/// dangling-reference rather than a silently-wrong literal.
+pub fn mirEmitOperand(op: MirOperand) -> String {
+    match op.kind {
+        MirOpInvalid -> "0",
+        MirOpCopy -> mirEmitOperandPlace(op.place),
+        MirOpMove -> mirEmitOperandPlace(op.place),
+        MirOpConst -> mirEmitConstOperand(op.const),
+    }
+}
+
+fn mirEmitOperandPlace(place: MirPlace) -> String {
+    if mirPlaceHasProjections(place) {
+        return "0"
+    }
+    mirEmitLocalRegName(place.local)
+}
+
+fn mirEmitConstOperand(c: MirConst) -> String {
+    match c.kind {
+        MirConstInvalid -> "0",
+        MirConstInt -> mirGenIntToString(c.intValue),
+        MirConstBool -> if c.boolValue { "1" } else { "0" },
+        MirConstFloat -> if c.floatText == "" { "0.0" } else { c.floatText },
+        MirConstChar -> mirGenIntToString(c.charValue),
+        MirConstByte -> mirGenIntToString(c.byteValue),
+        MirConstUnit -> "0",
+        MirConstNull -> "null",
+        MirConstString -> "null",
+        MirConstFn -> if c.fnSymbol == "" { "null" } else { "@" + c.fnSymbol },
     }
 }
 

@@ -58,6 +58,17 @@ func TestPhase0SelfHostWiringExists(t *testing.T) {
 				"MirTermReturn ->",
 				"MirTermGoto ->",
 				"MirTermUnreachable ->",
+				// Phase 1b — operand resolution + real terminator
+				// values. `MirTermReturn` now references
+				// `func.returnLocal` via `%v<id>`, and `MirTermBranch`
+				// reads its cond operand. Loss of these would silently
+				// regress to the literal-zero / unreachable stubs.
+				"pub fn mirEmitOperand(",
+				"mirEmitReturnTerminator(",
+				"mirEmitBranchTerminator(",
+				"mirEmitLocalRegName(",
+				"MirOpConst -> mirEmitConstOperand",
+				"MirConstInt -> mirGenIntToString",
 			},
 		},
 		{
