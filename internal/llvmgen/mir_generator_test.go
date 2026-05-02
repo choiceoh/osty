@@ -1509,6 +1509,88 @@ func TestGenerateFromMIRDivergingBuiltinsLowerThroughPanic(t *testing.T) {
 	}
 }
 
+// TestGenerateFromMIRForInRangePseudoBindingCharLowers pins the
+// `Range<Char>` extension of the pseudo-binding fast path. The
+// checker accepts `..` over Char (codepoints), and the lowerer
+// reuses the same Int counter loop the inline `for c in 'a'..='z'`
+// shape produces. Both ends are lowered into Int locals (Char
+// codepoints widen via the existing `lowerExprInto` path), so the
+// loop body sees the counter as Int — same as the existing
+// `lowerForRange` behavior for inline char ranges.
+func TestGenerateFromMIRForInRangePseudoBindingCharLowers(t *testing.T) {
+	rangeCharT := &ir.NamedType{Name: "Range", Args: []ir.Type{ir.TChar}}
+	// fn check() -> Int {
+	//     let r = 'a'..='c'
+	//     let mut count = 0
+	//     for _c in r { count = count + 1 }
+	//     count
+	// }
+	body := &ir.Block{
+		Stmts: []ir.Stmt{
+			&ir.LetStmt{
+				Name: "r",
+				Type: rangeCharT,
+				Value: &ir.RangeLit{
+					Start:     &ir.CharLit{Value: 'a'},
+					End:       &ir.CharLit{Value: 'c'},
+					Inclusive: true,
+					T:         rangeCharT,
+				},
+			},
+			&ir.LetStmt{
+				Name:  "count",
+				Type:  ir.TInt,
+				Mut:   true,
+				Value: &ir.IntLit{Text: "0", T: ir.TInt},
+			},
+			&ir.ForStmt{
+				Kind: ir.ForIn,
+				Var:  "_c",
+				Iter: &ir.Ident{Name: "r", Kind: ir.IdentLocal, T: rangeCharT},
+				Body: &ir.Block{
+					Stmts: []ir.Stmt{
+						&ir.AssignStmt{
+							Op:      ir.AssignEq,
+							Targets: []ir.Expr{&ir.Ident{Name: "count", Kind: ir.IdentLocal, T: ir.TInt}},
+							Value: &ir.BinaryExpr{
+								Op:    ir.BinAdd,
+								Left:  &ir.Ident{Name: "count", Kind: ir.IdentLocal, T: ir.TInt},
+								Right: &ir.IntLit{Text: "1", T: ir.TInt},
+								T:     ir.TInt,
+							},
+						},
+					},
+				},
+			},
+		},
+		Result: &ir.Ident{Name: "count", Kind: ir.IdentLocal, T: ir.TInt},
+	}
+	fn := &ir.FnDecl{Name: "check", Return: ir.TInt, Body: body}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/range_char.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	if strings.Contains(got, "range literal in value position") {
+		t.Fatalf("emitter still surfaces the range-in-value-position diagnostic:\n%s", got)
+	}
+	if strings.Contains(got, "for-in over non-List/Map/Channel iterable") {
+		t.Fatalf("emitter still surfaces the for-in-over-Range fallback:\n%s", got)
+	}
+	for _, want := range []string{
+		"define i64 @check()",
+		"icmp sle i64", // inclusive bound
+		"add i64",
+		"ret i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in:\n%s", want, got)
+		}
+	}
+}
+
 // TestGenerateFromMIRForInRangePseudoBindingLowers pins the
 // `let r = 0..n; for i in r { ... }` Range-pseudo-binding fast path.
 // Without it, RangeLit in value position used to surface as

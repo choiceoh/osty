@@ -848,7 +848,7 @@ func (bs *bodyState) lowerLet(let *ir.LetStmt) {
 		// (and only the for-in lowerer) reads back through that map —
 		// other uses of `r` will surface as the existing
 		// "range literal in value position" diagnostic, unchanged.
-		if rng, ok := let.Value.(*ir.RangeLit); ok && isRangeIntType(t) && rng.Start != nil && rng.End != nil {
+		if rng, ok := let.Value.(*ir.RangeLit); ok && isRangeIntOrCharType(t) && rng.Start != nil && rng.End != nil {
 			startLocal := bs.newLocal("_rstart", TInt, false, let.SpanV)
 			bs.emit(&StorageLiveInstr{Local: startLocal, SpanV: let.SpanV})
 			bs.lowerExprInto(rng.Start, startLocal, TInt)
@@ -876,18 +876,23 @@ func (bs *bodyState) lowerLet(let *ir.LetStmt) {
 	}
 }
 
-// isRangeIntType reports whether `t` is a `Range<Int>` (the only
-// instantiation the pseudo-binding fast path supports today).
-// Other Range<T> shapes still hit the standard "range literal in
-// value position" fallback until Range becomes a first-class MIR
-// value.
-func isRangeIntType(t Type) bool {
+// isRangeIntOrCharType reports whether `t` is a `Range<Int>` or
+// `Range<Char>`. The checker only accepts `..` over Int and Char
+// today, so those are the two instantiations the pseudo-binding
+// fast path can encounter. Both flow through the same Int counter
+// loop (Char ranges convert codepoints to Int at construction —
+// matches the behavior of the inline `for c in 'a'..='z'` shape
+// that `lowerForRange` already produces).
+func isRangeIntOrCharType(t Type) bool {
 	nt, ok := t.(*ir.NamedType)
 	if !ok || nt.Name != "Range" || len(nt.Args) != 1 {
 		return false
 	}
 	pt, ok := nt.Args[0].(*ir.PrimType)
-	return ok && pt.Kind == ir.PrimInt
+	if !ok {
+		return false
+	}
+	return pt.Kind == ir.PrimInt || pt.Kind == ir.PrimChar
 }
 
 func isPoisonType(t Type) bool {
