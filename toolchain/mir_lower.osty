@@ -1709,7 +1709,7 @@ fn mirLowerCallExprRecoveredType(bs: MirLowerBodyState, e: HirExpr) -> HirType {
     }
     if callee.kind == HirExprField && callee.fieldTarget.len() > 0 {
         let recv = callee.fieldTarget[0]
-        let useIdx = mirLowerUseAliasIndexForReceiver(bs.l, recv)
+        let useIdx = mirLowerBodyUseAliasIndexForReceiver(bs, recv)
         if useIdx >= 0 {
             let use_ = bs.l.useAliases[useIdx]
             let rt = mirLowerStdlibStringFreeFnReturnType(
@@ -3988,7 +3988,7 @@ fn mirLowerCallExprQualifiedIntrinsic(
     destT: HirType,
     span: MirSpan,
 ) -> Bool {
-    let nested = mirLowerUseAliasFieldPath(bs.l, callee)
+    let nested = mirLowerBodyUseAliasFieldPath(bs, callee)
     if nested.ok {
         let use_ = bs.l.useAliases[nested.useIdx]
         if mirLowerStdlibNestedNamespacePath(use_, nested.parts) {
@@ -4010,7 +4010,7 @@ fn mirLowerCallExprQualifiedIntrinsic(
         return false
     }
     let recv = callee.fieldTarget[0]
-    let useIdx = mirLowerUseAliasIndexForReceiver(bs.l, recv)
+    let useIdx = mirLowerBodyUseAliasIndexForReceiver(bs, recv)
     if useIdx < 0 {
         return false
     }
@@ -5585,7 +5585,10 @@ pub fn mirLowerMethodCallInto(
     // 1. Use-alias qualifier fast path. Before routing through a
     //    direct FnRef, probe the intrinsic tables: `thread.spawn(f)`,
     //    `std.strings.split(s, ",")`, `std.runtime.raw.null()`.
-    let useIdx = mirLowerUseAliasIndexForReceiver(bs.l, recv)
+    //    Use the body-aware variant so a local binding shadows the
+    //    package alias (avoids lowering `bytes.len()` on a List<Int>
+    //    local through the std.bytes intrinsic table).
+    let useIdx = mirLowerBodyUseAliasIndexForReceiver(bs, recv)
     if useIdx >= 0 {
         let use_ = bs.l.useAliases[useIdx]
         let qualifier = mirLowerUseQualifier(use_)
@@ -5624,7 +5627,7 @@ pub fn mirLowerMethodCallInto(
         mirLowerMethodCallQualified(bs, e, use_, dest, destT, span)
         return
     }
-    let nested = mirLowerUseAliasFieldPath(bs.l, recv)
+    let nested = mirLowerBodyUseAliasFieldPath(bs, recv)
     if nested.ok {
         let use_ = bs.l.useAliases[nested.useIdx]
         let mut parts = nested.parts
@@ -5697,6 +5700,51 @@ fn mirLowerUseAliasIndexForReceiver(l: MirLowerer, recv: HirExpr) -> Int {
         HirExprIdent -> mirLowerLookupUseAlias(l, recv.identName),
         _ -> -1,
     }
+}
+
+/// mirLowerBodyUseAliasIndexForReceiver is the body-aware variant of
+/// mirLowerUseAliasIndexForReceiver. When a local binding shadows a
+/// package alias (e.g. `let mut bytes: List<Int> = []` in a function
+/// that also imports `std.bytes as bytes`), the receiver is the local
+/// value, not the package qualifier — routing through the alias path
+/// would emit a stdlib-bytes intrinsic with the wrong arg shape. Skip
+/// the alias lookup whenever a local of the same name exists in any
+/// enclosing body scope. Mirrors Go's `bodyState.useAliasFor`.
+fn mirLowerBodyUseAliasIndexForReceiver(bs: MirLowerBodyState, recv: HirExpr) -> Int {
+    if recv.kind != HirExprIdent {
+        return -1
+    }
+    if recv.identName == "" {
+        return -1
+    }
+    if mirLowerLookupName(bs, recv.identName) >= 0 {
+        return -1
+    }
+    mirLowerLookupUseAlias(bs.l, recv.identName)
+}
+
+/// mirLowerBodyUseAliasFieldPath mirrors mirLowerUseAliasFieldPath
+/// with the same body-scope shadowing escape: the leaf ident is
+/// rejected as a use alias whenever a local already owns that name.
+fn mirLowerBodyUseAliasFieldPath(bs: MirLowerBodyState, e: HirExpr) -> MirLowerUseAliasFieldPath {
+    if e.kind != HirExprField || e.fieldTarget.len() == 0 {
+        return mirLowerUseAliasFieldPathInvalid()
+    }
+    let recv = e.fieldTarget[0]
+    let mut nested = mirLowerBodyUseAliasFieldPath(bs, recv)
+    if nested.ok {
+        nested.parts.push(e.fieldName)
+        return nested
+    }
+    let useIdx = mirLowerBodyUseAliasIndexForReceiver(bs, recv)
+    if useIdx >= 0 {
+        return MirLowerUseAliasFieldPath {
+            useIdx,
+            parts: [e.fieldName],
+            ok: true,
+        }
+    }
+    mirLowerUseAliasFieldPathInvalid()
 }
 
 /// mirLowerMethodCallQualified handles `pkg.fn(args)` shaped as a

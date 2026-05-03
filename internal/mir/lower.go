@@ -2687,7 +2687,7 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 		// (std.strings.*) which is the dispatch path the MIR emitter
 		// already uses for these calls at lowerCallExprInto.
 		if fx, ok := x.Callee.(*ir.FieldExpr); ok {
-			if use := bs.l.useAliasFor(fx.X); use != nil {
+			if use := bs.useAliasFor(fx.X); use != nil {
 				if rt := stdlibFreeFnReturnType(qualifierOf(use), fx.Name); rt != nil {
 					return rt
 				}
@@ -2732,7 +2732,7 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 		// as MethodCall{Receiver: Ident("strings"), Name: "join"}. The
 		// receiver is a use alias, not a value, so look up via the alias
 		// table instead of x.Receiver.Type().
-		if use := bs.l.useAliasFor(x.Receiver); use != nil {
+		if use := bs.useAliasFor(x.Receiver); use != nil {
 			if rt := stdlibFreeFnReturnType(qualifierOf(use), x.Name); rt != nil {
 				return rt
 			}
@@ -4456,33 +4456,38 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 	}
 	if fx, ok := c.Callee.(*ir.FieldExpr); ok {
 		if id, ok := fx.X.(*ir.Ident); ok && id != nil {
-			switch id.Name {
-			case "Bytes", "bytes":
-				if kind := stdlibBytesFreeFnToIntrinsic("bytes", fx.Name); kind != IntrinsicInvalid {
-					bs.emitBytesFreeFnIntrinsic(kind, c.Args, dest, destT, c.SpanV)
+			// Same shadowing escape as `lowerMethodCallInto`: don't
+			// route `bytes.foo(...)` (etc.) through the stdlib-module
+			// fast path when `bytes` names a local binding.
+			if _, shadowed := bs.lookup(id.Name); !shadowed {
+				switch id.Name {
+				case "Bytes", "bytes":
+					if kind := stdlibBytesFreeFnToIntrinsic("bytes", fx.Name); kind != IntrinsicInvalid {
+						bs.emitBytesFreeFnIntrinsic(kind, c.Args, dest, destT, c.SpanV)
+						return
+					}
+				case "String", "strings":
+					if kind := stdlibStringFreeFnToIntrinsic("strings", fx.Name); kind != IntrinsicInvalid {
+						bs.emitStringFreeFnIntrinsic(kind, c.Args, dest, destT, c.SpanV)
+						return
+					}
+				case "Error", "error":
+					args := bs.orderArgs(c.Args, nil)
+					destPtr := dest
+					if destPtr != nil && isUnit(destT) {
+						destPtr = nil
+					}
+					bs.emit(&CallInstr{
+						Dest:   destPtr,
+						Callee: &FnRef{Symbol: "std.error." + fx.Name, Type: c.T},
+						Args:   args,
+						SpanV:  c.SpanV,
+					})
 					return
 				}
-			case "String", "strings":
-				if kind := stdlibStringFreeFnToIntrinsic("strings", fx.Name); kind != IntrinsicInvalid {
-					bs.emitStringFreeFnIntrinsic(kind, c.Args, dest, destT, c.SpanV)
-					return
-				}
-			case "Error", "error":
-				args := bs.orderArgs(c.Args, nil)
-				destPtr := dest
-				if destPtr != nil && isUnit(destT) {
-					destPtr = nil
-				}
-				bs.emit(&CallInstr{
-					Dest:   destPtr,
-					Callee: &FnRef{Symbol: "std.error." + fx.Name, Type: c.T},
-					Args:   args,
-					SpanV:  c.SpanV,
-				})
-				return
 			}
 		}
-		if use := bs.l.useAliasFor(fx.X); use != nil {
+		if use := bs.useAliasFor(fx.X); use != nil {
 			if kind := concurrencyIntrinsicForFree(qualifierOf(use), fx.Name); kind != IntrinsicInvalid {
 				bs.emitConcurrencyIntrinsic(kind, c.Args, dest, destT, c.SpanV)
 				return
@@ -4531,7 +4536,7 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 				return
 			}
 		}
-		if use, parts, ok := bs.l.useAliasFieldPath(fx); ok && stdlibNestedNamespacePath(use, parts) {
+		if use, parts, ok := bs.useAliasFieldPath(fx); ok && stdlibNestedNamespacePath(use, parts) {
 			name := strings.Join(parts, ".")
 			args := bs.orderArgsByTypes(c.Args, stdlibFreeFnParamTypes(pathQualifier(use), name))
 			destPtr := dest
@@ -4870,7 +4875,7 @@ func (bs *bodyState) resolveCall(c *ir.CallExpr) ([]Operand, Callee) {
 		// Treating `x` as a receiver for the first case would produce
 		// `Split(strings, s, ",")`, which is the wrong ABI and loses
 		// the qualifier identity. So: classify before lowering.
-		if use := bs.l.useAliasFor(cal.X); use != nil {
+		if use := bs.useAliasFor(cal.X); use != nil {
 			return bs.resolveQualifiedCall(use, cal.Name, cal.T, c.Args)
 		}
 		// Not a package alias — fall back to an indirect call through
@@ -4941,6 +4946,11 @@ func qualifiedSymbol(use *ir.UseDecl, name string) string {
 
 // useAliasFor returns the use decl whose alias matches the ident, or
 // nil if expr is not a bare alias reference.
+//
+// NOTE: this is the package-level resolution and does NOT consider
+// lexical scope. Callers inside a body context should use
+// `bodyState.useAliasFor` instead — that variant first checks whether
+// the ident has been shadowed by a local binding.
 func (l *lowerer) useAliasFor(e ir.Expr) *ir.UseDecl {
 	id, ok := e.(*ir.Ident)
 	if !ok {
@@ -4950,6 +4960,71 @@ func (l *lowerer) useAliasFor(e ir.Expr) *ir.UseDecl {
 		return nil
 	}
 	return l.useAliases[id.Name]
+}
+
+// useAliasFor mirrors `lowerer.useAliasFor` but skips the lookup when
+// the ident has been shadowed by a local binding in the current body
+// scope. Toolchain-shaped programs do this routinely:
+//
+//	use std.bytes as bytes
+//	...
+//	fn build() {
+//	    let mut bytes: List<Int> = []   // shadows the import alias
+//	    bytes.push(0)                   // List<Int>.push, not std.bytes.push
+//	}
+//
+// The package-level `useAliasFor` would mis-route the receiver,
+// emitting `@std.bytes.push` instead of `List.push` and link-failing
+// in the MIR-direct emitter ("call to unresolved symbol
+// std.bytes.push"). Routing through this scope-aware variant fixes
+// the shadowing case.
+func (bs *bodyState) useAliasFor(e ir.Expr) *ir.UseDecl {
+	id, ok := e.(*ir.Ident)
+	if !ok {
+		return nil
+	}
+	if id.Name == "" {
+		return nil
+	}
+	if _, shadowed := bs.lookup(id.Name); shadowed {
+		return nil
+	}
+	return bs.l.useAliases[id.Name]
+}
+
+// useAliasFieldPath mirrors `lowerer.useAliasFieldPath` with the same
+// local-shadowing escape: walks the receiver chain and refuses to
+// treat the leaf ident as a use alias when a local binding already
+// owns that name in the current body scope.
+func (bs *bodyState) useAliasFieldPath(e ir.Expr) (*ir.UseDecl, []string, bool) {
+	field, ok := e.(*ir.FieldExpr)
+	if !ok || field == nil {
+		return nil, nil, false
+	}
+	var parts []string
+	cur := field
+	for cur != nil {
+		parts = append([]string{cur.Name}, parts...)
+		if id, ok := cur.X.(*ir.Ident); ok {
+			if id.Name == "" {
+				return nil, nil, false
+			}
+			if _, shadowed := bs.lookup(id.Name); shadowed {
+				return nil, nil, false
+			}
+			use := bs.l.useAliases[id.Name]
+			if use == nil {
+				return nil, nil, false
+			}
+			return use, parts, true
+		}
+		next, ok := cur.X.(*ir.FieldExpr)
+		if !ok {
+			return nil, nil, false
+		}
+		cur = next
+	}
+	return nil, nil, false
 }
 
 // useAliasFieldPath recognizes nested package-namespace expressions
@@ -5082,17 +5157,29 @@ func (bs *bodyState) orderArgs(args []ir.Arg, sig *fnSignature) []Operand {
 
 func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Type) {
 	recvType := bs.recoveredTypeOf(mc.Receiver)
+	// The hardcoded `bytes` / `Bytes` / `strings` / `String` receiver
+	// match below assumes the ident names a stdlib module qualifier,
+	// not a local value. When a local binding shadows the alias (e.g.
+	// `let mut bytes: List<Int> = []` followed by `bytes.len()`), the
+	// receiver is the List, and routing to the bytes free-fn intrinsic
+	// produces a no-receiver bytes intrinsic — `bytes.len()` lowered as
+	// IntrinsicBytesLen with empty args, which the LLVM backend rejects
+	// with "bytes intrinsic with no receiver". Skip the shortcut when
+	// the ident resolves to a local — fall through to the regular
+	// stdlibIntrinsicForMethod path which dispatches by recvType.
 	if id, ok := mc.Receiver.(*ir.Ident); ok && id != nil {
-		switch id.Name {
-		case "bytes", "Bytes":
-			if kind := stdlibBytesFreeFnToIntrinsic("bytes", mc.Name); kind != IntrinsicInvalid {
-				bs.emitBytesFreeFnIntrinsic(kind, mc.Args, &dest, destT, mc.SpanV)
-				return
-			}
-		case "strings", "String":
-			if kind := stdlibStringFreeFnToIntrinsic("strings", mc.Name); kind != IntrinsicInvalid {
-				bs.emitStringFreeFnIntrinsic(kind, mc.Args, &dest, destT, mc.SpanV)
-				return
+		if _, shadowed := bs.lookup(id.Name); !shadowed {
+			switch id.Name {
+			case "bytes", "Bytes":
+				if kind := stdlibBytesFreeFnToIntrinsic("bytes", mc.Name); kind != IntrinsicInvalid {
+					bs.emitBytesFreeFnIntrinsic(kind, mc.Args, &dest, destT, mc.SpanV)
+					return
+				}
+			case "strings", "String":
+				if kind := stdlibStringFreeFnToIntrinsic("strings", mc.Name); kind != IntrinsicInvalid {
+					bs.emitStringFreeFnIntrinsic(kind, mc.Args, &dest, destT, mc.SpanV)
+					return
+				}
 			}
 		}
 	}
@@ -5101,7 +5188,7 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 	// a use alias, not a value — fast-path to a concurrency intrinsic
 	// when the qualifier targets `thread`, or emit a direct qualified
 	// call with no synthetic `self` argument otherwise.
-	if use, parts, ok := bs.l.useAliasFieldPath(mc.Receiver); ok && stdlibNestedNamespacePath(use, append(parts, mc.Name)) {
+	if use, parts, ok := bs.useAliasFieldPath(mc.Receiver); ok && stdlibNestedNamespacePath(use, append(parts, mc.Name)) {
 		name := strings.Join(append(parts, mc.Name), ".")
 		args := bs.orderArgsByTypes(mc.Args, stdlibFreeFnParamTypes(pathQualifier(use), name))
 		destPtr := &dest
@@ -5116,7 +5203,7 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 		})
 		return
 	}
-	if use := bs.l.useAliasFor(mc.Receiver); use != nil {
+	if use := bs.useAliasFor(mc.Receiver); use != nil {
 		if kind := concurrencyIntrinsicForFree(qualifierOf(use), mc.Name); kind != IntrinsicInvalid {
 			bs.emitConcurrencyIntrinsic(kind, mc.Args, &dest, destT, mc.SpanV)
 			return
