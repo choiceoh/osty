@@ -362,56 +362,14 @@ func (g *generator) emitStdEnvCurrentDirCall(call *ast.CallExpr) (value, bool, e
 	if len(call.Args) != 0 {
 		return value{}, true, unsupportedf("call", "env.currentDir takes no arguments, got %d", len(call.Args))
 	}
-	info, ok := builtinResultTypeFromAST(stdEnvRequireResultSourceTypeSingleton, g.typeEnv())
-	if !ok {
-		return value{}, true, unsupported("type-system", "env.currentDir Result<String, Error> type is unavailable")
-	}
-	if g.resultTypes == nil {
-		g.resultTypes = map[string]builtinResultType{}
-	}
-	g.resultTypes[info.typ] = info
-	if info.okTyp != "ptr" || info.errTyp != "ptr" {
-		return value{}, true, unsupportedf("type-system", "env.currentDir currently needs ptr-backed Result<String, Error>, got ok=%s err=%s", info.okTyp, info.errTyp)
-	}
-	g.declareRuntimeSymbol(ostyRtEnvCurrentDirSymbol, "ptr", nil)
-	g.declareRuntimeSymbol(ostyRtEnvCurrentDirErrorSymbol, "ptr", nil)
-	emitter := g.toOstyEmitter()
-	g.emitCallSafepointIfNeeded(emitter)
-	dir := llvmCall(emitter, "ptr", ostyRtEnvCurrentDirSymbol, nil)
-	missing := llvmCompare(emitter, "eq", dir, toOstyValue(value{typ: "ptr", ref: "null"}))
-	missingLabel := llvmNextLabel(emitter, "env.current_dir.err")
-	okLabel := llvmNextLabel(emitter, "env.current_dir.ok")
-	contLabel := llvmNextLabel(emitter, "env.current_dir.cont")
-	emitter.body = append(emitter.body, "  br i1 "+missing.name+", label %"+missingLabel+", label %"+okLabel)
-
-	emitter.body = append(emitter.body, missingLabel+":")
-	errText := llvmCall(emitter, "ptr", ostyRtEnvCurrentDirErrorSymbol, nil)
-	errResult := llvmStructLiteral(emitter, info.typ, []*LlvmValue{
-		toOstyValue(value{typ: "i64", ref: "1"}),
-		toOstyValue(llvmZeroValue(info.okTyp)),
-		errText,
-	})
-	emitter.body = append(emitter.body, "  br label %"+contLabel)
-
-	emitter.body = append(emitter.body, okLabel+":")
-	okResult := llvmStructLiteral(emitter, info.typ, []*LlvmValue{
-		toOstyValue(value{typ: "i64", ref: "0"}),
-		dir,
-		toOstyValue(llvmZeroValue(info.errTyp)),
-	})
-	emitter.body = append(emitter.body, "  br label %"+contLabel)
-
-	emitter.body = append(emitter.body, contLabel+":")
-	phi := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, "  "+phi+" = phi "+info.typ+" [ "+errResult.name+", %"+missingLabel+" ], [ "+okResult.name+", %"+okLabel+" ]")
-	g.takeOstyEmitter(emitter)
-	v := value{
-		typ:        info.typ,
-		ref:        phi,
-		sourceType: stdEnvRequireResultSourceTypeSingleton,
-	}
-	v.rootPaths = g.rootPathsForType(v.typ)
-	return v, true, nil
+	return g.emitPtrBackedResultFromRuntimeCall(
+		"env.current_dir",
+		stdEnvRequireResultSourceTypeSingleton,
+		ostyRtEnvCurrentDirSymbol,
+		ostyRtEnvCurrentDirErrorSymbol,
+		nil,
+		nil,
+	)
 }
 
 func (g *generator) emitStdEnvSetCurrentDirCall(call *ast.CallExpr) (value, bool, error) {
