@@ -151,3 +151,28 @@ func TestManualPtrBackedResultBlocksStayInventoried(t *testing.T) {
 		}
 	}
 }
+
+func TestMirFsPtrBackedResultHelperReuseStaysInventoried(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "internal", "llvmgen", "stdlib_mir_runtime_shim.go"))
+	if err != nil {
+		t.Fatalf("read stdlib_mir_runtime_shim.go: %v", err)
+	}
+	text := string(src)
+	markers := []string{
+		"g.emitStdFsPtrResultMIRArgs(c, \"uuid.parse\"",
+		"g.emitStdFsPtrResultMIRArgs(c, \"regex.compile\"",
+	}
+	count := strings.Count(text, "emitStdFsPtrResultMIRArgs(")
+	if count != len(markers) {
+		t.Fatalf("stdlib_mir_runtime_shim.go has %d std.fs ptr-backed Result MIR helper calls, want %d inventoried calls", count, len(markers))
+	}
+	for _, marker := range markers {
+		if !strings.Contains(text, marker) {
+			t.Fatalf("stdlib_mir_runtime_shim.go lost inventoried std.fs ptr-backed Result MIR helper call %q", marker)
+		}
+	}
+}
