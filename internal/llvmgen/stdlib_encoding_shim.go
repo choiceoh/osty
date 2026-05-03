@@ -20,22 +20,30 @@ const (
 	ostyRtEncodingBase64UrlEncSymbol = "osty_rt_encoding_base64url_encode"
 )
 
+type stdEncodingRuntimeDecodeKind int
+
+const (
+	stdEncodingDecodeUnsupported stdEncodingRuntimeDecodeKind = iota
+	stdEncodingDecodeHexBytesResult
+)
+
 type stdEncodingRuntimeLowering struct {
 	Variant              string
 	ASTPath              []string
 	MIRPrefix            string
 	EncodeSymbol         string
+	DecodeMIRKind        stdEncodingRuntimeDecodeKind
 	DecodeMIRUnsupported string
 	DecodeASTUnsupported string
 }
 
 var stdEncodingRuntimeLowerings = []stdEncodingRuntimeLowering{
 	{
-		Variant:              "hex",
-		ASTPath:              []string{"hex"},
-		MIRPrefix:            "Hex__",
-		EncodeSymbol:         ostyRtBytesToHexSymbol,
-		DecodeMIRUnsupported: "encoding.hex.decode requires AST lowering route (MIR Result<Bytes, Error> handling pending)",
+		Variant:       "hex",
+		ASTPath:       []string{"hex"},
+		MIRPrefix:     "Hex__",
+		EncodeSymbol:  ostyRtBytesToHexSymbol,
+		DecodeMIRKind: stdEncodingDecodeHexBytesResult,
 	},
 	{
 		Variant:              "base64",
@@ -332,10 +340,9 @@ func (g *mirGen) emitStdEncodingRuntimeCallMIR(c *mir.CallInstr, fnRef *mir.FnRe
 	if !ok || spec == nil {
 		return false, nil
 	}
-	if method != "encode" {
-		if method == "decode" {
-			return true, unsupported("mir-mvp", spec.DecodeMIRUnsupported)
-		}
+	switch method {
+	case "encode", "decode":
+	default:
 		return false, nil
 	}
 	args := c.Args
@@ -343,14 +350,43 @@ func (g *mirGen) emitStdEncodingRuntimeCallMIR(c *mir.CallInstr, fnRef *mir.FnRe
 		return true, unsupported("mir-mvp", "encoding."+spec.Variant+" method without receiver")
 	}
 	args = args[1:]
+	switch method {
+	case "encode":
+		return true, g.emitStdEncodingEncodeCallMIR(c, spec, args)
+	case "decode":
+		return true, g.emitStdEncodingDecodeCallMIR(c, spec, args)
+	}
+	return false, nil
+}
+
+func (g *mirGen) emitStdEncodingEncodeCallMIR(c *mir.CallInstr, spec *stdEncodingRuntimeLowering, args []mir.Operand) error {
 	if len(args) != 1 {
-		return true, unsupported("mir-mvp", "encoding."+spec.Variant+".encode requires one Bytes argument")
+		return unsupported("mir-mvp", "encoding."+spec.Variant+".encode requires one Bytes argument")
 	}
 	data, err := g.evalBytesArg(args[0], "encoding."+spec.Variant+".encode", 0)
 	if err != nil {
-		return true, err
+		return err
 	}
-	return true, g.emitRuntimeCallToDest(c, spec.EncodeSymbol, "ptr", []mirRuntimeArg{data})
+	return g.emitRuntimeCallToDest(c, spec.EncodeSymbol, "ptr", []mirRuntimeArg{data})
+}
+
+func (g *mirGen) emitStdEncodingDecodeCallMIR(c *mir.CallInstr, spec *stdEncodingRuntimeLowering, args []mir.Operand) error {
+	if spec.DecodeMIRKind == stdEncodingDecodeUnsupported {
+		return unsupported("mir-mvp", spec.DecodeMIRUnsupported)
+	}
+	if len(args) != 1 {
+		return unsupported("mir-mvp", "encoding."+spec.Variant+".decode requires one String argument")
+	}
+	text, err := g.evalStringArg(args[0], "encoding."+spec.Variant+".decode", 0)
+	if err != nil {
+		return err
+	}
+	switch spec.DecodeMIRKind {
+	case stdEncodingDecodeHexBytesResult:
+		return g.emitEncodingHexDecodeMIR(c, text)
+	default:
+		return unsupported("mir-mvp", "encoding."+spec.Variant+".decode has no MIR lowering strategy")
+	}
 }
 
 // emitEncodingHexDecodeMIR validates input first (since
@@ -360,11 +396,10 @@ func (g *mirGen) emitStdEncodingRuntimeCallMIR(c *mir.CallInstr, fnRef *mir.FnRe
 // runtime call itself aborts rather than returning null.
 func (g *mirGen) emitEncodingHexDecodeMIR(c *mir.CallInstr, text mirRuntimeArg) error {
 	if c.Dest == nil {
-		// No dest — caller drops the result. Still validate to honor
+		// No dest; caller drops the result. Still validate to honor
 		// the no-abort contract; from_hex itself is skipped.
 		g.declareRuntime(ostyRtBytesIsValidHexSymbol, mirRuntimeDeclareLine("i1", ostyRtBytesIsValidHexSymbol, "ptr"))
-		_ = g.fresh()
-		g.fnBuf.WriteString(mirCallVoidLine(ostyRtBytesIsValidHexSymbol, mirRuntimeArgList([]mirRuntimeArg{text})))
+		g.fnBuf.WriteString(mirCallStmtLine("i1", ostyRtBytesIsValidHexSymbol, mirRuntimeArgList([]mirRuntimeArg{text})))
 		return nil
 	}
 	destLoc := g.fn.Local(c.Dest.Local)
@@ -384,7 +419,7 @@ func (g *mirGen) emitEncodingHexDecodeMIR(c *mir.CallInstr, text mirRuntimeArg) 
 	contLabel := g.freshLabel("hex.decode.cont")
 	g.fnBuf.WriteString(mirBrCondLine(valid, okLabel, errLabel))
 
-	// Ok arm: call from_hex (safe — validated above), wrap in Ok struct.
+	// Ok arm: call from_hex (safe; validated above), wrap in Ok struct.
 	g.fnBuf.WriteString(mirLabelLine(okLabel))
 	decoded := g.fresh()
 	g.fnBuf.WriteString(mirCallValueLine(decoded, "ptr", ostyRtBytesFromHexSymbol, mirRuntimeArgList([]mirRuntimeArg{text})))
