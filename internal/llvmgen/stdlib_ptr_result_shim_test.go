@@ -98,7 +98,7 @@ func TestManualPtrBackedResultBlocksStayInventoried(t *testing.T) {
 	}
 
 	allowed := map[string][]string{
-		"stdlib_regex_shim.go": {
+		"stdlib_regex_shim.go": []string{
 			"regex.compile Result must be ptr-backed",
 		},
 	}
