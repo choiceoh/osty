@@ -98,6 +98,10 @@ func TestManualPtrBackedResultBlocksStayInventoried(t *testing.T) {
 	}
 
 	allowed := map[string][]string{
+		"stdlib_env_shim.go": []string{
+			"env.require currently needs ptr-backed Result<String, Error>",
+			"env.currentDir currently needs ptr-backed Result<String, Error>",
+		},
 		"stdlib_regex_shim.go": []string{
 			"regex.compile Result must be ptr-backed",
 		},
@@ -115,10 +119,11 @@ func TestManualPtrBackedResultBlocksStayInventoried(t *testing.T) {
 		path := filepath.Join(dir, entry.Name())
 		src, err := os.ReadFile(path)
 		if err != nil {
-			t.Fatalf("read %s: %v", entry.Name(), err)
+			t.Fatalf("read %s: %v", entry.Name())
 		}
 		text := string(src)
 		count := strings.Count(text, "Result must be ptr-backed")
+		count += strings.Count(text, "currently needs ptr-backed Result")
 		if count == 0 {
 			continue
 		}
