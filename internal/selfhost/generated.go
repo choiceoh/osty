@@ -17184,6 +17184,8 @@ type OstyLexStringPart struct {
 	text           string
 	exprTokenStart int
 	exprTokenCount int
+	srcStart       int
+	srcEnd         int
 }
 
 // Osty: /tmp/selfhost_merged.osty:6283:5
@@ -17805,7 +17807,7 @@ func ostyLexStringPartFromFront(units []string, tok *FrontLexToken, part *FrontS
 	// Osty: /tmp/selfhost_merged.osty:6596:5
 	if ostyEqual(part.kind, FrontStringPartKind(&FrontStringPartKind_FrontStringInterpolation{})) {
 		// Osty: /tmp/selfhost_merged.osty:6597:9
-		return &OstyLexStringPart{ownerToken: part.ownerToken, ownerTokenID: tok.id, kindCode: 1, text: "", exprTokenStart: part.exprTokenStart, exprTokenCount: part.exprTokenCount}
+		return &OstyLexStringPart{ownerToken: part.ownerToken, ownerTokenID: tok.id, kindCode: 1, text: "", exprTokenStart: part.exprTokenStart, exprTokenCount: part.exprTokenCount, srcStart: part.start.offset, srcEnd: part.end.offset}
 	}
 	// Osty: /tmp/selfhost_merged.osty:6606:5
 	text := frontLexemeFromUnits(units, part.start.offset, func() int {
@@ -17821,7 +17823,7 @@ func ostyLexStringPartFromFront(units []string, tok *FrontLexToken, part *FrontS
 	}())
 	_ = text
 	text = ostyPublicStringPartText(units, tok, text)
-	return &OstyLexStringPart{ownerToken: part.ownerToken, ownerTokenID: tok.id, kindCode: 0, text: text, exprTokenStart: 0, exprTokenCount: 0}
+	return &OstyLexStringPart{ownerToken: part.ownerToken, ownerTokenID: tok.id, kindCode: 0, text: text, exprTokenStart: 0, exprTokenCount: 0, srcStart: part.start.offset, srcEnd: part.end.offset}
 }
 
 // Osty: /tmp/selfhost_merged.osty:6620:1
@@ -17830,7 +17832,7 @@ func ostyDefaultStringPart(units []string, tok *FrontLexToken, owner int) *OstyL
 	text := ostyStringContentRaw(units, tok)
 	_ = text
 	text = ostyPublicStringPartText(units, tok, text)
-	return &OstyLexStringPart{ownerToken: owner, ownerTokenID: tok.id, kindCode: 0, text: text, exprTokenStart: 0, exprTokenCount: 0}
+	return &OstyLexStringPart{ownerToken: owner, ownerTokenID: tok.id, kindCode: 0, text: text, exprTokenStart: 0, exprTokenCount: 0, srcStart: tok.start.offset, srcEnd: tok.end.offset}
 }
 
 func ostyPublicStringText(tok *FrontLexToken, raw string) string {

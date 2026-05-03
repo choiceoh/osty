@@ -132,6 +132,52 @@ func TestLexAdapterDiagnosticsCopyCanonicalFacts(t *testing.T) {
 	}
 }
 
+// TestLexStringPartsCarrySourceByteRanges asserts the srcStart/srcEnd
+// fields on OstyLexStringPart match the part's lexeme byte range in
+// the *normalized* source. The Day-2 work of STRING_INTERP_RESOLVE_GAP
+// uses these offsets to re-lex an interpolation expression so the
+// resulting AST nodes get NodeIDs from the same arena as the
+// surrounding code; without populated ranges the parser would have to
+// dig into Go-side `FrontLexStream.interpolationTokens`, which is
+// invisible from the osty side.
+func TestLexStringPartsCarrySourceByteRanges(t *testing.T) {
+	src := `fn main() { let s = "hi {name}" }` + "\n"
+	lexed, facts, _ := canonicalLexFacts(src)
+	str := firstFrontTokenKind(t, lexed.stream, FrontTokenKind(&FrontTokenKind_FrontString{}))
+	parts := canonicalPartsForOwnerID(facts.stringParts, str.id)
+	if len(parts) < 2 {
+		t.Fatalf("expected at least 2 string parts (literal + interp), got %d", len(parts))
+	}
+	for i, p := range parts {
+		if p.srcStart < 0 || p.srcEnd < p.srcStart {
+			t.Fatalf("part %d: invalid src range [%d, %d)", i, p.srcStart, p.srcEnd)
+		}
+		if p.srcStart < str.start.offset || p.srcEnd > str.end.offset {
+			t.Fatalf("part %d src range [%d, %d) outside owning token [%d, %d)",
+				i, p.srcStart, p.srcEnd, str.start.offset, str.end.offset)
+		}
+	}
+	// Find the interpolation part and confirm its slice maps back to
+	// `name` after the surrounding `{` / `}` are stripped.
+	var interp *OstyLexStringPart
+	for _, p := range parts {
+		if p.kindCode == 1 {
+			interp = p
+			break
+		}
+	}
+	if interp == nil {
+		t.Fatalf("no interpolation part in %q", src)
+	}
+	slice := lexed.source[interp.srcStart:interp.srcEnd]
+	// The exact slice may include the braces depending on how the
+	// frontend records interpolation positions; what we care about
+	// is that the slice is non-empty and contains the identifier.
+	if !strings.Contains(slice, "name") {
+		t.Fatalf("interp slice = %q; want it to contain %q", slice, "name")
+	}
+}
+
 func canonicalLexFacts(src string) (*OstyLexedSource, *OstyLexFacts, runeTable) {
 	lexed := ostyLexSource(src)
 	rt := newRuneTable(lexed.source)

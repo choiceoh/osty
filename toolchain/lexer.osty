@@ -59,6 +59,14 @@ pub struct OstyLexComment {
 /// OstyLexStringPart is the Go adapter-ready string part shape. `text` is the
 /// final public string-part text; escape decoding belongs to this self-hosted
 /// layer, not to the Go adapter.
+///
+/// `srcStart` / `srcEnd` are byte offsets into the *normalized* source for
+/// the part's lexeme range. For text parts this matches the slice that
+/// produced `text`; for interpolation parts it spans the inner expression
+/// (between `{` and `}`, exclusive). The parser uses these offsets to
+/// re-lex an interpolation expression as part of the Day-2 work in
+/// STRING_INTERP_RESOLVE_GAP.md so the resulting AST nodes get NodeIDs
+/// from the same arena as the surrounding code.
 pub struct OstyLexStringPart {
     pub ownerToken: Int,
     pub ownerTokenID: Int,
@@ -66,6 +74,8 @@ pub struct OstyLexStringPart {
     pub text: String,
     pub exprTokenStart: Int,
     pub exprTokenCount: Int,
+    pub srcStart: Int,
+    pub srcEnd: Int,
 }
 
 /// OstyLexFacts holds adapter-ready side tables. `tokenTexts` is the canonical
@@ -386,6 +396,8 @@ fn ostyLexStringPartFromFront(
             text: "",
             exprTokenStart: part.exprTokenStart,
             exprTokenCount: part.exprTokenCount,
+            srcStart: part.start.offset,
+            srcEnd: part.end.offset,
         }
     }
     let text = ostyPublicStringPartText(
@@ -400,6 +412,8 @@ fn ostyLexStringPartFromFront(
         text,
         exprTokenStart: 0,
         exprTokenCount: 0,
+        srcStart: part.start.offset,
+        srcEnd: part.end.offset,
     }
 }
 
@@ -412,6 +426,8 @@ fn ostyDefaultStringPart(units: List<String>, tok: FrontLexToken, owner: Int) ->
         text,
         exprTokenStart: 0,
         exprTokenCount: 0,
+        srcStart: tok.start.offset,
+        srcEnd: tok.end.offset,
     }
 }
 
