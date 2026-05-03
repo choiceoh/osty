@@ -183,54 +183,14 @@ func (g *generator) emitStdRegexCompileCall(call *ast.CallExpr) (value, bool, er
 	if loaded.typ != "ptr" {
 		return value{}, true, unsupportedf("type-system", "regex.compile arg 1 type %s, want String", loaded.typ)
 	}
-
-	info, ok := builtinResultTypeFromAST(stdRegexCompileResultSourceTypeSingleton, g.typeEnv())
-	if !ok {
-		return value{}, true, unsupported("type-system", "regex.compile Result<Regex, Error> type unavailable")
-	}
-	if g.resultTypes == nil {
-		g.resultTypes = map[string]builtinResultType{}
-	}
-	g.resultTypes[info.typ] = info
-	if info.okTyp != "ptr" || info.errTyp != "ptr" {
-		return value{}, true, unsupportedf("type-system", "regex.compile Result must be ptr-backed, got ok=%s err=%s", info.okTyp, info.errTyp)
-	}
-
-	g.declareRuntimeSymbol(ostyRtRegexCompileSymbol, "ptr", []paramInfo{{typ: "ptr"}})
-	g.declareRuntimeSymbol(ostyRtRegexCompileErrorSymbol, "ptr", nil)
-	emitter := g.toOstyEmitter()
-	g.emitCallSafepointIfNeeded(emitter)
-	out := llvmCall(emitter, "ptr", ostyRtRegexCompileSymbol, []*LlvmValue{toOstyValue(loaded)})
-	failed := llvmCompare(emitter, "eq", out, toOstyValue(value{typ: "ptr", ref: "null"}))
-	errLabel := llvmNextLabel(emitter, "regex.compile.err")
-	okLabel := llvmNextLabel(emitter, "regex.compile.ok")
-	contLabel := llvmNextLabel(emitter, "regex.compile.cont")
-	emitter.body = append(emitter.body, "  br i1 "+failed.name+", label %"+errLabel+", label %"+okLabel)
-
-	emitter.body = append(emitter.body, errLabel+":")
-	errText := llvmCall(emitter, "ptr", ostyRtRegexCompileErrorSymbol, nil)
-	errResult := llvmStructLiteral(emitter, info.typ, []*LlvmValue{
-		toOstyValue(value{typ: "i64", ref: "1"}),
-		toOstyValue(llvmZeroValue(info.okTyp)),
-		errText,
-	})
-	emitter.body = append(emitter.body, "  br label %"+contLabel)
-
-	emitter.body = append(emitter.body, okLabel+":")
-	okResult := llvmStructLiteral(emitter, info.typ, []*LlvmValue{
-		toOstyValue(value{typ: "i64", ref: "0"}),
-		out,
-		toOstyValue(llvmZeroValue(info.errTyp)),
-	})
-	emitter.body = append(emitter.body, "  br label %"+contLabel)
-
-	emitter.body = append(emitter.body, contLabel+":")
-	phi := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, "  "+phi+" = phi "+info.typ+" [ "+errResult.name+", %"+errLabel+" ], [ "+okResult.name+", %"+okLabel+" ]")
-	g.takeOstyEmitter(emitter)
-	v := value{typ: info.typ, ref: phi, sourceType: stdRegexCompileResultSourceTypeSingleton}
-	v.rootPaths = g.rootPathsForType(v.typ)
-	return v, true, nil
+	return g.emitPtrBackedResultFromRuntimeCall(
+		"regex.compile",
+		stdRegexCompileResultSourceTypeSingleton,
+		ostyRtRegexCompileSymbol,
+		ostyRtRegexCompileErrorSymbol,
+		[]paramInfo{{typ: "ptr"}},
+		[]*LlvmValue{toOstyValue(loaded)},
+	)
 }
 
 func (g *generator) emitStdRegexMethodCall(call *ast.CallExpr) (value, bool, error) {
