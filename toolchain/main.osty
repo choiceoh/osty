@@ -131,6 +131,62 @@ fn runCompile(args: List<String>) -> Int {
     0
 }
 
+/// runLirProtoLower is the Phase-7 Slice 2 self-host entry: read the
+/// source file, run the toolchain pipeline (HIR → MIR), then route
+/// MIR → LLVM IR through the new self-hosted LIR Proto path
+/// (`lirLowerMirModule` + `lirRenderModule`) instead of the legacy
+/// `mirEmitModule` direct emitter. Used by the
+/// `cmd/osty-native-lirproto` Go bridge as the production back end
+/// when the `OSTY_LLVM_LIR_PROTO` gate is on; the Go side stages the
+/// source to a temp path and invokes this subcommand.
+///
+/// CLI shape: `osty-self lir-proto-lower <path> [--package-name=NAME]
+/// [--target=TRIPLE]`. Defaults: `--package-name=main`, no target.
+/// Stdout receives the rendered LLVM IR text; lowering errors land
+/// on stderr with a non-zero exit code so the Go dispatcher can
+/// convert them into structured `declined` responses.
+fn runLirProtoLower(args: List<String>) -> Int {
+    if args.len() < 2 {
+        eprint("osty-self lir-proto-lower: missing <file> argument\n")
+        eprint("usage: osty-self lir-proto-lower <file.osty> [--package-name=NAME] [--target=TRIPLE]\n")
+        return 2
+    }
+    let path = args[1]
+    let mut packageName = "main"
+    let mut target = ""
+    let mut i = 2
+    for i < args.len() {
+        let a = args[i]
+        if strings.hasPrefix(a, "--package-name=") {
+            packageName = strings.trimPrefix(a, "--package-name=")
+        } else if strings.hasPrefix(a, "--target=") {
+            target = strings.trimPrefix(a, "--target=")
+        }
+        i = i + 1
+    }
+    let source = match fs.readToString(path) {
+        Ok(s) -> s,
+        Err(_) -> {
+            eprint("osty-self lir-proto-lower: cannot read source: " + path + "\n")
+            return 2
+        },
+    }
+    let hir = hirLowerSource(packageName, source)
+    let mir = mirLowerModule(hir)
+    let cfg = lirLowerConfig(packageName, path, target)
+    let result = lirLowerMirModule(cfg, mir)
+    if !lirLowerOK(result) {
+        for d in result.diagnostics {
+            if d.severity == LirSeverityError {
+                eprint("osty-self lir-proto-lower: " + lirDiagnosticRender(d) + "\n")
+            }
+        }
+        return 1
+    }
+    print(lirRenderModule(result.module))
+    0
+}
+
 fn main() {
     let args = forwardedArgs()
     if hasSelfhostCommand(args, "--selfhost-host") {
@@ -143,10 +199,13 @@ fn main() {
     if hasSelfhostCommand(args, "compile") {
         os.exit(runCompile(args))
     }
+    if hasSelfhostCommand(args, "lir-proto-lower") {
+        os.exit(runLirProtoLower(args))
+    }
     if isSelfRebuildBuild(args) {
         os.exit(runSelfRebuild(args))
     }
     eprint("osty-self: unsupported command; host compiler forwarding is disabled\n")
-    eprint("supported subcommands: compile <file.osty>, --selfhost-doctor\n")
+    eprint("supported subcommands: compile <file.osty>, lir-proto-lower <file.osty>, --selfhost-doctor\n")
     process.abort("osty-self cannot rebuild end-to-end until per-instruction MIR body emission lands (Phase 1+)")
 }
