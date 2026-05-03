@@ -112,6 +112,103 @@ func TestGenerateFromMIRConstReturn(t *testing.T) {
 	}
 }
 
+// TestGenerateFromMIRShortCircuitAndDoesNotEvalRHS — `a && b` must
+// route through a CFG branch, not an eager `and i1`. The two output
+// blocks correspond to "LHS true → evaluate RHS" and "LHS false →
+// store false". The test pins both directions plus the absence of
+// the eager bitwise op so a regression to the old shape would be
+// caught immediately. This was the root cause of the
+// `list index out of range` panic that
+// `lo < n && xs[lo*2] <= r` patterns hit when the backend evaluated
+// both sides eagerly. Mirrors the LIR proto parity fixture
+// `source_logical_and`.
+func TestGenerateFromMIRShortCircuitAndDoesNotEvalRHS(t *testing.T) {
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "both",
+				Return: ir.TBool,
+				Params: []*ir.Param{
+					{Name: "a", Type: ir.TBool},
+					{Name: "b", Type: ir.TBool},
+				},
+				Body: &ir.Block{
+					Result: &ir.BinaryExpr{
+						Op:    ir.BinAnd,
+						Left:  &ir.Ident{Name: "a", Kind: ir.IdentParam, T: ir.TBool},
+						Right: &ir.Ident{Name: "b", Kind: ir.IdentParam, T: ir.TBool},
+						T:     ir.TBool,
+					},
+				},
+			},
+		},
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/short_and.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"br i1",
+		"store i1 0,",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q for short-circuit AND in:\n%s", want, got)
+		}
+	}
+	// Eager `and i1 …` would be a regression: it implies both sides
+	// were evaluated before the bool combine.
+	if strings.Contains(got, "and i1 ") {
+		t.Fatalf("regressed to eager bitwise AND on Bool params:\n%s", got)
+	}
+}
+
+// TestGenerateFromMIRShortCircuitOrDoesNotEvalRHS — symmetrical to
+// the AND variant: `a || b` must short-circuit. LHS true → store
+// true; LHS false → evaluate RHS.
+func TestGenerateFromMIRShortCircuitOrDoesNotEvalRHS(t *testing.T) {
+	hir := &ir.Module{
+		Package: "main",
+		Decls: []ir.Decl{
+			&ir.FnDecl{
+				Name:   "either",
+				Return: ir.TBool,
+				Params: []*ir.Param{
+					{Name: "a", Type: ir.TBool},
+					{Name: "b", Type: ir.TBool},
+				},
+				Body: &ir.Block{
+					Result: &ir.BinaryExpr{
+						Op:    ir.BinOr,
+						Left:  &ir.Ident{Name: "a", Kind: ir.IdentParam, T: ir.TBool},
+						Right: &ir.Ident{Name: "b", Kind: ir.IdentParam, T: ir.TBool},
+						T:     ir.TBool,
+					},
+				},
+			},
+		},
+	}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/short_or.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	got := string(out)
+	for _, want := range []string{
+		"br i1",
+		"store i1 1,",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q for short-circuit OR in:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "or i1 ") {
+		t.Fatalf("regressed to eager bitwise OR on Bool params:\n%s", got)
+	}
+}
+
 // TestGenerateFromMIRBinaryArith — `fn add() -> Int { 1 + 2 }`.
 // Expect `add i64 1, 2` in the output.
 func TestGenerateFromMIRBinaryArith(t *testing.T) {
