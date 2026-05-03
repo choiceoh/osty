@@ -52,6 +52,7 @@ type generator struct {
 	stdTestingGenAliases map[string]bool
 	stdIoAliases         map[string]bool
 	stdLogAliases        map[string]bool
+	stdEncodingAliases   map[string]bool
 	stdBytesAliases      map[string]bool
 	stdCompressAliases   map[string]bool
 	stdStringsAliases    map[string]bool

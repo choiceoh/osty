@@ -1,0 +1,31 @@
+// encoding_e2e — E2E verification of internal/stdlib/modules/encoding.osty
+// against the LLVM backend.
+//
+// Phase 1 coverage: encoding.hex.encode via the existing
+// `osty_rt_bytes_to_hex` runtime. The decode path lives behind the
+// AST-level shim; the MIR-level Result<Bytes, Error> handling for
+// hex.decode awaits a follow-up cycle (GC root conflict — see
+// stdlib_encoding_shim.go). base64 and url codec paths await
+// dedicated C runtime functions (Phase 2/3).
+
+use std.testing
+use std.bytes
+use std.encoding
+
+fn testHexEncodeBasic() {
+    let inp = bytes.fromString("hi")
+    let out = encoding.hex.encode(inp)
+    testing.assertEq(out, "6869")
+}
+
+fn testHexEncodeEmpty() {
+    let inp = bytes.fromString("")
+    let out = encoding.hex.encode(inp)
+    testing.assertEq(out, "")
+}
+
+fn testHexEncodeMultiByte() {
+    let inp = bytes.fromString("abcd")
+    let out = encoding.hex.encode(inp)
+    testing.assertEq(out, "61626364")
+}

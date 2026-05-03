@@ -3326,6 +3326,11 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 			return err
 		}
 	}
+	if strings.HasPrefix(fnRef.Symbol, "Hex__") {
+		if handled, err := g.emitStdEncodingCallMIR(c, fnRef); handled {
+			return err
+		}
+	}
 	if handled, err := g.emitStdCmdCall(c, fnRef); handled {
 		return err
 	}
