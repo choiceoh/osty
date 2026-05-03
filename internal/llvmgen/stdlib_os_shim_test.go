@@ -87,6 +87,44 @@ fn main() {
 	}
 }
 
+func TestStdOsExecInputRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.os as os
+
+fn main() {
+    let env: Map<String, String> = {:}
+    match os.execInputWith("sh", ["-c", "cat"], "hello", "/tmp", env, 0) {
+        Ok(out) -> println(out.stdout),
+        Err(err) -> println(err.message()),
+    }
+
+    match os.execShellInput("cat", "shell") {
+        Ok(out) -> println(out.stdout),
+        Err(err) -> println(err.message()),
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_os_exec_input.osty",
+	})
+	if err != nil {
+		t.Fatalf("generateFromAST: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"declare ptr @osty_rt_os_exec_input_options(ptr, ptr, i1, ptr, ptr, i64, ptr)",
+		"declare ptr @osty_rt_os_exec_input(ptr, ptr, i1, ptr)",
+		"call ptr @osty_rt_os_exec_input_options(ptr",
+		"call ptr @osty_rt_os_exec_input(ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in IR:\n%s", want, got)
+		}
+	}
+}
+
 func TestStdOsPidHostnameAndExitRouteToRuntime(t *testing.T) {
 	file := parseLLVMGenFile(t, `use std.os as os
 

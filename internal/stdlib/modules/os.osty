@@ -27,9 +27,17 @@ pub fn exec(cmd: String, args: List<String> = []) -> Result<Output, Error>
 
 pub fn execShell(cmd: String) -> Result<Output, Error>
 
+pub fn execInput(cmd: String, args: List<String>, stdin: String) -> Result<Output, Error>
+
+pub fn execShellInput(cmd: String, stdin: String) -> Result<Output, Error>
+
 pub fn execWith(cmd: String, args: List<String>, cwd: String, env: Map<String, String>, timeoutMillis: Int) -> Result<ExecOutput, Error>
 
 pub fn execShellWith(cmd: String, cwd: String, env: Map<String, String>, timeoutMillis: Int) -> Result<ExecOutput, Error>
+
+pub fn execInputWith(cmd: String, args: List<String>, stdin: String, cwd: String, env: Map<String, String>, timeoutMillis: Int) -> Result<ExecOutput, Error>
+
+pub fn execShellInputWith(cmd: String, stdin: String, cwd: String, env: Map<String, String>, timeoutMillis: Int) -> Result<ExecOutput, Error>
 
 pub fn exit(code: Int) -> Never
 

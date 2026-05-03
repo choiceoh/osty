@@ -1,9 +1,9 @@
 // std.cmd — automation-friendly command execution.
 //
-// `std.process` remains the abort/todo/result-helper module. OS process
-// execution lives here as a builder over the low-level `std.os` runtime
-// calls, with explicit cwd/env/timeout knobs and shell-safe pipeline
-// rendering.
+// `std.process` provides the newer high-level process facade. This
+// module keeps the automation-oriented command builder surface that
+// predates it, with explicit cwd/env/timeout knobs and shell-safe
+// pipeline rendering over the low-level `std.os` runtime calls.
 
 use std.error
 use std.os

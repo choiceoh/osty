@@ -119,6 +119,7 @@ partial 모듈 4개 (bytes / crypto / option / result) 는 **호출 패턴 한�
 | secrets | §10.41 | 20 | 8 | 100% | keychain 위임 | keychain 백엔드 따라감 |
 | cli | §10.1 | 260 | 11 | 0% | env 위임 | flag/option spec/parse 본문 |
 | cmd | unspec | 214 | 24 | 0% | os shim + cmd runtime 8 | command builder + POSIX shell escape |
+| process | §10.1 + unspec | 277 | 32 | 74% | os shim + process runtime 9 | `ProcessCommand` / `ProcessPipeline` facade, stdin text, captured stdout/stderr, shell pipeline composition. abort/todo/unreachable는 backend-owned primitive 유지 |
 | path | §10.15 | 191 | 9 | 22% | runtime path 2 | join/split/extension 본문, absolute/canonical은 백엔드 |
 
 ### 2.3 ⭐⭐⭐ Surface-rich (스펙 외 또는 부분 백엔드)
@@ -212,7 +213,6 @@ partial 모듈 4개 (bytes / crypto / option / result) 는 **호출 패턴 한�
 | cmp | §10.1 | 27 | Equal / Ordered / Hashable interface 정의. 컴파일러 인지 |
 | error | §10.1 / §7 | 96 | Error interface + BasicError + WrappedError + wrap/chain/rootCause |
 | ref | §10.1 | 9 | `same<T>(a, b)` 단일 함수, declaration-only — 컴파일러 intrinsic 가정 |
-| process | §10.1 | 24 | abort/unreachable/todo/ignoreError/logError. 60% bodyless — 컴파일러 인지 |
 | debug | §10.1 | 10 | `dbg(value)` — 컴파일러가 source-text 캡처 |
 | hint | unspec | 25 | `black_box` 벤치 헬퍼 |
 | runtime/raw | §19 | 55 | runtime sublanguage (privileged package only) |
@@ -223,7 +223,7 @@ partial 모듈 4개 (bytes / crypto / option / result) 는 **호출 패턴 한�
 |---|---|---|
 | ⭐⭐⭐⭐⭐ Production (LLVM E2E 통과) | 15 | 14% |
 | ⭐⭐⭐⭐⭐ Production (declared, 매트릭스 5★ 미검증) | 10 | 9% |
-| ⭐⭐⭐⭐ Functional | 12 | 12% |
+| ⭐⭐⭐⭐ Functional | 13 | 13% |
 | ⭐⭐⭐ Surface-rich | 62 | 60% |
 | ⭐⭐ Spec-stub (백엔드 부재) | 0 | 0% |
 | ⭐ Broken / Placeholder | 0 | 0% |
@@ -294,7 +294,7 @@ unspec 모듈 62개는 stdlib에 들어갔지만 LANG_SPEC에 등재 안 됨. su
 uuid/regex는 declaration-only인데 백엔드도 없음. **모든 declaration-only 모듈은 `osty_rt_<name>_*` 또는 shim 직접 grep으로 검증 필수**.
 
 ### 5.5 이름 함정 (이전 함정, 유효)
-`process.osty` (exception helper) vs `cmd.osty` (command builder) vs `os.osty` (real OS). 이름만 보고 카테고리 추정 금지.
+`process.osty`는 이제 exception helper + OS process facade이고, `cmd.osty`는 낮은 단계 command builder, `os.osty`는 실제 OS syscall wrapper다. 이름만 보고 카테고리 추정 금지.
 
 ### 5.6 spec 위반 중복 정의 (신규 발견)
 ~~`thread.Duration{}` 빈 struct가 `time.Duration`과 동시 존재~~ → 2026-05-02 재확인 결과 commit `23f4568c` (`refactor: thread.Duration stub 제거, std.time 단일 타입으로 통일`)에서 이미 제거됨. 매트릭스가 stale했던 사례. **다른 모듈도 같은 stale 가능성 — 매트릭스 작성 시점 vs 현재 git HEAD 차이 항상 검증 필요**.
