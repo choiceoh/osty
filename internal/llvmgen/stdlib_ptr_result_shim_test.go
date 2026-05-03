@@ -30,3 +30,28 @@ func TestStdUuidParseUsesSharedPtrBackedResultHelper(t *testing.T) {
 		}
 	}
 }
+
+func TestSharedPtrBackedResultHelperIsStdlibNeutral(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "internal", "llvmgen", "stdlib_ptr_result_shim.go"))
+	if err != nil {
+		t.Fatalf("read stdlib_ptr_result_shim.go: %v", err)
+	}
+	text := string(src)
+	if strings.Contains(text, "emitStdFsPtrResultFromRuntimeCall(") {
+		t.Fatalf("shared ptr-backed Result helper should not depend on the std.fs-specific helper")
+	}
+	for _, want := range []string{
+		"builtinResultTypeFromAST(sourceType",
+		"declareRuntimeSymbol(valueSymbol",
+		"declareRuntimeSymbol(errorSymbol",
+		"llvmNextLabel(emitter, prefix+\".err\")",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("shared ptr-backed Result helper lost expected implementation marker %q", want)
+		}
+	}
+}
