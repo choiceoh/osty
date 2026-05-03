@@ -225,6 +225,58 @@ fn main() {
 	}
 }
 
+func TestLLVMBackendBinaryRunsStdProcessStreamingSurface(t *testing.T) {
+	parallelClangBackendTest(t)
+
+	if runtime.GOOS == "windows" {
+		t.Skip("std.process shell pipeline uses POSIX shell escaping in this test")
+	}
+	src := `use std.process
+
+fn main() {
+    match process.command("cat").withStdin("alpha\nbeta\n").run() {
+        Ok(out) -> {
+            println(out.exitCode == 0)
+            println(out.stdout == "alpha\nbeta\n")
+        },
+        Err(err) -> {
+            println(false)
+            println(err.message())
+        },
+    }
+
+    match process.pipe(
+        process.command("tr").arg("a-z").arg("A-Z"),
+        process.command("grep").arg("BETA"),
+    ).withStdin("alpha\nbeta\n").run() {
+        Ok(out) -> {
+            println(out.ok())
+            println(out.stdout.contains("BETA"))
+        },
+        Err(err) -> {
+            println(false)
+            println(err.message())
+        },
+    }
+}
+`
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, src)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	output, err := exec.Command(result.Artifacts.Binary).CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "true\ntrue\ntrue\ntrue\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q\nsource:\n%s", got, want, src)
+	}
+}
+
 func TestLLVMBackendBinaryStdOsExitUsesRequestedCode(t *testing.T) {
 	parallelClangBackendTest(t)
 

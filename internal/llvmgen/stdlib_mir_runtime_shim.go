@@ -532,13 +532,21 @@ func (g *mirGen) emitStdOsCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error)
 	method := strings.TrimPrefix(fnRef.Symbol, "std.os.")
 	switch method {
 	case "exec":
-		return true, g.emitStdOsExecMIR(c, false, false)
+		return true, g.emitStdOsExecMIR(c, false, false, false)
 	case "execShell":
-		return true, g.emitStdOsExecMIR(c, true, false)
+		return true, g.emitStdOsExecMIR(c, true, false, false)
+	case "execInput":
+		return true, g.emitStdOsExecMIR(c, false, false, true)
+	case "execShellInput":
+		return true, g.emitStdOsExecMIR(c, true, false, true)
 	case "execWith":
-		return true, g.emitStdOsExecMIR(c, false, true)
+		return true, g.emitStdOsExecMIR(c, false, true, false)
 	case "execShellWith":
-		return true, g.emitStdOsExecMIR(c, true, true)
+		return true, g.emitStdOsExecMIR(c, true, true, false)
+	case "execInputWith":
+		return true, g.emitStdOsExecMIR(c, false, true, true)
+	case "execShellInputWith":
+		return true, g.emitStdOsExecMIR(c, true, true, true)
 	case "pid":
 		if len(c.Args) != 0 {
 			return true, unsupported("mir-mvp", "std.os.pid requires no arguments")
@@ -563,9 +571,11 @@ func (g *mirGen) emitStdOsCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error)
 	return false, nil
 }
 
-func (g *mirGen) emitStdOsExecMIR(c *mir.CallInstr, shell bool, withOptions bool) error {
-	if len(c.Args) == 0 || (!withOptions && ((!shell && len(c.Args) > 2) || (shell && len(c.Args) != 1))) ||
-		(withOptions && ((!shell && len(c.Args) != 5) || (shell && len(c.Args) != 4))) {
+func (g *mirGen) emitStdOsExecMIR(c *mir.CallInstr, shell bool, withOptions bool, withInput bool) error {
+	if len(c.Args) == 0 || (!withOptions && !withInput && ((!shell && len(c.Args) > 2) || (shell && len(c.Args) != 1))) ||
+		(!withOptions && withInput && ((!shell && len(c.Args) != 3) || (shell && len(c.Args) != 2))) ||
+		(withOptions && !withInput && ((!shell && len(c.Args) != 5) || (shell && len(c.Args) != 4))) ||
+		(withOptions && withInput && ((!shell && len(c.Args) != 6) || (shell && len(c.Args) != 5))) {
 		return unsupported("mir-mvp", "std.os.exec/execShell argument shape")
 	}
 	cmdArg, err := g.evalStringArg(c.Args[0], "std.os.exec", 0)
@@ -573,13 +583,24 @@ func (g *mirGen) emitStdOsExecMIR(c *mir.CallInstr, shell bool, withOptions bool
 		return err
 	}
 	argsArg := mirRuntimeArg{typ: "ptr", val: "null"}
-	if !shell && len(c.Args) == 2 {
+	if !shell && !withOptions && len(c.Args) >= 2 {
 		argsArg, err = g.evalTypedArg(c.Args[1], c.Args[1].Type())
 		if err != nil {
 			return err
 		}
 		if argsArg.typ != "ptr" {
 			return unsupported("mir-mvp", "std.os.exec args must be List<String>")
+		}
+	}
+	inputArg := mirRuntimeArg{typ: "ptr", val: "null"}
+	if withInput {
+		inputIndex := 1
+		if !shell {
+			inputIndex = 2
+		}
+		inputArg, err = g.evalStringArg(c.Args[inputIndex], "std.os.execInput", inputIndex)
+		if err != nil {
+			return err
 		}
 	}
 	cwdArg := mirRuntimeArg{typ: "ptr", val: "null"}
@@ -596,6 +617,9 @@ func (g *mirGen) emitStdOsExecMIR(c *mir.CallInstr, shell bool, withOptions bool
 				return unsupported("mir-mvp", "std.os.execWith args must be List<String>")
 			}
 			argsIndex = 2
+		}
+		if withInput {
+			argsIndex++
 		}
 		cwdArg, err = g.evalStringArg(c.Args[argsIndex], "std.os.execWith", argsIndex)
 		if err != nil {
@@ -617,15 +641,23 @@ func (g *mirGen) emitStdOsExecMIR(c *mir.CallInstr, shell bool, withOptions bool
 	if shell {
 		shellArg.val = "true"
 	}
-	if withOptions {
+	if withOptions && withInput {
+		g.declareRuntime(ostyRtOsExecInputOptionsSymbol, mirRuntimeDeclareLine("ptr", ostyRtOsExecInputOptionsSymbol, "ptr, ptr, i1, ptr, ptr, i64, ptr"))
+	} else if withOptions {
 		g.declareRuntime(ostyRtOsExecOptionsSymbol, mirRuntimeDeclareLine("ptr", ostyRtOsExecOptionsSymbol, "ptr, ptr, i1, ptr, ptr, i64"))
+	} else if withInput {
+		g.declareRuntime(ostyRtOsExecInputSymbol, mirRuntimeDeclareLine("ptr", ostyRtOsExecInputSymbol, "ptr, ptr, i1, ptr"))
 	} else {
 		g.declareRuntime(ostyRtOsExecSymbol, mirRuntimeDeclareLine("ptr", ostyRtOsExecSymbol, "ptr, ptr, i1"))
 	}
 	g.declareRuntime(ostyRtOsExecResultFreeSymbol, mirRuntimeDeclareLine("void", ostyRtOsExecResultFreeSymbol, "ptr"))
 	raw := g.fresh()
-	if withOptions {
+	if withOptions && withInput {
+		g.fnBuf.WriteString(mirCallValueLine(raw, "ptr", ostyRtOsExecInputOptionsSymbol, mirRuntimeArgList([]mirRuntimeArg{cmdArg, argsArg, shellArg, cwdArg, envArg, timeoutArg, inputArg})))
+	} else if withOptions {
 		g.fnBuf.WriteString(mirCallValueLine(raw, "ptr", ostyRtOsExecOptionsSymbol, mirRuntimeArgList([]mirRuntimeArg{cmdArg, argsArg, shellArg, cwdArg, envArg, timeoutArg})))
+	} else if withInput {
+		g.fnBuf.WriteString(mirCallValueLine(raw, "ptr", ostyRtOsExecInputSymbol, mirRuntimeArgList([]mirRuntimeArg{cmdArg, argsArg, shellArg, inputArg})))
 	} else {
 		g.fnBuf.WriteString(mirCallValueLine(raw, "ptr", ostyRtOsExecSymbol, mirRuntimeArgList([]mirRuntimeArg{cmdArg, argsArg, shellArg})))
 	}

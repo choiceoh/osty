@@ -63,9 +63,12 @@ func fastPathListWriteEnabled() bool {
 }
 
 const (
-	stdCmdSyntheticCommandTypeName   = "__osty_std_cmd_Command"
-	stdCmdSyntheticRunOutputTypeName = "__osty_std_cmd_RunOutput"
-	stdCmdSyntheticPipelineTypeName  = "__osty_std_cmd_Pipeline"
+	stdCmdSyntheticCommandTypeName      = "__osty_std_cmd_Command"
+	stdCmdSyntheticRunOutputTypeName    = "__osty_std_cmd_RunOutput"
+	stdCmdSyntheticPipelineTypeName     = "__osty_std_cmd_Pipeline"
+	stdProcessSyntheticCommandTypeName  = "__osty_std_process_ProcessCommand"
+	stdProcessSyntheticOutputTypeName   = "__osty_std_process_ProcessOutput"
+	stdProcessSyntheticPipelineTypeName = "__osty_std_process_ProcessPipeline"
 )
 
 // GenerateFromMIR emits textual LLVM IR from a MIR module. It is the
@@ -208,13 +211,16 @@ type mirGen struct {
 	layoutCache MirLayoutCache        // §14 enum / tuple order cache (Osty mirror)
 	tupleDefs   map[string][]mir.Type // mangled tuple name → element types
 
-	stdTermSizeTouched     bool // synthetic std.term Size payload used by MIR
-	stdOsOutputTouched     bool // synthetic std.os Output payload used by MIR
-	stdOsExecOutputTouched bool // synthetic std.os ExecOutput payload used by MIR
-	stdCmdCommandTouched   bool // synthetic std.cmd Command payload used by MIR
-	stdCmdRunOutputTouched bool // synthetic std.cmd RunOutput payload used by MIR
-	stdCmdPipelineTouched  bool // synthetic std.cmd Pipeline payload used by MIR
-	stdRegexMatchTouched   bool // synthetic std.regex Match payload used by MIR
+	stdTermSizeTouched        bool // synthetic std.term Size payload used by MIR
+	stdOsOutputTouched        bool // synthetic std.os Output payload used by MIR
+	stdOsExecOutputTouched    bool // synthetic std.os ExecOutput payload used by MIR
+	stdCmdCommandTouched      bool // synthetic std.cmd Command payload used by MIR
+	stdCmdRunOutputTouched    bool // synthetic std.cmd RunOutput payload used by MIR
+	stdCmdPipelineTouched     bool // synthetic std.cmd Pipeline payload used by MIR
+	stdRegexMatchTouched      bool // synthetic std.regex Match payload used by MIR
+	stdProcessCommandTouched  bool // synthetic std.process ProcessCommand payload used by MIR
+	stdProcessOutputTouched   bool // synthetic std.process ProcessOutput payload used by MIR
+	stdProcessPipelineTouched bool // synthetic std.process ProcessPipeline payload used by MIR
 
 	// Closure-env thunks generated on demand when a bare `FnConst`
 	// (top-level fn used as a value) reaches an indirect-call site.
@@ -729,7 +735,10 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 			g.isStdCmdCommandType(x) ||
 			g.isStdCmdRunOutputType(x) ||
 			g.isStdCmdPipelineType(x) ||
-			g.isStdRegexMatchType(x) {
+			g.isStdRegexMatchType(x) ||
+			g.isStdProcessCommandType(x) ||
+			g.isStdProcessOutputType(x) ||
+			g.isStdProcessPipelineType(x) {
 			return true
 		}
 		if strings.Contains(x.QualifiedName(), ".") {
@@ -1631,7 +1640,10 @@ func (g *mirGen) emitTypeDefs() {
 		!g.stdCmdCommandTouched &&
 		!g.stdCmdRunOutputTouched &&
 		!g.stdCmdPipelineTouched &&
-		!g.stdRegexMatchTouched {
+		!g.stdRegexMatchTouched &&
+		!g.stdProcessCommandTouched &&
+		!g.stdProcessOutputTouched &&
+		!g.stdProcessPipelineTouched {
 		return
 	}
 
@@ -1673,6 +1685,15 @@ func (g *mirGen) emitTypeDefs() {
 	}
 	if g.stdCmdPipelineTouched {
 		block.WriteString(mirLlvmStructTypeDefLine(stdCmdSyntheticPipelineTypeName, "ptr, ptr, ptr, i64"))
+	}
+	if g.stdProcessCommandTouched {
+		block.WriteString(mirLlvmStructTypeDefLine(stdProcessSyntheticCommandTypeName, "ptr, ptr, ptr, ptr, i64, i1, ptr, i1"))
+	}
+	if g.stdProcessOutputTouched {
+		block.WriteString(mirLlvmStructTypeDefLine(stdProcessSyntheticOutputTypeName, "i64, ptr, ptr, i1"))
+	}
+	if g.stdProcessPipelineTouched {
+		block.WriteString(mirLlvmStructTypeDefLine(stdProcessSyntheticPipelineTypeName, "ptr, ptr, ptr, i64, ptr, i1"))
 	}
 	for _, name := range g.layoutCache.EnumLayoutOrder {
 		block.WriteString(mirLlvmEnumLayoutTypeDefLine(name))
@@ -3336,6 +3357,9 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 			return err
 		}
 	}
+	if handled, err := g.emitStdProcessFacadeCall(c, fnRef); handled {
+		return err
+	}
 	if handled, err := g.emitStdCmdCall(c, fnRef); handled {
 		return err
 	}
@@ -3573,7 +3597,7 @@ func (g *mirGen) emitStdProcessCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, e
 		g.emitAbortStringPtrAndExit(g.stringLiteral("entered unreachable code"))
 		return true, nil
 	}
-	return false, nil
+	return g.emitStdProcessFacadeCall(c, fnRef)
 }
 
 func splitRuntimeFFICallee(symbol string) (path string, name string, ok bool) {
@@ -9651,6 +9675,14 @@ func stdCmdCommandListType() mir.Type {
 	return &ir.NamedType{Name: "List", Args: []ir.Type{stdCmdCommandNamedType()}, Builtin: true}
 }
 
+func stdProcessCommandNamedType() mir.Type {
+	return &ir.NamedType{Name: "ProcessCommand"}
+}
+
+func stdProcessCommandListType() mir.Type {
+	return &ir.NamedType{Name: "List", Args: []ir.Type{stdProcessCommandNamedType()}, Builtin: true}
+}
+
 func (g *mirGen) syntheticStdlibStructElementTypes(nt *ir.NamedType) ([]mir.Type, bool) {
 	switch {
 	case g.isStdCmdCommandType(nt):
@@ -9661,6 +9693,12 @@ func (g *mirGen) syntheticStdlibStructElementTypes(nt *ir.NamedType) ([]mir.Type
 		return []mir.Type{stdCmdCommandListType(), ir.TString, stdCmdStringMapType(), ir.TInt}, true
 	case g.isStdRegexMatchType(nt):
 		return []mir.Type{ir.TString, ir.TInt, ir.TInt}, true
+	case g.isStdProcessCommandType(nt):
+		return []mir.Type{ir.TString, stdCmdStringListType(), ir.TString, stdCmdStringMapType(), ir.TInt, ir.TBool, ir.TString, ir.TBool}, true
+	case g.isStdProcessOutputType(nt):
+		return []mir.Type{ir.TInt, ir.TString, ir.TString, ir.TBool}, true
+	case g.isStdProcessPipelineType(nt):
+		return []mir.Type{stdProcessCommandListType(), ir.TString, stdCmdStringMapType(), ir.TInt, ir.TString, ir.TBool}, true
 	default:
 		return nil, false
 	}
@@ -10215,6 +10253,54 @@ func (g *mirGen) projectionIndexForType(base mir.Type, p mir.Projection) (int, b
 					return 2, true
 				}
 			}
+			if g.isStdProcessCommandType(nt) {
+				switch fp.Name {
+				case "program":
+					return 0, true
+				case "args":
+					return 1, true
+				case "cwd":
+					return 2, true
+				case "env":
+					return 3, true
+				case "timeoutMillis":
+					return 4, true
+				case "useShell":
+					return 5, true
+				case "stdin":
+					return 6, true
+				case "hasStdin":
+					return 7, true
+				}
+			}
+			if g.isStdProcessOutputType(nt) {
+				switch fp.Name {
+				case "exitCode":
+					return 0, true
+				case "stdout":
+					return 1, true
+				case "stderr":
+					return 2, true
+				case "timedOut":
+					return 3, true
+				}
+			}
+			if g.isStdProcessPipelineType(nt) {
+				switch fp.Name {
+				case "stages":
+					return 0, true
+				case "cwd":
+					return 1, true
+				case "env":
+					return 2, true
+				case "timeoutMillis":
+					return 3, true
+				case "stdin":
+					return 4, true
+				case "hasStdin":
+					return 5, true
+				}
+			}
 		}
 	}
 	return projectionIndex(p)
@@ -10728,6 +10814,18 @@ func (g *mirGen) llvmType(t mir.Type) string {
 			g.stdRegexMatchTouched = true
 			return "%" + stdRegexSyntheticMatchTypeName
 		}
+		if g.isStdProcessCommandType(x) {
+			g.stdProcessCommandTouched = true
+			return "%" + stdProcessSyntheticCommandTypeName
+		}
+		if g.isStdProcessOutputType(x) {
+			g.stdProcessOutputTouched = true
+			return "%" + stdProcessSyntheticOutputTypeName
+		}
+		if g.isStdProcessPipelineType(x) {
+			g.stdProcessPipelineTouched = true
+			return "%" + stdProcessSyntheticPipelineTypeName
+		}
 		// Prelude Option / Maybe / Result. Mint an anonymous
 		// `%Option.<T>` / `%Result.<T>.<E>` so the IR carries the
 		// element type in its name — mimicking how the legacy
@@ -10864,6 +10962,45 @@ func (g *mirGen) isStdRegexMatchType(t *ir.NamedType) bool {
 	}
 	q := t.QualifiedName()
 	return q == "Match" || q == "std.regex.Match" || q == "regex.Match"
+}
+
+func (g *mirGen) isStdProcessCommandType(t *ir.NamedType) bool {
+	if t == nil || t.Name != "ProcessCommand" {
+		return false
+	}
+	if g.mod != nil && g.mod.Layouts != nil {
+		if _, ok := g.mod.Layouts.Structs[mirNamedTypeLayoutKey(t)]; ok {
+			return false
+		}
+	}
+	q := t.QualifiedName()
+	return q == "ProcessCommand" || q == "std.process.ProcessCommand" || q == "process.ProcessCommand"
+}
+
+func (g *mirGen) isStdProcessOutputType(t *ir.NamedType) bool {
+	if t == nil || t.Name != "ProcessOutput" {
+		return false
+	}
+	if g.mod != nil && g.mod.Layouts != nil {
+		if _, ok := g.mod.Layouts.Structs[mirNamedTypeLayoutKey(t)]; ok {
+			return false
+		}
+	}
+	q := t.QualifiedName()
+	return q == "ProcessOutput" || q == "std.process.ProcessOutput" || q == "process.ProcessOutput"
+}
+
+func (g *mirGen) isStdProcessPipelineType(t *ir.NamedType) bool {
+	if t == nil || t.Name != "ProcessPipeline" {
+		return false
+	}
+	if g.mod != nil && g.mod.Layouts != nil {
+		if _, ok := g.mod.Layouts.Structs[mirNamedTypeLayoutKey(t)]; ok {
+			return false
+		}
+	}
+	q := t.QualifiedName()
+	return q == "ProcessPipeline" || q == "std.process.ProcessPipeline" || q == "process.ProcessPipeline"
 }
 
 // ==== enum layout helpers ====

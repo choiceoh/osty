@@ -8,6 +8,8 @@ import (
 
 const ostyRtOsExecSymbol = "osty_rt_os_exec"
 const ostyRtOsExecOptionsSymbol = "osty_rt_os_exec_options"
+const ostyRtOsExecInputSymbol = "osty_rt_os_exec_input"
+const ostyRtOsExecInputOptionsSymbol = "osty_rt_os_exec_input_options"
 const ostyRtOsHostnameSymbol = "osty_rt_os_hostname"
 const ostyRtOsPidSymbol = "osty_rt_os_pid"
 const ostyRtOsExitSymbol = "osty_rt_os_exit"
@@ -197,10 +199,18 @@ func (g *generator) emitStdOsCall(call *ast.CallExpr) (value, bool, error) {
 		return g.emitStdOsExecCall(call)
 	case "execShell":
 		return g.emitStdOsExecShellCall(call)
+	case "execInput":
+		return g.emitStdOsExecInputCall(call)
+	case "execShellInput":
+		return g.emitStdOsExecShellInputCall(call)
 	case "execWith":
 		return g.emitStdOsExecWithCall(call)
 	case "execShellWith":
 		return g.emitStdOsExecShellWithCall(call)
+	case "execInputWith":
+		return g.emitStdOsExecInputWithCall(call)
+	case "execShellInputWith":
+		return g.emitStdOsExecShellInputWithCall(call)
 	case "pid":
 		return g.emitStdOsPidCall(call)
 	case "hostname":
@@ -218,7 +228,7 @@ func (g *generator) stdOsCallStaticResult(call *ast.CallExpr) (value, bool) {
 		return value{}, false
 	}
 	switch field.Name {
-	case "exec", "execShell":
+	case "exec", "execShell", "execInput", "execShellInput":
 		ensureStdOsSyntheticOutputStruct(g)
 		info, ok := builtinResultTypeFromAST(stdOsExecResultSourceTypeSingleton, g.typeEnv())
 		if !ok {
@@ -229,7 +239,7 @@ func (g *generator) stdOsCallStaticResult(call *ast.CallExpr) (value, bool) {
 			sourceType: stdOsExecResultSourceTypeSingleton,
 			rootPaths:  g.rootPathsForType(info.typ),
 		}, true
-	case "execWith", "execShellWith":
+	case "execWith", "execShellWith", "execInputWith", "execShellInputWith":
 		ensureStdOsSyntheticExecOutputStruct(g)
 		info, ok := builtinResultTypeFromAST(stdOsExecOptionsResultSourceTypeSingleton, g.typeEnv())
 		if !ok {
@@ -263,10 +273,10 @@ func (g *generator) staticStdOsCallSourceType(call *ast.CallExpr) (ast.Type, boo
 		return nil, false
 	}
 	switch field.Name {
-	case "exec", "execShell":
+	case "exec", "execShell", "execInput", "execShellInput":
 		ensureStdOsSyntheticOutputStruct(g)
 		return stdOsExecResultSourceTypeSingleton, true
-	case "execWith", "execShellWith":
+	case "execWith", "execShellWith", "execInputWith", "execShellInputWith":
 		ensureStdOsSyntheticExecOutputStruct(g)
 		return stdOsExecOptionsResultSourceTypeSingleton, true
 	case "pid":
@@ -294,22 +304,38 @@ func (g *generator) stdOsCallField(call *ast.CallExpr) (*ast.FieldExpr, bool) {
 }
 
 func (g *generator) emitStdOsExecCall(call *ast.CallExpr) (value, bool, error) {
-	return g.emitStdOsExecLikeCall(call, false, false)
+	return g.emitStdOsExecLikeCall(call, false, false, false)
 }
 
 func (g *generator) emitStdOsExecShellCall(call *ast.CallExpr) (value, bool, error) {
-	return g.emitStdOsExecLikeCall(call, true, false)
+	return g.emitStdOsExecLikeCall(call, true, false, false)
+}
+
+func (g *generator) emitStdOsExecInputCall(call *ast.CallExpr) (value, bool, error) {
+	return g.emitStdOsExecLikeCall(call, false, false, true)
+}
+
+func (g *generator) emitStdOsExecShellInputCall(call *ast.CallExpr) (value, bool, error) {
+	return g.emitStdOsExecLikeCall(call, true, false, true)
 }
 
 func (g *generator) emitStdOsExecWithCall(call *ast.CallExpr) (value, bool, error) {
-	return g.emitStdOsExecLikeCall(call, false, true)
+	return g.emitStdOsExecLikeCall(call, false, true, false)
 }
 
 func (g *generator) emitStdOsExecShellWithCall(call *ast.CallExpr) (value, bool, error) {
-	return g.emitStdOsExecLikeCall(call, true, true)
+	return g.emitStdOsExecLikeCall(call, true, true, false)
 }
 
-func (g *generator) emitStdOsExecLikeCall(call *ast.CallExpr, shell bool, withOptions bool) (value, bool, error) {
+func (g *generator) emitStdOsExecInputWithCall(call *ast.CallExpr) (value, bool, error) {
+	return g.emitStdOsExecLikeCall(call, false, true, true)
+}
+
+func (g *generator) emitStdOsExecShellInputWithCall(call *ast.CallExpr) (value, bool, error) {
+	return g.emitStdOsExecLikeCall(call, true, true, true)
+}
+
+func (g *generator) emitStdOsExecLikeCall(call *ast.CallExpr, shell bool, withOptions bool, withInput bool) (value, bool, error) {
 	resultSourceType := stdOsExecResultSourceTypeSingleton
 	ensureStdOsSyntheticOutputStruct(g)
 	if withOptions {
@@ -329,21 +355,36 @@ func (g *generator) emitStdOsExecLikeCall(call *ast.CallExpr, shell bool, withOp
 	if shell {
 		wantArgs = 1
 	}
+	if withInput {
+		if shell {
+			wantArgs = 2
+		} else {
+			wantArgs = 3
+		}
+		minArgs = wantArgs
+	}
 	if withOptions {
 		if shell {
 			wantArgs = 4
 		} else {
 			wantArgs = 5
 		}
+		if withInput {
+			if shell {
+				wantArgs = 5
+			} else {
+				wantArgs = 6
+			}
+		}
 		minArgs = wantArgs
 	}
 	if len(call.Args) < minArgs || len(call.Args) > wantArgs {
-		name := stdOsExecCallName(shell, withOptions)
+		name := stdOsExecCallName(shell, withOptions, withInput)
 		return value{}, true, unsupportedf("call", "%s received %d arguments", name, len(call.Args))
 	}
 	cmdArg := call.Args[0]
 	if cmdArg == nil || (cmdArg.Name != "" && cmdArg.Name != "cmd" && cmdArg.Name != "command") || cmdArg.Value == nil {
-		name := stdOsExecCallName(shell, withOptions)
+		name := stdOsExecCallName(shell, withOptions, withInput)
 		return value{}, true, unsupported("call", name+" requires a String command argument")
 	}
 	cmd, err := g.emitExpr(cmdArg.Value)
@@ -359,7 +400,7 @@ func (g *generator) emitStdOsExecLikeCall(call *ast.CallExpr, shell bool, withOp
 		return value{}, true, unsupportedf("type-system", "os.exec command type %s, want String", cmd.typ)
 	}
 	argsValue := value{typ: "ptr", ref: "null"}
-	if !shell && len(call.Args) == 2 {
+	if !shell && !withOptions && len(call.Args) >= 2 {
 		argsArg := call.Args[1]
 		if argsArg == nil || (argsArg.Name != "" && argsArg.Name != "args") || argsArg.Value == nil {
 			return value{}, true, unsupported("call", "os.exec requires args as a positional or `args:` List<String> argument")
@@ -375,6 +416,17 @@ func (g *generator) emitStdOsExecLikeCall(call *ast.CallExpr, shell bool, withOp
 		}
 		if argsValue.typ != "ptr" {
 			return value{}, true, unsupportedf("type-system", "os.exec args type %s, want List<String>", argsValue.typ)
+		}
+	}
+	inputValue := value{typ: "ptr", ref: "null"}
+	if withInput {
+		inputIndex := 1
+		if !shell {
+			inputIndex = 2
+		}
+		inputValue, err = g.emitStdOsExecStringArg(call.Args[inputIndex], []string{"stdin", "input"}, stdOsExecCallName(shell, withOptions, withInput)+".stdin")
+		if err != nil {
+			return value{}, true, err
 		}
 	}
 	cwdValue := value{typ: "ptr", ref: "null"}
@@ -401,6 +453,9 @@ func (g *generator) emitStdOsExecLikeCall(call *ast.CallExpr, shell bool, withOp
 			}
 			argsIndex = 2
 		}
+		if withInput {
+			argsIndex++
+		}
 		cwdValue, err = g.emitStdOsExecPtrArg(call.Args[argsIndex], "cwd", "String", "os.execWith.cwd")
 		if err != nil {
 			return value{}, true, err
@@ -425,8 +480,12 @@ func (g *generator) emitStdOsExecLikeCall(call *ast.CallExpr, shell bool, withOp
 			return value{}, true, unsupportedf("type-system", "os.execWith timeoutMillis type %s, want Int", timeoutValue.typ)
 		}
 	}
-	if withOptions {
+	if withOptions && withInput {
+		g.declareRuntimeSymbol(ostyRtOsExecInputOptionsSymbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i1"}, {typ: "ptr"}, {typ: "ptr"}, {typ: "i64"}, {typ: "ptr"}})
+	} else if withOptions {
 		g.declareRuntimeSymbol(ostyRtOsExecOptionsSymbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i1"}, {typ: "ptr"}, {typ: "ptr"}, {typ: "i64"}})
+	} else if withInput {
+		g.declareRuntimeSymbol(ostyRtOsExecInputSymbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i1"}, {typ: "ptr"}})
 	} else {
 		g.declareRuntimeSymbol(ostyRtOsExecSymbol, "ptr", []paramInfo{{typ: "ptr"}, {typ: "ptr"}, {typ: "i1"}})
 	}
@@ -434,7 +493,17 @@ func (g *generator) emitStdOsExecLikeCall(call *ast.CallExpr, shell bool, withOp
 	emitter := g.toOstyEmitter()
 	g.emitCallSafepointIfNeeded(emitter)
 	var raw *LlvmValue
-	if withOptions {
+	if withOptions && withInput {
+		raw = llvmCall(emitter, "ptr", ostyRtOsExecInputOptionsSymbol, []*LlvmValue{
+			toOstyValue(cmd),
+			toOstyValue(argsValue),
+			llvmStdIoBoolValue(shell),
+			toOstyValue(cwdValue),
+			toOstyValue(envValue),
+			toOstyValue(timeoutValue),
+			toOstyValue(inputValue),
+		})
+	} else if withOptions {
 		raw = llvmCall(emitter, "ptr", ostyRtOsExecOptionsSymbol, []*LlvmValue{
 			toOstyValue(cmd),
 			toOstyValue(argsValue),
@@ -442,6 +511,13 @@ func (g *generator) emitStdOsExecLikeCall(call *ast.CallExpr, shell bool, withOp
 			toOstyValue(cwdValue),
 			toOstyValue(envValue),
 			toOstyValue(timeoutValue),
+		})
+	} else if withInput {
+		raw = llvmCall(emitter, "ptr", ostyRtOsExecInputSymbol, []*LlvmValue{
+			toOstyValue(cmd),
+			toOstyValue(argsValue),
+			llvmStdIoBoolValue(shell),
+			toOstyValue(inputValue),
 		})
 	} else {
 		raw = llvmCall(emitter, "ptr", ostyRtOsExecSymbol, []*LlvmValue{
@@ -510,8 +586,16 @@ func (g *generator) emitStdOsExecLikeCall(call *ast.CallExpr, shell bool, withOp
 	return v, true, nil
 }
 
-func stdOsExecCallName(shell bool, withOptions bool) string {
+func stdOsExecCallName(shell bool, withOptions bool, withInput bool) string {
 	switch {
+	case shell && withOptions && withInput:
+		return "os.execShellInputWith"
+	case withOptions && withInput:
+		return "os.execInputWith"
+	case shell && withInput:
+		return "os.execShellInput"
+	case withInput:
+		return "os.execInput"
 	case shell && withOptions:
 		return "os.execShellWith"
 	case shell:
@@ -521,6 +605,37 @@ func stdOsExecCallName(shell bool, withOptions bool) string {
 	default:
 		return "os.exec"
 	}
+}
+
+func (g *generator) emitStdOsExecStringArg(arg *ast.Arg, names []string, label string) (value, error) {
+	if arg == nil || arg.Value == nil {
+		return value{}, unsupported("call", label+" requires a String argument")
+	}
+	if arg.Name != "" {
+		ok := false
+		for _, name := range names {
+			if arg.Name == name {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return value{}, unsupported("call", label+" requires a String argument")
+		}
+	}
+	out, err := g.emitExpr(arg.Value)
+	if err != nil {
+		return value{}, err
+	}
+	out = g.protectManagedTemporary(label, out)
+	out, err = g.loadIfPointer(out)
+	if err != nil {
+		return value{}, err
+	}
+	if out.typ != "ptr" {
+		return value{}, unsupportedf("type-system", "%s type %s, want String", label, out.typ)
+	}
+	return out, nil
 }
 
 func (g *generator) emitStdOsExecPtrArg(arg *ast.Arg, name string, want string, label string) (value, error) {

@@ -13,6 +13,7 @@ import (
 type stdlibSupportMatrix struct {
 	production         []string
 	productionAdjacent []string
+	other              []string
 }
 
 // std.runtime.raw is intentionally internal support surface. It is bundled
@@ -28,6 +29,7 @@ func TestStdlibSupportMatrixCoversEmbeddedModules(t *testing.T) {
 	want := sortedStrings(combineStringSlices(
 		matrix.production,
 		matrix.productionAdjacent,
+		matrix.other,
 		stdlibSupportMatrixInternalModules,
 	))
 	if !reflect.DeepEqual(got, want) {
@@ -83,17 +85,27 @@ func parseStdlibSupportMatrix(markdown string) stdlibSupportMatrix {
 		sectionNone = iota
 		sectionProduction
 		sectionProductionAdjacent
+		sectionOther
 	)
 	var matrix stdlibSupportMatrix
 	section := sectionNone
 	for _, line := range strings.Split(markdown, "\n") {
 		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "## ") {
+			section = sectionNone
+			continue
+		}
 		if strings.HasPrefix(trimmed, "### ") {
 			switch {
-			case strings.Contains(trimmed, "Production-adjacent"):
+			case strings.Contains(trimmed, "Production-adjacent"), strings.Contains(trimmed, "Functional"):
 				section = sectionProductionAdjacent
 			case strings.Contains(trimmed, "Production"):
 				section = sectionProduction
+			case strings.Contains(trimmed, "Surface-rich"),
+				strings.Contains(trimmed, "Spec-stub"),
+				strings.Contains(trimmed, "Broken"),
+				strings.Contains(trimmed, "코어 인터페이스"):
+				section = sectionOther
 			default:
 				section = sectionNone
 			}
@@ -108,6 +120,8 @@ func parseStdlibSupportMatrix(markdown string) stdlibSupportMatrix {
 			matrix.production = append(matrix.production, module)
 		case sectionProductionAdjacent:
 			matrix.productionAdjacent = append(matrix.productionAdjacent, module)
+		case sectionOther:
+			matrix.other = append(matrix.other, module)
 		}
 	}
 	return matrix
@@ -122,7 +136,14 @@ func stdlibSupportMatrixTableModule(line string) (string, bool) {
 		return "", false
 	}
 	module := strings.TrimSpace(cells[1])
-	module = strings.Trim(module, "`")
+	if strings.Contains(module, "~~") {
+		return "", false
+	}
+	module = strings.Trim(module, "`*_")
+	if strings.HasPrefix(module, "primitives/") || module == "runtime/raw" {
+		return "", false
+	}
+	module = strings.ReplaceAll(module, "/", ".")
 	if module == "" || module == "모듈" || strings.Contains(module, " ") {
 		return "", false
 	}

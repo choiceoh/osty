@@ -10235,6 +10235,55 @@ const char *osty_rt_cmd_pipeline_shell_line(void *raw_stages) {
     return out;
 }
 
+typedef struct osty_rt_process_command {
+    const char *program;
+    void *args;
+    const char *cwd;
+    void *env;
+    int64_t timeout_millis;
+    bool use_shell;
+    const char *stdin_text;
+    bool has_stdin;
+} osty_rt_process_command;
+
+const char *osty_rt_process_pipeline_shell_line(void *raw_stages) {
+    osty_rt_list *stages;
+    osty_rt_process_command *commands;
+    int64_t i;
+    int64_t count;
+    size_t total;
+    char *out;
+    char *cursor;
+
+    stages = osty_rt_list_cast(raw_stages);
+    if (stages == NULL || stages->len == 0) {
+        out = (char *)osty_gc_allocate_managed(1, OSTY_GC_KIND_STRING, "runtime.process.pipeline.empty", NULL, NULL);
+        out[0] = '\0';
+        return out;
+    }
+    commands = (osty_rt_process_command *)stages->data;
+    count = stages->len;
+    total = 0;
+    for (i = 0; i < count; i++) {
+        total += osty_rt_cmd_shell_line_len(commands[i].program, commands[i].args, commands[i].use_shell);
+        if (i + 1 < count) {
+            total += 3;
+        }
+    }
+    out = (char *)osty_gc_allocate_managed(total + 1, OSTY_GC_KIND_STRING, "runtime.process.pipeline", NULL, NULL);
+    cursor = out;
+    for (i = 0; i < count; i++) {
+        cursor = osty_rt_cmd_write_shell_line(cursor, commands[i].program, commands[i].args, commands[i].use_shell);
+        if (i + 1 < count) {
+            *cursor++ = ' ';
+            *cursor++ = '|';
+            *cursor++ = ' ';
+        }
+    }
+    *cursor = '\0';
+    return out;
+}
+
 const char *osty_rt_strings_Repeat(const char *value, int64_t n) {
     size_t value_len;
     size_t total;
@@ -26960,12 +27009,32 @@ static char *osty_rt_os_build_windows_command_line(const char *cmd, void *args, 
     return buf;
 }
 
-static osty_rt_os_exec_result *osty_rt_os_exec_windows(const char *cmd, void *args, bool shell, const char *cwd, void *env_overrides, int64_t timeout_ms) {
+static bool osty_rt_os_write_all_handle_win(HANDLE handle, const char *text) {
+    const char *cursor = text == NULL ? "" : text;
+    size_t remaining = strlen(cursor);
+    while (remaining > 0) {
+        DWORD chunk = remaining > 0x7fffffffU ? 0x7fffffffU : (DWORD)remaining;
+        DWORD wrote = 0;
+        if (!WriteFile(handle, cursor, chunk, &wrote, NULL)) {
+            return false;
+        }
+        if (wrote == 0) {
+            return false;
+        }
+        cursor += wrote;
+        remaining -= (size_t)wrote;
+    }
+    return true;
+}
+
+static osty_rt_os_exec_result *osty_rt_os_exec_windows(const char *cmd, void *args, bool shell, const char *cwd, void *env_overrides, int64_t timeout_ms, const char *stdin_text) {
     char *stdout_path = NULL;
     char *stderr_path = NULL;
+    char *stdin_path = NULL;
     char *cmdline = NULL;
     char *cwd_text = NULL;
     char *env_block = NULL;
+    char *stdin_data = NULL;
     void *stdout_text = NULL;
     void *stderr_text = NULL;
     HANDLE stdout_handle = INVALID_HANDLE_VALUE;
@@ -26999,7 +27068,42 @@ static osty_rt_os_exec_result *osty_rt_os_exec_windows(const char *cmd, void *ar
         free(env_block);
         return osty_rt_os_exec_error_result("failed to launch process", "could not create stderr temp file", "runtime.os.exec.error");
     }
-    {
+    if (stdin_text != NULL) {
+        if (!osty_rt_os_open_tempfile_win(&stdin_path, &stdin_handle)) {
+            CloseHandle(stdout_handle);
+            CloseHandle(stderr_handle);
+            DeleteFileA(stdout_path);
+            DeleteFileA(stderr_path);
+            free(stdout_path);
+            free(stderr_path);
+            free(cwd_text);
+            free(env_block);
+            return osty_rt_os_exec_error_result("failed to launch process", "could not create stdin temp file", "runtime.os.exec.error");
+        }
+        stdin_data = osty_rt_os_cstr_dup(stdin_text, "runtime.os.exec.stdin");
+        if (!osty_rt_os_write_all_handle_win(stdin_handle, stdin_data) ||
+            SetFilePointer(stdin_handle, 0, NULL, FILE_BEGIN) == INVALID_SET_FILE_POINTER) {
+            DWORD code = GetLastError();
+            char buf[96];
+            int written = snprintf(buf, sizeof(buf), "win32 error %lu", (unsigned long)code);
+            CloseHandle(stdin_handle);
+            CloseHandle(stdout_handle);
+            CloseHandle(stderr_handle);
+            DeleteFileA(stdin_path);
+            DeleteFileA(stdout_path);
+            DeleteFileA(stderr_path);
+            free(stdin_path);
+            free(stdout_path);
+            free(stderr_path);
+            free(stdin_data);
+            free(cwd_text);
+            free(env_block);
+            if (written < 0) {
+                return osty_rt_os_exec_error_result("failed to prepare process stdin", "WriteFile failed", "runtime.os.exec.error");
+            }
+            return osty_rt_os_exec_error_result("failed to prepare process stdin", buf, "runtime.os.exec.error");
+        }
+    } else {
         SECURITY_ATTRIBUTES sa;
         sa.nLength = sizeof(sa);
         sa.lpSecurityDescriptor = NULL;
@@ -27032,8 +27136,13 @@ static osty_rt_os_exec_result *osty_rt_os_exec_windows(const char *cmd, void *ar
         CloseHandle(stdin_handle);
         CloseHandle(stdout_handle);
         CloseHandle(stderr_handle);
+        if (stdin_path != NULL) {
+            DeleteFileA(stdin_path);
+            free(stdin_path);
+        }
         DeleteFileA(stdout_path);
         DeleteFileA(stderr_path);
+        free(stdin_data);
         free(stdout_path);
         free(stderr_path);
         free(cmdline);
@@ -27047,6 +27156,11 @@ static osty_rt_os_exec_result *osty_rt_os_exec_windows(const char *cmd, void *ar
     CloseHandle(stdin_handle);
     CloseHandle(stdout_handle);
     CloseHandle(stderr_handle);
+    if (stdin_path != NULL) {
+        DeleteFileA(stdin_path);
+        free(stdin_path);
+        free(stdin_data);
+    }
     free(cmdline);
     if (timeout_ms > 0) {
         DWORD wait_ms = timeout_ms > (int64_t)0xFFFFFFFF ? 0xFFFFFFFF : (DWORD)timeout_ms;
@@ -27268,12 +27382,42 @@ static int osty_rt_os_open_tempfile_posix(const char *prefix, char **out_path) {
     return fd;
 }
 
-static osty_rt_os_exec_result *osty_rt_os_exec_posix(const char *cmd, void *args, bool shell, const char *cwd, void *env_overrides, int64_t timeout_ms) {
+static int osty_rt_os_write_all_fd_posix(int fd, const char *text) {
+    const char *cursor;
+    size_t remaining;
+    if (fd < 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    cursor = text == NULL ? "" : text;
+    remaining = strlen(cursor);
+    while (remaining > 0) {
+        ssize_t wrote = write(fd, cursor, remaining);
+        if (wrote < 0) {
+            if (errno == EINTR) {
+                continue;
+            }
+            return -1;
+        }
+        if (wrote == 0) {
+            errno = EIO;
+            return -1;
+        }
+        cursor += wrote;
+        remaining -= (size_t)wrote;
+    }
+    return 0;
+}
+
+static osty_rt_os_exec_result *osty_rt_os_exec_posix(const char *cmd, void *args, bool shell, const char *cwd, void *env_overrides, int64_t timeout_ms, const char *stdin_text) {
     char *stdout_path = NULL;
     char *stderr_path = NULL;
+    char *stdin_path = NULL;
     char *cwd_text = NULL;
+    char *stdin_data = NULL;
     int stdout_fd = -1;
     int stderr_fd = -1;
+    int stdin_fd = -1;
     int exec_pipe[2] = {-1, -1};
     char **argv = NULL;
     char **envp = NULL;
@@ -27318,13 +27462,50 @@ static osty_rt_os_exec_result *osty_rt_os_exec_posix(const char *cmd, void *args
         osty_rt_os_envp_free(envp);
         return osty_rt_os_exec_error_result("failed to launch process", strerror(errno), "runtime.os.exec.error");
     }
+    if (stdin_text != NULL) {
+        stdin_fd = osty_rt_os_open_tempfile_posix("osty-in.", &stdin_path);
+        if (stdin_fd < 0) {
+            close(stdout_fd);
+            close(stderr_fd);
+            unlink(stdout_path);
+            unlink(stderr_path);
+            free(stdout_path);
+            free(stderr_path);
+            free(cwd_text);
+            osty_rt_os_envp_free(envp);
+            return osty_rt_os_exec_error_result("failed to launch process", strerror(errno), "runtime.os.exec.error");
+        }
+        stdin_data = osty_rt_os_cstr_dup(stdin_text, "runtime.os.exec.stdin");
+        if (osty_rt_os_write_all_fd_posix(stdin_fd, stdin_data) != 0 || lseek(stdin_fd, 0, SEEK_SET) < 0) {
+            int err = errno;
+            close(stdout_fd);
+            close(stderr_fd);
+            close(stdin_fd);
+            unlink(stdout_path);
+            unlink(stderr_path);
+            unlink(stdin_path);
+            free(stdout_path);
+            free(stderr_path);
+            free(stdin_path);
+            free(stdin_data);
+            free(cwd_text);
+            osty_rt_os_envp_free(envp);
+            return osty_rt_os_exec_error_result("failed to prepare process stdin", strerror(err), "runtime.os.exec.error");
+        }
+    }
     if (pipe(exec_pipe) != 0) {
         close(stdout_fd);
         close(stderr_fd);
+        if (stdin_fd >= 0) {
+            close(stdin_fd);
+            unlink(stdin_path);
+        }
         unlink(stdout_path);
         unlink(stderr_path);
         free(stdout_path);
         free(stderr_path);
+        free(stdin_path);
+        free(stdin_data);
         free(cwd_text);
         osty_rt_os_envp_free(envp);
         return osty_rt_os_exec_error_result("failed to launch process", strerror(errno), "runtime.os.exec.error");
@@ -27347,12 +27528,18 @@ static osty_rt_os_exec_result *osty_rt_os_exec_posix(const char *cmd, void *args
         }
         close(stdout_fd);
         close(stderr_fd);
+        if (stdin_fd >= 0) {
+            close(stdin_fd);
+            unlink(stdin_path);
+        }
         close(exec_pipe[0]);
         close(exec_pipe[1]);
         unlink(stdout_path);
         unlink(stderr_path);
         free(stdout_path);
         free(stderr_path);
+        free(stdin_path);
+        free(stdin_data);
         free(cwd_text);
         osty_rt_os_argv_free(argv);
         osty_rt_os_envp_free(envp);
@@ -27360,13 +27547,18 @@ static osty_rt_os_exec_result *osty_rt_os_exec_posix(const char *cmd, void *args
     }
     if (pid == 0) {
         close(exec_pipe[0]);
-        if (dup2(stdout_fd, STDOUT_FILENO) < 0 || dup2(stderr_fd, STDERR_FILENO) < 0) {
+        if ((stdin_fd >= 0 && dup2(stdin_fd, STDIN_FILENO) < 0) ||
+            dup2(stdout_fd, STDOUT_FILENO) < 0 ||
+            dup2(stderr_fd, STDERR_FILENO) < 0) {
             int err = errno;
             (void)write(exec_pipe[1], &err, sizeof(err));
             _exit(127);
         }
         close(stdout_fd);
         close(stderr_fd);
+        if (stdin_fd >= 0) {
+            close(stdin_fd);
+        }
         if (cwd_text != NULL && chdir(cwd_text) != 0) {
             int err = errno;
             (void)write(exec_pipe[1], &err, sizeof(err));
@@ -27391,6 +27583,12 @@ static osty_rt_os_exec_result *osty_rt_os_exec_posix(const char *cmd, void *args
     }
     close(stdout_fd);
     close(stderr_fd);
+    if (stdin_fd >= 0) {
+        close(stdin_fd);
+        unlink(stdin_path);
+        free(stdin_path);
+        free(stdin_data);
+    }
     close(exec_pipe[1]);
     sigemptyset(&sigurg_mask);
     sigaddset(&sigurg_mask, SIGURG);
@@ -27482,14 +27680,26 @@ static osty_rt_os_exec_result *osty_rt_os_exec_posix(const char *cmd, void *args
 
 osty_rt_os_exec_result *osty_rt_os_exec_options(const char *cmd, void *args, bool shell, const char *cwd, void *env_overrides, int64_t timeout_ms) {
 #if defined(_WIN32)
-    return osty_rt_os_exec_windows(cmd, args, shell, cwd, env_overrides, timeout_ms);
+    return osty_rt_os_exec_windows(cmd, args, shell, cwd, env_overrides, timeout_ms, NULL);
 #else
-    return osty_rt_os_exec_posix(cmd, args, shell, cwd, env_overrides, timeout_ms);
+    return osty_rt_os_exec_posix(cmd, args, shell, cwd, env_overrides, timeout_ms, NULL);
 #endif
 }
 
 osty_rt_os_exec_result *osty_rt_os_exec(const char *cmd, void *args, bool shell) {
     return osty_rt_os_exec_options(cmd, args, shell, NULL, NULL, 0);
+}
+
+osty_rt_os_exec_result *osty_rt_os_exec_input_options(const char *cmd, void *args, bool shell, const char *cwd, void *env_overrides, int64_t timeout_ms, const char *stdin_text) {
+#if defined(_WIN32)
+    return osty_rt_os_exec_windows(cmd, args, shell, cwd, env_overrides, timeout_ms, stdin_text);
+#else
+    return osty_rt_os_exec_posix(cmd, args, shell, cwd, env_overrides, timeout_ms, stdin_text);
+#endif
+}
+
+osty_rt_os_exec_result *osty_rt_os_exec_input(const char *cmd, void *args, bool shell, const char *stdin_text) {
+    return osty_rt_os_exec_input_options(cmd, args, shell, NULL, NULL, 0, stdin_text);
 }
 
 osty_rt_os_string_result *osty_rt_os_hostname(void) {
