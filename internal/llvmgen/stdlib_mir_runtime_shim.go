@@ -1078,6 +1078,24 @@ func (g *mirGen) emitFloatPrimitiveMethodCall(c *mir.CallInstr, method, recv, re
 			return true, err
 		}
 		return true, g.emitFloatRuntimeCallToDest(c, ostyRtFloatToFixedSymbol, "ptr", []mirRuntimeArg{{typ: "double", val: recvDouble}, precision})
+	case "toIntTrunc", "toIntRound", "toIntFloor", "toIntCeil":
+		// Float `.toIntTrunc()` / `.toIntRound()` / `.toIntFloor()` /
+		// `.toIntCeil()` return `Result<Int, Error>`. Runtime helper
+		// signature: `(double v, int64_t *out) -> const char* err`
+		// (NULL on success). Lower as alloca + call + branch on
+		// errPtr to assemble the canonical
+		// `{i64 disc, i64 payload}` Result aggregate the rest of the
+		// MIR pipeline expects. Mirrors `math_shim.go`'s
+		// `emitFloatCheckedIntResultCall` (AST path) but emits MIR's
+		// 2-field Result layout instead of the 3-field shape that
+		// path uses.
+		sym := map[string]string{
+			"toIntTrunc": ostyRtFloatToIntTruncSymbol,
+			"toIntRound": ostyRtFloatToIntRoundSymbol,
+			"toIntFloor": ostyRtFloatToIntFloorSymbol,
+			"toIntCeil":  ostyRtFloatToIntCeilSymbol,
+		}[method]
+		return true, g.emitFloatCheckedIntResultMIR(c, sym, recvDouble)
 	case "toInt":
 		return true, g.emitFloatRuntimeCallToDest(c, ostyRtFloatToIntLossySymbol, "i64", []mirRuntimeArg{{typ: "double", val: recvDouble}})
 	case "toInt32":
@@ -1118,6 +1136,64 @@ func (g *mirGen) emitFloatPrimitiveMethodCall(c *mir.CallInstr, method, recv, re
 
 func (g *mirGen) emitFloatRuntimeCallToDest(c *mir.CallInstr, symbol, retLLVM string, args []mirRuntimeArg) error {
 	return g.emitRuntimeCallToDest(c, symbol, retLLVM, args)
+}
+
+// emitFloatCheckedIntResultMIR lowers Float `.toIntTrunc()` /
+// `.toIntRound()` / `.toIntFloor()` / `.toIntCeil()` — runtime
+// signature `(double v, int64_t *out) -> const char* err` — into the
+// canonical MIR Result `{i64 disc, i64 payload}`:
+//   - disc=1 (Ok), payload=loaded i64 slot value.
+//   - disc=0 (Err), payload=ptrtoint of the error-message pointer.
+//
+// The runtime helper writes to the alloca on success and returns
+// NULL; on failure it returns a managed error-string ptr and leaves
+// the slot untouched. Branch on err == null + phi the Result.
+func (g *mirGen) emitFloatCheckedIntResultMIR(c *mir.CallInstr, symbol, recvDouble string) error {
+	if c.Dest == nil {
+		// No destination — runtime call still has the side effect of
+		// validating the value, but there's nowhere to store the
+		// Result. Just emit the call against a throwaway slot.
+		g.declareRuntime(symbol, mirRuntimeDeclareLine("ptr", symbol, "double, ptr"))
+		slot := g.fresh()
+		g.fnBuf.WriteString(mirAllocaLine(slot, "i64"))
+		g.fnBuf.WriteString(mirCallStmtLine("ptr", symbol, "double "+recvDouble+", ptr "+slot))
+		return nil
+	}
+	destLoc := g.fn.Local(c.Dest.Local)
+	if destLoc == nil {
+		return fmt.Errorf("mir-mvp: float-checked-int dest into unknown local %d", c.Dest.Local)
+	}
+	resultLLVM := g.llvmType(destLoc.Type)
+	g.declareRuntime(symbol, mirRuntimeDeclareLine("ptr", symbol, "double, ptr"))
+	slot := g.fresh()
+	g.fnBuf.WriteString(mirAllocaLine(slot, "i64"))
+	g.fnBuf.WriteString(mirStoreLine("i64", "0", slot))
+	errReg := g.fresh()
+	g.fnBuf.WriteString(mirCallValueLine(errReg, "ptr", symbol, "double "+recvDouble+", ptr "+slot))
+	isNil := g.fresh()
+	g.fnBuf.WriteString(mirICmpEqLine(isNil, "ptr", errReg, "null"))
+	okLabel := g.freshLabel("float.toint.ok")
+	errLabel := g.freshLabel("float.toint.err")
+	contLabel := g.freshLabel("float.toint.cont")
+	g.fnBuf.WriteString(mirBrCondLine(isNil, okLabel, errLabel))
+
+	g.fnBuf.WriteString(mirLabelLine(okLabel))
+	okPayload := g.fresh()
+	g.fnBuf.WriteString(mirLoadLine(okPayload, "i64", slot))
+	okValue := g.emitResultValue(resultLLVM, true, okPayload)
+	g.fnBuf.WriteString(mirBrUncondLine(contLabel))
+
+	g.fnBuf.WriteString(mirLabelLine(errLabel))
+	errPayload := g.fresh()
+	g.fnBuf.WriteString(mirPtrToIntLine(errPayload, errReg, "i64"))
+	errValue := g.emitResultValue(resultLLVM, false, errPayload)
+	g.fnBuf.WriteString(mirBrUncondLine(contLabel))
+
+	g.fnBuf.WriteString(mirLabelLine(contLabel))
+	phi := g.fresh()
+	g.fnBuf.WriteString(mirPhiTwoLine(phi, resultLLVM, okValue, okLabel, errValue, errLabel))
+	g.fnBuf.WriteString(mirStoreLine(resultLLVM, phi, g.localSlots[c.Dest.Local]))
+	return nil
 }
 
 func (g *mirGen) evalFloatAsDouble(op mir.Operand) (string, error) {
