@@ -401,10 +401,7 @@ func (g *mirGen) emitStdEncodingNullableBytesDecodeMIR(c *mir.CallInstr, spec *s
 	if spec.DecodeSymbol == "" {
 		return unsupported("mir-mvp", "encoding."+spec.Variant+".decode missing runtime symbol")
 	}
-	g.declareRuntime(spec.DecodeSymbol, mirRuntimeDeclareLine("ptr", spec.DecodeSymbol, "ptr"))
-	decoded := g.fresh()
-	g.fnBuf.WriteString(mirCallValueLine(decoded, "ptr", spec.DecodeSymbol, mirRuntimeArgList([]mirRuntimeArg{text})))
-	return g.emitPtrResultFromNullable(c, decoded, mir.TBytes, "")
+	return g.emitPtrResultFromNullableRuntimeCall(c, spec.DecodeSymbol, mir.TBytes, []mirRuntimeArg{text}, "")
 }
 
 // emitEncodingHexDecodeMIR validates input first (since
