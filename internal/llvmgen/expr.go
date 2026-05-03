@@ -7905,6 +7905,9 @@ func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
 	if v, found, err := g.emitStdCompressCall(call); found || err != nil {
 		return g.finishCallResult(call, v, err)
 	}
+	if v, found, err := g.emitStdEncodingCall(call); found || err != nil {
+		return g.finishCallResult(call, v, err)
+	}
 	if v, found, err := g.emitBytesNamespaceCall(call); found || err != nil {
 		return g.finishCallResult(call, v, err)
 	}
