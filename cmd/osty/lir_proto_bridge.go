@@ -10,13 +10,14 @@ import (
 
 // init registers the process-bridge LIR Proto runner with the
 // dispatcher. When `OSTY_LLVM_LIR_PROTO=1`, the runner spawns
-// `osty-native-lirproto` and forwards the request as JSON. Slice-1
-// of Phase-7: the binary's body is still a Go wrapper around the
-// production MIR-direct path (so output is byte-identical to
-// gate-off), but the wire shape + runner registration are now in
-// place. A future slice replaces the binary's internals with a
-// real call into `toolchain/lir_proto.osty` without touching this
-// file or the dispatcher.
+// `osty-native-lirproto` and forwards the request as JSON. As of
+// Phase-7 Slice 2, the bridge binary forks the self-hosted
+// `osty-self lir-proto-lower` subcommand (built by `osty build
+// toolchain/`) which routes MIR through the Osty-owned
+// `toolchain/lir_proto.osty` pipeline. The dispatcher's
+// fall-back-on-error policy converts a missing osty-self artifact
+// or a declined response into a structured warning + MIR-direct
+// emit so gate-on never hard-fails on a stale worktree.
 func init() {
 	llvmgen.SetLIRProtoRunner(processLIRProtoRunner{})
 }

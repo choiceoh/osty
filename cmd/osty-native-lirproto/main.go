@@ -1,36 +1,55 @@
 // Command osty-native-lirproto is the subprocess half of the
 // Phase-7 LIR Proto runner bridge. It reads a `LIRProtoRequest`-
-// shaped JSON payload on stdin, runs the request through the
-// production lower → emit chain, and writes a `LIRProtoResponse`
+// shaped JSON payload on stdin and writes a `LIRProtoResponse`
 // JSON object on stdout.
 //
-// Slice-1 contract: the binary's body is a thin Go wrapper around
-// the existing MIR-direct emitter, so gate-on output matches
-// gate-off byte-for-byte. The wire shape is what matters — a
-// future slice replaces this body with a real call into the
-// Osty-owned `toolchain/lir_proto.osty` lowerer without touching
-// any caller of the bridge package.
+// Slice-2 contract: the binary's body is now a thin Go shim that
+// stages the source to a temp file and forks the self-hosted
+// `osty-self` binary's `lir-proto-lower` subcommand to do the
+// actual lowering through the Osty-owned `toolchain/lir_proto.osty`
+// pipeline (HIR → MIR → LIR Proto → LLVM IR). The wire shape stays
+// identical to Slice 1 — callers in `internal/nativelirproto`,
+// `cmd/osty/lir_proto_bridge.go`, and the tests are untouched.
 //
-// The binary intentionally scrubs `OSTY_LLVM_LIR_PROTO` from its
-// own environment before invoking `backend.EmitLLVMIRText` so the
-// gate check inside `generateLLVMIR` doesn't re-enter the runner
-// (which would recurse into another subprocess).
+// Failure modes (returned as `declined: true` so the dispatcher
+// falls back to the legacy MIR-direct emit instead of hard-failing):
+//
+//   - osty-self binary not found (run `osty build toolchain/` first)
+//   - osty-self exits non-zero on the lowering subcommand
+//   - the staged source can't be read back / written
+//
+// Tests of the wire shape itself live in `internal/nativelirproto`
+// (`TestRunUsesEnvBinaryAndDecodesResponse`,
+// `TestRunSurfacesDeclinedResponse`) and use a fake binary instead
+// of this one.
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 
-	"github.com/osty/osty/internal/backend"
-	"github.com/osty/osty/internal/check"
-	"github.com/osty/osty/internal/llvmgen"
 	"github.com/osty/osty/internal/nativelirproto"
-	"github.com/osty/osty/internal/resolve"
-	"github.com/osty/osty/internal/stdlib"
 )
+
+// SelfBinEnv overrides the osty-self lookup. Local development /
+// CI uses this to point at a freshly built artifact without having
+// to write to the default `.osty/out/...` cache path.
+const SelfBinEnv = "OSTY_SELF_BIN"
+
+// defaultSelfBinCandidates lists the paths searched (in order)
+// when SelfBinEnv is unset. They mirror the layout `osty build
+// toolchain/` writes by default.
+var defaultSelfBinCandidates = []string{
+	"toolchain/.osty/out/debug/llvm/osty-self",
+	"toolchain/.osty/out/release/llvm/osty-self",
+}
 
 func main() {
 	if err := run(os.Stdin, os.Stdout); err != nil {
@@ -40,13 +59,6 @@ func main() {
 }
 
 func run(stdin io.Reader, stdout io.Writer) error {
-	// Disable the Phase-7 gate inside this subprocess so
-	// `backend.EmitLLVMIRText` bypasses the LIR Proto runner check
-	// and goes straight through the production MIR-direct path. If
-	// we left the env var set, the dispatcher would re-spawn this
-	// binary — infinite recursion.
-	_ = os.Unsetenv(llvmgen.LIRProtoEnvVar)
-
 	var req nativelirproto.Request
 	if err := json.NewDecoder(stdin).Decode(&req); err != nil {
 		return fmt.Errorf("decode lirproto request: %w", err)
@@ -63,91 +75,90 @@ func run(stdin io.Reader, stdout io.Writer) error {
 }
 
 func lower(req nativelirproto.Request) (nativelirproto.Response, error) {
-	entry, cleanup, err := prepareEntry(req)
+	selfBin, err := resolveOstySelfBin()
+	if err != nil {
+		// Missing osty-self is a recoverable fall-back, not a hard
+		// exit — Phase-7 keeps gate-on/gate-off output identical
+		// when the self-host artifact isn't built yet.
+		return nativelirproto.Response{Declined: true, Error: err.Error()}, nil
+	}
+	sourcePath, cleanup, err := stageSource(req)
 	if cleanup != nil {
 		defer cleanup()
 	}
 	if err != nil {
 		return nativelirproto.Response{}, err
 	}
-	ir, _, emitErr := backend.EmitLLVMIRText(entry, req.Target, nil)
-	if emitErr != nil {
-		return nativelirproto.Response{}, emitErr
-	}
-	if len(ir) == 0 {
-		return nativelirproto.Response{Declined: true, Error: "empty IR"}, nil
-	}
-	return nativelirproto.Response{LLVMIR: string(ir)}, nil
-}
 
-// prepareEntry mirrors osty-native-llvmgen's source-staging path:
-// write the source bytes to a temp dir, stand up the workspace +
-// resolver + checker, and produce the `backend.Entry` the emit
-// pipeline consumes.
-func prepareEntry(req nativelirproto.Request) (backend.Entry, func(), error) {
-	root, err := os.MkdirTemp("", "osty-native-lirproto-*")
-	if err != nil {
-		return backend.Entry{}, nil, err
-	}
-	cleanup := func() { os.RemoveAll(root) }
-
-	entryName := "main.osty"
-	if req.SourcePath != "" {
-		entryName = filepath.Base(req.SourcePath)
-	}
-	entryPath := filepath.Join(root, entryName)
-	if err := os.WriteFile(entryPath, []byte(req.Source), 0o644); err != nil {
-		return backend.Entry{}, cleanup, err
-	}
-	absEntry, err := filepath.Abs(entryPath)
-	if err != nil {
-		return backend.Entry{}, cleanup, err
-	}
-
-	ws, err := resolve.NewWorkspace(root)
-	if err != nil {
-		return backend.Entry{}, cleanup, err
-	}
-	ws.Stdlib = stdlib.LoadCached()
-	if _, err := ws.LoadPackageNative(""); err != nil {
-		return backend.Entry{}, cleanup, err
-	}
-	graph := resolve.NewPackageGraph(ws)
-	results := resolve.ResolveGraph(graph)
-	checks := check.PackageGraph(graph, results, check.Opts{Stdlib: ws.Stdlib})
-
-	pkg := ws.Packages[""]
-	if pkg == nil {
-		return backend.Entry{}, cleanup, fmt.Errorf("%s: no package sources were loaded", root)
-	}
-	var entryFile *resolve.PackageFile
-	for _, pf := range pkg.Files {
-		if pf == nil {
-			continue
-		}
-		fp, err := filepath.Abs(pf.Path)
-		if err != nil {
-			continue
-		}
-		if fp == absEntry {
-			entryFile = pf
-			break
-		}
-	}
-	if entryFile == nil {
-		return backend.Entry{}, cleanup, fmt.Errorf("%s is not part of the generated package rooted at %s", absEntry, root)
-	}
-	chk := checks[""]
-	if chk == nil {
-		chk = &check.Result{}
-	}
 	pkgName := req.PackageName
 	if pkgName == "" {
 		pkgName = "main"
 	}
-	entry, err := backend.PrepareGraphPackage(pkgName, absEntry, graph, "", entryFile, chk)
-	if err != nil {
-		return backend.Entry{}, cleanup, err
+	args := []string{"lir-proto-lower", sourcePath, "--package-name=" + pkgName}
+	if req.Target != "" {
+		args = append(args, "--target="+req.Target)
 	}
-	return entry, cleanup, nil
+
+	cmd := exec.Command(selfBin, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if msg == "" {
+			msg = err.Error()
+		}
+		return nativelirproto.Response{Declined: true, Error: msg}, nil
+	}
+	ir := stdout.String()
+	if ir == "" {
+		return nativelirproto.Response{Declined: true, Error: "osty-self lir-proto-lower produced empty IR"}, nil
+	}
+	return nativelirproto.Response{LLVMIR: ir}, nil
+}
+
+// resolveOstySelfBin returns the path to the self-host `osty-self`
+// binary the lower call should subprocess. SelfBinEnv wins outright;
+// otherwise we search the default `osty build toolchain/` output
+// paths relative to the current working directory.
+func resolveOstySelfBin() (string, error) {
+	if override := strings.TrimSpace(os.Getenv(SelfBinEnv)); override != "" {
+		if _, err := os.Stat(override); err == nil {
+			return override, nil
+		}
+		return "", fmt.Errorf("%s=%q not found", SelfBinEnv, override)
+	}
+	for _, rel := range defaultSelfBinCandidates {
+		abs, err := filepath.Abs(rel)
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(abs); err == nil {
+			return abs, nil
+		}
+	}
+	return "", errors.New("osty-self not found; run `osty build toolchain/` or set OSTY_SELF_BIN")
+}
+
+// stageSource writes the request's source bytes to a temp file so
+// the osty-self subcommand can open it. The original `sourcePath`
+// is preserved as the basename when set (callers expect the file
+// name to round-trip through the staged copy for diagnostic
+// `source_filename` lines).
+func stageSource(req nativelirproto.Request) (string, func(), error) {
+	root, err := os.MkdirTemp("", "osty-native-lirproto-*")
+	if err != nil {
+		return "", nil, err
+	}
+	cleanup := func() { os.RemoveAll(root) }
+
+	name := "main.osty"
+	if req.SourcePath != "" {
+		name = filepath.Base(req.SourcePath)
+	}
+	stagedPath := filepath.Join(root, name)
+	if err := os.WriteFile(stagedPath, []byte(req.Source), 0o644); err != nil {
+		return "", cleanup, err
+	}
+	return stagedPath, cleanup, nil
 }
