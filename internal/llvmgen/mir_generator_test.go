@@ -112,6 +112,70 @@ func TestGenerateFromMIRConstReturn(t *testing.T) {
 	}
 }
 
+// TestGenerateFromMIRFloatToIntCheckedReturnsResult — `f.toIntTrunc()` /
+// `.toIntRound()` / `.toIntFloor()` / `.toIntCeil()` must lower to the
+// matching `osty_rt_float_to_int_*` runtime helper plus a Result
+// `{i64 disc, i64 payload}` aggregate. The runtime helper takes
+// `(double v, int64_t *out) -> ptr err` (NULL on success); the
+// emit allocates a slot, branches on err == null, builds Ok / Err
+// aggregates and phis them. Without this dispatch the merged MIR
+// path emitted `call to unresolved symbol Float__toIntTrunc` which
+// blocked std.fmt's `fmt.fixed` chain end-to-end.
+func TestGenerateFromMIRFloatToIntCheckedReturnsResult(t *testing.T) {
+	resultIntError := &ir.NamedType{
+		Name:    "Result",
+		Builtin: true,
+		Args: []ir.Type{
+			ir.TInt,
+			&ir.NamedType{Name: "Error", Builtin: true},
+		},
+	}
+	for _, tc := range []struct {
+		method     string
+		runtimeSym string
+	}{
+		{"toIntTrunc", "osty_rt_float_to_int_trunc"},
+		{"toIntRound", "osty_rt_float_to_int_round"},
+		{"toIntFloor", "osty_rt_float_to_int_floor"},
+		{"toIntCeil", "osty_rt_float_to_int_ceil"},
+	} {
+		tc := tc
+		t.Run(tc.method, func(t *testing.T) {
+			fn := &ir.FnDecl{
+				Name:   "go",
+				Return: resultIntError,
+				Params: []*ir.Param{{Name: "f", Type: ir.TFloat}},
+				Body: &ir.Block{
+					Result: &ir.MethodCall{
+						Receiver: &ir.Ident{Name: "f", Kind: ir.IdentParam, T: ir.TFloat},
+						Name:     tc.method,
+						T:        resultIntError,
+					},
+				},
+			}
+			hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+			m := buildMIRModuleFromHIR(t, hir)
+			out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/float_to_int_" + tc.method + ".osty"})
+			if err != nil {
+				t.Fatalf("GenerateFromMIR: %v", err)
+			}
+			got := string(out)
+			for _, want := range []string{
+				"declare ptr @" + tc.runtimeSym + "(double, ptr)",
+				"call ptr @" + tc.runtimeSym + "(double",
+				"alloca i64",
+				"icmp eq ptr",
+				"insertvalue",
+				"phi",
+			} {
+				if !strings.Contains(got, want) {
+					t.Fatalf("missing %q for %s in:\n%s", want, tc.method, got)
+				}
+			}
+		})
+	}
+}
+
 // TestGenerateFromMIRShortCircuitAndDoesNotEvalRHS — `a && b` must
 // route through a CFG branch, not an eager `and i1`. The two output
 // blocks correspond to "LHS true → evaluate RHS" and "LHS false →
