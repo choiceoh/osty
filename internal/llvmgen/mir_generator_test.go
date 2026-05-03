@@ -112,6 +112,55 @@ func TestGenerateFromMIRConstReturn(t *testing.T) {
 	}
 }
 
+// TestGenerateFromMIRIntToFloatLowersAsSItoFP — `n.toFloat()` /
+// `.toFloat32()` / `.toFloat64()` on integer receivers must lower
+// to a single LLVM `sitofp` (or `uitofp`) cast, not a runtime call
+// to `Int__toFloat` (which has no definition). std.fmt's `bytes(n)`
+// chain (`n.toFloat().abs()`) tripped this wall under
+// `OSTY_STDLIB_BODY_LOWER=1`.
+func TestGenerateFromMIRIntToFloatLowersAsSItoFP(t *testing.T) {
+	for _, tc := range []struct {
+		method string
+		toLLVM string
+	}{
+		{"toFloat", "double"},
+		{"toFloat32", "float"},
+		{"toFloat64", "double"},
+	} {
+		tc := tc
+		t.Run(tc.method, func(t *testing.T) {
+			fn := &ir.FnDecl{
+				Name:   "go",
+				Return: ir.TFloat,
+				Params: []*ir.Param{{Name: "n", Type: ir.TInt}},
+				Body: &ir.Block{
+					Result: &ir.MethodCall{
+						Receiver: &ir.Ident{Name: "n", Kind: ir.IdentParam, T: ir.TInt},
+						Name:     tc.method,
+						T:        ir.TFloat,
+					},
+				},
+			}
+			hir := &ir.Module{Package: "main", Decls: []ir.Decl{fn}}
+			m := buildMIRModuleFromHIR(t, hir)
+			out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/int_to_float_" + tc.method + ".osty"})
+			if err != nil {
+				t.Fatalf("GenerateFromMIR: %v", err)
+			}
+			got := string(out)
+			want := "sitofp i64 "
+			if !strings.Contains(got, want) {
+				t.Fatalf("missing %q for %s in:\n%s", want, tc.method, got)
+			}
+			// Regression guard: a fallback to the unmangled symbol
+			// would emit `call ... @Int__toFloat` instead.
+			if strings.Contains(got, "@Int__toFloat") {
+				t.Fatalf("regressed to mangled-symbol call for %s:\n%s", tc.method, got)
+			}
+		})
+	}
+}
+
 // TestGenerateFromMIRFloatToIntCheckedReturnsResult — `f.toIntTrunc()` /
 // `.toIntRound()` / `.toIntFloor()` / `.toIntCeil()` must lower to the
 // matching `osty_rt_float_to_int_*` runtime helper plus a Result

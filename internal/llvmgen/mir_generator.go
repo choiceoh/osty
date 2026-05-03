@@ -3854,6 +3854,27 @@ func (g *mirGen) emitPrimitiveMethodCall(c *mir.CallInstr, fnRef *mir.FnRef) (bo
 		resultReg = g.fresh()
 		body += "  " + resultReg + " = call ptr @" + mirRtIntToStringSymbol() + "(i64 " + extReg + ")\n"
 
+	case "toFloat", "toFloat32", "toFloat64":
+		// Integer → float cast. `toFloat` and `toFloat64` produce
+		// LLVM `double`; `toFloat32` produces `float`. Signed
+		// integers go through `sitofp`, unsigned through `uitofp`.
+		// The merged-MIR path previously fell through to
+		// `mangleMethodSymbol("Int", "toFloat")` → `Int__toFloat`,
+		// which has no definition; std.fmt's `bytes(n)` chain
+		// (`n.toFloat().abs()`) tripped that wall whenever bytes-like
+		// formatters were reached after #1342 unblocked the rounding
+		// family.
+		toLLVM := "double"
+		if method == "toFloat32" {
+			toLLVM = "float"
+		}
+		op := "sitofp"
+		if !isSigned {
+			op = "uitofp"
+		}
+		resultReg = g.fresh()
+		body = "  " + resultReg + " = " + op + " " + llvmTy + " " + recv + " to " + toLLVM + "\n"
+
 	case "ns", "us", "ms", "s", "minutes", "h", "days", "weeks":
 		// Duration constructors (§10.20). Receiver is an integer
 		// kind (Float receivers route through emitFloatPrimitiveMethodCall
