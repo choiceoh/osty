@@ -4951,6 +4951,14 @@ void *osty_rt_encoding_base64_decode(const char *value);
 void *osty_rt_encoding_base64url_decode(const char *value);
 const char *osty_rt_encoding_url_encode(const char *value);
 const char *osty_rt_encoding_url_decode(const char *value);
+void *osty_rt_url_parse(const char *text);
+const char *osty_rt_url_get_scheme(void *raw_url);
+const char *osty_rt_url_get_host(void *raw_url);
+int64_t osty_rt_url_get_port(void *raw_url);
+const char *osty_rt_url_get_path(void *raw_url);
+const char *osty_rt_url_get_fragment(void *raw_url);
+bool osty_rt_url_has_fragment(void *raw_url);
+void *osty_rt_url_get_query(void *raw_url);
 void *osty_rt_crypto_sha256(void *raw_data);
 void *osty_rt_crypto_sha512(void *raw_data);
 void *osty_rt_crypto_sha1(void *raw_data);
@@ -12631,6 +12639,286 @@ const char *osty_rt_encoding_url_decode(const char *value) {
     }
     out[j] = '\0';
     return out;
+}
+
+/* ── std.url RFC 3986 parser ──────────────────────────────────────
+ * Spec scope (matches `internal/stdlib/modules/url.osty`):
+ *   URI       = scheme ":" hier-part [ "?" query ] [ "#" fragment ]
+ *   hier-part = "//" authority path-abempty
+ *             | path-absolute | path-rootless | path-empty
+ *   authority = [ userinfo "@" ] host [ ":" port ]
+ *   host      = IPv4 | IPv6-bracketed | reg-name
+ *
+ * Result is an `osty_rt_url *` heap struct with C strings for each
+ * component. NULL signals parse error. Accessors return component
+ * strings (or NULL/`-1` when absent). The query map is built lazily
+ * on first `osty_rt_url_get_query` call.
+ */
+
+typedef struct osty_rt_url {
+    char *scheme;       /* "" if absent */
+    char *host;         /* "" if absent */
+    int64_t port;       /* -1 = absent */
+    char *path;         /* "" if absent */
+    char *query_raw;    /* raw query string after '?', NULL if absent */
+    int has_fragment;   /* 0/1 */
+    char *fragment;     /* "" if has_fragment=0 */
+    void *query_map;    /* lazily-built Map<String, String> or NULL */
+} osty_rt_url;
+
+static char *osty_rt_url_dup_range(const char *start, size_t len, const char *site) {
+    char *out = (char *)osty_gc_allocate_managed(len + 1, OSTY_GC_KIND_STRING, site, NULL, NULL);
+    if (len > 0) {
+        memcpy(out, start, len);
+    }
+    out[len] = '\0';
+    return out;
+}
+
+static int osty_rt_url_is_alpha(unsigned char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+static int osty_rt_url_is_digit(unsigned char c) {
+    return c >= '0' && c <= '9';
+}
+static int osty_rt_url_is_scheme_char(unsigned char c) {
+    return osty_rt_url_is_alpha(c) || osty_rt_url_is_digit(c) || c == '+' || c == '-' || c == '.';
+}
+
+void *osty_rt_url_parse(const char *text) {
+    size_t len;
+    size_t i = 0;
+    size_t scheme_start;
+    size_t authority_start;
+    size_t authority_end;
+    size_t host_start, host_end;
+    size_t path_start, path_end;
+    size_t query_start = 0, query_end = 0;
+    size_t fragment_start = 0, fragment_end = 0;
+    int has_query = 0;
+    int has_fragment = 0;
+    int64_t port = -1;
+    osty_rt_url *out;
+
+    if (text == NULL) {
+        return NULL;
+    }
+    len = strlen(text);
+
+    /* scheme = ALPHA *( ALPHA | DIGIT | "+" | "-" | "." ) */
+    scheme_start = 0;
+    if (len == 0 || !osty_rt_url_is_alpha((unsigned char)text[0])) {
+        return NULL;
+    }
+    while (i < len && osty_rt_url_is_scheme_char((unsigned char)text[i])) {
+        i++;
+    }
+    if (i >= len || text[i] != ':') {
+        return NULL;
+    }
+    /* scheme range = [scheme_start, i) */
+
+    out = (osty_rt_url *)osty_gc_allocate_managed(sizeof(osty_rt_url), OSTY_GC_KIND_GENERIC,
+                                                  "runtime.url.parse", NULL, NULL);
+    out->scheme = osty_rt_url_dup_range(text + scheme_start, i - scheme_start, "runtime.url.parse.scheme");
+    out->port = -1;
+    out->host = osty_rt_url_dup_range("", 0, "runtime.url.parse.host.empty");
+    out->path = osty_rt_url_dup_range("", 0, "runtime.url.parse.path.empty");
+    out->query_raw = NULL;
+    out->fragment = osty_rt_url_dup_range("", 0, "runtime.url.parse.fragment.empty");
+    out->has_fragment = 0;
+    out->query_map = NULL;
+
+    i++; /* skip ':' */
+
+    /* hier-part */
+    if (i + 1 < len && text[i] == '/' && text[i + 1] == '/') {
+        /* "//" authority path-abempty */
+        i += 2;
+        authority_start = i;
+        while (i < len && text[i] != '/' && text[i] != '?' && text[i] != '#') {
+            i++;
+        }
+        authority_end = i;
+        path_start = i;
+
+        /* userinfo? skip past "@" if present (we don't expose userinfo in spec) */
+        size_t scan = authority_start;
+        size_t at_pos = authority_end;
+        for (size_t k = authority_start; k < authority_end; k++) {
+            if (text[k] == '@') {
+                at_pos = k;
+            }
+        }
+        if (at_pos != authority_end) {
+            scan = at_pos + 1;
+        }
+
+        /* host: bracketed IPv6 or reg-name */
+        if (scan < authority_end && text[scan] == '[') {
+            host_start = scan + 1;
+            while (scan < authority_end && text[scan] != ']') {
+                scan++;
+            }
+            host_end = scan;
+            if (scan < authority_end && text[scan] == ']') {
+                scan++;
+            }
+        } else {
+            host_start = scan;
+            while (scan < authority_end && text[scan] != ':') {
+                scan++;
+            }
+            host_end = scan;
+        }
+        out->host = osty_rt_url_dup_range(text + host_start, host_end - host_start, "runtime.url.parse.host");
+
+        /* port: ":" *DIGIT */
+        if (scan < authority_end && text[scan] == ':') {
+            scan++;
+            int64_t p = 0;
+            int any = 0;
+            while (scan < authority_end) {
+                unsigned char c = (unsigned char)text[scan];
+                if (!osty_rt_url_is_digit(c)) {
+                    return NULL;
+                }
+                p = p * 10 + (int64_t)(c - '0');
+                if (p > 65535) {
+                    return NULL;
+                }
+                any = 1;
+                scan++;
+            }
+            if (any) {
+                port = p;
+            }
+        }
+        out->port = port;
+    } else {
+        /* path-absolute / path-rootless / path-empty */
+        path_start = i;
+    }
+
+    /* path until '?' or '#' or EOF */
+    while (i < len && text[i] != '?' && text[i] != '#') {
+        i++;
+    }
+    path_end = i;
+    out->path = osty_rt_url_dup_range(text + path_start, path_end - path_start, "runtime.url.parse.path");
+
+    if (i < len && text[i] == '?') {
+        i++;
+        has_query = 1;
+        query_start = i;
+        while (i < len && text[i] != '#') {
+            i++;
+        }
+        query_end = i;
+    }
+    if (i < len && text[i] == '#') {
+        i++;
+        has_fragment = 1;
+        fragment_start = i;
+        fragment_end = len;
+    }
+
+    if (has_query) {
+        out->query_raw = osty_rt_url_dup_range(text + query_start, query_end - query_start, "runtime.url.parse.query.raw");
+    }
+    if (has_fragment) {
+        out->has_fragment = 1;
+        out->fragment = osty_rt_url_dup_range(text + fragment_start, fragment_end - fragment_start, "runtime.url.parse.fragment");
+    }
+
+    return out;
+}
+
+const char *osty_rt_url_get_scheme(void *raw_url) {
+    osty_rt_url *u = (osty_rt_url *)raw_url;
+    return u == NULL ? "" : (u->scheme == NULL ? "" : u->scheme);
+}
+
+const char *osty_rt_url_get_host(void *raw_url) {
+    osty_rt_url *u = (osty_rt_url *)raw_url;
+    return u == NULL ? "" : (u->host == NULL ? "" : u->host);
+}
+
+int64_t osty_rt_url_get_port(void *raw_url) {
+    osty_rt_url *u = (osty_rt_url *)raw_url;
+    return u == NULL ? -1 : u->port;
+}
+
+const char *osty_rt_url_get_path(void *raw_url) {
+    osty_rt_url *u = (osty_rt_url *)raw_url;
+    return u == NULL ? "" : (u->path == NULL ? "" : u->path);
+}
+
+bool osty_rt_url_has_fragment(void *raw_url) {
+    osty_rt_url *u = (osty_rt_url *)raw_url;
+    return u != NULL && u->has_fragment != 0;
+}
+
+const char *osty_rt_url_get_fragment(void *raw_url) {
+    osty_rt_url *u = (osty_rt_url *)raw_url;
+    return u == NULL ? "" : (u->fragment == NULL ? "" : u->fragment);
+}
+
+void *osty_rt_url_get_query(void *raw_url) {
+    osty_rt_url *u = (osty_rt_url *)raw_url;
+    void *map;
+    const char *q;
+    size_t qlen;
+    size_t i = 0;
+    if (u == NULL) {
+        return NULL;
+    }
+    if (u->query_map != NULL) {
+        return u->query_map;
+    }
+    map = osty_rt_map_new(OSTY_RT_ABI_STRING, OSTY_RT_ABI_PTR,
+                          (int64_t)sizeof(void *), NULL);
+    osty_gc_root_bind_v1(map);
+    u->query_map = map;
+    if (u->query_raw == NULL) {
+        osty_gc_root_release_v1(map);
+        return map;
+    }
+    q = u->query_raw;
+    qlen = strlen(q);
+    while (i < qlen) {
+        size_t key_start = i;
+        size_t key_end;
+        size_t val_start, val_end;
+        char *key_copy;
+        char *value_copy;
+        while (i < qlen && q[i] != '=' && q[i] != '&') {
+            i++;
+        }
+        key_end = i;
+        if (i < qlen && q[i] == '=') {
+            i++;
+            val_start = i;
+            while (i < qlen && q[i] != '&') {
+                i++;
+            }
+            val_end = i;
+        } else {
+            val_start = val_end = i;
+        }
+        if (i < qlen && q[i] == '&') {
+            i++;
+        }
+        key_copy = osty_rt_url_dup_range(q + key_start, key_end - key_start, "runtime.url.query.key");
+        osty_gc_root_bind_v1(key_copy);
+        value_copy = osty_rt_url_dup_range(q + val_start, val_end - val_start, "runtime.url.query.value");
+        osty_gc_root_bind_v1(value_copy);
+        osty_rt_map_insert_string(map, key_copy, &value_copy);
+        osty_gc_root_release_v1(value_copy);
+        osty_gc_root_release_v1(key_copy);
+    }
+    osty_gc_root_release_v1(map);
+    return map;
 }
 
 void *osty_rt_bytes_from_list(void *raw_list) {
