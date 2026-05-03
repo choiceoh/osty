@@ -31,6 +31,31 @@ func TestStdUuidParseUsesSharedPtrBackedResultHelper(t *testing.T) {
 	}
 }
 
+func TestStdEnvCurrentDirUsesSharedPtrBackedResultHelper(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "internal", "llvmgen", "stdlib_env_shim.go"))
+	if err != nil {
+		t.Fatalf("read stdlib_env_shim.go: %v", err)
+	}
+	text := string(src)
+	if !strings.Contains(text, "emitPtrBackedResultFromRuntimeCall(\n\t\t\"env.current_dir\"") {
+		t.Fatalf("env.currentDir no longer routes through the shared ptr-backed Result helper")
+	}
+	for _, forbidden := range []string{
+		"env.current_dir.err",
+		"env.current_dir.ok",
+		"env.current_dir.cont",
+		"env.currentDir currently needs ptr-backed Result",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("env.currentDir still carries manual Result marker %q", forbidden)
+		}
+	}
+}
+
 func TestSharedPtrBackedResultHelperIsStdlibNeutral(t *testing.T) {
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -100,7 +125,6 @@ func TestManualPtrBackedResultBlocksStayInventoried(t *testing.T) {
 	allowed := map[string][]string{
 		"stdlib_env_shim.go": []string{
 			"env.require currently needs ptr-backed Result<String, Error>",
-			"env.currentDir currently needs ptr-backed Result<String, Error>",
 		},
 		"stdlib_regex_shim.go": []string{
 			"regex.compile Result must be ptr-backed",
