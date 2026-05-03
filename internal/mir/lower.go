@@ -2638,6 +2638,37 @@ func (bs *bodyState) recoveredTypeOf(e ir.Expr) ir.Type {
 	return t
 }
 
+// recoverFnTypedLocalReturn looks up `name` in the MIR function's
+// locals (params + scope-bound). When the local's type is a concrete
+// FnType, returns its Return so the caller can use it as the recovered
+// CallExpr result type. Used to un-poison `<error>` temps that back
+// indirect-call returns inside string interpolation — the closure
+// parameter's MIR-level Type was substituted at monomorph time even
+// when the IR Ident node lost its annotation.
+func (bs *bodyState) recoverFnTypedLocalReturn(name string) ir.Type {
+	if name == "" {
+		return nil
+	}
+	if id, ok := bs.lookup(name); ok {
+		if loc := bs.fn.Local(id); loc != nil {
+			if f, ok := loc.Type.(*ir.FnType); ok && f.Return != nil && !isPoisonType(f.Return) {
+				return f.Return
+			}
+		}
+	}
+	// Fallback: params that haven't been pushed into the lookup scope
+	// yet are still in fn.Locals with the substituted FnType.
+	for _, loc := range bs.fn.Locals {
+		if loc == nil || loc.Name != name {
+			continue
+		}
+		if f, ok := loc.Type.(*ir.FnType); ok && f.Return != nil && !isPoisonType(f.Return) {
+			return f.Return
+		}
+	}
+	return nil
+}
+
 func (bs *bodyState) recoveredIdentStorageType(id *ir.Ident) ir.Type {
 	if id == nil {
 		return nil
@@ -2678,6 +2709,15 @@ func (bs *bodyState) recoverOperandType(e ir.Expr) ir.Type {
 			}
 			if sig := bs.l.signatureForFn(id.Name); sig != nil && !isPoisonType(sig.retType) {
 				return sig.retType
+			}
+			// Indirect call through a fn-typed local / param (e.g.
+			// `mapper(item)` inside `fmt.joinWith<T>`). The Ident's
+			// own Type may have been poisoned by an earlier pass, but
+			// the MIR function's locals were created with substituted
+			// types post-monomorph — so a name match against fn.Locals
+			// recovers the FnType when the IR Ident lost it.
+			if rt := bs.recoverFnTypedLocalReturn(id.Name); rt != nil {
+				return rt
 			}
 		}
 		// Qualified call through a `use X as alias` — `alias.fn(...)`.
@@ -4856,6 +4896,26 @@ func (bs *bodyState) resolveCall(c *ir.CallExpr) ([]Operand, Callee) {
 			// closure's `%Option.i64` param ABI).
 			args := bs.orderArgsByTypes(c.Args, paramTypesOf(cal.T))
 			return args, &IndirectCall{Callee: calleeOp}
+		}
+		// IdentUnknown fallback: the checker/native-checker pair skips
+		// some Ident nodes (notably ones nested inside StringLit
+		// interpolations after monomorph), leaving Kind == IdentUnknown
+		// and Type == <error> on the IR side. If the name resolves to
+		// a fn-typed local/param in MIR scope, route as an indirect
+		// call instead of treating it as a module symbol — otherwise
+		// the FnRef fallback below produces "call to unresolved symbol
+		// <name>" at MIR generator time. Mirror of the same recovery
+		// the operand path does via recoverFnTypedLocalReturn.
+		if cal.Kind == ir.IdentUnknown {
+			if id, ok := bs.lookup(cal.Name); ok {
+				if loc := bs.fn.Local(id); loc != nil {
+					if _, isFn := loc.Type.(*ir.FnType); isFn {
+						calleeOp := &CopyOp{Place: Place{Local: id}, T: loc.Type}
+						args := bs.orderArgsByTypes(c.Args, paramTypesOf(loc.Type))
+						return args, &IndirectCall{Callee: calleeOp}
+					}
+				}
+			}
 		}
 		sig := bs.l.signatureForFn(cal.Name)
 		args := bs.orderArgs(c.Args, sig)
