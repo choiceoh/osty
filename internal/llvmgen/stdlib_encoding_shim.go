@@ -20,6 +20,8 @@ const (
 	ostyRtEncodingBase64UrlEncSymbol = "osty_rt_encoding_base64url_encode"
 	ostyRtEncodingBase64DecodeSymbol = "osty_rt_encoding_base64_decode"
 	ostyRtEncodingBase64UrlDecSymbol = "osty_rt_encoding_base64url_decode"
+	ostyRtEncodingUrlEncodeSymbol    = "osty_rt_encoding_url_encode"
+	ostyRtEncodingUrlDecodeSymbol    = "osty_rt_encoding_url_decode"
 )
 
 type stdEncodingRuntimeDecodeKind int
@@ -334,6 +336,35 @@ func (g *generator) emitEncodingHexDecodeResult(text value) (value, error) {
 // by mir_generator.go; the actual ABI selection is table-driven.
 func (g *mirGen) emitStdEncodingBase64CallMIR(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
 	return g.emitStdEncodingRuntimeCallMIR(c, fnRef)
+}
+
+// emitStdEncodingUrlCallMIR is the MIR dispatch for std.encoding.url.* —
+// the top-level percent-encoding helper, distinct from the
+// `encoding.base64.url` URL-safe alphabet alias dispatched by
+// emitStdEncodingBase64CallMIR. Restored after PR #1362's squash-merge
+// dropped this method while keeping its call site in mir_generator.go,
+// which left main with an undefined-method build break.
+func (g *mirGen) emitStdEncodingUrlCallMIR(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
+	method := strings.TrimPrefix(fnRef.Symbol, "UrlEncoding__")
+	if method != "encode" && method != "decode" {
+		return false, nil
+	}
+	if method == "decode" {
+		return true, unsupported("mir-mvp", "encoding.url.decode requires AST lowering route (MIR Result<String, Error> handling pending)")
+	}
+	args := c.Args
+	if len(args) == 0 {
+		return true, unsupported("mir-mvp", "encoding.url method without receiver")
+	}
+	args = args[1:]
+	if len(args) != 1 {
+		return true, unsupported("mir-mvp", "encoding.url.encode requires one String argument")
+	}
+	text, err := g.evalStringArg(args[0], "encoding.url.encode", 0)
+	if err != nil {
+		return true, err
+	}
+	return true, g.emitRuntimeCallToDest(c, ostyRtEncodingUrlEncodeSymbol, "ptr", []mirRuntimeArg{text})
 }
 
 // emitStdEncodingCallMIR is the MIR-level dispatch for std.encoding methods.
