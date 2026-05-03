@@ -1,0 +1,16 @@
+// encoding_url_e2e — Phase 3 RFC 3986 percent-encoding E2E.
+
+use std.testing
+use std.encoding
+
+fn testUrlEncodeSpace() {
+    testing.assertEq(encoding.url.encode("hello world"), "hello%20world")
+}
+
+fn testUrlEncodeReservedChars() {
+    testing.assertEq(encoding.url.encode("a/b?c=d&e=f"), "a%2Fb%3Fc%3Dd%26e%3Df")
+}
+
+fn testUrlEncodeUnreservedPassthrough() {
+    testing.assertEq(encoding.url.encode("ABC-_.~"), "ABC-_.~")
+}
