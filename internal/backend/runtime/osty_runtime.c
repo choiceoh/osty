@@ -4945,6 +4945,10 @@ uint8_t osty_rt_bytes_get(void *raw_bytes, int64_t index);
 void *osty_rt_bytes_slice(void *raw_bytes, int64_t start, int64_t end);
 void *osty_rt_compress_gzip_encode(void *raw_bytes);
 void *osty_rt_compress_gzip_decode(void *raw_bytes);
+const char *osty_rt_encoding_base64_encode(void *raw_bytes);
+const char *osty_rt_encoding_base64url_encode(void *raw_bytes);
+void *osty_rt_encoding_base64_decode(const char *value);
+void *osty_rt_encoding_base64url_decode(const char *value);
 void *osty_rt_crypto_sha256(void *raw_data);
 void *osty_rt_crypto_sha512(void *raw_data);
 void *osty_rt_crypto_sha1(void *raw_data);
@@ -12283,6 +12287,204 @@ void *osty_rt_compress_gzip_decode(void *raw_bytes) {
         }
     }
 #endif
+}
+
+/* ── std.encoding base64 ──────────────────────────────────────────
+ * Standard (RFC 4648 §4) and URL-safe (§5) variants. Encode emits
+ * padded ('=') for the standard alphabet and unpadded for URL-safe,
+ * matching the body in `internal/stdlib/modules/encoding.osty`.
+ * Decode accepts either presence or absence of padding (decoder is
+ * lenient on trailing '=' per common practice). Returns NULL on
+ * invalid input — never aborts. */
+
+static const char osty_rt_encoding_base64_alphabet_std[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+static const char osty_rt_encoding_base64_alphabet_url[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+static int osty_rt_encoding_base64_lookup(unsigned char c, int url_safe) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (url_safe) {
+        if (c == '-') return 62;
+        if (c == '_') return 63;
+    } else {
+        if (c == '+') return 62;
+        if (c == '/') return 63;
+    }
+    return -1;
+}
+
+static const char *osty_rt_encoding_base64_encode_impl(void *raw_bytes, int url_safe, int padded) {
+    osty_rt_bytes *b = (osty_rt_bytes *)raw_bytes;
+    const unsigned char *data;
+    size_t len;
+    size_t out_len;
+    char *out;
+    size_t i;
+    size_t j;
+    const char *alphabet = url_safe ? osty_rt_encoding_base64_alphabet_url
+                                    : osty_rt_encoding_base64_alphabet_std;
+
+    if (b == NULL || b->len == 0) {
+        return osty_rt_string_dup_site("", 0, "runtime.encoding.base64.encode.empty");
+    }
+    if (b->len < 0) {
+        osty_rt_abort("runtime.encoding.base64.encode: negative length");
+    }
+    data = b->data;
+    len = (size_t)b->len;
+
+    /* groups-of-3 → groups-of-4. Padded variant always rounds up. */
+    if (padded) {
+        out_len = ((len + 2) / 3) * 4;
+    } else {
+        out_len = (len / 3) * 4;
+        switch (len % 3) {
+            case 1: out_len += 2; break;
+            case 2: out_len += 3; break;
+            default: break;
+        }
+    }
+    out = (char *)osty_gc_allocate_managed(out_len + 1, OSTY_GC_KIND_STRING,
+                                           "runtime.encoding.base64.encode", NULL, NULL);
+
+    for (i = 0, j = 0; i < len;) {
+        unsigned int triple = (unsigned int)data[i++] << 16;
+        int has1 = i < len;
+        int has2 = i + 1 < len;
+        if (has1) {
+            triple |= (unsigned int)data[i++] << 8;
+        }
+        if (has2) {
+            triple |= (unsigned int)data[i++];
+        }
+        out[j++] = alphabet[(triple >> 18) & 0x3F];
+        out[j++] = alphabet[(triple >> 12) & 0x3F];
+        if (has1) {
+            out[j++] = alphabet[(triple >> 6) & 0x3F];
+        } else if (padded) {
+            out[j++] = '=';
+        }
+        if (has2) {
+            out[j++] = alphabet[triple & 0x3F];
+        } else if (padded) {
+            out[j++] = '=';
+        }
+    }
+    out[j] = '\0';
+    return out;
+}
+
+const char *osty_rt_encoding_base64_encode(void *raw_bytes) {
+    return osty_rt_encoding_base64_encode_impl(raw_bytes, 0, 1);
+}
+
+const char *osty_rt_encoding_base64url_encode(void *raw_bytes) {
+    return osty_rt_encoding_base64_encode_impl(raw_bytes, 1, 0);
+}
+
+static void *osty_rt_encoding_base64_decode_impl(const char *value, int url_safe) {
+    size_t in_len;
+    size_t cleaned_len = 0;
+    size_t i;
+    size_t out_cap;
+    size_t out_len = 0;
+    unsigned char *out;
+    int values[4];
+    int v_idx = 0;
+    void *result;
+    int saw_pad = 0;
+
+    if (value == NULL) {
+        value = "";
+    }
+    in_len = strlen(value);
+
+    /* Worst-case output is ceil(in_len * 3/4); allocate that and shrink. */
+    out_cap = (in_len / 4 + 1) * 3 + 3;
+    out = (unsigned char *)malloc(out_cap);
+    if (out == NULL) {
+        osty_rt_abort("runtime.encoding.base64.decode: out of memory");
+    }
+
+    for (i = 0; i < in_len; i++) {
+        unsigned char c = (unsigned char)value[i];
+        int v;
+        /* Skip ASCII whitespace (spec-compliant decoders are lenient). */
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+            continue;
+        }
+        if (c == '=') {
+            saw_pad = 1;
+            values[v_idx++] = -1;
+        } else {
+            if (saw_pad) {
+                free(out);
+                return NULL; /* data after padding */
+            }
+            v = osty_rt_encoding_base64_lookup(c, url_safe);
+            if (v < 0) {
+                free(out);
+                return NULL;
+            }
+            values[v_idx++] = v;
+        }
+        cleaned_len++;
+        if (v_idx == 4) {
+            int v0 = values[0], v1 = values[1], v2 = values[2], v3 = values[3];
+            if (v0 < 0 || v1 < 0) {
+                free(out);
+                return NULL;
+            }
+            out[out_len++] = (unsigned char)((v0 << 2) | (v1 >> 4));
+            if (v2 >= 0) {
+                out[out_len++] = (unsigned char)(((v1 & 0x0F) << 4) | (v2 >> 2));
+                if (v3 >= 0) {
+                    out[out_len++] = (unsigned char)(((v2 & 0x03) << 6) | v3);
+                }
+            } else if (v3 >= 0) {
+                /* "Xx=Y" — invalid. */
+                free(out);
+                return NULL;
+            }
+            v_idx = 0;
+        }
+    }
+
+    /* Handle remaining values (URL-safe / unpadded form). */
+    if (v_idx != 0) {
+        if (v_idx == 1) {
+            free(out);
+            return NULL;
+        }
+        if (values[0] < 0 || values[1] < 0) {
+            free(out);
+            return NULL;
+        }
+        out[out_len++] = (unsigned char)((values[0] << 2) | (values[1] >> 4));
+        if (v_idx >= 3 && values[2] >= 0) {
+            out[out_len++] = (unsigned char)(((values[1] & 0x0F) << 4) | (values[2] >> 2));
+        } else if (v_idx == 2 && (values[1] & 0x0F) != 0) {
+            free(out);
+            return NULL; /* non-zero trailing bits */
+        }
+    }
+
+    result = osty_rt_bytes_dup_site(out_len == 0 ? NULL : out, out_len,
+                                     out_len == 0 ? "runtime.encoding.base64.decode.empty"
+                                                  : "runtime.encoding.base64.decode");
+    free(out);
+    return result;
+}
+
+void *osty_rt_encoding_base64_decode(const char *value) {
+    return osty_rt_encoding_base64_decode_impl(value, 0);
+}
+
+void *osty_rt_encoding_base64url_decode(const char *value) {
+    return osty_rt_encoding_base64_decode_impl(value, 1);
 }
 
 void *osty_rt_bytes_from_list(void *raw_list) {

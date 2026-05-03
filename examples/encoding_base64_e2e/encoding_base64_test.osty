@@ -1,0 +1,21 @@
+use std.testing
+use std.bytes
+use std.encoding
+
+fn testStandardEncodeHello() {
+    let inp = bytes.fromString("hello")
+    let out = encoding.base64.encode(inp)
+    testing.assertEq(out, "aGVsbG8=")
+}
+
+fn testStandardEncodeOneByte() {
+    let inp = bytes.fromString("a")
+    let out = encoding.base64.encode(inp)
+    testing.assertEq(out, "YQ==")
+}
+
+fn testStandardEncodeTwoBytes() {
+    let inp = bytes.fromString("ab")
+    let out = encoding.base64.encode(inp)
+    testing.assertEq(out, "YWI=")
+}
