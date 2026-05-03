@@ -3357,6 +3357,11 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 			return err
 		}
 	}
+	if strings.HasPrefix(fnRef.Symbol, "UrlEncoding__") {
+		if handled, err := g.emitStdEncodingUrlCallMIR(c, fnRef); handled {
+			return err
+		}
+	}
 	if handled, err := g.emitStdProcessFacadeCall(c, fnRef); handled {
 		return err
 	}

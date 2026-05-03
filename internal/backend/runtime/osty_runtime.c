@@ -4949,6 +4949,8 @@ const char *osty_rt_encoding_base64_encode(void *raw_bytes);
 const char *osty_rt_encoding_base64url_encode(void *raw_bytes);
 void *osty_rt_encoding_base64_decode(const char *value);
 void *osty_rt_encoding_base64url_decode(const char *value);
+const char *osty_rt_encoding_url_encode(const char *value);
+const char *osty_rt_encoding_url_decode(const char *value);
 void *osty_rt_crypto_sha256(void *raw_data);
 void *osty_rt_crypto_sha512(void *raw_data);
 void *osty_rt_crypto_sha1(void *raw_data);
@@ -12534,6 +12536,101 @@ void *osty_rt_encoding_base64_decode(const char *value) {
 
 void *osty_rt_encoding_base64url_decode(const char *value) {
     return osty_rt_encoding_base64_decode_impl(value, 1);
+}
+
+/* ── std.encoding url percent-encoding (RFC 3986) ─────────────────
+ * Encode: unreserved (A-Z a-z 0-9 - _ . ~) → as-is; everything else
+ * → "%XX". Decode: reverse, with "+" treated as literal '+' (note:
+ * application/x-www-form-urlencoded would map "+" → space — that's
+ * a separate codec). Decode returns NULL on invalid sequences. */
+
+static const char osty_rt_encoding_url_hex_upper[] = "0123456789ABCDEF";
+
+static int osty_rt_encoding_url_unreserved(unsigned char c) {
+    if (c >= 'A' && c <= 'Z') return 1;
+    if (c >= 'a' && c <= 'z') return 1;
+    if (c >= '0' && c <= '9') return 1;
+    if (c == '-' || c == '_' || c == '.' || c == '~') return 1;
+    return 0;
+}
+
+const char *osty_rt_encoding_url_encode(const char *value) {
+    size_t in_len;
+    size_t out_len = 0;
+    size_t i;
+    char *out;
+    size_t j = 0;
+
+    if (value == NULL) {
+        value = "";
+    }
+    in_len = strlen(value);
+
+    for (i = 0; i < in_len; i++) {
+        unsigned char c = (unsigned char)value[i];
+        if (osty_rt_encoding_url_unreserved(c)) {
+            out_len++;
+        } else {
+            out_len += 3;
+        }
+    }
+    out = (char *)osty_gc_allocate_managed(out_len + 1, OSTY_GC_KIND_STRING,
+                                           "runtime.encoding.url.encode", NULL, NULL);
+    for (i = 0; i < in_len; i++) {
+        unsigned char c = (unsigned char)value[i];
+        if (osty_rt_encoding_url_unreserved(c)) {
+            out[j++] = (char)c;
+        } else {
+            out[j++] = '%';
+            out[j++] = osty_rt_encoding_url_hex_upper[(c >> 4) & 0x0F];
+            out[j++] = osty_rt_encoding_url_hex_upper[c & 0x0F];
+        }
+    }
+    out[j] = '\0';
+    return out;
+}
+
+static int osty_rt_encoding_url_hex_value(unsigned char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return -1;
+}
+
+const char *osty_rt_encoding_url_decode(const char *value) {
+    size_t in_len;
+    size_t i;
+    char *out;
+    size_t j = 0;
+
+    if (value == NULL) {
+        value = "";
+    }
+    in_len = strlen(value);
+
+    /* Worst-case (no escapes) is in_len. Allocate that. */
+    out = (char *)osty_gc_allocate_managed(in_len + 1, OSTY_GC_KIND_STRING,
+                                           "runtime.encoding.url.decode", NULL, NULL);
+    for (i = 0; i < in_len; i++) {
+        unsigned char c = (unsigned char)value[i];
+        if (c == '%') {
+            int hi, lo;
+            if (i + 2 >= in_len) {
+                return NULL;
+            }
+            hi = osty_rt_encoding_url_hex_value((unsigned char)value[i + 1]);
+            lo = osty_rt_encoding_url_hex_value((unsigned char)value[i + 2]);
+            if (hi < 0 || lo < 0) {
+                return NULL;
+            }
+            out[j++] = (char)((hi << 4) | lo);
+            i += 2;
+        } else {
+            out[j++] = (char)c;
+        }
+    }
+    out[j] = '\0';
+    return out;
 }
 
 void *osty_rt_bytes_from_list(void *raw_list) {
