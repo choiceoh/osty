@@ -3331,6 +3331,11 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 			return err
 		}
 	}
+	if strings.HasPrefix(fnRef.Symbol, "Base64__") || strings.HasPrefix(fnRef.Symbol, "Base64Url__") {
+		if handled, err := g.emitStdEncodingBase64CallMIR(c, fnRef); handled {
+			return err
+		}
+	}
 	if handled, err := g.emitStdCmdCall(c, fnRef); handled {
 		return err
 	}

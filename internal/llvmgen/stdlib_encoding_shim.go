@@ -18,9 +18,11 @@ import (
 // missing C runtime entries (Phase 2 / Phase 3).
 
 const (
-	ostyRtBytesToHexSymbol      = "osty_rt_bytes_to_hex"
-	ostyRtBytesFromHexSymbol    = "osty_rt_bytes_from_hex"
-	ostyRtBytesIsValidHexSymbol = "osty_rt_bytes_is_valid_hex"
+	ostyRtBytesToHexSymbol           = "osty_rt_bytes_to_hex"
+	ostyRtBytesFromHexSymbol         = "osty_rt_bytes_from_hex"
+	ostyRtBytesIsValidHexSymbol      = "osty_rt_bytes_is_valid_hex"
+	ostyRtEncodingBase64EncodeSymbol = "osty_rt_encoding_base64_encode"
+	ostyRtEncodingBase64UrlEncSymbol = "osty_rt_encoding_base64url_encode"
 )
 
 func collectStdEncodingAliases(file *ast.File) map[string]bool {
@@ -46,6 +48,38 @@ func collectStdEncodingAliases(file *ast.File) map[string]bool {
 
 // stdEncodingHexCallInfo matches `<encoding-alias>.hex.<method>(...)`.
 func (g *generator) stdEncodingHexCallInfo(call *ast.CallExpr) (*ast.FieldExpr, bool) {
+	return g.stdEncodingMethodInfo(call, "hex")
+}
+
+func (g *generator) stdEncodingBase64CallInfo(call *ast.CallExpr) (*ast.FieldExpr, string, bool) {
+	if field, ok := g.stdEncodingMethodInfo(call, "base64"); ok {
+		return field, "base64", true
+	}
+	// Nested form: `encoding.base64.url.<method>(...)`.
+	field, ok := fieldExprOfCallFn(call)
+	if !ok || field.IsOptional {
+		return nil, "", false
+	}
+	urlField, ok := field.X.(*ast.FieldExpr)
+	if !ok || urlField == nil || urlField.IsOptional || urlField.Name != "url" {
+		return nil, "", false
+	}
+	base64Field, ok := urlField.X.(*ast.FieldExpr)
+	if !ok || base64Field == nil || base64Field.IsOptional || base64Field.Name != "base64" {
+		return nil, "", false
+	}
+	alias, ok := base64Field.X.(*ast.Ident)
+	if !ok || alias == nil || !g.stdEncodingAliases[alias.Name] {
+		return nil, "", false
+	}
+	switch field.Name {
+	case "encode", "decode":
+		return field, "base64url", true
+	}
+	return nil, "", false
+}
+
+func (g *generator) stdEncodingMethodInfo(call *ast.CallExpr, sub string) (*ast.FieldExpr, bool) {
 	if call == nil || len(g.stdEncodingAliases) == 0 {
 		return nil, false
 	}
@@ -53,11 +87,11 @@ func (g *generator) stdEncodingHexCallInfo(call *ast.CallExpr) (*ast.FieldExpr, 
 	if !ok || field.IsOptional {
 		return nil, false
 	}
-	hexField, ok := field.X.(*ast.FieldExpr)
-	if !ok || hexField == nil || hexField.IsOptional || hexField.Name != "hex" {
+	subField, ok := field.X.(*ast.FieldExpr)
+	if !ok || subField == nil || subField.IsOptional || subField.Name != sub {
 		return nil, false
 	}
-	alias, ok := hexField.X.(*ast.Ident)
+	alias, ok := subField.X.(*ast.Ident)
 	if !ok || alias == nil || !g.stdEncodingAliases[alias.Name] {
 		return nil, false
 	}
@@ -80,62 +114,93 @@ func hexDecodeResultSourceType() ast.Type {
 }
 
 func (g *generator) emitStdEncodingCall(call *ast.CallExpr) (value, bool, error) {
-	field, ok := g.stdEncodingHexCallInfo(call)
-	if !ok {
-		return value{}, false, nil
+	if field, ok := g.stdEncodingHexCallInfo(call); ok {
+		switch field.Name {
+		case "encode":
+			if len(call.Args) != 1 {
+				return value{}, true, unsupportedf("call", "encoding.hex.encode expects 1 argument, got %d", len(call.Args))
+			}
+			data, err := g.emitStdBytesArg(call.Args[0], "encoding.hex.encode", 0)
+			if err != nil {
+				return value{}, true, err
+			}
+			out, err := g.emitEncodingHexEncodeRuntime(data)
+			return out, true, err
+		case "decode":
+			if len(call.Args) != 1 {
+				return value{}, true, unsupportedf("call", "encoding.hex.decode expects 1 argument, got %d", len(call.Args))
+			}
+			text, err := g.emitStdStringsArg(call.Args[0], "encoding.hex.decode", 0)
+			if err != nil {
+				return value{}, true, err
+			}
+			out, err := g.emitEncodingHexDecodeResult(text)
+			return out, true, err
+		}
 	}
-	switch field.Name {
-	case "encode":
-		if len(call.Args) != 1 {
-			return value{}, true, unsupportedf("call", "encoding.hex.encode expects 1 argument, got %d", len(call.Args))
+	if field, variant, ok := g.stdEncodingBase64CallInfo(call); ok {
+		switch field.Name {
+		case "encode":
+			if len(call.Args) != 1 {
+				return value{}, true, unsupportedf("call", "encoding.%s.encode expects 1 argument, got %d", variant, len(call.Args))
+			}
+			data, err := g.emitStdBytesArg(call.Args[0], "encoding."+variant+".encode", 0)
+			if err != nil {
+				return value{}, true, err
+			}
+			out, err := g.emitEncodingBase64EncodeRuntime(data, variant == "base64url")
+			return out, true, err
+		case "decode":
+			// AST-route decode for base64 awaits the same Result<Bytes,
+			// Error>-via-MIR fix as hex.decode (separate cycle).
+			return value{}, true, unsupportedf("call", "encoding.%s.decode requires MIR Result<Bytes, Error> handling (separate cycle)", variant)
 		}
-		data, err := g.emitStdBytesArg(call.Args[0], "encoding.hex.encode", 0)
-		if err != nil {
-			return value{}, true, err
-		}
-		out, err := g.emitEncodingHexEncodeRuntime(data)
-		return out, true, err
-	case "decode":
-		if len(call.Args) != 1 {
-			return value{}, true, unsupportedf("call", "encoding.hex.decode expects 1 argument, got %d", len(call.Args))
-		}
-		text, err := g.emitStdStringsArg(call.Args[0], "encoding.hex.decode", 0)
-		if err != nil {
-			return value{}, true, err
-		}
-		out, err := g.emitEncodingHexDecodeResult(text)
-		return out, true, err
 	}
 	return value{}, false, nil
 }
 
 func (g *generator) stdEncodingCallStaticResult(call *ast.CallExpr) (value, bool) {
-	field, ok := g.stdEncodingHexCallInfo(call)
-	if !ok {
-		return value{}, false
-	}
-	switch field.Name {
-	case "encode":
-		return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"String"}}}, true
-	case "decode":
-		if info, ok := builtinResultTypeFromAST(hexDecodeResultSourceType(), g.typeEnv()); ok {
-			return value{typ: info.typ, sourceType: hexDecodeResultSourceType(), rootPaths: g.rootPathsForType(info.typ)}, true
+	if field, ok := g.stdEncodingHexCallInfo(call); ok {
+		switch field.Name {
+		case "encode":
+			return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"String"}}}, true
+		case "decode":
+			if info, ok := builtinResultTypeFromAST(hexDecodeResultSourceType(), g.typeEnv()); ok {
+				return value{typ: info.typ, sourceType: hexDecodeResultSourceType(), rootPaths: g.rootPathsForType(info.typ)}, true
+			}
+			return value{}, false
 		}
-		return value{}, false
+	}
+	if field, _, ok := g.stdEncodingBase64CallInfo(call); ok {
+		switch field.Name {
+		case "encode":
+			return value{typ: "ptr", gcManaged: true, sourceType: &ast.NamedType{Path: []string{"String"}}}, true
+		case "decode":
+			if info, ok := builtinResultTypeFromAST(hexDecodeResultSourceType(), g.typeEnv()); ok {
+				return value{typ: info.typ, sourceType: hexDecodeResultSourceType(), rootPaths: g.rootPathsForType(info.typ)}, true
+			}
+			return value{}, false
+		}
 	}
 	return value{}, false
 }
 
 func (g *generator) staticStdEncodingCallSourceType(call *ast.CallExpr) (ast.Type, bool) {
-	field, ok := g.stdEncodingHexCallInfo(call)
-	if !ok {
-		return nil, false
+	if field, ok := g.stdEncodingHexCallInfo(call); ok {
+		switch field.Name {
+		case "encode":
+			return &ast.NamedType{Path: []string{"String"}}, true
+		case "decode":
+			return hexDecodeResultSourceType(), true
+		}
 	}
-	switch field.Name {
-	case "encode":
-		return &ast.NamedType{Path: []string{"String"}}, true
-	case "decode":
-		return hexDecodeResultSourceType(), true
+	if field, _, ok := g.stdEncodingBase64CallInfo(call); ok {
+		switch field.Name {
+		case "encode":
+			return &ast.NamedType{Path: []string{"String"}}, true
+		case "decode":
+			return hexDecodeResultSourceType(), true
+		}
 	}
 	return nil, false
 }
@@ -144,6 +209,21 @@ func (g *generator) emitEncodingHexEncodeRuntime(data value) (value, error) {
 	g.declareRuntimeSymbol(ostyRtBytesToHexSymbol, "ptr", []paramInfo{{typ: "ptr"}})
 	emitter := g.toOstyEmitter()
 	out := llvmCall(emitter, "ptr", ostyRtBytesToHexSymbol, []*LlvmValue{toOstyValue(data)})
+	g.takeOstyEmitter(emitter)
+	v := fromOstyValue(out)
+	v.gcManaged = true
+	v.sourceType = &ast.NamedType{Path: []string{"String"}}
+	return v, nil
+}
+
+func (g *generator) emitEncodingBase64EncodeRuntime(data value, urlSafe bool) (value, error) {
+	sym := ostyRtEncodingBase64EncodeSymbol
+	if urlSafe {
+		sym = ostyRtEncodingBase64UrlEncSymbol
+	}
+	g.declareRuntimeSymbol(sym, "ptr", []paramInfo{{typ: "ptr"}})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "ptr", sym, []*LlvmValue{toOstyValue(data)})
 	g.takeOstyEmitter(emitter)
 	v := fromOstyValue(out)
 	v.gcManaged = true
@@ -216,6 +296,43 @@ func (g *generator) emitEncodingHexDecodeResult(text value) (value, error) {
 	out.sourceType = sourceType
 	out.rootPaths = g.rootPathsForType(info.typ)
 	return out, nil
+}
+
+// emitStdEncodingBase64CallMIR routes `Base64__encode(self, data)` /
+// `Base64Url__encode(self, data)` MIR symbols to the runtime. Decode
+// is intentionally left to the AST path (which is also currently
+// gated until the MIR Result<Bytes, Error> wrapping lands).
+func (g *mirGen) emitStdEncodingBase64CallMIR(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
+	var prefix, runtime string
+	switch {
+	case strings.HasPrefix(fnRef.Symbol, "Base64Url__"):
+		prefix, runtime = "Base64Url__", ostyRtEncodingBase64UrlEncSymbol
+	case strings.HasPrefix(fnRef.Symbol, "Base64__"):
+		prefix, runtime = "Base64__", ostyRtEncodingBase64EncodeSymbol
+	default:
+		return false, nil
+	}
+	method := strings.TrimPrefix(fnRef.Symbol, prefix)
+	if method != "encode" {
+		// decode -> AST path / pending
+		if method == "decode" {
+			return true, unsupported("mir-mvp", "encoding.base64.decode requires AST lowering route (MIR Result<Bytes, Error> handling pending)")
+		}
+		return false, nil
+	}
+	args := c.Args
+	if len(args) == 0 {
+		return true, unsupported("mir-mvp", "encoding.base64 method without receiver")
+	}
+	args = args[1:]
+	if len(args) != 1 {
+		return true, unsupported("mir-mvp", "encoding.base64.encode requires one Bytes argument")
+	}
+	data, err := g.evalBytesArg(args[0], "encoding.base64.encode", 0)
+	if err != nil {
+		return true, err
+	}
+	return true, g.emitRuntimeCallToDest(c, runtime, "ptr", []mirRuntimeArg{data})
 }
 
 // emitStdEncodingCallMIR is the MIR-level dispatch. The call site
