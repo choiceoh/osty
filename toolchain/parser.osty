@@ -200,6 +200,15 @@ pub struct OstyParser {
     pub inLoop: Bool,
     pub typeGtDebt: Int,
     pub pendingAssign: Bool,
+    // Day 2 of STRING_INTERP_RESOLVE_GAP.md: facts the parser needs to
+    // sub-parse string-interpolation expressions and attach their AST
+    // nodes as children of `AstNStringLit`. Default-empty when the
+    // legacy `newOstyParser(tokens)` entry is used; populated by
+    // `newOstyParserWithStream` so the resolver downstream can walk
+    // the children just like any other expression.
+    pub interpSource: String,
+    pub interpStringParts: List<FrontStringPart>,
+    pub interpTokens: List<FrontInterpolationToken>,
 }
 
 pub fn newOstyParser(tokens: List<FrontToken>) -> OstyParser {
@@ -207,6 +216,27 @@ pub fn newOstyParser(tokens: List<FrontToken>) -> OstyParser {
         tokens, count: frontTokenListCount(tokens), pos: 0,
         arena: emptyAstArena(), stableAliases: [], noStructLit: false, inLoop: false,
         typeGtDebt: 0, pendingAssign: false,
+        interpSource: "", interpStringParts: [], interpTokens: [],
+    }
+}
+
+// newOstyParserWithStream is the interpolation-aware constructor.
+// Threading `source` + the lex stream's stringParts +
+// interpolationTokens into the parser lets `opParsePrefix`'s
+// `AstNStringLit` branch sub-parse each interp expression and attach
+// the resulting node IDs as children — closing the resolver gap
+// described in STRING_INTERP_RESOLVE_GAP.md.
+pub fn newOstyParserWithStream(
+    tokens: List<FrontToken>,
+    source: String,
+    stringParts: List<FrontStringPart>,
+    interpTokens: List<FrontInterpolationToken>,
+) -> OstyParser {
+    OstyParser {
+        tokens, count: frontTokenListCount(tokens), pos: 0,
+        arena: emptyAstArena(), stableAliases: [], noStructLit: false, inLoop: false,
+        typeGtDebt: 0, pendingAssign: false,
+        interpSource: source, interpStringParts: stringParts, interpTokens: interpTokens,
     }
 }
 
@@ -677,12 +707,25 @@ fn opParsePrimary(p: OstyParser) -> Int {
     n.start = start
     n.end = p.pos
     return opAddNode(p, n) }
-    if tok.kind == FrontString || tok.kind == FrontRawString { opAdvance(p)
-    let mut n = emptyAstNode(AstNStringLit)
-    n.text = tok.text
-    n.start = start
-    n.end = p.pos
-    return opAddNode(p, n) }
+    if tok.kind == FrontString || tok.kind == FrontRawString {
+        let stringTokenIdx = p.pos
+        opAdvance(p)
+        let mut n = emptyAstNode(AstNStringLit)
+        n.text = tok.text
+        n.start = start
+        n.end = p.pos
+        // Day 2 of STRING_INTERP_RESOLVE_GAP.md: walk the lexer's
+        // stringParts side-table for parts owned by this token and
+        // sub-parse each interpolation expression. Attach the
+        // resulting node IDs to `n.children` so the resolver's
+        // generic walker visits them. Order is preserved; text
+        // parts contribute no children but their position in the
+        // sequence is implicit from `kind`-based reconstruction
+        // downstream (the bridge layer can reconstruct part order
+        // from `srcStart`/`srcEnd` when needed).
+        opAttachStringInterpChildren(p, n, stringTokenIdx)
+        return opAddNode(p, n)
+    }
     if tok.kind == FrontChar { opAdvance(p)
     let mut n = emptyAstNode(AstNCharLit)
     n.text = tok.text
@@ -2810,6 +2853,105 @@ fn opUsePathSep(p: OstyParser) -> String {
 }
 
 // ===================================================================
+// STRING INTERPOLATION SUB-PARSE
+// ===================================================================
+//
+// Day 2 of STRING_INTERP_RESOLVE_GAP.md. The lexer produces a
+// `stringParts` side-table that pairs each `FrontString` /
+// `FrontRawString` token with its sequence of text + interpolation
+// parts. Each interpolation part records the slice
+// `interpolationTokens[exprTokenStart..exprTokenStart+exprTokenCount]`
+// — the tokens that lex'd between `{` and `}`.
+//
+// The parser used to leave AstNStringLit empty of children; the
+// resolver's generic walker then visited zero nodes inside
+// interpolations, so symbols referenced through `"{ident}"` syntax
+// never received a `RefsByID` entry. The MIR backend down the line
+// observed `IdentUnknown` / `<error>` and walled.
+//
+// Here we sub-parse each interp expression with the same parser
+// instance — same arena, same node-ID space — and append the result
+// to the StringLit's `children`. Down-stream walkers (resolver,
+// later passes) treat the children naturally.
+
+// opAttachStringInterpChildren scans the parser's stringParts table
+// for entries owned by the just-consumed string token and appends
+// one sub-parsed node ID per `FrontStringInterpolation` part to
+// `n.children`. Text parts contribute nothing — their literal text
+// is already on the `text` field of the StringLit node.
+fn opAttachStringInterpChildren(p: OstyParser, n: AstNode, ownerTokenIdx: Int) {
+    if p.interpStringParts.len() == 0 { return }
+    for part in p.interpStringParts {
+        if part.ownerToken != ownerTokenIdx { continue }
+        if part.kind != FrontStringInterpolation { continue }
+        if part.exprTokenCount == 0 { continue }
+        let childIdx = opSubParseInterpExpr(p, part.exprTokenStart, part.exprTokenCount)
+        if childIdx >= 0 {
+            n.children.push(childIdx)
+        }
+    }
+}
+
+// opSubParseInterpExpr swaps the parser's token cursor for the
+// interpolation token slice, runs `opParseExpr`, and restores the
+// outer state. The returned arena index points to the parsed
+// expression node — `-1` when the slice is empty (defensive; the
+// caller already filters that case). The arena is shared, so the
+// returned node ID is comparable / walkable alongside every other
+// expression in the file.
+fn opSubParseInterpExpr(p: OstyParser, exprTokenStart: Int, exprTokenCount: Int) -> Int {
+    if exprTokenCount <= 0 { return 0 - 1 }
+    let savedTokens = p.tokens
+    let savedCount = p.count
+    let savedPos = p.pos
+    let savedNoStructLit = p.noStructLit
+    let savedInLoop = p.inLoop
+    let savedTypeGtDebt = p.typeGtDebt
+    let savedPendingAssign = p.pendingAssign
+    // Build the FrontToken slice for this interp expression. Tokens
+    // come from `interpolationTokens[start..start+count]`; lexeme
+    // text is sliced off `interpSource` using the underlying
+    // FrontLexToken's offset + length.
+    let mut subTokens: List<FrontToken> = []
+    let limit = exprTokenStart + exprTokenCount
+    let totalInterp = p.interpTokens.len()
+    let units = strings.split(p.interpSource, "")
+    let mut i = exprTokenStart
+    for i < limit {
+        if i < 0 || i >= totalInterp { break }
+        let it = p.interpTokens[i]
+        let lex = it.token
+        let raw = frontLexemeFromUnits(units, lex.start.offset, lex.length)
+        let text = if lex.kind == FrontLabel { frontLabelName(raw) } else { raw }
+        subTokens.push(
+            FrontToken {
+                kind: lex.kind,
+                text: text,
+                startOffset: lex.start.offset,
+                endOffset: lex.end.offset,
+            },
+        )
+        i = i + 1
+    }
+    p.tokens = subTokens
+    p.count = subTokens.len()
+    p.pos = 0
+    p.noStructLit = false
+    p.inLoop = false
+    p.typeGtDebt = 0
+    p.pendingAssign = false
+    let childIdx = opParseExpr(p)
+    p.tokens = savedTokens
+    p.count = savedCount
+    p.pos = savedPos
+    p.noStructLit = savedNoStructLit
+    p.inLoop = savedInLoop
+    p.typeGtDebt = savedTypeGtDebt
+    p.pendingAssign = savedPendingAssign
+    childIdx
+}
+
+// ===================================================================
 // FILE PARSING
 // ===================================================================
 
@@ -2893,7 +3035,7 @@ pub struct AstFile { pub arena: AstArena }
 pub fn astParse(source: String) -> AstFile {
     let stream = frontendLexStream(source)
     let tokens = frontTokensFromSource(source, stream)
-    let mut p = newOstyParser(tokens)
+    let mut p = newOstyParserWithStream(tokens, source, stream.stringParts, stream.interpolationTokens)
     opParseFile(p)
     AstFile { arena: p.arena }
 }
