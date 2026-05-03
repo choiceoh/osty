@@ -13,11 +13,13 @@ import (
 // AST and MIR dispatch do not grow separate prefix tables as codecs are added.
 
 const (
-	ostyRtBytesToHexSymbol           = "osty_rt_bytes_to_hex"
-	ostyRtBytesFromHexSymbol         = "osty_rt_bytes_from_hex"
-	ostyRtBytesIsValidHexSymbol      = "osty_rt_bytes_is_valid_hex"
-	ostyRtEncodingBase64EncodeSymbol = "osty_rt_encoding_base64_encode"
-	ostyRtEncodingBase64UrlEncSymbol = "osty_rt_encoding_base64url_encode"
+	ostyRtBytesToHexSymbol            = "osty_rt_bytes_to_hex"
+	ostyRtBytesFromHexSymbol          = "osty_rt_bytes_from_hex"
+	ostyRtBytesIsValidHexSymbol       = "osty_rt_bytes_is_valid_hex"
+	ostyRtEncodingBase64EncodeSymbol  = "osty_rt_encoding_base64_encode"
+	ostyRtEncodingBase64UrlEncSymbol  = "osty_rt_encoding_base64url_encode"
+	ostyRtEncodingBase64DecodeSymbol  = "osty_rt_encoding_base64_decode"
+	ostyRtEncodingBase64UrlDecSymbol  = "osty_rt_encoding_base64url_decode"
 )
 
 type stdEncodingRuntimeDecodeKind int
@@ -25,6 +27,7 @@ type stdEncodingRuntimeDecodeKind int
 const (
 	stdEncodingDecodeUnsupported stdEncodingRuntimeDecodeKind = iota
 	stdEncodingDecodeHexBytesResult
+	stdEncodingDecodeNullableBytesResult
 )
 
 type stdEncodingRuntimeLowering struct {
@@ -32,6 +35,7 @@ type stdEncodingRuntimeLowering struct {
 	ASTPath              []string
 	MIRPrefix            string
 	EncodeSymbol         string
+	DecodeSymbol         string
 	DecodeMIRKind        stdEncodingRuntimeDecodeKind
 	DecodeMIRUnsupported string
 	DecodeASTUnsupported string
@@ -50,7 +54,8 @@ var stdEncodingRuntimeLowerings = []stdEncodingRuntimeLowering{
 		ASTPath:              []string{"base64"},
 		MIRPrefix:            "Base64__",
 		EncodeSymbol:         ostyRtEncodingBase64EncodeSymbol,
-		DecodeMIRUnsupported: "encoding.base64.decode requires AST lowering route (MIR Result<Bytes, Error> handling pending)",
+		DecodeSymbol:         ostyRtEncodingBase64DecodeSymbol,
+		DecodeMIRKind:        stdEncodingDecodeNullableBytesResult,
 		DecodeASTUnsupported: "encoding.base64.decode requires MIR Result<Bytes, Error> handling (separate cycle)",
 	},
 	{
@@ -58,7 +63,8 @@ var stdEncodingRuntimeLowerings = []stdEncodingRuntimeLowering{
 		ASTPath:              []string{"base64", "url"},
 		MIRPrefix:            "Base64Url__",
 		EncodeSymbol:         ostyRtEncodingBase64UrlEncSymbol,
-		DecodeMIRUnsupported: "encoding.base64url.decode requires AST lowering route (MIR Result<Bytes, Error> handling pending)",
+		DecodeSymbol:         ostyRtEncodingBase64UrlDecSymbol,
+		DecodeMIRKind:        stdEncodingDecodeNullableBytesResult,
 		DecodeASTUnsupported: "encoding.base64url.decode requires MIR Result<Bytes, Error> handling (separate cycle)",
 	},
 }
@@ -384,9 +390,21 @@ func (g *mirGen) emitStdEncodingDecodeCallMIR(c *mir.CallInstr, spec *stdEncodin
 	switch spec.DecodeMIRKind {
 	case stdEncodingDecodeHexBytesResult:
 		return g.emitEncodingHexDecodeMIR(c, text)
+	case stdEncodingDecodeNullableBytesResult:
+		return g.emitStdEncodingNullableBytesDecodeMIR(c, spec, text)
 	default:
 		return unsupported("mir-mvp", "encoding."+spec.Variant+".decode has no MIR lowering strategy")
 	}
+}
+
+func (g *mirGen) emitStdEncodingNullableBytesDecodeMIR(c *mir.CallInstr, spec *stdEncodingRuntimeLowering, text mirRuntimeArg) error {
+	if spec.DecodeSymbol == "" {
+		return unsupported("mir-mvp", "encoding."+spec.Variant+".decode missing runtime symbol")
+	}
+	g.declareRuntime(spec.DecodeSymbol, mirRuntimeDeclareLine("ptr", spec.DecodeSymbol, "ptr"))
+	decoded := g.fresh()
+	g.fnBuf.WriteString(mirCallValueLine(decoded, "ptr", spec.DecodeSymbol, mirRuntimeArgList([]mirRuntimeArg{text})))
+	return g.emitPtrResultFromNullable(c, decoded, mir.TBytes, "")
 }
 
 // emitEncodingHexDecodeMIR validates input first (since
