@@ -168,53 +168,14 @@ func (g *generator) emitStdUuidParseCall(call *ast.CallExpr) (value, bool, error
 		return value{}, true, unsupportedf("type-system", "uuid.parse arg 1 type %s, want String", loaded.typ)
 	}
 
-	info, ok := builtinResultTypeFromAST(stdUuidParseResultSourceTypeSingleton, g.typeEnv())
-	if !ok {
-		return value{}, true, unsupported("type-system", "uuid.parse Result<Uuid, Error> type unavailable")
-	}
-	if g.resultTypes == nil {
-		g.resultTypes = map[string]builtinResultType{}
-	}
-	g.resultTypes[info.typ] = info
-	if info.okTyp != "ptr" || info.errTyp != "ptr" {
-		return value{}, true, unsupportedf("type-system", "uuid.parse Result must be ptr-backed, got ok=%s err=%s", info.okTyp, info.errTyp)
-	}
-
-	g.declareRuntimeSymbol(ostyRtUuidParseSymbol, "ptr", []paramInfo{{typ: "ptr"}})
-	g.declareRuntimeSymbol(ostyRtUuidParseErrorSymbol, "ptr", nil)
-	emitter := g.toOstyEmitter()
-	g.emitCallSafepointIfNeeded(emitter)
-	out := llvmCall(emitter, "ptr", ostyRtUuidParseSymbol, []*LlvmValue{toOstyValue(loaded)})
-	failed := llvmCompare(emitter, "eq", out, toOstyValue(value{typ: "ptr", ref: "null"}))
-	errLabel := llvmNextLabel(emitter, "uuid.parse.err")
-	okLabel := llvmNextLabel(emitter, "uuid.parse.ok")
-	contLabel := llvmNextLabel(emitter, "uuid.parse.cont")
-	emitter.body = append(emitter.body, "  br i1 "+failed.name+", label %"+errLabel+", label %"+okLabel)
-
-	emitter.body = append(emitter.body, errLabel+":")
-	errText := llvmCall(emitter, "ptr", ostyRtUuidParseErrorSymbol, nil)
-	errResult := llvmStructLiteral(emitter, info.typ, []*LlvmValue{
-		toOstyValue(value{typ: "i64", ref: "1"}),
-		toOstyValue(llvmZeroValue(info.okTyp)),
-		errText,
-	})
-	emitter.body = append(emitter.body, "  br label %"+contLabel)
-
-	emitter.body = append(emitter.body, okLabel+":")
-	okResult := llvmStructLiteral(emitter, info.typ, []*LlvmValue{
-		toOstyValue(value{typ: "i64", ref: "0"}),
-		out,
-		toOstyValue(llvmZeroValue(info.errTyp)),
-	})
-	emitter.body = append(emitter.body, "  br label %"+contLabel)
-
-	emitter.body = append(emitter.body, contLabel+":")
-	phi := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, "  "+phi+" = phi "+info.typ+" [ "+errResult.name+", %"+errLabel+" ], [ "+okResult.name+", %"+okLabel+" ]")
-	g.takeOstyEmitter(emitter)
-	v := value{typ: info.typ, ref: phi, sourceType: stdUuidParseResultSourceTypeSingleton}
-	v.rootPaths = g.rootPathsForType(v.typ)
-	return v, true, nil
+	return g.emitPtrBackedResultFromRuntimeCall(
+		"uuid.parse",
+		stdUuidParseResultSourceTypeSingleton,
+		ostyRtUuidParseSymbol,
+		ostyRtUuidParseErrorSymbol,
+		[]paramInfo{{typ: "ptr"}},
+		[]*LlvmValue{toOstyValue(loaded)},
+	)
 }
 
 func (g *generator) emitStdUuidMethodCall(call *ast.CallExpr) (value, bool, error) {
