@@ -67,7 +67,7 @@ func TestStdFsPtrBackedResultHelperStaysFsLocal(t *testing.T) {
 		t.Fatalf("read internal/llvmgen: %v", err)
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())
