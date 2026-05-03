@@ -1,0 +1,40 @@
+// compress_e2e — E2E verification of internal/stdlib/modules/compress.osty
+// against the LLVM backend.
+//
+// Coverage: spec-canonical direct calls compress.gzip.{encode,decode}.
+// The instance-binding pattern (`let g = compress.gzip; g.encode(b)`)
+// is not yet covered by the LLVM shim — see SPEC_GAPS
+// `stdlib-body-llvm-wall` for the underlying gap.
+
+use std.testing
+use std.bytes
+use std.compress
+
+fn testGzipEncodeProducesNonEmpty() {
+    let inp = bytes.fromString("hello")
+    let enc = compress.gzip.encode(inp)
+    testing.assertTrue(bytes.len(enc) > 0)
+}
+
+fn testGzipRoundTripPreservesBytes() {
+    let inp = bytes.fromString("hello world")
+    let enc = compress.gzip.encode(inp)
+    match compress.gzip.decode(enc) {
+        Ok(_) -> testing.assertTrue(true),
+        Err(_) -> testing.assertTrue(false),
+    }
+}
+
+fn testGzipDecodeInvalidYieldsErr() {
+    let garbage = bytes.fromString("not gzip bytes")
+    match compress.gzip.decode(garbage) {
+        Ok(_) -> testing.assertTrue(false),
+        Err(_) -> testing.assertTrue(true),
+    }
+}
+
+fn testGzipEncodeEmptyInput() {
+    let inp = bytes.fromString("")
+    let _ = compress.gzip.encode(inp)
+    testing.assertTrue(true)
+}

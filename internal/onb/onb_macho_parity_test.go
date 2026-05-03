@@ -17,10 +17,10 @@ func TestMachoHeaderParityVsOstyTable(t *testing.T) {
 	writeU32(&buf, machoCPUTypeARM64)
 	writeU32(&buf, machoCPUSubtypeARM64All)
 	writeU32(&buf, machoFileTypeObject)
-	writeU32(&buf, 3)              // ncmds
-	writeU32(&buf, 100)            // sizeOfCmds
+	writeU32(&buf, 3)   // ncmds
+	writeU32(&buf, 100) // sizeOfCmds
 	writeU32(&buf, machoMHSubsectionsViaSyms)
-	writeU32(&buf, 0)              // reserved
+	writeU32(&buf, 0) // reserved
 	got := buf.Bytes()
 	if len(got) != machoHeader64Size {
 		t.Fatalf("header size = %d, want %d", len(got), machoHeader64Size)

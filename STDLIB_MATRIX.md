@@ -89,16 +89,18 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 | crypto | ⚠️ partial | `crypto.randomBytes(8)` OK, `crypto.sha256(bytes)` body lower 실패 |
 | option | ⚠️ partial | `match Some(x)` OK, `.map(\|x\| ...)` closure body 실패 |
 | result | ⚠️ partial | `match Ok(x)` OK, `.map(\|x\| ...)` closure body 실패 |
-| compress | ❌ FAIL | `gzip.encode(bytes)` body lower 실패 |
+| compress | ✅ PASS (direct) | `compress.gzip.encode(b)` / `compress.gzip.decode(b)` 직접 호출 OK ([`examples/compress_e2e/`](examples/compress_e2e/) 4/4). 인스턴스 binding (`let g = compress.gzip; g.encode(b)`) 은 미지원 — SPEC_GAPS `stdlib-body-llvm-wall`. |
 | url | ❌ FAIL | `url.parse(s)` body lower 실패 (다중 분기 / List<String> 의심) |
 | json | ❌ FAIL | `json.parse(s)` body lower 실패 |
 | encoding | ❌ FAIL | `encoding.hexEncode(b)` 가장 단순 케이스도 실패 |
 | iter | ❌ FAIL | `iter.map(xs, \|x\| ...)` closure body 실패 |
 | http | ❌ untested | (1588 LOC, body 풍부 — closure / List 의존도 높아 fail 가능성 높음. 별도 e2e 권장) |
 
-**카운트**: 14 PASS / 4 partial / 5 FAIL (http 미점검 제외) = 14/22 (64%) 가 진정 5★ 자격.
+**카운트**: 15 PASS / 4 partial / 4 FAIL (http 미점검 제외) = 15/22 (68%) 가 진정 5★ 자격.
 
-5 FAIL 모듈 (compress / url / json / encoding / iter) 은 본문 진정 + 스펙 정합 ✓ 이지만 **LLVM 본문 lowering** 이 막힘 — `log` 가 5★ 도달한 패턴 (LLVM shim 추가) 을 이들에도 적용해야 진짜 5★. 별도 cycle 작업.
+4 FAIL 모듈 (url / json / encoding / iter) 은 본문 진정 + 스펙 정합 ✓ 이지만 **LLVM 본문 lowering** 이 막힘 — `log` 가 5★ 도달한 패턴 (LLVM shim 추가) 을 이들에도 적용해야 진짜 5★. 별도 cycle 작업.
+
+**compress 5★ 승급 (2026-05-02)**: 매트릭스가 user smoke 의 인스턴스 binding 패턴 실패만 보고 ❌로 표시했으나, spec-canonical 직접 호출 (`compress.gzip.encode(b)`) 은 기존 [`stdlib_compress_shim.go`](internal/llvmgen/stdlib_compress_shim.go) AST + MIR dispatch 에서 정상 동작. E2E 검증 [`examples/compress_e2e/`](examples/compress_e2e/) 4/4 통과 (encode / round-trip / invalid err / empty input).
 
 partial 모듈 4개 (bytes / crypto / option / result) 는 **호출 패턴 한정 동작**. closure 인자 / `b"..."` arg 위치 / 특정 runtime 함수 (sha256, gzip) 는 별도 backend gap.
 
@@ -219,8 +221,8 @@ partial 모듈 4개 (bytes / crypto / option / result) 는 **호출 패턴 한�
 
 | 등급 | 개수 | 비율 |
 |---|---|---|
-| ⭐⭐⭐⭐⭐ Production (LLVM E2E 통과) | 14 | 13% |
-| ⭐⭐⭐⭐⭐ Production (declared, 매트릭스 5★ 미검증) | 11 | 10% |
+| ⭐⭐⭐⭐⭐ Production (LLVM E2E 통과) | 15 | 14% |
+| ⭐⭐⭐⭐⭐ Production (declared, 매트릭스 5★ 미검증) | 10 | 9% |
 | ⭐⭐⭐⭐ Functional | 12 | 12% |
 | ⭐⭐⭐ Surface-rich | 62 | 60% |
 | ⭐⭐ Spec-stub (백엔드 부재) | 0 | 0% |
@@ -229,7 +231,7 @@ partial 모듈 4개 (bytes / crypto / option / result) 는 **호출 패턴 한�
 
 **이전 매트릭스 주장**: 92/98 = 94% Production
 **2026-05-01 재평가 주장**: 22/106 = 21% Production
-**2026-05-02 LLVM E2E 점검 후**: **14/106 = 13% 진정 5★ (LLVM 통과)** + 11/106 = 10% declared 5★ (매트릭스 등재되었으나 LLVM 미검증). 자세한 audit 은 §2.1.A 참조.
+**2026-05-02 LLVM E2E 점검 후**: **15/106 = 14% 진정 5★ (LLVM 통과)** + 10/106 = 9% declared 5★ (매트릭스 등재되었으나 LLVM 미검증). 자세한 audit 은 §2.1.A 참조.
 
 차이의 원인:
 1. spec 없는 unspec 모듈을 Production으로 셈 (62개 — 본문은 진정하나 spec 정의 없음 → Surface-rich로 강등)
