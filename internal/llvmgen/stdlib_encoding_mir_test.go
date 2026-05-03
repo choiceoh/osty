@@ -54,6 +54,29 @@ func TestGenerateFromMIRStdEncodingHexDecodeReturnsResult(t *testing.T) {
 	}
 }
 
+func TestGenerateFromMIRStdEncodingHexDecodeDiscardValidatesAsI1(t *testing.T) {
+	got := generateStdEncodingDecodeDiscardMIR(t, "hex")
+	for _, want := range []string{
+		"declare i1 @osty_rt_bytes_is_valid_hex(ptr)",
+		"call i1 @osty_rt_bytes_is_valid_hex(",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("generated discarded hex.decode LLVM missing %q:\n%s", want, got)
+		}
+	}
+	for _, forbidden := range []string{
+		"call void @osty_rt_bytes_is_valid_hex(",
+		"call ptr @osty_rt_bytes_from_hex(",
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("discarded hex.decode emitted forbidden %q:\n%s", forbidden, got)
+		}
+	}
+	if strings.Contains(got, "Hex__decode") {
+		t.Fatalf("Hex__decode leaked as an unresolved call:\n%s", got)
+	}
+}
+
 func TestGenerateFromMIRStdEncodingBase64DecodeReturnsResult(t *testing.T) {
 	for _, tc := range []struct {
 		variant string
@@ -85,19 +108,8 @@ func TestGenerateFromMIRStdEncodingBase64DecodeReturnsResult(t *testing.T) {
 
 func generateStdEncodingDecodeMIR(t *testing.T, variant string) string {
 	t.Helper()
-	useDecl := &ir.UseDecl{
-		Path:    []string{"std", "encoding"},
-		RawPath: "std.encoding",
-		Alias:   "encoding",
-	}
-	resultBytes := &ir.NamedType{
-		Name:    "Result",
-		Builtin: true,
-		Args: []ir.Type{
-			ir.TBytes,
-			&ir.NamedType{Name: "Error", Builtin: true},
-		},
-	}
+	useDecl := stdEncodingUseDecl()
+	resultBytes := stdEncodingDecodeResultType()
 	fn := &ir.FnDecl{
 		Name:   "decodeValue",
 		Return: resultBytes,
@@ -115,6 +127,48 @@ func generateStdEncodingDecodeMIR(t *testing.T, variant string) string {
 		t.Fatalf("GenerateFromMIR: %v", err)
 	}
 	return string(out)
+}
+
+func generateStdEncodingDecodeDiscardMIR(t *testing.T, variant string) string {
+	t.Helper()
+	useDecl := stdEncodingUseDecl()
+	resultBytes := stdEncodingDecodeResultType()
+	call := &ir.CallExpr{
+		Callee: stdEncodingDecodeCallee(variant),
+		Args:   []ir.Arg{{Value: &ir.StringLit{Parts: []ir.StringPart{{IsLit: true, Lit: "00"}}}}},
+		T:      resultBytes,
+	}
+	fn := &ir.FnDecl{
+		Name:   "main",
+		Return: ir.TUnit,
+		Body:   &ir.Block{Stmts: []ir.Stmt{&ir.ExprStmt{X: call}}},
+	}
+	hir := &ir.Module{Package: "main", Decls: []ir.Decl{useDecl, fn}}
+	m := buildMIRModuleFromHIR(t, hir)
+	out, err := GenerateFromMIR(m, Options{PackageName: "main", SourcePath: "/tmp/std_encoding_" + variant + "_decode_discard_mir.osty"})
+	if err != nil {
+		t.Fatalf("GenerateFromMIR: %v", err)
+	}
+	return string(out)
+}
+
+func stdEncodingUseDecl() *ir.UseDecl {
+	return &ir.UseDecl{
+		Path:    []string{"std", "encoding"},
+		RawPath: "std.encoding",
+		Alias:   "encoding",
+	}
+}
+
+func stdEncodingDecodeResultType() *ir.NamedType {
+	return &ir.NamedType{
+		Name:    "Result",
+		Builtin: true,
+		Args: []ir.Type{
+			ir.TBytes,
+			&ir.NamedType{Name: "Error", Builtin: true},
+		},
+	}
 }
 
 func stdEncodingDecodeCallee(variant string) ir.Expr {
