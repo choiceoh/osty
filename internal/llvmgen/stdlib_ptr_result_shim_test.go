@@ -55,3 +55,33 @@ func TestSharedPtrBackedResultHelperIsStdlibNeutral(t *testing.T) {
 		}
 	}
 }
+
+func TestStdFsPtrBackedResultHelperStaysFsLocal(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	dir := filepath.Join(root, "internal", "llvmgen")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read internal/llvmgen: %v", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		src, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", entry.Name(), err)
+		}
+		text := string(src)
+		count := strings.Count(text, "emitStdFsPtrResultFromRuntimeCall(")
+		if entry.Name() == "stdlib_fs_shim.go" {
+			continue
+		}
+		if count > 0 {
+			t.Fatalf("%s calls the std.fs-specific ptr-backed Result helper; use emitPtrBackedResultFromRuntimeCall instead", entry.Name())
+		}
+	}
+}
