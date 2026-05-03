@@ -119,7 +119,7 @@ func TestManualPtrBackedResultBlocksStayInventoried(t *testing.T) {
 		path := filepath.Join(dir, entry.Name())
 		src, err := os.ReadFile(path)
 		if err != nil {
-			t.Fatalf("read %s: %v", entry.Name())
+			t.Fatalf("read %s: %v", entry.Name(), err)
 		}
 		text := string(src)
 		count := strings.Count(text, "Result must be ptr-backed")
