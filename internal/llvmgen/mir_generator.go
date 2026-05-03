@@ -212,6 +212,7 @@ type mirGen struct {
 	tupleDefs   map[string][]mir.Type // mangled tuple name → element types
 
 	stdTermSizeTouched        bool // synthetic std.term Size payload used by MIR
+	stdUrlUrlTouched          bool // synthetic std.url Url payload used by MIR
 	stdOsOutputTouched        bool // synthetic std.os Output payload used by MIR
 	stdOsExecOutputTouched    bool // synthetic std.os ExecOutput payload used by MIR
 	stdCmdCommandTouched      bool // synthetic std.cmd Command payload used by MIR
@@ -730,6 +731,7 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 			return true
 		}
 		if g.isStdTermSizeType(x) ||
+			g.isStdUrlType(x) ||
 			g.isStdOsOutputType(x) ||
 			g.isStdOsExecOutputType(x) ||
 			g.isStdCmdCommandType(x) ||
@@ -1667,6 +1669,10 @@ func (g *mirGen) emitTypeDefs() {
 	}
 	if g.stdTermSizeTouched {
 		block.WriteString(mirLlvmStructTypeDefLine(stdTermSyntheticSizeTypeName, "i64, i64"))
+	}
+	if g.stdUrlUrlTouched {
+		// scheme(ptr) host(ptr) port(Option<Int>) path(ptr) query(ptr) fragment(Option<String>)
+		block.WriteString(mirLlvmStructTypeDefLine(stdUrlSyntheticUrlTypeName, "ptr, ptr, { i64, i64 }, ptr, ptr, { i64, i64 }"))
 	}
 	if g.stdOsOutputTouched {
 		block.WriteString(mirLlvmStructTypeDefLine(stdOsSyntheticOutputTypeName, "i64, ptr, ptr"))
@@ -10186,6 +10192,22 @@ func (g *mirGen) projectionIndexForType(base mir.Type, p mir.Projection) (int, b
 					return 1, true
 				}
 			}
+			if g.isStdUrlType(nt) {
+				switch fp.Name {
+				case "scheme":
+					return 0, true
+				case "host":
+					return 1, true
+				case "port":
+					return 2, true
+				case "path":
+					return 3, true
+				case "query":
+					return 4, true
+				case "fragment":
+					return 5, true
+				}
+			}
 			if g.isStdOsOutputType(nt) {
 				switch fp.Name {
 				case "exitCode":
@@ -10794,6 +10816,10 @@ func (g *mirGen) llvmType(t mir.Type) string {
 		if g.isStdTermSizeType(x) {
 			g.stdTermSizeTouched = true
 			return "%" + stdTermSyntheticSizeTypeName
+		}
+		if g.isStdUrlType(x) {
+			g.stdUrlUrlTouched = true
+			return "%" + stdUrlSyntheticUrlTypeName
 		}
 		if g.isStdOsOutputType(x) {
 			g.stdOsOutputTouched = true
