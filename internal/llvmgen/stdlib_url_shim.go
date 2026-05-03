@@ -26,14 +26,14 @@ import (
 const (
 	stdUrlSyntheticUrlTypeName = "__osty_std_url_Url"
 
-	ostyRtUrlParseSymbol            = "osty_rt_url_parse"
-	ostyRtUrlGetSchemeSymbol        = "osty_rt_url_get_scheme"
-	ostyRtUrlGetHostSymbol          = "osty_rt_url_get_host"
-	ostyRtUrlGetPortSymbol          = "osty_rt_url_get_port"
-	ostyRtUrlGetPathSymbol          = "osty_rt_url_get_path"
-	ostyRtUrlGetFragmentSymbol      = "osty_rt_url_get_fragment"
-	ostyRtUrlHasFragmentSymbol      = "osty_rt_url_has_fragment"
-	ostyRtUrlGetQuerySymbol         = "osty_rt_url_get_query"
+	ostyRtUrlParseSymbol       = "osty_rt_url_parse"
+	ostyRtUrlGetSchemeSymbol   = "osty_rt_url_get_scheme"
+	ostyRtUrlGetHostSymbol     = "osty_rt_url_get_host"
+	ostyRtUrlGetPortSymbol     = "osty_rt_url_get_port"
+	ostyRtUrlGetPathSymbol     = "osty_rt_url_get_path"
+	ostyRtUrlGetFragmentSymbol = "osty_rt_url_get_fragment"
+	ostyRtUrlHasFragmentSymbol = "osty_rt_url_has_fragment"
+	ostyRtUrlGetQuerySymbol    = "osty_rt_url_get_query"
 )
 
 // stdUrlSyntheticUrlSourceType is the public AST `NamedType` used to
