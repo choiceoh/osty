@@ -20559,8 +20559,8 @@ fn mirEmitAssignIntoProjection(func: MirFunction, instr: MirInstr) -> String {
     out = out + mirEmitRValue(valueDest, instr.src)
     let valueTy = mirEmitRValueLLVMType(instr.src)
     // Pass 2: insertvalue back from deepest to outermost.
-    let lastIdx = instr.dest.projections[n - 1].index
-    let mut writeBack = "  " + baseReg + ".w" + mirGenIntToString(n - 1) + " = insertvalue \{ i64, i64 \} " + prev + ", " + valueTy + " " + valueDest + ", " + mirGenIntToString(lastIdx) + "\n"
+    let lastFieldIdx = instr.dest.projections[n - 1].index
+    let mut writeBack = "  " + baseReg + ".w" + mirGenIntToString(n - 1) + " = insertvalue \{ i64, i64 \} " + prev + ", " + valueTy + " " + valueDest + ", " + mirGenIntToString(lastFieldIdx) + "\n"
     out = out + writeBack
     let mut nested = baseReg + ".w" + mirGenIntToString(n - 1)
     let mut j = n - 2
