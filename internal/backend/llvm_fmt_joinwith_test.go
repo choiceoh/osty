@@ -26,12 +26,12 @@ import (
 //
 // The fix lives in two places (internal/mir/lower.go):
 //
-//   1. recoverFnTypedLocalReturn — when CallExpr.Callee is a bare
-//      Ident and global signature lookup fails, scan fn.Locals for a
-//      same-named fn-typed slot and pull the FnType.Return.
-//   2. resolveCall — IdentUnknown callees that resolve to a fn-typed
-//      local route as IndirectCall instead of falling through to a
-//      "call to unresolved symbol" FnRef.
+//  1. recoverFnTypedLocalReturn — when CallExpr.Callee is a bare
+//     Ident and global signature lookup fails, scan fn.Locals for a
+//     same-named fn-typed slot and pull the FnType.Return.
+//  2. resolveCall — IdentUnknown callees that resolve to a fn-typed
+//     local route as IndirectCall instead of falling through to a
+//     "call to unresolved symbol" FnRef.
 //
 // Without either half, the joinWith program rejects with one of the
 // two LLVM000 walls; with both, the LLVM backend emits cleanly. We
