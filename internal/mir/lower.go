@@ -2393,6 +2393,20 @@ func (bs *bodyState) lowerExprIntoPlace(e ir.Expr, dest Place, destT Type) {
 	case *ir.MapLit:
 		bs.lowerMapLitInto(x, dest, destT)
 		return
+	case *ir.BinaryExpr:
+		// `&&` and `||` are short-circuiting per spec — without a CFG
+		// lowering, both operands evaluate eagerly and any side
+		// effect on the RHS (e.g. `lo < n && xs[lo*2] <= r` where
+		// `xs[lo*2]` is out of bounds when `lo == n`) crashes the
+		// program even when the user wrote it specifically to guard
+		// against that case. The eager BinaryRV path below handled
+		// every binary op uniformly and was the source of the
+		// `list index out of range` panic the std.strings injection
+		// path tripped on.
+		if x.Op == ir.BinAnd || x.Op == ir.BinOr {
+			bs.lowerShortCircuitBinaryInto(x, dest, destT)
+			return
+		}
 	}
 	// Default path: lower to an rvalue and assign.
 	rv := bs.lowerExprToRValue(e, destT)
@@ -2400,6 +2414,56 @@ func (bs *bodyState) lowerExprIntoPlace(e ir.Expr, dest Place, destT Type) {
 		return
 	}
 	bs.emit(&AssignInstr{Dest: dest, Src: rv, SpanV: exprSpan(e)})
+}
+
+// lowerShortCircuitBinaryInto lowers `a && b` / `a || b` as a CFG
+// branch so the RHS is only evaluated when the LHS doesn't already
+// determine the result.
+//
+//	a && b  →  if a { dest = b } else { dest = false }
+//	a || b  →  if a { dest = true } else { dest = b }
+//
+// Mirrors `lowerIfExprInto`'s shape (cond → branch → then/else
+// blocks → merge). The dest's type is forced to TBool — the checker
+// always synthesises Bool for these ops, but we override for safety
+// in case the recovery path left it Poisoned.
+func (bs *bodyState) lowerShortCircuitBinaryInto(x *ir.BinaryExpr, dest Place, destT Type) {
+	if destT == nil || isPoisonType(destT) {
+		destT = TBool
+	}
+	cond := bs.lowerExprAsOperand(x.Left)
+	thenBB := bs.newBlock(x.SpanV)
+	elseBB := bs.newBlock(x.SpanV)
+	merge := bs.newBlock(x.SpanV)
+	bs.terminate(&BranchTerm{Cond: cond, Then: thenBB, Else: elseBB, SpanV: x.SpanV})
+
+	bs.cur = thenBB
+	if x.Op == ir.BinAnd {
+		// Left was true → result is whatever Right evaluates to.
+		bs.lowerExprIntoPlace(x.Right, dest, destT)
+	} else {
+		bs.emit(&AssignInstr{
+			Dest:  dest,
+			Src:   &UseRV{Op: &ConstOp{Const: &BoolConst{Value: true}, T: TBool}},
+			SpanV: x.SpanV,
+		})
+	}
+	bs.terminate(&GotoTerm{Target: merge, SpanV: x.SpanV})
+
+	bs.cur = elseBB
+	if x.Op == ir.BinAnd {
+		bs.emit(&AssignInstr{
+			Dest:  dest,
+			Src:   &UseRV{Op: &ConstOp{Const: &BoolConst{Value: false}, T: TBool}},
+			SpanV: x.SpanV,
+		})
+	} else {
+		// Left was false → result is whatever Right evaluates to.
+		bs.lowerExprIntoPlace(x.Right, dest, destT)
+	}
+	bs.terminate(&GotoTerm{Target: merge, SpanV: x.SpanV})
+
+	bs.cur = merge
 }
 
 // lowerExprAsOperand lowers e and returns an operand holding its
