@@ -1672,7 +1672,12 @@ func (g *mirGen) emitTypeDefs() {
 	}
 	if g.stdUrlUrlTouched {
 		// scheme(ptr) host(ptr) port(Option<Int>) path(ptr) query(ptr) fragment(Option<String>)
-		block.WriteString(mirLlvmStructTypeDefLine(stdUrlSyntheticUrlTypeName, "ptr, ptr, { i64, i64 }, ptr, ptr, { i64, i64 }"))
+		// The two Option flavours need their layouts registered so the
+		// enum-layout-defs block emits them; otherwise the
+		// `%Option.string` reference here references an unsized type.
+		g.registerEnumLayout("Option.i64")
+		g.registerEnumLayout("Option.string")
+		block.WriteString(mirLlvmStructTypeDefLine(stdUrlSyntheticUrlTypeName, "ptr, ptr, %Option.i64, ptr, ptr, %Option.string"))
 	}
 	if g.stdOsOutputTouched {
 		block.WriteString(mirLlvmStructTypeDefLine(stdOsSyntheticOutputTypeName, "i64, ptr, ptr"))

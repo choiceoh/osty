@@ -1,0 +1,45 @@
+// url Phase E — Option<Int> port + Option<String> fragment field access.
+// Builds on Phase A+B+C+D (PRs #1368, #1369, #1370).
+
+use std.testing
+use std.url
+
+fn testPortPresent() {
+    match url.parse("https://example.com:8080/x") {
+        Ok(u) -> match u.port {
+            Some(_) -> testing.assertTrue(true),
+            None -> testing.assertTrue(false),
+        },
+        Err(_) -> testing.assertTrue(false),
+    }
+}
+
+fn testPortAbsent() {
+    match url.parse("https://example.com/x") {
+        Ok(u) -> match u.port {
+            Some(_) -> testing.assertTrue(false),
+            None -> testing.assertTrue(true),
+        },
+        Err(_) -> testing.assertTrue(false),
+    }
+}
+
+fn testFragmentPresent() {
+    match url.parse("https://example.com/x#top") {
+        Ok(u) -> match u.fragment {
+            Some(_) -> testing.assertTrue(true),
+            None -> testing.assertTrue(false),
+        },
+        Err(_) -> testing.assertTrue(false),
+    }
+}
+
+fn testFragmentAbsent() {
+    match url.parse("https://example.com/x") {
+        Ok(u) -> match u.fragment {
+            Some(_) -> testing.assertTrue(false),
+            None -> testing.assertTrue(true),
+        },
+        Err(_) -> testing.assertTrue(false),
+    }
+}
