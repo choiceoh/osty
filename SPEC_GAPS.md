@@ -168,33 +168,17 @@ spec 동급 동작.
 
 `log` 가 5★ 도달한 경로는 (2). 같은 패턴으로 compress / encoding / url / json / iter 도 차례로 5★ 가능.
 
-### `duration-builtin-methods` — `Duration` builtin 의 메서드/필드 미등록
+### ~~`duration-builtin-methods`~~ — `Duration` builtin 의 메서드/필드 미등록 — **해소됨 (2026-05-05)**
 
-**상태:** spec §10.20 line 78 mandates `Duration.toString(self) -> String`
-("1.23s" / "15ms" / "120µs" 적응형) and `Duration.nanoseconds: Int64`
-public field. 현재 `internal/resolve/prelude.go:58` 이 `Duration` 을
-prelude builtin 으로 등록하면서 정의 본체 (`internal/stdlib/modules/time.osty:12-35`)
-의 메서드 / 필드를 **체커가 인지하지 못함**:
+**픽스**: `internal/selfhost/primitive_arith_register.go` 의
+`registerSupplementalStdlibSurface` 에 `registerDurationMembers` 추가
+— `Int.s` 같은 prelude-route 에서 `Duration` 이 등장할 때 그 struct
+의 method/field 도 함께 checker 에 등록되도록 했다. 메서드는 `abs() →
+Duration`, `micros() / millis() / seconds() → Int`, `toString() →
+String` 다섯 개 + `nanoseconds: Int64` 필드 — 모두 `internal/stdlib/modules/time.osty`
+의 struct 정의에서 그대로 흡수.
 
-```osty
-let d: time.Duration = 5.s
-let _ = d.toString()       // E0703: no method `toString` on type `Duration`
-let _ = d.nanoseconds      // E0702: no field `nanoseconds` on type `Duration`
-```
-
-`Instant` 는 prelude 가 아니라 `std.time` 모듈 정의를 그대로 쓰는데
-`Instant.format(layout)` 가 정상 동작하는 것과 대비. **builtin 등록과
-모듈 본체 사이의 정합 갭**.
-
-`internal/stdlib/modules/log.osty` 의 `formatLogValue(LogValue.Duration(d))`
-가 이 갭 때문에 `<duration>` placeholder 를 출력. 해소되면 spec §10.20
-의 adaptive shape 출력 가능.
-
-**구현 규모.** prelude registration 시 (또는 stdlib 로드 후) `Duration`
-builtin 의 method/field table 을 `internal/stdlib/modules/time.osty`
-의 struct 정의에서 흡수. `primitive_arith_register.go` 의 fan-out
-패턴이 참고가 될 수 있음. 또는 prelude 등록을 제거하고 사용자 코드는
-`use std.time` 명시.
+**관련 PR**: TBD (이번 작업).
 
 ### ~~`default-arg-resolve`~~ — defaulted parameter 가 함수 scope 에 등록 안 됨 — **해소됨 (2026-05-05)**
 
