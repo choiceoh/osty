@@ -68,22 +68,32 @@ SVE fallback 은 §3.8.3 에 문서화 완료. 남은 gap 은 iterator-protocol
 
 향후 gap 을 닫을 때 같은 entry 에 해결 요지 + 관련 PR 을 기록한다.
 
-### `pure-enforce` — `#[pure]` checker enforcement (v0.6 A13)
+### ~~`pure-enforce`~~ — `#[pure]` checker enforcement (v0.6 A13) — **이미 해소됨 (2026-05-05 doc fix)**
 
-**상태:** `#[pure]` 는 v0.6 에 lenient 로 착륙했다 (§3.8.11). 현재
-컴파일러는 annotation 을 **신뢰만 하고 검증하지 않는다** — LLVM 이 `readnone`
-attribute 를 받아서 CSE / hoist / dead-call elim 을 수행하지만, 본문이
-실제로 pure 한지는 체커가 확인하지 않는다. 거짓말하면 undefined behavior.
+**상태:** 갭 문서가 stale. `#[pure]` checker enforcement 는 이미
+구현되어 있고 E0775 코드로 발화한다 — `toolchain/check_gates.osty::runPureGate`
+(seed mirror at `internal/selfhost/generated.go`).
 
-해소 경로: `internal/check` 에 purity analyzer 추가. 금지 목록:
-(a) non-local write (field/global/ref-parameter 의 store), (b) I/O
-(`println`, `fmt.*`, filesystem), (c) impure call (다른 `#[pure]` 나
-known-pure intrinsic 이 아닌 fn 호출), (d) volatile / atomic ops,
-(e) allocation (GC 는 관찰 가능). `#[pure]` 어노테이션 있는 함수 본문
-walk 해서 위 중 하나라도 발견하면 새 에러 코드 (예: E0780) 발화.
+`runPureGate` 가 `#[pure]` 어노테이션 함수 / 메서드 본문을 walk 해서
+다음 카테고리를 모두 거부:
 
-언어 surface 변경 없음 — 어노테이션 의미는 이미 §3.8.11 에 정의됨. 검증
-도입은 기존 `#[pure]` 코드를 깨지 않는다 (정확히 쓰였다면).
+  (a) non-local write — `AstNAssign` 타깃이 fn-local binding 이 아닐 때
+  (b) I/O — `println` / `print` / `eprint` / `eprintln` / `fmt.*` / fs.* 등
+      `pureCalleeLooksLikeIO` 가 잡는 패턴
+  (c) impure call — callee 가 같은 파일의 `#[pure]` fn 이 아닐 때
+  (d) volatile/atomic — Osty 가 해당 primitive 를 노출하지 않으므로 N/A
+  (e) allocation — `AstNList` / `AstNMap` / `AstNStructLit` /
+      `AstNClosure` / 보간 / 문자열 concat (관리되는 GC 할당)
+
+추가로 잡히는 것:
+  - `AstNChanSend` — 채널 send (관찰 가능 부작용)
+  - `AstNDefer` — 함수 반환 후 실행, pure 본문에 부적절
+
+진정 pure 한 본문은 통과. 회귀 테스트는
+`internal/selfhost/pure_enforcement_test.go::TestPureAnnotationEnforcedByE0775`
+가 4개 카테고리를 모두 핀.
+
+**관련 PR**: TBD (이번 작업 — 문서 fix + 회귀 픽스).
 
 ### ~~`a12-branch-hints`~~ — `likely(x)` / `unlikely(x)` 빌트인 (v0.6 A12 후속) — **해소됨 (2026-05-05)**
 
