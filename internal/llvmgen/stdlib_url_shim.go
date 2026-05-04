@@ -157,7 +157,7 @@ func ensureStdUrlSyntheticUrlStruct(g *generator) *structInfo {
 		},
 		{
 			name:       "port",
-			typ:        "{ i64, i64 }",
+			typ:        "%Option.i64",
 			index:      2,
 			sourceType: optionIntSourceType,
 		},
@@ -175,7 +175,7 @@ func ensureStdUrlSyntheticUrlStruct(g *generator) *structInfo {
 		},
 		{
 			name:       "fragment",
-			typ:        "{ i64, i64 }",
+			typ:        "%Option.string",
 			index:      5,
 			sourceType: optionStringSourceType,
 		},
@@ -267,7 +267,7 @@ func (g *mirGen) emitUrlParseMIR(c *mir.CallInstr, text mirRuntimeArg) error {
 	hasFragment := g.fresh()
 	g.fnBuf.WriteString(mirCallValueLine(hasFragment, "i1", ostyRtUrlHasFragmentSymbol, mirArgSlotPtr(parsed)))
 
-	// Build Option<Int> port: -1 → None, else Some.
+	// Build Option<Int> port: -1 → None, else Some. Layout %Option.i64.
 	portCmp := g.fresh()
 	g.fnBuf.WriteString(fmt.Sprintf("  %s = icmp eq i64 %s, -1\n", portCmp, port))
 	portTag := g.fresh()
@@ -275,11 +275,11 @@ func (g *mirGen) emitUrlParseMIR(c *mir.CallInstr, text mirRuntimeArg) error {
 	portPayload := g.fresh()
 	g.fnBuf.WriteString(fmt.Sprintf("  %s = select i1 %s, i64 0, i64 %s\n", portPayload, portCmp, port))
 	portStep := g.fresh()
-	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue { i64, i64 } undef, i64 %s, 0\n", portStep, portTag))
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue %%Option.i64 undef, i64 %s, 0\n", portStep, portTag))
 	portOpt := g.fresh()
-	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue { i64, i64 } %s, i64 %s, 1\n", portOpt, portStep, portPayload))
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue %%Option.i64 %s, i64 %s, 1\n", portOpt, portStep, portPayload))
 
-	// Build Option<String> fragment.
+	// Build Option<String> fragment. Layout %Option.string.
 	fragTag := g.fresh()
 	g.fnBuf.WriteString(fmt.Sprintf("  %s = select i1 %s, i64 1, i64 0\n", fragTag, hasFragment))
 	fragPayload := g.fresh()
@@ -287,9 +287,9 @@ func (g *mirGen) emitUrlParseMIR(c *mir.CallInstr, text mirRuntimeArg) error {
 	fragGated := g.fresh()
 	g.fnBuf.WriteString(fmt.Sprintf("  %s = select i1 %s, i64 %s, i64 0\n", fragGated, hasFragment, fragPayload))
 	fragStep := g.fresh()
-	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue { i64, i64 } undef, i64 %s, 0\n", fragStep, fragTag))
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue %%Option.string undef, i64 %s, 0\n", fragStep, fragTag))
 	fragOpt := g.fresh()
-	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue { i64, i64 } %s, i64 %s, 1\n", fragOpt, fragStep, fragGated))
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue %%Option.string %s, i64 %s, 1\n", fragOpt, fragStep, fragGated))
 
 	// Build the Url struct.
 	url0 := g.fresh()
@@ -297,13 +297,13 @@ func (g *mirGen) emitUrlParseMIR(c *mir.CallInstr, text mirRuntimeArg) error {
 	url1 := g.fresh()
 	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue %s %s, ptr %s, 1\n", url1, urlLLVM, url0, host))
 	url2 := g.fresh()
-	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue %s %s, { i64, i64 } %s, 2\n", url2, urlLLVM, url1, portOpt))
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue %s %s, %%Option.i64 %s, 2\n", url2, urlLLVM, url1, portOpt))
 	url3 := g.fresh()
 	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue %s %s, ptr %s, 3\n", url3, urlLLVM, url2, pathReg))
 	url4 := g.fresh()
 	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue %s %s, ptr %s, 4\n", url4, urlLLVM, url3, queryReg))
 	url5 := g.fresh()
-	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue %s %s, { i64, i64 } %s, 5\n", url5, urlLLVM, url4, fragOpt))
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue %s %s, %%Option.string %s, 5\n", url5, urlLLVM, url4, fragOpt))
 
 	// Box the struct via toI64Slot — same pattern os.exec uses for
 	// returning Result<Output, Error>: the Url struct is allocated
