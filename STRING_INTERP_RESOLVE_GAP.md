@@ -1,7 +1,18 @@
 # String Interpolation Resolver Gap — Multi-Day Plan
 
-**Status (2026-05-04):** Open. Identified during the fmt_e2e wall-progression
-sweep after [#1326](https://github.com/choiceoh/osty/pull/1326),
+**Status (2026-05-05):** User-facing path closed via #1361 (MIR-layer
+recovery). Canonical-side parser + resolver + applyTwice regression
+shipped via #1360 (Day 1 lexer ranges), #1364 (Day 2 parser
+sub-parse), #1376 (Day 3 resolver verification). Architectural fix
+(Go-side `astbridge` consumes arena children, drops
+`interp_adapter.go` re-parse) blocked on
+`internal/selfhost/generated.go` regeneration — the seed has the
+pre-#1364 parser; the canonical Osty parser is ahead. Until LLVM
+self-host LLVMgen catches up, the runtime MIR fallback from #1361
+handles the visible cases.
+
+**Original status (2026-05-04):** Open. Identified during the fmt_e2e
+wall-progression sweep after [#1326](https://github.com/choiceoh/osty/pull/1326),
 [#1329](https://github.com/choiceoh/osty/pull/1329),
 [#1339](https://github.com/choiceoh/osty/pull/1339),
 [#1341](https://github.com/choiceoh/osty/pull/1341),
