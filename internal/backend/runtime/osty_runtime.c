@@ -4952,6 +4952,12 @@ void *osty_rt_encoding_base64url_decode(const char *value);
 const char *osty_rt_encoding_url_encode(const char *value);
 const char *osty_rt_encoding_url_decode(const char *value);
 void *osty_rt_url_parse(const char *text);
+void *osty_rt_json_parse(const char *text);
+int64_t osty_rt_json_kind(void *raw_json);
+bool osty_rt_json_get_bool(void *raw_json);
+int64_t osty_rt_json_get_int(void *raw_json);
+double osty_rt_json_get_float(void *raw_json);
+const char *osty_rt_json_get_string(void *raw_json);
 const char *osty_rt_url_get_scheme(void *raw_url);
 const char *osty_rt_url_get_host(void *raw_url);
 int64_t osty_rt_url_get_port(void *raw_url);
@@ -12919,6 +12925,172 @@ void *osty_rt_url_get_query(void *raw_url) {
     }
     osty_gc_root_release_v1(map);
     return map;
+}
+
+/* ── std.json minimal parser ──────────────────────────────────────
+ * Phase B/C scope: parse a JSON document and return an opaque
+ * `osty_rt_json *` so the LLVM shim can wrap it in Result<Json,
+ * Error>. Variant pattern matching (Json.Null / Json.Bool(b) / …)
+ * lands in a follow-up cycle once the synthetic enum layout is wired
+ * through MIR. For now the accessors are leaf scalars only — no
+ * Array / Object traversal yet (returns kind = -1 sentinel for both
+ * so callers can detect "not yet supported").
+ *
+ * Tag convention (matches `internal/stdlib/modules/json.osty`'s
+ * `pub enum Json` declaration order):
+ *   0 = Object, 1 = Array, 2 = String, 3 = Number, 4 = Bool, 5 = Null
+ */
+
+typedef struct osty_rt_json {
+    int64_t kind;
+    int64_t bool_val; /* 0 / 1 when kind = 4 */
+    double  num_val;  /* set when kind = 3 */
+    char   *str_val;  /* set when kind = 2 */
+} osty_rt_json;
+
+static void osty_rt_json_skip_ws(const char *text, size_t *i, size_t len) {
+    while (*i < len) {
+        unsigned char c = (unsigned char)text[*i];
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+            (*i)++;
+            continue;
+        }
+        break;
+    }
+}
+
+static int osty_rt_json_match_literal(const char *text, size_t *i, size_t len, const char *lit) {
+    size_t j = 0;
+    while (lit[j] != '\0') {
+        if (*i + j >= len || text[*i + j] != lit[j]) {
+            return 0;
+        }
+        j++;
+    }
+    *i += j;
+    return 1;
+}
+
+void *osty_rt_json_parse(const char *text) {
+    size_t i = 0;
+    size_t len;
+    osty_rt_json *out;
+    if (text == NULL) {
+        return NULL;
+    }
+    len = strlen(text);
+    osty_rt_json_skip_ws(text, &i, len);
+    if (i >= len) {
+        return NULL;
+    }
+    out = (osty_rt_json *)osty_gc_allocate_managed(sizeof(osty_rt_json), OSTY_GC_KIND_GENERIC,
+                                                   "runtime.json.parse", NULL, NULL);
+    out->kind = -1;
+    out->bool_val = 0;
+    out->num_val = 0.0;
+    out->str_val = NULL;
+
+    unsigned char c = (unsigned char)text[i];
+    if (c == 'n') {
+        if (!osty_rt_json_match_literal(text, &i, len, "null")) {
+            return NULL;
+        }
+        out->kind = 5;
+    } else if (c == 't') {
+        if (!osty_rt_json_match_literal(text, &i, len, "true")) {
+            return NULL;
+        }
+        out->kind = 4;
+        out->bool_val = 1;
+    } else if (c == 'f') {
+        if (!osty_rt_json_match_literal(text, &i, len, "false")) {
+            return NULL;
+        }
+        out->kind = 4;
+        out->bool_val = 0;
+    } else if (c == '"') {
+        size_t start;
+        i++;
+        start = i;
+        while (i < len && text[i] != '"') {
+            if (text[i] == '\\' && i + 1 < len) {
+                i += 2;
+            } else {
+                i++;
+            }
+        }
+        if (i >= len) {
+            return NULL;
+        }
+        out->kind = 2;
+        out->str_val = osty_rt_url_dup_range(text + start, i - start, "runtime.json.parse.string");
+        i++;
+    } else if (c == '-' || (c >= '0' && c <= '9')) {
+        size_t start = i;
+        char *endptr = NULL;
+        double d;
+        if (c == '-') {
+            i++;
+        }
+        while (i < len) {
+            unsigned char d_c = (unsigned char)text[i];
+            if (d_c == '.' || d_c == 'e' || d_c == 'E' || d_c == '+' || d_c == '-' || (d_c >= '0' && d_c <= '9')) {
+                i++;
+            } else {
+                break;
+            }
+        }
+        d = strtod(text + start, &endptr);
+        if (endptr == text + start) {
+            return NULL;
+        }
+        out->kind = 3;
+        out->num_val = d;
+    } else if (c == '[' || c == '{') {
+        /* Array / Object — opaque for Phase B; mark kind but do not
+         * traverse. Future phases (variant pattern matching) replace
+         * this with full structural parsing.
+         */
+        out->kind = (c == '[') ? 1 : 0;
+        return out;
+    } else {
+        return NULL;
+    }
+
+    osty_rt_json_skip_ws(text, &i, len);
+    if (i != len) {
+        /* Trailing content after the value — not strict-JSON, but
+         * tolerated in Phase B. */
+    }
+    return out;
+}
+
+int64_t osty_rt_json_kind(void *raw_json) {
+    osty_rt_json *j = (osty_rt_json *)raw_json;
+    return j == NULL ? -1 : j->kind;
+}
+
+bool osty_rt_json_get_bool(void *raw_json) {
+    osty_rt_json *j = (osty_rt_json *)raw_json;
+    return j != NULL && j->bool_val != 0;
+}
+
+int64_t osty_rt_json_get_int(void *raw_json) {
+    osty_rt_json *j = (osty_rt_json *)raw_json;
+    return j == NULL ? 0 : (int64_t)j->num_val;
+}
+
+double osty_rt_json_get_float(void *raw_json) {
+    osty_rt_json *j = (osty_rt_json *)raw_json;
+    return j == NULL ? 0.0 : j->num_val;
+}
+
+const char *osty_rt_json_get_string(void *raw_json) {
+    osty_rt_json *j = (osty_rt_json *)raw_json;
+    if (j == NULL || j->str_val == NULL) {
+        return "";
+    }
+    return j->str_val;
 }
 
 void *osty_rt_bytes_from_list(void *raw_list) {

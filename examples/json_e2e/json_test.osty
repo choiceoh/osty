@@ -1,0 +1,34 @@
+// json_e2e — E2E for json.parseValue (Phase A+B+C).
+// Variant pattern matching on Json (Json.Null / Json.Int(n) / ...)
+// is deferred — opaque ptr only at this stage.
+
+use std.testing
+use std.json
+
+fn testParseInt() {
+    match json.parseValue("42") {
+        Ok(_) -> testing.assertTrue(true),
+        Err(_) -> testing.assertTrue(false),
+    }
+}
+
+fn testParseString() {
+    match json.parseValue("\"hello\"") {
+        Ok(_) -> testing.assertTrue(true),
+        Err(_) -> testing.assertTrue(false),
+    }
+}
+
+fn testParseTrue() {
+    match json.parseValue("true") {
+        Ok(_) -> testing.assertTrue(true),
+        Err(_) -> testing.assertTrue(false),
+    }
+}
+
+fn testInvalidJsonReturnsErr() {
+    match json.parseValue("not json") {
+        Ok(_) -> testing.assertTrue(false),
+        Err(_) -> testing.assertTrue(true),
+    }
+}

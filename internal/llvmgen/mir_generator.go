@@ -691,7 +691,7 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 		// doesn't need a declared layout for them. These match what
 		// the runtime ABI hands back from chan_make / spawn / etc.
 		switch x.Name {
-		case "Channel", "Handle", "Group", "TaskGroup", "Select", "Duration", "Rng", "Gen", "Uuid", "Regex", "Captures", "Never":
+		case "Channel", "Handle", "Group", "TaskGroup", "Select", "Duration", "Rng", "Gen", "Uuid", "Regex", "Captures", "Never", "Json":
 			return true
 		case "Range":
 			// Range<T> is a prelude type but the Go-side resolver
@@ -3370,6 +3370,11 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 	}
 	if strings.HasPrefix(fnRef.Symbol, "std.url.") {
 		if handled, err := g.emitStdUrlCallMIR(c, fnRef); handled {
+			return err
+		}
+	}
+	if strings.HasPrefix(fnRef.Symbol, "std.json.") {
+		if handled, err := g.emitStdJsonCallMIR(c, fnRef); handled {
 			return err
 		}
 	}
