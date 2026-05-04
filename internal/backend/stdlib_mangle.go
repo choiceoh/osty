@@ -217,10 +217,22 @@ func RewriteStdlibMethodCallsites(mod *ir.Module, reached []ReachableStdlibMetho
 			}
 		}
 		named, ok := mc.Receiver.Type().(*ir.NamedType)
-		if !ok || named == nil || named.Package == "" || named.Name == "" {
+		if !ok || named == nil || named.Name == "" {
 			return true
 		}
-		mangled, hit := set[key{module: named.Package, typeName: named.Name, method: mc.Name}]
+		// Builtin generic types (`List<T>`, `Map<K, V>`, `Set<T>`,
+		// `Option<T>`, `Result<T, E>`) reach the IR with `Builtin:
+		// true` but `Package: ""`. Discovery in `ir.ReachMethods`
+		// patches the package to the canonical owning module; do
+		// the same here so the rewrite finds its match.
+		module := named.Package
+		if module == "" && named.Builtin {
+			module = ir.BuiltinTypeOwningModule(named.Name)
+		}
+		if module == "" {
+			return true
+		}
+		mangled, hit := set[key{module: module, typeName: named.Name, method: mc.Name}]
 		if !hit {
 			return true
 		}
