@@ -10,7 +10,7 @@ fn testQueryIterationFindsBothKeys() {
     match url.parse("https://example.com/x?a=1&b=2") {
         Ok(u) -> {
             let mut count = 0
-            for (k, v) in u.query {
+            for (_k, _v) in u.query {
                 count = count + 1
             }
             testing.assertEq(count, 2)
