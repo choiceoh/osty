@@ -5121,12 +5121,16 @@ func stdlibNestedNamespacePath(use *ir.UseDecl, parts []string) bool {
 		return parts[0] == "hmac"
 	case "compress", "std.compress":
 		return parts[0] == "gzip"
+	case "encoding", "std.encoding":
+		return parts[0] == "hex" || parts[0] == "base64"
 	}
 	switch pathQualifier(use) {
 	case "std.crypto":
 		return parts[0] == "hmac"
 	case "std.compress":
 		return parts[0] == "gzip"
+	case "std.encoding":
+		return parts[0] == "hex" || parts[0] == "base64"
 	}
 	return false
 }

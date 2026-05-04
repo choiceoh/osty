@@ -35,19 +35,7 @@ func TestStdEncodingRuntimeLoweringMarksDecodeMIRResult(t *testing.T) {
 	}
 }
 
-// Verified failing on every commit since #1349 introduced these
-// fixtures. The MIR builder lowers `encoding.hex.decode(s)` to a
-// chain of UseRV stores into ErrType-typed locals (because
-// `useAliasFieldPath` only recognises `crypto.hmac.*` and
-// `compress.gzip.*` namespaces, not `encoding.*`), and the LLVM
-// emitter rejects the resulting `<error>` locals up front. The
-// MIR-direct dispatch in `mir_generator.go::emitDirectCall` was
-// wired to expect already-mangled `Hex__decode` / `Base64__decode`
-// symbols that the MIR builder never produces. Skipping for now
-// to take these out of silent-failure status; tracked in
-// `project_encoding_mir_namespace_gap` memory note.
 func TestGenerateFromMIRStdEncodingHexDecodeReturnsResult(t *testing.T) {
-	t.Skip("merged broken in #1349; see project_encoding_mir_namespace_gap")
 	got := generateStdEncodingDecodeMIR(t, "hex")
 	for _, want := range []string{
 		"declare i1 @osty_rt_bytes_is_valid_hex(ptr)",
@@ -66,8 +54,17 @@ func TestGenerateFromMIRStdEncodingHexDecodeReturnsResult(t *testing.T) {
 	}
 }
 
+// Discard contract: in ExprStmt context the from_hex call must be
+// skipped (only is_valid_hex validates). Currently fails because the
+// MIR builder allocates a dest temp for every CallExpr result, so
+// `emitEncodingHexDecodeMIR`'s `c.Dest == nil` shortcut never fires.
+// Fixing requires the MIR builder to omit dest-alloca for discarded
+// calls, which is a broader change than this PR's scope. The
+// nullable-decode discard case (Base64 / Base64Url) sidesteps the
+// issue because its emitter goes through `emitPtrResultFromNullableRuntimeCall`,
+// which copes with a dest that's never read.
 func TestGenerateFromMIRStdEncodingHexDecodeDiscardValidatesAsI1(t *testing.T) {
-	t.Skip("merged broken in #1349; see project_encoding_mir_namespace_gap")
+	t.Skip("hex.decode discard requires MIR builder to skip dest-alloca for ExprStmt calls; see project_encoding_mir_namespace_gap")
 	got := generateStdEncodingDecodeDiscardMIR(t, "hex")
 	for _, want := range []string{
 		"declare i1 @osty_rt_bytes_is_valid_hex(ptr)",
@@ -91,7 +88,6 @@ func TestGenerateFromMIRStdEncodingHexDecodeDiscardValidatesAsI1(t *testing.T) {
 }
 
 func TestGenerateFromMIRStdEncodingBase64DecodeReturnsResult(t *testing.T) {
-	t.Skip("merged broken in #1349; see project_encoding_mir_namespace_gap")
 	for _, tc := range []struct {
 		variant string
 		runtime string

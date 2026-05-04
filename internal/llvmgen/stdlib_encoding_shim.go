@@ -372,6 +372,56 @@ func (g *mirGen) emitStdEncodingCallMIR(c *mir.CallInstr, fnRef *mir.FnRef) (boo
 	return g.emitStdEncodingRuntimeCallMIR(c, fnRef)
 }
 
+// emitStdEncodingDottedCallMIR handles `std.encoding.{variant}[.{sub}].{method}`
+// MIR symbols. Produced by the use-alias-field-path dispatch in
+// `internal/mir/lower.go` once `stdlibNestedNamespacePath` accepts the
+// `encoding` namespace — `qualifiedSymbol` joins the path with dots
+// rather than mangling to `Hex__decode` / `Base64__decode`. Mirrors
+// `emitStdEncodingRuntimeCallMIR` but the args list is the user's
+// argument list as-is (no synthetic receiver to strip), since the
+// field-path dispatch never prepends a receiver for free-fn calls.
+func (g *mirGen) emitStdEncodingDottedCallMIR(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
+	const prefix = "std.encoding."
+	if !strings.HasPrefix(fnRef.Symbol, prefix) {
+		return false, nil
+	}
+	parts := strings.Split(strings.TrimPrefix(fnRef.Symbol, prefix), ".")
+	if len(parts) < 2 {
+		return false, nil
+	}
+	method := parts[len(parts)-1]
+	pathParts := parts[:len(parts)-1]
+	var spec *stdEncodingRuntimeLowering
+	for i := range stdEncodingRuntimeLowerings {
+		if astPathEqual(stdEncodingRuntimeLowerings[i].ASTPath, pathParts) {
+			spec = &stdEncodingRuntimeLowerings[i]
+			break
+		}
+	}
+	if spec == nil {
+		return false, nil
+	}
+	switch method {
+	case "encode":
+		return true, g.emitStdEncodingEncodeCallMIR(c, spec, c.Args)
+	case "decode":
+		return true, g.emitStdEncodingDecodeCallMIR(c, spec, c.Args)
+	}
+	return false, nil
+}
+
+func astPathEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func (g *mirGen) emitStdEncodingRuntimeCallMIR(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
 	spec, method, ok := stdEncodingRuntimeLoweringForMIRSymbol(fnRef.Symbol)
 	if !ok || spec == nil {
