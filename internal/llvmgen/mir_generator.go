@@ -5372,8 +5372,37 @@ func (g *mirGen) emitIntrinsic(i *mir.IntrinsicInstr) error {
 	case mir.IntrinsicResultIsOk, mir.IntrinsicResultIsErr,
 		mir.IntrinsicResultUnwrap, mir.IntrinsicResultUnwrapOr:
 		return g.emitResultIntrinsic(i)
+	case mir.IntrinsicLikely:
+		return g.emitBranchHintIntrinsic(i, "true")
+	case mir.IntrinsicUnlikely:
+		return g.emitBranchHintIntrinsic(i, "false")
 	}
 	return unsupported("mir-mvp", fmt.Sprintf("intrinsic %s", mirIntrinsicLabel(i.Kind)))
+}
+
+// emitBranchHintIntrinsic lowers `likely(cond)` / `unlikely(cond)` to
+// `<reg> = call i1 @llvm.expect.i1(i1 %cond, i1 <expected>)`. The
+// `expected` literal is "true" for likely / "false" for unlikely;
+// LLVM uses the hint to bias block-placement after the next branch.
+// At runtime the call returns its first argument unchanged — only
+// the layout metadata moves.
+func (g *mirGen) emitBranchHintIntrinsic(i *mir.IntrinsicInstr, expected string) error {
+	if len(i.Args) != 1 {
+		return unsupported("mir-mvp", "likely/unlikely takes exactly one Bool argument")
+	}
+	if i.Dest == nil {
+		// No dest — caller discards the result. The call has no
+		// side effects, so skip emission entirely.
+		return nil
+	}
+	condReg, err := g.evalOperand(i.Args[0], mir.TBool)
+	if err != nil {
+		return err
+	}
+	g.declareRuntime(mirIntrinsicLLVMExpectI1(), "declare i1 @"+mirIntrinsicLLVMExpectI1()+"(i1, i1)")
+	resultReg := g.fresh()
+	g.fnBuf.WriteString(mirCallValueLLVMExpectI1Line(resultReg, condReg, expected))
+	return g.storeIntrinsicResult(i, &LlvmValue{typ: "i1", name: resultReg})
 }
 
 // emitOptionIntrinsic lowers the four Option<T> method intrinsics that

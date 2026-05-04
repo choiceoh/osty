@@ -7883,6 +7883,9 @@ func (g *generator) matchEnumTag(pattern ast.Pattern) (int, bool, error) {
 }
 
 func (g *generator) emitCall(call *ast.CallExpr) (value, error) {
+	if v, found, err := g.emitBranchHintCall(call); found || err != nil {
+		return g.finishCallResult(call, v, err)
+	}
 	if v, found, err := g.emitTestingValueCall(call); found || err != nil {
 		return g.finishCallResult(call, v, err)
 	}
@@ -8167,6 +8170,46 @@ func debugFieldBase(expr ast.Expr) string {
 	default:
 		return fmt.Sprintf("%T", expr)
 	}
+}
+
+// emitBranchHintCall handles the prelude `likely(cond) / unlikely(cond)`
+// branch-prediction builtins (SPEC_GAPS `a12-branch-hints`, v0.6 A12).
+// Lowers to `<reg> = call i1 @llvm.expect.i1(i1 %cond, i1 <expected>)`
+// and returns the call result so callers see the same Bool value the
+// argument evaluated to. Runtime semantics are identity — only the
+// branch-layout metadata is biased.
+func (g *generator) emitBranchHintCall(call *ast.CallExpr) (value, bool, error) {
+	if call == nil {
+		return value{}, false, nil
+	}
+	id, ok := call.Fn.(*ast.Ident)
+	if !ok {
+		return value{}, false, nil
+	}
+	expected := ""
+	switch id.Name {
+	case "likely":
+		expected = "true"
+	case "unlikely":
+		expected = "false"
+	default:
+		return value{}, false, nil
+	}
+	if len(call.Args) != 1 || call.Args[0] == nil || call.Args[0].Name != "" || call.Args[0].Value == nil {
+		return value{}, true, unsupportedf("call", "%s requires one positional Bool argument", id.Name)
+	}
+	condVal, err := g.emitExpr(call.Args[0].Value)
+	if err != nil {
+		return value{}, true, err
+	}
+	if condVal.typ != "i1" {
+		return value{}, true, unsupportedf("call", "%s expects Bool, got %s", id.Name, condVal.typ)
+	}
+	g.declareRuntimeSymbol("llvm.expect.i1", "i1", []paramInfo{{typ: "i1"}, {typ: "i1"}})
+	emitter := g.toOstyEmitter()
+	out := llvmCall(emitter, "i1", "llvm.expect.i1", []*LlvmValue{toOstyValue(condVal), {typ: "i1", name: expected}})
+	g.takeOstyEmitter(emitter)
+	return fromOstyValue(out), true, nil
 }
 
 func (g *generator) emitTestingValueCall(call *ast.CallExpr) (value, bool, error) {

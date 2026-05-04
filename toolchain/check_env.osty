@@ -2016,6 +2016,31 @@ pub fn checkInstallPrelude(env: CheckEnv) {
         generics: [],
         genericBounds: [],
     })
+    // `likely(cond: Bool) -> Bool` / `unlikely(cond: Bool) -> Bool`
+    // — branch-prediction prelude builtins (SPEC_GAPS
+    // `a12-branch-hints`, v0.6 A12). Identity at runtime; LLVM
+    // codegen lowers each call to `@llvm.expect.i1` so block layout
+    // biases hot/cold paths.
+    checkRegisterFn(env, CheckFnSig {
+        name: "likely",
+        owner: "",
+        receiverTy: -1, hasReceiver: false,
+        retTy: tBool(env.tys),
+        paramNames: ["cond"],
+        paramTys: [tBool(env.tys)],
+        generics: [],
+        genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "unlikely",
+        owner: "",
+        receiverTy: -1, hasReceiver: false,
+        retTy: tBool(env.tys),
+        paramNames: ["cond"],
+        paramTys: [tBool(env.tys)],
+        generics: [],
+        genericBounds: [],
+    })
     // Prelude concurrency helpers (§B.6) — registered as bare callers
     // so `taskGroup(...)`, `parallel(...)`, `spawn(...)` resolve. We
     // don't model the real types (Group/Handle<T>) here; the retTys

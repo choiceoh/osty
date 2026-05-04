@@ -85,23 +85,33 @@ walk 해서 위 중 하나라도 발견하면 새 에러 코드 (예: E0780) 발
 언어 surface 변경 없음 — 어노테이션 의미는 이미 §3.8.11 에 정의됨. 검증
 도입은 기존 `#[pure]` 코드를 깨지 않는다 (정확히 쓰였다면).
 
-### `a12-branch-hints` — `likely(x)` / `unlikely(x)` 빌트인 (v0.6 A12 후속)
+### ~~`a12-branch-hints`~~ — `likely(x)` / `unlikely(x)` 빌트인 (v0.6 A12 후속) — **해소됨 (2026-05-05)**
 
-**상태:** Tier 2 트랙에서 A11 (`#[noalias]`), A13 (`#[pure]`) 는
-착륙했지만 A12 branch prediction 빌트인은 후속 PR 로 미뤄진 상태.
-구현 규모: (a) prelude 에 `likely(x: Bool) -> Bool` / `unlikely(x: Bool)
--> Bool` 등록, (b) checker 가 이를 builtin-identity 로 인식, (c) IR /
-MIR / LLVM emitter 에서 `@llvm.expect.i1(i1 %x, i1 <hint>)` intrinsic
-call 로 lower. Annotation 과 달리 새로운 builtin symbol 을 언어 surface
-에 추가하는 것이므로 `#[inline]` 류와 다른 종류의 변경이다.
+**픽스**: 빌트인 함수 접근으로 착륙. Surface:
+- `likely(cond: Bool) -> Bool`
+- `unlikely(cond: Bool) -> Bool`
 
-설계 대안도 열려 있음:
-- `if likely(cond) { ... }` — 빌트인 expression wrap
-- `match x { likely A => ..., unlikely B => ... }` — match arm prefix
-  (grammar 변경 필요)
-- `#[likely] if ...` — expression attribute (grammar 변경 필요)
+5곳 변경:
+1. `internal/mir/mir.go` — `IntrinsicLikely` / `IntrinsicUnlikely` 추가
+2. `internal/mir/lower.go::lowerCallExprInto` — bare ident dispatch 가
+   `likely`/`unlikely` 인식해서 IntrinsicInstr 로 lower
+3. `internal/llvmgen/mir_generator.go::emitIntrinsic` — 새 kind 들이
+   `emitBranchHintIntrinsic` 으로 라우팅, `call i1 @llvm.expect.i1(i1
+   %cond, i1 <expected>)` 발화
+4. `internal/llvmgen/expr.go::emitCall` — 레거시 AST 경로용
+   `emitBranchHintCall` 추가 (같은 IR 셰이프)
+5. `internal/llvmgen/ir_native_entry.go::nativeExprFromIR` — native-owned
+   경로용 `nativeBranchHintExprFromIR` 추가 (역시 같은 IR)
 
-빌트인 함수 접근이 가장 부담이 적음. 별도 PR 에서 scope 결정 후 착륙.
+체커 사이드:
+- `internal/selfhost/generated.go` (frozen seed) — `likely`/`unlikely`
+  을 prelude fn 으로 등록 + `srIsBuiltinName` 화이트리스트에 추가
+- `toolchain/check_env.osty` + `toolchain/resolve.osty` — Osty mirror
+
+런타임 시맨틱은 identity (cond 그대로 반환); LLVM 이 `@llvm.expect.i1`
+힌트를 받아서 block layout 만 biases.
+
+**관련 PR**: TBD (이번 작업).
 
 ### `log-fields-sugar` — `Fields { "k": v }` 리터럴 + `ToLogValue` 자동 derive (spec §10.10)
 

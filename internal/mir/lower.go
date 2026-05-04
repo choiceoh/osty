@@ -3368,6 +3368,12 @@ func (bs *bodyState) builtinFreeCallReturnType(name string, args []ir.Arg) ir.Ty
 	if len(args) == 0 || args[0].Value == nil {
 		return nil
 	}
+	// `likely(cond) / unlikely(cond)` — branch hints. Argument is
+	// Bool-typed independent of the receiver type, so they bypass
+	// the receiver-keyed `builtinFreeCallIntrinsic` table.
+	if name == "likely" || name == "unlikely" {
+		return ir.TBool
+	}
 	if kind := bs.builtinFreeCallIntrinsic(name, args); kind == IntrinsicInvalid {
 		return nil
 	}
@@ -4439,6 +4445,31 @@ func (bs *bodyState) lowerCallExprInto(c *ir.CallExpr, dest *Place, destT Type) 
 			args := []Operand{&ConstOp{Const: &StringConst{Value: msg}, T: TString}}
 			bs.emit(&IntrinsicInstr{
 				Kind:  IntrinsicAbort,
+				Args:  args,
+				SpanV: c.SpanV,
+			})
+			return
+		}
+		// `likely(cond: Bool) -> Bool` / `unlikely(cond: Bool) -> Bool`
+		// — prelude branch-prediction hints (SPEC_GAPS `a12-branch-hints`,
+		// v0.6 A12). Lower to IntrinsicLikely / IntrinsicUnlikely with
+		// the condition as the single arg; the MIR generator emits
+		// `call i1 @llvm.expect.i1(i1 %cond, i1 <expected>)` and stores
+		// the result in dest. Runtime semantics are identity — only the
+		// branch-layout metadata is biased.
+		if (id.Name == "likely" || id.Name == "unlikely") && len(c.Args) == 1 && dest != nil {
+			args := []Operand{bs.lowerExprAsOperand(c.Args[0].Value)}
+			kind := IntrinsicLikely
+			if id.Name == "unlikely" {
+				kind = IntrinsicUnlikely
+			}
+			destPtr := dest
+			if destPtr != nil && isUnit(destT) {
+				destPtr = nil
+			}
+			bs.emit(&IntrinsicInstr{
+				Dest:  destPtr,
+				Kind:  kind,
 				Args:  args,
 				SpanV: c.SpanV,
 			})

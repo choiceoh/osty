@@ -3833,6 +3833,9 @@ func nativeExprFromIR(ctx *nativeProjectionCtx, expr ostyir.Expr) (*llvmNativeEx
 		if runtimeCall, ok := nativeRuntimeFFICallExprFromIR(ctx, e); ok {
 			return runtimeCall, true
 		}
+		if hint, ok := nativeBranchHintExprFromIR(ctx, e); ok {
+			return hint, true
+		}
 		callee, ok := e.Callee.(*ostyir.Ident)
 		if !ok || len(e.TypeArgs) != 0 {
 			return nil, false
@@ -5614,6 +5617,48 @@ func nativeQualifiedAliasCall(call *ostyir.CallExpr) (alias string, name string,
 		return "", "", false
 	}
 	return base.Name, field.Name, true
+}
+
+// nativeBranchHintExprFromIR catches `likely(cond)` / `unlikely(cond)`
+// (SPEC_GAPS `a12-branch-hints`, v0.6 A12) on the native-owned
+// emitter. Lowers to `call i1 @llvm.expect.i1(i1 %cond, i1 <hint>)`
+// — runtime identity, only LLVM block-placement metadata is biased.
+func nativeBranchHintExprFromIR(ctx *nativeProjectionCtx, call *ostyir.CallExpr) (*llvmNativeExpr, bool) {
+	if ctx == nil || call == nil {
+		return nil, false
+	}
+	id, ok := call.Callee.(*ostyir.Ident)
+	if !ok {
+		return nil, false
+	}
+	expected := ""
+	switch id.Name {
+	case "likely":
+		expected = "true"
+	case "unlikely":
+		expected = "false"
+	default:
+		return nil, false
+	}
+	if len(call.Args) != 1 || call.Args[0].IsKeyword() {
+		return nil, false
+	}
+	condExpr, ok := nativeExprFromIR(ctx, call.Args[0].Value)
+	if !ok {
+		return nil, false
+	}
+	ctx.addRuntimeDecl("declare i1 @llvm.expect.i1(i1, i1)")
+	expectedExpr := &llvmNativeExpr{
+		kind:      llvmNativeExprBool,
+		llvmType:  "i1",
+		boolValue: expected == "true",
+	}
+	return &llvmNativeExpr{
+		kind:       llvmNativeExprCall,
+		llvmType:   "i1",
+		name:       "llvm.expect.i1",
+		childExprs: []*llvmNativeExpr{condExpr, expectedExpr},
+	}, true
 }
 
 func nativeRuntimeFFICallExprFromIR(ctx *nativeProjectionCtx, call *ostyir.CallExpr) (*llvmNativeExpr, bool) {
