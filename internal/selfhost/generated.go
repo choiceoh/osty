@@ -48943,8 +48943,18 @@ func elaborateFnBody(cx *ElabCx, node *AstNode, owner string) {
 			}
 		}()
 		_ = pty
+		// `?`-prefix on `pname` is internal arity-tracking metadata
+		// (see paramDefaultCount); strip before binding so the body
+		// can reference the param by its source name. Without this,
+		// `fn fetch(x: String, timeout: Int = 30) { timeout + 1 }`
+		// fires E0745 because the body looks up `timeout` but only
+		// `?timeout` is bound.
+		bindName := pname
+		if len(bindName) > 0 && bindName[0] == '?' {
+			bindName = bindName[1:]
+		}
 		// Osty: /tmp/selfhost_merged.osty:24069:9
-		checkBindSpan(cx.env, pname, pty, true, node.start, node.end)
+		checkBindSpan(cx.env, bindName, pty, true, node.start, node.end)
 		// Osty: /tmp/selfhost_merged.osty:24070:9
 		func() {
 			var _cur2326 int = i

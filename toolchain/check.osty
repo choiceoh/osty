@@ -1349,11 +1349,18 @@ fn elaborateFnBody(cx: ElabCx, node: AstNode, owner: String) {
         checkBindSpan(cx.env, "self", sig.receiverTy, true, node.start, node.end)
     }
 
-    // Bind parameters.
+    // Bind parameters. `?`-prefix on `pname` is internal arity-
+    // tracking metadata injected by `collectFnDecl` so
+    // `paramDefaultCount` can count trailing defaults — strip it
+    // before binding so the body can reference the param by its
+    // source name. Without this, `fn fetch(x: String, timeout: Int =
+    // 30) { timeout + 1 }` fires E0745 because the body looks up
+    // `timeout` but only `?timeout` is bound.
     let mut i = 0
     for pname in sig.paramNames {
         let pty = if i < checkIntListLenLocal(sig.paramTys) { checkIntListAtLocal(sig.paramTys, i) } else { tErr(cx.env.tys) }
-        checkBindSpan(cx.env, pname, pty, true, node.start, node.end)
+        let bindName = if pname.startsWith("?") { strings.trimPrefix(pname, "?") } else { pname }
+        checkBindSpan(cx.env, bindName, pty, true, node.start, node.end)
         i = i + 1
     }
 

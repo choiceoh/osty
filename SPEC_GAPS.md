@@ -196,35 +196,22 @@ builtin 의 method/field table 을 `internal/stdlib/modules/time.osty`
 패턴이 참고가 될 수 있음. 또는 prelude 등록을 제거하고 사용자 코드는
 `use std.time` 명시.
 
-### `default-arg-resolve` — defaulted parameter 가 함수 scope 에 등록 안 됨
+### ~~`default-arg-resolve`~~ — defaulted parameter 가 함수 scope 에 등록 안 됨 — **해소됨 (2026-05-05)**
 
-**상태:** spec §3 (declarations) 에 명시된 default-arg surface
-(`fn fetch(url: String, timeout: Int = 30, retries: Int = 3)`) 의
-parser/resolver 결함. **default 가 붙은 파라미터가 함수 body 의
-scope 에 등록되지 않아 `E0745 cannot find <param>` 발화**.
+**진단**: resolver 가 아니라 **체커**의 결함이었다.
+`toolchain/check.osty::collectFnDecl` 이 default 를 가진 파라미터
+이름을 `?`-prefix 메타데이터로 `paramNames` 에 저장 (arity-tracking
+용; `paramDefaultCount` 가 trailing default 개수 카운트). 그런데
+`elabFnDecl` 의 body-scope 바인딩 루프가 그 prefix 를 strip 하지 않고
+그대로 `checkBindSpan(env, "?timeout", ...)` 으로 등록 — body 가
+`timeout` 을 찾으면 `?timeout` 만 바운드되어 있어서 E0745. 진단의
+`hint: did you mean ?timeout?` 도 같은 누설.
 
-**재현 (현재 HEAD):**
-```osty
-fn fetch(url: String, timeout: Int = 30) -> Int {
-    timeout + 1   // error[E0745]: cannot find `timeout` in this scope
-}
-```
+**픽스**: `?` prefix 를 strip 한 후 body scope 에 바인드. 다른 곳에서
+`?` prefix 를 보는 사이트는 `paramDefaultCount` 한 곳뿐이라 strip 의
+부작용 없음.
 
-CLAUDE.md A.7 / §10.10 default 시그니처 / `internal/stdlib/modules/`
-다수 모듈 (`fmt.osty`, `log.osty` 등) 이 모두 영향받음. stdlib
-loader 는 diagnostic 누적만 하고 fail 하지 않아서 모듈 로딩은
-통과하지만, 사용자가 `osty check` 로 모듈 파일을 직접 검증하면
-대량의 E0745 발화. `.bin/osty check` 사용자 코드도 default-arg
-정의된 함수 본문 작성 시 영향.
-
-**진단:** `internal/resolve` 에서 default expression 처리가 파라미터
-binding 보다 먼저 시도되어 scope 진입이 누락되는 것으로 추정. 또는
-default 가 있는 case 만 다른 declare-pass 경로를 타고 있음.
-
-**구현 규모.** resolver 의 function declaration 처리에서 파라미터
-binding 순서 점검. default expression 은 caller scope 에서 평가
-(default 가 다른 파라미터 참조 불가; 리터럴 only 가 spec 결정).
-파라미터 자체는 항상 함수 body scope 에 등록되어야 함.
+**관련 PR**: TBD (이번 작업).
 
 **운영 정책.** 새 gap 은 기존 처리 절차대로 G 번호를 부여해 `Open Gaps`
 섹션에서 추적. 버그 수정 / 명확화 / 성능 최적화 / 의미 중립 변경은
