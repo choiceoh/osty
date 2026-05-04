@@ -1,0 +1,36 @@
+// url_e2e — E2E verification of url.parse + Url field access.
+//
+// Combined Phase A+B+C+D delivery: synthetic Url struct in MIR
+// (#1368), C runtime parser (#1369), LLVM shim that builds Url
+// via insertvalue + toI64Slot heap-box for Result<Url, Error>.
+
+use std.testing
+use std.url
+
+fn testParseAndScheme() {
+    match url.parse("https://example.com/x") {
+        Ok(u) -> testing.assertEq(u.scheme, "https"),
+        Err(_) -> testing.assertTrue(false),
+    }
+}
+
+fn testParseAndHost() {
+    match url.parse("http://api.example.com/v1") {
+        Ok(u) -> testing.assertEq(u.host, "api.example.com"),
+        Err(_) -> testing.assertTrue(false),
+    }
+}
+
+fn testParseAndPath() {
+    match url.parse("https://x.com/foo/bar") {
+        Ok(u) -> testing.assertEq(u.path, "/foo/bar"),
+        Err(_) -> testing.assertTrue(false),
+    }
+}
+
+fn testInvalidUrlReturnsErr() {
+    match url.parse("not-a-url") {
+        Ok(_) -> testing.assertTrue(false),
+        Err(_) -> testing.assertTrue(true),
+    }
+}
