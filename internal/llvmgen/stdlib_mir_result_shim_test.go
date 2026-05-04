@@ -6,7 +6,6 @@ import (
 )
 
 func TestGenerateFromMIRStdEncodingNullableDecodeDiscardCallsRuntimeAsPtr(t *testing.T) {
-	t.Skip("merged broken in #1349/#1351; see project_encoding_mir_namespace_gap")
 	for _, tc := range []struct {
 		variant string
 		runtime string
