@@ -2458,6 +2458,9 @@ func hasPoisonedTypeArg(t Type) bool {
 		if x.Inner == ErrTypeVal {
 			return true
 		}
+		if pt, ok := x.Inner.(*PrimType); ok && pt.Kind == PrimInvalid {
+			return true
+		}
 		return hasPoisonedTypeArg(x.Inner)
 	case *TupleType:
 		for _, e := range x.Elems {
@@ -2788,7 +2791,20 @@ func (l *lowerer) lowerMethodCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArgs [
 	}
 	recv := l.lowerExpr(fx.X)
 	t := l.exprType(e)
-	if t == ErrTypeVal || t == nil || hasPoisonedTypeArg(t) {
+	// TypeVar-leaked method-result types ride a separate recovery
+	// arm. They're not "poisoned" in the broader sense — the body of
+	// a generic fn legitimately carries TypeVars before
+	// monomorphization — but at a *user-side* method call site, a
+	// result like `m.get(1)` returning `V?` instead of the
+	// substituted `String?` means the call's substitution slipped
+	// past the checker. Routing those through the same recovery as
+	// poisoned types lets us pull the concrete arg off the
+	// receiver's type without disturbing the legitimate generic-
+	// body case (TypeVars in injected stdlib bodies are not method
+	// call sites — they're FnDecl-level signatures handled by the
+	// monomorpher).
+	leaksTypeVar := containsTypeVar(t)
+	if t == ErrTypeVal || t == nil || hasPoisonedTypeArg(t) || leaksTypeVar {
 		if recovered := recoverMethodCallType(fx.Name, typeArgs); recovered != ErrTypeVal {
 			t = recovered
 		}
@@ -2803,7 +2819,7 @@ func (l *lowerer) lowerMethodCall(e *ast.CallExpr, fx *ast.FieldExpr, typeArgs [
 		// receiver poisons every enclosing expression and blocks
 		// MIR / propagates `<error>` into Match scrutinee shapes.
 		if recovered := recoverMethodReturnType(fx.Name, recv); recovered != nil {
-			if t == nil || t == ErrTypeVal || hasPoisonedTypeArg(t) {
+			if t == nil || t == ErrTypeVal || hasPoisonedTypeArg(t) || containsTypeVar(t) {
 				t = recovered
 			}
 		}
@@ -2927,6 +2943,27 @@ func recoverMethodReturnTypeFromType(name string, rt Type) Type {
 			return TUnit
 		case "sorted":
 			return nt
+		}
+	}
+	// Map<K, V> method returns: .get(k) → V?, .keys() → List<K>,
+	// .values() → List<V>, .insert / .remove → V?, .containsKey →
+	// Bool. Without this, untyped map literals (`let m = {1: "a"}`)
+	// landed at MIR with `m.get(1).Type() = V?` (the generic
+	// signature's TypeVar leaked) and downstream `println` walled
+	// on `non-primitive V`.
+	if nt, ok := rt.(*NamedType); ok && nt.Builtin && nt.Name == "Map" && len(nt.Args) == 2 {
+		k, v := nt.Args[0], nt.Args[1]
+		switch name {
+		case "get", "remove":
+			return &OptionalType{Inner: v}
+		case "keys":
+			return &NamedType{Name: "List", Builtin: true, Args: []Type{k}}
+		case "values":
+			return &NamedType{Name: "List", Builtin: true, Args: []Type{v}}
+		case "containsKey":
+			return TBool
+		case "insert":
+			return TUnit
 		}
 	}
 	return nil
