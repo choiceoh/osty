@@ -3204,6 +3204,14 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         paramNames: [], paramTys: [],
         generics: [], genericBounds: [],
     })
+    // `String.toBytes(self) -> Bytes` — spec §2.4.1 zero-copy reinterpret.
+    // Runtime symbol `osty_rt_strings_ToBytes` already exists; this just
+    // surfaces the method so call sites resolve.
+    checkRegisterFn(env, CheckFnSig {
+        name: "toBytes", owner: "String", receiverTy: tString_, hasReceiver: true, retTy: tBytes(tys),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
     checkRegisterFn(env, CheckFnSig {
         name: "startsWith", owner: "String", receiverTy: tString_, hasReceiver: true, retTy: tBool(tys),
         paramNames: ["prefix"], paramTys: [tString_],
