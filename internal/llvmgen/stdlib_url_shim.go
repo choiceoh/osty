@@ -1,8 +1,12 @@
 package llvmgen
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/ir"
+	"github.com/osty/osty/internal/mir"
 )
 
 // std.url shim — provides MIR + LLVM support for the spec §10.16 `Url`
@@ -184,4 +188,136 @@ func ensureStdUrlSyntheticUrlStruct(g *generator) *structInfo {
 	g.structsByName[info.name] = info
 	g.structsByType[info.typ] = info
 	return info
+}
+
+// emitStdUrlCallMIR is the MIR-level dispatch for url.parse. Uses
+// the same heap-box pattern as os.exec: build the synthetic Url
+// struct, hand it to toI64Slot which heap-allocates and returns
+// ptr-as-i64, then wrap in Result.
+func (g *mirGen) emitStdUrlCallMIR(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
+	method := strings.TrimPrefix(fnRef.Symbol, "std.url.")
+	if method != "parse" {
+		return false, nil
+	}
+	if len(c.Args) != 1 {
+		return true, unsupported("mir-mvp", "url.parse requires one String argument")
+	}
+	text, err := g.evalStringArg(c.Args[0], "url.parse", 0)
+	if err != nil {
+		return true, err
+	}
+	return true, g.emitUrlParseMIR(c, text)
+}
+
+func (g *mirGen) emitUrlParseMIR(c *mir.CallInstr, text mirRuntimeArg) error {
+	g.declareRuntime(ostyRtUrlParseSymbol, mirRuntimeDeclareLine("ptr", ostyRtUrlParseSymbol, "ptr"))
+	parsed := g.fresh()
+	g.fnBuf.WriteString(mirCallValueLine(parsed, "ptr", ostyRtUrlParseSymbol, mirRuntimeArgList([]mirRuntimeArg{text})))
+	if c.Dest == nil {
+		return nil
+	}
+	destLoc := g.fn.Local(c.Dest.Local)
+	if destLoc == nil {
+		return unsupported("mir-mvp", "url.parse dest into unknown local")
+	}
+	okT, _, ok := g.resultSubtypes(destLoc.Type)
+	if !ok {
+		return unsupported("mir-mvp", "url.parse dest is not Result<Url, Error>")
+	}
+	resultLLVM := g.llvmType(destLoc.Type)
+	urlLLVM := "%" + stdUrlSyntheticUrlTypeName
+	g.stdUrlUrlTouched = true
+
+	// Declare accessor symbols.
+	g.declareRuntime(ostyRtUrlGetSchemeSymbol, mirRuntimeDeclareLine("ptr", ostyRtUrlGetSchemeSymbol, "ptr"))
+	g.declareRuntime(ostyRtUrlGetHostSymbol, mirRuntimeDeclareLine("ptr", ostyRtUrlGetHostSymbol, "ptr"))
+	g.declareRuntime(ostyRtUrlGetPortSymbol, mirRuntimeDeclareLine("i64", ostyRtUrlGetPortSymbol, "ptr"))
+	g.declareRuntime(ostyRtUrlGetPathSymbol, mirRuntimeDeclareLine("ptr", ostyRtUrlGetPathSymbol, "ptr"))
+	g.declareRuntime(ostyRtUrlGetFragmentSymbol, mirRuntimeDeclareLine("ptr", ostyRtUrlGetFragmentSymbol, "ptr"))
+	g.declareRuntime(ostyRtUrlHasFragmentSymbol, mirRuntimeDeclareLine("i1", ostyRtUrlHasFragmentSymbol, "ptr"))
+	g.declareRuntime(ostyRtUrlGetQuerySymbol, mirRuntimeDeclareLine("ptr", ostyRtUrlGetQuerySymbol, "ptr"))
+
+	// Branch: parsed == null → Err, else build Url from accessors → Ok.
+	failed := g.fresh()
+	g.fnBuf.WriteString(mirICmpEqLine(failed, "ptr", parsed, "null"))
+	errLabel := g.freshLabel("url.parse.err")
+	okLabel := g.freshLabel("url.parse.ok")
+	contLabel := g.freshLabel("url.parse.cont")
+	g.fnBuf.WriteString(mirBrCondLine(failed, errLabel, okLabel))
+
+	// Err arm.
+	g.fnBuf.WriteString(mirLabelLine(errLabel))
+	errValue := g.emitResultValue(resultLLVM, false, "0")
+	g.fnBuf.WriteString(mirBrUncondLine(contLabel))
+
+	// Ok arm: pull components, build Url, box via toI64Slot.
+	g.fnBuf.WriteString(mirLabelLine(okLabel))
+	scheme := g.fresh()
+	g.fnBuf.WriteString(mirCallValueLine(scheme, "ptr", ostyRtUrlGetSchemeSymbol, mirArgSlotPtr(parsed)))
+	host := g.fresh()
+	g.fnBuf.WriteString(mirCallValueLine(host, "ptr", ostyRtUrlGetHostSymbol, mirArgSlotPtr(parsed)))
+	port := g.fresh()
+	g.fnBuf.WriteString(mirCallValueLine(port, "i64", ostyRtUrlGetPortSymbol, mirArgSlotPtr(parsed)))
+	pathReg := g.fresh()
+	g.fnBuf.WriteString(mirCallValueLine(pathReg, "ptr", ostyRtUrlGetPathSymbol, mirArgSlotPtr(parsed)))
+	queryReg := g.fresh()
+	g.fnBuf.WriteString(mirCallValueLine(queryReg, "ptr", ostyRtUrlGetQuerySymbol, mirArgSlotPtr(parsed)))
+	fragmentRaw := g.fresh()
+	g.fnBuf.WriteString(mirCallValueLine(fragmentRaw, "ptr", ostyRtUrlGetFragmentSymbol, mirArgSlotPtr(parsed)))
+	hasFragment := g.fresh()
+	g.fnBuf.WriteString(mirCallValueLine(hasFragment, "i1", ostyRtUrlHasFragmentSymbol, mirArgSlotPtr(parsed)))
+
+	// Build Option<Int> port: -1 → None, else Some.
+	portCmp := g.fresh()
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = icmp eq i64 %s, -1\n", portCmp, port))
+	portTag := g.fresh()
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = select i1 %s, i64 0, i64 1\n", portTag, portCmp))
+	portPayload := g.fresh()
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = select i1 %s, i64 0, i64 %s\n", portPayload, portCmp, port))
+	portStep := g.fresh()
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue { i64, i64 } undef, i64 %s, 0\n", portStep, portTag))
+	portOpt := g.fresh()
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue { i64, i64 } %s, i64 %s, 1\n", portOpt, portStep, portPayload))
+
+	// Build Option<String> fragment.
+	fragTag := g.fresh()
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = select i1 %s, i64 1, i64 0\n", fragTag, hasFragment))
+	fragPayload := g.fresh()
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = ptrtoint ptr %s to i64\n", fragPayload, fragmentRaw))
+	fragGated := g.fresh()
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = select i1 %s, i64 %s, i64 0\n", fragGated, hasFragment, fragPayload))
+	fragStep := g.fresh()
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue { i64, i64 } undef, i64 %s, 0\n", fragStep, fragTag))
+	fragOpt := g.fresh()
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue { i64, i64 } %s, i64 %s, 1\n", fragOpt, fragStep, fragGated))
+
+	// Build the Url struct.
+	url0 := g.fresh()
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue %s undef, ptr %s, 0\n", url0, urlLLVM, scheme))
+	url1 := g.fresh()
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue %s %s, ptr %s, 1\n", url1, urlLLVM, url0, host))
+	url2 := g.fresh()
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue %s %s, { i64, i64 } %s, 2\n", url2, urlLLVM, url1, portOpt))
+	url3 := g.fresh()
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue %s %s, ptr %s, 3\n", url3, urlLLVM, url2, pathReg))
+	url4 := g.fresh()
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue %s %s, ptr %s, 4\n", url4, urlLLVM, url3, queryReg))
+	url5 := g.fresh()
+	g.fnBuf.WriteString(fmt.Sprintf("  %s = insertvalue %s %s, { i64, i64 } %s, 5\n", url5, urlLLVM, url4, fragOpt))
+
+	// Box the struct via toI64Slot — same pattern os.exec uses for
+	// returning Result<Output, Error>: the Url struct is allocated
+	// on the GC heap and the payload slot stores the ptr-as-i64.
+	okPayload, err := g.toI64Slot(url5, okT)
+	if err != nil {
+		return err
+	}
+	okValue := g.emitResultValue(resultLLVM, true, okPayload)
+	g.fnBuf.WriteString(mirBrUncondLine(contLabel))
+
+	g.fnBuf.WriteString(mirLabelLine(contLabel))
+	phi := g.fresh()
+	g.fnBuf.WriteString(mirPhiTwoLine(phi, resultLLVM, errValue, errLabel, okValue, okLabel))
+	g.fnBuf.WriteString(mirStoreLine(resultLLVM, phi, g.localSlots[c.Dest.Local]))
+	return nil
 }

@@ -3368,6 +3368,11 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 			return err
 		}
 	}
+	if strings.HasPrefix(fnRef.Symbol, "std.url.") {
+		if handled, err := g.emitStdUrlCallMIR(c, fnRef); handled {
+			return err
+		}
+	}
 	if handled, err := g.emitStdProcessFacadeCall(c, fnRef); handled {
 		return err
 	}
