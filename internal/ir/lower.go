@@ -2027,7 +2027,25 @@ func (l *lowerer) lowerCall(e *ast.CallExpr) Expr {
 		if k, isIntrinsic := intrinsicByName(id.Name); isIntrinsic {
 			out := &IntrinsicCall{Kind: k, SpanV: nodeSpan(e)}
 			for _, a := range e.Args {
-				out.Args = append(out.Args, l.lowerArg(a))
+				lowered := l.lowerArg(a)
+				// Auto-`.toString()` for non-primitive print args.
+				// `println(p)` for a struct / enum value walls at
+				// the LLVM emit path with `LLVM000 println of
+				// non-primitive <Type>` because emitPrintlnLike
+				// only knows about primitives. Wrap the arg in an
+				// explicit toString() method call so the user-side
+				// or auto-derived toString impl handles the boxing
+				// — same shape as the existing string-interp
+				// boxing path that already works for `"{p}"`.
+				if printlnLikeKind(k) && shouldAutoToString(lowered.Value) {
+					lowered.Value = &MethodCall{
+						Receiver: lowered.Value,
+						Name:     "toString",
+						T:        TString,
+						SpanV:    lowered.Value.At(),
+					}
+				}
+				out.Args = append(out.Args, lowered)
 			}
 			return out
 		}
@@ -3004,6 +3022,63 @@ func (l *lowerer) lowerVariantCall(e *ast.CallExpr, enum, variant string) Expr {
 		out.Args = append(out.Args, l.lowerArg(a))
 	}
 	return out
+}
+
+// printlnLikeKind reports whether the IntrinsicKind is one of the
+// print-family intrinsics that consume a single value through
+// emitPrintlnLike (which only handles primitives natively).
+func printlnLikeKind(k IntrinsicKind) bool {
+	switch k {
+	case IntrinsicPrint, IntrinsicPrintln, IntrinsicEprint, IntrinsicEprintln:
+		return true
+	}
+	return false
+}
+
+// shouldAutoToString reports whether a print-arg expression's type
+// is non-primitive enough that the LLVM backend's emitPrintlnLike
+// would wall on it without a `.toString()` wrapper. Excludes
+// nil/poisoned types (the existing recovery path handles those)
+// and excludes types that already produce a String at the call
+// boundary (avoids a redundant identity wrap).
+func shouldAutoToString(e Expr) bool {
+	if e == nil {
+		return false
+	}
+	t := e.Type()
+	if t == nil || t == ErrTypeVal {
+		return false
+	}
+	if hasPoisonedTypeArg(t) {
+		return false
+	}
+	if pt, ok := t.(*PrimType); ok {
+		switch pt.Kind {
+		case PrimString:
+			return false
+		case PrimInvalid:
+			return false
+		}
+		// Other primitives (Int, Bool, Float, Char, Byte, ...) are
+		// emitPrintlnLike-native: leave them alone.
+		return false
+	}
+	// Don't double-wrap an already-toString-shaped MethodCall.
+	if mc, ok := e.(*MethodCall); ok && mc.Name == "toString" {
+		return false
+	}
+	// Built-in containers (List<T>, Map<K, V>, Set<T>, Bytes,
+	// Channel<T>, Handle<T>) skip auto-wrap; they have their own
+	// runtime println paths or aren't meant to be printed directly.
+	if nt, ok := t.(*NamedType); ok && nt.Builtin {
+		switch nt.Name {
+		case "List", "Map", "Set", "Bytes", "Channel", "Handle":
+			return false
+		}
+	}
+	// Everything else — user struct / enum, stdlib opaque types —
+	// route through `.toString()`.
+	return true
 }
 
 func intrinsicByName(name string) (IntrinsicKind, bool) {
