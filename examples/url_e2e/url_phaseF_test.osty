@@ -1,0 +1,50 @@
+// url Phase F — u.query Map<String, String> field iteration + lookup.
+// No backend changes needed: synthetic Url struct's `query: ptr` field
+// is the Map opaque pointer, and Map intrinsics (iteration / get)
+// work directly on that pointer.
+
+use std.testing
+use std.url
+
+fn testQueryIterationFindsBothKeys() {
+    match url.parse("https://example.com/x?a=1&b=2") {
+        Ok(u) -> {
+            let mut count = 0
+            for (k, v) in u.query {
+                count = count + 1
+            }
+            testing.assertEq(count, 2)
+        },
+        Err(_) -> testing.assertTrue(false),
+    }
+}
+
+fn testQueryGetSomeForExistingKey() {
+    match url.parse("https://example.com/x?key=value") {
+        Ok(u) -> match u.query.get("key") {
+            Some(_) -> testing.assertTrue(true),
+            None -> testing.assertTrue(false),
+        },
+        Err(_) -> testing.assertTrue(false),
+    }
+}
+
+fn testQueryGetNoneForMissingKey() {
+    match url.parse("https://example.com/x?present=1") {
+        Ok(u) -> match u.query.get("absent") {
+            Some(_) -> testing.assertTrue(false),
+            None -> testing.assertTrue(true),
+        },
+        Err(_) -> testing.assertTrue(false),
+    }
+}
+
+fn testNoQueryYieldsEmptyMap() {
+    match url.parse("https://example.com/x") {
+        Ok(u) -> match u.query.get("anything") {
+            Some(_) -> testing.assertTrue(false),
+            None -> testing.assertTrue(true),
+        },
+        Err(_) -> testing.assertTrue(false),
+    }
+}
