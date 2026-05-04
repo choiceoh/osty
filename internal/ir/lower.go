@@ -1621,8 +1621,14 @@ func (l *lowerer) lowerIdent(id *ast.Ident) Expr {
 	// resolved symbol's declaration node. This now also covers bare
 	// enum variants (`let k = HirSwitchUnknown`) by recovering the
 	// variant's containing enum.
-	if (out.T == nil || out.T == ErrTypeVal) && sym != nil {
-		if t := l.identTypeFromDecl(sym.Decl); t != nil {
+	//
+	// Same recovery fires when the recorded type carries poisoned
+	// type-args (`Map<<error>, <error>>`) — the checker pinned a
+	// shape but lost the K/V details. The decl-side recovery can
+	// often pull a complete type off the LetStmt.Value (a MapLit
+	// whose K/V types `lowerMapLit` filled from the entries).
+	if sym != nil && (out.T == nil || out.T == ErrTypeVal || hasPoisonedTypeArg(out.T)) {
+		if t := l.identTypeFromDecl(sym.Decl); t != nil && !hasPoisonedTypeArg(t) {
 			out.T = t
 		}
 	}
@@ -1646,12 +1652,53 @@ func (l *lowerer) identTypeFromDecl(decl ast.Node) Type {
 		if d == nil {
 			return nil
 		}
-		return l.lowerType(d.Type)
+		if t := l.lowerType(d.Type); t != nil && !hasPoisonedTypeArg(t) {
+			return t
+		}
+		// Annotation absent / poisoned. Recover off the initialiser
+		// expression. The checker may have left `Types[d.Value]`
+		// poisoned (`{"a": 1}` reaches lower.go with `Types[MapExpr]
+		// = Map<<error>, <error>>`), so we re-lower the AST
+		// expression to pick up `lowerMapLit`'s entry-driven KV
+		// recovery (or `lowerListLit`'s element recovery). The
+		// re-lowered Expr's Type() reflects the recovered shape.
+		if d.Value != nil {
+			if t := l.exprType(d.Value); t != nil && !hasPoisonedTypeArg(t) {
+				return t
+			}
+			lowered := l.lowerExpr(d.Value)
+			if lowered != nil {
+				if t := lowered.Type(); t != nil && !hasPoisonedTypeArg(t) {
+					return t
+				}
+			}
+		}
+		return nil
 	case *ast.LetDecl:
 		if d == nil {
 			return nil
 		}
-		return l.lowerType(d.Type)
+		if t := l.lowerType(d.Type); t != nil && !hasPoisonedTypeArg(t) {
+			return t
+		}
+		return nil
+	case *ast.IdentPat:
+		// IdentPat is the most common shape resolve.Symbol records
+		// for `let x = ...` bindings. The lowerLetStmt pass records
+		// the inferred binding type into `bindingPatTypes[ip]` after
+		// running entry-driven recovery on the initialiser, so look
+		// it up first. This is what unblocks `let m = {"a": 1}`
+		// downstream uses — the IdentPat is the resolver's Decl
+		// target, not the wrapping LetStmt.
+		if d == nil {
+			return nil
+		}
+		if l.bindingPatTypes != nil {
+			if t, ok := l.bindingPatTypes[d]; ok && t != nil && !hasPoisonedTypeArg(t) {
+				return t
+			}
+		}
+		return nil
 	case *ast.Variant:
 		return l.enumTypeForVariantDecl(d)
 	}
@@ -2393,6 +2440,14 @@ func hasPoisonedTypeArg(t Type) bool {
 	case *NamedType:
 		for _, a := range x.Args {
 			if a == ErrTypeVal {
+				return true
+			}
+			// PrimInvalid placeholder ({Kind: 0}) is what the
+			// checker leaves on type args when an upstream inference
+			// path bailed but didn't surface ErrType — `let m =
+			// {"a": 1}` ends up with `Map<*PrimType{0}, *PrimType{0}>`.
+			// Treat it as poisoned so recovery paths fire.
+			if pt, ok := a.(*PrimType); ok && pt.Kind == PrimInvalid {
 				return true
 			}
 			if hasPoisonedTypeArg(a) {
@@ -3340,6 +3395,24 @@ func (l *lowerer) lowerStructLit(s *ast.StructLit) Expr {
 	return out
 }
 
+// isMapLitPlaceholderType reports whether a MapLit KeyT/ValT slot
+// is unresolved — covers nil, ErrType, and PrimType{PrimInvalid}.
+// The checker's "unknown type" fallback can land in any of those
+// shapes depending on which inference path bailed; the entry-driven
+// recovery treats them uniformly.
+func isMapLitPlaceholderType(t Type) bool {
+	if t == nil {
+		return true
+	}
+	if _, ok := t.(*ErrType); ok {
+		return true
+	}
+	if pt, ok := t.(*PrimType); ok && pt.Kind == PrimInvalid {
+		return true
+	}
+	return false
+}
+
 func (l *lowerer) lowerMapLit(m *ast.MapExpr) Expr {
 	out := &MapLit{SpanV: nodeSpan(m)}
 	for _, en := range m.Entries {
@@ -3353,6 +3426,24 @@ func (l *lowerer) lowerMapLit(m *ast.MapExpr) Expr {
 		if nt, ok := t.(*NamedType); ok && nt.Name == "Map" && len(nt.Args) == 2 {
 			out.KeyT = nt.Args[0]
 			out.ValT = nt.Args[1]
+		}
+	}
+	// Entry-driven recovery: when the checker leaves the map literal
+	// without a pinned K/V (`let m = {"a": 1}` reaches ir.Lower with
+	// `Types[m]` either empty or carrying a `Map<?, ?>` shape whose
+	// type-args are PrimInvalid placeholders), pull the K/V off the
+	// first entry's lowered Key/Value types. Without this, the MapLit
+	// hits MIR with KeyT/ValT == placeholder and the downstream
+	// `for-in over Map with unresolved key/value type` walls fire
+	// — even though every entry has a concrete type.
+	if isMapLitPlaceholderType(out.KeyT) && len(out.Entries) > 0 {
+		if t := out.Entries[0].Key.Type(); !isMapLitPlaceholderType(t) {
+			out.KeyT = t
+		}
+	}
+	if isMapLitPlaceholderType(out.ValT) && len(out.Entries) > 0 {
+		if t := out.Entries[0].Value.Type(); !isMapLitPlaceholderType(t) {
+			out.ValT = t
 		}
 	}
 	if out.KeyT == nil {
