@@ -710,10 +710,10 @@ fn astLowerStringContent(s: String) -> String {
 
 fn astLowerDecodedLiteral(s: String) -> String {
     let mut raw = s
-    if strings.HasPrefix(raw, "b'") {
+    if strings.hasPrefix(raw, "b'") {
         raw = strings.TrimPrefix(raw, "b")
     }
-    if strings.HasPrefix(raw, "'") && strings.HasSuffix(raw, "'") {
+    if strings.hasPrefix(raw, "'") && strings.hasSuffix(raw, "'") {
         raw = strings.TrimSuffix(strings.TrimPrefix(raw, "'"), "'")
     }
     astLowerDecodeEscapes(raw)
@@ -1102,7 +1102,7 @@ fn astLowerLetDecl(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> 
         name = patNode.text
     } else if patNode.kind == AstNPattern && patNode.extra == astPatternIdentKind() {
         name = patNode.text
-    } else if strings.HasPrefix(patNode.text, "ident:") {
+    } else if strings.hasPrefix(patNode.text, "ident:") {
         name = strings.TrimPrefix(patNode.text, "ident:")
     }
     astbridge.LetDeclNode(
@@ -1746,13 +1746,13 @@ fn astLowerStructuredPattern(arena: AstArena, toks: List<astbridge.Token>, n: As
 }
 
 fn astLowerTextPattern(arena: AstArena, toks: List<astbridge.Token>, n: AstNode) -> astbridge.Pattern {
-    if strings.HasPrefix(n.text, "ident:") {
+    if strings.hasPrefix(n.text, "ident:") {
         return astbridge.IdentPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), strings.TrimPrefix(n.text, "ident:"))
     }
     if n.text == "wildcard" {
         return astbridge.WildcardPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n))
     }
-    if strings.HasPrefix(n.text, "literal:") {
+    if strings.hasPrefix(n.text, "literal:") {
         return astbridge.LiteralPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerLiteralPatternExpr(toks, n))
     }
     if n.text == "negLiteral" {
@@ -1765,7 +1765,7 @@ fn astLowerTextPattern(arena: AstArena, toks: List<astbridge.Token>, n: AstNode)
     if n.text == "tuple" {
         return astLowerTuplePat(arena, toks, n)
     }
-    if strings.HasPrefix(n.text, "variant:") {
+    if strings.hasPrefix(n.text, "variant:") {
         let mut args = astbridge.EmptyPatternList()
         for child in n.children {
             let p = astLowerPattern(arena, toks, child)
@@ -1775,7 +1775,7 @@ fn astLowerTextPattern(arena: AstArena, toks: List<astbridge.Token>, n: AstNode)
         }
         return astbridge.VariantPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerSplitPath(strings.TrimPrefix(n.text, "variant:")), args)
     }
-    if strings.HasPrefix(n.text, "struct:") {
+    if strings.hasPrefix(n.text, "struct:") {
         let mut fields = astbridge.EmptyStructPatFieldList()
         for child in n.children {
             let cn = astArenaNodeAt(arena, child)
@@ -1786,7 +1786,7 @@ fn astLowerTextPattern(arena: AstArena, toks: List<astbridge.Token>, n: AstNode)
                 let childNode = astArenaNodeAt(arena, child)
                 if childNode.kind == AstNIdent {
                     fields.push(astbridge.StructPatFieldNode(astLowerNodePos(toks, childNode), childNode.text, astbridge.NilPattern()))
-                } else if strings.HasPrefix(childNode.text, "ident:") {
+                } else if strings.hasPrefix(childNode.text, "ident:") {
                     fields.push(astbridge.StructPatFieldNode(astLowerNodePos(toks, childNode), strings.TrimPrefix(childNode.text, "ident:"), astbridge.NilPattern()))
                 } else if !(astbridge.IsNilPattern(pat)) {
                     fields.push(astbridge.StructPatFieldNode(astLowerNodePos(toks, childNode), "", pat))
@@ -1795,7 +1795,7 @@ fn astLowerTextPattern(arena: AstArena, toks: List<astbridge.Token>, n: AstNode)
         }
         return astbridge.StructPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerSplitPath(strings.TrimPrefix(n.text, "struct:")), fields, n.flags == 1)
     }
-    if strings.HasPrefix(n.text, "binding:") {
+    if strings.hasPrefix(n.text, "binding:") {
         return astbridge.BindingPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), strings.TrimPrefix(n.text, "binding:"), astLowerPattern(arena, toks, n.left))
     }
     if n.text == "range" {
