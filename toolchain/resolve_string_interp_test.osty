@@ -1,0 +1,47 @@
+// resolve_string_interp_test.osty — Day 3 of STRING_INTERP_RESOLVE_GAP
+// verification tests. Confirms `srAstResolveExpr`'s generic
+// fall-through (`toolchain/resolve.osty:1291-1298`) walks
+// `AstNStringLit.children` populated by Day 2 (#1364), so identifiers
+// referenced through interpolation syntax appear in the resolver's
+// `refList` exactly like every other expression-position ident.
+//
+// No new resolver case is needed — `AstNStringLit` has no early-return
+// in `srAstResolveExpr`, so the generic walker already iterates
+// `node.children`. These tests lock that contract in.
+
+use std.testing
+
+fn testResolverWalksInterpIdent() {
+    // Single ident inside interpolation — `x` reaches the resolver
+    // via the StringLit's children, gets recorded in refList.
+    let res = selfResolveSource("fn main() { let x = 1; let s = \"{x}\" }")
+    testing.assert(selfResolveHasRef(res, "x"))
+}
+
+fn testResolverWalksMultipleInterpIdents() {
+    // Both `a` and `b` should appear in refs.
+    let res = selfResolveSource("fn main() { let a = 1; let b = 2; let s = \"{a}-{b}\" }")
+    testing.assert(selfResolveHasRef(res, "a"))
+    testing.assert(selfResolveHasRef(res, "b"))
+}
+
+fn testResolverWalksInterpCallCallee() {
+    // Call inside interpolation — the callee `f` should appear in
+    // refs (assuming `f` is in scope; here we use a let-binding so
+    // the resolver matches without complaining).
+    let res = selfResolveSource(
+        "fn helper() -> Int { 42 }\n" +
+        "fn main() { let f = helper; let s = \"{f()}\" }"
+    )
+    // The closure capture `f` shows up as a ref, exercising the
+    // walker's recursion into AstNCall.callee inside the StringLit.
+    testing.assert(selfResolveHasRef(res, "f"))
+}
+
+fn testResolverIgnoresLiteralOnlyString() {
+    // No interpolation, no extra refs. Just confirm the call shape
+    // doesn't blow up.
+    let res = selfResolveSource("fn main() { let s = \"hello\" }")
+    // 'hello' is not an ident — selfResolveHasRef returns false.
+    testing.assert(!selfResolveHasRef(res, "hello"))
+}
