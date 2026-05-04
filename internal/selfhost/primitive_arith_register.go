@@ -172,6 +172,52 @@ func registerSupplementalStdlibSurface(env *CheckEnv) {
 		genericBounds: make([]*CheckGenericBound, 0, 1),
 	})
 	checkMarkFnHasBody(env, "new", "Error")
+	registerDurationMembers(env)
+}
+
+// registerDurationMembers fills in the methods + field that
+// `internal/stdlib/modules/time.osty:12-35` declares on the `Duration`
+// struct. Without this, prelude registers `Duration` as a builtin name
+// (so `Int.s` / `Int.ms` etc. constructors return a real type), but
+// the checker can't see any of the struct's methods or fields — every
+// `d.toString()` / `d.nanoseconds` access surfaces as E0703 / E0702.
+// Tracked as `duration-builtin-methods` in SPEC_GAPS until this fix.
+func registerDurationMembers(env *CheckEnv) {
+	tys := env.tys
+	tDuration := tyNamed(tys, "Duration", make([]int, 0, 1))
+	tInt_ := tInt(tys)
+	tInt64_ := tInt64(tys)
+	tString_ := tString(tys)
+
+	for _, m := range []struct {
+		name  string
+		retTy int
+	}{
+		{"abs", tDuration},
+		{"micros", tInt_},
+		{"millis", tInt_},
+		{"seconds", tInt_},
+		{"toString", tString_},
+	} {
+		checkRegisterFn(env, &CheckFnSig{
+			name:          m.name,
+			owner:         "Duration",
+			receiverTy:    tDuration,
+			hasReceiver:   true,
+			retTy:         m.retTy,
+			paramNames:    make([]string, 0, 1),
+			paramTys:      make([]int, 0, 1),
+			generics:      make([]string, 0, 1),
+			genericBounds: make([]*CheckGenericBound, 0, 1),
+		})
+	}
+	checkRegisterField(env, &CheckFieldSig{
+		owner:      "Duration",
+		name:       "nanoseconds",
+		ty:         tInt64_,
+		exported:   true,
+		hasDefault: false,
+	})
 }
 
 func registerIntConversionMethods(env *CheckEnv, owner string, ty int, tys *TyArena) {

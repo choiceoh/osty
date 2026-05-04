@@ -25,19 +25,19 @@ import (
 //
 // Fix in `internal/ir/lower.go`:
 //
-//   1. `lowerMapLit` — when the recorded MapLit type is missing or
-//      poisoned (PrimInvalid placeholders + ErrType args both),
-//      pull KeyT/ValT off the first entry's lowered Key/Value
-//      types.
-//   2. `hasPoisonedTypeArg` — extended to also catch
-//      `*PrimType{Kind: PrimInvalid}` (the checker's "unknown
-//      type" placeholder for type-args).
-//   3. `lowerIdent` — when the resolved type carries a poisoned
-//      type-arg, fall through to `identTypeFromDecl`.
-//   4. `identTypeFromDecl` — added an `*ast.IdentPat` case (the
-//      shape resolve.Symbol records for `let x = ...` bindings)
-//      that consults `bindingPatTypes`, which `lowerLetStmt`
-//      already populates with the entry-recovered type.
+//  1. `lowerMapLit` — when the recorded MapLit type is missing or
+//     poisoned (PrimInvalid placeholders + ErrType args both),
+//     pull KeyT/ValT off the first entry's lowered Key/Value
+//     types.
+//  2. `hasPoisonedTypeArg` — extended to also catch
+//     `*PrimType{Kind: PrimInvalid}` (the checker's "unknown
+//     type" placeholder for type-args).
+//  3. `lowerIdent` — when the resolved type carries a poisoned
+//     type-arg, fall through to `identTypeFromDecl`.
+//  4. `identTypeFromDecl` — added an `*ast.IdentPat` case (the
+//     shape resolve.Symbol records for `let x = ...` bindings)
+//     that consults `bindingPatTypes`, which `lowerLetStmt`
+//     already populates with the entry-recovered type.
 //
 // Coverage:
 //
