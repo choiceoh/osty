@@ -9,10 +9,11 @@ import (
 // `pure-enforce` contract: `#[pure]` is not just an LLVM
 // `readnone` hint — the checker walks the body and emits E0775
 // for any of the categories listed in §3.8.11 / SPEC_GAPS:
-//   (a) non-local write — assigning to a non-local binding
-//   (b) I/O — println / print / etc.
-//   (c) impure call — calling a non-`#[pure]` function
-//   (e) allocation — list / map / struct / closure literals
+//
+//	(a) non-local write — assigning to a non-local binding
+//	(b) I/O — println / print / etc.
+//	(c) impure call — calling a non-`#[pure]` function
+//	(e) allocation — list / map / struct / closure literals
 //
 // (d) volatile/atomic is N/A: Osty doesn't expose those primitives.
 //
