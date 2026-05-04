@@ -54,17 +54,7 @@ func TestGenerateFromMIRStdEncodingHexDecodeReturnsResult(t *testing.T) {
 	}
 }
 
-// Discard contract: in ExprStmt context the from_hex call must be
-// skipped (only is_valid_hex validates). Currently fails because the
-// MIR builder allocates a dest temp for every CallExpr result, so
-// `emitEncodingHexDecodeMIR`'s `c.Dest == nil` shortcut never fires.
-// Fixing requires the MIR builder to omit dest-alloca for discarded
-// calls, which is a broader change than this PR's scope. The
-// nullable-decode discard case (Base64 / Base64Url) sidesteps the
-// issue because its emitter goes through `emitPtrResultFromNullableRuntimeCall`,
-// which copes with a dest that's never read.
 func TestGenerateFromMIRStdEncodingHexDecodeDiscardValidatesAsI1(t *testing.T) {
-	t.Skip("hex.decode discard requires MIR builder to skip dest-alloca for ExprStmt calls; see project_encoding_mir_namespace_gap")
 	got := generateStdEncodingDecodeDiscardMIR(t, "hex")
 	for _, want := range []string{
 		"declare i1 @osty_rt_bytes_is_valid_hex(ptr)",

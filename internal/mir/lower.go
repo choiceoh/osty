@@ -1056,6 +1056,20 @@ func (bs *bodyState) bindPattern(pat ir.Pattern, scrutinee Place, scrutineeT Typ
 }
 
 func (bs *bodyState) lowerExprStmt(e *ir.ExprStmt) {
+	// For side-effecting calls in statement context (`encoding.hex.decode(s)`
+	// without a let / assign on the LHS), routing through
+	// lowerExprAsOperand allocates a fresh temp for the result and
+	// emits an `AssignInstr{Dest: tmp, Src: <call>}`. Stdlib emitters
+	// that key on `c.Dest == nil` to skip side-by-side runtime calls
+	// (e.g. `emitEncodingHexDecodeMIR` validates with `is_valid_hex`
+	// but skips `from_hex` when the result is discarded) never see
+	// the nil-dest signal because the temp always exists. Route
+	// CallExpr / MethodCall through their dest=nil-aware lowering so
+	// the discard contract reaches the emitters intact.
+	if c, ok := e.X.(*ir.CallExpr); ok {
+		bs.lowerCallExprInto(c, nil, nil)
+		return
+	}
 	_ = bs.lowerExprAsOperand(e.X)
 }
 
