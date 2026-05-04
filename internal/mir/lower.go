@@ -1610,6 +1610,10 @@ func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 		bs.lowerForInMap(f, iterT)
 		return
 	}
+	if bs.l.isSetType(iterT) {
+		bs.lowerForInSet(f, iterT)
+		return
+	}
 	// Range pseudo-binding fast path: `for i in r` where r was bound
 	// from a Range<Int> literal at let time. Reads the recorded
 	// start/end locals and emits the same counter-loop shape
@@ -1684,6 +1688,116 @@ func (bs *bodyState) lowerForIn(f *ir.ForStmt) {
 	// load current element: elem = iter[idx]
 	elemLocal := bs.newLocal("_elem", elemT, false, f.SpanV)
 	elemPlace := Place{Local: iter, Projections: []Projection{
+		&IndexProj{
+			Index:    &CopyOp{Place: Place{Local: idx}, T: TInt},
+			ElemType: elemT,
+		},
+	}}
+	bs.emit(&AssignInstr{
+		Dest:  Place{Local: elemLocal},
+		Src:   &UseRV{Op: &CopyOp{Place: elemPlace, T: elemT}},
+		SpanV: f.SpanV,
+	})
+	if f.Pattern != nil {
+		bs.bindPattern(f.Pattern, Place{Local: elemLocal}, elemT, f.SpanV)
+	} else if f.Var != "" {
+		bs.bind(f.Var, elemLocal)
+	}
+	for _, s := range f.Body.Stmts {
+		bs.lowerStmt(s)
+	}
+	bs.replayTopFrame(f.Body.SpanV)
+	bs.loopStack = bs.loopStack[:len(bs.loopStack)-1]
+	bs.popDeferScope()
+	bs.popScope()
+	bs.terminate(&GotoTerm{Target: step, SpanV: f.SpanV})
+	bs.cur = step
+	bs.emit(&AssignInstr{
+		Dest: Place{Local: idx},
+		Src: &BinaryRV{
+			Op:    BinAdd,
+			Left:  &CopyOp{Place: Place{Local: idx}, T: TInt},
+			Right: &ConstOp{Const: &IntConst{Value: 1, T: TInt}, T: TInt},
+			T:     TInt,
+		},
+		SpanV: f.SpanV,
+	})
+	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
+	bs.cur = exit
+}
+
+// lowerForInSet lowers `for x in s { ... }` over a Set<T>. The
+// runtime exposes `osty_rt_set_to_list` (via the
+// `IntrinsicSetToList` intrinsic) which materialises the set as a
+// `List<T>`; we then run the existing list-iteration shape on that.
+// Sets aren't naturally indexable so the snapshot pattern
+// (toList → iterate by index) is the same approach the language
+// reference recommends.
+func (bs *bodyState) lowerForInSet(f *ir.ForStmt, iterT Type) {
+	elemT := bs.l.setElementType(iterT)
+	if elemT == nil || isPoisonType(elemT) {
+		bs.l.noteIssue("for-in over Set with unresolved element type is not lowered to MIR yet: %s", typeString(iterT))
+		return
+	}
+	iter := bs.newLocal("_iter", iterT, false, f.SpanV)
+	bs.emit(&StorageLiveInstr{Local: iter, SpanV: f.SpanV})
+	bs.lowerExprInto(f.Iter, iter, iterT)
+
+	listT := &ir.NamedType{Name: "List", Args: []ir.Type{elemT}, Builtin: true}
+	listLocal := bs.newLocal("_set_items", listT, false, f.SpanV)
+	bs.emit(&StorageLiveInstr{Local: listLocal, SpanV: f.SpanV})
+	bs.emit(&IntrinsicInstr{
+		Dest:  &Place{Local: listLocal},
+		Kind:  IntrinsicSetToList,
+		Args:  []Operand{&CopyOp{Place: Place{Local: iter}, T: iterT}},
+		SpanV: f.SpanV,
+	})
+
+	lenLocal := bs.newLocal("_len", TInt, false, f.SpanV)
+	bs.emit(&AssignInstr{
+		Dest:  Place{Local: lenLocal},
+		Src:   &LenRV{Place: Place{Local: listLocal}, T: TInt},
+		SpanV: f.SpanV,
+	})
+	idx := bs.newLocal("_idx", TInt, true, f.SpanV)
+	bs.emit(&AssignInstr{
+		Dest:  Place{Local: idx},
+		Src:   &UseRV{Op: &ConstOp{Const: &IntConst{Value: 0, T: TInt}, T: TInt}},
+		SpanV: f.SpanV,
+	})
+	header := bs.newBlock(f.SpanV)
+	body := bs.newBlock(f.SpanV)
+	step := bs.newBlock(f.SpanV)
+	exit := bs.newBlock(f.SpanV)
+	bs.terminate(&GotoTerm{Target: header, SpanV: f.SpanV})
+	bs.cur = header
+	cmp := bs.freshTemp(TBool, f.SpanV)
+	bs.emit(&AssignInstr{
+		Dest: Place{Local: cmp},
+		Src: &BinaryRV{
+			Op:    BinLt,
+			Left:  &CopyOp{Place: Place{Local: idx}, T: TInt},
+			Right: &CopyOp{Place: Place{Local: lenLocal}, T: TInt},
+			T:     TBool,
+		},
+		SpanV: f.SpanV,
+	})
+	bs.terminate(&BranchTerm{
+		Cond:  &CopyOp{Place: Place{Local: cmp}, T: TBool},
+		Then:  body,
+		Else:  exit,
+		SpanV: f.SpanV,
+	})
+	bs.cur = body
+	bs.pushScope()
+	bs.pushDeferScope()
+	bs.loopStack = append(bs.loopStack, &loopFrame{
+		label:      f.Label,
+		breakBlock: exit, continueBlock: step, deferDepth: len(bs.deferFrames) - 1, scopeDepth: bs.currentScopeDepth(),
+	})
+
+	elemLocal := bs.newLocal("_elem", elemT, false, f.SpanV)
+	elemPlace := Place{Local: listLocal, Projections: []Projection{
 		&IndexProj{
 			Index:    &CopyOp{Place: Place{Local: idx}, T: TInt},
 			ElemType: elemT,
@@ -5986,6 +6100,19 @@ func (l *lowerer) isListType(t ir.Type) bool {
 func (l *lowerer) isMapType(t ir.Type) bool {
 	source, _ := l.builtinTypeShape(t)
 	return source == "Map"
+}
+
+func (l *lowerer) isSetType(t ir.Type) bool {
+	source, _ := l.builtinTypeShape(t)
+	return source == "Set"
+}
+
+func (l *lowerer) setElementType(t ir.Type) ir.Type {
+	source, args := l.builtinTypeShape(t)
+	if source == "Set" && len(args) >= 1 {
+		return args[0]
+	}
+	return nil
 }
 
 func (l *lowerer) listElementType(t ir.Type) Type {
