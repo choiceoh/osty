@@ -26,14 +26,14 @@ import (
 //
 // Fix in `internal/ir/lower.go`:
 //
-//   1. `recoverMethodReturnTypeFromType` — added Map<K, V> case
-//      covering `.get`, `.remove`, `.keys`, `.values`,
-//      `.containsKey`, `.insert`. Each pulls the substituted
-//      arg straight off the receiver's type.
-//   2. `lowerMethodCall` — fall through to the recovery path also
-//      when the recorded type contains a TypeVar leak (not just
-//      poisoned types). Uses `containsTypeVar` to detect, which
-//      already exists for the monomorph subst pass.
+//  1. `recoverMethodReturnTypeFromType` — added Map<K, V> case
+//     covering `.get`, `.remove`, `.keys`, `.values`,
+//     `.containsKey`, `.insert`. Each pulls the substituted
+//     arg straight off the receiver's type.
+//  2. `lowerMethodCall` — fall through to the recovery path also
+//     when the recorded type contains a TypeVar leak (not just
+//     poisoned types). Uses `containsTypeVar` to detect, which
+//     already exists for the monomorph subst pass.
 //
 // Companion to PR #1381 (untyped map K/V inference): together,
 // `let m = {1: "one"}` followed by `m.get(1).unwrapOr("?")` now
