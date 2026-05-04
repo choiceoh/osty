@@ -350,7 +350,7 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 		if lowered == nil {
 			continue
 		}
-		freeFn := methodToFreeFn(lowered, m.Module, m.Type, m.Method)
+		freeFn := methodToFreeFn(lowered, m.Module, m.Type, m.Method, reg.LookupTypeGenerics(m.Module, m.Type))
 		qualifyLoweredStdlibFnTypes(freeFn, reg, m.Module)
 		out = append(out, freeFn)
 		// Methods can call same-module free fns too; route them
@@ -454,7 +454,7 @@ func injectReachableStdlibBodies(mod *ir.Module, reg *stdlib.Registry) ([]ir.Dec
 			if lowered == nil {
 				continue
 			}
-			freeFn := methodToFreeFn(lowered, m.Module, m.Type, m.Method)
+			freeFn := methodToFreeFn(lowered, m.Module, m.Type, m.Method, reg.LookupTypeGenerics(m.Module, m.Type))
 			qualifyLoweredStdlibFnTypes(freeFn, reg, m.Module)
 			out = append(out, freeFn)
 			rewriteStdlibMethodCallsitesInFn(next.fn, []ReachableStdlibMethod{m})
@@ -1006,14 +1006,38 @@ func rewriteQualifiedStdlibCalls(fn *ir.FnDecl, qualifier, name, newName string)
 // generics) are out of scope here — that path needs the type-parameter
 // list propagated from the owning struct, which today's stdlib
 // injection set deliberately excludes.
-func methodToFreeFn(lowered *ir.FnDecl, module, typeName, method string) *ir.FnDecl {
-	selfTy := &ir.NamedType{Package: module, Name: typeName}
+func methodToFreeFn(lowered *ir.FnDecl, module, typeName, method string, ownerGenerics []*ast.GenericParam) *ir.FnDecl {
+	// Propagate the owner type's generics onto the free fn so the
+	// receiver param's NamedType carries the right Args and the body
+	// can substitute them at monomorph time. Without this, `List<T>.
+	// map<R>` becomes a free fn `osty_std_collections__List__map(self:
+	// List, f)` — the body's `for item in self` then has nothing to
+	// bind `T` to, and the call-site arity check rejects the [T, R]
+	// type-arg pair against a [R]-only generics list.
+	var ownerTypeArgs []ir.Type
+	for _, g := range ownerGenerics {
+		if g == nil || g.Name == "" {
+			continue
+		}
+		ownerTypeArgs = append(ownerTypeArgs, &ir.TypeVar{Name: g.Name})
+	}
+	selfTy := &ir.NamedType{Package: module, Name: typeName, Args: ownerTypeArgs, Builtin: ir.BuiltinTypeOwningModule(typeName) != ""}
 	selfParam := &ir.Param{
 		Name:  "self",
 		Type:  selfTy,
 		SpanV: lowered.SpanV,
 	}
 	lowered.Params = append([]*ir.Param{selfParam}, lowered.Params...)
+	if len(ownerTypeArgs) > 0 {
+		ownerTypeParams := make([]*ir.TypeParam, 0, len(ownerGenerics))
+		for _, g := range ownerGenerics {
+			if g == nil || g.Name == "" {
+				continue
+			}
+			ownerTypeParams = append(ownerTypeParams, &ir.TypeParam{Name: g.Name, SpanV: lowered.SpanV})
+		}
+		lowered.Generics = append(ownerTypeParams, lowered.Generics...)
+	}
 	lowered.Name = StdlibMethodSymbol(module, typeName, method)
 	lowered.ReceiverMut = false
 	return lowered

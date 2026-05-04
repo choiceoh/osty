@@ -525,6 +525,38 @@ func (r *Registry) LookupLetDecl(module, name string) *ast.LetDecl {
 // Returns the shared immutable registry copy; callers must not mutate
 // it. Mirrors LookupFnDecl in style and lookup contract so a future
 // stdlib body injector can drive both surfaces uniformly.
+// LookupTypeGenerics returns the generic-parameter list declared on a
+// stdlib struct / enum / interface. Returns nil for unknown types and
+// for types without generics. Used by the method-to-free-fn lowering
+// in `internal/backend/stdlib_inject.go` to propagate the owner's
+// type-vars onto the synthesised free fn.
+func (r *Registry) LookupTypeGenerics(module, typeName string) []*ast.GenericParam {
+	if r == nil || module == "" || typeName == "" {
+		return nil
+	}
+	mod, ok := r.Modules[module]
+	if !ok || mod == nil || mod.File == nil {
+		return nil
+	}
+	for _, decl := range mod.File.Decls {
+		switch d := decl.(type) {
+		case *ast.StructDecl:
+			if d.Name == typeName {
+				return d.Generics
+			}
+		case *ast.EnumDecl:
+			if d.Name == typeName {
+				return d.Generics
+			}
+		case *ast.InterfaceDecl:
+			if d.Name == typeName {
+				return d.Generics
+			}
+		}
+	}
+	return nil
+}
+
 func (r *Registry) LookupMethodDecl(module, typeName, methodName string) *ast.FnDecl {
 	if r == nil || module == "" || typeName == "" || methodName == "" {
 		return nil

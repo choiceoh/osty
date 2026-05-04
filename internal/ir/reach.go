@@ -84,17 +84,54 @@ type methodReachVisitor map[MethodRef]struct{}
 // receiver's named symbol resolves to a stdlib module — so this
 // visitor naturally filters to stdlib-owned types without having to
 // consult a registry.
+//
+// Builtin generic types (`List<T>`, `Map<K, V>`, `Set<T>`,
+// `Option<T>`, `Result<T, E>`) reach the IR with `Builtin: true` but
+// `Package: ""`: the user-visible names are prelude-bound rather
+// than module-qualified, so `fromCheckerType` doesn't get a stdlib
+// module string to attach. We patch the package to the canonical
+// owning module here so the body-injector can find the method body.
 func (r methodReachVisitor) Visit(n Node) Visitor {
 	call, ok := n.(*MethodCall)
 	if !ok || call == nil || call.Receiver == nil || call.Name == "" {
 		return r
 	}
 	named, ok := call.Receiver.Type().(*NamedType)
-	if !ok || named == nil || named.Package == "" || named.Name == "" {
+	if !ok || named == nil || named.Name == "" {
 		return r
 	}
-	r[MethodRef{Module: named.Package, Type: named.Name, Method: call.Name}] = struct{}{}
+	module := named.Package
+	if module == "" && named.Builtin {
+		module = BuiltinTypeOwningModule(named.Name)
+	}
+	if module == "" {
+		return r
+	}
+	r[MethodRef{Module: module, Type: named.Name, Method: call.Name}] = struct{}{}
 	return r
+}
+
+// BuiltinTypeOwningModule returns the stdlib module that owns the
+// bodied method declarations for a builtin generic type. Names not
+// in this table fall through and contribute no method references —
+// the body-injector treats them like user-defined types.
+//
+// Today only `List<T>` is whitelisted: its higher-order methods
+// (`map`, `filter`, `fold`, `reduce`, etc.) are bodied helpers that
+// the LLVM backend can lower end-to-end through the standard
+// injection path. `Map<K,V>` / `Set<T>` are intentionally left out
+// because their primitive operations (`get`, `insert`, `remove`,
+// `len`) route through dedicated runtime intrinsics
+// (`osty_rt_map_*`, `osty_rt_set_*`); pulling their bodied helpers
+// (`containsKey` calls `get(...).isSome()`, etc.) into injection
+// double-lowers the same call site and trips the monomorph
+// substitution. `Option`/`Result` already have working
+// per-intrinsic dispatch in `mir_generator.go`.
+func BuiltinTypeOwningModule(name string) string {
+	if name == "List" {
+		return "collections"
+	}
+	return ""
 }
 
 // Visit records qualifier.name pairs from two equivalent IR shapes:
