@@ -37359,6 +37359,10 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "chars", owner: "String", receiverTy: tString_, retTy: tListChar, paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:17042:5
 	checkRegisterFn(env, &CheckFnSig{name: "bytes", owner: "String", receiverTy: tString_, retTy: tListByte, paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// `String.toBytes(self) -> Bytes` — spec §2.4.1 zero-copy reinterpret.
+	// Runtime symbol `osty_rt_strings_ToBytes` already exists; this just
+	// surfaces the method to the checker so call sites resolve.
+	checkRegisterFn(env, &CheckFnSig{name: "toBytes", owner: "String", receiverTy: tString_, retTy: tBytes(env.tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:17047:5
 	checkRegisterFn(env, &CheckFnSig{name: "startsWith", owner: "String", receiverTy: tString_, retTy: tBool(tys), paramNames: []string{"prefix"}, paramTys: []int{tString_}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:17052:5
