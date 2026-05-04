@@ -164,29 +164,29 @@ log.info("user logged in", f)
 canonical caller 가 위 두 갭 때문에 호출 안 됨. 갭 해소 시 즉시
 spec 동급 동작.
 
-### `stdlib-body-llvm-wall` — pure-Osty stdlib 본문이 LLVM 백엔드에서 lower 안 됨
+### `stdlib-body-llvm-wall` — pure-Osty stdlib 본문이 LLVM 백엔드에서 lower 안 됨 (2026-05-05 부분 해소)
 
-**상태:** STDLIB_MATRIX 5★ 22 모듈 중 14개만 LLVM E2E 통과 (2026-05-02 audit, §2.1.A 참조). 진정 5★ 가 아닌 모듈:
+**상태 업데이트 (2026-05-05 재검증)**: 2026-05-02 audit 의 8개 실패 항목 중 **4개가 이미 해소됨** (그 사이 다른 PR 들이 백엔드 / shim 을 키운 결과). 남은 항목 + 새로 발견된 사항:
 
-| 모듈 | 실패 패턴 |
-|---|---|
-| compress | `gzip.encode(bytes)` body lower 실패 |
-| url | `url.parse(s)` body lower 실패 — 다중 분기 / `List<String>` 의존 의심 |
-| json | `json.parse(s)` body lower 실패 |
-| encoding | `hexEncode(b)` 가장 단순 케이스 실패 |
-| iter | `iter.map(xs, \|x\| ...)` closure body 실패 |
-| option / result combinator | `.map(\|x\| ...)` 등 closure 통과 함수 실패 |
-| crypto | `sha256(b)` body lower 실패 (`randomBytes(n)` 는 OK) |
-| bytes | `b"abc"` 인자 위치 parser 거부 (사전 결합 필요) |
+| 모듈 | 2026-05-02 status | 2026-05-05 재검증 |
+|---|---|---|
+| compress | `gzip.encode(bytes)` 실패 | ✅ **PASS** (`bytes.fromString("hello")` 로 round-trip 동작) |
+| url | `url.parse(s)` 실패 | ✅ **PASS** (RFC 3986 본문 통과) |
+| json | `json.parse(s)` 실패 | ⚠️ generic `parse<T>` 가 type 추론 못 — turbofish 필요 (사용성 issue, 백엔드 wall 아님) |
+| encoding | `hexEncode(b)` 실패 | ✅ **PASS** (`encoding.hex.encode(bytes)` 동작) |
+| iter | `iter.map(xs, ...)` 실패 | ⚠️ gap doc API 오류 — iter 는 `Iter<T>` struct 메서드 (free fn 아님). 사용성 mismatch, 백엔드 wall 아님 |
+| option / result combinator | `.map(\|x\| ...)` 실패 | ❌ **여전히 실패** — `Option__map` / `Result__map` 미해소 symbol (closure body) |
+| crypto | `sha256(b)` 실패 | ✅ **PASS** (`crypto.sha256(bytes)` 동작) |
+| bytes | `b"abc"` 인자 위치 parser 거부 | ❌ **여전히 실패** — 더 근본적: lexer 가 `b"..."` 자체를 모름 (`b'A'` 만 인식). spec §2.4.1 byte string literal 미구현 |
 
-공통 패턴: pure-Osty 본문이 (a) closure 인자, (b) `List<String>` 메서드, (c) 복잡한 enum match 분기 같은 LLVM 백엔드 미지원 구문을 사용. body 자체는 spec 동급으로 작성됐지만 backend가 monomorphize 시 실패.
+**남은 실 wall 2개**:
 
-**해소 경로 (모듈별 분리 작업):**
-1. **백엔드 확장**: closure / List<String> / recursive enum match 를 LLVM-route lower 가능하게 — multi-day backend 작업, 기반 영향 큼.
-2. **LLVM shim 추가** (log 패턴): 모듈마다 `internal/llvmgen/stdlib_<m>_shim.go` 작성해 본문 우회 — 한 모듈당 ~200 LOC, 자체 cycle.
-3. **본문 단순화**: closure / List 의존 제거 — body_truthful 평가 점수 낮아짐.
+1. **option/result combinator closure** — 가장 가시적. `.map(\|x\| ...)` 가 LLVM-route 에서 unresolved. closure body monomorphization + generic param 의 backend coverage 가 필요.
+2. **`b"..."` byte string literal lexer 부재** — lexer 가 `b"hello"` 를 인식 안 함 (`b'A'` single byte 만 인식). spec §2.4.1 명시 surface 인데 lexer 한 곳 패치 + 파서 / 코드젠 minor 변경 필요.
 
-`log` 가 5★ 도달한 경로는 (2). 같은 패턴으로 compress / encoding / url / json / iter 도 차례로 5★ 가능.
+**해소 경로**: 위에서 (2) 가 더 작은 작업 (lexer 한 곳 + parser/codegen 라인 추가). (1) 은 backend monomorphization track.
+
+`log` shim 패턴 (`internal/llvmgen/stdlib_<m>_shim.go`) 으로 우회한 것들이 그동안 catch up 했다는 게 가장 큰 변화 — 매트릭스 재평가 2026-05-02 이후의 progress 가 자연 추적 안 됐던 것.
 
 ### ~~`duration-builtin-methods`~~ — `Duration` builtin 의 메서드/필드 미등록 — **해소됨 (2026-05-05)**
 
