@@ -834,6 +834,16 @@ const (
 	// Dest nil. Appended at the tail to preserve historical enum
 	// values for every previously-emitted intrinsic.
 	IntrinsicSetClear
+	// IntrinsicLikely is the prelude `likely(cond: Bool) -> Bool`
+	// branch-prediction hint (SPEC_GAPS `a12-branch-hints` / v0.6
+	// A12). Lowers to `call i1 @llvm.expect.i1(i1 cond, i1 true)`.
+	// Returns the condition value unchanged at runtime; only the
+	// branch-layout metadata is biased. Args: [cond]. Dest receives
+	// the call result.
+	IntrinsicLikely
+	// IntrinsicUnlikely mirrors IntrinsicLikely with `expected = false`.
+	// Lowers to `call i1 @llvm.expect.i1(i1 cond, i1 false)`.
+	IntrinsicUnlikely
 )
 
 // StorageLiveInstr marks a local as alive. Optional; backends that do

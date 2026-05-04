@@ -36653,6 +36653,13 @@ func checkInstallPrelude(env *CheckEnv) {
 	checkRegisterFn(env, &CheckFnSig{name: "unreachable", owner: "", receiverTy: -1, retTy: tNever(env.tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	checkRegisterFn(env, &CheckFnSig{name: "todo", owner: "", receiverTy: -1, retTy: tNever(env.tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	checkRegisterFn(env, &CheckFnSig{name: "abort", owner: "", receiverTy: -1, retTy: tNever(env.tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	// `likely(cond: Bool) -> Bool` / `unlikely(cond: Bool) -> Bool`
+	// — branch-prediction prelude builtins (SPEC_GAPS
+	// `a12-branch-hints`, v0.6 A12). Identity at runtime; LLVM
+	// codegen lowers each call to `@llvm.expect.i1` so block layout
+	// biases hot/cold paths.
+	checkRegisterFn(env, &CheckFnSig{name: "likely", owner: "", receiverTy: -1, retTy: tBool(env.tys), paramNames: []string{"cond"}, paramTys: []int{tBool(env.tys)}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	checkRegisterFn(env, &CheckFnSig{name: "unlikely", owner: "", receiverTy: -1, retTy: tBool(env.tys), paramNames: []string{"cond"}, paramTys: []int{tBool(env.tys)}, generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// `dbg<T>(value: T) -> T` — diagnostic builtin (LANG_SPEC §A.10
 	// `dbg(expr)`). The MIR lowerer treats it as an identity
 	// passthrough today; a future refinement adds the eprintln
@@ -54742,7 +54749,7 @@ func srSymbolFound(sym *SelfSymbol) bool {
 
 // Osty: /tmp/selfhost_merged.osty:28147:1
 func srIsBuiltinName(name string) bool {
-	return name == "true" || name == "false" || name == "None" || name == "Some" || name == "Ok" || name == "Err" || name == "print" || name == "println" || name == "eprint" || name == "eprintln" || name == "dbg" || name == "panic" || name == "unreachable" || name == "todo" || name == "abort" || name == "spawn" || name == "parallel" || name == "taskGroup" || name == "thread" || name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Byte" || name == "Float" || name == "Float32" || name == "Float64" || name == "Bool" || name == "String" || name == "Bytes" || name == "Char" || name == "Never" || name == "RawPtr" || name == "List" || name == "Map" || name == "Set" || name == "Chan" || name == "Channel" || name == "Handle" || name == "TaskGroup" || name == "Option" || name == "Result" || name == "Error" || name == "Duration" || name == "Unit" || name == "Equal" || name == "Ordered" || name == "Hashable" || name == "ToString" || name == "Pod"
+	return name == "true" || name == "false" || name == "None" || name == "Some" || name == "Ok" || name == "Err" || name == "print" || name == "println" || name == "eprint" || name == "eprintln" || name == "dbg" || name == "panic" || name == "unreachable" || name == "todo" || name == "abort" || name == "likely" || name == "unlikely" || name == "spawn" || name == "parallel" || name == "taskGroup" || name == "thread" || name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Byte" || name == "Float" || name == "Float32" || name == "Float64" || name == "Bool" || name == "String" || name == "Bytes" || name == "Char" || name == "Never" || name == "RawPtr" || name == "List" || name == "Map" || name == "Set" || name == "Chan" || name == "Channel" || name == "Handle" || name == "TaskGroup" || name == "Option" || name == "Result" || name == "Error" || name == "Duration" || name == "Unit" || name == "Equal" || name == "Ordered" || name == "Hashable" || name == "ToString" || name == "Pod"
 }
 
 // Osty: /tmp/selfhost_merged.osty:28151:1
