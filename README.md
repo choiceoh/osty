@@ -216,6 +216,102 @@ Requires Go 1.26.2 or newer (matching `go.mod`).
 go build -o osty ./cmd/osty
 ```
 
+## Bootstrapping `osty-self`
+
+The native LLVM backend forks `osty-self lir-proto-lower` for every
+MIR → LLVM IR pass. `osty-self` is itself written in Osty
+(`toolchain/*.osty`) so a fresh clone has a chicken-and-egg moment:
+the host `osty` needs `osty-self` to compile, and `osty-self` needs
+`osty` to compile. The artifact cache resolves this with a
+content-addressed lookup chain so most workflows never have to
+think about it.
+
+### One-shot bootstrap
+
+After `git clone` + `go build -o .bin/osty ./cmd/osty`:
+
+```sh
+just bootstrap   # builds osty + native-checker + native-lirproto, then
+                 # `osty install-self` builds osty-self and promotes it
+                 # into .osty/cache/self-host/<sha>-<triple>/
+```
+
+Subsequent `osty build` / `osty run` / `osty test` invocations resolve
+the binary through the cache and skip the slow toolchain rebuild.
+The cache is keyed on the SHA-256 of every `toolchain/*.osty` file
+plus the host triple, so editing toolchain sources invalidates the
+entry automatically.
+
+### Lookup order
+
+`internal/toolchain/selfhostcache.ResolveBinaryWithFetch` consults,
+in order:
+
+1. `$OSTY_SELF_BIN` — explicit override for debugging or pinning a
+   specific binary.
+2. `toolchain/.osty/out/{debug,release}/llvm/osty-self` — the
+   in-tree build path. Always wins over the cache so an active
+   development build is never shadowed by a stale artifact.
+3. `.osty/cache/self-host/<sha>-<triple>/osty-self` — the
+   content-addressed cache. Populated by `osty install-self` and
+   `verify-self-rebuild --reuse-stage1`.
+4. **Network fetch** from `$OSTY_SELF_REGISTRY_URL` — only when set
+   and `$OSTY_SELF_REGISTRY_OFFLINE` is unset. Successful fetches
+   promote the binary into the local cache so step 3 hits next time.
+
+When all four miss, the resolver returns the canonical `osty-self
+not found` decline so the upstream backend dispatcher can fall back
+to its decline handler.
+
+### Network fetch + signing
+
+CI dispatches the [`build-osty-self`](.github/workflows/build-osty-self.yml)
+workflow per host triple. Each runner produces a manifest +
+binary pair via `osty manifest-self`, optionally signed via
+`osty sign-self` when the `OSTY_SELF_SIGNING_KEY` repo secret is
+available. The published layout is:
+
+```
+<base>/<sha>-<triple>.json       # manifest
+<base>/<sha>-<triple>.json.sig   # ed25519 signature (when signed)
+<base>/<binary-url>              # osty-self binary
+```
+
+Consumer-side env vars:
+
+| Var | Purpose |
+|---|---|
+| `OSTY_SELF_REGISTRY_URL` | Base URL the resolver GETs manifests / binaries from. Unset ⇒ network fetch disabled. |
+| `OSTY_SELF_REGISTRY_OFFLINE` | When truthy, hard-disables the fetcher even with a registry URL set. CI / air-gapped environments. |
+| `OSTY_SELF_TRUSTED_KEY` | 64-char hex ed25519 public key. When set, manifests must be signed under the matching private key or the fetcher rejects them. Unset ⇒ unsigned manifests are accepted (A4-class behaviour). |
+| `OSTY_SELF_BIN` | Bypass everything and use this binary path. |
+| `OSTY_STAGE0_FALLBACK` | Last-resort emergency-only Go MIR→LLVM emitter. See `docs/osty_self_bootstrap_design.md`. |
+
+The fetcher verifies the binary's SHA-256 against the manifest
+unconditionally. The signature check is opt-in via
+`OSTY_SELF_TRUSTED_KEY` — once set the fetcher fails closed on
+missing signatures (`ErrSignatureMissing`) so a registry compromise
+cannot silently downgrade clients.
+
+### Cache maintenance
+
+```sh
+osty cache-self            # print canonical cache path for current toolchain
+osty cache-self --check    # exit 1 if cache miss; useful in shell scripts
+osty cache-self --key      # print the <sha>-<triple> stem
+osty cache-self --triple   # print just the host triple
+
+osty gc-self               # prune stale entries (default: keep current SHA + 5 LRU)
+osty gc-self --dry-run     # print the plan without deleting
+osty gc-self --keep 10     # custom LRU cap
+osty gc-self --older-than 720h  # remove entries older than 30 days
+```
+
+`gc-self` always preserves entries whose SHA matches the current
+toolchain — a `--keep=0` immediately after `install-self` cannot
+delete the just-built artifact. Documented in
+`docs/osty_self_artifact_design.md` (A1–A8 roadmap).
+
 ## Native Checker
 
 `internal/check` prefers an external checker executable boundary when one is
