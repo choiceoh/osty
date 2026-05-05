@@ -947,9 +947,10 @@ func (s *lowerState) lowerEnumVariantAssign(rv *mir.AggregateRV, destSlot int64)
 	return out, nil
 }
 
-// lowerNullaryAssign covers `dest = none T?` — write the None tag (0)
-// to slot+0 and leave the payload undefined. Other nullary rvalues
-// don't exist in MIR today; new entries land here as the enum extends.
+// lowerNullaryAssign covers `dest = none T?` — find the None variant
+// in the layout and write its tag to slot+0, leaving the payload
+// undefined. Other nullary rvalues don't exist in MIR today; new
+// entries land here as the enum extends.
 func (s *lowerState) lowerNullaryAssign(rv *mir.NullaryRV, destSlot int64) ([]Instr, error) {
 	if rv.Kind != mir.NullaryNone {
 		return nil, fmt.Errorf("%w: nullary kind %v", ErrUnsupportedShape, rv.Kind)
@@ -958,9 +959,6 @@ func (s *lowerState) lowerNullaryAssign(rv *mir.NullaryRV, destSlot int64) ([]In
 	if layout == nil {
 		return nil, fmt.Errorf("%w: nullary none on non-enum type %s", ErrUnsupportedShape, rv.T)
 	}
-	// Find the None variant; for synthetic Option layouts it's at
-	// index 0 by construction. For user enums that re-use `none`
-	// (none today) this would walk Variants for Name == "None".
 	noneIdx := 0
 	for i, v := range layout.Variants {
 		if v.Name == "None" {
@@ -1222,10 +1220,12 @@ func structLayoutSupported(nt *ir.NamedType) bool {
 //
 // The synthetic Option layout uses the canonical convention from
 // `internal/llvmgen` and `internal/mir/lower.go`: discriminant 0 ==
-// None, 1 == Some, with the inner type as the Some payload. Result
-// types are surfaced as `NamedType{Name: "Result"}` and do live in
-// `mod.Layouts.Enums` after the front end's `buildLayouts` pass, so
-// they take the user-defined branch.
+// Some (with inner-type payload), 1 == None — matching the
+// declaration order in `internal/stdlib/modules/option.osty`. Result
+// follows the same rule (Ok=0 / Err=1, declared in
+// `internal/stdlib/modules/result.osty`). Some user-defined Result
+// instances also live in `mod.Layouts.Enums` after the front end's
+// `buildLayouts` pass and take the named branch.
 func (s *lowerState) lookupEnumLayout(t mir.Type) *mir.EnumLayout {
 	if s.mod == nil {
 		return nil
@@ -1238,7 +1238,7 @@ func (s *lowerState) lookupEnumLayout(t mir.Type) *mir.EnumLayout {
 		return nil
 	}
 	// Builtin Option / Maybe / Result types use synthetic layouts
-	// (None=0/Some=1, Err=0/Ok=1) the front end doesn't bother
+	// (Some=0/None=1, Ok=0/Err=1) the front end doesn't bother
 	// registering into `mod.Layouts.Enums`. The MIR layer canonicalises
 	// `T?` references to `NamedType{Name: "Option", Args: [T],
 	// Builtin: true}` (notably AggregateRV.T for `Some(...)` calls)
@@ -1262,37 +1262,42 @@ func (s *lowerState) lookupEnumLayout(t mir.Type) *mir.EnumLayout {
 }
 
 // syntheticOptionLayout builds the canonical 2-variant enum layout
-// (None=0 / Some(inner)=1) used wherever the front end emits an
+// (Some(inner)=0 / None=1) used wherever the front end emits an
 // optional type without registering it into `mod.Layouts.Enums`. Kept
 // out of `lookupEnumLayout` so the OptionalType and NamedType paths
-// share the same shape.
+// share the same shape. Variant order matches the stdlib declaration
+// in `internal/stdlib/modules/option.osty` (`Some(T), None`) so that
+// MIR-level variant indices computed via `variantIndexByName` line up
+// with this layout's slots.
 func (s *lowerState) syntheticOptionLayout(inner mir.Type) *mir.EnumLayout {
 	return &mir.EnumLayout{
 		Name:         "Option",
 		Discriminant: mir.TInt,
 		Variants: []mir.VariantLayout{
-			{Index: 0, Name: "None"},
-			{Index: 1, Name: "Some", Payload: []mir.FieldLayout{{Index: 0, Name: "value", Type: inner}}},
+			{Index: 0, Name: "Some", Payload: []mir.FieldLayout{{Index: 0, Name: "value", Type: inner}}},
+			{Index: 1, Name: "None"},
 		},
 	}
 }
 
-// syntheticResultLayout builds the 2-variant enum layout (Err=0 /
-// Ok=1) for `Result<T, E>`. The Err arm carries one E-typed payload
-// field; the Ok arm carries one T-typed field. Each variant has a
+// syntheticResultLayout builds the 2-variant enum layout (Ok=0 /
+// Err=1) for `Result<T, E>`. The Ok arm carries one T-typed payload
+// field; the Err arm carries one E-typed field. Each variant has a
 // single payload register so the whole Result fits in 16 bytes (1
 // disc + 1 payload), which keeps it eligible for AAPCS64
-// small-struct passing. The Err and Ok payload types live in
+// small-struct passing. The Ok and Err payload types live in
 // different variants — `enumSlotSize` reports the maximum payload
 // reg count across all variants, so a Result whose Err half needs
-// 2 regs would stop being eligible.
+// 2 regs would stop being eligible. Variant order matches the stdlib
+// declaration in `internal/stdlib/modules/result.osty`
+// (`Ok(T), Err(E)`) so MIR-level indices line up with this layout.
 func (s *lowerState) syntheticResultLayout(okT, errT mir.Type) *mir.EnumLayout {
 	return &mir.EnumLayout{
 		Name:         "Result",
 		Discriminant: mir.TInt,
 		Variants: []mir.VariantLayout{
-			{Index: 0, Name: "Err", Payload: []mir.FieldLayout{{Index: 0, Name: "error", Type: errT}}},
-			{Index: 1, Name: "Ok", Payload: []mir.FieldLayout{{Index: 0, Name: "value", Type: okT}}},
+			{Index: 0, Name: "Ok", Payload: []mir.FieldLayout{{Index: 0, Name: "value", Type: okT}}},
+			{Index: 1, Name: "Err", Payload: []mir.FieldLayout{{Index: 0, Name: "error", Type: errT}}},
 		},
 	}
 }
@@ -1364,10 +1369,10 @@ func (s *lowerState) enumPayloadOffset(fieldIdx int) int64 {
 	return int64(8 + fieldIdx*8)
 }
 
-// enumDiscriminantValue returns the integer tag for a variant. Most
-// enums simply use the variant index, but the synthetic Option layout
-// keeps None=0 / Some=1 explicit so the sequence matches the rest of
-// the toolchain's convention.
+// enumDiscriminantValue returns the integer tag for a variant. The tag
+// is the layout entry's explicit Index, which always matches the
+// variant's slot in `layout.Variants` for both user enums and the
+// synthetic Option/Result layouts.
 func (s *lowerState) enumDiscriminantValue(layout *mir.EnumLayout, variantIdx int) int64 {
 	if layout == nil || variantIdx < 0 || variantIdx >= len(layout.Variants) {
 		return int64(variantIdx)
@@ -2388,13 +2393,15 @@ func (s *lowerState) lowerMapLen(instr *mir.IntrinsicInstr) ([]Instr, error) {
 // lowerMapGet lowers `_v: V? = intrinsic map_get(m, k)` into:
 //
 //  1. `osty_rt_map_get_<keyKind>(map, key, &scratch)` returns 0/1 in x0
-//     and writes the value into scratch on hit.
+//     (0 = miss, 1 = hit) and writes the value into scratch on hit.
 //  2. The dest local is `Option<V>` (16 bytes: disc 8B + payload 8B).
-//     Store x0 (the bool, which is conveniently the None=0/Some=1
-//     tag) at dest+0; load scratch into x9 and store at dest+8. We
-//     write the payload unconditionally — for None it's a stale
-//     value, but the discriminant 0 means readers shouldn't touch
-//     it anyway.
+//     The Option layout uses Some=0/None=1 (matching the stdlib
+//     declaration in `option.osty`), so the runtime's hit/miss bool
+//     must be inverted (`1 - x0`) before being stored as the
+//     discriminant: hit (1) → Some (0), miss (0) → None (1). Load
+//     scratch into x9 and store at dest+8. The payload is written
+//     unconditionally — for None it's a stale value, but readers
+//     check the discriminant first.
 func (s *lowerState) lowerMapGet(instr *mir.IntrinsicInstr) ([]Instr, error) {
 	if len(instr.Args) != 2 {
 		return nil, fmt.Errorf("%w: map_get expects 2 args", ErrUnsupportedShape)
@@ -2428,7 +2435,11 @@ func (s *lowerState) lowerMapGet(instr *mir.IntrinsicInstr) ([]Instr, error) {
 	out = append(out,
 		&LoadStackAddress{Dst: RegX2, Offset: s.mapScratchOffset},
 		&BranchLink{Symbol: keySym},
-		// Discriminant: x0 already holds 0 (None) or 1 (Some).
+		// Invert x0 so the runtime's hit(1)/miss(0) maps to the
+		// Some=0/None=1 Option discriminant convention.
+		&MovImm64{Dst: RegX9, Imm: 0},
+		&Cmp{Lhs: RegX0, Rhs: RegX9},
+		&Cset{Dst: RegX0, Cond: CondEq},
 		&Store64Stack{Src: RegX0, Offset: destSlot},
 		// Payload: load whatever the runtime wrote into scratch.
 		&Load64Stack{Dst: RegX9, Offset: s.mapScratchOffset},
@@ -2613,7 +2624,7 @@ func (s *lowerState) lowerListIsEmpty(instr *mir.IntrinsicInstr) ([]Instr, error
 
 // lowerOptionIsSome / lowerOptionIsNone read the option's
 // discriminant (slot+0 of the enum local) and compare to the Some
-// tag (= 1). The Option layout is the synthetic one from Week 14 so
+// tag (= 0). The Option layout is the synthetic one from Week 14 so
 // these always look at offset 0 regardless of the inner type.
 func (s *lowerState) lowerOptionIsSome(instr *mir.IntrinsicInstr) ([]Instr, error) {
 	return s.lowerOptionDiscriminantCompare(instr, CondEq)
@@ -2625,8 +2636,9 @@ func (s *lowerState) lowerOptionIsNone(instr *mir.IntrinsicInstr) ([]Instr, erro
 
 // lowerOptionDiscriminantCompare emits the shared isSome/isNone body:
 // load the discriminant byte (option slot + 0) into x9, compare to
-// the Some tag (1), and `cset` with the caller-chosen condition.
-// CondEq → isSome (x9 == 1); CondNe → isNone (x9 != 1).
+// the Some tag (0 — see syntheticOptionLayout), and `cset` with the
+// caller-chosen condition.
+// CondEq → isSome (x9 == 0); CondNe → isNone (x9 != 0).
 func (s *lowerState) lowerOptionDiscriminantCompare(instr *mir.IntrinsicInstr, cond Cond) ([]Instr, error) {
 	if len(instr.Args) != 1 {
 		return nil, fmt.Errorf("%w: option discriminant compare expects 1 arg", ErrUnsupportedShape)
@@ -2650,7 +2662,7 @@ func (s *lowerState) lowerOptionDiscriminantCompare(instr *mir.IntrinsicInstr, c
 	}
 	out := []Instr{
 		&Load64Stack{Dst: RegX9, Offset: srcSlot},
-		&MovImm64{Dst: RegX10, Imm: 1}, // Some tag
+		&MovImm64{Dst: RegX10, Imm: 0}, // Some tag
 		&Cmp{Lhs: RegX9, Rhs: RegX10},
 		&Cset{Dst: RegX9, Cond: cond},
 	}
