@@ -297,6 +297,26 @@ fn main() {}`,
 				"call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.str, ptr @.str.0)",
 			},
 		},
+		{
+			name: "list_literal_len",
+			src: `fn answer() -> Int {
+    let xs: List<Int> = [1, 2, 3]
+    xs.len()
+}
+fn main() {}`,
+			wantIR: []string{
+				"declare ptr @osty_rt_list_new()",
+				"declare void @osty_rt_list_push_i64(ptr, i64)",
+				"declare i64 @osty_rt_list_len(ptr)",
+				"define i64 @answer()",
+				"%0 = call ptr @osty_rt_list_new()",
+				"call void @osty_rt_list_push_i64(ptr %0, i64 1)",
+				"call void @osty_rt_list_push_i64(ptr %0, i64 2)",
+				"call void @osty_rt_list_push_i64(ptr %0, i64 3)",
+				"%1 = call i64 @osty_rt_list_len(ptr %0)",
+				"ret i64 %1",
+			},
+		},
 	}
 	for _, c := range cases {
 		c := c
@@ -321,15 +341,6 @@ fn main() {}`,
 // coverage, flip skipNow=false to lock in the new capability.
 func TestStage0RealMIRGapProbe(t *testing.T) {
 	cases := []realProbeCase{
-		{
-			name: "list_literal_len",
-			src: `fn answer() -> Int {
-    let xs: List<Int> = [1, 2, 3]
-    xs.len()
-}
-fn main() {}`,
-			skipNow: true,
-		},
 	}
 	for _, c := range cases {
 		c := c
