@@ -374,6 +374,10 @@ type FrontTokenKind_FrontByte struct{ _ref byte }
 
 func (FrontTokenKind_FrontByte) _isFrontTokenKind() {}
 
+type FrontTokenKind_FrontByteString struct{ _ref byte }
+
+func (FrontTokenKind_FrontByteString) _isFrontTokenKind() {}
+
 type FrontTokenKind_FrontString struct{ _ref byte }
 
 func (FrontTokenKind_FrontString) _isFrontTokenKind() {}

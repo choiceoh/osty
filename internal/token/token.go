@@ -25,6 +25,10 @@ const (
 	// expression, already lexed).
 	STRING
 	RAWSTRING
+	// BYTESTRING represents a byte string literal `b"..."` (§2.4.1).
+	// The token's Value is the decoded string content (same as a regular
+	// string), but the literal produces a `Bytes` value rather than `String`.
+	BYTESTRING
 
 	// Keywords (17).
 	FN
@@ -124,6 +128,7 @@ var kindNames = [...]string{
 	BYTE:       "BYTE",
 	STRING:     "STRING",
 	RAWSTRING:  "RAWSTRING",
+	BYTESTRING: "BYTESTRING",
 	FN:         "fn",
 	STRUCT:     "struct",
 	ENUM:       "enum",

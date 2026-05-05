@@ -177,14 +177,21 @@ spec 동급 동작.
 | iter | `iter.map(xs, ...)` 실패 | ⚠️ gap doc API 오류 — iter 는 `Iter<T>` struct 메서드 (free fn 아님). 사용성 mismatch, 백엔드 wall 아님 |
 | option / result combinator | `.map(\|x\| ...)` 실패 | ❌ **여전히 실패** — `Option__map` / `Result__map` 미해소 symbol (closure body) |
 | crypto | `sha256(b)` 실패 | ✅ **PASS** (`crypto.sha256(bytes)` 동작) |
-| bytes | `b"abc"` 인자 위치 parser 거부 | ❌ **여전히 실패** — 더 근본적: lexer 가 `b"..."` 자체를 모름 (`b'A'` 만 인식). spec §2.4.1 byte string literal 미구현 |
+| bytes | `b"abc"` 인자 위치 parser 거부 | ✅ **PASS (2026-05-05)** — `FrontByteString` token kind 추가. Lexer 인식 + parser `AstNStringLit` 으로 lower 완료. 잔여: `b"..."` 의 type 을 `Bytes` 로 inference 하는 `AstNByteStringLit` 노드 작업은 follow-up. |
 
-**남은 실 wall 2개**:
+**남은 실 wall 1개**:
 
-1. **option/result combinator closure** — 가장 가시적. `.map(\|x\| ...)` 가 LLVM-route 에서 unresolved. closure body monomorphization + generic param 의 backend coverage 가 필요.
-2. **`b"..."` byte string literal lexer 부재** — lexer 가 `b"hello"` 를 인식 안 함 (`b'A'` single byte 만 인식). spec §2.4.1 명시 surface 인데 lexer 한 곳 패치 + 파서 / 코드젠 minor 변경 필요.
+1. **option/result combinator closure** — `.map(\|x\| ...)` 가 LLVM-route 에서 unresolved. closure body monomorphization + generic param 의 backend coverage 가 필요.
 
-**해소 경로**: 위에서 (2) 가 더 작은 작업 (lexer 한 곳 + parser/codegen 라인 추가). (1) 은 backend monomorphization track.
+**해소됨 (2026-05-05)**: `b"..."` byte string literal (`FrontByteString` token kind). Lexer 가 `b"hello"` 를 인식, `BYTESTRING` token 생성, parser 가 `AstNStringLit` 으로 lower. 변경사항:
+- `internal/selfhost/generated.go` — `FrontTokenKind_FrontByteString` type + dispatch in `frontInterpolationTokenScan` + `frontStringLikeScan` + `frontStringContentStart` + `ostyPublicTokenText` + `isFrontLiteralKind` + `frontKindInsertsTerm` + `frontTokenKindName` + parser `opParsePrimary` + `astLowerKind`
+- `internal/token/token.go` — `BYTESTRING` token kind (name + entry)
+- `internal/selfhost/adapter.go` — `FrontByteString` → `token.BYTESTRING` mapping + `fillLiteralParts`
+- `internal/cst/parse.go` — `BYTESTRING` in literal pattern + expression
+- `toolchain/frontend.osty` — same dispatch logic (self-hosting convergence)
+- `internal/docgen/generated.go` — matching changes for docgen
+
+**잔여**: `b"..."` 가 현재 `AstNStringLit` 으로 lower 되어 type checker 가 `Bytes` 대신 `String` 으로 추론. `b"..."` 가 spec대로 `Bytes` literal 이 되려면 `AstNByteStringLit` 노드 추가 + type checker + codegen 작업 필요. Follow-up track.
 
 `log` shim 패턴 (`internal/llvmgen/stdlib_<m>_shim.go`) 으로 우회한 것들이 그동안 catch up 했다는 게 가장 큰 변화 — 매트릭스 재평가 2026-05-02 이후의 progress 가 자연 추적 안 됐던 것.
 

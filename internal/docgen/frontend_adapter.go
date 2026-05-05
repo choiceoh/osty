@@ -209,6 +209,8 @@ func mapTokenKind(k FrontTokenKind) token.Kind {
 		return token.CHAR
 	case *FrontTokenKind_FrontByte:
 		return token.BYTE
+	case *FrontTokenKind_FrontByteString:
+		return token.BYTESTRING
 	case *FrontTokenKind_FrontString:
 		return token.STRING
 	case *FrontTokenKind_FrontRawString:
@@ -357,7 +359,7 @@ func mapTokenKind(k FrontTokenKind) token.Kind {
 
 func fillLiteralParts(tok *token.Token, rt runeTable, stream *FrontLexStream, facts *OstyLexFacts, owner int) {
 	switch tok.Kind {
-	case token.STRING, token.RAWSTRING:
+	case token.STRING, token.RAWSTRING, token.BYTESTRING:
 		for _, p := range facts.stringParts {
 			if p.ownerToken != owner {
 				continue
