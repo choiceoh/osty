@@ -36,20 +36,15 @@ import (
 	"strings"
 
 	"github.com/osty/osty/internal/nativelirproto"
+	"github.com/osty/osty/internal/toolchain/selfhostcache"
 )
 
 // SelfBinEnv overrides the osty-self lookup. Local development /
 // CI uses this to point at a freshly built artifact without having
-// to write to the default `.osty/out/...` cache path.
+// to write to the default `.osty/out/...` cache path. The actual
+// lookup is delegated to `selfhostcache.ResolveBinary` which honours
+// the same env var.
 const SelfBinEnv = "OSTY_SELF_BIN"
-
-// defaultSelfBinCandidates lists the paths searched (in order)
-// when SelfBinEnv is unset. They mirror the layout `osty build
-// toolchain/` writes by default.
-var defaultSelfBinCandidates = []string{
-	"toolchain/.osty/out/debug/llvm/osty-self",
-	"toolchain/.osty/out/release/llvm/osty-self",
-}
 
 func main() {
 	if err := run(os.Stdin, os.Stdout); err != nil {
@@ -122,26 +117,32 @@ func lower(req nativelirproto.Request) (nativelirproto.Response, error) {
 }
 
 // resolveOstySelfBin returns the path to the self-host `osty-self`
-// binary the lower call should subprocess. SelfBinEnv wins outright;
-// otherwise we search the default `osty build toolchain/` output
-// paths relative to the current working directory.
+// binary the lower call should subprocess.
+//
+// Lookup order (delegated to `selfhostcache.ResolveBinary`):
+//
+//	1. `$OSTY_SELF_BIN` env override.
+//	2. `toolchain/.osty/out/{debug,release}/llvm/osty-self` — the
+//	   in-tree build path.
+//	3. `.osty/cache/self-host/<sha>-<triple>/osty-self` — the
+//	   content-addressed artifact cache.
+//
+// On the no-cache path (env unset, no in-tree build, no cache hit),
+// the canonical "osty-self not found" message is preserved so the
+// upstream `backend.IsOstySelfMissing` detection chain keeps working.
 func resolveOstySelfBin() (string, error) {
-	if override := strings.TrimSpace(os.Getenv(SelfBinEnv)); override != "" {
-		if _, err := os.Stat(override); err == nil {
-			return override, nil
-		}
-		return "", fmt.Errorf("%s=%q not found", SelfBinEnv, override)
+	root, err := selfhostcache.LocateProjectRoot(".")
+	if err != nil {
+		return "", err
 	}
-	for _, rel := range defaultSelfBinCandidates {
-		abs, err := filepath.Abs(rel)
-		if err != nil {
-			continue
-		}
-		if _, err := os.Stat(abs); err == nil {
-			return abs, nil
-		}
+	bin, _, err := selfhostcache.ResolveBinary(root)
+	if errors.Is(err, selfhostcache.ErrNotCached) {
+		return "", errors.New("osty-self not found; run `osty build toolchain/` or set OSTY_SELF_BIN")
 	}
-	return "", errors.New("osty-self not found; run `osty build toolchain/` or set OSTY_SELF_BIN")
+	if err != nil {
+		return "", err
+	}
+	return bin, nil
 }
 
 // stageSource writes the request's source bytes to a temp file so

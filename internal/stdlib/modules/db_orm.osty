@@ -12,6 +12,7 @@ use std.db
 use std.db.driver
 use std.sql
 use std.error
+use std.strings
 
 // ── Metadata ────────────────────────────────────────────────────────────────
 
@@ -120,25 +121,62 @@ pub fn truncate(pool: driver.Pool, tableName: String) -> Result<(), Error>
 // ── Query helpers ───────────────────────────────────────────────────────────
 
 /// Builds a SELECT query for all columns of the model.
-pub fn selectAll(model: ModelDef) -> sql.Query
+pub fn selectAll(model: ModelDef) -> sql.Query {
+    sql.raw("SELECT * FROM \"{model.tableName}\"")
+}
 
 /// Builds a SELECT query scoped to the given columns.
-pub fn selectColumns(model: ModelDef, columns: List<String>) -> Result<sql.Query, Error>
+pub fn selectColumns(model: ModelDef, columns: List<String>) -> Result<sql.Query, Error> {
+    sql.select(model.tableName, columns)
+}
 
 /// Builds a SELECT query with a WHERE clause on the primary key.
-pub fn selectByPk(model: ModelDef, pkValue: Int) -> sql.Query
+pub fn selectByPk(model: ModelDef, pkValue: Int) -> sql.Query {
+    let pks = model.primaryKeys
+    let pk = if pks.isEmpty() { "id" } else { pks[0] }
+    sql.query("SELECT * FROM \"{model.tableName}\" WHERE \"{pk}\" = ?", [sql.integer(pkValue)])
+}
 
 /// Builds a SELECT query with a simple equality WHERE clause.
-pub fn selectWhere(model: ModelDef, column: String, value: db.Cell) -> Result<sql.Query, Error>
+pub fn selectWhere(model: ModelDef, column: String, value: db.Cell) -> Result<sql.Query, Error> {
+    let sv = cellToSqlValue(value)
+    let cond = sql.eq(column, sv)?
+    sql.selectWhere(model.tableName, [], cond)
+}
 
 /// Appends a WHERE condition to an existing Query.
-pub fn whereClause(q: sql.Query, condition: sql.Condition) -> sql.Query
+pub fn whereClause(q: sql.Query, condition: sql.Condition) -> sql.Query {
+    let mut combined: List<sql.Value> = []
+    for v in q.params {
+        combined.push(v)
+    }
+    for v in condition.params {
+        combined.push(v)
+    }
+    sql.query("{q.sql} WHERE {condition.sql}", combined)
+}
 
 /// Appends an ORDER BY clause.
-pub fn orderBy(q: sql.Query, orders: List<sql.Order>) -> Result<sql.Query, Error>
+pub fn orderBy(q: sql.Query, orders: List<sql.Order>) -> Result<sql.Query, Error> {
+    sql.orderBy(q, orders)
+}
 
 /// Appends LIMIT and OFFSET.
-pub fn limitOffset(q: sql.Query, limit: Int, offset: Int) -> Result<sql.Query, Error>
+pub fn limitOffset(q: sql.Query, limit: Int, offset: Int) -> Result<sql.Query, Error> {
+    let q2 = sql.limit(q, limit)?
+    sql.offset(q2, offset)
+}
+
+/// Converts a db.Cell to an sql.Value for use in query building.
+fn cellToSqlValue(cell: db.Cell) -> sql.Value {
+    match cell {
+        db.CellNull      -> sql.null(),
+        db.CellString(s) -> sql.text(s),
+        db.CellInt(n)    -> sql.integer(n),
+        db.CellFloat(n)  -> sql.float(n),
+        db.CellBool(b)   -> sql.boolean(b),
+    }
+}
 
 // ── Relationship queries ────────────────────────────────────────────────────
 

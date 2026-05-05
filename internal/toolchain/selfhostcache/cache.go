@@ -34,6 +34,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"github.com/osty/osty/internal/manifest"
 )
 
 // CacheDirName is the relative path inside the project root used for
@@ -172,6 +174,13 @@ func ComputeKey(projectRoot string) (Key, error) {
 // `Key` is non-zero when the cache layer (step 3) hits; the in-tree
 // build paths return a zero key because they are not content-
 // addressed.
+//
+// All "no usable binary" outcomes — env override missing, no in-tree
+// build, no cache entry, or even a missing `toolchain/` directory —
+// surface as `ErrNotCached`. Callers convert that single sentinel
+// into their preferred decline message (the lirproto bridge keeps
+// the canonical "osty-self not found" wording so
+// `backend.IsOstySelfMissing` continues matching).
 func ResolveBinary(projectRoot string) (string, Key, error) {
 	if env := strings.TrimSpace(os.Getenv(SelfBinEnv)); env != "" {
 		if info, err := os.Stat(env); err == nil && !info.IsDir() {
@@ -185,13 +194,37 @@ func ResolveBinary(projectRoot string) (string, Key, error) {
 	}
 	key, err := ComputeKey(projectRoot)
 	if err != nil {
-		return "", Key{}, err
+		// Treat key-derivation failures (missing toolchain dir,
+		// unreadable files, …) as a "no cache entry available"
+		// signal rather than a hard error. The cache cannot help
+		// here; upstream detection drops through to its own
+		// fallback chain.
+		return "", Key{}, ErrNotCached
 	}
 	cached := CachePath(projectRoot, key)
 	if info, err := os.Stat(cached); err == nil && !info.IsDir() {
 		return cached, key, nil
 	}
 	return "", key, ErrNotCached
+}
+
+// LocateProjectRoot walks up from `start` looking for `osty.toml`
+// (the canonical Osty manifest). Falls back to the absolute path of
+// `start` when no manifest is found, matching the behaviour of
+// `internal/toolchain.defaultManagedProjectRoot`. Callers thread the
+// result into `ResolveBinary`.
+func LocateProjectRoot(start string) (string, error) {
+	if start == "" {
+		start = "."
+	}
+	if root, err := manifest.FindRoot(start); err == nil {
+		return root, nil
+	}
+	abs, err := filepath.Abs(start)
+	if err != nil {
+		return "", fmt.Errorf("selfhostcache: locate project root: %w", err)
+	}
+	return abs, nil
 }
 
 // Install copies `binPath` into the cache for `key`. It is
