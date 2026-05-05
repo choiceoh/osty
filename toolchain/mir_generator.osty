@@ -3087,8 +3087,10 @@ pub struct MirAggregatePair {
 }
 
 /// mirSomeI64Aggregate builds the Some(payload) shape:
-///   `  <step1> = insertvalue <optLLVM> undef, i64 1, 0\n`
+///   `  <step1> = insertvalue <optLLVM> undef, i64 0, 0\n`
 ///   `  <final> = insertvalue <optLLVM> <step1>, i64 <payloadI64>, 1\n`
+/// The Option layout follows the stdlib declaration order in
+/// `option.osty` (`Some(T), None`), so Some is discriminant 0.
 /// The caller (Go bridge) supplies pre-allocated SSA register
 /// names for `step1Reg` / `finalReg` (via `g.fresh()`) so the
 /// MirSeq counter stays consistent with the legacy stream.
@@ -3100,15 +3102,16 @@ pub fn mirSomeI64Aggregate(
     payloadI64: String,
 ) -> MirAggregatePair {
     let mut lines: List<String> = []
-    lines.push(mirInsertValueAggLine(step1Reg, optLLVM, "undef", "i64", "1", "0"))
+    lines.push(mirInsertValueAggLine(step1Reg, optLLVM, "undef", "i64", "0", "0"))
     lines.push(mirInsertValueAggLine(finalReg, optLLVM, step1Reg, "i64", payloadI64, "1"))
     MirAggregatePair { step1Reg, finalReg, lines }
 }
 
 /// mirNoneAggregate builds the None shape:
-///   `  <step1> = insertvalue <optLLVM> undef, i64 0, 0\n`
+///   `  <step1> = insertvalue <optLLVM> undef, i64 1, 0\n`
 ///   `  <final> = insertvalue <optLLVM> <step1>, i64 0, 1\n`
-/// Symmetric to `mirSomeI64Aggregate` — disc=0, payload=0. The
+/// Symmetric to `mirSomeI64Aggregate` — disc=1 (None per the
+/// stdlib `option.osty` order `Some(T), None`), payload=0. The
 /// `i64 0, 1` suffix is the conventional zero-payload shape used
 /// across `IntrinsicListIndexOf` / `BytesIndexOf` / etc. None
 /// arms.
@@ -3118,17 +3121,18 @@ pub fn mirNoneAggregate(
     optLLVM: String,
 ) -> MirAggregatePair {
     let mut lines: List<String> = []
-    lines.push(mirInsertValueAggLine(step1Reg, optLLVM, "undef", "i64", "0", "0"))
+    lines.push(mirInsertValueAggLine(step1Reg, optLLVM, "undef", "i64", "1", "0"))
     lines.push(mirInsertValueAggLine(finalReg, optLLVM, step1Reg, "i64", "0", "1"))
     MirAggregatePair { step1Reg, finalReg, lines }
 }
 
 /// mirResultOkI64Aggregate builds the Ok(payload) shape — same
 /// as `mirSomeI64Aggregate` but with the Result tagging
-/// convention: disc=1 means Ok, disc=0 means Err. The result
-/// LLVM type is `%Result.<Ok>.<Err>` rather than `%Option.<T>`,
-/// but the `{ disc, payload }` shape is identical so the
-/// builder reuses the same insertvalue pair.
+/// convention: disc=0 means Ok, disc=1 means Err (matching the
+/// stdlib `result.osty` declaration order `Ok(T), Err(E)`). The
+/// result LLVM type is `%Result.<Ok>.<Err>` rather than
+/// `%Option.<T>`, but the `{ disc, payload }` shape is identical
+/// so the builder reuses the same insertvalue pair.
 pub fn mirResultOkI64Aggregate(
     step1Reg: String,
     finalReg: String,
@@ -3136,14 +3140,14 @@ pub fn mirResultOkI64Aggregate(
     payloadI64: String,
 ) -> MirAggregatePair {
     let mut lines: List<String> = []
-    lines.push(mirInsertValueAggLine(step1Reg, resultLLVM, "undef", "i64", "1", "0"))
+    lines.push(mirInsertValueAggLine(step1Reg, resultLLVM, "undef", "i64", "0", "0"))
     lines.push(mirInsertValueAggLine(finalReg, resultLLVM, step1Reg, "i64", payloadI64, "1"))
     MirAggregatePair { step1Reg, finalReg, lines }
 }
 
 /// mirResultErrI64Aggregate builds the Err(payload) shape —
-/// disc=0, payload=Err value. Used by string-parse + checked-
-/// cancellation paths.
+/// disc=1 (Err per the stdlib `result.osty` order), payload=Err
+/// value. Used by string-parse + checked-cancellation paths.
 pub fn mirResultErrI64Aggregate(
     step1Reg: String,
     finalReg: String,
@@ -3151,7 +3155,7 @@ pub fn mirResultErrI64Aggregate(
     payloadI64: String,
 ) -> MirAggregatePair {
     let mut lines: List<String> = []
-    lines.push(mirInsertValueAggLine(step1Reg, resultLLVM, "undef", "i64", "0", "0"))
+    lines.push(mirInsertValueAggLine(step1Reg, resultLLVM, "undef", "i64", "1", "0"))
     lines.push(mirInsertValueAggLine(finalReg, resultLLVM, step1Reg, "i64", payloadI64, "1"))
     MirAggregatePair { step1Reg, finalReg, lines }
 }
@@ -3862,13 +3866,14 @@ pub fn mirRuntimeDeclareStringConcat() -> String {
 
 /// §6 Some-aggregate builders — repeating the `Some(payload)` two-
 /// insertvalue construction that appears at every list/map probe
-/// site. Centralising the pair keeps the disc=1 / payload=val order
-/// stable and produces a four-line block (two insertvalues + store +
+/// site. Centralising the pair keeps the disc=0 / payload=val order
+/// (stdlib `option.osty` declares `Some(T), None`) stable and
+/// produces a four-line block (two insertvalues + store +
 /// store-zero-on-miss) that downstream readers can spot as a unit.
 
 /// mirSomeAggregateLines renders the canonical Some(payload)
 /// aggregate construction:
-///   `  <tagged> = insertvalue <optTy> undef, i64 1, 0\n`
+///   `  <tagged> = insertvalue <optTy> undef, i64 0, 0\n`
 ///   `  <filled> = insertvalue <optTy> <tagged>, i64 <payload>, 1\n`
 /// Caller passes freshly-allocated SSA registers for both
 /// intermediates and the i64-widened payload value. The returned
@@ -3878,7 +3883,7 @@ pub fn mirRuntimeDeclareStringConcat() -> String {
 /// IntrinsicListPop / IntrinsicListIndexOf / IntrinsicListContains
 /// / IntrinsicMapGet / IntrinsicListSafeGet sites.
 pub fn mirSomeAggregateLines(taggedReg: String, filledReg: String, optLLVM: String, payloadI64: String) -> String {
-    mirInsertValueAggLine(taggedReg, optLLVM, "undef", "i64", "1", "0") +
+    mirInsertValueAggLine(taggedReg, optLLVM, "undef", "i64", "0", "0") +
     mirInsertValueAggLine(filledReg, optLLVM, taggedReg, "i64", payloadI64, "1")
 }
 
@@ -3913,14 +3918,17 @@ pub fn mirSomeStoreThenJumpLines(taggedReg: String, filledReg: String, optLLVM: 
 }
 
 /// mirNoneStoreThenJumpLines renders the canonical "None-arm exit"
-/// sequence: write zeroinitializer into the dest slot then jump to
-/// the join label.
-///   `  store <optTy> zeroinitializer, ptr <destSlot>\n`
+/// sequence: write a None-tagged struct constant into the dest slot
+/// then jump to the join label.
+///   `  store <optTy> { i64 1, i64 0 }, ptr <destSlot>\n`
 ///   `  br label %<endLabel>\n`
 /// Two-line block. Sibling of `mirSomeStoreThenJumpLines` for the
-/// miss / empty / oob branch where None is the payload.
+/// miss / empty / oob branch where None is the payload. The disc
+/// must be 1 (per `option.osty`'s `Some(T), None` order) — using
+/// `zeroinitializer` here would emit `{0, 0}` which the new
+/// convention reads as `Some(0)`.
 pub fn mirNoneStoreThenJumpLines(optLLVM: String, destSlot: String, endLabel: String) -> String {
-    mirStoreZeroinitLine(optLLVM, destSlot) +
+    mirStoreLine(optLLVM, "{ i64 " + mirDiscriminantNone() + ", i64 0 }", destSlot) +
     mirBrUncondLine(endLabel)
 }
 
@@ -3980,22 +3988,24 @@ pub fn mirLinearScanLoopTailLines(contLabel: String, nextReg: String, iReg: Stri
 
 /// mirNoneAggregateLines renders the canonical None two-insertvalue
 /// construction:
-///   `  <step> = insertvalue <optTy> undef, i64 0, 0\n`
+///   `  <step> = insertvalue <optTy> undef, i64 1, 0\n`
 ///   `  <value> = insertvalue <optTy> <step>, i64 0, 1\n`
 /// Two-line block. Sibling of `mirSomeAggregateLines` for the
 /// "build a None value" surface — `bytes.get` / `list.find` /
 /// `map.get` phi-merge sites where the two arms produce the value
 /// shape (Some/None) rather than storing into a slot directly. The
-/// caller phi-merges Some/None into a single Option<T>.
+/// None tag is 1 because the stdlib `option.osty` declares the
+/// variants as `Some(T), None` (Some=0, None=1). The caller
+/// phi-merges Some/None into a single Option<T>.
 pub fn mirNoneAggregateLines(stepReg: String, valueReg: String, optLLVM: String) -> String {
-    mirInsertValueAggLine(stepReg, optLLVM, "undef", "i64", "0", "0") +
+    mirInsertValueAggLine(stepReg, optLLVM, "undef", "i64", "1", "0") +
     mirInsertValueAggLine(valueReg, optLLVM, stepReg, "i64", "0", "1")
 }
 
 /// mirOkAggregateLines renders the canonical Ok(payload) two-
-/// insertvalue construction.
-/// Matches enum declaration order: Result declares Ok first (idx 0),
-/// Err second (idx 1). Uses mirDiscriminantOk() which returns "0".
+/// insertvalue construction. Matches enum declaration order: Result
+/// declares Ok first (idx 0), Err second (idx 1). Uses
+/// mirDiscriminantOk() which returns "0".
 pub fn mirOkAggregateLines(stepReg: String, valueReg: String, resultLLVM: String, payloadI64: String) -> String {
     mirInsertValueAggLine(stepReg, resultLLVM, "undef", "i64", mirDiscriminantOk(), "0") +
     mirInsertValueAggLine(valueReg, resultLLVM, stepReg, "i64", payloadI64, "1")
@@ -4003,10 +4013,9 @@ pub fn mirOkAggregateLines(stepReg: String, valueReg: String, resultLLVM: String
 
 /// mirErrAggregateLines renders the canonical Err(payload) two-
 /// insertvalue construction:
-///   `  <step> = insertvalue <resultTy> undef, i64 0, 0\n`
+///   `  <step> = insertvalue <resultTy> undef, i64 1, 0\n`
 ///   `  <value> = insertvalue <resultTy> <step>, i64 <payload>, 1\n`
 /// Sibling of `mirOkAggregateLines` for the Err arm of Result.
-/// Note that for Result, disc=0 is Err (not None as in Option) —
 /// Matches enum declaration order: Err is second (idx 1).
 /// Uses mirDiscriminantErr() which returns "1".
 pub fn mirErrAggregateLines(stepReg: String, valueReg: String, resultLLVM: String, payloadI64: String) -> String {
@@ -9051,15 +9060,18 @@ pub fn mirElementKindStruct() -> String {
 }
 
 /// §6 LLVM-text discriminant / variant tag constants.
+///
+/// These match the stdlib variant declaration order — `option.osty`
+/// declares `Some(T), None` (Some=0, None=1) and `result.osty`
+/// declares `Ok(T), Err(E)` (Ok=0, Err=1). The MIR-side
+/// `variantIndexByName` (in `internal/mir/lower.go`) hardcodes the
+/// same mapping; backend tag emission must agree or match-arm
+/// dispatch goes through the wrong body.
 
-/// mirDiscriminantNone returns `0` — Option's None discriminant.
-pub fn mirDiscriminantNone() -> String {
-    "0"
-}
-
-/// mirDiscriminantSome returns `1` — Option's Some discriminant.
+/// mirDiscriminantSome returns `0` — Option's Some discriminant
+/// (matches enum declaration order in `option.osty`).
 pub fn mirDiscriminantSome() -> String {
-    "1"
+    "0"
 }
 
 /// mirDiscriminantOk returns `0` — Result's Ok discriminant (matches enum declaration order).
@@ -9068,6 +9080,21 @@ pub fn mirDiscriminantOk() -> String {
 }
 
 /// mirDiscriminantErr returns `1` — Result's Err discriminant (matches enum declaration order).
+pub fn mirDiscriminantErr() -> String {
+    "1"
+}
+
+/// mirDiscriminantNone returns `1` — Option's None discriminant.
+pub fn mirDiscriminantNone() -> String {
+    "1"
+}
+
+/// mirDiscriminantOk returns `0` — Result's Ok discriminant.
+pub fn mirDiscriminantOk() -> String {
+    "0"
+}
+
+/// mirDiscriminantErr returns `1` — Result's Err discriminant.
 pub fn mirDiscriminantErr() -> String {
     "1"
 }
