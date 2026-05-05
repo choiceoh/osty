@@ -858,6 +858,15 @@ func (*ByteLit) exprNode()    {}
 func (l *ByteLit) At() Span   { return l.SpanV }
 func (l *ByteLit) Type() Type { return TByte }
 
+type BytesLit struct {
+	Value string
+	SpanV Span
+}
+
+func (*BytesLit) exprNode()    {}
+func (l *BytesLit) At() Span   { return l.SpanV }
+func (l *BytesLit) Type() Type { return TBytes }
+
 // StringLit is a possibly interpolated string literal. Parts alternate
 // literal text and inner expressions; backends format the whole thing
 // via their own formatter.

@@ -288,6 +288,9 @@ func constValueEqual(a, b Const) bool {
 	case *ByteConst:
 		y, ok := b.(*ByteConst)
 		return ok && x.Value == y.Value
+	case *BytesConst:
+		y, ok := b.(*BytesConst)
+		return ok && x.Value == y.Value
 	case *UnitConst:
 		_, ok := b.(*UnitConst)
 		return ok

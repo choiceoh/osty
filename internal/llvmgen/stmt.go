@@ -1239,7 +1239,7 @@ func (g *generator) emitReturn(stmt *ast.ReturnStmt) error {
 
 func (g *generator) emitExprStmt(expr ast.Expr) error {
 	switch expr.(type) {
-	case *ast.BoolLit, *ast.IntLit, *ast.FloatLit, *ast.StringLit, *ast.CharLit, *ast.ByteLit:
+	case *ast.BoolLit, *ast.IntLit, *ast.FloatLit, *ast.StringLit, *ast.CharLit, *ast.ByteLit, *ast.BytesLit:
 		// Pure literal statements are semantic no-ops in statement position.
 		return nil
 	}

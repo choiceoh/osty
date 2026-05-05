@@ -2688,7 +2688,7 @@ func frontendLexStream(source string) *FrontLexStream {
 					}
 					skip = _cur82 - _rhs83
 				}()
-			} else if unit == "b" && next == "'" {
+			} else if unit == "b" && (next == "'" || next == "\"") {
 				// Osty: /tmp/selfhost_merged.osty:1245:17
 				scan := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontByte{}))
 				_ = scan
@@ -3663,8 +3663,13 @@ func frontStringScanHitNewline(units []string, start int, unitCount int, kind Fr
 		}()
 	}
 	// Osty: /tmp/selfhost_merged.osty:1702:5
-	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) {
-		// Osty: /tmp/selfhost_merged.osty:1703:9
+	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) {
+		if frontUnitAt(units, start+1) == "\"" {
+			close = "\""
+		} else {
+			close = "'"
+		}
+	} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) {
 		close = "'"
 	}
 	// Osty: /tmp/selfhost_merged.osty:1705:5
@@ -5073,7 +5078,7 @@ func frontInterpolationTokenScan(units []string, start int, limit int) *FrontSca
 	return func() *FrontScanResult {
 		if unit == "r" && next == "\"" {
 			return frontStringLikeScan(units, start, limit, FrontTokenKind(&FrontTokenKind_FrontRawString{}))
-		} else if unit == "b" && next == "'" {
+		} else if unit == "b" && (next == "'" || next == "\"") {
 			return frontStringLikeScan(units, start, limit, FrontTokenKind(&FrontTokenKind_FrontByte{}))
 		} else if unit == "\"" {
 			return frontStringLikeScan(units, start, limit, FrontTokenKind(&FrontTokenKind_FrontString{}))
@@ -5825,7 +5830,7 @@ func frontendLexSummary(source string) *FrontLexSummary {
 					}
 					skip = _cur422 - _rhs423
 				}()
-			} else if unit == "b" && next == "'" {
+			} else if unit == "b" && (next == "'" || next == "\"") {
 				// Osty: /tmp/selfhost_merged.osty:2457:17
 				atFileStart = false
 				// Osty: /tmp/selfhost_merged.osty:2458:17
@@ -6515,7 +6520,11 @@ func frontStringLikeScan(units []string, start int, unitCount int, kind FrontTok
 			contentStart = _cur494 + _rhs495
 		}()
 		// Osty: /tmp/selfhost_merged.osty:2692:9
-		close = "'"
+		if frontUnitAt(units, start+1) == "\"" {
+			close = "\""
+		} else {
+			close = "'"
+		}
 	} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) {
 		// Osty: /tmp/selfhost_merged.osty:2694:9
 		close = "'"
@@ -6709,7 +6718,7 @@ func frontStringLikeScan(units []string, start int, unitCount int, kind FrontTok
 					}
 					skip = _cur520 - _rhs521
 				}()
-			} else if unit == "b" && next == "'" {
+			} else if unit == "b" && (next == "'" || next == "\"") {
 				// Osty: /tmp/selfhost_merged.osty:2736:17
 				inner := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontByte{}))
 				_ = inner
@@ -18499,6 +18508,10 @@ type AstNodeKind_AstNByteLit struct{ _ref byte }
 
 func (AstNodeKind_AstNByteLit) _isAstNodeKind() {}
 
+type AstNodeKind_AstNBytesLit struct{ _ref byte }
+
+func (AstNodeKind_AstNBytesLit) _isAstNodeKind() {}
+
 type AstNodeKind_AstNBinary struct{ _ref byte }
 
 func (AstNodeKind_AstNBinary) _isAstNodeKind() {}
@@ -19244,7 +19257,7 @@ func opIsLiteralDefaultAt(p *OstyParser, idx int) bool {
 		return opIsLiteralDefaultAt(p, node.left)
 	}
 	// Osty: /tmp/selfhost_merged.osty:7189:5
-	if ostyEqual(k, AstNodeKind(&AstNodeKind_AstNIntLit{})) || ostyEqual(k, AstNodeKind(&AstNodeKind_AstNFloatLit{})) || ostyEqual(k, AstNodeKind(&AstNodeKind_AstNStringLit{})) || ostyEqual(k, AstNodeKind(&AstNodeKind_AstNCharLit{})) || ostyEqual(k, AstNodeKind(&AstNodeKind_AstNByteLit{})) || ostyEqual(k, AstNodeKind(&AstNodeKind_AstNBoolLit{})) {
+	if ostyEqual(k, AstNodeKind(&AstNodeKind_AstNIntLit{})) || ostyEqual(k, AstNodeKind(&AstNodeKind_AstNFloatLit{})) || ostyEqual(k, AstNodeKind(&AstNodeKind_AstNStringLit{})) || ostyEqual(k, AstNodeKind(&AstNodeKind_AstNCharLit{})) || ostyEqual(k, AstNodeKind(&AstNodeKind_AstNByteLit{})) || ostyEqual(k, AstNodeKind(&AstNodeKind_AstNBytesLit{})) || ostyEqual(k, AstNodeKind(&AstNodeKind_AstNBoolLit{})) {
 		// Osty: /tmp/selfhost_merged.osty:7190:9
 		return true
 	}
@@ -19934,6 +19947,9 @@ func opParsePrimary(p *OstyParser) int {
 		// Osty: /tmp/selfhost_merged.osty:7501:5
 		n := emptyAstNode(AstNodeKind(&AstNodeKind_AstNByteLit{}))
 		_ = n
+		if strings.HasPrefix(tok.text, "b\"") || strings.HasPrefix(tok.text, "B\"") {
+			n = emptyAstNode(AstNodeKind(&AstNodeKind_AstNBytesLit{}))
+		}
 		// Osty: /tmp/selfhost_merged.osty:7502:6
 		n.text = tok.text
 		// Osty: /tmp/selfhost_merged.osty:7503:6
@@ -20852,7 +20868,7 @@ func opParseMatchExpr(p *OstyParser) int {
 		// Osty: /tmp/selfhost_merged.osty:7772:9
 		_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontArrow{}))
 		// Osty: /tmp/selfhost_merged.osty:7773:9
-		body := opParseExpr(p)
+		body := opParseMatchArmBody(p)
 		_ = body
 		// Osty: /tmp/selfhost_merged.osty:7774:9
 		armNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNMatchArm{}))
@@ -20893,6 +20909,42 @@ func opParseMatchExpr(p *OstyParser) int {
 	// Osty: /tmp/selfhost_merged.osty:7790:6
 	n.end = p.pos
 	return opAddNode(p, n)
+}
+
+func opParseMatchArmBody(p *OstyParser) int {
+	body := opParseExpr(p)
+	next := opPeek(p)
+	if !(frontIsAssignOp(next.kind)) {
+		return body
+	}
+
+	_ = opAdvance(p)
+	value := opParseExpr(p)
+	bodyNode := astArenaNodeAt(p.arena, body)
+	stmtIdx := -1
+	if ostyEqual(next.kind, FrontTokenKind(&FrontTokenKind_FrontAssign{})) {
+		lowered := opLowerAppendAssignmentStmt(p, body, value, bodyNode.start, p.pos)
+		if lowered >= 0 {
+			stmtIdx = lowered
+		}
+	}
+	if stmtIdx < 0 {
+		assign := emptyAstNode(AstNodeKind(&AstNodeKind_AstNAssign{}))
+		assign.left = body
+		assign.right = value
+		assign.op = next.kind
+		assign.start = bodyNode.start
+		assign.end = p.pos
+		stmtIdx = opAddNode(p, assign)
+	}
+
+	stmts := make([]int, 0, 1)
+	stmts = opAppendCanonicalStmt(p, stmts, stmtIdx)
+	block := emptyAstNode(AstNodeKind(&AstNodeKind_AstNBlock{}))
+	block.children = stmts
+	block.start = bodyNode.start
+	block.end = p.pos
+	return opAddNode(p, block)
 }
 
 // Osty: /tmp/selfhost_merged.osty:7794:1
@@ -23467,7 +23519,7 @@ func opParseStructDecl(p *OstyParser, isPub bool, anns []int) int {
 		if opAt(p, FrontTokenKind(&FrontTokenKind_FrontFn{})) {
 			// Osty: /tmp/selfhost_merged.osty:8985:31
 			func() struct{} { members = append(members, opParseFnDecl(p, memberPub, memberAnns)); return struct{}{} }()
-		} else if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) {
+		} else if opAt(p, FrontTokenKind(&FrontTokenKind_FrontIdent{})) || opAt(p, FrontTokenKind(&FrontTokenKind_FrontType{})) {
 			// Osty: /tmp/selfhost_merged.osty:8986:13
 			fs := p.pos
 			_ = fs
@@ -24310,6 +24362,9 @@ func astNodeKindName(kind AstNodeKind) string {
 		}
 		if func() bool { _, ok := _m1807.(*AstNodeKind_AstNByteLit); return ok }() {
 			return "ByteLit"
+		}
+		if func() bool { _, ok := _m1807.(*AstNodeKind_AstNBytesLit); return ok }() {
+			return "BytesLit"
 		}
 		if func() bool { _, ok := _m1807.(*AstNodeKind_AstNBinary); return ok }() {
 			return "Binary"
@@ -25307,6 +25362,16 @@ func astCountSummary(file *AstFile) *FrontParseSummary {
 						panic("integer overflow")
 					}
 					return _p1913 + _rhs1914
+				}()
+			}
+			if func() bool { _, ok := _m1810.(*AstNodeKind_AstNBytesLit); return ok }() {
+				s.literals = func() int {
+					var _p1913b int = s.literals
+					var _rhs1914b int = 1
+					if _rhs1914b > 0 && _p1913b > math.MaxInt-_rhs1914b {
+						panic("integer overflow")
+					}
+					return _p1913b + _rhs1914b
 				}()
 			}
 			if func() bool { _, ok := _m1810.(*AstNodeKind_AstNError); return ok }() {
@@ -26320,6 +26385,9 @@ func ostyAstExprBare(f *OstyAstFormatter, node *AstNode) string {
 			return node.text
 		}
 		if func() bool { _, ok := _m1943.(*AstNodeKind_AstNByteLit); return ok }() {
+			return node.text
+		}
+		if func() bool { _, ok := _m1943.(*AstNodeKind_AstNBytesLit); return ok }() {
 			return node.text
 		}
 		if func() bool { _, ok := _m1943.(*AstNodeKind_AstNUnary); return ok }() {
@@ -30588,6 +30656,10 @@ type CoreKind_CkByteLit struct{ _ref byte }
 
 func (CoreKind_CkByteLit) _isCoreKind() {}
 
+type CoreKind_CkBytesLit struct{ _ref byte }
+
+func (CoreKind_CkBytesLit) _isCoreKind() {}
+
 type CoreKind_CkStringLit struct{ _ref byte }
 
 func (CoreKind_CkStringLit) _isCoreKind() {}
@@ -31142,6 +31214,16 @@ func coreByteLit(arena *CoreArena, byte int, ty int, start int, end int) int {
 	// Osty: /tmp/selfhost_merged.osty:12722:6
 	n.start = start
 	// Osty: /tmp/selfhost_merged.osty:12723:6
+	n.end = end
+	return coreArenaAdd(arena, n)
+}
+
+func coreBytesLit(arena *CoreArena, text string, ty int, start int, end int) int {
+	n := emptyCoreNode(CoreKind(&CoreKind_CkBytesLit{}))
+	_ = n
+	n.text = text
+	n.ty = ty
+	n.start = start
 	n.end = end
 	return coreArenaAdd(arena, n)
 }
@@ -32907,6 +32989,9 @@ func coreKindName(kind CoreKind) string {
 		if func() bool { _, ok := _m2039.(*CoreKind_CkByteLit); return ok }() {
 			return "ByteLit"
 		}
+		if func() bool { _, ok := _m2039.(*CoreKind_CkBytesLit); return ok }() {
+			return "BytesLit"
+		}
 		if func() bool { _, ok := _m2039.(*CoreKind_CkStringLit); return ok }() {
 			return "StringLit"
 		}
@@ -33227,6 +33312,9 @@ func corePrintNodeBody(arena *CoreArena, tys *TyArena, node *CoreNode, depth int
 		}
 		if func() bool { _, ok := _m2040.(*CoreKind_CkByteLit); return ok }() {
 			return fmt.Sprintf("b#%s", ostyToString(node.value))
+		}
+		if func() bool { _, ok := _m2040.(*CoreKind_CkBytesLit); return ok }() {
+			return fmt.Sprintf("b\"%s\"", ostyToString(node.text))
 		}
 		if func() bool { _, ok := _m2040.(*CoreKind_CkStringLit); return ok }() {
 			return fmt.Sprintf("\"%s\"", ostyToString(node.text))
@@ -38227,6 +38315,9 @@ func elabInferImpl(cx *ElabCx, idx int) *ElabResult {
 		if func() bool { _, ok := _m2175.(*AstNodeKind_AstNByteLit); return ok }() {
 			return elabInferByteLit(cx, node)
 		}
+		if func() bool { _, ok := _m2175.(*AstNodeKind_AstNBytesLit); return ok }() {
+			return elabInferBytesLit(cx, node)
+		}
 		if func() bool { _, ok := _m2175.(*AstNodeKind_AstNIdent); return ok }() {
 			return elabInferIdent(cx, node)
 		}
@@ -38435,6 +38526,9 @@ func elabPropagateExpectedToVariantIdent(cx *ElabCx, idx int, inferred int, expe
 	// Osty: /tmp/selfhost_merged.osty:17888:5
 	inferredResolved := checkResolveAliasDeep(cx.env, inferred)
 	_ = inferredResolved
+	if ostyEqual(tyKindAt(tys, inferredResolved), TyKind(&TyKind_TkOptional{})) {
+		inferredResolved = tyNamed(tys, "Option", []int{tyInnerAt(tys, inferredResolved)})
+	}
 	// Osty: /tmp/selfhost_merged.osty:17889:5
 	expectedResolved := checkResolveAliasDeep(cx.env, expected)
 	_ = expectedResolved
@@ -38547,6 +38641,12 @@ func elabInferByteLit(cx *ElabCx, node *AstNode) *ElabResult {
 	// Osty: /tmp/selfhost_merged.osty:17956:5
 	coreIdx := coreByteLit(cx.core, 0, ty, node.start, node.end)
 	_ = coreIdx
+	return &ElabResult{node: coreIdx, ty: ty}
+}
+
+func elabInferBytesLit(cx *ElabCx, node *AstNode) *ElabResult {
+	ty := tBytes(cx.env.tys)
+	coreIdx := coreBytesLit(cx.core, node.text, ty, node.start, node.end)
 	return &ElabResult{node: coreIdx, ty: ty}
 }
 
@@ -39875,6 +39975,9 @@ func astIsExprKindAt(ast *AstFile, idx int) bool {
 			return true
 		}
 		if func() bool { _, ok := _m2189.(*AstNodeKind_AstNByteLit); return ok }() {
+			return true
+		}
+		if func() bool { _, ok := _m2189.(*AstNodeKind_AstNBytesLit); return ok }() {
 			return true
 		}
 		if func() bool { _, ok := _m2189.(*AstNodeKind_AstNIdent); return ok }() {
@@ -41572,6 +41675,9 @@ func elabInferMethodCall(cx *ElabCx, callNode *AstNode, fieldNode *AstNode, expe
 	_ = sig
 	// Osty: /tmp/selfhost_merged.osty:19723:5
 	if sig.name == "" {
+		if fieldFnResult := elabFieldFnCallFallback(cx, recv.node, lookupRecvTy, ownerName, methodName, callNode, fieldNode, isOptionalChain); fieldFnResult != nil {
+			return fieldFnResult
+		}
 		// Osty: /tmp/selfhost_merged.osty:19724:9
 		hint := diagDidYouMean(checkSuggestSimilar(checkMethodNamesForReceiver(cx.env, lookupRecvTy, ownerName), methodName))
 		_ = hint
@@ -42476,6 +42582,60 @@ func elabNullaryMethodFallback(cx *ElabCx, recvNode int, owner, fieldName string
 	resultTy := elabWrapOptionalChain(cx, isOptionalChain, fnSig.retTy)
 	coreIdx := coreMethodCall(cx.core, recvNode, fieldName, owner, make([]int, 0, 1), make([]int, 0, 1), resultTy, start, end)
 	return &ElabResult{node: coreIdx, ty: resultTy}
+}
+
+// elabFieldFnCallFallback handles the case where `obj.field(args)` is
+// parsed as a method call but no method named `field` exists on the
+// receiver. When the receiver is a struct (or named type) that has a
+// field named `field` whose type is a function, the call desugars into
+// a field access followed by a function-value call. This matches the
+// intuition that `route.handler(req, params)` should work when
+// `handler` is a `RouteHandler` field on `Route`.
+//
+// Returns nil when the fallback does not apply, so the caller can
+// emit its E0703 diagnostic as before.
+func elabFieldFnCallFallback(cx *ElabCx, recvNode int, recvTy int, ownerName string, fieldName string, callNode *AstNode, fieldNode *AstNode, isOptionalChain bool) *ElabResult {
+	if ownerName == "" {
+		return nil
+	}
+	resolvedRecv := checkResolveAliasDeep(cx.env, recvTy)
+	if !ostyEqual(tyKindAt(cx.env.tys, resolvedRecv), TyKind(&TyKind_TkNamed{})) {
+		return nil
+	}
+	fieldSig := checkLookupField(cx.env, ownerName, fieldName)
+	if fieldSig.name == "" {
+		return nil
+	}
+	typeSig := checkLookupType(cx.env, ownerName)
+	ownerArgs := tyArgsAt(cx.env.tys, resolvedRecv)
+	var fieldTy int
+	if checkStringListLenHelper(typeSig.generics) == checkIntListLenHelper(ownerArgs) {
+		fieldTy = checkSubstituteTy(cx.env, fieldSig.ty, typeSig.generics, ownerArgs)
+	} else {
+		fieldTy = fieldSig.ty
+	}
+	resolvedFieldTy := checkResolveAliasDeep(cx.env, fieldTy)
+	if !ostyEqual(tyKindAt(cx.env.tys, resolvedFieldTy), TyKind(&TyKind_TkFn{})) {
+		return nil
+	}
+	paramTys := tyArgsAt(cx.env.tys, resolvedFieldTy)
+	retTy := tyRetAt(cx.env.tys, resolvedFieldTy)
+	resultFieldTy := elabWrapOptionalChain(cx, isOptionalChain, fieldTy)
+	coreFieldNode := coreField(cx.core, recvNode, fieldName, resultFieldTy, fieldNode.start, fieldNode.end)
+	argIdxs := callNode.children
+	var coreArgs []int
+	for i, argIdx := range argIdxs {
+		if i < checkIntListLenHelper(paramTys) {
+			r := elabCheck(cx, argIdx, checkIntListAt(paramTys, i))
+			coreArgs = append(coreArgs, r.node)
+		} else {
+			r := elabInfer(cx, argIdx)
+			coreArgs = append(coreArgs, r.node)
+		}
+	}
+	resultRetTy := elabWrapOptionalChain(cx, isOptionalChain, retTy)
+	coreCallNode := coreCall(cx.core, coreFieldNode, coreArgs, make([]int, 0, 1), resultRetTy, callNode.start, callNode.end)
+	return &ElabResult{node: coreCallNode, ty: resultRetTy}
 }
 
 // Osty: /tmp/selfhost_merged.osty:20265:1
@@ -49224,6 +49384,9 @@ func typedExprKindNameAt(ast *AstFile, idx int) string {
 			return astNodeKindName(node.kind)
 		}
 		if func() bool { _, ok := _m2328.(*AstNodeKind_AstNByteLit); return ok }() {
+			return astNodeKindName(node.kind)
+		}
+		if func() bool { _, ok := _m2328.(*AstNodeKind_AstNBytesLit); return ok }() {
 			return astNodeKindName(node.kind)
 		}
 		if func() bool { _, ok := _m2328.(*AstNodeKind_AstNIdent); return ok }() {
@@ -58794,7 +58957,7 @@ func selfLintAstExprsEqual(file *AstFile, leftIdx int, rightIdx int, resolved *S
 		return left.flags == right.flags
 	}
 	// Osty: /tmp/selfhost_merged.osty:31193:5
-	if ostyEqual(left.kind, AstNodeKind(&AstNodeKind_AstNIntLit{})) || ostyEqual(left.kind, AstNodeKind(&AstNodeKind_AstNFloatLit{})) || ostyEqual(left.kind, AstNodeKind(&AstNodeKind_AstNCharLit{})) || ostyEqual(left.kind, AstNodeKind(&AstNodeKind_AstNByteLit{})) {
+	if ostyEqual(left.kind, AstNodeKind(&AstNodeKind_AstNIntLit{})) || ostyEqual(left.kind, AstNodeKind(&AstNodeKind_AstNFloatLit{})) || ostyEqual(left.kind, AstNodeKind(&AstNodeKind_AstNCharLit{})) || ostyEqual(left.kind, AstNodeKind(&AstNodeKind_AstNByteLit{})) || ostyEqual(left.kind, AstNodeKind(&AstNodeKind_AstNBytesLit{})) {
 		// Osty: /tmp/selfhost_merged.osty:31194:9
 		return left.text == right.text
 	}
@@ -65465,6 +65628,9 @@ func inspectRuleForKind(kind string) string {
 		// Osty: /tmp/selfhost_merged.osty:35071:32
 		return "LIT-BYTE"
 	}
+	if kind == "AstNBytesLit" {
+		return "LIT-BYTES"
+	}
 	// Osty: /tmp/selfhost_merged.osty:35072:5
 	if kind == "AstNIdent" {
 		// Osty: /tmp/selfhost_merged.osty:35072:30
@@ -68854,6 +69020,10 @@ func astLowerExpr(arena *AstArena, toks []astbridge.Token, idx int) astbridge.Ex
 		// Osty: /tmp/selfhost_merged.osty:36756:9
 		return astbridge.ByteLitExpr(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerDecodedLiteral(astbridge.TokenValue(astLowerTok(toks, n.start))))
 	}
+	// Osty: bytes literal
+	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNBytesLit{})) {
+		return astbridge.BytesLitExpr(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerDecodedLiteral(astbridge.TokenValue(astLowerTok(toks, n.start))))
+	}
 	// Osty: /tmp/selfhost_merged.osty:36758:5
 	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNStringLit{})) {
 		// Osty: /tmp/selfhost_merged.osty:36759:9
@@ -69336,7 +69506,7 @@ func astLowerPattern(arena *AstArena, toks []astbridge.Token, idx int) astbridge
 		return astLowerTuplePat(arena, toks, n)
 	}
 	// Osty: /tmp/selfhost_merged.osty:37032:5
-	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNIntLit{})) || ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNFloatLit{})) || ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNStringLit{})) || ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNCharLit{})) || ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNByteLit{})) || ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNBoolLit{})) {
+	if ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNIntLit{})) || ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNFloatLit{})) || ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNStringLit{})) || ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNCharLit{})) || ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNByteLit{})) || ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNBytesLit{})) || ostyEqual(n.kind, AstNodeKind(&AstNodeKind_AstNBoolLit{})) {
 		// Osty: /tmp/selfhost_merged.osty:37033:9
 		return astbridge.LiteralPatNode(astLowerNodePos(toks, n), astLowerNodeEnd(toks, n), astLowerExpr(arena, toks, idx))
 	}

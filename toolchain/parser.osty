@@ -12,6 +12,7 @@ pub enum AstNodeKind {
     AstNBoolLit,
     AstNCharLit,
     AstNByteLit,
+    AstNBytesLit,
     AstNBinary,
     AstNUnary,
     AstNCall,
@@ -407,7 +408,7 @@ fn opIsLiteralDefaultAt(p: OstyParser, idx: Int) -> Bool {
     let node = astArenaNodeAt(p.arena, idx)
     let k = node.kind
     if k == AstNParen { return opIsLiteralDefaultAt(p, node.left) }
-    if k == AstNIntLit || k == AstNFloatLit || k == AstNStringLit || k == AstNCharLit || k == AstNByteLit || k == AstNBoolLit {
+    if k == AstNIntLit || k == AstNFloatLit || k == AstNStringLit || k == AstNCharLit || k == AstNByteLit || k == AstNBytesLit || k == AstNBoolLit {
         return true
     }
     if k == AstNUnary && node.op == FrontMinus {
@@ -734,6 +735,9 @@ fn opParsePrimary(p: OstyParser) -> Int {
     return opAddNode(p, n) }
     if tok.kind == FrontByte { opAdvance(p)
     let mut n = emptyAstNode(AstNByteLit)
+    if strings.hasPrefix(tok.text, "b\"") || strings.hasPrefix(tok.text, "B\"") {
+        n = emptyAstNode(AstNBytesLit)
+    }
     n.text = tok.text
     n.start = start
     n.end = p.pos
@@ -1302,7 +1306,7 @@ fn opParseMatchExpr(p: OstyParser) -> Int {
             p.noStructLit = pv
         }
         let _ = opExpect(p, FrontArrow)
-        let body = opParseExpr(p)
+        let body = opParseMatchArmBody(p)
         let mut armNode = emptyAstNode(AstNMatchArm)
         armNode.left = pat
         armNode.right = body
@@ -1321,6 +1325,42 @@ fn opParseMatchExpr(p: OstyParser) -> Int {
     n.start = start
     n.end = p.pos
     opAddNode(p, n)
+}
+
+fn opParseMatchArmBody(p: OstyParser) -> Int {
+    let body = opParseExpr(p)
+    let next = opPeek(p)
+    if !(frontIsAssignOp(next.kind)) {
+        return body
+    }
+
+    let _ = opAdvance(p)
+    let value = opParseExpr(p)
+    let bodyNode = astArenaNodeAt(p.arena, body)
+    let mut stmtIdx = -1
+    if next.kind == FrontAssign {
+        let lowered = opLowerAppendAssignmentStmt(p, body, value, bodyNode.start, p.pos)
+        if lowered >= 0 {
+            stmtIdx = lowered
+        }
+    }
+    if stmtIdx < 0 {
+        let mut assign = emptyAstNode(AstNAssign)
+        assign.left = body
+        assign.right = value
+        assign.op = next.kind
+        assign.start = bodyNode.start
+        assign.end = p.pos
+        stmtIdx = opAddNode(p, assign)
+    }
+
+    let mut stmts: List<Int> = []
+    stmts = opAppendCanonicalStmt(p, stmts, stmtIdx)
+    let mut block = emptyAstNode(AstNBlock)
+    block.children = stmts
+    block.start = bodyNode.start
+    block.end = p.pos
+    opAddNode(p, block)
 }
 
 fn opParseClosure(p: OstyParser) -> Int {
@@ -2536,7 +2576,7 @@ fn opParseStructDecl(p: OstyParser, isPub: Bool, anns: List<Int>) -> Int {
         let memberAnns = opParseAnnotations(p)
         let mut memberPub = false
         if opEat(p, FrontPub) { memberPub = true }
-        if opAt(p, FrontFn) { members.push(opParseFnDecl(p, memberPub, memberAnns)) } else if opAt(p, FrontIdent) {
+        if opAt(p, FrontFn) { members.push(opParseFnDecl(p, memberPub, memberAnns)) } else if opAt(p, FrontIdent) || opAt(p, FrontType) {
             let fs = p.pos
             let fn_ = opAdvance(p).text
             let _ = opExpect(p, FrontColon)
@@ -3001,7 +3041,7 @@ fn astPPNode(arena: AstArena, idx: Int, depth: Int, lines: List<String>) -> List
 pub fn astNodeKindName(kind: AstNodeKind) -> String {
     match kind {
         AstNIdent -> "Ident", AstNIntLit -> "IntLit", AstNFloatLit -> "FloatLit", AstNStringLit -> "StringLit",
-        AstNBoolLit -> "BoolLit", AstNCharLit -> "CharLit", AstNByteLit -> "ByteLit", AstNBinary -> "Binary",
+        AstNBoolLit -> "BoolLit", AstNCharLit -> "CharLit", AstNByteLit -> "ByteLit", AstNBytesLit -> "BytesLit", AstNBinary -> "Binary",
         AstNUnary -> "Unary", AstNCall -> "Call", AstNField -> "Field", AstNIndex -> "Index", AstNRange -> "Range",
         AstNIf -> "If", AstNMatch -> "Match", AstNClosure -> "Closure", AstNList -> "List", AstNTuple -> "Tuple",
         AstNMap -> "Map", AstNStructLit -> "StructLit", AstNBlock -> "Block", AstNParen -> "Paren",
@@ -3126,6 +3166,7 @@ pub fn astCountSummary(file: AstFile) -> FrontParseSummary {
             AstNBoolLit -> { s.literals = s.literals + 1 },
             AstNCharLit -> { s.literals = s.literals + 1 },
             AstNByteLit -> { s.literals = s.literals + 1 },
+            AstNBytesLit -> { s.literals = s.literals + 1 },
             AstNError -> { s.errors = s.errors + 1 },
             _ -> { let _ = n },
         }

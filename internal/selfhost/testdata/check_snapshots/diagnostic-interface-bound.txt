@@ -6,21 +6,21 @@ typedNodes
   id=typed-node:3c357a296 nodeKey=node:9440cf586cde53e typeKey=type:27afd946bb3613d node=14 nodeId=14 typeId=17 kind=Call span=122:124 type=String
   id=typed-node:f9acd80ba nodeKey=node:e4abda096343b5c typeKey=type:27afd946bb3613d node=16 nodeId=16 typeId=17 kind=Block span=110:126 type=String
   id=typed-node:22c21819d nodeKey=node:09faed5a8f0e6ee typeKey=type:0cbe92b642f4e2f node=21 nodeId=21 typeId=2 kind=IntLit span=172:174 type=Int
-  id=typed-node:ef9b548ba nodeKey=node:5bfa5a210ff801e typeKey=type:addc461d1f10d07 node=23 nodeId=23 typeId=135 kind=StructLit span=165:176 type=User
-  id=typed-node:bb04ebdbc nodeKey=node:8ff867d22716d38 typeKey=type:addc461d1f10d07 node=28 nodeId=28 typeId=135 kind=Ident span=209:213 type=User
+  id=typed-node:ef9b548ba nodeKey=node:5bfa5a210ff801e typeKey=type:addc461d1f10d07 node=23 nodeId=23 typeId=137 kind=StructLit span=165:176 type=User
+  id=typed-node:bb04ebdbc nodeKey=node:8ff867d22716d38 typeKey=type:addc461d1f10d07 node=28 nodeId=28 typeId=137 kind=Ident span=209:213 type=User
   id=typed-node:985a6b5a7 nodeKey=node:3cc4b7378e4d535 typeKey=type:27afd946bb3613d node=29 nodeId=29 typeId=17 kind=Call span=208:214 type=String
   id=typed-node:eb39bd0b2 nodeKey=node:598cc8b8332a80c typeKey=type:520c4bf26e2fabc node=31 nodeId=31 typeId=19 kind=Block span=137:216 type=()
 bindings
-  id=binding:ddf28dba2fe5 nodeKey=node:beda8c03414007c typeKey=type:addc461d1f10d07 bindingId=0 node=18 nodeId=18 name=user mutable=false typeId=135 span=147:151 type=User
+  id=binding:ddf28dba2fe5 nodeKey=node:beda8c03414007c typeKey=type:addc461d1f10d07 bindingId=0 node=18 nodeId=18 name=user mutable=false typeId=137 span=147:151 type=User
   id=binding:0b0c94771576 nodeKey=node:7abebfc4521a235 typeKey=type:27afd946bb3613d bindingId=1 node=25 nodeId=25 name=label mutable=false typeId=17 span=185:190 type=String
 symbols
-  id=symbol:89f31eaf230bd nodeKey=node:9ffc38d169fb3d4 typeKey=type:65086d14233556d symbolId=0 node=3 nodeId=3 kind=interface name=Named owner= typeId=133 span=0:43 type=Named
-  id=symbol:f5ec71b67ce18 nodeKey=node:571a54f97380c51 typeKey=type:1e90da063ee133a symbolId=1 node=2 nodeId=2 kind=fn name=name owner=Named typeId=134 span=18:41 type=fn() -> String
-  id=symbol:0ccf810404e77 nodeKey=node:8c94107f83ab34c typeKey=type:addc461d1f10d07 symbolId=2 node=6 nodeId=6 kind=struct name=User owner= typeId=135 span=44:68 type=User
+  id=symbol:89f31eaf230bd nodeKey=node:9ffc38d169fb3d4 typeKey=type:65086d14233556d symbolId=0 node=3 nodeId=3 kind=interface name=Named owner= typeId=135 span=0:43 type=Named
+  id=symbol:f5ec71b67ce18 nodeKey=node:571a54f97380c51 typeKey=type:1e90da063ee133a symbolId=1 node=2 nodeId=2 kind=fn name=name owner=Named typeId=136 span=18:41 type=fn() -> String
+  id=symbol:0ccf810404e77 nodeKey=node:8c94107f83ab34c typeKey=type:addc461d1f10d07 symbolId=2 node=6 nodeId=6 kind=struct name=User owner= typeId=137 span=44:68 type=User
   id=symbol:01d01384e52f6 nodeKey=node:48daa8c06dff3ae typeKey=type:0cbe92b642f4e2f symbolId=3 node=5 nodeId=5 kind=field name=age owner=User typeId=2 span=58:66 type=Int
-  id=symbol:0a9f88b56493a nodeKey=node:7a741eb7444e054 typeKey=type:943d867c4f1392a symbolId=4 node=17 nodeId=17 kind=fn name=display owner= typeId=136 span=69:126 type=fn(T) -> String
-  id=symbol:ecda378af8c7c nodeKey=node:cdcb78ae39bfed2 typeKey=type:b4f942e1ed0777f symbolId=5 node=32 nodeId=32 kind=fn name=main owner= typeId=137 span=127:216 type=fn() -> ()
+  id=symbol:0a9f88b56493a nodeKey=node:7a741eb7444e054 typeKey=type:943d867c4f1392a symbolId=4 node=17 nodeId=17 kind=fn name=display owner= typeId=138 span=69:126 type=fn(T) -> String
+  id=symbol:ecda378af8c7c nodeKey=node:cdcb78ae39bfed2 typeKey=type:b4f942e1ed0777f symbolId=5 node=32 nodeId=32 kind=fn name=main owner= typeId=139 span=127:216 type=fn() -> ()
 instantiations
-  id=instantiation:379f55 nodeKey=node:b34a4a91d02c6dd resultTypeKey=type:27afd946bb3613d instantiationId=0 node=29 nodeId=29 callee=display span=208:214 typeArgIds=[135] typeArgKeys=[type:addc461d1f10d07] typeArgs=[User] resultTypeId=17 resultType=String
+  id=instantiation:379f55 nodeKey=node:b34a4a91d02c6dd resultTypeKey=type:27afd946bb3613d instantiationId=0 node=29 nodeId=29 callee=display span=208:214 typeArgIds=[137] typeArgKeys=[type:addc461d1f10d07] typeArgs=[User] resultTypeId=17 resultType=String
 diagnostics
   code=E0749 severity=error span=208:214 line=6:32-6:38 message=type parameter `T` requires bound `Named`, but `User` does not satisfy it

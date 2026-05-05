@@ -245,6 +245,8 @@ func exprLiteralText(e Expr) string {
 		return "'" + string(e.Value) + "'"
 	case *ByteLit:
 		return "b'?'"
+	case *BytesLit:
+		return "b\"...\""
 	case *StringLit:
 		var sb strings.Builder
 		sb.WriteByte('"')
