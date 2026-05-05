@@ -52,7 +52,8 @@ PR #1405 가 in-process Go MIR emitter (`internal/llvmgen`) 를 제거한 뒤,
 | **A4** | 네트워크 fetcher — `<base>/<sha>-<triple>.json` manifest + binary 다운로드, SHA-256 검증 필수. `OSTY_SELF_REGISTRY_URL` / `OSTY_SELF_REGISTRY_OFFLINE` env var 게이트. `ResolveBinaryWithFetch` 가 캐시 miss 시 호출. | 17 tests (httptest server 기반) — **구현 완료** |
 | **A5** | `cmd/osty-native-lirproto` 가 `ResolveBinaryWithFetch` + `EnvFetcher()` 호출. `osty manifest-self` 서브커맨드 — 빌드된 binary → manifest JSON. `.github/workflows/build-osty-self.yml` 6개 triple matrix scaffold (manual dispatch). | manifest round-trip 4 tests + 기존 lirproto/selfhostcache 회귀 — **구현 완료** |
 | **A6** | Manifest signing — ed25519 detached sig (`<key>.json.sig`). `OSTY_SELF_TRUSTED_KEY` env var로 verify. `osty sign-self` / `osty sign-self genkey` 서브커맨드. CI workflow 가 `OSTY_SELF_SIGNING_KEY` secret 있을 때만 서명. | 14 unit tests (signing.go) + 4 CLI round-trip tests — **구현 완료** |
-| **A7** (이 PR) | `verify-self-rebuild --reuse-stage1` 가 selfhostcache 인식. `osty cache-self [--check\|--key\|--triple]` 서브커맨드 — 컨텐트-어드레스드 캐시 path/key 조회. cache hit 시 stage1 빌드 skip; fresh 빌드는 자동 promote. `--no-selfhostcache` 로 legacy mtime 캐시 fallback. | 7 cache-self CLI 단위 테스트 — **구현 완료** |
+| **A7** | `verify-self-rebuild --reuse-stage1` 가 selfhostcache 인식. `osty cache-self [--check\|--key\|--triple]` 서브커맨드 — 컨텐트-어드레스드 캐시 path/key 조회. cache hit 시 stage1 빌드 skip; fresh 빌드는 자동 promote. `--no-selfhostcache` 로 legacy mtime 캐시 fallback. | 7 cache-self CLI 단위 테스트 — **구현 완료** |
+| **A8** (이 PR) | 캐시 GC — `osty gc-self [--keep N] [--older-than DUR] [--dry-run]`. 현재 toolchain SHA 매치 entry 는 항상 보존, 나머지는 mtime 기준 LRU + age cutoff. `selfhostcache.{ListEntries, Plan, RunGC}` 공개 API. | 9 GC unit tests + 5 CLI tests — **구현 완료** |
 
 ## 4. Key 구성
 
