@@ -1,0 +1,21 @@
+// lib.osty — non-test source consumed by multi_file_test.osty.
+// Defines a pub fn and a pub struct so the test file in the same
+// package exercises cross-file symbol resolution + cross-file struct
+// layout under the native LLVM emit/link path.
+
+pub struct Point {
+    pub x: Int,
+    pub y: Int,
+}
+
+pub fn addInts(a: Int, b: Int) -> Int {
+    a + b
+}
+
+pub fn pointSum(p: Point) -> Int {
+    p.x + p.y
+}
+
+pub fn translate(p: Point, dx: Int, dy: Int) -> Point {
+    Point { x: p.x + dx, y: p.y + dy }
+}

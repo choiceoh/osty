@@ -1,0 +1,6 @@
+[package]
+name = "multi_file_e2e"
+version = "0.1.0"
+edition = "0.3"
+
+[dependencies]

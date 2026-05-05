@@ -298,9 +298,9 @@ func TestStage0SanitizesEmptyParamName(t *testing.T) {
 func TestStage0EmitsIntArithOps(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name   string
-		op     mir.BinaryOp
-		llvm   string
+		name string
+		op   mir.BinaryOp
+		llvm string
 	}{
 		{"add", mir.BinAdd, "add"},
 		{"sub", mir.BinSub, "sub"},

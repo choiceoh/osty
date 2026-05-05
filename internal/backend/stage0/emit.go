@@ -26,18 +26,20 @@ var ErrUnsupported = errors.New("stage0: MIR shape outside bootstrap subset")
 // order and emits the first that fits; otherwise ErrUnsupported:
 //
 //   - `fn main() {}` — single block, zero instructions, ReturnTerm.
+//
 //   - `fn name() -> T { value }` for T ∈ {Int, Bool} — single block,
 //     one AssignInstr writing a const / param-copy operand to the
 //     return local, ReturnTerm. Up to two Int / Bool parameters.
+//
 //   - `fn name(a, b: T) -> R { a OP b }` — single block, one
 //     AssignInstr writing a binary op to the return local, ReturnTerm.
 //     Each operand is independently a const literal or a CopyOp on
 //     one of the params (no projections). Operator families:
 //
-//       arithmetic Int×Int → Int : Add Sub Mul Div Mod
-//       comparison Int×Int → Bool: Eq Neq Lt Leq Gt Geq
-//       bitwise    Int×Int → Int : BitAnd BitOr BitXor Shl Shr
-//       logical    Bool×Bool→ Bool: And Or
+//     arithmetic Int×Int → Int : Add Sub Mul Div Mod
+//     comparison Int×Int → Bool: Eq Neq Lt Leq Gt Geq
+//     bitwise    Int×Int → Int : BitAnd BitOr BitXor Shl Shr
+//     logical    Bool×Bool→ Bool: And Or
 //
 // Anything else (multi-instruction, calls, control flow, non-Int/Bool
 // types, projections, …) declines so the next stage0 phase can pick
@@ -173,8 +175,8 @@ func scalarFromType(t mir.Type) scalarType {
 // a literal constant (int or bool) or a reference to a parameter local
 // (resolved to its position-indexed sanitised SSA name at emit time).
 type operandSrc struct {
-	kind   operandKind
-	intVal int64
+	kind    operandKind
+	intVal  int64
 	boolVal bool
 	paramID mir.LocalID
 }
