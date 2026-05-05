@@ -24,21 +24,21 @@ real program.
 | `loop { ... break value }` | value-returning unbounded loop | §4.4 |
 | `'label: for / loop ... break 'label` | labeled break/continue across nested loops | §4.4 |
 | `0..100 by 2` | range step (contextual `by`) | §4.4 |
-| `receiver { field: value }` | struct update shorthand (receiver-typed literal; equivalent to `Type { ..receiver, field: value }`) | §4.6 |
-| `f(x) \|y\| { body }` | trailing closure — last function-typed arg moves outside parentheses | §4.5 |
-| `err as? T` | downcast shortcut (equivalent to `err.downcast::<T>()`) | §4.9 |
+| `receiver { field: value }` | struct update shorthand (receiver-typed literal; equivalent to `Type { ..receiver, field: value }`) | §3.4 |
+| `f(x) \|y\| { body }` | trailing closure — last function-typed arg moves outside parentheses | §4.9 |
+| `err as? T` | downcast shortcut (equivalent to `err.downcast::<T>()`) | §7.4 |
 | `pub? const fn` | compile-time evaluable function; body constrained by §3.1.1 capability matrix (literals, arithmetic, acyclic const-fn calls, construction); recursion / control flow / string concat / generics forbidden | §3.1.1 |
 | `pub enum Status: Int { OK = 200, ... }` | enum with explicit integer discriminants (payload-free variants only) | §3.5 |
 | `use std.fs::{open, exists}` | scoped / grouped imports | §5 |
 | `pub use sub.Foo` | cross-module re-export | §5 |
 | `#[cfg(os = "linux")]` | conditional compilation (keys: `os` / `target` / `arch` / `feature`) | §5, §3.8 |
-| `#[op(+)] fn add(self, o: Self) -> Self` | opt-in operator overload (`+ - * / %` binary, `-` unary) | §3.1 |
+| `#[op(+)] fn add(self, o: Self) -> Self` | opt-in operator overload (`+ - * / %` binary, `-` unary) | §3.8 / §14.2 |
 | `#[test] fn ...` | inline test function — no separate `_test.osty` required | §11 |
 
 **Additions — semantics (checker / lowering).**
 
-- **Lossless numeric widening** (§2.2a). Implicit: `Int8 → Int16 → Int32 → Int → Float64`, `Int → Float64`, `Float32 → Float64`. Narrowing still requires explicit `.toInt32() / .toInt16() / .toInt8() / .toIntTrunc() / .toIntRound() / .toIntFloor() / .toIntCeil() / .toFloat32()` — `E0765` on implicit narrowing.
-- **Bounded operator overloading** (§3.1, §4.5). `#[op(+)]` / `#[op(-)]` / `#[op(*)]` / `#[op(/)]` / `#[op(%)]` binary + `#[op(-)]` unary only. `== / < / > / <= / >= / != / [] / () / << / >> / & / | / ^` remain primitive-only. Duplicate `#[op]` for same operator on same type is `E0724`; non-allowed operator is `E0725`.
+- **Lossless numeric widening** (§2.2). Implicit: `Int8 → Int16 → Int32 → Int → Float64`, `Int → Float64`, `Float32 → Float64`. Narrowing still requires explicit `.toInt32()` / `.toInt16()` / `.toInt8()` / `.toIntTrunc()` / `.toIntRound()` / `.toIntFloor()` / `.toIntCeil()` / `.toFloat32()` — `E0765` on implicit narrowing.
+- **Bounded operator overloading** (§3.8, §14.2). `#[op(+)]` / `#[op(-)]` / `#[op(*)]` / `#[op(/)]` / `#[op(%)]` binary + `#[op(-)]` unary only. `== / < / > / <= / >= / != / [] / () / << / >> / & / | / ^` remain primitive-only. Duplicate `#[op]` for same operator on same type is `E0724`; non-allowed operator is `E0725`.
 - **Function value keyword-name preservation** (G20). `fn(...) -> ...` carries parameter names as type-equality-neutral metadata. Keyword calls through function values allowed when names match; default-value capture still erased per G15.
 
 **Additions — stdlib.**
@@ -75,7 +75,7 @@ real program.
 
 **Changes to `§14` (excluded features).**
 
-- Removed (now allowed): "implicit numeric conversions" (replaced by lossless widening only, §2.2a), "operator overloading" (replaced by six-operator `#[op(...)]` opt-in, §3.1).
+- Removed (now allowed): "implicit numeric conversions" (replaced by lossless widening only, §2.2), "operator overloading" (replaced by six-operator `#[op(...)]` opt-in, §3.8 / §14.2).
 - Reaffirmed permanent exclusions (total 9 after v0.5): `null` / `nil`, exceptions & `try`/`catch`, inheritance, macros, user-defined annotation set, `unsafe` (user-facing), user-visible raw pointer, `[]` / `()` / bitwise operator overload, generic type-parameter defaults.
 - Removed from excluded list (now part of language): `while`/`loop` keyword (the `for cond { }` while-style existed since v0.3; `loop { break v }` is new in v0.5), labeled `break`/`continue` (new in v0.5), `const` (new in v0.5 for compile-time functions only — still no run-time immutable binding form beyond `let`).
 

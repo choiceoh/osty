@@ -10,7 +10,7 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - shebang은 byte offset 0에서만 한 번 허용된다.
 - 예약어: `fn struct enum interface type let mut pub if else match for break
   continue return use defer`.
-- 문맥 식별자: `self Self true false Some None Ok Err`.
+- 문맥 식별자: `self Self true false Some None Ok Err loop const by`.
 - identifier는 ASCII letter 또는 `_`로 시작한다. 단독 `_`는 wildcard이다.
 - 세미콜론은 없다. newline이 statement separator이다.
 - `} else`와 `} else if`는 같은 물리적 줄에 둔다.
@@ -26,10 +26,13 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - function parameter type은 필수. unit return은 return type 생략 가능.
 - function body는 block expression이고 마지막 expression이 반환값이다.
 - early return은 `return`.
-- overloading은 없다.
+- function overloading은 없다. operator overloading은 `#[op(+)]`, `#[op(-)]`,
+  `#[op(*)]`, `#[op(/)]`, `#[op(%)]` binary와 unary `#[op(-)]`만 허용된다.
+- `const fn`은 default argument용 compile-time evaluable function이다. 본문은
+  §3.1.1 capability matrix 안의 literal/산술/구성/acyclic const-fn call만 쓴다.
 - default parameter는 trailing parameter에만 허용된다.
-- default value는 literal 계열, `None`, literal payload의 `Ok`/`Err`, empty
-  collection, unit만 가능하다.
+- default value는 `DefaultLiteral`: literal 계열, `None`, `Ok`/`Err`, empty
+  collection, unit, fields가 literal인 struct literal, 허용된 `const fn` call만 가능하다.
 - required parameter는 positional-only.
 - defaulted parameter는 positional 또는 keyword argument로 전달 가능.
 - positional argument는 keyword argument 뒤에 올 수 없다.
@@ -41,7 +44,8 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
   visibility와 type parameter는 모두 일치해야 한다.
 - 같은 partial type의 field/variant는 한 declaration에만 있어야 한다. method
   이름은 중복될 수 없다.
-- compiler annotation은 고정 집합이다. v0.4는 `#[json]`, `#[deprecated]`.
+- compiler annotation은 고정 집합이다: `#[json]`, `#[deprecated]`, `#[op]`,
+  `#[cfg]`, `#[test]`, optimization annotations, runtime-only annotations.
   annotation은 named declaration 앞에만 둔다.
 
 ## 3. Types
@@ -52,10 +56,12 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - `String`은 immutable UTF-8 bytes. `Bytes`는 immutable byte sequence.
 - composite: `struct`, `enum`, `interface`, tuple, function type, `List<T>`,
   `Map<K, V>`, `Set<T>`, `Option<T>`, `Result<T, E>`.
+- `Set<T>`는 있지만 set literal은 없다. `Set.from([...])`를 사용한다.
 - `T?`는 `Option<T>` sugar. formatter는 `Option<T>`를 `T?`로 정규화한다.
 - `null`/`nil`은 없다. 부재는 `Option<T>`/`T?`.
 - alias는 transparent하다. 새 nominal type이 아니다.
-- 변수 사이 numeric conversion은 암묵적으로 일어나지 않는다.
+- 변수 사이 numeric conversion은 lossless widening만 암묵적으로 허용된다. narrowing과
+  lossy conversion은 명시 method를 쓴다.
 - numeric literal만 문맥 타입으로 추론된다. 문맥이 없으면 integer는 `Int`,
   float는 `Float`.
 - arithmetic overflow, invalid shift, integer div/mod by zero는 abort한다.
@@ -95,8 +101,11 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - `for pattern in expr`은 iterable loop.
 - `for expr`은 while-style loop.
 - bare `for`는 infinite loop.
+- `loop { ... break value }`는 value-returning unbounded loop이다.
+- range step은 `a..b by step` / `a..=b by step`이다.
 - `for let pattern = expr`은 match 성공 동안 반복한다.
-- `break`/`continue`는 innermost loop에만 적용된다. label은 없다.
+- `break`/`continue`는 기본적으로 innermost loop에 적용된다. `'label: for/loop`와
+  `break 'label` / `continue 'label`이 허용된다.
 - `Type { ... }` struct literal은 `if`/`match`/`for`/`if let`/`for let` head에서
   괄호로 감싼다.
 - assignment는 statement이다. expression으로 쓰지 않는다.
@@ -106,11 +115,15 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
   family를 직접 섞지 않는다.
 - `?.`는 `Option<T>` field/method access를 short-circuit한다.
 - `??`는 left가 `None`일 때만 right를 평가한다.
+- `err as? T`는 `Error.downcast::<T>()` shortcut이다. 일반 type test가 아니다.
 - closure는 capture by reference이다. capture mutability는 binding 선언을 따른다.
+- trailing closure는 마지막 function-typed argument에만 쓴다: `f(x) |y| { ... }`.
 - closure parameter pattern은 irrefutable `LetPattern`만 허용된다. refutable
   literal/range/variant/or pattern은 `E0741`.
 - member access와 method call은 `.`만 사용한다.
 - string indexing/slicing은 Unicode scalar가 아니라 byte 단위이다.
+- Unicode scalar iteration은 built-in `String.chars()`를 쓰고, 복잡한 문자열 처리는
+  `std.strings` helper를 쓴다.
 - unsafe lookup 대신 가능하면 `get` 계열로 `Option`을 받는다.
 - `defer`는 enclosing block exit에서 LIFO 실행된다.
 - `defer`는 normal exit, `return`, loop exit, `?`, cancellation에서 실행된다.
@@ -135,6 +148,7 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - subpackage는 subdirectory이다.
 - import cycle은 금지된다. diamond import는 허용된다.
 - `use path`는 Osty package import.
+- `use path::{A, B as C}`와 `pub use path.Symbol`은 허용된다.
 - dotted path와 URL-like path를 혼합하지 않는다.
 - script file은 top-level statement가 있는 파일이다.
 - script top-level statement는 implicit `main() -> Result<(), Error>` 안에 있는
@@ -192,6 +206,7 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 
 - test file suffix는 `_test.osty`.
 - lowercase `test`로 시작하고 argument가 없는 function은 test.
+- inline `#[test] fn`도 test로 수집되고 production build에서는 제외된다.
 - lowercase `bench`로 시작하고 argument가 없는 function은 benchmark.
 - test는 production build에서 제외된다.
 - `std.testing` assertion은 compiler-known이다. 일반 macro 기능은 아니다.
@@ -204,14 +219,13 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 
 - `null`, `nil`, exceptions, `try`, `catch`, panic recovery.
 - inheritance, class, `impl`, macro, user-defined annotation.
-- operator/function overloading.
-- `while`, `loop`, C-style `for`.
-- labelled `break`/`continue`.
+- function overloading, `[]`/`()`/bitwise/comparison operator overloading.
+- `while`, C-style `for`.
 - detached spawn, `async`, `await`, `WaitGroup`.
 - lifetime annotation, variance annotation, generic parameter default.
-- implicit numeric conversion, `as` conversion keyword.
+- implicit narrowing/lossy numeric conversion, `as` conversion keyword.
 - set literal, anonymous record/struct.
-- `const`; use top-level `let`.
+- run-time `const` binding; use top-level `let`. `const fn` is allowed.
 - `unsafe`; use FFI declarations.
 - `where` clause; put constraints directly on type parameters.
 - expression annotation or `use` annotation.

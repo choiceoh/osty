@@ -21,8 +21,10 @@ myapp/
 ```osty
 use std.fs
 use std.http
+use std::{fs, http as web}
 use github.com/user/lib
 use github.com/user/lib as mylib
+pub use myapp.db.Conn
 use go "net/http" {
     fn Get(url: String) -> Result<Response, Error>
     struct Response {
@@ -32,8 +34,11 @@ use go "net/http" {
 }
 ```
 
-`use <path>` imports an Osty package. `use go "<path>" { ... }` imports
-a Go package via FFI (see §12).
+`use <path>` imports an Osty package. Scoped import form
+`use path::{A, B as C}` imports several names from the same package.
+`pub use <path>` re-exports the imported symbol from the current package;
+re-export cycles are `E0552`. `use go "<path>" { ... }` imports a Go
+package via FFI (see §12).
 
 ### 5.3 Visibility
 
