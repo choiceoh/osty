@@ -292,6 +292,9 @@ func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error
 	if pat, ok := matchStructFieldRead(fn, mctx); ok {
 		return emitStructFieldRead(out, fn, pat)
 	}
+	if pat, ok := matchListLiteralLen(fn, mctx); ok {
+		return emitListLiteralLen(out, fn, pat)
+	}
 	return fmt.Errorf("%w: function %q does not match any stage0 pattern", ErrUnsupported, fn.Name)
 }
 
@@ -2150,6 +2153,145 @@ func emitStructFieldRead(out *strings.Builder, fn *mir.Function, pat structField
 	out.WriteString("entry:\n")
 	fmt.Fprintf(out, "  %%0 = extractvalue %%%s %%%s, %d\n", pat.structName, pat.paramName, pat.fieldIndex)
 	fmt.Fprintf(out, "  ret %s %%0\n", resultLLVM)
+	out.WriteString("}\n\n")
+	return nil
+}
+
+// ---- P12: list literal + len ----
+//
+// stage0 P12 handles the canonical "build a List<Int> literal then
+// read its length" shape:
+//
+//	fn name() -> Int {
+//	    let xs: List<Int> = [N1, N2, ...]
+//	    xs.len()
+//	}
+//
+// MIR shape: 0 params, single block, instructions = (StorageLive +
+// AssignInstr writing AggregateRV{AggList} to a List<Int> local +
+// IntrinsicInstr{IntrinsicListLen} reading that local), ReturnTerm.
+//
+// Output: declare the runtime ABI (list_new / list_push_i64 / list_len)
+// at module top, emit a call sequence that allocates the list, pushes
+// each element, and returns the length.
+
+type listLiteralLenPattern struct {
+	elements []int64 // currently only IntConst literals supported
+}
+
+func matchListLiteralLen(fn *mir.Function, mctx *moduleCtx) (listLiteralLenPattern, bool) {
+	pat := listLiteralLenPattern{}
+	if scalarFromType(fn.ReturnType) != scalarInt {
+		return pat, false
+	}
+	if len(fn.Params) != 0 {
+		return pat, false
+	}
+	bb, ok := singleBlockReturning(fn)
+	if !ok {
+		return pat, false
+	}
+
+	// Walk the instructions, skipping storage markers, recording
+	// the first AssignInstr (must be AggregateRV{AggList} writing
+	// IntConsts to a List<Int> local) and the IntrinsicListLen that
+	// reads the same local into the return local.
+	var (
+		listLocal mir.LocalID
+		listSet   bool
+		lenSet    bool
+	)
+	for _, instr := range bb.Instrs {
+		switch step := instr.(type) {
+		case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
+			continue
+		case *mir.AssignInstr:
+			if listSet {
+				return pat, false
+			}
+			if step.Dest.HasProjections() {
+				return pat, false
+			}
+			loc := lookupLocal(fn, step.Dest.Local)
+			if loc == nil {
+				return pat, false
+			}
+			named, ok := loc.Type.(*ir.NamedType)
+			if !ok || named == nil || named.Name != "List" {
+				return pat, false
+			}
+			agg, ok := step.Src.(*mir.AggregateRV)
+			if !ok || agg.Kind != mir.AggList {
+				return pat, false
+			}
+			elements := make([]int64, 0, len(agg.Fields))
+			for _, f := range agg.Fields {
+				con, ok := f.(*mir.ConstOp)
+				if !ok {
+					return pat, false
+				}
+				ic, ok := con.Const.(*mir.IntConst)
+				if !ok {
+					return pat, false
+				}
+				elements = append(elements, ic.Value)
+			}
+			pat.elements = elements
+			listLocal = step.Dest.Local
+			listSet = true
+		case *mir.IntrinsicInstr:
+			if !listSet || lenSet {
+				return pat, false
+			}
+			if step.Kind != mir.IntrinsicListLen || len(step.Args) != 1 || step.Dest == nil {
+				return pat, false
+			}
+			if step.Dest.Local != fn.ReturnLocal || step.Dest.HasProjections() {
+				return pat, false
+			}
+			cp, ok := step.Args[0].(*mir.CopyOp)
+			if !ok || cp.Place.Local != listLocal || cp.Place.HasProjections() {
+				return pat, false
+			}
+			lenSet = true
+		default:
+			return pat, false
+		}
+	}
+	if !listSet || !lenSet {
+		return pat, false
+	}
+	declareListRuntime(mctx)
+	return pat, true
+}
+
+// declareListRuntime appends the small runtime ABI declarations
+// stage0's list-literal pattern depends on. Idempotent — the
+// declarations are guarded by a sentinel in mctx.emittedStructs (the
+// flag map already exists for struct types and serves equally well
+// here for "have the list runtime decls been emitted").
+func declareListRuntime(mctx *moduleCtx) {
+	if mctx.emittedStructs == nil {
+		mctx.emittedStructs = map[string]bool{}
+	}
+	if mctx.emittedStructs["__stage0.list_runtime"] {
+		return
+	}
+	mctx.emittedStructs["__stage0.list_runtime"] = true
+	mctx.extraDecls.WriteString("declare ptr @osty_rt_list_new()\n")
+	mctx.extraDecls.WriteString("declare void @osty_rt_list_push_i64(ptr, i64)\n")
+	mctx.extraDecls.WriteString("declare i64 @osty_rt_list_len(ptr)\n")
+}
+
+func emitListLiteralLen(out *strings.Builder, fn *mir.Function, pat listLiteralLenPattern) error {
+	fmt.Fprintf(out, "define i64 @%s() {\n", fn.Name)
+	out.WriteString("entry:\n")
+	out.WriteString("  %0 = call ptr @osty_rt_list_new()\n")
+	for _, v := range pat.elements {
+		fmt.Fprintf(out, "  call void @osty_rt_list_push_i64(ptr %%0, i64 %d)\n", v)
+	}
+	fmt.Fprintf(out, "  %%1 = call i64 @osty_rt_list_len(ptr %%0)\n")
+	out.WriteString("  ret i64 %1\n")
 	out.WriteString("}\n\n")
 	return nil
 }
