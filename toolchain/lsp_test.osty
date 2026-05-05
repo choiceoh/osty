@@ -108,6 +108,120 @@ fn testLspCompletionAndCodeActionPolicy() {
     testing.assertEq(lspPrefixUnderscoreName("value"), "_value")
     testing.assertEq(lspPrefixUnderscoreName(""), "_")
     testing.assertEq(lspPrefixUnderscoreTitle("value"), "Prefix `value` with `_` to silence")
+    testing.assertEq(lspServerName(), "osty-lsp")
+    testing.assertEq(lspServerVersion(), "0.1.0")
+    testing.assertEq(lspPositionEncodingUTF16(), "utf-16")
+    testing.assertEq(lspJSONNull(), "null")
+    testing.assertEq(lspCompletionTriggerDot(), ".")
+    testing.assertEq(lspSignatureTriggerOpenParen(), "(")
+    testing.assertEq(lspSignatureTriggerComma(), ",")
+    let legend = lspSemanticTokenTypes()
+    testing.assertEq(legend[0], "namespace")
+    testing.assertEq(legend[11], "enumMember")
+    let modifiers = lspSemanticTokenModifiers()
+    testing.assertEq(modifiers[0], "declaration")
+    testing.assertEq(modifiers[1], "readonly")
+    testing.assertEq(lspExitCode(true), 0)
+    testing.assertEq(lspExitCode(false), 1)
+    testing.assertEq(lspDispatchDecision("initialize", false, false, false).action, lspDispatchActionInitialize())
+    testing.assertEq(lspDispatchDecision("textDocument/hover", false, false, false).errorCode, lspErrServerNotInitialized())
+    testing.assertEq(lspDispatchDecision("shutdown", false, true, false).action, lspDispatchActionShutdown())
+    testing.assertEq(lspDispatchDecision("textDocument/hover", false, true, false).action, lspDispatchActionDispatch())
+    testing.assertEq(lspDispatchDecision("unknown/method", false, true, false).errorCode, lspErrMethodNotFound())
+    testing.assertEq(lspDispatchDecision("unknown/method", true, true, false).action, lspDispatchActionIgnore())
+    testing.assertEq(lspAsciiLowerText("HeLLo"), "hello")
+    testing.assert(lspNameMatchesPrefix("helper", "hel"))
+    testing.assert(!(lspNameMatchesPrefix("helper", "map")))
+    testing.assert(lspNameMatchesQuery("HelperValue", "value"))
+    testing.assertEq(lspUriForSourcePath("inmemory:main"), "inmemory:main")
+    testing.assertEq(lspUriForSourcePath("/tmp/main.osty"), "file:///tmp/main.osty")
+    testing.assert(lspPreferAIRepairFixAll("x.length"))
+    testing.assert(!(lspPreferAIRepairFixAll("x.len()")))
+    testing.assert(lspTextChanged("a", "b"))
+    testing.assert(!(lspTextChanged("a", "a")))
+    testing.assert(lspParamsAreEmpty(""))
+    testing.assert(lspParamsAreEmpty("null"))
+    testing.assert(!(lspParamsAreEmpty("{}")))
+    testing.assertEq(lspRenameEmptyNameMessage(), "new name is empty")
+    testing.assertEq(lspCannotRenameBuiltinMessage(), "cannot rename a builtin")
+    testing.assert(lspCanRenameKind("function"))
+    testing.assert(!(lspCanRenameKind("builtin")))
+    testing.assertEq(lspRenameTitle("helper"), "Rename to `helper`")
+    testing.assertEq(lspRemoveLineTitle(), "Remove unused import")
+    testing.assertEq(lspFixAllTitle(), "Fix all auto-fixable problems")
+    testing.assertEq(lspOrganizeImportsTitle(), "Organize imports")
+    testing.assertEq(lspInlayTypeLabel("Int"), ": Int")
+    testing.assertEq(lspMethodNotImplementedMessage("custom/method"), "method not implemented: custom/method")
+    testing.assert(lspIsOstySourceFileName("main.osty"))
+    testing.assert(!(lspIsOstySourceFileName("main_test.osty")))
+    testing.assert(!(lspIsOstySourceFileName("main.go")))
+    testing.assert(lspHasOstyFileExtension("main_test.osty"))
+    testing.assert(!(lspHasOstyFileExtension("main.go")))
+
+    let completion = lspCompletionItemForSymbolView("map", "function", "fn(Int) -> String", "docs")
+    testing.assertEq(completion.label, "map")
+    testing.assertEq(completion.kind, lspCompletionKindFunction())
+    testing.assertEq(completion.sortText, "2_map")
+    testing.assertEq(completion.detail, "fn map(Int) -> String")
+    testing.assertEq(completion.documentation, "docs")
+
+    let filtered = lspCompletionItemsForCandidates(
+        [
+            LspCompletionCandidateView { name: "zeta", kind: "binding", typeText: "Int", docText: "", include: true },
+            LspCompletionCandidateView { name: "alpha", kind: "function", typeText: "fn() -> Int", docText: "docs", include: true },
+            LspCompletionCandidateView { name: "alpha", kind: "binding", typeText: "String", docText: "", include: true },
+            LspCompletionCandidateView { name: "hidden", kind: "binding", typeText: "Int", docText: "", include: false },
+            LspCompletionCandidateView { name: "", kind: "binding", typeText: "Int", docText: "", include: true },
+        ],
+        "",
+    )
+    testing.assertEq(filtered.len(), 2)
+    testing.assertEq(filtered[0].label, "alpha")
+    testing.assertEq(filtered[0].detail, "fn alpha() -> Int")
+    testing.assertEq(filtered[0].documentation, "docs")
+    testing.assertEq(filtered[1].label, "zeta")
+}
+
+fn testLspJsonRpcHeaderPolicy() {
+    testing.assertEq(lspFrameHeader(17), "Content-Length: 17\r\n\r\n")
+    testing.assertEq(lspTrimHeaderLine("Content-Length: 17\r\n"), "Content-Length: 17")
+    let parsed = lspParseHeaderLines([
+        "Content-Type: application/vscode-jsonrpc; charset=utf-8",
+        "content-length: 42",
+    ])
+    testing.assert(parsed.ok)
+    testing.assertEq(parsed.contentLength, 42)
+    testing.assertEq(parsed.error, "")
+
+    let missing = lspParseHeaderLines(["Content-Type: application/json"])
+    testing.assert(missing.ok)
+    testing.assertEq(missing.contentLength, -1)
+
+    let empty = lspParseHeaderLines([])
+    testing.assert(!(empty.ok))
+    testing.assertEq(empty.error, "lsp: empty header block")
+
+    let malformed = lspParseHeaderLines(["Content Length 42"])
+    testing.assert(!(malformed.ok))
+
+    let invalid = lspParseHeaderLines(["Content-Length: -1"])
+    testing.assert(!(invalid.ok))
+}
+
+fn testLspNearbyNameRankingPolicy() {
+    testing.assertEq(lspLevenshteinBounded("kitten", "sitting", 3), 3)
+    testing.assertEq(lspLevenshteinBounded("kitten", "sitting", 2), 3)
+    let ranked = lspRankNearbyNames(
+        ["helpr", "helper", "helper", "helmet", ""],
+        "helper",
+        1,
+    )
+    testing.assertEq(ranked.len(), 2)
+    testing.assertEq(ranked[0], "helper")
+    testing.assertEq(ranked[1], "helpr")
+    let merged = lspMergeNearbyNames(["helper", "helpr"], ["helper", "holder"])
+    testing.assertEq(merged.len(), 3)
+    testing.assertEq(merged[2], "holder")
 }
 
 fn testLspSymbolKindPolicy() {
@@ -140,6 +254,18 @@ fn testLspSignatureTextPolicy() {
     testing.assertEq(sig.label, "fn map(items: List<Int>, f: fn(Int) -> String) -> List<String>")
     testing.assertEq(sig.parameterLabels[0], "items: List<Int>")
     testing.assertEq(sig.parameterLabels[1], "f: fn(Int) -> String")
+
+    let parsed = lspParseFunctionType("fn(Int, Result<String, Error>, fn(Int) -> Bool) -> String")
+    testing.assert(parsed.ok)
+    testing.assertEq(parsed.parameterTypes.len(), 3)
+    testing.assertEq(parsed.parameterTypes[1], "Result<String, Error>")
+    testing.assertEq(parsed.parameterTypes[2], "fn(Int) -> Bool")
+    testing.assertEq(parsed.returnType, "String")
+    testing.assert(!(lspParseFunctionType("List<Int>").ok))
+
+    let fallbackNames = lspFallbackParameterNames(3)
+    testing.assertEq(fallbackNames[0], "arg1")
+    testing.assertEq(fallbackNames[2], "arg3")
 }
 
 fn testLspFindsNameOffsetInsideDeclarationSpan() {
@@ -175,6 +301,8 @@ fn testLspPositionAndParameterPolicy() {
     testing.assert(!(lspContainsPosition(1, 2, 1, 8, 1, 9)))
     testing.assert(lspSpanOverlaps(10, 20, 20, 30))
     testing.assert(!(lspSpanOverlaps(10, 19, 20, 30)))
+    testing.assertEq(lspNamedTypeReferenceEndOffset(10, 20, 6, true, 4), 14)
+    testing.assertEq(lspNamedTypeReferenceEndOffset(18, 20, 6, false, 4), 20)
     testing.assertEq(lspActiveParameter([12, 20, 32], 20), 1)
     testing.assertEq(lspActiveParameter([12, 20, 32], 33), 3)
 }
@@ -186,6 +314,9 @@ fn testLspUtf16PositionConversionPolicy() {
     testing.assertEq(lines[1], 4)
     testing.assertEq(lines[2], 6)
     testing.assertEq(lspUtf16UnitsInByteRange(source, 0, 2), 3)
+    let fullRange = lspFullDocumentRange(source, lines)
+    testing.assertEq(fullRange.endLine, 2)
+    testing.assertEq(fullRange.endCharacter, 3)
 
     let fromOsty = lspOstyPositionToLSP(source, lines, 1, 2)
     testing.assertEq(fromOsty.line, 0)
@@ -215,6 +346,10 @@ fn testLspUriLocationAndImportPolicy() {
     testing.assertEq(lspPathToUri("/tmp/main.osty"), "file:///tmp/main.osty")
     testing.assertEq(lspPathToUri("C:/tmp/main.osty"), "file:///C:/tmp/main.osty")
     testing.assertEq(lspPathToUri(""), "file://")
+    testing.assert(lspFileURIPathRaw("file:///tmp/main.osty").ok)
+    testing.assertEq(lspFileURIPathRaw("file:///tmp/main.osty").path, "/tmp/main.osty")
+    testing.assertEq(lspFileURIPathRaw("file:///C:/tmp/main.osty").path, "C:/tmp/main.osty")
+    testing.assert(!(lspFileURIPathRaw("inmemory:main").ok))
 
     let locs = [
         LspLocation {
@@ -244,6 +379,54 @@ fn testLspUriLocationAndImportPolicy() {
     testing.assertEq(resolved[0].uri, "file:///a.osty")
     testing.assertEq(resolved[1].uri, "file:///b.osty")
 
+    let targetLocs = lspLocationsForTarget(
+        [
+            LspReferenceFact {
+                uri: "file:///b.osty",
+                startLine: 2,
+                startCharacter: 0,
+                endLine: 2,
+                endCharacter: 4,
+                targetSymbolID: "sym.helper",
+                targetURI: "file:///decl.osty",
+                targetStartLine: 1,
+                targetStartCharacter: 1,
+                targetEndLine: 1,
+                targetEndCharacter: 7,
+                builtin: false,
+            },
+            LspReferenceFact {
+                uri: "file:///a.osty",
+                startLine: 4,
+                startCharacter: 1,
+                endLine: 4,
+                endCharacter: 7,
+                targetSymbolID: "sym.helper",
+                targetURI: "",
+                targetStartLine: 0,
+                targetStartCharacter: 0,
+                targetEndLine: 0,
+                targetEndCharacter: 0,
+                builtin: false,
+            },
+        ],
+        [
+            LspSymbolFact {
+                id: "sym.helper",
+                uri: "file:///decl.osty",
+                startLine: 1,
+                startCharacter: 2,
+                endLine: 1,
+                endCharacter: 8,
+            },
+        ],
+        "sym.helper",
+        true,
+    )
+    testing.assertEq(targetLocs.len(), 3)
+    testing.assertEq(targetLocs[0].uri, "file:///a.osty")
+    testing.assertEq(targetLocs[2].startCharacter, 2)
+
     let symbolOrder = lspSortSymbolIndexes([
         LspSymbolSortKey { name: "Zoo", uri: "file:///b.osty" },
         LspSymbolSortKey { name: "App", uri: "file:///z.osty" },
@@ -252,6 +435,11 @@ fn testLspUriLocationAndImportPolicy() {
     testing.assertEq(symbolOrder[0], 2)
     testing.assertEq(symbolOrder[1], 1)
     testing.assertEq(symbolOrder[2], 0)
+
+    let stringOrder = lspSortStringIndexes(["z.osty", "a.osty", "a.osty"])
+    testing.assertEq(stringOrder[0], 1)
+    testing.assertEq(stringOrder[1], 2)
+    testing.assertEq(stringOrder[2], 0)
 
     let importOrder = lspSortImportIndexes([
         LspImportSortKey { group: 1, key: "zeta", alias: "" },
@@ -263,6 +451,15 @@ fn testLspUriLocationAndImportPolicy() {
     testing.assertEq(importOrder[1], 3)
     testing.assertEq(importOrder[2], 2)
     testing.assertEq(importOrder[3], 0)
+
+    let organized = lspOrganizedUseBlock([
+        LspOrganizeUseEntry { group: 1, key: "zeta", alias: "", text: "use zeta", unused: false },
+        LspOrganizeUseEntry { group: 0, key: "fmt", alias: "", text: "use std.fmt", unused: false },
+        LspOrganizeUseEntry { group: 1, key: "alpha", alias: "", text: "use alpha", unused: false },
+        LspOrganizeUseEntry { group: 1, key: "alpha", alias: "", text: "use alpha duplicate", unused: false },
+        LspOrganizeUseEntry { group: 0, key: "io", alias: "", text: "use std.io", unused: true },
+    ])
+    testing.assertEq(organized, "use std.fmt\n\nuse alpha\nuse zeta\n")
 
     testing.assertEq(lspUseGroup(false, ["std", "fmt"]), 0)
     testing.assertEq(lspUseGroup(false, ["pkg"]), 1)
@@ -284,6 +481,65 @@ fn testLspDiagnosticPayloadPolicy() {
     testing.assertEq(payload.message, "unused value\nhelp: prefix it\nnote: declared here")
     testing.assertEq(lspDiagnosticPayload("note", "FYI", "", []).severity, lspDiagnosticSeverityInformation())
     testing.assertEq(lspDiagnosticPayload("unknown", "bad", "", []).severity, lspDiagnosticSeverityError())
+    let diagA = LspDiagnosticView {
+        startLine: 1,
+        startCharacter: 2,
+        endLine: 1,
+        endCharacter: 4,
+        severity: lspDiagnosticSeverityError(),
+        code: "E0500",
+        source: lspServerName(),
+        message: "bad",
+    }
+    let diagB = LspDiagnosticView {
+        startLine: 1,
+        startCharacter: 2,
+        endLine: 1,
+        endCharacter: 4,
+        severity: lspDiagnosticSeverityError(),
+        code: "E0500",
+        source: lspServerName(),
+        message: "bad",
+    }
+    testing.assert(lspDiagnosticsEqual([diagA], [diagB]))
+    testing.assert(!(lspDiagnosticsEqual([diagA], [])))
+
+    testing.assert(lspDiagnosticBelongsToFile(LspDiagnosticFileFact {
+        diagnosticFile: "/tmp/main.osty",
+        packageFile: "/tmp/main.osty",
+        spanSourceFileID: "",
+        packageSourceFileID: "",
+        primaryLine: 0,
+        primaryOffset: 999,
+        sourceLength: 1,
+    }))
+    testing.assert(lspDiagnosticBelongsToFile(LspDiagnosticFileFact {
+        diagnosticFile: "",
+        packageFile: "/tmp/main.osty",
+        spanSourceFileID: "src1",
+        packageSourceFileID: "src1",
+        primaryLine: 0,
+        primaryOffset: 999,
+        sourceLength: 1,
+    }))
+    testing.assert(lspDiagnosticBelongsToFile(LspDiagnosticFileFact {
+        diagnosticFile: "",
+        packageFile: "/tmp/main.osty",
+        spanSourceFileID: "",
+        packageSourceFileID: "",
+        primaryLine: 1,
+        primaryOffset: 3,
+        sourceLength: 3,
+    }))
+    testing.assert(!(lspDiagnosticBelongsToFile(LspDiagnosticFileFact {
+        diagnosticFile: "",
+        packageFile: "/tmp/main.osty",
+        spanSourceFileID: "",
+        packageSourceFileID: "",
+        primaryLine: 0,
+        primaryOffset: 0,
+        sourceLength: 3,
+    })))
 }
 
 fn testLspResolveOverlappingTextEdits() {

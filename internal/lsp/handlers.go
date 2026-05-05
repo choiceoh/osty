@@ -1,7 +1,6 @@
 package lsp
 
 import (
-	"bytes"
 	"encoding/json"
 
 	"github.com/osty/osty/internal/ast"
@@ -55,11 +54,11 @@ func (s *Server) handleInitialize(req *rpcRequest) {
 			},
 			CompletionProvider: &CompletionOptions{
 				// `.` triggers member completion (pkg.fn, recv.method).
-				TriggerCharacters: []string{"."},
+				TriggerCharacters: []string{LSPCompletionTriggerDot()},
 			},
 			SignatureHelpProvider: &SignatureHelpOptions{
-				TriggerCharacters:   []string{"(", ","},
-				RetriggerCharacters: []string{","},
+				TriggerCharacters:   []string{LSPSignatureTriggerOpenParen(), LSPSignatureTriggerComma()},
+				RetriggerCharacters: []string{LSPSignatureTriggerComma()},
 			},
 			SemanticTokensProvider: &SemanticTokensOptions{
 				Legend: SemanticTokensLegend{
@@ -68,13 +67,13 @@ func (s *Server) handleInitialize(req *rpcRequest) {
 				},
 				Full: true,
 			},
-			PositionEncoding: "utf-16",
+			PositionEncoding: LSPPositionEncodingUTF16(),
 		},
 		ServerInfo: &ServerInfo{
 			Name:    ServerName,
-			Version: "0.1.0",
+			Version: LSPServerVersion(),
 		},
-		PositionEncoding: "utf-16",
+		PositionEncoding: LSPPositionEncodingUTF16(),
 	}
 	replyJSON(s.conn, req.ID, result)
 }
@@ -165,15 +164,24 @@ func (s *Server) publishDiagnostics(doc *document) {
 // identical payloads. LSPDiagnostic is all-comparable so element-wise
 // `!=` suffices.
 func diagsEqual(a, b []LSPDiagnostic) bool {
-	if len(a) != len(b) {
-		return false
+	return LSPDiagnosticsEqual(lspDiagnosticViews(a), lspDiagnosticViews(b))
+}
+
+func lspDiagnosticViews(in []LSPDiagnostic) []LSPDiagnosticView {
+	out := make([]LSPDiagnosticView, 0, len(in))
+	for _, d := range in {
+		out = append(out, LSPDiagnosticView{
+			StartLine:      d.Range.Start.Line,
+			StartCharacter: d.Range.Start.Character,
+			EndLine:        d.Range.End.Line,
+			EndCharacter:   d.Range.End.Character,
+			Severity:       uint32(d.Severity),
+			Code:           d.Code,
+			Source:         d.Source,
+			Message:        d.Message,
+		})
 	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+	return out
 }
 
 // toLSPDiag is the severity + range mapping between our internal
@@ -320,16 +328,7 @@ func semanticHoverLegacyContext(a *docAnalysis, pos token.Pos) (docText string, 
 }
 
 func semanticHoverKind(kind string) string {
-	switch kind {
-	case "fn":
-		return "function"
-	case "value":
-		return "binding"
-	case "generic":
-		return "type parameter"
-	default:
-		return kind
-	}
+	return LSPSemanticHoverKind(kind)
 }
 
 // hoverForSymbol formats the markdown block shown on hover. The
@@ -531,25 +530,17 @@ func (s *Server) handleFormatting(req *rpcRequest) {
 		replyJSON(s.conn, req.ID, []TextEdit{})
 		return
 	}
-	if bytes.Equal(out, doc.src) {
+	if !LSPTextChanged(doc.src, out) {
 		// No-op formatting; avoid churning the editor's dirty flag.
 		replyJSON(s.conn, req.ID, []TextEdit{})
 		return
 	}
 	// Replace [start-of-file, end-of-file) with the formatted text.
-	endLine := uint32(0)
-	if n := len(doc.analysis.lines.lines); n > 0 {
-		endLine = uint32(n - 1)
-	}
-	lastLineStart := 0
-	if n := len(doc.analysis.lines.lines); n > 0 {
-		lastLineStart = doc.analysis.lines.lines[n-1]
-	}
-	endChar := utf16UnitsInPrefix(doc.src[lastLineStart:])
+	fullRange := LSPFullDocumentRangeFor(doc.src, doc.analysis.lines.lines)
 	edit := TextEdit{
 		Range: Range{
 			Start: Position{Line: 0, Character: 0},
-			End:   Position{Line: endLine, Character: endChar},
+			End:   Position{Line: fullRange.EndLine, Character: fullRange.EndCharacter},
 		},
 		NewText: string(out),
 	}
@@ -671,7 +662,7 @@ func spanWidth(n ast.Node) int {
 // unmarshalParams decodes req.Params into `target`, tolerating a
 // missing Params field (producing the zero value of target).
 func unmarshalParams(req *rpcRequest, target any) error {
-	if len(req.Params) == 0 || string(req.Params) == "null" {
+	if LSPParamsAreEmpty(req.Params) {
 		return nil
 	}
 	return json.Unmarshal(req.Params, target)
@@ -682,7 +673,7 @@ func unmarshalParams(req *rpcRequest, target any) error {
 // the client isn't left waiting.
 func replyJSON(c *conn, id json.RawMessage, v any) {
 	if v == nil {
-		_ = c.writeResponse(id, json.RawMessage("null"))
+		_ = c.writeResponse(id, json.RawMessage(LSPJSONNull()))
 		return
 	}
 	raw, err := json.Marshal(v)

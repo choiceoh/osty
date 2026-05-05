@@ -1,9 +1,6 @@
 package lsp
 
 import (
-	"fmt"
-	"strings"
-
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/token"
@@ -152,19 +149,19 @@ func buildStructuredSignatureInfo(call *ast.CallExpr, doc *document) (SignatureI
 	if ref == nil || ref.targetKind != "function" || ref.targetType == "" {
 		return SignatureInformation{}, false
 	}
-	paramTypes, returnType, ok := parseStructuredFunctionType(ref.targetType)
-	if !ok {
+	parsed := LSPParseFunctionType(ref.targetType)
+	if !parsed.OK {
 		return SignatureInformation{}, false
 	}
-	paramNames := fallbackParameterNames(len(paramTypes))
-	params := make([]LSPSignatureParam, 0, len(paramTypes))
-	for i, pt := range paramTypes {
+	paramNames := LSPFallbackParameterNames(len(parsed.ParameterTypes))
+	params := make([]LSPSignatureParam, 0, len(parsed.ParameterTypes))
+	for i, pt := range parsed.ParameterTypes {
 		params = append(params, LSPSignatureParam{
 			Name:     paramNames[i],
 			TypeName: pt,
 		})
 	}
-	rendered := LSPBuildSignatureText(ref.targetName, params, returnType)
+	rendered := LSPBuildSignatureText(ref.targetName, params, parsed.ReturnType)
 	paramInfo := make([]ParameterInformation, 0, len(rendered.ParameterLabels))
 	for _, paramLabel := range rendered.ParameterLabels {
 		paramInfo = append(paramInfo, ParameterInformation{Label: paramLabel})
@@ -173,75 +170,6 @@ func buildStructuredSignatureInfo(call *ast.CallExpr, doc *document) (SignatureI
 		Label:      rendered.Label,
 		Parameters: paramInfo,
 	}, true
-}
-
-func parseStructuredFunctionType(typeText string) ([]string, string, bool) {
-	rest := strings.TrimSpace(typeText)
-	if !strings.HasPrefix(rest, "fn") {
-		return nil, "", false
-	}
-	rest = strings.TrimSpace(strings.TrimPrefix(rest, "fn"))
-	if !strings.HasPrefix(rest, "(") {
-		return nil, "", false
-	}
-	closeIdx := matchingCloseParen(rest)
-	if closeIdx < 0 {
-		return nil, "", false
-	}
-	paramsText := strings.TrimSpace(rest[1:closeIdx])
-	var params []string
-	if paramsText != "" {
-		params = splitTopLevelComma(paramsText)
-	}
-	returnType := ""
-	tail := strings.TrimSpace(rest[closeIdx+1:])
-	if strings.HasPrefix(tail, "->") {
-		returnType = strings.TrimSpace(strings.TrimPrefix(tail, "->"))
-	}
-	return params, returnType, true
-}
-
-func matchingCloseParen(s string) int {
-	depth := 0
-	for i, r := range s {
-		switch r {
-		case '(':
-			depth++
-		case ')':
-			depth--
-			if depth == 0 {
-				return i
-			}
-		}
-	}
-	return -1
-}
-
-func splitTopLevelComma(s string) []string {
-	var out []string
-	start := 0
-	depth := 0
-	for i, r := range s {
-		switch r {
-		case '(', '[', '<':
-			depth++
-		case ')', ']', '>':
-			if depth > 0 {
-				depth--
-			}
-		case ',':
-			if depth == 0 {
-				if part := strings.TrimSpace(s[start:i]); part != "" {
-					out = append(out, part)
-				}
-				start = i + len(string(r))
-			}
-		}
-	}
-	if part := strings.TrimSpace(s[start:]); part != "" {
-		out = append(out, part)
-	}
-	return out
 }
 
 // calleeSymbol resolves the `Fn` side of a call expression to a
@@ -269,7 +197,7 @@ func calleeSymbol(call *ast.CallExpr, a *docAnalysis) (*resolve.Symbol, *ast.FnD
 // declaration when possible, filled with `argN` placeholders
 // otherwise.
 func parameterNames(fd *ast.FnDecl, count int) []string {
-	names := make([]string, count)
+	names := LSPFallbackParameterNames(count)
 	if fd != nil {
 		for i, p := range fd.Params {
 			if i >= count {
@@ -280,22 +208,7 @@ func parameterNames(fd *ast.FnDecl, count int) []string {
 			}
 		}
 	}
-	fillFallbackParameterNames(names)
 	return names
-}
-
-func fallbackParameterNames(count int) []string {
-	names := make([]string, count)
-	fillFallbackParameterNames(names)
-	return names
-}
-
-func fillFallbackParameterNames(names []string) {
-	for i := range names {
-		if names[i] == "" {
-			names[i] = fmt.Sprintf("arg%d", i+1)
-		}
-	}
 }
 
 // activeParamFor computes which parameter index the cursor sits in by
