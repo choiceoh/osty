@@ -175,6 +175,7 @@ fn mirConstEqual(a: MirConst, b: MirConst) -> Bool {
         MirConstBool -> a.boolValue == b.boolValue,
         MirConstFloat -> a.floatText == b.floatText,
         MirConstString -> a.strValue == b.strValue,
+        MirConstBytes -> a.strValue == b.strValue,
         MirConstChar -> a.charValue == b.charValue,
         MirConstByte -> a.byteValue == b.byteValue,
         MirConstUnit -> true,

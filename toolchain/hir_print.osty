@@ -115,6 +115,7 @@ pub fn hirPrintExpr(e: HirExpr, indent: Int) -> String {
         HirExprBoolLit -> if e.boolValue { "true" } else { "false" },
         HirExprCharLit -> "'" + hirPrintEscapeChar(e.charValue) + "'",
         HirExprByteLit -> "b" + hirPrintIntToString(e.byteValue),
+        HirExprBytesLit -> "b" + hirPrintStringLit(e),
         HirExprStringLit -> hirPrintStringLit(e),
         HirExprUnitLit -> "()",
         HirExprIdent -> hirPrintIdentExpr(e),
