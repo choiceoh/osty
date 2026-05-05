@@ -93,6 +93,24 @@ func runInstallSelf(args []string, _ cliFlags) {
 	builtBin, err := buildOstySelf(context.Background(), hostOsty, root, tcAbs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "osty install-self: build: %v\n", err)
+		// The chicken-egg: a fresh clone has no osty-self in cache,
+		// no in-tree build, and (by default) no registry URL. The
+		// host osty's LLVM backend forks `osty-self lir-proto-lower`
+		// for emit, which declines without an osty-self to fork.
+		// `OSTY_STAGE0_FALLBACK=1` activates the bootstrap-only
+		// emitter (`docs/osty_self_bootstrap_design.md`) which can
+		// emit a small subset of MIR patterns — enough for the
+		// emergency path but not yet for the full toolchain. Surface
+		// the workflow options so the user does not have to hunt
+		// through the resolver chain in the dark.
+		if os.Getenv("OSTY_STAGE0_FALLBACK") == "" {
+			fmt.Fprintln(os.Stderr, "")
+			fmt.Fprintln(os.Stderr, "hint: bootstrap from a fresh clone needs an osty-self source. Pick one:")
+			fmt.Fprintln(os.Stderr, "  - point OSTY_SELF_REGISTRY_URL at a registry serving a pre-built osty-self,")
+			fmt.Fprintln(os.Stderr, "  - point OSTY_SELF_BIN at an existing osty-self binary, or")
+			fmt.Fprintln(os.Stderr, "  - retry with OSTY_STAGE0_FALLBACK=1 to use the emergency bootstrap emitter")
+			fmt.Fprintln(os.Stderr, "    (subset coverage; see docs/osty_self_bootstrap_design.md).")
+		}
 		os.Exit(1)
 	}
 	if err := selfhostcache.Install(root, key, builtBin); err != nil {
