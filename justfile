@@ -33,6 +33,19 @@ build-lirproto:
 
 build-all: build build-checker build-lirproto
 
+# bootstrap performs the end-to-end fresh-clone bootstrap:
+#
+#   1. build host osty + native-checker + native-lirproto.
+#   2. invoke `osty install-self`, which builds osty-self from
+#      toolchain/ and promotes the result into the
+#      `.osty/cache/self-host/` content-addressed cache.
+#
+# Subsequent compiles look the binary up via
+# `selfhostcache.ResolveBinary` instead of re-running the slow
+# toolchain build.
+bootstrap: build-all
+    {{bin}} install-self
+
 # Cross-compile osty (+ native-checker) for every supported host triple.
 # Targets: linux/{amd64,arm64}, darwin/{amd64,arm64}, windows/{amd64,arm64}.
 # Artifacts land in .bin/cross/<goos>-<goarch>/.

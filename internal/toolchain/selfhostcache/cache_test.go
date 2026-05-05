@@ -205,6 +205,53 @@ func TestResolveBinaryReturnsErrNotCached(t *testing.T) {
 	}
 }
 
+// TestResolveBinaryReturnsErrNotCachedWithoutToolchain verifies that
+// the lookup degrades to ErrNotCached even when there is no
+// `toolchain/` directory at all — ComputeKey would otherwise error
+// out, but for the resolver's purposes the absence is just another
+// "no usable binary" outcome.
+func TestResolveBinaryReturnsErrNotCachedWithoutToolchain(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv(SelfBinEnv, "")
+
+	_, _, err := ResolveBinary(root)
+	if !errors.Is(err, ErrNotCached) {
+		t.Fatalf("err = %v, want ErrNotCached for missing toolchain dir", err)
+	}
+}
+
+func TestLocateProjectRootFindsManifest(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "osty.toml"), []byte("[package]\nname=\"x\"\nversion=\"0.0.0\"\n"), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+	sub := filepath.Join(root, "deep", "nested")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	got, err := LocateProjectRoot(sub)
+	if err != nil {
+		t.Fatalf("LocateProjectRoot: %v", err)
+	}
+	gotRel, _ := filepath.Rel(root, got)
+	wantRel, _ := filepath.Rel(root, root)
+	if gotRel != wantRel {
+		t.Fatalf("LocateProjectRoot = %q, want repo root %q", got, root)
+	}
+}
+
+func TestLocateProjectRootFallsBackToAbs(t *testing.T) {
+	root := t.TempDir()
+	got, err := LocateProjectRoot(root)
+	if err != nil {
+		t.Fatalf("LocateProjectRoot: %v", err)
+	}
+	abs, _ := filepath.Abs(root)
+	if got != abs {
+		t.Fatalf("fallback path = %q, want abs of %q", got, abs)
+	}
+}
+
 func TestInstallRoundTrip(t *testing.T) {
 	root := t.TempDir()
 	scaffoldToolchain(t, root, map[string]string{"main.osty": "fn main() {}\n"})
