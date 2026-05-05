@@ -334,6 +334,9 @@ func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error
 	if pat, ok := matchStructFieldRead(fn, mctx); ok {
 		return emitStructFieldRead(out, fn, pat)
 	}
+	if pat, ok := matchStructFieldBinaryOp(fn, mctx); ok {
+		return emitStructFieldBinaryOp(out, fn, pat)
+	}
 	if pat, ok := matchListLiteralLen(fn, mctx); ok {
 		return emitListLiteralLen(out, fn, pat)
 	}
@@ -2241,6 +2244,188 @@ func emitStructFieldRead(out *strings.Builder, fn *mir.Function, pat structField
 	return nil
 }
 
+// ---- P15: struct field binary-op return ----
+//
+// stage0 P15 handles the inlined "two-field arithmetic" shape produced
+// by the front-end for code like:
+//
+//	fn pointSum(p: Point) -> Int { p.x + p.y }
+//
+// MIR shape:
+//
+//	fn name(p: Struct) -> T {
+//	  bb0:
+//	    AssignInstr ReturnLocal = BinaryRV(op,
+//	        Copy(p.fieldI) | ConstOp,
+//	        Copy(p.fieldJ) | ConstOp)
+//	    ReturnTerm
+//	}
+//
+// One struct param, all-scalar fields, single block, single AssignInstr
+// to ReturnLocal whose Src is a BinaryRV. Each operand is independently
+// either a single FieldProj on the struct param or a scalar ConstOp.
+// Operator families: same as matchSequentialReturn (arithmetic,
+// comparison, bitwise, shift, logical).
+//
+// Output:
+//
+//	define <retT> @<name>(%<Struct> %<paramName>) {
+//	entry:
+//	  %0 = extractvalue %<Struct> %<paramName>, <I>     ; only when needed
+//	  %1 = extractvalue %<Struct> %<paramName>, <J>     ; only when needed
+//	  %2 = <llvmOp> <opT> %0, %1
+//	  ret <retT> %2
+//	}
+
+type p15FieldOperand struct {
+	isField    bool
+	fieldIndex int
+	constText  string // formatted scalar literal when !isField
+}
+
+type structFieldBinaryOpPattern struct {
+	structName  string
+	fieldTypes  []scalarType
+	paramName   string
+	left        p15FieldOperand
+	right       p15FieldOperand
+	llvmOp      string
+	resultType  scalarType
+	operandType scalarType
+}
+
+func matchStructFieldBinaryOp(fn *mir.Function, mctx *moduleCtx) (structFieldBinaryOpPattern, bool) {
+	pat := structFieldBinaryOpPattern{}
+	pat.resultType = scalarFromType(fn.ReturnType)
+	if pat.resultType == scalarUnknown {
+		return pat, false
+	}
+	if len(fn.Params) != 1 {
+		return pat, false
+	}
+	paramID := fn.Params[0]
+	paramLocal := lookupLocal(fn, paramID)
+	if paramLocal == nil || !paramLocal.IsParam {
+		return pat, false
+	}
+	named, ok := paramLocal.Type.(*ir.NamedType)
+	if !ok || named == nil || named.Name == "" {
+		return pat, false
+	}
+	fieldTypes, ok := mctx.lookupStructFields(named.Name)
+	if !ok {
+		return pat, false
+	}
+	bb, ok := singleBlockReturning(fn)
+	if !ok || len(bb.Instrs) != 1 {
+		return pat, false
+	}
+	ai, ok := bb.Instrs[0].(*mir.AssignInstr)
+	if !ok {
+		return pat, false
+	}
+	if ai.Dest.Local != fn.ReturnLocal || ai.Dest.HasProjections() {
+		return pat, false
+	}
+	bin, ok := ai.Src.(*mir.BinaryRV)
+	if !ok {
+		return pat, false
+	}
+	llvmOp, resultType, operandType := classifyBinary(bin.Op)
+	if llvmOp == "" || resultType != pat.resultType {
+		return pat, false
+	}
+	left, ok := classifyP15Operand(bin.Left, paramID, fieldTypes, operandType)
+	if !ok {
+		return pat, false
+	}
+	right, ok := classifyP15Operand(bin.Right, paramID, fieldTypes, operandType)
+	if !ok {
+		return pat, false
+	}
+	if !left.isField && !right.isField {
+		// At least one operand must reference the struct param —
+		// otherwise matchSequentialReturn already covers this shape.
+		return pat, false
+	}
+	pat.structName = named.Name
+	pat.fieldTypes = fieldTypes
+	pat.paramName = sanitizeLLVMName(paramLocal.Name, "p")
+	pat.left = left
+	pat.right = right
+	pat.llvmOp = llvmOp
+	pat.operandType = operandType
+	mctx.emitStructDef(named.Name, fieldTypes)
+	return pat, true
+}
+
+// classifyP15Operand accepts either a scalar ConstOp or a CopyOp with a
+// single FieldProj on the struct param. The field's type must equal
+// the binary op's required operand type.
+func classifyP15Operand(op mir.Operand, paramID mir.LocalID, fieldTypes []scalarType, operandType scalarType) (p15FieldOperand, bool) {
+	if con, ok := op.(*mir.ConstOp); ok {
+		switch c := con.Const.(type) {
+		case *mir.IntConst:
+			if operandType != scalarInt {
+				return p15FieldOperand{}, false
+			}
+			return p15FieldOperand{constText: fmt.Sprintf("%d", c.Value)}, true
+		case *mir.BoolConst:
+			if operandType != scalarBool {
+				return p15FieldOperand{}, false
+			}
+			if c.Value {
+				return p15FieldOperand{constText: "true"}, true
+			}
+			return p15FieldOperand{constText: "false"}, true
+		}
+		return p15FieldOperand{}, false
+	}
+	cp, ok := op.(*mir.CopyOp)
+	if !ok {
+		return p15FieldOperand{}, false
+	}
+	if cp.Place.Local != paramID || len(cp.Place.Projections) != 1 {
+		return p15FieldOperand{}, false
+	}
+	fp, ok := cp.Place.Projections[0].(*mir.FieldProj)
+	if !ok {
+		return p15FieldOperand{}, false
+	}
+	if fp.Index < 0 || fp.Index >= len(fieldTypes) {
+		return p15FieldOperand{}, false
+	}
+	if fieldTypes[fp.Index] != operandType {
+		return p15FieldOperand{}, false
+	}
+	return p15FieldOperand{isField: true, fieldIndex: fp.Index}, true
+}
+
+func emitStructFieldBinaryOp(out *strings.Builder, fn *mir.Function, pat structFieldBinaryOpPattern) error {
+	resultLLVM := pat.resultType.llvm()
+	operandLLVM := pat.operandType.llvm()
+	fmt.Fprintf(out, "define %s @%s(%%%s %%%s) {\n", resultLLVM, fn.Name, pat.structName, pat.paramName)
+	out.WriteString("entry:\n")
+	nextSSA := 0
+	leftExpr := pat.left.constText
+	if pat.left.isField {
+		leftExpr = fmt.Sprintf("%%%d", nextSSA)
+		fmt.Fprintf(out, "  %s = extractvalue %%%s %%%s, %d\n", leftExpr, pat.structName, pat.paramName, pat.left.fieldIndex)
+		nextSSA++
+	}
+	rightExpr := pat.right.constText
+	if pat.right.isField {
+		rightExpr = fmt.Sprintf("%%%d", nextSSA)
+		fmt.Fprintf(out, "  %s = extractvalue %%%s %%%s, %d\n", rightExpr, pat.structName, pat.paramName, pat.right.fieldIndex)
+		nextSSA++
+	}
+	resultReg := fmt.Sprintf("%%%d", nextSSA)
+	fmt.Fprintf(out, "  %s = %s %s %s, %s\n", resultReg, pat.llvmOp, operandLLVM, leftExpr, rightExpr)
+	fmt.Fprintf(out, "  ret %s %s\n", resultLLVM, resultReg)
+	out.WriteString("}\n\n")
+	return nil
+}
+
 // ---- P12: list literal + len ----
 //
 // stage0 P12 handles the canonical "build a List<Int> literal then
@@ -2399,12 +2584,12 @@ func emitListLiteralLen(out *strings.Builder, fn *mir.Function, pat listLiteralL
 // then a chain of `insertvalue` instructions inside the function.
 
 type aggregateConstructorPattern struct {
-	typeName    string         // LLVM type name without `%`
-	paramTypes  []scalarType   // function parameter scalar types
-	paramNames  []string       // sanitised parameter names
-	paramIDs    []mir.LocalID
-	fieldExprs  []string       // ordered LLVM operand expressions
-	fieldTypes  []scalarType   // matching scalar type per field
+	typeName   string       // LLVM type name without `%`
+	paramTypes []scalarType // function parameter scalar types
+	paramNames []string     // sanitised parameter names
+	paramIDs   []mir.LocalID
+	fieldExprs []string     // ordered LLVM operand expressions
+	fieldTypes []scalarType // matching scalar type per field
 }
 
 func matchAggregateConstructor(fn *mir.Function, mctx *moduleCtx) (aggregateConstructorPattern, bool) {
