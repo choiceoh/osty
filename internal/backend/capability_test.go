@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/osty/osty/internal/ir"
-	"github.com/osty/osty/internal/llvmgen"
+	"github.com/osty/osty/internal/llvmabi"
 	"github.com/osty/osty/internal/mir"
 )
 
@@ -20,7 +20,7 @@ func TestLLVMCapabilityMatrixReportsGoFFIBlocker(t *testing.T) {
 		},
 		MIR: &mir.Module{},
 	}
-	matrix := NewLLVMCapabilityMatrix(entry, llvmgen.Options{UseMIR: true, EmitGC: true})
+	matrix := NewLLVMCapabilityMatrix(entry, llvmabi.Options{UseMIR: true, EmitGC: true})
 
 	row, ok := capabilityRow(matrix, CapabilityGoFFI)
 	if !ok {
@@ -65,7 +65,7 @@ func TestLLVMCapabilityMatrixRecordsRuntimeABIKnownness(t *testing.T) {
 		},
 		MIR: &mir.Module{},
 	}
-	matrix := NewLLVMCapabilityMatrix(entry, llvmgen.Options{UseMIR: true, EmitGC: true})
+	matrix := NewLLVMCapabilityMatrix(entry, llvmabi.Options{UseMIR: true, EmitGC: true})
 
 	rows := rowsByID(matrix, CapabilityRuntimeFFI)
 	if got, want := len(rows), 2; got != want {
@@ -111,7 +111,7 @@ func TestLLVMCapabilityMatrixRecordsHIRNodeCoverage(t *testing.T) {
 		},
 		MIR: &mir.Module{},
 	}
-	matrix := NewLLVMCapabilityMatrix(entry, llvmgen.Options{UseMIR: true, EmitGC: true})
+	matrix := NewLLVMCapabilityMatrix(entry, llvmabi.Options{UseMIR: true, EmitGC: true})
 
 	rows := rowsByID(matrix, CapabilityHIRNode)
 	fn := rowBySubject(rows, "*ir.FnDecl")
@@ -126,7 +126,7 @@ func TestLLVMCapabilityMatrixRecordsHIRNodeCoverage(t *testing.T) {
 	}
 
 	entry.MIRIssues = []error{errors.New("synthetic MIR lowering gap")}
-	matrix = NewLLVMCapabilityMatrix(entry, llvmgen.Options{UseMIR: true, EmitGC: true})
+	matrix = NewLLVMCapabilityMatrix(entry, llvmabi.Options{UseMIR: true, EmitGC: true})
 	fn = rowBySubject(rowsByID(matrix, CapabilityHIRNode), "*ir.FnDecl")
 	if fn == nil {
 		t.Fatal("HIR capability row missing after MIR issue")
@@ -153,7 +153,7 @@ func TestLLVMCapabilityMatrixSelectsDispatchRoute(t *testing.T) {
 		IR:  &ir.Module{},
 		MIR: &mir.Module{},
 	}
-	matrix := NewLLVMCapabilityMatrix(entry, llvmgen.Options{UseMIR: true, EmitGC: true})
+	matrix := NewLLVMCapabilityMatrix(entry, llvmabi.Options{UseMIR: true, EmitGC: true})
 	if got, want := matrix.DispatchRoute(), llvmDispatchMIRDirect; got != want {
 		t.Fatalf("DispatchRoute = %q, want %q", got, want)
 	}
@@ -169,7 +169,7 @@ func TestLLVMCapabilityMatrixSelectsDispatchRoute(t *testing.T) {
 	}
 
 	entry.MIR = nil
-	matrix = NewLLVMCapabilityMatrix(entry, llvmgen.Options{UseMIR: true, EmitGC: true})
+	matrix = NewLLVMCapabilityMatrix(entry, llvmabi.Options{UseMIR: true, EmitGC: true})
 	if got, want := matrix.DispatchRoute(), llvmDispatchMIRDirect; got != want {
 		t.Fatalf("DispatchRoute without MIR = %q, want %q", got, want)
 	}
@@ -192,7 +192,7 @@ func TestLLVMCapabilityMatrixRecordsMIRRouteBlocker(t *testing.T) {
 		IR:  &ir.Module{},
 		MIR: mirModuleWithFunction(unsupportedMIRFunction()),
 	}
-	matrix := NewLLVMCapabilityMatrix(entry, llvmgen.Options{UseMIR: true, EmitGC: true})
+	matrix := NewLLVMCapabilityMatrix(entry, llvmabi.Options{UseMIR: true, EmitGC: true})
 
 	if got, want := matrix.DispatchRoute(), llvmDispatchMIRDirect; got != want {
 		t.Fatalf("DispatchRoute = %q, want %q", got, want)
@@ -228,7 +228,7 @@ func TestLLVMCapabilityMatrixRecordsMIRRuntimeABI(t *testing.T) {
 		IR:  &ir.Module{},
 		MIR: mirModuleWithFunction(printlnMIRFunction()),
 	}
-	matrix := NewLLVMCapabilityMatrix(entry, llvmgen.Options{UseMIR: true, EmitGC: true})
+	matrix := NewLLVMCapabilityMatrix(entry, llvmabi.Options{UseMIR: true, EmitGC: true})
 
 	row := rowBySubject(rowsByID(matrix, CapabilityMIREmit), "mir.instr:main:bb0:0:*mir.IntrinsicInstr")
 	if row == nil {
@@ -252,7 +252,7 @@ func TestLLVMCapabilityMatrixRecordsNativeOwnedRoute(t *testing.T) {
 		IR:  &ir.Module{},
 		MIR: &mir.Module{},
 	}
-	matrix := newLLVMDispatchCapabilityMatrix(entry, llvmgen.Options{UseMIR: true, EmitGC: true}, nil, EmitLLVMIR)
+	matrix := newLLVMDispatchCapabilityMatrix(entry, llvmabi.Options{UseMIR: true, EmitGC: true}, nil, EmitLLVMIR)
 	row, ok := capabilityRow(matrix, CapabilityNativeOwned)
 	if !ok {
 		t.Fatal("native-owned row missing")
@@ -264,7 +264,7 @@ func TestLLVMCapabilityMatrixRecordsNativeOwnedRoute(t *testing.T) {
 		t.Fatal("CanRoute(native-owned) = false, want true")
 	}
 
-	matrix = newLLVMDispatchCapabilityMatrix(entry, llvmgen.Options{UseMIR: true, EmitGC: true}, []string{"mir-backend"}, EmitLLVMIR)
+	matrix = newLLVMDispatchCapabilityMatrix(entry, llvmabi.Options{UseMIR: true, EmitGC: true}, []string{"mir-backend"}, EmitLLVMIR)
 	row, ok = capabilityRow(matrix, CapabilityNativeOwned)
 	if !ok {
 		t.Fatal("native-owned row missing when feature disables it")

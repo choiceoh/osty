@@ -19,7 +19,7 @@ var (
 var nativeLLVMGenSourceInputs = []string{
 	"cmd/osty-native-llvmgen",
 	"internal/backend",
-	"internal/llvmgen",
+	"internal/llvmabi",
 	"internal/mirjson",
 	"internal/nativelirproto",
 	"internal/nativellvmgen",

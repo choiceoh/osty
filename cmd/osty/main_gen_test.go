@@ -168,61 +168,6 @@ func TestPrepareGenBackendEntryUsesPackageLoweringForSingleFile(t *testing.T) {
 	}
 }
 
-func TestEmitGenArtifactUsesMIRPayloadBackendForPrimitiveLoop(t *testing.T) {
-	t.Setenv("OSTY_LLVM_LIR_PROTO", "0")
-
-	dir := t.TempDir()
-	target := writeGenTestFile(t, dir, "main.osty", `fn pick(flag: Bool) -> Int {
-    if flag {
-        42
-    } else {
-        0
-    }
-}
-
-fn main() {
-    let mut i = 0
-    let mut sum = 0
-    for i < 3 {
-        sum = sum + pick(i == 2)
-        i = i + 1
-    }
-    println(sum)
-}
-`)
-
-	entry, err := loadGenPackageEntry(target)
-	if err != nil {
-		t.Fatalf("loadGenPackageEntry() error = %v", err)
-	}
-	oldTry := tryExternalGenLLVMIR
-	tryExternalGenLLVMIR = func(*genPackageEntry) ([]byte, bool, []error, error) {
-		return nil, false, nil, nil
-	}
-	t.Cleanup(func() { tryExternalGenLLVMIR = oldTry })
-
-	got, result, err := emitGenArtifact(backend.NameLLVM, backend.EmitLLVMIR, "main", entry)
-	if err != nil {
-		t.Fatalf("emitGenArtifact() error = %v", err)
-	}
-	for _, want := range []string{
-		"osty LLVM MIR backend",
-		"define i64 @pick",
-		"define i32 @main",
-		"call i64 @pick",
-	} {
-		if !strings.Contains(string(got), want) {
-			t.Fatalf("MIR payload llvm-ir missing %q:\n%s", want, got)
-		}
-	}
-	if result == nil {
-		t.Fatal("emitGenArtifact() result is nil")
-	}
-	if len(result.Warnings) != 0 {
-		t.Fatalf("warnings = %#v, want none", result.Warnings)
-	}
-}
-
 func TestEmitGenArtifactUsesManagedNativeLLVMGenWhenCovered(t *testing.T) {
 	dir := t.TempDir()
 	target := writeGenTestFile(t, dir, "main.osty", "fn main() { println(1) }\n")
@@ -247,93 +192,6 @@ func TestEmitGenArtifactUsesManagedNativeLLVMGenWhenCovered(t *testing.T) {
 	}
 	if result == nil || len(result.Warnings) != 1 || result.Warnings[0].Error() != "external warning" {
 		t.Fatalf("warnings = %#v, want external warning", result)
-	}
-}
-
-func TestEmitGenArtifactUsesMIRPayloadBackendForStructFieldAssign(t *testing.T) {
-	t.Setenv("OSTY_LLVM_LIR_PROTO", "0")
-
-	dir := t.TempDir()
-	target := writeGenTestFile(t, dir, "main.osty", `struct Pair { left: Int, right: Int }
-
-fn main() {
-    let mut pair = Pair { left: 1, right: 2 }
-    pair.left = 3
-    println(pair.left)
-}
-`)
-
-	entry, err := loadGenPackageEntry(target)
-	if err != nil {
-		t.Fatalf("loadGenPackageEntry() error = %v", err)
-	}
-	oldTry := tryExternalGenLLVMIR
-	tryExternalGenLLVMIR = func(*genPackageEntry) ([]byte, bool, []error, error) {
-		return nil, false, nil, nil
-	}
-	t.Cleanup(func() { tryExternalGenLLVMIR = oldTry })
-
-	got, result, err := emitGenArtifact(backend.NameLLVM, backend.EmitLLVMIR, "main", entry)
-	if err != nil {
-		t.Fatalf("emitGenArtifact() error = %v", err)
-	}
-	if result == nil {
-		t.Fatal("emitGenArtifact() result is nil")
-	}
-	for _, want := range []string{
-		"osty LLVM MIR backend",
-		"%Pair = type",
-		"insertvalue %Pair",
-		"extractvalue %Pair",
-	} {
-		if !strings.Contains(string(got), want) {
-			t.Fatalf("MIR payload llvm-ir missing %q:\n%s", want, got)
-		}
-	}
-	if len(result.Warnings) != 0 {
-		t.Fatalf("warnings = %#v, want none", result.Warnings)
-	}
-}
-
-func TestEmitGenArtifactUsesMIRPayloadBackendForListIndex(t *testing.T) {
-	t.Setenv("OSTY_LLVM_LIR_PROTO", "0")
-
-	dir := t.TempDir()
-	target := writeGenTestFile(t, dir, "main.osty", `fn main() {
-    let xs = [1, 2]
-    println(xs[0])
-}
-`)
-
-	entry, err := loadGenPackageEntry(target)
-	if err != nil {
-		t.Fatalf("loadGenPackageEntry() error = %v", err)
-	}
-	oldTry := tryExternalGenLLVMIR
-	tryExternalGenLLVMIR = func(*genPackageEntry) ([]byte, bool, []error, error) {
-		return nil, false, nil, nil
-	}
-	t.Cleanup(func() { tryExternalGenLLVMIR = oldTry })
-
-	got, result, err := emitGenArtifact(backend.NameLLVM, backend.EmitLLVMIR, "main", entry)
-	if err != nil {
-		t.Fatalf("emitGenArtifact() error = %v", err)
-	}
-	if result == nil {
-		t.Fatal("emitGenArtifact() result is nil")
-	}
-	for _, want := range []string{
-		"osty LLVM MIR backend",
-		"@osty_rt_list_new",
-		"@osty_rt_list_push_i64",
-		"@osty_rt_list_get_i64",
-	} {
-		if !strings.Contains(string(got), want) {
-			t.Fatalf("MIR payload llvm-ir missing %q:\n%s", want, got)
-		}
-	}
-	if len(result.Warnings) != 0 {
-		t.Fatalf("warnings = %#v, want none", result.Warnings)
 	}
 }
 
@@ -376,23 +234,14 @@ fn main() {
 	}
 
 	got, result, err := emitGenArtifact(backend.NameLLVM, backend.EmitLLVMIR, "main", entry)
-	if err != nil {
-		t.Fatalf("emitGenArtifact() error = %v", err)
+	if err == nil {
+		t.Fatal("emitGenArtifact should return error with Go MIR emitter removed")
 	}
 	if result == nil {
 		t.Fatal("emitGenArtifact() result is nil")
 	}
-	for _, want := range []string{
-		"osty LLVM MIR backend",
-		"declare void @exit(i32)",
-		"extractvalue %Result.",
-		"testing.expectOk failed",
-		"testing.expectError failed",
-		"testing.assertEq failed",
-	} {
-		if !strings.Contains(string(got), want) {
-			t.Fatalf("MIR llvm-ir missing %q:\n%s", want, got)
-		}
+	if !strings.Contains(string(got), "LLVM000") {
+		t.Fatalf("gen artifact should contain skeleton diagnostic:\n%s", got)
 	}
 }
 
@@ -402,14 +251,11 @@ func TestGenCLIMultiFilePackageEmitsLLVMIR(t *testing.T) {
 	target := writeGenTestFile(t, dir, "b.osty", "fn main() -> Int { helper() }\n")
 
 	got := runOstyCLI(t, "gen", "--emit", "llvm-ir", target)
-	if got.exit != 0 {
-		t.Fatalf("osty gen exit = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.exit, got.stdout, got.stderr)
+	if got.exit == 0 {
+		t.Fatal("osty gen should exit non-zero with Go MIR emitter removed")
 	}
-	if !strings.Contains(got.stdout, "@helper") {
-		t.Fatalf("stdout missing helper symbol:\n%s", got.stdout)
-	}
-	if !strings.Contains(got.stdout, "@main") {
-		t.Fatalf("stdout missing main symbol:\n%s", got.stdout)
+	if !strings.Contains(got.stdout, "LLVM000") || !strings.Contains(got.stdout, "backend skeleton") {
+		t.Fatalf("stdout should contain unsupported skeleton:\n%s", got.stdout)
 	}
 }
 

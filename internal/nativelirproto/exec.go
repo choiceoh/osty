@@ -36,6 +36,7 @@ type Request struct {
 	SourcePath  string `json:"sourcePath,omitempty"`
 	Source      string `json:"source,omitempty"`
 	Target      string `json:"target,omitempty"`
+	MIR         any    `json:"mir,omitempty"`
 }
 
 // Response is the JSON payload the binary writes to stdout. `LLVMIR`

@@ -24,7 +24,7 @@ import (
 	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/llvmgen"
+	"github.com/osty/osty/internal/llvmabi"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/runner"
 	"github.com/osty/osty/internal/selfhost"
@@ -855,7 +855,7 @@ func compileNativeTestDriver(ctx context.Context, sourcePath, objectPath string)
 }
 
 func linkNativeTestDriver(ctx context.Context, objectPaths []string, binaryPath string) error {
-	args := llvmgen.ClangLinkBinaryArgs("", objectPaths, binaryPath)
+	args := llvmabi.ClangLinkBinaryArgs("", objectPaths, binaryPath)
 	return runNativeTestClang(ctx, "link test binary", args...)
 }
 

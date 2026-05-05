@@ -14,85 +14,17 @@ import (
 
 	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/check"
-	ostyir "github.com/osty/osty/internal/ir"
 	"github.com/osty/osty/internal/mirjson"
 	"github.com/osty/osty/internal/parser"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/stdlib"
 )
 
-func runLLVMGenSource(t *testing.T, path string, source string) llvmgenResponse {
-	t.Helper()
-	reqBody, err := json.Marshal(llvmgenRequest{Path: path, Source: source})
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-	var stdout bytes.Buffer
-	if err := run(bytes.NewReader(reqBody), &stdout); err != nil {
-		t.Fatalf("run error: %v", err)
-	}
-	var resp llvmgenResponse
-	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	return resp
-}
-
-func TestRunEmitsNativeOwnedLLVMIRForSource(t *testing.T) {
-	var stdout bytes.Buffer
-	stdin := strings.NewReader(`{"path":"main.osty","source":"fn pick(flag: Bool) -> Int { if flag { 42 } else { 0 } }\nfn main() { let mut i = 0 let mut sum = 0 for i < 3 { sum = sum + pick(i == 2) i = i + 1 } println(sum) }\n"}`)
-	if err := run(stdin, &stdout); err != nil {
-		t.Fatalf("run error: %v", err)
-	}
-	var resp llvmgenResponse
-	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if !resp.Covered {
-		t.Fatalf("covered = false, want true")
-	}
-	if !strings.Contains(resp.LLVMIR, "define i64 @pick(i1 %flag)") {
-		t.Fatalf("llvmIr missing pick definition:\n%s", resp.LLVMIR)
-	}
-	if !strings.Contains(resp.LLVMIR, "for.cond") {
-		t.Fatalf("llvmIr missing loop label:\n%s", resp.LLVMIR)
-	}
-}
-
-func TestRunEmitsNativeOwnedLLVMIRForPackage(t *testing.T) {
-	reqBody, err := json.Marshal(llvmgenRequest{
-		Path: "b.osty",
-		Package: &llvmgenPackageInput{
-			Files: []llvmgenPackageFile{
-				{Name: "a.osty", Source: "pub fn helper() -> Int { 1 }\n"},
-				{Name: "b.osty", Source: "fn main() { println(helper()) }\n"},
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("marshal request: %v", err)
-	}
-
-	var stdout bytes.Buffer
-	if err := run(bytes.NewReader(reqBody), &stdout); err != nil {
-		t.Fatalf("run error: %v", err)
-	}
-	var resp llvmgenResponse
-	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if !resp.Covered {
-		t.Fatalf("covered = false, want true")
-	}
-	if !strings.Contains(resp.LLVMIR, "@helper") {
-		t.Fatalf("llvmIr missing helper symbol:\n%s", resp.LLVMIR)
-	}
-	if !strings.Contains(resp.LLVMIR, "@main") {
-		t.Fatalf("llvmIr missing main symbol:\n%s", resp.LLVMIR)
-	}
-}
-
 func TestRunEmitsLLVMIRForMIRPayload(t *testing.T) {
+	bin := buildFakeNativeLIRProto(t)
+	t.Setenv("OSTY_NATIVE_LIRPROTO_BIN", bin)
+	t.Setenv("FAKE_NATIVE_LIRPROTO_RESPONSE", `{"llvmIr":"; lir-proto\ndefine i64 @main() { ret i64 7 }\n"}`)
+
 	entry := prepareMIRPayloadEntry(t, "fn main() -> Int { 7 }\n")
 	payload, err := mirjson.FromModule(entry.MIR)
 	if err != nil {
@@ -121,7 +53,7 @@ func TestRunEmitsLLVMIRForMIRPayload(t *testing.T) {
 	if !resp.Covered {
 		t.Fatalf("covered = false, want true; warnings=%v", resp.Warnings)
 	}
-	if !strings.Contains(resp.LLVMIR, "define i64 @main()") || !strings.Contains(resp.LLVMIR, "store i64 7") {
+	if !strings.Contains(resp.LLVMIR, "define i64 @main()") || !strings.Contains(resp.LLVMIR, "ret i64 7") {
 		t.Fatalf("llvmIr missing MIR-emitted main return:\n%s", resp.LLVMIR)
 	}
 }
@@ -175,7 +107,7 @@ func TestRunMIRPayloadPrefersLIRProtoWhenSelected(t *testing.T) {
 	}
 }
 
-func TestRunMIRPayloadFallsBackWhenLIRProtoDeclines(t *testing.T) {
+func TestRunMIRPayloadDeclinesWhenLIRProtoDeclines(t *testing.T) {
 	bin := buildFakeNativeLIRProto(t)
 	t.Setenv("OSTY_LLVM_LIR_PROTO", "1")
 	t.Setenv("OSTY_NATIVE_LIRPROTO_BIN", bin)
@@ -206,10 +138,10 @@ func TestRunMIRPayloadFallsBackWhenLIRProtoDeclines(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if !resp.Covered || !strings.Contains(resp.LLVMIR, "store i64 7") {
-		t.Fatalf("fallback did not emit Go MIR IR: %#v", resp)
+	if resp.Covered || resp.LLVMIR != "" {
+		t.Fatalf("declined LIR Proto should not fall back to Go MIR IR: %#v", resp)
 	}
-	if len(resp.Warnings) == 0 || !strings.Contains(resp.Warnings[0], "not ready") {
+	if len(resp.Warnings) < 2 || !strings.Contains(strings.Join(resp.Warnings, "\n"), "not ready") || !strings.Contains(strings.Join(resp.Warnings, "\n"), "Go MIR emitter fallback has been removed") {
 		t.Fatalf("fallback warnings = %#v, want decline reason", resp.Warnings)
 	}
 }
@@ -310,184 +242,6 @@ func main() {
 	os.Stdout.WriteString(resp)
 }
 `
-
-func TestRunEmitsNativeOwnedLLVMIRForStructFieldAssign(t *testing.T) {
-	var stdout bytes.Buffer
-	stdin := strings.NewReader(`{"path":"main.osty","source":"struct Pair { left: Int, right: Int }\nfn main() { let mut pair = Pair { left: 1, right: 2 } pair.left = 3 println(pair.left) }\n"}`)
-	if err := run(stdin, &stdout); err != nil {
-		t.Fatalf("run error: %v", err)
-	}
-	var resp llvmgenResponse
-	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if !resp.Covered {
-		t.Fatalf("covered = false, want true")
-	}
-	for _, want := range []string{
-		"%Pair = type { i64, i64 }",
-		"extractvalue %Pair",
-		"insertvalue %Pair",
-	} {
-		if !strings.Contains(resp.LLVMIR, want) {
-			t.Fatalf("llvmIr missing %q:\n%s", want, resp.LLVMIR)
-		}
-	}
-}
-
-func TestRunEmitsNativeOwnedLLVMIRForListIndex(t *testing.T) {
-	var stdout bytes.Buffer
-	stdin := strings.NewReader(`{"path":"main.osty","source":"fn main() { let xs = [1, 2] println(xs[0]) }\n"}`)
-	if err := run(stdin, &stdout); err != nil {
-		t.Fatalf("run error: %v", err)
-	}
-	var resp llvmgenResponse
-	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if !resp.Covered {
-		t.Fatalf("covered = false, want true")
-	}
-	for _, want := range []string{
-		"declare ptr @osty_rt_list_new()",
-		"call ptr @osty_rt_list_new()",
-		"call void @osty_rt_list_push_i64(",
-		"call i64 @osty_rt_list_get_i64(",
-	} {
-		if !strings.Contains(resp.LLVMIR, want) {
-			t.Fatalf("llvmIr missing %q:\n%s", want, resp.LLVMIR)
-		}
-	}
-}
-
-func TestRunReportsCoveredForOptionalCoalesceSource(t *testing.T) {
-	var stdout bytes.Buffer
-	stdin := strings.NewReader(`{"path":"main.osty","source":"fn resolve(name: String?) -> String {\n    name ?? \"anonymous\"\n}\n\nfn main() {}\n"}`)
-	if err := run(stdin, &stdout); err != nil {
-		t.Fatalf("run error: %v", err)
-	}
-	var resp llvmgenResponse
-	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if !resp.Covered {
-		t.Fatalf("covered = false, want true")
-	}
-	for _, want := range []string{
-		"define ptr @resolve(ptr %name)",
-		"coalesce.some",
-		"coalesce.none",
-		"phi ptr",
-	} {
-		if !strings.Contains(resp.LLVMIR, want) {
-			t.Fatalf("llvmIr missing %q:\n%s", want, resp.LLVMIR)
-		}
-	}
-}
-
-func TestRunUsesNativeOwnedExportAndCABIShape(t *testing.T) {
-	var stdout bytes.Buffer
-	stdin := strings.NewReader(`{"path":"main.osty","source":"#[export(\"osty.gc.native_entry_v1\")]\n#[c_abi]\npub fn native_entry_v1() -> Int { 0 }\n"}`)
-	if err := run(stdin, &stdout); err != nil {
-		t.Fatalf("run error: %v", err)
-	}
-	var resp llvmgenResponse
-	if err := json.Unmarshal(stdout.Bytes(), &resp); err != nil {
-		t.Fatalf("decode response: %v", err)
-	}
-	if !resp.Covered {
-		t.Fatalf("covered = false, want true")
-	}
-	if !strings.Contains(resp.LLVMIR, "define ccc i64 @native_entry_v1()") {
-		t.Fatalf("llvmIr missing C ABI function definition:\n%s", resp.LLVMIR)
-	}
-	if !strings.Contains(resp.LLVMIR, "@osty.gc.native_entry_v1 = dso_local alias ptr, ptr @native_entry_v1") {
-		t.Fatalf("llvmIr missing export alias:\n%s", resp.LLVMIR)
-	}
-}
-
-func TestRunCoversRuntimeStringsSplitAndListToSet(t *testing.T) {
-	source := `use runtime.strings as strings {
-    fn Split(s: String, sep: String) -> List<String>
-}
-
-fn main() {
-    let items = strings.Split("pear,apple", ",")
-    let seen = items.toSet()
-    println(seen.contains("pear"))
-}
-`
-	resp := runLLVMGenSource(t, "main.osty", source)
-	if !resp.Covered {
-		entry, err := prepareSourceEntry(llvmgenRequest{Path: "main.osty", Source: source})
-		if err != nil {
-			t.Fatalf("covered = false, want true; prepareSourceEntry error: %v", err)
-		}
-		t.Fatalf("covered = false, want true\n%s", ostyir.Print(entry.IR))
-	}
-	for _, want := range []string{
-		"declare ptr @osty_rt_strings_Split(ptr, ptr)",
-		"call ptr @osty_rt_strings_Split(",
-		"declare ptr @osty_rt_list_to_set_string(ptr)",
-		"call i1 @osty_rt_set_contains_string(",
-	} {
-		if !strings.Contains(resp.LLVMIR, want) {
-			t.Fatalf("llvmIr missing %q:\n%s", want, resp.LLVMIR)
-		}
-	}
-}
-
-func TestRunDefersStdTestingHelpersToMIRBackend(t *testing.T) {
-	resp := runLLVMGenSource(t, "main.osty", `use std.testing
-
-enum CalcError {
-    DivideByZero,
-}
-
-fn div(a: Int, b: Int) -> Result<Int, CalcError> {
-    if b == 0 { Err(DivideByZero) } else { Ok(a / b) }
-}
-
-fn main() {
-    let q = testing.expectOk(div(10, 2))
-    testing.assertEq(q, 5)
-    testing.expectError(div(1, 0))
-}
-`)
-	if resp.Covered {
-		t.Fatalf("covered = true, want false (std.testing should route to MIR backend)")
-	}
-}
-
-func TestRunCoversNestedStructBindingPattern(t *testing.T) {
-	resp := runLLVMGenSource(t, "main.osty", `struct Inner {
-    x: Int
-}
-
-struct Outer {
-    inner: Inner
-}
-
-fn main() {
-    let outer @ Outer { inner: Inner { x } } = Outer { inner: Inner { x: 7 } }
-    println(x)
-    println(outer.inner.x)
-}
-`)
-	if !resp.Covered {
-		t.Fatalf("covered = false, want true")
-	}
-	for _, want := range []string{
-		"%Inner = type { i64 }",
-		"%Outer = type { %Inner }",
-		"extractvalue %Outer",
-		"extractvalue %Inner",
-	} {
-		if !strings.Contains(resp.LLVMIR, want) {
-			t.Fatalf("llvmIr missing %q:\n%s", want, resp.LLVMIR)
-		}
-	}
-}
 
 func TestRunRejectsInvalidJSON(t *testing.T) {
 	var stdout bytes.Buffer

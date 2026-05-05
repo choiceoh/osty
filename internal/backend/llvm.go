@@ -10,14 +10,14 @@ import (
 	"strings"
 
 	"github.com/osty/osty/internal/ir"
-	"github.com/osty/osty/internal/llvmgen"
+	"github.com/osty/osty/internal/llvmabi"
 	"github.com/osty/osty/internal/nativellvmgen"
 )
 
 // ErrLLVMNotImplemented marks source shapes that the early LLVM lowering slice
 // cannot lower yet. The message is generated from the Osty-owned backend
 // diagnostic policy.
-var ErrLLVMNotImplemented = errors.New(llvmgen.UnsupportedBackendErrorMessage())
+var ErrLLVMNotImplemented = errors.New(llvmabi.UnsupportedBackendErrorMessage())
 
 type llvmToolchain interface {
 	CompileObject(ctx context.Context, irPath, objectPath, target string) error
@@ -65,25 +65,15 @@ func EmitLLVMIRText(entry Entry, target string, features []string) ([]byte, []er
 	return generateLLVMIR(entry, target, features, EmitLLVMIR)
 }
 
-// TryEmitNativeOwnedLLVMIRText runs only the native-owned llvmgen fast path
-// mirrored from toolchain/llvmgen.osty. It returns ok=false when the entry's
-// IR module is still outside that slice and the caller should choose a
-// broader MIR backend path.
+// TryEmitNativeOwnedLLVMIRText is retained as a compatibility probe while the
+// production dispatcher uses the MIR payload subprocess boundary.
 func TryEmitNativeOwnedLLVMIRText(entry Entry, target string) ([]byte, bool, []error, error) {
-	if entry.IR == nil {
-		return nil, false, nil, fmt.Errorf("llvm backend: missing lowered IR entry")
-	}
-	out, ok, err := llvmgen.TryGenerateNativeOwnedModule(entry.IR, llvmgen.Options{
-		PackageName: entry.PackageName,
-		SourcePath:  entry.SourcePath,
-		Source:      entry.Source,
-		Target:      target,
-	})
 	warnings := append([]error(nil), entry.IRIssues...)
-	if err != nil || !ok {
-		return out, ok, warnings, err
+	if entry.MIR == nil {
+		return nil, false, warnings, nil
 	}
-	return out, true, warnings, nil
+	out, ok, nativeWarnings, err := tryNativeOwnedMIRPayloadLLVMIRText(entry, target)
+	return out, ok, append(warnings, nativeWarnings...), err
 }
 
 var tryNativeOwnedMIRPayloadLLVMIRText = func(entry Entry, target string) ([]byte, bool, []error, error) {
@@ -105,18 +95,18 @@ func (b LLVMBackend) emitPrebuiltIR(ctx context.Context, req Request, irOut []by
 	if err != nil {
 		return nil, err
 	}
-	if !llvmgen.NeedsObjectArtifact(req.Emit.String()) {
+	if !llvmabi.NeedsObjectArtifact(req.Emit.String()) {
 		return out, nil
 	}
 	tc := b.llvmToolchain()
 	if err := tc.CompileObject(ctx, out.Artifacts.LLVMIR, out.Artifacts.Object, req.Layout.Target); err != nil {
 		return out, err
 	}
-	if !llvmgen.NeedsBinaryArtifact(req.Emit.String()) {
+	if !llvmabi.NeedsBinaryArtifact(req.Emit.String()) {
 		return out, nil
 	}
 	if out.Artifacts.Binary == "" {
-		return out, fmt.Errorf("%s", llvmgen.MissingBinaryArtifactMessage())
+		return out, fmt.Errorf("%s", llvmabi.MissingBinaryArtifactMessage())
 	}
 	runtimeObject, err := ensureLocalGCRuntimeObject(ctx, tc, out.Artifacts, req.Layout.Target)
 	if err != nil {
@@ -174,15 +164,15 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 	// (native-owned fast path or MIR-direct). Flipping the gate on
 	// stays safe before a real runner lands — production output is
 	// unchanged but the selection is visible in build logs.
-	if llvmgen.LIRProtoSelected() {
+	if llvmabi.LIRProtoSelected() {
 		traceLLVMDispatch("lir-proto-gate selected package=%s source=%s", entry.PackageName, entry.SourcePath)
-		req := llvmgen.LIRProtoRequest{
+		req := llvmabi.LIRProtoRequest{
 			PackageName: entry.PackageName,
 			SourcePath:  entry.SourcePath,
 			Source:      entry.Source,
 			Target:      target,
 		}
-		if out, err := llvmgen.InvokeLIRProtoRunner(req); err == nil && out != nil {
+		if out, err := llvmabi.InvokeLIRProtoRunner(req); err == nil && out != nil {
 			traceLLVMDispatch("lir-proto-runner covered package=%s source=%s", entry.PackageName, entry.SourcePath)
 			return out, warnings, nil
 		} else {
@@ -190,7 +180,7 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 			warnings = append(warnings, err)
 		}
 	}
-	opts := llvmgen.Options{
+	opts := llvmabi.Options{
 		PackageName: entry.PackageName,
 		SourcePath:  entry.SourcePath,
 		Source:      entry.Source,
@@ -240,21 +230,21 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 		return irOut, warnings, nil
 	}
 	traceLLVMDispatch("%s unsupported: %v", route, genErr)
-	diag := llvmgen.UnsupportedDiagnosticForError(genErr)
+	diag := llvmabi.UnsupportedDiagnosticForError(genErr)
 	return renderUnsupportedLLVMIR(entry, target, emit, warnings, diag, route)
 }
 
-func llvmFallbackDispatchRoute(opts llvmgen.Options, entry Entry) llvmDispatchRoute {
+func llvmFallbackDispatchRoute(opts llvmabi.Options, entry Entry) llvmDispatchRoute {
 	return NewLLVMCapabilityMatrix(entry, opts).DispatchRoute()
 }
 
-func emitLLVMFallback(route llvmDispatchRoute, entry Entry, opts llvmgen.Options) ([]byte, error) {
-	return llvmgen.GenerateFromMIR(entry.MIR, opts)
+func emitLLVMFallback(route llvmDispatchRoute, entry Entry, opts llvmabi.Options) ([]byte, error) {
+	return nil, llvmabi.Unsupported("mir-emit", "Go MIR emitter fallback has been removed; MIR emission must be covered by the native LIR Proto subprocess")
 }
 
-func renderUnsupportedLLVMIR(entry Entry, target string, emit EmitMode, warnings []error, diag llvmgen.UnsupportedDiagnostic, route llvmDispatchRoute) ([]byte, []error, error) {
+func renderUnsupportedLLVMIR(entry Entry, target string, emit EmitMode, warnings []error, diag llvmabi.UnsupportedDiagnostic, route llvmDispatchRoute) ([]byte, []error, error) {
 	summary := llvmUnsupportedTraceSummary(diag, route)
-	skeleton := llvmgen.RenderSkeleton(
+	skeleton := llvmabi.RenderSkeleton(
 		entry.PackageName,
 		entry.SourcePath,
 		string(emit),
@@ -268,8 +258,8 @@ func renderUnsupportedLLVMIR(entry Entry, target string, emit EmitMode, warnings
 	return skeleton, warnings, ErrLLVMNotImplemented
 }
 
-func llvmUnsupportedTraceSummary(diag llvmgen.UnsupportedDiagnostic, route llvmDispatchRoute) string {
-	summary := llvmgen.UnsupportedSummary(diag)
+func llvmUnsupportedTraceSummary(diag llvmabi.UnsupportedDiagnostic, route llvmDispatchRoute) string {
+	summary := llvmabi.UnsupportedSummary(diag)
 	if route == "" {
 		return summary
 	}
@@ -318,7 +308,7 @@ func (b LLVMBackend) llvmToolchain() llvmToolchain {
 type clangToolchain struct{}
 
 func (clangToolchain) CompileObject(ctx context.Context, irPath, objectPath, target string) error {
-	args := llvmgen.ClangCompileObjectArgs(target, irPath, objectPath)
+	args := llvmabi.ClangCompileObjectArgs(target, irPath, objectPath)
 	return runClang(ctx, "compile object", args)
 }
 
@@ -328,7 +318,7 @@ func (clangToolchain) CompileCObject(ctx context.Context, sourcePath, objectPath
 }
 
 func (clangToolchain) LinkBinary(ctx context.Context, objectPaths []string, binaryPath, target string, linkLibraries []string) error {
-	args := llvmgen.ClangLinkBinaryArgs(target, objectPaths, binaryPath)
+	args := llvmabi.ClangLinkBinaryArgs(target, objectPaths, binaryPath)
 	args = append(args, clangLinkLibraryArgs(linkLibraries)...)
 	args = append(args, clangPlatformRuntimeLinkArgs(target)...)
 	return runClang(ctx, "link binary", args)
@@ -414,7 +404,7 @@ func isDarwinTarget(target string) bool {
 func runClang(ctx context.Context, action string, args []string) error {
 	path, err := exec.LookPath("clang")
 	if err != nil {
-		return fmt.Errorf("%s: %w", llvmgen.MissingClangMessage(), err)
+		return fmt.Errorf("%s: %w", llvmabi.MissingClangMessage(), err)
 	}
 	cmd := exec.CommandContext(ctx, path, args...)
 	combined, err := cmd.CombinedOutput()
@@ -426,7 +416,7 @@ func runClang(ctx context.Context, action string, args []string) error {
 		msg = "<no output>"
 	}
 	command := "clang " + strings.Join(args, " ")
-	return fmt.Errorf("%s: %w", llvmgen.ClangFailureMessage(action, command, msg), err)
+	return fmt.Errorf("%s: %w", llvmabi.ClangFailureMessage(action, command, msg), err)
 }
 
 // useMIRBackend reports whether LLVM emission should use the
