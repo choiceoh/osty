@@ -31,6 +31,10 @@ var ErrUnsupported = errors.New("stage0: MIR shape outside bootstrap subset")
 //   - P2b: `fn name(x: Int) -> Int { x }` — non-main, single Int
 //     parameter, single block, one AssignInstr writing CopyOp(param)
 //     to the return local, ReturnTerm.
+//   - P2c: `fn name(a: Int, b: Int) -> Int { a + b }` — non-main,
+//     two Int parameters, single block, one AssignInstr writing
+//     BinaryRV{BinAdd, CopyOp(p0), CopyOp(p1)} to the return local,
+//     ReturnTerm.
 //
 // Each P2x extension adds one match predicate + emit closure +
 // regression test. Surface drift is held back by the stage0 coverage
@@ -83,6 +87,9 @@ func emitFunction(out *strings.Builder, fn *mir.Function) error {
 	}
 	if pat, ok := matchIntParamPassthrough(fn); ok {
 		return emitIntParamPassthrough(out, fn, pat)
+	}
+	if pat, ok := matchIntBinaryAdd(fn); ok {
+		return emitIntBinaryAdd(out, fn, pat)
 	}
 	return fmt.Errorf("%w: function %q does not match any stage0 pattern", ErrUnsupported, fn.Name)
 }
@@ -213,6 +220,89 @@ func emitIntParamPassthrough(out *strings.Builder, fn *mir.Function, pat intPara
 	fmt.Fprintf(out, "  ret i64 %%%s\n", pat.paramName)
 	out.WriteString("}\n\n")
 	return nil
+}
+
+// ---- P2c: two-Int-param add ----
+
+type intBinaryAddPattern struct {
+	leftName  string
+	rightName string
+}
+
+// matchIntBinaryAdd matches `fn name(a: Int, b: Int) -> Int { a + b }`.
+// MIR shape: 2 Int params, single block, single AssignInstr writing
+// BinaryRV{BinAdd, CopyOp(p0), CopyOp(p1)} to the return local,
+// ReturnTerm. Operand order must match Params order — `b + a` is a
+// distinct expression that lowers to swapped CopyOps and currently
+// declines.
+func matchIntBinaryAdd(fn *mir.Function) (intBinaryAddPattern, bool) {
+	if !isPrimType(fn.ReturnType, ir.PrimInt) {
+		return intBinaryAddPattern{}, false
+	}
+	if len(fn.Params) != 2 {
+		return intBinaryAddPattern{}, false
+	}
+	leftID, rightID := fn.Params[0], fn.Params[1]
+	leftLocal, rightLocal := lookupLocal(fn, leftID), lookupLocal(fn, rightID)
+	if leftLocal == nil || rightLocal == nil {
+		return intBinaryAddPattern{}, false
+	}
+	if !leftLocal.IsParam || !rightLocal.IsParam {
+		return intBinaryAddPattern{}, false
+	}
+	if !isPrimType(leftLocal.Type, ir.PrimInt) || !isPrimType(rightLocal.Type, ir.PrimInt) {
+		return intBinaryAddPattern{}, false
+	}
+	bb, ok := singleBlockReturning(fn)
+	if !ok || len(bb.Instrs) != 1 {
+		return intBinaryAddPattern{}, false
+	}
+	assign, ok := writeToReturnLocal(bb.Instrs[0], fn.ReturnLocal)
+	if !ok {
+		return intBinaryAddPattern{}, false
+	}
+	bin, ok := assign.Src.(*mir.BinaryRV)
+	if !ok || bin.Op != mir.BinAdd {
+		return intBinaryAddPattern{}, false
+	}
+	if !isPrimType(bin.T, ir.PrimInt) {
+		return intBinaryAddPattern{}, false
+	}
+	if !copiesParam(bin.Left, leftID) || !copiesParam(bin.Right, rightID) {
+		return intBinaryAddPattern{}, false
+	}
+	return intBinaryAddPattern{
+		leftName:  sanitizeLLVMName(leftLocal.Name, "a"),
+		rightName: sanitizeLLVMName(rightLocal.Name, "b"),
+	}, true
+}
+
+func emitIntBinaryAdd(out *strings.Builder, fn *mir.Function, pat intBinaryAddPattern) error {
+	left, right := pat.leftName, pat.rightName
+	if left == right {
+		// Sanitiser hands back the same fallback when both source
+		// names are unrenderable; disambiguate so SSA stays valid.
+		right = right + ".1"
+	}
+	fmt.Fprintf(out, "define i64 @%s(i64 %%%s, i64 %%%s) {\n", fn.Name, left, right)
+	out.WriteString("entry:\n")
+	fmt.Fprintf(out, "  %%0 = add i64 %%%s, %%%s\n", left, right)
+	out.WriteString("  ret i64 %0\n")
+	out.WriteString("}\n\n")
+	return nil
+}
+
+// copiesParam reports whether `op` is a CopyOp reading the entire
+// param local with id `paramID` (no projections).
+func copiesParam(op mir.Operand, paramID mir.LocalID) bool {
+	cp, ok := op.(*mir.CopyOp)
+	if !ok {
+		return false
+	}
+	if cp.Place.Local != paramID || cp.Place.HasProjections() {
+		return false
+	}
+	return true
 }
 
 // ---- shared helpers ----
