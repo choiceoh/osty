@@ -1035,6 +1035,10 @@ type FrontTokenKind_FrontByte struct{ _ref byte }
 
 func (FrontTokenKind_FrontByte) _isFrontTokenKind() {}
 
+type FrontTokenKind_FrontByteString struct{ _ref byte }
+
+func (FrontTokenKind_FrontByteString) _isFrontTokenKind() {}
+
 type FrontTokenKind_FrontString struct{ _ref byte }
 
 func (FrontTokenKind_FrontString) _isFrontTokenKind() {}
@@ -1978,6 +1982,8 @@ func frontTokenKindStableCode(kind FrontTokenKind) int {
 		return 7
 	case *FrontTokenKind_FrontByte:
 		return 8
+	case *FrontTokenKind_FrontByteString:
+		return 81
 	case *FrontTokenKind_FrontString:
 		return 9
 	case *FrontTokenKind_FrontRawString:
@@ -2688,9 +2694,13 @@ func frontendLexStream(source string) *FrontLexStream {
 					}
 					skip = _cur82 - _rhs83
 				}()
-			} else if unit == "b" && next == "'" {
+			} else if unit == "b" && (next == "'" || next == "\"") {
 				// Osty: /tmp/selfhost_merged.osty:1245:17
-				scan := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontByte{}))
+				byteScanKind := FrontTokenKind(&FrontTokenKind_FrontByte{})
+				if next == "\"" {
+					byteScanKind = FrontTokenKind(&FrontTokenKind_FrontByteString{})
+				}
+				scan := frontStringLikeScan(units, idx, unitCount, byteScanKind)
 				_ = scan
 				// Osty: /tmp/selfhost_merged.osty:1246:17
 				leadingDocLines := frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
@@ -2799,7 +2809,7 @@ func frontendLexStream(source string) *FrontLexStream {
 				if scan.errors > 0 {
 					// Osty: /tmp/selfhost_merged.osty:1291:21
 					func() struct{} {
-						diagnostics = append(diagnostics, frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontByte{}), scan), start, frontPositionAt(units, func() int {
+						diagnostics = append(diagnostics, frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, byteScanKind, scan), start, frontPositionAt(units, func() int {
 							var _p96 int = idx
 							var _rhs97 int = scan.consumed
 							if _rhs97 > 0 && _p96 > math.MaxInt-_rhs97 {
@@ -3648,7 +3658,7 @@ func frontStringScanHitNewline(units []string, start int, unitCount int, kind Fr
 	close := "\""
 	_ = close
 	// Osty: /tmp/selfhost_merged.osty:1699:5
-	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) {
+	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) || ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontByteString{})) {
 		// Osty: /tmp/selfhost_merged.osty:1700:9
 		func() {
 			var _cur192 int = start
@@ -4162,6 +4172,18 @@ func frontStringContentStart(units []string, start int, kind FrontTokenKind, tri
 					panic("integer overflow")
 				}
 				return _p248 + _rhs249
+			}()
+		} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontByteString{})) {
+			return func() int {
+				var _p248b int = start
+				var _rhs249b int = 2
+				if _rhs249b > 0 && _p248b > math.MaxInt-_rhs249b {
+					panic("integer overflow")
+				}
+				if _rhs249b < 0 && _p248b < math.MinInt-_rhs249b {
+					panic("integer overflow")
+				}
+				return _p248b + _rhs249b
 			}()
 		} else if triple {
 			return func() int {
@@ -5034,7 +5056,8 @@ func frontInterpolationStringDiagnostics(units []string, start int, limit int, t
 	if !ostyEqual(tokenScan.kind, FrontTokenKind(&FrontTokenKind_FrontString{})) &&
 		!ostyEqual(tokenScan.kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) &&
 		!ostyEqual(tokenScan.kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) &&
-		!ostyEqual(tokenScan.kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) {
+		!ostyEqual(tokenScan.kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) &&
+		!ostyEqual(tokenScan.kind, FrontTokenKind(&FrontTokenKind_FrontByteString{})) {
 		return emptyFrontStringStructureScan()
 	}
 	out := emptyFrontStringStructureScan()
@@ -5075,6 +5098,8 @@ func frontInterpolationTokenScan(units []string, start int, limit int) *FrontSca
 			return frontStringLikeScan(units, start, limit, FrontTokenKind(&FrontTokenKind_FrontRawString{}))
 		} else if unit == "b" && next == "'" {
 			return frontStringLikeScan(units, start, limit, FrontTokenKind(&FrontTokenKind_FrontByte{}))
+		} else if unit == "b" && next == "\"" {
+			return frontStringLikeScan(units, start, limit, FrontTokenKind(&FrontTokenKind_FrontByteString{}))
 		} else if unit == "\"" {
 			return frontStringLikeScan(units, start, limit, FrontTokenKind(&FrontTokenKind_FrontString{}))
 		} else if unit == "'" {
@@ -6516,6 +6541,23 @@ func frontStringLikeScan(units []string, start int, unitCount int, kind FrontTok
 		}()
 		// Osty: /tmp/selfhost_merged.osty:2692:9
 		close = "'"
+	} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontByteString{})) {
+		// Osty: /tmp/selfhost_merged.osty:2690:9
+		consumed = 2
+		// Osty: /tmp/selfhost_merged.osty:2691:9
+		func() {
+			var _cur494b int = start
+			var _rhs495b int = 2
+			if _rhs495b > 0 && _cur494b > math.MaxInt-_rhs495b {
+				panic("integer overflow")
+			}
+			if _rhs495b < 0 && _cur494b < math.MinInt-_rhs495b {
+				panic("integer overflow")
+			}
+			contentStart = _cur494b + _rhs495b
+		}()
+		// Osty: /tmp/selfhost_merged.osty:2692:9
+		close = "\""
 	} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) {
 		// Osty: /tmp/selfhost_merged.osty:2694:9
 		close = "'"
@@ -7460,6 +7502,9 @@ func frontKindInsertsTerm(kind FrontTokenKind) bool {
 		if func() bool { _, ok := _m596.(*FrontTokenKind_FrontByte); return ok }() {
 			return true
 		}
+		if func() bool { _, ok := _m596.(*FrontTokenKind_FrontByteString); return ok }() {
+			return true
+		}
 		if func() bool { _, ok := _m596.(*FrontTokenKind_FrontString); return ok }() {
 			return true
 		}
@@ -7921,6 +7966,9 @@ func isFrontLiteralKind(kind FrontTokenKind) bool {
 		if func() bool { _, ok := _m602.(*FrontTokenKind_FrontByte); return ok }() {
 			return true
 		}
+		if func() bool { _, ok := _m602.(*FrontTokenKind_FrontByteString); return ok }() {
+			return true
+		}
 		if func() bool { _, ok := _m602.(*FrontTokenKind_FrontString); return ok }() {
 			return true
 		}
@@ -8173,6 +8221,9 @@ func frontTokenKindName(kind FrontTokenKind) string {
 		}
 		if func() bool { _, ok := _m604.(*FrontTokenKind_FrontByte); return ok }() {
 			return "BYTE"
+		}
+		if func() bool { _, ok := _m604.(*FrontTokenKind_FrontByteString); return ok }() {
+			return "BYTESTRING"
 		}
 		if func() bool { _, ok := _m604.(*FrontTokenKind_FrontString); return ok }() {
 			return "STRING"
@@ -17367,7 +17418,7 @@ func ostyLexFactsFromStream(source string, stream *FrontLexStream) *OstyLexFacts
 		tok := frontLexTokenAt(stream, ti)
 		_ = tok
 		// Osty: /tmp/selfhost_merged.osty:6398:9
-		if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontString{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) {
+		if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontString{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontByteString{})) {
 			// Osty: /tmp/selfhost_merged.osty:6399:13
 			before := ostyLexStringPartCount(stringParts)
 			_ = before
@@ -17863,6 +17914,14 @@ func ostyPublicTokenText(tok *FrontLexToken, raw string) string {
 	}
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) {
 		return ostyDecodeByteLiteralValue(raw)
+	}
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontByteString{})) {
+		body := raw
+		if len(body) >= 3 && body[0] == 'b' && body[1] == '"' {
+			body = body[2 : len(body)-1]
+			return ostyDecodeEscapes(body)
+		}
+		return raw
 	}
 	return raw
 }
@@ -19896,7 +19955,7 @@ func opParsePrimary(p *OstyParser) int {
 		return opAddNode(p, n)
 	}
 	// Osty: /tmp/selfhost_merged.osty:7488:5
-	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontString{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) {
+	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontString{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontByteString{})) {
 		// Osty: /tmp/selfhost_merged.osty:7488:64
 		opAdvance(p)
 		// Osty: /tmp/selfhost_merged.osty:7489:5
@@ -67086,6 +67145,11 @@ func astLowerKind(kind FrontTokenKind) astbridge.Kind {
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontByte{})) {
 		// Osty: /tmp/selfhost_merged.osty:35985:28
 		return astbridge.KindByte()
+	}
+	// Osty: /tmp/selfhost_merged.osty:35985a:5
+	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontByteString{})) {
+		// Osty: /tmp/selfhost_merged.osty:35985a:32
+		return astbridge.KindString()
 	}
 	// Osty: /tmp/selfhost_merged.osty:35986:5
 	if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontString{})) {

@@ -12,6 +12,7 @@ pub enum FrontTokenKind {
     FrontFloat,
     FrontChar,
     FrontByte,
+    FrontByteString,
     FrontString,
     FrontRawString,
     FrontFn,
@@ -517,6 +518,7 @@ pub fn frontTokenKindStableCode(kind: FrontTokenKind) -> Int {
         FrontFloat -> 6,
         FrontChar -> 7,
         FrontByte -> 8,
+        FrontByteString -> 81,
         FrontString -> 9,
         FrontRawString -> 10,
         FrontFn -> 11,
@@ -838,8 +840,9 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
                 skip = scan.consumed - 1
-            } else if unit == "b" && next == "'" {
-                let scan = frontStringLikeScan(units, idx, unitCount, FrontByte)
+            } else if unit == "b" && (next == "'" || next == "\"") {
+                let byteScanKind = if next == "'" { FrontByte } else { FrontByteString }
+                let scan = frontStringLikeScan(units, idx, unitCount, byteScanKind)
                 let leadingDocLines = frontAttachedDocLines(
                     pendingDocLines,
                     docLastLine,
@@ -887,7 +890,7 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 if scan.errors > 0 {
                     diagnostics.push(
                         frontLexDiagnostic(
-                            frontStringDiagnosticCode(units, idx, unitCount, FrontByte, scan),
+                            frontStringDiagnosticCode(units, idx, unitCount, byteScanKind, scan),
                             start,
                             frontPositionAt(units, idx + scan.consumed),
                         ),
@@ -1303,7 +1306,7 @@ pub fn frontStringScanHitNewline(
 ) -> Bool {
     let mut contentStart = start + 1
     let mut close = "\""
-    if kind == FrontRawString || kind == FrontByte {
+    if kind == FrontRawString || kind == FrontByte || kind == FrontByteString {
         contentStart = start + 2
     }
     if kind == FrontByte || kind == FrontChar {
@@ -1804,7 +1807,7 @@ pub fn frontInterpolationStringDiagnostics(
     limit: Int,
     tokenScan: FrontScanResult,
 ) -> FrontStringStructureScan {
-    if tokenScan.kind != FrontString && tokenScan.kind != FrontRawString && tokenScan.kind != FrontChar && tokenScan.kind != FrontByte {
+    if tokenScan.kind != FrontString && tokenScan.kind != FrontRawString && tokenScan.kind != FrontChar && tokenScan.kind != FrontByte && tokenScan.kind != FrontByteString {
         return emptyFrontStringStructureScan()
     }
     let mut out = emptyFrontStringStructureScan()
@@ -1831,6 +1834,8 @@ pub fn frontInterpolationTokenScan(units: List<String>, start: Int, limit: Int) 
         frontStringLikeScan(units, start, limit, FrontRawString)
     } else if unit == "b" && next == "'" {
         frontStringLikeScan(units, start, limit, FrontByte)
+    } else if unit == "b" && next == "\"" {
+        frontStringLikeScan(units, start, limit, FrontByteString)
     } else if unit == "\"" {
         frontStringLikeScan(units, start, limit, FrontString)
     } else if unit == "'" {
@@ -2126,6 +2131,16 @@ pub fn frontendLexSummary(source: String) -> FrontLexSummary {
                     summary.errors = summary.errors + 1
                 }
                 skip = byteLit.consumed - 1
+            } else if unit == "b" && next == "\"" {
+                atFileStart = false
+                let byteLit = frontStringLikeScan(units, idx, unitCount, FrontByteString)
+                if byteLit.ok {
+                    summary = frontRecordScan(byteLit, summary)
+                    insertTerm = frontKindInsertsTerm(byteLit.kind)
+                } else {
+                    summary.errors = summary.errors + 1
+                }
+                skip = byteLit.consumed - 1
             } else if unit == "\"" {
                 atFileStart = false
                 let stringLit = frontStringLikeScan(units, idx, unitCount, FrontString)
@@ -2353,6 +2368,10 @@ pub fn frontStringLikeScan(
         consumed = 2
         contentStart = start + 2
         close = "'"
+    } else if kind == FrontByteString {
+        consumed = 2
+        contentStart = start + 2
+        close = "\""
     } else if kind == FrontChar {
         close = "'"
     } else if frontUnitAt(units, start + 1) == "\"" && frontUnitAt(units, start + 2) == "\"" {
@@ -2858,6 +2877,7 @@ pub fn frontKindInsertsTerm(kind: FrontTokenKind) -> Bool {
         FrontFloat -> true,
         FrontChar -> true,
         FrontByte -> true,
+        FrontByteString -> true,
         FrontString -> true,
         FrontRawString -> true,
         FrontRParen -> true,
@@ -3154,6 +3174,7 @@ pub fn isFrontLiteralKind(kind: FrontTokenKind) -> Bool {
         FrontFloat -> true,
         FrontChar -> true,
         FrontByte -> true,
+        FrontByteString -> true,
         FrontString -> true,
         FrontRawString -> true,
         _ -> false,
@@ -3262,6 +3283,7 @@ pub fn frontTokenKindName(kind: FrontTokenKind) -> String {
         FrontFloat -> "FLOAT",
         FrontChar -> "CHAR",
         FrontByte -> "BYTE",
+        FrontByteString -> "BYTESTRING",
         FrontString -> "STRING",
         FrontRawString -> "RAWSTRING",
         FrontFn -> "fn",

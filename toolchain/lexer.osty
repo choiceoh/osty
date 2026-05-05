@@ -216,7 +216,7 @@ pub fn ostyLexFactsFromStream(source: String, stream: FrontLexStream) -> OstyLex
     let mut ti = 0
     for ti < tokenCount {
         let tok = frontLexTokenAt(stream, ti)
-        if tok.kind == FrontString || tok.kind == FrontRawString {
+        if tok.kind == FrontString || tok.kind == FrontRawString || tok.kind == FrontByteString {
             let before = ostyLexStringPartCount(stringParts)
             let partCount = frontStringPartCount(stream)
             let mut pi = 0
@@ -437,6 +437,15 @@ fn ostyPublicTokenText(tok: FrontLexToken, raw: String) -> String {
     }
     if tok.kind == FrontByte {
         return ostyDecodeByteLiteralValue(raw)
+    }
+    if tok.kind == FrontByteString {
+        let mut body = raw
+        if strings.hasPrefix(body, "b") && strings.hasPrefix(ostyDropPrefixUnits(body, 1), "\"") {
+            body = ostyDropPrefixUnits(body, 2)
+            body = ostyDropSuffixUnits(body, 1)
+            return ostyDecodeEscapes(body)
+        }
+        return raw
     }
     raw
 }

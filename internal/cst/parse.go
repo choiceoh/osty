@@ -559,7 +559,7 @@ func (p *greenParser) parsePatternAtom(stops ...token.Kind) {
 	switch p.peek().Kind {
 	case token.UNDERSCORE:
 		p.parseLeaf(GkWildcardPat)
-	case token.INT, token.FLOAT, token.STRING, token.RAWSTRING, token.CHAR, token.BYTE:
+	case token.INT, token.FLOAT, token.STRING, token.RAWSTRING, token.BYTESTRING, token.CHAR, token.BYTE:
 		p.parseLeaf(GkLiteralPat)
 	case token.MINUS:
 		p.b.StartNode(GkLiteralPat)
@@ -910,7 +910,7 @@ func (p *greenParser) parsePrefix(stops ...token.Kind) {
 		p.parseLeaf(GkIntLit)
 	case token.FLOAT:
 		p.parseLeaf(GkFloatLit)
-	case token.STRING:
+	case token.STRING, token.BYTESTRING:
 		p.parseLeaf(GkStringLit)
 	case token.RAWSTRING:
 		p.parseLeaf(GkRawStringLit)

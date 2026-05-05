@@ -85,7 +85,7 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 | log | ✅ PASS | `log.info("msg")` (위 row 참조) |
 | uuid | ✅ PASS | `uuid.v4()` (위 row 참조) |
 | regex | ✅ PASS | `regex.compile("a+")` (위 row 참조) |
-| bytes | ⚠️ partial | `b""` 빈 입력 OK, `b"abc"` 인자 위치는 parser 가 거부 — 사전 결합 필요 |
+| bytes | ✅ PASS | `b""` 빈 입력 OK, `b"abc"` 인자 위치도 parser 통과 — 2026-05-05 `FrontByteString` token kind 추가로 해소. 단, `b"..."` 가 `AstNStringLit` 으로 lower 되어 type 은 `Bytes` 아닌 `String`. type fix 는 follow-up. `b"abc".toBytes()` workaround. |
 | crypto | ⚠️ partial | `crypto.randomBytes(8)` OK, `crypto.sha256(bytes)` body lower 실패 |
 | option | ⚠️ partial | `match Some(x)` OK, `.map(\|x\| ...)` closure body 실패 |
 | result | ⚠️ partial | `match Ok(x)` OK, `.map(\|x\| ...)` closure body 실패 |
