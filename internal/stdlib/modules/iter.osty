@@ -6,8 +6,6 @@
 // semantics match `List<T>` methods but live behind the documented
 // fluent API so user code written against the spec works today.
 
-use std.process
-
 pub struct Iter<T> {
     items: List<T>,
 
@@ -149,7 +147,8 @@ pub struct Iter<T> {
 
     pub fn stepBy(self, step: Int) -> Iter<T> {
         if step <= 0 {
-            process.abort("Iter.stepBy: step must be positive, got {step}")
+            // Iter.stepBy: step must be positive, got {step}
+            return Iter { items: [] }
         }
         let mut out: List<T> = []
         let mut i = 0
@@ -237,7 +236,8 @@ pub struct Iter<T> {
 
     pub fn chunked(self, size: Int) -> Iter<List<T>> {
         if size <= 0 {
-            process.abort("Iter.chunked: size must be positive, got {size}")
+            // Iter.chunked: size must be positive, got {size}
+            return Iter { items: [] }
         }
         let mut out: List<List<T>> = []
         let mut bucket: List<T> = []
@@ -259,11 +259,9 @@ pub struct Iter<T> {
     }
 
     pub fn windowed(self, size: Int, step: Int) -> Iter<List<T>> {
-        if size <= 0 {
-            process.abort("Iter.windowed: size must be positive, got {size}")
-        }
-        if step <= 0 {
-            process.abort("Iter.windowed: step must be positive, got {step}")
+        if size <= 0 || step <= 0 {
+            // Iter.windowed: size must be positive, got {size}
+            return Iter { items: [] }
         }
         let mut out: List<List<T>> = []
         let len = self.items.len()
