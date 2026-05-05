@@ -26,6 +26,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -119,23 +120,28 @@ func lower(req nativelirproto.Request) (nativelirproto.Response, error) {
 // resolveOstySelfBin returns the path to the self-host `osty-self`
 // binary the lower call should subprocess.
 //
-// Lookup order (delegated to `selfhostcache.ResolveBinary`):
+// Lookup order (delegated to `selfhostcache.ResolveBinaryWithFetch`):
 //
-//	1. `$OSTY_SELF_BIN` env override.
-//	2. `toolchain/.osty/out/{debug,release}/llvm/osty-self` — the
-//	   in-tree build path.
-//	3. `.osty/cache/self-host/<sha>-<triple>/osty-self` — the
-//	   content-addressed artifact cache.
+//  1. `$OSTY_SELF_BIN` env override.
+//  2. `toolchain/.osty/out/{debug,release}/llvm/osty-self` — the
+//     in-tree build path.
+//  3. `.osty/cache/self-host/<sha>-<triple>/osty-self` — the
+//     content-addressed artifact cache.
+//  4. Network fetch from `$OSTY_SELF_REGISTRY_URL` — only consulted
+//     when the env var is set and `$OSTY_SELF_REGISTRY_OFFLINE` is
+//     unset. A successful fetch promotes the binary into the local
+//     cache so subsequent invocations short-circuit at step 3.
 //
-// On the no-cache path (env unset, no in-tree build, no cache hit),
-// the canonical "osty-self not found" message is preserved so the
-// upstream `backend.IsOstySelfMissing` detection chain keeps working.
+// On the no-cache path (env unset, no in-tree build, no cache hit,
+// no registry / network failure), the canonical "osty-self not found"
+// message is preserved so the upstream `backend.IsOstySelfMissing`
+// detection chain keeps working.
 func resolveOstySelfBin() (string, error) {
 	root, err := selfhostcache.LocateProjectRoot(".")
 	if err != nil {
 		return "", err
 	}
-	bin, _, err := selfhostcache.ResolveBinary(root)
+	bin, _, err := selfhostcache.ResolveBinaryWithFetch(context.Background(), root, selfhostcache.EnvFetcher())
 	if errors.Is(err, selfhostcache.ErrNotCached) {
 		return "", errors.New("osty-self not found; run `osty build toolchain/` or set OSTY_SELF_BIN")
 	}

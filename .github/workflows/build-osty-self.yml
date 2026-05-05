@@ -1,0 +1,190 @@
+# Build per-host `osty-self` artifacts and produce the manifest pair
+# consumed by `selfhostcache.HTTPFetcher`.
+#
+# Status: scaffold (A5). The workflow runs on a manual dispatch only —
+# the artifact upload step is deliberately gated behind a runtime
+# `OSTY_SELF_REGISTRY_URL` so a maintainer can flip publishing on
+# without merging additional code. Until A6 (manifest signing) lands
+# the produced artifacts are advisory; resolvers will still verify
+# the manifest SHA-256 before promoting into the local cache.
+#
+# Layout produced per matrix entry (linux-amd64 etc.):
+#
+#   artifacts/<key>.json     ← published as <base>/<key>.json
+#   artifacts/<key>/osty-self  ← referenced by manifest.BinaryURL
+#
+# The matrix mirrors the `cross-compile` job in `.github/workflows/ci.yml`
+# but layers `osty install-self` + `osty manifest-self` over the
+# native build so each runner emits a real, content-addressed entry.
+
+name: Build osty-self
+
+on:
+  workflow_dispatch:
+    inputs:
+      osty_version:
+        description: "Provenance string baked into manifest.ostyVersion"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-osty-self-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.goos }}-${{ matrix.goarch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            runner: self-hosted
+          - goos: linux
+            goarch: arm64
+            runner: self-hosted
+          - goos: darwin
+            goarch: amd64
+            runner: self-hosted
+          - goos: darwin
+            goarch: arm64
+            runner: self-hosted
+          - goos: windows
+            goarch: amd64
+            runner: self-hosted
+          - goos: windows
+            goarch: arm64
+            runner: self-hosted
+    env:
+      GOFLAGS: -mod=readonly
+      OSTY_VERSION: ${{ inputs.osty_version }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build host osty CLI
+        run: |
+          mkdir -p .bin
+          go build -o .bin/osty ./cmd/osty
+
+      - name: Build osty-native-checker + lirproto
+        run: |
+          mkdir -p .osty/bin
+          go build -o .osty/bin/osty-native-checker ./cmd/osty-native-checker
+          go build -o .osty/bin/osty-native-lirproto ./cmd/osty-native-lirproto
+
+      - name: Install self-host artifact into cache
+        run: |
+          .bin/osty install-self --force
+
+      - name: Locate cached osty-self
+        id: locate
+        run: |
+          set -euo pipefail
+          triple="${{ matrix.goos }}-${{ matrix.goarch }}"
+          # `install-self` printed the cache path as the last token of
+          # `installed:`; re-derive it from the cache layout for
+          # robustness.
+          shopt -s nullglob
+          candidates=(.osty/cache/self-host/*-"$triple"/osty-self*)
+          if [ "${#candidates[@]}" -eq 0 ]; then
+            echo "no cache entry under .osty/cache/self-host/ matching triple $triple" >&2
+            ls -R .osty/cache/self-host/ || true
+            exit 1
+          fi
+          if [ "${#candidates[@]}" -gt 1 ]; then
+            echo "multiple cache entries; picking newest:" >&2
+            ls -lt "${candidates[@]}" >&2
+          fi
+          # Pick the lexicographically last one (alpha-stable across
+          # repeated runs); collisions are unexpected since toolchain SHA
+          # is deterministic per source state.
+          IFS=$'\n' sorted=($(printf '%s\n' "${candidates[@]}" | sort))
+          unset IFS
+          bin="${sorted[-1]}"
+          echo "bin=$bin"  >> "$GITHUB_OUTPUT"
+          echo "triple=$triple" >> "$GITHUB_OUTPUT"
+
+      - name: Generate manifest
+        run: |
+          set -euo pipefail
+          triple="${{ steps.locate.outputs.triple }}"
+          bin="${{ steps.locate.outputs.bin }}"
+          mkdir -p artifacts
+          # Bring the binary alongside the manifest so the artifact
+          # bundle is self-contained.
+          cp "$bin" "artifacts/osty-self-$triple"
+          .bin/osty manifest-self \
+            --bin "$bin" \
+            --binary-url "osty-self-$triple" \
+            --triple "$triple" \
+            --osty-version "${OSTY_VERSION:-${GITHUB_SHA:0:12}}" \
+            --out "artifacts/$triple.json"
+
+      - name: Upload artifact bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: osty-self-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: artifacts/
+          retention-days: 14
+          if-no-files-found: error
+
+  publish:
+    name: Publish manifests
+    runs-on: self-hosted
+    needs: build
+    timeout-minutes: 10
+    # Publishing is opt-in — set the secret to enable. Without it the
+    # job is a no-op so the matrix above can run on every dispatch
+    # without producing live artifacts.
+    if: ${{ vars.OSTY_SELF_REGISTRY_URL != '' }}
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: registry/
+
+      - name: Layout for upload
+        run: |
+          set -euo pipefail
+          # Each downloaded subdir holds one (manifest, binary) pair.
+          # Flatten into the layout HTTPFetcher expects:
+          #   <base>/<key>.json
+          #   <base>/<binary-url>
+          mkdir -p upload
+          shopt -s nullglob
+          for dir in registry/*/; do
+            for json in "$dir"*.json; do
+              # Drop into upload/ keyed by the manifest's `key` field.
+              key=$(jq -r .key "$json")
+              cp "$json" "upload/$key.json"
+            done
+            for bin in "$dir"osty-self-*; do
+              cp "$bin" "upload/$(basename "$bin")"
+            done
+          done
+          ls -la upload/
+
+      # Actual upload step is deferred to the maintainer's chosen
+      # backend (S3 / R2 / Pages). The scaffold stops here so the
+      # workflow remains visible/reviewable without binding the repo
+      # to a specific storage vendor.
+      - name: Summary
+        run: |
+          echo "Prepared upload payload under upload/" >&2
+          echo "Configure the maintainer-side step that POSTs to ${{ vars.OSTY_SELF_REGISTRY_URL }}." >&2

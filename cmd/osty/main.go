@@ -196,6 +196,13 @@ func main() {
 		runInstallSelf(args[1:], flags)
 		return
 	}
+	// manifest-self emits a JSON manifest describing a built osty-self
+	// binary so a CI workflow can publish the (manifest, binary) pair
+	// to a registry consumed by `selfhostcache.HTTPFetcher`.
+	if cmd == "manifest-self" {
+		runManifestSelf(args[1:], flags)
+		return
+	}
 	// `osty lint --explain CODE` prints the rule's description and
 	// exits. `osty lint --list` prints every rule. Both short-circuit
 	// before the normal file-arg handling below.
