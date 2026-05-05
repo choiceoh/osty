@@ -1041,7 +1041,7 @@ CodeEnumDiscriminantDuplicate: two variants of the same enum are assigned the sa
 
 ### E0765 — `CodeImplicitNarrowingConversion`
 
-CodeImplicitNarrowingConversion: an expression site required an implicit numeric narrowing (e.g. `Int64 -> Int32`, `Float64 -> Int`). v0.5 allows lossless widening only; narrowing must be spelled explicitly. v0.5 (G34) §2.2a.
+CodeImplicitNarrowingConversion: an expression site required an implicit numeric narrowing (e.g. `Int64 -> Int32`, `Float64 -> Int`). v0.5 allows lossless widening only; narrowing must be spelled explicitly. v0.5 (G34) §2.2.
 
 `.toIntTrunc()`, `.toIntRound()`, `.toIntFloor()`, `.toIntCeil()`, or `.toFloat32()` to make the intent explicit.
 

@@ -157,14 +157,27 @@ is `_`. Guarded arms do not contribute to coverage.
 ```osty
 for i in 0..10 { ... }
 for i in 0..=10 { ... }
+for i in 0..100 by 2 { ... }
 for item in xs { ... }
 for (k, v) in map { ... }
 
 for cond { ... }                 // while-style
 for { ... }                      // infinite
 
+let winner = loop {
+    let item = nextItem()
+    if item.accepted { break item }
+}
+
 for x in xs {
     if found(x) { break }
+}
+
+'outer: for row in rows {
+    for cell in row {
+        if done(cell) { break 'outer }
+        if skipRest(cell) { continue 'outer }
+    }
 }
 
 for item in items {
@@ -190,8 +203,33 @@ the loop exits.
 
 There is no C-style `for (init; cond; step)`.
 
+**Range step.** `a..b by step` and `a..=b by step` set the iteration
+stride for a range expression. `by` is contextual: outside range suffix
+position it is an ordinary identifier.
+
 `break` exits the innermost enclosing loop; `continue` skips to the next
-iteration. Labelled `break` / `continue` are not provided.
+iteration. A loop may be prefixed with a label (`'name: for ...` or
+`'name: loop ...`); `break 'name` and `continue 'name` target that loop.
+Unknown labels are `E0763`. Without a label, the target is the innermost
+enclosing loop.
+
+#### 4.4.1 Loop Expressions
+
+`loop { ... }` is the value-returning unbounded loop form. It is distinct
+from `for cond { ... }` and `for { ... }`, which are statement-style loops
+with `()` result.
+
+```osty
+let firstHit = loop {
+    let value = scanNext()
+    if value.matches { break value }
+}
+```
+
+The type of a `loop` expression is the common type of its `break value`
+exits. A bare `break` exits with `()`; `break value` is valid only when
+the target is a `loop` expression. For a labeled break, the value follows
+the label: `break 'search result`.
 
 ### 4.5 Error Propagation
 
@@ -353,8 +391,9 @@ byte at index `i` as a `Byte`; `s[a..b]` returns a `String` slice (no
 copy) that aborts at runtime if either endpoint falls inside a multi-
 byte UTF-8 sequence.
 
-For Unicode-scalar or grapheme iteration, use the explicit converters
-exposed by `std.strings`:
+For byte, Unicode-scalar, or grapheme iteration, use the explicit
+`String` methods. These are intrinsic methods on `String`; higher-level
+string processing helpers live in `std.strings`.
 
 ```osty
 for c in s.chars() { ... }         // Iterator<Char>
@@ -454,8 +493,8 @@ The left-hand side must be one of:
 - an **indexed element** on a mutable collection (`xs[i]`, `m[k]`).
 
 The right-hand side is evaluated, then written to the place named by the
-left-hand side. For `=`, the RHS type must match the LHS type; no
-implicit numeric conversion occurs.
+left-hand side. For `=`, the RHS type must match the LHS type except for
+the lossless numeric widening allowed by §2.2.
 
 #### 4.13.1 Compound Assignment
 
@@ -488,8 +527,9 @@ Semantics:
    type is compatible with the LHS.
 4. The LHS must be a valid mutable place (same rules as §4.13).
 5. `+=` on `String` is equivalent to concatenation: `s += other` is
-   `s = s + other`. Numeric mixing between `Int` and `Float64` is
-   rejected, same as `+` (no implicit conversion).
+   `s = s + other`. Numeric compound assignment follows the same
+   lossless-widening and narrowing-rejection rules as the corresponding
+   binary operator and final assignment (§2.2).
 6. Compound assignment on an immutable binding or field produces the
    same diagnostic as plain assignment (`E0601` et al.); there is no
    separate code.

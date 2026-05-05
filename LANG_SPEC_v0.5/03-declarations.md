@@ -46,9 +46,10 @@ connect("api.com", timeout: 60, port: 443)    // keywords in any order
 Rules:
 - Only trailing parameters may have defaults; once defaulted, all
   following parameters must also have defaults.
-- Defaults must be literals: numeric, string, char, byte, bool, `None`,
-  `Ok(literal)`, `Err(literal)`, empty collection literals (`[]`,
-  `{:}`), or `()`.
+- Defaults must be `DefaultLiteral`s: numeric, string, char, byte, bool,
+  `None`, `Ok(...)`, `Err(...)`, empty collection literals (`[]`, `{:}`),
+  `()`, struct literals whose fields are `DefaultLiteral`s, or `const fn`
+  calls allowed by §3.1.1.
 - Defaults are evaluated at call time at each call site.
 - Required parameters (no default) are **positional only**.
 - Parameters with defaults may be passed either **positionally** or
@@ -228,11 +229,17 @@ when a binding of that name is in scope.
 let user = User { name: "alice", age: 30, email: "a@x.com" }
 let older = User { ..user, age: 31 }
 let rebranded = User { ..user, email: "new@x.com", name: "Alice" }
+
+let renamed = user { name: "Alice" }       // shorthand for User { ..user, name: "Alice" }
 ```
 
 The `..expr` form must appear once per struct literal. Fields explicitly
 listed override copied values. All fields must either be listed or
 supplied by the spread source.
+
+The receiver shorthand `value { field: newValue }` is accepted when
+`value` is an in-scope struct-typed binding; it desugars to
+`Type { ..value, field: newValue }`.
 
 **Partial declarations.** A struct may be declared across multiple files
 within the same package. Fields appear in exactly one declaration;
@@ -375,14 +382,25 @@ pub enum Color {
     Blue,
     RGB(UInt8, UInt8, UInt8),
 }
+
+pub enum HttpStatus: Int {
+    OK = 200,
+    NotFound = 404,
+}
 ```
 
 Variants:
 - Bare: `Red`
 - Tuple-like: `RGB(UInt8, UInt8, UInt8)`
+- Integer-discriminated: payload-free variants in an enum with an integer
+  representation may assign explicit integer values.
 
 Variant access: bare name within the same package, qualified from other
 packages (`Color.Red`).
+
+An enum with an explicit integer representation auto-derives
+`.discriminant() -> Int` and `.fromDiscriminant(n: Int) -> Self?`.
+Payload variants may not assign discriminants (`E0721`).
 
 ### 3.6 Interfaces
 
@@ -418,6 +436,9 @@ mechanism. The complete set is:
 |---|---|---|
 | `#[json(...)]` | struct fields, enum variants | Customize JSON encoding/decoding (§10.8) |
 | `#[deprecated(...)]` | `fn`, `struct`, `enum`, `interface`, `type`, top-level `let`, struct/enum methods, struct fields, enum variants | Emit a warning when the item is referenced |
+| `#[op(...)]` | struct/enum methods | Opt-in overload for the bounded arithmetic operator set: `+ - * / %` binary and `-` unary (§14.2) |
+| `#[cfg(...)]` | top-level declarations, struct/enum methods, struct fields, enum variants | Conditional compilation pre-resolve filter; keys are `os`, `target`, `arch`, and `feature`, with `all` / `any` / `not` composition (§14.3, §18 G29) |
+| `#[test]` | top-level zero-arity `fn` declarations | Inline test function collected by `osty test` and excluded from production builds (§11) |
 | `#[vectorize]` | top-level `fn` declarations, struct/enum methods | **Default-on as of v0.6** — no annotation needed for the hint. Bare `#[vectorize]` is a no-op; `#[vectorize(scalable, predicate, width = N)]` refines strategy (§3.8.3) |
 | `#[no_vectorize]` | top-level `fn` declarations, struct/enum methods | Opt out of the default vectorize hint. Restores per-iteration safepoint polls (v0.6 A5.2) |
 | `#[parallel]` | top-level `fn` declarations, struct/enum methods | Hint: every load/store in the body tagged with `!llvm.access.group`, every loop's metadata references it via `llvm.loop.parallel_accesses` to bypass alias analysis (v0.6 A6) |
@@ -427,6 +448,8 @@ mechanism. The complete set is:
 | `#[target_feature(f1, f2, ...)]` | top-level `fn` declarations, struct/enum methods | LLVM `"target-features"="+f1,+f2"` fn attribute — per-function CPU feature override (v0.6 A10) |
 | `#[noalias]` / `#[noalias(p1, p2)]` | top-level `fn` declarations, struct/enum methods | Promise pointer params do not alias — emits LLVM `noalias` param attr (v0.6 A11) |
 | `#[pure]` | top-level `fn` declarations, struct/enum methods | Assert no side effects — emits LLVM `readnone` fn attr, unlocks CSE/hoisting (v0.6 A13) |
+
+`const fn` is a declaration prefix, not an annotation; see §3.1.1.
 
 **Runtime-only annotations** (privileged packages only — see §19.2 and §19.6).
 

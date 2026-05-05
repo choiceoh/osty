@@ -47,12 +47,15 @@ prelude and is unreachable from ordinary user code. See §19.3.
 
 ### 2.2 Numeric Conversions
 
-No implicit numeric conversions between variables. Conversions via
-methods:
+Osty allows only lossless implicit numeric widening. The widening lattice
+is `Int8 -> Int16 -> Int32 -> Int -> Float64`, `Int -> Float64`, and
+`Float32 -> Float64`. Narrowing, signedness-changing conversions, and
+lossy float/integer conversions require explicit methods; implicit
+narrowing is `E0765`.
 
 ```osty
 let a: Int = 5
-let b: Int64 = a.toInt64()
+let b: Float64 = a              // lossless widening
 let c: Int32 = big.toInt32()?           // Err if out of range
 let f: Float = a.toFloat()
 ```
@@ -66,7 +69,7 @@ type required by its usage:
 ```osty
 let a: Float = 5              // 5 is Float
 let b: Int32 = 100            // 100 is Int32
-let c: Int = a.toInt()        // no auto-conversion from variable
+let c: Int = narrow.toInt()?   // explicit narrowing from variable
 
 fn f(x: Int64) { ... }
 f(42)                         // 42 is Int64
@@ -157,6 +160,9 @@ T?                          // syntactic sugar for Option<T>
 Option<T>                   // canonical form
 Result<T, E>
 ```
+
+`Set<T>` is a standard collection type, but there is no set literal;
+construct one from an iterable, for example `Set.from([...])`.
 
 #### 2.4.1 The `Bytes` Type
 

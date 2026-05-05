@@ -123,7 +123,7 @@ v0.5.x 패치 안에서 조용히 바뀌지 않는다.
 | O5: `_` 토큰 | **`UNDERSCORE` 별도 토큰**. maximal munch로 `_foo`는 `IDENT`. |
 | O6: `::` 엄격성 | **turbofish 전용**. `::` 다음 `<` 없으면 에러. |
 | O7: `=>` 토큰 | **완전 제거**. |
-| O1: 어노테이션 | **제한적 집합**, Rust 스타일 `#[...]`, v0.9 세트 = `#[json]` + `#[deprecated]`. |
+| O1: 어노테이션 | **제한적 집합**, Rust 스타일 `#[...]`. 초기 세트는 `#[json]` + `#[deprecated]`; v0.5 이후 확장은 R26 참조. |
 
 ---
 
@@ -135,7 +135,7 @@ v0.5.x 패치 안에서 조용히 바뀌지 않는다.
 
 | 레벨 | 연산자 | 결합성 | 비고 |
 |---|---|---|---|
-| 14 | `.` `?.` `?`(postfix) `()` `[]` `::<T>` | 좌 | postfix |
+| 14 | `.` `?.` `?`(postfix) `()` trailing closure `[]` `::<T>` `as?` | 좌 | postfix |
 | 13 | `-` `!` `~` (단항) | — | prefix |
 | 12 | `*` `/` `%` | 좌 | |
 | 11 | `+` `-` | 좌 | |
@@ -230,6 +230,9 @@ use defer
 **문맥 식별자**: 렉서 관점에서 일반 `IDENT`, 파서가 문맥에서 해석.
 - `self`, `mut self`: 메서드 첫 파라미터 위치 전용.
 - `Self`: 타입 위치에서 둘러싼 타입.
+- `loop`: `loop Block` 표현식 머리 위치 전용.
+- `const`: `const fn` 선언 prefix 위치 전용.
+- `by`: range step suffix 위치 전용 (`a..b by step`).
 - `true`, `false`, `Some`, `None`, `Ok`, `Err`: prelude 값 참조.
 
 ### R8. 문자열 보간 렉싱
@@ -331,17 +334,29 @@ UsePath := DottedPath | UrlishPath
 ### R18. 기본 인자 제약
 
 ```ebnf
-DefaultExpr ::= Literal
-              | '-' (INT_LIT | FLOAT_LIT)
-              | 'None'
-              | 'Ok' '(' Literal ')'
-              | 'Err' '(' Literal ')'
-              | '[' ']'
-              | '{' ':' '}'
-              | '(' ')'
+DefaultExpr ::= DefaultLiteral
+DefaultLiteral ::= Literal
+                 | '-' (INT_LIT | FLOAT_LIT)
+                 | 'None'
+                 | 'Ok' '(' DefaultLiteral ')'
+                 | 'Err' '(' DefaultLiteral ')'
+                 | '[' DefaultLiteralList? ']'
+                 | '{' ':' '}'
+                 | '{' DefaultMapEntries '}'
+                 | '(' ')'
+                 | '(' DefaultLiteral (',' DefaultLiteral)+ ','? ')'
+                 | DefaultStructLit
+                 | ConstFnCall
+DefaultLiteralList ::= DefaultLiteral (',' DefaultLiteral)* ','?
+DefaultMapEntries ::= DefaultLiteral ':' DefaultLiteral
+                    (',' DefaultLiteral ':' DefaultLiteral)* ','?
+DefaultStructLit ::= TypePath '{' DefaultFieldInit (',' DefaultFieldInit)* ','? '}'
+DefaultFieldInit ::= IDENT ':' DefaultLiteral
+ConstFnCall ::= TypePath '(' DefaultLiteralList? ')'
 ```
 
-임의 표현식 거부. 파서 수준에서 즉시.
+임의 표현식 거부. `ConstFnCall` 은 §3.1.1 capability matrix 와 acyclic
+call graph 검증을 통과한 `const fn` 만 허용한다.
 
 ### R19. 파셜 선언
 
@@ -407,7 +422,7 @@ ClosureParam ::= LetPattern (':' Type)?
 
 문법: `#[Name AnnotArgs?]`. 선언 앞에 0개 이상.
 
-**v0.9 허용 집합** (컴파일러 고정 세트, 사용자 정의 불가):
+**v0.5/v0.6 허용 집합** (컴파일러 고정 세트, 사용자 정의 불가):
 
 **`#[json(...)]`** — 구조체 필드 전용.
 - `key = "<name>"` — JSON 키명 재매핑.
@@ -416,15 +431,34 @@ ClosureParam ::= LetPattern (':' Type)?
 - 여러 인자 조합 가능.
 
 **`#[deprecated(...)]`** — top-level `fn`/`struct`/`enum`/`interface`/
-`type`/`let`, 그리고 struct/enum 내부 메서드.
+`type`/`let`, struct/enum 내부 메서드, struct field, enum variant.
 - `since = "<version>"` (선택).
 - `use = "<replacement>"` (선택, 대체 API 힌트).
 - `message = "<text>"` (선택).
 
+**`#[op(...)]`** — struct/enum method 전용. 허용 operator literal 은
+`+`, `-`, `*`, `/`, `%`; `-` 는 unary/binary 양쪽 의미를 가질 수 있다.
+
+**`#[cfg(...)]`** — conditional compilation. `os`, `target`, `arch`,
+`feature` key 와 `all(...)` / `any(...)` / `not(...)` 조합만 허용한다.
+
+**`#[test]`** — top-level zero-arity `fn` 전용. `osty test` 에서만 수집되고
+production build 에서는 제외된다.
+
+**Optimization annotations** — top-level `fn` 또는 struct/enum method 전용:
+`#[vectorize]`, `#[no_vectorize]`, `#[parallel]`, `#[unroll]`, `#[inline]`,
+`#[hot]`, `#[cold]`, `#[target_feature(...)]`, `#[noalias]`, `#[pure]`.
+
+**Runtime-only annotations** — privileged package 전용:
+`#[intrinsic]`, `#[pod]`, `#[repr(...)]`, `#[export("name")]`, `#[c_abi]`,
+`#[no_alloc]`.
+
 **에러 처리**: 허용 목록 외 어노테이션은 컴파일 에러:
 ```
-error: unknown annotation '#[inline]'.
-       permitted annotations: json, deprecated.
+error: unknown annotation '#[memoize]'.
+       permitted annotations: json, deprecated, op, cfg, test, vectorize,
+       no_vectorize, parallel, unroll, inline, hot, cold, target_feature,
+       noalias, pure, intrinsic, pod, repr, export, c_abi, no_alloc.
 ```
 
 **위치 검증**: `#[json]`을 함수 앞에 붙이는 등 잘못된 대상은 컴파일 에러:
@@ -455,6 +489,7 @@ TERMINATOR    ::= NEWLINE                          (* R2 ASI 후 *)
 (* 식별자 & 와일드카드 *)
 IDENT         ::= /[A-Za-z_][A-Za-z0-9_]*/         (* maximal munch *)
 UNDERSCORE    ::= '_'                              (* 단독만, IDENT와 배타 *)
+LABEL         ::= "'" IDENT                        (* loop label reference *)
 
 KEYWORD       ::= 'fn' | 'struct' | 'enum' | 'interface' | 'type'
                 | 'let' | 'mut' | 'pub'
@@ -480,7 +515,7 @@ STRING_LIT    ::= InterpStringStream               (* §R8 *)
 (* 연산자 & 구두점 *)
 PUNCT         ::= '(' | ')' | '[' | ']' | '{' | '}'
                 | ',' | ':' | '::' | '.' | '?.' | '?' | '@'
-                | '->' | '<-'
+                | '->' | '<-' | 'as?'
                 | '..' | '..='
                 | '+' | '-' | '*' | '/' | '%'
                 | '==' | '!=' | '<' | '>' | '<=' | '>='
@@ -521,16 +556,28 @@ TopLevelStmt  ::= Stmt
 (* 어노테이션 *)
 Annotation    ::= '#' '[' IDENT AnnotationArgs? ']'
 AnnotationArgs ::= '(' AnnotationArg (',' AnnotationArg)* ','? ')'
-AnnotationArg ::= IDENT                            (* flag *)
-                | IDENT '=' Literal                (* 키=값 *)
+AnnotationArg ::= CfgCall                          (* #[cfg(all(...))] 등 *)
+                | OperatorLit                      (* #[op(+)] 등 *)
+                | IDENT '=' Literal                (* 키=값; cfg leaf 포함 *)
+                | IDENT                            (* flag *)
+                | Literal                          (* #[export("name")] 등 *)
+OperatorLit   ::= '+' | '-' | '*' | '/' | '%'
+CfgCall       ::= 'all' '(' CfgExpr (',' CfgExpr)* ','? ')'
+                | 'any' '(' CfgExpr (',' CfgExpr)* ','? ')'
+                | 'not' '(' CfgExpr ')'
+CfgExpr       ::= IDENT '=' STRING_LIT
+                | CfgCall
 ```
 
 ### 2.3 Use 선언
 
 ```ebnf
-UseDecl       ::= 'use' (OstyUse | GoUse)
+UseDecl       ::= 'pub'? 'use' OstyUse
+                | 'use' (GoUse | CUse)
 
 OstyUse       ::= UsePath ('as' IDENT)?
+                | UsePath '::' '{' UseSpec (',' UseSpec)* ','? '}'
+UseSpec       ::= IDENT ('as' IDENT)?
 UsePath       ::= DottedPath | UrlishPath
 DottedPath    ::= IDENT ('.' IDENT)*
 UrlishPath    ::= DomainSeg '/' PathSeg ('/' PathSeg)*
@@ -538,6 +585,9 @@ DomainSeg     ::= IDENT ('.' IDENT)+
 PathSeg       ::= IDENT
 
 GoUse         ::= 'go' STRING_LIT ('as' IDENT)? '{' TERM*
+                    (GoDecl (TERM+ GoDecl)*)? TERM*
+                  '}'
+CUse          ::= 'c' STRING_LIT ('as' IDENT)? '{' TERM*
                     (GoDecl (TERM+ GoDecl)*)? TERM*
                   '}'
 GoDecl        ::= GoFnDecl | GoStructDecl
@@ -574,7 +624,7 @@ TypeList      ::= Type (',' Type)* ','?
 ### 2.5 함수 선언
 
 ```ebnf
-FnDecl        ::= 'pub'? 'fn' IDENT GenericParams?
+FnDecl        ::= 'pub'? 'const'? 'fn' IDENT GenericParams?
                   '(' ParamList? ')' ('->' Type)? Block
 
 GenericParams ::= '<' GenericParam (',' GenericParam)* ','? '>'
@@ -586,14 +636,25 @@ ParamList     ::= SelfParam (',' Param)* ','?
 SelfParam     ::= 'mut'? 'self'
 Param         ::= IDENT ':' Type ('=' DefaultExpr)?
 
-DefaultExpr   ::= Literal
-                | '-' (INT_LIT | FLOAT_LIT)
-                | 'None'
-                | 'Ok' '(' Literal ')'
-                | 'Err' '(' Literal ')'
-                | '[' ']'
-                | '{' ':' '}'
-                | '(' ')'
+DefaultExpr   ::= DefaultLiteral
+DefaultLiteral ::= Literal
+                 | '-' (INT_LIT | FLOAT_LIT)
+                 | 'None'
+                 | 'Ok' '(' DefaultLiteral ')'
+                 | 'Err' '(' DefaultLiteral ')'
+                 | '[' DefaultLiteralList? ']'
+                 | '{' ':' '}'
+                 | '{' DefaultMapEntries '}'
+                 | '(' ')'
+                 | '(' DefaultLiteral (',' DefaultLiteral)+ ','? ')'
+                 | DefaultStructLit
+                 | ConstFnCall
+DefaultLiteralList ::= DefaultLiteral (',' DefaultLiteral)* ','?
+DefaultMapEntries ::= DefaultLiteral ':' DefaultLiteral
+                    (',' DefaultLiteral ':' DefaultLiteral)* ','?
+DefaultStructLit ::= TypePath '{' DefaultFieldInit (',' DefaultFieldInit)* ','? '}'
+DefaultFieldInit ::= IDENT ':' DefaultLiteral
+ConstFnCall ::= TypePath '(' DefaultLiteralList? ')'
 ```
 
 ### 2.6 Struct / Enum / Interface
@@ -611,13 +672,13 @@ FieldDecl     ::= 'pub'? IDENT ':' Type ('=' DefaultExpr)?
 MethodDecl    ::= 'pub'? 'fn' IDENT GenericParams?
                   '(' ParamList? ')' ('->' Type)? Block
 
-EnumDecl      ::= 'pub'? 'enum' IDENT GenericParams? '{' TERM*
+EnumDecl      ::= 'pub'? 'enum' IDENT GenericParams? (':' TypePath)? '{' TERM*
                     EnumMembers? TERM*
                   '}'
 EnumMembers   ::= EnumMember (MemberSep EnumMember)*
 EnumMember    ::= Annotation* VariantDecl
                 | Annotation* MethodDecl
-VariantDecl   ::= IDENT ('(' TypeList ')')?
+VariantDecl   ::= IDENT ('(' TypeList ')')? ('=' INT_LIT)?
 
 InterfaceDecl ::= 'pub'? 'interface' IDENT GenericParams? '{' TERM*
                     IfaceMembers? TERM*
@@ -668,8 +729,9 @@ AssignOp      ::= '=' | '+=' | '-=' | '*=' | '/=' | '%='
 SendStmt      ::= Expr '<-' Expr
 DeferStmt     ::= 'defer' (Expr | Block)
 ReturnStmt    ::= 'return' Expr?
-BreakStmt     ::= 'break'
-ContinueStmt  ::= 'continue'
+BreakStmt     ::= 'break' LabelRef? Expr?
+ContinueStmt  ::= 'continue' LabelRef?
+LabelRef      ::= LABEL
 ExprStmt      ::= Expr
 ```
 
@@ -686,9 +748,10 @@ LogicalOrExpr    ::= LogicalAndExpr ('||' LogicalAndExpr)*
 LogicalAndExpr   ::= CompareExpr ('&&' CompareExpr)*
 CompareExpr      ::= RangeExpr (CompareOp RangeExpr)?       (* non-assoc *)
 CompareOp        ::= '==' | '!=' | '<' | '>' | '<=' | '>='
-RangeExpr        ::= BitOrExpr (('..' | '..=') BitOrExpr)?  (* non-assoc *)
-                   | ('..' | '..=') BitOrExpr               (* prefix open *)
-                   | BitOrExpr ('..' | '..=')               (* postfix open *)
+RangeExpr        ::= BitOrExpr RangeTail?                   (* non-assoc *)
+                   | ('..' | '..=') BitOrExpr RangeStep?    (* prefix open *)
+RangeTail        ::= ('..' | '..=') BitOrExpr? RangeStep?
+RangeStep        ::= 'by' BitOrExpr
 BitOrExpr        ::= BitXorExpr ('|' BitXorExpr)*
 BitXorExpr       ::= BitAndExpr ('^' BitAndExpr)*
 BitAndExpr       ::= ShiftExpr ('&' ShiftExpr)*
@@ -701,10 +764,11 @@ PostfixExpr      ::= PrimaryExpr PostfixOp*
 PostfixOp        ::= '.' IDENT                    (* field/method name *)
                    | '?.' IDENT
                    | '?'                           (* propagate *)
-                   | '(' ArgList? ')'              (* call *)
+                   | '(' ArgList? ')' ClosureExpr? (* call + optional trailing closure *)
                    | '[' Expr ']'                  (* index *)
                    | '[' RangeExpr ']'             (* slice *)
                    | '::' TypeArgs                 (* turbofish — '<' 필수 *)
+                   | 'as?' Type                    (* checked downcast *)
 
 PrimaryExpr      ::= Literal
                    | IDENT
@@ -716,6 +780,7 @@ PrimaryExpr      ::= Literal
                    | IfExpr
                    | MatchExpr
                    | ForExpr
+                   | LoopExpr
                    | Block
                    | ClosureExpr
 
@@ -755,11 +820,13 @@ MatchExpr     ::= 'match' RestrictedExpr '{' TERM*
 ArmSep        ::= ',' TERM*
 MatchArm      ::= Pattern ('if' Expr)? '->' (Expr | Block)
 
-ForExpr       ::= 'for' ForHead Block
-                | 'for' 'let' LetPattern '=' RestrictedExpr Block
-                | 'for' Block                      (* infinite *)
+ForExpr       ::= LabelPrefix? 'for' ForHead Block
+                | LabelPrefix? 'for' 'let' LetPattern '=' RestrictedExpr Block
+                | LabelPrefix? 'for' Block         (* infinite, Unit result *)
 ForHead       ::= LetPattern 'in' RestrictedExpr
                 | RestrictedExpr                   (* while-style *)
+LoopExpr      ::= LabelPrefix? 'loop' Block        (* value-returning *)
+LabelPrefix   ::= LABEL ':'
 
 (* R3: StructLit이 금지된 식 위치. 파서가 flag로 관리 *)
 RestrictedExpr ::= Expr                            (* StructLit 거부 *)

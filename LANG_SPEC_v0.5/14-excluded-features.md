@@ -64,10 +64,10 @@ version, and a migration story for existing code.
 - `as` keyword for general type conversion — specific converter
   methods (`.toInt32()`, `.toFloat()`, `.toString()`, etc.) make the
   rounding / truncation / failure contract explicit. `as?` is a
-  narrow exception, reserved for `Error` downcast (§4.9).
+  narrow exception, reserved for `Error` downcast (§7.4).
 - Turbofish on enum variant construction (`Option::<Int>::Some(5)` —
   use inference or annotate the receiver).
-- `Set` literal syntax — construct via `Set.of(...)` or from an
+- `Set` literal syntax — construct via `Set.from(...)` or from an
   iterable.
 - Annotations on expressions or `use` statements — annotations apply
   only to declarations.
@@ -75,7 +75,7 @@ version, and a migration story for existing code.
 **Operator surface.**
 
 - Operator overloading **beyond** the six arithmetic operators
-  documented in §3.1 — `==` / `!=` / `<` / `<=` / `>` / `>=` use the
+  documented in §3.8 / §14.2 — `==` / `!=` / `<` / `<=` / `>` / `>=` use the
   `Equal` / `Ordered` interfaces; `[]` (indexing), `()` (call), `<<` /
   `>>` / `&` / `|` / `^` (bitwise) are primitive-only and cannot be
   overloaded. `#[op(+)]` / `#[op(-)]` / `#[op(*)]` / `#[op(/)]` /
@@ -105,7 +105,7 @@ the total ban blocked numerical code readability in realistic
 programs:
 
 - **Implicit numeric conversions** — replaced by **lossless widening
-  only** (§2.2a): `Int8 → Int16 → Int32 → Int → Float64`, `Int →
+  only** (§2.2): `Int8 → Int16 → Int32 → Int → Float64`, `Int →
   Float64`, `Float32 → Float64`. Narrowing remains explicit via
   rounding-mode-suffixed converters (`.toIntTrunc()` /
   `.toIntRound()` / `.toIntFloor()` / `.toIntCeil()` / `.toInt32()` /
@@ -113,7 +113,7 @@ programs:
   `E0765`.
 - **Operator overloading** — replaced by **six-operator opt-in** via
   `#[op(+)]` / `#[op(-)]` / `#[op(*)]` / `#[op(/)]` / `#[op(%)]`
-  (binary) and `#[op(-)]` (unary) on structural methods (§3.1). All
+  (binary) and `#[op(-)]` (unary) on structural methods (§3.8 / §14.2). All
   other operators remain primitive-only (see §14.1 above).
 
 ### 14.3 Newly accepted syntax (v0.5)
