@@ -948,3 +948,288 @@ func TestStage0RejectsTypeMismatchInChain(t *testing.T) {
 	)
 	mustReject(t, trivialMainFn(), fn)
 }
+
+// ---- P3b: function calls ----
+
+func callInstr(destID mir.LocalID, calleeSym string, calleeFnTy *ir.FnType, args ...mir.Operand) *mir.CallInstr {
+	return &mir.CallInstr{
+		Dest:   &mir.Place{Local: destID},
+		Callee: &mir.FnRef{Symbol: calleeSym, Type: calleeFnTy},
+		Args:   args,
+	}
+}
+
+func fnTy(ret mir.Type, params ...mir.Type) *ir.FnType {
+	return &ir.FnType{Params: params, Return: ret}
+}
+
+func TestStage0EmitsLeafCall(t *testing.T) {
+	t.Parallel()
+	// `fn add(a, b) -> Int { a + b }`
+	addFn := makeFn(fnSpec{
+		name:   "add",
+		retT:   ir.TInt,
+		params: []paramSpec{{name: "a", ty: ir.TInt}, {name: "b", ty: ir.TInt}},
+		src:    binaryRV(mir.BinAdd, paramCopy(1, ir.TInt), paramCopy(2, ir.TInt), ir.TInt),
+	})
+	// `fn caller() -> Int { add(1, 2) }`
+	caller := makeMultiInstrFn(
+		"caller",
+		ir.TInt,
+		nil,
+		[]paramSpec{{name: "r", ty: ir.TInt}},
+		[]mir.Instr{
+			callInstr(1, "add", fnTy(ir.TInt, ir.TInt, ir.TInt), intConst(1), intConst(2)),
+			assign(0, useRV(paramCopy(1, ir.TInt))),
+		},
+	)
+	got := emit(t, trivialMainFn(), addFn, caller)
+	for _, want := range []string{
+		"define i64 @add(i64 %a, i64 %b)",
+		"define i64 @caller()",
+		"%0 = call i64 @add(i64 1, i64 2)",
+		"ret i64 %0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0EmitsCallWithVariableArgs(t *testing.T) {
+	t.Parallel()
+	addFn := makeFn(fnSpec{
+		name:   "add",
+		retT:   ir.TInt,
+		params: []paramSpec{{name: "a", ty: ir.TInt}, {name: "b", ty: ir.TInt}},
+		src:    binaryRV(mir.BinAdd, paramCopy(1, ir.TInt), paramCopy(2, ir.TInt), ir.TInt),
+	})
+	// `fn caller(x: Int, y: Int) -> Int { add(x, y) }`
+	caller := makeMultiInstrFn(
+		"caller",
+		ir.TInt,
+		[]paramSpec{{name: "x", ty: ir.TInt}, {name: "y", ty: ir.TInt}},
+		[]paramSpec{{name: "r", ty: ir.TInt}},
+		[]mir.Instr{
+			callInstr(3, "add", fnTy(ir.TInt, ir.TInt, ir.TInt), paramCopy(1, ir.TInt), paramCopy(2, ir.TInt)),
+			assign(0, useRV(paramCopy(3, ir.TInt))),
+		},
+	)
+	got := emit(t, trivialMainFn(), addFn, caller)
+	if !strings.Contains(got, "%0 = call i64 @add(i64 %x, i64 %y)") {
+		t.Fatalf("expected call with param args:\n%s", got)
+	}
+}
+
+func TestStage0EmitsCallChainedWithArith(t *testing.T) {
+	t.Parallel()
+	doubleFn := makeFn(fnSpec{
+		name:   "double",
+		retT:   ir.TInt,
+		params: []paramSpec{{name: "x", ty: ir.TInt}},
+		src:    binaryRV(mir.BinMul, paramCopy(1, ir.TInt), intConst(2), ir.TInt),
+	})
+	// `fn quad(x: Int) -> Int { let d = double(x); d + d }`
+	quad := makeMultiInstrFn(
+		"quad",
+		ir.TInt,
+		[]paramSpec{{name: "x", ty: ir.TInt}},
+		[]paramSpec{{name: "d", ty: ir.TInt}},
+		[]mir.Instr{
+			callInstr(2, "double", fnTy(ir.TInt, ir.TInt), paramCopy(1, ir.TInt)),
+			assign(0, binaryRV(mir.BinAdd, paramCopy(2, ir.TInt), paramCopy(2, ir.TInt), ir.TInt)),
+		},
+	)
+	got := emit(t, trivialMainFn(), doubleFn, quad)
+	for _, want := range []string{
+		"%0 = call i64 @double(i64 %x)",
+		"%1 = add i64 %0, %0",
+		"ret i64 %1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0EmitsBoolReturningCall(t *testing.T) {
+	t.Parallel()
+	isPos := makeFn(fnSpec{
+		name:   "is_positive",
+		retT:   ir.TBool,
+		params: []paramSpec{{name: "n", ty: ir.TInt}},
+		src:    binaryRV(mir.BinGt, paramCopy(1, ir.TInt), intConst(0), ir.TBool),
+	})
+	caller := makeMultiInstrFn(
+		"check",
+		ir.TBool,
+		[]paramSpec{{name: "x", ty: ir.TInt}},
+		[]paramSpec{{name: "r", ty: ir.TBool}},
+		[]mir.Instr{
+			callInstr(2, "is_positive", fnTy(ir.TBool, ir.TInt), paramCopy(1, ir.TInt)),
+			assign(0, useRV(paramCopy(2, ir.TBool))),
+		},
+	)
+	got := emit(t, trivialMainFn(), isPos, caller)
+	for _, want := range []string{
+		"define i1 @is_positive(i64 %n)",
+		"%0 = call i1 @is_positive(i64 %x)",
+		"ret i1 %0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0EmitsZeroArgCall(t *testing.T) {
+	t.Parallel()
+	zero := makeFn(fnSpec{
+		name: "zero",
+		retT: ir.TInt,
+		src:  useRV(intConst(0)),
+	})
+	caller := makeMultiInstrFn(
+		"plus_zero",
+		ir.TInt,
+		[]paramSpec{{name: "x", ty: ir.TInt}},
+		[]paramSpec{{name: "z", ty: ir.TInt}},
+		[]mir.Instr{
+			callInstr(2, "zero", fnTy(ir.TInt)),
+			assign(0, binaryRV(mir.BinAdd, paramCopy(1, ir.TInt), paramCopy(2, ir.TInt), ir.TInt)),
+		},
+	)
+	got := emit(t, trivialMainFn(), zero, caller)
+	for _, want := range []string{"%0 = call i64 @zero()", "%1 = add i64 %x, %0"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// ---- P3b rejection paths ----
+
+func TestStage0RejectsCallToUnknownSymbol(t *testing.T) {
+	t.Parallel()
+	caller := makeMultiInstrFn(
+		"bad",
+		ir.TInt,
+		nil,
+		[]paramSpec{{name: "r", ty: ir.TInt}},
+		[]mir.Instr{
+			callInstr(1, "external_symbol_not_in_module", fnTy(ir.TInt, ir.TInt), intConst(1)),
+			assign(0, useRV(paramCopy(1, ir.TInt))),
+		},
+	)
+	mustReject(t, trivialMainFn(), caller)
+}
+
+func TestStage0RejectsCallReturnTypeMismatch(t *testing.T) {
+	t.Parallel()
+	// callee declared to return Int, but local typed Bool.
+	addFn := makeFn(fnSpec{
+		name:   "add",
+		retT:   ir.TInt,
+		params: []paramSpec{{name: "a", ty: ir.TInt}, {name: "b", ty: ir.TInt}},
+		src:    binaryRV(mir.BinAdd, paramCopy(1, ir.TInt), paramCopy(2, ir.TInt), ir.TInt),
+	})
+	caller := makeMultiInstrFn(
+		"bad",
+		ir.TBool,
+		nil,
+		[]paramSpec{{name: "r", ty: ir.TBool}}, // Bool local
+		[]mir.Instr{
+			callInstr(1, "add", fnTy(ir.TInt, ir.TInt, ir.TInt), intConst(1), intConst(2)),
+			assign(0, useRV(paramCopy(1, ir.TBool))),
+		},
+	)
+	mustReject(t, trivialMainFn(), addFn, caller)
+}
+
+func TestStage0RejectsCallArityMismatch(t *testing.T) {
+	t.Parallel()
+	addFn := makeFn(fnSpec{
+		name:   "add",
+		retT:   ir.TInt,
+		params: []paramSpec{{name: "a", ty: ir.TInt}, {name: "b", ty: ir.TInt}},
+		src:    binaryRV(mir.BinAdd, paramCopy(1, ir.TInt), paramCopy(2, ir.TInt), ir.TInt),
+	})
+	// Pass only one arg but FnType says 2.
+	caller := makeMultiInstrFn(
+		"bad",
+		ir.TInt,
+		nil,
+		[]paramSpec{{name: "r", ty: ir.TInt}},
+		[]mir.Instr{
+			callInstr(1, "add", fnTy(ir.TInt, ir.TInt, ir.TInt), intConst(1)),
+			assign(0, useRV(paramCopy(1, ir.TInt))),
+		},
+	)
+	mustReject(t, trivialMainFn(), addFn, caller)
+}
+
+func TestStage0RejectsIndirectCall(t *testing.T) {
+	t.Parallel()
+	caller := makeMultiInstrFn(
+		"bad",
+		ir.TInt,
+		nil,
+		[]paramSpec{{name: "r", ty: ir.TInt}},
+		[]mir.Instr{
+			&mir.CallInstr{
+				Dest:   &mir.Place{Local: 1},
+				Callee: &mir.IndirectCall{Callee: paramCopy(0, ir.TInt)},
+				Args:   nil,
+			},
+			assign(0, useRV(paramCopy(1, ir.TInt))),
+		},
+	)
+	mustReject(t, trivialMainFn(), caller)
+}
+
+func TestStage0RejectsCallWithoutDest(t *testing.T) {
+	t.Parallel()
+	// Discarded result — stage0 only handles calls bound to a local.
+	other := makeFn(fnSpec{
+		name: "other",
+		retT: ir.TInt,
+		src:  useRV(intConst(0)),
+	})
+	caller := makeMultiInstrFn(
+		"bad",
+		ir.TInt,
+		nil,
+		nil,
+		[]mir.Instr{
+			&mir.CallInstr{
+				Dest:   nil,
+				Callee: &mir.FnRef{Symbol: "other", Type: fnTy(ir.TInt)},
+				Args:   nil,
+			},
+			assign(0, useRV(intConst(7))),
+		},
+	)
+	mustReject(t, trivialMainFn(), other, caller)
+}
+
+func TestStage0RejectsCallParamTypeMismatch(t *testing.T) {
+	t.Parallel()
+	doubleFn := makeFn(fnSpec{
+		name:   "double",
+		retT:   ir.TInt,
+		params: []paramSpec{{name: "x", ty: ir.TInt}},
+		src:    binaryRV(mir.BinMul, paramCopy(1, ir.TInt), intConst(2), ir.TInt),
+	})
+	// Pass a Bool as the Int param.
+	caller := makeMultiInstrFn(
+		"bad",
+		ir.TInt,
+		[]paramSpec{{name: "flag", ty: ir.TBool}},
+		[]paramSpec{{name: "r", ty: ir.TInt}},
+		[]mir.Instr{
+			callInstr(2, "double", fnTy(ir.TInt, ir.TInt), paramCopy(1, ir.TBool)),
+			assign(0, useRV(paramCopy(2, ir.TInt))),
+		},
+	)
+	mustReject(t, trivialMainFn(), doubleFn, caller)
+}
