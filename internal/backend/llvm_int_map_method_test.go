@@ -41,6 +41,7 @@ import (
 // annotation.
 func TestLLVMBackendEmitIntMapMethodCalls(t *testing.T) {
 	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
+	installNativeMIRPayloadStub(t)
 	cases := []struct {
 		name string
 		src  string

@@ -7,7 +7,8 @@ package selfhost
 // the self-hosted checker — generated.go — does not consult that
 // map, so without this registration `Int.abs()` and friends surface
 // as `E0703 no method on type Int` and never reach the LLVM lowering
-// in `internal/llvmgen/mir_generator.go:emitPrimitiveMethodCall`.
+// at MIR primitive-method emission (now owned by the native LIR
+// Proto subprocess in `cmd/osty-native-lirproto`).
 //
 // The integer methods are all `Self`-shaped, so the registration just
 // substitutes each owner kind for `Self` in receiver / param / return

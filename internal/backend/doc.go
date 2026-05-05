@@ -4,8 +4,9 @@
 // The CLI routes native emission through this package so every backend
 // uses the same artifact / cache layout contract. The LLVM dispatcher
 // (llvm.go) consumes IR exclusively: Request.Entry.IR is the sole
-// semantic input it hands to llvmgen. Request.Entry.MIR is the required
-// MIR projection prepared from that same IR for the MIR-direct emitter.
+// semantic input it hands to the native LLVM generator subprocess.
+// Request.Entry.MIR is the required MIR projection prepared from that
+// same IR for the MIR-direct payload route.
 // The dispatcher never falls back to Request.Entry.File when lowering
 // hits an unsupported shape.
 //

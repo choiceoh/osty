@@ -40,6 +40,7 @@ import (
 // test verifies.
 func TestLLVMBackendEmitApplyTwiceInterp(t *testing.T) {
 	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
+	installNativeMIRPayloadStub(t)
 	src := `fn applyTwice(mapper: fn(Int) -> String) -> String {
     "{mapper(1)}-{mapper(2)}"
 }

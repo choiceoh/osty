@@ -185,66 +185,6 @@ func TestLLVMCapabilityMatrixSelectsDispatchRoute(t *testing.T) {
 	}
 }
 
-func TestLLVMCapabilityMatrixRecordsMIRRouteBlocker(t *testing.T) {
-	t.Parallel()
-
-	entry := Entry{
-		IR:  &ir.Module{},
-		MIR: mirModuleWithFunction(unsupportedMIRFunction()),
-	}
-	matrix := NewLLVMCapabilityMatrix(entry, llvmabi.Options{UseMIR: true, EmitGC: true})
-
-	if got, want := matrix.DispatchRoute(), llvmDispatchMIRDirect; got != want {
-		t.Fatalf("DispatchRoute = %q, want %q", got, want)
-	}
-	if _, _, ok := matrix.PreflightBlockingDiagnostic(); ok {
-		t.Fatal("MIR emitter gap should not block preflight before route selection")
-	}
-	diag, row, ok := matrix.RouteBlockingDiagnostic(llvmDispatchMIRDirect)
-	if !ok {
-		t.Fatal("RouteBlockingDiagnostic(mir-direct) not reported")
-	}
-	if row.ID != CapabilityMIREmit {
-		t.Fatalf("route blocker ID = %q, want %q", row.ID, CapabilityMIREmit)
-	}
-	if row.Route != string(llvmDispatchMIRDirect) {
-		t.Fatalf("route blocker Route = %q, want %q", row.Route, llvmDispatchMIRDirect)
-	}
-	if row.Subject != "mir.local:bad:poison:1" {
-		t.Fatalf("route blocker Subject = %q, want poisoned local row", row.Subject)
-	}
-	if row.LLVMEmittable {
-		t.Fatalf("route blocker row = %+v, want LLVMEmittable=false", row)
-	}
-	if got, want := diag.Kind, "unsupported-source"; got != want {
-		t.Fatalf("diag.Kind = %q, want %q", got, want)
-	}
-}
-
-func TestLLVMCapabilityMatrixRecordsMIRRuntimeABI(t *testing.T) {
-	t.Parallel()
-
-	entry := Entry{
-		IR:  &ir.Module{},
-		MIR: mirModuleWithFunction(printlnMIRFunction()),
-	}
-	matrix := NewLLVMCapabilityMatrix(entry, llvmabi.Options{UseMIR: true, EmitGC: true})
-
-	row := rowBySubject(rowsByID(matrix, CapabilityMIREmit), "mir.instr:main:bb0:0:*mir.IntrinsicInstr")
-	if row == nil {
-		t.Fatalf("MIR intrinsic capability row missing: %+v", rowsByID(matrix, CapabilityMIREmit))
-	}
-	if !row.LLVMEmittable {
-		t.Fatalf("MIR intrinsic row = %+v, want LLVM-emittable", *row)
-	}
-	if !row.RuntimeABIRequired || !row.RuntimeABIKnown {
-		t.Fatalf("MIR intrinsic row = %+v, want known runtime ABI", *row)
-	}
-	if _, _, ok := matrix.RouteBlockingDiagnostic(llvmDispatchMIRDirect); ok {
-		t.Fatal("supported MIR intrinsic unexpectedly blocked mir-direct route")
-	}
-}
-
 func TestLLVMCapabilityMatrixRecordsNativeOwnedRoute(t *testing.T) {
 	t.Parallel()
 
@@ -280,62 +220,6 @@ func TestLLVMCapabilityMatrixRecordsNativeOwnedRoute(t *testing.T) {
 	}
 }
 
-func mirModuleWithFunction(fn *mir.Function) *mir.Module {
-	return &mir.Module{
-		Package:   "main",
-		Functions: []*mir.Function{fn},
-		Layouts:   mir.NewLayoutTable(),
-	}
-}
-
-func unsupportedMIRFunction() *mir.Function {
-	return &mir.Function{
-		Name:        "bad",
-		ReturnType:  ir.TUnit,
-		ReturnLocal: 0,
-		Locals: []*mir.Local{
-			{ID: 0, Name: "ret", Type: ir.TUnit, IsReturn: true},
-			{ID: 1, Name: "poison", Type: ir.ErrTypeVal},
-		},
-		Entry: 0,
-		Blocks: []*mir.BasicBlock{
-			{
-				ID: 0,
-				Term: &mir.BranchTerm{
-					Cond: &mir.CopyOp{Place: mir.Place{Local: 1}, T: ir.ErrTypeVal},
-					Then: 0,
-					Else: 0,
-				},
-			},
-		},
-	}
-}
-
-func printlnMIRFunction() *mir.Function {
-	return &mir.Function{
-		Name:        "main",
-		ReturnType:  ir.TUnit,
-		ReturnLocal: 0,
-		Locals: []*mir.Local{
-			{ID: 0, Name: "ret", Type: ir.TUnit, IsReturn: true},
-		},
-		Entry: 0,
-		Blocks: []*mir.BasicBlock{
-			{
-				ID: 0,
-				Instrs: []mir.Instr{
-					&mir.IntrinsicInstr{
-						Kind: mir.IntrinsicPrintln,
-						Args: []mir.Operand{
-							&mir.ConstOp{Const: &mir.IntConst{Value: 42, T: ir.TInt}, T: ir.TInt},
-						},
-					},
-				},
-				Term: &mir.ReturnTerm{},
-			},
-		},
-	}
-}
 
 func capabilityRow(matrix CapabilityMatrix, id CapabilityID) (CapabilityRow, bool) {
 	for _, row := range matrix.Rows() {

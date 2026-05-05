@@ -224,7 +224,8 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 		traceLLVMDispatch("%s unsupported: %s %s (%s)", route, diag.Code, diag.Kind, row.Subject)
 		return renderUnsupportedLLVMIR(entry, target, emit, warnings, diag, route)
 	}
-	irOut, genErr := emitLLVMFallback(route, entry, opts)
+	irOut, fallbackWarnings, genErr := emitLLVMFallback(route, entry, opts)
+	warnings = append(warnings, fallbackWarnings...)
 	if genErr == nil {
 		traceLLVMDispatch("%s succeeded package=%s source=%s", route, entry.PackageName, entry.SourcePath)
 		return irOut, warnings, nil
@@ -238,8 +239,22 @@ func llvmFallbackDispatchRoute(opts llvmabi.Options, entry Entry) llvmDispatchRo
 	return NewLLVMCapabilityMatrix(entry, opts).DispatchRoute()
 }
 
-func emitLLVMFallback(route llvmDispatchRoute, entry Entry, opts llvmabi.Options) ([]byte, error) {
-	return nil, llvmabi.Unsupported("mir-emit", "Go MIR emitter fallback has been removed; MIR emission must be covered by the native LIR Proto subprocess")
+// emitLLVMFallback dispatches the resolved route to the native LIR Proto
+// subprocess. The Go MIR emitter is gone, so MIR-direct emission rides the
+// same `tryNativeOwnedMIRPayloadLLVMIRText` boundary the native-owned route
+// uses; declines surface as a structured "unsupported" diagnostic upstream.
+func emitLLVMFallback(route llvmDispatchRoute, entry Entry, opts llvmabi.Options) ([]byte, []error, error) {
+	if entry.MIR == nil {
+		return nil, nil, llvmabi.Unsupported("source-layout", "nil MIR module")
+	}
+	out, ok, nativeWarnings, err := tryNativeOwnedMIRPayloadLLVMIRText(entry, opts.Target)
+	if err != nil {
+		return nil, nativeWarnings, err
+	}
+	if !ok {
+		return nil, nativeWarnings, llvmabi.Unsupported("mir-emit", "native LIR Proto subprocess declined MIR coverage for route "+string(route))
+	}
+	return out, nativeWarnings, nil
 }
 
 func renderUnsupportedLLVMIR(entry Entry, target string, emit EmitMode, warnings []error, diag llvmabi.UnsupportedDiagnostic, route llvmDispatchRoute) ([]byte, []error, error) {
@@ -441,8 +456,8 @@ func useNativeOwnedLLVMIR(features []string, emit EmitMode) bool {
 }
 
 // UseNativeOwnedLLVMIR reports whether the backend's default dispatch would
-// prefer the native-owned llvmgen fast path for the given feature set and emit
-// mode.
+// prefer the native-owned LLVM generator fast path for the given feature set
+// and emit mode.
 func UseNativeOwnedLLVMIR(features []string, emit EmitMode) bool {
 	return useNativeOwnedLLVMIR(features, emit)
 }
