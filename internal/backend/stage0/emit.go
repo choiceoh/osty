@@ -132,6 +132,12 @@ type moduleCtx struct {
 	// to extraDecls already, so multiple functions referencing the
 	// same struct don't duplicate the type definition.
 	emittedStructs map[string]bool
+	// tuplePool maps a tuple's canonical key (the comma-separated
+	// list of LLVM scalar mnemonics) to its synthetic LLVM type
+	// name. Tuples don't carry a user-visible Osty name so stage0
+	// invents `.tuple.<N>` IDs on first use.
+	tuplePool   map[string]string
+	nextTupleID int
 }
 
 func newModuleCtx(module *mir.Module) *moduleCtx {
@@ -148,7 +154,42 @@ func newModuleCtx(module *mir.Module) *moduleCtx {
 		extraDecls:     &strings.Builder{},
 		stringPool:     map[string]string{},
 		emittedStructs: map[string]bool{},
+		tuplePool:      map[string]string{},
 	}
+}
+
+// internTupleType returns the synthetic LLVM type name (with leading
+// `%`) for the tuple `(elems...)`. Repeated calls with the same field
+// list return the cached name. The type definition is emitted into
+// extraDecls on first use.
+func (m *moduleCtx) internTupleType(elems []scalarType) string {
+	key := tupleKey(elems)
+	if name, ok := m.tuplePool[key]; ok {
+		return name
+	}
+	name := fmt.Sprintf(".tuple.%d", m.nextTupleID)
+	m.nextTupleID++
+	m.tuplePool[key] = name
+	fmt.Fprintf(m.extraDecls, "%%%s = type { ", name)
+	for i, ft := range elems {
+		if i > 0 {
+			m.extraDecls.WriteString(", ")
+		}
+		m.extraDecls.WriteString(ft.llvm())
+	}
+	m.extraDecls.WriteString(" }\n")
+	return name
+}
+
+func tupleKey(elems []scalarType) string {
+	var b strings.Builder
+	for i, e := range elems {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString(e.llvm())
+	}
+	return b.String()
 }
 
 // lookupStructFields returns the scalar field types for the named
@@ -295,6 +336,9 @@ func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error
 	}
 	if pat, ok := matchListLiteralLen(fn, mctx); ok {
 		return emitListLiteralLen(out, fn, pat)
+	}
+	if pat, ok := matchAggregateConstructor(fn, mctx); ok {
+		return emitAggregateConstructor(out, fn, pat)
 	}
 	return fmt.Errorf("%w: function %q does not match any stage0 pattern", ErrUnsupported, fn.Name)
 }
@@ -2329,6 +2373,205 @@ func emitListLiteralLen(out *strings.Builder, fn *mir.Function, pat listLiteralL
 	}
 	fmt.Fprintf(out, "  %%1 = call i64 @osty_rt_list_len(ptr %%0)\n")
 	out.WriteString("  ret i64 %1\n")
+	out.WriteString("}\n\n")
+	return nil
+}
+
+// ---- P14: aggregate constructor (struct + tuple) ----
+//
+// stage0 P14 handles the simplest "build aggregate, return it" shape:
+//
+//	struct Point { x: Int, y: Int }
+//	fn origin() -> Point { Point { x: 0, y: 0 } }
+//	fn make(x: Int, y: Int) -> Point { Point { x: x, y: y } }
+//	fn pair() -> (Int, Int) { (1, 2) }
+//
+// MIR shape: 0~2 scalar params, single block, single AssignInstr
+// writing AggregateRV{AggStruct or AggTuple} to the return local,
+// ReturnTerm. Each field is a ConstOp (Int / Bool / String) or a
+// CopyOp on a function parameter.
+//
+// Output: emit the aggregate's type definition once at module top
+// (struct uses its source name; tuple gets a synthetic `.tuple.<N>`),
+// then a chain of `insertvalue` instructions inside the function.
+
+type aggregateConstructorPattern struct {
+	typeName    string         // LLVM type name without `%`
+	paramTypes  []scalarType   // function parameter scalar types
+	paramNames  []string       // sanitised parameter names
+	paramIDs    []mir.LocalID
+	fieldExprs  []string       // ordered LLVM operand expressions
+	fieldTypes  []scalarType   // matching scalar type per field
+}
+
+func matchAggregateConstructor(fn *mir.Function, mctx *moduleCtx) (aggregateConstructorPattern, bool) {
+	pat := aggregateConstructorPattern{}
+
+	// Determine the aggregate type the function returns.
+	typeName, fieldTypes, ok := classifyAggregateReturnType(fn.ReturnType, mctx)
+	if !ok {
+		return pat, false
+	}
+	pat.typeName = typeName
+	pat.fieldTypes = fieldTypes
+
+	if len(fn.Params) > 2 {
+		return pat, false
+	}
+	pat.paramIDs = fn.Params
+	pat.paramTypes = make([]scalarType, len(fn.Params))
+	pat.paramNames = make([]string, len(fn.Params))
+	fallbackNames := []string{"a", "b"}
+	for i, pid := range fn.Params {
+		loc := lookupLocal(fn, pid)
+		if loc == nil || !loc.IsParam {
+			return pat, false
+		}
+		st := scalarFromType(loc.Type)
+		if st == scalarUnknown {
+			return pat, false
+		}
+		pat.paramTypes[i] = st
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+	}
+	disambiguateParamNames(pat.paramNames)
+
+	bb, ok := singleBlockReturning(fn)
+	if !ok || len(bb.Instrs) != 1 {
+		return pat, false
+	}
+	ai, ok := bb.Instrs[0].(*mir.AssignInstr)
+	if !ok {
+		return pat, false
+	}
+	if ai.Dest.Local != fn.ReturnLocal || ai.Dest.HasProjections() {
+		return pat, false
+	}
+	agg, ok := ai.Src.(*mir.AggregateRV)
+	if !ok {
+		return pat, false
+	}
+	if agg.Kind != mir.AggStruct && agg.Kind != mir.AggTuple {
+		return pat, false
+	}
+	if len(agg.Fields) != len(fieldTypes) {
+		return pat, false
+	}
+
+	// Param-id → LLVM register (fast lookup for CopyOp resolution).
+	paramRegs := map[mir.LocalID]string{}
+	for i, pid := range fn.Params {
+		paramRegs[pid] = "%" + pat.paramNames[i]
+	}
+
+	pat.fieldExprs = make([]string, len(agg.Fields))
+	for i, f := range agg.Fields {
+		expr, ty, ok := classifyAggregateField(f, paramRegs, fn, mctx)
+		if !ok {
+			return pat, false
+		}
+		if ty != fieldTypes[i] {
+			return pat, false
+		}
+		pat.fieldExprs[i] = expr
+	}
+	return pat, true
+}
+
+// classifyAggregateReturnType maps the function's return type to a
+// (typeName, fieldTypes) pair when the type is an aggregate stage0
+// can lower. Struct types use the source name and emit their type
+// definition through emitStructDef; tuple types use a synthetic
+// `.tuple.<N>` id allocated by mctx.internTupleType.
+func classifyAggregateReturnType(retT mir.Type, mctx *moduleCtx) (string, []scalarType, bool) {
+	switch t := retT.(type) {
+	case *ir.NamedType:
+		if t == nil || t.Name == "" {
+			return "", nil, false
+		}
+		fields, ok := mctx.lookupStructFields(t.Name)
+		if !ok {
+			return "", nil, false
+		}
+		mctx.emitStructDef(t.Name, fields)
+		return t.Name, fields, true
+	case *ir.TupleType:
+		if t == nil {
+			return "", nil, false
+		}
+		fields := make([]scalarType, len(t.Elems))
+		for i, e := range t.Elems {
+			st := scalarFromType(e)
+			if st == scalarUnknown {
+				return "", nil, false
+			}
+			fields[i] = st
+		}
+		name := mctx.internTupleType(fields)
+		return name, fields, true
+	}
+	return "", nil, false
+}
+
+// classifyAggregateField resolves one operand inside an aggregate
+// constructor. Constants (Int / Bool / String) inline directly; a
+// CopyOp must reference a parameter local without projections.
+func classifyAggregateField(op mir.Operand, paramRegs map[mir.LocalID]string, fn *mir.Function, mctx *moduleCtx) (string, scalarType, bool) {
+	if con, ok := op.(*mir.ConstOp); ok {
+		switch c := con.Const.(type) {
+		case *mir.IntConst:
+			return fmt.Sprintf("%d", c.Value), scalarInt, true
+		case *mir.BoolConst:
+			if c.Value {
+				return "true", scalarBool, true
+			}
+			return "false", scalarBool, true
+		case *mir.StringConst:
+			if mctx == nil {
+				return "", scalarUnknown, false
+			}
+			return mctx.internStringConst(c.Value), scalarString, true
+		}
+		return "", scalarUnknown, false
+	}
+	if cp, ok := op.(*mir.CopyOp); ok {
+		if cp.Place.HasProjections() {
+			return "", scalarUnknown, false
+		}
+		reg, found := paramRegs[cp.Place.Local]
+		if !found {
+			return "", scalarUnknown, false
+		}
+		loc := lookupLocal(fn, cp.Place.Local)
+		if loc == nil {
+			return "", scalarUnknown, false
+		}
+		return reg, scalarFromType(loc.Type), true
+	}
+	return "", scalarUnknown, false
+}
+
+func emitAggregateConstructor(out *strings.Builder, fn *mir.Function, pat aggregateConstructorPattern) error {
+	// Function signature.
+	fmt.Fprintf(out, "define %%%s @%s(", pat.typeName, fn.Name)
+	for i, name := range pat.paramNames {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
+	}
+	out.WriteString(") {\n")
+	out.WriteString("entry:\n")
+
+	// `insertvalue` chain. Start from `poison` (LLVM's "undefined"
+	// sentinel) and write each field in order. Final register holds
+	// the fully populated aggregate.
+	prev := "poison"
+	for i, fieldExpr := range pat.fieldExprs {
+		fmt.Fprintf(out, "  %%%d = insertvalue %%%s %s, %s %s, %d\n", i, pat.typeName, prev, pat.fieldTypes[i].llvm(), fieldExpr, i)
+		prev = fmt.Sprintf("%%%d", i)
+	}
+	fmt.Fprintf(out, "  ret %%%s %s\n", pat.typeName, prev)
 	out.WriteString("}\n\n")
 	return nil
 }

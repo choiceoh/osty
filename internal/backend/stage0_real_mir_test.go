@@ -352,6 +352,44 @@ fn main() {}`,
 				"phi i64",
 			},
 		},
+		{
+			name: "struct_constructor_const_fields",
+			src: `struct Point { x: Int, y: Int }
+fn origin() -> Point { Point { x: 0, y: 0 } }
+fn main() {}`,
+			wantIR: []string{
+				"%Point = type { i64, i64 }",
+				"define %Point @origin()",
+				"%0 = insertvalue %Point poison, i64 0, 0",
+				"%1 = insertvalue %Point %0, i64 0, 1",
+				"ret %Point %1",
+			},
+		},
+		{
+			name: "struct_constructor_param_fields",
+			src: `struct Point { x: Int, y: Int }
+fn make(x: Int, y: Int) -> Point { Point { x: x, y: y } }
+fn main() {}`,
+			wantIR: []string{
+				"%Point = type { i64, i64 }",
+				"define %Point @make(i64 %x, i64 %y)",
+				"%0 = insertvalue %Point poison, i64 %x, 0",
+				"%1 = insertvalue %Point %0, i64 %y, 1",
+				"ret %Point %1",
+			},
+		},
+		{
+			name: "tuple_int_int_return",
+			src: `fn pair() -> (Int, Int) { (1, 2) }
+fn main() {}`,
+			wantIR: []string{
+				"%.tuple.0 = type { i64, i64 }",
+				"define %.tuple.0 @pair()",
+				"%0 = insertvalue %.tuple.0 poison, i64 1, 0",
+				"%1 = insertvalue %.tuple.0 %0, i64 2, 1",
+				"ret %.tuple.0 %1",
+			},
+		},
 	}
 	for _, c := range cases {
 		c := c
