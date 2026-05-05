@@ -22,15 +22,18 @@ var ErrUnsupported = errors.New("stage0: MIR shape outside bootstrap subset")
 // builds with a working `osty-self` route through the LIR Proto
 // subprocess instead and never reach this entry.
 //
-// Currently supported function shapes (each gated by an explicit check
-// that returns ErrUnsupported with a precise reason):
+// Currently supported function shapes (each gated by an explicit
+// `match*` predicate; non-matching shapes return ErrUnsupported):
 //
 //   - P1: `fn main() {}` — single block, zero instructions, ReturnTerm.
 //   - P2a: `fn name() -> Int { N }` — non-main, single block, one
 //     AssignInstr writing IntConst to the return local, ReturnTerm.
+//   - P2b: `fn name(x: Int) -> Int { x }` — non-main, single Int
+//     parameter, single block, one AssignInstr writing CopyOp(param)
+//     to the return local, ReturnTerm.
 //
-// Any other shape is rejected. Each P2x extension adds one case +
-// regression test; surface drift is held back by the stage0 coverage
+// Each P2x extension adds one match predicate + emit closure +
+// regression test. Surface drift is held back by the stage0 coverage
 // gate planned for P3.
 func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 	if module == nil {
@@ -75,8 +78,16 @@ func emitFunction(out *strings.Builder, fn *mir.Function) error {
 	if fn.Name == "main" {
 		return emitTrivialMain(out, fn)
 	}
-	return emitIntLiteralReturn(out, fn)
+	if pat, ok := matchIntLiteralReturn(fn); ok {
+		return emitIntLiteralReturn(out, fn, pat)
+	}
+	if pat, ok := matchIntParamPassthrough(fn); ok {
+		return emitIntParamPassthrough(out, fn, pat)
+	}
+	return fmt.Errorf("%w: function %q does not match any stage0 pattern", ErrUnsupported, fn.Name)
 }
+
+// ---- P1: trivial main ----
 
 func emitTrivialMain(out *strings.Builder, fn *mir.Function) error {
 	if reason := trivialMainViolation(fn); reason != "" {
@@ -89,9 +100,6 @@ func emitTrivialMain(out *strings.Builder, fn *mir.Function) error {
 	return nil
 }
 
-// trivialMainViolation returns an empty string when `fn` matches the
-// stage0 P1 subset (`fn main() {}`), otherwise a short reason string
-// suitable for an ErrUnsupported diagnostic.
 func trivialMainViolation(fn *mir.Function) string {
 	if fn.Name != "main" {
 		return "stage0 expected `main`; saw " + fn.Name
@@ -115,68 +123,172 @@ func trivialMainViolation(fn *mir.Function) string {
 	return ""
 }
 
-// emitIntLiteralReturn handles `fn name() -> Int { N }` for non-main
-// functions. The MIR shape is one block with a single AssignInstr
-// writing an IntConst to the return local, followed by ReturnTerm.
-func emitIntLiteralReturn(out *strings.Builder, fn *mir.Function) error {
-	if reason, _ := intLiteralReturnViolation(fn); reason != "" {
-		return fmt.Errorf("%w: function %q: %s", ErrUnsupported, fn.Name, reason)
+// ---- P2a: int literal return ----
+
+type intLiteralPattern struct {
+	value int64
+}
+
+func matchIntLiteralReturn(fn *mir.Function) (intLiteralPattern, bool) {
+	if !isPrimType(fn.ReturnType, ir.PrimInt) {
+		return intLiteralPattern{}, false
 	}
-	_, value := intLiteralReturnViolation(fn)
+	if len(fn.Params) != 0 {
+		return intLiteralPattern{}, false
+	}
+	bb, ok := singleBlockReturning(fn)
+	if !ok || len(bb.Instrs) != 1 {
+		return intLiteralPattern{}, false
+	}
+	assign, ok := writeToReturnLocal(bb.Instrs[0], fn.ReturnLocal)
+	if !ok {
+		return intLiteralPattern{}, false
+	}
+	use, ok := assign.Src.(*mir.UseRV)
+	if !ok {
+		return intLiteralPattern{}, false
+	}
+	con, ok := use.Op.(*mir.ConstOp)
+	if !ok {
+		return intLiteralPattern{}, false
+	}
+	intc, ok := con.Const.(*mir.IntConst)
+	if !ok || !isPrimType(intc.Type(), ir.PrimInt) {
+		return intLiteralPattern{}, false
+	}
+	return intLiteralPattern{value: intc.Value}, true
+}
+
+func emitIntLiteralReturn(out *strings.Builder, fn *mir.Function, pat intLiteralPattern) error {
 	fmt.Fprintf(out, "define i64 @%s() {\n", fn.Name)
 	out.WriteString("entry:\n")
-	fmt.Fprintf(out, "  ret i64 %d\n", value)
+	fmt.Fprintf(out, "  ret i64 %d\n", pat.value)
 	out.WriteString("}\n\n")
 	return nil
 }
 
-// intLiteralReturnViolation returns "" + the constant value when `fn`
-// matches the P2a subset; otherwise it returns a reason string and a
-// zero value. Returning value alongside reason avoids re-walking the
-// MIR after the validation pass.
-func intLiteralReturnViolation(fn *mir.Function) (string, int64) {
+// ---- P2b: single Int param passthrough ----
+
+type intParamPassthroughPattern struct {
+	paramName string
+}
+
+func matchIntParamPassthrough(fn *mir.Function) (intParamPassthroughPattern, bool) {
 	if !isPrimType(fn.ReturnType, ir.PrimInt) {
-		return fmt.Sprintf("return type %s is not Int", primName(fn.ReturnType)), 0
+		return intParamPassthroughPattern{}, false
 	}
-	if len(fn.Params) != 0 {
-		return "function has parameters; stage0 P2a expects zero", 0
+	if len(fn.Params) != 1 {
+		return intParamPassthroughPattern{}, false
 	}
-	if len(fn.Blocks) != 1 {
-		return fmt.Sprintf("function has %d blocks; stage0 P2a expects exactly 1", len(fn.Blocks)), 0
+	paramID := fn.Params[0]
+	paramLocal := lookupLocal(fn, paramID)
+	if paramLocal == nil || !paramLocal.IsParam || !isPrimType(paramLocal.Type, ir.PrimInt) {
+		return intParamPassthroughPattern{}, false
 	}
-	bb := fn.Blocks[0]
-	if bb == nil {
-		return "entry block is nil", 0
+	bb, ok := singleBlockReturning(fn)
+	if !ok || len(bb.Instrs) != 1 {
+		return intParamPassthroughPattern{}, false
 	}
-	if len(bb.Instrs) != 1 {
-		return fmt.Sprintf("entry block has %d instructions; stage0 P2a expects exactly 1", len(bb.Instrs)), 0
-	}
-	if _, ok := bb.Term.(*mir.ReturnTerm); !ok {
-		return fmt.Sprintf("terminator is %T; stage0 P2a expects ReturnTerm", bb.Term), 0
-	}
-	assign, ok := bb.Instrs[0].(*mir.AssignInstr)
+	assign, ok := writeToReturnLocal(bb.Instrs[0], fn.ReturnLocal)
 	if !ok {
-		return fmt.Sprintf("instruction[0] is %T; stage0 P2a expects AssignInstr", bb.Instrs[0]), 0
-	}
-	if assign.Dest.Local != fn.ReturnLocal || assign.Dest.HasProjections() {
-		return "AssignInstr destination is not the return local without projections", 0
+		return intParamPassthroughPattern{}, false
 	}
 	use, ok := assign.Src.(*mir.UseRV)
 	if !ok {
-		return fmt.Sprintf("AssignInstr.Src is %T; stage0 P2a expects UseRV", assign.Src), 0
+		return intParamPassthroughPattern{}, false
 	}
-	con, ok := use.Op.(*mir.ConstOp)
+	cp, ok := use.Op.(*mir.CopyOp)
 	if !ok {
-		return fmt.Sprintf("UseRV.Op is %T; stage0 P2a expects ConstOp", use.Op), 0
+		return intParamPassthroughPattern{}, false
 	}
-	intc, ok := con.Const.(*mir.IntConst)
+	if cp.Place.Local != paramID || cp.Place.HasProjections() {
+		return intParamPassthroughPattern{}, false
+	}
+	return intParamPassthroughPattern{paramName: sanitizeLLVMName(paramLocal.Name, "p")}, true
+}
+
+func emitIntParamPassthrough(out *strings.Builder, fn *mir.Function, pat intParamPassthroughPattern) error {
+	fmt.Fprintf(out, "define i64 @%s(i64 %%%s) {\n", fn.Name, pat.paramName)
+	out.WriteString("entry:\n")
+	fmt.Fprintf(out, "  ret i64 %%%s\n", pat.paramName)
+	out.WriteString("}\n\n")
+	return nil
+}
+
+// ---- shared helpers ----
+
+func singleBlockReturning(fn *mir.Function) (*mir.BasicBlock, bool) {
+	if len(fn.Blocks) != 1 {
+		return nil, false
+	}
+	bb := fn.Blocks[0]
+	if bb == nil {
+		return nil, false
+	}
+	if _, ok := bb.Term.(*mir.ReturnTerm); !ok {
+		return nil, false
+	}
+	return bb, true
+}
+
+func writeToReturnLocal(instr mir.Instr, ret mir.LocalID) (*mir.AssignInstr, bool) {
+	assign, ok := instr.(*mir.AssignInstr)
 	if !ok {
-		return fmt.Sprintf("ConstOp.Const is %T; stage0 P2a expects IntConst", con.Const), 0
+		return nil, false
 	}
-	if !isPrimType(intc.Type(), ir.PrimInt) {
-		return fmt.Sprintf("IntConst type %s is not Int", primName(intc.Type())), 0
+	if assign.Dest.Local != ret || assign.Dest.HasProjections() {
+		return nil, false
 	}
-	return "", intc.Value
+	return assign, true
+}
+
+func lookupLocal(fn *mir.Function, id mir.LocalID) *mir.Local {
+	for _, l := range fn.Locals {
+		if l != nil && l.ID == id {
+			return l
+		}
+	}
+	return nil
+}
+
+// sanitizeLLVMName returns `name` if it is a non-empty valid LLVM
+// identifier (`[A-Za-z._][A-Za-z._0-9]*`), otherwise `fallback`.
+// Stage0 only emits SSA registers from clean Osty parameter names; the
+// guard exists so synthetic locals (`""`, generated suffixes) cannot
+// produce malformed IR.
+func sanitizeLLVMName(name, fallback string) string {
+	if name == "" {
+		return fallback
+	}
+	for i, r := range name {
+		if i == 0 {
+			if !isLLVMIdentStart(r) {
+				return fallback
+			}
+			continue
+		}
+		if !isLLVMIdentRest(r) {
+			return fallback
+		}
+	}
+	return name
+}
+
+func isLLVMIdentStart(r rune) bool {
+	switch {
+	case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z':
+		return true
+	case r == '_' || r == '.':
+		return true
+	}
+	return false
+}
+
+func isLLVMIdentRest(r rune) bool {
+	if isLLVMIdentStart(r) {
+		return true
+	}
+	return r >= '0' && r <= '9'
 }
 
 func isPrimType(t mir.Type, want ir.PrimKind) bool {
@@ -185,16 +297,6 @@ func isPrimType(t mir.Type, want ir.PrimKind) bool {
 		return false
 	}
 	return prim.Kind == want
-}
-
-func primName(t mir.Type) string {
-	if t == nil {
-		return "<nil>"
-	}
-	if prim, ok := t.(*ir.PrimType); ok && prim != nil {
-		return prim.String()
-	}
-	return fmt.Sprintf("%T", t)
 }
 
 func packageNameFor(module *mir.Module, opts llvmabi.Options) string {

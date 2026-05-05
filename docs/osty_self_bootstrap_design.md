@@ -158,7 +158,8 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 | P0 | `osty-self not found` 에러 분류 / `isOstySelfMissing(err)` 도입 | unit test — **구현 완료**: `internal/backend/bootstrap.go::IsOstySelfMissing` |
 | P1 | `internal/backend/stage0/` skeleton + 단순 `fn main()` 케이스 한 개 | TestStage0HelloWorld — **구현 완료**: `internal/backend/stage0/emit.go::EmitMIR` |
 | P2a | non-main fn → Int { N } (literal return) | TestStage0EmitsIntLiteralFunctionAlongsideMain — **구현 완료** |
-| P2b+ | toolchain 의 첫 10개 함수 lowering 통과 (params / non-Int / 산술 / call …) | toolchain/main.osty 부분 빌드 |
+| P2b | non-main fn(x: Int) -> Int { x } (param passthrough) | TestStage0EmitsIntParamPassthrough — **구현 완료** |
+| P2c+ | toolchain 의 첫 10개 함수 lowering 통과 (산술 / call / if-else / locals …) | toolchain/main.osty 부분 빌드 |
 | P3 | `OSTY_STAGE0_FALLBACK=1` 로 toolchain 전체 빌드 성공 | verify-self-rebuild stage1-only |
 | P4 | stage0 + osty-self 양쪽 모두에서 `verify-self-rebuild` 통과 | byte parity (stage2 vs stage3) |
 | P5 | CI matrix 추가 — `OSTY_STAGE0_FALLBACK=1` 잡과 default 잡 둘 다 | CI green |
