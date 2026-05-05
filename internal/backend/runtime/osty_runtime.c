@@ -24590,7 +24590,35 @@ void *osty_rt_io_read_line(void) {
  * - size() always succeeds, using the TTY size when available and
  *   COLUMNS/LINES or 80x24 as a deterministic fallback.
  * - write(), flush(), and setRawMode() return NULL on success or a managed
- *   String containing a human-readable error message on failure. */
+ *   String containing a human-readable error message on failure.
+ * - readKey() / pollKey() publish the decoded key in thread-local slots and
+ *   return a small status code consumed by the LLVM shim. */
+enum {
+    OSTY_RT_TERM_KEY_CHAR = 0,
+    OSTY_RT_TERM_KEY_ENTER = 1,
+    OSTY_RT_TERM_KEY_ESCAPE = 2,
+    OSTY_RT_TERM_KEY_BACKSPACE = 3,
+    OSTY_RT_TERM_KEY_TAB = 4,
+    OSTY_RT_TERM_KEY_BACKTAB = 5,
+    OSTY_RT_TERM_KEY_UP = 6,
+    OSTY_RT_TERM_KEY_DOWN = 7,
+    OSTY_RT_TERM_KEY_LEFT = 8,
+    OSTY_RT_TERM_KEY_RIGHT = 9,
+    OSTY_RT_TERM_KEY_HOME = 10,
+    OSTY_RT_TERM_KEY_END = 11,
+    OSTY_RT_TERM_KEY_PAGE_UP = 12,
+    OSTY_RT_TERM_KEY_PAGE_DOWN = 13,
+    OSTY_RT_TERM_KEY_INSERT = 14,
+    OSTY_RT_TERM_KEY_DELETE = 15,
+    OSTY_RT_TERM_KEY_FUNCTION = 16,
+    OSTY_RT_TERM_KEY_UNKNOWN = 17,
+};
+
+static OSTY_RT_TLS int64_t osty_rt_term_last_key_code = OSTY_RT_TERM_KEY_UNKNOWN;
+static OSTY_RT_TLS int64_t osty_rt_term_last_key_function = 0;
+static OSTY_RT_TLS void *osty_rt_term_last_key_text = NULL;
+static OSTY_RT_TLS void *osty_rt_term_last_error_text = NULL;
+
 static void *osty_rt_term_error_message(const char *prefix, const char *detail, const char *site) {
     const char *lhs = prefix == NULL ? "terminal error" : prefix;
     const char *rhs = (detail != NULL && detail[0] != '\0') ? detail : "unknown error";
@@ -24606,6 +24634,61 @@ static void *osty_rt_term_error_message(const char *prefix, const char *detail, 
     void *out = osty_rt_string_dup_site(buf, total, site);
     free(buf);
     return out;
+}
+
+static void osty_rt_term_set_last_error(const char *prefix, const char *detail, const char *site) {
+    osty_rt_term_last_error_text = osty_rt_term_error_message(prefix, detail, site);
+}
+
+static void osty_rt_term_set_last_errno(const char *prefix, const char *site) {
+    const char *detail = errno == 0 ? "unknown error" : strerror(errno);
+    osty_rt_term_set_last_error(prefix, detail, site);
+}
+
+void *osty_rt_term_last_error(void) {
+    if (osty_rt_term_last_error_text != NULL) {
+        return osty_rt_term_last_error_text;
+    }
+    return osty_rt_term_error_message("terminal input error", "unknown error", "runtime.term.input.unknown_error");
+}
+
+static void osty_rt_term_clear_input_status(void) {
+    osty_rt_term_last_error_text = NULL;
+    osty_rt_term_last_key_code = OSTY_RT_TERM_KEY_UNKNOWN;
+    osty_rt_term_last_key_function = 0;
+    osty_rt_term_last_key_text = NULL;
+}
+
+static void osty_rt_term_set_key_text(int64_t code, const char *text, size_t len, const char *site) {
+    osty_rt_term_last_key_code = code;
+    osty_rt_term_last_key_function = 0;
+    osty_rt_term_last_key_text = osty_rt_string_dup_site(text, len, site);
+}
+
+static void osty_rt_term_set_key_bare(int64_t code) {
+    osty_rt_term_last_key_code = code;
+    osty_rt_term_last_key_function = 0;
+    osty_rt_term_last_key_text = NULL;
+}
+
+static void osty_rt_term_set_key_function(int64_t n) {
+    osty_rt_term_last_key_code = OSTY_RT_TERM_KEY_FUNCTION;
+    osty_rt_term_last_key_function = n;
+    osty_rt_term_last_key_text = NULL;
+}
+
+int64_t osty_rt_term_key_code(void) {
+    return osty_rt_term_last_key_code;
+}
+
+void *osty_rt_term_key_text(void) {
+    return osty_rt_term_last_key_text != NULL
+        ? osty_rt_term_last_key_text
+        : osty_rt_string_dup_site("", 0, "runtime.term.key.empty");
+}
+
+int64_t osty_rt_term_key_function(void) {
+    return osty_rt_term_last_key_function;
 }
 
 static void *osty_rt_term_errno_error(const char *prefix, const char *site) {
@@ -24712,6 +24795,279 @@ void *osty_rt_term_flush(void) {
         return osty_rt_term_errno_error("failed to flush terminal", "runtime.term.flush.error");
     }
     return NULL;
+}
+
+static int osty_rt_term_stdin_ready(int64_t timeout_ms) {
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    HANDLE handle = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD wait_ms = timeout_ms < 0 ? INFINITE : (DWORD)timeout_ms;
+    DWORD wait_result;
+    if (handle == INVALID_HANDLE_VALUE || handle == NULL) {
+        osty_rt_term_set_last_error("failed to poll terminal input", "stdin is not a console", "runtime.term.poll.error");
+        return -1;
+    }
+    wait_result = WaitForSingleObject(handle, wait_ms);
+    if (wait_result == WAIT_TIMEOUT) {
+        return 0;
+    }
+    if (wait_result == WAIT_OBJECT_0) {
+        return 1;
+    }
+    osty_rt_term_set_last_error("failed to poll terminal input", "WaitForSingleObject failed", "runtime.term.poll.error");
+    return -1;
+#else
+    struct pollfd pfd;
+    int rc;
+    int timeout = -1;
+    if (timeout_ms >= 0) {
+        timeout = timeout_ms > INT_MAX ? INT_MAX : (int)timeout_ms;
+    }
+    pfd.fd = STDIN_FILENO;
+    pfd.events = POLLIN;
+    pfd.revents = 0;
+    do {
+        errno = 0;
+        rc = poll(&pfd, 1, timeout);
+    } while (rc < 0 && errno == EINTR);
+    if (rc == 0) {
+        return 0;
+    }
+    if (rc < 0) {
+        osty_rt_term_set_last_errno("failed to poll terminal input", "runtime.term.poll.error");
+        return -1;
+    }
+    if ((pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+        osty_rt_term_set_last_error("failed to poll terminal input", "stdin is not readable", "runtime.term.poll.error");
+        return -1;
+    }
+    return (pfd.revents & POLLIN) != 0 ? 1 : 0;
+#endif
+}
+
+static int osty_rt_term_read_byte(unsigned char *out) {
+#if defined(OSTY_RT_PLATFORM_WIN32)
+    HANDLE handle = GetStdHandle(STD_INPUT_HANDLE);
+    char ch = 0;
+    DWORD got = 0;
+    if (out == NULL) {
+        return -1;
+    }
+    if (handle == INVALID_HANDLE_VALUE || handle == NULL) {
+        osty_rt_term_set_last_error("failed to read terminal input", "stdin is not a console", "runtime.term.read.error");
+        return -1;
+    }
+    if (!ReadFile(handle, &ch, 1, &got, NULL) || got == 0) {
+        osty_rt_term_set_last_error("failed to read terminal input", "ReadFile failed", "runtime.term.read.error");
+        return -1;
+    }
+    *out = (unsigned char)ch;
+    return 0;
+#else
+    ssize_t n;
+    if (out == NULL) {
+        return -1;
+    }
+    do {
+        errno = 0;
+        n = read(STDIN_FILENO, out, 1);
+    } while (n < 0 && errno == EINTR);
+    if (n == 1) {
+        return 0;
+    }
+    if (n == 0) {
+        osty_rt_term_set_last_error("failed to read terminal input", "end of input", "runtime.term.read.eof");
+        return -1;
+    }
+    osty_rt_term_set_last_errno("failed to read terminal input", "runtime.term.read.error");
+    return -1;
+#endif
+}
+
+static int osty_rt_term_read_byte_timeout(unsigned char *out, int64_t timeout_ms) {
+    int ready = osty_rt_term_stdin_ready(timeout_ms);
+    if (ready <= 0) {
+        return ready;
+    }
+    return osty_rt_term_read_byte(out) == 0 ? 1 : -1;
+}
+
+static void osty_rt_term_set_ascii_key(unsigned char ch) {
+    char text[2];
+    switch (ch) {
+    case '\r':
+    case '\n':
+        osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_ENTER);
+        return;
+    case '\t':
+        osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_TAB);
+        return;
+    case 0x7f:
+    case 0x08:
+        osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_BACKSPACE);
+        return;
+    default:
+        break;
+    }
+    text[0] = (char)ch;
+    text[1] = '\0';
+    osty_rt_term_set_key_text(OSTY_RT_TERM_KEY_CHAR, text, 1, "runtime.term.key.char");
+}
+
+static void osty_rt_term_set_csi_key(char final, const int64_t *nums, int count, bool shifted) {
+    int64_t first = count > 0 ? nums[0] : 0;
+    switch (final) {
+    case 'A': osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_UP); return;
+    case 'B': osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_DOWN); return;
+    case 'C': osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_RIGHT); return;
+    case 'D': osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_LEFT); return;
+    case 'H': osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_HOME); return;
+    case 'F': osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_END); return;
+    case 'Z': osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_BACKTAB); return;
+    case '~':
+        switch (first) {
+        case 1:
+        case 7:
+            osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_HOME); return;
+        case 2: osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_INSERT); return;
+        case 3: osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_DELETE); return;
+        case 4:
+        case 8:
+            osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_END); return;
+        case 5: osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_PAGE_UP); return;
+        case 6: osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_PAGE_DOWN); return;
+        case 11: osty_rt_term_set_key_function(1); return;
+        case 12: osty_rt_term_set_key_function(2); return;
+        case 13: osty_rt_term_set_key_function(3); return;
+        case 14: osty_rt_term_set_key_function(4); return;
+        case 15: osty_rt_term_set_key_function(5); return;
+        case 17: osty_rt_term_set_key_function(6); return;
+        case 18: osty_rt_term_set_key_function(7); return;
+        case 19: osty_rt_term_set_key_function(8); return;
+        case 20: osty_rt_term_set_key_function(9); return;
+        case 21: osty_rt_term_set_key_function(10); return;
+        case 23: osty_rt_term_set_key_function(11); return;
+        case 24: osty_rt_term_set_key_function(12); return;
+        default: break;
+        }
+        break;
+    default:
+        break;
+    }
+    (void)shifted;
+}
+
+static int osty_rt_term_decode_escape_sequence(void) {
+    unsigned char ch = 0;
+    int got = osty_rt_term_read_byte_timeout(&ch, 25);
+    if (got == 0) {
+        osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_ESCAPE);
+        return 0;
+    }
+    if (got < 0) {
+        return -1;
+    }
+    if (ch == 'O') {
+        got = osty_rt_term_read_byte_timeout(&ch, 25);
+        if (got <= 0) {
+            return got < 0 ? -1 : (osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_ESCAPE), 0);
+        }
+        switch (ch) {
+        case 'P': osty_rt_term_set_key_function(1); return 0;
+        case 'Q': osty_rt_term_set_key_function(2); return 0;
+        case 'R': osty_rt_term_set_key_function(3); return 0;
+        case 'S': osty_rt_term_set_key_function(4); return 0;
+        case 'H': osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_HOME); return 0;
+        case 'F': osty_rt_term_set_key_bare(OSTY_RT_TERM_KEY_END); return 0;
+        default: break;
+        }
+    } else if (ch == '[') {
+        char seq[32];
+        size_t len = 0;
+        int64_t nums[3] = {0, 0, 0};
+        int count = 0;
+        int64_t current = 0;
+        bool have_digit = false;
+        bool shifted = false;
+        char final = '\0';
+        while (len + 1 < sizeof(seq)) {
+            got = osty_rt_term_read_byte_timeout(&ch, 25);
+            if (got <= 0) {
+                break;
+            }
+            seq[len++] = (char)ch;
+            if (ch >= 0x40 && ch <= 0x7e) {
+                final = (char)ch;
+                break;
+            }
+        }
+        seq[len] = '\0';
+        for (size_t i = 0; i < len; i++) {
+            unsigned char c = (unsigned char)seq[i];
+            if (c >= '0' && c <= '9') {
+                have_digit = true;
+                current = current * 10 + (int64_t)(c - '0');
+                continue;
+            }
+            if (c == ';' || c == final) {
+                if (have_digit && count < 3) {
+                    nums[count++] = current;
+                    if (count == 2 && current == 2) {
+                        shifted = true;
+                    }
+                }
+                current = 0;
+                have_digit = false;
+            }
+        }
+        if (final != '\0') {
+            osty_rt_term_set_csi_key(final, nums, count, shifted);
+            if (osty_rt_term_last_key_code != OSTY_RT_TERM_KEY_UNKNOWN) {
+                return 0;
+            }
+        }
+        if (len > 0) {
+            osty_rt_term_set_key_text(OSTY_RT_TERM_KEY_UNKNOWN, seq, len, "runtime.term.key.unknown.csi");
+            return 0;
+        }
+    }
+    {
+        char text[2] = {(char)ch, '\0'};
+        osty_rt_term_set_key_text(OSTY_RT_TERM_KEY_UNKNOWN, text, 1, "runtime.term.key.unknown.escape");
+    }
+    return 0;
+}
+
+static int osty_rt_term_decode_key_blocking(void) {
+    unsigned char ch = 0;
+    if (osty_rt_term_read_byte(&ch) != 0) {
+        return -1;
+    }
+    if (ch == 0x1b) {
+        return osty_rt_term_decode_escape_sequence();
+    }
+    osty_rt_term_set_ascii_key(ch);
+    return 0;
+}
+
+int64_t osty_rt_term_read_key_status(void) {
+    osty_rt_term_clear_input_status();
+    return osty_rt_term_decode_key_blocking() == 0 ? 0 : 1;
+}
+
+int64_t osty_rt_term_poll_key_status(int64_t timeout_ms) {
+    int ready;
+    osty_rt_term_clear_input_status();
+    if (timeout_ms < 0) {
+        timeout_ms = 0;
+    }
+    ready = osty_rt_term_stdin_ready(timeout_ms);
+    if (ready == 0) {
+        return 1;
+    }
+    if (ready < 0) {
+        return 2;
+    }
+    return osty_rt_term_decode_key_blocking() == 0 ? 0 : 2;
 }
 
 #if defined(OSTY_RT_PLATFORM_WIN32)

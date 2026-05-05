@@ -3993,14 +3993,11 @@ pub fn mirNoneAggregateLines(stepReg: String, valueReg: String, optLLVM: String)
 }
 
 /// mirOkAggregateLines renders the canonical Ok(payload) two-
-/// insertvalue construction:
-///   `  <step> = insertvalue <resultTy> undef, i64 1, 0\n`
-///   `  <value> = insertvalue <resultTy> <step>, i64 <payload>, 1\n`
-/// Sibling of `mirSomeAggregateLines` but for `Result<Ok, Err>`
-/// where `Ok` shares the disc=1 tag with Some. Used by the bench
-/// harness `Ok(())` synthesis and the `?` propagation Ok-arm.
+/// insertvalue construction.
+/// Matches enum declaration order: Result declares Ok first (idx 0),
+/// Err second (idx 1). Uses mirDiscriminantOk() which returns "0".
 pub fn mirOkAggregateLines(stepReg: String, valueReg: String, resultLLVM: String, payloadI64: String) -> String {
-    mirInsertValueAggLine(stepReg, resultLLVM, "undef", "i64", "1", "0") +
+    mirInsertValueAggLine(stepReg, resultLLVM, "undef", "i64", mirDiscriminantOk(), "0") +
     mirInsertValueAggLine(valueReg, resultLLVM, stepReg, "i64", payloadI64, "1")
 }
 
@@ -4010,10 +4007,10 @@ pub fn mirOkAggregateLines(stepReg: String, valueReg: String, resultLLVM: String
 ///   `  <value> = insertvalue <resultTy> <step>, i64 <payload>, 1\n`
 /// Sibling of `mirOkAggregateLines` for the Err arm of Result.
 /// Note that for Result, disc=0 is Err (not None as in Option) —
-/// the discriminant convention is shared between Result and Option
-/// at the i64-tag level but the variant assignment differs.
+/// Matches enum declaration order: Err is second (idx 1).
+/// Uses mirDiscriminantErr() which returns "1".
 pub fn mirErrAggregateLines(stepReg: String, valueReg: String, resultLLVM: String, payloadI64: String) -> String {
-    mirInsertValueAggLine(stepReg, resultLLVM, "undef", "i64", "0", "0") +
+    mirInsertValueAggLine(stepReg, resultLLVM, "undef", "i64", mirDiscriminantErr(), "0") +
     mirInsertValueAggLine(valueReg, resultLLVM, stepReg, "i64", payloadI64, "1")
 }
 
@@ -9065,14 +9062,14 @@ pub fn mirDiscriminantSome() -> String {
     "1"
 }
 
-/// mirDiscriminantOk returns `1` — Result's Ok discriminant.
+/// mirDiscriminantOk returns `0` — Result's Ok discriminant (matches enum declaration order).
 pub fn mirDiscriminantOk() -> String {
-    "1"
+    "0"
 }
 
-/// mirDiscriminantErr returns `0` — Result's Err discriminant.
+/// mirDiscriminantErr returns `1` — Result's Err discriminant (matches enum declaration order).
 pub fn mirDiscriminantErr() -> String {
-    "0"
+    "1"
 }
 
 /// §6 boolean-literal tokens (LLVM-style i1).

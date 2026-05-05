@@ -4450,10 +4450,10 @@ func (l *lowerer) questionOkPayloadType(t Type) Type {
 }
 
 // errTagOf returns the discriminant value for the error arm of a `?`-
-// able enum (Err / None). For Option/Maybe the error arm is None == 0;
-// for Result, Err == 0.
+// able enum (Err / None). For Option/Maybe the error arm is None (idx 1);
+// for Result, Err (idx 1).
 func errTagOf(t Type) int64 {
-	return 0
+	return 1
 }
 
 // typesMatch is a cheap structural check used to decide when a `?`
@@ -7591,17 +7591,17 @@ func exprSpan(e ir.Expr) Span {
 // ==== Option / Result tag helpers ====
 
 // someTagOf returns the discriminant value of the "present" arm of an
-// optional or Maybe/Option enum. Defaults to 1 which matches the
-// convention in internal/llvmgen (None=0, Some=1).
+// optional or Maybe/Option enum. Option enum declares Some first (idx 0);
+// matches the declaration-order convention (None=1, Some=0).
 func someTagOf(t ir.Type) int64 {
-	return 1
+	return 0
 }
 
 // okTagOf returns the discriminant value of the "happy" arm of a
-// `?`-able enum. For Option it's 1 (Some); for Result it's also 1
-// (Ok) in the current LLVM layout.
+// `?`-able enum. Follows declaration order: Ok is first in Result (idx 0),
+// Some is first in Option (idx 0).
 func okTagOf(t ir.Type) int64 {
-	return 1
+	return 0
 }
 
 // okVariantName returns the name of the happy arm for `?`.

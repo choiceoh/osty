@@ -38,5 +38,5 @@ one-based row/column convention used by ANSI terminals.
 raw mode, hide the cursor, or switch to the alternate screen.
 
 Current LLVM backend coverage includes `isTerminal`, `size`, `write`, `flush`,
-and `setRawMode`. Key and resize event decoding is part of the next host-backed
-terminal increment.
+`setRawMode`, `readKey`, and `pollKey`. Resize event decoding is part of the
+next host-backed terminal increment.

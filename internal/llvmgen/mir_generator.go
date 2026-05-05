@@ -4447,10 +4447,10 @@ func (g *mirGen) emitTestingExpectMIR(c *mir.CallInstr, method string) error {
 	if err != nil {
 		return err
 	}
-	wantTag := int64(1)
+	wantTag := int64(0)
 	payloadT := resultT.ok
 	if method == "expectError" {
-		wantTag = 0
+		wantTag = 1
 		payloadT = resultT.err
 	}
 	resultLLVM := g.llvmType(c.Args[0].Type())
@@ -5096,7 +5096,7 @@ func (g *mirGen) emitBenchErrorCheck(retRef, prefix string) {
 	tag := g.fresh()
 	g.fnBuf.WriteString(mirExtractValueLine(tag, "%Result.unit.Error", retRef, "0"))
 	isErr := g.fresh()
-	g.fnBuf.WriteString(mirICmpEqI64Line(isErr, tag, "0"))
+	g.fnBuf.WriteString(mirICmpEqI64Line(isErr, tag, "1"))
 	errLabel := g.freshLabel(prefix + ".err")
 	okLabel := g.freshLabel(prefix + ".ok")
 	g.fnBuf.WriteString(mirBranchToErrorTrapLines(isErr, errLabel, okLabel))

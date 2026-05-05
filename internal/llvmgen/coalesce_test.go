@@ -189,7 +189,7 @@ fn main() {}
 		"%Option.string = type { i64, i64 }",
 		"define ptr @resolve(%Option.string %arg0)",
 		"switch i64",
-		"i64 1, label",
+		"i64 0, label",
 		"inttoptr i64",
 		"store ptr @.str.0",
 		"ret ptr",
