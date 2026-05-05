@@ -46,6 +46,18 @@ build-all: build build-checker build-lirproto
 bootstrap: build-all
     {{bin}} install-self
 
+# cache-self prints the canonical .osty/cache/self-host/<sha>-<triple>/
+# osty-self path for the current toolchain SHA + host triple. With
+# `--check` it doubles as a fast cache-hit probe for shell tooling.
+cache-self *args: build
+    {{bin}} cache-self {{args}}
+
+# gc-self prunes stale entries from .osty/cache/self-host/. Default
+# policy keeps the current toolchain SHA plus the 5 most recently
+# modified other entries. Pass `--dry-run` first to preview the plan.
+gc-self *args: build
+    {{bin}} gc-self {{args}}
+
 # Cross-compile osty (+ native-checker) for every supported host triple.
 # Targets: linux/{amd64,arm64}, darwin/{amd64,arm64}, windows/{amd64,arm64}.
 # Artifacts land in .bin/cross/<goos>-<goarch>/.
