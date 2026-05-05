@@ -37498,6 +37498,12 @@ func checkInstallBuiltinMethods(env *CheckEnv) {
 	// Osty: /tmp/selfhost_merged.osty:17165:5
 	checkRegisterFn(env, &CheckFnSig{name: "toByte", owner: "Char", receiverTy: tChar(tys), retTy: tByte(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	checkRegisterFn(env, &CheckFnSig{name: "toString", owner: "Char", receiverTy: tChar(tys), retTy: tString_, paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	for _, name := range []string{"isDigit", "isAlpha", "isAlphanumeric", "isWhitespace", "isUpper", "isLower"} {
+		checkRegisterFn(env, &CheckFnSig{name: name, owner: "Char", receiverTy: tChar(tys), retTy: tBool(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	}
+	for _, name := range []string{"toUpper", "toLower"} {
+		checkRegisterFn(env, &CheckFnSig{name: name, owner: "Char", receiverTy: tChar(tys), retTy: tChar(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
+	}
 	// Osty: /tmp/selfhost_merged.osty:17170:5
 	checkRegisterFn(env, &CheckFnSig{name: "toInt", owner: "Byte", receiverTy: tByte(tys), retTy: tInt(tys), paramNames: make([]string, 0, 1), paramTys: make([]int, 0, 1), generics: make([]string, 0, 1), genericBounds: make([]*CheckGenericBound, 0, 1)})
 	// Osty: /tmp/selfhost_merged.osty:17175:5
