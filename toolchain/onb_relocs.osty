@@ -33,11 +33,11 @@ pub enum OnbRelocKind {
 // that identifies the reloc type in the relocation entry header.
 // Mirror of `machoARM64Reloc*` constants in `internal/onb/macho.go`.
 pub fn onbRelocKindMachoTyp(kind: OnbRelocKind) -> Int {
-    match kind {
-        OnbRelocKind.OnbRelocBranch26 -> 2,
-        OnbRelocKind.OnbRelocPage21 -> 3,
-        OnbRelocKind.OnbRelocPageOff12 -> 4,
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == OnbRelocKind.OnbRelocBranch26 { return 2 }
+    if kind == OnbRelocKind.OnbRelocPage21 { return 3 }
+    if kind == OnbRelocKind.OnbRelocPageOff12 { return 4 }
+    0
 }
 
 // === Reloc record =====================================================

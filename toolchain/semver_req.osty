@@ -119,13 +119,13 @@ pub fn semReqMatches(req: SemReq, version: SemVersion) -> Bool {
 /// semClauseMatches applies one normalized requirement clause.
 pub fn semClauseMatches(clause: SemReqClause, version: SemVersion) -> Bool {
     let cmp = compareSemVersion(version, clause.version)
-    match clause.op {
-        ReqEQ -> cmp == 0,
-        ReqGE -> cmp >= 0,
-        ReqGT -> cmp > 0,
-        ReqLE -> cmp <= 0,
-        ReqLT -> cmp < 0,
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if clause.op == ReqEQ { return cmp == 0 }
+    if clause.op == ReqGE { return cmp >= 0 }
+    if clause.op == ReqGT { return cmp > 0 }
+    if clause.op == ReqLE { return cmp <= 0 }
+    if clause.op == ReqLT { return cmp < 0 }
+    false
 }
 
 /// maxMatchingVersion selects the highest version satisfying a requirement.

@@ -40,26 +40,25 @@ pub enum OnbDwarfBaseTypeKind {
 }
 
 pub fn onbDwarfBaseTypeKindOrdinal(k: OnbDwarfBaseTypeKind) -> Int {
-    match k {
-        OnbDwarfBaseTypeKind.OnbDwarfBaseTypeNone -> 0,
-        OnbDwarfBaseTypeKind.OnbDwarfBaseTypeInt -> 1,
-        OnbDwarfBaseTypeKind.OnbDwarfBaseTypeBool -> 2,
-        OnbDwarfBaseTypeKind.OnbDwarfBaseTypeFloat -> 3,
-        OnbDwarfBaseTypeKind.OnbDwarfBaseTypeString -> 4,
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if k == OnbDwarfBaseTypeKind.OnbDwarfBaseTypeNone { return 0 }
+    if k == OnbDwarfBaseTypeKind.OnbDwarfBaseTypeInt { return 1 }
+    if k == OnbDwarfBaseTypeKind.OnbDwarfBaseTypeBool { return 2 }
+    if k == OnbDwarfBaseTypeKind.OnbDwarfBaseTypeFloat { return 3 }
+    if k == OnbDwarfBaseTypeKind.OnbDwarfBaseTypeString { return 4 }
+    0
 }
 
 // onbDebugTypeKindToDwarf maps the LIR-visible enum (used in
 // `OnbDebugLocal.typeKind`) to the DWARF-side kind. Same shape
 // as the Go-side `debugTypeToDwarfKind` in `internal/onb/macho.go`.
 pub fn onbDebugTypeKindToDwarf(k: OnbDebugTypeKind) -> OnbDwarfBaseTypeKind {
-    match k {
-        OnbDebugTypeKind.OnbDebugTypeInt -> OnbDwarfBaseTypeKind.OnbDwarfBaseTypeInt,
-        OnbDebugTypeKind.OnbDebugTypeBool -> OnbDwarfBaseTypeKind.OnbDwarfBaseTypeBool,
-        OnbDebugTypeKind.OnbDebugTypeFloat -> OnbDwarfBaseTypeKind.OnbDwarfBaseTypeFloat,
-        OnbDebugTypeKind.OnbDebugTypeString -> OnbDwarfBaseTypeKind.OnbDwarfBaseTypeString,
-        _ -> OnbDwarfBaseTypeKind.OnbDwarfBaseTypeNone,
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if k == OnbDebugTypeKind.OnbDebugTypeInt { return OnbDwarfBaseTypeKind.OnbDwarfBaseTypeInt }
+    if k == OnbDebugTypeKind.OnbDebugTypeBool { return OnbDwarfBaseTypeKind.OnbDwarfBaseTypeBool }
+    if k == OnbDebugTypeKind.OnbDebugTypeFloat { return OnbDwarfBaseTypeKind.OnbDwarfBaseTypeFloat }
+    if k == OnbDebugTypeKind.OnbDebugTypeString { return OnbDwarfBaseTypeKind.OnbDwarfBaseTypeString }
+    OnbDwarfBaseTypeKind.OnbDwarfBaseTypeNone
 }
 
 // OnbDwarfVariableInput describes one local visible to lldb's
