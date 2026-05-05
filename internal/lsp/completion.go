@@ -1,8 +1,6 @@
 package lsp
 
 import (
-	"strings"
-
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
@@ -89,17 +87,18 @@ func (s *Server) completionAfterDot(doc *document, recvName, prefix string) []Co
 	if pkg == nil || pkg.PkgScope == nil {
 		return nil
 	}
-	var items []CompletionItem
+	candidates := make([]LSPCompletionCandidateView, 0, len(pkg.PkgScope.Symbols()))
 	for name, member := range pkg.PkgScope.Symbols() {
-		if !member.Pub {
-			continue
-		}
-		if prefix != "" && !strings.HasPrefix(name, prefix) {
-			continue
-		}
-		items = append(items, completionItemFromSym(name, member, a.check))
+		view := completionSymbolView(name, member, a.check)
+		candidates = append(candidates, LSPCompletionCandidateView{
+			Name:     view.Name,
+			Kind:     view.Kind,
+			TypeText: view.TypeText,
+			DocText:  view.DocText,
+			Include:  member.Pub,
+		})
 	}
-	return sortCompletionItems(items)
+	return completionItemsFromPolicy(LSPCompletionItemsForCandidates(candidates, prefix))
 }
 
 func completionAfterStructuredImport(a *docAnalysis, recvName, prefix string) ([]CompletionItem, bool) {
@@ -110,17 +109,16 @@ func completionAfterStructuredImport(a *docAnalysis, recvName, prefix string) ([
 		if surface.alias != recvName {
 			continue
 		}
-		items := make([]CompletionItem, 0, len(surface.symbols))
+		candidates := make([]LSPCompletionCandidateView, 0, len(surface.symbols))
 		for _, sym := range surface.symbols {
-			if sym.name == "" {
-				continue
-			}
-			if prefix != "" && !strings.HasPrefix(sym.name, prefix) {
-				continue
-			}
-			items = append(items, completionItemFromStructuredImportSymbol(sym))
+			candidates = append(candidates, LSPCompletionCandidateView{
+				Name:     sym.name,
+				Kind:     sym.kind,
+				TypeText: sym.typeText,
+				Include:  true,
+			})
 		}
-		return sortCompletionItems(items), true
+		return completionItemsFromPolicy(LSPCompletionItemsForCandidates(candidates, prefix)), true
 	}
 	return nil, false
 }
@@ -130,37 +128,31 @@ func completionAfterStructuredImport(a *docAnalysis, recvName, prefix string) ([
 // locals, parameters, and builtins not yet exposed in those facts.
 func (s *Server) completionInScope(doc *document, prefix string) []CompletionItem {
 	a := doc.analysis
-	seen := map[string]struct{}{}
-	var items []CompletionItem
+	var candidates []LSPCompletionCandidateView
 	for _, sym := range a.structuredSymbols {
-		if sym.builtin || sym.name == "" || sym.depth != 0 {
-			continue
-		}
-		if _, dup := seen[sym.name]; dup {
-			continue
-		}
-		if prefix != "" && !strings.HasPrefix(sym.name, prefix) {
-			continue
-		}
-		seen[sym.name] = struct{}{}
-		items = append(items, completionItemFromStructuredSymbol(sym))
+		candidates = append(candidates, LSPCompletionCandidateView{
+			Name:     sym.name,
+			Kind:     sym.kind,
+			TypeText: sym.typeText,
+			Include:  !sym.builtin && sym.depth == 0,
+		})
 	}
 	if a.resolve == nil || a.resolve.FileScope == nil {
-		return sortCompletionItems(items)
+		return completionItemsFromPolicy(LSPCompletionItemsForCandidates(candidates, prefix))
 	}
 	for sc := a.resolve.FileScope; sc != nil; sc = sc.Parent() {
 		for name, sym := range sc.Symbols() {
-			if _, dup := seen[name]; dup {
-				continue
-			}
-			if prefix != "" && !strings.HasPrefix(name, prefix) {
-				continue
-			}
-			seen[name] = struct{}{}
-			items = append(items, completionItemFromSym(name, sym, a.check))
+			view := completionSymbolView(name, sym, a.check)
+			candidates = append(candidates, LSPCompletionCandidateView{
+				Name:     view.Name,
+				Kind:     view.Kind,
+				TypeText: view.TypeText,
+				DocText:  view.DocText,
+				Include:  true,
+			})
 		}
 	}
-	return sortCompletionItems(items)
+	return completionItemsFromPolicy(LSPCompletionItemsForCandidates(candidates, prefix))
 }
 
 func sortCompletionItems(in []CompletionItem) []CompletionItem {
@@ -231,18 +223,31 @@ func completionSymbolView(label string, sym *resolve.Symbol, r *check.Result) se
 // self-hosted policy; the markdown documentation flows through as a
 // raw doc string.
 func completionItemFromView(view selfhost.LSPSymbolView) CompletionItem {
+	policy := LSPCompletionItemForSymbolView(view)
+	return completionItemFromData(policy)
+}
+
+func completionItemsFromPolicy(items []LSPCompletionItemData) []CompletionItem {
+	out := make([]CompletionItem, 0, len(items))
+	for _, item := range items {
+		out = append(out, completionItemFromData(item))
+	}
+	return out
+}
+
+func completionItemFromData(policy LSPCompletionItemData) CompletionItem {
 	item := CompletionItem{
-		Label:    view.Name,
-		Kind:     CompletionItemKind(LSPCompletionKindForSymbolKind(view.Kind)),
-		SortText: LSPCompletionSortTextForSymbolKind(view.Kind, view.Name),
+		Label:    policy.Label,
+		Kind:     CompletionItemKind(policy.Kind),
+		SortText: policy.SortText,
 	}
-	if view.TypeText != "" {
-		item.Detail = LSPCompletionDetail(view.Kind, view.Name, view.TypeText)
+	if policy.Detail != "" {
+		item.Detail = policy.Detail
 	}
-	if view.DocText != "" {
+	if policy.Documentation != "" {
 		item.Documentation = &MarkupContent{
 			Kind:  MarkupKindMarkdown,
-			Value: view.DocText,
+			Value: policy.Documentation,
 		}
 	}
 	return item

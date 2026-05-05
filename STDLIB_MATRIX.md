@@ -41,6 +41,7 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 |---|---|---|---|---|---|---|
 | strings | §10.1 | 7223 | 92 | 0% | string 17 + bytes 29 runtime | UAX29 grapheme + BMH 검색 직접 확인 |
 | http | §10.24 | 1588 | 166 | 0% | net 40 runtime | matchRoutePattern / parseSetCookie / 라우터 본문 확인 |
+| http_middleware | unspec | 125 | 9 | 100% | body-less runtime stubs (retry, circuit breaker, rate limit) |
 | json | §10.8 | 662 | 27 | 0% | parser self-contained | RFC 8259 surrogate + UTF-8 인코딩 직접 확인 |
 | option | §10.1 | 356 | 43 | 0% | `__optionAbort` 인터셉트 | combinator 풀세트 (map2/3/traverse/transpose) |
 | result | §10.1 | 357 | 41 | 0% | `__resultAbort` 인터셉트 | combinator 풀세트 |
@@ -173,11 +174,20 @@ partial 모듈 3개 (crypto / option / result) 는 **호출 패턴 한정 동작
 | diff | unspec | 392 | 31 | LCS line diff |
 | dialog | unspec | 644 | 29 | 파일 픽커 명령 plan |
 | graphql | unspec | 224 | 21 | document/field 빌더 |
+| gql_client | unspec | 77 | 10 | body-less runtime stubs (GraphQL HTTP/WS transport) |
 | websocket | unspec | 338 | 15 | RFC 6455 frame encode/decode |
+| ws_client | unspec | 109 | 13 | body-less runtime stubs (WebSocket connect/send/receive) |
 | tar | unspec | 426 | 10 | ustar 인코드/디코드 |
 | zip | §10.31 | 341 | 9 | stored entries만 (deflate 미실행) |
 | sql | §10.28 | 665 | 43 | 빌더만 (실행은 db 위임) |
 | db | §10.29 | 615 | 40 | spec 명시: 드라이버 의도적 부재 |
+| db_driver | §10.29 | 177 | 10 | body-less runtime stubs (DB driver interface) |
+| db_sqlite | §10.29 | 77 | 4 | body-less runtime stubs (SQLite driver) |
+| db_pool | §10.29 | 80 | 7 | body-less runtime stubs (connection pool) |
+| db_migration | §10.29 | 79 | 8 | body-less runtime stubs (schema migration) |
+| db_orm | §10.29 | 169 | 7 | body-less runtime stubs (query builder / ORM) |
+| db_pg | §10.29 | 68 | 4 | body-less runtime stubs (PostgreSQL driver) |
+| db_mysql | §10.29 | 63 | 4 | body-less runtime stubs (MySQL driver) |
 | xml | unspec | 391 | 9 | escape/tag/tokenize |
 | template | unspec | 148 | 5 | escape/raw placeholder |
 | i18n | unspec | 136 | 11 | locale/catalog/plural |

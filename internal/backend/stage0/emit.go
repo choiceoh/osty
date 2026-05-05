@@ -340,6 +340,9 @@ func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error
 	if pat, ok := matchAggregateConstructor(fn, mctx); ok {
 		return emitAggregateConstructor(out, fn, pat)
 	}
+	if pat, ok := matchListLiteralIndexGet(fn, mctx); ok {
+		return emitListLiteralIndexGet(out, fn, pat)
+	}
 	return fmt.Errorf("%w: function %q does not match any stage0 pattern", ErrUnsupported, fn.Name)
 }
 
@@ -2572,6 +2575,144 @@ func emitAggregateConstructor(out *strings.Builder, fn *mir.Function, pat aggreg
 		prev = fmt.Sprintf("%%%d", i)
 	}
 	fmt.Fprintf(out, "  ret %%%s %s\n", pat.typeName, prev)
+	out.WriteString("}\n\n")
+	return nil
+}
+
+// ---- P15: list literal + indexed read ----
+//
+// `let xs: List<Int> = [10, 20, 30]; xs[0]` lowers to a 3-instruction
+// block: an AggregateRV{AggList} writing the list, followed by an
+// AssignInstr whose Src is `UseRV(CopyOp(list_local, [IndexProj]))`.
+// stage0 P15 emits this as a list_new + N pushes + list_get_i64 chain.
+
+type listLiteralIndexPattern struct {
+	elements []int64
+	index    int64
+}
+
+func matchListLiteralIndexGet(fn *mir.Function, mctx *moduleCtx) (listLiteralIndexPattern, bool) {
+	pat := listLiteralIndexPattern{}
+	if scalarFromType(fn.ReturnType) != scalarInt {
+		return pat, false
+	}
+	if len(fn.Params) != 0 {
+		return pat, false
+	}
+	bb, ok := singleBlockReturning(fn)
+	if !ok {
+		return pat, false
+	}
+
+	var (
+		listLocal mir.LocalID
+		listSet   bool
+		readSet   bool
+	)
+	for _, instr := range bb.Instrs {
+		switch step := instr.(type) {
+		case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
+			continue
+		case *mir.AssignInstr:
+			if !listSet {
+				if step.Dest.HasProjections() {
+					return pat, false
+				}
+				loc := lookupLocal(fn, step.Dest.Local)
+				if loc == nil {
+					return pat, false
+				}
+				named, ok := loc.Type.(*ir.NamedType)
+				if !ok || named == nil || named.Name != "List" {
+					return pat, false
+				}
+				agg, ok := step.Src.(*mir.AggregateRV)
+				if !ok || agg.Kind != mir.AggList {
+					return pat, false
+				}
+				elements := make([]int64, 0, len(agg.Fields))
+				for _, f := range agg.Fields {
+					con, ok := f.(*mir.ConstOp)
+					if !ok {
+						return pat, false
+					}
+					ic, ok := con.Const.(*mir.IntConst)
+					if !ok {
+						return pat, false
+					}
+					elements = append(elements, ic.Value)
+				}
+				pat.elements = elements
+				listLocal = step.Dest.Local
+				listSet = true
+				continue
+			}
+			// Second AssignInstr: must be the indexed read into ret.
+			if readSet {
+				return pat, false
+			}
+			if step.Dest.Local != fn.ReturnLocal || step.Dest.HasProjections() {
+				return pat, false
+			}
+			use, ok := step.Src.(*mir.UseRV)
+			if !ok {
+				return pat, false
+			}
+			cp, ok := use.Op.(*mir.CopyOp)
+			if !ok || cp.Place.Local != listLocal {
+				return pat, false
+			}
+			if len(cp.Place.Projections) != 1 {
+				return pat, false
+			}
+			idxProj, ok := cp.Place.Projections[0].(*mir.IndexProj)
+			if !ok {
+				return pat, false
+			}
+			idxConst, ok := idxProj.Index.(*mir.ConstOp)
+			if !ok {
+				return pat, false
+			}
+			ic, ok := idxConst.Const.(*mir.IntConst)
+			if !ok {
+				return pat, false
+			}
+			pat.index = ic.Value
+			readSet = true
+		default:
+			return pat, false
+		}
+	}
+	if !listSet || !readSet {
+		return pat, false
+	}
+	declareListRuntime(mctx)
+	declareListGetRuntime(mctx)
+	return pat, true
+}
+
+// declareListGetRuntime adds the `osty_rt_list_get_i64` declare to
+// extraDecls (idempotent — sentinel via emittedStructs).
+func declareListGetRuntime(mctx *moduleCtx) {
+	if mctx.emittedStructs == nil {
+		mctx.emittedStructs = map[string]bool{}
+	}
+	if mctx.emittedStructs["__stage0.list_get_i64"] {
+		return
+	}
+	mctx.emittedStructs["__stage0.list_get_i64"] = true
+	mctx.extraDecls.WriteString("declare i64 @osty_rt_list_get_i64(ptr, i64)\n")
+}
+
+func emitListLiteralIndexGet(out *strings.Builder, fn *mir.Function, pat listLiteralIndexPattern) error {
+	fmt.Fprintf(out, "define i64 @%s() {\n", fn.Name)
+	out.WriteString("entry:\n")
+	out.WriteString("  %0 = call ptr @osty_rt_list_new()\n")
+	for _, v := range pat.elements {
+		fmt.Fprintf(out, "  call void @osty_rt_list_push_i64(ptr %%0, i64 %d)\n", v)
+	}
+	fmt.Fprintf(out, "  %%1 = call i64 @osty_rt_list_get_i64(ptr %%0, i64 %d)\n", pat.index)
+	out.WriteString("  ret i64 %1\n")
 	out.WriteString("}\n\n")
 	return nil
 }

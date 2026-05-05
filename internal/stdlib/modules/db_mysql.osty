@@ -1,0 +1,63 @@
+// std.db.mysql — MySQL database driver.
+//
+// Body-less signature stubs: the backend lowers each call to the runtime
+// MySQL driver (native protocol implementation).
+//
+// Connection configuration is provided via db.Config (Driver=MySql).
+// The runtime handles SSL/TLS, authentication (mysql_native_password,
+// caching_sha2_password), and prepared statements.
+
+use std.db
+use std.db.driver
+use std.error
+
+/// Returns a DriverFactory for the MySQL driver.
+pub fn driverFactory() -> driver.DriverFactory
+
+/// Opens a single connection to a MySQL database.
+pub fn open(config: db.Config) -> Result<driver.Connection, Error>
+
+/// Creates a connection pool for a MySQL database.
+pub fn openPool(config: db.Config, options: db.PoolOptions) -> Result<driver.Pool, Error>
+
+/// Returns the version string of the connected MySQL server.
+pub fn serverVersion(conn: driver.Connection) -> Result<String, Error>
+
+/// Returns the connection ID assigned by the server.
+pub fn connectionId(conn: driver.Connection) -> Int
+
+/// Lists all databases on the server.
+pub fn databases(conn: driver.Connection) -> Result<db.ResultSet, Error>
+
+/// Lists all tables in the current or named database.
+pub fn tables(conn: driver.Connection, database: String) -> Result<db.ResultSet, Error>
+
+/// Returns column metadata for a table.
+pub fn tableInfo(conn: driver.Connection, database: String, table: String) -> Result<db.ResultSet, Error>
+
+/// Returns the table status (engine, row count, size, etc.).
+pub fn tableStatus(conn: driver.Connection, database: String) -> Result<db.ResultSet, Error>
+
+/// Executes a script containing multiple SQL statements.
+pub fn execScript(conn: driver.Connection, script: String) -> Result<db.ExecResult, Error>
+
+/// Creates a named prepared statement.
+pub fn prepare(conn: driver.Connection, name: String, sql: String) -> Result<(), Error>
+
+/// Executes a named prepared statement with the given parameters.
+pub fn executePrepared(conn: driver.Connection, name: String, params: List<db.Cell>) -> Result<db.ResultSet, Error>
+
+/// Lists all prepared statements on the connection.
+pub fn preparedStatements(conn: driver.Connection) -> Result<List<String>, Error>
+
+/// Sets a session variable.
+pub fn setSession(conn: driver.Connection, variable: String, value: String) -> Result<(), Error>
+
+/// Gets a session variable value.
+pub fn getSession(conn: driver.Connection, variable: String) -> Result<String, Error>
+
+/// Kills the given connection ID.
+pub fn killConnection(conn: driver.Connection, killConnId: Int) -> Result<(), Error>
+
+/// Pings the server to check if the connection is alive.
+pub fn ping(conn: driver.Connection) -> Bool

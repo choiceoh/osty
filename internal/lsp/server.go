@@ -2,13 +2,10 @@ package lsp
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -27,7 +24,7 @@ import (
 
 // ServerName is advertised in Initialize and used as the `source`
 // field of every published Diagnostic.
-const ServerName = "osty-lsp"
+var ServerName = LSPServerName()
 
 // Server implements the read/dispatch/write loop of the language
 // server. A Server is single-use: create it once per process with
@@ -169,10 +166,7 @@ func (s *Server) Run() error {
 func (s *Server) ExitCode() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.shutdown {
-		return 0
-	}
-	return 1
+	return LSPExitCode(s.shutdown)
 }
 
 // dispatch routes a decoded message to the right handler. Requests
@@ -190,13 +184,17 @@ func (s *Server) dispatch(req *rpcRequest) {
 			s.log.Printf("lsp-trace: %-40s %v", req.Method, time.Since(t0))
 		}()
 	}
-	// Fast-path the lifecycle methods that can legally appear
-	// before `initialized`.
-	switch req.Method {
-	case "initialize":
+	s.mu.Lock()
+	initialized := s.initialized
+	shutdown := s.shutdown
+	s.mu.Unlock()
+
+	decision := LSPDispatchDecisionFor(req.Method, req.isNotification(), initialized, shutdown)
+	switch decision.Action {
+	case LSPDispatchActionInitialize():
 		s.handleInitialize(req)
 		return
-	case "exit":
+	case LSPDispatchActionExit():
 		// Per spec, exit terminates the process regardless of
 		// whether a prior shutdown was received. Signal Run to
 		// stop; the caller decides whether to os.Exit.
@@ -210,37 +208,20 @@ func (s *Server) dispatch(req *rpcRequest) {
 		}
 		s.mu.Unlock()
 		return
-	}
-
-	s.mu.Lock()
-	initialized := s.initialized
-	shutdown := s.shutdown
-	s.mu.Unlock()
-	if !initialized {
-		if !req.isNotification() {
-			_ = s.conn.writeError(req.ID, errServerNotInitialized,
-				"server has not been initialized")
-		}
+	case LSPDispatchActionShutdown():
+		s.mu.Lock()
+		s.shutdown = true
+		s.mu.Unlock()
+		_ = s.conn.writeResponse(req.ID, json.RawMessage(LSPJSONNull()))
 		return
-	}
-	if shutdown {
-		// After shutdown only `exit` is valid; everything else
-		// is an invalid-request error (spec §Lifecycle).
-		if !req.isNotification() {
-			_ = s.conn.writeError(req.ID, errInvalidRequest,
-				"server is shutting down")
-		}
+	case LSPDispatchActionIgnore():
+		return
+	case LSPDispatchActionError():
+		_ = s.conn.writeError(req.ID, decision.ErrorCode, decision.ErrorMessage)
 		return
 	}
 
 	switch req.Method {
-	case "initialized":
-		// One-shot acknowledgement; nothing to do.
-	case "shutdown":
-		s.mu.Lock()
-		s.shutdown = true
-		s.mu.Unlock()
-		_ = s.conn.writeResponse(req.ID, json.RawMessage("null"))
 	case "textDocument/didOpen":
 		s.handleDidOpen(req)
 	case "textDocument/didChange":
@@ -272,10 +253,8 @@ func (s *Server) dispatch(req *rpcRequest) {
 	case "textDocument/codeAction":
 		s.handleCodeAction(req)
 	default:
-		if !req.isNotification() {
-			_ = s.conn.writeError(req.ID, errMethodNotFound,
-				fmt.Sprintf("method not implemented: %s", req.Method))
-		}
+		_ = s.conn.writeError(req.ID, errMethodNotFound,
+			LSPMethodNotImplementedMessage(req.Method))
 	}
 }
 
@@ -488,7 +467,7 @@ func dirHasOstySiblings(dir, selfPath string) bool {
 		return false
 	}
 	for _, e := range entries {
-		if e.IsDir() || filepath.Ext(e.Name()) != ".osty" {
+		if e.IsDir() || !LSPHasOstyFileExtension(e.Name()) {
 			continue
 		}
 		full := filepath.Join(dir, e.Name())
@@ -552,12 +531,12 @@ func (s *Server) analyzePackageViaEngine(pkgDir, path string, src []byte) *docAn
 			continue
 		}
 		name := e.Name()
-		if !strings.HasSuffix(name, ".osty") || strings.HasSuffix(name, "_test.osty") {
+		if !LSPIsOstySourceFileName(name) {
 			continue
 		}
 		filePaths = append(filePaths, ostyquery.NormalizePath(filepath.Join(pkgDir, name)))
 	}
-	sort.Strings(filePaths)
+	filePaths = SortLSPStrings(filePaths)
 
 	if len(filePaths) == 0 {
 		return nil
@@ -699,12 +678,12 @@ func (s *Server) analyzeWorkspaceViaEngine(root, path string, src []byte) *docAn
 				continue
 			}
 			name := e.Name()
-			if !strings.HasSuffix(name, ".osty") || strings.HasSuffix(name, "_test.osty") {
+			if !LSPIsOstySourceFileName(name) {
 				continue
 			}
 			filePaths = append(filePaths, ostyquery.NormalizePath(filepath.Join(pkgDir, name)))
 		}
-		sort.Strings(filePaths)
+		filePaths = SortLSPStrings(filePaths)
 
 		if len(filePaths) == 0 {
 			continue
@@ -1043,17 +1022,24 @@ func diagBelongsToFile(d *diag.Diagnostic, pf *resolve.PackageFile) bool {
 	if d == nil || pf == nil {
 		return false
 	}
+	diagnosticFile := ""
 	if d.File != "" {
-		return ostyquery.NormalizePath(d.File) == ostyquery.NormalizePath(pf.Path)
+		diagnosticFile = ostyquery.NormalizePath(d.File)
 	}
+	spanSourceFileID := ""
 	if span, ok := d.PrimarySpan(); ok && span.SourceFileID != "" && pf.SourceFileID != "" {
-		return span.SourceFileID == pf.SourceFileID
+		spanSourceFileID = string(span.SourceFileID)
 	}
 	pos := d.PrimaryPos()
-	if pos.Line == 0 {
-		return false
-	}
-	return pos.Offset <= len(pf.Source)
+	return LSPDiagnosticBelongsToFile(LSPDiagnosticFileFact{
+		DiagnosticFile:      diagnosticFile,
+		PackageFile:         ostyquery.NormalizePath(pf.Path),
+		SpanSourceFileID:    spanSourceFileID,
+		PackageSourceFileID: string(pf.SourceFileID),
+		PrimaryLine:         pos.Line,
+		PrimaryOffset:       pos.Offset,
+		SourceLength:        len(pf.Source),
+	})
 }
 
 // analyzeSingleFileViaEngine uses the Salsa-style incremental query

@@ -176,7 +176,8 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 | P12 | List<Int> 리터럴 + len() — runtime ABI 호출 (osty_rt_list_new / push_i64 / len) | list_literal_len real-MIR — **구현 완료** |
 | P13 | String + (concat) → osty_rt_strings_Concat 호출 + 재귀 함수 호출 검증 | string_concat_*, recursive_factorial real-MIR — **구현 완료** |
 | P14 | aggregate constructor (struct + tuple) — `Point { x, y }` / `(a, b)` → insertvalue 체인 + 합성 tuple 타입 풀 | struct_constructor_* / tuple_int_int_return real-MIR — **구현 완료** |
-| P15+ | list ops (get/iterate) / Optional / Result / pattern match / closure | toolchain/main.osty 부분 빌드 |
+| P15 | list literal + indexed read `xs[N]` → list_get_i64 runtime ABI | list_literal_index_first / _second real-MIR — **구현 완료** |
+| **P16+** | **stage0 확장 동결 — emergency-only fallback 으로 유지.** production 경로는 `docs/osty_self_artifact_design.md` 의 artifact cache 시스템으로 전환. P0~P15 의 인프라 (IsOstySelfMissing / 디스패처 wiring / real-MIR probe) 는 그대로 가치 보존. | — |
 | P3 | `OSTY_STAGE0_FALLBACK=1` 로 toolchain 전체 빌드 성공 | verify-self-rebuild stage1-only |
 | P4 | stage0 + osty-self 양쪽 모두에서 `verify-self-rebuild` 통과 | byte parity (stage2 vs stage3) |
 | P5 | CI matrix 추가 — `OSTY_STAGE0_FALLBACK=1` 잡과 default 잡 둘 다 | CI green |

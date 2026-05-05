@@ -1,11 +1,6 @@
 package lsp
 
-import (
-	"fmt"
-	"sort"
-
-	"github.com/osty/osty/internal/diag"
-)
+import "github.com/osty/osty/internal/diag"
 
 // handleCodeAction answers `textDocument/codeAction`. It produces two
 // families of results:
@@ -96,7 +91,7 @@ func undefinedNameFixes(doc *document, d LSPDiagnostic) []CodeAction {
 	var out []CodeAction
 	for _, c := range candidates {
 		out = append(out, CodeAction{
-			Title:       fmt.Sprintf("Rename to `%s`", c),
+			Title:       LSPRenameTitle(c),
 			Kind:        CodeActionQuickFix,
 			Diagnostics: []LSPDiagnostic{d},
 			Edit: &WorkspaceEdit{
@@ -111,113 +106,18 @@ func undefinedNameFixes(doc *document, d LSPDiagnostic) []CodeAction {
 }
 
 func nearbyStructuredSymbolNames(symbols []structuredSymbol, target string, maxDistance int) []string {
-	type candidate struct {
-		name string
-		dist int
-	}
-	seen := map[string]bool{}
-	var candidates []candidate
+	names := make([]string, 0, len(symbols))
 	for _, sym := range symbols {
-		if sym.name == "" || sym.builtin || sym.depth != 0 || seen[sym.name] {
+		if sym.name == "" || sym.builtin || sym.depth != 0 {
 			continue
 		}
-		dist := lspLevenshteinBounded(target, sym.name, maxDistance)
-		if dist > maxDistance {
-			continue
-		}
-		seen[sym.name] = true
-		candidates = append(candidates, candidate{name: sym.name, dist: dist})
+		names = append(names, sym.name)
 	}
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].dist != candidates[j].dist {
-			return candidates[i].dist < candidates[j].dist
-		}
-		return candidates[i].name < candidates[j].name
-	})
-	out := make([]string, 0, len(candidates))
-	for _, c := range candidates {
-		out = append(out, c.name)
-	}
-	return out
+	return LSPRankNearbyNames(names, target, maxDistance)
 }
 
 func mergeNearbyNames(primary []string, fallback []string) []string {
-	if len(primary) == 0 {
-		return fallback
-	}
-	seen := make(map[string]bool, len(primary)+len(fallback))
-	out := make([]string, 0, len(primary)+len(fallback))
-	for _, name := range primary {
-		if name == "" || seen[name] {
-			continue
-		}
-		seen[name] = true
-		out = append(out, name)
-	}
-	for _, name := range fallback {
-		if name == "" || seen[name] {
-			continue
-		}
-		seen[name] = true
-		out = append(out, name)
-	}
-	return out
-}
-
-func lspLevenshteinBounded(a, b string, limit int) int {
-	ar := []rune(a)
-	br := []rune(b)
-	if absInt(len(ar)-len(br)) > limit {
-		return limit + 1
-	}
-	prev := make([]int, len(br)+1)
-	curr := make([]int, len(br)+1)
-	for j := range prev {
-		prev[j] = j
-	}
-	for i := 1; i <= len(ar); i++ {
-		curr[0] = i
-		rowMin := curr[0]
-		for j := 1; j <= len(br); j++ {
-			cost := 0
-			if ar[i-1] != br[j-1] {
-				cost = 1
-			}
-			curr[j] = minInt(
-				prev[j]+1,
-				curr[j-1]+1,
-				prev[j-1]+cost,
-			)
-			if curr[j] < rowMin {
-				rowMin = curr[j]
-			}
-		}
-		if rowMin > limit {
-			return limit + 1
-		}
-		prev, curr = curr, prev
-	}
-	if prev[len(br)] > limit {
-		return limit + 1
-	}
-	return prev[len(br)]
-}
-
-func minInt(a, b, c int) int {
-	if b < a {
-		a = b
-	}
-	if c < a {
-		return c
-	}
-	return a
-}
-
-func absInt(v int) int {
-	if v < 0 {
-		return -v
-	}
-	return v
+	return LSPMergeNearbyNames(primary, fallback)
 }
 
 // prefixUnderscoreFix produces a "silence by prefixing `_`" action
@@ -249,7 +149,7 @@ func removeLineFix(doc *document, d LSPDiagnostic) CodeAction {
 		End:   Position{Line: d.Range.End.Line + 1, Character: 0},
 	}
 	return CodeAction{
-		Title:       "Remove unused import",
+		Title:       LSPRemoveLineTitle(),
 		Kind:        CodeActionQuickFix,
 		Diagnostics: []LSPDiagnostic{d},
 		Edit: &WorkspaceEdit{

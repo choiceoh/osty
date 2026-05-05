@@ -1,9 +1,6 @@
 package lsp
 
 import (
-	"bytes"
-	"strings"
-
 	"github.com/osty/osty/internal/airepair"
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/canonical"
@@ -76,42 +73,20 @@ func organizeImportsAction(doc *document) *CodeAction {
 	}
 	unused := unusedUseOffsets(doc)
 
-	kept := make([]keyedUse, 0, len(views))
-	seen := make(map[string]bool, len(views))
+	entries := make([]LSPOrganizeUseEntry, 0, len(views))
 	for _, v := range views {
-		if unused[v.PosOffset] {
-			continue
-		}
 		text := LSPUseSourceText(doc.src, v.PosOffset, v.EndOffset)
-		if text == "" {
-			continue
-		}
 		group := LSPUseGroup(v.IsFFI, v.Path)
 		key := LSPUseKey(v.IsFFI, v.FFIPath, v.RawPath, v.Path)
-		// Dedup by (group, key, alias) — two identical `use` lines
-		// collapse to one.
-		dedupKey := LSPKeyWithAlias(group, key, v.Alias)
-		if seen[dedupKey] {
-			continue
-		}
-		seen[dedupKey] = true
-		kept = append(kept, keyedUse{view: v, group: group, key: key, text: text})
+		entries = append(entries, LSPOrganizeUseEntry{
+			Group:  group,
+			Key:    key,
+			Alias:  v.Alias,
+			Text:   text,
+			Unused: unused[v.PosOffset],
+		})
 	}
-	kept = sortImportEntries(kept)
-
-	// Build the replacement block. Separate groups with a blank line so
-	// the output matches what `osty fmt` would emit after the reorder.
-	var b strings.Builder
-	prevGroup := -1
-	for i, k := range kept {
-		if i > 0 && k.group != prevGroup {
-			b.WriteByte('\n')
-		}
-		b.WriteString(k.text)
-		b.WriteByte('\n')
-		prevGroup = k.group
-	}
-	newText := b.String()
+	newText := LSPOrganizedUseBlock(entries)
 
 	// Replacement range covers the full `use` block: from the first
 	// use's start to just past the last use's terminating newline. We
@@ -126,7 +101,7 @@ func organizeImportsAction(doc *document) *CodeAction {
 
 	rng := doc.analysis.lines.rangeFromOffsets(startOff, endOff)
 	return &CodeAction{
-		Title: "Organize imports",
+		Title: LSPOrganizeImportsTitle(),
 		Kind:  CodeActionSourceOrganizeImports,
 		Edit: &WorkspaceEdit{
 			Changes: map[string][]TextEdit{
@@ -246,10 +221,10 @@ func fixAllAction(doc *document) *CodeAction {
 	// deliberately does not rewrite semantic JS habits like `.length`.
 	// When that property is present, prefer airepair's broader repair so
 	// fix-all doesn't stop after a partial canonicalization.
-	if bytes.Contains(doc.src, []byte(".length")) {
+	if LSPPreferAIRepairFixAll(doc.src) {
 		if edit := airepairFixAllEdit(doc); edit != nil {
 			return &CodeAction{
-				Title: "Fix all auto-fixable problems",
+				Title: LSPFixAllTitle(),
 				Kind:  CodeActionSourceFixAllOsty,
 				Edit: &WorkspaceEdit{
 					Changes: map[string][]TextEdit{
@@ -261,7 +236,7 @@ func fixAllAction(doc *document) *CodeAction {
 	}
 	if edit := parserCanonicalFixAllEdit(doc); edit != nil {
 		return &CodeAction{
-			Title: "Fix all auto-fixable problems",
+			Title: LSPFixAllTitle(),
 			Kind:  CodeActionSourceFixAllOsty,
 			Edit: &WorkspaceEdit{
 				Changes: map[string][]TextEdit{
@@ -272,7 +247,7 @@ func fixAllAction(doc *document) *CodeAction {
 	}
 	if edit := airepairFixAllEdit(doc); edit != nil {
 		return &CodeAction{
-			Title: "Fix all auto-fixable problems",
+			Title: LSPFixAllTitle(),
 			Kind:  CodeActionSourceFixAllOsty,
 			Edit: &WorkspaceEdit{
 				Changes: map[string][]TextEdit{
@@ -293,7 +268,7 @@ func fixAllAction(doc *document) *CodeAction {
 	// of fix-all.
 	edits = resolveOverlaps(edits)
 	return &CodeAction{
-		Title: "Fix all auto-fixable problems",
+		Title: LSPFixAllTitle(),
 		Kind:  CodeActionSourceFixAllOsty,
 		Edit: &WorkspaceEdit{
 			Changes: map[string][]TextEdit{
@@ -317,7 +292,7 @@ func parserCanonicalFixAllEdit(doc *document) *TextEdit {
 		return nil
 	}
 	canonicalSrc := canonical.Source(doc.src, parsed.File)
-	if len(canonicalSrc) == 0 || bytes.Equal(canonicalSrc, doc.src) {
+	if len(canonicalSrc) == 0 || !LSPTextChanged(doc.src, canonicalSrc) {
 		return nil
 	}
 	rng := doc.analysis.lines.rangeFromOffsets(0, len(doc.src))

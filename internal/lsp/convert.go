@@ -2,7 +2,6 @@ package lsp
 
 import (
 	"net/url"
-	"strings"
 
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/token"
@@ -62,18 +61,11 @@ func (li *lineIndex) rangeFromOffsets(start, end int) Range {
 // Returns ("", false) for non-file URIs (e.g. `inmemory:`, `untitled:`).
 // Percent-decoding handles paths with spaces and Unicode characters.
 func fileURIPath(uri string) (string, bool) {
-	const prefix = "file://"
-	if !strings.HasPrefix(uri, prefix) {
+	raw := LSPFileURIPathRaw(uri)
+	if !raw.OK {
 		return "", false
 	}
-	path := strings.TrimPrefix(uri, prefix)
-	// On Windows the URI is `file:///C:/path/...` — strip the leading
-	// slash so we get `C:/path/...`. On POSIX the leading slash IS the
-	// path root and must be kept.
-	if len(path) >= 3 && path[0] == '/' && path[2] == ':' {
-		path = path[1:]
-	}
-	decoded, err := url.PathUnescape(path)
+	decoded, err := url.PathUnescape(raw.Path)
 	if err != nil {
 		return "", false
 	}

@@ -1,0 +1,68 @@
+// std.db.pg — PostgreSQL database driver.
+//
+// Body-less signature stubs: the backend lowers each call to the runtime
+// PostgreSQL driver (libpq or native protocol implementation).
+//
+// Connection configuration is provided via db.Config (Driver=Postgres).
+// The runtime handles SSL, authentication, and prepared statements.
+
+use std.db
+use std.db.driver
+use std.error
+
+/// Returns a DriverFactory for the Postgres driver.
+pub fn driverFactory() -> driver.DriverFactory
+
+/// Opens a single connection to a Postgres database.
+pub fn open(config: db.Config) -> Result<driver.Connection, Error>
+
+/// Creates a connection pool for a Postgres database.
+pub fn openPool(config: db.Config, options: db.PoolOptions) -> Result<driver.Pool, Error>
+
+/// Returns the version string of the connected Postgres server.
+pub fn serverVersion(conn: driver.Connection) -> Result<String, Error>
+
+/// Returns the current connection's PID (for pg_notify etc.).
+pub fn backendPid(conn: driver.Connection) -> Int
+
+/// Lists all databases on the server.
+pub fn databases(conn: driver.Connection) -> Result<db.ResultSet, Error>
+
+/// Lists all schemas in the current database.
+pub fn schemas(conn: driver.Connection) -> Result<db.ResultSet, Error>
+
+/// Lists all tables in the given schema (default: "public").
+pub fn tables(conn: driver.Connection, schema: String) -> Result<db.ResultSet, Error>
+
+/// Returns column metadata for a table.
+pub fn tableInfo(conn: driver.Connection, schema: String, table: String) -> Result<db.ResultSet, Error>
+
+/// Executes a script containing multiple SQL statements.
+pub fn execScript(conn: driver.Connection, script: String) -> Result<db.ExecResult, Error>
+
+/// Copies data from stdin using the Postgres COPY protocol.
+pub fn copyIn(conn: driver.Connection, table: String, columns: List<String>, data: String) -> Result<Int, Error>
+
+/// Copies data to stdout using the Postgres COPY protocol.
+pub fn copyOut(conn: driver.Connection, query: String) -> Result<String, Error>
+
+/// Creates a named prepared statement.
+pub fn prepare(conn: driver.Connection, name: String, sql: String) -> Result<(), Error>
+
+/// Executes a named prepared statement with the given parameters.
+pub fn executePrepared(conn: driver.Connection, name: String, params: List<db.Cell>) -> Result<db.ResultSet, Error>
+
+/// Lists all prepared statements on the connection.
+pub fn preparedStatements(conn: driver.Connection) -> Result<List<String>, Error>
+
+/// Sets a configuration parameter for the session.
+pub fn setConfig(conn: driver.Connection, param: String, value: String) -> Result<(), Error>
+
+/// Gets a configuration parameter value.
+pub fn getConfig(conn: driver.Connection, param: String) -> Result<String, Error>
+
+/// Cancels the currently running query on the connection.
+pub fn cancelQuery(conn: driver.Connection) -> Result<(), Error>
+
+/// Terminates the connection forcibly.
+pub fn terminate(conn: driver.Connection) -> Result<(), Error>

@@ -1,0 +1,80 @@
+// std.db.pool — database connection pool management.
+//
+// Body-less signature stubs: the backend lowers each call to the runtime
+// pool implementation (connection acquire/release, health checking, stats).
+//
+// The Pool interface is defined in std.db.driver; this module provides the
+// concrete pool factory, configuration helpers, and telemetry functions.
+
+use std.db
+use std.db.driver
+use std.error
+
+/// PoolStats exposes runtime telemetry for a connection pool.
+pub struct PoolStats {
+    pub totalConns: Int,
+    pub idleConns: Int,
+    pub activeConns: Int,
+    pub waitCount: Int,
+    pub waitDurationMs: Int,
+    pub maxOpen: Int,
+    pub maxIdle: Int,
+}
+
+/// Returns a zero-initialised PoolStats value.
+pub fn poolStats() -> PoolStats
+
+/// Creates a new connection pool backed by the named driver.
+///
+/// The driver must have been registered with driver.DriverRegistry before
+/// calling this function.
+pub fn newPool(driverName: String, config: db.Config, options: db.PoolOptions) -> Result<driver.Pool, Error>
+
+/// Acquires a connection from the pool.
+///
+/// Blocks until a connection is available or the pool's connect timeout
+/// expires.  Returns an error if the pool is closed or the timeout is
+/// reached.
+pub fn acquire(pool: driver.Pool) -> Result<driver.Connection, Error>
+
+/// Releases a connection back to the pool.
+///
+/// The connection must have been obtained from acquire().  After release
+/// the caller must not use the connection again.
+pub fn release(pool: driver.Pool, conn: driver.Connection) -> Result<(), Error>
+
+/// Closes the pool and all idle connections.
+///
+/// Active connections are not closed; they become orphaned.  After close,
+/// acquire() returns an error.
+pub fn closePool(pool: driver.Pool) -> Result<(), Error>
+
+/// Returns current telemetry for the pool.
+pub fn stats(pool: driver.Pool) -> PoolStats
+
+/// Resets the pool: closes idle connections and re-dials the maximum allowed
+/// active connections.  Useful after a network partition.
+pub fn reset(pool: driver.Pool) -> Result<(), Error>
+
+/// Runs a health check against one idle connection from the pool.
+///
+/// Returns true if the connection responds to a simple ping query,
+/// false if the connection is stale (it will be discarded).
+pub fn ping(pool: driver.Pool) -> Bool
+
+/// Sets the maximum number of open connections.
+pub fn setMaxOpen(pool: driver.Pool, n: Int) -> Result<(), Error>
+
+/// Sets the maximum number of idle connections.
+pub fn setMaxIdle(pool: driver.Pool, n: Int) -> Result<(), Error>
+
+/// Sets the connection timeout in milliseconds.
+pub fn setConnectTimeout(pool: driver.Pool, timeoutMs: Int) -> Result<(), Error>
+
+/// Sets the idle timeout in milliseconds.
+/// Idle connections older than this are closed.
+pub fn setIdleTimeout(pool: driver.Pool, timeoutMs: Int) -> Result<(), Error>
+
+/// Prunes stale idle connections from the pool.
+/// Returns the number of connections that were closed.
+pub fn prune(pool: driver.Pool) -> Int
