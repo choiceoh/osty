@@ -52,6 +52,7 @@ import (
 	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/canonical"
 	"github.com/osty/osty/internal/check"
+	clicmd "github.com/osty/osty/internal/cli"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/format"
 	"github.com/osty/osty/internal/lexer"
@@ -107,14 +108,18 @@ type cliFlags struct {
 }
 
 func main() {
-	flags := parseFlags()
-
-	args := flag.Args()
-	if len(args) < 1 {
-		usage()
+	parsed := clicmd.ParseArgs(os.Args[1:])
+	if !parsed.IsOk() {
+		if len(parsed.Name) == 0 && len(parsed.RawRest) == 0 {
+			usage()
+		} else {
+			fmt.Fprint(os.Stderr, strings.Join(parsed.Errors, "\n"))
+		}
 		os.Exit(2)
 	}
-	cmd := args[0]
+	flags := convertFlags(parsed.Flags)
+	cmd := parsed.Name
+	args := append([]string{cmd}, parsed.RawRest...)
 	// fmt has its own flag parser because --check/--write only make
 	// sense in that subcommand. Most front-end subcommands take exactly
 	// one file path as their second positional arg.
@@ -528,6 +533,28 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+}
+
+func convertFlags(cf clicmd.CliFlags) cliFlags {
+	var f cliFlags
+	f.noColor = cf.NoColor
+	f.forceColor = cf.ForceColor
+	f.maxErrors = cf.MaxErrors
+	f.jsonOutput = cf.JsonOutput
+	f.strict = cf.Strict
+	f.fix = cf.Fix
+	f.fixDryRun = cf.FixDryRun
+	f.showScopes = cf.ShowScopes
+	f.trace = cf.Trace
+	f.explain = cf.Explain
+	f.inspect = cf.Inspect
+	f.aiRepair = cf.AiRepair
+	if cf.AiMode != "" {
+		f.aiMode = airepair.Mode(cf.AiMode)
+	}
+	f.dumpNativeDiags = cf.DumpNativeDiags
+	f.native = cf.Native
+	return f
 }
 
 // parseFlags parses global flags that may precede the subcommand. Uses
@@ -979,11 +1006,7 @@ func printExplainBlock(diags []*diag.Diagnostic) {
 // test, publish, lsp) are excluded — they would need their own
 // instrumentation, which would belong in their respective files.
 func isTraceableSingleFileCmd(cmd string) bool {
-	switch cmd {
-	case "tokens", "parse", "resolve", "check", "typecheck", "lint":
-		return true
-	}
-	return false
+	return clicmd.IsTraceableCommand(cmd)
 }
 
 // resolveFile runs single-file name resolution with the cached stdlib
@@ -1035,7 +1058,7 @@ func hasWarning(diags []*diag.Diagnostic) bool {
 }
 
 func usesFrontEndAIRepair(cmd string) bool {
-	return runner.UsesFrontEndAIRepair(cmd)
+	return clicmd.UsesFrontEndAIRepair(cmd)
 }
 
 func consumeFrontEndAIRepairFlags(args []string, flags cliFlags) ([]string, cliFlags, error) {
