@@ -169,7 +169,8 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 | P5 | real front-end → MIR 통합 probe + UnitConst / StorageLive / StorageDead 갭 봉합 | TestStage0RealMIRBaseline 12 cases — **구현 완료** |
 | P6 | while loop (4-block entry/header/body/exit + back-edge) + alloca/store/load 가변 local | TestStage0EmitsCountToWhileLoop / while_loop_count real-MIR — **구현 완료** |
 | P7 | for-in-range loop (5-block entry/header/body/post/exit) — while alloca 인프라 재사용 | for_in_range_sum real-MIR — **구현 완료** |
-| P8+ | println / struct field / list / String literal | toolchain/main.osty 부분 빌드 |
+| P8 | println(Int) intrinsic — printf declare + format string global + IntrinsicInstr 처리 | println_int_param / println_const_in_loop real-MIR — **구현 완료** |
+| P9+ | struct field access / list literal / String literal / 더 많은 intrinsic family | toolchain/main.osty 부분 빌드 |
 | P3 | `OSTY_STAGE0_FALLBACK=1` 로 toolchain 전체 빌드 성공 | verify-self-rebuild stage1-only |
 | P4 | stage0 + osty-self 양쪽 모두에서 `verify-self-rebuild` 통과 | byte parity (stage2 vs stage3) |
 | P5 | CI matrix 추가 — `OSTY_STAGE0_FALLBACK=1` 잡과 default 잡 둘 다 | CI green |
