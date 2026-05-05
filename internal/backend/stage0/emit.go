@@ -112,6 +112,9 @@ func emitFunction(out *strings.Builder, fn *mir.Function, knownSymbols map[strin
 	if pat, ok := matchWhileLoopReturn(fn, knownSymbols); ok {
 		return emitWhileLoopReturn(out, fn, pat)
 	}
+	if pat, ok := matchForInRangeReturn(fn, knownSymbols); ok {
+		return emitForInRangeReturn(out, fn, pat)
+	}
 	return fmt.Errorf("%w: function %q does not match any stage0 pattern", ErrUnsupported, fn.Name)
 }
 
@@ -1505,6 +1508,238 @@ func emitWhileLoopReturn(out *strings.Builder, fn *mir.Function, pat whileLoopPa
 	fmt.Fprintf(out, "  br label %%%s\n", pat.headerLabel)
 
 	// Exit.
+	out.WriteString("\n")
+	fmt.Fprintf(out, "%s:\n", pat.exitLabel)
+	out.WriteString(pat.exitBody)
+	fmt.Fprintf(out, "  ret %s %s\n", retLLVM, pat.finalRetExpr)
+	out.WriteString("}\n\n")
+	return nil
+}
+
+// ---- P7: for-in-range loop (5-block shape) ----
+//
+// The front-end lowers `for i in 0..n { body }` to a 5-block CFG:
+//
+//	entry    : pre-loop init (acc/i/_end) + GotoTerm(header)
+//	header   : cond = i < _end + BranchTerm(cond, body, exit)
+//	body     : loop body + GotoTerm(post)
+//	post     : i = i + 1 + GotoTerm(header)         ← back-edge
+//	exit     : post-loop instructions + ReturnTerm
+//
+// Stage0 P7 reuses the alloca/store/load machinery introduced in P6;
+// all mutable locals (the iterator + any user mut-bindings touched by
+// the body) become alloca slots. The pattern differs from `while`
+// only in the extra `post` block sitting between body and back-edge.
+
+type forInRangePattern struct {
+	retType    scalarType
+	paramIDs   []mir.LocalID
+	paramTypes []scalarType
+	paramNames []string
+	stackDecls []stackDecl
+
+	entryBody  string
+	headerBody string
+	bodyBody   string
+	postBody   string
+	exitBody   string
+
+	headerCondExpr string
+	finalRetExpr   string
+
+	headerLabel string
+	bodyLabel   string
+	postLabel   string
+	exitLabel   string
+}
+
+func matchForInRangeReturn(fn *mir.Function, knownSymbols map[string]bool) (forInRangePattern, bool) {
+	pat := forInRangePattern{}
+	pat.retType = scalarFromType(fn.ReturnType)
+	if pat.retType == scalarUnknown {
+		return pat, false
+	}
+	if len(fn.Params) > 2 {
+		return pat, false
+	}
+	if len(fn.Blocks) != 5 {
+		return pat, false
+	}
+
+	// Param SSA registers.
+	pat.paramIDs = fn.Params
+	pat.paramTypes = make([]scalarType, len(fn.Params))
+	pat.paramNames = make([]string, len(fn.Params))
+	fallbackNames := []string{"a", "b"}
+	for i, pid := range fn.Params {
+		loc := lookupLocal(fn, pid)
+		if loc == nil || !loc.IsParam {
+			return pat, false
+		}
+		pt := scalarFromType(loc.Type)
+		if pt == scalarUnknown {
+			return pat, false
+		}
+		pat.paramTypes[i] = pt
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+	}
+	disambiguateParamNames(pat.paramNames)
+
+	// Block layout: entry → header → (body → post → header | exit).
+	entry := blockByID(fn, fn.Entry)
+	if entry == nil {
+		return pat, false
+	}
+	entryGoto, ok := entry.Term.(*mir.GotoTerm)
+	if !ok {
+		return pat, false
+	}
+	header := blockByID(fn, entryGoto.Target)
+	if header == nil || header.ID == entry.ID {
+		return pat, false
+	}
+	branch, ok := header.Term.(*mir.BranchTerm)
+	if !ok {
+		return pat, false
+	}
+	body := blockByID(fn, branch.Then)
+	exit := blockByID(fn, branch.Else)
+	if body == nil || exit == nil {
+		return pat, false
+	}
+	bodyGoto, ok := body.Term.(*mir.GotoTerm)
+	if !ok {
+		return pat, false
+	}
+	post := blockByID(fn, bodyGoto.Target)
+	if post == nil {
+		return pat, false
+	}
+	if post.ID == header.ID || post.ID == body.ID || post.ID == exit.ID || post.ID == entry.ID {
+		return pat, false
+	}
+	postGoto, ok := post.Term.(*mir.GotoTerm)
+	if !ok || postGoto.Target != header.ID {
+		return pat, false
+	}
+	if _, ok := exit.Term.(*mir.ReturnTerm); !ok {
+		return pat, false
+	}
+
+	// Stack-allocate every Mut local that isn't param/return.
+	stack := map[mir.LocalID]stackDecl{}
+	for _, l := range fn.Locals {
+		if l == nil || l.IsParam || l.IsReturn || !l.Mut {
+			continue
+		}
+		ty := scalarFromType(l.Type)
+		if ty == scalarUnknown {
+			return pat, false
+		}
+		decl := stackDecl{id: l.ID, name: sanitizeLLVMName(l.Name, fmt.Sprintf("local%d", l.ID)) + ".slot", ty: ty}
+		stack[l.ID] = decl
+		pat.stackDecls = append(pat.stackDecls, decl)
+	}
+
+	bindings := map[mir.LocalID]localBinding{}
+	for i, pid := range fn.Params {
+		bindings[pid] = localBinding{
+			expr:    "%" + pat.paramNames[i],
+			ty:      pat.paramTypes[i],
+			defined: true,
+		}
+	}
+	for _, sd := range pat.stackDecls {
+		bindings[sd.id] = localBinding{
+			expr:    "%" + sd.name,
+			ty:      sd.ty,
+			defined: true,
+			isStack: true,
+		}
+	}
+
+	nextSSA := 0
+	ctx := &whileLoopEmitCtx{
+		fn:           fn,
+		bindings:     bindings,
+		stack:        stack,
+		knownSymbols: knownSymbols,
+		nextSSA:      &nextSSA,
+	}
+
+	// entry
+	if body, ok := emitWhileBlock(ctx, entry, false); ok {
+		pat.entryBody = body
+	} else {
+		return pat, false
+	}
+	// header
+	condExpr, headerBody, ok := emitWhileHeader(ctx, header, branch.Cond)
+	if !ok {
+		return pat, false
+	}
+	pat.headerBody = headerBody
+	pat.headerCondExpr = condExpr
+	// body
+	if body, ok := emitWhileBlock(ctx, body, false); ok {
+		pat.bodyBody = body
+	} else {
+		return pat, false
+	}
+	// post (increment)
+	if post, ok := emitWhileBlock(ctx, post, false); ok {
+		pat.postBody = post
+	} else {
+		return pat, false
+	}
+	// exit
+	if exitBody, finalExpr, ok := emitWhileExit(ctx, exit, fn.ReturnLocal, pat.retType); ok {
+		pat.exitBody = exitBody
+		pat.finalRetExpr = finalExpr
+	} else {
+		return pat, false
+	}
+
+	pat.headerLabel = blockLabelName(header.ID, "header")
+	pat.bodyLabel = blockLabelName(body.ID, "body")
+	pat.postLabel = blockLabelName(post.ID, "post")
+	pat.exitLabel = blockLabelName(exit.ID, "exit")
+	return pat, true
+}
+
+func emitForInRangeReturn(out *strings.Builder, fn *mir.Function, pat forInRangePattern) error {
+	retLLVM := pat.retType.llvm()
+	fmt.Fprintf(out, "define %s @%s(", retLLVM, fn.Name)
+	for i, name := range pat.paramNames {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
+	}
+	out.WriteString(") {\n")
+
+	out.WriteString("entry:\n")
+	for _, sd := range pat.stackDecls {
+		fmt.Fprintf(out, "  %%%s = alloca %s\n", sd.name, sd.ty.llvm())
+	}
+	out.WriteString(pat.entryBody)
+	fmt.Fprintf(out, "  br label %%%s\n", pat.headerLabel)
+
+	out.WriteString("\n")
+	fmt.Fprintf(out, "%s:\n", pat.headerLabel)
+	out.WriteString(pat.headerBody)
+	fmt.Fprintf(out, "  br i1 %s, label %%%s, label %%%s\n", pat.headerCondExpr, pat.bodyLabel, pat.exitLabel)
+
+	out.WriteString("\n")
+	fmt.Fprintf(out, "%s:\n", pat.bodyLabel)
+	out.WriteString(pat.bodyBody)
+	fmt.Fprintf(out, "  br label %%%s\n", pat.postLabel)
+
+	out.WriteString("\n")
+	fmt.Fprintf(out, "%s:\n", pat.postLabel)
+	out.WriteString(pat.postBody)
+	fmt.Fprintf(out, "  br label %%%s\n", pat.headerLabel)
+
 	out.WriteString("\n")
 	fmt.Fprintf(out, "%s:\n", pat.exitLabel)
 	out.WriteString(pat.exitBody)
