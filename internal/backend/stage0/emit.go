@@ -110,16 +110,21 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 // struct layouts, runtime declarations …) can attach without forcing
 // another sweep through all matcher signatures.
 type moduleCtx struct {
+	module       *mir.Module
 	knownSymbols map[string]bool
-	// extraDecls collects module-level lines (declares + globals)
-	// the matchers emit on demand. Concatenated into the final
-	// output before function bodies.
+	// extraDecls collects module-level lines (declares + globals +
+	// struct type defs) the matchers emit on demand. Concatenated
+	// into the final output before function bodies.
 	extraDecls *strings.Builder
 	// stringPool maps string-constant value → assigned global
 	// symbol (without the leading `@`). Lookups are write-once: the
 	// first reference allocates a fresh `@.str.<N>` global.
 	stringPool   map[string]string
 	nextStringID int
+	// emittedStructs records which struct names have been written
+	// to extraDecls already, so multiple functions referencing the
+	// same struct don't duplicate the type definition.
+	emittedStructs map[string]bool
 }
 
 func newModuleCtx(module *mir.Module) *moduleCtx {
@@ -131,10 +136,55 @@ func newModuleCtx(module *mir.Module) *moduleCtx {
 		syms[fn.Name] = true
 	}
 	return &moduleCtx{
-		knownSymbols: syms,
-		extraDecls:   &strings.Builder{},
-		stringPool:   map[string]string{},
+		module:         module,
+		knownSymbols:   syms,
+		extraDecls:     &strings.Builder{},
+		stringPool:     map[string]string{},
+		emittedStructs: map[string]bool{},
 	}
+}
+
+// lookupStructFields returns the scalar field types for the named
+// struct or (nil, false) if the struct isn't in the module's layout
+// table or any field is non-scalar (Int / Bool / String only).
+// Stage0's struct support is intentionally narrow — anything outside
+// the scalar-only subset declines so future phases can decide how to
+// handle aggregates inside structs.
+func (m *moduleCtx) lookupStructFields(name string) ([]scalarType, bool) {
+	if m == nil || m.module == nil || m.module.Layouts == nil {
+		return nil, false
+	}
+	layout, ok := m.module.Layouts.Structs[name]
+	if !ok || layout == nil {
+		return nil, false
+	}
+	tys := make([]scalarType, len(layout.Fields))
+	for i, f := range layout.Fields {
+		st := scalarFromType(f.Type)
+		if st == scalarUnknown {
+			return nil, false
+		}
+		tys[i] = st
+	}
+	return tys, true
+}
+
+// emitStructDef ensures `%<name> = type { ... }` lands in
+// extraDecls exactly once. Subsequent calls with the same name are
+// no-ops.
+func (m *moduleCtx) emitStructDef(name string, fields []scalarType) {
+	if m.emittedStructs[name] {
+		return
+	}
+	m.emittedStructs[name] = true
+	fmt.Fprintf(m.extraDecls, "%%%s = type { ", name)
+	for i, ft := range fields {
+		if i > 0 {
+			m.extraDecls.WriteString(", ")
+		}
+		m.extraDecls.WriteString(ft.llvm())
+	}
+	m.extraDecls.WriteString(" }\n")
 }
 
 // internStringConst interns `value` and returns the LLVM operand
@@ -223,6 +273,9 @@ func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error
 	}
 	if pat, ok := matchForInRangeReturn(fn, mctx); ok {
 		return emitForInRangeReturn(out, fn, pat)
+	}
+	if pat, ok := matchStructFieldRead(fn, mctx); ok {
+		return emitStructFieldRead(out, fn, pat)
 	}
 	return fmt.Errorf("%w: function %q does not match any stage0 pattern", ErrUnsupported, fn.Name)
 }
@@ -1940,6 +1993,108 @@ func emitForInRangeReturn(out *strings.Builder, fn *mir.Function, pat forInRange
 	fmt.Fprintf(out, "%s:\n", pat.exitLabel)
 	out.WriteString(pat.exitBody)
 	fmt.Fprintf(out, "  ret %s %s\n", retLLVM, pat.finalRetExpr)
+	out.WriteString("}\n\n")
+	return nil
+}
+
+// ---- P10: struct field accessor ----
+//
+// stage0 P10 handles a tightly-restricted "field reader" function:
+//
+//	fn name(p: SomeStruct) -> Int { p.<field> }
+//
+// MIR shape: 1 struct param (NamedType registered in
+// `module.Layouts.Structs`), single block, one AssignInstr writing
+// UseRV{CopyOp{Place: paramID, Projections: [FieldProj]}} to the
+// return local, ReturnTerm. All struct fields must be scalar
+// (Int / Bool / String) — anything outside that subset declines.
+//
+// Output:
+//
+//	%StructName = type { i64, i64, ... }
+//
+//	define i64 @name(%StructName %p) {
+//	entry:
+//	  %0 = extractvalue %StructName %p, <fieldIndex>
+//	  ret i64 %0
+//	}
+
+type structFieldReadPattern struct {
+	structName string
+	fieldTypes []scalarType
+	paramName  string
+	fieldIndex int
+	resultType scalarType
+}
+
+func matchStructFieldRead(fn *mir.Function, mctx *moduleCtx) (structFieldReadPattern, bool) {
+	pat := structFieldReadPattern{}
+	pat.resultType = scalarFromType(fn.ReturnType)
+	if pat.resultType == scalarUnknown {
+		return pat, false
+	}
+	if len(fn.Params) != 1 {
+		return pat, false
+	}
+	paramID := fn.Params[0]
+	paramLocal := lookupLocal(fn, paramID)
+	if paramLocal == nil || !paramLocal.IsParam {
+		return pat, false
+	}
+	named, ok := paramLocal.Type.(*ir.NamedType)
+	if !ok || named == nil || named.Name == "" {
+		return pat, false
+	}
+	fieldTypes, ok := mctx.lookupStructFields(named.Name)
+	if !ok {
+		return pat, false
+	}
+	bb, ok := singleBlockReturning(fn)
+	if !ok || len(bb.Instrs) != 1 {
+		return pat, false
+	}
+	ai, ok := bb.Instrs[0].(*mir.AssignInstr)
+	if !ok {
+		return pat, false
+	}
+	if ai.Dest.Local != fn.ReturnLocal || ai.Dest.HasProjections() {
+		return pat, false
+	}
+	use, ok := ai.Src.(*mir.UseRV)
+	if !ok {
+		return pat, false
+	}
+	cp, ok := use.Op.(*mir.CopyOp)
+	if !ok {
+		return pat, false
+	}
+	if cp.Place.Local != paramID || len(cp.Place.Projections) != 1 {
+		return pat, false
+	}
+	fieldProj, ok := cp.Place.Projections[0].(*mir.FieldProj)
+	if !ok {
+		return pat, false
+	}
+	if fieldProj.Index < 0 || fieldProj.Index >= len(fieldTypes) {
+		return pat, false
+	}
+	if fieldTypes[fieldProj.Index] != pat.resultType {
+		return pat, false
+	}
+	pat.structName = named.Name
+	pat.fieldTypes = fieldTypes
+	pat.paramName = sanitizeLLVMName(paramLocal.Name, "p")
+	pat.fieldIndex = fieldProj.Index
+	mctx.emitStructDef(named.Name, fieldTypes)
+	return pat, true
+}
+
+func emitStructFieldRead(out *strings.Builder, fn *mir.Function, pat structFieldReadPattern) error {
+	resultLLVM := pat.resultType.llvm()
+	fmt.Fprintf(out, "define %s @%s(%%%s %%%s) {\n", resultLLVM, fn.Name, pat.structName, pat.paramName)
+	out.WriteString("entry:\n")
+	fmt.Fprintf(out, "  %%0 = extractvalue %%%s %%%s, %d\n", pat.structName, pat.paramName, pat.fieldIndex)
+	fmt.Fprintf(out, "  ret %s %%0\n", resultLLVM)
 	out.WriteString("}\n\n")
 	return nil
 }

@@ -266,6 +266,28 @@ fn main() {}`,
 				"ret ptr @.str.0",
 			},
 		},
+		{
+			name: "struct_field_read_x",
+			src: `struct Point { x: Int, y: Int }
+fn first(p: Point) -> Int { p.x }
+fn main() {}`,
+			wantIR: []string{
+				"%Point = type { i64, i64 }",
+				"define i64 @first(%Point %p)",
+				"%0 = extractvalue %Point %p, 0",
+				"ret i64 %0",
+			},
+		},
+		{
+			name: "struct_field_read_y",
+			src: `struct Pair { a: Int, b: Int }
+fn second(p: Pair) -> Int { p.b }
+fn main() {}`,
+			wantIR: []string{
+				"%Pair = type { i64, i64 }",
+				"%0 = extractvalue %Pair %p, 1",
+			},
+		},
 	}
 	for _, c := range cases {
 		c := c
@@ -296,13 +318,6 @@ func TestStage0RealMIRGapProbe(t *testing.T) {
 			// runtime ABI yet.
 			name:    "println_string_arg",
 			src:     `fn main() { println("hi") }`,
-			skipNow: true,
-		},
-		{
-			name: "struct_field_access",
-			src: `struct Point { x: Int, y: Int }
-fn first(p: Point) -> Int { p.x }
-fn main() {}`,
 			skipNow: true,
 		},
 		{
