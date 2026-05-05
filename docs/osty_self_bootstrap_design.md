@@ -155,7 +155,7 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 
 | Phase | 범위 | 측정 |
 |---|---|---|
-| P0 | `osty-self not found` 에러 분류 / `isOstySelfMissing(err)` 도입 | unit test |
+| P0 | `osty-self not found` 에러 분류 / `isOstySelfMissing(err)` 도입 | unit test — **구현 완료**: `internal/backend/bootstrap.go::IsOstySelfMissing` |
 | P1 | `internal/backend/stage0/` skeleton + 단순 `fn main()` 케이스 한 개 | TestStage0HelloWorld |
 | P2 | toolchain 의 첫 10개 함수 lowering 통과 | toolchain/main.osty 부분 빌드 |
 | P3 | `OSTY_STAGE0_FALLBACK=1` 로 toolchain 전체 빌드 성공 | verify-self-rebuild stage1-only |
