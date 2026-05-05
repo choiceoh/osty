@@ -115,12 +115,11 @@ fn hirOptimizeSimplifyStmts(o: HirOptimizer, stmts: List<HirStmt>) -> List<HirSt
 }
 
 fn hirOptimizeIsTerminator(s: HirStmt) -> Bool {
-    match s.kind {
-        HirStmtReturn -> true,
-        HirStmtBreak -> true,
-        HirStmtContinue -> true,
-        _ -> false,
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if s.kind == HirStmtReturn { return true }
+    if s.kind == HirStmtBreak { return true }
+    if s.kind == HirStmtContinue { return true }
+    false
 }
 
 fn hirOptimizeVisitStmt(o: HirOptimizer, s: HirStmt) -> HirStmt {
@@ -606,13 +605,12 @@ fn hirOptimizeFoldIntBinary(e: HirExpr, lv: Int, rv: Int) -> HirExpr {
 }
 
 fn hirOptimizeFoldBoolBinary(e: HirExpr, left: Bool, right: Bool) -> HirExpr {
-    match e.binaryOp {
-        HirBinAnd -> hirBoolLit(left && right, e.span),
-        HirBinOr -> hirBoolLit(left || right, e.span),
-        HirBinEq -> hirBoolLit(left == right, e.span),
-        HirBinNeq -> hirBoolLit(left != right, e.span),
-        _ -> hirExprInvalid(),
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if e.binaryOp == HirBinAnd { return hirBoolLit(left && right, e.span) }
+    if e.binaryOp == HirBinOr { return hirBoolLit(left || right, e.span) }
+    if e.binaryOp == HirBinEq { return hirBoolLit(left == right, e.span) }
+    if e.binaryOp == HirBinNeq { return hirBoolLit(left != right, e.span) }
+    hirExprInvalid()
 }
 
 fn hirOptimizeIsIntLiteralZero(e: HirExpr) -> Bool {
@@ -699,31 +697,30 @@ fn hirOptimizeParseRadix(text: String, radix: Int) -> Int {
 }
 
 fn hirOptimizeCharToDigit(ch: Char) -> Int {
-    match ch {
-        '0' -> 0,
-        '1' -> 1,
-        '2' -> 2,
-        '3' -> 3,
-        '4' -> 4,
-        '5' -> 5,
-        '6' -> 6,
-        '7' -> 7,
-        '8' -> 8,
-        '9' -> 9,
-        'a' -> 10,
-        'b' -> 11,
-        'c' -> 12,
-        'd' -> 13,
-        'e' -> 14,
-        'f' -> 15,
-        'A' -> 10,
-        'B' -> 11,
-        'C' -> 12,
-        'D' -> 13,
-        'E' -> 14,
-        'F' -> 15,
-        _ -> -1,
-    }
+    // B2: payload-less Char dispatch as if-else chain (stage0 P0–P15).
+    if ch == '0' { return 0 }
+    if ch == '1' { return 1 }
+    if ch == '2' { return 2 }
+    if ch == '3' { return 3 }
+    if ch == '4' { return 4 }
+    if ch == '5' { return 5 }
+    if ch == '6' { return 6 }
+    if ch == '7' { return 7 }
+    if ch == '8' { return 8 }
+    if ch == '9' { return 9 }
+    if ch == 'a' { return 10 }
+    if ch == 'b' { return 11 }
+    if ch == 'c' { return 12 }
+    if ch == 'd' { return 13 }
+    if ch == 'e' { return 14 }
+    if ch == 'f' { return 15 }
+    if ch == 'A' { return 10 }
+    if ch == 'B' { return 11 }
+    if ch == 'C' { return 12 }
+    if ch == 'D' { return 13 }
+    if ch == 'E' { return 14 }
+    if ch == 'F' { return 15 }
+    -1
 }
 
 // ====================================================================
@@ -772,17 +769,16 @@ fn hirOptimizeIntToString(n: Int) -> String {
 }
 
 fn hirOptimizeDigitChar(d: Int) -> String {
-    match d {
-        0 -> "0",
-        1 -> "1",
-        2 -> "2",
-        3 -> "3",
-        4 -> "4",
-        5 -> "5",
-        6 -> "6",
-        7 -> "7",
-        8 -> "8",
-        9 -> "9",
-        _ -> "?",
-    }
+    // B2: Int dispatch as if-else chain (stage0 P0–P15).
+    if d == 0 { return "0" }
+    if d == 1 { return "1" }
+    if d == 2 { return "2" }
+    if d == 3 { return "3" }
+    if d == 4 { return "4" }
+    if d == 5 { return "5" }
+    if d == 6 { return "6" }
+    if d == 7 { return "7" }
+    if d == 8 { return "8" }
+    if d == 9 { return "9" }
+    "?"
 }

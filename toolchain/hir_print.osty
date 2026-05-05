@@ -969,17 +969,16 @@ fn hirPrintIntToString(n: Int) -> String {
 }
 
 fn hirPrintDigitChar(d: Int) -> String {
-    match d {
-        0 -> "0",
-        1 -> "1",
-        2 -> "2",
-        3 -> "3",
-        4 -> "4",
-        5 -> "5",
-        6 -> "6",
-        7 -> "7",
-        8 -> "8",
-        9 -> "9",
-        _ -> "?",
-    }
+    // B2: payload-less int dispatch as if-else chain (stage0 P0–P15).
+    if d == 0 { return "0" }
+    if d == 1 { return "1" }
+    if d == 2 { return "2" }
+    if d == 3 { return "3" }
+    if d == 4 { return "4" }
+    if d == 5 { return "5" }
+    if d == 6 { return "6" }
+    if d == 7 { return "7" }
+    if d == 8 { return "8" }
+    if d == 9 { return "9" }
+    "?"
 }

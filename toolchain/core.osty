@@ -1307,16 +1307,16 @@ pub fn coreStructSpreadAt(arena: CoreArena, idx: Int) -> Int {
 // =====================================================================
 
 fn identKindToInt(kind: IdentKind) -> Int {
-    match kind {
-        IkUnknown -> 0,
-        IkLocal -> 1,
-        IkParam -> 2,
-        IkFn -> 3,
-        IkVariant -> 4,
-        IkTypeName -> 5,
-        IkGlobal -> 6,
-        IkBuiltin -> 7,
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == IkUnknown { return 0 }
+    if kind == IkLocal { return 1 }
+    if kind == IkParam { return 2 }
+    if kind == IkFn { return 3 }
+    if kind == IkVariant { return 4 }
+    if kind == IkTypeName { return 5 }
+    if kind == IkGlobal { return 6 }
+    if kind == IkBuiltin { return 7 }
+    0
 }
 
 pub fn coreIdentKindAt(arena: CoreArena, idx: Int) -> IdentKind {
@@ -1335,27 +1335,26 @@ fn identKindFromInt(n: Int) -> IdentKind {
 }
 
 fn binOpToInt(op: BinOp) -> Int {
-    match op {
-        BoAdd -> 1,
-        BoSub -> 2,
-        BoMul -> 3,
-        BoDiv -> 4,
-        BoMod -> 5,
-        BoEq -> 6,
-        BoNe -> 7,
-        BoLt -> 8,
-        BoLe -> 9,
-        BoGt -> 10,
-        BoGe -> 11,
-        BoAnd -> 12,
-        BoOr -> 13,
-        BoBitAnd -> 14,
-        BoBitOr -> 15,
-        BoBitXor -> 16,
-        BoShl -> 17,
-        BoShr -> 18,
-        BoInvalid -> 0,
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if op == BoAdd { return 1 }
+    if op == BoSub { return 2 }
+    if op == BoMul { return 3 }
+    if op == BoDiv { return 4 }
+    if op == BoMod { return 5 }
+    if op == BoEq { return 6 }
+    if op == BoNe { return 7 }
+    if op == BoLt { return 8 }
+    if op == BoLe { return 9 }
+    if op == BoGt { return 10 }
+    if op == BoGe { return 11 }
+    if op == BoAnd { return 12 }
+    if op == BoOr { return 13 }
+    if op == BoBitAnd { return 14 }
+    if op == BoBitOr { return 15 }
+    if op == BoBitXor { return 16 }
+    if op == BoShl { return 17 }
+    if op == BoShr { return 18 }
+    0
 }
 
 pub fn coreBinaryOpAt(arena: CoreArena, idx: Int) -> BinOp {
@@ -1385,13 +1384,12 @@ fn binOpFromInt(n: Int) -> BinOp {
 }
 
 fn unOpToInt(op: UnOp) -> Int {
-    match op {
-        UoNeg -> 1,
-        UoPlus -> 2,
-        UoNot -> 3,
-        UoBitNot -> 4,
-        UoInvalid -> 0,
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if op == UoNeg { return 1 }
+    if op == UoPlus { return 2 }
+    if op == UoNot { return 3 }
+    if op == UoBitNot { return 4 }
+    0
 }
 
 pub fn coreUnaryOpAt(arena: CoreArena, idx: Int) -> UnOp {
@@ -1407,111 +1405,109 @@ fn unOpFromInt(n: Int) -> UnOp {
 }
 
 pub fn binOpSymbol(op: BinOp) -> String {
-    match op {
-        BoAdd -> "+",
-        BoSub -> "-",
-        BoMul -> "*",
-        BoDiv -> "/",
-        BoMod -> "%",
-        BoEq -> "==",
-        BoNe -> "!=",
-        BoLt -> "<",
-        BoLe -> "<=",
-        BoGt -> ">",
-        BoGe -> ">=",
-        BoAnd -> "&&",
-        BoOr -> "||",
-        BoBitAnd -> "&",
-        BoBitOr -> "|",
-        BoBitXor -> "^",
-        BoShl -> "<<",
-        BoShr -> ">>",
-        BoInvalid -> "?",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if op == BoAdd { return "+" }
+    if op == BoSub { return "-" }
+    if op == BoMul { return "*" }
+    if op == BoDiv { return "/" }
+    if op == BoMod { return "%" }
+    if op == BoEq { return "==" }
+    if op == BoNe { return "!=" }
+    if op == BoLt { return "<" }
+    if op == BoLe { return "<=" }
+    if op == BoGt { return ">" }
+    if op == BoGe { return ">=" }
+    if op == BoAnd { return "&&" }
+    if op == BoOr { return "||" }
+    if op == BoBitAnd { return "&" }
+    if op == BoBitOr { return "|" }
+    if op == BoBitXor { return "^" }
+    if op == BoShl { return "<<" }
+    if op == BoShr { return ">>" }
+    "?"
 }
 
 pub fn unOpSymbol(op: UnOp) -> String {
-    match op {
-        UoNeg -> "-",
-        UoPlus -> "+",
-        UoNot -> "!",
-        UoBitNot -> "~",
-        UoInvalid -> "?",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if op == UoNeg { return "-" }
+    if op == UoPlus { return "+" }
+    if op == UoNot { return "!" }
+    if op == UoBitNot { return "~" }
+    "?"
 }
 
 pub fn coreKindName(kind: CoreKind) -> String {
-    match kind {
-        CkErr -> "Err",
-        CkIntLit -> "IntLit",
-        CkFloatLit -> "FloatLit",
-        CkBoolLit -> "BoolLit",
-        CkCharLit -> "CharLit",
-        CkByteLit -> "ByteLit",
-        CkStringLit -> "StringLit",
-        CkBytesLit -> "BytesLit",
-        CkUnitLit -> "UnitLit",
-        CkIdent -> "Ident",
-        CkUnary -> "Unary",
-        CkBinary -> "Binary",
-        CkCoalesce -> "Coalesce",
-        CkQuestion -> "Question",
-        CkCall -> "Call",
-        CkMethodCall -> "MethodCall",
-        CkIntrinsic -> "Intrinsic",
-        CkVariantLit -> "VariantLit",
-        CkField -> "Field",
-        CkTupleAccess -> "TupleAccess",
-        CkIndex -> "Index",
-        CkList -> "List",
-        CkMap -> "Map",
-        CkMapEntry -> "MapEntry",
-        CkTuple -> "Tuple",
-        CkStruct -> "Struct",
-        CkStructField -> "StructField",
-        CkRange -> "Range",
-        CkClosure -> "Closure",
-        CkBlock -> "Block",
-        CkIf -> "If",
-        CkIfLet -> "IfLet",
-        CkMatch -> "Match",
-        CkMatchArm -> "MatchArm",
-        CsBlock -> "StmtBlock",
-        CsLet -> "LetStmt",
-        CsAssign -> "AssignStmt",
-        CsReturn -> "ReturnStmt",
-        CsBreak -> "BreakStmt",
-        CsContinue -> "ContinueStmt",
-        CsIf -> "IfStmt",
-        CsFor -> "ForStmt",
-        CsMatch -> "MatchStmt",
-        CsExprStmt -> "ExprStmt",
-        CsDefer -> "DeferStmt",
-        CsChanSend -> "ChanSendStmt",
-        CsErr -> "ErrStmt",
-        CdFn -> "FnDecl",
-        CdStruct -> "StructDecl",
-        CdEnum -> "EnumDecl",
-        CdEnumVariant -> "EnumVariant",
-        CdInterface -> "InterfaceDecl",
-        CdTypeAlias -> "TypeAliasDecl",
-        CdLet -> "LetDecl",
-        CdUse -> "UseDecl",
-        CdField -> "Field",
-        CdParam -> "Param",
-        CdGenericParam -> "GenericParam",
-        CpWild -> "WildPat",
-        CpIdent -> "IdentPat",
-        CpLit -> "LitPat",
-        CpTuple -> "TuplePat",
-        CpStruct -> "StructPat",
-        CpStructField -> "StructPatField",
-        CpVariant -> "VariantPat",
-        CpRange -> "RangePat",
-        CpOr -> "OrPat",
-        CpBinding -> "BindingPat",
-        CpErr -> "ErrPat",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == CkErr { return "Err" }
+    if kind == CkIntLit { return "IntLit" }
+    if kind == CkFloatLit { return "FloatLit" }
+    if kind == CkBoolLit { return "BoolLit" }
+    if kind == CkCharLit { return "CharLit" }
+    if kind == CkByteLit { return "ByteLit" }
+    if kind == CkStringLit { return "StringLit" }
+    if kind == CkBytesLit { return "BytesLit" }
+    if kind == CkUnitLit { return "UnitLit" }
+    if kind == CkIdent { return "Ident" }
+    if kind == CkUnary { return "Unary" }
+    if kind == CkBinary { return "Binary" }
+    if kind == CkCoalesce { return "Coalesce" }
+    if kind == CkQuestion { return "Question" }
+    if kind == CkCall { return "Call" }
+    if kind == CkMethodCall { return "MethodCall" }
+    if kind == CkIntrinsic { return "Intrinsic" }
+    if kind == CkVariantLit { return "VariantLit" }
+    if kind == CkField { return "Field" }
+    if kind == CkTupleAccess { return "TupleAccess" }
+    if kind == CkIndex { return "Index" }
+    if kind == CkList { return "List" }
+    if kind == CkMap { return "Map" }
+    if kind == CkMapEntry { return "MapEntry" }
+    if kind == CkTuple { return "Tuple" }
+    if kind == CkStruct { return "Struct" }
+    if kind == CkStructField { return "StructField" }
+    if kind == CkRange { return "Range" }
+    if kind == CkClosure { return "Closure" }
+    if kind == CkBlock { return "Block" }
+    if kind == CkIf { return "If" }
+    if kind == CkIfLet { return "IfLet" }
+    if kind == CkMatch { return "Match" }
+    if kind == CkMatchArm { return "MatchArm" }
+    if kind == CsBlock { return "StmtBlock" }
+    if kind == CsLet { return "LetStmt" }
+    if kind == CsAssign { return "AssignStmt" }
+    if kind == CsReturn { return "ReturnStmt" }
+    if kind == CsBreak { return "BreakStmt" }
+    if kind == CsContinue { return "ContinueStmt" }
+    if kind == CsIf { return "IfStmt" }
+    if kind == CsFor { return "ForStmt" }
+    if kind == CsMatch { return "MatchStmt" }
+    if kind == CsExprStmt { return "ExprStmt" }
+    if kind == CsDefer { return "DeferStmt" }
+    if kind == CsChanSend { return "ChanSendStmt" }
+    if kind == CsErr { return "ErrStmt" }
+    if kind == CdFn { return "FnDecl" }
+    if kind == CdStruct { return "StructDecl" }
+    if kind == CdEnum { return "EnumDecl" }
+    if kind == CdEnumVariant { return "EnumVariant" }
+    if kind == CdInterface { return "InterfaceDecl" }
+    if kind == CdTypeAlias { return "TypeAliasDecl" }
+    if kind == CdLet { return "LetDecl" }
+    if kind == CdUse { return "UseDecl" }
+    if kind == CdField { return "Field" }
+    if kind == CdParam { return "Param" }
+    if kind == CdGenericParam { return "GenericParam" }
+    if kind == CpWild { return "WildPat" }
+    if kind == CpIdent { return "IdentPat" }
+    if kind == CpLit { return "LitPat" }
+    if kind == CpTuple { return "TuplePat" }
+    if kind == CpStruct { return "StructPat" }
+    if kind == CpStructField { return "StructPatField" }
+    if kind == CpVariant { return "VariantPat" }
+    if kind == CpRange { return "RangePat" }
+    if kind == CpOr { return "OrPat" }
+    if kind == CpBinding { return "BindingPat" }
+    if kind == CpErr { return "ErrPat" }
+    "Unknown"
 }
 
 // =====================================================================
