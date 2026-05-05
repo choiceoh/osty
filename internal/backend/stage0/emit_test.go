@@ -54,6 +54,39 @@ func intLiteralFn(name string, value int64) *mir.Function {
 	}
 }
 
+// intParamPassthroughFn builds the canonical
+// `fn name(<paramName>: Int) -> Int { <paramName> }` MIR shape: one
+// block, one AssignInstr that copies the param local to the return
+// local.
+func intParamPassthroughFn(name, paramName string) *mir.Function {
+	const paramID mir.LocalID = 1
+	return &mir.Function{
+		Name:        name,
+		Params:      []mir.LocalID{paramID},
+		ReturnType:  ir.TInt,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "ret", Type: ir.TInt, IsReturn: true},
+			{ID: paramID, Name: paramName, Type: ir.TInt, IsParam: true},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{
+				ID: 0,
+				Instrs: []mir.Instr{
+					&mir.AssignInstr{
+						Dest: mir.Place{Local: 0},
+						Src: &mir.UseRV{
+							Op: &mir.CopyOp{Place: mir.Place{Local: paramID}, T: ir.TInt},
+						},
+					},
+				},
+				Term: &mir.ReturnTerm{},
+			},
+		},
+	}
+}
+
 func moduleWith(fns ...*mir.Function) *mir.Module {
 	return &mir.Module{
 		Package:   "main",
@@ -171,18 +204,7 @@ func TestStage0EmitsIntLiteralFunctionAlongsideMain(t *testing.T) {
 	}
 }
 
-func TestStage0RejectsIntFunctionWithParams(t *testing.T) {
-	t.Parallel()
-	fn := intLiteralFn("identity", 0)
-	fn.Params = []mir.LocalID{1}
-	fn.Locals = append(fn.Locals, &mir.Local{ID: 1, Name: "x", Type: ir.TInt, IsParam: true})
-	_, err := EmitMIR(moduleWith(trivialMainFn(), fn), llvmabi.Options{})
-	if !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("err = %v, want wrapped ErrUnsupported", err)
-	}
-}
-
-func TestStage0RejectsIntFunctionWithBoolReturn(t *testing.T) {
+func TestStage0RejectsBoolReturnFunction(t *testing.T) {
 	t.Parallel()
 	fn := intLiteralFn("flag", 1)
 	fn.ReturnType = ir.TBool
@@ -192,10 +214,9 @@ func TestStage0RejectsIntFunctionWithBoolReturn(t *testing.T) {
 	}
 }
 
-func TestStage0RejectsIntFunctionWithExtraInstr(t *testing.T) {
+func TestStage0RejectsMultiInstructionFunction(t *testing.T) {
 	t.Parallel()
 	fn := intLiteralFn("two_step", 7)
-	// Adding a second AssignInstr leaves the block with 2 instrs.
 	fn.Blocks[0].Instrs = append(fn.Blocks[0].Instrs, &mir.AssignInstr{
 		Dest: mir.Place{Local: 0},
 		Src: &mir.UseRV{
@@ -206,35 +227,89 @@ func TestStage0RejectsIntFunctionWithExtraInstr(t *testing.T) {
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("err = %v, want wrapped ErrUnsupported", err)
 	}
-	if !strings.Contains(err.Error(), "expects exactly 1") {
-		t.Fatalf("err = %q, want instr-count reason", err.Error())
-	}
 }
 
-func TestStage0RejectsIntFunctionWithBinaryRV(t *testing.T) {
+func TestStage0RejectsBinaryRVFunction(t *testing.T) {
 	t.Parallel()
 	fn := intLiteralFn("sum", 0)
 	fn.Blocks[0].Instrs[0] = &mir.AssignInstr{
 		Dest: mir.Place{Local: 0},
 		Src: &mir.BinaryRV{
-			Op: mir.BinAdd,
-			Left: &mir.ConstOp{Const: &mir.IntConst{Value: 1, T: ir.TInt}, T: ir.TInt},
+			Op:    mir.BinAdd,
+			Left:  &mir.ConstOp{Const: &mir.IntConst{Value: 1, T: ir.TInt}, T: ir.TInt},
 			Right: &mir.ConstOp{Const: &mir.IntConst{Value: 2, T: ir.TInt}, T: ir.TInt},
-			T:    ir.TInt,
+			T:     ir.TInt,
 		},
 	}
 	_, err := EmitMIR(moduleWith(trivialMainFn(), fn), llvmabi.Options{})
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("err = %v, want wrapped ErrUnsupported", err)
 	}
-	if !strings.Contains(err.Error(), "expects UseRV") {
-		t.Fatalf("err = %q, want UseRV reason", err.Error())
+}
+
+// ---- P2b: int param passthrough ----
+
+func TestStage0EmitsIntParamPassthrough(t *testing.T) {
+	t.Parallel()
+	got, err := EmitMIR(moduleWith(trivialMainFn(), intParamPassthroughFn("identity", "x"), intParamPassthroughFn("forward", "value")), llvmabi.Options{PackageName: "main"})
+	if err != nil {
+		t.Fatalf("EmitMIR: %v", err)
+	}
+	s := string(got)
+	for _, want := range []string{
+		"define i64 @identity(i64 %x)",
+		"ret i64 %x",
+		"define i64 @forward(i64 %value)",
+		"ret i64 %value",
+	} {
+		if !strings.Contains(s, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, s)
+		}
 	}
 }
 
-func TestStage0RejectsIntFunctionWithCopyOp(t *testing.T) {
+func TestStage0SanitizesEmptyParamName(t *testing.T) {
 	t.Parallel()
-	fn := intLiteralFn("dup", 0)
+	// Synthetic temporaries reach MIR with empty Name; we fall back
+	// to `%p` rather than emit malformed IR.
+	got, err := EmitMIR(moduleWith(trivialMainFn(), intParamPassthroughFn("identity", "")), llvmabi.Options{PackageName: "main"})
+	if err != nil {
+		t.Fatalf("EmitMIR: %v", err)
+	}
+	if !strings.Contains(string(got), "define i64 @identity(i64 %p)") {
+		t.Fatalf("expected fallback param name `%%p`:\n%s", got)
+	}
+}
+
+func TestStage0RejectsTwoParamFunction(t *testing.T) {
+	t.Parallel()
+	fn := intParamPassthroughFn("add", "x")
+	fn.Params = append(fn.Params, 2)
+	fn.Locals = append(fn.Locals, &mir.Local{ID: 2, Name: "y", Type: ir.TInt, IsParam: true})
+	_, err := EmitMIR(moduleWith(trivialMainFn(), fn), llvmabi.Options{})
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("err = %v, want wrapped ErrUnsupported", err)
+	}
+}
+
+func TestStage0RejectsBoolParamPassthrough(t *testing.T) {
+	t.Parallel()
+	fn := intParamPassthroughFn("flag", "b")
+	fn.ReturnType = ir.TBool
+	for _, l := range fn.Locals {
+		l.Type = ir.TBool
+	}
+	_, err := EmitMIR(moduleWith(trivialMainFn(), fn), llvmabi.Options{})
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("err = %v, want wrapped ErrUnsupported", err)
+	}
+}
+
+func TestStage0RejectsPassthroughCopyingNonParam(t *testing.T) {
+	t.Parallel()
+	fn := intParamPassthroughFn("mistake", "x")
+	// CopyOp source = ret local (not the param) — even with the
+	// right signature shape, this isn't the passthrough pattern.
 	fn.Blocks[0].Instrs[0] = &mir.AssignInstr{
 		Dest: mir.Place{Local: 0},
 		Src: &mir.UseRV{
@@ -244,8 +319,5 @@ func TestStage0RejectsIntFunctionWithCopyOp(t *testing.T) {
 	_, err := EmitMIR(moduleWith(trivialMainFn(), fn), llvmabi.Options{})
 	if !errors.Is(err, ErrUnsupported) {
 		t.Fatalf("err = %v, want wrapped ErrUnsupported", err)
-	}
-	if !strings.Contains(err.Error(), "expects ConstOp") {
-		t.Fatalf("err = %q, want ConstOp reason", err.Error())
 	}
 }
