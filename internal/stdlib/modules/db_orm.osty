@@ -1,0 +1,169 @@
+// std.db.orm — lightweight object-relational mapping.
+//
+// Body-less signature stubs: the backend lowers each call to the runtime
+// ORM engine (model registry, CRUD, relationship hydration).
+//
+// This module builds on std.db, std.db.driver, and std.sql to provide a
+// thin, opt-in ORM layer.  Models are described declaratively and the
+// runtime handles SQL generation, result-set mapping, and relationship
+// prefetching.
+
+use std.db
+use std.db.driver
+use std.sql
+use std.error
+
+// ── Metadata ────────────────────────────────────────────────────────────────
+
+/// Column metadata for a model field.
+pub struct ColumnDef {
+    pub name: String,
+    pub field: String,
+    pub primaryKey: Bool,
+    pub autoIncrement: Bool,
+    pub nullable: Bool,
+    pub unique: Bool,
+    pub columnType: String,
+    pub defaultExpr: String?,
+}
+
+/// Relationship kind.
+pub enum RelationKind {
+    HasOne,
+    HasMany,
+    BelongsTo,
+    ManyToMany,
+}
+
+/// Relationship metadata.
+pub struct RelationDef {
+    pub kind: RelationKind,
+    pub localField: String,
+    pub foreignModel: String,
+    pub foreignKey: String,
+    pub referenceKey: String,
+    pub joinTable: String?,
+}
+
+/// Model descriptor — maps a logical entity to a database table.
+pub struct ModelDef {
+    pub tableName: String,
+    pub columns: List<ColumnDef>,
+    pub primaryKeys: List<String>,
+    pub relations: List<RelationDef>,
+}
+
+/// Returns a zero-initialised ColumnDef.
+pub fn columnDef(name: String, field: String) -> ColumnDef
+
+/// Returns a zero-initialised RelationDef.
+pub fn relationDef(kind: RelationKind, localField: String, foreignModel: String) -> RelationDef
+
+/// Returns a zero-initialised ModelDef.
+pub fn modelDef(tableName: String, columns: List<ColumnDef>) -> ModelDef
+
+// ── Model Registry ──────────────────────────────────────────────────────────
+
+/// Registers a model definition so the runtime knows its schema.
+pub fn registerModel(model: ModelDef) -> Result<(), Error>
+
+/// Looks up a registered model by table name.
+pub fn lookupModel(tableName: String) -> Result<ModelDef, Error>
+
+/// Returns all registered model definitions.
+pub fn registeredModels() -> List<ModelDef>
+
+// ── CRUD — single-row ───────────────────────────────────────────────────────
+
+/// Inserts a row into the model's table.
+///
+/// values is a map of column name → Cell.  Returns the generated primary key
+/// value when autoIncrement is true.
+pub fn insert(pool: driver.Pool, tableName: String, values: Map<String, db.Cell>) -> Result<Int, Error>
+
+/// Finds a single row by primary key value.
+///
+/// Returns the row as a map of column name → Cell, or an error if not found.
+pub fn findByPk(pool: driver.Pool, tableName: String, pkValue: Int) -> Result<Map<String, db.Cell>, Error>
+
+/// Finds rows matching a simple equality condition.
+///
+/// column — column to filter; value — exact value to match.
+/// Returns a list of result rows.
+pub fn findBy(pool: driver.Pool, tableName: String, column: String, value: db.Cell) -> Result<List<Map<String, db.Cell>>, Error>
+
+/// Updates a row identified by its primary key.
+///
+/// values is a map of column → new cell value.  The primary key column
+/// is ignored if present.
+pub fn update(pool: driver.Pool, tableName: String, pkValue: Int, values: Map<String, db.Cell>) -> Result<(), Error>
+
+/// Deletes a row by primary key.
+pub fn delete(pool: driver.Pool, tableName: String, pkValue: Int) -> Result<(), Error>
+
+/// Saves (insert or update) a row.  If pkValue is 0 and the model has an
+/// auto-increment PK, an insert is performed.  Otherwise an update is
+/// attempted and falls back to insert.
+pub fn save(pool: driver.Pool, tableName: String, pkValue: Int, values: Map<String, db.Cell>) -> Result<Int, Error>
+
+// ── CRUD — batch ────────────────────────────────────────────────────────────
+
+/// Bulk inserts multiple rows in a single statement.
+pub fn insertMany(pool: driver.Pool, tableName: String, rows: List<Map<String, db.Cell>>) -> Result<Int, Error>
+
+/// Deletes all rows matching a simple equality condition.
+pub fn deleteBy(pool: driver.Pool, tableName: String, column: String, value: db.Cell) -> Result<Int, Error>
+
+/// Truncates the table (deletes all rows).
+pub fn truncate(pool: driver.Pool, tableName: String) -> Result<(), Error>
+
+// ── Query helpers ───────────────────────────────────────────────────────────
+
+/// Builds a SELECT query for all columns of the model.
+pub fn selectAll(model: ModelDef) -> sql.Query
+
+/// Builds a SELECT query scoped to the given columns.
+pub fn selectColumns(model: ModelDef, columns: List<String>) -> Result<sql.Query, Error>
+
+/// Builds a SELECT query with a WHERE clause on the primary key.
+pub fn selectByPk(model: ModelDef, pkValue: Int) -> sql.Query
+
+/// Builds a SELECT query with a simple equality WHERE clause.
+pub fn selectWhere(model: ModelDef, column: String, value: db.Cell) -> Result<sql.Query, Error>
+
+/// Appends a WHERE condition to an existing Query.
+pub fn whereClause(q: sql.Query, condition: sql.Condition) -> sql.Query
+
+/// Appends an ORDER BY clause.
+pub fn orderBy(q: sql.Query, orders: List<sql.Order>) -> Result<sql.Query, Error>
+
+/// Appends LIMIT and OFFSET.
+pub fn limitOffset(q: sql.Query, limit: Int, offset: Int) -> Result<sql.Query, Error>
+
+// ── Relationship queries ────────────────────────────────────────────────────
+
+/// Fetches related rows for a HasOne / HasMany relationship.
+///
+/// Given the parent row's primary key value, returns all child rows whose
+/// foreign key matches.
+pub fn related(pool: driver.Pool, parentModel: String, relation: RelationDef, parentPk: Int) -> Result<List<Map<String, db.Cell>>, Error>
+
+/// Eager-loads a single relationship for all parent rows at once.
+///
+/// Returns a map of parent PK → list of related child rows.
+pub fn eagerLoad(pool: driver.Pool, parentModel: String, relation: RelationDef, parentPks: List<Int>) -> Result<Map<Int, List<Map<String, db.Cell>>>, Error>
+
+// ── Transaction scoping ─────────────────────────────────────────────────────
+
+/// Executes a callback-like operation within a transaction.
+///
+/// callback takes a driver.Connection and returns Result<T, Error>.  If the
+/// callback returns an error the transaction is rolled back; otherwise
+/// it is committed.
+pub fn withTx(pool: driver.Pool, callback: fn(driver.Connection) -> Result<Map<String, db.Cell>, Error>) -> Result<Map<String, db.Cell>, Error>
+
+/// Executes a series of operations within a transaction.
+///
+/// Each query is executed in order.  If any query fails the transaction
+/// is rolled back.
+pub fn txExec(pool: driver.Pool, queries: List<sql.Query>) -> Result<List<db.ExecResult>, Error>

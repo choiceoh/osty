@@ -1,0 +1,77 @@
+// std.gql.client — GraphQL client runtime stubs.
+//
+// This module provides body-less runtime primitives for executing
+// GraphQL operations (queries, mutations, subscriptions) against
+// remote endpoints. The pure-Osty document/request builders live in
+// std.graphql; this module owns the HTTP transport layer.
+//
+// Runtime backends provide the actual HTTP + WebSocket transport
+// behind these stubs.
+
+use std.error
+use std.graphql
+use std.http
+
+/// Execute a GraphQL query or mutation against the given endpoint.
+/// The request is serialised via graphql.encode() and sent as an
+/// HTTP POST with Content-Type: application/json.
+pub fn execute(endpoint: String, request: graphql.Request) -> Result<http.Response, Error>
+
+/// Execute a GraphQL query or mutation with additional HTTP headers
+/// (e.g. authentication tokens, custom headers).
+pub fn executeWithHeaders(endpoint: String, request: graphql.Request, headers: http.Headers) -> Result<http.Response, Error>
+
+/// Execute a GraphQL query and extract the "data" section of the
+/// response as a raw JSON string. Returns an error if the status is
+/// not 2xx or the response body is malformed.
+///
+/// Runtime stub.
+pub fn executeJson(endpoint: String, request: graphql.Request) -> Result<String, Error>
+
+/// Convenience: build and execute a query from a selection set string.
+/// Equivalent to calling graphql.query() then execute().
+///
+/// Runtime stub.
+pub fn query(endpoint: String, selectionSet: String) -> Result<http.Response, Error>
+
+/// Convenience: build and execute a mutation from an operation name
+/// and selection set string.
+///
+/// Runtime stub.
+pub fn mutate(endpoint: String, name: String, selectionSet: String) -> Result<http.Response, Error>
+
+/// Subscribe to a GraphQL subscription via WebSocket transport
+/// (graphql-ws or subscriptions-transport-ws protocol).
+/// Returns a channel-like event stream that yields GraphQL response
+/// bodies as strings until the subscription completes or errors.
+///
+/// This is a runtime-level primitive; the backend manages the
+/// WebSocket handshake, protocol negotiation, and keep-alive.
+pub struct Subscription {
+    pub handle: Int,
+    pub endpoint: String,
+    pub query: String,
+}
+
+/// Open a GraphQL subscription. The runtime establishes a WebSocket
+/// connection to the endpoint and sends the subscription document
+/// over the graphql-ws protocol.
+pub fn subscribe(endpoint: String, queryDoc: String) -> Result<Subscription, Error>
+
+/// Open a GraphQL subscription with initial operation name and
+/// variables JSON.
+pub fn subscribeWithVars(endpoint: String, queryDoc: String, operationName: String, variablesJson: String) -> Result<Subscription, Error>
+
+/// Receive the next event from an active subscription (blocking).
+/// Returns the raw JSON response body for each data or complete
+/// payload.
+pub fn nextEvent(sub: Subscription) -> Result<String?, Error>
+
+/// Close a subscription and its underlying WebSocket connection.
+pub fn unsubscribe(sub: Subscription) -> Result<(), Error>
+
+/// Parse a standard GraphQL JSON response envelope and return the
+/// "data" field. Returns an error if "errors" is present.
+///
+/// Runtime stub.
+pub fn parseData(responseBody: String) -> Result<String, Error>

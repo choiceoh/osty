@@ -1,0 +1,109 @@
+// std.ws.client — WebSocket client runtime stubs.
+//
+// This module provides body-less runtime primitives for creating and
+// managing WebSocket connections. The frame-level encoding/decoding
+// helpers live in std.websocket; this module owns the I/O layer.
+//
+// Runtime backends (LLVM native codegen, etc.) provide the actual
+// socket implementations behind these stubs.
+
+use std.error
+use std.websocket
+use std.bytes
+
+pub type Headers = Map<String, String>
+
+pub enum ConnectionState {
+    Connecting,
+    Open,
+    Closing,
+    Closed,
+
+    pub fn toString(self) -> String {
+        match self {
+            Connecting -> "connecting",
+            Open       -> "open",
+            Closing    -> "closing",
+            Closed     -> "closed",
+        }
+    }
+
+    pub fn isConnected(self) -> Bool {
+        match self {
+            Open | Closing -> true,
+            _              -> false,
+        }
+    }
+}
+
+pub struct Connection {
+    pub handle: Int,
+    pub state: ConnectionState,
+}
+
+/// Message event yielded by a WebSocket connection.
+pub enum MessageEvent {
+    Text(String),
+    Binary(bytes.Bytes),
+}
+
+/// Events that a subscription loop can yield.
+pub enum ConnectionEvent {
+    Message(MessageEvent),
+    Close { code: Int, reason: String },
+    Error(String),
+}
+
+/// Establish a WebSocket connection to the given URL.
+/// The runtime performs the HTTP upgrade handshake; on success the
+/// caller receives a Connection in the Open state.
+pub fn connect(url: String, headers: Headers = {:}) -> Result<Connection, Error>
+
+/// Send a pre-encoded frame over an open WebSocket connection.
+/// The caller should use websocket.encode() to produce the frame
+/// bytes and websocket.frame/text/binary/close/ping/pong helpers
+/// to build the Frame value.
+pub fn send(conn: Connection, frame: websocket.Frame) -> Result<(), Error>
+
+/// Convenience: encode a text string as a Text frame and send it.
+/// Runtime stub.
+pub fn sendText(conn: Connection, text: String) -> Result<(), Error>
+
+/// Convenience: encode binary data as a Binary frame and send it.
+/// Runtime stub.
+pub fn sendBinary(conn: Connection, data: bytes.Bytes) -> Result<(), Error>
+
+/// Receive the next frame from a WebSocket connection (blocking).
+/// Returns the raw Frame; use websocket.textPayload() to extract
+/// text from Text frames.
+pub fn receive(conn: Connection) -> Result<websocket.Frame, Error>
+
+/// Convenience: receive and decode the next text message.
+/// Runtime stub.
+pub fn receiveText(conn: Connection) -> Result<String, Error>
+
+/// Initiate the WebSocket close handshake with the given status code
+/// and reason string. After this call the Connection transitions to
+/// the Closing state; the peer should respond with a Close frame.
+pub fn close(conn: Connection, code: Int = 1000, reason: String = "") -> Result<(), Error>
+
+/// Send a Ping frame with optional payload.
+pub fn ping(conn: Connection, data: bytes.Bytes) -> Result<(), Error>
+
+/// Send a Pong frame with optional payload (usually in response to a
+/// peer's Ping).
+pub fn pong(conn: Connection, data: bytes.Bytes) -> Result<(), Error>
+
+/// Returns true when the connection is in the Open or Closing state.
+pub fn isConnected(conn: Connection) -> Bool
+
+/// Returns the remote peer address as a string (host:port).
+pub fn remoteAddr(conn: Connection) -> Result<String, Error>
+
+/// Enter an event loop that yields ConnectionEvent values as they
+/// arrive. The loop exits when the connection closes or an error
+/// occurs.
+///
+/// This is a blocking runtime primitive; the caller runs the loop in
+/// a goroutine/fiber if concurrent processing is needed.
+pub fn eventLoop(conn: Connection) -> Result<ConnectionEvent, Error>

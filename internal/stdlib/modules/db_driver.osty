@@ -1,0 +1,177 @@
+// std.db.driver - database driver interface for runtime implementations
+//
+// This module defines the interface that runtime database drivers must implement.
+// It provides a contract for opening connections, executing queries,
+// and managing transactions.
+//
+// Drivers are expected to be implemented in native code (Go, Rust, etc.)
+// and exposed to Osty via FFI. This interface allows Osty code to
+// work with any database that implements this contract.
+
+use std.db
+use std.sql
+use std.error
+
+/// Driver is the interface that all database drivers must implement.
+/// It provides methods for opening connections and managing lifecycle.
+pub interface Driver {
+    /// Opens a new database connection using the provided configuration.
+    /// Returns a Connection handle or an error if the connection cannot be established.
+    fn open(self, config: db.Config) -> Result<Connection, Error>
+
+    /// Closes the driver and releases any resources.
+    /// After calling close, all connections obtained from this driver
+    /// should be considered invalid.
+    fn close(self) -> Result<(), Error>
+}
+
+/// Connection represents a single database connection.
+/// It provides methods for executing queries and managing transactions.
+pub interface Connection {
+    /// Executes a query that returns rows (SELECT, etc.)
+    /// Returns a ResultSet containing the columns and rows.
+    fn query(self, query: sql.Query) -> Result<db.ResultSet, Error>
+
+    /// Executes a query that does not return rows (INSERT, UPDATE, DELETE, etc.)
+    /// Returns an ExecResult with rows affected and last insert ID.
+    fn exec(self, query: sql.Query) -> Result<db.ExecResult, Error>
+
+    /// Begins a new transaction with the specified options.
+    /// Returns a Transaction handle that can be committed or rolled back.
+    fn beginTx(self, options: db.TxOptions) -> Result<Transaction, Error>
+
+    /// Closes the connection and releases it back to the pool or driver.
+    fn close(self) -> Result<(), Error>
+
+    /// Returns the underlying driver that created this connection.
+    fn driver(self) -> Driver
+}
+
+/// Transaction represents a database transaction.
+/// It provides the same query execution methods as Connection,
+/// but all operations are scoped to the transaction.
+pub interface Transaction {
+    /// Executes a query that returns rows within the transaction.
+    fn query(self, query: sql.Query) -> Result<db.ResultSet, Error>
+
+    /// Executes a query that does not return rows within the transaction.
+    fn exec(self, query: sql.Query) -> Result<db.ExecResult, Error>
+
+    /// Commits the transaction, making all changes permanent.
+    fn commit(self) -> Result<(), Error>
+
+    /// Rolls back the transaction, undoing all changes.
+    fn rollback(self) -> Result<(), Error>
+
+    /// Returns the underlying connection for this transaction.
+    fn connection(self) -> Connection
+}
+
+/// Pool represents a connection pool for managing multiple database connections.
+/// It provides methods for acquiring and releasing connections.
+pub interface Pool {
+    /// Acquires a connection from the pool.
+    /// Blocks until a connection is available or the timeout expires.
+    fn acquire(self) -> Result<Connection, Error>
+
+    /// Releases a connection back to the pool.
+    /// The connection should be in a valid state when released.
+    fn release(self, conn: Connection) -> Result<(), Error>
+
+    /// Closes all connections in the pool and releases resources.
+    fn close(self) -> Result<(), Error>
+
+    /// Returns the configuration used to create this pool.
+    fn config(self) -> db.Config
+
+    /// Returns the pool options used to create this pool.
+    fn options(self) -> db.PoolOptions
+}
+
+/// DriverFactory is a factory interface for creating drivers and pools.
+/// It allows the std.db module to create driver instances
+/// without knowing the concrete implementation.
+pub interface DriverFactory {
+    /// Creates a new driver instance.
+    fn createDriver(self) -> Result<Driver, Error>
+
+    /// Creates a new connection pool with the specified configuration and options.
+    fn createPool(self, config: db.Config, options: db.PoolOptions) -> Result<Pool, Error>
+
+    /// Returns the driver type this factory creates.
+    fn driverType(self) -> db.Driver
+}
+
+/// DriverRegistry is a registry for available database drivers.
+/// It allows registering and looking up drivers by name.
+pub struct DriverRegistry {
+    pub drivers: Map<String, DriverFactory>,
+}
+
+/// Creates a new empty driver registry.
+pub fn newDriverRegistry() -> DriverRegistry {
+    DriverRegistry {
+        drivers: {:},
+    }
+}
+
+/// Registers a driver factory with the given name.
+pub fn registerDriver(mut registry: DriverRegistry, name: String, factory: DriverFactory) -> Result<DriverRegistry, Error> {
+    if registry.drivers.contains(name) {
+        return Err(error.new("db.driver: driver {name} already registered"))
+    }
+    registry.drivers.insert(name, factory)
+    Ok(registry)
+}
+
+/// Looks up a driver factory by name.
+pub fn lookupDriver(registry: DriverRegistry, name: String) -> Result<DriverFactory, Error> {
+    match registry.drivers.get(name) {
+        Some(factory) -> Ok(factory),
+        None -> Err(error.new("db.driver: driver {name} not found")),
+    }
+}
+
+/// Returns a list of all registered driver names.
+pub fn registeredDrivers(registry: DriverRegistry) -> List<String> {
+    registry.drivers.keys().toList()
+}
+
+/// ConnectionOptions provides additional options for opening a connection.
+pub struct ConnectionOptions {
+    pub readOnly: Bool,
+    pub timeoutMs: Int,
+}
+
+/// Creates default connection options.
+pub fn defaultConnectionOptions() -> ConnectionOptions {
+    ConnectionOptions {
+        readOnly: false,
+        timeoutMs: 30000,
+    }
+}
+
+/// QueryOptions provides additional options for executing queries.
+pub struct QueryOptions {
+    pub timeoutMs: Int,
+}
+
+/// Creates default query options.
+pub fn defaultQueryOptions() -> QueryOptions {
+    QueryOptions {
+        timeoutMs: 30000,
+    }
+}
+
+/// IsolationLevel represents transaction isolation levels.
+/// This is a convenience alias for db.Isolation.
+pub type IsolationLevel = db.Isolation
+
+/// Returns the default isolation level for a driver.
+pub fn defaultIsolationLevel(driver: db.Driver) -> IsolationLevel {
+    match driver {
+        db.Sqlite   -> db.ReadCommitted,
+        db.Postgres -> db.ReadCommitted,
+        db.MySql    -> db.ReadCommitted,
+    }
+}
