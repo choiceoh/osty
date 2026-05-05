@@ -986,6 +986,12 @@ func (p *printer) printExprInner(e ast.Expr) {
 		p.write("'" + escapeForChar(n.Value) + "'")
 	case *ast.ByteLit:
 		p.write("b'" + escapeForByte(n.Value) + "'")
+	case *ast.BytesLit:
+		p.write("b\"")
+		for _, b := range []byte(n.Value) {
+			p.write(escapeForBytesLit(b))
+		}
+		p.write("\"")
 	case *ast.BoolLit:
 		if n.Value {
 			p.write("true")
