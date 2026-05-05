@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/osty/osty/internal/mir"
+	"github.com/osty/osty/internal/mirjson"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/toolchain"
 )
@@ -20,6 +22,15 @@ type Request struct {
 	Path    string        `json:"path,omitempty"`
 	Source  string        `json:"source,omitempty"`
 	Package *PackageInput `json:"package,omitempty"`
+	MIR     *MIRInput     `json:"mir,omitempty"`
+}
+
+type MIRInput struct {
+	PackageName string          `json:"packageName,omitempty"`
+	SourcePath  string          `json:"sourcePath,omitempty"`
+	Source      string          `json:"source,omitempty"`
+	Target      string          `json:"target,omitempty"`
+	Module      *mirjson.Module `json:"module,omitempty"`
 }
 
 type PackageInput struct {
@@ -97,6 +108,35 @@ func TryPackage(start, entryPath string, pkg *resolve.Package) ([]byte, bool, []
 		return nil, false, nil, err
 	}
 	return []byte(resp.LLVMIR), resp.Covered, warningErrors(resp.Warnings), nil
+}
+
+func TryMIR(start, packageName, sourcePath string, source []byte, module *mir.Module, target string) ([]byte, bool, []error, error) {
+	req, err := RequestFromMIR(packageName, sourcePath, source, module, target)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	resp, err := Run(start, req)
+	if err != nil {
+		return nil, false, nil, err
+	}
+	return []byte(resp.LLVMIR), resp.Covered, warningErrors(resp.Warnings), nil
+}
+
+func RequestFromMIR(packageName, sourcePath string, source []byte, module *mir.Module, target string) (Request, error) {
+	payload, err := mirjson.FromModule(module)
+	if err != nil {
+		return Request{}, fmt.Errorf("encode MIR for native llvmgen: %w", err)
+	}
+	return Request{
+		Path: sourcePath,
+		MIR: &MIRInput{
+			PackageName: packageName,
+			SourcePath:  sourcePath,
+			Source:      string(source),
+			Target:      target,
+			Module:      payload,
+		},
+	}, nil
 }
 
 func RequestFromPackage(entryPath string, pkg *resolve.Package) (Request, error) {

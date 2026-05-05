@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/osty/osty/internal/ir"
+	"github.com/osty/osty/internal/mir"
 	"github.com/osty/osty/internal/resolve"
 )
 
@@ -114,6 +116,48 @@ func TestTryPackageUsesManagedBinaryWhenEnvUnset(t *testing.T) {
 	if !req.Package.RuntimeCapability {
 		t.Fatal("runtime capability was not forwarded")
 	}
+}
+
+func TestRequestFromMIREncodesPayload(t *testing.T) {
+	sourcePath := "/tmp/mir_main.osty"
+	req, err := RequestFromMIR("main", sourcePath, []byte("fn main() -> Int { 7 }\n"), simpleReturnIntMIR(), "x86_64-unknown-linux-gnu")
+	if err != nil {
+		t.Fatalf("RequestFromMIR error: %v", err)
+	}
+	if req.Path != sourcePath {
+		t.Fatalf("request path = %q, want source path", req.Path)
+	}
+	if req.Package != nil || req.Source != "" {
+		t.Fatalf("request carried source/package path: %#v", req)
+	}
+	if req.MIR == nil || req.MIR.Module == nil {
+		t.Fatalf("request MIR payload missing: %#v", req.MIR)
+	}
+	if req.MIR.PackageName != "main" || req.MIR.Target != "x86_64-unknown-linux-gnu" {
+		t.Fatalf("MIR metadata = %#v", req.MIR)
+	}
+	if got := req.MIR.Module.Functions[0].Name; got != "main" {
+		t.Fatalf("MIR function = %q, want main", got)
+	}
+	if got := req.MIR.Module.Functions[0].Blocks[0].Instrs[0].Kind; got != "assign" {
+		t.Fatalf("MIR instr kind = %q, want assign", got)
+	}
+}
+
+func simpleReturnIntMIR() *mir.Module {
+	fn := &mir.Function{Name: "main", ReturnType: ir.TInt}
+	ret := fn.NewLocal("_return", ir.TInt, true, mir.Span{})
+	fn.ReturnLocal = ret
+	fn.Locals[ret].IsReturn = true
+	entry := fn.NewBlock(mir.Span{})
+	fn.Entry = entry
+	bb := fn.Block(entry)
+	bb.Append(&mir.AssignInstr{
+		Dest: mir.Place{Local: ret},
+		Src:  &mir.UseRV{Op: &mir.ConstOp{Const: &mir.IntConst{Value: 7, T: ir.TInt}, T: ir.TInt}},
+	})
+	bb.SetTerminator(&mir.ReturnTerm{})
+	return &mir.Module{Package: "main", Functions: []*mir.Function{fn}, Layouts: mir.NewLayoutTable()}
 }
 
 func buildFakeNativeLLVMGen(t *testing.T) string {

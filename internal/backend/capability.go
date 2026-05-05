@@ -256,19 +256,19 @@ func appendMIRLoweringCapabilities(rows []CapabilityRow, entry Entry) []Capabili
 
 func appendLLVMRouteCapabilities(rows []CapabilityRow, entry Entry, opts llvmgen.Options, features []string, emit EmitMode, includeNativeRoute bool) []CapabilityRow {
 	hirReady := entry.IR != nil
+	mirReady := entry.MIR != nil
 	if includeNativeRoute {
-		nativeReady := hirReady && useNativeOwnedLLVMIR(features, emit) && !hasInjectedStdlibBodies(entry.IR)
+		nativeReady := hirReady && mirReady && useNativeOwnedLLVMIR(features, emit) && !hasInjectedStdlibBodies(entry.IR)
 		rows = append(rows, CapabilityRow{
 			ID:              CapabilityNativeOwned,
 			Subject:         string(llvmDispatchNativeOwned),
 			HIRSupported:    hirReady,
-			MIRLowerable:    false,
+			MIRLowerable:    mirReady,
 			LLVMEmittable:   nativeReady,
 			FallbackAllowed: true,
 			Route:           string(llvmDispatchNativeOwned),
 		})
 	}
-	mirReady := entry.MIR != nil
 	rows = append(rows, CapabilityRow{
 		ID:                 CapabilityMIRDirect,
 		Subject:            string(llvmDispatchMIRDirect),

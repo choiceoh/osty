@@ -17,8 +17,9 @@
 //   - `unsupported-preflight`: capability preflight rejects backend gaps
 //     such as Go FFI or unknown runtime FFI before any concrete emitter is
 //     selected.
-//   - `native-owned`: the native-owned llvmgen slice gets the first chance
-//     when the feature set allows it and no injected stdlib bodies are present.
+//   - `native-owned`: the managed native LLVM generator gets the first chance
+//     with a MIR payload when the feature set allows it, MIR is available, and
+//     no injected stdlib bodies are present.
 //   - `mir-direct`: every remaining normal backend request routes through
 //     MIR-direct emission; MIR route blockers are read from the same
 //     capability matrix before emission.

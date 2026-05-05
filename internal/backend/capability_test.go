@@ -257,8 +257,8 @@ func TestLLVMCapabilityMatrixRecordsNativeOwnedRoute(t *testing.T) {
 	if !ok {
 		t.Fatal("native-owned row missing")
 	}
-	if !row.HIRSupported || row.MIRLowerable || !row.LLVMEmittable || !row.FallbackAllowed {
-		t.Fatalf("native-owned row = %+v, want HIR-only route with fallback allowed", row)
+	if !row.HIRSupported || !row.MIRLowerable || !row.LLVMEmittable || !row.FallbackAllowed {
+		t.Fatalf("native-owned row = %+v, want HIR+MIR route with fallback allowed", row)
 	}
 	if !matrix.CanRoute(llvmDispatchNativeOwned) {
 		t.Fatal("CanRoute(native-owned) = false, want true")
