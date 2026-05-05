@@ -42,6 +42,9 @@ The following have special meaning in context but are not reserved words:
 - `true`, `false` — `Bool` constants from prelude
 - `Some`, `None` — `Option` variants from prelude
 - `Ok`, `Err` — `Result` variants from prelude
+- `loop` — `loop { ... }` expression head (§4.4.1)
+- `const` — `const fn` declaration prefix (§3.1.1)
+- `by` — range step marker in range expressions (§4.4)
 
 ### 1.4 Identifiers
 
@@ -221,7 +224,10 @@ Other:       ?    // Result/Option propagation; also Option<T> sugar in type pos
 ```
 
 Increment (`++`) and decrement (`--`) are not provided.
-User-defined operator overloading is not provided.
+User-defined operator overloading is limited to the explicit `#[op(+)]`,
+`#[op(-)]`, `#[op(*)]`, `#[op(/)]`, and `#[op(%)]` binary forms plus
+unary `#[op(-)]` (§3.8, §14.2). All other operators remain primitive-
+only or interface-defined and cannot be overloaded.
 
 **Punctuation and contextual tokens.** The following are not operators
 but serve as syntactic punctuation or context-specific markers:

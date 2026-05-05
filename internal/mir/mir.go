@@ -1148,6 +1148,13 @@ type ByteConst struct {
 func (*ByteConst) constNode() {}
 func (*ByteConst) Type() Type { return TByte }
 
+type BytesConst struct {
+	Value string
+}
+
+func (*BytesConst) constNode() {}
+func (*BytesConst) Type() Type { return TBytes }
+
 // UnitConst is the `()` zero-value.
 type UnitConst struct{}
 

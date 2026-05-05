@@ -1008,6 +1008,7 @@ fn elabForIterableElemTy(cx: ElabCx, ty: Int, start: Int, end: Int) -> Int {
         }
     }
     if tyIsNamedHead(tys, resolved, "List")
+        || tyIsNamedHead(tys, resolved, "Set")
         || tyIsNamedHead(tys, resolved, "Range")
         || tyIsNamedHead(tys, resolved, "Chan")
         || tyIsNamedHead(tys, resolved, "Channel")
@@ -2829,6 +2830,14 @@ fn elabInferIndex(cx: ElabCx, node: AstNode) -> ElabResult {
             let coreIdx = coreIndex(cx.core, recv.node, idx.node, valTy, node.start, node.end)
             return ElabResult { node: coreIdx, ty: valTy }
         }
+    }
+    // Bytes[Int] → Byte
+    if tyIsPrim(tys, recvTy, PkBytes) {
+        if !(checkIsAssignable(cx.env, tInt(tys), idx.ty)) {
+            cx.env.local.diagnostics.push(diagMismatch("Int", tyToString(tys, idx.ty), node.start, node.end))
+        }
+        let coreIdx = coreIndex(cx.core, recv.node, idx.node, tByte(tys), node.start, node.end)
+        return ElabResult { node: coreIdx, ty: tByte(tys) }
     }
     // String[Int] → Char, String[Range<Int>] → String (slice)
     if tyIsPrim(tys, recvTy, PkString) {

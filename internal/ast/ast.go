@@ -889,6 +889,17 @@ func (*ByteLit) exprNode()        {}
 func (l *ByteLit) Pos() token.Pos { return l.PosV }
 func (l *ByteLit) End() token.Pos { return l.EndV }
 
+type BytesLit struct {
+	ID    NodeID
+	PosV  token.Pos
+	EndV  token.Pos
+	Value string
+}
+
+func (*BytesLit) exprNode()        {}
+func (l *BytesLit) Pos() token.Pos { return l.PosV }
+func (l *BytesLit) End() token.Pos { return l.EndV }
+
 // StringLit is a string literal, possibly interpolated.
 //
 //	"hello"        -> Parts: [Lit "hello"]

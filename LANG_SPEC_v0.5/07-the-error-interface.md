@@ -57,7 +57,8 @@ fn handle(err: Error) -> Result<(), Error> {
 }
 ```
 
-`Error.downcast::<T>()` returns `T?`.
+`Error.downcast::<T>()` returns `T?`. The postfix form `err as? T` is a
+shortcut for the same operation and is valid only on `Error` values.
 
 **Runtime mechanism.** Although Osty's interface satisfaction is
 otherwise structural (§2.6), values that flow through the `Error`

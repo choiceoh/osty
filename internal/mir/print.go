@@ -405,6 +405,8 @@ func constString(c Const) string {
 		return fmt.Sprintf("const '%c'", x.Value)
 	case *ByteConst:
 		return fmt.Sprintf("const 0x%02x", x.Value)
+	case *BytesConst:
+		return fmt.Sprintf("const b\"%s\"", x.Value)
 	case *UnitConst:
 		return "const ()"
 	case *NullConst:

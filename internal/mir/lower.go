@@ -2620,6 +2620,8 @@ func (bs *bodyState) lowerExprAsOperand(e ir.Expr) Operand {
 		return &ConstOp{Const: &CharConst{Value: x.Value}, T: TChar}
 	case *ir.ByteLit:
 		return &ConstOp{Const: &ByteConst{Value: x.Value}, T: TByte}
+	case *ir.BytesLit:
+		return bs.lowerBytesLitAsOperand(x)
 	case *ir.UnitLit:
 		return &ConstOp{Const: &UnitConst{}, T: TUnit}
 	case *ir.StringLit:
@@ -3938,6 +3940,10 @@ func (bs *bodyState) lowerStringLit(s *ir.StringLit) Operand {
 		SpanV: s.SpanV,
 	})
 	return &CopyOp{Place: Place{Local: tmp}, T: TString}
+}
+
+func (bs *bodyState) lowerBytesLitAsOperand(x *ir.BytesLit) Operand {
+	return &ConstOp{Const: &BytesConst{Value: x.Value}, T: TBytes}
 }
 
 func (bs *bodyState) lowerStringInterpolationOperand(e ir.Expr) Operand {

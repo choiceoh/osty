@@ -35,7 +35,7 @@ from the implementing `iter` return type.
 | `List<T>` | `T` |
 | `Set<T>` | `T` |
 | `Map<K, V>` | `(K, V)` |
-| `Range` (`a..b`, `a..=b`) | `Int` |
+| `Range` (`a..b`, `a..=b`, optional `by step`) | `Int` |
 | `Channel<T>` (§8.5) | `T` (loop ends when channel is closed and drained) |
 | `Iter<T>` (§10.7) | `T` |
 | `String.chars()` | `Char` |

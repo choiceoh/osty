@@ -3340,6 +3340,20 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         paramNames: [], paramTys: [],
         generics: [], genericBounds: [],
     })
+    for name in ["isDigit", "isAlpha", "isAlphanumeric", "isWhitespace", "isUpper", "isLower"] {
+        checkRegisterFn(env, CheckFnSig {
+            name, owner: "Char", receiverTy: tChar(tys), hasReceiver: true, retTy: tBool(tys),
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+    }
+    for name in ["toUpper", "toLower"] {
+        checkRegisterFn(env, CheckFnSig {
+            name, owner: "Char", receiverTy: tChar(tys), hasReceiver: true, retTy: tChar(tys),
+            paramNames: [], paramTys: [],
+            generics: [], genericBounds: [],
+        })
+    }
     checkRegisterFn(env, CheckFnSig {
         name: "toInt", owner: "Byte", receiverTy: tByte(tys), hasReceiver: true, retTy: tInt(tys),
         paramNames: [], paramTys: [],

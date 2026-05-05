@@ -1,3 +1,5 @@
+use std.process
+
 // std.collections — List<T>, Map<K, V>, Set<T>.
 //
 // These names are already auto-imported via the prelude, so user code
@@ -164,7 +166,7 @@ pub struct List<T> {
     /// `size <= 0` aborts.
     pub fn chunked(self, size: Int) -> List<List<T>> {
         if size <= 0 {
-            abort("List.chunked: size must be positive, got {size}")
+            process.abort("List.chunked: size must be positive, got {size}")
         }
         let mut out: List<List<T>> = []
         let mut bucket: List<T> = []
@@ -187,10 +189,10 @@ pub struct List<T> {
     /// result is empty.
     pub fn windowed(self, size: Int, step: Int) -> List<List<T>> {
         if size <= 0 {
-            abort("List.windowed: size must be positive, got {size}")
+            process.abort("List.windowed: size must be positive, got {size}")
         }
         if step <= 0 {
-            abort("List.windowed: step must be positive, got {step}")
+            process.abort("List.windowed: step must be positive, got {step}")
         }
         let mut out: List<List<T>> = []
         let n = self.len()

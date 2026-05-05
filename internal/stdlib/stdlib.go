@@ -120,6 +120,7 @@ var builtinTypeSurfaces = []BuiltinTypeSurface{
 	{Name: "List", Module: "collections", Kind: BuiltinTypeStruct, GenericParams: []string{"T"}, Injectable: true},
 	{Name: "Map", Module: "collections", Kind: BuiltinTypeStruct, GenericParams: []string{"K", "V"}, Injectable: true},
 	{Name: "Set", Module: "collections", Kind: BuiltinTypeStruct, GenericParams: []string{"T"}, Injectable: true},
+	{Name: "Iter", Module: "iter", Kind: BuiltinTypeStruct, GenericParams: []string{"T"}, Injectable: true},
 	{Name: "Option", Module: "option", Kind: BuiltinTypeEnum, GenericParams: []string{"T"}, Injectable: true},
 	{Name: "Result", Module: "result", Kind: BuiltinTypeEnum, GenericParams: []string{"T", "E"}, Injectable: true},
 	{Name: "Error", Module: "error", Kind: BuiltinTypeInterface},

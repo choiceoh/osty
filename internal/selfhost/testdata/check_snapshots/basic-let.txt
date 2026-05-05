@@ -5,6 +5,6 @@ typedNodes
 bindings
   id=binding:11bbeb1b4560 nodeKey=node:7e55f7d5861d8dd typeKey=type:0cbe92b642f4e2f bindingId=0 node=0 nodeId=0 name=answer mutable=false typeId=2 span=20:26 type=Int
 symbols
-  id=symbol:b682ed2ca7f2d nodeKey=node:b61dae7153803e3 typeKey=type:b4f942e1ed0777f symbolId=0 node=5 nodeId=5 kind=fn name=main owner= typeId=133 span=0:38 type=fn() -> ()
+  id=symbol:b682ed2ca7f2d nodeKey=node:b61dae7153803e3 typeKey=type:b4f942e1ed0777f symbolId=0 node=5 nodeId=5 kind=fn name=main owner= typeId=135 span=0:38 type=fn() -> ()
 instantiations
 diagnostics

@@ -2,7 +2,10 @@
 
 Test files use the `_test.osty` suffix and live alongside code in the
 same package. Functions whose names begin with lowercase `test` and
-take no arguments are discovered and run by `osty test`.
+take no arguments are discovered and run by `osty test`. A top-level
+zero-arity function annotated with `#[test]` is also discovered, even in
+a production source file; annotated test functions are excluded from
+production builds.
 
 ```osty
 // auth/login_test.osty

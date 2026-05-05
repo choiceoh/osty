@@ -223,7 +223,7 @@ func (a *captureAnalyzer) expr(e Expr) {
 	switch e := e.(type) {
 	case nil:
 		return
-	case *IntLit, *FloatLit, *BoolLit, *CharLit, *ByteLit, *UnitLit, *ErrorExpr:
+	case *IntLit, *FloatLit, *BoolLit, *CharLit, *ByteLit, *BytesLit, *UnitLit, *ErrorExpr:
 		return
 	case *StringLit:
 		for _, p := range e.Parts {
