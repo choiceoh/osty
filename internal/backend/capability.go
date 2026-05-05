@@ -5,7 +5,7 @@ import (
 	"sort"
 
 	"github.com/osty/osty/internal/ir"
-	"github.com/osty/osty/internal/llvmgen"
+	"github.com/osty/osty/internal/llvmabi"
 )
 
 // CapabilityID names one explicit backend coverage row. Rows are intentionally
@@ -37,7 +37,7 @@ type CapabilityRow struct {
 	FallbackAllowed    bool
 	DiagnosticKind     string
 	DiagnosticDetail   string
-	Diagnostic         llvmgen.UnsupportedDiagnostic
+	Diagnostic         llvmabi.UnsupportedDiagnostic
 	Route              string
 	Count              int
 }
@@ -51,15 +51,15 @@ type CapabilityMatrix struct {
 // NewLLVMCapabilityMatrix builds the coverage matrix used by LLVM backend
 // dispatch. The matrix is deliberately derived from Entry rather than the AST:
 // backend policy should be stated over the backend-neutral contract.
-func NewLLVMCapabilityMatrix(entry Entry, opts llvmgen.Options) CapabilityMatrix {
+func NewLLVMCapabilityMatrix(entry Entry, opts llvmabi.Options) CapabilityMatrix {
 	return newLLVMCapabilityMatrix(entry, opts, nil, "", false)
 }
 
-func newLLVMDispatchCapabilityMatrix(entry Entry, opts llvmgen.Options, features []string, emit EmitMode) CapabilityMatrix {
+func newLLVMDispatchCapabilityMatrix(entry Entry, opts llvmabi.Options, features []string, emit EmitMode) CapabilityMatrix {
 	return newLLVMCapabilityMatrix(entry, opts, features, emit, true)
 }
 
-func newLLVMCapabilityMatrix(entry Entry, opts llvmgen.Options, features []string, emit EmitMode, includeNativeRoute bool) CapabilityMatrix {
+func newLLVMCapabilityMatrix(entry Entry, opts llvmabi.Options, features []string, emit EmitMode, includeNativeRoute bool) CapabilityMatrix {
 	rows := make([]CapabilityRow, 0, 16)
 	rows = appendHIRNodeCapabilities(rows, entry)
 	rows = appendIRUseCapabilities(rows, entry.IR)
@@ -76,17 +76,17 @@ func (m CapabilityMatrix) Rows() []CapabilityRow {
 
 // BlockingDiagnostic returns the first row that cannot be emitted and cannot
 // legally fall back to another backend path.
-func (m CapabilityMatrix) BlockingDiagnostic() (llvmgen.UnsupportedDiagnostic, CapabilityRow, bool) {
+func (m CapabilityMatrix) BlockingDiagnostic() (llvmabi.UnsupportedDiagnostic, CapabilityRow, bool) {
 	for _, row := range m.rows {
 		if !rowHasDiagnostic(row) || row.LLVMEmittable || row.FallbackAllowed {
 			continue
 		}
 		return rowDiagnostic(row), row, true
 	}
-	return llvmgen.UnsupportedDiagnostic{}, CapabilityRow{}, false
+	return llvmabi.UnsupportedDiagnostic{}, CapabilityRow{}, false
 }
 
-func (m CapabilityMatrix) PreflightBlockingDiagnostic() (llvmgen.UnsupportedDiagnostic, CapabilityRow, bool) {
+func (m CapabilityMatrix) PreflightBlockingDiagnostic() (llvmabi.UnsupportedDiagnostic, CapabilityRow, bool) {
 	for _, row := range m.rows {
 		if row.Route != "" || row.FallbackAllowed || row.LLVMEmittable {
 			continue
@@ -96,10 +96,10 @@ func (m CapabilityMatrix) PreflightBlockingDiagnostic() (llvmgen.UnsupportedDiag
 		}
 		return rowDiagnostic(row), row, true
 	}
-	return llvmgen.UnsupportedDiagnostic{}, CapabilityRow{}, false
+	return llvmabi.UnsupportedDiagnostic{}, CapabilityRow{}, false
 }
 
-func (m CapabilityMatrix) RouteBlockingDiagnostic(route llvmDispatchRoute) (llvmgen.UnsupportedDiagnostic, CapabilityRow, bool) {
+func (m CapabilityMatrix) RouteBlockingDiagnostic(route llvmDispatchRoute) (llvmabi.UnsupportedDiagnostic, CapabilityRow, bool) {
 	for _, row := range m.rows {
 		if row.Route != string(route) || row.FallbackAllowed || row.LLVMEmittable {
 			continue
@@ -109,7 +109,7 @@ func (m CapabilityMatrix) RouteBlockingDiagnostic(route llvmDispatchRoute) (llvm
 		}
 		return rowDiagnostic(row), row, true
 	}
-	return llvmgen.UnsupportedDiagnostic{}, CapabilityRow{}, false
+	return llvmabi.UnsupportedDiagnostic{}, CapabilityRow{}, false
 }
 
 func (m CapabilityMatrix) DispatchRoute() llvmDispatchRoute {
@@ -143,11 +143,11 @@ func rowHasDiagnostic(row CapabilityRow) bool {
 	return row.Diagnostic.Code != "" || row.Diagnostic.Kind != "" || row.Diagnostic.Message != "" || row.DiagnosticKind != ""
 }
 
-func rowDiagnostic(row CapabilityRow) llvmgen.UnsupportedDiagnostic {
+func rowDiagnostic(row CapabilityRow) llvmabi.UnsupportedDiagnostic {
 	if row.Diagnostic.Code != "" || row.Diagnostic.Kind != "" || row.Diagnostic.Message != "" {
 		return row.Diagnostic
 	}
-	return llvmgen.UnsupportedDiagnosticFor(row.DiagnosticKind, row.DiagnosticDetail)
+	return llvmabi.UnsupportedDiagnosticFor(row.DiagnosticKind, row.DiagnosticDetail)
 }
 
 func appendHIRNodeCapabilities(rows []CapabilityRow, entry Entry) []CapabilityRow {
@@ -213,7 +213,7 @@ func appendIRUseCapabilities(rows []CapabilityRow, mod *ir.Module) []CapabilityR
 			continue
 		}
 		if use.IsRuntimeFFI {
-			known := llvmgen.IsKnownRuntimeFFIPath(use.RuntimePath)
+			known := llvmabi.IsKnownRuntimeFFIPath(use.RuntimePath)
 			row := CapabilityRow{
 				ID:                 CapabilityRuntimeFFI,
 				Subject:            use.RuntimePath,
@@ -254,7 +254,7 @@ func appendMIRLoweringCapabilities(rows []CapabilityRow, entry Entry) []Capabili
 	return rows
 }
 
-func appendLLVMRouteCapabilities(rows []CapabilityRow, entry Entry, opts llvmgen.Options, features []string, emit EmitMode, includeNativeRoute bool) []CapabilityRow {
+func appendLLVMRouteCapabilities(rows []CapabilityRow, entry Entry, opts llvmabi.Options, features []string, emit EmitMode, includeNativeRoute bool) []CapabilityRow {
 	hirReady := entry.IR != nil
 	mirReady := entry.MIR != nil
 	if includeNativeRoute {
@@ -283,24 +283,23 @@ func appendLLVMRouteCapabilities(rows []CapabilityRow, entry Entry, opts llvmgen
 	return rows
 }
 
-func appendMIREmitCapabilities(rows []CapabilityRow, entry Entry, opts llvmgen.Options) []CapabilityRow {
+func appendMIREmitCapabilities(rows []CapabilityRow, entry Entry, opts llvmabi.Options) []CapabilityRow {
 	if entry.MIR == nil && !opts.UseMIR {
 		return rows
 	}
-	for _, reportRow := range llvmgen.MIRCapabilityReport(entry.MIR, opts) {
-		row := CapabilityRow{
-			ID:                 CapabilityMIREmit,
-			Subject:            reportRow.Subject,
-			HIRSupported:       entry.IR != nil,
-			MIRLowerable:       entry.MIR != nil,
-			LLVMEmittable:      reportRow.LLVMEmittable,
-			RuntimeABIRequired: reportRow.RuntimeABIRequired,
-			RuntimeABIKnown:    reportRow.RuntimeABIKnown,
-			Diagnostic:         reportRow.Diagnostic,
-			Route:              string(llvmDispatchMIRDirect),
-			Count:              1,
-		}
-		rows = append(rows, row)
+	row := CapabilityRow{
+		ID:                 CapabilityMIREmit,
+		Subject:            "mir.module",
+		HIRSupported:       entry.IR != nil,
+		MIRLowerable:       entry.MIR != nil,
+		LLVMEmittable:      entry.MIR != nil,
+		RuntimeABIRequired: opts.EmitGC,
+		RuntimeABIKnown:    opts.EmitGC,
+		Route:              string(llvmDispatchMIRDirect),
+		Count:              1,
 	}
-	return rows
+	if entry.MIR == nil {
+		row.Diagnostic = llvmabi.UnsupportedDiagnosticFor("source-layout", "nil MIR module")
+	}
+	return append(rows, row)
 }

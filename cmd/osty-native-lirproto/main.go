@@ -82,7 +82,7 @@ func lower(req nativelirproto.Request) (nativelirproto.Response, error) {
 		// when the self-host artifact isn't built yet.
 		return nativelirproto.Response{Declined: true, Error: err.Error()}, nil
 	}
-	sourcePath, cleanup, err := stageSource(req)
+	sourcePath, cleanup, err := stageInput(req)
 	if cleanup != nil {
 		defer cleanup()
 	}
@@ -94,7 +94,11 @@ func lower(req nativelirproto.Request) (nativelirproto.Response, error) {
 	if pkgName == "" {
 		pkgName = "main"
 	}
-	args := []string{"lir-proto-lower", sourcePath, "--package-name=" + pkgName}
+	command := "lir-proto-lower"
+	if req.Source == "" && req.MIR != nil {
+		command = "lir-proto-lower-mir-json"
+	}
+	args := []string{command, sourcePath, "--package-name=" + pkgName}
 	if req.Target != "" {
 		args = append(args, "--target="+req.Target)
 	}
@@ -145,7 +149,7 @@ func resolveOstySelfBin() (string, error) {
 // is preserved as the basename when set (callers expect the file
 // name to round-trip through the staged copy for diagnostic
 // `source_filename` lines).
-func stageSource(req nativelirproto.Request) (string, func(), error) {
+func stageInput(req nativelirproto.Request) (string, func(), error) {
 	root, err := os.MkdirTemp("", "osty-native-lirproto-*")
 	if err != nil {
 		return "", nil, err
@@ -156,8 +160,17 @@ func stageSource(req nativelirproto.Request) (string, func(), error) {
 	if req.SourcePath != "" {
 		name = filepath.Base(req.SourcePath)
 	}
+	data := []byte(req.Source)
+	if req.Source == "" && req.MIR != nil {
+		name = strings.TrimSuffix(name, filepath.Ext(name)) + ".mir.json"
+		encoded, err := json.Marshal(req.MIR)
+		if err != nil {
+			return "", cleanup, err
+		}
+		data = encoded
+	}
 	stagedPath := filepath.Join(root, name)
-	if err := os.WriteFile(stagedPath, []byte(req.Source), 0o644); err != nil {
+	if err := os.WriteFile(stagedPath, data, 0o644); err != nil {
 		return "", cleanup, err
 	}
 	return stagedPath, cleanup, nil

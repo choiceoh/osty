@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/osty/osty/internal/llvmgen"
+	"github.com/osty/osty/internal/llvmabi"
 )
 
 // lirProtoGateSrc is a small main that compiles cleanly through
@@ -27,11 +27,11 @@ const lirProtoGateSrc = `fn main() {
 // wired.
 func TestLLVMDispatchAppendsLIRProtoFallbackWarning(t *testing.T) {
 	req := newBackendRequest(t, EmitLLVMIR, lirProtoGateSrc)
-	t.Setenv(llvmgen.LIRProtoEnvVar, "1")
+	t.Setenv(llvmabi.LIRProtoEnvVar, "1")
 	_, warnings, _ := generateLLVMIR(req.Entry, "arm64-apple-macosx", req.Features, req.Emit)
 	found := false
 	for _, w := range warnings {
-		if errors.Is(w, llvmgen.ErrLIRProtoNotWired) {
+		if errors.Is(w, llvmabi.ErrLIRProtoNotWired) {
 			found = true
 			break
 		}
@@ -47,10 +47,10 @@ func TestLLVMDispatchAppendsLIRProtoFallbackWarning(t *testing.T) {
 // silently make every backend run noisy.
 func TestLLVMDispatchSkipsLIRProtoWarningWhenGateOff(t *testing.T) {
 	req := newBackendRequest(t, EmitLLVMIR, lirProtoGateSrc)
-	t.Setenv(llvmgen.LIRProtoEnvVar, "")
+	t.Setenv(llvmabi.LIRProtoEnvVar, "")
 	_, warnings, _ := generateLLVMIR(req.Entry, req.Layout.Target, req.Features, req.Emit)
 	for _, w := range warnings {
-		if errors.Is(w, llvmgen.ErrLIRProtoNotWired) {
+		if errors.Is(w, llvmabi.ErrLIRProtoNotWired) {
 			t.Fatalf("warnings unexpectedly include ErrLIRProtoNotWired with gate off: %s", joinLirProtoWarnings(warnings))
 		}
 	}

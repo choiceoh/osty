@@ -19,16 +19,9 @@ var (
 // nativeLIRProtoSourceInputs lists the directories whose mtimes
 // trigger a rebuild of the managed `osty-native-lirproto` artifact.
 // Same shape as `nativeLLVMGenSourceInputs` — the binary's body
-// today is a thin Go wrapper around the production lower → emit
-// chain (so any change in `internal/llvmgen` or `internal/mir`
-// invalidates the cached managed binary), and Phase-7's eventual
-// Osty-side rewire will live in `cmd/osty-native-lirproto` plus a
-// future `internal/lirproto*` package whose path lands here too.
+// is the managed wrapper around the Osty-owned LIR Proto subprocess boundary.
 var nativeLIRProtoSourceInputs = []string{
 	"cmd/osty-native-lirproto",
-	"internal/backend",
-	"internal/llvmgen",
-	"internal/mir",
 	"internal/nativelirproto",
 	"go.mod",
 	"go.sum",

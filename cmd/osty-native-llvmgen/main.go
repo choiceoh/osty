@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,8 +9,6 @@ import (
 
 	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/check"
-	"github.com/osty/osty/internal/llvmgen"
-	"github.com/osty/osty/internal/mirjson"
 	"github.com/osty/osty/internal/nativelirproto"
 	"github.com/osty/osty/internal/nativellvmgen"
 	"github.com/osty/osty/internal/resolve"
@@ -69,45 +66,30 @@ func runMIRRequest(req llvmgenRequest, stdout io.Writer) error {
 	if req.MIR.Module == nil {
 		return fmt.Errorf("decode MIR llvmgen request: missing module")
 	}
-	mod, err := mirjson.ToModule(req.MIR.Module)
-	if err != nil {
-		return fmt.Errorf("decode MIR llvmgen request: %w", err)
-	}
 	warnings := []string(nil)
 	if ir, lirWarnings, ok := tryMIRRequestViaLIRProto(req); ok {
 		return json.NewEncoder(stdout).Encode(llvmgenResponse{Covered: true, LLVMIR: string(ir), Warnings: lirWarnings})
 	} else {
 		warnings = append(warnings, lirWarnings...)
 	}
-	ir, err := llvmgen.GenerateFromMIR(mod, llvmgen.Options{
-		PackageName: req.MIR.PackageName,
-		SourcePath:  req.MIR.SourcePath,
-		Source:      []byte(req.MIR.Source),
-		Target:      req.MIR.Target,
-		EmitGC:      true,
-	})
-	resp := llvmgenResponse{Covered: err == nil}
-	if err != nil {
-		if errors.Is(err, llvmgen.ErrUnsupported) {
-			resp.Warnings = append(warnings, err.Error())
-			return json.NewEncoder(stdout).Encode(resp)
-		}
-		return fmt.Errorf("emit MIR llvm-ir: %w", err)
-	}
-	resp.LLVMIR = string(ir)
-	resp.Warnings = warnings
+	resp := llvmgenResponse{Covered: false, Warnings: append(warnings, "MIR payload requires the Osty-owned LIR Proto backend; Go MIR emitter fallback has been removed")}
 	return json.NewEncoder(stdout).Encode(resp)
 }
 
 func tryMIRRequestViaLIRProto(req llvmgenRequest) ([]byte, []string, bool) {
-	if !llvmgen.LIRProtoSelected() || req.MIR == nil || req.MIR.Source == "" {
+	if req.MIR == nil {
+		return nil, nil, false
+	}
+	source := req.MIR.Source
+	if source == "" {
 		return nil, nil, false
 	}
 	resp, err := nativelirproto.Run(req.MIR.SourcePath, nativelirproto.Request{
 		PackageName: req.MIR.PackageName,
 		SourcePath:  req.MIR.SourcePath,
-		Source:      req.MIR.Source,
+		Source:      source,
 		Target:      req.MIR.Target,
+		MIR:         req.MIR.Module,
 	})
 	if err != nil {
 		return nil, []string{err.Error()}, false

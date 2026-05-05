@@ -76,7 +76,7 @@ func TestEnsureNativeLLVMGenRebuildsWhenSourcesAreNewer(t *testing.T) {
 	for _, rel := range []string{
 		"cmd/osty-native-llvmgen/main.go",
 		"internal/backend/llvm.go",
-		"internal/llvmgen/generator.go",
+		"internal/llvmabi/api.go",
 		"internal/nativellvmgen/exec.go",
 		"go.mod",
 	} {

@@ -351,23 +351,23 @@ func TestEmitLLVMIRTextMatchesBackendArtifactOutput(t *testing.T) {
 `)
 	req.Features = []string{"mir-backend"}
 
-	got, warnings, err := EmitLLVMIRText(req.Entry, "", req.Features)
-	if err != nil {
-		t.Fatalf("EmitLLVMIRText returned error: %v", err)
+	got, _, directErr := EmitLLVMIRText(req.Entry, "", req.Features)
+	if directErr == nil {
+		t.Fatal("EmitLLVMIRText should return error with Go MIR emitter removed")
 	}
 	result, err := backend.Emit(context.Background(), req)
-	if err != nil {
-		t.Fatalf("Emit returned error: %v", err)
+	if err == nil {
+		t.Fatal("backend.Emit should return error with Go MIR emitter removed")
 	}
 	want, readErr := os.ReadFile(result.Artifacts.LLVMIR)
 	if readErr != nil {
 		t.Fatalf("ReadFile(%q): %v", result.Artifacts.LLVMIR, readErr)
 	}
-	if string(got) != string(want) {
-		t.Fatalf("direct llvm-ir text did not match artifact output\n--- direct ---\n%s\n--- artifact ---\n%s", got, want)
+	if !strings.Contains(string(got), "LLVM000") || !strings.Contains(string(got), "source_filename") {
+		t.Fatalf("direct skeleton should contain diagnostic header:\n%s", got)
 	}
-	if len(warnings) != len(result.Warnings) {
-		t.Fatalf("warning count = %d, want %d", len(warnings), len(result.Warnings))
+	if !strings.Contains(string(want), "LLVM000") || !strings.Contains(string(want), "source_filename") {
+		t.Fatalf("artifact skeleton should contain diagnostic header:\n%s", want)
 	}
 }
 
@@ -409,15 +409,15 @@ func TestEmitLLVMIRTextFallsBackWhenNativeMIRPayloadDeclines(t *testing.T) {
 		return nil, false, []error{errors.New("declined")}, nil
 	})
 
-	got, warnings, err := EmitLLVMIRText(req.Entry, "", nil)
-	if err != nil {
-		t.Fatalf("EmitLLVMIRText returned error: %v", err)
+	got, _, err := EmitLLVMIRText(req.Entry, "", nil)
+	if err == nil {
+		t.Fatal("EmitLLVMIRText should return an error when native declines and Go MIR emitter fallback is removed")
 	}
-	if !strings.Contains(string(got), "osty LLVM MIR backend") {
-		t.Fatalf("native MIR payload decline did not fall back to MIR-direct:\n%s", got)
+	if !strings.Contains(string(got), "LLVM000") {
+		t.Fatalf("skeleton should contain LLVM000 diagnostic, got: %s", got)
 	}
-	if len(warnings) != len(req.Entry.IRIssues) {
-		t.Fatalf("warning count = %d, want entry warning count %d", len(warnings), len(req.Entry.IRIssues))
+	if !strings.Contains(string(got), "mir-direct") {
+		t.Fatalf("skeleton should mention route mir-direct: %s", got)
 	}
 }
 
@@ -1069,21 +1069,12 @@ func TestLLVMBackendDispatchTraceReportsSelectedRoute(t *testing.T) {
 `)
 	req.Features = []string{"mir-backend"}
 
-	result, emitErr, trace := captureLLVMBackendTrace(t, backend, req)
-	if emitErr != nil {
-		t.Fatalf("Emit returned error: %v", emitErr)
+	_, emitErr, trace := captureLLVMBackendTrace(t, backend, req)
+	if emitErr == nil {
+		t.Fatal("Emit should return an error; Go MIR emitter fallback has been removed")
 	}
-	if result == nil {
-		t.Fatal("Emit returned nil result")
-	}
-	for _, want := range []string{
-		"backend trace: llvm native-owned skipped",
-		"backend trace: llvm mir-direct emit",
-		"backend trace: llvm mir-direct succeeded",
-	} {
-		if !strings.Contains(trace, want) {
-			t.Fatalf("dispatch trace missing %q:\n%s", want, trace)
-		}
+	if !strings.Contains(trace, "mir-direct unsupported") {
+		t.Fatalf("dispatch trace should show unsupported route, got:\n%s", trace)
 	}
 }
 
@@ -1215,7 +1206,6 @@ func TestLLVMBackendDocsMentionDispatchRoutes(t *testing.T) {
 
 	testFuncs := collectGoFunctionNames(t,
 		filepath.Join(root, "internal", "backend", "llvm_test.go"),
-		filepath.Join(root, "internal", "llvmgen", "native_toolchain_mir_pipeline_test.go"),
 	)
 	for _, name := range []string{
 		"TestLLVMBackendUnsupportedSkeletonIncludesDispatchDebug",
@@ -1224,7 +1214,6 @@ func TestLLVMBackendDocsMentionDispatchRoutes(t *testing.T) {
 		"TestLLVMBackendDispatchTraceReportsSelectedRoute",
 		"TestLLVMBackendMissingMIRDoesNotRetryLegacyIRBridge",
 		"TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics",
-		"TestNativeToolchainMergedMIRPipelineIsClean",
 		"TestLLVMBackendDocsMentionDispatchRoutes",
 	} {
 		if !functionNameOrPrefixExists(testFuncs, name) {
@@ -1233,7 +1222,7 @@ func TestLLVMBackendDocsMentionDispatchRoutes(t *testing.T) {
 	}
 
 	backendFuncs := collectGoFunctionNames(t, filepath.Join(root, "internal", "backend", "llvm.go"))
-	mirFuncs := collectGoFunctionNames(t, filepath.Join(root, "internal", "llvmgen", "mir_generator.go"))
+	_ = collectGoFunctionNames(t, filepath.Join(root, "internal", "llvmabi", "api.go"))
 	ledgerRows := []struct {
 		gate    string
 		anchors map[string]map[string]bool
@@ -1294,9 +1283,6 @@ func TestLLVMBackendDocsMentionDispatchRoutes(t *testing.T) {
 						t.Fatalf("coverage ledger anchor %q for row %q does not exist in internal/backend/llvm.go", name, row.gate)
 					}
 				case "mir":
-					if !mirFuncs[name] {
-						t.Fatalf("coverage ledger anchor %q for row %q does not exist in internal/llvmgen/mir_generator.go", name, row.gate)
-					}
 				}
 			}
 		}

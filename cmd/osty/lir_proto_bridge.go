@@ -4,7 +4,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/osty/osty/internal/llvmgen"
+	"github.com/osty/osty/internal/llvmabi"
 	"github.com/osty/osty/internal/nativelirproto"
 )
 
@@ -16,10 +16,10 @@ import (
 // toolchain/`) which routes MIR through the Osty-owned
 // `toolchain/lir_proto.osty` pipeline. The dispatcher's
 // fall-back-on-error policy converts a missing osty-self artifact
-// or a declined response into a structured warning + MIR-direct
-// emit so gate-on never hard-fails on a stale worktree.
+	// or a declined response into a structured warning + MIR-direct
+	// emit so gate-on never hard-fails on a stale worktree.
 func init() {
-	llvmgen.SetLIRProtoRunner(processLIRProtoRunner{})
+	llvmabi.SetLIRProtoRunner(processLIRProtoRunner{})
 }
 
 // processLIRProtoRunner shells out to the managed osty-native-lirproto
@@ -30,7 +30,7 @@ type processLIRProtoRunner struct{}
 
 var errLIRProtoDeclined = errors.New("osty-native-lirproto declined the request")
 
-func (processLIRProtoRunner) Run(req llvmgen.LIRProtoRequest) ([]byte, error) {
+func (processLIRProtoRunner) Run(req llvmabi.LIRProtoRequest) ([]byte, error) {
 	bridgeReq := nativelirproto.Request{
 		PackageName: req.PackageName,
 		SourcePath:  req.SourcePath,
