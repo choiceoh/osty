@@ -161,7 +161,8 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 | P2b | non-main fn(x: Int) -> Int { x } (param passthrough) | TestStage0EmitsIntParamPassthrough — **구현 완료** |
 | P2c | non-main fn(a, b: Int) -> Int { a + b } (binary add) | TestStage0EmitsIntBinaryAdd — **구현 완료** |
 | P2d | non-main fn(a, b: Int) -> Int { a OP b } — Sub/Mul/Div/Mod 확장 | TestStage0EmitsIntBinaryArithOps — **구현 완료** |
-| P2e+ | toolchain 의 첫 10개 함수 lowering 통과 (call / if-else / locals / 비교 / 비트 …) | toolchain/main.osty 부분 빌드 |
+| P2e | single-instruction batch — 비교 / 비트 / 시프트 / 논리 / Bool / mixed const+var / 0~2 파라미터 / 자유로운 피연산자 순서 | 47 tests — **구현 완료** |
+| P3a+ | multi-instruction (let / 임시 변수) / 함수 호출 / if-else (multi-block) / 더 큰 toolchain 부분 빌드 | toolchain/main.osty 부분 빌드 |
 | P3 | `OSTY_STAGE0_FALLBACK=1` 로 toolchain 전체 빌드 성공 | verify-self-rebuild stage1-only |
 | P4 | stage0 + osty-self 양쪽 모두에서 `verify-self-rebuild` 통과 | byte parity (stage2 vs stage3) |
 | P5 | CI matrix 추가 — `OSTY_STAGE0_FALLBACK=1` 잡과 default 잡 둘 다 | CI green |
