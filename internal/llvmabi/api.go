@@ -100,7 +100,9 @@ func Unsupported(kind, detail string) error {
 	return &UnsupportedError{Diagnostic: UnsupportedDiagnosticFor(kind, detail)}
 }
 
-func UnsupportedBackendErrorMessage() string { return "llvm backend: code generation is not implemented yet" }
+func UnsupportedBackendErrorMessage() string {
+	return "llvm backend: code generation is not implemented yet"
+}
 
 func RenderSkeleton(packageName, sourcePath, emit, target string, reason error) []byte {
 	if packageName == "" {
@@ -164,7 +166,9 @@ func ClangLinkBinaryArgs(target string, objectPaths []string, binaryPath string)
 	return append(args, "-o", binaryPath)
 }
 
-func MissingClangMessage() string { return "llvm backend: clang not found on PATH; install clang or use --emit=llvm-ir" }
+func MissingClangMessage() string {
+	return "llvm backend: clang not found on PATH; install clang or use --emit=llvm-ir"
+}
 func MissingBinaryArtifactMessage() string { return "llvm backend: missing binary artifact path" }
 func ClangFailureMessage(action, command, output string) string {
 	return "llvm backend: clang " + action + " failed\ncommand: " + command + "\n" + output

@@ -220,7 +220,6 @@ func TestLLVMCapabilityMatrixRecordsNativeOwnedRoute(t *testing.T) {
 	}
 }
 
-
 func capabilityRow(matrix CapabilityMatrix, id CapabilityID) (CapabilityRow, bool) {
 	for _, row := range matrix.Rows() {
 		if row.ID == id {
