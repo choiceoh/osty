@@ -256,6 +256,16 @@ fn main() {}`,
 				"call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 ",
 			},
 		},
+		{
+			name: "string_literal_return",
+			src: `fn greet() -> String { "hi" }
+fn main() {}`,
+			wantIR: []string{
+				`@.str.0 = private unnamed_addr constant [3 x i8] c"hi\00"`,
+				"define ptr @greet()",
+				"ret ptr @.str.0",
+			},
+		},
 	}
 	for _, c := range cases {
 		c := c
@@ -301,12 +311,6 @@ fn main() {}`,
     let xs: List<Int> = [1, 2, 3]
     xs.len()
 }
-fn main() {}`,
-			skipNow: true,
-		},
-		{
-			name: "string_literal_return",
-			src: `fn greet() -> String { "hi" }
 fn main() {}`,
 			skipNow: true,
 		},
