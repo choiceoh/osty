@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
 	cat <<'USAGE'
-usage: scripts/verify-self-rebuild [--gates-only|--ir-only|--stage1-only] [--skip-gates] [--reuse-stage1] [HOST_OSTY_BIN]
+usage: scripts/verify-self-rebuild [--gates-only|--ir-only|--stage1-only] [--skip-gates] [--reuse-stage1] [--no-selfhostcache] [HOST_OSTY_BIN]
 
 Runs the self-rebuild ratchet:
 
@@ -24,12 +24,19 @@ Environment overrides:
 --stage1-only builds osty-self-1 only.
 --skip-gates reuses the current tree and jumps straight to the selected build loop.
 --reuse-stage1 reuses/caches osty-self-1 so repeated stage2/parity loops skip the slow first build.
+                When the content-addressed selfhostcache (.osty/cache/self-host/<sha>-<triple>/)
+                holds a fresh entry, --reuse-stage1 short-circuits the slow stage1 build and
+                also promotes any freshly built stage1 binary into the cache for
+                cross-worktree reuse (A7).
+--no-selfhostcache disables the selfhostcache integration; --reuse-stage1 falls back
+                to the legacy mtime-based stage1 cache only.
 USAGE
 }
 
 mode="full"
 skip_gates=0
 reuse_stage1=0
+no_selfhostcache=0
 while [[ $# -gt 0 ]]; do
 	case "${1:-}" in
 	--help | -h)
@@ -54,6 +61,10 @@ while [[ $# -gt 0 ]]; do
 		;;
 	--reuse-stage1)
 		reuse_stage1=1
+		shift
+		;;
+	--no-selfhostcache)
+		no_selfhostcache=1
 		shift
 		;;
 	--)
@@ -179,6 +190,42 @@ stage1_cache_fresh() {
 		fi
 	done < <(find "$toolchain_dir" -type f ! -path "$toolchain_dir/.osty/*")
 	return 0
+}
+
+# selfhostcache_path prints the canonical
+# `.osty/cache/self-host/<sha>-<triple>/osty-self` path for the
+# current toolchain source state. Empty stdout + non-zero exit means
+# the host osty does not yet support `cache-self` (running against a
+# pre-A7 binary) so callers fall through to the legacy mtime cache.
+selfhostcache_path() {
+	[[ "$no_selfhostcache" == "0" ]] || return 1
+	"$host_bin" cache-self 2>/dev/null
+}
+
+# selfhostcache_check exits 0 iff the content-addressed cache holds
+# a binary for the current key. Stdout is the cache path on success.
+selfhostcache_check() {
+	[[ "$no_selfhostcache" == "0" ]] || return 1
+	"$host_bin" cache-self --check 2>/dev/null
+}
+
+# install_into_selfhostcache copies a freshly built stage1 binary
+# into `.osty/cache/self-host/<sha>-<triple>/`. Idempotent — repeated
+# promotion of the same `(toolchain SHA, triple)` overwrites the
+# entry. Direct copy avoids re-running `install-self` (which would
+# rebuild toolchain/ from scratch — wasteful when the caller already
+# has a fresh stage1 binary in hand). Pre-A7 host osty binaries
+# (no `cache-self` subcommand) silently fall through.
+install_into_selfhostcache() {
+	local src="$1"
+	[[ "$no_selfhostcache" == "0" ]] || return 0
+	local target
+	target="$(selfhostcache_path 2>/dev/null)" || return 0
+	[[ -n "$target" ]] || return 0
+	mkdir -p "$(dirname "$target")"
+	cp "$src" "$target"
+	chmod +x "$target"
+	log "stage1: promoted into selfhostcache $target"
 }
 
 build_self_binary() {
@@ -309,20 +356,31 @@ if [[ "$mode" == "ir" ]]; then
 	exit 0
 fi
 
-if [[ "$reuse_stage1" == "1" && -x "$stage1_cache" ]]; then
-	if stage1_cache_fresh; then
+# A7: prefer the content-addressed selfhostcache when --reuse-stage1
+# is requested. The cache key encodes the SHA-256 of every
+# `toolchain/*.osty` file plus the host triple, so a hit is guaranteed
+# fresh by construction (no mtime races, no cross-worktree drift).
+# A miss falls through to the legacy mtime-based stage1 cache, which
+# still helps in environments where `osty cache-self` is unavailable
+# (older host osty binaries). On a fresh build we promote the result
+# into both caches so the next ratchet hits the fast path.
+selfhostcache_hit=""
+if [[ "$reuse_stage1" == "1" ]]; then
+	if selfhostcache_hit="$(selfhostcache_check)" && [[ -n "$selfhostcache_hit" ]]; then
+		log "stage1: reuse selfhostcache $selfhostcache_hit"
+		copy_override_binary "$selfhostcache_hit" "$stage1" "osty-self-1 selfhostcache"
+	elif [[ -x "$stage1_cache" ]] && stage1_cache_fresh; then
 		log "stage1: reuse cache $stage1_cache"
 		copy_override_binary "$stage1_cache" "$stage1" "osty-self-1 cache"
 	else
-		log "stage1: cache stale; rebuild $stage1_cache"
+		[[ -x "$stage1_cache" ]] && log "stage1: cache stale; rebuild $stage1_cache"
 		build_self_binary "$host_bin" "stage1" "$stage1"
 		cache_stage1_binary "$stage1"
+		install_into_selfhostcache "$stage1"
 	fi
 else
 	build_self_binary "$host_bin" "stage1" "$stage1"
-	if [[ "$reuse_stage1" == "1" ]]; then
-		cache_stage1_binary "$stage1"
-	fi
+	install_into_selfhostcache "$stage1"
 fi
 
 smoke_self_driver "$stage1" "stage1"
