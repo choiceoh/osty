@@ -106,6 +106,9 @@ func emitFunction(out *strings.Builder, fn *mir.Function, knownSymbols map[strin
 	if pat, ok := matchSequentialReturn(fn, knownSymbols); ok {
 		return emitSequentialReturn(out, fn, pat)
 	}
+	if pat, ok := matchIfElseReturn(fn, knownSymbols); ok {
+		return emitIfElseReturn(out, fn, pat)
+	}
 	return fmt.Errorf("%w: function %q does not match any stage0 pattern", ErrUnsupported, fn.Name)
 }
 
@@ -206,6 +209,9 @@ type pendingInstr struct {
 	kind       instrKind
 	destLocal  mir.LocalID
 	resultType scalarType
+	// SSA register pre-assigned at match time. Always set for
+	// instrBinary / instrCall; empty for instrInline.
+	binDestReg string
 	// binary fields
 	binOp      string
 	binArgType string
@@ -323,6 +329,7 @@ func matchSequentialReturn(fn *mir.Function, knownSymbols map[string]bool) (sequ
 		case instrBinary, instrCall:
 			reg := fmt.Sprintf("%%%d", nextSSA)
 			nextSSA++
+			pending.binDestReg = reg
 			bindings[destID] = localBinding{expr: reg, ty: destType, defined: true}
 		default:
 			bindings[destID] = localBinding{expr: expr, ty: destType, defined: true}
@@ -505,14 +512,12 @@ func emitSequentialReturn(out *strings.Builder, fn *mir.Function, pat sequential
 	out.WriteString(") {\n")
 	out.WriteString("entry:\n")
 
-	ssa := 0
 	for _, pi := range pat.pending {
 		switch pi.kind {
 		case instrBinary:
-			fmt.Fprintf(out, "  %%%d = %s %s %s, %s\n", ssa, pi.binOp, pi.binArgType, pi.leftExpr, pi.rightExpr)
-			ssa++
+			fmt.Fprintf(out, "  %s = %s %s %s, %s\n", pi.binDestReg, pi.binOp, pi.binArgType, pi.leftExpr, pi.rightExpr)
 		case instrCall:
-			fmt.Fprintf(out, "  %%%d = call %s @%s(", ssa, pi.resultType.llvm(), pi.callSymbol)
+			fmt.Fprintf(out, "  %s = call %s @%s(", pi.binDestReg, pi.resultType.llvm(), pi.callSymbol)
 			for i, a := range pi.callArgs {
 				if i > 0 {
 					out.WriteString(", ")
@@ -520,7 +525,6 @@ func emitSequentialReturn(out *strings.Builder, fn *mir.Function, pat sequential
 				fmt.Fprintf(out, "%s %s", a.ty, a.expr)
 			}
 			out.WriteString(")\n")
-			ssa++
 		}
 	}
 	fmt.Fprintf(out, "  ret %s %s\n", retLLVM, pat.returnExpr)
@@ -584,6 +588,312 @@ func disambiguateParamNames(names []string) {
 			}
 		}
 	}
+}
+
+// ---- P3c: if-else with phi-merged return ----
+//
+// stage0 P3c handles a tightly-restricted four-block if-else shape:
+//
+//	entry  : (P3a-style instructions) + BranchTerm{cond, then, else}
+//	then   : (P3a-style instructions; last AssignInstr writes ret) + GotoTerm(merge)
+//	else   : (P3a-style instructions; last AssignInstr writes ret) + GotoTerm(merge)
+//	merge  : zero instructions + ReturnTerm
+//
+// Cross-block bindings: only locals that are assigned in `entry` (and
+// thus already bound when the branch fires) are visible to `then` /
+// `else`. Intermediate locals defined inside `then` are not visible
+// in `else`, and vice versa — they live and die in their branch.
+// The return local is the only value that crosses the merge; stage0
+// emits a `phi` node at the start of `merge` to combine the values
+// produced by the two branches.
+
+type ifElsePattern struct {
+	retType    scalarType
+	paramIDs   []mir.LocalID
+	paramTypes []scalarType
+	paramNames []string
+	entry      blockEmit
+	thenBlk    blockEmit
+	elseBlk    blockEmit
+	condExpr   string
+	condType   string // always "i1" today
+	thenLabel  string
+	elseLabel  string
+	mergeLabel string
+	thenRet    string
+	elseRet    string
+}
+
+type blockEmit struct {
+	label   string
+	pending []pendingInstr
+}
+
+func matchIfElseReturn(fn *mir.Function, knownSymbols map[string]bool) (ifElsePattern, bool) {
+	pat := ifElsePattern{}
+	pat.retType = scalarFromType(fn.ReturnType)
+	if pat.retType == scalarUnknown {
+		return pat, false
+	}
+	if len(fn.Params) > 2 {
+		return pat, false
+	}
+	if len(fn.Blocks) != 4 {
+		return pat, false
+	}
+
+	// Seed param bindings.
+	pat.paramIDs = fn.Params
+	pat.paramTypes = make([]scalarType, len(fn.Params))
+	pat.paramNames = make([]string, len(fn.Params))
+	fallbackNames := []string{"a", "b"}
+	for i, pid := range fn.Params {
+		loc := lookupLocal(fn, pid)
+		if loc == nil || !loc.IsParam {
+			return pat, false
+		}
+		pt := scalarFromType(loc.Type)
+		if pt == scalarUnknown {
+			return pat, false
+		}
+		pat.paramTypes[i] = pt
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+	}
+	disambiguateParamNames(pat.paramNames)
+
+	entryBindings := map[mir.LocalID]localBinding{}
+	for i, pid := range fn.Params {
+		entryBindings[pid] = localBinding{
+			expr:    "%" + pat.paramNames[i],
+			ty:      pat.paramTypes[i],
+			defined: true,
+		}
+	}
+
+	// Identify entry / then / else / merge by structural shape.
+	entryBlock := blockByID(fn, fn.Entry)
+	if entryBlock == nil {
+		return pat, false
+	}
+	branch, ok := entryBlock.Term.(*mir.BranchTerm)
+	if !ok {
+		return pat, false
+	}
+	thenBlock := blockByID(fn, branch.Then)
+	elseBlock := blockByID(fn, branch.Else)
+	if thenBlock == nil || elseBlock == nil || thenBlock.ID == elseBlock.ID {
+		return pat, false
+	}
+	thenGoto, ok := thenBlock.Term.(*mir.GotoTerm)
+	if !ok {
+		return pat, false
+	}
+	elseGoto, ok := elseBlock.Term.(*mir.GotoTerm)
+	if !ok {
+		return pat, false
+	}
+	if thenGoto.Target != elseGoto.Target {
+		return pat, false
+	}
+	mergeBlock := blockByID(fn, thenGoto.Target)
+	if mergeBlock == nil || mergeBlock.ID == entryBlock.ID || mergeBlock.ID == thenBlock.ID || mergeBlock.ID == elseBlock.ID {
+		return pat, false
+	}
+	if len(mergeBlock.Instrs) != 0 {
+		return pat, false
+	}
+	if _, ok := mergeBlock.Term.(*mir.ReturnTerm); !ok {
+		return pat, false
+	}
+
+	// SSA register counter spans the whole function.
+	nextSSA := 0
+
+	// Walk entry block.
+	entryEmit, condExpr, condTy, ok := classifyEntryBlock(fn, entryBlock, entryBindings, knownSymbols, &nextSSA)
+	if !ok || condTy != scalarBool {
+		return pat, false
+	}
+	pat.entry = entryEmit
+	pat.condExpr = condExpr
+	pat.condType = condTy.llvm()
+
+	// Walk then / else, each forks a copy of entryBindings.
+	thenEmit, thenRet, ok := classifyBranchBlock(fn, thenBlock, copyBindings(entryBindings), knownSymbols, &nextSSA, fn.ReturnLocal, pat.retType)
+	if !ok {
+		return pat, false
+	}
+	elseEmit, elseRet, ok := classifyBranchBlock(fn, elseBlock, copyBindings(entryBindings), knownSymbols, &nextSSA, fn.ReturnLocal, pat.retType)
+	if !ok {
+		return pat, false
+	}
+	pat.thenBlk = thenEmit
+	pat.elseBlk = elseEmit
+	pat.thenRet = thenRet
+	pat.elseRet = elseRet
+
+	pat.thenLabel = blockLabelName(thenBlock.ID, "then")
+	pat.elseLabel = blockLabelName(elseBlock.ID, "else")
+	pat.mergeLabel = blockLabelName(mergeBlock.ID, "merge")
+	pat.entry.label = "entry"
+	pat.thenBlk.label = pat.thenLabel
+	pat.elseBlk.label = pat.elseLabel
+	return pat, true
+}
+
+func emitIfElseReturn(out *strings.Builder, fn *mir.Function, pat ifElsePattern) error {
+	retLLVM := pat.retType.llvm()
+	fmt.Fprintf(out, "define %s @%s(", retLLVM, fn.Name)
+	for i, name := range pat.paramNames {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
+	}
+	out.WriteString(") {\n")
+
+	emitBlock(out, pat.entry)
+	fmt.Fprintf(out, "  br %s %s, label %%%s, label %%%s\n", pat.condType, pat.condExpr, pat.thenLabel, pat.elseLabel)
+
+	out.WriteString("\n")
+	emitBlock(out, pat.thenBlk)
+	fmt.Fprintf(out, "  br label %%%s\n", pat.mergeLabel)
+
+	out.WriteString("\n")
+	emitBlock(out, pat.elseBlk)
+	fmt.Fprintf(out, "  br label %%%s\n", pat.mergeLabel)
+
+	out.WriteString("\n")
+	fmt.Fprintf(out, "%s:\n", pat.mergeLabel)
+	// phi node combines the return-local values produced by the two branches.
+	fmt.Fprintf(out, "  %%retval = phi %s [ %s, %%%s ], [ %s, %%%s ]\n", retLLVM, pat.thenRet, pat.thenLabel, pat.elseRet, pat.elseLabel)
+	fmt.Fprintf(out, "  ret %s %%retval\n", retLLVM)
+	out.WriteString("}\n\n")
+	return nil
+}
+
+func emitBlock(out *strings.Builder, blk blockEmit) {
+	fmt.Fprintf(out, "%s:\n", blk.label)
+	for _, pi := range blk.pending {
+		switch pi.kind {
+		case instrBinary:
+			fmt.Fprintf(out, "  %s = %s %s %s, %s\n", pi.binDestReg, pi.binOp, pi.binArgType, pi.leftExpr, pi.rightExpr)
+		case instrCall:
+			fmt.Fprintf(out, "  %s = call %s @%s(", pi.binDestReg, pi.resultType.llvm(), pi.callSymbol)
+			for i, a := range pi.callArgs {
+				if i > 0 {
+					out.WriteString(", ")
+				}
+				fmt.Fprintf(out, "%s %s", a.ty, a.expr)
+			}
+			out.WriteString(")\n")
+		}
+	}
+}
+
+// classifyEntryBlock walks the entry block of an if-else: zero or more
+// AssignInstr/CallInstr followed by a BranchTerm whose Cond is a
+// resolvable Bool operand. Returns the resolved condition expression
+// + scalar type so the caller can emit the `br`.
+func classifyEntryBlock(fn *mir.Function, bb *mir.BasicBlock, bindings map[mir.LocalID]localBinding, knownSymbols map[string]bool, nextSSA *int) (blockEmit, string, scalarType, bool) {
+	emit := blockEmit{label: "entry"}
+	for _, instr := range bb.Instrs {
+		if !applyStep(fn, instr, bindings, knownSymbols, nextSSA, &emit) {
+			return blockEmit{}, "", scalarUnknown, false
+		}
+	}
+	branch, ok := bb.Term.(*mir.BranchTerm)
+	if !ok {
+		return blockEmit{}, "", scalarUnknown, false
+	}
+	condExpr, condTy, ok := resolveOperand(branch.Cond, bindings)
+	if !ok {
+		return blockEmit{}, "", scalarUnknown, false
+	}
+	return emit, condExpr, condTy, true
+}
+
+// classifyBranchBlock walks a `then` / `else` block: zero or more
+// AssignInstr/CallInstr followed by GotoTerm. The block's last
+// AssignInstr to the return local provides the value contributed to
+// the merge phi; the helper returns that value's LLVM expression.
+func classifyBranchBlock(fn *mir.Function, bb *mir.BasicBlock, bindings map[mir.LocalID]localBinding, knownSymbols map[string]bool, nextSSA *int, retLocal mir.LocalID, retType scalarType) (blockEmit, string, bool) {
+	emit := blockEmit{}
+	for _, instr := range bb.Instrs {
+		if !applyStep(fn, instr, bindings, knownSymbols, nextSSA, &emit) {
+			return blockEmit{}, "", false
+		}
+	}
+	if _, ok := bb.Term.(*mir.GotoTerm); !ok {
+		return blockEmit{}, "", false
+	}
+	retBinding, ok := bindings[retLocal]
+	if !ok || !retBinding.defined || retBinding.ty != retType {
+		return blockEmit{}, "", false
+	}
+	return emit, retBinding.expr, true
+}
+
+// applyStep advances one MIR instruction inside a block during P3c
+// matching: it threads the binding map + SSA counter and appends a
+// pending entry to the block emit when the instruction needs an LLVM
+// line.
+func applyStep(fn *mir.Function, instr mir.Instr, bindings map[mir.LocalID]localBinding, knownSymbols map[string]bool, nextSSA *int, emit *blockEmit) bool {
+	var (
+		pending  pendingInstr
+		expr     string
+		destID   mir.LocalID
+		destType scalarType
+		okStep   bool
+	)
+	switch step := instr.(type) {
+	case *mir.AssignInstr:
+		pending, expr, destID, destType, okStep = classifyAssignStep(fn, step, bindings)
+	case *mir.CallInstr:
+		pending, destID, destType, okStep = classifyCallStep(fn, step, bindings, knownSymbols)
+	default:
+		return false
+	}
+	if !okStep {
+		return false
+	}
+	if existing, found := bindings[destID]; found && existing.defined {
+		return false
+	}
+	pending.destLocal = destID
+	pending.resultType = destType
+	switch pending.kind {
+	case instrBinary, instrCall:
+		reg := fmt.Sprintf("%%%d", *nextSSA)
+		*nextSSA++
+		pending.binDestReg = reg
+		bindings[destID] = localBinding{expr: reg, ty: destType, defined: true}
+	default:
+		bindings[destID] = localBinding{expr: expr, ty: destType, defined: true}
+	}
+	emit.pending = append(emit.pending, pending)
+	return true
+}
+
+func blockByID(fn *mir.Function, id mir.BlockID) *mir.BasicBlock {
+	for _, bb := range fn.Blocks {
+		if bb != nil && bb.ID == id {
+			return bb
+		}
+	}
+	return nil
+}
+
+func blockLabelName(id mir.BlockID, prefix string) string {
+	return fmt.Sprintf("%s.%d", prefix, id)
+}
+
+func copyBindings(src map[mir.LocalID]localBinding) map[mir.LocalID]localBinding {
+	dst := make(map[mir.LocalID]localBinding, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 // ---- shared helpers ----

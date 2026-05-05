@@ -1212,6 +1212,320 @@ func TestStage0RejectsCallWithoutDest(t *testing.T) {
 	mustReject(t, trivialMainFn(), other, caller)
 }
 
+// ---- P3c: if-else with phi-merged return ----
+
+// makeIfElseFn assembles the canonical 4-block if-else MIR shape.
+//   entry: cond = entryInstrs...; branch cond -> then, else
+//   then : thenInstrs (last AssignInstr writes ret); goto merge
+//   else : elseInstrs (last AssignInstr writes ret); goto merge
+//   merge: ret
+func makeIfElseFn(name string, retT mir.Type, params []paramSpec, extraLocals []paramSpec, entryInstrs []mir.Instr, cond mir.Operand, thenInstrs []mir.Instr, elseInstrs []mir.Instr) *mir.Function {
+	locals := []*mir.Local{
+		{ID: 0, Name: "ret", Type: retT, IsReturn: true},
+	}
+	paramIDs := make([]mir.LocalID, 0, len(params))
+	nextID := mir.LocalID(1)
+	for _, p := range params {
+		paramIDs = append(paramIDs, nextID)
+		locals = append(locals, &mir.Local{ID: nextID, Name: p.name, Type: p.ty, IsParam: true})
+		nextID++
+	}
+	for _, l := range extraLocals {
+		locals = append(locals, &mir.Local{ID: nextID, Name: l.name, Type: l.ty})
+		nextID++
+	}
+	return &mir.Function{
+		Name:        name,
+		Params:      paramIDs,
+		ReturnType:  retT,
+		ReturnLocal: 0,
+		Locals:      locals,
+		Entry:       0,
+		Blocks: []*mir.BasicBlock{
+			{ID: 0, Instrs: entryInstrs, Term: &mir.BranchTerm{Cond: cond, Then: 1, Else: 2}},
+			{ID: 1, Instrs: thenInstrs, Term: &mir.GotoTerm{Target: 3}},
+			{ID: 2, Instrs: elseInstrs, Term: &mir.GotoTerm{Target: 3}},
+			{ID: 3, Instrs: nil, Term: &mir.ReturnTerm{}},
+		},
+	}
+}
+
+func TestStage0EmitsIfElseConstReturns(t *testing.T) {
+	t.Parallel()
+	// `fn sign(x: Int) -> Int { if x > 0 { 1 } else { -1 } }`
+	// MIR: entry has cond temp; then assigns 1 to ret; else assigns -1.
+	fn := makeIfElseFn(
+		"sign",
+		ir.TInt,
+		[]paramSpec{{name: "x", ty: ir.TInt}},
+		[]paramSpec{{name: "cond", ty: ir.TBool}},
+		[]mir.Instr{
+			assign(2, binaryRV(mir.BinGt, paramCopy(1, ir.TInt), intConst(0), ir.TBool)),
+		},
+		paramCopy(2, ir.TBool),
+		[]mir.Instr{
+			assign(0, useRV(intConst(1))),
+		},
+		[]mir.Instr{
+			assign(0, useRV(intConst(-1))),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"define i64 @sign(i64 %x)",
+		"entry:",
+		"%0 = icmp sgt i64 %x, 0",
+		"br i1 %0, label %then.1, label %else.2",
+		"then.1:",
+		"br label %merge.3",
+		"else.2:",
+		"br label %merge.3",
+		"merge.3:",
+		"%retval = phi i64 [ 1, %then.1 ], [ -1, %else.2 ]",
+		"ret i64 %retval",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0EmitsIfElseWithBranchArith(t *testing.T) {
+	t.Parallel()
+	// `fn abs(x: Int) -> Int { if x < 0 { 0 - x } else { x } }`
+	fn := makeIfElseFn(
+		"abs",
+		ir.TInt,
+		[]paramSpec{{name: "x", ty: ir.TInt}},
+		[]paramSpec{
+			{name: "cond", ty: ir.TBool},
+			{name: "neg", ty: ir.TInt},
+		},
+		[]mir.Instr{
+			assign(2, binaryRV(mir.BinLt, paramCopy(1, ir.TInt), intConst(0), ir.TBool)),
+		},
+		paramCopy(2, ir.TBool),
+		[]mir.Instr{
+			assign(3, binaryRV(mir.BinSub, intConst(0), paramCopy(1, ir.TInt), ir.TInt)),
+			assign(0, useRV(paramCopy(3, ir.TInt))),
+		},
+		[]mir.Instr{
+			assign(0, useRV(paramCopy(1, ir.TInt))),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"%0 = icmp slt i64 %x, 0",
+		"br i1 %0, label %then.1, label %else.2",
+		"then.1:",
+		"%1 = sub i64 0, %x",
+		"%retval = phi i64 [ %1, %then.1 ], [ %x, %else.2 ]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0EmitsIfElseBoolReturn(t *testing.T) {
+	t.Parallel()
+	// `fn flip(b: Bool) -> Bool { if b { false } else { true } }`
+	fn := makeIfElseFn(
+		"flip",
+		ir.TBool,
+		[]paramSpec{{name: "b", ty: ir.TBool}},
+		nil,
+		nil, // no entry instructions; cond reads param directly
+		paramCopy(1, ir.TBool),
+		[]mir.Instr{
+			assign(0, useRV(boolConst(false))),
+		},
+		[]mir.Instr{
+			assign(0, useRV(boolConst(true))),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"define i1 @flip(i1 %b)",
+		"br i1 %b, label %then.1, label %else.2",
+		"%retval = phi i1 [ false, %then.1 ], [ true, %else.2 ]",
+		"ret i1 %retval",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0EmitsIfElseWithCallInBranch(t *testing.T) {
+	t.Parallel()
+	doubleFn := makeFn(fnSpec{
+		name:   "double",
+		retT:   ir.TInt,
+		params: []paramSpec{{name: "x", ty: ir.TInt}},
+		src:    binaryRV(mir.BinMul, paramCopy(1, ir.TInt), intConst(2), ir.TInt),
+	})
+	// `fn maybe_double(x: Int, flag: Bool) -> Int { if flag { double(x) } else { x } }`
+	fn := makeIfElseFn(
+		"maybe_double",
+		ir.TInt,
+		[]paramSpec{{name: "x", ty: ir.TInt}, {name: "flag", ty: ir.TBool}},
+		[]paramSpec{{name: "d", ty: ir.TInt}},
+		nil,
+		paramCopy(2, ir.TBool),
+		[]mir.Instr{
+			callInstr(3, "double", fnTy(ir.TInt, ir.TInt), paramCopy(1, ir.TInt)),
+			assign(0, useRV(paramCopy(3, ir.TInt))),
+		},
+		[]mir.Instr{
+			assign(0, useRV(paramCopy(1, ir.TInt))),
+		},
+	)
+	got := emit(t, trivialMainFn(), doubleFn, fn)
+	for _, want := range []string{
+		"br i1 %flag, label %then.1, label %else.2",
+		"%0 = call i64 @double(i64 %x)",
+		"%retval = phi i64 [ %0, %then.1 ], [ %x, %else.2 ]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0EmitsIfElseWithEntryArith(t *testing.T) {
+	t.Parallel()
+	// `fn classify(x: Int, y: Int) -> Int { let s = x + y; if s > 0 { s } else { 0 } }`
+	fn := makeIfElseFn(
+		"classify",
+		ir.TInt,
+		[]paramSpec{{name: "x", ty: ir.TInt}, {name: "y", ty: ir.TInt}},
+		[]paramSpec{
+			{name: "s", ty: ir.TInt},
+			{name: "cond", ty: ir.TBool},
+		},
+		[]mir.Instr{
+			assign(3, binaryRV(mir.BinAdd, paramCopy(1, ir.TInt), paramCopy(2, ir.TInt), ir.TInt)),
+			assign(4, binaryRV(mir.BinGt, paramCopy(3, ir.TInt), intConst(0), ir.TBool)),
+		},
+		paramCopy(4, ir.TBool),
+		[]mir.Instr{
+			assign(0, useRV(paramCopy(3, ir.TInt))),
+		},
+		[]mir.Instr{
+			assign(0, useRV(intConst(0))),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"%0 = add i64 %x, %y",
+		"%1 = icmp sgt i64 %0, 0",
+		"br i1 %1, label %then.1, label %else.2",
+		// `s` is the entry-block result %0; then branch reads it.
+		"%retval = phi i64 [ %0, %then.1 ], [ 0, %else.2 ]",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// ---- P3c rejection paths ----
+
+func TestStage0RejectsThreeBlockShape(t *testing.T) {
+	t.Parallel()
+	// 3 blocks instead of 4 — declines.
+	fn := &mir.Function{
+		Name:        "bad",
+		Params:      []mir.LocalID{1},
+		ReturnType:  ir.TInt,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "ret", Type: ir.TInt, IsReturn: true},
+			{ID: 1, Name: "x", Type: ir.TInt, IsParam: true},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{ID: 0, Term: &mir.BranchTerm{Cond: paramCopy(1, ir.TInt), Then: 1, Else: 1}},
+			{ID: 1, Instrs: []mir.Instr{assign(0, useRV(paramCopy(1, ir.TInt)))}, Term: &mir.ReturnTerm{}},
+		},
+	}
+	mustReject(t, trivialMainFn(), fn)
+}
+
+func TestStage0RejectsIfElseWhereOneBranchSkipsRet(t *testing.T) {
+	t.Parallel()
+	// else branch never assigns to ret — declines.
+	fn := makeIfElseFn(
+		"bad",
+		ir.TInt,
+		[]paramSpec{{name: "x", ty: ir.TInt}},
+		nil,
+		nil,
+		paramCopy(1, ir.TInt), // bad — Int as cond
+		[]mir.Instr{assign(0, useRV(intConst(1)))},
+		nil, // no ret assign in else
+	)
+	mustReject(t, trivialMainFn(), fn)
+}
+
+func TestStage0RejectsIfElseWithIntCondition(t *testing.T) {
+	t.Parallel()
+	fn := makeIfElseFn(
+		"bad",
+		ir.TInt,
+		[]paramSpec{{name: "x", ty: ir.TInt}},
+		nil,
+		nil,
+		paramCopy(1, ir.TInt), // Int condition
+		[]mir.Instr{assign(0, useRV(intConst(1)))},
+		[]mir.Instr{assign(0, useRV(intConst(0)))},
+	)
+	mustReject(t, trivialMainFn(), fn)
+}
+
+func TestStage0RejectsIfElseWhereThenElseTargetsDiffer(t *testing.T) {
+	t.Parallel()
+	// Manually construct: then goes to block 3, else goes to block 4. No common merge.
+	fn := &mir.Function{
+		Name:        "bad",
+		Params:      []mir.LocalID{1},
+		ReturnType:  ir.TInt,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "ret", Type: ir.TInt, IsReturn: true},
+			{ID: 1, Name: "b", Type: ir.TBool, IsParam: true},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{ID: 0, Term: &mir.BranchTerm{Cond: paramCopy(1, ir.TBool), Then: 1, Else: 2}},
+			{ID: 1, Instrs: []mir.Instr{assign(0, useRV(intConst(1)))}, Term: &mir.GotoTerm{Target: 3}},
+			{ID: 2, Instrs: []mir.Instr{assign(0, useRV(intConst(2)))}, Term: &mir.GotoTerm{Target: 4}}, // different target
+			{ID: 3, Term: &mir.ReturnTerm{}},
+			{ID: 4, Term: &mir.ReturnTerm{}},
+		},
+	}
+	mustReject(t, trivialMainFn(), fn)
+}
+
+func TestStage0RejectsIfElseWithMergeInstructions(t *testing.T) {
+	t.Parallel()
+	// Merge block has instructions — stage0 expects empty merge.
+	fn := makeIfElseFn(
+		"bad",
+		ir.TInt,
+		[]paramSpec{{name: "b", ty: ir.TBool}},
+		nil,
+		nil,
+		paramCopy(1, ir.TBool),
+		[]mir.Instr{assign(0, useRV(intConst(1)))},
+		[]mir.Instr{assign(0, useRV(intConst(2)))},
+	)
+	// Inject an instruction into the merge block (id 3).
+	fn.Blocks[3].Instrs = []mir.Instr{assign(0, useRV(intConst(99)))}
+	mustReject(t, trivialMainFn(), fn)
+}
+
 func TestStage0RejectsCallParamTypeMismatch(t *testing.T) {
 	t.Parallel()
 	doubleFn := makeFn(fnSpec{
