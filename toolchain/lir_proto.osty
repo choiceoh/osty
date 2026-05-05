@@ -117,16 +117,18 @@ pub fn lirTypeIsVoid(t: LirType) -> Bool {
 pub fn lirTypeSame(a: LirType, b: LirType) -> Bool {
     a.llvm == b.llvm && a.className == b.className
 }
+// B2 demo: `match` rewritten as if-else chain so this function fits
+// the stage0 P0–P15 emitter's coverage. Shape preserved exactly —
+// callers and ToString output are unchanged. See
+// `docs/osty_self_b2_audit.md` for the wider rewrite scope.
 pub fn lirTypeClassName(c: LirTypeClass) -> String {
-    match c {
-        LirTypeVoid -> "void",
-        LirTypeInt -> "int",
-        LirTypeFloat -> "float",
-        LirTypePtr -> "ptr",
-        LirTypeAggregate -> "aggregate",
-        LirTypeFunction -> "function",
-        _ -> "unknown",
-    }
+    if c == LirTypeVoid { return "void" }
+    if c == LirTypeInt { return "int" }
+    if c == LirTypeFloat { return "float" }
+    if c == LirTypePtr { return "ptr" }
+    if c == LirTypeAggregate { return "aggregate" }
+    if c == LirTypeFunction { return "function" }
+    "unknown"
 }
 pub struct LirOperand {
     pub typ: LirType,
