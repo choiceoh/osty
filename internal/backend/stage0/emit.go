@@ -26,23 +26,28 @@ var ErrUnsupported = errors.New("stage0: MIR shape outside bootstrap subset")
 // order and emits the first that fits; otherwise ErrUnsupported:
 //
 //   - `fn main() {}` — single block, zero instructions, ReturnTerm.
-//   - `fn name() -> T { value }` for T ∈ {Int, Bool} — single block,
-//     one AssignInstr writing a const / param-copy operand to the
-//     return local, ReturnTerm. Up to two Int / Bool parameters.
-//   - `fn name(a, b: T) -> R { a OP b }` — single block, one
-//     AssignInstr writing a binary op to the return local, ReturnTerm.
-//     Each operand is independently a const literal or a CopyOp on
-//     one of the params (no projections). Operator families:
+//   - Sequential single-block return: zero or more AssignInstrs (each
+//     writing to a unique scalar local) followed by ReturnTerm.
+//     Up to two Int / Bool parameters. Each AssignInstr's source is
+//     either:
+//
+//       UseRV { ConstOp(IntConst | BoolConst) }
+//       UseRV { CopyOp(local) }            // local must already be defined
+//       BinaryRV { op, operand, operand }  // op family classified below
+//
+//     where each operand is a const literal or a CopyOp of a
+//     previously-defined scalar local (param or earlier assignment).
+//     Operator families:
 //
 //       arithmetic Int×Int → Int : Add Sub Mul Div Mod
 //       comparison Int×Int → Bool: Eq Neq Lt Leq Gt Geq
 //       bitwise    Int×Int → Int : BitAnd BitOr BitXor Shl Shr
 //       logical    Bool×Bool→ Bool: And Or
 //
-// Anything else (multi-instruction, calls, control flow, non-Int/Bool
-// types, projections, …) declines so the next stage0 phase can pick
-// the case up. Surface drift is held back by the stage0 coverage gate
-// planned for P3.
+// Anything else (multi-block / calls / projections / non-Int-Bool
+// types / local reassignment / forward references) declines so the
+// next stage0 phase can pick the case up. Surface drift is held back
+// by the stage0 coverage gate planned for P3.
 func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 	if module == nil {
 		return nil, fmt.Errorf("stage0: nil MIR module")
@@ -86,8 +91,8 @@ func emitFunction(out *strings.Builder, fn *mir.Function) error {
 	if fn.Name == "main" {
 		return emitTrivialMain(out, fn)
 	}
-	if pat, ok := matchSingleInstrReturn(fn); ok {
-		return emitSingleInstrReturn(out, fn, pat)
+	if pat, ok := matchSequentialReturn(fn); ok {
+		return emitSequentialReturn(out, fn, pat)
 	}
 	return fmt.Errorf("%w: function %q does not match any stage0 pattern", ErrUnsupported, fn.Name)
 }
@@ -128,14 +133,14 @@ func trivialMainViolation(fn *mir.Function) string {
 	return ""
 }
 
-// ---- single-instruction return pattern ----
+// ---- sequential single-block return ----
 //
-// Covers everything from `fn x() -> Int { N }` (P2a) through
-// `fn cmp(a, b: Int) -> Bool { a < b }` (P2e bitwise / comparison /
-// logical / mixed const+var). The matcher classifies each operand
-// independently as a const or a param copy, so any 0/1/2-param
-// function with a single AssignInstr that writes a supported scalar
-// expression to the return local is covered.
+// `seqState` tracks per-local LLVM expressions as the matcher / emitter
+// walks the block instruction by instruction. Constants and copy-only
+// assignments are inlined (the matcher records the const literal /
+// param register / source local's expression directly), while
+// BinaryRV destinations bind a fresh `%N` SSA register reserved at
+// emit time.
 
 type scalarType int
 
@@ -169,55 +174,53 @@ func scalarFromType(t mir.Type) scalarType {
 	return scalarUnknown
 }
 
-// operandSrc records how to materialise one operand in LLVM. Either
-// a literal constant (int or bool) or a reference to a parameter local
-// (resolved to its position-indexed sanitised SSA name at emit time).
-type operandSrc struct {
-	kind   operandKind
-	intVal int64
-	boolVal bool
-	paramID mir.LocalID
+// localBinding records, for one MIR LocalID, how to materialise the
+// local in subsequent LLVM operands. Either an inlined immediate
+// expression (constant literal, param register, or another local's
+// already-resolved expression) or a fresh SSA register pending
+// emission.
+type localBinding struct {
+	expr      string // full LLVM operand expression (`42`, `true`, `%x`, `%3`)
+	ty        scalarType
+	defined   bool
 }
 
-type operandKind int
+// pendingInstr is one instruction the emitter will materialise.
+// For `inline` instructions (UseRV) nothing is emitted — the matcher
+// already recorded the expression in seqState.bindings. For `binary`
+// instructions the emitter assigns the next SSA register at emit time.
+type pendingInstr struct {
+	kind        instrKind
+	destLocal   mir.LocalID
+	resultType  scalarType
+	// binary fields
+	binOp       string
+	binArgType  string
+	leftExpr    string
+	rightExpr   string
+}
+
+type instrKind int
 
 const (
-	operandUnknown operandKind = iota
-	operandIntConst
-	operandBoolConst
-	operandParamCopy
+	instrInline instrKind = iota
+	instrBinary
 )
 
-// singleInstrPattern carries everything emitSingleInstrReturn needs.
-// `body` is nil for use-only / passthrough, non-nil for binary ops.
-type singleInstrPattern struct {
+// sequentialPattern is what `matchSequentialReturn` produces.
+type sequentialPattern struct {
 	retType    scalarType
 	paramIDs   []mir.LocalID
 	paramTypes []scalarType
 	paramNames []string // sanitised, position-disambiguated SSA names
-	source     valueSource
+	pending    []pendingInstr
+	returnExpr string // LLVM expression for the return local at end of block
 }
 
-// valueSource is the right-hand side of the AssignInstr. Either a
-// single operand (UseRV) or a binary op.
-type valueSource struct {
-	binary bool
-	// Single-operand mode (UseRV).
-	single operandSrc
-	// Binary mode (BinaryRV).
-	op    mir.BinaryOp
-	left  operandSrc
-	right operandSrc
-	// llvmOp is the LLVM mnemonic resolved by classifyBinary; "" when binary=false.
-	llvmOp string
-	// resultType is the result type the binary op produces (Int or Bool).
-	resultType scalarType
-}
-
-// matchSingleInstrReturn matches the return-only single-instruction
-// pattern described in `EmitMIR`'s docstring.
-func matchSingleInstrReturn(fn *mir.Function) (singleInstrPattern, bool) {
-	pat := singleInstrPattern{}
+// matchSequentialReturn classifies `fn` against the multi-instruction
+// stage0 subset described in the package docstring.
+func matchSequentialReturn(fn *mir.Function) (sequentialPattern, bool) {
+	pat := sequentialPattern{}
 	pat.retType = scalarFromType(fn.ReturnType)
 	if pat.retType == scalarUnknown {
 		return pat, false
@@ -225,6 +228,10 @@ func matchSingleInstrReturn(fn *mir.Function) (singleInstrPattern, bool) {
 	if len(fn.Params) > 2 {
 		return pat, false
 	}
+
+	bindings := map[mir.LocalID]localBinding{}
+
+	// Seed param bindings so subsequent CopyOp resolution works.
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
@@ -242,27 +249,149 @@ func matchSingleInstrReturn(fn *mir.Function) (singleInstrPattern, bool) {
 		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
 	}
 	disambiguateParamNames(pat.paramNames)
+	for i, pid := range fn.Params {
+		bindings[pid] = localBinding{
+			expr:    "%" + pat.paramNames[i],
+			ty:      pat.paramTypes[i],
+			defined: true,
+		}
+	}
 
 	bb, ok := singleBlockReturning(fn)
-	if !ok || len(bb.Instrs) != 1 {
-		return pat, false
-	}
-	assign, ok := writeToReturnLocal(bb.Instrs[0], fn.ReturnLocal)
 	if !ok {
 		return pat, false
 	}
-	src, ok := classifyAssignSrc(assign.Src, pat)
-	if !ok {
+
+	// Reserve fresh SSA register numbers as we encounter BinaryRVs.
+	// Inline instructions don't claim a register, so we count
+	// only `instrBinary` entries.
+	nextSSA := 0
+
+	for _, instr := range bb.Instrs {
+		assign, ok := instr.(*mir.AssignInstr)
+		if !ok {
+			return pat, false
+		}
+		if assign.Dest.HasProjections() {
+			return pat, false
+		}
+		destID := assign.Dest.Local
+		destLocal := lookupLocal(fn, destID)
+		if destLocal == nil {
+			return pat, false
+		}
+		destType := scalarFromType(destLocal.Type)
+		if destType == scalarUnknown {
+			return pat, false
+		}
+		// Reassignment is unsupported — both for params and for
+		// previously-bound locals.
+		if existing, found := bindings[destID]; found && existing.defined {
+			return pat, false
+		}
+
+		pending, expr, okSrc := classifyAssignSrc(assign.Src, destType, bindings)
+		if !okSrc {
+			return pat, false
+		}
+		pending.destLocal = destID
+		pending.resultType = destType
+
+		if pending.kind == instrBinary {
+			reg := fmt.Sprintf("%%%d", nextSSA)
+			nextSSA++
+			pending.leftExpr = pending.leftExpr // already set
+			pending.rightExpr = pending.rightExpr
+			bindings[destID] = localBinding{expr: reg, ty: destType, defined: true}
+			expr = reg
+		} else {
+			bindings[destID] = localBinding{expr: expr, ty: destType, defined: true}
+		}
+		pat.pending = append(pat.pending, pending)
+		_ = expr
+	}
+
+	retBinding, ok := bindings[fn.ReturnLocal]
+	if !ok || !retBinding.defined {
 		return pat, false
 	}
-	pat.source = src
+	if retBinding.ty != pat.retType {
+		return pat, false
+	}
+	pat.returnExpr = retBinding.expr
 	return pat, true
 }
 
-func emitSingleInstrReturn(out *strings.Builder, fn *mir.Function, pat singleInstrPattern) error {
-	retLLVM := pat.retType.llvm()
+// classifyAssignSrc reduces an AssignInstr.Src to either a pending
+// inline binding (no LLVM emission) or a pending binary op (emit a
+// fresh SSA register). `expr` is the LLVM operand string for inline
+// bindings; binary ops return "" (the emitter assigns a register
+// number after seeing the full pending list).
+func classifyAssignSrc(src mir.RValue, destType scalarType, bindings map[mir.LocalID]localBinding) (pendingInstr, string, bool) {
+	if use, ok := src.(*mir.UseRV); ok {
+		expr, ty, ok := resolveOperand(use.Op, bindings)
+		if !ok || ty != destType {
+			return pendingInstr{}, "", false
+		}
+		return pendingInstr{kind: instrInline}, expr, true
+	}
+	if bin, ok := src.(*mir.BinaryRV); ok {
+		llvmOp, resultType, operandType := classifyBinary(bin.Op)
+		if llvmOp == "" || resultType != destType {
+			return pendingInstr{}, "", false
+		}
+		left, leftTy, ok := resolveOperand(bin.Left, bindings)
+		if !ok || leftTy != operandType {
+			return pendingInstr{}, "", false
+		}
+		right, rightTy, ok := resolveOperand(bin.Right, bindings)
+		if !ok || rightTy != operandType {
+			return pendingInstr{}, "", false
+		}
+		return pendingInstr{
+			kind:       instrBinary,
+			binOp:      llvmOp,
+			binArgType: operandType.llvm(),
+			leftExpr:   left,
+			rightExpr:  right,
+		}, "", true
+	}
+	return pendingInstr{}, "", false
+}
 
-	// Function header.
+// resolveOperand returns (expression, type) for one MIR Operand using
+// the prior-bindings map. Forward references and projections decline.
+func resolveOperand(op mir.Operand, bindings map[mir.LocalID]localBinding) (string, scalarType, bool) {
+	if con, ok := op.(*mir.ConstOp); ok {
+		switch c := con.Const.(type) {
+		case *mir.IntConst:
+			if !isPrimType(c.Type(), ir.PrimInt) {
+				return "", scalarUnknown, false
+			}
+			return fmt.Sprintf("%d", c.Value), scalarInt, true
+		case *mir.BoolConst:
+			if c.Value {
+				return "true", scalarBool, true
+			}
+			return "false", scalarBool, true
+		}
+		return "", scalarUnknown, false
+	}
+	if cp, ok := op.(*mir.CopyOp); ok {
+		if cp.Place.HasProjections() {
+			return "", scalarUnknown, false
+		}
+		b, found := bindings[cp.Place.Local]
+		if !found || !b.defined {
+			return "", scalarUnknown, false
+		}
+		return b.expr, b.ty, true
+	}
+	return "", scalarUnknown, false
+}
+
+func emitSequentialReturn(out *strings.Builder, fn *mir.Function, pat sequentialPattern) error {
+	retLLVM := pat.retType.llvm()
 	fmt.Fprintf(out, "define %s @%s(", retLLVM, fn.Name)
 	for i, name := range pat.paramNames {
 		if i > 0 {
@@ -273,102 +402,24 @@ func emitSingleInstrReturn(out *strings.Builder, fn *mir.Function, pat singleIns
 	out.WriteString(") {\n")
 	out.WriteString("entry:\n")
 
-	// Body.
-	if pat.source.binary {
-		opTypeLLVM := pat.source.resultType
-		// For comparison ops, operand type is Int even though result is Bool.
-		// Use the operand's actual scalar type instead.
-		opOperandType := operandScalarType(pat.source.left, pat).llvm()
-		left := operandLLVM(pat.source.left, pat)
-		right := operandLLVM(pat.source.right, pat)
-		fmt.Fprintf(out, "  %%0 = %s %s %s, %s\n", pat.source.llvmOp, opOperandType, left, right)
-		fmt.Fprintf(out, "  ret %s %%0\n", opTypeLLVM.llvm())
-	} else {
-		fmt.Fprintf(out, "  ret %s %s\n", retLLVM, operandLLVM(pat.source.single, pat))
+	ssa := 0
+	for _, pi := range pat.pending {
+		if pi.kind != instrBinary {
+			continue
+		}
+		fmt.Fprintf(out, "  %%%d = %s %s %s, %s\n", ssa, pi.binOp, pi.binArgType, pi.leftExpr, pi.rightExpr)
+		ssa++
 	}
+	fmt.Fprintf(out, "  ret %s %s\n", retLLVM, pat.returnExpr)
 	out.WriteString("}\n\n")
 	return nil
 }
 
-// classifyAssignSrc inspects an AssignInstr.Src and decodes it to a
-// valueSource the emitter can consume.
-func classifyAssignSrc(src mir.RValue, pat singleInstrPattern) (valueSource, bool) {
-	if use, ok := src.(*mir.UseRV); ok {
-		op, ok := classifyOperand(use.Op, pat)
-		if !ok {
-			return valueSource{}, false
-		}
-		// Operand result type must match the return type.
-		if operandScalarTypeFromKind(op.kind, pat, op) != pat.retType {
-			return valueSource{}, false
-		}
-		return valueSource{single: op}, true
-	}
-	if bin, ok := src.(*mir.BinaryRV); ok {
-		llvmOp, resultType, operandType := classifyBinary(bin.Op)
-		if llvmOp == "" || resultType != pat.retType {
-			return valueSource{}, false
-		}
-		left, ok := classifyOperand(bin.Left, pat)
-		if !ok || operandScalarTypeFromKind(left.kind, pat, left) != operandType {
-			return valueSource{}, false
-		}
-		right, ok := classifyOperand(bin.Right, pat)
-		if !ok || operandScalarTypeFromKind(right.kind, pat, right) != operandType {
-			return valueSource{}, false
-		}
-		return valueSource{
-			binary:     true,
-			op:         bin.Op,
-			left:       left,
-			right:      right,
-			llvmOp:     llvmOp,
-			resultType: resultType,
-		}, true
-	}
-	return valueSource{}, false
-}
-
-// classifyOperand decodes a single MIR Operand into an operandSrc.
-func classifyOperand(op mir.Operand, pat singleInstrPattern) (operandSrc, bool) {
-	if con, ok := op.(*mir.ConstOp); ok {
-		switch c := con.Const.(type) {
-		case *mir.IntConst:
-			if !isPrimType(c.Type(), ir.PrimInt) {
-				return operandSrc{}, false
-			}
-			return operandSrc{kind: operandIntConst, intVal: c.Value}, true
-		case *mir.BoolConst:
-			return operandSrc{kind: operandBoolConst, boolVal: c.Value}, true
-		}
-		return operandSrc{}, false
-	}
-	if cp, ok := op.(*mir.CopyOp); ok {
-		if cp.Place.HasProjections() {
-			return operandSrc{}, false
-		}
-		idx := paramIndex(pat, cp.Place.Local)
-		if idx < 0 {
-			return operandSrc{}, false
-		}
-		return operandSrc{kind: operandParamCopy, paramID: cp.Place.Local}, true
-	}
-	return operandSrc{}, false
-}
-
 // classifyBinary returns (llvmOp, resultType, operandType) for a MIR
-// binary operator the stage0 single-instruction pattern supports.
-// Operator families:
-//
-//	arith    Int×Int → Int : Add Sub Mul Div Mod
-//	cmp      Int×Int → Bool: Eq Neq Lt Leq Gt Geq
-//	bitwise  Int×Int → Int : BitAnd BitOr BitXor Shl Shr
-//	logical  Bool×Bool→Bool: And Or
-//
-// Returns ("", scalarUnknown, scalarUnknown) for unsupported ops.
+// binary operator the stage0 sequential pattern supports. Returns
+// ("", scalarUnknown, scalarUnknown) for unsupported ops.
 func classifyBinary(op mir.BinaryOp) (string, scalarType, scalarType) {
 	switch op {
-	// arithmetic
 	case mir.BinAdd:
 		return "add", scalarInt, scalarInt
 	case mir.BinSub:
@@ -379,7 +430,6 @@ func classifyBinary(op mir.BinaryOp) (string, scalarType, scalarType) {
 		return "sdiv", scalarInt, scalarInt
 	case mir.BinMod:
 		return "srem", scalarInt, scalarInt
-	// comparison (signed Int)
 	case mir.BinEq:
 		return "icmp eq", scalarBool, scalarInt
 	case mir.BinNeq:
@@ -392,7 +442,6 @@ func classifyBinary(op mir.BinaryOp) (string, scalarType, scalarType) {
 		return "icmp sgt", scalarBool, scalarInt
 	case mir.BinGeq:
 		return "icmp sge", scalarBool, scalarInt
-	// bitwise / shift on Int
 	case mir.BinBitAnd:
 		return "and", scalarInt, scalarInt
 	case mir.BinBitOr:
@@ -403,7 +452,6 @@ func classifyBinary(op mir.BinaryOp) (string, scalarType, scalarType) {
 		return "shl", scalarInt, scalarInt
 	case mir.BinShr:
 		return "ashr", scalarInt, scalarInt
-	// logical on Bool
 	case mir.BinAnd:
 		return "and", scalarBool, scalarBool
 	case mir.BinOr:
@@ -412,61 +460,8 @@ func classifyBinary(op mir.BinaryOp) (string, scalarType, scalarType) {
 	return "", scalarUnknown, scalarUnknown
 }
 
-// operandScalarType / operandScalarTypeFromKind report the LLVM scalar
-// type of an operand. operandParamCopy resolves through pat.paramTypes;
-// constants carry their own type.
-func operandScalarType(op operandSrc, pat singleInstrPattern) scalarType {
-	return operandScalarTypeFromKind(op.kind, pat, op)
-}
-
-func operandScalarTypeFromKind(kind operandKind, pat singleInstrPattern, op operandSrc) scalarType {
-	switch kind {
-	case operandIntConst:
-		return scalarInt
-	case operandBoolConst:
-		return scalarBool
-	case operandParamCopy:
-		idx := paramIndex(pat, op.paramID)
-		if idx < 0 || idx >= len(pat.paramTypes) {
-			return scalarUnknown
-		}
-		return pat.paramTypes[idx]
-	}
-	return scalarUnknown
-}
-
-func operandLLVM(op operandSrc, pat singleInstrPattern) string {
-	switch op.kind {
-	case operandIntConst:
-		return formatInt(op.intVal)
-	case operandBoolConst:
-		if op.boolVal {
-			return "true"
-		}
-		return "false"
-	case operandParamCopy:
-		idx := paramIndex(pat, op.paramID)
-		if idx >= 0 && idx < len(pat.paramNames) {
-			return "%" + pat.paramNames[idx]
-		}
-	}
-	return "<invalid>"
-}
-
-func paramIndex(pat singleInstrPattern, id mir.LocalID) int {
-	for i, pid := range pat.paramIDs {
-		if pid == id {
-			return i
-		}
-	}
-	return -1
-}
-
 // disambiguateParamNames mutates `names` in place so that no two
 // entries are identical, by suffixing collisions with `.<index>`.
-// Sanitiser fallbacks (`a`, `b`) are already position-distinct, but a
-// user could legitimately name two parameters the same after
-// sanitisation collapses them.
 func disambiguateParamNames(names []string) {
 	for i := 1; i < len(names); i++ {
 		for j := 0; j < i; j++ {
@@ -476,10 +471,6 @@ func disambiguateParamNames(names []string) {
 			}
 		}
 	}
-}
-
-func formatInt(v int64) string {
-	return fmt.Sprintf("%d", v)
 }
 
 // ---- shared helpers ----
@@ -498,17 +489,6 @@ func singleBlockReturning(fn *mir.Function) (*mir.BasicBlock, bool) {
 	return bb, true
 }
 
-func writeToReturnLocal(instr mir.Instr, ret mir.LocalID) (*mir.AssignInstr, bool) {
-	assign, ok := instr.(*mir.AssignInstr)
-	if !ok {
-		return nil, false
-	}
-	if assign.Dest.Local != ret || assign.Dest.HasProjections() {
-		return nil, false
-	}
-	return assign, true
-}
-
 func lookupLocal(fn *mir.Function, id mir.LocalID) *mir.Local {
 	for _, l := range fn.Locals {
 		if l != nil && l.ID == id {
@@ -520,9 +500,6 @@ func lookupLocal(fn *mir.Function, id mir.LocalID) *mir.Local {
 
 // sanitizeLLVMName returns `name` if it is a non-empty valid LLVM
 // identifier (`[A-Za-z._][A-Za-z._0-9]*`), otherwise `fallback`.
-// Stage0 only emits SSA registers from clean Osty parameter names; the
-// guard exists so synthetic locals (`""`, generated suffixes) cannot
-// produce malformed IR.
 func sanitizeLLVMName(name, fallback string) string {
 	if name == "" {
 		return fallback
