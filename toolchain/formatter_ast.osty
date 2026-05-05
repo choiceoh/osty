@@ -160,16 +160,15 @@ pub fn ostyAstFormatSource(source: String) -> OstyFormatResult {
 
 fn ostyAstDecl(f: OstyAstFormatter, idx: Int) -> String {
     let node = ostyAstNode(f, idx)
-    match node.kind {
-        AstNFnDecl -> ostyAstFnDecl(f, node),
-        AstNStructDecl -> ostyAstAggregateDecl(f, node, "struct"),
-        AstNEnumDecl -> ostyAstAggregateDecl(f, node, "enum"),
-        AstNInterfaceDecl -> ostyAstInterfaceDecl(f, node),
-        AstNTypeAlias -> ostyAstTypeAliasDecl(f, node),
-        AstNUseDecl -> ostyAstRawTokenRange(f, node.start, node.end),
-        AstNLet -> ostyAstStmt(f, idx),
-        _ -> ostyAstRawTokenRange(f, node.start, node.end),
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if node.kind == AstNFnDecl { return ostyAstFnDecl(f, node) }
+    if node.kind == AstNStructDecl { return ostyAstAggregateDecl(f, node, "struct") }
+    if node.kind == AstNEnumDecl { return ostyAstAggregateDecl(f, node, "enum") }
+    if node.kind == AstNInterfaceDecl { return ostyAstInterfaceDecl(f, node) }
+    if node.kind == AstNTypeAlias { return ostyAstTypeAliasDecl(f, node) }
+    if node.kind == AstNUseDecl { return ostyAstRawTokenRange(f, node.start, node.end) }
+    if node.kind == AstNLet { return ostyAstStmt(f, idx) }
+    ostyAstRawTokenRange(f, node.start, node.end)
 }
 
 fn ostyAstVisibility(node: AstNode) -> String {

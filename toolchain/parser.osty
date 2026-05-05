@@ -3047,21 +3047,59 @@ fn astPPNode(arena: AstArena, idx: Int, depth: Int, lines: List<String>) -> List
 }
 
 pub fn astNodeKindName(kind: AstNodeKind) -> String {
-    match kind {
-        AstNIdent -> "Ident", AstNIntLit -> "IntLit", AstNFloatLit -> "FloatLit", AstNStringLit -> "StringLit",
-        AstNBoolLit -> "BoolLit", AstNCharLit -> "CharLit", AstNByteLit -> "ByteLit", AstNBytesLit -> "BytesLit", AstNBinary -> "Binary",
-        AstNUnary -> "Unary", AstNCall -> "Call", AstNField -> "Field", AstNIndex -> "Index", AstNRange -> "Range",
-        AstNIf -> "If", AstNMatch -> "Match", AstNClosure -> "Closure", AstNList -> "List", AstNTuple -> "Tuple",
-        AstNMap -> "Map", AstNStructLit -> "StructLit", AstNBlock -> "Block", AstNParen -> "Paren",
-        AstNQuestion -> "Question", AstNTurbofish -> "Turbofish", AstNLet -> "Let", AstNReturn -> "Return",
-        AstNBreak -> "Break", AstNContinue -> "Continue", AstNDefer -> "Defer", AstNFor -> "For",
-        AstNAssign -> "Assign", AstNChanSend -> "ChanSend", AstNExprStmt -> "ExprStmt", AstNFnDecl -> "FnDecl",
-        AstNStructDecl -> "StructDecl", AstNEnumDecl -> "EnumDecl", AstNInterfaceDecl -> "InterfaceDecl",
-        AstNTypeAlias -> "TypeAlias", AstNUseDecl -> "UseDecl", AstNLetDecl -> "LetDecl", AstNFile -> "File",
-        AstNParam -> "Param", AstNField_ -> "Field_", AstNVariant -> "Variant", AstNMatchArm -> "MatchArm",
-        AstNType -> "Type", AstNPattern -> "Pattern", AstNAnnotation -> "Annotation",
-        AstNGenericParam -> "GenericParam", AstNError -> "Error",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == AstNIdent { return "Ident" }
+    if kind == AstNIntLit { return "IntLit" }
+    if kind == AstNFloatLit { return "FloatLit" }
+    if kind == AstNStringLit { return "StringLit" }
+    if kind == AstNBoolLit { return "BoolLit" }
+    if kind == AstNCharLit { return "CharLit" }
+    if kind == AstNByteLit { return "ByteLit" }
+    if kind == AstNBytesLit { return "BytesLit" }
+    if kind == AstNBinary { return "Binary" }
+    if kind == AstNUnary { return "Unary" }
+    if kind == AstNCall { return "Call" }
+    if kind == AstNField { return "Field" }
+    if kind == AstNIndex { return "Index" }
+    if kind == AstNRange { return "Range" }
+    if kind == AstNIf { return "If" }
+    if kind == AstNMatch { return "Match" }
+    if kind == AstNClosure { return "Closure" }
+    if kind == AstNList { return "List" }
+    if kind == AstNTuple { return "Tuple" }
+    if kind == AstNMap { return "Map" }
+    if kind == AstNStructLit { return "StructLit" }
+    if kind == AstNBlock { return "Block" }
+    if kind == AstNParen { return "Paren" }
+    if kind == AstNQuestion { return "Question" }
+    if kind == AstNTurbofish { return "Turbofish" }
+    if kind == AstNLet { return "Let" }
+    if kind == AstNReturn { return "Return" }
+    if kind == AstNBreak { return "Break" }
+    if kind == AstNContinue { return "Continue" }
+    if kind == AstNDefer { return "Defer" }
+    if kind == AstNFor { return "For" }
+    if kind == AstNAssign { return "Assign" }
+    if kind == AstNChanSend { return "ChanSend" }
+    if kind == AstNExprStmt { return "ExprStmt" }
+    if kind == AstNFnDecl { return "FnDecl" }
+    if kind == AstNStructDecl { return "StructDecl" }
+    if kind == AstNEnumDecl { return "EnumDecl" }
+    if kind == AstNInterfaceDecl { return "InterfaceDecl" }
+    if kind == AstNTypeAlias { return "TypeAlias" }
+    if kind == AstNUseDecl { return "UseDecl" }
+    if kind == AstNLetDecl { return "LetDecl" }
+    if kind == AstNFile { return "File" }
+    if kind == AstNParam { return "Param" }
+    if kind == AstNField_ { return "Field_" }
+    if kind == AstNVariant { return "Variant" }
+    if kind == AstNMatchArm { return "MatchArm" }
+    if kind == AstNType { return "Type" }
+    if kind == AstNPattern { return "Pattern" }
+    if kind == AstNAnnotation { return "Annotation" }
+    if kind == AstNGenericParam { return "GenericParam" }
+    if kind == AstNError { return "Error" }
+    "Unknown"
 }
 
 pub fn astFormatErrors(file: AstFile) -> String {
