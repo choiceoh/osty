@@ -56,6 +56,31 @@ func TestStdEnvCurrentDirUsesSharedPtrBackedResultHelper(t *testing.T) {
 	}
 }
 
+func TestStdEnvRequireUsesSharedPtrBackedResultBuilder(t *testing.T) {
+	root, err := filepath.Abs("../..")
+	if err != nil {
+		t.Fatalf("abs root: %v", err)
+	}
+	src, err := os.ReadFile(filepath.Join(root, "internal", "llvmgen", "stdlib_env_shim.go"))
+	if err != nil {
+		t.Fatalf("read stdlib_env_shim.go: %v", err)
+	}
+	text := string(src)
+	if !strings.Contains(text, "emitPtrBackedResultFromNullablePtr(emitter, \"env.require\"") {
+		t.Fatalf("env.require no longer routes through the shared ptr-backed Result builder")
+	}
+	for _, forbidden := range []string{
+		"env.require.missing",
+		"env.require.ok",
+		"env.require.cont",
+		"env.require currently needs ptr-backed Result",
+	} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("env.require still carries manual Result marker %q", forbidden)
+		}
+	}
+}
+
 func TestStdRegexCompileUsesSharedPtrBackedResultHelper(t *testing.T) {
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -147,11 +172,7 @@ func TestManualPtrBackedResultBlocksStayInventoried(t *testing.T) {
 		t.Fatalf("read internal/llvmgen: %v", err)
 	}
 
-	allowed := map[string][]string{
-		"stdlib_env_shim.go": []string{
-			"env.require currently needs ptr-backed Result<String, Error>",
-		},
-	}
+	allowed := map[string][]string{}
 	seen := map[string]bool{}
 
 	for _, entry := range entries {

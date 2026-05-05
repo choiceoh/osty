@@ -274,16 +274,9 @@ func (g *generator) emitStdEnvRequireCall(call *ast.CallExpr) (value, bool, erro
 	if arg == nil || arg.Name != "" || arg.Value == nil {
 		return value{}, true, unsupported("call", "env.require requires one positional String argument")
 	}
-	info, ok := builtinResultTypeFromAST(stdEnvRequireResultSourceTypeSingleton, g.typeEnv())
-	if !ok {
-		return value{}, true, unsupported("type-system", "env.require Result<String, Error> type is unavailable")
-	}
-	if g.resultTypes == nil {
-		g.resultTypes = map[string]builtinResultType{}
-	}
-	g.resultTypes[info.typ] = info
-	if info.okTyp != "ptr" || info.errTyp != "ptr" {
-		return value{}, true, unsupportedf("type-system", "env.require currently needs ptr-backed Result<String, Error>, got ok=%s err=%s", info.okTyp, info.errTyp)
+	info, err := g.ptrBackedResultInfo("env.require", stdEnvRequireResultSourceTypeSingleton)
+	if err != nil {
+		return value{}, true, err
 	}
 	name, err := g.emitExpr(arg.Value)
 	if err != nil {
@@ -302,40 +295,11 @@ func (g *generator) emitStdEnvRequireCall(call *ast.CallExpr) (value, bool, erro
 	emitter := g.toOstyEmitter()
 	g.emitCallSafepointIfNeeded(emitter)
 	found := llvmCall(emitter, "ptr", ostyRtEnvGetSymbol, []*LlvmValue{toOstyValue(name)})
-	missing := llvmCompare(emitter, "eq", found, toOstyValue(value{typ: "ptr", ref: "null"}))
-	missingLabel := llvmNextLabel(emitter, "env.require.missing")
-	okLabel := llvmNextLabel(emitter, "env.require.ok")
-	contLabel := llvmNextLabel(emitter, "env.require.cont")
-	emitter.body = append(emitter.body, "  br i1 "+missing.name+", label %"+missingLabel+", label %"+okLabel)
-
-	emitter.body = append(emitter.body, missingLabel+":")
-	prefix := llvmStringLiteral(emitter, "environment variable not set: ")
-	message := llvmStringConcat(emitter, prefix, toOstyValue(name))
-	errResult := llvmStructLiteral(emitter, info.typ, []*LlvmValue{
-		toOstyValue(value{typ: "i64", ref: "1"}),
-		toOstyValue(llvmZeroValue(info.okTyp)),
-		message,
+	v := g.emitPtrBackedResultFromNullablePtr(emitter, "env.require", stdEnvRequireResultSourceTypeSingleton, info, found, func(emitter *LlvmEmitter) *LlvmValue {
+		prefix := llvmStringLiteral(emitter, "environment variable not set: ")
+		return llvmStringConcat(emitter, prefix, toOstyValue(name))
 	})
-	emitter.body = append(emitter.body, "  br label %"+contLabel)
-
-	emitter.body = append(emitter.body, okLabel+":")
-	okResult := llvmStructLiteral(emitter, info.typ, []*LlvmValue{
-		toOstyValue(value{typ: "i64", ref: "0"}),
-		found,
-		toOstyValue(llvmZeroValue(info.errTyp)),
-	})
-	emitter.body = append(emitter.body, "  br label %"+contLabel)
-
-	emitter.body = append(emitter.body, contLabel+":")
-	phi := llvmNextTemp(emitter)
-	emitter.body = append(emitter.body, "  "+phi+" = phi "+info.typ+" [ "+errResult.name+", %"+missingLabel+" ], [ "+okResult.name+", %"+okLabel+" ]")
 	g.takeOstyEmitter(emitter)
-	v := value{
-		typ:        info.typ,
-		ref:        phi,
-		sourceType: stdEnvRequireResultSourceTypeSingleton,
-	}
-	v.rootPaths = g.rootPathsForType(v.typ)
 	return v, true, nil
 }
 
