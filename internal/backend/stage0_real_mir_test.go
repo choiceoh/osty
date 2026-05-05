@@ -390,6 +390,37 @@ fn main() {}`,
 				"ret %.tuple.0 %1",
 			},
 		},
+		{
+			name: "list_literal_index_first",
+			src: `fn first() -> Int {
+    let xs: List<Int> = [10, 20, 30]
+    xs[0]
+}
+fn main() {}`,
+			wantIR: []string{
+				"declare ptr @osty_rt_list_new()",
+				"declare void @osty_rt_list_push_i64(ptr, i64)",
+				"declare i64 @osty_rt_list_get_i64(ptr, i64)",
+				"define i64 @first()",
+				"%0 = call ptr @osty_rt_list_new()",
+				"call void @osty_rt_list_push_i64(ptr %0, i64 10)",
+				"call void @osty_rt_list_push_i64(ptr %0, i64 20)",
+				"call void @osty_rt_list_push_i64(ptr %0, i64 30)",
+				"%1 = call i64 @osty_rt_list_get_i64(ptr %0, i64 0)",
+				"ret i64 %1",
+			},
+		},
+		{
+			name: "list_literal_index_second",
+			src: `fn second() -> Int {
+    let xs: List<Int> = [100, 200, 300]
+    xs[1]
+}
+fn main() {}`,
+			wantIR: []string{
+				"%1 = call i64 @osty_rt_list_get_i64(ptr %0, i64 1)",
+			},
+		},
 	}
 	for _, c := range cases {
 		c := c
