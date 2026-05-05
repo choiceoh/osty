@@ -98,6 +98,13 @@ func escapeForByte(b byte) string {
 	return string(b)
 }
 
+func escapeForBytesLit(b byte) string {
+	if b == '"' {
+		return `\"`
+	}
+	return escapeForByte(b)
+}
+
 // writeDefaultRune is the shared tail of the string escapers: an
 // escapeCommon match wins, otherwise unicode.IsPrint gates whether the
 // rune goes out literally or as `\u{...}`. IsPrint catches the invisible
