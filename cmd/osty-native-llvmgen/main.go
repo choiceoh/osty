@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +10,9 @@ import (
 
 	"github.com/osty/osty/internal/backend"
 	"github.com/osty/osty/internal/check"
+	"github.com/osty/osty/internal/llvmgen"
+	"github.com/osty/osty/internal/mirjson"
+	"github.com/osty/osty/internal/nativelirproto"
 	"github.com/osty/osty/internal/nativellvmgen"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/stdlib"
@@ -17,6 +21,7 @@ import (
 type llvmgenRequest = nativellvmgen.Request
 type llvmgenPackageInput = nativellvmgen.PackageInput
 type llvmgenPackageFile = nativellvmgen.PackageFile
+type llvmgenMIRInput = nativellvmgen.MIRInput
 type llvmgenResponse = nativellvmgen.Response
 
 func main() {
@@ -30,6 +35,9 @@ func run(stdin io.Reader, stdout io.Writer) error {
 	var req llvmgenRequest
 	if err := json.NewDecoder(stdin).Decode(&req); err != nil {
 		return fmt.Errorf("decode llvmgen request: %w", err)
+	}
+	if req.MIR != nil {
+		return runMIRRequest(req, stdout)
 	}
 	var (
 		entry backend.Entry
@@ -55,6 +63,62 @@ func run(stdin io.Reader, stdout io.Writer) error {
 		resp.LLVMIR = string(ir)
 	}
 	return json.NewEncoder(stdout).Encode(resp)
+}
+
+func runMIRRequest(req llvmgenRequest, stdout io.Writer) error {
+	if req.MIR.Module == nil {
+		return fmt.Errorf("decode MIR llvmgen request: missing module")
+	}
+	mod, err := mirjson.ToModule(req.MIR.Module)
+	if err != nil {
+		return fmt.Errorf("decode MIR llvmgen request: %w", err)
+	}
+	warnings := []string(nil)
+	if ir, lirWarnings, ok := tryMIRRequestViaLIRProto(req); ok {
+		return json.NewEncoder(stdout).Encode(llvmgenResponse{Covered: true, LLVMIR: string(ir), Warnings: lirWarnings})
+	} else {
+		warnings = append(warnings, lirWarnings...)
+	}
+	ir, err := llvmgen.GenerateFromMIR(mod, llvmgen.Options{
+		PackageName: req.MIR.PackageName,
+		SourcePath:  req.MIR.SourcePath,
+		Source:      []byte(req.MIR.Source),
+		Target:      req.MIR.Target,
+		EmitGC:      true,
+	})
+	resp := llvmgenResponse{Covered: err == nil}
+	if err != nil {
+		if errors.Is(err, llvmgen.ErrUnsupported) {
+			resp.Warnings = append(warnings, err.Error())
+			return json.NewEncoder(stdout).Encode(resp)
+		}
+		return fmt.Errorf("emit MIR llvm-ir: %w", err)
+	}
+	resp.LLVMIR = string(ir)
+	resp.Warnings = warnings
+	return json.NewEncoder(stdout).Encode(resp)
+}
+
+func tryMIRRequestViaLIRProto(req llvmgenRequest) ([]byte, []string, bool) {
+	if !llvmgen.LIRProtoSelected() || req.MIR == nil || req.MIR.Source == "" {
+		return nil, nil, false
+	}
+	resp, err := nativelirproto.Run(req.MIR.SourcePath, nativelirproto.Request{
+		PackageName: req.MIR.PackageName,
+		SourcePath:  req.MIR.SourcePath,
+		Source:      req.MIR.Source,
+		Target:      req.MIR.Target,
+	})
+	if err != nil {
+		return nil, []string{err.Error()}, false
+	}
+	if resp.Error != "" {
+		return nil, []string{resp.Error}, false
+	}
+	if resp.Declined || resp.LLVMIR == "" {
+		return nil, nil, false
+	}
+	return []byte(resp.LLVMIR), nil, true
 }
 
 func prepareSourceEntry(req llvmgenRequest) (backend.Entry, error) {

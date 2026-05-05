@@ -168,7 +168,9 @@ func TestPrepareGenBackendEntryUsesPackageLoweringForSingleFile(t *testing.T) {
 	}
 }
 
-func TestEmitGenArtifactUsesNativeOwnedFastPathWhenCovered(t *testing.T) {
+func TestEmitGenArtifactUsesMIRPayloadBackendForPrimitiveLoop(t *testing.T) {
+	t.Setenv("OSTY_LLVM_LIR_PROTO", "0")
+
 	dir := t.TempDir()
 	target := writeGenTestFile(t, dir, "main.osty", `fn pick(flag: Bool) -> Int {
     if flag {
@@ -198,30 +200,26 @@ fn main() {
 		return nil, false, nil, nil
 	}
 	t.Cleanup(func() { tryExternalGenLLVMIR = oldTry })
-	backendEntry, err := prepareGenBackendEntry("main", entry)
-	if err != nil {
-		t.Fatalf("prepareGenBackendEntry() error = %v", err)
-	}
-	want, ok, warnings, err := backend.TryEmitNativeOwnedLLVMIRText(backendEntry, "")
-	if err != nil {
-		t.Fatalf("TryEmitNativeOwnedLLVMIRText() error = %v", err)
-	}
-	if !ok {
-		t.Fatal("TryEmitNativeOwnedLLVMIRText() reported not covered for primitive slice")
-	}
 
 	got, result, err := emitGenArtifact(backend.NameLLVM, backend.EmitLLVMIR, "main", entry)
 	if err != nil {
 		t.Fatalf("emitGenArtifact() error = %v", err)
 	}
-	if string(got) != string(want) {
-		t.Fatalf("gen llvm-ir did not use native fast path output\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	for _, want := range []string{
+		"osty LLVM MIR backend",
+		"define i64 @pick",
+		"define i32 @main",
+		"call i64 @pick",
+	} {
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("MIR payload llvm-ir missing %q:\n%s", want, got)
+		}
 	}
 	if result == nil {
 		t.Fatal("emitGenArtifact() result is nil")
 	}
-	if len(result.Warnings) != len(warnings) {
-		t.Fatalf("warning count = %d, want %d", len(result.Warnings), len(warnings))
+	if len(result.Warnings) != 0 {
+		t.Fatalf("warnings = %#v, want none", result.Warnings)
 	}
 }
 
@@ -252,7 +250,9 @@ func TestEmitGenArtifactUsesManagedNativeLLVMGenWhenCovered(t *testing.T) {
 	}
 }
 
-func TestEmitGenArtifactUsesNativeOwnedFastPathForStructFieldAssign(t *testing.T) {
+func TestEmitGenArtifactUsesMIRPayloadBackendForStructFieldAssign(t *testing.T) {
+	t.Setenv("OSTY_LLVM_LIR_PROTO", "0")
+
 	dir := t.TempDir()
 	target := writeGenTestFile(t, dir, "main.osty", `struct Pair { left: Int, right: Int }
 
@@ -272,17 +272,6 @@ fn main() {
 		return nil, false, nil, nil
 	}
 	t.Cleanup(func() { tryExternalGenLLVMIR = oldTry })
-	backendEntry, err := prepareGenBackendEntry("main", entry)
-	if err != nil {
-		t.Fatalf("prepareGenBackendEntry() error = %v", err)
-	}
-	want, ok, warnings, err := backend.TryEmitNativeOwnedLLVMIRText(backendEntry, "")
-	if err != nil {
-		t.Fatalf("TryEmitNativeOwnedLLVMIRText() error = %v", err)
-	}
-	if !ok {
-		t.Fatal("TryEmitNativeOwnedLLVMIRText() reported not covered for struct field assignment")
-	}
 
 	got, result, err := emitGenArtifact(backend.NameLLVM, backend.EmitLLVMIR, "main", entry)
 	if err != nil {
@@ -291,15 +280,24 @@ fn main() {
 	if result == nil {
 		t.Fatal("emitGenArtifact() result is nil")
 	}
-	if string(got) != string(want) {
-		t.Fatalf("gen llvm-ir did not use native struct-field fast path output\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	for _, want := range []string{
+		"osty LLVM MIR backend",
+		"%Pair = type",
+		"insertvalue %Pair",
+		"extractvalue %Pair",
+	} {
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("MIR payload llvm-ir missing %q:\n%s", want, got)
+		}
 	}
-	if len(result.Warnings) != len(warnings) {
-		t.Fatalf("warning count = %d, want %d", len(result.Warnings), len(warnings))
+	if len(result.Warnings) != 0 {
+		t.Fatalf("warnings = %#v, want none", result.Warnings)
 	}
 }
 
-func TestEmitGenArtifactUsesNativeOwnedFastPathForListIndex(t *testing.T) {
+func TestEmitGenArtifactUsesMIRPayloadBackendForListIndex(t *testing.T) {
+	t.Setenv("OSTY_LLVM_LIR_PROTO", "0")
+
 	dir := t.TempDir()
 	target := writeGenTestFile(t, dir, "main.osty", `fn main() {
     let xs = [1, 2]
@@ -316,17 +314,6 @@ func TestEmitGenArtifactUsesNativeOwnedFastPathForListIndex(t *testing.T) {
 		return nil, false, nil, nil
 	}
 	t.Cleanup(func() { tryExternalGenLLVMIR = oldTry })
-	backendEntry, err := prepareGenBackendEntry("main", entry)
-	if err != nil {
-		t.Fatalf("prepareGenBackendEntry() error = %v", err)
-	}
-	want, ok, warnings, err := backend.TryEmitNativeOwnedLLVMIRText(backendEntry, "")
-	if err != nil {
-		t.Fatalf("TryEmitNativeOwnedLLVMIRText() error = %v", err)
-	}
-	if !ok {
-		t.Fatal("TryEmitNativeOwnedLLVMIRText() reported not covered for list index")
-	}
 
 	got, result, err := emitGenArtifact(backend.NameLLVM, backend.EmitLLVMIR, "main", entry)
 	if err != nil {
@@ -335,11 +322,18 @@ func TestEmitGenArtifactUsesNativeOwnedFastPathForListIndex(t *testing.T) {
 	if result == nil {
 		t.Fatal("emitGenArtifact() result is nil")
 	}
-	if string(got) != string(want) {
-		t.Fatalf("gen llvm-ir did not use native list fast path output\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	for _, want := range []string{
+		"osty LLVM MIR backend",
+		"@osty_rt_list_new",
+		"@osty_rt_list_push_i64",
+		"@osty_rt_list_get_i64",
+	} {
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("MIR payload llvm-ir missing %q:\n%s", want, got)
+		}
 	}
-	if len(result.Warnings) != len(warnings) {
-		t.Fatalf("warning count = %d, want %d", len(result.Warnings), len(warnings))
+	if len(result.Warnings) != 0 {
+		t.Fatalf("warnings = %#v, want none", result.Warnings)
 	}
 }
 

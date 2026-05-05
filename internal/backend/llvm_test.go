@@ -349,8 +349,9 @@ func TestEmitLLVMIRTextMatchesBackendArtifactOutput(t *testing.T) {
     println(1)
 }
 `)
+	req.Features = []string{"mir-backend"}
 
-	got, warnings, err := EmitLLVMIRText(req.Entry, "", nil)
+	got, warnings, err := EmitLLVMIRText(req.Entry, "", req.Features)
 	if err != nil {
 		t.Fatalf("EmitLLVMIRText returned error: %v", err)
 	}
@@ -368,6 +369,63 @@ func TestEmitLLVMIRTextMatchesBackendArtifactOutput(t *testing.T) {
 	if len(warnings) != len(result.Warnings) {
 		t.Fatalf("warning count = %d, want %d", len(warnings), len(result.Warnings))
 	}
+}
+
+func TestEmitLLVMIRTextUsesNativeMIRPayloadWhenCovered(t *testing.T) {
+	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
+    println(1)
+}
+`)
+
+	withNativeMIRPayloadEmitter(t, func(entry Entry, target string) ([]byte, bool, []error, error) {
+		if entry.MIR == nil {
+			t.Fatal("native-owned route did not receive MIR payload")
+		}
+		if entry.PackageName != "main" || entry.SourcePath != req.Entry.SourcePath || target != "wasm32-unknown-unknown" {
+			t.Fatalf("native-owned route metadata = (%q, %q, %q), want request metadata", entry.PackageName, entry.SourcePath, target)
+		}
+		return []byte("; native mir payload llvm ir\n"), true, []error{errors.New("native warning")}, nil
+	})
+
+	got, warnings, err := EmitLLVMIRText(req.Entry, "wasm32-unknown-unknown", nil)
+	if err != nil {
+		t.Fatalf("EmitLLVMIRText returned error: %v", err)
+	}
+	if string(got) != "; native mir payload llvm ir\n" {
+		t.Fatalf("EmitLLVMIRText did not use native MIR payload output: %q", got)
+	}
+	if len(warnings) != 1 || warnings[0].Error() != "native warning" {
+		t.Fatalf("warnings = %#v, want native warning", warnings)
+	}
+}
+
+func TestEmitLLVMIRTextFallsBackWhenNativeMIRPayloadDeclines(t *testing.T) {
+	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
+    println(1)
+}
+`)
+
+	withNativeMIRPayloadEmitter(t, func(Entry, string) ([]byte, bool, []error, error) {
+		return nil, false, []error{errors.New("declined")}, nil
+	})
+
+	got, warnings, err := EmitLLVMIRText(req.Entry, "", nil)
+	if err != nil {
+		t.Fatalf("EmitLLVMIRText returned error: %v", err)
+	}
+	if !strings.Contains(string(got), "osty LLVM MIR backend") {
+		t.Fatalf("native MIR payload decline did not fall back to MIR-direct:\n%s", got)
+	}
+	if len(warnings) != len(req.Entry.IRIssues) {
+		t.Fatalf("warning count = %d, want entry warning count %d", len(warnings), len(req.Entry.IRIssues))
+	}
+}
+
+func withNativeMIRPayloadEmitter(t *testing.T, fn func(Entry, string) ([]byte, bool, []error, error)) {
+	t.Helper()
+	oldTry := tryNativeOwnedMIRPayloadLLVMIRText
+	tryNativeOwnedMIRPayloadLLVMIRText = fn
+	t.Cleanup(func() { tryNativeOwnedMIRPayloadLLVMIRText = oldTry })
 }
 
 func TestEmitPrebuiltLLVMIRBuildsArtifactsFromProvidedIR(t *testing.T) {
@@ -551,8 +609,6 @@ fn dot(xs: List<Int>, ys: List<Int>) -> Int {
 }
 
 func TestEmitLLVMIRTextPrefersNativeOwnedFastPathWhenCovered(t *testing.T) {
-	t.Parallel()
-
 	req := newBackendRequest(t, EmitLLVMIR, `fn pick(flag: Bool) -> Int {
     if flag {
         42
@@ -571,14 +627,16 @@ fn main() {
     println(sum)
 }
 `)
+	want := []byte("; native primitive-slice mir payload llvm ir\n")
+	warnings := []error{errors.New("native primitive-slice warning")}
 
-	want, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(req.Entry, "")
-	if err != nil {
-		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
-	}
-	if !ok {
-		t.Fatal("TryEmitNativeOwnedLLVMIRText reported not covered for primitive slice")
-	}
+	withNativeMIRPayloadEmitter(t, func(entry Entry, target string) ([]byte, bool, []error, error) {
+		if entry.MIR == nil {
+			t.Fatal("native-owned route did not receive MIR payload")
+		}
+		return want, true, warnings, nil
+	})
+
 	got, gotWarnings, err := EmitLLVMIRText(req.Entry, "", nil)
 	if err != nil {
 		t.Fatalf("EmitLLVMIRText returned error: %v", err)
@@ -592,8 +650,6 @@ fn main() {
 }
 
 func TestEmitLLVMIRTextPrefersNativeOwnedFastPathForStructFieldAssign(t *testing.T) {
-	t.Parallel()
-
 	req := newBackendRequest(t, EmitLLVMIR, `struct Pair { left: Int, right: Int }
 
 fn main() {
@@ -602,14 +658,16 @@ fn main() {
     println(pair.left)
 }
 `)
+	want := []byte("; native struct-field mir payload llvm ir\n")
+	warnings := []error{errors.New("native struct-field warning")}
 
-	want, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(req.Entry, "")
-	if err != nil {
-		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
-	}
-	if !ok {
-		t.Fatal("TryEmitNativeOwnedLLVMIRText reported not covered for struct field assignment")
-	}
+	withNativeMIRPayloadEmitter(t, func(entry Entry, target string) ([]byte, bool, []error, error) {
+		if entry.MIR == nil {
+			t.Fatal("native-owned route did not receive MIR payload")
+		}
+		return want, true, warnings, nil
+	})
+
 	got, gotWarnings, err := EmitLLVMIRText(req.Entry, "", nil)
 	if err != nil {
 		t.Fatalf("EmitLLVMIRText returned error: %v", err)
@@ -623,21 +681,21 @@ fn main() {
 }
 
 func TestEmitLLVMIRTextPrefersNativeOwnedFastPathForListIndex(t *testing.T) {
-	t.Parallel()
-
 	req := newBackendRequest(t, EmitLLVMIR, `fn main() {
     let xs = [1, 2]
     println(xs[0])
 }
 `)
+	want := []byte("; native list-index mir payload llvm ir\n")
+	warnings := []error{errors.New("native list-index warning")}
 
-	want, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(req.Entry, "")
-	if err != nil {
-		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
-	}
-	if !ok {
-		t.Fatal("TryEmitNativeOwnedLLVMIRText reported not covered for list index")
-	}
+	withNativeMIRPayloadEmitter(t, func(entry Entry, target string) ([]byte, bool, []error, error) {
+		if entry.MIR == nil {
+			t.Fatal("native-owned route did not receive MIR payload")
+		}
+		return want, true, warnings, nil
+	})
+
 	got, gotWarnings, err := EmitLLVMIRText(req.Entry, "", nil)
 	if err != nil {
 		t.Fatalf("EmitLLVMIRText returned error: %v", err)
@@ -651,8 +709,6 @@ func TestEmitLLVMIRTextPrefersNativeOwnedFastPathForListIndex(t *testing.T) {
 }
 
 func TestLLVMBackendEmitBinaryPrefersNativeOwnedFastPathWhenCovered(t *testing.T) {
-	t.Parallel()
-
 	tc := &fakeLLVMToolchain{}
 	backend := LLVMBackend{toolchain: tc}
 	req := newBackendRequest(t, EmitBinary, `fn pick(flag: Bool) -> Int {
@@ -673,14 +729,16 @@ fn main() {
     println(sum)
 }
 `)
+	want := []byte("; native binary primitive-slice mir payload llvm ir\n")
+	warnings := []error{errors.New("native binary primitive-slice warning")}
 
-	want, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(req.Entry, "")
-	if err != nil {
-		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
-	}
-	if !ok {
-		t.Fatal("TryEmitNativeOwnedLLVMIRText reported not covered for primitive slice")
-	}
+	withNativeMIRPayloadEmitter(t, func(entry Entry, target string) ([]byte, bool, []error, error) {
+		if entry.MIR == nil {
+			t.Fatal("native-owned route did not receive MIR payload")
+		}
+		return want, true, warnings, nil
+	})
+
 	result, err := backend.Emit(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Emit returned error: %v", err)
@@ -698,8 +756,6 @@ fn main() {
 }
 
 func TestLLVMBackendEmitBinaryPrefersNativeOwnedFastPathForStructFieldAssign(t *testing.T) {
-	t.Parallel()
-
 	tc := &fakeLLVMToolchain{}
 	backend := LLVMBackend{toolchain: tc}
 	req := newBackendRequest(t, EmitBinary, `struct Pair { left: Int, right: Int }
@@ -710,14 +766,16 @@ fn main() {
     println(pair.left)
 }
 `)
+	want := []byte("; native binary struct-field mir payload llvm ir\n")
+	warnings := []error{errors.New("native binary struct-field warning")}
 
-	want, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(req.Entry, "")
-	if err != nil {
-		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
-	}
-	if !ok {
-		t.Fatal("TryEmitNativeOwnedLLVMIRText reported not covered for struct field assignment")
-	}
+	withNativeMIRPayloadEmitter(t, func(entry Entry, target string) ([]byte, bool, []error, error) {
+		if entry.MIR == nil {
+			t.Fatal("native-owned route did not receive MIR payload")
+		}
+		return want, true, warnings, nil
+	})
+
 	result, err := backend.Emit(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Emit returned error: %v", err)
@@ -735,8 +793,6 @@ fn main() {
 }
 
 func TestLLVMBackendEmitBinaryPrefersNativeOwnedFastPathForListIndex(t *testing.T) {
-	t.Parallel()
-
 	tc := &fakeLLVMToolchain{}
 	backend := LLVMBackend{toolchain: tc}
 	req := newBackendRequest(t, EmitBinary, `fn main() {
@@ -744,14 +800,16 @@ func TestLLVMBackendEmitBinaryPrefersNativeOwnedFastPathForListIndex(t *testing.
     println(xs[0])
 }
 `)
+	want := []byte("; native binary list-index mir payload llvm ir\n")
+	warnings := []error{errors.New("native binary list-index warning")}
 
-	want, ok, warnings, err := TryEmitNativeOwnedLLVMIRText(req.Entry, "")
-	if err != nil {
-		t.Fatalf("TryEmitNativeOwnedLLVMIRText returned error: %v", err)
-	}
-	if !ok {
-		t.Fatal("TryEmitNativeOwnedLLVMIRText reported not covered for list index")
-	}
+	withNativeMIRPayloadEmitter(t, func(entry Entry, target string) ([]byte, bool, []error, error) {
+		if entry.MIR == nil {
+			t.Fatal("native-owned route did not receive MIR payload")
+		}
+		return want, true, warnings, nil
+	})
+
 	result, err := backend.Emit(context.Background(), req)
 	if err != nil {
 		t.Fatalf("Emit returned error: %v", err)
@@ -1119,7 +1177,7 @@ func TestLLVMBackendDocsMentionDispatchRoutes(t *testing.T) {
 			"TestLLVMBackendUnsupportedSkeletonIncludesDispatchDebug",
 		},
 		string(llvmDispatchNativeOwned): {
-			"TryGenerateNativeOwnedModule",
+			"nativellvmgen.TryMIR",
 			"TestEmitLLVMIRTextPrefersNativeOwnedFastPathWhenCovered",
 			"TestTryEmitNativeOwnedLLVMIRText*",
 		},

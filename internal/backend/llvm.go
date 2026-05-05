@@ -11,6 +11,7 @@ import (
 
 	"github.com/osty/osty/internal/ir"
 	"github.com/osty/osty/internal/llvmgen"
+	"github.com/osty/osty/internal/nativellvmgen"
 )
 
 // ErrLLVMNotImplemented marks source shapes that the early LLVM lowering slice
@@ -83,6 +84,10 @@ func TryEmitNativeOwnedLLVMIRText(entry Entry, target string) ([]byte, bool, []e
 		return out, ok, warnings, err
 	}
 	return out, true, warnings, nil
+}
+
+var tryNativeOwnedMIRPayloadLLVMIRText = func(entry Entry, target string) ([]byte, bool, []error, error) {
+	return nativellvmgen.TryMIR(".", entry.PackageName, entry.SourcePath, entry.Source, entry.MIR, target)
 }
 
 // EmitPrebuiltLLVMIR materializes already-generated LLVM IR into the standard
@@ -200,9 +205,8 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 	}
 	if capabilities.CanRoute(llvmDispatchNativeOwned) {
 		traceLLVMDispatch("%s try package=%s source=%s emit=%s target=%s", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath, emit, target)
-		if out, ok, nativeWarnings, err := TryEmitNativeOwnedLLVMIRText(entry, target); err != nil {
+		if out, ok, nativeWarnings, err := tryNativeOwnedMIRPayloadLLVMIRText(entry, target); err != nil {
 			traceLLVMDispatch("%s error: %v", llvmDispatchNativeOwned, err)
-			return nil, append(warnings, nativeWarnings...), err
 		} else if ok {
 			traceLLVMDispatch("%s covered package=%s source=%s", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath)
 			// Carry both the outer warnings (entry IRIssues + Phase-7

@@ -68,7 +68,7 @@ source
   → mir.Lower        (HIR → MIR)              ⟵ Stage 1 landed
   → mir.Validate     (MIR invariants)         ⟵ Stage 1 landed
   → backend dispatch (Stage 4 full-coverage contract):
-      native-owned fast path may emit directly from Entry.IR
+      native-owned fast path may emit from Entry.MIR via managed subprocess
       otherwise llvmgen.GenerateFromMIR(Entry.MIR, opts)
       MIR lowering / validation issues fail PrepareEntry
       GenerateFromMIR unsupported shapes render the normal unsupported skeleton
@@ -129,7 +129,7 @@ for local diagnosis.
 | Route | When it is selected | Expected result | Guard |
 |-------|---------------------|-----------------|-------|
 | `unsupported-preflight` | `UnsupportedDiagnosticForModule` rejects source-level backend gaps before concrete emitter selection | Skeleton LLVM IR + `ErrLLVMNotImplemented`; no legacy retry | `TestLLVMBackendUnsupportedSkeletonIncludesDispatchDebug` |
-| `native-owned` | default LLVM emit modes when the feature set allows it and no injected stdlib bodies are present | Full LLVM IR from `TryGenerateNativeOwnedModule`; decline falls through to MIR-direct | `TestEmitLLVMIRTextPrefersNativeOwnedFastPathWhenCovered`, `TestTryEmitNativeOwnedLLVMIRText*` |
+| `native-owned` | default LLVM emit modes when the feature set allows it, MIR is available, and no injected stdlib bodies are present | Full LLVM IR from managed `nativellvmgen.TryMIR` payload emission; decline falls through to MIR-direct | `TestEmitLLVMIRTextPrefersNativeOwnedFastPathWhenCovered`, `TestTryEmitNativeOwnedLLVMIRText*` |
 | `mir-direct` | every remaining normal backend request after native-owned declines, including malformed entries with missing MIR | Full LLVM IR from `GenerateFromMIR`, or skeleton + `backend-route: mir-direct` on unsupported shape | `TestLLVMBackendDispatchTraceReportsSelectedRoute`, `TestLLVMBackendMissingMIRDoesNotRetryLegacyIRBridge`, `TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics`, `TestNativeToolchainMergedMIRPipelineIsClean` |
 
 Route changes must update this table, `internal/backend/doc.go`, and any
