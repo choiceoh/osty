@@ -422,6 +422,8 @@ func (g *generator) staticExprSourceType(expr ast.Expr) (ast.Type, bool) {
 		return &ast.NamedType{Path: []string{"Char"}}, true
 	case *ast.ByteLit:
 		return &ast.NamedType{Path: []string{"Byte"}}, true
+	case *ast.BytesLit:
+		return &ast.NamedType{Path: []string{"Bytes"}}, true
 	case *ast.StringLit:
 		return &ast.NamedType{Path: []string{"String"}}, true
 	case *ast.Ident:
@@ -895,6 +897,8 @@ func (g *generator) staticExprInfo(expr ast.Expr) (value, bool) {
 		return value{typ: "i32"}, true
 	case *ast.ByteLit:
 		return value{typ: "i8"}, true
+	case *ast.BytesLit:
+		return value{typ: "ptr", gcManaged: true}, true
 	case *ast.StringLit:
 		return value{typ: "ptr"}, true
 	case *ast.Ident:

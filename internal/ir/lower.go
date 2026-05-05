@@ -1103,6 +1103,8 @@ func (l *lowerer) bindingTypeFromAST(e ast.Expr) Type {
 		return TChar
 	case *ast.ByteLit:
 		return TByte
+	case *ast.BytesLit:
+		return TBytes
 	case *ast.StringLit:
 		return TString
 	case *ast.Ident:
@@ -1468,6 +1470,8 @@ func (l *lowerer) lowerExpr(e ast.Expr) Expr {
 		return &CharLit{Value: e.Value, SpanV: nodeSpan(e)}
 	case *ast.ByteLit:
 		return &ByteLit{Value: e.Value, SpanV: nodeSpan(e)}
+	case *ast.BytesLit:
+		return &BytesLit{Value: e.Value, SpanV: nodeSpan(e)}
 	case *ast.StringLit:
 		return l.lowerStringLit(e)
 	case *ast.Ident:

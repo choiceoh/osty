@@ -400,7 +400,7 @@ func switchKindOfLit(e Expr) SwitchKind {
 	switch e.(type) {
 	case *BoolLit:
 		return SwitchBool
-	case *IntLit, *CharLit, *ByteLit, *FloatLit:
+	case *IntLit, *CharLit, *ByteLit, *BytesLit, *FloatLit:
 		return SwitchLit
 	case *StringLit:
 		return SwitchLit
@@ -423,6 +423,8 @@ func litLabel(e Expr) string {
 		return fmt.Sprintf("'%c'", v.Value)
 	case *ByteLit:
 		return fmt.Sprintf("b%d", v.Value)
+	case *BytesLit:
+		return fmt.Sprintf("b\"%s\"", v.Value)
 	case *StringLit:
 		var b strings.Builder
 		b.WriteByte('"')

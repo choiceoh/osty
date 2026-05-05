@@ -192,7 +192,7 @@ func walkChildren(v Visitor, n Node) {
 		// leaf
 
 	// ---- Exprs ----
-	case *IntLit, *FloatLit, *BoolLit, *CharLit, *ByteLit, *UnitLit:
+	case *IntLit, *FloatLit, *BoolLit, *CharLit, *ByteLit, *BytesLit, *UnitLit:
 		// leaves
 	case *StringLit:
 		for _, p := range n.Parts {

@@ -207,7 +207,7 @@ func subst(n Node, env SubstEnv) {
 		n.T = substType(n.T, env)
 	case *FloatLit:
 		n.T = substType(n.T, env)
-	case *BoolLit, *CharLit, *ByteLit, *UnitLit:
+	case *BoolLit, *CharLit, *ByteLit, *BytesLit, *UnitLit:
 		// Primitive-only; no TypeVar possible.
 	case *StringLit:
 		for _, p := range n.Parts {

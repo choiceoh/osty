@@ -556,6 +556,10 @@ func ByteLitExpr(pos, end Pos, value string) Expr {
 	return &ast.ByteLit{PosV: pos, EndV: end, Value: firstByte(value)}
 }
 
+func BytesLitExpr(pos, end Pos, value string) Expr {
+	return &ast.BytesLit{PosV: pos, EndV: end, Value: value}
+}
+
 func StringLitFromToken(pos, end Pos, tok Token) Expr {
 	return &ast.StringLit{PosV: pos, EndV: end, IsRaw: tok.Kind == token.RAWSTRING, IsTriple: tok.Triple, Parts: stringPartsToAST(tok.Parts)}
 }

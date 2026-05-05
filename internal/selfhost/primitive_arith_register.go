@@ -76,6 +76,19 @@ func installPrimitiveArithMethods(env *CheckEnv) {
 	}
 	registerSupplementalStdlibSurface(env)
 
+	// Bytes primitive methods — mirrors the surface declared in
+	// `internal/stdlib/primitives/bytes.osty` behind
+	// `#[intrinsic_methods(Bytes)]`. The generic AST-based collector
+	// `collectIntrinsicMethodsFromAst` handles this when invoked on
+	// the bytes stub, but the prepopulated registration below ensures
+	// the methods are available even when the AST collector hasn't
+	// run yet (e.g. during early bootstrap).
+	{
+		bytesTy := tBytes(tys)
+		bytesOwner := "Bytes"
+		registerBytesIntrinsicMethods(env, bytesOwner, bytesTy, tys)
+	}
+
 	// Float family — same `#[intrinsic_methods(Float, Float32, Float64)]`
 	// shape as the integer loop above. Register the full stdlib-declared
 	// surface so selfhost checking matches the embedded primitive stub:
@@ -590,4 +603,60 @@ func registerIntrinsicMethodOn(cx *ElabCx, method *AstNode, targetName string, t
 		generics:      generics,
 		genericBounds: bounds,
 	})
+}
+
+func registerBytesIntrinsicMethods(env *CheckEnv, owner string, ty int, tys *TyArena) {
+	tInt_ := tInt(tys)
+	tBool_ := tBool(tys)
+	tString_ := tString(tys)
+	tBytes_ := tBytes(tys)
+	tOptByte := tyOptional(tys, tByte(tys))
+	tOptInt := tyOptional(tys, tInt_)
+	tListBytes := tyNamed(tys, "List", []int{tBytes_})
+	tResultStringError := tyNamed(tys, "Result", []int{tString_, tyNamed(tys, "Error", make([]int, 0, 1))})
+
+	type pm struct {
+		name       string
+		retTy      int
+		paramNames []string
+		paramTys   []int
+	}
+	methods := []pm{
+		{"len", tInt_, nil, nil},
+		{"isEmpty", tBool_, nil, nil},
+		{"get", tOptByte, []string{"i"}, []int{tInt_}},
+		{"contains", tBool_, []string{"sub"}, []int{tBytes_}},
+		{"startsWith", tBool_, []string{"prefix"}, []int{tBytes_}},
+		{"endsWith", tBool_, []string{"suffix"}, []int{tBytes_}},
+		{"indexOf", tOptInt, []string{"sub"}, []int{tBytes_}},
+		{"lastIndexOf", tOptInt, []string{"sub"}, []int{tBytes_}},
+		{"split", tListBytes, []string{"sep"}, []int{tBytes_}},
+		{"join", tBytes_, []string{"parts"}, []int{tListBytes}},
+		{"concat", tBytes_, []string{"other"}, []int{tBytes_}},
+		{"repeat", tBytes_, []string{"n"}, []int{tInt_}},
+		{"replace", tBytes_, []string{"old", "new"}, []int{tBytes_, tBytes_}},
+		{"replaceAll", tBytes_, []string{"old", "new"}, []int{tBytes_, tBytes_}},
+		{"trimLeft", tBytes_, []string{"strip"}, []int{tBytes_}},
+		{"trimRight", tBytes_, []string{"strip"}, []int{tBytes_}},
+		{"trim", tBytes_, []string{"strip"}, []int{tBytes_}},
+		{"trimSpace", tBytes_, nil, nil},
+		{"toUpper", tBytes_, nil, nil},
+		{"toLower", tBytes_, nil, nil},
+		{"toHex", tString_, nil, nil},
+		{"slice", tBytes_, []string{"start", "end"}, []int{tInt_, tInt_}},
+		{"toString", tResultStringError, nil, nil},
+	}
+	for _, m := range methods {
+		checkRegisterFn(env, &CheckFnSig{
+			name:          m.name,
+			owner:         owner,
+			receiverTy:    ty,
+			hasReceiver:   true,
+			retTy:         m.retTy,
+			paramNames:    m.paramNames,
+			paramTys:      m.paramTys,
+			generics:      make([]string, 0, 1),
+			genericBounds: make([]*CheckGenericBound, 0, 1),
+		})
+	}
 }

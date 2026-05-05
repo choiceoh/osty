@@ -598,6 +598,8 @@ func cloneExpr(e Expr) Expr {
 		return &CharLit{Value: e.Value, SpanV: e.SpanV}
 	case *ByteLit:
 		return &ByteLit{Value: e.Value, SpanV: e.SpanV}
+	case *BytesLit:
+		return &BytesLit{Value: e.Value, SpanV: e.SpanV}
 	case *StringLit:
 		return cloneStringLit(e)
 	case *UnitLit:

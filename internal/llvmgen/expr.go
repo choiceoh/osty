@@ -177,6 +177,18 @@ func (g *generator) emitStringLiteral(lit *ast.StringLit) (value, error) {
 	return v, nil
 }
 
+func (g *generator) emitBytesLiteral(lit *ast.BytesLit) (value, error) {
+	if lit == nil {
+		return value{}, unsupported("expression", "nil Bytes literal")
+	}
+	emitter := g.toOstyEmitter()
+	out := llvmStringLiteral(emitter, lit.Value)
+	g.takeOstyEmitter(emitter)
+	v := fromOstyValue(out)
+	v.sourceType = &ast.NamedType{Path: []string{"Bytes"}}
+	return v, nil
+}
+
 func (g *generator) emitInterpolatedString(lit *ast.StringLit) (value, error) {
 	if len(lit.Parts) == 0 {
 		emitter := g.toOstyEmitter()
@@ -315,6 +327,8 @@ func (g *generator) emitExpr(expr ast.Expr) (value, error) {
 		return value{typ: "i32", ref: strconv.FormatInt(int64(e.Value), 10)}, nil
 	case *ast.ByteLit:
 		return value{typ: "i8", ref: strconv.FormatInt(int64(e.Value), 10)}, nil
+	case *ast.BytesLit:
+		return g.emitBytesLiteral(e)
 	case *ast.StringLit:
 		return g.emitStringLiteral(e)
 	case *ast.Ident:

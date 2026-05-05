@@ -348,6 +348,8 @@ func (p *printer) printExpr(e Expr) {
 		p.writef("'%c'", e.Value)
 	case *ByteLit:
 		p.writef("b%d", e.Value)
+	case *BytesLit:
+		p.writef("b\"%s\"", e.Value)
 	case *StringLit:
 		p.b.WriteByte('"')
 		for _, part := range e.Parts {
