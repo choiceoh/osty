@@ -63,32 +63,26 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 	}
 	out.WriteString("\n")
 
-	// Collect the set of in-module function symbols up front so call
-	// classifiers can validate their FnRef.Symbol references a known
-	// declaration. External calls (runtime / FFI) decline — stage0
-	// doesn't emit declare statements.
-	knownSymbols := map[string]bool{}
-	for _, fn := range module.Functions {
-		if fn == nil || fn.Name == "" {
-			continue
-		}
-		knownSymbols[fn.Name] = true
+	// Build the per-module emit context — known function symbols,
+	// the lazy string-constant pool, and a buffer that collects any
+	// module-level declarations the matchers need to emit (printf
+	// declare, format strings, string literal globals, …).
+	mctx := newModuleCtx(module)
+
+	// Pre-scan for printf-using intrinsics so the printf declare +
+	// format string land in extraDecls before any function body.
+	if scanNeedsPrintlnInt(module) {
+		mctx.extraDecls.WriteString("@.fmt.stage0.println.int = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"\n")
+		mctx.extraDecls.WriteString("declare i32 @printf(ptr, ...)\n")
 	}
 
-	// Scan every instruction for intrinsic usage so we know which
-	// runtime declarations / globals to emit at module top.
-	needsPrintlnInt := scanNeedsPrintlnInt(module)
-	if needsPrintlnInt {
-		out.WriteString("@.fmt.stage0.println.int = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"\n")
-		out.WriteString("declare i32 @printf(ptr, ...)\n\n")
-	}
-
+	var fnBodies strings.Builder
 	emittedMain := false
 	for _, fn := range module.Functions {
 		if fn == nil {
 			continue
 		}
-		if err := emitFunction(&out, fn, knownSymbols); err != nil {
+		if err := emitFunction(&fnBodies, fn, mctx); err != nil {
 			return nil, err
 		}
 		if fn.Name == "main" {
@@ -98,7 +92,84 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 	if !emittedMain {
 		return nil, fmt.Errorf("%w: module has no `main` function", ErrUnsupported)
 	}
+
+	// Module-level declarations come before function bodies. LLVM
+	// accepts either order but top-level decls first reads more
+	// naturally and matches what mem2reg / sccp etc. expect.
+	if mctx.extraDecls.Len() > 0 {
+		out.WriteString(mctx.extraDecls.String())
+		out.WriteString("\n")
+	}
+	out.WriteString(fnBodies.String())
 	return []byte(out.String()), nil
+}
+
+// moduleCtx threads per-EmitMIR module-level state through every
+// matcher and emit helper. It replaces the bare `knownSymbols` map
+// the older signatures used so future stage0 features (string pool,
+// struct layouts, runtime declarations …) can attach without forcing
+// another sweep through all matcher signatures.
+type moduleCtx struct {
+	knownSymbols map[string]bool
+	// extraDecls collects module-level lines (declares + globals)
+	// the matchers emit on demand. Concatenated into the final
+	// output before function bodies.
+	extraDecls *strings.Builder
+	// stringPool maps string-constant value → assigned global
+	// symbol (without the leading `@`). Lookups are write-once: the
+	// first reference allocates a fresh `@.str.<N>` global.
+	stringPool   map[string]string
+	nextStringID int
+}
+
+func newModuleCtx(module *mir.Module) *moduleCtx {
+	syms := map[string]bool{}
+	for _, fn := range module.Functions {
+		if fn == nil || fn.Name == "" {
+			continue
+		}
+		syms[fn.Name] = true
+	}
+	return &moduleCtx{
+		knownSymbols: syms,
+		extraDecls:   &strings.Builder{},
+		stringPool:   map[string]string{},
+	}
+}
+
+// internStringConst interns `value` and returns the LLVM operand
+// expression for it (e.g., `@.str.0`). The byte sequence is emitted
+// into `mctx.extraDecls` as a private unnamed_addr constant
+// terminated with `\00` so the compiled program can pass it to
+// `printf`-style C ABIs without further copying.
+func (m *moduleCtx) internStringConst(value string) string {
+	if sym, ok := m.stringPool[value]; ok {
+		return "@" + sym
+	}
+	sym := fmt.Sprintf(".str.%d", m.nextStringID)
+	m.nextStringID++
+	m.stringPool[value] = sym
+	fmt.Fprintf(m.extraDecls, "@%s = private unnamed_addr constant [%d x i8] c\"%s\\00\"\n", sym, len(value)+1, escapeForLLVMConst(value))
+	return "@" + sym
+}
+
+// escapeForLLVMConst escapes one byte sequence for inclusion inside
+// an LLVM `c"..."` constant literal.
+func escapeForLLVMConst(s string) string {
+	var b strings.Builder
+	for _, c := range []byte(s) {
+		switch {
+		case c == '\\':
+			b.WriteString(`\5C`)
+		case c == '"':
+			b.WriteString(`\22`)
+		case c >= 0x20 && c < 0x7F:
+			b.WriteByte(c)
+		default:
+			fmt.Fprintf(&b, `\%02X`, c)
+		}
+	}
+	return b.String()
 }
 
 // scanNeedsPrintlnInt reports whether any function in `module`
@@ -131,7 +202,7 @@ func scanNeedsPrintlnInt(module *mir.Module) bool {
 	return false
 }
 
-func emitFunction(out *strings.Builder, fn *mir.Function, knownSymbols map[string]bool) error {
+func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error {
 	if fn.IsIntrinsic {
 		return fmt.Errorf("%w: intrinsic declaration %q", ErrUnsupported, fn.Name)
 	}
@@ -141,16 +212,16 @@ func emitFunction(out *strings.Builder, fn *mir.Function, knownSymbols map[strin
 	if fn.Name == "main" {
 		return emitTrivialMain(out, fn)
 	}
-	if pat, ok := matchSequentialReturn(fn, knownSymbols); ok {
+	if pat, ok := matchSequentialReturn(fn, mctx); ok {
 		return emitSequentialReturn(out, fn, pat)
 	}
-	if pat, ok := matchIfElseReturn(fn, knownSymbols); ok {
+	if pat, ok := matchIfElseReturn(fn, mctx); ok {
 		return emitIfElseReturn(out, fn, pat)
 	}
-	if pat, ok := matchWhileLoopReturn(fn, knownSymbols); ok {
+	if pat, ok := matchWhileLoopReturn(fn, mctx); ok {
 		return emitWhileLoopReturn(out, fn, pat)
 	}
-	if pat, ok := matchForInRangeReturn(fn, knownSymbols); ok {
+	if pat, ok := matchForInRangeReturn(fn, mctx); ok {
 		return emitForInRangeReturn(out, fn, pat)
 	}
 	return fmt.Errorf("%w: function %q does not match any stage0 pattern", ErrUnsupported, fn.Name)
@@ -241,6 +312,7 @@ const (
 	scalarUnknown scalarType = iota
 	scalarInt
 	scalarBool
+	scalarString
 )
 
 func (s scalarType) llvm() string {
@@ -249,6 +321,10 @@ func (s scalarType) llvm() string {
 		return "i64"
 	case scalarBool:
 		return "i1"
+	case scalarString:
+		// Osty Strings reach the C ABI as null-terminated UTF-8 byte
+		// sequences. LLVM 15+ uses opaque pointers for that role.
+		return "ptr"
 	}
 	return ""
 }
@@ -259,6 +335,8 @@ func scalarFromType(t mir.Type) scalarType {
 		return scalarUnknown
 	}
 	switch prim.Kind {
+	case ir.PrimString:
+		return scalarString
 	case ir.PrimInt:
 		return scalarInt
 	case ir.PrimBool:
@@ -327,7 +405,7 @@ const (
 // shape mismatches. Operand resolution uses the SSA-only `bindings`
 // path — stack-backed locals are not visible here (they live in the
 // while-loop matcher).
-func classifyIntrinsicLine(ii *mir.IntrinsicInstr, bindings map[mir.LocalID]localBinding) (string, bool) {
+func classifyIntrinsicLine(ii *mir.IntrinsicInstr, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (string, bool) {
 	if ii.Dest != nil {
 		return "", false
 	}
@@ -336,7 +414,7 @@ func classifyIntrinsicLine(ii *mir.IntrinsicInstr, bindings map[mir.LocalID]loca
 		if len(ii.Args) != 1 {
 			return "", false
 		}
-		expr, ty, ok := resolveOperand(ii.Args[0], bindings)
+		expr, ty, ok := resolveOperand(ii.Args[0], bindings, mctx)
 		if !ok || ty != scalarInt {
 			return "", false
 		}
@@ -360,7 +438,7 @@ type sequentialPattern struct {
 // names every function defined in the same MIR module so direct call
 // classifiers can decline references to external symbols (which
 // stage0 cannot declare).
-func matchSequentialReturn(fn *mir.Function, knownSymbols map[string]bool) (sequentialPattern, bool) {
+func matchSequentialReturn(fn *mir.Function, mctx *moduleCtx) (sequentialPattern, bool) {
 	pat := sequentialPattern{}
 	pat.retType = scalarFromType(fn.ReturnType)
 	if pat.retType == scalarUnknown {
@@ -418,11 +496,11 @@ func matchSequentialReturn(fn *mir.Function, knownSymbols map[string]bool) (sequ
 		)
 		switch step := instr.(type) {
 		case *mir.AssignInstr:
-			pending, expr, destID, destType, okStep = classifyAssignStep(fn, step, bindings)
+			pending, expr, destID, destType, okStep = classifyAssignStep(fn, step, bindings, mctx)
 		case *mir.CallInstr:
-			pending, destID, destType, okStep = classifyCallStep(fn, step, bindings, knownSymbols)
+			pending, destID, destType, okStep = classifyCallStep(fn, step, bindings, mctx)
 		case *mir.IntrinsicInstr:
-			line, okIntr := classifyIntrinsicLine(step, bindings)
+			line, okIntr := classifyIntrinsicLine(step, bindings, mctx)
 			if !okIntr {
 				return pat, false
 			}
@@ -472,7 +550,7 @@ func matchSequentialReturn(fn *mir.Function, knownSymbols map[string]bool) (sequ
 // classifyAssignStep adapts AssignInstr to the shared pending-step
 // signature used by the matcher's per-instruction loop. Returns
 // (pending, inline-expr, destID, destType, ok).
-func classifyAssignStep(fn *mir.Function, ai *mir.AssignInstr, bindings map[mir.LocalID]localBinding) (pendingInstr, string, mir.LocalID, scalarType, bool) {
+func classifyAssignStep(fn *mir.Function, ai *mir.AssignInstr, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (pendingInstr, string, mir.LocalID, scalarType, bool) {
 	if ai.Dest.HasProjections() {
 		return pendingInstr{}, "", 0, scalarUnknown, false
 	}
@@ -485,7 +563,7 @@ func classifyAssignStep(fn *mir.Function, ai *mir.AssignInstr, bindings map[mir.
 	if destType == scalarUnknown {
 		return pendingInstr{}, "", 0, scalarUnknown, false
 	}
-	pending, expr, ok := classifyAssignSrc(ai.Src, destType, bindings)
+	pending, expr, ok := classifyAssignSrc(ai.Src, destType, bindings, mctx)
 	if !ok {
 		return pendingInstr{}, "", 0, scalarUnknown, false
 	}
@@ -495,7 +573,7 @@ func classifyAssignStep(fn *mir.Function, ai *mir.AssignInstr, bindings map[mir.
 // classifyCallStep validates and decodes a direct call (`FnRef`) into
 // a pending call instruction. Indirect calls / unit-result calls /
 // projection destinations / non-scalar args decline.
-func classifyCallStep(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.LocalID]localBinding, knownSymbols map[string]bool) (pendingInstr, mir.LocalID, scalarType, bool) {
+func classifyCallStep(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (pendingInstr, mir.LocalID, scalarType, bool) {
 	if ci.Dest == nil {
 		// Stage0 only handles calls whose result feeds a local.
 		return pendingInstr{}, 0, scalarUnknown, false
@@ -519,7 +597,7 @@ func classifyCallStep(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.Loca
 	if ref.Symbol == "" {
 		return pendingInstr{}, 0, scalarUnknown, false
 	}
-	if !knownSymbols[ref.Symbol] {
+	if !mctx.knownSymbols[ref.Symbol] {
 		return pendingInstr{}, 0, scalarUnknown, false
 	}
 	// Validate the callee's declared return type matches dest.
@@ -535,7 +613,7 @@ func classifyCallStep(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.Loca
 	}
 	args := make([]callArg, 0, len(ci.Args))
 	for i, op := range ci.Args {
-		argExpr, argTy, okOp := resolveOperand(op, bindings)
+		argExpr, argTy, okOp := resolveOperand(op, bindings, mctx)
 		if !okOp {
 			return pendingInstr{}, 0, scalarUnknown, false
 		}
@@ -558,9 +636,9 @@ func classifyCallStep(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.Loca
 // fresh SSA register). `expr` is the LLVM operand string for inline
 // bindings; binary ops return "" (the emitter assigns a register
 // number after seeing the full pending list).
-func classifyAssignSrc(src mir.RValue, destType scalarType, bindings map[mir.LocalID]localBinding) (pendingInstr, string, bool) {
+func classifyAssignSrc(src mir.RValue, destType scalarType, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (pendingInstr, string, bool) {
 	if use, ok := src.(*mir.UseRV); ok {
-		expr, ty, ok := resolveOperand(use.Op, bindings)
+		expr, ty, ok := resolveOperand(use.Op, bindings, mctx)
 		if !ok || ty != destType {
 			return pendingInstr{}, "", false
 		}
@@ -571,11 +649,11 @@ func classifyAssignSrc(src mir.RValue, destType scalarType, bindings map[mir.Loc
 		if llvmOp == "" || resultType != destType {
 			return pendingInstr{}, "", false
 		}
-		left, leftTy, ok := resolveOperand(bin.Left, bindings)
+		left, leftTy, ok := resolveOperand(bin.Left, bindings, mctx)
 		if !ok || leftTy != operandType {
 			return pendingInstr{}, "", false
 		}
-		right, rightTy, ok := resolveOperand(bin.Right, bindings)
+		right, rightTy, ok := resolveOperand(bin.Right, bindings, mctx)
 		if !ok || rightTy != operandType {
 			return pendingInstr{}, "", false
 		}
@@ -592,7 +670,9 @@ func classifyAssignSrc(src mir.RValue, destType scalarType, bindings map[mir.Loc
 
 // resolveOperand returns (expression, type) for one MIR Operand using
 // the prior-bindings map. Forward references and projections decline.
-func resolveOperand(op mir.Operand, bindings map[mir.LocalID]localBinding) (string, scalarType, bool) {
+// String constants are interned through the moduleCtx pool, producing
+// a `@.str.<N>` global symbol the caller can use directly.
+func resolveOperand(op mir.Operand, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (string, scalarType, bool) {
 	if con, ok := op.(*mir.ConstOp); ok {
 		switch c := con.Const.(type) {
 		case *mir.IntConst:
@@ -605,6 +685,11 @@ func resolveOperand(op mir.Operand, bindings map[mir.LocalID]localBinding) (stri
 				return "true", scalarBool, true
 			}
 			return "false", scalarBool, true
+		case *mir.StringConst:
+			if mctx == nil {
+				return "", scalarUnknown, false
+			}
+			return mctx.internStringConst(c.Value), scalarString, true
 		}
 		return "", scalarUnknown, false
 	}
@@ -752,7 +837,7 @@ type blockEmit struct {
 	pending []pendingInstr
 }
 
-func matchIfElseReturn(fn *mir.Function, knownSymbols map[string]bool) (ifElsePattern, bool) {
+func matchIfElseReturn(fn *mir.Function, mctx *moduleCtx) (ifElsePattern, bool) {
 	pat := ifElsePattern{}
 	pat.retType = scalarFromType(fn.ReturnType)
 	if pat.retType == scalarUnknown {
@@ -833,7 +918,7 @@ func matchIfElseReturn(fn *mir.Function, knownSymbols map[string]bool) (ifElsePa
 	nextSSA := 0
 
 	// Walk entry block.
-	entryEmit, condExpr, condTy, ok := classifyEntryBlock(fn, entryBlock, entryBindings, knownSymbols, &nextSSA)
+	entryEmit, condExpr, condTy, ok := classifyEntryBlock(fn, entryBlock, entryBindings, mctx, &nextSSA)
 	if !ok || condTy != scalarBool {
 		return pat, false
 	}
@@ -842,11 +927,11 @@ func matchIfElseReturn(fn *mir.Function, knownSymbols map[string]bool) (ifElsePa
 	pat.condType = condTy.llvm()
 
 	// Walk then / else, each forks a copy of entryBindings.
-	thenEmit, thenRet, ok := classifyBranchBlock(fn, thenBlock, copyBindings(entryBindings), knownSymbols, &nextSSA, fn.ReturnLocal, pat.retType)
+	thenEmit, thenRet, ok := classifyBranchBlock(fn, thenBlock, copyBindings(entryBindings), mctx, &nextSSA, fn.ReturnLocal, pat.retType)
 	if !ok {
 		return pat, false
 	}
-	elseEmit, elseRet, ok := classifyBranchBlock(fn, elseBlock, copyBindings(entryBindings), knownSymbols, &nextSSA, fn.ReturnLocal, pat.retType)
+	elseEmit, elseRet, ok := classifyBranchBlock(fn, elseBlock, copyBindings(entryBindings), mctx, &nextSSA, fn.ReturnLocal, pat.retType)
 	if !ok {
 		return pat, false
 	}
@@ -920,10 +1005,10 @@ func emitBlock(out *strings.Builder, blk blockEmit) {
 // AssignInstr/CallInstr followed by a BranchTerm whose Cond is a
 // resolvable Bool operand. Returns the resolved condition expression
 // + scalar type so the caller can emit the `br`.
-func classifyEntryBlock(fn *mir.Function, bb *mir.BasicBlock, bindings map[mir.LocalID]localBinding, knownSymbols map[string]bool, nextSSA *int) (blockEmit, string, scalarType, bool) {
+func classifyEntryBlock(fn *mir.Function, bb *mir.BasicBlock, bindings map[mir.LocalID]localBinding, mctx *moduleCtx, nextSSA *int) (blockEmit, string, scalarType, bool) {
 	emit := blockEmit{label: "entry"}
 	for _, instr := range bb.Instrs {
-		if !applyStep(fn, instr, bindings, knownSymbols, nextSSA, &emit) {
+		if !applyStep(fn, instr, bindings, mctx, nextSSA, &emit) {
 			return blockEmit{}, "", scalarUnknown, false
 		}
 	}
@@ -931,7 +1016,7 @@ func classifyEntryBlock(fn *mir.Function, bb *mir.BasicBlock, bindings map[mir.L
 	if !ok {
 		return blockEmit{}, "", scalarUnknown, false
 	}
-	condExpr, condTy, ok := resolveOperand(branch.Cond, bindings)
+	condExpr, condTy, ok := resolveOperand(branch.Cond, bindings, mctx)
 	if !ok {
 		return blockEmit{}, "", scalarUnknown, false
 	}
@@ -942,10 +1027,10 @@ func classifyEntryBlock(fn *mir.Function, bb *mir.BasicBlock, bindings map[mir.L
 // AssignInstr/CallInstr followed by GotoTerm. The block's last
 // AssignInstr to the return local provides the value contributed to
 // the merge phi; the helper returns that value's LLVM expression.
-func classifyBranchBlock(fn *mir.Function, bb *mir.BasicBlock, bindings map[mir.LocalID]localBinding, knownSymbols map[string]bool, nextSSA *int, retLocal mir.LocalID, retType scalarType) (blockEmit, string, bool) {
+func classifyBranchBlock(fn *mir.Function, bb *mir.BasicBlock, bindings map[mir.LocalID]localBinding, mctx *moduleCtx, nextSSA *int, retLocal mir.LocalID, retType scalarType) (blockEmit, string, bool) {
 	emit := blockEmit{}
 	for _, instr := range bb.Instrs {
-		if !applyStep(fn, instr, bindings, knownSymbols, nextSSA, &emit) {
+		if !applyStep(fn, instr, bindings, mctx, nextSSA, &emit) {
 			return blockEmit{}, "", false
 		}
 	}
@@ -963,7 +1048,7 @@ func classifyBranchBlock(fn *mir.Function, bb *mir.BasicBlock, bindings map[mir.
 // matching: it threads the binding map + SSA counter and appends a
 // pending entry to the block emit when the instruction needs an LLVM
 // line.
-func applyStep(fn *mir.Function, instr mir.Instr, bindings map[mir.LocalID]localBinding, knownSymbols map[string]bool, nextSSA *int, emit *blockEmit) bool {
+func applyStep(fn *mir.Function, instr mir.Instr, bindings map[mir.LocalID]localBinding, mctx *moduleCtx, nextSSA *int, emit *blockEmit) bool {
 	var (
 		pending  pendingInstr
 		expr     string
@@ -973,11 +1058,11 @@ func applyStep(fn *mir.Function, instr mir.Instr, bindings map[mir.LocalID]local
 	)
 	switch step := instr.(type) {
 	case *mir.AssignInstr:
-		pending, expr, destID, destType, okStep = classifyAssignStep(fn, step, bindings)
+		pending, expr, destID, destType, okStep = classifyAssignStep(fn, step, bindings, mctx)
 	case *mir.CallInstr:
-		pending, destID, destType, okStep = classifyCallStep(fn, step, bindings, knownSymbols)
+		pending, destID, destType, okStep = classifyCallStep(fn, step, bindings, mctx)
 	case *mir.IntrinsicInstr:
-		line, okIntr := classifyIntrinsicLine(step, bindings)
+		line, okIntr := classifyIntrinsicLine(step, bindings, mctx)
 		if !okIntr {
 			return false
 		}
@@ -1156,7 +1241,7 @@ type stackDecl struct {
 	ty   scalarType
 }
 
-func matchWhileLoopReturn(fn *mir.Function, knownSymbols map[string]bool) (whileLoopPattern, bool) {
+func matchWhileLoopReturn(fn *mir.Function, mctx *moduleCtx) (whileLoopPattern, bool) {
 	pat := whileLoopPattern{}
 	pat.retType = scalarFromType(fn.ReturnType)
 	if pat.retType == scalarUnknown {
@@ -1268,7 +1353,7 @@ func matchWhileLoopReturn(fn *mir.Function, knownSymbols map[string]bool) (while
 		fn:           fn,
 		bindings:     bindings,
 		stack:        stack,
-		knownSymbols: knownSymbols,
+		mctx:         mctx,
 		nextSSA:      &nextSSA,
 	}
 
@@ -1305,7 +1390,7 @@ type whileLoopEmitCtx struct {
 	fn           *mir.Function
 	bindings     map[mir.LocalID]localBinding
 	stack        map[mir.LocalID]stackDecl
-	knownSymbols map[string]bool
+	mctx *moduleCtx
 	nextSSA      *int
 }
 
@@ -1493,7 +1578,7 @@ func emitWhileCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInst
 		return false
 	}
 	ref, ok := ci.Callee.(*mir.FnRef)
-	if !ok || ref.Symbol == "" || !ctx.knownSymbols[ref.Symbol] {
+	if !ok || ref.Symbol == "" || !ctx.mctx.knownSymbols[ref.Symbol] {
 		return false
 	}
 	fnTy, ok := ref.Type.(*ir.FnType)
@@ -1664,7 +1749,7 @@ type forInRangePattern struct {
 	exitLabel   string
 }
 
-func matchForInRangeReturn(fn *mir.Function, knownSymbols map[string]bool) (forInRangePattern, bool) {
+func matchForInRangeReturn(fn *mir.Function, mctx *moduleCtx) (forInRangePattern, bool) {
 	pat := forInRangePattern{}
 	pat.retType = scalarFromType(fn.ReturnType)
 	if pat.retType == scalarUnknown {
@@ -1774,7 +1859,7 @@ func matchForInRangeReturn(fn *mir.Function, knownSymbols map[string]bool) (forI
 		fn:           fn,
 		bindings:     bindings,
 		stack:        stack,
-		knownSymbols: knownSymbols,
+		mctx:         mctx,
 		nextSSA:      &nextSSA,
 	}
 
