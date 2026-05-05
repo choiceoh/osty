@@ -175,6 +175,28 @@ fn main() {}`,
 				"call i64 @add(i64 1, i64 2)",
 			},
 		},
+		{
+			name: "while_loop_count",
+			src: `fn count_to(n: Int) -> Int {
+    let mut acc = 0
+    while acc < n {
+        acc = acc + 1
+    }
+    acc
+}
+fn main() {}`,
+			wantIR: []string{
+				"define i64 @count_to(i64 %n)",
+				"%acc.slot = alloca i64",
+				"store i64 0, ptr %acc.slot",
+				"br label %header.1",
+				"icmp slt i64",
+				"br i1",
+				"add i64",
+				"store i64",
+				"ret i64",
+			},
+		},
 	}
 	for _, c := range cases {
 		c := c
@@ -199,20 +221,6 @@ fn main() {}`,
 // coverage, flip skipNow=false to lock in the new capability.
 func TestStage0RealMIRGapProbe(t *testing.T) {
 	cases := []realProbeCase{
-		{
-			name:    "while_loop",
-			src:     `fn count_down(n: Int) -> Int {
-    let mut i = n
-    let mut acc = 0
-    while i > 0 {
-        acc = acc + i
-        i = i - 1
-    }
-    acc
-}
-fn main() {}`,
-			skipNow: true,
-		},
 		{
 			name:    "for_in_range",
 			src:     `fn sum(n: Int) -> Int {

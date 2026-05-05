@@ -109,6 +109,9 @@ func emitFunction(out *strings.Builder, fn *mir.Function, knownSymbols map[strin
 	if pat, ok := matchIfElseReturn(fn, knownSymbols); ok {
 		return emitIfElseReturn(out, fn, pat)
 	}
+	if pat, ok := matchWhileLoopReturn(fn, knownSymbols); ok {
+		return emitWhileLoopReturn(out, fn, pat)
+	}
 	return fmt.Errorf("%w: function %q does not match any stage0 pattern", ErrUnsupported, fn.Name)
 }
 
@@ -229,9 +232,13 @@ func scalarFromType(t mir.Type) scalarType {
 // already-resolved expression) or a fresh SSA register pending
 // emission.
 type localBinding struct {
-	expr      string // full LLVM operand expression (`42`, `true`, `%x`, `%3`)
-	ty        scalarType
-	defined   bool
+	expr    string // LLVM operand expression (`42`, `true`, `%x`, `%3`) OR alloca slot (`%acc.slot`) when isStack
+	ty      scalarType
+	defined bool
+	// isStack reports whether the local lives in an alloca slot (P6
+	// while-loop mutable locals). Reads of stack-backed locals must
+	// be lowered to a `load` instruction; writes emit `store`.
+	isStack bool
 }
 
 // pendingInstr is one instruction the emitter will materialise.
@@ -1016,4 +1023,492 @@ func packageNameFor(module *mir.Module, opts llvmabi.Options) string {
 		return opts.PackageName
 	}
 	return "main"
+}
+
+// ---- P6: while-loop with stack-allocated mutable locals ----
+//
+// stage0 P6 introduces multi-block MIR with a back-edge — the canonical
+// 4-block while-loop shape produced by the front-end:
+//
+//	entry  : pre-loop instructions + GotoTerm(header)
+//	header : cond computation + BranchTerm(cond, body, exit)
+//	body   : loop body + GotoTerm(header)            ← back-edge
+//	exit   : post-loop + AssignInstr(ret) + ReturnTerm
+//
+// To handle locals that are reassigned across iterations (the loop
+// counter, accumulators), stage0 lowers each `mir.Local` with
+// `Mut == true` (and that is neither a parameter nor the return
+// local) to an LLVM alloca slot in the function entry. Reads emit
+// `load`, writes emit `store`. The LLVM mem2reg pass converts these
+// back to SSA + phi at -O1+, so the bootstrap output stays compact
+// after optimisation despite the verbose emit shape.
+
+type whileLoopPattern struct {
+	retType    scalarType
+	paramIDs   []mir.LocalID
+	paramTypes []scalarType
+	paramNames []string
+	stackDecls []stackDecl
+	// Pre-rendered block bodies (without label line, without terminator).
+	entryBody  string
+	headerBody string
+	bodyBody   string
+	exitBody   string
+	// Header condition LLVM expression (already loaded if stack-backed).
+	headerCondExpr string
+	// Final return expression (the value emitted to `ret`).
+	finalRetExpr string
+	headerLabel  string
+	bodyLabel    string
+	exitLabel    string
+}
+
+type stackDecl struct {
+	id   mir.LocalID
+	name string // SSA-style register name without leading %
+	ty   scalarType
+}
+
+func matchWhileLoopReturn(fn *mir.Function, knownSymbols map[string]bool) (whileLoopPattern, bool) {
+	pat := whileLoopPattern{}
+	pat.retType = scalarFromType(fn.ReturnType)
+	if pat.retType == scalarUnknown {
+		return pat, false
+	}
+	if len(fn.Params) > 2 {
+		return pat, false
+	}
+	if len(fn.Blocks) != 4 {
+		return pat, false
+	}
+
+	// Param SSA registers.
+	pat.paramIDs = fn.Params
+	pat.paramTypes = make([]scalarType, len(fn.Params))
+	pat.paramNames = make([]string, len(fn.Params))
+	fallbackNames := []string{"a", "b"}
+	for i, pid := range fn.Params {
+		loc := lookupLocal(fn, pid)
+		if loc == nil || !loc.IsParam {
+			return pat, false
+		}
+		pt := scalarFromType(loc.Type)
+		if pt == scalarUnknown {
+			return pat, false
+		}
+		pat.paramTypes[i] = pt
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+	}
+	disambiguateParamNames(pat.paramNames)
+
+	// Block layout: entry → header → (body | exit).
+	entry := blockByID(fn, fn.Entry)
+	if entry == nil {
+		return pat, false
+	}
+	entryGoto, ok := entry.Term.(*mir.GotoTerm)
+	if !ok {
+		return pat, false
+	}
+	header := blockByID(fn, entryGoto.Target)
+	if header == nil || header.ID == entry.ID {
+		return pat, false
+	}
+	branch, ok := header.Term.(*mir.BranchTerm)
+	if !ok {
+		return pat, false
+	}
+	body := blockByID(fn, branch.Then)
+	exit := blockByID(fn, branch.Else)
+	if body == nil || exit == nil {
+		return pat, false
+	}
+	if body.ID == exit.ID || body.ID == entry.ID || body.ID == header.ID || exit.ID == header.ID || exit.ID == entry.ID {
+		return pat, false
+	}
+	bodyGoto, ok := body.Term.(*mir.GotoTerm)
+	if !ok || bodyGoto.Target != header.ID {
+		return pat, false
+	}
+	if _, ok := exit.Term.(*mir.ReturnTerm); !ok {
+		return pat, false
+	}
+
+	// Discover stack-allocated locals (Mut and not param/return).
+	stack := map[mir.LocalID]stackDecl{}
+	for _, l := range fn.Locals {
+		if l == nil {
+			continue
+		}
+		if l.IsParam || l.IsReturn {
+			continue
+		}
+		if !l.Mut {
+			continue
+		}
+		ty := scalarFromType(l.Type)
+		if ty == scalarUnknown {
+			return pat, false
+		}
+		decl := stackDecl{id: l.ID, name: sanitizeLLVMName(l.Name, fmt.Sprintf("local%d", l.ID)) + ".slot", ty: ty}
+		stack[l.ID] = decl
+		pat.stackDecls = append(pat.stackDecls, decl)
+	}
+
+	// Bindings shared across blocks. Param + stack locals seeded;
+	// SSA-bound (immutable) locals get added as their AssignInstrs
+	// are walked.
+	bindings := map[mir.LocalID]localBinding{}
+	for i, pid := range fn.Params {
+		bindings[pid] = localBinding{
+			expr:    "%" + pat.paramNames[i],
+			ty:      pat.paramTypes[i],
+			defined: true,
+		}
+	}
+	for _, sd := range pat.stackDecls {
+		bindings[sd.id] = localBinding{
+			expr:    "%" + sd.name,
+			ty:      sd.ty,
+			defined: true,
+			// stack-allocated; reads must `load` first.
+			isStack: true,
+		}
+	}
+
+	nextSSA := 0
+	emitCtx := &whileLoopEmitCtx{
+		fn:           fn,
+		bindings:     bindings,
+		stack:        stack,
+		knownSymbols: knownSymbols,
+		nextSSA:      &nextSSA,
+	}
+
+	if body, ok := emitWhileBlock(emitCtx, entry, false); ok {
+		pat.entryBody = body
+	} else {
+		return pat, false
+	}
+	headerCondExpr, headerBody, ok := emitWhileHeader(emitCtx, header, branch.Cond)
+	if !ok {
+		return pat, false
+	}
+	pat.headerBody = headerBody
+	pat.headerCondExpr = headerCondExpr
+	if body, ok := emitWhileBlock(emitCtx, body, false); ok {
+		pat.bodyBody = body
+	} else {
+		return pat, false
+	}
+	if exitBody, finalExpr, ok := emitWhileExit(emitCtx, exit, fn.ReturnLocal, pat.retType); ok {
+		pat.exitBody = exitBody
+		pat.finalRetExpr = finalExpr
+	} else {
+		return pat, false
+	}
+
+	pat.headerLabel = blockLabelName(header.ID, "header")
+	pat.bodyLabel = blockLabelName(body.ID, "body")
+	pat.exitLabel = blockLabelName(exit.ID, "exit")
+	return pat, true
+}
+
+type whileLoopEmitCtx struct {
+	fn           *mir.Function
+	bindings     map[mir.LocalID]localBinding
+	stack        map[mir.LocalID]stackDecl
+	knownSymbols map[string]bool
+	nextSSA      *int
+}
+
+// emitWhileBlock walks an entry / body block and returns the rendered
+// LLVM body (without the label line, without terminator). Returns
+// false if any instruction declines.
+func emitWhileBlock(ctx *whileLoopEmitCtx, bb *mir.BasicBlock, _ bool) (string, bool) {
+	var out strings.Builder
+	for _, instr := range bb.Instrs {
+		if !emitWhileStep(ctx, &out, instr) {
+			return "", false
+		}
+	}
+	return out.String(), true
+}
+
+// emitWhileHeader renders the header block. The header has 0+
+// AssignInstrs (typically the cond computation) followed by a
+// BranchTerm whose Cond operand is resolved to an LLVM expression.
+func emitWhileHeader(ctx *whileLoopEmitCtx, bb *mir.BasicBlock, cond mir.Operand) (string, string, bool) {
+	var out strings.Builder
+	for _, instr := range bb.Instrs {
+		if !emitWhileStep(ctx, &out, instr) {
+			return "", "", false
+		}
+	}
+	expr, ty, ok := resolveOperandWithLoad(ctx, &out, cond)
+	if !ok || ty != scalarBool {
+		return "", "", false
+	}
+	return expr, out.String(), true
+}
+
+// emitWhileExit renders the exit block. The block ends with a
+// ReturnTerm; the final value emitted to `ret <retType>` is the
+// expression bound to the return local at the end.
+func emitWhileExit(ctx *whileLoopEmitCtx, bb *mir.BasicBlock, retLocal mir.LocalID, retType scalarType) (string, string, bool) {
+	var out strings.Builder
+	for _, instr := range bb.Instrs {
+		if !emitWhileStep(ctx, &out, instr) {
+			return "", "", false
+		}
+	}
+	binding, ok := ctx.bindings[retLocal]
+	if !ok || !binding.defined {
+		return "", "", false
+	}
+	if binding.ty != retType {
+		return "", "", false
+	}
+	if binding.isStack {
+		expr, _, okLoad := loadFromStack(ctx, &out, retLocal)
+		if !okLoad {
+			return "", "", false
+		}
+		return out.String(), expr, true
+	}
+	return out.String(), binding.expr, true
+}
+
+// emitWhileStep handles one MIR instruction in a while-loop block.
+// AssignInstrs are rendered with stack-aware reads / writes; storage
+// markers are skipped.
+func emitWhileStep(ctx *whileLoopEmitCtx, out *strings.Builder, instr mir.Instr) bool {
+	switch step := instr.(type) {
+	case *mir.AssignInstr:
+		return emitWhileAssign(ctx, out, step)
+	case *mir.CallInstr:
+		return emitWhileCall(ctx, out, step)
+	case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
+		return true
+	}
+	return false
+}
+
+func emitWhileAssign(ctx *whileLoopEmitCtx, out *strings.Builder, ai *mir.AssignInstr) bool {
+	if ai.Dest.HasProjections() {
+		return false
+	}
+	destID := ai.Dest.Local
+	destLocal := lookupLocal(ctx.fn, destID)
+	if destLocal == nil {
+		return false
+	}
+	destType := scalarFromType(destLocal.Type)
+	if destType == scalarUnknown {
+		return false
+	}
+
+	// Stage0 distinguishes stack-backed dests (alloca slot) from
+	// SSA-bound dests. Stack writes emit `store`; SSA writes bind
+	// the local to a fresh expression.
+	isStackDest := false
+	if _, ok := ctx.stack[destID]; ok {
+		isStackDest = true
+	}
+
+	// Resolve src.
+	var rhsExpr string
+	var rhsTy scalarType
+	switch src := ai.Src.(type) {
+	case *mir.UseRV:
+		expr, ty, ok := resolveOperandWithLoad(ctx, out, src.Op)
+		if !ok || ty != destType {
+			return false
+		}
+		rhsExpr = expr
+		rhsTy = ty
+	case *mir.BinaryRV:
+		llvmOp, resultType, operandType := classifyBinary(src.Op)
+		if llvmOp == "" || resultType != destType {
+			return false
+		}
+		left, leftTy, ok := resolveOperandWithLoad(ctx, out, src.Left)
+		if !ok || leftTy != operandType {
+			return false
+		}
+		right, rightTy, ok := resolveOperandWithLoad(ctx, out, src.Right)
+		if !ok || rightTy != operandType {
+			return false
+		}
+		reg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = %s %s %s, %s\n", reg, llvmOp, operandType.llvm(), left, right)
+		rhsExpr = reg
+		rhsTy = resultType
+	default:
+		return false
+	}
+	_ = rhsTy
+
+	if isStackDest {
+		fmt.Fprintf(out, "  store %s %s, ptr %%%s\n", destType.llvm(), rhsExpr, ctx.stack[destID].name)
+		// stack binding stays the same (always loaded fresh).
+		return true
+	}
+	// SSA dest: bind expression. If RHS is a constant literal /
+	// param register, bind directly. If RHS is a fresh reg, that's
+	// already its expression.
+	if existing, found := ctx.bindings[destID]; found && existing.defined && !existing.isStack {
+		// Disallow SSA reassignment.
+		return false
+	}
+	ctx.bindings[destID] = localBinding{expr: rhsExpr, ty: destType, defined: true}
+	return true
+}
+
+func emitWhileCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInstr) bool {
+	if ci.Dest == nil || ci.Dest.HasProjections() {
+		return false
+	}
+	destID := ci.Dest.Local
+	destLocal := lookupLocal(ctx.fn, destID)
+	if destLocal == nil {
+		return false
+	}
+	destType := scalarFromType(destLocal.Type)
+	if destType == scalarUnknown {
+		return false
+	}
+	ref, ok := ci.Callee.(*mir.FnRef)
+	if !ok || ref.Symbol == "" || !ctx.knownSymbols[ref.Symbol] {
+		return false
+	}
+	fnTy, ok := ref.Type.(*ir.FnType)
+	if !ok || fnTy == nil {
+		return false
+	}
+	if scalarFromType(fnTy.Return) != destType {
+		return false
+	}
+	if len(fnTy.Params) != len(ci.Args) {
+		return false
+	}
+	args := make([]callArg, 0, len(ci.Args))
+	for i, op := range ci.Args {
+		expr, ty, okOp := resolveOperandWithLoad(ctx, out, op)
+		if !okOp {
+			return false
+		}
+		paramTy := scalarFromType(fnTy.Params[i])
+		if paramTy == scalarUnknown || paramTy != ty {
+			return false
+		}
+		args = append(args, callArg{expr: expr, ty: ty.llvm()})
+	}
+	reg := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = call %s @%s(", reg, destType.llvm(), ref.Symbol)
+	for i, a := range args {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fmt.Fprintf(out, "%s %s", a.ty, a.expr)
+	}
+	out.WriteString(")\n")
+	if _, isStack := ctx.stack[destID]; isStack {
+		fmt.Fprintf(out, "  store %s %s, ptr %%%s\n", destType.llvm(), reg, ctx.stack[destID].name)
+		return true
+	}
+	if existing, found := ctx.bindings[destID]; found && existing.defined && !existing.isStack {
+		return false
+	}
+	ctx.bindings[destID] = localBinding{expr: reg, ty: destType, defined: true}
+	return true
+}
+
+// resolveOperandWithLoad is the while-loop counterpart of
+// resolveOperand: it understands stack-backed locals and emits a load
+// on demand. The SSA register that holds the load result becomes the
+// returned expression.
+func resolveOperandWithLoad(ctx *whileLoopEmitCtx, out *strings.Builder, op mir.Operand) (string, scalarType, bool) {
+	if con, ok := op.(*mir.ConstOp); ok {
+		switch c := con.Const.(type) {
+		case *mir.IntConst:
+			return fmt.Sprintf("%d", c.Value), scalarInt, true
+		case *mir.BoolConst:
+			if c.Value {
+				return "true", scalarBool, true
+			}
+			return "false", scalarBool, true
+		}
+		return "", scalarUnknown, false
+	}
+	if cp, ok := op.(*mir.CopyOp); ok {
+		if cp.Place.HasProjections() {
+			return "", scalarUnknown, false
+		}
+		b, found := ctx.bindings[cp.Place.Local]
+		if !found || !b.defined {
+			return "", scalarUnknown, false
+		}
+		if b.isStack {
+			return loadFromStack(ctx, out, cp.Place.Local)
+		}
+		return b.expr, b.ty, true
+	}
+	return "", scalarUnknown, false
+}
+
+func loadFromStack(ctx *whileLoopEmitCtx, out *strings.Builder, id mir.LocalID) (string, scalarType, bool) {
+	sd, ok := ctx.stack[id]
+	if !ok {
+		return "", scalarUnknown, false
+	}
+	reg := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = load %s, ptr %%%s\n", reg, sd.ty.llvm(), sd.name)
+	return reg, sd.ty, true
+}
+
+func freshReg(ctx *whileLoopEmitCtx) string {
+	reg := fmt.Sprintf("%%%d", *ctx.nextSSA)
+	*ctx.nextSSA++
+	return reg
+}
+
+func emitWhileLoopReturn(out *strings.Builder, fn *mir.Function, pat whileLoopPattern) error {
+	retLLVM := pat.retType.llvm()
+	fmt.Fprintf(out, "define %s @%s(", retLLVM, fn.Name)
+	for i, name := range pat.paramNames {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
+	}
+	out.WriteString(") {\n")
+
+	// Entry: alloca declarations + entry body + branch to header.
+	out.WriteString("entry:\n")
+	for _, sd := range pat.stackDecls {
+		fmt.Fprintf(out, "  %%%s = alloca %s\n", sd.name, sd.ty.llvm())
+	}
+	out.WriteString(pat.entryBody)
+	fmt.Fprintf(out, "  br label %%%s\n", pat.headerLabel)
+
+	// Header.
+	out.WriteString("\n")
+	fmt.Fprintf(out, "%s:\n", pat.headerLabel)
+	out.WriteString(pat.headerBody)
+	fmt.Fprintf(out, "  br i1 %s, label %%%s, label %%%s\n", pat.headerCondExpr, pat.bodyLabel, pat.exitLabel)
+
+	// Body (back-edge to header).
+	out.WriteString("\n")
+	fmt.Fprintf(out, "%s:\n", pat.bodyLabel)
+	out.WriteString(pat.bodyBody)
+	fmt.Fprintf(out, "  br label %%%s\n", pat.headerLabel)
+
+	// Exit.
+	out.WriteString("\n")
+	fmt.Fprintf(out, "%s:\n", pat.exitLabel)
+	out.WriteString(pat.exitBody)
+	fmt.Fprintf(out, "  ret %s %s\n", retLLVM, pat.finalRetExpr)
+	out.WriteString("}\n\n")
+	return nil
 }
