@@ -641,3 +641,310 @@ func TestStage0RejectsUnsupportedBinaryOp(t *testing.T) {
 		}),
 	)
 }
+
+// ---- P3a: multi-instruction sequential return ----
+//
+// makeMultiInstrFn builds a function with the given instruction
+// sequence. `extraLocals` lists non-param non-return locals (the
+// targets of intermediate AssignInstrs).
+func makeMultiInstrFn(name string, retT mir.Type, params []paramSpec, extraLocals []paramSpec, instrs []mir.Instr) *mir.Function {
+	locals := []*mir.Local{
+		{ID: 0, Name: "ret", Type: retT, IsReturn: true},
+	}
+	paramIDs := make([]mir.LocalID, 0, len(params))
+	nextID := mir.LocalID(1)
+	for _, p := range params {
+		paramIDs = append(paramIDs, nextID)
+		locals = append(locals, &mir.Local{ID: nextID, Name: p.name, Type: p.ty, IsParam: true})
+		nextID++
+	}
+	for _, l := range extraLocals {
+		locals = append(locals, &mir.Local{ID: nextID, Name: l.name, Type: l.ty})
+		nextID++
+	}
+	return &mir.Function{
+		Name:        name,
+		Params:      paramIDs,
+		ReturnType:  retT,
+		ReturnLocal: 0,
+		Locals:      locals,
+		Entry:       0,
+		Blocks: []*mir.BasicBlock{
+			{ID: 0, Instrs: instrs, Term: &mir.ReturnTerm{}},
+		},
+	}
+}
+
+func assign(destID mir.LocalID, src mir.RValue) *mir.AssignInstr {
+	return &mir.AssignInstr{Dest: mir.Place{Local: destID}, Src: src}
+}
+
+func TestStage0EmitsLetThenReturn(t *testing.T) {
+	t.Parallel()
+	// `fn double(x: Int) -> Int { let y = x; y + y }`
+	// Locals: 0 ret, 1 x param, 2 y temp.
+	// MIR: ret = (CopyOp y) which is binary on (CopyOp y, CopyOp y).
+	// Actually the lowerer would compute: y = x; ret = y + y.
+	// Use UseRV(CopyOp x) for y, then BinaryRV(BinAdd, CopyOp y, CopyOp y) for ret.
+	fn := makeMultiInstrFn(
+		"double",
+		ir.TInt,
+		[]paramSpec{{name: "x", ty: ir.TInt}},
+		[]paramSpec{{name: "y", ty: ir.TInt}},
+		[]mir.Instr{
+			assign(2, useRV(paramCopy(1, ir.TInt))),
+			assign(0, binaryRV(mir.BinAdd, paramCopy(2, ir.TInt), paramCopy(2, ir.TInt), ir.TInt)),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"define i64 @double(i64 %x)",
+		"%0 = add i64 %x, %x", // y inlined as %x
+		"ret i64 %0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0EmitsThreeStepArith(t *testing.T) {
+	t.Parallel()
+	// `fn poly(a: Int, b: Int) -> Int {
+	//      let s = a + b
+	//      let p = a * b
+	//      s - p
+	//  }`
+	// Locals: 0 ret, 1 a, 2 b, 3 s, 4 p.
+	fn := makeMultiInstrFn(
+		"poly",
+		ir.TInt,
+		[]paramSpec{{name: "a", ty: ir.TInt}, {name: "b", ty: ir.TInt}},
+		[]paramSpec{{name: "s", ty: ir.TInt}, {name: "p", ty: ir.TInt}},
+		[]mir.Instr{
+			assign(3, binaryRV(mir.BinAdd, paramCopy(1, ir.TInt), paramCopy(2, ir.TInt), ir.TInt)),
+			assign(4, binaryRV(mir.BinMul, paramCopy(1, ir.TInt), paramCopy(2, ir.TInt), ir.TInt)),
+			assign(0, binaryRV(mir.BinSub, paramCopy(3, ir.TInt), paramCopy(4, ir.TInt), ir.TInt)),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"define i64 @poly(i64 %a, i64 %b)",
+		"%0 = add i64 %a, %b",
+		"%1 = mul i64 %a, %b",
+		"%2 = sub i64 %0, %1",
+		"ret i64 %2",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0EmitsConstThenUse(t *testing.T) {
+	t.Parallel()
+	// `fn add_one(x: Int) -> Int { let one = 1; x + one }`
+	fn := makeMultiInstrFn(
+		"add_one",
+		ir.TInt,
+		[]paramSpec{{name: "x", ty: ir.TInt}},
+		[]paramSpec{{name: "one", ty: ir.TInt}},
+		[]mir.Instr{
+			assign(2, useRV(intConst(1))),
+			assign(0, binaryRV(mir.BinAdd, paramCopy(1, ir.TInt), paramCopy(2, ir.TInt), ir.TInt)),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	// `one` inlines to literal 1.
+	if !strings.Contains(got, "%0 = add i64 %x, 1") {
+		t.Fatalf("expected inlined const 1:\n%s", got)
+	}
+}
+
+func TestStage0EmitsBoolThreshold(t *testing.T) {
+	t.Parallel()
+	// `fn over(x: Int, threshold: Int) -> Bool {
+	//      let diff = x - threshold
+	//      diff > 0
+	//  }`
+	fn := makeMultiInstrFn(
+		"over",
+		ir.TBool,
+		[]paramSpec{{name: "x", ty: ir.TInt}, {name: "threshold", ty: ir.TInt}},
+		[]paramSpec{{name: "diff", ty: ir.TInt}},
+		[]mir.Instr{
+			assign(3, binaryRV(mir.BinSub, paramCopy(1, ir.TInt), paramCopy(2, ir.TInt), ir.TInt)),
+			assign(0, binaryRV(mir.BinGt, paramCopy(3, ir.TInt), intConst(0), ir.TBool)),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"define i1 @over(i64 %x, i64 %threshold)",
+		"%0 = sub i64 %x, %threshold",
+		"%1 = icmp sgt i64 %0, 0",
+		"ret i1 %1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0EmitsBoolLogicChain(t *testing.T) {
+	t.Parallel()
+	// `fn ranged(x: Int, lo: Int, hi: Int) -> Bool {
+	//      let above = x >= lo
+	//      let below = x <= hi
+	//      above && below
+	//  }`
+	fn := makeMultiInstrFn(
+		"ranged",
+		ir.TBool,
+		[]paramSpec{{name: "x", ty: ir.TInt}, {name: "lo", ty: ir.TInt}, {name: "hi", ty: ir.TInt}},
+		nil,
+		nil,
+	)
+	// Three-param functions are rejected by P2e — confirm this
+	// remains the case under sequential pattern too.
+	mustReject(t, trivialMainFn(), fn)
+}
+
+func TestStage0EmitsTwoParamBoolLogic(t *testing.T) {
+	t.Parallel()
+	// `fn between(lo: Int, hi: Int) -> Bool {
+	//      let valid = lo <= hi
+	//      let nonneg = lo >= 0
+	//      valid && nonneg
+	//  }`
+	fn := makeMultiInstrFn(
+		"between",
+		ir.TBool,
+		[]paramSpec{{name: "lo", ty: ir.TInt}, {name: "hi", ty: ir.TInt}},
+		[]paramSpec{{name: "valid", ty: ir.TBool}, {name: "nonneg", ty: ir.TBool}},
+		[]mir.Instr{
+			assign(3, binaryRV(mir.BinLeq, paramCopy(1, ir.TInt), paramCopy(2, ir.TInt), ir.TBool)),
+			assign(4, binaryRV(mir.BinGeq, paramCopy(1, ir.TInt), intConst(0), ir.TBool)),
+			assign(0, binaryRV(mir.BinAnd, paramCopy(3, ir.TBool), paramCopy(4, ir.TBool), ir.TBool)),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"define i1 @between(i64 %lo, i64 %hi)",
+		"%0 = icmp sle i64 %lo, %hi",
+		"%1 = icmp sge i64 %lo, 0",
+		"%2 = and i1 %0, %1",
+		"ret i1 %2",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0EmitsCopyChain(t *testing.T) {
+	t.Parallel()
+	// `fn passthrough(x: Int) -> Int { let a = x; let b = a; b }`
+	// Both temps inline to %x; no LLVM emitted.
+	fn := makeMultiInstrFn(
+		"passthrough",
+		ir.TInt,
+		[]paramSpec{{name: "x", ty: ir.TInt}},
+		[]paramSpec{{name: "a", ty: ir.TInt}, {name: "b", ty: ir.TInt}},
+		[]mir.Instr{
+			assign(2, useRV(paramCopy(1, ir.TInt))),
+			assign(3, useRV(paramCopy(2, ir.TInt))),
+			assign(0, useRV(paramCopy(3, ir.TInt))),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	if !strings.Contains(got, "ret i64 %x") {
+		t.Fatalf("expected `ret i64 %%x` (full inline chain):\n%s", got)
+	}
+	// No SSA register should have been emitted.
+	if strings.Contains(got, "%0 =") {
+		t.Fatalf("expected no SSA register for inline chain:\n%s", got)
+	}
+}
+
+// ---- multi-instruction rejection paths ----
+
+func TestStage0RejectsLocalReassignment(t *testing.T) {
+	t.Parallel()
+	// `let y = x; y = 1; y` — assigning to `y` twice declines.
+	fn := makeMultiInstrFn(
+		"bad",
+		ir.TInt,
+		[]paramSpec{{name: "x", ty: ir.TInt}},
+		[]paramSpec{{name: "y", ty: ir.TInt}},
+		[]mir.Instr{
+			assign(2, useRV(paramCopy(1, ir.TInt))),
+			assign(2, useRV(intConst(1))), // reassign
+			assign(0, useRV(paramCopy(2, ir.TInt))),
+		},
+	)
+	mustReject(t, trivialMainFn(), fn)
+}
+
+func TestStage0RejectsForwardReference(t *testing.T) {
+	t.Parallel()
+	// Use of `y` before it's defined.
+	fn := makeMultiInstrFn(
+		"bad",
+		ir.TInt,
+		[]paramSpec{{name: "x", ty: ir.TInt}},
+		[]paramSpec{{name: "y", ty: ir.TInt}},
+		[]mir.Instr{
+			// Read y before assigning it.
+			assign(0, useRV(paramCopy(2, ir.TInt))),
+			assign(2, useRV(paramCopy(1, ir.TInt))),
+		},
+	)
+	mustReject(t, trivialMainFn(), fn)
+}
+
+func TestStage0RejectsParamReassignment(t *testing.T) {
+	t.Parallel()
+	// `x = 1` — overwriting a param declines.
+	fn := makeMultiInstrFn(
+		"bad",
+		ir.TInt,
+		[]paramSpec{{name: "x", ty: ir.TInt}},
+		nil,
+		[]mir.Instr{
+			assign(1, useRV(intConst(1))), // overwrite param x
+			assign(0, useRV(paramCopy(1, ir.TInt))),
+		},
+	)
+	mustReject(t, trivialMainFn(), fn)
+}
+
+func TestStage0RejectsReturnLocalNeverAssigned(t *testing.T) {
+	t.Parallel()
+	// Block has instructions but never writes to ret.
+	fn := makeMultiInstrFn(
+		"bad",
+		ir.TInt,
+		[]paramSpec{{name: "x", ty: ir.TInt}},
+		[]paramSpec{{name: "y", ty: ir.TInt}},
+		[]mir.Instr{
+			assign(2, useRV(paramCopy(1, ir.TInt))),
+		},
+	)
+	mustReject(t, trivialMainFn(), fn)
+}
+
+func TestStage0RejectsTypeMismatchInChain(t *testing.T) {
+	t.Parallel()
+	// Local typed Bool, assigned an Int operand.
+	fn := makeMultiInstrFn(
+		"bad",
+		ir.TBool,
+		[]paramSpec{{name: "x", ty: ir.TInt}},
+		[]paramSpec{{name: "y", ty: ir.TBool}}, // Bool local
+		[]mir.Instr{
+			assign(2, useRV(paramCopy(1, ir.TInt))), // Int → Bool: type mismatch
+			assign(0, useRV(paramCopy(2, ir.TBool))),
+		},
+	)
+	mustReject(t, trivialMainFn(), fn)
+}
