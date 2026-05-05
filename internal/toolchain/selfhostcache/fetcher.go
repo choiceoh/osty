@@ -2,6 +2,7 @@ package selfhostcache
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -69,15 +70,23 @@ type Fetcher interface {
 // HTTPFetcher resolves artifacts against a base URL using the
 // canonical layout:
 //
-//	<baseURL>/<sha>-<triple>.json   ← manifest
-//	<manifest.BinaryURL>            ← binary (resolved relative to baseURL)
+//	<baseURL>/<sha>-<triple>.json     ← manifest
+//	<baseURL>/<sha>-<triple>.json.sig ← detached ed25519 signature (A6)
+//	<manifest.BinaryURL>              ← binary (resolved relative to baseURL)
 //
 // HTTPS is required for production; an http:// base URL is accepted
 // for local registry tests but emits an explicit error in offline
 // mode.
+//
+// When `TrustedKey` is non-nil the signature URL is fetched and
+// verified before the binary download is initiated. A nil
+// `TrustedKey` keeps the A4 behaviour — manifests are accepted
+// unsigned. `EnvFetcher` populates this from `OSTY_SELF_TRUSTED_KEY`
+// so the env var alone gates verification.
 type HTTPFetcher struct {
-	BaseURL string
-	Client  *http.Client
+	BaseURL    string
+	Client     *http.Client
+	TrustedKey ed25519.PublicKey
 }
 
 // Fetch implements Fetcher.
@@ -94,7 +103,7 @@ func (f HTTPFetcher) Fetch(ctx context.Context, key Key) (Manifest, io.ReadClose
 	if err != nil {
 		return Manifest{}, nil, fmt.Errorf("selfhostcache: manifest URL: %w", err)
 	}
-	manifest, err := fetchManifest(ctx, client, manifestURL)
+	manifest, manifestBody, err := fetchManifest(ctx, client, manifestURL)
 	if err != nil {
 		return Manifest{}, nil, err
 	}
@@ -111,6 +120,16 @@ func (f HTTPFetcher) Fetch(ctx context.Context, key Key) (Manifest, io.ReadClose
 		return Manifest{}, nil, fmt.Errorf("selfhostcache: manifest BinaryURL empty")
 	}
 
+	if f.TrustedKey != nil {
+		sig, err := fetchSignature(ctx, client, manifestURL)
+		if err != nil {
+			return Manifest{}, nil, err
+		}
+		if err := VerifyManifest(f.TrustedKey, manifestBody, sig); err != nil {
+			return Manifest{}, nil, err
+		}
+	}
+
 	binURL, err := resolveBinaryURL(f.BaseURL, manifest.BinaryURL)
 	if err != nil {
 		return Manifest{}, nil, fmt.Errorf("selfhostcache: binary URL: %w", err)
@@ -122,36 +141,40 @@ func (f HTTPFetcher) Fetch(ctx context.Context, key Key) (Manifest, io.ReadClose
 	return manifest, body, nil
 }
 
-func fetchManifest(ctx context.Context, client *http.Client, url string) (Manifest, error) {
+// fetchManifest returns both the decoded manifest and the raw
+// response bytes. The raw bytes feed ed25519 verification — the
+// signature is computed against the canonical on-the-wire encoding,
+// so a re-marshal would produce a different (and invalid) input.
+func fetchManifest(ctx context.Context, client *http.Client, url string) (Manifest, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return Manifest{}, err
+		return Manifest{}, nil, err
 	}
 	req.Header.Set("Accept", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return Manifest{}, fmt.Errorf("selfhostcache: GET %s: %w", url, err)
+		return Manifest{}, nil, fmt.Errorf("selfhostcache: GET %s: %w", url, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
-		return Manifest{}, ErrNotAvailable
+		return Manifest{}, nil, ErrNotAvailable
 	}
 	if resp.StatusCode != http.StatusOK {
-		return Manifest{}, fmt.Errorf("selfhostcache: GET %s: HTTP %d", url, resp.StatusCode)
+		return Manifest{}, nil, fmt.Errorf("selfhostcache: GET %s: HTTP %d", url, resp.StatusCode)
 	}
 	const maxManifestSize = 64 * 1024
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxManifestSize+1))
 	if err != nil {
-		return Manifest{}, fmt.Errorf("selfhostcache: read manifest: %w", err)
+		return Manifest{}, nil, fmt.Errorf("selfhostcache: read manifest: %w", err)
 	}
 	if len(body) > maxManifestSize {
-		return Manifest{}, fmt.Errorf("selfhostcache: manifest exceeds %d bytes", maxManifestSize)
+		return Manifest{}, nil, fmt.Errorf("selfhostcache: manifest exceeds %d bytes", maxManifestSize)
 	}
 	var m Manifest
 	if err := json.Unmarshal(body, &m); err != nil {
-		return Manifest{}, fmt.Errorf("selfhostcache: parse manifest: %w", err)
+		return Manifest{}, nil, fmt.Errorf("selfhostcache: parse manifest: %w", err)
 	}
-	return m, nil
+	return m, body, nil
 }
 
 func fetchBody(ctx context.Context, client *http.Client, url string) (io.ReadCloser, error) {
@@ -270,6 +293,12 @@ func FetchAndInstall(ctx context.Context, projectRoot string, key Key, fetcher F
 // process environment. It returns nil when the registry URL is unset
 // or when offline mode is requested — both signals collapse the
 // resolver back to its 3-step lookup chain.
+//
+// When `OSTY_SELF_TRUSTED_KEY` is set the returned fetcher requires
+// signed manifests; when unset the fetcher accepts unsigned (A4)
+// manifests as before. A malformed key is fatal — `EnvFetcher`
+// returns `nil` so the resolver fails closed (no network) instead
+// of silently downgrading to unsigned.
 func EnvFetcher() Fetcher {
 	if isOffline() {
 		return nil
@@ -278,7 +307,11 @@ func EnvFetcher() Fetcher {
 	if base == "" {
 		return nil
 	}
-	return HTTPFetcher{BaseURL: base}
+	pub, _, err := TrustedKey()
+	if err != nil {
+		return nil
+	}
+	return HTTPFetcher{BaseURL: base, TrustedKey: pub}
 }
 
 func isOffline() bool {

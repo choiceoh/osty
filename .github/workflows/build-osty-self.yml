@@ -135,6 +135,36 @@ jobs:
             --osty-version "${OSTY_VERSION:-${GITHUB_SHA:0:12}}" \
             --out "artifacts/$triple.json"
 
+      - name: Sign manifest
+        # Signing is opt-in. When the OSTY_SELF_SIGNING_KEY secret is
+        # set the runner produces a detached ed25519 signature
+        # alongside the manifest. Resolvers that have configured
+        # OSTY_SELF_TRUSTED_KEY refuse unsigned artifacts (A6).
+        # Without the secret the workflow still produces an
+        # unsigned manifest — the resolver's signed/unsigned switch
+        # remains a single env var on the consumer side. The
+        # conditional lives inside the step body (not in `if:`) so
+        # the secret check survives `secrets` context restrictions.
+        env:
+          OSTY_SELF_SIGNING_KEY: ${{ secrets.OSTY_SELF_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OSTY_SELF_SIGNING_KEY:-}" ]; then
+            echo "OSTY_SELF_SIGNING_KEY unset; skipping signature." >&2
+            exit 0
+          fi
+          triple="${{ steps.locate.outputs.triple }}"
+          key_path="$RUNNER_TEMP/osty-self-signing.key"
+          # Trim trailing whitespace; the secret store sometimes
+          # injects a newline that loadPrivateKey already tolerates,
+          # but explicit trimming avoids surprises.
+          printf '%s' "$OSTY_SELF_SIGNING_KEY" > "$key_path"
+          chmod 600 "$key_path"
+          .bin/osty sign-self \
+            --manifest "artifacts/$triple.json" \
+            --key "$key_path"
+          rm -f "$key_path"
+
       - name: Upload artifact bundle
         uses: actions/upload-artifact@v4
         with:
@@ -162,9 +192,10 @@ jobs:
       - name: Layout for upload
         run: |
           set -euo pipefail
-          # Each downloaded subdir holds one (manifest, binary) pair.
-          # Flatten into the layout HTTPFetcher expects:
+          # Each downloaded subdir holds one (manifest, binary[, sig])
+          # tuple. Flatten into the layout HTTPFetcher expects:
           #   <base>/<key>.json
+          #   <base>/<key>.json.sig    (when signed)
           #   <base>/<binary-url>
           mkdir -p upload
           shopt -s nullglob
@@ -173,6 +204,9 @@ jobs:
               # Drop into upload/ keyed by the manifest's `key` field.
               key=$(jq -r .key "$json")
               cp "$json" "upload/$key.json"
+              if [ -f "$json.sig" ]; then
+                cp "$json.sig" "upload/$key.json.sig"
+              fi
             done
             for bin in "$dir"osty-self-*; do
               cp "$bin" "upload/$(basename "$bin")"
