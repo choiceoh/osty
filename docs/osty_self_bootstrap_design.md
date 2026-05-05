@@ -1,0 +1,186 @@
+# `osty-self` 부트스트랩 설계 — Post-#1405 follow-up
+
+> **상태**: 제안 (draft). 합의 후 별도 PR에서 구현.
+> **연관 PR**: #1405 (Go MIR emitter 제거), #1406 (MIR-direct 디스패처 복구).
+> **소유**: backend / toolchain.
+
+## 1. 문제 정의
+
+PR #1405가 `internal/llvmgen` (Go 측 MIR emitter mirror, ~112K 줄)를 제거하면서 LLVM 백엔드의 in-process emit 경로가 사라졌다. 모든 MIR → LLVM IR 변환은 이제 다음 체인을 통과한다:
+
+```
+host osty (Go 부트스트랩)
+   └─ LLVMBackend.Emit
+       └─ tryNativeOwnedMIRPayloadLLVMIRText
+           └─ exec(osty-native-llvmgen)               # internal/nativellvmgen
+               └─ tryMIRRequestViaLIRProto
+                   └─ exec(osty-native-lirproto)       # internal/nativelirproto
+                       └─ exec(osty-self lir-proto-lower)
+                           └─ toolchain/lir_proto.osty (Osty 자체)
+```
+
+체인 끝의 **`osty-self`는 `osty build --backend=llvm toolchain/`의 산출물**이고 — 그걸 만들려면 다시 `osty build` 가 필요하다. 즉 **닭-달걀 부트스트랩 의존이 만들어졌다**.
+
+#1405 머지 이전에는 같은 호출 시점에 `llvmgen.GenerateFromMIR(entry.MIR, opts)` (in-process Go 코드)이 fallback이었기 때문에 `osty-self`가 없어도 MIR→LLVM이 가능했다. #1405는 그 in-process 경로를 삭제하면서 fallback도 같이 제거했다.
+
+### 1.1 현재 관찰 가능한 결과
+
+- `osty build --backend=llvm toolchain/` 자체는 `osty-self` 부재 시 실패 (front-end E0703 류 외에도 emit-stage에서 `LLVM000 Go MIR emitter fallback has been removed`로 떨어짐 — #1406 적용 후엔 `native LIR Proto subprocess declined MIR coverage`로 메시지만 바뀜).
+- `verify-self-rebuild` 스크립트는 stage1 build 진입 시 host osty (`.bin/osty`) 를 호출 → 같은 체인을 돌며 declined → 첫 build 실패. 즉 **fresh clone에서 self-host 부트스트랩이 끊어졌을 가능성이 높다** (현재 트리에는 별도로 source-level E0703 errors도 있어 별개 차단 요인이 추가됨).
+- `osty-self` 가 미리 빌드돼 있으면 (e.g. CI 캐시, dev 머신) 모든 게 정상 작동하므로 **PR #1405 머지 시점의 머신에서는 회귀가 보이지 않았을 가능성이 크다**.
+
+### 1.2 설계 목표
+
+- 부트스트랩 경로 1개 — fresh clone에서 git checkout → 단일 명령으로 osty 컴파일러 + toolchain 산출물 생성 가능.
+- 산출물은 Reproducible (동일 입력 → 동일 byte). 이미 `verify-self-rebuild`가 stage2/3 byte parity를 강제 중.
+- 호스트 의존성 최소: Go toolchain + clang 외 추가 사전 산출물 요구하지 않음.
+- v0.5 baseline 규칙 준수: 새 surface 추가 없음, Osty로 작성 가능한 로직은 Go로 새로 작성하지 않음.
+
+## 2. 후보 옵션
+
+### 옵션 A: Go fallback emitter 부분 복원 (포기 권장)
+
+#1405 이전의 `llvmgen.GenerateFromMIR`을 부분적으로 되돌린다. MIR-direct 경로가 `osty-self` 없이도 동작.
+
+- 장점: 즉시 효과. 부트스트랩 닭-달걀 해소.
+- 단점: **CLAUDE.md "Osty 우선" 규칙 정면 위반**. #1405 의 정신을 부정. 112K 줄을 다시 들이는 셈은 절대 비례하지 않으므로 현실적으론 minimal subset만 복원해도 그 minimal이 다음 토큰부터 drift surface가 됨.
+- **권장하지 않음**.
+
+### 옵션 B: 사전 빌드된 `osty-self`를 git에 커밋 (포기 권장)
+
+`toolchain/.osty/out/...` 아래 stage1-equivalent 바이너리를 LFS 또는 GitHub release artifact로 제공.
+
+- 장점: fresh clone → 빠른 빌드.
+- 단점: 플랫폼별 바이너리 (linux-amd64, linux-arm64, darwin-amd64, darwin-arm64, windows-amd64, windows-arm64) 6개 모두 관리 필요. 보안/감사 부담. 현재 단일 시드 (`internal/selfhost/generated.go`, 68k 줄) 정책과 모순.
+- **권장하지 않음**.
+
+### 옵션 C: Go 호스트 측에 minimal MIR→LLVM "stage0" fallback 추가 (권장)
+
+`osty-self`가 없을 때만 켜지는, 의도적으로 좁은 stage0 emitter를 Go 측에 둔다. 범위:
+
+- **포함**: `toolchain/*.osty` 자기 자신을 한번 컴파일하기에 충분한 MIR 패턴 — 함수 정의, 분기, 산술, struct/enum 기본 lowering, runtime ABI 호출 (`osty.gc.*`, `osty_rt_*`).
+- **제외**: vectorize 힌트, parallel access groups, target_feature, hot/cold 섹션, advanced unroll. 즉 v0.5 spec의 **컴파일러를 컴파일할 수 있는 핵심만**.
+
+stage0 emitter는 명시적으로 **deprecated-on-arrival** — fast path가 아니라 부트스트랩용. Production 빌드 (`osty-self` 사용 가능 시)는 LIR Proto 경로 그대로.
+
+설계 패턴:
+
+```go
+// internal/backend/llvm.go
+func emitLLVMFallback(route llvmDispatchRoute, entry Entry, opts llvmabi.Options) ([]byte, []error, error) {
+    if entry.MIR == nil { ... }
+    // 1차 시도: native subprocess (osty-self 사용 가능)
+    if out, ok, ws, err := tryNativeOwnedMIRPayloadLLVMIRText(entry, opts.Target); err == nil && ok {
+        return out, ws, nil
+    } else if err != nil && !isOstySelfMissing(err) {
+        return nil, ws, err   // 진짜 에러는 그대로 surface
+    }
+    // 2차: stage0 fallback (osty-self 없을 때만)
+    if !stage0Enabled() {
+        return nil, nil, llvmabi.Unsupported("mir-emit", "...")
+    }
+    return stage0EmitMIR(entry.MIR, opts)
+}
+```
+
+`stage0EmitMIR` 본체는:
+- **새 패키지 `internal/backend/stage0/`** 에 격리. ~5K 줄을 넘지 않도록 v0.5 spec 핵심 구문만 다룸.
+- 매 회 `toolchain/*.osty`가 stage0 surface를 벗어나지 않는지 CI에서 검증 (`TestStage0CoversToolchainMIR` 같은 게이트).
+- 출력은 LIR Proto 경로와 byte-equivalent일 필요 **없음**. `verify-self-rebuild`의 stage2/3 parity는 stage1의 결과물 (`osty-self-1`)이 stage1을 사용해서 다시 빌드되는 것이므로, stage0 IR이 stage1 IR과 다른 건 정상.
+
+장점:
+- v0.5 spec ON, 부트스트랩 가능.
+- stage0이 모든 emit을 처리하지 않으므로 surface 폭주 위험 제어됨.
+- LIR Proto 경로가 default — stage0 retire는 osty-self 광범위 가용 시점에 가능.
+
+단점:
+- **소소한 코드 중복** — toolchain/lir_proto.osty 의 일부 패턴과 stage0 가 같은 일을 다른 언어로 구현. CI 게이트가 drift 막아주지만 0%는 아님.
+- 새 Go 코드가 들어가는 점은 CLAUDE.md "Osty 우선" 정신과 마찰. 단, **부트스트랩 경계는 기존 예외 카테고리 (호스트 / 부트스트랩 시드)에 해당**한다고 본다. 같은 카테고리에서 `internal/selfhost/generated.go` (68K 줄, 동결 시드) 가 이미 허용됨.
+
+### 옵션 D: `osty-self` 없을 때 부트스트랩-only Osty interpreter (포기 권장)
+
+`toolchain/lir_proto.osty` 를 Go 측 tree-walking interpreter로 실행.
+
+- 장점: 코드 중복 0. surface 변경 없음.
+- 단점: 성능 cliff (toolchain 빌드가 분 단위 소요로 늘어날 가능성). interpreter 자체가 새 surface — 옵션 C보다 도리어 invasive.
+
+## 3. 권장 설계 — 옵션 C (Stage0 fallback)
+
+### 3.1 패키지 레이아웃
+
+```
+internal/backend/stage0/
+    doc.go            // 부트스트랩 전용 명시 + retirement 조건 명문화
+    emitter.go        // MIR → LLVM IR 핵심 (function/block/instr 분기)
+    rvalue.go         // 산술 / 비교 / 캐스트 / 호출
+    place.go          // local/projection 주소 계산
+    types.go          // mir.Type → LLVM 타입
+    runtime.go        // osty.gc.* + osty_rt_* 선언
+    coverage_test.go  // toolchain/*.osty 가 stage0 안에 머무르는지 검사
+```
+
+### 3.2 활성화 조건
+
+- 환경변수 `OSTY_STAGE0_FALLBACK=1` (기본 OFF) 로 명시적 opt-in 시 stage0 사용.
+- **자동 fallback은 `tryNativeOwnedMIRPayloadLLVMIRText`가 "osty-self not found"으로 declined한 경우에만**. 다른 declined 사유 (예: `osty-self`는 있지만 lir-proto가 명시적으로 "이 shape 못 한다"고 선언한 경우)는 fall through 시키지 않고 그대로 unsupported로 surface.
+- CI 빌드는 `OSTY_STAGE0_FALLBACK=1` 명시 + `osty-self`도 빌드해서 양쪽 모두 검증 (stage0이 stale 안 나도록).
+
+### 3.3 surface 가드
+
+```go
+// internal/backend/stage0/coverage_test.go
+func TestStage0CoversToolchainMIR(t *testing.T) {
+    // toolchain/*.osty 전체를 MIR로 lowering 후 stage0가 받아들이는지 검증.
+    // 새 MIR 패턴이 toolchain에 들어갈 때 stage0 갱신 누락이 즉시 빨간불.
+}
+```
+
+이 게이트가 stage0 retirement까지 drift 잡아준다.
+
+### 3.4 retirement 경로
+
+다음 조건이 모두 충족되면 stage0 삭제:
+
+1. `osty-self` 가 모든 지원 호스트 트리플에서 reproducible 빌드 가능.
+2. `osty install` (또는 동등 부트스트랩 명령) 이 단일 명령으로 first-build 완료.
+3. CI/dev 환경 모두 osty-self 자동 캐시 메커니즘 보유 — fresh clone에서도 LIR Proto 경로가 곧바로 동작.
+
+retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통째로 삭제 + 본 design doc도 archive로 이동.
+
+### 3.5 v0.5 spec 영향
+
+없음. stage0는 emitter level에서만 작동하며 surface 추가 0건. `LANG_SPEC_v0.5/`, `OSTY_GRAMMAR_v0.5.md`는 변경 안 함.
+
+## 4. 구현 단계 (제안)
+
+| Phase | 범위 | 측정 |
+|---|---|---|
+| P0 | `osty-self not found` 에러 분류 / `isOstySelfMissing(err)` 도입 | unit test |
+| P1 | `internal/backend/stage0/` skeleton + 단순 `fn main()` 케이스 한 개 | TestStage0HelloWorld |
+| P2 | toolchain 의 첫 10개 함수 lowering 통과 | toolchain/main.osty 부분 빌드 |
+| P3 | `OSTY_STAGE0_FALLBACK=1` 로 toolchain 전체 빌드 성공 | verify-self-rebuild stage1-only |
+| P4 | stage0 + osty-self 양쪽 모두에서 `verify-self-rebuild` 통과 | byte parity (stage2 vs stage3) |
+| P5 | CI matrix 추가 — `OSTY_STAGE0_FALLBACK=1` 잡과 default 잡 둘 다 | CI green |
+
+각 Phase는 independent PR. P0은 수십 줄. P1~P3은 stage0 emitter 본체이므로 분량 큼. 
+
+## 5. 결정 필요 항목
+
+1. stage0 surface가 v0.5 spec 핵심 정도인지, v0.4 baseline 정도면 충분한지 — 컴파일러 자체가 어느 spec에 의존하는지 확인 후 결정.
+2. stage0를 `internal/backend/stage0/`에 둘지, `internal/llvmabi/stage0/` 등 다른 위치에 둘지.
+3. `OSTY_STAGE0_FALLBACK=1` 기본값 (CI 잡 / dev 환경별 / fresh clone first-run-detect) 정책.
+4. retirement 시점에 stage0 삭제 PR이 필요한가, 아니면 빌드 프로세스에서 자동 unreachable이라고 볼 것인지.
+
+---
+
+## Appendix A. 현재 verify-self-rebuild 흐름
+
+```
+host_osty (Go-built .bin/osty)
+    └─ stage1 build: host_osty build toolchain/  →  osty-self-1 (LLVM 백엔드 사용)
+    └─ stage2 build: osty-self-1 build toolchain/ →  osty-self-2
+    └─ stage3 build: osty-self-2 build toolchain/ →  osty-self-3
+    └─ assert byte_eq(osty-self-2, osty-self-3)
+```
+
+stage1이 host_osty를 쓰므로, host_osty 의 LLVM 백엔드가 osty-self 없이도 emit해야 stage1 build가 가능. 이게 #1405 이후 깨졌다고 본 design 문서가 가정한다.
