@@ -1547,3 +1547,156 @@ func TestStage0RejectsCallParamTypeMismatch(t *testing.T) {
 	)
 	mustReject(t, trivialMainFn(), doubleFn, caller)
 }
+
+// ---- P6: while-loop with stack-allocated mutable locals ----
+
+// makeWhileLoopFn assembles the canonical 4-block while-loop MIR
+// shape used by the front-end:
+//
+//   entry  : pre-loop instructions + GotoTerm(header)
+//   header : header instructions + BranchTerm(cond, body, exit)
+//   body   : loop body + GotoTerm(header)
+//   exit   : post-loop instructions + ReturnTerm
+func makeWhileLoopFn(name string, retT mir.Type, params []paramSpec, allLocals []localSpec, entryInstrs, headerInstrs []mir.Instr, cond mir.Operand, bodyInstrs, exitInstrs []mir.Instr) *mir.Function {
+	locals := []*mir.Local{
+		{ID: 0, Name: "ret", Type: retT, IsReturn: true, Mut: true},
+	}
+	paramIDs := make([]mir.LocalID, 0, len(params))
+	nextID := mir.LocalID(1)
+	for _, p := range params {
+		paramIDs = append(paramIDs, nextID)
+		locals = append(locals, &mir.Local{ID: nextID, Name: p.name, Type: p.ty, IsParam: true})
+		nextID++
+	}
+	for _, l := range allLocals {
+		locals = append(locals, &mir.Local{ID: nextID, Name: l.name, Type: l.ty, Mut: l.mut})
+		nextID++
+	}
+	return &mir.Function{
+		Name:        name,
+		Params:      paramIDs,
+		ReturnType:  retT,
+		ReturnLocal: 0,
+		Locals:      locals,
+		Entry:       0,
+		Blocks: []*mir.BasicBlock{
+			{ID: 0, Instrs: entryInstrs, Term: &mir.GotoTerm{Target: 1}},
+			{ID: 1, Instrs: headerInstrs, Term: &mir.BranchTerm{Cond: cond, Then: 2, Else: 3}},
+			{ID: 2, Instrs: bodyInstrs, Term: &mir.GotoTerm{Target: 1}},
+			{ID: 3, Instrs: exitInstrs, Term: &mir.ReturnTerm{}},
+		},
+	}
+}
+
+type localSpec struct {
+	name string
+	ty   mir.Type
+	mut  bool
+}
+
+func TestStage0EmitsCountToWhileLoop(t *testing.T) {
+	t.Parallel()
+	// `fn count_to(n: Int) -> Int { let mut acc = 0; while acc < n { acc = acc + 1 } acc }`
+	// Locals: 0 ret (mut), 1 n param, 2 acc (mut), 3 cond (immut)
+	fn := makeWhileLoopFn(
+		"count_to",
+		ir.TInt,
+		[]paramSpec{{name: "n", ty: ir.TInt}},
+		[]localSpec{
+			{name: "acc", ty: ir.TInt, mut: true},
+			{name: "cond", ty: ir.TBool},
+		},
+		[]mir.Instr{
+			assign(2, useRV(intConst(0))),
+		},
+		[]mir.Instr{
+			assign(3, binaryRV(mir.BinLt, paramCopy(2, ir.TInt), paramCopy(1, ir.TInt), ir.TBool)),
+		},
+		paramCopy(3, ir.TBool),
+		[]mir.Instr{
+			assign(2, binaryRV(mir.BinAdd, paramCopy(2, ir.TInt), intConst(1), ir.TInt)),
+		},
+		[]mir.Instr{
+			assign(0, useRV(paramCopy(2, ir.TInt))),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"define i64 @count_to(i64 %n)",
+		"%acc.slot = alloca i64",
+		"store i64 0, ptr %acc.slot",
+		"br label %header.1",
+		"header.1:",
+		"= load i64, ptr %acc.slot",
+		"icmp slt i64",
+		"br i1 ",
+		"body.2:",
+		"add i64 ",
+		"store i64 ",
+		"exit.3:",
+		"ret i64 ",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0RejectsWhileLoopWithoutBackEdge(t *testing.T) {
+	t.Parallel()
+	// Body's GotoTerm targets exit instead of header — not a loop.
+	fn := makeWhileLoopFn(
+		"bad",
+		ir.TInt,
+		[]paramSpec{{name: "n", ty: ir.TInt}},
+		[]localSpec{
+			{name: "acc", ty: ir.TInt, mut: true},
+			{name: "cond", ty: ir.TBool},
+		},
+		[]mir.Instr{assign(2, useRV(intConst(0)))},
+		[]mir.Instr{assign(3, binaryRV(mir.BinLt, paramCopy(2, ir.TInt), paramCopy(1, ir.TInt), ir.TBool))},
+		paramCopy(3, ir.TBool),
+		[]mir.Instr{assign(2, binaryRV(mir.BinAdd, paramCopy(2, ir.TInt), intConst(1), ir.TInt))},
+		[]mir.Instr{assign(0, useRV(paramCopy(2, ir.TInt)))},
+	)
+	// Repoint body's terminator to exit (id 3), breaking the loop.
+	fn.Blocks[2].Term = &mir.GotoTerm{Target: 3}
+	mustReject(t, trivialMainFn(), fn)
+}
+
+func TestStage0RejectsWhileLoopWithIntCondition(t *testing.T) {
+	t.Parallel()
+	fn := makeWhileLoopFn(
+		"bad",
+		ir.TInt,
+		[]paramSpec{{name: "n", ty: ir.TInt}},
+		[]localSpec{{name: "acc", ty: ir.TInt, mut: true}},
+		[]mir.Instr{assign(2, useRV(intConst(0)))},
+		nil,
+		paramCopy(1, ir.TInt), // Int cond — wrong
+		[]mir.Instr{assign(2, binaryRV(mir.BinAdd, paramCopy(2, ir.TInt), intConst(1), ir.TInt))},
+		[]mir.Instr{assign(0, useRV(paramCopy(2, ir.TInt)))},
+	)
+	mustReject(t, trivialMainFn(), fn)
+}
+
+func TestStage0RejectsWhileLoopExitNotReturning(t *testing.T) {
+	t.Parallel()
+	// Exit block ends with a Goto rather than ReturnTerm — declines.
+	fn := makeWhileLoopFn(
+		"bad",
+		ir.TInt,
+		[]paramSpec{{name: "n", ty: ir.TInt}},
+		[]localSpec{
+			{name: "acc", ty: ir.TInt, mut: true},
+			{name: "cond", ty: ir.TBool},
+		},
+		[]mir.Instr{assign(2, useRV(intConst(0)))},
+		[]mir.Instr{assign(3, binaryRV(mir.BinLt, paramCopy(2, ir.TInt), paramCopy(1, ir.TInt), ir.TBool))},
+		paramCopy(3, ir.TBool),
+		[]mir.Instr{assign(2, binaryRV(mir.BinAdd, paramCopy(2, ir.TInt), intConst(1), ir.TInt))},
+		[]mir.Instr{assign(0, useRV(paramCopy(2, ir.TInt)))},
+	)
+	fn.Blocks[3].Term = &mir.GotoTerm{Target: 0}
+	mustReject(t, trivialMainFn(), fn)
+}
