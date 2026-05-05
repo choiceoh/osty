@@ -187,6 +187,15 @@ func main() {
 		runBuild(args[1:], flags)
 		return
 	}
+	// install-self builds the toolchain self-host binary and promotes
+	// the result into the content-addressed cache (`.osty/cache/
+	// self-host/`) so subsequent worktrees / sibling clones pick it
+	// up via `selfhostcache.ResolveBinary` instead of re-running the
+	// slow toolchain build.
+	if cmd == "install-self" {
+		runInstallSelf(args[1:], flags)
+		return
+	}
 	// `osty lint --explain CODE` prints the rule's description and
 	// exits. `osty lint --list` prints every rule. Both short-circuit
 	// before the normal file-arg handling below.
