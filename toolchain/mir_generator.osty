@@ -528,7 +528,7 @@ pub fn mirFormatFnAttrs(
         let mut joined = ""
         let mut first = true
         for f in targetFeatures {
-            let stripped = if llvmStrings.HasPrefix(f, "+") {
+            let stripped = if llvmStrings.hasPrefix(f, "+") {
                 f[1..f.len()]
             } else {
                 f
@@ -567,13 +567,13 @@ pub fn mirLlvmTypeHeadName(typeText: String) -> String {
     // Strip trailing generic args first so the subsequent dot search
     // doesn't walk into `<...>` content (package paths don't nest
     // angle brackets).
-    let ltIdx = llvmStrings.Index(typeText, "<")
+    let ltIdx = llvmStrings.indexOf(typeText, "<") ?? -1
     let stripped = if ltIdx >= 0 {
         typeText[0..ltIdx]
     } else {
         typeText
     }
-    let dotIdx = llvmStrings.Index(stripped, ".")
+    let dotIdx = llvmStrings.indexOf(stripped, ".") ?? -1
     if dotIdx >= 0 {
         stripped[(dotIdx + 1)..stripped.len()]
     } else {
@@ -592,7 +592,7 @@ pub fn mirLlvmTypeIsOptionalSurface(typeText: String) -> Bool {
     if n == 0 {
         return false
     }
-    if !llvmStrings.HasSuffix(typeText, "?") {
+    if !llvmStrings.hasSuffix(typeText, "?") {
         return false
     }
     // Walk the prefix once to confirm no unbalanced `<`/`(` keeps us
@@ -726,14 +726,14 @@ pub fn mirTopLevelTypeCommaIndex(typeText: String) -> Int {
 /// still owns the actual `mir.Type` nodes.
 pub fn mirResultTypeArgsText(typeText: String) -> String {
     let head = mirLlvmTypeHeadName(typeText)
-    if head != "Result" && !llvmStrings.HasSuffix(head, ".Result") {
+    if head != "Result" && !llvmStrings.hasSuffix(head, ".Result") {
         return ""
     }
-    let lt = llvmStrings.Index(typeText, "<")
+    let lt = llvmStrings.indexOf(typeText, "<") ?? -1
     if lt < 0 {
         return ""
     }
-    if !llvmStrings.HasSuffix(typeText, ">") {
+    if !llvmStrings.hasSuffix(typeText, ">") {
         return ""
     }
     let body = typeText[(lt + 1)..(typeText.len() - 1)]
@@ -751,7 +751,7 @@ pub fn mirResultTypeArgsText(typeText: String) -> String {
 
 pub fn mirResultOkTypeText(typeText: String) -> String {
     let packed = mirResultTypeArgsText(typeText)
-    let idx = llvmStrings.Index(packed, "\n")
+    let idx = llvmStrings.indexOf(packed, "\n") ?? -1
     if idx < 0 {
         return ""
     }
@@ -760,7 +760,7 @@ pub fn mirResultOkTypeText(typeText: String) -> String {
 
 pub fn mirResultErrTypeText(typeText: String) -> String {
     let packed = mirResultTypeArgsText(typeText)
-    let idx = llvmStrings.Index(packed, "\n")
+    let idx = llvmStrings.indexOf(packed, "\n") ?? -1
     if idx < 0 {
         return ""
     }
@@ -827,7 +827,7 @@ pub fn mirReplaceFirstText(text: String, old: String, newText: String) -> String
     if old == "" {
         return text
     }
-    let idx = llvmStrings.Index(text, old)
+    let idx = llvmStrings.indexOf(text, old) ?? -1
     if idx < 0 {
         return text
     }
@@ -927,7 +927,7 @@ pub fn mirFirstNonEmpty(vals: List<String>) -> String {
 /// down to one call here, and the caller picks the smallest non-
 /// negative result.
 pub fn mirEarliestAfter(input: String, needle: String) -> Int {
-    llvmStrings.Index(input, needle)
+    llvmStrings.indexOf(input, needle) ?? -1
 }
 
 /// mirEncodeLLVMString returns the escaped body of `s` for an LLVM
@@ -964,7 +964,7 @@ pub fn mirEncodeLLVMString(s: String) -> String {
             out = out + "\\\\"
         } else if ch == "\"" {
             out = out + "\\22"
-        } else if llvmStrings.Contains(printable, ch) {
+        } else if llvmStrings.contains(printable, ch) {
             out = out + ch
         } else {
             // Non-printable / non-ASCII byte — caller skipped the
@@ -989,7 +989,7 @@ pub fn mirCanEncodeLLVMString(s: String) -> Bool {
     let mut i = 0
     for i < n {
         let ch = s[i..(i + 1)]
-        if ch == "\\" || ch == "\"" || llvmStrings.Contains(printable, ch) {
+        if ch == "\\" || ch == "\"" || llvmStrings.contains(printable, ch) {
             i = i + 1
         } else {
             return false
@@ -1627,10 +1627,10 @@ pub fn mirIsMemoryAccessLine(line: String) -> Bool {
         i = i + 1
     }
     let trimmed = line[i..n]
-    if llvmStrings.HasPrefix(trimmed, "store ") {
+    if llvmStrings.hasPrefix(trimmed, "store ") {
         return true
     }
-    llvmStrings.Contains(line, " = load ")
+    llvmStrings.contains(line, " = load ")
 }
 
 /// mirTagParallelAccesses walks `body` line-by-line and appends
@@ -1649,7 +1649,7 @@ pub fn mirTagParallelAccesses(body: String, groupRef: String) -> String {
     for i < n {
         if body[i..(i + 1)] == "\n" {
             let line = body[start..i]
-            if mirIsMemoryAccessLine(line) && !llvmStrings.Contains(line, "!llvm.access.group") {
+            if mirIsMemoryAccessLine(line) && !llvmStrings.contains(line, "!llvm.access.group") {
                 out = out + line + suffix + "\n"
             } else {
                 out = out + body[start..(i + 1)]
@@ -1660,7 +1660,7 @@ pub fn mirTagParallelAccesses(body: String, groupRef: String) -> String {
     }
     if start < n {
         let line = body[start..n]
-        if mirIsMemoryAccessLine(line) && !llvmStrings.Contains(line, "!llvm.access.group") {
+        if mirIsMemoryAccessLine(line) && !llvmStrings.contains(line, "!llvm.access.group") {
             out = out + line + suffix
         } else {
             out = out + line
@@ -1696,7 +1696,7 @@ pub fn mirEmitHeaderBlock(source: String, target: String) -> String {
 pub fn mirEarliestAfterAny(input: String, needles: List<String>) -> Int {
     let mut best = -1
     for needle in needles {
-        let idx = llvmStrings.Index(input, needle)
+        let idx = llvmStrings.indexOf(input, needle) ?? -1
         if idx >= 0 {
             if best < 0 || idx < best {
                 best = idx
@@ -13227,7 +13227,7 @@ pub fn mirListUsesRawDataFastPath(elemLLVM: String) -> Bool {
 /// locate the entry-block boundary so hoisted allocas land just
 /// before the terminator.
 pub fn mirIsBrTerminatorLine(line: String) -> Bool {
-    llvmStrings.HasPrefix(line, "  br ")
+    llvmStrings.hasPrefix(line, "  br ")
 }
 
 /// mirIsAllocaLine reports whether `line` is an `alloca`-shaped
@@ -13239,14 +13239,14 @@ pub fn mirIsBrTerminatorLine(line: String) -> Bool {
 /// from the emit pass but left in for parser-symmetry).
 pub fn mirIsAllocaLine(line: String) -> Bool {
     let prefix = "  %"
-    if !llvmStrings.HasPrefix(line, prefix) { return false }
+    if !llvmStrings.hasPrefix(line, prefix) { return false }
     let rest = line[prefix.len()..line.len()]
-    let eq = llvmStrings.Index(rest, " = ")
+    let eq = llvmStrings.indexOf(rest, " = ") ?? -1
     if eq < 0 { return false }
     let separator = " = "
     let tailStart = eq + separator.len()
     let tail = rest[tailStart..rest.len()]
-    llvmStrings.HasPrefix(tail, "alloca ") || tail == "alloca"
+    llvmStrings.hasPrefix(tail, "alloca ") || tail == "alloca"
 }
 
 /// §18 (cont'd) — primitive scrutinee predicate ported from
@@ -13327,7 +13327,7 @@ pub fn mirLLVMTripleFor(arch: String, osName: String) -> String {
 /// (Map, List, Set, Option, Result). User struct names keep their
 /// source spelling.
 pub fn mirIsSpecializedBuiltinStructName(name: String) -> Bool {
-    llvmStrings.HasPrefix(name, "_ZTS")
+    llvmStrings.hasPrefix(name, "_ZTS")
 }
 
 /// §18 (cont'd) — LLVM aggregate name-part sanitizer ported from
@@ -13378,26 +13378,26 @@ pub fn mirLLVMBuiltinAggregatePart(part: String) -> String {
 /// Other triples return `""` — caller should skip datalayout emission
 /// rather than guess.
 pub fn mirDataLayoutFor(target: String) -> String {
-    let isWindows = llvmStrings.Contains(target, "-windows-msvc") || llvmStrings.Contains(target, "-pc-windows-msvc")
+    let isWindows = llvmStrings.contains(target, "-windows-msvc") || llvmStrings.contains(target, "-pc-windows-msvc")
     if isWindows {
-        if llvmStrings.HasPrefix(target, "aarch64") || llvmStrings.HasPrefix(target, "arm64") {
+        if llvmStrings.hasPrefix(target, "aarch64") || llvmStrings.hasPrefix(target, "arm64") {
             return "e-m:w-p:64:64-i32:32-i64:64-i128:128-n32:64-S128"
         }
         return "e-m:w-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
     }
-    let isApple = llvmStrings.Contains(target, "-apple-darwin") || llvmStrings.Contains(target, "-apple-macos")
+    let isApple = llvmStrings.contains(target, "-apple-darwin") || llvmStrings.contains(target, "-apple-macos")
     if isApple {
-        if llvmStrings.HasPrefix(target, "aarch64") || llvmStrings.HasPrefix(target, "arm64") {
+        if llvmStrings.hasPrefix(target, "aarch64") || llvmStrings.hasPrefix(target, "arm64") {
             return "e-m:o-i64:64-i128:128-n32:64-S128"
         }
         return "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
     }
-    let isLinux = llvmStrings.Contains(target, "-linux-gnu") || llvmStrings.Contains(target, "-linux-musl")
+    let isLinux = llvmStrings.contains(target, "-linux-gnu") || llvmStrings.contains(target, "-linux-musl")
     if isLinux {
-        if llvmStrings.HasPrefix(target, "aarch64") {
+        if llvmStrings.hasPrefix(target, "aarch64") {
             return "e-m:e-i8:8:32-i16:16:32-i64:64-i128:128-n32:64-S128"
         }
-        if llvmStrings.HasPrefix(target, "x86_64") {
+        if llvmStrings.hasPrefix(target, "x86_64") {
             return "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128"
         }
     }
@@ -13428,7 +13428,7 @@ pub fn mirResultVariantName(tag: Int) -> String {
 /// `osty.gc.*` or `osty.runtime.*` call argument list.
 pub fn mirLlvmPointerOperand(name: String) -> String {
     if name == "" || name == "null" { return name }
-    if llvmStrings.HasPrefix(name, "@") || llvmStrings.HasPrefix(name, "%") {
+    if llvmStrings.hasPrefix(name, "@") || llvmStrings.hasPrefix(name, "%") {
         return name
     }
     "@" + name
@@ -14439,15 +14439,15 @@ pub fn mirSanitizeLLVMName(name: String) -> String {
     for i < n {
         let ch = name[i..(i + 1)]
         if i == 0 {
-            if llvmStrings.Contains(alpha, ch) {
+            if llvmStrings.contains(alpha, ch) {
                 out = out + ch
-            } else if llvmStrings.Contains(digits, ch) {
+            } else if llvmStrings.contains(digits, ch) {
                 out = out + "_" + ch
             } else {
                 out = out + "_"
             }
         } else {
-            if llvmStrings.Contains(alnum, ch) {
+            if llvmStrings.contains(alnum, ch) {
                 out = out + ch
             } else {
                 out = out + "_"
@@ -14472,7 +14472,7 @@ pub fn mirSanitizeLabelFragment(name: String) -> String {
     let mut i = 0
     for i < n {
         let ch = name[i..(i + 1)]
-        if llvmStrings.Contains(alnum, ch) {
+        if llvmStrings.contains(alnum, ch) {
             out = out + ch
         } else {
             out = out + "_"
@@ -15478,7 +15478,7 @@ pub fn mirRootFrameStructLayout() -> String {
 /// `internal/llvmgen/generator.go`.
 pub fn mirSpliceFnAttrs(rendered: String, attrs: String) -> String {
     let needle = ") \{"
-    let idx = llvmStrings.Index(rendered, needle)
+    let idx = llvmStrings.indexOf(rendered, needle) ?? -1
     if idx < 0 { return rendered }
     let head = rendered[0..idx]
     let tail = rendered[(idx + needle.len())..rendered.len()]
@@ -15504,12 +15504,12 @@ pub fn mirSpliceNoaliasParams(
     all: Bool,
     selectedNames: List<String>,
 ) -> String {
-    let lineEnd = llvmStrings.Index(rendered, "\n")
+    let lineEnd = llvmStrings.indexOf(rendered, "\n") ?? -1
     if lineEnd < 0 { return rendered }
     let line = rendered[0..lineEnd]
     let rest = rendered[lineEnd..rendered.len()]
-    let openParen = llvmStrings.Index(line, "(")
-    let closeParen = llvmStrings.LastIndex(line, ")")
+    let openParen = llvmStrings.indexOf(line, "(") ?? -1
+    let closeParen = llvmStrings.lastIndexOf(line, ")") ?? -1
     if openParen < 0 { return rendered }
     if closeParen < 0 { return rendered }
     if closeParen <= openParen { return rendered }
@@ -15552,7 +15552,7 @@ pub fn mirSpliceNoaliasParams(
         // `piece` looks like "ptr %name" — insert `noalias` between
         // the type and the register name. Defensive: if the shape is
         // unexpected we leave the piece intact.
-        let spaceIdx = llvmStrings.Index(piece, " ")
+        let spaceIdx = llvmStrings.indexOf(piece, " ") ?? -1
         if spaceIdx < 0 {
             out.push(piece)
             i = i + 1
@@ -15615,7 +15615,7 @@ pub fn mirTagParallelAccessesLines(body: List<String>, groupRef: String) -> List
     let mut i = 0
     for i < n {
         let line = body[i]
-        if mirIsMemoryAccessLine(line) && !llvmStrings.Contains(line, "!llvm.access.group") {
+        if mirIsMemoryAccessLine(line) && !llvmStrings.contains(line, "!llvm.access.group") {
             out.push(line + suffix)
         } else {
             out.push(line)
@@ -17336,7 +17336,7 @@ pub fn mirParseDecimalPrefix(text: String, end: Int) -> Int {
 /// Set, Option, Maybe, or Result.
 pub fn mirMonomorphMangledSourceName(name: String) -> String {
     let prefix = "_ZTSN"
-    if !llvmStrings.HasPrefix(name, prefix) {
+    if !llvmStrings.hasPrefix(name, prefix) {
         return ""
     }
     let mut rest = name[prefix.len()..name.len()]
@@ -17376,14 +17376,14 @@ pub fn mirMangledBuiltinSourceNameIs(name: String, want: String) -> Bool {
 /// both direct `%Option.*` / `%Result.*` names and monomorphized builtin
 /// layout spellings whose source head was Option, Maybe, or Result.
 pub fn mirIsTwoWordEnumLLVM(llvmT: String) -> Bool {
-    let name = if llvmStrings.HasPrefix(llvmT, "%") {
+    let name = if llvmStrings.hasPrefix(llvmT, "%") {
         llvmT[1..llvmT.len()]
     } else {
         llvmT
     }
-    llvmStrings.HasPrefix(name, "Option.") ||
-        llvmStrings.HasPrefix(name, "Maybe.") ||
-        llvmStrings.HasPrefix(name, "Result.") ||
+    llvmStrings.hasPrefix(name, "Option.") ||
+        llvmStrings.hasPrefix(name, "Maybe.") ||
+        llvmStrings.hasPrefix(name, "Result.") ||
         mirMangledBuiltinSourceNameIs(name, "Option") ||
         mirMangledBuiltinSourceNameIs(name, "Maybe") ||
         mirMangledBuiltinSourceNameIs(name, "Result")
