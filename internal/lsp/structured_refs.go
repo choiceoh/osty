@@ -1,10 +1,6 @@
 package lsp
 
-import (
-	"strings"
-
-	"github.com/osty/osty/internal/resolve"
-)
+import "github.com/osty/osty/internal/resolve"
 
 type structuredReference struct {
 	name           string
@@ -199,10 +195,7 @@ func buildStructuredImportsForPackage(pkg *resolve.Package) []structuredImportSu
 }
 
 func uriForSourcePath(path string) string {
-	if strings.Contains(path, ":") && !strings.HasPrefix(path, "/") {
-		return path
-	}
-	return pathToURI(path)
+	return LSPURIForSourcePath(path)
 }
 
 func structuredReferenceAt(doc *document, lspPos Position) *structuredReference {
@@ -249,39 +242,44 @@ func rangeContainsPosition(r Range, p Position) bool {
 }
 
 func structuredReferencesForTarget(refs []structuredReference, symbols []structuredSymbol, targetID string, includeDecl bool) []Location {
-	if targetID == "" {
-		return nil
+	convertedRefs := make([]LSPReferenceFact, 0, len(refs))
+	for _, ref := range refs {
+		convertedRefs = append(convertedRefs, LSPReferenceFact{
+			URI:                  ref.uri,
+			StartLine:            ref.rng.Start.Line,
+			StartCharacter:       ref.rng.Start.Character,
+			EndLine:              ref.rng.End.Line,
+			EndCharacter:         ref.rng.End.Character,
+			TargetSymbolID:       ref.targetSymbolID,
+			TargetURI:            ref.targetURI,
+			TargetStartLine:      ref.targetRange.Start.Line,
+			TargetStartCharacter: ref.targetRange.Start.Character,
+			TargetEndLine:        ref.targetRange.End.Line,
+			TargetEndCharacter:   ref.targetRange.End.Character,
+			Builtin:              ref.builtin,
+		})
 	}
-	out := make([]Location, 0, len(refs)+1)
-	var decl *structuredReference
-	for i := range refs {
-		ref := &refs[i]
-		if ref.targetSymbolID != targetID {
-			continue
-		}
-		out = append(out, Location{URI: ref.uri, Range: ref.rng})
-		if decl == nil && ref.targetURI != "" && !ref.builtin {
-			decl = ref
-		}
+	convertedSymbols := make([]LSPSymbolFact, 0, len(symbols))
+	for _, sym := range symbols {
+		convertedSymbols = append(convertedSymbols, LSPSymbolFact{
+			ID:             sym.id,
+			URI:            sym.uri,
+			StartLine:      sym.selectionRange.Start.Line,
+			StartCharacter: sym.selectionRange.Start.Character,
+			EndLine:        sym.selectionRange.End.Line,
+			EndCharacter:   sym.selectionRange.End.Character,
+		})
 	}
-	if includeDecl {
-		if sym := structuredSymbolForTarget(symbols, targetID); sym != nil {
-			out = append(out, Location{URI: sym.uri, Range: sym.selectionRange})
-		} else if decl != nil {
-			out = append(out, Location{URI: decl.targetURI, Range: decl.targetRange})
-		}
+	locs := LSPLocationsForTarget(convertedRefs, convertedSymbols, targetID, includeDecl)
+	out := make([]Location, 0, len(locs))
+	for _, loc := range locs {
+		out = append(out, Location{
+			URI: loc.URI,
+			Range: Range{
+				Start: Position{Line: loc.StartLine, Character: loc.StartCharacter},
+				End:   Position{Line: loc.EndLine, Character: loc.EndCharacter},
+			},
+		})
 	}
-	return sortDedupLocations(out)
-}
-
-func structuredSymbolForTarget(symbols []structuredSymbol, targetID string) *structuredSymbol {
-	if targetID == "" {
-		return nil
-	}
-	for i := range symbols {
-		if symbols[i].id == targetID {
-			return &symbols[i]
-		}
-	}
-	return nil
+	return out
 }

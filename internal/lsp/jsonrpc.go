@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
-	"strings"
 	"sync"
 )
 
@@ -68,40 +66,26 @@ func (c *conn) readMessage() ([]byte, error) {
 // stream ends cleanly before any header bytes were seen; a partial
 // header block is a framing error.
 func readHeaders(r *bufio.Reader) (int, error) {
-	length := -1
-	sawAnyHeader := false
+	var lines []string
 	for {
 		line, err := r.ReadString('\n')
 		if err != nil {
-			if errors.Is(err, io.EOF) && !sawAnyHeader && line == "" {
+			if errors.Is(err, io.EOF) && len(lines) == 0 && line == "" {
 				return 0, io.EOF
 			}
 			return 0, fmt.Errorf("lsp: header read: %w", err)
 		}
 		// Accept both CRLF (required by spec) and bare LF (tolerant
 		// for pipes and test harnesses).
-		line = strings.TrimRight(line, "\r\n")
+		line = LSPTrimHeaderLine(line)
 		if line == "" {
-			if !sawAnyHeader {
-				return 0, fmt.Errorf("lsp: empty header block")
+			parsed := LSPParseHeaderLines(lines)
+			if !parsed.OK {
+				return 0, errors.New(parsed.Error)
 			}
-			return length, nil
+			return parsed.ContentLength, nil
 		}
-		sawAnyHeader = true
-		colon := strings.IndexByte(line, ':')
-		if colon < 0 {
-			return 0, fmt.Errorf("lsp: malformed header %q", line)
-		}
-		name := strings.TrimSpace(line[:colon])
-		value := strings.TrimSpace(line[colon+1:])
-		if strings.EqualFold(name, "Content-Length") {
-			n, err := strconv.Atoi(value)
-			if err != nil || n < 0 {
-				return 0, fmt.Errorf("lsp: invalid Content-Length %q", value)
-			}
-			length = n
-		}
-		// Other headers (Content-Type) are intentionally ignored.
+		lines = append(lines, line)
 	}
 }
 
@@ -109,7 +93,7 @@ func readHeaders(r *bufio.Reader) (int, error) {
 // pushes it to the writer atomically.
 func (c *conn) writeMessage(body []byte) error {
 	var buf bytes.Buffer
-	fmt.Fprintf(&buf, "Content-Length: %d\r\n\r\n", len(body))
+	buf.WriteString(LSPFrameHeader(len(body)))
 	buf.Write(body)
 
 	c.writeMu.Lock()
@@ -133,7 +117,7 @@ func (c *conn) writeError(id json.RawMessage, code int, message string) error {
 	if id == nil {
 		// Preserve null ID so clients can correlate parse-time
 		// failures. An empty RawMessage would be omitted.
-		id = json.RawMessage("null")
+		id = json.RawMessage(LSPJSONNull())
 	}
 	return c.writeMessage(mustMarshal(rpcResponse{
 		JSONRPC: "2.0",

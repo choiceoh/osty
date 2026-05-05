@@ -1,8 +1,6 @@
 package lsp
 
 import (
-	"strings"
-
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 )
@@ -23,7 +21,7 @@ func (s *Server) handleWorkspaceSymbol(req *rpcRequest) {
 		_ = s.conn.writeError(req.ID, errInvalidParams, err.Error())
 		return
 	}
-	query := strings.ToLower(params.Query)
+	query := LSPAsciiLowerText(params.Query)
 
 	var out []SymbolInformation
 	seen := map[string]bool{}
@@ -108,7 +106,7 @@ func collectDeclSymbols(uri string, li *lineIndex, file *ast.File, container, qu
 		if name == "" {
 			return
 		}
-		if query != "" && !strings.Contains(strings.ToLower(name), query) {
+		if !LSPNameMatchesQuery(name, query) {
 			return
 		}
 		out = append(out, SymbolInformation{

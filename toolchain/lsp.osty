@@ -42,6 +42,30 @@ pub struct LspLocation {
     pub endCharacter: Int,
 }
 
+pub struct LspReferenceFact {
+    pub uri: String,
+    pub startLine: Int,
+    pub startCharacter: Int,
+    pub endLine: Int,
+    pub endCharacter: Int,
+    pub targetSymbolID: String,
+    pub targetURI: String,
+    pub targetStartLine: Int,
+    pub targetStartCharacter: Int,
+    pub targetEndLine: Int,
+    pub targetEndCharacter: Int,
+    pub builtin: Bool,
+}
+
+pub struct LspSymbolFact {
+    pub id: String,
+    pub uri: String,
+    pub startLine: Int,
+    pub startCharacter: Int,
+    pub endLine: Int,
+    pub endCharacter: Int,
+}
+
 struct LspIndexedLocation {
     loc: LspLocation,
     index: Int,
@@ -68,6 +92,14 @@ struct LspIndexedImportSortKey {
     index: Int,
 }
 
+pub struct LspOrganizeUseEntry {
+    pub group: Int,
+    pub key: String,
+    pub alias: String,
+    pub text: String,
+    pub unused: Bool,
+}
+
 pub struct LspSignatureParam {
     pub name: String,
     pub typeName: String,
@@ -78,6 +110,12 @@ pub struct LspSignatureText {
     pub parameterLabels: List<String>,
 }
 
+pub struct LspFunctionTypeParts {
+    pub ok: Bool,
+    pub parameterTypes: List<String>,
+    pub returnType: String,
+}
+
 pub struct LspCompletionContext {
     pub prefix: String,
     pub afterDot: String,
@@ -86,6 +124,64 @@ pub struct LspCompletionContext {
 pub struct LspDiagnosticPayload {
     pub severity: Int,
     pub message: String,
+}
+
+pub struct LspDiagnosticView {
+    pub startLine: Int,
+    pub startCharacter: Int,
+    pub endLine: Int,
+    pub endCharacter: Int,
+    pub severity: Int,
+    pub code: String,
+    pub source: String,
+    pub message: String,
+}
+
+pub struct LspDiagnosticFileFact {
+    pub diagnosticFile: String,
+    pub packageFile: String,
+    pub spanSourceFileID: String,
+    pub packageSourceFileID: String,
+    pub primaryLine: Int,
+    pub primaryOffset: Int,
+    pub sourceLength: Int,
+}
+
+pub struct LspHeaderParseResult {
+    pub ok: Bool,
+    pub contentLength: Int,
+    pub error: String,
+}
+
+pub struct LspFileURIPathRawResult {
+    pub ok: Bool,
+    pub path: String,
+}
+
+pub struct LspCompletionItemData {
+    pub label: String,
+    pub kind: Int,
+    pub sortText: String,
+    pub detail: String,
+    pub documentation: String,
+}
+
+pub struct LspCompletionCandidateView {
+    pub name: String,
+    pub kind: String,
+    pub typeText: String,
+    pub docText: String,
+    pub include: Bool,
+}
+
+pub struct LspNameCandidate {
+    pub name: String,
+    pub distance: Int,
+}
+
+struct LspIndexedNameCandidate {
+    candidate: LspNameCandidate,
+    index: Int,
 }
 
 pub struct LspPosition {
@@ -104,6 +200,17 @@ pub struct LspOstyPosition {
     pub offset: Int,
     pub line: Int,
     pub column: Int,
+}
+
+pub struct LspFullDocumentRange {
+    pub endLine: Int,
+    pub endCharacter: Int,
+}
+
+pub struct LspDispatchDecision {
+    pub action: String,
+    pub errorCode: Int,
+    pub errorMessage: String,
 }
 
 pub fn lspSemanticTypeNamespace() -> Int { return 0 }
@@ -151,6 +258,221 @@ pub fn lspDiagnosticSeverityError() -> Int { return 1 }
 pub fn lspDiagnosticSeverityWarning() -> Int { return 2 }
 pub fn lspDiagnosticSeverityInformation() -> Int { return 3 }
 
+pub fn lspServerName() -> String { return "osty-lsp" }
+pub fn lspServerVersion() -> String { return "0.1.0" }
+pub fn lspPositionEncodingUTF16() -> String { return "utf-16" }
+pub fn lspJSONNull() -> String { return "null" }
+pub fn lspCompletionTriggerDot() -> String { return "." }
+pub fn lspSignatureTriggerOpenParen() -> String { return "(" }
+pub fn lspSignatureTriggerComma() -> String { return "," }
+pub fn lspSemanticTokenTypes() -> List<String> {
+    return [
+        "namespace",
+        "type",
+        "parameter",
+        "variable",
+        "property",
+        "function",
+        "keyword",
+        "string",
+        "number",
+        "operator",
+        "comment",
+        "enumMember",
+    ]
+}
+pub fn lspSemanticTokenModifiers() -> List<String> {
+    return ["declaration", "readonly"]
+}
+pub fn lspDispatchActionInitialize() -> String { return "initialize" }
+pub fn lspDispatchActionExit() -> String { return "exit" }
+pub fn lspDispatchActionShutdown() -> String { return "shutdown" }
+pub fn lspDispatchActionIgnore() -> String { return "ignore" }
+pub fn lspDispatchActionDispatch() -> String { return "dispatch" }
+pub fn lspDispatchActionError() -> String { return "error" }
+pub fn lspErrInvalidRequest() -> Int { return -32600 }
+pub fn lspErrMethodNotFound() -> Int { return -32601 }
+pub fn lspErrServerNotInitialized() -> Int { return -32002 }
+
+pub fn lspAsciiLowerText(text: String) -> String {
+    let units = strings.split(text, "")
+    let mut out = ""
+    for unit in units {
+        out = "{out}{lspAsciiLowerUnit(unit)}"
+    }
+    return out
+}
+
+pub fn lspNameMatchesPrefix(name: String, prefix: String) -> Bool {
+    return prefix == "" || lspStringHasPrefix(name, prefix)
+}
+
+pub fn lspNameMatchesQuery(name: String, query: String) -> Bool {
+    return query == "" || lspStringContains(lspAsciiLowerText(name), query)
+}
+
+pub fn lspUriForSourcePath(path: String) -> String {
+    if lspStringContains(path, ":") && !(lspStringHasPrefix(path, "/")) {
+        return path
+    }
+    return lspPathToUri(path)
+}
+
+pub fn lspPreferAIRepairFixAll(source: String) -> Bool {
+    return lspStringContains(source, ".length")
+}
+
+pub fn lspTextChanged(original: String, replacement: String) -> Bool {
+    return original != replacement
+}
+
+pub fn lspParamsAreEmpty(paramsText: String) -> Bool {
+    return paramsText == "" || paramsText == "null"
+}
+
+pub fn lspRenameEmptyNameMessage() -> String {
+    return "new name is empty"
+}
+
+pub fn lspCannotRenameBuiltinMessage() -> String {
+    return "cannot rename a builtin"
+}
+
+pub fn lspCanRenameKind(kind: String) -> Bool {
+    return kind != "builtin"
+}
+
+pub fn lspRenameTitle(name: String) -> String {
+    return "Rename to `{name}`"
+}
+
+pub fn lspRemoveLineTitle() -> String {
+    return "Remove unused import"
+}
+
+pub fn lspFixAllTitle() -> String {
+    return "Fix all auto-fixable problems"
+}
+
+pub fn lspOrganizeImportsTitle() -> String {
+    return "Organize imports"
+}
+
+pub fn lspInlayTypeLabel(typeText: String) -> String {
+    return ": {typeText}"
+}
+
+pub fn lspMethodNotImplementedMessage(method: String) -> String {
+    return "method not implemented: {method}"
+}
+
+pub fn lspIsOstySourceFileName(name: String) -> Bool {
+    return lspStringHasSuffix(name, ".osty") && !(lspStringHasSuffix(name, "_test.osty"))
+}
+
+pub fn lspHasOstyFileExtension(name: String) -> Bool {
+    return lspStringHasSuffix(name, ".osty")
+}
+
+pub fn lspExitCode(shutdown: Bool) -> Int {
+    if shutdown {
+        return 0
+    }
+    return 1
+}
+
+pub fn lspDispatchDecision(
+    method: String,
+    isNotification: Bool,
+    initialized: Bool,
+    shutdown: Bool,
+) -> LspDispatchDecision {
+    if method == "initialize" {
+        return LspDispatchDecision { action: lspDispatchActionInitialize(), errorCode: 0, errorMessage: "" }
+    }
+    if method == "exit" {
+        return LspDispatchDecision { action: lspDispatchActionExit(), errorCode: 0, errorMessage: "" }
+    }
+    if !(initialized) {
+        if isNotification {
+            return LspDispatchDecision { action: lspDispatchActionIgnore(), errorCode: 0, errorMessage: "" }
+        }
+        return LspDispatchDecision {
+            action: lspDispatchActionError(),
+            errorCode: lspErrServerNotInitialized(),
+            errorMessage: "server has not been initialized",
+        }
+    }
+    if shutdown {
+        if isNotification {
+            return LspDispatchDecision { action: lspDispatchActionIgnore(), errorCode: 0, errorMessage: "" }
+        }
+        return LspDispatchDecision {
+            action: lspDispatchActionError(),
+            errorCode: lspErrInvalidRequest(),
+            errorMessage: "server is shutting down",
+        }
+    }
+    if method == "initialized" {
+        return LspDispatchDecision { action: lspDispatchActionIgnore(), errorCode: 0, errorMessage: "" }
+    }
+    if method == "shutdown" {
+        return LspDispatchDecision { action: lspDispatchActionShutdown(), errorCode: 0, errorMessage: "" }
+    }
+    if lspMethodIsHandled(method) {
+        return LspDispatchDecision { action: lspDispatchActionDispatch(), errorCode: 0, errorMessage: "" }
+    }
+    if isNotification {
+        return LspDispatchDecision { action: lspDispatchActionIgnore(), errorCode: 0, errorMessage: "" }
+    }
+    return LspDispatchDecision {
+        action: lspDispatchActionError(),
+        errorCode: lspErrMethodNotFound(),
+        errorMessage: lspMethodNotImplementedMessage(method),
+    }
+}
+
+pub fn lspFrameHeader(bodyLength: Int) -> String {
+    return "Content-Length: {bodyLength}\r\n\r\n"
+}
+
+pub fn lspTrimHeaderLine(line: String) -> String {
+    let mut out = line
+    for out.chars().len() > 0 {
+        let units = strings.split(out, "")
+        let last = units[units.len() - 1]
+        if last != "\r" && last != "\n" {
+            break
+        }
+        out = frontLexemeFromUnits(units, 0, units.len() - 1)
+    }
+    return out
+}
+
+pub fn lspParseHeaderLines(lines: List<String>) -> LspHeaderParseResult {
+    if lines.len() == 0 {
+        return LspHeaderParseResult { ok: false, contentLength: -1, error: "lsp: empty header block" }
+    }
+    let mut length = -1
+    for raw in lines {
+        let line = lspTrimAsciiSpace(raw)
+        let colon = lspIndexOfUnit(line, ":")
+        if colon < 0 {
+            return LspHeaderParseResult { ok: false, contentLength: -1, error: "lsp: malformed header {line}" }
+        }
+        let name = lspTrimAsciiSpace(lspSliceUnits(line, 0, colon))
+        let value = lspTrimAsciiSpace(lspSliceUnits(line, colon + 1, line.chars().len()))
+        if lspEqualFoldAscii(name, "Content-Length") {
+            let parsed = lspParseNonNegativeDecimal(value)
+            if parsed < 0 {
+                return LspHeaderParseResult { ok: false, contentLength: -1, error: "lsp: invalid Content-Length {value}" }
+            }
+            length = parsed
+        }
+    }
+    return LspHeaderParseResult { ok: true, contentLength: length, error: "" }
+}
+
 pub fn lspPathToUri(path: String) -> String {
     if path == "" {
         return "file://"
@@ -159,6 +481,19 @@ pub fn lspPathToUri(path: String) -> String {
         return "file://{path}"
     }
     return "file:///{path}"
+}
+
+pub fn lspFileURIPathRaw(uri: String) -> LspFileURIPathRawResult {
+    let prefix = "file://"
+    if !(lspStringHasPrefix(uri, prefix)) {
+        return LspFileURIPathRawResult { ok: false, path: "" }
+    }
+    let mut path = lspSliceUnits(uri, prefix.chars().len(), uri.chars().len())
+    let units = strings.split(path, "")
+    if units.len() >= 3 && units[0] == "/" && units[2] == ":" {
+        path = lspSliceUnits(path, 1, path.chars().len())
+    }
+    return LspFileURIPathRawResult { ok: true, path }
 }
 
 pub fn lspLineStarts(source: String) -> List<Int> {
@@ -327,6 +662,19 @@ pub fn lspRangeFromOstySpan(
         startCharacter: start.character,
         endLine: end.line,
         endCharacter: end.character,
+    }
+}
+
+pub fn lspFullDocumentRange(source: String, lineStarts: List<Int>) -> LspFullDocumentRange {
+    let mut endLine = 0
+    let mut lastLineStart = 0
+    if lineStarts.len() > 0 {
+        endLine = lineStarts.len() - 1
+        lastLineStart = lineStarts[lineStarts.len() - 1]
+    }
+    return LspFullDocumentRange {
+        endLine,
+        endCharacter: lspUtf16UnitsInByteRange(source, lastLineStart, source.chars().len()),
     }
 }
 
@@ -640,6 +988,24 @@ pub fn lspSpanOverlaps(startOffset: Int, endOffset: Int, queryStart: Int, queryE
     return true
 }
 
+pub fn lspNamedTypeReferenceEndOffset(
+    startOffset: Int,
+    sourceLength: Int,
+    targetNameLength: Int,
+    firstPathMatchesTarget: Bool,
+    firstPathLength: Int,
+) -> Int {
+    let mut width = targetNameLength
+    if firstPathMatchesTarget {
+        width = firstPathLength
+    }
+    let mut endOffset = startOffset + width
+    if endOffset > sourceLength {
+        endOffset = sourceLength
+    }
+    return endOffset
+}
+
 pub fn lspDiagnosticPayload(
     severity: String,
     message: String,
@@ -661,6 +1027,115 @@ pub fn lspDiagnosticPayload(
         out = "{out}\nnote: {note}"
     }
     return LspDiagnosticPayload { severity: code, message: out }
+}
+
+pub fn lspDiagnosticsEqual(a: List<LspDiagnosticView>, b: List<LspDiagnosticView>) -> Bool {
+    if a.len() != b.len() {
+        return false
+    }
+    let mut idx = 0
+    for idx < a.len() {
+        if !(lspDiagnosticViewEqual(a[idx], b[idx])) {
+            return false
+        }
+        idx = idx + 1
+    }
+    return true
+}
+
+pub fn lspDiagnosticBelongsToFile(fact: LspDiagnosticFileFact) -> Bool {
+    if fact.diagnosticFile != "" {
+        return fact.diagnosticFile == fact.packageFile
+    }
+    if fact.spanSourceFileID != "" && fact.packageSourceFileID != "" {
+        return fact.spanSourceFileID == fact.packageSourceFileID
+    }
+    if fact.primaryLine == 0 {
+        return false
+    }
+    return fact.primaryOffset <= fact.sourceLength
+}
+
+pub fn lspLevenshteinBounded(a: String, b: String, limit: Int) -> Int {
+    let ar = strings.split(a, "")
+    let br = strings.split(b, "")
+    if lspAbsInt(ar.len() - br.len()) > limit {
+        return limit + 1
+    }
+
+    let mut prev: List<Int> = []
+    let mut j = 0
+    for j <= br.len() {
+        prev.push(j)
+        j = j + 1
+    }
+
+    let mut i = 1
+    for i <= ar.len() {
+        let mut curr: List<Int> = [i]
+        let mut rowMin = i
+        j = 1
+        for j <= br.len() {
+            let cost = if ar[i - 1] == br[j - 1] { 0 } else { 1 }
+            let value = lspMin3Int(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
+            curr.push(value)
+            if value < rowMin {
+                rowMin = value
+            }
+            j = j + 1
+        }
+        if rowMin > limit {
+            return limit + 1
+        }
+        prev = curr
+        i = i + 1
+    }
+    if prev[br.len()] > limit {
+        return limit + 1
+    }
+    return prev[br.len()]
+}
+
+pub fn lspRankNearbyNames(names: List<String>, target: String, maxDistance: Int) -> List<String> {
+    let mut candidates: List<LspNameCandidate> = []
+    let mut seen: List<String> = []
+    for name in names {
+        if name == "" || lspStringListContains(seen, name) {
+            continue
+        }
+        let distance = lspLevenshteinBounded(target, name, maxDistance)
+        if distance > maxDistance {
+            continue
+        }
+        seen.push(name)
+        candidates.push(LspNameCandidate { name, distance })
+    }
+
+    let mut out: List<String> = []
+    for candidate in lspSortNameCandidates(candidates) {
+        out.push(candidate.name)
+    }
+    return out
+}
+
+pub fn lspMergeNearbyNames(primary: List<String>, fallback: List<String>) -> List<String> {
+    let mut out: List<String> = []
+    let mut seen: List<String> = []
+    for name in primary {
+        if name == "" || lspStringListContains(seen, name) {
+            continue
+        }
+        seen.push(name)
+        out.push(name)
+    }
+    for name in fallback {
+        if name == "" || lspStringListContains(seen, name) {
+            continue
+        }
+        seen.push(name)
+        out.push(name)
+    }
+    return out
 }
 
 pub fn lspSortDedupLocations(locs: List<LspLocation>) -> List<LspLocation> {
@@ -686,6 +1161,134 @@ pub fn lspSortDedupLocations(locs: List<LspLocation>) -> List<LspLocation> {
         have = true
     }
     return out
+}
+
+pub fn lspLocationsForTarget(
+    refs: List<LspReferenceFact>,
+    symbols: List<LspSymbolFact>,
+    targetID: String,
+    includeDecl: Bool,
+) -> List<LspLocation> {
+    if targetID == "" {
+        return []
+    }
+    let mut out: List<LspLocation> = []
+    let mut haveFallbackDecl = false
+    let mut fallbackDecl = LspLocation { uri: "", startLine: 0, startCharacter: 0, endLine: 0, endCharacter: 0 }
+    for ref in refs {
+        if ref.targetSymbolID != targetID {
+            continue
+        }
+        out.push(LspLocation {
+            uri: ref.uri,
+            startLine: ref.startLine,
+            startCharacter: ref.startCharacter,
+            endLine: ref.endLine,
+            endCharacter: ref.endCharacter,
+        })
+        if !(haveFallbackDecl) && ref.targetURI != "" && !(ref.builtin) {
+            fallbackDecl = LspLocation {
+                uri: ref.targetURI,
+                startLine: ref.targetStartLine,
+                startCharacter: ref.targetStartCharacter,
+                endLine: ref.targetEndLine,
+                endCharacter: ref.targetEndCharacter,
+            }
+            haveFallbackDecl = true
+        }
+    }
+    if includeDecl {
+        let mut haveSymbolDecl = false
+        for sym in symbols {
+            if sym.id == targetID {
+                out.push(LspLocation {
+                    uri: sym.uri,
+                    startLine: sym.startLine,
+                    startCharacter: sym.startCharacter,
+                    endLine: sym.endLine,
+                    endCharacter: sym.endCharacter,
+                })
+                haveSymbolDecl = true
+                break
+            }
+        }
+        if !(haveSymbolDecl) && haveFallbackDecl {
+            out.push(fallbackDecl)
+        }
+    }
+    return lspSortDedupLocations(out)
+}
+
+pub fn lspCompletionItemForSymbolView(
+    name: String,
+    kind: String,
+    typeText: String,
+    docText: String,
+) -> LspCompletionItemData {
+    let mut detail = ""
+    if typeText != "" {
+        detail = lspCompletionDetail(kind, name, typeText)
+    }
+    return LspCompletionItemData {
+        label: name,
+        kind: lspCompletionKindForSymbolKind(kind),
+        sortText: lspCompletionSortTextForSymbolKind(kind, name),
+        detail,
+        documentation: docText,
+    }
+}
+
+pub fn lspCompletionItemsForCandidates(
+    candidates: List<LspCompletionCandidateView>,
+    prefix: String,
+) -> List<LspCompletionItemData> {
+    let mut items: List<LspCompletionItemData> = []
+    let mut seen: List<String> = []
+    for candidate in candidates {
+        if !(candidate.include) || candidate.name == "" {
+            continue
+        }
+        if lspStringListContains(seen, candidate.name) {
+            continue
+        }
+        if !(lspNameMatchesPrefix(candidate.name, prefix)) {
+            continue
+        }
+        seen.push(candidate.name)
+        items.push(lspCompletionItemForSymbolView(
+            candidate.name,
+            candidate.kind,
+            candidate.typeText,
+            candidate.docText,
+        ))
+    }
+
+    let mut labels: List<String> = []
+    for item in items {
+        labels.push(item.label)
+    }
+
+    let mut out: List<LspCompletionItemData> = []
+    for idx in lspSortStringIndexes(labels) {
+        if idx < 0 || idx >= items.len() {
+            continue
+        }
+        out.push(items[idx])
+    }
+    return out
+}
+
+pub fn lspSemanticHoverKind(kind: String) -> String {
+    if kind == "fn" {
+        return "function"
+    }
+    if kind == "value" {
+        return "binding"
+    }
+    if kind == "generic" {
+        return "type parameter"
+    }
+    return kind
 }
 
 pub fn lspSortSymbolIndexes(keys: List<LspSymbolSortKey>) -> List<Int> {
@@ -716,6 +1319,14 @@ pub fn lspSortSymbolIndexes(keys: List<LspSymbolSortKey>) -> List<Int> {
     return out
 }
 
+pub fn lspSortStringIndexes(values: List<String>) -> List<Int> {
+    let mut keys: List<LspSymbolSortKey> = []
+    for value in values {
+        keys.push(LspSymbolSortKey { name: value, uri: "" })
+    }
+    return lspSortSymbolIndexes(keys)
+}
+
 pub fn lspSortImportIndexes(keys: List<LspImportSortKey>) -> List<Int> {
     let mut sorted: List<LspIndexedImportSortKey> = []
     let mut index = 0
@@ -740,6 +1351,44 @@ pub fn lspSortImportIndexes(keys: List<LspImportSortKey>) -> List<Int> {
     let mut out: List<Int> = []
     for tagged in sorted {
         out.push(tagged.index)
+    }
+    return out
+}
+
+pub fn lspOrganizedUseBlock(entries: List<LspOrganizeUseEntry>) -> String {
+    let mut kept: List<LspOrganizeUseEntry> = []
+    let mut seen: List<String> = []
+    for entry in entries {
+        if entry.unused || entry.text == "" {
+            continue
+        }
+        let dedupKey = lspKeyWithAlias(entry.group, entry.key, entry.alias)
+        if lspStringListContains(seen, dedupKey) {
+            continue
+        }
+        seen.push(dedupKey)
+        kept.push(entry)
+    }
+
+    let mut keys: List<LspImportSortKey> = []
+    for entry in kept {
+        keys.push(LspImportSortKey { group: entry.group, key: entry.key, alias: entry.alias })
+    }
+
+    let mut out = ""
+    let mut prevGroup = -1
+    let mut emitted = 0
+    for idx in lspSortImportIndexes(keys) {
+        if idx < 0 || idx >= kept.len() {
+            continue
+        }
+        let entry = kept[idx]
+        if emitted > 0 && entry.group != prevGroup {
+            out = "{out}\n"
+        }
+        out = "{out}{entry.text}\n"
+        prevGroup = entry.group
+        emitted = emitted + 1
     }
     return out
 }
@@ -849,6 +1498,46 @@ pub fn lspBuildSignatureText(
         label = "{label} -> {returnType}"
     }
     return LspSignatureText { label, parameterLabels }
+}
+
+pub fn lspParseFunctionType(typeText: String) -> LspFunctionTypeParts {
+    let mut rest = lspTrimAsciiSpace(typeText)
+    if !(lspStringHasPrefix(rest, "fn")) {
+        return LspFunctionTypeParts { ok: false, parameterTypes: [], returnType: "" }
+    }
+    rest = lspTrimAsciiSpace(lspSliceUnits(rest, 2, rest.chars().len()))
+    if !(lspStringHasPrefix(rest, "(")) {
+        return LspFunctionTypeParts { ok: false, parameterTypes: [], returnType: "" }
+    }
+
+    let closeIdx = lspMatchingCloseParen(rest)
+    if closeIdx < 0 {
+        return LspFunctionTypeParts { ok: false, parameterTypes: [], returnType: "" }
+    }
+
+    let paramsText = lspTrimAsciiSpace(lspSliceUnits(rest, 1, closeIdx))
+    let mut params: List<String> = []
+    if paramsText != "" {
+        params = lspSplitTopLevelComma(paramsText)
+    }
+
+    let mut returnType = ""
+    let tail = lspTrimAsciiSpace(lspSliceUnits(rest, closeIdx + 1, rest.chars().len()))
+    if lspStringHasPrefix(tail, "->") {
+        returnType = lspTrimAsciiSpace(lspSliceUnits(tail, 2, tail.chars().len()))
+    }
+    return LspFunctionTypeParts { ok: true, parameterTypes: params, returnType }
+}
+
+pub fn lspFallbackParameterNames(count: Int) -> List<String> {
+    let mut names: List<String> = []
+    let mut idx = 0
+    for idx < count {
+        let ordinal = idx + 1
+        names.push("arg{ordinal}")
+        idx = idx + 1
+    }
+    return names
 }
 
 pub fn lspIsKeywordKind(kind: String) -> Bool {
@@ -1025,6 +1714,44 @@ fn lspSortSemanticTokensByPosition(tokens: List<LspSemanticToken>) -> List<LspSe
     return out
 }
 
+fn lspSortNameCandidates(candidates: List<LspNameCandidate>) -> List<LspNameCandidate> {
+    let mut sorted: List<LspIndexedNameCandidate> = []
+    let mut index = 0
+    for candidate in candidates {
+        let tagged = LspIndexedNameCandidate { candidate, index }
+        let mut inserted = false
+        let mut i = 0
+        for i < sorted.len() {
+            if lspIndexedNameCandidateLess(tagged, sorted[i]) {
+                sorted.insert(i, tagged)
+                inserted = true
+                break
+            }
+            i = i + 1
+        }
+        if !inserted {
+            sorted.push(tagged)
+        }
+        index = index + 1
+    }
+
+    let mut out: List<LspNameCandidate> = []
+    for tagged in sorted {
+        out.push(tagged.candidate)
+    }
+    return out
+}
+
+fn lspIndexedNameCandidateLess(a: LspIndexedNameCandidate, b: LspIndexedNameCandidate) -> Bool {
+    if a.candidate.distance != b.candidate.distance {
+        return a.candidate.distance < b.candidate.distance
+    }
+    if a.candidate.name != b.candidate.name {
+        return a.candidate.name < b.candidate.name
+    }
+    return a.index < b.index
+}
+
 fn lspIndexedSemanticTokenLess(a: LspIndexedSemanticToken, b: LspIndexedSemanticToken) -> Bool {
     if a.token.line != b.token.line {
         return a.token.line < b.token.line
@@ -1117,6 +1844,17 @@ fn lspSameLocation(a: LspLocation, b: LspLocation) -> Bool {
         a.endCharacter == b.endCharacter
 }
 
+fn lspDiagnosticViewEqual(a: LspDiagnosticView, b: LspDiagnosticView) -> Bool {
+    return a.startLine == b.startLine &&
+        a.startCharacter == b.startCharacter &&
+        a.endLine == b.endLine &&
+        a.endCharacter == b.endCharacter &&
+        a.severity == b.severity &&
+        a.code == b.code &&
+        a.source == b.source &&
+        a.message == b.message
+}
+
 fn lspPositionBefore(line: Int, character: Int, otherLine: Int, otherCharacter: Int) -> Bool {
     if line != otherLine {
         return line < otherLine
@@ -1185,6 +1923,273 @@ fn lspStringHasPrefix(text: String, prefix: String) -> Bool {
         idx = idx + 1
     }
     return true
+}
+
+fn lspStringHasSuffix(text: String, suffix: String) -> Bool {
+    if suffix == "" {
+        return true
+    }
+    let textUnits = strings.split(text, "")
+    let suffixUnits = strings.split(suffix, "")
+    if suffixUnits.len() > textUnits.len() {
+        return false
+    }
+    let start = textUnits.len() - suffixUnits.len()
+    let mut idx = 0
+    for idx < suffixUnits.len() {
+        if textUnits[start + idx] != suffixUnits[idx] {
+            return false
+        }
+        idx = idx + 1
+    }
+    return true
+}
+
+fn lspStringContains(text: String, needle: String) -> Bool {
+    if needle == "" {
+        return true
+    }
+    let textUnits = strings.split(text, "")
+    let needleUnits = strings.split(needle, "")
+    if needleUnits.len() > textUnits.len() {
+        return false
+    }
+    let mut start = 0
+    for start <= textUnits.len() - needleUnits.len() {
+        let mut idx = 0
+        let mut matched = true
+        for idx < needleUnits.len() {
+            if textUnits[start + idx] != needleUnits[idx] {
+                matched = false
+                break
+            }
+            idx = idx + 1
+        }
+        if matched {
+            return true
+        }
+        start = start + 1
+    }
+    return false
+}
+
+fn lspMethodIsHandled(method: String) -> Bool {
+    return method == "textDocument/didOpen" ||
+        method == "textDocument/didChange" ||
+        method == "textDocument/didClose" ||
+        method == "textDocument/hover" ||
+        method == "textDocument/definition" ||
+        method == "textDocument/formatting" ||
+        method == "textDocument/documentSymbol" ||
+        method == "textDocument/completion" ||
+        method == "textDocument/references" ||
+        method == "textDocument/rename" ||
+        method == "textDocument/signatureHelp" ||
+        method == "workspace/symbol" ||
+        method == "textDocument/inlayHint" ||
+        method == "textDocument/semanticTokens/full" ||
+        method == "textDocument/codeAction"
+}
+
+fn lspStringListContains(items: List<String>, needle: String) -> Bool {
+    for item in items {
+        if item == needle {
+            return true
+        }
+    }
+    return false
+}
+
+fn lspIndexOfUnit(text: String, needle: String) -> Int {
+    let units = strings.split(text, "")
+    let mut idx = 0
+    for idx < units.len() {
+        if units[idx] == needle {
+            return idx
+        }
+        idx = idx + 1
+    }
+    return -1
+}
+
+fn lspSliceUnits(text: String, start: Int, end: Int) -> String {
+    let units = strings.split(text, "")
+    let mut lo = start
+    if lo < 0 {
+        lo = 0
+    }
+    let mut hi = end
+    if hi > units.len() {
+        hi = units.len()
+    }
+    if hi < lo {
+        hi = lo
+    }
+    return frontLexemeFromUnits(units, lo, hi - lo)
+}
+
+fn lspMatchingCloseParen(text: String) -> Int {
+    let units = strings.split(text, "")
+    let mut depth = 0
+    let mut idx = 0
+    for idx < units.len() {
+        if units[idx] == "(" {
+            depth = depth + 1
+        } else if units[idx] == ")" {
+            depth = depth - 1
+            if depth == 0 {
+                return idx
+            }
+        }
+        idx = idx + 1
+    }
+    return -1
+}
+
+fn lspSplitTopLevelComma(text: String) -> List<String> {
+    let units = strings.split(text, "")
+    let mut out: List<String> = []
+    let mut start = 0
+    let mut depth = 0
+    let mut idx = 0
+    for idx < units.len() {
+        let unit = units[idx]
+        if lspIsOpenTypeDelimiter(unit) {
+            depth = depth + 1
+        } else if lspIsCloseTypeDelimiter(unit) {
+            if depth > 0 {
+                depth = depth - 1
+            }
+        } else if unit == "," {
+            if depth == 0 {
+                let part = lspTrimAsciiSpace(frontLexemeFromUnits(units, start, idx - start))
+                if part != "" {
+                    out.push(part)
+                }
+                start = idx + 1
+            }
+        }
+        idx = idx + 1
+    }
+    let tail = lspTrimAsciiSpace(frontLexemeFromUnits(units, start, units.len() - start))
+    if tail != "" {
+        out.push(tail)
+    }
+    return out
+}
+
+fn lspIsOpenTypeDelimiter(unit: String) -> Bool {
+    return unit == "(" || unit == "[" || unit == "<"
+}
+
+fn lspIsCloseTypeDelimiter(unit: String) -> Bool {
+    return unit == ")" || unit == "]" || unit == ">"
+}
+
+fn lspTrimAsciiSpace(text: String) -> String {
+    let units = strings.split(text, "")
+    let mut start = 0
+    let mut end = units.len()
+    for start < end && (units[start] == " " || units[start] == "\t" || units[start] == "\r" || units[start] == "\n") {
+        start = start + 1
+    }
+    for end > start && (units[end - 1] == " " || units[end - 1] == "\t" || units[end - 1] == "\r" || units[end - 1] == "\n") {
+        end = end - 1
+    }
+    return frontLexemeFromUnits(units, start, end - start)
+}
+
+fn lspEqualFoldAscii(a: String, b: String) -> Bool {
+    let au = strings.split(a, "")
+    let bu = strings.split(b, "")
+    if au.len() != bu.len() {
+        return false
+    }
+    let mut idx = 0
+    for idx < au.len() {
+        if lspAsciiLowerUnit(au[idx]) != lspAsciiLowerUnit(bu[idx]) {
+            return false
+        }
+        idx = idx + 1
+    }
+    return true
+}
+
+fn lspAsciiLowerUnit(unit: String) -> String {
+    if unit == "A" { return "a" }
+    if unit == "B" { return "b" }
+    if unit == "C" { return "c" }
+    if unit == "D" { return "d" }
+    if unit == "E" { return "e" }
+    if unit == "F" { return "f" }
+    if unit == "G" { return "g" }
+    if unit == "H" { return "h" }
+    if unit == "I" { return "i" }
+    if unit == "J" { return "j" }
+    if unit == "K" { return "k" }
+    if unit == "L" { return "l" }
+    if unit == "M" { return "m" }
+    if unit == "N" { return "n" }
+    if unit == "O" { return "o" }
+    if unit == "P" { return "p" }
+    if unit == "Q" { return "q" }
+    if unit == "R" { return "r" }
+    if unit == "S" { return "s" }
+    if unit == "T" { return "t" }
+    if unit == "U" { return "u" }
+    if unit == "V" { return "v" }
+    if unit == "W" { return "w" }
+    if unit == "X" { return "x" }
+    if unit == "Y" { return "y" }
+    if unit == "Z" { return "z" }
+    return unit
+}
+
+fn lspParseNonNegativeDecimal(text: String) -> Int {
+    let units = strings.split(text, "")
+    if units.len() == 0 {
+        return -1
+    }
+    let mut out = 0
+    for unit in units {
+        if unit < "0" || unit > "9" {
+            return -1
+        }
+        out = out * 10 + lspDecimalDigit(unit)
+    }
+    return out
+}
+
+fn lspDecimalDigit(unit: String) -> Int {
+    if unit == "0" { return 0 }
+    if unit == "1" { return 1 }
+    if unit == "2" { return 2 }
+    if unit == "3" { return 3 }
+    if unit == "4" { return 4 }
+    if unit == "5" { return 5 }
+    if unit == "6" { return 6 }
+    if unit == "7" { return 7 }
+    if unit == "8" { return 8 }
+    if unit == "9" { return 9 }
+    return -1
+}
+
+fn lspAbsInt(v: Int) -> Int {
+    if v < 0 {
+        return -v
+    }
+    return v
+}
+
+fn lspMin3Int(a: Int, b: Int, c: Int) -> Int {
+    let mut out = a
+    if b < out {
+        out = b
+    }
+    if c < out {
+        out = c
+    }
+    return out
 }
 
 fn lspIsIdentContUnit(unit: String) -> Bool {

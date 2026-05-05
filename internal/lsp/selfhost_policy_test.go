@@ -1,6 +1,7 @@
 package lsp
 
 import (
+	"bufio"
 	"bytes"
 	"io"
 	"reflect"
@@ -51,6 +52,20 @@ func TestCompletionSortUsesSelfHostedPolicy(t *testing.T) {
 	if labels := []string{got[0].Label, got[1].Label, got[2].Label}; !reflect.DeepEqual(labels, []string{"alpha", "middle", "zeta"}) {
 		t.Fatalf("completion labels = %#v", labels)
 	}
+
+	filtered := LSPCompletionItemsForCandidates([]LSPCompletionCandidateView{
+		{Name: "zeta", Kind: "binding", TypeText: "Int", Include: true},
+		{Name: "alpha", Kind: "function", TypeText: "fn() -> Int", DocText: "docs", Include: true},
+		{Name: "alpha", Kind: "binding", TypeText: "String", Include: true},
+		{Name: "hidden", Kind: "binding", TypeText: "Int"},
+		{Name: "", Kind: "binding", TypeText: "Int", Include: true},
+	}, "")
+	if labels := []string{filtered[0].Label, filtered[1].Label}; !reflect.DeepEqual(labels, []string{"alpha", "zeta"}) {
+		t.Fatalf("completion candidate labels = %#v", labels)
+	}
+	if filtered[0].Detail != "fn alpha() -> Int" || filtered[0].Documentation != "docs" {
+		t.Fatalf("completion candidate item = %+v", filtered[0])
+	}
 }
 
 func TestSymbolKindUsesSelfHostedPolicy(t *testing.T) {
@@ -91,6 +106,56 @@ func TestWantsKindUsesSelfHostedPrefixPolicy(t *testing.T) {
 	}
 }
 
+func TestJSONRPCHeaderPolicyUsesSelfHost(t *testing.T) {
+	parsed := LSPParseHeaderLines([]string{
+		"Content-Type: application/vscode-jsonrpc; charset=utf-8",
+		"content-length: 42",
+	})
+	if !parsed.OK || parsed.ContentLength != 42 || parsed.Error != "" {
+		t.Fatalf("header parse = %+v, want length 42", parsed)
+	}
+	missing := LSPParseHeaderLines([]string{"Content-Type: application/json"})
+	if !missing.OK || missing.ContentLength != -1 {
+		t.Fatalf("missing content length = %+v, want ok length -1", missing)
+	}
+	if got := LSPParseHeaderLines(nil); got.OK || got.Error != "lsp: empty header block" {
+		t.Fatalf("empty header parse = %+v, want empty-block error", got)
+	}
+	if got := LSPParseHeaderLines([]string{"Content-Length: -1"}); got.OK {
+		t.Fatalf("negative content length parsed ok: %+v", got)
+	}
+	if got := LSPFrameHeader(17); got != "Content-Length: 17\r\n\r\n" {
+		t.Fatalf("frame header = %q", got)
+	}
+	if got := LSPTrimHeaderLine("Content-Length: 17\r\n"); got != "Content-Length: 17" {
+		t.Fatalf("trimmed header line = %q", got)
+	}
+	length, err := readHeaders(bufio.NewReader(strings.NewReader("Content-Type: x\r\ncontent-length: 2\r\n\r\n{}")))
+	if err != nil || length != 2 {
+		t.Fatalf("readHeaders = (%d, %v), want (2, nil)", length, err)
+	}
+}
+
+func TestNearbyNameRankingUsesSelfHostedPolicy(t *testing.T) {
+	if got := LSPLevenshteinBounded("kitten", "sitting", 3); got != 3 {
+		t.Fatalf("levenshtein = %d, want 3", got)
+	}
+	if got := LSPLevenshteinBounded("kitten", "sitting", 2); got != 3 {
+		t.Fatalf("bounded levenshtein = %d, want limit+1", got)
+	}
+	got := nearbyStructuredSymbolNames([]structuredSymbol{
+		{name: "helpr"},
+		{name: "helper"},
+		{name: "helper"},
+		{name: "helmet"},
+		{name: "builtin", builtin: true},
+		{name: "local", depth: 1},
+	}, "helper", 1)
+	if want := []string{"helper", "helpr"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("nearby names = %#v, want %#v", got, want)
+	}
+}
+
 func TestDisplayTextUsesSelfHostedPolicy(t *testing.T) {
 	if got := LSPHoverSignatureLine("struct", "User", ""); got != "struct User" {
 		t.Fatalf("hover signature = %q", got)
@@ -100,6 +165,196 @@ func TestDisplayTextUsesSelfHostedPolicy(t *testing.T) {
 	}
 	if got := LSPCompletionDetail("function", "map", "fn(Int) -> String"); got != "fn map(Int) -> String" {
 		t.Fatalf("completion detail = %q", got)
+	}
+}
+
+func TestNameURIAndFixAllPolicyUseSelfHost(t *testing.T) {
+	if got := LSPServerName(); got != "osty-lsp" {
+		t.Fatalf("server name = %q", got)
+	}
+	if got := LSPServerVersion(); got != "0.1.0" {
+		t.Fatalf("server version = %q", got)
+	}
+	if got := LSPPositionEncodingUTF16(); got != "utf-16" {
+		t.Fatalf("encoding = %q", got)
+	}
+	if got := LSPJSONNull(); got != "null" {
+		t.Fatalf("json null = %q", got)
+	}
+	if got := []string{LSPCompletionTriggerDot(), LSPSignatureTriggerOpenParen(), LSPSignatureTriggerComma()}; !reflect.DeepEqual(got, []string{".", "(", ","}) {
+		t.Fatalf("triggers = %#v", got)
+	}
+	if got := LSPSemanticTokenTypes(); got[0] != "namespace" || got[len(got)-1] != "enumMember" {
+		t.Fatalf("semantic token legend = %#v", got)
+	}
+	if got := LSPSemanticTokenModifiers(); !reflect.DeepEqual(got, []string{"declaration", "readonly"}) {
+		t.Fatalf("semantic token modifiers = %#v", got)
+	}
+	if got := LSPExitCode(true); got != 0 {
+		t.Fatalf("exit code = %d, want 0", got)
+	}
+	if got := LSPExitCode(false); got != 1 {
+		t.Fatalf("exit code = %d, want 1", got)
+	}
+	if got := LSPDispatchDecisionFor("initialize", false, false, false); got.Action != LSPDispatchActionInitialize() {
+		t.Fatalf("initialize decision = %+v", got)
+	}
+	if got := LSPDispatchDecisionFor("textDocument/hover", false, false, false); got.ErrorCode != errServerNotInitialized {
+		t.Fatalf("pre-init decision = %+v", got)
+	}
+	if got := LSPDispatchDecisionFor("shutdown", false, true, false); got.Action != LSPDispatchActionShutdown() {
+		t.Fatalf("shutdown decision = %+v", got)
+	}
+	if got := LSPDispatchDecisionFor("textDocument/hover", false, true, false); got.Action != LSPDispatchActionDispatch() {
+		t.Fatalf("hover decision = %+v", got)
+	}
+	if got := LSPDispatchDecisionFor("unknown/method", false, true, false); got.ErrorCode != errMethodNotFound {
+		t.Fatalf("unknown request decision = %+v", got)
+	}
+	if got := LSPDispatchDecisionFor("unknown/method", true, true, false); got.Action != LSPDispatchActionIgnore() {
+		t.Fatalf("unknown notification decision = %+v", got)
+	}
+	if got := LSPAsciiLowerText("HeLLo"); got != "hello" {
+		t.Fatalf("lower text = %q, want hello", got)
+	}
+	if !LSPNameMatchesPrefix("helper", "hel") || LSPNameMatchesPrefix("helper", "map") {
+		t.Fatal("prefix policy mismatch")
+	}
+	if !LSPNameMatchesQuery("HelperValue", "value") {
+		t.Fatal("query policy did not match lowercase substring")
+	}
+	if got := LSPURIForSourcePath("inmemory:main"); got != "inmemory:main" {
+		t.Fatalf("source URI = %q, want inmemory:main", got)
+	}
+	if got := LSPURIForSourcePath("/tmp/main.osty"); got != "file:///tmp/main.osty" {
+		t.Fatalf("file source URI = %q", got)
+	}
+	if got := LSPFileURIPathRaw("file:///tmp/main.osty"); !got.OK || got.Path != "/tmp/main.osty" {
+		t.Fatalf("file URI raw path = %+v", got)
+	}
+	if got := LSPFileURIPathRaw("file:///C:/tmp/main.osty"); !got.OK || got.Path != "C:/tmp/main.osty" {
+		t.Fatalf("windows file URI raw path = %+v", got)
+	}
+	if got := LSPFileURIPathRaw("inmemory:main"); got.OK {
+		t.Fatalf("non-file URI raw path = %+v", got)
+	}
+	if !LSPPreferAIRepairFixAll([]byte("x.length")) || LSPPreferAIRepairFixAll([]byte("x.len()")) {
+		t.Fatal("fix-all preference policy mismatch")
+	}
+	if !LSPTextChanged([]byte("a"), []byte("b")) || LSPTextChanged([]byte("a"), []byte("a")) {
+		t.Fatal("text changed policy mismatch")
+	}
+	if !LSPParamsAreEmpty(nil) || !LSPParamsAreEmpty([]byte("null")) || LSPParamsAreEmpty([]byte("{}")) {
+		t.Fatal("params empty policy mismatch")
+	}
+	if got := LSPRenameEmptyNameMessage(); got != "new name is empty" {
+		t.Fatalf("empty rename message = %q", got)
+	}
+	if got := LSPCannotRenameBuiltinMessage(); got != "cannot rename a builtin" {
+		t.Fatalf("builtin rename message = %q", got)
+	}
+	if !LSPCanRenameKind("function") || LSPCanRenameKind("builtin") {
+		t.Fatal("rename kind policy mismatch")
+	}
+	if got := LSPRenameTitle("helper"); got != "Rename to `helper`" {
+		t.Fatalf("rename title = %q", got)
+	}
+	if got := LSPRemoveLineTitle(); got != "Remove unused import" {
+		t.Fatalf("remove title = %q", got)
+	}
+	if got := LSPFixAllTitle(); got != "Fix all auto-fixable problems" {
+		t.Fatalf("fix-all title = %q", got)
+	}
+	if got := LSPOrganizeImportsTitle(); got != "Organize imports" {
+		t.Fatalf("organize title = %q", got)
+	}
+	if got := LSPInlayTypeLabel("Int"); got != ": Int" {
+		t.Fatalf("inlay label = %q", got)
+	}
+	if got := LSPMethodNotImplementedMessage("custom/method"); got != "method not implemented: custom/method" {
+		t.Fatalf("method message = %q", got)
+	}
+	if !LSPIsOstySourceFileName("main.osty") || LSPIsOstySourceFileName("main_test.osty") || LSPIsOstySourceFileName("main.go") {
+		t.Fatal("source filename policy mismatch")
+	}
+	if !LSPHasOstyFileExtension("main_test.osty") || LSPHasOstyFileExtension("main.go") {
+		t.Fatal("source extension policy mismatch")
+	}
+	item := LSPCompletionItemForSymbolView(selfhost.LSPSymbolView{
+		Name:     "map",
+		Kind:     "function",
+		TypeText: "fn(Int) -> String",
+		DocText:  "docs",
+		HasSym:   true,
+	})
+	if item.Label != "map" || item.Kind != uint32(CompletionItemFunction) || item.SortText != "2_map" || item.Detail != "fn map(Int) -> String" || item.Documentation != "docs" {
+		t.Fatalf("completion item policy = %+v", item)
+	}
+	if got := LSPSemanticHoverKind("generic"); got != "type parameter" {
+		t.Fatalf("semantic hover kind = %q", got)
+	}
+}
+
+func TestTargetLocationPolicyUsesSelfHost(t *testing.T) {
+	refs := []LSPReferenceFact{
+		{
+			URI:                  "file:///b.osty",
+			StartLine:            2,
+			StartCharacter:       0,
+			EndLine:              2,
+			EndCharacter:         4,
+			TargetSymbolID:       "sym.helper",
+			TargetURI:            "file:///decl.osty",
+			TargetStartLine:      1,
+			TargetStartCharacter: 1,
+			TargetEndLine:        1,
+			TargetEndCharacter:   7,
+		},
+		{
+			URI:            "file:///a.osty",
+			StartLine:      4,
+			StartCharacter: 1,
+			EndLine:        4,
+			EndCharacter:   7,
+			TargetSymbolID: "sym.helper",
+		},
+	}
+	symbols := []LSPSymbolFact{{
+		ID:             "sym.helper",
+		URI:            "file:///decl.osty",
+		StartLine:      1,
+		StartCharacter: 2,
+		EndLine:        1,
+		EndCharacter:   8,
+	}}
+	got := LSPLocationsForTarget(refs, symbols, "sym.helper", true)
+	want := []LSPLocation{
+		{URI: "file:///a.osty", StartLine: 4, StartCharacter: 1, EndLine: 4, EndCharacter: 7},
+		{URI: "file:///b.osty", StartLine: 2, StartCharacter: 0, EndLine: 2, EndCharacter: 4},
+		{URI: "file:///decl.osty", StartLine: 1, StartCharacter: 2, EndLine: 1, EndCharacter: 8},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("target locations = %#v, want %#v", got, want)
+	}
+	if got := LSPLocationsForTarget(refs, nil, "missing", true); len(got) != 0 {
+		t.Fatalf("missing target locations = %#v, want none", got)
+	}
+}
+
+func TestSignatureTypeParsingUsesSelfHostedPolicy(t *testing.T) {
+	parsed := LSPParseFunctionType("fn(Int, Result<String, Error>, fn(Int) -> Bool) -> String")
+	if !parsed.OK {
+		t.Fatal("function type did not parse")
+	}
+	wantParams := []string{"Int", "Result<String, Error>", "fn(Int) -> Bool"}
+	if !reflect.DeepEqual(parsed.ParameterTypes, wantParams) || parsed.ReturnType != "String" {
+		t.Fatalf("parsed function type = %+v, want params %#v return String", parsed, wantParams)
+	}
+	if got := LSPParseFunctionType("List<Int>"); got.OK {
+		t.Fatalf("non-function type parsed ok: %+v", got)
+	}
+	if got, want := LSPFallbackParameterNames(3), []string{"arg1", "arg2", "arg3"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("fallback parameter names = %#v, want %#v", got, want)
 	}
 }
 
@@ -258,6 +513,12 @@ func TestIdentifierAtUsesSelfHostedPolicy(t *testing.T) {
 	}
 	if got := identifierAt(src, strings.Index(string(src), "값")); got != "값" {
 		t.Fatalf("identifierAt(unicode) = %q, want 값", got)
+	}
+	if got := LSPNamedTypeReferenceEndOffset(10, 20, "helper", "help"); got != 16 {
+		t.Fatalf("named type end = %d, want 16", got)
+	}
+	if got := LSPNamedTypeReferenceEndOffset(18, 20, "helper", ""); got != 20 {
+		t.Fatalf("clamped named type end = %d, want 20", got)
 	}
 }
 
@@ -536,6 +797,9 @@ func TestURIAndLocationPolicyUsesSelfHost(t *testing.T) {
 	if got := pathToURI(""); got != "file://" {
 		t.Fatalf("pathToURI(empty) = %q", got)
 	}
+	if got := LSPFullDocumentRangeFor([]byte("a😀\nend"), LSPLineStarts([]byte("a😀\nend"))); got.EndLine != 1 || got.EndCharacter != 3 {
+		t.Fatalf("full document range = %+v", got)
+	}
 
 	got := sortDedupLocations([]Location{
 		{
@@ -573,6 +837,9 @@ func TestURIAndLocationPolicyUsesSelfHost(t *testing.T) {
 	if got := []string{syms[0].Location.URI, syms[1].Location.URI, syms[2].Location.URI}; !reflect.DeepEqual(got, []string{"file:///a.osty", "file:///z.osty", "file:///b.osty"}) {
 		t.Fatalf("symbol order = %#v", got)
 	}
+	if got := SortLSPStrings([]string{"z.osty", "a.osty", "a.osty"}); !reflect.DeepEqual(got, []string{"a.osty", "a.osty", "z.osty"}) {
+		t.Fatalf("string order = %#v", got)
+	}
 }
 
 func TestDiagnosticPayloadUsesSelfHostedPolicy(t *testing.T) {
@@ -593,6 +860,41 @@ func TestDiagnosticPayloadUsesSelfHostedPolicy(t *testing.T) {
 	}
 	if got.Message != "unused value\nhelp: prefix it\nnote: declared here" {
 		t.Fatalf("message = %q", got.Message)
+	}
+	a := []LSPDiagnostic{got}
+	b := append([]LSPDiagnostic(nil), a...)
+	if !diagsEqual(a, b) {
+		t.Fatalf("diagnostics should be equal: %#v %#v", a, b)
+	}
+	b[0].Message = "changed"
+	if diagsEqual(a, b) {
+		t.Fatalf("diagnostics should differ: %#v %#v", a, b)
+	}
+	if !LSPDiagnosticBelongsToFile(LSPDiagnosticFileFact{
+		DiagnosticFile: "/tmp/main.osty",
+		PackageFile:    "/tmp/main.osty",
+		PrimaryOffset:  999,
+		SourceLength:   1,
+	}) {
+		t.Fatal("diagnostic file match should win")
+	}
+	if !LSPDiagnosticBelongsToFile(LSPDiagnosticFileFact{
+		SpanSourceFileID:    "src1",
+		PackageSourceFileID: "src1",
+		PrimaryOffset:       999,
+		SourceLength:        1,
+	}) {
+		t.Fatal("diagnostic source file id should match")
+	}
+	if !LSPDiagnosticBelongsToFile(LSPDiagnosticFileFact{
+		PrimaryLine:   1,
+		PrimaryOffset: 3,
+		SourceLength:  3,
+	}) {
+		t.Fatal("diagnostic offset fallback should match")
+	}
+	if LSPDiagnosticBelongsToFile(LSPDiagnosticFileFact{SourceLength: 3}) {
+		t.Fatal("zero-line diagnostic should not match")
 	}
 }
 
@@ -635,6 +937,16 @@ func TestImportOrganizeHelpersUseSelfHost(t *testing.T) {
 	})
 	if got := []string{sorted[0].key, sorted[1].view.Alias, sorted[2].view.Alias, sorted[3].key}; !reflect.DeepEqual(got, []string{"fmt", "a", "b", "zeta"}) {
 		t.Fatalf("import order = %#v", got)
+	}
+	block := LSPOrganizedUseBlock([]LSPOrganizeUseEntry{
+		{Group: 1, Key: "zeta", Text: "use zeta"},
+		{Group: 0, Key: "fmt", Text: "use std.fmt"},
+		{Group: 1, Key: "alpha", Text: "use alpha"},
+		{Group: 1, Key: "alpha", Text: "use alpha duplicate"},
+		{Group: 0, Key: "io", Text: "use std.io", Unused: true},
+	})
+	if got, want := block, "use std.fmt\n\nuse alpha\nuse zeta\n"; got != want {
+		t.Fatalf("organized use block = %q, want %q", got, want)
 	}
 	if got := LSPUseSourceText(stdSrc, views[0].PosOffset, views[0].EndOffset); got != "use std.fmt" {
 		t.Fatalf("source text = %q", got)

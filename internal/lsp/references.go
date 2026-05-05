@@ -70,7 +70,7 @@ func (s *Server) handleRename(req *rpcRequest) {
 		return
 	}
 	if params.NewName == "" {
-		_ = s.conn.writeError(req.ID, errInvalidParams, "new name is empty")
+		_ = s.conn.writeError(req.ID, errInvalidParams, LSPRenameEmptyNameMessage())
 		return
 	}
 	doc := s.docs.get(params.TextDocument.URI)
@@ -88,7 +88,7 @@ func (s *Server) handleRename(req *rpcRequest) {
 			return
 		}
 		if ref.builtin {
-			_ = s.conn.writeError(req.ID, errInvalidRequest, "cannot rename a builtin")
+			_ = s.conn.writeError(req.ID, errInvalidRequest, LSPCannotRenameBuiltinMessage())
 			return
 		}
 		edits := structuredRenameEditsFor(doc.analysis.structuredRefs, doc.analysis.structuredSymbols, ref.targetSymbolID, params.NewName)
@@ -101,7 +101,7 @@ func (s *Server) handleRename(req *rpcRequest) {
 			return
 		}
 		if sym.builtin {
-			_ = s.conn.writeError(req.ID, errInvalidRequest, "cannot rename a builtin")
+			_ = s.conn.writeError(req.ID, errInvalidRequest, LSPCannotRenameBuiltinMessage())
 			return
 		}
 		edits := structuredRenameEditsFor(doc.analysis.structuredRefs, doc.analysis.structuredSymbols, sym.id, params.NewName)
@@ -113,8 +113,8 @@ func (s *Server) handleRename(req *rpcRequest) {
 		replyJSON(s.conn, req.ID, nil)
 		return
 	}
-	if target.Kind == resolve.SymBuiltin {
-		_ = s.conn.writeError(req.ID, errInvalidRequest, "cannot rename a builtin")
+	if !LSPCanRenameKind(target.Kind.String()) {
+		_ = s.conn.writeError(req.ID, errInvalidRequest, LSPCannotRenameBuiltinMessage())
 		return
 	}
 	edits := s.renameEditsFor(doc, target, params.NewName)
@@ -142,7 +142,7 @@ func (s *Server) semanticRenameEdits(doc *document, lspPos Position, newName str
 	if !ok {
 		return nil, false
 	}
-	if target.Kind == "builtin" {
+	if !LSPCanRenameKind(target.Kind) {
 		return nil, false
 	}
 	out := map[string][]TextEdit{}
@@ -216,13 +216,11 @@ func (s *Server) findReferences(doc *document, target *resolve.Symbol, includeDe
 			// is `auth`. Narrow to the head identifier so the rename
 			// doesn't chew through the whole path.
 			startOff := nt.Pos().Offset
-			endOff := startOff + len(target.Name)
-			if len(nt.Path) > 0 && nt.Path[0] == target.Name {
-				endOff = startOff + len(nt.Path[0])
+			firstPath := ""
+			if len(nt.Path) > 0 {
+				firstPath = nt.Path[0]
 			}
-			if endOff > len(src) {
-				endOff = len(src)
-			}
+			endOff := LSPNamedTypeReferenceEndOffset(startOff, len(src), target.Name, firstPath)
 			out = append(out, Location{
 				URI:   uri,
 				Range: li.rangeFromOffsets(startOff, endOff),

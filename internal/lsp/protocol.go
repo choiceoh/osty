@@ -32,7 +32,7 @@ type rpcRequest struct {
 // isNotification reports whether the message lacks an id (§LSP 3.17
 // "Notification Message"). Notifications must never be answered.
 func (r *rpcRequest) isNotification() bool {
-	return len(r.ID) == 0 || string(r.ID) == "null"
+	return LSPParamsAreEmpty(r.ID)
 }
 
 // rpcResponse is the outgoing reply to a request. Exactly one of

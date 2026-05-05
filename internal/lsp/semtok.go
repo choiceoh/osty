@@ -8,27 +8,11 @@ import (
 // semanticTokenTypes is the legend the server advertises in
 // ServerCapabilities. Indices into this slice appear in each encoded
 // token; the client maps them to theme colors.
-var semanticTokenTypes = []string{
-	"namespace",
-	"type",
-	"parameter",
-	"variable",
-	"property",
-	"function",
-	"keyword",
-	"string",
-	"number",
-	"operator",
-	"comment",
-	"enumMember",
-}
+var semanticTokenTypes = LSPSemanticTokenTypes()
 
 // semanticTokenModifiers complements tokenTypes; packed as a bitmask
 // on each emitted token.
-var semanticTokenModifiers = []string{
-	"declaration",
-	"readonly",
-}
+var semanticTokenModifiers = LSPSemanticTokenModifiers()
 
 // semToken is the intermediate form before relative encoding. `mods`
 // is always 0 today; kept in the struct so the wire-format (5 ints
