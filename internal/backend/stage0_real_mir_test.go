@@ -197,6 +197,34 @@ fn main() {}`,
 				"ret i64",
 			},
 		},
+		{
+			name: "for_in_range_sum",
+			src: `fn sum(n: Int) -> Int {
+    let mut acc = 0
+    for i in 0..n {
+        acc = acc + i
+    }
+    acc
+}
+fn main() {}`,
+			wantIR: []string{
+				"define i64 @sum(i64 %n)",
+				"%acc.slot = alloca i64",
+				"%i.slot = alloca i64",
+				"store i64 0, ptr %acc.slot",
+				"store i64 0, ptr %i.slot",
+				"br label %header.1",
+				"icmp slt i64",
+				"br i1",
+				"add i64",
+				"br label %post.3",
+				"post.3:",
+				"add i64",
+				"store i64",
+				"br label %header.1",
+				"ret i64",
+			},
+		},
 	}
 	for _, c := range cases {
 		c := c
@@ -221,18 +249,6 @@ fn main() {}`,
 // coverage, flip skipNow=false to lock in the new capability.
 func TestStage0RealMIRGapProbe(t *testing.T) {
 	cases := []realProbeCase{
-		{
-			name:    "for_in_range",
-			src:     `fn sum(n: Int) -> Int {
-    let mut acc = 0
-    for i in 0..n {
-        acc = acc + i
-    }
-    acc
-}
-fn main() {}`,
-			skipNow: true,
-		},
 		{
 			name:    "println_call",
 			src:     `fn main() { println("hi") }`,
