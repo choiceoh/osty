@@ -63,12 +63,24 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 	}
 	out.WriteString("\n")
 
+	// Collect the set of in-module function symbols up front so call
+	// classifiers can validate their FnRef.Symbol references a known
+	// declaration. External calls (runtime / FFI) decline — stage0
+	// doesn't emit declare statements.
+	knownSymbols := map[string]bool{}
+	for _, fn := range module.Functions {
+		if fn == nil || fn.Name == "" {
+			continue
+		}
+		knownSymbols[fn.Name] = true
+	}
+
 	emittedMain := false
 	for _, fn := range module.Functions {
 		if fn == nil {
 			continue
 		}
-		if err := emitFunction(&out, fn); err != nil {
+		if err := emitFunction(&out, fn, knownSymbols); err != nil {
 			return nil, err
 		}
 		if fn.Name == "main" {
@@ -81,7 +93,7 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 	return []byte(out.String()), nil
 }
 
-func emitFunction(out *strings.Builder, fn *mir.Function) error {
+func emitFunction(out *strings.Builder, fn *mir.Function, knownSymbols map[string]bool) error {
 	if fn.IsIntrinsic {
 		return fmt.Errorf("%w: intrinsic declaration %q", ErrUnsupported, fn.Name)
 	}
@@ -91,7 +103,7 @@ func emitFunction(out *strings.Builder, fn *mir.Function) error {
 	if fn.Name == "main" {
 		return emitTrivialMain(out, fn)
 	}
-	if pat, ok := matchSequentialReturn(fn); ok {
+	if pat, ok := matchSequentialReturn(fn, knownSymbols); ok {
 		return emitSequentialReturn(out, fn, pat)
 	}
 	return fmt.Errorf("%w: function %q does not match any stage0 pattern", ErrUnsupported, fn.Name)
@@ -188,16 +200,25 @@ type localBinding struct {
 // pendingInstr is one instruction the emitter will materialise.
 // For `inline` instructions (UseRV) nothing is emitted — the matcher
 // already recorded the expression in seqState.bindings. For `binary`
-// instructions the emitter assigns the next SSA register at emit time.
+// and `call` instructions the emitter assigns the next SSA register
+// at emit time.
 type pendingInstr struct {
-	kind        instrKind
-	destLocal   mir.LocalID
-	resultType  scalarType
+	kind       instrKind
+	destLocal  mir.LocalID
+	resultType scalarType
 	// binary fields
-	binOp       string
-	binArgType  string
-	leftExpr    string
-	rightExpr   string
+	binOp      string
+	binArgType string
+	leftExpr   string
+	rightExpr  string
+	// call fields
+	callSymbol string
+	callArgs   []callArg
+}
+
+type callArg struct {
+	expr string
+	ty   string // LLVM type ("i64" / "i1")
 }
 
 type instrKind int
@@ -205,6 +226,7 @@ type instrKind int
 const (
 	instrInline instrKind = iota
 	instrBinary
+	instrCall
 )
 
 // sequentialPattern is what `matchSequentialReturn` produces.
@@ -218,8 +240,11 @@ type sequentialPattern struct {
 }
 
 // matchSequentialReturn classifies `fn` against the multi-instruction
-// stage0 subset described in the package docstring.
-func matchSequentialReturn(fn *mir.Function) (sequentialPattern, bool) {
+// stage0 subset described in the package docstring. `knownSymbols`
+// names every function defined in the same MIR module so direct call
+// classifiers can decline references to external symbols (which
+// stage0 cannot declare).
+func matchSequentialReturn(fn *mir.Function, knownSymbols map[string]bool) (sequentialPattern, bool) {
 	pat := sequentialPattern{}
 	pat.retType = scalarFromType(fn.ReturnType)
 	if pat.retType == scalarUnknown {
@@ -268,20 +293,22 @@ func matchSequentialReturn(fn *mir.Function) (sequentialPattern, bool) {
 	nextSSA := 0
 
 	for _, instr := range bb.Instrs {
-		assign, ok := instr.(*mir.AssignInstr)
-		if !ok {
+		var (
+			pending pendingInstr
+			expr    string
+			destID  mir.LocalID
+			destType scalarType
+			okStep  bool
+		)
+		switch step := instr.(type) {
+		case *mir.AssignInstr:
+			pending, expr, destID, destType, okStep = classifyAssignStep(fn, step, bindings)
+		case *mir.CallInstr:
+			pending, destID, destType, okStep = classifyCallStep(fn, step, bindings, knownSymbols)
+		default:
 			return pat, false
 		}
-		if assign.Dest.HasProjections() {
-			return pat, false
-		}
-		destID := assign.Dest.Local
-		destLocal := lookupLocal(fn, destID)
-		if destLocal == nil {
-			return pat, false
-		}
-		destType := scalarFromType(destLocal.Type)
-		if destType == scalarUnknown {
+		if !okStep {
 			return pat, false
 		}
 		// Reassignment is unsupported — both for params and for
@@ -289,26 +316,18 @@ func matchSequentialReturn(fn *mir.Function) (sequentialPattern, bool) {
 		if existing, found := bindings[destID]; found && existing.defined {
 			return pat, false
 		}
-
-		pending, expr, okSrc := classifyAssignSrc(assign.Src, destType, bindings)
-		if !okSrc {
-			return pat, false
-		}
 		pending.destLocal = destID
 		pending.resultType = destType
 
-		if pending.kind == instrBinary {
+		switch pending.kind {
+		case instrBinary, instrCall:
 			reg := fmt.Sprintf("%%%d", nextSSA)
 			nextSSA++
-			pending.leftExpr = pending.leftExpr // already set
-			pending.rightExpr = pending.rightExpr
 			bindings[destID] = localBinding{expr: reg, ty: destType, defined: true}
-			expr = reg
-		} else {
+		default:
 			bindings[destID] = localBinding{expr: expr, ty: destType, defined: true}
 		}
 		pat.pending = append(pat.pending, pending)
-		_ = expr
 	}
 
 	retBinding, ok := bindings[fn.ReturnLocal]
@@ -320,6 +339,90 @@ func matchSequentialReturn(fn *mir.Function) (sequentialPattern, bool) {
 	}
 	pat.returnExpr = retBinding.expr
 	return pat, true
+}
+
+// classifyAssignStep adapts AssignInstr to the shared pending-step
+// signature used by the matcher's per-instruction loop. Returns
+// (pending, inline-expr, destID, destType, ok).
+func classifyAssignStep(fn *mir.Function, ai *mir.AssignInstr, bindings map[mir.LocalID]localBinding) (pendingInstr, string, mir.LocalID, scalarType, bool) {
+	if ai.Dest.HasProjections() {
+		return pendingInstr{}, "", 0, scalarUnknown, false
+	}
+	destID := ai.Dest.Local
+	destLocal := lookupLocal(fn, destID)
+	if destLocal == nil {
+		return pendingInstr{}, "", 0, scalarUnknown, false
+	}
+	destType := scalarFromType(destLocal.Type)
+	if destType == scalarUnknown {
+		return pendingInstr{}, "", 0, scalarUnknown, false
+	}
+	pending, expr, ok := classifyAssignSrc(ai.Src, destType, bindings)
+	if !ok {
+		return pendingInstr{}, "", 0, scalarUnknown, false
+	}
+	return pending, expr, destID, destType, true
+}
+
+// classifyCallStep validates and decodes a direct call (`FnRef`) into
+// a pending call instruction. Indirect calls / unit-result calls /
+// projection destinations / non-scalar args decline.
+func classifyCallStep(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.LocalID]localBinding, knownSymbols map[string]bool) (pendingInstr, mir.LocalID, scalarType, bool) {
+	if ci.Dest == nil {
+		// Stage0 only handles calls whose result feeds a local.
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	if ci.Dest.HasProjections() {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	destID := ci.Dest.Local
+	destLocal := lookupLocal(fn, destID)
+	if destLocal == nil {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	destType := scalarFromType(destLocal.Type)
+	if destType == scalarUnknown {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	ref, ok := ci.Callee.(*mir.FnRef)
+	if !ok {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	if ref.Symbol == "" {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	if !knownSymbols[ref.Symbol] {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	// Validate the callee's declared return type matches dest.
+	fnTy, ok := ref.Type.(*ir.FnType)
+	if !ok || fnTy == nil {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	if scalarFromType(fnTy.Return) != destType {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	if len(fnTy.Params) != len(ci.Args) {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	args := make([]callArg, 0, len(ci.Args))
+	for i, op := range ci.Args {
+		argExpr, argTy, okOp := resolveOperand(op, bindings)
+		if !okOp {
+			return pendingInstr{}, 0, scalarUnknown, false
+		}
+		// Param type must agree with the callee's declared param.
+		paramTy := scalarFromType(fnTy.Params[i])
+		if paramTy == scalarUnknown || paramTy != argTy {
+			return pendingInstr{}, 0, scalarUnknown, false
+		}
+		args = append(args, callArg{expr: argExpr, ty: argTy.llvm()})
+	}
+	return pendingInstr{
+		kind:       instrCall,
+		callSymbol: ref.Symbol,
+		callArgs:   args,
+	}, destID, destType, true
 }
 
 // classifyAssignSrc reduces an AssignInstr.Src to either a pending
@@ -404,11 +507,21 @@ func emitSequentialReturn(out *strings.Builder, fn *mir.Function, pat sequential
 
 	ssa := 0
 	for _, pi := range pat.pending {
-		if pi.kind != instrBinary {
-			continue
+		switch pi.kind {
+		case instrBinary:
+			fmt.Fprintf(out, "  %%%d = %s %s %s, %s\n", ssa, pi.binOp, pi.binArgType, pi.leftExpr, pi.rightExpr)
+			ssa++
+		case instrCall:
+			fmt.Fprintf(out, "  %%%d = call %s @%s(", ssa, pi.resultType.llvm(), pi.callSymbol)
+			for i, a := range pi.callArgs {
+				if i > 0 {
+					out.WriteString(", ")
+				}
+				fmt.Fprintf(out, "%s %s", a.ty, a.expr)
+			}
+			out.WriteString(")\n")
+			ssa++
 		}
-		fmt.Fprintf(out, "  %%%d = %s %s %s, %s\n", ssa, pi.binOp, pi.binArgType, pi.leftExpr, pi.rightExpr)
-		ssa++
 	}
 	fmt.Fprintf(out, "  ret %s %s\n", retLLVM, pat.returnExpr)
 	out.WriteString("}\n\n")
