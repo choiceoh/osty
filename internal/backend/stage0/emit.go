@@ -745,6 +745,28 @@ func classifyAssignSrc(src mir.RValue, destType scalarType, bindings map[mir.Loc
 		return pendingInstr{kind: instrInline}, expr, true
 	}
 	if bin, ok := src.(*mir.BinaryRV); ok {
+		// Special-case String + Add: lowers to a runtime ABI call
+		// (`osty_rt_strings_Concat`) rather than a native LLVM
+		// binary instruction.
+		if bin.Op == mir.BinAdd && destType == scalarString {
+			left, leftTy, ok := resolveOperand(bin.Left, bindings, mctx)
+			if !ok || leftTy != scalarString {
+				return pendingInstr{}, "", false
+			}
+			right, rightTy, ok := resolveOperand(bin.Right, bindings, mctx)
+			if !ok || rightTy != scalarString {
+				return pendingInstr{}, "", false
+			}
+			declareStringConcatRuntime(mctx)
+			return pendingInstr{
+				kind:       instrCall,
+				callSymbol: "osty_rt_strings_Concat",
+				callArgs: []callArg{
+					{expr: left, ty: "ptr"},
+					{expr: right, ty: "ptr"},
+				},
+			}, "", true
+		}
 		llvmOp, resultType, operandType := classifyBinary(bin.Op)
 		if llvmOp == "" || resultType != destType {
 			return pendingInstr{}, "", false
@@ -766,6 +788,20 @@ func classifyAssignSrc(src mir.RValue, destType scalarType, bindings map[mir.Loc
 		}, "", true
 	}
 	return pendingInstr{}, "", false
+}
+
+// declareStringConcatRuntime appends the runtime ABI declaration for
+// `osty_rt_strings_Concat` to extraDecls (idempotent — sentinel
+// stored alongside other emit-once flags in `emittedStructs`).
+func declareStringConcatRuntime(mctx *moduleCtx) {
+	if mctx.emittedStructs == nil {
+		mctx.emittedStructs = map[string]bool{}
+	}
+	if mctx.emittedStructs["__stage0.strings_concat"] {
+		return
+	}
+	mctx.emittedStructs["__stage0.strings_concat"] = true
+	mctx.extraDecls.WriteString("declare ptr @osty_rt_strings_Concat(ptr, ptr)\n")
 }
 
 // resolveOperand returns (expression, type) for one MIR Operand using
