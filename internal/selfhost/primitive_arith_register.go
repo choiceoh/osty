@@ -501,3 +501,93 @@ func registerResultReturnNullary(env *CheckEnv, owner string, ty int, name strin
 		genericBounds: make([]*CheckGenericBound, 0, 1),
 	})
 }
+
+// collectIntrinsicMethodsFromAst fans out methods from a
+// `#[intrinsic_methods(Int, Int8, …)]`-annotated struct to the named
+// primitive types so the self-hosted checker resolves `42.abs()` etc.
+// without relying on the Go-side Primitives map.
+//
+// Mirrored in toolchain/check.osty so the future LLVM-compiled native
+// checker processes the same surface.
+func collectIntrinsicMethodsFromAst(cx *ElabCx, node *AstNode) {
+	if cx == nil || node == nil {
+		return
+	}
+	anns := srCollectAnnotationNodes(cx.ast, node.extra)
+	for _, ann := range anns {
+		if ann.text != "intrinsic_methods" {
+			continue
+		}
+		for _, argIdx := range ann.children {
+			arg := astArenaNodeAt(cx.ast.arena, argIdx)
+			targetName := arg.text
+			if targetName == "" {
+				continue
+			}
+			targetTy := tyNamed(cx.env.tys, targetName, make([]int, 0, 1))
+			if targetTy < 0 || tyIsBad(cx.env.tys, targetTy) {
+				continue
+			}
+			for _, memberIdx := range node.children {
+				member := astArenaNodeAt(cx.ast.arena, memberIdx)
+				if _, ok := member.kind.(*AstNodeKind_AstNFnDecl); !ok {
+					continue
+				}
+				registerIntrinsicMethodOn(cx, member, targetName, targetTy)
+			}
+		}
+	}
+}
+
+// registerIntrinsicMethodOn builds a CheckFnSig for one method and
+// registers it on targetName. Self references stay intact — they are
+// resolved by checkSpecializeMethodSelf at the call site.
+func registerIntrinsicMethodOn(cx *ElabCx, method *AstNode, targetName string, targetTy int) {
+	fnName := method.text
+	generics := collectGenericNames(cx, method.children2)
+	bounds := collectGenericBounds(cx, method.children2)
+
+	paramNames := make([]string, 0, len(method.children))
+	paramTys := make([]int, 0, len(method.children))
+	hasReceiver := false
+	for _, paramIdx := range method.children {
+		paramNode := astArenaNodeAt(cx.ast.arena, paramIdx)
+		if _, ok := paramNode.kind.(*AstNodeKind_AstNParam); !ok {
+			continue
+		}
+		if paramNode.text == "self" {
+			hasReceiver = true
+		} else {
+			hasDefault := paramNode.left >= 0
+			rawName := paramNode.text
+			storedName := rawName
+			if hasDefault {
+				storedName = "?" + rawName
+			}
+			paramNames = append(paramNames, storedName)
+			declared := astTypeToTyInCollect(cx, paramNode.right)
+			if declared >= 0 {
+				paramTys = append(paramTys, declared)
+			} else {
+				paramTys = append(paramTys, tErr(cx.env.tys))
+			}
+		}
+	}
+
+	retTy := astTypeToTyInCollect(cx, method.left)
+	if retTy < 0 {
+		retTy = tUnit(cx.env.tys)
+	}
+
+	checkRegisterFn(cx.env, &CheckFnSig{
+		name:          fnName,
+		owner:         targetName,
+		receiverTy:    targetTy,
+		hasReceiver:   hasReceiver,
+		retTy:         retTy,
+		paramNames:    paramNames,
+		paramTys:      paramTys,
+		generics:      generics,
+		genericBounds: bounds,
+	})
+}
