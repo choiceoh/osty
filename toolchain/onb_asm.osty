@@ -155,52 +155,52 @@ fn onbAsmOctalEscape(c: Int) -> String {
 // the `Ret` instruction itself just emits `ret`.
 
 pub fn onbAsmRenderInstr(target: OnbTarget, instr: OnbInstr) -> String {
-    match instr.kind {
-        OnbInstrKind.OnbInstrBrk -> "\tbrk #{instr.imm}\n",
-        OnbInstrKind.OnbInstrRet -> "\tret\n",
-        OnbInstrKind.OnbInstrAddReg -> "\tadd {instr.dst}, {instr.lhs}, {instr.rhs}\n",
-        OnbInstrKind.OnbInstrSubReg -> "\tsub {instr.dst}, {instr.lhs}, {instr.rhs}\n",
-        OnbInstrKind.OnbInstrMulReg -> "\tmul {instr.dst}, {instr.lhs}, {instr.rhs}\n",
-        OnbInstrKind.OnbInstrCmp -> "\tcmp {instr.lhs}, {instr.rhs}\n",
-        OnbInstrKind.OnbInstrCset -> "\tcset {instr.dst}, {onbCondAsmName(instr.cond)}\n",
-        OnbInstrKind.OnbInstrStore64Stack -> "\tstr {instr.src}, [sp, #{instr.offset}]\n",
-        OnbInstrKind.OnbInstrLoad64Stack -> "\tldr {instr.dst}, [sp, #{instr.offset}]\n",
-        OnbInstrKind.OnbInstrMovRegReg -> "\tmov {instr.dst}, {instr.src}\n",
-        OnbInstrKind.OnbInstrLoadStackAddress -> "\tadd {instr.dst}, sp, #{instr.offset}\n",
-        OnbInstrKind.OnbInstrLoadFromReg -> "\tldr {instr.dst}, [{instr.src}, #{instr.offset}]\n",
-        OnbInstrKind.OnbInstrStoreToReg -> "\tstr {instr.src}, [{instr.base}, #{instr.offset}]\n",
-        OnbInstrKind.OnbInstrLoadFloat64Stack -> "\tldr {instr.dst}, [sp, #{instr.offset}]\n",
-        OnbInstrKind.OnbInstrStoreFloat64Stack -> "\tstr {instr.src}, [sp, #{instr.offset}]\n",
-        OnbInstrKind.OnbInstrFmovDFromX -> "\tfmov {instr.dst}, {instr.src}\n",
-        OnbInstrKind.OnbInstrFmovXFromD -> "\tfmov {instr.dst}, {instr.src}\n",
-        OnbInstrKind.OnbInstrFaddReg -> "\tfadd {instr.dst}, {instr.lhs}, {instr.rhs}\n",
-        OnbInstrKind.OnbInstrFsubReg -> "\tfsub {instr.dst}, {instr.lhs}, {instr.rhs}\n",
-        OnbInstrKind.OnbInstrFmulReg -> "\tfmul {instr.dst}, {instr.lhs}, {instr.rhs}\n",
-        OnbInstrKind.OnbInstrFdivReg -> "\tfdiv {instr.dst}, {instr.lhs}, {instr.rhs}\n",
-        OnbInstrKind.OnbInstrBranchLinkReg -> "\tblr {instr.src}\n",
-        OnbInstrKind.OnbInstrMovImm32 -> "\tmovz {instr.dst}, #{instr.imm}\n",
-        OnbInstrKind.OnbInstrMovImm64 -> "\t<MovImm64 multi-word; renderer needs onbAsmRenderMovImm64>\n",
-        OnbInstrKind.OnbInstrBranch -> "\tb <unresolved-target>\n",
-        OnbInstrKind.OnbInstrBranchCond -> "\tb.{onbCondAsmName(instr.cond)} <unresolved-target>\n",
-        OnbInstrKind.OnbInstrBranchCondNotZero -> "\tcbnz {instr.src}, <unresolved-target>\n",
-        OnbInstrKind.OnbInstrLoadCStringAddress -> onbAsmRenderLoadCStringAddress(target, instr),
-        OnbInstrKind.OnbInstrLoadSymbolAddress -> onbAsmRenderLoadSymbolAddress(target, instr),
-        OnbInstrKind.OnbInstrBranchLink -> "\tbl {onbAsmSymbolName(target, instr.symbol)}\n",
-        OnbInstrKind.OnbInstrInvalid -> "\t<invalid>\n",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if instr.kind == OnbInstrKind.OnbInstrBrk { return "\tbrk #{instr.imm}\n" }
+    if instr.kind == OnbInstrKind.OnbInstrRet { return "\tret\n" }
+    if instr.kind == OnbInstrKind.OnbInstrAddReg { return "\tadd {instr.dst}, {instr.lhs}, {instr.rhs}\n" }
+    if instr.kind == OnbInstrKind.OnbInstrSubReg { return "\tsub {instr.dst}, {instr.lhs}, {instr.rhs}\n" }
+    if instr.kind == OnbInstrKind.OnbInstrMulReg { return "\tmul {instr.dst}, {instr.lhs}, {instr.rhs}\n" }
+    if instr.kind == OnbInstrKind.OnbInstrCmp { return "\tcmp {instr.lhs}, {instr.rhs}\n" }
+    if instr.kind == OnbInstrKind.OnbInstrCset { return "\tcset {instr.dst}, {onbCondAsmName(instr.cond)}\n" }
+    if instr.kind == OnbInstrKind.OnbInstrStore64Stack { return "\tstr {instr.src}, [sp, #{instr.offset}]\n" }
+    if instr.kind == OnbInstrKind.OnbInstrLoad64Stack { return "\tldr {instr.dst}, [sp, #{instr.offset}]\n" }
+    if instr.kind == OnbInstrKind.OnbInstrMovRegReg { return "\tmov {instr.dst}, {instr.src}\n" }
+    if instr.kind == OnbInstrKind.OnbInstrLoadStackAddress { return "\tadd {instr.dst}, sp, #{instr.offset}\n" }
+    if instr.kind == OnbInstrKind.OnbInstrLoadFromReg { return "\tldr {instr.dst}, [{instr.src}, #{instr.offset}]\n" }
+    if instr.kind == OnbInstrKind.OnbInstrStoreToReg { return "\tstr {instr.src}, [{instr.base}, #{instr.offset}]\n" }
+    if instr.kind == OnbInstrKind.OnbInstrLoadFloat64Stack { return "\tldr {instr.dst}, [sp, #{instr.offset}]\n" }
+    if instr.kind == OnbInstrKind.OnbInstrStoreFloat64Stack { return "\tstr {instr.src}, [sp, #{instr.offset}]\n" }
+    if instr.kind == OnbInstrKind.OnbInstrFmovDFromX { return "\tfmov {instr.dst}, {instr.src}\n" }
+    if instr.kind == OnbInstrKind.OnbInstrFmovXFromD { return "\tfmov {instr.dst}, {instr.src}\n" }
+    if instr.kind == OnbInstrKind.OnbInstrFaddReg { return "\tfadd {instr.dst}, {instr.lhs}, {instr.rhs}\n" }
+    if instr.kind == OnbInstrKind.OnbInstrFsubReg { return "\tfsub {instr.dst}, {instr.lhs}, {instr.rhs}\n" }
+    if instr.kind == OnbInstrKind.OnbInstrFmulReg { return "\tfmul {instr.dst}, {instr.lhs}, {instr.rhs}\n" }
+    if instr.kind == OnbInstrKind.OnbInstrFdivReg { return "\tfdiv {instr.dst}, {instr.lhs}, {instr.rhs}\n" }
+    if instr.kind == OnbInstrKind.OnbInstrBranchLinkReg { return "\tblr {instr.src}\n" }
+    if instr.kind == OnbInstrKind.OnbInstrMovImm32 { return "\tmovz {instr.dst}, #{instr.imm}\n" }
+    if instr.kind == OnbInstrKind.OnbInstrMovImm64 { return "\t<MovImm64 multi-word; renderer needs onbAsmRenderMovImm64>\n" }
+    if instr.kind == OnbInstrKind.OnbInstrBranch { return "\tb <unresolved-target>\n" }
+    if instr.kind == OnbInstrKind.OnbInstrBranchCond { return "\tb.{onbCondAsmName(instr.cond)} <unresolved-target>\n" }
+    if instr.kind == OnbInstrKind.OnbInstrBranchCondNotZero { return "\tcbnz {instr.src}, <unresolved-target>\n" }
+    if instr.kind == OnbInstrKind.OnbInstrLoadCStringAddress { return onbAsmRenderLoadCStringAddress(target, instr) }
+    if instr.kind == OnbInstrKind.OnbInstrLoadSymbolAddress { return onbAsmRenderLoadSymbolAddress(target, instr) }
+    if instr.kind == OnbInstrKind.OnbInstrBranchLink { return "\tbl {onbAsmSymbolName(target, instr.symbol)}\n" }
+    if instr.kind == OnbInstrKind.OnbInstrInvalid { return "\t<invalid>\n" }
+    "\t<unknown>\n"
 }
 
 // onbCondAsmName returns the GAS mnemonic suffix for a condition
 // code. Mirror of `Cond.AsmName` in `internal/onb/lir.go`.
 pub fn onbCondAsmName(c: OnbCond) -> String {
-    match c {
-        OnbCond.OnbCondEq -> "eq",
-        OnbCond.OnbCondNe -> "ne",
-        OnbCond.OnbCondGe -> "ge",
-        OnbCond.OnbCondLt -> "lt",
-        OnbCond.OnbCondGt -> "gt",
-        OnbCond.OnbCondLe -> "le",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if c == OnbCond.OnbCondEq { return "eq" }
+    if c == OnbCond.OnbCondNe { return "ne" }
+    if c == OnbCond.OnbCondGe { return "ge" }
+    if c == OnbCond.OnbCondLt { return "lt" }
+    if c == OnbCond.OnbCondGt { return "gt" }
+    if c == OnbCond.OnbCondLe { return "le" }
+    "?"
 }
 
 // onbAsmRenderLoadCStringAddress emits the adrp/add pair for a

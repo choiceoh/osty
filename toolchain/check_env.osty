@@ -870,13 +870,12 @@ fn checkResolveAliasDeepAt(env: CheckEnv, ty: Int, depth: Int) -> Int {
         return checkResolveAliasDeepAt(env, direct, depth + 1)
     }
     let kind = tyKindAt(env.tys, ty)
-    match kind {
-        TkTuple    -> checkResolveAliasDeepTuple(env, ty, depth),
-        TkFn       -> checkResolveAliasDeepFn(env, ty, depth),
-        TkNamed    -> checkResolveAliasDeepNamed(env, ty, depth),
-        TkOptional -> checkResolveAliasDeepOptional(env, ty, depth),
-        _          -> ty,
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == TkTuple { return checkResolveAliasDeepTuple(env, ty, depth) }
+    if kind == TkFn { return checkResolveAliasDeepFn(env, ty, depth) }
+    if kind == TkNamed { return checkResolveAliasDeepNamed(env, ty, depth) }
+    if kind == TkOptional { return checkResolveAliasDeepOptional(env, ty, depth) }
+    ty
 }
 
 fn checkResolveAliasDeepTuple(env: CheckEnv, ty: Int, depth: Int) -> Int {

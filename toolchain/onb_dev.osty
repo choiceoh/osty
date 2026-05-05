@@ -57,12 +57,12 @@ pub enum OnbTimingPath {
 }
 
 pub fn onbTimingPathName(p: OnbTimingPath) -> String {
-    match p {
-        OnbTimingPath.OnbTimingPathNative -> "native",
-        OnbTimingPath.OnbTimingPathLlvmFallback -> "llvm-fallback",
-        OnbTimingPath.OnbTimingPathError -> "error",
-        OnbTimingPath.OnbTimingPathOther -> "other",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if p == OnbTimingPath.OnbTimingPathNative { return "native" }
+    if p == OnbTimingPath.OnbTimingPathLlvmFallback { return "llvm-fallback" }
+    if p == OnbTimingPath.OnbTimingPathError { return "error" }
+    if p == OnbTimingPath.OnbTimingPathOther { return "other" }
+    "unknown"
 }
 
 // OnbTimingEvent describes one ONB build path so callers can
@@ -106,18 +106,19 @@ pub fn onbFormatTiming(ev: OnbTimingEvent) -> String {
 
 fn onbTimingSuffix(ev: OnbTimingEvent) -> String {
     let target = if ev.target == "" { "host" } else { ev.target }
-    match ev.path {
-        OnbTimingPath.OnbTimingPathNative -> "[native: {target}]",
-        OnbTimingPath.OnbTimingPathLlvmFallback -> {
-            let reason = if ev.reason == "" { "shape unsupported" } else { ev.reason }
-            "[fallback to llvm: {reason}]"
-        },
-        OnbTimingPath.OnbTimingPathError -> {
-            let reason = if ev.reason == "" { "rejected" } else { ev.reason }
-            "[error: {reason}]"
-        },
-        OnbTimingPath.OnbTimingPathOther -> "[other]",
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if ev.path == OnbTimingPath.OnbTimingPathNative {
+        return "[native: {target}]"
     }
+    if ev.path == OnbTimingPath.OnbTimingPathLlvmFallback {
+        let reason = if ev.reason == "" { "shape unsupported" } else { ev.reason }
+        return "[fallback to llvm: {reason}]"
+    }
+    if ev.path == OnbTimingPath.OnbTimingPathError {
+        let reason = if ev.reason == "" { "rejected" } else { ev.reason }
+        return "[error: {reason}]"
+    }
+    "[other]"
 }
 
 // === formatElapsed ================================================
