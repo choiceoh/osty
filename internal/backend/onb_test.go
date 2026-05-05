@@ -142,6 +142,17 @@ func TestONBBackendEmitObjectWritesMachOArtifact(t *testing.T) {
 
 func TestONBBackendEmitBinaryInvokesHostLinker(t *testing.T) {
 	t.Parallel()
+	// EmitBinary materialises `osty_runtime.c` and feeds it to the host
+	// clang with `-target aarch64-apple-darwin`. The fake linker
+	// substitutes for the final link step but the runtime compile is
+	// real; without macOS SDK headers (i.e. on a non-darwin host) the
+	// cross-compile fails before we can assert linker wiring.
+	if runtime.GOOS != "darwin" {
+		t.Skip("ONB binary host-linker test compiles bundled runtime with -target aarch64-apple-darwin; needs macOS host SDK")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang not found on PATH")
+	}
 
 	req := newBackendRequest(t, EmitBinary, `fn main() {}`)
 	req.Layout.Target = "aarch64-apple-darwin"
