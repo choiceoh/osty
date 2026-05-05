@@ -7089,15 +7089,19 @@ func builtinEnumHasVariant(t ir.Type, name string) bool {
 
 func (l *lowerer) variantIndexByName(t ir.Type, name string) int {
 	// Well-known builtins first.
+	// NOTE: these indices must match the variant declaration order in
+	// the stdlib source (stdlib/modules/{option,result}.osty):
+	//   Option<T> { Some(T), None }  → Some=0, None=1
+	//   Result<T,E> { Ok(T), Err(E) } → Ok=0, Err=1
 	switch name {
 	case "None":
-		return 0
+		return 1
 	case "Some":
-		return 1
-	case "Err":
 		return 0
-	case "Ok":
+	case "Err":
 		return 1
+	case "Ok":
+		return 0
 	}
 	typeName := typeNameOf(t)
 	if typeName == "" {
