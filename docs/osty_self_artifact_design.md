@@ -46,8 +46,8 @@ PR #1405 가 in-process Go MIR emitter (`internal/llvmgen`) 를 제거한 뒤,
 
 | Phase | 범위 | 측정 |
 |---|---|---|
-| **A1** (이 PR) | `internal/toolchain/selfhostcache` 패키지 — `Key`, `ComputeKey`, `ResolveBinary`, `Install`, `CachePath`. 디스크에 이미 있는 캐시 entry 만 lookup. 네트워크 0. | 13 단위 테스트 통과 |
-| A2 | `cmd/osty-native-lirproto` 가 `selfhostcache.ResolveBinary` 사용. 로컬 빌드 → `Install` 자동 호출. | 기존 lirproto 테스트 + 통합 |
+| **A1** | `internal/toolchain/selfhostcache` 패키지 — `Key`, `ComputeKey`, `ResolveBinary`, `Install`, `CachePath`. 디스크에 이미 있는 캐시 entry 만 lookup. 네트워크 0. | 13 단위 테스트 통과 — **구현 완료** |
+| **A2** (이 PR) | `cmd/osty-native-lirproto` 가 `selfhostcache.ResolveBinary` 사용. `LocateProjectRoot` 헬퍼 추가. ErrNotCached → "osty-self not found" 메시지로 변환해서 IsOstySelfMissing 호환 유지. | 기존 lirproto 테스트 통과 + 캐시 lookup 통합 — **구현 완료** |
 | A3 | `osty install-self` 서브커맨드 — toolchain 빌드 + 캐시 적재 한 번에. `just bootstrap` 가 이걸 호출. | E2E |
 | A4 | 네트워크 fetcher — GitHub Release / S3-compatible URL 에서 `<sha>-<triple>` artifact 다운로드. SHA-256 검증 필수. | offline 모드 정책 결정 |
 | A5 | CI 워크플로 — main 브랜치 push 시 6개 host triple 별로 빌드 → release artifact 업로드 + manifest. | reproducibility 확인 |
