@@ -727,6 +727,14 @@ fn opParsePrimary(p: OstyParser) -> Int {
         opAttachStringInterpChildren(p, n, stringTokenIdx)
         return opAddNode(p, n)
     }
+    if tok.kind == FrontByteString {
+        opAdvance(p)
+        let mut n = emptyAstNode(AstNBytesLit)
+        n.text = tok.text
+        n.start = start
+        n.end = p.pos
+        return opAddNode(p, n)
+    }
     if tok.kind == FrontChar { opAdvance(p)
     let mut n = emptyAstNode(AstNCharLit)
     n.text = tok.text

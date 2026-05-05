@@ -5,11 +5,10 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 > **Scope**:
 > - `internal/stdlib/modules/*.osty` (Phase B / surface)
 > - `internal/stdlib/primitives/*.osty` (intrinsic methods)
-> - `internal/llvmgen/stdlib_*_shim.go` (11 파일 / Phase A / LLVM bridge)
 > - `internal/backend/runtime/osty_runtime.c` (23,895 LOC / 638 `osty_rt_*` 함수 / Phase A / C runtime)
 > - `LANG_SPEC_v0.5/10-standard-library/*.md` (스펙 권위)
 >
-> **기준일**: 2026-05-01 (재평가) / 2026-05-02 (Tier 0 #1 검증).
+> **기준일**: 2026-05-05 (HEAD `b640a833` 대조).
 > **이전 매트릭스 (94% Production 주장) 전면 재평가됨** —
 > 본문 직접 검증 결과 (1) 백엔드 미구현 모듈을 ⭐⭐⭐⭐⭐로 등재한 사례 다수 발견,
 > (2) `log`처럼 placeholder 본문(`println` 폴백)을 spec 동급으로 잘못 표기한 사례 발견,
@@ -40,13 +39,13 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 
 | 모듈 | spec | LOC | 표면 | bodyless | backend | 검증 노트 |
 |---|---|---|---|---|---|---|
-| strings | §10.1 | 7246 | 92 | 0% | string 17 + bytes 29 runtime | UAX29 grapheme + BMH 검색 직접 확인 |
+| strings | §10.1 | 7223 | 92 | 0% | string 17 + bytes 29 runtime | UAX29 grapheme + BMH 검색 직접 확인 |
 | http | §10.24 | 1588 | 166 | 0% | net 40 runtime | matchRoutePattern / parseSetCookie / 라우터 본문 확인 |
 | json | §10.8 | 662 | 27 | 0% | parser self-contained | RFC 8259 surrogate + UTF-8 인코딩 직접 확인 |
 | option | §10.1 | 356 | 43 | 0% | `__optionAbort` 인터셉트 | combinator 풀세트 (map2/3/traverse/transpose) |
 | result | §10.1 | 357 | 41 | 0% | `__resultAbort` 인터셉트 | combinator 풀세트 |
-| iter | §10.7 | 488 | 49 | 0% | List 기반 eager | 49 메서드 = spec 명세 동등 (lazy 변환은 미래 작업, spec 명시) |
-| collections | §10.6 | 521 | 69 | 0% | list 72 + map 53 + set 18 | spec과 method 1:1 일치 (List 36 / Map 25 / Set 9) |
+| iter | §10.7 | 486 | 49 | 0% | List 기반 eager | 49 메서드 = spec 명세 동등 (lazy 변환은 미래 작업, spec 명시) |
+| collections | §10.6 | 523 | 69 | 0% | list 72 + map 53 + set 18 | spec과 method 1:1 일치 (List 36 / Map 25 / Set 9) |
 | url | §10.16 | 597 | 4+method | 0% | pure Osty | RFC 3986 dot-segment resolution 본문 확인 |
 | bytes | §10.21 | 113 | 27 | 0% | bytes 29 runtime | spec API 일치 |
 | char | §2.1 | 219 | 25 | 0% | string runtime | Unicode/ASCII 메서드 |
@@ -55,16 +54,13 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 | math | §10.17 | 42 | 25 | 100% | float 40 runtime | libm 매핑 다 있음 |
 | fs | §10.1 | 51 | 20 | 100% | fs 52 runtime + shim 685 | read/write/exists/remove/mkdir 등 충족 |
 | env | §10.1 | 20 | 8 | 100% | env 15 runtime + shim 624 | args/get/set/vars 충족 |
-| os | §10.15 | 40 | 8 | 100% | os 37 runtime + shim | exec/exit/pid/hostname 충족 |
+| os | §10.15 | 48 | 8 | 100% | os 37 runtime + shim | exec/exit/pid/hostname 충족 |
 | random | §10.14 | 41 | 9 | 77% | random 17 runtime + shim 524 | Rng default + seeded 충족 |
 | compress | §10.19 | 11 | 2 | 100% | compress 4 runtime + shim 199 | gzip만 (spec 명시) |
 | io | §16/§10.1 | 541 | 50 | 0% | io 2 runtime + shim 171 | Reader/Writer 인터페이스 + BytesReader/Buffer 본문 |
 | collections (List/Map/Set 메서드) | §10.6 | (above) | (above) | mixed | runtime intrinsics | spec method 정확히 일치 |
-| primitives/int | §10.5 | 69 | 35 | 100% | int runtime ops | checkedAdd/wrappingAdd/saturating/pow/abs 다 있음 |
-| primitives/float | §10.5 | 56 | 30 | 100% | float 40 runtime | sqrt/pow/round/isNaN/isInfinite 충족 |
-| log | §10.10 | 410 | 27 + 6 method | 0% (osty body) | LLVM AST + MIR shim → `osty_rt_strings_ConcatN` + `osty_rt_io_write` | **2026-05-02 5★ 승급**. (1) Osty 본문: `TextHandler.handle` (stderr + level + fields), `JsonHandler.handle` (RFC 8259 호환 `jsonEscapeString`), `Logger` struct + `with(key,value)` / `withFields(more)` 체인, `LevelHandler { inner, minLevel }` decorator, `newLogger` / `newDefaultLogger`. (2) LLVM 백엔드: [`stdlib_log_shim.go`](internal/llvmgen/stdlib_log_shim.go) AST + MIR 양쪽 dispatch — `log.{debug,info,warn,error}(msg)` 1-arg 캐논 호출을 `[level] ` prefix 합성 + `osty_rt_strings_ConcatN` + `osty_rt_io_write(stderr=true, newline=true)`. (3) E2E 검증: [`examples/log_e2e/`](examples/log_e2e/) `osty test` 4/4 통과. (4) Surface 테스트: [`log_test.go`](internal/stdlib/log_test.go). 잔여 (다음 라운드): 2-arg `log.<lvl>(msg, fields)` LLVM 미지원 (Map iter + recursive enum match 필요), `Fields { "k": v }` 리터럴 sugar (SPEC_GAPS `log-fields-sugar`), process-global setLevel/setHandler (runtime intercept). 본문은 spec 동급으로 작성돼 있어 백엔드가 catch up 하면 즉시 활성화. |
-| uuid | §10.13 | 23 | 4 | 100% | uuid 7 runtime + [`stdlib_uuid_shim.go`](internal/llvmgen/stdlib_uuid_shim.go) | **2026-05-02 stale 매트릭스 정정**. ⭐⭐ 가 아니라 5★ — `osty_rt_uuid_{v4,v7,nil,to_string,to_bytes,parse,parse_error}` 7 함수, LLVM shim, shim_test 모두 존재. E2E 검증 [`examples/uuid_e2e/`](examples/uuid_e2e/) 5/5 통과 (v4 / v7 / nil / toString / parse round-trip). |
-| regex | §10.9 | 88 | 9+method | 55% (Regex 메서드는 0%) | regex 7+ runtime + [`stdlib_regex_shim.go`](internal/llvmgen/stdlib_regex_shim.go) | **2026-05-02 stale 매트릭스 정정**. ⭐⭐ 가 아니라 5★ — `osty_rt_regex_{compile,compile_error,matches,replace,replace_all}` 등 7+ 함수 + LLVM shim + shim_test. RE2-derived parser ([`internal/backend/runtime/osty_runtime.c:14971`](internal/backend/runtime/osty_runtime.c)). E2E 검증 [`examples/regex_e2e/`](examples/regex_e2e/) 5/5 통과 (compile / matches +/- / replaceAll / compile_error). |
+| primitives/int | §10.5 | 84 | 43 | 100% | int runtime ops | checkedAdd/wrappingAdd/saturating/pow/abs 다 있음 |
+| primitives/float | §10.5 | 69 | 40 | 100% | float 40 runtime | sqrt/pow/round/isNaN/isInfinite 충족 |
 
 ### 2.1.A LLVM E2E 점검 결과 (2026-05-02 audit)
 
@@ -85,24 +81,24 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 | log | ✅ PASS | `log.info("msg")` (위 row 참조) |
 | uuid | ✅ PASS | `uuid.v4()` (위 row 참조) |
 | regex | ✅ PASS | `regex.compile("a+")` (위 row 참조) |
-| bytes | ✅ PASS | `b""` 빈 입력 OK, `b"abc"` 인자 위치도 parser 통과 — 2026-05-05 `FrontByteString` token kind 추가로 해소. 단, `b"..."` 가 `AstNStringLit` 으로 lower 되어 type 은 `Bytes` 아닌 `String`. type fix 는 follow-up. `b"abc".toBytes()` workaround. |
+| bytes | ✅ PASS | `b"..."` 리터럴 타입이 `Bytes`로 올바름 — 2026-05-05 `FrontByteString` → `AstNBytesLit` → `HirExprBytesLit` → `MirConstBytes` → `MirIntrinsicBytesConcat` 풀パス実装. parser/elab/hir/hir_lower/mir/mir_generator すべて対応. |
 | crypto | ⚠️ partial | `crypto.randomBytes(8)` OK, `crypto.sha256(bytes)` body lower 실패 |
 | option | ⚠️ partial | `match Some(x)` OK, `.map(\|x\| ...)` closure body 실패 |
 | result | ⚠️ partial | `match Ok(x)` OK, `.map(\|x\| ...)` closure body 실패 |
-| compress | ✅ PASS (direct) | `compress.gzip.encode(b)` / `compress.gzip.decode(b)` 직접 호출 OK ([`examples/compress_e2e/`](examples/compress_e2e/) 4/4). 인스턴스 binding (`let g = compress.gzip; g.encode(b)`) 은 미지원 — SPEC_GAPS `stdlib-body-llvm-wall`. |
+| compress | ✅ PASS (direct) | `compress.gzip.encode(b)` / `compress.gzip.decode(b)` 直接呼び出し OK
 | url | ❌ FAIL | `url.parse(s)` body lower 실패 (다중 분기 / List<String> 의심) |
 | json | ❌ FAIL | `json.parse(s)` body lower 실패 |
 | encoding | ❌ FAIL | `encoding.hexEncode(b)` 가장 단순 케이스도 실패 |
 | iter | ❌ FAIL | `iter.map(xs, \|x\| ...)` closure body 실패 |
 | http | ❌ untested | (1588 LOC, body 풍부 — closure / List 의존도 높아 fail 가능성 높음. 별도 e2e 권장) |
 
-**카운트**: 15 PASS / 4 partial / 4 FAIL (http 미점검 제외) = 15/22 (68%) 가 진정 5★ 자격.
+**카운트**: 11 PASS / 6 partial / 5 FAIL / 1 untested (http) = 11/22 (50%) 가 진정 5★ 자격.
 
-4 FAIL 모듈 (url / json / encoding / iter) 은 본문 진정 + 스펙 정합 ✓ 이지만 **LLVM 본문 lowering** 이 막힘 — `log` 가 5★ 도달한 패턴 (LLVM shim 추가) 을 이들에도 적용해야 진짜 5★. 별도 cycle 작업.
+> **정정**: `internal/llvmgen/`이 현재 HEAD에 부재하므로 `log`는 FAIL, `uuid`/`regex`는 partial로 재분류.
 
-**compress 5★ 승급 (2026-05-02)**: 매트릭스가 user smoke 의 인스턴스 binding 패턴 실패만 보고 ❌로 표시했으나, spec-canonical 직접 호출 (`compress.gzip.encode(b)`) 은 기존 [`stdlib_compress_shim.go`](internal/llvmgen/stdlib_compress_shim.go) AST + MIR dispatch 에서 정상 동작. E2E 검증 [`examples/compress_e2e/`](examples/compress_e2e/) 4/4 통과 (encode / round-trip / invalid err / empty input).
+5 FAIL 모듈 (url / json / encoding / iter / log) 은 본문 진정 + 스펙 정합 ✓ 이지만 **LLVM 본문 lowering 또는 shim 부재** 로 막힘 — LLVM shim 추가를 이들에도 적용해야 진짜 5★. 별도 cycle 작업.
 
-partial 모듈 4개 (bytes / crypto / option / result) 는 **호출 패턴 한정 동작**. closure 인자 / `b"..."` arg 위치 / 특정 runtime 함수 (sha256, gzip) 는 별도 backend gap.
+partial 모듈 3개 (crypto / option / result) 는 **호출 패턴 한정 동작**. closure 인자 / 특정 runtime 함수 (sha256, gzip) 는 별도 backend gap.
 
 ### 2.2 ⭐⭐⭐⭐ Functional (본문/백엔드 일부 검증 필요)
 
@@ -121,6 +117,9 @@ partial 모듈 4개 (bytes / crypto / option / result) 는 **호출 패턴 한�
 | cmd | unspec | 214 | 24 | 0% | os shim + cmd runtime 8 | command builder + POSIX shell escape |
 | process | §10.1 + unspec | 277 | 32 | 74% | os shim + process runtime 9 | `ProcessCommand` / `ProcessPipeline` facade, stdin text, captured stdout/stderr, shell pipeline composition. abort/todo/unreachable는 backend-owned primitive 유지 |
 | path | §10.15 | 191 | 9 | 22% | runtime path 2 | join/split/extension 본문, absolute/canonical은 백엔드 |
+| log | §10.10 | 441 | 33 | 0% | `eprintln` 폰백 (C runtime `osty_rt_log_*` 부재, LLVM shim 부재) | Osty 본문은 spec 동급 (`TextHandler`, `JsonHandler`, `Logger` 체인). 체커/인터프리터 E2E 통과 ([`examples/log_e2e/`](examples/log_e2e/)). **현재 HEAD에는 `internal/llvmgen/` 디렉토리가 없어 LLVM shim 미구현**. |
+| uuid | §10.13 | 22 | 0 | 100% | C runtime 7개 (`osty_rt_uuid_v4/v7/nil/to_string/to_bytes/parse/parse_error`) | declaration-only 모듈. C runtime 백엔드는 충족. 체커/인터프리터 E2E 통과 ([`examples/uuid_e2e/`](examples/uuid_e2e/)). **현재 HEAD에는 LLVM bridge shim 없음**. |
+| regex | §10.9 | 88 | 10 | 10% | C runtime 7+ (`osty_rt_regex_compile/matches/replace/replace_all/compile_error` 등) | RE2-derived parser 본문 ([`osty_runtime.c:18234`](internal/backend/runtime/osty_runtime.c)). 체커/인터프리터 E2E 통과 ([`examples/regex_e2e/`](examples/regex_e2e/)). **현재 HEAD에는 LLVM bridge shim 없음**. |
 
 ### 2.3 ⭐⭐⭐ Surface-rich (스펙 외 또는 부분 백엔드)
 
@@ -196,14 +195,14 @@ partial 모듈 4개 (bytes / crypto / option / result) 는 **호출 패턴 한�
 
 | 모듈 | spec | LOC | bodyless | 진단 |
 |---|---|---|---|---|
-| ~~**uuid**~~ | §10.13 | 23 | 100% | **5★ 정정 (2026-05-02)** — 매트릭스가 stale. `osty_rt_uuid_{v4,v7,nil,to_string,to_bytes,parse,parse_error}` 7 함수 + [`stdlib_uuid_shim.go`](internal/llvmgen/stdlib_uuid_shim.go) + shim_test 모두 존재. E2E [`examples/uuid_e2e/`](examples/uuid_e2e/) 5/5 통과. §2.1 표 참조. |
-| ~~**regex**~~ | §10.9 | 88 | 55% | **5★ 정정 (2026-05-02)** — 매트릭스가 stale. RE2-derived parser ([`osty_runtime.c:14971`](internal/backend/runtime/osty_runtime.c)) + [`stdlib_regex_shim.go`](internal/llvmgen/stdlib_regex_shim.go) + shim_test. E2E [`examples/regex_e2e/`](examples/regex_e2e/) 5/5 통과. §2.1 표 참조. |
+| ~~**uuid**~~ | §10.13 | 22 | 100% | **정정 (2026-05-05)** — C runtime 7개는 존재하나 현재 HEAD에 `internal/llvmgen/stdlib_uuid_shim.go` 없음. 인터프리터 E2E는 통과. §2.2 Functional 표 참조. |
+| ~~**regex**~~ | §10.9 | 88 | 10% | **정정 (2026-05-05)** — C runtime 7+개는 존재하나 현재 HEAD에 `internal/llvmgen/stdlib_regex_shim.go` 없음. 인터프리터 E2E는 통과. §2.2 Functional 표 참조. |
 
 ### 2.5 ⭐ Broken / Placeholder
 
 | 모듈 | 문제 |
 |---|---|
-| ~~**log**~~ | **5★ 승급 (2026-05-02)** — 2.1 Production 표 참조. 본문 진정화 + Logger 인스턴스 surface + LLVM shim (AST + MIR) 으로 캐논 1-arg 호출 E2E 통과. 자세한 작업 내역은 2.1 표의 `log` 행 + [`examples/log_e2e/`](examples/log_e2e/) 참조. |
+| ~~**log**~~ | **정정 (2026-05-05)** — Osty 본문은 spec 동급이나 C runtime `osty_rt_log_*` 부재, LLVM shim 부재. `eprintln` 폰백에 의존. §2.2 Functional 표 참조. |
 | ~~**thread.Duration**~~ | **해결됨 (commit `23f4568c`)** — `thread.osty`가 `use std.time`로 `time.Duration` 단일 사용. self-host 체커는 `thread.Duration` qualified 이름을 builtin `Duration` 별칭으로 등록 (re-export). |
 
 ### 2.6 코어 인터페이스 / 마커 (별도 평가)
@@ -221,17 +220,19 @@ partial 모듈 4개 (bytes / crypto / option / result) 는 **호출 패턴 한�
 
 | 등급 | 개수 | 비율 |
 |---|---|---|
-| ⭐⭐⭐⭐⭐ Production (LLVM E2E 통과) | 15 | 14% |
-| ⭐⭐⭐⭐⭐ Production (declared, 매트릭스 5★ 미검증) | 10 | 9% |
-| ⭐⭐⭐⭐ Functional | 13 | 13% |
-| ⭐⭐⭐ Surface-rich | 62 | 60% |
+| ⭐⭐⭐⭐⭐ Production (LLVM E2E 통과) | 12 | 11% |
+| ⭐⭐⭐⭐⭐ Production (declared, 매트릭스 5★ 미검증) | 8 | 8% |
+| ⭐⭐⭐⭐ Functional | 16 | 15% |
+| ⭐⭐⭐ Surface-rich | 62 | 58% |
 | ⭐⭐ Spec-stub (백엔드 부재) | 0 | 0% |
 | ⭐ Broken / Placeholder | 0 | 0% |
 | 코어 인터페이스 (별도) | 7 | 7% |
 
 **이전 매트릭스 주장**: 92/98 = 94% Production
 **2026-05-01 재평가 주장**: 22/106 = 21% Production
-**2026-05-02 LLVM E2E 점검 후**: **15/106 = 14% 진정 5★ (LLVM 통과)** + 10/106 = 9% declared 5★ (매트릭스 등재되었으나 LLVM 미검증). 자세한 audit 은 §2.1.A 참조.
+**2026-05-05 HEAD 대조 후**: **12/106 = 11% 진정 5★ (LLVM 통과)** + 8/106 = 8% declared 5★ (매트릭스 등재되었으나 LLVM 미검증). 자세한 audit 은 §2.1.A 참조.
+
+> **정정 노트 (2026-05-05)**: `internal/llvmgen/` 디렉토리가 현재 HEAD(`b640a833`)에 존재하지 않음. 매트릭스에 `stdlib_log_shim.go`, `stdlib_uuid_shim.go`, `stdlib_regex_shim.go` 등을 참조하며 5★로 승격한 내용은 아직 main에 merge되지 않은 워크트리 작업물로 확인됨. 현재 HEAD 기준으로 `log`는 C runtime 부재 + LLVM shim 부재, `uuid`/`regex`는 C runtime 존재하나 LLVM shim 부재.
 
 차이의 원인:
 1. spec 없는 unspec 모듈을 Production으로 셈 (62개 — 본문은 진정하나 spec 정의 없음 → Surface-rich로 강등)
@@ -243,19 +244,22 @@ partial 모듈 4개 (bytes / crypto / option / result) 는 **호출 패턴 한�
 
 ### 🔴 Tier 0 — 즉시 수정해야 할 spec 위반
 
+**남은 항목 없음 (2026-05-05 기준)**. 이전 4건 모두 해결 또는 해당 없음으로 확인됨.
+
 | # | 모듈 | 문제 | 수정 |
 |---|---|---|---|
 | ~~1~~ | ~~thread~~ | ~~`pub struct Duration {}` (spec §10.20 위반)~~ | **완료 (commit `23f4568c`)**. `thread.osty`는 `use std.time` + `time.Duration` 단일 사용 |
-| ~~2~~ | ~~primitives/int~~ | ~~`Int.s/ms/h/minutes/days/ns/us/weeks` 메서드 부재~~ | **완료** — Int 8개 + Float 8개 surface 선언됨, `primitive_arith_register.go:131` 8개 loop 등록, LLVM 백엔드 `duration_constructors_test.go` 8 테스트 통과. 매트릭스가 stale (`min`이라 잘못 표기 — spec은 `minutes`) |
-| ~~3~~ | ~~log~~ | ~~`println` 폴백 + no-op handler~~ | **5★ 완료 (2026-05-02)** — 본문 spec 동급 + Logger 인스턴스 surface + LLVM shim (AST + MIR) + E2E 통과 4/4. 잔여 (별도 트랙): 2-arg `log.<lvl>(msg, fields)` LLVM, `Fields { "k": v }` literal (SPEC_GAPS `log-fields-sugar`), process-global setLevel/setHandler. 자세한 내역은 2.1 표 참조. |
-| 4 | strings | `Contains/HasPrefix/Index` PascalCase 별칭 (부트스트랩 누수) | 사용자 surface에서 제거 또는 internal 이동 |
+| ~~2~~ | ~~primitives/int~~ | ~~`Int.s/ms/h/minutes/days/ns/us/weeks` 메서드 부재~~ | **완료** — Int 8개 + Float 8개 surface 선언됨, `primitive_arith_register.go:131` 8개 loop 등록. 매트릭스가 stale (`min`이라 잘못 표기 — spec은 `minutes`) |
+| ~~3~~ | ~~log~~ | ~~`println` 폰백 + no-op handler~~ | **본문은 spec 동급으로 개선됨** — `TextHandler`/`JsonHandler`/`Logger` 체인 구현. 단, C runtime `osty_rt_log_*` 및 LLVM shim은 현재 HEAD에 부재. §2.2 Functional 참조. |
+| ~~4~~ | ~~strings~~ | ~~`Contains/HasPrefix/Index` PascalCase 별칭 (부트스트랩 누수)~~ | **완료 (HEAD)** — `strings.osty`에서 PascalCase 별칭 미발견. 이미 제거되었거나 존재하지 않음. |
 
-### 🟠 Tier 1 — 백엔드 부재로 호출 불가
+
+### 🟠 Tier 1 — LLVM bridge shim 부재 (C runtime은 존재)
 
 | # | 모듈 | 영향 | 수정 |
 |---|---|---|---|
-| 5 | uuid | `uuid.v4()`/`v7()`/`parse()`/`toString()`/`toBytes()` 호출 시 LLVM 실패 | `osty_rt_uuid_v4` 등 6개 runtime entry 추가 |
-| 6 | regex | `regex.compile()`/`re.matches()` 등 9개 호출 LLVM 실패 | RE2 binding (Go FFI 또는 C++ RE2 link), `osty_rt_regex_*` 추가 |
+| 5 | uuid | C runtime 7개 존재하나 LLVM bridge shim 부재 | `internal/llvmgen/stdlib_uuid_shim.go` 및 관련 LLVM bridge 생성 (현재 HEAD에는 해당 디렉토리 없음) |
+| 6 | regex | C runtime 7+개 존재하나 LLVM bridge shim 부재 | `internal/llvmgen/stdlib_regex_shim.go` 및 관련 LLVM bridge 생성 (현재 HEAD에는 해당 디렉토리 없음) |
 
 ### 🟡 Tier 2 — 부분 구현 → 전체 미실행
 
@@ -291,7 +295,7 @@ log.osty 133줄에 본문 풍부하나 `println` 폴백 + no-op handler — spec
 unspec 모듈 62개는 stdlib에 들어갔지만 LANG_SPEC에 등재 안 됨. surface API 안정성 보장 없음. **이전 매트릭스가 ⭐⭐⭐⭐⭐로 등재했던 거의 전부가 여기 해당**.
 
 ### 5.4 declaration-only ≠ 백엔드 있음 (신규 발견)
-uuid/regex는 declaration-only인데 백엔드도 없음. **모든 declaration-only 모듈은 `osty_rt_<name>_*` 또는 shim 직접 grep으로 검증 필수**.
+~~uuid/regex는 declaration-only인데 백엔드도 없음~~ → **정정 (2026-05-05)**. C runtime에는 `osty_rt_uuid_*` 7개, `osty_rt_regex_*` 7+개 존재. 단, 현재 HEAD에 LLVM bridge shim (`internal/llvmgen/stdlib_*_shim.go`)은 없음. **declaration-only 모듈은 `osty_rt_<name>_*` (C runtime) + shim 파일 존재 여부를 동시에 검증 필수**.
 
 ### 5.5 이름 함정 (이전 함정, 유효)
 `process.osty`는 이제 exception helper + OS process facade이고, `cmd.osty`는 낮은 단계 command builder, `os.osty`는 실제 OS syscall wrapper다. 이름만 보고 카테고리 추정 금지.
@@ -312,7 +316,7 @@ uuid/regex는 declaration-only인데 백엔드도 없음. **모든 declaration-o
 7. **json RFC 8259** — json.osty:370 parseHex4 + 4-byte UTF-8 인코딩 본문.
 
 **이전 매트릭스에서 자랑했지만 검증 실패한 것들**:
-- ❌ `uuid.v7()` 2024 IETF draft 8 — 백엔드 부재로 호출 불가
+- ❌ `uuid.v7()` 2024 IETF draft 8 — C runtime은 존재하나 LLVM bridge shim 부재로 LLVM 호출 불가
 - ❌ `log.Handler/TextHandler/JsonHandler` slog 동급 — placeholder 본문
 - ⚠️ `testing.property` first-class — 표면 있고 testing_gen 본문 풍부, 백엔드 인터셉트 확인됨 (유효)
 
@@ -322,10 +326,10 @@ uuid/regex는 declaration-only인데 백엔드도 없음. **모든 declaration-o
 
 진짜 우선순위:
 
-1. **Tier 0 spec 위반 4건 즉시 수정** (1주)
-2. **Tier 1 백엔드 부재 2건** (uuid + regex runtime 추가, 1-2주)
+1. ~~Tier 0 spec 위반 4건 즉시 수정~~ → **완료 (2026-05-05)**. 남은 항목 없음.
+2. **Tier 1 LLVM bridge shim 부재 2건** (`internal/llvmgen/stdlib_uuid_shim.go` + `stdlib_regex_shim.go` 생성, 1-2주)
 3. **OSTY_STDLIB_BODY_LOWER default-on flip** (memory blocker `project_stdlib_injection_hang` 해소 후)
 4. **unspec 62개 모듈 정책 결정** (stdlib 잔류 vs community package 분리)
 5. **그 다음에야** db driver / smtp TLS 등 Tier 2 작업
 
-**스스로에게 정직한 한 줄**: stdlib은 표면 야심 9/10이지만 검증된 production-ready는 22개. 매트릭스가 "94% Production"이라 부풀린 게 다음 라운드 우선순위 판단 자체를 왜곡했음. 정확한 카운트로 시작.
+**스스로에게 정직한 한 줄**: stdlib은 표면 야심 9/10이지만 검증된 production-ready는 12개(LLVM E2E 통과) + 8개(declared 5★). 매트릭스가 "94% Production"이라 부풀린 게 다음 라운드 우선순위 판단 자체를 왜곡했음. 정확한 카운트로 시작.

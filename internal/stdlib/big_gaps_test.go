@@ -154,3 +154,42 @@ func requirePublicType(t *testing.T, mod *Module, module, name string) {
 		t.Fatalf("std.%s.%s not public", module, name)
 	}
 }
+
+func TestBytesModuleSurface(t *testing.T) {
+	reg := LoadCached()
+	mod := reg.Modules["bytes"]
+	if mod == nil || mod.Package == nil {
+		t.Fatalf("std.bytes not loaded")
+	}
+	for _, name := range []string{
+		"len", "isEmpty", "get", "equal", "slice",
+		"contains", "startsWith", "endsWith",
+		"indexOf", "lastIndexOf", "split", "join",
+		"concat", "repeat", "replace", "replaceAll",
+		"trimLeft", "trimRight", "trim", "trimSpace",
+		"toUpper", "toLower", "fromString", "from",
+		"toString", "toHex", "fromHex",
+	} {
+		requirePublicFn(t, mod, "bytes", name)
+	}
+}
+
+func TestBytesModuleSourcePinsBStringLiterals(t *testing.T) {
+	reg := LoadCached()
+	mod := reg.Modules["bytes"]
+	if mod == nil {
+		t.Fatal("std.bytes module missing")
+	}
+	src := string(mod.Source)
+	for _, want := range []string{
+		`pub fn len(b: Bytes) -> Int`,
+		`pub fn equal(a: Bytes, b: Bytes) -> Bool`,
+		`pub fn slice(b: Bytes, start: Int, end: Int) -> Bytes`,
+		`pub fn toHex(b: Bytes) -> String`,
+		`pub fn fromHex(s: String) -> Result<Bytes, Error>`,
+	} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("std.bytes source missing %q", want)
+		}
+	}
+}

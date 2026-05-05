@@ -106,6 +106,7 @@ fn elabInferImpl(cx: ElabCx, idx: Int) -> ElabResult {
         AstNBoolLit -> elabInferBoolLit(cx, node),
         AstNCharLit -> elabInferCharLit(cx, node),
         AstNByteLit -> elabInferByteLit(cx, node),
+        AstNBytesLit -> elabInferBytesLit(cx, node),
         AstNIdent -> elabInferIdent(cx, node),
         AstNParen -> elabInfer(cx, node.left),
         AstNBlock -> elabInferBlock(cx, idx, node),
@@ -276,6 +277,12 @@ fn elabInferCharLit(cx: ElabCx, node: AstNode) -> ElabResult {
 fn elabInferByteLit(cx: ElabCx, node: AstNode) -> ElabResult {
     let ty = tByte(cx.env.tys)
     let coreIdx = coreByteLit(cx.core, 0, ty, node.start, node.end)
+    ElabResult { node: coreIdx, ty }
+}
+
+fn elabInferBytesLit(cx: ElabCx, node: AstNode) -> ElabResult {
+    let ty = tBytes(cx.env.tys)
+    let coreIdx = coreBytesLit(cx.core, node.text, ty, node.start, node.end)
     ElabResult { node: coreIdx, ty }
 }
 
@@ -1041,6 +1048,7 @@ fn astIsExprKindAt(ast: AstFile, idx: Int) -> Bool {
         AstNBoolLit -> true,
         AstNCharLit -> true,
         AstNByteLit -> true,
+        AstNBytesLit -> true,
         AstNIdent -> true,
         AstNParen -> true,
         AstNBlock -> true,
