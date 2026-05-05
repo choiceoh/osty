@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"io"
 	mathrand "math/rand/v2"
 	"os"
@@ -242,8 +243,9 @@ func executeNativeTests(ctx context.Context, b backend.Backend, tmpRoot string, 
 }
 
 type nativeTestBinary struct {
-	Path string
-	Err  error
+	Path     string
+	TestName string
+	Err      error
 }
 
 func compileNativeTestBinaries(ctx context.Context, b backend.Backend, tmpRoot string, pkg *resolve.Package, tests []nativeTestCase, workers int) map[string]nativeTestBinary {
@@ -304,9 +306,9 @@ func compileNativeTestBundleBinaries(ctx context.Context, b backend.Backend, tmp
 		}
 		return out
 	}
+	binPath, err := linkNativeTestBundleBinary(ctx, assets, tmpRoot, bundle)
 	for _, tc := range bundle.Tests {
-		binPath, err := linkNativeTestBinary(ctx, assets, tmpRoot, tc)
-		out[nativeTestBinaryKey(tc)] = nativeTestBinary{Path: binPath, Err: err}
+		out[nativeTestBinaryKey(tc)] = nativeTestBinary{Path: binPath, TestName: tc.Name, Err: err}
 	}
 	return out
 }
@@ -436,7 +438,7 @@ func runCompiledNativeTest(ctx context.Context, binaries map[string]nativeTestBi
 	if bin.Err != nil {
 		return nativeTestRun{}, bin.Err
 	}
-	return runNativeTestBinary(ctx, bin.Path, benchTimeNs)
+	return runNativeTestBinary(ctx, bin.Path, bin.TestName, benchTimeNs)
 }
 
 func nativeTestBinaryKey(tc nativeTestCase) string {
@@ -771,10 +773,10 @@ func prepareNativeTestBackendEntry(sourcePath string, pkg *resolve.Package) (bac
 	return entry, nil
 }
 
-func linkNativeTestBinary(ctx context.Context, assets nativeTestBundleAssets, tmpRoot string, tc nativeTestCase) (string, error) {
-	stem := sanitizeNativeTestName(tc.Name)
+func linkNativeTestBundleBinary(ctx context.Context, assets nativeTestBundleAssets, tmpRoot string, bundle nativeTestBundle) (string, error) {
+	stem := nativeTestBundleStem(bundle.SourcePath)
 	if stem == "osty_test" {
-		stem = "osty_test_case"
+		stem = "osty_test_bundle"
 	}
 	root := filepath.Join(tmpRoot, "link-"+stem)
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -787,7 +789,7 @@ func linkNativeTestBinary(ctx context.Context, assets nativeTestBundleAssets, tm
 		binaryName += ".exe"
 	}
 	binaryPath := filepath.Join(root, binaryName)
-	if err := os.WriteFile(driverPath, buildNativeTestDriver(tc.Name), 0o644); err != nil {
+	if err := os.WriteFile(driverPath, buildNativeTestDriver(bundle.Tests), 0o644); err != nil {
 		return "", err
 	}
 	if err := compileNativeTestDriver(ctx, driverPath, driverObject); err != nil {
@@ -799,8 +801,53 @@ func linkNativeTestBinary(ctx context.Context, assets nativeTestBundleAssets, tm
 	return binaryPath, nil
 }
 
-func buildNativeTestDriver(name string) []byte {
-	return []byte(fmt.Sprintf("extern void %s(void);\nint main(void) {\n    %s();\n    return 0;\n}\n", name, name))
+func nativeTestBundleStem(sourcePath string) string {
+	base := filepath.Base(sourcePath)
+	if base == "." || base == string(filepath.Separator) || base == "" {
+		base = "osty_test"
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(sourcePath))
+	return sanitizeNativeTestName(fmt.Sprintf("%s_%x", base, h.Sum64()))
+}
+
+func buildNativeTestDriver(tests []nativeTestCase) []byte {
+	var b strings.Builder
+	b.WriteString("#include <stdio.h>\n#include <string.h>\n")
+	for _, tc := range tests {
+		fmt.Fprintf(&b, "extern void %s(void);\n", tc.Name)
+	}
+	b.WriteString("int main(int argc, char **argv) {\n")
+	b.WriteString("    if (argc != 2) { fprintf(stderr, \"missing test name\\n\"); return 2; }\n")
+	for _, tc := range tests {
+		fmt.Fprintf(&b, "    if (strcmp(argv[1], %s) == 0) { %s(); return 0; }\n", cStringLiteral(tc.Name), tc.Name)
+	}
+	b.WriteString("    fprintf(stderr, \"unknown test %s\\n\", argv[1]);\n")
+	b.WriteString("    return 2;\n")
+	b.WriteString("}\n")
+	return []byte(b.String())
+}
+
+func cStringLiteral(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '\\', '"':
+			b.WriteByte('\\')
+			b.WriteRune(r)
+		case '\n':
+			b.WriteString("\\n")
+		case '\r':
+			b.WriteString("\\r")
+		case '\t':
+			b.WriteString("\\t")
+		default:
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('"')
+	return b.String()
 }
 
 func compileNativeTestDriver(ctx context.Context, sourcePath, objectPath string) error {
@@ -833,7 +880,7 @@ func sanitizeNativeTestName(name string) string {
 	return runner.SanitizeNativeTestName(name)
 }
 
-func runNativeTestBinary(ctx context.Context, binPath string, benchTimeNs int64) (nativeTestRun, error) {
+func runNativeTestBinary(ctx context.Context, binPath, testName string, benchTimeNs int64) (nativeTestRun, error) {
 	if binPath == "" {
 		return nativeTestRun{}, fmt.Errorf("native backend did not produce a binary")
 	}
@@ -841,7 +888,7 @@ func runNativeTestBinary(ctx context.Context, binPath string, benchTimeNs int64)
 	if err != nil {
 		return nativeTestRun{}, err
 	}
-	cmd := exec.CommandContext(ctx, absBin)
+	cmd := exec.CommandContext(ctx, absBin, testName)
 	// OSTY_BENCH_TIME_NS is read by osty_rt_bench_target_ns. Always
 	// rebuild the child's env from scratch: when benchTimeNs > 0 we
 	// overwrite it with our value, otherwise we strip it so a stale
