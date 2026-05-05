@@ -9,6 +9,7 @@ import (
 )
 
 func TestLLVMBackendStdKeychainApiKeyWrapperLowers(t *testing.T) {
+	requireRealLLVMEmission(t)
 	req := newBackendRequest(t, EmitLLVMIR, `use std.keychain
 
 fn main() {

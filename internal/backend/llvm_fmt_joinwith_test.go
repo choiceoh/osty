@@ -39,6 +39,7 @@ import (
 // surfaces either pattern again.
 func TestLLVMBackendEmitFmtJoinWithGenericClosure(t *testing.T) {
 	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
+	installNativeMIRPayloadStub(t)
 	src := `use std.fmt
 fn main() {
     let xs: List<Int> = [1, 2, 3]

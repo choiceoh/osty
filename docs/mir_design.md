@@ -129,8 +129,8 @@ for local diagnosis.
 | Route | When it is selected | Expected result | Guard |
 |-------|---------------------|-----------------|-------|
 | `unsupported-preflight` | `UnsupportedDiagnosticForModule` rejects source-level backend gaps before concrete emitter selection | Skeleton LLVM IR + `ErrLLVMNotImplemented`; no legacy retry | `TestLLVMBackendUnsupportedSkeletonIncludesDispatchDebug` |
-| `native-owned` | default LLVM emit modes when the feature set allows it, MIR is available, and no injected stdlib bodies are present | Full LLVM IR from managed `nativellvmgen.TryMIR` payload emission; decline falls through to MIR-direct | `TestEmitLLVMIRTextPrefersNativeOwnedFastPathWhenCovered`, `TestTryEmitNativeOwnedLLVMIRText*` |
-| `mir-direct` | every remaining normal backend request after native-owned declines, including malformed entries with missing MIR | Full LLVM IR from `GenerateFromMIR`, or skeleton + `backend-route: mir-direct` on unsupported shape | `TestLLVMBackendDispatchTraceReportsSelectedRoute`, `TestLLVMBackendMissingMIRDoesNotRetryLegacyIRBridge`, `TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics`, `TestNativeToolchainMergedMIRPipelineIsClean` |
+| `native-owned` | default LLVM emit modes when the feature set allows it, MIR is available, and no injected stdlib bodies are present | Full LLVM IR from managed `nativellvmgen.TryMIR` payload emission; decline falls through to MIR-direct | `TestEmitLLVMIRTextPrefersNativeOwnedFastPathWhenCovered` |
+| `mir-direct` | every remaining normal backend request after native-owned declines, including malformed entries with missing MIR | Full LLVM IR from `nativellvmgen.TryMIR` (the same MIR payload subprocess feeding `native-owned`); MIR coverage decline renders skeleton + `backend-route: mir-direct` | `TestLLVMBackendDispatchTraceReportsSelectedRoute`, `TestLLVMBackendMissingMIRDoesNotRetryLegacyIRBridge`, `TestLLVMBackendEmitLLVMIRMIRBackendStringIntrinsics`, `TestNativeToolchainMergedMIRPipelineIsClean` |
 
 Route changes must update this table, `internal/backend/doc.go`, and any
 route-sensitive tests in the same patch.

@@ -49,6 +49,7 @@ import (
 // closure-inference issue downstream and is tracked separately.
 func TestLLVMBackendEmitListHigherOrder(t *testing.T) {
 	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
+	installNativeMIRPayloadStub(t)
 	cases := []struct {
 		name string
 		src  string

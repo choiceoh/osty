@@ -55,7 +55,7 @@ func (e *loweredStdlibTypesEntry) moduleTypeNames(module string) map[string]bool
 // templates alongside the user's concrete type references and emits
 // specializations (e.g. `Map$String$Int` with its update / getOr
 // methods pre-substituted) — retiring the need for per-helper
-// hand-emit in llvmgen.
+// hand-emit at the LLVM emission boundary.
 //
 // Only referenced types are injected; the cache is shared so repeated
 // compiles in the same process don't re-lower collections.osty.
@@ -409,7 +409,7 @@ func genericParamNames(params []*ir.TypeParam) []string {
 //     intrinsic method on `self` whose dispatch the backend has not
 //     whitelisted. Their bodies would survive into the specialization
 //     but the `self.<missing>(...)` site has no lowering target, so
-//     the legacy llvmgen bridge walls on `*ast.TurbofishExpr` /
+//     the LLVM emission boundary walls on `*ast.TurbofishExpr` /
 //     `self.<missing>` when it later tries to emit them. The canonical
 //     List example: `List<T>.contains { self.indexOf(item).isSome() }`
 //     — `indexOf` is body-less and not in `listMethodInfo`, so the
@@ -505,9 +505,10 @@ func methodHasUnsupportedLLVMShape(owner string, m *ir.FnDecl) bool {
 // only call dispatched intrinsics stay.
 //
 // Kept in sync with the backend's `listMethodInfo` / `mapMethodInfo` /
-// `setMethodInfo` whitelists in `internal/llvmgen/type.go`. When a new
-// dispatch lands there, drop the corresponding name here so its
-// callers stop getting cascade-stripped.
+// `setMethodInfo` whitelists owned by the native LLVM generator
+// (`cmd/osty-native-lirproto`). When a new dispatch lands there, drop
+// the corresponding name here so its callers stop getting
+// cascade-stripped.
 func ownerUndispatchableMethodSet(owner string) map[string]bool {
 	switch owner {
 	case "List":
