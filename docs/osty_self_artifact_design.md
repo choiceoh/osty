@@ -48,9 +48,9 @@ PR #1405 가 in-process Go MIR emitter (`internal/llvmgen`) 를 제거한 뒤,
 |---|---|---|
 | **A1** | `internal/toolchain/selfhostcache` 패키지 — `Key`, `ComputeKey`, `ResolveBinary`, `Install`, `CachePath`. 디스크에 이미 있는 캐시 entry 만 lookup. 네트워크 0. | 13 단위 테스트 통과 — **구현 완료** |
 | **A2** | `cmd/osty-native-lirproto` 가 `selfhostcache.ResolveBinary` 사용. `LocateProjectRoot` 헬퍼 추가. ErrNotCached → "osty-self not found" 메시지로 변환해서 IsOstySelfMissing 호환 유지. | 기존 lirproto 테스트 통과 + 캐시 lookup 통합 — **구현 완료** |
-| **A3** (이 PR) | `osty install-self` 서브커맨드 — toolchain 빌드 + 캐시 적재 한 번에. `just bootstrap` 레시피가 build-all + install-self 호출. | TestInstallSelfUsageMessage / TestBuildOstySelf{RunsHostBinary,FailsWhenHostExits,FailsWhenNoBinaryProduced} — **구현 완료** |
-| A4 | 네트워크 fetcher — GitHub Release / S3-compatible URL 에서 `<sha>-<triple>` artifact 다운로드. SHA-256 검증 필수. | offline 모드 정책 결정 |
-| A5 | CI 워크플로 — main 브랜치 push 시 6개 host triple 별로 빌드 → release artifact 업로드 + manifest. | reproducibility 확인 |
+| **A3** | `osty install-self` 서브커맨드 — toolchain 빌드 + 캐시 적재 한 번에. `just bootstrap` 레시피가 build-all + install-self 호출. | TestInstallSelfUsageMessage / TestBuildOstySelf — **구현 완료** |
+| **A4** (이 PR) | 네트워크 fetcher — `<base>/<sha>-<triple>.json` manifest + binary 다운로드, SHA-256 검증 필수. `OSTY_SELF_REGISTRY_URL` / `OSTY_SELF_REGISTRY_OFFLINE` env var 게이트. `ResolveBinaryWithFetch` 가 캐시 miss 시 호출. | 17 tests (httptest server 기반) — **구현 완료** |
+| A5 | CI 워크플로 — main push 시 6개 host triple 별로 빌드 → release artifact 업로드 + manifest. `osty-native-lirproto` 가 `EnvFetcher()` 로 자동 활성. | reproducibility 확인 |
 | A6 | Manifest signing (sigstore / minisign) — supply-chain 보호. | 정책 결정 |
 
 ## 4. Key 구성
