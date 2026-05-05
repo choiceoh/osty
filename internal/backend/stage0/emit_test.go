@@ -305,9 +305,11 @@ func TestStage0RejectsBoolParamPassthrough(t *testing.T) {
 	}
 }
 
-// intBinaryAddFn builds the canonical
-// `fn name(a: Int, b: Int) -> Int { a + b }` MIR shape.
-func intBinaryAddFn(name, leftName, rightName string) *mir.Function {
+// intBinaryArithFn builds the canonical
+// `fn name(a: Int, b: Int) -> Int { a OP b }` MIR shape, parameterised
+// over the operator so P2c (Add) and P2d (Sub/Mul/Div/Mod) can share a
+// fixture.
+func intBinaryArithFn(name string, op mir.BinaryOp, leftName, rightName string) *mir.Function {
 	const leftID, rightID mir.LocalID = 1, 2
 	return &mir.Function{
 		Name:        name,
@@ -327,7 +329,7 @@ func intBinaryAddFn(name, leftName, rightName string) *mir.Function {
 					&mir.AssignInstr{
 						Dest: mir.Place{Local: 0},
 						Src: &mir.BinaryRV{
-							Op:    mir.BinAdd,
+							Op:    op,
 							Left:  &mir.CopyOp{Place: mir.Place{Local: leftID}, T: ir.TInt},
 							Right: &mir.CopyOp{Place: mir.Place{Local: rightID}, T: ir.TInt},
 							T:     ir.TInt,
@@ -342,7 +344,7 @@ func intBinaryAddFn(name, leftName, rightName string) *mir.Function {
 
 func TestStage0EmitsIntBinaryAdd(t *testing.T) {
 	t.Parallel()
-	got, err := EmitMIR(moduleWith(trivialMainFn(), intBinaryAddFn("add", "a", "b"), intBinaryAddFn("sum", "left", "right")), llvmabi.Options{PackageName: "main"})
+	got, err := EmitMIR(moduleWith(trivialMainFn(), intBinaryArithFn("add", mir.BinAdd, "a", "b"), intBinaryArithFn("sum", mir.BinAdd, "left", "right")), llvmabi.Options{PackageName: "main"})
 	if err != nil {
 		t.Fatalf("EmitMIR: %v", err)
 	}
@@ -360,15 +362,45 @@ func TestStage0EmitsIntBinaryAdd(t *testing.T) {
 	}
 }
 
-func TestStage0BinaryAddDisambiguatesCollidingParamNames(t *testing.T) {
+func TestStage0EmitsIntBinaryArithOps(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name    string
+		op      mir.BinaryOp
+		llvmOp  string
+	}{
+		{"sub", mir.BinSub, "sub"},
+		{"mul", mir.BinMul, "mul"},
+		{"div", mir.BinDiv, "sdiv"},
+		{"mod", mir.BinMod, "srem"},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := EmitMIR(moduleWith(trivialMainFn(), intBinaryArithFn(c.name, c.op, "a", "b")), llvmabi.Options{PackageName: "main"})
+			if err != nil {
+				t.Fatalf("EmitMIR: %v", err)
+			}
+			s := string(got)
+			fnHeader := "define i64 @" + c.name + "(i64 %a, i64 %b)"
+			body := "%0 = " + c.llvmOp + " i64 %a, %b"
+			for _, want := range []string{fnHeader, body, "ret i64 %0"} {
+				if !strings.Contains(s, want) {
+					t.Fatalf("emitted IR missing %q:\n%s", want, s)
+				}
+			}
+		})
+	}
+}
+
+func TestStage0BinaryArithDisambiguatesCollidingParamNames(t *testing.T) {
 	t.Parallel()
 	// Both param names empty → both sanitise to `a`/`b` (the
-	// per-position fallbacks). Here we force them to BOTH sanitise
-	// to the same value to confirm the post-sanitise collision
-	// guard runs: sanitiser maps non-ASCII names to fallback "a"
-	// (left position), so set left=valid, right=non-ASCII to force
-	// collision through the fallback.
-	fn := intBinaryAddFn("collide", "", "")
+	// per-position fallbacks). The collision-guard inside
+	// emitIntBinaryArith only triggers when fallbacks coincide
+	// (left and right both produce identical sanitised names).
+	fn := intBinaryArithFn("collide", mir.BinAdd, "", "")
 	got, err := EmitMIR(moduleWith(trivialMainFn(), fn), llvmabi.Options{})
 	if err != nil {
 		t.Fatalf("EmitMIR: %v", err)
@@ -378,9 +410,9 @@ func TestStage0BinaryAddDisambiguatesCollidingParamNames(t *testing.T) {
 	}
 }
 
-func TestStage0RejectsBinaryAddWithBoolReturn(t *testing.T) {
+func TestStage0RejectsBinaryArithWithBoolReturn(t *testing.T) {
 	t.Parallel()
-	fn := intBinaryAddFn("flag", "a", "b")
+	fn := intBinaryArithFn("flag", mir.BinAdd, "a", "b")
 	fn.ReturnType = ir.TBool
 	_, err := EmitMIR(moduleWith(trivialMainFn(), fn), llvmabi.Options{})
 	if !errors.Is(err, ErrUnsupported) {
@@ -388,12 +420,11 @@ func TestStage0RejectsBinaryAddWithBoolReturn(t *testing.T) {
 	}
 }
 
-func TestStage0RejectsBinaryAddWithSwappedOperands(t *testing.T) {
+func TestStage0RejectsBinaryArithWithSwappedOperands(t *testing.T) {
 	t.Parallel()
-	// `b + a` instead of `a + b`. Stage0 P2c is intentionally strict
-	// about operand order — swapped operands lower to a different
-	// MIR shape and decline.
-	fn := intBinaryAddFn("swap", "a", "b")
+	// `b + a` instead of `a + b`. Stage0 is intentionally strict about
+	// operand order — swapped operands lower to a different MIR shape.
+	fn := intBinaryArithFn("swap", mir.BinAdd, "a", "b")
 	bin := fn.Blocks[0].Instrs[0].(*mir.AssignInstr).Src.(*mir.BinaryRV)
 	bin.Left, bin.Right = bin.Right, bin.Left
 	_, err := EmitMIR(moduleWith(trivialMainFn(), fn), llvmabi.Options{})
@@ -402,14 +433,24 @@ func TestStage0RejectsBinaryAddWithSwappedOperands(t *testing.T) {
 	}
 }
 
-func TestStage0RejectsBinarySubOperator(t *testing.T) {
+func TestStage0RejectsComparisonBinaryOp(t *testing.T) {
 	t.Parallel()
-	fn := intBinaryAddFn("minus", "a", "b")
-	bin := fn.Blocks[0].Instrs[0].(*mir.AssignInstr).Src.(*mir.BinaryRV)
-	bin.Op = mir.BinSub
+	// BinEq is outside the arithmetic subset (P2d covers Add/Sub/Mul/
+	// Div/Mod only). Comparison results are Bool, but even with the
+	// right shape the operator declines.
+	fn := intBinaryArithFn("eq", mir.BinEq, "a", "b")
 	_, err := EmitMIR(moduleWith(trivialMainFn(), fn), llvmabi.Options{})
 	if !errors.Is(err, ErrUnsupported) {
-		t.Fatalf("err = %v, want wrapped ErrUnsupported (BinSub not in P2c)", err)
+		t.Fatalf("err = %v, want wrapped ErrUnsupported (BinEq not in P2d)", err)
+	}
+}
+
+func TestStage0RejectsBitwiseBinaryOp(t *testing.T) {
+	t.Parallel()
+	fn := intBinaryArithFn("bit_and", mir.BinBitAnd, "a", "b")
+	_, err := EmitMIR(moduleWith(trivialMainFn(), fn), llvmabi.Options{})
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("err = %v, want wrapped ErrUnsupported (BinBitAnd not in P2d)", err)
 	}
 }
 
