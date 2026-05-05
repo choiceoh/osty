@@ -317,6 +317,41 @@ fn main() {}`,
 				"ret i64 %1",
 			},
 		},
+		{
+			name: "string_concat_const_param",
+			src: `fn greeting(name: String) -> String { "hello, " + name }
+fn main() {}`,
+			wantIR: []string{
+				"declare ptr @osty_rt_strings_Concat(ptr, ptr)",
+				`@.str.0 = private unnamed_addr constant [8 x i8] c"hello, \00"`,
+				"define ptr @greeting(ptr %name)",
+				"%0 = call ptr @osty_rt_strings_Concat(ptr @.str.0, ptr %name)",
+				"ret ptr %0",
+			},
+		},
+		{
+			name: "string_concat_two_params",
+			src: `fn join(a: String, b: String) -> String { a + b }
+fn main() {}`,
+			wantIR: []string{
+				"declare ptr @osty_rt_strings_Concat(ptr, ptr)",
+				"define ptr @join(ptr %a, ptr %b)",
+				"%0 = call ptr @osty_rt_strings_Concat(ptr %a, ptr %b)",
+			},
+		},
+		{
+			name: "recursive_factorial",
+			src: `fn fact(n: Int) -> Int {
+    if n <= 1 { 1 } else { n * fact(n - 1) }
+}
+fn main() {}`,
+			wantIR: []string{
+				"define i64 @fact(i64 %n)",
+				"icmp sle i64 %n, 1",
+				"call i64 @fact(i64",
+				"phi i64",
+			},
+		},
 	}
 	for _, c := range cases {
 		c := c
