@@ -45,6 +45,7 @@ pub enum CoreKind {
     CkCharLit,
     CkByteLit,
     CkStringLit,
+    CkBytesLit,
     CkUnitLit,
 
     // Atoms and operators
@@ -328,6 +329,15 @@ pub fn coreStringLit(arena: CoreArena, text: String, parts: List<Int>, ty: Int, 
     let mut n = emptyCoreNode(CkStringLit)
     n.text = text
     n.children = parts
+    n.ty = ty
+    n.start = start
+    n.end = end
+    coreArenaAdd(arena, n)
+}
+
+pub fn coreBytesLit(arena: CoreArena, text: String, ty: Int, start: Int, end: Int) -> Int {
+    let mut n = emptyCoreNode(CkBytesLit)
+    n.text = text
     n.ty = ty
     n.start = start
     n.end = end
@@ -1439,6 +1449,7 @@ pub fn coreKindName(kind: CoreKind) -> String {
         CkCharLit -> "CharLit",
         CkByteLit -> "ByteLit",
         CkStringLit -> "StringLit",
+        CkBytesLit -> "BytesLit",
         CkUnitLit -> "UnitLit",
         CkIdent -> "Ident",
         CkUnary -> "Unary",
@@ -1562,6 +1573,7 @@ fn corePrintNodeBody(arena: CoreArena, tys: TyArena, node: CoreNode, depth: Int)
         CkCharLit -> "#{node.value}",
         CkByteLit -> "b#{node.value}",
         CkStringLit -> "\"{node.text}\"",
+        CkBytesLit -> "b\"{node.text}\"",
         CkUnitLit -> "",
         CkIdent -> node.name,
         CkUnary -> "{unOpSymbol(unOpFromInt(node.value))} {corePrintNode(arena, tys, node.left, depth + 1)}",

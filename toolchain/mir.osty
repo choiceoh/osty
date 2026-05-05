@@ -45,6 +45,7 @@ pub enum MirConstKind {
     MirConstBool,
     MirConstFloat,
     MirConstString,
+    MirConstBytes,
     MirConstChar,
     MirConstByte,
     MirConstUnit,
@@ -168,6 +169,7 @@ pub enum MirIntrinsicKind {
     MirIntrinsicEprintln,
     MirIntrinsicAbort,
     MirIntrinsicStringConcat,
+    MirIntrinsicBytesConcat,
     // concurrency: channels
     MirIntrinsicChanMake,
     MirIntrinsicChanSend,
@@ -396,6 +398,14 @@ pub fn mirConstString(value: String) -> MirConst {
     c.kind = MirConstString
     c.strValue = value
     c.typ = "String"
+    c
+}
+
+pub fn mirConstBytes(value: String) -> MirConst {
+    let mut c = mirConstInvalid()
+    c.kind = MirConstBytes
+    c.strValue = value
+    c.typ = "Bytes"
     c
 }
 
@@ -1788,6 +1798,7 @@ pub fn mirIntrinsicName(k: MirIntrinsicKind) -> String {
         MirIntrinsicEprintln -> "eprintln",
         MirIntrinsicAbort -> "abort",
         MirIntrinsicStringConcat -> "string_concat",
+        MirIntrinsicBytesConcat -> "bytes_concat",
         MirIntrinsicChanMake -> "chan_make",
         MirIntrinsicChanSend -> "chan_send",
         MirIntrinsicChanRecv -> "chan_recv",

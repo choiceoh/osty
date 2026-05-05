@@ -2241,6 +2241,21 @@ pub fn hirLowerAssembleStringLit(
     hirStringLit(parts, span)
 }
 
+pub fn hirLowerAssembleBytesLit(
+    parts: List<HirStringPart>,
+    isRaw: Bool,
+    isTriple: Bool,
+    span: HirSpan,
+) -> HirExpr {
+    if isTriple {
+        return hirBytesLitTriple(parts, span)
+    }
+    if isRaw {
+        return hirBytesLitRaw(parts, span)
+    }
+    hirBytesLit(parts, span)
+}
+
 // ---- ErrorExpr / ErrorStmt shortcuts ---------------------------
 
 /// hirLowerAssembleErrorExpr builds a poisoned expression for
@@ -3080,6 +3095,9 @@ fn hirLowerExprFromCore(
     if node.kind == CkStringLit {
         return hirLowerStringExprFromCore(cx, coreIdx, span)
     }
+    if node.kind == CkBytesLit {
+        return hirLowerBytesExprFromCore(cx, coreIdx, span)
+    }
     if node.kind == CkUnitLit {
         return hirUnitLit(span)
     }
@@ -3429,6 +3447,17 @@ fn hirLowerStringExprFromCore(
     let decoded = hirLowerDecodeStringToken(node.text)
     let parts = [hirStringPartLit(decoded.body)]
     hirLowerAssembleStringLit(parts, decoded.raw, decoded.triple, span)
+}
+
+fn hirLowerBytesExprFromCore(
+    cx: HirLowerContext,
+    coreIdx: Int,
+    span: HirSpan,
+) -> HirExpr {
+    let node = coreArenaNodeAt(cx.elab.core, coreIdx)
+    let decoded = hirLowerDecodeBytesToken(node.text)
+    let parts = [hirStringPartLit(decoded.body)]
+    hirLowerAssembleBytesLit(parts, decoded.raw, decoded.triple, span)
 }
 
 fn hirLowerListExprFromCore(
@@ -3924,6 +3953,39 @@ fn hirLowerDecodeStringToken(text: String) -> HirLowerDecodedString {
             body: text[1..n - 1],
             raw: false,
             triple: false,
+        }
+    }
+    HirLowerDecodedString { body: text, raw: false, triple: false }
+}
+
+fn hirLowerDecodeBytesToken(text: String) -> HirLowerDecodedString {
+    let n = text.len()
+    if n >= 4 && text[0..2] == "b\"" && text[n - 1..n] == "\"" {
+        return HirLowerDecodedString {
+            body: text[2..n - 1],
+            raw: false,
+            triple: false,
+        }
+    }
+    if n >= 5 && text[0..3] == "b\"\"\"" && text[n - 3..n] == "\"\"\"" {
+        return HirLowerDecodedString {
+            body: text[3..n - 3],
+            raw: false,
+            triple: true,
+        }
+    }
+    if n >= 5 && text[0..3] == "br\"" && text[n - 1..n] == "\"" {
+        return HirLowerDecodedString {
+            body: text[3..n - 1],
+            raw: true,
+            triple: false,
+        }
+    }
+    if n >= 6 && text[0..4] == "br\"\"\"" && text[n - 3..n] == "\"\"\"" {
+        return HirLowerDecodedString {
+            body: text[4..n - 3],
+            raw: true,
+            triple: true,
         }
     }
     HirLowerDecodedString { body: text, raw: false, triple: false }

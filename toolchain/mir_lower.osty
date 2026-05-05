@@ -1563,6 +1563,7 @@ pub fn mirLowerExprAsOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
         HirExprByteLit -> mirOperandConst(mirConstByte(e.byteValue)),
         HirExprUnitLit -> mirOperandConst(mirConstUnit()),
         HirExprStringLit -> mirLowerStringLitOperand(bs, e),
+        HirExprBytesLit -> mirLowerBytesLitOperand(bs, e),
         HirExprIdent -> mirLowerIdentOperand(bs, e),
         HirExprField -> mirLowerFieldExprOperand(bs, e),
         HirExprTupleAccess -> mirLowerTupleAccessOperand(bs, e),
@@ -1890,6 +1891,39 @@ fn mirLowerStringLitOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
         mirIntrinsicInstr(true, mirPlace(tmp), MirIntrinsicStringConcat, args, span),
     )
     mirOperandCopy(mirPlace(tmp), "String")
+}
+
+fn mirLowerBytesLitOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
+    let mut hasInterpolation = false
+    for part in e.strParts {
+        if !part.isLit {
+            hasInterpolation = true
+        }
+    }
+    if !hasInterpolation {
+        let mut buf: List<String> = []
+        for part in e.strParts {
+            if part.isLit {
+                buf.push(part.lit)
+            }
+        }
+        return mirOperandConst(mirConstBytes(strings.join(buf, "")))
+    }
+    let mut args: List<MirOperand> = []
+    for part in e.strParts {
+        if part.isLit {
+            args.push(mirOperandConst(mirConstString(part.lit)))
+        } else if part.expr.len() > 0 {
+            args.push(mirLowerExprAsOperand(bs, part.expr[0]))
+        }
+    }
+    let span = mirSpanFromHir(e.span)
+    let tmp = mirLowerNewLocal(bs, "_bytesconcat", e.typ, false, span)
+    mirLowerEmitInstr(
+        bs,
+        mirIntrinsicInstr(true, mirPlace(tmp), MirIntrinsicBytesConcat, args, span),
+    )
+    mirOperandCopy(mirPlace(tmp), "Bytes")
 }
 
 /// mirLowerIdentOperand lowers an ident reference to an operand.

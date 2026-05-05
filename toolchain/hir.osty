@@ -132,6 +132,7 @@ pub enum HirExprKind {
     HirExprCharLit,
     HirExprByteLit,
     HirExprStringLit,
+    HirExprBytesLit,
     HirExprUnitLit,
     HirExprIdent,
     HirExprUnary,
@@ -2150,6 +2151,27 @@ pub fn hirStringLit(parts: List<HirStringPart>, span: HirSpan) -> HirExpr {
     e
 }
 
+pub fn hirBytesLit(parts: List<HirStringPart>, span: HirSpan) -> HirExpr {
+    let mut e = hirExprInvalid()
+    e.kind = HirExprBytesLit
+    e.strParts = parts
+    e.typ = hirTBytes()
+    e.span = span
+    e
+}
+
+pub fn hirBytesLitRaw(parts: List<HirStringPart>, span: HirSpan) -> HirExpr {
+    let mut e = hirBytesLit(parts, span)
+    e.strIsRaw = true
+    e
+}
+
+pub fn hirBytesLitTriple(parts: List<HirStringPart>, span: HirSpan) -> HirExpr {
+    let mut e = hirBytesLit(parts, span)
+    e.strIsTriple = true
+    e
+}
+
 /// hirStringLitRaw / hirStringLitTriple adjust the literal flags for
 /// raw and triple-quoted forms respectively.
 pub fn hirStringLitRaw(parts: List<HirStringPart>, span: HirSpan) -> HirExpr {
@@ -2936,6 +2958,7 @@ pub fn hirExprKindName(k: HirExprKind) -> String {
         HirExprCharLit -> "CharLit",
         HirExprByteLit -> "ByteLit",
         HirExprStringLit -> "StringLit",
+        HirExprBytesLit -> "BytesLit",
         HirExprUnitLit -> "UnitLit",
         HirExprIdent -> "Ident",
         HirExprUnary -> "Unary",

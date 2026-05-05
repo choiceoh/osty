@@ -19048,6 +19048,7 @@ fn mirEmitConstOperand(c: MirConst) -> String {
         MirConstUnit -> "0",
         MirConstNull -> "null",
         MirConstString -> mirEmitConstStringRef(c.strValue),
+        MirConstBytes -> mirEmitConstStringRef(c.strValue),
         MirConstFn -> if c.fnSymbol == "" { "null" } else { "@" + c.fnSymbol },
     }
 }
