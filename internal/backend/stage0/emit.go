@@ -75,6 +75,14 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 		knownSymbols[fn.Name] = true
 	}
 
+	// Scan every instruction for intrinsic usage so we know which
+	// runtime declarations / globals to emit at module top.
+	needsPrintlnInt := scanNeedsPrintlnInt(module)
+	if needsPrintlnInt {
+		out.WriteString("@.fmt.stage0.println.int = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"\n")
+		out.WriteString("declare i32 @printf(ptr, ...)\n\n")
+	}
+
 	emittedMain := false
 	for _, fn := range module.Functions {
 		if fn == nil {
@@ -91,6 +99,36 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 		return nil, fmt.Errorf("%w: module has no `main` function", ErrUnsupported)
 	}
 	return []byte(out.String()), nil
+}
+
+// scanNeedsPrintlnInt reports whether any function in `module`
+// invokes `println(Int)` (the IntrinsicPrintln intrinsic with a
+// single Int-typed argument). The result drives whether stage0
+// emits the `@printf` declaration + format string at module top.
+func scanNeedsPrintlnInt(module *mir.Module) bool {
+	for _, fn := range module.Functions {
+		if fn == nil {
+			continue
+		}
+		for _, bb := range fn.Blocks {
+			if bb == nil {
+				continue
+			}
+			for _, instr := range bb.Instrs {
+				intr, ok := instr.(*mir.IntrinsicInstr)
+				if !ok || intr.Kind != mir.IntrinsicPrintln {
+					continue
+				}
+				if len(intr.Args) != 1 {
+					continue
+				}
+				if scalarFromType(intr.Args[0].Type()) == scalarInt {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func emitFunction(out *strings.Builder, fn *mir.Function, knownSymbols map[string]bool) error {
@@ -254,7 +292,7 @@ type pendingInstr struct {
 	destLocal  mir.LocalID
 	resultType scalarType
 	// SSA register pre-assigned at match time. Always set for
-	// instrBinary / instrCall; empty for instrInline.
+	// instrBinary / instrCall; empty for instrInline / instrIntrinsic.
 	binDestReg string
 	// binary fields
 	binOp      string
@@ -264,6 +302,9 @@ type pendingInstr struct {
 	// call fields
 	callSymbol string
 	callArgs   []callArg
+	// intrinsic fields — pre-rendered LLVM line that the emitter
+	// writes verbatim. Used for IntrinsicPrintln (and future kinds).
+	intrinsicLine string
 }
 
 type callArg struct {
@@ -277,7 +318,32 @@ const (
 	instrInline instrKind = iota
 	instrBinary
 	instrCall
+	instrIntrinsic
 )
+
+// classifyIntrinsicLine pre-renders the LLVM line for an
+// IntrinsicInstr that doesn't bind a local (e.g., println). Returns
+// (line, true) on success; declines for unsupported intrinsics or
+// shape mismatches. Operand resolution uses the SSA-only `bindings`
+// path — stack-backed locals are not visible here (they live in the
+// while-loop matcher).
+func classifyIntrinsicLine(ii *mir.IntrinsicInstr, bindings map[mir.LocalID]localBinding) (string, bool) {
+	if ii.Dest != nil {
+		return "", false
+	}
+	switch ii.Kind {
+	case mir.IntrinsicPrintln:
+		if len(ii.Args) != 1 {
+			return "", false
+		}
+		expr, ty, ok := resolveOperand(ii.Args[0], bindings)
+		if !ok || ty != scalarInt {
+			return "", false
+		}
+		return fmt.Sprintf("  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 %s)\n", expr), true
+	}
+	return "", false
+}
 
 // sequentialPattern is what `matchSequentialReturn` produces.
 type sequentialPattern struct {
@@ -355,6 +421,13 @@ func matchSequentialReturn(fn *mir.Function, knownSymbols map[string]bool) (sequ
 			pending, expr, destID, destType, okStep = classifyAssignStep(fn, step, bindings)
 		case *mir.CallInstr:
 			pending, destID, destType, okStep = classifyCallStep(fn, step, bindings, knownSymbols)
+		case *mir.IntrinsicInstr:
+			line, okIntr := classifyIntrinsicLine(step, bindings)
+			if !okIntr {
+				return pat, false
+			}
+			pat.pending = append(pat.pending, pendingInstr{kind: instrIntrinsic, intrinsicLine: line})
+			continue
 		case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
 			// Storage liveness markers carry no LLVM-visible semantics
 			// for stage0. Skip them and move to the next instruction.
@@ -573,6 +646,8 @@ func emitSequentialReturn(out *strings.Builder, fn *mir.Function, pat sequential
 				fmt.Fprintf(out, "%s %s", a.ty, a.expr)
 			}
 			out.WriteString(")\n")
+		case instrIntrinsic:
+			out.WriteString(pi.intrinsicLine)
 		}
 	}
 	fmt.Fprintf(out, "  ret %s %s\n", retLLVM, pat.returnExpr)
@@ -835,6 +910,8 @@ func emitBlock(out *strings.Builder, blk blockEmit) {
 				fmt.Fprintf(out, "%s %s", a.ty, a.expr)
 			}
 			out.WriteString(")\n")
+		case instrIntrinsic:
+			out.WriteString(pi.intrinsicLine)
 		}
 	}
 }
@@ -899,6 +976,13 @@ func applyStep(fn *mir.Function, instr mir.Instr, bindings map[mir.LocalID]local
 		pending, expr, destID, destType, okStep = classifyAssignStep(fn, step, bindings)
 	case *mir.CallInstr:
 		pending, destID, destType, okStep = classifyCallStep(fn, step, bindings, knownSymbols)
+	case *mir.IntrinsicInstr:
+		line, okIntr := classifyIntrinsicLine(step, bindings)
+		if !okIntr {
+			return false
+		}
+		emit.pending = append(emit.pending, pendingInstr{kind: instrIntrinsic, intrinsicLine: line})
+		return true
 	case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
 		// Storage liveness markers are opt-in metadata; stage0
 		// has nothing to emit for them.
@@ -1291,7 +1375,34 @@ func emitWhileStep(ctx *whileLoopEmitCtx, out *strings.Builder, instr mir.Instr)
 		return emitWhileAssign(ctx, out, step)
 	case *mir.CallInstr:
 		return emitWhileCall(ctx, out, step)
+	case *mir.IntrinsicInstr:
+		return emitWhileIntrinsic(ctx, out, step)
 	case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
+		return true
+	}
+	return false
+}
+
+// emitWhileIntrinsic handles the small set of intrinsics stage0
+// understands inside any block (entry / header / body / post / exit).
+// Currently the only supported intrinsic is `IntrinsicPrintln` with a
+// single Int-typed argument; everything else declines.
+func emitWhileIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.IntrinsicInstr) bool {
+	if ii.Dest != nil {
+		// Stage0 only handles intrinsics whose result is unit
+		// (no destination). Println / abort / etc. fit this shape.
+		return false
+	}
+	switch ii.Kind {
+	case mir.IntrinsicPrintln:
+		if len(ii.Args) != 1 {
+			return false
+		}
+		expr, ty, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+		if !ok || ty != scalarInt {
+			return false
+		}
+		fmt.Fprintf(out, "  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 %s)\n", expr)
 		return true
 	}
 	return false

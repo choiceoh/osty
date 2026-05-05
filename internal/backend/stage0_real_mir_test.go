@@ -225,6 +225,37 @@ fn main() {}`,
 				"ret i64",
 			},
 		},
+		{
+			name: "println_int_param",
+			src: `fn show(n: Int) -> Int {
+    println(n)
+    n
+}
+fn main() {}`,
+			wantIR: []string{
+				"declare i32 @printf(ptr, ...)",
+				`@.fmt.stage0.println.int = private unnamed_addr constant [6 x i8] c"%lld\0A\00"`,
+				"define i64 @show(i64 %n)",
+				"call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 %n)",
+				"ret i64 %n",
+			},
+		},
+		{
+			name: "println_const_in_loop",
+			src: `fn shout(n: Int) -> Int {
+    let mut acc = 0
+    while acc < n {
+        println(acc)
+        acc = acc + 1
+    }
+    acc
+}
+fn main() {}`,
+			wantIR: []string{
+				"declare i32 @printf(ptr, ...)",
+				"call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 ",
+			},
+		},
 	}
 	for _, c := range cases {
 		c := c
@@ -250,7 +281,10 @@ fn main() {}`,
 func TestStage0RealMIRGapProbe(t *testing.T) {
 	cases := []realProbeCase{
 		{
-			name:    "println_call",
+			// Stage0 P8 only handles `println(Int)`. String-arg
+			// println still declines because there's no String
+			// runtime ABI yet.
+			name:    "println_string_arg",
 			src:     `fn main() { println("hi") }`,
 			skipNow: true,
 		},
