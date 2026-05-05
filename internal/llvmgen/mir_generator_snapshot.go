@@ -3060,15 +3060,12 @@ func mirNoneAggregateLines(stepReg, valueReg, optLLVM string) string {
 // insertvalue construction.
 // Osty: mirOkAggregateLines
 func mirOkAggregateLines(stepReg, valueReg, resultLLVM, payloadI64 string) string {
-	return mirInsertValueAggLine(stepReg, resultLLVM, "undef", "i64", "1", "0") +
+	return mirInsertValueAggLine(stepReg, resultLLVM, "undef", "i64", mirDiscriminantOk(), "0") +
 		mirInsertValueAggLine(valueReg, resultLLVM, stepReg, "i64", payloadI64, "1")
 }
 
-// mirErrAggregateLines renders the canonical Err(payload) two-
-// insertvalue construction.
-// Osty: mirErrAggregateLines
 func mirErrAggregateLines(stepReg, valueReg, resultLLVM, payloadI64 string) string {
-	return mirInsertValueAggLine(stepReg, resultLLVM, "undef", "i64", "0", "0") +
+	return mirInsertValueAggLine(stepReg, resultLLVM, "undef", "i64", mirDiscriminantErr(), "0") +
 		mirInsertValueAggLine(valueReg, resultLLVM, stepReg, "i64", payloadI64, "1")
 }
 
@@ -5866,8 +5863,8 @@ func mirElementKindStruct() string { return "7" }
 // Osty: mirDiscriminant{None,Some,Ok,Err}
 func mirDiscriminantNone() string { return "0" }
 func mirDiscriminantSome() string { return "1" }
-func mirDiscriminantOk() string   { return "1" }
-func mirDiscriminantErr() string  { return "0" }
+func mirDiscriminantOk() string   { return "0" }
+func mirDiscriminantErr() string  { return "1" }
 
 // §6 boolean-literal tokens.
 

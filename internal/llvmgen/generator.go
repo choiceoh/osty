@@ -533,12 +533,14 @@ func (g *generator) render(defs []string) []byte {
 	allDefs = append(allDefs, g.globalDefs...)
 	allDefs = append(allDefs, defs...)
 	typeDefs := make([]string, 0, len(g.structs)+len(g.enumsByType)+len(g.tupleTypes)+len(g.resultTypes)+len(g.rangeTypes))
+	emittedStructTypeDefs := map[string]bool{}
 	for _, info := range g.structs {
 		fieldTypes := make([]string, 0, len(info.fields))
 		for _, field := range info.fields {
 			fieldTypes = append(fieldTypes, field.typ)
 		}
 		typeDefs = append(typeDefs, llvmStructTypeDef(info.name, fieldTypes))
+		emittedStructTypeDefs[info.name] = true
 	}
 	for _, info := range g.enums {
 		if info.hasPayload {
@@ -564,7 +566,10 @@ func (g *generator) render(defs []string) []byte {
 					fields = append(fields, slotTyp)
 				}
 			}
-			typeDefs = append(typeDefs, llvmStructTypeDef(info.name, fields))
+			if !emittedStructTypeDefs[info.name] {
+				typeDefs = append(typeDefs, llvmStructTypeDef(info.name, fields))
+				emittedStructTypeDefs[info.name] = true
+			}
 		}
 	}
 	if len(g.tupleTypes) != 0 {

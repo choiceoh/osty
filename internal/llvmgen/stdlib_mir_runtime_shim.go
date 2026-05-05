@@ -799,6 +799,8 @@ func (g *mirGen) emitStdTermCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, erro
 			return true, err
 		}
 		return true, g.emitUnitResultFromNullableError(c, ostyRtTermSetRawModeSymbol, []mirRuntimeArg{enabled})
+	case "readKey", "pollKey", "readEvent":
+		return true, unsupported("mir-mvp", "std.term."+method+" is only wired through the AST LLVM shim")
 	}
 	return false, nil
 }

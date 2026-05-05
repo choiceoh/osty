@@ -61,3 +61,47 @@ fn main() {
 		}
 	}
 }
+
+func TestStdTermInputRoutesToRuntime(t *testing.T) {
+	file := parseLLVMGenFile(t, `use std.term as term
+
+fn main() {
+    match term.readKey() {
+        Ok(key) -> println(key.toString()),
+        Err(err) -> println(err.message()),
+    }
+    match term.pollKey(0) {
+        Ok(key) -> println("ok"),
+        Err(err) -> println(err.message()),
+    }
+}
+`)
+
+	ir, err := generateFromAST(file, Options{
+		PackageName: "main",
+		SourcePath:  "/tmp/std_term_input.osty",
+	})
+	if err != nil {
+		t.Fatalf("generateFromAST: %v", err)
+	}
+
+	got := string(ir)
+	for _, want := range []string{
+		"%__osty_std_term_Key = type { i64, ptr }",
+		"declare i64 @osty_rt_term_read_key_status()",
+		"call i64 @osty_rt_term_read_key_status()",
+		"declare i64 @osty_rt_term_poll_key_status(i64)",
+		"call i64 @osty_rt_term_poll_key_status(i64 0)",
+		"declare i64 @osty_rt_term_key_code()",
+		"declare ptr @osty_rt_term_key_text()",
+		"declare i64 @osty_rt_term_key_function()",
+		"declare ptr @osty_rt_term_last_error()",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in IR:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "std.term.readKey is not supported") || strings.Contains(got, "std.term.pollKey is not supported") {
+		t.Fatalf("input functions still emit unsupported diagnostic:\n%s", got)
+	}
+}
