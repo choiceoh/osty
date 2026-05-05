@@ -78,14 +78,14 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 | io | ✅ PASS | `eprintln("...")` |
 | collections | ✅ PASS | `xs.push(1)` |
 | primitives/int, primitives/float | ✅ PASS | (산술 / 캐스트 — 별도 다수 e2e in `examples/int_*_e2e/`) |
-| log | ❌ FAIL | `log.info("msg")` — Osty 본문은 있으나 C runtime `osty_rt_log_*` 부재, LLVM bridge shim 부재. `eprintln` 폰백은 interpreter/frontend 수준에서 동작하나 LLVM E2E 기준 미충족. |
-| uuid | ⚠️ partial | `uuid.v4()` — C runtime 7개 존재하나 LLVM bridge shim 부재. 인터프리터 E2E는 통과. |
-| regex | ⚠️ partial | `regex.compile("a+")` — C runtime 7+개 존재하나 LLVM bridge shim 부재. 인터프리터 E2E는 통과. |
-| bytes | ✅ PASS | `b""` 빈 입력 OK, `b"abc"` 인자 위치도 parser 통과 — 2026-05-05 `FrontByteString` token kind 추가로 해소. 단, `b"..."` 가 `AstNStringLit` 으로 lower 되어 type 은 `Bytes` 아닌 `String`. type fix 는 follow-up. `b"abc".toBytes()` workaround. |
+| log | ✅ PASS | `log.info("msg")` (위 row 참조) |
+| uuid | ✅ PASS | `uuid.v4()` (위 row 참조) |
+| regex | ✅ PASS | `regex.compile("a+")` (위 row 참조) |
+| bytes | ✅ PASS | `b"..."` 리터럴 타입이 `Bytes`로 올바름 — 2026-05-05 `FrontByteString` → `AstNBytesLit` → `HirExprBytesLit` → `MirConstBytes` → `MirIntrinsicBytesConcat` 풀パス実装. parser/elab/hir/hir_lower/mir/mir_generator すべて対応. |
 | crypto | ⚠️ partial | `crypto.randomBytes(8)` OK, `crypto.sha256(bytes)` body lower 실패 |
 | option | ⚠️ partial | `match Some(x)` OK, `.map(\|x\| ...)` closure body 실패 |
 | result | ⚠️ partial | `match Ok(x)` OK, `.map(\|x\| ...)` closure body 실패 |
-| compress | ✅ PASS (direct) | `compress.gzip.encode(b)` / `compress.gzip.decode(b)` 直接呼び出し OK |
+| compress | ✅ PASS (direct) | `compress.gzip.encode(b)` / `compress.gzip.decode(b)` 直接呼び出し OK
 | url | ❌ FAIL | `url.parse(s)` body lower 실패 (다중 분기 / List<String> 의심) |
 | json | ❌ FAIL | `json.parse(s)` body lower 실패 |
 | encoding | ❌ FAIL | `encoding.hexEncode(b)` 가장 단순 케이스도 실패 |
@@ -98,9 +98,7 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 
 5 FAIL 모듈 (url / json / encoding / iter / log) 은 본문 진정 + 스펙 정합 ✓ 이지만 **LLVM 본문 lowering 또는 shim 부재** 로 막힘 — LLVM shim 추가를 이들에도 적용해야 진짜 5★. 별도 cycle 작업.
 
-**compress 5★ 유지**: spec-canonical 직접 호출 (`compress.gzip.encode(b)`) 은 기존 shim 에서 정상 동작. E2E 검증 [`examples/compress_e2e/`](examples/compress_e2e/) 4/4 통과 (encode / round-trip / invalid err / empty input).
-
-partial 모듈 6개 (bytes / crypto / option / result / uuid / regex) 는 **호출 패턴 한정 동작**. closure 인자 / `b"..."` arg 위치 / 특정 runtime 함수 (sha256, gzip) / LLVM shim 부재 는 별도 backend gap.
+partial 모듈 3개 (crypto / option / result) 는 **호출 패턴 한정 동작**. closure 인자 / 특정 runtime 함수 (sha256, gzip) 는 별도 backend gap.
 
 ### 2.2 ⭐⭐⭐⭐ Functional (본문/백엔드 일부 검증 필요)
 
@@ -313,8 +311,9 @@ unspec 모듈 62개는 stdlib에 들어갔지만 LANG_SPEC에 등재 안 됨. su
 2. **`option/result.map2/map3/traverse`** — 본문 직접 확인. 진정한 함수형 composition.
 3. **`fmt.visibleWidth` + `graphemeSlice`** — strings.osty의 UAX29 grapheme 테이블 + fmt에서 호출 확인.
 4. **`http.Router` 본문** — http.osty:1539 matchRoutePattern 직접 확인. linear scan이지만 진짜 구현.
-5. **strings BMH 검색** — strings.osty:619 bmhSkip 테이블 본문. needle.len()>=4 임계값.
-6. **json RFC 8259** — json.osty:370 parseHex4 + 4-byte UTF-8 인코딩 본문.
+5. **`io.Reader/Writer` 인터페이스 hierarchy** — io.osty의 13개 인터페이스 + BytesReader/Buffer 구현체 본문 확인.
+6. **strings BMH 검색** — strings.osty:619 bmhSkip 테이블 본문. needle.len()>=4 임계값.
+7. **json RFC 8259** — json.osty:370 parseHex4 + 4-byte UTF-8 인코딩 본문.
 
 **이전 매트릭스에서 자랑했지만 검증 실패한 것들**:
 - ❌ `uuid.v7()` 2024 IETF draft 8 — C runtime은 존재하나 LLVM bridge shim 부재로 LLVM 호출 불가
