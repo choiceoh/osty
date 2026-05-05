@@ -315,8 +315,6 @@ func SetLIRProtoRunner(runner LIRProtoRunner) {
 	registeredLIRProtoRunner = runner
 }
 
-func CurrentLIRProtoRunner() LIRProtoRunner { return registeredLIRProtoRunner }
-
 func InvokeLIRProtoRunner(req LIRProtoRequest) ([]byte, error) {
 	return registeredLIRProtoRunner.Run(req)
 }
