@@ -817,6 +817,27 @@ func classifyAssignSrc(src mir.RValue, destType scalarType, bindings map[mir.Loc
 				},
 			}, "", true
 		}
+		// P16 — Special-case String == String: lowers to a runtime
+		// call (`osty_rt_strings_Equal`) returning i1. Falls through
+		// to classifyBinary when the operand isn't String so Int ==
+		// Int continues through `icmp eq`.
+		if bin.Op == mir.BinEq && destType == scalarBool {
+			if left, leftTy, ok := resolveOperand(bin.Left, bindings, mctx); ok && leftTy == scalarString {
+				right, rightTy, ok := resolveOperand(bin.Right, bindings, mctx)
+				if !ok || rightTy != scalarString {
+					return pendingInstr{}, "", false
+				}
+				declareStringEqualRuntime(mctx)
+				return pendingInstr{
+					kind:       instrCall,
+					callSymbol: "osty_rt_strings_Equal",
+					callArgs: []callArg{
+						{expr: left, ty: "ptr"},
+						{expr: right, ty: "ptr"},
+					},
+				}, "", true
+			}
+		}
 		llvmOp, resultType, operandType := classifyBinary(bin.Op)
 		if llvmOp == "" || resultType != destType {
 			return pendingInstr{}, "", false
@@ -852,6 +873,20 @@ func declareStringConcatRuntime(mctx *moduleCtx) {
 	}
 	mctx.emittedStructs["__stage0.strings_concat"] = true
 	mctx.extraDecls.WriteString("declare ptr @osty_rt_strings_Concat(ptr, ptr)\n")
+}
+
+// declareStringEqualRuntime appends the runtime ABI declaration for
+// `osty_rt_strings_Equal` to extraDecls (idempotent). Mirrors the
+// concat helper above — used by the P16 String == String path.
+func declareStringEqualRuntime(mctx *moduleCtx) {
+	if mctx.emittedStructs == nil {
+		mctx.emittedStructs = map[string]bool{}
+	}
+	if mctx.emittedStructs["__stage0.strings_equal"] {
+		return
+	}
+	mctx.emittedStructs["__stage0.strings_equal"] = true
+	mctx.extraDecls.WriteString("declare i1 @osty_rt_strings_Equal(ptr, ptr)\n")
 }
 
 // resolveOperand returns (expression, type) for one MIR Operand using
