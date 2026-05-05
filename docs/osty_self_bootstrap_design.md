@@ -172,7 +172,8 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 | P8 | println(Int) intrinsic — printf declare + format string global + IntrinsicInstr 처리 | println_int_param / println_const_in_loop real-MIR — **구현 완료** |
 | P9 | String literal return + moduleCtx refactor (string-pool / extraDecls 인프라) | string_literal_return real-MIR — **구현 완료** |
 | P10 | struct field accessor — `fn name(p: Struct) -> T { p.field }` + module-level `%Struct = type {...}` 정의 | struct_field_read_x / struct_field_read_y real-MIR — **구현 완료** |
-| P11+ | list literal / 더 많은 intrinsic family / 더 큰 toolchain 빌드 | toolchain/main.osty 부분 빌드 |
+| P11 | println(String) — `%s\n` format + main 본문 안 intrinsic 호출 받기 | println_string_literal real-MIR — **구현 완료** |
+| P12+ | list literal / 더 많은 intrinsic family / 더 큰 toolchain 빌드 | toolchain/main.osty 부분 빌드 |
 | P3 | `OSTY_STAGE0_FALLBACK=1` 로 toolchain 전체 빌드 성공 | verify-self-rebuild stage1-only |
 | P4 | stage0 + osty-self 양쪽 모두에서 `verify-self-rebuild` 통과 | byte parity (stage2 vs stage3) |
 | P5 | CI matrix 추가 — `OSTY_STAGE0_FALLBACK=1` 잡과 default 잡 둘 다 | CI green |
