@@ -298,9 +298,9 @@ func TestStage0SanitizesEmptyParamName(t *testing.T) {
 func TestStage0EmitsIntArithOps(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name   string
-		op     mir.BinaryOp
-		llvm   string
+		name string
+		op   mir.BinaryOp
+		llvm string
 	}{
 		{"add", mir.BinAdd, "add"},
 		{"sub", mir.BinSub, "sub"},
@@ -1215,10 +1215,11 @@ func TestStage0RejectsCallWithoutDest(t *testing.T) {
 // ---- P3c: if-else with phi-merged return ----
 
 // makeIfElseFn assembles the canonical 4-block if-else MIR shape.
-//   entry: cond = entryInstrs...; branch cond -> then, else
-//   then : thenInstrs (last AssignInstr writes ret); goto merge
-//   else : elseInstrs (last AssignInstr writes ret); goto merge
-//   merge: ret
+//
+//	entry: cond = entryInstrs...; branch cond -> then, else
+//	then : thenInstrs (last AssignInstr writes ret); goto merge
+//	else : elseInstrs (last AssignInstr writes ret); goto merge
+//	merge: ret
 func makeIfElseFn(name string, retT mir.Type, params []paramSpec, extraLocals []paramSpec, entryInstrs []mir.Instr, cond mir.Operand, thenInstrs []mir.Instr, elseInstrs []mir.Instr) *mir.Function {
 	locals := []*mir.Local{
 		{ID: 0, Name: "ret", Type: retT, IsReturn: true},
@@ -1553,10 +1554,10 @@ func TestStage0RejectsCallParamTypeMismatch(t *testing.T) {
 // makeWhileLoopFn assembles the canonical 4-block while-loop MIR
 // shape used by the front-end:
 //
-//   entry  : pre-loop instructions + GotoTerm(header)
-//   header : header instructions + BranchTerm(cond, body, exit)
-//   body   : loop body + GotoTerm(header)
-//   exit   : post-loop instructions + ReturnTerm
+//	entry  : pre-loop instructions + GotoTerm(header)
+//	header : header instructions + BranchTerm(cond, body, exit)
+//	body   : loop body + GotoTerm(header)
+//	exit   : post-loop instructions + ReturnTerm
 func makeWhileLoopFn(name string, retT mir.Type, params []paramSpec, allLocals []localSpec, entryInstrs, headerInstrs []mir.Instr, cond mir.Operand, bodyInstrs, exitInstrs []mir.Instr) *mir.Function {
 	locals := []*mir.Local{
 		{ID: 0, Name: "ret", Type: retT, IsReturn: true, Mut: true},

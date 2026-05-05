@@ -26,23 +26,24 @@ var ErrUnsupported = errors.New("stage0: MIR shape outside bootstrap subset")
 // order and emits the first that fits; otherwise ErrUnsupported:
 //
 //   - `fn main() {}` — single block, zero instructions, ReturnTerm.
+//
 //   - Sequential single-block return: zero or more AssignInstrs (each
 //     writing to a unique scalar local) followed by ReturnTerm.
 //     Up to two Int / Bool parameters. Each AssignInstr's source is
 //     either:
 //
-//       UseRV { ConstOp(IntConst | BoolConst) }
-//       UseRV { CopyOp(local) }            // local must already be defined
-//       BinaryRV { op, operand, operand }  // op family classified below
+//     UseRV { ConstOp(IntConst | BoolConst) }
+//     UseRV { CopyOp(local) }            // local must already be defined
+//     BinaryRV { op, operand, operand }  // op family classified below
 //
 //     where each operand is a const literal or a CopyOp of a
 //     previously-defined scalar local (param or earlier assignment).
 //     Operator families:
 //
-//       arithmetic Int×Int → Int : Add Sub Mul Div Mod
-//       comparison Int×Int → Bool: Eq Neq Lt Leq Gt Geq
-//       bitwise    Int×Int → Int : BitAnd BitOr BitXor Shl Shr
-//       logical    Bool×Bool→ Bool: And Or
+//     arithmetic Int×Int → Int : Add Sub Mul Div Mod
+//     comparison Int×Int → Bool: Eq Neq Lt Leq Gt Geq
+//     bitwise    Int×Int → Int : BitAnd BitOr BitXor Shl Shr
+//     logical    Bool×Bool→ Bool: And Or
 //
 // Anything else (multi-block / calls / projections / non-Int-Bool
 // types / local reassignment / forward references) declines so the
@@ -233,8 +234,8 @@ func escapeForLLVMConst(s string) string {
 // the per-format-string decisions in EmitMIR — Int prints go through
 // the `%lld\n` format, String prints through `%s\n`.
 type printlnNeeds struct {
-	int    bool
-	str    bool
+	int bool
+	str bool
 }
 
 func scanPrintlnNeeds(module *mir.Module) printlnNeeds {
@@ -584,11 +585,11 @@ func matchSequentialReturn(fn *mir.Function, mctx *moduleCtx) (sequentialPattern
 
 	for _, instr := range bb.Instrs {
 		var (
-			pending pendingInstr
-			expr    string
-			destID  mir.LocalID
+			pending  pendingInstr
+			expr     string
+			destID   mir.LocalID
 			destType scalarType
-			okStep  bool
+			okStep   bool
 		)
 		switch step := instr.(type) {
 		case *mir.AssignInstr:
@@ -1446,11 +1447,11 @@ func matchWhileLoopReturn(fn *mir.Function, mctx *moduleCtx) (whileLoopPattern, 
 
 	nextSSA := 0
 	emitCtx := &whileLoopEmitCtx{
-		fn:           fn,
-		bindings:     bindings,
-		stack:        stack,
-		mctx:         mctx,
-		nextSSA:      &nextSSA,
+		fn:       fn,
+		bindings: bindings,
+		stack:    stack,
+		mctx:     mctx,
+		nextSSA:  &nextSSA,
 	}
 
 	if body, ok := emitWhileBlock(emitCtx, entry, false); ok {
@@ -1483,11 +1484,11 @@ func matchWhileLoopReturn(fn *mir.Function, mctx *moduleCtx) (whileLoopPattern, 
 }
 
 type whileLoopEmitCtx struct {
-	fn           *mir.Function
-	bindings     map[mir.LocalID]localBinding
-	stack        map[mir.LocalID]stackDecl
-	mctx *moduleCtx
-	nextSSA      *int
+	fn       *mir.Function
+	bindings map[mir.LocalID]localBinding
+	stack    map[mir.LocalID]stackDecl
+	mctx     *moduleCtx
+	nextSSA  *int
 }
 
 // emitWhileBlock walks an entry / body block and returns the rendered
@@ -1964,11 +1965,11 @@ func matchForInRangeReturn(fn *mir.Function, mctx *moduleCtx) (forInRangePattern
 
 	nextSSA := 0
 	ctx := &whileLoopEmitCtx{
-		fn:           fn,
-		bindings:     bindings,
-		stack:        stack,
-		mctx:         mctx,
-		nextSSA:      &nextSSA,
+		fn:       fn,
+		bindings: bindings,
+		stack:    stack,
+		mctx:     mctx,
+		nextSSA:  &nextSSA,
 	}
 
 	// entry

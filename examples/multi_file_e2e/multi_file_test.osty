@@ -1,0 +1,54 @@
+// multi_file_e2e — executable Osty tests for cross-file symbol
+// resolution + cross-file struct layout under the native LLVM
+// emit/link path. Companion file: lib.osty (same package).
+//
+// (C2) surface for the Multi-file native emit/link milestone:
+// pub fn calls + pub struct construction/field reads across
+// `.osty` files in one package. P0 short-suite shapes
+// (Map.update, optional aggregate, generic method turbofish,
+// interface dispatch, nested binding pattern) are intentionally
+// avoided so the gate measures multi-file infra in isolation.
+
+use std.testing
+
+fn testCrossFileFnCallReturnsSum() {
+    testing.assertEq(addInts(2, 3), 5)
+}
+
+fn testCrossFileFnCallChained() {
+    testing.assertEq(addInts(addInts(1, 2), addInts(3, 4)), 10)
+}
+
+fn testCrossFileStructLiteralAndFieldRead() {
+    let p = Point { x: 4, y: 9 }
+    testing.assertEq(p.x, 4)
+    testing.assertEq(p.y, 9)
+}
+
+fn testCrossFileStructPassedToCrossFileFn() {
+    let p = Point { x: 4, y: 9 }
+    testing.assertEq(pointSum(p), 13)
+}
+
+fn testCrossFileStructReturnedFromCrossFileFn() {
+    let p = Point { x: 1, y: 2 }
+    let q = translate(p, 10, 20)
+    testing.assertEq(q.x, 11)
+    testing.assertEq(q.y, 22)
+}
+
+fn testCrossFileFnInsideLocalLoop() {
+    let mut acc: Int = 0
+    for i in 0..5 {
+        acc = addInts(acc, i)
+    }
+    testing.assertEq(acc, 10)
+}
+
+fn testCrossFileStructMutatedThenReturnedThrough() {
+    let mut p = Point { x: 0, y: 0 }
+    p.x = 7
+    p.y = 8
+    let q = translate(p, 1, 1)
+    testing.assertEq(q.x + q.y, 17)
+}
