@@ -1,0 +1,79 @@
+// std.db.migration — database migration runner.
+//
+// Body-less signature stubs: the backend lowers each call to the runtime
+// migration engine (version tracking, apply, rollback, status, etc.).
+//
+// The data types Migration and MigrationPlan live in std.db; this module
+// provides the runtime operations that actually execute SQL against a
+// connection pool or driver connection.
+
+use std.db
+use std.db.driver
+use std.error
+
+/// MigrationStatus tracks the state of a single migration.
+pub struct MigrationStatus {
+    pub version: Int,
+    pub name: String,
+    pub appliedAt: String?,
+    pub success: Bool,
+    pub errorMessage: String?,
+}
+
+/// MigrationReport summarises the result of a migration run.
+pub struct MigrationReport {
+    pub applied: List<MigrationStatus>,
+    pub rolledBack: List<MigrationStatus>,
+    pub failed: List<MigrationStatus>,
+    pub currentVersion: Int,
+    pub targetVersion: Int,
+}
+
+/// Returns a zero-initialised MigrationStatus value.
+pub fn migrationStatus(version: Int, name: String) -> MigrationStatus
+
+/// Returns a zero-initialised MigrationReport value.
+pub fn migrationReport() -> MigrationReport
+
+/// Ensures the schema_migrations tracking table exists.
+pub fn ensureMigrationTable(pool: driver.Pool) -> Result<(), Error>
+
+/// Returns the list of already-applied migration versions from the database.
+pub fn appliedVersions(pool: driver.Pool) -> Result<List<Int>, Error>
+
+/// Returns the current schema version (max applied version, or 0).
+pub fn currentVersion(pool: driver.Pool) -> Result<Int, Error>
+
+/// Applies all pending migrations from the given list.
+///
+/// Each migration is executed inside its own transaction.  On failure the
+/// failed migration is recorded in the report and remaining migrations are
+/// skipped unless rollbackOnError is true.
+pub fn apply(pool: driver.Pool, migrations: List<db.Migration>, rollbackOnError: Bool) -> Result<MigrationReport, Error>
+
+/// Rolls back the most recent applied migration.
+pub fn rollbackLast(pool: driver.Pool, migrations: List<db.Migration>) -> Result<MigrationReport, Error>
+
+/// Rolls back N most recent applied migrations.
+pub fn rollbackN(pool: driver.Pool, migrations: List<db.Migration>, n: Int) -> Result<MigrationReport, Error>
+
+/// Rolls back to the target version (inclusive).  All migrations with a
+/// version greater than target are rolled back in reverse order.
+pub fn rollbackTo(pool: driver.Pool, migrations: List<db.Migration>, targetVersion: Int) -> Result<MigrationReport, Error>
+
+/// Prints the current migration status for all given migrations.
+///
+/// Returns a list of MigrationStatus values indicating which migrations
+/// have been applied and which are pending.
+pub fn status(pool: driver.Pool, migrations: List<db.Migration>) -> Result<List<MigrationStatus>, Error>
+
+/// Redoes the most recent migration (rollback then apply).
+pub fn redo(pool: driver.Pool, migrations: List<db.Migration>) -> Result<MigrationReport, Error>
+
+/// Resets the database: rolls back all applied migrations, then re-applies
+/// every migration from the beginning.
+pub fn reset(pool: driver.Pool, migrations: List<db.Migration>) -> Result<MigrationReport, Error>
+
+/// Forces the recorded schema version to a specific value without running
+/// any migration SQL.  Use with extreme caution.
+pub fn forceVersion(pool: driver.Pool, version: Int) -> Result<(), Error>

@@ -1,0 +1,125 @@
+// std.http.middleware — HTTP client middleware (retry, circuit breaker,
+// rate limiter).
+//
+// This module declares body-less runtime stubs for the higher-order
+// middleware constructors. The pure-Osty implementation will land once
+// the parser supports closure-returning function bodies.
+//
+// Default factory functions (defaultRetryPolicy, defaultCircuitBreaker,
+// etc.) have pure-Osty bodies since they use only struct-literal
+// patterns that the parser can handle.
+
+use std.error
+use std.http
+
+// ---------------------------------------------------------------------------
+// Retry
+// ---------------------------------------------------------------------------
+
+pub struct RetryPolicy {
+    pub maxAttempts: Int,
+    pub baseDelayMs: Int,
+    pub maxDelayMs: Int,
+    pub jitter: Bool,
+}
+
+pub fn defaultRetryPolicy() -> RetryPolicy {
+    RetryPolicy {
+        maxAttempts: 3,
+        baseDelayMs: 200,
+        maxDelayMs: 10_000,
+        jitter: true,
+    }
+}
+
+/// Wrap a handler with retry logic. On server-error responses (5xx)
+/// or transport errors, the middleware retries up to maxAttempts-1
+/// additional times with exponential backoff.
+///
+/// Runtime stub — the actual retry loop is provided by the backend.
+pub fn retry(policy: RetryPolicy, next: http.Handler) -> http.Handler
+
+// ---------------------------------------------------------------------------
+// Circuit Breaker
+// ---------------------------------------------------------------------------
+
+pub enum CircuitState {
+    Closed,
+    Open,
+    HalfOpen,
+}
+
+pub struct CircuitBreaker {
+    pub state: CircuitState,
+    pub failureThreshold: Int,
+    pub recoveryTimeoutMs: Int,
+    pub consecutiveFailures: Int,
+    pub lastFailureNanos: Int64,
+}
+
+pub fn newCircuitBreaker(failureThreshold: Int, recoveryTimeoutMs: Int) -> CircuitBreaker {
+    CircuitBreaker {
+        state: Closed,
+        failureThreshold: failureThreshold,
+        recoveryTimeoutMs: recoveryTimeoutMs,
+        consecutiveFailures: 0,
+        lastFailureNanos: 0,
+    }
+}
+
+pub fn defaultCircuitBreaker() -> CircuitBreaker {
+    newCircuitBreaker(5, 30_000)
+}
+
+/// Wrap a handler with a circuit breaker. When the failure count
+/// exceeds the threshold, the circuit opens and subsequent requests
+/// are rejected immediately until the recovery timeout elapses.
+///
+/// Runtime stub — the actual circuit-breaker state machine is
+/// provided by the backend.
+pub fn circuitBreaker(cb: CircuitBreaker, next: http.Handler) -> http.Handler
+
+// ---------------------------------------------------------------------------
+// Rate Limiter
+// ---------------------------------------------------------------------------
+
+pub struct TokenBucket {
+    pub capacity: Int,
+    pub refillRate: Int,
+    pub refillIntervalMs: Int,
+    pub tokens: Int,
+    pub lastRefillNanos: Int64,
+}
+
+pub fn newTokenBucket(capacity: Int, refillRate: Int, refillIntervalMs: Int) -> TokenBucket {
+    TokenBucket {
+        capacity: capacity,
+        refillRate: refillRate,
+        refillIntervalMs: refillIntervalMs,
+        tokens: capacity,
+        lastRefillNanos: 0,
+    }
+}
+
+pub fn defaultTokenBucket() -> TokenBucket {
+    newTokenBucket(100, 10, 1_000)
+}
+
+/// Wrap a handler with a token-bucket rate limiter. If no tokens are
+/// available the request is rejected immediately.
+///
+/// Runtime stub — the actual token-bucket logic is provided by the
+/// backend.
+pub fn rateLimit(bucket: TokenBucket, next: http.Handler) -> http.Handler
+
+// ---------------------------------------------------------------------------
+// Middleware chain
+// ---------------------------------------------------------------------------
+
+/// Compose multiple middleware layers into a single handler. The
+/// middleware are applied right-to-left (innermost-first), so the
+/// first middleware in the list wraps the outermost layer.
+///
+/// Runtime stub — the actual chaining logic is provided by the
+/// backend.
+pub fn chain(middlewares: List<fn(http.Handler) -> http.Handler>, finalHandler: http.Handler) -> http.Handler

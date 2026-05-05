@@ -1,0 +1,77 @@
+// std.db.sqlite - SQLite database driver stub
+//
+// This module provides the SQLite database driver implementation.
+// The actual runtime implementation lives in the C runtime layer
+// (internal/backend/runtime/) and is linked through the LLVM backend.
+//
+// Driver registration:
+//   let registry = db.driver.defaultDriverRegistry()
+//   let factory = db.sqlite.driverFactory()
+//   let registry = db.driver.registerDriver(registry, "sqlite", factory)?
+//   let driver = db.driver.lookupDriver(registry, "sqlite")?.createDriver()?
+//   let conn = driver.open(db.sqlite("path/to/db.osty")?)?
+
+use std.db
+use std.db.driver
+use std.sql
+use std.error
+
+/// Creates a new SQLite driver factory.
+/// The factory can be used to create SQLite driver instances
+/// and connection pools.
+pub fn driverFactory() -> driver.DriverFactory
+
+/// Opens a SQLite database connection directly.
+/// This is a convenience function equivalent to:
+///   driverFactory().createDriver()?.open(config)
+pub fn open(config: db.Config) -> Result<driver.Connection, Error>
+
+/// Creates a SQLite connection pool with the specified options.
+pub fn openPool(config: db.Config, options: db.PoolOptions) -> Result<driver.Pool, Error>
+
+/// Executes a SQLite-specific PRAGMA statement on a connection.
+/// Returns the result rows if the PRAGMA produces output.
+pub fn pragma(conn: driver.Connection, statement: String) -> Result<db.ResultSet, Error>
+
+/// Returns the SQLite library version string (e.g. "3.45.1").
+pub fn libVersion() -> String
+
+/// Enables or disables WAL (Write-Ahead Logging) mode on a SQLite database.
+/// WAL mode provides better concurrent read performance.
+pub fn enableWal(conn: driver.Connection, enabled: Bool) -> Result<(), Error>
+
+/// Returns the list of tables in the connected SQLite database.
+pub fn tables(conn: driver.Connection) -> Result<List<String>, Error>
+
+/// Returns the schema information for a specific table.
+pub fn tableInfo(conn: driver.Connection, tableName: String) -> Result<db.ResultSet, Error>
+
+/// Executes multiple SQL statements in a single call.
+/// This is useful for running initialization scripts.
+pub fn execScript(conn: driver.Connection, script: String) -> Result<db.ExecResult, Error>
+
+/// Creates a backup of the SQLite database to a file.
+pub fn backup(conn: driver.Connection, destPath: String) -> Result<(), Error>
+
+/// Restores a SQLite database from a backup file.
+pub fn restore(conn: driver.Connection, srcPath: String) -> Result<(), Error>
+
+/// Vacuums the SQLite database to reclaim unused space.
+pub fn vacuum(conn: driver.Connection) -> Result<(), Error>
+
+/// Sets a busy timeout in milliseconds.
+/// When the timeout expires, a busy SQLite connection returns an error.
+pub fn setBusyTimeout(conn: driver.Connection, timeoutMs: Int) -> Result<(), Error>
+
+/// Returns the last inserted row ID from the connection.
+pub fn lastInsertRowId(conn: driver.Connection) -> Int
+
+/// Returns the number of rows changed by the last SQL statement.
+pub fn changes(conn: driver.Connection) -> Int
+
+/// Returns the total number of rows changed since the connection was opened.
+pub fn totalChanges(conn: driver.Connection) -> Int
+
+/// Interrupts a running query on the connection.
+/// This is safe to call from a different thread.
+pub fn interrupt(conn: driver.Connection) -> Result<(), Error>
