@@ -1,0 +1,967 @@
+pub struct CliFlags {
+    pub noColor: Bool,
+    pub forceColor: Bool,
+    pub maxErrors: Int,
+    pub jsonOutput: Bool,
+    pub strict: Bool,
+    pub fix: Bool,
+    pub fixDryRun: Bool,
+    pub showScopes: Bool,
+    pub trace: Bool,
+    pub explain: Bool,
+    pub inspect: Bool,
+    pub aiRepair: Bool,
+    pub aiMode: String,
+    pub dumpNativeDiags: Bool,
+    pub native: Bool,
+}
+
+pub fn defaultCliFlags() -> CliFlags {
+    CliFlags {
+        noColor: false,
+        forceColor: false,
+        maxErrors: 0,
+        jsonOutput: false,
+        strict: false,
+        fix: false,
+        fixDryRun: false,
+        showScopes: false,
+        trace: false,
+        explain: false,
+        inspect: false,
+        aiRepair: false,
+        aiMode: "",
+        dumpNativeDiags: false,
+        native: false,
+    }
+}
+
+pub struct ParsedCommand {
+    pub name: String,
+    pub args: List<String>,
+    pub flags: CliFlags,
+    pub subFlags: Map<String, String>,
+    pub errors: List<String>,
+}
+
+pub fn parsedOk(name: String, args: List<String>, flags: CliFlags, subFlags: Map<String, String>) -> ParsedCommand {
+    ParsedCommand {
+        name: name,
+        args: args,
+        flags: flags,
+        subFlags: subFlags,
+        errors: [],
+    }
+}
+
+pub fn parsedError(msg: String) -> ParsedCommand {
+    ParsedCommand {
+        name: "",
+        args: [],
+        flags: defaultCliFlags(),
+        subFlags: {:},
+        errors: [msg],
+    }
+}
+
+pub fn isOk(cmd: ParsedCommand) -> Bool {
+    cmd.errors.len() == 0
+}
+
+pub struct FlagSpec {
+    pub name: String,
+    pub short: String,
+    pub takesValue: Bool,
+    pub required: Bool,
+    pub defaultValue: String?,
+    pub help: String,
+}
+
+pub struct ParsedArgs {
+    pub values: Map<String, String>,
+    pub present: Map<String, Bool>,
+    pub positionals: List<String>,
+    pub errors: List<String>,
+}
+
+pub fn parsedArgsOk(values: Map<String, String>, present: Map<String, Bool>, positionals: List<String>) -> ParsedArgs {
+    ParsedArgs {
+        values: values,
+        present: present,
+        positionals: positionals,
+        errors: [],
+    }
+}
+
+pub fn parsedArgsHas(parsed: ParsedArgs, name: String) -> Bool {
+    parsed.present.get(name) ?? false
+}
+
+pub fn parsedArgsValue(parsed: ParsedArgs, name: String) -> String? {
+    parsed.values.get(name)
+}
+
+pub fn parsedArgsValueOr(parsed: ParsedArgs, name: String, defaultVal: String) -> String {
+    parsed.values.get(name) ?? defaultVal
+}
+
+pub fn flagSpec(name: String, short: String, help: String) -> FlagSpec {
+    FlagSpec {
+        name: name,
+        short: short,
+        takesValue: false,
+        required: false,
+        defaultValue: None,
+        help: help,
+    }
+}
+
+pub fn optionSpec(name: String, short: String, help: String) -> FlagSpec {
+    FlagSpec {
+        name: name,
+        short: short,
+        takesValue: true,
+        required: false,
+        defaultValue: None,
+        help: help,
+    }
+}
+
+pub fn optionDefaultSpec(name: String, short: String, defaultVal: String, help: String) -> FlagSpec {
+    FlagSpec {
+        name: name,
+        short: short,
+        takesValue: true,
+        required: false,
+        defaultValue: Some(defaultVal),
+        help: help,
+    }
+}
+
+pub fn requiredOptionSpec(name: String, short: String, help: String) -> FlagSpec {
+    FlagSpec {
+        name: name,
+        short: short,
+        takesValue: true,
+        required: true,
+        defaultValue: None,
+        help: help,
+    }
+}
+
+struct InlineArg {
+    name: String,
+    value: String?,
+}
+
+fn splitInlineValue(text: String) -> InlineArg {
+    let chars = text.chars()
+    let mut i = 0
+    for i < chars.len() {
+        if chars[i] == '=' {
+            return InlineArg {
+                name: text[0..i],
+                value: Some(text[i + 1..text.len()]),
+            }
+        }
+        i = i + 1
+    }
+    InlineArg {
+        name: text,
+        value: None,
+    }
+}
+
+pub fn parseFlags(args: List<String>, specs: List<FlagSpec>) -> ParsedArgs {
+    let mut values: Map<String, String> = {:}
+    let mut present: Map<String, Bool> = {:}
+    let mut positionals: List<String> = []
+    let mut errors: List<String> = []
+
+    for spec in specs {
+        present.insert(spec.name, false)
+        match spec.defaultValue {
+            Some(value) -> values.insert(spec.name, value),
+            None -> {},
+        }
+    }
+
+    let mut i = 0
+    let mut positionalOnly = false
+    for i < args.len() {
+        let arg = args[i]
+        if positionalOnly {
+            positionals.push(arg)
+            i = i + 1
+            continue
+        }
+        if arg == "--" {
+            positionalOnly = true
+            i = i + 1
+            continue
+        }
+        if strings.hasPrefix(arg, "--") && arg.len() > 2 {
+            let parsed = splitInlineValue(strings.slice(arg, 2, arg.len()))
+            match findLong(specs, parsed.name) {
+                Some(spec) -> {
+                    let used = applySpec(spec, parsed.value, args, i, values, present, errors)
+                    i = i + used
+                },
+                None -> {
+                    errors.push("cli: unknown option --" + parsed.name)
+                    i = i + 1
+                },
+            }
+            continue
+        }
+        if strings.hasPrefix(arg, "-") && arg != "-" {
+            let parsed = splitInlineValue(strings.slice(arg, 1, arg.len()))
+            match findShort(specs, parsed.name) {
+                Some(spec) -> {
+                    let used = applySpec(spec, parsed.value, args, i, values, present, errors)
+                    i = i + used
+                },
+                None -> {
+                    errors.push("cli: unknown option -" + parsed.name)
+                    i = i + 1
+                },
+            }
+            continue
+        }
+        positionals.push(arg)
+        i = i + 1
+    }
+
+    for spec in specs {
+        if spec.required && !parsedArgsPresent(present, spec.name) {
+            errors.push("cli: missing required option --" + spec.name)
+        }
+    }
+
+    ParsedArgs {
+        values: values,
+        present: present,
+        positionals: positionals,
+        errors: errors,
+    }
+}
+
+fn parsedArgsPresent(present: Map<String, Bool>, name: String) -> Bool {
+    match present.get(name) {
+        Some(true) -> true,
+        _ -> false,
+    }
+}
+
+fn findLong(specs: List<FlagSpec>, name: String) -> FlagSpec? {
+    for spec in specs {
+        if spec.name == name {
+            return Some(spec)
+        }
+    }
+    None
+}
+
+fn findShort(specs: List<FlagSpec>, short: String) -> FlagSpec? {
+    for spec in specs {
+        if !spec.short.isEmpty() && spec.short == short {
+            return Some(spec)
+        }
+    }
+    None
+}
+
+fn applySpec(
+    spec: FlagSpec,
+    inlineValue: String?,
+    args: List<String>,
+    index: Int,
+    values: Map<String, String>,
+    present: Map<String, Bool>,
+    errors: List<String>,
+) -> Int {
+    present.insert(spec.name, true)
+    if !spec.takesValue {
+        match inlineValue {
+            Some(_) -> errors.push("cli: option --" + spec.name + " does not take a value"),
+            None -> {},
+        }
+        values.insert(spec.name, "true")
+        return 1
+    }
+
+    match inlineValue {
+        Some(value) -> {
+            values.insert(spec.name, value)
+            return 1
+        },
+        None -> {},
+    }
+
+    if index + 1 >= args.len() {
+        errors.push("cli: option --" + spec.name + " requires a value")
+        return 1
+    }
+    let value = args[index + 1]
+    if strings.hasPrefix(value, "-") {
+        errors.push("cli: option --" + spec.name + " requires a value")
+        return 1
+    }
+    values.insert(spec.name, value)
+    2
+}
+
+pub struct GlobalParse {
+    pub flags: CliFlags,
+    pub rest: List<String>,
+    pub errors: List<String>,
+}
+
+fn parseIntOr(text: String, fallback: Int) -> Int {
+    if text == "0" { return 0 }
+    if text == "1" { return 1 }
+    if text == "2" { return 2 }
+    if text == "3" { return 3 }
+    if text == "4" { return 4 }
+    if text == "5" { return 5 }
+    if text == "6" { return 6 }
+    if text == "7" { return 7 }
+    if text == "8" { return 8 }
+    if text == "9" { return 9 }
+    if text == "10" { return 10 }
+    if text == "20" { return 20 }
+    if text == "50" { return 50 }
+    if text == "100" { return 100 }
+    let mut out = 0
+    let mut valid = true
+    for unit in strings.split(text, "") {
+        let d = digitValue(unit)
+        if d < 0 {
+            valid = false
+        } else {
+            out = out * 10 + d
+        }
+    }
+    if valid && out > 0 {
+        out
+    } else {
+        fallback
+    }
+}
+
+fn digitValue(unit: String) -> Int {
+    if unit == "0" {
+        0
+    } else if unit == "1" {
+        1
+    } else if unit == "2" {
+        2
+    } else if unit == "3" {
+        3
+    } else if unit == "4" {
+        4
+    } else if unit == "5" {
+        5
+    } else if unit == "6" {
+        6
+    } else if unit == "7" {
+        7
+    } else if unit == "8" {
+        8
+    } else if unit == "9" {
+        9
+    } else {
+        -1
+    }
+}
+
+pub fn parseGlobal(args: List<String>) -> GlobalParse {
+    let mut flags = defaultCliFlags()
+    let mut rest: List<String> = []
+    let mut errors: List<String> = []
+    let mut i = 0
+    let mut stopped = false
+    for i < args.len() {
+        if stopped {
+            rest.push(args[i])
+            i = i + 1
+            continue
+        }
+        let arg = args[i]
+        if arg == "--" {
+            stopped = true
+            i = i + 1
+            continue
+        }
+        if strings.hasPrefix(arg, "--") && arg.len() > 2 {
+            let raw = strings.slice(arg, 2, arg.len())
+            let parsed = splitInlineValue(raw)
+            match parsed.value {
+                Some(val) -> {
+                    if applyBoolFlag(flags, parsed.name) {
+                        i = i + 1
+                        continue
+                    }
+                    if applyValueFlag(flags, parsed.name, val) {
+                        i = i + 1
+                        continue
+                    }
+                    stopped = true
+                    rest.push(arg)
+                    i = i + 1
+                    continue
+                },
+                None -> {},
+            }
+            if applyBoolFlag(flags, raw) {
+                i = i + 1
+                continue
+            }
+            if isValueFlag(raw) {
+                if i + 1 < args.len() {
+                    let _ = applyValueFlag(flags, raw, args[i + 1])
+                    i = i + 2
+                    continue
+                }
+                errors.push("cli: --" + raw + " requires a value")
+                i = i + 1
+                continue
+            }
+            stopped = true
+            rest.push(arg)
+            i = i + 1
+            continue
+        }
+        stopped = true
+        rest.push(arg)
+        i = i + 1
+    }
+    GlobalParse { flags: flags, rest: rest, errors: errors }
+}
+
+fn applyBoolFlag(flags: CliFlags, name: String) -> Bool {
+    if name == "no-color" {
+        flags.noColor = true
+        return true
+    }
+    if name == "color" {
+        flags.forceColor = true
+        return true
+    }
+    if name == "json" {
+        flags.jsonOutput = true
+        return true
+    }
+    if name == "strict" {
+        flags.strict = true
+        return true
+    }
+    if name == "fix" {
+        flags.fix = true
+        return true
+    }
+    if name == "fix-dry-run" {
+        flags.fixDryRun = true
+        return true
+    }
+    if name == "scopes" {
+        flags.showScopes = true
+        return true
+    }
+    if name == "trace" {
+        flags.trace = true
+        return true
+    }
+    if name == "explain" {
+        flags.explain = true
+        return true
+    }
+    if name == "inspect" {
+        flags.inspect = true
+        return true
+    }
+    if name == "dump-native-diags" {
+        flags.dumpNativeDiags = true
+        return true
+    }
+    if name == "native" {
+        flags.native = true
+        return true
+    }
+    if name == "airepair" || name == "repair" {
+        flags.aiRepair = true
+        return true
+    }
+    if name == "no-airepair" || name == "no-repair" {
+        flags.aiRepair = false
+        return true
+    }
+    false
+}
+
+fn isValueFlag(name: String) -> Bool {
+    name == "max-errors" || name == "airepair-mode" || name == "repair-mode"
+}
+
+fn applyValueFlag(flags: CliFlags, name: String, value: String) -> Bool {
+    if name == "max-errors" {
+        flags.maxErrors = parseIntOr(value, 0)
+        return true
+    }
+    if name == "airepair-mode" || name == "repair-mode" {
+        flags.aiMode = value
+        return true
+    }
+    if name == "airepair" || name == "repair" {
+        if value == "true" {
+            flags.aiRepair = true
+        } else if value == "false" {
+            flags.aiRepair = false
+        } else {
+            flags.aiRepair = true
+        }
+        return true
+    }
+    false
+}
+
+pub fn knownCommand(name: String) -> Bool {
+    name == "parse" || name == "tokens" || name == "resolve" ||
+    name == "check" || name == "typecheck" || name == "lint" ||
+    name == "fmt" || name == "airepair" || name == "repair" ||
+    name == "gen" || name == "lsp" || name == "query-check" ||
+    name == "new" || name == "init" || name == "scaffold" ||
+    name == "gui" || name == "build" || name == "run" ||
+    name == "test" || name == "add" || name == "update" ||
+    name == "remove" || name == "rm" || name == "fetch" ||
+    name == "publish" || name == "search" || name == "info" ||
+    name == "yank" || name == "unyank" || name == "login" ||
+    name == "logout" || name == "registry" || name == "doc" ||
+    name == "ci" || name == "explain" || name == "pipeline" ||
+    name == "profiles" || name == "targets" || name == "features" ||
+    name == "cache"
+}
+
+pub fn usesFrontEndAIRepair(name: String) -> Bool {
+    name == "check" || name == "resolve" || name == "typecheck" || name == "lint"
+}
+
+pub fn isTraceableCommand(name: String) -> Bool {
+    name == "tokens" || name == "parse" || name == "resolve" ||
+    name == "check" || name == "typecheck" || name == "lint"
+}
+
+pub fn isSingleFileCommand(name: String) -> Bool {
+    name == "parse" || name == "tokens" || name == "check" ||
+    name == "typecheck" || name == "resolve" || name == "lint"
+}
+
+pub fn isOwnParserCommand(name: String) -> Bool {
+    name == "fmt" || name == "airepair" || name == "repair" ||
+    name == "gen" || name == "new" || name == "init" ||
+    name == "build" || name == "run" || name == "test" ||
+    name == "add" || name == "update" || name == "lint" ||
+    name == "ci" || name == "doc" || name == "pipeline" ||
+    name == "scaffold" || name == "gui" || name == "publish" ||
+    name == "search" || name == "yank" || name == "unyank" ||
+    name == "login" || name == "logout" || name == "fetch" ||
+    name == "info" || name == "registry" || name == "profiles" ||
+    name == "targets" || name == "features" || name == "cache" ||
+    name == "remove" || name == "rm"
+}
+
+pub fn fmtSpecs() -> List<FlagSpec> {
+    [
+        flagSpec("check", "c", "exit 1 if FILE is not already formatted"),
+        flagSpec("write", "w", "overwrite FILE in place"),
+        flagSpec("airepair", "", "enable automatic AI repair before formatting"),
+        flagSpec("no-airepair", "", "disable automatic AI repair before formatting"),
+    ]
+}
+
+pub fn genSpecs() -> List<FlagSpec> {
+    [
+        optionSpec("out", "o", "write generated artifact to this file instead of stdout"),
+        optionDefaultSpec("package", "", "main", "backend package/module name"),
+        optionDefaultSpec("backend", "", "llvm", "code generation backend (llvm, onb)"),
+        optionSpec("emit", "", "artifact mode (llvm-ir, asm)"),
+    ]
+}
+
+pub fn newSpecs() -> List<FlagSpec> {
+    [
+        flagSpec("lib", "", "scaffold a library project (lib.osty, no main)"),
+        flagSpec("bin", "", "scaffold a binary project (main.osty) [default]"),
+        flagSpec("workspace", "", "scaffold a virtual workspace with one default member"),
+        flagSpec("cli", "", "scaffold a CLI app starter"),
+        flagSpec("service", "", "scaffold an HTTP service starter"),
+        optionSpec("gui", "", "scaffold a GUI app (qtquick or webview2)"),
+        optionDefaultSpec("member", "", "core", "workspace member directory name"),
+    ]
+}
+
+pub fn initSpecs() -> List<FlagSpec> {
+    [
+        flagSpec("lib", "", "scaffold a library project"),
+        flagSpec("bin", "", "scaffold a binary project [default]"),
+        flagSpec("workspace", "", "scaffold a virtual workspace"),
+        flagSpec("cli", "", "scaffold a CLI app starter"),
+        flagSpec("service", "", "scaffold an HTTP service starter"),
+        optionSpec("gui", "", "scaffold a GUI app (qtquick or webview2)"),
+        optionSpec("name", "", "project name (defaults to cwd basename)"),
+        optionDefaultSpec("member", "", "core", "workspace member directory name"),
+    ]
+}
+
+pub fn buildSpecs() -> List<FlagSpec> {
+    [
+        flagSpec("offline", "", "do not fetch dependencies"),
+        flagSpec("locked", "", "fail if osty.lock would change"),
+        flagSpec("frozen", "", "imply --locked --offline"),
+        flagSpec("force", "", "ignore the build cache and rebuild from source"),
+        optionSpec("profile", "", "build profile name (debug, release, ...)"),
+        flagSpec("release", "", "shorthand for --profile release"),
+        optionSpec("target", "", "cross-compilation target triple"),
+        optionSpec("features", "", "comma-separated feature flags to enable"),
+        flagSpec("no-default-features", "", "drop manifest's [features].default set"),
+        optionDefaultSpec("backend", "", "llvm", "code generation backend (llvm, onb)"),
+        optionSpec("emit", "", "artifact mode (llvm-ir, object, or binary)"),
+    ]
+}
+
+pub fn runSpecs() -> List<FlagSpec> {
+    [
+        flagSpec("offline", "", "do not fetch dependencies"),
+        flagSpec("locked", "", "fail if osty.lock would change"),
+        flagSpec("frozen", "", "imply --locked --offline"),
+        optionSpec("profile", "", "build profile name"),
+        flagSpec("release", "", "shorthand for --profile release"),
+        optionSpec("target", "", "cross-compilation target triple"),
+        optionSpec("features", "", "comma-separated feature flags"),
+        flagSpec("no-default-features", "", "drop manifest default features"),
+        optionDefaultSpec("backend", "", "llvm", "code generation backend"),
+        optionSpec("emit", "", "artifact mode"),
+        flagSpec("airepair", "", "enable AI repair"),
+        flagSpec("no-airepair", "", "disable AI repair"),
+        optionSpec("airepair-mode", "", "AI repair mode (auto, rewrite, parse, frontend)"),
+    ]
+}
+
+pub fn testSpecs() -> List<FlagSpec> {
+    [
+        flagSpec("offline", "", "do not fetch dependencies"),
+        flagSpec("locked", "", "fail if osty.lock would change"),
+        flagSpec("frozen", "", "imply --locked --offline"),
+        optionSpec("profile", "", "build profile name"),
+        flagSpec("release", "", "shorthand for --profile release"),
+        optionSpec("target", "", "cross-compilation target triple"),
+        optionSpec("features", "", "comma-separated feature flags"),
+        flagSpec("no-default-features", "", "drop manifest default features"),
+        optionDefaultSpec("backend", "", "llvm", "code generation backend"),
+        optionSpec("emit", "", "artifact mode"),
+        optionSpec("seed", "", "RNG seed for test ordering"),
+        flagSpec("serial", "", "run tests sequentially (no parallelism)"),
+        optionSpec("jobs", "j", "max parallel test workers"),
+    ]
+}
+
+pub fn addSpecs() -> List<FlagSpec> {
+    [
+        optionSpec("path", "", "local filesystem dependency path"),
+        optionSpec("git", "", "git dependency URL"),
+        optionSpec("tag", "", "git tag to pin (with --git)"),
+        optionSpec("branch", "", "git branch (with --git)"),
+        optionSpec("rev", "", "git commit SHA (with --git)"),
+        optionSpec("version", "", "explicit version requirement"),
+        optionSpec("rename", "", "local alias for the dep"),
+        flagSpec("dev", "", "add to [dev-dependencies]"),
+        flagSpec("offline", "", "do not fetch dependencies"),
+    ]
+}
+
+pub fn lintSpecs() -> List<FlagSpec> {
+    [
+        optionSpec("explain", "", "describe a lint rule and exit"),
+        flagSpec("list", "", "print every lint rule"),
+        flagSpec("fix", "", "apply machine-applicable suggestions"),
+        flagSpec("fix-dry-run", "", "show fixed source without writing"),
+        flagSpec("strict", "", "exit 1 on warnings (CI mode)"),
+    ]
+}
+
+pub fn ciSpecs() -> List<FlagSpec> {
+    [
+        flagSpec("format", "", "run format check"),
+        flagSpec("lint", "", "run lint check"),
+        flagSpec("policy", "", "run policy check"),
+        flagSpec("lockfile", "", "run lockfile check"),
+        flagSpec("release", "", "run release readiness check"),
+        flagSpec("semver", "", "run semver diff check"),
+        optionSpec("baseline", "", "path to baseline API snapshot"),
+        flagSpec("semver-warn-only", "", "emit warnings instead of errors for breaking changes"),
+        flagSpec("strict", "", "exit 1 on warnings"),
+    ]
+}
+
+pub fn docSpecs() -> List<FlagSpec> {
+    [
+        optionDefaultSpec("format", "", "markdown", "output format (markdown or html)"),
+        optionSpec("out", "", "write docs to PATH instead of stdout"),
+        optionSpec("title", "", "document title"),
+        flagSpec("check", "", "exit 1 if doc generation would produce diffs"),
+        flagSpec("verify-examples", "", "compile code examples in doc comments"),
+    ]
+}
+
+pub fn publishSpecs() -> List<FlagSpec> {
+    [
+        optionSpec("registry", "", "target registry name"),
+        optionSpec("token", "t", "API token (or set $OSTY_PUBLISH_TOKEN)"),
+        flagSpec("dry-run", "", "build the tarball but do not upload"),
+    ]
+}
+
+pub fn searchSpecs() -> List<FlagSpec> {
+    [
+        optionSpec("registry", "", "registry name to query"),
+        optionDefaultSpec("limit", "", "20", "max number of hits"),
+    ]
+}
+
+pub fn yankSpecs() -> List<FlagSpec> {
+    [
+        requiredOptionSpec("version", "v", "version to yank/unyank"),
+    ]
+}
+
+pub fn loginSpecs() -> List<FlagSpec> {
+    [
+        optionSpec("registry", "", "registry name"),
+    ]
+}
+
+pub fn logoutSpecs() -> List<FlagSpec> {
+    [
+        optionSpec("registry", "", "registry name"),
+        flagSpec("all", "", "forget all stored tokens"),
+    ]
+}
+
+pub fn registrySpecs() -> List<FlagSpec> {
+    [
+        optionDefaultSpec("addr", "", "127.0.0.1:7878", "address to listen on"),
+        optionSpec("root", "", "registry data directory"),
+        optionSpec("token", "", "bearer token for publish/yank"),
+        flagSpec("allow-anonymous-writes", "", "accept publish/yank without tokens"),
+    ]
+}
+
+pub fn fetchSpecs() -> List<FlagSpec> {
+    [
+        flagSpec("locked", "", "fail if osty.lock would change"),
+        flagSpec("frozen", "", "imply --locked --offline"),
+    ]
+}
+
+pub fn infoSpecs() -> List<FlagSpec> {
+    [
+        flagSpec("all-versions", "", "show all published versions"),
+    ]
+}
+
+pub fn profilesSpecs() -> List<FlagSpec> {
+    [
+        flagSpec("verbose", "v", "also print go-flags, env, and inheritance"),
+    ]
+}
+
+pub fn pipelineSpecs() -> List<FlagSpec> {
+    [
+        flagSpec("json", "", "emit per-phase timing as JSON"),
+        flagSpec("trace", "", "stream per-phase timing to stderr"),
+        optionDefaultSpec("backend", "", "llvm", "code generation backend"),
+    ]
+}
+
+pub fn airepairSpecs() -> List<FlagSpec> {
+    [
+        flagSpec("check", "c", "exit 1 if FILE would be repaired"),
+        flagSpec("write", "w", "overwrite FILE in place"),
+        flagSpec("json", "", "emit a structured report as JSON"),
+        optionSpec("capture-dir", "", "directory for captured artifacts"),
+        optionSpec("capture-name", "", "basename for captured artifacts"),
+        optionSpec("capture-if", "", "capture mode: residual, changed, or always"),
+        optionSpec("stdin-name", "", "filename when FILE is -"),
+        optionSpec("mode", "", "acceptance mode: auto, rewrite, parse, or frontend"),
+        optionSpec("top", "", "triage: max entries per section"),
+        optionSpec("corpus", "", "learn: corpus directory"),
+        optionSpec("dest", "", "promote: destination corpus directory"),
+        optionSpec("name", "", "promote: basename for promoted files"),
+    ]
+}
+
+pub fn scaffoldSpecs() -> List<FlagSpec> {
+    [
+        optionSpec("name", "", "output basename"),
+    ]
+}
+
+pub fn guiSpecs() -> List<FlagSpec> {
+    []
+}
+
+pub fn cacheSpecs() -> List<FlagSpec> {
+    [
+        optionSpec("profile", "", "profile name for cache info"),
+        optionSpec("target", "", "target triple for cache info"),
+        optionSpec("backend", "", "backend name for cache info"),
+    ]
+}
+
+pub fn updateSpecs() -> List<FlagSpec> {
+    [
+        flagSpec("offline", "", "do not fetch dependencies"),
+    ]
+}
+
+pub fn parseArgs(rawArgs: List<String>) -> ParsedCommand {
+    let global = parseGlobal(rawArgs)
+    if global.errors.len() > 0 {
+        return parsedError(strings.join(global.errors, "\n"))
+    }
+    if global.rest.len() == 0 {
+        return parsedError(cliUsage())
+    }
+    let cmd = global.rest[0]
+    let subArgs = restFrom(global.rest, 1)
+    let mut flags = global.flags
+    consumeAIRepairFlags(cmd, subArgs, flags)
+    if isOwnParserCommand(cmd) {
+        let parsed = parseSubcommand(cmd, subArgs)
+        let mut errs: List<String> = []
+        for e in parsed.errors {
+            errs.push(e)
+        }
+        if errs.len() > 0 {
+            return parsedError(strings.join(errs, "\n"))
+        }
+        let sf = parsedToSubFlags(parsed)
+        return parsedOk(cmd, parsed.positionals, flags, sf)
+    }
+    parsedOk(cmd, subArgs, flags, {:})
+}
+
+fn consumeAIRepairFlags(cmd: String, args: List<String>, flags: CliFlags) {
+    if !(usesFrontEndAIRepair(cmd)) {
+        return
+    }
+    if flags.aiMode == "" {
+        flags.aiMode = "auto"
+    }
+    flags.aiRepair = true
+    let mut i = 0
+    for i < args.len() {
+        let arg = args[i]
+        if arg == "--airepair" || arg == "--repair" {
+            flags.aiRepair = true
+        } else if arg == "--no-airepair" || arg == "--no-repair" {
+            flags.aiRepair = false
+        }
+        i = i + 1
+    }
+}
+
+fn parseSubcommand(cmd: String, args: List<String>) -> ParsedArgs {
+    if cmd == "fmt" { return parseFlags(args, fmtSpecs()) }
+    if cmd == "airepair" || cmd == "repair" { return parseFlags(args, airepairSpecs()) }
+    if cmd == "gen" { return parseFlags(args, genSpecs()) }
+    if cmd == "new" { return parseFlags(args, newSpecs()) }
+    if cmd == "init" { return parseFlags(args, initSpecs()) }
+    if cmd == "build" { return parseFlags(args, buildSpecs()) }
+    if cmd == "run" { return parseFlags(args, runSpecs()) }
+    if cmd == "test" { return parseFlags(args, testSpecs()) }
+    if cmd == "add" { return parseFlags(args, addSpecs()) }
+    if cmd == "update" { return parseFlags(args, updateSpecs()) }
+    if cmd == "remove" || cmd == "rm" { return parseFlags(args, []) }
+    if cmd == "fetch" { return parseFlags(args, fetchSpecs()) }
+    if cmd == "lint" { return parseFlags(args, lintSpecs()) }
+    if cmd == "ci" { return parseFlags(args, ciSpecs()) }
+    if cmd == "doc" { return parseFlags(args, docSpecs()) }
+    if cmd == "publish" { return parseFlags(args, publishSpecs()) }
+    if cmd == "search" { return parseFlags(args, searchSpecs()) }
+    if cmd == "yank" || cmd == "unyank" { return parseFlags(args, yankSpecs()) }
+    if cmd == "login" { return parseFlags(args, loginSpecs()) }
+    if cmd == "logout" { return parseFlags(args, logoutSpecs()) }
+    if cmd == "registry" { return parseFlags(args, registrySpecs()) }
+    if cmd == "info" { return parseFlags(args, infoSpecs()) }
+    if cmd == "profiles" { return parseFlags(args, profilesSpecs()) }
+    if cmd == "pipeline" { return parseFlags(args, pipelineSpecs()) }
+    if cmd == "scaffold" { return parseFlags(args, scaffoldSpecs()) }
+    if cmd == "gui" { return parseFlags(args, guiSpecs()) }
+    if cmd == "cache" { return parseFlags(args, cacheSpecs()) }
+    if cmd == "targets" { return parseFlags(args, []) }
+    if cmd == "features" { return parseFlags(args, []) }
+    parseFlags(args, [])
+}
+
+fn parsedToSubFlags(parsed: ParsedArgs) -> Map<String, String> {
+    let mut sf: Map<String, String> = {:}
+    let keys = parsed.values.keys()
+    for k in keys {
+        match parsed.values.get(k) {
+            Some(v) -> sf.insert(k, v),
+            None -> {},
+        }
+    }
+    let presentKeys = parsed.present.keys()
+    for k in presentKeys {
+        match parsed.present.get(k) {
+            Some(true) -> sf.insert(k, "true"),
+            _ -> {},
+        }
+    }
+    sf
+}
+
+fn restFrom(list: List<String>, start: Int) -> List<String> {
+    let mut out: List<String> = []
+    let mut i = start
+    for i < list.len() {
+        out.push(list[i])
+        i = i + 1
+    }
+    out
+}
+
+pub fn cliUsage() -> String {
+    let mut out = "usage: osty [flags] (parse|tokens|resolve|check|typecheck|lint|fmt|airepair|gen) FILE\n"
+    out = out + "       osty new [--bin|--lib|--workspace|--cli|--service|--gui BACKEND] [--member NAME] NAME\n"
+    out = out + "       osty init [--bin|--lib|--workspace|--cli|--service|--gui BACKEND] [--name NAME]\n"
+    out = out + "       osty build [DIR]\n"
+    out = out + "       osty add NAME[@VER]\n"
+    out = out + "       osty update [NAME...]\n"
+    out = out + "       osty run [-- ARGS...]\n"
+    out = out + "       osty test [PATH|FILTER...]\n"
+    out = out + "       osty publish\n"
+    out = out + "       osty search QUERY\n"
+    out = out + "       osty yank --version V [PKG]\n"
+    out = out + "       osty unyank --version V [PKG]\n"
+    out = out + "       osty login [--registry N]\n"
+    out = out + "       osty logout [--registry N|--all]\n"
+    out = out + "       osty remove NAME [NAME...]\n"
+    out = out + "       osty fetch [--locked|--frozen]\n"
+    out = out + "       osty info NAME [--all-versions]\n"
+    out = out + "       osty registry serve [--addr A] [--root DIR]\n"
+    out = out + "       osty doc [--format FMT] [--out PATH] PATH\n"
+    out = out + "       osty ci [flags] [PATH]\n"
+    out = out + "       osty profiles\n"
+    out = out + "       osty targets\n"
+    out = out + "       osty features\n"
+    out = out + "       osty cache [ls|clean|info]\n"
+    out = out + "       osty gui doctor qtquick\n"
+    out = out + "       osty scaffold <fixture|schema|ffi|polyglot> [flags] NAME\n"
+    out = out + "       osty lsp\n"
+    out = out + "       osty explain [CODE]\n"
+    out = out + "       osty pipeline FILE|DIR\n"
+    out
+}
