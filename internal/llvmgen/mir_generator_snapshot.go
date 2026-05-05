@@ -78,7 +78,7 @@ func mirLlvmTypeForPrim(name string) string {
 // Osty: toolchain/mir_generator.osty:76:5
 func mirLlvmTypeForOpaqueNamed(name string) string {
 	// Osty: toolchain/mir_generator.osty:79:5
-	if name == "List" || name == "Map" || name == "Set" || name == "Bytes" {
+	if name == "List" || name == "Map" || name == "Set" || name == "Bytes" || name == "Iter" {
 		// Osty: toolchain/mir_generator.osty:80:9
 		return "ptr"
 	}

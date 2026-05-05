@@ -131,6 +131,9 @@ func BuiltinTypeOwningModule(name string) string {
 	if name == "List" {
 		return "collections"
 	}
+	if name == "Iter" {
+		return "iter"
+	}
 	return ""
 }
 

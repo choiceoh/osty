@@ -671,7 +671,7 @@ func (g *mirGen) typeSupported(t mir.Type) bool {
 		// them; actual operations go through runtime intrinsics.
 		if x.Builtin {
 			switch x.Name {
-			case "List", "Map", "Set", "ClosureEnv":
+			case "List", "Map", "Set", "ClosureEnv", "Iter":
 				return true
 			case "Range":
 				// Range<Int> values only materialize via the
@@ -3481,11 +3481,20 @@ func (g *mirGen) emitDirectCall(c *mir.CallInstr, fnRef *mir.FnRef) error {
 			return err
 		}
 	}
+	if strings.HasPrefix(fnRef.Symbol, "std.iter.") {
+		if handled, err := g.emitStdIterCall(c, fnRef); handled {
+			return err
+		}
+	}
 	if handled, err := g.emitStaticBuiltinTypeCall(c, fnRef); handled {
 		return err
 	}
 	sig, known := g.functionTypes[fnRef.Symbol]
 	if !known {
+		name := strings.TrimPrefix(fnRef.Symbol, "std.iter.")
+		if name == "from" || name == "empty" || name == "range" {
+			return unsupported("mir-mvp", "call to unresolved symbol "+fnRef.Symbol)
+		}
 		return unsupported("mir-mvp", "call to unresolved symbol "+fnRef.Symbol)
 	}
 	// Lower args.
@@ -11293,7 +11302,7 @@ func isStdMathMarkerType(t mir.Type) bool {
 
 func isStdlibModuleMarkerTypeName(name string) bool {
 	switch name {
-	case "bytes", "char", "compress", "crypto", "email", "encoding", "error", "image", "math", "smtp", "strings", "zip":
+	case "bytes", "char", "compress", "crypto", "email", "encoding", "error", "image", "iter", "math", "process", "smtp", "strings", "zip":
 		return true
 	}
 	return false

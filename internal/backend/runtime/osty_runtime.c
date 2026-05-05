@@ -12146,6 +12146,20 @@ static void *osty_rt_bytes_dup_site(const unsigned char *start, size_t len, cons
     return out;
 }
 
+static void *osty_rt_bytes_alloc_site(size_t len, const char *site) {
+    size_t total;
+    osty_rt_bytes *out;
+
+    if (len > SIZE_MAX - sizeof(osty_rt_bytes)) {
+        osty_rt_abort("runtime.bytes.alloc: size overflow");
+    }
+    total = sizeof(osty_rt_bytes) + len;
+    out = (osty_rt_bytes *)osty_gc_allocate_managed(total, OSTY_GC_KIND_BYTES, site, NULL, NULL);
+    out->data = (unsigned char *)(out + 1);
+    out->len = (int64_t)len;
+    return out;
+}
+
 static unsigned char *osty_rt_compress_grow_buffer(unsigned char *buf, size_t *cap, size_t min_cap, const char *site) {
     unsigned char *grown;
     size_t next = (*cap == 0) ? 256 : *cap;
@@ -13394,7 +13408,7 @@ void *osty_rt_bytes_join(void *raw_parts, void *raw_sep) {
             total_len += sep_len;
         }
     }
-    out = (osty_rt_bytes *)osty_rt_bytes_dup_site(NULL, total_len, total_len == 0 ? "runtime.bytes.join.empty" : "runtime.bytes.join");
+    out = (osty_rt_bytes *)osty_rt_bytes_alloc_site(total_len, total_len == 0 ? "runtime.bytes.join.empty" : "runtime.bytes.join");
     cursor = out->data;
     for (i = 0; i < count; i++) {
         osty_rt_bytes *piece = ((osty_rt_bytes **)parts->data)[i];
@@ -13860,7 +13874,7 @@ void *osty_rt_bytes_from_hex(const char *value) {
         osty_rt_abort("runtime.bytes.from_hex: odd hex length");
     }
     byte_len = len / 2;
-    out = (osty_rt_bytes *)osty_rt_bytes_dup_site(NULL, byte_len, byte_len == 0 ? "runtime.bytes.from_hex.empty" : "runtime.bytes.from_hex");
+    out = (osty_rt_bytes *)osty_rt_bytes_alloc_site(byte_len, byte_len == 0 ? "runtime.bytes.from_hex.empty" : "runtime.bytes.from_hex");
     data = out->data;
     for (i = 0; i < byte_len; i++) {
         int hi = osty_rt_hex_nibble((unsigned char)value[i * 2]);

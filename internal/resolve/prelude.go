@@ -41,6 +41,7 @@ var preludeNames = []struct {
 	{"List", SymBuiltin},
 	{"Map", SymBuiltin},
 	{"Set", SymBuiltin},
+	{"Iter", SymBuiltin},
 
 	// Concurrency types (§8.5).
 	{"Chan", SymBuiltin},

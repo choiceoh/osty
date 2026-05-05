@@ -918,6 +918,7 @@ var builtinGenericParamNames = map[string][]string{
 	"List":   []string{"T"},
 	"Set":    []string{"T"},
 	"Option": []string{"T"},
+	"Iter":   []string{"T"},
 	"Map":    []string{"K", "V"},
 	"Result": []string{"T", "E"},
 }
@@ -932,7 +933,7 @@ func (s *monoState) builtinReceiverOwnerAndArity(receiver Type) (string, int, bo
 		return "Option", 1, true
 	case *NamedType:
 		switch x.Name {
-		case "List", "Set", "Option":
+		case "List", "Set", "Option", "Iter":
 			return x.Name, 1, true
 		case "Map", "Result":
 			return x.Name, 2, true

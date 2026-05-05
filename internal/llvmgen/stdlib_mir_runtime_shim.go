@@ -1964,3 +1964,7 @@ func (g *mirGen) emitStdRegexCapturesMethod(c *mir.CallInstr, fnRef *mir.FnRef) 
 	}
 	return false, nil
 }
+
+func (g *mirGen) emitStdIterCall(c *mir.CallInstr, fnRef *mir.FnRef) (bool, error) {
+	return false, nil
+}
