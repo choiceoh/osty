@@ -209,6 +209,14 @@ func main() {
 		runSignSelf(args[1:], flags)
 		return
 	}
+	// cache-self prints the content-addressed cache path for the
+	// current toolchain SHA + host triple. Shell tooling
+	// (`verify-self-rebuild`, `just bootstrap`) consults this to
+	// branch on cache hit/miss without recomputing the SHA in bash.
+	if cmd == "cache-self" {
+		runCacheSelf(args[1:], flags)
+		return
+	}
 	// `osty lint --explain CODE` prints the rule's description and
 	// exits. `osty lint --list` prints every rule. Both short-circuit
 	// before the normal file-arg handling below.
