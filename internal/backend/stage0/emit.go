@@ -125,6 +125,11 @@ func emitTrivialMain(out *strings.Builder, fn *mir.Function) error {
 	return nil
 }
 
+// trivialMainViolation accepts the canonical empty-body shape produced
+// by the front-end for `fn main() {}`. The body may contain zero or
+// one AssignInstr that writes a UnitConst to the return local — the
+// front-end emits that exact instruction even when the source body is
+// empty, since `()` is the implicit return value.
 func trivialMainViolation(fn *mir.Function) string {
 	if fn.Name != "main" {
 		return "stage0 expected `main`; saw " + fn.Name
@@ -139,13 +144,42 @@ func trivialMainViolation(fn *mir.Function) string {
 	if bb == nil {
 		return "main entry block is nil"
 	}
-	if len(bb.Instrs) != 0 {
-		return fmt.Sprintf("main entry block has %d instructions; stage0 expects 0", len(bb.Instrs))
+	switch len(bb.Instrs) {
+	case 0:
+		// Bare empty body — accept.
+	case 1:
+		if !isUnitAssignToReturnLocal(bb.Instrs[0], fn.ReturnLocal) {
+			return fmt.Sprintf("main entry block has 1 instruction (%T); stage0 expects an empty body or a single Unit assignment", bb.Instrs[0])
+		}
+	default:
+		return fmt.Sprintf("main entry block has %d instructions; stage0 expects 0 or 1", len(bb.Instrs))
 	}
 	if _, ok := bb.Term.(*mir.ReturnTerm); !ok {
 		return fmt.Sprintf("main terminator is %T; stage0 expects ReturnTerm", bb.Term)
 	}
 	return ""
+}
+
+// isUnitAssignToReturnLocal reports whether `instr` is the canonical
+// `ret = ()` AssignInstr the front-end emits for empty-body main.
+func isUnitAssignToReturnLocal(instr mir.Instr, ret mir.LocalID) bool {
+	ai, ok := instr.(*mir.AssignInstr)
+	if !ok {
+		return false
+	}
+	if ai.Dest.Local != ret || ai.Dest.HasProjections() {
+		return false
+	}
+	use, ok := ai.Src.(*mir.UseRV)
+	if !ok {
+		return false
+	}
+	con, ok := use.Op.(*mir.ConstOp)
+	if !ok {
+		return false
+	}
+	_, ok = con.Const.(*mir.UnitConst)
+	return ok
 }
 
 // ---- sequential single-block return ----
@@ -311,6 +345,10 @@ func matchSequentialReturn(fn *mir.Function, knownSymbols map[string]bool) (sequ
 			pending, expr, destID, destType, okStep = classifyAssignStep(fn, step, bindings)
 		case *mir.CallInstr:
 			pending, destID, destType, okStep = classifyCallStep(fn, step, bindings, knownSymbols)
+		case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
+			// Storage liveness markers carry no LLVM-visible semantics
+			// for stage0. Skip them and move to the next instruction.
+			continue
 		default:
 			return pat, false
 		}
@@ -851,6 +889,10 @@ func applyStep(fn *mir.Function, instr mir.Instr, bindings map[mir.LocalID]local
 		pending, expr, destID, destType, okStep = classifyAssignStep(fn, step, bindings)
 	case *mir.CallInstr:
 		pending, destID, destType, okStep = classifyCallStep(fn, step, bindings, knownSymbols)
+	case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
+		// Storage liveness markers are opt-in metadata; stage0
+		// has nothing to emit for them.
+		return true
 	default:
 		return false
 	}

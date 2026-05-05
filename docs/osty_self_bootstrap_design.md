@@ -166,7 +166,8 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 | P3b | 함수 호출 (CallInstr → LLVM `call`) — direct FnRef, scalar args/return, in-module symbol | 70 tests — **구현 완료** |
 | P3c | if-else (4-block: entry/then/else/merge + BranchTerm + GotoTerm + phi for ret) | 80 tests — **구현 완료** |
 | P4 | 디스패처 wiring (`OSTY_STAGE0_FALLBACK=1` + `IsOstySelfMissing` 조건부 라우팅) | TestEmitLLVMFallbackUsesStage0WhenOstySelfMissing — **구현 완료** |
-| P5+ | toolchain 의 첫 N개 함수 lowering 통과 | toolchain/main.osty 부분 빌드 |
+| P5 | real front-end → MIR 통합 probe + UnitConst / StorageLive / StorageDead 갭 봉합 | TestStage0RealMIRBaseline 12 cases — **구현 완료** |
+| P6+ | while / for / 호출 연쇄 / struct field / list / println 등 다음 패턴 batch | toolchain/main.osty 부분 빌드 |
 | P3 | `OSTY_STAGE0_FALLBACK=1` 로 toolchain 전체 빌드 성공 | verify-self-rebuild stage1-only |
 | P4 | stage0 + osty-self 양쪽 모두에서 `verify-self-rebuild` 통과 | byte parity (stage2 vs stage3) |
 | P5 | CI matrix 추가 — `OSTY_STAGE0_FALLBACK=1` 잡과 default 잡 둘 다 | CI green |
