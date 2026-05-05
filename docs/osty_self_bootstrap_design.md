@@ -162,7 +162,18 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 | P2c | non-main fn(a, b: Int) -> Int { a + b } (binary add) | TestStage0EmitsIntBinaryAdd — **구현 완료** |
 | P2d | non-main fn(a, b: Int) -> Int { a OP b } — Sub/Mul/Div/Mod 확장 | TestStage0EmitsIntBinaryArithOps — **구현 완료** |
 | P2e | single-instruction batch — 비교 / 비트 / 시프트 / 논리 / Bool / mixed const+var / 0~2 파라미터 / 자유로운 피연산자 순서 | 47 tests — **구현 완료** |
-| P3a+ | multi-instruction (let / 임시 변수) / 함수 호출 / if-else (multi-block) / 더 큰 toolchain 부분 빌드 | toolchain/main.osty 부분 빌드 |
+| P3a | multi-instruction sequential (let / 임시 변수) — 단일 블록 안에서 N개 AssignInstr; UseRV 는 inline, BinaryRV 는 SSA register | 59 tests — **구현 완료** |
+| P3b | 함수 호출 (CallInstr → LLVM `call`) — direct FnRef, scalar args/return, in-module symbol | 70 tests — **구현 완료** |
+| P3c | if-else (4-block: entry/then/else/merge + BranchTerm + GotoTerm + phi for ret) | 80 tests — **구현 완료** |
+| P4 | 디스패처 wiring (`OSTY_STAGE0_FALLBACK=1` + `IsOstySelfMissing` 조건부 라우팅) | TestEmitLLVMFallbackUsesStage0WhenOstySelfMissing — **구현 완료** |
+| P5 | real front-end → MIR 통합 probe + UnitConst / StorageLive / StorageDead 갭 봉합 | TestStage0RealMIRBaseline 12 cases — **구현 완료** |
+| P6 | while loop (4-block entry/header/body/exit + back-edge) + alloca/store/load 가변 local | TestStage0EmitsCountToWhileLoop / while_loop_count real-MIR — **구현 완료** |
+| P7 | for-in-range loop (5-block entry/header/body/post/exit) — while alloca 인프라 재사용 | for_in_range_sum real-MIR — **구현 완료** |
+| P8 | println(Int) intrinsic — printf declare + format string global + IntrinsicInstr 처리 | println_int_param / println_const_in_loop real-MIR — **구현 완료** |
+| P9 | String literal return + moduleCtx refactor (string-pool / extraDecls 인프라) | string_literal_return real-MIR — **구현 완료** |
+| P10 | struct field accessor — `fn name(p: Struct) -> T { p.field }` + module-level `%Struct = type {...}` 정의 | struct_field_read_x / struct_field_read_y real-MIR — **구현 완료** |
+| P11 | println(String) — `%s\n` format + main 본문 안 intrinsic 호출 받기 | println_string_literal real-MIR — **구현 완료** |
+| P12+ | list literal / 더 많은 intrinsic family / 더 큰 toolchain 빌드 | toolchain/main.osty 부분 빌드 |
 | P3 | `OSTY_STAGE0_FALLBACK=1` 로 toolchain 전체 빌드 성공 | verify-self-rebuild stage1-only |
 | P4 | stage0 + osty-self 양쪽 모두에서 `verify-self-rebuild` 통과 | byte parity (stage2 vs stage3) |
 | P5 | CI matrix 추가 — `OSTY_STAGE0_FALLBACK=1` 잡과 default 잡 둘 다 | CI green |

@@ -1474,7 +1474,7 @@ func TestLowerMIREnumSwitchEmitsBrkForUnreachableDefault(t *testing.T) {
 }
 
 // optionIntModule mirrors `Some(5)` / `None` construction + match.
-// The fixture covers the Option synthetic layout (None=0, Some=1)
+// The fixture covers the Option synthetic layout (Some=0, None=1)
 // and the VariantProj{FieldIdx:0} payload read.
 func optionIntModule() *mir.Module {
 	optT := &ir.OptionalType{Inner: mir.TInt}
@@ -1503,7 +1503,7 @@ func optionIntModule() *mir.Module {
 			Src: &mir.AggregateRV{
 				Kind:       mir.AggEnumVariant,
 				T:          optT,
-				VariantIdx: 1,
+				VariantIdx: 0,
 				VariantTag: "Some",
 				Fields:     []mir.Operand{&mir.ConstOp{Const: &mir.IntConst{Value: 5, T: mir.TInt}, T: mir.TInt}},
 			},
@@ -1513,7 +1513,7 @@ func optionIntModule() *mir.Module {
 	mainFn.Block(bb0).SetTerminator(&mir.SwitchIntTerm{
 		Scrutinee: &mir.CopyOp{Place: mir.Place{Local: 3}, T: mir.TInt},
 		Cases: []mir.SwitchCase{
-			{Value: 1, Target: bbSome, Label: "Some"},
+			{Value: 0, Target: bbSome, Label: "Some"},
 		},
 		Default: bbNone,
 	})
@@ -1524,7 +1524,7 @@ func optionIntModule() *mir.Module {
 				Op: &mir.CopyOp{
 					Place: mir.Place{
 						Local:       1,
-						Projections: []mir.Projection{&mir.VariantProj{Variant: 1, Name: "Some", FieldIdx: 0, Type: mir.TInt}},
+						Projections: []mir.Projection{&mir.VariantProj{Variant: 0, Name: "Some", FieldIdx: 0, Type: mir.TInt}},
 					},
 					T: mir.TInt,
 				},
@@ -1558,7 +1558,10 @@ func TestLowerMIROptionVariantStoresTagAndPayload(t *testing.T) {
 	mainFn := &program.Functions[0]
 	instrs := mainFn.Blocks[0].Instrs
 	// Look for two stores 8 bytes apart originating from MovImm64 with
-	// Imm=1 (Some tag) and Imm=5 (payload).
+	// Imm=0 (Some tag — Option layout has Some=0/None=1) and Imm=5
+	// (payload). The first MovImm64{Imm:0} preceding a Store64Stack is
+	// taken to be the tag write; later Imm=0 movs (e.g. for the
+	// discriminant compare) are skipped because tagSlot is already set.
 	var tagSlot int64 = -1
 	var payloadSlot int64 = -1
 	for i := 0; i+1 < len(instrs); i++ {
@@ -1571,7 +1574,7 @@ func TestLowerMIROptionVariantStoresTagAndPayload(t *testing.T) {
 			continue
 		}
 		switch mov.Imm {
-		case 1:
+		case 0:
 			if tagSlot < 0 {
 				tagSlot = store.Offset
 			}
@@ -1582,7 +1585,7 @@ func TestLowerMIROptionVariantStoresTagAndPayload(t *testing.T) {
 		}
 	}
 	if tagSlot < 0 || payloadSlot < 0 {
-		t.Fatalf("expected both Some tag (Imm=1) and payload (Imm=5) writes; instrs=%+v", instrs)
+		t.Fatalf("expected both Some tag (Imm=0) and payload (Imm=5) writes; instrs=%+v", instrs)
 	}
 	if payloadSlot-tagSlot != 8 {
 		t.Fatalf("payload should land 8 bytes past tag; tag=%d payload=%d", tagSlot, payloadSlot)

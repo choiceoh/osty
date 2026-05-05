@@ -242,7 +242,12 @@ func llvmFallbackDispatchRoute(opts llvmabi.Options, entry Entry) llvmDispatchRo
 // emitLLVMFallback dispatches the resolved route to the native LIR Proto
 // subprocess. The Go MIR emitter is gone, so MIR-direct emission rides the
 // same `tryNativeOwnedMIRPayloadLLVMIRText` boundary the native-owned route
-// uses; declines surface as a structured "unsupported" diagnostic upstream.
+// uses. When the subprocess declines because `osty-self` is not built yet
+// (the canonical bootstrap symptom), an opt-in stage0 fallback can step in
+// and emit a small bootstrap-only subset; see
+// `docs/osty_self_bootstrap_design.md`. Without the env-var opt-in the
+// dispatcher still declines so production builds never silently route
+// through the bootstrap emitter.
 func emitLLVMFallback(route llvmDispatchRoute, entry Entry, opts llvmabi.Options) ([]byte, []error, error) {
 	if entry.MIR == nil {
 		return nil, nil, llvmabi.Unsupported("source-layout", "nil MIR module")
@@ -251,10 +256,18 @@ func emitLLVMFallback(route llvmDispatchRoute, entry Entry, opts llvmabi.Options
 	if err != nil {
 		return nil, nativeWarnings, err
 	}
-	if !ok {
-		return nil, nativeWarnings, llvmabi.Unsupported("mir-emit", "native LIR Proto subprocess declined MIR coverage for route "+string(route))
+	if ok {
+		return out, nativeWarnings, nil
 	}
-	return out, nativeWarnings, nil
+	if Stage0FallbackEnabled() && IsOstySelfMissing(nativeWarnings) {
+		s0Out, s0Err := tryStage0Fallback(entry, opts)
+		if s0Err == nil {
+			nativeWarnings = append(nativeWarnings, errors.New("stage0 fallback: emitted MIR through bootstrap-only path"))
+			return s0Out, nativeWarnings, nil
+		}
+		nativeWarnings = append(nativeWarnings, fmt.Errorf("stage0 fallback declined: %w", s0Err))
+	}
+	return nil, nativeWarnings, llvmabi.Unsupported("mir-emit", "native LIR Proto subprocess declined MIR coverage for route "+string(route))
 }
 
 func renderUnsupportedLLVMIR(entry Entry, target string, emit EmitMode, warnings []error, diag llvmabi.UnsupportedDiagnostic, route llvmDispatchRoute) ([]byte, []error, error) {
