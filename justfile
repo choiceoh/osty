@@ -137,7 +137,7 @@ osty: build verify-selfhost
 osty-tests:
     set -euo pipefail
     test -x {{bin}} || just build
-    for dir in {{osty_test_dirs}}; do {{bin}} test --seed 0x1 --serial "$dir"; done
+    for dir in {{osty_test_dirs}}; do {{bin}} test --seed 0x1 "$dir"; done
 
 test pkg="./...":
     go test {{test_flags}} {{pkg}}
