@@ -50,8 +50,8 @@ PR #1405 가 in-process Go MIR emitter (`internal/llvmgen`) 를 제거한 뒤,
 | **A2** | `cmd/osty-native-lirproto` 가 `selfhostcache.ResolveBinary` 사용. `LocateProjectRoot` 헬퍼 추가. ErrNotCached → "osty-self not found" 메시지로 변환해서 IsOstySelfMissing 호환 유지. | 기존 lirproto 테스트 통과 + 캐시 lookup 통합 — **구현 완료** |
 | **A3** | `osty install-self` 서브커맨드 — toolchain 빌드 + 캐시 적재 한 번에. `just bootstrap` 레시피가 build-all + install-self 호출. | TestInstallSelfUsageMessage / TestBuildOstySelf — **구현 완료** |
 | **A4** | 네트워크 fetcher — `<base>/<sha>-<triple>.json` manifest + binary 다운로드, SHA-256 검증 필수. `OSTY_SELF_REGISTRY_URL` / `OSTY_SELF_REGISTRY_OFFLINE` env var 게이트. `ResolveBinaryWithFetch` 가 캐시 miss 시 호출. | 17 tests (httptest server 기반) — **구현 완료** |
-| **A5** (이 PR) | `cmd/osty-native-lirproto` 가 `ResolveBinaryWithFetch` + `EnvFetcher()` 호출. `osty manifest-self` 서브커맨드 — 빌드된 binary → manifest JSON. `.github/workflows/build-osty-self.yml` 6개 triple matrix scaffold (manual dispatch). | manifest round-trip 4 tests + 기존 lirproto/selfhostcache 회귀 — **구현 완료** |
-| A6 | Manifest signing (sigstore / minisign) — supply-chain 보호. | 정책 결정 |
+| **A5** | `cmd/osty-native-lirproto` 가 `ResolveBinaryWithFetch` + `EnvFetcher()` 호출. `osty manifest-self` 서브커맨드 — 빌드된 binary → manifest JSON. `.github/workflows/build-osty-self.yml` 6개 triple matrix scaffold (manual dispatch). | manifest round-trip 4 tests + 기존 lirproto/selfhostcache 회귀 — **구현 완료** |
+| **A6** (이 PR) | Manifest signing — ed25519 detached sig (`<key>.json.sig`). `OSTY_SELF_TRUSTED_KEY` env var로 verify. `osty sign-self` / `osty sign-self genkey` 서브커맨드. CI workflow 가 `OSTY_SELF_SIGNING_KEY` secret 있을 때만 서명. | 14 unit tests (signing.go) + 4 CLI round-trip tests — **구현 완료** |
 
 ## 4. Key 구성
 
@@ -98,10 +98,12 @@ LLVM target triple 과는 다른 layer. cross-compile 빌드는 별도 정책 (�
 
 ## 6. 보안 / 무결성
 
-A4 단계에서 도입할 정책:
-- 다운로드는 **HTTPS** 만.
-- 응답 본문의 SHA-256 가 manifest 의 값과 일치하는지 검증.
-- (A6) manifest 자체의 서명 검증.
+A4/A6 단계에서 도입한 정책:
+- 다운로드는 **HTTPS** 만 (production). http:// 는 local registry 테스트용.
+- 응답 본문의 SHA-256 가 manifest 의 값과 일치하는지 검증 (A4).
+- `OSTY_SELF_TRUSTED_KEY` 가 설정된 경우, `<key>.json.sig` 의 ed25519
+  서명이 manifest 본문에 대해 verify 되어야 함 (A6). 서명 누락 시
+  `ErrSignatureMissing` — 검증 disabled 상태로 silent downgrade 하지 않음.
 - 검증 실패 시 캐시에 **저장하지 않고** 에러로 fall through.
 
 A1~A3 (로컬-only) 까지는 보안 모델이 단순하다 — 사용자가 이미 제어하는

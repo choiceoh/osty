@@ -203,6 +203,12 @@ func main() {
 		runManifestSelf(args[1:], flags)
 		return
 	}
+	// sign-self mints / consumes ed25519 keys for the
+	// OSTY_SELF_TRUSTED_KEY verification path. Producer side of A6.
+	if cmd == "sign-self" {
+		runSignSelf(args[1:], flags)
+		return
+	}
 	// `osty lint --explain CODE` prints the rule's description and
 	// exits. `osty lint --list` prints every rule. Both short-circuit
 	// before the normal file-arg handling below.
