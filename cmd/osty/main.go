@@ -217,6 +217,13 @@ func main() {
 		runCacheSelf(args[1:], flags)
 		return
 	}
+	// gc-self prunes stale entries from .osty/cache/self-host/ so
+	// long-lived dev workspaces don't accumulate gigabytes of
+	// historical osty-self builds (A8).
+	if cmd == "gc-self" {
+		runGCSelf(args[1:], flags)
+		return
+	}
 	// `osty lint --explain CODE` prints the rule's description and
 	// exits. `osty lint --list` prints every rule. Both short-circuit
 	// before the normal file-arg handling below.
