@@ -542,10 +542,6 @@ pub fn knownCommand(name: String) -> Bool {
     name == "cache"
 }
 
-pub fn usesFrontEndAIRepair(name: String) -> Bool {
-    name == "check" || name == "resolve" || name == "typecheck" || name == "lint"
-}
-
 pub fn isTraceableCommand(name: String) -> Bool {
     name == "tokens" || name == "parse" || name == "resolve" ||
     name == "check" || name == "typecheck" || name == "lint"

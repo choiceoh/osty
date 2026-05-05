@@ -9089,16 +9089,6 @@ pub fn mirDiscriminantNone() -> String {
     "1"
 }
 
-/// mirDiscriminantOk returns `0` — Result's Ok discriminant.
-pub fn mirDiscriminantOk() -> String {
-    "0"
-}
-
-/// mirDiscriminantErr returns `1` — Result's Err discriminant.
-pub fn mirDiscriminantErr() -> String {
-    "1"
-}
-
 /// §6 boolean-literal tokens (LLVM-style i1).
 
 /// mirBoolTrueLiteral returns `1` — i1 true.

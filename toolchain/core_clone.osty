@@ -83,6 +83,7 @@ pub fn coreKindSlots(kind: CoreKind) -> CoreRefSlots {
         CkBoolLit -> coreSlotsNone(),
         CkCharLit -> coreSlotsNone(),
         CkByteLit -> coreSlotsNone(),
+        CkBytesLit -> coreSlotsNone(),
         CkStringLit -> coreSlotsNone(),
         CkUnitLit -> coreSlotsNone(),
 
