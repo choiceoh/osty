@@ -48648,6 +48648,7 @@ func collectStructDecl(cx *ElabCx, declIdx int, node *AstNode) {
 			}
 		}
 	}
+	collectIntrinsicMethodsFromAst(cx, node)
 }
 
 // Osty: /tmp/selfhost_merged.osty:23890:1

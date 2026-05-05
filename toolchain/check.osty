@@ -1172,6 +1172,84 @@ fn collectStructDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
             _ -> {},
         }
     }
+
+    collectIntrinsicMethods(cx, node)
+}
+
+/// collectIntrinsicMethods fans out each fn-decl member of a
+/// #[intrinsic_methods(Int, Int8, …)]-annotated struct to the named
+/// primitive types so checker method lookup resolves `42.abs()` etc.
+/// without relying on the Go-side Primitives map.
+fn collectIntrinsicMethods(cx: ElabCx, node: AstNode) {
+    let anns = srCollectAnnotationNodes(cx.ast, node.extra)
+    for ann in anns {
+        if ann.text != "intrinsic_methods" {
+            continue
+        }
+        for argIdx in ann.children {
+            let arg = astArenaNodeAt(cx.ast.arena, argIdx)
+            let targetName = arg.text
+            if targetName == "" {
+                continue
+            }
+            let targetTy = tyNamed(cx.env.tys, targetName, [])
+            if targetTy < 0 || tyIsBad(cx.env.tys, targetTy) {
+                continue
+            }
+            for memberIdx in node.children {
+                let member = astArenaNodeAt(cx.ast.arena, memberIdx)
+                if member.kind != AstNFnDecl {
+                    continue
+                }
+                registerIntrinsicMethodOn(cx, member, targetName, targetTy)
+            }
+        }
+    }
+}
+
+/// registerIntrinsicMethodOn builds a CheckFnSig for one method and
+/// registers it on `targetName`. The signature keeps its original Self
+/// references — checkSpecializeMethodSelf resolves them against the
+/// concrete receiver at the call site.
+fn registerIntrinsicMethodOn(cx: ElabCx, method: AstNode, targetName: String, targetTy: Int) {
+    let fnName = method.text
+    let generics = collectGenericNames(cx, method.children2)
+    let bounds = collectGenericBounds(cx, method.children2)
+
+    let mut paramNames: List<String> = []
+    let mut paramTys: List<Int> = []
+    let mut hasReceiver = false
+    for paramIdx in method.children {
+        let paramNode = astArenaNodeAt(cx.ast.arena, paramIdx)
+        if paramNode.kind != AstNParam {
+            continue
+        }
+        if paramNode.text == "self" {
+            hasReceiver = true
+        } else {
+            let hasDefault = paramNode.left >= 0
+            let rawName = paramNode.text
+            let storedName = if hasDefault { "?" + rawName } else { rawName }
+            paramNames.push(storedName)
+            let declared = astTypeToTyInCollect(cx, paramNode.right)
+            paramTys.push(if declared >= 0 { declared } else { tErr(cx.env.tys) })
+        }
+    }
+
+    let retTy = astTypeToTyInCollect(cx, method.left)
+    let retEffective = if retTy >= 0 { retTy } else { tUnit(cx.env.tys) }
+
+    checkRegisterFn(cx.env, CheckFnSig {
+        name: fnName,
+        owner: targetName,
+        receiverTy: targetTy,
+        hasReceiver,
+        retTy: retEffective,
+        paramNames,
+        paramTys,
+        generics,
+        genericBounds: bounds,
+    })
 }
 
 fn collectEnumDecl(cx: ElabCx, declIdx: Int, node: AstNode) {
