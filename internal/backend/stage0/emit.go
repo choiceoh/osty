@@ -70,9 +70,15 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 	mctx := newModuleCtx(module)
 
 	// Pre-scan for printf-using intrinsics so the printf declare +
-	// format string land in extraDecls before any function body.
-	if scanNeedsPrintlnInt(module) {
+	// format strings land in extraDecls before any function body.
+	needs := scanPrintlnNeeds(module)
+	if needs.int {
 		mctx.extraDecls.WriteString("@.fmt.stage0.println.int = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"\n")
+	}
+	if needs.str {
+		mctx.extraDecls.WriteString("@.fmt.stage0.println.str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"\n")
+	}
+	if needs.int || needs.str {
 		mctx.extraDecls.WriteString("declare i32 @printf(ptr, ...)\n")
 	}
 
@@ -222,11 +228,17 @@ func escapeForLLVMConst(s string) string {
 	return b.String()
 }
 
-// scanNeedsPrintlnInt reports whether any function in `module`
-// invokes `println(Int)` (the IntrinsicPrintln intrinsic with a
-// single Int-typed argument). The result drives whether stage0
-// emits the `@printf` declaration + format string at module top.
-func scanNeedsPrintlnInt(module *mir.Module) bool {
+// scanPrintlnNeeds walks every IntrinsicPrintln in the module and
+// reports which scalar argument types are used. The result drives
+// the per-format-string decisions in EmitMIR — Int prints go through
+// the `%lld\n` format, String prints through `%s\n`.
+type printlnNeeds struct {
+	int    bool
+	str    bool
+}
+
+func scanPrintlnNeeds(module *mir.Module) printlnNeeds {
+	needs := printlnNeeds{}
 	for _, fn := range module.Functions {
 		if fn == nil {
 			continue
@@ -243,13 +255,16 @@ func scanNeedsPrintlnInt(module *mir.Module) bool {
 				if len(intr.Args) != 1 {
 					continue
 				}
-				if scalarFromType(intr.Args[0].Type()) == scalarInt {
-					return true
+				switch scalarFromType(intr.Args[0].Type()) {
+				case scalarInt:
+					needs.int = true
+				case scalarString:
+					needs.str = true
 				}
 			}
 		}
 	}
-	return false
+	return needs
 }
 
 func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error {
@@ -260,7 +275,7 @@ func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error
 		return fmt.Errorf("%w: external declaration %q", ErrUnsupported, fn.Name)
 	}
 	if fn.Name == "main" {
-		return emitTrivialMain(out, fn)
+		return emitTrivialMain(out, fn, mctx)
 	}
 	if pat, ok := matchSequentialReturn(fn, mctx); ok {
 		return emitSequentialReturn(out, fn, pat)
@@ -282,23 +297,55 @@ func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error
 
 // ---- P1: trivial main ----
 
-func emitTrivialMain(out *strings.Builder, fn *mir.Function) error {
-	if reason := trivialMainViolation(fn); reason != "" {
+// emitTrivialMain handles `fn main() {}` and small extensions thereof.
+// The function header is always `define i32 @main()` with `ret i32 0`;
+// the body can contain:
+//
+//   - Storage liveness markers (skipped).
+//   - An optional final AssignInstr writing UnitConst to the return
+//     local (skipped — main always returns the C ABI's `i32 0`).
+//   - Zero or more `IntrinsicInstr` whose Dest is nil — currently
+//     limited to `IntrinsicPrintln` via classifyIntrinsicLine.
+//
+// Anything else inside main declines so a future stage0 phase can
+// pick the case up.
+func emitTrivialMain(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error {
+	if reason := trivialMainShapeViolation(fn); reason != "" {
 		return fmt.Errorf("%w: function %q: %s", ErrUnsupported, fn.Name, reason)
+	}
+	bb := fn.Blocks[0]
+	var bodyBuf strings.Builder
+	for _, instr := range bb.Instrs {
+		switch step := instr.(type) {
+		case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
+			continue
+		case *mir.AssignInstr:
+			if isUnitAssignToReturnLocal(step, fn.ReturnLocal) {
+				continue
+			}
+			return fmt.Errorf("%w: main: AssignInstr writing %T to local#%d not supported", ErrUnsupported, step.Src, step.Dest.Local)
+		case *mir.IntrinsicInstr:
+			line, ok := classifyIntrinsicLine(step, nil, mctx)
+			if !ok {
+				return fmt.Errorf("%w: main: intrinsic %v with %d args not supported", ErrUnsupported, step.Kind, len(step.Args))
+			}
+			bodyBuf.WriteString(line)
+		default:
+			return fmt.Errorf("%w: main: instruction %T not supported", ErrUnsupported, instr)
+		}
 	}
 	out.WriteString("define i32 @main() {\n")
 	out.WriteString("entry:\n")
+	out.WriteString(bodyBuf.String())
 	out.WriteString("  ret i32 0\n")
 	out.WriteString("}\n\n")
 	return nil
 }
 
-// trivialMainViolation accepts the canonical empty-body shape produced
-// by the front-end for `fn main() {}`. The body may contain zero or
-// one AssignInstr that writes a UnitConst to the return local — the
-// front-end emits that exact instruction even when the source body is
-// empty, since `()` is the implicit return value.
-func trivialMainViolation(fn *mir.Function) string {
+// trivialMainShapeViolation enforces the structural envelope for
+// stage0 main — single block, no parameters, ReturnTerm. Body
+// instruction validation lives in emitTrivialMain itself.
+func trivialMainShapeViolation(fn *mir.Function) string {
 	if fn.Name != "main" {
 		return "stage0 expected `main`; saw " + fn.Name
 	}
@@ -311,16 +358,6 @@ func trivialMainViolation(fn *mir.Function) string {
 	bb := fn.Blocks[0]
 	if bb == nil {
 		return "main entry block is nil"
-	}
-	switch len(bb.Instrs) {
-	case 0:
-		// Bare empty body — accept.
-	case 1:
-		if !isUnitAssignToReturnLocal(bb.Instrs[0], fn.ReturnLocal) {
-			return fmt.Sprintf("main entry block has 1 instruction (%T); stage0 expects an empty body or a single Unit assignment", bb.Instrs[0])
-		}
-	default:
-		return fmt.Sprintf("main entry block has %d instructions; stage0 expects 0 or 1", len(bb.Instrs))
 	}
 	if _, ok := bb.Term.(*mir.ReturnTerm); !ok {
 		return fmt.Sprintf("main terminator is %T; stage0 expects ReturnTerm", bb.Term)
@@ -468,10 +505,16 @@ func classifyIntrinsicLine(ii *mir.IntrinsicInstr, bindings map[mir.LocalID]loca
 			return "", false
 		}
 		expr, ty, ok := resolveOperand(ii.Args[0], bindings, mctx)
-		if !ok || ty != scalarInt {
+		if !ok {
 			return "", false
 		}
-		return fmt.Sprintf("  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 %s)\n", expr), true
+		switch ty {
+		case scalarInt:
+			return fmt.Sprintf("  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 %s)\n", expr), true
+		case scalarString:
+			return fmt.Sprintf("  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.str, ptr %s)\n", expr), true
+		}
+		return "", false
 	}
 	return "", false
 }
@@ -1537,11 +1580,18 @@ func emitWhileIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.Int
 			return false
 		}
 		expr, ty, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
-		if !ok || ty != scalarInt {
+		if !ok {
 			return false
 		}
-		fmt.Fprintf(out, "  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 %s)\n", expr)
-		return true
+		switch ty {
+		case scalarInt:
+			fmt.Fprintf(out, "  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 %s)\n", expr)
+			return true
+		case scalarString:
+			fmt.Fprintf(out, "  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.str, ptr %s)\n", expr)
+			return true
+		}
+		return false
 	}
 	return false
 }
@@ -1690,6 +1740,11 @@ func resolveOperandWithLoad(ctx *whileLoopEmitCtx, out *strings.Builder, op mir.
 				return "true", scalarBool, true
 			}
 			return "false", scalarBool, true
+		case *mir.StringConst:
+			if ctx == nil || ctx.mctx == nil {
+				return "", scalarUnknown, false
+			}
+			return ctx.mctx.internStringConst(c.Value), scalarString, true
 		}
 		return "", scalarUnknown, false
 	}

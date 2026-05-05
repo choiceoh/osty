@@ -288,6 +288,15 @@ fn main() {}`,
 				"%0 = extractvalue %Pair %p, 1",
 			},
 		},
+		{
+			name: "println_string_literal",
+			src:  `fn main() { println("hi") }`,
+			wantIR: []string{
+				`@.fmt.stage0.println.str = private unnamed_addr constant [4 x i8] c"%s\0A\00"`,
+				`@.str.0 = private unnamed_addr constant [3 x i8] c"hi\00"`,
+				"call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.str, ptr @.str.0)",
+			},
+		},
 	}
 	for _, c := range cases {
 		c := c
@@ -312,14 +321,6 @@ fn main() {}`,
 // coverage, flip skipNow=false to lock in the new capability.
 func TestStage0RealMIRGapProbe(t *testing.T) {
 	cases := []realProbeCase{
-		{
-			// Stage0 P8 only handles `println(Int)`. String-arg
-			// println still declines because there's no String
-			// runtime ABI yet.
-			name:    "println_string_arg",
-			src:     `fn main() { println("hi") }`,
-			skipNow: true,
-		},
 		{
 			name: "list_literal_len",
 			src: `fn answer() -> Int {
