@@ -1090,17 +1090,16 @@ fn irKindDeclaresSymbol(kind: IrNodeKind) -> Bool {
 }
 
 pub fn irKindIsDecl(kind: IrNodeKind) -> Bool {
-    match kind {
-        IrNodeUseDecl -> true,
-        IrNodeGoUseDecl -> true,
-        IrNodeFnDecl -> true,
-        IrNodeStructDecl -> true,
-        IrNodeEnumDecl -> true,
-        IrNodeInterfaceDecl -> true,
-        IrNodeTypeAliasDecl -> true,
-        IrNodeLetDecl -> true,
-        _ -> false,
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == IrNodeUseDecl { return true }
+    if kind == IrNodeGoUseDecl { return true }
+    if kind == IrNodeFnDecl { return true }
+    if kind == IrNodeStructDecl { return true }
+    if kind == IrNodeEnumDecl { return true }
+    if kind == IrNodeInterfaceDecl { return true }
+    if kind == IrNodeTypeAliasDecl { return true }
+    if kind == IrNodeLetDecl { return true }
+    false
 }
 
 pub fn irKindIsStmt(kind: IrNodeKind) -> Bool {
@@ -1220,153 +1219,149 @@ pub fn irDiagnosticKindFromFront(kind: FrontParseDiagnosticKind) -> IrDiagnostic
 }
 
 pub fn irKindFromAst(kind: AstNodeKind, depth: Int) -> IrNodeKind {
-    match kind {
-        AstNBinary -> IrNodeBinaryExpr,
-        AstNUnary -> IrNodeUnaryExpr,
-        AstNCall -> IrNodeCallExpr,
-        AstNField -> IrNodeSelectorExpr,
-        AstNIndex -> IrNodeIndexExpr,
-        AstNRange -> IrNodeRangeExpr,
-        AstNIf -> IrNodeIfExpr,
-        AstNMatch -> IrNodeMatchExpr,
-        AstNClosure -> IrNodeClosureExpr,
-        AstNList -> IrNodeListExpr,
-        AstNTuple -> IrNodeTupleExpr,
-        AstNMap -> IrNodeMapExpr,
-        AstNStructLit -> IrNodeStructExpr,
-        AstNBlock -> IrNodeBlock,
-        AstNQuestion -> IrNodeQuestionExpr,
-        AstNTurbofish -> IrNodeTurbofishExpr,
-        AstNLet -> {
-            if depth == 1 {
-                IrNodeLetDecl
-            } else {
-                IrNodeLetStmt
-            }
-        },
-        AstNReturn -> IrNodeReturnStmt,
-        AstNBreak -> IrNodeBreakStmt,
-        AstNContinue -> IrNodeContinueStmt,
-        AstNDefer -> IrNodeDeferStmt,
-        AstNFor -> IrNodeForStmt,
-        AstNAssign -> IrNodeAssignStmt,
-        AstNChanSend -> IrNodeChannelSendStmt,
-        AstNFnDecl -> IrNodeFnDecl,
-        AstNStructDecl -> IrNodeStructDecl,
-        AstNEnumDecl -> IrNodeEnumDecl,
-        AstNInterfaceDecl -> IrNodeInterfaceDecl,
-        AstNTypeAlias -> IrNodeTypeAliasDecl,
-        AstNUseDecl -> IrNodeUseDecl,
-        AstNLetDecl -> IrNodeLetDecl,
-        AstNFile -> IrNodeModule,
-        AstNParam -> IrNodeParam,
-        AstNField_ -> IrNodeField,
-        AstNVariant -> IrNodeVariant,
-        AstNMatchArm -> IrNodeMatchArm,
-        AstNType -> IrNodeType,
-        AstNPattern -> IrNodePattern,
-        AstNAnnotation -> IrNodeAnnotation,
-        AstNGenericParam -> IrNodeGenericParams,
-        AstNError -> IrNodeError,
-        _ -> IrNodeRecovery,
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == AstNBinary { return IrNodeBinaryExpr }
+    if kind == AstNUnary { return IrNodeUnaryExpr }
+    if kind == AstNCall { return IrNodeCallExpr }
+    if kind == AstNField { return IrNodeSelectorExpr }
+    if kind == AstNIndex { return IrNodeIndexExpr }
+    if kind == AstNRange { return IrNodeRangeExpr }
+    if kind == AstNIf { return IrNodeIfExpr }
+    if kind == AstNMatch { return IrNodeMatchExpr }
+    if kind == AstNClosure { return IrNodeClosureExpr }
+    if kind == AstNList { return IrNodeListExpr }
+    if kind == AstNTuple { return IrNodeTupleExpr }
+    if kind == AstNMap { return IrNodeMapExpr }
+    if kind == AstNStructLit { return IrNodeStructExpr }
+    if kind == AstNBlock { return IrNodeBlock }
+    if kind == AstNQuestion { return IrNodeQuestionExpr }
+    if kind == AstNTurbofish { return IrNodeTurbofishExpr }
+    if kind == AstNLet {
+        if depth == 1 { return IrNodeLetDecl }
+        return IrNodeLetStmt
     }
+    if kind == AstNReturn { return IrNodeReturnStmt }
+    if kind == AstNBreak { return IrNodeBreakStmt }
+    if kind == AstNContinue { return IrNodeContinueStmt }
+    if kind == AstNDefer { return IrNodeDeferStmt }
+    if kind == AstNFor { return IrNodeForStmt }
+    if kind == AstNAssign { return IrNodeAssignStmt }
+    if kind == AstNChanSend { return IrNodeChannelSendStmt }
+    if kind == AstNFnDecl { return IrNodeFnDecl }
+    if kind == AstNStructDecl { return IrNodeStructDecl }
+    if kind == AstNEnumDecl { return IrNodeEnumDecl }
+    if kind == AstNInterfaceDecl { return IrNodeInterfaceDecl }
+    if kind == AstNTypeAlias { return IrNodeTypeAliasDecl }
+    if kind == AstNUseDecl { return IrNodeUseDecl }
+    if kind == AstNLetDecl { return IrNodeLetDecl }
+    if kind == AstNFile { return IrNodeModule }
+    if kind == AstNParam { return IrNodeParam }
+    if kind == AstNField_ { return IrNodeField }
+    if kind == AstNVariant { return IrNodeVariant }
+    if kind == AstNMatchArm { return IrNodeMatchArm }
+    if kind == AstNType { return IrNodeType }
+    if kind == AstNPattern { return IrNodePattern }
+    if kind == AstNAnnotation { return IrNodeAnnotation }
+    if kind == AstNGenericParam { return IrNodeGenericParams }
+    if kind == AstNError { return IrNodeError }
+    IrNodeRecovery
 }
 
 pub fn irNodeKindName(kind: IrNodeKind) -> String {
-    match kind {
-        IrNodeModule -> "module",
-        IrNodeAnnotation -> "annotation",
-        IrNodeUseDecl -> "use",
-        IrNodeGoUseDecl -> "goUse",
-        IrNodeFnDecl -> "fn",
-        IrNodeStructDecl -> "struct",
-        IrNodeEnumDecl -> "enum",
-        IrNodeInterfaceDecl -> "interface",
-        IrNodeTypeAliasDecl -> "typeAlias",
-        IrNodeLetDecl -> "letDecl",
-        IrNodeGenericParams -> "genericParams",
-        IrNodeParamList -> "paramList",
-        IrNodeParam -> "param",
-        IrNodeType -> "type",
-        IrNodeBlock -> "block",
-        IrNodeLetStmt -> "letStmt",
-        IrNodeReturnStmt -> "return",
-        IrNodeBreakStmt -> "break",
-        IrNodeContinueStmt -> "continue",
-        IrNodeForStmt -> "for",
-        IrNodeDeferStmt -> "defer",
-        IrNodeAssignStmt -> "assign",
-        IrNodeChannelSendStmt -> "channelSend",
-        IrNodeIfExpr -> "if",
-        IrNodeMatchExpr -> "match",
-        IrNodeMatchArm -> "matchArm",
-        IrNodeCallExpr -> "call",
-        IrNodeIndexExpr -> "index",
-        IrNodeSelectorExpr -> "selector",
-        IrNodeTurbofishExpr -> "turbofish",
-        IrNodeClosureExpr -> "closure",
-        IrNodeListExpr -> "list",
-        IrNodeMapExpr -> "map",
-        IrNodeTupleExpr -> "tuple",
-        IrNodeStructExpr -> "structExpr",
-        IrNodeRangeExpr -> "range",
-        IrNodeBinaryExpr -> "binary",
-        IrNodeUnaryExpr -> "unary",
-        IrNodeQuestionExpr -> "question",
-        IrNodePattern -> "pattern",
-        IrNodeField -> "field",
-        IrNodeVariant -> "variant",
-        IrNodeRecovery -> "recovery",
-        IrNodeError -> "error",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == IrNodeModule { return "module" }
+    if kind == IrNodeAnnotation { return "annotation" }
+    if kind == IrNodeUseDecl { return "use" }
+    if kind == IrNodeGoUseDecl { return "goUse" }
+    if kind == IrNodeFnDecl { return "fn" }
+    if kind == IrNodeStructDecl { return "struct" }
+    if kind == IrNodeEnumDecl { return "enum" }
+    if kind == IrNodeInterfaceDecl { return "interface" }
+    if kind == IrNodeTypeAliasDecl { return "typeAlias" }
+    if kind == IrNodeLetDecl { return "letDecl" }
+    if kind == IrNodeGenericParams { return "genericParams" }
+    if kind == IrNodeParamList { return "paramList" }
+    if kind == IrNodeParam { return "param" }
+    if kind == IrNodeType { return "type" }
+    if kind == IrNodeBlock { return "block" }
+    if kind == IrNodeLetStmt { return "letStmt" }
+    if kind == IrNodeReturnStmt { return "return" }
+    if kind == IrNodeBreakStmt { return "break" }
+    if kind == IrNodeContinueStmt { return "continue" }
+    if kind == IrNodeForStmt { return "for" }
+    if kind == IrNodeDeferStmt { return "defer" }
+    if kind == IrNodeAssignStmt { return "assign" }
+    if kind == IrNodeChannelSendStmt { return "channelSend" }
+    if kind == IrNodeIfExpr { return "if" }
+    if kind == IrNodeMatchExpr { return "match" }
+    if kind == IrNodeMatchArm { return "matchArm" }
+    if kind == IrNodeCallExpr { return "call" }
+    if kind == IrNodeIndexExpr { return "index" }
+    if kind == IrNodeSelectorExpr { return "selector" }
+    if kind == IrNodeTurbofishExpr { return "turbofish" }
+    if kind == IrNodeClosureExpr { return "closure" }
+    if kind == IrNodeListExpr { return "list" }
+    if kind == IrNodeMapExpr { return "map" }
+    if kind == IrNodeTupleExpr { return "tuple" }
+    if kind == IrNodeStructExpr { return "structExpr" }
+    if kind == IrNodeRangeExpr { return "range" }
+    if kind == IrNodeBinaryExpr { return "binary" }
+    if kind == IrNodeUnaryExpr { return "unary" }
+    if kind == IrNodeQuestionExpr { return "question" }
+    if kind == IrNodePattern { return "pattern" }
+    if kind == IrNodeField { return "field" }
+    if kind == IrNodeVariant { return "variant" }
+    if kind == IrNodeRecovery { return "recovery" }
+    if kind == IrNodeError { return "error" }
+    "unknown"
 }
 
 pub fn irDiagnosticKindName(kind: IrDiagnosticKind) -> String {
-    match kind {
-        IrDiagUnexpectedToken -> "unexpectedToken",
-        IrDiagMissingName -> "missingName",
-        IrDiagMissingDelimiter -> "missingDelimiter",
-        IrDiagUnmatchedDelimiter -> "unmatchedDelimiter",
-        IrDiagNonAssociativeOperator -> "nonAssociativeOperator",
-        IrDiagTrailingSelector -> "trailingSelector",
-        IrDiagLexerError -> "lexerError",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == IrDiagUnexpectedToken { return "unexpectedToken" }
+    if kind == IrDiagMissingName { return "missingName" }
+    if kind == IrDiagMissingDelimiter { return "missingDelimiter" }
+    if kind == IrDiagUnmatchedDelimiter { return "unmatchedDelimiter" }
+    if kind == IrDiagNonAssociativeOperator { return "nonAssociativeOperator" }
+    if kind == IrDiagTrailingSelector { return "trailingSelector" }
+    if kind == IrDiagLexerError { return "lexerError" }
+    "unknown"
 }
 
 pub fn irSymbolKindName(kind: IrSymbolKind) -> String {
-    match kind {
-        IrSymNone -> "none",
-        IrSymPackage -> "package",
-        IrSymFunction -> "function",
-        IrSymType -> "type",
-        IrSymVariant -> "variant",
-        IrSymField -> "field",
-        IrSymParameter -> "parameter",
-        IrSymLocal -> "local",
-        IrSymGeneric -> "generic",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == IrSymNone { return "none" }
+    if kind == IrSymPackage { return "package" }
+    if kind == IrSymFunction { return "function" }
+    if kind == IrSymType { return "type" }
+    if kind == IrSymVariant { return "variant" }
+    if kind == IrSymField { return "field" }
+    if kind == IrSymParameter { return "parameter" }
+    if kind == IrSymLocal { return "local" }
+    if kind == IrSymGeneric { return "generic" }
+    "unknown"
 }
 
 pub fn irValueKindName(kind: IrValueKind) -> String {
-    match kind {
-        IrValueNone -> "none",
-        IrValueType -> "type",
-        IrValueFunction -> "function",
-        IrValuePlace -> "place",
-        IrValueRValue -> "rvalue",
-        IrValuePattern -> "pattern",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == IrValueNone { return "none" }
+    if kind == IrValueType { return "type" }
+    if kind == IrValueFunction { return "function" }
+    if kind == IrValuePlace { return "place" }
+    if kind == IrValueRValue { return "rvalue" }
+    if kind == IrValuePattern { return "pattern" }
+    "unknown"
 }
 
 pub fn irFlowKindName(kind: IrFlowKind) -> String {
-    match kind {
-        IrFlowFallthrough -> "fallthrough",
-        IrFlowReturns -> "returns",
-        IrFlowBreaks -> "breaks",
-        IrFlowContinues -> "continues",
-        IrFlowDiverges -> "diverges",
-        IrFlowMixed -> "mixed",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == IrFlowFallthrough { return "fallthrough" }
+    if kind == IrFlowReturns { return "returns" }
+    if kind == IrFlowBreaks { return "breaks" }
+    if kind == IrFlowContinues { return "continues" }
+    if kind == IrFlowDiverges { return "diverges" }
+    if kind == IrFlowMixed { return "mixed" }
+    "unknown"
 }
 
 pub fn irFnDeclKind() -> IrNodeKind {

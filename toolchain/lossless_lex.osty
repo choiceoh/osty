@@ -583,21 +583,21 @@ fn losslessComputeInterpDepths(inner: FrontLexStream) -> List<Int> {
 /// losslessDiagCodeName returns the stable `Exxxx` code for a raw
 /// lexer diagnostic code.
 pub fn losslessDiagCodeName(code: FrontLexDiagnosticCode) -> String {
-    match code {
-        FrontDiagUnterminatedBlockComment -> "E0004",
-        FrontDiagUnterminatedString -> "E0001",
-        FrontDiagUnterminatedInterpolation -> "E0001",
-        FrontDiagNewlineInString -> "E0001",
-        FrontDiagTripleMissingLeadingNewline -> "E0006",
-        FrontDiagBadTripleIndent -> "E0006",
-        FrontDiagUppercaseBasePrefix -> "E0002",
-        FrontDiagUnknownEscape -> "E0003",
-        FrontDiagEmptyChar -> "E0009",
-        FrontDiagEmptyByte -> "E0009",
-        FrontDiagIllegalCharacter -> "E0005",
-        FrontDiagBadNumericSeparator -> "E0008",
-        FrontDiagFatArrowRemoved -> "E0007",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if code == FrontDiagUnterminatedBlockComment { return "E0004" }
+    if code == FrontDiagUnterminatedString { return "E0001" }
+    if code == FrontDiagUnterminatedInterpolation { return "E0001" }
+    if code == FrontDiagNewlineInString { return "E0001" }
+    if code == FrontDiagTripleMissingLeadingNewline { return "E0006" }
+    if code == FrontDiagBadTripleIndent { return "E0006" }
+    if code == FrontDiagUppercaseBasePrefix { return "E0002" }
+    if code == FrontDiagUnknownEscape { return "E0003" }
+    if code == FrontDiagEmptyChar { return "E0009" }
+    if code == FrontDiagEmptyByte { return "E0009" }
+    if code == FrontDiagIllegalCharacter { return "E0005" }
+    if code == FrontDiagBadNumericSeparator { return "E0008" }
+    if code == FrontDiagFatArrowRemoved { return "E0007" }
+    "E0000"
 }
 
 /// losslessDiagMessage formats the user-facing message for a
@@ -607,21 +607,21 @@ pub fn losslessDiagMessage(
     units: List<String>,
     d: FrontLexDiagnostic,
 ) -> String {
-    match d.code {
-        FrontDiagUnterminatedBlockComment -> "unterminated block comment",
-        FrontDiagUnterminatedString -> "unterminated string literal",
-        FrontDiagUnterminatedInterpolation -> "unterminated interpolation in string",
-        FrontDiagNewlineInString -> "newline in string literal",
-        FrontDiagTripleMissingLeadingNewline -> "invalid triple-quoted string",
-        FrontDiagBadTripleIndent -> "invalid triple-quoted string",
-        FrontDiagUppercaseBasePrefix -> "uppercase base prefix is not allowed",
-        FrontDiagUnknownEscape -> "unknown escape sequence",
-        FrontDiagEmptyChar -> losslessCharMessage(units, d.start.offset, false),
-        FrontDiagEmptyByte -> losslessCharMessage(units, d.start.offset, true),
-        FrontDiagIllegalCharacter -> "illegal character",
-        FrontDiagBadNumericSeparator -> "numeric separator `_` must appear between two digits",
-        FrontDiagFatArrowRemoved -> "`=>` is not valid Osty syntax; use `->`",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if d.code == FrontDiagUnterminatedBlockComment { return "unterminated block comment" }
+    if d.code == FrontDiagUnterminatedString { return "unterminated string literal" }
+    if d.code == FrontDiagUnterminatedInterpolation { return "unterminated interpolation in string" }
+    if d.code == FrontDiagNewlineInString { return "newline in string literal" }
+    if d.code == FrontDiagTripleMissingLeadingNewline { return "invalid triple-quoted string" }
+    if d.code == FrontDiagBadTripleIndent { return "invalid triple-quoted string" }
+    if d.code == FrontDiagUppercaseBasePrefix { return "uppercase base prefix is not allowed" }
+    if d.code == FrontDiagUnknownEscape { return "unknown escape sequence" }
+    if d.code == FrontDiagEmptyChar { return losslessCharMessage(units, d.start.offset, false) }
+    if d.code == FrontDiagEmptyByte { return losslessCharMessage(units, d.start.offset, true) }
+    if d.code == FrontDiagIllegalCharacter { return "illegal character" }
+    if d.code == FrontDiagBadNumericSeparator { return "numeric separator `_` must appear between two digits" }
+    if d.code == FrontDiagFatArrowRemoved { return "`=>` is not valid Osty syntax; use `->`" }
+    ""
 }
 
 fn losslessCharMessage(units: List<String>, start: Int, byteLit: Bool) -> String {
@@ -646,21 +646,13 @@ fn losslessCharMessage(units: List<String>, start: Int, byteLit: Bool) -> String
 /// losslessDiagHint attaches fix-it hints to the small set of codes
 /// where a mechanical suggestion is safe.
 pub fn losslessDiagHint(code: FrontLexDiagnosticCode) -> String {
-    match code {
-        FrontDiagUppercaseBasePrefix -> "use lowercase base prefixes: `0x`, `0b`, or `0o`",
-        FrontDiagIllegalCharacter -> "",
-        FrontDiagUnterminatedBlockComment -> "",
-        FrontDiagUnterminatedString -> "",
-        FrontDiagUnterminatedInterpolation -> "",
-        FrontDiagNewlineInString -> "",
-        FrontDiagTripleMissingLeadingNewline -> "",
-        FrontDiagBadTripleIndent -> "",
-        FrontDiagUnknownEscape -> "",
-        FrontDiagEmptyChar -> "",
-        FrontDiagEmptyByte -> "",
-        FrontDiagBadNumericSeparator -> "place `_` only between two digits",
-        FrontDiagFatArrowRemoved -> "replace `=>` with `->`",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    // Most variants have no fix-it hint and collapse to "" — just
+    // return the few that do.
+    if code == FrontDiagUppercaseBasePrefix { return "use lowercase base prefixes: `0x`, `0b`, or `0o`" }
+    if code == FrontDiagBadNumericSeparator { return "place `_` only between two digits" }
+    if code == FrontDiagFatArrowRemoved { return "replace `=>` with `->`" }
+    ""
 }
 
 fn losslessBuildDiagnostics(
@@ -870,13 +862,13 @@ pub fn losslessModeStackAt(stream: LosslessStream, tokenIdx: Int) -> List<ModeFr
 }
 
 pub fn losslessFormatMode(mode: LexMode) -> String {
-    match mode {
-        ModeTopLevel -> "TopLevel",
-        ModeStringBody -> "StringBody",
-        ModeTripleStringBody -> "TripleStringBody",
-        ModeRawStringBody -> "RawStringBody",
-        ModeInterpolationExpr -> "InterpolationExpr",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if mode == ModeTopLevel { return "TopLevel" }
+    if mode == ModeStringBody { return "StringBody" }
+    if mode == ModeTripleStringBody { return "TripleStringBody" }
+    if mode == ModeRawStringBody { return "RawStringBody" }
+    if mode == ModeInterpolationExpr { return "InterpolationExpr" }
+    "Unknown"
 }
 
 // -------------------------------------------------------------------
@@ -1080,16 +1072,16 @@ pub fn losslessToFrontTokens(stream: LosslessStream) -> List<FrontToken> {
 // -------------------------------------------------------------------
 
 pub fn losslessFormatTriviaKind(kind: TriviaKind) -> String {
-    match kind {
-        TriviaWhitespace -> "WS",
-        TriviaNewline -> "NL",
-        TriviaLineComment -> "LINE",
-        TriviaBlockComment -> "BLOCK",
-        TriviaDocComment -> "DOC",
-        TriviaShebang -> "SHEBANG",
-        TriviaBom -> "BOM",
-        TriviaUnterminatedBlockComment -> "BLOCK!",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == TriviaWhitespace { return "WS" }
+    if kind == TriviaNewline { return "NL" }
+    if kind == TriviaLineComment { return "LINE" }
+    if kind == TriviaBlockComment { return "BLOCK" }
+    if kind == TriviaDocComment { return "DOC" }
+    if kind == TriviaShebang { return "SHEBANG" }
+    if kind == TriviaBom { return "BOM" }
+    if kind == TriviaUnterminatedBlockComment { return "BLOCK!" }
+    "Unknown"
 }
 
 pub fn losslessFormatTokens(stream: LosslessStream) -> String {

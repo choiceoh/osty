@@ -75,114 +75,114 @@ fn coreSlotsUnknown() -> CoreRefSlots {
 /// cloner refuses to copy a node whose `known` flag is false and
 /// reports an error back to the caller via the returned mapping.
 pub fn coreKindSlots(kind: CoreKind) -> CoreRefSlots {
-    match kind {
-        // ---- Literals (no children) ----
-        CkErr -> coreSlotsNone(),
-        CkIntLit -> coreSlotsNone(),
-        CkFloatLit -> coreSlotsNone(),
-        CkBoolLit -> coreSlotsNone(),
-        CkCharLit -> coreSlotsNone(),
-        CkByteLit -> coreSlotsNone(),
-        CkBytesLit -> coreSlotsNone(),
-        CkStringLit -> coreSlotsNone(),
-        CkUnitLit -> coreSlotsNone(),
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    // ---- Literals (no children) ----
+    if kind == CkErr { return coreSlotsNone() }
+    if kind == CkIntLit { return coreSlotsNone() }
+    if kind == CkFloatLit { return coreSlotsNone() }
+    if kind == CkBoolLit { return coreSlotsNone() }
+    if kind == CkCharLit { return coreSlotsNone() }
+    if kind == CkByteLit { return coreSlotsNone() }
+    if kind == CkBytesLit { return coreSlotsNone() }
+    if kind == CkStringLit { return coreSlotsNone() }
+    if kind == CkUnitLit { return coreSlotsNone() }
 
-        // ---- Atoms & operators ----
-        CkIdent -> coreSlotsNone(),
-        CkUnary -> coreSlotsLeft(),
-        CkBinary -> coreSlotsLeftRight(),
-        CkCoalesce -> coreSlotsLeftRight(),
-        CkQuestion -> coreSlotsLeft(),
+    // ---- Atoms & operators ----
+    if kind == CkIdent { return coreSlotsNone() }
+    if kind == CkUnary { return coreSlotsLeft() }
+    if kind == CkBinary { return coreSlotsLeftRight() }
+    if kind == CkCoalesce { return coreSlotsLeftRight() }
+    if kind == CkQuestion { return coreSlotsLeft() }
 
-        // ---- Callables (typeArgs is TyArena-indexed for these) ----
-        CkCall -> coreSlotsLeftChildren(),
-        CkMethodCall -> coreSlotsLeftChildren(),
-        CkIntrinsic -> coreSlotsChildren(),
-        CkVariantLit -> coreSlotsChildren(),
+    // ---- Callables (typeArgs is TyArena-indexed for these) ----
+    if kind == CkCall { return coreSlotsLeftChildren() }
+    if kind == CkMethodCall { return coreSlotsLeftChildren() }
+    if kind == CkIntrinsic { return coreSlotsChildren() }
+    if kind == CkVariantLit { return coreSlotsChildren() }
 
-        // ---- Access ----
-        CkField -> coreSlotsLeft(),
-        CkTupleAccess -> coreSlotsLeft(),
-        CkIndex -> coreSlotsLeftRight(),
+    // ---- Access ----
+    if kind == CkField { return coreSlotsLeft() }
+    if kind == CkTupleAccess { return coreSlotsLeft() }
+    if kind == CkIndex { return coreSlotsLeftRight() }
 
-        // ---- Aggregates ----
-        CkList -> coreSlotsChildren(),
-        CkMap -> coreSlotsChildren(),
-        CkMapEntry -> coreSlotsLeftRight(),
-        CkTuple -> coreSlotsChildren(),
-        CkStruct -> coreSlotsChildren(),
-        CkStructField -> coreSlotsLeft(),
-        CkRange -> coreSlotsLeftRight(),
+    // ---- Aggregates ----
+    if kind == CkList { return coreSlotsChildren() }
+    if kind == CkMap { return coreSlotsChildren() }
+    if kind == CkMapEntry { return coreSlotsLeftRight() }
+    if kind == CkTuple { return coreSlotsChildren() }
+    if kind == CkStruct { return coreSlotsChildren() }
+    if kind == CkStructField { return coreSlotsLeft() }
+    if kind == CkRange { return coreSlotsLeftRight() }
 
-        // ---- Control ----
-        CkClosure -> coreSlotsChildrenLeft(),
-        CkBlock -> coreSlotsChildren(),
-        CkIf -> coreSlotsLeftRightExtra(),
-        CkIfLet -> coreSlotsChildrenLeft(),
-        CkMatch -> coreSlotsLeftChildren(),
-        CkMatchArm -> coreSlotsLeftRightExtra(),
+    // ---- Control ----
+    if kind == CkClosure { return coreSlotsChildrenLeft() }
+    if kind == CkBlock { return coreSlotsChildren() }
+    if kind == CkIf { return coreSlotsLeftRightExtra() }
+    if kind == CkIfLet { return coreSlotsChildrenLeft() }
+    if kind == CkMatch { return coreSlotsLeftChildren() }
+    if kind == CkMatchArm { return coreSlotsLeftRightExtra() }
 
-        // ---- Statements ----
-        CsBlock -> coreSlotsChildren(),
-        CsLet -> coreSlotsLeftRight(),
-        CsAssign -> coreSlotsLeftRight(),
-        CsReturn -> coreSlotsLeft(),
-        CsBreak -> coreSlotsNone(),
-        CsContinue -> coreSlotsNone(),
-        CsIf -> coreSlotsLeftRightExtra(),
-        CsFor -> coreSlotsLeftRightExtra(),
-        CsMatch -> coreSlotsLeftChildren(),
-        CsExprStmt -> coreSlotsLeft(),
-        CsDefer -> coreSlotsLeft(),
-        CsChanSend -> coreSlotsLeftRight(),
-        CsErr -> coreSlotsNone(),
+    // ---- Statements ----
+    if kind == CsBlock { return coreSlotsChildren() }
+    if kind == CsLet { return coreSlotsLeftRight() }
+    if kind == CsAssign { return coreSlotsLeftRight() }
+    if kind == CsReturn { return coreSlotsLeft() }
+    if kind == CsBreak { return coreSlotsNone() }
+    if kind == CsContinue { return coreSlotsNone() }
+    if kind == CsIf { return coreSlotsLeftRightExtra() }
+    if kind == CsFor { return coreSlotsLeftRightExtra() }
+    if kind == CsMatch { return coreSlotsLeftChildren() }
+    if kind == CsExprStmt { return coreSlotsLeft() }
+    if kind == CsDefer { return coreSlotsLeft() }
+    if kind == CsChanSend { return coreSlotsLeftRight() }
+    if kind == CsErr { return coreSlotsNone() }
 
-        // ---- Decls ----
-        //
-        // CdFn: children=params (Core), children2=generics (Core),
-        //       left=body (Core), right=retTy (Ty — not a Core ref),
-        //       typeArgs currently unused (stays false).
-        CdFn -> {
-            let mut s = coreSlotsNone()
-            s.leftIsCore = true
-            s.childrenIsCore = true
-            s.children2IsCore = true
-            s
-        },
-        // CdStruct: children=fields (Core), children2=generics (Core),
-        //           typeArgs=methods (Core).
-        CdStruct -> coreSlotsChildrenChildren2Type(),
-        // CdEnum: children=variants, children2=generics, typeArgs=methods.
-        CdEnum -> coreSlotsChildrenChildren2Type(),
-        CdEnumVariant -> coreSlotsChildren(),
-        CdInterface -> coreSlotsChildrenChildren2Type(),
-        // CdTypeAlias: children2=generics (Core), ty carries target —
-        // target is TyArena, not Core; no Core refs in slots.
-        CdTypeAlias -> {
-            let mut s = coreSlotsNone()
-            s.children2IsCore = true
-            s
-        },
-        // CdLet: left=init (Core), right unused (Ty), ty=declared type.
-        CdLet -> coreSlotsLeft(),
-        CdUse -> coreSlotsNone(),
-        CdField -> coreSlotsLeft(),
-        CdParam -> coreSlotsLeft(),
-        CdGenericParam -> coreSlotsChildren(),
-
-        // ---- Patterns ----
-        CpWild -> coreSlotsNone(),
-        CpIdent -> coreSlotsNone(),
-        CpLit -> coreSlotsNone(),
-        CpTuple -> coreSlotsChildren(),
-        CpStruct -> coreSlotsChildren(),
-        CpStructField -> coreSlotsLeft(),
-        CpVariant -> coreSlotsChildren(),
-        CpRange -> coreSlotsLeftRight(),
-        CpOr -> coreSlotsChildren(),
-        CpBinding -> coreSlotsLeft(),
-        CpErr -> coreSlotsNone(),
+    // ---- Decls ----
+    //
+    // CdFn: children=params (Core), children2=generics (Core),
+    //       left=body (Core), right=retTy (Ty — not a Core ref),
+    //       typeArgs currently unused (stays false).
+    if kind == CdFn {
+        let mut s = coreSlotsNone()
+        s.leftIsCore = true
+        s.childrenIsCore = true
+        s.children2IsCore = true
+        return s
     }
+    // CdStruct: children=fields (Core), children2=generics (Core),
+    //           typeArgs=methods (Core).
+    if kind == CdStruct { return coreSlotsChildrenChildren2Type() }
+    // CdEnum: children=variants, children2=generics, typeArgs=methods.
+    if kind == CdEnum { return coreSlotsChildrenChildren2Type() }
+    if kind == CdEnumVariant { return coreSlotsChildren() }
+    if kind == CdInterface { return coreSlotsChildrenChildren2Type() }
+    // CdTypeAlias: children2=generics (Core), ty carries target —
+    // target is TyArena, not Core; no Core refs in slots.
+    if kind == CdTypeAlias {
+        let mut s = coreSlotsNone()
+        s.children2IsCore = true
+        return s
+    }
+    // CdLet: left=init (Core), right unused (Ty), ty=declared type.
+    if kind == CdLet { return coreSlotsLeft() }
+    if kind == CdUse { return coreSlotsNone() }
+    if kind == CdField { return coreSlotsLeft() }
+    if kind == CdParam { return coreSlotsLeft() }
+    if kind == CdGenericParam { return coreSlotsChildren() }
+
+    // ---- Patterns ----
+    if kind == CpWild { return coreSlotsNone() }
+    if kind == CpIdent { return coreSlotsNone() }
+    if kind == CpLit { return coreSlotsNone() }
+    if kind == CpTuple { return coreSlotsChildren() }
+    if kind == CpStruct { return coreSlotsChildren() }
+    if kind == CpStructField { return coreSlotsLeft() }
+    if kind == CpVariant { return coreSlotsChildren() }
+    if kind == CpRange { return coreSlotsLeftRight() }
+    if kind == CpOr { return coreSlotsChildren() }
+    if kind == CpBinding { return coreSlotsLeft() }
+    if kind == CpErr { return coreSlotsNone() }
+    coreSlotsNone()
 }
 
 fn coreSlotsLeft() -> CoreRefSlots {
