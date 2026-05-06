@@ -522,19 +522,18 @@ pub fn mirLowerIntToString(n: Int) -> String {
 }
 
 fn mirLowerDigitChar(d: Int) -> String {
-    match d {
-        0 -> "0",
-        1 -> "1",
-        2 -> "2",
-        3 -> "3",
-        4 -> "4",
-        5 -> "5",
-        6 -> "6",
-        7 -> "7",
-        8 -> "8",
-        9 -> "9",
-        _ -> "?",
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if d == 0 { return "0" }
+    if d == 1 { return "1" }
+    if d == 2 { return "2" }
+    if d == 3 { return "3" }
+    if d == 4 { return "4" }
+    if d == 5 { return "5" }
+    if d == 6 { return "6" }
+    if d == 7 { return "7" }
+    if d == 8 { return "8" }
+    if d == 9 { return "9" }
+    "?"
 }
 
 // ====================================================================
@@ -889,10 +888,9 @@ pub fn mirLowerGlobal(l: MirLowerer, let_: HirLetDecl) -> MirGlobal {
 /// call-site dispatch (e.g. distinguishing stdlib intrinsics from
 /// user calls).
 pub fn hirTypeNameOf(t: HirType) -> String {
-    match t.kind {
-        HirTypeNamed -> t.namedName,
-        _ -> "",
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if t.kind == HirTypeNamed { return t.namedName }
+    ""
 }
 
 /// hirTypeIsList reports whether `t` is a `List<_>` builtin type.
@@ -993,58 +991,58 @@ pub fn hirTypeSecondArg(t: HirType) -> HirType {
 /// hirUnOpToMir maps HIR unary-op kinds to MIR's enum. Returns
 /// `MirUnInvalid` for the Osty-side `HirUnInvalid`.
 pub fn hirUnOpToMir(op: HirUnOp) -> MirUnaryOp {
-    match op {
-        HirUnInvalid -> MirUnInvalid,
-        HirUnNeg -> MirUnNeg,
-        HirUnPlus -> MirUnPlus,
-        HirUnNot -> MirUnNot,
-        HirUnBitNot -> MirUnBitNot,
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if op == HirUnInvalid { return MirUnInvalid }
+    if op == HirUnNeg { return MirUnNeg }
+    if op == HirUnPlus { return MirUnPlus }
+    if op == HirUnNot { return MirUnNot }
+    if op == HirUnBitNot { return MirUnBitNot }
+    MirUnInvalid
 }
 
 /// hirBinOpToMir maps HIR binary-op kinds to MIR's enum.
 pub fn hirBinOpToMir(op: HirBinOp) -> MirBinaryOp {
-    match op {
-        HirBinInvalid -> MirBinInvalid,
-        HirBinAdd -> MirBinAdd,
-        HirBinSub -> MirBinSub,
-        HirBinMul -> MirBinMul,
-        HirBinDiv -> MirBinDiv,
-        HirBinMod -> MirBinMod,
-        HirBinEq -> MirBinEq,
-        HirBinNeq -> MirBinNeq,
-        HirBinLt -> MirBinLt,
-        HirBinLeq -> MirBinLeq,
-        HirBinGt -> MirBinGt,
-        HirBinGeq -> MirBinGeq,
-        HirBinAnd -> MirBinAnd,
-        HirBinOr -> MirBinOr,
-        HirBinBitAnd -> MirBinBitAnd,
-        HirBinBitOr -> MirBinBitOr,
-        HirBinBitXor -> MirBinBitXor,
-        HirBinShl -> MirBinShl,
-        HirBinShr -> MirBinShr,
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if op == HirBinInvalid { return MirBinInvalid }
+    if op == HirBinAdd { return MirBinAdd }
+    if op == HirBinSub { return MirBinSub }
+    if op == HirBinMul { return MirBinMul }
+    if op == HirBinDiv { return MirBinDiv }
+    if op == HirBinMod { return MirBinMod }
+    if op == HirBinEq { return MirBinEq }
+    if op == HirBinNeq { return MirBinNeq }
+    if op == HirBinLt { return MirBinLt }
+    if op == HirBinLeq { return MirBinLeq }
+    if op == HirBinGt { return MirBinGt }
+    if op == HirBinGeq { return MirBinGeq }
+    if op == HirBinAnd { return MirBinAnd }
+    if op == HirBinOr { return MirBinOr }
+    if op == HirBinBitAnd { return MirBinBitAnd }
+    if op == HirBinBitOr { return MirBinBitOr }
+    if op == HirBinBitXor { return MirBinBitXor }
+    if op == HirBinShl { return MirBinShl }
+    if op == HirBinShr { return MirBinShr }
+    MirBinInvalid
 }
 
 /// hirAssignOpToBinOp maps a compound-assign operator to its
 /// equivalent binary op for lowering `x op= y` into `x = x op y`.
 /// Returns `MirBinInvalid` for plain `=` (no underlying binary op).
 pub fn hirAssignOpToBinOp(op: HirAssignOp) -> MirBinaryOp {
-    match op {
-        HirAssignInvalid -> MirBinInvalid,
-        HirAssignEq -> MirBinInvalid,
-        HirAssignAdd -> MirBinAdd,
-        HirAssignSub -> MirBinSub,
-        HirAssignMul -> MirBinMul,
-        HirAssignDiv -> MirBinDiv,
-        HirAssignMod -> MirBinMod,
-        HirAssignAnd -> MirBinBitAnd,
-        HirAssignOr -> MirBinBitOr,
-        HirAssignXor -> MirBinBitXor,
-        HirAssignShl -> MirBinShl,
-        HirAssignShr -> MirBinShr,
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if op == HirAssignInvalid { return MirBinInvalid }
+    if op == HirAssignEq { return MirBinInvalid }
+    if op == HirAssignAdd { return MirBinAdd }
+    if op == HirAssignSub { return MirBinSub }
+    if op == HirAssignMul { return MirBinMul }
+    if op == HirAssignDiv { return MirBinDiv }
+    if op == HirAssignMod { return MirBinMod }
+    if op == HirAssignAnd { return MirBinBitAnd }
+    if op == HirAssignOr { return MirBinBitOr }
+    if op == HirAssignXor { return MirBinBitXor }
+    if op == HirAssignShl { return MirBinShl }
+    if op == HirAssignShr { return MirBinShr }
+    MirBinInvalid
 }
 
 // ====================================================================
@@ -1555,21 +1553,20 @@ pub fn mirLowerExprAsOperand(bs: MirLowerBodyState, e: HirExpr) -> MirOperand {
     if !hirExprIsValid(e) {
         return mirOperandConst(mirConstUnit())
     }
-    match e.kind {
-        HirExprIntLit -> mirLowerIntLitOperand(e),
-        HirExprFloatLit -> mirLowerFloatLitOperand(e),
-        HirExprBoolLit -> mirOperandConst(mirConstBool(e.boolValue)),
-        HirExprCharLit -> mirOperandConst(mirConstChar(e.charValue)),
-        HirExprByteLit -> mirOperandConst(mirConstByte(e.byteValue)),
-        HirExprUnitLit -> mirOperandConst(mirConstUnit()),
-        HirExprStringLit -> mirLowerStringLitOperand(bs, e),
-        HirExprBytesLit -> mirLowerBytesLitOperand(bs, e),
-        HirExprIdent -> mirLowerIdentOperand(bs, e),
-        HirExprField -> mirLowerFieldExprOperand(bs, e),
-        HirExprTupleAccess -> mirLowerTupleAccessOperand(bs, e),
-        HirExprIndex -> mirLowerIndexExprOperand(bs, e),
-        _ -> mirLowerExprAsOperandFallback(bs, e),
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if e.kind == HirExprIntLit { return mirLowerIntLitOperand(e) }
+    if e.kind == HirExprFloatLit { return mirLowerFloatLitOperand(e) }
+    if e.kind == HirExprBoolLit { return mirOperandConst(mirConstBool(e.boolValue)) }
+    if e.kind == HirExprCharLit { return mirOperandConst(mirConstChar(e.charValue)) }
+    if e.kind == HirExprByteLit { return mirOperandConst(mirConstByte(e.byteValue)) }
+    if e.kind == HirExprUnitLit { return mirOperandConst(mirConstUnit()) }
+    if e.kind == HirExprStringLit { return mirLowerStringLitOperand(bs, e) }
+    if e.kind == HirExprBytesLit { return mirLowerBytesLitOperand(bs, e) }
+    if e.kind == HirExprIdent { return mirLowerIdentOperand(bs, e) }
+    if e.kind == HirExprField { return mirLowerFieldExprOperand(bs, e) }
+    if e.kind == HirExprTupleAccess { return mirLowerTupleAccessOperand(bs, e) }
+    if e.kind == HirExprIndex { return mirLowerIndexExprOperand(bs, e) }
+    mirLowerExprAsOperandFallback(bs, e)
 }
 
 /// mirLowerExprAsOperandFallback handles every expression kind that
@@ -1618,10 +1615,9 @@ pub fn mirLowerRecoveredExprType(bs: MirLowerBodyState, e: HirExpr) -> HirType {
     if hirTypeIsValid(e.typ) && !hirTypeIsErr(e.typ) {
         return e.typ
     }
-    match e.kind {
-        HirExprCall -> mirLowerCallExprRecoveredType(bs, e),
-        _ -> e.typ,
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if e.kind == HirExprCall { return mirLowerCallExprRecoveredType(bs, e) }
+    e.typ
 }
 
 fn mirLowerIdentRecoveredType(bs: MirLowerBodyState, e: HirExpr) -> HirType {
@@ -2288,13 +2284,12 @@ pub fn mirLowerFreshTemp(bs: MirLowerBodyState, t: HirType, span: MirSpan) -> In
 /// Since Osty doesn't have tuple returns in our style yet, we return a
 /// MirPlace with `local == -1` on failure and callers check the local.
 pub fn mirLowerExprToPlace(bs: MirLowerBodyState, e: HirExpr) -> MirPlace {
-    match e.kind {
-        HirExprIdent -> mirLowerIdentPlace(bs, e),
-        HirExprField -> mirLowerFieldExprPlace(bs, e),
-        HirExprTupleAccess -> mirLowerTupleAccessPlace(bs, e),
-        HirExprIndex -> mirLowerIndexExprPlace(bs, e),
-        _ -> mirPlace(-1),
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if e.kind == HirExprIdent { return mirLowerIdentPlace(bs, e) }
+    if e.kind == HirExprField { return mirLowerFieldExprPlace(bs, e) }
+    if e.kind == HirExprTupleAccess { return mirLowerTupleAccessPlace(bs, e) }
+    if e.kind == HirExprIndex { return mirLowerIndexExprPlace(bs, e) }
+    mirPlace(-1)
 }
 
 fn mirLowerIdentPlace(bs: MirLowerBodyState, e: HirExpr) -> MirPlace {
@@ -2406,10 +2401,9 @@ fn mirLowerMakeIndexProj(
 ) -> MirProjection {
     match idxOp.kind {
         MirOpConst -> {
-            match idxOp.const.kind {
-                MirConstInt -> mirIndexProjConst(idxOp.const.intValue, elemTypeText),
-                _ -> mirLowerSpillIndexOperand(bs, idxOp, idxT, elemTypeText, span),
-            }
+            // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+            if idxOp.const.kind == MirConstInt { return mirIndexProjConst(idxOp.const.intValue, elemTypeText) }
+            mirLowerSpillIndexOperand(bs, idxOp, idxT, elemTypeText, span)
         },
         _ -> mirLowerSpillIndexOperand(bs, idxOp, idxT, elemTypeText, span),
     }
@@ -3441,18 +3435,17 @@ pub fn mirLowerExprToRValue(
     if !hirExprIsValid(e) {
         return mirRVUse(mirOperandConst(mirConstUnit()))
     }
-    match e.kind {
-        HirExprUnary -> mirLowerUnaryRValue(bs, e),
-        HirExprBinary -> mirLowerBinaryRValue(bs, e),
-        HirExprField -> mirLowerFieldRValue(bs, e),
-        HirExprTupleAccess -> mirLowerTupleAccessRValue(bs, e),
-        HirExprIndex -> mirLowerIndexRValue(bs, e),
-        HirExprTupleLit -> mirLowerTupleLitRValue(bs, e),
-        HirExprList -> mirLowerListLitRValue(bs, e, hint),
-        HirExprClosure -> mirLowerClosureRValue(bs, e, hint),
-        HirExprError -> mirLowerErrorExprRValue(bs, e),
-        _ -> mirRVUse(mirLowerExprAsOperand(bs, e)),
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if e.kind == HirExprUnary { return mirLowerUnaryRValue(bs, e) }
+    if e.kind == HirExprBinary { return mirLowerBinaryRValue(bs, e) }
+    if e.kind == HirExprField { return mirLowerFieldRValue(bs, e) }
+    if e.kind == HirExprTupleAccess { return mirLowerTupleAccessRValue(bs, e) }
+    if e.kind == HirExprIndex { return mirLowerIndexRValue(bs, e) }
+    if e.kind == HirExprTupleLit { return mirLowerTupleLitRValue(bs, e) }
+    if e.kind == HirExprList { return mirLowerListLitRValue(bs, e, hint) }
+    if e.kind == HirExprClosure { return mirLowerClosureRValue(bs, e, hint) }
+    if e.kind == HirExprError { return mirLowerErrorExprRValue(bs, e) }
+    mirRVUse(mirLowerExprAsOperand(bs, e))
 }
 
 fn mirLowerUnaryRValue(bs: MirLowerBodyState, e: HirExpr) -> MirRValue {
@@ -4004,10 +3997,9 @@ pub fn mirLowerCallExprInto(
         }
     }
     // 3. Ident fallback path (direct fn, indirect call, variant ctor).
-    match callee.kind {
-        HirExprIdent -> mirLowerCallIdent(bs, e, callee, dest, destT, span),
-        _ -> mirLowerCallUnsupported(bs, e, dest, destT, span, "non-ident callee"),
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if callee.kind == HirExprIdent { return mirLowerCallIdent(bs, e, callee, dest, destT, span) }
+    mirLowerCallUnsupported(bs, e, dest, destT, span, "non-ident callee")
 }
 
 /// mirLowerCallExprQualifiedIntrinsic handles `pkg.fn(args)` shaped
@@ -4501,10 +4493,9 @@ fn mirLowerParamIndex(sig: MirLowerFnSignature, name: String) -> Int {
 }
 
 fn mirLowerParamTypesOf(t: HirType) -> List<HirType> {
-    match t.kind {
-        HirTypeFn -> t.fnParams,
-        _ -> [],
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if t.kind == HirTypeFn { return t.fnParams }
+    []
 }
 
 /// mirLowerIntrinsicCallInto lowers an `IntrinsicCall` HIR node into
@@ -4538,13 +4529,13 @@ pub fn mirLowerIntrinsicCallInto(
 }
 
 fn hirIntrinsicToMir(k: HirIntrinsicKind) -> MirIntrinsicKind {
-    match k {
-        HirIntrinsicInvalid -> MirIntrinsicInvalid,
-        HirIntrinsicPrint -> MirIntrinsicPrint,
-        HirIntrinsicPrintln -> MirIntrinsicPrintln,
-        HirIntrinsicEprint -> MirIntrinsicEprint,
-        HirIntrinsicEprintln -> MirIntrinsicEprintln,
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if k == HirIntrinsicInvalid { return MirIntrinsicInvalid }
+    if k == HirIntrinsicPrint { return MirIntrinsicPrint }
+    if k == HirIntrinsicPrintln { return MirIntrinsicPrintln }
+    if k == HirIntrinsicEprint { return MirIntrinsicEprint }
+    if k == HirIntrinsicEprintln { return MirIntrinsicEprintln }
+    MirIntrinsicInvalid
 }
 
 // ====================================================================
@@ -5279,10 +5270,9 @@ pub fn mirLowerIfLetExprInto(
         mirLowerExprInto(bs, e.ifLetScrutinee[0], scrutLocal, scrutT)
     }
 
-    match e.ifLetPattern.kind {
-        HirPatVariant -> mirLowerIfLetVariant(bs, e, scrutLocal, scrutT, dest, destT, span),
-        _ -> mirLowerIfLetNonVariant(bs, e, scrutLocal, scrutT, dest, destT, span),
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if e.ifLetPattern.kind == HirPatVariant { return mirLowerIfLetVariant(bs, e, scrutLocal, scrutT, dest, destT, span) }
+    mirLowerIfLetNonVariant(bs, e, scrutLocal, scrutT, dest, destT, span)
 
     mirLowerPopScope(bs)
 }
@@ -5730,10 +5720,9 @@ pub fn mirLowerMethodCallInto(
 /// `l.useAliases` when `recv` is a bare Ident referencing an imported
 /// package alias, or -1 otherwise. Matches Go's `useAliasFor`.
 fn mirLowerUseAliasIndexForReceiver(l: MirLowerer, recv: HirExpr) -> Int {
-    match recv.kind {
-        HirExprIdent -> mirLowerLookupUseAlias(l, recv.identName),
-        _ -> -1,
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if recv.kind == HirExprIdent { return mirLowerLookupUseAlias(l, recv.identName) }
+    -1
 }
 
 /// mirLowerBodyUseAliasIndexForReceiver is the body-aware variant of
@@ -6025,17 +6014,16 @@ pub fn mirLowerConcurrencyIntrinsicForMethod(
 /// produces no MIR-visible value. Used so calls in expression
 /// position do not carry a stale dest.
 pub fn mirLowerIsVoidConcurrencyIntrinsic(k: MirIntrinsicKind) -> Bool {
-    match k {
-        MirIntrinsicChanSend -> true,
-        MirIntrinsicChanClose -> true,
-        MirIntrinsicGroupCancel -> true,
-        MirIntrinsicYield -> true,
-        MirIntrinsicSelectRecv -> true,
-        MirIntrinsicSelectSend -> true,
-        MirIntrinsicSelectTimeout -> true,
-        MirIntrinsicSelectDefault -> true,
-        _ -> false,
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if k == MirIntrinsicChanSend { return true }
+    if k == MirIntrinsicChanClose { return true }
+    if k == MirIntrinsicGroupCancel { return true }
+    if k == MirIntrinsicYield { return true }
+    if k == MirIntrinsicSelectRecv { return true }
+    if k == MirIntrinsicSelectSend { return true }
+    if k == MirIntrinsicSelectTimeout { return true }
+    if k == MirIntrinsicSelectDefault { return true }
+    false
 }
 
 // ---- Runtime (std.runtime.raw) ------------------------------------
@@ -6315,16 +6303,15 @@ pub fn mirLowerBuiltinFreeCallIntrinsicForReceiver(
 /// produces no MIR-visible value. Keeps call sites in expression
 /// position from carrying a stale dest through to the backend.
 pub fn mirLowerIsVoidStdlibIntrinsic(k: MirIntrinsicKind) -> Bool {
-    match k {
-        MirIntrinsicListPush -> true,
-        MirIntrinsicListInsert -> true,
-        MirIntrinsicListClear -> true,
-        MirIntrinsicMapSet -> true,
-        MirIntrinsicMapClear -> true,
-        MirIntrinsicSetInsert -> true,
-        MirIntrinsicSetClear -> true,
-        _ -> false,
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if k == MirIntrinsicListPush { return true }
+    if k == MirIntrinsicListInsert { return true }
+    if k == MirIntrinsicListClear { return true }
+    if k == MirIntrinsicMapSet { return true }
+    if k == MirIntrinsicMapClear { return true }
+    if k == MirIntrinsicSetInsert { return true }
+    if k == MirIntrinsicSetClear { return true }
+    false
 }
 
 // ---- String / Bytes method intrinsics -----------------------------

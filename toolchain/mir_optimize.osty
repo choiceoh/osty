@@ -565,11 +565,10 @@ fn mirRewritePlaceProjections(p: MirPlace, known: List<MirConst>) -> Bool {
 /// or a SwitchInt's scrutinee when possible. Returns true on
 /// substitution.
 fn mirRewriteTerminatorCond(t: MirTerm, known: List<MirConst>) -> Bool {
-    match t.kind {
-        MirTermBranch -> mirSubstituteOperandInPlace(t.cond, known),
-        MirTermSwitchInt -> mirSubstituteOperandInPlace(t.cond, known),
-        _ -> false,
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if t.kind == MirTermBranch { return mirSubstituteOperandInPlace(t.cond, known) }
+    if t.kind == MirTermSwitchInt { return mirSubstituteOperandInPlace(t.cond, known) }
+    false
 }
 
 /// mirSubstituteOperandInPlace checks whether `op` is a bare

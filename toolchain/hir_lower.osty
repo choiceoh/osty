@@ -327,30 +327,30 @@ pub fn hirLowerPrimByName(name: String) -> HirType {
 /// `Float` — matches Go's `types.Untyped.Default()` convention so
 /// downstream passes never see an untyped carrier.
 pub fn hirLowerPrimByPk(pk: PrimKind) -> HirType {
-    match pk {
-        PkInvalid -> hirTypeErr(),
-        PkInt -> hirTInt(),
-        PkInt8 -> hirTInt8(),
-        PkInt16 -> hirTInt16(),
-        PkInt32 -> hirTInt32(),
-        PkInt64 -> hirTInt64(),
-        PkUInt8 -> hirTUInt8(),
-        PkUInt16 -> hirTUInt16(),
-        PkUInt32 -> hirTUInt32(),
-        PkUInt64 -> hirTUInt64(),
-        PkByte -> hirTByte(),
-        PkFloat -> hirTFloat(),
-        PkFloat32 -> hirTFloat32(),
-        PkFloat64 -> hirTFloat64(),
-        PkBool -> hirTBool(),
-        PkChar -> hirTChar(),
-        PkString -> hirTString(),
-        PkBytes -> hirTBytes(),
-        PkUnit -> hirTUnit(),
-        PkNever -> hirTNever(),
-        PkUntypedInt -> hirTInt(),
-        PkUntypedFloat -> hirTFloat(),
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if pk == PkInvalid { return hirTypeErr() }
+    if pk == PkInt { return hirTInt() }
+    if pk == PkInt8 { return hirTInt8() }
+    if pk == PkInt16 { return hirTInt16() }
+    if pk == PkInt32 { return hirTInt32() }
+    if pk == PkInt64 { return hirTInt64() }
+    if pk == PkUInt8 { return hirTUInt8() }
+    if pk == PkUInt16 { return hirTUInt16() }
+    if pk == PkUInt32 { return hirTUInt32() }
+    if pk == PkUInt64 { return hirTUInt64() }
+    if pk == PkByte { return hirTByte() }
+    if pk == PkFloat { return hirTFloat() }
+    if pk == PkFloat32 { return hirTFloat32() }
+    if pk == PkFloat64 { return hirTFloat64() }
+    if pk == PkBool { return hirTBool() }
+    if pk == PkChar { return hirTChar() }
+    if pk == PkString { return hirTString() }
+    if pk == PkBytes { return hirTBytes() }
+    if pk == PkUnit { return hirTUnit() }
+    if pk == PkNever { return hirTNever() }
+    if pk == PkUntypedInt { return hirTInt() }
+    if pk == PkUntypedFloat { return hirTFloat() }
+    hirTypeErr()
 }
 
 // ====================================================================
@@ -1660,19 +1660,18 @@ fn hirLowerPrimKindEq(a: HirPrimKind, b: HirPrimKind) -> Bool {
 pub fn hirLowerIsIntegralType(t: HirType) -> Bool {
     match t.kind {
         HirTypePrim -> {
-            match t.primKind {
-                HirPrimInt -> true,
-                HirPrimInt8 -> true,
-                HirPrimInt16 -> true,
-                HirPrimInt32 -> true,
-                HirPrimInt64 -> true,
-                HirPrimUInt8 -> true,
-                HirPrimUInt16 -> true,
-                HirPrimUInt32 -> true,
-                HirPrimUInt64 -> true,
-                HirPrimByte -> true,
-                _ -> false,
-            }
+            // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+            if t.primKind == HirPrimInt { return true }
+            if t.primKind == HirPrimInt8 { return true }
+            if t.primKind == HirPrimInt16 { return true }
+            if t.primKind == HirPrimInt32 { return true }
+            if t.primKind == HirPrimInt64 { return true }
+            if t.primKind == HirPrimUInt8 { return true }
+            if t.primKind == HirPrimUInt16 { return true }
+            if t.primKind == HirPrimUInt32 { return true }
+            if t.primKind == HirPrimUInt64 { return true }
+            if t.primKind == HirPrimByte { return true }
+            false
         },
         _ -> false,
     }
@@ -1683,12 +1682,11 @@ pub fn hirLowerIsIntegralType(t: HirType) -> Bool {
 pub fn hirLowerIsFloatType(t: HirType) -> Bool {
     match t.kind {
         HirTypePrim -> {
-            match t.primKind {
-                HirPrimFloat -> true,
-                HirPrimFloat32 -> true,
-                HirPrimFloat64 -> true,
-                _ -> false,
-            }
+            // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+            if t.primKind == HirPrimFloat { return true }
+            if t.primKind == HirPrimFloat32 { return true }
+            if t.primKind == HirPrimFloat64 { return true }
+            false
         },
         _ -> false,
     }
@@ -1774,11 +1772,10 @@ pub fn hirLowerRecoverIndexType(baseT: HirType) -> HirType {
     }
     match baseT.kind {
         HirTypePrim -> {
-            match baseT.primKind {
-                HirPrimBytes -> hirTByte(),
-                HirPrimString -> hirTChar(),
-                _ -> hirTypeErr(),
-            }
+            // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+            if baseT.primKind == HirPrimBytes { return hirTByte() }
+            if baseT.primKind == HirPrimString { return hirTChar() }
+            hirTypeErr()
         },
         HirTypeNamed -> {
             if baseT.namedName == "List" && baseT.namedArgs.len() >= 1 {
@@ -1875,12 +1872,12 @@ pub fn hirLowerClassifyRange(hasStart: Bool, hasEnd: Bool) -> HirLowerRangeShape
 }
 
 pub fn hirLowerRangeShapeName(s: HirLowerRangeShape) -> String {
-    match s {
-        HirRangeShapeEmpty -> "empty",
-        HirRangeShapeBounded -> "bounded",
-        HirRangeShapeFrom -> "from",
-        HirRangeShapeTo -> "to",
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if s == HirRangeShapeEmpty { return "empty" }
+    if s == HirRangeShapeBounded { return "bounded" }
+    if s == HirRangeShapeFrom { return "from" }
+    if s == HirRangeShapeTo { return "to" }
+    "empty"
 }
 
 // ====================================================================
@@ -4126,50 +4123,47 @@ fn hirLowerAssignOpFromFrontToken(op: FrontTokenKind) -> HirAssignOp {
 }
 
 fn hirLowerUnaryOpFromCore(op: UnOp) -> HirUnOp {
-    match op {
-        UoNeg -> HirUnNeg,
-        UoPlus -> HirUnPlus,
-        UoNot -> HirUnNot,
-        UoBitNot -> HirUnBitNot,
-        _ -> HirUnInvalid,
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if op == UoNeg { return HirUnNeg }
+    if op == UoPlus { return HirUnPlus }
+    if op == UoNot { return HirUnNot }
+    if op == UoBitNot { return HirUnBitNot }
+    HirUnInvalid
 }
 
 fn hirLowerBinaryOpFromCore(op: BinOp) -> HirBinOp {
-    match op {
-        BoAdd -> HirBinAdd,
-        BoSub -> HirBinSub,
-        BoMul -> HirBinMul,
-        BoDiv -> HirBinDiv,
-        BoMod -> HirBinMod,
-        BoEq -> HirBinEq,
-        BoNe -> HirBinNeq,
-        BoLt -> HirBinLt,
-        BoLe -> HirBinLeq,
-        BoGt -> HirBinGt,
-        BoGe -> HirBinGeq,
-        BoAnd -> HirBinAnd,
-        BoOr -> HirBinOr,
-        BoBitAnd -> HirBinBitAnd,
-        BoBitOr -> HirBinBitOr,
-        BoBitXor -> HirBinBitXor,
-        BoShl -> HirBinShl,
-        BoShr -> HirBinShr,
-        _ -> HirBinInvalid,
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if op == BoAdd { return HirBinAdd }
+    if op == BoSub { return HirBinSub }
+    if op == BoMul { return HirBinMul }
+    if op == BoDiv { return HirBinDiv }
+    if op == BoMod { return HirBinMod }
+    if op == BoEq { return HirBinEq }
+    if op == BoNe { return HirBinNeq }
+    if op == BoLt { return HirBinLt }
+    if op == BoLe { return HirBinLeq }
+    if op == BoGt { return HirBinGt }
+    if op == BoGe { return HirBinGeq }
+    if op == BoAnd { return HirBinAnd }
+    if op == BoOr { return HirBinOr }
+    if op == BoBitAnd { return HirBinBitAnd }
+    if op == BoBitOr { return HirBinBitOr }
+    if op == BoBitXor { return HirBinBitXor }
+    if op == BoShl { return HirBinShl }
+    if op == BoShr { return HirBinShr }
+    HirBinInvalid
 }
 
 fn hirLowerIdentKindFromCore(kind: IdentKind) -> HirIdentKind {
-    match kind {
-        IkLocal -> HirIdentLocal,
-        IkParam -> HirIdentParam,
-        IkFn -> HirIdentFn,
-        IkVariant -> HirIdentVariant,
-        IkTypeName -> HirIdentTypeName,
-        IkGlobal -> HirIdentGlobal,
-        IkBuiltin -> HirIdentBuiltin,
-        _ -> HirIdentUnknown,
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if kind == IkLocal { return HirIdentLocal }
+    if kind == IkParam { return HirIdentParam }
+    if kind == IkFn { return HirIdentFn }
+    if kind == IkVariant { return HirIdentVariant }
+    if kind == IkTypeName { return HirIdentTypeName }
+    if kind == IkGlobal { return HirIdentGlobal }
+    if kind == IkBuiltin { return HirIdentBuiltin }
+    HirIdentUnknown
 }
 
 fn hirLowerCoreIdentCaptureKind(

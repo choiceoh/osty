@@ -1762,11 +1762,10 @@ fn monoIsBuiltinStdlibName(name: String) -> Bool {
 }
 
 fn monoExtractOwnerNominal(t: HirType) -> String {
-    match t.kind {
-        HirTypeNamed -> t.namedName,
-        HirTypeOptional -> "Option",
-        _ -> "",
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if t.kind == HirTypeNamed { return t.namedName }
+    if t.kind == HirTypeOptional { return "Option" }
+    ""
 }
 
 pub struct MonoResolvedOwner {
