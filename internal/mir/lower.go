@@ -2099,7 +2099,15 @@ func (bs *bodyState) lowerMatch(scrutinee ir.Expr, arms []*ir.MatchArm, tree ir.
 	// a specialised decision tree instead of the goto-armBlocks[0]
 	// fallback, which silently collapses every match on Result / enum
 	// payload bindings to "always take arm 0".
-	if tree == nil && scrutT != nil && !isPoisonType(scrutT) {
+	//
+	// CompileDecisionTree always returns a non-nil node — even for an
+	// ErrType / nil scrutinee it falls through to a `compileArmChain`
+	// of guard-cascades plus DecisionFail. Recompiling is therefore
+	// unconditional; ErrType bodies will stop at the type-checker
+	// gate before they ever reach a backend, but their MIR shape stays
+	// well-formed and the audit harness can fingerprint them instead
+	// of getting buried under "match without decision tree".
+	if tree == nil {
 		tree = ir.CompileDecisionTree(scrutT, decisionArms)
 	}
 
