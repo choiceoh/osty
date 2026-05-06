@@ -594,7 +594,11 @@ func matchSequentialReturn(fn *mir.Function, mctx *moduleCtx) (sequentialPattern
 	if pat.retType == scalarUnknown {
 		return pat, false
 	}
-	if len(fn.Params) > 2 {
+	// Lift the historical 2-param ceiling to 8. The cap was a P3a
+	// artifact (only `a`/`b` fallback names existed) and not
+	// load-bearing for the rest of the matcher; toolchain audit shows
+	// 3–8 param scalar/String fns are common in production code.
+	if len(fn.Params) > 8 {
 		return pat, false
 	}
 
@@ -604,7 +608,7 @@ func matchSequentialReturn(fn *mir.Function, mctx *moduleCtx) (sequentialPattern
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b"}
+	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
