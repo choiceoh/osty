@@ -265,6 +265,7 @@ func emitLLVMFallback(route llvmDispatchRoute, entry Entry, opts llvmabi.Options
 			nativeWarnings = append(nativeWarnings, errors.New("stage0 fallback: emitted MIR through bootstrap-only path"))
 			return s0Out, nativeWarnings, nil
 		}
+		traceLLVMDispatch("stage0 fallback declined: %v", s0Err)
 		nativeWarnings = append(nativeWarnings, fmt.Errorf("stage0 fallback declined: %w", s0Err))
 	}
 	return nil, nativeWarnings, llvmabi.Unsupported("mir-emit", "native LIR Proto subprocess declined MIR coverage for route "+string(route))
