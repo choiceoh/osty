@@ -33,11 +33,10 @@ use std.strings as strings
 /// gave up; try to recover from context". Matches Go's
 /// `isUnresolvedType` predicate.
 pub fn hirIsUnresolvedType(t: HirType) -> Bool {
-    match t.kind {
-        HirTypeInvalid -> true,
-        HirTypeErr -> true,
-        _ -> false,
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if t.kind == HirTypeInvalid { return true }
+    if t.kind == HirTypeErr { return true }
+    false
 }
 
 // ====================================================================

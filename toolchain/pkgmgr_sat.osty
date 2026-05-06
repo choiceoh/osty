@@ -116,11 +116,11 @@ pub fn vsIsFull(vs: SatVersionSet) -> Bool {
 }
 
 fn satBoundIsUnbounded(b: SatBound) -> Bool {
-    match b.kind {
-        SatUnbounded -> true,
-        SatInclusive -> false,
-        SatExclusive -> false,
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if b.kind == SatUnbounded { return true }
+    if b.kind == SatInclusive { return false }
+    if b.kind == SatExclusive { return false }
+    true
 }
 
 /// satCompareLowBounds compares two low-side bounds. Lower bound is
@@ -138,11 +138,11 @@ fn satCompareLowBounds(a: SatBound, b: SatBound) -> Int {
 }
 
 fn satLowInclusiveRank(b: SatBound) -> Int {
-    match b.kind {
-        SatUnbounded -> 0,
-        SatInclusive -> 0,
-        SatExclusive -> 1,
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if b.kind == SatUnbounded { return 0 }
+    if b.kind == SatInclusive { return 0 }
+    if b.kind == SatExclusive { return 1 }
+    0
 }
 
 /// satCompareHighBounds compares two high-side bounds. Higher is
@@ -160,11 +160,11 @@ fn satCompareHighBounds(a: SatBound, b: SatBound) -> Int {
 }
 
 fn satHighInclusiveRank(b: SatBound) -> Int {
-    match b.kind {
-        SatUnbounded -> 1,
-        SatInclusive -> 1,
-        SatExclusive -> 0,
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if b.kind == SatUnbounded { return 1 }
+    if b.kind == SatInclusive { return 1 }
+    if b.kind == SatExclusive { return 0 }
+    1
 }
 
 /// satIntervalContains reports whether `v` lies inside interval `iv`.
@@ -241,11 +241,11 @@ fn satBoundLessThanLow(high: SatBound, low: SatBound) -> Bool {
 }
 
 fn isSatBoundExclusive(b: SatBound) -> Bool {
-    match b.kind {
-        SatUnbounded -> false,
-        SatInclusive -> false,
-        SatExclusive -> true,
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if b.kind == SatUnbounded { return false }
+    if b.kind == SatInclusive { return false }
+    if b.kind == SatExclusive { return true }
+    false
 }
 
 /// satIntervalIntersect returns the overlap of two intervals, or an
@@ -380,19 +380,19 @@ pub fn vsComplement(vs: SatVersionSet) -> SatVersionSet {
 fn satFlipBoundHigh(low: SatBound) -> SatBound {
     // For complement: a low endpoint becomes the opposite-inclusivity
     // high endpoint of the preceding hole. `[v, ...)` becomes `..., v)`.
-    match low.kind {
-        SatUnbounded -> satBoundUnbounded(),
-        SatInclusive -> satBoundExclusive(low.version),
-        SatExclusive -> satBoundInclusive(low.version),
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if low.kind == SatUnbounded { return satBoundUnbounded() }
+    if low.kind == SatInclusive { return satBoundExclusive(low.version) }
+    if low.kind == SatExclusive { return satBoundInclusive(low.version) }
+    satBoundUnbounded()
 }
 
 fn satFlipBoundLow(high: SatBound) -> SatBound {
-    match high.kind {
-        SatUnbounded -> satBoundUnbounded(),
-        SatInclusive -> satBoundExclusive(high.version),
-        SatExclusive -> satBoundInclusive(high.version),
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if high.kind == SatUnbounded { return satBoundUnbounded() }
+    if high.kind == SatInclusive { return satBoundExclusive(high.version) }
+    if high.kind == SatExclusive { return satBoundInclusive(high.version) }
+    satBoundUnbounded()
 }
 
 fn satCompareLowBoundAgainstHigh(lo: SatBound, hi: SatBound) -> Int {
@@ -1445,12 +1445,12 @@ fn satLearnedSeed(state: SatState, incIdx: Int) -> String {
     // from next. Fallback: root.
     let inc = state.incompats[incIdx]
     let rel = satRelation(state, inc)
-    match rel.rel {
-        SatIncAlmost -> inc.terms[rel.unsatisfied].pkg,
-        SatIncSat -> state.rootName,
-        SatIncContra -> state.rootName,
-        SatIncInconc -> state.rootName,
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if rel.rel == SatIncAlmost { return inc.terms[rel.unsatisfied].pkg }
+    if rel.rel == SatIncSat { return state.rootName }
+    if rel.rel == SatIncContra { return state.rootName }
+    if rel.rel == SatIncInconc { return state.rootName }
+    inc.terms[rel.unsatisfied].pkg
 }
 
 // ---------------------------------------------------------------------

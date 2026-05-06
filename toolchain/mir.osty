@@ -1154,12 +1154,12 @@ pub enum MirInlineMode {
 /// mirInlineModeName renders a MirInlineMode for diagnostic /
 /// debug-print callers. Matches hirInlineModeName verbatim.
 pub fn mirInlineModeName(mode: MirInlineMode) -> String {
-    match mode {
-        MirInlineNone -> "none",
-        MirInlineSoft -> "soft",
-        MirInlineAlways -> "always",
-        MirInlineNever -> "never",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if mode == MirInlineNone { return "none" }
+    if mode == MirInlineSoft { return "soft" }
+    if mode == MirInlineAlways { return "always" }
+    if mode == MirInlineNever { return "never" }
+    "none"
 }
 
 pub fn mirFunction(name: String, returnType: String, span: MirSpan) -> MirFunction {
@@ -1581,11 +1581,10 @@ fn mirPrintInstr(i: MirInstr, func: MirFunction) -> String {
 }
 
 fn mirPrintCallee(i: MirInstr, func: MirFunction) -> String {
-    match i.calleeKind {
-        MirCalleeFn -> i.calleeSymbol,
-        MirCalleeIndirect -> "*" + mirPrintOperand(i.calleeOperand, func),
-        _ -> "(?)",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if i.calleeKind == MirCalleeFn { return i.calleeSymbol }
+    if i.calleeKind == MirCalleeIndirect { return "*" + mirPrintOperand(i.calleeOperand, func) }
+    "(?)"
 }
 
 fn mirPrintTerm(t: MirTerm, func: MirFunction) -> String {
@@ -1649,12 +1648,11 @@ fn mirPrintProjection(proj: MirProjection, func: MirFunction) -> String {
 }
 
 fn mirPrintOperand(op: MirOperand, func: MirFunction) -> String {
-    match op.kind {
-        MirOpCopy -> mirPrintPlace(op.place, func),
-        MirOpMove -> "move " + mirPrintPlace(op.place, func),
-        MirOpConst -> mirPrintConst(op.const),
-        _ -> "(?)",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if op.kind == MirOpCopy { return mirPrintPlace(op.place, func) }
+    if op.kind == MirOpMove { return "move " + mirPrintPlace(op.place, func) }
+    if op.kind == MirOpConst { return mirPrintConst(op.const) }
+    "(?)"
 }
 
 fn mirPrintOperandList(ops: List<MirOperand>, func: MirFunction) -> String {
@@ -1720,69 +1718,64 @@ fn mirPrintRValue(rv: MirRValue, func: MirFunction) -> String {
 // ====================================================================
 
 fn mirUnaryOpName(op: MirUnaryOp) -> String {
-    match op {
-        MirUnNeg -> "-",
-        MirUnPlus -> "+",
-        MirUnNot -> "!",
-        MirUnBitNot -> "~",
-        _ -> "(?)",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if op == MirUnNeg { return "-" }
+    if op == MirUnPlus { return "+" }
+    if op == MirUnNot { return "!" }
+    if op == MirUnBitNot { return "~" }
+    "(?)"
 }
 
 fn mirBinaryOpName(op: MirBinaryOp) -> String {
-    match op {
-        MirBinAdd -> "+",
-        MirBinSub -> "-",
-        MirBinMul -> "*",
-        MirBinDiv -> "/",
-        MirBinMod -> "%",
-        MirBinEq -> "==",
-        MirBinNeq -> "!=",
-        MirBinLt -> "<",
-        MirBinLeq -> "<=",
-        MirBinGt -> ">",
-        MirBinGeq -> ">=",
-        MirBinAnd -> "&&",
-        MirBinOr -> "||",
-        MirBinBitAnd -> "&",
-        MirBinBitOr -> "|",
-        MirBinBitXor -> "^",
-        MirBinShl -> "<<",
-        MirBinShr -> ">>",
-        _ -> "(?)",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if op == MirBinAdd { return "+" }
+    if op == MirBinSub { return "-" }
+    if op == MirBinMul { return "*" }
+    if op == MirBinDiv { return "/" }
+    if op == MirBinMod { return "%" }
+    if op == MirBinEq { return "==" }
+    if op == MirBinNeq { return "!=" }
+    if op == MirBinLt { return "<" }
+    if op == MirBinLeq { return "<=" }
+    if op == MirBinGt { return ">" }
+    if op == MirBinGeq { return ">=" }
+    if op == MirBinAnd { return "&&" }
+    if op == MirBinOr { return "||" }
+    if op == MirBinBitAnd { return "&" }
+    if op == MirBinBitOr { return "|" }
+    if op == MirBinBitXor { return "^" }
+    if op == MirBinShl { return "<<" }
+    if op == MirBinShr { return ">>" }
+    "(?)"
 }
 
 fn mirAggregateKindName(k: MirAggregateKind) -> String {
-    match k {
-        MirAggTuple -> "Tuple",
-        MirAggStruct -> "Struct",
-        MirAggEnumVariant -> "EnumVariant",
-        MirAggList -> "List",
-        MirAggMap -> "Map",
-        MirAggClosure -> "Closure",
-        _ -> "(?)",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if k == MirAggTuple { return "Tuple" }
+    if k == MirAggStruct { return "Struct" }
+    if k == MirAggEnumVariant { return "EnumVariant" }
+    if k == MirAggList { return "List" }
+    if k == MirAggMap { return "Map" }
+    if k == MirAggClosure { return "Closure" }
+    "(?)"
 }
 
 fn mirCastKindName(k: MirCastKind) -> String {
-    match k {
-        MirCastIntResize -> "int_resize",
-        MirCastIntToFloat -> "int_to_float",
-        MirCastFloatToInt -> "float_to_int",
-        MirCastFloatResize -> "float_resize",
-        MirCastOptionalWrap -> "optional_wrap",
-        MirCastOptionalUnwrap -> "optional_unwrap",
-        MirCastBitcast -> "bitcast",
-        _ -> "(?)",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if k == MirCastIntResize { return "int_resize" }
+    if k == MirCastIntToFloat { return "int_to_float" }
+    if k == MirCastFloatToInt { return "float_to_int" }
+    if k == MirCastFloatResize { return "float_resize" }
+    if k == MirCastOptionalWrap { return "optional_wrap" }
+    if k == MirCastOptionalUnwrap { return "optional_unwrap" }
+    if k == MirCastBitcast { return "bitcast" }
+    "(?)"
 }
 
 fn mirNullaryKindName(k: MirNullaryRVKind) -> String {
-    match k {
-        MirNullaryNone -> "none",
-        _ -> "(?)",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if k == MirNullaryNone { return "none" }
+    "(?)"
 }
 
 /// mirIntrinsicName returns the canonical printable name of a MIR
@@ -1790,146 +1783,145 @@ fn mirNullaryKindName(k: MirNullaryRVKind) -> String {
 /// IntrinsicKind; callers that need a stable on-disk encoding should
 /// use this rather than the raw enum tag.
 pub fn mirIntrinsicName(k: MirIntrinsicKind) -> String {
-    match k {
-        MirIntrinsicPrint -> "print",
-        MirIntrinsicPrintln -> "println",
-        MirIntrinsicEprint -> "eprint",
-        MirIntrinsicEprintln -> "eprintln",
-        MirIntrinsicAbort -> "abort",
-        MirIntrinsicStringConcat -> "string_concat",
-        MirIntrinsicBytesConcat -> "bytes_concat",
-        MirIntrinsicChanMake -> "chan_make",
-        MirIntrinsicChanSend -> "chan_send",
-        MirIntrinsicChanRecv -> "chan_recv",
-        MirIntrinsicChanClose -> "chan_close",
-        MirIntrinsicChanIsClosed -> "chan_is_closed",
-        MirIntrinsicTaskGroup -> "task_group",
-        MirIntrinsicSpawn -> "spawn",
-        MirIntrinsicHandleJoin -> "handle_join",
-        MirIntrinsicGroupCancel -> "group_cancel",
-        MirIntrinsicGroupIsCancelled -> "group_is_cancelled",
-        MirIntrinsicParallel -> "parallel",
-        MirIntrinsicRace -> "race",
-        MirIntrinsicCollectAll -> "collect_all",
-        MirIntrinsicSelect -> "select",
-        MirIntrinsicSelectRecv -> "select_recv",
-        MirIntrinsicSelectSend -> "select_send",
-        MirIntrinsicSelectTimeout -> "select_timeout",
-        MirIntrinsicSelectDefault -> "select_default",
-        MirIntrinsicIsCancelled -> "is_cancelled",
-        MirIntrinsicCheckCancelled -> "check_cancelled",
-        MirIntrinsicYield -> "yield",
-        MirIntrinsicSleep -> "sleep",
-        MirIntrinsicListPush -> "list_push",
-        MirIntrinsicListLen -> "list_len",
-        MirIntrinsicListGet -> "list_get",
-        MirIntrinsicListIsEmpty -> "list_is_empty",
-        MirIntrinsicListFirst -> "list_first",
-        MirIntrinsicListLast -> "list_last",
-        MirIntrinsicListSorted -> "list_sorted",
-        MirIntrinsicListContains -> "list_contains",
-        MirIntrinsicListIndexOf -> "list_index_of",
-        MirIntrinsicListToSet -> "list_to_set",
-        MirIntrinsicListRemoveAt -> "list_remove_at",
-        MirIntrinsicListReverse -> "list_reverse",
-        MirIntrinsicListReversed -> "list_reversed",
-        MirIntrinsicListToString -> "list_to_string",
-        MirIntrinsicMapNew -> "map_new",
-        MirIntrinsicMapGet -> "map_get",
-        MirIntrinsicMapSet -> "map_set",
-        MirIntrinsicMapContains -> "map_contains",
-        MirIntrinsicMapLen -> "map_len",
-        MirIntrinsicMapKeys -> "map_keys",
-        MirIntrinsicMapValues -> "map_values",
-        MirIntrinsicMapRemove -> "map_remove",
-        MirIntrinsicMapKeysSorted -> "map_keys_sorted",
-        MirIntrinsicMapToString -> "map_to_string",
-        MirIntrinsicSetNew -> "set_new",
-        MirIntrinsicSetInsert -> "set_insert",
-        MirIntrinsicSetContains -> "set_contains",
-        MirIntrinsicSetLen -> "set_len",
-        MirIntrinsicSetToList -> "set_to_list",
-        MirIntrinsicSetRemove -> "set_remove",
-        MirIntrinsicSetToString -> "set_to_string",
-        MirIntrinsicStringLen -> "string_len",
-        MirIntrinsicStringIsEmpty -> "string_is_empty",
-        MirIntrinsicStringContains -> "string_contains",
-        MirIntrinsicStringCount -> "string_count",
-        MirIntrinsicStringStartsWith -> "string_starts_with",
-        MirIntrinsicStringEndsWith -> "string_ends_with",
-        MirIntrinsicStringIndexOf -> "string_index_of",
-        MirIntrinsicStringSplit -> "string_split",
-        MirIntrinsicStringTrim -> "string_trim",
-        MirIntrinsicStringToUpper -> "string_to_upper",
-        MirIntrinsicStringToLower -> "string_to_lower",
-        MirIntrinsicStringToInt -> "string_to_int",
-        MirIntrinsicStringToFloat -> "string_to_float",
-        MirIntrinsicStringReplace -> "string_replace",
-        MirIntrinsicStringChars -> "string_chars",
-        MirIntrinsicStringBytes -> "string_bytes",
-        MirIntrinsicBytesLen -> "bytes_len",
-        MirIntrinsicBytesIsEmpty -> "bytes_is_empty",
-        MirIntrinsicBytesGet -> "bytes_get",
-        MirIntrinsicBytesContains -> "bytes_contains",
-        MirIntrinsicBytesStartsWith -> "bytes_starts_with",
-        MirIntrinsicBytesEndsWith -> "bytes_ends_with",
-        MirIntrinsicBytesIndexOf -> "bytes_index_of",
-        MirIntrinsicBytesLastIndexOf -> "bytes_last_index_of",
-        MirIntrinsicBytesSplit -> "bytes_split",
-        MirIntrinsicBytesJoin -> "bytes_join",
-        MirIntrinsicBytesRepeat -> "bytes_repeat",
-        MirIntrinsicBytesReplace -> "bytes_replace",
-        MirIntrinsicBytesReplaceAll -> "bytes_replace_all",
-        MirIntrinsicBytesTrimLeft -> "bytes_trim_left",
-        MirIntrinsicBytesTrimRight -> "bytes_trim_right",
-        MirIntrinsicBytesTrim -> "bytes_trim",
-        MirIntrinsicBytesTrimSpace -> "bytes_trim_space",
-        MirIntrinsicBytesToUpper -> "bytes_to_upper",
-        MirIntrinsicBytesToLower -> "bytes_to_lower",
-        MirIntrinsicBytesToHex -> "bytes_to_hex",
-        MirIntrinsicBytesSlice -> "bytes_slice",
-        MirIntrinsicOptionIsSome -> "option_is_some",
-        MirIntrinsicOptionIsNone -> "option_is_none",
-        MirIntrinsicOptionUnwrap -> "option_unwrap",
-        MirIntrinsicOptionUnwrapOr -> "option_unwrap_or",
-        MirIntrinsicResultIsOk -> "result_is_ok",
-        MirIntrinsicResultIsErr -> "result_is_err",
-        MirIntrinsicResultUnwrap -> "result_unwrap",
-        MirIntrinsicResultUnwrapOr -> "result_unwrap_or",
-        MirIntrinsicRawNull -> "raw_null",
-        MirIntrinsicStringJoin -> "string_join",
-        MirIntrinsicListPop -> "list_pop",
-        MirIntrinsicStringSubstring -> "string_substring",
-        MirIntrinsicByteToInt -> "byte_to_int",
-        MirIntrinsicCharToInt -> "char_to_int",
-        MirIntrinsicListSlice -> "list_slice",
-        MirIntrinsicMapGetOr -> "map_get_or",
-        MirIntrinsicStringSplitInto -> "string_split_into",
-        MirIntrinsicStringNthSegment -> "string_nth_segment",
-        MirIntrinsicMapIncr -> "map_incr",
-        MirIntrinsicStringRepeat -> "string_repeat",
-        MirIntrinsicStringTrimPrefix -> "string_trim_prefix",
-        MirIntrinsicStringTrimSuffix -> "string_trim_suffix",
-        MirIntrinsicStringTrimStart -> "string_trim_start",
-        MirIntrinsicStringTrimEnd -> "string_trim_end",
-        MirIntrinsicStringReplaceAll -> "string_replace_all",
-        MirIntrinsicStringSplitN -> "string_split_n",
-        MirIntrinsicStringFields -> "string_fields",
-        MirIntrinsicStringLastIndexOf -> "string_last_index_of",
-        MirIntrinsicBytesFromList -> "bytes_from_list",
-        MirIntrinsicBytesFromString -> "bytes_from_string",
-        MirIntrinsicBytesToString -> "bytes_to_string",
-        MirIntrinsicBytesFromHex -> "bytes_from_hex",
-        MirIntrinsicIntToByte -> "int_to_byte",
-        MirIntrinsicIntToChar -> "int_to_char",
-        MirIntrinsicByteToChar -> "byte_to_char",
-        MirIntrinsicCharToByte -> "char_to_byte",
-        MirIntrinsicListInsert -> "list_insert",
-        MirIntrinsicListClear -> "list_clear",
-        MirIntrinsicMapClear -> "map_clear",
-        MirIntrinsicSetClear -> "set_clear",
-        _ -> "invalid",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if k == MirIntrinsicPrint { return "print" }
+    if k == MirIntrinsicPrintln { return "println" }
+    if k == MirIntrinsicEprint { return "eprint" }
+    if k == MirIntrinsicEprintln { return "eprintln" }
+    if k == MirIntrinsicAbort { return "abort" }
+    if k == MirIntrinsicStringConcat { return "string_concat" }
+    if k == MirIntrinsicBytesConcat { return "bytes_concat" }
+    if k == MirIntrinsicChanMake { return "chan_make" }
+    if k == MirIntrinsicChanSend { return "chan_send" }
+    if k == MirIntrinsicChanRecv { return "chan_recv" }
+    if k == MirIntrinsicChanClose { return "chan_close" }
+    if k == MirIntrinsicChanIsClosed { return "chan_is_closed" }
+    if k == MirIntrinsicTaskGroup { return "task_group" }
+    if k == MirIntrinsicSpawn { return "spawn" }
+    if k == MirIntrinsicHandleJoin { return "handle_join" }
+    if k == MirIntrinsicGroupCancel { return "group_cancel" }
+    if k == MirIntrinsicGroupIsCancelled { return "group_is_cancelled" }
+    if k == MirIntrinsicParallel { return "parallel" }
+    if k == MirIntrinsicRace { return "race" }
+    if k == MirIntrinsicCollectAll { return "collect_all" }
+    if k == MirIntrinsicSelect { return "select" }
+    if k == MirIntrinsicSelectRecv { return "select_recv" }
+    if k == MirIntrinsicSelectSend { return "select_send" }
+    if k == MirIntrinsicSelectTimeout { return "select_timeout" }
+    if k == MirIntrinsicSelectDefault { return "select_default" }
+    if k == MirIntrinsicIsCancelled { return "is_cancelled" }
+    if k == MirIntrinsicCheckCancelled { return "check_cancelled" }
+    if k == MirIntrinsicYield { return "yield" }
+    if k == MirIntrinsicSleep { return "sleep" }
+    if k == MirIntrinsicListPush { return "list_push" }
+    if k == MirIntrinsicListLen { return "list_len" }
+    if k == MirIntrinsicListGet { return "list_get" }
+    if k == MirIntrinsicListIsEmpty { return "list_is_empty" }
+    if k == MirIntrinsicListFirst { return "list_first" }
+    if k == MirIntrinsicListLast { return "list_last" }
+    if k == MirIntrinsicListSorted { return "list_sorted" }
+    if k == MirIntrinsicListContains { return "list_contains" }
+    if k == MirIntrinsicListIndexOf { return "list_index_of" }
+    if k == MirIntrinsicListToSet { return "list_to_set" }
+    if k == MirIntrinsicListRemoveAt { return "list_remove_at" }
+    if k == MirIntrinsicListReverse { return "list_reverse" }
+    if k == MirIntrinsicListReversed { return "list_reversed" }
+    if k == MirIntrinsicListToString { return "list_to_string" }
+    if k == MirIntrinsicMapNew { return "map_new" }
+    if k == MirIntrinsicMapGet { return "map_get" }
+    if k == MirIntrinsicMapSet { return "map_set" }
+    if k == MirIntrinsicMapContains { return "map_contains" }
+    if k == MirIntrinsicMapLen { return "map_len" }
+    if k == MirIntrinsicMapKeys { return "map_keys" }
+    if k == MirIntrinsicMapValues { return "map_values" }
+    if k == MirIntrinsicMapRemove { return "map_remove" }
+    if k == MirIntrinsicMapKeysSorted { return "map_keys_sorted" }
+    if k == MirIntrinsicMapToString { return "map_to_string" }
+    if k == MirIntrinsicSetNew { return "set_new" }
+    if k == MirIntrinsicSetInsert { return "set_insert" }
+    if k == MirIntrinsicSetContains { return "set_contains" }
+    if k == MirIntrinsicSetLen { return "set_len" }
+    if k == MirIntrinsicSetToList { return "set_to_list" }
+    if k == MirIntrinsicSetRemove { return "set_remove" }
+    if k == MirIntrinsicSetToString { return "set_to_string" }
+    if k == MirIntrinsicStringLen { return "string_len" }
+    if k == MirIntrinsicStringIsEmpty { return "string_is_empty" }
+    if k == MirIntrinsicStringContains { return "string_contains" }
+    if k == MirIntrinsicStringCount { return "string_count" }
+    if k == MirIntrinsicStringStartsWith { return "string_starts_with" }
+    if k == MirIntrinsicStringEndsWith { return "string_ends_with" }
+    if k == MirIntrinsicStringIndexOf { return "string_index_of" }
+    if k == MirIntrinsicStringSplit { return "string_split" }
+    if k == MirIntrinsicStringTrim { return "string_trim" }
+    if k == MirIntrinsicStringToUpper { return "string_to_upper" }
+    if k == MirIntrinsicStringToLower { return "string_to_lower" }
+    if k == MirIntrinsicStringToInt { return "string_to_int" }
+    if k == MirIntrinsicStringToFloat { return "string_to_float" }
+    if k == MirIntrinsicStringReplace { return "string_replace" }
+    if k == MirIntrinsicStringChars { return "string_chars" }
+    if k == MirIntrinsicStringBytes { return "string_bytes" }
+    if k == MirIntrinsicBytesLen { return "bytes_len" }
+    if k == MirIntrinsicBytesIsEmpty { return "bytes_is_empty" }
+    if k == MirIntrinsicBytesGet { return "bytes_get" }
+    if k == MirIntrinsicBytesContains { return "bytes_contains" }
+    if k == MirIntrinsicBytesStartsWith { return "bytes_starts_with" }
+    if k == MirIntrinsicBytesEndsWith { return "bytes_ends_with" }
+    if k == MirIntrinsicBytesIndexOf { return "bytes_index_of" }
+    if k == MirIntrinsicBytesLastIndexOf { return "bytes_last_index_of" }
+    if k == MirIntrinsicBytesSplit { return "bytes_split" }
+    if k == MirIntrinsicBytesJoin { return "bytes_join" }
+    if k == MirIntrinsicBytesRepeat { return "bytes_repeat" }
+    if k == MirIntrinsicBytesReplace { return "bytes_replace" }
+    if k == MirIntrinsicBytesReplaceAll { return "bytes_replace_all" }
+    if k == MirIntrinsicBytesTrimLeft { return "bytes_trim_left" }
+    if k == MirIntrinsicBytesTrimRight { return "bytes_trim_right" }
+    if k == MirIntrinsicBytesTrim { return "bytes_trim" }
+    if k == MirIntrinsicBytesTrimSpace { return "bytes_trim_space" }
+    if k == MirIntrinsicBytesToUpper { return "bytes_to_upper" }
+    if k == MirIntrinsicBytesToLower { return "bytes_to_lower" }
+    if k == MirIntrinsicBytesToHex { return "bytes_to_hex" }
+    if k == MirIntrinsicBytesSlice { return "bytes_slice" }
+    if k == MirIntrinsicOptionIsSome { return "option_is_some" }
+    if k == MirIntrinsicOptionIsNone { return "option_is_none" }
+    if k == MirIntrinsicOptionUnwrap { return "option_unwrap" }
+    if k == MirIntrinsicOptionUnwrapOr { return "option_unwrap_or" }
+    if k == MirIntrinsicResultIsOk { return "result_is_ok" }
+    if k == MirIntrinsicResultIsErr { return "result_is_err" }
+    if k == MirIntrinsicResultUnwrap { return "result_unwrap" }
+    if k == MirIntrinsicResultUnwrapOr { return "result_unwrap_or" }
+    if k == MirIntrinsicRawNull { return "raw_null" }
+    if k == MirIntrinsicStringJoin { return "string_join" }
+    if k == MirIntrinsicListPop { return "list_pop" }
+    if k == MirIntrinsicStringSubstring { return "string_substring" }
+    if k == MirIntrinsicByteToInt { return "byte_to_int" }
+    if k == MirIntrinsicCharToInt { return "char_to_int" }
+    if k == MirIntrinsicListSlice { return "list_slice" }
+    if k == MirIntrinsicMapGetOr { return "map_get_or" }
+    if k == MirIntrinsicStringSplitInto { return "string_split_into" }
+    if k == MirIntrinsicStringNthSegment { return "string_nth_segment" }
+    if k == MirIntrinsicMapIncr { return "map_incr" }
+    if k == MirIntrinsicStringRepeat { return "string_repeat" }
+    if k == MirIntrinsicStringTrimPrefix { return "string_trim_prefix" }
+    if k == MirIntrinsicStringTrimSuffix { return "string_trim_suffix" }
+    if k == MirIntrinsicStringTrimStart { return "string_trim_start" }
+    if k == MirIntrinsicStringTrimEnd { return "string_trim_end" }
+    if k == MirIntrinsicStringReplaceAll { return "string_replace_all" }
+    if k == MirIntrinsicStringSplitN { return "string_split_n" }
+    if k == MirIntrinsicStringFields { return "string_fields" }
+    if k == MirIntrinsicStringLastIndexOf { return "string_last_index_of" }
+    if k == MirIntrinsicBytesFromList { return "bytes_from_list" }
+    if k == MirIntrinsicBytesFromString { return "bytes_from_string" }
+    if k == MirIntrinsicBytesToString { return "bytes_to_string" }
+    if k == MirIntrinsicBytesFromHex { return "bytes_from_hex" }
+    if k == MirIntrinsicIntToByte { return "int_to_byte" }
+    if k == MirIntrinsicIntToChar { return "int_to_char" }
+    if k == MirIntrinsicByteToChar { return "byte_to_char" }
+    if k == MirIntrinsicCharToByte { return "char_to_byte" }
+    if k == MirIntrinsicListInsert { return "list_insert" }
+    if k == MirIntrinsicListClear { return "list_clear" }
+    if k == MirIntrinsicMapClear { return "map_clear" }
+    if k == MirIntrinsicSetClear { return "set_clear" }
+    "invalid"
 }
 
 // ====================================================================
@@ -1981,19 +1973,18 @@ fn mirIntToString(n: Int) -> String {
 }
 
 fn mirDigitChar(d: Int) -> String {
-    match d {
-        0 -> "0",
-        1 -> "1",
-        2 -> "2",
-        3 -> "3",
-        4 -> "4",
-        5 -> "5",
-        6 -> "6",
-        7 -> "7",
-        8 -> "8",
-        9 -> "9",
-        _ -> "?",
-    }
+    // B2: Int dispatch as if-else chain (stage0 P0–P15).
+    if d == 0 { return "0" }
+    if d == 1 { return "1" }
+    if d == 2 { return "2" }
+    if d == 3 { return "3" }
+    if d == 4 { return "4" }
+    if d == 5 { return "5" }
+    if d == 6 { return "6" }
+    if d == 7 { return "7" }
+    if d == 8 { return "8" }
+    if d == 9 { return "9" }
+    "?"
 }
 
 // ====================================================================
@@ -2001,55 +1992,51 @@ fn mirDigitChar(d: Int) -> String {
 // ====================================================================
 
 pub fn mirInstrKindName(k: MirInstrKind) -> String {
-    match k {
-        MirInstrAssign -> "assign",
-        MirInstrCall -> "call",
-        MirInstrIntrinsic -> "intrinsic",
-        MirInstrStorageLive -> "storage_live",
-        MirInstrStorageDead -> "storage_dead",
-        _ -> "invalid",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if k == MirInstrAssign { return "assign" }
+    if k == MirInstrCall { return "call" }
+    if k == MirInstrIntrinsic { return "intrinsic" }
+    if k == MirInstrStorageLive { return "storage_live" }
+    if k == MirInstrStorageDead { return "storage_dead" }
+    "invalid"
 }
 
 pub fn mirTermKindName(k: MirTermKind) -> String {
-    match k {
-        MirTermGoto -> "goto",
-        MirTermBranch -> "branch",
-        MirTermSwitchInt -> "switch_int",
-        MirTermReturn -> "return",
-        MirTermUnreachable -> "unreachable",
-        _ -> "invalid",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if k == MirTermGoto { return "goto" }
+    if k == MirTermBranch { return "branch" }
+    if k == MirTermSwitchInt { return "switch_int" }
+    if k == MirTermReturn { return "return" }
+    if k == MirTermUnreachable { return "unreachable" }
+    "invalid"
 }
 
 pub fn mirRValueKindName(k: MirRValueKind) -> String {
-    match k {
-        MirRVUse -> "use",
-        MirRVUnary -> "unary",
-        MirRVBinary -> "binary",
-        MirRVAggregate -> "aggregate",
-        MirRVDiscriminant -> "discriminant",
-        MirRVLen -> "len",
-        MirRVCast -> "cast",
-        MirRVRef -> "ref",
-        MirRVAddressOf -> "address_of",
-        MirRVGlobalRef -> "global_ref",
-        MirRVNullary -> "nullary",
-        _ -> "invalid",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if k == MirRVUse { return "use" }
+    if k == MirRVUnary { return "unary" }
+    if k == MirRVBinary { return "binary" }
+    if k == MirRVAggregate { return "aggregate" }
+    if k == MirRVDiscriminant { return "discriminant" }
+    if k == MirRVLen { return "len" }
+    if k == MirRVCast { return "cast" }
+    if k == MirRVRef { return "ref" }
+    if k == MirRVAddressOf { return "address_of" }
+    if k == MirRVGlobalRef { return "global_ref" }
+    if k == MirRVNullary { return "nullary" }
+    "invalid"
 }
 
 pub fn mirConstKindName(k: MirConstKind) -> String {
-    match k {
-        MirConstInt -> "int",
-        MirConstBool -> "bool",
-        MirConstFloat -> "float",
-        MirConstString -> "string",
-        MirConstChar -> "char",
-        MirConstByte -> "byte",
-        MirConstUnit -> "unit",
-        MirConstNull -> "null",
-        MirConstFn -> "fn",
-        _ -> "invalid",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if k == MirConstInt { return "int" }
+    if k == MirConstBool { return "bool" }
+    if k == MirConstFloat { return "float" }
+    if k == MirConstString { return "string" }
+    if k == MirConstChar { return "char" }
+    if k == MirConstByte { return "byte" }
+    if k == MirConstUnit { return "unit" }
+    if k == MirConstNull { return "null" }
+    if k == MirConstFn { return "fn" }
+    "invalid"
 }
