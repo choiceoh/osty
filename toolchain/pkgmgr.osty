@@ -254,17 +254,16 @@ pub fn selfPkgCanonicalName(dep: SelfPkgDependency) -> String {
 
 /// selfPkgSourceURI renders the lockfile-stable source identifier.
 pub fn selfPkgSourceURI(dep: SelfPkgDependency) -> String {
-    match dep.sourceKind {
-        SelfPkgSourceRegistry -> {
-            if dep.registry == "" {
-                "registry+default"
-            } else {
-                "registry+{dep.registry}"
-            }
-        },
-        SelfPkgSourcePath -> "path+{dep.sourceRef}",
-        SelfPkgSourceGit -> "git+{dep.sourceRef}",
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if dep.sourceKind == SelfPkgSourceRegistry {
+        if dep.registry == "" {
+            return "registry+default"
+        }
+        return "registry+{dep.registry}"
     }
+    if dep.sourceKind == SelfPkgSourcePath { return "path+{dep.sourceRef}" }
+    if dep.sourceKind == SelfPkgSourceGit { return "git+{dep.sourceRef}" }
+    "registry+default"
 }
 
 /// selfPkgGitURI renders git+URL plus the stable query selector.
