@@ -1485,22 +1485,27 @@ Phase 5 에서 stdlib sink 4 개 (`db.query`, `process.exec`, `fs.path*`,
 
 ## 7.5 Cross-feature interaction matrix
 
-15 개 신규 결정의 *상호작용*. 같은 함수에 다중 어노테이션 적용 시 의미는 다음
-표가 권위:
+14 개 결정 (G36–G49) 의 *상호작용*. 같은 함수에 다중 어노테이션 적용 시 의미는
+다음 표가 권위. 11 개 *의미론적 상호작용* feature 만 행/열에 등장 — G47 (osty
+context, 운영 도구), G48 (annotation surface, meta), G49 (`while`, syntactic) 는
+다른 결정과 의미 충돌이 없으므로 별도 행 없음.
+
+표는 *upper-triangular* 형식 — `Row × Column` 위치에 두 feature 의 상호작용을
+명시. 대칭 위치 (Column × Row) 는 `—` 로 표기 (위쪽 entry 가 권위).
 
 | | Capability (G36) | Taint (G37) | Spec link (G38) | Reproducible (G39) | Sealed (G40) | ErrContract (G41) | Intent (G42) | SpecBlock (G43) | Evolution (G44) | Golden (G45) | Budget (G46) |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| **Capability (G36)** | self | tag flows through capability methods | OK | exclude non-deterministic caps | OK | OK | OK | spec block 가능 | OK | OK (golden 함수는 deterministic cap 만) | OK |
-| **Taint (G37)** | — | self | OK | tainted 값은 reproducible 결과 차단 | sealed type 도 tag 운반 | OK — Err variant 도 tag 가능 | OK | spec block invariant 안에서 tag 검사 | OK | golden 입력은 untainted 권장 | OK |
-| **Spec link (G38)** | — | — | self | OK | OK | OK | OK | OK | OK | OK | OK |
-| **Reproducible (G39)** | non-det 거부 | tainted 값은 결과에 reproducible 영향 — sanitize 후 OK | OK | self (scope 강도 비교) | OK | OK | OK | spec block 검사 | OK | golden 강제 reproducible | OK |
-| **Sealed (G40)** | — | sealed value 도 tag 유지 | OK | sealed constructor 도 reproducible 가능 | self | sealed type 도 ErrContract 가능 | OK | OK | OK | OK | OK |
-| **ErrContract (G41)** | — | Err variant 가 tag 운반 | OK | OK | OK | self | OK | spec block example 에 Err 케이스 가능 | stability 약속 영향 | OK | OK |
-| **Intent (G42)** | — | — | OK — example 이 spec ref 와 일치 | OK | example 이 sealed constructor 호출 가능 | example 이 ErrContract variant 검증 가능 | self | spec block example 과 중복 가능 | OK | fixture 가 golden 입력 | OK |
-| **SpecBlock (G43)** | capability 사용 가능 | tag-aware invariant 가능 | spec ref 와 보완 | reproducible 검사 대상 | sealed constructor invariant | ErrContract 와 중복 가능 (intent example 과도) | example clause = #[example] | self | OK | example: 이 golden과 결합 가능 | OK |
-| **Evolution (G44)** | capability 시그니처 변경 = breaking | tag 변경 = breaking | spec ref 이동 = warning | scope 변경 = breaking | sealed → non-sealed = breaking | ErrContract 추가 = breaking | OK | OK | self | golden snapshot 변경 audit | budget 변경 = warning |
-| **Golden (G45)** | deterministic cap 만 | untainted 입력 권장 | OK | reproducible 강제 | OK | OK | fixture 결합 | example: 추출 가능 | snapshot stability 추적 | self | OK |
-| **Budget (G46)** | capability 호출이 io_calls 카운트 | OK | OK | OK | OK | OK | OK | OK | budget 약화 = warning | OK | self |
+| **Capability (G36)** | self | tag propagates through capability method 시그니처 | 무관 | non-det cap 수신은 `E0784` | 무관 | 무관 | 무관 | spec block 안에서 capability 호출 가능 | capability 시그니처 변경 = breaking | golden 함수는 deterministic capability 만 (`E0444`) | capability 호출이 `io_calls` budget 에 카운트 |
+| **Taint (G37)** | — | self | 무관 | 직교 — taint 는 provenance, reproducibility 는 determinism. 둘 다 적용 가능 | sealed type 도 tag 운반 (struct 단위 fold per §21.5) | Err variant 도 tag 운반 (Result/Option per §21.5.2) | example 의 input 에 source tag 표시 가능 | spec block 안에서 taint 검사 — 정식 검증은 v0.7+ Open Item | taint annotation 변경 = breaking (caller 측 sanitize 의무) | golden 입력은 *untainted* 권장 (snapshot 의 reproducibility 위해) | 무관 |
+| **Spec link (G38)** | — | — | self | 무관 | 무관 | 무관 | example / purpose 와 함께 사용 가능 | spec block 과 보완 (annotation 은 ref, block 은 본문) | spec section 이동 = `W0790` | 무관 | 무관 |
+| **Reproducible (G39)** | — | — | — | self (scope 강도: portable > target > run) | sealed constructor 도 reproducible 가능 | 무관 | 무관 | spec block 도 reproducible 함수 안에서 OK | scope 강화 = breaking, 약화 = compat-add | golden ⇒ implied `#[reproducible(scope="target")]` | 무관 |
+| **Sealed (G40)** | — | — | — | — | self | sealed type 도 ErrContract 가능 | example 이 sealed constructor 호출 가능 | spec block example 도 sealed constructor 경유 | sealed → non-sealed = breaking | 무관 | 무관 |
+| **ErrContract (G41)** | — | — | — | — | — | self | example 이 contract variant 검증 가능 | spec block example 에 Err 케이스 포함 가능 | contract 변형 = breaking (variant 추가/제거) | 무관 | 무관 |
+| **Intent (G42)** | — | — | — | — | — | — | self | spec block example 과 `#[example]` 동시 사용 시 두 source 합집합 — 중복은 OK | example 변경 = compat-add (no SemVer effect) | fixture 가 golden 입력으로 사용 가능 | 무관 |
+| **SpecBlock (G43)** | — | — | — | — | — | — | — | self | spec block 변경 = compat-add (body 변경과 동급) | spec block example 결과가 golden 화 가능 | 무관 |
+| **Evolution (G44)** | — | — | — | — | — | — | — | — | self | golden snapshot 변경 = audit (W0444) | budget 약화 = compat-add, 강화 = breaking |
+| **Golden (G45)** | — | — | — | — | — | — | — | — | — | self | 무관 |
+| **Budget (G46)** | — | — | — | — | — | — | — | — | — | — | self |
 
 **핵심 invariants** (위 표가 함의):
 1. `#[reproducible]` ∩ `#[ambient]` 또는 `Clock`/`Rng`/`Env`/`Fs`/`Net`/`Process`
@@ -1514,29 +1519,35 @@ Phase 5 에서 stdlib sink 4 개 (`db.query`, `process.exec`, `fs.path*`,
 
 ## 7.6 Annotation 합법 위치 매트릭스
 
-| Annotation | fn | struct | enum | enum variant | field | parameter | method | impl block |
+Osty 에는 *impl block* 이 없다 (§14: "methods live inside `struct` / `enum`
+bodies"). interface 는 별도 declaration. 아래 표는 그 기준.
+
+| Annotation | fn | struct | enum | enum variant | field | parameter | method | interface |
 |---|---|---|---|---|---|---|---|---|
-| `#[ambient]` | ✓ (`main` 등) | | | | | | ✓ | |
+| `#[ambient]` | ✓ (entry-point 만) | | | | | | | |
 | `#[taint]` | ✓ (반환) | | | | ✓ | ✓ | ✓ | |
 | `#[sanitizes]` | ✓ | | | | | | ✓ | |
 | `#[requires]` | | | | | | ✓ | | |
 | `#[trusted_declassify]` | ✓ | | | | | | ✓ | |
 | `#[taint_field]` | | | | | ✓ | | | |
 | `#[reproducible]` | ✓ | | | | | | ✓ | |
-| `#[reproducible_capability]` | | | | | | | | ✓ (interface only) |
+| `#[reproducible_capability]` | | | | | | | | ✓ |
 | `#[spec]` | ✓ | ✓ | ✓ | | | | ✓ | ✓ |
 | `#[sealed_construct]` | | ✓ | | | | | | |
 | `#[trusted_construct]` | ✓ | | | | | | ✓ | |
 | `#[test_construct]` | ✓ | | | | | | ✓ | |
 | `#[error_contract]` | ✓ | | | | | | ✓ | |
-| `#[purpose]` | ✓ | ✓ | ✓ | | | | ✓ | |
+| `#[purpose]` | ✓ | ✓ | ✓ | | | | ✓ | ✓ |
 | `#[example]` | ✓ | | | | | | ✓ | |
 | `#[fixture]` | ✓ | | | | | | | |
-| `#[since]` | ✓ | ✓ | ✓ | ✓ | ✓ | | ✓ | |
-| `#[stability]` | ✓ | ✓ | ✓ | | | | ✓ | |
+| `#[since]` | ✓ | ✓ | ✓ | ✓ | ✓ | | ✓ | ✓ |
+| `#[stability]` | ✓ | ✓ | ✓ | | | | ✓ | ✓ |
 | `#[match_compat]` | ✓ | | | | | | ✓ | |
 | `#[golden]` | ✓ (test) | | | | | | | |
 | `#[budget]` | ✓ | | | | | | ✓ | |
+
+`#[ambient]` 의 *entry-point 만* 의미: `fn main` / script (`#!/usr/bin/env osty`) /
+`#[test]` / `#[bench]` / `bench*` / `test_*` 함수. 그 외 `fn` 위치는 `E0780`.
 
 `✓` 표시 위치 외 사용은 `E0405` (annotation site invalid).
 
