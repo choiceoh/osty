@@ -14,6 +14,7 @@ import (
 	"github.com/osty/osty/internal/llvmabi"
 	"github.com/osty/osty/internal/mir"
 	"github.com/osty/osty/internal/resolve"
+	"github.com/osty/osty/internal/stdlib"
 )
 
 // TestStage0ToolchainAudit (skipped in CI) walks every function in
@@ -35,11 +36,21 @@ func TestStage0ToolchainAudit(t *testing.T) {
 	// Tests run from internal/backend/, walk up to repo root then into toolchain/.
 	repoRoot := filepath.Dir(filepath.Dir(wd))
 	pkgDir := filepath.Join(repoRoot, "toolchain")
-	pkg, err := resolve.LoadPackageForNative(pkgDir)
+	paths, err := resolve.PackageSourcePaths(pkgDir, false)
+	if err != nil {
+		t.Fatalf("collect toolchain paths: %v", err)
+	}
+	reg := stdlib.LoadCached()
+	pkg, err := resolve.LoadPackageFiles(paths, reg)
 	if err != nil {
 		t.Fatalf("load toolchain: %v", err)
 	}
-	chk := check.Package(pkg, nil)
+	res := resolve.ResolvePackageDefault(pkg)
+	chk := check.Package(pkg, res, check.Opts{
+		Stdlib:        reg,
+		Primitives:    reg.Primitives,
+		ResultMethods: reg.ResultMethods,
+	})
 
 	entry, err := PreparePackage("toolchain", filepath.Join(pkgDir, "main.osty"), pkg, nil, chk)
 	if err != nil {
