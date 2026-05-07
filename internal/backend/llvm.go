@@ -195,16 +195,19 @@ func generateLLVMIR(entry Entry, target string, features []string, emit EmitMode
 	}
 	if capabilities.CanRoute(llvmDispatchNativeOwned) {
 		traceLLVMDispatch("%s try package=%s source=%s emit=%s target=%s", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath, emit, target)
-		if out, ok, nativeWarnings, err := tryNativeOwnedMIRPayloadLLVMIRText(entry, target); err != nil {
+		out, ok, nativeWarnings, err := tryNativeOwnedMIRPayloadLLVMIRText(entry, target)
+		switch {
+		case err != nil:
 			traceLLVMDispatch("%s error: %v", llvmDispatchNativeOwned, err)
-		} else if ok {
+		case ok:
 			traceLLVMDispatch("%s covered package=%s source=%s", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath)
 			// Carry both the outer warnings (entry IRIssues + Phase-7
 			// gate) and the native-owned path's warnings forward so
 			// neither is silently dropped.
 			return out, append(warnings, nativeWarnings...), nil
+		default:
+			traceLLVMDispatch("%s declined package=%s source=%s reasons=[%s]", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath, joinErrors(nativeWarnings))
 		}
-		traceLLVMDispatch("%s declined package=%s source=%s", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath)
 	} else {
 		traceLLVMDispatch("%s skipped package=%s source=%s", llvmDispatchNativeOwned, entry.PackageName, entry.SourcePath)
 	}
@@ -268,7 +271,11 @@ func emitLLVMFallback(route llvmDispatchRoute, entry Entry, opts llvmabi.Options
 		traceLLVMDispatch("stage0 fallback declined: %v", s0Err)
 		nativeWarnings = append(nativeWarnings, fmt.Errorf("stage0 fallback declined: %w", s0Err))
 	}
-	return nil, nativeWarnings, llvmabi.Unsupported("mir-emit", "native LIR Proto subprocess declined MIR coverage for route "+string(route))
+	detail := "native LIR Proto subprocess declined MIR coverage for route " + string(route)
+	if joined := joinErrors(nativeWarnings); joined != "" {
+		detail = detail + "; reasons: " + joined
+	}
+	return nil, nativeWarnings, llvmabi.Unsupported("mir-emit", detail)
 }
 
 func renderUnsupportedLLVMIR(entry Entry, target string, emit EmitMode, warnings []error, diag llvmabi.UnsupportedDiagnostic, route llvmDispatchRoute) ([]byte, []error, error) {
@@ -284,7 +291,69 @@ func renderUnsupportedLLVMIR(entry Entry, target string, emit EmitMode, warnings
 		errors.New(summary),
 		ErrLLVMNotImplemented,
 	)
-	return skeleton, warnings, ErrLLVMNotImplemented
+	return skeleton, warnings, wrapWithDecline(ErrLLVMNotImplemented, summary, warnings)
+}
+
+// joinErrors renders a list of errors as a `; `-separated string suitable for
+// embedding in trace output or downstream diagnostic messages. Nil entries
+// and empty strings are skipped; duplicates are deduplicated to keep noise
+// down when the same warning surfaces from multiple layers of the dispatcher.
+func joinErrors(errs []error) string {
+	if len(errs) == 0 {
+		return ""
+	}
+	seen := make(map[string]struct{}, len(errs))
+	parts := make([]string, 0, len(errs))
+	for _, e := range errs {
+		if e == nil {
+			continue
+		}
+		s := strings.TrimSpace(e.Error())
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		parts = append(parts, s)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// wrapWithDecline wraps `base` with the unsupported summary and any
+// additional warning text. `errors.Is(err, base)` continues to match so
+// callers depending on the sentinel keep working, while `%v` formatting
+// surfaces the underlying decline reason that previously only lived in
+// the result's Warnings slice.
+func wrapWithDecline(base error, summary string, warnings []error) error {
+	baseMsg := base.Error()
+	seen := map[string]struct{}{baseMsg: {}}
+	parts := make([]string, 0, len(warnings)+1)
+	if s := strings.TrimSpace(summary); s != "" {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			parts = append(parts, s)
+		}
+	}
+	for _, w := range warnings {
+		if w == nil {
+			continue
+		}
+		s := strings.TrimSpace(w.Error())
+		if s == "" {
+			continue
+		}
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		parts = append(parts, s)
+	}
+	if len(parts) == 0 {
+		return base
+	}
+	return fmt.Errorf("%w: %s", base, strings.Join(parts, "; "))
 }
 
 func llvmUnsupportedTraceSummary(diag llvmabi.UnsupportedDiagnostic, route llvmDispatchRoute) string {
