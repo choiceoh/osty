@@ -6,21 +6,21 @@ import (
 )
 
 type CliFlags struct {
-	NoColor       bool
-	ForceColor    bool
-	MaxErrors     int
-	JsonOutput    bool
-	Strict        bool
-	Fix           bool
-	FixDryRun     bool
-	ShowScopes    bool
-	Trace         bool
-	Explain       bool
-	Inspect       bool
-	AiRepair      bool
-	AiMode        string
+	NoColor         bool
+	ForceColor      bool
+	MaxErrors       int
+	JsonOutput      bool
+	Strict          bool
+	Fix             bool
+	FixDryRun       bool
+	ShowScopes      bool
+	Trace           bool
+	Explain         bool
+	Inspect         bool
+	AiRepair        bool
+	AiMode          string
 	DumpNativeDiags bool
-	Native        bool
+	Native          bool
 }
 
 func DefaultCliFlags() CliFlags {

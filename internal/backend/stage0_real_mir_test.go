@@ -444,8 +444,7 @@ fn main() {}`,
 // the gap reason and skips. As future bootstrap phases extend
 // coverage, flip skipNow=false to lock in the new capability.
 func TestStage0RealMIRGapProbe(t *testing.T) {
-	cases := []realProbeCase{
-	}
+	cases := []realProbeCase{}
 	for _, c := range cases {
 		c := c
 		t.Run(c.name, func(t *testing.T) {
