@@ -1697,17 +1697,20 @@ pub struct LirMirFunctionLowerer {
 //   3. `@llvm.global_ctors = appending global [...]` registration so
 //      the ctor runs before main.
 // When `mir.globals` is empty nothing is emitted — same as production.
-fn lirEmitMirGlobals(out: LirModule, mir: MirModule) {
+fn lirEmitMirGlobals(out: LirModule, mir: MirModule, diags: List<LirDiagnostic>) {
     if mir.globals.len() == 0 {
         return
     }
     for glob in mir.globals {
-        let typ = lirLowerMirType_module(out, mir, glob.typ)
+        let typ = lirLowerMirType_module(out, mir, glob.typ, "global." + glob.name, diags)
+        if lirTypeIsZero(typ) || lirTypeIsVoid(typ) {
+            continue
+        }
         out.globals.push(lirGlobal("@" + glob.name, typ, ""))
     }
     let mut hasInit = false
     for glob in mir.globals {
-        if glob.hasInit && glob.initSymbol != "" {
+        if glob.hasInit && glob.initSymbol != "" && lirModuleHasGlobal(out, "@" + glob.name) {
             hasInit = true
         }
     }
@@ -1717,7 +1720,7 @@ fn lirEmitMirGlobals(out: LirModule, mir: MirModule) {
         // without a ctor (LLVM zeros them at module load).
         return
     }
-    let ctor = lirBuildInitGlobalsCtor(out, mir)
+    let ctor = lirBuildInitGlobalsCtor(out, mir, diags)
     out.functions.push(ctor)
     out.globals.push(lirGlobalWithLinkage("@llvm.global_ctors", lirRawType("[1 x \{ i32, ptr, ptr \}]"), "[\{ i32, ptr, ptr \} \{ i32 65535, ptr @__osty_init_globals, ptr null \}]", "appending"))
 }
@@ -1725,7 +1728,7 @@ fn lirEmitMirGlobals(out: LirModule, mir: MirModule) {
 // `lirLowerMirType` requires a `LirMirFunctionLowerer`; for
 // module-level globals we don't have one. Reproduce the relevant
 // portion (primitives + Option/Result/struct/tuple shape).
-fn lirLowerMirType_module(out: LirModule, mir: MirModule, name: String) -> LirType {
+fn lirLowerMirType_module(out: LirModule, mir: MirModule, name: String, path: String, diags: List<LirDiagnostic>) -> LirType {
     let primitive = lirLowerPrimitiveTypeName(name)
     if !(lirTypeIsZero(primitive)) {
         return primitive
@@ -1745,6 +1748,7 @@ fn lirLowerMirType_module(out: LirModule, mir: MirModule, name: String) -> LirTy
             return lirAggregateType(typeName)
         }
     }
+    diags.push(lirDiagnosticError(LirDiagUnsupported, "unsupported module type `" + name + "`", path))
     lirTypeInvalid()
 }
 // `lirBuildInitGlobalsCtor` synthesises the
@@ -1752,7 +1756,7 @@ fn lirLowerMirType_module(out: LirModule, mir: MirModule, name: String) -> LirTy
 // each global with `hasInit`, calls the init fn and stores into the
 // global. Mirrors production `mirInitGlobalsCtorHeader / Footer /
 // StoreSequence` (mir_generator_snapshot.go).
-fn lirBuildInitGlobalsCtor(out: LirModule, mir: MirModule) -> LirFunction {
+fn lirBuildInitGlobalsCtor(out: LirModule, mir: MirModule, diags: List<LirDiagnostic>) -> LirFunction {
     let mut fn_ = lirFunction("__osty_init_globals", lirVoidType())
     fn_.linkage = "private"
     let mut entry = lirBlock("entry", lirRetVoid())
@@ -1760,13 +1764,27 @@ fn lirBuildInitGlobalsCtor(out: LirModule, mir: MirModule) -> LirFunction {
         if !(glob.hasInit) || glob.initSymbol == "" {
             continue
         }
-        let initRet = lirLowerMirType_module(out, mir, glob.typ)
+        if !(lirModuleHasGlobal(out, "@" + glob.name)) {
+            continue
+        }
+        let initRet = lirLowerMirType_module(out, mir, glob.typ, "global." + glob.name + ".init", diags)
+        if lirTypeIsZero(initRet) || lirTypeIsVoid(initRet) {
+            continue
+        }
         let tmp = "%v" + glob.name
         entry.instrs.push(lirCall(tmp, initRet, "@" + glob.initSymbol, []))
         entry.instrs.push(lirStore(lirOperand(initRet, tmp), "@" + glob.name, 0))
     }
     fn_.blocks.push(entry)
     fn_
+}
+fn lirModuleHasGlobal(m: LirModule, name: String) -> Bool {
+    for g in m.globals {
+        if g.name == name {
+            return true
+        }
+    }
+    false
 }
 pub fn lirLowerMirModule(cfg: LirLowerConfig, mir: MirModule) -> LirLowerResult {
     let packageName = if cfg.packageName == "" {
@@ -1782,10 +1800,8 @@ pub fn lirLowerMirModule(cfg: LirLowerConfig, mir: MirModule) -> LirLowerResult 
     // `@llvm.global_ctors`. Mirrors production `emitGlobalVars`
     // (mir_generator.go:1508). When MIR has no globals nothing is
     // emitted — same as production.
-    lirEmitMirGlobals(out, mir)
-    if mir.uses.len() > 0 {
-        diags.push(lirDiagnosticError(LirDiagUnsupported, "MIR uses/imports are not implemented in LIR Proto lowering", "module.uses"))
-    }
+    lirEmitMirGlobals(out, mir, diags)
+    lirLowerMirUses(out, mir)
     for fn_ in mir.functions {
         let lowered = lirLowerMirFunction(cfg, mir, out, fn_)
         for d in lowered.diagnostics {
@@ -1810,6 +1826,28 @@ pub fn lirLowerMirModule(cfg: LirLowerConfig, mir: MirModule) -> LirLowerResult 
         diags.push(d)
     }
     LirLowerResult {module: out, diagnostics: diags}
+}
+
+// MIR `use` declarations are already resolved before MIR reaches this
+// lowerer. Non-FFI package imports therefore need no LLVM artifact, while
+// FFI surfaces arrive as external MIR functions and are declared by the
+// normal call/function lowering path. Keep the edges visible as comments
+// for traceability but do not decline the module.
+fn lirLowerMirUses(out: LirModule, mir: MirModule) {
+    for u in mir.uses {
+        let mut text = "; MIR use "
+        if u.isGoFFI {
+            text = text + "go \"" + u.goPath + "\""
+        } else if u.isRuntimeFFI {
+            text = text + "runtime \"" + u.runtimePath + "\""
+        } else {
+            text = text + u.rawPath
+        }
+        if u.alias != "" {
+            text = text + " as " + u.alias
+        }
+        out.metadata.push(text)
+    }
 }
 pub fn lirLowerMirFunction(cfg: LirLowerConfig, mir: MirModule, module: LirModule, fn_: MirFunction) -> LirLowerResult {
     let mut l = LirMirFunctionLowerer {cfg, mirModule: mir, fn_, out: lirModule(module.packageName, module.sourcePath, module.target), diagnostics: [], prologue: [], instrs: [], slots: [], labels: [], temp: 0, safepointSerial: 0, currentBlockLabel: "", extraBlocks: [], auxLabel: 0, gcRootSlots: [], parallelAccessGroupRef: ""}

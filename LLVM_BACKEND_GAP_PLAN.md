@@ -3,6 +3,8 @@
 > **목적**: PR #1405 (2026-05-05) 이후 새 architecture (`internal/llvmgen` → `osty-self lir-proto-lower` 서브프로세스)에서 LLVM 백엔드의 실제 coverage 빈 칸을 문서화하고, phase별 PR 분할안을 제시한다. 이 문서는 audit 결과이며 상세 lowering 설계는 각 phase PR에서 별도로.
 >
 > **상태**: 2026-05-07 audit. 현재 실패 테스트 9건 + 빌드 실패 6건 (Security framework link). `LLVM_MIGRATION_PLAN.md`의 Tier A 항목 (Map.update / optional aggregate / generic turbofish / interface dispatch / nested binding pattern) 이 모두 같은 root에 매달려 있음을 발견.
+>
+> **Phase A 진행**: module-context type lowering 폴스루는 명시적 `unsupported module type` 진단으로 바뀌었고, MIR `uses/imports`는 resolved trace-only metadata로 낮아져 더 이상 LIR Proto 모듈 전체를 decline시키지 않는다.
 
 ## 1. 새 architecture 요약
 
@@ -52,7 +54,7 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 
 | ID | 코드 위치 | 메시지 | 영향 |
 |---|---|---|---|
-| GAP-MOD-001 | lir_proto.osty:1787 | `MIR uses/imports are not implemented in LIR Proto lowering` | 모든 multi-file/cross-package source가 native-owned 경로 못 탐 |
+| GAP-MOD-001 | lir_proto.osty | ✅ Phase A에서 trace-only lowering | resolved `use` edge가 native-owned 경로를 막지 않음 |
 
 #### 2.2.2 Type-level
 
@@ -61,7 +63,7 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 | GAP-TYP-001 | 1855 | `unsupported param type \`T\`` | Interface 타입, Closure type, Tuple, 미등록 generic struct |
 | GAP-TYP-002 | 1974 | `unsupported local type \`T\`` | 위와 동일 + 임시 closure local |
 | GAP-TYP-003 | 2081 | `unsupported assign destination type \`T\`` | 위와 같은 사유 |
-| GAP-TYP-004 | 1748 | `lirTypeInvalid()` 반환 (silent) | `lirLowerMirType_module` 폴스루 — interface/tuple 등 |
+| GAP-TYP-004 | lir_proto.osty | ✅ Phase A에서 명시 진단 | `lirLowerMirType_module` 폴스루가 `unsupported module type`으로 보고됨 |
 
 #### 2.2.3 Instruction-level fallthrough
 

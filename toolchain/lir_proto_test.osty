@@ -480,12 +480,22 @@ fn testLirProtoLowerMirProjectedCallAndIntrinsicResultsOstyOwned() {
     m.layouts.structs.push(lirTestStructLayout("Cell", [lirTestField(0, "value", "Int"), lirTestField(1, "other", "Int")]))
     assertLirLoweredContains(m, ["%Cell = type \{ i64, i64 \}", "define i64 @makeValue() \{", "define i64 @fill(i8 %p2) \{", "call i64 @makeValue()", "zext i8", "insertvalue %Cell", "store %Cell", "extractvalue %Cell"])
 }
-fn testLirProtoLowerMirDiagnosticsForUnsupportedModuleShapeOstyOwned() {
+fn testLirProtoLowerMirUsesAreTraceOnlyOstyOwned() {
     let mut m = mirModule("main")
     m.globals.push(mirGlobal("g", "Int", false, mirNoSpan()))
     m.uses.push(mirUse("std.io", "io", mirNoSpan()))
-    assertLirLoweredDiagnosticsContain(m, "MIR globals are not implemented")
-    assertLirLoweredDiagnosticsContain(m, "MIR uses/imports are not implemented")
+    assertLirLoweredContains(m, ["@g = global i64 zeroinitializer", "; MIR use std.io as io"])
+}
+fn testLirProtoLowerMirReportsUnsupportedModuleTypeOstyOwned() {
+    let mut m = mirModule("main")
+    let mut g = mirGlobal("g", "OpaqueThing", false, mirNoSpan())
+    g.hasInit = true
+    g.initSymbol = "init_g"
+    m.globals.push(g)
+    let result = lirLowerMirModule(lirLowerConfig("main", "/tmp/lir_proto_fixture.osty", ""), m)
+    testing.assert(lirLowerHasErrors(result))
+    assertLirDiagnosticsContain(result.diagnostics, "unsupported module type `OpaqueThing`")
+    testing.assertEq(result.diagnostics.len(), 1)
 }
 fn testLirProtoParityCatalogIsOstyOwned() {
     let manual = lirParityManualMIRFixtures()
@@ -553,7 +563,7 @@ fn testLirProtoLowererEnvelopeAndPackageFallbackOstyOwned() {
     assertLirContains(ir, "source_filename = \"/tmp/empty.osty\"")
     assertLirContains(ir, "target triple = \"arm64-apple-macosx\"")
     let mut unsupported = mirModule("pkg")
-    unsupported.globals.push(mirGlobal("g", "Int", false, mirNoSpan()))
+    unsupported.globals.push(mirGlobal("g", "OpaqueThing", false, mirNoSpan()))
     let first = lirLowererLowerMIR(lowerer, unsupported)
     testing.assert(!(lirLowerOK(first)))
     testing.assert(lirLowerHasErrors(first))
