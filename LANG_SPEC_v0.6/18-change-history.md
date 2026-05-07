@@ -3,7 +3,144 @@
 This chapter records the evolution of the specification across released
 versions. The latest release is at the top.
 
-### 18.-1 v0.4 → v0.5
+### 18.0 v0.5 → v0.6
+
+v0.6 is the release that closes 14 gaps (G36–G49) accumulated during
+the v0.5 use corpus and the 100-PR self-host sprint. The release is
+governed by a single design principle:
+
+> **Hidden dependency is forbidden.**
+> Time, randomness, environment, filesystem, network, security flow,
+> API evolution rules, performance contracts, intent, and
+> specification — all surfaced through type signatures or annotations,
+> never implicit.
+
+Four annotation families implement the principle:
+
+| Family | New surface |
+|---|---|
+| **Effectful** (env / IO) | Capability parameters (§20), `#[ambient]`, `#[reproducible]`, `#[reproducible_capability]` |
+| **Security** (sources → sinks) | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]`, `#[taint_field]` (§21) |
+| **Temporal** (versioning) | `#[since]`, `#[stability]`, `#[match_compat]`, `osty publish` (§3.14) |
+| **Intent + Determinism** | `#[spec]`, `#[purpose]`, `#[example]`, `#[fixture]`, `spec { }`, `#[error_contract]`, `#[sealed_construct]`, `#[golden]`, `#[budget]`, `osty context` (§3.10–§3.15, §7.5, §11.5, §13.6) |
+
+**Resolved gaps (G36–G49).**
+
+| ID | 영역 | 한 줄 |
+|---|---|---|
+| G36 | Capabilities (§20) | 환경 effect 를 capability 값으로 명시 |
+| G37 | Information flow (§21) | `#[taint]` / `#[sanitizes]` 정적 IFC |
+| G38 | Spec link (§3.10) | `#[spec("§X.Y")]` checked link |
+| G39 | Reproducibility (§3.11) | `#[reproducible(scope=...)]` 환경독립 강제 |
+| G40 | Sealed construct (§3.4.5) | `#[sealed_construct]` parse-don't-validate |
+| G41 | Error contract (§7.5) | `#[error_contract(... when ...)]` failure mode 명세 |
+| G42 | Structured intent (§3.12) | `#[purpose]` / `#[example]` / `#[fixture]` |
+| G43 | Executable spec (§3.13) | `spec { example: / law: / invariant: }` 블록 |
+| G44 | API evolution (§3.14) | `#[since]` / `#[stability]` / `#[match_compat]` |
+| G45 | Golden tests (§11.5) | `#[golden]` AST-aware 스냅샷 |
+| G46 | Performance contract (§3.15) | `#[budget(allocs/io/time)]` static + runtime |
+| G47 | Machine-readable context (§13.6) | `osty context <symbol>` 구조화 추출 |
+| G48 | Annotation surface | 위 신규 어노테이션의 grammar 통합 (+20 fixed annotations) |
+| G49 | `while` keyword (§4.4) | `for cond {}` 와 동의어. mental-model 일치 |
+
+`G50` (anonymous structural record) 은 본 batch 검토 중 빠졌다 — v0.5 §14
+의 "named types are nominal" discipline 유지를 위해 ad-hoc labeled data 는
+nominal `struct` 또는 tuple 로 표현한다.
+
+**Additions — grammar (G48 + G49).**
+
+- *Reserved keyword + 1*: `while` (G49) — `while cond { body }` ≡
+  `for cond { body }`. 식별자 `while` 사용 코드는 rename (사용자 0
+  단계의 acceptable break).
+- *Contextual keyword + 4*: `spec`, `example`, `law`, `invariant`
+  (G43 — spec block 컨텍스트만). `forall` 은 v1 (Phase 5) 단계.
+- *Fixed annotation set*: 11 → 31 (+20 신규).
+- *EBNF productions*: 191 → 199 (+8). 새 grammar surface 는 §3.13
+  spec block 과 parameter 위치 annotation 두 곳.
+
+**Additions — capabilities (G36, §20).**
+
+- 7 canonical interfaces — `Clock`, `Rng`, `Env`, `Fs`, `Net`,
+  `Process`, `Console`. 각 capability 는 deterministic 등급
+  (§20.6) 을 가진다.
+- `#[ambient(name1, ...)]` — script / `fn main` / `#[test]` /
+  `#[bench]` 진입점에서만 허용. 그 외 함수: E0780.
+- `#[reproducible_capability]` — 사용자 정의 deterministic
+  capability 등록.
+- 호환 모드 `--legacy-globals` v0.6.x 한정 — v0.5 의 전역 함수
+  (`time.now()` / `random.next()` 등) 자동 desugar. v0.7 제거.
+
+**Additions — information flow (G37, §21).**
+
+- `#[taint("source")]` — source 표시.
+- `#[sanitizes("source", into = "trust")]` — sanitizer.
+- `#[requires("trust")]` — sink 요구.
+- `#[trusted_declassify]` — FFI 경계 audit escape.
+- `#[taint_field]` — struct field-level narrow tracking.
+- v0.6 baseline sink: `db.query` (sql_safe), `process.exec`
+  (shell_safe), `fs.path*` (path_safe), `http.redirect` (url_safe),
+  `template.render` / `http.respondHtml` (html_safe).
+- Implicit flow 는 *explicit-only* 정책 (Jif 와 동일 결정) —
+  covert channel 추적은 v0.7+ Open Item.
+
+**Additions — declarations / annotations.**
+
+§3.4.5, §3.10–§3.15 신규 — `#[sealed_construct]`,
+`#[spec("§X.Y")]`, `#[reproducible(scope=...)]`, `#[purpose]` /
+`#[example]` / `#[fixture]`, `spec { example: / law: / invariant: }`
+블록, `#[since]` / `#[stability]` / `#[match_compat]`,
+`#[budget(allocs / io_calls / stack_depth / instructions / time_ms /
+p99_ms)]`. 각 신규 surface 는 §3 의 *v0.6 Annotation Extensions* 섹션
+참조.
+
+**Additions — error / testing / tooling.**
+
+- §7.5 — `#[error_contract(Variant when "...")]` concrete enum
+  failure-mode catalog.
+- §11.5 — `#[golden(path, mode="text"|"ast"|"json"|"diag")]` AST-aware
+  snapshot. 함수는 암묵 `#[reproducible(scope="target")]`.
+- §13.6 — `osty context <symbol>` JSON output (LSP / AI agent 통합).
+- `osty publish` — manifest API surface diff. stable API breaking
+  change + minor/patch bump 시 E2100. compat-add + patch only E2102.
+
+**Stdlib changes.**
+
+- v0.5 의 전역 effect 함수 `time.now()` / `random.next()` /
+  `env.get()` / `fs.read()` / `os.exec()` / `net.dial()` 가 capability
+  메서드 (`clock.now()` / `rng.next()` / …) 로 전환. v0.6.x 는
+  `--legacy-globals` 호환 모드, v0.7 제거.
+- stdlib sealed types: `Email`, `Url`, `Path`, `SqlIdent`,
+  `Duration`, `Uuid` 가 v0.6 에서 `#[sealed_construct]` 화. 사용자
+  코드는 이미 stdlib parser 경유이므로 영향 적음. `--legacy-construct`
+  호환 모드 v0.6.x 한정.
+- stdlib sink annotation rollout (Phase 5) — `db.query` /
+  `process.exec` / `fs.path*` / `http.redirect` / `template.render`
+  에 `#[requires(...)]` 추가. 미-sanitize 코드는 컴파일 에러 (의도된
+  보안 회귀 노출).
+
+**Diagnostic codes.** +28 신규 — E0410-E0451 (annotation/intent),
+E0780-E0796 (capability/spec link/budget), E0900-E0903 (information
+flow), E2100-E2102 (publish). Catalog: `ERROR_CODES.md` (auto-generated
+from `internal/diag/codes.go`).
+
+**Implementation phases.** 결정은 v0.6 baseline 으로 동결, 구현은
+5 phase (Phase 1 capability + ambient + stdlib migration → Phase 5
+taint + budget runtime + spec block v1). `CHANGELOG_v0.6.md` 가
+phase 별 진행도 추적.
+
+**v0.5 → v0.6 breaking changes (사용자 0 단계의 acceptable break).**
+
+- stdlib capability migration — v0.6.x `--legacy-globals` 호환,
+  v0.7 제거.
+- stdlib sealed types — v0.6.x `--legacy-construct` 호환.
+- `#[taint]` rollout in Phase 5 — 미-sanitize 코드 컴파일 에러.
+- `while` reserved keyword — 식별자 `while` 사용 코드 rename.
+
+자세한 결정 근거 / 의사 코드 / worked example / migration sample 은
+[`00-revision.md`](./00-revision.md), [`SPEC_GAPS.md`](../SPEC_GAPS.md)
+"Resolved in v0.6", `OSTY_GRAMMAR_v0.6.md` 의 R27–R29 참조.
+
+### 18.1 v0.4 → v0.5
 
 v0.5 is the release in which the accumulated v0.4 pain points are
 resolved in a single batch, rather than incrementally over multiple
@@ -87,7 +224,7 @@ generic `const fn` rejection respectively (§3.1.1).
 
 **Implementation guidance.** The implementation order is (i) additive stdlib (Option / Result / List / Map extensions, `std.strings`, `Error.wrap`), (ii) small syntax (labels, `loop`, range `by`, `as?`, scoped imports, `pub use`, enum discriminants, `#[cfg]`), (iii) medium syntax (struct update shorthand, trailing closure, struct-literal defaults, `const fn` with §3.1.1 capability matrix and acyclic-call-graph check), (iv) type system (numeric widening, operator dispatch, function-value name preservation), (v) test infrastructure (inline `#[test]`, doctest, property framework). Each feature ships a positive spec example, a negative reject case, and a golden-snapshot diagnostic test.
 
-### 18.0 v0.4 minor: runtime primitives (additive)
+### 18.2 v0.4 minor: runtime primitives (additive)
 
 §19 (runtime primitives) was added in the v0.4 additive minor, introducing
 a package-gated runtime sublanguage. The change is strictly additive:
@@ -115,7 +252,7 @@ a package-gated runtime sublanguage. The change is strictly additive:
 Recorded in `SPEC_GAPS.md` as **G19 — runtime sublanguage capability
 surface, decided**.
 
-### 18.1 v0.3 → v0.4
+### 18.3 v0.3 → v0.4
 
 v0.4 closes the v0.3 edge-case decision queue without adding a large new
 surface area. The goal is a tighter baseline: finite front-end rules,
@@ -144,7 +281,7 @@ Additional grammar hardening:
 - `(T,)` is a one-element tuple type, not a parenthesized `T`; `fn()`
   is the Unit-returning function type shorthand.
 
-### 18.2 v0.2 → v0.3
+### 18.4 v0.2 → v0.3
 
 v0.3 closes every remaining open gap from v0.2 and nails down the
 ambiguities surfaced by a full audit of the v0.2 text. **No known open
@@ -265,7 +402,7 @@ gaps remain** at the time of this release.
 - `??` precedence is grammar-authoritative (§1.7 cross-references the grammar).
 - Closure capture of `mut` bindings is by mutable reference (existing §4.7).
 
-### 18.3 v0.1 → v0.2
+### 18.5 v0.1 → v0.2
 
 v0.2 reconciled every conflict between `LANG_SPEC_v0.1.md` and
 `OSTY_GRAMMAR_v0.2.md` and resolved gaps G1, G2, G3, G5, G6, G7 from
@@ -325,7 +462,7 @@ that v0.3 inherits.
 - `Error.downcast::<T>()` documented as the one nominal-typing exception (§7.4).
 - Built-in-instances table (§2.6.5) enumerates primitive `Equal`/`Ordered`/`Hashable`/`ToString` membership.
 
-### 18.4 Migration notes
+### 18.6 Migration notes
 
 **v0.2 → v0.3 breaking changes to watch for:**
 
@@ -335,5 +472,5 @@ that v0.3 inherits.
 - `time.sleep(d)` now returns `Result<(), Error>` instead of `()` (§10.20).
 - Top-level `defer` in scripts is now an error — wrap in `{ ... }` (§6).
 
-**v0.1 → v0.3 migration** follows both §18.1 and §18.2. Users moving
-directly should read §18.2 first, then §18.1.
+**v0.1 → v0.3 migration** follows both §18.3 and §18.4. Users moving
+directly should read §18.4 first, then §18.3.
