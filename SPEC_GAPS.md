@@ -259,9 +259,8 @@ v0.6.x 에서만 제공 후 v0.7 에서 제거. 자세한 spec 본문은
 | **G47** | Machine-readable context (§13.6) | `osty context <symbol> [--format=json] [--recursive]` — purpose / examples / spec_refs / error_contract / fixtures / stability / since 단일 JSON 으로 추출. LSP `textDocument/hover` 통합. AI agent 첫 시민. | decided |
 | **G48** | Annotation surface 통합 | 신규 어노테이션 14 개 (G36-G47 합계) 가 기존 fixed annotation set 에 추가, `#[name(args)]` form 그대로 — 신규 grammar 0. parameter 위치 annotation (`#[taint]` / `#[requires]`) 은 v0.6 grammar 변경. spec block 만 신규 syntax. 추가 contextual keyword 4 (v0): `spec`, `example`, `law`, `invariant`. | decided |
 | **G49** | `while` keyword (§4.4) | `for cond {}` 외에 `while cond {}` 동의어 추가. v0.5 의 keyword economy taste 는 유지하되 *mental model 일치*를 위해 더 흔한 surface 도 받아들임. `for cond` 도 deprecate 안 함 — 양쪽 모두 컴파일러가 같은 lowering. | decided |
-| **G50** | Anonymous structural record (§2.5) | `{ x: Int, y: Int }` 형식의 type literal + `{ x: 1, y: 2 }` value literal. ad-hoc labeled tuple 케이스 충당. nominal struct 와는 *별도 universe* — 자동 변환 없음. 메서드 정의 불가. 함수 반환 / 인자 / let binding 가능. nominal struct destructuring 과 같은 pattern syntax. | decided |
 
-이 15 개 결정 (G36-G50) 은 [`LANG_SPEC_v0.6/00-revision.md`](LANG_SPEC_v0.6/00-revision.md)
+이 14 개 결정 (G36-G49) 은 [`LANG_SPEC_v0.6/00-revision.md`](LANG_SPEC_v0.6/00-revision.md)
 가 권위. 구현 phase 는 동 문서 §2 참조. 호환성 영향이 있는 항목 — G36 (capability
 migration, breaking in v0.7), G37 (taint sink rollout, breaking for unsanitized
 code), G40 (stdlib sealed types) — 은 `--legacy-globals` 또는 `--legacy-construct`

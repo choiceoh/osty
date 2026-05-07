@@ -1041,7 +1041,7 @@ const (
 	CodePureViolation = "E0775"
 
 	// =====================================================================
-	// v0.6 — Hidden-Dependency-Surface (G36 – G50)
+	// v0.6 — Hidden-Dependency-Surface (G36 – G49)
 	// =====================================================================
 
 	// G36 — Capabilities (§20)
@@ -1258,38 +1258,6 @@ const (
 	// =====================================================================
 	// v0.6 — Annotation / declaration extensions
 	// =====================================================================
-
-	// G50 — Anonymous structural record (§2.5.4)
-
-	// CodeAnonRecordAnnotation: an attempt was made to attach an
-	// annotation, method, or `pub` modifier to a field of an
-	// `AnonymousRecordType`. Anonymous records are *structural* and
-	// metadata-free; promote to a nominal `struct` for these features.
-	//
-	// Spec: v0.6 §2.5.4.4
-	// Fix: declare a nominal `struct` if the field needs annotations.
-	CodeAnonRecordAnnotation = "E0340"
-
-	// CodeAnonRecordRecursive: an `AnonymousRecordType` references
-	// itself in one of its field types (directly or transitively).
-	// Anonymous records cannot be self-recursive — the resulting type
-	// would be infinite.
-	//
-	// Spec: v0.6 §2.5.4.4
-	// Fix: declare a nominal `struct` and use it by name in the
-	//      recursive position.
-	CodeAnonRecordRecursive = "E0341"
-
-	// CodeAnonRecordAmbiguous: a `{ ... }` literal cannot be
-	// disambiguated between block expression and anonymous record
-	// literal at this position. Most common cause: closure body where
-	// `: T` could parse either as record field type or as a statement-
-	// level annotation.
-	//
-	// Spec: v0.6 §2.5.4.6 / R29
-	// Fix: add a type ascription (`: { x: Int }`) on the value position
-	//      or wrap in `(...)` to force expression context.
-	CodeAnonRecordAmbiguous = "E0342"
 
 	// G41 — Error contract (§7.5)
 

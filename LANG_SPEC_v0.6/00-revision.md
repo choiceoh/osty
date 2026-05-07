@@ -1,6 +1,6 @@
 # Osty v0.6 — Revision Document
 
-> **Status**: 제안 (draft). 15 개 결정 (G36–G50) 을 v0.5 baseline 위에 추가하는 spec 개정.
+> **Status**: 제안 (draft). 14 개 결정 (G36–G49) 을 v0.5 baseline 위에 추가하는 spec 개정.
 > v0.5 의 모든 결정은 v0.6 에서도 유효. 본 문서는 *delta* 만 기술하며, 변경 없는 챕터는
 > [`../LANG_SPEC_v0.5/`](../LANG_SPEC_v0.5/) 가 계속 권위.
 >
@@ -9,9 +9,12 @@
 ## 0. Overview
 
 v0.5 의 외부 사용 corpus 와 셀프호스트 운영 (100 PR / 4 일 sprint) 에서 도출된 13 개
-*hidden-dependency-surface* 결정 + 2 개 *ergonomics* 정정을 v0.6 에 batch 로 수용한다.
-사용자 0 인 단계의 마지막 큰 surface revision — 이후 v0.7 부터는 stable API rule
-(G44) 이 적용된다.
+*hidden-dependency-surface* 결정 + 1 개 *ergonomics* 정정 (`while` 키워드) 을 v0.6 에
+batch 로 수용한다. 사용자 0 인 단계의 마지막 큰 surface revision — 이후 v0.7 부터는
+stable API rule (G44) 이 적용된다.
+
+v0.5 의 §14 *anonymous structural record* 금지 정책은 그대로 유지된다 — ad-hoc
+labeled data 는 nominal `struct` 또는 tuple 로 표현한다.
 
 | G | 영역 | 한 줄 |
 |---|---|---|
@@ -29,13 +32,12 @@ v0.5 의 외부 사용 corpus 와 셀프호스트 운영 (100 PR / 4 일 sprint)
 | G47 | Machine-readable context (§13.6) | `osty context <symbol>` 구조화 추출 |
 | G48 | Annotation surface | 위 신규 어노테이션의 grammar 통합 |
 | **G49** | `while` keyword (§4.4) | `for cond {}` 와 동의어. mental-model 일치 |
-| **G50** | Anonymous structural record (§2.5) | `{ x: Int, y: Int }` ad-hoc record |
 
-> **G49 / G50 design review status**: G36–G48 (13 개) 는 직전 사용 corpus 분석에서
-> 합의된 결정인 반면, **G49 / G50 은 본 spec 작성 과정에서 추가 제안된 ergonomics
-> 정정**. v0.6 baseline 에 포함하기 전 별도 design review 권장. 빼도 v0.6 의
-> hidden-dependency-surface 정신은 유지된다. 본 문서는 편의상 *포함* 으로 작성 —
-> 결정에 따라 `SPEC_GAPS.md` 와 `OSTY_GRAMMAR_v0.6.md` 수정 필요.
+> **G49 design review note**: G36–G48 (13 개) 가 직전 사용 corpus 분석에서
+> 합의된 결정. **G49 는 본 spec 작성 과정에서 추가된 ergonomics 정정**으로
+> 작은 surface (1 keyword, 새 의미 0) 라 포함. 한때 같이 검토됐던 *G50 anonymous
+> structural record* 는 v0.5 §14 의 "named types are nominal" discipline 유지를
+> 위해 *제외*. ad-hoc labeled data 는 nominal `struct` 또는 tuple 로.
 
 ## 1. Design North Star — *Hidden Dependency Is Forbidden*
 
@@ -1756,91 +1758,6 @@ WhileStmt ::= 'while' Expr Block
 
 ---
 
-### §2.5.4 Anonymous structural record (G50)
-
-#### §2.5.4.1 동기
-
-v0.5 까지 모든 record 형 데이터는 nominal `struct` 선언 강제. ad-hoc labeled
-data (예: 함수 1 회용 반환, JSON 파싱 임시 결과, config option bundle) 마다
-struct 선언 작성은 cognitive overhead. Tuple 은 positional — 필드명 손실. v0.6 은
-*anonymous structural record* 를 추가한다.
-
-#### §2.5.4.2 Surface
-
-**Type literal**:
-```osty
-fn split(p: Point) -> { x: Int, y: Int } {
-    { x: p.x, y: p.y }
-}
-```
-
-**Value literal**: 컨텍스트에서 type 추론 가능하면 `{ x: 1, y: 2 }`. 명시
-type 은 `Type 추론 안되는 자리` 에 필요.
-
-**Field 접근 / destructure**: nominal struct 와 동일.
-```osty
-let r = split(p)
-println("{r.x}")
-let { x, y } = r
-```
-
-#### §2.5.4.3 의미
-
-- **Structural type** — 같은 필드 set 을 가진 record 는 같은 type.
-  `{ x: Int, y: Int }` 와 `{ y: Int, x: Int }` 도 같은 type (필드 순서 무관).
-- **Nominal struct 와 별도 universe** — `Point` (nominal) 과 `{ x: Int, y: Int }`
-  (anonymous) 는 *type-equivalent 아님*. 변환 위해 explicit field copy 필요.
-- **메서드 정의 불가** — anonymous record 에 메서드 첨부 안 됨. 메서드가 필요하면
-  nominal struct 사용.
-- **Mutation**: 필드는 모두 `let` 의미 (불변). mutable 이 필요하면 nominal struct.
-
-#### §2.5.4.4 제약
-
-- **Annotation 사용 불가** — anonymous record 필드에 `#[json]` / `#[taint]` 등
-  적용 불가. 필요하면 nominal struct 로 승급.
-- **Recursion 금지** — `{ next: { ... } }` 형식 self-reference 안 됨 — 무한 type.
-- **Generic 가능** — 함수가 generic 일 때 anonymous record 의 필드 type 도 generic
-  파라미터 사용 가능.
-
-```osty
-fn pair<A, B>(a: A, b: B) -> { fst: A, snd: B } {
-    { fst: a, snd: b }
-}
-```
-
-#### §2.5.4.5 nominal vs anonymous 가이드라인
-
-| 상황 | 권장 |
-|---|---|
-| 메서드 / interface 구현 | nominal `struct` |
-| `#[sealed_construct]` / 기타 어노테이션 필요 | nominal `struct` |
-| 1-2 회 사용 ad-hoc 반환 | anonymous record |
-| Tuple positional 이 헷갈리는 자리 | anonymous record |
-| Public API surface | nominal `struct` (이름이 있어야 deprecate / since 등록 가능) |
-
-#### §2.5.4.6 Grammar
-
-```ebnf
-AnonymousRecordType  ::= '{' RecordTypeField (',' RecordTypeField)* ','? '}'
-RecordTypeField      ::= IDENT ':' Type
-AnonymousRecordValue ::= '{' RecordValueField (',' RecordValueField)* ','? '}'
-RecordValueField     ::= IDENT (':' Expr)?    (* shorthand same as struct literal *)
-```
-
-Disambiguation: block expression `{ ... }` 와 충돌하지 않는 위치는 *type 위치*
-또는 *type-annotated let / fn return*. 모호한 위치에선 type ascription 필수
-(`: { x: Int, y: Int }`).
-
-#### §2.5.4.7 진단 코드
-
-| 코드 | 의미 |
-|---|---|
-| `E0340` | Anonymous record 에 method/annotation 시도 |
-| `E0341` | Anonymous record 의 self-recursive type |
-| `E0342` | Block expression 과 anonymous record literal 모호 (type ascription 권장) |
-
----
-
 ## 5. Grammar Changes (v0.5 → v0.6)
 
 ```ebnf
@@ -1854,12 +1771,6 @@ ForallClause   ::= 'forall' Ident (',' Ident)* 'in' Expr ':' Expr (LineEnd)
 
 (* §4.4 G49 — while as alias *)
 WhileStmt      ::= 'while' Expr Block
-
-(* §2.5.4 G50 — anonymous structural record *)
-AnonymousRecordType  ::= '{' RecordTypeField (',' RecordTypeField)* ','? '}'
-RecordTypeField      ::= IDENT ':' Type
-AnonymousRecordValue ::= '{' RecordValueField (',' RecordValueField)* ','? '}'
-RecordValueField     ::= IDENT (':' Expr)?
 
 (* §21 G37 — annotation on parameter (new position) *)
 ParamDecl      ::= Annotation* Pattern ':' Annotation* Type ('=' DefaultExpr)?
@@ -1875,7 +1786,7 @@ ParamDecl      ::= Annotation* Pattern ':' Annotation* Type ('=' DefaultExpr)?
 | Reserved keywords | 18 | 19 | +1 (`while` — G49) |
 | Contextual keywords | 10 | 14 | +4 (`spec`, `example`, `law`, `invariant`; `forall` 은 v1 단계) |
 | Fixed annotation set | 11 | 31 | +20 |
-| EBNF productions | 191 | 203 | +12 |
+| EBNF productions | 191 | 199 | +8 |
 | Lexer token classes | 36 | 36 | 0 |
 
 신규 어노테이션 20:
@@ -2458,9 +2369,6 @@ v0.6 의 결정들이 참조한 학술/산업 선행 사례:
 | **G47 Machine context** | LSP `textDocument/hover` | 동일 응용을 LLM 까지 확장 |
 | | `cargo metadata` JSON output | 메타데이터 export 정신 |
 | **G49 while** | C / Java / Rust / Swift | 가장 흔한 conditional loop. Osty 가 v0.5 에서 부재했던 부분 |
-| **G50 Anonymous record** | TypeScript `{ x: number, y: number }` | structural type 영감 |
-| | Swift tuple labeled fields | 부분 영향 |
-| | OCaml anonymous record | 학술 origin |
 
 ### 10.1 References
 
@@ -2486,7 +2394,7 @@ v0.6 baseline 동결 → public 1.0 alpha 출시 까지의 게이트:
 
 ### 9.1 Spec readiness (이 문서가 cover)
 
-- [x] G36–G50 (15 결정) 본 문서에 명시
+- [x] G36–G49 (15 결정) 본 문서에 명시
 - [x] SPEC_GAPS.md §"Resolved in v0.6" 에 entries 등재
 - [x] OSTY_GRAMMAR_v0.6.md grammar delta + R27–R30
 - [x] CHANGELOG_v0.6.md skeleton
@@ -2523,8 +2431,8 @@ v0.6 baseline 동결 → public 1.0 alpha 출시 까지의 게이트:
 
 ### 9.4 Spec corpus readiness
 
-- [ ] `testdata/spec/positive/` 에 G36-G50 별 통과 케이스 추가
-- [ ] `testdata/spec/negative/reject.osty` 에 신규 진단 코드 (E0340-E0451,
+- [ ] `testdata/spec/positive/` 에 G36-G49 별 통과 케이스 추가
+- [ ] `testdata/spec/negative/reject.osty` 에 신규 진단 코드 (E0405-E0451,
   E0780-E0796, E0900-E0903, E2100-E2101) 케이스
 - [ ] `STDLIB_MATRIX.md` 가 capability migration 후 모듈별 capability requirement
   컬럼 추가
@@ -2535,7 +2443,7 @@ v0.6 baseline 동결 → public 1.0 alpha 출시 까지의 게이트:
 - [ ] `README.md` v0.6 surface 표 갱신
 - [ ] `ARCHITECTURE.md` capability layer 추가
 - [ ] `CLAUDE.md` 부록 A (canonical 예시) 에 capability + sealed + taint 패턴 추가
-- [ ] `CLAUDE.md` 부록 B (생산성 기법 카탈로그) 에 G36-G50 행 추가
+- [ ] `CLAUDE.md` 부록 B (생산성 기법 카탈로그) 에 G36-G49 행 추가
 - [ ] *마이그레이션 가이드* 문서 — `MIGRATING_v0.5_to_v0.6.md`
 
 ### 9.6 Compatibility / breaking change audit

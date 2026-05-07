@@ -4,7 +4,7 @@ v0.5 의 R1–R26 결정과 EBNF 를 baseline 으로, v0.6 에서 추가/변경�
 만 본 문서에 명시한다. v0.5 grammar 의 본문은
 [`OSTY_GRAMMAR_v0.5.md`](./OSTY_GRAMMAR_v0.5.md) 가 계속 권위.
 
-> **Status**: v0.6 spec revision 동기 (G36–G50). spec 본문은
+> **Status**: v0.6 spec revision 동기 (G36–G49). spec 본문은
 > [`LANG_SPEC_v0.6/00-revision.md`](./LANG_SPEC_v0.6/00-revision.md).
 
 ---
@@ -36,7 +36,7 @@ v0.5 의 R1–R26 결정과 EBNF 를 baseline 으로, v0.6 에서 추가/변경�
 §5 of [`LANG_SPEC_v0.6/00-revision.md`](./LANG_SPEC_v0.6/00-revision.md)
 참조 — 31 개 fixed annotation 으로 확장. `#[name(args)]` 형식 그대로.
 
-### Annotation parameter position (R30)
+### Annotation parameter position (R29)
 
 `ParamDecl` 의 두 위치에 `Annotation*` 신규 허용:
 - Pattern 앞 (caller-facing intent: source 표시)
@@ -84,31 +84,6 @@ WhileStmt      ::= 'while' Expr Block
 ```
 
 `'while'` 은 fully reserved (R27). 식별자 자리에 사용 불가.
-
-### G50 — anonymous structural record
-
-```ebnf
-AnonymousRecordType  ::= '{' RecordTypeField (',' RecordTypeField)* ','? '}'
-RecordTypeField      ::= IDENT ':' Type
-
-AnonymousRecordValue ::= '{' RecordValueField (',' RecordValueField)* ','? '}'
-RecordValueField     ::= IDENT (':' Expr)?       (* shorthand, struct literal 과 같음 *)
-```
-
-R29 의 disambiguation 규칙:
-
-```
-1. Type 위치 (let `: T`, fn return type, fn param type) — 항상 record type
-2. Value 위치, type ascription 있음 — 항상 record value (struct literal 우선
-   적용 안 됨, AnonymousRecordValue 로 파싱)
-3. Value 위치, type ascription 없음 — lookahead:
-   `'{' IDENT ':'` 패턴이면 record value
-   그 외 (e.g., `'{' Stmt`) 는 block expression
-4. 모호 시 `: T` ascription 추가 권장 (E0342 hint)
-```
-
-`AnonymousRecordType` / `AnonymousRecordValue` 의 *필드 안에는 annotation
-허용 안 함* (E0340) — annotation 이 필요하면 nominal struct 사용.
 
 ### G37 — annotation on parameter
 
@@ -281,31 +256,12 @@ expression 평가 안 됨. spec block 본문은 *순수 메타데이터*: `examp
 `'spec'` keyword 는 그 위치에서만 keyword 로 lex. 그 외 위치 (예: 변수
 이름, struct field 이름) 에서는 식별자.
 
-### R29. anonymous record vs block 모호성 (G50)
-
-`{ x: 1, y: 2 }` 가 block expression 인지 anonymous record literal
-인지의 모호성 해소 규칙:
-
-1. **Type 위치**: 항상 `AnonymousRecordType`. e.g. `let r: { x: Int, y:
-   Int } = ...`.
-2. **함수 반환 type 위치**: 항상 `AnonymousRecordType`.
-3. **Value 위치, type ascription 있음**: 항상 `AnonymousRecordValue`.
-   e.g. `let r: { x: Int, y: Int } = { x: 1, y: 2 }`.
-4. **Value 위치, type ascription 없음**: parser 가 *lookahead* — `{`
-   다음 `IDENT ':'` 패턴이면 record value, 그 외는 block.
-5. **모호한 경우** (예: lambda `|| { x: 1 }` 가 block 인지 record 반환
-   인지): block 으로 파싱 — `: Int` 가 statement-level annotation 아님.
-   Record 의도를 강제하려면 type ascription 추가.
-6. **mismatched 위치는 명확한 진단**: type ascription 없이 모호한 자리
-   에서 record value 의도였으면 `E0342` (suggestion: `: T` 추가).
-
-### R30. annotation 위치 확장 (G37)
+### R29. annotation 위치 확장 (G37)
 
 `Annotation*` 가 새로 허용되는 위치:
 
 - Function parameter `Pattern` 앞 (v0.5 까지는 declaration-only)
 - Function parameter `Type` 앞 (동일)
-- Anonymous record field 에는 annotation **불허** (`E0340`)
 - Tuple 요소에는 annotation **불허** (모호성)
 
 기존 declaration 위치 (top-level fn/struct/enum/interface, struct
@@ -341,7 +297,7 @@ R7 에 다음 추가:
 | Reserved keywords | 17 | 18 | **19** | +1 (`while`) |
 | Contextual keywords | 7 | 10 | **14** | +4 (`forall` 은 v1 단계 추가 시 15) |
 | Fixed annotation set | 8 | 11 | **31** | +20 |
-| EBNF productions | 180 | 191 | **203** | +12 |
+| EBNF productions | 180 | 191 | **199** | +8 |
 | Lexer token classes | 34 | 36 | **36** | 0 |
 | Diagnostic bands used | E0001-E0779 + E0405 | 동일 | E0001-E0949 + E2149 + W0949 | +5 bands |
 
@@ -354,8 +310,7 @@ R7 에 다음 추가:
 | R1–R26 | (v0.5 와 동일) | — |
 | R27 | `while` 키워드 | G49 |
 | R28 | spec block 위치 + `spec`/`example`/`law`/`invariant` 컨텍스트 | G43 |
-| R29 | anonymous record vs block 모호성 | G50 |
-| R30 | annotation 위치 확장 (parameter 두 위치) | G37 |
+| R29 | annotation 위치 확장 (parameter 두 위치) | G37 |
 
 ---
 
@@ -363,9 +318,6 @@ R7 에 다음 추가:
 
 | 코드 | 의미 |
 |---|---|
-| `E0340` | Anonymous record field 에 annotation/method 시도 |
-| `E0341` | Anonymous record self-recursive type |
-| `E0342` | Block expression 과 anonymous record literal 모호 |
 | `E0405` | Annotation 이 잘못된 위치 (annotation matrix 기반) |
 | `E0440` | `spec` block 이 함수 본문 첫 위치가 아님 |
 | `E0441` | `spec { example: }` 가 boolean 으로 평가되지 않음 |
