@@ -1371,38 +1371,6 @@ Spec: v0.6 §3.14.4 / §3.14.2
 
 ---
 
-## G50 — Anonymous structural record (§2.5.4)
-
-### E0340 — `CodeAnonRecordAnnotation`
-
-CodeAnonRecordAnnotation: an attempt was made to attach an annotation, method, or `pub` modifier to a field of an `AnonymousRecordType`. Anonymous records are *structural* and metadata-free; promote to a nominal `struct` for these features.
-
-Spec: v0.6 §2.5.4.4
-
-**Fix**: declare a nominal `struct` if the field needs annotations.
-
-### E0341 — `CodeAnonRecordRecursive`
-
-CodeAnonRecordRecursive: an `AnonymousRecordType` references itself in one of its field types (directly or transitively). Anonymous records cannot be self-recursive — the resulting type would be infinite.
-
-recursive position.
-
-Spec: v0.6 §2.5.4.4
-
-**Fix**: declare a nominal `struct` and use it by name in the
-
-### E0342 — `CodeAnonRecordAmbiguous`
-
-CodeAnonRecordAmbiguous: a `{ ... }` literal cannot be disambiguated between block expression and anonymous record literal at this position. Most common cause: closure body where `: T` could parse either as record field type or as a statement- level annotation.
-
-or wrap in `(...)` to force expression context.
-
-Spec: v0.6 §2.5.4.6 / R29
-
-**Fix**: add a type ascription (`: { x: Int }`) on the value position
-
----
-
 ## G41 — Error contract (§7.5)
 
 ### E0410 — `CodeErrorContractMismatch`

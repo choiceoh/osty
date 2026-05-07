@@ -174,10 +174,6 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
     if code == "E0903" { return FamilyTypeChecking }
     if code == "W0901" { return FamilyTypeChecking }
     if code == "W0902" { return FamilyTypeChecking }
-    // G50 — Anonymous structural record (§2.5.4)
-    if code == "E0340" { return FamilyTypePattern }
-    if code == "E0341" { return FamilyTypePattern }
-    if code == "E0342" { return FamilyTypePattern }
     // G41 — Error contract (§7.5)
     if code == "E0410" { return FamilyAnnotation }
     if code == "E0411" { return FamilyAnnotation }

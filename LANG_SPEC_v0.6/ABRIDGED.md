@@ -62,7 +62,7 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - `Int`는 항상 64-bit signed. machine-word `UInt`는 없다.
 - `String`은 immutable UTF-8 bytes. `Bytes`는 immutable byte sequence.
 - composite: `struct`, `enum`, `interface`, tuple, function type, `List<T>`,
-  `Map<K, V>`, `Set<T>`, `Option<T>`, `Result<T, E>`, **anonymous record**.
+  `Map<K, V>`, `Set<T>`, `Option<T>`, `Result<T, E>`.
 - `Set<T>`는 있지만 set literal은 없다. `Set.from([...])`를 사용한다.
 - `T?`는 `Option<T>` sugar. formatter는 `Option<T>`를 `T?`로 정규화한다.
 - `null`/`nil`은 없다. 부재는 `Option<T>`/`T?`.
@@ -74,13 +74,8 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - arithmetic overflow, invalid shift, integer div/mod by zero는 abort한다.
   복구 동작은 checked/wrapping/saturating method를 사용한다.
 - value semantics: primitives, `String`, `Bytes`, tuple.
-- reference semantics: `struct`, `enum`, collections, function/closure values,
-  anonymous record.
+- reference semantics: `struct`, `enum`, collections, function/closure values.
 - binding은 기본 immutable. 재할당과 field mutation에는 `mut` binding이 필요하다.
-- **anonymous record (G50)**: `{ x: Int, y: Int }` type, `{ x: 1, y: 2 }` value.
-  structural type — 같은 필드 set = 같은 type. nominal struct 와는 별도 universe.
-  메서드 정의 불가, annotation 불가, self-recursive 금지. `#[sealed_construct]`
-  필요하면 nominal struct.
 
 ## 4. Interfaces and Generics
 
@@ -147,7 +142,7 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 
 - pattern 위치: `match`, `let`, `if let`, `for let`, closure parameter 일부.
 - pattern 종류: wildcard, literal, identifier binding, tuple, struct, variant,
-  range, or, `name @ pattern`. anonymous record destructuring 도 같은 syntax.
+  range, or, `name @ pattern`.
 - `let` pattern은 irrefutable destructuring만 사용한다. enum variant는 `let`
   대신 `match` 또는 `if let`.
 - pattern precedence: atomic, range, binding, or.

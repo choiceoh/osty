@@ -9,7 +9,7 @@ authority on what v0.6 *is* right now. v0.5 의 분리 패턴
 ([`CHANGELOG_v0.5.md`](./CHANGELOG_v0.5.md)) 을 그대로 따른다.
 
 See [`LANG_SPEC_v0.6/00-revision.md`](./LANG_SPEC_v0.6/00-revision.md)
-for the full v0.5 → v0.6 decision log (15 resolved gaps, G36 – G50)
+for the full v0.5 → v0.6 decision log (14 resolved gaps, G36 – G49)
 and [`SPEC_GAPS.md`](./SPEC_GAPS.md) §"Resolved in v0.6" for per-gap
 rationale.
 
@@ -26,7 +26,7 @@ rationale.
 | Phase 3 | Reproducible + spec block v0 + golden | G39, G43 (v0), G45 |
 | Phase 4 | Sealed + ErrorContract + Evolution + Budget(static) | G40, G41, G44, G46 (static) |
 | Phase 5 | Taint + Budget(runtime) + spec block v1 | G37, G46 (runtime), G43 (v1) |
-| Pre-1.0 | While + Anonymous record | G49, G50 |
+| Pre-1.0 | While ergonomics | G49 |
 
 ## Shipped in the compiler
 
@@ -38,7 +38,6 @@ rationale.
 | Form | Status | Notes |
 |---|---|---|
 | `while cond { body }` | **planned** (G49) | `for cond { body }` 와 동등 lowering. 사용자 0 단계의 breaking change — 식별자 `while` 사용했던 코드는 rename. |
-| `{ x: Int, y: Int }` anonymous record | **planned** (G50) | structural type, nominal struct 와 별도 universe |
 | `spec { example: ... }` block | **planned** (G43, v0) | example: 만 v0 에 실행, law:/invariant: 는 doc only |
 | Parameter annotation `fn f(#[taint("...")] x: T)` | **planned** (G37) | parameter 위치 annotation 신규 허용 |
 
@@ -115,7 +114,7 @@ rationale.
 
 - `#[since]` / `#[stability]` / `#[match_compat]` — 옵션 어노테이션, 미사용
   코드 영향 없음
-- Anonymous record / `while` keyword — 신규 surface, 기존 코드 영향 없음
+- `while` keyword — 신규 surface, 기존 코드 영향 없음 (식별자 `while` 사용 코드만 rename)
 - `#[spec]` / `#[purpose]` / `#[example]` / `#[fixture]` — 메타데이터, 옵션
 - `#[reproducible]` / `#[golden]` / `#[budget]` — 옵션, 미사용 영향 없음
 
