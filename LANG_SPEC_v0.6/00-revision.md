@@ -31,6 +31,12 @@ v0.5 의 외부 사용 corpus 와 셀프호스트 운영 (100 PR / 4 일 sprint)
 | **G49** | `while` keyword (§4.4) | `for cond {}` 와 동의어. mental-model 일치 |
 | **G50** | Anonymous structural record (§2.5) | `{ x: Int, y: Int }` ad-hoc record |
 
+> **G49 / G50 design review status**: G36–G48 (13 개) 는 직전 사용 corpus 분석에서
+> 합의된 결정인 반면, **G49 / G50 은 본 spec 작성 과정에서 추가 제안된 ergonomics
+> 정정**. v0.6 baseline 에 포함하기 전 별도 design review 권장. 빼도 v0.6 의
+> hidden-dependency-surface 정신은 유지된다. 본 문서는 편의상 *포함* 으로 작성 —
+> 결정에 따라 `SPEC_GAPS.md` 와 `OSTY_GRAMMAR_v0.6.md` 수정 필요.
+
 ## 1. Design North Star — *Hidden Dependency Is Forbidden*
 
 v0.5 까지의 결정이 (a) safety-by-construction, (b) type system simplicity, (c) grammar
@@ -213,6 +219,85 @@ ambient 불가 (`E0789`).**
 라이브러리 코드는 항상 명시. ambient 는 **boundary 위에서만 허용**. 이는
 *테스트 가능성*을 강제 — 라이브러리 함수는 mockable Clock / Rng 를 받아 테스트
 시 fake 주입 가능.
+
+#### §20.3.2 Ambient binding scope 규칙
+
+`#[ambient(name1, ...)]` 의 binding 은 다음 scope 규칙을 따른다:
+
+1. **Visibility 시작점**: 함수 본문의 첫 statement 위치에 desugar 된 `let
+   name<i>: Capability<i> = std.<...>.default()` 가 삽입된 *이후 모든
+   statement* 에서 가시.
+
+2. **Block 통과**: 일반 `let` 처럼 — `if` / `match` / `for` / `while` / `loop` /
+   block expression 내부에서도 가시.
+   ```osty
+   #[ambient(clock)]
+   fn main() {
+       if shouldLog() {
+           let t = clock.now()        // OK — ambient 가 nested block 안에 가시
+       }
+   }
+   ```
+
+3. **Closure capture (deterministic)**: closure 가 ambient binding 을 capture
+   하면 *값 capture* (capability 값을 closure 가 보유). closure 가 다른 함수로
+   넘어가도 ambient 가 함께 흐름.
+   ```osty
+   #[ambient(clock)]
+   fn main() {
+       let measure = || clock.monotonic()    // measure: () -> Duration, captures clock
+       runRepeatedly(measure)                 // measure 가 다른 함수에서 호출돼도 OK
+   }
+   ```
+   다만 *ambient 자체는 함수 boundary 를 넘지 않음* — `runRepeatedly` 의 본문이
+   ambient `clock` 을 보지 못함. `measure` closure 가 capability 을 들고 들어감.
+
+4. **Shadowing**: 같은 이름 `let` 선언이 ambient 가린다 — 일반 scoping 규칙.
+   ```osty
+   #[ambient(clock)]
+   fn main() {
+       let clock = std.time.fakeClock(epoch_ms = 0)    // ambient 를 fake 로 shadow
+       buildId(clock)                                    // shadow 된 값 forward
+   }
+   ```
+
+5. **Auto-forward 의 정확한 매칭**: callee 의 capability parameter 이름과 ambient
+   binding 이름이 *exact 일치* 시에만 자동 forward. 케이스 차이 / underscore 차이
+   불일치 — 명시 인자 필요.
+   ```osty
+   fn buildId(systemClock: Clock, rng: Rng) -> String { ... }
+
+   #[ambient(clock, rng)]
+   fn main() {
+       buildId()                  // ERROR: ambient `clock` 이 callee `systemClock` 과
+                                   //        이름 불일치 — auto-forward 안 함
+       buildId(clock, rng)         // OK — 명시
+   }
+   ```
+
+6. **Ambient 누수 금지**: ambient binding 은 *함수 boundary* 에서 멈춘다. 즉
+   `#[ambient(clock)]` 함수가 다른 함수 `g()` 를 호출할 때, `g` 가 capability
+   parameter 를 받지 않으면 capability 가 자동 주입되지 않음. *명시 routing*만
+   허용.
+
+7. **Recursion**: `#[ambient]` 가 붙은 함수가 자기 자신을 호출 시 ambient 는
+   함수 boundary 마다 재-desugar — 즉 매 호출 instance 가 같은 default instance
+   를 받는다 (deterministic).
+
+#### §20.3.3 Ambient 와 capability 위 effect annotation
+
+```osty
+#[ambient(clock, rng)]
+#[reproducible]                  // ERROR: E0784 — ambient 가 non-det capability 주입
+fn main() { ... }
+```
+
+`#[reproducible]` 와 ambient (Clock / Rng / Env / Fs / Net / Process 중 하나
+포함) 동시 적용 = 컴파일 에러. ambient 는 *boundary 의 ergonomics 도구*이므로,
+*그 함수가 reproducible 하다* 와는 양립 불가.
+
+`#[ambient(console)]` 단독은 — `Console` 이 deterministic 출력 capability 이므로
+`#[reproducible(scope = "run")]` 와 양립 (그 외 scope 는 `Console` 도 거부).
 
 #### §20.4 Capability 와 effect annotation 의 상호작용
 
@@ -447,9 +532,116 @@ fn handler() -> Result<(), Error> {
 }
 ```
 
-#### §21.6 Implicit flow
+#### §21.5.3 Type tag propagation — formal inference rules
 
-다음은 **explicit flow only** 정책을 채택한다 (Jif 와 동일 결정):
+타입 `T` 는 *tag set* `A ⊆ Tags` 를 운반한다 — 표기 `T@A`. 어노테이션 없는 위치는
+`A = ∅` (clean). 다음 inference rule 들이 propagation 의 권위:
+
+```
+─────────────────────────────────                            (T-Const)
+   Γ ⊢ literal : T@∅
+
+
+   Γ ⊢ e : T@A       (T-Forward, 어노테이션 없는 통과 함수)
+   f : T -> U
+─────────────────────────
+   Γ ⊢ f(e) : U@A
+
+
+   Γ ⊢ e1 : T1@A1     Γ ⊢ e2 : T2@A2     ...     (T-Combine, n-ary)
+   f : T1 × T2 × ... × Tn -> U
+─────────────────────────────────────────────────
+   Γ ⊢ f(e1, e2, ..., en) : U@(A1 ∪ A2 ∪ ... ∪ An)
+
+
+   f 의 선언이 #[taint("σ")] 부착                            (T-Source)
+   f : () -> T
+─────────────────────────────────
+   f : () -> T@{σ}        (실제 시그니처)
+
+
+   f 의 선언이 #[sanitizes("σ", into = "τ")] 부착             (T-Sanitize)
+   f : T -> U      σ ∈ A
+─────────────────────────────────────────
+   Γ ⊢ f(e:T@A) : U@((A \ {σ}) ∪ {τ})
+
+
+   f 의 인자 위치에 #[requires("τ")] 부착                     (T-Sink)
+   Γ ⊢ e : T@A         τ ∈ A
+─────────────────────────────────
+   Γ ⊢ f(e) : U                  (호출 OK)
+
+   Γ ⊢ e : T@A         τ ∉ A
+─────────────────────────────────
+   E0900: tainted value reaches sink (호출 거부)
+
+
+   Γ ⊢ s : Struct { f1: T1@A1, ..., fn: Tn@An }              (T-Struct)
+   #[taint_field] 어노테이션 없음
+─────────────────────────────────────────────────────
+   tag(s) = A1 ∪ A2 ∪ ... ∪ An       (struct 단위 fold)
+   ∀i.  Γ ⊢ s.fi : Ti@(A1 ∪ ... ∪ An)
+
+
+   Γ ⊢ s : Struct { f1: T1@A1, ..., fn: Tn@An }              (T-Struct-Field)
+   필드 fi 만 #[taint_field("σ")] 어노테이션
+─────────────────────────────────────────────────────
+   Γ ⊢ s.fi : Ti@({σ} ∪ Ai)          (해당 필드만 narrow)
+   ∀j ≠ i. Γ ⊢ s.fj : Tj@Aj
+
+
+   Γ ⊢ e : List<T@A>                                         (T-Container)
+   xs : List<T@A>
+─────────────────────────────────
+   Γ ⊢ xs[i] : T@A
+   ∀x ∈ xs.  Γ ⊢ x : T@A
+
+
+   Γ ⊢ e : Result<T@A, E@B>                                  (T-Result)
+─────────────────────────────────────────
+   Γ ⊢ e? : T@A         (Ok 분기 — A 보존)
+                        (Err 분기 — B 운반하며 enclosing 의 Err 로 propagate)
+
+
+   λ |x: T@A| -> body  closure                              (T-Closure)
+   capture set: { y_i : U_i@B_i }
+─────────────────────────────────────────
+   closure type : (T@A) -> R@(A ∪ B_1 ∪ ... ∪ B_k)
+                  (capture 된 모든 tag 결과에 합집합)
+
+
+   Γ ⊢ e : T@A      f<X> : X -> X      (T-Generic-Mono)
+   monomorphization: X = T@A
+─────────────────────────────────
+   Γ ⊢ f::<T@A>(e) : T@A         (tag 가 generic instance 와 함께 propagate)
+```
+
+#### §21.5.4 Subtyping 와 lattice
+
+Tag set 은 powerset lattice (⊆ 순서) 이지만 *subtyping 방향은 sink 측 요구의
+역방향*:
+
+```
+   Γ ⊢ e : T@A      A ⊇ τ-required-set       (T-Subsume-Sink)
+─────────────────────────────────────────
+   Γ ⊢ e : T (sink-acceptable)
+```
+
+**중요**: tag 추가는 *제약 강화* 가 아니라 *제공 정보 추가*. 더 많은 tag 가 붙은
+값은 더 많은 sink 요구 만족 가능. *제거*는 sanitize 를 통해서만 가능.
+
+#### §21.5.5 Soundness 약속
+
+이 규칙 set 은 다음 invariant 를 보장 — *증명 의무는 v0.7+ 의 Open Item* (formal
+proof in mechanized assistant 검토):
+
+> **No-Bypass Invariant**: 만약 `db.query(s)` call site 가 컴파일 통과했다면,
+> `s` 의 source-to-sink path 위 어딘가에 `#[sanitizes(σ_user_input, into =
+> sql_safe)]` 또는 `#[trusted_declassify]` 가 존재한다.
+
+#### §21.6 Implicit flow 미지원 — 정책
+
+다음은 **explicit flow only** 정책을 채택한다 (Jif [Myers 2002] 와 동일 결정):
 
 ```osty
 fn leak(token: #[taint("secret")] String) -> Bool {
@@ -1027,15 +1219,198 @@ Levels:
 - `"deprecated"` — `since` 부터 deprecated. `remove` 버전에 제거 예정. 사용 시 `W0750`.
 - `"internal"` — 같은 패키지 외부 사용 시 `W0902`.
 
-#### §3.14.3 `osty publish` 통합
+#### §3.14.3 `osty publish` API surface diff algorithm
 
-`osty publish` 시:
-- 이전 버전과 API surface diff 계산
-- `stable` 시그니처 변경 → breaking change. major bump 강제 (`E2100`)
-- `stable` 함수 / type / variant 제거 → breaking. major bump 강제
-- `experimental` 변경 → 허용 (warning 만)
-- 새 함수 / variant 추가 → minor bump
-- 실수로 minor bump 했는데 breaking 있으면 publish 거부
+`osty publish` 가 *이전 published 버전* 의 manifest 와 *현재 working tree* 의
+manifest 를 비교해 SemVer 호환성 검증.
+
+##### §3.14.3.1 API surface 의 정의
+
+다음만 surface 에 포함:
+
+| 영역 | 포함 |
+|---|---|
+| 함수 | `pub fn` 또는 `pub interface` 의 method. `pub` 없으면 surface 아님 |
+| 함수 시그니처 | name, generic param list, param 의 (name, type), return type, where bounds |
+| 함수 attributes | `#[stability]`, `#[error_contract]`, `#[since]`, `#[reproducible]`, `#[pure]`, `#[budget]`, parameter taint annotations |
+| 함수 body | **포함 안 함** (구현 변경은 surface 아님) |
+| Struct | name, generic params, `pub` 필드 (name, type, default), method 시그니처 |
+| Struct attributes | `#[sealed_construct]`, `#[json]`, `#[stability]`, `#[since]` |
+| Enum | name, generic params, variant list (name, payload types), method 시그니처 |
+| Enum attributes | `#[stability]`, `#[since]` per variant |
+| Interface | name, generic params, method 시그니처, default body 존재 여부 (body 내용 아님) |
+| Type alias | name, generic params, RHS type |
+| Constants | `pub const` 의 (name, type) — value 는 surface 아님 |
+
+다음은 surface 에 **포함 안 함** — 변경해도 SemVer 영향 없음:
+- 함수 / 메서드 본문
+- 비-`pub` 항목 모두
+- `#[purpose]`, `#[example]`, `#[fixture]`, `#[spec]` (메타데이터, 문서 영향)
+- `#[golden]` (테스트만 영향)
+- 라인 번호, 파일 위치
+- 주석
+
+##### §3.14.3.2 Diff 분류
+
+각 surface 항목 변경을 다음 카테고리로 분류:
+
+| 카테고리 | SemVer 효과 | 예시 |
+|---|---|---|
+| **Breaking** | major bump 필수 | 항목 제거, 시그니처 변경, 필드 type 변경 |
+| **Compat-add** | minor bump | 신규 항목 추가, 새 enum variant (with `#[since]`), 새 default arg 추가 |
+| **Patch** | patch bump | 메타데이터 갱신, body 변경, 주석 |
+| **Mixed** | breaking 우선 | 한 항목이라도 breaking 이면 전체 breaking |
+
+세부 규칙:
+
+```
+함수 시그니처:
+  Δ(name)                                   → BREAKING (rename = remove + add)
+  Δ(param-name) at position i               → BREAKING (named-call 영향, G20)
+  Δ(param-type) at position i               → BREAKING
+  Δ(return-type)                            → BREAKING
+  Δ(generic-params) — count change          → BREAKING
+  Δ(generic-bound) — strengthen             → BREAKING
+  Δ(generic-bound) — weaken                 → COMPAT-ADD
+  Add required param                        → BREAKING
+  Add defaulted param at end                → COMPAT-ADD (positional caller OK)
+  Add defaulted param NOT at end            → BREAKING (G20 named-call shift)
+  Remove defaulted param                    → BREAKING
+  Default value change                      → COMPAT-ADD (호출자 다음 빌드 시 영향)
+  Add #[reproducible]                       → COMPAT-ADD (callee 추가 보장)
+  Remove #[reproducible]                    → BREAKING (callee 보장 약화)
+  Add #[error_contract] variant             → BREAKING (캐치 의무 추가)
+  Remove #[error_contract] variant          → COMPAT-ADD (caller 가 처리하던 분기 dead)
+  Add parameter #[taint] / #[requires]      → BREAKING (caller 측 sanitize 의무)
+  Add #[budget] strengthening               → BREAKING (이전 호출이 새 budget 위반 가능)
+  Relax #[budget]                           → COMPAT-ADD
+
+Struct:
+  Add pub field with default                → COMPAT-ADD
+  Add pub field without default             → BREAKING (constructor 측 영향)
+  Remove pub field                          → BREAKING
+  Δ(field-type)                             → BREAKING
+  Field pub → priv                          → BREAKING
+  Field priv → pub                          → COMPAT-ADD
+  Add #[sealed_construct]                   → BREAKING (외부 literal 차단)
+  Remove #[sealed_construct]                → COMPAT-ADD
+
+Enum:
+  Add variant (with #[since])               → COMPAT-ADD * (note: G44 match_compat 권장)
+  Add variant (without #[since])            → BREAKING (#[since] 누락 = exhaustiveness 강제)
+  Remove variant                            → BREAKING
+  Δ(variant-payload)                        → BREAKING
+  Reorder variants                          → BREAKING (discriminant 영향, G31)
+
+Interface:
+  Add method with default body              → COMPAT-ADD
+  Add method without default body           → BREAKING (구현체 강제)
+  Remove method                             → BREAKING
+  Δ(method-signature)                       → BREAKING
+
+Type alias:
+  Δ(RHS) — same shape                       → COMPAT-ADD or PATCH (case-by-case)
+  Δ(RHS) — different shape                  → BREAKING
+
+Stability transition:
+  experimental → stable                     → COMPAT-ADD (강화)
+  stable → experimental                     → BREAKING (regression)
+  stable → deprecated                       → COMPAT-ADD (still callable)
+  deprecated → removed                      → BREAKING (publish 시 #[stability] level=removed-by 표시 필수)
+  internal → pub                            → COMPAT-ADD
+  pub → internal                            → BREAKING
+```
+
+##### §3.14.3.3 알고리즘 의사 코드
+
+```
+fn computeDiff(prev: Manifest, curr: Manifest) -> DiffReport {
+    let mut report = DiffReport::new()
+
+    for prevItem in prev.surface {
+        if let currItem = curr.surface.findByQualifiedName(prevItem.name) {
+            classifyChange(prevItem, currItem) into report
+        } else {
+            // 1. #[stability(level="deprecated", remove="X.Y")] 와 일치하는 X.Y 도달 시
+            if prevItem.deprecatedAt(curr.version) {
+                report.add(REMOVED_AS_PROMISED, prevItem)   // 예고된 제거
+            } else {
+                report.add(BREAKING_REMOVE, prevItem)
+            }
+        }
+    }
+
+    for currItem in curr.surface {
+        if !prev.surface.containsByQualifiedName(currItem.name) {
+            report.add(COMPAT_ADD, currItem)
+        }
+    }
+
+    report
+}
+
+fn classifyChange(prev: SurfaceItem, curr: SurfaceItem) -> ChangeKind {
+    // 위 §3.14.3.2 표의 모든 규칙을 if-else chain 으로 매칭
+    // 첫 BREAKING 매칭이 결과
+}
+
+fn validatePublish(prev: Version, curr: Version, report: DiffReport) -> Result<(), PublishError> {
+    let bump = compareVersion(prev, curr)
+    let maxSeverity = report.maxChangeKind()
+
+    match (maxSeverity, bump) {
+        (BREAKING, MajorBump) => Ok(()),
+        (BREAKING, MinorBump | PatchBump) => Err(E2100 { needsMajorBump: report.breakingItems() }),
+        (COMPAT_ADD, MinorBump | MajorBump) => Ok(()),
+        (COMPAT_ADD, PatchBump) => Err(E2102 { needsMinorBump: report.addedItems() }),
+        (PATCH, _) => Ok(()),     // 어떤 bump 든 patch-only 는 OK
+        (_, NoChange | Downgrade) => Err(E2101),
+    }
+}
+```
+
+##### §3.14.3.4 Manifest 형식
+
+`osty publish` 는 `target/manifest-{version}.json` 을 생성/갱신:
+
+```json
+{
+  "$schema": "https://osty.dev/schemas/manifest/v1.json",
+  "package": "github.com/x/y",
+  "version": "0.6.0",
+  "stability_default": "experimental",
+  "surface": [
+    {
+      "kind": "function",
+      "name": "std.user.createUser",
+      "stability": "stable",
+      "since": "0.6",
+      "signature": { /* §13.6.2 와 동일 schema */ }
+    },
+    /* ... */
+  ]
+}
+```
+
+`osty publish` 는 (a) 이전 manifest fetch (registry 또는 git tag), (b)
+`computeDiff` 실행, (c) bump 검증, (d) 통과 시 manifest sign + upload.
+
+##### §3.14.3.5 Edge cases
+
+- **Generic instance 변경**: monomorphization 결과는 surface 아님. *type-level
+  signature* 만 surface. Generic body 는 patch.
+- **Structural interface 변경**: nominal interface 와 동일 규칙 — `pub interface
+  X { fn m(...) }` 의 `m` 변경은 BREAKING 이라도, *어떤 type 이 X 를 구현하는지*
+  는 nominal 등록 아님 (구조적). 따라서 X 의 변경이 영향을 주는 *모든 구현체*가
+  자동 BREAKING 으로 전파. publish 시점에 워크스페이스 내 영향 분석 추가.
+- **Trait alias / type alias 의 transitive expand**: `type T = Foo<Int>` 후
+  `Foo` 가 변하면 `T` 도 변함. transitive 분석 필요.
+- **Re-export 변경 (`pub use`)**: re-exported symbol 의 원본이 변하면 re-export
+  지점도 변경된 것으로 분류.
+
+##### §3.14.3.6 진단 코드 (publish)
+
+§3.14.5 통합 — `E2100`/`E2101`/`E2102`, `W2100`.
 
 #### §3.14.4 `#[match_compat("X.Y", ...)]`
 
@@ -1068,6 +1443,7 @@ fn handle(e: Event) -> String {
 | `W0902` | `unsafe_silent` 사용 또는 `internal` API 외부 사용 |
 | `E2100` | `osty publish` — stable API breaking change without major bump |
 | `E2101` | `osty publish` — version downgrade |
+| `E2102` | `osty publish` — compat-add change with patch-only bump |
 | `W2100` | `osty publish` — experimental API change |
 
 ---
@@ -1565,6 +1941,54 @@ Phase 2 에서 *category-prefix 옵션* 도입 검토:
 - v0.6.x: 마이그레이션 기간
 - v0.7.0: 전역 함수 제거
 
+##### `--legacy-globals` desugar 의미론
+
+`osty build --legacy-globals` 또는 manifest `[legacy] globals = true` 활성 시:
+
+1. **stdlib 의 v0.5 전역 함수 stub 재활성화**: `std.time.now()` /
+   `std.random.next()` / `std.env.get(k)` / `std.fs.read(p)` / `std.os.exec(...)`
+   / `std.net.dial(...)` 가 **`std.<module>.<host>.<method>` 호출로 자동 desugar**:
+   ```
+   time.now()           ⟶  std.time.host.now()
+   random.next()        ⟶  std.random.host.next()
+   env.get(k)           ⟶  std.env.host.get(k)
+   fs.read(p)           ⟶  std.fs.host.read(p)
+   os.exec(c, a)        ⟶  std.process.host.exec(c, a)
+   net.dial(h, p)       ⟶  std.net.host.dial(h, p)
+   ```
+
+2. **`std.<module>.host` 는 process-global capability instance**:
+   - 프로그램 lifetime 동안 단 하나
+   - `std.time.host: Clock` 는 system clock
+   - `std.random.host: Rng` 는 process-default seed (cryptographically secure)
+   - `std.fs.host: Fs` 는 host filesystem
+   - 등
+
+3. **Legacy 호출은 `W0750` deprecation warning**:
+   ```
+   warning: time.now() 는 v0.7 에서 제거됩니다.
+            #[ambient(clock)] 또는 capability parameter 로 마이그레이션 권장.
+            --legacy-globals 활성 시에만 동작.
+            See: MIGRATING_v0.5_to_v0.6.md
+   ```
+
+4. **`#[reproducible]` / `#[pure]` 검사는 legacy 호출도 차단**:
+   `--legacy-globals` 가 활성이어도, `#[reproducible]` 함수 본문에서
+   `time.now()` 호출 시 desugar 결과가 `std.time.host.now()` (capability method)
+   이고, `std.time.host: Clock` 의 deterministic 등급이 non-deterministic
+   이므로 `E0784` 발화. *legacy 모드도 effect 검사를 우회하지 못함*.
+
+5. **`--legacy-globals` 자체가 manifest `stability` 영향**:
+   manifest 에 `legacy.globals = true` 표시된 패키지는 자동으로
+   `[stability] default = "experimental"` 로 강제. *legacy 의존 코드는 stable
+   API 못 약속*.
+
+6. **v0.7 제거 시 동작**: `--legacy-globals` flag 자체가 unknown flag 로 fail.
+   manifest 의 `[legacy]` 섹션은 warning 만 (호환성 의도이므로 무시).
+
+이 desugar 는 **capability 시그니처 위에서 sound** — host 인스턴스가 capability
+type 을 만족하므로 type system 의 모든 보장이 유지된다. 단지 *명시성* 만 잃은 것.
+
 #### 7.1.1 Migration code samples
 
 **Before (v0.5 — 라이브러리 코드)**:
@@ -1834,7 +2258,229 @@ _본 문서는 v0.6 의 *결정 동결 baseline*. 구현 진행도는 `CHANGELOG
 
 ---
 
-## 9. v0.6 cut readiness checklist
+## 9. Worked Examples — combined v0.6 features
+
+각 예시는 5–8 개의 v0.6 어노테이션을 함께 사용하며, 사용자 멘탈 모델 형성용.
+
+### 9.1 사용자 생성 함수 (capability + sealed + error_contract + intent + spec + reproducible)
+
+```osty
+// std.user.osty
+
+#[sealed_construct(parse)]
+#[json(constructor = parse, field = "email")]
+#[since("0.6")]
+#[stability("stable")]
+pub struct Email {
+    local: String,
+    domain: String,
+}
+
+impl Email {
+    #[purpose("이메일 문자열을 파싱하여 검증된 Email 인스턴스 반환")]
+    #[example(input = "alice@example.com", output = "Some(...)")]
+    #[example(input = "invalid", output = "None")]
+    #[spec("§10.30.user.email")]
+    #[reproducible(scope = "portable")]
+    pub fn parse(s: String) -> Email? {
+        spec {
+            example: Email.parse("a@b").isSome()
+            example: Email.parse("noatsign").isNone()
+            law: result.isSome() implies result.unwrap().toString() == s
+        }
+
+        let parts = s.split("@")
+        if parts.len() != 2 { return None }
+        if parts[0].isEmpty() || parts[1].isEmpty() { return None }
+        Some(Email { local: parts[0], domain: parts[1] })
+    }
+
+    pub fn local(self) -> String { self.local }
+    pub fn domain(self) -> String { self.domain }
+}
+
+pub enum UserCreateError {
+    EmailFormat,
+    DomainBlocked(String),
+    DbConflict(Int),
+}
+
+#[purpose("이메일 검증 + DB 저장으로 새 사용자 생성")]
+#[example(input = "alice@example.com", uses = "sampleDb", output = "Ok(42)")]
+#[example(input = "invalid", uses = "sampleDb", output = "Err(UserCreateError.EmailFormat)")]
+#[spec("§10.30.user.create")]
+#[since("0.6")]
+#[stability("stable")]
+#[error_contract(
+    UserCreateError.EmailFormat    when "Email.parse 실패",
+    UserCreateError.DomainBlocked  when "도메인이 deny-list 에 등재",
+    UserCreateError.DbConflict     when "이메일 unique 제약 위반",
+)]
+pub fn createUser(email: String, db: Db) -> Result<UserId, UserCreateError> {
+    let e = Email.parse(email).orError(UserCreateError.EmailFormat)?
+
+    if isDomainBlocked(e.domain()) {
+        return Err(UserCreateError.DomainBlocked(e.domain()))
+    }
+
+    db.insert(e).mapErr(|dbErr| match dbErr {
+        DbError.UniqueViolation(id) -> UserCreateError.DbConflict(id),
+        _ -> UserCreateError.DbConflict(0),
+    })
+}
+
+#[fixture(name = "sampleDb")]
+fn fakeDb() -> Db { std.testing.db.inMemory() }
+
+#[fixture(name = "alice")]
+fn aliceUser() -> Email { Email.parse("alice@example.com")? }
+```
+
+**무엇이 보장되는가**:
+- `Email` 은 *반드시* `parse` 통과 — 외부 literal `Email { ... }` 불가 (G40)
+- `createUser` 호출자는 *세 실패 모드만* 처리하면 exhaustive (G41)
+- `Email.parse` 는 plat 무관 동일 동작 (G39 `portable`)
+- `osty doc` / `osty context` 가 purpose / examples / error_contract / spec
+  inline 표시 (G38, G42)
+- `db: Db` capability — 테스트 시 `fakeDb` 주입, production 시 real Db (G36)
+
+### 9.2 Web 라우트 핸들러 (capability + taint + sanitize + budget + match_compat)
+
+```osty
+// app/handlers.osty
+
+pub enum HttpEvent {
+    Get,
+    Post,
+    Put,
+    Delete,
+
+    #[since("0.6")]
+    Patch,                           // v0.6 신규 — 기존 #[match_compat] 가 처리
+}
+
+#[purpose("사용자 ID 검색 — SQL injection 방어")]
+#[example(input = "alice@example.com", output = "Ok(...)")]
+#[spec("§10.24.http.handlers")]
+#[since("0.6")]
+#[stability("stable")]
+#[error_contract(
+    HandlerError.NotFound when "users 테이블에 없는 ID",
+    HandlerError.DbDown   when "DB 연결 실패",
+)]
+#[budget(allocs = 4, io_calls = 1, time_ms = 50)]
+pub fn lookupUser(
+    #[taint("user_input")] userId: String,
+    db: Db,
+    clock: Clock,
+) -> Result<UserSummary, HandlerError> {
+    let safe = std.sql.escape(userId)             // G37 sanitize: user_input → sql_safe
+    let started = clock.monotonic()
+
+    let rows = db.exec(
+        "SELECT id, email FROM users WHERE id = ?",
+        [safe],                                    // sink #[requires("sql_safe")] 충족
+    ).mapErr(|_| HandlerError.DbDown)?
+
+    if rows.isEmpty() { return Err(HandlerError.NotFound) }
+
+    let user = UserSummary {
+        id: rows[0].getInt("id"),
+        email: rows[0].getString("email"),
+        lookedUpAt: clock.now(),
+    }
+
+    Ok(user)
+}
+
+#[match_compat("0.6", fallback = handlePatchAsPut, reason = "Patch 는 v0.7 에 정식 핸들러")]
+pub fn dispatch(event: HttpEvent) -> Response {
+    match event {
+        HttpEvent.Get -> handleGet(),
+        HttpEvent.Post -> handlePost(),
+        HttpEvent.Put -> handlePut(),
+        HttpEvent.Delete -> handleDelete(),
+    }
+    // HttpEvent.Patch (v0.6 신규) 도달 시 fallback = handlePatchAsPut 호출
+}
+
+fn handlePatchAsPut() -> Response { handlePut() }
+```
+
+**무엇이 보장되는가**:
+- `userId` 가 *반드시* sanitizer 경유 후 sink 도달 — 미경유 시 컴파일 에러 (G37)
+- `lookupUser` 는 50ms 이내 / 4 alloc / 1 IO call 이내 (G46) — bench 회귀 차단
+- v0.6 에 `Patch` variant 가 추가되어도 기존 dispatch 함수가 *조용히 깨지지 않음*
+  — `fallback` 으로 명시 routing (G44)
+- `db` / `clock` 이 capability — 테스트 시 fake injection 으로 deterministic
+  (G36)
+
+---
+
+## 10. Prior art / Bibliography
+
+v0.6 의 결정들이 참조한 학술/산업 선행 사례:
+
+| 결정 | 영향받은 prior art | 비고 |
+|---|---|---|
+| **G36 Capabilities** | Roc platform model (Feldman 2018+) | Roc 은 platform-driven, Osty 는 ambient-with-explicit. 같은 정신, 다른 ergonomics 균형 |
+| | Pony reference capabilities (Clebsch et al., 2015) | Pony 는 *memory aliasing* 용도. Osty G36 은 *effect tracking* 용도 — 카테고리 다름 |
+| | Haskell ReaderT / mtl / ZIO | 함수형 effect tracking 의 origin. Osty 는 industrial 문법으로 채택 |
+| **G37 Information Flow** | **Jif** (Myers, Liskov 1998–2002) | 산업 IFC 의 origin. Jif 는 Java 확장; Osty 는 mainstream 문법으로 첫 정착 |
+| | Flow Caml (Pottier, Simonet 2003) | OCaml IFC. type system 통합 사례 |
+| | Perl taint mode (Wall 1990s) | Dynamic / runtime IFC. Osty 는 static. 정신은 동일 |
+| | Haskell `Tagged<T, Trust>` newtype 패턴 | 라이브러리-수준 IFC. Osty 는 언어-수준 |
+| **G38 Spec link** | Doxygen / JSDoc cross-ref | 도구 측 cross-ref 만. *checked* 는 Osty 첫 시도 |
+| **G39 Reproducibility** | Bazel hermetic build | 빌드 시스템 측 reproducibility. Osty 는 *함수* 수준 |
+| | Nix purity model | 환경독립 강제 정신 동일 |
+| | Rust `#[no_std]` | 환경 의존 제한 패턴 (다른 차원) |
+| **G40 Sealed construct** | Haskell smart constructor + module export 관례 | 관례를 *언어 primitive* 로 |
+| | F# `private` constructor + smart factory | 동일 |
+| | Java sealed class (JEP 409, Java 17) | 다른 의미 — Osty 의 sealed_construct 는 *생성 경로* 제한 |
+| **G41 Error contract** | Java `throws` clause | checked exception 의 응용 — but Osty 는 Result-based |
+| | Eiffel postcondition | Design by Contract 영향 |
+| **G42 Structured intent** | Doxygen `@brief` / `@param` | 자유 텍스트 doc. Osty 는 *machine-readable* |
+| | Rust doc tests | `#[example]` 의 자동 검증 패턴 |
+| **G43 spec block** | **Eiffel** Design by Contract (Meyer 1986+) | invariant / require / ensure 의 기원 |
+| | Dafny (Leino, Microsoft) | spec-as-language-feature 의 학술 가장 가까운 사례 |
+| | F* / Liquid Haskell | refinement type 영향 (Osty v1 에서 검토) |
+| | QuickCheck (Claessen, Hughes 2000) | property-based testing |
+| | Hypothesis (Python) | property test API 영향 |
+| **G44 stability + publish** | **Elm package SemVer enforcement** (Czaplicki) | 가장 가까운 선행 — Osty 는 typed compiled 영역에 도입 |
+| | Rust `#[stable]` / `#[unstable]` | nightly-gating, crates.io 강제 없음. Osty 는 publish-gating |
+| | Java `@Deprecated` / `@Stable` | 메타데이터만, enforce 없음 |
+| **G45 Golden** | Insta (Rust) | text-based snapshot 라이브러리 |
+| | Jest snapshot (JS) | 동일 카테고리 |
+| | AST diff: ts-morph 등 도구 | 산업 사례 부족 — Osty 는 언어 통합 |
+| **G46 Budget** | C++ `[[gnu::pure]]` 등 attribute | static 측 영향 |
+| | go-perf benchstat regression gate | runtime 측 영향 |
+| | LLVM `cost model` | budget(time_ms) static 증명 검토 |
+| **G47 Machine context** | LSP `textDocument/hover` | 동일 응용을 LLM 까지 확장 |
+| | `cargo metadata` JSON output | 메타데이터 export 정신 |
+| **G49 while** | C / Java / Rust / Swift | 가장 흔한 conditional loop. Osty 가 v0.5 에서 부재했던 부분 |
+| **G50 Anonymous record** | TypeScript `{ x: number, y: number }` | structural type 영감 |
+| | Swift tuple labeled fields | 부분 영향 |
+| | OCaml anonymous record | 학술 origin |
+
+### 10.1 References
+
+```
+[Myers 2002]    A. C. Myers, B. Liskov. "Protecting Privacy Using the
+                Decentralized Label Model." ACM TOSEM, 2000.
+[Pottier 2003]  F. Pottier, V. Simonet. "Information Flow Inference for
+                ML." ACM TOPLAS, 2003.
+[Clebsch 2015]  S. Clebsch et al. "Deny capabilities for safe, fast
+                actors." AGERE 2015.
+[Meyer 1986]    B. Meyer. "Design by Contract." Eiffel manuals, 1986+.
+[Leino]         K. R. M. Leino. "Dafny: An Automatic Program Verifier."
+                LPAR 2010.
+[Claessen 2000] K. Claessen, J. Hughes. "QuickCheck: A Lightweight Tool
+                for Random Testing of Haskell Programs." ICFP 2000.
+```
+
+---
+
+## 11. v0.6 cut readiness checklist
 
 v0.6 baseline 동결 → public 1.0 alpha 출시 까지의 게이트:
 
