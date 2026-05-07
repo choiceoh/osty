@@ -1041,7 +1041,7 @@ CodeEnumDiscriminantDuplicate: two variants of the same enum are assigned the sa
 
 ### E0765 — `CodeImplicitNarrowingConversion`
 
-CodeImplicitNarrowingConversion: an expression site required an implicit numeric narrowing (e.g. `Int64 -> Int32`, `Float64 -> Int`). v0.5 allows lossless widening only; narrowing must be spelled explicitly. v0.5 (G34) §2.2.
+CodeImplicitNarrowingConversion: an expression site required an implicit numeric narrowing (e.g. `Int64 -> Int32`, `Float64 -> Int`). v0.5 allows lossless widening only; narrowing must be spelled explicitly. v0.5 (G34) §2.2a.
 
 `.toIntTrunc()`, `.toIntRound()`, `.toIntFloor()`, `.toIntCeil()`, or `.toFloat32()` to make the intent explicit.
 
@@ -1085,7 +1085,7 @@ forward-compatibility hatch.
 
 ---
 
-## Runtime sublanguage (E0771–E0775)
+## Runtime sublanguage (E0771–E0789)
 
 ### E0771 — `CodePodShapeViolation`
 
@@ -1150,6 +1150,492 @@ CodePureViolation: a function carrying `#[pure]` contains a body operation that 
 Spec: v0.6 A13
 
 **Fix**: remove `#[pure]`, prove and mark the callee `#[pure]`, or rewrite the body to local scalar computation.
+
+### E0780 — `CodeAmbientWrongSite`
+
+CodeAmbientWrongSite: `#[ambient(...)]` is applied to a function that is not at a permitted boundary. Permitted: scripts, `fn main`, `#[test]` / `#[bench]` / `bench*` / `test_*` functions. Library functions must receive capabilities as explicit parameters.
+
+the function to a permitted boundary.
+
+Spec: v0.6 §20.3
+
+**Fix**: remove `#[ambient]` and add capability parameters, or move
+
+### E0781 — `CodeAmbientUnknownCapability`
+
+CodeAmbientUnknownCapability: `#[ambient(name)]` references a name that is not in the canonical capability set (`clock`, `rng`, `env`, `fs`, `net`, `process`, `console`).
+
+capabilities cannot be ambient (`E0789`).
+
+Spec: v0.6 §20.6
+
+**Fix**: use one of the recognised capability names. User-defined
+
+### E0782 — `CodeAmbientForwardFailed`
+
+CodeAmbientForwardFailed: a callee at a call site requires a capability whose name does not match any in-scope ambient binding. Auto-forward requires *exact* identifier match.
+
+the names match.
+
+Spec: v0.6 §20.3.1
+
+**Fix**: pass the capability explicitly, or rename either side so
+
+### E0783 — `CodeReproducibleCapabilityNonRepro`
+
+CodeReproducibleCapabilityNonRepro: an interface marked `#[reproducible_capability]` declares a method that is not itself `#[reproducible]`. The capability cannot be sealed if its surface allows non-deterministic operations.
+
+every method, or remove `#[reproducible_capability]`.
+
+Spec: v0.6 §20.5
+
+**Fix**: add `#[reproducible(scope = "target")]` (or stronger) to
+
+### E0784 — `CodeReproducibleViaCapability`
+
+CodeReproducibleViaCapability: a function carrying `#[reproducible]` receives a non-deterministic capability parameter (`Clock`, `Rng`, `Env`, `Fs`, `Net`, `Process`).
+
+scope = "run")]` if `Console` is the only side-effect, or remove `#[reproducible]`.
+
+Spec: v0.6 §20.4
+
+**Fix**: drop the non-det capability parameter, narrow `#[reproducible(
+
+### E0785 — `CodePureViaCapability`
+
+CodePureViaCapability: a function carrying `#[pure]` receives any capability parameter. `#[pure]` is the strongest effect annotation and forbids capability flow entirely.
+
+allows deterministic capabilities like `Hash`).
+
+Spec: v0.6 §20.4
+
+**Fix**: drop the capability parameter, or use `#[reproducible]` (which
+
+### E0786 — `CodeReproducibleUnorderedIter`
+
+CodeReproducibleUnorderedIter: a `#[reproducible]` function iterates an unordered collection (`Map.iter`, `Set.iter`) whose element order is implementation-defined.
+
+deterministic ordering.
+
+Spec: v0.6 §3.11.3
+
+**Fix**: use `Map.entriesSorted()` / `Set.toListSorted()` for
+
+### E0787 — `CodeReproducibleScopeHierarchy`
+
+CodeReproducibleScopeHierarchy: a `#[reproducible(scope = A)]` function calls a callee with weaker scope. Scope strength: `portable` > `target` > `run`.
+
+Spec: v0.6 §3.11.3
+
+**Fix**: strengthen the callee's scope, or weaken the caller's.
+
+### E0788 — `CodeReproduciblePortableConstraint`
+
+CodeReproduciblePortableConstraint: a `#[reproducible(scope = "portable")]` function violates one of the cross-platform constraints — endianness-dependent serialisation, `NaN` bit pattern comparison, platform-specific integer width assumption.
+
+NaN comparisons (`isNaN()` is OK), or drop to scope = "target".
+
+Spec: v0.6 §3.11.3
+
+**Fix**: use explicit endianness (`bytes.toBigEndian`), avoid raw
+
+### E0789 — `CodeAmbientUserCapability`
+
+CodeAmbientUserCapability: `#[ambient(name)]` references a user-defined capability. Ambient binding only supports the stdlib's prelude default instances.
+
+Spec: v0.6 §20.3
+
+**Fix**: pass the user capability as an explicit parameter.
+
+---
+
+## G38 — Spec link (§3.10)
+
+### E0790 — `CodeSpecAnchorNotFound`
+
+CodeSpecAnchorNotFound: `#[spec("§X.Y")]` references a markdown anchor that does not exist in `LANG_SPEC_v0.6/`.
+
+spec.
+
+Spec: v0.6 §3.10.2
+
+**Fix**: correct the section reference, or add the section to the
+
+### W0790 — `CodeSpecAnchorMoved`
+
+CodeSpecAnchorMoved: `#[spec("§X.Y")]` references a section that has moved to a different chapter. Suggestion includes the new path.
+
+Spec: v0.6 §3.10.2
+
+**Fix**: update the reference to the new section path.
+
+---
+
+## G46 — Performance contract (§3.15)
+
+### E0795 — `CodeBudgetStaticViolation`
+
+CodeBudgetStaticViolation: a `#[budget]` static field (`allocs`, `io_calls`, `stack_depth`, `instructions`) is exceeded by the function's compile-time analysis.
+
+budget.
+
+Spec: v0.6 §3.15.1
+
+**Fix**: reduce allocations / IO / recursion depth, or relax the
+
+### E0796 — `CodeBudgetUnknownKey`
+
+CodeBudgetUnknownKey: `#[budget(...)]` uses a key that is not in the recognised set (`allocs`, `io_calls`, `stack_depth`, `instructions`, `time_ms`, `p99_ms`).
+
+forward-compatibility hatch.
+
+Spec: v0.6 §3.15
+
+**Fix**: use one of the recognised keys; unknown keys are not a
+
+### W0795 — `CodeBudgetRuntimeRegression`
+
+CodeBudgetRuntimeRegression: `osty bench --budget` measured a runtime metric (`time_ms` / `p99_ms`) exceeding the declared `#[budget]`. Emitted as a hard fail in CI mode, warn in interactive mode.
+
+Spec: v0.6 §3.15.2
+
+**Fix**: optimise the function, or relax the runtime budget.
+
+---
+
+## G37 — Information flow (§21)
+
+### E0900 — `CodeTaintSinkViolation`
+
+CodeTaintSinkViolation: a value carrying tag `σ` reaches a parameter or position annotated `#[requires("τ")]` where `τ ∉ A` (the value's tag set lacks the required trust tag). The most frequent cause is unsanitised user input flowing into a SQL, shell, path, URL, or HTML sink.
+
+tag (`std.sql.escape` for `sql_safe`, `std.shell.quote` for `shell_safe`, etc.), or use the parametrised form (`db.exec("... WHERE id = ?", [form])`).
+
+Spec: v0.6 §21.5.3 (T-Sink) / §21.8
+
+```osty
+fn h(form: #[taint("user_input")] String) {
+    db.query("SELECT * FROM users WHERE id = {form}")  // E0900
+}
+```
+
+**Fix**: pass through a sanitiser that produces the required trust
+
+### E0901 — `CodeTaintUnknownTag`
+
+CodeTaintUnknownTag: `#[taint("σ")]` uses a tag identifier that has no producer or sanitiser registered. Unknown tags would silently never propagate.
+
+`#[taint(σ)]` source, or rename to a known tag.
+
+Spec: v0.6 §21.2
+
+**Fix**: register the tag via a `#[sanitizes(σ, ...)]` or another
+
+### E0902 — `CodeSanitizesUnknownSource`
+
+CodeSanitizesUnknownSource: `#[sanitizes("σ", into = "τ")]` references a source tag `σ` that is never produced by any `#[taint(σ)]` annotation. The sanitiser cannot fire.
+
+Spec: v0.6 §21.2
+
+**Fix**: add a `#[taint(σ)]` source, or correct the source tag name.
+
+### E0903 — `CodeRequiresUnknownTag`
+
+CodeRequiresUnknownTag: `#[requires("τ")]` uses a trust tag `τ` that is never produced by any `#[sanitizes(_, into = τ)]`. The requirement is unsatisfiable.
+
+reachable surface, or correct the tag name.
+
+Spec: v0.6 §21.2
+
+**Fix**: add a `#[sanitizes(... into = τ)]` somewhere in the
+
+### W0901 — `CodeTrustedDeclassifyAudit`
+
+CodeTrustedDeclassifyAudit: a function or position uses `#[trusted_declassify(reason = "...")]` to drop a flow tag without going through a sanitiser. Always emitted (audit hint), never blocks compilation.
+
+ensure the `reason` text is informative — `osty audit --trusted-declassify` enumerates all sites.
+
+Spec: v0.6 §21.7
+
+**Fix**: where possible, replace with a real sanitiser. Otherwise
+
+### W0902 — `CodeUnsafeSilentMatchCompat`
+
+CodeUnsafeSilentMatchCompat: a `#[match_compat("X.Y", unsafe_silent = true)]` is in effect, or a `#[stability("internal")]` API is used from outside the same package. Both produce a warning that surfaces in `osty audit`.
+
+from a stable API surface.
+
+Spec: v0.6 §3.14.4 / §3.14.2
+
+**Fix**: provide a `fallback = name` to `#[match_compat]`, or import
+
+---
+
+## G50 — Anonymous structural record (§2.5.4)
+
+### E0340 — `CodeAnonRecordAnnotation`
+
+CodeAnonRecordAnnotation: an attempt was made to attach an annotation, method, or `pub` modifier to a field of an `AnonymousRecordType`. Anonymous records are *structural* and metadata-free; promote to a nominal `struct` for these features.
+
+Spec: v0.6 §2.5.4.4
+
+**Fix**: declare a nominal `struct` if the field needs annotations.
+
+### E0341 — `CodeAnonRecordRecursive`
+
+CodeAnonRecordRecursive: an `AnonymousRecordType` references itself in one of its field types (directly or transitively). Anonymous records cannot be self-recursive — the resulting type would be infinite.
+
+recursive position.
+
+Spec: v0.6 §2.5.4.4
+
+**Fix**: declare a nominal `struct` and use it by name in the
+
+### E0342 — `CodeAnonRecordAmbiguous`
+
+CodeAnonRecordAmbiguous: a `{ ... }` literal cannot be disambiguated between block expression and anonymous record literal at this position. Most common cause: closure body where `: T` could parse either as record field type or as a statement- level annotation.
+
+or wrap in `(...)` to force expression context.
+
+Spec: v0.6 §2.5.4.6 / R29
+
+**Fix**: add a type ascription (`: { x: Int }`) on the value position
+
+---
+
+## G41 — Error contract (§7.5)
+
+### E0410 — `CodeErrorContractMismatch`
+
+CodeErrorContractMismatch: a function carrying `#[error_contract]` returns `Err(V)` where `V` is not in the contract. The contract is the authoritative failure-mode catalogue; deviations break caller match exhaustiveness.
+
+to use a contracted variant.
+
+Spec: v0.6 §7.5.2
+
+**Fix**: add the variant to the contract, or change the return path
+
+### E0411 — `CodeErrorContractUnknownVariant`
+
+CodeErrorContractUnknownVariant: a contract entry references a variant that does not exist on the function's declared error type.
+
+Spec: v0.6 §7.5.2
+
+**Fix**: correct the variant name, or extend the error enum.
+
+### W0411 — `CodeErrorContractDeadVariant`
+
+CodeErrorContractDeadVariant: a contract variant is declared but never produced by any return path.
+
+that returns it.
+
+Spec: v0.6 §7.5.2
+
+**Fix**: remove the variant from the contract, or add a code path
+
+### E0412 — `CodeErrorContractOnErased`
+
+CodeErrorContractOnErased: `#[error_contract]` is applied to a function whose error type is the erased `Error` interface. Contracts only have meaning over concrete enum types. The declarative form `#[error_contract(any)]` is permitted (no check).
+
+`#[error_contract(any)]` for documentation only.
+
+Spec: v0.6 §7.5.5
+
+**Fix**: change the error type to a concrete enum, or use
+
+### W0413 — `CodeMatchExcludesContractVariant`
+
+CodeMatchExcludesContractVariant: a `match` arm references an `Err(V)` where `V` is on the callee's enum but not in the callee's `#[error_contract]`. The arm is dead code per the contract.
+
+Spec: v0.6 §7.5.7
+
+**Fix**: drop the arm, or extend the callee's contract to include V.
+
+---
+
+## G40 — Sealed construct (§3.4.5)
+
+### E0420 — `CodeSealedExternalLiteral`
+
+CodeSealedExternalLiteral: a `struct` carrying `#[sealed_construct(name)]` was instantiated via struct literal outside the named constructor or other authorised paths.
+
+`Type.parse(...)`), or remove the seal if direct construction is acceptable.
+
+Spec: v0.6 §3.4.5.2
+
+**Fix**: route construction through the sealed constructor (e.g.,
+
+### E0421 — `CodeTestConstructInProduction`
+
+CodeTestConstructInProduction: a function carrying `#[test_construct]` is reachable from a non-test build. The annotation only relaxes sealed-construct rules in the test profile.
+
+`#[cfg(test)]` paths, or drop `#[test_construct]`.
+
+Spec: v0.6 §3.4.5.5
+
+**Fix**: ensure the function is only called from `#[test]` or
+
+### E0422 — `CodeTrustedConstructInUserPackage`
+
+CodeTrustedConstructInUserPackage: `#[trusted_construct(...)]` is applied in a user package. The annotation is reserved for stdlib / internal packages where sealed constructors cannot cover every necessary path (e.g., binary deserialisers).
+
+code into `std.*` if it genuinely needs the bypass.
+
+Spec: v0.6 §3.4.5.6
+
+**Fix**: route through the public sealed constructor, or move the
+
+### E0423 — `CodeSealedConstructorNotMethod`
+
+CodeSealedConstructorNotMethod: `#[sealed_construct(name)]` names an identifier that is not a method or associated function on the struct.
+
+Spec: v0.6 §3.4.5
+
+**Fix**: name an existing constructor method, or define one.
+
+---
+
+## G42 — Structured intent (§3.12)
+
+### E0430 — `CodeExampleMismatch`
+
+CodeExampleMismatch: an `#[example(input = ..., output = ...)]` invocation produced an output that differs from the expected value.
+
+Spec: v0.6 §3.12.2
+
+**Fix**: correct the input/output, or fix the function body.
+
+### E0431 — `CodeExampleArityMismatch`
+
+CodeExampleArityMismatch: `#[example(input = [...])]` provides a number of arguments that does not match the function's arity (capabilities counted as one-each).
+
+arity.
+
+Spec: v0.6 §3.12.2
+
+**Fix**: adjust the input list to match the function's positional
+
+### E0432 — `CodeFixtureNonZeroArity`
+
+CodeFixtureNonZeroArity: `#[fixture(name = "...")]` is applied to a function that takes parameters. Fixtures must be zero-arity to be sharable across docs / tests / context / property seed.
+
+needed), or drop `#[fixture]`.
+
+Spec: v0.6 §3.12.3
+
+**Fix**: remove the parameters (use closures or inline state if
+
+### E0433 — `CodeExampleUnknownFixture`
+
+CodeExampleUnknownFixture: `#[example(uses = "name")]` references a fixture name that has no `#[fixture(name = "name")]` declared.
+
+Spec: v0.6 §3.12.3
+
+**Fix**: declare the fixture, or correct the name.
+
+---
+
+## G43 — Executable spec block (§3.13)
+
+### E0440 — `CodeSpecBlockMisplaced`
+
+CodeSpecBlockMisplaced: a `spec { ... }` block appears outside the function-body first-statement position.
+
+Spec: v0.6 §3.13 / R28
+
+**Fix**: move the block to the start of the function body.
+
+### E0441 — `CodeSpecBlockExampleNotBool`
+
+CodeSpecBlockExampleNotBool: a `spec { example: expr }` clause's `expr` does not evaluate to `Bool`.
+
+(`fn(args) == expected`).
+
+Spec: v0.6 §3.13.2
+
+**Fix**: rewrite the example as a boolean comparison
+
+### E0442 — `CodeSpecBlockLawNotBool`
+
+CodeSpecBlockLawNotBool: a `spec { law: expr }` or `spec { invariant: expr }` clause's `expr` does not evaluate to `Bool`. Permitted free identifiers inside `law` / `invariant` include `result` (the function's return value, virtual binding).
+
+Spec: v0.6 §3.13.5
+
+**Fix**: rewrite as a boolean expression.
+
+### E0443 — `CodeSpecBlockForallBadGenerator`
+
+CodeSpecBlockForallBadGenerator: a `spec { forall x in expr: ... }` clause's `expr` is not of type `Gen<T>` for some `T`. (Phase 5 / v1 only — earlier phases reject `forall` syntactically.).
+
+Spec: v0.6 §3.13.3
+
+**Fix**: use a `std.testing.gen.*` constructor.
+
+---
+
+## G45 — Golden tests (§11.5)
+
+### E0444 — `CodeGoldenNotReproducible`
+
+CodeGoldenNotReproducible: a function carrying `#[golden]` does not satisfy `#[reproducible(scope = "target")]`. Non-deterministic snapshots have no diagnostic value.
+
+pass capabilities explicitly and avoid time/random/env access.
+
+Spec: v0.6 §11.5.4
+
+**Fix**: ensure the function (and its callees) are reproducible —
+
+### E0445 — `CodeGoldenSnapshotMissing`
+
+CodeGoldenSnapshotMissing: a `#[golden(path)]` declaration's snapshot file does not exist on disk. On first run, `osty test --update-golden` creates it.
+
+then audit its contents.
+
+Spec: v0.6 §11.5.2
+
+**Fix**: run `osty test --update-golden` to create the snapshot,
+
+### E0446 — `CodeGoldenAstParseError`
+
+CodeGoldenAstParseError: `#[golden(mode = "ast")]` is applied to a function whose output is not valid Osty source — reparse failed.
+
+output is structured but not Osty source.
+
+Spec: v0.6 §11.5.3
+
+**Fix**: use `mode = "text"` (byte-exact) or `mode = "json"` if the
+
+### W0444 — `CodeGoldenSnapshotStale`
+
+CodeGoldenSnapshotStale: `#[golden]` snapshot's `source-hash` header does not match the current function definition. The snapshot may be stale.
+
+--update-golden` to refresh.
+
+Spec: v0.6 §11.5.4
+
+**Fix**: review the snapshot for correctness, then `osty test
+
+---
+
+## G44 — API evolution (§3.14)
+
+### E0450 — `CodeMatchCompatNoFallback`
+
+CodeMatchCompatNoFallback: `#[match_compat("X.Y")]` is applied without specifying `fallback = name` or `unsafe_silent = true`. Silent fallthrough is forbidden by default.
+
+`unsafe_silent = true` (which always emits W0902).
+
+Spec: v0.6 §3.14.4
+
+**Fix**: add `fallback = handlerName`, or explicitly opt into
+
+### E0451 — `CodeMatchCompatUnknownVersion`
+
+CodeMatchCompatUnknownVersion: `#[match_compat("X.Y")]` references a version that the compiler does not recognise (newer than the running compiler, or never released).
+
+Spec: v0.6 §3.14.4
+
+**Fix**: use a known version, or update the compiler.
 
 ---
 
@@ -1288,6 +1774,44 @@ The scaffolder never overwrites — it requires a fresh target path.
 I/O error creating the new project files.
 
 **Fix**: check write permissions and free space.
+
+---
+
+## G44 — Publishing (§3.14.3)
+
+### E2100 — `CodePublishStableBreaking`
+
+CodePublishStableBreaking: `osty publish` detected a breaking change in a `#[stability("stable")]` API surface item but the new version number does not bump the major component. SemVer compatibility is enforced by the registry.
+
+diagnostic enumerates each breaking item.
+
+Spec: v0.6 §3.14.3.2 / §3.14.3.3
+
+**Fix**: bump the major version, or revert the breaking change. The
+
+### E2101 — `CodePublishVersionDowngrade`
+
+CodePublishVersionDowngrade: `osty publish` rejects a manifest whose version is lower than the previously published version.
+
+Spec: v0.6 §3.14.3.3
+
+**Fix**: bump the version forward.
+
+### E2102 — `CodePublishCompatAddPatchOnly`
+
+CodePublishCompatAddPatchOnly: `osty publish` detected new public API surface items but the version bump is patch-only. Additive changes require at least a minor bump per SemVer.
+
+Spec: v0.6 §3.14.3.3
+
+**Fix**: bump the minor version, or remove the new items.
+
+### W2100 — `CodePublishExperimentalChange`
+
+CodePublishExperimentalChange: `osty publish` detected a change to a `#[stability("experimental")]` API surface item. Experimental APIs are exempt from SemVer enforcement, but the change is logged for audit.
+
+Spec: v0.6 §3.14.3.2
+
+**Fix**: review whether the API is ready to be promoted to "stable".
 
 ---
 

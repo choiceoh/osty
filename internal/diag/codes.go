@@ -1040,6 +1040,470 @@ const (
 	// Fix: remove `#[pure]`, prove and mark the callee `#[pure]`, or rewrite the body to local scalar computation.
 	CodePureViolation = "E0775"
 
+	// =====================================================================
+	// v0.6 — Hidden-Dependency-Surface (G36 – G50)
+	// =====================================================================
+
+	// G36 — Capabilities (§20)
+	//
+	// Capability parameters and `#[ambient]` ergonomics. Capability
+	// types: `Clock`, `Rng`, `Env`, `Fs`, `Net`, `Process`, `Console`.
+
+	// CodeAmbientWrongSite: `#[ambient(...)]` is applied to a function
+	// that is not at a permitted boundary. Permitted: scripts, `fn main`,
+	// `#[test]` / `#[bench]` / `bench*` / `test_*` functions. Library
+	// functions must receive capabilities as explicit parameters.
+	//
+	// Spec: v0.6 §20.3
+	// Fix: remove `#[ambient]` and add capability parameters, or move
+	//      the function to a permitted boundary.
+	CodeAmbientWrongSite = "E0780"
+
+	// CodeAmbientUnknownCapability: `#[ambient(name)]` references a name
+	// that is not in the canonical capability set (`clock`, `rng`,
+	// `env`, `fs`, `net`, `process`, `console`).
+	//
+	// Spec: v0.6 §20.6
+	// Fix: use one of the recognised capability names. User-defined
+	//      capabilities cannot be ambient (`E0789`).
+	CodeAmbientUnknownCapability = "E0781"
+
+	// CodeAmbientForwardFailed: a callee at a call site requires a
+	// capability whose name does not match any in-scope ambient
+	// binding. Auto-forward requires *exact* identifier match.
+	//
+	// Spec: v0.6 §20.3.1
+	// Fix: pass the capability explicitly, or rename either side so
+	//      the names match.
+	CodeAmbientForwardFailed = "E0782"
+
+	// CodeReproducibleCapabilityNonRepro: an interface marked
+	// `#[reproducible_capability]` declares a method that is not itself
+	// `#[reproducible]`. The capability cannot be sealed if its surface
+	// allows non-deterministic operations.
+	//
+	// Spec: v0.6 §20.5
+	// Fix: add `#[reproducible(scope = "target")]` (or stronger) to
+	//      every method, or remove `#[reproducible_capability]`.
+	CodeReproducibleCapabilityNonRepro = "E0783"
+
+	// CodeReproducibleViaCapability: a function carrying
+	// `#[reproducible]` receives a non-deterministic capability
+	// parameter (`Clock`, `Rng`, `Env`, `Fs`, `Net`, `Process`).
+	//
+	// Spec: v0.6 §20.4
+	// Fix: drop the non-det capability parameter, narrow `#[reproducible(
+	//      scope = "run")]` if `Console` is the only side-effect, or
+	//      remove `#[reproducible]`.
+	CodeReproducibleViaCapability = "E0784"
+
+	// CodePureViaCapability: a function carrying `#[pure]` receives any
+	// capability parameter. `#[pure]` is the strongest effect annotation
+	// and forbids capability flow entirely.
+	//
+	// Spec: v0.6 §20.4
+	// Fix: drop the capability parameter, or use `#[reproducible]` (which
+	//      allows deterministic capabilities like `Hash`).
+	CodePureViaCapability = "E0785"
+
+	// CodeReproducibleUnorderedIter: a `#[reproducible]` function
+	// iterates an unordered collection (`Map.iter`, `Set.iter`) whose
+	// element order is implementation-defined.
+	//
+	// Spec: v0.6 §3.11.3
+	// Fix: use `Map.entriesSorted()` / `Set.toListSorted()` for
+	//      deterministic ordering.
+	CodeReproducibleUnorderedIter = "E0786"
+
+	// CodeReproducibleScopeHierarchy: a `#[reproducible(scope = A)]`
+	// function calls a callee with weaker scope. Scope strength:
+	// `portable` > `target` > `run`.
+	//
+	// Spec: v0.6 §3.11.3
+	// Fix: strengthen the callee's scope, or weaken the caller's.
+	CodeReproducibleScopeHierarchy = "E0787"
+
+	// CodeReproduciblePortableConstraint: a `#[reproducible(scope =
+	// "portable")]` function violates one of the cross-platform
+	// constraints — endianness-dependent serialisation, `NaN` bit
+	// pattern comparison, platform-specific integer width assumption.
+	//
+	// Spec: v0.6 §3.11.3
+	// Fix: use explicit endianness (`bytes.toBigEndian`), avoid raw
+	//      NaN comparisons (`isNaN()` is OK), or drop to scope =
+	//      "target".
+	CodeReproduciblePortableConstraint = "E0788"
+
+	// CodeAmbientUserCapability: `#[ambient(name)]` references a
+	// user-defined capability. Ambient binding only supports the
+	// stdlib's prelude default instances.
+	//
+	// Spec: v0.6 §20.3
+	// Fix: pass the user capability as an explicit parameter.
+	CodeAmbientUserCapability = "E0789"
+
+	// G38 — Spec link (§3.10)
+
+	// CodeSpecAnchorNotFound: `#[spec("§X.Y")]` references a markdown
+	// anchor that does not exist in `LANG_SPEC_v0.6/`.
+	//
+	// Spec: v0.6 §3.10.2
+	// Fix: correct the section reference, or add the section to the
+	//      spec.
+	CodeSpecAnchorNotFound = "E0790"
+
+	// CodeSpecAnchorMoved: `#[spec("§X.Y")]` references a section that
+	// has moved to a different chapter. Suggestion includes the new
+	// path.
+	//
+	// Spec: v0.6 §3.10.2
+	// Fix: update the reference to the new section path.
+	CodeSpecAnchorMoved = "W0790"
+
+	// G46 — Performance contract (§3.15)
+
+	// CodeBudgetStaticViolation: a `#[budget]` static field (`allocs`,
+	// `io_calls`, `stack_depth`, `instructions`) is exceeded by the
+	// function's compile-time analysis.
+	//
+	// Spec: v0.6 §3.15.1
+	// Fix: reduce allocations / IO / recursion depth, or relax the
+	//      budget.
+	CodeBudgetStaticViolation = "E0795"
+
+	// CodeBudgetUnknownKey: `#[budget(...)]` uses a key that is not in
+	// the recognised set (`allocs`, `io_calls`, `stack_depth`,
+	// `instructions`, `time_ms`, `p99_ms`).
+	//
+	// Spec: v0.6 §3.15
+	// Fix: use one of the recognised keys; unknown keys are not a
+	//      forward-compatibility hatch.
+	CodeBudgetUnknownKey = "E0796"
+
+	// CodeBudgetRuntimeRegression: `osty bench --budget` measured a
+	// runtime metric (`time_ms` / `p99_ms`) exceeding the declared
+	// `#[budget]`. Emitted as a hard fail in CI mode, warn in
+	// interactive mode.
+	//
+	// Spec: v0.6 §3.15.2
+	// Fix: optimise the function, or relax the runtime budget.
+	CodeBudgetRuntimeRegression = "W0795"
+
+	// G37 — Information flow (§21)
+
+	// CodeTaintSinkViolation: a value carrying tag `σ` reaches a
+	// parameter or position annotated `#[requires("τ")]` where `τ ∉ A`
+	// (the value's tag set lacks the required trust tag). The most
+	// frequent cause is unsanitised user input flowing into a SQL,
+	// shell, path, URL, or HTML sink.
+	//
+	// Spec: v0.6 §21.5.3 (T-Sink) / §21.8
+	// Example:
+	//   fn h(form: #[taint("user_input")] String) {
+	//       db.query("SELECT * FROM users WHERE id = {form}")  // E0900
+	//   }
+	// Fix: pass through a sanitiser that produces the required trust
+	//      tag (`std.sql.escape` for `sql_safe`, `std.shell.quote` for
+	//      `shell_safe`, etc.), or use the parametrised form
+	//      (`db.exec("... WHERE id = ?", [form])`).
+	CodeTaintSinkViolation = "E0900"
+
+	// CodeTaintUnknownTag: `#[taint("σ")]` uses a tag identifier that
+	// has no producer or sanitiser registered. Unknown tags would
+	// silently never propagate.
+	//
+	// Spec: v0.6 §21.2
+	// Fix: register the tag via a `#[sanitizes(σ, ...)]` or another
+	//      `#[taint(σ)]` source, or rename to a known tag.
+	CodeTaintUnknownTag = "E0901"
+
+	// CodeSanitizesUnknownSource: `#[sanitizes("σ", into = "τ")]`
+	// references a source tag `σ` that is never produced by any
+	// `#[taint(σ)]` annotation. The sanitiser cannot fire.
+	//
+	// Spec: v0.6 §21.2
+	// Fix: add a `#[taint(σ)]` source, or correct the source tag name.
+	CodeSanitizesUnknownSource = "E0902"
+
+	// CodeRequiresUnknownTag: `#[requires("τ")]` uses a trust tag `τ`
+	// that is never produced by any `#[sanitizes(_, into = τ)]`. The
+	// requirement is unsatisfiable.
+	//
+	// Spec: v0.6 §21.2
+	// Fix: add a `#[sanitizes(... into = τ)]` somewhere in the
+	//      reachable surface, or correct the tag name.
+	CodeRequiresUnknownTag = "E0903"
+
+	// CodeTrustedDeclassifyAudit: a function or position uses
+	// `#[trusted_declassify(reason = "...")]` to drop a flow tag
+	// without going through a sanitiser. Always emitted (audit hint),
+	// never blocks compilation.
+	//
+	// Spec: v0.6 §21.7
+	// Fix: where possible, replace with a real sanitiser. Otherwise
+	//      ensure the `reason` text is informative — `osty audit
+	//      --trusted-declassify` enumerates all sites.
+	CodeTrustedDeclassifyAudit = "W0901"
+
+	// CodeUnsafeSilentMatchCompat: a `#[match_compat("X.Y", unsafe_silent
+	// = true)]` is in effect, or a `#[stability("internal")]` API is used
+	// from outside the same package. Both produce a warning that surfaces
+	// in `osty audit`.
+	//
+	// Spec: v0.6 §3.14.4 / §3.14.2
+	// Fix: provide a `fallback = name` to `#[match_compat]`, or import
+	//      from a stable API surface.
+	CodeUnsafeSilentMatchCompat = "W0902"
+
+	// =====================================================================
+	// v0.6 — Annotation / declaration extensions
+	// =====================================================================
+
+	// G50 — Anonymous structural record (§2.5.4)
+
+	// CodeAnonRecordAnnotation: an attempt was made to attach an
+	// annotation, method, or `pub` modifier to a field of an
+	// `AnonymousRecordType`. Anonymous records are *structural* and
+	// metadata-free; promote to a nominal `struct` for these features.
+	//
+	// Spec: v0.6 §2.5.4.4
+	// Fix: declare a nominal `struct` if the field needs annotations.
+	CodeAnonRecordAnnotation = "E0340"
+
+	// CodeAnonRecordRecursive: an `AnonymousRecordType` references
+	// itself in one of its field types (directly or transitively).
+	// Anonymous records cannot be self-recursive — the resulting type
+	// would be infinite.
+	//
+	// Spec: v0.6 §2.5.4.4
+	// Fix: declare a nominal `struct` and use it by name in the
+	//      recursive position.
+	CodeAnonRecordRecursive = "E0341"
+
+	// CodeAnonRecordAmbiguous: a `{ ... }` literal cannot be
+	// disambiguated between block expression and anonymous record
+	// literal at this position. Most common cause: closure body where
+	// `: T` could parse either as record field type or as a statement-
+	// level annotation.
+	//
+	// Spec: v0.6 §2.5.4.6 / R29
+	// Fix: add a type ascription (`: { x: Int }`) on the value position
+	//      or wrap in `(...)` to force expression context.
+	CodeAnonRecordAmbiguous = "E0342"
+
+	// G41 — Error contract (§7.5)
+
+	// CodeErrorContractMismatch: a function carrying `#[error_contract]`
+	// returns `Err(V)` where `V` is not in the contract. The contract
+	// is the authoritative failure-mode catalogue; deviations break
+	// caller match exhaustiveness.
+	//
+	// Spec: v0.6 §7.5.2
+	// Fix: add the variant to the contract, or change the return path
+	//      to use a contracted variant.
+	CodeErrorContractMismatch = "E0410"
+
+	// CodeErrorContractUnknownVariant: a contract entry references a
+	// variant that does not exist on the function's declared error
+	// type.
+	//
+	// Spec: v0.6 §7.5.2
+	// Fix: correct the variant name, or extend the error enum.
+	CodeErrorContractUnknownVariant = "E0411"
+
+	// CodeErrorContractDeadVariant: a contract variant is declared but
+	// never produced by any return path.
+	//
+	// Spec: v0.6 §7.5.2
+	// Fix: remove the variant from the contract, or add a code path
+	//      that returns it.
+	CodeErrorContractDeadVariant = "W0411"
+
+	// CodeErrorContractOnErased: `#[error_contract]` is applied to a
+	// function whose error type is the erased `Error` interface.
+	// Contracts only have meaning over concrete enum types. The
+	// declarative form `#[error_contract(any)]` is permitted (no check).
+	//
+	// Spec: v0.6 §7.5.5
+	// Fix: change the error type to a concrete enum, or use
+	//      `#[error_contract(any)]` for documentation only.
+	CodeErrorContractOnErased = "E0412"
+
+	// CodeMatchExcludesContractVariant: a `match` arm references an
+	// `Err(V)` where `V` is on the callee's enum but not in the
+	// callee's `#[error_contract]`. The arm is dead code per the
+	// contract.
+	//
+	// Spec: v0.6 §7.5.7
+	// Fix: drop the arm, or extend the callee's contract to include V.
+	CodeMatchExcludesContractVariant = "W0413"
+
+	// G40 — Sealed construct (§3.4.5)
+
+	// CodeSealedExternalLiteral: a `struct` carrying
+	// `#[sealed_construct(name)]` was instantiated via struct literal
+	// outside the named constructor or other authorised paths.
+	//
+	// Spec: v0.6 §3.4.5.2
+	// Fix: route construction through the sealed constructor (e.g.,
+	//      `Type.parse(...)`), or remove the seal if direct
+	//      construction is acceptable.
+	CodeSealedExternalLiteral = "E0420"
+
+	// CodeTestConstructInProduction: a function carrying
+	// `#[test_construct]` is reachable from a non-test build.
+	// The annotation only relaxes sealed-construct rules in the test
+	// profile.
+	//
+	// Spec: v0.6 §3.4.5.5
+	// Fix: ensure the function is only called from `#[test]` or
+	//      `#[cfg(test)]` paths, or drop `#[test_construct]`.
+	CodeTestConstructInProduction = "E0421"
+
+	// CodeTrustedConstructInUserPackage: `#[trusted_construct(...)]`
+	// is applied in a user package. The annotation is reserved for
+	// stdlib / internal packages where sealed constructors cannot
+	// cover every necessary path (e.g., binary deserialisers).
+	//
+	// Spec: v0.6 §3.4.5.6
+	// Fix: route through the public sealed constructor, or move the
+	//      code into `std.*` if it genuinely needs the bypass.
+	CodeTrustedConstructInUserPackage = "E0422"
+
+	// CodeSealedConstructorNotMethod: `#[sealed_construct(name)]` names
+	// an identifier that is not a method or associated function on the
+	// struct.
+	//
+	// Spec: v0.6 §3.4.5
+	// Fix: name an existing constructor method, or define one.
+	CodeSealedConstructorNotMethod = "E0423"
+
+	// G42 — Structured intent (§3.12)
+
+	// CodeExampleMismatch: an `#[example(input = ..., output = ...)]`
+	// invocation produced an output that differs from the expected
+	// value.
+	//
+	// Spec: v0.6 §3.12.2
+	// Fix: correct the input/output, or fix the function body.
+	CodeExampleMismatch = "E0430"
+
+	// CodeExampleArityMismatch: `#[example(input = [...])]` provides a
+	// number of arguments that does not match the function's arity
+	// (capabilities counted as one-each).
+	//
+	// Spec: v0.6 §3.12.2
+	// Fix: adjust the input list to match the function's positional
+	//      arity.
+	CodeExampleArityMismatch = "E0431"
+
+	// CodeFixtureNonZeroArity: `#[fixture(name = "...")]` is applied
+	// to a function that takes parameters. Fixtures must be zero-arity
+	// to be sharable across docs / tests / context / property seed.
+	//
+	// Spec: v0.6 §3.12.3
+	// Fix: remove the parameters (use closures or inline state if
+	//      needed), or drop `#[fixture]`.
+	CodeFixtureNonZeroArity = "E0432"
+
+	// CodeExampleUnknownFixture: `#[example(uses = "name")]` references
+	// a fixture name that has no `#[fixture(name = "name")]` declared.
+	//
+	// Spec: v0.6 §3.12.3
+	// Fix: declare the fixture, or correct the name.
+	CodeExampleUnknownFixture = "E0433"
+
+	// G43 — Executable spec block (§3.13)
+
+	// CodeSpecBlockMisplaced: a `spec { ... }` block appears outside
+	// the function-body first-statement position.
+	//
+	// Spec: v0.6 §3.13 / R28
+	// Fix: move the block to the start of the function body.
+	CodeSpecBlockMisplaced = "E0440"
+
+	// CodeSpecBlockExampleNotBool: a `spec { example: expr }` clause's
+	// `expr` does not evaluate to `Bool`.
+	//
+	// Spec: v0.6 §3.13.2
+	// Fix: rewrite the example as a boolean comparison
+	//      (`fn(args) == expected`).
+	CodeSpecBlockExampleNotBool = "E0441"
+
+	// CodeSpecBlockLawNotBool: a `spec { law: expr }` or `spec {
+	// invariant: expr }` clause's `expr` does not evaluate to `Bool`.
+	// Permitted free identifiers inside `law` / `invariant` include
+	// `result` (the function's return value, virtual binding).
+	//
+	// Spec: v0.6 §3.13.5
+	// Fix: rewrite as a boolean expression.
+	CodeSpecBlockLawNotBool = "E0442"
+
+	// CodeSpecBlockForallBadGenerator: a `spec { forall x in expr: ... }`
+	// clause's `expr` is not of type `Gen<T>` for some `T`. (Phase 5 / v1
+	// only — earlier phases reject `forall` syntactically.)
+	//
+	// Spec: v0.6 §3.13.3
+	// Fix: use a `std.testing.gen.*` constructor.
+	CodeSpecBlockForallBadGenerator = "E0443"
+
+	// G45 — Golden tests (§11.5)
+
+	// CodeGoldenNotReproducible: a function carrying `#[golden]` does
+	// not satisfy `#[reproducible(scope = "target")]`. Non-deterministic
+	// snapshots have no diagnostic value.
+	//
+	// Spec: v0.6 §11.5.4
+	// Fix: ensure the function (and its callees) are reproducible —
+	//      pass capabilities explicitly and avoid time/random/env access.
+	CodeGoldenNotReproducible = "E0444"
+
+	// CodeGoldenSnapshotMissing: a `#[golden(path)]` declaration's
+	// snapshot file does not exist on disk. On first run, `osty test
+	// --update-golden` creates it.
+	//
+	// Spec: v0.6 §11.5.2
+	// Fix: run `osty test --update-golden` to create the snapshot,
+	//      then audit its contents.
+	CodeGoldenSnapshotMissing = "E0445"
+
+	// CodeGoldenAstParseError: `#[golden(mode = "ast")]` is applied
+	// to a function whose output is not valid Osty source — reparse
+	// failed.
+	//
+	// Spec: v0.6 §11.5.3
+	// Fix: use `mode = "text"` (byte-exact) or `mode = "json"` if the
+	//      output is structured but not Osty source.
+	CodeGoldenAstParseError = "E0446"
+
+	// CodeGoldenSnapshotStale: `#[golden]` snapshot's `source-hash`
+	// header does not match the current function definition. The
+	// snapshot may be stale.
+	//
+	// Spec: v0.6 §11.5.4
+	// Fix: review the snapshot for correctness, then `osty test
+	//      --update-golden` to refresh.
+	CodeGoldenSnapshotStale = "W0444"
+
+	// G44 — API evolution (§3.14)
+
+	// CodeMatchCompatNoFallback: `#[match_compat("X.Y")]` is applied
+	// without specifying `fallback = name` or `unsafe_silent = true`.
+	// Silent fallthrough is forbidden by default.
+	//
+	// Spec: v0.6 §3.14.4
+	// Fix: add `fallback = handlerName`, or explicitly opt into
+	//      `unsafe_silent = true` (which always emits W0902).
+	CodeMatchCompatNoFallback = "E0450"
+
+	// CodeMatchCompatUnknownVersion: `#[match_compat("X.Y")]` references
+	// a version that the compiler does not recognise (newer than the
+	// running compiler, or never released).
+	//
+	// Spec: v0.6 §3.14.4
+	// Fix: use a known version, or update the compiler.
+	CodeMatchCompatUnknownVersion = "E0451"
+
 	// Manifest — TOML syntax.
 
 	// Fallback TOML syntax error in `osty.toml`.
@@ -1149,6 +1613,42 @@ const (
 	//
 	// Fix: check write permissions and free space.
 	CodeScaffoldWriteError = "E2052"
+
+	// G44 — Publishing (§3.14.3)
+
+	// CodePublishStableBreaking: `osty publish` detected a breaking
+	// change in a `#[stability("stable")]` API surface item but the new
+	// version number does not bump the major component. SemVer
+	// compatibility is enforced by the registry.
+	//
+	// Spec: v0.6 §3.14.3.2 / §3.14.3.3
+	// Fix: bump the major version, or revert the breaking change. The
+	//      diagnostic enumerates each breaking item.
+	CodePublishStableBreaking = "E2100"
+
+	// CodePublishVersionDowngrade: `osty publish` rejects a manifest
+	// whose version is lower than the previously published version.
+	//
+	// Spec: v0.6 §3.14.3.3
+	// Fix: bump the version forward.
+	CodePublishVersionDowngrade = "E2101"
+
+	// CodePublishCompatAddPatchOnly: `osty publish` detected new public
+	// API surface items but the version bump is patch-only. Additive
+	// changes require at least a minor bump per SemVer.
+	//
+	// Spec: v0.6 §3.14.3.3
+	// Fix: bump the minor version, or remove the new items.
+	CodePublishCompatAddPatchOnly = "E2102"
+
+	// CodePublishExperimentalChange: `osty publish` detected a change
+	// to a `#[stability("experimental")]` API surface item. Experimental
+	// APIs are exempt from SemVer enforcement, but the change is logged
+	// for audit.
+	//
+	// Spec: v0.6 §3.14.3.2
+	// Fix: review whether the API is ready to be promoted to "stable".
+	CodePublishExperimentalChange = "W2100"
 )
 
 const (

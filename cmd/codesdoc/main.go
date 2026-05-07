@@ -726,6 +726,25 @@ var headingFamily = map[string]string{
 	"Deprecation warning":       "FamilyWarning",
 	"Runtime sublanguage":       "FamilyTypeChecking", // TODO: dedicated FamilyRuntime once generated.go accommodates it
 	"Scaffolding":               "FamilyScaffold",
+
+	// v0.6 — Hidden-Dependency-Surface (G36 – G50)
+	// Note: stripRangeSuffix removes " (...)" suffix, so map uses stripped form.
+	"v0.6 — Hidden-Dependency-Surface": "FamilyAnnotation",
+	"G36 — Capabilities":               "FamilyTypeChecking",
+	"G38 — Spec link":                  "FamilyAnnotation",
+	"G46 — Performance contract":       "FamilyAnnotation",
+	"G37 — Information flow":           "FamilyTypeChecking",
+
+	// v0.6 — Annotation / declaration extensions
+	"v0.6 — Annotation / declaration extensions": "FamilyAnnotation",
+	"G50 — Anonymous structural record":          "FamilyTypePattern",
+	"G41 — Error contract":                       "FamilyAnnotation",
+	"G40 — Sealed construct":                     "FamilyDeclaration",
+	"G42 — Structured intent":                    "FamilyAnnotation",
+	"G43 — Executable spec block":                "FamilyDeclaration",
+	"G45 — Golden tests":                         "FamilyAnnotation",
+	"G44 — API evolution":                        "FamilyAnnotation",
+	"G44 — Publishing":                           "FamilyManifest",
 }
 
 // headingPrefixFamily matches headings by prefix when multiple

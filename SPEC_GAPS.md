@@ -231,6 +231,44 @@ G 번호 없이 일반 이슈 트래커에서 처리. 언어 surface 변경은 �
 
 ---
 
+## Resolved in v0.6
+
+v0.6 은 100 PR sprint 직후 *사용자 0 인 마지막 기회*에 hidden dependency 를
+모두 surface 로 끌어올리는 batch 결정을 한 릴리스다. 13 개 신규 결정 + 2 개
+ergonomics 개선. 일부는 *breaking* 임 — `--legacy-globals` 호환 모드를
+v0.6.x 에서만 제공 후 v0.7 에서 제거. 자세한 spec 본문은
+[`LANG_SPEC_v0.6/00-revision.md`](LANG_SPEC_v0.6/00-revision.md).
+
+**Design north star**: *Hidden dependency is forbidden* — 시간 / 난수 / 환경
+/ 보안 흐름 / 진화 규칙 / 성능 계약 / 의도 / 명세 어느 것도 암묵으로 두지
+않는다.
+
+| ID | 영역 | 결정 | 상태 |
+|---|---|---|---|
+| **G36** | Capabilities (§20) | 환경 effect (`Clock`, `Rng`, `Env`, `Fs`, `Net`, `Process`, `Console`) 를 stdlib interface 로 정의하고 함수 파라미터로 전달. `#[ambient(...)]` 어노테이션이 script / `main` / test 진입점에서 default instance 를 scope 에 주입. `#[reproducible_capability]` 가 사용자 정의 deterministic capability 등록. `#[reproducible]` / `#[pure]` 검사가 capability 시그니처 기반 *allow-list* 로 sound. v0.5 의 전역 함수 (`time.now()` / `random.next()` 등) 는 `--legacy-globals` 로 v0.6.x 호환, v0.7 제거. | decided |
+| **G37** | Information flow (§21) | `#[taint("source")]` source 표시, `#[sanitizes("source", into = "trust")]` sanitizer, `#[requires("trust")]` sink 요구. 1-bit + N-tag flow tracking 을 type system 에 추가. Generic / closure 통한 propagation 자동. Implicit flow 는 *explicit-only* 정책 (Jif 와 동일). FFI 경계는 `#[trusted_declassify(reason)]` 로 audit. v0.6 baseline sink: `db.query` / `process.exec` / `fs.path*` / `http.redirect` / `template.render`. mainstream 산업언어 첫 정적 IFC. | decided |
+| **G38** | Spec link (§3.10) | `#[spec("§X.Y")]` 어노테이션. 컴파일러가 markdown anchor 존재 검증 (`E0790`), section 이동 시 `W0790`. `osty doc` 가 spec 본문 첫 단락 inline 표시, LSP hover 동일. 운영 discipline 을 언어 feature 로 승급. | decided |
+| **G39** | Reproducibility (§3.11) | `#[reproducible(scope=...)]` — `"run"` / `"target"` / `"portable"` 3-tier. `target` 이 default. capability deny rule 기반 검증. unordered iter 금지 (`E0786`), pointer-id 비교 금지, transitive callee 도 같거나 강한 scope 필수 (`E0787`). `portable` 추가 제약 (endianness, NaN bit, …). `#[golden]` 함수는 암묵적으로 `#[reproducible(scope="target")]`. | decided |
+| **G40** | Sealed construct (§3.4.5) | `#[sealed_construct(name)]` — 명시한 constructor 만 허용. 외부 struct literal / spread update / 직접 mutation / generic deserialize / FFI default 모두 차단. `#[trusted_construct(reason)]` stdlib escape, `#[test_construct]` test profile escape. parse-don't-validate 패턴을 언어 primitive 로. v0.6 baseline 에서 stdlib `Email` / `Url` / `Path` / `SqlIdent` / `Duration` / `Uuid` 등 sealed 화. | decided |
+| **G41** | Error contract (§7.5) | `#[error_contract(Variant when "condition", ...)]` — concrete enum error 의 failure mode catalog. `Err(...)` return path 정합성 정적 검증 (`E0410`), 미발화 variant `W0411`. 호출자 측 match exhaustiveness 가 contract variant 기반. erased `Error` 에는 `#[error_contract(any)]` 만 (검증 없음, 문서용). | decided |
+| **G42** | Structured intent (§3.12) | `#[purpose("...")]` 자유 텍스트 의도, `#[example(input=, output=, uses=)]` 자동 검증 예시, `#[fixture(name=)]` canonical instance. 모두 `osty doc` / `osty context` / LSP / property test seed 가 공유. AI hype 비의존 framing — *machine-readable intent*. | decided |
+| **G43** | Executable spec block (§3.13) | `spec { example: / law: / invariant: / forall x in gen: }` 함수 본문 첫 위치 블록. v0 (Phase 3) 는 `example:` 만 실행, `law:` / `invariant:` 는 doc/hover. v1 (Phase 5) 는 `forall` property test 자동 생성. `result` virtual binding (`law:` / `invariant:` 안에서). | decided |
+| **G44** | API evolution (§3.14) | `#[since("X.Y")]` 도입 버전, `#[stability(level, until?, since?, remove?)]` 에서 level ∈ {`stable`, `experimental`, `deprecated`, `internal`}. `osty publish` 가 stable API breaking change 시 major bump 강제 (`E2100`). `#[match_compat("X.Y", fallback=)]` 로 enum shape pin — silent fallback 금지 (`E0450`), `unsafe_silent` 명시 시 `W0902`. | decided |
+| **G45** | Golden tests (§11.5) | `#[golden("path", mode="text"|"ast")]` snapshot 비교. AST mode 는 reparse 후 비교 (whitespace/comment 무시). `osty test --golden` / `--update-golden`. 함수는 reproducible 검증 통과 필수 (`E0444`). | decided |
+| **G46** | Performance contract (§3.15) | `#[budget(allocs=, io_calls=, stack_depth=, instructions=)]` static — 컴파일러 증명, 위반 `E0795`. `#[budget(time_ms=, p99_ms=)]` runtime — `osty bench --budget` 회귀 게이트. static 과 runtime 이 같은 어노테이션 키 namespace 공유. | decided |
+| **G47** | Machine-readable context (§13.6) | `osty context <symbol> [--format=json] [--recursive]` — purpose / examples / spec_refs / error_contract / fixtures / stability / since 단일 JSON 으로 추출. LSP `textDocument/hover` 통합. AI agent 첫 시민. | decided |
+| **G48** | Annotation surface 통합 | 신규 어노테이션 14 개 (G36-G47 합계) 가 기존 fixed annotation set 에 추가, `#[name(args)]` form 그대로 — 신규 grammar 0. parameter 위치 annotation (`#[taint]` / `#[requires]`) 은 v0.6 grammar 변경. spec block 만 신규 syntax. 추가 contextual keyword 4 (v0): `spec`, `example`, `law`, `invariant`. | decided |
+| **G49** | `while` keyword (§4.4) | `for cond {}` 외에 `while cond {}` 동의어 추가. v0.5 의 keyword economy taste 는 유지하되 *mental model 일치*를 위해 더 흔한 surface 도 받아들임. `for cond` 도 deprecate 안 함 — 양쪽 모두 컴파일러가 같은 lowering. | decided |
+| **G50** | Anonymous structural record (§2.5) | `{ x: Int, y: Int }` 형식의 type literal + `{ x: 1, y: 2 }` value literal. ad-hoc labeled tuple 케이스 충당. nominal struct 와는 *별도 universe* — 자동 변환 없음. 메서드 정의 불가. 함수 반환 / 인자 / let binding 가능. nominal struct destructuring 과 같은 pattern syntax. | decided |
+
+이 15 개 결정 (G36-G50) 은 [`LANG_SPEC_v0.6/00-revision.md`](LANG_SPEC_v0.6/00-revision.md)
+가 권위. 구현 phase 는 동 문서 §2 참조. 호환성 영향이 있는 항목 — G36 (capability
+migration, breaking in v0.7), G37 (taint sink rollout, breaking for unsanitized
+code), G40 (stdlib sealed types) — 은 `--legacy-globals` 또는 `--legacy-construct`
+호환 모드 v0.6.x 한정 제공.
+
+---
+
 ## Resolved in v0.5
 
 v0.5 는 v0.4 이후 일정 기간 사용하며 누적된 15 개 개선점을 한 번에
