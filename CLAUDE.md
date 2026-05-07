@@ -1025,10 +1025,350 @@ fn benchParseConfig() {
 
 ---
 
+# 부록 C. v0.6 신규 패턴 (G36-G49)
+
+> **v0.6 design north star**: *Hidden dependency is forbidden* — 시간, 난수, 환경, 보안 흐름, API 진화, 성능 계약, 의도, 명세 어느 것도 암묵으로 두지 않는다.
+>
+> 본 부록의 권위는 `LANG_SPEC_v0.6/`. 부록 A 의 v0.4 예시들은 여전히 유효한 Osty — v0.6 는 *추가 surface* 만. 라이브러리 / public API / 보안-민감 코드는 v0.6 패턴을 우선 사용하고, 단순 스크립트는 부록 A 스타일로도 충분.
+
+## C.1 Capability parameter (G36, §20)
+
+**규칙**: 라이브러리 코드는 환경 effect 를 *capability parameter* 로 받는다. 7 canonical: `Clock`, `Rng`, `Env`, `Fs`, `Net`, `Process`, `Console`.
+
+```osty
+// 라이브러리 함수 — capability 명시
+pub fn buildId(clock: Clock, rng: Rng) -> String {
+    "{clock.now().toEpochMillis()}-{rng.next()}"
+}
+
+pub fn loadConfig(env: Env, fs: Fs) -> Result<Config, Error> {
+    let path = env.get("CONFIG_PATH") ?? "/etc/app.toml"
+    let text = fs.readToString(path)?
+    json.parse(text)
+}
+```
+
+**`#[ambient]` — entry point 만**:
+
+```osty
+// fn main / scripts / #[test] / #[bench] 만 허용
+#[ambient(clock, rng, env, fs, console)]
+fn main() {
+    let id = buildId(clock, rng)              // 자동 forward
+    let cfg = loadConfig(env, fs)?            // 자동 forward
+    console.println("id={id}")
+}
+```
+
+**금지**:
+- 라이브러리 함수에 `#[ambient]` (`E0780`)
+- `time.now()` / `random.next()` / `env.get(k)` 류 *전역 함수* — `--legacy-globals` 호환 모드 v0.6.x 한정, v0.7 제거
+
+**테스트 측 fake injection**:
+
+```osty
+fn test_buildId_format() {
+    let fakeClock = std.time.fakeClock(epoch_ms = 1_000_000)
+    let fakeRng = std.random.seededRng(seed = 42)
+    let id = buildId(fakeClock, fakeRng)
+    testing.assertEq(id, "1000000-1608637542")    // deterministic
+}
+```
+
+## C.2 Information flow tagging (G37, §21)
+
+**규칙**: 사용자 입력 / 외부 데이터는 `#[taint(source)]` 로 marker, sanitizer 는 `#[sanitizes(source, into = trust)]`, sink 는 `#[requires(trust)]`.
+
+```osty
+// Source — HTTP form 파라미터
+#[taint("user_input")]
+pub fn readForm(req: HttpRequest, name: String) -> String? {
+    req.queryParam(name)
+}
+
+// Sanitizer — SQL identifier 검증
+#[sanitizes("user_input", into = "sql_safe")]
+pub fn sqlIdent(s: String) -> SqlIdent? { ... }
+
+// Sink — DB query 는 sql_safe 요구
+pub fn query(table: #[requires("sql_safe")] SqlIdent) -> Rows { ... }
+```
+
+**전형 패턴** — vulnerable → fixed:
+
+```osty
+// ❌ E0900 — tainted value reaches sql sink
+fn handler_bad(req: HttpRequest, db: Db) -> Response {
+    let userId = req.queryParam("id") ?? ""
+    let rows = db.query("SELECT * FROM users WHERE id = {userId}")
+    // ...
+}
+
+// ✅ parameterized query (sink 가 tag 무시)
+fn handler_param(req: HttpRequest, db: Db) -> Response {
+    let userId = req.queryParam("id") ?? ""
+    let rows = db.exec(
+        "SELECT * FROM users WHERE id = ?",
+        [userId],                            // tag 와 무관
+    )
+    // ...
+}
+
+// ✅ sanitize 후 sink
+fn handler_sanitize(req: HttpRequest, db: Db) -> Response {
+    let userId = req.queryParam("id") ?? ""
+    let safe = std.sql.escape(userId)        // tag → sql_safe 변환
+    let rows = db.query("SELECT * FROM users WHERE id = {safe}")
+    // ...
+}
+```
+
+**v0.6 baseline sinks**: `db.query` (sql_safe) · `process.exec` (shell_safe) · `fs.path*` (path_safe) · `http.redirect` (url_safe) · `template.render` / `http.respondHtml` (html_safe).
+
+**FFI 경계**: `#[trusted_declassify(reason)]` 로 명시적 audit. `osty audit --trusted-declassify` 로 enumerate.
+
+## C.3 Sealed construct (G40, §3.4.5)
+
+**규칙**: parse-don't-validate 패턴은 `#[sealed_construct(constructor)]` 로 강제. 외부 literal 차단 = "이 type 의 값이 존재한다 ⇒ 검증 통과" 자동 보장.
+
+```osty
+#[sealed_construct(parse)]
+#[json(constructor = parse, field = "email")]
+pub struct Email {
+    local: String,
+    domain: String,
+}
+
+impl Email {
+    pub fn parse(s: String) -> Email? {
+        let parts = s.split("@")
+        if parts.len() != 2 { return None }
+        Some(Email { local: parts[0], domain: parts[1] })   // OK — authorized
+    }
+    pub fn local(self) -> String { self.local }
+    pub fn domain(self) -> String { self.domain }
+}
+```
+
+**금지** (모두 `E0420`):
+- 외부 struct literal: `Email { local: "a", domain: "b" }`
+- Spread: `Email { ..existing, domain: "x" }`
+- 직접 mutation
+- generic deserialize 우회 (`#[json(constructor)]` 없으면)
+- test 환경 우회 (production 빌드 — `E0421`)
+
+**Stdlib v0.6 baseline sealed**: `Email`, `Url`, `Path`, `SqlIdent`, `Duration`, `Uuid`. 사용자 코드는 항상 `Type.parse(...)` 경유.
+
+## C.4 Error contract (G41, §7.5)
+
+**규칙**: public API 의 concrete enum error 는 `#[error_contract]` 로 failure mode catalog 명시.
+
+```osty
+pub enum UserCreateError {
+    EmailFormat,
+    DomainBlocked(String),
+    DbConflict(Int),
+}
+
+#[error_contract(
+    UserCreateError.EmailFormat   when "Email.parse 실패",
+    UserCreateError.DomainBlocked when "도메인이 deny-list 등재",
+    UserCreateError.DbConflict    when "이메일 unique 제약 위반",
+)]
+pub fn createUser(email: String, db: Db) -> Result<UserId, UserCreateError> { ... }
+```
+
+**효과**:
+- `Err(...)` return path 가 contract variant 만 사용 (정적 검증, `E0410`)
+- 호출자 측 match exhaustiveness 가 contract variant 기반
+- `osty doc` Failure modes 표 자동 생성
+- `osty context <fn>` JSON 에 포함
+
+**Erased `Error` interface 에는 `#[error_contract(any)]`** (검증 없음, 문서용).
+
+## C.5 Spec link + structured intent (G38, G42)
+
+**규칙**: public API / 컴파일러 internal 함수에 `#[spec("§X.Y")]` + `#[purpose]` + `#[example]` 로 machine-readable intent 노출.
+
+```osty
+#[purpose("이메일 검증 후 DB에 사용자 저장")]
+#[example(input = "alice@example.com", uses = "sampleDb", output = "Ok(42)")]
+#[example(input = "invalid",            uses = "sampleDb", output = "Err(UserCreateError.EmailFormat)")]
+#[spec("§10.30.user.create")]
+pub fn createUser(email: String, db: Db) -> Result<UserId, UserCreateError> { ... }
+
+#[fixture(name = "sampleDb")]
+fn fakeDb() -> Db { std.testing.db.inMemory() }
+```
+
+**소비**: `osty doc` (문서 생성), `osty test --example` (자동 검증), `osty context` (LLM agent payload), LSP hover.
+
+**`#[spec]` 컴파일러 검증**: markdown anchor 존재 확인 — 누락 `E0790`, 이동 `W0790` (suggested replacement).
+
+## C.6 Spec block — 실행 가능한 명세 (G43, §3.13)
+
+**v0 Phase 3** (현재 baseline): `example:` 만 자동 실행. `law:` / `invariant:` 는 doc + LSP hover.
+
+```osty
+fn normalizeEmail(s: String) -> String {
+    spec {
+        example: normalizeEmail(" Alice@EXAMPLE.COM ") == "alice@example.com"
+        example: normalizeEmail("") == ""
+        law: result == result.trim()
+        law: result == result.toLowerCase()
+        invariant: result.indexOf(" ") == -1
+    }
+    s.trim().toLowerCase()
+}
+```
+
+**제약**:
+- 함수 본문의 *첫 statement* 위치만 (`E0440`)
+- `example:` 는 boolean (`E0441`), `law:` / `invariant:` 는 boolean — `result` 는 함수 반환값 가리키는 virtual binding
+
+**v1 Phase 5** (예정): `forall x in gen.list(gen.int(), 128): result.toMultiset() == x.toMultiset()` 형식의 property test.
+
+## C.7 Reproducibility (G39, §3.11)
+
+**규칙**: 캐시 키 / 빌드 해시 / migration ID / content addressing 함수에 `#[reproducible(scope=...)]`.
+
+```osty
+#[reproducible(scope = "target")]
+fn computeKey(data: Bytes) -> Bytes32 {
+    sha256(data)
+}
+
+#[reproducible(scope = "portable")]
+fn migrationId(name: String, sequence: Int) -> Int64 {
+    bytes.toBigEndian(name.toBytes() + sequence.toBytes()).toInt64()
+}
+```
+
+**Scope**:
+- `"run"` — 같은 프로세스 실행 (Console capability OK)
+- `"target"` *(default)* — 같은 Osty 버전 + target triple
+- `"portable"` — 플랫폼 간 byte-equal
+
+**금지**: non-deterministic capability 수신 (`E0784`), unordered iter (`E0786`), pointer-id 비교, 더 약한 scope callee 호출 (`E0787`).
+
+## C.8 Performance contract (G46, §3.15)
+
+**규칙**: hot path / public API 에 `#[budget(...)]` 명시.
+
+```osty
+#[budget(allocs = 0, io_calls = 0, stack_depth = 100)]
+fn pureCompute(data: Bytes) -> Bytes32 { ... }
+
+#[budget(time_ms = 5, p99_ms = 20)]
+fn routeRequest(req: Request, db: Db) -> Response { ... }
+```
+
+**Static keys** (컴파일러 증명, `E0795`): `allocs` / `io_calls` / `stack_depth` / `instructions`.
+**Runtime keys** (`osty bench --budget` 회귀 게이트, `W0795`): `time_ms` / `p99_ms`.
+
+## C.9 API evolution (G44)
+
+**규칙**: public API 는 `#[stability]` + `#[since]` 로 진화 규칙 명시. enum match 는 `#[match_compat]` 로 future-proof.
+
+```osty
+#[stability("stable")]
+#[since("0.6")]
+pub fn parseEmail(s: String) -> Email? { ... }
+
+#[stability("experimental", until = "0.7")]
+#[since("0.6")]
+pub fn parseEmailLoose(s: String) -> Email? { ... }
+
+pub enum HttpEvent {
+    Get,
+    Post,
+
+    #[since("0.7")]
+    Patch,
+}
+
+#[match_compat("0.6", fallback = handlePatchAsPut, reason = "Patch 는 v0.7+ 정식")]
+fn dispatch(e: HttpEvent) -> Response {
+    match e {
+        HttpEvent.Get -> handleGet(),
+        HttpEvent.Post -> handlePost(),
+    }
+    // HttpEvent.Patch 도달 시 fallback 호출
+}
+```
+
+**`osty publish` 게이트**: `stable` API breaking change → major bump 강제 (`E2100`). `experimental` 변경 OK (`W2100`).
+
+**Silent fallback 금지**: `#[match_compat]` 는 `fallback = name` 또는 `unsafe_silent = true` 명시 필수 (`E0450`).
+
+## C.10 Golden tests (G45, §11.5.2)
+
+**규칙**: 컴파일러 / formatter / docgen / 진단 출력 테스트는 `#[golden]` annotation 형식.
+
+```osty
+#[golden("fixtures/format_expr.snap")]
+fn testFormatBinaryOp() {
+    let result = formatExpr(parseExpr("1 + 2 * 3"))
+    testing.assertGolden(result)
+}
+
+#[golden("fixtures/diag_E0765.snap", mode = "ast")]
+fn testNumericNarrowingDiag() {
+    let diag = checkSnippet("let x: Int8 = bigInt")
+    testing.assertGolden(diag.toString())
+}
+```
+
+**Mode**: `"text"` (default, byte-exact) / `"ast"` (reparse + AST 비교, whitespace 무시) / `"json"` (structural) / `"diag"` (Span-tolerant).
+
+**`#[golden]` 함수는 자동 `#[reproducible(scope="target")]`** — non-deterministic 호출 시 `E0444`.
+
+**Update**: `osty test --update-golden` 로 일괄 갱신.
+
+## C.11 `while` keyword (G49, §4.4)
+
+**규칙**: `while cond { body }` 와 `for cond { body }` 는 *동의어*. 둘 다 컴파일러가 같은 IR 생성. 가독성 / mental model 따라 선택.
+
+```osty
+// 둘 다 같은 의미
+while !queue.isEmpty() {
+    process(queue.pop()?)
+}
+
+for !queue.isEmpty() {
+    process(queue.pop()?)
+}
+```
+
+**그 외 loop 형식 (v0.5 와 동일)**:
+- `for x in iter { ... }` — iterable
+- `for { ... }` — infinite
+- `loop { ... break value }` — value-returning
+- `for let Some(x) = q.pop() { ... }` — Some/Ok 패턴
+
+## C.12 부록 C 빠른 참조 표
+
+| 영역 | Annotation | 주 사용처 |
+|---|---|---|
+| **Capability** (C.1) | `Clock`/`Rng`/`Env`/`Fs`/`Net`/`Process`/`Console` parameter, `#[ambient]` | 모든 라이브러리 함수 / entry point |
+| **Information flow** (C.2) | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]` | HTTP / DB / shell / path / URL 경계 |
+| **Sealed construct** (C.3) | `#[sealed_construct(parse)]` | parse-don't-validate 타입 (Email/Url/Path/Uuid/...) |
+| **Error contract** (C.4) | `#[error_contract(... when ...)]` | public API의 concrete enum error |
+| **Spec / intent** (C.5) | `#[spec]`, `#[purpose]`, `#[example]`, `#[fixture]` | public API / compiler internal |
+| **Spec block** (C.6) | `spec { example: / law: / invariant: }` | 명세-주도 함수 |
+| **Reproducibility** (C.7) | `#[reproducible(scope=...)]` | 캐시 키 / 해시 / migration ID |
+| **Budget** (C.8) | `#[budget(allocs=, time_ms=, ...)]` | hot path / public API |
+| **Evolution** (C.9) | `#[stability]`, `#[since]`, `#[match_compat]` | public API surface |
+| **Golden** (C.10) | `#[golden(path, mode=)]` | 컴파일러 / formatter / docgen 자가 테스트 |
+| **While** (C.11) | `while cond { }` | 가독성 선호 시 `for cond` 대신 |
+
+---
+
 ## 이 부록들의 사용 규칙
 
-- 새 Osty 코드·예시·진단 메시지 작성 **전에** 부록 A의 해당 소섹션을 확인하고 예시 스타일을 따른다.
-- 새 기능·린트 추가 전에 부록 B에 이미 있는 기법과 중복되는지 검사.
-- `LANG_SPEC_v0.5/`가 확장되면 같은 커밋에서 부록 A/B도 갱신.
+- 새 Osty 코드·예시·진단 메시지 작성 **전에** 부록 A 의 해당 소섹션을 확인하고 예시 스타일을 따른다.
+- v0.6 신규 surface 가 필요한 경우 부록 C 를 우선 참조 — 라이브러리 / public API / 보안-민감 코드는 v0.6 패턴 (capability / taint / sealed / error_contract) 을 *기본*으로.
+- 새 기능·린트 추가 전에 부록 B 에 이미 있는 기법과 중복되는지 검사.
+- `LANG_SPEC_v0.6/` 가 확장되면 같은 커밋에서 부록 A/B/C 도 갱신.
 - 부록 예시는 반드시 스펙 내 확실한 문법만. 불확실하면 서술로 대체하거나 생략.
-- 부록 A에 없는 구문을 예시·코드에 쓰려 한다면 먼저 스펙을 확인하고, 있다면 부록 A에 추가.
+- 부록 A/C 에 없는 구문을 예시·코드에 쓰려 한다면 먼저 스펙을 확인하고, 있다면 해당 부록에 추가.
