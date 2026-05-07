@@ -78,11 +78,11 @@ func runMIRRequest(req llvmgenRequest, stdout io.Writer) error {
 
 func tryMIRRequestViaLIRProto(req llvmgenRequest) ([]byte, []string, bool) {
 	if req.MIR == nil {
-		return nil, nil, false
+		return nil, []string{"lir-proto bridge skipped: MIR payload missing"}, false
 	}
 	source := req.MIR.Source
 	if source == "" {
-		return nil, nil, false
+		return nil, []string{"lir-proto bridge skipped: original source text not attached to MIR payload"}, false
 	}
 	resp, err := nativelirproto.Run(req.MIR.SourcePath, nativelirproto.Request{
 		PackageName: req.MIR.PackageName,
@@ -97,8 +97,11 @@ func tryMIRRequestViaLIRProto(req llvmgenRequest) ([]byte, []string, bool) {
 	if resp.Error != "" {
 		return nil, []string{resp.Error}, false
 	}
-	if resp.Declined || resp.LLVMIR == "" {
-		return nil, nil, false
+	if resp.Declined {
+		return nil, []string{"native lirproto subprocess declined the MIR request"}, false
+	}
+	if resp.LLVMIR == "" {
+		return nil, []string{"native lirproto subprocess produced empty IR text"}, false
 	}
 	return []byte(resp.LLVMIR), nil, true
 }

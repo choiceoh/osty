@@ -107,6 +107,7 @@ func newBackendRequest(t *testing.T, emit EmitMode, src string) Request {
 	if err != nil {
 		t.Fatalf("PrepareEntry returned error: %v", err)
 	}
+	entry.Source = []byte(src)
 	return Request{
 		Layout: Layout{
 			Root:    root,
