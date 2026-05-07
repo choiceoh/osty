@@ -328,6 +328,12 @@ func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error
 	if pat, ok := matchIfElseAggregateReturn(fn, mctx); ok {
 		return emitIfElseAggregateReturn(out, fn, pat, mctx)
 	}
+	if pat, ok := matchOrShortCircuitIfElseAggregate(fn, mctx); ok {
+		return emitOrShortCircuitIfElseAggregate(out, fn, pat, mctx)
+	}
+	if pat, ok := matchElseIfChainAggregate(fn, mctx); ok {
+		return emitElseIfChainAggregate(out, fn, pat, mctx)
+	}
 	if pat, ok := matchWhileLoopReturn(fn, mctx); ok {
 		return emitWhileLoopReturn(out, fn, pat)
 	}
@@ -1498,6 +1504,664 @@ func emitIfElseAggregateReturn(out *strings.Builder, fn *mir.Function, pat ifEls
 		pat.thenBranch.resultExpr, pat.thenBranch.predLabelOut,
 		pat.elseBranch.resultExpr, pat.elseBranch.predLabelOut,
 	)
+	fmt.Fprintf(out, "  ret %%%s %%retval\n", pat.typeName)
+	out.WriteString("}\n\n")
+	return nil
+}
+
+// ---- P18: `||` short-circuit + if-else struct/tuple return ----
+//
+// stage0 P18 covers the canonical "if A || B { S{..} } else { S{..} }"
+// shape — the front-end lowers `||` as a 3-block boolean phi so the
+// resulting CFG is 7 blocks (3 for the OR, 4 for the if-else):
+//
+//	bb0(entry):       AssignInstr Bool L = leftCond ; BranchTerm(L → bb1, bb2)
+//	bb1(short_true):  AssignInstr Bool R = UseRV(BoolConst{true}) ; GotoTerm(bb3)
+//	bb2(right_eval):  AssignInstr Bool R = rightCond              ; GotoTerm(bb3)
+//	bb3(or_merge):    BranchTerm(R → bb4, bb5)                     [empty body]
+//	bb4(then):        AssignInstr ReturnLocal = AggregateRV ; GotoTerm(bb6)
+//	bb5(else):        AssignInstr ReturnLocal = AggregateRV ; GotoTerm(bb6)
+//	bb6(merge):       ReturnTerm                            [empty body]
+//
+// bb0 owns the leftCond computation (any scalar P3a-style instructions
+// + a final AssignInstr to the same Bool local that bb1 / bb2 also
+// write). bb2 owns the rightCond computation (same shape). bb3 must
+// be empty so the merged Bool flows directly from the implicit phi.
+//
+// Output:
+//
+//	define %T @name(<params>) {
+//	entry:
+//	  ; leftCond instructions
+//	  br i1 %L, label %or_short.K, label %or_right.M
+//	or_short.K:
+//	  br label %or_merge.N
+//	or_right.M:
+//	  ; rightCond instructions
+//	  br label %or_merge.N
+//	or_merge.N:
+//	  %or = phi i1 [ true, %or_short.K ], [ %R, %or_right.M ]
+//	  br i1 %or, label %then.X, label %else.Y
+//	then.X:
+//	  ; insertvalue chain for then's aggregate
+//	  br label %merge.Z
+//	else.Y:
+//	  ; insertvalue chain for else's aggregate
+//	  br label %merge.Z
+//	merge.Z:
+//	  %retval = phi %T [ %thenAgg, %then.X ], [ %elseAgg, %else.Y ]
+//	  ret %T %retval
+//	}
+
+type orShortCircuitPattern struct {
+	typeName   string
+	fieldTypes []scalarType
+	paramIDs   []mir.LocalID
+	paramTypes []scalarType
+	paramNames []string
+
+	entry        blockEmit
+	leftCondExpr string
+	leftCondType string
+
+	orShortLabel  string
+	orRightLabel  string
+	orMergeLabel  string
+	rightEvalEmit blockEmit
+	rightCondExpr string
+
+	thenLabel  string
+	elseLabel  string
+	mergeLabel string
+
+	thenBranch ifElseAggregateBranch
+	elseBranch ifElseAggregateBranch
+}
+
+func matchOrShortCircuitIfElseAggregate(fn *mir.Function, mctx *moduleCtx) (orShortCircuitPattern, bool) {
+	pat := orShortCircuitPattern{}
+
+	typeName, fieldTypes, ok := classifyAggregateReturnType(fn.ReturnType, mctx)
+	if !ok {
+		return pat, false
+	}
+	pat.typeName = typeName
+	pat.fieldTypes = fieldTypes
+
+	if len(fn.Params) > 2 {
+		return pat, false
+	}
+	if len(fn.Blocks) != 7 {
+		return pat, false
+	}
+
+	pat.paramIDs = fn.Params
+	pat.paramTypes = make([]scalarType, len(fn.Params))
+	pat.paramNames = make([]string, len(fn.Params))
+	fallbackNames := []string{"a", "b"}
+	for i, pid := range fn.Params {
+		loc := lookupLocal(fn, pid)
+		if loc == nil || !loc.IsParam {
+			return pat, false
+		}
+		pt := scalarFromType(loc.Type)
+		if pt == scalarUnknown {
+			return pat, false
+		}
+		pat.paramTypes[i] = pt
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+	}
+	disambiguateParamNames(pat.paramNames)
+
+	entryBindings := map[mir.LocalID]localBinding{}
+	for i, pid := range fn.Params {
+		entryBindings[pid] = localBinding{
+			expr:    "%" + pat.paramNames[i],
+			ty:      pat.paramTypes[i],
+			defined: true,
+		}
+	}
+
+	entryBlock := blockByID(fn, fn.Entry)
+	if entryBlock == nil {
+		return pat, false
+	}
+	leftBranch, ok := entryBlock.Term.(*mir.BranchTerm)
+	if !ok {
+		return pat, false
+	}
+	shortBlock := blockByID(fn, leftBranch.Then)
+	rightEvalBlock := blockByID(fn, leftBranch.Else)
+	if shortBlock == nil || rightEvalBlock == nil || shortBlock.ID == rightEvalBlock.ID {
+		return pat, false
+	}
+	shortGoto, ok := shortBlock.Term.(*mir.GotoTerm)
+	if !ok {
+		return pat, false
+	}
+	rightGoto, ok := rightEvalBlock.Term.(*mir.GotoTerm)
+	if !ok {
+		return pat, false
+	}
+	if shortGoto.Target != rightGoto.Target {
+		return pat, false
+	}
+	orMergeBlock := blockByID(fn, shortGoto.Target)
+	if orMergeBlock == nil || len(orMergeBlock.Instrs) != 0 {
+		return pat, false
+	}
+	orMergeBranch, ok := orMergeBlock.Term.(*mir.BranchTerm)
+	if !ok {
+		return pat, false
+	}
+	thenBlock := blockByID(fn, orMergeBranch.Then)
+	elseBlock := blockByID(fn, orMergeBranch.Else)
+	if thenBlock == nil || elseBlock == nil || thenBlock.ID == elseBlock.ID {
+		return pat, false
+	}
+	thenGoto, ok := thenBlock.Term.(*mir.GotoTerm)
+	if !ok {
+		return pat, false
+	}
+	elseGoto, ok := elseBlock.Term.(*mir.GotoTerm)
+	if !ok {
+		return pat, false
+	}
+	if thenGoto.Target != elseGoto.Target {
+		return pat, false
+	}
+	mergeBlock := blockByID(fn, thenGoto.Target)
+	if mergeBlock == nil || len(mergeBlock.Instrs) != 0 {
+		return pat, false
+	}
+	if _, ok := mergeBlock.Term.(*mir.ReturnTerm); !ok {
+		return pat, false
+	}
+
+	// Reject overlapping IDs.
+	ids := []mir.BlockID{entryBlock.ID, shortBlock.ID, rightEvalBlock.ID, orMergeBlock.ID, thenBlock.ID, elseBlock.ID, mergeBlock.ID}
+	seen := map[mir.BlockID]bool{}
+	for _, id := range ids {
+		if seen[id] {
+			return pat, false
+		}
+		seen[id] = true
+	}
+
+	nextSSA := 0
+
+	// Walk entry: left-cond instructions ending in BranchTerm.
+	entryEmit, leftCondExpr, leftCondTy, ok := classifyEntryBlock(fn, entryBlock, entryBindings, mctx, &nextSSA)
+	if !ok || leftCondTy != scalarBool {
+		return pat, false
+	}
+	pat.entry = entryEmit
+	pat.leftCondExpr = leftCondExpr
+	pat.leftCondType = leftCondTy.llvm()
+
+	// short-circuit-true block must contain a single AssignInstr writing
+	// `true` to a Bool local — that local is the merged Bool the or_merge
+	// block branches on.
+	if len(shortBlock.Instrs) != 1 {
+		return pat, false
+	}
+	shortAi, ok := shortBlock.Instrs[0].(*mir.AssignInstr)
+	if !ok || shortAi.Dest.HasProjections() {
+		return pat, false
+	}
+	shortUse, ok := shortAi.Src.(*mir.UseRV)
+	if !ok {
+		return pat, false
+	}
+	shortConst, ok := shortUse.Op.(*mir.ConstOp)
+	if !ok {
+		return pat, false
+	}
+	shortBool, ok := shortConst.Const.(*mir.BoolConst)
+	if !ok || !shortBool.Value {
+		return pat, false
+	}
+	mergedLocal := shortAi.Dest.Local
+	mergedLocalRec := lookupLocal(fn, mergedLocal)
+	if mergedLocalRec == nil || scalarFromType(mergedLocalRec.Type) != scalarBool {
+		return pat, false
+	}
+
+	// or_merge.Cond must Copy the same merged Bool local.
+	orMergeCond, ok := orMergeBranch.Cond.(*mir.CopyOp)
+	if !ok || orMergeCond.Place.HasProjections() || orMergeCond.Place.Local != mergedLocal {
+		return pat, false
+	}
+
+	// right-eval block: walk instructions producing the merged Bool
+	// local. The final AssignInstr must write to mergedLocal; only its
+	// value contributes to the OR phi.
+	rightBindings := copyBindings(entryBindings)
+	rightEmit := blockEmit{}
+	for _, instr := range rightEvalBlock.Instrs {
+		if !applyStep(fn, instr, rightBindings, mctx, &nextSSA, &rightEmit) {
+			return pat, false
+		}
+	}
+	rightBinding, ok := rightBindings[mergedLocal]
+	if !ok || !rightBinding.defined || rightBinding.ty != scalarBool {
+		return pat, false
+	}
+	pat.rightEvalEmit = rightEmit
+	pat.rightCondExpr = rightBinding.expr
+
+	pat.orShortLabel = blockLabelName(shortBlock.ID, "or_short")
+	pat.orRightLabel = blockLabelName(rightEvalBlock.ID, "or_right")
+	pat.orMergeLabel = blockLabelName(orMergeBlock.ID, "or_merge")
+	pat.thenLabel = blockLabelName(thenBlock.ID, "then")
+	pat.elseLabel = blockLabelName(elseBlock.ID, "else")
+	pat.mergeLabel = blockLabelName(mergeBlock.ID, "merge")
+	pat.entry.label = "entry"
+	pat.rightEvalEmit.label = pat.orRightLabel
+
+	thenBranch, ok := classifyAggregateBranch(fn, thenBlock, pat.thenLabel, pat.fieldTypes, &nextSSA, mctx)
+	if !ok {
+		return pat, false
+	}
+	pat.thenBranch = thenBranch
+
+	elseBranch, ok := classifyAggregateBranch(fn, elseBlock, pat.elseLabel, pat.fieldTypes, &nextSSA, mctx)
+	if !ok {
+		return pat, false
+	}
+	pat.elseBranch = elseBranch
+
+	return pat, true
+}
+
+func emitOrShortCircuitIfElseAggregate(out *strings.Builder, fn *mir.Function, pat orShortCircuitPattern, mctx *moduleCtx) error {
+	mctx.emitStructDef(pat.typeName, pat.fieldTypes)
+	fmt.Fprintf(out, "define %%%s @%s(", pat.typeName, fn.Name)
+	for i, name := range pat.paramNames {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
+	}
+	out.WriteString(") {\n")
+
+	// entry: left-cond + branch to short_true / right_eval
+	emitBlock(out, pat.entry)
+	fmt.Fprintf(out, "  br %s %s, label %%%s, label %%%s\n", pat.leftCondType, pat.leftCondExpr, pat.orShortLabel, pat.orRightLabel)
+	out.WriteString("\n")
+
+	// or_short: just goto or_merge (the `true` constant flows through phi)
+	fmt.Fprintf(out, "%s:\n", pat.orShortLabel)
+	fmt.Fprintf(out, "  br label %%%s\n", pat.orMergeLabel)
+	out.WriteString("\n")
+
+	// or_right: right-cond instructions + goto or_merge
+	emitBlock(out, pat.rightEvalEmit)
+	fmt.Fprintf(out, "  br label %%%s\n", pat.orMergeLabel)
+	out.WriteString("\n")
+
+	// or_merge: phi i1 + branch to then / else
+	fmt.Fprintf(out, "%s:\n", pat.orMergeLabel)
+	fmt.Fprintf(out, "  %%or = phi i1 [ true, %%%s ], [ %s, %%%s ]\n", pat.orShortLabel, pat.rightCondExpr, pat.orRightLabel)
+	fmt.Fprintf(out, "  br i1 %%or, label %%%s, label %%%s\n", pat.thenLabel, pat.elseLabel)
+	out.WriteString("\n")
+
+	// then / else aggregate insertvalue chains
+	emitArm := func(arm ifElseAggregateBranch) {
+		fmt.Fprintf(out, "%s:\n", arm.label)
+		prev := "poison"
+		for i, fieldExpr := range arm.fieldExprs {
+			reg := fmt.Sprintf("%%%d", arm.startSSA+i)
+			fmt.Fprintf(out, "  %s = insertvalue %%%s %s, %s %s, %d\n", reg, pat.typeName, prev, pat.fieldTypes[i].llvm(), fieldExpr, i)
+			prev = reg
+		}
+		fmt.Fprintf(out, "  br label %%%s\n", pat.mergeLabel)
+	}
+	emitArm(pat.thenBranch)
+	out.WriteString("\n")
+	emitArm(pat.elseBranch)
+	out.WriteString("\n")
+
+	// merge: phi %T + ret
+	fmt.Fprintf(out, "%s:\n", pat.mergeLabel)
+	fmt.Fprintf(out, "  %%retval = phi %%%s [ %s, %%%s ], [ %s, %%%s ]\n",
+		pat.typeName,
+		pat.thenBranch.resultExpr, pat.thenBranch.predLabelOut,
+		pat.elseBranch.resultExpr, pat.elseBranch.predLabelOut,
+	)
+	fmt.Fprintf(out, "  ret %%%s %%retval\n", pat.typeName)
+	out.WriteString("}\n\n")
+	return nil
+}
+
+// ---- P19: N-arm else-if chain with struct/tuple return ----
+//
+// stage0 P19 covers `if A { S{..} } else if B { S{..} } else if C { S{..} }
+// ... else { S{..} }` — an N-arm chain (N >= 2) where each arm assigns a
+// struct/tuple AggregateRV to the return local. The front-end lowers this
+// as a ladder of cond blocks where each block's `else` edge points either
+// at the next rung or at the final-else arm. Matched arms and the final
+// else flow into a single ReturnTerm block, possibly through one or more
+// empty / storage-only intermediate goto blocks (Osty's lowerer emits
+// these but the empty-goto-collapse pass leaves them alone when they
+// carry StorageDead markers).
+//
+// Block budget for an N-arm chain (no `||` head, no nested cond exprs):
+//
+//	2*N + 1 cond/arm blocks (each rung: cond + matched-arm)
+//	+ 1 final-else arm block
+//	+ 1 ReturnTerm block
+//	+ up to N intermediate goto blocks (storage-dead chain)
+//
+// The matcher walks the ladder explicitly: starting from entry, each
+// cond block becomes a rung; the rung's `then` edge is a matched arm
+// (AggregateRV → goto-chain → ReturnTerm), and the rung's `else` edge
+// is either the next rung or the final-else arm (also an AggregateRV →
+// goto-chain → ReturnTerm). The chain terminates when the else edge
+// reaches a non-branch block.
+//
+// Output: classic phi over N+1 incoming arms.
+
+type elseIfArm struct {
+	label      string
+	fieldExprs []string
+	startSSA   int
+	resultExpr string
+}
+
+type elseIfRung struct {
+	condEmit blockEmit
+	condExpr string
+	condType string
+	armLabel string // label of the matched arm block
+}
+
+type elseIfChainPattern struct {
+	typeName   string
+	fieldTypes []scalarType
+	paramIDs   []mir.LocalID
+	paramTypes []scalarType
+	paramNames []string
+
+	rungs      []elseIfRung
+	arms       []elseIfArm // len == len(rungs) + 1; the last entry is the final else arm
+	mergeLabel string
+}
+
+func matchElseIfChainAggregate(fn *mir.Function, mctx *moduleCtx) (elseIfChainPattern, bool) {
+	pat := elseIfChainPattern{}
+
+	typeName, fieldTypes, ok := classifyAggregateReturnType(fn.ReturnType, mctx)
+	if !ok {
+		return pat, false
+	}
+	pat.typeName = typeName
+	pat.fieldTypes = fieldTypes
+
+	if len(fn.Params) > 2 {
+		return pat, false
+	}
+	pat.paramIDs = fn.Params
+	pat.paramTypes = make([]scalarType, len(fn.Params))
+	pat.paramNames = make([]string, len(fn.Params))
+	fallbackNames := []string{"a", "b"}
+	for i, pid := range fn.Params {
+		loc := lookupLocal(fn, pid)
+		if loc == nil || !loc.IsParam {
+			return pat, false
+		}
+		pt := scalarFromType(loc.Type)
+		if pt == scalarUnknown {
+			return pat, false
+		}
+		pat.paramTypes[i] = pt
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+	}
+	disambiguateParamNames(pat.paramNames)
+
+	// Locate the unique ReturnTerm block. Multiple return blocks would
+	// require a more elaborate phi join; defer that to a later phase.
+	var returnBlock *mir.BasicBlock
+	for _, bb := range fn.Blocks {
+		if _, ok := bb.Term.(*mir.ReturnTerm); ok {
+			if returnBlock != nil {
+				return pat, false
+			}
+			returnBlock = bb
+		}
+	}
+	if returnBlock == nil {
+		return pat, false
+	}
+
+	entryBindings := map[mir.LocalID]localBinding{}
+	for i, pid := range fn.Params {
+		entryBindings[pid] = localBinding{
+			expr:    "%" + pat.paramNames[i],
+			ty:      pat.paramTypes[i],
+			defined: true,
+		}
+	}
+
+	nextSSA := 0
+	current := blockByID(fn, fn.Entry)
+	if current == nil {
+		return pat, false
+	}
+
+	rungIndex := 0
+	for {
+		// Each rung is a cond block ending in a BranchTerm.
+		branch, ok := current.Term.(*mir.BranchTerm)
+		if !ok {
+			break
+		}
+		matchedBlock := blockByID(fn, branch.Then)
+		nextOrElse := blockByID(fn, branch.Else)
+		if matchedBlock == nil || nextOrElse == nil || matchedBlock.ID == nextOrElse.ID {
+			return pat, false
+		}
+
+		// Run the cond block's instructions to compute the Bool cond.
+		condBindings := copyBindings(entryBindings)
+		condEmit := blockEmit{}
+		for _, instr := range current.Instrs {
+			if !applyStep(fn, instr, condBindings, mctx, &nextSSA, &condEmit) {
+				return pat, false
+			}
+		}
+		condExpr, condTy, ok := resolveOperand(branch.Cond, condBindings, mctx)
+		if !ok || condTy != scalarBool {
+			return pat, false
+		}
+
+		// Validate the matched arm (must reach returnBlock through goto chain).
+		armFields, armStart, armReg, ok := classifyChainAggregateArm(fn, matchedBlock, returnBlock, fieldTypes, &nextSSA, mctx)
+		if !ok {
+			return pat, false
+		}
+
+		armLabel := blockLabelName(matchedBlock.ID, fmt.Sprintf("arm%d", rungIndex))
+		if rungIndex == 0 {
+			condEmit.label = "entry"
+		} else {
+			condEmit.label = blockLabelName(current.ID, fmt.Sprintf("rung%d", rungIndex))
+		}
+
+		pat.rungs = append(pat.rungs, elseIfRung{
+			condEmit: condEmit,
+			condExpr: condExpr,
+			condType: condTy.llvm(),
+			armLabel: armLabel,
+		})
+		pat.arms = append(pat.arms, elseIfArm{
+			label:      armLabel,
+			fieldExprs: armFields,
+			startSSA:   armStart,
+			resultExpr: armReg,
+		})
+
+		rungIndex++
+
+		// Advance to the next rung (or accept nextOrElse as the final-else
+		// aggregate arm if it is no longer a branch block).
+		if _, ok := nextOrElse.Term.(*mir.BranchTerm); ok {
+			current = nextOrElse
+			continue
+		}
+		// Final-else arm: must be aggregate → returnBlock.
+		armFields, armStart, armReg, ok = classifyChainAggregateArm(fn, nextOrElse, returnBlock, fieldTypes, &nextSSA, mctx)
+		if !ok {
+			return pat, false
+		}
+		pat.arms = append(pat.arms, elseIfArm{
+			label:      blockLabelName(nextOrElse.ID, "fallback"),
+			fieldExprs: armFields,
+			startSSA:   armStart,
+			resultExpr: armReg,
+		})
+		break
+	}
+
+	// Need at least 2 rungs (1 rung == standard if-else, handled by P17).
+	if len(pat.rungs) < 2 || len(pat.arms) != len(pat.rungs)+1 {
+		return pat, false
+	}
+	pat.mergeLabel = blockLabelName(returnBlock.ID, "merge")
+	return pat, true
+}
+
+// classifyChainAggregateArm validates that `arm` is an aggregate-arm
+// block — exactly one AssignInstr writing AggregateRV{Struct|Tuple} to
+// the return local — and that its GotoTerm reaches the unique
+// returnBlock through zero or more empty / storage-dead-only goto
+// blocks. Returns the aggregate's field expressions, the SSA index of
+// the first insertvalue, and the SSA register that holds the final
+// aggregate value.
+func classifyChainAggregateArm(fn *mir.Function, arm, returnBlock *mir.BasicBlock, fieldTypes []scalarType, nextSSA *int, mctx *moduleCtx) ([]string, int, string, bool) {
+	if len(arm.Instrs) != 1 {
+		return nil, 0, "", false
+	}
+	ai, ok := arm.Instrs[0].(*mir.AssignInstr)
+	if !ok || ai.Dest.Local != fn.ReturnLocal || ai.Dest.HasProjections() {
+		return nil, 0, "", false
+	}
+	agg, ok := ai.Src.(*mir.AggregateRV)
+	if !ok {
+		return nil, 0, "", false
+	}
+	if agg.Kind != mir.AggStruct && agg.Kind != mir.AggTuple {
+		return nil, 0, "", false
+	}
+	if len(agg.Fields) != len(fieldTypes) {
+		return nil, 0, "", false
+	}
+	gotoT, ok := arm.Term.(*mir.GotoTerm)
+	if !ok {
+		return nil, 0, "", false
+	}
+	// Walk the empty / storage-dead-only goto chain to returnBlock.
+	cursor := gotoT.Target
+	visited := map[mir.BlockID]bool{}
+	for {
+		if visited[cursor] {
+			return nil, 0, "", false
+		}
+		visited[cursor] = true
+		if cursor == returnBlock.ID {
+			break
+		}
+		next := blockByID(fn, cursor)
+		if next == nil {
+			return nil, 0, "", false
+		}
+		// Allow storage-dead-only blocks in the chain.
+		for _, instr := range next.Instrs {
+			switch instr.(type) {
+			case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
+				continue
+			default:
+				return nil, 0, "", false
+			}
+		}
+		nextGoto, ok := next.Term.(*mir.GotoTerm)
+		if !ok {
+			return nil, 0, "", false
+		}
+		cursor = nextGoto.Target
+	}
+
+	// Build the field-expression list using existing aggregate helpers.
+	paramRegs := map[mir.LocalID]string{}
+	for _, pid := range fn.Params {
+		loc := lookupLocal(fn, pid)
+		if loc == nil {
+			return nil, 0, "", false
+		}
+		paramRegs[pid] = "%" + sanitizeLLVMName(loc.Name, "a")
+	}
+	fieldExprs := make([]string, len(agg.Fields))
+	for i, f := range agg.Fields {
+		expr, ty, ok := classifyAggregateField(f, paramRegs, fn, mctx)
+		if !ok || ty != fieldTypes[i] {
+			return nil, 0, "", false
+		}
+		fieldExprs[i] = expr
+	}
+	startSSA := *nextSSA
+	*nextSSA += len(fieldTypes)
+	resultReg := fmt.Sprintf("%%%d", startSSA+len(fieldTypes)-1)
+	return fieldExprs, startSSA, resultReg, true
+}
+
+func emitElseIfChainAggregate(out *strings.Builder, fn *mir.Function, pat elseIfChainPattern, mctx *moduleCtx) error {
+	mctx.emitStructDef(pat.typeName, pat.fieldTypes)
+	fmt.Fprintf(out, "define %%%s @%s(", pat.typeName, fn.Name)
+	for i, name := range pat.paramNames {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
+	}
+	out.WriteString(") {\n")
+
+	// Emit each rung: cond + br to its arm vs the next rung label.
+	for i, rung := range pat.rungs {
+		emitBlock(out, rung.condEmit)
+		// Else target is either the next rung's cond label or the final-else arm.
+		var elseLabel string
+		if i+1 < len(pat.rungs) {
+			elseLabel = pat.rungs[i+1].condEmit.label
+		} else {
+			elseLabel = pat.arms[len(pat.arms)-1].label
+		}
+		fmt.Fprintf(out, "  br %s %s, label %%%s, label %%%s\n", rung.condType, rung.condExpr, rung.armLabel, elseLabel)
+		out.WriteString("\n")
+	}
+
+	// Emit each arm: insertvalue chain + br to merge.
+	for _, arm := range pat.arms {
+		fmt.Fprintf(out, "%s:\n", arm.label)
+		prev := "poison"
+		for i, fieldExpr := range arm.fieldExprs {
+			reg := fmt.Sprintf("%%%d", arm.startSSA+i)
+			fmt.Fprintf(out, "  %s = insertvalue %%%s %s, %s %s, %d\n", reg, pat.typeName, prev, pat.fieldTypes[i].llvm(), fieldExpr, i)
+			prev = reg
+		}
+		fmt.Fprintf(out, "  br label %%%s\n", pat.mergeLabel)
+		out.WriteString("\n")
+	}
+
+	// Merge block: phi over all arms + ret.
+	fmt.Fprintf(out, "%s:\n", pat.mergeLabel)
+	out.WriteString("  %retval = phi %" + pat.typeName)
+	for i, arm := range pat.arms {
+		if i > 0 {
+			out.WriteString(",")
+		}
+		fmt.Fprintf(out, " [ %s, %%%s ]", arm.resultExpr, arm.label)
+	}
+	out.WriteString("\n")
 	fmt.Fprintf(out, "  ret %%%s %%retval\n", pat.typeName)
 	out.WriteString("}\n\n")
 	return nil
