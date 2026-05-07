@@ -982,10 +982,12 @@ fn checkNumericWidening(from: Type, to: Type) -> CheckResult { ... }
 pub fn createUser(email: String, db: Db) -> Result<UserId, Error> { ... }
 ```
 
-`#[spec]` may be applied to functions, methods, structs, enums,
-interfaces, and impl blocks. Use is encouraged for compiler-internal
-code (`internal/check`, `toolchain/*.osty`) and stdlib modules; user
-code may use it for self-documentation.
+`#[spec]` may be applied to functions, methods, structs, enums, and
+interfaces. Use is encouraged for compiler-internal code
+(`internal/check`, `toolchain/*.osty`) and stdlib modules; user code
+may use it for self-documentation. Osty has no `impl` blocks (§14) —
+methods live in struct / enum bodies, where `#[spec]` applies
+directly.
 
 ### 3.11 `#[reproducible(scope=...)]` — Determinism contract (G39)
 
