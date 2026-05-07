@@ -117,3 +117,87 @@ The wrapping enum must then be constructed explicitly at each error
 site; `?` does not synthesize wrappers.
 
 ---
+
+### 7.5 Error Contract (G44)
+
+A function returning a `Result<T, E>` over a *concrete enum* `E` may
+carry an `#[error_contract]` annotation that catalogues which error
+variants are produced under which conditions. The contract is a
+machine-readable failure-mode catalogue — `osty doc` renders it as a
+table, `osty test --example` cross-checks it, `osty context` (§13.6)
+exposes it as JSON, and the type checker uses it to prune match
+exhaustiveness.
+
+```osty
+pub enum EmailError {
+    Format,
+    DomainBlocked(String),
+    TooLong(Int),
+}
+
+#[error_contract(
+    EmailError.Format         when "missing @ or wrong format",
+    EmailError.DomainBlocked  when "domain is in blocklist",
+    EmailError.TooLong        when "input exceeds 320 chars",
+)]
+pub fn parseEmail(s: String) -> Result<Email, EmailError> { ... }
+```
+
+**Static checks (Phase 4).**
+
+| Check | Diagnostic |
+|---|---|
+| `Err(V)` return path uses a variant `V` not in the contract | `E0410` |
+| Contract entry references a variant not on the declared error type | `E0411` |
+| Contract entry never fires from any return path | `W0411` |
+
+**Erased `Error` — declarative form only.**
+
+`#[error_contract]` requires a *concrete enum* error type. Applying it
+to a function returning `Result<_, Error>` is `E0412`. The
+documentation-only form `#[error_contract(any)]` is permitted (no
+check); it tells `osty doc` "this function returns many error types,
+see body."
+
+**`?` propagation.** When the caller carries `#[error_contract]`,
+the caller's contract must be a *superset* of every callee contract
+that flows through `?`:
+
+```osty
+#[error_contract(
+    EmailError.Format         when "from parseEmail",
+    EmailError.DomainBlocked  when "from parseEmail",
+    DbError.Conflict          when "duplicate user",
+)]
+fn createUser(s: String) -> Result<UserId, EmailError | DbError> {
+    let e = parseEmail(s)?       // OK — caller contract ⊇ parseEmail
+    db.insert(e)?                 // OK — DbError.Conflict in caller contract
+}
+```
+
+The closed union form `EmailError | DbError` enumerates the error
+types statically. Open / row-polymorphic error unions are deferred to
+v0.7+ (see `00-revision.md §8 Open Items`).
+
+**Match exhaustiveness.** When a function carrying `#[error_contract]`
+is the scrutinee of a `match`, exhaustiveness is computed against the
+contract variants only:
+
+- Covering every contract variant exhausts the match (other variants
+  are treated as dead per the contract).
+- A `_ -> ...` arm is also exhaustive.
+- An `Err(V)` arm where `V` is on the enum but *not* in the contract
+  emits `W0413` (dead-per-contract).
+
+**Doc / context surfacing.**
+
+`osty doc` rendering of a contracted function includes:
+
+```
+Failure modes:
+  EmailError.Format        — missing @ or wrong format
+  EmailError.DomainBlocked — domain is in blocklist
+  EmailError.TooLong       — input exceeds 320 chars
+```
+
+`osty context <fn>` (§13.6) emits the same data as JSON.

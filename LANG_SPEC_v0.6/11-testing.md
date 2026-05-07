@@ -172,9 +172,18 @@ In bench mode:
   flag uses Go-style durations (`500ms`, `2s`, `1m`) and requires
   `--bench`.
 
-### 11.5 Snapshots
+### 11.5 Snapshots / Golden Tests
 
-`std.testing.snapshot` provides golden-file testing:
+Two surface forms are provided: a *runtime form* via
+`std.testing.snapshot()` (v0.5, §11.5.1) and a *declarative form*
+via the `#[golden]` annotation (v0.6 G45, §11.5.2). Both share the
+same on-disk format — a snapshot file written by one form can be
+consumed by the other.
+
+#### 11.5.1 Runtime form — `testing.snapshot()`
+
+`std.testing.snapshot` provides golden-file testing within a regular
+test function:
 
 ```osty
 fn testRenderOutput() {
@@ -211,6 +220,63 @@ directory when resolving the golden's location. This is only intended
 for test harnesses that exercise the snapshot machinery itself and
 want to isolate writes into a tempdir; production `osty test` runs
 leave it unset.
+
+#### 11.5.2 Declarative form — `#[golden]` (G45)
+
+A function may carry `#[golden(path, mode)]` to declare its output is
+compared against an explicit snapshot file. The annotation form is
+designed for *compiler / formatter / docgen / diagnostic* output
+testing — exactly the workloads where the language's own toolchain is
+exercised.
+
+```osty
+#[golden("fixtures/format_expr.snap")]
+fn testFormatBinaryOp() {
+    let result = formatExpr(parseExpr("1 + 2 * 3"))
+    testing.assertGolden(result)
+}
+
+#[golden("fixtures/diag_E0765.snap", mode = "ast")]
+fn testNumericNarrowingDiag() {
+    let diag = checkSnippet("let x: Int8 = bigInt")
+    testing.assertGolden(diag.toString())
+}
+```
+
+**Modes.**
+
+| Mode | Comparison |
+|---|---|
+| `"text"` *(default)* | Byte-exact. |
+| `"ast"` | Reparse both sides as Osty source, compare normalised AST. Whitespace / comments / formatter idiosyncrasies are ignored. |
+| `"json"` | Parse as JSON, compare structurally (key order ignored). |
+| `"diag"` | Osty diagnostic format — same code/message comparable across `Span` deltas. |
+
+**Reproducibility.** A `#[golden]` function is implicitly
+`#[reproducible(scope = "target")]` (§3.11). Calling non-deterministic
+capabilities or unordered iteration is `E0444`. AST mode applied to
+output that is not valid Osty source is `E0446`. Missing snapshot on
+first run is `E0445` (run `osty test --update-golden`). A snapshot's
+embedded `source-hash` header that disagrees with the function's
+current definition is `W0444`.
+
+**Snapshot file format.**
+
+```
+# osty-golden-v1
+# function: TestFormatBinaryOp
+# mode: ast
+# fixture: sampleBinaryExpr   (optional; references #[fixture(name)])
+# generated: 2026-05-07T12:34:56Z
+# source-hash: abc123...
+
+fn add(x: Int, y: Int) -> Int { x + y }
+```
+
+Header lines start with `#`; the body begins after one blank line.
+
+**Tooling.** `osty test --golden` runs the comparison; `osty test
+--update-golden[=<path>]` rewrites snapshots. See §13.8.
 
 ### 11.6 Parallel Execution
 
