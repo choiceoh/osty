@@ -88,7 +88,7 @@ func TestComputeKeyChangesOnNewFile(t *testing.T) {
 func TestComputeKeyIgnoresGeneratedDir(t *testing.T) {
 	root := t.TempDir()
 	scaffoldToolchain(t, root, map[string]string{
-		"main.osty":                            "fn main() {}\n",
+		"main.osty":                           "fn main() {}\n",
 		filepath.Join(".osty", "out", "junk"): "ignored binary",
 	})
 	first, err := ComputeKey(root)
