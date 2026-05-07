@@ -207,3 +207,129 @@ Among other normalizations:
 - Normalizes trailing commas
 
 ---
+
+### 13.4 `osty context` (G47)
+
+`osty context <symbol>` extracts a *machine-readable intent dossier*
+for a function, method, struct, enum, interface, or module. The
+output combines `#[purpose]` (§3.12), `#[example]` (§3.12),
+`#[spec]` (§3.10), `#[error_contract]` (§7.5), `#[stability]` /
+`#[since]` (§3.14), capability requirements (§20), and `#[budget]`
+(§3.15) into a single document. It is the canonical surface for AI
+agents, IDE hover, code-search tools, and external static analysis.
+
+```sh
+osty context <symbol>                          # default text
+osty context <symbol> --format=json            # machine-readable JSON
+osty context <symbol> --recursive              # include depth-1 callees
+osty context <symbol> --recursive=N            # depth=N
+osty context current://path:line:col           # LSP cursor form
+osty context --search=<query>                  # symbol search
+osty context --all-stdlib --format=jsonl       # bulk export
+```
+
+The JSON schema is pinned at `https://osty.dev/schemas/context/v1.json`
+and includes:
+
+| Field | Source |
+|---|---|
+| `signature` | declared parameters / return type / generics |
+| `purpose` | `#[purpose]` |
+| `examples` | `#[example]` (auto-checked) |
+| `spec_refs` | `#[spec]` (anchor + section title) |
+| `error_contract` | `#[error_contract]` |
+| `effects.capabilities_required` | capability parameters in signature |
+| `effects.reproducible` | `#[reproducible(scope=...)]` |
+| `effects.taint_sources / sanitizes / sinks` | `#[taint]` / `#[sanitizes]` / `#[requires]` |
+| `budget.static / runtime` | `#[budget(...)]` |
+| `stability` / `since` | `#[stability]` / `#[since]` |
+| `fixtures_referenced` | `#[example(uses = "name")]` |
+| `callees` | `--recursive` only |
+
+The full schema is `LANG_SPEC_v0.6/00-revision.md §13.6.2`.
+
+**LSP integration.** `textDocument/hover` returns the same data
+rendered as markdown. AI agents query the JSON directly via `osty
+context --format=json` or the LSP custom request `osty/context`.
+
+### 13.5 `osty publish` (G44)
+
+`osty publish` packages a workspace into a registry-publishable
+artifact and validates SemVer compatibility against the previous
+published manifest. It is the gate that enforces `#[stability]`
+(§3.14) — *stable API breaking changes require a major version bump*.
+
+**Workflow.**
+
+1. Read the previous published manifest from `OSTY_SELF_REGISTRY_URL`
+   (or git tag if local).
+2. Compute the *API surface diff* between previous and current
+   workspace per the algorithm in `00-revision.md §3.14.3`.
+3. Classify each change as `Breaking` / `CompatAdd` / `Patch`.
+4. Compare to the version bump:
+   - Breaking + non-major bump → `E2100`.
+   - CompatAdd + patch-only → `E2102`.
+   - Version downgrade → `E2101`.
+   - Experimental change → `W2100`.
+5. On success, sign the manifest (ed25519, §A6 of selfhost) and
+   upload.
+
+**Surface definition.** API surface includes: function signatures,
+struct fields and methods, enum variants and their payloads, interface
+methods, type alias RHS, public constants, and the following
+annotations: `#[stability]`, `#[error_contract]`, `#[since]`,
+`#[reproducible]`, `#[pure]`, `#[budget]`, parameter taint annotations.
+*Excluded* from surface: function bodies, `#[purpose]` / `#[example]` /
+`#[fixture]` / `#[spec]`, `#[golden]`, line numbers, comments.
+
+**Manifest format.** `target/manifest-{version}.json` (schema:
+`https://osty.dev/schemas/manifest/v1.json`) — `00-revision.md
+§3.14.3.4`.
+
+### 13.6 `osty validate-spec` (G38)
+
+`osty validate-spec` walks the workspace looking for `#[spec("§X.Y")]`
+annotations and verifies each anchor exists in
+`LANG_SPEC_v0.6/`. Missing anchors become `E0790`; anchors that have
+moved between sections produce `W0790` with a suggested replacement.
+
+```sh
+osty validate-spec                          # workspace
+osty validate-spec ./toolchain              # specific dir
+osty validate-spec --strict                 # treat W0790 as error
+osty validate-spec --update                 # apply suggested rewrites
+```
+
+The command is run automatically by `osty check --strict` and by
+the `just prepush` recipe.
+
+### 13.7 Audit subcommands
+
+Several v0.6 annotations grant *audit-marked escapes* — places where
+the language allows a normally-restricted operation under explicit
+audit. Each escape is enumerable:
+
+| Subcommand | Sites | Annotation / spec |
+|---|---|---|
+| `osty audit --trusted-declassify` | FFI / Go-side data drop | `#[trusted_declassify(reason)]` (§21.7) |
+| `osty audit --trusted-construct` | sealed-struct bypass | `#[trusted_construct(reason)]` (§3.4.5.6) |
+| `osty audit --match-compat` | enum-shape pin | `#[match_compat(... unsafe_silent = true)]` (§3.14.4) |
+| `osty audit --legacy-globals` | v0.5 global effect calls | `--legacy-globals` flag (§7.1.1) |
+| `osty audit --all` | all of the above |  |
+
+Each subcommand prints `<file>:<line>:<col> <reason>` for every site,
+suitable for security review and migration tracking.
+
+### 13.8 Test subcommand extensions
+
+`osty test` gains v0.6-aware modes:
+
+| Mode | Reads | Discovers |
+|---|---|---|
+| `osty test --spec` | `spec { example: }` clauses (§3.13) | per-clause boolean test |
+| `osty test --example` | `#[example(input=, output=, uses=)]` (§3.12) | input → output match |
+| `osty test --golden` | `#[golden(path, mode)]` (§11.5.2) | snapshot compare |
+| `osty test --update-golden` | (same) | overwrites snapshot |
+| `osty test --doc` | `///` doc-test blocks (v0.5) | runs as test |
+
+`osty bench --budget` (§3.15.2) gates runtime budget regressions.

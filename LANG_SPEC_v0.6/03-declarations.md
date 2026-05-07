@@ -361,6 +361,42 @@ AuthToken.builder()   // ERROR: no builder generated
 **Override.** If the user defines `default`, `builder`, or `toBuilder`
 on the type, the user's definition replaces the auto-generated one.
 
+### 3.4.5 `#[sealed_construct]` — Parse-don't-validate primitive (G40)
+
+A `struct` may declare `#[sealed_construct(name)]` to restrict
+construction paths to a single named constructor. This makes
+"a value of this type exists" *equivalent* to "the validating
+constructor accepted the input."
+
+```osty
+#[sealed_construct(parse)]
+pub struct Email {
+    local: String,
+    domain: String,
+}
+
+impl Email {
+    pub fn parse(s: String) -> Email? { ... }
+    pub fn local(self) -> String { self.local }
+    pub fn domain(self) -> String { self.domain }
+}
+```
+
+**Forbidden construction paths.** The following all fail with `E0420`
+when applied to a sealed struct from outside the named constructor:
+
+1. External struct literal: `Email { local: "a", domain: "b" }`
+2. Spread update: `Email { ..existing, domain: "x" }`
+3. Direct field mutation (when the struct has `mut` fields)
+4. Generic deserialise / FFI default construction (must route through
+   the constructor — `#[json(constructor = parse)]` registers the path)
+5. Test helpers in production builds (use `#[test_construct]` to opt
+   into a test-only escape — production reachability is `E0421`)
+
+**Stdlib escape: `#[trusted_construct(reason = "...")]`.** Restricted
+to `std.*` and toolchain-internal packages (`E0422` from user code). All
+sites are enumerated by `osty audit --trusted-construct`.
+
 ### 3.5 Enums
 
 ```osty
@@ -929,51 +965,6 @@ Any argument is rejected with `E0739`.
 - In partial struct/enum declarations (§3.4), each declaration's
   annotations apply only to members named in that declaration; the
   compiler does not merge annotations across declarations.
-
----
-
-## v0.6 Annotation Extensions
-
-The following annotations were introduced in v0.6 (G36–G49). Each
-applies under the *Hidden dependency is forbidden* north star — every
-external dependency, intent, contract, or evolution rule is surfaced
-through the type signature or annotation.
-
-### 3.4.5 `#[sealed_construct]` — Parse-don't-validate primitive (G40)
-
-A `struct` may declare `#[sealed_construct(name)]` to restrict
-construction paths to a single named constructor. This makes
-"a value of this type exists" *equivalent* to "the validating
-constructor accepted the input."
-
-```osty
-#[sealed_construct(parse)]
-pub struct Email {
-    local: String,
-    domain: String,
-}
-
-impl Email {
-    pub fn parse(s: String) -> Email? { ... }
-    pub fn local(self) -> String { self.local }
-    pub fn domain(self) -> String { self.domain }
-}
-```
-
-**Forbidden construction paths.** The following all fail with `E0420`
-when applied to a sealed struct from outside the named constructor:
-
-1. External struct literal: `Email { local: "a", domain: "b" }`
-2. Spread update: `Email { ..existing, domain: "x" }`
-3. Direct field mutation (when the struct has `mut` fields)
-4. Generic deserialise / FFI default construction (must route through
-   the constructor — `#[json(constructor = parse)]` registers the path)
-5. Test helpers in production builds (use `#[test_construct]` to opt
-   into a test-only escape — production reachability is `E0421`)
-
-**Stdlib escape: `#[trusted_construct(reason = "...")]`.** Restricted
-to `std.*` and toolchain-internal packages (`E0422` from user code). All
-sites are enumerated by `osty audit --trusted-construct`.
 
 ### 3.10 `#[spec("§X.Y")]` — Spec link (G38)
 
