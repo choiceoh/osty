@@ -1,0 +1,14 @@
+// v0.6 Phase 2 metadata surface — declaration-level spec/intent
+// annotations parse cleanly, and #[spec] points at a real spec section.
+
+#[spec("§3.10")]
+#[purpose("link a declaration to the language spec")]
+#[example(input = "1", output = "1")]
+fn linkedSpecExample() -> Int {
+    1
+}
+
+#[fixture(name = "basic")]
+pub struct SpecFixture {
+    pub value: Int,
+}

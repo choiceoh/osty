@@ -68,7 +68,7 @@ rationale.
 
 | Item | Status | Notes |
 |---|---|---|
-| `#[spec("§X.Y")]` annotation | **planned** (G38, Phase 2) | markdown anchor 검증 |
+| `#[spec("§X.Y")]` annotation | **partial** (G38, Phase 2) | active check now rejects missing `LANG_SPEC_v0.6/` section links (`E0790`). `osty doc`/LSP lead-paragraph surfacing remains planned. |
 | `#[purpose("...")]` | **planned** (G42, Phase 2) | doc / context only |
 | `#[example(input=, output=, uses=)]` | **planned** (G42, Phase 2) | auto-test |
 | `#[fixture(name=)]` | **planned** (G42, Phase 2) | 공유 canonical instance |
