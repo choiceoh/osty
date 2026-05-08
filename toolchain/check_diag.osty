@@ -99,11 +99,13 @@ pub fn checkCodePurposeNotStringLiteral() -> String { "E0434" }
 pub fn checkCodeExampleUnknownKey() -> String { "E0435" }
 pub fn checkCodeFixtureNonFunction() -> String { "E0436" }
 
-// v0.6 G43 — Executable spec block (LANG_SPEC_v0.6 §3.13).
-pub fn checkCodeSpecBlockMisplaced() -> String { "E0440" }
-pub fn checkCodeSpecBlockExampleNotBool() -> String { "E0441" }
-pub fn checkCodeSpecBlockLawNotBool() -> String { "E0442" }
-pub fn checkCodeSpecBlockForallBadGenerator() -> String { "E0443" }
+// G43 (executable spec block) was withdrawn in PRs #1542-#1549; the
+// E0440-E0443 code accessors are kept commented out as a pointer in
+// case a successor gap revives the construct.
+// pub fn checkCodeSpecBlockMisplaced() -> String { "E0440" }
+// pub fn checkCodeSpecBlockExampleNotBool() -> String { "E0441" }
+// pub fn checkCodeSpecBlockLawNotBool() -> String { "E0442" }
+// pub fn checkCodeSpecBlockForallBadGenerator() -> String { "E0443" }
 
 // v0.6 G45 — Golden tests (LANG_SPEC_v0.6 §11.5).
 pub fn checkCodeGoldenNotReproducible() -> String { "E0444" }
@@ -1333,65 +1335,12 @@ pub fn diagFixtureNonFunction(declName: String, kind: String, start: Int, end: I
 // G43 — Executable spec block (§3.13)
 // ---------------------------------------------------------------------
 
-/// diagSpecBlockMisplaced reports a `spec { ... }` block outside the
-/// function-body first-statement position.
-pub fn diagSpecBlockMisplaced(fnName: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiagWithNotes(
-        checkCodeSpecBlockMisplaced(),
-        "`spec { }` block in `{fnName}` is not at the first-statement position",
-        start,
-        end,
-        [
-            "LANG_SPEC §3.13 / R28: spec blocks must be the first statement in a function body",
-            "hint: move the block to the start of the function body",
-        ],
-    )
-}
-
-/// diagSpecBlockExampleNotBool reports a `spec { example: expr }` where
-/// `expr` does not evaluate to `Bool`.
-pub fn diagSpecBlockExampleNotBool(fnName: String, gotType: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiagWithNotes(
-        checkCodeSpecBlockExampleNotBool(),
-        "`spec { example: ... }` in `{fnName}` evaluates to `{gotType}`, expected `Bool`",
-        start,
-        end,
-        [
-            "LANG_SPEC §3.13.2: spec examples must be boolean comparisons",
-            "hint: rewrite the example as `fn(args) == expected`",
-        ],
-    )
-}
-
-/// diagSpecBlockLawNotBool reports a `spec { law: expr }` or
-/// `spec { invariant: expr }` where `expr` does not evaluate to `Bool`.
-pub fn diagSpecBlockLawNotBool(fnName: String, kind: String, gotType: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiagWithNotes(
-        checkCodeSpecBlockLawNotBool(),
-        "`spec { {kind}: ... }` in `{fnName}` evaluates to `{gotType}`, expected `Bool`",
-        start,
-        end,
-        [
-            "LANG_SPEC §3.13.5: laws and invariants must be boolean expressions",
-            "hint: rewrite as a boolean expression (use `result` for the function's return value)",
-        ],
-    )
-}
-
-/// diagSpecBlockForallBadGenerator reports a `spec { forall x in expr: ... }`
-/// where `expr` is not `Gen<T>`.
-pub fn diagSpecBlockForallBadGenerator(fnName: String, gotType: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiagWithNotes(
-        checkCodeSpecBlockForallBadGenerator(),
-        "`spec { forall ... in ... }` in `{fnName}` generator is `{gotType}`, expected `Gen<T>`",
-        start,
-        end,
-        [
-            "LANG_SPEC §3.13.3: forall generators must produce `Gen<T>`",
-            "hint: use a `std.testing.gen.*` constructor",
-        ],
-    )
-}
+// G43 (executable spec block) — diagSpecBlockMisplaced /
+// diagSpecBlockExampleNotBool / diagSpecBlockLawNotBool /
+// diagSpecBlockForallBadGenerator removed alongside the construct's
+// retract in PRs #1542-#1549. They had no production callers (the
+// matching gate runSpecBlockGate was already stubbed in the
+// check_gates fix). E0440-E0443 are reserved for any successor gap.
 
 // ---------------------------------------------------------------------
 // G45 — Golden tests (§11.5)
