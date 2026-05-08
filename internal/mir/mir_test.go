@@ -146,6 +146,58 @@ func TestValidateRejectsDuplicateSymbol(t *testing.T) {
 
 // ==== lowering tests ====
 
+func TestLowerBuildsInterfaceLayouts(t *testing.T) {
+	sized := &ir.InterfaceDecl{
+		Name: "Sized",
+		Methods: []*ir.FnDecl{{
+			Name:   "size",
+			Params: []*ir.Param{{Name: "self", Type: &ir.NamedType{Name: "Sized"}}},
+			Return: ir.TInt,
+		}},
+	}
+	vec := &ir.StructDecl{
+		Name:   "Vec",
+		Fields: []*ir.Field{{Name: "count", Type: ir.TInt}},
+		Methods: []*ir.FnDecl{{
+			Name:   "size",
+			Params: []*ir.Param{{Name: "self", Type: &ir.NamedType{Name: "Vec"}}},
+			Return: ir.TInt,
+			Body:   &ir.Block{Result: &ir.IntLit{Text: "0", T: ir.TInt}},
+		}},
+	}
+	color := &ir.EnumDecl{
+		Name:     "Color",
+		Variants: []*ir.Variant{{Name: "Red"}},
+		Methods: []*ir.FnDecl{{
+			Name:   "size",
+			Params: []*ir.Param{{Name: "self", Type: &ir.NamedType{Name: "Color"}}},
+			Return: ir.TInt,
+			Body:   &ir.Block{Result: &ir.IntLit{Text: "0", T: ir.TInt}},
+		}},
+	}
+	mod := &ir.Module{Package: "main", Decls: []ir.Decl{sized, vec, color}}
+	out := Lower(mod)
+	if out == nil || out.Layouts == nil {
+		t.Fatalf("Lower returned missing layouts")
+	}
+	layout := out.Layouts.Interfaces["Sized"]
+	if layout == nil {
+		t.Fatalf("interface layout missing: %#v", out.Layouts.Interfaces)
+	}
+	if len(layout.Methods) != 1 || layout.Methods[0].Name != "size" || layout.Methods[0].Slot != 0 {
+		t.Fatalf("interface methods = %#v, want size slot 0", layout.Methods)
+	}
+	if len(layout.Impls) != 2 {
+		t.Fatalf("interface impls = %#v, want Vec and Color", layout.Impls)
+	}
+	if layout.Impls[0].ImplName != "Vec" || layout.Impls[0].VtableSym != "@osty.vtable.Vec__Sized" {
+		t.Fatalf("first interface impl = %#v, want Vec", layout.Impls[0])
+	}
+	if layout.Impls[1].ImplName != "Color" || layout.Impls[1].VtableSym != "@osty.vtable.Color__Sized" {
+		t.Fatalf("second interface impl = %#v, want Color", layout.Impls[1])
+	}
+}
+
 // helper: wrap a single statement into a main() function and lower.
 func lowerHIR(t *testing.T, decl *ir.FnDecl) *Module {
 	t.Helper()
