@@ -47,7 +47,7 @@ in v0.6" for per-gap rationale.
 | Deterministic capability test fakes | **partial** | `std.capability.testing` 에 `FakeClock` / `FakeRng` / `FakeEnv` / `FakeFs` / `FakeNet` / `FakeProcess` / `FakeConsole` 추가. `examples/v06_capability_fakes` 로 fake injection proof 추가. |
 | `#[ambient(...)]` annotation | **partial** | active checker gate now rejects non-entry usage (`E0780`), unknown canonical names (`E0781`), and user-defined ambient capabilities (`E0789`). Positive/negative spec corpus plus `examples/v06_ambient_boundaries` pin the boundary; auto-forward/desugar remains follow-up. |
 | `#[reproducible_capability]` annotation | **partial** | active checker gate now rejects non-`#[reproducible]` methods in reproducible capability interfaces (`E0783`). Deeper transitive reproducibility analysis remains follow-up. |
-| `--legacy-globals` 호환 모드 | **planned** | v0.6.x 에서만, v0.7 제거 |
+| `--legacy-globals` 호환 모드 | **partial** | CLI flag (`cli.CliFlags.LegacyGlobals`) + W0750 deprecation pass land — `osty check/typecheck/resolve/lint --legacy-globals` 가 v0.5 글로벌 호출 (`time.now()`, `random.next()`, `env.get(...)`, `fs.read(...)`, `os.exec(...)`, `net.dial(...)` 등) 마다 W0750 발화. Auto-desugar to capability host adapters + manifest stability=experimental 강제 는 follow-up. v0.6.x 에서만, v0.7 제거. |
 | stdlib `time.*` → `clock.*` migration | **partial** | migration catalog (`capability.legacyGlobalRewriteRules`) 와 host-boundary factories가 landing. 전역 호출 warning/desugar 는 compiler phase 후속. |
 
 ### Information flow (G37 — Phase 5)

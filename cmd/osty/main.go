@@ -105,6 +105,16 @@ type cliFlags struct {
 	// afterwards, so multi-file failures don't emit a summary line per
 	// file. Never surfaced as a CLI flag.
 	suppressSummary bool
+	// legacyGlobals enables the v0.5 → v0.6 transition compatibility
+	// mode. When true, the front-end emits W0750 deprecation warnings
+	// at every legacy-global call site (`time.now()`, `random.next()`,
+	// `env.get(...)`, `fs.read(...)`, `os.exec(...)`, `net.dial(...)`,
+	// etc.) so users can enumerate migration work via
+	// `osty check --legacy-globals --warnings-as-errors`. Auto-desugar
+	// to capability host adapters is a follow-up PR. v0.6.x only —
+	// v0.7 removes the flag (BREAKING_v0.6.md §3, LANG_SPEC_v0.6
+	// §20.15).
+	legacyGlobals bool
 }
 
 func main() {
@@ -456,6 +466,7 @@ func main() {
 			switch cmd {
 			case "check":
 				diags := append(append([]*diag.Diagnostic{}, selected.res.Diags...), selected.chk.Diags...)
+				diags = append(diags, legacyGlobalsDiags(selected.pkg, flags)...)
 				printPackageDiags(selected.pkg, diags, flags)
 				if flags.inspect && selected.file != nil && selected.file.File != nil {
 					runInspectPackageInput(nativePackageCheckInput(selected.pkg, nil), selected.file.Path, flags)
@@ -469,6 +480,7 @@ func main() {
 				return
 			case "typecheck":
 				diags := append(append([]*diag.Diagnostic{}, selected.res.Diags...), selected.chk.Diags...)
+				diags = append(diags, legacyGlobalsDiags(selected.pkg, flags)...)
 				printPackageDiags(selected.pkg, diags, flags)
 				printTypes(selected.chk)
 				if hasError(diags) {
@@ -480,6 +492,7 @@ func main() {
 				if nativeDiags, err := nativeResolvePackageDiagnostics(selected.pkg); err == nil {
 					diags = append(packageParseDiags(selected.pkg), nativeDiags...)
 				}
+				diags = append(diags, legacyGlobalsDiags(selected.pkg, flags)...)
 				printPackageDiags(selected.pkg, diags, flags)
 				if rows, err := nativeResolvePackageRows(selected.pkg, selected.file.Path); err == nil && len(rows) > 0 {
 					fmt.Printf("# %s\n", selected.file.Path)
@@ -591,6 +604,7 @@ func convertFlags(cf clicmd.CliFlags) cliFlags {
 	}
 	f.dumpNativeDiags = cf.DumpNativeDiags
 	f.native = cf.Native
+	f.legacyGlobals = cf.LegacyGlobals
 	return f
 }
 
@@ -612,6 +626,7 @@ func parseFlags() cliFlags {
 	flag.BoolVar(&f.inspect, "inspect", false, "check: emit one record per expression showing the inference rule, type, and hint (see LANG_SPEC_v0.6/02a-type-inference.md)")
 	flag.BoolVar(&f.dumpNativeDiags, "dump-native-diags", false, "check/typecheck: after the run, print the native checker's per-context error histogram to stderr")
 	flag.BoolVar(&f.native, "native", true, "check/typecheck: backwards-compat no-op since Phase 1c.5. The self-host arena pipeline is the only path; this flag is accepted so old scripts keep working")
+	flag.BoolVar(&f.legacyGlobals, "legacy-globals", false, "check/lint/build: enable the v0.5 → v0.6 transition compat mode. Each legacy-global call site (time.now / random.next / env.get / fs.read / os.exec / net.dial …) emits W0750. v0.6.x only; v0.7 removes the flag")
 	flag.Usage = usage
 	flag.Parse()
 	return f
@@ -655,6 +670,7 @@ func runResolvePackageInner(dir string, flags cliFlags) int {
 		r := ensureGoResolve()
 		diags = r.Diags
 	}
+	diags = append(diags, legacyGlobalsDiags(pkg, flags)...)
 	printPackageDiags(pkg, diags, flags)
 	nativeRowsUsed := false
 	nativeErrored := false
