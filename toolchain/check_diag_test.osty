@@ -407,6 +407,27 @@ fn testDiagExampleUnknownFixtureStampsE0433() {
     testing.assert(stringsContains(d.message, "missingFixture"))
 }
 
+fn testDiagPurposeNotStringLiteralStampsE0434() {
+    let d = diagPurposeNotStringLiteral("interpolated string", 0, 10)
+    testing.assertEq(d.code, "E0434")
+    testing.assert(stringsContains(d.message, "interpolated"))
+    testing.assert(stringsContains(d.message, "string literal"))
+}
+
+fn testDiagExampleUnknownKeyStampsE0435() {
+    let d = diagExampleUnknownKey("f", "tags", 0, 10)
+    testing.assertEq(d.code, "E0435")
+    testing.assert(stringsContains(d.message, "f"))
+    testing.assert(stringsContains(d.message, "tags"))
+}
+
+fn testDiagFixtureNonFunctionStampsE0436() {
+    let d = diagFixtureNonFunction("MyStruct", "struct", 0, 10)
+    testing.assertEq(d.code, "E0436")
+    testing.assert(stringsContains(d.message, "MyStruct"))
+    testing.assert(stringsContains(d.message, "struct"))
+}
+
 // ---------------------------------------------------------------------
 // v0.6 G43 — Spec block diagnostics.
 // ---------------------------------------------------------------------

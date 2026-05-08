@@ -403,6 +403,29 @@ fn badSinceTwoArgs() {}
 fn badSinceKwarg() {}
 // === END
 
+// === CASE: E0434 === purpose argument is interpolated string
+let target = "world"
+
+#[purpose("hello {target}")]
+fn greet() -> Int {
+    0
+}
+// === END
+
+// === CASE: E0435 === example uses key outside the input/output/uses catalog
+#[example(input = [1], output = "1", tags = "smoke")]
+fn echoExample(x: Int) -> Int {
+    x
+}
+// === END
+
+// === CASE: E0436 === fixture annotation on a non-function declaration
+#[fixture(name = "shape")]
+pub struct ShapeFixture {
+    pub value: Int,
+}
+// === END
+
 // === CASE: E0004 === unterminated block comment (MUST remain last — the
 // unclosed /* is intentional and swallows every byte to EOF).
 /* never closes

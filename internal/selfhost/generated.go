@@ -49960,6 +49960,7 @@ func runCheckGates(cx *ElabCx) {
 	runAmbientGate(cx)
 	runReproducibleCapabilityGate(cx)
 	runCapabilitySignatureGate(cx)
+	runStructuredIntentGate(cx)
 }
 
 // Osty: /tmp/selfhost_merged.osty:24554:1
@@ -70955,4 +70956,457 @@ func isNonDeterministicCapabilityName(name string) bool {
 	default:
 		return false
 	}
+}
+
+// ---------------------------------------------------------------------
+// G42 — structured intent gate (E0430–E0436, v0.6 §3.12).
+// Mirror of toolchain/check_gates.osty::runStructuredIntentGate so the
+// host-side generated checker emits the same diagnostics as the LLVM
+// self-host until the bootstrapped seed catches up.
+// ---------------------------------------------------------------------
+
+func checkCodePurposeNotStringLiteral() string { return "E0434" }
+func checkCodeExampleUnknownKey() string       { return "E0435" }
+func checkCodeFixtureNonFunction() string      { return "E0436" }
+func checkCodeExampleArityMismatch() string    { return "E0431" }
+func checkCodeFixtureNonZeroArity() string     { return "E0432" }
+func checkCodeExampleUnknownFixture() string   { return "E0433" }
+
+func diagPurposeNotStringLiteral(detail string, start int, end int) *CheckDiagnostic {
+	return checkDiagWithNotes(
+		checkCodePurposeNotStringLiteral(),
+		fmt.Sprintf("`#[purpose]` argument must be a plain string literal (%s)", ostyToString(detail)),
+		start,
+		end,
+		[]string{
+			"LANG_SPEC §3.12.1: `#[purpose]` accepts exactly one plain `\"...\"` literal",
+			"hint: replace the argument with a single non-interpolated string literal",
+		},
+	)
+}
+
+func diagExampleUnknownKey(fnName string, key string, start int, end int) *CheckDiagnostic {
+	return checkDiagWithNotes(
+		checkCodeExampleUnknownKey(),
+		fmt.Sprintf("`#[example]` on `%s` uses unknown key `%s`", ostyToString(fnName), ostyToString(key)),
+		start,
+		end,
+		[]string{
+			"LANG_SPEC §3.12.2: `#[example]` keys are `input`, `output`, `uses`",
+			"hint: rename the key to one of the catalog entries, or drop it",
+		},
+	)
+}
+
+func diagFixtureNonFunction(declName string, kind string, start int, end int) *CheckDiagnostic {
+	return checkDiagWithNotes(
+		checkCodeFixtureNonFunction(),
+		fmt.Sprintf("`#[fixture]` cannot be applied to %s `%s`; only functions are eligible", ostyToString(kind), ostyToString(declName)),
+		start,
+		end,
+		[]string{
+			"LANG_SPEC §3.12.3: `#[fixture]` registers a zero-arity factory function",
+			"hint: move `#[fixture]` to a `fn` that returns the value",
+		},
+	)
+}
+
+func diagFixtureNonZeroArity(fnName string, paramCount int, start int, end int) *CheckDiagnostic {
+	return checkDiagWithNotes(
+		checkCodeFixtureNonZeroArity(),
+		fmt.Sprintf("`#[fixture]` function `%s` has %d parameter(s); fixtures must be zero-arity", ostyToString(fnName), paramCount),
+		start,
+		end,
+		[]string{
+			"LANG_SPEC §3.12.3: fixtures must be zero-arity to be sharable across docs / tests / context",
+			"hint: remove the parameters, or drop `#[fixture]`",
+		},
+	)
+}
+
+func diagExampleArityMismatch(fnName string, expected int, got int, start int, end int) *CheckDiagnostic {
+	return checkDiagWithNotes(
+		checkCodeExampleArityMismatch(),
+		fmt.Sprintf("`#[example]` on `%s`: expected %d input(s), got %d", ostyToString(fnName), expected, got),
+		start,
+		end,
+		[]string{
+			"LANG_SPEC §3.12.2: example input count must match the function's positional arity",
+			"hint: adjust the input list to match the function's parameters",
+		},
+	)
+}
+
+func diagExampleUnknownFixture(fnName string, fixtureName string, start int, end int) *CheckDiagnostic {
+	return checkDiagWithNotes(
+		checkCodeExampleUnknownFixture(),
+		fmt.Sprintf("`#[example]` on `%s` references unknown fixture `%s`", ostyToString(fnName), ostyToString(fixtureName)),
+		start,
+		end,
+		[]string{
+			"LANG_SPEC §3.12.3: fixture names must resolve to a `#[fixture]` declaration",
+			"hint: declare the fixture, or correct the name",
+		},
+	)
+}
+
+// runStructuredIntentGate validates `#[purpose]` / `#[example]` /
+// `#[fixture]` annotations against §3.12.
+func runStructuredIntentGate(cx *ElabCx) {
+	if cx == nil || cx.ast == nil || cx.ast.arena == nil {
+		return
+	}
+	arena := cx.ast.arena
+	fixtureNames := collectFixtureNames(arena)
+	for _, declIdx := range arena.decls {
+		node := astArenaNodeAt(arena, declIdx)
+		if node == nil {
+			continue
+		}
+		switch node.kind.(type) {
+		case *AstNodeKind_AstNFnDecl:
+			structuredIntentCheckFn(cx, arena, node, fixtureNames)
+		case *AstNodeKind_AstNStructDecl:
+			structuredIntentCheckPurposeAt(cx, arena, node.extra)
+			structuredIntentCheckFixtureNonFn(cx, arena, node.text, "struct", node.extra)
+			structuredIntentCheckStructMembers(cx, arena, node, fixtureNames)
+		case *AstNodeKind_AstNEnumDecl:
+			structuredIntentCheckPurposeAt(cx, arena, node.extra)
+			structuredIntentCheckFixtureNonFn(cx, arena, node.text, "enum", node.extra)
+			structuredIntentCheckEnumMembers(cx, arena, node, fixtureNames)
+		case *AstNodeKind_AstNInterfaceDecl:
+			structuredIntentCheckPurposeAt(cx, arena, node.extra)
+			structuredIntentCheckFixtureNonFn(cx, arena, node.text, "interface", node.extra)
+			structuredIntentCheckMethodsList(cx, arena, node, fixtureNames)
+		case *AstNodeKind_AstNTypeAlias:
+			structuredIntentCheckPurposeAt(cx, arena, node.extra)
+			structuredIntentCheckFixtureNonFn(cx, arena, node.text, "type alias", node.extra)
+		case *AstNodeKind_AstNLet, *AstNodeKind_AstNLetDecl:
+			structuredIntentCheckPurposeAt(cx, arena, node.extra)
+			structuredIntentCheckFixtureNonFn(cx, arena, node.text, "let", node.extra)
+		}
+	}
+}
+
+func structuredIntentCheckMethodsList(cx *ElabCx, arena *AstArena, parent *AstNode, fixtureNames []string) {
+	if parent == nil {
+		return
+	}
+	for _, memberIdx := range parent.children {
+		member := astArenaNodeAt(arena, memberIdx)
+		if member == nil {
+			continue
+		}
+		if _, ok := member.kind.(*AstNodeKind_AstNFnDecl); ok {
+			structuredIntentCheckFn(cx, arena, member, fixtureNames)
+		}
+	}
+}
+
+func structuredIntentCheckStructMembers(cx *ElabCx, arena *AstArena, parent *AstNode, fixtureNames []string) {
+	if parent == nil {
+		return
+	}
+	for _, memberIdx := range parent.children {
+		member := astArenaNodeAt(arena, memberIdx)
+		if member == nil {
+			continue
+		}
+		switch member.kind.(type) {
+		case *AstNodeKind_AstNFnDecl:
+			structuredIntentCheckFn(cx, arena, member, fixtureNames)
+		case *AstNodeKind_AstNField_:
+			structuredIntentCheckPurposeAt(cx, arena, member.extra)
+			structuredIntentCheckFixtureNonFn(cx, arena, member.text, "field", member.extra)
+		}
+	}
+}
+
+func structuredIntentCheckEnumMembers(cx *ElabCx, arena *AstArena, parent *AstNode, fixtureNames []string) {
+	if parent == nil {
+		return
+	}
+	for _, memberIdx := range parent.children {
+		member := astArenaNodeAt(arena, memberIdx)
+		if member == nil {
+			continue
+		}
+		switch member.kind.(type) {
+		case *AstNodeKind_AstNFnDecl:
+			structuredIntentCheckFn(cx, arena, member, fixtureNames)
+		case *AstNodeKind_AstNVariant:
+			structuredIntentCheckPurposeAt(cx, arena, member.extra)
+			structuredIntentCheckFixtureNonFn(cx, arena, member.text, "enum variant", member.extra)
+		}
+	}
+}
+
+func structuredIntentCheckFn(cx *ElabCx, arena *AstArena, fnNode *AstNode, fixtureNames []string) {
+	if fnNode == nil || fnNode.extra < 0 {
+		return
+	}
+	structuredIntentCheckPurposeAt(cx, arena, fnNode.extra)
+	fixtureAnnots := structuredIntentCollectAnnotations(arena, fnNode.extra, "fixture")
+	for range fixtureAnnots {
+		paramCount := fnParamCountExcludingSelf(arena, fnNode)
+		if paramCount > 0 {
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagFixtureNonZeroArity(fnNode.text, paramCount, fnNode.start, fnNode.end))
+		}
+	}
+	exampleAnnots := structuredIntentCollectAnnotations(arena, fnNode.extra, "example")
+	for _, annot := range exampleAnnots {
+		structuredIntentCheckExample(cx, arena, annot, fnNode, fixtureNames)
+	}
+}
+
+func structuredIntentCheckPurposeAt(cx *ElabCx, arena *AstArena, annotIdx int) {
+	if annotIdx < 0 {
+		return
+	}
+	purposeAnnots := structuredIntentCollectAnnotations(arena, annotIdx, "purpose")
+	for _, annot := range purposeAnnots {
+		structuredIntentValidatePurposeArgs(cx, arena, annot)
+	}
+}
+
+func structuredIntentValidatePurposeArgs(cx *ElabCx, arena *AstArena, annot *AstNode) {
+	if annot == nil {
+		return
+	}
+	argCount := len(annot.children)
+	if argCount == 0 {
+		cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagPurposeNotStringLiteral("missing argument", annot.start, annot.end))
+		return
+	}
+	if argCount > 1 {
+		cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagPurposeNotStringLiteral(fmt.Sprintf("expected exactly one argument, got %d", argCount), annot.start, annot.end))
+	}
+	first := astArenaNodeAt(arena, annot.children[0])
+	issue := classifyPurposeArg(first)
+	if issue != "" {
+		cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagPurposeNotStringLiteral(issue, first.start, first.end))
+	}
+}
+
+func classifyPurposeArg(arg *AstNode) string {
+	if arg == nil {
+		return "missing argument"
+	}
+	if _, ok := arg.kind.(*AstNodeKind_AstNField_); ok {
+		return "argument has `key = value` form; use a plain string literal"
+	}
+	if _, ok := arg.kind.(*AstNodeKind_AstNStringLit); !ok {
+		return "argument is not a string literal"
+	}
+	if strings.HasPrefix(arg.text, "r\"") {
+		return "raw string literals are not accepted"
+	}
+	if strings.HasPrefix(arg.text, "\"\"\"") {
+		return "triple-quoted strings are not accepted"
+	}
+	if len(arg.children) > 0 {
+		return "interpolated strings are not accepted"
+	}
+	if containsInterpolation(arg.text) {
+		return "interpolated strings are not accepted"
+	}
+	return ""
+}
+
+func structuredIntentCheckFixtureNonFn(cx *ElabCx, arena *AstArena, declName string, kind string, annotIdx int) {
+	if annotIdx < 0 {
+		return
+	}
+	fixtureAnnots := structuredIntentCollectAnnotations(arena, annotIdx, "fixture")
+	for _, annot := range fixtureAnnots {
+		cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagFixtureNonFunction(declName, kind, annot.start, annot.end))
+	}
+}
+
+func structuredIntentCheckExample(cx *ElabCx, arena *AstArena, annot *AstNode, fnNode *AstNode, fixtureNames []string) {
+	if annot == nil || fnNode == nil {
+		return
+	}
+	fnParamCount := fnParamCountExcludingSelf(arena, fnNode)
+	inputCount := 0
+	sawInput := false
+	usesFixture := ""
+	for _, argIdx := range annot.children {
+		arg := astArenaNodeAt(arena, argIdx)
+		if arg == nil {
+			continue
+		}
+		if _, ok := arg.kind.(*AstNodeKind_AstNField_); !ok {
+			continue
+		}
+		key := arg.text
+		switch key {
+		case "input":
+			sawInput = true
+			inputCount = exampleInputArity(arena, arg.left)
+		case "output":
+			// Output runtime check is follow-up; ensure presence only.
+		case "uses":
+			name := annotationStringLiteralValue(arena, arg.left)
+			if name != "" {
+				usesFixture = name
+			}
+		default:
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagExampleUnknownKey(fnNode.text, key, arg.start, arg.end))
+		}
+	}
+	if sawInput && fnParamCount >= 0 && inputCount != fnParamCount {
+		cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagExampleArityMismatch(fnNode.text, fnParamCount, inputCount, annot.start, annot.end))
+	}
+	if usesFixture != "" && !structuredIntentListContains(fixtureNames, usesFixture) {
+		cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagExampleUnknownFixture(fnNode.text, usesFixture, annot.start, annot.end))
+	}
+}
+
+func exampleInputArity(arena *AstArena, valueIdx int) int {
+	if valueIdx < 0 {
+		return 0
+	}
+	v := astArenaNodeAt(arena, valueIdx)
+	if v == nil {
+		return 0
+	}
+	if _, ok := v.kind.(*AstNodeKind_AstNList); ok {
+		return len(v.children)
+	}
+	return 1
+}
+
+func annotationStringLiteralValue(arena *AstArena, valueIdx int) string {
+	if valueIdx < 0 {
+		return ""
+	}
+	v := astArenaNodeAt(arena, valueIdx)
+	if v == nil {
+		return ""
+	}
+	if _, ok := v.kind.(*AstNodeKind_AstNStringLit); !ok {
+		return ""
+	}
+	if len(v.children) > 0 {
+		return ""
+	}
+	raw := v.text
+	if strings.HasPrefix(raw, "r\"") {
+		return ""
+	}
+	if strings.HasPrefix(raw, "\"\"\"") {
+		return ""
+	}
+	n := len(raw)
+	if n < 2 {
+		return raw
+	}
+	if strings.HasPrefix(raw, "\"") && strings.HasSuffix(raw, "\"") {
+		return raw[1 : n-1]
+	}
+	return raw
+}
+
+func collectFixtureNames(arena *AstArena) []string {
+	var out []string
+	for _, declIdx := range arena.decls {
+		node := astArenaNodeAt(arena, declIdx)
+		if node == nil || node.extra < 0 {
+			continue
+		}
+		if _, ok := node.kind.(*AstNodeKind_AstNFnDecl); !ok {
+			continue
+		}
+		fixtureAnnots := structuredIntentCollectAnnotations(arena, node.extra, "fixture")
+		for _, annot := range fixtureAnnots {
+			name := fixtureAnnotName(arena, annot)
+			if name != "" {
+				out = append(out, name)
+			} else {
+				out = append(out, node.text)
+			}
+		}
+	}
+	return out
+}
+
+func fixtureAnnotName(arena *AstArena, annot *AstNode) string {
+	if annot == nil {
+		return ""
+	}
+	for _, argIdx := range annot.children {
+		arg := astArenaNodeAt(arena, argIdx)
+		if arg == nil {
+			continue
+		}
+		if _, ok := arg.kind.(*AstNodeKind_AstNField_); !ok {
+			continue
+		}
+		if arg.text == "name" {
+			return annotationStringLiteralValue(arena, arg.left)
+		}
+	}
+	return ""
+}
+
+func structuredIntentCollectAnnotations(arena *AstArena, idx int, name string) []*AstNode {
+	var out []*AstNode
+	if idx < 0 {
+		return out
+	}
+	structuredIntentCollectAnnotationsWalk(arena, idx, name, &out)
+	return out
+}
+
+func structuredIntentCollectAnnotationsWalk(arena *AstArena, idx int, name string, out *[]*AstNode) {
+	if idx < 0 {
+		return
+	}
+	node := astArenaNodeAt(arena, idx)
+	if node == nil {
+		return
+	}
+	if _, ok := node.kind.(*AstNodeKind_AstNAnnotation); !ok {
+		return
+	}
+	if node.text == name {
+		*out = append(*out, node)
+		return
+	}
+	if node.text == "__group" {
+		for _, childIdx := range node.children {
+			structuredIntentCollectAnnotationsWalk(arena, childIdx, name, out)
+		}
+	}
+}
+
+func fnParamCountExcludingSelf(arena *AstArena, fnNode *AstNode) int {
+	if fnNode == nil {
+		return 0
+	}
+	count := 0
+	for _, paramIdx := range fnNode.children {
+		param := astArenaNodeAt(arena, paramIdx)
+		if param == nil {
+			continue
+		}
+		if _, ok := param.kind.(*AstNodeKind_AstNParam); !ok {
+			continue
+		}
+		if param.text == "self" {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+func structuredIntentListContains(xs []string, x string) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
 }

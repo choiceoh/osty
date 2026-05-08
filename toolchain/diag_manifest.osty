@@ -183,6 +183,9 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
     if code == "E0431" { return FamilyAnnotation }
     if code == "E0432" { return FamilyAnnotation }
     if code == "E0433" { return FamilyAnnotation }
+    if code == "E0434" { return FamilyAnnotation }
+    if code == "E0435" { return FamilyAnnotation }
+    if code == "E0436" { return FamilyAnnotation }
     // G45 — Golden tests (§11.5)
     if code == "E0444" { return FamilyAnnotation }
     if code == "E0445" { return FamilyAnnotation }
