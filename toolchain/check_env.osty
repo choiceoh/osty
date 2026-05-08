@@ -2272,11 +2272,74 @@ fn checkInstallErrorIntrinsics(env: CheckEnv) {
     checkMarkFnHasBody(env, "downcast", "Error")
 }
 
+/// checkInstallDurationSuffixesFor registers the eight zero-arg duration
+/// constructor methods (`.ns`, `.us`, `.ms`, `.s`, `.minutes`, `.h`,
+/// `.days`, `.weeks`) for a single integer/float owner type. Mirrors
+/// `internal/selfhost/primitive_arith_register.go::registerDurationConstructors`.
+///
+/// Pulled out of `checkInstallChannelIntrinsics` so the hot path is a
+/// single basic block (no for-loops) — the bootstrap stage0 emitter
+/// requires single-block sequential void shape.
+fn checkInstallDurationSuffixesFor(env: CheckEnv, ownerName: String, ownerTy: Int, tDuration_: Int) {
+    checkRegisterFn(env, CheckFnSig {
+        name: "ns", owner: ownerName, receiverTy: ownerTy,
+        hasReceiver: true, retTy: tDuration_,
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "us", owner: ownerName, receiverTy: ownerTy,
+        hasReceiver: true, retTy: tDuration_,
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "ms", owner: ownerName, receiverTy: ownerTy,
+        hasReceiver: true, retTy: tDuration_,
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "s", owner: ownerName, receiverTy: ownerTy,
+        hasReceiver: true, retTy: tDuration_,
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "minutes", owner: ownerName, receiverTy: ownerTy,
+        hasReceiver: true, retTy: tDuration_,
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "h", owner: ownerName, receiverTy: ownerTy,
+        hasReceiver: true, retTy: tDuration_,
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "days", owner: ownerName, receiverTy: ownerTy,
+        hasReceiver: true, retTy: tDuration_,
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "weeks", owner: ownerName, receiverTy: ownerTy,
+        hasReceiver: true, retTy: tDuration_,
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+}
+
 /// checkInstallChannelIntrinsics registers the intrinsic methods on
 /// the `Channel<T>` runtime type that `thread.chan::<T>(buf)` yields.
 /// Also registers `Channel` and `Handle` as types so receiver-based
 /// generic seeding (`ch.close()` binds T from the `Channel<Int>`
 /// receiver) works without per-site turbofish.
+///
+/// The body is intentionally control-flow-flat (no for/if/match) so
+/// that the bootstrap stage0 emitter can lower it via the
+/// `matchSequentialVoid` pattern.
 fn checkInstallChannelIntrinsics(env: CheckEnv) {
     let tys = env.tys
     let tT = tyNamed(tys, "T", [])
@@ -2324,35 +2387,27 @@ fn checkInstallChannelIntrinsics(env: CheckEnv) {
         generics: gT, genericBounds: [],
     })
     // Int duration suffixes (spec §10.20). `5.s`, `30.minutes`,
-    // `1000.ns`, etc. — zero-arg methods on every integer kind returning
-    // Duration. Mirrors `internal/selfhost/primitive_arith_register.go::registerDurationConstructors`
-    // so the future LLVM-built native checker stays in sync with the
-    // Go-side surface.
-    let durationOwners = [
-        ("Int", tInt(env.tys)),
-        ("Int8", tInt8(env.tys)),
-        ("Int16", tInt16(env.tys)),
-        ("Int32", tInt32(env.tys)),
-        ("Int64", tInt64(env.tys)),
-        ("UInt8", tUInt8(env.tys)),
-        ("UInt16", tUInt16(env.tys)),
-        ("UInt32", tUInt32(env.tys)),
-        ("UInt64", tUInt64(env.tys)),
-        ("Byte", tByte(env.tys)),
-        ("Float", tFloat(env.tys)),
-        ("Float32", tFloat32(env.tys)),
-        ("Float64", tFloat64(env.tys)),
-    ]
-    for (ownerName, ownerTy) in durationOwners {
-        for suffix in ["ns", "us", "ms", "s", "minutes", "h", "days", "weeks"] {
-            checkRegisterFn(env, CheckFnSig {
-                name: suffix, owner: ownerName, receiverTy: ownerTy,
-                hasReceiver: true, retTy: tDuration_,
-                paramNames: [], paramTys: [],
-                generics: [], genericBounds: [],
-            })
-        }
-    }
+    // `1000.ns`, etc. — zero-arg methods on every integer / float kind
+    // returning Duration. Mirrors
+    // `internal/selfhost/primitive_arith_register.go::registerDurationConstructors`.
+    //
+    // Each owner explicitly forwarded to `checkInstallDurationSuffixesFor`
+    // (rather than a nested loop over a tuple list) so this function
+    // stays single-basic-block — the bootstrap stage0 emitter requires
+    // that shape.
+    checkInstallDurationSuffixesFor(env, "Int",     tInt(env.tys),     tDuration_)
+    checkInstallDurationSuffixesFor(env, "Int8",    tInt8(env.tys),    tDuration_)
+    checkInstallDurationSuffixesFor(env, "Int16",   tInt16(env.tys),   tDuration_)
+    checkInstallDurationSuffixesFor(env, "Int32",   tInt32(env.tys),   tDuration_)
+    checkInstallDurationSuffixesFor(env, "Int64",   tInt64(env.tys),   tDuration_)
+    checkInstallDurationSuffixesFor(env, "UInt8",   tUInt8(env.tys),   tDuration_)
+    checkInstallDurationSuffixesFor(env, "UInt16",  tUInt16(env.tys),  tDuration_)
+    checkInstallDurationSuffixesFor(env, "UInt32",  tUInt32(env.tys),  tDuration_)
+    checkInstallDurationSuffixesFor(env, "UInt64",  tUInt64(env.tys),  tDuration_)
+    checkInstallDurationSuffixesFor(env, "Byte",    tByte(env.tys),    tDuration_)
+    checkInstallDurationSuffixesFor(env, "Float",   tFloat(env.tys),   tDuration_)
+    checkInstallDurationSuffixesFor(env, "Float32", tFloat32(env.tys), tDuration_)
+    checkInstallDurationSuffixesFor(env, "Float64", tFloat64(env.tys), tDuration_)
     // Group.spawn(body: fn() -> T) -> Handle<T> — structural concurrency
     // helper that spawns a scoped task inside a `taskGroup(|g| { ... })`
     // body. Spec §B.6 canonical pattern.
@@ -2397,6 +2452,400 @@ fn checkInstallChannelIntrinsics(env: CheckEnv) {
         name: "join", owner: "Handle", receiverTy: tHandleT, hasReceiver: true, retTy: tT,
         paramNames: [], paramTys: [],
         generics: gT, genericBounds: [],
+    })
+}
+
+/// installIntArithMethodsFor registers the spec §10.20 integer
+/// arithmetic / wrapping / checked / saturating / conversion intrinsics
+/// for a single integer owner type (`Int`, `Int8`, ..., `Byte`).
+///
+/// Pulled out of `checkInstallBuiltinMethods` and inner loops fully
+/// unrolled so this body is single-basic-block — the bootstrap stage0
+/// emitter requires that shape, and inlining at the call site
+/// (10 owners × 38 calls = 380 inline calls) would dwarf the rest of
+/// the function.
+fn installIntArithMethodsFor(env: CheckEnv, ownerName: String, ty: Int, tys: TyArena, tString_: Int) {
+    // 5 single calls: abs / signum / min / max / clamp
+    checkRegisterFn(env, CheckFnSig {
+        name: "abs", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "signum", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "min", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "max", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "clamp", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["lo", "hi"], paramTys: [ty, ty], generics: [], genericBounds: [],
+    })
+
+    // 5 wrapping arithmetic — `other: ty`, returns `ty`
+    checkRegisterFn(env, CheckFnSig {
+        name: "wrappingAdd", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "wrappingSub", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "wrappingMul", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "wrappingDiv", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "wrappingMod", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+
+    // 3 wrapping shift+pow — `b: Int`, returns `ty`
+    checkRegisterFn(env, CheckFnSig {
+        name: "wrappingShl", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["b"], paramTys: [tInt(tys)], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "wrappingShr", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["b"], paramTys: [tInt(tys)], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "pow", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["b"], paramTys: [tInt(tys)], generics: [], genericBounds: [],
+    })
+
+    // 2 wrapping unary
+    checkRegisterFn(env, CheckFnSig {
+        name: "wrappingAbs", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "wrappingNeg", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+
+    // 5 checked arithmetic — returns `Optional<ty>`
+    let tOptTy = tyOptional(tys, ty)
+    checkRegisterFn(env, CheckFnSig {
+        name: "checkedAdd", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tOptTy,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "checkedSub", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tOptTy,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "checkedMul", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tOptTy,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "checkedDiv", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tOptTy,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "checkedMod", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tOptTy,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+
+    // 2 checked shift — `b: Int`, returns `Optional<ty>`
+    checkRegisterFn(env, CheckFnSig {
+        name: "checkedShl", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tOptTy,
+        paramNames: ["b"], paramTys: [tInt(tys)], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "checkedShr", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tOptTy,
+        paramNames: ["b"], paramTys: [tInt(tys)], generics: [], genericBounds: [],
+    })
+
+    // 2 checked unary — returns `Optional<ty>`
+    checkRegisterFn(env, CheckFnSig {
+        name: "checkedAbs", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tOptTy,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "checkedNeg", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tOptTy,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+
+    // 4 saturating arithmetic — `other: ty`, returns `ty`
+    checkRegisterFn(env, CheckFnSig {
+        name: "saturatingAdd", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "saturatingSub", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "saturatingMul", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "saturatingDiv", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+
+    // Conversions — Result<T, Error> for narrowing, plain T for widening
+    let tErrTy = tyNamed(tys, "Error", [])
+    checkRegisterFn(env, CheckFnSig {
+        name: "toInt", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tInt(tys),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toInt8", owner: ownerName, receiverTy: ty, hasReceiver: true,
+        retTy: tyNamed(tys, "Result", [tInt8(tys), tErrTy]),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toInt16", owner: ownerName, receiverTy: ty, hasReceiver: true,
+        retTy: tyNamed(tys, "Result", [tInt16(tys), tErrTy]),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toInt32", owner: ownerName, receiverTy: ty, hasReceiver: true,
+        retTy: tyNamed(tys, "Result", [tInt32(tys), tErrTy]),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toInt64", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tInt64(tys),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toUInt8", owner: ownerName, receiverTy: ty, hasReceiver: true,
+        retTy: tyNamed(tys, "Result", [tUInt8(tys), tErrTy]),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toByte", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tByte(tys),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toUInt16", owner: ownerName, receiverTy: ty, hasReceiver: true,
+        retTy: tyNamed(tys, "Result", [tUInt16(tys), tErrTy]),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toUInt32", owner: ownerName, receiverTy: ty, hasReceiver: true,
+        retTy: tyNamed(tys, "Result", [tUInt32(tys), tErrTy]),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toUInt64", owner: ownerName, receiverTy: ty, hasReceiver: true,
+        retTy: tyNamed(tys, "Result", [tUInt64(tys), tErrTy]),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toFloat", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tFloat(tys),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toFloat32", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tFloat32(tys),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toFloat64", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tFloat64(tys),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toChar", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tChar(tys),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toString", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tString_,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+}
+
+/// installFloatArithMethodsFor registers the spec §10.20 float
+/// arithmetic / trig / log / conversion / Bool predicate intrinsics
+/// for a single float owner type (`Float`, `Float32`, `Float64`).
+///
+/// Same single-basic-block constraint as `installIntArithMethodsFor`
+/// — all four inner loops are unrolled.
+fn installFloatArithMethodsFor(env: CheckEnv, ownerName: String, ty: Int, tys: TyArena, tString_: Int) {
+    // 19 unary same-typed transforms / trig / log / exp
+    checkRegisterFn(env, CheckFnSig {
+        name: "abs", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "signum", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "floor", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "ceil", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "round", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "trunc", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "fract", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "sqrt", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "cbrt", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "ln", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "log2", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "log10", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "exp", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "sin", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "cos", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "tan", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "asin", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "acos", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "atan", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+
+    // 4 binary same-typed (min/max/atan2/pow)
+    checkRegisterFn(env, CheckFnSig {
+        name: "min", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "max", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "atan2", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "pow", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["other"], paramTys: [ty], generics: [], genericBounds: [],
+    })
+
+    // clamp (lo, hi)
+    checkRegisterFn(env, CheckFnSig {
+        name: "clamp", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
+        paramNames: ["lo", "hi"], paramTys: [ty, ty], generics: [], genericBounds: [],
+    })
+
+    // 3 Bool predicates
+    checkRegisterFn(env, CheckFnSig {
+        name: "isNaN", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tBool(tys),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "isInfinite", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tBool(tys),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "isFinite", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tBool(tys),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+
+    // toBits / toFixed
+    checkRegisterFn(env, CheckFnSig {
+        name: "toBits", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tUInt64(tys),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toFixed", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tString_,
+        paramNames: ["n"], paramTys: [tInt(tys)], generics: [], genericBounds: [],
+    })
+
+    // 4 checked Int conversions — Result<Int, Error>
+    let tErrTy = tyNamed(tys, "Error", [])
+    let tResultIntErr = tyNamed(tys, "Result", [tInt(tys), tErrTy])
+    checkRegisterFn(env, CheckFnSig {
+        name: "toIntTrunc", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tResultIntErr,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toIntRound", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tResultIntErr,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toIntFloor", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tResultIntErr,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toIntCeil", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tResultIntErr,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+
+    // Plain casts
+    checkRegisterFn(env, CheckFnSig {
+        name: "toInt", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tInt(tys),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toInt32", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tInt32(tys),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toInt64", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tInt64(tys),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toFloat", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tFloat(tys),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toFloat32", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tFloat32(tys),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toFloat64", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tFloat64(tys),
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toString", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tString_,
+        paramNames: [], paramTys: [], generics: [], genericBounds: [],
     })
 }
 
@@ -3345,20 +3794,49 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
         paramNames: [], paramTys: [],
         generics: [], genericBounds: [],
     })
-    for name in ["isDigit", "isAlpha", "isAlphanumeric", "isWhitespace", "isUpper", "isLower"] {
-        checkRegisterFn(env, CheckFnSig {
-            name, owner: "Char", receiverTy: tChar(tys), hasReceiver: true, retTy: tBool(tys),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-    }
-    for name in ["toUpper", "toLower"] {
-        checkRegisterFn(env, CheckFnSig {
-            name, owner: "Char", receiverTy: tChar(tys), hasReceiver: true, retTy: tChar(tys),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-    }
+    // Char predicate / case methods unrolled in place so this function
+    // stays single-basic-block for the bootstrap stage0 emitter (which
+    // only handles `matchSequentialVoid` shape).
+    checkRegisterFn(env, CheckFnSig {
+        name: "isDigit", owner: "Char", receiverTy: tChar(tys), hasReceiver: true, retTy: tBool(tys),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "isAlpha", owner: "Char", receiverTy: tChar(tys), hasReceiver: true, retTy: tBool(tys),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "isAlphanumeric", owner: "Char", receiverTy: tChar(tys), hasReceiver: true, retTy: tBool(tys),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "isWhitespace", owner: "Char", receiverTy: tChar(tys), hasReceiver: true, retTy: tBool(tys),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "isUpper", owner: "Char", receiverTy: tChar(tys), hasReceiver: true, retTy: tBool(tys),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "isLower", owner: "Char", receiverTy: tChar(tys), hasReceiver: true, retTy: tBool(tys),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toUpper", owner: "Char", receiverTy: tChar(tys), hasReceiver: true, retTy: tChar(tys),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
+    checkRegisterFn(env, CheckFnSig {
+        name: "toLower", owner: "Char", receiverTy: tChar(tys), hasReceiver: true, retTy: tChar(tys),
+        paramNames: [], paramTys: [],
+        generics: [], genericBounds: [],
+    })
     checkRegisterFn(env, CheckFnSig {
         name: "toInt", owner: "Byte", receiverTy: tByte(tys), hasReceiver: true, retTy: tInt(tys),
         paramNames: [], paramTys: [],
@@ -3393,184 +3871,20 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
     // backend's concern; the checker accepts every width listed in
     // `#[intrinsic_methods(Int, Int8, Int16, Int32, Int64, UInt8,
     // UInt16, UInt32, UInt64, Byte)]`.
-    let intArithKinds: List<(String, Int)> = [
-        ("Int", tInt(tys)),
-        ("Int8", tInt8(tys)),
-        ("Int16", tInt16(tys)),
-        ("Int32", tInt32(tys)),
-        ("Int64", tInt64(tys)),
-        ("UInt8", tUInt8(tys)),
-        ("UInt16", tUInt16(tys)),
-        ("UInt32", tUInt32(tys)),
-        ("UInt64", tUInt64(tys)),
-        ("Byte", tByte(tys)),
-    ]
-    for (ownerName, ty) in intArithKinds {
-        checkRegisterFn(env, CheckFnSig {
-            name: "abs", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "signum", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "min", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
-            paramNames: ["other"], paramTys: [ty],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "max", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
-            paramNames: ["other"], paramTys: [ty],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "clamp", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
-            paramNames: ["lo", "hi"], paramTys: [ty, ty],
-            generics: [], genericBounds: [],
-        })
-        for name in ["wrappingAdd", "wrappingSub", "wrappingMul", "wrappingDiv", "wrappingMod"] {
-            checkRegisterFn(env, CheckFnSig {
-                name, owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
-                paramNames: ["other"], paramTys: [ty],
-                generics: [], genericBounds: [],
-            })
-        }
-        for name in ["wrappingShl", "wrappingShr", "pow"] {
-            checkRegisterFn(env, CheckFnSig {
-                name, owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
-                paramNames: ["b"], paramTys: [tInt(tys)],
-                generics: [], genericBounds: [],
-            })
-        }
-        for name in ["wrappingAbs", "wrappingNeg"] {
-            checkRegisterFn(env, CheckFnSig {
-                name, owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
-                paramNames: [], paramTys: [],
-                generics: [], genericBounds: [],
-            })
-        }
-        for name in ["checkedAdd", "checkedSub", "checkedMul", "checkedDiv", "checkedMod"] {
-            checkRegisterFn(env, CheckFnSig {
-                name, owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tyOptional(tys, ty),
-                paramNames: ["other"], paramTys: [ty],
-                generics: [], genericBounds: [],
-            })
-        }
-        for name in ["checkedShl", "checkedShr"] {
-            checkRegisterFn(env, CheckFnSig {
-                name, owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tyOptional(tys, ty),
-                paramNames: ["b"], paramTys: [tInt(tys)],
-                generics: [], genericBounds: [],
-            })
-        }
-        for name in ["checkedAbs", "checkedNeg"] {
-            checkRegisterFn(env, CheckFnSig {
-                name, owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tyOptional(tys, ty),
-                paramNames: [], paramTys: [],
-                generics: [], genericBounds: [],
-            })
-        }
-        for name in ["saturatingAdd", "saturatingSub", "saturatingMul", "saturatingDiv"] {
-            checkRegisterFn(env, CheckFnSig {
-                name, owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
-                paramNames: ["other"], paramTys: [ty],
-                generics: [], genericBounds: [],
-            })
-        }
-        checkRegisterFn(env, CheckFnSig {
-            name: "toInt", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tInt(tys),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toInt8", owner: ownerName, receiverTy: ty, hasReceiver: true,
-            retTy: tyNamed(tys, "Result", [tInt8(tys), tyNamed(tys, "Error", [])]),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toInt16", owner: ownerName, receiverTy: ty, hasReceiver: true,
-            retTy: tyNamed(tys, "Result", [tInt16(tys), tyNamed(tys, "Error", [])]),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toInt32", owner: ownerName, receiverTy: ty, hasReceiver: true,
-            retTy: tyNamed(tys, "Result", [tInt32(tys), tyNamed(tys, "Error", [])]),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toInt64", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tInt64(tys),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toUInt8", owner: ownerName, receiverTy: ty, hasReceiver: true,
-            retTy: tyNamed(tys, "Result", [tUInt8(tys), tyNamed(tys, "Error", [])]),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toByte", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tByte(tys),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toUInt16", owner: ownerName, receiverTy: ty, hasReceiver: true,
-            retTy: tyNamed(tys, "Result", [tUInt16(tys), tyNamed(tys, "Error", [])]),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toUInt32", owner: ownerName, receiverTy: ty, hasReceiver: true,
-            retTy: tyNamed(tys, "Result", [tUInt32(tys), tyNamed(tys, "Error", [])]),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toUInt64", owner: ownerName, receiverTy: ty, hasReceiver: true,
-            retTy: tyNamed(tys, "Result", [tUInt64(tys), tyNamed(tys, "Error", [])]),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toFloat", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tFloat(tys),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toFloat32", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tFloat32(tys),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toFloat64", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tFloat64(tys),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toChar", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tChar(tys),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        // toString — narrow widths share the i64 ABI on the LLVM side
-        // and dispatch through `osty_rt_int_to_string`. The loop here
-        // matches the `#[intrinsic_methods(Int, Int8, …)]` decoration
-        // on `primitives/int.osty` so `let n: Int8 = 3; n.toString()`
-        // resolves the same way `let n: Int = 3; n.toString()` does.
-        // The Int (untyped-default) registration below is kept too so
-        // the per-kind loop doesn't collide with explicit fixtures —
-        // duplicates are deduped by `checkRegisterFn`.
-        checkRegisterFn(env, CheckFnSig {
-            name: "toString", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tString_,
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-    }
+    // Integer arithmetic methods registered via `installIntArithMethodsFor`
+    // helper, called once per owner kind. The outer loop is unrolled to
+    // keep this function single-basic-block (bootstrap stage0 emitter
+    // requirement); the helper itself unrolls all inner loops.
+    installIntArithMethodsFor(env, "Int",    tInt(tys),    tys, tString_)
+    installIntArithMethodsFor(env, "Int8",   tInt8(tys),   tys, tString_)
+    installIntArithMethodsFor(env, "Int16",  tInt16(tys),  tys, tString_)
+    installIntArithMethodsFor(env, "Int32",  tInt32(tys),  tys, tString_)
+    installIntArithMethodsFor(env, "Int64",  tInt64(tys),  tys, tString_)
+    installIntArithMethodsFor(env, "UInt8",  tUInt8(tys),  tys, tString_)
+    installIntArithMethodsFor(env, "UInt16", tUInt16(tys), tys, tString_)
+    installIntArithMethodsFor(env, "UInt32", tUInt32(tys), tys, tString_)
+    installIntArithMethodsFor(env, "UInt64", tUInt64(tys), tys, tString_)
+    installIntArithMethodsFor(env, "Byte",   tByte(tys),   tys, tString_)
 
     // ----- Float methods (`primitives/float.osty`) -----
     // Same `#[intrinsic_methods(Float, Float32, Float64)]` shape as the
@@ -3584,96 +3898,11 @@ fn checkInstallBuiltinMethods(env: CheckEnv) {
     //   - checked `Result<Int, Error>` conversions
     //   - compatibility explicit casts (`toInt`, `toInt32`, ...)
     //   - `toString()`
-    let floatArithKinds: List<(String, Int)> = [
-        ("Float", tFloat(tys)),
-        ("Float32", tFloat32(tys)),
-        ("Float64", tFloat64(tys)),
-    ]
-    for (ownerName, ty) in floatArithKinds {
-        for name in [
-            "abs", "signum", "floor", "ceil", "round", "trunc", "fract",
-            "sqrt", "cbrt", "ln", "log2", "log10", "exp",
-            "sin", "cos", "tan", "asin", "acos", "atan",
-        ] {
-            checkRegisterFn(env, CheckFnSig {
-                name, owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
-                paramNames: [], paramTys: [],
-                generics: [], genericBounds: [],
-            })
-        }
-        for name in ["min", "max", "atan2", "pow"] {
-            checkRegisterFn(env, CheckFnSig {
-                name, owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
-                paramNames: ["other"], paramTys: [ty],
-                generics: [], genericBounds: [],
-            })
-        }
-        checkRegisterFn(env, CheckFnSig {
-            name: "clamp", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: ty,
-            paramNames: ["lo", "hi"], paramTys: [ty, ty],
-            generics: [], genericBounds: [],
-        })
-        for name in ["isNaN", "isInfinite", "isFinite"] {
-            checkRegisterFn(env, CheckFnSig {
-                name, owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tBool(tys),
-                paramNames: [], paramTys: [],
-                generics: [], genericBounds: [],
-            })
-        }
-        checkRegisterFn(env, CheckFnSig {
-            name: "toBits", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tUInt64(tys),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toFixed", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tString_,
-            paramNames: ["n"], paramTys: [tInt(tys)],
-            generics: [], genericBounds: [],
-        })
-        for name in ["toIntTrunc", "toIntRound", "toIntFloor", "toIntCeil"] {
-            checkRegisterFn(env, CheckFnSig {
-                name, owner: ownerName, receiverTy: ty, hasReceiver: true,
-                retTy: tyNamed(tys, "Result", [tInt(tys), tyNamed(tys, "Error", [])]),
-                paramNames: [], paramTys: [],
-                generics: [], genericBounds: [],
-            })
-        }
-        checkRegisterFn(env, CheckFnSig {
-            name: "toInt", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tInt(tys),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toInt32", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tInt32(tys),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toInt64", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tInt64(tys),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toFloat", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tFloat(tys),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toFloat32", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tFloat32(tys),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toFloat64", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tFloat64(tys),
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-        checkRegisterFn(env, CheckFnSig {
-            name: "toString", owner: ownerName, receiverTy: ty, hasReceiver: true, retTy: tString_,
-            paramNames: [], paramTys: [],
-            generics: [], genericBounds: [],
-        })
-    }
+    // Float arithmetic methods registered via `installFloatArithMethodsFor`
+    // helper. Same single-basic-block discipline as the int section above.
+    installFloatArithMethodsFor(env, "Float",   tFloat(tys),   tys, tString_)
+    installFloatArithMethodsFor(env, "Float32", tFloat32(tys), tys, tString_)
+    installFloatArithMethodsFor(env, "Float64", tFloat64(tys), tys, tString_)
 }
 
 // Preserve a surface-level mirror of `frontCheckResult*`-style bridge
