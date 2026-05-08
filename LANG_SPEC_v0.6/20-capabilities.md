@@ -272,6 +272,7 @@ pub interface MyDb {
 
 #[reproducible_capability]
 pub interface Hash {
+    #[reproducible]
     fn hash(self, data: Bytes) -> Bytes32
 }
 ```
@@ -280,8 +281,9 @@ pub interface Hash {
 "deterministic 함수만 노출함"을 컴파일러에 약속. `#[reproducible]` 검사는 이런
 capability 수신을 허용한다.
 
-**약속 검증**: `#[reproducible_capability]` interface 는 `#[reproducible]` 함수만
-포함할 수 있다 (`E0785`). 즉 capability 자체가 sealed.
+**약속 검증**: 현재 구현은 `#[reproducible_capability]` interface 가
+`#[reproducible]` 함수만 포함하도록 active checker gate 로 검증한다 (`E0783`).
+즉 capability 자체가 sealed.
 
 ### 20.6 Capability deterministic 등급
 

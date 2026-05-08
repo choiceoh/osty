@@ -80,6 +80,7 @@ pub fn checkCodePureViolation() -> String { "E0775" }
 // v0.6 G36 — Capabilities (LANG_SPEC_v0.6/20-capabilities.md §20.8).
 pub fn checkCodeAmbientWrongSite() -> String { "E0780" }
 pub fn checkCodeAmbientUnknownCapability() -> String { "E0781" }
+pub fn checkCodeReproducibleCapabilityNonRepro() -> String { "E0783" }
 pub fn checkCodeAmbientUserCapability() -> String { "E0789" }
 
 // ---------------------------------------------------------------------
@@ -771,6 +772,22 @@ pub fn diagAmbientUnknownCapability(name: String, start: Int, end: Int) -> Check
         [
             "LANG_SPEC §20.6: canonical ambient names are `clock`, `rng`, `env`, `fs`, `net`, `process`, `console`",
             "hint: pass user-defined capabilities as explicit parameters — ambient binding only supports stdlib prelude defaults",
+        ],
+    )
+}
+
+/// diagReproducibleCapabilityNonRepro reports a method inside a
+/// `#[reproducible_capability]` interface that is not itself marked
+/// `#[reproducible]`.
+pub fn diagReproducibleCapabilityNonRepro(interfaceName: String, methodName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeReproducibleCapabilityNonRepro(),
+        "`#[reproducible_capability]` interface `{interfaceName}` method `{methodName}` must be `#[reproducible]`",
+        start,
+        end,
+        [
+            "LANG_SPEC §20.5: reproducible capability interfaces may expose only reproducible methods",
+            "hint: add `#[reproducible]` to the method, or remove `#[reproducible_capability]` from the interface",
         ],
     )
 }

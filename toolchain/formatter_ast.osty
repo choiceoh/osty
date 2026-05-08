@@ -271,6 +271,9 @@ fn ostyAstAggregateDecl(f: OstyAstFormatter, node: AstNode, keyword: String) -> 
         } else {
             line = ostyAstRawTokenRange(f, member.start, member.end)
         }
+        for annLine in ostyAstAnnotationLines(f, member.extra) {
+            lines.push(strings.join([ostyAstIndent(1), annLine], ""))
+        }
         lines.push(strings.join([ostyAstIndent(1), line], ""))
     }
     f.indent = saved
@@ -294,6 +297,28 @@ fn ostyAstVariant(f: OstyAstFormatter, node: AstNode) -> String {
     strings.join([text, ","], "")
 }
 
+fn ostyAstAnnotationLines(f: OstyAstFormatter, extraIdx: Int) -> List<String> {
+    let mut lines: List<String> = []
+    if extraIdx < 0 {
+        return lines
+    }
+    let ann = ostyAstNode(f, extraIdx)
+    if !(ann.kind == AstNAnnotation) {
+        return lines
+    }
+    if ann.text == "__group" {
+        for childIdx in ann.children {
+            let child = ostyAstNode(f, childIdx)
+            if child.kind == AstNAnnotation {
+                lines.push(ostyAstRawTokenRange(f, child.start, child.end))
+            }
+        }
+    } else {
+        lines.push(ostyAstRawTokenRange(f, ann.start, ann.end))
+    }
+    lines
+}
+
 fn ostyAstInterfaceDecl(f: OstyAstFormatter, node: AstNode) -> String {
     let mut head = strings.join([ostyAstVisibility(node), "interface ", node.text], "")
     if node.children2.len() > 0 {
@@ -303,6 +328,10 @@ fn ostyAstInterfaceDecl(f: OstyAstFormatter, node: AstNode) -> String {
     let saved = f.indent
     f.indent = 1
     for memberIdx in node.children {
+        let member = ostyAstNode(f, memberIdx)
+        for annLine in ostyAstAnnotationLines(f, member.extra) {
+            lines.push(strings.join([ostyAstIndent(1), annLine], ""))
+        }
         lines.push(strings.join([ostyAstIndent(1), ostyAstDecl(f, memberIdx)], ""))
     }
     f.indent = saved

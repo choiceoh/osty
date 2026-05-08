@@ -40,5 +40,6 @@ fn test_mainManyAmbient() {
 // ---- #[reproducible_capability] remains a separate interface annotation ----
 #[reproducible_capability]
 interface MyCap {
+    #[reproducible]
     fn now(self) -> Int
 }

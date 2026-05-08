@@ -25879,6 +25879,9 @@ func ostyAstAggregateDecl(f *OstyAstFormatter, node *AstNode, keyword string) st
 			// Osty: /tmp/selfhost_merged.osty:9752:13
 			line = ostyAstRawTokenRange(f, member.start, member.end)
 		}
+		for _, annLine := range ostyAstAnnotationLines(f, member.extra) {
+			lines = append(lines, strings.Join([]string{ostyAstIndent(1), annLine}, ""))
+		}
 		// Osty: /tmp/selfhost_merged.osty:9754:9
 		func() struct{} {
 			lines = append(lines, strings.Join([]string{ostyAstIndent(1), line}, ""))
@@ -25918,6 +25921,28 @@ func ostyAstVariant(f *OstyAstFormatter, node *AstNode) string {
 	return strings.Join([]string{text, ","}, "")
 }
 
+func ostyAstAnnotationLines(f *OstyAstFormatter, extraIdx int) []string {
+	var lines []string = make([]string, 0, 1)
+	if extraIdx < 0 {
+		return lines
+	}
+	ann := ostyAstNode(f, extraIdx)
+	if !ostyEqual(ann.kind, AstNodeKind(&AstNodeKind_AstNAnnotation{})) {
+		return lines
+	}
+	if ann.text == "__group" {
+		for _, childIdx := range ann.children {
+			child := ostyAstNode(f, childIdx)
+			if ostyEqual(child.kind, AstNodeKind(&AstNodeKind_AstNAnnotation{})) {
+				lines = append(lines, ostyAstRawTokenRange(f, child.start, child.end))
+			}
+		}
+	} else {
+		lines = append(lines, ostyAstRawTokenRange(f, ann.start, ann.end))
+	}
+	return lines
+}
+
 // Osty: /tmp/selfhost_merged.osty:9777:1
 func ostyAstInterfaceDecl(f *OstyAstFormatter, node *AstNode) string {
 	// Osty: /tmp/selfhost_merged.osty:9778:5
@@ -25938,6 +25963,10 @@ func ostyAstInterfaceDecl(f *OstyAstFormatter, node *AstNode) string {
 	f.indent = 1
 	// Osty: /tmp/selfhost_merged.osty:9785:5
 	for _, memberIdx := range node.children {
+		member := ostyAstNode(f, memberIdx)
+		for _, annLine := range ostyAstAnnotationLines(f, member.extra) {
+			lines = append(lines, strings.Join([]string{ostyAstIndent(1), annLine}, ""))
+		}
 		// Osty: /tmp/selfhost_merged.osty:9786:9
 		func() struct{} {
 			lines = append(lines, strings.Join([]string{ostyAstIndent(1), ostyAstDecl(f, memberIdx)}, ""))
@@ -28554,6 +28583,10 @@ func checkCodeAmbientUnknownCapability() string {
 	return "E0781"
 }
 
+func checkCodeReproducibleCapabilityNonRepro() string {
+	return "E0783"
+}
+
 func diagAmbientWrongSite(fnName string, start int, end int) *CheckDiagnostic {
 	return checkDiagWithNotes(
 		checkCodeAmbientWrongSite(),
@@ -28576,6 +28609,19 @@ func diagAmbientUnknownCapability(name string, start int, end int) *CheckDiagnos
 		[]string{
 			"LANG_SPEC §20.6: canonical ambient names are `clock`, `rng`, `env`, `fs`, `net`, `process`, `console`",
 			"hint: pass user-defined capabilities as explicit parameters — ambient binding only supports stdlib prelude defaults",
+		},
+	)
+}
+
+func diagReproducibleCapabilityNonRepro(interfaceName string, methodName string, start int, end int) *CheckDiagnostic {
+	return checkDiagWithNotes(
+		checkCodeReproducibleCapabilityNonRepro(),
+		fmt.Sprintf("`#[reproducible_capability]` interface `%s` method `%s` must be `#[reproducible]`", ostyToString(interfaceName), ostyToString(methodName)),
+		start,
+		end,
+		[]string{
+			"LANG_SPEC §20.5: reproducible capability interfaces may expose only reproducible methods",
+			"hint: add `#[reproducible]` to the method, or remove `#[reproducible_capability]` from the interface",
 		},
 	)
 }
@@ -49737,6 +49783,7 @@ func runCheckGates(cx *ElabCx) {
 	runNoAllocGate(cx)
 	runPureGate(cx)
 	runAmbientGate(cx)
+	runReproducibleCapabilityGate(cx)
 }
 
 // Osty: /tmp/selfhost_merged.osty:24554:1
@@ -70257,5 +70304,39 @@ func isCanonicalAmbientName(name string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func runReproducibleCapabilityGate(cx *ElabCx) {
+	if cx == nil || cx.ast == nil || cx.ast.arena == nil {
+		return
+	}
+	arena := cx.ast.arena
+	for _, declIdx := range arena.decls {
+		node := astArenaNodeAt(arena, declIdx)
+		if node == nil {
+			continue
+		}
+		if _, ok := node.kind.(*AstNodeKind_AstNInterfaceDecl); ok {
+			checkReproducibleCapabilityInterface(cx, arena, node)
+		}
+	}
+}
+
+func checkReproducibleCapabilityInterface(cx *ElabCx, arena *AstArena, iface *AstNode) {
+	if iface == nil || iface.extra < 0 {
+		return
+	}
+	if !checkGateAnnotationContains(arena, iface.extra, "reproducible_capability") {
+		return
+	}
+	for _, memberIdx := range iface.children {
+		member := astArenaNodeAt(arena, memberIdx)
+		if member == nil {
+			continue
+		}
+		if _, ok := member.kind.(*AstNodeKind_AstNFnDecl); ok && !checkGateAnnotationContains(arena, member.extra, "reproducible") {
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagReproducibleCapabilityNonRepro(iface.text, member.text, member.start, member.end))
+		}
 	}
 }
