@@ -86,62 +86,6 @@ Phase 5   G37 #[taint] / #[sanitizes] (가장 무거움, 시그니처급 임팩�
 
 ## 4. Extended Chapters
 
-### §3.10 `#[spec("§X.Y")]` (G38)
-
-#### §3.10.1 의미
-
-선언 (fn / struct / enum / interface) 위에 `#[spec("§X.Y")]` 를 붙이면 컴파일러가
-spec 챕터의 해당 section 존재를 검증하고, doc generation / LSP / `osty explain`
-에 cross-reference 를 첨부한다.
-
-```osty
-#[spec("§2.2")]
-fn checkNumericWidening(from: Type, to: Type) -> CheckResult { ... }
-
-#[spec("§4.5")]
-fn lowerTryOperator(expr: AstNode) -> MirNode { ... }
-
-#[spec("§10.1.tier-1-core")]
-pub fn strings_len(s: String) -> Int { ... }
-```
-
-#### §3.10.2 검증
-
-`osty validate-spec` (또는 빌드 시 자동) 이 모든 `#[spec(...)]` 인자를 markdown
-heading anchor 로 해석하고:
-
-- 해당 section 이 존재하지 않으면 `E0790`
-- Section 이 다른 chapter 로 이동했으면 `W0790` (suggested replacement 표시)
-
-#### §3.10.3 사용 위치
-
-- 컴파일러 internal: `internal/check`, `internal/resolve`, `internal/llvmgen`,
-  `toolchain/*.osty` — *권장*
-- Stdlib: `internal/stdlib/modules/*.osty` — *권장*
-- 사용자 코드: 가능 (자기 문서화 용도)
-
-#### §3.10.4 Doc cross-reference
-
-`osty doc` 출력 시 `#[spec(...)]` 가 있는 함수의 hover/문서에 **spec 본문 첫 단락
-inline** 표시. 예:
-
-```
-fn checkNumericWidening(from: Type, to: Type) -> CheckResult
-  Spec: §2.2 Numeric Conversions
-  > Osty allows a small fixed graph of implicit numeric widening and
-  > float-promotion conversions. The conversion graph is Int8 -> Int16
-  > -> Int32 -> Int, Int32 -> Float64, Int -> Float64, ...
-```
-
-#### §3.10.5 진단 코드
-
-| 코드 | 의미 |
-|---|---|
-| `E0790` | `#[spec(...)]` 의 section 이 존재하지 않음 |
-| `W0790` | Section 이 이동됨 (rename suggestion 포함) |
-
----
-
 ### §3.11 `#[reproducible(scope=...)]` (G39)
 
 #### §3.11.1 의미
@@ -451,7 +395,6 @@ fn sampleMinUser() -> User { ... }
 
 사용처:
 - `#[example]` 가 호출하는 fixture: `#[example(uses = "sampleUser")]`
-- `osty test --spec` 의 generator seed
 - `osty doc` 의 코드 예시
 - `osty context <symbol>` 의 sample 항목
 - `#[golden]` 테스트의 입력 (G45)
@@ -469,7 +412,6 @@ $ osty context std.user::createUser
     {"input": ["alice@example.com"], "output": "Ok(42)"},
     {"input": ["invalid"], "output": "Err(EmailError.Format)"}
   ],
-  "spec_refs": ["§10.30"],
   "error_contract": [
     {"variant": "EmailError.Format", "when": "missing @ or wrong format"},
     {"variant": "EmailError.DomainBlocked", "when": "domain is in blocklist"}
@@ -490,91 +432,6 @@ JSON 스키마는 `LANG_SPEC_v0.6/13-tooling.md §13.9` 에서 정의.
 | `E0431` | `#[example]` 의 input arity 가 함수 arity 와 불일치 |
 | `E0432` | `#[fixture]` 함수가 인자를 받음 (must be zero-arity) |
 | `E0433` | `#[example(uses = "X")]` 의 X 가 fixture 가 아님 |
-
----
-
-### §3.13 `spec { ... }` Block (G43)
-
-#### §3.13.1 의도
-
-함수 본문 옆에 *실행 가능한 명세*를 배치. v0 (Phase 3) 에선 `example:` 만 실행,
-`law:` / `invariant:` 는 doc + LSP hover. v1 (Phase 5) 에서 forall property test
-자동 생성.
-
-#### §3.13.2 v0 surface
-
-```osty
-fn normalizeEmail(s: String) -> String {
-    spec {
-        example: normalizeEmail(" Alice@EXAMPLE.COM ") == "alice@example.com"
-        example: normalizeEmail("") == ""
-        law: result == result.trim()
-        law: result == result.toLowerCase()
-        invariant: result.indexOf(" ") == -1
-    }
-
-    s.trim().toLowerCase()
-}
-```
-
-처리:
-- `example:` — `osty test --spec` 가 boolean expression 으로 평가, 실패 시 test
-  fail
-- `law:` / `invariant:` — `osty doc` 출력에 포함, LSP hover 에 표시. *실행 안
-  됨*. `result` 식별자 만 hover scope 에서 의미 있음 (실제 실행 시 임의 입력 평가
-  불가).
-
-#### §3.13.3 v1 surface (Phase 5)
-
-```osty
-fn quicksort<T: Ordered>(xs: List<T>) -> List<T> {
-    spec {
-        forall xs in gen.list(gen.int(), 128):
-            result.toMultiset() == xs.toMultiset()
-
-        forall xs in gen.list(gen.int(), 128):
-            result.windowed(2).all(|w| w[0].le(w[1]))
-
-        example: quicksort([]) == []
-        example: quicksort([3, 1, 2]) == [1, 2, 3]
-    }
-    // ...impl
-}
-```
-
-`forall x in gen:` 형태가 `std.testing.gen.*` generator 와 통합. `osty test
---spec` 가 property-based test runner 로 변환.
-
-#### §3.13.4 Grammar (EBNF 추가)
-
-```
-SpecBlock      ::= 'spec' '{' SpecClause+ '}'
-SpecClause     ::= ExampleClause | LawClause | InvariantClause | ForallClause
-ExampleClause  ::= 'example' ':' Expr (LineEnd)
-LawClause      ::= 'law' ':' Expr (LineEnd)
-InvariantClause::= 'invariant' ':' Expr (LineEnd)
-ForallClause   ::= 'forall' Ident (',' Ident)* 'in' Expr ':' Expr (LineEnd)
-                   (* v1 only, deferred to Phase 5 *)
-```
-
-`spec` 은 contextual keyword (R7) — top-level `fn` / method body 첫
-statement 위치에서만 keyword.
-
-#### §3.13.5 의미 — `result` 식별자
-
-`law:` / `invariant:` 식 내부에서 식별자 `result` 는 *함수 반환값*을 가리킨다
-(virtual binding). 함수 외부에선 의미 없음.
-
-`example:` 식 내부에서는 `result` 미사용. 표현은 boolean expression 으로 직접 평가.
-
-#### §3.13.6 진단 코드
-
-| 코드 | 의미 |
-|---|---|
-| `E0440` | `spec` 블록이 함수 본문 첫 위치가 아님 |
-| `E0441` | `example:` 가 boolean 으로 평가되지 않음 |
-| `E0442` | `law:` / `invariant:` 가 boolean 으로 평가되지 않음 |
-| `E0443` | `forall` 의 generator 가 `Gen<T>` 가 아님 |
 
 ---
 
@@ -938,53 +795,6 @@ fn add(x: Int, y: Int) -> Int { x + y }
 
 ---
 
-### §3.15 `#[budget]` — Static + Runtime 분리 (G46)
-
-#### §3.15.1 Static budget (Phase 4)
-
-```osty
-#[budget(allocs = 0)]
-fn hotLoop(xs: List<Int>) -> Int {
-    let mut sum = 0
-    for x in xs { sum = sum + x }
-    sum
-}
-
-#[budget(io_calls = 0, stack_depth = 100)]
-fn pure_compute(data: Bytes) -> Bytes32 { ... }
-```
-
-컴파일러가 *증명*. 위반 시 `E0795`.
-
-| Budget key | 검증 |
-|---|---|
-| `allocs = N` | GC alloc site 수 정적 카운트 |
-| `io_calls = N` | I/O capability 호출 transitive 카운트 |
-| `stack_depth = N` | 재귀 깊이 분석 (재귀 cycle 감지 시 추가 검사) |
-| `instructions = N` | 컴파일된 함수의 estimated cycle count (LLVM 측정) |
-
-#### §3.15.2 Runtime budget (Phase 5)
-
-```osty
-#[budget(time_ms = 5, p99_ms = 20)]
-fn routeRequest(req: Request) -> Response { ... }
-```
-
-`osty bench --budget` 가 회귀 게이트:
-- `time_ms` — 평균 ≤ 5ms
-- `p99_ms` — p99 ≤ 20ms
-- 위반 시 bench 실패, CI 차단
-
-#### §3.15.3 진단 코드
-
-| 코드 | 의미 |
-|---|---|
-| `E0795` | Static budget 위반 (알loc / io_calls / stack_depth / instructions) |
-| `E0796` | `#[budget]` key 가 알려지지 않음 |
-| `W0795` | Runtime budget 위반 (bench-time, fail 아니라 warn 옵션) |
-
----
-
 ### §13.4 `osty context <symbol>` (G47)
 
 #### §13.4.1 명령 surface
@@ -1033,9 +843,6 @@ osty context --all-stdlib --format=jsonl       # bulk export (one JSON per line)
     }
   ],
   "fixtures_referenced": [],
-  "spec_refs": [
-    {"section": "§10.30.user", "title": "User module"}
-  ],
   "error_contract": [
     {"variant": "EmailError.Format", "when": "missing @ or wrong format"},
     {"variant": "EmailError.DomainBlocked", "when": "domain is in blocklist"},
@@ -1048,10 +855,6 @@ osty context --all-stdlib --format=jsonl       # bulk export (one JSON per line)
     "taint_sources": [],
     "taint_sanitizes": [],
     "taint_sinks": []
-  },
-  "budget": {
-    "static": null,
-    "runtime": null
   },
   "doc_comment": "사용자를 생성한다. ...",
   "diagnostics_emitted": ["E0410", "W0411"],
@@ -1068,12 +871,9 @@ osty context --all-stdlib --format=jsonl       # bulk export (one JSON per line)
 - `stability.level`: G44 의 4 레벨 (`stable | experimental | deprecated | internal`)
 - `examples[].input`: position 별 인자. capability 는 `"<Capability>"` 형 placeholder
 - `examples[].uses_fixture`: G42 fixture 사용 시 fixture 이름, 아니면 null
-- `spec_refs[]`: G38 `#[spec]` 의 모든 등록 — markdown anchor 와 section title
 - `error_contract[]`: G41 의 contract entries
 - `effects.capabilities_required`: 함수 시그니처의 capability parameter 합집합
 - `effects.taint_sources / sanitizes / sinks`: G37 어노테이션 수집
-- `budget.static`: G46 `{"allocs": 0, "io_calls": 0, ...}` 또는 null
-- `budget.runtime`: G46 `{"time_ms": 5, "p99_ms": 20}` 또는 null
 - `callees[]`: `--recursive` 시에만 채워짐, depth 0 에서는 빈 배열
 
 #### §13.4.2 사용 시나리오
@@ -1119,70 +919,24 @@ JSON 직접 query (`osty context --format=json` 또는 LSP custom request
 
 ---
 
-### §4.4 `while` keyword (G49)
-
-#### §4.4.1 동기
-
-v0.5 까지 Osty 는 `while cond { }` 자리에 `for cond { }` 를 사용 (G22 의 `loop`
-와 구별 위해). 의도는 keyword economy — `for` 하나로 두 모드 cover. 그러나 사용
-corpus 에서 *읽기* 단계 mental-model 충돌 보고 다수 (`for` = iteration 이라는
-기대). v0.6 은 `while cond { }` 를 *동의어* 로 도입.
-
-#### §4.4.2 의미
-
-```osty
-while cond { body }      ≡   for cond { body }
-```
-
-- 둘 다 같은 lowering, 같은 type (Unit), 같은 control flow.
-- `for` 모드는 *유지* — deprecate 하지 않는다. 어느 form 도 정답.
-- `for cond { }` 는 G22 도입 시점 (v0.5) 의 형식. `while` 은 v0.6 추가.
-
-#### §4.4.3 Grammar
-
-`while` 은 **fully reserved keyword** (contextual 아님). v0.5 까지 `while` 을
-식별자로 쓴 코드 — 만약 있다면 — 이름 변경 필요. *fresh tree* 이므로 호환성
-영향 0 으로 간주.
-
-```ebnf
-WhileStmt ::= 'while' Expr Block
-```
-
-#### §4.4.4 진단 코드
-
-신규 코드 없음. 기존 control flow 진단 (`E0600` 류) 재사용.
-
----
-
 ## 5. Grammar Changes (v0.5 → v0.6)
 
 ```ebnf
-(* §3.13 G43 — spec block *)
-SpecBlock      ::= 'spec' '{' SpecClause+ '}'
-SpecClause     ::= ExampleClause | LawClause | InvariantClause | ForallClause
-ExampleClause  ::= 'example' ':' Expr (LineEnd)
-LawClause      ::= 'law' ':' Expr (LineEnd)
-InvariantClause::= 'invariant' ':' Expr (LineEnd)
-ForallClause   ::= 'forall' Ident (',' Ident)* 'in' Expr ':' Expr (LineEnd)
-
-(* §4.4 G49 — while as alias *)
-WhileStmt      ::= 'while' Expr Block
-
 (* §21 G37 — annotation on parameter (new position) *)
 ParamDecl      ::= Annotation* Pattern ':' Annotation* Type ('=' DefaultExpr)?
                    (* Annotation* before Pattern is new in v0.6 *)
                    (* Annotation* before Type allows #[taint("...")] String form *)
 
-(* §20 / §3.4.5 / §3.10-3.15 / §7.5 — fixed annotation set extension *)
+(* §20 / §3.4.5 / §3.11-3.14 / §7.5 — fixed annotation set extension *)
 (* Existing Annotation rule unchanged: #[name(args)] form *)
 ```
 
 | 항목 | v0.5 | v0.6 | Δ |
 |---|---:|---:|---:|
-| Reserved keywords | 17 | 18 | +1 (`while` — G49) |
-| Contextual keywords | 10 | 14 | +4 (`spec`, `example`, `law`, `invariant`; `forall` 은 v1 단계) |
-| Fixed annotation set | 11 | 31 | +20 |
-| EBNF productions | 191 | 199 | +8 |
+| Reserved keywords | 17 | 17 | 0 |
+| Contextual keywords | 10 | 10 | 0 |
+| Fixed annotation set | 11 | 27 | +16 |
+| EBNF productions | 191 | 192 | +1 |
 | Lexer token classes | 36 | 36 | 0 |
 
 신규 어노테이션 20:
@@ -1216,11 +970,11 @@ Phase 2 에서 *category-prefix 옵션* 도입 검토:
 | Range | 영역 | 신규 |
 |---|---|---|
 | `E0410–E0429` | Annotation/intent (G41, G42) | E0410, E0411, E0412, E0414, E0420, E0421, E0422, E0423, E0424, E0430, E0431, E0432, E0433 |
-| `E0440–E0449` | Spec block (G43, G44) | E0440, E0441, E0442, E0443, E0444, E0445, E0450, E0451 |
-| `E0780–E0799` | Capability / Reproducible / Budget (G36, G39, G46) | E0780-E0789, E0790, E0795, E0796 |
+| `E0440–E0449` | Golden / evolution (G44, G45) | E0444, E0445, E0450, E0451 |
+| `E0780–E0799` | Capability / Reproducible (G36, G39) | E0780-E0789 |
 | `E0900–E0949` | Information flow (G37) | E0900, E0901, E0902, E0903 |
 | `E2100–E2149` | Publishing (G44) | E2100, E2101 |
-| `W0750–W0799` | Stability / spec ref warnings | W0790, W0795 |
+| `W0750–W0799` | Stability warnings | — |
 | `W0900–W0949` | Flow / declassify warnings | W0901, W0902 |
 | `W2100–W2149` | Publish warnings | W2100 |
 
@@ -1487,27 +1241,24 @@ Phase 5 에서 stdlib sink 4 개 (`db.query`, `process.exec`, `fs.path*`,
 
 ## 7.5 Cross-feature interaction matrix
 
-14 개 결정 (G36–G49) 의 *상호작용*. 같은 함수에 다중 어노테이션 적용 시 의미는
-다음 표가 권위. 11 개 *의미론적 상호작용* feature 만 행/열에 등장 — G47 (osty
-context, 운영 도구), G48 (annotation surface, meta), G49 (`while`, syntactic) 는
-다른 결정과 의미 충돌이 없으므로 별도 행 없음.
+10 개 결정 (G36/G37/G39-G42, G44, G45, G47, G48) 의 *상호작용*. 같은 함수에
+다중 어노테이션 적용 시 의미는 다음 표가 권위. 8 개 *의미론적 상호작용* feature
+만 행/열에 등장 — G47 (osty context, 운영 도구), G48 (annotation surface,
+meta) 은 다른 결정과 의미 충돌이 없으므로 별도 행 없음.
 
 표는 *upper-triangular* 형식 — `Row × Column` 위치에 두 feature 의 상호작용을
 명시. 대칭 위치 (Column × Row) 는 `—` 로 표기 (위쪽 entry 가 권위).
 
-| | Capability (G36) | Taint (G37) | Spec link (G38) | Reproducible (G39) | Sealed (G40) | ErrContract (G41) | Intent (G42) | SpecBlock (G43) | Evolution (G44) | Golden (G45) | Budget (G46) |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| **Capability (G36)** | self | tag propagates through capability method 시그니처 | 무관 | non-det cap 수신은 `E0784` | 무관 | 무관 | 무관 | spec block 안에서 capability 호출 가능 | capability 시그니처 변경 = breaking | golden 함수는 deterministic capability 만 (`E0444`) | capability 호출이 `io_calls` budget 에 카운트 |
-| **Taint (G37)** | — | self | 무관 | 직교 — taint 는 provenance, reproducibility 는 determinism. 둘 다 적용 가능 | sealed type 도 tag 운반 (struct 단위 fold per §21.5) | Err variant 도 tag 운반 (Result/Option per §21.5.2) | example 의 input 에 source tag 표시 가능 | spec block 안에서 taint 검사 — 정식 검증은 v0.7+ Open Item | taint annotation 변경 = breaking (caller 측 sanitize 의무) | golden 입력은 *untainted* 권장 (snapshot 의 reproducibility 위해) | 무관 |
-| **Spec link (G38)** | — | — | self | 무관 | 무관 | 무관 | example / purpose 와 함께 사용 가능 | spec block 과 보완 (annotation 은 ref, block 은 본문) | spec section 이동 = `W0790` | 무관 | 무관 |
-| **Reproducible (G39)** | — | — | — | self (scope 강도: portable > target > run) | sealed constructor 도 reproducible 가능 | 무관 | 무관 | spec block 도 reproducible 함수 안에서 OK | scope 강화 = breaking, 약화 = compat-add | golden ⇒ implied `#[reproducible(scope="target")]` | 무관 |
-| **Sealed (G40)** | — | — | — | — | self | sealed type 도 ErrContract 가능 | example 이 sealed constructor 호출 가능 | spec block example 도 sealed constructor 경유 | sealed → non-sealed = breaking | 무관 | 무관 |
-| **ErrContract (G41)** | — | — | — | — | — | self | example 이 contract variant 검증 가능 | spec block example 에 Err 케이스 포함 가능 | contract 변형 = breaking (variant 추가/제거) | 무관 | 무관 |
-| **Intent (G42)** | — | — | — | — | — | — | self | spec block example 과 `#[example]` 동시 사용 시 두 source 합집합 — 중복은 OK | example 변경 = compat-add (no SemVer effect) | fixture 가 golden 입력으로 사용 가능 | 무관 |
-| **SpecBlock (G43)** | — | — | — | — | — | — | — | self | spec block 변경 = compat-add (body 변경과 동급) | spec block example 결과가 golden 화 가능 | 무관 |
-| **Evolution (G44)** | — | — | — | — | — | — | — | — | self | golden snapshot 변경 = audit (W0444) | budget 약화 = compat-add, 강화 = breaking |
-| **Golden (G45)** | — | — | — | — | — | — | — | — | — | self | 무관 |
-| **Budget (G46)** | — | — | — | — | — | — | — | — | — | — | self |
+| | Capability (G36) | Taint (G37) | Reproducible (G39) | Sealed (G40) | ErrContract (G41) | Intent (G42) | Evolution (G44) | Golden (G45) |
+|---|---|---|---|---|---|---|---|---|
+| **Capability (G36)** | self | tag propagates through capability method 시그니처 | non-det cap 수신은 `E0784` | 무관 | 무관 | 무관 | capability 시그니처 변경 = breaking | golden 함수는 deterministic capability 만 (`E0444`) |
+| **Taint (G37)** | — | self | 직교 — taint 는 provenance, reproducibility 는 determinism. 둘 다 적용 가능 | sealed type 도 tag 운반 (struct 단위 fold per §21.5) | Err variant 도 tag 운반 (Result/Option per §21.5.2) | example 의 input 에 source tag 표시 가능 | taint annotation 변경 = breaking (caller 측 sanitize 의무) | golden 입력은 *untainted* 권장 (snapshot 의 reproducibility 위해) |
+| **Reproducible (G39)** | — | — | self (scope 강도: portable > target > run) | sealed constructor 도 reproducible 가능 | 무관 | 무관 | scope 강화 = breaking, 약화 = compat-add | golden ⇒ implied `#[reproducible(scope="target")]` |
+| **Sealed (G40)** | — | — | — | self | sealed type 도 ErrContract 가능 | example 이 sealed constructor 호출 가능 | sealed → non-sealed = breaking | 무관 |
+| **ErrContract (G41)** | — | — | — | — | self | example 이 contract variant 검증 가능 | contract 변형 = breaking (variant 추가/제거) | 무관 |
+| **Intent (G42)** | — | — | — | — | — | self | example 변경 = compat-add (no SemVer effect) | fixture 가 golden 입력으로 사용 가능 |
+| **Evolution (G44)** | — | — | — | — | — | — | self | golden snapshot 변경 = audit (W0444) |
+| **Golden (G45)** | — | — | — | — | — | — | — | self |
 
 **핵심 invariants** (위 표가 함의):
 1. `#[reproducible]` ∩ `#[ambient]` 또는 `Clock`/`Rng`/`Env`/`Fs`/`Net`/`Process`
@@ -1567,7 +1318,7 @@ v0.6 에서 결정 안 된 항목 — 사용 corpus 후 재검토:
 - **Cross-capability flow analysis** — `Clock` 결과가 `Rng` seed 가 되는 패턴의
   추적
 
-각 항목은 `SPEC_GAPS.md` 의 *Open Gaps* 로 등재 (G49+).
+각 항목은 `SPEC_GAPS.md` 의 *Open Gaps* 로 등재 (G50+).
 
 ---
 
@@ -1659,11 +1410,11 @@ fn aliceUser() -> Email { Email.parse("alice@example.com")? }
 - `Email` 은 *반드시* `parse` 통과 — 외부 literal `Email { ... }` 불가 (G40)
 - `createUser` 호출자는 *세 실패 모드만* 처리하면 exhaustive (G41)
 - `Email.parse` 는 plat 무관 동일 동작 (G39 `portable`)
-- `osty doc` / `osty context` 가 purpose / examples / error_contract / spec
-  inline 표시 (G38, G42)
+- `osty doc` / `osty context` 가 purpose / examples / error_contract
+  inline 표시 (G42)
 - `db: Db` capability — 테스트 시 `fakeDb` 주입, production 시 real Db (G36)
 
-### 9.2 Web 라우트 핸들러 (capability + taint + sanitize + budget + match_compat)
+### 9.2 Web 라우트 핸들러 (capability + taint + sanitize + match_compat)
 
 ```osty
 // app/handlers.osty
@@ -1728,7 +1479,6 @@ fn handlePatchAsPut() -> Response { handlePut() }
 
 **무엇이 보장되는가**:
 - `userId` 가 *반드시* sanitizer 경유 후 sink 도달 — 미경유 시 컴파일 에러 (G37)
-- `lookupUser` 는 50ms 이내 / 4 alloc / 1 IO call 이내 (G46) — bench 회귀 차단
 - v0.6 에 `Patch` variant 가 추가되어도 기존 dispatch 함수가 *조용히 깨지지 않음*
   — `fallback` 으로 명시 routing (G44)
 - `db` / `clock` 이 capability — 테스트 시 fake injection 으로 deterministic
@@ -1749,7 +1499,6 @@ v0.6 의 결정들이 참조한 학술/산업 선행 사례:
 | | Flow Caml (Pottier, Simonet 2003) | OCaml IFC. type system 통합 사례 |
 | | Perl taint mode (Wall 1990s) | Dynamic / runtime IFC. Osty 는 static. 정신은 동일 |
 | | Haskell `Tagged<T, Trust>` newtype 패턴 | 라이브러리-수준 IFC. Osty 는 언어-수준 |
-| **G38 Spec link** | Doxygen / JSDoc cross-ref | 도구 측 cross-ref 만. *checked* 는 Osty 첫 시도 |
 | **G39 Reproducibility** | Bazel hermetic build | 빌드 시스템 측 reproducibility. Osty 는 *함수* 수준 |
 | | Nix purity model | 환경독립 강제 정신 동일 |
 | | Rust `#[no_std]` | 환경 의존 제한 패턴 (다른 차원) |
@@ -1760,23 +1509,14 @@ v0.6 의 결정들이 참조한 학술/산업 선행 사례:
 | | Eiffel postcondition | Design by Contract 영향 |
 | **G42 Structured intent** | Doxygen `@brief` / `@param` | 자유 텍스트 doc. Osty 는 *machine-readable* |
 | | Rust doc tests | `#[example]` 의 자동 검증 패턴 |
-| **G43 spec block** | **Eiffel** Design by Contract (Meyer 1986+) | invariant / require / ensure 의 기원 |
-| | Dafny (Leino, Microsoft) | spec-as-language-feature 의 학술 가장 가까운 사례 |
-| | F* / Liquid Haskell | refinement type 영향 (Osty v1 에서 검토) |
-| | QuickCheck (Claessen, Hughes 2000) | property-based testing |
-| | Hypothesis (Python) | property test API 영향 |
 | **G44 stability + publish** | **Elm package SemVer enforcement** (Czaplicki) | 가장 가까운 선행 — Osty 는 typed compiled 영역에 도입 |
 | | Rust `#[stable]` / `#[unstable]` | nightly-gating, crates.io 강제 없음. Osty 는 publish-gating |
 | | Java `@Deprecated` / `@Stable` | 메타데이터만, enforce 없음 |
 | **G45 Golden** | Insta (Rust) | text-based snapshot 라이브러리 |
 | | Jest snapshot (JS) | 동일 카테고리 |
 | | AST diff: ts-morph 등 도구 | 산업 사례 부족 — Osty 는 언어 통합 |
-| **G46 Budget** | C++ `[[gnu::pure]]` 등 attribute | static 측 영향 |
-| | go-perf benchstat regression gate | runtime 측 영향 |
-| | LLVM `cost model` | budget(time_ms) static 증명 검토 |
 | **G47 Machine context** | LSP `textDocument/hover` | 동일 응용을 LLM 까지 확장 |
 | | `cargo metadata` JSON output | 메타데이터 export 정신 |
-| **G49 while** | C / Java / Rust / Swift | 가장 흔한 conditional loop. Osty 가 v0.5 에서 부재했던 부분 |
 
 ### 10.1 References
 
@@ -1802,7 +1542,7 @@ v0.6 baseline 동결 → public 1.0 alpha 출시 까지의 게이트:
 
 ### 9.1 Spec readiness (이 문서가 cover)
 
-- [x] G36–G49 (14 결정) 본 문서에 명시
+- [x] G36-G48 의 baseline 10 결정 (G36, G37, G39-G42, G44, G45, G47, G48) 본 문서에 명시
 - [x] SPEC_GAPS.md §"Resolved in v0.6" 에 entries 등재
 - [x] OSTY_GRAMMAR_v0.6.md grammar delta + R27–R29
 - [x] CHANGELOG_v0.6.md skeleton
@@ -1820,28 +1560,25 @@ v0.6 baseline 동결 → public 1.0 alpha 출시 까지의 게이트:
 - [ ] Phase 0 (Tier A 5 개 LLVM 갭) — *진행 중*
 - [ ] Phase 1 capability migration — stdlib 100 PR 분량 순회
 - [ ] Phase 2 spec / intent / context — 작은 분량
-- [ ] Phase 3 reproducible / spec block / golden
-- [ ] Phase 4 sealed / errcontract / evolution / budget(static)
-- [ ] Phase 5 taint / budget(runtime) / spec block v1
+- [ ] Phase 3 reproducible / golden
+- [ ] Phase 4 sealed / errcontract / evolution
+- [ ] Phase 5 taint
 
 ### 9.3 Tooling readiness
 
-- [ ] `osty validate-spec` (G38)
 - [ ] `osty context` (G47, JSON schema 권위 따름)
 - [ ] `osty publish` API surface diff (G44)
 - [ ] `osty test --golden` / `--update-golden` (G45)
-- [ ] `osty test --spec` (G43)
 - [ ] `osty test --example` (G42)
-- [ ] `osty bench --budget` (G46)
 - [ ] `osty audit --trusted-declassify` (G37)
 - [ ] `osty audit --trusted-construct` (G40)
 - [ ] `osty audit --match-compat` (G44)
 
 ### 9.4 Spec corpus readiness
 
-- [ ] `testdata/spec/positive/` 에 G36-G49 별 통과 케이스 추가
-- [ ] `testdata/spec/negative/reject.osty` 에 신규 진단 코드 (E0405-E0451,
-  E0780-E0796, E0789, E0900-E0903, E2100-E2101) 케이스
+- [ ] `testdata/spec/positive/` 에 baseline 10 결정 별 통과 케이스 추가
+- [ ] `testdata/spec/negative/reject.osty` 에 신규 진단 코드 (E0405-E0446,
+  E0780-E0789, E0900-E0903, E2100-E2101) 케이스
 - [ ] `STDLIB_MATRIX.md` 가 capability migration 후 모듈별 capability requirement
   컬럼 추가
 - [ ] `ERROR_CODES.md` regenerate (`go generate ./internal/diag/...`)
@@ -1851,7 +1588,7 @@ v0.6 baseline 동결 → public 1.0 alpha 출시 까지의 게이트:
 - [ ] `README.md` v0.6 surface 표 갱신
 - [ ] `ARCHITECTURE.md` capability layer 추가
 - [ ] `CLAUDE.md` 부록 A (canonical 예시) 에 capability + sealed + taint 패턴 추가
-- [ ] `CLAUDE.md` 부록 B (생산성 기법 카탈로그) 에 G36-G49 행 추가
+- [ ] `CLAUDE.md` 부록 B (생산성 기법 카탈로그) 에 baseline 10 결정 행 추가
 - [ ] *마이그레이션 가이드* 문서 — `MIGRATING_v0.5_to_v0.6.md`
 
 ### 9.6 Compatibility / breaking change audit
