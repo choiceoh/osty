@@ -94,23 +94,6 @@ Specifically:
 This is what lets flow tracking work without per-object metadata
 overhead.
 
-#### 9.3.3 `#[budget(allocs)]` and GC pressure
-
-The `allocs = N` budget (§3.15) counts allocation *sites* in the
-function's call graph, not *bytes* allocated. The relationship to
-GC pressure:
-
-- `allocs = 0` — no GC work attributable to this function.
-- `allocs = N` — at most N objects allocated per call. GC pressure
-  scales with N × call frequency.
-- `allocs = INF` — no budget; the function may allocate freely
-  (default for non-budgeted functions).
-
-The compiler proves the static count by walking the call graph;
-runtime allocation count under `osty bench --budget` should match.
-A discrepancy is a static-analysis bug or a runtime cost-model
-issue.
-
 ### 9.4 Defer cleanup patterns
 
 `defer` (§4.12) is the primary cleanup mechanism. The v0.6

@@ -647,9 +647,6 @@ suitable for security review and migration tracking.
     {"input": ["alice@example.com", "<Db>"], "output": "Ok(42)", "uses_fixture": "fakeDb"},
     {"input": ["invalid", "<Db>"], "output": "Err(UserCreateError.Format)", "uses_fixture": "fakeDb"}
   ],
-  "spec_refs": [
-    {"section": "§10.30.user.create", "title": "User creation"}
-  ],
   "error_contract": [
     {"variant": "UserCreateError.Format", "when": "missing @ or wrong format"},
     {"variant": "UserCreateError.DomainBlocked", "when": "domain in blocklist"},
@@ -687,7 +684,6 @@ suitable for security review and migration tracking.
 | `stability` | object \| null | `#[stability]` 데이터 |
 | `purpose` | `String` \| null | `#[purpose("...")]` |
 | `examples` | array | `#[example(input=, output=, uses=)]` 모두 |
-| `spec_refs` | array | `#[spec("§X.Y")]` + 동일 함수의 모든 spec ref |
 | `error_contract` | array | `#[error_contract]` entries |
 | `effects.capabilities_required` | array of capability type names | 함수 시그니처에서 capability 파라미터 추출 |
 | `effects.reproducible` | object \| null | `#[reproducible(scope=...)]` 데이터 |
@@ -798,9 +794,7 @@ fn computeDiff(prev: Manifest, curr: Manifest) -> DiffReport {
 | `#[reproducible]` 추가 | COMPAT-ADD (callee 보장 강화) |
 | `#[reproducible]` 제거 | BREAKING (callee 보장 약화) |
 | `#[error_contract]` variant 추가 | BREAKING (caller match exhaustiveness) |
-| `#[budget]` 강화 (allocs ↓, time_ms ↓) | BREAKING |
-| `#[budget]` 완화 | COMPAT-ADD |
-| body / `#[purpose]` / `#[spec]` 등 metadata | PATCH |
+| body / `#[purpose]` 등 metadata | PATCH |
 
 #### 13.10.4 Manifest 형식
 
@@ -901,7 +895,6 @@ legacy-globals util.timestamp
 | Mode | Discovers | Output |
 |---|---|---|
 | `osty test` | `#[test]` / `test_*` / `bench_*` (with `--bench`) | pass/fail summary |
-| `osty test --spec` | `spec { example: }` clause | per-clause pass/fail |
 | `osty test --example` | `#[example(input=, output=, uses=)]` | per-example pass/fail |
 | `osty test --golden` | `#[golden(path, mode)]` | snapshot 비교 결과 |
 | `osty test --update-golden` | (same) | snapshot 갱신 + report |

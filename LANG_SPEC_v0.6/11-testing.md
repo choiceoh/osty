@@ -956,33 +956,6 @@ fn appCaps() -> AppCaps {
 pub fn loadConfig(path: String, caps: AppCaps) -> Result<Config, ConfigError> { ... }
 ```
 
-### 11.14 Property-based testing (v1 outlook)
-
-v0.6 baseline 은 `spec { example: }` 만 자동 실행. **v1 (Phase 5)** 에서
-`forall x in gen: ...` 형식의 property test 자동 등록 추가:
-
-```osty
-fn quicksort<T: Ordered>(xs: List<T>) -> List<T> {
-    spec {
-        forall xs in gen.list(gen.int(), 128):
-            result.toMultiset() == xs.toMultiset()
-
-        forall xs in gen.list(gen.int(), 128):
-            result.windowed(2).all(|w| w[0].le(w[1]))
-
-        example: quicksort([]) == []
-        example: quicksort([3, 1, 2]) == [1, 2, 3]
-    }
-    // ...impl
-}
-```
-
-`forall x in gen.list(gen.int(), 128)` 는 `gen.list(elemGen,
-maxLen)` 으로 `List<Int>` (길이 0..=128) 시퀀스 생성. v1 의 spec
-block runner 가 default 100 iterations 수행 + shrinking on failure.
-
-자세한 generator API 는 §10.5 (std.testing.gen) 참조.
-
 ### 11.15 Test 모드 통합
 
 ```sh
@@ -1198,36 +1171,3 @@ Guards against: regression in sanitization. The fake `Console`'s
 captured output is byte-equal to what the production `Console` would
 emit, so flow-tag bugs surface as observable failures.
 
-#### 11.18.7 Spec block + capability recipe
-
-`spec { example: ... }` clauses (§3.13) inside a capability-typed
-function run under the `--spec` mode. Capability instances that the
-function takes must be provided either by `#[example(uses = "name")]`
-referencing a fixture, or by explicit closure construction inside the
-example expression:
-
-```osty
-#[fixture(name = "frozenClock")]
-fn frozenClock() -> Clock {
-    std.capability.testing.FakeClock(epoch_ms = 0)
-}
-
-#[fixture(name = "seededRng")]
-fn seededRng() -> Rng {
-    std.capability.testing.FakeRng(seed = 42)
-}
-
-#[example(input = "()", uses = "frozenClock", uses = "seededRng",
-          output = "\"0-1608637542\"")]
-fn buildId(clock: Clock, rng: Rng) -> String {
-    spec {
-        example: buildId(frozenClock(), seededRng()) == "0-1608637542"
-    }
-    "{clock.now().toEpochMillis()}-{rng.next()}"
-}
-```
-
-The `uses = "name"` form composes; multiple `uses =` repeats inject
-each named fixture in order. v0.6 baseline runs the inline
-`example:` clause; the `#[example]` annotation form runs under
-`osty test --example`.

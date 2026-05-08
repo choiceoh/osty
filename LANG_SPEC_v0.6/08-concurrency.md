@@ -107,21 +107,6 @@ behavior* (same input → same output). Worker assignment is
 implementation-detail; a `#[reproducible]` function produces the
 same result regardless of which worker happens to execute it.
 
-#### 8.0.2 Scheduler and `#[budget]`
-
-Runtime budget keys (`time_ms`, `p99_ms`) measure *wall-clock
-time* — the time elapsed regardless of worker placement. A
-function whose budget is `time_ms = 5` may run on a busy worker
-(blocked behind other tasks) or a free worker (executing
-immediately); the measurement is end-to-end, including any wait
-time.
-
-For deterministic budget testing, `osty bench --budget` runs each
-benchmark in isolation by default — no other tasks contend for
-workers during the timed loop. The flag `--bench-contention`
-allows simulating multi-task contention if a benchmark wants to
-measure that explicitly.
-
 ### 8.1 Structured Concurrency
 
 All concurrent tasks belong to a `taskGroup` scope. There is no detached
@@ -432,19 +417,6 @@ applies *only* to those two types — capability instances are not
 included, but the discipline of avoiding cross-scope capability
 sharing is recommended.
 
-#### 8.5.3 Channels and `#[budget]`
-
-A `thread.chan::<T>(capacity)` allocation counts as one allocation
-site for `#[budget(allocs)]` purposes. Each `ch <- value` and
-`ch.recv()` counts as one channel operation; a function that
-loops `ch.recv()` to drain a channel of `n` items counts `n`
-channel operations.
-
-The runtime's per-channel state (FIFO buffer, sender/receiver
-queues) is one allocation per channel; growing the buffer past its
-declared capacity is not supported (the channel rejects further
-sends until the receiver makes progress).
-
 ### 8.6 Select
 
 ```osty
@@ -519,18 +491,6 @@ If a `select` body needs to react to cancel separately from its
 ready branches, register an explicit `s.timeout(d, ...)` arm with
 a short duration — the timer fires before most blocking arms,
 giving the body a periodic point to check `thread.isCancelled()`.
-
-#### 8.6.3 Select and `#[budget]`
-
-Each registered branch counts as zero `io_calls` until it actually
-fires — `select` itself is the synchronization point. The `time`
-spent waiting in `select` is *not* counted toward `#[budget(time_ms
-= X)]`; only the active body's wall-clock time counts.
-
-For a function that loops over `select`, the budget applies to
-each iteration's *active branch body*, not to the number of
-iterations. Use `loop { ... }` exit conditions to bound iteration
-count separately if required.
 
 ### 8.7 Capabilities and Tasks
 
