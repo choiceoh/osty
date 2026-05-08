@@ -2996,7 +2996,7 @@ fn srCheckCfgArg(
         let callee = srAstNode(file, arg.left)
         if callee.kind == AstNIdent && (callee.text == "all" || callee.text == "any" || callee.text == "not") {
             let mut out = result
-            if callee.text == "not" && arg.children.length != 1 {
+            if callee.text == "not" && arg.children.len() != 1 {
                 out.diagnostics.push(selfResolveDiagnosticHintAtNode(
                     "E0739",
                     "`not(...)` requires exactly one argument",
@@ -3101,7 +3101,7 @@ fn srCfgArgIdxPasses(file: AstFile, argIdx: Int, cfg: SelfResolveCfgEnv) -> Bool
                 return false
             }
             if callee.text == "not" {
-                if arg.children.length == 1 {
+                if arg.children.len() == 1 {
                     return !srCfgArgIdxPasses(file, arg.children[0], cfg)
                 }
                 return false
