@@ -17,6 +17,14 @@ pub struct ExecOutput {
     pub timedOut: Bool,
 }
 
+pub fn output(exitCode: Int, stdout: String, stderr: String) -> Output {
+    Output {exitCode: exitCode, stdout: stdout, stderr: stderr}
+}
+
+pub fn execOutput(exitCode: Int, stdout: String, stderr: String, timedOut: Bool) -> ExecOutput {
+    ExecOutput {exitCode: exitCode, stdout: stdout, stderr: stderr, timedOut: timedOut}
+}
+
 pub enum Signal {
     Interrupt,
     Terminate,

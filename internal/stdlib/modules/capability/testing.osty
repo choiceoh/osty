@@ -1,0 +1,445 @@
+// std.capability.testing - deterministic capability fakes for v0.6 tests.
+//
+// These helpers are intentionally pure Osty values. They let examples,
+// stdlib modules, and user packages test APIs that accept the canonical
+// v0.6 capability interfaces without touching the host clock, environment,
+// filesystem, network, process table, or console.
+use std.bytes
+use std.error
+use std.io
+use std.net
+use std.os
+use std.process as proc
+use std.strings
+use std.time
+pub struct FakeClock {
+    pub current: time.Instant,
+    pub elapsed: time.Duration,
+    pub slept: List<time.Duration> = [],
+    pub failSleep: Bool = false,
+    pub fn now(self) -> time.Instant {
+        self.current
+    }
+    pub fn monotonic(self) -> time.Duration {
+        self.elapsed
+    }
+    pub fn sleep(mut self, duration: time.Duration) -> Result<(), Error> {
+        if self.failSleep {
+            return Err(error.new("capability.testing.clock: sleep rejected"))
+        }
+        self.slept.push(duration)
+        Ok(())
+    }
+    pub fn set(mut self, instant: time.Instant) -> FakeClock {
+        self.current = instant
+        self
+    }
+    pub fn advance(mut self, duration: time.Duration) -> FakeClock {
+        self.current = self.current.add(duration)
+        self.elapsed = time.Duration
+        {nanoseconds: self.elapsed.nanoseconds + duration.nanoseconds}
+        self
+    }
+    pub fn withElapsed(mut self, duration: time.Duration) -> FakeClock {
+        self.elapsed = duration
+        self
+    }
+    pub fn rejectSleep(mut self) -> FakeClock {
+        self.failSleep = true
+        self
+    }
+}
+pub fn instant(unixNanos: Int64) -> time.Instant {
+    time.Instant
+    {unixNanos: unixNanos}
+}
+pub fn duration(nanos: Int64) -> time.Duration {
+    time.Duration
+    {nanoseconds: nanos}
+}
+pub fn clock(unixNanos: Int64, elapsedNanos: Int64) -> FakeClock {
+    FakeClock {current: instant(unixNanos), elapsed: duration(elapsedNanos)}
+}
+pub fn clockAt(unixNanos: Int64) -> FakeClock {
+    clock(unixNanos, 0)
+}
+pub struct FakeRng {
+    pub values: List<Int> = [],
+    pub cursor: Int = 0,
+    pub bytePattern: String = "x",
+    pub floatValue: Float = 0.5,
+    pub boolValue: Bool = true,
+    fn take(mut self) -> Int {
+        if self.values.isEmpty() {
+            return 0
+        }
+        let idx = self.cursor % self.values.len()
+        self.cursor = self.cursor + 1
+        self.values[idx]
+    }
+    pub fn next(mut self) -> Int {
+        self.take()
+    }
+    pub fn nextBytes(self, n: Int) -> Bytes {
+        self.bytes(n)
+    }
+    pub fn int(mut self, min: Int, max: Int) -> Int {
+        if max <= min {
+            return min
+        }
+        let span = max - min
+        let raw = self.take().abs()
+        min + (raw % span)
+    }
+    pub fn intInclusive(mut self, min: Int, max: Int) -> Int {
+        if max <= min {
+            return min
+        }
+        let span = max - min + 1
+        let raw = self.take().abs()
+        min + (raw % span)
+    }
+    pub fn float(self) -> Float {
+        self.floatValue
+    }
+    pub fn bool(self) -> Bool {
+        self.boolValue
+    }
+    pub fn bytes(self, n: Int) -> Bytes {
+        if n <= 0 || self.bytePattern.isEmpty() {
+            return bytes.fromString("")
+        }
+        bytes.repeat(bytes.fromString(self.bytePattern), n)
+    }
+    pub fn withBytes(mut self, pattern: String) -> FakeRng {
+        self.bytePattern = pattern
+        self
+    }
+    pub fn withFloat(mut self, value: Float) -> FakeRng {
+        self.floatValue = value
+        self
+    }
+    pub fn withBool(mut self, value: Bool) -> FakeRng {
+        self.boolValue = value
+        self
+    }
+}
+pub fn rng(values: List<Int>) -> FakeRng {
+    FakeRng {values: values}
+}
+pub fn defaultRng() -> FakeRng {
+    rng([])
+}
+pub struct FakeEnv {
+    pub argv: List<String> = [],
+    pub values: Map<String, String> = {:},
+    pub cwd: String = "/",
+    pub fn args(self) -> List<String> {
+        self.argv
+    }
+    pub fn get(self, name: String) -> String? {
+        self.values.get(name)
+    }
+    pub fn require(self, name: String) -> Result<String, Error> {
+        match self.get(name) {
+            Some(value) -> Ok(value),
+            None -> Err(error.new("capability.testing.env: missing {name}")),
+        }
+    }
+    pub fn set(mut self, name: String, value: String) -> Result<(), Error> {
+        self.values.insert(name, value)
+        Ok(())
+    }
+    pub fn unset(mut self, name: String) -> Result<(), Error> {
+        self.values.remove(name)
+        Ok(())
+    }
+    pub fn vars(self) -> Map<String, String> {
+        self.values
+    }
+    pub fn currentDir(self) -> Result<String, Error> {
+        Ok(self.cwd)
+    }
+    pub fn setCurrentDir(mut self, path: String) -> Result<(), Error> {
+        if path.isEmpty() {
+            return Err(error.new("capability.testing.env: cwd is empty"))
+        }
+        self.cwd = path
+        Ok(())
+    }
+    pub fn withArg(mut self, arg: String) -> FakeEnv {
+        self.argv.push(arg)
+        self
+    }
+    pub fn withVar(mut self, name: String, value: String) -> FakeEnv {
+        self.values.insert(name, value)
+        self
+    }
+    pub fn withCwd(mut self, path: String) -> FakeEnv {
+        self.cwd = path
+        self
+    }
+}
+pub fn env() -> FakeEnv {
+    FakeEnv {}
+}
+pub struct FakeFs {
+    pub files: Map<String, Bytes> = {:},
+    pub dirs: Map<String, Bool> = {:},
+    pub fn read(self, path: String) -> Result<Bytes, Error> {
+        match self.files.get(path) {
+            Some(data) -> Ok(data),
+            None -> Err(error.new("capability.testing.fs: not found: {path}")),
+        }
+    }
+    pub fn readToString(self, path: String) -> Result<String, Error> {
+        (self.read(path)?).toString()
+    }
+    pub fn write(mut self, path: String, contents: Bytes) -> Result<(), Error> {
+        if path.isEmpty() {
+            return Err(error.new("capability.testing.fs: path is empty"))
+        }
+        self.files.insert(path, contents)
+        Ok(())
+    }
+    pub fn writeString(mut self, path: String, contents: String) -> Result<(), Error> {
+        self.write(path, bytes.fromString(contents))
+    }
+    pub fn exists(self, path: String) -> Bool {
+        self.files.get(path).isSome() || (self.dirs.get(path) ?? false)
+    }
+    pub fn walk(self, root: String) -> Result<List<String>, Error> {
+        let mut out: List<String> = []
+        for dir in self.dirs.keys().sorted() {
+            if underRoot(dir, root) {
+                out.push("{dir}/")
+            }
+        }
+        for path in self.files.keys().sorted() {
+            if underRoot(path, root) {
+                out.push(path)
+            }
+        }
+        Ok(out)
+    }
+    pub fn glob(self, pattern: String) -> Result<List<String>, Error> {
+        if pattern == "*" || pattern == "**" {
+            return Ok(self.files.keys().sorted())
+        }
+        if self.exists(pattern) {
+            Ok([pattern])
+        } else {
+            Ok([])
+        }
+    }
+    pub fn create(mut self, path: String) -> Result<(), Error> {
+        self.write(path, bytes.fromString(""))
+    }
+    pub fn remove(mut self, path: String) -> Result<(), Error> {
+        self.files.remove(path)
+        self.dirs.remove(path)
+        Ok(())
+    }
+    pub fn rename(mut self, from: String, to: String) -> Result<(), Error> {
+        let data = self.read(from)?
+        self.files.remove(from)
+        self.files.insert(to, data)
+        Ok(())
+    }
+    pub fn copy(mut self, from: String, to: String) -> Result<(), Error> {
+        let data = self.read(from)?
+        self.files.insert(to, data)
+        Ok(())
+    }
+    pub fn mkdir(mut self, path: String) -> Result<(), Error> {
+        self.dirs.insert(strings.trimSuffix(path, "/"), true)
+        Ok(())
+    }
+    pub fn mkdirAll(mut self, path: String) -> Result<(), Error> {
+        self.mkdir(path)
+    }
+    pub fn withFile(mut self, path: String, contents: String) -> FakeFs {
+        self.files.insert(path, bytes.fromString(contents))
+        self
+    }
+    pub fn withBytes(mut self, path: String, contents: Bytes) -> FakeFs {
+        self.files.insert(path, contents)
+        self
+    }
+    pub fn withDir(mut self, path: String) -> FakeFs {
+        self.dirs.insert(strings.trimSuffix(path, "/"), true)
+        self
+    }
+}
+pub fn fs() -> FakeFs {
+    FakeFs {}.withDir("/")
+}
+pub struct FakeNet {
+    pub addrs: Map<String, List<net.Addr>> = {:},
+    pub lookups: Map<String, List<net.IpAddr>> = {:},
+    pub reverse: Map<String, List<String>> = {:},
+    pub fn resolve(self, addr: String) -> Result<net.Addr, Error> {
+        net.parseAddr(addr)
+    }
+    pub fn resolveAll(self, host: String) -> Result<List<net.Addr>, Error> {
+        Ok(self.addrs.get(host) ?? [])
+    }
+    pub fn lookup(self, host: String) -> Result<List<net.IpAddr>, Error> {
+        Ok(self.lookups.get(host) ?? [])
+    }
+    pub fn lookupAddr(self, ip: net.IpAddr) -> Result<List<String>, Error> {
+        Ok(self.reverse.get(ip.toString()) ?? [])
+    }
+    pub fn connect(self, addr: String) -> Result<net.TcpConn, Error> {
+        Err(error.new("capability.testing.net: connect disabled for {addr}"))
+    }
+    pub fn connectTimeout(self, addr: String, timeoutMs: Int) -> Result<net.TcpConn, Error> {
+        let _ = timeoutMs
+        self.connect(addr)
+    }
+    pub fn listen(self, addr: String) -> Result<net.TcpListener, Error> {
+        Err(error.new("capability.testing.net: listen disabled for {addr}"))
+    }
+    pub fn withAddr(mut self, host: String, addr: net.Addr) -> FakeNet {
+        let mut values = self.addrs.get(host) ?? []
+        values.push(addr)
+        self.addrs.insert(host, values)
+        self
+    }
+    pub fn withLookup(mut self, host: String, ip: net.IpAddr) -> FakeNet {
+        let mut values = self.lookups.get(host) ?? []
+        values.push(ip)
+        self.lookups.insert(host, values)
+        self
+    }
+    pub fn withReverse(mut self, ip: net.IpAddr, name: String) -> FakeNet {
+        let key = ip.toString()
+        let mut values = self.reverse.get(key) ?? []
+        values.push(name)
+        self.reverse.insert(key, values)
+        self
+    }
+}
+pub fn network() -> FakeNet {
+    FakeNet {}
+}
+pub struct FakeProcess {
+    pub pidValue: Int = 1,
+    pub hostnameValue: String = "test-host",
+    pub exitCode: Int = 0,
+    pub stdout: String = "",
+    pub stderr: String = "",
+    pub timedOut: Bool = false,
+    pub fn pid(self) -> Int {
+        self.pidValue
+    }
+    pub fn hostname(self) -> Result<String, Error> {
+        Ok(self.hostnameValue)
+    }
+    pub fn command(self, program: String) -> proc.ProcessCommand {
+        proc.command(program)
+    }
+    pub fn commandArgs(self, program: String, args: List<String>) -> proc.ProcessCommand {
+        proc.commandArgs(program, args)
+    }
+    pub fn shell(self, line: String) -> proc.ProcessCommand {
+        proc.shell(line)
+    }
+    pub fn run(self, command: proc.ProcessCommand) -> Result<proc.ProcessOutput, Error> {
+        let _ = command
+        Ok(proc.output(self.exitCode, self.stdout, self.stderr, self.timedOut))
+    }
+    pub fn exec(self, command: String, args: List<String>) -> Result<os.Output, Error> {
+        let _ = command
+        let _ = args
+        Ok(os.output(self.exitCode, self.stdout, self.stderr))
+    }
+    pub fn withPid(mut self, pid: Int) -> FakeProcess {
+        self.pidValue = pid
+        self
+    }
+    pub fn withHostname(mut self, name: String) -> FakeProcess {
+        self.hostnameValue = name
+        self
+    }
+    pub fn withOutput(mut self, stdout: String, stderr: String, exitCode: Int) -> FakeProcess {
+        self.stdout = stdout
+        self.stderr = stderr
+        self.exitCode = exitCode
+        self.timedOut = false
+        self
+    }
+    pub fn withStdout(self, stdout: String) -> FakeProcess {
+        self.withOutput(stdout, "", 0)
+    }
+    pub fn withTimeout(mut self) -> FakeProcess {
+        self.timedOut = true
+        self
+    }
+}
+pub fn process() -> FakeProcess {
+    FakeProcess {}
+}
+pub struct FakeConsole {
+    pub stdout: List<String> = [],
+    pub stderr: List<String> = [],
+    pub input: List<String> = [],
+    pub cursor: Int = 0,
+    pub fn print(mut self, text: String) {
+        self.stdout.push(text)
+    }
+    pub fn println(mut self, text: String) {
+        self.stdout.push("{text}\n")
+    }
+    pub fn eprint(mut self, text: String) {
+        self.stderr.push(text)
+    }
+    pub fn eprintln(mut self, text: String) {
+        self.stderr.push("{text}\n")
+    }
+    pub fn readLine(mut self) -> String {
+        if self.cursor >= self.input.len() {
+            return ""
+        }
+        let line = self.input[self.cursor]
+        self.cursor = self.cursor + 1
+        line
+    }
+    pub fn writer(self) -> io.Writer {
+        io.buffer()
+    }
+    pub fn withInput(mut self, line: String) -> FakeConsole {
+        self.input.push(line)
+        self
+    }
+    pub fn stdoutText(self) -> String {
+        strings.join(self.stdout, "")
+    }
+    pub fn stderrText(self) -> String {
+        strings.join(self.stderr, "")
+    }
+}
+pub fn console() -> FakeConsole {
+    FakeConsole {}
+}
+pub struct FakeRuntime {
+    pub clock: FakeClock,
+    pub rng: FakeRng,
+    pub env: FakeEnv,
+    pub fs: FakeFs,
+    pub net: FakeNet,
+    pub process: FakeProcess,
+    pub console: FakeConsole,
+}
+pub fn runtime() -> FakeRuntime {
+    FakeRuntime {clock: clockAt(0), rng: defaultRng(), env: env(), fs: fs(), net: network(), process: process(), console: console()}
+}
+pub fn fakeNames() -> List<String> {
+    ["FakeClock", "FakeRng", "FakeEnv", "FakeFs", "FakeNet", "FakeProcess", "FakeConsole"]
+}
+fn underRoot(path: String, root: String) -> Bool {
+    if root.isEmpty() || root == "/" {
+        return true
+    }
+    path == root || strings.startsWith(path, strings.trimSuffix(root, "/") + "/")
+}

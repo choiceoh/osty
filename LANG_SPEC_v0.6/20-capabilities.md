@@ -75,6 +75,8 @@ pub interface Process {
 factory 는 현재 `time.systemClock()`, `random.host()`, `env.host()`, `fs.host()`,
 `capability.hostNet()`, `capability.hostProcess()`, `io.console()` 로 노출하며,
 `std.net.host()` / `std.process.host()` 는 cross-module bridge helper 로 제공한다.
+테스트용 deterministic fake set 은 `std.capability.testing` 의 `FakeClock`,
+`FakeRng`, `FakeEnv`, `FakeFs`, `FakeNet`, `FakeProcess`, `FakeConsole` 로 제공한다.
 Ambient desugar / `--legacy-globals` warning 은 별도 compiler phase 에서 닫는다.
 
 함수는 capability 를 **명시적 파라미터**로 받는다:

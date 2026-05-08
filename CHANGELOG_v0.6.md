@@ -47,6 +47,7 @@ rationale.
 |---|---|---|
 | `Clock` / `Rng` / `Env` / `Fs` / `Net` / `Process` / `Console` interface | **partial** | `std.capability` 에 7 canonical protocol surface 추가. `std.random.Rng.next/nextBytes` alias와 `examples/v06_capabilities` front-end proof 포함. |
 | Host capability adapter factories | **partial** | `time.systemClock`, `random.host`, `env.host`, `fs.host`, `capability.hostNet`, `capability.hostProcess`, `io.console` 를 추가하고 `examples/v06_capability_adapters` 로 front-end/type-check proof 추가. `net.host` / `process.host` bridge factory 는 cross-module migration helper 로 제공. |
+| Deterministic capability test fakes | **partial** | `std.capability.testing` 에 `FakeClock` / `FakeRng` / `FakeEnv` / `FakeFs` / `FakeNet` / `FakeProcess` / `FakeConsole` 추가. `examples/v06_capability_fakes` 로 fake injection proof 추가. |
 | `#[ambient(...)]` annotation | **planned** | script / main / test entry 에서만 |
 | `#[reproducible_capability]` annotation | **planned** | 사용자 정의 deterministic capability |
 | `--legacy-globals` 호환 모드 | **planned** | v0.6.x 에서만, v0.7 제거 |

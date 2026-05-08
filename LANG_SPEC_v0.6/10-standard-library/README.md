@@ -66,3 +66,5 @@ Capability protocols (`std.capability`) are specified in
 typing and ambient injection as well as stdlib shape.
 The current stdlib also exposes host-boundary adapter factories for the
 canonical capability set; see §20 for the exact list and migration status.
+`std.capability.testing` contains deterministic fake implementations for
+capability-injected tests.
