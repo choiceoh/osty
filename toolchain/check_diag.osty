@@ -77,6 +77,11 @@ pub fn checkCodeIntrinsicNonEmptyBody() -> String { "E0773" }
 pub fn checkCodeBuilderMissingRequiredField() -> String { "E0774" }
 pub fn checkCodePureViolation() -> String { "E0775" }
 
+// v0.6 G36 — Capabilities (LANG_SPEC_v0.6/20-capabilities.md §20.8).
+pub fn checkCodeAmbientWrongSite() -> String { "E0780" }
+pub fn checkCodeAmbientUnknownCapability() -> String { "E0781" }
+pub fn checkCodeAmbientUserCapability() -> String { "E0789" }
+
 // ---------------------------------------------------------------------
 // Low-level builder. Higher-level constructors below wrap this so call
 // sites stay readable.
@@ -729,4 +734,43 @@ pub fn checkDiagRenderAll(xs: List<CheckDiagnostic>) -> String {
         parts.push(checkDiagRender(d))
     }
     strings.join(parts, "\n")
+}
+
+// ---------------------------------------------------------------------
+// v0.6 G36 — Capability annotation diagnostics.
+//
+// Spec: LANG_SPEC_v0.6/20-capabilities.md §20.3 / §20.8.
+// ---------------------------------------------------------------------
+
+/// diagAmbientWrongSite reports `#[ambient(...)]` applied to a function
+/// outside the entry-point set (script `main`, `fn main`, `#[test]`,
+/// `#[bench]`, `bench*`/`test_*`). Library code must receive capabilities
+/// as explicit parameters.
+pub fn diagAmbientWrongSite(fnName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeAmbientWrongSite(),
+        "`#[ambient]` is only allowed on entry-point functions, not on `{fnName}`",
+        start,
+        end,
+        [
+            "LANG_SPEC §20.3: ambient binding is restricted to scripts, `fn main`, `#[test]`, `#[bench]`, and `bench*`/`test_*` functions",
+            "hint: receive the needed capability (`Clock` / `Rng` / `Env` / `Fs` / `Net` / `Process` / `Console`) as an explicit parameter",
+        ],
+    )
+}
+
+/// diagAmbientUnknownCapability reports `#[ambient(name)]` referencing a
+/// name outside the canonical set (`clock`, `rng`, `env`, `fs`, `net`,
+/// `process`, `console`).
+pub fn diagAmbientUnknownCapability(name: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeAmbientUnknownCapability(),
+        "`#[ambient({name})]` references an unknown capability",
+        start,
+        end,
+        [
+            "LANG_SPEC §20.6: canonical ambient names are `clock`, `rng`, `env`, `fs`, `net`, `process`, `console`",
+            "hint: pass user-defined capabilities as explicit parameters — ambient binding only supports stdlib prelude defaults",
+        ],
+    )
 }
