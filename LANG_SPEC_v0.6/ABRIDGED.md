@@ -13,9 +13,8 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - 파일은 `.osty`, UTF-8, newline은 `\n`; `\r\n`은 정규화된다.
 - shebang은 byte offset 0에서만 한 번 허용된다.
 - 예약어: `fn struct enum interface type let mut pub if else match for break
-  continue return use defer while`. (`while` v0.6 추가, G49)
-- 문맥 식별자: `self Self true false Some None Ok Err loop const by spec
-  example law invariant`. (`spec` / `example` / `law` / `invariant` v0.6 추가, G43)
+  continue return use defer`.
+- 문맥 식별자: `self Self true false Some None Ok Err loop const by`.
 - v1 단계 추가 예정: `forall` (Phase 5).
 - identifier는 ASCII letter 또는 `_`로 시작한다. 단독 `_`는 wildcard이다.
 - 세미콜론은 없다. newline이 statement separator이다.
@@ -108,14 +107,14 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - `match`는 exhaustive여야 한다.
 - match guard는 arm 선택에는 참여하지만 exhaustiveness coverage에는 기여하지 않는다.
 - `for pattern in expr`은 iterable loop.
-- `for expr`은 while-style loop. **v0.6: `while expr` 도 같은 의미 (G49)**.
+- `for expr`은 while-style loop.
 - bare `for`는 infinite loop.
 - `loop { ... break value }`는 value-returning unbounded loop이다.
 - range step은 `a..b by step` / `a..=b by step`이다.
 - `for let pattern = expr`은 match 성공 동안 반복한다.
 - `break`/`continue`는 기본적으로 innermost loop에 적용된다. `'label: for/loop`와
   `break 'label` / `continue 'label`이 허용된다.
-- `Type { ... }` struct literal은 `if`/`match`/`for`/`while`/`if let`/`for let` head에서
+- `Type { ... }` struct literal은 `if`/`match`/`for`/`if let`/`for let` head에서
   괄호로 감싼다.
 - assignment는 statement이다. expression으로 쓰지 않는다.
 - channel send `<-`도 statement이다.
@@ -247,36 +246,24 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - v0.6 baseline sanitizer: `std.sql.escape`, `std.shell.quote`,
   `std.path.normalize`, `std.url.encode`, `std.html.escape`.
 
-## 11. Reproducibility (G39) and Performance (G46)
+## 11. Reproducibility (G39)
 
 - `#[reproducible(scope=...)]` — 환경독립 강제. scope 는 `"run"` / `"target"`
   (default) / `"portable"`.
 - 검사: non-deterministic capability 수신 금지, unordered iter 금지, pointer-id
   비교 금지, transitive callee 도 같거나 강한 scope 필수.
 - `#[pure]` 는 더 강함 — capability 수신 자체 금지.
-- `#[budget(...)]` static keys — `allocs`, `io_calls`, `stack_depth`,
-  `instructions`. 컴파일러가 *증명*. 위반 `E0795`.
-- `#[budget(...)]` runtime keys — `time_ms`, `p99_ms`. `osty bench --budget`
-  회귀 게이트.
 - `#[golden(path, mode=...)]` — snapshot 비교. mode `"text"` / `"ast"` / `"json"` /
   `"diag"`. text mode 는 BOM 제거 + LF 정규화 후 비교. `#[golden]` 은 암묵
   `#[reproducible(scope="target")]` — 위반 `E0444`.
 
-## 12. Spec Block (G43) and Intent (G42)
+## 12. Intent (G42)
 
-- `spec { ... }` top-level 함수 / method body 첫 statement 위치. clauses: `example:`, `law:`,
-  `invariant:`, `forall x in gen:` (v1).
-- v0 (Phase 3): `example:` 만 `osty test --spec` 실행, `law:` / `invariant:` 는
-  doc + LSP hover. `result` 는 `law:` / `invariant:` 안에서 함수 반환값 가리키는
-  virtual binding.
 - `#[purpose("...")]` — 자유 텍스트 의도 (doc / LSP / context).
 - `#[example(input=, output=, uses=)]` — 자동 검증. `uses` 는 fixture 이름.
 - `#[fixture(name=)]` — zero-arity 함수, 같은 type 의 canonical instance 제공.
-- `#[spec("§X.Y")]` — markdown anchor 검증 (`E0790` if missing). doc / LSP /
-  `osty explain` 에 spec 본문 인용.
-- `osty context <symbol> [--format=json]` — purpose / examples / spec_refs /
-  error_contract / fixtures / stability 단일 JSON 추출 (LSP / AI agent 첫
-  시민).
+- `osty context <symbol> [--format=json]` — purpose / examples / error_contract /
+  fixtures / stability 단일 JSON 추출 (LSP / AI agent 첫 시민).
 
 ## 13. API Evolution (G44) and Sealed Construction (G40)
 
@@ -302,12 +289,12 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 | **Existing (v0.5)** | `#[json]`, `#[deprecated]`, `#[op]`, `#[cfg]`, `#[test]`, `#[intrinsic]`, `#[pod]`, `#[repr]`, `#[export]`, `#[c_abi]`, `#[no_alloc]` | 기존 |
 | **Capability (G36)** | `#[ambient]`, `#[reproducible_capability]` | §9 |
 | **Information flow (G37)** | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]`, `#[taint_field]` | §10 |
-| **Spec / intent (G38, G42)** | `#[spec]`, `#[purpose]`, `#[example]`, `#[fixture]` | §12 |
+| **Intent (G42)** | `#[purpose]`, `#[example]`, `#[fixture]` | §12 |
 | **Construction (G40)** | `#[sealed_construct]`, `#[trusted_construct]`, `#[test_construct]` | §13 |
 | **Error (G41)** | `#[error_contract]` | §8 |
 | **Determinism (G39)** | `#[reproducible]` | §11 |
 | **Evolution (G44)** | `#[since]`, `#[stability]`, `#[match_compat]` | §13 |
-| **Testing / perf (G45, G46)** | `#[golden]`, `#[budget]` | §11 |
+| **Testing (G45)** | `#[golden]` | §11 |
 
 각 annotation 의 합법 위치는 `LANG_SPEC_v0.6/00-revision.md §7.6` 의 표가
 권위. 잘못된 위치는 `E0405`. annotation 인자는 항상 literal — 표현식 불가.
@@ -339,17 +326,16 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - `beforeEach`/`afterEach`는 없다. helper, `testing.context`, `defer`를 쓴다.
 - formatter는 설정이 없다. 생성 후 `osty fmt`, `osty check`, 필요하면 `osty lint`.
 - manifest는 `osty.toml`, lockfile은 `osty.lock`.
-- v0.6 신규 명령: `osty context <symbol>` (G47), `osty validate-spec` (G38),
-  `osty publish` (G44), `osty test --golden` / `--update-golden` (G45),
-  `osty test --spec` (G43), `osty test --example` (G42), `osty bench --budget`
-  (G46), `osty audit --trusted-declassify | --trusted-construct | --match-compat`.
+- v0.6 신규 명령: `osty context <symbol>` (G47), `osty publish` (G44),
+  `osty test --golden` / `--update-golden` (G45), `osty test --example` (G42),
+  `osty audit --trusted-declassify | --trusted-construct | --match-compat`.
 
 ## 17. Do Not Generate
 
 - `null`, `nil`, exceptions, `try`, `catch`, panic recovery.
 - inheritance, class, `impl`, macro, user-defined annotation.
 - function overloading, `[]`/`()`/bitwise/comparison operator overloading.
-- C-style `for`. (v0.6 부터 `while` 은 허용.)
+- C-style `for`. `while` 도 없음 — `for cond { }` 사용.
 - detached spawn, `async`, `await`, `WaitGroup`.
 - lifetime annotation, variance annotation, generic parameter default.
 - implicit narrowing/lossy numeric conversion, `as` conversion keyword.
@@ -372,7 +358,7 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 
 - No semicolons, no trailing-dot chains, no newline before `else`.
 - Use `T?`, not `Option<T>`, in formatted output.
-- Use `for cond` 또는 `while cond` (v0.6 동의어, §4.4). C-style for 는 금지.
+- Use `for cond` (§4.4). C-style for / `while` 키워드 모두 없다.
 - Use `match`/`if let` for enum destructuring, not plain `let`.
 - Parenthesize struct literals in control-flow heads.
 - Use `::<T>` only on calls and never with an empty type-argument list.
@@ -384,5 +370,5 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - v0.6: 라이브러리 코드에선 capability parameter 명시 — testability 강화.
 - v0.6: SQL/shell/path/url/html 데이터는 sanitizer 경유 후 sink 도달.
 - v0.6: stdlib sealed types 직접 literal 금지 — `Type.parse(...)`.
-- v0.6: 메타데이터가 풍부한 함수에 `#[purpose]` / `#[example]` / `#[spec]` 부착.
+- v0.6: 메타데이터가 풍부한 함수에 `#[purpose]` / `#[example]` 부착.
 - Run formatter/checker after edits.

@@ -215,11 +215,6 @@ The v0.6 annotation surface composes with `const fn` as follows:
 - **`#[pure]`** — every `const fn` is implicitly pure (the body
   cannot consult any capability — capabilities are runtime
   values). Explicit `#[pure]` is permitted but redundant.
-- **`#[budget]`** — `const fn` calls in default-argument position
-  count for *zero* `allocs` / `io_calls` because the result is a
-  compile-time constant. They count for `instructions` only at the
-  runtime call site (when the `const fn` is called with non-const
-  arguments).
 - **`#[taint]`** — a `const fn` cannot receive a tainted input
   because tainted values are runtime constructs. The annotation is
   meaningless on a `const fn` parameter (`W0903`).
@@ -1862,7 +1857,6 @@ duplicate public/test helper name (`E0554`).
 #[example(input = ["invalid", "<Db>"],
           uses = "freshDb",
           output = "Err(SignupError.EmailFormat)")]
-#[spec("§10.30.user.signup")]
 #[since("0.6")]
 #[stability("stable")]
 #[error_contract(
@@ -1870,12 +1864,7 @@ duplicate public/test helper name (`E0554`).
     SignupError.DomainBlocked when "domain in deny-list",
     SignupError.DbConflict    when "email unique constraint",
 )]
-pub fn signup(email: String, db: Db) -> Result<UserId, SignupError> {
-    spec {
-        example: signup("alice@example.com", freshDb()) == Ok(UserId(1))
-    }
-    ...
-}
+pub fn signup(email: String, db: Db) -> Result<UserId, SignupError> { ... }
 
 #[fixture(name = "freshDb")]
 fn freshDb() -> Db { std.capability.testing.FakeDb() }
@@ -1890,11 +1879,10 @@ fn dbWithAlice() -> Db {
 
 This single declaration emits to:
 
-- `osty doc` page with purpose / spec link / failure modes / 3
-  example panels (each with the fixture body inlined).
+- `osty doc` page with purpose / failure modes / 3 example panels
+  (each with the fixture body inlined).
 - `osty context signup --format=json` with the full intent payload.
-- `osty test --spec --example --golden` runs all three examples + the
-  spec-block clause.
+- `osty test --example --golden` runs all three examples.
 - `osty publish` validates the API surface against `#[stability("stable")]`
   and the contract.
 - LSP hover shows the purpose + spec lead paragraph.
@@ -2064,7 +2052,6 @@ patterns 의 carry-forward 사례. 정식 의미는 각 sub-section.
     uses = "fakeDb",
     output = "Err(UserCreateError.Format)",
 )]
-#[spec("§10.30.user.create")]
 #[since("0.6")]
 #[stability("stable")]
 #[error_contract(
@@ -2072,7 +2059,6 @@ patterns 의 carry-forward 사례. 정식 의미는 각 sub-section.
     UserCreateError.DomainBlocked when "도메인 deny-list 등재",
     UserCreateError.DbConflict    when "이메일 unique 위반",
 )]
-#[budget(allocs = 8, io_calls = 1)]
 pub fn createUser(email: String, db: Db) -> Result<UserId, UserCreateError> {
     let parsed = Email.parse(email).orError(UserCreateError.Format)?
     if isDomainBlocked(parsed.domain()) {
@@ -2103,9 +2089,7 @@ fn fakeDb() -> Db { std.testing.db.inMemory() }
 ```osty
 #[purpose("Content-addressed hash of input bytes")]
 #[example(input = "<empty bytes>", output = "Bytes32.fromHex(\"e3b0c44...\")")]
-#[spec("§10.12.crypto")]
 #[reproducible(scope = "portable")]
-#[budget(allocs = 1, io_calls = 0)]
 pub fn computeKey(data: Bytes) -> Bytes32 {
     sha256(data)
 }
@@ -2115,33 +2099,12 @@ pub fn computeKey(data: Bytes) -> Bytes32 {
 `scope = "portable"` 는 가장 강한 scope — endianness / NaN bit /
 unordered iter 모두 거부 (§3.11.3).
 
-#### 3.16.3 Spec-block-driven validation
-
-```osty
-#[purpose("Normalize email — trim + lowercase")]
-fn normalizeEmail(s: String) -> String {
-    spec {
-        example: normalizeEmail(" Alice@EXAMPLE.COM ") == "alice@example.com"
-        example: normalizeEmail("") == ""
-        law: result == result.trim()
-        law: result == result.toLowerCase()
-        invariant: result.indexOf(" ") == -1
-    }
-    s.trim().toLowerCase()
-}
-```
-
-`spec { example: }` 는 `osty test --spec` 자동 실행. `law:` /
-`invariant:` 는 v0 (Phase 3) 에서 `osty doc` 만 — v1 (Phase 5) 에서
-property test 자동 생성.
-
-#### 3.16.4 Sealed type with structured intent
+#### 3.16.3 Sealed type with structured intent
 
 ```osty
 #[purpose("RFC 5322 email parser")]
 #[example(input = "alice@example.com", output = "Some(...)")]
 #[example(input = "no-at", output = "None")]
-#[spec("§10.30.email.parse")]
 #[since("0.6")]
 #[stability("stable")]
 #[sealed_construct(parse)]
@@ -2176,7 +2139,6 @@ struct literal `Email { local: ..., domain: ... }` 은 `E0420`. 이로써
     HandlerError.NotFound when "users 테이블에 없는 ID",
     HandlerError.DbDown   when "DB 연결 실패",
 )]
-#[budget(allocs = 4, io_calls = 1, time_ms = 50)]
 pub fn lookupUser(
     #[taint("user_input")] userId: String,
     db: Db,
