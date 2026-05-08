@@ -1175,3 +1175,220 @@ fn routeRequest(req: Request) -> Response { ... }
 
 Static and runtime keys may coexist on the same annotation —
 the compiler partitions them by category.
+
+### 3.16 Combined v0.6 declaration patterns
+
+이 섹션은 §3.10–§3.15 의 v0.6 어노테이션을 *함께* 사용하는 patterns
+의 carry-forward 사례. 정식 의미는 각 sub-section.
+
+#### 3.16.1 Library function — full v0.6 surface
+
+```osty
+#[purpose("Validates email and inserts user record")]
+#[example(
+    input = ["alice@example.com", "<Db>"],
+    uses = "fakeDb",
+    output = "Ok(42)",
+)]
+#[example(
+    input = ["invalid", "<Db>"],
+    uses = "fakeDb",
+    output = "Err(UserCreateError.Format)",
+)]
+#[spec("§10.30.user.create")]
+#[since("0.6")]
+#[stability("stable")]
+#[error_contract(
+    UserCreateError.Format        when "Email.parse 실패",
+    UserCreateError.DomainBlocked when "도메인 deny-list 등재",
+    UserCreateError.DbConflict    when "이메일 unique 위반",
+)]
+#[budget(allocs = 8, io_calls = 1)]
+pub fn createUser(email: String, db: Db) -> Result<UserId, UserCreateError> {
+    let parsed = Email.parse(email).orError(UserCreateError.Format)?
+    if isDomainBlocked(parsed.domain()) {
+        return Err(UserCreateError.DomainBlocked(parsed.domain()))
+    }
+    db.insert(parsed).mapErr(|e| UserCreateError.DbConflict(e.id))
+}
+
+#[fixture(name = "fakeDb")]
+fn fakeDb() -> Db { std.testing.db.inMemory() }
+```
+
+이 함수가 노출하는 surface:
+
+- **Type**: `(String, Db) -> Result<UserId, UserCreateError>`
+- **Capability**: `Db` (`Net` capability 의 wrapping — DB 가 외부 의존)
+- **Failure**: 3 contracted variants
+- **Performance**: 8 allocs / 1 io_call (compiler proven)
+- **Stability**: stable since 0.6
+- **Spec ref**: §10.30.user.create
+- **Examples**: 2 auto-tested
+
+`osty context std.user.createUser --format=json` 호출 시 위 정보
+모두 single JSON 으로 노출 (§13.9).
+
+#### 3.16.2 Reproducible utility — capability-free
+
+```osty
+#[purpose("Content-addressed hash of input bytes")]
+#[example(input = "<empty bytes>", output = "Bytes32.fromHex(\"e3b0c44...\")")]
+#[spec("§10.12.crypto")]
+#[reproducible(scope = "portable")]
+#[budget(allocs = 1, io_calls = 0)]
+pub fn computeKey(data: Bytes) -> Bytes32 {
+    sha256(data)
+}
+```
+
+`#[reproducible(scope = "portable")]` 는 *플랫폼 간 byte-equal* 약속.
+`scope = "portable"` 는 가장 강한 scope — endianness / NaN bit /
+unordered iter 모두 거부 (§3.11.3).
+
+#### 3.16.3 Spec-block-driven validation
+
+```osty
+#[purpose("Normalize email — trim + lowercase")]
+fn normalizeEmail(s: String) -> String {
+    spec {
+        example: normalizeEmail(" Alice@EXAMPLE.COM ") == "alice@example.com"
+        example: normalizeEmail("") == ""
+        law: result == result.trim()
+        law: result == result.toLowerCase()
+        invariant: result.indexOf(" ") == -1
+    }
+    s.trim().toLowerCase()
+}
+```
+
+`spec { example: }` 는 `osty test --spec` 자동 실행. `law:` /
+`invariant:` 는 v0 (Phase 3) 에서 `osty doc` 만 — v1 (Phase 5) 에서
+property test 자동 생성.
+
+#### 3.16.4 Sealed type with structured intent
+
+```osty
+#[purpose("RFC 5322 email parser")]
+#[example(input = "alice@example.com", output = "Some(...)")]
+#[example(input = "no-at", output = "None")]
+#[spec("§10.30.email.parse")]
+#[since("0.6")]
+#[stability("stable")]
+#[sealed_construct(parse)]
+pub struct Email {
+    local: String,
+    domain: String,
+}
+
+impl Email {
+    pub fn parse(s: String) -> Email? {
+        let parts = s.split("@")
+        if parts.len() != 2 { return None }
+        Some(Email { local: parts[0], domain: parts[1] })
+    }
+
+    pub fn local(self) -> String { self.local }
+    pub fn domain(self) -> String { self.domain }
+}
+```
+
+`Email.parse(...)` 외 path 로 `Email` 인스턴스 만들 수 없음 — 외부
+struct literal `Email { local: ..., domain: ... }` 은 `E0420`. 이로써
+`Email` 값이 존재한다 ⇒ 위 `parse` 가 OK 반환했다 ⇒ 검증 통과.
+
+#### 3.16.5 Web handler — capability + taint + sanitize
+
+```osty
+#[purpose("Look up user by ID with SQL safety")]
+#[since("0.6")]
+#[stability("stable")]
+#[error_contract(
+    HandlerError.NotFound when "users 테이블에 없는 ID",
+    HandlerError.DbDown   when "DB 연결 실패",
+)]
+#[budget(allocs = 4, io_calls = 1, time_ms = 50)]
+pub fn lookupUser(
+    #[taint("user_input")] userId: String,
+    db: Db,
+    clock: Clock,
+) -> Result<UserSummary, HandlerError> {
+    let safe = std.sql.escape(userId)             // sanitize: user_input → sql_safe
+    let started = clock.monotonic()
+
+    let rows = db.exec(
+        "SELECT id, email FROM users WHERE id = ?",
+        [safe],                                    // sink #[requires("sql_safe")] 충족
+    ).mapErr(|_| HandlerError.DbDown)?
+
+    if rows.isEmpty() { return Err(HandlerError.NotFound) }
+
+    Ok(UserSummary {
+        id: rows[0].getInt("id"),
+        email: rows[0].getString("email"),
+        lookedUpAt: clock.now(),
+    })
+}
+```
+
+여러 v0.6 surface 가 한 함수에 모임 — capability (`db: Db`,
+`clock: Clock`) + taint (`userId` 가 user_input source) + sanitizer
+(`std.sql.escape`) + sink (`db.exec` parameterized form) +
+error_contract (2 failure modes) + runtime budget. `osty context`
+호출 시 single JSON 으로 모두 export (§13.9.1).
+
+#### 3.16.6 Match with versioned enum
+
+```osty
+pub enum HttpEvent {
+    Get,
+    Post,
+    Put,
+    Delete,
+
+    #[since("0.7")]
+    Patch,                       // v0.7 신규 — v0.6 코드는 fallback 로 처리
+}
+
+#[match_compat("0.6", fallback = handlePatchAsPut, reason = "Patch 는 v0.7 정식")]
+pub fn dispatch(event: HttpEvent) -> Response {
+    match event {
+        HttpEvent.Get -> handleGet(),
+        HttpEvent.Post -> handlePost(),
+        HttpEvent.Put -> handlePut(),
+        HttpEvent.Delete -> handleDelete(),
+    }
+    // HttpEvent.Patch (v0.7) 도달 시 fallback = handlePatchAsPut 호출
+}
+
+fn handlePatchAsPut() -> Response { handlePut() }
+```
+
+`#[match_compat]` 는 *versioned enum shape* 에 match 를 pin —
+미래 variant 추가 시 silent 깨짐 방지 (§3.14.4 / E0450).
+
+#### 3.16.7 Test 측 fake injection
+
+production 코드는 explicit capability parameter — 테스트에선
+deterministic fake 주입.
+
+```osty
+#[test]
+fn test_lookupUser_returns_summary() {
+    let db = std.capability.testing.FakeDb()
+    db.seed(User.parse("alice@example.com")?)
+
+    let clock = std.capability.testing.FakeClock(epoch_ms = 1_000_000)
+
+    let result = lookupUser("123", db, clock)
+    testing.assertOk(result)
+
+    let summary = result.unwrap()
+    testing.assertEq(summary.email, "alice@example.com")
+    testing.assertEq(summary.lookedUpAt.toEpochMillis(), 1_000_000)
+}
+```
+
+`FakeDb` / `FakeClock` 의 deterministic 동작이 테스트 결과의
+재현성을 보장. v0.6 테스트는 `--legacy-globals` 의존 없음 — 모든
+effect 가 fake 로 대체.

@@ -532,3 +532,145 @@ fn find(id: Int) -> User? { ... }
 ```
 
 ---
+
+### 2.12 v0.6 type system extensions
+
+이 섹션은 v0.6 가 *기존 type system 위에 layer 한 메커니즘*을 한
+곳에 정리. 정식 의미는 §20 (capabilities), §21 (information flow),
+§3.10 (spec link), §3.11 (reproducibility), §3.4.5 (sealed
+construct), §7.5 (error contract) 가 권위.
+
+#### 2.12.1 Capability types — interface-level
+
+v0.6 의 7 canonical capability (`Clock` / `Rng` / `Env` / `Fs` /
+`Net` / `Process` / `Console`) 는 *일반 structural interface* 이다.
+Type system 측 변경 0 — capability 는 새 type kind 가 아니다.
+
+```osty
+fn buildId(clock: Clock, rng: Rng) -> String { ... }
+//          ^^^^^^^^^^^^^^^^^^^^^^^^
+//          Clock, Rng 는 평범한 interface 타입.
+```
+
+검사기 (toolchain/check_gates.osty::runReproducibleCapabilityGate)
+가 `#[reproducible]` 함수의 capability parameter 검사 — type system
+위 *추가 enforcement layer* 만 추가됐다 (§20.4 / §3.11).
+
+#### 2.12.2 Flow tags — type-orthogonal annotation
+
+`#[taint("σ")]` / `#[sanitizes("σ", into = "τ")]` /
+`#[requires("τ")]` 가 type 에 부착하는 *flow tag set* 은 type
+identity 를 변경하지 않는다 — 같은 `String` 이라도 한 site 에선
+`{user_input}` tag, 다른 site 에선 untagged 일 수 있다.
+
+```osty
+fn handler(form: #[taint("user_input")] String) { ... }
+//                                       ^^^^^^
+//                                       String 그대로. tag 만 부착.
+```
+
+Tag set 의 정확한 propagation rule 은 §21.5.3 의 inference rule.
+요점: tag 는 *type-level* 이 아니라 *value-level* annotation —
+ascription / equality / generic instantiation 등 type system 의 모든
+규칙은 tag 와 무관하게 작동.
+
+#### 2.12.3 Sealed construct — restriction on literal sites
+
+`#[sealed_construct(parse)]` 는 struct 의 *literal 생성 위치* 만
+제한한다 — type identity / interface satisfaction / generic
+instantiation 등은 영향 없음.
+
+```osty
+#[sealed_construct(parse)]
+pub struct Email { local: String, domain: String }
+```
+
+`Email` 은 평범한 struct — `Equal` / `Hashable` 자동 derive (§2.6.5),
+`Map<Email, Int>` key 사용 가능, generic parameter 로 사용 가능. 다만
+*construct* 만 sealed (§3.4.5 / E0420).
+
+#### 2.12.4 Error contract — Result<T, E> 위 attestation
+
+`#[error_contract]` 는 `Result<T, E>` 의 `E` 가 concrete enum 일 때만
+적용 가능한 attestation. Type system 자체 변경 없음 — `Result<T, E>`
+는 그대로 generic enum.
+
+```osty
+#[error_contract(EmailError.Format when "missing @")]
+pub fn parseEmail(s: String) -> Result<Email, EmailError> { ... }
+```
+
+caller 의 match exhaustiveness 검사 가 contract variant 만 고려하도록
+*추가 rule* 만 들어감 (§7.5.7). Erased `Error` interface 는
+`#[error_contract(any)]` 만 (검증 없음, 문서용).
+
+#### 2.12.5 Type erasure rules
+
+- **Function value (G15)**: default / keyword metadata 는 erase. v0.6
+  capability parameter 는 *positional 필수* 이므로 G15 와 충돌 없음
+  — capability 는 함수값 시그니처 그대로 유지.
+- **Interface value**: fat pointer (data + vtable). capability 도
+  interface 이므로 같은 layout — `let f: Clock = systemClock` 형식의
+  upcast 자유.
+- **Flow tag erasure**: 함수값 으로 저장 시 tag 는 *유지* — `let f:
+  fn(#[taint("user_input")] String) -> ...` 의 caller 측 검사가
+  남는다.
+
+#### 2.12.6 Generic monomorphization 와 v0.6 surface
+
+generic 함수의 capability parameter 는 monomorphization 시 type
+parameter 와 함께 결정.
+
+```osty
+fn id<T>(x: T) -> T { x }
+
+#[ambient(clock)]
+fn main() {
+    let c = id(clock)         // T = Clock instance
+    c.now()                    // OK — monomorphized id::<Clock>
+}
+```
+
+flow tag 는 generic instance 별로 독립. `id<String@{user_input}>`
+는 `id<String@{}>` 와 다른 monomorphization signature.
+
+#### 2.12.7 Inference 와 v0.6 annotation
+
+Bidirectional type inference (§2a) 는 v0.6 annotation 위에서 그대로
+작동:
+
+- `#[taint]`, `#[requires]` 는 type-level 검사 *후* 의 추가 layer —
+  inference 자체에 영향 없음
+- `#[reproducible]` 은 capability parameter 의 *수신 여부* 만 확인 —
+  inference 가 결정한 parameter type 위 검사
+- `#[sealed_construct]` 의 literal 차단은 *parse / resolve 단계* 검사
+  — type checker 는 sealed type 의 일반 사용을 inference 통해 처리
+
+#### 2.12.8 Variance, lifetime, where clause — 변경 없음
+
+§14 의 exclusion (variance, lifetime, where, generic 기본값) 는
+v0.6 에서 모두 carry-forward. v0.6 의 capability / flow tag /
+sealed / error contract 는 *모두* 이 exclusion 을 지키는 형태로
+설계.
+
+| Excluded feature | v0.6 영향 |
+|---|---|
+| Variance annotation | capability `Clock` 등은 invariant interface — sub/super 관계 없음 |
+| Lifetime annotation | flow tag 가 lifetime *대체* — `'a` 같은 ident 없음 |
+| `where` clause | `T: I1 + I2` 그대로 — capability 도 동일 |
+| Generic 기본값 | variation 없음 |
+
+### 2.13 Equality / Hashability / Ordering — v0.6 baseline 그대로
+
+v0.5 의 §2.9 (Equality and Hashing) 와 §2.10 (Mutability) 는 v0.6
+에서 *변경 없음*. 다만 v0.6 신규 어노테이션 의 `Equal` / `Hashable`
+영향:
+
+| Annotation | Equal/Hashable 영향 |
+|---|---|
+| `#[sealed_construct]` | 영향 없음 — sealed 는 construct 만 제한 |
+| `#[taint]` | 영향 없음 — flow tag 는 value-level |
+| `#[reproducible]` | 영향 없음 — function-level annotation |
+| `#[purpose]` / `#[example]` / `#[fixture]` | 영향 없음 — metadata |
+| `#[stability]` | 영향 없음 — metadata |
+| `#[budget]` | 영향 없음 — metadata + perf check |

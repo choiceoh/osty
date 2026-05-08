@@ -2,6 +2,13 @@
 
 Non-cryptographic pseudorandom numbers.
 
+> **v0.6 migration**: the v0.5 globals `random.next()` / `random.nextBytes(n)` /
+> `random.default()` move to `Rng` capability methods (§20.9.2). The
+> production host adapter is `random.host`; for deterministic tests use
+> `std.capability.testing.FakeRng(seed = N)`. The legacy globals stay
+> available under `--legacy-globals` (v0.6.x only); v0.7 removes them.
+> See §10.46 for the full migration table.
+
 ```osty
 use std.random
 

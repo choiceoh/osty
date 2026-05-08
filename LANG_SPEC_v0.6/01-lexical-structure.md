@@ -396,3 +396,78 @@ an annotation with unknown arguments, an annotation in an unsupported
 position, or with arguments of the wrong type, is a compile error.
 
 ---
+
+### 1.10 v0.6 lexical surface summary
+
+이 섹션은 v0.6 의 *lexical-level* 변경을 한눈에 볼 수 있게 정리. 정식
+규칙은 위 §1.2 (keywords) / §1.3 (contextual identifiers) / §1.9
+(annotations).
+
+#### 1.10.1 Reserved keyword 변경
+
+v0.5 → v0.6 에서 reserved keyword 가 17 → 18 로 +1 — `while` (G49).
+`while cond { body }` 와 `for cond { body }` 는 *동의어* — 두 form
+모두 같은 IR 로 lower (§4.4).
+
+| v0.5 | v0.6 | 변경 |
+|---|---|---|
+| 17 reserved | 18 reserved | +`while` |
+
+#### 1.10.2 Contextual keyword 변경
+
+v0.5 의 10 contextual keyword (`self`, `Self`, `true`, `false`,
+`Some`, `None`, `Ok`, `Err`, `loop`, `const`, `by`) 위에 v0.6 은
+4 추가 — `spec`, `example`, `law`, `invariant` (G43, §3.13).
+
+이 4 키워드는 *spec block 내부* 에서만 keyword. 그 외 위치 (변수
+이름, struct field 이름) 에서는 식별자.
+
+`forall` 은 v1 (Phase 5) 단계에서 추가 예정 — v0.6.0 baseline 에는
+없음.
+
+#### 1.10.3 Annotation set 변경
+
+v0.5 의 11 fixed annotation 위에 v0.6 은 20 신규 annotation 추가.
+모든 v0.6 annotation 의 합법 위치 표는 `00-revision.md §7.6` 가
+권위.
+
+| 카테고리 | v0.6 신규 annotation |
+|---|---|
+| Capabilities (G36) | `#[ambient]`, `#[reproducible_capability]` |
+| Information flow (G37) | `#[taint]`, `#[sanitizes]`, `#[trusted_declassify]`, `#[taint_field]` (parameter `#[requires]` 는 v0.5 reuse) |
+| Spec link (G38) | `#[spec]` |
+| Reproducibility (G39) | `#[reproducible]` |
+| Sealed construct (G40) | `#[sealed_construct]`, `#[trusted_construct]`, `#[test_construct]` |
+| Error contract (G41) | `#[error_contract]` |
+| Structured intent (G42) | `#[purpose]`, `#[example]`, `#[fixture]` |
+| API evolution (G44) | `#[since]`, `#[stability]`, `#[match_compat]` |
+| Golden tests (G45) | `#[golden]` |
+| Performance (G46) | `#[budget]` |
+
+annotation 인자는 v0.5 와 동일 — *literal 만* (string / int / bool /
+ident / `key = literal`). expression 인자 불가.
+
+#### 1.10.4 Lexer token 변경
+
+v0.5 에서 v0.6 으로 *새 token kind 0 추가*. 모든 v0.6 신규 syntax
+(spec block / parameter-position annotation / capability parameter)
+는 기존 token 으로 표현 가능.
+
+#### 1.10.5 ASI 영향
+
+`while` keyword 추가는 `for` / `loop` 와 동일한 ASI suppression
+패턴. `while cond { body }` 는 `if cond { body }` 와 같은 token
+flow 로 처리.
+
+`spec { }` block 은 함수 본문의 *첫 statement 위치* 에서 lex —
+`fn foo() {` 다음 `spec` 식별자 발견 시 spec block 시작 token 으로
+승격. 다른 위치에서는 일반 식별자.
+
+#### 1.10.6 Diagnostic 영향
+
+v0.6 lexical 영역에 *신규 진단 코드 0* — 모든 신규 surface 가 기존
+band 의 코드 재사용 또는 §3.8 / §20 / §21 의 의미론 진단으로 처리.
+
+`E0400` (CodeUnknownAnnotation) 는 v0.6 의 21 추가 annotation 모두
+recognize — `internal/ast/ast.go::annotationRules` 와
+`toolchain/resolve.osty::srAnnotAllowedTargets` 가 sync.

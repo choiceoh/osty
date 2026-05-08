@@ -1,6 +1,18 @@
 ### 10.24 HTTP (`std.http`)
 
 HTTP client/server ergonomics built on top of three runtime-owned
+transport primitives.
+
+> **v0.6 migration**: HTTP client construction routes through `Net`
+> capability (`net.httpClient()`, §20.9.5). Two Phase 5 information-flow
+> sinks are added: `http.redirect(target)` requires `url_safe`
+> (sanitize via `std.url.encode` or `Url.parse(...)?`), and
+> `http.respondHtml(body)` requires `html_safe` (sanitize via
+> `std.html.escape` or use auto-escape templates). See §21.8 for the
+> full sink catalogue and §21.12.4 / §21.12.5 for vulnerable→fixed
+> patterns.
+
+HTTP client/server ergonomics built on top of three runtime-owned
 transport primitives:
 
 - `http.request(req)` — full client request
