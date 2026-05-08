@@ -313,3 +313,522 @@ stdlib 내 sanitizer 도 함께 제공: `sql.escape` / `shell.quote` /
 
 ---
 
+
+### 21.10 Tag taxonomy
+
+v0.6 의 정보 흐름 태그는 두 부류로 나뉜다 — *source tags* (데이터의
+출처를 표시) 와 *trust tags* (sanitization 통과 사실을 표시). 두
+부류 모두 일반 `String` literal 이며 — 컴파일러가 이름을 hardcode
+하지 않으므로 사용자 정의 영역도 같은 메커니즘으로 작동한다.
+
+#### 21.10.1 Stdlib source tags (v0.6 baseline)
+
+| Tag | 발생 위치 | 의도 |
+|---|---|---|
+| `"user_input"` | `HttpRequest.queryParam`, `formField`, `cookie`, `header` | 신뢰 불가능한 외부 입력 |
+| `"network_payload"` | `Net` capability 에서 읽은 raw bytes | TLS/MTLS 검증 후에도 application-level 로 untrusted |
+| `"filesystem_content"` | `Fs.readToString`, `readToBytes` 의 반환 (사용자 controlled path 일 때) | 디스크 내용은 누가 작성했는지 모를 수 있음 |
+| `"env_var"` | `Env.get`, `Env.vars` 의 반환 | 사용자 환경에서 주입 가능 |
+| `"command_output"` | `Process.exec`, `Process.spawn` 의 stdout/stderr | 외부 프로세스 출력 |
+| `"deserialized"` | `json.parse`, `toml.parse` 등 외부 직렬화 입력 | schema 검증 전 raw 데이터 |
+
+stdlib 의 source 어노테이션은 *Phase 5* 에 일괄 적용. 이전 phase 에선
+의도된 source 만 사용자가 명시한다.
+
+#### 21.10.2 Stdlib trust tags (v0.6 baseline)
+
+| Tag | 의미 | 발화 위치 (sanitizer) |
+|---|---|---|
+| `"sql_safe"` | SQL identifier / string literal escape 완료 | `std.sql.escape`, `SqlIdent.parse` |
+| `"shell_safe"` | shell metacharacter 이스케이프 완료 | `std.shell.quote`, `Path.parse` |
+| `"path_safe"` | path traversal sanitize 완료 (no `..` segments) | `std.path.normalize`, `Path.parse` |
+| `"url_safe"` | URL 인코딩 완료 (RFC 3986) | `std.url.encode`, `Url.parse` |
+| `"html_safe"` | HTML entity escape 완료 | `std.html.escape`, `template.htmlEscape` |
+| `"json_safe"` | JSON serialize-ready (UTF-8 + valid escape) | `json.encode` (자동 발화) |
+
+trust tag 는 *sanitizer 의 출력에만* 부착된다. 사용자 코드가 임의로
+trust tag 를 부여할 수는 없다 — `#[sanitizes(... into = "X")]`
+선언만 가능.
+
+#### 21.10.3 Tag set 의 부분 순서
+
+`#[requires("τ")]` 위치는 *value 의 tag set 이 τ 를 포함*해야 통과.
+정확한 규칙은 §21.5.4 의 lattice rule. 한 값이 여러 trust tag 를
+운반할 수 있다 — `sqlIdent(s)` 후 `htmlEscape(...)` 거치면 `{sql_safe,
+html_safe}` 동시 운반.
+
+source tag 는 *sanitize 통과 시 제거*된다 (`sanitizes("user_input",
+into = "sql_safe")` → `user_input` 제거 + `sql_safe` 추가). 그러므로
+일반 흐름은 `{user_input}` → `{sql_safe}` 순.
+
+#### 21.10.4 사용자 정의 tag
+
+stdlib 외부에서도 새 tag 를 도입할 수 있다 — `#[taint("my_app_secret")]`
+같은 형식. 새 tag 를 sink 에서 검증하려면 `#[requires("my_app_secret")]`
+도 사용자 정의 함수 시그니처에서 사용. 단 컴파일러는 *해당 tag 를
+생산하는 source 가 어디든 등록*되어 있어야 한다 — 미등록 시 `E0901`.
+
+```osty
+// 사용자 정의 source
+#[taint("session_token")]
+fn extractSessionToken(req: HttpRequest) -> String? {
+    req.cookie("session")
+}
+
+// 사용자 정의 sanitizer (signing 검증)
+#[sanitizes("session_token", into = "verified_session")]
+fn verifySession(token: String) -> Session? { ... }
+
+// 사용자 정의 sink
+fn loadUserData(
+    db: Db,
+    sessionId: #[requires("verified_session")] String,
+) -> User? {
+    db.query("SELECT * FROM users WHERE session_id = ?", [sessionId])
+}
+```
+
+### 21.11 Sanitizer registry — `std.sanitize`
+
+v0.6 stdlib 의 canonical sanitizer 목록. 모든 함수는
+`#[sanitizes(..., into = ...)]` 어노테이션 부착이 보장되며, 그
+출력은 sink 가 즉시 받을 수 있다.
+
+#### 21.11.1 `std.sql.escape`
+
+```osty
+#[sanitizes("user_input", into = "sql_safe")]
+pub fn escape(s: String) -> String { ... }
+```
+
+PostgreSQL / MySQL / SQLite 공통 string-literal escape 규칙 — `'` →
+`''`, NUL byte 거부, UTF-8 검증. 식별자 escape 는 `SqlIdent.parse`
+(아래 §21.11.7) 사용 — sealed type 이라 외부 literal 차단됨.
+
+#### 21.11.2 `std.shell.quote`
+
+```osty
+#[sanitizes("user_input", into = "shell_safe")]
+pub fn quote(s: String) -> String { ... }
+```
+
+POSIX `sh` / `bash` / `dash` 공통 — single-quote wrap + embedded
+single-quote 처리 (`it's` → `'it'\''s'`). Windows `cmd.exe` 는 별도
+sanitizer (현재 stdlib 미제공, follow-up).
+
+#### 21.11.3 `std.path.normalize`
+
+```osty
+#[sanitizes("user_input", into = "path_safe")]
+pub fn normalize(s: String) -> Result<Path, PathError> { ... }
+```
+
+`..` segment 거부 (path traversal 차단), absolute path 정규화, NUL
+byte 거부, OS-specific 분리자 통일. 결과는 sealed `Path` 타입.
+
+#### 21.11.4 `std.url.encode`
+
+```osty
+#[sanitizes("user_input", into = "url_safe")]
+pub fn encode(s: String) -> String { ... }
+```
+
+RFC 3986 percent-encoding — reserved character + non-ASCII 모두
+`%NN` 로 변환. URL component 별 (path / query / fragment) variant 는
+`encodePath` / `encodeQuery` / `encodeFragment`.
+
+#### 21.11.5 `std.html.escape`
+
+```osty
+#[sanitizes("user_input", into = "html_safe")]
+pub fn escape(s: String) -> String { ... }
+```
+
+`<` `>` `&` `"` `'` HTML entity escape. Attribute context 와 element
+content 의 escape 규칙은 동일하다 (모든 5 문자 escape).
+
+#### 21.11.6 `std.template.htmlEscape`
+
+`std.html.escape` 의 alias — template engine 내부에서 안전한 자동
+escape 을 호출하는 위치이다.
+
+#### 21.11.7 Sealed type parse 도 sanitizer 역할
+
+`#[sealed_construct(parse)]` types — `Email`, `Url`, `Path`,
+`SqlIdent`, `Duration`, `Uuid` — 의 `parse` 는 *암묵적으로* 다음
+어노테이션이 부착되어 있다:
+
+```osty
+#[sanitizes("user_input", into = "<type>_safe")]
+pub fn parse(s: String) -> Self?
+```
+
+따라서 `Email.parse(form_email)?` 의 결과는 `email_safe` tag 를
+운반하며, `Email` 받는 sink 는 `#[requires("email_safe")]` 또는
+default (untagged Email) 둘 다 허용.
+
+### 21.12 Worked attack scenarios
+
+각 시나리오: **vulnerable** → **컴파일 에러** → **fixed** (3 옵션).
+
+#### 21.12.1 SQL injection
+
+```osty
+// vulnerable — Phase 5 부터 컴파일 에러
+fn handler(req: HttpRequest, db: Db) -> Response {
+    let id = req.queryParam("id") ?? ""
+    let rows = db.query("SELECT * FROM users WHERE id = {id}")
+    //                                                    ^^^ E0900
+    Response.ok(rows.toJson())
+}
+```
+
+```osty
+// option A — parameterized (권장)
+fn handler(req: HttpRequest, db: Db) -> Response {
+    let id = req.queryParam("id") ?? ""
+    let rows = db.exec("SELECT * FROM users WHERE id = ?", [id])
+    Response.ok(rows.toJson())
+}
+
+// option B — sanitizer
+fn handler(req: HttpRequest, db: Db) -> Response {
+    let id = req.queryParam("id") ?? ""
+    let safe = std.sql.escape(id)
+    let rows = db.query("SELECT * FROM users WHERE id = {safe}")
+    Response.ok(rows.toJson())
+}
+
+// option C — sealed type
+fn handler(req: HttpRequest, db: Db) -> Result<Response, Error> {
+    let raw = req.queryParam("id") ?? ""
+    let id = SqlIdent.parse(raw).orError(BadRequestError)?
+    let rows = db.query("SELECT * FROM users WHERE id = {id}")
+    Ok(Response.ok(rows.toJson()))
+}
+```
+
+#### 21.12.2 Command injection
+
+```osty
+// vulnerable
+fn runCommand(req: HttpRequest, process: Process) -> Result<String, Error> {
+    let cmd = req.queryParam("cmd") ?? "ls"
+    process.exec(cmd, []).map(|out| out.stdout)
+    //           ^^^ E0900 — `cmd` parameter requires shell_safe
+}
+```
+
+```osty
+// option A — fixed command, dynamic args
+fn runCommand(req: HttpRequest, process: Process) -> Result<String, Error> {
+    let arg = req.queryParam("dir") ?? "."
+    process.exec("ls", [arg]).map(|out| out.stdout)
+    //                  ^^^ first arg list element is shell_safe via Process.exec
+    //                  ^^^ contract — see §20.9.6.
+}
+
+// option B — quote sanitizer
+fn runCommand(req: HttpRequest, process: Process) -> Result<String, Error> {
+    let raw = req.queryParam("cmd") ?? "ls"
+    let cmd = std.shell.quote(raw)
+    process.exec("/bin/sh", ["-c", cmd]).map(|out| out.stdout)
+}
+```
+
+#### 21.12.3 Path traversal
+
+```osty
+// vulnerable
+fn loadFile(req: HttpRequest, fs: Fs) -> Result<Bytes, Error> {
+    let path = req.queryParam("file") ?? "default.txt"
+    fs.readToBytes(path)   // E0900 — `path` requires path_safe
+}
+```
+
+```osty
+// option A — Path.parse (path_safe trust + traversal 차단)
+fn loadFile(req: HttpRequest, fs: Fs) -> Result<Bytes, Error> {
+    let raw = req.queryParam("file") ?? "default.txt"
+    let safe = Path.parse(raw).orError(BadPathError)?
+    fs.readToBytes(safe)   // OK — Path inputs to Fs are path_safe
+}
+
+// option B — fixed base + segment join
+fn loadFile(req: HttpRequest, fs: Fs) -> Result<Bytes, Error> {
+    let segment = req.queryParam("file") ?? "default.txt"
+    let base = Path.parse("/var/data")?
+    let safe = base.join(segment)?  // join validates segments
+    fs.readToBytes(safe)
+}
+```
+
+#### 21.12.4 Open redirect
+
+```osty
+// vulnerable
+fn redirect(req: HttpRequest, http: HttpClient) -> Response {
+    let target = req.queryParam("next") ?? "/"
+    http.redirect(target)  // E0900 — `target` requires url_safe
+}
+```
+
+```osty
+// option A — allowlist
+fn redirect(req: HttpRequest, http: HttpClient) -> Response {
+    let target = req.queryParam("next") ?? "/"
+    if !target.startsWith("/") { return Response.badRequest() }
+    let safe = std.url.encode(target)
+    http.redirect(safe)
+}
+
+// option B — Url.parse + host allowlist
+fn redirect(req: HttpRequest, http: HttpClient) -> Response {
+    let raw = req.queryParam("next") ?? "/"
+    match Url.parse(raw) {
+        Some(url) if isAllowedHost(url.host()) -> http.redirect(url),
+        _ -> Response.badRequest(),
+    }
+}
+```
+
+#### 21.12.5 XSS in template rendering
+
+```osty
+// vulnerable
+fn renderProfile(req: HttpRequest, template: Template) -> Response {
+    let name = req.queryParam("name") ?? "anon"
+    template.render("profile.html", { "userName": name })
+    //                                              ^^^ E0900 — template values require html_safe
+}
+```
+
+```osty
+// option A — html.escape
+fn renderProfile(req: HttpRequest, template: Template) -> Response {
+    let name = req.queryParam("name") ?? "anon"
+    let safe = std.html.escape(name)
+    template.render("profile.html", { "userName": safe })
+}
+
+// option B — auto-escape template (template engine 자동 escape 속성)
+fn renderProfile(req: HttpRequest, template: AutoEscapeTemplate) -> Response {
+    let name = req.queryParam("name") ?? "anon"
+    template.render("profile.html", { "userName": name })
+    //                                              ^^^ AutoEscapeTemplate.render
+    //                                                   wrap 내부 sanitizes
+}
+```
+
+### 21.13 Tag propagation through generics, closures, collections
+
+#### 21.13.1 Generic identity
+
+```osty
+fn id<T>(x: T) -> T { x }
+
+fn handler(form: #[taint("user_input")] String, db: Db) {
+    let copy = id(form)               // copy: { user_input } 유지
+    db.query("... {copy}")            // E0900
+}
+```
+
+`T` 의 monomorphized instance 가 tagged type 이면 `id` 의 인자/반환
+모두 같은 tag set 운반. 컴파일러는 generic instance 별로 type tag
+flow 를 결정.
+
+#### 21.13.2 Closure capture
+
+```osty
+fn process(form: #[taint("user_input")] String) -> fn() -> String {
+    || form.toUpperCase()              // closure 의 반환 type: { user_input }
+}
+
+fn handler(form: #[taint("user_input")] String, db: Db) {
+    let f = process(form)
+    let out = f()                       // out: { user_input }
+    db.query("... {out}")               // E0900
+}
+```
+
+closure 가 capture 한 모든 tagged value 의 tag 가 closure 의 반환
+type 에 합쳐진다.
+
+#### 21.13.3 Collection propagation
+
+```osty
+fn handler(req: HttpRequest, db: Db) {
+    let names: List<#[taint("user_input")] String> = [
+        req.queryParam("a") ?? "",
+        req.queryParam("b") ?? "",
+    ]
+    for name in names {
+        db.query("... {name}")          // E0900 (each iteration)
+    }
+}
+```
+
+`List<T@A>` 의 element access (`xs[i]`, `for x in xs`) 는 `T@A` 를
+반환. `Map<K, V@A>` 의 value access 도 동일.
+
+#### 21.13.4 Result/Option
+
+```osty
+fn fetch(net: Net, url: String) -> Result<#[taint("network_payload")] String, NetError> { ... }
+
+fn handler(net: Net, db: Db) -> Result<(), Error> {
+    let body = fetch(net, "https://x.example")?    // body: { network_payload }
+    db.query("... {body}")                          // E0900
+    Ok(())
+}
+```
+
+`?` operator 의 Ok-arm payload 가 같은 tag 운반. Err-arm 의 tag 는
+caller 의 Err 로 propagate (caller's Err type 이 tagged 면).
+
+#### 21.13.5 Struct field
+
+§21.5 의 default rule: struct 단위 fold. `#[taint_field]` 로 필드별
+narrow 가능.
+
+```osty
+struct Form {
+    email: String,
+    name: String,
+}
+
+fn build(emailIn: #[taint("user_input")] String) -> Form {
+    Form { email: emailIn, name: "anon" }
+    // 결과 Form: { user_input } 전체 fold
+}
+
+fn use(f: Form, db: Db) {
+    db.query("... {f.name}")       // E0900 — name 도 fold 영향
+}
+```
+
+```osty
+// narrow with #[taint_field]
+struct Form {
+    #[taint_field("user_input")]
+    email: String,
+    name: String,
+}
+
+fn use(f: Form, db: Db) {
+    db.query("... {f.email}")      // E0900
+    db.query("... {f.name}")       // OK — narrow fold
+}
+```
+
+### 21.14 FFI declassify policy
+
+`#[trusted_declassify(reason = "...")]` 는 *audit-marked drop* 이며,
+다음 두 의미를 가진다:
+1. 컴파일러가 해당 함수의 반환 type 에서 모든 source tag 를 제거
+2. `osty audit --trusted-declassify` 가 reason 과 함께 site 를
+   enumerate
+
+`reason` 문자열은 *human-readable audit trail* — vocabulary 는
+표준화 되지 않았으나 다음 prefix 를 권장:
+
+| Reason prefix | 사용 케이스 |
+|---|---|
+| `"validated by ..."` | 외부 검증기 통과 (e.g., upstream WAF, schema validator) |
+| `"hard-coded ..."` | 컴파일타임 상수에서 옴 |
+| `"signed by ..."` | 디지털 서명 검증 통과 |
+| `"safe by construction ..."` | type system 외부 invariant |
+| `"FFI from trusted system call ..."` | Go syscall 류 |
+
+```osty
+#[trusted_declassify(reason = "validated by upstream WAF")]
+fn fromWaf(raw: String) -> String { raw }
+
+#[trusted_declassify(reason = "hard-coded UUID for system user")]
+fn systemUserId() -> String { "00000000-0000-0000-0000-000000000001" }
+
+#[trusted_declassify(reason = "signed by ed25519 root key")]
+fn parseSignedToken(token: String) -> String? { ... }
+```
+
+각 site 는 개발자 + 보안 reviewer 의 의도적 결정. CI 에서
+`osty audit --trusted-declassify` 출력의 *증가* 는 review trigger.
+
+### 21.15 Audit workflow
+
+```sh
+$ osty audit --trusted-declassify --report=pretty
+src/auth/session.osty:42:10  fromSession      "validated by signed JWT (HS256)"
+src/api/legacy.osty:15:5     fromLegacyClient "hard-coded UUID for system user"
+src/ffi/syscall.osty:108:8   syscallReturn    "FFI from trusted system call (getpid)"
+3 trusted-declassify sites
+```
+
+CI 통합 권장:
+
+```yaml
+# .github/workflows/security-audit.yml
+- name: Audit declassify sites
+  run: |
+    osty audit --trusted-declassify --format=json > declassify.json
+    # Compare to baseline; fail if new entries appear without review
+    diff <(jq -r '.[] | .symbol' declassify.json | sort) \
+         <(cat .ci/declassify-baseline.txt | sort) \
+      || (echo "::error::new trusted-declassify site requires security review" && exit 1)
+```
+
+`osty audit --all` 은 `--trusted-declassify` + `--trusted-construct` +
+`--match-compat` + `--legacy-globals` 를 동시 출력.
+
+### 21.16 Implicit flow rationale
+
+v0.6 은 *explicit-only* 정보 흐름 추적을 채택 — control-flow 의존
+covert channel 은 추적하지 않는다. 사례:
+
+```osty
+fn leak(token: #[taint("secret")] String) -> Bool {
+    if token.startsWith("admin") {
+        true            // 결과는 untagged
+    } else {
+        false           // 결과는 untagged
+    }
+}
+```
+
+`Bool` 결과 의 값 은 token 정보를 *간접 전송* — 엄밀히 말하면 정보가
+누출됐지만, v0.6 은 이것을 추적하지 않는다.
+
+**근거 (Jif [Myers 2002] 의 결정과 동일)**:
+1. **False positive 폭발** — 모든 conditional 의 결과가 condition 의
+   tag 를 운반하면 거의 모든 값이 tainted 가 된다 — false alarm 율
+   이 사용 가능 임계치 초과
+2. **종합적 추적 비용** — implicit flow 추적은 type system 에 *security
+   level lattice* 추가가 필요. 학술적 IFC 시스템에서도 도입
+   비용으로 정착 안 된 이유
+3. **Mainstream 채택 가능성** — explicit flow 만으로도 OWASP Top 10
+   의 *직접 직접 데이터 흐름* (SQLi / XSS / 명령 주입) 차단 가능 —
+   가장 흔한 pattern
+
+**v0.7+ 옵션 (Open Item, SPEC_GAPS)**:
+- `#[strict_flow]` — function-scoped opt-in implicit flow tracking
+- 적용 함수 내에선 covert channel 도 거부 (false-positive 율 ↑)
+- 보안 감사 코드 / cryptographic primitive 에서 사용
+
+### 21.17 Forward compatibility
+
+v0.6 의 information flow surface 는 *baseline* — 다음 추가가
+미래 minor release 에 가능:
+
+| 변경 | SemVer 영향 |
+|---|---|
+| 새 source tag (`#[taint("X")]` 등록) | additive |
+| 새 trust tag (sanitizer 출력 tag) | additive |
+| 새 sink (`#[requires]` 도입) | breaking — caller 측 sanitize 의무 추가 |
+| 기존 sink 의 required tag 변경 | breaking |
+| `#[trusted_declassify]` 추가 | additive |
+| Implicit flow 추적 (`#[strict_flow]`) | additive (opt-in 이므로) |
+
+stdlib 의 sink 카탈로그 에 추가는 breaking — `#[stability("stable")]`
+public API 가 sink 를 추가하면 major version bump (`E2100`).
+v0.6.0 의 baseline sink 5 종 (db / process / fs.path / http.redirect
+/ template) 외 sink 추가는 v0.7 이후로 일정 표시.
