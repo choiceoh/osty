@@ -1530,6 +1530,177 @@ func TestStage0P23PayloadlessEnumFeedsCall(t *testing.T) {
 	}
 }
 
+func TestStage0PayloadlessEnumComparesFnConstVariant(t *testing.T) {
+	t.Parallel()
+	kind := &ir.NamedType{Name: "FixtureKind"}
+	fn := makeFn(fnSpec{
+		name:   "isSourceFixture",
+		retT:   ir.TBool,
+		params: []paramSpec{{name: "kind", ty: kind}},
+		src: binaryRV(
+			mir.BinEq,
+			paramCopy(1, kind),
+			&mir.ConstOp{Const: &mir.FnConst{Symbol: "FixtureKind__FixtureSource", T: ir.ErrTypeVal}, T: ir.ErrTypeVal},
+			ir.TBool,
+		),
+	})
+	module := moduleWith(trivialMainFn(), fn)
+	module.Layouts.Enums["FixtureKind"] = &mir.EnumLayout{
+		Name:         "FixtureKind",
+		Discriminant: ir.TInt,
+		Variants: []mir.VariantLayout{
+			{Index: 0, Name: "FixtureManual"},
+			{Index: 1, Name: "FixtureSource"},
+		},
+	}
+	gotBytes, err := EmitMIR(module, llvmabi.Options{PackageName: "main"})
+	if err != nil {
+		t.Fatalf("EmitMIR: %v", err)
+	}
+	got := string(gotBytes)
+	for _, want := range []string{
+		"define i1 @isSourceFixture(i64 %kind)",
+		"%0 = icmp eq i64 %kind, 1",
+		"ret i1 %0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0TreatsErrTypedIntConstAsIntLiteral(t *testing.T) {
+	t.Parallel()
+	fn := makeFn(fnSpec{
+		name: "fallbackIndex",
+		retT: ir.TInt,
+		src:  useRV(&mir.ConstOp{Const: &mir.IntConst{Value: -1, T: ir.ErrTypeVal}, T: ir.ErrTypeVal}),
+	})
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"define i64 @fallbackIndex()",
+		"ret i64 -1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0GenericCFGSkipsUnreachableErrorOnlyLocals(t *testing.T) {
+	t.Parallel()
+	fn := &mir.Function{
+		Name:        "returnBeforeErrorSink",
+		ReturnType:  ir.TBool,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "ret", Type: ir.TBool, IsReturn: true},
+			{ID: 1, Name: "scratch", Type: ir.ErrTypeVal},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{ID: 0, Instrs: []mir.Instr{assign(0, useRV(boolConst(true)))}, Term: &mir.GotoTerm{Target: 1}},
+			{ID: 1, Term: &mir.ReturnTerm{}},
+			{
+				ID: 2,
+				Instrs: []mir.Instr{
+					assign(1, useRV(&mir.ConstOp{Const: &mir.FnConst{Symbol: "unreachableDebug", T: ir.ErrTypeVal}, T: ir.ErrTypeVal})),
+				},
+				Term: &mir.UnreachableTerm{},
+			},
+		},
+	}
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"define i1 @returnBeforeErrorSink()",
+		"br label %bb.1",
+		"bb.1:",
+		"ret i1 %0",
+		"bb.2:",
+		"unreachable",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "unreachableDebug") {
+		t.Fatalf("unreachable-only ErrType instruction should not be emitted:\n%s", got)
+	}
+}
+
+func TestStage0GenericCFGSynthesizesListAccumulatorReturn(t *testing.T) {
+	t.Parallel()
+	listString := &ir.NamedType{Name: "List", Builtin: true, Args: []ir.Type{ir.TString}}
+	fn := &mir.Function{
+		Name:        "cloneStrings",
+		Params:      []mir.LocalID{1},
+		ReturnType:  listString,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "ret", Type: listString, IsReturn: true},
+			{ID: 1, Name: "src", Type: listString, IsParam: true},
+			{ID: 2, Name: "out", Type: listString},
+			{ID: 3, Name: "iter", Type: listString},
+			{ID: 4, Name: "len", Type: ir.TInt},
+			{ID: 5, Name: "idx", Type: ir.TInt},
+			{ID: 6, Name: "keepGoing", Type: ir.TBool},
+			{ID: 7, Name: "elem", Type: ir.TString},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{
+				ID: 0,
+				Instrs: []mir.Instr{
+					assign(2, &mir.AggregateRV{Kind: mir.AggList, T: listString}),
+					assign(3, useRV(paramCopy(1, listString))),
+					assign(4, &mir.LenRV{Place: mir.Place{Local: 3}, T: ir.TInt}),
+					assign(5, useRV(intConst(0))),
+				},
+				Term: &mir.GotoTerm{Target: 1},
+			},
+			{
+				ID:     1,
+				Instrs: []mir.Instr{assign(6, binaryRV(mir.BinLt, localCopy(5, ir.TInt), localCopy(4, ir.TInt), ir.TBool))},
+				Term:   &mir.BranchTerm{Cond: localCopy(6, ir.TBool), Then: 2, Else: 4},
+			},
+			{
+				ID: 2,
+				Instrs: []mir.Instr{
+					assign(7, useRV(&mir.CopyOp{
+						Place: mir.Place{Local: 3, Projections: []mir.Projection{&mir.IndexProj{Index: localCopy(5, ir.TInt), ElemType: ir.TString}}},
+						T:     ir.TString,
+					})),
+					&mir.IntrinsicInstr{Kind: mir.IntrinsicListPush, Args: []mir.Operand{localCopy(2, listString), localCopy(7, ir.TString)}},
+				},
+				Term: &mir.GotoTerm{Target: 3},
+			},
+			{
+				ID:     3,
+				Instrs: []mir.Instr{assign(5, binaryRV(mir.BinAdd, localCopy(5, ir.TInt), intConst(1), ir.TInt))},
+				Term:   &mir.GotoTerm{Target: 1},
+			},
+			{
+				ID:     4,
+				Instrs: []mir.Instr{&mir.StorageDeadInstr{Local: 2}},
+				Term:   &mir.UnreachableTerm{},
+			},
+		},
+	}
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"define ptr @cloneStrings(ptr %src)",
+		"call ptr @osty_rt_list_new()",
+		"call ptr @osty_rt_list_get_string",
+		"call void @osty_rt_list_push_string",
+		"bb.4:",
+		"ret ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestStage0P24CallAndIntrinsicMix(t *testing.T) {
 	t.Parallel()
 	fn := makeMultiInstrFn(
