@@ -508,90 +508,90 @@ pub fn frontStableTokenID(
 }
 
 pub fn frontTokenKindStableCode(kind: FrontTokenKind) -> Int {
-    match kind {
-        FrontEOF -> 0,
-        FrontIllegal -> 1,
-        FrontNewline -> 2,
-        FrontIdent -> 3,
-        FrontLabel -> 4,
-        FrontInt -> 5,
-        FrontFloat -> 6,
-        FrontChar -> 7,
-        FrontByte -> 8,
-        FrontByteString -> 81,
-        FrontString -> 9,
-        FrontRawString -> 10,
-        FrontFn -> 11,
-        FrontStruct -> 12,
-        FrontEnum -> 13,
-        FrontInterface -> 14,
-        FrontType -> 15,
-        FrontLet -> 16,
-        FrontMut -> 17,
-        FrontPub -> 18,
-        FrontUse -> 19,
-        FrontIf -> 20,
-        FrontElse -> 21,
-        FrontMatch -> 22,
-        FrontFor -> 23,
-        FrontReturn -> 24,
-        FrontBreak -> 25,
-        FrontContinue -> 26,
-        FrontDefer -> 27,
-        FrontLParen -> 28,
-        FrontRParen -> 29,
-        FrontLBrace -> 30,
-        FrontRBrace -> 31,
-        FrontLBracket -> 32,
-        FrontRBracket -> 33,
-        FrontComma -> 34,
-        FrontColon -> 35,
-        FrontSemicolon -> 36,
-        FrontDot -> 37,
-        FrontPlus -> 38,
-        FrontMinus -> 39,
-        FrontStar -> 40,
-        FrontSlash -> 41,
-        FrontPercent -> 42,
-        FrontEq -> 43,
-        FrontNeq -> 44,
-        FrontLt -> 45,
-        FrontGt -> 46,
-        FrontLeq -> 47,
-        FrontGeq -> 48,
-        FrontAnd -> 49,
-        FrontOr -> 50,
-        FrontNot -> 51,
-        FrontBitAnd -> 52,
-        FrontBitOr -> 53,
-        FrontBitXor -> 54,
-        FrontBitNot -> 55,
-        FrontShl -> 56,
-        FrontShr -> 57,
-        FrontAssign -> 58,
-        FrontPlusEq -> 59,
-        FrontMinusEq -> 60,
-        FrontStarEq -> 61,
-        FrontSlashEq -> 62,
-        FrontPercentEq -> 63,
-        FrontBitAndEq -> 64,
-        FrontBitOrEq -> 65,
-        FrontBitXorEq -> 66,
-        FrontShlEq -> 67,
-        FrontShrEq -> 68,
-        FrontArrow -> 69,
-        FrontChanArrow -> 70,
-        FrontQuestion -> 71,
-        FrontAsQuestion -> 72,
-        FrontQDot -> 73,
-        FrontQQ -> 74,
-        FrontDotDot -> 75,
-        FrontDotDotEq -> 76,
-        FrontColonColon -> 77,
-        FrontUnderscore -> 78,
-        FrontAt -> 79,
-        FrontHash -> 80,
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == FrontEOF { return 0 }
+    if kind == FrontIllegal { return 1 }
+    if kind == FrontNewline { return 2 }
+    if kind == FrontIdent { return 3 }
+    if kind == FrontLabel { return 4 }
+    if kind == FrontInt { return 5 }
+    if kind == FrontFloat { return 6 }
+    if kind == FrontChar { return 7 }
+    if kind == FrontByte { return 8 }
+    if kind == FrontByteString { return 81 }
+    if kind == FrontString { return 9 }
+    if kind == FrontRawString { return 10 }
+    if kind == FrontFn { return 11 }
+    if kind == FrontStruct { return 12 }
+    if kind == FrontEnum { return 13 }
+    if kind == FrontInterface { return 14 }
+    if kind == FrontType { return 15 }
+    if kind == FrontLet { return 16 }
+    if kind == FrontMut { return 17 }
+    if kind == FrontPub { return 18 }
+    if kind == FrontUse { return 19 }
+    if kind == FrontIf { return 20 }
+    if kind == FrontElse { return 21 }
+    if kind == FrontMatch { return 22 }
+    if kind == FrontFor { return 23 }
+    if kind == FrontReturn { return 24 }
+    if kind == FrontBreak { return 25 }
+    if kind == FrontContinue { return 26 }
+    if kind == FrontDefer { return 27 }
+    if kind == FrontLParen { return 28 }
+    if kind == FrontRParen { return 29 }
+    if kind == FrontLBrace { return 30 }
+    if kind == FrontRBrace { return 31 }
+    if kind == FrontLBracket { return 32 }
+    if kind == FrontRBracket { return 33 }
+    if kind == FrontComma { return 34 }
+    if kind == FrontColon { return 35 }
+    if kind == FrontSemicolon { return 36 }
+    if kind == FrontDot { return 37 }
+    if kind == FrontPlus { return 38 }
+    if kind == FrontMinus { return 39 }
+    if kind == FrontStar { return 40 }
+    if kind == FrontSlash { return 41 }
+    if kind == FrontPercent { return 42 }
+    if kind == FrontEq { return 43 }
+    if kind == FrontNeq { return 44 }
+    if kind == FrontLt { return 45 }
+    if kind == FrontGt { return 46 }
+    if kind == FrontLeq { return 47 }
+    if kind == FrontGeq { return 48 }
+    if kind == FrontAnd { return 49 }
+    if kind == FrontOr { return 50 }
+    if kind == FrontNot { return 51 }
+    if kind == FrontBitAnd { return 52 }
+    if kind == FrontBitOr { return 53 }
+    if kind == FrontBitXor { return 54 }
+    if kind == FrontBitNot { return 55 }
+    if kind == FrontShl { return 56 }
+    if kind == FrontShr { return 57 }
+    if kind == FrontAssign { return 58 }
+    if kind == FrontPlusEq { return 59 }
+    if kind == FrontMinusEq { return 60 }
+    if kind == FrontStarEq { return 61 }
+    if kind == FrontSlashEq { return 62 }
+    if kind == FrontPercentEq { return 63 }
+    if kind == FrontBitAndEq { return 64 }
+    if kind == FrontBitOrEq { return 65 }
+    if kind == FrontBitXorEq { return 66 }
+    if kind == FrontShlEq { return 67 }
+    if kind == FrontShrEq { return 68 }
+    if kind == FrontArrow { return 69 }
+    if kind == FrontChanArrow { return 70 }
+    if kind == FrontQuestion { return 71 }
+    if kind == FrontAsQuestion { return 72 }
+    if kind == FrontQDot { return 73 }
+    if kind == FrontQQ { return 74 }
+    if kind == FrontDotDot { return 75 }
+    if kind == FrontDotDotEq { return 76 }
+    if kind == FrontColonColon { return 77 }
+    if kind == FrontUnderscore { return 78 }
+    if kind == FrontAt { return 79 }
+    if kind == FrontHash { return 80 }
+    unreachable()
 }
 
 pub fn frontLexDiagnostic(
@@ -2871,27 +2871,26 @@ pub fn frontSuppressingStart(unit: String, next: String) -> Bool {
 }
 
 pub fn frontKindInsertsTerm(kind: FrontTokenKind) -> Bool {
-    match kind {
-        FrontIdent -> true,
-        FrontInt -> true,
-        FrontFloat -> true,
-        FrontChar -> true,
-        FrontByte -> true,
-        FrontByteString -> true,
-        FrontString -> true,
-        FrontRawString -> true,
-        FrontRParen -> true,
-        FrontRBracket -> true,
-        FrontRBrace -> true,
-        FrontBreak -> true,
-        FrontContinue -> true,
-        FrontReturn -> true,
-        FrontUnderscore -> true,
-        FrontQuestion -> true,
-        FrontDot -> true,
-        FrontQDot -> true,
-        _ -> false,
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == FrontIdent { return true }
+    if kind == FrontInt { return true }
+    if kind == FrontFloat { return true }
+    if kind == FrontChar { return true }
+    if kind == FrontByte { return true }
+    if kind == FrontByteString { return true }
+    if kind == FrontString { return true }
+    if kind == FrontRawString { return true }
+    if kind == FrontRParen { return true }
+    if kind == FrontRBracket { return true }
+    if kind == FrontRBrace { return true }
+    if kind == FrontBreak { return true }
+    if kind == FrontContinue { return true }
+    if kind == FrontReturn { return true }
+    if kind == FrontUnderscore { return true }
+    if kind == FrontQuestion { return true }
+    if kind == FrontDot { return true }
+    if kind == FrontQDot { return true }
+    false
 }
 
 pub fn classifyFrontLexeme(text: String) -> FrontTokenKind {
@@ -3146,98 +3145,95 @@ pub fn frontPunctuationKind(text: String) -> FrontTokenKind {
 }
 
 pub fn isFrontKeywordKind(kind: FrontTokenKind) -> Bool {
-    match kind {
-        FrontFn -> true,
-        FrontStruct -> true,
-        FrontEnum -> true,
-        FrontInterface -> true,
-        FrontType -> true,
-        FrontLet -> true,
-        FrontMut -> true,
-        FrontPub -> true,
-        FrontUse -> true,
-        FrontIf -> true,
-        FrontElse -> true,
-        FrontMatch -> true,
-        FrontFor -> true,
-        FrontReturn -> true,
-        FrontBreak -> true,
-        FrontContinue -> true,
-        FrontDefer -> true,
-        _ -> false,
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == FrontFn { return true }
+    if kind == FrontStruct { return true }
+    if kind == FrontEnum { return true }
+    if kind == FrontInterface { return true }
+    if kind == FrontType { return true }
+    if kind == FrontLet { return true }
+    if kind == FrontMut { return true }
+    if kind == FrontPub { return true }
+    if kind == FrontUse { return true }
+    if kind == FrontIf { return true }
+    if kind == FrontElse { return true }
+    if kind == FrontMatch { return true }
+    if kind == FrontFor { return true }
+    if kind == FrontReturn { return true }
+    if kind == FrontBreak { return true }
+    if kind == FrontContinue { return true }
+    if kind == FrontDefer { return true }
+    false
 }
 
 pub fn isFrontLiteralKind(kind: FrontTokenKind) -> Bool {
-    match kind {
-        FrontInt -> true,
-        FrontFloat -> true,
-        FrontChar -> true,
-        FrontByte -> true,
-        FrontByteString -> true,
-        FrontString -> true,
-        FrontRawString -> true,
-        _ -> false,
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == FrontInt { return true }
+    if kind == FrontFloat { return true }
+    if kind == FrontChar { return true }
+    if kind == FrontByte { return true }
+    if kind == FrontByteString { return true }
+    if kind == FrontString { return true }
+    if kind == FrontRawString { return true }
+    false
 }
 
 pub fn isFrontPunctuationKind(kind: FrontTokenKind) -> Bool {
-    match kind {
-        FrontLParen -> true,
-        FrontRParen -> true,
-        FrontLBrace -> true,
-        FrontRBrace -> true,
-        FrontLBracket -> true,
-        FrontRBracket -> true,
-        FrontComma -> true,
-        FrontColon -> true,
-        FrontSemicolon -> true,
-        FrontDot -> true,
-        FrontPlus -> true,
-        FrontMinus -> true,
-        FrontStar -> true,
-        FrontSlash -> true,
-        FrontPercent -> true,
-        FrontEq -> true,
-        FrontNeq -> true,
-        FrontLt -> true,
-        FrontGt -> true,
-        FrontLeq -> true,
-        FrontGeq -> true,
-        FrontAnd -> true,
-        FrontOr -> true,
-        FrontNot -> true,
-        FrontBitAnd -> true,
-        FrontBitOr -> true,
-        FrontBitXor -> true,
-        FrontBitNot -> true,
-        FrontShl -> true,
-        FrontShr -> true,
-        FrontAssign -> true,
-        FrontPlusEq -> true,
-        FrontMinusEq -> true,
-        FrontStarEq -> true,
-        FrontSlashEq -> true,
-        FrontPercentEq -> true,
-        FrontBitAndEq -> true,
-        FrontBitOrEq -> true,
-        FrontBitXorEq -> true,
-        FrontShlEq -> true,
-        FrontShrEq -> true,
-        FrontArrow -> true,
-        FrontChanArrow -> true,
-        FrontQuestion -> true,
-        FrontAsQuestion -> true,
-        FrontQDot -> true,
-        FrontQQ -> true,
-        FrontDotDot -> true,
-        FrontDotDotEq -> true,
-        FrontColonColon -> true,
-        FrontUnderscore -> true,
-        FrontAt -> true,
-        FrontHash -> true,
-        _ -> false,
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == FrontLParen { return true }
+    if kind == FrontRParen { return true }
+    if kind == FrontLBrace { return true }
+    if kind == FrontRBrace { return true }
+    if kind == FrontLBracket { return true }
+    if kind == FrontRBracket { return true }
+    if kind == FrontComma { return true }
+    if kind == FrontColon { return true }
+    if kind == FrontSemicolon { return true }
+    if kind == FrontDot { return true }
+    if kind == FrontPlus { return true }
+    if kind == FrontMinus { return true }
+    if kind == FrontStar { return true }
+    if kind == FrontSlash { return true }
+    if kind == FrontPercent { return true }
+    if kind == FrontEq { return true }
+    if kind == FrontNeq { return true }
+    if kind == FrontLt { return true }
+    if kind == FrontGt { return true }
+    if kind == FrontLeq { return true }
+    if kind == FrontGeq { return true }
+    if kind == FrontAnd { return true }
+    if kind == FrontOr { return true }
+    if kind == FrontNot { return true }
+    if kind == FrontBitAnd { return true }
+    if kind == FrontBitOr { return true }
+    if kind == FrontBitXor { return true }
+    if kind == FrontBitNot { return true }
+    if kind == FrontShl { return true }
+    if kind == FrontShr { return true }
+    if kind == FrontAssign { return true }
+    if kind == FrontPlusEq { return true }
+    if kind == FrontMinusEq { return true }
+    if kind == FrontStarEq { return true }
+    if kind == FrontSlashEq { return true }
+    if kind == FrontPercentEq { return true }
+    if kind == FrontBitAndEq { return true }
+    if kind == FrontBitOrEq { return true }
+    if kind == FrontBitXorEq { return true }
+    if kind == FrontShlEq { return true }
+    if kind == FrontShrEq { return true }
+    if kind == FrontArrow { return true }
+    if kind == FrontChanArrow { return true }
+    if kind == FrontQuestion { return true }
+    if kind == FrontAsQuestion { return true }
+    if kind == FrontQDot { return true }
+    if kind == FrontQQ { return true }
+    if kind == FrontDotDot { return true }
+    if kind == FrontDotDotEq { return true }
+    if kind == FrontColonColon { return true }
+    if kind == FrontUnderscore { return true }
+    if kind == FrontAt { return true }
+    if kind == FrontHash { return true }
+    false
 }
 
 pub fn frontTokenKindByName(name: String) -> FrontTokenKind {
@@ -3273,123 +3269,123 @@ pub fn frontTokenKindByName(name: String) -> FrontTokenKind {
 }
 
 pub fn frontTokenKindName(kind: FrontTokenKind) -> String {
-    match kind {
-        FrontEOF -> "EOF",
-        FrontIllegal -> "ILLEGAL",
-        FrontNewline -> "NEWLINE",
-        FrontIdent -> "IDENT",
-        FrontLabel -> "LABEL",
-        FrontInt -> "INT",
-        FrontFloat -> "FLOAT",
-        FrontChar -> "CHAR",
-        FrontByte -> "BYTE",
-        FrontByteString -> "BYTESTRING",
-        FrontString -> "STRING",
-        FrontRawString -> "RAWSTRING",
-        FrontFn -> "fn",
-        FrontStruct -> "struct",
-        FrontEnum -> "enum",
-        FrontInterface -> "interface",
-        FrontType -> "type",
-        FrontLet -> "let",
-        FrontMut -> "mut",
-        FrontPub -> "pub",
-        FrontUse -> "use",
-        FrontIf -> "if",
-        FrontElse -> "else",
-        FrontMatch -> "match",
-        FrontFor -> "for",
-        FrontReturn -> "return",
-        FrontBreak -> "break",
-        FrontContinue -> "continue",
-        FrontDefer -> "defer",
-        FrontLParen -> "(",
-        FrontRParen -> ")",
-        FrontLBrace -> r"{",
-        FrontRBrace -> r"}",
-        FrontLBracket -> "[",
-        FrontRBracket -> "]",
-        FrontComma -> ",",
-        FrontColon -> ":",
-        FrontSemicolon -> ";",
-        FrontDot -> ".",
-        FrontPlus -> "+",
-        FrontMinus -> "-",
-        FrontStar -> "*",
-        FrontSlash -> "/",
-        FrontPercent -> "%",
-        FrontEq -> "==",
-        FrontNeq -> "!=",
-        FrontLt -> "<",
-        FrontGt -> ">",
-        FrontLeq -> "<=",
-        FrontGeq -> ">=",
-        FrontAnd -> "&&",
-        FrontOr -> "||",
-        FrontNot -> "!",
-        FrontBitAnd -> "&",
-        FrontBitOr -> "|",
-        FrontBitXor -> "^",
-        FrontBitNot -> "~",
-        FrontShl -> "<<",
-        FrontShr -> ">>",
-        FrontAssign -> "=",
-        FrontPlusEq -> "+=",
-        FrontMinusEq -> "-=",
-        FrontStarEq -> "*=",
-        FrontSlashEq -> "/=",
-        FrontPercentEq -> "%=",
-        FrontBitAndEq -> "&=",
-        FrontBitOrEq -> "|=",
-        FrontBitXorEq -> "^=",
-        FrontShlEq -> "<<=",
-        FrontShrEq -> ">>=",
-        FrontArrow -> "->",
-        FrontChanArrow -> "<-",
-        FrontQuestion -> "?",
-        FrontAsQuestion -> "as?",
-        FrontQDot -> "?.",
-        FrontQQ -> "??",
-        FrontDotDot -> "..",
-        FrontDotDotEq -> "..=",
-        FrontColonColon -> "::",
-        FrontUnderscore -> "_",
-        FrontAt -> "@",
-        FrontHash -> "#",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == FrontEOF { return "EOF" }
+    if kind == FrontIllegal { return "ILLEGAL" }
+    if kind == FrontNewline { return "NEWLINE" }
+    if kind == FrontIdent { return "IDENT" }
+    if kind == FrontLabel { return "LABEL" }
+    if kind == FrontInt { return "INT" }
+    if kind == FrontFloat { return "FLOAT" }
+    if kind == FrontChar { return "CHAR" }
+    if kind == FrontByte { return "BYTE" }
+    if kind == FrontByteString { return "BYTESTRING" }
+    if kind == FrontString { return "STRING" }
+    if kind == FrontRawString { return "RAWSTRING" }
+    if kind == FrontFn { return "fn" }
+    if kind == FrontStruct { return "struct" }
+    if kind == FrontEnum { return "enum" }
+    if kind == FrontInterface { return "interface" }
+    if kind == FrontType { return "type" }
+    if kind == FrontLet { return "let" }
+    if kind == FrontMut { return "mut" }
+    if kind == FrontPub { return "pub" }
+    if kind == FrontUse { return "use" }
+    if kind == FrontIf { return "if" }
+    if kind == FrontElse { return "else" }
+    if kind == FrontMatch { return "match" }
+    if kind == FrontFor { return "for" }
+    if kind == FrontReturn { return "return" }
+    if kind == FrontBreak { return "break" }
+    if kind == FrontContinue { return "continue" }
+    if kind == FrontDefer { return "defer" }
+    if kind == FrontLParen { return "(" }
+    if kind == FrontRParen { return ")" }
+    if kind == FrontLBrace { return r"{" }
+    if kind == FrontRBrace { return r"}" }
+    if kind == FrontLBracket { return "[" }
+    if kind == FrontRBracket { return "]" }
+    if kind == FrontComma { return "," }
+    if kind == FrontColon { return ":" }
+    if kind == FrontSemicolon { return ";" }
+    if kind == FrontDot { return "." }
+    if kind == FrontPlus { return "+" }
+    if kind == FrontMinus { return "-" }
+    if kind == FrontStar { return "*" }
+    if kind == FrontSlash { return "/" }
+    if kind == FrontPercent { return "%" }
+    if kind == FrontEq { return "==" }
+    if kind == FrontNeq { return "!=" }
+    if kind == FrontLt { return "<" }
+    if kind == FrontGt { return ">" }
+    if kind == FrontLeq { return "<=" }
+    if kind == FrontGeq { return ">=" }
+    if kind == FrontAnd { return "&&" }
+    if kind == FrontOr { return "||" }
+    if kind == FrontNot { return "!" }
+    if kind == FrontBitAnd { return "&" }
+    if kind == FrontBitOr { return "|" }
+    if kind == FrontBitXor { return "^" }
+    if kind == FrontBitNot { return "~" }
+    if kind == FrontShl { return "<<" }
+    if kind == FrontShr { return ">>" }
+    if kind == FrontAssign { return "=" }
+    if kind == FrontPlusEq { return "+=" }
+    if kind == FrontMinusEq { return "-=" }
+    if kind == FrontStarEq { return "*=" }
+    if kind == FrontSlashEq { return "/=" }
+    if kind == FrontPercentEq { return "%=" }
+    if kind == FrontBitAndEq { return "&=" }
+    if kind == FrontBitOrEq { return "|=" }
+    if kind == FrontBitXorEq { return "^=" }
+    if kind == FrontShlEq { return "<<=" }
+    if kind == FrontShrEq { return ">>=" }
+    if kind == FrontArrow { return "->" }
+    if kind == FrontChanArrow { return "<-" }
+    if kind == FrontQuestion { return "?" }
+    if kind == FrontAsQuestion { return "as?" }
+    if kind == FrontQDot { return "?." }
+    if kind == FrontQQ { return "??" }
+    if kind == FrontDotDot { return ".." }
+    if kind == FrontDotDotEq { return "..=" }
+    if kind == FrontColonColon { return "::" }
+    if kind == FrontUnderscore { return "_" }
+    if kind == FrontAt { return "@" }
+    if kind == FrontHash { return "#" }
+    unreachable()
 }
 
 pub fn frontLexDiagnosticCodeName(code: FrontLexDiagnosticCode) -> String {
-    match code {
-        FrontDiagIllegalCharacter -> "E_LEX_ILLEGAL_CHARACTER",
-        FrontDiagUnterminatedBlockComment -> "E_LEX_UNTERMINATED_BLOCK_COMMENT",
-        FrontDiagUnterminatedString -> "E_LEX_UNTERMINATED_STRING",
-        FrontDiagUnterminatedInterpolation -> "E_LEX_UNTERMINATED_INTERPOLATION",
-        FrontDiagNewlineInString -> "E_LEX_NEWLINE_IN_STRING",
-        FrontDiagTripleMissingLeadingNewline -> "E_LEX_TRIPLE_MISSING_LEADING_NEWLINE",
-        FrontDiagBadTripleIndent -> "E_LEX_BAD_TRIPLE_INDENT",
-        FrontDiagUppercaseBasePrefix -> "E_LEX_UPPERCASE_BASE_PREFIX",
-        FrontDiagUnknownEscape -> "E_LEX_UNKNOWN_ESCAPE",
-        FrontDiagEmptyChar -> "E_LEX_EMPTY_CHAR",
-        FrontDiagEmptyByte -> "E_LEX_EMPTY_BYTE",
-        FrontDiagBadNumericSeparator -> "E_LEX_BAD_NUMERIC_SEPARATOR",
-        FrontDiagFatArrowRemoved -> "E_LEX_FAT_ARROW_REMOVED",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if code == FrontDiagIllegalCharacter { return "E_LEX_ILLEGAL_CHARACTER" }
+    if code == FrontDiagUnterminatedBlockComment { return "E_LEX_UNTERMINATED_BLOCK_COMMENT" }
+    if code == FrontDiagUnterminatedString { return "E_LEX_UNTERMINATED_STRING" }
+    if code == FrontDiagUnterminatedInterpolation { return "E_LEX_UNTERMINATED_INTERPOLATION" }
+    if code == FrontDiagNewlineInString { return "E_LEX_NEWLINE_IN_STRING" }
+    if code == FrontDiagTripleMissingLeadingNewline { return "E_LEX_TRIPLE_MISSING_LEADING_NEWLINE" }
+    if code == FrontDiagBadTripleIndent { return "E_LEX_BAD_TRIPLE_INDENT" }
+    if code == FrontDiagUppercaseBasePrefix { return "E_LEX_UPPERCASE_BASE_PREFIX" }
+    if code == FrontDiagUnknownEscape { return "E_LEX_UNKNOWN_ESCAPE" }
+    if code == FrontDiagEmptyChar { return "E_LEX_EMPTY_CHAR" }
+    if code == FrontDiagEmptyByte { return "E_LEX_EMPTY_BYTE" }
+    if code == FrontDiagBadNumericSeparator { return "E_LEX_BAD_NUMERIC_SEPARATOR" }
+    if code == FrontDiagFatArrowRemoved { return "E_LEX_FAT_ARROW_REMOVED" }
+    unreachable()
 }
 
 pub fn frontCommentKindName(kind: FrontCommentKind) -> String {
-    match kind {
-        FrontCommentLine -> "line",
-        FrontCommentBlock -> "block",
-        FrontCommentDoc -> "doc",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == FrontCommentLine { return "line" }
+    if kind == FrontCommentBlock { return "block" }
+    if kind == FrontCommentDoc { return "doc" }
+    unreachable()
 }
 
 pub fn frontStringPartKindName(kind: FrontStringPartKind) -> String {
-    match kind {
-        FrontStringText -> "text",
-        FrontStringInterpolation -> "interpolation",
-    }
+    // B2: payload-less enum dispatch as if-else (stage0 P0–P15).
+    if kind == FrontStringText { return "text" }
+    if kind == FrontStringInterpolation { return "interpolation" }
+    unreachable()
 }
 
 pub fn emptyFrontParseSummary() -> FrontParseSummary {
@@ -5824,19 +5820,19 @@ pub fn frontTypeByName(name: String) -> FrontTypeKind {
 }
 
 pub fn frontTypeName(kind: FrontTypeKind) -> String {
-    match kind {
-        FrontTypeInvalid -> "Invalid",
-        FrontTypeInt -> "Int",
-        FrontTypeFloat -> "Float",
-        FrontTypeBool -> "Bool",
-        FrontTypeString -> "String",
-        FrontTypeBytes -> "Bytes",
-        FrontTypeChar -> "Char",
-        FrontTypeUnit -> "()",
-        FrontTypeNever -> "Never",
-        FrontTypeUntypedInt -> "UntypedInt",
-        FrontTypeUntypedFloat -> "UntypedFloat",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == FrontTypeInvalid { return "Invalid" }
+    if kind == FrontTypeInt { return "Int" }
+    if kind == FrontTypeFloat { return "Float" }
+    if kind == FrontTypeBool { return "Bool" }
+    if kind == FrontTypeString { return "String" }
+    if kind == FrontTypeBytes { return "Bytes" }
+    if kind == FrontTypeChar { return "Char" }
+    if kind == FrontTypeUnit { return "()" }
+    if kind == FrontTypeNever { return "Never" }
+    if kind == FrontTypeUntypedInt { return "UntypedInt" }
+    if kind == FrontTypeUntypedFloat { return "UntypedFloat" }
+    unreachable()
 }
 
 pub fn frontTypeIsInteger(kind: FrontTypeKind) -> Bool {

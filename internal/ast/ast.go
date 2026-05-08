@@ -252,8 +252,8 @@ var annotationRules = map[string]AnnotationTarget{
 	// tracking surface. Targets are widened across function declaration,
 	// parameter, struct field (per `#[taint]`), and method positions to
 	// match the rule table in 00-revision.md §7.6.
-	"taint":              TargetTopLevelDecl | TargetMethod | TargetStructField,
-	"sanitizes":          TargetTopLevelDecl | TargetMethod,
+	"taint":     TargetTopLevelDecl | TargetMethod | TargetStructField,
+	"sanitizes": TargetTopLevelDecl | TargetMethod,
 	// `#[requires("tag")]` on parameters (G37 sink) reuses the v0.5
 	// `requires` annotation name; the parameter-position grammar is a
 	// separate G37 R29 surface added in v0.6 and tracked by the parser
@@ -273,9 +273,9 @@ var annotationRules = map[string]AnnotationTarget{
 	"reproducible": TargetTopLevelDecl | TargetMethod,
 
 	// v0.6 G40 — Sealed construction (§3.4.5).
-	"sealed_construct":   TargetTopLevelDecl,
-	"trusted_construct":  TargetTopLevelDecl | TargetMethod,
-	"test_construct":     TargetTopLevelDecl | TargetMethod,
+	"sealed_construct":  TargetTopLevelDecl,
+	"trusted_construct": TargetTopLevelDecl | TargetMethod,
+	"test_construct":    TargetTopLevelDecl | TargetMethod,
 
 	// v0.6 G41 — Error contract (§7.5). Catalogues failure modes.
 	"error_contract": TargetTopLevelDecl | TargetMethod,
