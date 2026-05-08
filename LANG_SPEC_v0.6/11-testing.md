@@ -298,6 +298,110 @@ Header lines start with `#`; the body begins after one blank line.
 **Tooling.** `osty test --golden` runs the comparison; `osty test
 --update-golden[=<path>]` rewrites snapshots. See §13.8.
 
+#### 11.5.3 Mode selection guide
+
+The four golden modes target different output shapes. Choose the
+strictest mode that the output actually demands:
+
+| Output shape | Recommended mode | Why |
+|---|---|---|
+| Free-form text (logs, error messages without span info) | `"text"` | Byte-exact catches every regression |
+| Generated Osty source (formatter, codegen output) | `"ast"` | Whitespace / comment-only diffs ignored, semantic regressions caught |
+| Structured data exports (`osty context`, `osty doc --format=json`) | `"json"` | Key ordering / pretty-print noise ignored |
+| Diagnostic output (`osty check` with positions) | `"diag"` | Span column shifts ignored, code + message + suggested-fix preserved |
+
+Fallback rule: if uncertain, start with `"text"`. Loosen to `"ast"`
+or `"diag"` only when the strict mode produces noisy diffs that
+don't reflect real regressions.
+
+#### 11.5.4 Workflow for accepted golden updates
+
+A golden update is a deliberate change to a `.snap` file checked in
+alongside the test. The recommended workflow:
+
+```sh
+# 1. Run tests; observe golden mismatches.
+$ osty test --golden
+testing.assertGolden(...) mismatch at fixtures/format_expr.snap
+
+# 2. Inspect the diff; verify the new output is the intended one.
+$ osty test --golden --report=diff
+- fixtures/format_expr.snap
++ test output
+@@ -1,3 +1,3 @@
+- 1 + 2 * 3
++ 1 + (2 * 3)
+
+# 3. Accept the new output explicitly.
+$ osty test --update-golden=fixtures/format_expr.snap
+snapshot: updated fixtures/format_expr.snap
+
+# 4. Commit the snapshot change with the source change.
+$ git add fixtures/format_expr.snap toolchain/format.osty
+$ git commit -m "format: parenthesize precedence-ambiguous binary ops"
+```
+
+`osty test --update-golden` (no path) updates **every** mismatched
+snapshot in one pass. Use the per-path form for targeted updates so
+unrelated regressions stay visible as failures.
+
+**CI policy.** A pull request that touches snapshot files **must**
+also touch the source file producing the snapshot — the relationship
+is reviewed manually. `osty audit --golden-orphans` enumerates
+snapshots whose source-hash header does not match any current
+function in the workspace; orphans are removed at PR review time.
+
+#### 11.5.5 `#[fixture]` integration
+
+A `#[golden]` function may reference a `#[fixture(name)]` to
+parameterize the input. The fixture body runs once per test
+invocation and is *recorded* in the snapshot header so reviewers can
+see which input produced which output:
+
+```osty
+#[fixture(name = "sampleBinaryExpr")]
+fn sampleBinaryExpr() -> Expr {
+    parseExpr("1 + 2 * 3")
+}
+
+#[golden("fixtures/format_sampleBinary.snap")]
+fn testFormatSampleBinary() {
+    let expr = sampleBinaryExpr()
+    testing.assertGolden(formatExpr(expr))
+}
+```
+
+The snapshot's `# fixture: sampleBinaryExpr` header provides the
+audit trail. Updating `sampleBinaryExpr`'s body without rerunning
+`--update-golden` produces `W0444` (source-hash mismatch) on the
+next test run, prompting the author to either accept or revert the
+fixture change.
+
+#### 11.5.6 In-tree vs out-of-tree snapshot organization
+
+Two layouts are supported:
+
+```
+project/
+├── toolchain/
+│   ├── format.osty
+│   └── format_test.osty                 ← #[golden] functions live here
+└── fixtures/
+    └── format/
+        ├── format_binary_op.snap        ← snapshot files
+        └── format_sampleBinary.snap
+```
+
+The `path` argument of `#[golden(path, ...)]` is resolved relative
+to the project root (the directory containing `osty.toml`). Layout
+within `fixtures/` is a project convention; `osty audit
+--golden-orphans` walks the whole tree.
+
+For *runtime-form* snapshots (`testing.snapshot(name, value)`), the
+file lives at `<source_dir>/__snapshots__/<sanitize(name)>.snap` —
+a per-test-file directory. The two layouts coexist; pick one
+consistently per test file.
+
 ### 11.6 Parallel Execution
 
 Tests run in parallel by default. Use `--serial` to force sequential
