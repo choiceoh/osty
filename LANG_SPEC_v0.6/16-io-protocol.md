@@ -267,10 +267,6 @@ cancellation point. The helper itself does not check cancel
 between calls; it relies on the underlying I/O to surface the
 signal.
 
-**Budget.** `io.readAll` allocates one growing `Bytes` buffer.
-Functions with `#[budget(allocs = 1)]` may use `io.readAll` for
-a single read; functions with `#[budget(allocs = 0)]` cannot.
-
 **Reproducibility.** `io.copy` and `io.readAll` are *not*
 deterministic — the exact byte sequence depends on the underlying
 stream's behavior (timing, partial reads). They cannot be used

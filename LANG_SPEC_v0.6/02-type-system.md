@@ -174,11 +174,6 @@ adds two interactions:
   This is acceptable inside `#[reproducible]` because the function
   contract concerns *successful* return values; aborts are a
   separate failure path that doesn't break determinism.
-- **`#[budget(allocs)]`** — `wrapping*` / `checked*` /
-  `saturating*` add no allocations (they're inlined into
-  arithmetic instruction sequences). The `instructions` budget may
-  reflect the slightly higher operation count for `checked*`
-  (overflow detection branch).
 
 The integer overflow contract holds across both backends (Go and
 LLVM); a v0.6 program that aborts on `Int.MAX + 1` does so with the
