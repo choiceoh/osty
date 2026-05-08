@@ -3,18 +3,19 @@
 Osty is a general-purpose, statically-typed, garbage-collected programming language.
 This directory holds the specification, split into per-section files for easier navigation and editing.
 
-**Status.** v0.6 — current spec baseline. Supersedes v0.5. Closes 14 gaps
-(G36–G49) accumulated during the v0.5 use corpus and the 100-PR
-self-host sprint: capability parameters, information flow tracking,
-spec link, reproducibility, sealed construction, error contract,
-structured intent, executable spec block, API evolution rules, golden
-tests, performance contract, machine-readable context export, plus a
-single ergonomics fix (`while` keyword).
+**Status.** v0.6 — current spec baseline. Supersedes v0.5. Closes 10 gaps
+(G36, G37, G39, G40, G41, G42, G44, G45, G47, G48) accumulated during
+the v0.5 use corpus and the 100-PR self-host sprint: capability
+parameters, information flow tracking, reproducibility, sealed
+construction, error contract, structured intent, API evolution rules,
+golden tests, machine-readable context export. Four originally-proposed
+gaps (G38, G43, G46, G49) were withdrawn pre-release as low-utility —
+see SPEC_GAPS.md "Withdrawn" for sub-rationale.
 
 The v0.6 design north star is *Hidden dependency is forbidden* —
 time, randomness, environment, security flow, evolution rules,
-performance contracts, intent, and specification are all surfaced
-explicitly through the type system or the annotation surface.
+intent are all surfaced explicitly through the type system or the
+annotation surface.
 
 See [`18-change-history.md`](./18-change-history.md) for the full
 v0.1 → v0.2 → v0.3 → v0.4 → v0.5 → v0.6 evolution and per-version
@@ -117,4 +118,4 @@ Four annotation families implement this principle:
 | **Effectful** (env / IO) | Capability parameters, `#[ambient]`, `#[reproducible]`, `#[pure]` | §20, §3.11 |
 | **Security** (sources → sinks) | `#[taint]`, `#[sanitizes]`, `#[requires]` | §21 |
 | **Temporal** (versioning) | `#[since]`, `#[stability]`, `#[match_compat]`, `osty publish` | §3.14 |
-| **Intent + Determinism** | `#[spec]`, `#[purpose]`, `#[example]`, `#[fixture]`, `spec { }`, `#[error_contract]`, `#[sealed_construct]`, `#[golden]`, `#[budget]`, `osty context` | §3.10, §3.12, §3.13, §3.15, §3.4.5, §7.5, §11.5, §13.4 |
+| **Intent + Determinism** | `#[purpose]`, `#[example]`, `#[fixture]`, `#[error_contract]`, `#[sealed_construct]`, `#[golden]`, `osty context` | §3.12, §3.4.5, §7.5, §11.5, §13.4 |

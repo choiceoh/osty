@@ -9,9 +9,9 @@ authority on what v0.6 *is* right now. v0.5 의 분리 패턴
 ([`CHANGELOG_v0.5.md`](./CHANGELOG_v0.5.md)) 을 그대로 따른다.
 
 See [`LANG_SPEC_v0.6/00-revision.md`](./LANG_SPEC_v0.6/00-revision.md)
-for the full v0.5 → v0.6 decision log (14 resolved gaps, G36 – G49)
-and [`SPEC_GAPS.md`](./SPEC_GAPS.md) §"Resolved in v0.6" for per-gap
-rationale.
+for the v0.5 → v0.6 decision log (10 resolved gaps after G38/G43/
+G46/G49 withdrawal) and [`SPEC_GAPS.md`](./SPEC_GAPS.md) §"Resolved
+in v0.6" for per-gap rationale.
 
 ## Implementation phases
 
@@ -22,11 +22,10 @@ rationale.
 |---|---|---|
 | Phase 0 | Self-host 자력 사이클 (Tier A 5 개) | (v0.5 follow-up) |
 | Phase 1 | Capability + ambient + stdlib migration | G36 |
-| Phase 2 | Spec link + structured intent + osty context | G38, G42, G47 |
-| Phase 3 | Reproducible + spec block v0 + golden | G39, G43 (v0), G45 |
-| Phase 4 | Sealed + ErrorContract + Evolution + Budget(static) | G40, G41, G44, G46 (static) |
-| Phase 5 | Taint + Budget(runtime) + spec block v1 | G37, G46 (runtime), G43 (v1) |
-| Pre-1.0 | While ergonomics | G49 |
+| Phase 2 | Structured intent + osty context | G42, G47 |
+| Phase 3 | Reproducible + golden | G39, G45 |
+| Phase 4 | Sealed + ErrorContract + Evolution | G40, G41, G44 |
+| Phase 5 | Taint / sanitize | G37 |
 
 ## Shipped in the compiler
 
@@ -37,10 +36,8 @@ rationale.
 
 | Form | Status | Notes |
 |---|---|---|
-| `while cond { body }` | **planned** (G49) | `for cond { body }` 와 동등 lowering. 사용자 0 단계의 breaking change — 식별자 `while` 사용했던 코드는 rename. |
-| `spec { example: ... }` block | **planned** (G43, v0) | example: 만 v0 에 실행, law:/invariant: 는 doc only |
 | Parameter annotation `fn f(#[taint("...")] x: T)` | **planned** (G37) | parameter 위치 annotation 신규 허용 |
-| v0.6 declaration annotation vocabulary | **partial** (G36-G46) | Go parser/resolver and selfhost resolver both recognize the declaration/field/method/variant annotation names. Per-feature semantic gates and parameter-position annotations still land by phase. |
+| v0.6 declaration annotation vocabulary | **partial** (G36, G37, G39-G42, G44, G45, G47) | Go parser/resolver and selfhost resolver both recognize the declaration/field/method/variant annotation names. Per-feature semantic gates and parameter-position annotations still land by phase. |
 
 ### Capabilities (G36 — Phase 1, blocking everything else)
 
@@ -64,16 +61,14 @@ rationale.
 | `#[trusted_declassify(reason)]` FFI escape | **planned** | audit 가능 |
 | stdlib sink catalog (`db.query`, `process.exec`, `fs.path*`, `http.redirect`, `template.render`) | **planned** | Phase 5 baseline |
 
-### Spec / Intent
+### Intent
 
 | Item | Status | Notes |
 |---|---|---|
-| `#[spec("§X.Y")]` annotation | **partial** (G38, Phase 2) | active check now rejects missing `LANG_SPEC_v0.6/` section links (`E0790`). `osty doc`/LSP lead-paragraph surfacing remains planned. |
 | `#[purpose("...")]` | **planned** (G42, Phase 2) | doc / context only |
 | `#[example(input=, output=, uses=)]` | **planned** (G42, Phase 2) | auto-test |
 | `#[fixture(name=)]` | **planned** (G42, Phase 2) | 공유 canonical instance |
 | `osty context <symbol>` | **planned** (G47, Phase 2) | JSON output |
-| `osty validate-spec` | **planned** (G38, Phase 2) | CI gate |
 
 ### Determinism / Construction / Errors
 
@@ -95,8 +90,6 @@ rationale.
 | `osty publish` API surface diff | **planned** (G44, Phase 4) | major bump 강제 |
 | `#[golden("path", mode="text"|"ast")]` | **planned** (G45, Phase 3) | reproducible 결합 |
 | `osty test --golden` / `--update-golden` | **planned** (G45, Phase 3) | |
-| `#[budget(allocs, io_calls, stack_depth, instructions)]` static | **planned** (G46, Phase 4) | 컴파일러 증명 |
-| `#[budget(time_ms, p99_ms)]` runtime | **planned** (G46, Phase 5) | osty bench 게이트 |
 
 ## Migration path from v0.5
 
@@ -117,9 +110,8 @@ rationale.
 
 - `#[since]` / `#[stability]` / `#[match_compat]` — 옵션 어노테이션, 미사용
   코드 영향 없음
-- `while` keyword — 신규 surface, 기존 코드 영향 없음 (식별자 `while` 사용 코드만 rename)
-- `#[spec]` / `#[purpose]` / `#[example]` / `#[fixture]` — 메타데이터, 옵션
-- `#[reproducible]` / `#[golden]` / `#[budget]` — 옵션, 미사용 영향 없음
+- `#[purpose]` / `#[example]` / `#[fixture]` — 메타데이터, 옵션
+- `#[reproducible]` / `#[golden]` — 옵션, 미사용 영향 없음
 
 ## Spec corpus 확장
 
@@ -129,10 +121,10 @@ rationale.
 | Phase | Positive 케이스 추가 | Negative 케이스 추가 |
 |---|---|---|
 | 1 | capability typed signature | E0780-E0789 (capability misuse) |
-| 2 | `#[spec]` 검증 통과, `osty context` 출력 | E0790, W0790 |
+| 2 | `osty context` 출력 | (intent annotations metadata only) |
 | 3 | `#[reproducible]` 통과, golden snapshot | E0784-E0788, E0444-E0445 |
 | 4 | sealed/ErrorContract/Evolution | E0410-E0451, E2100-E2101 |
-| 5 | taint flow, budget runtime | E0900-E0903, E0795-E0796 |
+| 5 | taint flow | E0900-E0903 |
 
 각 phase 의 `LLVM E2E` 통과까지 확인 후 phase 종료.
 
@@ -141,8 +133,6 @@ rationale.
 v0.7 에서 다룰 예정 (현 시점 미결정):
 
 - **Implicit information flow** (covert channel) — opt-in `#[strict_flow]`
-- **`#[budget(time_ms)]` static 증명** — LLVM cost model 기반
-- **`spec { forall }` SMT solver 통합** — Z3/CVC5 backend
 - **Row-polymorphic error union** — `Result<T, EmailError | DbError | ...>` 의
   open form
 - **Cross-capability flow analysis** — `Clock` 결과가 `Rng` seed 가 되는 패턴

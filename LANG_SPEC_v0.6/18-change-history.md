@@ -5,15 +5,17 @@ versions. The latest release is at the top.
 
 ### 18.0 v0.5 → v0.6
 
-v0.6 is the release that closes 14 gaps (G36–G49) accumulated during
-the v0.5 use corpus and the 100-PR self-host sprint. The release is
-governed by a single design principle:
+v0.6 is the release that closes 10 gaps (G36, G37, G39-G42, G44, G45,
+G47, G48) accumulated during the v0.5 use corpus and the 100-PR self-
+host sprint. Four originally-proposed gaps (G38, G43, G46, G49) were
+withdrawn pre-release as low-utility — see SPEC_GAPS.md "Withdrawn"
+for sub-rationale. The release is governed by a single design
+principle:
 
 > **Hidden dependency is forbidden.**
 > Time, randomness, environment, filesystem, network, security flow,
-> API evolution rules, performance contracts, intent, and
-> specification — all surfaced through type signatures or annotations,
-> never implicit.
+> API evolution rules, intent — all surfaced through type signatures
+> or annotations, never implicit.
 
 Four annotation families implement the principle:
 
@@ -22,41 +24,39 @@ Four annotation families implement the principle:
 | **Effectful** (env / IO) | Capability parameters (§20), `#[ambient]`, `#[reproducible]`, `#[reproducible_capability]` |
 | **Security** (sources → sinks) | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]`, `#[taint_field]` (§21) |
 | **Temporal** (versioning) | `#[since]`, `#[stability]`, `#[match_compat]`, `osty publish` (§3.14) |
-| **Intent + Determinism** | `#[spec]`, `#[purpose]`, `#[example]`, `#[fixture]`, `spec { }`, `#[error_contract]`, `#[sealed_construct]`, `#[golden]`, `#[budget]`, `osty context` (§3.10–§3.15, §7.5, §11.5, §13.4) |
+| **Intent + Determinism** | `#[purpose]`, `#[example]`, `#[fixture]`, `#[error_contract]`, `#[sealed_construct]`, `#[golden]`, `osty context` (§3.12, §3.4.5, §7.5, §11.5, §13.4) |
 
-**Resolved gaps (G36–G49).**
+**Resolved gaps (10).**
 
 | ID | 영역 | 한 줄 |
 |---|---|---|
 | G36 | Capabilities (§20) | 환경 effect 를 capability 값으로 명시 |
 | G37 | Information flow (§21) | `#[taint]` / `#[sanitizes]` 정적 IFC |
-| G38 | Spec link (§3.10) | `#[spec("§X.Y")]` checked link |
 | G39 | Reproducibility (§3.11) | `#[reproducible(scope=...)]` 환경독립 강제 |
 | G40 | Sealed construct (§3.4.5) | `#[sealed_construct]` parse-don't-validate |
 | G41 | Error contract (§7.5) | `#[error_contract(... when ...)]` failure mode 명세 |
 | G42 | Structured intent (§3.12) | `#[purpose]` / `#[example]` / `#[fixture]` |
-| G43 | Executable spec (§3.13) | `spec { example: / law: / invariant: }` 블록 |
 | G44 | API evolution (§3.14) | `#[since]` / `#[stability]` / `#[match_compat]` |
 | G45 | Golden tests (§11.5) | `#[golden]` AST-aware 스냅샷 |
-| G46 | Performance contract (§3.15) | `#[budget(allocs/io/time)]` static + runtime |
 | G47 | Machine-readable context (§13.4) | `osty context <symbol>` 구조화 추출 |
-| G48 | Annotation surface | 위 신규 어노테이션의 grammar 통합 (+20 fixed annotations) |
-| G49 | `while` keyword (§4.4) | `for cond {}` 와 동의어. mental-model 일치 |
+| G48 | Annotation surface | 위 신규 어노테이션의 grammar 통합 (+16 fixed annotations) |
 
-`G50` (anonymous structural record) 은 본 batch 검토 중 빠졌다 — v0.5 §14
-의 "named types are nominal" discipline 유지를 위해 ad-hoc labeled data 는
-nominal `struct` 또는 tuple 로 표현한다.
+**Withdrawn from v0.6 baseline (4).**
 
-**Additions — grammar (G48 + G49).**
+G38 `#[spec]` link / G43 `spec { }` block / G46 `#[budget]` /
+G49 `while` keyword — pre-release withdrawal. SPEC_GAPS.md 의
+Withdrawn 섹션 참조. `G50` (anonymous structural record) 도 본
+batch 검토 중 빠졌다 — v0.5 §14 의 "named types are nominal"
+discipline 유지를 위해 ad-hoc labeled data 는 nominal `struct`
+또는 tuple 로 표현한다.
 
-- *Reserved keyword + 1*: `while` (G49) — `while cond { body }` ≡
-  `for cond { body }`. 식별자 `while` 사용 코드는 rename (사용자 0
-  단계의 acceptable break).
-- *Contextual keyword + 4*: `spec`, `example`, `law`, `invariant`
-  (G43 — spec block 컨텍스트만). `forall` 은 v1 (Phase 5) 단계.
-- *Fixed annotation set*: 11 → 31 (+20 신규).
-- *EBNF productions*: 191 → 199 (+8). 새 grammar surface 는 §3.13
-  spec block 과 parameter 위치 annotation 두 곳.
+**Additions — grammar (G48).**
+
+- *Reserved keyword*: 변경 없음 (17 → 17).
+- *Contextual keyword*: 변경 없음.
+- *Fixed annotation set*: 11 → 27 (+16 신규).
+- *EBNF productions*: 변경 없음. 새 grammar surface 는 parameter 위치
+  annotation (§21) 한 곳.
 
 **Additions — capabilities (G36, §20).**
 
