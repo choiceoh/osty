@@ -6,7 +6,7 @@ func TestProcessModuleExposesExecutionSurface(t *testing.T) {
 	reg := LoadCached()
 
 	for _, name := range []string{
-		"command", "commandArgs", "shell", "pipeline", "pipe", "run", "runShell", "shellEscape", "joinEscaped",
+		"output", "command", "commandArgs", "shell", "pipeline", "pipe", "run", "runShell", "shellEscape", "joinEscaped",
 	} {
 		fn := reg.LookupFnDecl("process", name)
 		if fn == nil {

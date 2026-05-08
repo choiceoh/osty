@@ -70,6 +70,9 @@ pub struct ProcessOutput {
         }
     }
 }
+pub fn output(exitCode: Int, stdout: String, stderr: String, timedOut: Bool) -> ProcessOutput {
+    ProcessOutput {exitCode: exitCode, stdout: stdout, stderr: stderr, timedOut: timedOut}
+}
 pub struct ProcessCommand {
     pub program: String,
     pub args: List<String>,

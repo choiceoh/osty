@@ -28,7 +28,7 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 - **⭐⭐ Spec-stub**: spec 있고 declaration-only인데 **백엔드 미구현** (호출 시 LLVM emit 실패 위험)
 - **⭐ Broken / Placeholder**: 본문이 무동작이거나 spec 위반
 
-## 2. 모듈 매트릭스 (99 + 8 sub = 107 파일)
+## 2. 모듈 매트릭스 (99 + 9 sub = 108 파일)
 
 표 항목:
 - **spec**: LANG_SPEC v0.5 챕터 (없으면 `—`)
@@ -222,6 +222,7 @@ partial 모듈 3개 (crypto / option / result) 는 **호출 패턴 한정 동작
 | 모듈 | spec | LOC | 비고 |
 |---|---|---|---|
 | capability | §20 | 177 | v0.6 canonical `Clock` / `Rng` / `Env` / `Fs` / `Net` / `Process` / `Console` interface surface, migration rules, exact `HostNet` / `HostProcess` adapters. `examples/v06_capabilities` + `examples/v06_capability_adapters` front-end/type-check proof. Ambient/legacy-global compiler semantics remain Phase 1 follow-up. |
+| capability.testing | §20 | 445 | deterministic `FakeClock` / `FakeRng` / `FakeEnv` / `FakeFs` / `FakeNet` / `FakeProcess` / `FakeConsole` helpers for capability-injected tests. `examples/v06_capability_fakes` front-end/type-check proof. |
 | cmp | §10.1 | 27 | Equal / Ordered / Hashable interface 정의. 컴파일러 인지 |
 | error | §10.1 / §7 | 96 | Error interface + BasicError + WrappedError + wrap/chain/rootCause |
 | ref | §10.1 | 9 | `same<T>(a, b)` 단일 함수, declaration-only — 컴파일러 intrinsic 가정 |

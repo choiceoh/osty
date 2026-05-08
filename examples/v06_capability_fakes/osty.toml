@@ -1,0 +1,7 @@
+[package]
+name = "v06_capability_fakes"
+version = "0.1.0"
+edition = "0.5"
+description = "v0.6 deterministic capability fake example."
+
+[dependencies]
