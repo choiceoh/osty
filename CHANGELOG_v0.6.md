@@ -5,8 +5,7 @@ Tracks the user-visible slice of the v0.6 spec
 compiler today, separate from the spec itself.
 
 The spec is the authority on what v0.6 *will* be; this file is the
-authority on what v0.6 *is* right now. v0.5 의 분리 패턴
-([`CHANGELOG_v0.5.md`](./CHANGELOG_v0.5.md)) 을 그대로 따른다.
+authority on what v0.6 *is* right now.
 
 See [`LANG_SPEC_v0.6/00-revision.md`](./LANG_SPEC_v0.6/00-revision.md)
 for the v0.5 → v0.6 decision log (10 resolved gaps after G38/G43/
