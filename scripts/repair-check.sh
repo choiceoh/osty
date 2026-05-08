@@ -46,6 +46,5 @@ done)
 printf '%s\n' "$needs_check" | xargs -n 1 -P "$parallel_n" -I {} bash -c '
 	marker="${1%%|*}"
 	file="${1#*|}"
-	"$2" repair --check "$file" || true
-	: > "$marker"
+	"$2" repair --check "$file" && : > "$marker"
 ' _ {} "$osty"
