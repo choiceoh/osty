@@ -4,15 +4,13 @@ Osty v0.6 tooling exposes the spec surface through commands. The CLI
 (§13.1), package manifest format (§13.2), and zero-config formatter
 (§13.3) carry forward from v0.5 unchanged. v0.6 adds: `osty context`
 (§13.4, G47) for machine-readable intent extraction (purpose,
-example, spec_refs, error_contract, capabilities, taint, budget) as
-a single JSON document; `osty publish` (§13.5, G44) for SemVer
-enforcement against `#[stability]` declarations through API surface
-diff; `osty validate-spec` (§13.6, G38) for `#[spec(...)]` anchor
-validation; audit subcommands (§13.7) for trusted-declassify /
-trusted-construct / match-compat / legacy-globals enumeration; and
-test-subcommand extensions (§13.8) for `--spec`, `--example`,
-`--golden`, `--update-golden`, and `--doc` modes alongside `osty
-bench --budget` runtime gates.
+example, error_contract, capabilities, taint) as a single JSON
+document; `osty publish` (§13.5, G44) for SemVer enforcement against
+`#[stability]` declarations through API surface diff; audit
+subcommands (§13.7) for trusted-declassify / trusted-construct /
+match-compat / legacy-globals enumeration; and test-subcommand
+extensions (§13.8) for `--example`, `--golden`, `--update-golden`,
+and `--doc` modes.
 
 ### 13.1 CLI
 
@@ -594,77 +592,6 @@ The fingerprint excludes line numbers, formatting, and comments —
 reformatting source code does not change the fingerprint. This is
 why `osty fmt` is safe to run before `osty publish`.
 
-### 13.6 `osty validate-spec` (G38)
-
-`osty validate-spec` walks the workspace looking for `#[spec("§X.Y")]`
-annotations and verifies each anchor exists in
-`LANG_SPEC_v0.6/`. Missing anchors become `E0790`; anchors that have
-moved between sections produce `W0790` with a suggested replacement.
-
-```sh
-osty validate-spec                          # workspace
-osty validate-spec ./toolchain              # specific dir
-osty validate-spec --strict                 # treat W0790 as error
-osty validate-spec --update                 # apply suggested rewrites
-```
-
-The command is run automatically by `osty check --strict` and by
-the `just prepush` recipe.
-
-#### 13.6.1 Anchor resolution algorithm
-
-`osty validate-spec` walks the spec corpus once at startup, building
-an index of `(file, heading) → anchor`. The walk follows these
-rules:
-
-1. **Section heading** (`## §X.Y Title`, `### §X.Y.Z Title`) — the
-   anchor is `§X.Y` or `§X.Y.Z`. The title becomes the lead text.
-2. **Sub-anchor** (`<a id="X.Y.user.create"></a>` immediately
-   before a heading) — the anchor is the explicit `id`.
-3. **Inline anchor** (text immediately following a heading) — the
-   anchor is the heading's slugified title, with the parent
-   section as prefix.
-
-The index is rebuilt only when the spec corpus changes, so repeated
-`osty validate-spec` invocations are fast.
-
-For `#[spec("§X.Y")]` annotations whose argument matches a known
-anchor, the resolver records the `(file, heading, lead)` triple and
-caches it in `target/spec-links.json` for use by `osty doc` and
-`osty context`.
-
-#### 13.6.2 `--update` rewrite policy
-
-When invoked with `--update`, `osty validate-spec` applies
-suggested rewrites in three categories:
-
-1. **Anchor renamed** — `§X.Y` is replaced by the target section's
-   new anchor. The replacement is exact-string in the source file.
-2. **Anchor moved** — `§X.Y.foo` becomes `§A.B.foo` if the named
-   sub-anchor moved across sections. The resolver maintains a
-   *moved-anchor history* across spec versions to enable this.
-3. **Anchor removed** — emits `E0790` (no rewrite). The author
-   must manually choose a replacement.
-
-The rewrite mode is opt-in because changing spec links can have
-publish-surface implications (§3.14.3 includes `#[spec]` arguments
-in the API hash for `stable` symbols). CI typically runs
-`osty validate-spec --strict` (no `--update`) and asks the author
-to apply the rewrite locally with review.
-
-#### 13.6.3 Cross-package spec validation
-
-A workspace with multiple packages may reference spec anchors from
-each. `osty validate-spec` resolves *all* anchors against a single
-spec corpus snapshot — the workspace declares its target spec
-version in `osty.toml` (`[package].edition = "0.6"`).
-
-Mixed-edition workspaces (rare; transitional) resolve each package
-against its own edition's corpus. The compiler does not allow
-`edition = "0.5"` and `edition = "0.6"` to share a workspace
-directly — use a `[workspace.member]` boundary with explicit
-edition pin.
-
 ### 13.7 Audit subcommands
 
 Several v0.6 annotations grant *audit-marked escapes* — places where
@@ -933,51 +860,6 @@ osty publish --dry-run --report=summary
 #   1 PATCH
 #   Current bump: 0.6.0 → 0.6.1 (patch)
 #   ❌ Insufficient bump — major required
-```
-
-### 13.11 `osty validate-spec` algorithm
-
-`#[spec("§X.Y")]` 어노테이션의 anchor 가 `LANG_SPEC_v0.6/` 안에
-존재하는지 검증.
-
-#### 13.11.1 Workflow
-
-```
-1. 워크스페이스 walk → 모든 #[spec(...)] anchor 수집
-2. LANG_SPEC_v0.6/ 의 모든 markdown 파일 walk → heading anchor 카탈로그
-3. 각 #[spec] anchor 가 카탈로그에 있는지 확인
-4. 누락 → E0790
-5. 카탈로그에서 다른 chapter 로 이동했으면 (heading text 일치) → W0790 +
-   suggested replacement
-6. 모든 anchor 통과 → 0 errors
-```
-
-#### 13.11.2 Anchor 형식
-
-`#[spec("§X.Y")]` 의 `§X.Y` 는 다음 패턴 매치:
-
-- `§N` → `## N. <title>` heading
-- `§N.M` → `### N.M <title>` heading
-- `§N.M.K` → `#### N.M.K <title>` heading
-- `§10.X.<id>` → `LANG_SPEC_v0.6/10-standard-library/<NN>-<id>.md` 의 `## 10.X` heading
-
-#### 13.11.3 CLI
-
-```sh
-osty validate-spec                          # 전체 워크스페이스
-osty validate-spec ./toolchain              # 특정 디렉토리
-osty validate-spec --strict                 # W0790 도 error 처리
-osty validate-spec --update                 # suggested replacement 자동 적용
-```
-
-`osty check --strict` 와 `just prepush` 가 자동 호출.
-
-#### 13.11.4 CI 통합
-
-```yaml
-- name: Validate spec links
-  run: osty validate-spec --strict
-  # PR 가 spec section 을 옮기면 #[spec] 어노테이션도 함께 갱신해야 통과
 ```
 
 ### 13.12 Audit workflow

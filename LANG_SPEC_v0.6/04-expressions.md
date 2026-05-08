@@ -4,9 +4,8 @@ Osty v0.6 is an expression-oriented language. Block (§4.1), `if`
 (§4.2), `match` (§4.3), and `loop` are all expressions that produce
 values when used in value position, and statements when used at
 statement position. This chapter defines expression syntax and
-semantics: blocks, conditionals, pattern matching, loops including
-the v0.6-introduced `while cond { }` synonym for `for cond { }`
-(G49, §4.4), error propagation (§4.5), optional chaining and
+semantics: blocks, conditionals, pattern matching, loops (§4.4),
+error propagation (§4.5), optional chaining and
 nil-coalescing (§4.6), closures (§4.7), string interpolation (§4.8),
 member access (§4.9), indexing (§4.10), block scope (§4.11), `defer`
 semantics including cancellation interaction (§4.12), and assignment
@@ -26,13 +25,6 @@ grammar:
   expression form (`if`, `match`, `?`, closures, indexing,
   interpolation) preserving the tag set; sanitization is the only way
   to drop a tag, and it must be explicit (§21.5).
-- **Spec block.** A function's `spec { }` block (§3.13, G43) sits in
-  *declaration position* — `spec { example: ... }` is not an
-  expression. It must be the top-level function or method body's first
-  statement; placing it elsewhere is `E0440`.
-
-The v0.6 keyword addition is `while cond { }` as a synonym for
-`for cond { }` (G49, §4.4) — both lower to the same IR.
 
 ### 4.1 Block Expressions
 
@@ -300,8 +292,7 @@ for i in 0..100 by 2 { ... }
 for item in xs { ... }
 for (k, v) in map { ... }
 
-for cond { ... }                 // while-style (legacy form)
-while cond { ... }               // while-style (G49 — same lowering)
+for cond { ... }                 // while-style
 for { ... }                      // infinite
 
 let winner = loop {
@@ -379,7 +370,6 @@ The complete catalogue of v0.6 loop forms:
 |---|---|---|---|
 | `for x in iterable { }` | Each-iteration over an `Iterable<T>` | `()` | No (use `thread.checkCancelled()`) |
 | `for cond { }` | While-style loop | `()` | No |
-| `while cond { }` | While-style synonym (G49) | `()` | No |
 | `for { }` | Infinite, no value | `()` | No |
 | `for let Some(x) = expr { }` | Loop while pattern matches | `()` | No |
 | `loop { ... break value }` | Value-returning loop | type of `break value` | No |
