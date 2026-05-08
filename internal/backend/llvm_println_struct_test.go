@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/osty/osty/internal/mir"
 )
 
 // TestLLVMBackendEmitPrintlnStructAutoToString covers auto-dispatch
@@ -48,7 +50,6 @@ import (
 // covered by a follow-up.
 func TestLLVMBackendEmitPrintlnStructAutoToString(t *testing.T) {
 	t.Setenv("OSTY_STDLIB_BODY_LOWER", "1")
-	installNativeMIRPayloadStub(t)
 	cases := []struct {
 		name string
 		src  string
@@ -79,6 +80,12 @@ fn main() {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			var sawPrintString bool
+			var sawToStringCall bool
+			withNativeMIRPayloadEmitter(t, func(entry Entry, target string) ([]byte, bool, []error, error) {
+				sawPrintString, sawToStringCall = printlnToStringMIRShape(entry.MIR)
+				return []byte("; stub native MIR payload IR\nsource_filename = \"stub.osty\"\n"), true, nil, nil
+			})
 			tc := &fakeLLVMToolchain{}
 			backend := LLVMBackend{toolchain: tc}
 			req := newBackendRequest(t, EmitBinary, c.src)
@@ -98,6 +105,41 @@ fn main() {
 					}
 				}
 			}
+			if !sawPrintString {
+				t.Fatal("regression: println MIR payload did not carry a String operand")
+			}
+			if !sawToStringCall {
+				t.Fatal("regression: println MIR payload did not call a toString method before printing")
+			}
 		})
 	}
+}
+
+func printlnToStringMIRShape(module *mir.Module) (sawPrintString bool, sawToStringCall bool) {
+	if module == nil {
+		return false, false
+	}
+	for _, fn := range module.Functions {
+		if fn == nil {
+			continue
+		}
+		for _, block := range fn.Blocks {
+			if block == nil {
+				continue
+			}
+			for _, instr := range block.Instrs {
+				switch x := instr.(type) {
+				case *mir.CallInstr:
+					if ref, ok := x.Callee.(*mir.FnRef); ok && strings.Contains(ref.Symbol, "__toString") {
+						sawToStringCall = true
+					}
+				case *mir.IntrinsicInstr:
+					if x.Kind == mir.IntrinsicPrintln && len(x.Args) == 1 && x.Args[0].Type() == mir.TString {
+						sawPrintString = true
+					}
+				}
+			}
+		}
+	}
+	return sawPrintString, sawToStringCall
 }
