@@ -3,7 +3,9 @@
 ## 프로젝트
 
 **Osty**: 정적 타입, GC 기반, 범용 프로그래밍 언어의 **셀프호스팅 컴파일러/툴체인**.
-언어 스펙은 v0.5 (현행 baseline), 네이티브 백엔드는 LLVM.
+언어 스펙은 **v0.6 (현행 baseline, 결정 동결, 구현 phase 진행 중)**, 네이티브 백엔드는 LLVM.
+
+> **v0.5 → v0.6 transition (2026-05-07~ 진행 중)**: v0.6 spec 결정은 PR #1469 / #1471 ~ #1476 으로 baseline 동결. 구현은 Phase 0–5 단계로 진행. v0.5 baseline 호환은 `--legacy-globals` / `--legacy-construct` 플래그 (v0.6.x 한정 — v0.7 제거). 자세한 transition 정책: §"v0.6 baseline 규칙" 아래.
 
 - **셀프호스팅**: 컴파일러 본체(렉서/파서/리졸버/체커/린트/포매터/LLVM 코드젠/LSP 정책)는 전부 **Osty로 작성** (`toolchain/*.osty`)
 - Go는 **호스트 경계와 부트스트랩 역할만**: I/O, JSON-RPC, CLI 진입점, Osty→Go 셀프호스트 시드(`internal/selfhost/generated.go`), 얇은 어댑터(`internal/lexer`·`internal/parser` 등은 수십 줄짜리 파사드)
@@ -30,11 +32,21 @@
 코드 작성 전 반드시 읽을 것:
 - `README.md` — 현재 구현 상태 표, CLI 레퍼런스
 - `ARCHITECTURE.md` — 파이프라인, 패키지별 책임, 에러 복구 전략
-- `LANG_SPEC_v0.5/` — 언어 시맨틱 (프로즈 + 예제)
-- `OSTY_GRAMMAR_v0.5.md` — EBNF 문법 + decision log. 스펙과 구현이 충돌하면 **스펙이 기준**
-- `SPEC_GAPS.md` — 해결된 갭 아카이브 (v0.4는 open item 0개)
+- **`LANG_SPEC_v0.6/`** — 언어 시맨틱 (현행 baseline, v0.6 결정 동결)
+  - `LANG_SPEC_v0.6/README.md` — 진입점 + ToC + design north star
+  - `LANG_SPEC_v0.6/ABRIDGED.md` — agent quick spec
+  - `LANG_SPEC_v0.6/00-revision.md` — v0.5 → v0.6 결정 overview
+  - `LANG_SPEC_v0.6/18-change-history.md §18.0` — v0.5 → v0.6 변경 이력
+  - `LANG_SPEC_v0.6/20-capabilities.md`, `21-information-flow.md` — v0.6 신규 챕터
+- **`OSTY_GRAMMAR_v0.6.md`** — EBNF 문법 + R1–R29 decision log. 스펙과 구현이 충돌하면 **스펙이 기준**
+- `SPEC_GAPS.md` — 해결된 갭 아카이브 (v0.6 시점 G36-G49 추가됨, open gap 0)
+- `CHANGELOG_v0.6.md` — v0.6 implementation 진행도 (spec 와 분리)
+- `BREAKING_v0.6.md` — v0.5 → v0.6 breaking change 카탈로그
+- `MIGRATING_v0.5_to_v0.6.md` — 사용자 마이그레이션 가이드
 - `ERROR_CODES.md` — 진단 카탈로그 (생성물, `internal/diag/codes.go`에서 자동 생성)
 - `RUNTIME_GC.md` — 런타임/GC 구현 경로
+
+> v0.5 spec 은 `LANG_SPEC_v0.5/` / `OSTY_GRAMMAR_v0.5.md` 에 historical snapshot 으로 보존. v0.6 코드 작성에는 v0.6 docs 만 참조.
 
 ## graphify 지식 그래프
 
@@ -173,14 +185,49 @@ winget install --id LLVM.LLVM                              # clang/lld/llc (머�
 - 코드베이스 규모 파악은 `tokei`, LSP가 약한 영역의 심볼 탐색은 Homebrew `universal-ctags`의 `ctags`를 사용.
 - 추가 힌트는 `.claude/rules/ai-tooling.md`를 따른다.
 
-## v0.5 baseline 규칙
+## v0.6 baseline 규칙
 
-- 새 구문/키워드 추가는 `LANG_SPEC_v0.5/` 개정 없이는 **금지**.
-  정식 버전 업(minor/major)과 함께만 surface 변경.
-- `LANG_SPEC_v0.5/`와 `OSTY_GRAMMAR_v0.5.md`가 권위. 스펙과 구현
-  충돌 시 스펙이 기준.
-- 문법 모호성 발견 → 컴파일러가 아니라 `SPEC_GAPS.md`에 먼저 기록
-- 공개 백엔드는 `--backend llvm`만. 새 백엔드 플래그 추가 금지
+**현행 권위**: `LANG_SPEC_v0.6/` + `OSTY_GRAMMAR_v0.6.md`. 스펙과 구현 충돌 시 스펙이 기준.
+
+**Design north star**: *Hidden dependency is forbidden* — 시간, 난수, 환경, 보안 흐름, API 진화, 성능 계약, 의도, 명세 어느 것도 암묵으로 두지 않는다.
+
+**규칙**:
+- 새 구문/키워드/어노테이션 추가는 `LANG_SPEC_v0.6/` 개정 없이는 **금지**. 정식 버전 업(minor/major)과 함께만 surface 변경.
+- v0.6 결정 (G36–G49) 은 baseline 동결. 새 결정은 `SPEC_GAPS.md` Open Gaps 섹션에 G50+ 으로 등재 후 다음 minor/major 에 일괄 수용.
+- 문법 모호성 발견 → 컴파일러가 아니라 `SPEC_GAPS.md` 에 먼저 기록.
+- 공개 백엔드는 `--backend llvm` 만. 새 백엔드 플래그 추가 금지.
+
+### v0.5 → v0.6 transition 정책
+
+**Spec 단계 (완료)**: PR #1469 / #1471 / #1472 / #1473 / #1474 / #1475 / #1476 으로 14 결정 (G36-G49) baseline 동결. 22 main chapter + 46 stdlib subchapter, OSTY_GRAMMAR_v0.6, BREAKING / MIGRATING 가이드, CLAUDE.md 부록 C 모두 land.
+
+**Implementation phase 진행**: `CHANGELOG_v0.6.md` 가 phase 진행도의 권위.
+
+| Phase | 영역 | Gap |
+|---|---|---|
+| 0 | Self-host 자력 사이클 (Tier A 갭) | (v0.5 follow-up) |
+| 1 | Capability + ambient + stdlib migration | G36 |
+| 2 | Spec link + structured intent + osty context | G38, G42, G47 |
+| 3 | Reproducible + spec block v0 + golden | G39, G43 (v0), G45 |
+| 4 | Sealed + ErrorContract + Evolution + Budget(static) | G40, G41, G44, G46 (static) |
+| 5 | Taint + Budget(runtime) + spec block v1 | G37, G46 (runtime), G43 (v1) |
+| Pre-1.0 | While ergonomics | G49 |
+
+**호환성**:
+- `--legacy-globals` (v0.6.x 한정 — v0.7 제거): v0.5 의 전역 effect 함수 (`time.now()` / `random.next()` / `env.get(k)` / `fs.read(p)` / `os.exec(...)` / `net.dial(...)`) 가 자동 desugar 됨. 사용 시 manifest stability 가 자동 `experimental` 로 강제.
+- `--legacy-construct` (v0.6.x 한정 — v0.7 제거): stdlib sealed types (`Email` / `Url` / `Path` / `SqlIdent` / `Duration` / `Uuid`) 외부 literal 검사 비활성.
+
+**v0.5 ↔ v0.6 차이 한 줄**:
+- v0.5 코드는 v0.6 컴파일러에서 `--legacy-globals --legacy-construct` 와 함께 컴파일 가능 (W0750 deprecation warning 다수)
+- 신규 코드는 v0.6 패턴 (capability parameter, sealed type 의 `Type.parse()` 경유) 사용 권장 — `CLAUDE.md` 부록 C 참조
+
+### 이 프로젝트에서 v0.6 작업 시
+
+1. spec 변경이 필요하면 — `LANG_SPEC_v0.6/` + `OSTY_GRAMMAR_v0.6.md` + `SPEC_GAPS.md` 갱신 + `CHANGELOG_v0.6.md` "shipped" 표 동기
+2. v0.6 패턴 코드 예시는 `CLAUDE.md` 부록 C 참조
+3. 진단 코드 신규 추가는 `internal/diag/codes.go` → `go generate ./internal/diag/...` (catalog 자동 갱신)
+4. `osty check` 통과까지 verify
+5. 신규 Osty 진단 helper (`toolchain/check_diag.osty`) 와 gate (`toolchain/check_gates.osty`) 추가 시 `runCheckGates` 에 등록
 
 ## 백엔드 작업 규칙
 
