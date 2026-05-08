@@ -3310,10 +3310,13 @@ fn lirContainerElemIsString(typeName: String) -> Bool {
     typeName == "String"
 }
 // LirContainerReceiver carries everything an intrinsic lowering needs
-// from one shared parse of the container receiver type. For Map<K, V>
-// the value-side fields are populated too so `map.set` does not re-parse
-// the type string after `lirLowerMirContainerReceiver` returns. For
-// List<T>/Set<T> the value-side fields stay empty.
+// from one shared parse of the container receiver type. List<T> may
+// carry either a typed runtime lane (i64/i1/double/ptr) or a lowered
+// composite layout (%Pair). For Map<K, V>, the key must still be a
+// runtime-supported lane, while V may be typed or composite; the
+// value-side fields are populated so `map.set`/`map.getOr` do not
+// re-parse the receiver string after this helper returns. For Set<T>
+// composite elements stay unsupported because set elements are keys.
 pub struct LirContainerReceiver {
     pub receiverReg: String,
     pub elemTypeName: String,
@@ -3349,10 +3352,25 @@ fn lirLowerMirContainerReceiver(l: LirMirFunctionLowerer, instr: MirInstr, label
         lirLowerError(l, LirDiagUnsupported, label + " could not extract element type from receiver `" + instr.args[0].typ + "`", label)
         return lirContainerReceiverInvalid()
     }
-    let elemLir = lirContainerElemLaneType(elemName)
+    let mut elemLir = lirContainerElemLaneType(elemName)
     if lirTypeIsZero(elemLir) {
-        lirLowerError(l, LirDiagUnsupported, label + " element type `" + elemName + "` has no LIR runtime lane", label)
-        return lirContainerReceiverInvalid()
+        if kind != "list.elem" {
+            lirLowerError(l, LirDiagUnsupported, label + " element type `" + elemName + "` has no LIR runtime lane", label)
+            return lirContainerReceiverInvalid()
+        }
+        let compositeElem = lirLowerMirType(l, elemName)
+        if lirTypeIsZero(compositeElem) || lirTypeIsVoid(compositeElem) {
+            lirLowerError(l, LirDiagUnsupported, label + " element type `" + elemName + "` has no LIR runtime lane or MIR layout", label)
+            return lirContainerReceiverInvalid()
+        }
+        elemLir = compositeElem
+    }
+    if kind == "map.key" || kind == "map.kv" {
+        let keyKind = llvmContainerAbiKind(elemLir.llvm, lirContainerElemIsString(elemName))
+        if keyKind == 6 {
+            lirLowerError(l, LirDiagUnsupported, label + " key type `" + elemName + "` is not a supported runtime key", label)
+            return lirContainerReceiverInvalid()
+        }
     }
     let mut out = LirContainerReceiver {receiverReg: recv.value, elemTypeName: elemName, elemLir, isString: lirContainerElemIsString(elemName), valueTypeName: "", valueLir: lirTypeInvalid(), valueIsString: false, ok: true}
     if kind == "map.kv" {
@@ -3361,10 +3379,14 @@ fn lirLowerMirContainerReceiver(l: LirMirFunctionLowerer, instr: MirInstr, label
             lirLowerError(l, LirDiagUnsupported, label + " could not extract value type from receiver `" + instr.args[0].typ + "`", label)
             return lirContainerReceiverInvalid()
         }
-        let valueLir = lirContainerElemLaneType(valueName)
+        let mut valueLir = lirContainerElemLaneType(valueName)
         if lirTypeIsZero(valueLir) {
-            lirLowerError(l, LirDiagUnsupported, label + " value type `" + valueName + "` has no LIR runtime lane", label)
-            return lirContainerReceiverInvalid()
+            let compositeValue = lirLowerMirType(l, valueName)
+            if lirTypeIsZero(compositeValue) || lirTypeIsVoid(compositeValue) {
+                lirLowerError(l, LirDiagUnsupported, label + " value type `" + valueName + "` has no LIR runtime lane or MIR layout", label)
+                return lirContainerReceiverInvalid()
+            }
+            valueLir = compositeValue
         }
         out.valueTypeName = valueName
         out.valueLir = valueLir

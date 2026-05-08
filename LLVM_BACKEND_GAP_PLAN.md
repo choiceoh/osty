@@ -7,6 +7,8 @@
 > **Phase A 진행**: module-context type lowering 폴스루는 명시적 `unsupported module type` 진단으로 바뀌었고, MIR `uses/imports`는 resolved trace-only metadata로 낮아져 더 이상 LIR Proto 모듈 전체를 decline시키지 않는다.
 >
 > **Phase B 진행**: B1의 첫 조각으로 `MirIntrinsicMapNew`가 destination `Map<K, V>` 타입에서 key/value ABI kind와 `value_size`를 계산해 `osty_rt_map_new(i64, i64, i64, ptr)`를 호출하도록 복구했다. 로컬 실행 회귀는 `osty-self` 캐시 부재로 아직 end-to-end binary까지는 닫지 못했고, LIR Proto 패리티 fixture가 ABI shape를 고정한다.
+>
+> **Phase B 추가 진행**: B2/B3의 넓은 조각으로 canonical `Map.update(k, |n| (n ?? 0) + delta)`를 Go MIR lowerer와 Osty self-host MIR lowerer 양쪽에서 `MirIntrinsicMapIncr`로 직접 낮추도록 고정했다. 또 LIR Proto receiver 분석이 `List<Pair>` element와 `Map<String, Pair>` value의 MIR layout을 composite lane으로 보존하게 바꿔, `map.set`/`map.getOr` bytes-v1 fixture가 receiver 단계에서 끊기지 않도록 했다.
 
 ## 1. 새 architecture 요약
 
@@ -147,11 +149,14 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 **B2 — `Map.update` closure body lowering** (a)
 - `counts.update(k, |n: Int?| (n ?? 0) + 1)` 패턴.
 - 닫혀야 할 sub-기능: closure as Map.update 인자, Optional 인자, `??` coalesce in closure body.
+- 진행: canonical counter shape `|n: Int?| (n ?? 0) + delta`는 일반 closure lowering을 우회해 `map_incr(map, key, delta)`로 직접 lowered. Go MIR와 `toolchain/mir_lower.osty` self-host mirror 모두 적용.
 - 회귀: `TestLLVMBackendBinaryRunsMapUpdateCanonicalPattern`.
 - 의존성: B1 + Phase D의 일부 (Optional 인자).
 
 **B3 — composite element type 폴스루 보강** (GAP-RECV-002, 005)
 - `List<Struct>`, `Map<K, Struct>` element ABI bytes-v1 path 검증.
+- 진행: `lirLowerMirContainerReceiver`가 List element와 Map value에 대해 typed runtime lane이 없을 때 `lirLowerMirType` layout (`%Pair` 등)을 보존하도록 완화. Map key / Set element는 key ABI라 composite unsupported 상태를 유지.
+- 회귀 lock: `map_set_struct_bytes_v1`, 기존 `map_get_or_struct_bytes_v1`, `list_remove_at_struct_bytes_v1` fixture가 같은 receiver path를 탄다.
 - 회귀: `TestLLVMBackendBinaryKeepsMapKeysSortedAliveUnderGC` 와 비슷한 패턴.
 
 ### Phase C — Optional aggregate & projection (Tier A `(b)` + `(d)`)

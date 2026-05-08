@@ -5691,6 +5691,9 @@ pub fn mirLowerMethodCallInto(
             return
         },
     }
+    if mirLowerTryMapUpdateIncr(bs, e, destT, recvT, span) {
+        return
+    }
     // 3. Stdlib method intrinsic (List/Map/Set/String/Bytes/Option/
     //    Result). Runs after concurrency so primitive-name collisions
     //    (`close`, etc.) stay unambiguous.
@@ -5714,6 +5717,143 @@ pub fn mirLowerMethodCallInto(
     // 4/5. Regular method call (user-defined signature or mangled
     //      fallback).
     mirLowerMethodCallUser(bs, e, recv, dest, destT, span)
+}
+
+pub struct MirLowerMapUpdateIncrMatch {
+    pub ok: Bool,
+    pub delta: HirExpr,
+}
+
+fn mirLowerMapUpdateIncrMatchInvalid() -> MirLowerMapUpdateIncrMatch {
+    MirLowerMapUpdateIncrMatch {ok: false, delta: hirExprInvalid()}
+}
+
+fn mirLowerTryMapUpdateIncr(
+    bs: MirLowerBodyState,
+    e: HirExpr,
+    destT: HirType,
+    recvT: HirType,
+    span: MirSpan,
+) -> Bool {
+    if e.methodName != "update" || e.methodArgs.len() != 2 || !hirTypeIsUnit(destT) {
+        return false
+    }
+    if !hirTypeIsMap(recvT) {
+        return false
+    }
+    let valueT = hirTypeSecondArg(recvT)
+    if !mirLowerTypeIsI64Int(valueT) {
+        return false
+    }
+    let matched = mirLowerMapUpdateIncrDeltaExpr(e.methodArgs[1].value)
+    if !(matched.ok) {
+        return false
+    }
+    let recvOp = mirLowerExprAsOperand(bs, e.methodReceiver[0])
+    let keyOp = mirLowerExprAsOperand(bs, e.methodArgs[0].value)
+    let deltaOp = mirLowerExprAsOperandHint(bs, matched.delta, valueT)
+    mirLowerEmitInstr(
+        bs,
+        mirIntrinsicInstr(
+            false,
+            mirPlace(-1),
+            MirIntrinsicMapIncr,
+            [recvOp, keyOp, deltaOp],
+            span,
+        ),
+    )
+    true
+}
+
+fn mirLowerTypeIsI64Int(t: HirType) -> Bool {
+    if t.kind != HirTypePrim {
+        return false
+    }
+    t.primKind == HirPrimInt || t.primKind == HirPrimInt64
+}
+
+fn mirLowerMapUpdateIncrDeltaExpr(closure: HirExpr) -> MirLowerMapUpdateIncrMatch {
+    if closure.kind != HirExprClosure || closure.closureParams.len() != 1 || closure.closureBody.len() != 1 {
+        return mirLowerMapUpdateIncrMatchInvalid()
+    }
+    let paramName = closure.closureParams[0].name
+    if paramName == "" {
+        return mirLowerMapUpdateIncrMatchInvalid()
+    }
+    let body = closure.closureBody[0]
+    if body.stmts.len() != 0 || !(body.hasResult) || body.result.kind != HirExprBinary {
+        return mirLowerMapUpdateIncrMatchInvalid()
+    }
+    let bin = body.result
+    if bin.binaryOp != HirBinAdd || bin.binaryLeft.len() != 1 || bin.binaryRight.len() != 1 {
+        return mirLowerMapUpdateIncrMatchInvalid()
+    }
+    let left = bin.binaryLeft[0]
+    let right = bin.binaryRight[0]
+    if mirLowerMapUpdateIncrBaseExpr(left, paramName) && mirLowerMapUpdateIncrDeltaSafe(right, paramName) {
+        return MirLowerMapUpdateIncrMatch {ok: true, delta: right}
+    }
+    if mirLowerMapUpdateIncrBaseExpr(right, paramName) && mirLowerMapUpdateIncrDeltaSafe(left, paramName) {
+        return MirLowerMapUpdateIncrMatch {ok: true, delta: left}
+    }
+    mirLowerMapUpdateIncrMatchInvalid()
+}
+
+fn mirLowerMapUpdateIncrBaseExpr(e: HirExpr, paramName: String) -> Bool {
+    if e.kind != HirExprCoalesce || e.coalesceLeft.len() != 1 || e.coalesceRight.len() != 1 {
+        return false
+    }
+    let left = e.coalesceLeft[0]
+    if left.kind != HirExprIdent || left.identName != paramName {
+        return false
+    }
+    let right = e.coalesceRight[0]
+    right.kind == HirExprIntLit && mirLowerParseIntLit(right.numText) == 0
+}
+
+fn mirLowerMapUpdateIncrDeltaSafe(e: HirExpr, paramName: String) -> Bool {
+    if e.kind == HirExprIntLit {
+        return true
+    }
+    if e.kind == HirExprIdent {
+        return e.identName != paramName
+    }
+    if e.kind == HirExprUnary {
+        if e.unaryChild.len() != 1 {
+            return false
+        }
+        if e.unaryOp != HirUnPlus && e.unaryOp != HirUnNeg {
+            return false
+        }
+        return mirLowerMapUpdateIncrDeltaSafe(e.unaryChild[0], paramName)
+    }
+    if e.kind == HirExprBinary {
+        if e.binaryLeft.len() != 1 || e.binaryRight.len() != 1 {
+            return false
+        }
+        let op = e.binaryOp
+        let arithmetic = op == HirBinAdd || op == HirBinSub || op == HirBinMul
+        if !arithmetic {
+            return false
+        }
+        if !mirLowerMapUpdateIncrDeltaSafe(e.binaryLeft[0], paramName) {
+            return false
+        }
+        return mirLowerMapUpdateIncrDeltaSafe(e.binaryRight[0], paramName)
+    }
+    if e.kind == HirExprField {
+        if e.fieldOptional || e.fieldTarget.len() != 1 {
+            return false
+        }
+        return mirLowerMapUpdateIncrDeltaSafe(e.fieldTarget[0], paramName)
+    }
+    if e.kind == HirExprTupleAccess {
+        if e.tupleAccessTarget.len() != 1 {
+            return false
+        }
+        return mirLowerMapUpdateIncrDeltaSafe(e.tupleAccessTarget[0], paramName)
+    }
+    false
 }
 
 /// mirLowerUseAliasIndexForReceiver returns the index into
