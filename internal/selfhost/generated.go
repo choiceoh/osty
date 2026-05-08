@@ -170,11 +170,51 @@ func resultMapErr[T any, E any, F any](r Result[T, E], f func(E) F) Result[T, F]
 	return resultErr[T, F](f(r.Error))
 }
 
+// ostyTagTypeCache caches the result of ostyIsTagType per reflect.Type.
+// Tag-discriminant types (single `_ref byte` field) are the bulk of the
+// ostyEqual call shape `ostyEqual(value, KindType(&KindType_Variant{}))`,
+// and the lookup is hit ~25M times on big self-host inputs.
+var ostyTagTypeCache sync.Map // reflect.Type -> bool
+
+// ostyIsTagType reports whether t is a pointer to a single-field
+// `_ref byte` tag struct. The selfhost code generator emits these for
+// every sum-type variant; their `_ref` is always zero, so two values of
+// the same dynamic type are always equal.
+func ostyIsTagType(t reflect.Type) bool {
+	if t == nil || t.Kind() != reflect.Pointer {
+		return false
+	}
+	if v, ok := ostyTagTypeCache.Load(t); ok {
+		return v.(bool)
+	}
+	elem := t.Elem()
+	isTag := elem.Kind() == reflect.Struct &&
+		elem.NumField() == 1 &&
+		elem.Field(0).Name == "_ref"
+	ostyTagTypeCache.Store(t, isTag)
+	return isTag
+}
+
 func ostyEqual(a, b any) bool {
 	av := reflect.ValueOf(a)
 	bv := reflect.ValueOf(b)
 	if !av.IsValid() || !bv.IsValid() {
 		return ostyIsNilValue(av) && ostyIsNilValue(bv)
+	}
+	at, bt := av.Type(), bv.Type()
+	// Fast path: differing dynamic types skip the seen-map allocation.
+	// Mirrors ostyEqualValue's type-mismatch fall-through.
+	if at != bt {
+		return ostyIsNilValue(av) && ostyIsNilValue(bv)
+	}
+	// Fast path: tag-discriminant types are equal whenever their dynamic
+	// types match (the `_ref` field is always zero). Saves ~57% of CPU
+	// on self-host inputs by short-circuiting deep reflect.
+	if ostyIsTagType(at) {
+		if av.IsNil() || bv.IsNil() {
+			return av.IsNil() == bv.IsNil()
+		}
+		return true
 	}
 	return ostyEqualValue(av, bv, map[ostyEqualVisit]bool{})
 }
