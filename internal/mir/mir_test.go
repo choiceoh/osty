@@ -325,12 +325,53 @@ func TestLowerWhileLoop(t *testing.T) {
 	})
 	mod := lowerHIR(t, fn)
 	text := Print(mod)
-	// Expect a branch on the condition and a back-edge goto.
 	if strings.Count(text, "goto -> bb") < 2 {
 		t.Fatalf("expected two gotos for while header/back-edge, got:\n%s", text)
 	}
 	if !strings.Contains(text, "branch ") {
 		t.Fatalf("expected branch for while cond, got:\n%s", text)
+	}
+}
+
+func TestLowerLoopExprBreakValue(t *testing.T) {
+	fn := mkFn("find", ir.TInt, &ir.Block{
+		Result: &ir.LoopExpr{
+			Body: &ir.Block{
+				Stmts: []ir.Stmt{
+					&ir.BreakStmt{Value: &ir.IntLit{Text: "42", T: ir.TInt}},
+				},
+			},
+			T: ir.TInt,
+		},
+	})
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if !strings.Contains(text, "goto -> bb") {
+		t.Fatalf("expected goto for loop header, got:\n%s", text)
+	}
+	if !strings.Contains(text, "use const 42 Int") {
+		t.Fatalf("expected break value 42, got:\n%s", text)
+	}
+	if !strings.Contains(text, "_0 = use _1") {
+		t.Fatalf("expected copy from result to return slot, got:\n%s", text)
+	}
+}
+
+func TestLowerLoopExprNoValue(t *testing.T) {
+	fn := mkFn("spin", ir.TUnit, &ir.Block{
+		Stmts: []ir.Stmt{
+			&ir.ExprStmt{X: &ir.LoopExpr{
+				Body: &ir.Block{
+					Stmts: []ir.Stmt{},
+				},
+				T: ir.TUnit,
+			}},
+		},
+	})
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if strings.Count(text, "goto -> bb") < 2 {
+		t.Fatalf("expected gotos for infinite loop, got:\n%s", text)
 	}
 }
 

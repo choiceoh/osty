@@ -243,9 +243,21 @@ func (p *printer) printStmt(s Stmt) {
 		p.b.WriteByte(')')
 	case *BreakStmt:
 		if s.Label != "" {
-			p.writef("(break '%s)", s.Label)
+			if s.Value != nil {
+				p.writef("(break '%s ", s.Label)
+				p.printExpr(s.Value)
+				p.b.WriteByte(')')
+			} else {
+				p.writef("(break '%s)", s.Label)
+			}
 		} else {
-			p.b.WriteString("(break)")
+			if s.Value != nil {
+				p.b.WriteString("(break ")
+				p.printExpr(s.Value)
+				p.b.WriteByte(')')
+			} else {
+				p.b.WriteString("(break)")
+			}
 		}
 	case *ContinueStmt:
 		if s.Label != "" {
@@ -559,6 +571,14 @@ func (p *printer) printExpr(e Expr) {
 		p.b.WriteByte(')')
 	case *BlockExpr:
 		p.printBlock(e.Block)
+	case *LoopExpr:
+		p.b.WriteString("(loop")
+		if e.Label != "" {
+			p.writef(" '%s", e.Label)
+		}
+		p.b.WriteByte(' ')
+		p.printBlock(e.Body)
+		p.b.WriteByte(')')
 	case *IfExpr:
 		p.b.WriteString("(if-expr ")
 		p.printExpr(e.Cond)

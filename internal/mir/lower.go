@@ -571,15 +571,10 @@ type loopFrame struct {
 	label         string
 	breakBlock    BlockID
 	continueBlock BlockID
-	// deferDepth records the defer-frame depth active at the top of
-	// the loop body. `break` and `continue` unwind inner frames
-	// *inclusive* of this one — every iteration enters the body
-	// scope fresh, so the body's defers run on both exit paths.
-	deferDepth int
-	// scopeDepth records the local-scope depth of the loop body so
-	// break/continue can retire loop-body locals before control jumps
-	// to the header/step/exit blocks.
-	scopeDepth int
+	deferDepth    int
+	scopeDepth    int
+	resultLocal   LocalID
+	resultType    Type
 }
 
 func newBodyState(l *lowerer, fn *Function) *bodyState {
@@ -1322,6 +1317,14 @@ func (bs *bodyState) lowerBreak(b *ir.BreakStmt) {
 			bs.l.noteIssue("break to undefined loop label")
 			return
 		}
+	}
+	if b.Value != nil && top.resultLocal != 0 {
+		rv := bs.lowerExprAsOperand(b.Value)
+		bs.emit(&AssignInstr{
+			Dest:  Place{Local: top.resultLocal},
+			Src:   &UseRV{Op: rv},
+			SpanV: b.SpanV,
+		})
 	}
 	bs.replayDefersFromDepth(top.deferDepth, b.SpanV)
 	bs.emitStorageDeadFromDepth(top.scopeDepth)
@@ -2496,6 +2499,9 @@ func (bs *bodyState) lowerExprIntoPlace(e ir.Expr, dest Place, destT Type) {
 		return
 	case *ir.IfExpr:
 		bs.lowerIfExprInto(x, dest, destT)
+		return
+	case *ir.LoopExpr:
+		bs.lowerLoopExprInto(x, dest, destT)
 		return
 	case *ir.IfLetExpr:
 		bs.lowerIfLetExprInto(x, dest, destT)
@@ -4131,7 +4137,47 @@ func (bs *bodyState) lowerBlockExprInto(be *ir.BlockExpr, dest Place, destT Type
 	bs.popScope()
 }
 
-// lowerIfLetExprInto handles `if let pat = scrut { … } else { … }`.
+func (bs *bodyState) lowerLoopExprInto(le *ir.LoopExpr, dest Place, destT Type) {
+	resultLocal := bs.newLocal("loop.result", destT, false, le.SpanV)
+	header := bs.newBlock(le.SpanV)
+	body := bs.newBlock(le.SpanV)
+	exit := bs.newBlock(le.SpanV)
+	bs.terminate(&GotoTerm{Target: header, SpanV: le.SpanV})
+	bs.cur = header
+	bs.terminate(&GotoTerm{Target: body, SpanV: le.SpanV})
+	bs.cur = body
+	bs.pushScope()
+	bs.pushDeferScope()
+	bs.loopStack = append(bs.loopStack, &loopFrame{
+		label:         le.Label,
+		breakBlock:    exit,
+		continueBlock: header,
+		deferDepth:    len(bs.deferFrames) - 1,
+		scopeDepth:    bs.currentScopeDepth(),
+		resultLocal:   resultLocal,
+		resultType:    destT,
+	})
+	if le.Body != nil {
+		for _, s := range le.Body.Stmts {
+			bs.lowerStmt(s)
+		}
+	}
+	bs.replayTopFrame(le.SpanV)
+	bs.loopStack = bs.loopStack[:len(bs.loopStack)-1]
+	bs.popDeferScope()
+	bs.popScope()
+	bs.terminate(&GotoTerm{Target: header, SpanV: le.SpanV})
+	bs.cur = exit
+	if destT != nil && !isPoisonType(destT) {
+		bs.emit(&AssignInstr{
+			Dest:  dest,
+			Src:   &UseRV{Op: &CopyOp{Place: Place{Local: resultLocal}, T: destT}},
+			SpanV: le.SpanV,
+		})
+	}
+}
+
+// lowerIfLetExprInto handles `if let pat = scrut { … } else { … }`. handles `if let pat = scrut { … } else { … }`.
 // It lowers into a discriminant test + payload binding for Option /
 // enum variants, and falls back to an unsupported note otherwise.
 func (bs *bodyState) lowerIfLetExprInto(ife *ir.IfLetExpr, dest Place, destT Type) {

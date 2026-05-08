@@ -129,7 +129,7 @@ func cloneNode(n Node) Node {
 	case *ReturnStmt:
 		return &ReturnStmt{Value: cloneExprOrNil(n.Value), SpanV: n.SpanV}
 	case *BreakStmt:
-		return &BreakStmt{Label: n.Label, SpanV: n.SpanV}
+		return &BreakStmt{Label: n.Label, Value: cloneExprOrNil(n.Value), SpanV: n.SpanV}
 	case *ContinueStmt:
 		return &ContinueStmt{Label: n.Label, SpanV: n.SpanV}
 	case *IfStmt:
@@ -466,7 +466,7 @@ func cloneStmt(s Stmt) Stmt {
 	case *ReturnStmt:
 		return &ReturnStmt{Value: cloneExprOrNil(s.Value), SpanV: s.SpanV}
 	case *BreakStmt:
-		return &BreakStmt{Label: s.Label, SpanV: s.SpanV}
+		return &BreakStmt{Label: s.Label, Value: cloneExprOrNil(s.Value), SpanV: s.SpanV}
 	case *ContinueStmt:
 		return &ContinueStmt{Label: s.Label, SpanV: s.SpanV}
 	case *IfStmt:
@@ -646,6 +646,13 @@ func cloneExpr(e Expr) Expr {
 	case *BlockExpr:
 		return &BlockExpr{
 			Block: cloneBlockOrNil(e.Block),
+			T:     CloneType(e.T),
+			SpanV: e.SpanV,
+		}
+	case *LoopExpr:
+		return &LoopExpr{
+			Label: e.Label,
+			Body:  cloneBlockOrNil(e.Body),
 			T:     CloneType(e.T),
 			SpanV: e.SpanV,
 		}
