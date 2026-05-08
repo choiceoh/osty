@@ -1,5 +1,24 @@
 ## 2. Type System
 
+Osty v0.6 is a statically typed language with bidirectional type
+inference, structural interfaces, monomorphized generics, and a
+fixed-shape collection of value-semantic primitives plus
+reference-semantic composites. The type system is designed to admit
+compile-time guarantees without lifetimes or borrow analysis: the
+v0.6 *capability surface* (§20) and *information flow tags* (§21)
+ride on top of the standard type rules — capabilities appear as
+ordinary parameter types, and flow tags decorate a type without
+changing its identity.
+
+This chapter covers primitives (§2.1), numeric conversions (§2.2),
+overflow semantics (§2.3), composite types (§2.4), the optional sugar
+`T?` (§2.5), structural interfaces and built-in protocols (§2.6),
+monomorphized generics (§2.7), value vs reference semantics (§2.8),
+equality and hashing (§2.9), mutability (§2.10), and nullability
+(§2.11). All v0.5 primitives and composites carry forward unchanged;
+v0.6 adds no new type-system surface — the new annotation surfaces
+(§3.10–§3.15, §20, §21) are layered on existing types.
+
 ### 2.1 Primitive Types
 
 ```

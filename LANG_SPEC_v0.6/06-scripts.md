@@ -1,5 +1,14 @@
 ## 6. Scripts
 
+Osty v0.6 lets a single file mix declarations and top-level statements
+to function as a *script*. The compiler synthesizes an implicit
+`main() -> Result<(), Error>` from those statements. v0.6 scripts run
+under an automatic `#[ambient(clock, rng, env, fs)]` capability binding
+(§20.3), so common effectful calls work without explicit capability
+parameters in the script body. Library code retains the discipline of
+explicit capability arguments — scripts are the boundary where ambient
+binding is acceptable.
+
 A file is a **script file** if it contains top-level statements outside
 any function or type declaration. A file with only declarations is a
 **module file**.

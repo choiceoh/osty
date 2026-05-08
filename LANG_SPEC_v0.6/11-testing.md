@@ -1,5 +1,15 @@
 ## 11. Testing
 
+Osty v0.6 ships a built-in testing surface. Tests live alongside code
+in `_test.osty` files or as `#[test]`-annotated functions in
+production sources; the runner is `osty test`, with assertions
+provided by `std.testing`. The v0.6 surface adds: declarative golden
+tests via `#[golden]` (§11.5.2, G45) which reuse the v0.5 snapshot
+on-disk format, executable specification clauses through `spec { }`
+blocks (§3.13, G43) which run as tests under `osty test --spec`, and
+the `#[example]` annotation (§3.12, G42) which auto-checks
+`input → output` declarations under `osty test --example`.
+
 Test files use the `_test.osty` suffix and live alongside code in the
 same package. Functions whose names begin with lowercase `test` and
 take no arguments are discovered and run by `osty test`. A top-level

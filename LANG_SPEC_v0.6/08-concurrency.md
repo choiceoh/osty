@@ -1,5 +1,21 @@
 ## 8. Concurrency
 
+Osty v0.6 supports concurrency exclusively through *structured
+concurrency* — every task lives within a `taskGroup` scope and joins
+or fails with its parent. Detached tasks, `async`/`await`, and
+`spawn` keywords are excluded by §14. Green tasks multiplex onto an
+M:N scheduler (§8.0); communication uses channels (§8.5) or shared
+state under `std.sync` primitives (§8.6). The non-escaping rule for
+`Handle<T>` and `TaskGroup` capabilities (G13, §8.2) is enforced by a
+finite front-end check, not lifetimes.
+
+This chapter is unchanged from v0.5 in semantics. v0.6 introduces
+capability parameters (§20) which interact with concurrent code:
+spawning a child task that needs a `Clock` requires explicit
+forwarding from the enclosing scope, since ambient bindings do not
+cross function boundaries. The `Net` and `Fs` capabilities are
+cancellation-aware, matching the v0.5 stdlib contract.
+
 ### 8.0 Scheduler Model
 
 Osty specifies an **M:N scheduler**. Task-level units (`g.spawn(...)`, the

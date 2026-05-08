@@ -1,5 +1,19 @@
 ## 13. Tooling
 
+Osty v0.6 tooling exposes the spec surface through commands. The CLI
+(§13.1), package manifest format (§13.2), and zero-config formatter
+(§13.3) carry forward from v0.5 unchanged. v0.6 adds: `osty context`
+(§13.4, G47) for machine-readable intent extraction (purpose,
+example, spec_refs, error_contract, capabilities, taint, budget) as
+a single JSON document; `osty publish` (§13.5, G44) for SemVer
+enforcement against `#[stability]` declarations through API surface
+diff; `osty validate-spec` (§13.6, G38) for `#[spec(...)]` anchor
+validation; audit subcommands (§13.7) for trusted-declassify /
+trusted-construct / match-compat / legacy-globals enumeration; and
+test-subcommand extensions (§13.8) for `--spec`, `--example`,
+`--golden`, `--update-golden`, and `--doc` modes alongside `osty
+bench --budget` runtime gates.
+
 ### 13.1 CLI
 
 ```

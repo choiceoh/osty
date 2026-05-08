@@ -1,5 +1,15 @@
 ## 17. Display and Format Protocol
 
+Osty v0.6 defines value-to-string conversion through a single
+interface, `ToString`. String interpolation `"{expr}"` (§4.8), the
+`println` / `print` / `eprint` family, and the formatter's
+`Display` rendering all dispatch through `toString()`. The interface
+is structural — any type that defines `fn toString(self) -> String`
+satisfies it. v0.6 adds no new format protocol surface; the
+machine-readable intent annotations (`#[purpose]`, `#[example]`,
+`#[fixture]` per §3.12) operate at a different layer (documentation
+/ context export) and do not interact with `ToString`.
+
 String interpolation and the `print*` family are defined in terms of a
 single interface:
 

@@ -1,11 +1,25 @@
 ## 10. Standard Library
 
-This chapter is split into one file per subsection for easier navigation. The introduction below states the structuring principles; each `std.*` package then lives in its own file.
+Osty v0.6 ships a batteries-included standard library. This chapter
+catalogues the canonical `std.*` packages, organized in tiers (§10.1
+Tier 1 / §10.2 Tier 2) plus per-package specifications. Each
+subsection is a separate file for navigation.
 
-## 10. Standard Library
+The v0.6 stdlib introduces 7 capability protocols (`Clock`, `Rng`,
+`Env`, `Fs`, `Net`, `Process`, `Console` per §20) in `std.capability`
+and host-adapter factories (`time.systemClock`, `random.host`,
+`env.host`, `fs.host`, `capability.hostNet`, `capability.hostProcess`,
+`io.console`). The legacy globals (`time.now()`, `random.next()`, etc.)
+remain available under the `--legacy-globals` compatibility mode for
+the v0.6.x lifetime; v0.7 removes them.
 
-**v0.4 stub policy.** Standard-library protocol signatures are tracked
-as checked `.osty` stubs before runtime parity. A stub may use a dummy
+Six stdlib types become sealed in v0.6 (G40, §3.4.5): `Email`,
+`Url`, `Path`, `SqlIdent`, `Duration`, `Uuid`. External code routes
+construction through `Type.parse(...)`; the `--legacy-construct` mode
+preserves direct literal construction during the v0.6.x transition.
+
+**Stub policy.** Standard-library protocol signatures are tracked as
+checked `.osty` stubs before runtime parity. A stub may use a dummy
 body, but it must parse, resolve, and type-check. If moving prose from
 §10, §15, §16, or §17 into stubs exposes a signature ambiguity, that
 ambiguity becomes a new language-decision gap; missing backend/runtime

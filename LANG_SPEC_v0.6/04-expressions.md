@@ -1,5 +1,20 @@
 ## 4. Expressions
 
+Osty v0.6 is an expression-oriented language. Block (§4.1), `if`
+(§4.2), `match` (§4.3), and `loop` are all expressions that produce
+values when used in value position, and statements when used at
+statement position. This chapter defines expression syntax and
+semantics: blocks, conditionals, pattern matching, loops including
+the v0.6-introduced `while cond { }` synonym for `for cond { }`
+(G49, §4.4), error propagation (§4.5), optional chaining and
+nil-coalescing (§4.6), closures (§4.7), string interpolation (§4.8),
+member access (§4.9), indexing (§4.10), block scope (§4.11), `defer`
+semantics including cancellation interaction (§4.12), and assignment
+forms (§4.13).
+
+The v0.6 surface additions touch §4.4 only (the `while` synonym).
+All other expression forms carry forward from v0.5 unchanged.
+
 ### 4.1 Block Expressions
 
 ```osty

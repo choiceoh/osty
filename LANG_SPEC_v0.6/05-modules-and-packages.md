@@ -1,5 +1,14 @@
 ## 5. Modules and Packages
 
+Osty v0.6 organizes code by directory: a directory is a package, and
+all `.osty` files in that directory share one namespace. Packages
+import each other through `use` statements. The import surface —
+including `use path::{a, b as c}` (G28), `pub use path.Sym` (G30),
+and `#[cfg(...)]`-conditional declarations (G29) — is unchanged in
+v0.6. v0.6 adds no new module-system syntax; the publishing surface
+(`osty publish` SemVer enforcement, G44) and its API-surface diff
+algorithm are described in §13.5 and §3.14.3 respectively.
+
 ### 5.1 Package = Directory
 
 A directory is a package. All `.osty` files in a directory belong to the

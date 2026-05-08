@@ -1,5 +1,15 @@
 ## 1. Lexical Structure
 
+This chapter defines the lexical surface of Osty v0.6 — file encoding,
+keywords (18 reserved + 14 contextual), identifier conventions,
+literals, and the rules the lexer applies to produce a token stream
+the parser can consume. The grammar (`OSTY_GRAMMAR_v0.6.md`) and v0.6
+design north star (*hidden dependency is forbidden*) inform the rule
+set, but the *token-level* rules below are mostly stable across
+versions: the v0.6 additions are limited to the `while` reserved
+keyword (G49, §1.2) and four spec-block contextual keywords (`spec`,
+`example`, `law`, `invariant`; G43, §1.3).
+
 ### 1.1 Source Files
 
 - File extension: `.osty`
