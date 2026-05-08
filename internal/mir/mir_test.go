@@ -481,6 +481,91 @@ func TestLowerStructLiteralAndField(t *testing.T) {
 	}
 }
 
+func TestLowerNestedStructBindingPatternKeepsAliasAndLeaves(t *testing.T) {
+	addressT := &ir.NamedType{Name: "Address"}
+	userT := &ir.NamedType{Name: "User"}
+	addressDecl := &ir.StructDecl{
+		Name: "Address",
+		Fields: []*ir.Field{
+			{Name: "city", Type: ir.TInt},
+			{Name: "zip", Type: ir.TInt},
+		},
+	}
+	userDecl := &ir.StructDecl{
+		Name: "User",
+		Fields: []*ir.Field{
+			{Name: "addr", Type: addressT},
+			{Name: "score", Type: ir.TInt},
+		},
+	}
+	fn := &ir.FnDecl{
+		Name:   "check",
+		Return: ir.TInt,
+		Params: []*ir.Param{{Name: "u", Type: userT}},
+		Body: &ir.Block{
+			Stmts: []ir.Stmt{
+				&ir.LetStmt{
+					Type: userT,
+					Pattern: &ir.BindingPat{Name: "whole", Pattern: &ir.StructPat{
+						TypeName: "User",
+						Fields: []ir.StructPatField{
+							{Name: "addr", Pattern: &ir.StructPat{
+								TypeName: "Address",
+								Fields: []ir.StructPatField{
+									{Name: "city"},
+									{Name: "zip"},
+								},
+							}},
+							{Name: "score"},
+						},
+					}},
+					Value: &ir.Ident{Name: "u", Kind: ir.IdentParam, T: userT},
+				},
+			},
+			Result: &ir.BinaryExpr{
+				Op: ir.BinAdd,
+				Left: &ir.BinaryExpr{
+					Op: ir.BinAdd,
+					Left: &ir.BinaryExpr{
+						Op: ir.BinAdd,
+						Left: &ir.FieldExpr{
+							X:    &ir.Ident{Name: "whole", Kind: ir.IdentLocal, T: userT},
+							Name: "score",
+							T:    ir.TInt,
+						},
+						Right: &ir.Ident{Name: "city", Kind: ir.IdentLocal, T: ir.TInt},
+						T:     ir.TInt,
+					},
+					Right: &ir.Ident{Name: "zip", Kind: ir.IdentLocal, T: ir.TInt},
+					T:     ir.TInt,
+				},
+				Right: &ir.Ident{Name: "score", Kind: ir.IdentLocal, T: ir.TInt},
+				T:     ir.TInt,
+			},
+		},
+	}
+	out := Lower(&ir.Module{Package: "main", Decls: []ir.Decl{addressDecl, userDecl, fn}})
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+	text := Print(out)
+	for _, want := range []string{
+		"fn check(_1: User) -> Int",
+		"_3 = use _2",
+		".addr.city",
+		".addr.zip",
+		".score",
+		"+",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("lowered MIR missing %q:\n%s", want, text)
+		}
+	}
+	if out.Layouts == nil || out.Layouts.Structs["Address"] == nil || out.Layouts.Structs["User"] == nil {
+		t.Fatalf("expected nested struct layouts, got %#v", out.Layouts)
+	}
+}
+
 func TestLowerEnumMatch(t *testing.T) {
 	// enum Maybe { Some(Int), None }
 	// fn score(m: Maybe) -> Int { match m { Some(x) -> x, None -> 0 } }

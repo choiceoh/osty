@@ -177,6 +177,7 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 **C3 — Nested struct binding pattern** (GAP-INSTR-006) — Tier A (d)
 - `match user { User { addr: Address { city } } -> ... }` recursive `extractvalue` + `name @ pattern` alias.
 - 진행: `source_nested_struct_binding` source parity fixture가 `let whole @ User { addr: Address { city, zip }, score } = u`를 통해 whole-scrutinee alias + nested field extraction을 고정한다.
+- 진행: Go MIR lowering 회귀도 같은 shape를 `whole` alias store + `.addr.city`/`.addr.zip`/`.score` projected reads로 잠근다. LIR Proto catalog sentinel은 current-generator fixture set에 이 source parity fixture가 계속 포함되는지도 확인한다.
 - 회귀: `TestRunCoversNestedStructBindingPattern` (cmd/osty-native-llvmgen).
 - 의존성: A1 진단 가시화 권장.
 
@@ -272,7 +273,7 @@ F3 (별개): TestBundledRuntimeMap* link
 
 ## 8. 추후 audit 추가 항목
 
-- (TODO) cmd/osty-native-llvmgen 측 nested binding 회귀 (Tier A (d)) 정확한 코드 위치
+- cmd/osty-native-llvmgen 측 nested binding binary 회귀는 `osty-self` artifact가 있는 환경에서만 활성화한다. 로컬 기본 잠금은 Go MIR shape + LIR Proto source parity catalog로 유지.
 - (TODO) `MIRDirect` 라우트가 항상 `tryNativeOwnedMIRPayloadLLVMIRText`로 fallback하는 현재 로직 재검토 — 이중 호출 비효율
 - (TODO) 진짜 Tier B (pkgmgr 셀프-컴파일) 갭은 별도 audit. 현재 본 문서는 Tier A 범위.
 
