@@ -68,6 +68,12 @@ pub interface Process {
 이 7 개 interface (`Clock`, `Rng`, `Env`, `Fs`, `Net`, `Process`, `Console`) 가 v0.6
 의 **canonical capability set**. 사용자 정의 capability 는 §20.5 참조.
 
+**Implementation note.** 현재 stdlib 는 이 canonical protocol set 을
+`std.capability` 에 compile-checked interface surface 로 노출한다. 기존
+`std.time`, `std.random`, `std.env`, `std.fs`, `std.net`, `std.process`, `std.io`
+전역 함수는 v0.6.x compatibility surface 로 유지되며, ambient desugar /
+`--legacy-globals` warning 은 별도 compiler phase 에서 닫는다.
+
 함수는 capability 를 **명시적 파라미터**로 받는다:
 
 ```osty
@@ -304,4 +310,3 @@ f(systemClock, defaultRng)         // OK
 | `E0785` | `#[pure]` 함수가 capability 수신 |
 
 ---
-

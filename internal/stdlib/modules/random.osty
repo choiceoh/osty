@@ -1,16 +1,21 @@
 // std.random — non-cryptographic pseudorandom numbers (spec §10.14).
 //
-// Constructors and primitive methods are runtime-backed. `choice` and
-// `shuffle` stay as canonical derived helpers over that primitive
-// surface, so their edge-case behavior is visible in the stdlib source.
-
+// Constructors and primitive methods are runtime-backed. `next` /
+// `nextBytes` are v0.6 capability aliases over the existing primitive
+// surface. `choice` and `shuffle` stay as canonical derived helpers so
+// their edge-case behavior is visible in the stdlib source.
 pub struct Rng {
+    pub fn next(self) -> Int {
+        self.int(0, 2147483647)
+    }
+    pub fn nextBytes(self, n: Int) -> Bytes {
+        self.bytes(n)
+    }
     pub fn int(self, min: Int, max: Int) -> Int
     pub fn intInclusive(self, min: Int, max: Int) -> Int
     pub fn float(self) -> Float
     pub fn bool(self) -> Bool
     pub fn bytes(self, n: Int) -> Bytes
-
     pub fn choice<T>(self, items: List<T>) -> T? {
         if items.isEmpty() {
             None
@@ -18,10 +23,6 @@ pub struct Rng {
             Some(items[self.int(0, items.len())])
         }
     }
-
-    /// Shuffle `items` in place with Fisher-Yates. Empty and single-item
-    /// lists are left unchanged; every other permutation is produced by
-    /// the receiver's own random stream.
     pub fn shuffle<T>(self, items: List<T>) {
         let mut i = items.len()
         for i > 1 {
@@ -35,7 +36,5 @@ pub struct Rng {
         }
     }
 }
-
 pub fn default() -> Rng
-
 pub fn seeded(seed: Int64) -> Rng
