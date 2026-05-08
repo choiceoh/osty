@@ -22,4 +22,4 @@ package selfhostcache
 // over default). Disable verification entirely: blank both. The env
 // var path also lets a fork user run a private registry without
 // touching this constant.
-const DefaultTrustedKeyHex = ""
+const DefaultTrustedKeyHex = "47a2fccb88dee314ec7b32d16b223f20c0108de7812427065c2f29c7d65fa2e3"
