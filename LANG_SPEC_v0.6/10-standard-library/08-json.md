@@ -32,9 +32,9 @@ Mapping:
 
 - **Unknown keys are silently ignored.** A JSON object may contain keys
   not named by the target struct; the decoder skips them. This is the
-  forward-compatible default (Go/Rust convention). The `#[json(strict)]`
-  annotation is *not* part of the v0.4 set — use a custom `Decode`
-  implementation if strict rejection is required.
+  forward-compatible default (Go/Rust convention). A `#[json(strict)]`
+  variant is not part of the v0.6 annotation surface — use a custom
+  `Decode` implementation if strict rejection is required.
 - **Type mismatches are fatal.** When an incoming value's JSON type
   does not match the target (e.g. string where integer expected),
   `json.decode` returns `Err` immediately. There is no partial recovery

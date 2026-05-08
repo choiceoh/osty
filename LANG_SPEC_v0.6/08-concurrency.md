@@ -9,12 +9,25 @@ state under `std.sync` primitives (§8.6). The non-escaping rule for
 `Handle<T>` and `TaskGroup` capabilities (G13, §8.2) is enforced by a
 finite front-end check, not lifetimes.
 
-This chapter is unchanged from v0.5 in semantics. v0.6 introduces
-capability parameters (§20) which interact with concurrent code:
-spawning a child task that needs a `Clock` requires explicit
-forwarding from the enclosing scope, since ambient bindings do not
-cross function boundaries. The `Net` and `Fs` capabilities are
-cancellation-aware, matching the v0.5 stdlib contract.
+Capability parameters (§20) flow through `taskGroup` naturally:
+spawned closures *capture* the outer scope's capabilities by
+reference, so a child task that needs a `Clock` is satisfied by the
+enclosing function's `clock` parameter without any explicit hand-off.
+What does **not** cross is `#[ambient]` binding (§20.3) — ambient
+binding is scoped to the enclosing entry-point function, never to
+spawned closures. A child that wants ambient access must instead
+*receive* the capability as a parameter (or capture a binding that
+already received it).
+
+`Net`, `Fs`, and `Clock` are cancellation-aware: every blocking
+operation honors §8.4.2's cancellation contract and returns
+`Err(Cancelled { cause })` when the surrounding `taskGroup` is being
+torn down. CPU-bound work without stdlib calls must check
+`thread.isCancelled()` (§8.4.2) explicitly.
+
+The non-escaping rule for `Handle<T>` and `TaskGroup` (G13, §8.2) is
+enforced by a finite front-end check, not lifetimes — the rule
+predates v0.6 and is unchanged.
 
 ### 8.0 Scheduler Model
 
@@ -254,5 +267,80 @@ and a simultaneously-ready branch.
 channel is "ready" and fires once with `None` (matching the `recv`
 semantics of §8.5). A `send` branch on a closed channel aborts when
 selected.
+
+### 8.7 Capabilities and Tasks
+
+The capability surface (§20) and structured concurrency compose
+through three rules:
+
+#### 8.7.1 Closures capture by reference
+
+A closure passed to `g.spawn(...)` keeps the outer scope's
+capabilities alive for the closure's lifetime, exactly as it would
+keep any other captured binding alive. The captured reference is
+shared — multiple sibling tasks spawned from the same enclosing
+function may legitimately call methods on the same `Net` or `Fs`
+instance concurrently. Capabilities are themselves expected to be
+internally synchronized; a host `Net` adapter that opens a TCP
+connection per call is automatically thread-safe under this rule.
+
+```osty
+fn fanout(net: Net, urls: List<String>) -> Result<List<Bytes>, Error> {
+    taskGroup(|g| {
+        let handles = urls.map(|u| g.spawn(|| net.fetch(u)))   // shared `net`
+        handles.map(|h| h.join()).traverse(|r| r)
+    })
+}
+```
+
+#### 8.7.2 Ambient binding does not cross spawn
+
+`#[ambient(...)]` only binds names inside the *enclosing entry-point
+function*. A child task spawned via `g.spawn(|| ...)` cannot reference
+an ambient `clock` even if the entry point declared one — the closure
+must capture the binding explicitly:
+
+```osty
+#[ambient(clock)]
+fn main() {
+    taskGroup(|g| {
+        // ✅ closure captures the ambient `clock` from main's scope
+        g.spawn(|| clock.sleep(1.s))
+
+        // ❌ helper called below would receive *no* ambient clock
+        //    — its capability parameter must be passed explicitly
+        g.spawn(|| sweep(clock))
+    })
+}
+
+fn sweep(clock: Clock) -> Result<(), Error> {
+    clock.sleep(5.s)?
+    Ok(())
+}
+```
+
+#### 8.7.3 Cancel signals are capability-blind
+
+Cancellation flows by *task lineage*, not by capability identity. If
+a parent's `taskGroup` cancels, every descendant blocking call —
+regardless of which capability it is on, including ones the parent
+never directly used — observes `Err(Cancelled { cause })`. This is
+why the `Net` / `Fs` / `Clock` adapters are required to be
+cancellation-aware (§8.4.2).
+
+A capability that cannot honor cancellation (a hypothetical
+synchronous FFI symbol with no abort path) must document that limit
+and is *not* added to the canonical capability surface.
+
+#### 8.7.4 Capability-typed channels
+
+A channel's element type may be a capability instance, but it is
+almost always a mistake. A `thread.chan::<Net>(8)` would let a
+producer hand a network handle to a consumer that lives in a
+different `taskGroup`, breaking the lifetime model: capabilities
+are not `Handle<T>`-flavored and have no escape rule, but in practice
+a host `Net` adapter often holds resources tied to its construction
+context. Prefer sending request/response data through the channel
+and keep the capability bound to the original scope.
 
 ---

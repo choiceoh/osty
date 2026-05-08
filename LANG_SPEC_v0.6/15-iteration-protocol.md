@@ -2,11 +2,20 @@
 
 Osty v0.6 defines iteration through two structural interfaces:
 `Iterator<T>` and `Iterable<T>`. Any type implementing `Iterable<T>`
-participates in `for x in xs { ... }` loops. The protocol is
-unchanged from v0.5 in semantics; the v0.6 backend layer optimizes
-for `List<T>` / range / `Map<K, V>` shapes (cf. SPEC_GAPS
-`vectorize-hint`), but every conforming type works under the protocol
-regardless of backend optimization.
+participates in `for x in xs { ... }` loops.
+
+The protocol is intentionally minimal so it composes cleanly with the
+v0.6 surfaces:
+
+- A `for x in xs` loop carrying a capability (e.g. `Net`) keeps it
+  available in the body — the loop introduces no new scope boundary
+  that ambient binding (§20.3) would have to cross.
+- An iterator over `#[taint("σ")]` values yields tagged elements;
+  flow tracking (§21) propagates the tag into each loop iteration
+  binding without any `for`-specific rule.
+- Backend vectorization (§3.8.5) targets `List<T>` / range /
+  `Map<K, V>` shapes today; arbitrary `Iterable` implementations fall
+  back to method dispatch but participate in the protocol identically.
 
 Lazy iterator combinators (filter, map, take, …) live in `std.iter`
 (§10.7). User types implement `Iterable<T>` directly; the compiler
@@ -88,5 +97,93 @@ for x in (CountdownFrom { start: 3 }) {
 ```
 
 (The parentheses around the struct literal are required by §4.1.1.)
+
+### 15.1 Iteration over capability-derived sources
+
+A capability that yields a stream returns an `Iterable<T>` whose
+*construction* required the capability but whose *iteration* does
+not — once the iterator is built, the capability is no longer
+consulted to advance it. This separates the question of who is
+allowed to *open* the source from the question of how the body of
+the loop processes its elements:
+
+```osty
+fn auditLines(fs: Fs, path: String, console: Console) -> Result<(), Error> {
+    let lines = fs.lines(path)?           // construction needs `fs`
+    for line in lines {                   // iteration does not
+        console.println(line)
+    }
+    Ok(())
+}
+```
+
+The reverse — *consuming an iterator* that was built by someone else
+— is therefore safe in a more restricted scope. A pure helper can
+take an `Iterable<T>` of already-collected lines and process them
+without needing `Fs`:
+
+```osty
+#[reproducible(scope = "target")]
+fn classify(lines: Iterable<String>) -> Map<String, Int> {
+    let mut counts: Map<String, Int> = {:}
+    for line in lines {
+        let cat = categoryOf(line)
+        counts.update(cat, |n| (n ?? 0) + 1)
+    }
+    counts
+}
+```
+
+### 15.2 Iteration over channels
+
+`Channel<T>` (§8.5) implements `Iterable<T>`. Iteration ends
+naturally when the channel is closed and drained. Inside a
+`taskGroup`, the iterating task is automatically cancelled along
+with its siblings if the group enters cancellation:
+
+```osty
+fn pipeline(net: Net, jobs: List<Job>) -> Result<(), Error> {
+    let ch = thread.chan::<Job>(64)
+
+    taskGroup(|g| {
+        // Producer
+        g.spawn(|| {
+            for j in jobs { ch <- j }
+            ch.close()
+        })
+
+        // Consumer (main task)
+        for j in ch {
+            net.dispatch(j)?     // returns Err(Cancelled) on cancel
+        }
+        Ok(())
+    })
+}
+```
+
+Reading `ch.recv()` directly (not via `for ... in`) returns `None`
+both on natural close and on cancel; check `thread.isCancelled()` to
+distinguish the two cases (§8.5).
+
+### 15.3 Iteration and information flow
+
+A `for x in xs` loop binds `x` with the element type's flow tag set
+preserved. There is no implicit declassification at the loop
+boundary:
+
+```osty
+let lines: Iterable<#[taint("user_input")] String> = ...
+for line in lines {
+    // `line` is #[taint("user_input")] String — must sanitize before
+    // it reaches a sink such as db.query.
+    db.query("SELECT * FROM logs WHERE msg = ?", [line])
+}
+```
+
+The parameterized form (`db.query("...", [line])`) is the safe path
+— the sink does not concatenate `line` into the SQL text, so the
+flow tag never reaches a string-shaped sink and no sanitizer is
+required. Direct concatenation into the SQL string would be flagged
+by the §21 checker.
 
 ---

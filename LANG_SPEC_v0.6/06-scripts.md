@@ -51,4 +51,80 @@ Rules:
 `osty run script.osty` compiles and executes a script. With the shebang
 line present, `chmod +x script.osty && ./script.osty` also works.
 
+### 6.1 Ambient capability binding
+
+The synthesized `main` in a script file carries an automatic
+`#[ambient(clock, rng, env, fs)]` (§20.3). The ambient binding is
+*scoped to the script's main only* — it does not propagate into:
+
+- `fn` declarations defined at the top level of the script (those
+  declarations are ordinary functions; they receive only what their
+  signature declares),
+- closures `g.spawn(|| ...)` inside a `taskGroup` (closures capture
+  the script's bindings by reference, so they can name `clock`
+  etc., but the *capture* is what makes them visible — not ambient
+  forwarding through the spawn boundary; see §8.7.2).
+
+```osty
+#!/usr/bin/env osty
+// hello.osty — script file
+
+let now = clock.now()                  // ambient binding visible
+let user = env.get("USER") ?? "world"
+
+println("hi {user}, {now}")
+
+// Helper fn — ambient does NOT cross. Capability must be a parameter.
+fn render(clock: Clock, prefix: String) -> String {
+    "{prefix} @ {clock.now().toString()}"
+}
+
+println(render(clock, "tick"))         // explicit hand-off
+```
+
+Scripts that need additional capabilities (`net`, `process`,
+`console`) must declare them via an explicit `#[ambient(...)]` at
+the top of the script source. The synthesized `main`'s default set
+covers the most common script needs but is intentionally limited;
+broader scripts opt in:
+
+```osty
+// script with additional ambient
+#[ambient(clock, rng, env, fs, net, console)]
+
+let resp = net.get("https://api.example.com/health")?
+console.println("health: {resp.status}")
+```
+
+A `#[ambient]` line at script top-level **replaces** the synthesized
+default set — it is not additive. Listing only `clock` here would
+remove `rng`, `env`, and `fs`. This is the design explicitly: *no
+hidden defaults*. The reduced set is what you signed up for.
+
+### 6.2 Scripts and information flow
+
+Scripts inherit the same flow-tracking rules as library code (§21).
+Tainted input flowing into a sink without sanitization is an error
+even at the script level — there is no relaxed mode. The expected
+pattern is:
+
+```osty
+#[ambient(env, process)]
+
+let target = env.get("TARGET") ?? "localhost"
+// `target` is tainted (env value); shell sink requires shell_safe.
+// Either parameterize…
+process.exec("ping", ["-c", "1", target])
+
+// …or sanitize explicitly.
+let safe = std.shell.quote(target)
+process.execShell("ping -c 1 {safe}")
+```
+
+The `process.exec(cmd, args)` form already takes a list of arguments
+and does not interpolate; tainted strings landing in `args` are
+acceptable to `process.exec` because the spawn does not interpret
+them as shell metacharacters. `process.execShell(cmdline)` *does*
+interpret them and therefore requires `shell_safe` on the input.
+
 ---

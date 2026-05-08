@@ -12,10 +12,17 @@ let result = iter.from(xs)
     .toList()
 ```
 
-The current v0.4 stdlib implementation is eager over a backing
-`List<T>`: adapters allocate a new `Iter<T>` immediately. The API is
-kept fluent so user code can move to a lazy pull-based implementation
-later without changing call sites.
+The current implementation is **eager** over a backing `List<T>`:
+each adapter allocates a new `Iter<T>`. The surface is fluent on
+purpose — when the runtime gains pull-based iteration, call sites
+keep working unchanged. `Iter<T>` participates in the iteration
+protocol (§15) like any other `Iterable<T>`, so `for x in iter` is
+always available alongside the chained terminators below.
+
+The chain itself is *capability-free* — `map` / `filter` /
+`take` / `toList` perform no I/O and are safe to compose inside a
+`#[reproducible(scope = "target")]` function (§3.11), provided the
+closure arguments are themselves capability-free.
 
 API:
 

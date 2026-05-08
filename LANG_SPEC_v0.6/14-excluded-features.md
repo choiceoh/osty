@@ -155,4 +155,38 @@ The v0.4 → v0.5 newly accepted syntax (`loop`, labeled `break` /
 [`18-change-history.md §18.1`](./18-change-history.md). All forms
 remain in v0.6 unchanged.
 
+### 14.5 Why v0.6 stops where it does
+
+The v0.6 surface adds 14 design decisions (G36–G49) catalogued in
+[`00-revision.md`](./00-revision.md). Each is a *narrow* attestation
+mechanism — capability parameter, taint tag, sealed construct,
+error contract, intent annotation, spec block, golden test,
+reproducibility scope, performance budget, API stability tier,
+match-compat fallback, while keyword. None of them introduce a new
+type kind, a new control-flow primitive, or a new evaluation rule.
+
+This is intentional. The exclusions in §14.1 (no exceptions, no
+inheritance, no lifetimes, no overloading, no implicit numeric
+conversion, no macros, no user annotations) constrain the language
+to a small grammar that compiles to a small IR. v0.6's additions
+must compose with that grammar without breaking it. Every G36–G49
+decision was vetted against three questions:
+
+1. **Does it expand the type kind set?** If yes, the proposal is
+   demoted to *attestation only* (e.g. `#[reproducible]` does not
+   create a new function type — it is a checker-side promise).
+2. **Does it introduce a new control-flow construct?** If yes, the
+   proposal is rejected. `Cancelled` flows through `?`, capabilities
+   ride on ordinary parameters, spec blocks are statement-shaped,
+   `while` desugars to `for`.
+3. **Does it require a new annotation argument shape?** If yes, the
+   proposal is reshaped to fit the literal-only argument grammar
+   (no expressions, no nested annotations).
+
+Future proposals (G50+) tracked in `SPEC_GAPS.md` are evaluated
+against the same three questions. Anonymous structural records, for
+example, were proposed during the v0.6 batch and withdrawn because
+they would have fork-extended the type-kind set without buying a
+proportional safety / clarity gain.
+
 ---
