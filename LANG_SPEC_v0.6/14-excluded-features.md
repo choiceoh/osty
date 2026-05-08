@@ -125,8 +125,8 @@ caveats in `BREAKING_v0.6.md` and `MIGRATING_v0.5_to_v0.6.md`).
 
 ### 14.3 Carried-forward exclusions from v0.5
 
-The v0.5 reversal of "implicit numeric conversions" (→ lossless widening
-only, §2.2) and "operator overloading" (→ six-operator opt-in
+The v0.5 reversal of "implicit numeric conversions" (→ fixed widening /
+float-promotion graph, §2.2) and "operator overloading" (→ six-operator opt-in
 `#[op(...)]`, §3.8) carries forward into v0.6 with no further
 narrowing. Anonymous structural records remain excluded — proposed as
 G50 during the v0.6 batch but withdrawn to preserve the
@@ -138,9 +138,10 @@ discussion).
 Two v0.4 exclusions were replaced with scoped forms in v0.5; both
 remain in v0.6 unchanged:
 
-- **Implicit numeric conversions** — replaced by **lossless widening
-  only** (§2.2): `Int8 → Int16 → Int32 → Int → Float64`, `Int →
-  Float64`, `Float32 → Float64`. Narrowing remains explicit via
+- **Implicit numeric conversions** — replaced by a **fixed widening /
+  float-promotion graph** (§2.2): `Int8 → Int16 → Int32 → Int`,
+  `Int32 → Float64`, `Int → Float64`, `Float32 → Float64`. `Int →
+  Float64` is precision-tolerant, not lossless. Narrowing remains explicit via
   rounding-mode-suffixed converters (`.toIntTrunc()` /
   `.toIntRound()` / `.toIntFloor()` / `.toIntCeil()` / `.toInt32()` /
   `.toInt16()` / `.toInt8()` / `.toFloat32()`). Implicit narrowing is

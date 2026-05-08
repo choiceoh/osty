@@ -605,14 +605,18 @@ sites are enumerated by `osty audit --trusted-construct`.
 The named constructor — `parse` in the example above — must satisfy
 three rules at definition time:
 
-1. **It returns the sealed type** (or `Result<Self, _>` / `Self?`).
+1. **It resolves to an associated constructor on the sealed type.** The
+   named item must exist on the struct's method set and must not take
+   `self`, `mut self`, or `&self`; a missing name or instance method is
+   `E0423`.
+2. **It returns the sealed type** (or `Result<Self, _>` / `Self?`).
    Returning a wrapper or a generic `Self?` not parameterized on the
    sealed type is `E0423`.
-2. **It is package-public** if the struct itself is `pub`. A `pub
+3. **It is package-public** if the struct itself is `pub`. A `pub
    struct` with a non-`pub` constructor is `E0424` — external code
    needs *some* path to construct values, otherwise the type would be
    uninhabitable to importers.
-3. **It accepts only ordinary parameters** — no `Self` / `mut self` /
+4. **It accepts only ordinary parameters** — no `Self` / `mut self` /
    sealed-aware special args. The constructor reaches the body via
    normal call resolution and is not allowed to short-circuit
    sealed-construction checks via reflection.
@@ -939,7 +943,7 @@ same signature.
 asserts that *every* method on the interface is `#[reproducible]`
 at some scope. The compiler enforces this at the interface
 definition: a method body that omits `#[reproducible(...)]` is
-`E0780.1`.
+`E0783`.
 
 ```osty
 #[reproducible_capability]
@@ -947,7 +951,7 @@ pub interface Hash {
     #[reproducible(scope = "portable")]
     fn hash(self, data: Bytes) -> Bytes32
 
-    // ❌ E0780.1 — interface annotated #[reproducible_capability]
+    // ❌ E0783 — interface annotated #[reproducible_capability]
     //    but this method has no #[reproducible].
     fn salt(self) -> Bytes
 }
@@ -967,7 +971,9 @@ Stdlib v0.6 baseline `#[reproducible_capability]` interfaces:
 
 Implementers must annotate every method with the same scope or
 stronger. A weaker-scope method on a `#[reproducible_capability]`
-interface is `E0786`.
+interface is `E0783`; a method body that violates its declared
+reproducibility scope is checked by the ordinary reproducibility
+diagnostics (`E0786`–`E0788`).
 
 #### 3.6.5 Interface 진화 rules
 
@@ -1589,7 +1595,7 @@ Reading examples:
 - `#[error_contract]` + `#[pure]`: OK. A pure function may return
   `Result<_, E>` and carry an error contract.
 - `#[reproducible(scope = "portable")]` + transitively-called
-  `#[reproducible(scope = "target")]`: rejected with `E0786`. A
+  `#[reproducible(scope = "target")]`: rejected with `E0787`. A
   `portable` caller cannot delegate to a `target` callee — the
   scope contract propagates downward (§3.11.1).
 
@@ -1898,9 +1904,10 @@ pub fn signup(email: String, db: Db) -> Result<UserId, SignupError> { ... }
   etc. are *capability placeholders* — the runner substitutes the
   fixture named by the `uses` argument (or the default fake from
   `std.testing.capabilityFakes()` if no `uses` is given).
-- `output = "..."` — a string literal evaluated as an Osty
-  expression at test time. Must compare equal to the function's
-  actual return value with `==` (using the value's `Equal` impl).
+- `output = "..."` — a string literal parsed and type-checked as an
+  Osty expression at test time. It must compare equal to the
+  function's actual return value with `==` using the value's `Equal`
+  implementation; `ToString` rendering is not involved.
 - `uses = "name"` — references a `#[fixture(name = "name")]`
   function. Multiple `uses =` repeats inject each named fixture in
   order; capability placeholders in `input` are resolved against
@@ -1938,6 +1945,13 @@ fn fakeDb() -> Db {
 4. Fixtures are package-local by default; `pub fn` annotated with
    `#[fixture]` is exported for downstream packages but is rare in
    practice (most fixtures are test-local).
+
+Fixture names live in a package-qualified namespace. Inside the same
+package, `uses = "fakeDb"` resolves to that package's fixture named
+`fakeDb`. Downstream references to public fixtures use the normal
+qualified path (`uses = "pkg.fakeDb"` or an imported alias). Two
+fixtures with the same exported name in one package are rejected as a
+duplicate public/test helper name (`E0554`).
 
 **Consumption.**
 

@@ -8,7 +8,7 @@
 OWASP Top 10 의 SQLi / XSS / 명령 주입 / 경로 traversal / SSRF 가 모두 **"sanitize
 하지 않은 사용자 입력이 sink 에 도달했나"** 한 질문으로 환원된다. 산업언어 중
 mainstream 에 정적 IFC (Information Flow Control) 를 가진 사례 없음. v0.6 은
-**1-bit + N-tag flow tracking** 을 type system 에 추가한다.
+**1-bit + N-tag value-flow tracking** 을 checker 에 추가한다.
 
 ### 21.2 Surface
 
@@ -92,8 +92,9 @@ pub fn doubleSanitize(s: String) -> String { ... }
 
 ### 21.3 의미론
 
-타입에 *flow tag set* 이 첨부된다 (concrete syntax 노출 없음 — annotation 으로만
-표현). 규칙:
+checker judgement 가 값마다 *flow tag set* 을 운반한다 (concrete syntax 노출
+없음 — annotation 으로만 표현). 이 tag set 은 type identity, interface
+satisfaction, generic monomorphization key 에 포함되지 않는다. 규칙:
 
 1. `#[taint(t)]` 함수의 반환값은 tag `t` 가 추가된다.
 2. Tagged 값을 받은 함수의 반환값은 tag 가 **자동 propagate** 된다 (transitive).
@@ -139,8 +140,9 @@ helper 모두. 반대 효과는 없다 — output 이 input 보다 적은 tag se
 - `let x = y` rebind — tag 보존.
 
 declassify 의 유일한 path 는 명시적 sanitizer 호출 (`#[sanitizes]`
-함수의 반환). FFI 경계에서의 audit-marked drop 은 별도 mechanism
-(`#[trusted_declassify]`, §21.7).
+함수의 반환). FFI 같은 opaque 경계에서는 `#[trusted_declassify]`
+가 sibling `#[sanitizes]` 효과를 audit-marked trust 로 승인할 수
+있다 (§21.7).
 
 #### 21.3.3 Tag arithmetic
 
@@ -188,8 +190,9 @@ fn handleHtmlInSql(form: #[taint("user_input")] String) -> Rows {
 
 ### 21.5 Generic / closure / struct 처리
 
-**Generic**: Osty 는 monomorphize 하므로 generic 함수의 instance 별로 tag 흐름이
-결정된다.
+**Generic**: Osty 는 monomorphize 하지만 flow tag 는 monomorphization key 에
+들어가지 않는다. generic body 는 concrete type 별로 한 번 생성되고, tag 흐름은
+각 call site 의 checker fact 로 결정된다.
 
 ```osty
 fn id<T>(x: T) -> T { x }
@@ -200,7 +203,7 @@ fn handler(form: #[taint("user_input")] String) {
 }
 ```
 
-**Closure**: capture 된 tagged 값은 closure 결과 type 에 propagate.
+**Closure**: capture 된 tagged 값은 closure 결과 value 에 propagate.
 
 ```osty
 fn process(form: #[taint("user_input")] String) -> fn() -> String {
@@ -242,6 +245,9 @@ struct Form {
 ```
 
 **기본은 struct 단위 fold (sound default)**, `#[taint_field]` 는 명시적 narrow.
+`#[taint_field]` 는 struct field 에만 허용되며 parameter, local binding,
+enum variant, or function return position 에 붙이면 annotation-site error
+(`E0405`) 이다.
 
 ### 21.5.1 Container / collection
 
@@ -270,10 +276,19 @@ fn handler() -> Result<(), Error> {
 }
 ```
 
+A sanitizer returning `Option<U>` or `Result<U, E>` applies its
+`#[sanitizes]` transformation only to the success payload
+(`Some`/`Ok`). `None` carries no success value, and `Err(e)` carries
+only the tags present on `e` itself; the original source tag is not
+converted into a trust tag on the failure path.
+
 ### 21.5.3 Type tag propagation — formal inference rules
 
-타입 `T` 는 *tag set* `A ⊆ Tags` 를 운반한다 — 표기 `T@A`. 어노테이션 없는 위치는
-`A = ∅` (clean). 다음 inference rule 들이 propagation 의 권위:
+checker judgement `Γ ⊢ e : T@A` 는 "식 `e` 의 static type 은 `T` 이고
+value-flow tag set 은 `A ⊆ Tags`" 를 뜻한다. `T@A` 는 spec 표기일 뿐 실제
+source-level type 이 아니며, type identity 와 monomorphization key 는 `T` 만
+사용한다. 어노테이션 없는 위치는 `A = ∅` (clean). 다음 inference rule 들이
+propagation 의 권위:
 
 ```
 ─────────────────────────────────                            (T-Const)
@@ -290,6 +305,18 @@ fn handler() -> Result<(), Error> {
    f : T1 × T2 × ... × Tn -> U
 ─────────────────────────────────────────────────
    Γ ⊢ f(e1, e2, ..., en) : U@(A1 ∪ A2 ∪ ... ∪ An)
+
+
+   Γ ⊢ cond : Bool@A      Γ ⊢ then : T@B      Γ ⊢ else : T@C      (T-If)
+───────────────────────────────────────────────────────────────
+   Γ ⊢ if cond { then } else { else } : T@(B ∪ C)
+   // explicit-flow policy: A does not taint the branch result
+
+
+   Γ ⊢ scrutinee : E@A      each arm_i : T@B_i                  (T-Match)
+──────────────────────────────────────────────────────────────
+   Γ ⊢ match scrutinee { arm_i... } : T@(B_1 ∪ ... ∪ B_n)
+   // payload bindings extracted from scrutinee carry A; pattern choice itself does not
 
 
    f 의 선언이 #[taint("σ")] 부착                            (T-Source)
@@ -348,10 +375,10 @@ fn handler() -> Result<(), Error> {
                   (capture 된 모든 tag 결과에 합집합)
 
 
-   Γ ⊢ e : T@A      f<X> : X -> X      (T-Generic-Mono)
-   monomorphization: X = T@A
+   Γ ⊢ e : T@A      f<X> : X -> X      (T-Generic-Flow)
+   monomorphization key: X = T
 ─────────────────────────────────
-   Γ ⊢ f::<T@A>(e) : T@A         (tag 가 generic instance 와 함께 propagate)
+   Γ ⊢ f::<T>(e) : T@A           (tag 는 value-flow fact 로 propagate)
 ```
 
 ### 21.5.4 Subtyping 와 lattice
@@ -375,7 +402,8 @@ proof in mechanized assistant 검토):
 
 > **No-Bypass Invariant**: 만약 `db.query(s)` call site 가 컴파일 통과했다면,
 > `s` 의 source-to-sink path 위 어딘가에 `#[sanitizes(σ_user_input, into =
-> sql_safe)]` 또는 `#[trusted_declassify]` 가 존재한다.
+> sql_safe)]` 가 존재한다. Opaque boundary 의 경우 그 sanitizer 효과는 sibling
+> `#[trusted_declassify]` 로 audit-marked trust 를 받아야 한다.
 
 #### 21.5.6 Generic propagation through type parameters
 
@@ -450,12 +478,24 @@ fn leak(token: #[taint("secret")] String) -> Bool {
 명시적 declassify 가 필요하면:
 
 ```osty
-#[trusted_declassify("user_input", reason = "validated by Go-side parser")]
+#[sanitizes("user_input", into = "sql_safe")]
+#[trusted_declassify(reason = "validated by Go-side parser")]
 fn fromGoParser() -> String { ... }
 ```
 
-`#[trusted_declassify]` 는 *human review 표식* — 컴파일러는 이를 신뢰하고 tag 제거.
+`#[trusted_declassify]` 는 *human review 표식* — 컴파일러는 선언된 sanitizer
+효과를 신뢰하고 tag 를 변환한다.
 모든 사용처는 `osty audit --trusted-declassify` 로 enumerate 가능.
+
+Typing rule: `#[trusted_declassify(reason = "...")]` has no tag
+arguments and does not by itself strip an arbitrary tag. A function
+that declassifies must also declare one or more sibling
+`#[sanitizes("source", into = "trust")]` annotations; the trusted
+annotation tells the checker to accept those declared sanitizer effects
+even when the body proof crosses an FFI or other opaque boundary. The
+tags removed and added are exactly the sibling `#[sanitizes]` entries.
+Without a sibling `#[sanitizes]`, `#[trusted_declassify]` is audit-only
+and has no typing effect.
 
 #### 21.7.1 FFI inbound — re-tagging at the boundary
 
@@ -472,26 +512,29 @@ use go "net/http" {
 이 형식은 FFI wrapper 의 책임으로 명시. callee 측에서 sanitize
 이미 했다면 (rare), 별도 declassify 없이 untagged 로 둔다.
 
-#### 21.7.2 FFI outbound — tag drop at the boundary
+#### 21.7.2 FFI outbound — explicit trust before crossing
 
 Osty 측의 tagged 값이 FFI 함수에 인자로 전달되면, foreign side 는
-tag 를 인식하지 못하므로 실질적으로 *declassify* 가 일어난다. 이는
-soundness 누수 — 막기 위해 outbound declassify 도 명시:
+tag 를 인식하지 못한다. 따라서 FFI wrapper 는 raw tainted 값을 바로
+받지 않고, 필요한 trust tag 를 `#[requires]` 로 요구하거나 wrapper
+안에서 검증한 뒤 sibling `#[sanitizes]` + `#[trusted_declassify]` 로
+명시해야 한다:
 
 ```osty
 use c "legacy" {
     fn legacy_set_user(name: ptr) -> Int
 }
 
-#[trusted_declassify("user_input", reason = "legacy code path is internally
-                                              audited and validates input")]
-fn callLegacy(name: #[taint("user_input")] String) -> Int {
+#[trusted_declassify(reason = "legacy code path receives legacy_user_safe only")]
+fn callLegacy(name: #[requires("legacy_user_safe")] String) -> Int {
     legacy_set_user(name.toCString())
 }
 ```
 
-이 wrapper 함수 자체에 `#[trusted_declassify]` 적용 — tagged 값을
-받아 untagged 로 처리하는 site 가 audit 가능.
+이 wrapper 함수 자체의 `#[trusted_declassify]` 는 audit marker 이다.
+typing effect 는 `#[requires("legacy_user_safe")]` 가 담당한다. wrapper
+안에서 직접 검증해 trust tag 를 생산하는 형태라면 sibling
+`#[sanitizes(...)]` 를 함께 선언해야 한다.
 
 #### 21.7.3 Audit reporting
 
@@ -521,6 +564,11 @@ CI 는 이 list 의 *증가* 만 차단 — 기존 site 는 grandfathered in.
 stdlib 내 sanitizer 도 함께 제공: `sql.escape` / `shell.quote` /
 `path.normalize` / `url.encode` / `html.escape`.
 
+This table is a stdlib baseline, not a closed universe. User-defined
+sinks are ordinary function parameters annotated `#[requires("tag")]`.
+They are valid when the required trust tag is produced by a reachable
+`#[sanitizes(_, into = "tag")]` declaration (stdlib or user-defined).
+
 ### 21.9 진단 코드
 
 | 코드 | 의미 |
@@ -528,7 +576,7 @@ stdlib 내 sanitizer 도 함께 제공: `sql.escape` / `shell.quote` /
 | `E0900` | Sink violation — tainted value reaches `#[requires]` |
 | `E0901` | `#[taint]` tag 가 알려지지 않음 |
 | `E0902` | `#[sanitizes(t, into = u)]` 의 t 가 가능 source 에 없음 |
-| `E0903` | `#[requires]` 가 stdlib sink 카탈로그 외부 tag 사용 |
+| `E0903` | `#[requires]` 가 어떤 sanitizer 도 생산하지 않는 trust tag 사용 |
 | `W0901` | `#[trusted_declassify]` 사용 (audit hint) |
 
 ---
@@ -853,9 +901,9 @@ fn handler(form: #[taint("user_input")] String, db: Db) {
 }
 ```
 
-`T` 의 monomorphized instance 가 tagged type 이면 `id` 의 인자/반환
-모두 같은 tag set 운반. 컴파일러는 generic instance 별로 type tag
-flow 를 결정.
+`id<String>` 의 monomorphized body 는 하나뿐이다. tagged `String` 과 untagged
+`String` 호출은 같은 body 를 공유하고, checker 는 call site 별 value-flow fact 로
+인자/반환의 tag set 을 보존한다.
 
 #### 21.13.2 Closure capture
 
@@ -888,8 +936,10 @@ fn handler(req: HttpRequest, db: Db) {
 }
 ```
 
-`List<T@A>` 의 element access (`xs[i]`, `for x in xs`) 는 `T@A` 를
-반환. `Map<K, V@A>` 의 value access 도 동일.
+Spec 표기상 `List<T@A>` 의 element access (`xs[i]`, `for x in xs`) 는
+`T@A` judgement 를 만든다. 실제 source-level type 은 `List<T>` /
+`T` 이고, tag set 은 checker fact 로만 유지된다. `Map<K, V@A>` 의 value
+access 도 동일.
 
 #### 21.13.4 Result/Option
 
@@ -943,11 +993,13 @@ fn use(f: Form, db: Db) {
 
 ### 21.14 FFI declassify policy
 
-`#[trusted_declassify(reason = "...")]` 는 *audit-marked drop* 이며,
-다음 두 의미를 가진다:
-1. 컴파일러가 해당 함수의 반환 type 에서 모든 source tag 를 제거
+`#[trusted_declassify(reason = "...")]` 는 *audit-marked sanitizer
+attestation* 이며, 다음 두 의미를 가진다:
+1. sibling `#[sanitizes("source", into = "trust")]` 로 선언된 tag
+   변환을 opaque body/FFI boundary 에서 신뢰한다. 선언되지 않은 tag 는
+   제거하지 않는다.
 2. `osty audit --trusted-declassify` 가 reason 과 함께 site 를
-   enumerate
+   enumerate 한다.
 
 `reason` 문자열은 *human-readable audit trail* — vocabulary 는
 표준화 되지 않았으나 다음 prefix 를 권장:
@@ -961,12 +1013,15 @@ fn use(f: Form, db: Db) {
 | `"FFI from trusted system call ..."` | Go syscall 류 |
 
 ```osty
+#[sanitizes("user_input", into = "html_safe")]
 #[trusted_declassify(reason = "validated by upstream WAF")]
 fn fromWaf(raw: String) -> String { raw }
 
-#[trusted_declassify(reason = "hard-coded UUID for system user")]
-fn systemUserId() -> String { "00000000-0000-0000-0000-000000000001" }
+#[sanitizes("filesystem_content", into = "uuid_safe")]
+#[trusted_declassify(reason = "validated by deployment manifest schema")]
+fn fromConfigUuid(raw: String) -> String { raw }
 
+#[sanitizes("user_input", into = "verified_session")]
 #[trusted_declassify(reason = "signed by ed25519 root key")]
 fn parseSignedToken(token: String) -> String? { ... }
 ```
@@ -1057,7 +1112,7 @@ v0.6.0 의 baseline sink 5 종 (db / process / fs.path / http.redirect
 
 This section catalogues every flow tag defined in the v0.6 baseline
 stdlib, the source / sanitizer / sink relationships, and where each
-tag enters and exits the type system. Authors of new sinks or
+tag enters and exits the checker flow graph. Authors of new sinks or
 sanitizers should pick from this taxonomy before introducing a new
 tag string — an unrecognized tag is a compile warning (`W0902`).
 

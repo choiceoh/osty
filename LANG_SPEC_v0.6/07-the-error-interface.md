@@ -150,7 +150,7 @@ site; `?` does not synthesize wrappers.
 
 ---
 
-### 7.5 Error Contract (G44)
+### 7.5 Error Contract (G41)
 
 A function returning a `Result<T, E>` over a *concrete enum* `E` may
 carry an `#[error_contract]` annotation that catalogues which error
@@ -183,17 +183,35 @@ pub fn parseEmail(s: String) -> Result<Email, EmailError> { ... }
 | Contract entry references a variant not on the declared error type | `E0411` |
 | Contract entry never fires from any return path | `W0411` |
 
+**Contract identity.** A contract denotes a finite set of exact error
+variants:
+
+```
+Contract(f) = { (EnumTypeIdentity, VariantName), ... }
+```
+
+`EnumTypeIdentity` is the resolved enum declaration, not a structural
+shape or imported alias spelling. Payload types are part of the enum
+variant's declaration but not part of the set key. This means
+`EmailError.Format` and `OtherEmailError.Format` are different
+contract entries even if their payload shapes match; a type alias to
+`EmailError` keeps the original enum identity.
+
 **Erased `Error` — declarative form only.**
 
 `#[error_contract]` requires a *concrete enum* error type. Applying it
 to a function returning `Result<_, Error>` is `E0412`. The
 documentation-only form `#[error_contract(any)]` is permitted (no
-check); it tells `osty doc` "this function returns many error types,
-see body."
+definition-site variant check); it tells `osty doc` "this function
+returns many error types, see body." It does **not** satisfy a caller's
+superset requirement: a contracted caller that applies `?` to an
+`any` callee must either declare `#[error_contract(any)]` itself or
+map the erased error into a concrete contracted variant.
 
 **`?` propagation.** When the caller carries `#[error_contract]`,
-the caller's contract must be a *superset* of every callee contract
-that flows through `?`:
+the caller's contract must be a *superset* of every concrete callee
+contract that flows through `?`, using the exact `(enum identity,
+variant name)` relation above:
 
 ```osty
 #[error_contract(
@@ -255,7 +273,8 @@ Failure modes:
    carries `#[error_contract]`, every callee error variant that
    could flow through `?` must be a subset of the caller's contract.
    Mismatch is `E0414`; the fix is either to expand the caller's
-   contract or to convert the error explicitly.
+   contract with the exact `(enum, variant)` entry or to convert the
+   error explicitly.
 
 #### 7.5.2 Worked patterns
 

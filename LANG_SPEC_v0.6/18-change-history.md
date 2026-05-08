@@ -175,7 +175,7 @@ real program.
 
 **Additions — semantics (checker / lowering).**
 
-- **Lossless numeric widening** (§2.2). Implicit: `Int8 → Int16 → Int32 → Int → Float64`, `Int → Float64`, `Float32 → Float64`. Narrowing still requires explicit `.toInt32()` / `.toInt16()` / `.toInt8()` / `.toIntTrunc()` / `.toIntRound()` / `.toIntFloor()` / `.toIntCeil()` / `.toFloat32()` — `E0765` on implicit narrowing.
+- **Numeric widening and float promotion** (§2.2). Implicit: `Int8 → Int16 → Int32 → Int`, `Int32 → Float64`, `Int → Float64`, `Float32 → Float64`. `Int → Float64` is precision-tolerant rather than lossless. Narrowing still requires explicit `.toInt32()` / `.toInt16()` / `.toInt8()` / `.toIntTrunc()` / `.toIntRound()` / `.toIntFloor()` / `.toIntCeil()` / `.toFloat32()` — `E0765` on implicit narrowing.
 - **Bounded operator overloading** (§3.8, §14.2). `#[op(+)]` / `#[op(-)]` / `#[op(*)]` / `#[op(/)]` / `#[op(%)]` binary + `#[op(-)]` unary only. `== / < / > / <= / >= / != / [] / () / << / >> / & / | / ^` remain primitive-only. Duplicate `#[op]` for same operator on same type is `E0724`; non-allowed operator is `E0725`.
 - **Function value keyword-name preservation** (G20). `fn(...) -> ...` carries parameter names as type-equality-neutral metadata. Keyword calls through function values allowed when names match; default-value capture still erased per G15.
 
@@ -203,17 +203,17 @@ real program.
 | **G26** | Struct update shorthand | `receiver { field: value }` where `receiver` is a local identifier of struct type; desugars to `Type { ..receiver, field: value }`. |
 | **G27** | `as?` downcast syntax | Typed postfix form over `Error` values only; equivalent to `err.downcast::<T>()`. |
 | **G28** | Scoped / grouped imports | `use path::{a, b as c}` extends existing UseDecl. |
-| **G29** | Conditional compilation `#[cfg(...)]` | Pre-resolve filter; keys `os`, `target`, `arch`, `feature`; composition via `all` / `any` / `not`; unknown key is `E0405`. |
-| **G30** | `pub use` re-export | Re-exports inherit the declared visibility of the source symbol; cycles are `E0552`. |
+| **G29** | Conditional compilation `#[cfg(...)]` | Parsed before filtering, resolved/type-checked only when active; keys `os`, `target`, `arch`, `feature`; composition via `all` / `any` / `not`; unknown key or feature is `E0405`. |
+| **G30** | `pub use` re-export | Re-exports inherit the source symbol's public contract by default; cycles are `E0552`, private source is `E0553`, duplicate export/local names are `E0554`. |
 | **G31** | Enum integer discriminants | `pub enum X: Int { A = 1, ... }` with payload-free variants; `.discriminant()` / `.fromDiscriminant(n)` auto-derived. |
 | **G32** | Inline `#[test]` + doctest | Test functions may sit next to production code; doctests extracted from `///` blocks. |
 | **G33** | Property-based testing | `std.testing.gen` new submodule; `testing.property` runner; built-in shrinkers for core types. |
-| **G34** | Lossless numeric widening | Narrowing remains explicit with rounding-mode-suffixed converters; widening follows a total lattice. |
+| **G34** | Numeric widening and float promotion | Narrowing remains explicit with rounding-mode-suffixed converters; implicit conversions follow a fixed graph. |
 | **G35** | Bounded operator overloading | Exactly six operators allowed via `#[op(...)]`; all other operators remain primitive-only. |
 
 **Changes to `§14` (excluded features).**
 
-- Removed (now allowed): "implicit numeric conversions" (replaced by lossless widening only, §2.2), "operator overloading" (replaced by six-operator `#[op(...)]` opt-in, §3.8 / §14.2).
+- Removed (now allowed): "implicit numeric conversions" (replaced by the fixed widening / float-promotion graph in §2.2), "operator overloading" (replaced by six-operator `#[op(...)]` opt-in, §3.8 / §14.2).
 - Reaffirmed permanent exclusions (total 9 after v0.5): `null` / `nil`, exceptions & `try`/`catch`, inheritance, macros, user-defined annotation set, `unsafe` (user-facing), user-visible raw pointer, `[]` / `()` / bitwise operator overload, generic type-parameter defaults.
 - Removed from excluded list (now part of language): `while`/`loop` keyword (the `for cond { }` while-style existed since v0.3; `loop { break v }` is new in v0.5), labeled `break`/`continue` (new in v0.5), `const` (new in v0.5 for compile-time functions only — still no run-time immutable binding form beyond `let`).
 
@@ -293,7 +293,7 @@ gaps remain** at the time of this release.
 | Gap | Resolution | Location |
 |---|---|---|
 | **G4** Closure parameter patterns | `ClosureParam ::= LetPattern (':' Type)?` — tuple/struct destructure allowed. Only irrefutable patterns. v0.3 specified the surface ahead of parser parity; v0.4 implements parser/checker support. | §4.7 |
-| **G8** Channel `close()` semantics | Any task may close. Second close aborts. `recv` returns buffered values then `None`. `for x in ch` terminates naturally. | §8.5 |
+| **G8** Channel `close()` semantics | Any task may close. Close is linearized; exactly one concurrent close wins and later/concurrent closes abort. `recv` returns buffered values then `None`; blocked receivers wake on close. `for x in ch` terminates naturally. | §8.5 |
 | **G9** `Builder<T>` phantom type | Fully abstracted — `Builder<T>` surface only; internal phantom parameter names missing fields in the compile error. Users cannot construct or destructure. | §3.4 |
 | **G10** `Char` / surrogate | Surrogate code points are not representable. Literal/escape errors at compile time. `Int.toChar()` aborts; safe `Char.fromInt(n) -> Char?`. | §2.1, §10.5 |
 | **G11** Generic compilation model | **Monomorphization** (Rust-style). Interface values use fat-pointer + vtable. Error nominal tag (§7.4) remains orthogonal. | §2.7.3 |
@@ -320,7 +320,7 @@ gaps remain** at the time of this release.
 - **`Float → Int` conversion** is through explicit rounding-mode methods: `toIntTrunc`, `toIntRound` (banker's), `toIntFloor`, `toIntCeil`, each returning `Result<Int, Error>` (NaN/±Inf → `Err`). The ambiguous `Float.toInt()` is removed.
 - `Float.round()` uses banker's rounding (half-to-even).
 - Float `NaN`: `NaN.eq(NaN) == false` — documented exception to `Equal` reflexivity. `Float` is **not** `Hashable`.
-- `-0.0 == 0.0` is true; `-0.0 < 0.0` false under `==`, true under the total ordering exposed by `Ordered`.
+- `-0.0 == 0.0` is true. Floats do not implement `Ordered`; use `Float.totalCompare` / `Float.totalKey` for IEEE-754 total ordering.
 - Float literal exponent overflow (`1e1000`) parses to ±Infinity (IEEE).
 
 **Strings**
@@ -355,6 +355,7 @@ gaps remain** at the time of this release.
 - No weak references.
 - OOM aborts the process.
 - Cycle collection is guaranteed.
+- Concurrency memory model is DRF-SC: race-free programs observe sequentially consistent interleavings; data races are invalid.
 
 **Patterns**
 - Or-pattern alternatives must agree on binding names and types; different nesting depths allowed.

@@ -137,8 +137,9 @@ inline** 표시. 예:
 ```
 fn checkNumericWidening(from: Type, to: Type) -> CheckResult
   Spec: §2.2 Numeric Conversions
-  > Osty allows only lossless implicit numeric widening. The widening
-  > lattice is Int8 -> Int16 -> Int32 -> Int -> Float64, ...
+  > Osty allows a small fixed graph of implicit numeric widening and
+  > float-promotion conversions. The conversion graph is Int8 -> Int16
+  > -> Int32 -> Int, Int32 -> Float64, Int -> Float64, ...
 ```
 
 #### §3.10.5 진단 코드
@@ -350,7 +351,9 @@ exhaustiveness 판단. (없으면 generic enum exhaustiveness 규칙.)
 #### §7.5.6 `?` 연산자와의 상호작용
 
 `?` 가 `#[error_contract]` 함수의 결과에 적용되면, **caller 의 contract 가 callee
-contract 를 *포함*해야 한다** (subset relation):
+contract 를 *포함*해야 한다** (subset relation). 포함 관계는 resolved
+`(EnumTypeIdentity, VariantName)` 쌍의 정확 일치로 판단한다. 같은 variant
+이름이나 같은 payload shape 만으로는 같은 failure mode 가 아니다:
 
 ```osty
 #[error_contract(
@@ -374,6 +377,11 @@ fn createUser(s: String) -> Result<UserId, EmailError | DbError> {
 **closed union 만 허용** — `EmailError | DbError | ...` 은 enum 합집합이며 각
 variant 가 정확히 어느 enum 소속인지 정해진다. row polymorphism (open union) 은
 Open Items (§8) 에 deferred.
+
+`#[error_contract(any)]` callee 는 documentation-only 이므로 caller 의
+superset 조건을 자동 만족하지 않는다. contracted caller 는 `any` 를 그대로
+전파하려면 자신도 `#[error_contract(any)]` 여야 하고, concrete contract 를
+유지하려면 explicit map 으로 구체 variant 로 변환해야 한다. 불일치는 `E0414`.
 
 #### §7.5.7 `match` exhaustiveness 규칙
 
@@ -674,7 +682,7 @@ manifest 를 비교해 SemVer 호환성 검증.
   Add defaulted param at end                → COMPAT-ADD (positional caller OK)
   Add defaulted param NOT at end            → BREAKING (G20 named-call shift)
   Remove defaulted param                    → BREAKING
-  Default value change                      → COMPAT-ADD (호출자 다음 빌드 시 영향)
+  Default value change                      → BREAKING for stable (omitted-arg behavior changes; experimental = W2100)
   Add #[reproducible]                       → COMPAT-ADD (callee 추가 보장)
   Remove #[reproducible]                    → BREAKING (callee 보장 약화)
   Add #[error_contract] variant             → BREAKING (캐치 의무 추가)
@@ -876,7 +884,8 @@ fn testNumericNarrowingDiag() {
 #### §11.5.3 AST-aware diff
 
 `mode` 옵션:
-- `"text"` (default) — byte-exact 비교. 어떤 String 출력이든 사용 가능
+- `"text"` (default) — UTF-8 BOM 제거 + CRLF/CR→LF 정규화 후 byte 비교.
+  trailing newline 은 보존
 - `"ast"` — reparse 후 AST 비교. **출력이 valid Osty source 일 때만** 사용 가능
 - `"json"` — JSON 으로 parse 후 structural 비교. key 순서 무시
 - `"diag"` — Osty diagnostic 출력 형식. `Span` 이 다른 두 진단이 같은 코드/메시지면 same
@@ -1215,9 +1224,9 @@ Phase 2 에서 *category-prefix 옵션* 도입 검토:
 
 | Range | 영역 | 신규 |
 |---|---|---|
-| `E0410–E0429` | Annotation/intent (G41, G42) | E0410, E0411, E0412, E0420, E0421, E0422, E0423, E0430, E0431, E0432, E0433 |
+| `E0410–E0429` | Annotation/intent (G41, G42) | E0410, E0411, E0412, E0414, E0420, E0421, E0422, E0423, E0424, E0430, E0431, E0432, E0433 |
 | `E0440–E0449` | Spec block (G43, G44) | E0440, E0441, E0442, E0443, E0444, E0445, E0450, E0451 |
-| `E0780–E0799` | Capability / Reproducible / Budget (G36, G39, G46) | E0780-E0788, E0790, E0795, E0796 |
+| `E0780–E0799` | Capability / Reproducible / Budget (G36, G39, G46) | E0780-E0789, E0790, E0795, E0796 |
 | `E0900–E0949` | Information flow (G37) | E0900, E0901, E0902, E0903 |
 | `E2100–E2149` | Publishing (G44) | E2100, E2101 |
 | `W0750–W0799` | Stability / spec ref warnings | W0790, W0795 |
@@ -1254,21 +1263,22 @@ Phase 2 에서 *category-prefix 옵션* 도입 검토:
 
 1. **stdlib 의 v0.5 전역 함수 stub 재활성화**: `std.time.now()` /
    `std.random.next()` / `std.env.get(k)` / `std.fs.read(p)` / `std.os.exec(...)`
-   / `std.net.dial(...)` 가 **`std.<module>.<host>.<method>` 호출로 자동 desugar**:
+   / `std.net.dial(...)` 가 canonical host adapter 호출로 자동 desugar:
    ```
-   time.now()           ⟶  std.time.host.now()
-   random.next()        ⟶  std.random.host.next()
-   env.get(k)           ⟶  std.env.host.get(k)
-   fs.read(p)           ⟶  std.fs.host.read(p)
-   os.exec(c, a)        ⟶  std.process.host.exec(c, a)
-   net.dial(h, p)       ⟶  std.net.host.dial(h, p)
+   time.now()           ⟶  time.systemClock.now()
+   random.next()        ⟶  random.host.next()
+   env.get(k)           ⟶  env.host.get(k)
+   fs.read(p)           ⟶  fs.host.read(p)
+   os.exec(c, a)        ⟶  capability.hostProcess.exec(c, a)
+   net.dial(h, p)       ⟶  capability.hostNet.dial(h, p)
    ```
 
-2. **`std.<module>.host` 는 process-global capability instance**:
+2. **host adapter 는 process-global capability instance**:
    - 프로그램 lifetime 동안 단 하나
-   - `std.time.host: Clock` 는 system clock
-   - `std.random.host: Rng` 는 process-default seed (cryptographically secure)
-   - `std.fs.host: Fs` 는 host filesystem
+   - `time.systemClock: Clock` 는 system clock
+   - `random.host: Rng` 는 process-default seed (cryptographically secure)
+     로 한 번 seed 되고 호출마다 같은 sequence 를 전진
+   - `fs.host: Fs` 는 host filesystem
    - 등
 
 3. **Legacy 호출은 `W0750` deprecation warning**:
@@ -1281,8 +1291,8 @@ Phase 2 에서 *category-prefix 옵션* 도입 검토:
 
 4. **`#[reproducible]` / `#[pure]` 검사는 legacy 호출도 차단**:
    `--legacy-globals` 가 활성이어도, `#[reproducible]` 함수 본문에서
-   `time.now()` 호출 시 desugar 결과가 `std.time.host.now()` (capability method)
-   이고, `std.time.host: Clock` 의 deterministic 등급이 non-deterministic
+   `time.now()` 호출 시 desugar 결과가 `time.systemClock.now()` (capability method)
+   이고, `time.systemClock: Clock` 의 deterministic 등급이 non-deterministic
    이므로 `E0784` 발화. *legacy 모드도 effect 검사를 우회하지 못함*.
 
 5. **`--legacy-globals` 자체가 manifest `stability` 영향**:
@@ -1840,7 +1850,7 @@ v0.6 baseline 동결 → public 1.0 alpha 출시 까지의 게이트:
 
 - [ ] `testdata/spec/positive/` 에 G36-G49 별 통과 케이스 추가
 - [ ] `testdata/spec/negative/reject.osty` 에 신규 진단 코드 (E0405-E0451,
-  E0780-E0796, E0900-E0903, E2100-E2101) 케이스
+  E0780-E0796, E0789, E0900-E0903, E2100-E2101) 케이스
 - [ ] `STDLIB_MATRIX.md` 가 capability migration 후 모듈별 capability requirement
   컬럼 추가
 - [ ] `ERROR_CODES.md` regenerate (`go generate ./internal/diag/...`)

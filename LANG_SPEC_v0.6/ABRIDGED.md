@@ -66,8 +66,9 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - `T?`는 `Option<T>` sugar. formatter는 `Option<T>`를 `T?`로 정규화한다.
 - `null`/`nil`은 없다. 부재는 `Option<T>`/`T?`.
 - alias는 transparent하다. 새 nominal type이 아니다.
-- 변수 사이 numeric conversion은 lossless widening만 암묵적으로 허용된다. narrowing과
-  lossy conversion은 명시 method를 쓴다.
+- 변수 사이 numeric conversion은 고정된 widening / float-promotion 그래프만
+  암묵적으로 허용된다. `Int -> Float64` 는 편의상 허용되지만 lossless 보장은
+  없다. narrowing과 rounding-policy가 필요한 conversion은 명시 method를 쓴다.
 - numeric literal만 문맥 타입으로 추론된다. 문맥이 없으면 integer는 `Int`,
   float는 `Float`.
 - arithmetic overflow, invalid shift, integer div/mod by zero는 abort한다.
@@ -135,7 +136,8 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - unsafe lookup 대신 가능하면 `get` 계열로 `Option`을 받는다.
 - `defer`는 enclosing block exit에서 LIFO 실행된다.
 - `defer`는 normal exit, `return`, loop exit, `?`, cancellation에서 실행된다.
-  process abort/exit에서는 실행되지 않는다.
+  process abort/exit/FFI panic에서는 실행되지 않는다. defer 실행 중 process
+  termination 이 발생하면 남은 defer 는 스킵된다.
 
 ## 6. Patterns
 
@@ -156,7 +158,8 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - subpackage는 subdirectory이다.
 - import cycle은 금지된다. diamond import는 허용된다.
 - `use path`는 Osty package import.
-- `use path::{A, B as C}`와 `pub use path.Symbol`은 허용된다.
+- `use path::{A, B as C}`와 `pub use path.Symbol`은 허용된다. `pub use`는
+  원본 stability/error/flow 계약을 상속하고, public 이름 충돌은 `E0554`.
 - dotted path와 URL-like path를 혼합하지 않는다.
 - script file은 top-level statement가 있는 파일이다.
 - script top-level statement는 implicit `main() -> Result<(), Error>` 안에 있는
@@ -170,8 +173,8 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - Go `panic`은 process abort. Go concrete error downcast는 없다.
 - Osty closure, generic declaration, empty interface, Go channel type은 FFI에
   직접 노출하지 않는다.
-- FFI 통한 데이터는 untagged 시작 — taint flow 가 필요하면 `#[trusted_declassify(reason)]`
-  명시 (§10).
+- FFI 통한 데이터는 untagged 시작 — opaque sanitizer 가 필요하면
+  `#[sanitizes(...)]` + `#[trusted_declassify(reason)]` 명시 (§10).
 
 ## 8. Errors
 
@@ -185,6 +188,8 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - v0.6: concrete enum error type 에 `#[error_contract(Variant when "...")]`
   적용 가능 (§13). caller match exhaustiveness 가 contract variants 기반.
   erased `Error` 에는 `#[error_contract(any)]` (검증 없음, 문서용).
+- contract 포함 관계는 `(EnumTypeIdentity, VariantName)` 정확 일치이고,
+  `any` callee 는 concrete caller 의 superset 조건을 자동 만족하지 않는다.
 
 ## 9. Concurrency and Capabilities
 
@@ -192,12 +197,13 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - `Handle<T>`와 `TaskGroup`은 non-escaping capability이다.
 - handle/group을 return, field/collection 저장, channel send, escaping closure
   capture하지 않는다. 위반은 `E0743`.
-- child failure는 sibling/descendant cancellation을 유발하고 첫 관측 error를
-  caller에 전파한다.
+- child `Err` failure는 sibling/descendant cancellation을 유발하고 첫 관측 error를
+  caller에 전파한다. abort/unreachable/todo/os.exit/FFI panic 은 즉시 process termination.
 - blocking stdlib call은 cancellation-aware여야 한다.
 - CPU-bound code는 explicit cancellation check helper를 호출한다.
 - channel capacity 0은 synchronous rendezvous, 양수는 FIFO buffer.
-- channel close는 두 번 하면 abort. closed channel send도 abort.
+- channel close는 linearization point 하나를 가진다. concurrent double close 중
+  하나만 성공하고 나머지는 abort. closed channel send도 abort.
 - `recv`는 buffered value 후 closed+drained 상태에서 `None`.
 - `select`는 ready branch가 있으면 `default`보다 ready branch를 우선한다.
   여러 ready branch 사이 선택은 비결정적이다.
@@ -206,6 +212,8 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 
 - 환경 effect 는 capability parameter 로만 받는다. 7 canonical interface:
   `Clock`, `Rng`, `Env`, `Fs`, `Net`, `Process`, `Console`.
+- capability 값의 interface 만족은 structural 이지만, reproducibility/effect
+  판정은 parameter 에 적힌 resolved interface identity 기준이다.
 - v0.5 의 전역 함수 (`time.now()` / `random.next()` 등) 는 v0.6.x 에서
   `--legacy-globals` 호환. v0.7 제거.
 - 라이브러리 함수는 capability 명시 — `#[ambient]` 금지.
@@ -230,8 +238,9 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
   unwrap 통해 자동 propagate.
 - struct 단위 fold 가 default. 필드별 narrow 는 `#[taint_field]`.
 - implicit flow (control-flow 의존) 는 *추적 안 함* — explicit flow only (Jif 와 동일).
-- FFI 경계 데이터는 untagged 시작. tag 제거가 필요하면 `#[trusted_declassify(reason)]` —
-  audit log (`osty audit --trusted-declassify`) 로 enumerate.
+- FFI 경계 데이터는 untagged 시작. opaque sanitizer 가 필요하면
+  `#[sanitizes(...)]` + `#[trusted_declassify(reason)]` — audit log
+  (`osty audit --trusted-declassify`) 로 enumerate.
 - v0.6 baseline sink: `db.query` (`sql_safe`), `process.exec` (`shell_safe`),
   `fs.path*` (`path_safe`), `http.redirect` (`url_safe`), `template.render` /
   `http.respondHtml` (`html_safe`).
@@ -250,7 +259,8 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - `#[budget(...)]` runtime keys — `time_ms`, `p99_ms`. `osty bench --budget`
   회귀 게이트.
 - `#[golden(path, mode=...)]` — snapshot 비교. mode `"text"` / `"ast"` / `"json"` /
-  `"diag"`. `#[golden]` 은 암묵 `#[reproducible(scope="target")]` — 위반 `E0444`.
+  `"diag"`. text mode 는 BOM 제거 + LF 정규화 후 비교. `#[golden]` 은 암묵
+  `#[reproducible(scope="target")]` — 위반 `E0444`.
 
 ## 12. Spec Block (G43) and Intent (G42)
 
@@ -314,6 +324,8 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - resource cleanup은 `defer` 또는 closure-scoped stdlib helper로 한다.
 - allocation failure는 recoverable error가 아니라 abort이다.
 - reference cycle은 GC가 회수해야 한다.
+- 동시성 메모리 모델은 DRF-SC: data race 없는 프로그램은 sequentially consistent
+  interleaving 으로 관찰되고, race 는 invalid program.
 
 ## 16. Tests and Tooling
 

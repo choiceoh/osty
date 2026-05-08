@@ -7,8 +7,8 @@ reference-semantic composites. The type system is designed to admit
 compile-time guarantees without lifetimes or borrow analysis: the
 v0.6 *capability surface* (§20) and *information flow tags* (§21)
 ride on top of the standard type rules — capabilities appear as
-ordinary parameter types, and flow tags decorate a type without
-changing its identity.
+ordinary parameter types, and flow tags decorate checker value-flow
+facts without changing type identity.
 
 This chapter covers primitives (§2.1), numeric conversions (§2.2),
 overflow semantics (§2.3), composite types (§2.4), the optional sugar
@@ -70,20 +70,25 @@ prelude and is unreachable from ordinary user code. See §19.3.
 
 ### 2.2 Numeric Conversions
 
-Osty allows only lossless implicit numeric widening. The widening lattice
-is `Int8 -> Int16 -> Int32 -> Int -> Float64`, `Int -> Float64`, and
-`Float32 -> Float64`. Narrowing, signedness-changing conversions, and
-lossy float/integer conversions require explicit methods; implicit
-narrowing is `E0765`.
+Osty allows a small fixed graph of implicit numeric widening and
+float-promotion conversions. The conversion graph is `Int8 -> Int16 ->
+Int32 -> Int`, `Int32 -> Float64`, `Int -> Float64`, and `Float32 ->
+Float64`. Integer widening and `Float32 -> Float64` are exact. The
+`Int -> Float64` edge is precision-tolerant rather than lossless: values
+whose magnitude is greater than `2^53` may round to the nearest
+representable `Float64`. Narrowing, signedness-changing conversions, and
+float/integer conversions that require an explicit rounding policy use
+explicit methods; implicit narrowing is `E0765`.
 
 ```osty
 let a: Int = 5
-let b: Float64 = a              // lossless widening
+let b: Float64 = a              // allowed numeric promotion; may round for large Int
 let c: Int32 = big.toInt32()?           // Err if out of range
 let f: Float = a.toFloat()
 ```
 
-Lossy conversions return `Result<T, Error>`; lossless return `T`.
+Conversions that can fail due to range return `Result<T, Error>`. Exact
+widening and precision-tolerant float promotion return `T`.
 
 **Literal inference.** Numeric literals are polymorphic until their
 type is fixed by context. A literal without explicit suffix adopts the
@@ -320,7 +325,9 @@ interface Hashable {
 Comparison operators desugar to `Equal`/`Ordered` calls on implementing
 types. Primitives use built-in comparison directly, **and** they are
 considered to implement the corresponding interfaces — so a generic
-function with bound `T: Ordered` accepts `Int`, `Float`, `String`, etc.
+function with bound `T: Ordered` accepts `Int`, `String`, `Bool`, etc.
+`Float`/`Float32`/`Float64` deliberately do **not** implement
+`Ordered`; see the NaN rule below.
 
 #### 2.6.5 Built-in Instances
 
@@ -330,7 +337,7 @@ listed:
 | Type | `Equal` | `Ordered` | `Hashable` | `ToString` (§17) |
 |---|:---:|:---:|:---:|:---:|
 | `Int`, `Int8…Int64`, `UInt8…UInt64`, `Byte` | ✓ | ✓ | ✓ | ✓ |
-| `Float`, `Float32`, `Float64` | ✓ | ✓ † | ✗ ‡ | ✓ |
+| `Float`, `Float32`, `Float64` | ✓ † | — | ✗ ‡ | ✓ |
 | `Bool` | ✓ | ✓ (false < true) | ✓ | ✓ |
 | `Char` | ✓ | ✓ (scalar order) | ✓ | ✓ |
 | `String` | ✓ | ✓ (lexicographic by byte) | ✓ | ✓ |
@@ -339,8 +346,11 @@ listed:
 | `Option<T>` | ✓ if `T: Equal` | ✓ if `T: Ordered` (`None < Some`) | ✓ if `T: Hashable` | ✓ |
 | `Result<T, E>` | ✓ if both | — | ✓ if both | ✓ |
 
-† `Float` ordering follows IEEE-754 total ordering: `NaN` is greater
-than all finite and infinite values; `-0.0 < 0.0`.
+† `Float.eq` follows IEEE-754 equality: `NaN.eq(NaN)` is `false` and
+`-0.0 == 0.0` is `true`. Because `Ordered` is a super-interface of
+`Equal`, floats are not built-in `Ordered` instances. Use
+`Float.totalCompare(other)` / `Float.totalKey()` (§10.5) when a stable
+IEEE-754 total order is required for sorting.
 
 ‡ `Float` is **not** `Hashable` because `==` and `hash` would disagree
 under `NaN` semantics. Convert via `f.toBits()` if you must hash.
@@ -470,6 +480,11 @@ pub struct Node<T> {
     pub next: Node<T>?,
 }
 ```
+
+Flow tags (§21) do not create additional generic instantiations. A call
+to `id<String>` is compiled once for `String`; taint/trust facts attached
+to individual values are tracked by the checker at call sites and
+returns, not encoded into the monomorphization key.
 
 **Generic methods on structs and enums** are independent of the
 enclosing type's generics:
@@ -660,11 +675,10 @@ collection types.
 reflexivity (`a.eq(a)` is always true). `Float` is the one deliberate
 exception: `NaN.eq(NaN)` is `false`, matching IEEE-754. Users writing
 generic code over `T: Equal` must account for this when `T` can be
-`Float`. `Float` as `Ordered` does *not* inherit this asymmetry — the
-total-ordering defined in §2.6.5 places `NaN` above all finite values,
-so `<`, `<=`, `>`, `>=` are well-defined on NaN. `-0.0 == 0.0` is
-`true`; `-0.0 < 0.0` is `false` under `==` but `true` under the total
-ordering exposed by `Ordered` (§2.6.5 footnote).
+`Float`. Because `Ordered` inherits `Equal`, floats cannot soundly
+implement `Ordered`: deriving `le` from `lt || eq` would make `NaN <=
+NaN` false and break the super-interface law. Float sorting therefore
+uses the explicit total-order helpers in §10.5, not `T: Ordered`.
 
 `Float` is not `Hashable` (§2.6.5).
 
@@ -741,14 +755,15 @@ fn buildId(clock: Clock, rng: Rng) -> String { ... }
 #### 2.12.2 Flow tags — type-orthogonal annotation
 
 `#[taint("σ")]` / `#[sanitizes("σ", into = "τ")]` /
-`#[requires("τ")]` 가 type 에 부착하는 *flow tag set* 은 type
-identity 를 변경하지 않는다 — 같은 `String` 이라도 한 site 에선
-`{user_input}` tag, 다른 site 에선 untagged 일 수 있다.
+`#[requires("τ")]` 가 checker 에 부착하는 *flow tag set* 은 type
+identity 를 변경하지 않는다 — 같은 `String` 값이라도 한 site 에선
+`{user_input}` tag fact 를 갖고, 다른 site 에선 untagged fact 를 가질 수
+있다.
 
 ```osty
 fn handler(form: #[taint("user_input")] String) { ... }
 //                                       ^^^^^^
-//                                       String 그대로. tag 만 부착.
+//                                       String 그대로. value-flow tag fact 만 부착.
 ```
 
 Tag set 의 정확한 propagation rule 은 §21.5.3 의 inference rule.
@@ -794,9 +809,10 @@ caller 의 match exhaustiveness 검사 가 contract variant 만 고려하도록
 - **Interface value**: fat pointer (data + vtable). capability 도
   interface 이므로 같은 layout — `let f: Clock = systemClock` 형식의
   upcast 자유.
-- **Flow tag erasure**: 함수값 으로 저장 시 tag 는 *유지* — `let f:
-  fn(#[taint("user_input")] String) -> ...` 의 caller 측 검사가
-  남는다.
+- **Flow tag erasure 없음**: 함수값 으로 저장 시 parameter / return
+  boundary 의 flow contract 는 *유지* — `let f:
+  fn(#[taint("user_input")] String) -> ...` 의 caller 측 검사가 남는다.
+  다만 tag 는 type identity 나 function-type equality 의 일부가 아니다.
 
 #### 2.12.6 Generic monomorphization 와 v0.6 surface
 
@@ -813,8 +829,10 @@ fn main() {
 }
 ```
 
-flow tag 는 generic instance 별로 독립. `id<String@{user_input}>`
-는 `id<String@{}>` 와 다른 monomorphization signature.
+flow tag 는 generic instance key 의 일부가 아니다. `id<String>` 은
+tagged `String` 과 untagged `String` 호출에 같은 monomorphized body 를
+사용한다. checker 는 각 call site 의 value-flow fact 로
+`form@{user_input} -> id -> copy@{user_input}` 를 보존한다.
 
 #### 2.12.7 Inference 와 v0.6 annotation
 

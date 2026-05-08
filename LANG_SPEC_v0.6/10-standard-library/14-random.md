@@ -33,7 +33,7 @@ let seeded: Rng = random.seeded(42)
 API:
 
 ```
-random.default() -> Rng
+random.host: Rng
 random.seeded(seed: Int64) -> Rng
 
 Rng.int(self, min: Int, max: Int) -> Int              // [min, max)

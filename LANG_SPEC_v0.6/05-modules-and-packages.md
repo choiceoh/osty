@@ -55,9 +55,38 @@ use go "net/http" {
 
 `use <path>` imports an Osty package. Scoped import form
 `use path::{A, B as C}` imports several names from the same package.
-`pub use <path>` re-exports the imported symbol from the current package;
-re-export cycles are `E0552`. `use go "<path>" { ... }` imports a Go
-package via FFI (see §12).
+`pub use <path>` re-exports the imported symbol from the current
+package; re-export cycles are `E0552`, re-exporting a private source
+symbol is `E0553`, and introducing the same local/exported name through
+two imports or an import plus a local declaration is `E0554`. `use go
+"<path>" { ... }` imports a Go package via FFI (see §12).
+
+#### 5.2.1 Re-export identity, stability, and shadowing
+
+A `pub use` creates an alias in the current package's public surface;
+it does not create a new declaration. By default the alias inherits the
+source symbol's `#[since]`, `#[stability]`, `#[error_contract]`,
+capability parameters, and information-flow annotations. `osty doc`
+may render the alias path, but `osty publish` hashes the resolved
+source symbol plus the alias name.
+
+An alias may restate `#[since]` or `#[stability]` only to make the
+current package's promise stricter:
+
+- `experimental` source re-exported as `stable` is allowed, but the
+  current package now owns the stable promise and future upstream drift
+  can break its publish gate.
+- `stable` source re-exported as `experimental` or `internal` is
+  rejected at publish time (`E2100`) because it weakens the imported
+  contract.
+- `deprecated` metadata may be added at the alias to steer users to a
+  different path; it does not remove deprecation metadata from the
+  source.
+
+Public names do not shadow each other. If a package contains both
+`pub use a.X` and `pub fn X(...)`, or two `pub use` aliases that export
+the same final name, the module is ambiguous and compilation emits
+`E0554`. Authors must rename one import with `as`.
 
 #### 5.2.1 Import resolution order
 
@@ -266,6 +295,8 @@ API-surface diff against the previous published version:
 | Add a new variant to a `pub enum` | major bump (unless `#[match_compat]` covers it) | minor bump |
 | Remove a `pub` symbol | major bump | warning (`W2100`) |
 | Change the type of a `pub fn` parameter / return | major bump | warning (`W2100`) |
+| Rename a public function parameter | major bump | warning (`W2100`) |
+| Change a public default argument value | major bump | warning (`W2100`) |
 | Add a new `Err` variant to `#[error_contract]` | major bump | minor bump |
 
 Bumping below the required level produces `E2100` and blocks publish.
@@ -292,5 +323,40 @@ hash. Authors who want to add a capability requirement to an
 existing `stable` API must either bump the major version or
 introduce a new function and deprecate the old one with
 `#[deprecated(use = "newName")]`.
+
+### 5.7 Conditional compilation — `#[cfg(...)]`
+
+`#[cfg(...)]` is a declaration filter evaluated before name resolution
+and type checking. The parser still parses cfg-disabled declarations so
+syntax errors do not hide behind feature flags, but disabled
+declarations do not introduce names, do not participate in `pub use`,
+and do not need to type-check.
+
+Allowed keys are:
+
+| Key | Values |
+|---|---|
+| `os` | target operating-system name such as `"linux"`, `"darwin"`, `"windows"` |
+| `arch` | target architecture such as `"amd64"`, `"arm64"` |
+| `target` | full target triple/profile name from §13.2 |
+| `feature` | a feature declared in `[features]` (§13.2) |
+
+Composition uses `all(...)`, `any(...)`, and `not(...)`. Multiple
+`#[cfg]` annotations on the same declaration are conjoined. Unknown
+keys are `E0405`; unknown feature names are also `E0405` because they
+usually indicate a misspelled manifest feature.
+
+```osty
+#[cfg(all(os = "linux", feature = "epoll"))]
+pub fn poller() -> Poller { ... }
+
+#[cfg(any(os = "darwin", os = "linux"))]
+pub use unix.NetPoller as PlatformPoller
+```
+
+For public API, the exported surface is computed after cfg filtering
+for the selected target/features. `osty publish` records cfg
+conditions in the manifest so a stable symbol cannot silently disappear
+from a supported target without the appropriate SemVer bump.
 
 ---

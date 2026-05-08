@@ -5,7 +5,7 @@ concurrency* — every task lives within a `taskGroup` scope and joins
 or fails with its parent. Detached tasks, `async`/`await`, and
 `spawn` keywords are excluded by §14. Green tasks multiplex onto an
 M:N scheduler (§8.0); communication uses channels (§8.5) or shared
-state under `std.sync` primitives (§8.6). The non-escaping rule for
+state under `std.sync` primitives (§9.5). The non-escaping rule for
 `Handle<T>` and `TaskGroup` capabilities (G13, §8.2) is enforced by a
 finite front-end check, not lifetimes.
 
@@ -149,12 +149,25 @@ a channel, or capturing one in a closure that can outlive the group is a
 **compile error** (`E0743`). This preserves the invariant that every task
 completes before its parent returns.
 
+**Escape check.** G13 is a conservative syntactic check. A `Handle<T>`
+or `TaskGroup` value escapes when it is returned, assigned to a field
+or global, inserted into a collection, sent over a channel, or captured
+by a closure whose lifetime is not statically known to end before the
+current `taskGroup` scope exits. Capturing is allowed only for
+immediately-invoked closures, closures passed directly to the same
+group's `g.spawn`, and standard-library higher-order parameters that
+the spec marks no-escape. Merely capturing a handle and never using it
+is still an escape if the closure can outlive the group; the diagnostic
+is `E0743`.
+
 ### 8.2 Failure Semantics
 
-**`taskGroup`** — if any child fails (returns `Err(e)`, panics via
-`abort`, or completes through `unreachable`/`todo`), the group enters
-cancellation: all remaining siblings receive a cancel signal (§8.4)
-and the first observed error is propagated to the group's caller.
+**`taskGroup`** — if any child fails by returning `Err(e)`, the group
+enters cancellation: all remaining siblings receive a cancel signal
+(§8.4) and the first observed error is propagated to the group's
+caller. Programmer-error termination (`abort`, `panic` from FFI,
+`unreachable`, `todo`, `os.exit`) is not recoverable and bypasses the
+group failure path.
 
 **`collectAll`** — all children run to completion; results are
 collected regardless of individual failures. The outer scope can still
@@ -236,7 +249,15 @@ cleanup path is intentionally uninterruptible). Authors who need
 bounded cleanup should enforce a timeout inside the `defer` body.
 
 `defer` does **not** run when the process terminates via `abort`,
-`unreachable`, `todo`, or `os.exit` — these are immediate terminations.
+`panic` crossing the FFI bridge, `unreachable`, `todo`, or `os.exit` —
+these are immediate terminations.
+
+When multiple `defer` blocks are registered in the same block, they run
+in LIFO order. If a deferred block aborts, panics through FFI, or calls
+`os.exit`, process termination begins immediately and remaining
+deferred blocks are skipped. If cancellation arrives while a deferred
+block is already running, it is observed only after the deferred block
+finishes; the cleanup path is a cancellation-masked region.
 
 #### 8.4.4 `collectAll` Under Cancel
 
@@ -349,14 +370,20 @@ delivered whole — never partially observed.
 **Close semantics.**
 
 - `ch.close()` signals that no further values will be sent.
-- **Any task may close a channel.** A second `close` on an already-
-  closed channel aborts. This is not idempotent by design — double
-  close indicates a coordination bug.
+- **Any task may close a channel.** Close has a single linearization
+  point. If two tasks close concurrently, exactly one close wins and
+  every other close observes the already-closed state and aborts. This
+  is not idempotent by design — double close indicates a coordination
+  bug.
 - Sending on a closed channel aborts.
 - `ch.recv()` returns buffered values until the buffer is empty **and**
   the channel is closed, at which point it returns `None`. `for x in ch`
   therefore terminates naturally when the channel is closed and
   drained.
+- A receiver blocked on an empty channel wakes promptly when `close`
+  linearizes and returns `None`. Receivers blocked while buffered
+  values exist wake to receive those values first; only receivers beyond
+  the drained buffer observe `None`.
 - `ch.isClosed() -> Bool` reports close state without consuming a
   value.
 - `ch.recv()` is a cancellation point per §8.4.2 — it returns `None`

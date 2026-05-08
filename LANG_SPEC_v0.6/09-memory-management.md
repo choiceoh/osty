@@ -174,4 +174,59 @@ until block exit).
 For long-lived deferred bodies, the captured capability extends
 its effective lifetime — unusual but legal.
 
+### 9.5 Concurrency memory model
+
+Osty v0.6 uses a **DRF-SC** memory model: every program with no data
+races observes behavior equivalent to a sequentially consistent
+interleaving of tasks. The scheduler may run tasks on many OS threads,
+but synchronization edges define the only cross-task visibility
+guarantees.
+
+#### 9.5.1 Happens-before
+
+The happens-before relation is the transitive closure of:
+
+- Source order within one task.
+- `Mutex.unlock` happens-before a later successful `Mutex.lock` on the
+  same mutex.
+- `RwLock` write unlock happens-before a later read or write lock; read
+  unlock participates in the usual reader/writer exclusion ordering.
+- Channel send happens-before the matching receive of that value.
+- `ch.close()` happens-before any receive that observes the closed,
+  drained state (`None`).
+- Child task completion happens-before a successful `Handle.join` that
+  observes that completion.
+- `taskGroup` scope exit happens-after every child in the group has
+  completed or observed cancellation.
+- Atomic operations synchronize according to their declared ordering.
+  v0.6 exposes `seq_cst` atomics as the portable baseline; weaker
+  acquire/release/relaxed forms are reserved for a future revision.
+
+#### 9.5.2 Data races
+
+A data race occurs when two tasks access the same mutable memory
+location concurrently, at least one access is a write, and the accesses
+are not ordered by happens-before and are not atomic operations on the
+same atomic object. A program with a data race is invalid: a conforming
+implementation may reject it statically when it can prove the race,
+abort in an instrumented runtime, or leave the behavior unspecified in
+an optimized build. Safe Osty code should use channels, `Mutex`,
+`RwLock`, or atomics for every shared mutable location.
+
+Immutable values and values reachable only from one task are race-free.
+Sharing an interface value or capability between tasks is legal only if
+the implementation is internally synchronized or the caller protects it
+with `std.sync`.
+
+#### 9.5.3 Atomics and volatile
+
+Atomic integer and boolean cells provide indivisible load, store,
+compare-and-swap, and fetch-update operations. In v0.6 every public
+atomic operation is sequentially consistent. This keeps the first
+portable contract simple; lower-level memory orders require an RFC.
+
+Osty has no user-visible `volatile` operation in v0.6. FFI bindings
+that need volatile or device-memory semantics must hide them behind a
+capability whose methods provide their own synchronization contract.
+
 ---

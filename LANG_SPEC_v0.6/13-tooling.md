@@ -876,6 +876,8 @@ fn computeDiff(prev: Manifest, curr: Manifest) -> DiffReport {
 | 신규 enum variant 없음 (`#[since]`) | BREAKING |
 | 신규 default arg trailing | COMPAT-ADD |
 | 신규 default arg non-trailing | BREAKING (G20 named call shift) |
+| stable 함수의 public parameter rename | BREAKING (keyword call surface changes) |
+| default value expression 변경 | BREAKING for `stable`; `experimental` emits `W2100` |
 | `#[reproducible]` 추가 | COMPAT-ADD (callee 보장 강화) |
 | `#[reproducible]` 제거 | BREAKING (callee 보장 약화) |
 | `#[error_contract]` variant 추가 | BREAKING (caller match exhaustiveness) |
