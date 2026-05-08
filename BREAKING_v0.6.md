@@ -41,7 +41,7 @@ struct While {                  // OK — 'While' (대문자) 는 영향 없음
 
 ## 2. 🔴 Reserved contextual keywords: `spec` / `example` / `law` / `invariant` (G43)
 
-이 4 식별자는 *함수 본문 첫 statement 위치* 또는 *spec block 안*에서만 keyword. 다른 위치는 식별자 그대로. 하지만 다음 케이스가 충돌:
+이 4 식별자는 top-level `fn` / method body 의 *첫 statement 위치* 또는 *spec block 안*에서만 keyword. closure body, `if` arm, `match` arm, nested block 에서는 식별자 그대로. 하지만 다음 케이스가 충돌:
 
 ```osty
 fn foo() {

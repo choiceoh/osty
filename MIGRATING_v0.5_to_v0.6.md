@@ -79,7 +79,7 @@ rg -nw 'while' --type osty | grep -v 'while .*{' | grep -v '//'
 
 ## 2. spec block keyword 충돌 확인 (G43) 🔴
 
-**문제**: `spec` 가 *함수 본문 첫 statement* 위치에서 contextual keyword. 그 외 위치에선 식별자.
+**문제**: `spec` 가 top-level `fn` / method body 의 *첫 statement* 위치에서 contextual keyword. closure body, `if` arm, `match` arm, nested block 및 그 외 위치에선 식별자.
 
 **드물지만 충돌**:
 ```osty
@@ -100,7 +100,7 @@ fn foo() {
 
 **탐지**:
 ```sh
-# 함수 본문 첫 statement 가 'spec' / 'example' / 'law' / 'invariant' 인 경우
+# top-level fn / method body 첫 statement 가 'spec' / 'example' / 'law' / 'invariant' 인 경우
 osty check 2>&1 | grep -E "E0440|E0441"
 ```
 

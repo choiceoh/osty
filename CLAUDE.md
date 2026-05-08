@@ -406,7 +406,7 @@ fn copyFile(src: String, dst: String) -> Result<(), Error> {
     let from = fs.open(src)?
     defer from.close()
 
-    let to = fs.create(dst)?
+    let to = fs.createWriter(dst)?
     defer to.close()
 
     // 어느 ?에서 실패해도 두 파일 모두 close
@@ -777,7 +777,7 @@ fn memoize<K: Hashable, V>(cache: Cache<K, V>, k: K, compute: fn() -> V) -> V {
 fn compressFile(src: String, dst: String) -> Result<(), Error> {
     let r = fs.open(src)?
     defer r.close()
-    let w = fs.create(dst)?
+    let w = fs.createWriter(dst)?
     defer w.close()
     let enc = gzip.writer(w)?
     defer enc.close()
@@ -1270,7 +1270,7 @@ fn normalizeEmail(s: String) -> String {
 ```
 
 **제약**:
-- 함수 본문의 *첫 statement* 위치만 (`E0440`)
+- top-level 함수 / method body 의 *첫 statement* 위치만 (`E0440`)
 - `example:` 는 boolean (`E0441`), `law:` / `invariant:` 는 boolean — `result` 는 함수 반환값 가리키는 virtual binding
 
 **v1 Phase 5** (예정): `forall x in gen.list(gen.int(), 128): result.toMultiset() == x.toMultiset()` 형식의 property test.

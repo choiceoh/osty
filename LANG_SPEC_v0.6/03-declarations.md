@@ -18,7 +18,7 @@ contract, or evolution rule that affects a declaration is expressible
 at the declaration site. The annotation surface in §3.10 – §3.15
 makes that visibility *machine-readable* so that diagnostics
 (§3.10.4 spec link, §7.5 error contract), enforcement (§3.11
-reproducibility, §3.4.5 sealed construct), and tooling (§13.6 `osty
+reproducibility, §3.4.5 sealed construct), and tooling (§13.4 `osty
 context`, §13.5 `osty publish`) all share one source of truth.
 
 The annotation set is finite — 31 compiler-recognized annotations as
@@ -1864,8 +1864,8 @@ at the function's signature.
 
 ### 3.13 `spec { ... }` — Executable Spec Block (G43)
 
-A function body may begin with a `spec { ... }` block stating
-executable specifications colocated with the implementation. The
+A top-level function or method body may begin with a `spec { ... }`
+block stating executable specifications colocated with the implementation. The
 block has no runtime cost — `example:` clauses run as tests under
 `osty test --spec`, while `law:` and `invariant:` clauses are surfaced
 in `osty doc` and LSP hover.
@@ -1891,8 +1891,10 @@ fn normalizeEmail(s: String) -> String {
 | `law: expr`, `invariant: expr` | Doc / LSP only; `result` is virtual binding for return value (`E0442`) | (same) |
 | `forall x, y in gen: expr` | Reserved (parser allows; runtime defers) | Auto property test |
 
-The `spec` block must be the function body's *first* statement
-(`E0440`). It is not an expression; it produces no value.
+The `spec` block must be the top-level function or method body's
+*first* statement (`E0440`). It is not an expression; it produces no
+value. Closure bodies, `if` arms, `match` arms, and nested blocks cannot
+host a `spec` block even when `spec` appears first inside that block.
 
 #### 3.13.1 `result` virtual binding
 

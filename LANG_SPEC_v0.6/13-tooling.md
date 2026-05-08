@@ -396,7 +396,7 @@ and includes:
 | `fixtures_referenced` | `#[example(uses = "name")]` |
 | `callees` | `--recursive` only |
 
-The full schema is `LANG_SPEC_v0.6/00-revision.md §13.6.2`.
+The full schema is specified in §13.9 below.
 
 **LSP integration.** `textDocument/hover` returns the same data
 rendered as markdown. AI agents query the JSON directly via `osty

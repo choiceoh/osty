@@ -183,7 +183,7 @@ fn copyFile(fs: Fs, src: String, dst: String) -> Result<Int, Error> {
     let r = fs.open(src)?         // capability call → Reader+Closer
     defer r.close()
 
-    let w = fs.create(dst)?       // capability call → Writer+Closer
+    let w = fs.createWriter(dst)? // capability call → Writer+Closer
     defer w.close()
 
     io.copy(w, r)                  // protocol-only — no capability

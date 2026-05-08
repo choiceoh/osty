@@ -50,7 +50,7 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
   visibility와 type parameter는 모두 일치해야 한다.
 - 같은 partial type의 field/variant는 한 declaration에만 있어야 한다. method
   이름은 중복될 수 없다.
-- compiler annotation은 고정 집합이다 — v0.6에서 31개로 확장 (§14 참조).
+- compiler annotation은 고정 집합이다 — v0.6에서 31개로 확장 (§3.8 참조).
 - annotation은 named declaration 앞에 둔다. v0.6 부터 parameter 위치에도
   허용 (Pattern 앞 또는 Type 앞).
 
@@ -254,7 +254,7 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 
 ## 12. Spec Block (G43) and Intent (G42)
 
-- `spec { ... }` 함수 본문 첫 statement 위치. clauses: `example:`, `law:`,
+- `spec { ... }` top-level 함수 / method body 첫 statement 위치. clauses: `example:`, `law:`,
   `invariant:`, `forall x in gen:` (v1).
 - v0 (Phase 3): `example:` 만 `osty test --spec` 실행, `law:` / `invariant:` 는
   doc + LSP hover. `result` 는 `law:` / `invariant:` 안에서 함수 반환값 가리키는

@@ -17,15 +17,15 @@ v0.5 의 R1–R26 결정과 EBNF 를 baseline 으로, v0.6 에서 추가/변경�
   `for cond { }` 와 동의어 — 둘 다 같은 lowering. 식별자로 사용했던 코드는
   rename 필요 (사용자 0 단계에서의 acceptable break).
 
-### 새 contextual keyword 4 개 (R28)
+### 새 v0 contextual keyword 4 개 (R28)
 
-- **`spec`** — 함수 본문 첫 statement 위치에서만 keyword. 그 외 위치
-  식별자.
+- **`spec`** — top-level `fn` / method body 첫 statement 위치에서만
+  keyword. 그 외 위치 식별자.
 - **`example`** — `spec { }` block 안에서만 keyword.
 - **`law`** — `spec { }` block 안에서만 keyword.
 - **`invariant`** — `spec { }` block 안에서만 keyword.
-- **`forall`** *(v1 — Phase 5)* — `spec { }` block 안에서만 keyword. v0
-  단계는 식별자.
+- **`forall`** *(v1 — Phase 5 reserved)* — `spec { }` block 안에서만
+  keyword. v0 단계는 식별자.
 
 ### 새 lexer 토큰 0 개
 
@@ -69,7 +69,9 @@ LineEnd        ::= NEWLINE
 ```
 
 위치 제약 (R28):
-- `SpecBlock` 은 함수 본문의 *첫 statement* 위치에만 출현 가능.
+- `SpecBlock` 은 top-level `FnDecl` 또는 method declaration body 의
+  *첫 statement* 위치에만 출현 가능. closure body, `if` arm,
+  `match` arm, nested block 에는 출현할 수 없다.
 - `'spec'` 토큰은 그 위치에서만 keyword. 그 외 위치 (예: `let spec = 1`)
   에서는 일반 식별자.
 - `'example'` / `'law'` / `'invariant'` 는 `SpecBlock` 본문 안에서만
@@ -247,11 +249,12 @@ BudgetField  ::= 'allocs' '=' IntLit
 
 ### R28. spec block 위치 (G43)
 
-`spec { ... }` block 은 함수 본문의 *첫 statement* 위치에만 허용. 그
-외 위치는 `E0440`. block 은 expression 이 아니다 — 결과 type 없음, 마지막
-expression 평가 안 됨. spec block 본문은 *순수 메타데이터*: `example:`
-는 test runner 가 따로 실행, `law:` / `invariant:` 는 doc generator 가
-추출.
+`spec { ... }` block 은 top-level `fn` / method body 의 *첫 statement*
+위치에만 허용. closure body, `if` arm, `match` arm, nested block 의
+첫 위치라도 허용하지 않는다. 그 외 위치는 `E0440`. block 은 expression 이
+아니다 — 결과 type 없음, 마지막 expression 평가 안 됨. spec block 본문은
+*순수 메타데이터*: `example:` 는 test runner 가 따로 실행, `law:` /
+`invariant:` 는 doc generator 가 추출.
 
 `'spec'` keyword 는 그 위치에서만 keyword 로 lex. 그 외 위치 (예: 변수
 이름, struct field 이름) 에서는 식별자.
@@ -285,8 +288,14 @@ R7 에 다음 추가:
 > **spec block scope**: `spec { ... }` block 안에서 `example`, `law`,
 > `invariant` 는 keyword. 그 외 위치 (block 외부) 에서는 식별자.
 
-> **block 시작 위치**: 함수 본문 첫 statement 위치에서 `spec` 가 keyword.
+> **block 시작 위치**: top-level `fn` / method body 첫 statement 위치에서 `spec` 가 keyword.
+> 여기서 함수 본문은 top-level `fn` / method declaration body 만 뜻한다.
 > 그 외 위치에서는 식별자. R28 참조.
+
+> **label vs char literal**: lexer 는 single quote 다음이 one scalar or
+> escape + closing quote 이면 `CHAR_LIT`, single quote 다음이 identifier 이고
+> 즉시 closing quote 가 아니면 `LABEL` 로 토큰화한다. 따라서 `'X'` 는 char,
+> `'X:` 는 label prefix 이다.
 
 ---
 
@@ -294,7 +303,7 @@ R7 에 다음 추가:
 
 | 항목 | v0.4 | v0.5 | v0.6 | Δ (v0.5→v0.6) |
 |---|---:|---:|---:|---:|
-| Reserved keywords | 17 | 18 | **19** | +1 (`while`) |
+| Reserved keywords | 17 | 17 | **18** | +1 (`while`) |
 | Contextual keywords | 7 | 10 | **14** | +4 (`forall` 은 v1 단계 추가 시 15) |
 | Fixed annotation set | 8 | 11 | **31** | +20 |
 | EBNF productions | 180 | 191 | **199** | +8 |

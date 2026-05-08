@@ -22,7 +22,7 @@ Four annotation families implement the principle:
 | **Effectful** (env / IO) | Capability parameters (§20), `#[ambient]`, `#[reproducible]`, `#[reproducible_capability]` |
 | **Security** (sources → sinks) | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]`, `#[taint_field]` (§21) |
 | **Temporal** (versioning) | `#[since]`, `#[stability]`, `#[match_compat]`, `osty publish` (§3.14) |
-| **Intent + Determinism** | `#[spec]`, `#[purpose]`, `#[example]`, `#[fixture]`, `spec { }`, `#[error_contract]`, `#[sealed_construct]`, `#[golden]`, `#[budget]`, `osty context` (§3.10–§3.15, §7.5, §11.5, §13.6) |
+| **Intent + Determinism** | `#[spec]`, `#[purpose]`, `#[example]`, `#[fixture]`, `spec { }`, `#[error_contract]`, `#[sealed_construct]`, `#[golden]`, `#[budget]`, `osty context` (§3.10–§3.15, §7.5, §11.5, §13.4) |
 
 **Resolved gaps (G36–G49).**
 
@@ -39,7 +39,7 @@ Four annotation families implement the principle:
 | G44 | API evolution (§3.14) | `#[since]` / `#[stability]` / `#[match_compat]` |
 | G45 | Golden tests (§11.5) | `#[golden]` AST-aware 스냅샷 |
 | G46 | Performance contract (§3.15) | `#[budget(allocs/io/time)]` static + runtime |
-| G47 | Machine-readable context (§13.6) | `osty context <symbol>` 구조화 추출 |
+| G47 | Machine-readable context (§13.4) | `osty context <symbol>` 구조화 추출 |
 | G48 | Annotation surface | 위 신규 어노테이션의 grammar 통합 (+20 fixed annotations) |
 | G49 | `while` keyword (§4.4) | `for cond {}` 와 동의어. mental-model 일치 |
 
@@ -99,7 +99,8 @@ p99_ms)]`. 각 신규 surface 는 §3 의 *v0.6 Annotation Extensions* 섹션
   failure-mode catalog.
 - §11.5 — `#[golden(path, mode="text"|"ast"|"json"|"diag")]` AST-aware
   snapshot. 함수는 암묵 `#[reproducible(scope="target")]`.
-- §13.6 — `osty context <symbol>` JSON output (LSP / AI agent 통합).
+- §13.4 / §13.9 — `osty context <symbol>` command and JSON output
+  (LSP / AI agent 통합).
 - `osty publish` — manifest API surface diff. stable API breaking
   change + minor/patch bump 시 E2100. compat-add + patch only E2102.
 

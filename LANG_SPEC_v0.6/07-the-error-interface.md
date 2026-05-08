@@ -156,7 +156,7 @@ A function returning a `Result<T, E>` over a *concrete enum* `E` may
 carry an `#[error_contract]` annotation that catalogues which error
 variants are produced under which conditions. The contract is a
 machine-readable failure-mode catalogue — `osty doc` renders it as a
-table, `osty test --example` cross-checks it, `osty context` (§13.6)
+table, `osty test --example` cross-checks it, `osty context` (§13.4)
 exposes it as JSON, and the type checker uses it to prune match
 exhaustiveness.
 
@@ -232,7 +232,7 @@ Failure modes:
   EmailError.TooLong       — input exceeds 320 chars
 ```
 
-`osty context <fn>` (§13.6) emits the same data as JSON.
+`osty context <fn>` (§13.4 / §13.9) emits the same data as JSON.
 
 #### 7.5.1 Contract enforcement at function boundary
 
@@ -386,7 +386,7 @@ enum — applies identically.
 fn copyAll(fs: Fs, src: String, dst: String) -> Result<(), Error> {
     let r = fs.open(src)?
     defer r.close()
-    let w = fs.create(dst)?
+    let w = fs.createWriter(dst)?
     defer w.close()
 
     io.copy(w, r)?            // returns Err(Cancelled) on cancel
