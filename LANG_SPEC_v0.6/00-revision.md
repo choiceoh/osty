@@ -29,7 +29,7 @@ labeled data 는 nominal `struct` 또는 tuple 로 표현한다.
 | G44 | API evolution (§3.14) | `#[since]` / `#[stability]` / `#[match_compat]` |
 | G45 | Golden tests (§11.5) | `#[golden]` AST-aware 스냅샷 |
 | G46 | Performance contract (§3.15) | `#[budget(allocs/io/time)]` static + runtime 분리 |
-| G47 | Machine-readable context (§13.6) | `osty context <symbol>` 구조화 추출 |
+| G47 | Machine-readable context (§13.4) | `osty context <symbol>` 구조화 추출 |
 | G48 | Annotation surface | 위 신규 어노테이션의 grammar 통합 |
 | **G49** | `while` keyword (§4.4) | `for cond {}` 와 동의어. mental-model 일치 |
 
@@ -85,7 +85,7 @@ Phase 5   G37 #[taint] / #[sanitizes] (가장 무거움, 시그니처급 임팩�
 ### §20 Capabilities (G36)
 
 정식 챕터 본문은 [`20-capabilities.md`](./20-capabilities.md) 가 권위.
-본 문서의 다른 섹션 (§3.x extensions, §7.5, §11.5, §13.6, interaction matrix)
+본 문서의 다른 섹션 (§3.x extensions, §7.5, §11.5, §13.4, interaction matrix)
 에서 §20 참조는 그 챕터 파일을 가리킨다.
 
 ### §21 Information Flow Tracking (G37)
@@ -481,7 +481,7 @@ $ osty context std.user::createUser
 }
 ```
 
-JSON 스키마는 `LANG_SPEC_v0.6/13-tooling.md §13.6` 에서 정의.
+JSON 스키마는 `LANG_SPEC_v0.6/13-tooling.md §13.9` 에서 정의.
 
 #### §3.12.5 진단 코드
 
@@ -558,7 +558,8 @@ ForallClause   ::= 'forall' Ident (',' Ident)* 'in' Expr ':' Expr (LineEnd)
                    (* v1 only, deferred to Phase 5 *)
 ```
 
-`spec` 은 contextual keyword (R7) — 함수 본문 첫 statement 위치에서만 keyword.
+`spec` 은 contextual keyword (R7) — top-level `fn` / method body 첫
+statement 위치에서만 keyword.
 
 #### §3.13.5 의미 — `result` 식별자
 
@@ -782,7 +783,7 @@ fn validatePublish(prev: Version, curr: Version, report: DiffReport) -> Result<(
       "name": "std.user.createUser",
       "stability": "stable",
       "since": "0.6",
-      "signature": { /* §13.6.2 와 동일 schema */ }
+      "signature": { /* §13.9 와 동일 schema */ }
     },
     /* ... */
   ]
@@ -984,9 +985,9 @@ fn routeRequest(req: Request) -> Response { ... }
 
 ---
 
-### §13.6 `osty context <symbol>` (G47)
+### §13.4 `osty context <symbol>` (G47)
 
-#### §13.6.1 명령 surface
+#### §13.4.1 명령 surface
 
 ```sh
 osty context <symbol>                          # default: human-readable text
@@ -998,7 +999,7 @@ osty context --search=<query>                  # symbol search + first match
 osty context --all-stdlib --format=jsonl       # bulk export (one JSON per line)
 ```
 
-#### §13.6.2 JSON 스키마 (정식)
+#### §13.9 JSON 스키마 (정식)
 
 ```json
 {
@@ -1075,7 +1076,7 @@ osty context --all-stdlib --format=jsonl       # bulk export (one JSON per line)
 - `budget.runtime`: G46 `{"time_ms": 5, "p99_ms": 20}` 또는 null
 - `callees[]`: `--recursive` 시에만 채워짐, depth 0 에서는 빈 배열
 
-#### §13.6.3 사용 시나리오
+#### §13.4.2 사용 시나리오
 
 **LLM agent**:
 ```python
@@ -1110,7 +1111,7 @@ fn createUser(email: String, db: Db) -> Result<UserId, Error>
 **Bulk export** (`--all-stdlib --format=jsonl`): stdlib 전체를 jsonl 로 export.
 training 데이터 / static analysis / 외부 검사 도구가 사용.
 
-#### §13.6.4 LSP integration
+#### §13.4.3 LSP integration
 
 LSP `textDocument/hover` 응답이 같은 데이터를 markdown 으로 렌더. AI agent 측은
 JSON 직접 query (`osty context --format=json` 또는 LSP custom request
@@ -1178,7 +1179,7 @@ ParamDecl      ::= Annotation* Pattern ':' Annotation* Type ('=' DefaultExpr)?
 
 | 항목 | v0.5 | v0.6 | Δ |
 |---|---:|---:|---:|
-| Reserved keywords | 18 | 19 | +1 (`while` — G49) |
+| Reserved keywords | 17 | 18 | +1 (`while` — G49) |
 | Contextual keywords | 10 | 14 | +4 (`spec`, `example`, `law`, `invariant`; `forall` 은 v1 단계) |
 | Fixed annotation set | 11 | 31 | +20 |
 | EBNF productions | 191 | 199 | +8 |
@@ -1800,14 +1801,14 @@ v0.6 baseline 동결 → public 1.0 alpha 출시 까지의 게이트:
 
 ### 9.1 Spec readiness (이 문서가 cover)
 
-- [x] G36–G49 (15 결정) 본 문서에 명시
+- [x] G36–G49 (14 결정) 본 문서에 명시
 - [x] SPEC_GAPS.md §"Resolved in v0.6" 에 entries 등재
-- [x] OSTY_GRAMMAR_v0.6.md grammar delta + R27–R30
+- [x] OSTY_GRAMMAR_v0.6.md grammar delta + R27–R29
 - [x] CHANGELOG_v0.6.md skeleton
 - [x] Cross-feature interaction matrix (§7.5)
 - [x] Annotation site matrix (§7.6)
 - [x] Migration code samples (§7.1.1, §7.2.1, §7.3.1)
-- [x] `osty context` JSON schema (§13.6.2)
+- [x] `osty context` JSON schema (§13.9)
 - [ ] §20 / §21 정식 챕터 파일 (`LANG_SPEC_v0.6/20-capabilities.md` 등)
 - [ ] 기존 v0.5 챕터 (§3, §4, §7, §11, §13) 의 v0.6 amend 파일
 - [ ] `LANG_SPEC_v0.6/ABRIDGED.md` (agent 용 단축본) v0.6 갱신

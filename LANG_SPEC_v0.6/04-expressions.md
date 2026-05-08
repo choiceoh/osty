@@ -28,8 +28,8 @@ grammar:
   to drop a tag, and it must be explicit (§21.5).
 - **Spec block.** A function's `spec { }` block (§3.13, G43) sits in
   *declaration position* — `spec { example: ... }` is not an
-  expression. It must be the function body's first statement; placing
-  it elsewhere is `E0440`.
+  expression. It must be the top-level function or method body's first
+  statement; placing it elsewhere is `E0440`.
 
 The v0.6 keyword addition is `while cond { }` as a synonym for
 `for cond { }` (G49, §4.4) — both lower to the same IR.
@@ -746,7 +746,7 @@ fn copyFile(fs: Fs, src: String, dst: String) -> Result<(), Error> {
     let r = fs.open(src)?
     defer logError(r.close(), "close src failed")
 
-    let w = fs.create(dst)?
+    let w = fs.createWriter(dst)?
     defer logError(w.close(), "close dst failed")
 
     io.copy(w, r)?

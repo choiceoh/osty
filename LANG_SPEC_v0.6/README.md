@@ -25,12 +25,12 @@ gap closure tables.
 - [`ABRIDGED.md`](./ABRIDGED.md) — short, example-free quick spec for AI
   agents generating or editing Osty code.
 - [`00-revision.md`](./00-revision.md) — comprehensive decision log for
-  the v0.5 → v0.6 batch. Cross-references all 15 gaps with diff
+  the v0.5 → v0.6 batch. Cross-references all 14 decisions with diff
   algorithms, formal IFC inference rules, worked examples, migration
   notes, and the v0.6 cut readiness checklist. Each chapter file in
   this directory is the *normative* source; `00-revision.md` is the
   *one-document overview*.
-- `../OSTY_GRAMMAR_v0.6.md` — formal grammar (R1–R30 + EBNF). The
+- `../OSTY_GRAMMAR_v0.6.md` — formal grammar (R1–R29 + EBNF). The
   lexer/parser ground truth.
 - `../OSTY_GRAMMAR_v0.5.md` and earlier — historical grammar snapshots.
 - `../SPEC_GAPS.md` — archive of resolved gaps per version.
@@ -117,4 +117,4 @@ Four annotation families implement this principle:
 | **Effectful** (env / IO) | Capability parameters, `#[ambient]`, `#[reproducible]`, `#[pure]` | §20, §3.11 |
 | **Security** (sources → sinks) | `#[taint]`, `#[sanitizes]`, `#[requires]` | §21 |
 | **Temporal** (versioning) | `#[since]`, `#[stability]`, `#[match_compat]`, `osty publish` | §3.14 |
-| **Intent + Determinism** | `#[spec]`, `#[purpose]`, `#[example]`, `#[fixture]`, `spec { }`, `#[error_contract]`, `#[sealed_construct]`, `#[golden]`, `#[budget]`, `osty context` | §3.10, §3.12, §3.13, §3.15, §3.4.5, §7.5, §11.5, §13.6 |
+| **Intent + Determinism** | `#[spec]`, `#[purpose]`, `#[example]`, `#[fixture]`, `spec { }`, `#[error_contract]`, `#[sealed_construct]`, `#[golden]`, `#[budget]`, `osty context` | §3.10, §3.12, §3.13, §3.15, §3.4.5, §7.5, §11.5, §13.4 |

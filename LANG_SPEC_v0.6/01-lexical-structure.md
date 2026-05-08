@@ -1,7 +1,7 @@
 ## 1. Lexical Structure
 
 This chapter defines the lexical surface of Osty v0.6 — file encoding,
-keywords (18 reserved + 14 contextual), identifier conventions,
+keywords (18 reserved + 14 v0 contextual), identifier conventions,
 literals, and the rules the lexer applies to produce a token stream
 the parser can consume. The grammar (`OSTY_GRAMMAR_v0.6.md`) and v0.6
 design north star (*hidden dependency is forbidden*) inform the rule
@@ -99,6 +99,12 @@ by any identifier-continuation character) is a distinct token used as a
 pattern wildcard, a destructuring placeholder, and the type-arguments
 inference marker. Because the lexer applies maximal munch, `_foo` and
 `_1` are identifiers; only the lone `_` is the wildcard token.
+
+**Label vs char literal.** A single quote followed by one scalar or
+escape sequence and a closing single quote is a `CHAR_LIT` (`'x'`,
+`'\n'`, `'\u{1F600}'`). A single quote followed by an identifier and
+not immediately closed is a `LABEL` (`'outer`, `'search`). This
+lookahead rule makes `'X'` a char literal and `'X:` a loop label prefix.
 
 ### 1.5 Comments
 
@@ -412,12 +418,13 @@ v0.5 → v0.6 에서 reserved keyword 가 17 → 18 로 +1 — `while` (G49).
 
 #### 1.10.2 Contextual keyword 변경
 
-v0.5 의 10 contextual keyword (`self`, `Self`, `true`, `false`,
+v0.5 의 contextual identifier set (`self`, `Self`, `true`, `false`,
 `Some`, `None`, `Ok`, `Err`, `loop`, `const`, `by`) 위에 v0.6 은
 4 추가 — `spec`, `example`, `law`, `invariant` (G43, §3.13).
 
-이 4 키워드는 *spec block 내부* 에서만 keyword. 그 외 위치 (변수
-이름, struct field 이름) 에서는 식별자.
+`spec` 은 top-level `fn` / method body 의 첫 statement 위치에서만
+keyword. `example`, `law`, `invariant` 는 *spec block 내부* 에서만
+keyword. 그 외 위치 (변수 이름, struct field 이름) 에서는 식별자.
 
 `forall` 은 v1 (Phase 5) 단계에서 추가 예정 — v0.6.0 baseline 에는
 없음.
@@ -456,16 +463,17 @@ v0.5 에서 v0.6 으로 *새 token kind 0 추가*. 모든 v0.6 신규 syntax
 패턴. `while cond { body }` 는 `if cond { body }` 와 같은 token
 flow 로 처리.
 
-`spec { }` block 은 함수 본문의 *첫 statement 위치* 에서 lex —
-`fn foo() {` 다음 `spec` 식별자 발견 시 spec block 시작 token 으로
-승격. 다른 위치에서는 일반 식별자.
+`spec { }` block 은 top-level `fn` / method body 의 *첫 statement
+위치* 에서 lex — `fn foo() {` 다음 `spec` 식별자 발견 시 spec block
+시작 token 으로 승격. closure body, `if` arm, `match` arm, nested block
+안에서는 일반 식별자.
 
 #### 1.10.6 Diagnostic 영향
 
 v0.6 lexical 영역에 *신규 진단 코드 0* — 모든 신규 surface 가 기존
 band 의 코드 재사용 또는 §3.8 / §20 / §21 의 의미론 진단으로 처리.
 
-`E0400` (CodeUnknownAnnotation) 는 v0.6 의 21 추가 annotation 모두
+`E0400` (CodeUnknownAnnotation) 는 v0.6 의 20 추가 annotation 모두
 recognize — `internal/ast/ast.go::annotationRules` 와
 `toolchain/resolve.osty::srAnnotAllowedTargets`, checked-in selfhost
 generated mirror 가 sync.
