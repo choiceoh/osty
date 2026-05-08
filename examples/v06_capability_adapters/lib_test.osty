@@ -1,0 +1,14 @@
+use std.testing
+fn testCapabilitySummaryCatalog() {
+    testing.assertEq(capabilitySummary(), "7 protocols; 7 host factories; 8 rewrite rules")
+}
+fn testLegacyRewriteReportShape() {
+    let rows = legacyRewriteReport()
+    testing.assertEq(rows.len(), 8)
+    testing.assertEq(rows[0], "time.now() -> clock.now() [Clock]")
+}
+fn testAmbientBoundaryFactoryCatalog() {
+    let rows = ambientBoundaryFactories()
+    testing.assertEq(rows.len(), 7)
+    testing.assertEq(rows[0], "clock = time.systemClock()")
+}

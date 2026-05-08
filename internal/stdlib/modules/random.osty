@@ -37,4 +37,10 @@ pub struct Rng {
     }
 }
 pub fn default() -> Rng
+pub fn host() -> Rng {
+    default()
+}
 pub fn seeded(seed: Int64) -> Rng
+pub fn seededCapability(seed: Int64) -> Rng {
+    seeded(seed)
+}

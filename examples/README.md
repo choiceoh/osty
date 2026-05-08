@@ -19,6 +19,8 @@ the compiler evolves.
   and property-based testing.
 - `v06_capabilities`: v0.6-style explicit `Clock` / `Rng` capability
   parameters with deterministic fakes and stdlib protocol helpers.
+- `v06_capability_adapters`: v0.6 host-boundary adapter catalog showing how
+  existing global stdlib modules become explicit capability values.
 - `stdlib-tour`: front-end checked package that demonstrates Tier 1
   standard-library imports and Result-style error flow.
 - `gui-webview2-inspector`: Windows WebView2 GUI example using

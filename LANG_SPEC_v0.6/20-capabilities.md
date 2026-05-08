@@ -71,8 +71,11 @@ pub interface Process {
 **Implementation note.** 현재 stdlib 는 이 canonical protocol set 을
 `std.capability` 에 compile-checked interface surface 로 노출한다. 기존
 `std.time`, `std.random`, `std.env`, `std.fs`, `std.net`, `std.process`, `std.io`
-전역 함수는 v0.6.x compatibility surface 로 유지되며, ambient desugar /
-`--legacy-globals` warning 은 별도 compiler phase 에서 닫는다.
+전역 함수는 v0.6.x compatibility surface 로 유지된다. Host-boundary adapter
+factory 는 현재 `time.systemClock()`, `random.host()`, `env.host()`, `fs.host()`,
+`capability.hostNet()`, `capability.hostProcess()`, `io.console()` 로 노출하며,
+`std.net.host()` / `std.process.host()` 는 cross-module bridge helper 로 제공한다.
+Ambient desugar / `--legacy-globals` warning 은 별도 compiler phase 에서 닫는다.
 
 함수는 capability 를 **명시적 파라미터**로 받는다:
 

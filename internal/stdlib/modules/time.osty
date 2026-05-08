@@ -4,64 +4,49 @@
 // formatting are body-less; the backend lowers each call to the time
 // runtime. Pure arithmetic on `Instant` / `Duration` stays as Osty
 // code.
-
 pub let ISO_8601: String = "2006-01-02T15:04:05Z07:00"
 pub let RFC_3339: String = "2006-01-02T15:04:05Z07:00"
 pub let RFC_2822: String = "Mon, 02 Jan 2006 15:04:05 -0700"
-
 pub struct Duration {
     pub nanoseconds: Int64,
-
     pub fn abs(self) -> Duration {
         Duration { nanoseconds: self.nanoseconds.abs() }
     }
-
     pub fn micros(self) -> Int {
         let nanosPerMicro: Int64 = 1000
         self.nanoseconds / nanosPerMicro
     }
-
     pub fn millis(self) -> Int {
         let nanosPerMilli: Int64 = 1000000
         self.nanoseconds / nanosPerMilli
     }
-
     pub fn seconds(self) -> Int {
         let nanosPerSecond: Int64 = 1000000000
         self.nanoseconds / nanosPerSecond
     }
-
     pub fn toString(self) -> String
 }
-
 pub struct Instant {
     pub unixNanos: Int64,
-
     pub fn add(self, duration: Duration) -> Instant {
-        Instant { unixNanos: self.unixNanos + duration.nanoseconds }
+        Instant {unixNanos: self.unixNanos + duration.nanoseconds}
     }
-
     pub fn sub(self, other: Instant) -> Duration {
-        Duration { nanoseconds: self.unixNanos - other.unixNanos }
+        Duration {nanoseconds: self.unixNanos - other.unixNanos}
     }
-
     pub fn since(self, earlier: Instant) -> Duration {
         self.sub(earlier)
     }
-
     pub fn format(self, layout: String) -> String
-
     pub fn inZone(self, zone: Zone) -> ZonedTime {
-        ZonedTime { instant: self, zone: zone }
+        ZonedTime {instant: self, zone: zone}
     }
 }
-
 pub struct Zone {
     pub name: String,
     pub offset: Duration,
     pub isFixed: Bool,
 }
-
 pub enum Weekday {
     Mon,
     Tue,
@@ -71,40 +56,39 @@ pub enum Weekday {
     Sat,
     Sun,
 }
-
 pub struct ZonedTime {
     pub instant: Instant,
     pub zone: Zone,
-
     pub fn year(self) -> Int
-
     pub fn month(self) -> Int
-
     pub fn day(self) -> Int
-
     pub fn hour(self) -> Int
-
     pub fn minute(self) -> Int
-
     pub fn second(self) -> Int
-
     pub fn nanosecond(self) -> Int
-
     pub fn weekday(self) -> Weekday
-
     pub fn format(self, layout: String) -> String {
         self.instant.format(layout)
     }
 }
-
+pub struct HostClock {
+    pub startedAt: Instant,
+    pub fn now(self) -> Instant {
+        now()
+    }
+    pub fn monotonic(self) -> Duration {
+        now().sub(self.startedAt).abs()
+    }
+    pub fn sleep(self, duration: Duration) -> Result<(), Error> {
+        sleep(duration)
+    }
+}
+pub fn systemClock() -> HostClock {
+    HostClock {startedAt: now()}
+}
 pub fn now() -> Instant
-
 pub fn parse(text: String, layout: String) -> Result<Instant, Error>
-
 pub fn sleep(duration: Duration) -> Result<(), Error>
-
 pub fn zone(name: String) -> Result<Zone, Error>
-
 pub fn local() -> Zone
-
 pub fn utc() -> Zone

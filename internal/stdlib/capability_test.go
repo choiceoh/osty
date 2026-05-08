@@ -20,8 +20,12 @@ func TestCapabilityModuleExposesV06Protocols(t *testing.T) {
 		"pub interface Net",
 		"pub interface Process",
 		"pub interface Console",
+		"pub struct MigrationRule",
+		"pub struct HostNet",
+		"pub struct HostProcess",
 		"pub fn canonicalNames() -> List<String>",
 		"pub fn defaultAmbientNames() -> List<String>",
+		"pub fn hostFactoryNames() -> List<String>",
 		"pub fn legacyGlobalModules() -> List<String>",
 	} {
 		if !strings.Contains(src, want) {
@@ -57,8 +61,15 @@ func TestCapabilityModuleHelperNamesAreBodied(t *testing.T) {
 		"defaultAmbientNames",
 		"mainAmbientNames",
 		"testAmbientNames",
+		"hostFactoryNames",
+		"bridgeFactoryNames",
+		"deterministicCapabilityNames",
+		"nondeterministicCapabilityNames",
 		"filesystemEffectFns",
 		"legacyGlobalModules",
+		"legacyGlobalRewriteRules",
+		"hostNet",
+		"hostProcess",
 	} {
 		fn := reg.LookupFnDecl("capability", name)
 		if fn == nil {
@@ -66,6 +77,53 @@ func TestCapabilityModuleHelperNamesAreBodied(t *testing.T) {
 		}
 		if fn.Body == nil {
 			t.Fatalf("capability.%s body = nil, want Osty helper body", name)
+		}
+	}
+}
+
+func TestCapabilityHostAdaptersExposeInterfaceMethods(t *testing.T) {
+	reg := LoadCached()
+	for _, tc := range []struct {
+		module   string
+		typeName string
+		methods  []string
+	}{
+		{"time", "HostClock", []string{"now", "monotonic", "sleep"}},
+		{"env", "HostEnv", []string{"args", "get", "require", "set", "unset", "vars", "currentDir", "setCurrentDir"}},
+		{"fs", "HostFs", []string{"read", "readToString", "write", "writeString", "exists", "walk", "glob", "create", "remove", "rename", "copy", "mkdir", "mkdirAll"}},
+		{"net", "HostNet", []string{"resolve", "resolveAll", "lookup", "lookupAddr", "connect", "connectTimeout", "listen"}},
+		{"process", "HostProcess", []string{"pid", "hostname", "command", "commandArgs", "shell", "run", "exec"}},
+		{"io", "HostConsole", []string{"print", "println", "eprint", "eprintln", "readLine", "writer"}},
+		{"io", "ConsoleWriter", []string{"write", "flush"}},
+		{"capability", "HostNet", []string{"resolve", "resolveAll", "lookup", "lookupAddr", "connect", "connectTimeout", "listen"}},
+		{"capability", "HostProcess", []string{"pid", "hostname", "command", "commandArgs", "shell", "run", "exec"}},
+	} {
+		for _, method := range tc.methods {
+			if got := reg.LookupMethodDecl(tc.module, tc.typeName, method); got == nil {
+				t.Fatalf("LookupMethodDecl(%s, %s, %s) = nil", tc.module, tc.typeName, method)
+			}
+		}
+	}
+
+	for _, tc := range []struct {
+		module string
+		name   string
+	}{
+		{"time", "systemClock"},
+		{"random", "host"},
+		{"random", "seededCapability"},
+		{"env", "host"},
+		{"fs", "host"},
+		{"net", "host"},
+		{"process", "host"},
+		{"io", "console"},
+		{"io", "stdoutWriter"},
+		{"io", "stderrWriter"},
+		{"capability", "hostNet"},
+		{"capability", "hostProcess"},
+	} {
+		if got := reg.LookupFnDecl(tc.module, tc.name); got == nil {
+			t.Fatalf("LookupFnDecl(%s, %s) = nil", tc.module, tc.name)
 		}
 	}
 }

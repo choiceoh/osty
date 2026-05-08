@@ -64,3 +64,5 @@ lowering remains implementation backlog.
 Capability protocols (`std.capability`) are specified in
 [§20 Capabilities](../20-capabilities.md) because they govern effect
 typing and ambient injection as well as stdlib shape.
+The current stdlib also exposes host-boundary adapter factories for the
+canonical capability set; see §20 for the exact list and migration status.
