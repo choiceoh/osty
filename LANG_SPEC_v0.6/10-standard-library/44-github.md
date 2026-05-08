@@ -185,3 +185,62 @@ github.requireSuccess(response) -> Result<http.Response, Error>
 
 `ApiError` extracts GitHub's common `message` and `documentation_url` fields
 while preserving the raw body for logs and agent transcripts.
+
+#### 10.44.1 GitHub capability surface
+
+Production GitHub code routes through:
+
+1. **`Env`** for token lookup — `env.require("GITHUB_TOKEN")`.
+2. **`Net`** for HTTP transport — `client.send(net, req)`.
+3. **`std.crypto`** for webhook signature verification — pure,
+   no capability needed.
+
+Pure builder functions (`github.repo`, `github.issueQuery`,
+`github.pullRequestDraft`, etc.) build request values and are
+acceptable inside `#[reproducible(scope = "target")]`. Only the
+actual `send*` call is non-reproducible.
+
+#### 10.44.2 Webhook verification flow
+
+GitHub webhooks use HMAC-SHA256 signature verification. The
+verification function:
+
+```osty
+fn verifyWebhook(secret: String, body: Bytes, sigHeader: String) -> Bool {
+    let expected = crypto.hmac.sha256(secret.toBytes(), body)
+    let actual = parseSig(sigHeader)
+    crypto.constantTimeEq(expected, actual)
+}
+```
+
+is *pure* — no capability required. The `constantTimeEq` is
+critical: a vanilla `==` on byte sequences leaks timing
+information that attackers can exploit to forge signatures.
+
+The full webhook intake combines verification + replay window +
+payload parsing — covered by `std.webhook` (§10.45).
+
+#### 10.44.3 Rate limit handling
+
+GitHub returns rate-limit headers (`X-RateLimit-Remaining`,
+`X-RateLimit-Reset`) on every response. Client code that wants to
+respect these should:
+
+1. Read the headers from the `Response`.
+2. Sleep until reset if remaining is 0.
+3. Retry the request.
+
+`std.httpretry` (§10.34) provides the backoff infrastructure;
+`Clock.sleep` honors cancellation so a long-running rate-limit
+wait does not block `taskGroup` shutdown.
+
+#### 10.44.4 Token scope and `#[stability]`
+
+A `pub fn` that takes `github.Client` exposes the underlying token
+*usage* — code that wraps GitHub calls should document the minimum
+required token scope (e.g. `repo`, `repo:read`, `workflow`).
+
+Documenting scope is a `#[purpose]` / `#[doc-comment]` choice, not
+a v0.6 type-level feature. A future audit subcommand
+(`osty audit --github-scope`) is tracked for Phase 5 to
+auto-extract scope hints from doc comments.

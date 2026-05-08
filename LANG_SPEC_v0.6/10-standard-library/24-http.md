@@ -369,3 +369,63 @@ fn handler(req: Request) -> Result<Response, Error> {
 The struct's fields all carry `user_input` because the parser
 preserves the input's tag set on each output field. Authors who
 need *per-field* tag narrowing use `#[taint_field]` (§21.5.8).
+
+#### 10.24.4 Router pattern matching
+
+`Router.find(req)` returns a `RouteMatch?` with extracted path
+parameters. The pattern grammar:
+
+| Pattern | Matches | Captures |
+|---|---|---|
+| `/users` | exact | none |
+| `/users/:id` | one segment after `/users/` | `id` → segment |
+| `/files/*rest` | one or more segments | `rest` → joined path |
+| `/users/:id/posts/:pid` | two-level params | `id`, `pid` |
+| `/static/*path` | catch-all suffix | `path` |
+
+Pattern matching is deterministic — the first matching route in
+registration order wins. Authors building dynamic routers should
+register more-specific patterns before catch-alls.
+
+Path parameters extracted from the URL carry
+`#[taint("user_input")]`. Authors must sanitize before passing
+into sinks. `params.get("id")` returns the raw string.
+
+#### 10.24.5 Cookie and header attacks
+
+The HTTP module does not implement automatic cookie sanitization.
+Setting a cookie value containing CRLF (`\r\n`) is a header-
+injection vulnerability — the request would split into two
+responses. The recommended pattern:
+
+```osty
+fn safeCookie(name: String, value: #[taint("user_input")] String) -> Result<Cookie, Error> {
+    if value.contains("\r") || value.contains("\n") {
+        return Err(Error.new("invalid cookie value"))
+    }
+    Ok(http.cookie(name, value))
+}
+```
+
+A future stdlib `std.http.cookieSafe` sanitizer is tracked for
+Phase 5; v0.6 baseline requires manual validation.
+
+#### 10.24.6 Server-side cancellation
+
+A handler invoked via `http.dispatch` runs in the request task.
+The task is cancelled when the client disconnects mid-request.
+Long-running handlers should check cancellation periodically or
+use cancellation-aware blocking calls:
+
+```osty
+fn slowHandler(req: HttpRequest) -> Result<HttpResponse, Error> {
+    for chunk in processChunks(req.body) {
+        thread.checkCancelled()?       // honor client disconnect
+        publishChunk(chunk)?
+    }
+    Ok(http.okText(""))
+}
+```
+
+`Net.read` and `Net.write` already honor cancellation; explicit
+`thread.checkCancelled()` is needed only for CPU-bound work.

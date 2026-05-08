@@ -110,3 +110,62 @@ Behavior:
 - `literal` and `debugSql` are for diagnostics, migrations, or generated SQL
   text. Runtime query execution should prefer `Query.params` over string
   interpolation.
+
+#### 10.28.1 SQL builder determinism
+
+Every builder in `std.sql` produces deterministic output —
+identical inputs yield byte-identical `Query` values. This is
+critical for:
+
+- **`#[reproducible]` cache keys**: a function that derives a SQL
+  fingerprint hashes the rendered query text and expects bit-
+  identical output across runs.
+- **Migration verification**: the same schema definition must
+  produce the same SQL across runs to validate migrations.
+- **`#[golden]` tests**: snapshot files of generated SQL can be
+  compared byte-exact.
+
+The determinism includes:
+
+- Column ordering (preserves `select(table, columns)` argument
+  order).
+- Conditions in `allOf`/`anyOf` join in argument order.
+- `orderBy` clauses join in argument order with the dialect's
+  default `NULLS FIRST` / `NULLS LAST` (Postgres convention is
+  preserved as-is; MySQL/SQLite emit no `NULLS` clause).
+- Placeholder numbering follows `Query.params` order.
+
+#### 10.28.2 SqlIdent and parameterization
+
+`SqlIdent` (returned from `sql.quoteIdent`) is sealed (§3.4.5) —
+external `SqlIdent { value: "..." }` literals are rejected
+(`E0420`). The seal ensures every identifier reaching a SQL sink
+has been validated against the `[A-Za-z_][A-Za-z0-9_]*` pattern.
+
+```osty
+fn buildOrderBy(col: String) -> Result<Order, Error> {
+    let ident = sql.quoteIdent(col)?      // validates the column name
+    Ok(sql.asc(ident)?)
+}
+```
+
+If `col` is tainted (`#[taint("user_input")]`), `sql.quoteIdent`
+acts as a sanitizer (`#[sanitizes("user_input", into = "sql_safe")]`)
+— the resulting `SqlIdent` carries `sql_safe`, acceptable for
+`Query` construction.
+
+#### 10.28.3 Dialect-specific render output
+
+`sql.render(query, dialect)` converts the internal placeholder
+form (`?`) to the dialect's expected form:
+
+| Dialect | Placeholder | Identifier quote | NULL ordering |
+|---|---|---|---|
+| `Generic` | `?` | `"name"` | dialect default |
+| `Postgres` | `$1, $2, ...` | `"name"` | explicit `NULLS FIRST`/`LAST` |
+| `MySql` | `?` | `` `name` `` | implicit |
+| `Sqlite` | `?` | `"name"` | implicit |
+
+The dialect choice is a runtime decision (typically inferred from
+the `db.Config`). Generated SQL text is byte-identical for the
+same `(query, dialect)` pair.

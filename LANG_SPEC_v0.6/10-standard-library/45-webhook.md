@@ -137,3 +137,77 @@ webhook.clearInFlight(store, key) -> Store
 `Store` is intentionally value-shaped. Small applications can keep it in memory;
 larger services should persist the same `idempotencyKey(event)` in a database or
 queue table before performing side effects.
+
+#### 10.45.1 Webhook input flow tag
+
+The bytes received from a webhook callback carry
+`#[taint("user_input")]` because the sender is not authenticated
+beyond signature verification. Even after signature passes, the
+*payload* is still controlled by an external party.
+
+```osty
+fn handle(env: Env, clock: Clock, req: HttpRequest) -> Result<HttpResponse, Error> {
+    let policy = webhook.stripe(env.require("STRIPE_WEBHOOK_SECRET")?)
+    let store = webhook.emptyStore()
+
+    let outcome = webhook.dispatch(req, policy, clock, store, fn(event) {
+        // event.payload: #[taint("user_input")] Bytes
+        // — process under the same trust assumption as any HTTP body
+        webhook.ack()
+    })
+    Ok(outcome.response)
+}
+```
+
+The signature check is a *replay-prevention* guarantee, not a
+declassification of the payload. Code processing the event payload
+must apply the same flow-tag rules as ordinary user input.
+
+#### 10.45.2 Replay window and Clock determinism
+
+The `webhook.policy` configures an acceptable replay window (e.g.
+"timestamps older than 5 minutes are rejected"). The check uses
+`clock.now()` against the event's signed timestamp; deterministic
+testing requires `FakeClock`:
+
+```osty
+#[test]
+fn test_replay_rejected() {
+    let env = std.capability.testing.FakeEnv(vars = {"STRIPE_WEBHOOK_SECRET": "test"})
+    let clock = std.capability.testing.FakeClock(epoch_ms = 1_700_000_000_000)
+    let req = std.capability.testing.fakeStripeWebhook(timestamp = 1_699_999_900_000)  // 100s old
+
+    let outcome = handle(env, clock, req)?
+    testing.assert(outcome.response.status == 400)  // replay rejected
+}
+```
+
+The replay window is part of the package's policy, not a v0.6
+language feature; the `Clock` capability is the v0.6 mechanism
+that makes the policy testable.
+
+#### 10.45.3 Webhook and `#[error_contract]`
+
+A handler returning `Result<HttpResponse, WebhookError>` carries
+contract entries for each verification failure mode:
+
+```osty
+pub enum WebhookError {
+    SignatureMismatch,
+    Replay,
+    PayloadParseFailed,
+    HandlerFailed(Error),
+}
+
+#[error_contract(
+    WebhookError.SignatureMismatch when "signature did not verify",
+    WebhookError.Replay when "timestamp outside replay window",
+    WebhookError.PayloadParseFailed when "payload was not valid JSON",
+    WebhookError.HandlerFailed when "business handler returned Err",
+)]
+pub fn handle(env: Env, clock: Clock, req: HttpRequest) -> Result<HttpResponse, WebhookError> { ... }
+```
+
+Each variant maps to a distinct HTTP response shape; the contract
+makes the mapping explicit at the type level, and the handler
+function's match exhaustiveness benefits from the contract pruning.

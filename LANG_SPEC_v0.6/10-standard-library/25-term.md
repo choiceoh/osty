@@ -77,3 +77,32 @@ Legacy `term.open()` / `term.readKey()` / etc. (no capability args)
 desugar to `std.term.host.open()` / `std.term.host.readKey()` under
 `--legacy-globals` (v0.6.x only). Outside that mode, bare-arg form
 is `E0780`.
+
+#### 10.25.1 Cursor and screen restoration
+
+Programs that enter raw mode or switch to the alternate screen
+must restore the original state on exit. The recommended pattern
+is `defer term.restore()`:
+
+```osty
+fn runTui(console: Console) -> Result<(), Error> {
+    let term = console.terminal()?
+    term.setRawMode(true)?
+    defer term.restore()              // runs on every exit path
+
+    term.write(term.enterAltScreenSeq())?
+    term.flush()?
+    // ... interactive loop ...
+    Ok(())
+}
+```
+
+`term.restore()` is idempotent — calling it twice is safe. The
+implementation tracks which modes the program changed and reverses
+exactly those.
+
+If the program crashes (uncaught panic, signal-triggered abort)
+without running `defer`, the restore step is skipped — the host
+shell may need manual `reset` to recover the terminal. v0.6
+baseline does not provide a process-exit hook; signal handlers
+that want to restore must do so explicitly (§10.15.4).

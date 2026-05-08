@@ -75,3 +75,57 @@ fn cacheKey(payload: Bytes) -> Bytes {
 `cacheKey` produces byte-identical hashes on every supported
 target. The hash output is ordinary `Bytes`; flow tags ride
 through (a tainted input produces a tainted hash output).
+
+#### 10.12.2 HMAC and constant-time comparison
+
+`crypto.hmac.sha256(key, message)` computes the keyed message
+authentication code. The function is *not* constant-time on the
+key — the `key` length affects the inner padding step. This is
+the standard HMAC contract; constant-time *comparison* of two
+HMAC outputs uses `crypto.constantTimeEq`:
+
+```osty
+fn verifySignature(secret: Bytes, payload: Bytes, sig: Bytes) -> Bool {
+    let computed = crypto.hmac.sha256(secret, payload)
+    crypto.constantTimeEq(computed, sig)
+}
+```
+
+The naive `computed == sig` is a timing attack — bytewise `==`
+short-circuits on the first mismatch, leaking position
+information that attackers can use to forge signatures one byte
+at a time. `constantTimeEq` always inspects every byte regardless
+of mismatches found.
+
+#### 10.12.3 Hash and information flow
+
+The hashing functions preserve flow tags — a tainted input
+produces a tainted hash output. The hash is *not* a sanitizer:
+
+- `crypto.sha256(taintedBytes)` returns tainted `Bytes`.
+- The hash output may flow into a sink only after appropriate
+  sanitization for that sink (e.g. `crypto.constantTimeEq` for
+  HMAC verification doesn't require sanitization since `Bool` is
+  primitive).
+
+This conservative approach catches a class of bugs where authors
+assume hashing "anonymizes" sensitive input — the hash output
+still carries the source's trust set, even though it does not
+carry the source bytes.
+
+#### 10.12.4 Hash algorithm policy
+
+The v0.6 stdlib provides:
+
+- **`sha256`, `sha512`** — recommended for new code. Collision-
+  resistant under cryptographic assumptions.
+- **`sha1`** — legacy compatibility only. SHA-1 is deprecated for
+  new use; collision attacks are practical. Available for
+  protocols that still require it (Git, older HMAC).
+- **`md5`** — legacy compatibility only. Cryptographically broken;
+  collision attacks are trivial. Use only for non-security
+  identifiers (cache keys where collision is acceptable).
+
+`osty lint` flags new uses of `sha1` and `md5` for security-
+sensitive contexts (`L0060`). The flag is a hint — author
+discretion overrides for known-safe cases.
