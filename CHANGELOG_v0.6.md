@@ -40,6 +40,7 @@ rationale.
 | `while cond { body }` | **planned** (G49) | `for cond { body }` 와 동등 lowering. 사용자 0 단계의 breaking change — 식별자 `while` 사용했던 코드는 rename. |
 | `spec { example: ... }` block | **planned** (G43, v0) | example: 만 v0 에 실행, law:/invariant: 는 doc only |
 | Parameter annotation `fn f(#[taint("...")] x: T)` | **planned** (G37) | parameter 위치 annotation 신규 허용 |
+| v0.6 declaration annotation vocabulary | **partial** (G36-G46) | Go parser/resolver and selfhost resolver both recognize the declaration/field/method/variant annotation names. Per-feature semantic gates and parameter-position annotations still land by phase. |
 
 ### Capabilities (G36 — Phase 1, blocking everything else)
 

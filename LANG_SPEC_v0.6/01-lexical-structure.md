@@ -467,4 +467,5 @@ band 의 코드 재사용 또는 §3.8 / §20 / §21 의 의미론 진단으로 
 
 `E0400` (CodeUnknownAnnotation) 는 v0.6 의 21 추가 annotation 모두
 recognize — `internal/ast/ast.go::annotationRules` 와
-`toolchain/resolve.osty::srAnnotAllowedTargets` 가 sync.
+`toolchain/resolve.osty::srAnnotAllowedTargets`, checked-in selfhost
+generated mirror 가 sync.
