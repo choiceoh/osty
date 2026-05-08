@@ -1065,7 +1065,7 @@ const (
 	//
 	// Spec: v0.6 §20.6
 	// Fix: use one of the recognised capability names. User-defined
-	//      capabilities cannot be ambient (`E0781`).
+	//      capabilities cannot be ambient (`E0789`).
 	CodeAmbientUnknownCapability = "E0781"
 
 	// CodeAmbientForwardFailed: a callee at a call site requires a

@@ -53,7 +53,7 @@ use std.strings as strings
 //     would make the LLVM `readnone` promise unsound: non-local writes,
 //     I/O/impure calls, managed allocation, and closures.
 //
-//   runAmbientGate        — E0780 / E0781 (v0.6 G36)
+//   runAmbientGate        — E0780 / E0781 / E0789 (v0.6 G36)
 //     `#[ambient(...)]` is only allowed at entry-point functions and
 //     only accepts the canonical stdlib capability names.
 //
@@ -1457,7 +1457,7 @@ fn pureCollectPatternBindings(arena: AstArena, patIdx: Int, out: List<String>) {
 }
 
 // ---------------------------------------------------------------------
-// E0780 / E0781 — `#[ambient(...)]` entry-point gate (G36, v0.6 §20.3).
+// E0780 / E0781 / E0789 — `#[ambient(...)]` entry-point gate (G36, v0.6 §20.3).
 //
 // `#[ambient]` is restricted to entry-point fns:
 //   - `fn main`
@@ -1467,33 +1467,35 @@ fn pureCollectPatternBindings(arena: AstArena, patIdx: Int, out: List<String>) {
 // Library code must receive capabilities as explicit parameters; an
 // ambient binding outside the entry-point set is `E0780`. Each ambient
 // arg ident must be in the canonical set (`clock`/`rng`/`env`/`fs`/
-// `net`/`process`/`console`); foreign idents are `E0781`.
+// `net`/`process`/`console`). Foreign idents are `E0781`; names that
+// resolve to local user-defined capabilities are `E0789`.
 // ---------------------------------------------------------------------
 
 fn runAmbientGate(cx: ElabCx) {
     let arena = cx.ast.arena
+    let userCapabilities = collectReproducibleCapabilityNames(arena)
     for declIdx in arena.decls {
         let node = astArenaNodeAt(arena, declIdx)
         match node.kind {
-            AstNFnDecl -> checkAmbientFn(cx, arena, node),
+            AstNFnDecl -> checkAmbientFn(cx, arena, node, userCapabilities),
             AstNStructDecl -> {
-                checkAmbientNonFnDecl(cx, arena, node)
-                checkAmbientMethods(cx, arena, node)
+                checkAmbientNonFnDecl(cx, arena, node, userCapabilities)
+                checkAmbientMethods(cx, arena, node, userCapabilities)
             },
             AstNEnumDecl -> {
-                checkAmbientNonFnDecl(cx, arena, node)
-                checkAmbientMethods(cx, arena, node)
+                checkAmbientNonFnDecl(cx, arena, node, userCapabilities)
+                checkAmbientMethods(cx, arena, node, userCapabilities)
             },
-            AstNInterfaceDecl -> checkAmbientNonFnDecl(cx, arena, node),
-            AstNTypeAlias -> checkAmbientNonFnDecl(cx, arena, node),
-            AstNLet -> checkAmbientNonFnDecl(cx, arena, node),
-            AstNLetDecl -> checkAmbientNonFnDecl(cx, arena, node),
+            AstNInterfaceDecl -> checkAmbientNonFnDecl(cx, arena, node, userCapabilities),
+            AstNTypeAlias -> checkAmbientNonFnDecl(cx, arena, node, userCapabilities),
+            AstNLet -> checkAmbientNonFnDecl(cx, arena, node, userCapabilities),
+            AstNLetDecl -> checkAmbientNonFnDecl(cx, arena, node, userCapabilities),
             _ -> {},
         }
     }
 }
 
-fn checkAmbientNonFnDecl(cx: ElabCx, arena: AstArena, node: AstNode) {
+fn checkAmbientNonFnDecl(cx: ElabCx, arena: AstArena, node: AstNode, userCapabilities: List<String>) {
     if node.extra < 0 {
         return
     }
@@ -1502,7 +1504,7 @@ fn checkAmbientNonFnDecl(cx: ElabCx, arena: AstArena, node: AstNode) {
     }
     let name = ambientDeclName(node)
     cx.env.local.diagnostics.push(diagAmbientWrongSite(name, node.start, node.end))
-    checkAmbientArgs(cx, arena, node.extra)
+    checkAmbientArgs(cx, arena, node.extra, userCapabilities)
 }
 
 fn ambientDeclName(node: AstNode) -> String {
@@ -1512,16 +1514,16 @@ fn ambientDeclName(node: AstNode) -> String {
     astNodeKindName(node.kind)
 }
 
-fn checkAmbientMethods(cx: ElabCx, arena: AstArena, parent: AstNode) {
+fn checkAmbientMethods(cx: ElabCx, arena: AstArena, parent: AstNode, userCapabilities: List<String>) {
     for memberIdx in parent.children {
         let m = astArenaNodeAt(arena, memberIdx)
         if m.kind == AstNFnDecl {
-            checkAmbientFn(cx, arena, m)
+            checkAmbientFn(cx, arena, m, userCapabilities)
         }
     }
 }
 
-fn checkAmbientFn(cx: ElabCx, arena: AstArena, fn_: AstNode) {
+fn checkAmbientFn(cx: ElabCx, arena: AstArena, fn_: AstNode, userCapabilities: List<String>) {
     if fn_.extra < 0 {
         return
     }
@@ -1533,8 +1535,9 @@ fn checkAmbientFn(cx: ElabCx, arena: AstArena, fn_: AstNode) {
         cx.env.local.diagnostics.push(diagAmbientWrongSite(name, fn_.start, fn_.end))
     }
     // Validate each ambient arg ident regardless of site — even on a
-    // legal entry point, an unknown capability name is `E0781`.
-    checkAmbientArgs(cx, arena, fn_.extra)
+    // legal entry point, an unknown capability name is `E0781`, while
+    // user-defined capabilities are `E0789`.
+    checkAmbientArgs(cx, arena, fn_.extra, userCapabilities)
 }
 
 fn isAmbientEntryPoint(arena: AstArena, annotIdx: Int, fnName: String) -> Bool {
@@ -1553,7 +1556,7 @@ fn isAmbientEntryPoint(arena: AstArena, annotIdx: Int, fnName: String) -> Bool {
     false
 }
 
-fn checkAmbientArgs(cx: ElabCx, arena: AstArena, annotIdx: Int) {
+fn checkAmbientArgs(cx: ElabCx, arena: AstArena, annotIdx: Int, userCapabilities: List<String>) {
     if annotIdx < 0 {
         return
     }
@@ -1562,20 +1565,20 @@ fn checkAmbientArgs(cx: ElabCx, arena: AstArena, annotIdx: Int) {
         return
     }
     if node.text == "ambient" {
-        validateAmbientArgs(cx, arena, node)
+        validateAmbientArgs(cx, arena, node, userCapabilities)
         return
     }
     if node.text == "__group" {
         for childIdx in node.children {
             let child = astArenaNodeAt(arena, childIdx)
             if child.kind == AstNAnnotation && child.text == "ambient" {
-                validateAmbientArgs(cx, arena, child)
+                validateAmbientArgs(cx, arena, child, userCapabilities)
             }
         }
     }
 }
 
-fn validateAmbientArgs(cx: ElabCx, arena: AstArena, ambient: AstNode) {
+fn validateAmbientArgs(cx: ElabCx, arena: AstArena, ambient: AstNode, userCapabilities: List<String>) {
     for argIdx in ambient.children {
         let arg = astArenaNodeAt(arena, argIdx)
         // Annotation args are stored as `AstNAnnotation` children with
@@ -1587,7 +1590,11 @@ fn validateAmbientArgs(cx: ElabCx, arena: AstArena, ambient: AstNode) {
             continue
         }
         if !isCanonicalAmbientName(argName) {
-            cx.env.local.diagnostics.push(diagAmbientUnknownCapability(argName, arg.start, arg.end))
+            if isUserAmbientCapabilityName(argName, userCapabilities) {
+                cx.env.local.diagnostics.push(diagAmbientUserCapability(argName, arg.start, arg.end))
+            } else {
+                cx.env.local.diagnostics.push(diagAmbientUnknownCapability(argName, arg.start, arg.end))
+            }
         }
     }
 }
@@ -1600,6 +1607,16 @@ fn isCanonicalAmbientName(name: String) -> Bool {
         || name == "net"
         || name == "process"
         || name == "console"
+}
+
+fn isUserAmbientCapabilityName(name: String, userCapabilities: List<String>) -> Bool {
+    let lowerName = strings.toLower(name)
+    for capabilityName in userCapabilities {
+        if name == capabilityName || lowerName == strings.toLower(capabilityName) {
+            return true
+        }
+    }
+    false
 }
 
 // ---------------------------------------------------------------------
