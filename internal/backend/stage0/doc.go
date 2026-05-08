@@ -15,6 +15,6 @@
 //
 // See docs/osty_self_bootstrap_design.md for the bootstrap plan,
 // retirement conditions, and the roadmap from P1 (this skeleton)
-// through P5 (CI matrix). v0.5 spec surface is unchanged — stage0
+// through P5 (CI matrix). v0.6 spec surface is unchanged — stage0
 // operates entirely below the front-end.
 package stage0

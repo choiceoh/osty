@@ -21405,7 +21405,7 @@ func opTryParsePostfix(p *OstyParser, lhs int) int {
 	// Osty: /tmp/selfhost_merged.osty:7962:5
 	if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontIdent{})) && tok.text == "as" && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontQuestion{})) {
 		// Osty: /tmp/selfhost_merged.osty:7966:9
-		opErrorFull(p, "`as?` must be written without whitespace between `as` and `?`", "write `as?` as a single token (no space)", "OSTY_GRAMMAR_v0.5 §28", "E0202")
+		opErrorFull(p, "`as?` must be written without whitespace between `as` and `?`", "write `as?` as a single token (no space)", "OSTY_GRAMMAR_v0.6 §28", "E0202")
 		// Osty: /tmp/selfhost_merged.osty:7967:9
 		_ = opAdvance(p)
 		// Osty: /tmp/selfhost_merged.osty:7968:9

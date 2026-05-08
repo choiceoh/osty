@@ -1,8 +1,9 @@
 # Osty Grammar — Rules & EBNF (v0.6)
 
-v0.5 의 R1–R26 결정과 EBNF 를 baseline 으로, v0.6 에서 추가/변경된 rule
-만 본 문서에 명시한다. v0.5 grammar 의 본문은
-[`OSTY_GRAMMAR_v0.5.md`](./OSTY_GRAMMAR_v0.5.md) 가 계속 권위.
+R1–R26 결정과 EBNF baseline 위에서 v0.6 에서 추가/변경된 rule 만
+본 문서에 *delta* 로 명시한다. 통합 grammar 는 별도 파일
+`OSTY_GRAMMAR_v0.6_FULL.md` (Phase 1 종료 시 생성) 참조 — 본 문서는
+*delta only*.
 
 > **Status**: v0.6 spec revision 동기 (G36, G37, G39-G42, G44, G45,
 > G47, G48). spec 본문은

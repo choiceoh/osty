@@ -33,7 +33,6 @@ gap closure tables.
   *one-document overview*.
 - `../OSTY_GRAMMAR_v0.6.md` — formal grammar (R1–R29 + EBNF). The
   lexer/parser ground truth.
-- `../OSTY_GRAMMAR_v0.5.md` and earlier — historical grammar snapshots.
 - `../SPEC_GAPS.md` — archive of resolved gaps per version.
 - `../CHANGELOG_v0.6.md` — implementation status (what is *shipped*
   vs what is *spec*).

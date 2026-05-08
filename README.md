@@ -4,8 +4,8 @@
 - **Type**: README
 A work-in-progress implementation of the **Osty** programming language — a
 general-purpose, statically-typed, GC'd language specified in
-[`LANG_SPEC_v0.5/`](./LANG_SPEC_v0.5/README.md) with grammar fixed in
-[`OSTY_GRAMMAR_v0.5.md`](./OSTY_GRAMMAR_v0.5.md).
+[`LANG_SPEC_v0.6/`](./LANG_SPEC_v0.6/README.md) with grammar fixed in
+[`OSTY_GRAMMAR_v0.6.md`](./OSTY_GRAMMAR_v0.6.md).
 
 The target is a self-hosted native runtime and LLVM backend. Current scope:
 front-end (lex → parse → resolve → type-check), multi-file packages and
@@ -33,7 +33,7 @@ native-only through the LLVM backend.
 | Diagnostics (`error[E0002]:` with caret, hints, notes) | done |
 | Name resolution (single + multi-file, workspace, typo suggestions) | done |
 | Formatter (`internal/format`) | done |
-| Type checker (`internal/check`) | done for the shipped v0.5 front-end core — generic instantiation, structural interface checks, exhaustiveness, builder protocol, function-value arity, closure pattern params. Algorithm: bidirectional + local unification, spec in [`LANG_SPEC_v0.5/02a-type-inference.md`](./LANG_SPEC_v0.5/02a-type-inference.md); `osty check --inspect` observes it at runtime |
+| Type checker (`internal/check`) | done for the shipped v0.6 front-end core — generic instantiation, structural interface checks, exhaustiveness, builder protocol, function-value arity, closure pattern params. Algorithm: bidirectional + local unification, spec in [`LANG_SPEC_v0.6/02a-type-inference.md`](./LANG_SPEC_v0.6/02a-type-inference.md); `osty check --inspect` observes it at runtime |
 | Linter (`internal/lint`, 28 codes across L0001–L0070 spanning unused / dead-code / naming / simplify / complexity / docs, `--fix` / `--fix-dry-run`, policy via `[lint]` in `osty.toml`) | done |
 | Multi-file packages (`resolve` loader/package/workspace) | done |
 | LSP (`internal/lsp`, wired as `osty lsp`) | done — hover, definition, formatting, documentSymbol, lint diagnostics, editor policy backed by toolchain sources |
@@ -138,8 +138,8 @@ parity.
 
 ```
 osty/
-├── LANG_SPEC_v0.5/          # Current spec prose / design target
-├── OSTY_GRAMMAR_v0.5.md     # Current EBNF grammar + decision log
+├── LANG_SPEC_v0.6/          # Current spec prose / design target
+├── OSTY_GRAMMAR_v0.6.md     # Current EBNF grammar + decision log
 ├── SPEC_GAPS.md             # Resolved-gap archive by language version
 ├── LLVM_MIGRATION_PLAN.md   # Native backend migration history/plan
 ├── LLVM_PHASE1_BASELINE.md  # Legacy Go-backend baseline for LLVM migration
@@ -396,7 +396,7 @@ osty parse FILE        # parse to AST, emit JSON
 osty resolve FILE|DIR  # name resolution; directory = package mode (--scopes for tree)
 osty check FILE|DIR    # lex + parse + resolve + type-check (diagnostics only)
                        # --inspect prints one record per expression with the
-                       # inference rule applied (see LANG_SPEC_v0.5/02a-type-inference.md)
+                       # inference rule applied (see LANG_SPEC_v0.6/02a-type-inference.md)
 osty typecheck FILE    # same as check, plus a per-expression type dump
 osty lint FILE|DIR     # style + correctness warnings (L0xxx codes)
 osty fmt FILE          # airepair + format to canonical style (see --check, --write, --engine)
@@ -434,7 +434,7 @@ Global flags (precede the subcommand):
   unique code; applies to `check`, `typecheck`, `resolve`, `lint`, `parse`, `tokens`
 - `--inspect` — `check`-only: emit one record per expression naming the
   inference rule and the type/hint the checker used. Pairs with `--json` for
-  NDJSON output. See [`LANG_SPEC_v0.5/02a-type-inference.md`](./LANG_SPEC_v0.5/02a-type-inference.md).
+  NDJSON output. See [`LANG_SPEC_v0.6/02a-type-inference.md`](./LANG_SPEC_v0.6/02a-type-inference.md).
 
 `fmt`-specific flags (after the subcommand):
 
@@ -811,8 +811,8 @@ regenerations.
 
 ## Contributing
 
-Spec work in this repo is tracked under **v0.5**
-(`LANG_SPEC_v0.5/`, `OSTY_GRAMMAR_v0.5.md`), and the shipped project
+Spec work in this repo is tracked under **v0.6**
+(`LANG_SPEC_v0.6/`, `OSTY_GRAMMAR_v0.6.md`), and the shipped project
 edition is **0.5** today: `osty new` / `osty init` write
 `edition = "0.5"`, while manifest validation still accepts the
 historical `0.3` / `0.4` range for existing projects. Future surface

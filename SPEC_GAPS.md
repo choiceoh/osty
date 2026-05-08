@@ -2,13 +2,14 @@
 
 - **Scope**: Resolved spec gaps — v0.4 edge-case decisions, archived by language version
 - **Type**: Decision log
-`LANG_SPEC_v0.5/` + `OSTY_GRAMMAR_v0.5.md` 기준.
+`LANG_SPEC_v0.6/` + `OSTY_GRAMMAR_v0.6.md` 기준.
 
-**v0.5 시점 open gap: 없음.** v0.4 사용 코퍼스에서 관찰된 15 개
-개선점(G20-G34) 을 v0.5 에서 일괄 결정했다.
+**v0.6 시점 open gap: 없음.** v0.4 사용 코퍼스에서 관찰된 15 개
+개선점(G20-G34) 을 v0.5 에서 일괄 결정했고, v0.6 에서는 G36-G48 중
+G36/G37/G39-G42/G44/G45/G47/G48 (10 결정) 을 baseline 동결했다.
 
-스펙은 v0.2 부터 폴더 구조이다. §X (X = 1..18) 는 `LANG_SPEC_v0.5/NN-*.md`
-파일. §10 의 서브섹션은 `LANG_SPEC_v0.5/10-standard-library/NN-*.md`.
+스펙은 v0.2 부터 폴더 구조이다. §X (X = 1..21) 는 `LANG_SPEC_v0.6/NN-*.md`
+파일. §10 의 서브섹션은 `LANG_SPEC_v0.6/10-standard-library/NN-*.md`.
 §19 는 v0.4 additive minor 로 도입된 toolchain-only 서브언어.
 
 ---
