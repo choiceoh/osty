@@ -532,6 +532,37 @@ Tests run in parallel by default. Use `--serial` to force sequential
 execution. Tests depending on shared mutable state should use
 `std.sync` primitives or opt into serial execution.
 
+#### 11.6.1 Capability fakes and parallelism
+
+Capability fakes (§11.18) are designed to be safe under parallel
+test execution. Each fake is **per-test instance** — constructing
+`std.capability.testing.FakeClock(epoch_ms = N)` returns a fresh
+instance that other tests cannot observe. There is no global fake
+state to coordinate.
+
+The exception is `FakeFs.global()` (rare) — a shared in-memory
+filesystem that multiple tests opt into for end-to-end scenarios.
+Tests that touch the global instance must opt into `--serial` or
+guard with `std.sync` primitives.
+
+For deterministic execution under `--serial`, the seed (§11.7) is
+still printed and reproducible — the parallel-vs-serial choice
+affects test *concurrency*, not test *outcome*.
+
+#### 11.6.2 Capability adapter thread safety
+
+Production capability adapters (`time.systemClock`, `random.host`,
+etc.) are required to be thread-safe across the worker pool
+(§8.7.1). This is what allows tests using production adapters to
+run in parallel without explicit synchronization. Custom
+capability implementations that do *not* satisfy thread safety
+must declare so via `#[capability_thread_unsafe]` (rare) or the
+package must opt into `--serial` for affected tests.
+
+`osty audit --capabilities` reports any user-defined capability
+that omits the thread-safety attestation; this is a soft warning,
+not an error.
+
 ### 11.7 Test Order
 
 Within each execution mode (parallel or serial), `osty test` chooses a
@@ -558,6 +589,70 @@ belongs in helper functions called from each test, or in a
 `testing.context` block. Test-local cleanup uses `defer`. Because tests
 may run in parallel (§11.6), any shared fixture must be constructed
 per-test or guarded with `std.sync` primitives.
+
+#### 11.8.1 Setup via `#[fixture]`
+
+The v0.6 `#[fixture(name)]` annotation (§3.12.3) is the canonical
+form for parametric setup:
+
+```osty
+#[fixture(name = "freshDb")]
+fn freshDb() -> Db { std.capability.testing.FakeDb() }
+
+#[fixture(name = "loadedDb")]
+fn loadedDb() -> Db {
+    let db = freshDb()
+    db.exec(insertSql(sampleAlice()))
+    db
+}
+
+#[example(input = "<Db>", uses = "loadedDb", output = "Some(User{...})")]
+fn findAlice(db: Db) -> Option<User> {
+    db.queryOne("SELECT * FROM users WHERE email = 'alice@example.com'")
+}
+```
+
+Each fixture invocation produces a fresh instance — there is no
+shared state between examples that share the same fixture name.
+
+#### 11.8.2 Teardown via `defer`
+
+Test-local cleanup uses `defer` in the test function body:
+
+```osty
+fn testWithTempFile() {
+    let fs = std.capability.testing.FakeFs.empty()
+    let path = "/tmp/test-{thread.testId()}.tmp"
+    fs.write(path, "data")?
+    defer fs.remove(path)              // runs on test exit (success or failure)
+
+    let result = processFile(fs, path)?
+    testing.assertEq(result.size, 4)
+}
+```
+
+For real-fs tests (rare; capability fakes are preferred), the
+`defer fs.remove(path)` cleanup runs on every exit path including
+test failure, so leftover artifacts are cleaned up reliably.
+
+#### 11.8.3 Shared expensive setup
+
+If a fixture is genuinely expensive (large dataset load, etc.) and
+per-test construction is too slow, the recommended pattern is a
+*module-scoped const fn* that builds the immutable shared data
+once:
+
+```osty
+const fn sampleDataset() -> Bytes { ... }   // built at compile time
+
+#[fixture(name = "sampleData")]
+fn sampleData() -> Bytes { sampleDataset() }   // returns the shared bytes
+```
+
+Compile-time evaluation removes the runtime cost. For data that
+*cannot* be built at compile time (network-fetched fixtures), use
+`std.sync.Once` and accept that affected tests must run with
+`--serial`.
 
 ---
 

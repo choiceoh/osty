@@ -77,6 +77,51 @@ they may pin a worker for the duration of the call. A runtime is free
 to grow its worker pool or hand off to a carrier thread to preserve
 progress on other tasks.
 
+#### 8.0.1 Scheduler interaction with v0.6 surfaces
+
+The M:N scheduler design composes with the v0.6 surfaces as
+follows:
+
+**Capability access from any worker.** A capability instance is
+shared (reference-semantic). A task that calls `net.fetch(...)`
+may be running on any worker; the capability's host adapter is
+internally synchronized for cross-worker access. Stdlib adapters
+(`time.systemClock`, `random.host`, etc.) all satisfy this
+contract.
+
+**Flow tags are task-local.** Each task carries its own tag-set
+view of the values it manipulates. Tasks do not share tag state
+across the worker pool — sending a tagged value through a channel
+preserves the tag (§8.5.1), but worker migration of a task does
+not affect the tag set its bindings carry.
+
+**Cancellation token is task-bound, not worker-bound.** When a
+`taskGroup` cancels, the runtime sets a per-task flag. Workers
+check the flag at yield points and propagate `Err(Cancelled
+{ ... })`. Worker migration during a blocking operation does not
+lose the cancel state — the flag rides with the task.
+
+**`#[reproducible]` is not affected by worker scheduling.**
+Reproducibility is a property of the *function's logical
+behavior* (same input → same output). Worker assignment is
+implementation-detail; a `#[reproducible]` function produces the
+same result regardless of which worker happens to execute it.
+
+#### 8.0.2 Scheduler and `#[budget]`
+
+Runtime budget keys (`time_ms`, `p99_ms`) measure *wall-clock
+time* — the time elapsed regardless of worker placement. A
+function whose budget is `time_ms = 5` may run on a busy worker
+(blocked behind other tasks) or a free worker (executing
+immediately); the measurement is end-to-end, including any wait
+time.
+
+For deterministic budget testing, `osty bench --budget` runs each
+benchmark in isolation by default — no other tasks contend for
+workers during the timed loop. The flag `--bench-contention`
+allows simulating multi-task contention if a benchmark wants to
+measure that explicitly.
+
 ### 8.1 Structured Concurrency
 
 All concurrent tasks belong to a `taskGroup` scope. There is no detached

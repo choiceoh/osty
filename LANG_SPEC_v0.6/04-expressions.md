@@ -106,6 +106,57 @@ Struct literals in the `if` head must be parenthesized — see §4.1.1
 (restricted expression position). The same rule applies to `for` and
 `match` heads.
 
+#### 4.2.1 If as expression vs statement
+
+`if` is both:
+
+- **Expression** when the surrounding context expects a value
+  (`let x = if ... else ...`). Both arms must be present and
+  produce the same type.
+- **Statement** when used purely for control flow (`if cond {
+  body }` with no surrounding expression). The arm result is
+  discarded and the `else` clause is optional.
+
+The compiler decides expression vs statement contextually; there
+is no syntactic distinction. An `if` with no `else` in expression
+position is `E0671` (missing else branch).
+
+#### 4.2.2 Information flow through if branches
+
+Each branch's value carries the union of its own tag set and the
+condition's tag set:
+
+```osty
+let user: #[taint("user_input")] User = ...
+let label = if user.isAdmin { "admin" } else { user.name }
+//          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+//          label: #[taint("user_input")] String
+//          (carries user's tag because the condition reads user)
+```
+
+This is conservative — even a static-string arm picks up the
+condition's tag set if the condition consults a tainted value.
+This conservativism prevents a class of timing-channel bugs where
+the *choice* of branch leaks the condition to an observer.
+
+#### 4.2.3 Capability flow through if branches
+
+Capabilities captured by the surrounding scope remain in scope
+inside both branches. There is no per-branch capability re-binding:
+
+```osty
+fn handle(net: Net, fs: Fs, mode: Mode) -> Result<(), Error> {
+    if mode.usesNet {
+        net.fetch(...)
+    } else {
+        fs.read(...)
+    }
+}
+```
+
+A `#[reproducible]` function may use `if` freely — the scope
+constraint applies to the whole function body, not per branch.
+
 ### 4.3 Match Expressions
 
 ```osty
@@ -185,6 +236,60 @@ concretizes the leftmost missing component and uses `_` for the rest.
 For closed enum, `Option`, and `Result` payloads, the witness recurses
 into the missing payload shape; for open or scalar domains, the payload
 is `_`. Guarded arms do not contribute to coverage.
+
+#### 4.3.3 Match and v0.6 surfaces
+
+`match` interacts with five v0.6 surfaces:
+
+**Error contract pruning.** When matching on a function call that
+carries `#[error_contract]`, exhaustiveness considers only contract
+variants. Arms that target uncontracted variants emit `W0413` (dead-
+per-contract). See §7.5.1.
+
+**Match-compat fallback.** A function annotated
+`#[match_compat("X.Y", fallback = name)]` (§3.14.4) wraps its
+internal `match` so that a future enum variant added at version
+later than `X.Y` falls into the named fallback handler instead of
+crashing the exhaustiveness check.
+
+**Information flow through match arms.** Each arm body inherits
+the scrutinee's flow tag set on its bound variables:
+
+```osty
+let raw: #[taint("user_input")] String = ...
+match parse(raw) {
+    Some(parsed) -> use(parsed),    // parsed: #[taint("user_input")] T
+    None -> defaultValue(),
+}
+```
+
+The tag rides through the pattern destructuring — `Some(parsed)`
+binds `parsed` with the same tag set the source had. Sanitization
+must still happen explicitly before the value reaches a sink.
+
+**Capability bindings in arm bodies.** Capabilities captured in
+the surrounding scope remain in scope inside arm bodies:
+
+```osty
+fn dispatch(net: Net, evt: Event) -> Result<(), Error> {
+    match evt {
+        Event.Get(url)  -> net.fetch(url),       // net in scope
+        Event.Post(url, body) -> net.send(url, body),
+        Event.Close -> Ok(()),
+    }
+}
+```
+
+There is no per-arm capability re-binding; the closure-style
+capture rules (§4.7.1) apply uniformly.
+
+**`#[reproducible]` and match.** A `#[reproducible]` function may
+contain `match` expressions; the determinism contract requires
+that every arm body satisfies the same reproducibility scope, and
+the scrutinee is a deterministic value. Matching against a
+`Map.iter()` element inside a `#[reproducible]` is `E0786` (the
+underlying iteration order is non-deterministic, so the match
+arm chosen could vary).
 
 ### 4.4 Loops
 
@@ -397,6 +502,51 @@ The right operand is evaluated only when the left is `None`. `??` binds
 tighter than assignment but looser than comparison. `?.` binds at the
 same precedence as `.`.
 
+#### 4.6.1 `?.` and information flow
+
+`?.` chain access preserves flow tags through every step:
+
+```osty
+let user: #[taint("user_input")] User? = ...
+let city: #[taint("user_input")] String? = user?.address?.city
+```
+
+If the chain short-circuits on `None`, the result `None` carries
+the same tag set the original optional carried — flow tracking is
+not gated on the value being present.
+
+#### 4.6.2 `??` and laziness
+
+The right operand of `??` is evaluated lazily only when the left
+side is `None`. Side-effecting defaults are uncommon but supported:
+
+```osty
+let logger = appConfig?.logger ?? defaultLogger()
+```
+
+`defaultLogger()` runs only when `appConfig` lacks a `logger`. The
+flow tag of the result is the union of the present-side's tags
+and the default-side's tags — *neither side's tag dominates*
+because either could be the value the consumer sees.
+
+#### 4.6.3 `??` is `Option`-only
+
+`??` accepts `Option<T>` on the left and `T` on the right. Using
+it on `Result<T, E>` is `E0672` — the recommended idiom is
+`.unwrapOr(d)` for `Result`.
+
+```osty
+// ❌ E0672
+let cfg = loadConfig() ?? defaultConfig()
+
+// ✅
+let cfg = loadConfig().unwrapOr(defaultConfig())
+```
+
+The asymmetry is intentional: `Result<T, E>` carries an error
+value that `??` would silently discard. Forcing the explicit
+`unwrapOr` keeps the discard visible at the call site.
+
 ### 4.7 Closures
 
 ```osty
@@ -441,6 +591,72 @@ closure expressions; annotations are a declaration-level feature.
 > literal, range, variant, or or-pattern parameters are rejected with
 > `E0741`.
 
+#### 4.7.1 Closures and capability capture
+
+A closure that references a capability binding from its enclosing
+scope captures the capability by reference, identical to any other
+captured binding. The closure's lifetime extends the capability's
+effective lifetime — the GC keeps the capability alive as long as
+the closure is reachable:
+
+```osty
+fn buildHandler(net: Net) -> fn(String) -> Result<Bytes, Error> {
+    |url| net.fetch(url)         // closure captures `net` by reference
+}
+```
+
+Because capabilities are interface fat pointers, the captured
+reference is constant-cost — no per-call lookup. Multiple
+closures created from the same enclosing scope share the same
+capability instance.
+
+A closure that *does not* reference any capability is "pure" in
+the sense that it runs without consulting any host effect. The
+language does not enforce this distinction at the closure type
+level — `fn(T) -> R` does not record capability dependencies.
+Authors who want a strong "no effects" guarantee should define a
+named function annotated `#[pure]` (§3.8.11) instead.
+
+#### 4.7.2 Closures and information flow
+
+A closure that captures a tainted value preserves the tag set
+when invoked:
+
+```osty
+let raw: #[taint("user_input")] String = req.queryParam("q") ?? ""
+let render = |suffix: String| "{raw} {suffix}"
+let out = render("end")          // out: #[taint("user_input")] String
+```
+
+The closure body's expression result inherits both the captured
+value's tags and the parameter's tags. There is no implicit
+declassification at the closure boundary.
+
+#### 4.7.3 Closures stored in data structures
+
+A closure stored in a `List<fn(T) -> R>`, a `Map<K, fn(T) -> R>`,
+or a struct field continues to satisfy the v0.6 capability and
+flow rules — its type is the function shape, and the captured
+state is opaque to the type system. This is why the recommended
+pattern for "callback that needs an effect" is to take the
+capability as a parameter rather than capture it:
+
+```osty
+// ❌ Captures `net` — opaque dependency.
+let handlers: List<fn(String) -> Result<Bytes, Error>> = [
+    |url| net1.fetch(url),
+    |url| net2.fetch(url),
+]
+
+// ✅ Caller passes the capability — explicit dependency.
+let handlers: List<fn(Net, String) -> Result<Bytes, Error>> = [
+    |net, url| net.fetch(url),
+    |net, url| net.fetchAlt(url),
+]
+```
+
+The second form makes the dependency visible at the call site.
+
 ### 4.8 String Interpolation
 
 See §1.6.3.
@@ -481,6 +697,46 @@ arguments are available there. Once the callable is stored as
 `fn(...) -> ...`, that metadata is erased: calls through the function
 value are positional-only and must pass exactly the declared arity.
 
+#### 4.9.1 Method calls and capability flow
+
+A method call `obj.method(args)` evaluates `obj` once, then
+dispatches to the method. When `obj` is a capability instance
+(e.g. `clock.now()`), the method call is the canonical site where
+the capability's effect is observed. The compiler tracks each such
+call for `osty audit --capabilities` reporting.
+
+Method calls inherit the receiver's flow tag set when the method
+preserves the source data:
+
+```osty
+let raw: #[taint("user_input")] String = ...
+let upper = raw.toUpperCase()           // upper: #[taint("user_input")] String
+let len = raw.len()                     // len: Int (no tag — primitive int)
+```
+
+The rule: if the method returns the receiver's data shape
+(generally `String` → `String`, `List<T>` → `List<T>`), the tag
+set rides through. If the method returns a primitive that does
+not carry the source data (`len`, `count`), the tag set drops.
+This is *not* declassification — the primitive simply doesn't
+carry the source content.
+
+#### 4.9.2 Static methods and namespaced calls
+
+Static method calls (`Type.fnName(args)`) are not method calls in
+the receiver sense; they are namespaced function calls. Capability
+flow rules apply identically to ordinary function calls:
+
+```osty
+let parsed = Email.parse(form)?         // calls a free function under Email
+let id = Uuid.parse(text)?              // same shape
+```
+
+The `Type.method` syntax is sugar for `<package>.<Type>.method` at
+the resolver level; there is no implicit receiver. Authors should
+not confuse this with method dispatch — `Email` is a type, not a
+value.
+
 ### 4.10 Indexing
 
 ```osty
@@ -511,6 +767,51 @@ let n = s.charCount()              // O(n) scan
 
 `Bytes` indexing follows the same rules but never aborts on UTF-8
 boundaries, since it carries no encoding contract.
+
+#### 4.10.1 Indexing and information flow
+
+Indexing preserves flow tags element-wise. `xs[i]` returns an
+element with `xs`'s tag set; `xs[a..b]` returns a slice with the
+same tag set:
+
+```osty
+let userInput: #[taint("user_input")] List<String> = ...
+let first = userInput[0]              // first: #[taint("user_input")] String
+let head = userInput[0..3]            // head: #[taint("user_input")] List<String>
+```
+
+The aborts-on-out-of-range semantics do not declassify — a panic
+exits the process; recovery is not part of the language.
+
+#### 4.10.2 Indexing and `#[reproducible]`
+
+A `#[reproducible]` function may index `List<T>` and `String`
+freely — the indexing operation is deterministic given the
+collection and the index. `Map<K, V>` indexing (`m[k]`) is also
+deterministic — the value at a given key is determined by the
+map's contents.
+
+The non-deterministic operation is *iteration order*, not
+indexing. A `#[reproducible]` function may use `m["specific_key"]`
+without issue; only `m.iter()` / `m.keys()` / `m.values()` are
+flagged.
+
+#### 4.10.3 Slicing patterns
+
+Slice expressions (`xs[a..b]`) produce a new collection of the
+same type. Common idioms:
+
+| Idiom | Meaning |
+|---|---|
+| `xs[..n]` | First `n` elements |
+| `xs[n..]` | All elements from index `n` |
+| `xs[..]` | Whole collection (rarely useful — equivalent to `xs`) |
+| `s[i..j]` | Substring; aborts on UTF-8 boundary mismatch |
+| `bytes[i..j]` | Sub-byte-sequence; never aborts on boundary |
+
+Slices share underlying storage with the source — no copy. This
+keeps slicing constant-time but means a slice keeps the source
+alive for the slice's lifetime (GC reachability rule).
 
 ### 4.11 Block Scope
 

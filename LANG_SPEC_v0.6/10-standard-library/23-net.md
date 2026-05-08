@@ -133,3 +133,34 @@ are excluded from the standard library (§10.3). Use Go FFI with
 **`TcpConn` as `Reader`/`Writer`.** `TcpConn` satisfies both `Reader`
 and `Writer` (§16), so `io.copy`, `io.readAll`, and `io.writeAll` work
 directly on connections.
+
+#### 10.23.1 Net capability and information flow
+
+Bytes received from a TCP/UDP connection carry the
+`#[taint("net_input")]` source tag (§21.18.1). A handler that
+parses the bytes into structured data preserves the tag through
+the parser:
+
+```osty
+fn handleConn(conn: TcpConn) -> Result<(), Error> {
+    let raw = io.readAll(conn)?       // raw: #[taint("net_input")] Bytes
+    let req = parseHttpRequest(raw)?  // req: #[taint("net_input")] HttpRequest
+    let body = req.body                // body: #[taint("net_input")] Bytes
+    ...
+}
+```
+
+Sanitization happens at sink boundaries, not at the receive
+boundary — the design intent is that *every* byte from the
+network is treated as adversarial input until validated.
+
+#### 10.23.2 DNS as a flow source
+
+`net.resolve(addr)` is a flow source — the returned `Addr` is
+data the remote DNS server (or local cache) returned, which
+should be treated as untrusted. The v0.6 baseline marks DNS
+output `#[taint("net_input")]`.
+
+For SSRF prevention, parse the resolved address through
+`std.security.checkUrl` or apply the address-block validation
+(§10.34 `std.security`) before opening a connection to it.

@@ -328,6 +328,35 @@ let mut b = 2
 (a, _) = makePair()              // assign first only
 ```
 
+#### 3.3.1 Tuple destructuring rules
+
+The LHS must be a tuple pattern; element count must match the RHS
+tuple. Mismatch is `E0710`. Each LHS slot must be one of:
+
+- A mutable identifier (declared with `let mut`).
+- The wildcard `_` (skip).
+- A field-access form (`obj.field`) where the receiver is mutable.
+- An index form (`xs[i]`) where the collection is mutable.
+
+Nested tuple patterns are not permitted (`((a, b), c) = ...` is
+`E0711`). Authors who need nested destructuring use `let` with a
+nested pattern, not multiple assignment.
+
+#### 3.3.2 Multiple assignment and v0.6 surfaces
+
+Multiple assignment behaves identically per slot to the single-
+assignment rules. Specifically:
+
+- **Capability bindings** — a `mut`-declared capability binding
+  may be reassigned via tuple LHS. Reassignment swaps the
+  underlying capability instance through that binding.
+- **Flow tags** — each assignment slot inherits the corresponding
+  RHS element's tag set. Tagged values flow through tuple
+  destructuring without declassification.
+- **Reproducibility** — multiple assignment inside a
+  `#[reproducible]` function follows the same scope rules as
+  single assignment; no special exemption.
+
 ### 3.4 Structs
 
 ```osty
@@ -969,6 +998,60 @@ pub type Pair<T> = (T, T)
 ```
 
 Aliases are transparent; they create no new type.
+
+#### 3.7.1 Type aliases and v0.6 surfaces
+
+Type aliases interact with the v0.6 annotation surface in the
+following ways:
+
+**Capability aliases.** An alias for a capability bag struct is
+common in workspaces with many capability-typed parameters:
+
+```osty
+pub type AppCaps = (Clock, Rng, Env, Fs, Net, Console)
+
+fn run(caps: AppCaps) -> Result<(), Error> {
+    let (clock, rng, env, fs, net, console) = caps
+    ...
+}
+```
+
+Tuple aliases are convenient but lose the named-field readability
+of a `struct` bag (§20.17.1). For more than 3 capabilities, prefer
+a struct.
+
+**Flow-tagged aliases.** Aliases preserve flow tags transparently.
+A type alias `type UserText = String` admits the same tag rules as
+`String` directly — there is no implicit decoration applied by the
+alias.
+
+**`#[stability]` on aliases.** A `pub type` participates in the
+public API surface. Changing the RHS of a `pub type` is:
+
+| Change | `stable` alias | `experimental` alias |
+|---|---|---|
+| RHS expanded to a wider type (e.g. `Map<String, Int>` → `Map<String, Cell>` where `Cell.fromInt` works) | major bump | minor bump |
+| RHS narrowed | major bump | minor bump |
+| RHS structurally compatible reorganization (e.g. inlining a sub-alias) | patch bump | patch bump |
+
+The compatibility rules are cosmetic — Osty's structural type
+system means an alias's *meaning* is its RHS, and any change to
+the RHS is a SemVer-relevant change at the level of the alias's
+clients.
+
+#### 3.7.2 Generic type aliases
+
+A `pub type` may carry generic parameters:
+
+```osty
+pub type Result_<T> = Result<T, AppError>      // app-specific Result alias
+pub type Cache<K> = Map<K, CacheEntry<V>>      // bound K, V via context
+```
+
+The generic parameters appear in the alias's surface; adding /
+removing them follows generic struct evolution rules. Aliases do
+not introduce monomorphization themselves — they expand at use
+sites and the underlying generic struct is monomorphized.
 
 ### 3.8 Annotations
 

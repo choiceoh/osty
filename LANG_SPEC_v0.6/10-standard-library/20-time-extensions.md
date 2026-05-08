@@ -139,4 +139,59 @@ These are compile-time recognized so they do not require an explicit
 that the type checker sees normally. The float forms (`1.5.s`) are
 analogous methods on `Float`.
 
+#### 10.20.1 Clock determinism and reproducibility
+
+`Clock.now()` is non-deterministic — the system time advances
+between calls. A `#[reproducible]` function therefore cannot
+receive `Clock` as a parameter (`E0784`).
+
+The pattern for "I need a timestamp inside reproducible code":
+
+```osty
+// Outer (non-reproducible) captures the clock value.
+fn writeSnapshot(clock: Clock, fs: Fs, payload: Bytes) -> Result<(), Error> {
+    let timestamp = clock.now().toEpochMillis()
+    let key = computeKey(timestamp, payload)
+    fs.write("snap/{key.toHex()}.bin", payload)
+}
+
+// Inner (reproducible) takes the captured timestamp.
+#[reproducible(scope = "target")]
+fn computeKey(timestamp: Int64, payload: Bytes) -> Bytes32 {
+    sha256(payload + timestamp.toBytes())
+}
+```
+
+`FakeClock(epoch_ms = N)` returns the configured `N` on every
+`now()` call — a deterministic sequence for tests. `clock.sleep`
+in production blocks; `FakeClock.sleep` returns immediately while
+honoring the surrounding `taskGroup` cancel.
+
+#### 10.20.2 Cancellation and timeouts
+
+`clock.sleep(d)` is a cancellation point (§8.4.2). When the
+surrounding task is cancelled, the sleep returns
+`Err(Cancelled { ... })` regardless of how much time remains. This
+is what enables `withTimeout` patterns (§8.4.5):
+
+```osty
+fn withTimeout<T>(clock: Clock, d: Duration,
+                  body: fn(Group) -> Result<T, Error>) -> Result<T, Error> {
+    taskGroup(|g| {
+        g.spawn(|| {
+            clock.sleep(d)?
+            g.cancel(Cancelled.New("timeout"))
+            Ok(())
+        })
+        body(g)
+    })
+}
+```
+
+The timer task sleeps; the body runs in parallel. When the timer
+fires, it cancels the group; the body's blocking calls return
+`Cancelled`. When the body completes first, the timer's
+`clock.sleep(d)?` itself returns `Cancelled` (because the group is
+cancelled by the body's success).
+
 ---

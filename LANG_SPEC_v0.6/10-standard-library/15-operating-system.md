@@ -88,3 +88,43 @@ os.pid()                  ⟶  process.pid()
 os.hostname()             ⟶  process.hostname()
 os.onSignal(sig, handler) ⟶  process.onSignal(sig, handler)
 ```
+
+#### 10.15.1 Process capability and information flow
+
+`Process.exec(cmd, args)` is *not* a flow sink — argv-style
+process invocation does not invoke a shell, so each `args[i]`
+arrives at the child process as a literal argument. Tainted args
+are accepted without sanitization; the kernel does not interpret
+them.
+
+`Process.execShell(cmdline)` *is* a sink (`#[requires("shell_safe")]`).
+The shell *does* interpret metacharacters, so tainted strings
+flowing into the cmdline must pass `std.shell.quote` first:
+
+```osty
+fn ping(proc: Process, host: #[taint("user_input")] String) -> Result<(), Error> {
+    // ✅ argv-style — no shell.
+    proc.exec("ping", ["-c", "1", host])
+
+    // ❌ shell-style — needs shell_safe.
+    let safe = std.shell.quote(host)
+    proc.execShell("ping -c 1 {safe}")
+}
+```
+
+The asymmetry between `exec` and `execShell` is what makes the
+canonical recommendation "use `exec` whenever possible" testable
+at the type level.
+
+#### 10.15.2 Path helpers and information flow
+
+The `os.path.*` helpers (`join`, `dirname`, `basename`,
+`canonical`, `absolute`) are pure transformations on `String`.
+They preserve flow tags element-wise and are *not* registered as
+sanitizers — running `os.path.join(parts)` on tainted parts
+produces a tainted joined path.
+
+The path *sanitizer* is `std.path.normalize` / `Path.parse(...)?`
+— these registered with `#[sanitizes("user_input", into =
+"path_safe")]` and produce a `Path` value acceptable to `Fs.*`
+sinks.

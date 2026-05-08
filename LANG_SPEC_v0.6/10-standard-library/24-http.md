@@ -312,3 +312,60 @@ http.newRouter() -> Router
 - `Response.withCookie` and `Response.setCookie` model a single
   `Set-Cookie` header line because `Headers` is single-valued. Higher
   multiplicity will require a future runtime/header representation change.
+
+#### 10.24.1 HTTP and information flow — sink registry
+
+`std.http` registers four sinks that participate in the v0.6 flow
+type system (§21.18.3):
+
+| Sink | Required tag | Trigger |
+|---|---|---|
+| `http.redirect(target)` | `url_safe` | `target` is a redirect Location |
+| `http.movedPermanently(target)` | `url_safe` | same |
+| `http.found(target)` / `http.seeOther(target)` | `url_safe` | same |
+| `http.respondHtml(body)` | `html_safe` | body is rendered as HTML |
+| `template.render(...)` | `html_safe` | template body is HTML |
+
+Sources that produce tainted strings (`req.queryParam`,
+`req.body`, `req.cookie`, `req.path`) must pass through the
+appropriate sanitizer before reaching these sinks.
+
+#### 10.24.2 HTTP and capability matrix
+
+Production HTTP code routes through three capability touchpoints:
+
+1. **`Net` for connection setup** — `net.httpClient()` and
+   `net.httpServer()` both consume a `Net` capability for the
+   underlying transport.
+2. **`Console` for logging** — `log.info` etc. are dispatched via
+   ambient `Console` (§10.10).
+3. **`Clock` for timeouts** — request timeout values are
+   `Duration` constants; the actual deadline check uses the task's
+   ambient cancellation, which `Clock.sleep` respects.
+
+A test of a handler injects `FakeNet`, `FakeConsole`, and
+`FakeClock` — a fully hermetic test environment.
+
+#### 10.24.3 Body parsing and flow tag inheritance
+
+`req.json::<T>()` returns `T` whose type carries `req.body`'s flow
+tag set. This means a JSON-decoded user-input form inherits the
+tag set element-wise:
+
+```osty
+struct UserCreate {
+    pub email: String,
+    pub name: String,
+}
+
+fn handler(req: Request) -> Result<Response, Error> {
+    let body: #[taint("user_input")] UserCreate = req.json::<UserCreate>()?
+    // body.email and body.name both carry user_input
+    let email = Email.parse(body.email)?      // sanitizes → email_safe
+    ...
+}
+```
+
+The struct's fields all carry `user_input` because the parser
+preserves the input's tag set on each output field. Authors who
+need *per-field* tag narrowing use `#[taint_field]` (§21.5.8).
