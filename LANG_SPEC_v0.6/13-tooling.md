@@ -347,3 +347,398 @@ suitable for security review and migration tracking.
 | `osty test --doc` | `///` doc-test blocks (baseline since v0.5) | runs as test |
 
 `osty bench --budget` (§3.15.2) gates runtime budget regressions.
+
+### 13.9 `osty context` JSON schema
+
+`osty context <symbol> --format=json` 출력은 다음 schema 를 따른다
+(`https://osty.dev/schemas/context/v1.json`).
+
+```json
+{
+  "$schema": "https://osty.dev/schemas/context/v1.json",
+  "symbol": "std.user.createUser",
+  "kind": "function",
+  "package": "std.user",
+  "file": "internal/stdlib/modules/user.osty",
+  "line": 42,
+  "signature": {
+    "params": [
+      {
+        "name": "email",
+        "type": "String",
+        "annotations": [
+          {"name": "taint", "args": ["user_input"]}
+        ]
+      },
+      {"name": "db", "type": "Db", "annotations": []}
+    ],
+    "returns": "Result<UserId, UserCreateError>",
+    "generic_params": [],
+    "where_bounds": []
+  },
+  "stability": {"level": "stable", "since": "0.6"},
+  "purpose": "이메일 검증 후 DB 에 사용자 저장",
+  "examples": [
+    {"input": ["alice@example.com", "<Db>"], "output": "Ok(42)", "uses_fixture": "fakeDb"},
+    {"input": ["invalid", "<Db>"], "output": "Err(UserCreateError.Format)", "uses_fixture": "fakeDb"}
+  ],
+  "spec_refs": [
+    {"section": "§10.30.user.create", "title": "User creation"}
+  ],
+  "error_contract": [
+    {"variant": "UserCreateError.Format", "when": "missing @ or wrong format"},
+    {"variant": "UserCreateError.DomainBlocked", "when": "domain in blocklist"},
+    {"variant": "UserCreateError.DbConflict", "when": "duplicate email"}
+  ],
+  "effects": {
+    "capabilities_required": ["Db"],
+    "reproducible": null,
+    "pure": false,
+    "taint_sources": ["user_input"],
+    "taint_sanitizes": [],
+    "taint_sinks": ["sql_safe"]
+  },
+  "budget": {
+    "static": null,
+    "runtime": {"time_ms": 50, "p99_ms": 200}
+  },
+  "fixtures_referenced": ["fakeDb"],
+  "doc_comment": "사용자를 생성한다. ...",
+  "diagnostics_emitted": ["E0410"],
+  "callees": []
+}
+```
+
+#### 13.9.1 Schema field reference
+
+| Field | Type | Source |
+|---|---|---|
+| `symbol` | `String` | qualified name |
+| `kind` | `"function" \| "method" \| "struct" \| "enum" \| "interface" \| "type-alias" \| "constant"` | declaration kind |
+| `package` | `String` | enclosing package path |
+| `file`, `line` | `String`, `Int` | declaration site |
+| `signature` | object | full type signature (params / return / generics) |
+| `signature.params[].annotations` | array | parameter-position annotations (`#[taint]`, `#[requires]`) |
+| `stability` | object \| null | `#[stability]` 데이터 |
+| `purpose` | `String` \| null | `#[purpose("...")]` |
+| `examples` | array | `#[example(input=, output=, uses=)]` 모두 |
+| `spec_refs` | array | `#[spec("§X.Y")]` + 동일 함수의 모든 spec ref |
+| `error_contract` | array | `#[error_contract]` entries |
+| `effects.capabilities_required` | array of capability type names | 함수 시그니처에서 capability 파라미터 추출 |
+| `effects.reproducible` | object \| null | `#[reproducible(scope=...)]` 데이터 |
+| `effects.pure` | `Bool` | `#[pure]` 부착 여부 |
+| `effects.taint_sources` | array | `#[taint("...")]` source tag list |
+| `effects.taint_sanitizes` | array | `#[sanitizes]` source/trust 매핑 |
+| `effects.taint_sinks` | array | parameter-position `#[requires]` trust tag list |
+| `budget` | object | static / runtime 분리 |
+| `fixtures_referenced` | array of names | `#[example(uses="X")]` 의 X |
+| `doc_comment` | `String` \| null | `///` doc 첫 단락 |
+| `diagnostics_emitted` | array of code strings | 함수가 발화 가능한 진단 코드 (compiler analysis) |
+| `callees` | array | `--recursive` 시에만 채워짐 |
+
+#### 13.9.2 Output formats
+
+```sh
+osty context <symbol>                          # default text (markdown)
+osty context <symbol> --format=json            # 위 schema
+osty context <symbol> --format=jsonl           # bulk export 시 1 symbol = 1 line
+osty context <symbol> --recursive              # depth=1 callees 포함
+osty context <symbol> --recursive=N            # depth=N
+osty context current://path:line:col           # LSP cursor
+osty context --search=<query>                  # symbol 검색 후 첫 매치
+osty context --all-stdlib --format=jsonl       # 전체 stdlib export
+```
+
+#### 13.9.3 LSP integration
+
+LSP server 는 `textDocument/hover` 응답을 같은 schema 의 markdown
+rendering 으로 반환. AI agent 는 JSON 직접 query 또는 LSP custom
+request `osty/context`.
+
+```python
+# AI agent pseudo-code
+import subprocess, json
+ctx = json.loads(subprocess.check_output(
+    ["osty", "context", "std.user.createUser", "--format=json"]
+))
+prompt = f"""You are working on {ctx['symbol']}.
+Purpose: {ctx['purpose']}
+Failure modes:
+{chr(10).join(f'  {e["variant"]} — {e["when"]}' for e in ctx['error_contract'])}
+"""
+```
+
+### 13.10 `osty publish` algorithm
+
+`osty publish` 는 packaging + SemVer 검증 + manifest signing 을 수행
+(G44, §3.14.3 의 정식 명세).
+
+#### 13.10.1 Workflow
+
+```
+1. Read previous manifest from registry (or git tag)
+2. Compute API surface diff against current workspace
+3. Classify each change as Breaking / CompatAdd / Patch
+4. Compare diff severity vs version bump
+   - Breaking + non-major bump      → E2100
+   - CompatAdd + patch-only          → E2102
+   - Version downgrade               → E2101
+   - Experimental change             → W2100
+5. On success, sign manifest (ed25519, A6) + upload
+```
+
+#### 13.10.2 Surface diff algorithm
+
+```osty
+fn computeDiff(prev: Manifest, curr: Manifest) -> DiffReport {
+    let mut report = DiffReport::new()
+
+    for prevItem in prev.surface {
+        if let currItem = curr.surface.findByQualifiedName(prevItem.name) {
+            classifyChange(prevItem, currItem) into report
+        } else {
+            // 1. #[stability(remove="X.Y")] 의 X.Y 도달 시
+            if prevItem.deprecatedAt(curr.version) {
+                report.add(REMOVED_AS_PROMISED, prevItem)
+            } else {
+                report.add(BREAKING_REMOVE, prevItem)
+            }
+        }
+    }
+
+    for currItem in curr.surface {
+        if !prev.surface.containsByQualifiedName(currItem.name) {
+            report.add(COMPAT_ADD, currItem)
+        }
+    }
+
+    report
+}
+```
+
+#### 13.10.3 Surface 분류 (요약)
+
+§3.14.3.2 의 정식 표가 권위. 가장 흔한 변경:
+
+| 변경 | Severity |
+|---|---|
+| 함수 제거 | BREAKING |
+| 함수 시그니처 변경 (param/return) | BREAKING |
+| 신규 enum variant + `#[since]` | COMPAT-ADD |
+| 신규 enum variant 없음 (`#[since]`) | BREAKING |
+| 신규 default arg trailing | COMPAT-ADD |
+| 신규 default arg non-trailing | BREAKING (G20 named call shift) |
+| `#[reproducible]` 추가 | COMPAT-ADD (callee 보장 강화) |
+| `#[reproducible]` 제거 | BREAKING (callee 보장 약화) |
+| `#[error_contract]` variant 추가 | BREAKING (caller match exhaustiveness) |
+| `#[budget]` 강화 (allocs ↓, time_ms ↓) | BREAKING |
+| `#[budget]` 완화 | COMPAT-ADD |
+| body / `#[purpose]` / `#[spec]` 등 metadata | PATCH |
+
+#### 13.10.4 Manifest 형식
+
+```json
+{
+  "$schema": "https://osty.dev/schemas/manifest/v1.json",
+  "package": "github.com/x/y",
+  "version": "0.6.0",
+  "stability_default": "experimental",
+  "surface": [
+    {
+      "kind": "function",
+      "name": "std.user.createUser",
+      "stability": "stable",
+      "since": "0.6",
+      "signature": {/* §13.9.1 와 동일 */}
+    }
+  ],
+  "signature": {
+    "ed25519_pub_key_id": "<key-fingerprint>",
+    "signed_at": "2026-05-08T00:00:00Z"
+  }
+}
+```
+
+#### 13.10.5 Edge cases
+
+- **Generic instance variation**: monomorphization 결과는 surface 아님. *type-level* 시그니처만.
+- **Structural interface 변경**: `pub interface X { fn m(...) }` 의 `m` 변경은 BREAKING — 워크스페이스 내 *모든 구현체* 에 영향. publish 시 transitive 분석.
+- **Trait alias / type alias transitive**: `type T = Foo<Int>` 후 `Foo` 변경 시 `T` 도 변경. 추적 필요.
+- **Re-export (`pub use`) 변경**: re-exported 원본의 변경이 re-export site 도 영향.
+
+#### 13.10.6 Dry-run
+
+```sh
+osty publish --dry-run
+```
+
+manifest diff + classification 만 출력 (서명 / upload 안 함). CI 의
+*publish readiness* 검증에 사용.
+
+```sh
+osty publish --dry-run --report=summary
+# Output:
+#   2 BREAKING (require major bump)
+#   3 COMPAT-ADD (require minor bump)
+#   1 PATCH
+#   Current bump: 0.6.0 → 0.6.1 (patch)
+#   ❌ Insufficient bump — major required
+```
+
+### 13.11 `osty validate-spec` algorithm
+
+`#[spec("§X.Y")]` 어노테이션의 anchor 가 `LANG_SPEC_v0.6/` 안에
+존재하는지 검증.
+
+#### 13.11.1 Workflow
+
+```
+1. 워크스페이스 walk → 모든 #[spec(...)] anchor 수집
+2. LANG_SPEC_v0.6/ 의 모든 markdown 파일 walk → heading anchor 카탈로그
+3. 각 #[spec] anchor 가 카탈로그에 있는지 확인
+4. 누락 → E0790
+5. 카탈로그에서 다른 chapter 로 이동했으면 (heading text 일치) → W0790 +
+   suggested replacement
+6. 모든 anchor 통과 → 0 errors
+```
+
+#### 13.11.2 Anchor 형식
+
+`#[spec("§X.Y")]` 의 `§X.Y` 는 다음 패턴 매치:
+
+- `§N` → `## N. <title>` heading
+- `§N.M` → `### N.M <title>` heading
+- `§N.M.K` → `#### N.M.K <title>` heading
+- `§10.X.<id>` → `LANG_SPEC_v0.6/10-standard-library/<NN>-<id>.md` 의 `## 10.X` heading
+
+#### 13.11.3 CLI
+
+```sh
+osty validate-spec                          # 전체 워크스페이스
+osty validate-spec ./toolchain              # 특정 디렉토리
+osty validate-spec --strict                 # W0790 도 error 처리
+osty validate-spec --update                 # suggested replacement 자동 적용
+```
+
+`osty check --strict` 와 `just prepush` 가 자동 호출.
+
+#### 13.11.4 CI 통합
+
+```yaml
+- name: Validate spec links
+  run: osty validate-spec --strict
+  # PR 가 spec section 을 옮기면 #[spec] 어노테이션도 함께 갱신해야 통과
+```
+
+### 13.12 Audit workflow
+
+§13.7 이 enumerate 한 4 audit subcommand 의 *통합 사용* 패턴.
+
+#### 13.12.1 Per-PR baseline diff
+
+```yaml
+# .github/workflows/security-audit.yml
+- name: Run audits
+  run: |
+    osty audit --all --format=json > audit.json
+
+- name: Compare to baseline
+  run: |
+    diff <(jq -r '.[] | "\(.subcommand) \(.symbol)"' audit.json | sort) \
+         <(cat .ci/audit-baseline.txt | sort) \
+      || (echo "::error::audit drift — review and update baseline" && exit 1)
+```
+
+baseline 파일은 `.ci/audit-baseline.txt` — 매 정상 머지 후 갱신:
+
+```
+trusted-declassify auth.session.fromSession
+trusted-declassify api.legacy.fromLegacyClient
+trusted-construct std.cache.internalCache
+match-compat handlers.dispatch
+legacy-globals util.timestamp
+```
+
+#### 13.12.2 신규 site 검토 워크플로
+
+```
+1. PR 가 새 trusted-declassify 추가
+   → CI 가 audit drift 감지 → 머지 차단
+2. 보안 reviewer 가 reason 검토 + approve
+3. .ci/audit-baseline.txt 갱신 (해당 entry 추가)
+4. 머지 가능
+```
+
+이는 *audit 드리프트가 보안 review 의 trigger* 가 되는 정책. v0.6
+의 secure-by-default 정신 (legacy escape 의 visibility 강제).
+
+### 13.13 Test subcommand 통합 reference
+
+§13.8 의 detailed CLI:
+
+| Mode | Discovers | Output |
+|---|---|---|
+| `osty test` | `#[test]` / `test_*` / `bench_*` (with `--bench`) | pass/fail summary |
+| `osty test --spec` | `spec { example: }` clause | per-clause pass/fail |
+| `osty test --example` | `#[example(input=, output=, uses=)]` | per-example pass/fail |
+| `osty test --golden` | `#[golden(path, mode)]` | snapshot 비교 결과 |
+| `osty test --update-golden` | (same) | snapshot 갱신 + report |
+| `osty test --doc` | `///` doctest blocks | doc 안 example 실행 |
+| `osty test --bench` | `bench*` + `#[bench]` | benchmark 결과 |
+| `osty test --bench --benchtime <dur>` | (same) | auto-tuned iterations |
+| `osty test --bench --budget` | (same) | runtime budget regression check |
+
+#### 13.13.1 Filter / 병렬 / Random seed
+
+```sh
+osty test --filter=name           # 이름 패턴 매칭
+osty test --serial                # 병렬 비활성
+osty test --seed=N                # test order randomization seed 고정
+osty test --report=junit          # JUnit XML 출력 (CI 통합)
+osty test --report=json           # JSON
+```
+
+`--seed` 는 *재현 가능한* test order 를 보장. CI 가 fail 시 같은
+seed 로 reproducer 생성 가능.
+
+### 13.14 Tool integration matrix
+
+| Annotation / Surface | `osty test` | `osty check` | `osty doc` | `osty context` | `osty publish` | `osty audit` |
+|---|---|---|---|---|---|---|
+| `#[test]` | ✓ discover | | | | | |
+| `#[bench]` | ✓ discover | | | | | |
+| `#[golden]` | ✓ snapshot | | | | | |
+| `#[example]` | ✓ auto-test | | ✓ render | ✓ JSON | | |
+| `#[fixture]` | ✓ seed | | ✓ render | ✓ JSON | | |
+| `#[purpose]` | | | ✓ render | ✓ JSON | | |
+| `#[spec("§X.Y")]` | | ✓ validate | ✓ inline ref | ✓ JSON | | |
+| `spec { example: }` | ✓ auto-test | | ✓ render | ✓ JSON | | |
+| `#[error_contract]` | | ✓ enforce | ✓ table | ✓ JSON | ✓ surface diff | |
+| `#[reproducible]` | | ✓ enforce | | ✓ JSON | ✓ surface diff | |
+| `#[stability]` | | | ✓ banner | ✓ JSON | ✓ enforce | |
+| `#[since]` | | | ✓ render | ✓ JSON | ✓ surface diff | |
+| `#[match_compat]` | | ✓ enforce | | | | ✓ enumerate |
+| `#[budget]` | ✓ runtime check | ✓ static check | | ✓ JSON | ✓ surface diff | |
+| `#[ambient]` | | ✓ enforce | | | | |
+| `#[taint]` / `#[sanitizes]` | | ✓ enforce (Phase 5) | | ✓ JSON | ✓ surface diff | |
+| `#[trusted_declassify]` | | | | | | ✓ enumerate |
+| `#[trusted_construct]` | | | | | | ✓ enumerate |
+| `#[sealed_construct]` | | ✓ enforce | | | ✓ surface diff | |
+
+### 13.15 Forward compatibility
+
+tooling surface 의 SemVer 영향:
+
+| 변경 | 영향 |
+|---|---|
+| 새 subcommand 추가 | additive |
+| 새 `--flag` 추가 | additive (flag default 가 기존 동작 보존 시) |
+| Existing flag 의 default 변경 | breaking |
+| Subcommand 제거 | breaking |
+| JSON schema 의 새 field 추가 | additive (consumer 가 unknown field 무시) |
+| JSON schema 의 field 제거 | breaking |
+| Output format 변경 (text rendering) | non-breaking 가정 (스크립트 의존 시 `--report=json` 사용 권장) |
+
+`osty publish` 자체의 `osty publish` 가 publish surface 인 것은
+recursive 하지만 — `osty` CLI 자체는 의 publish 통한 SemVer 검증
+대상은 아니다 (CLI 는 별도 release flow).
