@@ -630,3 +630,22 @@ while the export symbol is link-reachable.
   compiler-emitted root array per §19.10, not the stack).
 - Volatile / atomic-fence / inline-assembly primitives. The first
   GC delivered through this surface is single-threaded STW.
+
+### 19.11 v0.6 surface relevance
+
+The runtime sublanguage (this chapter) is *below* the v0.6
+annotation surfaces — capabilities / flow / reproducible / etc.
+operate on user-level types and have no analog at the runtime
+intrinsic level. Specifically:
+
+- Runtime intrinsics never appear in `osty audit` capability or
+  flow reports (they're toolchain-internal, not user surface).
+- A `#[reproducible]` user function may transitively call
+  `raw.alloc` etc. — the runtime's allocation is a deterministic
+  function of size + alignment from the user's perspective. The
+  resulting `RawPtr` is *not* used directly by user code (it would
+  fail `E0770` — privileged-only).
+- `#[budget(allocs)]` counts at the user-level allocation site,
+  which lowers to `raw.alloc`. The mapping is one-to-one for
+  scalar types and one-to-N for composite types (the compiler
+  reports the lowered count via `osty audit --allocs`).

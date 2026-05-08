@@ -56,6 +56,80 @@ testing.fail(msg: String) -> Never
 testing.context(msg: String, body: fn())
 ```
 
+#### 11.1.1 v0.6 assertion patterns
+
+The v0.6 baseline assertion API is unchanged from v0.5 in
+signatures and semantics. Three idiomatic patterns surface in
+v0.6 capability-typed code:
+
+**Pattern 1 — Capability fake + assertEq.** Most v0.6 tests of
+capability-typed code follow this shape:
+
+```osty
+fn test_buildId_format() {
+    let clock = std.capability.testing.FakeClock(epoch_ms = 1_000_000)
+    let rng = std.capability.testing.FakeRng(seed = 42)
+    let id = buildId(clock, rng)
+    testing.assertEq(id, "1000000-1608637542")
+}
+```
+
+The fakes are deterministic — the same epoch/seed always produces
+the same output — so `assertEq` is reliable.
+
+**Pattern 2 — `expectOk` for capability-returning functions.**
+Functions that return `Result<T, Error>` after capability work
+test cleanly with `expectOk`:
+
+```osty
+fn test_loadConfig_succeeds() {
+    let fs = std.capability.testing.FakeFs.fromLayout({"/etc/x": "{...}"})
+    let cfg = testing.expectOk(loadConfig(fs, "/etc/x"))
+    testing.assertEq(cfg.port, 8080)
+}
+```
+
+`expectOk` returns the unwrapped `T` on success and aborts the
+test on `Err` with the error's `message()` printed. This is
+shorter than `match` for the common success-test path.
+
+**Pattern 3 — `expectError` with downcast.** Tests of error paths
+use `expectError` paired with `Error.downcast::<T>()`:
+
+```osty
+fn test_parseEmail_rejects_blank() {
+    let err = testing.expectError(parseEmail(""))
+    let parsed = err.downcast::<EmailError>()
+    testing.assertEq(parsed, Some(EmailError.Format))
+}
+```
+
+This pattern is the canonical form for asserting *which* error
+variant occurred when the function returns a wide
+`Result<_, Error>` rather than a contracted concrete enum.
+
+#### 11.1.2 Assertion failures and capability fakes
+
+When an assertion fails inside a test that uses capability fakes,
+the fake's captured state is not automatically printed — the
+failure message includes only the asserted values. Authors who
+want to inspect fake state on failure use `testing.context`:
+
+```osty
+fn test_writes_log_file() {
+    let fs = std.capability.testing.FakeFs.empty()
+    runApp(fs)
+    testing.context("fs layout: {fs.snapshot()}", || {
+        testing.assert(fs.exists("/var/log/app.log"))
+    })
+}
+```
+
+`fs.snapshot()` (and the equivalent inspectors on each
+`std.capability.testing.Fake*` type) returns a deterministic
+string rendering of the captured state, useful in assertion
+context lines.
+
 ### 11.2 Detailed Failure Output
 
 The compiler recognizes the above `testing` functions specifically and

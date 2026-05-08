@@ -88,6 +88,88 @@ reproducibility analysis 는 후속 단계이다.
 
 함수는 capability 를 **명시적 파라미터**로 받는다:
 
+#### 20.2.1 Capability values are interface values
+
+각 capability 는 ordinary structural interface 다. v0.6 의 7
+canonical capability 모두 새 type kind 가 아닌 평범한 `interface`
+선언이며, 따라서:
+
+- `let c: Clock = systemClock` — interface upcast 자유.
+- `fn f(c: Clock)` — interface value parameter (fat pointer +
+  vtable).
+- `List<Clock>` — 다른 인스턴스를 한 컬렉션에 담는 것 가능.
+- `Clock` 의 method 는 `Clock` 인스턴스 를 첫 인자 (`self`) 로
+  받는 일반 method.
+
+이 표면 선택의 결과:
+1. Capability 는 *값* — pass / store / return 가능.
+2. Vtable dispatch — production adapter / FakeClock 등 다른 impl
+   이 같은 site 에서 호환 가능.
+3. New language construct 도입 *제로* — capability 는 Osty 의
+   기존 type system 위에 layer.
+
+#### 20.2.2 Naming convention
+
+Production capability 는 lowercase 의 verb-shape:
+
+```
+clock.now()
+rng.next()
+env.get(k)
+fs.read(p)
+net.connect(addr)
+process.exec(cmd, args)
+console.println(s)
+```
+
+Construction은 helper factory:
+
+```
+time.systemClock        // returns Clock
+random.host             // returns Rng
+random.seeded(seed)     // returns Rng (deterministic — for derivation)
+env.host                // returns Env
+fs.host                 // returns Fs
+capability.hostNet      // returns Net
+capability.hostProcess  // returns Process
+io.console              // returns Console
+```
+
+테스트용 fake은 `std.capability.testing.Fake*`:
+
+```
+std.capability.testing.FakeClock(epoch_ms = 1_000_000)
+std.capability.testing.FakeRng(seed = 42)
+std.capability.testing.FakeEnv(vars = {"K": "V"})
+std.capability.testing.FakeFs.fromLayout({"/etc/x": "..."})
+std.capability.testing.FakeNet.routes({"host:80": canned})
+std.capability.testing.FakeProcess(stubs = [...])
+std.capability.testing.FakeConsole()
+```
+
+#### 20.2.3 Pass-by-value 의미
+
+Capability 는 reference-semantic value (interface fat pointer).
+함수에 전달 시 fat pointer 가 복사되며 — 같은 underlying capability
+를 가리킨다.
+
+```osty
+fn run(net: Net) {
+    let n2 = net                  // 같은 Net 가리키는 두 binding
+    fetchA(n2)
+    fetchB(net)                   // 둘 다 같은 인스턴스 사용
+}
+```
+
+이로 인해:
+- 같은 `Net` instance 를 sibling task 에 spawn 시켜도 안전 — 모든
+  capability 가 internally synchronized 이도록 §20.9 규정.
+- 함수가 `Net` 을 store/return 가능 — 일반 interface value 와 동일.
+  단 비추 — capability 의 lifetime 을 construction context 외부로
+  확장하지 말 것 (§20.17.1 권고).
+
+함수는 capability 를 **명시적 파라미터**로 받는다:
+
 ```osty
 fn buildId(clock: Clock, rng: Rng) -> String {
     "{clock.now().toEpochMillis()}-{rng.next()}"
@@ -158,6 +240,57 @@ ambient 불가 (`E0781`).**
 라이브러리 코드는 항상 명시. ambient 는 **boundary 위에서만 허용**. 이는
 *테스트 가능성*을 강제 — 라이브러리 함수는 mockable Clock / Rng 를 받아 테스트
 시 fake 주입 가능.
+
+#### 20.3.1.1 Ambient name binding pinpoint
+
+`#[ambient(name1, name2, ...)]` 의 *name* 부분은 prelude 의 *고정
+표* 를 따른다. 다음 7 이름만 허용:
+
+| Name | Capability type | Default factory |
+|---|---|---|
+| `clock` | `Clock` | `time.systemClock` |
+| `rng` | `Rng` | `random.host` |
+| `env` | `Env` | `env.host` |
+| `fs` | `Fs` | `fs.host` |
+| `net` | `Net` | `capability.hostNet` |
+| `process` | `Process` | `capability.hostProcess` |
+| `console` | `Console` | `io.console` |
+
+다른 이름은 `E0789` (unknown capability name in `#[ambient]`).
+사용자가 자기 자신의 `Hash` capability 를 정의해도 ambient 로
+주입할 수 없다 — script 의 ergonomics 를 위한 fixed surface.
+
+#### 20.3.1.2 Ambient binding visibility
+
+ambient 로 주입된 binding 은 함수 *body* 의 *모든* statement 에서
+in-scope 이다. statement 순서나 control flow 에 따라 unbinding
+되지 않는다:
+
+```osty
+#[ambient(clock, rng)]
+fn main() {
+    let id = buildId(clock, rng)         // OK
+    if shouldRetry() {
+        let retry = buildId(clock, rng)  // 여전히 in-scope
+    }
+    while shouldContinue() {
+        clock.sleep(1.s)?                // 여전히 in-scope
+    }
+}
+```
+
+이 visibility 는 *함수 boundary 에서 멈춘다* — 다른 함수를 호출해도
+ambient binding 은 callee 측에 자동 주입되지 않는다 (§20.3.2).
+
+#### 20.3.1.3 Ambient and `#[reproducible]` 충돌
+
+`#[ambient]` 와 `#[reproducible]` 은 함수에 같이 부착할 수 없다 —
+ambient 는 entry-point 만 (그리고 entry-point 는 reproducible 이
+아님). 같이 적용하면 `E0782` (incompatible annotations).
+
+이 충돌은 의도적이다: reproducible 함수는 *순수* 한 데이터
+변환이며, 환경 capability 는 정의상 받을 수 없다. ambient 는
+*그 환경* 을 주입하는 mechanism 이라 둘은 양립 불가.
 
 ### 20.3.2 Ambient binding scope 규칙
 

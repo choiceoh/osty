@@ -402,6 +402,64 @@ channel is "ready" and fires once with `None` (matching the `recv`
 semantics of §8.5). A `send` branch on a closed channel aborts when
 selected.
 
+#### 8.6.1 Select and information flow
+
+A `select` branch's body runs in the surrounding scope's lexical
+environment, with the branch's parameter typed per the channel's
+element type. Flow tags ride through identically:
+
+```osty
+let userInput: Channel<#[taint("user_input")] String> = thread.chan(64)
+let serverEvents: Channel<#[taint("net_input")] Event> = thread.chan(64)
+
+thread.select(|s| {
+    s.recv(userInput, |msg| {
+        // msg: #[taint("user_input")] String
+        log.info("user typed: {std.html.escape(msg)}")
+    })
+    s.recv(serverEvents, |evt| {
+        // evt: #[taint("net_input")] Event
+        handle(evt)
+    })
+})
+```
+
+There is no implicit declassification at the select boundary —
+each branch's body sees its channel's tag set directly.
+
+#### 8.6.2 Select and cancellation
+
+`thread.select` is a cancellation point per §8.4.2. When the
+surrounding `taskGroup` is cancelled while `select` is blocked on
+its branches, the runtime returns *as if no branch was selected*
+— the `select` expression evaluates to `()` and execution
+continues. The caller checks `thread.isCancelled()` to detect this:
+
+```osty
+thread.select(|s| {
+    s.recv(ch1, |x| ...)
+    s.recv(ch2, |x| ...)
+})
+thread.checkCancelled()?            // propagate cancel if it fired
+```
+
+If a `select` body needs to react to cancel separately from its
+ready branches, register an explicit `s.timeout(d, ...)` arm with
+a short duration — the timer fires before most blocking arms,
+giving the body a periodic point to check `thread.isCancelled()`.
+
+#### 8.6.3 Select and `#[budget]`
+
+Each registered branch counts as zero `io_calls` until it actually
+fires — `select` itself is the synchronization point. The `time`
+spent waiting in `select` is *not* counted toward `#[budget(time_ms
+= X)]`; only the active body's wall-clock time counts.
+
+For a function that loops over `select`, the budget applies to
+each iteration's *active branch body*, not to the number of
+iterations. Use `loop { ... }` exit conditions to bound iteration
+count separately if required.
+
 ### 8.7 Capabilities and Tasks
 
 The capability surface (§20) and structured concurrency compose

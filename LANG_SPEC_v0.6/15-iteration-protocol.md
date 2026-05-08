@@ -186,4 +186,23 @@ flow tag never reaches a string-shaped sink and no sanitizer is
 required. Direct concatenation into the SQL string would be flagged
 by the §21 checker.
 
+### 15.4 Iteration and `#[reproducible]`
+
+A `for x in xs` loop inside a `#[reproducible(scope = X)]` function
+must iterate a *deterministically-ordered* iterable:
+
+- `List<T>` — insertion-order, deterministic. ✓
+- `Range` — increasing or `by`-stepped, deterministic. ✓
+- `Map.entriesSorted()` — explicit sort, deterministic. ✓
+- `Map.iter()` / `Map.keys()` / `Map.values()` — hash-based, NOT
+  deterministic. ✗ (E0786)
+- `Set.toListSorted()` — explicit sort, deterministic. ✓
+- `Set.iter()` — hash-based, NOT deterministic. ✗ (E0786)
+- `Channel<T>` — runtime-dependent ordering, NOT deterministic. ✗
+
+The checker walks every `for ... in` and ensures the iterable side
+satisfies the determinism constraint. Mixing a `Map.iter()` with a
+`#[reproducible]` annotation is therefore a compile error caught
+before the body is even type-checked.
+
 ---

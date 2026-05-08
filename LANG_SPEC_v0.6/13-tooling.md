@@ -402,6 +402,56 @@ The full schema is specified in §13.9 below.
 rendered as markdown. AI agents query the JSON directly via `osty
 context --format=json` or the LSP custom request `osty/context`.
 
+#### 13.4.1 Symbol resolution
+
+The `<symbol>` argument may be:
+
+- **Fully-qualified** — `myapp.users.createUser`. Resolves
+  exactly; ambiguity is impossible.
+- **Method-qualified** — `User.greet`. Resolves against all types
+  named `User` in the workspace; ambiguity is `E2105`.
+- **Bare** — `createUser`. Searches the current package by default;
+  `--all-packages` widens the search.
+- **LSP cursor form** — `current://path:line:col`. The CLI reads
+  the symbol at the named cursor position, identical to the LSP's
+  `textDocument/documentSymbol` resolution.
+
+#### 13.4.2 `--recursive` semantics
+
+`--recursive=N` walks the call graph to depth `N`, including each
+callee's full context object as a nested entry. The walk respects
+package boundaries: callees in the same workspace are inlined;
+callees in external dependencies are summarized (signature only,
+no body details) unless the dependency was published with
+`#[stability("internal")]` symbols exposed.
+
+The recursion stops at:
+
+- `Never`-returning functions (no further callees to visit).
+- FFI imports (`use go "..."` / `use c "..."`) — the foreign
+  symbol has no Osty-side context.
+- Cycles (a function reachable through itself stops the walk).
+
+#### 13.4.3 Bulk export workflow
+
+`osty context --all-stdlib --format=jsonl` emits one JSON object
+per line for every `pub` symbol in the standard library. The
+typical consumer is an LLM training pipeline or an offline doc
+generator:
+
+```sh
+$ osty context --all-stdlib --format=jsonl > stdlib-context.jsonl
+$ wc -l stdlib-context.jsonl
+3142 stdlib-context.jsonl
+```
+
+Each line is a complete context object — there is no shared
+schema header. The recipient may stream-parse and filter without
+buffering the entire output.
+
+`--all-workspace` similarly emits the workspace's own `pub`
+symbols. `--filter-stability=stable` restricts to stable APIs.
+
 ### 13.5 `osty publish` (G44)
 
 `osty publish` packages a workspace into a registry-publishable
@@ -436,6 +486,67 @@ annotations: `#[stability]`, `#[error_contract]`, `#[since]`,
 `https://osty.dev/schemas/manifest/v1.json`) — `00-revision.md
 §3.14.3.4`.
 
+#### 13.5.1 Publish-time gates
+
+Beyond the SemVer surface diff (Step 4), `osty publish` runs a
+fixed gate set before signing:
+
+| Gate | Behavior on failure |
+|---|---|
+| `osty check` (full type-check) | `E2100`-class abort |
+| `osty audit --legacy-globals` | warns; promotes to abort if `[stability] default = "stable"` |
+| `osty audit --trusted-declassify` | warns; lists every declassify site for review |
+| `osty audit --trusted-construct` | same |
+| `osty validate-spec` (`#[spec]` resolution) | `E0790` aborts |
+| `osty test --example --spec` | example mismatch aborts |
+| `osty bench --budget` | `time_ms`/`p99_ms` regression beyond `regression-threshold` aborts |
+| `osty test --golden` | snapshot mismatch aborts |
+
+The gate sequence is intentional: cheap checks first, expensive
+benchmarks last. A `--no-bench` flag skips the budget gate for
+local previews; the registry-side acceptance still requires the
+full gate to have passed.
+
+#### 13.5.2 Workspace publish
+
+A workspace publishes its packages in topological order (root
+dependency first). Each package is published as a separate
+manifest entry; the workspace's `[workspace] version` is the
+compound version visible to `osty add` consumers.
+
+Cross-package references inside a workspace use *exact version
+pin* during publish (the just-released version of the dependency).
+External dependencies use the version range in `[dependencies]`.
+
+#### 13.5.3 Publish dry-run
+
+`osty publish --check` runs every gate but does not sign or upload
+the manifest. It prints the surface diff and the proposed version
+bump:
+
+```sh
+$ osty publish --check
+api-surface diff:
+  + pub fn isAcceptableEmail (private — internal helper)
+proposed: v0.6.1 (patch — additive only)
+0 errors, 0 warnings.
+```
+
+`--check` is the recommended pre-commit gate for branches that
+modify `pub` declarations.
+
+#### 13.5.4 Surface fingerprint
+
+The API surface diff is computed against a *fingerprint* — a
+content hash of the surface elements listed under "Surface
+definition". Two workspaces with identical surface produce
+identical fingerprints; this enables registry-side caching and
+fast "is anything published?" checks.
+
+The fingerprint excludes line numbers, formatting, and comments —
+reformatting source code does not change the fingerprint. This is
+why `osty fmt` is safe to run before `osty publish`.
+
 ### 13.6 `osty validate-spec` (G38)
 
 `osty validate-spec` walks the workspace looking for `#[spec("§X.Y")]`
@@ -452,6 +563,60 @@ osty validate-spec --update                 # apply suggested rewrites
 
 The command is run automatically by `osty check --strict` and by
 the `just prepush` recipe.
+
+#### 13.6.1 Anchor resolution algorithm
+
+`osty validate-spec` walks the spec corpus once at startup, building
+an index of `(file, heading) → anchor`. The walk follows these
+rules:
+
+1. **Section heading** (`## §X.Y Title`, `### §X.Y.Z Title`) — the
+   anchor is `§X.Y` or `§X.Y.Z`. The title becomes the lead text.
+2. **Sub-anchor** (`<a id="X.Y.user.create"></a>` immediately
+   before a heading) — the anchor is the explicit `id`.
+3. **Inline anchor** (text immediately following a heading) — the
+   anchor is the heading's slugified title, with the parent
+   section as prefix.
+
+The index is rebuilt only when the spec corpus changes, so repeated
+`osty validate-spec` invocations are fast.
+
+For `#[spec("§X.Y")]` annotations whose argument matches a known
+anchor, the resolver records the `(file, heading, lead)` triple and
+caches it in `target/spec-links.json` for use by `osty doc` and
+`osty context`.
+
+#### 13.6.2 `--update` rewrite policy
+
+When invoked with `--update`, `osty validate-spec` applies
+suggested rewrites in three categories:
+
+1. **Anchor renamed** — `§X.Y` is replaced by the target section's
+   new anchor. The replacement is exact-string in the source file.
+2. **Anchor moved** — `§X.Y.foo` becomes `§A.B.foo` if the named
+   sub-anchor moved across sections. The resolver maintains a
+   *moved-anchor history* across spec versions to enable this.
+3. **Anchor removed** — emits `E0790` (no rewrite). The author
+   must manually choose a replacement.
+
+The rewrite mode is opt-in because changing spec links can have
+publish-surface implications (§3.14.3 includes `#[spec]` arguments
+in the API hash for `stable` symbols). CI typically runs
+`osty validate-spec --strict` (no `--update`) and asks the author
+to apply the rewrite locally with review.
+
+#### 13.6.3 Cross-package spec validation
+
+A workspace with multiple packages may reference spec anchors from
+each. `osty validate-spec` resolves *all* anchors against a single
+spec corpus snapshot — the workspace declares its target spec
+version in `osty.toml` (`[package].edition = "0.6"`).
+
+Mixed-edition workspaces (rare; transitional) resolve each package
+against its own edition's corpus. The compiler does not allow
+`edition = "0.5"` and `edition = "0.6"` to share a workspace
+directly — use a `[workspace.member]` boundary with explicit
+edition pin.
 
 ### 13.7 Audit subcommands
 

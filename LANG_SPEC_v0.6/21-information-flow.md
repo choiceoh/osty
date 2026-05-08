@@ -102,6 +102,64 @@ pub fn doubleSanitize(s: String) -> String { ... }
 5. 서로 다른 source 의 taint 는 *합집합* — `#[taint("a")]` 와 `#[taint("b")]` 결과
    를 concatenate 하면 결과는 `{a, b}` tag.
 
+#### 21.3.1 Auto-propagation rule (transitive)
+
+규칙 2 ("자동 propagate") 의 정확한 정의:
+
+함수 `f(p1, p2, ...)` 가 input 으로 받은 값들의 tag set union 을
+계산해 output 에 attach. 이는 *signature-level* 추론 — 본문을
+walk 하지 않고 type checker 가 결정.
+
+```osty
+fn concatenate(a: String, b: String) -> String {
+    a + b
+}
+
+let userInput: #[taint("user_input")] String = ...
+let envValue: #[taint("env_input")] String = ...
+
+let combined = concatenate(userInput, envValue)
+//             ^^^^^^^^^^^
+//             returns String #[taint({user_input, env_input})]
+```
+
+이 자동 추론은 *모든* 함수에 적용 — 사용자 코드 / stdlib / 일반
+helper 모두. 반대 효과는 없다 — output 이 input 보다 적은 tag set
+을 가질 수 없다 (sanitizer 명시 적용 외).
+
+#### 21.3.2 Implicit declassification 부재
+
+타입 시스템은 *어떠한* 형태의 implicit declassification 도 거부:
+
+- Format 변환 (`bytes.toString`) — tag 보존.
+- Encoding (`encoding.base64.encode`) — tag 보존.
+- Compression (`compress.gzip.encode`) — tag 보존.
+- Round-trip through `Result.ok()?` — tag 보존.
+- Round-trip through `Option<T>?` — tag 보존.
+- `let x = y` rebind — tag 보존.
+
+declassify 의 유일한 path 는 명시적 sanitizer 호출 (`#[sanitizes]`
+함수의 반환). FFI 경계에서의 audit-marked drop 은 별도 mechanism
+(`#[trusted_declassify]`, §21.7).
+
+#### 21.3.3 Tag arithmetic
+
+flow tag set 의 정확한 의미는 *유한 부분 집합* — 한 값이 동시에
+가질 수 있는 tag 들. 동등은 set 동등이며, ordering 은 subset
+관계 (§21.5.4 의 lattice).
+
+| 연산 | 결과 |
+|---|---|
+| `f(x)` 에서 `f` 가 `#[taint("a")]` | output ⊇ `x` 's tag ∪ {a} |
+| `f(x, y)` 에서 `f` 무 attribution | output = `x.tags ∪ y.tags` |
+| `f(x)` 에서 `f` 가 `#[sanitizes("a", into = "b")]` | output = (`x.tags` − {a}) ∪ {b} |
+| `match x { Some(y) -> f(y), None -> z }` | output = `f(y).tags ∪ z.tags` |
+| `xs.map(\|x\| f(x))` | output element type = `f(x).tags` |
+| 컬렉션 reduce | output = ∪ over all elements |
+
+이 산술 규칙은 §21.5.3 의 formal inference rules 에서 정확히
+정의된다.
+
 ### 21.4 예제
 
 ```osty
@@ -348,6 +406,55 @@ fn fromGoParser() -> String { ... }
 
 `#[trusted_declassify]` 는 *human review 표식* — 컴파일러는 이를 신뢰하고 tag 제거.
 모든 사용처는 `osty audit --trusted-declassify` 로 enumerate 가능.
+
+#### 21.7.1 FFI inbound — re-tagging at the boundary
+
+FFI 함수의 반환값에 `#[taint("σ")]` 을 부착해 *Osty 측* 에서 tag
+재부여 가능:
+
+```osty
+use go "net/http" {
+    // 외부에서 들어온 데이터는 user_input 으로 재-tag
+    fn ReadBody(req: ptr) -> Result<#[taint("user_input")] String, Error>
+}
+```
+
+이 형식은 FFI wrapper 의 책임으로 명시. callee 측에서 sanitize
+이미 했다면 (rare), 별도 declassify 없이 untagged 로 둔다.
+
+#### 21.7.2 FFI outbound — tag drop at the boundary
+
+Osty 측의 tagged 값이 FFI 함수에 인자로 전달되면, foreign side 는
+tag 를 인식하지 못하므로 실질적으로 *declassify* 가 일어난다. 이는
+soundness 누수 — 막기 위해 outbound declassify 도 명시:
+
+```osty
+use c "legacy" {
+    fn legacy_set_user(name: ptr) -> Int
+}
+
+#[trusted_declassify("user_input", reason = "legacy code path is internally
+                                              audited and validates input")]
+fn callLegacy(name: #[taint("user_input")] String) -> Int {
+    legacy_set_user(name.toCString())
+}
+```
+
+이 wrapper 함수 자체에 `#[trusted_declassify]` 적용 — tagged 값을
+받아 untagged 로 처리하는 site 가 audit 가능.
+
+#### 21.7.3 Audit reporting
+
+`osty audit --trusted-declassify` 출력 형식:
+
+```
+src/ffi.osty:42:5  fromGoParser()             reason: validated by Go-side parser
+src/ffi.osty:67:5  callLegacy(name: ...)      reason: legacy code path is internally audited
+2 trusted-declassify sites in workspace.
+```
+
+CI 는 이 list 의 *증가* 만 차단 — 기존 site 는 grandfathered in.
+새 declassify 추가는 review 동안 명시적으로 허용 받아야 한다.
 
 ### 21.8 Stdlib sink 카탈로그 (v0.6 baseline)
 
