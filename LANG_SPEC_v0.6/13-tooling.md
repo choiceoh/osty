@@ -742,3 +742,52 @@ tooling surface 의 SemVer 영향:
 `osty publish` 자체의 `osty publish` 가 publish surface 인 것은
 recursive 하지만 — `osty` CLI 자체는 의 publish 통한 SemVer 검증
 대상은 아니다 (CLI 는 별도 release flow).
+
+### 13.16 Capability inventory and review aids
+
+A reviewer / author who needs to see *which capabilities a package
+uses* without reading every file has three CLI surfaces:
+
+```sh
+# Per-package capability summary — one line per pub fn.
+osty audit --capabilities
+
+# Per-symbol detail — capabilities, flow tags, error_contract,
+# stability, since, budget, fixtures, examples, spec link.
+osty context <symbol> --format=json
+
+# Diff of capability usage between two refs (e.g. main vs PR).
+osty audit --capabilities --diff main..HEAD
+```
+
+Sample output of `osty audit --capabilities` (text mode):
+
+```
+pkg myapp.users
+  pub fn createUser(email: String, db: Db)             [Db]
+  pub fn parseEmail(s: String)                          (pure)
+  pub fn fetchAvatar(net: Net, url: Url)                [Net]
+
+pkg myapp.audit
+  pub fn record(clock: Clock, fs: Fs, event: Event)     [Clock, Fs]
+```
+
+The same data drives review-bot comments and the package home-page
+renderer.
+
+### 13.17 Tooling under `--legacy-globals`
+
+`--legacy-globals` is a *transitional* compatibility mode that lets
+v0.5 source compile under v0.6.x. Tooling behavior under the flag:
+
+| Surface | Default (`v0.6`) | `--legacy-globals` |
+|---|---|---|
+| `osty check` | rejects bare `time.now()` etc. (`E0780`) | accepts (`W0750` deprecation per call site) |
+| `osty publish` | manifest's stability default may be `stable` | forced to `experimental` (global desugar contaminates surface) |
+| `osty audit --legacy-globals` | enumerates remaining sites (none expected) | enumerates remaining sites |
+| `osty bench --budget` | unchanged | unchanged (capability methods desugar to the same calls at runtime) |
+
+`v0.7` removes the flag; programs that still depend on it must
+migrate by then. The migration path is documented in
+`MIGRATING_v0.5_to_v0.6.md` and §10.46 (Capability Migration
+Catalog).

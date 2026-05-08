@@ -5,8 +5,23 @@ interface, `ToString`. String interpolation `"{expr}"` (§4.8), the
 `println` / `print` / `eprint` family, and the formatter's
 `Display` rendering all dispatch through `toString()`. The interface
 is structural — any type that defines `fn toString(self) -> String`
-satisfies it. v0.6 adds no new format protocol surface; the
-machine-readable intent annotations (`#[purpose]`, `#[example]`,
+satisfies it.
+
+`ToString` interacts with two v0.6 surfaces:
+
+- **Capability vs pure rendering.** `toString()` is a pure
+  declaration on the value itself — it receives no capability and
+  must not perform an effect. `print`/`println` consume the result
+  and *write it* through the ambient `Console` capability (§20.9.7),
+  which is where the effect actually lives. This split lets value
+  types implement `ToString` without becoming capability-coupled.
+- **Information flow.** A `ToString` impl preserves any
+  `#[taint(...)]` tag on its self argument: the tag rides on the
+  rendered `String` and must be sanitized before reaching a sink
+  such as `http.respondHtml` (§21.8). The interface itself is
+  flow-tag-agnostic.
+
+Machine-readable intent annotations (`#[purpose]`, `#[example]`,
 `#[fixture]` per §3.12) operate at a different layer (documentation
 / context export) and do not interact with `ToString`.
 
@@ -73,5 +88,73 @@ respective stream (`println` adds a trailing `\n`).
 **Relationship to `dbg`.** `dbg(x)` (§10.1) prints a developer-oriented
 form including source location and the unprocessed expression text. It
 is built on top of `ToString` for the value portion.
+
+### 17.1 Sealed types and `ToString`
+
+A `#[sealed_construct]` type (§3.4.5) implements `ToString` like any
+other struct — there is no special interaction. The auto-derived form
+exposes private fields as text, which is sometimes the wrong choice
+for sealed types since a parsed `Email` value is meant to be opaque
+to consumers:
+
+```osty
+#[sealed_construct(parse)]
+pub struct Email {
+    local: String,
+    domain: String,
+
+    pub fn parse(s: String) -> Email? { ... }
+
+    // Author-supplied — render the canonical text form, not the
+    // auto-derived `Email { local: ..., domain: ... }` debug form.
+    pub fn toString(self) -> String {
+        "{self.local}@{self.domain}"
+    }
+}
+
+println(Email.parse("alice@example.com")?)   // alice@example.com
+```
+
+The convention across the v0.6 stdlib sealed types (`Email`, `Url`,
+`Path`, `SqlIdent`, `Duration`, `Uuid`) is **always** to override
+`toString()` with the canonical reverse of `parse(...)` — round-trip
+through `ToString` ↔ `Type.parse` is part of the public contract.
+
+### 17.2 Interaction with information flow
+
+`toString()` preserves any `#[taint(σ)]` tag on its self argument:
+the rendered `String` carries the same tag set, so a tainted value
+flowing into `"{user.email}"` interpolation produces a tainted
+`String`, which the type checker tracks into whatever sink the
+interpolation result lands in.
+
+```osty
+fn render(form: #[taint("user_input")] FormData) -> String {
+    "submitted: {form.message}"     // result is also #[taint("user_input")]
+}
+
+// Sink that requires `html_safe` rejects the tainted result —
+// authors must sanitize first.
+http.respondHtml(render(form))      // E0901 — missing #[sanitizes(...)]
+```
+
+Sanitization happens *before* the value reaches `toString()`. There
+is no "format-time sanitizer" — that would hide the data flow that
+§21 is explicitly designed to surface.
+
+### 17.3 Capability-free guarantee
+
+`toString()` is declared without any capability parameter. The
+runtime does not synthesize one for the call, so a `ToString`
+implementation cannot read the clock, query the environment, or open
+a file. This is what lets the `print*` family safely route through
+ambient `Console` (§20.9.7) — the rendering work is pure, and only
+the *write* is effectful.
+
+A user implementation that *does* need to consult an effect to
+render a value should not abuse `ToString`; instead expose a
+deliberate `render(self, clock: Clock) -> String` method that the
+caller passes the capability to. The naming convention `render*`
+keeps `ToString` free of hidden dependence.
 
 ---

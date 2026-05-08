@@ -44,7 +44,12 @@ os.exit(0)
 
 API:
 
+Path helpers are pure functions. Process effects (`exec`, `exit`, …) are
+methods on the `Process` capability (§20.9.6); the function-style
+listings below match the `--legacy-globals` desugar target.
+
 ```
+// Pure path helpers — no capability required.
 os.path.join(parts: List<String>) -> String
 os.path.split(path: String) -> (String, String)      // (dirname, basename)
 os.path.extension(path: String) -> String
@@ -53,10 +58,15 @@ os.path.basename(path: String) -> String
 os.path.absolute(path: String) -> Result<String, Error>
 os.path.canonical(path: String) -> Result<String, Error>
 os.path.isAbsolute(path: String) -> Bool
-os.path.separator() -> String                         // "/" or "\\"
+os.path.separator() -> String                        // "/" or "\\"
 
-os.exec(cmd: String, args: List<String>) -> Result<Output, Error>
-os.execShell(command: String) -> Result<Output, Error>
+// `Process` capability methods (canonical v0.6 surface).
+Process.exec(self, cmd: String, args: List<String>) -> Result<Output, Error>
+Process.execShell(self, command: String) -> Result<Output, Error>
+Process.exit(self, code: Int) -> Never
+Process.pid(self) -> Int
+Process.hostname(self) -> String
+Process.onSignal(self, sig: Signal, handler: fn())
 
 pub struct Output {
     pub exitCode: Int,
@@ -64,10 +74,17 @@ pub struct Output {
     pub stderr: String,
 }
 
-os.exit(code: Int) -> Never
-os.pid() -> Int
-os.hostname() -> String
-
-os.onSignal(sig: Signal, handler: fn())
 pub enum Signal { Interrupt, Terminate, Hangup }
+```
+
+Legacy aliases (desugar to the methods above when `--legacy-globals` is
+active; rejected otherwise — `E0780`):
+
+```
+os.exec(cmd, args)        ⟶  process.exec(cmd, args)
+os.execShell(command)     ⟶  process.execShell(command)
+os.exit(code)             ⟶  process.exit(code)
+os.pid()                  ⟶  process.pid()
+os.hostname()             ⟶  process.hostname()
+os.onSignal(sig, handler) ⟶  process.onSignal(sig, handler)
 ```

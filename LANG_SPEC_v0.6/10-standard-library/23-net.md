@@ -63,11 +63,16 @@ fn addrInfo(net: Net) -> Result<Addr, Error> {
 
 API:
 
+The methods below hang off the `Net` capability (§20.9.5). Listings
+written `Net.method(self, ...)` are the canonical v0.6 form;
+`net.method(...)` legacy aliases desugar to the same call when
+`--legacy-globals` is active and are rejected otherwise (`E0780`).
+
 ```
 // TCP
-net.connect(addr: String) -> Result<TcpConn, Error>
-net.connectTimeout(addr: String, timeout: Duration) -> Result<TcpConn, Error>
-net.listen(addr: String) -> Result<TcpListener, Error>
+Net.connect(self, addr: String) -> Result<TcpConn, Error>
+Net.connectTimeout(self, addr: String, timeout: Duration) -> Result<TcpConn, Error>
+Net.listen(self, addr: String) -> Result<TcpListener, Error>
 
 pub struct TcpConn {
     // implements Reader, Writer, Closer (§16)
@@ -90,8 +95,8 @@ pub struct TcpListener {
 }
 
 // UDP
-net.udpBind(addr: String) -> Result<UdpSocket, Error>
-net.udpConnect(addr: String) -> Result<UdpSocket, Error>   // connected mode
+Net.udpBind(self, addr: String) -> Result<UdpSocket, Error>
+Net.udpConnect(self, addr: String) -> Result<UdpSocket, Error>  // connected mode
 
 pub struct UdpSocket {
     // implements Closer (§16)
@@ -103,9 +108,9 @@ pub struct UdpSocket {
     fn localAddr(self) -> Addr
 }
 
-// Address resolution
-net.resolve(addr: String) -> Result<Addr, Error>
-net.resolveAll(host: String) -> Result<List<Addr>, Error>
+// Address resolution (DNS — also a network effect, hence on the capability)
+Net.resolve(self, addr: String) -> Result<Addr, Error>
+Net.resolveAll(self, host: String) -> Result<List<Addr>, Error>
 
 pub struct Addr {
     pub host: String,

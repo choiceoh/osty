@@ -93,20 +93,21 @@ pub type Params = Map<String, String>
 pub type Handler = fn(Request) -> Result<Response, Error>
 pub type RouteHandler = fn(Request, Params) -> Result<Response, Error>
 
-// Runtime-owned primitives
-http.request(req: Request) -> Result<Response, Error>
-http.get(url: String, headers: Headers = {:}) -> Result<Response, Error>
-http.serve(addr: String, handler: Handler) -> Result<(), Error>
+// Network-effecting primitives — methods on the client / server objects
+// returned by `Net.httpClient()` / `Net.httpServer()` (§20.9.5).
+HttpClient.request(self, req: Request) -> Result<Response, Error>
+HttpClient.get(self, url: String, headers: Headers = {:}) -> Result<Response, Error>
+HttpClient.send(self, method: Method, url: String, body: Bytes, headers: Headers = {:}) -> Result<Response, Error>
+HttpClient.head(self, ...) / post(self, ...) / put(self, ...) / patch(self, ...) / delete(self, ...) / options(self, ...) / trace(self, ...) / connect(self, ...)
+HttpClient.sendText(self, ...) / sendJson(self, ...) / sendForm(self, ...)
+HttpClient.postText(self, ...) / putText(self, ...) / patchText(self, ...)
+HttpClient.postJson(self, ...) / putJson(self, ...) / patchJson(self, ...)
+HttpClient.postForm(self, ...) / putForm(self, ...) / patchForm(self, ...)
+HttpServer.serve(self, addr: String, handler: Handler) -> Result<(), Error>
 
-// Client helpers
+// Pure helpers — operate on values, no capability needed.
 http.newRequest(method: Method, url: String) -> Request
 http.dispatch(router: Router, req: Request) -> Result<Response, Error>
-http.send(method: Method, url: String, body: Bytes, headers: Headers = {:}) -> Result<Response, Error>
-http.head(...) / post(...) / put(...) / patch(...) / delete(...) / options(...) / trace(...) / connect(...)
-http.sendText(...) / sendJson(...) / sendForm(...)
-http.postText(...) / putText(...) / patchText(...)
-http.postJson(...) / putJson(...) / patchJson(...)
-http.postForm(...) / putForm(...) / patchForm(...)
 
 // Query/form codecs
 http.parseQuery(text: String) -> Result<QueryValues, Error>
@@ -298,7 +299,9 @@ http.newRouter() -> Router
 - `problem(...)` and `Problem.toResponse()` emit
   `application/problem+json` bodies.
 - Server code dispatches routers through `http.dispatch(router, req)`. The
-  transport primitive remains `http.serve(addr, handler)`.
+  transport primitive is `HttpServer.serve(addr, handler)` on the
+  capability-supplied server object (legacy `http.serve(addr, handler)`
+  desugars there under `--legacy-globals`).
 
 **Current runtime limits.**
 

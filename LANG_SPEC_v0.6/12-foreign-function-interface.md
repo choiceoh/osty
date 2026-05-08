@@ -1,18 +1,34 @@
 ## 12. Foreign Function Interface
 
-Osty v0.6 interoperates with Go via `use go "..." { ... }` declaration
-blocks. The bridge maps Osty's `Result<T, Error>` to Go's
-`(T, error)`, optional types `T?` to nullable pointers `*T`, and
-preserves panic-as-process-abort semantics. Go closures, generics,
-empty interfaces, and channel types are not exposed across the
-boundary.
+Osty v0.6 supports two FFI families:
 
-The v0.6 information flow surface (§21) treats data crossing an FFI
-boundary as untagged by default. When data has been validated outside
-Osty's flow tracking, the `#[trusted_declassify(reason)]` annotation
-on the FFI wrapper drops flow tags with audit-marked attestation —
-all such sites are enumerable via `osty audit --trusted-declassify`
-(§13.7).
+- **Go FFI** (`use go "..." { ... }`) — for the bootstrap toolchain
+  and any deployment that runs on the Go runtime. The bridge maps
+  `Result<T, Error>` ↔ `(T, error)`, `T?` ↔ `*T`, and
+  preserves panic-as-process-abort semantics. Closures, generics,
+  empty interfaces, and channel types are not exposed across the
+  boundary (§12.7).
+- **Native C ABI** (`use c "..." { ... }` / `use runtime.cabi.*`) —
+  for `--backend llvm` builds, where the Go runtime is not present.
+  Same constraint set as Go FFI; symbol resolution and link
+  contracts are described in §12.8.
+
+Three v0.6 surfaces apply at the FFI boundary:
+
+- **Information flow tags drop on entry.** Bytes that originate
+  outside Osty have no `#[taint]` history, so the FFI wrapper
+  receives them untagged. To re-tag (so downstream sinks pay the
+  appropriate sanitization cost), apply `#[taint("σ")]` on the
+  wrapper's return type at the boundary.
+- **Audited declassification.** When Osty-side data must cross *out*
+  of Osty's flow tracking despite carrying tags, the wrapper carries
+  `#[trusted_declassify(reason)]` — every such site is enumerable
+  via `osty audit --trusted-declassify` (§13.7).
+- **Capability passthrough is not allowed.** A capability instance
+  (`Clock`, `Net`, …) is an Osty-side object with no stable foreign
+  ABI. FFI wrappers that need foreign-side effects must take the
+  primitive arguments (paths, addresses, …) and own the effect
+  inside the Osty wrapper, not pass a `Net` value through.
 
 ### 12.1 Importing Go Packages
 

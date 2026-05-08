@@ -1,16 +1,36 @@
 ## 7. The Error Interface
 
 Osty v0.6 represents errors as values, never as exceptions. The
-`Error` interface (§7.1) carries a nominal tag for runtime downcast
-(`as?` per §4 and §7.4), `BasicError` (§7.2) provides the standard
-constructor, custom error enums (§7.3) integrate via the structural
-interface rules of §2.6, and propagation uses the `?` operator
-(§7.4). The v0.6 addition is `#[error_contract]` (§7.5, G41) — a
-declaration-level annotation that catalogues which error variants
-flow out under which conditions, enabling caller-side exhaustiveness
-pruning, machine-readable failure-mode export via `osty context`
-(§13.4), and the publish-time SemVer rule that adding a contracted
-variant is a breaking change (§3.14.3).
+chapter defines four pieces:
+
+- **`Error` interface** (§7.1) — the structural protocol every error
+  satisfies. Values that flow through this interface carry a nominal
+  type tag for runtime downcast.
+- **`BasicError`** (§7.2) — the stdlib constructor for ad-hoc string
+  errors (`Error.new("...")`).
+- **Custom error enums** (§7.3) — application-specific error
+  hierarchies that integrate via the structural rules of §2.6.
+- **Propagation** (§7.4) — the `?` operator for `Result<T, E>` /
+  `Option<T>`, with up-cast to `Error` when the enclosing function
+  returns `Result<_, Error>`.
+
+Two v0.6 surfaces sit on top of this baseline:
+
+- **`#[error_contract]`** (§7.5, G41) — a declaration-level
+  attestation that catalogues which error variants flow out and
+  under which conditions. Enables caller-side exhaustiveness pruning,
+  machine-readable failure-mode export via `osty context` (§13.4),
+  and the publish-time SemVer rule that adding a contracted variant
+  is a breaking change (§3.14.3).
+- **Cancellation as a recoverable error** — `Err(Cancelled { cause
+  })` is the Result-shaped form of the cancel signal (§8.4.1). It
+  flows through `?` identically to any other `Error`, so canceling a
+  `taskGroup` requires no new control-flow construct in this
+  chapter.
+
+There is no `try`/`catch`. Programmer errors (`abort` / `unreachable`
+/ `todo`) are deliberate process termination, not recoverable failure
+— they bypass `?` propagation entirely (§4.12 rule 7).
 
 ### 7.1 Definition
 
@@ -213,3 +233,48 @@ Failure modes:
 ```
 
 `osty context <fn>` (§13.6) emits the same data as JSON.
+
+### 7.6 Cancellation as a Recoverable Error
+
+The cancel signal is delivered as `Err(Cancelled { cause })` (see
+§8.4.1). It is an *ordinary* `Error`-shaped value: every rule in this
+chapter — `?`-propagation, `match err.downcast::<Cancelled>()`,
+`#[error_contract(Cancelled when ...)]`, conversion to a wrapping
+enum — applies identically.
+
+```osty
+fn copyAll(fs: Fs, src: String, dst: String) -> Result<(), Error> {
+    let r = fs.open(src)?
+    defer r.close()
+    let w = fs.create(dst)?
+    defer w.close()
+
+    io.copy(w, r)?            // returns Err(Cancelled) on cancel
+    Ok(())
+}
+```
+
+If recovery is desired (rare), a downcast tells `Cancelled` apart
+from other errors. The recovered task **must** propagate cancellation
+upward immediately afterward — swallowing a cancel is a soundness
+bug:
+
+```osty
+fn try_with_log(fs: Fs, console: Console, src: String) -> Result<Bytes, Error> {
+    match fs.read(src) {
+        Ok(b) -> Ok(b),
+        Err(e) -> match e.downcast::<Cancelled>() {
+            Some(c) -> {
+                console.eprintln("cancel mid-read: {c.cause.message()}")
+                Err(e)         // re-propagate; do not return Ok or a placeholder
+            },
+            None -> Err(e),
+        },
+    }
+}
+```
+
+**Cancellation is *not* listed in `#[error_contract]` by default.** A
+contract that does not mention `Cancelled` still permits it to flow
+out — the contract describes domain-specific failure modes, while
+cancellation is a structural concern owned by §8.4.

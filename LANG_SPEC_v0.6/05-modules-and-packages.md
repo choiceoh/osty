@@ -3,11 +3,21 @@
 Osty v0.6 organizes code by directory: a directory is a package, and
 all `.osty` files in that directory share one namespace. Packages
 import each other through `use` statements. The import surface —
-including `use path::{a, b as c}` (G28), `pub use path.Sym` (G30),
-and `#[cfg(...)]`-conditional declarations (G29) — is unchanged in
-v0.6. v0.6 adds no new module-system syntax; the publishing surface
-(`osty publish` SemVer enforcement, G44) and its API-surface diff
-algorithm are described in §13.5 and §3.14.3 respectively.
+scoped imports (`use path::{a, b as c}`), re-exports
+(`pub use path.Sym`), and `#[cfg(...)]`-conditional declarations —
+is the v0.6 baseline.
+
+v0.6 layers two enforcement surfaces on this chapter's syntax,
+defined elsewhere:
+
+- **`osty publish` API-surface diff** (§13.5, §3.14.3) — a stable
+  package's public surface is hashed at publish time; subsequent
+  releases that drop or weaken a `#[stability("stable")]` symbol
+  bump the major version automatically (G44).
+- **Sealed `pub` types** (§3.4.5) — a struct annotated
+  `#[sealed_construct(parse)]` exports its name through `pub` but
+  rejects external literal construction; downstream packages must
+  route through the named constructor.
 
 ### 5.1 Package = Directory
 
@@ -101,5 +111,55 @@ build" — see §13.2.
 
 Each directory is exactly one package. Sub-packages live in
 subdirectories.
+
+### 5.6 Public surface and v0.6 evolution rules
+
+The public surface of a package is the set of `pub` declarations
+visible to importers — `pub fn`, `pub struct` (with its `pub`
+fields), `pub enum` variants, `pub interface`, `pub type` aliases,
+and `pub let` constants. v0.6 layers three machine-readable
+attestations onto that surface:
+
+#### 5.6.1 `#[stability]` and SemVer
+
+A `pub` declaration carries `#[stability(level)]` (§3.14) where
+`level` is one of `"stable"` / `"experimental"` / `"deprecated"` /
+`"internal"`. `osty publish` (§13.5) reads the manifest's
+`stability_default` and per-symbol overrides, then computes the
+API-surface diff against the previous published version:
+
+| Change | `stable` | `experimental` |
+|---|---|---|
+| Add a new `pub` symbol | minor bump | patch bump |
+| Add a new field to a `pub struct` (without sealed_construct) | major bump | minor bump |
+| Add a new variant to a `pub enum` | major bump (unless `#[match_compat]` covers it) | minor bump |
+| Remove a `pub` symbol | major bump | warning (`W2100`) |
+| Change the type of a `pub fn` parameter / return | major bump | warning (`W2100`) |
+| Add a new `Err` variant to `#[error_contract]` | major bump | minor bump |
+
+Bumping below the required level produces `E2100` and blocks publish.
+
+#### 5.6.2 Sealed types in the public surface
+
+A `pub struct` annotated `#[sealed_construct(parse)]` (§3.4.5)
+appears in the public surface as a *type only* — its fields, even
+the `pub` ones, do not allow external literal construction. Adding
+or removing fields on a sealed type is therefore *not* a SemVer-
+breaking change in itself; only the constructor signature
+(`Type.parse(...)` etc.) is part of the stable contract. This
+inverts the usual struct-evolution rule and is what makes the
+parse-don't-validate pattern compose well with v0.6 publish gates.
+
+#### 5.6.3 Capability surface is part of the contract
+
+A `pub fn` that takes a `Net` parameter exposes "this function
+performs a network effect" as part of its public contract. Adding,
+removing, or changing the capability set of a `pub fn` is a
+**breaking change** at the `stable` level — the API-surface diff
+algorithm includes capability-typed parameters in the signature
+hash. Authors who want to add a capability requirement to an
+existing `stable` API must either bump the major version or
+introduce a new function and deprecate the old one with
+`#[deprecated(use = "newName")]`.
 
 ---

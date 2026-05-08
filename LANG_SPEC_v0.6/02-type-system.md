@@ -15,9 +15,13 @@ overflow semantics (§2.3), composite types (§2.4), the optional sugar
 `T?` (§2.5), structural interfaces and built-in protocols (§2.6),
 monomorphized generics (§2.7), value vs reference semantics (§2.8),
 equality and hashing (§2.9), mutability (§2.10), and nullability
-(§2.11). All v0.5 primitives and composites carry forward unchanged;
-v0.6 adds no new type-system surface — the new annotation surfaces
-(§3.10–§3.15, §20, §21) are layered on existing types.
+(§2.11). The v0.6 annotation surfaces — capability parameters
+(§20), information flow tags (§21), spec links and intent (§3.10 –
+§3.12), reproducibility (§3.11), sealed construction (§3.4.5), error
+contracts (§7.5), API evolution (§3.14), and budgets (§3.15) — all
+*ride on top of* the type rules in this chapter; they decorate or
+restrict declarations without introducing a new type kind. §2.12
+catalogues those interactions in one place.
 
 ### 2.1 Primitive Types
 
@@ -527,7 +531,21 @@ mutation through that binding.
 No `null`. Use `Option<T>` / `T?`:
 
 ```osty
-fn find(id: Int) -> User? { ... }
+fn find(db: Db, id: Int) -> User? { ... }
+```
+
+Capability parameters and `Option<T>` compose without special rules
+— a missing user is not the same as a missing database, so a
+function that *could* fail to find or *could* fail to access uses
+both forms:
+
+```osty
+fn lookup(db: Db, id: Int) -> Result<User?, Error> {
+    // Err(...)  — db itself failed (network, lock, etc.)
+    // Ok(None) — db succeeded, no row matched
+    // Ok(Some(u)) — found
+    db.queryOne::<User>("SELECT * FROM users WHERE id = ?", [id])
+}
 ```
 
 ---
@@ -659,11 +677,12 @@ sealed / error contract 는 *모두* 이 exclusion 을 지키는 형태로
 | `where` clause | `T: I1 + I2` 그대로 — capability 도 동일 |
 | Generic 기본값 | variation 없음 |
 
-### 2.13 Equality / Hashability / Ordering — v0.6 baseline 그대로
+### 2.13 Equality / Hashability / Ordering — annotation interactions
 
-v0.5 의 §2.9 (Equality and Hashing) 와 §2.10 (Mutability) 는 v0.6
-에서 *변경 없음*. 다만 v0.6 신규 어노테이션 의 `Equal` / `Hashable`
-영향:
+The `Equal` / `Hashable` / `Ordered` rules in §2.6.5 / §2.9 stand on
+their own; the v0.6 annotation surface does not perturb them.
+Specifically, the answer to *"does annotation X affect equality
+behavior?"* is uniformly **no** for all v0.6 surfaces:
 
 | Annotation | Equal/Hashable 영향 |
 |---|---|

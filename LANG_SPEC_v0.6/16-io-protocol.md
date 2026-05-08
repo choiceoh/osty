@@ -6,12 +6,28 @@ there is no distinguished error type for end-of-stream. The contract
 is shared across `std.io`, stream-oriented standard-library modules,
 and FFI byte-stream bridges.
 
-The v0.6 capability surface (§20) layers on top of the I/O protocol:
-filesystem and network access flow through `Fs` and `Net` capability
-parameters rather than global functions. The protocol interfaces
-themselves are unchanged from v0.5; capability-typed handles
-(returned by `fs.open(path)`, `net.dial(...)`) implement the same
-`Reader`/`Writer`/`Closer` interfaces as their v0.5 predecessors.
+The v0.6 capability surface (§20) is the *only* path that produces an
+I/O handle: filesystem reads/writes flow through `Fs.open(self, path)`
+or `Fs.readToString(self, path)` (§10.15), network reads/writes
+through `Net.connect(self, addr)` or `Net.listen(self, addr)`
+(§10.23). The handles those methods return implement
+`Reader` / `Writer` / `Closer` exactly as defined here, so generic
+helpers like `io.copy(dst, src)` accept any capability-derived
+stream without a special case.
+
+Information flow (§21) interacts with the protocol at two points:
+
+- **Path-shaped sinks** on `Fs` (`open` / `read` / `write` / `remove`)
+  carry `#[requires("path_safe")]`. Bytes that flow into them must
+  have been sanitized (§21.8) — typically via `Path.parse(...)?` or
+  `std.path.normalize`.
+- **URL-shaped sinks** on `Net` (`connect` / `dial` / `httpClient`)
+  similarly require `url_safe`. Phase 5 enforces this; v0.6 baseline
+  surfaces the requirement in `osty audit`.
+
+The interfaces themselves are pure protocol definitions and carry no
+capability or flow tag — they describe what a stream *is*, not who
+holds the right to open one.
 
 The `Reader` and `Writer` interfaces define the streaming I/O contract
 shared across `std.io`, stream-oriented standard-library modules, and
@@ -155,5 +171,83 @@ with cursor-style methods such as `remaining()`, `peek(n)`,
 adds inspection helpers such as `bytes()` and `toString()`, plus
 buffer-management / piping helpers such as `clear()`, `truncate(n)`,
 `reader()`, `readFrom(r)`, and `writeTo(w)`.
+
+### 16.1 Composing capabilities and the I/O protocol
+
+A typical effectful pipeline opens a stream from a capability,
+operates on it through the protocol interfaces, and lets `defer`
+close it on every exit path:
+
+```osty
+fn copyFile(fs: Fs, src: String, dst: String) -> Result<Int, Error> {
+    let r = fs.open(src)?         // capability call → Reader+Closer
+    defer r.close()
+
+    let w = fs.create(dst)?       // capability call → Writer+Closer
+    defer w.close()
+
+    io.copy(w, r)                  // protocol-only — no capability
+}
+```
+
+The middle layer (`io.copy`) operates on `Reader` / `Writer` only.
+This is what lets in-memory adapters (`io.bytesReader` / `io.buffer`)
+participate in the same pipelines as real files or sockets — the
+test path constructs a pure adapter, and `io.copy` cannot tell the
+difference.
+
+### 16.2 In-memory adapters in tests
+
+A test that exercises an `io.copy`-shaped function does not need a
+`Fs` capability — it constructs `BytesReader` and `Buffer` directly
+and feeds them to the function:
+
+```osty
+#[test]
+fn test_copy_from_bytes_reader() {
+    let r = io.bytesReader(b"hello")
+    let w = io.buffer()
+    let n = io.copy(w, r)?
+    testing.assertEq(n, 5)
+    testing.assertEq(w.toString()?, "hello")
+}
+```
+
+For tests that *do* exercise capability-typed code, the
+`std.capability.testing.FakeFs` adapter (§11.9) returns the same
+`Reader`/`Writer`/`Closer`-shaped handles as the host adapter, so
+the production code under test runs unmodified.
+
+### 16.3 Information flow on streams
+
+A `Reader` produces `Bytes`. The bytes carry the flow tag set of the
+underlying source: `fs.read(path)` is conventionally tagged
+`#[taint("fs_input")]`, `net.read(conn, n)` is `#[taint("user_input")]`,
+and `io.bytesReader(data)` inherits whatever tags `data` had. Tags
+ride through `io.readAll`, `io.copy`, and `io.readLines` without
+declassification — sanitization must be explicit at the sink, not
+implicit at the protocol boundary.
+
+```osty
+fn safeRender(net: Net, conn: TcpConn) -> Result<String, Error> {
+    let raw = io.readAll(conn)?    // Bytes #[taint("user_input")]
+    let text = raw.toString()?     // String #[taint("user_input")]
+    Ok(std.html.escape(text))      // sanitize → #[trust("html_safe")]
+}
+```
+
+`std.html.escape` is registered as a sanitizer with
+`#[sanitizes("user_input", into = "html_safe")]` (§21.6); after the
+call, the result is acceptable to `http.respondHtml`.
+
+### 16.4 Cancellation surfaces on streams
+
+Every blocking method on a capability-derived stream
+(`net.read`/`net.write`/`fs.read`/`fs.write`) returns `Err(Cancelled
+{ cause })` when the surrounding `taskGroup` is cancelled (§8.4.2,
+§7.6). In-memory adapters (`BytesReader`, `Buffer`) never block, so
+they never return `Cancelled` — a test that wants to exercise
+cancellation paths must use a fake capability (`FakeNet`) that
+honors the cancel token, not the in-memory adapter.
 
 ---

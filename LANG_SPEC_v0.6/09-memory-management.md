@@ -15,7 +15,8 @@ identically to an untainted one, and a `Clock` capability instance
 has the same lifetime rules as any reference value.
 
 Resource cleanup is done through `defer` (§4.12) or closure-based
-stdlib APIs (`fs.withFile`, `net.withConn`, etc.).
+helpers on the relevant capability (`Fs.withFile(self, path, body)`,
+`Net.withConn(self, addr, body)`, etc.).
 
 `std.sync` provides `Mutex`, `RwLock`, and atomics.
 

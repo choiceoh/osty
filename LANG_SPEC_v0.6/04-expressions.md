@@ -12,8 +12,27 @@ member access (§4.9), indexing (§4.10), block scope (§4.11), `defer`
 semantics including cancellation interaction (§4.12), and assignment
 forms (§4.13).
 
-The v0.6 surface additions touch §4.4 only (the `while` synonym).
-All other expression forms carry forward from v0.5 unchanged.
+Three v0.6 surfaces interact with this chapter without changing its
+grammar:
+
+- **Capability flow.** `?`-propagation, `defer` cleanup, and `match`
+  exhaustiveness all see capability-typed bindings as ordinary values
+  — there is no `effect` keyword, no `try`/`catch`, and no special
+  `await` form. An `Err` from `fs.read(path)` propagates through `?`
+  identically to any other `Result<_, _>` (§4.5); `defer
+  conn.close()` runs through cancel paths exactly like every other
+  cleanup (§4.12, §8.4.3).
+- **Information flow.** `#[taint]`-tagged values flow through every
+  expression form (`if`, `match`, `?`, closures, indexing,
+  interpolation) preserving the tag set; sanitization is the only way
+  to drop a tag, and it must be explicit (§21.5).
+- **Spec block.** A function's `spec { }` block (§3.13, G43) sits in
+  *declaration position* — `spec { example: ... }` is not an
+  expression. It must be the function body's first statement; placing
+  it elsewhere is `E0440`.
+
+The v0.6 keyword addition is `while cond { }` as a synonym for
+`for cond { }` (G49, §4.4) — both lower to the same IR.
 
 ### 4.1 Block Expressions
 
@@ -554,5 +573,120 @@ Semantics:
 There are no compound forms for `&&`, `||`, `??`, or comparison
 operators. `++` and `--` are explicitly excluded (§14) and are not
 reintroduced by the compound family.
+
+### 4.14 Composing v0.6 surfaces in expression position
+
+The grammar in §4.1 – §4.13 is unchanged from v0.5; this section
+catalogues how the v0.6 attestation surfaces *appear* inside the
+expressions a programmer actually writes. None of these are new
+syntax — they are the existing constructs interacting with the v0.6
+annotation set.
+
+#### 4.14.1 `?` and capability-shaped errors
+
+`?` propagates `Err(...)` from a capability call without unwrapping
+the capability itself; the capability remains in scope across the
+propagation.
+
+```osty
+fn loadUser(fs: Fs, id: Int) -> Result<User, Error> {
+    let path = "users/{id}.json"
+    let text = fs.readToString(path)?       // Err(Cancelled) or Err(NotFound) bubbles
+    let user: User = json.parse(text)?
+    Ok(user)
+}
+```
+
+The function's return type is `Result<User, Error>`; the *concrete*
+errors that flow out are whatever `Fs.readToString` and `json.parse`
+produce, widened to `Error` at the up-cast site (§7.4). If the
+caller wants to discriminate, `err.downcast::<FsError>()` or a
+`#[error_contract(...)]` annotation makes that explicit.
+
+#### 4.14.2 `match` against `#[error_contract]` returns
+
+Match exhaustiveness against a contracted Result is computed against
+the contract variants, not the underlying enum's full surface
+(§7.5).
+
+```osty
+match createUser(email, db) {
+    Ok(uid) -> uid,
+    Err(UserCreateError.EmailFormat) -> ...,
+    Err(UserCreateError.DomainBlocked(d)) -> ...,
+    Err(UserCreateError.DbConflict(_)) -> ...,
+    // No `_ -> ...` needed if the contract enumerates exactly these
+    // three variants; future enum additions become Err arms via
+    // #[match_compat] (§3.14.4).
+}
+```
+
+#### 4.14.3 String interpolation and tainted bindings
+
+Interpolation `"{expr}"` desugars to `expr.toString()` per §17. The
+result `String` carries the tag set of `expr` — interpolation does
+not declassify:
+
+```osty
+fn welcome(user: #[taint("user_input")] User) -> String {
+    "hello {user.name}"     // result is #[taint("user_input")] String
+}
+```
+
+A sink that requires a clean `html_safe` tag rejects the result
+unless `std.html.escape` (or another registered sanitizer) sat
+between the binding and the sink.
+
+#### 4.14.4 Closures capture capabilities, not ambient bindings
+
+`#[ambient(...)]` binds names *only* inside the entry-point function
+body. A closure that runs later (in a `taskGroup`, in a callback
+passed to `iter.map`, in `defer`) needs the binding to be in lexical
+scope at the closure site:
+
+```osty
+#[ambient(net)]
+fn main() {
+    taskGroup(|g| {
+        g.spawn(|| net.fetch("https://a"))   // ✅ captures `net` from main
+        g.spawn(|| fetchOne(net, "https://b"))  // ✅ explicit pass
+    })
+}
+
+fn fetchOne(net: Net, url: String) -> Result<Bytes, Error> {
+    net.fetch(url)
+}
+```
+
+The closure inside `g.spawn(|| ...)` does not "inherit ambient" — it
+captures `net` by ordinary closure semantics. This is why
+`#[ambient]` is restricted to entry-point functions: ambient
+forwarding with structured concurrency would require an extra
+mechanism that v0.6 deliberately does not introduce (§14.5 rule 2).
+
+#### 4.14.5 `defer` is capability-blind
+
+A `defer`red expression runs whatever code it contains; the cleanup
+path can therefore call methods on the capability:
+
+```osty
+fn copyFile(fs: Fs, src: String, dst: String) -> Result<(), Error> {
+    let r = fs.open(src)?
+    defer logError(r.close(), "close src failed")
+
+    let w = fs.create(dst)?
+    defer logError(w.close(), "close dst failed")
+
+    io.copy(w, r)?
+    Ok(())
+}
+```
+
+`defer` runs on the cancel path too (§4.12 rule 7), so the close
+calls execute even when the surrounding `taskGroup` is being torn
+down. Blocking calls inside the `defer` body do **not** honor
+cancellation — cleanup is uninterruptible (§4.12 rule 8) — so
+authors who need bounded close-time use a timeout helper inside
+the body.
 
 ---

@@ -13,11 +13,29 @@ blocks for executable specification, `#[since]` / `#[stability]` /
 contracts.
 
 The v0.6 design north star (*hidden dependency is forbidden*) is
-realized in this chapter through the new annotation surface: every
-external dependency, intent, contract, or evolution rule that affects
-a declaration is now expressible at the declaration site. v0.5
-declarations carry forward unchanged; the v0.6 additions are *opt-in*
-metadata — declarations without v0.6 annotations have v0.5 semantics.
+realized in this chapter: every external dependency, intent,
+contract, or evolution rule that affects a declaration is expressible
+at the declaration site. The annotation surface in §3.10 – §3.15
+makes that visibility *machine-readable* so that diagnostics
+(§3.10.4 spec link, §7.5 error contract), enforcement (§3.11
+reproducibility, §3.4.5 sealed construct), and tooling (§13.6 `osty
+context`, §13.5 `osty publish`) all share one source of truth.
+
+The annotation set is finite — 31 compiler-recognized annotations as
+of v0.6 (§3.8). Three sub-categories sit on top of the underlying
+declaration grammar:
+
+| Category | Annotations | Purpose |
+|---|---|---|
+| **Effect & flow** | `#[ambient]`, `#[reproducible]`, `#[reproducible_capability]`, `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]` | Make capability use, reproducibility scope, and information-flow tags explicit at the declaration boundary. |
+| **Intent & contract** | `#[purpose]`, `#[example]`, `#[fixture]`, `#[spec]`, `spec { }` block, `#[error_contract]`, `#[golden]` | Author-visible, machine-readable record of *what a declaration is for* and *what it must produce*. |
+| **Evolution & budget** | `#[since]`, `#[stability]`, `#[match_compat]`, `#[deprecated]`, `#[budget]` | Promises about API surface stability and performance regression bounds, enforced by `osty publish` and `osty bench --budget`. |
+
+Declarations without these annotations behave per the underlying
+grammar — the annotations are *opt-in attestations*, not new syntactic
+forms. The compiler does not synthesize defaults, so a function that
+omits `#[stability]` is treated as un-attested rather than implicitly
+stable.
 
 ### 3.1 Functions
 
@@ -1414,3 +1432,107 @@ fn test_lookupUser_returns_summary() {
 `FakeDb` / `FakeClock` 의 deterministic 동작이 테스트 결과의
 재현성을 보장. v0.6 테스트는 `--legacy-globals` 의존 없음 — 모든
 effect 가 fake 로 대체.
+
+### 3.17 Declaration anti-patterns and how v0.6 surfaces them
+
+The annotation surface in §3.10 – §3.15 / §20 / §21 is opt-in, but
+the v0.6 toolchain can detect declarations that *should* carry one
+of them and surface that as a lint or diagnostic. Six anti-patterns
+recur often enough to be tracked by `osty audit`:
+
+#### 3.17.1 Effect performed without a capability parameter
+
+```osty
+// ❌ Hidden dependency on the system clock — flagged by E0780.
+fn buildId() -> String {
+    "{time.now().toEpochMillis()}-{random.next()}"
+}
+
+// ✅ Explicit capability surface.
+fn buildId(clock: Clock, rng: Rng) -> String {
+    "{clock.now().toEpochMillis()}-{rng.next()}"
+}
+```
+
+`E0780` fires on every bare global effect call outside
+`--legacy-globals`. The fix is mechanical — accept the capability
+as a parameter; entry-point callers either bind ambient or forward
+explicitly.
+
+#### 3.17.2 `pub` API without `#[stability]`
+
+```osty
+// ⚠ W2105 — pub fn carries no stability attestation.
+pub fn createUser(email: String, db: Db) -> Result<UserId, Error> { ... }
+
+// ✅
+#[stability("stable")]
+#[since("0.6")]
+pub fn createUser(email: String, db: Db) -> Result<UserId, Error> { ... }
+```
+
+A `pub` symbol without `#[stability]` is *un-attested* — `osty
+publish` treats it as `experimental` for SemVer purposes, which
+allows breaking changes without a major bump but emits `W2100`
+warnings on every diff.
+
+#### 3.17.3 `Result<_, ConcreteEnum>` without `#[error_contract]`
+
+```osty
+// ⚠ W0414 — concrete Err type but no contract; documentation gap.
+pub fn parseEmail(s: String) -> Result<Email, EmailError> { ... }
+
+// ✅
+#[error_contract(
+    EmailError.Format        when "missing @ or wrong format",
+    EmailError.DomainBlocked when "domain in deny-list",
+)]
+pub fn parseEmail(s: String) -> Result<Email, EmailError> { ... }
+```
+
+The diagnostic is a warning, not an error: `#[error_contract]` is
+optional, but its absence on a concrete-enum return is almost always
+oversight rather than intent.
+
+#### 3.17.4 Sealed type external literal
+
+```osty
+// ❌ E0420 — Email is sealed; cannot construct outside its module.
+let e = Email { local: "alice", domain: "example.com" }
+
+// ✅
+let e = Email.parse("alice@example.com")?
+```
+
+#### 3.17.5 Sink without sanitizer on tainted input
+
+```osty
+fn handler(req: HttpRequest, db: Db) -> Response {
+    let id = req.queryParam("id") ?? ""
+    // ❌ E0901 — tainted input reaches sql_safe sink without sanitization.
+    db.query("SELECT * FROM users WHERE id = {id}")
+    ...
+}
+```
+
+The fix is parameterized query (`db.exec("SELECT ... WHERE id = ?",
+[id])`) or explicit sanitization (`std.sql.escape(id)`).
+
+#### 3.17.6 `#[reproducible]` with non-deterministic capability
+
+```osty
+// ❌ E0784 — reproducible function receives Clock (non-deterministic).
+#[reproducible(scope = "target")]
+fn cacheKey(clock: Clock, payload: Bytes) -> Bytes32 {
+    sha256(payload + clock.now().toBytes())
+}
+
+// ✅ Receive a precomputed timestamp instead.
+#[reproducible(scope = "target")]
+fn cacheKey(timestamp: Int64, payload: Bytes) -> Bytes32 {
+    sha256(payload + timestamp.toBytes())
+}
+```
+
+The caller is then responsible for capturing `clock.now()` at a
+non-reproducible boundary and passing the captured value down.
