@@ -162,12 +162,16 @@ pub struct LirGlobal {
     // Used for `appending` (e.g. `@llvm.global_ctors`), `private`,
     // `external`, etc.
     pub linkage: String,
+    pub constant: Bool,
 }
 pub fn lirGlobal(name: String, typ: LirType, init: String) -> LirGlobal {
-    LirGlobal {name, typ, init, attrs: [], linkage: ""}
+    LirGlobal {name, typ, init, attrs: [], linkage: "", constant: false}
 }
 pub fn lirGlobalWithLinkage(name: String, typ: LirType, init: String, linkage: String) -> LirGlobal {
-    LirGlobal {name, typ, init, attrs: [], linkage}
+    LirGlobal {name, typ, init, attrs: [], linkage, constant: false}
+}
+pub fn lirGlobalConstant(name: String, typ: LirType, init: String) -> LirGlobal {
+    LirGlobal {name, typ, init, attrs: [], linkage: "", constant: true}
 }
 pub struct LirParam {
     pub name: String,
@@ -699,7 +703,11 @@ pub fn lirRenderGlobal(g: LirGlobal) -> String {
     if g.linkage != "" {
         parts.push(g.linkage)
     }
-    parts.push("global")
+    if g.constant {
+        parts.push("constant")
+    } else {
+        parts.push("global")
+    }
     parts.push(lirTypeString(g.typ))
     parts.push(init)
     for attr in g.attrs {
@@ -1947,6 +1955,106 @@ fn lirModuleHasGlobal(m: LirModule, name: String) -> Bool {
     }
     false
 }
+fn lirEmitInterfaceVTables(out: LirModule, mir: MirModule, diags: List<LirDiagnostic>) {
+    for layout in mir.layouts.interfaces {
+        if layout.name == "" {
+            continue
+        }
+        for impl in layout.impls {
+            if impl.implName == "" {
+                continue
+            }
+            let vtableSym = lirInterfaceVTableSymbol(layout, impl)
+            let mut entries: List<String> = []
+            for method in layout.methods {
+                if lirEmitInterfaceShim(out, mir, layout, impl, method, diags) {
+                    entries.push("ptr @" + lirInterfaceShimSymbol(impl.implName, layout.name, method.name))
+                } else {
+                    entries.push("ptr null")
+                }
+            }
+            let count = layout.methods.len()
+            let init = if entries.len() == 0 {
+                "zeroinitializer"
+            } else {
+                "[" + strings.join(entries, ", ") + "]"
+            }
+            out.globals.push(lirGlobalConstant(vtableSym, lirRawType("[" + lirIntToString(count) + " x ptr]"), init))
+        }
+    }
+}
+fn lirInterfaceVTableSymbol(layout: MirInterfaceLayout, impl: MirInterfaceImpl) -> String {
+    if impl.vtableSym != "" {
+        return impl.vtableSym
+    }
+    "@osty.vtable." + impl.implName + "__" + layout.name
+}
+fn lirInterfaceShimSymbol(implName: String, ifaceName: String, methodName: String) -> String {
+    "osty.shim." + implName + "__" + ifaceName + "__" + methodName
+}
+fn lirInterfaceConcreteMethodSymbol(implName: String, methodName: String) -> String {
+    implName + "__" + methodName
+}
+fn lirEmitInterfaceShim(out: LirModule, mir: MirModule, layout: MirInterfaceLayout, impl: MirInterfaceImpl, method: MirInterfaceMethod, diags: List<LirDiagnostic>) -> Bool {
+    if method.name == "" {
+        return false
+    }
+    let concreteSymbol = lirInterfaceConcreteMethodSymbol(impl.implName, method.name)
+    let concrete = lirLookupMirFunction(mir, concreteSymbol)
+    if concrete.name == "" {
+        diags.push(lirDiagnosticError(LirDiagUnsupported, "interface `" + layout.name + "` impl `" + impl.implName + "` has no concrete method `" + concreteSymbol + "`", "interface." + layout.name))
+        return false
+    }
+    if concrete.params.len() == 0 {
+        diags.push(lirDiagnosticError(LirDiagUnsupported, "interface shim `" + concreteSymbol + "` has no receiver parameter", "interface." + layout.name + "." + method.name))
+        return false
+    }
+    let selfLocal = mirFunctionLocal(concrete, concrete.params[0])
+    if selfLocal.id < 0 {
+        diags.push(lirDiagnosticError(LirDiagInvalidInput, "interface shim `" + concreteSymbol + "` receiver local is out of range", "interface." + layout.name + "." + method.name))
+        return false
+    }
+    let selfType = lirLowerMirType_module(out, mir, selfLocal.typ, "interface." + layout.name + "." + method.name + ".self", diags)
+    let retType = lirLowerMirType_module(out, mir, concrete.returnType, "interface." + layout.name + "." + method.name + ".return", diags)
+    if lirTypeIsZero(selfType) || lirTypeIsVoid(selfType) || lirTypeIsZero(retType) {
+        return false
+    }
+    let mut fn_ = lirFunction(lirInterfaceShimSymbol(impl.implName, layout.name, method.name), retType)
+    fn_.params.push(lirParam("%self_data", lirPtrType()))
+    let mut args: List<LirOperand> = []
+    let mut entry = lirBlock("entry", if lirTypeIsVoid(retType) { lirRetVoid() } else { lirRetValue(retType, "%res") })
+    entry.instrs.push(lirLoad("%self", selfType, "%self_data", 8))
+    args.push(lirOperand(selfType, "%self"))
+    let mut skipSelf = true
+    let mut argIndex = 0
+    for id in concrete.params {
+        if skipSelf {
+            skipSelf = false
+            continue
+        }
+        let loc = mirFunctionLocal(concrete, id)
+        if loc.id < 0 {
+            diags.push(lirDiagnosticError(LirDiagInvalidInput, "interface shim `" + concreteSymbol + "` parameter local is out of range", "interface." + layout.name + "." + method.name))
+            return false
+        }
+        let paramType = lirLowerMirType_module(out, mir, loc.typ, "interface." + layout.name + "." + method.name + ".arg", diags)
+        if lirTypeIsZero(paramType) || lirTypeIsVoid(paramType) {
+            return false
+        }
+        let paramName = "%a" + lirIntToString(argIndex)
+        fn_.params.push(lirParam(paramName, paramType))
+        args.push(lirOperand(paramType, paramName))
+        argIndex = argIndex + 1
+    }
+    if lirTypeIsVoid(retType) {
+        entry.instrs.push(lirCall("", retType, "@" + lirRenderedMirFunctionName(concrete), args))
+    } else {
+        entry.instrs.push(lirCall("%res", retType, "@" + lirRenderedMirFunctionName(concrete), args))
+    }
+    fn_.blocks.push(entry)
+    out.functions.push(fn_)
+    true
+}
 pub fn lirLowerMirModule(cfg: LirLowerConfig, mir: MirModule) -> LirLowerResult {
     let packageName = if cfg.packageName == "" {
         mir.packageName
@@ -1963,6 +2071,7 @@ pub fn lirLowerMirModule(cfg: LirLowerConfig, mir: MirModule) -> LirLowerResult 
     // emitted — same as production.
     lirEmitMirGlobals(out, mir, diags)
     lirLowerMirUses(out, mir)
+    lirEmitInterfaceVTables(out, mir, diags)
     for fn_ in mir.functions {
         let lowered = lirLowerMirFunction(cfg, mir, out, fn_)
         for d in lowered.diagnostics {

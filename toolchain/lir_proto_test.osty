@@ -300,6 +300,9 @@ fn lirTestInterfaceLayout(name: String, methods: List<MirInterfaceMethod>) -> Mi
 fn lirTestInterfaceMethod(name: String, slot: Int) -> MirInterfaceMethod {
     MirInterfaceMethod {name, slot}
 }
+fn lirTestInterfaceImpl(implName: String, vtableSym: String) -> MirInterfaceImpl {
+    MirInterfaceImpl {implName, vtableSym}
+}
 fn testLirProtoLowerMirConstReturnOstyOwned() {
     let mut fn_ = lirTestFunction("answer", "Int")
     let entry = lirTestEntryBlock(fn_)
@@ -457,6 +460,19 @@ fn testLirProtoLowerMirInterfaceParamLayoutOstyOwned() {
     let mut m = lirTestModule([fn_])
     m.layouts.interfaces.push(lirTestInterfaceLayout("Sized", [lirTestInterfaceMethod("size", 0)]))
     assertLirLoweredContains(m, ["%osty.iface = type \{ ptr, ptr \}", "define void @touch(%osty.iface", "store %osty.iface", "ret void"])
+}
+fn testLirProtoLowerMirInterfaceVTableShimOstyOwned() {
+    let mut size = lirTestFunction("Vec__size", "Int")
+    lirTestAddParam(size, "self", "Vec")
+    let entry = lirTestEntryBlock(size)
+    mirFunctionAppend(size, entry, mirAssignInstr(mirPlace(size.returnLocal), mirRVUse(mirOperandConst(mirConstInt(3, "Int"))), mirNoSpan()))
+    mirFunctionTerminate(size, entry, mirReturnTerm(mirNoSpan()))
+    let mut m = lirTestModule([size])
+    m.layouts.structs.push(lirTestStructLayout("Vec", [lirTestField(0, "count", "Int")]))
+    let mut sized = lirTestInterfaceLayout("Sized", [lirTestInterfaceMethod("size", 0)])
+    sized.impls.push(lirTestInterfaceImpl("Vec", "@osty.vtable.Vec__Sized"))
+    m.layouts.interfaces.push(sized)
+    assertLirLoweredContains(m, ["%Vec = type \{ i64 \}", "@osty.vtable.Vec__Sized = constant [1 x ptr] [ptr @osty.shim.Vec__Sized__size]", "define i64 @osty.shim.Vec__Sized__size(ptr %self_data)", "%self = load %Vec, ptr %self_data, align 8", "%res = call i64 @Vec__size(%Vec %self)", "ret i64 %res"])
 }
 fn testLirProtoLowerMirNestedProjectedAssignOstyOwned() {
     let mut fn_ = lirTestFunction("update", "Int")
