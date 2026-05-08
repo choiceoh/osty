@@ -310,6 +310,23 @@ fn ch() {
 }
 // === END
 
+// === CASE: E0780 === #[ambient] on a non-entry helper function
+#[ambient(clock)]
+fn helper() {}
+// === END
+
+// === CASE: E0780 === #[ambient] on an interface declaration
+#[ambient(rng)]
+interface BadAmbientInterface {
+    fn next(self) -> Int
+}
+// === END
+
+// === CASE: E0781 === unknown ambient capability name
+#[ambient(database)]
+fn main() {}
+// === END
+
 // === CASE: E0004 === unterminated block comment (MUST remain last — the
 // unclosed /* is intentional and swallows every byte to EOF).
 /* never closes

@@ -1,0 +1,7 @@
+[package]
+name = "v06_ambient_boundaries"
+version = "0.1.0"
+edition = "0.5"
+description = "v0.6 ambient capability boundary example."
+
+[dependencies]

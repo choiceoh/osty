@@ -28546,6 +28546,40 @@ func diagIntrinsicNonEmptyBody(fnName string, start int, end int) *CheckDiagnost
 	return checkDiagWithNotes(checkCodeIntrinsicNonEmptyBody(), fmt.Sprintf("`#[intrinsic]` function `%s` must have an empty body", ostyToString(fnName)), start, end, []string{"LANG_SPEC §19.6: intrinsic implementations are supplied by the lowering layer; the source body is ignored", "hint: keep the signature and drop the body, or use an empty block"})
 }
 
+func checkCodeAmbientWrongSite() string {
+	return "E0780"
+}
+
+func checkCodeAmbientUnknownCapability() string {
+	return "E0781"
+}
+
+func diagAmbientWrongSite(fnName string, start int, end int) *CheckDiagnostic {
+	return checkDiagWithNotes(
+		checkCodeAmbientWrongSite(),
+		fmt.Sprintf("`#[ambient]` is only allowed on entry-point functions, not on `%s`", ostyToString(fnName)),
+		start,
+		end,
+		[]string{
+			"LANG_SPEC §20.3: ambient binding is restricted to scripts, `fn main`, `#[test]`, `#[bench]`, and `bench*`/`test*` functions",
+			"hint: receive the needed capability (`Clock` / `Rng` / `Env` / `Fs` / `Net` / `Process` / `Console`) as an explicit parameter",
+		},
+	)
+}
+
+func diagAmbientUnknownCapability(name string, start int, end int) *CheckDiagnostic {
+	return checkDiagWithNotes(
+		checkCodeAmbientUnknownCapability(),
+		fmt.Sprintf("`#[ambient(%s)]` references an unknown capability", ostyToString(name)),
+		start,
+		end,
+		[]string{
+			"LANG_SPEC §20.6: canonical ambient names are `clock`, `rng`, `env`, `fs`, `net`, `process`, `console`",
+			"hint: pass user-defined capabilities as explicit parameters — ambient binding only supports stdlib prelude defaults",
+		},
+	)
+}
+
 // Osty: /tmp/selfhost_merged.osty:11286:5
 func checkSuggestSimilar(candidates []string, name string) string {
 	// Osty: /tmp/selfhost_merged.osty:11287:5
@@ -49702,6 +49736,7 @@ func runCheckGates(cx *ElabCx) {
 	// Osty: /tmp/selfhost_merged.osty:24547:5
 	runNoAllocGate(cx)
 	runPureGate(cx)
+	runAmbientGate(cx)
 }
 
 // Osty: /tmp/selfhost_merged.osty:24554:1
@@ -70070,4 +70105,157 @@ func pureCopyLocals(in map[string]struct{}) map[string]struct{} {
 		out[k] = v
 	}
 	return out
+}
+
+// Osty: toolchain/check_gates.osty:1464:1
+func runAmbientGate(cx *ElabCx) {
+	if cx == nil || cx.ast == nil || cx.ast.arena == nil {
+		return
+	}
+	arena := cx.ast.arena
+	for _, declIdx := range arena.decls {
+		node := astArenaNodeAt(arena, declIdx)
+		if node == nil {
+			continue
+		}
+		switch node.kind.(type) {
+		case *AstNodeKind_AstNFnDecl:
+			checkAmbientFn(cx, arena, node)
+		case *AstNodeKind_AstNStructDecl, *AstNodeKind_AstNEnumDecl:
+			checkAmbientNonFnDecl(cx, arena, node)
+			checkAmbientMethods(cx, arena, node)
+		case *AstNodeKind_AstNInterfaceDecl, *AstNodeKind_AstNTypeAlias, *AstNodeKind_AstNLet, *AstNodeKind_AstNLetDecl:
+			checkAmbientNonFnDecl(cx, arena, node)
+		}
+	}
+}
+
+// Osty: toolchain/check_gates.osty:1484:1
+func checkAmbientNonFnDecl(cx *ElabCx, arena *AstArena, node *AstNode) {
+	if node == nil || node.extra < 0 {
+		return
+	}
+	if !checkGateAnnotationContains(arena, node.extra, "ambient") {
+		return
+	}
+	cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagAmbientWrongSite(ambientDeclName(node), node.start, node.end))
+	checkAmbientArgs(cx, arena, node.extra)
+}
+
+// Osty: toolchain/check_gates.osty:1497:1
+func ambientDeclName(node *AstNode) string {
+	if node == nil {
+		return "declaration"
+	}
+	if node.text != "" {
+		return node.text
+	}
+	return astNodeKindName(node.kind)
+}
+
+// Osty: toolchain/check_gates.osty:1504:1
+func checkAmbientMethods(cx *ElabCx, arena *AstArena, parent *AstNode) {
+	if parent == nil {
+		return
+	}
+	for _, memberIdx := range parent.children {
+		m := astArenaNodeAt(arena, memberIdx)
+		if m == nil {
+			continue
+		}
+		if _, ok := m.kind.(*AstNodeKind_AstNFnDecl); ok {
+			checkAmbientFn(cx, arena, m)
+		}
+	}
+}
+
+// Osty: toolchain/check_gates.osty:1513:1
+func checkAmbientFn(cx *ElabCx, arena *AstArena, fn_ *AstNode) {
+	if fn_ == nil || fn_.extra < 0 {
+		return
+	}
+	if !checkGateAnnotationContains(arena, fn_.extra, "ambient") {
+		return
+	}
+	name := fn_.text
+	if !isAmbientEntryPoint(arena, fn_.extra, name) {
+		cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagAmbientWrongSite(name, fn_.start, fn_.end))
+	}
+	checkAmbientArgs(cx, arena, fn_.extra)
+}
+
+// Osty: toolchain/check_gates.osty:1527:1
+func isAmbientEntryPoint(arena *AstArena, annotIdx int, fnName string) bool {
+	if fnName == "main" {
+		return true
+	}
+	if strings.HasPrefix(fnName, "test") || strings.HasPrefix(fnName, "bench") {
+		return true
+	}
+	if checkGateAnnotationContains(arena, annotIdx, "test") {
+		return true
+	}
+	if checkGateAnnotationContains(arena, annotIdx, "bench") {
+		return true
+	}
+	return false
+}
+
+// Osty: toolchain/check_gates.osty:1546:1
+func checkAmbientArgs(cx *ElabCx, arena *AstArena, annotIdx int) {
+	if annotIdx < 0 {
+		return
+	}
+	node := astArenaNodeAt(arena, annotIdx)
+	if node == nil {
+		return
+	}
+	if _, ok := node.kind.(*AstNodeKind_AstNAnnotation); !ok {
+		return
+	}
+	if node.text == "ambient" {
+		validateAmbientArgs(cx, arena, node)
+		return
+	}
+	if node.text == "__group" {
+		for _, childIdx := range node.children {
+			child := astArenaNodeAt(arena, childIdx)
+			if child == nil {
+				continue
+			}
+			if _, ok := child.kind.(*AstNodeKind_AstNAnnotation); ok && child.text == "ambient" {
+				validateAmbientArgs(cx, arena, child)
+			}
+		}
+	}
+}
+
+// Osty: toolchain/check_gates.osty:1567:1
+func validateAmbientArgs(cx *ElabCx, arena *AstArena, ambient *AstNode) {
+	if ambient == nil {
+		return
+	}
+	for _, argIdx := range ambient.children {
+		arg := astArenaNodeAt(arena, argIdx)
+		if arg == nil {
+			continue
+		}
+		argName := arg.text
+		if argName == "" {
+			continue
+		}
+		if !isCanonicalAmbientName(argName) {
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagAmbientUnknownCapability(argName, arg.start, arg.end))
+		}
+	}
+}
+
+// Osty: toolchain/check_gates.osty:1581:1
+func isCanonicalAmbientName(name string) bool {
+	switch name {
+	case "clock", "rng", "env", "fs", "net", "process", "console":
+		return true
+	default:
+		return false
+	}
 }

@@ -744,7 +744,7 @@ pub fn checkDiagRenderAll(xs: List<CheckDiagnostic>) -> String {
 
 /// diagAmbientWrongSite reports `#[ambient(...)]` applied to a function
 /// outside the entry-point set (script `main`, `fn main`, `#[test]`,
-/// `#[bench]`, `bench*`/`test_*`). Library code must receive capabilities
+/// `#[bench]`, `bench*`/`test*`). Library code must receive capabilities
 /// as explicit parameters.
 pub fn diagAmbientWrongSite(fnName: String, start: Int, end: Int) -> CheckDiagnostic {
     checkDiagWithNotes(
@@ -753,7 +753,7 @@ pub fn diagAmbientWrongSite(fnName: String, start: Int, end: Int) -> CheckDiagno
         start,
         end,
         [
-            "LANG_SPEC §20.3: ambient binding is restricted to scripts, `fn main`, `#[test]`, `#[bench]`, and `bench*`/`test_*` functions",
+            "LANG_SPEC §20.3: ambient binding is restricted to scripts, `fn main`, `#[test]`, `#[bench]`, and `bench*`/`test*` functions",
             "hint: receive the needed capability (`Clock` / `Rng` / `Env` / `Fs` / `Net` / `Process` / `Console`) as an explicit parameter",
         ],
     )

@@ -3,54 +3,41 @@
 //
 // 이 파일은 spec corpus 의 parse + resolve + check (E0780/E0781 gate
 // 포함) 가 통과해야 하는 *positive* 케이스. 모든 fn 이 entry-point
-// 위치 (`main`, `test_*`, `bench_*`) 또는 `#[test]`/`#[bench]` 부착.
-
+// 위치 (`main`, `test*`, `bench*`) 또는 `#[test]`/`#[bench]` 부착.
 // ---- #[ambient(name)] on `fn main` — 단일 capability ----
-
 #[ambient(clock)]
 fn main() {
 }
-
-// ---- #[ambient(...)] on `fn main` — 다중 capability ----
-
+// ---- #[ambient(...)] on test* entry — 다중 capability ----
 #[ambient(clock, rng)]
-fn mainTwo() {
+fn testMainTwoAmbient() {
 }
-
-// ---- #[ambient(...)] — 7 canonical 모두 ----
-
+// ---- #[ambient(...)] on bench* entry — 7 canonical 모두 ----
 #[ambient(clock, rng, env, fs, net, process, console)]
-fn mainAll() {
+fn benchMainAllAmbient() {
 }
-
 // ---- #[ambient(...)] on test_* prefixed function ----
-
 #[ambient(rng)]
 fn test_buildId() {
 }
-
 // ---- #[ambient(...)] on bench_* prefixed function ----
-
 #[ambient(fs)]
 fn bench_throughput() {
 }
-
 // ---- #[ambient(...)] on `#[test]` annotated function (non-prefixed) ----
-
 #[test]
 #[ambient(clock)]
 fn deterministicTest() {
 }
-
 // ---- #[ambient] without args — bare flag form ----
-
 #[ambient]
-fn mainBare() {
+fn test_mainBareAmbient() {
 }
-
-// ---- #[ambient(...)] with full annotation surface combination ----
-
+// ---- #[ambient(...)] with larger legal entry-point set ----
 #[ambient(clock, rng, env)]
+fn test_mainManyAmbient() {
+}
+// ---- #[reproducible_capability] remains a separate interface annotation ----
 #[reproducible_capability]
 interface MyCap {
     fn now(self) -> Int

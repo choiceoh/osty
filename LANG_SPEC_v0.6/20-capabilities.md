@@ -80,6 +80,9 @@ factory 는 현재 `time.systemClock()`, `random.host()`, `env.host()`, `fs.host
 테스트용 deterministic fake set 은 `std.capability.testing` 의 `FakeClock`,
 `FakeRng`, `FakeEnv`, `FakeFs`, `FakeNet`, `FakeProcess`, `FakeConsole` 로 제공한다.
 Ambient desugar / `--legacy-globals` warning 은 별도 compiler phase 에서 닫는다.
+현재 구현은 `#[ambient]` 의 entry-point 위치 제한과 canonical name 검증을
+active checker gate 로 고정한다 (`E0780` / `E0781`). 실제 auto-forward/desugar 는
+후속 단계이다.
 
 함수는 capability 를 **명시적 파라미터**로 받는다:
 
@@ -142,12 +145,12 @@ fn main() {
 ```
 
 **Ambient 가 줄 수 있는 capability 는 prelude default 만 — 사용자 정의 capability 는
-ambient 불가 (`E0789`).**
+ambient 불가 (`E0781`).**
 
 **`#[ambient]` 사용 가능 위치**:
 - Script (`#!/usr/bin/env osty` 파일) — **자동 ambient = `(clock, rng, env, fs)`**
 - `fn main` (top-level main 이 entry 일 때)
-- `#[test]` / `#[bench]` / `bench*` / `test_*` 함수 — 테스트 환경의 ambient
+- `#[test]` / `#[bench]` / `bench*` / `test*` 함수 — 테스트 환경의 ambient
 - 그 외 함수: **금지** (`E0780`)
 
 라이브러리 코드는 항상 명시. ambient 는 **boundary 위에서만 허용**. 이는

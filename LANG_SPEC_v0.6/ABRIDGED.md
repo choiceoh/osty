@@ -209,7 +209,7 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - v0.5 의 전역 함수 (`time.now()` / `random.next()` 등) 는 v0.6.x 에서
   `--legacy-globals` 호환. v0.7 제거.
 - 라이브러리 함수는 capability 명시 — `#[ambient]` 금지.
-- script / `fn main` / `#[test]` / `#[bench]` 함수에서만 `#[ambient(name1, ...)]`
+- script / `fn main` / `#[test]` / `#[bench]` / `test*` / `bench*` 함수에서만 `#[ambient(name1, ...)]`
   허용. 본문 첫 위치에 default instance 자동 bind.
 - ambient binding 은 *exact 이름 매칭* 으로 callee 의 capability parameter 에
   자동 forward. 불일치 시 명시 호출 필수.

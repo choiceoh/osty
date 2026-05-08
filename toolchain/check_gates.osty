@@ -52,6 +52,10 @@ use std.strings as strings
 //     Inside the body of a `#[pure]` function, reject operations that
 //     would make the LLVM `readnone` promise unsound: non-local writes,
 //     I/O/impure calls, managed allocation, and closures.
+//
+//   runAmbientGate        — E0780 / E0781 (v0.6 G36)
+//     `#[ambient(...)]` is only allowed at entry-point functions and
+//     only accepts the canonical stdlib capability names.
 
 // ---------------------------------------------------------------------
 // Entry point — called from check.osty:elabFile after elaborateDecls.
@@ -1447,7 +1451,7 @@ fn pureCollectPatternBindings(arena: AstArena, patIdx: Int, out: List<String>) {
 // `#[ambient]` is restricted to entry-point fns:
 //   - `fn main`
 //   - functions carrying `#[test]` or `#[bench]`
-//   - functions whose name starts with `test_` or `bench_` / `bench` / `test`
+//   - functions whose name starts with lowercase `test` or `bench`
 //
 // Library code must receive capabilities as explicit parameters; an
 // ambient binding outside the entry-point set is `E0780`. Each ambient
@@ -1461,11 +1465,40 @@ fn runAmbientGate(cx: ElabCx) {
         let node = astArenaNodeAt(arena, declIdx)
         match node.kind {
             AstNFnDecl -> checkAmbientFn(cx, arena, node),
-            AstNStructDecl -> checkAmbientMethods(cx, arena, node),
-            AstNEnumDecl -> checkAmbientMethods(cx, arena, node),
+            AstNStructDecl -> {
+                checkAmbientNonFnDecl(cx, arena, node)
+                checkAmbientMethods(cx, arena, node)
+            },
+            AstNEnumDecl -> {
+                checkAmbientNonFnDecl(cx, arena, node)
+                checkAmbientMethods(cx, arena, node)
+            },
+            AstNInterfaceDecl -> checkAmbientNonFnDecl(cx, arena, node),
+            AstNTypeAlias -> checkAmbientNonFnDecl(cx, arena, node),
+            AstNLet -> checkAmbientNonFnDecl(cx, arena, node),
+            AstNLetDecl -> checkAmbientNonFnDecl(cx, arena, node),
             _ -> {},
         }
     }
+}
+
+fn checkAmbientNonFnDecl(cx: ElabCx, arena: AstArena, node: AstNode) {
+    if node.extra < 0 {
+        return
+    }
+    if !checkGateAnnotationContains(arena, node.extra, "ambient") {
+        return
+    }
+    let name = ambientDeclName(node)
+    cx.env.local.diagnostics.push(diagAmbientWrongSite(name, node.start, node.end))
+    checkAmbientArgs(cx, arena, node.extra)
+}
+
+fn ambientDeclName(node: AstNode) -> String {
+    if node.text != "" {
+        return node.text
+    }
+    astNodeKindName(node.kind)
 }
 
 fn checkAmbientMethods(cx: ElabCx, arena: AstArena, parent: AstNode) {
@@ -1497,10 +1530,7 @@ fn isAmbientEntryPoint(arena: AstArena, annotIdx: Int, fnName: String) -> Bool {
     if fnName == "main" {
         return true
     }
-    if strings.startsWith(fnName, "test_") || strings.startsWith(fnName, "bench_") {
-        return true
-    }
-    if fnName == "test" || fnName == "bench" {
+    if strings.startsWith(fnName, "test") || strings.startsWith(fnName, "bench") {
         return true
     }
     if checkGateAnnotationContains(arena, annotIdx, "test") {

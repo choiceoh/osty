@@ -1,0 +1,28 @@
+use std.capability as cap
+use std.capability.testing as fake
+use std.testing
+pub fn buildToken(clock: cap.Clock, rng: cap.Rng) -> String {
+    let elapsed = clock.monotonic().millis()
+    let suffix = rng.intInclusive(1, 3)
+    "{elapsed}:{suffix}"
+}
+pub fn boundarySummary() -> String {
+    let names = cap.canonicalNames()
+    let defaults = cap.defaultAmbientNames()
+    "{defaults.len()} ambient defaults / {names.len()} canonical capabilities"
+}
+#[ambient(clock, rng, env, fs)]
+fn main() {
+}
+#[ambient(console)]
+fn test_consoleBoundary() {
+    testing.assertEq(boundarySummary(), "4 ambient defaults / 7 canonical capabilities")
+}
+#[ambient(fs)]
+fn bench_loader() {
+}
+fn testLibraryAPIStaysExplicit() {
+    let clock = fake.clock(0, 9000000)
+    let rng = fake.rng([5])
+    testing.assertEq(buildToken(clock, rng), "9:3")
+}
