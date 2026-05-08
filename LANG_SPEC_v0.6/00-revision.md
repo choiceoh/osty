@@ -1,17 +1,22 @@
 # Osty v0.6 — Revision Document
 
-> **Status**: 제안 (draft). 14 개 결정 (G36–G49) 을 v0.5 baseline 위에 추가하는 spec 개정.
+> **Status**: baseline (frozen). 10 개 결정 (G36, G37, G39, G40, G41, G42,
+> G44, G45, G47, G48) 을 v0.5 baseline 위에 추가하는 spec 개정.
 > v0.5 의 모든 결정은 v0.6 에서도 유효. 본 문서는 *delta* 만 기술하며, 변경 없는 챕터는
 > [`../LANG_SPEC_v0.5/`](../LANG_SPEC_v0.5/) 가 계속 권위.
+>
+> **Withdrawn from v0.6 baseline** (low-utility, removed pre-release):
+> G38 (`#[spec]` link), G43 (spec block), G46 (`#[budget]`), G49 (`while`
+> keyword). 자세한 사유는 SPEC_GAPS.md 의 "Withdrawn" 섹션.
 >
 > **Companion**: [`SPEC_GAPS.md`](../SPEC_GAPS.md) §"Resolved in v0.6", [`OSTY_GRAMMAR_v0.6.md`](../OSTY_GRAMMAR_v0.6.md), [`CHANGELOG_v0.6.md`](../CHANGELOG_v0.6.md).
 
 ## 0. Overview
 
-v0.5 의 외부 사용 corpus 와 셀프호스트 운영 (100 PR / 4 일 sprint) 에서 도출된 13 개
-*hidden-dependency-surface* 결정 + 1 개 *ergonomics* 정정 (`while` 키워드) 을 v0.6 에
-batch 로 수용한다. 사용자 0 인 단계의 마지막 큰 surface revision — 이후 v0.7 부터는
-stable API rule (G44) 이 적용된다.
+v0.5 의 외부 사용 corpus 와 셀프호스트 운영 (100 PR / 4 일 sprint) 에서 도출된
+*hidden-dependency-surface* 결정 10 개를 v0.6 에 batch 로 수용한다. 사용자 0 인
+단계의 마지막 큰 surface revision — 이후 v0.7 부터는 stable API rule (G44) 이
+적용된다.
 
 v0.5 의 §14 *anonymous structural record* 금지 정책은 그대로 유지된다 — ad-hoc
 labeled data 는 nominal `struct` 또는 tuple 로 표현한다.
@@ -20,24 +25,14 @@ labeled data 는 nominal `struct` 또는 tuple 로 표현한다.
 |---|---|---|
 | G36 | Capabilities (§20) | 환경 effect 를 capability 값으로 명시 |
 | G37 | Information flow (§21) | `#[taint]` / `#[sanitizes]` 정적 IFC |
-| G38 | Spec link (§3.10) | `#[spec("§X.Y")]` checked spec ↔ impl 링크 |
 | G39 | Reproducibility (§3.11) | `#[reproducible(scope=...)]` 환경독립 강제 |
 | G40 | Construction discipline (§3.4.5) | `#[sealed_construct]` parse-don't-validate |
 | G41 | Error contract (§7.5) | `#[error_contract(... when ...)]` failure mode 명세 |
 | G42 | Structured intent (§3.12) | `#[purpose]` / `#[example]` / `#[fixture]` |
-| G43 | Executable spec (§3.13) | `spec { example: / law: / invariant: }` 블록 |
 | G44 | API evolution (§3.14) | `#[since]` / `#[stability]` / `#[match_compat]` |
 | G45 | Golden tests (§11.5) | `#[golden]` AST-aware 스냅샷 |
-| G46 | Performance contract (§3.15) | `#[budget(allocs/io/time)]` static + runtime 분리 |
 | G47 | Machine-readable context (§13.4) | `osty context <symbol>` 구조화 추출 |
 | G48 | Annotation surface | 위 신규 어노테이션의 grammar 통합 |
-| **G49** | `while` keyword (§4.4) | `for cond {}` 와 동의어. mental-model 일치 |
-
-> **G49 design review note**: G36–G48 (13 개) 가 직전 사용 corpus 분석에서
-> 합의된 결정. **G49 는 본 spec 작성 과정에서 추가된 ergonomics 정정**으로
-> 작은 surface (1 keyword, 새 의미 0) 라 포함. 한때 같이 검토됐던 *G50 anonymous
-> structural record* 는 v0.5 §14 의 "named types are nominal" discipline 유지를
-> 위해 *제외*. ad-hoc labeled data 는 nominal `struct` 또는 tuple 로.
 
 ## 1. Design North Star — *Hidden Dependency Is Forbidden*
 
@@ -45,39 +40,35 @@ v0.5 까지의 결정이 (a) safety-by-construction, (b) type system simplicity,
 discipline 세 축이었다면, v0.6 은 네 번째 축을 추가한다:
 
 > **모든 hidden dependency 는 surface 로 끌어올린다 — 시간, 난수, 환경, 보안 흐름,
-> 진화 규칙, 성능 계약, 의도, 명세 — 어느 것도 "암묵"으로 두지 않는다.**
+> 진화 규칙, 의도 — 어느 것도 "암묵"으로 두지 않는다.**
 
-이 원칙으로 v0.6 의 13 결정이 4 카테고리로 묶인다:
+이 원칙으로 v0.6 의 10 결정이 4 카테고리로 묶인다:
 
 | 카테고리 | 명시 대상 | 결정 |
 |---|---|---|
 | **Effectful** | 런타임 환경 의존 (시간/난수/IO) | G36 (Capability), G39 (Reproducible) |
 | **Security** | 정보 흐름 (sources → sinks) | G37 (Taint/Sanitize) |
 | **Temporal** | API 진화 / 호환성 | G44 (Since/Stability/MatchCompat) |
-| **Intent + Determinism** | 의도, 명세, 성능, 실패 양태 | G38 (Spec), G40 (SealedConstruct), G41 (ErrorContract), G42 (Intent), G43 (SpecBlock), G45 (Golden), G46 (Budget), G47 (Context) |
+| **Intent + Determinism** | 의도, 명세, 실패 양태 | G40 (SealedConstruct), G41 (ErrorContract), G42 (Intent), G45 (Golden), G47 (Context) |
 
-**Capability (G36) 은 base layer.** G39 / G37 / G46 의 검사가 capability 시그니처 위에서
-*allow-list 기반*으로 sound 해진다. 따라서 구현 순서는 G36 → G38 → G39 → G37 순.
+**Capability (G36) 은 base layer.** G39 / G37 의 검사가 capability 시그니처 위에서
+*allow-list 기반*으로 sound 해진다. 따라서 구현 순서는 G36 → G39 → G37 순.
 
 ## 2. Implementation Phases
 
-스펙 결정은 v0.6 baseline 으로 한 번에 동결하지만, 구현은 5 단계로 분리한다.
+스펙 결정은 v0.6 baseline 으로 한 번에 동결하지만, 구현은 단계로 분리한다.
 각 phase 종료 시 `spec corpus`, `STDLIB_MATRIX`, `CHANGELOG_v0.6` 갱신.
 
 ```
 Phase 1   G36 Capability + #[ambient] + stdlib capability migration
           (가장 큰 리팩터, base layer 이므로 선행 필수)
-Phase 2   G38 #[spec("§X.Y")] + G42 #[fixture] / #[purpose] / #[example]
+Phase 2   G42 #[fixture] / #[purpose] / #[example]
           + G47 osty context (작고 dogfood 가치 ↑)
 Phase 3   G39 #[reproducible(scope=...)] (capability 위에 sound)
-          + G43 spec { } v0 (example: 만)
           + G45 #[golden] AST-aware
 Phase 4   G40 #[sealed_construct] + G41 #[error_contract]
           + G44 #[since] / #[stability] / #[match_compat]
-          + G46 #[budget(static)]
 Phase 5   G37 #[taint] / #[sanitizes] (가장 무거움, 시그니처급 임팩트)
-          + G46 #[budget(runtime)]
-          + G43 spec { } v1 (forall property test 자동 생성)
 ```
 
 ## 3. New Chapters
