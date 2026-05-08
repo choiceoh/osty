@@ -150,10 +150,11 @@ outside this set is `E0766`.
   folding in runtime call sites.
 
 **Forward compatibility.** The FORBID rows above are the stable set for
-v0.5. Relaxing any of them is an additive, semver-observable change —
-it enables source that previously did not compile. Such changes must
-ship under a normal minor version bump; no FORBID row silently flips
-to ALLOW inside a v0.5.x patch release.
+v0.6 (carried unchanged from v0.5). Relaxing any of them is an
+additive, semver-observable change — it enables source that previously
+did not compile. Such changes must ship under a normal minor version
+bump; no FORBID row silently flips to ALLOW inside a v0.6.x patch
+release.
 
 ### 3.2 Variables
 
@@ -1022,8 +1023,9 @@ fn computeKey(data: Bytes) -> Bytes32 {
 
 `scope = "portable"` adds endianness and NaN-bit constraints (`E0788`).
 
-`#[pure]` (v0.5) is strictly stronger — it forbids capability receipt
-entirely, even for deterministic capabilities like `Hash`. `E0785`.
+`#[pure]` (carried from v0.5 §3.8) is strictly stronger than
+`#[reproducible]` — it forbids capability receipt entirely, even for
+deterministic capabilities like `Hash`. `E0785`.
 
 ### 3.12 Structured Intent — `#[purpose]`, `#[example]`, `#[fixture]` (G42)
 

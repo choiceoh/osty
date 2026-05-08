@@ -5,7 +5,9 @@
 
 ### 20.1 동기
 
-v0.5 까지 stdlib 의 환경 접근은 **전역 함수**로 노출되어 있다:
+v0.5 baseline 까지 stdlib 의 환경 접근은 **전역 함수**로 노출되어 있었다 —
+v0.6 에서 이 surface 는 capability 로 전환된다 (`--legacy-globals` 호환
+모드는 v0.6.x 한정, v0.7 제거):
 
 ```osty
 let t = time.now()
