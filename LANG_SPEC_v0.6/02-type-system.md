@@ -70,17 +70,24 @@ prelude and is unreachable from ordinary user code. See §19.3.
 
 ### 2.2 Numeric Conversions
 
-Osty allows only lossless implicit numeric widening. The widening lattice
-is `Int8 -> Int16 -> Int32 -> Int -> Float64`, `Int -> Float64`, and
-`Float32 -> Float64`. Narrowing, signedness-changing conversions, and
-lossy float/integer conversions require explicit methods; implicit
-narrowing is `E0765`.
+Osty allows implicit numeric widening along the lattice
+`Int8 -> Int16 -> Int32 -> Int -> Float64`, `Int -> Float64`, and
+`Float32 -> Float64`. Integer-to-integer and `Float32 -> Float64`
+widening is exact (every source value has an identical target
+representation). Integer-to-float widening is exact for source
+magnitudes within the target's representable integer range
+(|v| ≤ 2^24 for `Float32`, |v| ≤ 2^53 for `Float64`); for the rare
+case of larger `Int` magnitudes, IEEE-754 round-to-nearest-ties-to-even
+applies — `.toFloat()` is available when the conversion deserves to
+be called out at the source. Narrowing, signedness-changing
+conversions, and `Float64 -> Float32` require explicit methods (see
+§10.5); implicit narrowing is `E0765`.
 
 ```osty
 let a: Int = 5
-let b: Float64 = a              // lossless widening
-let c: Int32 = big.toInt32()?           // Err if out of range
-let f: Float = a.toFloat()
+let b: Float64 = a              // exact (5 fits within 2^53)
+let c: Int32 = big.toInt32()?   // Err if out of range
+let f: Float = a.toFloat()      // explicit form
 ```
 
 Lossy conversions return `Result<T, Error>`; lossless return `T`.
@@ -310,7 +317,12 @@ listed:
 | `Result<T, E>` | ✓ if both | — | ✓ if both | ✓ |
 
 † `Float` ordering follows IEEE-754 total ordering: `NaN` is greater
-than all finite and infinite values; `-0.0 < 0.0`.
+than all finite and infinite values; `-0.0 < 0.0`. The built-in
+`Ordered` instance for `Float` overrides the default bodies of
+`le` / `ge` so they fall back to total-order comparison rather than
+the generic `lt(other) || eq(other)` form — this preserves
+reflexivity (`NaN.le(NaN)` is `true`) under the `Ordered: Equal`
+super-trait even though `NaN.eq(NaN)` remains `false` per IEEE-754.
 
 ‡ `Float` is **not** `Hashable` because `==` and `hash` would disagree
 under `NaN` semantics. Convert via `f.toBits()` if you must hash.
