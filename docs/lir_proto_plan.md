@@ -1260,8 +1260,11 @@ generator should already satisfy with the `current-generator` tag.
 `internal/llvmgen` parses that Osty-owned catalog, lowers each embedded source
 through the normal front-end, IR, monomorphization, and MIR pipeline, runs
 `GenerateFromMIR`, and checks the fixture needles. Fixtures such as
-`source_println_int_runtime_abi` stay tagged `lir-only` until the current
-generator and LIR Proto runtime ABI intentionally converge.
+`source_println_int_runtime_abi` and `source_println_struct_to_string` stay
+tagged `lir-only` until the current generator and LIR Proto runtime ABI
+intentionally converge. The struct-print fixture pins the production shape:
+source `println(p)` is already lowered to a `P__toString` call before LIR Proto
+receives the print intrinsic, so LIR Proto only prints a `String` operand.
 
 Coverage target:
 

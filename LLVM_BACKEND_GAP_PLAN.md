@@ -11,6 +11,8 @@
 > **Phase B 추가 진행**: B2/B3의 넓은 조각으로 canonical `Map.update(k, |n| (n ?? 0) + delta)`를 Go MIR lowerer와 Osty self-host MIR lowerer 양쪽에서 `MirIntrinsicMapIncr`로 직접 낮추도록 고정했다. 또 LIR Proto receiver 분석이 `List<Pair>` element와 `Map<String, Pair>` value의 MIR layout을 composite lane으로 보존하게 바꿔, `map.set`/`map.getOr` bytes-v1 fixture가 receiver 단계에서 끊기지 않도록 했다.
 >
 > **Phase C 진행**: C1의 widened `Option<Struct>` / `Result<Struct, _>` typedef 위에 C2 첫 조각을 얹어, LIR Proto가 `Option<Struct>` None/Some, `Some(struct)` aggregate, `Option<Struct>.unwrap()` / `unwrapOr()`, `map.get` / `list.first` / `list.last` / `list.pop`의 composite Some payload를 i64 boxing 없이 직접 `%Struct` payload slot으로 emit한다. 이 과정에서 self-host MIR/LIR Proto의 Option/Result 태그도 source/Go convention(`Some`/`Ok`=0, `None`/`Err`=1)으로 맞췄다.
+>
+> **Phase F 진행**: F1의 `println(struct)` 경로는 IR lowering이 print-family 인자를 `.toString()` method call로 자동 감싼 뒤 MIR payload가 `String` print operand만 LIR Proto로 넘기는 형태로 닫혔다. `source_println_struct_to_string` parity fixture와 backend MIR-shape regression이 GAP-PRINT-001 재발을 막는다.
 
 ## 1. 새 architecture 요약
 
@@ -96,7 +98,7 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 
 | ID | 코드 위치 | 메시지 | 시나리오 |
 |---|---|---|---|
-| GAP-PRINT-001 | 2533 | `print argument type \`T\` is not implemented` | struct/enum print (ToString lowering 미구현) |
+| GAP-PRINT-001 | 2533 | `print argument type \`T\` is not implemented` | ✅ F1에서 `println(struct)` → `.toString()` MIR payload shape로 폐쇄 |
 
 #### 2.2.6 Interface (full-blank)
 
@@ -224,9 +226,9 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 
 ### Phase F — Cleanup / multi-file gate
 
-**F1 — Print struct/enum lowering** (GAP-PRINT-001)
+**F1 — Print struct/enum lowering** (GAP-PRINT-001) — 완료
 - `println(some_struct)` → ToString protocol 호출 lower.
-- 회귀: 1 fixture.
+- 회귀: `TestLLVMBackendEmitPrintlnStructAutoToString`가 native MIR payload의 `toString` call + `String` print operand를 직접 확인하고, `source_println_struct_to_string` LIR Proto parity fixture가 runtime print ABI shape를 잠근다.
 
 **F2 — Multi-file package emit gate 측정**
 - `TestLLVMBackendBinary*MultiFile*`의 declined 비율 확인.
