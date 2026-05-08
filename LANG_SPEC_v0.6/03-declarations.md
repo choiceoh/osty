@@ -1335,6 +1335,159 @@ fn aliceUser() -> Email { Email.parse("alice@example.com")? }
 
 `#[fixture]` is restricted to zero-arity functions. `E0432`.
 
+#### 3.12.1 `#[purpose]` — free-text intent
+
+`#[purpose("...")]` is a single string literal expressing *why* the
+declaration exists. Unlike a doc comment (`///`), the purpose:
+
+- Has a fixed syntactic shape — easy for tooling to extract.
+- Is required to be a single string literal, not a concatenation
+  or expression. `E0431`.
+- Is rendered as the *primary one-liner* in `osty doc`, separate
+  from longer explanatory prose in `///` comments.
+
+Recommended length: under 80 characters; one sentence; no internal
+formatting markers. The conventions favor a *what does this do?*
+phrasing, not a *how does this do it?* one — the `///` comment
+covers the latter.
+
+```osty
+// ✅ Good — declarative, one sentence, fits a render slot.
+#[purpose("Validate the email and create a user row, returning the row id")]
+pub fn createUser(...) -> ... { ... }
+
+// ❌ Bad — too long, embedded markup, prose-like.
+#[purpose("This function takes an `email` *string* and a `db` *capability* and ...")]
+pub fn createUser(...) -> ... { ... }
+```
+
+#### 3.12.2 `#[example]` — input/output pairs
+
+`#[example]` records a tested input/output pair. The annotation
+reads as a function call: pass `input`, expect `output`, optionally
+inject named fixtures via `uses`:
+
+```osty
+#[example(input = ["alice@example.com", "<Db>"], output = "Ok(42)")]
+#[example(input = ["alice@example.com", "<Db>"],
+          uses = "fakeDb",
+          output = "Err(SignupError.DbConflict(1))")]
+#[example(input = ["", "<Db>"], output = "Err(SignupError.EmailFormat)")]
+pub fn signup(email: String, db: Db) -> Result<UserId, SignupError> { ... }
+```
+
+**Argument grammar.**
+
+- `input = [a, b, c]` — a literal list whose elements match the
+  function's positional parameters in order. `<Db>` / `<Net>` /
+  etc. are *capability placeholders* — the runner substitutes the
+  fixture named by the `uses` argument (or the default fake from
+  `std.testing.capabilityFakes()` if no `uses` is given).
+- `output = "..."` — a string literal evaluated as an Osty
+  expression at test time. Must compare equal to the function's
+  actual return value with `==` (using the value's `Equal` impl).
+- `uses = "name"` — references a `#[fixture(name = "name")]`
+  function. Multiple `uses =` repeats inject each named fixture in
+  order; capability placeholders in `input` are resolved against
+  the fixture set.
+
+**Verification.** `osty test --example` runs each `#[example]` as
+an independent test. Output mismatch is a test failure. Missing
+fixture (named in `uses` but no matching `#[fixture]`) is `E0433`.
+
+#### 3.12.3 `#[fixture]` — canonical instances
+
+`#[fixture(name)]` registers a zero-arity function as a named
+canonical instance for tests, examples, and documentation:
+
+```osty
+#[fixture(name = "alice")]
+fn alice() -> Email {
+    Email.parse("alice@example.com").unwrap()
+}
+
+#[fixture(name = "fakeDb")]
+fn fakeDb() -> Db {
+    let db = std.capability.testing.FakeDb()
+    db.seed(alice())                // fixtures may call other fixtures
+    db
+}
+```
+
+**Composition rules.**
+
+1. Zero arity is mandatory (`E0432`). A fixture takes no parameters.
+2. Fixtures may call other fixtures by name. Cycles are `E0433`.
+3. Each call to a fixture function returns a *fresh instance* —
+   tests never share fixture state.
+4. Fixtures are package-local by default; `pub fn` annotated with
+   `#[fixture]` is exported for downstream packages but is rare in
+   practice (most fixtures are test-local).
+
+**Consumption.**
+
+- `#[example(uses = "name")]` — direct use as test input.
+- `osty doc` — fixture body inlined under the example panel.
+- `osty context <symbol> --format=json` — fixtures listed under
+  `fixtures_referenced[]`.
+- Property-test seeds (Phase 5, `forall x in fixture: ...`) — the
+  fixture's value is the starting point for shrinking.
+
+#### 3.12.4 Composition example — full intent surface
+
+```osty
+#[purpose("Validate the email and create a user row, returning the row id")]
+#[example(input = ["alice@example.com", "<Db>"],
+          uses = "freshDb",
+          output = "Ok(UserId(1))")]
+#[example(input = ["alice@example.com", "<Db>"],
+          uses = "dbWithAlice",
+          output = "Err(SignupError.DbConflict(1))")]
+#[example(input = ["invalid", "<Db>"],
+          uses = "freshDb",
+          output = "Err(SignupError.EmailFormat)")]
+#[spec("§10.30.user.signup")]
+#[since("0.6")]
+#[stability("stable")]
+#[error_contract(
+    SignupError.EmailFormat   when "Email.parse failed",
+    SignupError.DomainBlocked when "domain in deny-list",
+    SignupError.DbConflict    when "email unique constraint",
+)]
+pub fn signup(email: String, db: Db) -> Result<UserId, SignupError> {
+    spec {
+        example: signup("alice@example.com", freshDb()) == Ok(UserId(1))
+    }
+    ...
+}
+
+#[fixture(name = "freshDb")]
+fn freshDb() -> Db { std.capability.testing.FakeDb() }
+
+#[fixture(name = "dbWithAlice")]
+fn dbWithAlice() -> Db {
+    let db = freshDb()
+    db.exec(insertSql(Email.parse("alice@example.com").unwrap()))
+    db
+}
+```
+
+This single declaration emits to:
+
+- `osty doc` page with purpose / spec link / failure modes / 3
+  example panels (each with the fixture body inlined).
+- `osty context signup --format=json` with the full intent payload.
+- `osty test --spec --example --golden` runs all three examples + the
+  spec-block clause.
+- `osty publish` validates the API surface against `#[stability("stable")]`
+  and the contract.
+- LSP hover shows the purpose + spec lead paragraph.
+
+This is what *hidden dependency forbidden* looks like at a single
+declaration: every external dependency, every failure mode, every
+test fixture, every API stability promise — all surfaced explicitly
+at the function's signature.
+
 ### 3.13 `spec { ... }` — Executable Spec Block (G43)
 
 A function body may begin with a `spec { ... }` block stating

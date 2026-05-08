@@ -234,6 +234,146 @@ Failure modes:
 
 `osty context <fn>` (§13.6) emits the same data as JSON.
 
+#### 7.5.1 Contract enforcement at function boundary
+
+`#[error_contract]` is checked at three points:
+
+1. **Definition site** — every `Err(V)` returned (including via
+   `?`-propagation that widens a callee's error to the contract
+   variant) must use a variant listed in the contract. Returning an
+   un-contracted variant is `E0410`. `Err`-from-helper must either
+   be widened explicitly or the contract must list the propagated
+   variant.
+
+2. **Caller match exhaustiveness** — when the contracted function is
+   the scrutinee of a `match`, exhaustiveness considers only contract
+   variants. Uncontracted enum variants do not need to be matched
+   (they're treated as dead per the contract). Match arms targeting
+   uncontracted variants emit `W0413`.
+
+3. **`?`-propagation through a contracted caller** — if the *caller*
+   carries `#[error_contract]`, every callee error variant that
+   could flow through `?` must be a subset of the caller's contract.
+   Mismatch is `E0414`; the fix is either to expand the caller's
+   contract or to convert the error explicitly.
+
+#### 7.5.2 Worked patterns
+
+**Wrapping multiple concrete errors into one contract.** A pipeline
+function that calls `Email.parse` and `db.exec` carries a wrapping
+enum that the contract enumerates:
+
+```osty
+pub enum SignupError {
+    EmailFormat,
+    DomainBlocked(String),
+    DbConflict(Int),
+    DbUnavailable,
+}
+
+#[error_contract(
+    SignupError.EmailFormat     when "Email.parse rejected the input",
+    SignupError.DomainBlocked   when "domain in deny-list",
+    SignupError.DbConflict      when "email unique constraint",
+    SignupError.DbUnavailable   when "DB connection lost mid-request",
+)]
+pub fn signup(email: String, db: Db) -> Result<UserId, SignupError> {
+    let parsed = Email.parse(email)
+        .orError(SignupError.EmailFormat)?
+    if isBlocked(parsed.domain()) {
+        return Err(SignupError.DomainBlocked(parsed.domain()))
+    }
+    db.exec(insertSql(parsed))
+        .mapErr(|e| match e.downcast::<DbError>() {
+            Some(DbError.Conflict(c)) -> SignupError.DbConflict(c),
+            Some(_) -> SignupError.DbUnavailable,
+            None -> SignupError.DbUnavailable,
+        })
+        .map(|_| UserId(0))
+}
+```
+
+The contract documents *which* failure modes the caller will see,
+and the type checker enforces that `db.exec`'s native error type
+cannot leak out un-rewrapped.
+
+**Optional-as-success in a contract context.** When a function
+returns `Result<T?, E>` (e.g. "find user — error means DB issue,
+`Ok(None)` means simply not found"), the contract is on the `E`
+side only:
+
+```osty
+#[error_contract(
+    LookupError.DbUnavailable when "DB connection lost",
+)]
+pub fn findUser(db: Db, id: Int) -> Result<User?, LookupError> {
+    match db.queryOne::<User>("SELECT * FROM users WHERE id = ?", [id]) {
+        Ok(u) -> Ok(u),                                // Some / None passes through
+        Err(_) -> Err(LookupError.DbUnavailable),
+    }
+}
+```
+
+This pattern is preferred over a 3-way `Result<T, NotFoundOrError>`
+because it keeps "user does not exist" — a normal flow outcome —
+out of the contract.
+
+#### 7.5.3 Contract evolution and SemVer
+
+Contract changes are SemVer-relevant per §3.14.3:
+
+| Change | `#[stability("stable")]` | `#[stability("experimental")]` |
+|---|---|---|
+| Add a contract variant | major bump | minor bump |
+| Remove a contract variant | major bump | minor bump |
+| Tighten the `when` clause text | patch bump (doc-only) | patch bump |
+| Loosen — variant now flows from a new condition | patch bump (additive) | patch bump |
+
+Adding a variant is breaking because callers' `match` expressions
+that exhausted the previous contract no longer cover the new
+variant. The recommended evolution path is to introduce the new
+variant as `experimental` first, let downstream `match
+#[match_compat]` clauses opt in, and promote to `stable` after a
+release cycle.
+
+#### 7.5.4 Cancellation in error contracts
+
+`Cancelled` (§7.6, §8.4.1) is a structural concern that flows
+orthogonally to domain failures. The convention is:
+
+- **Do not list `Cancelled` in `#[error_contract]`.** The contract
+  enumerates *domain* failure modes; cancellation is not a domain
+  failure.
+- **Cancellation propagates through a contracted Result naturally.**
+  When a contracted function calls a stdlib blocking method and the
+  caller's `taskGroup` is cancelled, the resulting `Err(Cancelled
+  { cause })` flows through `?` and exits the contracted function.
+  This *does not* count as an unlisted variant — `Cancelled` is
+  outside the contract surface entirely.
+- **Callers must handle cancellation separately.** A `match` against
+  a contracted Result needs an `Err(_)` arm to catch `Cancelled`
+  even when the contract is exhaustive on domain errors.
+
+```osty
+match createUser(email, db) {
+    Ok(uid) -> ...,
+    Err(SignupError.EmailFormat) -> ...,
+    Err(SignupError.DomainBlocked(d)) -> ...,
+    Err(SignupError.DbConflict(_)) -> ...,
+    Err(SignupError.DbUnavailable) -> ...,
+    Err(other) -> {
+        // Cancelled or any future contract addition.
+        if other.downcast::<Cancelled>().isSome() { return Err(other) }
+        unreachable("contract violation: {other}")
+    },
+}
+```
+
+The `unreachable` arm catches contract violations at runtime — a
+defense-in-depth backstop against soundness bugs in the contract
+checker. In practice the checker prevents reaching it; the
+`unreachable` panics if the invariant is violated.
+
 ### 7.6 Cancellation as a Recoverable Error
 
 The cancel signal is delivered as `Err(Cancelled { cause })` (see
