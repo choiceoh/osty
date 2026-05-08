@@ -5513,6 +5513,10 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 		return
 	}
 
+	if bs.tryLowerMapUpdateIncr(mc, destT, recvType) {
+		return
+	}
+
 	// Peephole: `map.keys().sorted()` fuses to a single
 	// IntrinsicMapKeysSorted runtime call, saving the intermediate
 	// unsorted-keys-list allocation. Every Map-aggregation bench
@@ -5602,6 +5606,100 @@ func (bs *bodyState) lowerMethodCallInto(mc *ir.MethodCall, dest Place, destT Ty
 		Args:   callArgs,
 		SpanV:  mc.SpanV,
 	})
+}
+
+func (bs *bodyState) tryLowerMapUpdateIncr(mc *ir.MethodCall, destT Type, recvType Type) bool {
+	if mc == nil || mc.Name != "update" || len(mc.Args) != 2 || !isUnit(destT) {
+		return false
+	}
+	_, valueT := mapKVFromMapType(recvType)
+	if valueT == nil || !isI64PrimitiveInt(valueT) {
+		return false
+	}
+	closure, ok := mc.Args[1].Value.(*ir.Closure)
+	if !ok {
+		return false
+	}
+	deltaExpr, ok := mapUpdateIncrDeltaExpr(closure)
+	if !ok {
+		return false
+	}
+	bs.emit(&IntrinsicInstr{
+		Kind: IntrinsicMapIncr,
+		Args: []Operand{
+			bs.lowerExprAsOperand(mc.Receiver),
+			bs.lowerExprAsOperand(mc.Args[0].Value),
+			bs.lowerExprAsOperandHint(deltaExpr, valueT),
+		},
+		SpanV: mc.SpanV,
+	})
+	return true
+}
+
+func mapUpdateIncrDeltaExpr(closure *ir.Closure) (ir.Expr, bool) {
+	if closure == nil || len(closure.Params) != 1 || closure.Params[0] == nil || closure.Params[0].Name == "" || closure.Body == nil {
+		return nil, false
+	}
+	if len(closure.Body.Stmts) != 0 || closure.Body.Result == nil {
+		return nil, false
+	}
+	paramName := closure.Params[0].Name
+	bin, ok := closure.Body.Result.(*ir.BinaryExpr)
+	if !ok || bin.Op != ir.BinAdd {
+		return nil, false
+	}
+	if mapUpdateIncrBaseExpr(bin.Left, paramName) && mapUpdateIncrDeltaSafe(bin.Right, paramName) {
+		return bin.Right, true
+	}
+	if mapUpdateIncrBaseExpr(bin.Right, paramName) && mapUpdateIncrDeltaSafe(bin.Left, paramName) {
+		return bin.Left, true
+	}
+	return nil, false
+}
+
+func mapUpdateIncrBaseExpr(e ir.Expr, paramName string) bool {
+	coalesce, ok := e.(*ir.CoalesceExpr)
+	if !ok || coalesce == nil {
+		return false
+	}
+	id, ok := coalesce.Left.(*ir.Ident)
+	if !ok || id == nil || id.Name != paramName {
+		return false
+	}
+	return intLitValueIs(coalesce.Right, 0)
+}
+
+func mapUpdateIncrDeltaSafe(e ir.Expr, paramName string) bool {
+	switch x := e.(type) {
+	case *ir.IntLit:
+		return true
+	case *ir.Ident:
+		return x != nil && x.Name != paramName
+	case *ir.UnaryExpr:
+		return x != nil && (x.Op == ir.UnPlus || x.Op == ir.UnNeg) && mapUpdateIncrDeltaSafe(x.X, paramName)
+	case *ir.BinaryExpr:
+		if x == nil {
+			return false
+		}
+		switch x.Op {
+		case ir.BinAdd, ir.BinSub, ir.BinMul:
+			return mapUpdateIncrDeltaSafe(x.Left, paramName) && mapUpdateIncrDeltaSafe(x.Right, paramName)
+		}
+	case *ir.FieldExpr:
+		return x != nil && !x.Optional && mapUpdateIncrDeltaSafe(x.X, paramName)
+	case *ir.TupleAccess:
+		return x != nil && mapUpdateIncrDeltaSafe(x.X, paramName)
+	}
+	return false
+}
+
+func intLitValueIs(e ir.Expr, want int64) bool {
+	lit, ok := e.(*ir.IntLit)
+	if !ok || lit == nil {
+		return false
+	}
+	got, err := strconv.ParseInt(strings.ReplaceAll(lit.Text, "_", ""), 0, 64)
+	return err == nil && got == want
 }
 
 func (bs *bodyState) lowerMapLitInto(m *ir.MapLit, dest Place, destT Type) {

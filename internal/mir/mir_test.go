@@ -2163,6 +2163,55 @@ func TestLowerStdlibMapMethods(t *testing.T) {
 	}
 }
 
+func TestLowerMapUpdateCanonicalPatternFusesToMapIncr(t *testing.T) {
+	mapType := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, ir.TInt}, Builtin: true}
+	optInt := &ir.OptionalType{Inner: ir.TInt}
+	body := &ir.Block{
+		Stmts: []ir.Stmt{
+			&ir.ExprStmt{X: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "m", Kind: ir.IdentParam, T: mapType},
+				Name:     "update",
+				Args: []ir.Arg{
+					{Value: &ir.Ident{Name: "k", Kind: ir.IdentParam, T: ir.TString}},
+					{Value: &ir.Closure{
+						Params: []*ir.Param{{Name: "n", Type: optInt}},
+						Return: ir.TInt,
+						Body: &ir.Block{Result: &ir.BinaryExpr{
+							Op: ir.BinAdd,
+							Left: &ir.CoalesceExpr{
+								Left:  &ir.Ident{Name: "n", Kind: ir.IdentParam, T: optInt},
+								Right: &ir.IntLit{Text: "0", T: ir.TInt},
+								T:     ir.TInt,
+							},
+							Right: &ir.IntLit{Text: "1", T: ir.TInt},
+							T:     ir.TInt,
+						}},
+						T: &ir.FnType{Params: []ir.Type{optInt}, Return: ir.TInt},
+					}},
+				},
+				T: ir.TUnit,
+			}},
+		},
+	}
+	fn := &ir.FnDecl{
+		Name:   "count",
+		Return: ir.TUnit,
+		Params: []*ir.Param{
+			{Name: "m", Type: mapType},
+			{Name: "k", Type: ir.TString},
+		},
+		Body: body,
+	}
+	mod := lowerHIR(t, fn)
+	text := Print(mod)
+	if !strings.Contains(text, "intrinsic map_incr(_1, _2, const 1 Int)") {
+		t.Fatalf("expected canonical Map.update to fuse to map_incr, got:\n%s", text)
+	}
+	if strings.Contains(text, "Map__update") || strings.Contains(text, "closure") {
+		t.Fatalf("canonical Map.update should not lower through the generic method/closure path:\n%s", text)
+	}
+}
+
 func TestLowerStdlibSetMethods(t *testing.T) {
 	setInt := &ir.NamedType{Name: "Set", Args: []ir.Type{ir.TInt}, Builtin: true}
 	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
