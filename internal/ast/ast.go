@@ -234,6 +234,71 @@ var annotationRules = map[string]AnnotationTarget{
 	// annotation; a checker-level enforcement pass is tracked under
 	// SPEC_GAPS `pure-enforce`. §3.8.12.
 	"pure": TargetTopLevelDecl | TargetMethod,
+
+	// v0.6 G36 — Capabilities (LANG_SPEC_v0.6/20-capabilities.md).
+	// `#[ambient(name1, ...)]` injects prelude default capability
+	// instances at the function body's first statement position.
+	// Restricted to entry-point functions (script `main`, `#[test]`,
+	// `#[bench]` etc.). Library functions must receive capabilities
+	// as explicit parameters — `E0780` when applied elsewhere.
+	"ambient": TargetTopLevelDecl,
+	// `#[reproducible_capability]` marks an interface as carrying only
+	// `#[reproducible]` methods, so user-defined deterministic
+	// capabilities can pass `#[reproducible]` checks. v0.6 §20.5.
+	"reproducible_capability": TargetTopLevelDecl,
+
+	// v0.6 G37 — Information flow (LANG_SPEC_v0.6/21-information-flow.md).
+	// Source / sanitizer / sink annotations form a 1-bit + N-tag flow
+	// tracking surface. Targets are widened across function declaration,
+	// parameter, struct field (per `#[taint]`), and method positions to
+	// match the rule table in 00-revision.md §7.6.
+	"taint":              TargetTopLevelDecl | TargetMethod | TargetStructField,
+	"sanitizes":          TargetTopLevelDecl | TargetMethod,
+	// `#[requires("tag")]` on parameters (G37 sink) reuses the v0.5
+	// `requires` annotation name; the parameter-position grammar is a
+	// separate G37 R29 surface added in v0.6 and tracked by the parser
+	// rather than the annotation target table. The existing v0.5
+	// `"requires": TargetMethod` entry above (around line 116) covers
+	// the stdlib trait-bound use; parameter annotations bypass that
+	// table since they live at a different syntactic position.
+	"trusted_declassify": TargetTopLevelDecl | TargetMethod,
+	"taint_field":        TargetStructField,
+
+	// v0.6 G38 — Spec link (LANG_SPEC_v0.6/03-declarations.md §3.10).
+	// `#[spec("§X.Y")]` registers a checked link into the spec corpus.
+	"spec": TargetTopLevelDecl | TargetMethod,
+
+	// v0.6 G39 — Reproducibility (§3.11). `#[reproducible(scope=...)]`
+	// asserts environment-independence; checker enforces in Phase 3.
+	"reproducible": TargetTopLevelDecl | TargetMethod,
+
+	// v0.6 G40 — Sealed construction (§3.4.5).
+	"sealed_construct":   TargetTopLevelDecl,
+	"trusted_construct":  TargetTopLevelDecl | TargetMethod,
+	"test_construct":     TargetTopLevelDecl | TargetMethod,
+
+	// v0.6 G41 — Error contract (§7.5). Catalogues failure modes.
+	"error_contract": TargetTopLevelDecl | TargetMethod,
+
+	// v0.6 G42 — Structured intent (§3.12). Machine-readable purpose,
+	// example (auto-checked), fixture (canonical instance).
+	"purpose": TargetTopLevelDecl | TargetMethod,
+	"example": TargetTopLevelDecl | TargetMethod,
+	"fixture": TargetTopLevelDecl,
+
+	// v0.6 G44 — API evolution (§3.14).
+	"since":        TargetTopLevelDecl | TargetMethod | TargetStructField | TargetVariant,
+	"stability":    TargetTopLevelDecl | TargetMethod,
+	"match_compat": TargetTopLevelDecl | TargetMethod,
+
+	// v0.6 G45 — Golden tests (§11.5.2). AST/text/json/diag-aware
+	// snapshot. Implicitly requires `#[reproducible(scope="target")]`.
+	"golden": TargetTopLevelDecl,
+
+	// v0.6 G46 — Performance contract (§3.15). Static keys (allocs,
+	// io_calls, stack_depth, instructions) and runtime keys (time_ms,
+	// p99_ms) coexist on one annotation.
+	"budget": TargetTopLevelDecl | TargetMethod,
 }
 
 // IsAllowedAnnotation reports whether an annotation name is part of the
