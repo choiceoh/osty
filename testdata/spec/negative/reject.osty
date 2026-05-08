@@ -327,6 +327,13 @@ interface BadAmbientInterface {
 fn main() {}
 // === END
 
+// === CASE: E0783 === reproducible capability method missing reproducible annotation
+#[reproducible_capability]
+interface BadReproducibleCapability {
+    fn hash(self, value: String) -> String
+}
+// === END
+
 // === CASE: E0004 === unterminated block comment (MUST remain last — the
 // unclosed /* is intentional and swallows every byte to EOF).
 /* never closes
