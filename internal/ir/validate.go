@@ -239,8 +239,11 @@ func (v *validator) validateStmt(s Stmt) {
 		if s.Value != nil {
 			v.validateExpr(s.Value)
 		}
-	case *BreakStmt, *ContinueStmt:
-		// leaves
+	case *BreakStmt:
+		if s.Value != nil {
+			v.validateExpr(s.Value)
+		}
+	case *ContinueStmt:
 	case *IfStmt:
 		if s.Cond == nil {
 			v.addf("IfStmt: nil Cond")
@@ -454,6 +457,10 @@ func (v *validator) validateExpr(e Expr) {
 		}
 	case *BlockExpr:
 		v.validateBlock(e.Block)
+	case *LoopExpr:
+		if e.Body != nil {
+			v.validateBlock(e.Body)
+		}
 	case *IfExpr:
 		v.validateExpr(e.Cond)
 		v.validateBlock(e.Then)

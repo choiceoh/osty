@@ -1010,7 +1010,11 @@ func (l *lowerer) lowerStmt(s ast.Stmt) Stmt {
 		}
 		return out
 	case *ast.BreakStmt:
-		return &BreakStmt{Label: s.Label, SpanV: nodeSpan(s)}
+		out := &BreakStmt{Label: s.Label, SpanV: nodeSpan(s)}
+		if s.Value != nil {
+			out.Value = l.lowerExpr(s.Value)
+		}
+		return out
 	case *ast.ContinueStmt:
 		return &ContinueStmt{Label: s.Label, SpanV: nodeSpan(s)}
 	case *ast.AssignStmt:
@@ -1555,6 +1559,8 @@ func (l *lowerer) lowerExpr(e ast.Expr) Expr {
 		return l.lowerClosure(e)
 	case *ast.TurbofishExpr:
 		return l.lowerTurbofish(e)
+	case *ast.LoopExpr:
+		return l.lowerLoopExpr(e)
 	}
 	l.note("unsupported expression %T at %v", e, e.Pos())
 	return &ErrorExpr{Note: fmt.Sprintf("%T", e), T: ErrTypeVal, SpanV: nodeSpan(e)}
@@ -3633,6 +3639,19 @@ func (l *lowerer) lowerTurbofish(tf *ast.TurbofishExpr) Expr {
 	}
 	l.note("bare turbofish at %v attached to non-ident base; type args dropped", tf.Pos())
 	return base
+}
+
+func (l *lowerer) lowerLoopExpr(e *ast.LoopExpr) Expr {
+	t := l.exprType(e)
+	if t == nil || t == ErrTypeVal {
+		t = TUnit
+	}
+	return &LoopExpr{
+		Label: e.Label,
+		Body:  l.lowerBlock(e.Body),
+		T:     t,
+		SpanV: nodeSpan(e),
+	}
 }
 
 func (l *lowerer) lowerMatchStmt(m *ast.MatchExpr) Stmt {

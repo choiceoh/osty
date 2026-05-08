@@ -715,8 +715,11 @@ func (r *ReturnStmt) At() Span { return r.SpanV }
 
 // BreakStmt exits the targeted loop.
 // Label is empty for the innermost enclosing loop.
+// Value is the optional expression on `break <expr>` (G22), only
+// legal inside a `loop { … }` expression. Nil for bare `break`.
 type BreakStmt struct {
 	Label string
+	Value Expr
 	SpanV Span
 }
 
@@ -1079,6 +1082,20 @@ type BlockExpr struct {
 func (*BlockExpr) exprNode()    {}
 func (b *BlockExpr) At() Span   { return b.SpanV }
 func (b *BlockExpr) Type() Type { return b.T }
+
+// LoopExpr is `loop { … }` — an infinite loop whose value is the
+// `break <expr>` that exits it (G22, §A.4). The type is Never when
+// no break-value exists; otherwise the join of all break values.
+type LoopExpr struct {
+	Label string
+	Body  *Block
+	T     Type
+	SpanV Span
+}
+
+func (*LoopExpr) exprNode()    {}
+func (l *LoopExpr) At() Span   { return l.SpanV }
+func (l *LoopExpr) Type() Type { return l.T }
 
 // IfExpr is an `if` used in expression position. Both arms are
 // guaranteed present; statement-form `if` without else lowers to

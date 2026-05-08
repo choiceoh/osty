@@ -159,8 +159,11 @@ func subst(n Node, env SubstEnv) {
 		if n.Value != nil {
 			subst(n.Value, env)
 		}
-	case *BreakStmt, *ContinueStmt:
-		// leaves
+	case *BreakStmt:
+		if n.Value != nil {
+			subst(n.Value, env)
+		}
+	case *ContinueStmt:
 	case *IfStmt:
 		if n.Cond != nil {
 			subst(n.Cond, env)
@@ -301,6 +304,11 @@ func subst(n Node, env SubstEnv) {
 		n.T = substType(n.T, env)
 		if n.Block != nil {
 			subst(n.Block, env)
+		}
+	case *LoopExpr:
+		n.T = substType(n.T, env)
+		if n.Body != nil {
+			subst(n.Body, env)
 		}
 	case *IfExpr:
 		n.T = substType(n.T, env)
