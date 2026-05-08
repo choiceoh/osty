@@ -201,50 +201,50 @@ pub fn hirLowerTyToHirType(arena: TyArena, idx: Int) -> HirType {
     if tyIsErr(arena, idx) || tyIsPoison(arena, idx) {
         return hirTypeErr()
     }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
     let kind = tyKindAt(arena, idx)
-    match kind {
-        TkErr -> hirTypeErr(),
-        TkPoison -> hirTypeErr(),
-        TkPrim -> hirLowerPrimByPk(tyPrimAt(arena, idx)),
-        TkNamed -> hirLowerNamedFromTy(arena, idx),
-        TkOptional -> {
-            let inner = hirLowerTyToHirType(arena, tyInnerAt(arena, idx))
-            hirTypeOptional(inner)
-        },
-        TkTuple -> {
-            let mut elems: List<HirType> = []
-            for ei in tyArgsAt(arena, idx) {
-                elems.push(hirLowerTyToHirType(arena, ei))
-            }
-            hirTypeTuple(elems)
-        },
-        TkFn -> {
-            let mut params: List<HirType> = []
-            for pi in tyArgsAt(arena, idx) {
-                params.push(hirLowerTyToHirType(arena, pi))
-            }
-            let retIdx = tyRetAt(arena, idx)
-            let ret = if retIdx >= 0 {
-                hirLowerTyToHirType(arena, retIdx)
-            } else {
-                hirTUnit()
-            }
-            hirTypeFn(params, ret)
-        },
-        TkVar -> {
-            let varName = tyVarNameAt(arena, idx)
-            let varOwner = tyVarOwnerAt(arena, idx)
-            hirTypeVar(varName, varOwner)
-        },
-        TkSelf -> {
-            // Interface / trait bodies carry `Self` as a distinct
-            // arena kind; the HIR has no separate Self — represent it
-            // as a TypeVar bound to the owning type's name so
-            // monomorphization can substitute it per impl.
-            let owner = tyHeadAt(arena, idx)
-            hirTypeVar("Self", owner)
-        },
+    if kind == TkErr { return hirTypeErr() }
+    if kind == TkPoison { return hirTypeErr() }
+    if kind == TkPrim { return hirLowerPrimByPk(tyPrimAt(arena, idx)) }
+    if kind == TkNamed { return hirLowerNamedFromTy(arena, idx) }
+    if kind == TkOptional {
+        let inner = hirLowerTyToHirType(arena, tyInnerAt(arena, idx))
+        return hirTypeOptional(inner)
     }
+    if kind == TkTuple {
+        let mut elems: List<HirType> = []
+        for ei in tyArgsAt(arena, idx) {
+            elems.push(hirLowerTyToHirType(arena, ei))
+        }
+        return hirTypeTuple(elems)
+    }
+    if kind == TkFn {
+        let mut params: List<HirType> = []
+        for pi in tyArgsAt(arena, idx) {
+            params.push(hirLowerTyToHirType(arena, pi))
+        }
+        let retIdx = tyRetAt(arena, idx)
+        let ret = if retIdx >= 0 {
+            hirLowerTyToHirType(arena, retIdx)
+        } else {
+            hirTUnit()
+        }
+        return hirTypeFn(params, ret)
+    }
+    if kind == TkVar {
+        let varName = tyVarNameAt(arena, idx)
+        let varOwner = tyVarOwnerAt(arena, idx)
+        return hirTypeVar(varName, varOwner)
+    }
+    if kind == TkSelf {
+        // Interface / trait bodies carry `Self` as a distinct arena
+        // kind; the HIR has no separate Self — represent it as a
+        // TypeVar bound to the owning type's name so monomorphization
+        // can substitute it per impl.
+        let owner = tyHeadAt(arena, idx)
+        return hirTypeVar("Self", owner)
+    }
+    unreachable()
 }
 
 /// hirLowerNamedFromTy reconstructs a `HirType` for a `TkNamed`
@@ -1182,15 +1182,14 @@ pub struct HirLowerNameBind {
 /// case too — callers that want the Go semantics (reject `mut` for
 /// simple-name form) can check pattern.identMut themselves.
 pub fn hirLowerSimpleBindName(pattern: HirPattern) -> HirLowerNameBind {
-    match pattern.kind {
-        HirPatIdent -> {
-            if pattern.identMut {
-                return HirLowerNameBind { name: "", ok: false }
-            }
-            HirLowerNameBind { name: pattern.identName, ok: true }
-        },
-        _ -> HirLowerNameBind { name: "", ok: false },
+    // B2: payload-less enum dispatch as if-else (stage0 P0–P15).
+    if pattern.kind == HirPatIdent {
+        if pattern.identMut {
+            return HirLowerNameBind { name: "", ok: false }
+        }
+        return HirLowerNameBind { name: pattern.identName, ok: true }
     }
+    HirLowerNameBind { name: "", ok: false }
 }
 
 // ---- Type-yield classifier -------------------------------------
@@ -1621,75 +1620,46 @@ pub fn hirLowerIsPreludeVariantName(name: String) -> Bool {
 /// hirLowerIsPrim reports whether `t` is a primitive HirType with
 /// the given PrimKind. Mirrors Go's `isPrim`.
 pub fn hirLowerIsPrim(t: HirType, pk: HirPrimKind) -> Bool {
-    match t.kind {
-        HirTypePrim -> {
-            hirLowerPrimKindEq(t.primKind, pk)
-        },
-        _ -> false,
+    // B2: payload-less enum dispatch as if-else (stage0 P0–P15).
+    if t.kind == HirTypePrim {
+        return hirLowerPrimKindEq(t.primKind, pk)
     }
+    false
 }
 
 fn hirLowerPrimKindEq(a: HirPrimKind, b: HirPrimKind) -> Bool {
-    match a {
-        HirPrimInvalid -> match b { HirPrimInvalid -> true, _ -> false },
-        HirPrimInt -> match b { HirPrimInt -> true, _ -> false },
-        HirPrimInt8 -> match b { HirPrimInt8 -> true, _ -> false },
-        HirPrimInt16 -> match b { HirPrimInt16 -> true, _ -> false },
-        HirPrimInt32 -> match b { HirPrimInt32 -> true, _ -> false },
-        HirPrimInt64 -> match b { HirPrimInt64 -> true, _ -> false },
-        HirPrimUInt8 -> match b { HirPrimUInt8 -> true, _ -> false },
-        HirPrimUInt16 -> match b { HirPrimUInt16 -> true, _ -> false },
-        HirPrimUInt32 -> match b { HirPrimUInt32 -> true, _ -> false },
-        HirPrimUInt64 -> match b { HirPrimUInt64 -> true, _ -> false },
-        HirPrimByte -> match b { HirPrimByte -> true, _ -> false },
-        HirPrimFloat -> match b { HirPrimFloat -> true, _ -> false },
-        HirPrimFloat32 -> match b { HirPrimFloat32 -> true, _ -> false },
-        HirPrimFloat64 -> match b { HirPrimFloat64 -> true, _ -> false },
-        HirPrimBool -> match b { HirPrimBool -> true, _ -> false },
-        HirPrimChar -> match b { HirPrimChar -> true, _ -> false },
-        HirPrimString -> match b { HirPrimString -> true, _ -> false },
-        HirPrimBytes -> match b { HirPrimBytes -> true, _ -> false },
-        HirPrimRawPtr -> match b { HirPrimRawPtr -> true, _ -> false },
-        HirPrimUnit -> match b { HirPrimUnit -> true, _ -> false },
-        HirPrimNever -> match b { HirPrimNever -> true, _ -> false },
-    }
+    // B2: 21-variant exhaustive prim-vs-prim match collapses to a
+    // single Equal compare (auto-derived for payload-less enums).
+    a == b
 }
 
 /// hirLowerIsIntegralType reports whether `t` is an integer
 /// primitive. Used by bitwise-op type recovery.
 pub fn hirLowerIsIntegralType(t: HirType) -> Bool {
-    match t.kind {
-        HirTypePrim -> {
-            // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
-            if t.primKind == HirPrimInt { return true }
-            if t.primKind == HirPrimInt8 { return true }
-            if t.primKind == HirPrimInt16 { return true }
-            if t.primKind == HirPrimInt32 { return true }
-            if t.primKind == HirPrimInt64 { return true }
-            if t.primKind == HirPrimUInt8 { return true }
-            if t.primKind == HirPrimUInt16 { return true }
-            if t.primKind == HirPrimUInt32 { return true }
-            if t.primKind == HirPrimUInt64 { return true }
-            if t.primKind == HirPrimByte { return true }
-            false
-        },
-        _ -> false,
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if t.kind != HirTypePrim { return false }
+    if t.primKind == HirPrimInt { return true }
+    if t.primKind == HirPrimInt8 { return true }
+    if t.primKind == HirPrimInt16 { return true }
+    if t.primKind == HirPrimInt32 { return true }
+    if t.primKind == HirPrimInt64 { return true }
+    if t.primKind == HirPrimUInt8 { return true }
+    if t.primKind == HirPrimUInt16 { return true }
+    if t.primKind == HirPrimUInt32 { return true }
+    if t.primKind == HirPrimUInt64 { return true }
+    if t.primKind == HirPrimByte { return true }
+    false
 }
 
 /// hirLowerIsFloatType reports whether `t` is a floating-point
 /// primitive. Symmetric with hirLowerIsIntegralType.
 pub fn hirLowerIsFloatType(t: HirType) -> Bool {
-    match t.kind {
-        HirTypePrim -> {
-            // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
-            if t.primKind == HirPrimFloat { return true }
-            if t.primKind == HirPrimFloat32 { return true }
-            if t.primKind == HirPrimFloat64 { return true }
-            false
-        },
-        _ -> false,
-    }
+    // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
+    if t.kind != HirTypePrim { return false }
+    if t.primKind == HirPrimFloat { return true }
+    if t.primKind == HirPrimFloat32 { return true }
+    if t.primKind == HirPrimFloat64 { return true }
+    false
 }
 
 /// hirLowerIsNumericType reports whether `t` is integer or float.
@@ -1719,33 +1689,32 @@ pub fn hirLowerNumericResult(lt: HirType, rt: HirType) -> HirType {
 pub fn hirLowerRecoverBinaryType(op: HirBinOp, lt: HirType, rt: HirType) -> HirType {
     if hirTypeIsErr(lt) || hirTypeIsErr(rt) { return hirTypeErr() }
     if !hirTypeIsValid(lt) || !hirTypeIsValid(rt) { return hirTypeErr() }
-    match op {
-        HirBinEq -> hirTBool(),
-        HirBinNeq -> hirTBool(),
-        HirBinLt -> hirTBool(),
-        HirBinLeq -> hirTBool(),
-        HirBinGt -> hirTBool(),
-        HirBinGeq -> hirTBool(),
-        HirBinAnd -> hirTBool(),
-        HirBinOr -> hirTBool(),
-        HirBinAdd -> {
-            // String + String → String; else numeric.
-            if hirLowerIsPrim(lt, HirPrimString) && hirLowerIsPrim(rt, HirPrimString) {
-                return hirTString()
-            }
-            hirLowerNumericResult(lt, rt)
-        },
-        HirBinSub -> hirLowerNumericResult(lt, rt),
-        HirBinMul -> hirLowerNumericResult(lt, rt),
-        HirBinDiv -> hirLowerNumericResult(lt, rt),
-        HirBinMod -> hirLowerNumericResult(lt, rt),
-        HirBinBitAnd -> hirLowerBitwiseResult(lt, rt),
-        HirBinBitOr -> hirLowerBitwiseResult(lt, rt),
-        HirBinBitXor -> hirLowerBitwiseResult(lt, rt),
-        HirBinShl -> hirLowerBitwiseResult(lt, rt),
-        HirBinShr -> hirLowerBitwiseResult(lt, rt),
-        _ -> hirTypeErr(),
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if op == HirBinEq { return hirTBool() }
+    if op == HirBinNeq { return hirTBool() }
+    if op == HirBinLt { return hirTBool() }
+    if op == HirBinLeq { return hirTBool() }
+    if op == HirBinGt { return hirTBool() }
+    if op == HirBinGeq { return hirTBool() }
+    if op == HirBinAnd { return hirTBool() }
+    if op == HirBinOr { return hirTBool() }
+    if op == HirBinAdd {
+        // String + String → String; else numeric.
+        if hirLowerIsPrim(lt, HirPrimString) && hirLowerIsPrim(rt, HirPrimString) {
+            return hirTString()
+        }
+        return hirLowerNumericResult(lt, rt)
     }
+    if op == HirBinSub { return hirLowerNumericResult(lt, rt) }
+    if op == HirBinMul { return hirLowerNumericResult(lt, rt) }
+    if op == HirBinDiv { return hirLowerNumericResult(lt, rt) }
+    if op == HirBinMod { return hirLowerNumericResult(lt, rt) }
+    if op == HirBinBitAnd { return hirLowerBitwiseResult(lt, rt) }
+    if op == HirBinBitOr { return hirLowerBitwiseResult(lt, rt) }
+    if op == HirBinBitXor { return hirLowerBitwiseResult(lt, rt) }
+    if op == HirBinShl { return hirLowerBitwiseResult(lt, rt) }
+    if op == HirBinShr { return hirLowerBitwiseResult(lt, rt) }
+    hirTypeErr()
 }
 
 fn hirLowerBitwiseResult(lt: HirType, rt: HirType) -> HirType {
@@ -1770,24 +1739,22 @@ pub fn hirLowerRecoverIndexType(baseT: HirType) -> HirType {
     if !hirTypeIsValid(baseT) {
         return hirTypeErr()
     }
-    match baseT.kind {
-        HirTypePrim -> {
-            // B2: payload-less dispatch as if-else chain (stage0 P0–P15).
-            if baseT.primKind == HirPrimBytes { return hirTByte() }
-            if baseT.primKind == HirPrimString { return hirTChar() }
-            hirTypeErr()
-        },
-        HirTypeNamed -> {
-            if baseT.namedName == "List" && baseT.namedArgs.len() >= 1 {
-                return baseT.namedArgs[0]
-            }
-            if baseT.namedName == "Map" && baseT.namedArgs.len() >= 2 {
-                return baseT.namedArgs[1]
-            }
-            hirTypeErr()
-        },
-        _ -> hirTypeErr(),
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if baseT.kind == HirTypePrim {
+        if baseT.primKind == HirPrimBytes { return hirTByte() }
+        if baseT.primKind == HirPrimString { return hirTChar() }
+        return hirTypeErr()
     }
+    if baseT.kind == HirTypeNamed {
+        if baseT.namedName == "List" && baseT.namedArgs.len() >= 1 {
+            return baseT.namedArgs[0]
+        }
+        if baseT.namedName == "Map" && baseT.namedArgs.len() >= 2 {
+            return baseT.namedArgs[1]
+        }
+        return hirTypeErr()
+    }
+    hirTypeErr()
 }
 
 // ---- Place-expression detection --------------------------------
@@ -1802,31 +1769,28 @@ pub fn hirLowerRecoverIndexType(baseT: HirType) -> HirType {
 /// Optional-field chains (`x?.y`) are NOT places — they can return
 /// None and therefore need to materialise.
 pub fn hirLowerCanLowerAsPlace(e: HirExpr) -> Bool {
-    match e.kind {
-        HirExprIdent -> true,
-        HirExprField -> {
-            if e.fieldOptional {
-                return false
-            }
-            if e.fieldTarget.len() > 0 {
-                return hirLowerCanLowerAsPlace(e.fieldTarget[0])
-            }
-            false
-        },
-        HirExprTupleAccess -> {
-            if e.tupleAccessTarget.len() > 0 {
-                return hirLowerCanLowerAsPlace(e.tupleAccessTarget[0])
-            }
-            false
-        },
-        HirExprIndex -> {
-            if e.indexTarget.len() > 0 {
-                return hirLowerCanLowerAsPlace(e.indexTarget[0])
-            }
-            false
-        },
-        _ -> false,
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if e.kind == HirExprIdent { return true }
+    if e.kind == HirExprField {
+        if e.fieldOptional { return false }
+        if e.fieldTarget.len() > 0 {
+            return hirLowerCanLowerAsPlace(e.fieldTarget[0])
+        }
+        return false
     }
+    if e.kind == HirExprTupleAccess {
+        if e.tupleAccessTarget.len() > 0 {
+            return hirLowerCanLowerAsPlace(e.tupleAccessTarget[0])
+        }
+        return false
+    }
+    if e.kind == HirExprIndex {
+        if e.indexTarget.len() > 0 {
+            return hirLowerCanLowerAsPlace(e.indexTarget[0])
+        }
+        return false
+    }
+    false
 }
 
 // ---- Literal text normalization --------------------------------
@@ -4178,13 +4142,13 @@ fn hirLowerCoreIdentCaptureKind(
     if coreIdx < 0 {
         return HirCaptureUnknown
     }
-    match coreIdentKindAt(cx.elab.core, coreIdx) {
-        IkLocal -> HirCaptureLocal,
-        IkParam -> HirCaptureParam,
-        IkFn -> HirCaptureFn,
-        IkGlobal -> HirCaptureGlobal,
-        _ -> HirCaptureUnknown,
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    let kind = coreIdentKindAt(cx.elab.core, coreIdx)
+    if kind == IkLocal { return HirCaptureLocal }
+    if kind == IkParam { return HirCaptureParam }
+    if kind == IkFn { return HirCaptureFn }
+    if kind == IkGlobal { return HirCaptureGlobal }
+    HirCaptureUnknown
 }
 
 fn hirLowerBindingMutable(node: AstNode) -> Bool {
