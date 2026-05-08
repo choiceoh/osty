@@ -3,6 +3,11 @@
 `std.image` detects common image formats and parses header metadata. Full
 pixel decoding is intentionally left for a future runtime-backed codec layer.
 
+`std.image` is *pure* — every function operates on already-captured
+`Bytes`. Filesystem reads happen at the caller's boundary through
+`Fs` (§20.9.4). The pure surface is acceptable inside
+`#[reproducible(scope = "target")]` and never consults a capability.
+
 Supported metadata formats:
 
 - PNG
