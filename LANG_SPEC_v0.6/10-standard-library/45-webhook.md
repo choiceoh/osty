@@ -16,15 +16,21 @@ use std.env
 use std.http
 use std.webhook
 
-let policy = webhook.stripe(env.require("STRIPE_WEBHOOK_SECRET")?)
-let store = webhook.emptyStore()
+// Webhook intake: `Env` resolves the shared secret; `Clock` provides
+// the timestamp used to bound the replay window. Both are explicit
+// capability parameters (§20.9). The handler closure remains pure
+// data — no ambient effect leaks into business logic.
+fn handle(env: Env, clock: Clock, request: HttpRequest) -> Result<HttpResponse, Error> {
+    let policy = webhook.stripe(env.require("STRIPE_WEBHOOK_SECRET")?)
+    let store = webhook.emptyStore()
 
-let outcome = webhook.dispatch(request, policy, store, fn(event) {
-    // Business logic runs only after signature and replay checks pass.
-    webhook.ack()
-})
+    let outcome = webhook.dispatch(request, policy, clock, store, fn(event) {
+        // Business logic runs only after signature and replay checks pass.
+        webhook.ack()
+    })
 
-return outcome.response
+    Ok(outcome.response)
+}
 ```
 
 Core types:

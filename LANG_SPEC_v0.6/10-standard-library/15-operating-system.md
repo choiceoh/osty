@@ -13,14 +13,32 @@ environment variables and arguments are in `std.env`.
 
 ```osty
 use std.os
+use std.process
 
+// Path helpers are pure — no capability required.
 let joined = os.path.join(["data", "users", "alice.json"])
 let ext = os.path.extension("report.pdf")            // "pdf"
 let parent = os.path.dirname("/a/b/c.txt")           // "/a/b"
 
+// Process effects flow through a `Process` capability (§20.9.6).
+fn runStatus(proc: Process, console: Console) -> Result<(), Error> {
+    let result = proc.exec("git", ["status"])?
+    console.println(result.stdout)
+    proc.exit(0)
+}
+
+// Entry-point binds ambient capability so script-level code is concise.
+#[ambient(process, console)]
+fn main() {
+    runStatus(process, console)?
+}
+```
+
+Legacy form (`--legacy-globals`, v0.6.x only):
+
+```osty
 let result = os.exec("git", ["status"])?
 println(result.stdout)
-
 os.exit(0)
 ```
 

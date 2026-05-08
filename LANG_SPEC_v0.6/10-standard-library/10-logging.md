@@ -3,6 +3,14 @@
 Structured logging with levels and pluggable handlers. Inspired by
 Go's `slog`.
 
+> **v0.6 capability note**: log emission is a host effect (writes to
+> the process's `stderr`). The runtime handler binds to the ambient
+> `Console` capability (§20.9.7). Library code may call
+> `log.info(...)` etc. as a convenience — the call is desugared to
+> dispatch through the per-task `Console` binding. Pure functions that
+> wish to remain free of capability dependence should return values
+> instead of logging.
+
 ```osty
 use std.log
 

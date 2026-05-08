@@ -250,14 +250,15 @@ the label: `break 'search result`.
 ### 4.5 Error Propagation
 
 ```osty
-fn loadConfig(path: String) -> Result<Config, Error> {
+// 라이브러리 함수는 `Fs` capability 를 받아 effect 를 명시 (§20).
+fn loadConfig(fs: Fs, path: String) -> Result<Config, Error> {
     let text = fs.readToString(path)?
     let cfg: Config = json.parse(text)?
     Ok(cfg)
 }
 
-fn findActive(id: Int) -> User? {
-    let user = lookupUser(id)?
+fn findActive(db: Db, id: Int) -> User? {
+    let user = db.lookupUser(id)?
     if user.active { Some(user) } else { None }
 }
 ```
@@ -432,12 +433,12 @@ of loop, `?` propagation).
 exits.
 
 ```osty
-fn process(path: String) -> Result<(), Error> {
-    let conn = net.connect("api.com")?
+fn process(net: Net, fs: Fs, path: String) -> Result<(), Error> {
+    let conn = net.dial("api.com", 443)?
     defer conn.close()
 
-    let data = fs.read(path)?
-    let result = conn.send(data)?
+    let data = fs.readToBytes(path)?
+    let _ = conn.send(data)?
     Ok(())
 }
 ```

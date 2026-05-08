@@ -20,17 +20,27 @@ production builds.
 ```osty
 // auth/login_test.osty
 use std.testing
+use std.capability.testing as ct
 
 fn testLoginSuccess() {
-    let result = login("alice", "valid_pass")
+    let db = ct.FakeDb.seeded(["alice"])
+    let result = login("alice", "valid_pass", db)
     testing.assert(result.isOk())
 }
 
 fn testLoginRejectsBlankUser() {
-    let result = login("", "anything")
+    let db = ct.FakeDb.empty()
+    let result = login("", "anything", db)
     testing.assertEq(result, Err(InvalidInput))
 }
 ```
+
+The production-side `login` here takes a `Db` capability parameter and
+the tests inject a deterministic fake — there is no global database
+client, no fixed clock, and no leaked filesystem state. v0.6's
+information-flow rule (§21) is satisfied by construction: tainted
+input never reaches a sink because the `Db` interface only accepts
+sanitized values.
 
 Test files are excluded from production builds.
 

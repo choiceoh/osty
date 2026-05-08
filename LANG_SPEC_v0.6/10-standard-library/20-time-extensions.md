@@ -15,20 +15,34 @@ parsing, and timezone handling.
 ```osty
 use std.time
 
-let now = time.now()                               // Instant
-let iso = now.format(time.ISO_8601)                // "2024-01-15T10:30:00Z"
-let custom = now.format("yyyy-MM-dd HH:mm:ss")
+// Effectful access flows through a `Clock` capability (§20.9.1).
+fn snapshot(clock: Clock) -> Result<String, Error> {
+    let now = clock.now()                          // Instant
+    let iso = now.format(time.ISO_8601)            // "2024-01-15T10:30:00Z"
+    let custom = now.format("yyyy-MM-dd HH:mm:ss")
 
-let parsed: Instant = time.parse(iso, time.ISO_8601)?
+    let parsed: Instant = time.parse(iso, time.ISO_8601)?
 
-let later = now.add(5.minutes)
-let diff: Duration = later - now
+    let later = now.add(5.minutes)
+    let diff: Duration = later - now
 
-time.sleep(100.ms)            // returns Err(Cancelled) if task cancelled
+    clock.sleep(100.ms)?       // returns Err(Cancelled) if task cancelled
 
-let tz = time.zone("Asia/Seoul")?
-let local: ZonedTime = now.inZone(tz)
+    let tz = time.zone("Asia/Seoul")?
+    let local: ZonedTime = now.inZone(tz)
+    Ok(custom)
+}
+
+#[ambient(clock)]
+fn main() {
+    let _ = snapshot(clock)?
+}
 ```
+
+The pure types (`Instant`, `Duration`, `Zone`, `ZonedTime`) and the
+formatting / parsing helpers below are not `Clock`-bound — they operate
+on already-captured values. Only `now` / `monotonic` / `sleep` are
+capability-gated.
 
 **Cancellation.** `time.sleep(d)` is a cancellation point per §8.4.2.
 If the surrounding task's cancel signal fires, the sleep returns

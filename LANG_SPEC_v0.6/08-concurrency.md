@@ -67,15 +67,19 @@ progress on other tasks.
 ### 8.1 Structured Concurrency
 
 All concurrent tasks belong to a `taskGroup` scope. There is no detached
-spawn. `taskGroup` and `parallel` are in the prelude.
+spawn. `taskGroup` and `parallel` are in the prelude. Capability
+parameters captured by spawned closures flow naturally through the
+group:
 
 ```osty
-let result = taskGroup(|g| {
-    let h1 = g.spawn(|| fetchA())
-    let h2 = g.spawn(|| fetchB())
-    let h3 = g.spawn(|| fetchC())
-    Ok((h1.join()?, h2.join()?, h3.join()?))
-})
+fn fetchAll(net: Net) -> Result<(Bytes, Bytes, Bytes), Error> {
+    taskGroup(|g| {
+        let h1 = g.spawn(|| net.fetch("https://a.example/data"))
+        let h2 = g.spawn(|| net.fetch("https://b.example/data"))
+        let h3 = g.spawn(|| net.fetch("https://c.example/data"))
+        Ok((h1.join()?, h2.join()?, h3.join()?))
+    })
+}
 ```
 
 `g.spawn(closure)` returns `Handle<T>`. `Handle<T>` and `TaskGroup` are

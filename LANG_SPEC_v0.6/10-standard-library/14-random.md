@@ -12,12 +12,22 @@ Non-cryptographic pseudorandom numbers.
 ```osty
 use std.random
 
-let rng = random.default()                           // thread-local, auto-seeded
-let n = rng.int(0, 100)
-let f = rng.float()                                  // [0.0, 1.0)
-let picked = rng.choice(items)?
+// `Rng` itself is the v0.6 capability (§20.9.2). Library code receives
+// it as a parameter; entry points bind it ambiently.
+fn pickWinner(rng: Rng, candidates: List<User>) -> Result<User, Error> {
+    let n = rng.int(0, 100)
+    let f = rng.float()                              // [0.0, 1.0)
+    let picked = rng.choice(candidates)?
+    Ok(picked)
+}
 
-let seeded = random.seeded(42)                       // reproducible
+#[ambient(rng)]
+fn main() {
+    let _ = pickWinner(rng, loadCandidates())
+}
+
+// Reproducible derivation — useful in deterministic tests / benches.
+let seeded: Rng = random.seeded(42)
 ```
 
 API:

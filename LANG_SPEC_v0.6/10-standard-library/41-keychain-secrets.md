@@ -4,9 +4,19 @@
 and other small application secrets. It stores secrets by `(service, account)`
 in the OS credential store instead of in project files.
 
+> **v0.6 capability note**: keychain access is a host effect — the
+> implementation invokes Keychain Services on macOS, Credential Manager
+> on Windows, etc. Reads/writes funnel through the ambient `Process`
+> capability (§20.9.6) at the runtime layer. Library code that wants
+> hermetic tests should accept a `KeychainStore` parameter instead of
+> calling the module-level functions directly; a deterministic fake is
+> available as `std.capability.testing.FakeKeychain`. A capability-shaped
+> wrapper type is tracked as Phase 5 follow-up.
+
 ```osty
 use std.keychain
 
+// Script / entry-point convenience surface (ambient `process` binding):
 keychain.setApiKey("openrouter", "sk-...")?
 let apiKey = keychain.getApiKey("openrouter")?
 ```

@@ -9,15 +9,26 @@ token storage, HTTP hosting, or background job scheduling.
 use std.env
 use std.github
 
-let gh = github.client(env.require("GITHUB_TOKEN")?)
-let repo = github.repo("choiceoh", "osty")?
+// `std.github` builds `Request` values; sending them is a `Net` effect.
+// Token lookup is an `Env` effect. Both are explicit capability params.
+fn buildIssueListRequest(env: Env, owner: String, name: String) -> Result<HttpRequest, Error> {
+    let gh = github.client(env.require("GITHUB_TOKEN")?)
+    let repo = github.repo(owner, name)?
 
-let mut issues = github.issueQuery()
-issues.state = github.IssueAll
-let req = github.listIssuesWithQueryHttpRequest(gh, repo, issues)?
+    let mut issues = github.issueQuery()
+    issues.state = github.IssueAll
+    github.listIssuesWithQueryHttpRequest(gh, repo, issues)
+}
 
-let pr = github.pullRequestDraft("fix std.github docs", "codex/std-github", "main")
-let create = github.createPullRequestHttpRequest(gh, repo, pr)?
+fn submitDraftPr(env: Env, net: Net) -> Result<PullRequest, Error> {
+    let gh = github.client(env.require("GITHUB_TOKEN")?)
+    let repo = github.repo("choiceoh", "osty")?
+
+    let pr = github.pullRequestDraft("fix std.github docs", "codex/std-github", "main")
+    let req = github.createPullRequestHttpRequest(gh, repo, pr)?
+    let resp = net.httpClient().request(req)?.requireStatus(201)?
+    resp.json::<PullRequest>()
+}
 ```
 
 Core types:

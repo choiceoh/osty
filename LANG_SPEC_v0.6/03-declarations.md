@@ -26,18 +26,31 @@ fn add(a: Int, b: Int) -> Int {
     a + b
 }
 
-fn greet(name: String) {
-    println("hi, {name}")
+// 라이브러리 함수는 effect 를 capability parameter 로 받는다 (§20).
+fn greet(name: String, console: Console) {
+    console.println("hi, {name}")
 }
 
-fn connect(host: String, port: Int = 80, timeout: Int = 30) -> Result<Conn, Error> {
-    ...
+fn connect(net: Net, host: String, port: Int = 80, timeout: Int = 30) -> Result<Conn, Error> {
+    net.dial(host, port, timeout: timeout)
 }
 
-pub fn loadConfig(path: String) -> Result<Config, Error> {
+pub fn loadConfig(fs: Fs, path: String) -> Result<Config, Error> {
     let text = fs.readToString(path)?
     let cfg: Config = json.parse(text)?
     Ok(cfg)
+}
+```
+
+Entry-point 함수는 `#[ambient(...)]` 로 prelude default capability 를
+받아 callee 로 forward 한다:
+
+```osty
+#[ambient(console, fs, net)]
+fn main() {
+    greet("world", console)            // ambient forward
+    let cfg = loadConfig(fs, "/etc/app.toml")?
+    let _ = connect(net, "api.example.com", 443)
 }
 ```
 
@@ -464,9 +477,19 @@ pub interface Writer {
     fn write(self, data: Bytes) -> Result<Int, Error>
     fn flush(self) -> Result<(), Error>
 }
+
+// 사용자 정의 capability — `#[reproducible_capability]` 가 모든 메서드의
+// `#[reproducible]` 부착을 강제 (§20.5).
+#[reproducible_capability]
+pub interface Hash {
+    #[reproducible(scope = "portable")]
+    fn hash(self, data: Bytes) -> Bytes32
+}
 ```
 
-See §2.6.
+See §2.6 for the full structural-typing rules and §20 for the canonical
+capability set (`Clock`, `Rng`, `Env`, `Fs`, `Net`, `Process`,
+`Console`).
 
 ### 3.7 Type Aliases
 

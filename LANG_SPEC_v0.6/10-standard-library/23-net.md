@@ -15,35 +15,50 @@ Low-level TCP and UDP networking. Higher-level HTTP is in `std.http`
 use std.net
 use std.io
 
-// TCP client
-let conn = net.connect("example.com:443")?
-defer conn.close()
-io.writeAll(conn, b"GET / HTTP/1.0\r\n\r\n")?
-let response = io.readAll(conn)?
+// `Net` is the v0.6 capability (§20.9.5). All connect / listen entry
+// points hang off the parameter, so dependency tracking is explicit.
+fn fetchHomepage(net: Net) -> Result<Bytes, Error> {
+    let conn = net.connect("example.com:443")?
+    defer conn.close()
+    io.writeAll(conn, b"GET / HTTP/1.0\r\n\r\n")?
+    io.readAll(conn)
+}
 
-// TCP server
-let listener = net.listen("0.0.0.0:8080")?
-defer listener.close()
+fn serveLoop(net: Net) -> Result<(), Error> {
+    let listener = net.listen("0.0.0.0:8080")?
+    defer listener.close()
 
-for {
-    let conn = listener.accept()?
-    thread.spawn(|| {
-        defer conn.close()
-        handleConn(conn)
+    taskGroup(|g| {
+        for {
+            let conn = listener.accept()?
+            g.spawn(|| {
+                defer conn.close()
+                handleConn(conn)
+            })
+        }
     })
 }
 
-// UDP
-let sock = net.udpBind("0.0.0.0:9000")?
-defer sock.close()
-let (data, from) = sock.recvFrom(4096)?
-sock.sendTo(b"pong", from)?
+fn pongOnce(net: Net) -> Result<(), Error> {
+    let sock = net.udpBind("0.0.0.0:9000")?
+    defer sock.close()
+    let (_data, from) = sock.recvFrom(4096)?
+    sock.sendTo(b"pong", from)?
+    Ok(())
+}
 
-// Address utilities
-let addr = net.resolve("localhost:80")?      // Result<Addr, Error>
-addr.host        // "127.0.0.1"
-addr.port        // 80
-addr.toString()  // "127.0.0.1:80"
+#[ambient(net)]
+fn main() {
+    let _ = fetchHomepage(net)?
+}
+
+// Address utilities are pure — `net.resolve` is the lone exception
+// since DNS is an effect.
+fn addrInfo(net: Net) -> Result<Addr, Error> {
+    let addr = net.resolve("localhost:80")?       // Result<Addr, Error>
+    println("{addr.host}:{addr.port}")            // requires console capability
+    Ok(addr)
+}
 ```
 
 API:

@@ -27,39 +27,59 @@ router with path parameters.
 ```osty
 use std.http
 
-// Client
-let req = http.newRequest(http.Post, "https://api.example.com/users")
-    .withBearerToken(token)
-    .withQueryValue("expand", "profile")
-    .withJson(UserCreate { name: "Ada" })
+// Library code receives a `Net` capability and constructs the HTTP
+// client off it (§20.9.5). The client itself is then passed wherever
+// requests need to flow, so reachability of network effects is visible
+// at every call boundary.
+fn createUser(net: Net, token: String) -> Result<User, Error> {
+    let client = net.httpClient()
 
-let created = http.request(req)?
-    .requireStatus(201)?
-let user: User = created.json()?
+    let req = http.newRequest(http.Post, "https://api.example.com/users")
+        .withBearerToken(token)
+        .withQueryValue("expand", "profile")
+        .withJson(UserCreate { name: "Ada" })
 
-// Forms and cookies
-let login = http.postForm("https://example.com/login", {
-    "username": ["ada"],
-    "password": ["secret"],
-})?
+    let created = client.request(req)?
+        .requireStatus(201)?
+    created.json::<User>()
+}
 
-let csrf = login.setCookie()?.unwrap()
+fn loginAndCookie(net: Net, user: String, pass: String) -> Result<Cookie, Error> {
+    let client = net.httpClient()
+    let login = client.postForm("https://example.com/login", {
+        "username": [user],
+        "password": [pass],
+    })?
+    login.setCookie()?.orError("missing Set-Cookie")
+}
 
-// Server
-let mut router = http.newRouter()
-router.get("/health", |req, params| {
-    let _ = req
-    let _ = params
-    Ok(http.okText("ok"))
-})
-router.get("/users/:id", |req, params| {
-    let _ = req
-    Ok(http.okJson(UserView {
-        id: params.get("id").unwrap(),
-    }))
-})
+// Server side: routes are pure data; the transport binding requires
+// `Net`. `http.respondHtml` requires the `html_safe` flow tag (§21.8).
+fn buildRouter() -> Router {
+    let mut router = http.newRouter()
+    router.get("/health", |req, params| {
+        let _ = req
+        let _ = params
+        Ok(http.okText("ok"))
+    })
+    router.get("/users/:id", |req, params| {
+        let _ = req
+        Ok(http.okJson(UserView {
+            id: params.get("id").unwrap(),
+        }))
+    })
+    router
+}
 
-http.serve(":8080", |req| http.dispatch(router, req))
+fn run(net: Net) -> Result<(), Error> {
+    let router = buildRouter()
+    net.httpServer().serve(":8080", |req| http.dispatch(router, req))
+}
+
+#[ambient(net)]
+fn main() {
+    let _ = run(net)?
+}
 ```
 
 API:

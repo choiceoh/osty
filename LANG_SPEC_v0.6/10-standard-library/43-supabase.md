@@ -13,17 +13,26 @@ ready-to-send HTTP requests for Supabase's stable gateway paths:
 ```osty
 use std.supabase
 
-let sb = supabase.fromEnv()?
-let q = supabase.from("todos")?
-    .select("id,title,completed")
-    .eq("completed", "false")?
-    .orderDesc("created_at")?
-    .withCount(supabase.CountExact)
-    .range(0, 19)?
+// Library code receives `Env` (for credential lookup) and `Net` (for
+// HTTP transport) capabilities (§20.9). The `TableQuery` value is
+// pure data — only `supabase.send*` actually performs the request.
+fn loadActiveTodos(env: Env, net: Net) -> Result<List<Todo>, Error> {
+    let sb = supabase.fromEnv(env)?
+    let q = supabase.from("todos")?
+        .select("id,title,completed")
+        .eq("completed", "false")?
+        .orderDesc("created_at")?
+        .withCount(supabase.CountExact)
+        .range(0, 19)?
 
-let page = supabase.sendSelectPage::<List<Todo>>(sb, q)?
-let rows = page.value
-let total = page.count()
+    let page = supabase.sendSelectPage::<List<Todo>>(net, sb, q)?
+    Ok(page.value)
+}
+
+#[ambient(env, net)]
+fn main() {
+    let todos = loadActiveTodos(env, net)?
+}
 ```
 
 Core types:
