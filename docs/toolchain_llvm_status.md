@@ -1,5 +1,7 @@
 # Toolchain × LLVM compilability — status report
 
+- **Scope**: Toolchain × LLVM compilability status report
+- **Type**: Status report
 ## 2026-04-29 sync update — checker bundle bridge excluded
 
 `internal/selfhost/ast_lower.osty` is no longer a checker-bundle input. It

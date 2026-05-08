@@ -1,5 +1,7 @@
 ### 10.30 SMTP (`std.smtp`)
 
+- **Scope**: Osty stdlib spec — 10.30 SMTP (`std.smtp`)
+- **Type**: Standard library specification
 `std.smtp` builds SMTP protocol commands and parses server replies. It uses
 `std.email.Envelope` for message data, but does not claim TLS/socket execution
 until the runtime grows that transport layer.

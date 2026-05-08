@@ -1,5 +1,7 @@
 # LLVM Phase 1 Baseline
 
+- **Scope**: Legacy Go-backend baseline metrics for LLVM migration comparison
+- **Type**: Reference
 기준일: 2026-04-16 Asia/Seoul
 기준 commit: `0eb6ea1`
 목적: LLVM backend 이주 초기에 기록한 historical baseline 이다. 당시 Go

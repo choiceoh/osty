@@ -1,5 +1,7 @@
 ### 10.25 Terminal (`std.term`)
 
+- **Scope**: Osty stdlib spec — 10.25 Terminal (`std.term`)
+- **Type**: Standard library specification
 `std.term` is the low-level terminal boundary used by text UIs and simple
 terminal games.
 

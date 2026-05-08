@@ -1,5 +1,7 @@
 ### 10.32 Image (`std.image`)
 
+- **Scope**: Osty stdlib spec — 10.32 Image (`std.image`)
+- **Type**: Standard library specification
 `std.image` detects common image formats and parses header metadata. Full
 pixel decoding is intentionally left for a future runtime-backed codec layer.
 

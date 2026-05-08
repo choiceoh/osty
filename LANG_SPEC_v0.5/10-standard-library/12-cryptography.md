@@ -1,5 +1,7 @@
 ### 10.12 Cryptography (`std.crypto`)
 
+- **Scope**: Osty stdlib spec — 10.12 Cryptography (`std.crypto`)
+- **Type**: Standard library specification
 Hashing, message authentication, and cryptographically secure random
 bytes. Asymmetric cryptography (RSA, Ed25519) is out of scope.
 

@@ -1,5 +1,7 @@
 ## 2. Type System
 
+- **Scope**: Osty language spec — 2. Type System
+- **Type**: Language specification
 ### 2.1 Primitive Types
 
 ```

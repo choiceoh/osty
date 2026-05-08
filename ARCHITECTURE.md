@@ -1,5 +1,7 @@
 # Architecture
 
+- **Scope**: Compiler pipeline design — pass-level architecture, error recovery, diagnostic flow
+- **Type**: Design doc
 High-level map of the Osty front-end. For spec decisions see
 `OSTY_GRAMMAR_v0.5.md`; this document covers **implementation** layout.
 

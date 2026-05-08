@@ -1,5 +1,7 @@
 # Osty Grammar — Rules & EBNF (v0.3)
 
+- **Scope**: Osty EBNF grammar v0.3 — legacy edition
+- **Type**: Grammar
 v0.1 에서 열린 이슈 O1~O7 (v0.2 에서 해결) + v0.3 에서 추가된 grammar
 확장을 반영한 최종본. R1~R26 에 O1~O7 결정 및 v0.3 변경을 통합하여
 단일 규범 문서로 재구성.

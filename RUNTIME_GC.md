@@ -1,5 +1,7 @@
 # LLVM Runtime GC
 
+- **Scope**: Runtime GC design — shadow stack ABI, root bind/release, thread-local frame chain
+- **Type**: Design doc
 This document is the source of truth for Osty's active GC implementation path.
 
 The live implementation is the LLVM/native runtime path:

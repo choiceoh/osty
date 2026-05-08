@@ -1,5 +1,7 @@
 ### 10.28 SQL (`std.sql`)
 
+- **Scope**: Osty stdlib spec — 10.28 SQL (`std.sql`)
+- **Type**: Standard library specification
 `std.sql` provides safe SQL fragment and statement builders. It does not
 open database connections or execute queries; drivers such as SQLite or
 Postgres should accept the `Query` value produced by this module.

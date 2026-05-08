@@ -1,5 +1,7 @@
 # MIR design (Osty compiler)
 
+- **Scope**: MIR design — middle-end IR for the Osty compiler
+- **Type**: Design doc
 Status: Stage 4 full-coverage backend contract landed. Backend entry now treats
 any `mir.Lower` / `mir.Validate` issue as fatal incomplete MIR coverage, and the
 LLVM dispatcher no longer retries the legacy HIR→AST bridge. The old bridge

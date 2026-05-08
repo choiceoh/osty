@@ -1,5 +1,7 @@
 # CHANGELOG — v0.5
 
+- **Scope**: v0.5 edition changes — new surface, wired features, regen status
+- **Type**: Changelog
 Tracks the user-visible slice of the v0.5 spec (`LANG_SPEC_v0.5/`) that
 has landed in the compiler today, separate from the spec itself. The
 spec is the authority on what v0.5 *will* be; this file is the

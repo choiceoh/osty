@@ -1,5 +1,7 @@
 ## 3. Declarations
 
+- **Scope**: Osty language spec — 3. Declarations
+- **Type**: Language specification
 ### 3.1 Functions
 
 ```osty

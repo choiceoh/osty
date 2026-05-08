@@ -1,5 +1,7 @@
 ## 4. Expressions
 
+- **Scope**: Osty language spec — 4. Expressions
+- **Type**: Language specification
 ### 4.1 Block Expressions
 
 ```osty

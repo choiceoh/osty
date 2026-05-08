@@ -1,5 +1,7 @@
 # RUNTIME_SCHEDULER.md — Osty 런타임 스케줄러 아키텍처 & 단계 로드맵
 
+- **Scope**: Runtime scheduler design — task groups, structured concurrency, cancel state
+- **Type**: Design doc
 > **Status (2026-04-22):** **Phase 2 착륙.** thread-per-task pthread 모델이 워커 풀 + 워커별 Chase-Lev work-stealing deque + linked-list FIFO 인젝트 큐로 교체됨. 워커 수는 기본 `min(CPUs, 8)` (Darwin 은 `sysctlbyname("hw.ncpu")`, 그 외 POSIX 는 `sysconf(_SC_NPROCESSORS_ONLN)`, Windows 는 `GetSystemInfo`), `OSTY_SCHED_WORKERS` 환경변수로 `[1, 256]` 오버라이드. Elastic worker는 **블로킹 cv_wait 진입 직전에만** on-demand 생성 (상한 `OSTY_SCHED_ELASTIC_MAX = 256`) — CPU-bound 워크로드는 오버섭스크립션 없이 fixed pool 로 스케일. 관찰된 speedup: 16 xorshift task × `workers=1 → 4` 에서 **3.97x**. ThreadSanitizer clean (Chase-Lev slot publication 을 release/acquire atomic 으로 게시). 공개 ABI (`osty_rt_task_spawn/group_spawn/handle_join/group/group_cancel/...`) 는 Phase 1B에서 그대로 유지 — MIR/백엔드 재컴파일 불필요. `parallel` / `race` / `collectAll` / `thread.select` (recv/send/timeout/default) 은 Phase 1B에서 추가된 형태 그대로 풀 위에서 동작하며, Phase 1B부터 남아있던 `race` / `collectAll` 의 `list trace-kind mismatch` 버그는 이 마이그레이션 중에 함께 수정. 이 문서는 `LANG_SPEC_v0.5/08-concurrency.md` §8.0과 `LANG_SPEC_v0.5/19-runtime-primitives.md` §19.1 "GC × scheduler interaction" 절에 대응하는 **구현 레퍼런스**다. 스펙은 관찰 가능한 계약만 고정하고, 이 문서는 공개 LLVM 백엔드의 참조 런타임이 어떤 단계로 그 계약을 만족하는지 기술한다.
 
 ## 배경

@@ -1,5 +1,7 @@
 ### 10.33 AI Agents (`std.aiagents`)
 
+- **Scope**: Osty stdlib spec — 10.33 AI Agents (`std.aiagents`)
+- **Type**: Standard library specification
 `std.aiagents` contains dependency-light primitives for building agent
 applications. It deliberately starts with the parts that can be implemented as
 pure Osty data shapes and helper logic: message/session models, tool presets,

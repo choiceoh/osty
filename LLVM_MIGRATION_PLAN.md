@@ -1,5 +1,7 @@
 # LLVM Migration Plan
 
+- **Scope**: Native LLVM backend migration history and plan
+- **Type**: Plan
 > **Status (2026-04-29): Historical with current sync notes.** 공개 백엔드는 이미 LLVM 하나뿐이며,
 > 기존 Osty→Go 부트스트랩 트랜스파일러는 제거되었다 — `internal/selfhost/generated.go`
 > 는 커밋된 시드 산출물로 동결되어 있다. 이 문서는 이주 과정의 기록이며, phase

@@ -1,5 +1,7 @@
 ### 10.27 Grid (`std.grid`)
 
+- **Scope**: Osty stdlib spec — 10.27 Grid (`std.grid`)
+- **Type**: Standard library specification
 `std.grid` contains small spatial types shared by text UIs, board games,
 roguelikes, simulations, and pathfinding libraries.
 

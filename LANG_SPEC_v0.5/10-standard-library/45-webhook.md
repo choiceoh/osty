@@ -1,5 +1,7 @@
 ### 10.45 Webhooks (`std.webhook`)
 
+- **Scope**: Osty stdlib spec — 10.45 Webhooks (`std.webhook`)
+- **Type**: Standard library specification
 `std.webhook` is the safe intake layer for HTTP callbacks from external
 systems. It composes with `std.http`, `std.crypto`, `std.encoding`,
 `std.json`, and `std.time` instead of owning a server runtime. The module

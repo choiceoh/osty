@@ -1,5 +1,7 @@
 # D4 — Closure capture lift for self-hosted CoreModule
 
+- **Scope**: Closure capture lift spec for self-hosted CoreModule
+- **Type**: Spec
 Status: spec for a parallel PR. Depends on `toolchain/core_clone.osty` (D1) only for its walk helpers — can start as soon as D1 lands. Does **not** depend on D2 (TyArena substitution) or D3 (monomorphize).
 
 ## Goal

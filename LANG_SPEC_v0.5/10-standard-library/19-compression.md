@@ -1,5 +1,7 @@
 ### 10.19 Compression (`std.compress`)
 
+- **Scope**: Osty stdlib spec — 10.19 Compression (`std.compress`)
+- **Type**: Standard library specification
 gzip compression. Other formats (zstd, brotli, lz4) are available as
 community packages.
 

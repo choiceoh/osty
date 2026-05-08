@@ -1,5 +1,7 @@
 ### 10.35 Tables (`std.table`)
 
+- **Scope**: Osty stdlib spec — 10.35 Tables (`std.table`)
+- **Type**: Standard library specification
 `std.table` is a small dataframe layer for command-line tools and data
 cleanup jobs. It keeps cells as strings for lossless CSV/TSV round-trips,
 then layers typed access and column inference on top.

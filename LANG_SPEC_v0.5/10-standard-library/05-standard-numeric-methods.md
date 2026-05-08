@@ -1,5 +1,7 @@
 ### 10.5 Standard Numeric Methods
 
+- **Scope**: Osty stdlib spec — 10.5 Standard Numeric Methods
+- **Type**: Standard library specification
 **Common to every integer type `T` (`Int`, `Int8..Int64`, `UInt8..UInt64`, `Byte`):**
 
 ```

@@ -1,5 +1,7 @@
 ### 10.10 Logging (`std.log`)
 
+- **Scope**: Osty stdlib spec — 10.10 Logging (`std.log`)
+- **Type**: Standard library specification
 Structured logging with levels and pluggable handlers. Inspired by
 Go's `slog`.
 

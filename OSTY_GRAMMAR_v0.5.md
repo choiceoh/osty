@@ -1,5 +1,7 @@
 # Osty Grammar — Rules & EBNF (v0.5)
 
+- **Scope**: Osty EBNF grammar v0.5 — current edition with decision log
+- **Type**: Grammar
 v0.1 에서 열린 이슈 O1~O7 (v0.2 에서 해결), v0.3 grammar 확장, v0.4
 edge-case 결정(G13-G18), v0.5 에서 한 번에 수용된 15 개 결정
 (G20-G34) 까지 반영한 **현행본**. 문법 surface 변경은 정식 버전 업

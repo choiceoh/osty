@@ -1,5 +1,7 @@
 # Osty
 
+- **Scope**: Project overview — build status, CLI reference, layout, testing, contributing
+- **Type**: README
 A work-in-progress implementation of the **Osty** programming language — a
 general-purpose, statically-typed, GC'd language specified in
 [`LANG_SPEC_v0.5/`](./LANG_SPEC_v0.5/README.md) with grammar fixed in

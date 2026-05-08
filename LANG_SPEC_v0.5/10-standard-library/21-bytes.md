@@ -1,5 +1,7 @@
 ### 10.21 Bytes (`std.bytes`)
 
+- **Scope**: Osty stdlib spec — 10.21 Bytes (`std.bytes`)
+- **Type**: Standard library specification
 Byte-sequence manipulation, mirroring `std.strings` for `Bytes` values.
 `Bytes` is an immutable byte sequence (§2.4.1); all operations return new
 values and never mutate in place.

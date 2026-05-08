@@ -1,5 +1,7 @@
 # SELFHOST_PORT_MATRIX.md
 
+- **Scope**: Self-host porting matrix — Osty→Go frontend/backend parity tracking
+- **Type**: Porting matrix
 Go → Osty 셀프호스팅 포팅 현황 매트릭스. 리졸버 / 체커 잔여 작업을 항목 단위로 분류.
 
 > **Scope**: `internal/resolve` ↔ `toolchain/resolve.osty`, `internal/check` ↔

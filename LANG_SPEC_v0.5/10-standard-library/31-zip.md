@@ -1,5 +1,7 @@
 ### 10.31 ZIP (`std.zip`)
 
+- **Scope**: Osty stdlib spec — 10.31 ZIP (`std.zip`)
+- **Type**: Standard library specification
 `std.zip` creates and reads ZIP archives using the standard "store" method.
 This needs no deflate runtime and produces interoperable ZIP files with local
 headers, central directory records, EOCD, and CRC32 checks.

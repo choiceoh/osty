@@ -1,5 +1,7 @@
 ### 10.8 JSON (`std.json`)
 
+- **Scope**: Osty stdlib spec — 10.8 JSON (`std.json`)
+- **Type**: Standard library specification
 Reflection-based encode/decode for primitives, `struct`, and `enum`:
 
 ```osty

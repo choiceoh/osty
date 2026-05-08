@@ -1,5 +1,7 @@
 ## 18. Change History
 
+- **Scope**: Osty language spec — 18. Change History
+- **Type**: Language specification
 This chapter records the evolution of the specification across released
 versions. The latest release is at the top.
 

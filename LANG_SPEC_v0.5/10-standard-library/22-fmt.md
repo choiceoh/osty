@@ -1,5 +1,7 @@
 ### 10.22 Formatting (`std.fmt`)
 
+- **Scope**: Osty stdlib spec — 10.22 Formatting (`std.fmt`)
+- **Type**: Standard library specification
 String formatting utilities beyond `{}` interpolation: number base
 conversion, padding and alignment, fixed-precision printing, escaped
 string rendering, compact human-readable numbers, and composite value

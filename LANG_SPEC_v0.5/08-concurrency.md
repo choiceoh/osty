@@ -1,5 +1,7 @@
 ## 8. Concurrency
 
+- **Scope**: Osty language spec — 8. Concurrency
+- **Type**: Language specification
 ### 8.0 Scheduler Model
 
 Osty specifies an **M:N scheduler**. Task-level units (`g.spawn(...)`, the

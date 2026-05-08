@@ -1,5 +1,7 @@
 ### 10.7 Lazy Iterators (`std.iter`)
 
+- **Scope**: Osty stdlib spec — 10.7 Lazy Iterators (`std.iter`)
+- **Type**: Standard library specification
 For pipeline-style transformations over sequences:
 
 ```osty

@@ -1,5 +1,7 @@
 ## 1. Lexical Structure
 
+- **Scope**: Osty language spec — 1. Lexical Structure
+- **Type**: Language specification
 ### 1.1 Source Files
 
 - File extension: `.osty`

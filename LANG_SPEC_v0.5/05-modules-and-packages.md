@@ -1,5 +1,7 @@
 ## 5. Modules and Packages
 
+- **Scope**: Osty language spec — 5. Modules and Packages
+- **Type**: Language specification
 ### 5.1 Package = Directory
 
 A directory is a package. All `.osty` files in a directory belong to the

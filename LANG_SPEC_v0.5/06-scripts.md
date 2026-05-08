@@ -1,5 +1,7 @@
 ## 6. Scripts
 
+- **Scope**: Osty language spec — 6. Scripts
+- **Type**: Language specification
 A file is a **script file** if it contains top-level statements outside
 any function or type declaration. A file with only declarations is a
 **module file**.

@@ -1,5 +1,7 @@
 ### 10.15 Operating System (`std.os`)
 
+- **Scope**: Osty stdlib spec — 10.15 Operating System (`std.os`)
+- **Type**: Standard library specification
 Paths, process control, and signal handling. File I/O is in `std.fs`;
 environment variables and arguments are in `std.env`.
 

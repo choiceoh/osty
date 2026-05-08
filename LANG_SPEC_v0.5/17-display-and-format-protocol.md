@@ -1,5 +1,7 @@
 ## 17. Display and Format Protocol
 
+- **Scope**: Osty language spec — 17. Display and Format Protocol
+- **Type**: Language specification
 String interpolation and the `print*` family are defined in terms of a
 single interface:
 

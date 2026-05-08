@@ -1,5 +1,7 @@
 ### 10.20 Time Extensions (`std.time`)
 
+- **Scope**: Osty stdlib spec — 10.20 Time Extensions (`std.time`)
+- **Type**: Standard library specification
 Beyond basic instants and durations, `std.time` provides formatting,
 parsing, and timezone handling.
 

@@ -1,5 +1,7 @@
 ## 11. Testing
 
+- **Scope**: Osty language spec — 11. Testing
+- **Type**: Language specification
 Test files use the `_test.osty` suffix and live alongside code in the
 same package. Functions whose names begin with lowercase `test` and
 take no arguments are discovered and run by `osty test`. A top-level

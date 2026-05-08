@@ -1,5 +1,7 @@
 ## 14. Excluded Features
 
+- **Scope**: Osty language spec — 14. Excluded Features
+- **Type**: Language specification
 The items below are excluded from v0.5. Items are grouped by reason so
 readers can see the argument without consulting the change history.
 Re-opening any of them requires a design proposal, a new minor or major

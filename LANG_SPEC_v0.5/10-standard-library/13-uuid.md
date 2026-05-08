@@ -1,5 +1,7 @@
 ### 10.13 UUID (`std.uuid`)
 
+- **Scope**: Osty stdlib spec — 10.13 UUID (`std.uuid`)
+- **Type**: Standard library specification
 ```osty
 use std.uuid
 

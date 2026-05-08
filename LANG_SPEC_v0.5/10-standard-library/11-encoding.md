@@ -1,5 +1,7 @@
 ### 10.11 Encoding (`std.encoding`)
 
+- **Scope**: Osty stdlib spec — 10.11 Encoding (`std.encoding`)
+- **Type**: Standard library specification
 Binary-to-text encodings.
 
 ```osty
