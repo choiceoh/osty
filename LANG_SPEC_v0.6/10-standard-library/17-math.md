@@ -59,10 +59,10 @@ NaN (`math.sqrt(-1.0)`, `0.0 / 0.0`, etc.) return a NaN with the
 same bit pattern as `math.NAN`; this is necessary for `portable`
 scope reproducibility.
 
-#### Constants and `#[budget]`
+#### Constants
 
 The math constants (`math.PI`, `math.E`, `math.TAU`,
 `math.INFINITY`, `math.NAN`) are compile-time `const fn` values
 (§3.1.1) — referencing them counts as zero allocations and zero
-operations beyond the constant load. Use them freely in
-`#[budget(allocs = 0)]` functions.
+operations beyond the constant load. Acceptable inside `#[pure]`
+functions and any allocation-sensitive context.

@@ -53,6 +53,5 @@ guaranteed for every well-formed encoded string `s`. Malformed
 input to `decode` returns `Err(...)`; the round-trip assertion is
 on well-formed input only.
 
-This round-trip property is documented as a `spec { law: ... }`
-clause on each encode function (§3.13.1). Phase 5 turns the laws
-into property tests.
+This round-trip property is documented in each encode function's
+doc comment and asserted via `#[example]` annotations.

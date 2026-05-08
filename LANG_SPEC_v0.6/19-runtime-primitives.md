@@ -645,10 +645,6 @@ intrinsic level. Specifically:
   function of size + alignment from the user's perspective. The
   resulting `RawPtr` is *not* used directly by user code (it would
   fail `E0770` — privileged-only).
-- `#[budget(allocs)]` counts at the user-level allocation site,
-  which lowers to `raw.alloc`. The mapping is one-to-one for
-  scalar types and one-to-N for composite types (the compiler
-  reports the lowered count via `osty audit --allocs`).
 
 ### 19.12 Privileged toolchain access
 
