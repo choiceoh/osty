@@ -109,3 +109,187 @@ fn testCheckDiagAttachHintIgnoresEmptyText() {
 fn stringsContains(haystack: String, needle: String) -> Bool {
     strings.contains(haystack, needle)
 }
+
+// ---------------------------------------------------------------------
+// v0.6 G36 — Ambient forward diagnostic.
+// ---------------------------------------------------------------------
+
+fn testDiagAmbientForwardFailedStampsE0782() {
+    let d = diagAmbientForwardFailed("main", "processData", "Clock", 10, 30)
+    testing.assertEq(d.code, "E0782")
+    testing.assert(stringsContains(d.message, "main"))
+    testing.assert(stringsContains(d.message, "Clock"))
+    testing.assert(stringsContains(d.message, "processData"))
+    testing.assertEq(d.start, 10)
+    testing.assertEq(d.end, 30)
+    // Severity should be Error (E prefix).
+    match d.severity {
+        SeverityError -> testing.assert(true),
+        _ -> testing.assert(false),
+    }
+}
+
+// ---------------------------------------------------------------------
+// v0.6 G39 — Reproducible scope diagnostics.
+// ---------------------------------------------------------------------
+
+fn testDiagReproducibleUnorderedIterStampsE0786() {
+    let d = diagReproducibleUnorderedIter("computeKey", "Map", 5, 15)
+    testing.assertEq(d.code, "E0786")
+    testing.assert(stringsContains(d.message, "computeKey"))
+    testing.assert(stringsContains(d.message, "Map"))
+    testing.assert(stringsContains(d.message, "unordered"))
+    match d.severity {
+        SeverityError -> testing.assert(true),
+        _ -> testing.assert(false),
+    }
+}
+
+fn testDiagReproducibleScopeHierarchyStampsE0787() {
+    let d = diagReproducibleScopeHierarchy("computeKey", "portable", "helper", "target", 10, 20)
+    testing.assertEq(d.code, "E0787")
+    testing.assert(stringsContains(d.message, "portable"))
+    testing.assert(stringsContains(d.message, "target"))
+    testing.assert(stringsContains(d.message, "helper"))
+    match d.severity {
+        SeverityError -> testing.assert(true),
+        _ -> testing.assert(false),
+    }
+}
+
+fn testDiagReproduciblePortableConstraintStampsE0788() {
+    let d = diagReproduciblePortableConstraint("hashBytes", "endianness-dependent serialisation", "use bytes.toBigEndian", 0, 10)
+    testing.assertEq(d.code, "E0788")
+    testing.assert(stringsContains(d.message, "portable"))
+    testing.assert(stringsContains(d.message, "endianness"))
+    // Notes should include the fix hint.
+    testing.assert(d.notes.len() >= 2)
+}
+
+fn testDiagReproduciblePortableConstraintOmitsEmptyHint() {
+    let d = diagReproduciblePortableConstraint("hashBytes", "test violation", "", 0, 10)
+    // Only the base note, no hint.
+    testing.assertEq(d.notes.len(), 1)
+}
+
+// ---------------------------------------------------------------------
+// v0.6 G38 — Spec link diagnostics.
+// ---------------------------------------------------------------------
+
+fn testDiagSpecAnchorNotFoundStampsE0790() {
+    let d = diagSpecAnchorNotFound("§99.99", 0, 12)
+    testing.assertEq(d.code, "E0790")
+    testing.assert(stringsContains(d.message, "§99.99"))
+    testing.assert(stringsContains(d.message, "not found"))
+    testing.assertEq(d.start, 0)
+    testing.assertEq(d.end, 12)
+    match d.severity {
+        SeverityError -> testing.assert(true),
+        _ -> testing.assert(false),
+    }
+}
+
+fn testDiagSpecAnchorMovedStampsW0790() {
+    let d = diagSpecAnchorMoved("§5.3", "§6.3", 0, 10)
+    testing.assertEq(d.code, "W0790")
+    testing.assert(stringsContains(d.message, "§5.3"))
+    testing.assert(stringsContains(d.message, "moved"))
+    // Notes should include the suggestion.
+    testing.assertEq(d.notes.len(), 2)
+    testing.assert(stringsContains(d.notes[1], "§6.3"))
+    // Severity should be Warning (W prefix).
+    match d.severity {
+        SeverityWarning -> testing.assert(true),
+        _ -> testing.assert(false),
+    }
+}
+
+fn testDiagSpecAnchorMovedOmitsEmptySuggestion() {
+    let d = diagSpecAnchorMoved("§5.3", "", 0, 10)
+    testing.assertEq(d.notes.len(), 1)
+}
+
+// ---------------------------------------------------------------------
+// v0.6 G46 — Budget diagnostics.
+// ---------------------------------------------------------------------
+
+fn testDiagBudgetStaticViolationStampsE0795() {
+    let d = diagBudgetStaticViolation("hotPath", "allocs", 0, 5, 10, 20)
+    testing.assertEq(d.code, "E0795")
+    testing.assert(stringsContains(d.message, "hotPath"))
+    testing.assert(stringsContains(d.message, "allocs"))
+    testing.assert(stringsContains(d.message, "0"))
+    testing.assert(stringsContains(d.message, "5"))
+    match d.severity {
+        SeverityError -> testing.assert(true),
+        _ -> testing.assert(false),
+    }
+}
+
+fn testDiagBudgetUnknownKeyStampsE0796() {
+    let d = diagBudgetUnknownKey("myFn", "heap_allocs", 5, 15)
+    testing.assertEq(d.code, "E0796")
+    testing.assert(stringsContains(d.message, "myFn"))
+    testing.assert(stringsContains(d.message, "heap_allocs"))
+    testing.assert(stringsContains(d.message, "unknown"))
+    match d.severity {
+        SeverityError -> testing.assert(true),
+        _ -> testing.assert(false),
+    }
+}
+
+fn testDiagBudgetRuntimeRegressionStampsW0795() {
+    let d = diagBudgetRuntimeRegression("handler", "time_ms", 5, 50, 0, 10)
+    testing.assertEq(d.code, "W0795")
+    testing.assert(stringsContains(d.message, "handler"))
+    testing.assert(stringsContains(d.message, "time_ms"))
+    testing.assert(stringsContains(d.message, "5"))
+    testing.assert(stringsContains(d.message, "50"))
+    match d.severity {
+        SeverityWarning -> testing.assert(true),
+        _ -> testing.assert(false),
+    }
+}
+
+// ---------------------------------------------------------------------
+// Gate helper tests — scope ordering.
+// ---------------------------------------------------------------------
+
+fn testScopeStrengthOrdering() {
+    testing.assertEq(scopeStrength("run"), 0)
+    testing.assertEq(scopeStrength("target"), 1)
+    testing.assertEq(scopeStrength("portable"), 2)
+}
+
+fn testScopeIsWeakerDetectsHierarchyViolation() {
+    // portable caller, target callee → violation.
+    testing.assert(scopeIsWeaker("portable", "target"))
+    // portable caller, run callee → violation.
+    testing.assert(scopeIsWeaker("portable", "run"))
+    // target caller, run callee → violation.
+    testing.assert(scopeIsWeaker("target", "run"))
+    // Same scope → no violation.
+    testing.assert(!scopeIsWeaker("target", "target"))
+    // Weaker caller, stronger callee → no violation.
+    testing.assert(!scopeIsWeaker("run", "portable"))
+}
+
+fn testBudgetKeyRecognition() {
+    testing.assert(isRecognisedBudgetKey("allocs"))
+    testing.assert(isRecognisedBudgetKey("io_calls"))
+    testing.assert(isRecognisedBudgetKey("stack_depth"))
+    testing.assert(isRecognisedBudgetKey("instructions"))
+    testing.assert(isRecognisedBudgetKey("time_ms"))
+    testing.assert(isRecognisedBudgetKey("p99_ms"))
+    testing.assert(!isRecognisedBudgetKey("heap_allocs"))
+    testing.assert(!isRecognisedBudgetKey("memory"))
+}
+
+fn testDigitStringDetection() {
+    testing.assert(isDigitString("0"))
+    testing.assert(isDigitString("42"))
+    testing.assert(isDigitString("100"))
+    testing.assert(!isDigitString(""))
+    testing.assert(!isDigitString("abc"))
+    testing.assert(!isDigitString("12a"))
+}

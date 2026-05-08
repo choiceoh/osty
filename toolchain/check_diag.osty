@@ -80,10 +80,23 @@ pub fn checkCodePureViolation() -> String { "E0775" }
 // v0.6 G36 — Capabilities (LANG_SPEC_v0.6/20-capabilities.md §20.8).
 pub fn checkCodeAmbientWrongSite() -> String { "E0780" }
 pub fn checkCodeAmbientUnknownCapability() -> String { "E0781" }
+pub fn checkCodeAmbientForwardFailed() -> String { "E0782" }
 pub fn checkCodeReproducibleCapabilityNonRepro() -> String { "E0783" }
 pub fn checkCodeReproducibleViaCapability() -> String { "E0784" }
 pub fn checkCodePureViaCapability() -> String { "E0785" }
+pub fn checkCodeReproducibleUnorderedIter() -> String { "E0786" }
+pub fn checkCodeReproducibleScopeHierarchy() -> String { "E0787" }
+pub fn checkCodeReproduciblePortableConstraint() -> String { "E0788" }
 pub fn checkCodeAmbientUserCapability() -> String { "E0789" }
+
+// v0.6 G38 — Spec link (LANG_SPEC_v0.6 §3.10).
+pub fn checkCodeSpecAnchorNotFound() -> String { "E0790" }
+pub fn checkCodeSpecAnchorMoved() -> String { "W0790" }
+
+// v0.6 G46 — Performance contract (LANG_SPEC_v0.6 §3.15).
+pub fn checkCodeBudgetStaticViolation() -> String { "E0795" }
+pub fn checkCodeBudgetUnknownKey() -> String { "E0796" }
+pub fn checkCodeBudgetRuntimeRegression() -> String { "W0795" }
 
 // ---------------------------------------------------------------------
 // Low-level builder. Higher-level constructors below wrap this so call
@@ -836,6 +849,168 @@ pub fn diagPureViaCapability(fnName: String, paramName: String, typeName: String
         [
             "LANG_SPEC §20.4: `#[pure]` is stronger than `#[reproducible]` and forbids capability flow entirely",
             "hint: drop the capability parameter, or weaken the function to `#[reproducible]` if deterministic capabilities are intended",
+        ],
+    )
+}
+
+// ---------------------------------------------------------------------
+// v0.6 G36 — Ambient forward / reproducible scope diagnostics.
+// ---------------------------------------------------------------------
+
+/// diagAmbientForwardFailed reports a call site inside an `#[ambient]`
+/// entry point where the callee expects a capability parameter whose name
+/// does not match any in-scope ambient binding. Auto-forward requires
+/// *exact* identifier match (§20.3.1).
+pub fn diagAmbientForwardFailed(fnName: String, calleeName: String, capabilityName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeAmbientForwardFailed(),
+        "`#[ambient]` function `{fnName}` cannot auto-forward capability `{capabilityName}` to `{calleeName}`",
+        start,
+        end,
+        [
+            "LANG_SPEC §20.3.1: auto-forward requires the capability parameter name to match the ambient binding exactly",
+            "hint: pass the capability explicitly, or rename the parameter so the names match",
+        ],
+    )
+}
+
+/// diagReproducibleUnorderedIter reports a `#[reproducible]` function
+/// that iterates an unordered collection (`Map` / `Set`) whose element
+/// order is implementation-defined (§3.11.3).
+pub fn diagReproducibleUnorderedIter(fnName: String, collectionType: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeReproducibleUnorderedIter(),
+        "`#[reproducible]` function `{fnName}` iterates unordered collection `{collectionType}`",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.11.3: unordered collection iteration has implementation-defined element order",
+            "hint: use `entriesSorted()` / `toListSorted()` for deterministic ordering, or remove `#[reproducible]`",
+        ],
+    )
+}
+
+/// diagReproducibleScopeHierarchy reports a `#[reproducible(scope = A)]`
+/// function that calls a callee with a weaker scope. Scope strength:
+/// `portable` > `target` > `run` (§3.11.3).
+pub fn diagReproducibleScopeHierarchy(fnName: String, callerScope: String, calleeName: String, calleeScope: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeReproducibleScopeHierarchy(),
+        "`#[reproducible(scope = \"{callerScope}\")]` function `{fnName}` calls `{calleeName}` which has weaker scope `{calleeScope}`",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.11.3: reproducible scope strength is `portable` > `target` > `run`; callers may not reach weaker-scoped callees",
+            "hint: strengthen the callee's scope, or weaken the caller's",
+        ],
+    )
+}
+
+/// diagReproduciblePortableConstraint reports a `#[reproducible(scope =
+/// "portable")]` function that violates a cross-platform constraint:
+/// endianness-dependent serialisation, NaN bit pattern comparison, or
+/// platform-specific integer width assumption (§3.11.3).
+pub fn diagReproduciblePortableConstraint(fnName: String, what: String, fixHint: String, start: Int, end: Int) -> CheckDiagnostic {
+    let mut notes: List<String> = [
+        "LANG_SPEC §3.11.3: `#[reproducible(scope = \"portable\")]` must be byte-equal across platforms",
+    ]
+    if fixHint != "" {
+        notes.push("hint: {fixHint}")
+    }
+    checkDiagWithNotes(
+        checkCodeReproduciblePortableConstraint(),
+        "`#[reproducible(scope = \"portable\")]` function `{fnName}` violates a portable constraint: {what}",
+        start,
+        end,
+        notes,
+    )
+}
+
+// ---------------------------------------------------------------------
+// v0.6 G38 — Spec link diagnostics.
+// ---------------------------------------------------------------------
+
+/// diagSpecAnchorNotFound reports a `#[spec("§X.Y")]` annotation that
+/// references a markdown anchor not present in `LANG_SPEC_v0.6/`.
+pub fn diagSpecAnchorNotFound(anchor: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeSpecAnchorNotFound(),
+        "spec anchor `{anchor}` was not found",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.10.2: `#[spec]` references must resolve to an existing section in `LANG_SPEC_v0.6/`",
+            "hint: correct the section reference, or add the section to the spec",
+        ],
+    )
+}
+
+/// diagSpecAnchorMoved reports a `#[spec("§X.Y")]` annotation that
+/// references a section that has moved to a different chapter. A
+/// suggested replacement may be provided via the `suggestion` parameter.
+pub fn diagSpecAnchorMoved(anchor: String, suggestion: String, start: Int, end: Int) -> CheckDiagnostic {
+    let mut notes: List<String> = [
+        "LANG_SPEC §3.10.2: the spec section has been reorganised; update the reference",
+    ]
+    if suggestion != "" {
+        notes.push("hint: the section moved to `{suggestion}`")
+    }
+    checkDiagWithNotes(
+        checkCodeSpecAnchorMoved(),
+        "spec anchor `{anchor}` has moved",
+        start,
+        end,
+        notes,
+    )
+}
+
+// ---------------------------------------------------------------------
+// v0.6 G46 — Performance contract diagnostics.
+// ---------------------------------------------------------------------
+
+/// diagBudgetStaticViolation reports a `#[budget]` static field
+/// (`allocs`, `io_calls`, `stack_depth`, `instructions`) exceeded by
+/// the function's compile-time analysis (§3.15.1).
+pub fn diagBudgetStaticViolation(fnName: String, key: String, budget: Int, actual: Int, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeBudgetStaticViolation(),
+        "`#[budget]` function `{fnName}` exceeds `{key}` budget: declared {budget}, actual {actual}",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.15.1: static budget fields are verified at compile time",
+            "hint: reduce allocations / IO / recursion depth, or relax the budget",
+        ],
+    )
+}
+
+/// diagBudgetUnknownKey reports a `#[budget(...)]` annotation that uses
+/// a key not in the recognised set (§3.15).
+pub fn diagBudgetUnknownKey(fnName: String, key: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeBudgetUnknownKey(),
+        "`#[budget]` function `{fnName}` uses unknown key `{key}`",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.15: recognised keys are `allocs`, `io_calls`, `stack_depth`, `instructions`, `time_ms`, `p99_ms`",
+            "hint: use one of the recognised keys; unknown keys are not a forward-compatibility hatch",
+        ],
+    )
+}
+
+/// diagBudgetRuntimeRegression reports an `osty bench --budget` measured
+/// runtime metric exceeding the declared `#[budget]` (§3.15.2). Emitted
+/// as a warning, not an error.
+pub fn diagBudgetRuntimeRegression(fnName: String, key: String, budget: Int, actual: Int, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeBudgetRuntimeRegression(),
+        "`#[budget]` function `{fnName}` exceeds `{key}` runtime budget: declared {budget}, measured {actual}",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.15.2: runtime budget fields are verified by `osty bench --budget`",
+            "hint: optimise the function, or relax the runtime budget",
         ],
     )
 }
