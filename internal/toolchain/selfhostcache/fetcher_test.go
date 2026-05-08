@@ -281,26 +281,52 @@ func TestFetchAndInstallZeroKey(t *testing.T) {
 	}
 }
 
-func TestEnvFetcherDisabledByDefault(t *testing.T) {
+func TestEnvFetcherDisabledWhenAllEmpty(t *testing.T) {
+	// No env URL, no default URL → nil (preserves the legacy
+	// "no fetcher without explicit URL" contract for fork users
+	// who blank out DefaultRegistryURL).
 	t.Setenv(RegistryURLEnv, "")
 	t.Setenv(RegistryOfflineEnv, "")
-	if EnvFetcher() != nil {
-		t.Fatal("expected EnvFetcher to return nil with no URL configured")
+	if envFetcherWithDefault("") != nil {
+		t.Fatal("expected nil when both env and default URLs are empty")
+	}
+}
+
+func TestEnvFetcherUsesDefaultWhenEnvUnset(t *testing.T) {
+	// The env var is unset but a non-empty default exists — fresh
+	// clones must reach the upstream registry without the user
+	// exporting OSTY_SELF_REGISTRY_URL by hand.
+	t.Setenv(RegistryURLEnv, "")
+	t.Setenv(RegistryOfflineEnv, "")
+	f := envFetcherWithDefault("https://example.com/default")
+	if f == nil {
+		t.Fatal("expected fetcher to use the default URL when env is unset")
+	}
+	httpF, ok := f.(HTTPFetcher)
+	if !ok {
+		t.Fatalf("expected HTTPFetcher, got %T", f)
+	}
+	if httpF.BaseURL != "https://example.com/default" {
+		t.Fatalf("BaseURL = %q, want default URL", httpF.BaseURL)
 	}
 }
 
 func TestEnvFetcherHonoursOfflineMode(t *testing.T) {
+	// Offline mode must override both an explicit env URL and any
+	// configured default — air-gapped CI must never reach out.
 	t.Setenv(RegistryURLEnv, "https://example.com/osty-self")
 	t.Setenv(RegistryOfflineEnv, "1")
-	if EnvFetcher() != nil {
-		t.Fatal("offline mode must disable the fetcher")
+	if envFetcherWithDefault("https://example.com/default") != nil {
+		t.Fatal("offline mode must disable the fetcher even with default set")
 	}
 }
 
-func TestEnvFetcherActiveWithURL(t *testing.T) {
+func TestEnvFetcherEnvWinsOverDefault(t *testing.T) {
+	// Explicit env var must override the default — fork users and
+	// developers exercising staging registries rely on this.
 	t.Setenv(RegistryURLEnv, "https://example.com/osty-self")
 	t.Setenv(RegistryOfflineEnv, "")
-	f := EnvFetcher()
+	f := envFetcherWithDefault("https://example.com/default")
 	if f == nil {
 		t.Fatal("expected non-nil fetcher with URL set")
 	}
@@ -309,7 +335,16 @@ func TestEnvFetcherActiveWithURL(t *testing.T) {
 		t.Fatalf("expected HTTPFetcher, got %T", f)
 	}
 	if httpF.BaseURL != "https://example.com/osty-self" {
-		t.Fatalf("BaseURL = %q, want canonical URL", httpF.BaseURL)
+		t.Fatalf("BaseURL = %q, want canonical URL (env wins over default)", httpF.BaseURL)
+	}
+}
+
+func TestDefaultRegistryURLPointsAtUpstream(t *testing.T) {
+	// Sanity-pin the const so a careless edit (e.g. accidentally
+	// blanking the URL) lights up here before merging.
+	const want = "https://github.com/choiceoh/osty/releases/download/osty-self-snapshots"
+	if DefaultRegistryURL != want {
+		t.Fatalf("DefaultRegistryURL = %q, want %q", DefaultRegistryURL, want)
 	}
 }
 
