@@ -531,6 +531,7 @@ fn testLirProtoParityCatalogIsOstyOwned() {
     let currentNames = strings.join(lirParityFixtureNames(current), ",")
     assertLirContains(currentNames, "source_scalar_arithmetic")
     assertLirContains(currentNames, "source_projected_intrinsic_result")
+    assertLirContains(currentNames, "source_nested_struct_binding")
     testing.assert(!(strings.contains(currentNames, "source_println_int_runtime_abi")))
 }
 fn testLirProtoParityCatalogFindsMissingNeedles() {
