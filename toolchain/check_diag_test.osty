@@ -293,3 +293,280 @@ fn testDigitStringDetection() {
     testing.assert(!isDigitString("abc"))
     testing.assert(!isDigitString("12a"))
 }
+
+// ---------------------------------------------------------------------
+// v0.6 G41 — Error contract diagnostics.
+// ---------------------------------------------------------------------
+
+fn testDiagErrorContractMismatchStampsE0410() {
+    let d = diagErrorContractMismatch("createUser", "Timeout", 10, 20)
+    testing.assertEq(d.code, "E0410")
+    testing.assert(stringsContains(d.message, "createUser"))
+    testing.assert(stringsContains(d.message, "Timeout"))
+    testing.assert(stringsContains(d.message, "error_contract"))
+    match d.severity {
+        SeverityError -> testing.assert(true),
+        _ -> testing.assert(false),
+    }
+}
+
+fn testDiagErrorContractUnknownVariantStampsE0411() {
+    let d = diagErrorContractUnknownVariant("createUser", "NotFound", "UserError", 5, 15)
+    testing.assertEq(d.code, "E0411")
+    testing.assert(stringsContains(d.message, "NotFound"))
+    testing.assert(stringsContains(d.message, "UserError"))
+}
+
+fn testDiagErrorContractDeadVariantStampsW0411() {
+    let d = diagErrorContractDeadVariant("load", "DiskFull", 0, 10)
+    testing.assertEq(d.code, "W0411")
+    testing.assert(stringsContains(d.message, "DiskFull"))
+    testing.assert(stringsContains(d.message, "never produced"))
+    match d.severity {
+        SeverityWarning -> testing.assert(true),
+        _ -> testing.assert(false),
+    }
+}
+
+fn testDiagErrorContractOnErasedStampsE0412() {
+    let d = diagErrorContractOnErased("handler", 0, 10)
+    testing.assertEq(d.code, "E0412")
+    testing.assert(stringsContains(d.message, "handler"))
+    testing.assert(stringsContains(d.message, "erased"))
+}
+
+fn testDiagMatchExcludesContractVariantStampsW0413() {
+    let d = diagMatchExcludesContractVariant("handle", "Timeout", "load", 10, 20)
+    testing.assertEq(d.code, "W0413")
+    testing.assert(stringsContains(d.message, "Timeout"))
+    testing.assert(stringsContains(d.message, "load"))
+    testing.assert(stringsContains(d.message, "dead code"))
+}
+
+// ---------------------------------------------------------------------
+// v0.6 G40 — Sealed construct diagnostics.
+// ---------------------------------------------------------------------
+
+fn testDiagSealedExternalLiteralStampsE0420() {
+    let d = diagSealedExternalLiteral("Email", "parse", 10, 25)
+    testing.assertEq(d.code, "E0420")
+    testing.assert(stringsContains(d.message, "Email"))
+    testing.assert(stringsContains(d.message, "parse"))
+    testing.assert(stringsContains(d.message, "sealed"))
+}
+
+fn testDiagTestConstructInProductionStampsE0421() {
+    let d = diagTestConstructInProduction("testEmail", "Email", 0, 10)
+    testing.assertEq(d.code, "E0421")
+    testing.assert(stringsContains(d.message, "testEmail"))
+    testing.assert(stringsContains(d.message, "production"))
+}
+
+fn testDiagTrustedConstructInUserPackageStampsE0422() {
+    let d = diagTrustedConstructInUserPackage("deserialise", "Email", 0, 10)
+    testing.assertEq(d.code, "E0422")
+    testing.assert(stringsContains(d.message, "user packages"))
+}
+
+fn testDiagSealedConstructorNotMethodStampsE0423() {
+    let d = diagSealedConstructorNotMethod("Email", "fromRaw", 0, 10)
+    testing.assertEq(d.code, "E0423")
+    testing.assert(stringsContains(d.message, "Email"))
+    testing.assert(stringsContains(d.message, "fromRaw"))
+}
+
+// ---------------------------------------------------------------------
+// v0.6 G42 — Structured intent diagnostics.
+// ---------------------------------------------------------------------
+
+fn testDiagExampleMismatchStampsE0430() {
+    let d = diagExampleMismatch("add", "3", "5", 0, 10)
+    testing.assertEq(d.code, "E0430")
+    testing.assert(stringsContains(d.message, "add"))
+    testing.assert(stringsContains(d.message, "3"))
+    testing.assert(stringsContains(d.message, "5"))
+}
+
+fn testDiagExampleArityMismatchStampsE0431() {
+    let d = diagExampleArityMismatch("f", 2, 1, 0, 10)
+    testing.assertEq(d.code, "E0431")
+    testing.assert(stringsContains(d.message, "2"))
+    testing.assert(stringsContains(d.message, "1"))
+}
+
+fn testDiagFixtureNonZeroArityStampsE0432() {
+    let d = diagFixtureNonZeroArity("myFixture", 3, 0, 10)
+    testing.assertEq(d.code, "E0432")
+    testing.assert(stringsContains(d.message, "myFixture"))
+    testing.assert(stringsContains(d.message, "3"))
+}
+
+fn testDiagExampleUnknownFixtureStampsE0433() {
+    let d = diagExampleUnknownFixture("f", "missingFixture", 0, 10)
+    testing.assertEq(d.code, "E0433")
+    testing.assert(stringsContains(d.message, "missingFixture"))
+}
+
+// ---------------------------------------------------------------------
+// v0.6 G43 — Spec block diagnostics.
+// ---------------------------------------------------------------------
+
+fn testDiagSpecBlockMisplacedStampsE0440() {
+    let d = diagSpecBlockMisplaced("compute", 10, 20)
+    testing.assertEq(d.code, "E0440")
+    testing.assert(stringsContains(d.message, "compute"))
+    testing.assert(stringsContains(d.message, "first-statement"))
+}
+
+fn testDiagSpecBlockExampleNotBoolStampsE0441() {
+    let d = diagSpecBlockExampleNotBool("f", "Int", 0, 10)
+    testing.assertEq(d.code, "E0441")
+    testing.assert(stringsContains(d.message, "Int"))
+    testing.assert(stringsContains(d.message, "Bool"))
+}
+
+fn testDiagSpecBlockLawNotBoolStampsE0442() {
+    let d = diagSpecBlockLawNotBool("f", "law", "String", 0, 10)
+    testing.assertEq(d.code, "E0442")
+    testing.assert(stringsContains(d.message, "law"))
+    testing.assert(stringsContains(d.message, "String"))
+}
+
+fn testDiagSpecBlockForallBadGeneratorStampsE0443() {
+    let d = diagSpecBlockForallBadGenerator("f", "List<Int>", 0, 10)
+    testing.assertEq(d.code, "E0443")
+    testing.assert(stringsContains(d.message, "List<Int>"))
+    testing.assert(stringsContains(d.message, "Gen"))
+}
+
+// ---------------------------------------------------------------------
+// v0.6 G45 — Golden test diagnostics.
+// ---------------------------------------------------------------------
+
+fn testDiagGoldenNotReproducibleStampsE0444() {
+    let d = diagGoldenNotReproducible("testOutput", 0, 10)
+    testing.assertEq(d.code, "E0444")
+    testing.assert(stringsContains(d.message, "testOutput"))
+    testing.assert(stringsContains(d.message, "reproducible"))
+}
+
+fn testDiagGoldenSnapshotMissingStampsE0445() {
+    let d = diagGoldenSnapshotMissing("testOutput", "fixtures/output.snap", 0, 10)
+    testing.assertEq(d.code, "E0445")
+    testing.assert(stringsContains(d.message, "fixtures/output.snap"))
+}
+
+fn testDiagGoldenAstParseErrorStampsE0446() {
+    let d = diagGoldenAstParseError("testFormat", "unexpected token", 0, 10)
+    testing.assertEq(d.code, "E0446")
+    testing.assert(stringsContains(d.message, "unexpected token"))
+}
+
+fn testDiagGoldenSnapshotStaleStampsW0444() {
+    let d = diagGoldenSnapshotStale("testFormat", "fixtures/fmt.snap", 0, 10)
+    testing.assertEq(d.code, "W0444")
+    testing.assert(stringsContains(d.message, "source-hash"))
+    match d.severity {
+        SeverityWarning -> testing.assert(true),
+        _ -> testing.assert(false),
+    }
+}
+
+// ---------------------------------------------------------------------
+// v0.6 G44 — API evolution diagnostics.
+// ---------------------------------------------------------------------
+
+fn testDiagMatchCompatNoFallbackStampsE0450() {
+    let d = diagMatchCompatNoFallback("dispatch", "0.6", 0, 10)
+    testing.assertEq(d.code, "E0450")
+    testing.assert(stringsContains(d.message, "dispatch"))
+    testing.assert(stringsContains(d.message, "fallback"))
+}
+
+fn testDiagMatchCompatUnknownVersionStampsE0451() {
+    let d = diagMatchCompatUnknownVersion("dispatch", "99.0", 0, 10)
+    testing.assertEq(d.code, "E0451")
+    testing.assert(stringsContains(d.message, "99.0"))
+}
+
+fn testDiagPublishStableBreakingStampsE2100() {
+    let d = diagPublishStableBreaking("process", 0, 10)
+    testing.assertEq(d.code, "E2100")
+    testing.assert(stringsContains(d.message, "process"))
+    testing.assert(stringsContains(d.message, "major"))
+}
+
+fn testDiagPublishVersionDowngradeStampsE2101() {
+    let d = diagPublishVersionDowngrade("2.0.0", "1.5.0", 0, 10)
+    testing.assertEq(d.code, "E2101")
+    testing.assert(stringsContains(d.message, "2.0.0"))
+    testing.assert(stringsContains(d.message, "1.5.0"))
+}
+
+fn testDiagPublishExperimentalChangeStampsW2100() {
+    let d = diagPublishExperimentalChange("tryParse", 0, 10)
+    testing.assertEq(d.code, "W2100")
+    testing.assert(stringsContains(d.message, "tryParse"))
+    testing.assert(stringsContains(d.message, "experimental"))
+    match d.severity {
+        SeverityWarning -> testing.assert(true),
+        _ -> testing.assert(false),
+    }
+}
+
+// ---------------------------------------------------------------------
+// v0.6 G37 — Taint / Information flow diagnostics.
+// ---------------------------------------------------------------------
+
+fn testDiagTaintSinkViolationStampsE0900() {
+    let d = diagTaintSinkViolation("user_input", "db.query", "sql_safe", 10, 20)
+    testing.assertEq(d.code, "E0900")
+    testing.assert(stringsContains(d.message, "user_input"))
+    testing.assert(stringsContains(d.message, "db.query"))
+    testing.assert(stringsContains(d.message, "sql_safe"))
+}
+
+fn testDiagTaintUnknownTagStampsE0901() {
+    let d = diagTaintUnknownTag("custom_tag", 0, 10)
+    testing.assertEq(d.code, "E0901")
+    testing.assert(stringsContains(d.message, "custom_tag"))
+    testing.assert(stringsContains(d.message, "unknown"))
+}
+
+fn testDiagSanitizesUnknownSourceStampsE0902() {
+    let d = diagSanitizesUnknownSource("missing_src", "sql_safe", 0, 10)
+    testing.assertEq(d.code, "E0902")
+    testing.assert(stringsContains(d.message, "missing_src"))
+}
+
+fn testDiagRequiresUnknownTagStampsE0903() {
+    let d = diagRequiresUnknownTag("unobtainium", 0, 10)
+    testing.assertEq(d.code, "E0903")
+    testing.assert(stringsContains(d.message, "unobtainium"))
+    testing.assert(stringsContains(d.message, "unsatisfiable"))
+}
+
+fn testDiagTrustedDeclassifyAuditStampsW0901() {
+    let d = diagTrustedDeclassifyAudit("handler", "legacy FFI boundary", 0, 10)
+    testing.assertEq(d.code, "W0901")
+    testing.assert(stringsContains(d.message, "handler"))
+    testing.assert(stringsContains(d.message, "declassify"))
+    // Notes should include the reason.
+    testing.assert(d.notes.len() >= 3)
+    match d.severity {
+        SeverityWarning -> testing.assert(true),
+        _ -> testing.assert(false),
+    }
+}
+
+fn testDiagTrustedDeclassifyAuditOmitsEmptyReason() {
+    let d = diagTrustedDeclassifyAudit("handler", "", 0, 10)
+    // Base note + hint, no audit reason.
+    testing.assertEq(d.notes.len(), 2)
+}
+
+fn testDiagUnsafeSilentMatchCompatStampsW0902() {
+    let d = diagUnsafeSilentMatchCompat("match_compat with unsafe_silent = true", 0, 10)
+    testing.assertEq(d.code, "W0902")
+    testing.assert(stringsContains(d.message, "unsafe_silent"))
+}

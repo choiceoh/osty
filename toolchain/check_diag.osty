@@ -77,6 +77,53 @@ pub fn checkCodeIntrinsicNonEmptyBody() -> String { "E0773" }
 pub fn checkCodeBuilderMissingRequiredField() -> String { "E0774" }
 pub fn checkCodePureViolation() -> String { "E0775" }
 
+// v0.6 G41 — Error contract (LANG_SPEC_v0.6 §7.5).
+pub fn checkCodeErrorContractMismatch() -> String { "E0410" }
+pub fn checkCodeErrorContractUnknownVariant() -> String { "E0411" }
+pub fn checkCodeErrorContractDeadVariant() -> String { "W0411" }
+pub fn checkCodeErrorContractOnErased() -> String { "E0412" }
+pub fn checkCodeMatchExcludesContractVariant() -> String { "W0413" }
+
+// v0.6 G40 — Sealed construct (LANG_SPEC_v0.6 §3.4.5).
+pub fn checkCodeSealedExternalLiteral() -> String { "E0420" }
+pub fn checkCodeTestConstructInProduction() -> String { "E0421" }
+pub fn checkCodeTrustedConstructInUserPackage() -> String { "E0422" }
+pub fn checkCodeSealedConstructorNotMethod() -> String { "E0423" }
+
+// v0.6 G42 — Structured intent (LANG_SPEC_v0.6 §3.12).
+pub fn checkCodeExampleMismatch() -> String { "E0430" }
+pub fn checkCodeExampleArityMismatch() -> String { "E0431" }
+pub fn checkCodeFixtureNonZeroArity() -> String { "E0432" }
+pub fn checkCodeExampleUnknownFixture() -> String { "E0433" }
+
+// v0.6 G43 — Executable spec block (LANG_SPEC_v0.6 §3.13).
+pub fn checkCodeSpecBlockMisplaced() -> String { "E0440" }
+pub fn checkCodeSpecBlockExampleNotBool() -> String { "E0441" }
+pub fn checkCodeSpecBlockLawNotBool() -> String { "E0442" }
+pub fn checkCodeSpecBlockForallBadGenerator() -> String { "E0443" }
+
+// v0.6 G45 — Golden tests (LANG_SPEC_v0.6 §11.5).
+pub fn checkCodeGoldenNotReproducible() -> String { "E0444" }
+pub fn checkCodeGoldenSnapshotMissing() -> String { "E0445" }
+pub fn checkCodeGoldenAstParseError() -> String { "E0446" }
+pub fn checkCodeGoldenSnapshotStale() -> String { "W0444" }
+
+// v0.6 G44 — API evolution (LANG_SPEC_v0.6 §3.14).
+pub fn checkCodeMatchCompatNoFallback() -> String { "E0450" }
+pub fn checkCodeMatchCompatUnknownVersion() -> String { "E0451" }
+pub fn checkCodePublishStableBreaking() -> String { "E2100" }
+pub fn checkCodePublishVersionDowngrade() -> String { "E2101" }
+pub fn checkCodePublishCompatAddPatchOnly() -> String { "E2102" }
+pub fn checkCodePublishExperimentalChange() -> String { "W2100" }
+
+// v0.6 G37 — Information flow / Taint (LANG_SPEC_v0.6 §21).
+pub fn checkCodeTaintSinkViolation() -> String { "E0900" }
+pub fn checkCodeTaintUnknownTag() -> String { "E0901" }
+pub fn checkCodeSanitizesUnknownSource() -> String { "E0902" }
+pub fn checkCodeRequiresUnknownTag() -> String { "E0903" }
+pub fn checkCodeTrustedDeclassifyAudit() -> String { "W0901" }
+pub fn checkCodeUnsafeSilentMatchCompat() -> String { "W0902" }
+
 // v0.6 G36 — Capabilities (LANG_SPEC_v0.6/20-capabilities.md §20.8).
 pub fn checkCodeAmbientWrongSite() -> String { "E0780" }
 pub fn checkCodeAmbientUnknownCapability() -> String { "E0781" }
@@ -1011,6 +1058,536 @@ pub fn diagBudgetRuntimeRegression(fnName: String, key: String, budget: Int, act
         [
             "LANG_SPEC §3.15.2: runtime budget fields are verified by `osty bench --budget`",
             "hint: optimise the function, or relax the runtime budget",
+        ],
+    )
+}
+
+// =====================================================================
+// v0.6 Phase 4/5 — Error Contract, Sealed Construct, Structured Intent,
+//   Spec Block, Golden, API Evolution, Taint
+//
+// Diagnostic constructors for the E04xx, E09xx, and E2xxx bands.
+// Codes are registered in internal/diag/codes.go; these Osty-side
+// constructors provide the self-host checker with typed builders.
+// Gate implementations will land in check_gates.osty per phase.
+// =====================================================================
+
+// ---------------------------------------------------------------------
+// G41 — Error contract (§7.5)
+// ---------------------------------------------------------------------
+
+/// diagErrorContractMismatch reports a function returning `Err(V)`
+/// where `V` is not in the declared `#[error_contract]`.
+pub fn diagErrorContractMismatch(fnName: String, variant: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeErrorContractMismatch(),
+        "function `{fnName}` returns `Err({variant})` not listed in its `#[error_contract]`",
+        start,
+        end,
+        [
+            "LANG_SPEC §7.5.2: the error contract is the authoritative failure-mode catalogue",
+            "hint: add `{variant}` to the contract, or change the return path to use a contracted variant",
+        ],
+    )
+}
+
+/// diagErrorContractUnknownVariant reports a contract entry referencing
+/// a variant that does not exist on the function's error enum.
+pub fn diagErrorContractUnknownVariant(fnName: String, variant: String, enumName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeErrorContractUnknownVariant(),
+        "`#[error_contract]` on `{fnName}` references unknown variant `{variant}` of enum `{enumName}`",
+        start,
+        end,
+        [
+            "LANG_SPEC §7.5.2: contract variants must exist on the declared error enum",
+            "hint: correct the variant name, or extend the error enum",
+        ],
+    )
+}
+
+/// diagErrorContractDeadVariant reports a contract variant that is
+/// declared but never produced by any return path (warning).
+pub fn diagErrorContractDeadVariant(fnName: String, variant: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeErrorContractDeadVariant(),
+        "`#[error_contract]` variant `{variant}` on `{fnName}` is never produced",
+        start,
+        end,
+        [
+            "LANG_SPEC §7.5.2: dead contract variants indicate incomplete error handling",
+            "hint: remove the variant from the contract, or add a code path that returns it",
+        ],
+    )
+}
+
+/// diagErrorContractOnErased reports `#[error_contract]` on a function
+/// whose error type is the erased `Error` interface.
+pub fn diagErrorContractOnErased(fnName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeErrorContractOnErased(),
+        "`#[error_contract]` on `{fnName}` targets erased `Error` interface; contracts require a concrete enum",
+        start,
+        end,
+        [
+            "LANG_SPEC §7.5.5: contracts only have meaning over concrete enum types",
+            "hint: change the error type to a concrete enum, or use `#[error_contract(any)]` for documentation only",
+        ],
+    )
+}
+
+/// diagMatchExcludesContractVariant reports a match arm referencing an
+/// `Err(V)` where `V` is on the enum but not in the callee's contract.
+pub fn diagMatchExcludesContractVariant(fnName: String, variant: String, calleeName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeMatchExcludesContractVariant(),
+        "match arm `Err({variant})` is excluded by `{calleeName}`'s `#[error_contract]`; the arm is dead code",
+        start,
+        end,
+        [
+            "LANG_SPEC §7.5.7: the callee's contract is the authoritative failure-mode set",
+            "hint: drop the arm, or extend the callee's contract to include `{variant}`",
+        ],
+    )
+}
+
+// ---------------------------------------------------------------------
+// G40 — Sealed construct (§3.4.5)
+// ---------------------------------------------------------------------
+
+/// diagSealedExternalLiteral reports a struct literal construction of a
+/// `#[sealed_construct]` type outside an authorised path.
+pub fn diagSealedExternalLiteral(typeName: String, constructor: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeSealedExternalLiteral(),
+        "sealed type `{typeName}` cannot be constructed via struct literal outside `{constructor}`",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.4.5.2: sealed types enforce parse-don't-validate; only authorised constructors may produce values",
+            "hint: route construction through `{typeName}.{constructor}(...)`",
+        ],
+    )
+}
+
+/// diagTestConstructInProduction reports a `#[test_construct]` function
+/// reachable from a non-test build.
+pub fn diagTestConstructInProduction(fnName: String, sealedType: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeTestConstructInProduction(),
+        "`#[test_construct]` function `{fnName}` for `{sealedType}` is reachable from production code",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.4.5.5: test constructors only relax sealed rules in the test profile",
+            "hint: ensure the function is only called from `#[test]` or `#[cfg(test)]` paths",
+        ],
+    )
+}
+
+/// diagTrustedConstructInUserPackage reports `#[trusted_construct]` used
+/// outside stdlib/internal packages.
+pub fn diagTrustedConstructInUserPackage(fnName: String, sealedType: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeTrustedConstructInUserPackage(),
+        "`#[trusted_construct]` on `{fnName}` for `{sealedType}` is not allowed in user packages",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.4.5.6: trusted_construct is reserved for stdlib / internal packages",
+            "hint: route through the public sealed constructor, or move into `std.*` if genuinely needed",
+        ],
+    )
+}
+
+/// diagSealedConstructorNotMethod reports `#[sealed_construct(name)]`
+/// where `name` is not a method on the struct.
+pub fn diagSealedConstructorNotMethod(typeName: String, constructorName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeSealedConstructorNotMethod(),
+        "`#[sealed_construct({constructorName})]` on `{typeName}` names a non-existent method",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.4.5: the sealed constructor must be an existing method or associated function",
+            "hint: name an existing constructor method, or define one",
+        ],
+    )
+}
+
+// ---------------------------------------------------------------------
+// G42 — Structured intent (§3.12)
+// ---------------------------------------------------------------------
+
+/// diagExampleMismatch reports an `#[example]` invocation whose actual
+/// output differs from the expected value.
+pub fn diagExampleMismatch(fnName: String, expected: String, actual: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeExampleMismatch(),
+        "`#[example]` on `{fnName}`: expected `{expected}`, got `{actual}`",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.12.2: example outputs are verified at test time",
+            "hint: correct the input/output, or fix the function body",
+        ],
+    )
+}
+
+/// diagExampleArityMismatch reports an `#[example]` providing the wrong
+/// number of input arguments.
+pub fn diagExampleArityMismatch(fnName: String, expected: Int, got: Int, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeExampleArityMismatch(),
+        "`#[example]` on `{fnName}`: expected {expected} input(s), got {got}",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.12.2: example input count must match the function's positional arity",
+            "hint: adjust the input list to match the function's parameters",
+        ],
+    )
+}
+
+/// diagFixtureNonZeroArity reports a `#[fixture]` on a function that
+/// takes parameters.
+pub fn diagFixtureNonZeroArity(fnName: String, paramCount: Int, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeFixtureNonZeroArity(),
+        "`#[fixture]` function `{fnName}` has {paramCount} parameter(s); fixtures must be zero-arity",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.12.3: fixtures must be zero-arity to be sharable across docs / tests / context",
+            "hint: remove the parameters, or drop `#[fixture]`",
+        ],
+    )
+}
+
+/// diagExampleUnknownFixture reports an `#[example(uses = "name")]`
+/// referencing a fixture that has no `#[fixture(name = "name")]`.
+pub fn diagExampleUnknownFixture(fnName: String, fixtureName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeExampleUnknownFixture(),
+        "`#[example]` on `{fnName}` references unknown fixture `{fixtureName}`",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.12.3: fixture names must resolve to a `#[fixture]` declaration",
+            "hint: declare the fixture, or correct the name",
+        ],
+    )
+}
+
+// ---------------------------------------------------------------------
+// G43 — Executable spec block (§3.13)
+// ---------------------------------------------------------------------
+
+/// diagSpecBlockMisplaced reports a `spec { ... }` block outside the
+/// function-body first-statement position.
+pub fn diagSpecBlockMisplaced(fnName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeSpecBlockMisplaced(),
+        "`spec { }` block in `{fnName}` is not at the first-statement position",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.13 / R28: spec blocks must be the first statement in a function body",
+            "hint: move the block to the start of the function body",
+        ],
+    )
+}
+
+/// diagSpecBlockExampleNotBool reports a `spec { example: expr }` where
+/// `expr` does not evaluate to `Bool`.
+pub fn diagSpecBlockExampleNotBool(fnName: String, gotType: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeSpecBlockExampleNotBool(),
+        "`spec { example: ... }` in `{fnName}` evaluates to `{gotType}`, expected `Bool`",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.13.2: spec examples must be boolean comparisons",
+            "hint: rewrite the example as `fn(args) == expected`",
+        ],
+    )
+}
+
+/// diagSpecBlockLawNotBool reports a `spec { law: expr }` or
+/// `spec { invariant: expr }` where `expr` does not evaluate to `Bool`.
+pub fn diagSpecBlockLawNotBool(fnName: String, kind: String, gotType: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeSpecBlockLawNotBool(),
+        "`spec { {kind}: ... }` in `{fnName}` evaluates to `{gotType}`, expected `Bool`",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.13.5: laws and invariants must be boolean expressions",
+            "hint: rewrite as a boolean expression (use `result` for the function's return value)",
+        ],
+    )
+}
+
+/// diagSpecBlockForallBadGenerator reports a `spec { forall x in expr: ... }`
+/// where `expr` is not `Gen<T>`.
+pub fn diagSpecBlockForallBadGenerator(fnName: String, gotType: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeSpecBlockForallBadGenerator(),
+        "`spec { forall ... in ... }` in `{fnName}` generator is `{gotType}`, expected `Gen<T>`",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.13.3: forall generators must produce `Gen<T>`",
+            "hint: use a `std.testing.gen.*` constructor",
+        ],
+    )
+}
+
+// ---------------------------------------------------------------------
+// G45 — Golden tests (§11.5)
+// ---------------------------------------------------------------------
+
+/// diagGoldenNotReproducible reports a `#[golden]` function that is not
+/// `#[reproducible]`.
+pub fn diagGoldenNotReproducible(fnName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeGoldenNotReproducible(),
+        "`#[golden]` function `{fnName}` is not `#[reproducible]`",
+        start,
+        end,
+        [
+            "LANG_SPEC §11.5.4: golden functions must be deterministic for snapshots to be meaningful",
+            "hint: add `#[reproducible]` and ensure the function avoids non-deterministic capabilities",
+        ],
+    )
+}
+
+/// diagGoldenSnapshotMissing reports a `#[golden(path)]` whose snapshot
+/// file does not exist on disk.
+pub fn diagGoldenSnapshotMissing(fnName: String, path: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeGoldenSnapshotMissing(),
+        "`#[golden]` function `{fnName}` snapshot `{path}` does not exist",
+        start,
+        end,
+        [
+            "LANG_SPEC §11.5.2: snapshot files are created on first run with `--update-golden`",
+            "hint: run `osty test --update-golden` to create the snapshot, then audit its contents",
+        ],
+    )
+}
+
+/// diagGoldenAstParseError reports a `#[golden(mode = \"ast\")]`
+/// function whose output is not valid Osty source.
+pub fn diagGoldenAstParseError(fnName: String, parseError: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeGoldenAstParseError(),
+        "`#[golden(mode = \"ast\")]` function `{fnName}` output failed to reparse: {parseError}",
+        start,
+        end,
+        [
+            "LANG_SPEC §11.5.3: AST mode requires valid Osty source as output",
+            "hint: use `mode = \"text\"` (byte-exact) or `mode = \"json\"` if the output is not Osty source",
+        ],
+    )
+}
+
+/// diagGoldenSnapshotStale reports a `#[golden]` snapshot whose
+/// `source-hash` does not match the current function definition.
+pub fn diagGoldenSnapshotStale(fnName: String, path: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeGoldenSnapshotStale(),
+        "`#[golden]` function `{fnName}` snapshot `{path}` source-hash mismatch",
+        start,
+        end,
+        [
+            "LANG_SPEC §11.5.4: the snapshot may be stale after a function body change",
+            "hint: review the snapshot for correctness, then `osty test --update-golden` to refresh",
+        ],
+    )
+}
+
+// ---------------------------------------------------------------------
+// G44 — API evolution (§3.14)
+// ---------------------------------------------------------------------
+
+/// diagMatchCompatNoFallback reports `#[match_compat]` without a
+/// `fallback` or `unsafe_silent = true`.
+pub fn diagMatchCompatNoFallback(fnName: String, version: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeMatchCompatNoFallback(),
+        "`#[match_compat(\"{version}\")]` on `{fnName}` requires `fallback` or `unsafe_silent = true`",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.14.4: silent fallthrough is forbidden by default",
+            "hint: add `fallback = handlerName`, or explicitly opt into `unsafe_silent = true` (emits W0902)",
+        ],
+    )
+}
+
+/// diagMatchCompatUnknownVersion reports `#[match_compat]` referencing
+/// an unknown version.
+pub fn diagMatchCompatUnknownVersion(fnName: String, version: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeMatchCompatUnknownVersion(),
+        "`#[match_compat(\"{version}\")]` on `{fnName}` references an unknown version",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.14.4: match_compat versions must be recognised by the compiler",
+            "hint: use a known version, or update the compiler",
+        ],
+    )
+}
+
+/// diagPublishStableBreaking reports a breaking change on a `stable` API.
+pub fn diagPublishStableBreaking(symbol: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodePublishStableBreaking(),
+        "breaking change on stable API `{symbol}` requires a major version bump",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.14.3: `stable` APIs may not break without a major semver bump",
+            "hint: bump the major version, or revert the breaking change",
+        ],
+    )
+}
+
+/// diagPublishVersionDowngrade reports a version downgrade.
+pub fn diagPublishVersionDowngrade(oldVersion: String, newVersion: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodePublishVersionDowngrade(),
+        "version downgrade from `{oldVersion}` to `{newVersion}` is not allowed",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.14.3: versions must be monotonically non-decreasing",
+        ],
+    )
+}
+
+/// diagPublishCompatAddPatchOnly reports an additive change with only a
+/// patch bump.
+pub fn diagPublishCompatAddPatchOnly(change: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodePublishCompatAddPatchOnly(),
+        "additive change `{change}` requires at least a minor version bump",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.14.3: additive surface changes are minor bumps, not patches",
+        ],
+    )
+}
+
+/// diagPublishExperimentalChange reports a change to an experimental API.
+pub fn diagPublishExperimentalChange(symbol: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodePublishExperimentalChange(),
+        "change to experimental API `{symbol}` — no major bump required but consumers may break",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.14.2: experimental APIs carry no stability promise",
+        ],
+    )
+}
+
+// ---------------------------------------------------------------------
+// G37 — Information flow / Taint (§21)
+// ---------------------------------------------------------------------
+
+/// diagTaintSinkViolation reports a tainted value reaching a sink
+/// without the required trust tag.
+pub fn diagTaintSinkViolation(source: String, sink: String, requiredTag: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeTaintSinkViolation(),
+        "tainted value from `{source}` reaches sink `{sink}` without `{requiredTag}` sanitisation",
+        start,
+        end,
+        [
+            "LANG_SPEC §21.5.3 (T-Sink): tainted values must be sanitised before reaching a sink",
+            "hint: pass through a sanitiser that produces `{requiredTag}", or use the parametrised form",
+        ],
+    )
+}
+
+/// diagTaintUnknownTag reports `#[taint(\"σ\")]` with an unregistered tag.
+pub fn diagTaintUnknownTag(tag: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeTaintUnknownTag(),
+        "`#[taint(\"{tag}\")]` uses an unknown tag",
+        start,
+        end,
+        [
+            "LANG_SPEC §21.2: tags must have at least one producer or sanitiser",
+            "hint: register the tag via `#[sanitizes({tag}, ...)]` or another `#[taint({tag})]` source",
+        ],
+    )
+}
+
+/// diagSanitizesUnknownSource reports `#[sanitizes]` referencing a source
+/// tag that is never produced.
+pub fn diagSanitizesUnknownSource(source: String, into: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeSanitizesUnknownSource(),
+        "`#[sanitizes(\"{source}\", into = \"{into}\")]` references unproduced source tag `{source}`",
+        start,
+        end,
+        [
+            "LANG_SPEC §21.2: the sanitiser's source tag must be produced by a `#[taint]` annotation",
+            "hint: add a `#[taint(\"{source}\")]` source, or correct the source tag name",
+        ],
+    )
+}
+
+/// diagRequiresUnknownTag reports `#[requires(\"τ\")]` where `τ` is never
+/// produced by any sanitiser.
+pub fn diagRequiresUnknownTag(tag: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeRequiresUnknownTag(),
+        "`#[requires(\"{tag}\")]` references an unsatisfiable tag",
+        start,
+        end,
+        [
+            "LANG_SPEC §21.2: required tags must be produced by a sanitiser",
+            "hint: add a `#[sanitizes(..., into = \"{tag}\")]` somewhere in the reachable surface",
+        ],
+    )
+}
+
+/// diagTrustedDeclassifyAudit reports use of `#[trusted_declassify]`
+/// (audit hint, never blocks compilation).
+pub fn diagTrustedDeclassifyAudit(fnName: String, reason: String, start: Int, end: Int) -> CheckDiagnostic {
+    let mut notes: List<String> = [
+        "LANG_SPEC §21.7: trusted declassify bypasses the sanitiser pipeline",
+    ]
+    if reason != "" {
+        notes.push("audit: {reason}")
+    }
+    notes.push("hint: where possible, replace with a real sanitiser; `osty audit --trusted-declassify` enumerates all sites")
+    checkDiagWithNotes(
+        checkCodeTrustedDeclassifyAudit(),
+        "`#[trusted_declassify]` in `{fnName}` drops a flow tag without sanitiser",
+        start,
+        end,
+        notes,
+    )
+}
+
+/// diagUnsafeSilentMatchCompat reports use of `unsafe_silent = true` in
+/// `#[match_compat]` or cross-package `#[stability(\"internal\")]` usage.
+pub fn diagUnsafeSilentMatchCompat(what: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeUnsafeSilentMatchCompat(),
+        "unsafe silent fallback: {what}",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.14.4 / §3.14.2: silent fallbacks and internal API cross-usage produce audit warnings",
+            "hint: provide a `fallback = name` to `#[match_compat]`, or import from a stable API surface",
         ],
     )
 }
