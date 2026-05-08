@@ -98,7 +98,7 @@ The `=>` (fat-arrow) token was removed from the grammar.
 
 `match` arms and every other arrow position use `->` instead. Any occurrence of `=>` in source is a lex error (O7, §1.7).
 
-Spec: v0.4 §1.7, OSTY_GRAMMAR_v0.4 O7
+Spec: §1.7, OSTY_GRAMMAR_v0.6 O7
 
 ```osty
 match x { 0 => "zero", _ => "other" }  // rejected

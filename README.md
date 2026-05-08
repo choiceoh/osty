@@ -818,8 +818,8 @@ edition is **0.5** today: `osty new` / `osty init` write
 historical `0.3` / `0.4` range for existing projects. Future surface
 changes follow the normal versioning process and land in a new spec
 directory. See [`SPEC_GAPS.md`](./SPEC_GAPS.md) for the full decision
-log and [`CHANGELOG_v0.5.md`](./CHANGELOG_v0.5.md) for which parts of
-the v0.5 surface are wired in the CLI today versus still waiting on
+log and [`CHANGELOG_v0.6.md`](./CHANGELOG_v0.6.md) for which parts of
+the v0.6 surface are wired in the CLI today versus still waiting on
 regen. When docs discuss newer surface area, be explicit about whether
 it is a design target or behavior already wired in the CLI and tests.
 
