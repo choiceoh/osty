@@ -200,6 +200,85 @@ cancel signal from the **enclosing** `taskGroup` propagates into the
 `collectAll` children normally — the collected list then contains
 `Err(Cancelled { cause })` for any child that was mid-flight.
 
+#### 8.4.5 Triggering Cancellation Explicitly
+
+A `taskGroup` body may call `g.cancel(cause)` to trigger cancellation
+on every descendant task without first failing a sibling. Use cases:
+
+- A "first-success" pattern where one child finds the answer and the
+  others should stop:
+
+  ```osty
+  fn findFirst(net: Net, urls: List<String>) -> Result<Bytes, Error> {
+      taskGroup(|g| {
+          let handles = urls.map(|u| g.spawn(|| net.fetch(u)))
+          for h in handles {
+              if let Ok(body) = h.join() {
+                  g.cancel(Cancelled.New("found"))   // tell siblings to stop
+                  return Ok(body)
+              }
+          }
+          Err(Error.new("all fetches failed"))
+      })
+  }
+  ```
+
+- A timeout scope — the caller cancels after a deadline elapses:
+
+  ```osty
+  fn withTimeout<T>(clock: Clock, d: Duration,
+                    body: fn(Group) -> Result<T, Error>) -> Result<T, Error> {
+      taskGroup(|g| {
+          g.spawn(|| {
+              clock.sleep(d)?
+              g.cancel(Cancelled.New("timeout"))
+              Ok(())
+          })
+          body(g)
+      })
+  }
+  ```
+
+`g.cancel(cause)` is **idempotent** — calling it twice on the same
+group raises the same signal once. The cause from the first call
+wins; subsequent calls' causes are dropped.
+
+#### 8.4.6 Cancellation does not equal failure
+
+A `taskGroup` that completes successfully *despite* an internal
+cancel (e.g. the first-success pattern above) returns `Ok(...)` to
+its caller. Cancellation is the mechanism that *stops sibling work*,
+not a failure mode in itself. The receiver of `Cancelled` must:
+
+1. Run any necessary `defer` cleanup.
+2. Return `Err(Cancelled { ... })` to its caller (do **not** swallow).
+3. Avoid blocking calls inside `defer` (uninterruptible cleanup —
+   §8.4.3).
+
+A child that catches `Cancelled` and returns `Ok(())` is a soundness
+bug: the parent then continues with stale state. The compiler does
+not enforce this; it is a discipline that the cancellation contract
+relies on.
+
+#### 8.4.7 Capability adapter responsibilities
+
+Every capability adapter that performs a blocking operation **must**
+honor the cancel signal of the surrounding task. The contract for
+adapter authors:
+
+| Operation | Cancellation behavior |
+|---|---|
+| Read/write on a stream (`Net.read`, `Fs.read`, ...) | Return `Err(Cancelled { cause })` as soon as the signal is observed — partial buffer is fine |
+| Sleep / wait (`Clock.sleep`, `clock.until(...)`) | Return immediately with `Err(Cancelled { cause })` |
+| Channel ops (`ch.recv`, `ch.send` on full buffer) | Return `None` / unblock and propagate |
+| FFI calls | Cannot generally be interrupted; document the limit and consider running them on a carrier thread |
+| In-memory adapters (`io.bytesReader`, `io.buffer`) | No-op (never block, never see the signal) |
+
+Adapters that do *not* honor cancellation are not added to the
+canonical capability surface. A bespoke capability that wraps such
+an adapter must document the limitation and is *not* automatically
+acceptable to `#[reproducible_capability]` enforcement.
+
 ### 8.5 Channels
 
 ```osty
@@ -238,6 +317,61 @@ delivered whole — never partially observed.
 - `ch.recv()` is a cancellation point per §8.4.2 — it returns `None`
   early when the surrounding task is cancelled (the caller distinguishes
   cancel from drain by checking `thread.isCancelled()`).
+
+#### 8.5.1 Channels and information flow
+
+A `Channel<T>` carrying tainted values preserves the flow tag set
+through send and receive. There is no implicit declassification at
+the channel boundary:
+
+```osty
+let ch = thread.chan::<#[taint("user_input")] String>(64)
+
+// Producer
+ch <- userInput
+
+// Consumer
+for msg in ch {
+    // `msg` is #[taint("user_input")] String — sanitize before sink
+    db.exec(sql.eq("col", sql.string(msg))?)
+}
+```
+
+A consumer task at a different point in the program receives the
+same flow tags as the producer attached. Channels do not flatten
+trust — they are a synchronous-with-respect-to-tags transport.
+
+#### 8.5.2 Channels and capability lifetime
+
+Sending a capability instance through a channel is *legal* but
+discouraged. The capability remains live for as long as a receiver
+holds it, which may extend its effective lifetime past the
+construction context. Idiomatic patterns:
+
+- **Send work, not capabilities.** A producer sends *requests*;
+  the consumer holds its own capability and applies it to each
+  request. Capabilities stay scoped to construction.
+- **Send results, not handles.** A producer that does its own I/O
+  sends `Result<T, Error>` payloads; the consumer never needs the
+  upstream `Net` / `Fs` instance.
+
+The non-escaping rule for `Handle<T>` and `TaskGroup` (§8.1, G13)
+applies *only* to those two types — capability instances are not
+included, but the discipline of avoiding cross-scope capability
+sharing is recommended.
+
+#### 8.5.3 Channels and `#[budget]`
+
+A `thread.chan::<T>(capacity)` allocation counts as one allocation
+site for `#[budget(allocs)]` purposes. Each `ch <- value` and
+`ch.recv()` counts as one channel operation; a function that
+loops `ch.recv()` to drain a channel of `n` items counts `n`
+channel operations.
+
+The runtime's per-channel state (FIFO buffer, sender/receiver
+queues) is one allocation per channel; growing the buffer past its
+declared capacity is not supported (the channel rejects further
+sends until the receiver makes progress).
 
 ### 8.6 Select
 

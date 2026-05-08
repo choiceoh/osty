@@ -58,3 +58,57 @@
   explicit calibration state
 - `std.shortid` — deterministic short id formatting
 - `std.metrics` — lightweight labeled counters
+
+#### 10.2.1 Tier 2 capability summary
+
+The Tier 2 chapter listing is dense; the *capability shape* of each
+module is summarized below. Use this when deciding which Tier 2
+import is acceptable in a `#[reproducible]` / `#[pure]` /
+capability-typed context.
+
+| Module | Effectful methods (capability) | Pure helpers |
+|---|---|---|
+| `std.json` | (none) | encode / decode / parseValue |
+| `std.http` | `HttpClient.*` (Net), `HttpServer.serve` (Net) | builders, codecs, router |
+| `std.time` | `Clock.now/monotonic/sleep` | format/parse, duration math |
+| `std.thread` | `taskGroup`, `parallel`, `chan`, `select` | (the primitives are themselves effects) |
+| `std.sync` | `Mutex.lock`, `RwLock.*`, atomics | (none) |
+| `std.testing` | (test-only effects) | assertions, golden, capability fakes |
+| `std.env` | `Env.get/require/args/vars` | (none) |
+| `std.iter` | (none) | All combinators |
+| `std.regex` | (none) | All |
+| `std.log` | (writes via ambient `Console`) | `Fields` builder |
+| `std.encoding` | (none) | base64 / hex / URL encode-decode |
+| `std.crypto` | `CryptoRng.randomBytes` | hashes / hmac / constantTimeEq |
+| `std.uuid` | `uuid.v4(rng)`, `uuid.v7(clock, rng)` | parse / nil / toString |
+| `std.random` | `Rng.*` | `random.seeded` |
+| `std.os`/`std.process` | `Process.*` | `os.path.*` |
+| `std.url` | (none) | parse / build / canonical |
+| `std.math` | (none) | All |
+| `std.csv` | (none) | encode / decode |
+| `std.table` | (none) | All |
+| `std.xlsx` | (none) | encode / decode |
+| `std.compress` | (none) | gzip encode / decode |
+| `std.term` | `Terminal.*` (via `Console.terminal()`) | ANSI sequence builders |
+| `std.tui` | `Screen.present` | `Frame.*` builders, ANSI rendering |
+| `std.grid` | (none) | All |
+| `std.clipboard` | dispatches via ambient `Process` | (none) |
+| `std.ai` | (caller drives via `Net`) | request builders, response parsers |
+| `std.aiagents` | (none) | All |
+| `std.redact` | (none) | All |
+| `std.security` | (none) | URL classification, HTML escape |
+| `std.search` | (none) | indexing, search, scoring |
+| `std.markdown` | (none) | extraction, conversion |
+| `std.media` | (none) | sniffing, parsing |
+| `std.httpretry` | (none) | retry policy, classification |
+| `std.webhook` | `Clock` (replay window), caller's `Env` (secret) | verification, dispatch |
+| `std.jsonl` | (none) | parse / write |
+| `std.tokenest` | (none) | estimation |
+| `std.shortid` | (none) | formatting |
+| `std.metrics` | (none) | counters |
+
+This matrix is the inverse view of §20.18: §20.18 lists each
+capability's stdlib clients; §10.2.1 lists each stdlib module's
+capability dependencies. Both are maintained alongside chapter
+edits; a divergence is a soundness issue that `osty audit
+--capability-matrix` enumerates.

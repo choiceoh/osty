@@ -1,5 +1,14 @@
 ### 10.9 Regular Expressions (`std.regex`)
 
+> **v0.6 capability note**: `std.regex` is *pure* — every function
+> transforms strings without consulting any capability. The module
+> is acceptable inside `#[reproducible(scope = "portable")]` and
+> `#[pure]` contexts. Match results inherit the input string's flow
+> tag set — `regex.findAll(taintedHaystack, "...")` produces a
+> `List<String>` where each match carries `taintedHaystack`'s tags.
+> The regex itself (compiled `Pattern`) is metadata and does not
+> contribute tags.
+
 RE2-based regular expressions. Linear-time matching; no catastrophic
 backtracking, no ReDoS. Does not support backreferences or lookaround
 (RE2 limitations).

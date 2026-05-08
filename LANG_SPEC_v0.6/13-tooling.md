@@ -212,6 +212,102 @@ driver before backend emission.
 lists those records, `osty cache info` prints one fingerprint, and
 `osty cache clean` removes `.osty/cache/` plus `.osty/out/`.
 
+#### 13.2.1 v0.6-specific manifest tables
+
+Three v0.6 surfaces add manifest tables on top of the v0.5 baseline:
+
+##### `[stability]`
+
+```toml
+[stability]
+default = "stable"               # stable | experimental | deprecated | internal
+```
+
+The `default` value applies to every `pub` declaration that does not
+carry an explicit `#[stability(...)]` annotation. `osty publish`
+reads this default during the API-surface diff (§3.14.3) — a
+package whose default is `experimental` is permitted to make
+breaking changes within minor versions. A package whose default is
+`stable` requires explicit `#[stability("experimental")]` on each
+unstable symbol.
+
+##### `[legacy]`
+
+```toml
+[legacy]
+globals = false                  # default: false in v0.6
+construct = false                # default: false in v0.6
+```
+
+`globals = true` activates the v0.5 → v0.6 desugar for global effect
+calls (`time.now()` etc.) — see §10.46. `construct = true` permits
+external literal construction of stdlib sealed types (§3.4.5). Both
+flags are scheduled for removal in v0.7.
+
+Activating either flag forces `[stability] default = "experimental"`
+automatically — a package depending on legacy compatibility cannot
+promise stable APIs.
+
+##### `[budget]`
+
+```toml
+[budget]
+strict = true                    # default: false
+regression-threshold = 0.20      # 20% regression promotes W0795 to E0795
+```
+
+`strict = true` makes runtime budget violations (`W0795`) into
+errors, blocking `osty publish` until fixed or the budget is
+intentionally loosened. `regression-threshold` is the relative
+performance loss that *automatically* triggers the strict path;
+default 20% is the v0.6 baseline.
+
+#### 13.2.2 Capability injection in manifest
+
+A package that wants to *override* the default capability adapter
+set (e.g. for embedded targets that lack a real `Net`) declares
+the override via `[capability]`:
+
+```toml
+[capability.net]
+adapter = "myproject.embedded.NetAdapter"  # custom Net implementation
+
+[capability.fs]
+adapter = "myproject.virtual.VfsAdapter"   # virtual file system
+```
+
+The named adapter must implement the corresponding capability
+interface (§20.9). When the package is built, the adapter
+substitutes for the canonical host adapter at the entry-point
+`#[ambient]` binding site. This is how Osty supports targets where
+a particular capability has no usable host implementation —
+embedded systems, sandboxed runtimes, deterministic replay
+environments.
+
+`osty audit --capability-overrides` enumerates active overrides for
+review.
+
+#### 13.2.3 Workspace-level annotations defaults
+
+A workspace may declare default annotation policies that propagate
+to member packages unless overridden:
+
+```toml
+[workspace]
+members = ["pkg-a", "pkg-b", "pkg-c"]
+
+[workspace.defaults.stability]
+default = "stable"
+
+[workspace.defaults.budget]
+strict = true
+```
+
+A workspace member's own `[stability]` / `[budget]` tables override
+the workspace defaults. The workspace-level defaults exist so a
+multi-package workspace can establish a uniform release discipline
+without each package re-declaring it.
+
 ### 13.3 Formatter
 
 `osty fmt` is the canonical formatter. It accepts no configuration.
@@ -219,6 +315,46 @@ Among other normalizations:
 - Rewrites `Option<T>` to `T?`
 - Enforces naming conventions (§1.4)
 - Normalizes trailing commas
+
+#### 13.3.1 v0.6 formatter additions
+
+The v0.6 formatter adds three normalizations:
+
+1. **Annotation ordering** — annotations on a declaration are
+   re-sequenced into the conventional order (§3.8.14). The
+   formatter writes them top-to-bottom: visibility / intent /
+   examples / spec link / error contract / reproducibility / budget
+   / stability / performance hints / compatibility / flow /
+   capability marker.
+2. **Capability parameter placement** — when a function takes both
+   capability parameters and ordinary parameters, the formatter
+   places capabilities first (left-aligned). Existing function
+   signatures are not auto-rearranged unless `osty fmt
+   --reorder-capabilities` is passed.
+3. **Sealed type literal rewrite** — an external attempt to write
+   `Email { local: ..., domain: ... }` (forbidden by §3.4.5) is
+   rewritten by `osty fix --sealed-rewrite` into `Email.parse(...)?`
+   if the field-level information is recoverable from the literal.
+   The rewrite is opt-in because it changes call-site error
+   handling (introduces a `?` propagation).
+
+#### 13.3.2 Idempotence
+
+`osty fmt` is idempotent — `fmt(fmt(x)) == fmt(x)` for any source
+`x`. The implementation reaches idempotence by reparsing the
+formatter's output and asserting the AST matches the input AST. Any
+non-idempotent formatter behavior is a compiler bug (`osty fmt
+--check` exits non-zero in CI to catch regressions).
+
+#### 13.3.3 Annotation hint normalization
+
+Performance hints (`#[vectorize]`, `#[parallel]`, `#[unroll]`,
+`#[inline]`, `#[hot]`/`#[cold]`, `#[target_feature]`,
+`#[noalias]`, `#[pure]`) are *advisory* — the compiler is free to
+ignore them when the cost model disagrees. The formatter does not
+strip ignored hints; it preserves the author's intent for future
+readers. To enumerate which hints actually affected codegen, use
+`osty build --report=hints`.
 
 ---
 

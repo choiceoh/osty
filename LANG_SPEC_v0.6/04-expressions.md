@@ -266,6 +266,78 @@ exits. A bare `break` exits with `()`; `break value` is valid only when
 the target is a `loop` expression. For a labeled break, the value follows
 the label: `break 'search result`.
 
+#### 4.4.2 Loop forms summary
+
+The complete catalogue of v0.6 loop forms:
+
+| Form | Purpose | Result type | Cancellation point? |
+|---|---|---|---|
+| `for x in iterable { }` | Each-iteration over an `Iterable<T>` | `()` | No (use `thread.checkCancelled()`) |
+| `for cond { }` | While-style loop | `()` | No |
+| `while cond { }` | While-style synonym (G49) | `()` | No |
+| `for { }` | Infinite, no value | `()` | No |
+| `for let Some(x) = expr { }` | Loop while pattern matches | `()` | No |
+| `loop { ... break value }` | Value-returning loop | type of `break value` | No |
+
+None of the loop forms is a *language-level* cancellation point —
+the compiler does not insert cancel checks at loop heads. Tasks
+that loop without making any stdlib blocking call must explicitly
+call `thread.checkCancelled()?` to participate in cooperative
+cancellation:
+
+```osty
+fn processQueue(jobs: List<Job>) -> Result<(), Error> {
+    for job in jobs {
+        thread.checkCancelled()?       // cooperative cancel check
+        process(job)
+    }
+    Ok(())
+}
+```
+
+A future revision may add compiler-inserted preemption at loop
+backedges (§8.0); programs written to the explicit-check contract
+keep working.
+
+#### 4.4.3 Loops and capability flow
+
+A loop body inherits the surrounding scope's capability bindings.
+There is no per-iteration capability re-binding; `fs` named in the
+function signature stays in scope for every iteration:
+
+```osty
+fn copyAll(fs: Fs, src: List<String>, dstDir: String) -> Result<(), Error> {
+    for path in src {
+        let bytes = fs.read(path)?       // fs reused per iteration
+        fs.write("{dstDir}/{path}", bytes)?
+    }
+    Ok(())
+}
+```
+
+Capability instances are typically interface values (fat pointer);
+keeping them in scope across a loop is constant cost. There is no
+hidden allocation per iteration.
+
+#### 4.4.4 Loops and information flow
+
+Loop iteration variables inherit the element type's flow tag set:
+
+```osty
+let lines: List<#[taint("user_input")] String> = [...]
+for line in lines {
+    // line: #[taint("user_input")] String
+    // — must sanitize before reaching a sink
+    let safe = std.html.escape(line)
+    log.info("processed: {safe}")
+}
+```
+
+The tag set is *per-iteration* — each `line` binding carries its
+own tag. Loop body code that aggregates `line` into an outer
+collection produces a tag-union for the collection element type
+(per §21.5.1).
+
 ### 4.5 Error Propagation
 
 ```osty

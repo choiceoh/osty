@@ -68,3 +68,19 @@ bytes.fromHex(s: String) -> Result<Bytes, Error>
 - `toHex` / `fromHex` are convenience wrappers over `std.encoding.hex`.
   Importing `std.encoding` directly is preferred when both encode and
   decode are needed in the same file.
+
+#### v0.6 reproducibility and flow
+
+`std.bytes` is *pure* — every operation transforms `Bytes` to
+`Bytes` (or `String`) without consulting any capability. The whole
+module is acceptable inside `#[reproducible(scope = "portable")]`.
+
+Flow tags propagate identically — `bytes.toUpper` of a tainted
+`Bytes` produces a tainted `Bytes` with the same source tag set.
+`bytes.slice` preserves the parent's tag set on every byte.
+
+`bytes.toString` is a *fallible* operation (returns `Result<String,
+Error>`) because the byte sequence may be invalid UTF-8. The
+fallible path keeps the conversion explicit at the type level —
+authors who want lossless byte-level work stay in `Bytes`; UTF-8
+work requires explicit `toString` with error handling.

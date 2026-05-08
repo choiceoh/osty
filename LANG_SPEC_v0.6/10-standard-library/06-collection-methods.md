@@ -98,3 +98,44 @@ insert(item: T)
 remove(item: T) -> Bool
 clear()
 ```
+
+#### v0.6 reproducibility note
+
+Collection methods that **return a new collection** preserve the
+ordering of their inputs — a `List<T>.sortBy(...)` is deterministic,
+and `List<T>.filter(...)` preserves the original order. Methods on
+`Map<K, V>` / `Set<T>` that *iterate* are *not* deterministic in
+iteration order:
+
+| Method | Deterministic order? |
+|---|---|
+| `Map.iter()` / `Map.keys()` / `Map.values()` | No (hash-based, may vary across runs) |
+| `Map.entriesSorted()` / `Map.entriesSortedBy(f)` | Yes |
+| `Set.iter()` | No |
+| `Set.toListSorted()` / `Set.toListSortedBy(f)` | Yes |
+| `List.iter()` / `for x in list` | Yes (insertion order) |
+
+A function annotated `#[reproducible(scope = "target")]` (§3.11)
+that iterates a `Map` or `Set` must use the `*Sorted` variant —
+calling `Map.iter()` from a reproducible context is `E0786`.
+
+#### Information flow propagation
+
+Collection methods preserve flow tags element-wise:
+
+```osty
+let names: List<#[taint("user_input")] String> = [...]
+let upper = names.map(|n| n.toUpperCase())   // List<#[taint("user_input")] String>
+```
+
+`map`, `filter`, `flatMap`, `take`, `drop`, `chunked`, etc. all
+preserve the tag set of their elements. Aggregation methods that
+collapse multiple elements (`reduce`, `fold`) union the tag sets:
+
+```osty
+let pairs: List<#[taint("user_input")] String> = [...]
+let joined: #[taint("user_input")] String = pairs.reduce(|a, b| a + b)
+```
+
+The tag set on the result is the union of all element tag sets that
+flowed into the reduction.

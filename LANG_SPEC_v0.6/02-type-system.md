@@ -156,6 +156,29 @@ a.saturatingDiv(b)  // clamps to T.MIN / T.MAX on overflow; aborts on b = 0
 **`pow`.** `Int.pow(exp: Int) -> Int` aborts when `exp < 0` (no integer
 result). Use `Float.pow` for fractional/negative exponents.
 
+#### 2.3.1 Numeric overflow and v0.6 surfaces
+
+Overflow behavior in v0.6 is the same as v0.5 (§2.3): default
+arithmetic on `Int` / `Int8…Int64` / `UInt8…UInt64` aborts on
+overflow, with explicit `wrapping*` / `checked*` / `saturating*`
+methods for non-aborting alternatives. The v0.6 annotation surface
+adds two interactions:
+
+- **`#[reproducible]`** — arithmetic that aborts is *deterministic*
+  in the sense that the same input always produces the same abort.
+  This is acceptable inside `#[reproducible]` because the function
+  contract concerns *successful* return values; aborts are a
+  separate failure path that doesn't break determinism.
+- **`#[budget(allocs)]`** — `wrapping*` / `checked*` /
+  `saturating*` add no allocations (they're inlined into
+  arithmetic instruction sequences). The `instructions` budget may
+  reflect the slightly higher operation count for `checked*`
+  (overflow detection branch).
+
+The integer overflow contract holds across both backends (Go and
+LLVM); a v0.6 program that aborts on `Int.MAX + 1` does so with the
+same error message regardless of backend.
+
 ### 2.4 Composite Types
 
 ```osty
@@ -205,6 +228,13 @@ The byte-string literal `b"..."` accepts only printable ASCII characters
 plus the escapes `\n`, `\r`, `\t`, `\\`, `\"`, `\0`, and `\xNN`. It does
 not interpolate. To embed non-ASCII data, use `\xNN` or build the value
 programmatically with `Bytes.from(...)`.
+
+**`Bytes` and information flow.** `Bytes` carries flow tags
+identically to `String`. A `Bytes` returned from `Net.read` /
+`Fs.read` carries the source's `#[taint(...)]` set; transformations
+(`concat`, `slice`, indexing) preserve the tag set. Conversion
+between `Bytes` and `String` (`Bytes.toString`,
+`String.toBytes`) is tag-preserving.
 
 **API.**
 

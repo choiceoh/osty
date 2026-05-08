@@ -137,3 +137,23 @@ fmt.tableAligned(headers: List<String>, rows: List<List<String>>, alignments: Li
   `parts.len() <= 1` the `last` separator is not used.
 - `tableAligned` accepts `"left"`, `"right"`, and `"center"`; unknown or
   missing alignment entries default to `"left"`.
+
+#### v0.6 reproducibility and flow
+
+`std.fmt` is *pure* — every function transforms values to `String`
+without consulting any capability. The module is acceptable inside
+`#[reproducible(scope = "portable")]` and `#[pure]` contexts.
+
+Flow tags ride through formatting — `fmt.padLeft(taintedStr, 10)`
+produces a `String` carrying the same source tag set as
+`taintedStr`. Authors who use `std.fmt` to render values for log
+output or HTTP responses must sanitize before reaching the sink;
+the formatter itself does not declassify.
+
+The `tableAligned` helper produces *deterministic* output even
+when input rows have differing widths — pad characters are spaces
+(`U+0020`), and column boundaries are computed by a single
+left-to-right pass that counts grapheme widths via §10.34
+`std.markdown` rules. This determinism is part of the v0.6
+contract; `tableAligned` is suitable for `#[golden]` snapshot
+output.
