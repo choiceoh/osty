@@ -3425,6 +3425,45 @@ func TestStage0P27WhileValueIntrinsics(t *testing.T) {
 	}
 }
 
+func TestStage0WhileMapGetInitializesMissPayload(t *testing.T) {
+	t.Parallel()
+	mapStringInt := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, ir.TInt}, Builtin: true}
+	optInt := &ir.NamedType{Name: "Option", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := makeWhileLoopFn(
+		"lookupWhile",
+		optInt,
+		[]paramSpec{{name: "items", ty: mapStringInt}, {name: "keepGoing", ty: ir.TBool}},
+		[]localSpec{{name: "hit", ty: optInt}},
+		nil,
+		nil,
+		paramCopy(2, ir.TBool),
+		[]mir.Instr{
+			&mir.IntrinsicInstr{Dest: &mir.Place{Local: 3}, Kind: mir.IntrinsicMapGet, Args: []mir.Operand{paramCopy(1, mapStringInt), stringConst("missing")}},
+		},
+		[]mir.Instr{
+			assign(0, useRV(paramCopy(3, optInt))),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"%stage0.Option.i64 = type { i64, i64 }",
+		"declare i1 @osty_rt_map_get_string(ptr, ptr, ptr)",
+		"define ptr @lookupWhile(ptr %items, i1 %keepGoing)",
+		"body.2:",
+		"%0 = alloca i64",
+		"store i64 0, ptr %0",
+		"%1 = call i1 @osty_rt_map_get_string(ptr %items, ptr @.str.0, ptr %0)",
+		"%6 = load i64, ptr %0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Index(got, "store i64 0, ptr %0") > strings.Index(got, "%1 = call i1 @osty_rt_map_get_string") {
+		t.Fatalf("map_get miss payload initialization appears after runtime call:\n%s", got)
+	}
+}
+
 func TestStage0P28WhileListIterationLoweringPieces(t *testing.T) {
 	t.Parallel()
 	listString := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}

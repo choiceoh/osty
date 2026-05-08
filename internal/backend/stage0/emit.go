@@ -577,6 +577,18 @@ func (s scalarType) llvm() string {
 	return ""
 }
 
+func (s scalarType) zeroValue() (string, bool) {
+	switch s {
+	case scalarInt:
+		return "0", true
+	case scalarBool:
+		return "false", true
+	case scalarString, scalarOpaquePtr:
+		return "null", true
+	}
+	return "", false
+}
+
 func scalarFromType(t mir.Type) scalarType {
 	return scalarFromTypeInternal(t, false)
 }
@@ -6282,7 +6294,12 @@ func emitWhileMapGetIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *m
 	tagSlot := ctx.mctx.freshTempName("map.get.option.tag.slot")
 	payloadSlot := ctx.mctx.freshTempName("map.get.option.payload.slot")
 	payload := freshReg(ctx)
+	zero, ok := payloadTy.zeroValue()
+	if !ok {
+		return false
+	}
 	fmt.Fprintf(out, "  %s = alloca %s\n", valueSlot, payloadTy.llvm())
+	fmt.Fprintf(out, "  store %s %s, ptr %s\n", payloadTy.llvm(), zero, valueSlot)
 	declareRuntimePrototype(ctx.mctx, symbol, scalarBool, []callArg{{ty: "ptr"}, {ty: keyTy.llvm()}, {ty: "ptr"}})
 	fmt.Fprintf(out, "  %s = call i1 @%s(ptr %s, %s %s, ptr %s)\n", found, symbol, mapExpr, keyTy.llvm(), keyExpr, valueSlot)
 	fmt.Fprintf(out, "  %s = getelementptr %%%s, ptr null, i32 1\n", sizePtr, typeName)
