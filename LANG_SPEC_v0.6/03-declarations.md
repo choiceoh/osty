@@ -1246,6 +1246,71 @@ fn computeKey(data: Bytes) -> Bytes32 {
 `#[reproducible]` — it forbids capability receipt entirely, even for
 deterministic capabilities like `Hash`. `E0785`.
 
+#### 3.11.1 Scope inference rules
+
+When a `#[reproducible(scope = X)]` function calls another
+function `f`, the checker requires that `f` is also reproducible
+with scope ≥ `X`. The strength order:
+
+```
+portable > target > run
+```
+
+A `portable` caller may freely call `target` or `run` callees? **No**
+— stronger callers require *equally or more* strict callees. The
+arrow runs the other way: a `portable` function cannot call a
+`target` function, because `target`'s output may depend on
+endianness or NaN-bit patterns that `portable` excludes.
+
+| Caller scope | May call (callee scope) |
+|---|---|
+| `run` | `run`, `target`, `portable` |
+| `target` | `target`, `portable` |
+| `portable` | `portable` only |
+
+Practical consequence: helper functions used inside `portable`
+contexts must themselves be `portable`. The `#[reproducible(scope =
+"portable")]` annotation propagates downward.
+
+#### 3.11.2 Allowed capability shapes
+
+Some capabilities are *deterministic by construction* — the same
+input always produces the same output, regardless of process
+identity. These remain receivable inside `#[reproducible]`:
+
+| Capability | Deterministic? | Notes |
+|---|---|---|
+| `Hash` | Yes (when annotated `#[reproducible_capability]`) | Hashing is by definition deterministic |
+| `Clock` | No | `now()` depends on wall time |
+| `Rng` | No | Even seeded; the seed is process-local state |
+| `CryptoRng` | No | Pulls from OS entropy pool |
+| `Env` | No | Process environment is not stable input |
+| `Fs` | No | Filesystem state is non-deterministic |
+| `Net` | No | Network responses depend on remote state |
+| `Process` | No | Subprocess output is non-deterministic |
+| `Console` | No (effect), but allowed at `run` scope | Stdout writes are observable |
+
+Deterministic capabilities (e.g. a `Hash` interface where every
+method is annotated `#[reproducible(scope = "portable")]`) are
+receivable in `portable` functions provided the *interface itself*
+is annotated `#[reproducible_capability]` (§20.5).
+
+#### 3.11.3 Reproducibility audit
+
+`osty audit --reproducible` enumerates every `#[reproducible]`
+declaration and shows its scope:
+
+```sh
+$ osty audit --reproducible
+pkg myapp.users
+  fn computeUserKey(...)         scope=target  callees=2 (sha256:portable, json.encode:target)
+  fn migrationId(...)            scope=portable callees=1 (sha256:portable)
+```
+
+The output is suitable for security review: a `target`-scoped key
+function called from a context that needs `portable` immediately
+shows up as a scope mismatch.
+
 ### 3.12 Structured Intent — `#[purpose]`, `#[example]`, `#[fixture]` (G42)
 
 Structured, machine-readable intent annotations complement free-text
@@ -1302,6 +1367,100 @@ fn normalizeEmail(s: String) -> String {
 The `spec` block must be the function body's *first* statement
 (`E0440`). It is not an expression; it produces no value.
 
+#### 3.13.1 `result` virtual binding
+
+Inside `law:` and `invariant:` clauses, the identifier `result`
+refers to the function's return value as if it had already been
+computed. The binding is *virtual* — it does not exist at runtime,
+and the clauses themselves are not executed in v0.6 baseline (Phase
+3 runs `example:` only). The checker uses `result` to type-check
+the clause body so authors can reference it without `let result =
+...` boilerplate.
+
+```osty
+fn parseInt(s: String) -> Result<Int, Error> {
+    spec {
+        example: parseInt("42") == Ok(42)
+        example: parseInt("foo").isErr()
+        law: result.isOk() == s.bytes().all(|b| b >= '0' && b <= '9') || s == ""
+        invariant: !result.isOk() || result.unwrap() >= 0 || s.startsWith("-")
+    }
+    ...
+}
+```
+
+`result` is in scope only inside `law:` / `invariant:` clauses.
+Inside `example:` clauses, the function is called explicitly with
+the example's input — there is no implicit `result` because the
+runner needs to know which arguments to pass.
+
+#### 3.13.2 Determinism rules for `example:` clauses
+
+An `example:` clause is run as a test under `osty test --spec`.
+The test harness applies these rules:
+
+1. The clause body must evaluate to `Bool`. Anything else is `E0441`.
+2. The clause is run with the surrounding function's `#[fixture]` set
+   inlined as `let` bindings — every `name` in `#[example(uses =
+   "name")]` is bound to the fixture body's return value.
+3. The clause cannot consult non-deterministic capabilities directly.
+   To exercise `Clock` / `Rng` / `Net` / `Fs`, route through
+   `std.capability.testing.Fake*` via a `#[fixture]`.
+4. Multiple `example:` clauses run independently — each gets a fresh
+   fixture instance, so state mutations don't leak between examples.
+
+```osty
+#[fixture(name = "fakeClock")]
+fn fakeClock() -> Clock {
+    std.capability.testing.FakeClock(epoch_ms = 1_000_000)
+}
+
+fn timestampLine(clock: Clock, msg: String) -> String {
+    spec {
+        example: timestampLine(fakeClock(), "ready") == "1000000:ready"
+    }
+    "{clock.now().toEpochMillis()}:{msg}"
+}
+```
+
+#### 3.13.3 Composing with `#[example]`
+
+`spec { example: }` and `#[example]` are *additive* surfaces, not
+substitutes:
+
+| Surface | Best for |
+|---|---|
+| `spec { example: ... }` (inside body) | Examples that read naturally as code; "the parser accepts these inputs" |
+| `#[example(input = ..., output = ..., uses = ...)]` (annotation) | Machine-readable input/output pairs; consumed by `osty doc` and `osty context` JSON |
+
+A function may carry both. `osty test --spec` runs the spec-block
+clauses; `osty test --example` runs the annotation entries; `osty
+test --spec --example` runs both. They share the same `#[fixture]`
+registry.
+
+#### 3.13.4 Spec block and reproducibility
+
+A spec block does not by itself make its enclosing function
+`#[reproducible]` — that's a separate annotation (§3.11). However,
+spec blocks compose well with reproducibility:
+
+```osty
+#[reproducible(scope = "target")]
+fn merkleRoot(leaves: List<Bytes32>) -> Bytes32 {
+    spec {
+        example: merkleRoot([]) == Bytes32.zero()
+        example: merkleRoot([Bytes32.zero()]).isHashOf(Bytes32.zero())
+        law: result == merkleRoot(leaves)   // determinism
+    }
+    ...
+}
+```
+
+The `law: result == merkleRoot(leaves)` clause is documentation in
+v0.6 baseline; Phase 5 turns it into an enforced property test
+(`forall leaves in gen.list(gen.bytes32(), 16): result ==
+merkleRoot(leaves)`).
+
 ### 3.14 API Evolution — `#[since]`, `#[stability]`, `#[match_compat]` (G44)
 
 Three annotations cooperate to make API versioning a first-class
@@ -1345,6 +1504,104 @@ shape so that adding a variant (with `#[since]`) does not silently
 break existing code. Either `fallback = name` or `unsafe_silent =
 true` is mandatory (`E0450`); the latter always emits `W0902`.
 
+#### 3.14.1 Stability levels — when to use which
+
+| Level | Audience | Breaking-change rule | Use case |
+|---|---|---|---|
+| `"stable"` | All external consumers | Major bump required (`E2100` if violated) | Public APIs that downstream packages depend on |
+| `"experimental"` | Early adopters opting in | Warning (`W2100`); breaking changes allowed | New surfaces being trialed before promotion |
+| `"deprecated"` | Existing users migrating away | Becomes `E2100` once `remove = "X.Y"` hits | APIs scheduled for removal |
+| `"internal"` | Same-package only | Not part of public surface; no SemVer rule | Implementation helpers exposed across files |
+
+Promotion path: `experimental` → `stable` (after a release cycle of
+practical use). Demotion path: `stable` → `deprecated` (with a
+`remove` target version) → removed. Direct `stable` → removed is a
+SemVer violation regardless of major-bump.
+
+#### 3.14.2 `#[since]` and version anchoring
+
+`#[since("X.Y")]` is metadata, not a check. The version string must
+match the manifest's `[package] version` history but is not
+otherwise validated by the compiler — it is consumed by `osty doc`
+and `osty changelog` to render version chips.
+
+A `#[since]` value newer than the package's *current* version is
+permitted (it pre-records a planned addition for an upcoming
+release). `osty publish` reconciles `#[since]` against the actual
+release version at publish time.
+
+#### 3.14.3 `#[match_compat]` worked patterns
+
+The simple form names a fallback handler:
+
+```osty
+#[match_compat("0.6", fallback = handleUnknown)]
+fn dispatch(e: HttpEvent) -> Response {
+    match e {
+        HttpEvent.Get -> handleGet(),
+        HttpEvent.Post -> handlePost(),
+    }
+}
+
+fn handleUnknown(e: HttpEvent) -> Response {
+    log.warn("unhandled event: {e}")
+    http.notImplemented("")
+}
+```
+
+The fallback receives the unmatched value as its first argument and
+returns the same type as the match expression. `osty check` verifies
+the fallback's signature.
+
+The escape form `unsafe_silent = true` is for the rare case where a
+silent default is acceptable:
+
+```osty
+#[match_compat("0.6", unsafe_silent = true)]
+fn isReadEvent(e: HttpEvent) -> Bool {
+    match e {
+        HttpEvent.Get -> true,
+        HttpEvent.Post -> false,
+    }
+    // Future variants silently return false.
+}
+```
+
+`unsafe_silent = true` always emits `W0902` to make the silent fall-
+through visible at every site, and `osty audit --match-compat` lists
+all such uses.
+
+#### 3.14.4 Coordinated evolution: enum + match + handler
+
+When introducing a new enum variant, three coordinated changes
+happen across releases:
+
+```osty
+// v0.6
+pub enum HttpEvent {
+    Get,
+    Post,
+
+    #[since("0.7")]
+    Patch,                          // declared but not yet present
+}
+
+#[match_compat("0.6", fallback = handlePatchAsPost)]
+fn dispatch(e: HttpEvent) -> Response { ... }
+
+fn handlePatchAsPost(e: HttpEvent) -> Response { ... }
+
+// v0.7
+//   - Patch becomes #[since("0.6")]; the variant is materialized.
+//   - dispatch's match adds Patch -> handlePatch().
+//   - #[match_compat] is removed (or changed to "0.7").
+//   - handlePatchAsPost is removed (or kept for older compat).
+```
+
+Authors who follow this pattern get *zero silent fallthroughs* across
+the upgrade — the compiler-enforced fallback in v0.6 anchors the
+behavior, and the explicit handler in v0.7 replaces it.
+
 ### 3.15 `#[budget]` — Performance Contract (G46)
 
 A function may declare static and runtime performance budgets.
@@ -1375,6 +1632,104 @@ fn routeRequest(req: Request) -> Response { ... }
 
 Static and runtime keys may coexist on the same annotation —
 the compiler partitions them by category.
+
+#### 3.15.1 Static-key proof rules
+
+`allocs = N` is proved by counting allocation sites in the
+function's transitive call graph. The checker walks every callee
+reachable from the function body and sums the worst-case
+allocations per call site. A function calling `List<Int>.append(x)`
+in a loop with bound `n` counts `n` allocations (one per `append`),
+so `#[budget(allocs = 0)]` on such a function is `E0795`.
+
+`io_calls = N` counts capability-method calls. A function that takes
+`Net` and calls `net.connect(...)` once carries `io_calls = 1`. A
+helper that *transitively* calls `net.connect` through 3 wrapper
+functions still counts the single underlying call.
+
+`stack_depth = N` is proved by the maximum simple-cycle path in the
+call graph. Recursive functions can carry `stack_depth = N` only
+when the recursion has a structural bound (e.g. tree height); the
+checker conservatively rejects unbounded recursion under any finite
+budget.
+
+`instructions = N` uses the LLVM IR cost model; the budget is
+matched against the function's lowered IR instruction count. Tight
+loops with `#[unroll]` raise the count; the budget should be set
+based on observed values from `osty bench --instructions`.
+
+#### 3.15.2 Runtime-key measurement
+
+`time_ms` and `p99_ms` are sampled by `osty bench --budget` over a
+large iteration count (default 1000, configurable via
+`--benchtime`). The sampling rules:
+
+- The benchmark warm-up phase (`max(N/10, 100)` iterations) is
+  excluded from the budget check.
+- Wall-clock time uses the monotonic clock; clock skew during the
+  run does not affect the budget.
+- Cancellation paths (`Err(Cancelled { ... })` returned mid-run) are
+  counted as failed iterations; budget violations apply to
+  successful iterations only.
+- A regression of more than 20% over the previous published version
+  promotes `W0795` (warning) to `E0795` (error) on `osty publish`,
+  blocking release until fixed or the budget is intentionally
+  loosened (which itself is a SemVer-relevant change — see §3.14).
+
+#### 3.15.3 Worked budget patterns
+
+**Hot pure helper** — zero alloc, zero IO, bounded depth:
+
+```osty
+#[budget(allocs = 0, io_calls = 0, stack_depth = 1)]
+#[reproducible(scope = "portable")]
+fn xorBytes(a: Bytes, b: Bytes) -> Bytes {
+    let mut out = Bytes.zeros(a.len())
+    for i in 0..a.len() {
+        out[i] = a[i] ^ b[i]
+    }
+    out
+}
+```
+
+The single output buffer is the lone allocation; `Bytes.zeros` is a
+single allocation site. Adjusting to `allocs = 1` reflects the
+honest cost.
+
+**HTTP handler** — bounded time, bounded p99:
+
+```osty
+#[budget(time_ms = 5, p99_ms = 20)]
+fn routeUserLookup(req: HttpRequest, db: Db) -> Result<HttpResponse, Error> {
+    let id = req.queryParam("id") ?? ""
+    match db.queryOne::<User>("SELECT * FROM users WHERE id = ?", [id])? {
+        Some(u) -> Ok(http.okJson(u)),
+        None -> Ok(http.notFound("")),
+    }
+}
+```
+
+`time_ms = 5` says the *mean* response is under 5ms; `p99_ms = 20`
+says even the slowest 1% stays under 20ms. The benchmark drives
+the function with synthetic input under `osty bench --budget`; CI
+fails on regression.
+
+**Combined static + runtime**:
+
+```osty
+#[budget(
+    allocs = 4,
+    io_calls = 1,
+    time_ms = 5,
+    p99_ms = 20,
+)]
+pub fn createUser(email: String, db: Db) -> Result<UserId, UserCreateError> { ... }
+```
+
+The compiler proves `allocs ≤ 4` and `io_calls ≤ 1` at compile
+time; `osty bench --budget` measures `time_ms` and `p99_ms`. Both
+gates run independently — a static violation blocks at `osty
+check`, a runtime violation blocks at `osty publish`.
 
 ### 3.16 Combined v0.6 declaration patterns
 
