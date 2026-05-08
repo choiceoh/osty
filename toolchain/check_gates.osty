@@ -60,6 +60,11 @@ use std.strings as strings
 //   runReproducibleCapabilityGate — E0783 (v0.6 G36/G39)
 //     `#[reproducible_capability]` interfaces must expose only methods
 //     explicitly marked `#[reproducible]`.
+//
+//   runCapabilitySignatureGate — E0784 / E0785 (v0.6 G36/G39)
+//     `#[reproducible]` functions reject non-deterministic capability
+//     parameters, and `#[pure]` functions reject capability parameters
+//     entirely.
 
 // ---------------------------------------------------------------------
 // Entry point — called from check.osty:elabFile after elaborateDecls.
@@ -73,6 +78,7 @@ pub fn runCheckGates(cx: ElabCx) {
     runPureGate(cx)
     runAmbientGate(cx)
     runReproducibleCapabilityGate(cx)
+    runCapabilitySignatureGate(cx)
 }
 
 // ---------------------------------------------------------------------
@@ -1630,4 +1636,141 @@ fn checkReproducibleCapabilityInterface(cx: ElabCx, arena: AstArena, iface: AstN
             )
         }
     }
+}
+
+// ---------------------------------------------------------------------
+// E0784 / E0785 — capability parameters on effect-annotated functions.
+//
+// This is a signature-local phase of G39: it does not attempt transitive
+// call-graph reproducibility yet, but it prevents the direct unsound cases
+// listed in §20.4.
+// ---------------------------------------------------------------------
+
+fn runCapabilitySignatureGate(cx: ElabCx) {
+    let arena = cx.ast.arena
+    let reproducibleCapabilities = collectReproducibleCapabilityNames(arena)
+    for declIdx in arena.decls {
+        let node = astArenaNodeAt(arena, declIdx)
+        checkCapabilitySignatureDecl(cx, arena, node, reproducibleCapabilities)
+    }
+}
+
+fn collectReproducibleCapabilityNames(arena: AstArena) -> List<String> {
+    let mut out: List<String> = []
+    for declIdx in arena.decls {
+        let node = astArenaNodeAt(arena, declIdx)
+        if node.kind == AstNInterfaceDecl && checkGateAnnotationContains(arena, node.extra, "reproducible_capability") {
+            out.push(node.text)
+        }
+    }
+    out
+}
+
+fn checkCapabilitySignatureDecl(cx: ElabCx, arena: AstArena, node: AstNode, reproducibleCapabilities: List<String>) {
+    match node.kind {
+        AstNFnDecl -> checkCapabilitySignatureFn(cx, arena, node, reproducibleCapabilities),
+        AstNStructDecl -> checkCapabilitySignatureMethods(cx, arena, node, reproducibleCapabilities),
+        AstNEnumDecl -> checkCapabilitySignatureMethods(cx, arena, node, reproducibleCapabilities),
+        AstNInterfaceDecl -> checkCapabilitySignatureMethods(cx, arena, node, reproducibleCapabilities),
+        _ -> {},
+    }
+}
+
+fn checkCapabilitySignatureMethods(cx: ElabCx, arena: AstArena, parent: AstNode, reproducibleCapabilities: List<String>) {
+    for memberIdx in parent.children {
+        let member = astArenaNodeAt(arena, memberIdx)
+        if member.kind == AstNFnDecl {
+            checkCapabilitySignatureFn(cx, arena, member, reproducibleCapabilities)
+        }
+    }
+}
+
+fn checkCapabilitySignatureFn(cx: ElabCx, arena: AstArena, fn_: AstNode, reproducibleCapabilities: List<String>) {
+    if fn_.extra < 0 {
+        return
+    }
+    let isReproducible = checkGateAnnotationContains(arena, fn_.extra, "reproducible")
+    let isPure = checkGateAnnotationContains(arena, fn_.extra, "pure")
+    if !isReproducible && !isPure {
+        return
+    }
+    for paramIdx in fn_.children {
+        let param = astArenaNodeAt(arena, paramIdx)
+        if param.kind != AstNParam || param.text == "self" || param.right < 0 {
+            continue
+        }
+        let typeName = formatTypeForDiag(arena, param.right)
+        if isReproducible {
+            let nonDet = capabilityHeadInType(arena, param.right, false, reproducibleCapabilities)
+            if isNonDeterministicCapabilityName(nonDet) {
+                cx.env.local.diagnostics.push(
+                    diagReproducibleViaCapability(fn_.text, param.text, typeName, nonDet, param.start, param.end),
+                )
+            }
+        }
+        if isPure {
+            let capability = capabilityHeadInType(arena, param.right, true, reproducibleCapabilities)
+            if capability != "" {
+                cx.env.local.diagnostics.push(
+                    diagPureViaCapability(fn_.text, param.text, typeName, capability, param.start, param.end),
+                )
+            }
+        }
+    }
+}
+
+fn capabilityHeadInType(arena: AstArena, typeIdx: Int, includeDeterministic: Bool, reproducibleCapabilities: List<String>) -> String {
+    if typeIdx < 0 {
+        return ""
+    }
+    let node = astArenaNodeAt(arena, typeIdx)
+    if node.kind != AstNType {
+        return ""
+    }
+    if node.text == "optional" {
+        return capabilityHeadInType(arena, node.left, includeDeterministic, reproducibleCapabilities)
+    }
+    if node.text == "tuple" || node.text == "fn" {
+        for childIdx in node.children {
+            let childHead = capabilityHeadInType(arena, childIdx, includeDeterministic, reproducibleCapabilities)
+            if childHead != "" {
+                return childHead
+            }
+        }
+        if node.right >= 0 {
+            return capabilityHeadInType(arena, node.right, includeDeterministic, reproducibleCapabilities)
+        }
+        return ""
+    }
+    let head = capabilityBaseName(node.text)
+    if isNonDeterministicCapabilityName(head) {
+        return head
+    }
+    if includeDeterministic && (head == "Console" || listContainsString(reproducibleCapabilities, head)) {
+        return head
+    }
+    for argIdx in node.children {
+        let argHead = capabilityHeadInType(arena, argIdx, includeDeterministic, reproducibleCapabilities)
+        if argHead != "" {
+            return argHead
+        }
+    }
+    ""
+}
+
+fn capabilityBaseName(name: String) -> String {
+    let parts = strings.split(name, ".")
+    if parts.len() == 0 {
+        return name
+    }
+    parts[parts.len() - 1]
+}
+
+fn isNonDeterministicCapabilityName(name: String) -> Bool {
+    name == "Clock"
+        || name == "Rng"
+        || name == "Env"
+        || name == "Fs"
+        || name == "Net"
+        || name == "Process"
 }

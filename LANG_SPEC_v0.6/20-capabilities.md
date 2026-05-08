@@ -81,8 +81,10 @@ factory 는 현재 `time.systemClock()`, `random.host()`, `env.host()`, `fs.host
 `FakeRng`, `FakeEnv`, `FakeFs`, `FakeNet`, `FakeProcess`, `FakeConsole` 로 제공한다.
 Ambient desugar / `--legacy-globals` warning 은 별도 compiler phase 에서 닫는다.
 현재 구현은 `#[ambient]` 의 entry-point 위치 제한과 canonical name 검증을
-active checker gate 로 고정한다 (`E0780` / `E0781`). 실제 auto-forward/desugar 는
-후속 단계이다.
+active checker gate 로 고정한다 (`E0780` / `E0781`). `#[reproducible]` /
+`#[pure]` 의 direct capability parameter 제한도 signature gate 로 고정한다
+(`E0784` / `E0785`). 실제 ambient auto-forward/desugar 와 transitive
+reproducibility analysis 는 후속 단계이다.
 
 함수는 capability 를 **명시적 파라미터**로 받는다:
 
@@ -255,13 +257,16 @@ fn buildId(clock: Clock, rng: Rng) -> String {  // E0784
 
 검사 규칙:
 - `#[reproducible]` 함수는 `Clock`, `Rng`, `Env`, `Net`, `Process`, `Fs` capability
-  파라미터 를 받을 수 없다 (`E0784`).
+  파라미터 를 받을 수 없다 (`E0784`). 현재 구현은 direct signature parameter 를
+  active checker gate 로 검증한다.
 - 호출하는 함수 도 같은 제약을 만족해야 한다 (transitive).
 - `Console`, `Hash`, `Os` 같은 *side-effect-free 또는 deterministic* capability 는
   허용 — capability set 마다 *deterministic 등급* 을 §20.6 표에서 정의.
 
 `#[pure]` 도 동일한 모델로 단순화:
-- `#[pure]` 함수는 *어떤* capability 도 받을 수 없다.
+- `#[pure]` 함수는 *어떤* capability 도 받을 수 없다 (`E0785`). 현재 구현은
+  canonical capability 와 `#[reproducible_capability]` 로 선언된 local
+  deterministic capability 를 direct signature 에서 검증한다.
 
 ### 20.5 사용자 정의 capability
 
