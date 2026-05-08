@@ -59,7 +59,7 @@ host osty (Go 부트스트랩)
 `osty-self`가 없을 때만 켜지는, 의도적으로 좁은 stage0 emitter를 Go 측에 둔다. 범위:
 
 - **포함**: `toolchain/*.osty` 자기 자신을 한번 컴파일하기에 충분한 MIR 패턴 — 함수 정의, 분기, 산술, struct/enum 기본 lowering, runtime ABI 호출 (`osty.gc.*`, `osty_rt_*`).
-- **제외**: vectorize 힌트, parallel access groups, target_feature, hot/cold 섹션, advanced unroll. 즉 v0.5 spec의 **컴파일러를 컴파일할 수 있는 핵심만**.
+- **제외**: vectorize 힌트, parallel access groups, target_feature, hot/cold 섹션, advanced unroll. 즉 v0.6 spec의 **컴파일러를 컴파일할 수 있는 핵심만**.
 
 stage0 emitter는 명시적으로 **deprecated-on-arrival** — fast path가 아니라 부트스트랩용. Production 빌드 (`osty-self` 사용 가능 시)는 LIR Proto 경로 그대로.
 
@@ -84,12 +84,12 @@ func emitLLVMFallback(route llvmDispatchRoute, entry Entry, opts llvmabi.Options
 ```
 
 `stage0EmitMIR` 본체는:
-- **새 패키지 `internal/backend/stage0/`** 에 격리. ~5K 줄을 넘지 않도록 v0.5 spec 핵심 구문만 다룸.
+- **새 패키지 `internal/backend/stage0/`** 에 격리. ~5K 줄을 넘지 않도록 v0.6 spec 핵심 구문만 다룸.
 - 매 회 `toolchain/*.osty`가 stage0 surface를 벗어나지 않는지 CI에서 검증 (`TestStage0CoversToolchainMIR` 같은 게이트).
 - 출력은 LIR Proto 경로와 byte-equivalent일 필요 **없음**. `verify-self-rebuild`의 stage2/3 parity는 stage1의 결과물 (`osty-self-1`)이 stage1을 사용해서 다시 빌드되는 것이므로, stage0 IR이 stage1 IR과 다른 건 정상.
 
 장점:
-- v0.5 spec ON, 부트스트랩 가능.
+- v0.6 spec ON, 부트스트랩 가능.
 - stage0이 모든 emit을 처리하지 않으므로 surface 폭주 위험 제어됨.
 - LIR Proto 경로가 default — stage0 retire는 osty-self 광범위 가용 시점에 가능.
 
@@ -147,9 +147,9 @@ func TestStage0CoversToolchainMIR(t *testing.T) {
 
 retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통째로 삭제 + 본 design doc도 archive로 이동.
 
-### 3.5 v0.5 spec 영향
+### 3.5 v0.6 spec 영향
 
-없음. stage0는 emitter level에서만 작동하며 surface 추가 0건. `LANG_SPEC_v0.5/`, `OSTY_GRAMMAR_v0.5.md`는 변경 안 함.
+없음. stage0는 emitter level에서만 작동하며 surface 추가 0건. `LANG_SPEC_v0.6/`, `OSTY_GRAMMAR_v0.6.md`는 변경 안 함.
 
 ## 4. 구현 단계 (제안)
 

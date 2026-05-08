@@ -67,7 +67,7 @@ PR #1406이 그 위에 추가로 12개 backend 테스트를 obsolete 처리 (del
 
 테스트: 자유변수 캡처 → 환경 struct 생성 → indirect call.
 
-- v0.5 spec 핵심 (B.5).
+- v0.6 spec 핵심 (B.5).
 - 현황: 자기-호스트 컴파일 자체가 closure를 사용하므로 `verify-self-rebuild` 가 indirect로 잡음. 단 specific shape (재귀, mutable capture 등)는 미보장.
 - **Action**: backend 측 통합 테스트 5-10개 정도로 회복. skip-on-no-osty-self.
 
@@ -75,7 +75,7 @@ PR #1406이 그 위에 추가로 12개 backend 테스트를 obsolete 처리 (del
 
 테스트: `Error.downcast::<T>()` lowering, vtable lookup.
 
-- v0.5 spec 핵심 (A.6).
+- v0.6 spec 핵심 (A.6).
 - 현황: 자기-호스트 컴파일러가 downcast 안 쓰면 `verify-self-rebuild` 로 잡히지 않음.
 - **Action**: 회복 필요. 우선순위 중.
 
@@ -91,7 +91,7 @@ PR #1406이 그 위에 추가로 12개 backend 테스트를 obsolete 처리 (del
 
 테스트: 모든 패턴 종류 (literal / range / or / binding / guard / payload destructure) lowering.
 
-- v0.5 spec A.5.
+- v0.6 spec A.5.
 - 자기-호스트가 일부 패턴만 사용 → 광범위 indirect coverage 불가.
 - **Action**: spec corpus 와 결합. 우선순위 중-높음.
 
@@ -99,7 +99,7 @@ PR #1406이 그 위에 추가로 12개 backend 테스트를 obsolete 처리 (del
 
 테스트: defer LIFO + `?` propagation 시 실행 + cancel 시 실행 + `panic`/`unreachable`/`todo`/`abort` skip.
 
-- v0.5 spec A.6 (특히 panic 시 skip vs cancel 시 실행 — 미묘함).
+- v0.6 spec A.6 (특히 panic 시 skip vs cancel 시 실행 — 미묘함).
 - 자기-호스트가 defer를 사용하지만 defer × cancel × panic 조합은 안 씀.
 - **Action**: 회복 필요. 우선순위 중.
 

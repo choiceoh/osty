@@ -20,7 +20,7 @@ func lastSeg(s string, sep byte) string {
 
 // stringArg extracts a literal string from an annotation argument
 // expression. Returns ok=false for interpolated or non-string forms —
-// annotations require literal arguments per the v0.5 spec.
+// annotations require literal arguments per the v0.6 spec.
 func stringArg(e ast.Expr) (string, bool) {
 	lit, ok := e.(*ast.StringLit)
 	if !ok {

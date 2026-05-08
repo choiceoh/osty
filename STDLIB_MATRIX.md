@@ -8,7 +8,7 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 > - `internal/stdlib/modules/*.osty` (Phase B / surface)
 > - `internal/stdlib/primitives/*.osty` (intrinsic methods)
 > - `internal/backend/runtime/osty_runtime.c` (23,895 LOC / 638 `osty_rt_*` 함수 / Phase A / C runtime)
-> - `LANG_SPEC_v0.5/10-standard-library/*.md` (스펙 권위)
+> - `LANG_SPEC_v0.6/10-standard-library/*.md` (스펙 권위)
 >
 > **기준일**: 2026-05-05 (HEAD `b640a833` 대조).
 > **이전 매트릭스 (94% Production 주장) 전면 재평가됨** —
@@ -110,7 +110,7 @@ partial 모듈 3개 (crypto / option / result) 는 **호출 패턴 한정 동작
 | net | §10.23 / §20 | 972 | 94 + HostNet | 11% | net 40 runtime | TCP/UDP는 백엔드 풍부, IPv6 zone parsing 등 일부 미검증. v0.6 bridge `HostNet` adapter 추가 |
 | thread | §8 | 76 | 16 | 50% | thread 16 + chan 10 + select 22 + task 19 | ~~`thread.Duration{}` 빈 struct~~ → commit `23f4568c`에서 제거. 현재는 `use std.time` + `time.Duration` 단일 사용 |
 | sync | §10.2 | 96 | 17 | 17% | mu 5 + rmu 5 + cond 6 + once 3 | spec tier-2 = "Mutex, RwLock, atomics". Once는 spec 외인데 백엔드는 갖춤 |
-| time | §10.20 / §20 | 94 | 25 + HostClock | 64% | monotonic + sleep + format 일부 | `systemClock` adapter 추가. ~~`Int.s/ms/h/min/days/ns/us/weeks` 부재~~ → 2026-05-02 재확인 결과 8개 모두 ([primitives/int.osty:76-83](internal/stdlib/primitives/int.osty)) + Float 8개 ([primitives/float.osty:61-68](internal/stdlib/primitives/float.osty)) 선언됨. 체커 등록은 [`primitive_arith_register.go:131`](internal/selfhost/primitive_arith_register.go) (8개 loop), LLVM 백엔드는 [`duration_constructors_test.go`](internal/llvmgen/duration_constructors_test.go) 8개 테스트 통과. spec 이름 `minutes` (≠ `min`, `Int.min(self, other)`와 충돌 회피, [spec §10.20](LANG_SPEC_v0.5/10-standard-library/20-time-extensions.md) line 111-112) |
+| time | §10.20 / §20 | 94 | 25 + HostClock | 64% | monotonic + sleep + format 일부 | `systemClock` adapter 추가. ~~`Int.s/ms/h/min/days/ns/us/weeks` 부재~~ → 2026-05-02 재확인 결과 8개 모두 ([primitives/int.osty:76-83](internal/stdlib/primitives/int.osty)) + Float 8개 ([primitives/float.osty:61-68](internal/stdlib/primitives/float.osty)) 선언됨. 체커 등록은 [`primitive_arith_register.go:131`](internal/selfhost/primitive_arith_register.go) (8개 loop), LLVM 백엔드는 [`duration_constructors_test.go`](internal/llvmgen/duration_constructors_test.go) 8개 테스트 통과. spec 이름 `minutes` (≠ `min`, `Int.min(self, other)`와 충돌 회피, [spec §10.20](LANG_SPEC_v0.6/10-standard-library/20-time-extensions.md) line 111-112) |
 | testing | §11 | 88 | 14 | 100% | bench 7 + test 6 + snapshot 7 + parallel 6 | assertion/benchmark/snapshot 백엔드 인터셉트로 동작. property는 스펙 §11 G33 |
 | testing_gen | §11 | 168 | 18 | 0% | pure Osty | int/intRange/bool/float/string/list 등 generator |
 | term | §10.25 | 320 | 39 | 17% | term 14 runtime + shim | isTerminal/size/write/flush/setRawMode 백엔드. **readKey/pollKey/readEvent는 미구현** (모듈 헤더 자백) |
@@ -291,7 +291,7 @@ partial 모듈 3개 (crypto / option / result) 는 **호출 패턴 한정 동작
 
 | # | 항목 | 작업 |
 |---|---|---|
-| 14 | unspec 모듈 (62개) | LANG_SPEC_v0.5/10-standard-library/에 챕터 추가하거나 community-package 라벨 |
+| 14 | unspec 모듈 (62개) | LANG_SPEC_v0.6/10-standard-library/에 챕터 추가하거나 community-package 라벨 |
 | 15 | OSTY_STDLIB_BODY_LOWER | default-on flip + 게이트 제거 (memory `project_stdlib_injection_hang`) |
 | 16 | `Set` 빈약 / `Deque`/`PriorityQueue` 부재 | spec §10.6 확장 제안 (v0.6 minor) |
 

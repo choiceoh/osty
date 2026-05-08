@@ -46,11 +46,9 @@
 - `ERROR_CODES.md` — 진단 카탈로그 (생성물, `internal/diag/codes.go`에서 자동 생성)
 - `RUNTIME_GC.md` — 런타임/GC 구현 경로
 
-> v0.5 spec 은 `LANG_SPEC_v0.5/` / `OSTY_GRAMMAR_v0.5.md` 에 historical snapshot 으로 보존. v0.6 코드 작성에는 v0.6 docs 만 참조.
-
 ## graphify 지식 그래프
 
-`graphify-out/`에 AST + 시맨틱 병합 그래프 존재 (13.6k 노드 / 44.9k 엣지 / 159 커뮤니티). 스코프: `internal/` + `LANG_SPEC_v0.5/` + `toolchain/`. `cmd/`·`benchmarks/`·`examples/`는 미인덱스.
+`graphify-out/`에 AST + 시맨틱 병합 그래프 존재 (13.6k 노드 / 44.9k 엣지 / 159 커뮤니티). 스코프: `internal/` + `LANG_SPEC_v0.6/` + `toolchain/`. `cmd/`·`benchmarks/`·`examples/`는 미인덱스.
 
 ### 언제 쓸지
 - 아키텍처/파이프라인 질문 → **먼저 `graphify-out/GRAPH_REPORT.md`** 읽고 god 노드 + 커뮤니티 구조 파악
@@ -268,7 +266,7 @@ prefix는 `feat` / `fix` / `chore` / `docs` / `refactor` / `test` / `perf` 중 �
 
 # 부록 A. 언어 핵심 문법·의미론 + canonical 예시 (v0.4)
 
-> **이 부록은 에이전트가 실제로 Osty 코드를 작성할 때 참조하는 작업 레퍼런스다.** 모든 권위는 `LANG_SPEC_v0.5/`와 `OSTY_GRAMMAR_v0.5.md`에 있으나, 아래 예시들은 Osty다운 스타일의 baseline — 그대로 따라 쓸 수 있는 기준이다. 예시 코드는 스펙 내에서 확실한 구문만 사용한다.
+> **이 부록은 에이전트가 실제로 Osty 코드를 작성할 때 참조하는 작업 레퍼런스다.** 모든 권위는 `LANG_SPEC_v0.6/`와 `OSTY_GRAMMAR_v0.6.md`에 있으나, 아래 예시들은 Osty다운 스타일의 baseline — 그대로 따라 쓸 수 있는 기준이다. 예시 코드는 스펙 내에서 확실한 구문만 사용한다.
 
 ## A.1 프로그램 구조 / 렉시컬
 

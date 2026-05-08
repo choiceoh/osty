@@ -2,8 +2,8 @@
 
 > **Status**: baseline (frozen). 10 개 결정 (G36, G37, G39, G40, G41, G42,
 > G44, G45, G47, G48) 을 v0.5 baseline 위에 추가하는 spec 개정.
-> v0.5 의 모든 결정은 v0.6 에서도 유효. 본 문서는 *delta* 만 기술하며, 변경 없는 챕터는
-> [`../LANG_SPEC_v0.5/`](../LANG_SPEC_v0.5/) 가 계속 권위.
+> v0.5 의 모든 결정은 v0.6 에서도 유효 — 변경 없는 챕터는 본 디렉토리
+> [`./`](./) 의 같은-번호 파일이 계속 권위. 본 문서는 *delta* 만 기술한다.
 >
 > **Withdrawn from v0.6 baseline** (low-utility, removed pre-release):
 > G38 (`#[spec]` link), G43 (spec block), G46 (`#[budget]`), G49 (`while`

@@ -3,7 +3,7 @@
 - **Scope**: Compiler pipeline design — pass-level architecture, error recovery, diagnostic flow
 - **Type**: Design doc
 High-level map of the Osty front-end. For spec decisions see
-`OSTY_GRAMMAR_v0.5.md`; this document covers **implementation** layout.
+`OSTY_GRAMMAR_v0.6.md`; this document covers **implementation** layout.
 
 ## Pipeline
 
@@ -321,7 +321,7 @@ tracked outside spec gaps.
 Bidirectional typing with local unification and monomorphization on
 generic instantiation. The full specification, including the rule
 table and a line-level mapping to the self-hosted implementation,
-lives at `LANG_SPEC_v0.5/02a-type-inference.md`. The reference
+lives at `LANG_SPEC_v0.6/02a-type-inference.md`. The reference
 implementation is `toolchain/check.osty`; `host_boundary.go` is a
 pure adapter that materializes the checker's output as
 `Result.Types`, `Result.LetTypes`, `Result.SymTypes`, and
