@@ -100,6 +100,7 @@ func runLintLoadedPackage(
 	}
 	all := append([]*diag.Diagnostic{}, frontendDiags...)
 	all = append(all, lr.Diags...)
+	all = append(all, legacyGlobalsDiags(pkg, flags)...)
 	printPackageDiags(pkg, all, flags)
 	if flags.fix || flags.fixDryRun {
 		applyPackageFixes(pkg, lr.Diags, flags)
@@ -200,6 +201,7 @@ func runLintFile(path string, src []byte, formatter *diag.Formatter, flags cliFl
 	}
 	all := append([]*diag.Diagnostic{}, chk.Diags...)
 	all = append(all, lr.Diags...)
+	all = append(all, legacyGlobalsDiagsFromRun(run, path, flags)...)
 	printDiags(formatter, all, flags)
 	if flags.fix || flags.fixDryRun {
 		newSrc, applied, skipped := lint.ApplyFixes(src, lr.Diags)

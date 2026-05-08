@@ -21,6 +21,16 @@ type CliFlags struct {
 	AiMode          string
 	DumpNativeDiags bool
 	Native          bool
+	// LegacyGlobals enables the v0.5 → v0.6 transition compatibility
+	// mode for legacy global effect functions (`time.now()`,
+	// `random.next()`, `env.get(k)`, `fs.read(p)`, `os.exec(...)`,
+	// `net.dial(...)`). When set, the front-end emits W0750
+	// deprecation warnings at every legacy-global call site so users
+	// can enumerate migration work; auto-desugar to capability host
+	// adapters lands in a follow-up PR. v0.6.x only — v0.7 removes
+	// the flag entirely (BREAKING_v0.6.md §3, LANG_SPEC_v0.6
+	// §20.15).
+	LegacyGlobals bool
 }
 
 func DefaultCliFlags() CliFlags {
@@ -321,6 +331,9 @@ func applyBoolFlag(flags *CliFlags, name string) bool {
 		return true
 	case "native":
 		flags.Native = true
+		return true
+	case "legacy-globals":
+		flags.LegacyGlobals = true
 		return true
 	case "airepair", "repair":
 		flags.AiRepair = true
