@@ -4907,7 +4907,7 @@ pub fn mirLowerRangeLitInto(
     let span = mirSpanFromHir(e.span)
     mirLowerNoteIssue(
         bs.l,
-        "mir_lower: range literal in value position not lowered to MIR",
+        "mir_lower: range literal in value position not lowered to MIR (HIR span offset {e.span.start.offset}-{e.span.end.offset}, line {e.span.start.line})",
     )
     mirLowerEmitInstr(
         bs,
