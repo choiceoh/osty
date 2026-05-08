@@ -77,7 +77,7 @@ five conceptual buckets:
 | **Build** | `build`, `run`, `gen`, `pipeline` | Source → executable / artifact |
 | **Test** | `test`, `bench`, `doc-test` (alias of `test --doc`) | Verification |
 | **Quality** | `check`, `lint`, `fmt`, `airepair` | Source-level analysis |
-| **Audit** | `audit`, `validate-spec`, `context` | Machine-readable surface inspection |
+| **Audit** | `audit`, `context` | Machine-readable surface inspection |
 | **Release** | `publish`, `add`, `update`, `remove`, `fetch`, `info`, `search` | Package lifecycle |
 | **Service** | `lsp`, `registry serve`, `cache`, `profiles`, `targets`, `features`, `explain` | Long-running tools / introspection |
 
@@ -292,20 +292,6 @@ flags are scheduled for removal in v0.7.
 Activating either flag forces `[stability] default = "experimental"`
 automatically — a package depending on legacy compatibility cannot
 promise stable APIs.
-
-##### `[budget]`
-
-```toml
-[budget]
-strict = true                    # default: false
-regression-threshold = 0.20      # 20% regression promotes W0795 to E0795
-```
-
-`strict = true` makes runtime budget violations (`W0795`) into
-errors, blocking `osty publish` until fixed or the budget is
-intentionally loosened. `regression-threshold` is the relative
-performance loss that *automatically* triggers the strict path;
-default 20% is the v0.6 baseline.
 
 #### 13.2.2 Capability injection in manifest
 
