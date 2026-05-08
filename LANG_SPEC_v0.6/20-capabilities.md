@@ -322,3 +322,487 @@ f(systemClock, defaultRng)         // OK
 | `E0785` | `#[pure]` 함수가 capability 수신 |
 
 ---
+
+### 20.9 Canonical capability interface specifications
+
+이하 §20.9.1–§20.9.7 은 v0.6 baseline 의 7 canonical capability —
+`Clock`, `Rng`, `Env`, `Fs`, `Net`, `Process`, `Console` — 의 정식
+interface 정의이다. 각 capability 는 `std.capability` 모듈에 선언되며,
+host-boundary adapter 는 §20.10 이 기록한다.
+
+#### 20.9.1 `Clock` — wall + monotonic time
+
+```osty
+pub interface Clock {
+    /// Wall clock in UTC. Monotonically non-decreasing within one
+    /// process; subject to platform clock adjustments across reboot.
+    fn now(self) -> Time
+
+    /// Monotonic clock since process start. Strictly non-decreasing,
+    /// immune to wall-clock adjustments. Suitable for measuring
+    /// elapsed time.
+    fn monotonic(self) -> Duration
+
+    /// Cancellation-aware sleep. Returns `Err(Cancelled)` if the
+    /// enclosing taskGroup is cancelled before the duration elapses.
+    fn sleep(self, d: Duration) -> Result<(), Error>
+}
+```
+
+**Host adapter**: `time.systemClock` — `Clock` instance backed by the
+platform's wall clock + `CLOCK_MONOTONIC`.
+
+**Fake adapter**: `std.capability.testing.FakeClock(epoch_ms = N)` —
+returns the configured epoch on every `now()`; `monotonic()` advances
+by 1ms per call; `sleep()` is instantaneous and never blocks.
+
+**Determinism grade**: non-deterministic. `#[reproducible]` functions
+cannot receive `Clock` (`E0784`); `#[pure]` rejects all capabilities
+including `Clock` (`E0785`).
+
+#### 20.9.2 `Rng` — random number generation
+
+```osty
+pub interface Rng {
+    /// Pseudo-random Int. Distribution over the full Int range.
+    fn next(self) -> Int
+
+    /// Pseudo-random byte sequence of length n.
+    fn nextBytes(self, n: Int) -> Bytes
+
+    /// Pseudo-random Int in [lo, hi]. Returns `lo` when lo == hi;
+    /// aborts when lo > hi.
+    fn nextRange(self, lo: Int, hi: Int) -> Int
+
+    /// Pseudo-random Float64 in [0.0, 1.0).
+    fn nextFloat(self) -> Float64
+}
+```
+
+**Host adapter**: `random.host` — cryptographically secure when
+available (Linux: `getrandom`, macOS: `arc4random_buf`, Windows:
+`BCryptGenRandom`); falls back to a seeded PRNG only on platforms
+without secure entropy sources.
+
+**Fake adapter**: `std.capability.testing.FakeRng(seed = N)` —
+deterministic xorshift64 sequence from `seed`. Returning the same
+sequence given the same seed is part of the contract.
+
+**Determinism grade**: non-deterministic for `random.host`;
+deterministic for `FakeRng`. The Rng *type* is non-deterministic
+because the production adapter is.
+
+#### 20.9.3 `Env` — environment + arguments
+
+```osty
+pub interface Env {
+    /// Returns the value of environment variable `key`, or None if
+    /// not set. Empty string is a present-but-empty value.
+    fn get(self, key: String) -> String?
+
+    /// Sets `key` to `value` in the current process environment.
+    /// Effect on already-spawned children is platform-defined.
+    fn set(self, key: String, value: String)
+
+    /// Removes `key` from the current process environment.
+    fn unset(self, key: String)
+
+    /// Snapshot of all environment variables at call time.
+    fn vars(self) -> Map<String, String>
+
+    /// Process command-line arguments, including the program name at
+    /// index 0.
+    fn args(self) -> List<String>
+}
+```
+
+**Host adapter**: `env.host` — wraps `std.os.getenv` / `setenv` /
+`environ` / process arguments.
+
+**Fake adapter**: `std.capability.testing.FakeEnv(vars = {...},
+args = [...])` — in-memory variable map and argument list, isolated
+per test.
+
+**Determinism grade**: non-deterministic. Environment varies across
+runs and platforms; `#[reproducible]` excludes.
+
+#### 20.9.4 `Fs` — filesystem read + write
+
+```osty
+pub interface Fs {
+    fn readToString(self, path: String) -> Result<String, FsError>
+    fn readToBytes(self, path: String) -> Result<Bytes, FsError>
+    fn write(self, path: String, content: String) -> Result<(), FsError>
+    fn writeBytes(self, path: String, bytes: Bytes) -> Result<(), FsError>
+    fn exists(self, path: String) -> Bool
+    fn isFile(self, path: String) -> Bool
+    fn isDir(self, path: String) -> Bool
+    fn create(self, path: String) -> Result<(), FsError>
+    fn remove(self, path: String) -> Result<(), FsError>
+    fn mkdir(self, path: String) -> Result<(), FsError>
+    fn mkdirAll(self, path: String) -> Result<(), FsError>
+    fn list(self, path: String) -> Result<List<String>, FsError>
+
+    /// Open a file for streaming read. Returns a Reader that must be
+    /// closed via `defer` or a closure-scoped helper (`fs.withReader`).
+    fn open(self, path: String) -> Result<Reader, FsError>
+
+    /// Create or truncate for streaming write.
+    fn createWriter(self, path: String) -> Result<Writer, FsError>
+}
+```
+
+**Host adapter**: `fs.host` — wraps `os.Open` / `os.Create` / etc.
+
+**Fake adapter**: `std.capability.testing.FakeFs(layout = {...})` —
+in-memory tree. The `layout` argument is a `Map<String, FakeEntry>`
+where `FakeEntry` covers files and directories.
+
+**Determinism grade**: non-deterministic for `fs.host`; deterministic
+for `FakeFs` given a fixed `layout`.
+
+**Path safety**: in v0.6 Phase 5, path-accepting methods (`readTo*`,
+`write*`, `open`, `mkdir`, etc.) carry `#[requires("path_safe")]` on
+the path parameter. User input must pass through `std.path.normalize`
+or `std.path.join` before reaching these sinks. See §21.8.
+
+#### 20.9.5 `Net` — TCP / TLS / HTTP
+
+```osty
+pub interface Net {
+    fn dial(self, host: String, port: Int) -> Result<Conn, NetError>
+
+    /// TLS-wrapped dial. Verifies certificate chain against the
+    /// system trust store unless `verify = false` is supplied
+    /// (audit-marked, follow-up).
+    fn dialTLS(self, host: String, port: Int) -> Result<Conn, NetError>
+
+    fn listen(self, host: String, port: Int) -> Result<Listener, NetError>
+
+    /// HTTP client construction. The returned client respects
+    /// taskGroup cancellation on every operation.
+    fn httpClient(self) -> HttpClient
+}
+```
+
+**Host adapter**: `capability.hostNet` (canonical) and `net.host`
+(transitional bridge — deprecated for v0.7 removal per §10.46.4).
+
+**Fake adapter**: `std.capability.testing.FakeNet(routes = {...})` —
+pre-canned responses keyed by `host:port`. Calls to `dial` return a
+`Conn` backed by the fake's response stream; calls to unrouted
+addresses return `NetError.RouteNotFound`.
+
+**Determinism grade**: non-deterministic.
+
+**URL safety (Phase 5)**: redirect-accepting methods carry
+`#[requires("url_safe")]`. User input passes through `std.url.encode`
+or `Url.parse(...)?` first.
+
+#### 20.9.6 `Process` — subprocess + signals
+
+```osty
+pub interface Process {
+    /// Run an external command synchronously. Returns the captured
+    /// output and exit code; cancellation propagates through
+    /// `Output.cancel()`.
+    fn exec(self, cmd: String, args: List<String>) -> Result<Output, ProcError>
+
+    /// Asynchronous variant — returns a Handle<Output> that joins
+    /// when the child exits. Subject to G13 non-escape.
+    fn spawn(self, cmd: String, args: List<String>) -> Handle<Output>
+
+    fn pid(self) -> Int
+    fn hostname(self) -> String
+
+    /// Replace the current process image. Does not return on success;
+    /// only the error path produces a value.
+    fn replace(self, cmd: String, args: List<String>) -> Result<Never, ProcError>
+
+    /// Terminate the current process with `code`. Does not return.
+    fn exit(self, code: Int) -> Never
+}
+```
+
+**Host adapter**: `capability.hostProcess` (canonical) and
+`process.host` (transitional bridge).
+
+**Fake adapter**: `std.capability.testing.FakeProcess(stubs = {...})`
+— programmable command stubs. Each stub maps `(cmd, args)` to a
+canned `Output` or `ProcError`.
+
+**Determinism grade**: non-deterministic.
+
+**Shell safety (Phase 5)**: `exec` and `spawn`'s args carry
+`#[requires("shell_safe")]` for all but the first element (the
+program name). User input through `std.shell.quote` first.
+
+#### 20.9.7 `Console` — stdout / stderr
+
+```osty
+pub interface Console {
+    fn print(self, text: String)
+    fn println(self, text: String)
+    fn eprint(self, text: String)
+    fn eprintln(self, text: String)
+
+    /// Read a single line from stdin (UTF-8). Returns `None` on EOF.
+    fn readLine(self) -> Result<String?, IoError>
+
+    /// Returns true when stdout is bound to an interactive TTY.
+    /// Suitable for gating colored output and progress bars.
+    fn isTTY(self) -> Bool
+}
+```
+
+**Host adapter**: `io.console` — backed by process stdin/stdout/stderr.
+
+**Fake adapter**: `std.capability.testing.FakeConsole()` — captures
+stdout and stderr into in-memory buffers accessible via
+`fakeConsole.stdoutCaptured()` / `stderrCaptured()`.
+
+**Determinism grade**: deterministic output (writes don't depend on
+external state). `#[reproducible(scope = "run")]` allows `Console`;
+`scope = "target"` and `scope = "portable"` reject it because byte
+ordering of interleaved stdout/stderr is run-dependent.
+
+### 20.10 Host adapter factories — full registry
+
+| Capability | Canonical factory | Returns | Deprecation status |
+|---|---|---|---|
+| `Clock` | `time.systemClock` | `Clock` | stable |
+| `Rng` | `random.host` | `Rng` | stable |
+| `Env` | `env.host` | `Env` | stable |
+| `Fs` | `fs.host` | `Fs` | stable |
+| `Net` | `capability.hostNet` | `Net` | stable |
+| `Net` | `net.host` | `Net` | transitional bridge — v0.7 removal |
+| `Process` | `capability.hostProcess` | `Process` | stable |
+| `Process` | `process.host` | `Process` | transitional bridge — v0.7 removal |
+| `Console` | `io.console` | `Console` | stable |
+
+The transitional bridges (`net.host`, `process.host`) exist so v0.5 →
+v0.6 migrations can stay within a module's existing namespace
+(`net.*` / `process.*`) during the upgrade. They forward to the
+canonical factory in `std.capability` and emit `W0750` deprecation on
+use. v0.7 removes them; see `BREAKING_v0.6.md §3` for the timeline.
+
+### 20.11 Fake registry for tests
+
+`std.capability.testing` exposes deterministic fakes for every
+canonical capability. Use them in `#[test]`-discovered functions to
+replace the implicit determinism of `--legacy-globals`-style tests.
+
+```osty
+use std.capability.testing as ct
+
+fn test_buildId_format() {
+    let clock = ct.FakeClock(epoch_ms = 1_000_000)
+    let rng = ct.FakeRng(seed = 42)
+    let id = buildId(clock, rng)
+    testing.assertEq(id, "1000000-1608637542")
+}
+```
+
+The convenience factory `std.testing.capabilityFakes()` returns a
+`CapabilityFakes` struct with all seven fakes preset — useful for
+test functions that exercise capability-heavy code paths:
+
+```osty
+fn test_pipeline() {
+    let f = std.testing.capabilityFakes()
+    f.fakeFs.write("/tmp/in.txt", "hello")?
+    runPipeline(f.fakeClock, f.fakeRng, f.fakeEnv, f.fakeFs, f.fakeNet,
+                f.fakeProcess, f.fakeConsole)?
+    testing.assertEq(f.fakeConsole.stdoutCaptured(), "OK\n")
+}
+```
+
+### 20.12 Capability injection patterns
+
+Three patterns for routing capabilities through a code base:
+
+#### Pattern A — explicit parameter
+
+The recommended baseline. Library functions receive what they need;
+no implicit state, no thread-locals, no globals.
+
+```osty
+pub fn renderTimestamp(clock: Clock) -> String {
+    "{clock.now().toIso8601()}"
+}
+
+pub fn loadConfig(env: Env, fs: Fs) -> Result<Config, ConfigError> {
+    let path = env.get("CONFIG_PATH") ?? "/etc/app.toml"
+    fs.readToString(path).mapErr(|_| ConfigError.NotFound(path))
+        .andThen(|text| toml.parse(text))
+}
+```
+
+#### Pattern B — entry-point ambient
+
+At program / script / test entry points, `#[ambient(name1, ...)]`
+binds default instances:
+
+```osty
+#[ambient(clock, env, fs, console)]
+fn main() {
+    let cfg = loadConfig(env, fs)?
+    let ts = renderTimestamp(clock)
+    console.println("[{ts}] config loaded: {cfg}")
+}
+```
+
+The ambient bindings only exist in the entry function's body. Callees
+still receive the capabilities as explicit parameters.
+
+#### Pattern C — capability struct
+
+When a function or struct needs many capabilities, package them
+together:
+
+```osty
+pub struct AppCaps {
+    pub clock: Clock,
+    pub rng: Rng,
+    pub env: Env,
+    pub fs: Fs,
+}
+
+pub fn runApp(c: AppCaps) -> Result<(), Error> {
+    let id = buildId(c.clock, c.rng)
+    let cfg = loadConfig(c.env, c.fs)?
+    process(id, cfg)
+}
+```
+
+`AppCaps` is a regular struct; capability values are `interface`
+references and follow Osty's reference semantics. Storing them in a
+struct field doesn't violate any non-escape rule (only `Handle<T>` /
+`TaskGroup` carry the G13 escape ban).
+
+### 20.13 Forwarding between functions
+
+Capability forwarding is *explicit* — callers pass them, callees
+declare them. There is no implicit forwarding through dynamic
+dispatch or thread-local state.
+
+```osty
+pub fn run(clock: Clock, rng: Rng) -> String {
+    // Forward both capabilities to buildId.
+    buildId(clock, rng)
+}
+```
+
+Inside an `#[ambient]` function body, `buildId(clock, rng)` works
+because `clock` and `rng` are bound as locals (per §20.3.1
+desugaring).
+
+Across `taskGroup` boundaries, capabilities flow through closure
+captures:
+
+```osty
+#[ambient(clock)]
+fn main() {
+    taskGroup(|g| {
+        let h = g.spawn(|| {
+            // Closure captures `clock` from main's body.
+            clock.now()
+        })
+        h.join()?
+        Ok(())
+    })
+}
+```
+
+### 20.14 Anti-patterns and rejected forms
+
+#### Library function with `#[ambient]` — `E0780`
+
+```osty
+#[ambient(clock)]                       // ERROR E0780
+pub fn renderTimestamp() -> String {
+    clock.now().toIso8601()
+}
+```
+
+`#[ambient]` is restricted to entry-point functions. A library that
+wants `Clock` declares it as a parameter; the test fake replaces it
+deterministically.
+
+#### Unknown ambient name — `E0781`
+
+```osty
+#[ambient(database)]                    // ERROR E0781
+fn main() { ... }
+```
+
+The canonical set is `clock`, `rng`, `env`, `fs`, `net`, `process`,
+`console`. User-defined capabilities cannot be ambient (`E0789`); pass
+them explicitly.
+
+#### `#[reproducible]` with non-deterministic capability — `E0784`
+
+```osty
+#[reproducible]                         // ERROR E0784
+fn buildId(clock: Clock) -> String {
+    clock.now().toIso8601()
+}
+```
+
+Reproducibility requires the function's output to be fully determined
+by its input. A `Clock` parameter (non-deterministic adapter)
+violates this. The `#[pure]` annotation rejects all capability
+parameters (`E0785`); `#[reproducible]` rejects only non-deterministic
+ones.
+
+#### Implicit forwarding does not exist
+
+```osty
+pub fn outer(clock: Clock) {
+    inner()                              // ERROR — `inner` does not see `clock`
+}
+
+pub fn inner() {
+    // No way to find `clock` from here.
+}
+```
+
+The capability flow is exactly what the function signatures declare.
+
+### 20.15 Compatibility — `--legacy-globals`
+
+The compatibility mode `osty build --legacy-globals` (or
+`[legacy] globals = true` in `osty.toml`) reactivates the v0.5
+top-level effect functions. They desugar to capability host calls:
+
+| v0.5 form | Desugared to |
+|---|---|
+| `time.now()` | `time.systemClock.now()` |
+| `random.next()` | `random.host.next()` |
+| `env.get("HOME")` | `env.host.get("HOME")` |
+| `fs.readToString("/etc/passwd")` | `fs.host.readToString("/etc/passwd")` |
+| `os.exec("ls", [])` | `capability.hostProcess.exec("ls", [])` |
+| `net.dial("example.com", 443)` | `capability.hostNet.dial("example.com", 443)` |
+
+Each call site emits `W0750` (deprecation warning). The package's
+`[stability]` is forced to `experimental` whenever any legacy global
+is reachable. v0.7 removes the desugar and the flag — all uses
+become `E0701` (`unknown name in this scope`).
+
+`§10.46` is the authoritative migration catalog with per-function
+mapping.
+
+### 20.16 Forward compatibility
+
+The capability surface in v0.6 is a *baseline* — adding new
+capabilities to the canonical set in a future minor release is an
+additive change (existing code keeps working with the seven). Adding
+new methods to an existing capability interface is also additive; any
+production code that implements `Clock` (uncommon — usually the host
+adapter is the only implementation) need only carry forward the
+interface implementation.
+
+Removing a method or changing a method signature is a breaking
+change requiring a major version bump (per §3.14.3). The non-canonical
+adapters (`net.host`, `process.host`) carry their own removal schedule
+documented in `BREAKING_v0.6.md`.
