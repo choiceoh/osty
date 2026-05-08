@@ -230,7 +230,7 @@ backend-loop-gates: build-all
 
 check: fmt-check vet front
 
-prepush: fmt-check vet repair-check airepair-capture ci
+prepush: fmt-check vet repair-check ci
 
 pipe target:
     test -x {{bin}} || just build
