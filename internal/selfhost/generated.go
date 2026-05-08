@@ -28587,6 +28587,14 @@ func checkCodeReproducibleCapabilityNonRepro() string {
 	return "E0783"
 }
 
+func checkCodeReproducibleViaCapability() string {
+	return "E0784"
+}
+
+func checkCodePureViaCapability() string {
+	return "E0785"
+}
+
 func diagAmbientWrongSite(fnName string, start int, end int) *CheckDiagnostic {
 	return checkDiagWithNotes(
 		checkCodeAmbientWrongSite(),
@@ -28622,6 +28630,32 @@ func diagReproducibleCapabilityNonRepro(interfaceName string, methodName string,
 		[]string{
 			"LANG_SPEC §20.5: reproducible capability interfaces may expose only reproducible methods",
 			"hint: add `#[reproducible]` to the method, or remove `#[reproducible_capability]` from the interface",
+		},
+	)
+}
+
+func diagReproducibleViaCapability(fnName string, paramName string, typeName string, capabilityName string, start int, end int) *CheckDiagnostic {
+	return checkDiagWithNotes(
+		checkCodeReproducibleViaCapability(),
+		fmt.Sprintf("`#[reproducible]` function `%s` parameter `%s: %s` receives non-deterministic capability `%s`", ostyToString(fnName), ostyToString(paramName), ostyToString(typeName), ostyToString(capabilityName)),
+		start,
+		end,
+		[]string{
+			"LANG_SPEC §20.4: reproducible functions may not receive `Clock`, `Rng`, `Env`, `Fs`, `Net`, or `Process` capabilities",
+			"hint: pass deterministic data instead, or remove `#[reproducible]` from the function",
+		},
+	)
+}
+
+func diagPureViaCapability(fnName string, paramName string, typeName string, capabilityName string, start int, end int) *CheckDiagnostic {
+	return checkDiagWithNotes(
+		checkCodePureViaCapability(),
+		fmt.Sprintf("`#[pure]` function `%s` parameter `%s: %s` receives capability `%s`", ostyToString(fnName), ostyToString(paramName), ostyToString(typeName), ostyToString(capabilityName)),
+		start,
+		end,
+		[]string{
+			"LANG_SPEC §20.4: `#[pure]` is stronger than `#[reproducible]` and forbids capability flow entirely",
+			"hint: drop the capability parameter, or weaken the function to `#[reproducible]` if deterministic capabilities are intended",
 		},
 	)
 }
@@ -49784,6 +49818,7 @@ func runCheckGates(cx *ElabCx) {
 	runPureGate(cx)
 	runAmbientGate(cx)
 	runReproducibleCapabilityGate(cx)
+	runCapabilitySignatureGate(cx)
 }
 
 // Osty: /tmp/selfhost_merged.osty:24554:1
@@ -70338,5 +70373,156 @@ func checkReproducibleCapabilityInterface(cx *ElabCx, arena *AstArena, iface *As
 		if _, ok := member.kind.(*AstNodeKind_AstNFnDecl); ok && !checkGateAnnotationContains(arena, member.extra, "reproducible") {
 			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagReproducibleCapabilityNonRepro(iface.text, member.text, member.start, member.end))
 		}
+	}
+}
+
+func runCapabilitySignatureGate(cx *ElabCx) {
+	if cx == nil || cx.ast == nil || cx.ast.arena == nil {
+		return
+	}
+	arena := cx.ast.arena
+	reproducibleCapabilities := collectReproducibleCapabilityNames(arena)
+	for _, declIdx := range arena.decls {
+		node := astArenaNodeAt(arena, declIdx)
+		if node == nil {
+			continue
+		}
+		checkCapabilitySignatureDecl(cx, arena, node, reproducibleCapabilities)
+	}
+}
+
+func collectReproducibleCapabilityNames(arena *AstArena) []string {
+	out := make([]string, 0, 1)
+	if arena == nil {
+		return out
+	}
+	for _, declIdx := range arena.decls {
+		node := astArenaNodeAt(arena, declIdx)
+		if node == nil {
+			continue
+		}
+		if _, ok := node.kind.(*AstNodeKind_AstNInterfaceDecl); ok && checkGateAnnotationContains(arena, node.extra, "reproducible_capability") {
+			out = append(out, node.text)
+		}
+	}
+	return out
+}
+
+func checkCapabilitySignatureDecl(cx *ElabCx, arena *AstArena, node *AstNode, reproducibleCapabilities []string) {
+	if node == nil {
+		return
+	}
+	switch node.kind.(type) {
+	case *AstNodeKind_AstNFnDecl:
+		checkCapabilitySignatureFn(cx, arena, node, reproducibleCapabilities)
+	case *AstNodeKind_AstNStructDecl, *AstNodeKind_AstNEnumDecl, *AstNodeKind_AstNInterfaceDecl:
+		checkCapabilitySignatureMethods(cx, arena, node, reproducibleCapabilities)
+	}
+}
+
+func checkCapabilitySignatureMethods(cx *ElabCx, arena *AstArena, parent *AstNode, reproducibleCapabilities []string) {
+	if parent == nil {
+		return
+	}
+	for _, memberIdx := range parent.children {
+		member := astArenaNodeAt(arena, memberIdx)
+		if member == nil {
+			continue
+		}
+		if _, ok := member.kind.(*AstNodeKind_AstNFnDecl); ok {
+			checkCapabilitySignatureFn(cx, arena, member, reproducibleCapabilities)
+		}
+	}
+}
+
+func checkCapabilitySignatureFn(cx *ElabCx, arena *AstArena, fn *AstNode, reproducibleCapabilities []string) {
+	if fn == nil || fn.extra < 0 {
+		return
+	}
+	isReproducible := checkGateAnnotationContains(arena, fn.extra, "reproducible")
+	isPure := checkGateAnnotationContains(arena, fn.extra, "pure")
+	if !isReproducible && !isPure {
+		return
+	}
+	for _, paramIdx := range fn.children {
+		param := astArenaNodeAt(arena, paramIdx)
+		if param == nil {
+			continue
+		}
+		if _, ok := param.kind.(*AstNodeKind_AstNParam); !ok || param.text == "self" || param.right < 0 {
+			continue
+		}
+		typeName := formatTypeForDiag(arena, param.right)
+		if isReproducible {
+			nonDet := capabilityHeadInType(arena, param.right, false, reproducibleCapabilities)
+			if isNonDeterministicCapabilityName(nonDet) {
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagReproducibleViaCapability(fn.text, param.text, typeName, nonDet, param.start, param.end))
+			}
+		}
+		if isPure {
+			capability := capabilityHeadInType(arena, param.right, true, reproducibleCapabilities)
+			if capability != "" {
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagPureViaCapability(fn.text, param.text, typeName, capability, param.start, param.end))
+			}
+		}
+	}
+}
+
+func capabilityHeadInType(arena *AstArena, typeIdx int, includeDeterministic bool, reproducibleCapabilities []string) string {
+	if arena == nil || typeIdx < 0 {
+		return ""
+	}
+	node := astArenaNodeAt(arena, typeIdx)
+	if node == nil {
+		return ""
+	}
+	if _, ok := node.kind.(*AstNodeKind_AstNType); !ok {
+		return ""
+	}
+	if node.text == "optional" {
+		return capabilityHeadInType(arena, node.left, includeDeterministic, reproducibleCapabilities)
+	}
+	if node.text == "tuple" || node.text == "fn" {
+		for _, childIdx := range node.children {
+			childHead := capabilityHeadInType(arena, childIdx, includeDeterministic, reproducibleCapabilities)
+			if childHead != "" {
+				return childHead
+			}
+		}
+		if node.right >= 0 {
+			return capabilityHeadInType(arena, node.right, includeDeterministic, reproducibleCapabilities)
+		}
+		return ""
+	}
+	head := capabilityBaseName(node.text)
+	if isNonDeterministicCapabilityName(head) {
+		return head
+	}
+	if includeDeterministic && (head == "Console" || listContainsString(reproducibleCapabilities, head)) {
+		return head
+	}
+	for _, argIdx := range node.children {
+		argHead := capabilityHeadInType(arena, argIdx, includeDeterministic, reproducibleCapabilities)
+		if argHead != "" {
+			return argHead
+		}
+	}
+	return ""
+}
+
+func capabilityBaseName(name string) string {
+	parts := strings.Split(name, ".")
+	if len(parts) == 0 {
+		return name
+	}
+	return parts[len(parts)-1]
+}
+
+func isNonDeterministicCapabilityName(name string) bool {
+	switch name {
+	case "Clock", "Rng", "Env", "Fs", "Net", "Process":
+		return true
+	default:
+		return false
 	}
 }

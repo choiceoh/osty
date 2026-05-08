@@ -81,6 +81,8 @@ pub fn checkCodePureViolation() -> String { "E0775" }
 pub fn checkCodeAmbientWrongSite() -> String { "E0780" }
 pub fn checkCodeAmbientUnknownCapability() -> String { "E0781" }
 pub fn checkCodeReproducibleCapabilityNonRepro() -> String { "E0783" }
+pub fn checkCodeReproducibleViaCapability() -> String { "E0784" }
+pub fn checkCodePureViaCapability() -> String { "E0785" }
 pub fn checkCodeAmbientUserCapability() -> String { "E0789" }
 
 // ---------------------------------------------------------------------
@@ -788,6 +790,36 @@ pub fn diagReproducibleCapabilityNonRepro(interfaceName: String, methodName: Str
         [
             "LANG_SPEC §20.5: reproducible capability interfaces may expose only reproducible methods",
             "hint: add `#[reproducible]` to the method, or remove `#[reproducible_capability]` from the interface",
+        ],
+    )
+}
+
+/// diagReproducibleViaCapability reports `#[reproducible]` functions
+/// that receive a non-deterministic capability parameter.
+pub fn diagReproducibleViaCapability(fnName: String, paramName: String, typeName: String, capabilityName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeReproducibleViaCapability(),
+        "`#[reproducible]` function `{fnName}` parameter `{paramName}: {typeName}` receives non-deterministic capability `{capabilityName}`",
+        start,
+        end,
+        [
+            "LANG_SPEC §20.4: reproducible functions may not receive `Clock`, `Rng`, `Env`, `Fs`, `Net`, or `Process` capabilities",
+            "hint: pass deterministic data instead, or remove `#[reproducible]` from the function",
+        ],
+    )
+}
+
+/// diagPureViaCapability reports `#[pure]` functions that receive any
+/// capability parameter.
+pub fn diagPureViaCapability(fnName: String, paramName: String, typeName: String, capabilityName: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodePureViaCapability(),
+        "`#[pure]` function `{fnName}` parameter `{paramName}: {typeName}` receives capability `{capabilityName}`",
+        start,
+        end,
+        [
+            "LANG_SPEC §20.4: `#[pure]` is stronger than `#[reproducible]` and forbids capability flow entirely",
+            "hint: drop the capability parameter, or weaken the function to `#[reproducible]` if deterministic capabilities are intended",
         ],
     )
 }

@@ -334,6 +334,25 @@ interface BadReproducibleCapability {
 }
 // === END
 
+// === CASE: E0784 === reproducible function receives non-deterministic capability
+#[reproducible]
+fn badReproducibleClock(clock: Clock) -> Int {
+    0
+}
+// === END
+
+// === CASE: E0785 === pure function receives a capability parameter
+#[reproducible_capability]
+interface PureHashCap {
+    #[reproducible]
+    fn hash(self, value: String) -> String
+}
+#[pure]
+fn badPureCapability(hash: PureHashCap, value: String) -> String {
+    value
+}
+// === END
+
 // === CASE: E0004 === unterminated block comment (MUST remain last — the
 // unclosed /* is intentional and swallows every byte to EOF).
 /* never closes
