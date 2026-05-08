@@ -1690,6 +1690,70 @@ func TestLowerThreadChanIsIntrinsicNotCall(t *testing.T) {
 	}
 }
 
+func TestLowerGenericOwnerMethodTurbofishUsesMonomorphizedSymbol(t *testing.T) {
+	tVar := &ir.TypeVar{Name: "T", Owner: "Box"}
+	uVar := &ir.TypeVar{Name: "U", Owner: "Box.pick"}
+	box := &ir.StructDecl{
+		Name:     "Box",
+		Generics: []*ir.TypeParam{{Name: "T"}},
+		Fields:   []*ir.Field{{Name: "value", Type: tVar, Exported: true}},
+		Methods: []*ir.FnDecl{
+			{
+				Name:     "pick",
+				Generics: []*ir.TypeParam{{Name: "U"}},
+				Params:   []*ir.Param{{Name: "fallback", Type: uVar}},
+				Return:   uVar,
+				Body: &ir.Block{
+					Result: &ir.Ident{Name: "fallback", Kind: ir.IdentParam, T: uVar},
+				},
+			},
+		},
+	}
+	boxInt := &ir.NamedType{Name: "Box", Args: []ir.Type{ir.TInt}}
+	mainFn := &ir.FnDecl{
+		Name:   "main",
+		Return: ir.TUnit,
+		Body: &ir.Block{Stmts: []ir.Stmt{
+			&ir.LetStmt{
+				Name: "b",
+				Type: boxInt,
+				Value: &ir.StructLit{
+					TypeName: "Box",
+					Fields:   []ir.StructLitField{{Name: "value", Value: &ir.IntLit{Text: "7", T: ir.TInt}}},
+					T:        boxInt,
+				},
+			},
+			&ir.ExprStmt{X: &ir.MethodCall{
+				Receiver: &ir.Ident{Name: "b", Kind: ir.IdentLocal, T: boxInt},
+				Name:     "pick",
+				TypeArgs: []ir.Type{ir.TInt},
+				Args:     []ir.Arg{{Value: &ir.IntLit{Text: "42", T: ir.TInt}}},
+				T:        ir.TInt,
+			}},
+		}},
+	}
+
+	mono, errs := ir.Monomorphize(&ir.Module{Package: "main", Decls: []ir.Decl{box, mainFn}})
+	if len(errs) != 0 {
+		t.Fatalf("Monomorphize errors: %v", errs)
+	}
+	out := Lower(mono)
+	if errs := Validate(out); len(errs) > 0 {
+		t.Fatalf("validate: %v\n\n%s", errs, Print(out))
+	}
+
+	owner := ir.MonomorphMangleType(ir.NewMonomorphTypeRequest("main", "Box", []string{"l"})).Symbol()
+	method := ir.MonomorphMangleMethodName("pick", []string{"l"})
+	want := "call " + owner + "__" + method
+	text := Print(out)
+	if !strings.Contains(text, want) {
+		t.Fatalf("expected monomorphized method call %q, got:\n%s", want, text)
+	}
+	if strings.Contains(text, "call pick_ZIlE") {
+		t.Fatalf("method call lost owner-qualified symbol:\n%s", text)
+	}
+}
+
 // ==== Stage 2c: inner-block defer scoping ====
 
 // mkCallStmt is a tiny helper that wraps a print intrinsic in an

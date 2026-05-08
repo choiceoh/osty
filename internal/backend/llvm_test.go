@@ -2558,6 +2558,44 @@ fn main() {
 	}
 }
 
+// TestLLVMBackendBinaryRunsGenericOwnerMethodTurbofish covers the Phase D
+// handoff where IR method-local monomorphization rewrites `pick::<Int>` into
+// a concrete method name, then MIR and LIR must keep the owner-qualified
+// method symbol pointing at the same local definition instead of declaring a
+// missing cross-module call.
+func TestLLVMBackendBinaryRunsGenericOwnerMethodTurbofish(t *testing.T) {
+	parallelClangBackendTest(t)
+	requireRealLLVMEmission(t)
+
+	backend := LLVMBackend{}
+	req := newBackendRequest(t, EmitBinary, `struct Box<T> {
+    value: T,
+
+    fn pick<U>(self, fallback: U) -> U {
+        fallback
+    }
+}
+
+fn main() {
+    let b: Box<Int> = Box { value: 7 }
+    println(b.pick::<Int>(42))
+}
+`)
+
+	result, err := backend.Emit(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Emit returned error: %v", err)
+	}
+	cmd := exec.Command(result.Artifacts.Binary)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("running %q failed: %v\n%s", result.Artifacts.Binary, err, output)
+	}
+	if got, want := string(output), "42\n"; got != want {
+		t.Fatalf("binary stdout = %q, want %q", got, want)
+	}
+}
+
 // TestLLVMBackendBinaryRunsInterfaceBoxingDispatch exercises the full
 // Phase 6a-6e interface pipeline end-to-end: a struct's method set
 // structurally satisfies an interface, the concrete value is boxed
