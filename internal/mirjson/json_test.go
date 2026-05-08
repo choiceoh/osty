@@ -30,6 +30,16 @@ func TestModuleRoundTripPreservesMIREmissionShape(t *testing.T) {
 	if decoded.Layouts.Structs["pkg.Point"] == nil {
 		t.Fatalf("qualified struct layout key was not preserved: %#v", decoded.Layouts.Structs)
 	}
+	if got := decoded.Layouts.Interfaces["pkg.Sized"]; got == nil {
+		t.Fatalf("qualified interface layout key was not preserved: %#v", decoded.Layouts.Interfaces)
+	} else {
+		if len(got.Methods) != 1 || got.Methods[0].Name != "size" || got.Methods[0].Slot != 0 {
+			t.Fatalf("interface methods = %#v, want size slot 0", got.Methods)
+		}
+		if len(got.Impls) != 1 || got.Impls[0].ImplName != "Point" || got.Impls[0].VtableSym != "@osty.vtable.Point__Sized" {
+			t.Fatalf("interface impls = %#v, want Point vtable", got.Impls)
+		}
+	}
 }
 
 func roundTripFixtureMIR() *mir.Module {
@@ -50,6 +60,17 @@ func roundTripFixtureMIR() *mir.Module {
 		Name:    "Point",
 		Mangled: "Point",
 		Fields:  []mir.FieldLayout{{Index: 0, Name: "x", Type: ir.TInt}},
+	}
+	layouts.Interfaces["pkg.Sized"] = &mir.InterfaceLayout{
+		Name: "Sized",
+		Methods: []mir.InterfaceMethod{{
+			Name: "size",
+			Slot: 0,
+		}},
+		Impls: []mir.InterfaceImpl{{
+			ImplName:  "Point",
+			VtableSym: "@osty.vtable.Point__Sized",
+		}},
 	}
 	return &mir.Module{Package: "main", Functions: []*mir.Function{fn}, Layouts: layouts}
 }

@@ -196,6 +196,9 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 **E1 — Interface type lowering + boxing layout 정의** (GAP-IFACE-001, 002)
 - `lirLowerMirType_module`에 interface case 추가 → `%osty.iface = type { ptr, ptr }` 자동 emit.
 - HIR/MIR 단계에서 boxing site 식별 (let site `let s: Iface = concrete`).
+- 진행: PR #1522에서 self-host MIR layout table과 LIR Proto가 interface 타입을 `%osty.iface`
+  fat-pointer layout으로 낮추는 E1 토대를 열었다. 후속 회귀락은 Go MIR lowering/JSON bridge가
+  method slot과 `(impl, iface)` vtable symbol을 보존하는지 고정한다. Boxing site materialization은 E3에 남김.
 - 회귀: 1 IR snapshot fixture.
 
 **E2 — Vtable + per-method shim emission** (GAP-IFACE-004, 005)
