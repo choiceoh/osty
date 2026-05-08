@@ -26,7 +26,7 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 - **⭐⭐ Spec-stub**: spec 있고 declaration-only인데 **백엔드 미구현** (호출 시 LLVM emit 실패 위험)
 - **⭐ Broken / Placeholder**: 본문이 무동작이거나 spec 위반
 
-## 2. 모듈 매트릭스 (98 + 8 sub = 106 파일)
+## 2. 모듈 매트릭스 (99 + 8 sub = 107 파일)
 
 표 항목:
 - **spec**: LANG_SPEC v0.5 챕터 (없으면 `—`)
@@ -219,6 +219,7 @@ partial 모듈 3개 (crypto / option / result) 는 **호출 패턴 한정 동작
 
 | 모듈 | spec | LOC | 비고 |
 |---|---|---|---|
+| capability | §20 | 102 | v0.6 canonical `Clock` / `Rng` / `Env` / `Fs` / `Net` / `Process` / `Console` interface surface. `examples/v06_capabilities` front-end/type-check proof. Ambient/legacy-global compiler semantics remain Phase 1 follow-up. |
 | cmp | §10.1 | 27 | Equal / Ordered / Hashable interface 정의. 컴파일러 인지 |
 | error | §10.1 / §7 | 96 | Error interface + BasicError + WrappedError + wrap/chain/rootCause |
 | ref | §10.1 | 9 | `same<T>(a, b)` 단일 함수, declaration-only — 컴파일러 intrinsic 가정 |
@@ -236,7 +237,7 @@ partial 모듈 3개 (crypto / option / result) 는 **호출 패턴 한정 동작
 | ⭐⭐⭐ Surface-rich | 62 | 58% |
 | ⭐⭐ Spec-stub (백엔드 부재) | 0 | 0% |
 | ⭐ Broken / Placeholder | 0 | 0% |
-| 코어 인터페이스 (별도) | 7 | 7% |
+| 코어 인터페이스 (별도) | 8 | 7% |
 
 **이전 매트릭스 주장**: 92/98 = 94% Production
 **2026-05-01 재평가 주장**: 22/106 = 21% Production

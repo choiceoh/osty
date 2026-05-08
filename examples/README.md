@@ -17,6 +17,8 @@ the compiler evolves.
 - `url-health`: concurrent URL health checker — enum with methods,
   `Result`/`?` propagation, range patterns, `taskGroup`, `Map.update`,
   and property-based testing.
+- `v06_capabilities`: v0.6-style explicit `Clock` / `Rng` capability
+  parameters with deterministic fakes and stdlib protocol helpers.
 - `stdlib-tour`: front-end checked package that demonstrates Tier 1
   standard-library imports and Result-style error flow.
 - `gui-webview2-inspector`: Windows WebView2 GUI example using

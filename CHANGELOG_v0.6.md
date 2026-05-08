@@ -30,8 +30,8 @@ rationale.
 
 ## Shipped in the compiler
 
-> 본 섹션은 PR 머지 시점에 갱신. 현재 v0.6 cut 직후 / Phase 0
-> 진행 중 — 구체 항목 비어 있음.
+> 본 섹션은 PR 머지 시점에 갱신. v0.6 spec 전체가 landed 라는 뜻이
+> 아니라, 현재 컴파일러/stdlib이 실제로 받아들이는 조각만 적는다.
 
 ### Syntax
 
@@ -45,7 +45,7 @@ rationale.
 
 | Item | Status | Notes |
 |---|---|---|
-| `Clock` / `Rng` / `Env` / `Fs` / `Net` / `Process` / `Console` interface | **planned** | stdlib 측 7 capability 정의 |
+| `Clock` / `Rng` / `Env` / `Fs` / `Net` / `Process` / `Console` interface | **partial** | `std.capability` 에 7 canonical protocol surface 추가. `std.random.Rng.next/nextBytes` alias와 `examples/v06_capabilities` front-end proof 포함. |
 | `#[ambient(...)]` annotation | **planned** | script / main / test entry 에서만 |
 | `#[reproducible_capability]` annotation | **planned** | 사용자 정의 deterministic capability |
 | `--legacy-globals` 호환 모드 | **planned** | v0.6.x 에서만, v0.7 제거 |

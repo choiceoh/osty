@@ -1,0 +1,102 @@
+// std.capability - v0.6 explicit environment capability protocols.
+//
+// These interfaces are the compile-checked stdlib surface for LANG_SPEC
+// v0.6 §20. They let library APIs state their hidden environment
+// dependencies as ordinary parameters while the compiler-side ambient and
+// reproducibility rules continue to land in later phases.
+use std.io
+use std.net
+use std.os
+use std.process as proc
+use std.time
+pub interface Clock {
+    fn now(self) -> time.Instant
+    fn monotonic(self) -> time.Duration
+    fn sleep(self, duration: time.Duration) -> Result<(), Error>
+}
+pub interface Rng {
+    fn next(self) -> Int
+    fn nextBytes(self, n: Int) -> Bytes
+    fn int(self, min: Int, max: Int) -> Int
+    fn intInclusive(self, min: Int, max: Int) -> Int
+    fn float(self) -> Float
+    fn bool(self) -> Bool
+    fn bytes(self, n: Int) -> Bytes
+}
+pub interface Env {
+    fn args(self) -> List<String>
+    fn get(self, name: String) -> String?
+    fn require(self, name: String) -> Result<String, Error>
+    fn set(self, name: String, value: String) -> Result<(), Error>
+    fn unset(self, name: String) -> Result<(), Error>
+    fn vars(self) -> Map<String, String>
+    fn currentDir(self) -> Result<String, Error>
+    fn setCurrentDir(self, path: String) -> Result<(), Error>
+}
+pub interface Fs {
+    fn read(self, path: String) -> Result<Bytes, Error>
+    fn readToString(self, path: String) -> Result<String, Error>
+    fn write(self, path: String, contents: Bytes) -> Result<(), Error>
+    fn writeString(self, path: String, contents: String) -> Result<(), Error>
+    fn exists(self, path: String) -> Bool
+    fn walk(self, root: String) -> Result<List<String>, Error>
+    fn glob(self, pattern: String) -> Result<List<String>, Error>
+    fn create(self, path: String) -> Result<(), Error>
+    fn remove(self, path: String) -> Result<(), Error>
+    fn rename(self, from: String, to: String) -> Result<(), Error>
+    fn copy(self, from: String, to: String) -> Result<(), Error>
+    fn mkdir(self, path: String) -> Result<(), Error>
+    fn mkdirAll(self, path: String) -> Result<(), Error>
+}
+pub interface Net {
+    fn resolve(self, addr: String) -> Result<net.Addr, Error>
+    fn resolveAll(self, host: String) -> Result<List<net.Addr>, Error>
+    fn lookup(self, host: String) -> Result<List<net.IpAddr>, Error>
+    fn lookupAddr(self, ip: net.IpAddr) -> Result<List<String>, Error>
+    fn connect(self, addr: String) -> Result<net.TcpConn, Error>
+    fn connectTimeout(self, addr: String, timeoutMs: Int) -> Result<net.TcpConn, Error>
+    fn listen(self, addr: String) -> Result<net.TcpListener, Error>
+}
+pub interface Process {
+    fn pid(self) -> Int
+    fn hostname(self) -> Result<String, Error>
+    fn command(self, program: String) -> proc.ProcessCommand
+    fn commandArgs(self, program: String, args: List<String>) -> proc.ProcessCommand
+    fn shell(self, line: String) -> proc.ProcessCommand
+    fn run(self, command: proc.ProcessCommand) -> Result<proc.ProcessOutput, Error>
+    fn exec(self, command: String, args: List<String>) -> Result<os.Output, Error>
+}
+pub interface Console {
+    fn print(self, text: String)
+    fn println(self, text: String)
+    fn eprint(self, text: String)
+    fn eprintln(self, text: String)
+    fn readLine(self) -> String
+    fn writer(self) -> io.Writer
+}
+pub fn canonicalNames() -> List<String> {
+    ["Clock", "Rng", "Env", "Fs", "Net", "Process", "Console"]
+}
+pub fn isCanonical(name: String) -> Bool {
+    for candidate in canonicalNames() {
+        if candidate == name {
+            return true
+        }
+    }
+    false
+}
+pub fn defaultAmbientNames() -> List<String> {
+    ["clock", "rng", "env", "fs"]
+}
+pub fn mainAmbientNames() -> List<String> {
+    ["clock", "rng", "env", "fs", "net", "process", "console"]
+}
+pub fn testAmbientNames() -> List<String> {
+    ["clock", "rng", "env", "fs", "console"]
+}
+pub fn filesystemEffectFns() -> List<String> {
+    ["read", "readToString", "write", "writeString", "exists", "walk", "glob", "create", "remove", "rename", "copy", "mkdir", "mkdirAll"]
+}
+pub fn legacyGlobalModules() -> List<String> {
+    ["time", "random", "env", "fs", "net", "process", "io", "os"]
+}
