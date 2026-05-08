@@ -305,3 +305,69 @@ These analyses run as separate passes after type checking so that
 type errors short-circuit the more expensive flow / reproducibility
 passes. Diagnostic ordering: `E0700`-class first, then `E0900`/
 `E0780` flow / capability errors.
+
+### 2a.14 Pass ordering
+
+The complete v0.6 inference / check pipeline:
+
+| Pass | Purpose | Diagnostics emitted |
+|---|---|---|
+| 1. Lex | UTF-8 → tokens | `E0001`-`E0099` |
+| 2. Parse | Tokens → AST | `E0100`-`E0299` |
+| 3. Resolve | Names → declarations (2-pass: declare + body) | `E0500`-`E0599` |
+| 4. Type-check | Bidirectional inference | `E0300`-`E0399`, `E0700`-`E0799` |
+| 5. Capability check | `#[ambient]` / `#[reproducible]` / capability params | `E0780`-`E0789` |
+| 6. Flow check | `#[taint]` / `#[sanitizes]` / `#[requires]` propagation | `E0900`-`E0903` |
+| 7. Sealed construct check | External literal validation | `E0420`-`E0424` |
+| 8. Error contract check | Variant set against `#[error_contract]` | `E0410`-`E0414` |
+| 9. Spec link check | `#[spec]` anchor resolution | `E0790`, `W0790` |
+| 10. Stability / SemVer (publish only) | Surface diff against previous version | `E2100`-`E2102` |
+| 11. Budget check (static) | `allocs` / `io_calls` / `stack_depth` | `E0795` |
+| 12. Lint | Style + correctness suggestions | `L0001`-`L0099` |
+
+Each pass operates on the AST + symbol table from prior passes;
+later passes never modify earlier-pass output. The pipeline is
+strictly sequential — pass 6 (flow) does not run if pass 4 (type)
+fails.
+
+`osty check` runs passes 1-9, 11. `osty publish` adds pass 10.
+`osty lint` runs pass 12 (which itself depends on passes 1-4).
+
+### 2a.15 Inference and capability values
+
+Capability parameters infer like any other interface parameter
+(§2.7). The bidirectional rules:
+
+- **Synthesis from receiver type**: `clock.now()` infers `clock`
+  must satisfy `Clock` (or any interface that provides `now`).
+- **Check from declared type**: `fn f(c: Clock)` checks at call
+  sites that the argument satisfies `Clock`.
+- **Generic default unification**: a generic function `fn f<T>(c:
+  T)` cannot infer `T = Clock` from a method call alone (the
+  method is on the interface, not on T) — the caller must
+  annotate or pass a concrete `Clock`.
+
+The inference rules ensure that capability parameters do not
+require special-case handling; they reuse the structural-interface
+machinery established in §2.6.
+
+### 2a.16 Inference and flow tags
+
+Tag inference operates *after* type inference is settled. The
+rules (§21.5.3) take the typed AST as input and produce a tag
+annotation per binding. Specifically:
+
+- **Forward dataflow** — each value's tag set is determined by its
+  inputs (function parameters, struct fields, collection
+  elements).
+- **Tag union at joins** — `if cond { a } else { b }` produces a
+  tag set that is the union of the two arms (and the condition if
+  it consults a tagged value, per §4.2.2).
+- **Sanitizer effect** — a function annotated `#[sanitizes(σ, into
+  = τ)]` removes σ and adds τ at its return.
+
+The pass produces no monomorphization — flow tags do not affect
+type identity, and the same monomorphic body runs regardless of
+input tag set.
+
+---

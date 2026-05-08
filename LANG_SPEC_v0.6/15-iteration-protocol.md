@@ -205,4 +205,80 @@ satisfies the determinism constraint. Mixing a `Map.iter()` with a
 `#[reproducible]` annotation is therefore a compile error caught
 before the body is even type-checked.
 
+### 15.5 User-defined iterables and capability boundaries
+
+A user-defined `Iterable<T>` may be implemented over a
+capability-typed source. The pattern:
+
+```osty
+pub struct LineIter {
+    fs: Fs,
+    path: String,
+    cursor: Int,
+
+    pub fn next(mut self) -> String? {
+        // call fs.read at each iteration
+        match self.fs.readLineAt(self.path, self.cursor) {
+            Ok(Some(line)) -> {
+                self.cursor = self.cursor + line.len() + 1
+                Some(line)
+            },
+            _ -> None,
+        }
+    }
+}
+
+pub struct FileLines {
+    fs: Fs,
+    path: String,
+
+    pub fn iter(self) -> LineIter { LineIter { fs: self.fs, path: self.path, cursor: 0 } }
+}
+```
+
+This pattern is rare — typical Osty code reads a file once into a
+`List<String>` and iterates the eager collection. The lazy form is
+useful for very large files where streaming is required.
+
+**Caveat:** the iterator's `next` method reads the filesystem on
+each call. Cancellation cooperatively interrupts the iteration —
+each `fs.readLineAt` is a cancellation point.
+
+### 15.6 Iteration over async-shaped sources
+
+Osty does not have `async`/`await`, but channels and `taskGroup`
+provide the equivalent of "iterate over an asynchronous source":
+
+```osty
+fn streamFromMany(net: Net, urls: List<String>) -> List<Bytes> {
+    let ch = thread.chan::<Bytes>(64)
+    taskGroup(|g| {
+        for url in urls {
+            g.spawn(|| {
+                if let Ok(b) = net.fetch(url) {
+                    ch <- b
+                }
+            })
+        }
+        g.spawn(|| {
+            // close after all fetches finish — wait via group barrier
+            ch.close()
+        })
+
+        let mut out: List<Bytes> = []
+        for b in ch {              // iterate over channel
+            out.push(b)
+        }
+        out
+    })
+}
+```
+
+The pattern — fan out via `taskGroup`, collect via channel
+iteration — is the v0.6 idiom for parallel collection. It
+composes with cancellation (the consumer's loop sees `None` on
+cancel), with reproducibility (only when input ordering is
+deterministic), and with information flow (channel preserves tag
+sets per element).
+
 ---

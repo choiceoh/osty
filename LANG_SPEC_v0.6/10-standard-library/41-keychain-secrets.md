@@ -44,3 +44,45 @@ pub fn deleteApiKey(provider: String) -> Result<(), Error>
 `std.secrets` is a convenience facade over `std.keychain` for the common
 API-key/token case. It uses the default service name `osty.api` and treats the
 caller-provided `name` or `provider` as the credential account.
+
+#### 10.41.1 Keychain values and information flow
+
+A secret returned by `keychain.get(service, account)` carries
+`#[taint("keychain_input")]` — it is data from outside the
+program's trust boundary, even though the OS keychain is generally
+considered trusted. The taint marker forces explicit sanitization
+or sink-routing decisions:
+
+```osty
+fn callApi(net: Net, key: #[taint("keychain_input")] String) -> ... {
+    // The raw key flows into the HTTP Authorization header.
+    // Headers are not a registered sink, so no sanitization is required.
+    net.httpClient().request(http.newRequest(http.Get, "...")
+        .withBearerToken(key))
+}
+```
+
+If the key were to flow into a SQL `WHERE` clause (rare but
+possible — querying audit logs by key), the standard `sql_safe`
+sanitization would apply.
+
+#### 10.41.2 Keychain testing
+
+`std.capability.testing.FakeKeychain` provides an in-memory
+keychain for tests:
+
+```osty
+fn test_loadApiKey() {
+    let kc = std.capability.testing.FakeKeychain()
+    kc.setApiKey("openrouter", "test-key-123")?
+    let key = loadApiKey(kc, "openrouter")?
+    testing.assertEq(key, "test-key-123")
+}
+```
+
+The fake is process-local and fresh per test. There is no global
+state to worry about; tests do not interfere with each other.
+
+For production builds, the host backend dispatches to the OS
+credential store. Test builds default to `FakeKeychain` unless the
+test explicitly opts into the real backend (rare).

@@ -67,6 +67,44 @@ The imported package is bound to the last path segment (or the alias).
 | `Result<T, Error>` | Go function returning `(T, error)` |
 | Osty `struct` in `use go` block | Go `struct` (field-by-field) |
 
+#### 12.2.1 Type mapping caveats
+
+The bridge handles the listed type pairs but with some edge-case
+constraints:
+
+- **`String` ↔ `string`** — Osty's `String` is immutable and
+  length-prefixed; Go's is similarly immutable. Cross-boundary
+  passes copy the bytes (Go does not share the Osty heap).
+- **`Bytes` ↔ `[]byte`** — Bytes are passed as a *copy*, not a
+  slice into the Osty heap. Mutations on the Go side do not
+  propagate back unless explicitly returned.
+- **`List<T>` ↔ `[]T`** — Element type T must be one of the listed
+  primitives or a `use go` struct. `List<List<Int>>` works (nested
+  slice on Go side); `List<UserStruct>` works only if `UserStruct`
+  is declared in the same `use go` block.
+- **`Map<K, V>` ↔ `map[K]V`** — K must be a comparable Go type
+  (string, int variants). User-defined struct keys are rejected.
+- **`Result<T, Error>` ↔ `(T, error)`** — non-nil `error` becomes
+  `Err(BasicError(error.Error()))` on the Osty side (§12.4).
+
+#### 12.2.2 Generic types and FFI
+
+Generic Osty types (`List<T>` with arbitrary T, `Option<T>`,
+`Result<T, E>`) do not work directly across FFI; they require
+monomorphization at the bridge. Each FFI declaration with a generic
+parameter must be specialized:
+
+```osty
+use go "myproject" {
+    fn ProcessInts(xs: List<Int>) -> List<Int>
+    fn ProcessStrings(xs: List<String>) -> List<String>
+}
+```
+
+A generic Osty function may *wrap* a monomorphic FFI call but
+cannot itself cross the boundary as generic. This is a consequence
+of monomorphization (§2.7.3).
+
 ### 12.3 Nullability
 
 Go's nullable types are exposed as `T?` if and only if the declaration

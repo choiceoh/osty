@@ -157,4 +157,90 @@ deliberate `render(self, clock: Clock) -> String` method that the
 caller passes the capability to. The naming convention `render*`
 keeps `ToString` free of hidden dependence.
 
+### 17.4 `dbg` and v0.6 surfaces
+
+`dbg(value)` (§10.1) prints a developer-oriented form including
+source location and the unprocessed expression text. It is
+designed for ad-hoc debugging, not for production output.
+
+The v0.6 interactions:
+
+**Capability dispatch.** `dbg` writes through the ambient
+`Console` capability. Calling `dbg` outside an `#[ambient(console)]`
+context is `E0780` (no Console available). This means library
+functions cannot call `dbg` — only entry-point code and tests.
+
+**Production use rejection.** `dbg` calls in `pub fn` declarations
+are flagged by `osty lint` (`L0050`) — the assumption is that
+`dbg` is for transient debugging and should be removed before
+publishing.
+
+**Information flow.** `dbg(taintedValue)` writes the tainted value
+to the stdout/stderr console. This is *not* a sink in the §21
+sense — `dbg` is debug-time only and does not have a registered
+required tag. Authors who want production-safe value rendering use
+`log.info` (§10.10) or explicit `console.println` with sanitization.
+
+### 17.5 `ToString` and trait implementation
+
+User types implement `ToString` by defining a `toString(self) ->
+String` method:
+
+```osty
+pub struct Money {
+    amount: Int,
+    currency: String,
+
+    pub fn toString(self) -> String {
+        let dollars = self.amount / 100
+        let cents = self.amount % 100
+        "{self.currency}{dollars}.{cents.toString().padLeft(2, '0')}"
+    }
+}
+
+println(Money { amount: 1234, currency: "$" })  // $12.34
+```
+
+The user's `toString` overrides the auto-derived form. To opt out
+of the auto-derive entirely (so that the type is *not* `ToString`
+unless explicitly implemented), declare the type with
+`#[no_auto_to_string]` (rare; most types benefit from the
+auto-derived form for debugging).
+
+#### 17.5.1 Auto-derived form for sealed types
+
+Auto-derived `toString` for a `#[sealed_construct]` struct exposes
+private fields. The convention is to override:
+
+```osty
+#[sealed_construct(parse)]
+pub struct Email {
+    local: String,
+    domain: String,
+
+    pub fn toString(self) -> String { "{self.local}@{self.domain}" }
+}
+```
+
+Without the override, `dbg(email)` would print
+`Email { local: "alice", domain: "example.com" }` — useful for
+debugging but inappropriate for production rendering. The override
+makes the canonical text form the default `toString` output.
+
+#### 17.5.2 `ToString` and reproducibility
+
+`toString` is implicitly reproducible — the auto-derived form is
+deterministic (it walks fields in declaration order). User
+overrides should preserve determinism:
+
+- Don't consult `Clock` / `Rng` / `Env` / `Fs` / `Net` /
+  `Process` — capabilities are not parameters of `toString`.
+- Don't iterate `Map.iter()` or `Set.iter()` (use
+  `entriesSorted()`).
+- Don't depend on `std.ref.same(a, b)` — pointer identity may vary
+  across runs.
+
+A `#[reproducible(scope = "portable")]` function may freely call
+`x.toString()` — the result is determined by `x`'s value.
+
 ---

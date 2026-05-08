@@ -250,4 +250,54 @@ they never return `Cancelled` — a test that wants to exercise
 cancellation paths must use a fake capability (`FakeNet`) that
 honors the cancel token, not the in-memory adapter.
 
+### 16.5 Buffered helpers and v0.6 surfaces
+
+`io.copy(dst, src)` and `io.readAll(r)` are common helpers that
+operate purely on `Reader`/`Writer` interface values. Their
+interaction with v0.6 surfaces:
+
+**Information flow.** The helper's output carries the input
+stream's flow tag set. `io.readAll(netConn)` produces
+`#[taint("net_input")] Bytes` because `netConn` reads return
+tainted bytes; the helper does not declassify.
+
+**Cancellation.** `io.copy` is a *cooperative* cancellation point
+— it loops over `read` + `write` calls, each of which is a
+cancellation point. The helper itself does not check cancel
+between calls; it relies on the underlying I/O to surface the
+signal.
+
+**Budget.** `io.readAll` allocates one growing `Bytes` buffer.
+Functions with `#[budget(allocs = 1)]` may use `io.readAll` for
+a single read; functions with `#[budget(allocs = 0)]` cannot.
+
+**Reproducibility.** `io.copy` and `io.readAll` are *not*
+deterministic — the exact byte sequence depends on the underlying
+stream's behavior (timing, partial reads). They cannot be used
+inside `#[reproducible]` functions when the stream is from a
+non-deterministic capability (`Net`, `Fs`, `Process`).
+
+When the stream is an in-memory adapter (`io.bytesReader`,
+`io.buffer`), the helpers *are* deterministic — their input is a
+captured `Bytes`, and the operations are pure transformations.
+
+### 16.6 Stream lifecycle ownership
+
+A stream returned by `Fs.open(path)` or `Net.connect(addr)` has
+two lifetimes:
+
+1. **The handle** (file descriptor, socket) — released when the
+   stream is `close()`d, regardless of GC.
+2. **The Osty value** (the interface value) — collected by GC when
+   no longer reachable.
+
+The v0.6 contract requires `close()` for handle release. GC
+reclamation alone is *not* a sufficient cleanup signal — a long-
+running program that opens streams without closing them will leak
+host-side resources even though the GC-side memory is returned.
+
+The recommended pattern is `defer stream.close()` immediately
+after acquisition. Closure-based helpers (`Fs.withFile`,
+`Net.withConn`) wrap this pattern by construction.
+
 ---

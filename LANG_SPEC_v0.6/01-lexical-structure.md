@@ -227,6 +227,61 @@ Indentation handling for triple-quoted strings:
 7. `r"""..."""` disables escape and interpolation but still applies
    indentation handling.
 
+##### Interpolation and v0.6 surfaces
+
+`"{expr}"` is sugar for `expr.toString()` (§17). The interaction
+with v0.6 surfaces:
+
+**Flow tags.** An interpolated value's flow tags ride into the
+resulting `String`. A literal piece of the string is untagged; the
+unioned tag set across all interpolation points becomes the
+`String`'s tag set:
+
+```osty
+let user: #[taint("user_input")] User = ...
+let line = "user is {user.name}"
+//        ^^^^^^^^^^^^^^^^^^^^^^^
+//        line: #[taint("user_input")] String
+```
+
+**Capability calls.** An interpolation expression may be any expression,
+including `clock.now()` or `rng.next()`. The capability is consulted
+once per interpolation:
+
+```osty
+let id = "req-{rng.next()}"          // rng called once
+let log = "{clock.now()}: ready"     // clock.now() called once
+```
+
+`#[reproducible]` functions cannot have interpolation expressions
+that consult non-deterministic capabilities — the resulting string
+would not be reproducible. The checker walks each interpolation
+sub-expression like any other expression.
+
+**Raw strings disable interpolation.** `r"hello {name}"` is a raw
+literal — `{name}` appears as `{name}` in the output. There is no
+flow-tag or capability concern because no expression is evaluated.
+
+**Triple-quoted preserves interpolation.** `"""{expr}"""` is
+interpolated identically to `"..."`; `r"""..."""` is raw.
+
+##### Format specifier policy
+
+Osty does **not** support inline format specifiers — `"{x:.2f}"`
+or `"{x:>10}"` are syntax errors. The rationale: format options
+hide intent at the call site. The recommended pattern is explicit
+method calls before interpolation:
+
+```osty
+"price: {n.toFixed(2)}"
+"hex:   {n.toString(base: 16)}"
+"padded:{name.padLeft(10)}"
+```
+
+This keeps interpolation grammar trivial (no parser ambiguity
+between `:` for format and `:` for type ascription, etc.) and
+makes formatting inspectable in the AST.
+
 #### 1.6.4 Char and Byte literals
 ```osty
 'A'              // Char (Unicode scalar value)
@@ -297,6 +352,55 @@ source is a lex error.
 Assignment operators (`=`, `+=`, …) are statement-only — assignment is
 not an expression, so `let x = (y = 1)` is a compile error. `<-`
 (channel send) is likewise statement-only.
+
+#### 1.7.1 Operator categorization
+
+The operator set is intentionally small. Categorized by precedence
+(highest to lowest):
+
+| Group | Operators | Associativity |
+|---|---|---|
+| **Postfix** | `.`, `?.`, `()`, `[]`, `?` | left |
+| **Unary** | `-`, `!` | right (prefix) |
+| **Multiplicative** | `*`, `/`, `%` | left |
+| **Additive** | `+`, `-` | left |
+| **Shift** | `<<`, `>>` | left |
+| **Bitwise AND** | `&` | left |
+| **Bitwise XOR** | `^` | left |
+| **Bitwise OR** | `\|` | left |
+| **Range** | `..`, `..=` | non-associative |
+| **Comparison** | `<`, `<=`, `>`, `>=` | non-associative |
+| **Equality** | `==`, `!=` | non-associative |
+| **Logical AND** | `&&` | left, short-circuit |
+| **Logical OR** | `\|\|` | left, short-circuit |
+| **Nil-coalesce** | `??` | right |
+
+`?` (postfix propagation) is parsed at postfix precedence; `?.`
+binds at the same precedence as `.`. The full Pratt table is in
+`OSTY_GRAMMAR_v0.6.md §R-prec`.
+
+Operators not in the table are reserved for future use or
+explicitly excluded:
+- `++`, `--` — excluded (§14)
+- `=>` — excluded (use `->`)
+- `~` — reserved
+- `**` — reserved (use `Int.pow`)
+- `<>` — not a token
+- `===`, `!==` — not provided (`==` uses `Equal`)
+
+#### 1.7.2 v0.6 operator surface
+
+The v0.6 baseline does not change the operator set. Three
+interactions worth noting:
+
+- `?` propagates `Cancelled` (§7.6) identically to any other
+  `Error` — there is no special operator for cancellation.
+- `==` on capability values is not defined — capabilities do not
+  implement `Equal`. Use `std.ref.same(a, b)` for reference
+  identity.
+- `+=` on a `String` field of a sealed-construct struct is allowed
+  *only* when the field is `pub mut` (rare for sealed types).
+  Sealed struct fields are typically read-only after parse.
 
 ### 1.8 Statement Separators
 
