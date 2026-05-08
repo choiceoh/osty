@@ -200,6 +200,85 @@ cancel signal from the **enclosing** `taskGroup` propagates into the
 `collectAll` children normally — the collected list then contains
 `Err(Cancelled { cause })` for any child that was mid-flight.
 
+#### 8.4.5 Triggering Cancellation Explicitly
+
+A `taskGroup` body may call `g.cancel(cause)` to trigger cancellation
+on every descendant task without first failing a sibling. Use cases:
+
+- A "first-success" pattern where one child finds the answer and the
+  others should stop:
+
+  ```osty
+  fn findFirst(net: Net, urls: List<String>) -> Result<Bytes, Error> {
+      taskGroup(|g| {
+          let handles = urls.map(|u| g.spawn(|| net.fetch(u)))
+          for h in handles {
+              if let Ok(body) = h.join() {
+                  g.cancel(Cancelled.New("found"))   // tell siblings to stop
+                  return Ok(body)
+              }
+          }
+          Err(Error.new("all fetches failed"))
+      })
+  }
+  ```
+
+- A timeout scope — the caller cancels after a deadline elapses:
+
+  ```osty
+  fn withTimeout<T>(clock: Clock, d: Duration,
+                    body: fn(Group) -> Result<T, Error>) -> Result<T, Error> {
+      taskGroup(|g| {
+          g.spawn(|| {
+              clock.sleep(d)?
+              g.cancel(Cancelled.New("timeout"))
+              Ok(())
+          })
+          body(g)
+      })
+  }
+  ```
+
+`g.cancel(cause)` is **idempotent** — calling it twice on the same
+group raises the same signal once. The cause from the first call
+wins; subsequent calls' causes are dropped.
+
+#### 8.4.6 Cancellation does not equal failure
+
+A `taskGroup` that completes successfully *despite* an internal
+cancel (e.g. the first-success pattern above) returns `Ok(...)` to
+its caller. Cancellation is the mechanism that *stops sibling work*,
+not a failure mode in itself. The receiver of `Cancelled` must:
+
+1. Run any necessary `defer` cleanup.
+2. Return `Err(Cancelled { ... })` to its caller (do **not** swallow).
+3. Avoid blocking calls inside `defer` (uninterruptible cleanup —
+   §8.4.3).
+
+A child that catches `Cancelled` and returns `Ok(())` is a soundness
+bug: the parent then continues with stale state. The compiler does
+not enforce this; it is a discipline that the cancellation contract
+relies on.
+
+#### 8.4.7 Capability adapter responsibilities
+
+Every capability adapter that performs a blocking operation **must**
+honor the cancel signal of the surrounding task. The contract for
+adapter authors:
+
+| Operation | Cancellation behavior |
+|---|---|
+| Read/write on a stream (`Net.read`, `Fs.read`, ...) | Return `Err(Cancelled { cause })` as soon as the signal is observed — partial buffer is fine |
+| Sleep / wait (`Clock.sleep`, `clock.until(...)`) | Return immediately with `Err(Cancelled { cause })` |
+| Channel ops (`ch.recv`, `ch.send` on full buffer) | Return `None` / unblock and propagate |
+| FFI calls | Cannot generally be interrupted; document the limit and consider running them on a carrier thread |
+| In-memory adapters (`io.bytesReader`, `io.buffer`) | No-op (never block, never see the signal) |
+
+Adapters that do *not* honor cancellation are not added to the
+canonical capability surface. A bespoke capability that wraps such
+an adapter must document the limitation and is *not* automatically
+acceptable to `#[reproducible_capability]` enforcement.
+
 ### 8.5 Channels
 
 ```osty

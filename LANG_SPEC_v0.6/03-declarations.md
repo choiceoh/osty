@@ -567,6 +567,101 @@ An enum with an explicit integer representation auto-derives
 `.discriminant() -> Int` and `.fromDiscriminant(n: Int) -> Self?`.
 Payload variants may not assign discriminants (`E0721`).
 
+#### 3.5.1 `#[since]` on variants
+
+A variant may carry `#[since("X.Y")]` to record when it was added.
+The annotation is consumed by `osty publish` (§3.14.3) — adding a
+`#[since]`-marked variant to a `#[stability("stable")]` enum is a
+**major** SemVer bump because exhaustive `match` expressions on the
+old enum become non-exhaustive.
+
+```osty
+pub enum HttpEvent {
+    Get,
+    Post,
+
+    #[since("0.7")]
+    Patch,                          // 도착 예정 v0.7
+}
+```
+
+Callers that exhaustively match `HttpEvent` should reach for
+`#[match_compat("0.6", fallback = name)]` (§3.14.4) to absorb the
+new variant on upgrade. The compiler emits `W0413` (dead-per-
+contract) for arms that target a variant *added later than the
+caller's `#[match_compat]` pin*.
+
+#### 3.5.2 Variant payloads and information flow
+
+A variant payload is an ordinary value — flow tags ride through
+construction and pattern-matching identically:
+
+```osty
+pub enum FormResult {
+    Accepted(UserId),
+    Rejected(#[taint("user_input")] String),  // payload-tagged at site
+}
+
+fn handle(req: HttpRequest) -> Response {
+    let raw = req.queryParam("name") ?? ""    // String #[taint("user_input")]
+    let r = FormResult.Rejected(raw)          // payload carries the tag
+
+    match r {
+        FormResult.Rejected(msg) -> {
+            // `msg` is #[taint("user_input")] String
+            log.warn("rejected: {std.html.escape(msg)}")     // sanitize before sink
+        },
+        FormResult.Accepted(id) -> ...,
+    }
+}
+```
+
+The pattern `FormResult.Rejected(msg)` binds `msg` with the same
+flow-tag set the payload carried at construction time. The checker
+tracks tags through both construction and destructuring without a
+special rule.
+
+#### 3.5.3 Methods inside enum bodies
+
+Methods declared inside an enum body apply to *every variant* — the
+same surface as struct methods (§3.4) but receiving a sum-typed
+`self`:
+
+```osty
+pub enum Shape {
+    Circle(Float),
+    Rect(Float, Float),
+    Empty,
+
+    pub fn area(self) -> Float {
+        match self {
+            Circle(r) -> 3.14159 * r * r,
+            Rect(w, h) -> w * h,
+            Empty -> 0.0,
+        }
+    }
+}
+```
+
+Methods inside the enum body may be `pub` (exported), private, or
+have `mut self` for mutation through the receiver. Capability
+parameters work like any other parameter: `fn render(self, console:
+Console)` is a perfectly normal enum method.
+
+#### 3.5.4 `#[error_contract]`-eligible enum
+
+An enum used as the `E` parameter of `Result<T, E>` may participate
+in `#[error_contract]` (§7.5). The contract enumerates which
+variants flow out under which conditions; the type checker uses the
+contract to prune match exhaustiveness on the caller side.
+
+A `#[error_contract]`-eligible enum has no special declaration
+syntax — any concrete enum suffices. The contract is on the
+*function* that returns `Result<T, ThisEnum>`, not on the enum
+declaration itself. This separation lets the same enum back
+multiple functions with different contracts (subsetting the variant
+list per-function).
+
 ### 3.6 Interfaces
 
 ```osty
@@ -587,6 +682,158 @@ pub interface Hash {
 See §2.6 for the full structural-typing rules and §20 for the canonical
 capability set (`Clock`, `Rng`, `Env`, `Fs`, `Net`, `Process`,
 `Console`).
+
+#### 3.6.1 Default method implementations
+
+An interface method may carry a body — a *default implementation* —
+that types satisfying the interface inherit when they do not provide
+their own. This avoids duplicating shared default logic across every
+implementer:
+
+```osty
+pub interface Reader {
+    fn read(self, maxBytes: Int) -> Result<Bytes, Error>
+
+    // Default — derived from `read`.
+    fn readAll(self) -> Result<Bytes, Error> {
+        let mut acc = Bytes.empty()
+        for {
+            let chunk = self.read(4096)?
+            if chunk.isEmpty() { break }
+            acc = acc.concat(chunk)
+        }
+        Ok(acc)
+    }
+}
+```
+
+A concrete type that implements `Reader` only needs to provide
+`read`; `readAll` is inherited. Overriding the default by providing
+the method body in the concrete type is permitted and is the path
+when a more efficient implementation exists (e.g. a `Bytes`-backed
+reader can return its full payload in one shot).
+
+Default implementations may not call methods that the interface does
+not define (no escaping the structural envelope). Defaults that
+require additional state or capabilities should instead be exposed
+as ordinary helpers on the implementing type.
+
+#### 3.6.2 Interface composition (`Reader + Writer`)
+
+Interfaces compose by declaring multiple parent interface names in
+the body — an interface that lists `Reader` and `Writer` is the
+union of both contracts:
+
+```osty
+pub interface ReadWriter {
+    Reader
+    Writer
+}
+
+pub interface ReadCloser {
+    Reader
+    Closer
+}
+
+pub interface BufferedReader {
+    ByteReader
+    LineReader
+}
+```
+
+A concrete type satisfies `ReadWriter` iff it satisfies both `Reader`
+and `Writer` structurally. There is no diamond-inheritance hazard
+because Osty has no inheritance — every method in the composed
+interface is part of a single flat method set.
+
+Interface composition is *deeply structural*. Adding a method to a
+parent interface (e.g. `Reader`) makes every dependent composed
+interface (`ReadWriter`, `ReadCloser`, …) require the new method
+too. This is intentional — interfaces describe contracts, not
+hierarchy.
+
+#### 3.6.3 Interface as parameter — value vs generic
+
+Two ways to take an interface-typed parameter:
+
+```osty
+// Generic — monomorphized; one specialized body per concrete T.
+fn copyGen<R: Reader, W: Writer>(src: R, dst: W) -> Result<Int, Error> { ... }
+
+// Interface value — single body, fat-pointer dispatch through vtable.
+fn copyDyn(src: Reader, dst: Writer) -> Result<Int, Error> { ... }
+```
+
+The generic form runs faster (no vtable indirection, inlining
+opportunities) but compiles each call site separately. The interface-
+value form is what Rust calls `dyn Trait` — a fat pointer of (data,
+vtable). Picking between them:
+
+| Constraint | Choose |
+|---|---|
+| Hot path / small method set / known concrete types at most call sites | Generic |
+| Heterogeneous collection (`List<Reader>` of mixed concrete types) | Interface value |
+| Cross-package API (the function is published; binary size matters) | Interface value |
+| Capability parameters | Interface value (capabilities are interfaces; `Net` etc. are passed as fat pointers in production builds) |
+
+The mix is permitted on the same parameter list: a function may
+take a generic `T: Reader` and an interface-value `Writer` in the
+same signature.
+
+#### 3.6.4 `#[reproducible_capability]` — deterministic interface
+
+`#[reproducible_capability]` (§20.5) on an interface declaration
+asserts that *every* method on the interface is `#[reproducible]`
+at some scope. The compiler enforces this at the interface
+definition: a method body that omits `#[reproducible(...)]` is
+`E0780.1`.
+
+```osty
+#[reproducible_capability]
+pub interface Hash {
+    #[reproducible(scope = "portable")]
+    fn hash(self, data: Bytes) -> Bytes32
+
+    // ❌ E0780.1 — interface annotated #[reproducible_capability]
+    //    but this method has no #[reproducible].
+    fn salt(self) -> Bytes
+}
+```
+
+A `Hash` value can therefore be received inside a `#[reproducible]`
+function — the type checker knows every call goes to a deterministic
+method, so the function's reproducibility contract holds.
+
+Stdlib v0.6 baseline `#[reproducible_capability]` interfaces:
+
+| Interface | Methods | Scope |
+|---|---|---|
+| `Hash` | `hash(self, data)` → `Bytes32` | `portable` |
+| `Encoder<T>` | `encode(self, value)` → `Bytes` | `portable` |
+| `Decoder<T>` | `decode(self, bytes)` → `Result<T, Error>` | `portable` |
+
+Implementers must annotate every method with the same scope or
+stronger. A weaker-scope method on a `#[reproducible_capability]`
+interface is `E0786`.
+
+#### 3.6.5 Interface 진화 rules
+
+`#[stability("stable")]` interfaces follow standard SemVer rules
+(§3.14.3) plus an interface-specific clause:
+
+| Change | Stable interface | Experimental interface |
+|---|---|---|
+| Add a method *with* default body | minor bump (additive — implementers don't need changes) | patch bump |
+| Add a method *without* default body | major bump (existing implementers fail compilation) | minor bump |
+| Remove a method | major bump | minor bump |
+| Change a method signature | major bump | minor bump |
+| Change a default body | patch bump (semantic-only change) | patch bump |
+| Promote `#[reproducible_capability]` | major bump (existing impls may need new annotations) | minor bump |
+
+The "add method *with* default body" rule is the canonical *minor
+bump* path for interface evolution — it lets stdlib add helper
+methods to `Reader` / `Writer` without breaking downstream
+implementers.
 
 ### 3.7 Type Aliases
 
