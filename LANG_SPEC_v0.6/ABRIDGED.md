@@ -351,8 +351,10 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
   (stdlib 또는 audit-marked 코드만).
 - v0.6: stdlib sealed types (`Email` / `Url` / `Path` / `SqlIdent` / `Duration` /
   `Uuid`) 의 외부 struct literal 금지 — `Type.parse(...)` 사용.
-- v0.6: 전역 effect 함수 (`time.now()` / `random.next()` 등) 미사용 권장.
-  capability parameter 또는 `#[ambient]` 사용. `--legacy-globals` 는 v0.7 제거.
+- v0.6: 전역 effect 함수 (`time.now()` / `random.next()` / `env.get(k)` /
+  `fs.read(p)` / `os.exec(...)` / `net.dial(...)`) 는 baseline 거부 (`E0780`).
+  capability parameter 명시 또는 entry-point `#[ambient]` 만 허용.
+  `--legacy-globals` flag 는 v0.6.x transition 한정 — v0.7 제거.
 
 ## 18. Agent Checklist
 
