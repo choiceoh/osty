@@ -2400,7 +2400,7 @@ fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
         return
     }
     if value.typ.llvm != destType.llvm {
-        value = lirCoerceMirOperand(l, value, instr.src.typ, destType, "assign")
+        value = lirCoerceMirOperandToName(l, value, instr.src.typ, destLoc.typ, destType, "assign")
         if value.value == "" {
             return
         }
@@ -2421,7 +2421,7 @@ fn lirStoreProjectedMirValue(l: LirMirFunctionLowerer, place: MirPlace, root: Mi
     let leafType = lirLowerMirType(l, leafTypeName)
     let mut stored = value
     if stored.typ.llvm != leafType.llvm {
-        stored = lirCoerceMirOperand(l, stored, valueMirType, leafType, context)
+        stored = lirCoerceMirOperandToName(l, stored, valueMirType, leafTypeName, leafType, context)
         if stored.value == "" {
             return
         }
@@ -2642,7 +2642,10 @@ fn lirLowerMirCallArgs(l: LirMirFunctionLowerer, args: List<MirOperand>, callee:
         let paramType = lirLowerMirType(l, paramLocal.typ)
         let mut value = lirLowerMirOperand(l, arg, paramLocal.typ, paramType)
         if value.typ.llvm != paramType.llvm {
-            value = lirCoerceMirOperand(l, value, arg.typ, paramType, "direct call arg")
+            value = lirCoerceMirOperandToName(l, value, arg.typ, paramLocal.typ, paramType, "direct call arg")
+            if value.value == "" {
+                return out
+            }
         }
         out.push(lirOperand(paramType, value.value))
         i = i + 1
@@ -2665,7 +2668,10 @@ fn lirStoreMirResult(l: LirMirFunctionLowerer, dest: MirPlace, result: LirOperan
     }
     let mut stored = result
     if stored.typ.llvm != destType.llvm {
-        stored = lirCoerceMirOperand(l, stored, resultTypeName, destType, context)
+        stored = lirCoerceMirOperandToName(l, stored, resultTypeName, loc.typ, destType, context)
+        if stored.value == "" {
+            return
+        }
     }
     let slot = lirMirLocalSlot(l, loc.id)
     if slot.slot == "" {
@@ -3551,7 +3557,7 @@ fn lirLowerCoercedOperand(l: LirMirFunctionLowerer, op: MirOperand, hintName: St
     if value.typ.llvm == hint.llvm {
         return value
     }
-    lirCoerceMirOperand(l, value, op.typ, hint, label)
+    lirCoerceMirOperandToName(l, value, op.typ, hintName, hint, label)
 }
 // `lirEmitContainerCall` emits the closing scaffold every container
 // intrinsic shares: declare the runtime symbol, emit the `call`, and
@@ -6215,6 +6221,15 @@ fn lirBoolOperand(value: Bool) -> LirOperand {
     }
     lirOperand(lirIntType(1), "0")
 }
+fn lirCoerceMirOperandToName(l: LirMirFunctionLowerer, value: LirOperand, fromName: String, toName: String, to: LirType, context: String) -> LirOperand {
+    if value.typ.llvm == to.llvm {
+        return lirOperand(to, value.value)
+    }
+    if lirMirModuleHasInterfaceLayout(l.mirModule, toName) {
+        return lirBoxInterfaceValue(l, value, fromName, toName, to, context)
+    }
+    lirCoerceMirOperand(l, value, fromName, to, context)
+}
 fn lirCoerceMirOperand(l: LirMirFunctionLowerer, value: LirOperand, fromName: String, to: LirType, context: String) -> LirOperand {
     if value.typ.llvm == to.llvm {
         return lirOperand(to, value.value)
@@ -6230,6 +6245,61 @@ fn lirCastMirOperand(l: LirMirFunctionLowerer, value: LirOperand, op: String, to
     let dest = lirFresh(l)
     l.instrs.push(lirCast(dest, op, value, to))
     lirOperand(to, dest)
+}
+fn lirBoxInterfaceValue(l: LirMirFunctionLowerer, value: LirOperand, concreteName: String, ifaceName: String, ifaceType: LirType, context: String) -> LirOperand {
+    if ifaceType.llvm != lirIfaceTypeName() {
+        lirLowerError(l, LirDiagUnsupported, context + " interface target has unexpected LIR type `" + ifaceType.llvm + "`", context)
+        return lirOperandInvalid()
+    }
+    if value.value == "" || lirTypeIsZero(value.typ) || lirTypeIsVoid(value.typ) {
+        lirLowerError(l, LirDiagUnsupported, context + " cannot box empty or void value into interface `" + ifaceName + "`", context)
+        return lirOperandInvalid()
+    }
+    let vtableSym = lirFindInterfaceVTableSymbol(l.mirModule, concreteName, ifaceName)
+    if vtableSym == "" {
+        lirLowerError(l, LirDiagUnsupported, context + " has no interface vtable for `" + concreteName + "` as `" + ifaceName + "`", context)
+        return lirOperandInvalid()
+    }
+    let dataPtr = lirBoxInterfaceData(l, value, concreteName, ifaceName)
+    let withData = lirFresh(l)
+    l.instrs.push(lirInsertValue(withData, ifaceType, "zeroinitializer", lirOperand(lirPtrType(), dataPtr), [0]))
+    let withVTable = lirFresh(l)
+    l.instrs.push(lirInsertValue(withVTable, ifaceType, withData, lirOperand(lirPtrType(), vtableSym), [1]))
+    lirOperand(ifaceType, withVTable)
+}
+fn lirBoxInterfaceData(l: LirMirFunctionLowerer, value: LirOperand, concreteName: String, ifaceName: String) -> String {
+    let allocSym = "osty.gc.alloc_v1"
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(allocSym, lirPtrType(), [lirIntType(64), lirIntType(64), lirPtrType()], false))
+    let sizeReg = lirEmitSizeOf(l, value.typ)
+    let siteLabel = "mir.iface.box." + lirInterfaceConcreteName(concreteName) + "__" + ifaceName
+    let siteSym = lirStringPoolIntern(l.out.stringPool, siteLabel)
+    let box = lirFresh(l)
+    l.instrs.push(lirCall(box, lirPtrType(), "@" + allocSym, [lirOperand(lirIntType(64), "1"), lirOperand(lirIntType(64), sizeReg), lirOperand(lirPtrType(), siteSym)]))
+    l.instrs.push(lirStore(value, box, 0))
+    box
+}
+fn lirFindInterfaceVTableSymbol(mir: MirModule, concreteName: String, ifaceName: String) -> String {
+    let implName = lirInterfaceConcreteName(concreteName)
+    for layout in mir.layouts.interfaces {
+        if !(lirMirInterfaceLayoutMatches(layout, ifaceName)) {
+            continue
+        }
+        for impl in layout.impls {
+            if impl.implName == implName {
+                if impl.vtableSym != "" {
+                    return impl.vtableSym
+                }
+                return "@osty.vtable." + impl.implName + "__" + layout.name
+            }
+        }
+    }
+    ""
+}
+fn lirInterfaceConcreteName(name: String) -> String {
+    if strings.startsWith(name, "%") {
+        return strings.slice(name, 1, name.len())
+    }
+    name
 }
 fn lirLowerMirType(l: LirMirFunctionLowerer, name: String) -> LirType {
     let primitive = lirLowerPrimitiveTypeName(name)
