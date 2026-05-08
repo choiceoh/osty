@@ -588,6 +588,51 @@ the rest follows v0.5 builder rules (G9).
 | `List`, `Map`, `Set` | Reference |
 | Function types (closures) | Reference |
 
+#### 2.8.1 Capability and interface values
+
+Capability instances (`Clock`, `Net`, etc.) are *interface values*
+— a fat pointer (data + vtable). Interface values are reference-
+semantic: passing one to a function shares the underlying data;
+calling a method dispatches through the vtable.
+
+| Form | Semantics |
+|---|---|
+| `let c: Clock = systemClock` | binding holds the fat pointer |
+| `fn f(c: Clock)` parameter | parameter receives a copy of the fat pointer |
+| `c1 == c2` | not defined — capability values do not implement `Equal` |
+| `same(c1, c2)` | reference identity check via `std.ref.same` |
+
+The reference-semantics design is what lets a single capability
+instance be shared across multiple sibling tasks (§8.7.1) without
+per-task allocation.
+
+#### 2.8.2 Flow tags and value/reference semantics
+
+Flow tags are *value-level* annotations — they ride on the *bound
+value*, not the underlying data. For value-semantic types
+(primitives, `String`, `Bytes`, tuples), the tag set travels
+naturally with the value because each binding owns its own copy of
+the data semantically.
+
+For reference-semantic types (`struct`, `enum`, `List`, `Map`,
+`Set`), multiple bindings may share the same underlying data;
+their *flow tag sets may differ* per binding. The compiler tracks
+tags per binding, not per object identity. This is sound because
+flow tags describe *who has authority over this value at this
+site*, not properties of the object itself.
+
+```osty
+let raw: #[taint("user_input")] User = ...
+let copy = raw                       // copy: #[taint("user_input")] User (same tags)
+let alias: User = raw                // alias: User (no tags — different binding)
+                                     // — illegal in v0.6: a tagged-to-untagged
+                                     // assignment is E0905
+```
+
+The third form is rejected because it would silently declassify;
+the only path from tagged to untagged is an explicit
+`#[sanitizes]` call.
+
 ### 2.9 Equality and Hashing
 
 `==` and `!=` for primitive types use built-in comparison. For `struct`,

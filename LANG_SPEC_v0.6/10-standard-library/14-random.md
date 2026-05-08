@@ -44,3 +44,44 @@ Rng.bytes(self, n: Int) -> Bytes
 Rng.choice<T>(self, items: List<T>) -> T?
 Rng.shuffle<T>(self, items: mut List<T>)
 ```
+
+#### 10.14.1 `Rng` vs `CryptoRng`
+
+The v0.6 stdlib distinguishes two random capabilities:
+
+| Capability | Source | Use cases | Reproducible? |
+|---|---|---|---|
+| `Rng` | xorshift64 (seedable) | simulation, games, sampling | yes (with `random.seeded(N)`) |
+| `CryptoRng` | OS entropy (`/dev/urandom`, `BCryptGenRandom`) | tokens, keys, IVs, UUIDs | no |
+
+Mixing them is a security bug — using `Rng` for a session token
+gives an adversary who learns the seed full prediction power. The
+v0.6 type system separates them into distinct interfaces so the
+checker catches the mismatch.
+
+#### 10.14.2 Seeded Rng for derivation
+
+`random.seeded(seed)` returns an `Rng` whose sequence is
+deterministic for the given seed. This is the canonical pattern
+for *derivation* — generating a deterministic stream of random
+values from a known starting point:
+
+```osty
+fn deriveScores(seed: Int64, n: Int) -> List<Int> {
+    let rng = random.seeded(seed)
+    let mut out: List<Int> = []
+    for _ in 0..n {
+        out.push(rng.int(0, 100))
+    }
+    out
+}
+```
+
+`deriveScores(42, 10)` always returns the same list. This is
+acceptable inside `#[reproducible(scope = "portable")]` — the
+seeded `Rng`'s output is determined by its input.
+
+The seeded `Rng` is *not* received as a capability parameter —
+it's constructed locally from a deterministic seed, so the
+function takes the seed as a plain `Int64` rather than the `Rng`
+itself.

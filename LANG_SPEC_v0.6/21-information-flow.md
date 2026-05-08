@@ -377,7 +377,57 @@ proof in mechanized assistant 검토):
 > `s` 의 source-to-sink path 위 어딘가에 `#[sanitizes(σ_user_input, into =
 > sql_safe)]` 또는 `#[trusted_declassify]` 가 존재한다.
 
-### 21.6 Implicit flow 미지원 — 정책
+#### 21.5.6 Generic propagation through type parameters
+
+generic 함수가 tag 를 propagate 하는 방식은 *per monomorphization*
+이 아니라 *signature-level* 이다. type checker 는:
+
+1. 함수 signature 의 input 타입들에서 tag set 합집합 계산.
+2. output 타입에 그 tag set 부여.
+3. 본문 내부의 sanitizer 호출은 *instantiation 별* 추적.
+
+```osty
+fn map<T, U>(xs: List<T>, f: fn(T) -> U) -> List<U> { ... }
+
+let raw: List<#[taint("user_input")] String> = ...
+let upper = map(raw, |s| s.toUpperCase())
+//          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+//          upper: List<#[taint("user_input")] String>
+```
+
+추론 결과: `T = String`, `U = String` (둘 다 tagged). closure
+`|s| s.toUpperCase()` 의 input/output 모두 tagged 이므로 결과 list
+의 element type 도 tagged.
+
+#### 21.5.7 Closure 의 tag 처리
+
+closure 가 captured value 의 tag 를 보존하는 규칙은 §4.7.2 와 동일.
+flow inference 측에서:
+
+```osty
+let raw: #[taint("user_input")] String = ...
+let render = |suffix: String| "{raw} {suffix}"
+//             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+//             render: fn(String) -> #[taint("user_input")] String
+```
+
+closure 의 *type* 자체에 tag 가 부여 — caller 측에서 호출 시 결과는
+그 tag 를 받는다. 한 closure 가 여러 captured value 의 tag 를 union
+한 형태로 type 변환되므로 cross-source taint 자동으로 추적.
+
+#### 21.5.8 Struct field tag aggregation
+
+Struct 단위 tag fold (§21.5 본문) 와 field-narrow tag 의 trade-off:
+
+| 모드 | 정확성 | False positive | False negative |
+|---|---|---|---|
+| Struct fold (default) | 보수적 | 잦음 (모든 field 가 tag 유지) | 없음 |
+| `#[taint_field]` narrow | 정밀 | 적음 | 가능 — annotation 누락 시 sink 통과 |
+
+v0.6 baseline 은 **default = struct fold**. narrow 는 phase 5 의
+opt-in surface (annotation 추가 시점에 narrow 적용). 이 정책은
+"보수적 default + opt-in 정밀" — false negative (security 문제) 보다
+false positive (engineering 인) 를 선호.
 
 다음은 **explicit flow only** 정책을 채택한다 (Jif [Myers 2002] 와 동일 결정):
 

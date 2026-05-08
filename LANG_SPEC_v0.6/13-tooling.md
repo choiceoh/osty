@@ -69,6 +69,53 @@ is normalized without requiring an explicit opt-in flag. Debugging flags
 may narrow or disable that behavior, but the default user contract is
 best-effort automatic adaptation.
 
+#### 13.1.1 v0.6 CLI subcommands grouped
+
+The CLI surface is large; the v0.6 release groups subcommands into
+five conceptual buckets:
+
+| Bucket | Commands | Primary purpose |
+|---|---|---|
+| **Build** | `build`, `run`, `gen`, `pipeline` | Source → executable / artifact |
+| **Test** | `test`, `bench`, `doc-test` (alias of `test --doc`) | Verification |
+| **Quality** | `check`, `lint`, `fmt`, `airepair` | Source-level analysis |
+| **Audit** | `audit`, `validate-spec`, `context` | Machine-readable surface inspection |
+| **Release** | `publish`, `add`, `update`, `remove`, `fetch`, `info`, `search` | Package lifecycle |
+| **Service** | `lsp`, `registry serve`, `cache`, `profiles`, `targets`, `features`, `explain` | Long-running tools / introspection |
+
+The grouping is documentation-only — the CLI does not enforce a
+namespace prefix. An author may compose any sequence (e.g. `osty
+check && osty test --spec && osty publish --check`) without
+restriction.
+
+#### 13.1.2 Capability-related subcommands
+
+Three CLI surfaces consume v0.6 capability information:
+
+- **`osty audit --capabilities`** (§13.16) — enumerates each
+  `pub fn`'s capability requirements per package.
+- **`osty context <symbol>`** (§13.4) — emits per-symbol
+  capability set as part of the context JSON.
+- **`osty audit --legacy-globals`** (§10.46.6) — enumerates
+  remaining v0.5 global effect calls during migration.
+
+These three are the canonical inspection paths for "what
+capabilities does this code use?" — adopted by `osty publish`'s
+gate set and by IDE integrations.
+
+#### 13.1.3 Information-flow-related subcommands
+
+Two CLI surfaces consume v0.6 flow information:
+
+- **`osty audit --trusted-declassify`** (§21.7.3) — enumerates
+  every site that drops a flow tag explicitly.
+- **`osty audit --taint-paths`** (Phase 5 — planned) — visualizes
+  source-to-sink data paths in a workspace, useful for security
+  review.
+
+Phase 5 will add `osty audit --info-flow` as a unified flow
+report; v0.6 baseline keeps the surfaces narrow.
+
 ### 13.2 Manifest
 
 A project is described by `osty.toml` at its root. `osty.lock` records
