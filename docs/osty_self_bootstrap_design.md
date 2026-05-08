@@ -177,19 +177,24 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 | P13 | String + (concat) → osty_rt_strings_Concat 호출 + 재귀 함수 호출 검증 | string_concat_*, recursive_factorial real-MIR — **구현 완료** |
 | P14 | aggregate constructor (struct + tuple) — `Point { x, y }` / `(a, b)` → insertvalue 체인 + 합성 tuple 타입 풀 | struct_constructor_* / tuple_int_int_return real-MIR — **구현 완료** |
 | P15 | list literal + indexed read `xs[N]` → list_get_i64 runtime ABI | list_literal_index_first / _second real-MIR — **구현 완료** |
-| **P16+** | **stage0 확장 동결 — emergency-only fallback 으로 유지.** production 경로는 `docs/osty_self_artifact_design.md` 의 artifact cache 시스템으로 전환. P0~P15 의 인프라 (IsOstySelfMissing / 디스패처 wiring / real-MIR probe) 는 그대로 가치 보존. | — |
-| P3 | `OSTY_STAGE0_FALLBACK=1` 로 toolchain 전체 빌드 성공 | verify-self-rebuild stage1-only |
-| P4 | stage0 + osty-self 양쪽 모두에서 `verify-self-rebuild` 통과 | byte parity (stage2 vs stage3) |
-| P5 | CI matrix 추가 — `OSTY_STAGE0_FALLBACK=1` 잡과 default 잡 둘 다 | CI green |
+| P16 | String == String runtime call | (#1455) — **구현 완료** |
+| P17 | if-else with phi-merged struct return | (#1459) — **구현 완료** |
+| P18 | `\|\|` short-circuit + if-else struct return | (#1461) — **구현 완료** |
+| P19 | N-arm else-if chain with struct return + ? early-return desugar | (#1463 / #1465) — **구현 완료** |
+| P20 | `\|\|` head + N-arm else-if chain | (#1467) — **구현 완료** |
+| **P21+** | **emergency-only freeze — Q8 결정**. `docs/osty_self_b2_1_audit.md` 측정으로 stage0 단독 부트스트랩의 ROI 가 옵션 (C) registry 보다 낮음 (현재 11.3% cover, P21–P24 추가해도 ~40%). 진행은 옵션 (C) registry path 안정 후 별도 dedicated 트랙으로 평가. | — |
 
-각 Phase는 independent PR. P0은 수십 줄. P1~P3은 stage0 emitter 본체이므로 분량 큼. 
+각 Phase는 independent PR. P0은 수십 줄. P1~P20 합산 emit.go 약 4253 줄
++ tests 1703 줄 = ~6K LOC.
 
-## 5. 결정 필요 항목
+## 5. 결정 — RESOLVED
 
-1. stage0 surface가 v0.5 spec 핵심 정도인지, v0.4 baseline 정도면 충분한지 — 컴파일러 자체가 어느 spec에 의존하는지 확인 후 결정.
-2. stage0를 `internal/backend/stage0/`에 둘지, `internal/llvmabi/stage0/` 등 다른 위치에 둘지.
-3. `OSTY_STAGE0_FALLBACK=1` 기본값 (CI 잡 / dev 환경별 / fresh clone first-run-detect) 정책.
-4. retirement 시점에 stage0 삭제 PR이 필요한가, 아니면 빌드 프로세스에서 자동 unreachable이라고 볼 것인지.
+| 항목 | 결정 |
+|---|---|
+| 1. stage0 surface 의 spec 범위 | **v0.5 핵심 — 진행 동결**. P0–P20 가 v0.5 의 단순 함수/제어/타입 cover. P21+ 동결로 더 넓은 v0.5 surface 는 cover 하지 않음. v0.6 surface 는 outright 미진행 (CLAUDE.md "v0.5 baseline" 규칙). |
+| 2. stage0 위치 | `internal/backend/stage0/` — 결정. emit.go (4253 줄) + emit_test.go (1703 줄) + doc.go. |
+| 3. `OSTY_STAGE0_FALLBACK=1` 기본값 | **OFF** — emergency 발화 시만 사용자가 명시 set. CI matrix 에서도 default off; `bootstrap-smoke-test.yml` 가 fresh-clone 시나리오 (registry path) 만 검증. |
+| 4. stage0 retirement 시점 | **영구 보존** — Q8. `docs/security/bootstrap-recovery.md` §5 의 "DR2 reconstruction" 경로에 명시. retirement PR 미예정 — stage0 가 진단 가치 (`b2_1_audit.md` decline 카탈로그 source) 만으로도 6K LOC 비용 정당화. |
 
 ---
 
