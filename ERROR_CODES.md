@@ -1067,7 +1067,7 @@ CodeReexportPrivate: `pub use` attempted to re-export a private symbol. v0.5 (G3
 
 ### E0554 — `CodeUseDuplicateName`
 
-CodeUseDuplicateName: a scoped `use path::{a, a}` names the same identifier twice, or two separate imports introduce the same local binding. v0.5 (G28) §5.
+CodeUseDuplicateName: a scoped `use path::{a, a}` names the same identifier twice, two imports introduce the same local binding, or a `pub use` export collides with another public/local declaration name. v0.5/v0.6 (G28/G30) §5.
 
 **Fix**: remove the duplicate or use `as` to rename one side.
 
@@ -1351,7 +1351,7 @@ Spec: v0.6 §21.2
 
 ### W0901 — `CodeTrustedDeclassifyAudit`
 
-CodeTrustedDeclassifyAudit: a function or position uses `#[trusted_declassify(reason = "...")]` to drop a flow tag without going through a sanitiser. Always emitted (audit hint), never blocks compilation.
+CodeTrustedDeclassifyAudit: a function or position uses `#[trusted_declassify(reason = "...")]` to accept declared sanitizer effects across an opaque boundary. Always emitted (audit hint), never blocks compilation.
 
 ensure the `reason` text is informative — `osty audit --trusted-declassify` enumerates all sites.
 
@@ -1411,6 +1411,14 @@ Spec: v0.6 §7.5.5
 
 **Fix**: change the error type to a concrete enum, or use
 
+### E0414 — `CodeErrorContractPropagationMismatch`
+
+CodeErrorContractPropagationMismatch: `?` propagation from a contracted callee can produce an error variant that is not in the caller's `#[error_contract]`. Contract inclusion is exact over `(enum identity, variant name)`.
+
+Spec: v0.6 §7.5.1
+
+**Fix**: add the exact variant to the caller's contract, map the callee error to a contracted variant, or use `#[error_contract(any)]` at the boundary.
+
 ### W0413 — `CodeMatchExcludesContractVariant`
 
 CodeMatchExcludesContractVariant: a `match` arm references an `Err(V)` where `V` is on the callee's enum but not in the callee's `#[error_contract]`. The arm is dead code per the contract.
@@ -1460,6 +1468,14 @@ CodeSealedConstructorNotMethod: `#[sealed_construct(name)]` names an identifier 
 Spec: v0.6 §3.4.5
 
 **Fix**: name an existing constructor method, or define one.
+
+### E0424 — `CodeSealedConstructorNotPublic`
+
+CodeSealedConstructorNotPublic: a `pub struct` carrying `#[sealed_construct(name)]` names a constructor that is not public, leaving downstream packages with no valid construction path.
+
+Spec: v0.6 §3.4.5.1
+
+**Fix**: make the constructor `pub`, make the struct package-private, or expose a different public sealed constructor.
 
 ---
 
@@ -1571,7 +1587,7 @@ output is structured but not Osty source.
 
 Spec: v0.6 §11.5.3
 
-**Fix**: use `mode = "text"` (byte-exact) or `mode = "json"` if the
+**Fix**: use `mode = "text"` (canonical text compare) or `mode = "json"` if the
 
 ### W0444 — `CodeGoldenSnapshotStale`
 

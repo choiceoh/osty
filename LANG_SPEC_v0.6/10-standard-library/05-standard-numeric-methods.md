@@ -55,6 +55,8 @@ toFixed(n: Int) -> String            // "{n}"-digit decimal form
 isNaN() -> Bool
 isInfinite() -> Bool
 toBits() -> UInt64                   // IEEE-754 bit pattern (for hashing)
+totalCompare(other: T) -> Ordering    // IEEE-754 totalOrder; NaN sorted last
+totalKey() -> UInt64                  // sortable key matching totalCompare
 
 toIntTrunc() -> Result<Int, Error>   // truncates toward zero; Err on NaN/±Inf/overflow
 toIntRound() -> Result<Int, Error>   // banker's rounding
@@ -99,7 +101,10 @@ the platform's IEEE-754 implementation. The v0.6 contract guarantees:
    silently flush subnormals. A program that depends on subnormals
    produces the same answer on every supported target.
 
-The above guarantees are why `Float` is `Ordered` (with the total
-ordering convention from §2.6.5) but **not** `Hashable` — bit-
-pattern stability is not the same as hash-ability under NaN
-reflexivity (§2.9).
+Floats do **not** implement `Ordered` because `Ordered` inherits
+`Equal`, and `NaN.eq(NaN)` is false (§2.6.5). Sorting code that needs a
+stable float order uses `totalCompare` or `totalKey`, both of which
+follow IEEE-754 totalOrder: `-0.0 < +0.0`, all finite values sort
+before infinities, and NaN payloads sort after non-NaN values in a
+stable bit-pattern order. Floats are also not `Hashable`; use
+`toBits()` when bit-pattern hashing is intended.

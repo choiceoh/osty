@@ -391,7 +391,7 @@ fn testNumericNarrowingDiag() {
 
 | Mode | Comparison |
 |---|---|
-| `"text"` *(default)* | Byte-exact. |
+| `"text"` *(default)* | Canonical text bytes: UTF-8 BOM removed, CRLF/CR normalized to LF, all other bytes including trailing newline preserved. |
 | `"ast"` | Reparse both sides as Osty source, compare normalised AST. Whitespace / comments / formatter idiosyncrasies are ignored. |
 | `"json"` | Parse as JSON, compare structurally (key order ignored). |
 | `"diag"` | Osty diagnostic format — same code/message comparable across `Span` deltas. |
@@ -418,6 +418,10 @@ fn add(x: Int, y: Int) -> Int { x + y }
 ```
 
 Header lines start with `#`; the body begins after one blank line.
+For `"text"` mode, comparison canonicalizes both the snapshot body and
+the produced output by removing an optional UTF-8 BOM and normalizing
+line endings to LF. Trailing newlines, spaces, tabs, and all other
+bytes remain significant. `--update-golden` writes LF and no BOM.
 
 **Tooling.** `osty test --golden` runs the comparison; `osty test
 --update-golden[=<path>]` rewrites snapshots. See §13.8.
@@ -429,7 +433,7 @@ strictest mode that the output actually demands:
 
 | Output shape | Recommended mode | Why |
 |---|---|---|
-| Free-form text (logs, error messages without span info) | `"text"` | Byte-exact catches every regression |
+| Free-form text (logs, error messages without span info) | `"text"` | Canonical text compare catches meaningful byte-level regressions |
 | Generated Osty source (formatter, codegen output) | `"ast"` | Whitespace / comment-only diffs ignored, semantic regressions caught |
 | Structured data exports (`osty context`, `osty doc --format=json`) | `"json"` | Key ordering / pretty-print noise ignored |
 | Diagnostic output (`osty check` with positions) | `"diag"` | Span column shifts ignored, code + message + suggested-fix preserved |
@@ -532,7 +536,23 @@ Tests run in parallel by default. Use `--serial` to force sequential
 execution. Tests depending on shared mutable state should use
 `std.sync` primitives or opt into serial execution.
 
-#### 11.6.1 Capability fakes and parallelism
+#### 11.6.1 Default ambient isolation
+
+Each test receives an isolated default ambient capability set:
+`FakeClock`, `FakeRng`, `FakeEnv`, `FakeFs`, `FakeNet`,
+`FakeProcess`, and `FakeConsole` instances are fresh per test case and
+seeded from the printed test seed plus the test name. The fake
+filesystem is rooted at a test-local temporary directory, fake
+environment mutation does not affect the process environment, and fake
+console output is captured per test. The runner does not mutate the
+host process cwd during a test.
+
+Tests that explicitly construct host adapters (`fs.host`,
+`env.host`, `random.host`, etc.) opt out of this isolation. Such tests
+must be written as ordinary concurrent programs: protect shared state
+with `std.sync`, use unique paths, or run with `--serial`.
+
+#### 11.6.2 Capability fakes and parallelism
 
 Capability fakes (§11.18) are designed to be safe under parallel
 test execution. Each fake is **per-test instance** — constructing
@@ -549,7 +569,7 @@ For deterministic execution under `--serial`, the seed (§11.7) is
 still printed and reproducible — the parallel-vs-serial choice
 affects test *concurrency*, not test *outcome*.
 
-#### 11.6.2 Capability adapter thread safety
+#### 11.6.3 Capability adapter thread safety
 
 Production capability adapters (`time.systemClock`, `random.host`,
 etc.) are required to be thread-safe across the worker pool
@@ -865,6 +885,9 @@ pub fn parseEmail(s: String) -> Email? { ... }
 `osty test --example` 호출 시 두 example 모두 평가 — `parseEmail("alice@example.com")
 == Some(Email{...})` / `parseEmail("invalid") == None` 로 비교.
 실패 시 `example[parseEmail#1] FAIL: expected Some(...), got None`.
+Expected output strings are parsed as Osty expressions and compared with
+`==` using the return value's `Equal` implementation; the runner does
+not compare `ToString` output.
 
 #### 11.11.1 Capability + example
 
@@ -915,7 +938,7 @@ fn testNumericNarrowingDiag() {
 
 | Mode | 비교 |
 |---|---|
-| `"text"` (default) | byte-exact |
+| `"text"` (default) | UTF-8 BOM 제거 + CRLF/CR→LF 정규화 후 byte 비교; trailing newline 은 보존 |
 | `"ast"` | reparse 후 AST 비교 (whitespace / 주석 무시) |
 | `"json"` | structural JSON 비교 (key 순서 무시) |
 | `"diag"` | Osty diagnostic format — Span 차이 무시, code/message 비교 |
@@ -1004,6 +1027,11 @@ fn sampleDb() -> Db {
 fixture 함수는 *서로 호출 가능* — 위 `sampleDb` 가 `sampleUser` 를
 호출. fixture 간 cycle 은 `E0433` (cycle detected — fixture 로직
 재구성 필요).
+
+Fixture lookup is package-qualified. Unqualified `uses = "name"`
+searches the current package; downstream packages refer to public
+fixtures by qualified path or import alias. Duplicate fixture names in
+one package are `E0554`.
 
 #### 11.13.3 Fixture 와 capability fake 결합
 

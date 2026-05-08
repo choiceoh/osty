@@ -859,8 +859,10 @@ Rules:
 6. Errors raised inside a deferred expression do not propagate.
 7. `defer` runs on normal block exit, on `?`-propagated early return,
    and on task **cancellation** (§8.4.3). It does **not** run when
-   the process terminates via `abort`, `unreachable`, `todo`, or
-   `os.exit`; those are immediate.
+   the process terminates via `abort`, `panic` crossing the FFI bridge,
+   `unreachable`, `todo`, or `os.exit`; those are immediate. If a
+   deferred block itself terminates the process this way, remaining
+   deferred blocks in the same LIFO stack are skipped.
 8. Blocking calls inside a `defer` body are **not** cancellation
    points — cleanup is uninterruptible. Authors who need bounded
    cleanup must enforce their own timeout inside the `defer` body.
@@ -903,7 +905,7 @@ The left-hand side must be one of:
 
 The right-hand side is evaluated, then written to the place named by the
 left-hand side. For `=`, the RHS type must match the LHS type except for
-the lossless numeric widening allowed by §2.2.
+the numeric widening / float-promotion conversions allowed by §2.2.
 
 #### 4.13.1 Compound Assignment
 
@@ -937,8 +939,8 @@ Semantics:
 4. The LHS must be a valid mutable place (same rules as §4.13).
 5. `+=` on `String` is equivalent to concatenation: `s += other` is
    `s = s + other`. Numeric compound assignment follows the same
-   lossless-widening and narrowing-rejection rules as the corresponding
-   binary operator and final assignment (§2.2).
+   widening / float-promotion and narrowing-rejection rules as the
+   corresponding binary operator and final assignment (§2.2).
 6. Compound assignment on an immutable binding or field produces the
    same diagnostic as plain assignment (`E0601` et al.); there is no
    separate code.

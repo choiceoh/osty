@@ -70,6 +70,19 @@ pub interface Process {
 이 7 개 interface (`Clock`, `Rng`, `Env`, `Fs`, `Net`, `Process`, `Console`) 가 v0.6
 의 **canonical capability set**. 사용자 정의 capability 는 §20.5 참조.
 
+**Satisfaction vs policy classification.** Capability *satisfaction*
+uses the normal structural interface rule from §3.6: any value whose
+method set satisfies `Clock` may be passed to a parameter declared
+`clock: Clock`. Capability *classification* is nominal: the
+determinism/effect table in §20.6 is keyed by the resolved interface
+identity named in the parameter type (or by an interface explicitly
+annotated `#[reproducible_capability]`). Therefore a user
+`struct FakeClock { fn now(...) }` can satisfy a `Clock` parameter, but
+a function that declares `clock: Clock` still receives the canonical
+non-deterministic `Clock` effect for `#[reproducible]` checking. To
+create a deterministic user capability, declare a distinct interface
+and mark it `#[reproducible_capability]`.
+
 **Implementation note.** 현재 stdlib 는 이 canonical protocol set 을
 `std.capability` 에 compile-checked interface surface 로 노출한다. 기존
 `std.time`, `std.random`, `std.env`, `std.fs`, `std.net`, `std.process`, `std.io`
@@ -195,11 +208,12 @@ fn main() {
 
 `#[ambient(name1, name2, ...)]` 의 desugar 규칙:
 
-1. **Bind**: 본문 첫 statement 위치에 `let name<i> = std.<capability>.default()` 가
-   삽입된다. `name<i>` 와 capability 의 매핑은 prelude 의 *고정 표* (§20.6) 에서
-   도출 — `clock` → `std.time.systemClock`, `rng` → `std.random.default()`, `env`
-   → `std.env.host`, `fs` → `std.fs.host`, `net` → `std.net.host`, `process` →
-   `std.process.host`, `console` → `std.io.stdout`.
+1. **Bind**: 본문 첫 statement 위치에 `let name<i> = <factory>()` 가
+   삽입된다. `name<i>` 와 capability 의 매핑은 prelude 의 *고정 표* (§20.10) 에서
+   도출 — `clock` → `time.systemClock`, `rng` → `random.host`, `env`
+   → `env.host`, `fs` → `fs.host`, `net` → `capability.hostNet`, `process` →
+   `capability.hostProcess`, `console` → `io.console`. 각 factory 는
+   process-singleton host adapter 를 반환한다 (§20.15).
 2. **Forward**: 본문 안에서 함수 호출 시 호출 대상 함수의 capability parameter 와
    **이름이 일치**하는 ambient binding 이 있으면 자동으로 인자 자리에 채워진다.
    이름 불일치 시 (예: callee 가 `fn f(c: Clock)` 인데 ambient 는 `myClock`) 자동
@@ -341,11 +355,17 @@ ambient 는 entry-point 만 (그리고 entry-point 는 reproducible 이
 
    #[ambient(clock, rng)]
    fn main() {
-       buildId()                  // ERROR: ambient `clock` 이 callee `systemClock` 과
+       buildId()                  // ERROR E0782: ambient `clock` 이 callee `systemClock` 과
                                    //        이름 불일치 — auto-forward 안 함
        buildId(clock, rng)         // OK — 명시
    }
    ```
+
+   Omitted capability parameters that cannot be filled from an
+   in-scope ambient binding are `E0782`. This includes script files
+   whose automatic ambient set lacks the required capability, such as
+   a bare call to a function requiring `net: Net` from a script with
+   only `(clock, rng, env, fs)` ambient bindings.
 
 6. **Ambient 누수 금지**: ambient binding 은 *함수 boundary* 에서 멈춘다. 즉
    `#[ambient(clock)]` 함수가 다른 함수 `g()` 를 호출할 때, `g` 가 capability
@@ -454,9 +474,9 @@ The compiler cannot in general prove a capability is deterministic
 — it relies on the `#[reproducible_capability]` attestation
 (§3.6.4). The attestation is checked structurally: every method on
 a `#[reproducible_capability]` interface must carry
-`#[reproducible(scope = X)]`. Implementing the interface with a
-non-reproducible body is a programmer error caught at the
-interface-implementation site (`E0786`).
+`#[reproducible(scope = X)]`; missing or weaker annotations are
+`E0783`. Implementing method bodies are then checked by the ordinary
+reproducibility diagnostics for their declared scope (`E0786`–`E0788`).
 
 #### 20.6.2 Console at scope `"run"`
 
@@ -513,6 +533,7 @@ f(systemClock, defaultRng)         // OK
 | `E0783` | `#[reproducible_capability]` interface 에 비-reproducible 메서드 |
 | `E0784` | `#[reproducible]` 함수가 non-deterministic capability 수신 |
 | `E0785` | `#[pure]` 함수가 capability 수신 |
+| `E0789` | `#[ambient]` 로 사용자 정의 capability 를 바인딩하려 함 |
 
 ---
 
@@ -966,7 +987,8 @@ The capability flow is exactly what the function signatures declare.
 
 The compatibility mode `osty build --legacy-globals` (or
 `[legacy] globals = true` in `osty.toml`) reactivates the v0.5
-top-level effect functions. They desugar to capability host calls:
+top-level effect functions. They desugar to capability host calls on
+process-singleton host adapters:
 
 | v0.5 form | Desugared to |
 |---|---|
@@ -976,6 +998,14 @@ top-level effect functions. They desugar to capability host calls:
 | `fs.readToString("/etc/passwd")` | `fs.host.readToString("/etc/passwd")` |
 | `os.exec("ls", [])` | `capability.hostProcess.exec("ls", [])` |
 | `net.dial("example.com", 443)` | `capability.hostNet.dial("example.com", 443)` |
+
+Each host adapter in this table is created once per process and reused
+for every legacy call site. `random.host` is seeded once, so
+`random.next()` advances one process-wide sequence; it is not
+re-created per call. `time.systemClock`, `env.host`, `fs.host`,
+`capability.hostNet`, `capability.hostProcess`, and `io.console` are
+likewise process-singleton adapters. Deterministic tests should avoid
+legacy globals and inject `std.capability.testing.Fake*` instances.
 
 Each call site emits `W0750` (deprecation warning). The package's
 `[stability]` is forced to `experimental` whenever any legacy global
