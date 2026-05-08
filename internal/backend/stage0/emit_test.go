@@ -87,6 +87,10 @@ func boolConst(v bool) *mir.ConstOp {
 	return &mir.ConstOp{Const: &mir.BoolConst{Value: v}, T: ir.TBool}
 }
 
+func stringConst(v string) *mir.ConstOp {
+	return &mir.ConstOp{Const: &mir.StringConst{Value: v}, T: ir.TString}
+}
+
 func paramCopy(id mir.LocalID, ty mir.Type) *mir.CopyOp {
 	return &mir.CopyOp{Place: mir.Place{Local: id}, T: ty}
 }
@@ -526,14 +530,24 @@ func TestStage0EmitsComparisonAgainstConst(t *testing.T) {
 
 // ---- rejection paths ----
 
-func TestStage0RejectsThreeParams(t *testing.T) {
+func TestStage0RejectsNineParams(t *testing.T) {
 	t.Parallel()
 	mustReject(t, trivialMainFn(),
 		makeFn(fnSpec{
-			name:   "three",
-			retT:   ir.TInt,
-			params: []paramSpec{{name: "a", ty: ir.TInt}, {name: "b", ty: ir.TInt}, {name: "c", ty: ir.TInt}},
-			src:    useRV(paramCopy(1, ir.TInt)),
+			name: "nine",
+			retT: ir.TInt,
+			params: []paramSpec{
+				{name: "a", ty: ir.TInt},
+				{name: "b", ty: ir.TInt},
+				{name: "c", ty: ir.TInt},
+				{name: "d", ty: ir.TInt},
+				{name: "e", ty: ir.TInt},
+				{name: "f", ty: ir.TInt},
+				{name: "g", ty: ir.TInt},
+				{name: "h", ty: ir.TInt},
+				{name: "i", ty: ir.TInt},
+			},
+			src: useRV(paramCopy(1, ir.TInt)),
 		}),
 	)
 }
@@ -1107,9 +1121,575 @@ func TestStage0EmitsZeroArgCall(t *testing.T) {
 	}
 }
 
+func TestStage0P21DeclaresUnknownDirectCall(t *testing.T) {
+	t.Parallel()
+	caller := makeMultiInstrFn(
+		"wrapper",
+		ir.TString,
+		nil,
+		nil,
+		[]mir.Instr{
+			callInstr(0, "external_string_leaf", fnTy(ir.TString)),
+		},
+	)
+	got := emit(t, trivialMainFn(), caller)
+	for _, want := range []string{
+		"declare ptr @external_string_leaf()",
+		"define ptr @wrapper()",
+		"%0 = call ptr @external_string_leaf()",
+		"ret ptr %0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P21DeclaresUnknownDirectCallWithArgs(t *testing.T) {
+	t.Parallel()
+	caller := makeMultiInstrFn(
+		"wrap_key",
+		ir.TString,
+		[]paramSpec{{name: "owner", ty: ir.TString}, {name: "name", ty: ir.TString}},
+		nil,
+		[]mir.Instr{
+			callInstr(0, "external_key", fnTy(ir.TString, ir.TString, ir.TString), paramCopy(1, ir.TString), paramCopy(2, ir.TString)),
+		},
+	)
+	got := emit(t, trivialMainFn(), caller)
+	for _, want := range []string{
+		"declare ptr @external_key(ptr, ptr)",
+		"define ptr @wrap_key(ptr %owner, ptr %name)",
+		"%0 = call ptr @external_key(ptr %owner, ptr %name)",
+		"ret ptr %0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P21OpaqueNamedArgWithErrTypedCallee(t *testing.T) {
+	t.Parallel()
+	snapshot := &ir.NamedType{Name: "Snapshot"}
+	caller := makeMultiInstrFn(
+		"WriteSnapshot",
+		ir.TString,
+		[]paramSpec{{name: "path", ty: ir.TString}, {name: "snap", ty: snapshot}},
+		nil,
+		[]mir.Instr{
+			&mir.CallInstr{
+				Dest:   &mir.Place{Local: 0},
+				Callee: &mir.FnRef{Symbol: "runtime.cihost.WriteSnapshotHost", Type: ir.ErrTypeVal},
+				Args:   []mir.Operand{paramCopy(1, ir.TString), paramCopy(2, snapshot)},
+			},
+		},
+	)
+	got := emit(t, trivialMainFn(), caller)
+	for _, want := range []string{
+		"declare ptr @runtime.cihost.WriteSnapshotHost(ptr, ptr)",
+		"define ptr @WriteSnapshot(ptr %path, ptr %snap)",
+		"%0 = call ptr @runtime.cihost.WriteSnapshotHost(ptr %path, ptr %snap)",
+		"ret ptr %0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P23OpaqueNamedIntermediateCallChain(t *testing.T) {
+	t.Parallel()
+	formatter := &ir.NamedType{Name: "OstyAstFormatter"}
+	node := &ir.NamedType{Name: "AstNode"}
+	fn := makeMultiInstrFn(
+		"ostyAstBlock",
+		ir.TString,
+		[]paramSpec{{name: "f", ty: formatter}, {name: "idx", ty: ir.TInt}},
+		[]paramSpec{{name: "node", ty: node}},
+		[]mir.Instr{
+			&mir.CallInstr{
+				Dest:   &mir.Place{Local: 3},
+				Callee: &mir.FnRef{Symbol: "ostyAstNode", Type: ir.ErrTypeVal},
+				Args:   []mir.Operand{paramCopy(1, formatter), paramCopy(2, ir.TInt)},
+			},
+			&mir.CallInstr{
+				Dest:   &mir.Place{Local: 0},
+				Callee: &mir.FnRef{Symbol: "ostyAstBlockFromNode", Type: ir.ErrTypeVal},
+				Args:   []mir.Operand{paramCopy(1, formatter), paramCopy(3, node)},
+			},
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"declare ptr @ostyAstNode(ptr, i64)",
+		"declare ptr @ostyAstBlockFromNode(ptr, ptr)",
+		"define ptr @ostyAstBlock(ptr %f, i64 %idx)",
+		"%0 = call ptr @ostyAstNode(ptr %f, i64 %idx)",
+		"%1 = call ptr @ostyAstBlockFromNode(ptr %f, ptr %0)",
+		"ret ptr %1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P22StringConcatIntrinsicChain(t *testing.T) {
+	t.Parallel()
+	fn := makeMultiInstrFn(
+		"checkFnKey",
+		ir.TString,
+		[]paramSpec{{name: "name", ty: ir.TString}, {name: "owner", ty: ir.TString}},
+		nil,
+		[]mir.Instr{
+			&mir.IntrinsicInstr{
+				Dest: &mir.Place{Local: 0},
+				Kind: mir.IntrinsicStringConcat,
+				Args: []mir.Operand{
+					paramCopy(2, ir.TString),
+					stringConst("\u001f"),
+					paramCopy(1, ir.TString),
+				},
+			},
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_Concat(ptr, ptr)",
+		"%0 = call ptr @osty_rt_strings_Concat(ptr %owner, ptr @.str.0)",
+		"%1 = call ptr @osty_rt_strings_Concat(ptr %0, ptr %name)",
+		"ret ptr %1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P22StringSplitJoinIntrinsicFlow(t *testing.T) {
+	t.Parallel()
+	listString := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	fn := makeMultiInstrFn(
+		"stripUnderscores",
+		ir.TString,
+		[]paramSpec{{name: "text", ty: ir.TString}},
+		[]paramSpec{{name: "parts", ty: listString}},
+		[]mir.Instr{
+			&mir.IntrinsicInstr{
+				Dest: &mir.Place{Local: 2},
+				Kind: mir.IntrinsicStringSplit,
+				Args: []mir.Operand{paramCopy(1, ir.TString), stringConst("_")},
+			},
+			&mir.IntrinsicInstr{
+				Dest: &mir.Place{Local: 0},
+				Kind: mir.IntrinsicStringJoin,
+				Args: []mir.Operand{paramCopy(2, listString), stringConst("")},
+			},
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_Split(ptr, ptr)",
+		"declare ptr @osty_rt_strings_Join(ptr, ptr)",
+		"%0 = call ptr @osty_rt_strings_Split(ptr %text, ptr @.str.0)",
+		"%1 = call ptr @osty_rt_strings_Join(ptr %0, ptr @.str.1)",
+		"ret ptr %1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P22StringListLiteralJoinFlow(t *testing.T) {
+	t.Parallel()
+	listString := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	fn := makeMultiInstrFn(
+		"joinLiteral",
+		ir.TString,
+		nil,
+		[]paramSpec{{name: "parts", ty: listString}},
+		[]mir.Instr{
+			assign(1, &mir.AggregateRV{
+				Kind: mir.AggList,
+				T:    listString,
+				Fields: []mir.Operand{
+					stringConst("a"),
+					stringConst("b"),
+				},
+			}),
+			&mir.IntrinsicInstr{
+				Dest: &mir.Place{Local: 0},
+				Kind: mir.IntrinsicStringJoin,
+				Args: []mir.Operand{paramCopy(1, listString), stringConst(",")},
+			},
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"declare ptr @osty_rt_list_new()",
+		"declare void @osty_rt_list_push_string(ptr, ptr)",
+		"%0 = call ptr @osty_rt_list_new()",
+		"call void @osty_rt_list_push_string(ptr %0, ptr @.str.0)",
+		"call void @osty_rt_list_push_string(ptr %0, ptr @.str.1)",
+		"%1 = call ptr @osty_rt_strings_Join(ptr %0, ptr @.str.2)",
+		"ret ptr %1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P23PayloadlessEnumFeedsCall(t *testing.T) {
+	t.Parallel()
+	kind := &ir.NamedType{Name: "FixtureKind"}
+	fn := makeMultiInstrFn(
+		"fixtureName",
+		ir.TString,
+		nil,
+		[]paramSpec{{name: "kind", ty: kind}},
+		[]mir.Instr{
+			assign(1, &mir.AggregateRV{
+				Kind:       mir.AggEnumVariant,
+				T:          kind,
+				VariantIdx: 1,
+				VariantTag: "FixtureSource",
+			}),
+			&mir.CallInstr{
+				Dest:   &mir.Place{Local: 0},
+				Callee: &mir.FnRef{Symbol: "externalFixtureName", Type: ir.ErrTypeVal},
+				Args:   []mir.Operand{paramCopy(1, kind)},
+			},
+		},
+	)
+	module := moduleWith(trivialMainFn(), fn)
+	module.Layouts.Enums["FixtureKind"] = &mir.EnumLayout{
+		Name:         "FixtureKind",
+		Discriminant: ir.TInt,
+		Variants: []mir.VariantLayout{
+			{Index: 0, Name: "FixtureManual"},
+			{Index: 1, Name: "FixtureSource"},
+		},
+	}
+	gotBytes, err := EmitMIR(module, llvmabi.Options{PackageName: "main"})
+	if err != nil {
+		t.Fatalf("EmitMIR: %v", err)
+	}
+	got := string(gotBytes)
+	for _, want := range []string{
+		"declare ptr @externalFixtureName(i64)",
+		"%0 = call ptr @externalFixtureName(i64 1)",
+		"ret ptr %0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P24CallAndIntrinsicMix(t *testing.T) {
+	t.Parallel()
+	fn := makeMultiInstrFn(
+		"decorate",
+		ir.TString,
+		[]paramSpec{{name: "name", ty: ir.TString}},
+		[]paramSpec{{name: "suffix", ty: ir.TString}},
+		[]mir.Instr{
+			callInstr(2, "external_suffix", fnTy(ir.TString)),
+			&mir.IntrinsicInstr{
+				Dest: &mir.Place{Local: 0},
+				Kind: mir.IntrinsicStringConcat,
+				Args: []mir.Operand{paramCopy(1, ir.TString), paramCopy(2, ir.TString)},
+			},
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"declare ptr @external_suffix()",
+		"%0 = call ptr @external_suffix()",
+		"%1 = call ptr @osty_rt_strings_Concat(ptr %name, ptr %0)",
+		"ret ptr %1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P25AggregateReturnAfterCalls(t *testing.T) {
+	t.Parallel()
+	child := &ir.NamedType{Name: "Child"}
+	fixture := &ir.NamedType{Name: "Fixture"}
+	fn := makeMultiInstrFn(
+		"fixture",
+		fixture,
+		nil,
+		[]paramSpec{{name: "child", ty: child}, {name: "label", ty: ir.TString}},
+		[]mir.Instr{
+			&mir.CallInstr{
+				Dest:   &mir.Place{Local: 1},
+				Callee: &mir.FnRef{Symbol: "externalChild", Type: ir.ErrTypeVal},
+			},
+			callInstr(2, "externalLabel", fnTy(ir.TString)),
+			assign(0, &mir.AggregateRV{
+				Kind: mir.AggStruct,
+				T:    fixture,
+				Fields: []mir.Operand{
+					paramCopy(1, child),
+					paramCopy(2, ir.TString),
+				},
+			}),
+		},
+	)
+	module := moduleWith(trivialMainFn(), fn)
+	module.Layouts.Structs["Fixture"] = &mir.StructLayout{
+		Name: "Fixture",
+		Fields: []mir.FieldLayout{
+			{Index: 0, Name: "child", Type: child},
+			{Index: 1, Name: "label", Type: ir.TString},
+		},
+	}
+	gotBytes, err := EmitMIR(module, llvmabi.Options{PackageName: "main"})
+	if err != nil {
+		t.Fatalf("EmitMIR: %v", err)
+	}
+	got := string(gotBytes)
+	for _, want := range []string{
+		"%Fixture = type { ptr, ptr }",
+		"declare ptr @externalChild()",
+		"declare ptr @externalLabel()",
+		"%0 = call ptr @externalChild()",
+		"%1 = call ptr @externalLabel()",
+		"%2 = insertvalue %Fixture poison, ptr %0, 0",
+		"%3 = insertvalue %Fixture %2, ptr %1, 1",
+		"ret %Fixture %3",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P25StructFieldListLen(t *testing.T) {
+	t.Parallel()
+	result := &ir.NamedType{Name: "FrontCheckResult"}
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := makeMultiInstrFn(
+		"frontCheckResultTypedNodeCount",
+		ir.TInt,
+		[]paramSpec{{name: "result", ty: result}},
+		nil,
+		[]mir.Instr{
+			&mir.IntrinsicInstr{
+				Dest: &mir.Place{Local: 0},
+				Kind: mir.IntrinsicListLen,
+				Args: []mir.Operand{
+					&mir.CopyOp{
+						Place: mir.Place{
+							Local: 1,
+							Projections: []mir.Projection{
+								&mir.FieldProj{Index: 0, Name: "typedNodes", Type: listInt},
+							},
+						},
+						T: listInt,
+					},
+				},
+			},
+		},
+	)
+	module := moduleWith(trivialMainFn(), fn)
+	module.Layouts.Structs["FrontCheckResult"] = &mir.StructLayout{
+		Name: "FrontCheckResult",
+		Fields: []mir.FieldLayout{
+			{Index: 0, Name: "typedNodes", Type: listInt},
+		},
+	}
+	gotBytes, err := EmitMIR(module, llvmabi.Options{PackageName: "main"})
+	if err != nil {
+		t.Fatalf("EmitMIR: %v", err)
+	}
+	got := string(gotBytes)
+	for _, want := range []string{
+		"%FrontCheckResult = type { ptr }",
+		"declare i64 @osty_rt_list_len(ptr)",
+		"define i64 @frontCheckResultTypedNodeCount(%FrontCheckResult %result)",
+		"%0 = extractvalue %FrontCheckResult %result, 0",
+		"%1 = call i64 @osty_rt_list_len(ptr %0)",
+		"ret i64 %1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P26VoidListPush(t *testing.T) {
+	t.Parallel()
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := makeMultiInstrFn(
+		"pushCode",
+		ir.TUnit,
+		[]paramSpec{{name: "codes", ty: listInt}, {name: "code", ty: ir.TInt}},
+		nil,
+		[]mir.Instr{
+			&mir.IntrinsicInstr{
+				Kind: mir.IntrinsicListPush,
+				Args: []mir.Operand{paramCopy(1, listInt), paramCopy(2, ir.TInt)},
+			},
+			assign(0, useRV(&mir.ConstOp{Const: &mir.UnitConst{}, T: ir.TUnit})),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"declare void @osty_rt_list_push_i64(ptr, i64)",
+		"define void @pushCode(ptr %codes, i64 %code)",
+		"call void @osty_rt_list_push_i64(ptr %codes, i64 %code)",
+		"ret void",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P26VoidListPushToStructField(t *testing.T) {
+	t.Parallel()
+	env := &ir.NamedType{Name: "CheckEnv"}
+	ext := &ir.NamedType{Name: "CheckInterfaceExt"}
+	listExt := &ir.NamedType{Name: "List", Args: []ir.Type{ext}, Builtin: true}
+	fn := makeMultiInstrFn(
+		"checkRegisterInterfaceExtends",
+		ir.TUnit,
+		[]paramSpec{{name: "env", ty: env}, {name: "ext", ty: ext}},
+		nil,
+		[]mir.Instr{
+			&mir.IntrinsicInstr{
+				Kind: mir.IntrinsicListPush,
+				Args: []mir.Operand{
+					&mir.CopyOp{
+						Place: mir.Place{
+							Local: 1,
+							Projections: []mir.Projection{
+								&mir.FieldProj{Index: 0, Name: "extends", Type: listExt},
+							},
+						},
+						T: listExt,
+					},
+					paramCopy(2, ext),
+				},
+			},
+			assign(0, useRV(&mir.ConstOp{Const: &mir.UnitConst{}, T: ir.TUnit})),
+		},
+	)
+	module := moduleWith(trivialMainFn(), fn)
+	module.Layouts.Structs["CheckEnv"] = &mir.StructLayout{
+		Name: "CheckEnv",
+		Fields: []mir.FieldLayout{
+			{Index: 0, Name: "extends", Type: listExt},
+		},
+	}
+	gotBytes, err := EmitMIR(module, llvmabi.Options{PackageName: "main"})
+	if err != nil {
+		t.Fatalf("EmitMIR: %v", err)
+	}
+	got := string(gotBytes)
+	for _, want := range []string{
+		"%CheckEnv = type { ptr }",
+		"define void @checkRegisterInterfaceExtends(ptr %env, ptr %ext)",
+		"getelementptr inbounds %CheckEnv, ptr %env, i32 0, i32 0",
+		"load ptr, ptr %stage0.list.field.slot.0",
+		"call void @osty_rt_list_push_ptr(ptr %stage0.list.field.1, ptr %ext)",
+		"ret void",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P26VoidUnknownCallAfterListLiteral(t *testing.T) {
+	t.Parallel()
+	listString := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	fn := makeMultiInstrFn(
+		"emitParts",
+		ir.TUnit,
+		nil,
+		[]paramSpec{{name: "parts", ty: listString}},
+		[]mir.Instr{
+			assign(1, &mir.AggregateRV{
+				Kind: mir.AggList,
+				T:    listString,
+				Fields: []mir.Operand{
+					stringConst("a"),
+					stringConst("b"),
+				},
+			}),
+			&mir.CallInstr{
+				Callee: &mir.FnRef{Symbol: "externalEmit", Type: ir.ErrTypeVal},
+				Args:   []mir.Operand{paramCopy(1, listString)},
+			},
+			assign(0, useRV(&mir.ConstOp{Const: &mir.UnitConst{}, T: ir.TUnit})),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"declare void @externalEmit(ptr)",
+		"define void @emitParts()",
+		"%0 = call ptr @osty_rt_list_new()",
+		"call void @osty_rt_list_push_string(ptr %0, ptr @.str.0)",
+		"call void @osty_rt_list_push_string(ptr %0, ptr @.str.1)",
+		"call void @externalEmit(ptr %0)",
+		"ret void",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P27VoidRuntimeIntrinsics(t *testing.T) {
+	t.Parallel()
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	setInt := &ir.NamedType{Name: "Set", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := makeMultiInstrFn(
+		"touchRuntime",
+		ir.TUnit,
+		[]paramSpec{{name: "items", ty: listInt}, {name: "seen", ty: setInt}, {name: "value", ty: ir.TInt}},
+		nil,
+		[]mir.Instr{
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicListReverse, Args: []mir.Operand{paramCopy(1, listInt)}},
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicSetInsert, Args: []mir.Operand{paramCopy(2, setInt), paramCopy(3, ir.TInt)}},
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicYield},
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicSleep, Args: []mir.Operand{intConst(1)}},
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicCheckCancelled},
+			assign(0, useRV(&mir.ConstOp{Const: &mir.UnitConst{}, T: ir.TUnit})),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"declare void @osty_rt_list_reverse(ptr)",
+		"declare i1 @osty_rt_set_insert_i64(ptr, i64)",
+		"declare void @osty_rt_yield()",
+		"declare void @osty_rt_sleep(i64)",
+		"declare void @osty_rt_check_cancelled()",
+		"call void @osty_rt_list_reverse(ptr %items)",
+		"call i1 @osty_rt_set_insert_i64(ptr %seen, i64 %value)",
+		"call void @osty_rt_yield()",
+		"call void @osty_rt_sleep(i64 1)",
+		"call void @osty_rt_check_cancelled()",
+		"ret void",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // ---- P3b rejection paths ----
 
-func TestStage0RejectsCallToUnknownSymbol(t *testing.T) {
+func TestStage0RejectsCallWithoutFunctionType(t *testing.T) {
 	t.Parallel()
 	caller := makeMultiInstrFn(
 		"bad",
@@ -1117,7 +1697,11 @@ func TestStage0RejectsCallToUnknownSymbol(t *testing.T) {
 		nil,
 		[]paramSpec{{name: "r", ty: ir.TInt}},
 		[]mir.Instr{
-			callInstr(1, "external_symbol_not_in_module", fnTy(ir.TInt, ir.TInt), intConst(1)),
+			&mir.CallInstr{
+				Dest:   &mir.Place{Local: 1},
+				Callee: &mir.FnRef{Symbol: "external_symbol_not_in_module", Type: ir.TInt},
+				Args:   []mir.Operand{intConst(1)},
+			},
 			assign(0, useRV(paramCopy(1, ir.TInt))),
 		},
 	)

@@ -138,6 +138,7 @@ type moduleCtx struct {
 	// invents `.tuple.<N>` IDs on first use.
 	tuplePool   map[string]string
 	nextTupleID int
+	nextTempID  int
 }
 
 func newModuleCtx(module *mir.Module) *moduleCtx {
@@ -208,7 +209,7 @@ func (m *moduleCtx) lookupStructFields(name string) ([]scalarType, bool) {
 	}
 	tys := make([]scalarType, len(layout.Fields))
 	for i, f := range layout.Fields {
-		st := scalarFromType(f.Type)
+		st := m.scalarFromType(f.Type, true)
 		if st == scalarUnknown {
 			return nil, false
 		}
@@ -233,6 +234,15 @@ func (m *moduleCtx) emitStructDef(name string, fields []scalarType) {
 		m.extraDecls.WriteString(ft.llvm())
 	}
 	m.extraDecls.WriteString(" }\n")
+}
+
+func (m *moduleCtx) freshTempName(label string) string {
+	if m == nil {
+		return "%stage0.tmp"
+	}
+	name := fmt.Sprintf("%%stage0.%s.%d", sanitizeLLVMName(label, "tmp"), m.nextTempID)
+	m.nextTempID++
+	return name
 }
 
 // internStringConst interns `value` and returns the LLVM operand
@@ -319,6 +329,9 @@ func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error
 	if fn.Name == "main" {
 		return emitTrivialMain(out, fn, mctx)
 	}
+	if pat, ok := matchSequentialVoid(fn, mctx); ok {
+		return emitSequentialVoid(out, fn, pat)
+	}
 	if pat, ok := matchSequentialReturn(fn, mctx); ok {
 		return emitSequentialReturn(out, fn, pat)
 	}
@@ -348,6 +361,9 @@ func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error
 	}
 	if pat, ok := matchStructFieldBinaryOp(fn, mctx); ok {
 		return emitStructFieldBinaryOp(out, fn, pat)
+	}
+	if pat, ok := matchStructFieldListLen(fn, mctx); ok {
+		return emitStructFieldListLen(out, fn, pat)
 	}
 	if pat, ok := matchListLiteralLen(fn, mctx); ok {
 		return emitListLiteralLen(out, fn, pat)
@@ -391,7 +407,7 @@ func emitTrivialMain(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) er
 			}
 			return fmt.Errorf("%w: main: AssignInstr writing %T to local#%d not supported", ErrUnsupported, step.Src, step.Dest.Local)
 		case *mir.IntrinsicInstr:
-			line, ok := classifyIntrinsicLine(step, nil, mctx)
+			line, ok := classifyIntrinsicLine(fn, step, nil, mctx)
 			if !ok {
 				return fmt.Errorf("%w: main: intrinsic %v with %d args not supported", ErrUnsupported, step.Kind, len(step.Args))
 			}
@@ -469,6 +485,7 @@ const (
 	scalarInt
 	scalarBool
 	scalarString
+	scalarOpaquePtr
 )
 
 func (s scalarType) llvm() string {
@@ -481,24 +498,73 @@ func (s scalarType) llvm() string {
 		// Osty Strings reach the C ABI as null-terminated UTF-8 byte
 		// sequences. LLVM 15+ uses opaque pointers for that role.
 		return "ptr"
+	case scalarOpaquePtr:
+		return "ptr"
 	}
 	return ""
 }
 
 func scalarFromType(t mir.Type) scalarType {
+	return scalarFromTypeInternal(t, false)
+}
+
+func scalarFromParamType(t mir.Type) scalarType {
+	return scalarFromTypeInternal(t, true)
+}
+
+func scalarFromTypeInternal(t mir.Type, allowUserNamed bool) scalarType {
 	prim, ok := t.(*ir.PrimType)
-	if !ok || prim == nil {
+	if ok && prim != nil {
+		switch prim.Kind {
+		case ir.PrimString:
+			return scalarString
+		case ir.PrimInt:
+			return scalarInt
+		case ir.PrimBool:
+			return scalarBool
+		case ir.PrimBytes, ir.PrimRawPtr:
+			return scalarOpaquePtr
+		}
 		return scalarUnknown
 	}
-	switch prim.Kind {
-	case ir.PrimString:
-		return scalarString
-	case ir.PrimInt:
-		return scalarInt
-	case ir.PrimBool:
-		return scalarBool
+	if named, ok := t.(*ir.NamedType); ok && named != nil {
+		switch {
+		case named.Builtin && isOpaqueNamedType(named.Name):
+			return scalarOpaquePtr
+		case allowUserNamed:
+			return scalarOpaquePtr
+		}
 	}
 	return scalarUnknown
+}
+
+func isOpaqueNamedType(name string) bool {
+	switch name {
+	case "List", "Map", "Set", "Option", "Result", "Channel", "Handle", "TaskGroup":
+		return true
+	}
+	return false
+}
+
+func (m *moduleCtx) scalarFromType(t mir.Type, allowUserNamed bool) scalarType {
+	if named, ok := t.(*ir.NamedType); ok && named != nil && m != nil && m.module != nil && m.module.Layouts != nil {
+		if layout, ok := m.module.Layouts.Enums[named.Name]; ok && enumLayoutIsPayloadless(layout) {
+			return scalarInt
+		}
+	}
+	return scalarFromTypeInternal(t, allowUserNamed)
+}
+
+func enumLayoutIsPayloadless(layout *mir.EnumLayout) bool {
+	if layout == nil {
+		return false
+	}
+	for _, variant := range layout.Variants {
+		if len(variant.Payload) != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // localBinding records, for one MIR LocalID, how to materialise the
@@ -536,6 +602,11 @@ type pendingInstr struct {
 	// call fields
 	callSymbol string
 	callArgs   []callArg
+	// call-chain fields — currently used for N-ary String concat by
+	// lowering it as left-associated calls to osty_rt_strings_Concat.
+	chainRegs []string
+	// list-literal fields
+	listPushSymbol string
 	// intrinsic fields — pre-rendered LLVM line that the emitter
 	// writes verbatim. Used for IntrinsicPrintln (and future kinds).
 	intrinsicLine string
@@ -552,6 +623,8 @@ const (
 	instrInline instrKind = iota
 	instrBinary
 	instrCall
+	instrCallChain
+	instrListLiteral
 	instrIntrinsic
 )
 
@@ -561,7 +634,7 @@ const (
 // shape mismatches. Operand resolution uses the SSA-only `bindings`
 // path — stack-backed locals are not visible here (they live in the
 // while-loop matcher).
-func classifyIntrinsicLine(ii *mir.IntrinsicInstr, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (string, bool) {
+func classifyIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (string, bool) {
 	if ii.Dest != nil {
 		return "", false
 	}
@@ -581,6 +654,75 @@ func classifyIntrinsicLine(ii *mir.IntrinsicInstr, bindings map[mir.LocalID]loca
 			return fmt.Sprintf("  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.str, ptr %s)\n", expr), true
 		}
 		return "", false
+	case mir.IntrinsicListPush:
+		if len(ii.Args) != 2 {
+			return "", false
+		}
+		listPrelude, listExpr, ok := resolveListReceiverOperand(fn, ii.Args[0], bindings, mctx)
+		if !ok {
+			return "", false
+		}
+		elemExpr, elemTy, ok := resolveOperand(ii.Args[1], bindings, mctx)
+		if !ok {
+			return "", false
+		}
+		pushSymbol := listPushSymbolFor(elemTy)
+		if pushSymbol == "" {
+			return "", false
+		}
+		declareListRuntime(mctx)
+		return fmt.Sprintf("%s  call void @%s(ptr %s, %s %s)\n", listPrelude, pushSymbol, listExpr, elemTy.llvm(), elemExpr), true
+	case mir.IntrinsicListReverse:
+		if len(ii.Args) != 1 {
+			return "", false
+		}
+		expr, ty, ok := resolveOperand(ii.Args[0], bindings, mctx)
+		if !ok || ty != scalarOpaquePtr {
+			return "", false
+		}
+		declareVoidFunctionPrototype(mctx, "osty_rt_list_reverse", []callArg{{ty: "ptr"}})
+		return fmt.Sprintf("  call void @osty_rt_list_reverse(ptr %s)\n", expr), true
+	case mir.IntrinsicSetInsert, mir.IntrinsicSetRemove:
+		if len(ii.Args) != 2 {
+			return "", false
+		}
+		setExpr, setTy, ok := resolveOperand(ii.Args[0], bindings, mctx)
+		if !ok || setTy != scalarOpaquePtr {
+			return "", false
+		}
+		elemExpr, elemTy, ok := resolveOperand(ii.Args[1], bindings, mctx)
+		if !ok {
+			return "", false
+		}
+		symbol := setMutationSymbolFor(ii.Kind, elemTy)
+		if symbol == "" {
+			return "", false
+		}
+		args := []callArg{{ty: "ptr"}, {ty: elemTy.llvm()}}
+		declareRuntimePrototype(mctx, symbol, scalarBool, args)
+		return fmt.Sprintf("  call i1 @%s(ptr %s, %s %s)\n", symbol, setExpr, elemTy.llvm(), elemExpr), true
+	case mir.IntrinsicYield:
+		if len(ii.Args) != 0 {
+			return "", false
+		}
+		declareVoidFunctionPrototype(mctx, "osty_rt_yield", nil)
+		return "  call void @osty_rt_yield()\n", true
+	case mir.IntrinsicSleep:
+		if len(ii.Args) != 1 {
+			return "", false
+		}
+		expr, ty, ok := resolveOperand(ii.Args[0], bindings, mctx)
+		if !ok || ty != scalarInt {
+			return "", false
+		}
+		declareVoidFunctionPrototype(mctx, "osty_rt_sleep", []callArg{{ty: "i64"}})
+		return fmt.Sprintf("  call void @osty_rt_sleep(i64 %s)\n", expr), true
+	case mir.IntrinsicCheckCancelled:
+		if len(ii.Args) != 0 {
+			return "", false
+		}
+		declareVoidFunctionPrototype(mctx, "osty_rt_check_cancelled", nil)
+		return "  call void @osty_rt_check_cancelled()\n", true
 	}
 	return "", false
 }
@@ -602,7 +744,7 @@ type sequentialPattern struct {
 // stage0 cannot declare).
 func matchSequentialReturn(fn *mir.Function, mctx *moduleCtx) (sequentialPattern, bool) {
 	pat := sequentialPattern{}
-	pat.retType = scalarFromType(fn.ReturnType)
+	pat.retType = mctx.scalarFromType(fn.ReturnType, true)
 	if pat.retType == scalarUnknown {
 		return pat, false
 	}
@@ -626,7 +768,7 @@ func matchSequentialReturn(fn *mir.Function, mctx *moduleCtx) (sequentialPattern
 		if loc == nil || !loc.IsParam {
 			return pat, false
 		}
-		pt := scalarFromType(loc.Type)
+		pt := mctx.scalarFromType(loc.Type, true)
 		if pt == scalarUnknown {
 			return pat, false
 		}
@@ -666,12 +808,15 @@ func matchSequentialReturn(fn *mir.Function, mctx *moduleCtx) (sequentialPattern
 		case *mir.CallInstr:
 			pending, destID, destType, okStep = classifyCallStep(fn, step, bindings, mctx)
 		case *mir.IntrinsicInstr:
-			line, okIntr := classifyIntrinsicLine(step, bindings, mctx)
-			if !okIntr {
-				return pat, false
+			if step.Dest == nil {
+				line, okIntr := classifyIntrinsicLine(fn, step, bindings, mctx)
+				if !okIntr {
+					return pat, false
+				}
+				pat.pending = append(pat.pending, pendingInstr{kind: instrIntrinsic, intrinsicLine: line})
+				continue
 			}
-			pat.pending = append(pat.pending, pendingInstr{kind: instrIntrinsic, intrinsicLine: line})
-			continue
+			pending, destID, destType, okStep = classifyIntrinsicValueStep(fn, step, bindings, mctx)
 		case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
 			// Storage liveness markers carry no LLVM-visible semantics
 			// for stage0. Skip them and move to the next instruction.
@@ -691,11 +836,19 @@ func matchSequentialReturn(fn *mir.Function, mctx *moduleCtx) (sequentialPattern
 		pending.resultType = destType
 
 		switch pending.kind {
-		case instrBinary, instrCall:
+		case instrBinary, instrCall, instrListLiteral:
 			reg := fmt.Sprintf("%%%d", nextSSA)
 			nextSSA++
 			pending.binDestReg = reg
 			bindings[destID] = localBinding{expr: reg, ty: destType, defined: true}
+		case instrCallChain:
+			regs := make([]string, len(pending.callArgs)-1)
+			for i := range regs {
+				regs[i] = fmt.Sprintf("%%%d", nextSSA)
+				nextSSA++
+			}
+			pending.chainRegs = regs
+			bindings[destID] = localBinding{expr: regs[len(regs)-1], ty: destType, defined: true}
 		default:
 			bindings[destID] = localBinding{expr: expr, ty: destType, defined: true}
 		}
@@ -713,6 +866,145 @@ func matchSequentialReturn(fn *mir.Function, mctx *moduleCtx) (sequentialPattern
 	return pat, true
 }
 
+type voidPattern struct {
+	paramIDs   []mir.LocalID
+	paramTypes []scalarType
+	paramNames []string
+	pending    []pendingInstr
+}
+
+func matchSequentialVoid(fn *mir.Function, mctx *moduleCtx) (voidPattern, bool) {
+	pat := voidPattern{}
+	if !isUnitType(fn.ReturnType) {
+		return pat, false
+	}
+	if len(fn.Params) > 8 {
+		return pat, false
+	}
+
+	bindings := map[mir.LocalID]localBinding{}
+	pat.paramIDs = fn.Params
+	pat.paramTypes = make([]scalarType, len(fn.Params))
+	pat.paramNames = make([]string, len(fn.Params))
+	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	for i, pid := range fn.Params {
+		loc := lookupLocal(fn, pid)
+		if loc == nil || !loc.IsParam {
+			return pat, false
+		}
+		pt := mctx.scalarFromType(loc.Type, true)
+		if pt == scalarUnknown {
+			return pat, false
+		}
+		pat.paramTypes[i] = pt
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+	}
+	disambiguateParamNames(pat.paramNames)
+	for i, pid := range fn.Params {
+		bindings[pid] = localBinding{
+			expr:    "%" + pat.paramNames[i],
+			ty:      pat.paramTypes[i],
+			defined: true,
+		}
+	}
+
+	bb, ok := singleBlockReturning(fn)
+	if !ok {
+		return pat, false
+	}
+	nextSSA := 0
+	for _, instr := range bb.Instrs {
+		var (
+			pending  pendingInstr
+			expr     string
+			destID   mir.LocalID
+			destType scalarType
+			okStep   bool
+		)
+		switch step := instr.(type) {
+		case *mir.AssignInstr:
+			if isUnitAssignToReturnLocal(step, fn.ReturnLocal) {
+				continue
+			}
+			pending, expr, destID, destType, okStep = classifyAssignStep(fn, step, bindings, mctx)
+		case *mir.CallInstr:
+			if step.Dest == nil {
+				line, okCall := classifyVoidCallLine(step, bindings, mctx)
+				if !okCall {
+					return pat, false
+				}
+				pat.pending = append(pat.pending, pendingInstr{kind: instrIntrinsic, intrinsicLine: line})
+				continue
+			}
+			pending, destID, destType, okStep = classifyCallStep(fn, step, bindings, mctx)
+		case *mir.IntrinsicInstr:
+			if step.Dest == nil {
+				line, okIntr := classifyIntrinsicLine(fn, step, bindings, mctx)
+				if !okIntr {
+					return pat, false
+				}
+				pat.pending = append(pat.pending, pendingInstr{kind: instrIntrinsic, intrinsicLine: line})
+				continue
+			}
+			pending, destID, destType, okStep = classifyIntrinsicValueStep(fn, step, bindings, mctx)
+		case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
+			continue
+		default:
+			return pat, false
+		}
+		if !okStep {
+			return pat, false
+		}
+		if existing, found := bindings[destID]; found && existing.defined {
+			return pat, false
+		}
+		pending.destLocal = destID
+		pending.resultType = destType
+
+		switch pending.kind {
+		case instrBinary, instrCall, instrListLiteral:
+			reg := fmt.Sprintf("%%%d", nextSSA)
+			nextSSA++
+			pending.binDestReg = reg
+			bindings[destID] = localBinding{expr: reg, ty: destType, defined: true}
+		case instrCallChain:
+			regs := make([]string, len(pending.callArgs)-1)
+			for i := range regs {
+				regs[i] = fmt.Sprintf("%%%d", nextSSA)
+				nextSSA++
+			}
+			pending.chainRegs = regs
+			bindings[destID] = localBinding{expr: regs[len(regs)-1], ty: destType, defined: true}
+		default:
+			bindings[destID] = localBinding{expr: expr, ty: destType, defined: true}
+		}
+		pat.pending = append(pat.pending, pending)
+	}
+	return pat, true
+}
+
+func isUnitType(t mir.Type) bool {
+	return isPrimType(t, ir.PrimUnit)
+}
+
+func emitSequentialVoid(out *strings.Builder, fn *mir.Function, pat voidPattern) error {
+	fmt.Fprintf(out, "define void @%s(", fn.Name)
+	for i, name := range pat.paramNames {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
+	}
+	out.WriteString(") {\n")
+	out.WriteString("entry:\n")
+	for _, pi := range pat.pending {
+		emitPendingInstr(out, pi)
+	}
+	out.WriteString("  ret void\n")
+	out.WriteString("}\n\n")
+	return nil
+}
+
 // classifyAssignStep adapts AssignInstr to the shared pending-step
 // signature used by the matcher's per-instruction loop. Returns
 // (pending, inline-expr, destID, destType, ok).
@@ -725,7 +1017,7 @@ func classifyAssignStep(fn *mir.Function, ai *mir.AssignInstr, bindings map[mir.
 	if destLocal == nil {
 		return pendingInstr{}, "", 0, scalarUnknown, false
 	}
-	destType := scalarFromType(destLocal.Type)
+	destType := mctx.scalarFromType(destLocal.Type, true)
 	if destType == scalarUnknown {
 		return pendingInstr{}, "", 0, scalarUnknown, false
 	}
@@ -747,15 +1039,6 @@ func classifyCallStep(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.Loca
 	if ci.Dest.HasProjections() {
 		return pendingInstr{}, 0, scalarUnknown, false
 	}
-	destID := ci.Dest.Local
-	destLocal := lookupLocal(fn, destID)
-	if destLocal == nil {
-		return pendingInstr{}, 0, scalarUnknown, false
-	}
-	destType := scalarFromType(destLocal.Type)
-	if destType == scalarUnknown {
-		return pendingInstr{}, 0, scalarUnknown, false
-	}
 	ref, ok := ci.Callee.(*mir.FnRef)
 	if !ok {
 		return pendingInstr{}, 0, scalarUnknown, false
@@ -763,15 +1046,34 @@ func classifyCallStep(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.Loca
 	if ref.Symbol == "" {
 		return pendingInstr{}, 0, scalarUnknown, false
 	}
-	if !mctx.knownSymbols[ref.Symbol] {
+	allowOpaqueUserNamed := !mctx.knownSymbols[ref.Symbol]
+	destID := ci.Dest.Local
+	destLocal := lookupLocal(fn, destID)
+	if destLocal == nil {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	destType := mctx.scalarFromType(destLocal.Type, allowOpaqueUserNamed)
+	if destType == scalarUnknown {
 		return pendingInstr{}, 0, scalarUnknown, false
 	}
 	// Validate the callee's declared return type matches dest.
 	fnTy, ok := ref.Type.(*ir.FnType)
 	if !ok || fnTy == nil {
-		return pendingInstr{}, 0, scalarUnknown, false
+		if !allowOpaqueUserNamed || !isErrType(ref.Type) {
+			return pendingInstr{}, 0, scalarUnknown, false
+		}
+		args, ok := resolveCallArgsWithoutFnType(ci.Args, bindings, mctx)
+		if !ok {
+			return pendingInstr{}, 0, scalarUnknown, false
+		}
+		declareFunctionPrototype(mctx, ref.Symbol, destType, args)
+		return pendingInstr{
+			kind:       instrCall,
+			callSymbol: ref.Symbol,
+			callArgs:   args,
+		}, destID, destType, true
 	}
-	if scalarFromType(fnTy.Return) != destType {
+	if mctx.scalarFromType(fnTy.Return, allowOpaqueUserNamed) != destType {
 		return pendingInstr{}, 0, scalarUnknown, false
 	}
 	if len(fnTy.Params) != len(ci.Args) {
@@ -784,17 +1086,288 @@ func classifyCallStep(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.Loca
 			return pendingInstr{}, 0, scalarUnknown, false
 		}
 		// Param type must agree with the callee's declared param.
-		paramTy := scalarFromType(fnTy.Params[i])
+		paramTy := mctx.scalarFromType(fnTy.Params[i], allowOpaqueUserNamed)
 		if paramTy == scalarUnknown || paramTy != argTy {
 			return pendingInstr{}, 0, scalarUnknown, false
 		}
 		args = append(args, callArg{expr: argExpr, ty: argTy.llvm()})
+	}
+	if !mctx.knownSymbols[ref.Symbol] {
+		declareFunctionPrototype(mctx, ref.Symbol, destType, args)
 	}
 	return pendingInstr{
 		kind:       instrCall,
 		callSymbol: ref.Symbol,
 		callArgs:   args,
 	}, destID, destType, true
+}
+
+func classifyVoidCallLine(ci *mir.CallInstr, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (string, bool) {
+	if ci == nil || ci.Dest != nil {
+		return "", false
+	}
+	ref, ok := ci.Callee.(*mir.FnRef)
+	if !ok || ref.Symbol == "" {
+		return "", false
+	}
+	allowOpaqueUserNamed := !mctx.knownSymbols[ref.Symbol]
+	var args []callArg
+	if fnTy, ok := ref.Type.(*ir.FnType); ok && fnTy != nil {
+		if !isUnitType(fnTy.Return) || len(fnTy.Params) != len(ci.Args) {
+			return "", false
+		}
+		args = make([]callArg, 0, len(ci.Args))
+		for i, op := range ci.Args {
+			argExpr, argTy, okOp := resolveOperand(op, bindings, mctx)
+			if !okOp {
+				return "", false
+			}
+			paramTy := mctx.scalarFromType(fnTy.Params[i], allowOpaqueUserNamed)
+			if paramTy == scalarUnknown || paramTy != argTy {
+				return "", false
+			}
+			args = append(args, callArg{expr: argExpr, ty: argTy.llvm()})
+		}
+	} else {
+		if !allowOpaqueUserNamed || !isErrType(ref.Type) {
+			return "", false
+		}
+		var okArgs bool
+		args, okArgs = resolveCallArgsWithoutFnType(ci.Args, bindings, mctx)
+		if !okArgs {
+			return "", false
+		}
+	}
+	if !mctx.knownSymbols[ref.Symbol] {
+		declareVoidFunctionPrototype(mctx, ref.Symbol, args)
+	}
+	return renderVoidCallLine(ref.Symbol, args), true
+}
+
+func isErrType(t mir.Type) bool {
+	_, ok := t.(*ir.ErrType)
+	return ok
+}
+
+func resolveCallArgsWithoutFnType(argsIn []mir.Operand, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) ([]callArg, bool) {
+	args := make([]callArg, 0, len(argsIn))
+	for _, op := range argsIn {
+		argExpr, argTy, ok := resolveOperand(op, bindings, mctx)
+		if !ok || argTy == scalarUnknown {
+			return nil, false
+		}
+		args = append(args, callArg{expr: argExpr, ty: argTy.llvm()})
+	}
+	return args, true
+}
+
+func declareFunctionPrototype(mctx *moduleCtx, symbol string, retType scalarType, args []callArg) {
+	if mctx == nil || symbol == "" {
+		return
+	}
+	key := "__stage0.fn_decl." + symbol
+	if mctx.emittedStructs == nil {
+		mctx.emittedStructs = map[string]bool{}
+	}
+	if mctx.emittedStructs[key] {
+		return
+	}
+	mctx.emittedStructs[key] = true
+	fmt.Fprintf(mctx.extraDecls, "declare %s @%s(", retType.llvm(), symbol)
+	for i, a := range args {
+		if i > 0 {
+			mctx.extraDecls.WriteString(", ")
+		}
+		mctx.extraDecls.WriteString(a.ty)
+	}
+	mctx.extraDecls.WriteString(")\n")
+}
+
+func declareVoidFunctionPrototype(mctx *moduleCtx, symbol string, args []callArg) {
+	if mctx == nil || symbol == "" {
+		return
+	}
+	key := "__stage0.fn_decl." + symbol
+	if mctx.emittedStructs == nil {
+		mctx.emittedStructs = map[string]bool{}
+	}
+	if mctx.emittedStructs[key] {
+		return
+	}
+	mctx.emittedStructs[key] = true
+	fmt.Fprintf(mctx.extraDecls, "declare void @%s(", symbol)
+	for i, a := range args {
+		if i > 0 {
+			mctx.extraDecls.WriteString(", ")
+		}
+		mctx.extraDecls.WriteString(a.ty)
+	}
+	mctx.extraDecls.WriteString(")\n")
+}
+
+func renderVoidCallLine(symbol string, args []callArg) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "  call void @%s(", symbol)
+	for i, a := range args {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		fmt.Fprintf(&b, "%s %s", a.ty, a.expr)
+	}
+	b.WriteString(")\n")
+	return b.String()
+}
+
+type intrinsicRuntimeSpec struct {
+	symbol string
+	ret    scalarType
+	args   []scalarType
+}
+
+func classifyIntrinsicValueStep(fn *mir.Function, ii *mir.IntrinsicInstr, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (pendingInstr, mir.LocalID, scalarType, bool) {
+	if ii.Dest == nil || ii.Dest.HasProjections() {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	destID := ii.Dest.Local
+	destLocal := lookupLocal(fn, destID)
+	if destLocal == nil {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	destType := mctx.scalarFromType(destLocal.Type, true)
+	if destType == scalarUnknown {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+
+	if ii.Kind == mir.IntrinsicStringConcat {
+		return classifyStringConcatIntrinsic(ii, destID, destType, bindings, mctx)
+	}
+
+	spec, ok := intrinsicRuntimeCallSpec(ii.Kind)
+	if !ok || spec.ret != destType || len(spec.args) != len(ii.Args) {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	args := make([]callArg, 0, len(ii.Args))
+	for i, op := range ii.Args {
+		expr, ty, ok := resolveOperand(op, bindings, mctx)
+		if !ok || ty != spec.args[i] {
+			return pendingInstr{}, 0, scalarUnknown, false
+		}
+		args = append(args, callArg{expr: expr, ty: ty.llvm()})
+	}
+	declareRuntimePrototype(mctx, spec.symbol, spec.ret, args)
+	return pendingInstr{
+		kind:       instrCall,
+		callSymbol: spec.symbol,
+		callArgs:   args,
+	}, destID, destType, true
+}
+
+func classifyStringConcatIntrinsic(ii *mir.IntrinsicInstr, destID mir.LocalID, destType scalarType, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (pendingInstr, mir.LocalID, scalarType, bool) {
+	if destType != scalarString || len(ii.Args) < 2 {
+		return pendingInstr{}, 0, scalarUnknown, false
+	}
+	args := make([]callArg, 0, len(ii.Args))
+	for _, op := range ii.Args {
+		expr, ty, ok := resolveOperand(op, bindings, mctx)
+		if !ok || ty != scalarString {
+			return pendingInstr{}, 0, scalarUnknown, false
+		}
+		args = append(args, callArg{expr: expr, ty: "ptr"})
+	}
+	declareStringConcatRuntime(mctx)
+	if len(args) == 2 {
+		return pendingInstr{
+			kind:       instrCall,
+			callSymbol: "osty_rt_strings_Concat",
+			callArgs:   args,
+		}, destID, destType, true
+	}
+	return pendingInstr{
+		kind:       instrCallChain,
+		resultType: scalarString,
+		callSymbol: "osty_rt_strings_Concat",
+		callArgs:   args,
+	}, destID, destType, true
+}
+
+func intrinsicRuntimeCallSpec(kind mir.IntrinsicKind) (intrinsicRuntimeSpec, bool) {
+	switch kind {
+	case mir.IntrinsicStringSplit:
+		return intrinsicRuntimeSpec{"osty_rt_strings_Split", scalarOpaquePtr, []scalarType{scalarString, scalarString}}, true
+	case mir.IntrinsicStringJoin:
+		return intrinsicRuntimeSpec{"osty_rt_strings_Join", scalarString, []scalarType{scalarOpaquePtr, scalarString}}, true
+	case mir.IntrinsicStringLen:
+		return intrinsicRuntimeSpec{"osty_rt_strings_ByteLen", scalarInt, []scalarType{scalarString}}, true
+	case mir.IntrinsicStringContains:
+		return intrinsicRuntimeSpec{"osty_rt_strings_Contains", scalarBool, []scalarType{scalarString, scalarString}}, true
+	case mir.IntrinsicStringStartsWith:
+		return intrinsicRuntimeSpec{"osty_rt_strings_HasPrefix", scalarBool, []scalarType{scalarString, scalarString}}, true
+	case mir.IntrinsicStringEndsWith:
+		return intrinsicRuntimeSpec{"osty_rt_strings_HasSuffix", scalarBool, []scalarType{scalarString, scalarString}}, true
+	case mir.IntrinsicStringCount:
+		return intrinsicRuntimeSpec{"osty_rt_strings_Count", scalarInt, []scalarType{scalarString, scalarString}}, true
+	case mir.IntrinsicStringIndexOf:
+		return intrinsicRuntimeSpec{"osty_rt_strings_IndexOf", scalarInt, []scalarType{scalarString, scalarString}}, true
+	case mir.IntrinsicStringLastIndexOf:
+		return intrinsicRuntimeSpec{"osty_rt_strings_LastIndexOf", scalarInt, []scalarType{scalarString, scalarString}}, true
+	case mir.IntrinsicStringTrim:
+		return intrinsicRuntimeSpec{"osty_rt_strings_TrimSpace", scalarString, []scalarType{scalarString}}, true
+	case mir.IntrinsicStringTrimStart:
+		return intrinsicRuntimeSpec{"osty_rt_strings_TrimStart", scalarString, []scalarType{scalarString}}, true
+	case mir.IntrinsicStringTrimEnd:
+		return intrinsicRuntimeSpec{"osty_rt_strings_TrimEnd", scalarString, []scalarType{scalarString}}, true
+	case mir.IntrinsicStringTrimPrefix:
+		return intrinsicRuntimeSpec{"osty_rt_strings_TrimPrefix", scalarString, []scalarType{scalarString, scalarString}}, true
+	case mir.IntrinsicStringTrimSuffix:
+		return intrinsicRuntimeSpec{"osty_rt_strings_TrimSuffix", scalarString, []scalarType{scalarString, scalarString}}, true
+	case mir.IntrinsicStringToUpper:
+		return intrinsicRuntimeSpec{"osty_rt_strings_ToUpper", scalarString, []scalarType{scalarString}}, true
+	case mir.IntrinsicStringToLower:
+		return intrinsicRuntimeSpec{"osty_rt_strings_ToLower", scalarString, []scalarType{scalarString}}, true
+	case mir.IntrinsicStringReplace:
+		return intrinsicRuntimeSpec{"osty_rt_strings_Replace", scalarString, []scalarType{scalarString, scalarString, scalarString}}, true
+	case mir.IntrinsicStringReplaceAll:
+		return intrinsicRuntimeSpec{"osty_rt_strings_ReplaceAll", scalarString, []scalarType{scalarString, scalarString, scalarString}}, true
+	case mir.IntrinsicStringRepeat:
+		return intrinsicRuntimeSpec{"osty_rt_strings_Repeat", scalarString, []scalarType{scalarString, scalarInt}}, true
+	case mir.IntrinsicStringSubstring:
+		return intrinsicRuntimeSpec{"osty_rt_strings_Slice", scalarString, []scalarType{scalarString, scalarInt, scalarInt}}, true
+	case mir.IntrinsicStringSplitN:
+		return intrinsicRuntimeSpec{"osty_rt_strings_SplitN", scalarOpaquePtr, []scalarType{scalarString, scalarString, scalarInt}}, true
+	case mir.IntrinsicStringFields:
+		return intrinsicRuntimeSpec{"osty_rt_strings_Fields", scalarOpaquePtr, []scalarType{scalarString}}, true
+	case mir.IntrinsicStringChars:
+		return intrinsicRuntimeSpec{"osty_rt_strings_Chars", scalarOpaquePtr, []scalarType{scalarString}}, true
+	case mir.IntrinsicStringBytes:
+		return intrinsicRuntimeSpec{"osty_rt_strings_Bytes", scalarOpaquePtr, []scalarType{scalarString}}, true
+	case mir.IntrinsicStringNthSegment:
+		return intrinsicRuntimeSpec{"osty_rt_strings_NthSegment", scalarString, []scalarType{scalarString, scalarString, scalarInt}}, true
+	case mir.IntrinsicListLen:
+		return intrinsicRuntimeSpec{"osty_rt_list_len", scalarInt, []scalarType{scalarOpaquePtr}}, true
+	}
+	return intrinsicRuntimeSpec{}, false
+}
+
+func declareRuntimePrototype(mctx *moduleCtx, symbol string, retType scalarType, args []callArg) {
+	if mctx == nil || symbol == "" {
+		return
+	}
+	key := "__stage0.runtime_decl." + symbol
+	if mctx.emittedStructs == nil {
+		mctx.emittedStructs = map[string]bool{}
+	}
+	if mctx.emittedStructs[key] {
+		return
+	}
+	mctx.emittedStructs[key] = true
+	fmt.Fprintf(mctx.extraDecls, "declare %s @%s(", retType.llvm(), symbol)
+	for i, a := range args {
+		if i > 0 {
+			mctx.extraDecls.WriteString(", ")
+		}
+		mctx.extraDecls.WriteString(a.ty)
+	}
+	mctx.extraDecls.WriteString(")\n")
 }
 
 // classifyAssignSrc reduces an AssignInstr.Src to either a pending
@@ -874,7 +1447,80 @@ func classifyAssignSrc(src mir.RValue, destType scalarType, bindings map[mir.Loc
 			rightExpr:  right,
 		}, "", true
 	}
+	if agg, ok := src.(*mir.AggregateRV); ok {
+		return classifyAggregateAssignSrc(agg, destType, bindings, mctx)
+	}
 	return pendingInstr{}, "", false
+}
+
+func classifyAggregateAssignSrc(agg *mir.AggregateRV, destType scalarType, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (pendingInstr, string, bool) {
+	if agg != nil && agg.Kind == mir.AggEnumVariant && destType == scalarInt && len(agg.Fields) == 0 {
+		return pendingInstr{kind: instrInline}, fmt.Sprintf("%d", agg.VariantIdx), true
+	}
+	if agg == nil || agg.Kind != mir.AggList || destType != scalarOpaquePtr {
+		return pendingInstr{}, "", false
+	}
+	args := make([]callArg, 0, len(agg.Fields))
+	elemType := scalarUnknown
+	for _, field := range agg.Fields {
+		expr, ty, ok := resolveOperand(field, bindings, mctx)
+		if !ok || ty == scalarUnknown {
+			return pendingInstr{}, "", false
+		}
+		if elemType == scalarUnknown {
+			elemType = ty
+		}
+		if ty != elemType {
+			return pendingInstr{}, "", false
+		}
+		args = append(args, callArg{expr: expr, ty: ty.llvm()})
+	}
+	pushSymbol := listPushSymbolFor(elemType)
+	if pushSymbol == "" && len(args) > 0 {
+		return pendingInstr{}, "", false
+	}
+	declareListRuntime(mctx)
+	return pendingInstr{
+		kind:           instrListLiteral,
+		resultType:     scalarOpaquePtr,
+		callArgs:       args,
+		listPushSymbol: pushSymbol,
+	}, "", true
+}
+
+func listPushSymbolFor(elemType scalarType) string {
+	switch elemType {
+	case scalarInt:
+		return "osty_rt_list_push_i64"
+	case scalarBool:
+		return "osty_rt_list_push_i1"
+	case scalarString:
+		return "osty_rt_list_push_string"
+	case scalarOpaquePtr:
+		return "osty_rt_list_push_ptr"
+	}
+	return ""
+}
+
+func setMutationSymbolFor(kind mir.IntrinsicKind, elemType scalarType) string {
+	prefix := ""
+	switch kind {
+	case mir.IntrinsicSetInsert:
+		prefix = "osty_rt_set_insert_"
+	case mir.IntrinsicSetRemove:
+		prefix = "osty_rt_set_remove_"
+	default:
+		return ""
+	}
+	switch elemType {
+	case scalarInt:
+		return prefix + "i64"
+	case scalarBool:
+		return prefix + "i1"
+	case scalarString, scalarOpaquePtr:
+		return prefix + "ptr"
+	}
+	return ""
 }
 
 // declareStringConcatRuntime appends the runtime ABI declaration for
@@ -943,6 +1589,43 @@ func resolveOperand(op mir.Operand, bindings map[mir.LocalID]localBinding, mctx 
 	return "", scalarUnknown, false
 }
 
+func resolveListReceiverOperand(fn *mir.Function, op mir.Operand, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (string, string, bool) {
+	expr, ty, ok := resolveOperand(op, bindings, mctx)
+	if ok && ty == scalarOpaquePtr {
+		return "", expr, true
+	}
+	cp, ok := op.(*mir.CopyOp)
+	if !ok || fn == nil || mctx == nil || len(cp.Place.Projections) != 1 {
+		return "", "", false
+	}
+	fp, ok := cp.Place.Projections[0].(*mir.FieldProj)
+	if !ok {
+		return "", "", false
+	}
+	base, found := bindings[cp.Place.Local]
+	if !found || !base.defined || base.ty != scalarOpaquePtr {
+		return "", "", false
+	}
+	baseLocal := lookupLocal(fn, cp.Place.Local)
+	if baseLocal == nil {
+		return "", "", false
+	}
+	named, ok := baseLocal.Type.(*ir.NamedType)
+	if !ok || named == nil || named.Name == "" {
+		return "", "", false
+	}
+	fieldTypes, ok := mctx.lookupStructFields(named.Name)
+	if !ok || fp.Index < 0 || fp.Index >= len(fieldTypes) || fieldTypes[fp.Index] != scalarOpaquePtr {
+		return "", "", false
+	}
+	mctx.emitStructDef(named.Name, fieldTypes)
+	slot := mctx.freshTempName("list.field.slot")
+	value := mctx.freshTempName("list.field")
+	prelude := fmt.Sprintf("  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 %d\n  %s = load ptr, ptr %s\n",
+		slot, named.Name, base.expr, fp.Index, value, slot)
+	return prelude, value, true
+}
+
 func emitSequentialReturn(out *strings.Builder, fn *mir.Function, pat sequentialPattern) error {
 	retLLVM := pat.retType.llvm()
 	fmt.Fprintf(out, "define %s @%s(", retLLVM, fn.Name)
@@ -956,25 +1639,33 @@ func emitSequentialReturn(out *strings.Builder, fn *mir.Function, pat sequential
 	out.WriteString("entry:\n")
 
 	for _, pi := range pat.pending {
-		switch pi.kind {
-		case instrBinary:
-			fmt.Fprintf(out, "  %s = %s %s %s, %s\n", pi.binDestReg, pi.binOp, pi.binArgType, pi.leftExpr, pi.rightExpr)
-		case instrCall:
-			fmt.Fprintf(out, "  %s = call %s @%s(", pi.binDestReg, pi.resultType.llvm(), pi.callSymbol)
-			for i, a := range pi.callArgs {
-				if i > 0 {
-					out.WriteString(", ")
-				}
-				fmt.Fprintf(out, "%s %s", a.ty, a.expr)
-			}
-			out.WriteString(")\n")
-		case instrIntrinsic:
-			out.WriteString(pi.intrinsicLine)
-		}
+		emitPendingInstr(out, pi)
 	}
 	fmt.Fprintf(out, "  ret %s %s\n", retLLVM, pat.returnExpr)
 	out.WriteString("}\n\n")
 	return nil
+}
+
+func emitPendingInstr(out *strings.Builder, pi pendingInstr) {
+	switch pi.kind {
+	case instrBinary:
+		fmt.Fprintf(out, "  %s = %s %s %s, %s\n", pi.binDestReg, pi.binOp, pi.binArgType, pi.leftExpr, pi.rightExpr)
+	case instrCall:
+		fmt.Fprintf(out, "  %s = call %s @%s(", pi.binDestReg, pi.resultType.llvm(), pi.callSymbol)
+		for i, a := range pi.callArgs {
+			if i > 0 {
+				out.WriteString(", ")
+			}
+			fmt.Fprintf(out, "%s %s", a.ty, a.expr)
+		}
+		out.WriteString(")\n")
+	case instrCallChain:
+		emitCallChain(out, pi)
+	case instrListLiteral:
+		emitListLiteral(out, pi)
+	case instrIntrinsic:
+		out.WriteString(pi.intrinsicLine)
+	}
 }
 
 // classifyBinary returns (llvmOp, resultType, operandType) for a MIR
@@ -1220,21 +1911,28 @@ func emitIfElseReturn(out *strings.Builder, fn *mir.Function, pat ifElsePattern)
 func emitBlock(out *strings.Builder, blk blockEmit) {
 	fmt.Fprintf(out, "%s:\n", blk.label)
 	for _, pi := range blk.pending {
-		switch pi.kind {
-		case instrBinary:
-			fmt.Fprintf(out, "  %s = %s %s %s, %s\n", pi.binDestReg, pi.binOp, pi.binArgType, pi.leftExpr, pi.rightExpr)
-		case instrCall:
-			fmt.Fprintf(out, "  %s = call %s @%s(", pi.binDestReg, pi.resultType.llvm(), pi.callSymbol)
-			for i, a := range pi.callArgs {
-				if i > 0 {
-					out.WriteString(", ")
-				}
-				fmt.Fprintf(out, "%s %s", a.ty, a.expr)
-			}
-			out.WriteString(")\n")
-		case instrIntrinsic:
-			out.WriteString(pi.intrinsicLine)
-		}
+		emitPendingInstr(out, pi)
+	}
+}
+
+func emitCallChain(out *strings.Builder, pi pendingInstr) {
+	if len(pi.callArgs) < 2 || len(pi.chainRegs) != len(pi.callArgs)-1 {
+		return
+	}
+	prev := pi.callArgs[0]
+	for i, next := range pi.callArgs[1:] {
+		reg := pi.chainRegs[i]
+		fmt.Fprintf(out, "  %s = call %s @%s(%s %s, %s %s)\n",
+			reg, pi.resultType.llvm(), pi.callSymbol,
+			prev.ty, prev.expr, next.ty, next.expr)
+		prev = callArg{expr: reg, ty: pi.resultType.llvm()}
+	}
+}
+
+func emitListLiteral(out *strings.Builder, pi pendingInstr) {
+	fmt.Fprintf(out, "  %s = call ptr @osty_rt_list_new()\n", pi.binDestReg)
+	for _, a := range pi.callArgs {
+		fmt.Fprintf(out, "  call void @%s(ptr %s, %s %s)\n", pi.listPushSymbol, pi.binDestReg, a.ty, a.expr)
 	}
 }
 
@@ -2598,12 +3296,15 @@ func applyStep(fn *mir.Function, instr mir.Instr, bindings map[mir.LocalID]local
 	case *mir.CallInstr:
 		pending, destID, destType, okStep = classifyCallStep(fn, step, bindings, mctx)
 	case *mir.IntrinsicInstr:
-		line, okIntr := classifyIntrinsicLine(step, bindings, mctx)
-		if !okIntr {
-			return false
+		if step.Dest == nil {
+			line, okIntr := classifyIntrinsicLine(fn, step, bindings, mctx)
+			if !okIntr {
+				return false
+			}
+			emit.pending = append(emit.pending, pendingInstr{kind: instrIntrinsic, intrinsicLine: line})
+			return true
 		}
-		emit.pending = append(emit.pending, pendingInstr{kind: instrIntrinsic, intrinsicLine: line})
-		return true
+		pending, destID, destType, okStep = classifyIntrinsicValueStep(fn, step, bindings, mctx)
 	case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
 		// Storage liveness markers are opt-in metadata; stage0
 		// has nothing to emit for them.
@@ -2620,11 +3321,19 @@ func applyStep(fn *mir.Function, instr mir.Instr, bindings map[mir.LocalID]local
 	pending.destLocal = destID
 	pending.resultType = destType
 	switch pending.kind {
-	case instrBinary, instrCall:
+	case instrBinary, instrCall, instrListLiteral:
 		reg := fmt.Sprintf("%%%d", *nextSSA)
 		*nextSSA++
 		pending.binDestReg = reg
 		bindings[destID] = localBinding{expr: reg, ty: destType, defined: true}
+	case instrCallChain:
+		regs := make([]string, len(pending.callArgs)-1)
+		for i := range regs {
+			regs[i] = fmt.Sprintf("%%%d", *nextSSA)
+			*nextSSA++
+		}
+		pending.chainRegs = regs
+		bindings[destID] = localBinding{expr: regs[len(regs)-1], ty: destType, defined: true}
 	default:
 		bindings[destID] = localBinding{expr: expr, ty: destType, defined: true}
 	}
@@ -3776,6 +4485,107 @@ func emitStructFieldBinaryOp(out *strings.Builder, fn *mir.Function, pat structF
 	return nil
 }
 
+// ---- P25: struct List field + len ----
+//
+// stage0 P25 handles a narrow but common audit shape:
+//
+//	fn count(result: FrontCheckResult) -> Int {
+//	    result.typedNodes.len()
+//	}
+//
+// MIR lowers this as one IntrinsicInstr{IntrinsicListLen} whose
+// argument is a CopyOp of the struct param with a single FieldProj.
+// This is safe to lower for value-struct params because LLVM can
+// extract the field from the aggregate value before calling the list
+// runtime. It deliberately does not generalise projections on opaque
+// pointer values.
+
+type structFieldListLenPattern struct {
+	structName string
+	fieldTypes []scalarType
+	paramName  string
+	fieldIndex int
+}
+
+func matchStructFieldListLen(fn *mir.Function, mctx *moduleCtx) (structFieldListLenPattern, bool) {
+	pat := structFieldListLenPattern{}
+	if scalarFromType(fn.ReturnType) != scalarInt {
+		return pat, false
+	}
+	if len(fn.Params) != 1 {
+		return pat, false
+	}
+	paramID := fn.Params[0]
+	paramLocal := lookupLocal(fn, paramID)
+	if paramLocal == nil || !paramLocal.IsParam {
+		return pat, false
+	}
+	named, ok := paramLocal.Type.(*ir.NamedType)
+	if !ok || named == nil || named.Name == "" {
+		return pat, false
+	}
+	fieldTypes, ok := mctx.lookupStructFields(named.Name)
+	if !ok {
+		return pat, false
+	}
+	bb, ok := singleBlockReturning(fn)
+	if !ok {
+		return pat, false
+	}
+
+	var matched bool
+	for _, instr := range bb.Instrs {
+		switch step := instr.(type) {
+		case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
+			continue
+		case *mir.IntrinsicInstr:
+			if matched {
+				return pat, false
+			}
+			if step.Kind != mir.IntrinsicListLen || len(step.Args) != 1 || step.Dest == nil {
+				return pat, false
+			}
+			if step.Dest.Local != fn.ReturnLocal || step.Dest.HasProjections() {
+				return pat, false
+			}
+			cp, ok := step.Args[0].(*mir.CopyOp)
+			if !ok || cp.Place.Local != paramID || len(cp.Place.Projections) != 1 {
+				return pat, false
+			}
+			fp, ok := cp.Place.Projections[0].(*mir.FieldProj)
+			if !ok || fp.Index < 0 || fp.Index >= len(fieldTypes) {
+				return pat, false
+			}
+			if fieldTypes[fp.Index] != scalarOpaquePtr {
+				return pat, false
+			}
+			pat.fieldIndex = fp.Index
+			matched = true
+		default:
+			return pat, false
+		}
+	}
+	if !matched {
+		return pat, false
+	}
+	pat.structName = named.Name
+	pat.fieldTypes = fieldTypes
+	pat.paramName = sanitizeLLVMName(paramLocal.Name, "p")
+	mctx.emitStructDef(named.Name, fieldTypes)
+	declareListRuntime(mctx)
+	return pat, true
+}
+
+func emitStructFieldListLen(out *strings.Builder, fn *mir.Function, pat structFieldListLenPattern) error {
+	fmt.Fprintf(out, "define i64 @%s(%%%s %%%s) {\n", fn.Name, pat.structName, pat.paramName)
+	out.WriteString("entry:\n")
+	fmt.Fprintf(out, "  %%0 = extractvalue %%%s %%%s, %d\n", pat.structName, pat.paramName, pat.fieldIndex)
+	out.WriteString("  %1 = call i64 @osty_rt_list_len(ptr %0)\n")
+	out.WriteString("  ret i64 %1\n")
+	out.WriteString("}\n\n")
+	return nil
+}
+
 // ---- P12: list literal + len ----
 //
 // stage0 P12 handles the canonical "build a List<Int> literal then
@@ -3899,6 +4709,9 @@ func declareListRuntime(mctx *moduleCtx) {
 	mctx.emittedStructs["__stage0.list_runtime"] = true
 	mctx.extraDecls.WriteString("declare ptr @osty_rt_list_new()\n")
 	mctx.extraDecls.WriteString("declare void @osty_rt_list_push_i64(ptr, i64)\n")
+	mctx.extraDecls.WriteString("declare void @osty_rt_list_push_i1(ptr, i1)\n")
+	mctx.extraDecls.WriteString("declare void @osty_rt_list_push_string(ptr, ptr)\n")
+	mctx.extraDecls.WriteString("declare void @osty_rt_list_push_ptr(ptr, ptr)\n")
 	mctx.extraDecls.WriteString("declare i64 @osty_rt_list_len(ptr)\n")
 }
 
@@ -3938,8 +4751,10 @@ type aggregateConstructorPattern struct {
 	paramTypes []scalarType // function parameter scalar types
 	paramNames []string     // sanitised parameter names
 	paramIDs   []mir.LocalID
+	pending    []pendingInstr
 	fieldExprs []string     // ordered LLVM operand expressions
 	fieldTypes []scalarType // matching scalar type per field
+	insertBase int
 }
 
 func matchAggregateConstructor(fn *mir.Function, mctx *moduleCtx) (aggregateConstructorPattern, bool) {
@@ -3953,66 +4768,84 @@ func matchAggregateConstructor(fn *mir.Function, mctx *moduleCtx) (aggregateCons
 	pat.typeName = typeName
 	pat.fieldTypes = fieldTypes
 
-	if len(fn.Params) > 2 {
+	if len(fn.Params) > 8 {
 		return pat, false
 	}
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b"}
+	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	bindings := map[mir.LocalID]localBinding{}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
 			return pat, false
 		}
-		st := scalarFromType(loc.Type)
+		st := mctx.scalarFromType(loc.Type, true)
 		if st == scalarUnknown {
 			return pat, false
 		}
 		pat.paramTypes[i] = st
 		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+		bindings[pid] = localBinding{expr: "%" + pat.paramNames[i], ty: st, defined: true}
 	}
 	disambiguateParamNames(pat.paramNames)
+	for i, pid := range fn.Params {
+		bindings[pid] = localBinding{expr: "%" + pat.paramNames[i], ty: pat.paramTypes[i], defined: true}
+	}
 
 	bb, ok := singleBlockReturning(fn)
-	if !ok || len(bb.Instrs) != 1 {
-		return pat, false
-	}
-	ai, ok := bb.Instrs[0].(*mir.AssignInstr)
 	if !ok {
 		return pat, false
 	}
-	if ai.Dest.Local != fn.ReturnLocal || ai.Dest.HasProjections() {
-		return pat, false
-	}
-	agg, ok := ai.Src.(*mir.AggregateRV)
-	if !ok {
-		return pat, false
-	}
-	if agg.Kind != mir.AggStruct && agg.Kind != mir.AggTuple {
-		return pat, false
-	}
-	if len(agg.Fields) != len(fieldTypes) {
-		return pat, false
-	}
 
-	// Param-id → LLVM register (fast lookup for CopyOp resolution).
-	paramRegs := map[mir.LocalID]string{}
-	for i, pid := range fn.Params {
-		paramRegs[pid] = "%" + pat.paramNames[i]
-	}
-
-	pat.fieldExprs = make([]string, len(agg.Fields))
-	for i, f := range agg.Fields {
-		expr, ty, ok := classifyAggregateField(f, paramRegs, fn, mctx)
-		if !ok {
+	nextSSA := 0
+	sawAggregateReturn := false
+	for _, instr := range bb.Instrs {
+		if _, ok := instr.(*mir.StorageLiveInstr); ok {
+			continue
+		}
+		if _, ok := instr.(*mir.StorageDeadInstr); ok {
+			continue
+		}
+		if ai, ok := instr.(*mir.AssignInstr); ok && ai.Dest.Local == fn.ReturnLocal && !ai.Dest.HasProjections() {
+			agg, ok := ai.Src.(*mir.AggregateRV)
+			if !ok {
+				return pat, false
+			}
+			if agg.Kind != mir.AggStruct && agg.Kind != mir.AggTuple {
+				return pat, false
+			}
+			if len(agg.Fields) != len(fieldTypes) {
+				return pat, false
+			}
+			pat.fieldExprs = make([]string, len(agg.Fields))
+			for i, f := range agg.Fields {
+				expr, ty, ok := classifyAggregateFieldWithBindings(f, bindings, mctx)
+				if !ok {
+					return pat, false
+				}
+				if ty != fieldTypes[i] {
+					return pat, false
+				}
+				pat.fieldExprs[i] = expr
+			}
+			sawAggregateReturn = true
+			continue
+		}
+		if sawAggregateReturn {
 			return pat, false
 		}
-		if ty != fieldTypes[i] {
+		emit := blockEmit{}
+		if !applyStep(fn, instr, bindings, mctx, &nextSSA, &emit) {
 			return pat, false
 		}
-		pat.fieldExprs[i] = expr
+		pat.pending = append(pat.pending, emit.pending...)
 	}
+	if !sawAggregateReturn {
+		return pat, false
+	}
+	pat.insertBase = nextSSA
 	return pat, true
 }
 
@@ -4039,7 +4872,7 @@ func classifyAggregateReturnType(retT mir.Type, mctx *moduleCtx) (string, []scal
 		}
 		fields := make([]scalarType, len(t.Elems))
 		for i, e := range t.Elems {
-			st := scalarFromType(e)
+			st := mctx.scalarFromType(e, true)
 			if st == scalarUnknown {
 				return "", nil, false
 			}
@@ -4084,9 +4917,30 @@ func classifyAggregateField(op mir.Operand, paramRegs map[mir.LocalID]string, fn
 		if loc == nil {
 			return "", scalarUnknown, false
 		}
-		return reg, scalarFromType(loc.Type), true
+		return reg, mctx.scalarFromType(loc.Type, true), true
 	}
 	return "", scalarUnknown, false
+}
+
+func classifyAggregateFieldWithBindings(op mir.Operand, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (string, scalarType, bool) {
+	if con, ok := op.(*mir.ConstOp); ok {
+		switch c := con.Const.(type) {
+		case *mir.IntConst:
+			return fmt.Sprintf("%d", c.Value), scalarInt, true
+		case *mir.BoolConst:
+			if c.Value {
+				return "true", scalarBool, true
+			}
+			return "false", scalarBool, true
+		case *mir.StringConst:
+			if mctx == nil {
+				return "", scalarUnknown, false
+			}
+			return mctx.internStringConst(c.Value), scalarString, true
+		}
+		return "", scalarUnknown, false
+	}
+	return resolveOperand(op, bindings, mctx)
 }
 
 func emitAggregateConstructor(out *strings.Builder, fn *mir.Function, pat aggregateConstructorPattern) error {
@@ -4100,14 +4954,18 @@ func emitAggregateConstructor(out *strings.Builder, fn *mir.Function, pat aggreg
 	}
 	out.WriteString(") {\n")
 	out.WriteString("entry:\n")
+	for _, pi := range pat.pending {
+		emitPendingInstr(out, pi)
+	}
 
 	// `insertvalue` chain. Start from `poison` (LLVM's "undefined"
 	// sentinel) and write each field in order. Final register holds
 	// the fully populated aggregate.
 	prev := "poison"
 	for i, fieldExpr := range pat.fieldExprs {
-		fmt.Fprintf(out, "  %%%d = insertvalue %%%s %s, %s %s, %d\n", i, pat.typeName, prev, pat.fieldTypes[i].llvm(), fieldExpr, i)
-		prev = fmt.Sprintf("%%%d", i)
+		reg := pat.insertBase + i
+		fmt.Fprintf(out, "  %%%d = insertvalue %%%s %s, %s %s, %d\n", reg, pat.typeName, prev, pat.fieldTypes[i].llvm(), fieldExpr, i)
+		prev = fmt.Sprintf("%%%d", reg)
 	}
 	fmt.Fprintf(out, "  ret %%%s %s\n", pat.typeName, prev)
 	out.WriteString("}\n\n")
