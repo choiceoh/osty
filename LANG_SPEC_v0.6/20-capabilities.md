@@ -807,6 +807,172 @@ production code that implements `Clock` (uncommon — usually the host
 adapter is the only implementation) need only carry forward the
 interface implementation.
 
+### 20.17 Capability composition patterns
+
+This section catalogues recurring patterns for combining capabilities
+in real applications. Each pattern names the capability set, the
+shape of the composing structure, and the trade-offs of the
+alternatives.
+
+#### 20.17.1 Capability bag struct
+
+When a function or struct method needs three or more capabilities, a
+*capability bag* — a struct that aggregates them — keeps the
+parameter list bounded:
+
+```osty
+pub struct AppCaps {
+    pub clock: Clock,
+    pub rng: Rng,
+    pub env: Env,
+    pub fs: Fs,
+    pub net: Net,
+    pub console: Console,
+}
+
+pub fn loadAndAnnotate(caps: AppCaps, path: String) -> Result<Annotated, Error> {
+    let raw = caps.fs.readToString(path)?
+    let now = caps.clock.now()
+    let token = caps.rng.next()
+    Ok(Annotated { raw, fetchedAt: now, requestId: token })
+}
+```
+
+Trade-offs:
+
+- **+** signatures stay readable when a function naturally needs many
+  effects;
+- **+** test injection is one struct literal instead of seven
+  arguments;
+- **−** the function's *actual* capability set is opaque to a reader
+  — `AppCaps` says nothing about which fields the body actually
+  uses;
+- **−** `osty audit --capabilities` reports the bag, not the
+  individual effects, so security review loses some signal.
+
+The discipline that recovers the lost signal: keep the bag *narrow*
+to a layer (an HTTP handler bag, a CLI command bag) rather than
+aggregating every capability the program might ever need. A
+`HandlerCaps` struct that holds just `Clock` + `Db` + `Net` is more
+informative than an `AppCaps` that holds all seven.
+
+#### 20.17.2 Per-request capability forwarding
+
+A web server's request handler typically receives capabilities from
+the dispatch layer rather than from `#[ambient]`:
+
+```osty
+fn dispatch(caps: AppCaps, req: HttpRequest) -> Result<HttpResponse, Error> {
+    match (req.method, req.path()) {
+        (Method.Get, "/health") -> handleHealth(caps.clock),
+        (Method.Get, p) if p.startsWith("/users/") ->
+            handleGetUser(caps.db, parseUserId(p)?),
+        (Method.Post, "/users") ->
+            handleCreateUser(caps.clock, caps.rng, caps.db, req),
+        _ -> Ok(http.notFound("")),
+    }
+}
+```
+
+Each handler receives only the capabilities it actually needs. The
+dispatch layer itself receives the full `AppCaps`. This makes
+per-handler capability sets explicit and shows up as such in
+`osty audit --capabilities`.
+
+#### 20.17.3 Reproducible derivation
+
+A function annotated `#[reproducible(scope = "target")]` cannot
+receive non-deterministic capabilities (`Clock`, `Rng`, `Env`, `Fs`,
+`Net`, `Process`). The composition pattern is to *capture* the
+non-deterministic value at a non-reproducible boundary and pass the
+captured value into the reproducible function:
+
+```osty
+// Non-reproducible boundary — owns the Clock.
+fn writeBuildSnapshot(clock: Clock, fs: Fs, payload: Bytes) -> Result<(), Error> {
+    let timestamp = clock.now().toEpochMillis()
+    let key = computeKey(timestamp, payload)        // reproducible call
+    fs.write("snapshots/{key.toHex()}.bin", payload)
+}
+
+// Reproducible inner — receives the captured timestamp value.
+#[reproducible(scope = "target")]
+fn computeKey(timestamp: Int64, payload: Bytes) -> Bytes32 {
+    sha256(payload + timestamp.toBytes())
+}
+```
+
+The reproducible inner is *fully* deterministic on its inputs — the
+same `timestamp` + `payload` always produces the same key. The
+non-reproducible outer admits the timestamp into the system once.
+
+#### 20.17.4 Capability-typed factory
+
+When a capability's *construction* is itself an effect (e.g. opening
+a database connection), expose the construction step explicitly
+rather than synthesizing it inside `#[ambient]`:
+
+```osty
+// Construction is an effect — surface it.
+fn connectDb(env: Env, net: Net) -> Result<Db, Error> {
+    let dsn = env.require("DATABASE_URL")?
+    let cfg = db.parseDsn(dsn)?
+    db.host.connect(net, cfg)
+}
+
+#[ambient(env, net)]
+fn main() {
+    let db = connectDb(env, net)?
+    runApp(db)
+}
+```
+
+`Db` is then passed by value into application code. This composes
+cleanly with the bag pattern (§20.17.1) — the `AppCaps` bag is
+constructed at the entry point with concrete capability instances,
+including ones that required effects to construct.
+
+### 20.18 Capability matrix per stdlib chapter
+
+This matrix summarizes which capabilities each stdlib chapter's
+methods require. Pure modules (no capability) compose freely; effectful
+modules name the capability needed at each call site.
+
+| Chapter | Capability methods | Pure helpers |
+|---|---|---|
+| §10.1 std.io | `Console.print` / `println` / `eprint` etc. | `io.copy`, `io.readAll`, `io.bytesReader`, `io.buffer`, `io.writeAll` |
+| §10.6 collections | (none) | All `List` / `Map` / `Set` operations |
+| §10.7 std.iter | (none) | All combinators |
+| §10.8 std.json | (none) | `parse` / `stringify` / typed `decode` / `encode` |
+| §10.10 std.log | dispatches through ambient `Console` | `Fields` builder |
+| §10.12 std.crypto | `CryptoRng.randomBytes` | `sha256`, `hmac.sha256`, `constantTimeEq` |
+| §10.13 std.uuid | `uuid.v4(rng)`, `uuid.v7(clock, rng)` | `uuid.parse`, `uuid.nil`, `Uuid.toString` |
+| §10.14 std.random | `Rng.int`, `Rng.float`, `Rng.bytes`, `Rng.choice` | `random.seeded` (constructor for derivation) |
+| §10.15 std.os / std.process | `Process.exec`, `Process.exit`, `Process.pid` | `os.path.*` |
+| §10.16 std.url | (none — `url.parse` is pure) | All |
+| §10.20 std.time | `Clock.now`, `Clock.monotonic`, `Clock.sleep` | `Instant.format`, `Duration.toString`, `time.parse` |
+| §10.23 std.net | `Net.connect`, `Net.listen`, `Net.udpBind`, `Net.resolve` | (`Addr` rendering only) |
+| §10.24 std.http | `HttpClient.request`, `HttpServer.serve` | `http.newRequest`, builders, codecs |
+| §10.25 std.term | `Terminal.*` (via `Console.terminal()`) | `term.*Seq` ANSI helpers |
+| §10.26 std.tui | `Screen.present` | `tui.frame`, `Frame.draw*`, `Frame.renderAnsi`, `Frame.diffAnsi` |
+| §10.28 std.sql | (none) | All |
+| §10.29 std.db | `Db.exec`, `Db.query`, `Db.queryOne`, `Db.beginTx` | All non-driver helpers |
+| §10.30 std.smtp | (none — caller drives transport via `Net`) | All |
+| §10.32 std.image | (none) | All |
+| §10.33 std.aiagents | (none — caller drives transport via `std.ai` + `Net`) | All |
+| §10.35 std.table | (none) | All |
+| §10.37 std.scan | `scan.run` (Process+Fs), `scan.listDevices` (Process) | `scan.plan`, `scan.parseScanimageDevices` |
+| §10.38 std.print | `print.print`, `print.printers` (Process) | `print.options`, `print.plan`, `print.pageRange` |
+| §10.39 std.clipboard | dispatches through ambient `Process` | (none) |
+| §10.40 std.xlsx | (none) | All |
+| §10.41 std.keychain | dispatches through ambient `Process` | (none) |
+| §10.42 std.pdf | (none) | All |
+
+A glance at this matrix tells the reader two things at once: which
+imports trigger capability requirements, and which can be used inside
+`#[reproducible]` / `#[pure]` contexts. Maintaining the matrix is part
+of any new stdlib module's PR.
+
 Removing a method or changing a method signature is a breaking
 change requiring a major version bump (per §3.14.3). The non-canonical
 adapters (`net.host`, `process.host`) carry their own removal schedule
