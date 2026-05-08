@@ -1067,7 +1067,7 @@ CodeReexportPrivate: `pub use` attempted to re-export a private symbol. v0.5 (G3
 
 ### E0554 — `CodeUseDuplicateName`
 
-CodeUseDuplicateName: a scoped `use path::{a, a}` names the same identifier twice, two imports introduce the same local binding, or a `pub use` export collides with another public/local declaration name. v0.5/v0.6 (G28/G30) §5.
+CodeUseDuplicateName: a scoped `use path::{a, a}` names the same identifier twice, or two separate imports introduce the same local binding. v0.5 (G28) §5.
 
 **Fix**: remove the duplicate or use `as` to rename one side.
 
@@ -1153,7 +1153,7 @@ Spec: v0.6 A13
 
 ### E0780 — `CodeAmbientWrongSite`
 
-CodeAmbientWrongSite: `#[ambient(...)]` is applied to a function that is not at a permitted boundary. Permitted: scripts, `fn main`, `#[test]` / `#[bench]` / `bench*` / `test_*` functions. Library functions must receive capabilities as explicit parameters.
+CodeAmbientWrongSite: `#[ambient(...)]` is applied to a function that is not at a permitted boundary. Permitted: scripts, `fn main`, `#[test]` / `#[bench]` / `bench*` / `test*` functions. Library functions must receive capabilities as explicit parameters.
 
 the function to a permitted boundary.
 
@@ -1249,60 +1249,6 @@ Spec: v0.6 §20.3
 
 ---
 
-## G38 — Spec link (§3.10)
-
-### E0790 — `CodeSpecAnchorNotFound`
-
-CodeSpecAnchorNotFound: `#[spec("§X.Y")]` references a markdown anchor that does not exist in `LANG_SPEC_v0.6/`.
-
-spec.
-
-Spec: v0.6 §3.10.2
-
-**Fix**: correct the section reference, or add the section to the
-
-### W0790 — `CodeSpecAnchorMoved`
-
-CodeSpecAnchorMoved: `#[spec("§X.Y")]` references a section that has moved to a different chapter. Suggestion includes the new path.
-
-Spec: v0.6 §3.10.2
-
-**Fix**: update the reference to the new section path.
-
----
-
-## G46 — Performance contract (§3.15)
-
-### E0795 — `CodeBudgetStaticViolation`
-
-CodeBudgetStaticViolation: a `#[budget]` static field (`allocs`, `io_calls`, `stack_depth`, `instructions`) is exceeded by the function's compile-time analysis.
-
-budget.
-
-Spec: v0.6 §3.15.1
-
-**Fix**: reduce allocations / IO / recursion depth, or relax the
-
-### E0796 — `CodeBudgetUnknownKey`
-
-CodeBudgetUnknownKey: `#[budget(...)]` uses a key that is not in the recognised set (`allocs`, `io_calls`, `stack_depth`, `instructions`, `time_ms`, `p99_ms`).
-
-forward-compatibility hatch.
-
-Spec: v0.6 §3.15
-
-**Fix**: use one of the recognised keys; unknown keys are not a
-
-### W0795 — `CodeBudgetRuntimeRegression`
-
-CodeBudgetRuntimeRegression: `osty bench --budget` measured a runtime metric (`time_ms` / `p99_ms`) exceeding the declared `#[budget]`. Emitted as a hard fail in CI mode, warn in interactive mode.
-
-Spec: v0.6 §3.15.2
-
-**Fix**: optimise the function, or relax the runtime budget.
-
----
-
 ## G37 — Information flow (§21)
 
 ### E0900 — `CodeTaintSinkViolation`
@@ -1351,7 +1297,7 @@ Spec: v0.6 §21.2
 
 ### W0901 — `CodeTrustedDeclassifyAudit`
 
-CodeTrustedDeclassifyAudit: a function or position uses `#[trusted_declassify(reason = "...")]` to accept declared sanitizer effects across an opaque boundary. Always emitted (audit hint), never blocks compilation.
+CodeTrustedDeclassifyAudit: a function or position uses `#[trusted_declassify(reason = "...")]` to drop a flow tag without going through a sanitiser. Always emitted (audit hint), never blocks compilation.
 
 ensure the `reason` text is informative — `osty audit --trusted-declassify` enumerates all sites.
 
@@ -1411,14 +1357,6 @@ Spec: v0.6 §7.5.5
 
 **Fix**: change the error type to a concrete enum, or use
 
-### E0414 — `CodeErrorContractPropagationMismatch`
-
-CodeErrorContractPropagationMismatch: `?` propagation from a contracted callee can produce an error variant that is not in the caller's `#[error_contract]`. Contract inclusion is exact over `(enum identity, variant name)`.
-
-Spec: v0.6 §7.5.1
-
-**Fix**: add the exact variant to the caller's contract, map the callee error to a contracted variant, or use `#[error_contract(any)]` at the boundary.
-
 ### W0413 — `CodeMatchExcludesContractVariant`
 
 CodeMatchExcludesContractVariant: a `match` arm references an `Err(V)` where `V` is on the callee's enum but not in the callee's `#[error_contract]`. The arm is dead code per the contract.
@@ -1469,14 +1407,6 @@ Spec: v0.6 §3.4.5
 
 **Fix**: name an existing constructor method, or define one.
 
-### E0424 — `CodeSealedConstructorNotPublic`
-
-CodeSealedConstructorNotPublic: a `pub struct` carrying `#[sealed_construct(name)]` names a constructor that is not public, leaving downstream packages with no valid construction path.
-
-Spec: v0.6 §3.4.5.1
-
-**Fix**: make the constructor `pub`, make the struct package-private, or expose a different public sealed constructor.
-
 ---
 
 ## G42 — Structured intent (§3.12)
@@ -1519,44 +1449,6 @@ Spec: v0.6 §3.12.3
 
 ---
 
-## G43 — Executable spec block (§3.13)
-
-### E0440 — `CodeSpecBlockMisplaced`
-
-CodeSpecBlockMisplaced: a `spec { ... }` block appears outside the function-body first-statement position.
-
-Spec: v0.6 §3.13 / R28
-
-**Fix**: move the block to the start of the function body.
-
-### E0441 — `CodeSpecBlockExampleNotBool`
-
-CodeSpecBlockExampleNotBool: a `spec { example: expr }` clause's `expr` does not evaluate to `Bool`.
-
-(`fn(args) == expected`).
-
-Spec: v0.6 §3.13.2
-
-**Fix**: rewrite the example as a boolean comparison
-
-### E0442 — `CodeSpecBlockLawNotBool`
-
-CodeSpecBlockLawNotBool: a `spec { law: expr }` or `spec { invariant: expr }` clause's `expr` does not evaluate to `Bool`. Permitted free identifiers inside `law` / `invariant` include `result` (the function's return value, virtual binding).
-
-Spec: v0.6 §3.13.5
-
-**Fix**: rewrite as a boolean expression.
-
-### E0443 — `CodeSpecBlockForallBadGenerator`
-
-CodeSpecBlockForallBadGenerator: a `spec { forall x in expr: ... }` clause's `expr` is not of type `Gen<T>` for some `T`. (Phase 5 / v1 only — earlier phases reject `forall` syntactically.).
-
-Spec: v0.6 §3.13.3
-
-**Fix**: use a `std.testing.gen.*` constructor.
-
----
-
 ## G45 — Golden tests (§11.5)
 
 ### E0444 — `CodeGoldenNotReproducible`
@@ -1587,7 +1479,7 @@ output is structured but not Osty source.
 
 Spec: v0.6 §11.5.3
 
-**Fix**: use `mode = "text"` (canonical text compare) or `mode = "json"` if the
+**Fix**: use `mode = "text"` (byte-exact) or `mode = "json"` if the
 
 ### W0444 — `CodeGoldenSnapshotStale`
 

@@ -230,10 +230,6 @@ R7 에 추가되는 항목:
 | 코드 | 의미 |
 |---|---|
 | `E0405` | Annotation 이 잘못된 위치 (annotation matrix 기반) |
-| `E0440` | `spec` block 이 함수 본문 첫 위치가 아님 |
-| `E0441` | `spec { example: }` 가 boolean 으로 평가되지 않음 |
-| `E0442` | `spec { law:/invariant: }` 가 boolean 으로 평가되지 않음 |
-| `E0443` | `spec { forall }` 의 generator 가 `Gen<T>` 가 아님 (v1) |
 
 기타 G36–G48 의 의미론적 진단 코드는
 [00-revision.md §6](./LANG_SPEC_v0.6/00-revision.md) 참조.

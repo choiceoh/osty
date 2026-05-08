@@ -1142,53 +1142,6 @@ const (
 	// Fix: pass the user capability as an explicit parameter.
 	CodeAmbientUserCapability = "E0789"
 
-	// G38 — Spec link (§3.10)
-
-	// CodeSpecAnchorNotFound: `#[spec("§X.Y")]` references a markdown
-	// anchor that does not exist in `LANG_SPEC_v0.6/`.
-	//
-	// Spec: v0.6 §3.10.2
-	// Fix: correct the section reference, or add the section to the
-	//      spec.
-	CodeSpecAnchorNotFound = "E0790"
-
-	// CodeSpecAnchorMoved: `#[spec("§X.Y")]` references a section that
-	// has moved to a different chapter. Suggestion includes the new
-	// path.
-	//
-	// Spec: v0.6 §3.10.2
-	// Fix: update the reference to the new section path.
-	CodeSpecAnchorMoved = "W0790"
-
-	// G46 — Performance contract (§3.15)
-
-	// CodeBudgetStaticViolation: a `#[budget]` static field (`allocs`,
-	// `io_calls`, `stack_depth`, `instructions`) is exceeded by the
-	// function's compile-time analysis.
-	//
-	// Spec: v0.6 §3.15.1
-	// Fix: reduce allocations / IO / recursion depth, or relax the
-	//      budget.
-	CodeBudgetStaticViolation = "E0795"
-
-	// CodeBudgetUnknownKey: `#[budget(...)]` uses a key that is not in
-	// the recognised set (`allocs`, `io_calls`, `stack_depth`,
-	// `instructions`, `time_ms`, `p99_ms`).
-	//
-	// Spec: v0.6 §3.15
-	// Fix: use one of the recognised keys; unknown keys are not a
-	//      forward-compatibility hatch.
-	CodeBudgetUnknownKey = "E0796"
-
-	// CodeBudgetRuntimeRegression: `osty bench --budget` measured a
-	// runtime metric (`time_ms` / `p99_ms`) exceeding the declared
-	// `#[budget]`. Emitted as a hard fail in CI mode, warn in
-	// interactive mode.
-	//
-	// Spec: v0.6 §3.15.2
-	// Fix: optimise the function, or relax the runtime budget.
-	CodeBudgetRuntimeRegression = "W0795"
-
 	// G37 — Information flow (§21)
 
 	// CodeTaintSinkViolation: a value carrying tag `σ` reaches a
@@ -1380,40 +1333,6 @@ const (
 	// Spec: v0.6 §3.12.3
 	// Fix: declare the fixture, or correct the name.
 	CodeExampleUnknownFixture = "E0433"
-
-	// G43 — Executable spec block (§3.13)
-
-	// CodeSpecBlockMisplaced: a `spec { ... }` block appears outside
-	// the function-body first-statement position.
-	//
-	// Spec: v0.6 §3.13 / R28
-	// Fix: move the block to the start of the function body.
-	CodeSpecBlockMisplaced = "E0440"
-
-	// CodeSpecBlockExampleNotBool: a `spec { example: expr }` clause's
-	// `expr` does not evaluate to `Bool`.
-	//
-	// Spec: v0.6 §3.13.2
-	// Fix: rewrite the example as a boolean comparison
-	//      (`fn(args) == expected`).
-	CodeSpecBlockExampleNotBool = "E0441"
-
-	// CodeSpecBlockLawNotBool: a `spec { law: expr }` or `spec {
-	// invariant: expr }` clause's `expr` does not evaluate to `Bool`.
-	// Permitted free identifiers inside `law` / `invariant` include
-	// `result` (the function's return value, virtual binding).
-	//
-	// Spec: v0.6 §3.13.5
-	// Fix: rewrite as a boolean expression.
-	CodeSpecBlockLawNotBool = "E0442"
-
-	// CodeSpecBlockForallBadGenerator: a `spec { forall x in expr: ... }`
-	// clause's `expr` is not of type `Gen<T>` for some `T`. (Phase 5 / v1
-	// only — earlier phases reject `forall` syntactically.)
-	//
-	// Spec: v0.6 §3.13.3
-	// Fix: use a `std.testing.gen.*` constructor.
-	CodeSpecBlockForallBadGenerator = "E0443"
 
 	// G45 — Golden tests (§11.5)
 

@@ -160,13 +160,6 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
     if code == "E0787" { return FamilyTypeChecking }
     if code == "E0788" { return FamilyTypeChecking }
     if code == "E0789" { return FamilyTypeChecking }
-    // G38 — Spec link (§3.10)
-    if code == "E0790" { return FamilyAnnotation }
-    if code == "W0790" { return FamilyAnnotation }
-    // G46 — Performance contract (§3.15)
-    if code == "E0795" { return FamilyAnnotation }
-    if code == "E0796" { return FamilyAnnotation }
-    if code == "W0795" { return FamilyAnnotation }
     // G37 — Information flow (§21)
     if code == "E0900" { return FamilyTypeChecking }
     if code == "E0901" { return FamilyTypeChecking }
@@ -190,11 +183,6 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
     if code == "E0431" { return FamilyAnnotation }
     if code == "E0432" { return FamilyAnnotation }
     if code == "E0433" { return FamilyAnnotation }
-    // G43 — Executable spec block (§3.13)
-    if code == "E0440" { return FamilyDeclaration }
-    if code == "E0441" { return FamilyDeclaration }
-    if code == "E0442" { return FamilyDeclaration }
-    if code == "E0443" { return FamilyDeclaration }
     // G45 — Golden tests (§11.5)
     if code == "E0444" { return FamilyAnnotation }
     if code == "E0445" { return FamilyAnnotation }

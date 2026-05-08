@@ -119,15 +119,14 @@ p99_ms)]`. 각 신규 surface 는 §3 의 *v0.6 Annotation Extensions* 섹션
   에 `#[requires(...)]` 추가. 미-sanitize 코드는 컴파일 에러 (의도된
   보안 회귀 노출).
 
-**Diagnostic codes.** +28 신규 — E0410-E0451 (annotation/intent),
-E0780-E0796 (capability/spec link/budget), E0900-E0903 (information
-flow), E2100-E2102 (publish). Catalog: `ERROR_CODES.md` (auto-generated
-from `internal/diag/codes.go`).
+**Diagnostic codes.** 신규 — E0410-E0446 (annotation/intent/golden),
+E0780-E0789 (capability), E0900-E0903 (information flow), E2100-E2102
+(publish). Catalog: `ERROR_CODES.md` (auto-generated from
+`internal/diag/codes.go`).
 
 **Implementation phases.** 결정은 v0.6 baseline 으로 동결, 구현은
 5 phase (Phase 1 capability + ambient + stdlib migration → Phase 5
-taint + budget runtime + spec block v1). `CHANGELOG_v0.6.md` 가
-phase 별 진행도 추적.
+taint). `CHANGELOG_v0.6.md` 가 phase 별 진행도 추적.
 
 **v0.5 → v0.6 breaking changes (사용자 0 단계의 acceptable break).**
 

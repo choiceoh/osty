@@ -129,24 +129,13 @@ This pattern is *opt-in* — process-global handlers remain the easy
 path for scripts and tools where capability discipline is not the
 priority.
 
-#### Performance budget for log calls
+#### Performance hint for log calls
 
-A `log.info(...)` call counts as one `io_calls` budget unit when
-the active level is at or below `Info`. Levels suppressed by
-`setLevel` count zero — the call is short-circuited before any
-work.
-
-```osty
-#[budget(io_calls = 1)]
-fn handleRead() {
-    log.info("read complete")        // counts 1
-    log.debug("...")                  // counts 0 if level >= Info
-}
-```
-
-The `instructions` budget includes the format-string interpolation
-work even at suppressed levels (the args are evaluated). Use the
-pre-check pattern when interpolation is expensive:
+Levels suppressed by `setLevel` short-circuit before any work — the
+call site pays only the level check. The `instructions` cost
+includes format-string interpolation even at suppressed levels (the
+args are evaluated). Use the pre-check pattern when interpolation
+is expensive:
 
 ```osty
 if log.isEnabled(log.Debug) {

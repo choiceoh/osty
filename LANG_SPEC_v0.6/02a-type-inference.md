@@ -320,18 +320,16 @@ The complete v0.6 inference / check pipeline:
 | 6. Flow check | `#[taint]` / `#[sanitizes]` / `#[requires]` propagation | `E0900`-`E0903` |
 | 7. Sealed construct check | External literal validation | `E0420`-`E0424` |
 | 8. Error contract check | Variant set against `#[error_contract]` | `E0410`-`E0414` |
-| 9. Spec link check | `#[spec]` anchor resolution | `E0790`, `W0790` |
-| 10. Stability / SemVer (publish only) | Surface diff against previous version | `E2100`-`E2102` |
-| 11. Budget check (static) | `allocs` / `io_calls` / `stack_depth` | `E0795` |
-| 12. Lint | Style + correctness suggestions | `L0001`-`L0099` |
+| 9. Stability / SemVer (publish only) | Surface diff against previous version | `E2100`-`E2102` |
+| 10. Lint | Style + correctness suggestions | `L0001`-`L0099` |
 
 Each pass operates on the AST + symbol table from prior passes;
 later passes never modify earlier-pass output. The pipeline is
 strictly sequential — pass 6 (flow) does not run if pass 4 (type)
 fails.
 
-`osty check` runs passes 1-9, 11. `osty publish` adds pass 10.
-`osty lint` runs pass 12 (which itself depends on passes 1-4).
+`osty check` runs passes 1-8. `osty publish` adds pass 9.
+`osty lint` runs pass 10 (which itself depends on passes 1-4).
 
 ### 2a.15 Inference and capability values
 

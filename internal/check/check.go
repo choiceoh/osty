@@ -11,7 +11,6 @@ import (
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/semanticdb"
-	"github.com/osty/osty/internal/specvalidate"
 	"github.com/osty/osty/internal/token"
 	"github.com/osty/osty/internal/types"
 )
@@ -206,7 +205,6 @@ func SelfhostRun(run *selfhost.FrontendRun, opts ...Opts) *Result {
 	checked := selfhost.CheckStructuredFromRun(run)
 	policy := nativeDiagPolicy{privileged: opt.Privileged}
 	result.Diags = append(result.Diags, nativeCheckerDiags(src, checked, policy)...)
-	appendSpecLinkDiagnosticsForSource(result, src, opt.Path)
 	result.NativeCheckerTelemetry = nativeCheckerTelemetry(checked, policy)
 	result.NativeCheckResult = cloneNativeCheckResult(checked)
 	result.SemanticDB = semanticdb.FromCheck(checked)
@@ -235,7 +233,6 @@ func SelfhostFile(f *ast.File, rr *resolve.Result, opts ...Opts) *Result {
 	opt := firstOpt(opts)
 	result := newResult()
 	applyNativeFileResult(result, f, rr, opt.Source, opt.Stdlib, opt.Privileged)
-	appendSpecLinkDiagnosticsForSource(result, opt.Source, opt.Path)
 	diag.StampFile(result.Diags, opt.Path)
 	recordSelfhostDeclPass(opt.OnDecl, f, "collect")
 	recordSelfhostDeclPass(opt.OnDecl, f, "check")
@@ -253,7 +250,6 @@ func Package(pkg *resolve.Package, pr *resolve.PackageResult, opts ...Opts) *Res
 	}
 	privileged := isPrivilegedPackage(pkg)
 	applyNativePackageResult(result, pkg, pr, nil, opt.Stdlib, privileged)
-	appendSpecLinkDiagnosticsForPackage(result, pkg)
 	stampPackageDiags(result.Diags, pkg)
 	// §19 policy gates (privilege / POD / no_alloc / intrinsic body) are
 	// now sourced from the bootstrapped Osty checker
@@ -314,7 +310,6 @@ func Workspace(
 	// comment above). TestGatesCrossSideParity guards against drift.
 	for _, e := range walk {
 		pkgResult := out[e.path]
-		appendSpecLinkDiagnosticsForPackage(pkgResult, e.pkg)
 		stampPackageDiags(pkgResult.Diags, e.pkg)
 		for _, pf := range e.pkg.Files {
 			if pf == nil {
@@ -357,7 +352,6 @@ func PackageGraph(
 		result := resultWithSharedMaps(shared)
 		out[path] = result
 		applyNativePackageResult(result, pkg, pr, nil, opt.Stdlib, isPrivilegedPackage(pkg))
-		appendSpecLinkDiagnosticsForPackage(result, pkg)
 		stampPackageDiags(result.Diags, pkg)
 		for _, pf := range pkg.Files {
 			if pf == nil {
@@ -368,25 +362,6 @@ func PackageGraph(
 		}
 	}
 	return out
-}
-
-func appendSpecLinkDiagnosticsForSource(result *Result, src []byte, path string) {
-	if result == nil || len(src) == 0 {
-		return
-	}
-	result.Diags = append(result.Diags, specvalidate.Diagnostics(src, path)...)
-}
-
-func appendSpecLinkDiagnosticsForPackage(result *Result, pkg *resolve.Package) {
-	if result == nil || pkg == nil {
-		return
-	}
-	for _, pf := range pkg.Files {
-		if pf == nil {
-			continue
-		}
-		result.Diags = append(result.Diags, specvalidate.Diagnostics(pf.Source, pf.Path)...)
-	}
 }
 
 func newResult() *Result {
