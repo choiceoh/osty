@@ -1733,6 +1733,13 @@ fn lirEmitMirGlobals(out: LirModule, mir: MirModule, diags: List<LirDiagnostic>)
 // *which checks were attempted* so the root cause of an "unsupported param
 // type"/"unsupported local type" upstream failure can be traced without
 // reading the source. v0.6 GAP-TYP-004 (LLVM_BACKEND_GAP_PLAN.md A1).
+//
+// Option/Result with struct payload (C1, GAP-TYP-004 part 2): when the
+// payload is a registered struct in `mir.layouts.structs`, the aggregate
+// type is `{i64, %StructTy}` rather than the default `{i64, i64}` so the
+// payload field can hold the full struct value (>8 bytes). The struct type
+// must be looked up in the same layout table so the named struct typedef
+// is emitted before the Option/Result typedef references it.
 fn lirLowerMirType_module(out: LirModule, mir: MirModule, name: String, path: String, diags: List<LirDiagnostic>) -> LirType {
     let primitive = lirLowerPrimitiveTypeName(name)
     if !(lirTypeIsZero(primitive)) {
@@ -1743,7 +1750,8 @@ fn lirLowerMirType_module(out: LirModule, mir: MirModule, name: String, path: St
     }
     if lirIsOptionTypeName(name) || lirIsResultTypeName(name) {
         let typeName = "%" + lirMangleAlgebraicTypeName(name)
-        lirModuleDeclareTypeDef(out, lirTypeDef(typeName, "\{ i64, i64 \}"))
+        let bodyText = lirAlgebraicAggregateBody_module(out, mir, name)
+        lirModuleDeclareTypeDef(out, lirTypeDef(typeName, bodyText))
         return lirAggregateType(typeName)
     }
     // Composite layout — only resolve those already in the MIR module.
@@ -1762,6 +1770,108 @@ fn lirLowerMirType_module(out: LirModule, mir: MirModule, name: String, path: St
     diags.push(lirDiagnosticError(LirDiagUnsupported,
         "unsupported module type `" + name + "` (" + trace + ")", path))
     lirTypeInvalid()
+}
+
+// `lirAlgebraicAggregateBody_module` builds the LLVM type body string for an
+// `Option<T>` / `Result<T, E>` aggregate. Default shape is `{ i64, i64 }`
+// (tag + i64-sized payload), but when the payload type is a registered
+// struct in `mir.layouts.structs` the payload slot widens to the full
+// `%StructName` aggregate so values >8 bytes fit (C1, GAP-TYP-004 part 2).
+//
+// `Result<T, E>` widens for whichever side is a struct — the tag layout
+// keeps both Ok and Err slots in the *same* aggregate so we widen to the
+// max size of {Ok struct, Err struct} when either is a struct. For the
+// initial v0.6 baseline we widen the *Ok side only* (Err is typically the
+// `Error` interface = ptr-sized or an enum-typed sum), but Err side is
+// covered by the same fallback when `lirOptionResultStructPayload` finds a
+// match.
+//
+// Struct typedef must already be emitted (via the composite layout pass);
+// the aggregate body references it by `%StructMangled`. Recurse into
+// `lirLowerMirType_module` would loop, so we look up the struct directly
+// in `mir.layouts.structs` and reuse the mangled name.
+fn lirAlgebraicAggregateBody_module(out: LirModule, mir: MirModule, name: String) -> String {
+    let payloadInner = lirOptionResultPayloadInner(name)
+    if payloadInner == "" {
+        return "\{ i64, i64 \}"
+    }
+    let structRef = lirMirStructTypeRefByName(mir, payloadInner)
+    if structRef == "" {
+        return "\{ i64, i64 \}"
+    }
+    // Ensure the struct typedef is forward-declared at the top of the
+    // module so this Option<S> typedef can reference it. The composite
+    // pass below also emits it; declaring twice is a no-op for a typedef
+    // module table keyed by name (lirModuleDeclareTypeDef is idempotent).
+    "\{ i64, " + structRef + " \}"
+}
+
+// `lirOptionResultPayloadInner` extracts the *payload type name* from a
+// canonical `Option<T>` / `Result<T, E>` spelling. Returns "" when the
+// shape does not match (caller falls back to the default `{i64, i64}`).
+//
+// For `Result<T, E>` the payload that may be a struct is conventionally
+// `T` (the Ok side); the Err side is typically `Error` (ptr) or a small
+// enum. We return the first generic argument — extending to a wider Err
+// payload is a follow-up.
+fn lirOptionResultPayloadInner(name: String) -> String {
+    if lirIsOptionTypeName(name) {
+        // "Option<X>" or "Maybe<X>"
+        if strings.startsWith(name, "Option<") {
+            return lirContainerInnerArg(name, "Option<")
+        }
+        if strings.startsWith(name, "Maybe<") {
+            return lirContainerInnerArg(name, "Maybe<")
+        }
+        return ""
+    }
+    if lirIsResultTypeName(name) {
+        // "Result<T, E>" — split the first comma-separated arg (T).
+        let inner = lirContainerInnerArg(name, "Result<")
+        if inner == "" {
+            return ""
+        }
+        return lirSplitFirstGenericArg(inner)
+    }
+    ""
+}
+
+// `lirSplitFirstGenericArg` returns the first comma-separated top-level
+// argument from a generic argument list ("T, E" -> "T"). Tracks angle
+// bracket depth so nested generics are not split mid-arg
+// ("Map<K, V>, Error" -> "Map<K, V>").
+fn lirSplitFirstGenericArg(args: String) -> String {
+    let mut depth = 0
+    let mut out = ""
+    let chars = strings.chars(args)
+    for ch in chars {
+        if ch == '<' {
+            depth = depth + 1
+            out = out + strings.fromChar(ch)
+        } else if ch == '>' {
+            depth = depth - 1
+            out = out + strings.fromChar(ch)
+        } else if ch == ',' && depth == 0 {
+            return strings.trim(out)
+        } else {
+            out = out + strings.fromChar(ch)
+        }
+    }
+    strings.trim(out)
+}
+
+// `lirMirStructTypeRefByName` returns the LLVM type reference (`%Mangled`)
+// for a named struct in `mir.layouts.structs`, or "" when not found. Used
+// by Option/Result aggregate widening so we don't recurse through
+// `lirLowerMirType_module`.
+fn lirMirStructTypeRefByName(mir: MirModule, name: String) -> String {
+    for layout in mir.layouts.structs {
+        if lirMirStructLayoutMatches(layout, name) {
+            let identifier = if layout.mangled == "" { layout.name } else { layout.mangled }
+            return "%" + identifier
+        }
+    }
+    ""
 }
 // `lirBuildInitGlobalsCtor` synthesises the
 // `define private void @__osty_init_globals()` function that, for
@@ -2117,7 +2227,9 @@ fn lirLowerMirInstr(l: LirMirFunctionLowerer, instr: MirInstr) {
         },
         MirInstrStorageDead -> {
         },
-        _ -> lirLowerError(l, LirDiagUnsupported, "unsupported MIR instruction kind", "instr"),
+        _ -> lirLowerError(l, LirDiagUnsupported,
+            "unsupported MIR instruction kind `" + mirInstrKindName(instr.kind) + "`",
+            "instr." + mirInstrKindName(instr.kind)),
     }
 }
 fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
@@ -2233,7 +2345,9 @@ fn lirLowerMirCall(l: LirMirFunctionLowerer, instr: MirInstr) {
         return
     }
     if instr.calleeKind != MirCalleeFn {
-        lirLowerError(l, LirDiagUnsupported, "unsupported MIR callee kind", "call")
+        lirLowerError(l, LirDiagUnsupported,
+            "unsupported MIR callee kind `" + mirCalleeKindName(instr.calleeKind) + "`",
+            "call." + mirCalleeKindName(instr.calleeKind))
         return
     }
     if instr.calleeSymbol == "" {
@@ -5205,7 +5319,9 @@ fn lirLowerMirRValue(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, 
         MirRVNullary -> lirLowerMirNullaryRV(l, rv, hintName, hint),
         MirRVGlobalRef -> lirLowerMirGlobalRefRV(l, rv, hintName, hint),
         _ -> {
-            lirLowerError(l, LirDiagUnsupported, "unsupported MIR rvalue kind", "rvalue")
+            lirLowerError(l, LirDiagUnsupported,
+                "unsupported MIR rvalue kind `" + mirRValueKindName(rv.kind) + "`",
+                "rvalue." + mirRValueKindName(rv.kind))
             lirOperandInvalid()
         },
     }
@@ -5343,7 +5459,9 @@ fn lirLowerMirUnary(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, h
         MirUnNot -> l.instrs.push(lirBinary(dest, "xor", typ, arg.value, "1")),
         MirUnBitNot -> l.instrs.push(lirBinary(dest, "xor", typ, arg.value, "-1")),
         _ -> {
-            lirLowerError(l, LirDiagUnsupported, "unsupported MIR unary op", "unary")
+            lirLowerError(l, LirDiagUnsupported,
+                "unsupported MIR unary op `" + mirUnaryKindName(rv.unaryOp) + "`",
+                "unary." + mirUnaryKindName(rv.unaryOp))
             return lirOperandInvalid()
         },
     }
@@ -5367,7 +5485,9 @@ fn lirLowerMirBinary(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, 
     }
     let opcode = lirMirBinaryOpcode(rv.binaryOp, argType, lirPrimitiveTypeIsUnsigned(rv.arg.typ))
     if opcode == "" {
-        lirLowerError(l, LirDiagUnsupported, "unsupported MIR binary op", "binary")
+        lirLowerError(l, LirDiagUnsupported,
+            "unsupported MIR binary op `" + mirBinaryKindName(rv.binaryOp) + "` for arg type `" + rv.arg.typ + "`",
+            "binary." + mirBinaryKindName(rv.binaryOp))
         return lirOperandInvalid()
     }
     let dest = lirFresh(l)
@@ -5433,7 +5553,9 @@ fn lirLowerMirCast(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hi
             // CastRV{OptionalUnwrap} is a passthrough.
         },
         _ -> {
-            lirLowerError(l, LirDiagUnsupported, "unsupported MIR cast kind", "cast")
+            lirLowerError(l, LirDiagUnsupported,
+                "unsupported MIR cast kind `" + mirCastKindName(rv.castKind) + "` (`" + rv.castFrom + "` -> `" + rv.castTo + "`)",
+                "cast." + mirCastKindName(rv.castKind))
             return lirOperandInvalid()
         },
     }
@@ -5710,7 +5832,9 @@ fn lirLowerMirOperand(l: LirMirFunctionLowerer, op: MirOperand, hintName: String
         MirOpMove -> lirLoadMirPlace(l, op.place),
         MirOpConst -> lirLowerMirConst(l, op.const, hintName, hint),
         _ -> {
-            lirLowerError(l, LirDiagUnsupported, "unsupported MIR operand kind", "operand")
+            lirLowerError(l, LirDiagUnsupported,
+                "unsupported MIR operand kind `" + mirOperandKindName(op.kind) + "`",
+                "operand." + mirOperandKindName(op.kind))
             lirOperandInvalid()
         },
     }
@@ -5746,7 +5870,9 @@ fn lirProjectMirOperand(l: LirMirFunctionLowerer, value: LirOperand, projections
     for proj in projections {
         let step = lirProjectionStepFromMir(l, proj)
         if step.kind == LirProjInvalid {
-            lirLowerError(l, LirDiagUnsupported, "unsupported MIR projection", "projection")
+            lirLowerError(l, LirDiagUnsupported,
+                "unsupported MIR projection `" + mirProjectionKindName(proj.kind) + "`",
+                "projection." + mirProjectionKindName(proj.kind))
             return lirOperandInvalid()
         }
         let dest = lirFresh(l)
@@ -5778,7 +5904,9 @@ fn lirLowerMirConst(l: LirMirFunctionLowerer, c: MirConst, hintName: String, hin
         MirConstNull -> lirOperand(lirPtrType(), "null"),
         MirConstFn -> lirOperand(lirPtrType(), "@" + c.fnSymbol),
         _ -> {
-            lirLowerError(l, LirDiagUnsupported, "unsupported MIR const kind", "const")
+            lirLowerError(l, LirDiagUnsupported,
+                "unsupported MIR const kind `" + mirConstKindName(c.kind) + "`",
+                "const." + mirConstKindName(c.kind))
             lirOperandInvalid()
         },
     }

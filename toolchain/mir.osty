@@ -1715,9 +1715,15 @@ fn mirPrintRValue(rv: MirRValue, func: MirFunction) -> String {
 
 // ====================================================================
 // Enum name helpers (for printer)
+//
+// `mirUnaryOpName` / `mirBinaryOpName` historically returned the *operator
+// glyph* used by the human-readable MIR printer ("+", "-", "&&"). For
+// diagnostics we prefer the variant identifier ("add", "sub", "and") so
+// `mirUnaryKindName` / `mirBinaryKindName` (below in the diagnostic block)
+// expose those. The printer-facing helpers stay unchanged.
 // ====================================================================
 
-fn mirUnaryOpName(op: MirUnaryOp) -> String {
+pub fn mirUnaryOpName(op: MirUnaryOp) -> String {
     // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
     if op == MirUnNeg { return "-" }
     if op == MirUnPlus { return "+" }
@@ -1726,7 +1732,7 @@ fn mirUnaryOpName(op: MirUnaryOp) -> String {
     "(?)"
 }
 
-fn mirBinaryOpName(op: MirBinaryOp) -> String {
+pub fn mirBinaryOpName(op: MirBinaryOp) -> String {
     // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
     if op == MirBinAdd { return "+" }
     if op == MirBinSub { return "-" }
@@ -2040,3 +2046,59 @@ pub fn mirConstKindName(k: MirConstKind) -> String {
     if k == MirConstFn { return "fn" }
     "invalid"
 }
+
+pub fn mirCalleeKindName(k: MirCalleeKind) -> String {
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if k == MirCalleeNone { return "none" }
+    if k == MirCalleeFn { return "fn" }
+    if k == MirCalleeIndirect { return "indirect" }
+    "invalid"
+}
+
+// Diagnostic-facing identifier names for unary / binary ops. The printer
+// helpers `mirUnaryOpName` / `mirBinaryOpName` (above) return the operator
+// glyph; these return the variant identifier suitable for E0700-class
+// diagnostic messages.
+pub fn mirUnaryKindName(op: MirUnaryOp) -> String {
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if op == MirUnNeg { return "neg" }
+    if op == MirUnPlus { return "plus" }
+    if op == MirUnNot { return "not" }
+    if op == MirUnBitNot { return "bit_not" }
+    "invalid"
+}
+
+pub fn mirBinaryKindName(op: MirBinaryOp) -> String {
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if op == MirBinAdd { return "add" }
+    if op == MirBinSub { return "sub" }
+    if op == MirBinMul { return "mul" }
+    if op == MirBinDiv { return "div" }
+    if op == MirBinMod { return "mod" }
+    if op == MirBinEq { return "eq" }
+    if op == MirBinNeq { return "neq" }
+    if op == MirBinLt { return "lt" }
+    if op == MirBinLeq { return "leq" }
+    if op == MirBinGt { return "gt" }
+    if op == MirBinGeq { return "geq" }
+    if op == MirBinAnd { return "and" }
+    if op == MirBinOr { return "or" }
+    if op == MirBinBitAnd { return "bit_and" }
+    if op == MirBinBitOr { return "bit_or" }
+    if op == MirBinBitXor { return "bit_xor" }
+    if op == MirBinShl { return "shl" }
+    if op == MirBinShr { return "shr" }
+    "invalid"
+}
+
+pub fn mirOperandKindName(k: MirOperandKind) -> String {
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if k == MirOpCopy { return "copy" }
+    if k == MirOpMove { return "move" }
+    if k == MirOpConst { return "const" }
+    "invalid"
+}
+
+// Note: `mirProjectionKindName` already exists in `mir_generator.osty`
+// (legacy printer helper); we reuse it from diagnostic call sites instead
+// of duplicating here.
