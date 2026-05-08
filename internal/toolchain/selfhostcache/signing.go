@@ -57,8 +57,26 @@ var ErrTrustedKeyMalformed = errors.New("selfhostcache: trusted key not a 64-cha
 // require manifests to be signed under. The boolean return is
 // `false` when no key is configured — the caller must treat that
 // as "verification disabled" and accept unsigned manifests.
+//
+// Resolution order: OSTY_SELF_TRUSTED_KEY env var first, then the
+// repo-committed `DefaultTrustedKeyHex` constant. Empty default +
+// unset env preserves the legacy warn-only behaviour (A6); a
+// committed default upgrades fresh clones to verify-by-default
+// without requiring users to discover and export the env var.
 func TrustedKey() (ed25519.PublicKey, bool, error) {
+	return trustedKeyWithDefault(DefaultTrustedKeyHex)
+}
+
+// trustedKeyWithDefault is the test-friendly form of TrustedKey —
+// callers inject the default explicitly so the unit suite can
+// exercise both the "default unset" (legacy warn-only) and
+// "default present" (fresh-clone verify) branches without rewriting
+// package-level state.
+func trustedKeyWithDefault(defaultHex string) (ed25519.PublicKey, bool, error) {
 	raw := strings.TrimSpace(os.Getenv(TrustedKeyEnv))
+	if raw == "" {
+		raw = strings.TrimSpace(defaultHex)
+	}
 	if raw == "" {
 		return nil, false, nil
 	}
