@@ -29,6 +29,72 @@ func TestParseTrustedKeyAcceptsValidHex(t *testing.T) {
 	}
 }
 
+func TestTrustedKeyEnvWinsOverDefault(t *testing.T) {
+	envPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("genkey env: %v", err)
+	}
+	defaultPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("genkey default: %v", err)
+	}
+	t.Setenv(TrustedKeyEnv, hex.EncodeToString(envPub))
+	got, ok, err := trustedKeyWithDefault(hex.EncodeToString(defaultPub))
+	if err != nil {
+		t.Fatalf("trustedKeyWithDefault: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected key configured")
+	}
+	if !got.Equal(envPub) {
+		t.Errorf("env should win over default")
+	}
+}
+
+func TestTrustedKeyFallsBackToDefault(t *testing.T) {
+	defaultPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("genkey: %v", err)
+	}
+	t.Setenv(TrustedKeyEnv, "")
+	got, ok, err := trustedKeyWithDefault(hex.EncodeToString(defaultPub))
+	if err != nil {
+		t.Fatalf("trustedKeyWithDefault: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected default to activate verification")
+	}
+	if !got.Equal(defaultPub) {
+		t.Errorf("default key not returned")
+	}
+}
+
+func TestTrustedKeyDisabledWhenAllEmpty(t *testing.T) {
+	t.Setenv(TrustedKeyEnv, "")
+	_, ok, err := trustedKeyWithDefault("")
+	if err != nil {
+		t.Fatalf("trustedKeyWithDefault: %v", err)
+	}
+	if ok {
+		t.Fatal("expected ok=false when both env and default are empty (warn-only)")
+	}
+}
+
+func TestDefaultTrustedKeyHexIsValidOrEmpty(t *testing.T) {
+	// Sanity-pin: the committed constant must either be the empty
+	// string (warn-only) or a 64-char hex ed25519 pubkey. Anything
+	// in between (e.g. an accidental partial paste) would silently
+	// downgrade fresh clones to no-verification with a malformed-key
+	// error consumed by EnvFetcher().
+	v := strings.TrimSpace(DefaultTrustedKeyHex)
+	if v == "" {
+		return
+	}
+	if _, err := ParseTrustedKey(v); err != nil {
+		t.Fatalf("DefaultTrustedKeyHex is set but malformed: %v", err)
+	}
+}
+
 func TestParseTrustedKeyRejectsBadInput(t *testing.T) {
 	cases := []struct {
 		name string

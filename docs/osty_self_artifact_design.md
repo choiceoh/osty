@@ -126,17 +126,95 @@ test infra) 는 본 artifact 시스템에서도 그대로 가치 보존된다 �
 체인의 마지막 단계로 유지되며, real-MIR 회귀 테스트는 stage0 든 osty-self
 든 어느 쪽이 emit 했는지 무관하게 회귀 게이트로 작동.
 
-## 8. 결정 필요 항목
+## 8. 결정 — RESOLVED
 
-1. **CI 빌드 호스트** — GitHub Actions 의 어떤 runner 가 어떤 triple 을
-   담당? linux-amd64, linux-arm64 (self-hosted?), darwin-amd64,
-   darwin-arm64, windows-amd64, windows-arm64.
-2. **Release 정책** — main push 마다? 태그 push 시? 분기 빌드는?
-3. **Storage 비용** — GitHub Release artifact 무료 한도 vs S3 / R2 호스팅.
-4. **Toolchain 변경 빈도** — 너무 잦으면 release 폭주. 캐시 키 안정성을 위해
-   toolchain 외 변경은 키에 들어가지 않게 4.1 알고리즘 유지.
-5. **Reproducibility** — 같은 toolchain SHA 에서 host 가 같은 OS/CPU 라면
-   바이너리가 같아야 함. LLVM 의 비결정성 (예: -fdebug-prefix-map) 통제 필요.
+각 항목의 합의 결과 (Q1–Q5 grilling 기록 기반).
+
+### 8.1 CI 빌드 호스트 (Q1)
+
+**5 GA-stable hosted runners**:
+
+| triple | runner | 비고 |
+|---|---|---|
+| linux-amd64 | `ubuntu-latest` | |
+| linux-arm64 | `ubuntu-22.04-arm` | |
+| darwin-amd64 | `macos-15-intel` | Intel macOS sunset 예정 — exit 계획 별도 |
+| darwin-arm64 | `macos-14` | |
+| windows-amd64 | `windows-latest` | |
+
+**`windows-arm64` 는 초기 매트릭스에서 drop**. `windows-11-arm` GA 전까지
+사용자가 `OSTY_SELF_BIN` 또는 `OSTY_STAGE0_FALLBACK=1` fallback.
+
+### 8.2 Release 정책 (Q2 + Q3)
+
+- **저장 위치**: GitHub Releases, **rolling tag `osty-self-snapshots`**.
+  asset 형식 `<sha>-<triple>.json` + binary + 옵션 `<sha>-<triple>.json.sig`.
+- **Trigger 하이브리드**:
+  - `push` to main with `paths: toolchain/**` + `internal/toolchain/selfhostcache/**` + workflow 파일
+  - `workflow_dispatch` (manual recovery / first-publish)
+  - `schedule: cron 0 6 * * 1` (월요일 06:00 UTC, 안전망 backfill)
+
+### 8.3 Storage 비용 (Q2)
+
+- **GitHub Releases (퍼블릭 repo)**: storage / bandwidth 사실상 무제한
+  (Homebrew/cargo binstall 와 같은 패턴).
+- 추가 secrets: `OSTY_SELF_SIGNING_KEY` (signing 활성화 시), `GITHUB_TOKEN`
+  (자동 주입). 그 외 0.
+- **외부 vendor lock-in 0** (S3/R2/CF 의존성 없음).
+
+### 8.4 Toolchain 변경 빈도
+
+- `paths-filter` 가 `toolchain/**` 외 변경에서 publish 잡 자체를 trigger
+  안 함 — 백엔드/check/runtime push 가 publish 폭주 안 만듦.
+- `Key.ToolchainSHA` 알고리즘 (§4.1) 그대로 — `toolchain/` 만 hash.
+- `osty gc-self` (A8) 가 LRU + age cutoff 로 정상 상태 1–2GB 유지.
+
+### 8.5 Reproducibility (Q5-b)
+
+- **`SOURCE_DATE_EPOCH=$(commit-timestamp)`**: clang/lld 가 honor.
+  timestamp macros (`__DATE__`/`__TIME__`), object archive headers,
+  debug-info timestamps 통제.
+- **`-ffile-prefix-map=$WORKSPACE=. -fdebug-prefix-map=$WORKSPACE=.`**:
+  runner CWD 를 debug-info 경로에서 제거 → 다른 runner workspace
+  에서도 같은 byte.
+- **Runner OS pin**: `ubuntu-latest` / `macos-14` / `macos-15-intel`
+  / `windows-latest` 명시. `*-latest` aliases 안 사용 (drift 위험).
+- **`verify-self-rebuild`** 의 stage2/3 byte parity 가 host-내
+  reproducibility 검증 중 — 위 env 추가는 cross-publish stability 만 보장.
+
+### 8.6 Signing (Q4)
+
+- **Custody**: 단일 메인테이너 + 1Password 백업. GitHub Secret
+  `OSTY_SELF_SIGNING_KEY` 가 production 경로.
+- **Rotation**: 사고 시 IR (`docs/security/signing-rotation.md`).
+  정기 rotation 안 함.
+- **Trust key 분배**: `internal/toolchain/selfhostcache/default_trusted_key.go`
+  의 `DefaultTrustedKeyHex` 상수 + `docs/security/trusted-keys.md` 의
+  fingerprint 표 commit.
+- **Verification 강도**: warn-only (key 미설정 시 unsigned 통과).
+  `DefaultTrustedKeyHex` 가 비어 있으면 fresh clone 도 verify 안 함;
+  메인테이너가 첫 키 publish 시 const 갱신 → 자동 verify 활성.
+
+### 8.7 Source — chicken-and-egg (Q5-a)
+
+- **운영 모델**: rolling release `osty-self-snapshots` 가 cache entries
+  (불변, append-only) + bootstrap seeds (`osty-self-latest-<triple>.bin`,
+  rolling, force-update) 두 종류 보관.
+- **첫 round (manual ops)**: 메인테이너가 5 triple 의 bootstrap seed
+  를 hand-distribute. Docker `linux/{amd64,arm64}` + 메인테이너
+  darwin-arm64 머신 + macos-15-intel hosted runner 1회 dispatch +
+  windows-latest hosted runner 1회 dispatch. 자세한 절차:
+  [`docs/operations/first-publish-playbook.md`](operations/first-publish-playbook.md).
+- **이후**: workflow 가 prior `osty-self-latest-<triple>.bin` 을 fetch
+  → 자기 triple 빌드 → 새 cache entry + 새 seed publish. self-perpetuating.
+
+### 8.8 검증 정책 (Q5-c)
+
+- **Cache entries**: same-key first-publish-wins. 같은 `<sha>-<triple>.json`
+  이 이미 release 에 있으면 publish skip — reproducibility 회귀를
+  cache 가 silently 흡수하지 않도록.
+- **Bootstrap seeds**: 매 publish 마다 force-overwrite. 다음 round
+  의 시드는 항상 latest.
 
 ## Appendix A. A1 단계 (이 PR) 의 효과
 

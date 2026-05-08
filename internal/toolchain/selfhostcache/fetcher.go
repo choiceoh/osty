@@ -300,10 +300,32 @@ func FetchAndInstall(ctx context.Context, projectRoot string, key Key, fetcher F
 // returns `nil` so the resolver fails closed (no network) instead
 // of silently downgrading to unsigned.
 func EnvFetcher() Fetcher {
+	return envFetcherWithDefault(DefaultRegistryURL)
+}
+
+// envFetcherWithDefault is the test-friendly form of EnvFetcher — the
+// caller provides the default URL explicitly so tests can exercise
+// both the "default-disabled" (empty) and "default-active" branches
+// without rewriting package-level state.
+//
+// Resolution order:
+//
+//  1. OSTY_SELF_REGISTRY_OFFLINE=1 → nil (air-gapped / CI lockdown).
+//  2. OSTY_SELF_REGISTRY_URL set → use it.
+//  3. OSTY_SELF_REGISTRY_URL unset and `defaultURL` non-empty → use default.
+//  4. Both empty → nil (no fetch).
+//
+// The malformed-trusted-key path returns nil rather than fall back —
+// fail closed so a misconfigured key never silently downgrades a
+// signed-required deployment to unsigned.
+func envFetcherWithDefault(defaultURL string) Fetcher {
 	if isOffline() {
 		return nil
 	}
 	base := strings.TrimSpace(os.Getenv(RegistryURLEnv))
+	if base == "" {
+		base = defaultURL
+	}
 	if base == "" {
 		return nil
 	}

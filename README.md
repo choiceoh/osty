@@ -257,13 +257,17 @@ in order:
 3. `.osty/cache/self-host/<sha>-<triple>/osty-self` — the
    content-addressed cache. Populated by `osty install-self` and
    `verify-self-rebuild --reuse-stage1`.
-4. **Network fetch** from `$OSTY_SELF_REGISTRY_URL` — only when set
-   and `$OSTY_SELF_REGISTRY_OFFLINE` is unset. Successful fetches
+4. **Network fetch** from `$OSTY_SELF_REGISTRY_URL`, falling back to
+   `selfhostcache.DefaultRegistryURL` (the upstream `choiceoh/osty`
+   rolling release `osty-self-snapshots`) when the env var is unset.
+   Disabled by `$OSTY_SELF_REGISTRY_OFFLINE`. Successful fetches
    promote the binary into the local cache so step 3 hits next time.
 
 When all four miss, the resolver returns the canonical `osty-self
 not found` decline so the upstream backend dispatcher can fall back
-to its decline handler.
+to its decline handler. **Fresh clones therefore work out of the
+box** without exporting any env var — `just bootstrap` consults the
+upstream registry directly.
 
 ### Network fetch + signing
 
@@ -283,9 +287,9 @@ Consumer-side env vars:
 
 | Var | Purpose |
 |---|---|
-| `OSTY_SELF_REGISTRY_URL` | Base URL the resolver GETs manifests / binaries from. Unset ⇒ network fetch disabled. |
+| `OSTY_SELF_REGISTRY_URL` | Base URL the resolver GETs manifests / binaries from. Unset ⇒ falls back to `selfhostcache.DefaultRegistryURL` (the upstream rolling release). |
 | `OSTY_SELF_REGISTRY_OFFLINE` | When truthy, hard-disables the fetcher even with a registry URL set. CI / air-gapped environments. |
-| `OSTY_SELF_TRUSTED_KEY` | 64-char hex ed25519 public key. When set, manifests must be signed under the matching private key or the fetcher rejects them. Unset ⇒ unsigned manifests are accepted (A4-class behaviour). |
+| `OSTY_SELF_TRUSTED_KEY` | 64-char hex ed25519 public key. When set, manifests must be signed under the matching private key or the fetcher rejects them. Unset ⇒ falls back to `selfhostcache.DefaultTrustedKeyHex`; if both are empty, unsigned manifests are accepted (warn-only mode). |
 | `OSTY_SELF_BIN` | Bypass everything and use this binary path. |
 | `OSTY_STAGE0_FALLBACK` | Last-resort emergency-only Go MIR→LLVM emitter. See `docs/osty_self_bootstrap_design.md`. |
 

@@ -1,32 +1,67 @@
-# Build per-host `osty-self` artifacts and produce the manifest pair
-# consumed by `selfhostcache.HTTPFetcher`.
+# Build per-host `osty-self` artifacts and publish them to the
+# `osty-self-snapshots` rolling release on this repository.
 #
-# Status: scaffold (A5). The workflow runs on a manual dispatch only —
-# the artifact upload step is deliberately gated behind a runtime
-# `OSTY_SELF_REGISTRY_URL` so a maintainer can flip publishing on
-# without merging additional code. Until A6 (manifest signing) lands
-# the produced artifacts are advisory; resolvers will still verify
-# the manifest SHA-256 before promoting into the local cache.
+# The rolling release stores three asset families (see
+# `docs/operations/self_host_registry_setup.md`):
 #
-# Layout produced per matrix entry (linux-amd64 etc.):
+#   <sha>-<triple>.json            ← cache manifest (immutable, append-only)
+#   <sha>-<triple>.json.sig        ← detached ed25519 sig (when signing key is set)
+#   <binary-url>                   ← the binary referenced by manifest.BinaryURL
+#   osty-self-latest-<triple>.bin  ← bootstrap seed for the next publish round
 #
-#   artifacts/<key>.json     ← published as <base>/<key>.json
-#   artifacts/<key>/osty-self  ← referenced by manifest.BinaryURL
+# Cache entries (the first three) are first-publish-wins — re-running
+# this workflow against the same toolchain SHA leaves them untouched.
+# The bootstrap seed (the fourth) is force-overwritten on every run so
+# the next workflow round can pull a fresh osty-self into its build
+# environment.
 #
-# The matrix mirrors the `cross-compile` job in `.github/workflows/ci.yml`
-# but layers `osty install-self` + `osty manifest-self` over the
-# native build so each runner emits a real, content-addressed entry.
+# Triggers:
+#   - push to main when `toolchain/**` or this workflow itself changes
+#     (a new toolchain SHA is the only thing that produces new cache
+#     entries — pure backend / check / runtime changes are skipped).
+#   - workflow_dispatch for manual recovery / first-publish bootstrap.
+#   - schedule (Monday 06:00 UTC) as a safety-net backfill in case a
+#     paths-filter false negative or external toolchain (LLVM) bump
+#     ever invalidates the prior cache.
+#
+# Runner pinning: the matrix uses pinned hosted runners (no `*-latest`
+# beyond the GA aliases) so reproducibility is bounded to the GitHub
+# image release the runner picks up. SOURCE_DATE_EPOCH and the prefix
+# maps below clamp the rest of the LLVM-side variability.
+#
+# Publishing is gated on `vars.OSTY_SELF_REGISTRY_URL` being set on the
+# repository — without it the matrix still runs and uploads workflow
+# artifacts (advisory build), but the rolling-release publish step is
+# a no-op so a maintainer can dry-run the workflow before flipping
+# the variable.
 
 name: Build osty-self
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'toolchain/**'
+      - '.github/workflows/build-osty-self.yml'
+      - 'internal/toolchain/selfhostcache/**'
   workflow_dispatch:
     inputs:
       osty_version:
-        description: "Provenance string baked into manifest.ostyVersion"
+        description: "Provenance string baked into manifest.ostyVersion (default: short SHA)"
         required: false
         type: string
         default: ""
+      skip_seed_fetch:
+        description: "Skip downloading the prior bootstrap seed (use only when seeding the very first round)"
+        required: false
+        type: boolean
+        default: false
+  schedule:
+    # Monday 06:00 UTC — safety-net backfill. Cheap when nothing has
+    # changed (paths-filter wins on next push), useful when an
+    # external dependency bump invalidates an existing cache entry
+    # for the same toolchain SHA.
+    - cron: '0 6 * * 1'
 
 permissions:
   contents: read
@@ -43,28 +78,40 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # 5 GA-stable triples. windows-arm64 is intentionally absent —
+        # `windows-11-arm` is in public preview as of this workflow
+        # writing; users on that triple fall through to the
+        # `OSTY_SELF_BIN` / stage0 fallback paths until GA.
         include:
           - goos: linux
             goarch: amd64
-            runner: self-hosted
+            runner: ubuntu-latest
           - goos: linux
             goarch: arm64
-            runner: self-hosted
+            runner: ubuntu-22.04-arm
           - goos: darwin
             goarch: amd64
-            runner: self-hosted
+            # Intel macOS runners are end-of-life on hosted GHA — the
+            # last GA Intel image is `macos-15-intel`. Plan a darwin-amd64
+            # exit when it sunsets; users on Intel Macs already lean on
+            # Rosetta-emulated arm64 binaries for most other tooling.
+            runner: macos-15-intel
           - goos: darwin
             goarch: arm64
-            runner: self-hosted
+            runner: macos-14
           - goos: windows
             goarch: amd64
-            runner: self-hosted
-          - goos: windows
-            goarch: arm64
-            runner: self-hosted
+            runner: windows-latest
     env:
       GOFLAGS: -mod=readonly
       OSTY_VERSION: ${{ inputs.osty_version }}
+      # Reproducibility env (Q5-b). SOURCE_DATE_EPOCH clamps timestamp
+      # macros (__DATE__/__TIME__), object archive headers, and lld
+      # debug-info timestamps — clang and lld both honour it. The
+      # prefix maps strip the runner CWD from debug-info paths so
+      # builds on different runner workspaces produce the same bytes.
+      SOURCE_DATE_EPOCH: ${{ github.event.head_commit.timestamp != '' && github.event.head_commit.timestamp || '0' }}
+      OSTY_BUILD_FLAGS: "-ffile-prefix-map=${{ github.workspace }}=. -fdebug-prefix-map=${{ github.workspace }}=."
 
     steps:
       - name: Checkout
@@ -77,6 +124,10 @@ jobs:
           cache: true
 
       - name: Build host osty CLI
+        # The Go-built host osty drives the toolchain build — front
+        # end + LIR Proto subprocess invocation. It does not itself
+        # need the prior seed; it only fails if it then can't find
+        # an osty-self to run lir-proto-lower.
         run: |
           mkdir -p .bin
           go build -o .bin/osty ./cmd/osty
@@ -87,18 +138,62 @@ jobs:
           go build -o .osty/bin/osty-native-checker ./cmd/osty-native-checker
           go build -o .osty/bin/osty-native-lirproto ./cmd/osty-native-lirproto
 
+      - name: Fetch prior bootstrap seed
+        # Pull the previous round's `osty-self-latest-<triple>.bin`
+        # off the rolling release and expose it via OSTY_SELF_BIN so
+        # `install-self` can use it to compile the new toolchain. The
+        # seed itself was produced by an earlier publish, breaking
+        # the chicken-and-egg cycle.
+        #
+        # On the very first publish round there is no seed yet —
+        # callers pass `skip_seed_fetch=true` (workflow_dispatch only)
+        # and instead rely on a maintainer-uploaded seed already
+        # present in the rolling release before this run.
+        if: ${{ inputs.skip_seed_fetch != true }}
+        env:
+          REGISTRY_URL: ${{ vars.OSTY_SELF_REGISTRY_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${REGISTRY_URL:-}" ]; then
+            echo "OSTY_SELF_REGISTRY_URL repo variable unset — skipping seed fetch (advisory build mode)." >&2
+            exit 0
+          fi
+          triple="${{ matrix.goos }}-${{ matrix.goarch }}"
+          seed_url="$REGISTRY_URL/osty-self-latest-$triple.bin"
+          seed_dir=".osty/cache/self-host/seed"
+          mkdir -p "$seed_dir"
+          seed_path="$seed_dir/osty-self"
+          if [ "${{ matrix.goos }}" = "windows" ]; then seed_path="$seed_path.exe"; fi
+          if curl -fsSL --retry 3 --retry-delay 5 -o "$seed_path" "$seed_url"; then
+            chmod +x "$seed_path" || true
+            echo "OSTY_SELF_BIN=$PWD/$seed_path" >> "$GITHUB_ENV"
+            echo "Fetched seed from $seed_url"
+          else
+            # Missing seed is a recoverable condition (first round, or
+            # a deliberately-cleared release). Surface it but let the
+            # build try `OSTY_STAGE0_FALLBACK=1` so the matrix can
+            # still produce *something* for the maintainer to inspect.
+            echo "Seed not available at $seed_url — falling through to stage0 fallback for this run." >&2
+            echo "OSTY_STAGE0_FALLBACK=1" >> "$GITHUB_ENV"
+          fi
+
       - name: Install self-host artifact into cache
+        # Drives toolchain → osty-self build using the seed we just
+        # placed (or stage0 fallback if no seed). The cache layout is
+        # the local `.osty/cache/self-host/<sha>-<triple>/` tree.
+        env:
+          OSTY_BUILD_FLAGS: ${{ env.OSTY_BUILD_FLAGS }}
+        shell: bash
         run: |
           .bin/osty install-self --force
 
       - name: Locate cached osty-self
         id: locate
+        shell: bash
         run: |
           set -euo pipefail
           triple="${{ matrix.goos }}-${{ matrix.goarch }}"
-          # `install-self` printed the cache path as the last token of
-          # `installed:`; re-derive it from the cache layout for
-          # robustness.
           shopt -s nullglob
           candidates=(.osty/cache/self-host/*-"$triple"/osty-self*)
           if [ "${#candidates[@]}" -eq 0 ]; then
@@ -106,20 +201,15 @@ jobs:
             ls -R .osty/cache/self-host/ || true
             exit 1
           fi
-          if [ "${#candidates[@]}" -gt 1 ]; then
-            echo "multiple cache entries; picking newest:" >&2
-            ls -lt "${candidates[@]}" >&2
-          fi
-          # Pick the lexicographically last one (alpha-stable across
-          # repeated runs); collisions are unexpected since toolchain SHA
-          # is deterministic per source state.
-          IFS=$'\n' sorted=($(printf '%s\n' "${candidates[@]}" | sort))
-          unset IFS
+          # Lex-sort so re-runs against an unchanged toolchain SHA
+          # pick the same binary (deterministic across redrives).
+          mapfile -t sorted < <(printf '%s\n' "${candidates[@]}" | sort)
           bin="${sorted[-1]}"
           echo "bin=$bin"  >> "$GITHUB_OUTPUT"
           echo "triple=$triple" >> "$GITHUB_OUTPUT"
 
       - name: Generate manifest
+        shell: bash
         run: |
           set -euo pipefail
           triple="${{ steps.locate.outputs.triple }}"
@@ -127,26 +217,24 @@ jobs:
           mkdir -p artifacts
           # Bring the binary alongside the manifest so the artifact
           # bundle is self-contained.
-          cp "$bin" "artifacts/osty-self-$triple"
+          binary_basename="osty-self-$triple"
+          if [ "${{ matrix.goos }}" = "windows" ]; then binary_basename="$binary_basename.exe"; fi
+          cp "$bin" "artifacts/$binary_basename"
           .bin/osty manifest-self \
             --bin "$bin" \
-            --binary-url "osty-self-$triple" \
+            --binary-url "$binary_basename" \
             --triple "$triple" \
             --osty-version "${OSTY_VERSION:-${GITHUB_SHA:0:12}}" \
             --out "artifacts/$triple.json"
 
       - name: Sign manifest
-        # Signing is opt-in. When the OSTY_SELF_SIGNING_KEY secret is
-        # set the runner produces a detached ed25519 signature
-        # alongside the manifest. Resolvers that have configured
-        # OSTY_SELF_TRUSTED_KEY refuse unsigned artifacts (A6).
-        # Without the secret the workflow still produces an
-        # unsigned manifest — the resolver's signed/unsigned switch
-        # remains a single env var on the consumer side. The
-        # conditional lives inside the step body (not in `if:`) so
-        # the secret check survives `secrets` context restrictions.
+        # Signing is opt-in. When OSTY_SELF_SIGNING_KEY is set the
+        # runner produces a detached ed25519 signature alongside the
+        # manifest. Resolvers consult `OSTY_SELF_TRUSTED_KEY` (or the
+        # repo-committed `docs/security/trusted-keys.md`) to verify.
         env:
           OSTY_SELF_SIGNING_KEY: ${{ secrets.OSTY_SELF_SIGNING_KEY }}
+        shell: bash
         run: |
           set -euo pipefail
           if [ -z "${OSTY_SELF_SIGNING_KEY:-}" ]; then
@@ -155,15 +243,23 @@ jobs:
           fi
           triple="${{ steps.locate.outputs.triple }}"
           key_path="$RUNNER_TEMP/osty-self-signing.key"
-          # Trim trailing whitespace; the secret store sometimes
-          # injects a newline that loadPrivateKey already tolerates,
-          # but explicit trimming avoids surprises.
           printf '%s' "$OSTY_SELF_SIGNING_KEY" > "$key_path"
           chmod 600 "$key_path"
           .bin/osty sign-self \
             --manifest "artifacts/$triple.json" \
             --key "$key_path"
           rm -f "$key_path"
+
+      - name: Stage bootstrap seed
+        # Copy the freshly built binary as `osty-self-latest-<triple>.bin`
+        # so the publish job force-uploads it. This is the seed the
+        # *next* workflow run will fetch in the "Fetch prior bootstrap
+        # seed" step above.
+        shell: bash
+        run: |
+          triple="${{ steps.locate.outputs.triple }}"
+          bin="${{ steps.locate.outputs.bin }}"
+          cp "$bin" "artifacts/osty-self-latest-$triple.bin"
 
       - name: Upload artifact bundle
         uses: actions/upload-artifact@v4
@@ -174,51 +270,119 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish manifests
-    runs-on: self-hosted
+    name: Publish to rolling release
+    runs-on: ubuntu-latest
     needs: build
-    timeout-minutes: 10
-    # Publishing is opt-in — set the secret to enable. Without it the
-    # job is a no-op so the matrix above can run on every dispatch
-    # without producing live artifacts.
+    timeout-minutes: 15
+    # Publishing is gated on the repo variable being set. Without it
+    # the build matrix still runs end-to-end (advisory build), so a
+    # maintainer can verify reproducibility / signing / fetch chain
+    # before flipping the gate.
     if: ${{ vars.OSTY_SELF_REGISTRY_URL != '' }}
+    permissions:
+      # `gh release create / upload` requires write on contents.
+      contents: write
 
     steps:
+      - name: Checkout
+        # gh CLI infers the target repo from the working tree.
+        uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: registry/
 
-      - name: Layout for upload
+      - name: Flatten upload payload
+        shell: bash
         run: |
           set -euo pipefail
-          # Each downloaded subdir holds one (manifest, binary[, sig])
-          # tuple. Flatten into the layout HTTPFetcher expects:
-          #   <base>/<key>.json
-          #   <base>/<key>.json.sig    (when signed)
-          #   <base>/<binary-url>
+          # Each downloaded subdir holds one (manifest, binary,
+          # optional sig, bootstrap seed) tuple. Flatten into a
+          # single `upload/` directory so the publish step can iterate
+          # over file families uniformly.
           mkdir -p upload
           shopt -s nullglob
           for dir in registry/*/; do
             for json in "$dir"*.json; do
-              # Drop into upload/ keyed by the manifest's `key` field.
               key=$(jq -r .key "$json")
               cp "$json" "upload/$key.json"
               if [ -f "$json.sig" ]; then
                 cp "$json.sig" "upload/$key.json.sig"
               fi
             done
-            for bin in "$dir"osty-self-*; do
+            for bin in "$dir"osty-self-*.bin "$dir"osty-self-*-*; do
+              [ -e "$bin" ] || continue
               cp "$bin" "upload/$(basename "$bin")"
             done
           done
           ls -la upload/
 
-      # Actual upload step is deferred to the maintainer's chosen
-      # backend (S3 / R2 / Pages). The scaffold stops here so the
-      # workflow remains visible/reviewable without binding the repo
-      # to a specific storage vendor.
-      - name: Summary
+      - name: Ensure rolling release exists
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          echo "Prepared upload payload under upload/" >&2
-          echo "Configure the maintainer-side step that POSTs to ${{ vars.OSTY_SELF_REGISTRY_URL }}." >&2
+          set -euo pipefail
+          if ! gh release view osty-self-snapshots >/dev/null 2>&1; then
+            gh release create osty-self-snapshots \
+              --title "osty-self snapshots (rolling)" \
+              --notes "Rolling cache of per-host osty-self artifacts. See docs/operations/self_host_registry_setup.md for layout and consumption."
+          fi
+
+      - name: Publish cache entries (first-publish-wins)
+        # Manifest + binary + sig are immutable per Q5-c (γ). If an
+        # asset with the target name already exists on the release,
+        # we do NOT overwrite it — the first publish for any given
+        # toolchain SHA is the authoritative one. This keeps the
+        # cache key contract honest (same SHA → same byte sequence).
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd upload
+          existing=$(gh release view osty-self-snapshots --json assets --jq '.assets[].name' | sort -u)
+          publish_one() {
+            local f="$1"
+            if printf '%s\n' "$existing" | grep -qx "$f"; then
+              echo "skip (already published): $f"
+              return 0
+            fi
+            gh release upload osty-self-snapshots "$f"
+            echo "uploaded: $f"
+          }
+          shopt -s nullglob
+          # Manifests + their signatures, then their binaries. The
+          # rolling seeds are handled in the next step (force-update).
+          for f in *.json *.json.sig; do publish_one "$f"; done
+          for f in osty-self-darwin-* osty-self-linux-* osty-self-windows-*; do
+            case "$f" in
+              osty-self-latest-*) continue ;;
+            esac
+            publish_one "$f"
+          done
+
+      - name: Publish bootstrap seeds (force-update)
+        # `osty-self-latest-<triple>.bin` is the seed for the *next*
+        # run — it must always reflect the latest successful build,
+        # so we force-overwrite. There is no cache-key contract on
+        # these files; the next workflow consumes them as
+        # opaque-but-fresh.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd upload
+          shopt -s nullglob
+          for f in osty-self-latest-*.bin; do
+            gh release upload osty-self-snapshots "$f" --clobber
+            echo "force-uploaded seed: $f"
+          done
+
+      - name: Summary
+        shell: bash
+        run: |
+          echo "Published to ${{ vars.OSTY_SELF_REGISTRY_URL }}"
+          echo "Cache entries are immutable; bootstrap seeds were force-updated."

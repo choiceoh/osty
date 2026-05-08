@@ -1,0 +1,152 @@
+# Fresh-clone bootstrap smoke test (B1 post-verification).
+#
+# Each Sunday this workflow runs the exact path a brand-new contributor
+# walks: shallow-clone the repo into an empty directory, build the
+# host osty Go binary, and let `install-self` fetch a pre-built
+# `osty-self` from the rolling release configured by
+# `vars.OSTY_SELF_REGISTRY_URL`. Then it builds a tiny example to
+# prove the toolchain path is wired end-to-end.
+#
+# A failure here means fresh clones cannot bootstrap. The job opens an
+# issue automatically so the maintainer notices even if they only
+# check email.
+
+name: Bootstrap smoke test
+
+on:
+  schedule:
+    # Sunday 04:00 UTC — runs ~2 hours before the Monday backfill of
+    # `build-osty-self.yml`, so a missing publish surfaces as a smoke
+    # test failure first, then auto-recovers when the backfill runs.
+    - cron: '0 4 * * 0'
+  workflow_dispatch:
+    inputs:
+      from_ref:
+        description: "Ref to clone for the smoke test (default: main)"
+        required: false
+        type: string
+        default: "main"
+
+permissions:
+  # `gh issue create` on failure.
+  contents: read
+  issues: write
+
+concurrency:
+  group: bootstrap-smoke-${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    name: Fresh clone → bootstrap → toolchain build
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Set up Go
+        # The host osty CLI is a Go binary; bootstrap needs Go on PATH.
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+
+      - name: Install just
+        run: |
+          curl -fsSL https://github.com/casey/just/releases/latest/download/just-1.50.0-x86_64-unknown-linux-musl.tar.gz \
+              | tar -xz -C "$HOME/.local/bin" just
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          mkdir -p "$HOME/.local/bin"
+
+      - name: Install LLVM toolchain (clang/lld for the link step)
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends clang lld
+
+      - name: Shallow clone in scratch dir
+        # We deliberately do not use actions/checkout — a fresh
+        # contributor never has the repo pre-staged. Shallow clone is
+        # what `git clone --depth 1` produces, which exercises every
+        # path that depends on the working tree being a clone vs. an
+        # archive.
+        env:
+          REF: ${{ inputs.from_ref || 'main' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/scratch"
+          cd "$RUNNER_TEMP/scratch"
+          git clone --depth 1 --branch "$REF" https://github.com/choiceoh/osty osty
+          cd osty
+          git rev-parse HEAD
+          git status
+
+      - name: Bootstrap from registry (`just bootstrap`)
+        # `just bootstrap` runs build-all + install-self. The
+        # install-self step is the meat of the test — it consults the
+        # rolling release at OSTY_SELF_REGISTRY_URL, fetches a
+        # pre-built osty-self for linux-amd64, verifies the manifest,
+        # and promotes the binary into the local cache.
+        env:
+          # Don't let a stale env on a re-used hosted runner leak into
+          # the test — the resolver should see a clean fresh-clone
+          # state.
+          OSTY_SELF_BIN: ""
+          OSTY_SELF_TRUSTED_KEY: ""
+          OSTY_STAGE0_FALLBACK: ""
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/scratch/osty"
+          just bootstrap 2>&1 | tee "$RUNNER_TEMP/bootstrap.log"
+
+      - name: Verify toolchain build path with a tiny example
+        # If install-self fetched a working osty-self, a trivial build
+        # against examples/calc proves the front-end → LIR Proto →
+        # toolchain chain is wired. This isn't a full toolchain build
+        # (slow), just a sanity check that the registry binary is
+        # actually executable + ABI-compatible.
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/scratch/osty"
+          ./.bin/osty check examples/calc 2>&1 | tee "$RUNNER_TEMP/check.log"
+
+      - name: Open / update tracking issue on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          title="bootstrap-smoke: fresh clone broken (commit ${GITHUB_SHA:0:12})"
+          body=$(cat <<EOF
+          The weekly fresh-clone smoke test failed against \`${GITHUB_REF_NAME}\` at commit \`${GITHUB_SHA}\`.
+
+          Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          ### What this means
+
+          A new contributor running \`just bootstrap\` after \`git clone\` will hit
+          the same failure. Diagnose by inspecting the run log, then either:
+
+          - Re-trigger \`Build osty-self\` with \`workflow_dispatch\` to refresh the
+            rolling release, or
+          - Walk \`docs/security/bootstrap-recovery.md\` if the registry itself
+            is in a bad state.
+
+          ### Recent build-osty-self runs
+
+          ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/workflows/build-osty-self.yml
+          EOF
+          )
+          # If a prior failure issue is still open, append a comment
+          # rather than spawning a duplicate.
+          existing=$(gh issue list \
+              --label bootstrap-smoke-failure \
+              --state open \
+              --limit 1 \
+              --json number \
+              --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create \
+                --title "$title" \
+                --body "$body" \
+                --label bootstrap-smoke-failure
+          fi
