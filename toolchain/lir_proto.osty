@@ -535,12 +535,12 @@ pub fn lirDiagnosticError(kind: LirDiagnosticKind, message: String, path: String
     lirDiagnostic(kind, LirSeverityError, message, path)
 }
 pub fn lirDiagnosticKindName(kind: LirDiagnosticKind) -> String {
-    match kind {
-        LirDiagInvalidInput -> "invalid_input",
-        LirDiagUnsupported -> "unsupported",
-        LirDiagValidation -> "validation",
-        LirDiagLoweringBug -> "lowering_bug",
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if kind == LirDiagInvalidInput { return "invalid_input" }
+    if kind == LirDiagUnsupported { return "unsupported" }
+    if kind == LirDiagValidation { return "validation" }
+    if kind == LirDiagLoweringBug { return "lowering_bug" }
+    unreachable()
 }
 pub fn lirDiagnosticRender(d: LirDiagnostic) -> String {
     let mut prefix = lirDiagnosticKindName(d.kind)
@@ -1033,121 +1033,137 @@ fn lirValidateBlock(diags: List<LirDiagnostic>, block: LirBlock, path: String) {
     }
 }
 fn lirValidateInstr(diags: List<LirDiagnostic>, i: LirInstr, path: String) {
-    match i.kind {
-        LirInstrAlloca -> {
-            lirValidateName(diags, i.dest, "missing dest", path + ".dest")
-            lirValidateNonVoidType(diags, i.typ, path + ".typ")
-            lirValidateAlign(diags, i.align, path + ".align")
-        },
-        LirInstrLoad -> {
-            lirValidateName(diags, i.dest, "missing dest", path + ".dest")
-            lirValidateNonVoidType(diags, i.typ, path + ".typ")
-            lirValidateName(diags, i.ptr, "missing ptr", path + ".ptr")
-            lirValidateAlign(diags, i.align, path + ".align")
-        },
-        LirInstrStore -> {
-            lirValidateOperand(diags, i.value, path + ".value")
-            lirValidateName(diags, i.ptr, "missing ptr", path + ".ptr")
-            lirValidateAlign(diags, i.align, path + ".align")
-        },
-        LirInstrBinary -> {
-            lirValidateName(diags, i.dest, "missing dest", path + ".dest")
-            lirValidateName(diags, i.op, "missing op", path + ".op")
-            lirValidateNonVoidType(diags, i.typ, path + ".typ")
-            lirValidateName(diags, i.left, "missing left operand", path + ".left")
-            lirValidateName(diags, i.right, "missing right operand", path + ".right")
-        },
-        LirInstrUnary -> {
-            lirValidateName(diags, i.dest, "missing dest", path + ".dest")
-            lirValidateName(diags, i.op, "missing op", path + ".op")
-            lirValidateNonVoidType(diags, i.typ, path + ".typ")
-            lirValidateName(diags, i.left, "missing value", path + ".value")
-        },
-        LirInstrCall -> {
-            if !(lirTypeIsZero(i.returnType)) {
-                lirValidateType(diags, i.returnType, true, path + ".return")
-            }
-            lirValidateName(diags, i.callee, "missing callee", path + ".callee")
-            let mut ai = 0
-            for arg in i.args {
-                lirValidateOperand(diags, arg, path + ".args[" + lirIntToString(ai) + "]")
-                ai = ai + 1
-            }
-        },
-        LirInstrCast -> {
-            lirValidateName(diags, i.dest, "missing dest", path + ".dest")
-            lirValidateName(diags, i.op, "missing op", path + ".op")
-            lirValidateOperand(diags, i.from, path + ".from")
-            lirValidateNonVoidType(diags, i.toType, path + ".to")
-        },
-        LirInstrInsertValue -> {
-            lirValidateName(diags, i.dest, "missing dest", path + ".dest")
-            lirValidateNonVoidType(diags, i.typ, path + ".typ")
-            lirValidateName(diags, i.aggregate, "missing aggregate", path + ".aggregate")
-            lirValidateOperand(diags, i.value, path + ".value")
-            lirValidateIndices(diags, i.indices, path + ".indices")
-        },
-        LirInstrExtractValue -> {
-            lirValidateName(diags, i.dest, "missing dest", path + ".dest")
-            lirValidateNonVoidType(diags, i.typ, path + ".typ")
-            lirValidateName(diags, i.aggregate, "missing aggregate", path + ".aggregate")
-            lirValidateIndices(diags, i.indices, path + ".indices")
-        },
-        LirInstrGep -> {
-            lirValidateName(diags, i.dest, "missing dest", path + ".dest")
-            lirValidateNonVoidType(diags, i.elemType, path + ".elemType")
-            lirValidateName(diags, i.ptr, "missing ptr", path + ".ptr")
-            if i.gepIndices.len() == 0 {
-                lirDiagPush(diags, "missing GEP indices", path + ".gepIndices")
-            }
-            let mut gi = 0
-            for idx in i.gepIndices {
-                lirValidateOperand(diags, idx, path + ".gepIndices[" + lirIntToString(gi) + "]")
-                gi = gi + 1
-            }
-        },
-        LirInstrComment -> {
-        },
-        _ -> lirDiagPush(diags, "invalid instruction kind", path),
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if i.kind == LirInstrAlloca {
+        lirValidateName(diags, i.dest, "missing dest", path + ".dest")
+        lirValidateNonVoidType(diags, i.typ, path + ".typ")
+        lirValidateAlign(diags, i.align, path + ".align")
+        return
     }
+    if i.kind == LirInstrLoad {
+        lirValidateName(diags, i.dest, "missing dest", path + ".dest")
+        lirValidateNonVoidType(diags, i.typ, path + ".typ")
+        lirValidateName(diags, i.ptr, "missing ptr", path + ".ptr")
+        lirValidateAlign(diags, i.align, path + ".align")
+        return
+    }
+    if i.kind == LirInstrStore {
+        lirValidateOperand(diags, i.value, path + ".value")
+        lirValidateName(diags, i.ptr, "missing ptr", path + ".ptr")
+        lirValidateAlign(diags, i.align, path + ".align")
+        return
+    }
+    if i.kind == LirInstrBinary {
+        lirValidateName(diags, i.dest, "missing dest", path + ".dest")
+        lirValidateName(diags, i.op, "missing op", path + ".op")
+        lirValidateNonVoidType(diags, i.typ, path + ".typ")
+        lirValidateName(diags, i.left, "missing left operand", path + ".left")
+        lirValidateName(diags, i.right, "missing right operand", path + ".right")
+        return
+    }
+    if i.kind == LirInstrUnary {
+        lirValidateName(diags, i.dest, "missing dest", path + ".dest")
+        lirValidateName(diags, i.op, "missing op", path + ".op")
+        lirValidateNonVoidType(diags, i.typ, path + ".typ")
+        lirValidateName(diags, i.left, "missing value", path + ".value")
+        return
+    }
+    if i.kind == LirInstrCall {
+        if !(lirTypeIsZero(i.returnType)) {
+            lirValidateType(diags, i.returnType, true, path + ".return")
+        }
+        lirValidateName(diags, i.callee, "missing callee", path + ".callee")
+        let mut ai = 0
+        for arg in i.args {
+            lirValidateOperand(diags, arg, path + ".args[" + lirIntToString(ai) + "]")
+            ai = ai + 1
+        }
+        return
+    }
+    if i.kind == LirInstrCast {
+        lirValidateName(diags, i.dest, "missing dest", path + ".dest")
+        lirValidateName(diags, i.op, "missing op", path + ".op")
+        lirValidateOperand(diags, i.from, path + ".from")
+        lirValidateNonVoidType(diags, i.toType, path + ".to")
+        return
+    }
+    if i.kind == LirInstrInsertValue {
+        lirValidateName(diags, i.dest, "missing dest", path + ".dest")
+        lirValidateNonVoidType(diags, i.typ, path + ".typ")
+        lirValidateName(diags, i.aggregate, "missing aggregate", path + ".aggregate")
+        lirValidateOperand(diags, i.value, path + ".value")
+        lirValidateIndices(diags, i.indices, path + ".indices")
+        return
+    }
+    if i.kind == LirInstrExtractValue {
+        lirValidateName(diags, i.dest, "missing dest", path + ".dest")
+        lirValidateNonVoidType(diags, i.typ, path + ".typ")
+        lirValidateName(diags, i.aggregate, "missing aggregate", path + ".aggregate")
+        lirValidateIndices(diags, i.indices, path + ".indices")
+        return
+    }
+    if i.kind == LirInstrGep {
+        lirValidateName(diags, i.dest, "missing dest", path + ".dest")
+        lirValidateNonVoidType(diags, i.elemType, path + ".elemType")
+        lirValidateName(diags, i.ptr, "missing ptr", path + ".ptr")
+        if i.gepIndices.len() == 0 {
+            lirDiagPush(diags, "missing GEP indices", path + ".gepIndices")
+        }
+        let mut gi = 0
+        for idx in i.gepIndices {
+            lirValidateOperand(diags, idx, path + ".gepIndices[" + lirIntToString(gi) + "]")
+            gi = gi + 1
+        }
+        return
+    }
+    if i.kind == LirInstrComment {
+        return
+    }
+    lirDiagPush(diags, "invalid instruction kind", path)
 }
 fn lirValidateTerm(diags: List<LirDiagnostic>, t: LirTerm, path: String) {
-    match t.kind {
-        LirTermRet -> {
-            if lirTypeIsZero(t.retType) {
-                if t.retValue != "" {
-                    lirDiagPush(diags, "return value without return type", path + ".retValue")
-                }
-            } else {
-                lirValidateType(diags, t.retType, false, path + ".retType")
-                lirValidateName(diags, t.retValue, "missing return value", path + ".retValue")
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if t.kind == LirTermRet {
+        if lirTypeIsZero(t.retType) {
+            if t.retValue != "" {
+                lirDiagPush(diags, "return value without return type", path + ".retValue")
             }
-        },
-        LirTermBr -> lirValidateName(diags, t.target, "missing target", path + ".target"),
-        LirTermCondBr -> {
-            lirValidateName(diags, t.cond, "missing condition", path + ".cond")
-            lirValidateName(diags, t.thenLabel, "missing then target", path + ".then")
-            lirValidateName(diags, t.elseLabel, "missing else target", path + ".else")
-        },
-        LirTermSwitch -> {
-            lirValidateNonVoidType(diags, t.switchType, path + ".type")
-            lirValidateName(diags, t.switchScrutinee, "missing scrutinee", path + ".scrutinee")
-            lirValidateName(diags, t.switchDefault, "missing default", path + ".default")
-            let mut i = 0
-            for c in t.cases {
-                if c.value == "" {
-                    lirDiagPush(diags, "missing case value", path + ".cases[" + lirIntToString(i) + "].value")
-                }
-                if c.label == "" {
-                    lirDiagPush(diags, "missing case label", path + ".cases[" + lirIntToString(i) + "].label")
-                }
-                i = i + 1
-            }
-        },
-        LirTermUnreachable -> {
-        },
-        _ -> lirDiagPush(diags, "invalid terminator kind", path),
+        } else {
+            lirValidateType(diags, t.retType, false, path + ".retType")
+            lirValidateName(diags, t.retValue, "missing return value", path + ".retValue")
+        }
+        return
     }
+    if t.kind == LirTermBr {
+        lirValidateName(diags, t.target, "missing target", path + ".target")
+        return
+    }
+    if t.kind == LirTermCondBr {
+        lirValidateName(diags, t.cond, "missing condition", path + ".cond")
+        lirValidateName(diags, t.thenLabel, "missing then target", path + ".then")
+        lirValidateName(diags, t.elseLabel, "missing else target", path + ".else")
+        return
+    }
+    if t.kind == LirTermSwitch {
+        lirValidateNonVoidType(diags, t.switchType, path + ".type")
+        lirValidateName(diags, t.switchScrutinee, "missing scrutinee", path + ".scrutinee")
+        lirValidateName(diags, t.switchDefault, "missing default", path + ".default")
+        let mut i = 0
+        for c in t.cases {
+            if c.value == "" {
+                lirDiagPush(diags, "missing case value", path + ".cases[" + lirIntToString(i) + "].value")
+            }
+            if c.label == "" {
+                lirDiagPush(diags, "missing case label", path + ".cases[" + lirIntToString(i) + "].label")
+            }
+            i = i + 1
+        }
+        return
+    }
+    if t.kind == LirTermUnreachable {
+        return
+    }
+    lirDiagPush(diags, "invalid terminator kind", path)
 }
 fn lirValidateOperand(diags: List<LirDiagnostic>, op: LirOperand, path: String) {
     lirValidateNonVoidType(diags, op.typ, path + ".typ")
@@ -1162,42 +1178,47 @@ fn lirValidateType(diags: List<LirDiagnostic>, typ: LirType, allowVoid: Bool, pa
         lirDiagPush(diags, "missing LLVM spelling", path)
         return
     }
-    match typ.className {
-        LirTypeUnknown -> {
-        },
-        LirTypeVoid -> {
-            if typ.llvm != "void" {
-                lirDiagPush(diags, "class void has LLVM spelling `" + typ.llvm + "`", path)
-            }
-            if !(allowVoid) {
-                lirDiagPush(diags, "void is not allowed here", path)
-            }
-        },
-        LirTypeInt -> {
-            if !(lirIsIntegerLLVMType(typ.llvm)) {
-                lirDiagPush(diags, "class int has LLVM spelling `" + typ.llvm + "`", path)
-            }
-        },
-        LirTypeFloat -> {
-            if !(lirIsFloatLLVMType(typ.llvm)) {
-                lirDiagPush(diags, "class float has LLVM spelling `" + typ.llvm + "`", path)
-            }
-        },
-        LirTypePtr -> {
-            if typ.llvm != "ptr" {
-                lirDiagPush(diags, "class ptr has LLVM spelling `" + typ.llvm + "`", path)
-            }
-        },
-        LirTypeAggregate -> {
-            if !(lirIsAggregateLLVMType(typ.llvm)) {
-                lirDiagPush(diags, "class aggregate has LLVM spelling `" + typ.llvm + "`", path)
-            }
-        },
-        LirTypeFunction -> {
-            if !(strings.contains(typ.llvm, "(")) {
-                lirDiagPush(diags, "class function has LLVM spelling `" + typ.llvm + "`", path)
-            }
-        },
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if typ.className == LirTypeUnknown {
+        return
+    }
+    if typ.className == LirTypeVoid {
+        if typ.llvm != "void" {
+            lirDiagPush(diags, "class void has LLVM spelling `" + typ.llvm + "`", path)
+        }
+        if !(allowVoid) {
+            lirDiagPush(diags, "void is not allowed here", path)
+        }
+        return
+    }
+    if typ.className == LirTypeInt {
+        if !(lirIsIntegerLLVMType(typ.llvm)) {
+            lirDiagPush(diags, "class int has LLVM spelling `" + typ.llvm + "`", path)
+        }
+        return
+    }
+    if typ.className == LirTypeFloat {
+        if !(lirIsFloatLLVMType(typ.llvm)) {
+            lirDiagPush(diags, "class float has LLVM spelling `" + typ.llvm + "`", path)
+        }
+        return
+    }
+    if typ.className == LirTypePtr {
+        if typ.llvm != "ptr" {
+            lirDiagPush(diags, "class ptr has LLVM spelling `" + typ.llvm + "`", path)
+        }
+        return
+    }
+    if typ.className == LirTypeAggregate {
+        if !(lirIsAggregateLLVMType(typ.llvm)) {
+            lirDiagPush(diags, "class aggregate has LLVM spelling `" + typ.llvm + "`", path)
+        }
+        return
+    }
+    if typ.className == LirTypeFunction {
+        if !(strings.contains(typ.llvm, "(")) {
+            lirDiagPush(diags, "class function has LLVM spelling `" + typ.llvm + "`", path)
+        }
     }
 }
 fn lirValidateNonVoidType(diags: List<LirDiagnostic>, typ: LirType, path: String) {
@@ -1526,27 +1547,18 @@ pub fn lirRuntimeDeclPtrFromTwoPtr(symbol: String) -> LirRuntimeDecl {
 // than raw `t.llvm` strings so changes to LIR type spelling do not silently
 // drop runtime-result coercion.
 pub fn lirRuntimeReturnTypeName(t: LirType) -> String {
-    match t.className {
-        LirTypeInt -> {
-            if t.llvm == "i1" {
-                return "Bool"
-            }
-            if t.llvm == "i8" {
-                return "Byte"
-            }
-            if t.llvm == "i32" {
-                return "Char"
-            }
-            return "Int"
-        },
-        LirTypeFloat -> {
-            if t.llvm == "float" {
-                return "Float32"
-            }
-            return "Float"
-        },
-        _ -> "",
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if t.className == LirTypeInt {
+        if t.llvm == "i1" { return "Bool" }
+        if t.llvm == "i8" { return "Byte" }
+        if t.llvm == "i32" { return "Char" }
+        return "Int"
     }
+    if t.className == LirTypeFloat {
+        if t.llvm == "float" { return "Float32" }
+        return "Float"
+    }
+    ""
 }
 // ====================================================================
 // Aggregate and projection planning helpers
@@ -1591,19 +1603,23 @@ pub fn lirProjectionPathIndices(steps: List<LirProjectionStep>) -> List<Int> {
 pub fn lirProjectionPathText(steps: List<LirProjectionStep>) -> String {
     let mut parts: List<String> = []
     for step in steps {
-        match step.kind {
-            LirProjField -> {
-                if step.name == "" {
-                    parts.push(".field" + lirIntToString(step.index))
-                } else {
-                    parts.push("." + step.name)
-                }
-            },
-            LirProjTuple -> parts.push("." + lirIntToString(step.index)),
-            LirProjVariant -> parts.push("@" + step.name),
-            LirProjIndex -> parts.push("[" + lirIntToString(step.index) + "]"),
-            LirProjDeref -> parts.push(".*"),
-            _ -> parts.push(".?"),
+        // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+        if step.kind == LirProjField {
+            if step.name == "" {
+                parts.push(".field" + lirIntToString(step.index))
+            } else {
+                parts.push("." + step.name)
+            }
+        } else if step.kind == LirProjTuple {
+            parts.push("." + lirIntToString(step.index))
+        } else if step.kind == LirProjVariant {
+            parts.push("@" + step.name)
+        } else if step.kind == LirProjIndex {
+            parts.push("[" + lirIntToString(step.index) + "]")
+        } else if step.kind == LirProjDeref {
+            parts.push(".*")
+        } else {
+            parts.push(".?")
         }
     }
     strings.join(parts, "")
@@ -2219,18 +2235,15 @@ fn lirFresh(l: LirMirFunctionLowerer) -> String {
     name
 }
 fn lirLowerMirInstr(l: LirMirFunctionLowerer, instr: MirInstr) {
-    match instr.kind {
-        MirInstrAssign -> lirLowerMirAssign(l, instr),
-        MirInstrCall -> lirLowerMirCall(l, instr),
-        MirInstrIntrinsic -> lirLowerMirIntrinsic(l, instr),
-        MirInstrStorageLive -> {
-        },
-        MirInstrStorageDead -> {
-        },
-        _ -> lirLowerError(l, LirDiagUnsupported,
-            "unsupported MIR instruction kind `" + mirInstrKindName(instr.kind) + "`",
-            "instr." + mirInstrKindName(instr.kind)),
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if instr.kind == MirInstrAssign { return lirLowerMirAssign(l, instr) }
+    if instr.kind == MirInstrCall { return lirLowerMirCall(l, instr) }
+    if instr.kind == MirInstrIntrinsic { return lirLowerMirIntrinsic(l, instr) }
+    if instr.kind == MirInstrStorageLive { return }
+    if instr.kind == MirInstrStorageDead { return }
+    lirLowerError(l, LirDiagUnsupported,
+        "unsupported MIR instruction kind `" + mirInstrKindName(instr.kind) + "`",
+        "instr." + mirInstrKindName(instr.kind))
 }
 fn lirLowerMirAssign(l: LirMirFunctionLowerer, instr: MirInstr) {
     let destLoc = mirFunctionLocal(l.fn_, instr.dest.local)
@@ -2325,13 +2338,12 @@ fn lirStoreProjectedMirValue(l: LirMirFunctionLowerer, place: MirPlace, root: Mi
 }
 fn lirProjectionStepFromMir(l: LirMirFunctionLowerer, proj: MirProjection) -> LirProjectionStep {
     let typ = lirLowerMirType(l, proj.typ)
-    match proj.kind {
-        MirProjField -> lirFieldProjection(proj.index, proj.name, typ),
-        MirProjTuple -> lirTupleProjection(proj.index, typ),
-        MirProjVariant -> lirVariantProjection(proj.index, proj.name, typ),
-        MirProjIndex -> lirIndexProjection(proj.indexConst, typ),
-        _ -> LirProjectionStep {kind: LirProjInvalid, index: 0, name: "", typ: lirTypeInvalid()},
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if proj.kind == MirProjField { return lirFieldProjection(proj.index, proj.name, typ) }
+    if proj.kind == MirProjTuple { return lirTupleProjection(proj.index, typ) }
+    if proj.kind == MirProjVariant { return lirVariantProjection(proj.index, proj.name, typ) }
+    if proj.kind == MirProjIndex { return lirIndexProjection(proj.indexConst, typ) }
+    LirProjectionStep {kind: LirProjInvalid, index: 0, name: "", typ: lirTypeInvalid()}
 }
 fn lirMirProjectionLeafType(projections: List<MirProjection>) -> String {
     if projections.len() == 0 {
@@ -2531,145 +2543,145 @@ fn lirStoreMirResult(l: LirMirFunctionLowerer, dest: MirPlace, result: LirOperan
     l.instrs.push(lirStore(stored, slot.slot, 0))
 }
 fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
-    match instr.intrinsic {
-        MirIntrinsicPrint -> lirLowerMirPrintIntrinsic(l, instr, false, false),
-        MirIntrinsicPrintln -> lirLowerMirPrintIntrinsic(l, instr, true, false),
-        MirIntrinsicEprint -> lirLowerMirPrintIntrinsic(l, instr, false, true),
-        MirIntrinsicEprintln -> lirLowerMirPrintIntrinsic(l, instr, true, true),
-        MirIntrinsicByteToInt -> lirLowerMirIntegerConversionIntrinsic(l, instr, "Byte", "Int", "zext"),
-        MirIntrinsicCharToInt -> lirLowerMirIntegerConversionIntrinsic(l, instr, "Char", "Int", "zext"),
-        MirIntrinsicIntToByte -> lirLowerMirIntegerConversionIntrinsic(l, instr, "Int", "Byte", "trunc"),
-        MirIntrinsicIntToChar -> lirLowerMirIntegerConversionIntrinsic(l, instr, "Int", "Char", "trunc"),
-        MirIntrinsicByteToChar -> lirLowerMirIntegerConversionIntrinsic(l, instr, "Byte", "Char", "zext"),
-        MirIntrinsicCharToByte -> lirLowerMirIntegerConversionIntrinsic(l, instr, "Char", "Byte", "trunc"),
-        MirIntrinsicStringLen -> lirLowerMirStringLen(l, instr),
-        MirIntrinsicStringIsEmpty -> lirLowerMirStringIsEmpty(l, instr),
-        MirIntrinsicStringContains -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Contains"), lirIntType(1), [lirPtrType(), lirPtrType()], "string.contains"),
-        MirIntrinsicStringStartsWith -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("HasPrefix"), lirIntType(1), [lirPtrType(), lirPtrType()], "string.startsWith"),
-        MirIntrinsicStringEndsWith -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("HasSuffix"), lirIntType(1), [lirPtrType(), lirPtrType()], "string.endsWith"),
-        MirIntrinsicStringCount -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Count"), lirIntType(64), [lirPtrType(), lirPtrType()], "string.count"),
-        MirIntrinsicStringTrim -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("TrimSpace"), lirPtrType(), [lirPtrType()], "string.trim"),
-        MirIntrinsicStringTrimStart -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("TrimStart"), lirPtrType(), [lirPtrType()], "string.trimStart"),
-        MirIntrinsicStringTrimEnd -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("TrimEnd"), lirPtrType(), [lirPtrType()], "string.trimEnd"),
-        MirIntrinsicStringTrimPrefix -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("TrimPrefix"), lirPtrType(), [lirPtrType(), lirPtrType()], "string.trimPrefix"),
-        MirIntrinsicStringTrimSuffix -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("TrimSuffix"), lirPtrType(), [lirPtrType(), lirPtrType()], "string.trimSuffix"),
-        MirIntrinsicStringToUpper -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("ToUpper"), lirPtrType(), [lirPtrType()], "string.toUpper"),
-        MirIntrinsicStringToLower -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("ToLower"), lirPtrType(), [lirPtrType()], "string.toLower"),
-        MirIntrinsicStringChars -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Chars"), lirPtrType(), [lirPtrType()], "string.chars"),
-        MirIntrinsicStringBytes -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Bytes"), lirPtrType(), [lirPtrType()], "string.bytes"),
-        MirIntrinsicStringSplit -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Split"), lirPtrType(), [lirPtrType(), lirPtrType()], "string.split"),
-        MirIntrinsicStringJoin -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Join"), lirPtrType(), [lirPtrType(), lirPtrType()], "string.join"),
-        MirIntrinsicStringRepeat -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Repeat"), lirPtrType(), [lirPtrType(), lirIntType(64)], "string.repeat"),
-        MirIntrinsicStringSubstring -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Slice"), lirPtrType(), [lirPtrType(), lirIntType(64), lirIntType(64)], "string.substring"),
-        MirIntrinsicStringReplace -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Replace"), lirPtrType(), [lirPtrType(), lirPtrType(), lirPtrType()], "string.replace"),
-        MirIntrinsicStringReplaceAll -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("ReplaceAll"), lirPtrType(), [lirPtrType(), lirPtrType(), lirPtrType()], "string.replaceAll"),
-        MirIntrinsicStringConcat -> lirLowerMirStringConcat(l, instr),
-        MirIntrinsicBytesLen -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("len"), lirIntType(64), [lirPtrType()], "bytes.len"),
-        MirIntrinsicBytesIsEmpty -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("is_empty"), lirIntType(1), [lirPtrType()], "bytes.isEmpty"),
-        MirIntrinsicBytesContains -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("contains"), lirIntType(1), [lirPtrType(), lirPtrType()], "bytes.contains"),
-        MirIntrinsicBytesStartsWith -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("starts_with"), lirIntType(1), [lirPtrType(), lirPtrType()], "bytes.startsWith"),
-        MirIntrinsicBytesEndsWith -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("ends_with"), lirIntType(1), [lirPtrType(), lirPtrType()], "bytes.endsWith"),
-        MirIntrinsicBytesConcat -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("concat"), lirPtrType(), [lirPtrType(), lirPtrType()], "bytes.concat"),
-        MirIntrinsicBytesJoin -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("join"), lirPtrType(), [lirPtrType(), lirPtrType()], "bytes.join"),
-        MirIntrinsicBytesSplit -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("split"), lirPtrType(), [lirPtrType(), lirPtrType()], "bytes.split"),
-        MirIntrinsicBytesRepeat -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("repeat"), lirPtrType(), [lirPtrType(), lirIntType(64)], "bytes.repeat"),
-        MirIntrinsicBytesSlice -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("slice"), lirPtrType(), [lirPtrType(), lirIntType(64), lirIntType(64)], "bytes.slice"),
-        MirIntrinsicBytesReplace -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("replace"), lirPtrType(), [lirPtrType(), lirPtrType(), lirPtrType()], "bytes.replace"),
-        MirIntrinsicBytesReplaceAll -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("replace_all"), lirPtrType(), [lirPtrType(), lirPtrType(), lirPtrType()], "bytes.replaceAll"),
-        MirIntrinsicBytesTrim -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("trim"), lirPtrType(), [lirPtrType(), lirPtrType()], "bytes.trim"),
-        MirIntrinsicBytesTrimLeft -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("trim_left"), lirPtrType(), [lirPtrType(), lirPtrType()], "bytes.trimLeft"),
-        MirIntrinsicBytesTrimRight -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("trim_right"), lirPtrType(), [lirPtrType(), lirPtrType()], "bytes.trimRight"),
-        MirIntrinsicBytesTrimSpace -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("trim_space"), lirPtrType(), [lirPtrType()], "bytes.trimSpace"),
-        MirIntrinsicBytesToUpper -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("to_upper"), lirPtrType(), [lirPtrType()], "bytes.toUpper"),
-        MirIntrinsicBytesToLower -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("to_lower"), lirPtrType(), [lirPtrType()], "bytes.toLower"),
-        MirIntrinsicBytesToHex -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("to_hex"), lirPtrType(), [lirPtrType()], "bytes.toHex"),
-        MirIntrinsicListPush -> lirLowerMirListPush(l, instr),
-        MirIntrinsicListLen -> lirLowerMirStringRuntimeCall(l, instr, llvmListRuntimeLenSymbol(), lirIntType(64), [lirPtrType()], "list.len"),
-        MirIntrinsicListIsEmpty -> lirLowerMirListIsEmpty(l, instr),
-        MirIntrinsicListGet -> lirLowerMirListGet(l, instr),
-        MirIntrinsicListClear -> lirLowerMirStringRuntimeCall(l, instr, mirRtListClearSymbol(), lirVoidType(), [lirPtrType()], "list.clear"),
-        MirIntrinsicListReverse -> lirLowerMirStringRuntimeCall(l, instr, mirRtListReverseSymbol(), lirVoidType(), [lirPtrType()], "list.reverse"),
-        MirIntrinsicListFirst -> lirLowerMirListFirstOrLast(l, instr, false),
-        MirIntrinsicListLast -> lirLowerMirListFirstOrLast(l, instr, true),
-        MirIntrinsicListReversed -> lirLowerMirStringRuntimeCall(l, instr, mirRtListReversedSymbol(), lirPtrType(), [lirPtrType()], "list.reversed"),
-        MirIntrinsicListPop -> lirLowerMirListPop(l, instr),
-        MirIntrinsicListToString -> lirLowerMirListToString(l, instr),
-        MirIntrinsicBytesGet -> lirLowerMirBytesGet(l, instr),
-        MirIntrinsicMapToString -> lirLowerMirStringRuntimeCall(l, instr, "osty_rt_map_to_string", lirPtrType(), [lirPtrType()], "map.toString"),
-        MirIntrinsicSetToString -> lirLowerMirStringRuntimeCall(l, instr, "osty_rt_set_to_string", lirPtrType(), [lirPtrType()], "set.toString"),
-        MirIntrinsicCheckCancelled -> lirLowerMirCheckCancelled(l, instr),
-        MirIntrinsicListSorted -> lirLowerMirListSorted(l, instr),
-        MirIntrinsicListInsert -> lirLowerMirListInsert(l, instr),
-        MirIntrinsicMapNew -> lirLowerMirMapNew(l, instr),
-        MirIntrinsicMapLen -> lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeLenSymbol(), lirIntType(64), [lirPtrType()], "map.len"),
-        MirIntrinsicMapKeys -> lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeKeysSymbol(), lirPtrType(), [lirPtrType()], "map.keys"),
-        MirIntrinsicMapValues -> lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeValuesSymbol(), lirPtrType(), [lirPtrType()], "map.values"),
-        MirIntrinsicMapClear -> lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeClearSymbol(), lirVoidType(), [lirPtrType()], "map.clear"),
-        MirIntrinsicMapSet -> lirLowerMirMapInsert(l, instr),
-        MirIntrinsicMapGet -> lirLowerMirMapGet(l, instr),
-        MirIntrinsicMapContains -> lirLowerMirMapContains(l, instr),
-        MirIntrinsicMapRemove -> lirLowerMirMapRemove(l, instr),
-        MirIntrinsicSetNew -> lirLowerMirStringRuntimeCall(l, instr, llvmSetRuntimeNewSymbol(), lirPtrType(), [], "set.new"),
-        MirIntrinsicSetLen -> lirLowerMirStringRuntimeCall(l, instr, llvmSetRuntimeLenSymbol(), lirIntType(64), [lirPtrType()], "set.len"),
-        MirIntrinsicSetToList -> lirLowerMirStringRuntimeCall(l, instr, llvmSetRuntimeToListSymbol(), lirPtrType(), [lirPtrType()], "set.toList"),
-        MirIntrinsicSetClear -> lirLowerMirStringRuntimeCall(l, instr, llvmSetRuntimeClearSymbol(), lirVoidType(), [lirPtrType()], "set.clear"),
-        MirIntrinsicSetInsert -> lirLowerMirSetInsert(l, instr),
-        MirIntrinsicSetContains -> lirLowerMirSetContains(l, instr),
-        MirIntrinsicSetRemove -> lirLowerMirSetRemove(l, instr),
-        MirIntrinsicChanMake -> lirLowerMirStringRuntimeCall(l, instr, llvmChanRuntimeMakeSymbol(), lirPtrType(), [lirIntType(64)], "chan.make"),
-        MirIntrinsicChanClose -> lirLowerMirStringRuntimeCall(l, instr, llvmChanRuntimeCloseSymbol(), lirVoidType(), [lirPtrType()], "chan.close"),
-        MirIntrinsicChanIsClosed -> lirLowerMirStringRuntimeCall(l, instr, llvmChanRuntimeIsClosedSymbol(), lirIntType(1), [lirPtrType()], "chan.isClosed"),
-        MirIntrinsicChanSend -> lirLowerMirChanSend(l, instr),
-        MirIntrinsicChanRecv -> lirLowerMirChanRecv(l, instr),
-        MirIntrinsicYield -> lirLowerMirStringRuntimeCall(l, instr, "osty_rt_task_yield", lirVoidType(), [], "task.yield"),
-        MirIntrinsicSleep -> lirLowerMirStringRuntimeCall(l, instr, mirRtThreadSleepSymbol(), lirVoidType(), [lirPtrType()], "task.sleep"),
-        MirIntrinsicGroupCancel -> lirLowerMirStringRuntimeCall(l, instr, mirRtTaskGroupCancelSymbol(), lirVoidType(), [lirPtrType()], "group.cancel"),
-        MirIntrinsicGroupIsCancelled -> lirLowerMirStringRuntimeCall(l, instr, mirRtTaskGroupIsCancelledSymbol(), lirIntType(1), [lirPtrType()], "group.isCancelled"),
-        MirIntrinsicHandleJoin -> lirLowerMirHandleJoin(l, instr),
-        MirIntrinsicTaskGroup -> lirLowerMirTaskGroup(l, instr),
-        MirIntrinsicSpawn -> lirLowerMirSpawn(l, instr),
-        MirIntrinsicSelect -> lirLowerMirStringRuntimeCall(l, instr, mirRtSelectSymbol(), lirVoidType(), [lirPtrType()], "select"),
-        MirIntrinsicSelectRecv -> lirLowerMirStringRuntimeCall(l, instr, mirRtSelectRecvSymbol(), lirVoidType(), [lirPtrType(), lirPtrType(), lirPtrType()], "select.recv"),
-        MirIntrinsicSelectTimeout -> lirLowerMirStringRuntimeCall(l, instr, mirRtSelectTimeoutSymbol(), lirVoidType(), [lirPtrType(), lirPtrType(), lirPtrType()], "select.timeout"),
-        MirIntrinsicSelectDefault -> lirLowerMirStringRuntimeCall(l, instr, mirRtSelectDefaultSymbol(), lirVoidType(), [lirPtrType(), lirPtrType()], "select.default"),
-        MirIntrinsicSelectSend -> lirLowerMirSelectSend(l, instr),
-        MirIntrinsicParallel -> lirLowerMirStringRuntimeCall(l, instr, mirRtParallelSymbol(), lirPtrType(), [lirPtrType(), lirIntType(64), lirPtrType()], "parallel"),
-        MirIntrinsicRace -> lirLowerMirRace(l, instr),
-        MirIntrinsicCollectAll -> lirLowerMirStringRuntimeCall(l, instr, mirRtTaskCollectAllSymbol(), lirPtrType(), [lirPtrType()], "collectAll"),
-        MirIntrinsicMapKeysSorted -> lirLowerMirMapKeysSorted(l, instr),
-        MirIntrinsicBytesFromList -> lirLowerMirStringRuntimeCall(l, instr, mirRtBytesFromListSymbol(), lirPtrType(), [lirPtrType()], "bytes.fromList"),
-        MirIntrinsicBytesFromString -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringToBytesSymbol(), lirPtrType(), [lirPtrType()], "bytes.fromString"),
-        MirIntrinsicBytesToString -> lirLowerMirBytesValidatedResult(l, instr, mirRtBytesIsValidUTF8Symbol(), mirRtBytesToStringSymbol(), "bytes.toString"),
-        MirIntrinsicBytesFromHex -> lirLowerMirBytesValidatedResult(l, instr, mirRtBytesIsValidHexSymbol(), mirRtBytesFromHexSymbol(), "bytes.fromHex"),
-        MirIntrinsicIsCancelled -> lirLowerMirStringRuntimeCall(l, instr, "osty_rt_cancel_is_cancelled", lirIntType(1), [], "cancel.isCancelled"),
-        MirIntrinsicStringIndexOf -> lirLowerMirIndexOf(l, instr, mirRtStringSymbol("IndexOf"), [lirPtrType(), lirPtrType()], "string.indexOf"),
-        MirIntrinsicStringLastIndexOf -> lirLowerMirIndexOf(l, instr, mirRtStringSymbol("LastIndexOf"), [lirPtrType(), lirPtrType()], "string.lastIndexOf"),
-        MirIntrinsicBytesIndexOf -> lirLowerMirIndexOf(l, instr, mirRtBytesSymbol("index_of"), [lirPtrType(), lirPtrType()], "bytes.indexOf"),
-        MirIntrinsicBytesLastIndexOf -> lirLowerMirIndexOf(l, instr, mirRtBytesSymbol("last_index_of"), [lirPtrType(), lirPtrType()], "bytes.lastIndexOf"),
-        MirIntrinsicStringToInt -> lirLowerMirStringParse(l, instr, mirRtStringIsValidIntSymbol(), mirRtStringToIntSymbol(), lirIntType(64), "string.toInt"),
-        MirIntrinsicStringToFloat -> lirLowerMirStringParse(l, instr, mirRtStringIsValidFloatSymbol(), mirRtStringToFloatSymbol(), lirFloatType("double"), "string.toFloat"),
-        MirIntrinsicOptionIsSome -> lirLowerMirAlgebraicTagCheck(l, instr, "eq", "option.isSome"),
-        MirIntrinsicOptionIsNone -> lirLowerMirAlgebraicTagCheck(l, instr, "ne", "option.isNone"),
-        MirIntrinsicResultIsOk -> lirLowerMirAlgebraicTagCheck(l, instr, "eq", "result.isOk"),
-        MirIntrinsicResultIsErr -> lirLowerMirAlgebraicTagCheck(l, instr, "ne", "result.isErr"),
-        MirIntrinsicRawNull -> lirLowerMirRawNull(l, instr),
-        MirIntrinsicListSlice -> lirLowerMirStringRuntimeCall(l, instr, mirRtListSymbol("slice"), lirPtrType(), [lirPtrType(), lirIntType(64), lirIntType(64)], "list.slice"),
-        MirIntrinsicListToSet -> lirLowerMirListToSet(l, instr),
-        MirIntrinsicStringFields -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Fields"), lirPtrType(), [lirPtrType()], "string.fields"),
-        MirIntrinsicStringSplitN -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("SplitN"), lirPtrType(), [lirPtrType(), lirPtrType(), lirIntType(64)], "string.splitN"),
-        MirIntrinsicOptionUnwrap -> lirLowerMirAlgebraicUnwrap(l, instr, mirRtOptionUnwrapNoneSymbol(), "option.unwrap"),
-        MirIntrinsicOptionUnwrapOr -> lirLowerMirAlgebraicUnwrapOr(l, instr, "option.unwrapOr"),
-        MirIntrinsicResultUnwrap -> lirLowerMirAlgebraicUnwrap(l, instr, mirRtResultUnwrapErrSymbol(), "result.unwrap"),
-        MirIntrinsicResultUnwrapOr -> lirLowerMirAlgebraicUnwrapOr(l, instr, "result.unwrapOr"),
-        MirIntrinsicStringSplitInto -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringSplitIntoSymbol(), lirVoidType(), [lirPtrType(), lirPtrType(), lirPtrType()], "string.splitInto"),
-        MirIntrinsicStringNthSegment -> lirLowerMirStringRuntimeCall(l, instr, mirRtStringNthSegmentSymbol(), lirPtrType(), [lirPtrType(), lirPtrType(), lirIntType(64)], "string.nthSegment"),
-        MirIntrinsicListRemoveAt -> lirLowerMirListRemoveAt(l, instr),
-        MirIntrinsicMapGetOr -> lirLowerMirMapGetOr(l, instr),
-        MirIntrinsicMapIncr -> lirLowerMirMapIncr(l, instr),
-        MirIntrinsicListContains -> lirLowerMirListLinearScan(l, instr, false),
-        MirIntrinsicListIndexOf -> lirLowerMirListLinearScan(l, instr, true),
-        _ -> lirLowerError(l, LirDiagUnsupported, "unsupported MIR intrinsic `" + mirIntrinsicName(instr.intrinsic) + "`", "intrinsic"),
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    let kind = instr.intrinsic
+    if kind == MirIntrinsicPrint { return lirLowerMirPrintIntrinsic(l, instr, false, false) }
+    if kind == MirIntrinsicPrintln { return lirLowerMirPrintIntrinsic(l, instr, true, false) }
+    if kind == MirIntrinsicEprint { return lirLowerMirPrintIntrinsic(l, instr, false, true) }
+    if kind == MirIntrinsicEprintln { return lirLowerMirPrintIntrinsic(l, instr, true, true) }
+    if kind == MirIntrinsicByteToInt { return lirLowerMirIntegerConversionIntrinsic(l, instr, "Byte", "Int", "zext") }
+    if kind == MirIntrinsicCharToInt { return lirLowerMirIntegerConversionIntrinsic(l, instr, "Char", "Int", "zext") }
+    if kind == MirIntrinsicIntToByte { return lirLowerMirIntegerConversionIntrinsic(l, instr, "Int", "Byte", "trunc") }
+    if kind == MirIntrinsicIntToChar { return lirLowerMirIntegerConversionIntrinsic(l, instr, "Int", "Char", "trunc") }
+    if kind == MirIntrinsicByteToChar { return lirLowerMirIntegerConversionIntrinsic(l, instr, "Byte", "Char", "zext") }
+    if kind == MirIntrinsicCharToByte { return lirLowerMirIntegerConversionIntrinsic(l, instr, "Char", "Byte", "trunc") }
+    if kind == MirIntrinsicStringLen { return lirLowerMirStringLen(l, instr) }
+    if kind == MirIntrinsicStringIsEmpty { return lirLowerMirStringIsEmpty(l, instr) }
+    if kind == MirIntrinsicStringContains { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Contains"), lirIntType(1), [lirPtrType(), lirPtrType()], "string.contains") }
+    if kind == MirIntrinsicStringStartsWith { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("HasPrefix"), lirIntType(1), [lirPtrType(), lirPtrType()], "string.startsWith") }
+    if kind == MirIntrinsicStringEndsWith { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("HasSuffix"), lirIntType(1), [lirPtrType(), lirPtrType()], "string.endsWith") }
+    if kind == MirIntrinsicStringCount { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Count"), lirIntType(64), [lirPtrType(), lirPtrType()], "string.count") }
+    if kind == MirIntrinsicStringTrim { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("TrimSpace"), lirPtrType(), [lirPtrType()], "string.trim") }
+    if kind == MirIntrinsicStringTrimStart { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("TrimStart"), lirPtrType(), [lirPtrType()], "string.trimStart") }
+    if kind == MirIntrinsicStringTrimEnd { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("TrimEnd"), lirPtrType(), [lirPtrType()], "string.trimEnd") }
+    if kind == MirIntrinsicStringTrimPrefix { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("TrimPrefix"), lirPtrType(), [lirPtrType(), lirPtrType()], "string.trimPrefix") }
+    if kind == MirIntrinsicStringTrimSuffix { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("TrimSuffix"), lirPtrType(), [lirPtrType(), lirPtrType()], "string.trimSuffix") }
+    if kind == MirIntrinsicStringToUpper { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("ToUpper"), lirPtrType(), [lirPtrType()], "string.toUpper") }
+    if kind == MirIntrinsicStringToLower { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("ToLower"), lirPtrType(), [lirPtrType()], "string.toLower") }
+    if kind == MirIntrinsicStringChars { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Chars"), lirPtrType(), [lirPtrType()], "string.chars") }
+    if kind == MirIntrinsicStringBytes { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Bytes"), lirPtrType(), [lirPtrType()], "string.bytes") }
+    if kind == MirIntrinsicStringSplit { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Split"), lirPtrType(), [lirPtrType(), lirPtrType()], "string.split") }
+    if kind == MirIntrinsicStringJoin { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Join"), lirPtrType(), [lirPtrType(), lirPtrType()], "string.join") }
+    if kind == MirIntrinsicStringRepeat { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Repeat"), lirPtrType(), [lirPtrType(), lirIntType(64)], "string.repeat") }
+    if kind == MirIntrinsicStringSubstring { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Slice"), lirPtrType(), [lirPtrType(), lirIntType(64), lirIntType(64)], "string.substring") }
+    if kind == MirIntrinsicStringReplace { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Replace"), lirPtrType(), [lirPtrType(), lirPtrType(), lirPtrType()], "string.replace") }
+    if kind == MirIntrinsicStringReplaceAll { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("ReplaceAll"), lirPtrType(), [lirPtrType(), lirPtrType(), lirPtrType()], "string.replaceAll") }
+    if kind == MirIntrinsicStringConcat { return lirLowerMirStringConcat(l, instr) }
+    if kind == MirIntrinsicBytesLen { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("len"), lirIntType(64), [lirPtrType()], "bytes.len") }
+    if kind == MirIntrinsicBytesIsEmpty { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("is_empty"), lirIntType(1), [lirPtrType()], "bytes.isEmpty") }
+    if kind == MirIntrinsicBytesContains { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("contains"), lirIntType(1), [lirPtrType(), lirPtrType()], "bytes.contains") }
+    if kind == MirIntrinsicBytesStartsWith { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("starts_with"), lirIntType(1), [lirPtrType(), lirPtrType()], "bytes.startsWith") }
+    if kind == MirIntrinsicBytesEndsWith { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("ends_with"), lirIntType(1), [lirPtrType(), lirPtrType()], "bytes.endsWith") }
+    if kind == MirIntrinsicBytesConcat { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("concat"), lirPtrType(), [lirPtrType(), lirPtrType()], "bytes.concat") }
+    if kind == MirIntrinsicBytesJoin { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("join"), lirPtrType(), [lirPtrType(), lirPtrType()], "bytes.join") }
+    if kind == MirIntrinsicBytesSplit { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("split"), lirPtrType(), [lirPtrType(), lirPtrType()], "bytes.split") }
+    if kind == MirIntrinsicBytesRepeat { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("repeat"), lirPtrType(), [lirPtrType(), lirIntType(64)], "bytes.repeat") }
+    if kind == MirIntrinsicBytesSlice { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("slice"), lirPtrType(), [lirPtrType(), lirIntType(64), lirIntType(64)], "bytes.slice") }
+    if kind == MirIntrinsicBytesReplace { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("replace"), lirPtrType(), [lirPtrType(), lirPtrType(), lirPtrType()], "bytes.replace") }
+    if kind == MirIntrinsicBytesReplaceAll { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("replace_all"), lirPtrType(), [lirPtrType(), lirPtrType(), lirPtrType()], "bytes.replaceAll") }
+    if kind == MirIntrinsicBytesTrim { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("trim"), lirPtrType(), [lirPtrType(), lirPtrType()], "bytes.trim") }
+    if kind == MirIntrinsicBytesTrimLeft { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("trim_left"), lirPtrType(), [lirPtrType(), lirPtrType()], "bytes.trimLeft") }
+    if kind == MirIntrinsicBytesTrimRight { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("trim_right"), lirPtrType(), [lirPtrType(), lirPtrType()], "bytes.trimRight") }
+    if kind == MirIntrinsicBytesTrimSpace { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("trim_space"), lirPtrType(), [lirPtrType()], "bytes.trimSpace") }
+    if kind == MirIntrinsicBytesToUpper { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("to_upper"), lirPtrType(), [lirPtrType()], "bytes.toUpper") }
+    if kind == MirIntrinsicBytesToLower { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("to_lower"), lirPtrType(), [lirPtrType()], "bytes.toLower") }
+    if kind == MirIntrinsicBytesToHex { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesSymbol("to_hex"), lirPtrType(), [lirPtrType()], "bytes.toHex") }
+    if kind == MirIntrinsicListPush { return lirLowerMirListPush(l, instr) }
+    if kind == MirIntrinsicListLen { return lirLowerMirStringRuntimeCall(l, instr, llvmListRuntimeLenSymbol(), lirIntType(64), [lirPtrType()], "list.len") }
+    if kind == MirIntrinsicListIsEmpty { return lirLowerMirListIsEmpty(l, instr) }
+    if kind == MirIntrinsicListGet { return lirLowerMirListGet(l, instr) }
+    if kind == MirIntrinsicListClear { return lirLowerMirStringRuntimeCall(l, instr, mirRtListClearSymbol(), lirVoidType(), [lirPtrType()], "list.clear") }
+    if kind == MirIntrinsicListReverse { return lirLowerMirStringRuntimeCall(l, instr, mirRtListReverseSymbol(), lirVoidType(), [lirPtrType()], "list.reverse") }
+    if kind == MirIntrinsicListFirst { return lirLowerMirListFirstOrLast(l, instr, false) }
+    if kind == MirIntrinsicListLast { return lirLowerMirListFirstOrLast(l, instr, true) }
+    if kind == MirIntrinsicListReversed { return lirLowerMirStringRuntimeCall(l, instr, mirRtListReversedSymbol(), lirPtrType(), [lirPtrType()], "list.reversed") }
+    if kind == MirIntrinsicListPop { return lirLowerMirListPop(l, instr) }
+    if kind == MirIntrinsicListToString { return lirLowerMirListToString(l, instr) }
+    if kind == MirIntrinsicBytesGet { return lirLowerMirBytesGet(l, instr) }
+    if kind == MirIntrinsicMapToString { return lirLowerMirStringRuntimeCall(l, instr, "osty_rt_map_to_string", lirPtrType(), [lirPtrType()], "map.toString") }
+    if kind == MirIntrinsicSetToString { return lirLowerMirStringRuntimeCall(l, instr, "osty_rt_set_to_string", lirPtrType(), [lirPtrType()], "set.toString") }
+    if kind == MirIntrinsicCheckCancelled { return lirLowerMirCheckCancelled(l, instr) }
+    if kind == MirIntrinsicListSorted { return lirLowerMirListSorted(l, instr) }
+    if kind == MirIntrinsicListInsert { return lirLowerMirListInsert(l, instr) }
+    if kind == MirIntrinsicMapNew { return lirLowerMirMapNew(l, instr) }
+    if kind == MirIntrinsicMapLen { return lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeLenSymbol(), lirIntType(64), [lirPtrType()], "map.len") }
+    if kind == MirIntrinsicMapKeys { return lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeKeysSymbol(), lirPtrType(), [lirPtrType()], "map.keys") }
+    if kind == MirIntrinsicMapValues { return lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeValuesSymbol(), lirPtrType(), [lirPtrType()], "map.values") }
+    if kind == MirIntrinsicMapClear { return lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeClearSymbol(), lirVoidType(), [lirPtrType()], "map.clear") }
+    if kind == MirIntrinsicMapSet { return lirLowerMirMapInsert(l, instr) }
+    if kind == MirIntrinsicMapGet { return lirLowerMirMapGet(l, instr) }
+    if kind == MirIntrinsicMapContains { return lirLowerMirMapContains(l, instr) }
+    if kind == MirIntrinsicMapRemove { return lirLowerMirMapRemove(l, instr) }
+    if kind == MirIntrinsicSetNew { return lirLowerMirStringRuntimeCall(l, instr, llvmSetRuntimeNewSymbol(), lirPtrType(), [], "set.new") }
+    if kind == MirIntrinsicSetLen { return lirLowerMirStringRuntimeCall(l, instr, llvmSetRuntimeLenSymbol(), lirIntType(64), [lirPtrType()], "set.len") }
+    if kind == MirIntrinsicSetToList { return lirLowerMirStringRuntimeCall(l, instr, llvmSetRuntimeToListSymbol(), lirPtrType(), [lirPtrType()], "set.toList") }
+    if kind == MirIntrinsicSetClear { return lirLowerMirStringRuntimeCall(l, instr, llvmSetRuntimeClearSymbol(), lirVoidType(), [lirPtrType()], "set.clear") }
+    if kind == MirIntrinsicSetInsert { return lirLowerMirSetInsert(l, instr) }
+    if kind == MirIntrinsicSetContains { return lirLowerMirSetContains(l, instr) }
+    if kind == MirIntrinsicSetRemove { return lirLowerMirSetRemove(l, instr) }
+    if kind == MirIntrinsicChanMake { return lirLowerMirStringRuntimeCall(l, instr, llvmChanRuntimeMakeSymbol(), lirPtrType(), [lirIntType(64)], "chan.make") }
+    if kind == MirIntrinsicChanClose { return lirLowerMirStringRuntimeCall(l, instr, llvmChanRuntimeCloseSymbol(), lirVoidType(), [lirPtrType()], "chan.close") }
+    if kind == MirIntrinsicChanIsClosed { return lirLowerMirStringRuntimeCall(l, instr, llvmChanRuntimeIsClosedSymbol(), lirIntType(1), [lirPtrType()], "chan.isClosed") }
+    if kind == MirIntrinsicChanSend { return lirLowerMirChanSend(l, instr) }
+    if kind == MirIntrinsicChanRecv { return lirLowerMirChanRecv(l, instr) }
+    if kind == MirIntrinsicYield { return lirLowerMirStringRuntimeCall(l, instr, "osty_rt_task_yield", lirVoidType(), [], "task.yield") }
+    if kind == MirIntrinsicSleep { return lirLowerMirStringRuntimeCall(l, instr, mirRtThreadSleepSymbol(), lirVoidType(), [lirPtrType()], "task.sleep") }
+    if kind == MirIntrinsicGroupCancel { return lirLowerMirStringRuntimeCall(l, instr, mirRtTaskGroupCancelSymbol(), lirVoidType(), [lirPtrType()], "group.cancel") }
+    if kind == MirIntrinsicGroupIsCancelled { return lirLowerMirStringRuntimeCall(l, instr, mirRtTaskGroupIsCancelledSymbol(), lirIntType(1), [lirPtrType()], "group.isCancelled") }
+    if kind == MirIntrinsicHandleJoin { return lirLowerMirHandleJoin(l, instr) }
+    if kind == MirIntrinsicTaskGroup { return lirLowerMirTaskGroup(l, instr) }
+    if kind == MirIntrinsicSpawn { return lirLowerMirSpawn(l, instr) }
+    if kind == MirIntrinsicSelect { return lirLowerMirStringRuntimeCall(l, instr, mirRtSelectSymbol(), lirVoidType(), [lirPtrType()], "select") }
+    if kind == MirIntrinsicSelectRecv { return lirLowerMirStringRuntimeCall(l, instr, mirRtSelectRecvSymbol(), lirVoidType(), [lirPtrType(), lirPtrType(), lirPtrType()], "select.recv") }
+    if kind == MirIntrinsicSelectTimeout { return lirLowerMirStringRuntimeCall(l, instr, mirRtSelectTimeoutSymbol(), lirVoidType(), [lirPtrType(), lirPtrType(), lirPtrType()], "select.timeout") }
+    if kind == MirIntrinsicSelectDefault { return lirLowerMirStringRuntimeCall(l, instr, mirRtSelectDefaultSymbol(), lirVoidType(), [lirPtrType(), lirPtrType()], "select.default") }
+    if kind == MirIntrinsicSelectSend { return lirLowerMirSelectSend(l, instr) }
+    if kind == MirIntrinsicParallel { return lirLowerMirStringRuntimeCall(l, instr, mirRtParallelSymbol(), lirPtrType(), [lirPtrType(), lirIntType(64), lirPtrType()], "parallel") }
+    if kind == MirIntrinsicRace { return lirLowerMirRace(l, instr) }
+    if kind == MirIntrinsicCollectAll { return lirLowerMirStringRuntimeCall(l, instr, mirRtTaskCollectAllSymbol(), lirPtrType(), [lirPtrType()], "collectAll") }
+    if kind == MirIntrinsicMapKeysSorted { return lirLowerMirMapKeysSorted(l, instr) }
+    if kind == MirIntrinsicBytesFromList { return lirLowerMirStringRuntimeCall(l, instr, mirRtBytesFromListSymbol(), lirPtrType(), [lirPtrType()], "bytes.fromList") }
+    if kind == MirIntrinsicBytesFromString { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringToBytesSymbol(), lirPtrType(), [lirPtrType()], "bytes.fromString") }
+    if kind == MirIntrinsicBytesToString { return lirLowerMirBytesValidatedResult(l, instr, mirRtBytesIsValidUTF8Symbol(), mirRtBytesToStringSymbol(), "bytes.toString") }
+    if kind == MirIntrinsicBytesFromHex { return lirLowerMirBytesValidatedResult(l, instr, mirRtBytesIsValidHexSymbol(), mirRtBytesFromHexSymbol(), "bytes.fromHex") }
+    if kind == MirIntrinsicIsCancelled { return lirLowerMirStringRuntimeCall(l, instr, "osty_rt_cancel_is_cancelled", lirIntType(1), [], "cancel.isCancelled") }
+    if kind == MirIntrinsicStringIndexOf { return lirLowerMirIndexOf(l, instr, mirRtStringSymbol("IndexOf"), [lirPtrType(), lirPtrType()], "string.indexOf") }
+    if kind == MirIntrinsicStringLastIndexOf { return lirLowerMirIndexOf(l, instr, mirRtStringSymbol("LastIndexOf"), [lirPtrType(), lirPtrType()], "string.lastIndexOf") }
+    if kind == MirIntrinsicBytesIndexOf { return lirLowerMirIndexOf(l, instr, mirRtBytesSymbol("index_of"), [lirPtrType(), lirPtrType()], "bytes.indexOf") }
+    if kind == MirIntrinsicBytesLastIndexOf { return lirLowerMirIndexOf(l, instr, mirRtBytesSymbol("last_index_of"), [lirPtrType(), lirPtrType()], "bytes.lastIndexOf") }
+    if kind == MirIntrinsicStringToInt { return lirLowerMirStringParse(l, instr, mirRtStringIsValidIntSymbol(), mirRtStringToIntSymbol(), lirIntType(64), "string.toInt") }
+    if kind == MirIntrinsicStringToFloat { return lirLowerMirStringParse(l, instr, mirRtStringIsValidFloatSymbol(), mirRtStringToFloatSymbol(), lirFloatType("double"), "string.toFloat") }
+    if kind == MirIntrinsicOptionIsSome { return lirLowerMirAlgebraicTagCheck(l, instr, "eq", "option.isSome") }
+    if kind == MirIntrinsicOptionIsNone { return lirLowerMirAlgebraicTagCheck(l, instr, "ne", "option.isNone") }
+    if kind == MirIntrinsicResultIsOk { return lirLowerMirAlgebraicTagCheck(l, instr, "eq", "result.isOk") }
+    if kind == MirIntrinsicResultIsErr { return lirLowerMirAlgebraicTagCheck(l, instr, "ne", "result.isErr") }
+    if kind == MirIntrinsicRawNull { return lirLowerMirRawNull(l, instr) }
+    if kind == MirIntrinsicListSlice { return lirLowerMirStringRuntimeCall(l, instr, mirRtListSymbol("slice"), lirPtrType(), [lirPtrType(), lirIntType(64), lirIntType(64)], "list.slice") }
+    if kind == MirIntrinsicListToSet { return lirLowerMirListToSet(l, instr) }
+    if kind == MirIntrinsicStringFields { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("Fields"), lirPtrType(), [lirPtrType()], "string.fields") }
+    if kind == MirIntrinsicStringSplitN { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSymbol("SplitN"), lirPtrType(), [lirPtrType(), lirPtrType(), lirIntType(64)], "string.splitN") }
+    if kind == MirIntrinsicOptionUnwrap { return lirLowerMirAlgebraicUnwrap(l, instr, mirRtOptionUnwrapNoneSymbol(), "option.unwrap") }
+    if kind == MirIntrinsicOptionUnwrapOr { return lirLowerMirAlgebraicUnwrapOr(l, instr, "option.unwrapOr") }
+    if kind == MirIntrinsicResultUnwrap { return lirLowerMirAlgebraicUnwrap(l, instr, mirRtResultUnwrapErrSymbol(), "result.unwrap") }
+    if kind == MirIntrinsicResultUnwrapOr { return lirLowerMirAlgebraicUnwrapOr(l, instr, "result.unwrapOr") }
+    if kind == MirIntrinsicStringSplitInto { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringSplitIntoSymbol(), lirVoidType(), [lirPtrType(), lirPtrType(), lirPtrType()], "string.splitInto") }
+    if kind == MirIntrinsicStringNthSegment { return lirLowerMirStringRuntimeCall(l, instr, mirRtStringNthSegmentSymbol(), lirPtrType(), [lirPtrType(), lirPtrType(), lirIntType(64)], "string.nthSegment") }
+    if kind == MirIntrinsicListRemoveAt { return lirLowerMirListRemoveAt(l, instr) }
+    if kind == MirIntrinsicMapGetOr { return lirLowerMirMapGetOr(l, instr) }
+    if kind == MirIntrinsicMapIncr { return lirLowerMirMapIncr(l, instr) }
+    if kind == MirIntrinsicListContains { return lirLowerMirListLinearScan(l, instr, false) }
+    if kind == MirIntrinsicListIndexOf { return lirLowerMirListLinearScan(l, instr, true) }
+    lirLowerError(l, LirDiagUnsupported, "unsupported MIR intrinsic `" + mirIntrinsicName(instr.intrinsic) + "`", "intrinsic")
 }
 fn lirLowerMirPrintIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr, newline: Bool, stderr: Bool) {
     if instr.args.len() != 1 {
@@ -2793,12 +2805,13 @@ fn lirEmitGcSafepointCall(l: LirMirFunctionLowerer) {
 // `noalias` is a parameter attribute.
 fn lirFnAttrsFromMir(fn_: MirFunction) -> List<String> {
     let mut attrs: List<String> = []
-    match fn_.inlineMode {
-        MirInlineSoft -> attrs.push("inlinehint"),
-        MirInlineAlways -> attrs.push("alwaysinline"),
-        MirInlineNever -> attrs.push("noinline"),
-        _ -> {
-        },
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if fn_.inlineMode == MirInlineSoft {
+        attrs.push("inlinehint")
+    } else if fn_.inlineMode == MirInlineAlways {
+        attrs.push("alwaysinline")
+    } else if fn_.inlineMode == MirInlineNever {
+        attrs.push("noinline")
     }
     if fn_.hot {
         attrs.push("hot")
@@ -2954,10 +2967,9 @@ fn lirCutBlockCondBr(l: LirMirFunctionLowerer, cond: String, thenLabel: String, 
     l.instrs = []
     l.currentBlockLabel = nextLabel
 }
-// `lirEmitOptionNone` / `lirEmitOptionSome` build Option<T> aggregates
-// at the LLVM boundary. The default shape is the canonical
-// `{i64 disc, i64 payload}`; widened Option<Struct> uses
-// `{i64 disc, %Struct}` and must insert a typed payload directly.
+// `lirEmitOptionNone` / `lirEmitOptionSome` build the canonical 2-i64
+// `{i64 disc, i64 payload}` aggregate production uses for every
+// Option<T> at the LLVM boundary
 // (mir_generator_snapshot.go::mirNoneAggregateLines /
 // mirSomeAggregateLines / mirOkAggregateLines / mirErrAggregateLines).
 // `payloadI64` must already be the i64-encoded form of the payload —
@@ -2965,19 +2977,13 @@ fn lirCutBlockCondBr(l: LirMirFunctionLowerer, cond: String, thenLabel: String, 
 // appropriate. Returns the temporary holding the constructed aggregate.
 fn lirEmitOptionNone(l: LirMirFunctionLowerer, optType: LirType) -> String {
     if lirAggregateHasWidenedPayload(l.out, optType) {
-        let payloadType = lirAggregatePayloadType(l.out, optType)
-        if lirTypeIsZero(payloadType) {
-            lirLowerError(l, LirDiagUnsupported, "Option<Struct> None payload type missing for `" + optType.llvm + "`", "option.none.widened")
-            return "undef"
-        }
-        let step = lirFresh(l)
-        l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "1"), [0]))
-        let value = lirFresh(l)
-        l.instrs.push(lirInsertValue(value, optType, step, lirOperand(payloadType, "undef"), [1]))
-        return value
+        lirLowerError(l, LirDiagUnsupported,
+            "Option<Struct> None construction not implemented for widened payload `" + optType.llvm + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)",
+            "option.none.widened")
+        return "undef"
     }
     let step = lirFresh(l)
-    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "1"), [0]))
+    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "0"), [0]))
     let value = lirFresh(l)
     l.instrs.push(lirInsertValue(value, optType, step, lirOperand(lirIntType(64), "0"), [1]))
     value
@@ -2985,37 +2991,15 @@ fn lirEmitOptionNone(l: LirMirFunctionLowerer, optType: LirType) -> String {
 fn lirEmitOptionSome(l: LirMirFunctionLowerer, optType: LirType, payloadI64: String) -> String {
     if lirAggregateHasWidenedPayload(l.out, optType) {
         lirLowerError(l, LirDiagUnsupported,
-            "Option<Struct> Some construction needs a typed payload for `" + optType.llvm + "`",
+            "Option<Struct> Some construction not implemented for widened payload `" + optType.llvm + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)",
             "option.some.widened")
         return "undef"
     }
     let step = lirFresh(l)
-    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "0"), [0]))
+    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "1"), [0]))
     let value = lirFresh(l)
     l.instrs.push(lirInsertValue(value, optType, step, lirOperand(lirIntType(64), payloadI64), [1]))
     value
-}
-fn lirEmitOptionSomeOperand(l: LirMirFunctionLowerer, optType: LirType, payload: LirOperand) -> String {
-    let payloadType = lirAggregatePayloadType(l.out, optType)
-    if lirTypeIsZero(payloadType) {
-        lirLowerError(l, LirDiagUnsupported, "Option payload type missing for `" + optType.llvm + "`", "option.some")
-        return "undef"
-    }
-    if payload.typ.llvm != payloadType.llvm {
-        lirLowerError(l, LirDiagUnsupported, "Option payload type `" + payload.typ.llvm + "` does not match `" + payloadType.llvm + "`", "option.some")
-        return "undef"
-    }
-    let step = lirFresh(l)
-    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "0"), [0]))
-    let value = lirFresh(l)
-    l.instrs.push(lirInsertValue(value, optType, step, payload, [1]))
-    value
-}
-fn lirEmitOptionSomeValue(l: LirMirFunctionLowerer, optType: LirType, valueReg: String, valueType: LirType) -> String {
-    if lirAggregateHasWidenedPayload(l.out, optType) {
-        return lirEmitOptionSomeOperand(l, optType, lirOperand(valueType, valueReg))
-    }
-    lirEmitOptionSome(l, optType, lirParseResultPayloadAsI64(l, valueReg, valueType))
 }
 fn lirEmitResultOk(l: LirMirFunctionLowerer, resultType: LirType, payloadI64: String) -> String {
     if lirAggregateHasWidenedPayload(l.out, resultType) {
@@ -3025,7 +3009,7 @@ fn lirEmitResultOk(l: LirMirFunctionLowerer, resultType: LirType, payloadI64: St
         return "undef"
     }
     let step = lirFresh(l)
-    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), "0"), [0]))
+    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), "1"), [0]))
     let value = lirFresh(l)
     l.instrs.push(lirInsertValue(value, resultType, step, lirOperand(lirIntType(64), payloadI64), [1]))
     value
@@ -3038,7 +3022,7 @@ fn lirEmitResultErr(l: LirMirFunctionLowerer, resultType: LirType, payloadI64: S
         return "undef"
     }
     let step = lirFresh(l)
-    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), "1"), [0]))
+    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), "0"), [0]))
     let value = lirFresh(l)
     l.instrs.push(lirInsertValue(value, resultType, step, lirOperand(lirIntType(64), payloadI64), [1]))
     value
@@ -3076,25 +3060,6 @@ fn lirAggregateHasWidenedPayload(out: LirModule, aggType: LirType) -> Bool {
     // second field is a struct ref. The aggregate body emitted by
     // `lirAlgebraicAggregateBody_module` is exactly `{ i64, %X }`.
     strings.contains(body, ", %")
-}
-
-fn lirAggregatePayloadType(out: LirModule, aggType: LirType) -> LirType {
-    let body = lirAggregateBodyForRef(out, aggType.llvm)
-    if body == "" {
-        return lirIntType(64)
-    }
-    let parts = strings.split(body, ",")
-    if parts.len() < 2 {
-        return lirTypeInvalid()
-    }
-    let raw = strings.trimSpace(strings.trimSuffix(parts[1], "}"))
-    if raw == "i64" {
-        return lirIntType(64)
-    }
-    if strings.startsWith(raw, "%") {
-        return lirAggregateType(raw)
-    }
-    lirTypeInvalid()
 }
 
 // `lirAggregateBodyForRef` looks up an aggregate's typedef body string
@@ -3933,7 +3898,8 @@ fn lirLowerMirMapGet(l: LirMirFunctionLowerer, instr: MirInstr) {
     lirCutBlockCondBr(l, presentReg, someLabel, noneLabel, someLabel)
     let loaded = lirFresh(l)
     l.instrs.push(lirLoad(loaded, valueType, outSlot, 0))
-    let someValue = lirEmitOptionSomeValue(l, optType, loaded, valueType)
+    let payloadI64 = lirParseResultPayloadAsI64(l, loaded, valueType)
+    let someValue = lirEmitOptionSome(l, optType, payloadI64)
     l.instrs.push(lirStore(lirOperand(optType, someValue), mergeSlot, 0))
     lirCutBlockBr(l, endLabel)
     l.currentBlockLabel = noneLabel
@@ -4038,7 +4004,8 @@ fn lirLowerMirListFirstOrLast(l: LirMirFunctionLowerer, instr: MirInstr, isLast:
         l.instrs.push(lirLoad(dest, elemType, slot, 0))
         dest
     }
-    let someValue = lirEmitOptionSomeValue(l, optType, elemReg, elemType)
+    let payloadI64 = lirParseResultPayloadAsI64(l, elemReg, elemType)
+    let someValue = lirEmitOptionSome(l, optType, payloadI64)
     l.instrs.push(lirStore(lirOperand(optType, someValue), mergeSlot, 0))
     lirCutBlockBr(l, endLabel)
     let merged = lirFresh(l)
@@ -4135,7 +4102,8 @@ fn lirLowerMirListPop(l: LirMirFunctionLowerer, instr: MirInstr) {
         dest
     }
     l.instrs.push(lirCall("", lirVoidType(), "@" + discardSym, [lirOperand(lirPtrType(), recv.receiverReg)]))
-    let someValue = lirEmitOptionSomeValue(l, optType, elemReg, elemType)
+    let payloadI64 = lirParseResultPayloadAsI64(l, elemReg, elemType)
+    let someValue = lirEmitOptionSome(l, optType, payloadI64)
     l.instrs.push(lirStore(lirOperand(optType, someValue), mergeSlot, 0))
     lirCutBlockBr(l, endLabel)
     let merged = lirFresh(l)
@@ -4741,9 +4709,9 @@ fn lirLowerMirStringParse(l: LirMirFunctionLowerer, instr: MirInstr, validateSym
 // inspection (`is_some` / `is_none` / `is_ok` / `is_err`). The four
 // intrinsics share the same shape: extract the i64 disc field at index
 // 0 of the `%Option.<T>` / `%Result.<T>_<E>` aggregate and icmp it
-// against `0`. `cmp` is `"eq"` for the present-tag intrinsics
-// (IsSome / IsOk; disc==0 → true) and `"ne"` for the absent-tag
-// intrinsics (IsNone / IsErr; disc!=0 → true). Mirrors production
+// against `0`. `cmp` is `"ne"` for the present-tag intrinsics
+// (IsSome / IsOk; disc==1 → true) and `"eq"` for the absent-tag
+// intrinsics (IsNone / IsErr; disc==0 → true). Mirrors production
 // `emitOptionIntrinsic` / `emitResultIntrinsic`
 // (mir_generator.go:5283-5294 / similar Result block).
 fn lirLowerMirAlgebraicTagCheck(l: LirMirFunctionLowerer, instr: MirInstr, cmp: String, label: String) {
@@ -4857,7 +4825,7 @@ fn lirCutBlockUnreachable(l: LirMirFunctionLowerer, nextLabel: String) {
 }
 // `lirLowerMirAlgebraicUnwrap` lowers Option.unwrap() / Result.unwrap()
 // — the panic-on-absent variants. Shape: `extractvalue` the disc field,
-// `icmp eq` against 1 to detect the absent tag, branch to a panic arm
+// `icmp eq` against 0 to detect the absent tag, branch to a panic arm
 // that calls the noreturn runtime helper (`osty_rt_option_unwrap_none`
 // or `osty_rt_result_unwrap_err`) and terminates with `unreachable`,
 // then in the present arm extract the i64 payload and narrow back to
@@ -4878,6 +4846,16 @@ fn lirLowerMirAlgebraicUnwrap(l: LirMirFunctionLowerer, instr: MirInstr, abortSy
         lirLowerError(l, LirDiagUnsupported, label + " operand type `" + instr.args[0].typ + "` is not implemented", label)
         return
     }
+    if lirAggregateHasWidenedPayload(l.out, aggType) {
+        // Widened struct payload — extractvalue would yield a struct, not
+        // i64. The current i64-shaped payload propagation downstream would
+        // hit a type mismatch. C2 needs a struct-payload-aware unwrap that
+        // either copies the struct via alloca or handles the value type.
+        lirLowerError(l, LirDiagUnsupported,
+            label + " not implemented for widened payload `" + instr.args[0].typ + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)",
+            label + ".widened")
+        return
+    }
     let aggValue = lirLowerMirOperand(l, instr.args[0], instr.args[0].typ, aggType)
     if aggValue.value == "" {
         return
@@ -4895,30 +4873,21 @@ fn lirLowerMirAlgebraicUnwrap(l: LirMirFunctionLowerer, instr: MirInstr, abortSy
     let discReg = lirFresh(l)
     l.instrs.push(lirExtractValue(discReg, aggType, aggValue.value, [0]))
     let isAbsentReg = lirFresh(l)
-    l.instrs.push(lirBinary(isAbsentReg, "icmp eq", lirIntType(64), discReg, "1"))
+    l.instrs.push(lirBinary(isAbsentReg, "icmp eq", lirIntType(64), discReg, "0"))
     let absentLabel = lirFreshAuxLabel(l, label + ".absent")
     let presentLabel = lirFreshAuxLabel(l, label + ".present")
     lirCutBlockCondBr(l, isAbsentReg, absentLabel, presentLabel, absentLabel)
     lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(abortSym, lirVoidType(), [], false))
     l.instrs.push(lirCall("", lirVoidType(), "@" + abortSym, []))
     lirCutBlockUnreachable(l, presentLabel)
-    let payloadType = lirAggregatePayloadType(l.out, aggType)
-    if lirTypeIsZero(payloadType) {
-        lirLowerError(l, LirDiagUnsupported, label + " payload type for `" + instr.args[0].typ + "` is not implemented", label)
+    let payloadI64 = lirFresh(l)
+    l.instrs.push(lirExtractValue(payloadI64, aggType, aggValue.value, [1]))
+    let narrowed = lirNarrowI64ToType(l, payloadI64, destType)
+    if narrowed == "" {
+        lirLowerError(l, LirDiagUnsupported, label + " payload narrow to `" + loc.typ + "` is not implemented", label)
         return
     }
-    let payload = lirFresh(l)
-    l.instrs.push(lirExtractValue(payload, aggType, aggValue.value, [1]))
-    let mut outValue = payload
-    if payloadType.llvm != destType.llvm {
-        let narrowed = lirNarrowI64ToType(l, payload, destType)
-        if narrowed == "" {
-            lirLowerError(l, LirDiagUnsupported, label + " payload narrow to `" + loc.typ + "` is not implemented", label)
-            return
-        }
-        outValue = narrowed
-    }
-    lirStoreMirResult(l, instr.dest, lirOperand(destType, outValue), loc.typ, label + " result")
+    lirStoreMirResult(l, instr.dest, lirOperand(destType, narrowed), loc.typ, label + " result")
 }
 // `lirLowerMirAlgebraicUnwrapOr` lowers Option.unwrapOr(default) and
 // Result.unwrapOr(default) — the fallback variants. Same disc-field
@@ -4941,6 +4910,14 @@ fn lirLowerMirAlgebraicUnwrapOr(l: LirMirFunctionLowerer, instr: MirInstr, label
         lirLowerError(l, LirDiagUnsupported, label + " operand type `" + instr.args[0].typ + "` is not implemented", label)
         return
     }
+    if lirAggregateHasWidenedPayload(l.out, aggType) {
+        // Same diagnostic-only guard as lirLowerMirAlgebraicUnwrap (above).
+        // Struct-payload-aware unwrapOr depends on C2 implementation.
+        lirLowerError(l, LirDiagUnsupported,
+            label + " not implemented for widened payload `" + instr.args[0].typ + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)",
+            label + ".widened")
+        return
+    }
     let aggValue = lirLowerMirOperand(l, instr.args[0], instr.args[0].typ, aggType)
     if aggValue.value == "" {
         return
@@ -4958,7 +4935,7 @@ fn lirLowerMirAlgebraicUnwrapOr(l: LirMirFunctionLowerer, instr: MirInstr, label
     let discReg = lirFresh(l)
     l.instrs.push(lirExtractValue(discReg, aggType, aggValue.value, [0]))
     let isAbsentReg = lirFresh(l)
-    l.instrs.push(lirBinary(isAbsentReg, "icmp eq", lirIntType(64), discReg, "1"))
+    l.instrs.push(lirBinary(isAbsentReg, "icmp eq", lirIntType(64), discReg, "0"))
     let mergeSlot = lirFresh(l)
     l.instrs.push(lirAlloca(mergeSlot, destType, 0))
     let absentLabel = lirFreshAuxLabel(l, label + ".absent")
@@ -4972,23 +4949,14 @@ fn lirLowerMirAlgebraicUnwrapOr(l: LirMirFunctionLowerer, instr: MirInstr, label
     l.instrs.push(lirStore(lirOperand(destType, fallback.value), mergeSlot, 0))
     lirCutBlockBr(l, endLabel)
     l.currentBlockLabel = presentLabel
-    let payloadType = lirAggregatePayloadType(l.out, aggType)
-    if lirTypeIsZero(payloadType) {
-        lirLowerError(l, LirDiagUnsupported, label + " payload type for `" + instr.args[0].typ + "` is not implemented", label)
+    let payloadI64 = lirFresh(l)
+    l.instrs.push(lirExtractValue(payloadI64, aggType, aggValue.value, [1]))
+    let narrowed = lirNarrowI64ToType(l, payloadI64, destType)
+    if narrowed == "" {
+        lirLowerError(l, LirDiagUnsupported, label + " payload narrow to `" + loc.typ + "` is not implemented", label)
         return
     }
-    let payload = lirFresh(l)
-    l.instrs.push(lirExtractValue(payload, aggType, aggValue.value, [1]))
-    let mut outValue = payload
-    if payloadType.llvm != destType.llvm {
-        let narrowed = lirNarrowI64ToType(l, payload, destType)
-        if narrowed == "" {
-            lirLowerError(l, LirDiagUnsupported, label + " payload narrow to `" + loc.typ + "` is not implemented", label)
-            return
-        }
-        outValue = narrowed
-    }
-    l.instrs.push(lirStore(lirOperand(destType, outValue), mergeSlot, 0))
+    l.instrs.push(lirStore(lirOperand(destType, narrowed), mergeSlot, 0))
     lirCutBlockBr(l, endLabel)
     let merged = lirFresh(l)
     l.instrs.push(lirLoad(merged, destType, mergeSlot, 0))
@@ -5477,53 +5445,50 @@ fn lirMangleAlgebraicTypeName(name: String) -> String {
     out
 }
 fn lirLowerMirTerm(l: LirMirFunctionLowerer, term: MirTerm, ret: LirType) -> LirTerm {
-    match term.kind {
-        MirTermReturn -> {
-            if lirTypeIsVoid(ret) {
-                lirEmitGcRootReleases(l)
-                return lirRetVoid()
-            }
-            let value = lirLoadMirLocal(l, l.fn_.returnLocal)
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if term.kind == MirTermReturn {
+        if lirTypeIsVoid(ret) {
             lirEmitGcRootReleases(l)
-            return lirRetValue(value.typ, value.value)
-        },
-        MirTermGoto -> {
-            let mut t = lirBr(lirLabelForMirBlock(l, term.target))
-            if term.loopBackEdge && lirFnHasLoopHints(l.fn_) {
-                t.loopMDRef = lirNextLoopMD(l, l.fn_)
-            }
-            return t
-        },
-        MirTermBranch -> {
-            let cond = lirLowerMirOperand(l, term.cond, "Bool", lirIntType(1))
-            if cond.typ.llvm != "i1" {
-                lirLowerError(l, LirDiagUnsupported, "branch condition requires i1, got `" + cond.typ.llvm + "`", "term.branch")
-                return lirUnreachable()
-            }
-            let mut t = lirCondBr(cond.value, lirLabelForMirBlock(l, term.thenBlock), lirLabelForMirBlock(l, term.elseBlock))
-            if term.loopBackEdge && lirFnHasLoopHints(l.fn_) {
-                t.loopMDRef = lirNextLoopMD(l, l.fn_)
-            }
-            return t
-        },
-        MirTermSwitchInt -> {
-            let scrutinee = lirLowerMirOperand(l, term.cond, term.cond.typ, lirTypeInvalid())
-            if scrutinee.typ.className != LirTypeInt {
-                lirLowerError(l, LirDiagUnsupported, "switch scrutinee requires integer type, got `" + scrutinee.typ.llvm + "`", "term.switch")
-                return lirUnreachable()
-            }
-            let mut cases: List<LirSwitchCase> = []
-            for c in term.cases {
-                cases.push(lirSwitchCase(lirIntToString(c.value), lirLabelForMirBlock(l, c.target)))
-            }
-            return lirSwitch(scrutinee.typ, scrutinee.value, lirLabelForMirBlock(l, term.target), cases)
-        },
-        MirTermUnreachable -> lirUnreachable(),
-        _ -> {
-            lirLowerError(l, LirDiagInvalidInput, "missing or unsupported MIR terminator", "term")
-            lirUnreachable()
-        },
+            return lirRetVoid()
+        }
+        let value = lirLoadMirLocal(l, l.fn_.returnLocal)
+        lirEmitGcRootReleases(l)
+        return lirRetValue(value.typ, value.value)
     }
+    if term.kind == MirTermGoto {
+        let mut t = lirBr(lirLabelForMirBlock(l, term.target))
+        if term.loopBackEdge && lirFnHasLoopHints(l.fn_) {
+            t.loopMDRef = lirNextLoopMD(l, l.fn_)
+        }
+        return t
+    }
+    if term.kind == MirTermBranch {
+        let cond = lirLowerMirOperand(l, term.cond, "Bool", lirIntType(1))
+        if cond.typ.llvm != "i1" {
+            lirLowerError(l, LirDiagUnsupported, "branch condition requires i1, got `" + cond.typ.llvm + "`", "term.branch")
+            return lirUnreachable()
+        }
+        let mut t = lirCondBr(cond.value, lirLabelForMirBlock(l, term.thenBlock), lirLabelForMirBlock(l, term.elseBlock))
+        if term.loopBackEdge && lirFnHasLoopHints(l.fn_) {
+            t.loopMDRef = lirNextLoopMD(l, l.fn_)
+        }
+        return t
+    }
+    if term.kind == MirTermSwitchInt {
+        let scrutinee = lirLowerMirOperand(l, term.cond, term.cond.typ, lirTypeInvalid())
+        if scrutinee.typ.className != LirTypeInt {
+            lirLowerError(l, LirDiagUnsupported, "switch scrutinee requires integer type, got `" + scrutinee.typ.llvm + "`", "term.switch")
+            return lirUnreachable()
+        }
+        let mut cases: List<LirSwitchCase> = []
+        for c in term.cases {
+            cases.push(lirSwitchCase(lirIntToString(c.value), lirLabelForMirBlock(l, c.target)))
+        }
+        return lirSwitch(scrutinee.typ, scrutinee.value, lirLabelForMirBlock(l, term.target), cases)
+    }
+    if term.kind == MirTermUnreachable { return lirUnreachable() }
+    lirLowerError(l, LirDiagInvalidInput, "missing or unsupported MIR terminator", "term")
+    lirUnreachable()
 }
 // Load the return value before releasing roots. The value
 // is already in a register at the point of release, so the
@@ -5531,23 +5496,21 @@ fn lirLowerMirTerm(l: LirMirFunctionLowerer, term: MirTerm, ret: LirType) -> Lir
 // (generator.go::releaseGCRoots) uses the same order:
 // value materialization, then LIFO root release, then ret.
 fn lirLowerMirRValue(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
-    match rv.kind {
-        MirRVUse -> lirLowerMirOperand(l, rv.arg, hintName, hint),
-        MirRVUnary -> lirLowerMirUnary(l, rv, hintName, hint),
-        MirRVBinary -> lirLowerMirBinary(l, rv, hintName, hint),
-        MirRVCast -> lirLowerMirCast(l, rv, hintName, hint),
-        MirRVAggregate -> lirLowerMirAggregate(l, rv, hintName, hint),
-        MirRVDiscriminant -> lirLowerMirDiscriminant(l, rv, hintName, hint),
-        MirRVLen -> lirLowerMirLenRV(l, rv, hintName, hint),
-        MirRVNullary -> lirLowerMirNullaryRV(l, rv, hintName, hint),
-        MirRVGlobalRef -> lirLowerMirGlobalRefRV(l, rv, hintName, hint),
-        _ -> {
-            lirLowerError(l, LirDiagUnsupported,
-                "unsupported MIR rvalue kind `" + mirRValueKindName(rv.kind) + "`",
-                "rvalue." + mirRValueKindName(rv.kind))
-            lirOperandInvalid()
-        },
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    let kind = rv.kind
+    if kind == MirRVUse { return lirLowerMirOperand(l, rv.arg, hintName, hint) }
+    if kind == MirRVUnary { return lirLowerMirUnary(l, rv, hintName, hint) }
+    if kind == MirRVBinary { return lirLowerMirBinary(l, rv, hintName, hint) }
+    if kind == MirRVCast { return lirLowerMirCast(l, rv, hintName, hint) }
+    if kind == MirRVAggregate { return lirLowerMirAggregate(l, rv, hintName, hint) }
+    if kind == MirRVDiscriminant { return lirLowerMirDiscriminant(l, rv, hintName, hint) }
+    if kind == MirRVLen { return lirLowerMirLenRV(l, rv, hintName, hint) }
+    if kind == MirRVNullary { return lirLowerMirNullaryRV(l, rv, hintName, hint) }
+    if kind == MirRVGlobalRef { return lirLowerMirGlobalRefRV(l, rv, hintName, hint) }
+    lirLowerError(l, LirDiagUnsupported,
+        "unsupported MIR rvalue kind `" + mirRValueKindName(kind) + "`",
+        "rvalue." + mirRValueKindName(kind))
+    lirOperandInvalid()
 }
 // `lirLowerMirNullaryRV` lowers the `MirRVNullary` rvalue. Currently
 // only `MirNullaryNone` is defined — it materialises an `Option<T>`
@@ -5671,22 +5634,22 @@ fn lirLowerMirUnary(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, h
         hint
     }
     let dest = lirFresh(l)
-    match rv.unaryOp {
-        MirUnNeg -> {
-            if typ.className == LirTypeFloat {
-                l.instrs.push(lirUnary(dest, "fneg", typ, arg.value))
-            } else {
-                l.instrs.push(lirBinary(dest, "sub", typ, lirZeroValue(typ), arg.value))
-            }
-        },
-        MirUnNot -> l.instrs.push(lirBinary(dest, "xor", typ, arg.value, "1")),
-        MirUnBitNot -> l.instrs.push(lirBinary(dest, "xor", typ, arg.value, "-1")),
-        _ -> {
-            lirLowerError(l, LirDiagUnsupported,
-                "unsupported MIR unary op `" + mirUnaryKindName(rv.unaryOp) + "`",
-                "unary." + mirUnaryKindName(rv.unaryOp))
-            return lirOperandInvalid()
-        },
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if rv.unaryOp == MirUnNeg {
+        if typ.className == LirTypeFloat {
+            l.instrs.push(lirUnary(dest, "fneg", typ, arg.value))
+        } else {
+            l.instrs.push(lirBinary(dest, "sub", typ, lirZeroValue(typ), arg.value))
+        }
+    } else if rv.unaryOp == MirUnNot {
+        l.instrs.push(lirBinary(dest, "xor", typ, arg.value, "1"))
+    } else if rv.unaryOp == MirUnBitNot {
+        l.instrs.push(lirBinary(dest, "xor", typ, arg.value, "-1"))
+    } else {
+        lirLowerError(l, LirDiagUnsupported,
+            "unsupported MIR unary op `" + mirUnaryKindName(rv.unaryOp) + "`",
+            "unary." + mirUnaryKindName(rv.unaryOp))
+        return lirOperandInvalid()
     }
     lirOperand(typ, dest)
 }
@@ -5748,39 +5711,31 @@ fn lirLowerMirCast(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hi
     let value = lirLowerMirOperand(l, rv.arg, rv.castFrom, fromType)
     let unsigned = lirPrimitiveTypeIsUnsigned(rv.castFrom) || lirPrimitiveTypeIsUnsigned(rv.castTo)
     let mut opcode = ""
-    match rv.castKind {
-        MirCastIntResize -> {
-            opcode = lirPlanScalarCastOpcode(fromType, toType, unsigned)
-        },
-        MirCastIntToFloat -> {
-            opcode = lirPlanScalarCastOpcode(fromType, toType, unsigned)
-        },
-        MirCastFloatToInt -> {
-            opcode = lirPlanScalarCastOpcode(fromType, toType, unsigned)
-        },
-        MirCastFloatResize -> {
-            opcode = lirPlanScalarCastOpcode(fromType, toType, unsigned)
-        },
-        MirCastBitcast -> {
-            opcode = "bitcast"
-        },
-        MirCastOptionalWrap -> {
-            // Identity at this stage — the MIR lowerer normally
-            // materialises wrap via AggregateRV{EnumVariant}, so a bare
-            // CastRV{OptionalWrap} is a passthrough. Mirrors production
-            // (mir_generator.go:9045).
-        },
-        MirCastOptionalUnwrap -> {
-            // Identity at this stage — the MIR lowerer normally
-            // materialises unwrap via VariantProj, so a bare
-            // CastRV{OptionalUnwrap} is a passthrough.
-        },
-        _ -> {
-            lirLowerError(l, LirDiagUnsupported,
-                "unsupported MIR cast kind `" + mirCastKindName(rv.castKind) + "` (`" + rv.castFrom + "` -> `" + rv.castTo + "`)",
-                "cast." + mirCastKindName(rv.castKind))
-            return lirOperandInvalid()
-        },
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if rv.castKind == MirCastIntResize {
+        opcode = lirPlanScalarCastOpcode(fromType, toType, unsigned)
+    } else if rv.castKind == MirCastIntToFloat {
+        opcode = lirPlanScalarCastOpcode(fromType, toType, unsigned)
+    } else if rv.castKind == MirCastFloatToInt {
+        opcode = lirPlanScalarCastOpcode(fromType, toType, unsigned)
+    } else if rv.castKind == MirCastFloatResize {
+        opcode = lirPlanScalarCastOpcode(fromType, toType, unsigned)
+    } else if rv.castKind == MirCastBitcast {
+        opcode = "bitcast"
+    } else if rv.castKind == MirCastOptionalWrap {
+        // Identity at this stage — the MIR lowerer normally
+        // materialises wrap via AggregateRV{EnumVariant}, so a bare
+        // CastRV{OptionalWrap} is a passthrough. Mirrors production
+        // (mir_generator.go:9045).
+    } else if rv.castKind == MirCastOptionalUnwrap {
+        // Identity at this stage — the MIR lowerer normally
+        // materialises unwrap via VariantProj, so a bare
+        // CastRV{OptionalUnwrap} is a passthrough.
+    } else {
+        lirLowerError(l, LirDiagUnsupported,
+            "unsupported MIR cast kind `" + mirCastKindName(rv.castKind) + "` (`" + rv.castFrom + "` -> `" + rv.castTo + "`)",
+            "cast." + mirCastKindName(rv.castKind))
+        return lirOperandInvalid()
     }
     if opcode == "" {
         return lirOperand(toType, value.value)
@@ -5788,17 +5743,14 @@ fn lirLowerMirCast(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hi
     lirCastMirOperand(l, value, opcode, toType)
 }
 fn lirLowerMirAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
-    match rv.aggKind {
-        MirAggTuple -> lirLowerMirTupleAggregate(l, rv, hintName, hint),
-        MirAggStruct -> lirLowerMirStructAggregate(l, rv, hintName, hint),
-        MirAggEnumVariant -> lirLowerMirEnumVariantAggregate(l, rv, hintName, hint),
-        MirAggList -> lirLowerMirListAggregate(l, rv, hintName, hint),
-        MirAggClosure -> lirLowerMirClosureAggregate(l, rv, hintName, hint),
-        _ -> {
-            lirLowerError(l, LirDiagUnsupported, "aggregate kind is not implemented in LIR Proto aggregate lowering", "aggregate")
-            lirOperandInvalid()
-        },
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if rv.aggKind == MirAggTuple { return lirLowerMirTupleAggregate(l, rv, hintName, hint) }
+    if rv.aggKind == MirAggStruct { return lirLowerMirStructAggregate(l, rv, hintName, hint) }
+    if rv.aggKind == MirAggEnumVariant { return lirLowerMirEnumVariantAggregate(l, rv, hintName, hint) }
+    if rv.aggKind == MirAggList { return lirLowerMirListAggregate(l, rv, hintName, hint) }
+    if rv.aggKind == MirAggClosure { return lirLowerMirClosureAggregate(l, rv, hintName, hint) }
+    lirLowerError(l, LirDiagUnsupported, "aggregate kind is not implemented in LIR Proto aggregate lowering", "aggregate")
+    lirOperandInvalid()
 }
 // `lirLowerMirClosureAggregate` boxes a closure into a stack alloca
 // shaped as `%ClosureEnv.<tag>.<tag>...` where slot 0 is the lifted
@@ -5932,11 +5884,13 @@ fn lirLowerMirListAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: S
     }
     lirOperand(lirPtrType(), listReg)
 }
-// `lirLowerMirEnumVariantAggregate` builds the algebraic aggregate for
-// an enum variant. The common shape remains `{ i64 disc, i64 payload }`;
-// widened Option/Result payloads use `{ i64 disc, %Struct }` and insert
-// the typed payload directly instead of boxing it back through i64.
-// Mirrors production `emitEnumVariant` (mir_generator.go:9148).
+// `lirLowerMirEnumVariantAggregate` builds the canonical
+// `{ i64 disc, i64 payload }` aggregate for an enum variant. Disc is
+// the variant index (e.g. 0 for None / Err, 1 for Some / Ok). Payload
+// is i64-encoded via `lirParseResultPayloadAsI64` (the boxing helper
+// already used by IndexOf and List.first/last). Bare 0-arity variants
+// fill the slot with literal 0. Mirrors production `emitEnumVariant`
+// (mir_generator.go:9148).
 fn lirLowerMirEnumVariantAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
     let typeName = lirAggTypeNameFromRV(rv, hintName)
     let aggType = if typeName != "" {
@@ -5951,13 +5905,8 @@ fn lirLowerMirEnumVariantAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hint
     let discText = lirIntToString(rv.aggVariantIdx)
     let step1 = lirFresh(l)
     l.instrs.push(lirInsertValue(step1, aggType, "undef", lirOperand(lirIntType(64), discText), [0]))
-    let payload = if rv.aggFields.len() == 0 {
-        let payloadType = lirAggregatePayloadType(l.out, aggType)
-        if lirTypeIsZero(payloadType) {
-            lirOperand(lirIntType(64), "0")
-        } else {
-            lirOperand(payloadType, if payloadType.llvm == "i64" { "0" } else { "undef" })
-        }
+    let payloadI64 = if rv.aggFields.len() == 0 {
+        "0"
     } else if rv.aggFields.len() == 1 {
         let arg = rv.aggFields[0]
         let argHint = lirLowerMirType(l, arg.typ)
@@ -5965,22 +5914,13 @@ fn lirLowerMirEnumVariantAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hint
         if value.value == "" {
             return lirOperandInvalid()
         }
-        if lirAggregateHasWidenedPayload(l.out, aggType) {
-            value
-        } else {
-            lirOperand(lirIntType(64), lirParseResultPayloadAsI64(l, value.value, value.typ))
-        }
+        lirParseResultPayloadAsI64(l, value.value, value.typ)
     } else {
         lirLowerError(l, LirDiagUnsupported, "enum variant with " + lirIntToString(rv.aggFields.len()) + " payload fields (only scalar / 0-arity supported)", "aggregate.enum")
         return lirOperandInvalid()
     }
-    let payloadType = lirAggregatePayloadType(l.out, aggType)
-    if !(lirTypeIsZero(payloadType)) && payload.typ.llvm != payloadType.llvm {
-        lirLowerError(l, LirDiagUnsupported, "enum variant payload type `" + payload.typ.llvm + "` does not match aggregate payload `" + payloadType.llvm + "`", "aggregate.enum")
-        return lirOperandInvalid()
-    }
     let value = lirFresh(l)
-    l.instrs.push(lirInsertValue(value, aggType, step1, payload, [1]))
+    l.instrs.push(lirInsertValue(value, aggType, step1, lirOperand(lirIntType(64), payloadI64), [1]))
     lirOperand(aggType, value)
 }
 fn lirLowerMirTupleAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
@@ -6062,17 +6002,14 @@ fn lirLowerMirStructAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName:
     current
 }
 fn lirLowerMirOperand(l: LirMirFunctionLowerer, op: MirOperand, hintName: String, hint: LirType) -> LirOperand {
-    match op.kind {
-        MirOpCopy -> lirLoadMirPlace(l, op.place),
-        MirOpMove -> lirLoadMirPlace(l, op.place),
-        MirOpConst -> lirLowerMirConst(l, op.const, hintName, hint),
-        _ -> {
-            lirLowerError(l, LirDiagUnsupported,
-                "unsupported MIR operand kind `" + mirOperandKindName(op.kind) + "`",
-                "operand." + mirOperandKindName(op.kind))
-            lirOperandInvalid()
-        },
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if op.kind == MirOpCopy { return lirLoadMirPlace(l, op.place) }
+    if op.kind == MirOpMove { return lirLoadMirPlace(l, op.place) }
+    if op.kind == MirOpConst { return lirLowerMirConst(l, op.const, hintName, hint) }
+    lirLowerError(l, LirDiagUnsupported,
+        "unsupported MIR operand kind `" + mirOperandKindName(op.kind) + "`",
+        "operand." + mirOperandKindName(op.kind))
+    lirOperandInvalid()
 }
 fn lirLoadMirPlace(l: LirMirFunctionLowerer, place: MirPlace) -> LirOperand {
     let base = lirLoadMirLocal(l, place.local)
@@ -6117,34 +6054,28 @@ fn lirProjectMirOperand(l: LirMirFunctionLowerer, value: LirOperand, projections
     current
 }
 fn lirLowerMirConst(l: LirMirFunctionLowerer, c: MirConst, hintName: String, hint: LirType) -> LirOperand {
-    match c.kind {
-        MirConstInt -> lirOperand(lirLowerMirType(l, if c.typ == "" {
-            hintName
-        } else {
-            c.typ
-        }), lirIntToString(c.intValue)),
-        MirConstBool -> lirBoolOperand(c.boolValue),
-        MirConstFloat -> lirOperand(lirLowerMirType(l, if c.typ == "" {
-            hintName
-        } else {
-            c.typ
-        }), c.floatText),
-        MirConstString -> {
-            let symbol = lirStringPoolInternKnown(l.out.stringPool, c.strValue, lirCStringEncodeBasic(c.strValue), c.strValue.len() + 1)
-            lirOperand(lirPtrType(), symbol)
-        },
-        MirConstChar -> lirOperand(lirIntType(32), lirIntToString(c.charValue)),
-        MirConstByte -> lirOperand(lirIntType(8), lirIntToString(c.byteValue)),
-        MirConstUnit -> lirOperand(lirVoidType(), ""),
-        MirConstNull -> lirOperand(lirPtrType(), "null"),
-        MirConstFn -> lirOperand(lirPtrType(), "@" + c.fnSymbol),
-        _ -> {
-            lirLowerError(l, LirDiagUnsupported,
-                "unsupported MIR const kind `" + mirConstKindName(c.kind) + "`",
-                "const." + mirConstKindName(c.kind))
-            lirOperandInvalid()
-        },
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    let kind = c.kind
+    if kind == MirConstInt {
+        return lirOperand(lirLowerMirType(l, if c.typ == "" { hintName } else { c.typ }), lirIntToString(c.intValue))
     }
+    if kind == MirConstBool { return lirBoolOperand(c.boolValue) }
+    if kind == MirConstFloat {
+        return lirOperand(lirLowerMirType(l, if c.typ == "" { hintName } else { c.typ }), c.floatText)
+    }
+    if kind == MirConstString {
+        let symbol = lirStringPoolInternKnown(l.out.stringPool, c.strValue, lirCStringEncodeBasic(c.strValue), c.strValue.len() + 1)
+        return lirOperand(lirPtrType(), symbol)
+    }
+    if kind == MirConstChar { return lirOperand(lirIntType(32), lirIntToString(c.charValue)) }
+    if kind == MirConstByte { return lirOperand(lirIntType(8), lirIntToString(c.byteValue)) }
+    if kind == MirConstUnit { return lirOperand(lirVoidType(), "") }
+    if kind == MirConstNull { return lirOperand(lirPtrType(), "null") }
+    if kind == MirConstFn { return lirOperand(lirPtrType(), "@" + c.fnSymbol) }
+    lirLowerError(l, LirDiagUnsupported,
+        "unsupported MIR const kind `" + mirConstKindName(kind) + "`",
+        "const." + mirConstKindName(kind))
+    lirOperandInvalid()
 }
 fn lirBoolOperand(value: Bool) -> LirOperand {
     if value {
@@ -6303,79 +6234,45 @@ fn lirLowerHasErrorDiagnostics(diags: List<LirDiagnostic>) -> Bool {
     false
 }
 fn lirMirBinaryIsComparison(op: MirBinaryOp) -> Bool {
-    match op {
-        MirBinEq -> true,
-        MirBinNeq -> true,
-        MirBinLt -> true,
-        MirBinLeq -> true,
-        MirBinGt -> true,
-        MirBinGeq -> true,
-        _ -> false,
-    }
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if op == MirBinEq { return true }
+    if op == MirBinNeq { return true }
+    if op == MirBinLt { return true }
+    if op == MirBinLeq { return true }
+    if op == MirBinGt { return true }
+    if op == MirBinGeq { return true }
+    false
 }
 fn lirMirBinaryOpcode(op: MirBinaryOp, typ: LirType, unsigned: Bool) -> String {
     let isFloat = typ.className == LirTypeFloat
-    match op {
-        MirBinAdd -> if isFloat {
-            "fadd"
-        } else {
-            "add"
-        },
-        MirBinSub -> if isFloat {
-            "fsub"
-        } else {
-            "sub"
-        },
-        MirBinMul -> if isFloat {
-            "fmul"
-        } else {
-            "mul"
-        },
-        MirBinDiv -> {
-            if isFloat {
-                return "fdiv"
-            }
-            if unsigned {
-                return "udiv"
-            }
-            "sdiv"
-        },
-        MirBinMod -> {
-            if isFloat {
-                return "frem"
-            }
-            if unsigned {
-                return "urem"
-            }
-            "srem"
-        },
-        MirBinEq -> if isFloat {
-            "fcmp oeq"
-        } else {
-            "icmp eq"
-        },
-        MirBinNeq -> if isFloat {
-            "fcmp one"
-        } else {
-            "icmp ne"
-        },
-        MirBinLt -> lirMirCompareOpcode("lt", isFloat, unsigned),
-        MirBinLeq -> lirMirCompareOpcode("le", isFloat, unsigned),
-        MirBinGt -> lirMirCompareOpcode("gt", isFloat, unsigned),
-        MirBinGeq -> lirMirCompareOpcode("ge", isFloat, unsigned),
-        MirBinAnd -> "and",
-        MirBinOr -> "or",
-        MirBinBitAnd -> "and",
-        MirBinBitOr -> "or",
-        MirBinBitXor -> "xor",
-        MirBinShl -> "shl",
-        MirBinShr -> if unsigned {
-            "lshr"
-        } else {
-            "ashr"
-        },
-        _ -> "",
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if op == MirBinAdd { return if isFloat { "fadd" } else { "add" } }
+    if op == MirBinSub { return if isFloat { "fsub" } else { "sub" } }
+    if op == MirBinMul { return if isFloat { "fmul" } else { "mul" } }
+    if op == MirBinDiv {
+        if isFloat { return "fdiv" }
+        if unsigned { return "udiv" }
+        return "sdiv"
     }
+    if op == MirBinMod {
+        if isFloat { return "frem" }
+        if unsigned { return "urem" }
+        return "srem"
+    }
+    if op == MirBinEq { return if isFloat { "fcmp oeq" } else { "icmp eq" } }
+    if op == MirBinNeq { return if isFloat { "fcmp one" } else { "icmp ne" } }
+    if op == MirBinLt { return lirMirCompareOpcode("lt", isFloat, unsigned) }
+    if op == MirBinLeq { return lirMirCompareOpcode("le", isFloat, unsigned) }
+    if op == MirBinGt { return lirMirCompareOpcode("gt", isFloat, unsigned) }
+    if op == MirBinGeq { return lirMirCompareOpcode("ge", isFloat, unsigned) }
+    if op == MirBinAnd { return "and" }
+    if op == MirBinOr { return "or" }
+    if op == MirBinBitAnd { return "and" }
+    if op == MirBinBitOr { return "or" }
+    if op == MirBinBitXor { return "xor" }
+    if op == MirBinShl { return "shl" }
+    if op == MirBinShr { return if unsigned { "lshr" } else { "ashr" } }
+    ""
 }
 fn lirMirCompareOpcode(op: String, isFloat: Bool, unsigned: Bool) -> String {
     if isFloat {
@@ -6451,17 +6348,16 @@ pub fn lirIntToString(n: Int) -> String {
     out
 }
 fn lirDigitChar(d: Int) -> String {
-    match d {
-        0 -> "0",
-        1 -> "1",
-        2 -> "2",
-        3 -> "3",
-        4 -> "4",
-        5 -> "5",
-        6 -> "6",
-        7 -> "7",
-        8 -> "8",
-        9 -> "9",
-        _ -> "?",
-    }
+    // B2: literal-int dispatch as if-else chain (stage0 P0–P15).
+    if d == 0 { return "0" }
+    if d == 1 { return "1" }
+    if d == 2 { return "2" }
+    if d == 3 { return "3" }
+    if d == 4 { return "4" }
+    if d == 5 { return "5" }
+    if d == 6 { return "6" }
+    if d == 7 { return "7" }
+    if d == 8 { return "8" }
+    if d == 9 { return "9" }
+    "?"
 }
