@@ -207,4 +207,133 @@ The manifest never embeds full paths or `-L` directories; project-wide
 search paths come from the build environment. CI / package authors
 keep cross-platform link lists per `[target.<triple>]` table.
 
+### 12.9 FFI and v0.6 surfaces
+
+This section catalogues how each v0.6 declaration-level annotation
+surfaces interacts with FFI declarations. All rules apply uniformly
+to `use go "..."`, `use c "..."`, and `use runtime.*` blocks.
+
+#### 12.9.1 `#[stability]` on FFI imports
+
+An FFI declaration with `#[stability("stable")]` is part of the
+package's public API surface — adding, removing, or changing the
+imported symbol's signature triggers a SemVer-relevant change
+(§3.14.3). The rules:
+
+- **Add a new FFI declaration in the same block** — minor bump
+  (additive).
+- **Remove a previously-public FFI symbol** — major bump
+  (caller's `?`-propagation breaks).
+- **Change the imported symbol's name without changing the Osty
+  declaration name** — patch bump (the Osty surface is
+  unchanged; only the link target moves).
+- **Change the imported library** (`use go "net/http"` →
+  `use go "github.com/foo/http"`) — major bump (link contract
+  changes).
+
+#### 12.9.2 `#[reproducible]` and FFI
+
+A function annotated `#[reproducible(scope = X)]` *cannot* call an
+FFI symbol unless that symbol is itself annotated `#[reproducible]`
+inside the FFI block. Foreign symbols are deterministic-by-default
+*not assumed* — the author must attest:
+
+```osty
+use c "myproject" {
+    #[reproducible(scope = "portable")]
+    fn fast_hash_v2(data: Bytes) -> Bytes32
+
+    fn random_bytes(n: Int) -> Bytes        // no annotation — non-deterministic
+}
+
+#[reproducible(scope = "portable")]
+fn computeKey(data: Bytes) -> Bytes32 {
+    fast_hash_v2(data)        // OK — callee carries #[reproducible]
+}
+
+#[reproducible(scope = "portable")]
+fn buildToken(n: Int) -> Bytes {
+    random_bytes(n)           // E0786 — non-reproducible callee
+}
+```
+
+The annotation is *attestation* — the compiler trusts it. A
+mistakenly-annotated foreign symbol breaks reproducibility silently.
+
+#### 12.9.3 Information flow at FFI boundary
+
+By default, all data crossing into Osty from FFI carries *no* tags
+(`#[taint(*)]` is empty). To re-tag the boundary, apply
+`#[taint("σ")]` on the FFI declaration's return type:
+
+```osty
+use go "net/http" {
+    fn Get(url: String) -> Result<#[taint("net_input")] Response, Error>
+}
+```
+
+Outbound data (Osty → FFI) by default loses any flow tags it
+carried — the foreign type system has no notion of Osty's tags.
+For audited declassification at the boundary, wrap the call in a
+function annotated `#[trusted_declassify(reason)]`:
+
+```osty
+#[trusted_declassify(reason = "JNI bridge to legacy code path")]
+fn legacyBridge(payload: #[taint("user_input")] String) -> () {
+    legacyJniSetText(payload)
+}
+```
+
+Every `#[trusted_declassify]` site is enumerable via
+`osty audit --trusted-declassify`.
+
+#### 12.9.4 `#[error_contract]` and FFI errors
+
+A function that propagates errors from an FFI call into a contract-
+typed `Result<T, ConcreteEnum>` must convert the FFI error
+explicitly:
+
+```osty
+use go "..." {
+    fn DoIo() -> Result<Bytes, Error>
+}
+
+#[error_contract(MyError.IoFailed when "underlying I/O error")]
+fn safeDoIo() -> Result<Bytes, MyError> {
+    DoIo().mapErr(|_| MyError.IoFailed)
+}
+```
+
+`?`-propagation through an FFI error directly into a contract is
+`E0414` (caller contract does not include the FFI's error variant).
+Conversion is mandatory.
+
+#### 12.9.5 Capability access from FFI
+
+FFI symbols cannot receive Osty capabilities as parameters —
+capabilities are interface values with vtable layouts that have no
+stable foreign ABI. To do effectful work via FFI:
+
+- The FFI wrapper takes plain arguments (paths, addresses, byte
+  buffers).
+- The Osty side that calls the wrapper takes the relevant
+  capability and constructs the FFI inputs from it.
+
+```osty
+use c "fastio" {
+    fn osty_fastio_read(path: ptr, out: ptr, max: Int) -> Int
+}
+
+fn fastRead(fs: Fs, path: String) -> Result<Bytes, Error> {
+    // Permission check via the capability — even though the actual
+    // read happens in C, the capability still gates whether we
+    // *should* read at all.
+    if !fs.exists(path)? { return Err(Error.new("not found")) }
+    // ... call osty_fastio_read with the path bytes ...
+}
+```
+
+This pattern keeps capability discipline at the call site without
+forcing capabilities through the foreign ABI.
+
 ---

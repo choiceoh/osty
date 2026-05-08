@@ -487,6 +487,96 @@ pub struct Stack<T> {
 satisfies `Animal`. Osty does not provide declaration-site or use-site
 variance annotations (no `in`/`out`, no wildcards).
 
+#### 2.7.4 Generics and v0.6 surfaces
+
+Generics interact with each v0.6 annotation surface as follows:
+
+**Capability parameters in generic functions.** Capability-typed
+parameters are ordinary parameters; they can be combined with
+generic type parameters freely:
+
+```osty
+fn fetchAndParse<T>(net: Net, url: String) -> Result<T, Error>
+    where T: Decode {
+    let bytes = net.fetch(url)?
+    json.parse::<T>(bytes.toString()?)
+}
+```
+
+The function monomorphizes per `T`; the `Net` parameter remains
+an interface value. Each monomorphization shares the same
+non-generic capability handling.
+
+**Flow tags through type parameters.** A generic function's flow
+behavior depends on its type argument's tag set per call site.
+The check is *per monomorphization*:
+
+```osty
+fn id<T>(x: T) -> T { x }
+
+let raw: #[taint("user_input")] String = ...
+let v = id(raw)
+// v: #[taint("user_input")] String — tag rides through T binding
+```
+
+The signature `fn id<T>(x: T) -> T` does not name flow tags
+explicitly; the propagation is structural at each call site.
+
+**`#[reproducible]` on generic functions.** A generic function may
+be `#[reproducible]`. The constraint applies *per monomorphization*
+— each `T` instantiation must satisfy the reproducibility contract
+(no non-deterministic capability transitively reachable through
+`T`'s methods).
+
+```osty
+#[reproducible(scope = "portable")]
+fn merge<T: Equal>(a: List<T>, b: List<T>) -> List<T> {
+    // Reproducible because List<T>.append etc. are pure
+    // and Equal is pure (auto-derived for primitives).
+    a + b
+}
+```
+
+If `T` is later instantiated with a type whose `Equal` impl is
+non-reproducible, that monomorphization fails (`E0786`).
+
+**`#[error_contract]` on generic Result return.** A function
+returning `Result<T, E>` may carry `#[error_contract]` only when
+`E` is a *concrete* enum, not a generic parameter:
+
+```osty
+// ✅ E is concrete.
+#[error_contract(EmailError.Format when "...")]
+fn parseEmail<U>(s: String) -> Result<Email<U>, EmailError> { ... }
+
+// ❌ E is a generic parameter — `#[error_contract]` rejected (E0412).
+#[error_contract(...)]
+fn build<E>(x: Int) -> Result<Output, E> { ... }
+```
+
+The contract enumerates concrete variants; a generic `E` could
+unify to any type, making the contract meaningless.
+
+**Builder generation for generic structs.** The builder auto-
+deriver works on generic structs the same way as on concrete
+ones:
+
+```osty
+pub struct Cache<K, V> {
+    pub maxSize: Int,
+    pub ttl: Duration,
+    backend: CacheBackend<K, V>,
+}
+
+let c: Cache<String, Int> = Cache::<String, Int>::builder()
+    .maxSize(1024)
+    .ttl(5.minutes)
+    .build()
+```
+
+The turbofish on the builder call selects the type instantiation;
+the rest follows v0.5 builder rules (G9).
+
 ### 2.8 Reference vs Value Semantics
 
 | Type category | Semantics |

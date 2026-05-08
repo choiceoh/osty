@@ -106,6 +106,28 @@ escape sequence and a closing single quote is a `CHAR_LIT` (`'x'`,
 not immediately closed is a `LABEL` (`'outer`, `'search`). This
 lookahead rule makes `'X'` a char literal and `'X:` a loop label prefix.
 
+#### 1.4.1 v0.6 capability identifier convention
+
+The 7 canonical capability ambient names are reserved as
+*conventional identifiers* — `clock`, `rng`, `env`, `fs`, `net`,
+`process`, `console`. They are not keywords (using them as
+parameter names in non-capability contexts is permitted), but the
+formatter and `osty audit --capabilities` recognize them as the
+canonical capability bindings under `#[ambient]` (§20.3).
+
+```osty
+fn helper(clock: Clock) -> Time { clock.now() }   // canonical name
+
+fn helper(c: Clock) -> Time { c.now() }           // permitted but not idiomatic;
+                                                  // formatter does not rewrite
+```
+
+Authors using a non-canonical name (`c` instead of `clock`) lose
+ambient compatibility — `#[ambient(clock)]` cannot inject into a
+parameter named `c`. The compiler does not auto-rename; the
+discipline is to follow the canonical names so that the binding
+matches the ambient injection point.
+
 ### 1.5 Comments
 
 ```osty

@@ -278,3 +278,30 @@ would propagate to every backend and to the LSP.
 - Observation tool: [`internal/check/inspect.go`](../internal/check/inspect.go), invoked via `osty check --inspect`.
 - Diagnostic codes produced: `E0300`–`E0399` (types/patterns), `E0700`–`E0799` (type-check).
 - Change history: see §18.
+
+### 2a.13 v0.6 inference additions
+
+The v0.6 annotation surface does not change the *core* type
+inference algorithm — annotations are checked *after* types are
+inferred. Three integration points:
+
+1. **Capability parameter inference.** A function parameter with a
+   capability interface type (`Clock`, `Net`, etc.) infers as an
+   ordinary interface value. No special inference rule applies —
+   the same bidirectional algorithm handles `fn f(c: Clock)` like
+   any other interface parameter.
+2. **Flow tag inference.** Tag sets are inferred *separately* from
+   types. The tag inference is a forward dataflow analysis on the
+   already-typed AST: each value's tag set is the union of its
+   inputs' tags, modulo sanitizer effects. The inference is total
+   (every value has a determinate tag set) and deterministic.
+3. **`#[reproducible]` checks.** Reproducibility is a *whole-call-
+   graph* check applied after types and tags are settled. The
+   checker walks the function's call graph and verifies that every
+   reachable callee carries `#[reproducible]` at compatible scope
+   (§3.11.1).
+
+These analyses run as separate passes after type checking so that
+type errors short-circuit the more expensive flow / reproducibility
+passes. Diagnostic ordering: `E0700`-class first, then `E0900`/
+`E0780` flow / capability errors.

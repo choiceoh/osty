@@ -29,3 +29,42 @@ and all neighbor helpers filter out points outside the grid.
 `std.grid` is deliberately not a pathfinding or roguelike engine. Higher
 level packages can build A*, field of view, dungeon generation, and turn
 scheduling on top of this stable geometry layer.
+
+#### v0.6 reproducibility
+
+`std.grid` is *pure* — every type is value-semantic and every
+operation transforms grid values without consulting any capability.
+The whole module is acceptable inside `#[reproducible(scope =
+"portable")]` and `#[pure]` contexts.
+
+The neighbor-iteration helpers (`Grid.neighbors(p)`,
+`Grid.neighbors8(p)`) iterate in *deterministic* order — clockwise
+from `Up` for the 4-direction set, and clockwise from `UpLeft` for
+the 8-direction set. This deterministic order makes
+`#[reproducible]` consumers stable across runs.
+
+#### Information flow
+
+`Grid<T>` cells inherit the element type's flow tag set. A
+`Grid<#[taint("user_input")] String>` propagates the tag through
+indexing, iteration, and `Grid.map` transformations.
+
+#### Composition with rendering
+
+A `Grid<Cell>` (where `Cell` is text+style) renders to a string via
+`std.tui.Frame`:
+
+```osty
+fn render(grid: Grid<Cell>) -> String {
+    let frame = tui.frame(grid.size())
+    for p in grid.points() {
+        let cell = grid.get(p).unwrap()
+        frame.put(p, cell.text, cell.style)
+    }
+    frame.renderAnsi()
+}
+```
+
+`render` is `#[pure]`-eligible (capability-free). Side-effecting
+display happens via `Screen.present(frame)` (§10.26), which routes
+through `Terminal` (capability).

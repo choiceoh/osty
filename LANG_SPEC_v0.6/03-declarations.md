@@ -254,6 +254,64 @@ Patterns in `let`:
 Enum-variant patterns are not permitted in `let`; use `match` or
 `if let`.
 
+#### 3.2.1 Variables and v0.6 surfaces
+
+`let` bindings interact with the v0.6 annotation surface in several
+predictable ways:
+
+- **Capability binding** — `let net: Net = ...` is an ordinary
+  reference-typed binding. The binding's `mut`-ness has no effect
+  on the underlying capability (capabilities are interface values
+  with shared internal state).
+- **Flow-tagged binding** — `let raw: #[taint("user_input")]
+  String = ...` annotates the binding's *type*. The annotation
+  cannot be added by `let`; it must already be present on the RHS
+  expression. (Authors who want to *add* a tag at a binding site
+  use a passthrough function annotated `#[taint]` and call it from
+  `let`.)
+- **`let mut`** — for capability-typed bindings, `mut` allows
+  rebinding to a *different* capability instance. The mutation
+  goes through the binding, not through the underlying value:
+
+  ```osty
+  let mut clock: Clock = systemClock
+  if testMode {
+      clock = std.capability.testing.FakeClock(epoch_ms = 0)
+  }
+  ```
+- **Tuple/struct destructuring** preserves flow tags element-wise.
+  `let (a, b) = pair` where `pair: (#[taint("user_input")] String,
+  #[taint("env_input")] String)` produces `a: #[taint("user_input")]
+  String` and `b: #[taint("env_input")] String`.
+
+#### 3.2.2 Top-level `let`
+
+A `pub let` at module scope declares a *constant value* — the RHS
+is evaluated once at module load time. Restrictions:
+
+- The RHS must be a `DefaultLiteral` or a `const fn` call (§3.1.1).
+  Runtime computation at module scope is `E0719`.
+- `pub let` participates in the public API surface (§3.14.3) — its
+  type is part of the package's exported signature.
+- `let` (without `pub`) at top level is package-private; it is
+  rare and used for derived constants reused inside the package.
+
+Top-level `let` with capability-typed values is **not allowed** —
+capabilities require runtime construction (host adapter factories
+are themselves runtime functions). The pattern is to construct
+capabilities inside `fn main` or via an `#[ambient]` entry point:
+
+```osty
+// ❌ E0719 — runtime evaluation at module scope.
+pub let prodClock: Clock = time.systemClock
+
+// ✅ Capability is local to main / passed explicitly.
+#[ambient(clock)]
+fn main() {
+    runApp(clock)
+}
+```
+
 Top-level `let` may be marked `pub`:
 
 ```osty
