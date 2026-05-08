@@ -1509,7 +1509,7 @@ pub fn diagTaintSinkViolation(source: String, sink: String, requiredTag: String,
         end,
         [
             "LANG_SPEC §21.5.3 (T-Sink): tainted values must be sanitised before reaching a sink",
-            "hint: pass through a sanitiser that produces `{requiredTag}", or use the parametrised form",
+            "hint: pass through a sanitiser that produces `{requiredTag}`, or use the parametrised form",
         ],
     )
 }

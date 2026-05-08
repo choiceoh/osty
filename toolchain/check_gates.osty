@@ -2427,7 +2427,7 @@ fn collectSealedStructInfo(arena: AstArena) -> List<SealedStructInfo> {
         }
         let sealedAnnots = collectAnnotationByName(arena, node.extra, "sealed_construct")
         for annot in sealedAnnots {
-            let constructorName = sealedConstructAnnotConstructor(annot)
+            let constructorName = sealedConstructAnnotConstructor(arena, annot)
             let mut methodNames: List<String> = []
             for memberIdx in node.children {
                 let member = astArenaNodeAt(arena, memberIdx)
@@ -2448,10 +2448,10 @@ fn collectSealedStructInfo(arena: AstArena) -> List<SealedStructInfo> {
     out
 }
 
-fn sealedConstructAnnotConstructor(annot: AstNode) -> String {
+fn sealedConstructAnnotConstructor(arena: AstArena, annot: AstNode) -> String {
     // The constructor name is stored as the first child's text.
     for argIdx in annot.children {
-        let arg = astArenaNodeAt(annot, argIdx)
+        let arg = astArenaNodeAt(arena, argIdx)
         if arg.text != "" {
             return arg.text
         }
@@ -2897,7 +2897,7 @@ fn collectFixtureNames(arena: AstArena) -> List<String> {
                 // We skip emitting here and do it in structuredIntentCheckFn.
             }
             // Extract fixture name from annotation args.
-            let name = fixtureAnnotName(annot)
+            let name = fixtureAnnotName(arena, annot)
             if name != "" {
                 out.push(name)
             } else {
@@ -2909,9 +2909,9 @@ fn collectFixtureNames(arena: AstArena) -> List<String> {
     out
 }
 
-fn fixtureAnnotName(annot: AstNode) -> String {
+fn fixtureAnnotName(arena: AstArena, annot: AstNode) -> String {
     for argIdx in annot.children {
-        let arg = astArenaNodeAt(annot, argIdx)
+        let arg = astArenaNodeAt(arena, argIdx)
         let text = arg.text
         // Look for `name = "..."` pattern.
         if strings.hasPrefix(text, "name") {
@@ -2924,7 +2924,7 @@ fn fixtureAnnotName(annot: AstNode) -> String {
             }
             // Check children for the value.
             for valIdx in arg.children {
-                let val = astArenaNodeAt(annot, valIdx)
+                let val = astArenaNodeAt(arena, valIdx)
                 if val.text != "" {
                     return val.text
                 }
@@ -3024,59 +3024,11 @@ fn fnParamCountExcludingSelf(arena: AstArena, fnNode: AstNode) -> Int {
 // ---------------------------------------------------------------------
 
 fn runSpecBlockGate(cx: ElabCx) {
-    let arena = cx.ast.arena
-    for declIdx in arena.decls {
-        let node = astArenaNodeAt(arena, declIdx)
-        match node.kind {
-            AstNFnDecl -> specBlockCheckFn(cx, arena, node),
-            AstNStructDecl -> specBlockCheckMethods(cx, arena, node),
-            AstNEnumDecl -> specBlockCheckMethods(cx, arena, node),
-            _ -> {},
-        }
-    }
-}
-
-fn specBlockCheckMethods(cx: ElabCx, arena: AstArena, parent: AstNode) {
-    for memberIdx in parent.children {
-        let member = astArenaNodeAt(arena, memberIdx)
-        if member.kind == AstNFnDecl {
-            specBlockCheckFn(cx, arena, member)
-        }
-    }
-}
-
-fn specBlockCheckFn(cx: ElabCx, arena: AstArena, fnNode: AstNode) {
-    if fnNode.right < 0 {
-        return
-    }
-    let body = astArenaNodeAt(arena, fnNode.right)
-    if body.kind != AstNBlock {
-        return
-    }
-    if body.children.len() == 0 {
-        return
-    }
-    // Check the first statement.
-    let firstStmt = astArenaNodeAt(arena, body.children[0])
-    if firstStmt.kind == AstNExprStmt {
-        let inner = astArenaNodeAt(arena, firstStmt.left)
-        if inner.kind == AstNSpecBlock {
-            return  // OK: spec block at first position.
-        }
-    }
-    // If there's a spec block anywhere, check if it's misplaced.
-    for stmtIdx in body.children {
-        let stmt = astArenaNodeAt(arena, stmtIdx)
-        if stmt.kind == AstNExprStmt {
-            let inner = astArenaNodeAt(arena, stmt.left)
-            if inner.kind == AstNSpecBlock {
-                cx.env.local.diagnostics.push(
-                    diagSpecBlockMisplaced(fnNode.text, inner.start, inner.end),
-                )
-                return
-            }
-        }
-    }
+    // G43 (spec block) was withdrawn in PRs #1542-#1549. The gate is
+    // kept as a no-op so the dispatcher's call-site stays stable;
+    // `AstNSpecBlock` is no longer part of the AST surface, so the
+    // previous walk was dead anyway. Reinstate when/if a successor
+    // gap revives the spec-block construct.
 }
 
 // ---------------------------------------------------------------------
@@ -3436,8 +3388,8 @@ fn taintCheckAnnotations(cx: ElabCx, arena: AstArena, node: AstNode, taintTags: 
     // W0901: #[trusted_declassify] — always emit audit warning.
     let declassifyAnnots = collectAnnotationByName(arena, node.extra, "trusted_declassify")
     for annot in declassifyAnnots {
-        let reason = declassifyAnnotReason(annot)
-        let fnName = node.text
+        let reason = declassifyAnnotReason(arena, annot)
+        let mut fnName = node.text
         if fnName == "" {
             fnName = "<unknown>"
         }
@@ -3447,9 +3399,9 @@ fn taintCheckAnnotations(cx: ElabCx, arena: AstArena, node: AstNode, taintTags: 
     }
 }
 
-fn declassifyAnnotReason(annot: AstNode) -> String {
+fn declassifyAnnotReason(arena: AstArena, annot: AstNode) -> String {
     for argIdx in annot.children {
-        let arg = astArenaNodeAt(annot, argIdx)
+        let arg = astArenaNodeAt(arena, argIdx)
         let text = arg.text
         if strings.hasPrefix(text, "reason") {
             let parts = strings.split(text, "=")
@@ -3457,7 +3409,7 @@ fn declassifyAnnotReason(annot: AstNode) -> String {
                 return strings.trimSpace(parts[parts.len() - 1])
             }
             for valIdx in arg.children {
-                let val = astArenaNodeAt(annot, valIdx)
+                let val = astArenaNodeAt(arena, valIdx)
                 if val.text != "" {
                     return val.text
                 }
