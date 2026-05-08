@@ -23,6 +23,8 @@ the compiler evolves.
   existing global stdlib modules become explicit capability values.
 - `v06_capability_fakes`: deterministic `std.capability.testing` fakes for
   testing APIs that accept explicit v0.6 capability parameters.
+- `v06_ambient_boundaries`: `#[ambient(...)]` entry-point boundary examples
+  while library APIs keep explicit capability parameters.
 - `stdlib-tour`: front-end checked package that demonstrates Tier 1
   standard-library imports and Result-style error flow.
 - `gui-webview2-inspector`: Windows WebView2 GUI example using

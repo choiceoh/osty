@@ -1547,7 +1547,7 @@ bodies"). interface 는 별도 declaration. 아래 표는 그 기준.
 | `#[budget]` | ✓ | | | | | | ✓ | |
 
 `#[ambient]` 의 *entry-point 만* 의미: `fn main` / script (`#!/usr/bin/env osty`) /
-`#[test]` / `#[bench]` / `bench*` / `test_*` 함수. 그 외 `fn` 위치는 `E0780`.
+`#[test]` / `#[bench]` / `bench*` / `test*` 함수. 그 외 `fn` 위치는 `E0780`.
 
 `✓` 표시 위치 외 사용은 `E0405` (annotation site invalid).
 

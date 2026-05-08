@@ -1051,7 +1051,7 @@ const (
 
 	// CodeAmbientWrongSite: `#[ambient(...)]` is applied to a function
 	// that is not at a permitted boundary. Permitted: scripts, `fn main`,
-	// `#[test]` / `#[bench]` / `bench*` / `test_*` functions. Library
+	// `#[test]` / `#[bench]` / `bench*` / `test*` functions. Library
 	// functions must receive capabilities as explicit parameters.
 	//
 	// Spec: v0.6 §20.3
@@ -1065,7 +1065,7 @@ const (
 	//
 	// Spec: v0.6 §20.6
 	// Fix: use one of the recognised capability names. User-defined
-	//      capabilities cannot be ambient (`E0789`).
+	//      capabilities cannot be ambient (`E0781`).
 	CodeAmbientUnknownCapability = "E0781"
 
 	// CodeAmbientForwardFailed: a callee at a call site requires a
