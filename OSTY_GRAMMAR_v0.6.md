@@ -4,37 +4,35 @@ v0.5 의 R1–R26 결정과 EBNF 를 baseline 으로, v0.6 에서 추가/변경�
 만 본 문서에 명시한다. v0.5 grammar 의 본문은
 [`OSTY_GRAMMAR_v0.5.md`](./OSTY_GRAMMAR_v0.5.md) 가 계속 권위.
 
-> **Status**: v0.6 spec revision 동기 (G36–G49). spec 본문은
+> **Status**: v0.6 spec revision 동기 (G36, G37, G39-G42, G44, G45,
+> G47, G48). spec 본문은
 > [`LANG_SPEC_v0.6/00-revision.md`](./LANG_SPEC_v0.6/00-revision.md).
+>
+> **Withdrawn from v0.6 baseline**: G38 (spec link), G43 (spec block),
+> G46 (`#[budget]`), G49 (while keyword) — pre-release low-utility
+> withdrawal. SPEC_GAPS.md 의 Withdrawn 섹션 참조.
 
 ---
 
 ## 결정 이력 (v0.5 → v0.6)
 
-### 새 reserved keyword 1 개 (R27)
+### 새 reserved keyword 0 개
 
-- **`while`** (G49) — `while cond { }` 형식의 conditional loop. v0.5 의
-  `for cond { }` 와 동의어 — 둘 다 같은 lowering. 식별자로 사용했던 코드는
-  rename 필요 (사용자 0 단계에서의 acceptable break).
+(G49 `while` keyword 는 withdrawn — reserved keyword 17 → 17 변경 없음.)
 
-### 새 v0 contextual keyword 4 개 (R28)
+### 새 v0 contextual keyword 0 개
 
-- **`spec`** — top-level `fn` / method body 첫 statement 위치에서만
-  keyword. 그 외 위치 식별자.
-- **`example`** — `spec { }` block 안에서만 keyword.
-- **`law`** — `spec { }` block 안에서만 keyword.
-- **`invariant`** — `spec { }` block 안에서만 keyword.
-- **`forall`** *(v1 — Phase 5 reserved)* — `spec { }` block 안에서만
-  keyword. v0 단계는 식별자.
+(G43 spec block contextual keywords `spec` / `example` / `law` /
+`invariant` 는 withdrawn.)
 
 ### 새 lexer 토큰 0 개
 
 신규 syntax 는 모두 기존 token 조합으로 표현. `{`, `}`, `:`, `,` 재사용.
 
-### Annotation set 확장 +20
+### Annotation set 확장 +16
 
 §5 of [`LANG_SPEC_v0.6/00-revision.md`](./LANG_SPEC_v0.6/00-revision.md)
-참조 — 31 개 fixed annotation 으로 확장. `#[name(args)]` 형식 그대로.
+참조 — 27 개 fixed annotation 으로 확장. `#[name(args)]` 형식 그대로.
 
 ### Annotation parameter position (R29)
 
@@ -45,47 +43,6 @@ v0.5 의 R1–R26 결정과 EBNF 를 baseline 으로, v0.6 에서 추가/변경�
 ---
 
 ## EBNF — 전체 신규 production
-
-### G43 — spec block
-
-```ebnf
-SpecBlock      ::= 'spec' '{' SpecClause+ '}'
-
-SpecClause     ::= ExampleClause
-                 | LawClause
-                 | InvariantClause
-                 | ForallClause            (* v1 — Phase 5 *)
-
-ExampleClause  ::= 'example' ':' Expr LineEnd
-
-LawClause      ::= 'law' ':' Expr LineEnd
-
-InvariantClause::= 'invariant' ':' Expr LineEnd
-
-ForallClause   ::= 'forall' Ident (',' Ident)* 'in' Expr ':' Expr LineEnd
-
-LineEnd        ::= NEWLINE
-                 | (다음 SpecClause 시작 token 직전 — ASI 적용)
-```
-
-위치 제약 (R28):
-- `SpecBlock` 은 top-level `FnDecl` 또는 method declaration body 의
-  *첫 statement* 위치에만 출현 가능. closure body, `if` arm,
-  `match` arm, nested block 에는 출현할 수 없다.
-- `'spec'` 토큰은 그 위치에서만 keyword. 그 외 위치 (예: `let spec = 1`)
-  에서는 일반 식별자.
-- `'example'` / `'law'` / `'invariant'` 는 `SpecBlock` 본문 안에서만
-  keyword.
-
-### G49 — while loop
-
-```ebnf
-WhileStmt      ::= 'while' Expr Block
-
-(* 의미: 'while' Expr Block ≡ 'for' Expr Block — same lowering, same type *)
-```
-
-`'while'` 은 fully reserved (R27). 식별자 자리에 사용 불가.
 
 ### G37 — annotation on parameter
 
@@ -132,13 +89,6 @@ SanitizeAnno  ::= '#[sanitizes' '(' StringLit ',' 'into' '=' StringLit ')' ']'
 RequiresAnno  ::= '#[requires' '(' StringLit ')' ']'
 DeclassifyAnno::= '#[trusted_declassify' '(' 'reason' '=' StringLit ')' ']'
 TaintFieldAnno::= '#[taint_field' '(' StringLit ')' ']'
-```
-
-### G38 — spec link
-
-```ebnf
-SpecAnno      ::= '#[spec' '(' StringLit ')' ']'
-                  (* StringLit 는 markdown anchor (예: "§2.2", "§10.30.user") *)
 ```
 
 ### G39 — reproducibility
@@ -215,22 +165,6 @@ GoldenMode   ::= '"text"' | '"ast"' | '"json"' | '"diag"'
                  (* 미지정 시 default = "text" *)
 ```
 
-### G46 — performance contract
-
-```ebnf
-BudgetAnno   ::= '#[budget' '(' BudgetField (',' BudgetField)* ','? ')' ']'
-
-BudgetField  ::= 'allocs' '=' IntLit
-               | 'io_calls' '=' IntLit
-               | 'stack_depth' '=' IntLit
-               | 'instructions' '=' IntLit
-               | 'time_ms' '=' (IntLit | FloatLit)
-               | 'p99_ms' '=' (IntLit | FloatLit)
-
-(* 같은 어노테이션에 static (allocs/io_calls/stack_depth/instructions) 와
-   runtime (time_ms/p99_ms) 키가 혼재 가능 — 컴파일러가 분리 처리 *)
-```
-
 ### Annotation 위치 enforcement
 
 각 annotation 의 합법 위치는 `LANG_SPEC_v0.6/00-revision.md §7.6` 의 표가
@@ -240,26 +174,7 @@ BudgetField  ::= 'allocs' '=' IntLit
 
 ## R-rule 추가
 
-### R27. `while` 키워드 (G49)
-
-`while` 은 fully reserved keyword. parser 에서 `'while' Expr Block` 를
-`'for' Expr Block` 와 동등하게 lower. expression / type / control flow
-의미 완전 동일. v0.5 의 `for cond {}` 도 deprecate 안 함 — 양쪽 모두
-컴파일러가 같은 IR 생성.
-
-### R28. spec block 위치 (G43)
-
-`spec { ... }` block 은 top-level `fn` / method body 의 *첫 statement*
-위치에만 허용. closure body, `if` arm, `match` arm, nested block 의
-첫 위치라도 허용하지 않는다. 그 외 위치는 `E0440`. block 은 expression 이
-아니다 — 결과 type 없음, 마지막 expression 평가 안 됨. spec block 본문은
-*순수 메타데이터*: `example:` 는 test runner 가 따로 실행, `law:` /
-`invariant:` 는 doc generator 가 추출.
-
-`'spec'` keyword 는 그 위치에서만 keyword 로 lex. 그 외 위치 (예: 변수
-이름, struct field 이름) 에서는 식별자.
-
-### R29. annotation 위치 확장 (G37)
+### R27. annotation 위치 확장 (G37)
 
 `Annotation*` 가 새로 허용되는 위치:
 
@@ -274,23 +189,12 @@ field, enum variant) 는 변경 없음.
 
 ## R7 보강 — 키워드 vs 문맥 식별자 (v0.6 갱신)
 
-v0.5 의 R7 는 contextual keyword 7+ 개 (`self`, `Self`, `true`, `false`,
-`Some`, `None`, `Ok`, `Err`, `loop`, `const`, `by`) 를 정의. v0.6 은:
+v0.5 의 R7 는 contextual keyword 11 개 (`self`, `Self`, `true`, `false`,
+`Some`, `None`, `Ok`, `Err`, `loop`, `const`, `by`) 를 정의. v0.6 은
+변경 없음 — withdrawn G43 의 spec block contextual keywords 와 G49 의
+`while` reserved keyword 는 baseline 에 포함되지 않는다.
 
-- **추가 contextual**: `spec`, `example`, `law`, `invariant` — spec
-  block 컨텍스트에서만 keyword.
-- **추가 reserved**: `while` — 모든 위치에서 keyword.
-- **`forall`**: v1 (Phase 5) 단계에서 contextual keyword 추가. v0
-  단계에서는 식별자 그대로.
-
-R7 에 다음 추가:
-
-> **spec block scope**: `spec { ... }` block 안에서 `example`, `law`,
-> `invariant` 는 keyword. 그 외 위치 (block 외부) 에서는 식별자.
-
-> **block 시작 위치**: top-level `fn` / method body 첫 statement 위치에서 `spec` 가 keyword.
-> 여기서 함수 본문은 top-level `fn` / method declaration body 만 뜻한다.
-> 그 외 위치에서는 식별자. R28 참조.
+R7 에 추가되는 항목:
 
 > **label vs char literal**: lexer 는 single quote 다음이 one scalar or
 > escape + closing quote 이면 `CHAR_LIT`, single quote 다음이 identifier 이고
@@ -303,10 +207,10 @@ R7 에 다음 추가:
 
 | 항목 | v0.4 | v0.5 | v0.6 | Δ (v0.5→v0.6) |
 |---|---:|---:|---:|---:|
-| Reserved keywords | 17 | 17 | **18** | +1 (`while`) |
-| Contextual keywords | 7 | 10 | **14** | +4 (`forall` 은 v1 단계 추가 시 15) |
-| Fixed annotation set | 8 | 11 | **31** | +20 |
-| EBNF productions | 180 | 191 | **199** | +8 |
+| Reserved keywords | 17 | 17 | **17** | 0 |
+| Contextual keywords | 7 | 11 | **11** | 0 |
+| Fixed annotation set | 8 | 11 | **27** | +16 |
+| EBNF productions | 180 | 191 | **192** | +1 (parameter annotation) |
 | Lexer token classes | 34 | 36 | **36** | 0 |
 | Diagnostic bands used | E0001-E0779 + E0405 | 동일 | E0001-E0949 + E2149 + W0949 | +5 bands |
 
@@ -317,9 +221,7 @@ R7 에 다음 추가:
 | 번호 | 이름 | 영역 |
 |---|---|---|
 | R1–R26 | (v0.5 와 동일) | — |
-| R27 | `while` 키워드 | G49 |
-| R28 | spec block 위치 + `spec`/`example`/`law`/`invariant` 컨텍스트 | G43 |
-| R29 | annotation 위치 확장 (parameter 두 위치) | G37 |
+| R27 | annotation 위치 확장 (parameter 두 위치) | G37 |
 
 ---
 

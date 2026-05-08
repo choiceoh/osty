@@ -38,8 +38,8 @@
   - `LANG_SPEC_v0.6/00-revision.md` — v0.5 → v0.6 결정 overview
   - `LANG_SPEC_v0.6/18-change-history.md §18.0` — v0.5 → v0.6 변경 이력
   - `LANG_SPEC_v0.6/20-capabilities.md`, `21-information-flow.md` — v0.6 신규 챕터
-- **`OSTY_GRAMMAR_v0.6.md`** — EBNF 문법 + R1–R29 decision log. 스펙과 구현이 충돌하면 **스펙이 기준**
-- `SPEC_GAPS.md` — 해결된 갭 아카이브 (v0.6 시점 G36-G49 추가됨, open gap 0)
+- **`OSTY_GRAMMAR_v0.6.md`** — EBNF 문법 + R1–R27 decision log. 스펙과 구현이 충돌하면 **스펙이 기준**
+- `SPEC_GAPS.md` — 해결된 갭 아카이브 (v0.6 시점 10 결정: G36, G37, G39-G42, G44, G45, G47, G48; G38/G43/G46/G49 withdrawn; open gap 0)
 - `CHANGELOG_v0.6.md` — v0.6 implementation 진행도 (spec 와 분리)
 - `BREAKING_v0.6.md` — v0.5 → v0.6 breaking change 카탈로그
 - `MIGRATING_v0.5_to_v0.6.md` — 사용자 마이그레이션 가이드
@@ -193,13 +193,13 @@ winget install --id LLVM.LLVM                              # clang/lld/llc (머�
 
 **규칙**:
 - 새 구문/키워드/어노테이션 추가는 `LANG_SPEC_v0.6/` 개정 없이는 **금지**. 정식 버전 업(minor/major)과 함께만 surface 변경.
-- v0.6 결정 (G36–G49) 은 baseline 동결. 새 결정은 `SPEC_GAPS.md` Open Gaps 섹션에 G50+ 으로 등재 후 다음 minor/major 에 일괄 수용.
+- v0.6 결정 (10 개: G36, G37, G39-G42, G44, G45, G47, G48) 은 baseline 동결. G38/G43/G46/G49 는 pre-release withdrawn (low utility). 새 결정은 `SPEC_GAPS.md` Open Gaps 섹션에 G50+ 으로 등재 후 다음 minor/major 에 일괄 수용.
 - 문법 모호성 발견 → 컴파일러가 아니라 `SPEC_GAPS.md` 에 먼저 기록.
 - 공개 백엔드는 `--backend llvm` 만. 새 백엔드 플래그 추가 금지.
 
 ### v0.5 → v0.6 transition 정책
 
-**Spec 단계 (완료)**: PR #1469 / #1471 / #1472 / #1473 / #1474 / #1475 / #1476 으로 14 결정 (G36-G49) baseline 동결. 22 main chapter + 46 stdlib subchapter, OSTY_GRAMMAR_v0.6, BREAKING / MIGRATING 가이드, CLAUDE.md 부록 C 모두 land.
+**Spec 단계 (완료)**: 10 결정 (G36, G37, G39-G42, G44, G45, G47, G48) baseline 동결. 22 main chapter + 46 stdlib subchapter, OSTY_GRAMMAR_v0.6, BREAKING / MIGRATING 가이드, CLAUDE.md 부록 C 모두 land.
 
 **Implementation phase 진행**: `CHANGELOG_v0.6.md` 가 phase 진행도의 권위.
 
@@ -207,11 +207,10 @@ winget install --id LLVM.LLVM                              # clang/lld/llc (머�
 |---|---|---|
 | 0 | Self-host 자력 사이클 (Tier A 갭) | (v0.5 follow-up) |
 | 1 | Capability + ambient + stdlib migration | G36 |
-| 2 | Spec link + structured intent + osty context | G38, G42, G47 |
-| 3 | Reproducible + spec block v0 + golden | G39, G43 (v0), G45 |
-| 4 | Sealed + ErrorContract + Evolution + Budget(static) | G40, G41, G44, G46 (static) |
-| 5 | Taint + Budget(runtime) + spec block v1 | G37, G46 (runtime), G43 (v1) |
-| Pre-1.0 | While ergonomics | G49 |
+| 2 | Structured intent + osty context | G42, G47 |
+| 3 | Reproducible + golden | G39, G45 |
+| 4 | Sealed + ErrorContract + Evolution | G40, G41, G44 |
+| 5 | Taint / sanitize | G37 |
 
 **호환성**:
 - `--legacy-globals` (v0.6.x 한정 — v0.7 제거): v0.5 의 전역 effect 함수 (`time.now()` / `random.next()` / `env.get(k)` / `fs.read(p)` / `os.exec(...)` / `net.dial(...)`) 가 자동 desugar 됨. 사용 시 manifest stability 가 자동 `experimental` 로 강제.
@@ -1072,7 +1071,7 @@ fn benchParseConfig() {
 
 ---
 
-# 부록 C. v0.6 신규 패턴 (G36-G49)
+# 부록 C. v0.6 신규 패턴 (G36, G37, G39-G42, G44, G45, G47, G48)
 
 > **v0.6 design north star**: *Hidden dependency is forbidden* — 시간, 난수, 환경, 보안 흐름, API 진화, 성능 계약, 의도, 명세 어느 것도 암묵으로 두지 않는다.
 >
@@ -1233,47 +1232,23 @@ pub fn createUser(email: String, db: Db) -> Result<UserId, UserCreateError> { ..
 
 **Erased `Error` interface 에는 `#[error_contract(any)]`** (검증 없음, 문서용).
 
-## C.5 Spec link + structured intent (G38, G42)
+## C.5 Structured intent (G42)
 
-**규칙**: public API / 컴파일러 internal 함수에 `#[spec("§X.Y")]` + `#[purpose]` + `#[example]` 로 machine-readable intent 노출.
+**규칙**: public API / 컴파일러 internal 함수에 `#[purpose]` + `#[example]`
+로 machine-readable intent 노출.
 
 ```osty
 #[purpose("이메일 검증 후 DB에 사용자 저장")]
 #[example(input = "alice@example.com", uses = "sampleDb", output = "Ok(42)")]
 #[example(input = "invalid",            uses = "sampleDb", output = "Err(UserCreateError.EmailFormat)")]
-#[spec("§10.30.user.create")]
 pub fn createUser(email: String, db: Db) -> Result<UserId, UserCreateError> { ... }
 
 #[fixture(name = "sampleDb")]
 fn fakeDb() -> Db { std.testing.db.inMemory() }
 ```
 
-**소비**: `osty doc` (문서 생성), `osty test --example` (자동 검증), `osty context` (LLM agent payload), LSP hover.
-
-**`#[spec]` 컴파일러 검증**: markdown anchor 존재 확인 — 누락 `E0790`, 이동 `W0790` (suggested replacement).
-
-## C.6 Spec block — 실행 가능한 명세 (G43, §3.13)
-
-**v0 Phase 3** (현재 baseline): `example:` 만 자동 실행. `law:` / `invariant:` 는 doc + LSP hover.
-
-```osty
-fn normalizeEmail(s: String) -> String {
-    spec {
-        example: normalizeEmail(" Alice@EXAMPLE.COM ") == "alice@example.com"
-        example: normalizeEmail("") == ""
-        law: result == result.trim()
-        law: result == result.toLowerCase()
-        invariant: result.indexOf(" ") == -1
-    }
-    s.trim().toLowerCase()
-}
-```
-
-**제약**:
-- top-level 함수 / method body 의 *첫 statement* 위치만 (`E0440`)
-- `example:` 는 boolean (`E0441`), `law:` / `invariant:` 는 boolean — `result` 는 함수 반환값 가리키는 virtual binding
-
-**v1 Phase 5** (예정): `forall x in gen.list(gen.int(), 128): result.toMultiset() == x.toMultiset()` 형식의 property test.
+**소비**: `osty doc` (문서 생성), `osty test --example` (자동 검증),
+`osty context` (LLM agent payload), LSP hover.
 
 ## C.7 Reproducibility (G39, §3.11)
 
@@ -1297,21 +1272,6 @@ fn migrationId(name: String, sequence: Int) -> Int64 {
 - `"portable"` — 플랫폼 간 byte-equal
 
 **금지**: non-deterministic capability 수신 (`E0784`), unordered iter (`E0786`), pointer-id 비교, 더 약한 scope callee 호출 (`E0787`).
-
-## C.8 Performance contract (G46, §3.15)
-
-**규칙**: hot path / public API 에 `#[budget(...)]` 명시.
-
-```osty
-#[budget(allocs = 0, io_calls = 0, stack_depth = 100)]
-fn pureCompute(data: Bytes) -> Bytes32 { ... }
-
-#[budget(time_ms = 5, p99_ms = 20)]
-fn routeRequest(req: Request, db: Db) -> Response { ... }
-```
-
-**Static keys** (컴파일러 증명, `E0795`): `allocs` / `io_calls` / `stack_depth` / `instructions`.
-**Runtime keys** (`osty bench --budget` 회귀 게이트, `W0795`): `time_ms` / `p99_ms`.
 
 ## C.9 API evolution (G44)
 
@@ -1372,28 +1332,7 @@ fn testNumericNarrowingDiag() {
 
 **Update**: `osty test --update-golden` 로 일괄 갱신.
 
-## C.11 `while` keyword (G49, §4.4)
-
-**규칙**: `while cond { body }` 와 `for cond { body }` 는 *동의어*. 둘 다 컴파일러가 같은 IR 생성. 가독성 / mental model 따라 선택.
-
-```osty
-// 둘 다 같은 의미
-while !queue.isEmpty() {
-    process(queue.pop()?)
-}
-
-for !queue.isEmpty() {
-    process(queue.pop()?)
-}
-```
-
-**그 외 loop 형식 (v0.5 와 동일)**:
-- `for x in iter { ... }` — iterable
-- `for { ... }` — infinite
-- `loop { ... break value }` — value-returning
-- `for let Some(x) = q.pop() { ... }` — Some/Ok 패턴
-
-## C.12 부록 C 빠른 참조 표
+## C.11 부록 C 빠른 참조 표
 
 | 영역 | Annotation | 주 사용처 |
 |---|---|---|
@@ -1401,13 +1340,10 @@ for !queue.isEmpty() {
 | **Information flow** (C.2) | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]` | HTTP / DB / shell / path / URL 경계 |
 | **Sealed construct** (C.3) | `#[sealed_construct(parse)]` | parse-don't-validate 타입 (Email/Url/Path/Uuid/...) |
 | **Error contract** (C.4) | `#[error_contract(... when ...)]` | public API의 concrete enum error |
-| **Spec / intent** (C.5) | `#[spec]`, `#[purpose]`, `#[example]`, `#[fixture]` | public API / compiler internal |
-| **Spec block** (C.6) | `spec { example: / law: / invariant: }` | 명세-주도 함수 |
+| **Intent** (C.5) | `#[purpose]`, `#[example]`, `#[fixture]` | public API / compiler internal |
 | **Reproducibility** (C.7) | `#[reproducible(scope=...)]` | 캐시 키 / 해시 / migration ID |
-| **Budget** (C.8) | `#[budget(allocs=, time_ms=, ...)]` | hot path / public API |
 | **Evolution** (C.9) | `#[stability]`, `#[since]`, `#[match_compat]` | public API surface |
 | **Golden** (C.10) | `#[golden(path, mode=)]` | 컴파일러 / formatter / docgen 자가 테스트 |
-| **While** (C.11) | `while cond { }` | 가독성 선호 시 `for cond` 대신 |
 
 ---
 
