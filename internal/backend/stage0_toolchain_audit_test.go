@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -123,8 +124,14 @@ func TestStage0ToolchainAudit(t *testing.T) {
 	// Pick the first declined function in the top 3 buckets and print
 	// its detailed shape so we can pattern-match a new matcher.
 	if os.Getenv("OSTY_STAGE0_AUDIT_SAMPLES") != "" {
+		sampleLimit := 5
+		if raw := os.Getenv("OSTY_STAGE0_AUDIT_SAMPLE_LIMIT"); raw != "" {
+			if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+				sampleLimit = parsed
+			}
+		}
 		topBuckets := map[string]bool{}
-		for i := 0; i < 5 && i < len(buckets); i++ {
+		for i := 0; i < sampleLimit && i < len(buckets); i++ {
 			topBuckets[buckets[i].key] = true
 		}
 		seen := map[string]bool{}
@@ -156,10 +163,64 @@ func TestStage0ToolchainAudit(t *testing.T) {
 				}
 				t.Logf("  bb id=%d term=%T instrs=%d", bb.ID, bb.Term, len(bb.Instrs))
 				for _, instr := range bb.Instrs {
-					t.Logf("    %T", instr)
+					t.Logf("    %s", describeAuditInstr(instr))
 				}
 			}
 		}
+	}
+}
+
+func describeAuditInstr(instr mir.Instr) string {
+	switch x := instr.(type) {
+	case *mir.AssignInstr:
+		return fmt.Sprintf("%T dest=%s src=%T", instr, describeAuditPlace(x.Dest), x.Src)
+	case *mir.CallInstr:
+		callee := fmt.Sprintf("%T", x.Callee)
+		if ref, ok := x.Callee.(*mir.FnRef); ok {
+			callee = fmt.Sprintf("FnRef{%s type=%s}", ref.Symbol, classifyType(ref.Type))
+		}
+		dest := "<nil>"
+		if x.Dest != nil {
+			dest = describeAuditPlace(*x.Dest)
+		}
+		return fmt.Sprintf("%T dest=%s callee=%s args=%s", instr, dest, callee, describeAuditOperands(x.Args))
+	case *mir.IntrinsicInstr:
+		dest := "<nil>"
+		if x.Dest != nil {
+			dest = describeAuditPlace(*x.Dest)
+		}
+		return fmt.Sprintf("%T dest=%s kind=%s args=%s", instr, dest, x.Kind.String(), describeAuditOperands(x.Args))
+	default:
+		return fmt.Sprintf("%T", instr)
+	}
+}
+
+func describeAuditPlace(p mir.Place) string {
+	if p.HasProjections() {
+		return fmt.Sprintf("local#%d+proj", p.Local)
+	}
+	return fmt.Sprintf("local#%d", p.Local)
+}
+
+func describeAuditOperands(ops []mir.Operand) string {
+	if len(ops) == 0 {
+		return "[]"
+	}
+	parts := make([]string, 0, len(ops))
+	for _, op := range ops {
+		parts = append(parts, describeAuditOperand(op))
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+func describeAuditOperand(op mir.Operand) string {
+	switch x := op.(type) {
+	case *mir.CopyOp:
+		return fmt.Sprintf("Copy(%s type=%s)", describeAuditPlace(x.Place), classifyType(x.Type()))
+	case *mir.ConstOp:
+		return fmt.Sprintf("Const(%T type=%s)", x.Const, classifyType(x.Type()))
+	default:
+		return fmt.Sprintf("%T type=%s", op, classifyType(op.Type()))
 	}
 }
 
