@@ -235,36 +235,35 @@ pub fn hirSubstType(t: HirType, env: HirSubstEnv) -> HirType {
     if hirSubstEnvLen(env) == 0 {
         return hirCloneType(t)
     }
-    match t.kind {
-        HirTypeVar -> {
-            if hirSubstEnvHas(env, t.varName) {
-                return hirSubstEnvLookup(env, t.varName)
-            }
-            hirCloneType(t)
-        },
-        HirTypeNamed -> {
-            let mut out = hirCloneType(t)
-            out.namedArgs = hirSubstTypeList(t.namedArgs, env)
-            out
-        },
-        HirTypeOptional -> {
-            let mut out = hirCloneType(t)
-            out.optionalInner = hirSubstTypeList(t.optionalInner, env)
-            out
-        },
-        HirTypeTuple -> {
-            let mut out = hirCloneType(t)
-            out.tupleElems = hirSubstTypeList(t.tupleElems, env)
-            out
-        },
-        HirTypeFn -> {
-            let mut out = hirCloneType(t)
-            out.fnParams = hirSubstTypeList(t.fnParams, env)
-            out.fnReturn = hirSubstTypeList(t.fnReturn, env)
-            out
-        },
-        _ -> hirCloneType(t),
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if t.kind == HirTypeVar {
+        if hirSubstEnvHas(env, t.varName) {
+            return hirSubstEnvLookup(env, t.varName)
+        }
+        return hirCloneType(t)
     }
+    if t.kind == HirTypeNamed {
+        let mut out = hirCloneType(t)
+        out.namedArgs = hirSubstTypeList(t.namedArgs, env)
+        return out
+    }
+    if t.kind == HirTypeOptional {
+        let mut out = hirCloneType(t)
+        out.optionalInner = hirSubstTypeList(t.optionalInner, env)
+        return out
+    }
+    if t.kind == HirTypeTuple {
+        let mut out = hirCloneType(t)
+        out.tupleElems = hirSubstTypeList(t.tupleElems, env)
+        return out
+    }
+    if t.kind == HirTypeFn {
+        let mut out = hirCloneType(t)
+        out.fnParams = hirSubstTypeList(t.fnParams, env)
+        out.fnReturn = hirSubstTypeList(t.fnReturn, env)
+        return out
+    }
+    hirCloneType(t)
 }
 
 /// hirSubstTypeList substitutes each element and returns a fresh
@@ -289,19 +288,16 @@ fn hirSubstTypeList(src: List<HirType>, env: HirSubstEnv) -> List<HirType> {
 /// propagate a half-specialized type. Mirrors Go's
 /// `containsTypeVar` in monomorph.go:1930.
 pub fn hirContainsTypeVar(t: HirType) -> Bool {
-    match t.kind {
-        HirTypeVar -> true,
-        HirTypeNamed -> hirContainsTypeVarList(t.namedArgs),
-        HirTypeOptional -> hirContainsTypeVarList(t.optionalInner),
-        HirTypeTuple -> hirContainsTypeVarList(t.tupleElems),
-        HirTypeFn -> {
-            if hirContainsTypeVarList(t.fnParams) {
-                return true
-            }
-            hirContainsTypeVarList(t.fnReturn)
-        },
-        _ -> false,
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if t.kind == HirTypeVar { return true }
+    if t.kind == HirTypeNamed { return hirContainsTypeVarList(t.namedArgs) }
+    if t.kind == HirTypeOptional { return hirContainsTypeVarList(t.optionalInner) }
+    if t.kind == HirTypeTuple { return hirContainsTypeVarList(t.tupleElems) }
+    if t.kind == HirTypeFn {
+        if hirContainsTypeVarList(t.fnParams) { return true }
+        return hirContainsTypeVarList(t.fnReturn)
     }
+    false
 }
 
 fn hirContainsTypeVarList(src: List<HirType>) -> Bool {
@@ -328,29 +324,23 @@ pub fn hirTypeEqual(a: HirType, b: HirType) -> Bool {
     if a.kind != b.kind {
         return false
     }
-    match a.kind {
-        HirTypePrim -> a.primKind == b.primKind,
-        HirTypeNamed -> {
-            if a.namedPkg != b.namedPkg {
-                return false
-            }
-            if a.namedName != b.namedName {
-                return false
-            }
-            hirTypeListEqual(a.namedArgs, b.namedArgs)
-        },
-        HirTypeOptional -> hirTypeListEqual(a.optionalInner, b.optionalInner),
-        HirTypeTuple -> hirTypeListEqual(a.tupleElems, b.tupleElems),
-        HirTypeFn -> {
-            if !hirTypeListEqual(a.fnParams, b.fnParams) {
-                return false
-            }
-            hirTypeListEqual(a.fnReturn, b.fnReturn)
-        },
-        HirTypeVar -> a.varName == b.varName && a.varOwner == b.varOwner,
-        HirTypeErr -> true,
-        HirTypeInvalid -> true,
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if a.kind == HirTypePrim { return a.primKind == b.primKind }
+    if a.kind == HirTypeNamed {
+        if a.namedPkg != b.namedPkg { return false }
+        if a.namedName != b.namedName { return false }
+        return hirTypeListEqual(a.namedArgs, b.namedArgs)
     }
+    if a.kind == HirTypeOptional { return hirTypeListEqual(a.optionalInner, b.optionalInner) }
+    if a.kind == HirTypeTuple { return hirTypeListEqual(a.tupleElems, b.tupleElems) }
+    if a.kind == HirTypeFn {
+        if !hirTypeListEqual(a.fnParams, b.fnParams) { return false }
+        return hirTypeListEqual(a.fnReturn, b.fnReturn)
+    }
+    if a.kind == HirTypeVar { return a.varName == b.varName && a.varOwner == b.varOwner }
+    if a.kind == HirTypeErr { return true }
+    if a.kind == HirTypeInvalid { return true }
+    unreachable()
 }
 
 fn hirTypeListEqual(a: List<HirType>, b: List<HirType>) -> Bool {
@@ -647,49 +637,47 @@ fn monoSeenMethodLookup(state: MonoState, key: String) -> String {
 /// produce distinct mangled symbols when their `Point` types are
 /// independently declared.
 pub fn hirTypeCodeOf(t: HirType, pkg: String) -> String {
-    match t.kind {
-        HirTypePrim -> {
-            let code = monomorphPrimCode(hirPrimKindString(t.primKind))
-            if code == "" {
-                return "?"
-            }
-            code
-        },
-        HirTypeNamed -> hirTypeCodeOfNamed(t, pkg),
-        HirTypeOptional -> {
-            let inner = if t.optionalInner.len() > 0 {
-                hirTypeCodeOf(t.optionalInner[0], pkg)
-            } else {
-                "?"
-            }
-            monomorphBuiltinTemplate("Option", inner)
-        },
-        HirTypeTuple -> {
-            let mut body = ""
-            for e in t.tupleElems {
-                body = "{body}{hirTypeCodeOf(e, pkg)}"
-            }
-            monomorphBuiltinTemplate("Tuple", body)
-        },
-        HirTypeFn -> {
-            // Itanium pointer-to-function form `PF<ret><params>E`.
-            // Rare enough in generics that we approximate; the dedup
-            // key only needs uniqueness so this is fine.
-            let ret = if t.fnReturn.len() > 0 {
-                hirTypeCodeOf(t.fnReturn[0], pkg)
-            } else {
-                "v"
-            }
-            let mut body = "PF{ret}"
-            for p in t.fnParams {
-                body = "{body}{hirTypeCodeOf(p, pkg)}"
-            }
-            "{body}E"
-        },
-        HirTypeVar -> "?",
-        HirTypeErr -> "?",
-        HirTypeInvalid -> "?",
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if t.kind == HirTypePrim {
+        let code = monomorphPrimCode(hirPrimKindString(t.primKind))
+        if code == "" { return "?" }
+        return code
     }
+    if t.kind == HirTypeNamed { return hirTypeCodeOfNamed(t, pkg) }
+    if t.kind == HirTypeOptional {
+        let inner = if t.optionalInner.len() > 0 {
+            hirTypeCodeOf(t.optionalInner[0], pkg)
+        } else {
+            "?"
+        }
+        return monomorphBuiltinTemplate("Option", inner)
+    }
+    if t.kind == HirTypeTuple {
+        let mut body = ""
+        for e in t.tupleElems {
+            body = "{body}{hirTypeCodeOf(e, pkg)}"
+        }
+        return monomorphBuiltinTemplate("Tuple", body)
+    }
+    if t.kind == HirTypeFn {
+        // Itanium pointer-to-function form `PF<ret><params>E`. Rare
+        // enough in generics that we approximate; the dedup key only
+        // needs uniqueness so this is fine.
+        let ret = if t.fnReturn.len() > 0 {
+            hirTypeCodeOf(t.fnReturn[0], pkg)
+        } else {
+            "v"
+        }
+        let mut body = "PF{ret}"
+        for p in t.fnParams {
+            body = "{body}{hirTypeCodeOf(p, pkg)}"
+        }
+        return "{body}E"
+    }
+    if t.kind == HirTypeVar { return "?" }
+    if t.kind == HirTypeErr { return "?" }
+    if t.kind == HirTypeInvalid { return "?" }
+    unreachable()
 }
 
 /// hirTypeCodeOfNamed dispatches the HirTypeNamed branch: a bare
@@ -1195,54 +1183,53 @@ fn monoSpecializeInterfaceDecl(decl: HirInterfaceDecl, env: HirSubstEnv) -> HirI
 }
 
 fn monoRewriteType(state: MonoState, t: HirType) -> HirType {
-    match t.kind {
-        HirTypeNamed -> {
-            let mut out = hirCloneType(t)
-            out.namedArgs = monoRewriteTypeList(state, t.namedArgs)
-            if out.namedArgs.len() == 0 {
-                return out
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if t.kind == HirTypeNamed {
+        let mut out = hirCloneType(t)
+        out.namedArgs = monoRewriteTypeList(state, t.namedArgs)
+        if out.namedArgs.len() == 0 {
+            return out
+        }
+        let si = monoFindGenericStruct(state, out.namedName)
+        if si >= 0 {
+            let mangled = monoRequestStructType(state, state.genericStructs[si], out.namedArgs)
+            if mangled != "" {
+                return hirTypeNamed(mangled, [])
             }
-            let si = monoFindGenericStruct(state, out.namedName)
-            if si >= 0 {
-                let mangled = monoRequestStructType(state, state.genericStructs[si], out.namedArgs)
-                if mangled != "" {
-                    return hirTypeNamed(mangled, [])
-                }
+        }
+        let ei = monoFindGenericEnum(state, out.namedName)
+        if ei >= 0 {
+            let mangled = monoRequestEnumType(state, state.genericEnums[ei], out.namedArgs)
+            if mangled != "" {
+                return hirTypeNamed(mangled, [])
             }
-            let ei = monoFindGenericEnum(state, out.namedName)
-            if ei >= 0 {
-                let mangled = monoRequestEnumType(state, state.genericEnums[ei], out.namedArgs)
-                if mangled != "" {
-                    return hirTypeNamed(mangled, [])
-                }
+        }
+        let ii = monoFindGenericInterface(state, out.namedName)
+        if ii >= 0 {
+            let mangled = monoRequestInterfaceType(state, state.genericInterfaces[ii], out.namedArgs)
+            if mangled != "" {
+                return hirTypeNamed(mangled, [])
             }
-            let ii = monoFindGenericInterface(state, out.namedName)
-            if ii >= 0 {
-                let mangled = monoRequestInterfaceType(state, state.genericInterfaces[ii], out.namedArgs)
-                if mangled != "" {
-                    return hirTypeNamed(mangled, [])
-                }
-            }
-            out
-        },
-        HirTypeOptional -> {
-            let mut out = hirCloneType(t)
-            out.optionalInner = monoRewriteTypeList(state, t.optionalInner)
-            out
-        },
-        HirTypeTuple -> {
-            let mut out = hirCloneType(t)
-            out.tupleElems = monoRewriteTypeList(state, t.tupleElems)
-            out
-        },
-        HirTypeFn -> {
-            let mut out = hirCloneType(t)
-            out.fnParams = monoRewriteTypeList(state, t.fnParams)
-            out.fnReturn = monoRewriteTypeList(state, t.fnReturn)
-            out
-        },
-        _ -> hirCloneType(t),
+        }
+        return out
     }
+    if t.kind == HirTypeOptional {
+        let mut out = hirCloneType(t)
+        out.optionalInner = monoRewriteTypeList(state, t.optionalInner)
+        return out
+    }
+    if t.kind == HirTypeTuple {
+        let mut out = hirCloneType(t)
+        out.tupleElems = monoRewriteTypeList(state, t.tupleElems)
+        return out
+    }
+    if t.kind == HirTypeFn {
+        let mut out = hirCloneType(t)
+        out.fnParams = monoRewriteTypeList(state, t.fnParams)
+        out.fnReturn = monoRewriteTypeList(state, t.fnReturn)
+        return out
+    }
+    hirCloneType(t)
 }
 
 fn monoRewriteTypeList(state: MonoState, types: List<HirType>) -> List<HirType> {
@@ -1320,70 +1307,68 @@ fn monoScanFnBody(state: MonoState, decl: HirFnDecl) {
 
 fn monoRewriteExprNodeTypes(state: MonoState, e: HirExpr) {
     e.typ = monoRewriteType(state, e.typ)
-    match e.kind {
-        HirExprIdent -> {
-            e.identTypeArgs = monoRewriteTypeList(state, e.identTypeArgs)
-        },
-        HirExprCall -> {
-            e.callTypeArgs = monoRewriteTypeList(state, e.callTypeArgs)
-        },
-        HirExprMethod -> {
-            e.methodTypeArgs = monoRewriteTypeList(state, e.methodTypeArgs)
-        },
-        HirExprList -> {
-            e.listElem = monoRewriteType(state, e.listElem)
-        },
-        HirExprMapLit -> {
-            e.mapKeyT = monoRewriteType(state, e.mapKeyT)
-            e.mapValT = monoRewriteType(state, e.mapValT)
-        },
-        HirExprClosure -> {
-            e.closureReturn = monoRewriteType(state, e.closureReturn)
-            let mut rewrittenParams: List<HirParam> = []
-            for p in e.closureParams {
-                let mut np = p
-                np.typ = monoRewriteType(state, np.typ)
-                rewrittenParams.push(np)
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if e.kind == HirExprIdent {
+        e.identTypeArgs = monoRewriteTypeList(state, e.identTypeArgs)
+        return
+    }
+    if e.kind == HirExprCall {
+        e.callTypeArgs = monoRewriteTypeList(state, e.callTypeArgs)
+        return
+    }
+    if e.kind == HirExprMethod {
+        e.methodTypeArgs = monoRewriteTypeList(state, e.methodTypeArgs)
+        return
+    }
+    if e.kind == HirExprList {
+        e.listElem = monoRewriteType(state, e.listElem)
+        return
+    }
+    if e.kind == HirExprMapLit {
+        e.mapKeyT = monoRewriteType(state, e.mapKeyT)
+        e.mapValT = monoRewriteType(state, e.mapValT)
+        return
+    }
+    if e.kind == HirExprClosure {
+        e.closureReturn = monoRewriteType(state, e.closureReturn)
+        let mut rewrittenParams: List<HirParam> = []
+        for p in e.closureParams {
+            let mut np = p
+            np.typ = monoRewriteType(state, np.typ)
+            rewrittenParams.push(np)
+        }
+        e.closureParams = rewrittenParams
+        let mut rewrittenCaptures: List<HirCapture> = []
+        for c in e.closureCaptures {
+            let mut nc = c
+            nc.typ = monoRewriteType(state, nc.typ)
+            rewrittenCaptures.push(nc)
+        }
+        e.closureCaptures = rewrittenCaptures
+        return
+    }
+    if e.kind == HirExprStructLit {
+        if e.typ.kind == HirTypeNamed {
+            if e.structTypeName != e.typ.namedName && e.typ.namedName != "" {
+                e.structTypeName = e.typ.namedName
             }
-            e.closureParams = rewrittenParams
-            let mut rewrittenCaptures: List<HirCapture> = []
-            for c in e.closureCaptures {
-                let mut nc = c
-                nc.typ = monoRewriteType(state, nc.typ)
-                rewrittenCaptures.push(nc)
+        }
+        return
+    }
+    if e.kind == HirExprVariantLit {
+        if e.typ.kind == HirTypeNamed {
+            if e.variantEnum != e.typ.namedName && e.typ.namedName != "" {
+                e.variantEnum = e.typ.namedName
             }
-            e.closureCaptures = rewrittenCaptures
-        },
-        HirExprStructLit -> {
-            match e.typ.kind {
-                HirTypeNamed -> {
-                    if e.structTypeName != e.typ.namedName && e.typ.namedName != "" {
-                        e.structTypeName = e.typ.namedName
-                    }
-                },
-                _ -> {},
-            }
-        },
-        HirExprVariantLit -> {
-            match e.typ.kind {
-                HirTypeNamed -> {
-                    if e.variantEnum != e.typ.namedName && e.typ.namedName != "" {
-                        e.variantEnum = e.typ.namedName
-                    }
-                },
-                _ -> {},
-            }
-        },
-        _ -> {},
+        }
+        return
     }
 }
 
 fn monoRewriteStmtNodeTypes(state: MonoState, stmt: HirStmt) {
-    match stmt.kind {
-        HirStmtLet -> {
-            stmt.letTyp = monoRewriteType(state, stmt.letTyp)
-        },
-        _ -> {},
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if stmt.kind == HirStmtLet {
+        stmt.letTyp = monoRewriteType(state, stmt.letTyp)
     }
 }
 
@@ -1398,64 +1383,78 @@ pub fn monoScanBlock(state: MonoState, b: HirBlock) {
 
 pub fn monoScanStmt(state: MonoState, stmt: HirStmt) {
     monoRewriteStmtNodeTypes(state, stmt)
-    match stmt.kind {
-        HirStmtBlock -> monoScanBlock(state, stmt.block),
-        HirStmtLet -> {
-            if stmt.letHasValue {
-                monoSeedVariantTypeFromContext(state, stmt.letTyp, stmt.letValue)
-                monoScanExpr(state, stmt.letValue)
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if stmt.kind == HirStmtBlock {
+        monoScanBlock(state, stmt.block)
+        return
+    }
+    if stmt.kind == HirStmtLet {
+        if stmt.letHasValue {
+            monoSeedVariantTypeFromContext(state, stmt.letTyp, stmt.letValue)
+            monoScanExpr(state, stmt.letValue)
+        }
+        if stmt.letHasPattern {
+            let scrutinee = if hirIsUnresolvedType(stmt.letTyp) && stmt.letHasValue {
+                stmt.letValue.typ
+            } else {
+                stmt.letTyp
             }
-            if stmt.letHasPattern {
-                let scrutinee = if hirIsUnresolvedType(stmt.letTyp) && stmt.letHasValue {
-                    stmt.letValue.typ
-                } else {
-                    stmt.letTyp
-                }
-                monoRewritePattern(state, stmt.letPattern, scrutinee)
+            monoRewritePattern(state, stmt.letPattern, scrutinee)
+        }
+        return
+    }
+    if stmt.kind == HirStmtExpr {
+        monoScanExpr(state, stmt.exprValue)
+        return
+    }
+    if stmt.kind == HirStmtAssign {
+        for t in stmt.assignTargets {
+            monoScanExpr(state, t)
+        }
+        monoScanExpr(state, stmt.assignValue)
+        return
+    }
+    if stmt.kind == HirStmtReturn {
+        if stmt.returnHasValue {
+            monoScanExpr(state, stmt.returnValue)
+        }
+        return
+    }
+    if stmt.kind == HirStmtIf {
+        monoScanExpr(state, stmt.ifCond)
+        monoScanBlock(state, stmt.ifThen)
+        if stmt.ifHasElse {
+            monoScanBlock(state, stmt.ifElse)
+        }
+        return
+    }
+    if stmt.kind == HirStmtFor {
+        if stmt.forHasCond { monoScanExpr(state, stmt.forCond) }
+        if stmt.forHasIter { monoScanExpr(state, stmt.forIter) }
+        if stmt.forHasStart { monoScanExpr(state, stmt.forStart) }
+        if stmt.forHasEnd { monoScanExpr(state, stmt.forEnd) }
+        monoScanBlock(state, stmt.forBody)
+        return
+    }
+    if stmt.kind == HirStmtMatch {
+        monoScanExpr(state, stmt.matchScrutinee)
+        for arm in stmt.matchArms {
+            monoRewritePattern(state, arm.pattern, stmt.matchScrutinee.typ)
+            if arm.hasGuard {
+                monoScanExpr(state, arm.guard)
             }
-        },
-        HirStmtExpr -> monoScanExpr(state, stmt.exprValue),
-        HirStmtAssign -> {
-            for t in stmt.assignTargets {
-                monoScanExpr(state, t)
-            }
-            monoScanExpr(state, stmt.assignValue)
-        },
-        HirStmtReturn -> {
-            if stmt.returnHasValue {
-                monoScanExpr(state, stmt.returnValue)
-            }
-        },
-        HirStmtIf -> {
-            monoScanExpr(state, stmt.ifCond)
-            monoScanBlock(state, stmt.ifThen)
-            if stmt.ifHasElse {
-                monoScanBlock(state, stmt.ifElse)
-            }
-        },
-        HirStmtFor -> {
-            if stmt.forHasCond { monoScanExpr(state, stmt.forCond) }
-            if stmt.forHasIter { monoScanExpr(state, stmt.forIter) }
-            if stmt.forHasStart { monoScanExpr(state, stmt.forStart) }
-            if stmt.forHasEnd { monoScanExpr(state, stmt.forEnd) }
-            monoScanBlock(state, stmt.forBody)
-        },
-        HirStmtMatch -> {
-            monoScanExpr(state, stmt.matchScrutinee)
-            for arm in stmt.matchArms {
-                monoRewritePattern(state, arm.pattern, stmt.matchScrutinee.typ)
-                if arm.hasGuard {
-                    monoScanExpr(state, arm.guard)
-                }
-                monoScanBlock(state, arm.body)
-            }
-        },
-        HirStmtDefer -> monoScanBlock(state, stmt.deferBody),
-        HirStmtChanSend -> {
-            monoScanExpr(state, stmt.chanChannel)
-            monoScanExpr(state, stmt.chanValue)
-        },
-        _ -> {},
+            monoScanBlock(state, arm.body)
+        }
+        return
+    }
+    if stmt.kind == HirStmtDefer {
+        monoScanBlock(state, stmt.deferBody)
+        return
+    }
+    if stmt.kind == HirStmtChanSend {
+        monoScanExpr(state, stmt.chanChannel)
+        monoScanExpr(state, stmt.chanValue)
+        return
     }
 }
 
@@ -1464,149 +1463,175 @@ pub fn monoScanExpr(state: MonoState, e: HirExpr) {
         return
     }
     monoRewriteExprNodeTypes(state, e)
-    match e.kind {
-        HirExprCall -> monoScanCall(state, e),
-        HirExprMethod -> monoScanMethod(state, e),
-        HirExprIdent -> monoScanIdent(state, e),
-        HirExprUnary -> {
-            if e.unaryChild.len() > 0 { monoScanExpr(state, e.unaryChild[0]) }
-        },
-        HirExprBinary -> {
-            if e.binaryLeft.len() > 0 { monoScanExpr(state, e.binaryLeft[0]) }
-            if e.binaryRight.len() > 0 { monoScanExpr(state, e.binaryRight[0]) }
-        },
-        HirExprField -> {
-            if e.fieldTarget.len() > 0 { monoScanExpr(state, e.fieldTarget[0]) }
-        },
-        HirExprIndex -> {
-            if e.indexTarget.len() > 0 { monoScanExpr(state, e.indexTarget[0]) }
-            if e.indexIndex.len() > 0 { monoScanExpr(state, e.indexIndex[0]) }
-        },
-        HirExprTupleAccess -> {
-            if e.tupleAccessTarget.len() > 0 { monoScanExpr(state, e.tupleAccessTarget[0]) }
-        },
-        HirExprBlock -> {
-            if e.blockBody.len() > 0 { monoScanBlock(state, e.blockBody[0]) }
-        },
-        HirExprIf -> {
-            if e.ifExprCond.len() > 0 { monoScanExpr(state, e.ifExprCond[0]) }
-            if e.ifExprThen.len() > 0 { monoScanBlock(state, e.ifExprThen[0]) }
-            if e.ifExprElse.len() > 0 { monoScanBlock(state, e.ifExprElse[0]) }
-        },
-        HirExprIfLet -> {
-            if e.ifLetScrutinee.len() > 0 {
-                monoScanExpr(state, e.ifLetScrutinee[0])
-                monoRewritePattern(state, e.ifLetPattern, e.ifLetScrutinee[0].typ)
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if e.kind == HirExprCall {
+        monoScanCall(state, e)
+        return
+    }
+    if e.kind == HirExprMethod {
+        monoScanMethod(state, e)
+        return
+    }
+    if e.kind == HirExprIdent {
+        monoScanIdent(state, e)
+        return
+    }
+    if e.kind == HirExprUnary {
+        if e.unaryChild.len() > 0 { monoScanExpr(state, e.unaryChild[0]) }
+        return
+    }
+    if e.kind == HirExprBinary {
+        if e.binaryLeft.len() > 0 { monoScanExpr(state, e.binaryLeft[0]) }
+        if e.binaryRight.len() > 0 { monoScanExpr(state, e.binaryRight[0]) }
+        return
+    }
+    if e.kind == HirExprField {
+        if e.fieldTarget.len() > 0 { monoScanExpr(state, e.fieldTarget[0]) }
+        return
+    }
+    if e.kind == HirExprIndex {
+        if e.indexTarget.len() > 0 { monoScanExpr(state, e.indexTarget[0]) }
+        if e.indexIndex.len() > 0 { monoScanExpr(state, e.indexIndex[0]) }
+        return
+    }
+    if e.kind == HirExprTupleAccess {
+        if e.tupleAccessTarget.len() > 0 { monoScanExpr(state, e.tupleAccessTarget[0]) }
+        return
+    }
+    if e.kind == HirExprBlock {
+        if e.blockBody.len() > 0 { monoScanBlock(state, e.blockBody[0]) }
+        return
+    }
+    if e.kind == HirExprIf {
+        if e.ifExprCond.len() > 0 { monoScanExpr(state, e.ifExprCond[0]) }
+        if e.ifExprThen.len() > 0 { monoScanBlock(state, e.ifExprThen[0]) }
+        if e.ifExprElse.len() > 0 { monoScanBlock(state, e.ifExprElse[0]) }
+        return
+    }
+    if e.kind == HirExprIfLet {
+        if e.ifLetScrutinee.len() > 0 {
+            monoScanExpr(state, e.ifLetScrutinee[0])
+            monoRewritePattern(state, e.ifLetPattern, e.ifLetScrutinee[0].typ)
+        }
+        if e.ifLetThen.len() > 0 { monoScanBlock(state, e.ifLetThen[0]) }
+        if e.ifLetHasElse && e.ifLetElse.len() > 0 {
+            monoScanBlock(state, e.ifLetElse[0])
+        }
+        return
+    }
+    if e.kind == HirExprMatch {
+        if e.matchExprScrutinee.len() > 0 {
+            monoScanExpr(state, e.matchExprScrutinee[0])
+        }
+        let scrutinee = if e.matchExprScrutinee.len() > 0 {
+            e.matchExprScrutinee[0].typ
+        } else {
+            hirTypeInvalid()
+        }
+        for arm in e.matchExprArms {
+            monoRewritePattern(state, arm.pattern, scrutinee)
+            if arm.hasGuard {
+                monoScanExpr(state, arm.guard)
             }
-            if e.ifLetThen.len() > 0 { monoScanBlock(state, e.ifLetThen[0]) }
-            if e.ifLetHasElse && e.ifLetElse.len() > 0 {
-                monoScanBlock(state, e.ifLetElse[0])
+            monoScanBlock(state, arm.body)
+        }
+        return
+    }
+    if e.kind == HirExprCoalesce {
+        if e.coalesceLeft.len() > 0 { monoScanExpr(state, e.coalesceLeft[0]) }
+        if e.coalesceRight.len() > 0 { monoScanExpr(state, e.coalesceRight[0]) }
+        return
+    }
+    if e.kind == HirExprQuestion {
+        if e.questionChild.len() > 0 { monoScanExpr(state, e.questionChild[0]) }
+        return
+    }
+    if e.kind == HirExprList {
+        for el in e.listElems {
+            monoScanExpr(state, el)
+        }
+        return
+    }
+    if e.kind == HirExprTupleLit {
+        for el in e.tupleElems {
+            monoScanExpr(state, el)
+        }
+        return
+    }
+    if e.kind == HirExprMapLit {
+        for entry in e.mapEntries {
+            monoScanExpr(state, entry.key)
+            monoScanExpr(state, entry.value)
+        }
+        return
+    }
+    if e.kind == HirExprStructLit {
+        for f in e.structFields {
+            if f.hasValue {
+                monoScanExpr(state, f.value)
             }
-        },
-        HirExprMatch -> {
-            if e.matchExprScrutinee.len() > 0 {
-                monoScanExpr(state, e.matchExprScrutinee[0])
+        }
+        if e.structHasSpread && e.structSpread.len() > 0 {
+            monoScanExpr(state, e.structSpread[0])
+        }
+        return
+    }
+    if e.kind == HirExprVariantLit {
+        for a in e.variantArgs {
+            monoScanExpr(state, a.value)
+        }
+        return
+    }
+    if e.kind == HirExprClosure {
+        for p in e.closureParams {
+            if p.hasDefault {
+                monoScanExpr(state, p.defaultValue)
             }
-            let scrutinee = if e.matchExprScrutinee.len() > 0 {
-                e.matchExprScrutinee[0].typ
-            } else {
-                hirTypeInvalid()
+        }
+        if e.closureBody.len() > 0 {
+            monoScanBlock(state, e.closureBody[0])
+        }
+        return
+    }
+    if e.kind == HirExprRange {
+        if e.rangeStart.len() > 0 { monoScanExpr(state, e.rangeStart[0]) }
+        if e.rangeEnd.len() > 0 { monoScanExpr(state, e.rangeEnd[0]) }
+        return
+    }
+    if e.kind == HirExprStringLit {
+        for part in e.strParts {
+            if !part.isLit && part.expr.len() > 0 {
+                monoScanExpr(state, part.expr[0])
             }
-            for arm in e.matchExprArms {
-                monoRewritePattern(state, arm.pattern, scrutinee)
-                if arm.hasGuard {
-                    monoScanExpr(state, arm.guard)
-                }
-                monoScanBlock(state, arm.body)
-            }
-        },
-        HirExprCoalesce -> {
-            if e.coalesceLeft.len() > 0 { monoScanExpr(state, e.coalesceLeft[0]) }
-            if e.coalesceRight.len() > 0 { monoScanExpr(state, e.coalesceRight[0]) }
-        },
-        HirExprQuestion -> {
-            if e.questionChild.len() > 0 { monoScanExpr(state, e.questionChild[0]) }
-        },
-        HirExprList -> {
-            for el in e.listElems {
-                monoScanExpr(state, el)
-            }
-        },
-        HirExprTupleLit -> {
-            for el in e.tupleElems {
-                monoScanExpr(state, el)
-            }
-        },
-        HirExprMapLit -> {
-            for entry in e.mapEntries {
-                monoScanExpr(state, entry.key)
-                monoScanExpr(state, entry.value)
-            }
-        },
-        HirExprStructLit -> {
-            for f in e.structFields {
-                if f.hasValue {
-                    monoScanExpr(state, f.value)
-                }
-            }
-            if e.structHasSpread && e.structSpread.len() > 0 {
-                monoScanExpr(state, e.structSpread[0])
-            }
-        },
-        HirExprVariantLit -> {
-            for a in e.variantArgs {
-                monoScanExpr(state, a.value)
-            }
-        },
-        HirExprClosure -> {
-            for p in e.closureParams {
-                if p.hasDefault {
-                    monoScanExpr(state, p.defaultValue)
-                }
-            }
-            if e.closureBody.len() > 0 {
-                monoScanBlock(state, e.closureBody[0])
-            }
-        },
-        HirExprRange -> {
-            if e.rangeStart.len() > 0 { monoScanExpr(state, e.rangeStart[0]) }
-            if e.rangeEnd.len() > 0 { monoScanExpr(state, e.rangeEnd[0]) }
-        },
-        HirExprStringLit -> {
-            for part in e.strParts {
-                if !part.isLit && part.expr.len() > 0 {
-                    monoScanExpr(state, part.expr[0])
-                }
-            }
-        },
-        HirExprIntrinsic -> {
-            for a in e.intrinsicArgs {
-                monoScanExpr(state, a.value)
-            }
-        },
-        _ -> {},
+        }
+        return
+    }
+    if e.kind == HirExprIntrinsic {
+        for a in e.intrinsicArgs {
+            monoScanExpr(state, a.value)
+        }
     }
 }
 
 fn monoScanCall(state: MonoState, e: HirExpr) {
     if e.callCallee.len() > 0 {
         let callee = e.callCallee[0]
-        match callee.kind {
-            HirExprIdent -> {
-                if callee.identKind == HirIdentFn && e.callTypeArgs.len() > 0 {
-                    let gi = monoFindGenericFn(state, callee.identName)
-                    if gi >= 0 {
-                        let mangled = monoRequestFn(state, state.genericFns[gi], e.callTypeArgs)
-                        if mangled != "" {
-                            let rewritten = e.callCallee[0]
-                            rewritten.identName = mangled
-                            e.callCallee[0] = rewritten
-                            e.callTypeArgs = []
-                        }
+        // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+        if callee.kind == HirExprIdent {
+            if callee.identKind == HirIdentFn && e.callTypeArgs.len() > 0 {
+                let gi = monoFindGenericFn(state, callee.identName)
+                if gi >= 0 {
+                    let mangled = monoRequestFn(state, state.genericFns[gi], e.callTypeArgs)
+                    if mangled != "" {
+                        let rewritten = e.callCallee[0]
+                        rewritten.identName = mangled
+                        e.callCallee[0] = rewritten
+                        e.callTypeArgs = []
                     }
                 }
-            },
-            _ -> monoScanExpr(state, callee),
+            }
+        } else {
+            monoScanExpr(state, callee)
         }
     }
     for a in e.callArgs {
@@ -1671,84 +1696,77 @@ fn monoSeedVariantTypeFromContext(state: MonoState, expect: HirType, e: HirExpr)
     if hirIsUnresolvedType(expect) || !hirExprIsValid(e) {
         return
     }
-    match e.kind {
-        HirExprVariantLit -> {
-            if !hirIsUnresolvedType(e.typ) {
-                return
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if e.kind == HirExprVariantLit {
+        if !hirIsUnresolvedType(e.typ) {
+            return
+        }
+        if expect.kind == HirTypeNamed {
+            if e.variantEnum == "" || e.variantEnum == expect.namedName || monoFindGenericEnum(state, e.variantEnum) >= 0 {
+                e.typ = hirCloneType(expect)
+                e.variantEnum = expect.namedName
             }
-            match expect.kind {
-                HirTypeNamed -> {
-                    if e.variantEnum == "" || e.variantEnum == expect.namedName || monoFindGenericEnum(state, e.variantEnum) >= 0 {
-                        e.typ = hirCloneType(expect)
-                        e.variantEnum = expect.namedName
-                    }
-                },
-                _ -> {},
-            }
-        },
-        _ -> {},
+        }
     }
 }
 
 fn monoRewritePattern(state: MonoState, p: HirPattern, scrutinee: HirType) {
-    match p.kind {
-        HirPatLit -> {
-            if p.litValue.len() > 0 {
-                monoScanExpr(state, p.litValue[0])
+    // B2: payload-less enum dispatch as if-else chain (stage0 P0–P15).
+    if p.kind == HirPatLit {
+        if p.litValue.len() > 0 {
+            monoScanExpr(state, p.litValue[0])
+        }
+        return
+    }
+    if p.kind == HirPatTuple {
+        for elem in p.tupleElems {
+            monoRewritePattern(state, elem, hirTypeInvalid())
+        }
+        return
+    }
+    if p.kind == HirPatStruct {
+        if scrutinee.kind == HirTypeNamed {
+            if p.structTypeName == scrutinee.namedName || monoFindGenericStruct(state, p.structTypeName) >= 0 {
+                p.structTypeName = scrutinee.namedName
             }
-        },
-        HirPatTuple -> {
-            for elem in p.tupleElems {
-                monoRewritePattern(state, elem, hirTypeInvalid())
+        }
+        for field in p.structFields {
+            if field.hasPattern {
+                monoRewritePattern(state, field.pattern, hirTypeInvalid())
             }
-        },
-        HirPatStruct -> {
-            match scrutinee.kind {
-                HirTypeNamed -> {
-                    if p.structTypeName == scrutinee.namedName || monoFindGenericStruct(state, p.structTypeName) >= 0 {
-                        p.structTypeName = scrutinee.namedName
-                    }
-                },
-                _ -> {},
+        }
+        return
+    }
+    if p.kind == HirPatVariant {
+        if scrutinee.kind == HirTypeNamed {
+            if p.variantEnum == scrutinee.namedName || monoFindGenericEnum(state, p.variantEnum) >= 0 {
+                p.variantEnum = scrutinee.namedName
             }
-            for field in p.structFields {
-                if field.hasPattern {
-                    monoRewritePattern(state, field.pattern, hirTypeInvalid())
-                }
-            }
-        },
-        HirPatVariant -> {
-            match scrutinee.kind {
-                HirTypeNamed -> {
-                    if p.variantEnum == scrutinee.namedName || monoFindGenericEnum(state, p.variantEnum) >= 0 {
-                        p.variantEnum = scrutinee.namedName
-                    }
-                },
-                _ -> {},
-            }
-            for arg in p.variantArgs {
-                monoRewritePattern(state, arg, hirTypeInvalid())
-            }
-        },
-        HirPatRange -> {
-            if p.rangeLow.len() > 0 {
-                monoScanExpr(state, p.rangeLow[0])
-            }
-            if p.rangeHigh.len() > 0 {
-                monoScanExpr(state, p.rangeHigh[0])
-            }
-        },
-        HirPatOr -> {
-            for alt in p.orAlts {
-                monoRewritePattern(state, alt, scrutinee)
-            }
-        },
-        HirPatBinding -> {
-            if p.bindingChild.len() > 0 {
-                monoRewritePattern(state, p.bindingChild[0], scrutinee)
-            }
-        },
-        _ -> {},
+        }
+        for arg in p.variantArgs {
+            monoRewritePattern(state, arg, hirTypeInvalid())
+        }
+        return
+    }
+    if p.kind == HirPatRange {
+        if p.rangeLow.len() > 0 {
+            monoScanExpr(state, p.rangeLow[0])
+        }
+        if p.rangeHigh.len() > 0 {
+            monoScanExpr(state, p.rangeHigh[0])
+        }
+        return
+    }
+    if p.kind == HirPatOr {
+        for alt in p.orAlts {
+            monoRewritePattern(state, alt, scrutinee)
+        }
+        return
+    }
+    if p.kind == HirPatBinding {
+        if p.bindingChild.len() > 0 {
+            monoRewritePattern(state, p.bindingChild[0], scrutinee)
+        }
     }
 }
 
