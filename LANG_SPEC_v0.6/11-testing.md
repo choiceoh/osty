@@ -322,3 +322,437 @@ may run in parallel (§11.6), any shared fixture must be constructed
 per-test or guarded with `std.sync` primitives.
 
 ---
+
+### 11.9 Capability fakes for deterministic tests
+
+v0.6 의 `std.capability.testing` 모듈은 7 canonical capability 별
+deterministic fake 을 제공한다. 테스트는 production 코드에 fake
+capability 를 주입해 *시간 / 난수 / 환경 / 파일시스템 / 네트워크 /
+프로세스 / 콘솔* 모든 사이드 이펙트를 hermetic 하게 만들 수 있다.
+
+#### 11.9.1 Fake capability registry
+
+| Capability | Fake | 결정성 보장 |
+|---|---|---|
+| `Clock` | `FakeClock(epoch_ms = N)` | 모든 `now()` 가 `epoch_ms` 반환; `monotonic()` 매 호출 +1ms; `sleep()` 즉시 반환 |
+| `Rng` | `FakeRng(seed = N)` | seed 로 결정된 xorshift64 시퀀스 |
+| `Env` | `FakeEnv(vars = {...}, args = [...])` | in-memory map / list |
+| `Fs` | `FakeFs(layout = {...})` | in-memory 파일 트리 |
+| `Net` | `FakeNet(routes = {...})` | host:port → canned response |
+| `Process` | `FakeProcess(stubs = {...})` | (cmd, args) → canned `Output` |
+| `Console` | `FakeConsole()` | stdout/stderr capture |
+
+#### 11.9.2 단일 capability 주입
+
+```osty
+use std.capability.testing as ct
+
+fn buildId(clock: Clock, rng: Rng) -> String {
+    "{clock.now().toEpochMillis()}-{rng.next()}"
+}
+
+#[test]
+fn test_buildId_format() {
+    let clock = ct.FakeClock(epoch_ms = 1_000_000)
+    let rng = ct.FakeRng(seed = 42)
+    let id = buildId(clock, rng)
+    testing.assertEq(id, "1000000-1608637542")
+}
+```
+
+테스트가 깨지지 않는 것은 fake 가 *결정적* 이기 때문이다 — 같은
+`epoch_ms` + `seed` 는 항상 같은 출력을 만든다.
+
+#### 11.9.3 다중 capability — convenience factory
+
+```osty
+fn runPipeline(
+    clock: Clock,
+    rng: Rng,
+    fs: Fs,
+    console: Console,
+) -> Result<(), Error> {
+    let id = "{clock.now().toEpochMillis()}-{rng.next()}"
+    fs.write("/tmp/{id}.log", "started")?
+    console.println("pipeline {id} started")
+    Ok(())
+}
+
+#[test]
+fn test_pipeline_writes_and_logs() {
+    let f = std.testing.capabilityFakes()
+    runPipeline(f.fakeClock, f.fakeRng, f.fakeFs, f.fakeConsole)?
+    testing.assert(f.fakeFs.exists("/tmp/0-1608637542.log"))
+    testing.assertEq(f.fakeConsole.stdoutCaptured(), "pipeline 0-1608637542 started\n")
+}
+```
+
+`std.testing.capabilityFakes()` 는 7 canonical fake 모두 preset 한
+`CapabilityFakes` struct 를 반환. 단일 호출로 모든 capability 가
+hermetic 으로 준비된다.
+
+#### 11.9.4 Fake assertions
+
+각 fake 는 검증을 위한 helper 메서드 노출:
+
+| Fake | Assertion helper | 의미 |
+|---|---|---|
+| `FakeConsole` | `stdoutCaptured() -> String` | print 누적 |
+| `FakeConsole` | `stderrCaptured() -> String` | eprint 누적 |
+| `FakeFs` | `exists(p) -> Bool`, `readToString(p)` | 작성 후 검증 |
+| `FakeNet` | `dialedHosts() -> List<String>` | dial 호출 host 추적 |
+| `FakeProcess` | `executedCommands() -> List<(String, List<String>)>` | exec 호출 카탈로그 |
+| `FakeEnv` | `set` 후 `get` 정합 | mutation 추적 |
+| `FakeRng` | (deterministic 이므로 별도 helper 없음) | seed 기준 sequence |
+
+#### 11.9.5 Cancel 전파 테스트
+
+```osty
+fn longRunning(clock: Clock) -> Result<(), Error> {
+    clock.sleep(Duration.seconds(60))?
+    Ok(())
+}
+
+#[test]
+fn test_cancel_propagates_through_sleep() {
+    let clock = ct.FakeClock(epoch_ms = 0)
+    taskGroup(|g| {
+        let h = g.spawn(|| longRunning(clock))
+        g.cancel(Cancelled.New("test"))
+        match h.join() {
+            Err(e) -> testing.assert(e is Cancelled),
+            Ok(_) -> testing.fail("expected Cancelled"),
+        }
+        Ok(())
+    })
+}
+```
+
+`FakeClock.sleep()` 은 즉시 반환하지만 `taskGroup` cancel 이 도달
+하면 `Err(Cancelled)` 로 응답.
+
+### 11.10 `spec { }` block as tests
+
+`spec { example: ... }` 절은 `osty test --spec` 모드에서 *자동 등록
+테스트* 가 된다 (G43, §3.13). spec block 의 example 은 `assertEq`
+호출 없이 boolean expression 으로 작성되며, runner 가 결과를 평가.
+
+#### 11.10.1 Example clauses
+
+```osty
+fn normalizeEmail(s: String) -> String {
+    spec {
+        example: normalizeEmail(" Alice@EXAMPLE.COM ") == "alice@example.com"
+        example: normalizeEmail("") == ""
+    }
+    s.trim().toLowerCase()
+}
+```
+
+`osty test --spec` 호출 시 두 example 이 자동 테스트로 등록 — 출력은
+`spec[normalizeEmail#example:1] PASS` 형식.
+
+#### 11.10.2 Law / invariant clauses
+
+```osty
+fn normalizeEmail(s: String) -> String {
+    spec {
+        example: normalizeEmail(" Hi ") == "hi"
+        law: result == result.trim()
+        law: result == result.toLowerCase()
+        invariant: result.indexOf(" ") == -1
+    }
+    s.trim().toLowerCase()
+}
+```
+
+`law:` / `invariant:` 는 v0 (Phase 3) 에선 *문서화 + LSP hover* 만 —
+실행되지 않는다. v1 (Phase 5) 에서 `forall` property test 자동
+생성과 함께 enforcement.
+
+`result` 는 함수 반환값을 가리키는 *virtual binding* — `law:` /
+`invariant:` 안에서만 의미를 가진다.
+
+#### 11.10.3 Spec block 와 일반 test 의 공존
+
+```osty
+fn normalize(s: String) -> String {
+    spec {
+        example: normalize("HI") == "hi"
+        law: result.length() <= s.length()
+    }
+    s.toLowerCase().trim()
+}
+
+// 같은 함수에 일반 test
+#[test]
+fn test_normalize_preserves_alpha() {
+    testing.assertEq(normalize("hello"), "hello")
+}
+```
+
+두 형식 모두 등록 — `spec { example: }` 는 `osty test --spec` 시,
+`#[test]` 는 `osty test` 시 (`--spec` 도 spec example 포함).
+
+### 11.11 `#[example]` annotation as tests
+
+`#[example(input = ..., output = ...)]` (G42, §3.12) 는 함수
+선언에 *machine-readable* example 부착 — `osty test --example` 모드
+에서 자동 검증.
+
+```osty
+#[example(input = "alice@example.com", output = "Some(...)")]
+#[example(input = "invalid", output = "None")]
+pub fn parseEmail(s: String) -> Email? { ... }
+```
+
+`osty test --example` 호출 시 두 example 모두 평가 — `parseEmail("alice@example.com")
+== Some(Email{...})` / `parseEmail("invalid") == None` 로 비교.
+실패 시 `example[parseEmail#1] FAIL: expected Some(...), got None`.
+
+#### 11.11.1 Capability + example
+
+`#[example(uses = "name")]` 는 fixture 참조 — fixture 함수가
+capability 인스턴스를 반환하면 example 호출 시 fixture 가 먼저
+평가되어 인자로 주입.
+
+```osty
+#[fixture(name = "fakeDb")]
+fn fakeDb() -> Db {
+    let f = std.capability.testing.FakeDb()
+    f.seed(User.parse("alice@example.com")?)
+    f
+}
+
+#[example(input = "alice@example.com", uses = "fakeDb", output = "Ok(42)")]
+#[example(input = "missing@x.com", uses = "fakeDb", output = "Err(NotFound)")]
+pub fn lookupUser(email: String, db: Db) -> Result<UserId, LookupError> { ... }
+```
+
+`uses = "fakeDb"` 는 같은 파일 / 같은 패키지의 `#[fixture(name =
+"fakeDb")]` 를 참조. fixture 는 zero-arity 이므로 매 example 호출마다
+새로 생성 — hermetic 보장.
+
+### 11.12 `#[golden]` annotation tests
+
+`#[golden(path, mode)]` (G45, §11.5.2) 는 함수 출력을 디스크 snapshot
+파일과 비교. `osty test --golden` / `osty test --update-golden` 으로
+실행/갱신.
+
+#### 11.12.1 Compiler / formatter / docgen 자가 테스트
+
+```osty
+#[golden("fixtures/format_expr.snap")]
+fn testFormatBinaryOp() {
+    let result = formatExpr(parseExpr("1 + 2 * 3"))
+    testing.assertGolden(result)
+}
+
+#[golden("fixtures/diag_E0765.snap", mode = "ast")]
+fn testNumericNarrowingDiag() {
+    let diag = checkSnippet("let x: Int8 = bigInt")
+    testing.assertGolden(diag.toString())
+}
+```
+
+#### 11.12.2 Mode 별 비교 의미
+
+| Mode | 비교 |
+|---|---|
+| `"text"` (default) | byte-exact |
+| `"ast"` | reparse 후 AST 비교 (whitespace / 주석 무시) |
+| `"json"` | structural JSON 비교 (key 순서 무시) |
+| `"diag"` | Osty diagnostic format — Span 차이 무시, code/message 비교 |
+
+#### 11.12.3 Reproducibility 요구
+
+`#[golden]` 함수는 *암묵적으로* `#[reproducible(scope = "target")]` —
+non-deterministic capability 수신 시 `E0444`. 시간/난수/환경에
+의존하는 출력을 snapshot 화하면 `osty test --golden` 이 매 실행마다
+실패하므로 의도적 거부.
+
+```osty
+#[golden("fixtures/timestamp.snap")]
+fn testTimestamp(clock: Clock) {  // ERROR E0444
+    testing.assertGolden(clock.now().toString())
+}
+```
+
+#### 11.12.4 Snapshot 파일 형식
+
+```
+# osty-golden-v1
+# function: TestFormatBinaryOp
+# mode: ast
+# fixture: sampleBinaryExpr
+# generated: 2026-05-07T12:34:56Z
+# source-hash: abc123...
+
+fn add(x: Int, y: Int) -> Int { x + y }
+```
+
+헤더 (`#` 시작) 는 메타데이터; 본문은 빈 줄 다음. `source-hash` 는
+함수 정의 의 해시 — 함수 변경 시 stale snapshot 알림 (`W0444`).
+
+#### 11.12.5 Update workflow
+
+```sh
+# 신규 snapshot 만 생성 (기존 변경 안 함)
+osty test --update-golden=missing
+
+# 모든 snapshot 갱신
+osty test --update-golden
+
+# 특정 함수만
+osty test --update-golden --filter=TestFormatBinaryOp
+
+# Diff 만 보고 적용 안 함 (CI dry-run)
+osty test --golden --report=diff
+```
+
+### 11.13 `#[fixture]` 공유 canonical instance
+
+`#[fixture(name = "...")]` (G42, §3.12) 는 zero-arity 함수가 *재사용
+가능한* canonical instance 를 반환함을 표시. 사용처:
+
+1. `#[example(uses = "name")]` 의 입력
+2. `osty doc` 의 코드 예시
+3. `osty context <symbol>` JSON 의 fixtures_referenced 항목
+4. property test seed (v1 spec block)
+5. `#[golden]` 함수의 입력 (수동 호출 패턴)
+
+#### 11.13.1 Zero-arity 제약
+
+`#[fixture]` 함수는 인자를 받지 않는다 (`E0432`). 매 호출마다 *새
+instance* 가 생성 — 테스트 간 hermetic 보장.
+
+```osty
+#[fixture(name = "sampleUser")]
+fn sampleUser() -> User {
+    User.builder()
+        .email("alice@example.com")
+        .age(30)
+        .build()
+}
+
+#[fixture(name = "sampleDb")]
+fn sampleDb() -> Db {
+    let db = std.capability.testing.FakeDb()
+    db.seed(sampleUser())  // 다른 fixture 호출 가능
+    db
+}
+```
+
+#### 11.13.2 Cross-fixture 호출
+
+fixture 함수는 *서로 호출 가능* — 위 `sampleDb` 가 `sampleUser` 를
+호출. fixture 간 cycle 은 `E0433` (cycle detected — fixture 로직
+재구성 필요).
+
+#### 11.13.3 Fixture 와 capability fake 결합
+
+```osty
+#[fixture(name = "appCaps")]
+fn appCaps() -> AppCaps {
+    let f = std.testing.capabilityFakes()
+    AppCaps {
+        clock: f.fakeClock,
+        rng: f.fakeRng,
+        env: f.fakeEnv,
+        fs: f.fakeFs,
+    }
+}
+
+#[example(input = "/etc/app.toml", uses = "appCaps", output = "Ok(...)")]
+#[example(input = "/missing", uses = "appCaps", output = "Err(NotFound)")]
+pub fn loadConfig(path: String, caps: AppCaps) -> Result<Config, ConfigError> { ... }
+```
+
+### 11.14 Property-based testing (v1 outlook)
+
+v0.6 baseline 은 `spec { example: }` 만 자동 실행. **v1 (Phase 5)** 에서
+`forall x in gen: ...` 형식의 property test 자동 등록 추가:
+
+```osty
+fn quicksort<T: Ordered>(xs: List<T>) -> List<T> {
+    spec {
+        forall xs in gen.list(gen.int(), 128):
+            result.toMultiset() == xs.toMultiset()
+
+        forall xs in gen.list(gen.int(), 128):
+            result.windowed(2).all(|w| w[0].le(w[1]))
+
+        example: quicksort([]) == []
+        example: quicksort([3, 1, 2]) == [1, 2, 3]
+    }
+    // ...impl
+}
+```
+
+`forall x in gen.list(gen.int(), 128)` 는 `gen.list(elemGen,
+maxLen)` 으로 `List<Int>` (길이 0..=128) 시퀀스 생성. v1 의 spec
+block runner 가 default 100 iterations 수행 + shrinking on failure.
+
+자세한 generator API 는 §10.5 (std.testing.gen) 참조.
+
+### 11.15 Test 모드 통합
+
+```sh
+# 기본 — #[test] / test_* / bench_* / spec block example / #[example]
+osty test
+
+# spec block example 만
+osty test --spec
+
+# #[example] 만 (faster than --spec since no spec block discovery)
+osty test --example
+
+# golden snapshot 비교
+osty test --golden
+
+# golden snapshot 갱신
+osty test --update-golden
+
+# doc 블록 (`///`) 안의 doctest
+osty test --doc
+
+# 모든 모드 동시
+osty test --spec --example --golden --doc
+```
+
+`--filter=name` 으로 패턴 매칭, `--serial` 로 병렬 비활성화,
+`--seed=N` 으로 test order 의 randomization seed 고정 (§11.7).
+
+### 11.16 CI / test runner integration
+
+```yaml
+# .github/workflows/test.yml
+- name: Test
+  run: osty test --report=junit > test-results.xml
+
+- name: Spec block tests
+  run: osty test --spec --strict --report=json
+
+- name: Golden snapshot
+  run: osty test --golden --report=diff
+  # PR 가 의도적 snapshot 갱신을 포함하면 osty test --update-golden 후 commit
+```
+
+`osty bench --budget` 은 §3.15.2 의 runtime budget 검증을 추가
+(`time_ms` / `p99_ms` 회귀 시 fail).
+
+### 11.17 Forward compatibility
+
+테스트 surface 의 SemVer 영향:
+
+| 변경 | 영향 |
+|---|---|
+| `#[example]` / `#[golden]` / `#[fixture]` 추가 | additive (테스트만 영향) |
+| `std.testing` API 추가 | additive |
+| `std.capability.testing.Fake*` 메서드 추가 | additive |
+| Existing fake 의 메서드 시그니처 변경 | breaking |
+| `osty test --<mode>` flag 제거 | breaking |
+| Spec block clause syntax 변경 (`example:` / `law:`) | breaking |
+
+`#[stability("stable")]` API 가 테스트 surface (e.g., custom Fake
+impl) 를 노출하면 `osty publish` 의 SemVer 룰 적용.
