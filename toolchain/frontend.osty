@@ -899,6 +899,64 @@ pub fn frontendLexStream(source: String) -> FrontLexStream {
                 pendingDocLines = 0
                 insertTerm = frontKindInsertsTerm(scan.kind)
                 skip = scan.consumed - 1
+            } else if unit == "b" && next == "\"" {
+                let scan = frontStringLikeScan(units, idx, unitCount, FrontByte)
+                let leadingDocLines = frontAttachedDocLines(
+                    pendingDocLines,
+                    docLastLine,
+                    start.line,
+                )
+                atFileStart = false
+                let ownerToken = tokenIndex
+                tokens.push(
+                    frontLexTokenFromScan(
+                        units,
+                        idx,
+                        scan.consumed,
+                        scan.kind,
+                        leadingDocLines,
+                        scan.triple,
+                        scan.interpolations,
+                        false,
+                    ),
+                )
+                tokenIndex = tokenIndex + 1
+                let facts = frontStringStructureScan(
+                    units,
+                    idx,
+                    unitCount,
+                    scan.kind,
+                    ownerToken,
+                    stringPartIndex,
+                    interpolationTokenIndex,
+                    scan,
+                )
+                for part in facts.parts {
+                    stringParts.push(part)
+                }
+                for interp in facts.interpolationTokens {
+                    interpolationTokens.push(interp)
+                }
+                for diag in facts.diagnostics {
+                    diagnostics.push(diag)
+                }
+                stringPartIndex = stringPartIndex + facts.partCount
+                interpolationTokenIndex = interpolationTokenIndex + facts.interpolationTokenCount
+                normalizedTripleUnits = normalizedTripleUnits + facts.normalizedTripleUnits
+                tripleIndentErrors = tripleIndentErrors + facts.tripleIndentErrors
+                escapeErrors = escapeErrors + facts.escapeErrors
+                if scan.errors > 0 {
+                    diagnostics.push(
+                        frontLexDiagnostic(
+                            frontStringDiagnosticCode(units, idx, unitCount, FrontByte, scan),
+                            start,
+                            frontPositionAt(units, idx + scan.consumed),
+                        ),
+                    )
+                }
+                pendingDocLines = 0
+                insertTerm = frontKindInsertsTerm(scan.kind)
+                skip = scan.consumed - 1
             } else if unit == "\"" {
                 let scan = frontStringLikeScan(units, idx, unitCount, FrontString)
                 let leadingDocLines = frontAttachedDocLines(

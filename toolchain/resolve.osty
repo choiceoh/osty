@@ -2991,6 +2991,29 @@ fn srCheckCfgArg(
     argIdx: Int,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
+    let arg = srAstNode(file, argIdx)
+    if arg.kind == AstNCall && arg.left >= 0 {
+        let callee = srAstNode(file, arg.left)
+        if callee.kind == AstNIdent && (callee.text == "all" || callee.text == "any" || callee.text == "not") {
+            let mut out = result
+            if callee.text == "not" && arg.children.length != 1 {
+                out.diagnostics.push(selfResolveDiagnosticHintAtNode(
+                    "E0739",
+                    "`not(...)` requires exactly one argument",
+                    "cfg",
+                    arg.start,
+                    arg.end,
+                    -1,
+                    "v0.5 §5 / G29: `not` takes exactly one cfg predicate",
+                ))
+                return out
+            }
+            for childIdx in arg.children {
+                out = srCheckCfgArg(file, childIdx, out)
+            }
+            return out
+        }
+    }
     let view = srAnnotArgView(file, argIdx)
     let mut out = result
     if view.isFlag || view.key == "" || view.valueIdx < 0 || !srIsStringLitAtIdx(file, view.valueIdx) {
@@ -3049,12 +3072,44 @@ fn srCfgAnnotationPasses(file: AstFile, ann: AstNode, cfg: SelfResolveCfgEnv) ->
         return false
     }
     for argIdx in ann.children {
-        let view = srAnnotArgView(file, argIdx)
-        if !srCfgArgPasses(file, view, cfg) {
+        if !srCfgArgIdxPasses(file, argIdx, cfg) {
             return false
         }
     }
     true
+}
+
+fn srCfgArgIdxPasses(file: AstFile, argIdx: Int, cfg: SelfResolveCfgEnv) -> Bool {
+    let arg = srAstNode(file, argIdx)
+    if arg.kind == AstNCall && arg.left >= 0 {
+        let callee = srAstNode(file, arg.left)
+        if callee.kind == AstNIdent {
+            if callee.text == "all" {
+                for childIdx in arg.children {
+                    if !srCfgArgIdxPasses(file, childIdx, cfg) {
+                        return false
+                    }
+                }
+                return true
+            }
+            if callee.text == "any" {
+                for childIdx in arg.children {
+                    if srCfgArgIdxPasses(file, childIdx, cfg) {
+                        return true
+                    }
+                }
+                return false
+            }
+            if callee.text == "not" {
+                if arg.children.length == 1 {
+                    return !srCfgArgIdxPasses(file, arg.children[0], cfg)
+                }
+                return false
+            }
+        }
+    }
+    let view = srAnnotArgView(file, argIdx)
+    return srCfgArgPasses(file, view, cfg)
 }
 
 fn srCfgArgPasses(file: AstFile, view: SrAnnotArgView, cfg: SelfResolveCfgEnv) -> Bool {
