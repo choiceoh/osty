@@ -173,8 +173,13 @@ func resultMapErr[T any, E any, F any](r Result[T, E], f func(E) F) Result[T, F]
 // ostyTagTypeCache caches the result of ostyIsTagType per reflect.Type.
 // Tag-discriminant types (single `_ref byte` field) are the bulk of the
 // ostyEqual call shape `ostyEqual(value, KindType(&KindType_Variant{}))`,
-// and the lookup is hit ~25M times on big self-host inputs.
-var ostyTagTypeCache sync.Map // reflect.Type -> bool
+// and the lookup is hit ~25M times on big self-host inputs. RWMutex+map
+// beats sync.Map here — sync.Map's interface-hash path (runtime.nilinterhash)
+// dominated the cache time on profile.
+var (
+	ostyTagTypeMu    sync.RWMutex
+	ostyTagTypeCache = map[reflect.Type]bool{}
+)
 
 // ostyIsTagType reports whether t is a pointer to a single-field
 // `_ref byte` tag struct. The selfhost code generator emits these for
@@ -184,14 +189,19 @@ func ostyIsTagType(t reflect.Type) bool {
 	if t == nil || t.Kind() != reflect.Pointer {
 		return false
 	}
-	if v, ok := ostyTagTypeCache.Load(t); ok {
-		return v.(bool)
+	ostyTagTypeMu.RLock()
+	v, ok := ostyTagTypeCache[t]
+	ostyTagTypeMu.RUnlock()
+	if ok {
+		return v
 	}
 	elem := t.Elem()
 	isTag := elem.Kind() == reflect.Struct &&
 		elem.NumField() == 1 &&
 		elem.Field(0).Name == "_ref"
-	ostyTagTypeCache.Store(t, isTag)
+	ostyTagTypeMu.Lock()
+	ostyTagTypeCache[t] = isTag
+	ostyTagTypeMu.Unlock()
 	return isTag
 }
 
@@ -17493,7 +17503,14 @@ func ostyLexFactsFromStream(source string, stream *FrontLexStream) *OstyLexFacts
 		tok := frontLexTokenAt(stream, ti)
 		_ = tok
 		// Osty: /tmp/selfhost_merged.osty:6398:9
-		if ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontString{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontRawString{})) || ostyEqual(tok.kind, FrontTokenKind(&FrontTokenKind_FrontByteString{})) {
+		// Hand-tuned: type switch in place of three reflect-driven
+		// ostyEqual calls per token. Runs on every token in the file.
+		_isStringTok := false
+		switch tok.kind.(type) {
+		case *FrontTokenKind_FrontString, *FrontTokenKind_FrontRawString, *FrontTokenKind_FrontByteString:
+			_isStringTok = true
+		}
+		if _isStringTok {
 			// Osty: /tmp/selfhost_merged.osty:6399:13
 			before := ostyLexStringPartCount(stringParts)
 			_ = before
@@ -18473,7 +18490,12 @@ func ostyJoinDocLines(units []string, stream *FrontLexStream, tok *FrontLexToken
 		c := frontCommentAt(stream, ci)
 		_ = c
 		// Osty: /tmp/selfhost_merged.osty:6762:9
-		if ostyEqual(c.kind, FrontCommentKind(&FrontCommentKind_FrontCommentDoc{})) && c.end.line <= tok.start.line && c.end.line >= func() int {
+		// Hand-tuned: cheap line-bound checks first; then a direct type
+		// assertion in place of `ostyEqual(c.kind, &FrontCommentKind_FrontCommentDoc{})`.
+		// On large self-host inputs the original ordering reflect-walked
+		// every comment in the file per token-with-doc, dominating CPU.
+		_, _isDoc := c.kind.(*FrontCommentKind_FrontCommentDoc)
+		if _isDoc && c.end.line <= tok.start.line && c.end.line >= func() int {
 			var _p1735 int = tok.start.line
 			var _rhs1736 int = docLines
 			if _rhs1736 < 0 && _p1735 > math.MaxInt+_rhs1736 {
