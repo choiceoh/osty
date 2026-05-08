@@ -80,8 +80,8 @@ factory 는 현재 `time.systemClock()`, `random.host()`, `env.host()`, `fs.host
 테스트용 deterministic fake set 은 `std.capability.testing` 의 `FakeClock`,
 `FakeRng`, `FakeEnv`, `FakeFs`, `FakeNet`, `FakeProcess`, `FakeConsole` 로 제공한다.
 Ambient desugar / `--legacy-globals` warning 은 별도 compiler phase 에서 닫는다.
-현재 구현은 `#[ambient]` 의 entry-point 위치 제한과 canonical name 검증을
-active checker gate 로 고정한다 (`E0780` / `E0781`). `#[reproducible]` /
+현재 구현은 `#[ambient]` 의 entry-point 위치 제한, canonical name 검증, user-defined
+capability ambient 금지를 active checker gate 로 고정한다 (`E0780` / `E0781` / `E0789`). `#[reproducible]` /
 `#[pure]` 의 direct capability parameter 제한도 signature gate 로 고정한다
 (`E0784` / `E0785`). 실제 ambient auto-forward/desugar 와 transitive
 reproducibility analysis 는 후속 단계이다.

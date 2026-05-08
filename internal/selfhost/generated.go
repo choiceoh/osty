@@ -28595,6 +28595,10 @@ func checkCodePureViaCapability() string {
 	return "E0785"
 }
 
+func checkCodeAmbientUserCapability() string {
+	return "E0789"
+}
+
 func diagAmbientWrongSite(fnName string, start int, end int) *CheckDiagnostic {
 	return checkDiagWithNotes(
 		checkCodeAmbientWrongSite(),
@@ -28617,6 +28621,19 @@ func diagAmbientUnknownCapability(name string, start int, end int) *CheckDiagnos
 		[]string{
 			"LANG_SPEC §20.6: canonical ambient names are `clock`, `rng`, `env`, `fs`, `net`, `process`, `console`",
 			"hint: pass user-defined capabilities as explicit parameters — ambient binding only supports stdlib prelude defaults",
+		},
+	)
+}
+
+func diagAmbientUserCapability(name string, start int, end int) *CheckDiagnostic {
+	return checkDiagWithNotes(
+		checkCodeAmbientUserCapability(),
+		fmt.Sprintf("`#[ambient(%s)]` references a user-defined capability", ostyToString(name)),
+		start,
+		end,
+		[]string{
+			"LANG_SPEC §20.3: ambient binding only supports stdlib prelude default capabilities",
+			"hint: pass user-defined capabilities as explicit parameters",
 		},
 	)
 }
@@ -70195,6 +70212,7 @@ func runAmbientGate(cx *ElabCx) {
 		return
 	}
 	arena := cx.ast.arena
+	userCapabilities := collectReproducibleCapabilityNames(arena)
 	for _, declIdx := range arena.decls {
 		node := astArenaNodeAt(arena, declIdx)
 		if node == nil {
@@ -70202,18 +70220,18 @@ func runAmbientGate(cx *ElabCx) {
 		}
 		switch node.kind.(type) {
 		case *AstNodeKind_AstNFnDecl:
-			checkAmbientFn(cx, arena, node)
+			checkAmbientFn(cx, arena, node, userCapabilities)
 		case *AstNodeKind_AstNStructDecl, *AstNodeKind_AstNEnumDecl:
-			checkAmbientNonFnDecl(cx, arena, node)
-			checkAmbientMethods(cx, arena, node)
+			checkAmbientNonFnDecl(cx, arena, node, userCapabilities)
+			checkAmbientMethods(cx, arena, node, userCapabilities)
 		case *AstNodeKind_AstNInterfaceDecl, *AstNodeKind_AstNTypeAlias, *AstNodeKind_AstNLet, *AstNodeKind_AstNLetDecl:
-			checkAmbientNonFnDecl(cx, arena, node)
+			checkAmbientNonFnDecl(cx, arena, node, userCapabilities)
 		}
 	}
 }
 
 // Osty: toolchain/check_gates.osty:1484:1
-func checkAmbientNonFnDecl(cx *ElabCx, arena *AstArena, node *AstNode) {
+func checkAmbientNonFnDecl(cx *ElabCx, arena *AstArena, node *AstNode, userCapabilities []string) {
 	if node == nil || node.extra < 0 {
 		return
 	}
@@ -70221,7 +70239,7 @@ func checkAmbientNonFnDecl(cx *ElabCx, arena *AstArena, node *AstNode) {
 		return
 	}
 	cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagAmbientWrongSite(ambientDeclName(node), node.start, node.end))
-	checkAmbientArgs(cx, arena, node.extra)
+	checkAmbientArgs(cx, arena, node.extra, userCapabilities)
 }
 
 // Osty: toolchain/check_gates.osty:1497:1
@@ -70236,7 +70254,7 @@ func ambientDeclName(node *AstNode) string {
 }
 
 // Osty: toolchain/check_gates.osty:1504:1
-func checkAmbientMethods(cx *ElabCx, arena *AstArena, parent *AstNode) {
+func checkAmbientMethods(cx *ElabCx, arena *AstArena, parent *AstNode, userCapabilities []string) {
 	if parent == nil {
 		return
 	}
@@ -70246,13 +70264,13 @@ func checkAmbientMethods(cx *ElabCx, arena *AstArena, parent *AstNode) {
 			continue
 		}
 		if _, ok := m.kind.(*AstNodeKind_AstNFnDecl); ok {
-			checkAmbientFn(cx, arena, m)
+			checkAmbientFn(cx, arena, m, userCapabilities)
 		}
 	}
 }
 
 // Osty: toolchain/check_gates.osty:1513:1
-func checkAmbientFn(cx *ElabCx, arena *AstArena, fn_ *AstNode) {
+func checkAmbientFn(cx *ElabCx, arena *AstArena, fn_ *AstNode, userCapabilities []string) {
 	if fn_ == nil || fn_.extra < 0 {
 		return
 	}
@@ -70263,7 +70281,7 @@ func checkAmbientFn(cx *ElabCx, arena *AstArena, fn_ *AstNode) {
 	if !isAmbientEntryPoint(arena, fn_.extra, name) {
 		cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagAmbientWrongSite(name, fn_.start, fn_.end))
 	}
-	checkAmbientArgs(cx, arena, fn_.extra)
+	checkAmbientArgs(cx, arena, fn_.extra, userCapabilities)
 }
 
 // Osty: toolchain/check_gates.osty:1527:1
@@ -70284,7 +70302,7 @@ func isAmbientEntryPoint(arena *AstArena, annotIdx int, fnName string) bool {
 }
 
 // Osty: toolchain/check_gates.osty:1546:1
-func checkAmbientArgs(cx *ElabCx, arena *AstArena, annotIdx int) {
+func checkAmbientArgs(cx *ElabCx, arena *AstArena, annotIdx int, userCapabilities []string) {
 	if annotIdx < 0 {
 		return
 	}
@@ -70296,7 +70314,7 @@ func checkAmbientArgs(cx *ElabCx, arena *AstArena, annotIdx int) {
 		return
 	}
 	if node.text == "ambient" {
-		validateAmbientArgs(cx, arena, node)
+		validateAmbientArgs(cx, arena, node, userCapabilities)
 		return
 	}
 	if node.text == "__group" {
@@ -70306,14 +70324,14 @@ func checkAmbientArgs(cx *ElabCx, arena *AstArena, annotIdx int) {
 				continue
 			}
 			if _, ok := child.kind.(*AstNodeKind_AstNAnnotation); ok && child.text == "ambient" {
-				validateAmbientArgs(cx, arena, child)
+				validateAmbientArgs(cx, arena, child, userCapabilities)
 			}
 		}
 	}
 }
 
 // Osty: toolchain/check_gates.osty:1567:1
-func validateAmbientArgs(cx *ElabCx, arena *AstArena, ambient *AstNode) {
+func validateAmbientArgs(cx *ElabCx, arena *AstArena, ambient *AstNode, userCapabilities []string) {
 	if ambient == nil {
 		return
 	}
@@ -70327,7 +70345,11 @@ func validateAmbientArgs(cx *ElabCx, arena *AstArena, ambient *AstNode) {
 			continue
 		}
 		if !isCanonicalAmbientName(argName) {
-			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagAmbientUnknownCapability(argName, arg.start, arg.end))
+			if isUserAmbientCapabilityName(argName, userCapabilities) {
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagAmbientUserCapability(argName, arg.start, arg.end))
+			} else {
+				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagAmbientUnknownCapability(argName, arg.start, arg.end))
+			}
 		}
 	}
 }
@@ -70340,6 +70362,16 @@ func isCanonicalAmbientName(name string) bool {
 	default:
 		return false
 	}
+}
+
+func isUserAmbientCapabilityName(name string, userCapabilities []string) bool {
+	lowerName := strings.ToLower(name)
+	for _, capabilityName := range userCapabilities {
+		if name == capabilityName || lowerName == strings.ToLower(capabilityName) {
+			return true
+		}
+	}
+	return false
 }
 
 func runReproducibleCapabilityGate(cx *ElabCx) {

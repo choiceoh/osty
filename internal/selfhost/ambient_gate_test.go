@@ -24,7 +24,7 @@ fn deterministic_console() {}
 `)
 	checked := CheckSourceStructured(src)
 	for _, d := range checked.Diagnostics {
-		if d.Code == "E0780" || d.Code == "E0781" {
+		if d.Code == "E0780" || d.Code == "E0781" || d.Code == "E0789" {
 			t.Fatalf("entry-point ambient should not emit %s: %#v", d.Code, checked.Diagnostics)
 		}
 	}
@@ -54,6 +54,9 @@ type BadAlias = Int
 	if got := countAmbientCode(checked, "E0781"); got != 0 {
 		t.Fatalf("E0781 count = %d, want 0; diagnostics=%#v", got, checked.Diagnostics)
 	}
+	if got := countAmbientCode(checked, "E0789"); got != 0 {
+		t.Fatalf("E0789 count = %d, want 0; diagnostics=%#v", got, checked.Diagnostics)
+	}
 }
 
 func TestAmbientGateRejectsUnknownCanonicalName(t *testing.T) {
@@ -63,6 +66,31 @@ fn main() {}
 	checked := CheckSourceStructured(src)
 	if got := countAmbientCode(checked, "E0781"); got != 1 {
 		t.Fatalf("E0781 count = %d, want 1; diagnostics=%#v", got, checked.Diagnostics)
+	}
+	if got := countAmbientCode(checked, "E0780"); got != 0 {
+		t.Fatalf("E0780 count = %d, want 0; diagnostics=%#v", got, checked.Diagnostics)
+	}
+	if got := countAmbientCode(checked, "E0789"); got != 0 {
+		t.Fatalf("E0789 count = %d, want 0; diagnostics=%#v", got, checked.Diagnostics)
+	}
+}
+
+func TestAmbientGateRejectsUserDefinedCapability(t *testing.T) {
+	src := []byte(`#[reproducible_capability]
+interface LocalEntropy {
+    #[reproducible]
+    fn next(self) -> Int
+}
+
+#[ambient(localentropy)]
+fn main() {}
+`)
+	checked := CheckSourceStructured(src)
+	if got := countAmbientCode(checked, "E0789"); got != 1 {
+		t.Fatalf("E0789 count = %d, want 1; diagnostics=%#v", got, checked.Diagnostics)
+	}
+	if got := countAmbientCode(checked, "E0781"); got != 0 {
+		t.Fatalf("E0781 count = %d, want 0; diagnostics=%#v", got, checked.Diagnostics)
 	}
 	if got := countAmbientCode(checked, "E0780"); got != 0 {
 		t.Fatalf("E0780 count = %d, want 0; diagnostics=%#v", got, checked.Diagnostics)

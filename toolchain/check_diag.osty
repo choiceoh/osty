@@ -778,6 +778,22 @@ pub fn diagAmbientUnknownCapability(name: String, start: Int, end: Int) -> Check
     )
 }
 
+/// diagAmbientUserCapability reports `#[ambient(name)]` referencing a
+/// user-defined capability. Ambient binding intentionally remains limited to
+/// stdlib prelude defaults; user capabilities must be threaded explicitly.
+pub fn diagAmbientUserCapability(name: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeAmbientUserCapability(),
+        "`#[ambient({name})]` references a user-defined capability",
+        start,
+        end,
+        [
+            "LANG_SPEC §20.3: ambient binding only supports stdlib prelude default capabilities",
+            "hint: pass user-defined capabilities as explicit parameters",
+        ],
+    )
+}
+
 /// diagReproducibleCapabilityNonRepro reports a method inside a
 /// `#[reproducible_capability]` interface that is not itself marked
 /// `#[reproducible]`.
