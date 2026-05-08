@@ -432,6 +432,9 @@ fn ostyDefaultStringPart(units: List<String>, tok: FrontLexToken, owner: Int) ->
 }
 
 fn ostyPublicTokenText(tok: FrontLexToken, raw: String) -> String {
+    if tok.kind == FrontByte && strings.hasPrefix(raw, "b\"") {
+        return "b\"" + ostyDecodeByteStringLiteralValue(raw) + "\""
+    }
     if tok.kind == FrontChar {
         return ostyDecodeCharLiteralValue(raw)
     }
@@ -642,6 +645,17 @@ fn ostyDecodeByteLiteralValue(text: String) -> String {
     value.toChar().toString()
 }
 
+fn ostyDecodeByteStringLiteralValue(text: String) -> String {
+    if !strings.hasPrefix(text, "b\"") {
+        return text
+    }
+    let mut body = ostyDropPrefixUnits(text, 2)
+    if strings.hasSuffix(body, "\"") {
+        body = ostyDropSuffixUnits(body, 1)
+    }
+    ostyDecodeEscapes(body)
+}
+
 fn ostyCharLiteralBody(text: String) -> String {
     let mut body = text
     if strings.hasPrefix(body, "b") {
@@ -650,7 +664,13 @@ fn ostyCharLiteralBody(text: String) -> String {
     if strings.hasPrefix(body, "'") {
         body = ostyDropPrefixUnits(body, 1)
     }
+    if strings.hasPrefix(body, "\"") {
+        body = ostyDropPrefixUnits(body, 1)
+    }
     if strings.hasSuffix(body, "'") {
+        body = ostyDropSuffixUnits(body, 1)
+    }
+    if strings.hasSuffix(body, "\"") {
         body = ostyDropSuffixUnits(body, 1)
     }
     body

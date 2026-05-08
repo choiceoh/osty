@@ -2839,6 +2839,44 @@ func frontendLexStream(source string) *FrontLexStream {
 					}
 					skip = _cur98 - _rhs99
 				}()
+			} else if unit == "b" && next == "\"" {
+				scan := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontByteString{}))
+				_ = scan
+				leadingDocLinesBs := frontAttachedDocLines(pendingDocLines, docLastLine, start.line)
+				_ = leadingDocLinesBs
+				atFileStart = false
+				ownerTokenBs := tokenIndex
+				_ = ownerTokenBs
+				func() struct{} {
+					tokens = append(tokens, frontLexTokenFromScan(units, idx, scan.consumed, scan.kind, leadingDocLinesBs, scan.triple, scan.interpolations, false))
+					return struct{}{}
+				}()
+				tokenIndex = tokenIndex + 1
+				factsBs := frontStringStructureScan(units, idx, unitCount, scan.kind, ownerTokenBs, stringPartIndex, interpolationTokenIndex, scan)
+				_ = factsBs
+				for _, part := range factsBs.parts {
+					func() struct{} { stringParts = append(stringParts, part); return struct{}{} }()
+				}
+				for _, interp := range factsBs.interpolationTokens {
+					func() struct{} { interpolationTokens = append(interpolationTokens, interp); return struct{}{} }()
+				}
+				for _, diag := range factsBs.diagnostics {
+					func() struct{} { diagnostics = append(diagnostics, diag); return struct{}{} }()
+				}
+				stringPartIndex = stringPartIndex + factsBs.partCount
+				interpolationTokenIndex = interpolationTokenIndex + factsBs.interpolationTokenCount
+				normalizedTripleUnits = normalizedTripleUnits + factsBs.normalizedTripleUnits
+				tripleIndentErrors = tripleIndentErrors + factsBs.tripleIndentErrors
+				escapeErrors = escapeErrors + factsBs.escapeErrors
+				if scan.errors > 0 {
+					func() struct{} {
+						diagnostics = append(diagnostics, frontLexDiagnostic(frontStringDiagnosticCode(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontByteString{}), scan), start, frontPositionAt(units, idx+scan.consumed)))
+						return struct{}{}
+					}()
+				}
+				pendingDocLines = 0
+				insertTerm = frontKindInsertsTerm(scan.kind)
+				skip = scan.consumed - 1
 			} else if unit == "\"" {
 				// Osty: /tmp/selfhost_merged.osty:1303:17
 				scan := frontStringLikeScan(units, idx, unitCount, FrontTokenKind(&FrontTokenKind_FrontString{}))
@@ -6534,7 +6572,7 @@ func frontStringLikeScan(units []string, start int, unitCount int, kind FrontTok
 			if _rhs495 > 0 && _cur494 > math.MaxInt-_rhs495 {
 				panic("integer overflow")
 			}
-			if _rhs495 < 0 && _cur494 < math.MinInt-_rhs495 {
+			if _rhs495 < 0 && _cur494 < math.MinInt+_rhs495 {
 				panic("integer overflow")
 			}
 			contentStart = _cur494 + _rhs495
@@ -6542,21 +6580,18 @@ func frontStringLikeScan(units []string, start int, unitCount int, kind FrontTok
 		// Osty: /tmp/selfhost_merged.osty:2692:9
 		close = "'"
 	} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontByteString{})) {
-		// Osty: /tmp/selfhost_merged.osty:2690:9
 		consumed = 2
-		// Osty: /tmp/selfhost_merged.osty:2691:9
 		func() {
 			var _cur494b int = start
 			var _rhs495b int = 2
 			if _rhs495b > 0 && _cur494b > math.MaxInt-_rhs495b {
 				panic("integer overflow")
 			}
-			if _rhs495b < 0 && _cur494b < math.MinInt-_rhs495b {
+			if _rhs495b < 0 && _cur494b < math.MinInt+_rhs495b {
 				panic("integer overflow")
 			}
 			contentStart = _cur494b + _rhs495b
 		}()
-		// Osty: /tmp/selfhost_merged.osty:2692:9
 		close = "\""
 	} else if ostyEqual(kind, FrontTokenKind(&FrontTokenKind_FrontChar{})) {
 		// Osty: /tmp/selfhost_merged.osty:2694:9
@@ -23175,6 +23210,33 @@ func opParseAnnotationArg(p *OstyParser) int {
 		n.end = p.pos
 		// Osty: /tmp/selfhost_merged.osty:8828:9
 		return opAddNode(p, n)
+	}
+	// cfg composition: all(...), any(...), not(...)
+	if key != "" && (key == "all" || key == "any" || key == "not") && ostyEqual(opPeekAt(p, 1).kind, FrontTokenKind(&FrontTokenKind_FrontLParen{})) {
+		_ = opAdvance(p)
+		_ = opAdvance(p)
+		var compChildren []int = make([]int, 0, 1)
+		_ = compChildren
+		opSkipNewlines(p)
+		for !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))) && !(opAt(p, FrontTokenKind(&FrontTokenKind_FrontEOF{}))) {
+			func() struct{} { compChildren = append(compChildren, opParseAnnotationArg(p)); return struct{}{} }()
+			opSkipNewlines(p)
+			if !(opEat(p, FrontTokenKind(&FrontTokenKind_FrontComma{}))) {
+				break
+			}
+			opSkipNewlines(p)
+		}
+		_ = opExpect(p, FrontTokenKind(&FrontTokenKind_FrontRParen{}))
+		calleeNode := emptyAstNode(AstNodeKind(&AstNodeKind_AstNIdent{}))
+		calleeNode.text = key
+		calleeNode.start = start
+		calleeNode.end = start + len(key)
+		cn := emptyAstNode(AstNodeKind(&AstNodeKind_AstNCall{}))
+		cn.left = opAddNode(p, calleeNode)
+		cn.children = compChildren
+		cn.start = start
+		cn.end = p.pos
+		return opAddNode(p, cn)
 	}
 	return opParseExpr(p)
 }
@@ -55525,6 +55587,23 @@ func srCheckCfgArgs(file *AstFile, ann *AstNode, result *SelfResolveResult) *Sel
 // Osty: /tmp/selfhost_merged.osty:28510:1
 func srCheckCfgArg(file *AstFile, argIdx int, result *SelfResolveResult) *SelfResolveResult {
 	// Osty: /tmp/selfhost_merged.osty:28515:5
+	arg := srAstNode(file, argIdx)
+	_ = arg
+	// composition: all(...), any(...), not(...)
+	if ostyEqual(arg.kind, AstNodeKind(&AstNodeKind_AstNCall{})) && arg.left >= 0 {
+		callee := srAstNode(file, arg.left)
+		if ostyEqual(callee.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) && (callee.text == "all" || callee.text == "any" || callee.text == "not") {
+			out := result
+			if callee.text == "not" && len(arg.children) != 1 {
+				out.diagnostics = append(out.diagnostics, selfResolveDiagnosticHintAtNode("E0739", "`not(...)` requires exactly one argument", "cfg", arg.start, arg.end, -1, "v0.5 §5 / G29: `not` takes exactly one cfg predicate"))
+				return out
+			}
+			for _, childIdx := range arg.children {
+				out = srCheckCfgArg(file, childIdx, out)
+			}
+			return out
+		}
+	}
 	view := srAnnotArgView(file, argIdx)
 	_ = view
 	// Osty: /tmp/selfhost_merged.osty:28516:5
@@ -55593,16 +55672,46 @@ func srCfgAnnotationPasses(file *AstFile, ann *AstNode, cfg *SelfResolveCfgEnv) 
 	}
 	// Osty: /tmp/selfhost_merged.osty:28572:5
 	for _, argIdx := range ann.children {
-		// Osty: /tmp/selfhost_merged.osty:28573:9
-		view := srAnnotArgView(file, argIdx)
-		_ = view
 		// Osty: /tmp/selfhost_merged.osty:28574:9
-		if !srCfgArgPasses(file, view, cfg) {
+		if !srCfgArgIdxPasses(file, argIdx, cfg) {
 			// Osty: /tmp/selfhost_merged.osty:28575:13
 			return false
 		}
 	}
 	return true
+}
+
+func srCfgArgIdxPasses(file *AstFile, argIdx int, cfg *SelfResolveCfgEnv) bool {
+	arg := srAstNode(file, argIdx)
+	if ostyEqual(arg.kind, AstNodeKind(&AstNodeKind_AstNCall{})) && arg.left >= 0 {
+		callee := srAstNode(file, arg.left)
+		if ostyEqual(callee.kind, AstNodeKind(&AstNodeKind_AstNIdent{})) {
+			if callee.text == "all" {
+				for _, childIdx := range arg.children {
+					if !srCfgArgIdxPasses(file, childIdx, cfg) {
+						return false
+					}
+				}
+				return true
+			}
+			if callee.text == "any" {
+				for _, childIdx := range arg.children {
+					if srCfgArgIdxPasses(file, childIdx, cfg) {
+						return true
+					}
+				}
+				return false
+			}
+			if callee.text == "not" {
+				if len(arg.children) == 1 {
+					return !srCfgArgIdxPasses(file, arg.children[0], cfg)
+				}
+				return false
+			}
+		}
+	}
+	view := srAnnotArgView(file, argIdx)
+	return srCfgArgPasses(file, view, cfg)
 }
 
 // Osty: /tmp/selfhost_merged.osty:28581:1

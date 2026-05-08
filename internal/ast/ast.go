@@ -63,11 +63,13 @@ func (a *Annotation) End() token.Pos { return a.EndV }
 //
 //	IDENT                — flag form (Key set, Value nil)
 //	IDENT '=' Literal    — key/value form (Key set, Value is the literal)
+//	all/any/not '(' ... ')' — composition form (Compose set, Key is "all"/"any"/"not")
 type AnnotationArg struct {
-	ID    NodeID
-	PosV  token.Pos
-	Key   string
-	Value Expr // nil for flag form
+	ID      NodeID
+	PosV    token.Pos
+	Key     string
+	Value   Expr             // nil for flag form
+	Compose []*AnnotationArg // non-nil for all/any/not composition
 }
 
 func (a *AnnotationArg) Pos() token.Pos { return a.PosV }

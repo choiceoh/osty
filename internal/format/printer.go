@@ -486,10 +486,21 @@ func (p *printer) printAnnotation(a *ast.Annotation) {
 	p.write(a.Name)
 	if len(a.Args) > 0 {
 		printBracketedList(p, "(", ")", a.Args, spanMultiline(a.Args), func(arg *ast.AnnotationArg) {
-			p.write(arg.Key)
-			if arg.Value != nil {
-				p.write(" = ")
-				p.printExpr(arg.Value)
+			if len(arg.Compose) > 0 {
+				p.write(arg.Key)
+				printBracketedList(p, "(", ")", arg.Compose, false, func(child *ast.AnnotationArg) {
+					p.write(child.Key)
+					if child.Value != nil {
+						p.write(" = ")
+						p.printExpr(child.Value)
+					}
+				})
+			} else {
+				p.write(arg.Key)
+				if arg.Value != nil {
+					p.write(" = ")
+					p.printExpr(arg.Value)
+				}
 			}
 		})
 	}

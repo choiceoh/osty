@@ -28,6 +28,7 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/diag"
 	"github.com/osty/osty/internal/selfhost/api"
+	"github.com/osty/osty/internal/token"
 )
 
 // CfgEnv carries the values that `#[cfg(key = "value")]` predicates
@@ -157,8 +158,12 @@ func evaluateCfgAnnotation(a *ast.Annotation, env *CfgEnv) (bool, []*diag.Diagno
 	return pass, diags
 }
 
-// evaluateCfgArg handles one `key = "value"` pair.
+// evaluateCfgArg handles one `key = "value"` pair or a composition
+// form (`all`/`any`/`not`).
 func evaluateCfgArg(arg *ast.AnnotationArg, env *CfgEnv) (bool, []*diag.Diagnostic) {
+	if len(arg.Compose) > 0 {
+		return evaluateCfgCompose(arg.Key, arg.Compose, arg.PosV, env)
+	}
 	value, ok := stringArg(arg.Value)
 	if !ok {
 		return false, []*diag.Diagnostic{
@@ -186,6 +191,52 @@ func evaluateCfgArg(arg *ast.AnnotationArg, env *CfgEnv) (bool, []*diag.Diagnost
 				Code(diag.CodeCfgUnknownKey).
 				PrimaryPos(arg.PosV, "unrecognised cfg key").
 				Note("v0.5 §5 / G29 recognises only `os`, `target`, `arch`, `feature`").
+				Build(),
+		}
+	}
+}
+
+func evaluateCfgCompose(op string, children []*ast.AnnotationArg, pos token.Pos, env *CfgEnv) (bool, []*diag.Diagnostic) {
+	switch op {
+	case "all":
+		var diags []*diag.Diagnostic
+		for _, child := range children {
+			result, ds := evaluateCfgArg(child, env)
+			diags = append(diags, ds...)
+			if !result {
+				return false, diags
+			}
+		}
+		return true, diags
+	case "any":
+		var diags []*diag.Diagnostic
+		for _, child := range children {
+			result, ds := evaluateCfgArg(child, env)
+			diags = append(diags, ds...)
+			if result {
+				return true, diags
+			}
+		}
+		return false, diags
+	case "not":
+		if len(children) != 1 {
+			return false, []*diag.Diagnostic{
+				diag.New(diag.Error,
+					"`not(...)` requires exactly one argument").
+					Code(diag.CodeAnnotationBadArg).
+					PrimaryPos(pos, "not takes exactly one cfg predicate").
+					Build(),
+			}
+		}
+		result, ds := evaluateCfgArg(children[0], env)
+		return !result, ds
+	default:
+		return false, []*diag.Diagnostic{
+			diag.New(diag.Error,
+				"unknown cfg composition `"+op+"`").
+				Code(diag.CodeAnnotationBadArg).
+				PrimaryPos(pos, "unknown cfg composition").
+				Note("v0.5 §5 / G29: use `all`, `any`, or `not`").
 				Build(),
 		}
 	}

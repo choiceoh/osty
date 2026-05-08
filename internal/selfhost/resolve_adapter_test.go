@@ -613,6 +613,85 @@ fn bad() -> Int { 1 }
 	}
 }
 
+func TestResolveCfgCompositionAll(t *testing.T) {
+	src := []byte(`#[cfg(all(os = "linux", arch = "arm64"))]
+fn linuxArm64() -> Int { 1 }
+
+#[cfg(all(os = "linux", arch = "amd64"))]
+fn linuxAmd64() -> Int { 2 }
+
+fn alwaysHere() -> Int { 3 }
+`)
+	env := &selfhost.CfgEnv{OS: "linux", Arch: "arm64", Target: "linux"}
+	resolved := selfhost.ResolveSourceStructuredWithCfg(src, env)
+	if resolved.Summary.Diagnostics != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", resolved.Diagnostics)
+	}
+	if findResolvedSymbol(resolved, "linuxArm64", "fn") == nil {
+		t.Errorf("linuxArm64 should survive: all(os=linux, arch=arm64)")
+	}
+	if findResolvedSymbol(resolved, "linuxAmd64", "fn") != nil {
+		t.Errorf("linuxAmd64 should drop: all(os=linux, arch=amd64) fails arch=arm64")
+	}
+	if findResolvedSymbol(resolved, "alwaysHere", "fn") == nil {
+		t.Errorf("unannotated fn should survive")
+	}
+}
+
+func TestResolveCfgCompositionAny(t *testing.T) {
+	src := []byte(`#[cfg(any(os = "linux", os = "darwin"))]
+fn unixy() -> Int { 1 }
+
+#[cfg(any(os = "windows", os = "wasm"))]
+fn notLinux() -> Int { 2 }
+`)
+	env := &selfhost.CfgEnv{OS: "linux", Arch: "amd64", Target: "linux"}
+	resolved := selfhost.ResolveSourceStructuredWithCfg(src, env)
+	if resolved.Summary.Diagnostics != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", resolved.Diagnostics)
+	}
+	if findResolvedSymbol(resolved, "unixy", "fn") == nil {
+		t.Errorf("unixy should survive: any(os=linux, os=darwin) matches linux")
+	}
+	if findResolvedSymbol(resolved, "notLinux", "fn") != nil {
+		t.Errorf("notLinux should drop: any(windows, wasm) neither matches linux")
+	}
+}
+
+func TestResolveCfgCompositionNot(t *testing.T) {
+	src := []byte(`#[cfg(not(os = "windows"))]
+fn notWindows() -> Int { 1 }
+
+#[cfg(not(os = "linux"))]
+fn notLinux() -> Int { 2 }
+`)
+	env := &selfhost.CfgEnv{OS: "linux", Arch: "amd64", Target: "linux"}
+	resolved := selfhost.ResolveSourceStructuredWithCfg(src, env)
+	if resolved.Summary.Diagnostics != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", resolved.Diagnostics)
+	}
+	if findResolvedSymbol(resolved, "notWindows", "fn") == nil {
+		t.Errorf("notWindows should survive: not(os=windows) under linux")
+	}
+	if findResolvedSymbol(resolved, "notLinux", "fn") != nil {
+		t.Errorf("notLinux should drop: not(os=linux) under linux")
+	}
+}
+
+func TestResolveCfgCompositionNested(t *testing.T) {
+	src := []byte(`#[cfg(all(os = "linux", not(arch = "wasm")))]
+fn linuxNative() -> Int { 1 }
+`)
+	env := &selfhost.CfgEnv{OS: "linux", Arch: "amd64", Target: "linux"}
+	resolved := selfhost.ResolveSourceStructuredWithCfg(src, env)
+	if resolved.Summary.Diagnostics != 0 {
+		t.Fatalf("unexpected diagnostics: %#v", resolved.Diagnostics)
+	}
+	if findResolvedSymbol(resolved, "linuxNative", "fn") == nil {
+		t.Errorf("linuxNative should survive: all(os=linux, not(arch=wasm)) under linux/amd64")
+	}
+}
+
 func TestResolveSourceStructuredPartialStructMergesMethods(t *testing.T) {
 	// Two partial declarations of the same struct — fields in one,
 	// methods in the other. R19 allows this; no duplicate diag should

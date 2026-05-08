@@ -178,6 +178,38 @@ func TestLexStringPartsCarrySourceByteRanges(t *testing.T) {
 	}
 }
 
+func TestLexByteStringToken(t *testing.T) {
+	src := `let bs = b"hello"` + "\n"
+	lexed := ostyLexSource(src)
+	stream := lexed.stream
+	tc := frontLexTokenCount(stream)
+	var kinds []string
+	for i := 0; i < tc; i++ {
+		tok := frontLexTokenAt(stream, i)
+		raw := frontLexemeFromUnits(splitStringUnits(lexed.source), tok.start.offset, tok.length)
+		kinds = append(kinds, frontTokenKindName(tok.kind)+":"+raw)
+	}
+	t.Logf("front tokens: %v", kinds)
+	toks, diags, _ := Lex([]byte(src))
+	if len(diags) != 0 {
+		t.Fatalf("unexpected diagnostics: %+v", diags)
+	}
+	var found bool
+	for _, tok := range toks {
+		if tok.Kind == token.BYTESTRING && tok.Value == "hello" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		var adapted []string
+		for _, tok := range toks {
+			adapted = append(adapted, tok.Kind.String()+":"+tok.Value)
+		}
+		t.Fatalf("b\"hello\" not lexed correctly; adapted: %v", adapted)
+	}
+}
+
 func canonicalLexFacts(src string) (*OstyLexedSource, *OstyLexFacts, runeTable) {
 	lexed := ostyLexSource(src)
 	rt := newRuneTable(lexed.source)
