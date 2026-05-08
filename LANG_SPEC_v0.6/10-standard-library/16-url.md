@@ -104,3 +104,34 @@ time. The build step is fallible — invalid combinations (e.g. a
 relative path without a scheme + host) return `Err`. Adding new
 required fields to the builder is a major SemVer event because
 existing builder chains will fail at compile time.
+
+#### 10.16.3 Query parameter handling
+
+`Url.query` is `Map<String, String>` — single-valued. URLs with
+repeated keys (`?key=a&key=b`) lose data on parse — only the last
+value survives. Multi-valued query strings should use
+`Url.queryValues(key)` which returns a `List<String>` parsed from
+the original raw string.
+
+The single-valued default is the common case (most APIs use
+unique query keys). Authors who need full multi-valued semantics
+parse the raw query string with `http.parseQuery` (§10.24).
+
+#### 10.16.4 URL join semantics
+
+`url.join(base: Url, relative: String) -> Result<Url, Error>`
+follows RFC 3986 reference resolution:
+
+| `base.toString()` | `relative` | Result |
+|---|---|---|
+| `https://example.com/a/` | `b/c` | `https://example.com/a/b/c` |
+| `https://example.com/a/` | `/b/c` | `https://example.com/b/c` |
+| `https://example.com/a/b` | `c` | `https://example.com/a/c` |
+| `https://example.com/a/b/` | `../c` | `https://example.com/a/c` |
+| `https://example.com/a/b` | `?q=1` | `https://example.com/a/b?q=1` |
+| `https://example.com/a/b` | `#frag` | `https://example.com/a/b#frag` |
+| `https://example.com/a/` | `https://other/x` | `https://other/x` (absolute wins) |
+
+The result is a sealed `Url` value; the join either succeeds
+fully (returning a validated URL) or fails with `Err`. There is
+no partial-result mode.

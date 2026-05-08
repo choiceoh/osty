@@ -128,3 +128,49 @@ The path *sanitizer* is `std.path.normalize` / `Path.parse(...)?`
 — these registered with `#[sanitizes("user_input", into =
 "path_safe")]` and produce a `Path` value acceptable to `Fs.*`
 sinks.
+
+#### 10.15.3 Process exit and `defer`
+
+`Process.exit(code)` is an *immediate* termination — it bypasses
+`defer` cleanup (see §4.12 rule 7). For graceful shutdown, return
+from `main` instead of calling `exit`:
+
+```osty
+#[ambient(process)]
+fn main() -> Result<(), Error> {
+    let result = runApp()
+    match result {
+        Ok(_) -> Ok(()),                    // exit code 0, defer runs
+        Err(_) -> process.exit(1),          // exit code 1, defer SKIPS
+    }
+}
+```
+
+The asymmetry is the v0.5 baseline; v0.6 does not change it. For
+specific exit codes with cleanup, the recommended pattern is to
+return a `Result` from `main` and let the runtime translate it
+(see §6 scripts).
+
+#### 10.15.4 Signal handling
+
+`Process.onSignal(sig, handler)` registers a handler for OS
+signals (SIGINT, SIGTERM, SIGHUP). The handler runs on the Osty
+worker pool, not on a separate signal thread, so it has full
+access to the program's runtime (allocations, capability calls).
+
+The handler is *not* allowed to call `process.exit` — exit must
+happen through normal `main` return. Authors who want signal-
+triggered shutdown set a flag and let the main loop check it:
+
+```osty
+fn main(process: Process) -> Result<(), Error> {
+    let shutdownFlag = Atomic.new(false)
+    process.onSignal(Signal.Interrupt, || shutdownFlag.set(true))
+
+    while !shutdownFlag.get() {
+        processWork()?
+        thread.checkCancelled()?
+    }
+    Ok(())
+}
+```

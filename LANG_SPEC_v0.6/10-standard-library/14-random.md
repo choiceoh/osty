@@ -85,3 +85,38 @@ The seeded `Rng` is *not* received as a capability parameter —
 it's constructed locally from a deterministic seed, so the
 function takes the seed as a plain `Int64` rather than the `Rng`
 itself.
+
+#### 10.14.3 Rng method semantics
+
+| Method | Range | Notes |
+|---|---|---|
+| `Rng.int(min, max)` | `[min, max)` half-open | aborts if `min >= max` |
+| `Rng.intInclusive(min, max)` | `[min, max]` closed | aborts if `min > max` |
+| `Rng.float()` | `[0.0, 1.0)` | excludes 1.0 exactly |
+| `Rng.bool()` | `true`/`false` | 50/50 from underlying bit |
+| `Rng.bytes(n)` | n random bytes | aborts if `n < 0` |
+| `Rng.choice(items)` | one element of `items` | `None` if empty |
+| `Rng.shuffle(mut items)` | reorders in place | Fisher-Yates |
+
+`Rng.shuffle` mutates the input list in place; it requires `items`
+to be a `mut` binding. The shuffled order is determined by the
+seed.
+
+#### 10.14.4 Combining seeded and host RNGs
+
+A common pattern: derive a per-request seed from cryptographic
+randomness, then use seeded operations for reproducible per-
+request derivations:
+
+```osty
+fn deriveTokens(cryptoRng: CryptoRng, count: Int) -> List<Token> {
+    let seed = cryptoRng.bytes(8).toInt64BigEndian()
+    let rng = random.seeded(seed)
+    (0..count).map(|_| Token.fromBytes(rng.bytes(16))).toList()
+}
+```
+
+The outer `cryptoRng` provides cryptographic entropy (per request);
+the inner seeded `rng` is reproducible given that seed. This pattern
+is useful when tests want to fix the seed and replay the derivation
+without consulting the real `CryptoRng`.

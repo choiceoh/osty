@@ -194,4 +194,34 @@ fires, it cancels the group; the body's blocking calls return
 `clock.sleep(d)?` itself returns `Cancelled` (because the group is
 cancelled by the body's success).
 
+#### 10.20.3 Duration arithmetic
+
+`Duration` supports `+`, `-`, `*` (by Int), `/` (by Int):
+
+```osty
+let total = 5.minutes + 30.seconds        // 5:30
+let half = total / 2                       // 2:45
+let triple = total * 3                     // 16:30
+```
+
+Duration overflow follows the integer overflow rules (§2.3) — a
+`Duration` representing a value that exceeds `Int64` nanoseconds
+aborts. Practical durations (sub-century) never approach the
+limit.
+
+`Instant - Instant` returns a `Duration` (signed); `Instant +
+Duration` returns a new `Instant`. Adding a `Duration` to an
+`Instant` that would overflow `Int64` epoch nanoseconds aborts.
+
+#### 10.20.4 Timezone caveats
+
+`time.zone(name)` looks up an IANA tz database entry. The lookup
+is host-dependent — the runtime queries the system tz database.
+The set of valid `name` values is therefore platform-specific in
+edge cases (custom zones, unusual aliases).
+
+For maximum portability, use UTC (`time.utc()`) for all internal
+timestamps and apply zone conversion only at user-display
+boundaries.
+
 ---

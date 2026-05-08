@@ -156,3 +156,38 @@ pipeline.
 
 Parity audit: behavior-equivalent for increment/add/get/snapshot/key joining,
 with explicit value threading instead of lock-backed package globals.
+
+#### v0.6 surface summary
+
+The Deneb-derived utilities are *all pure*. None receives a
+capability parameter; each transforms input values into output
+values (or builds explicit state structs threaded by the caller).
+Acceptable inside `#[reproducible(scope = "portable")]` provided
+the caller's input is itself reproducible.
+
+| Module | Sanitizer registry | Capability needed |
+|---|---|---|
+| `std.redact` | not registered (best-effort masking, not a flow sanitizer) | none |
+| `std.security` | `sanitizeHtml` → `html_safe`, `checkUrl` → `url_safe` | none |
+| `std.search` | not a sanitizer | none |
+| `std.markdown` | `htmlToMarkdown` outputs untagged text from tagged HTML — noted as `#[trusted_declassify]`-equivalent for HTML→MD pipelines | none |
+| `std.media` | not a sanitizer | none |
+| `std.httpretry` | not a sanitizer | `Clock` (for backoff timer) |
+| `std.jsonl` | not a sanitizer | none |
+| `std.tokenest` | not a sanitizer | none |
+| `std.shortid` | not a sanitizer | `Rng` or `CryptoRng` (caller provides seed/source) |
+| `std.metrics` | not a sanitizer | none |
+
+The two registered sanitizers (`sanitizeHtml`, `checkUrl`) are
+documented under §10.34 `std.security`; their entries in the
+sanitizer registry (§21.18.2) make them recognized by the type
+checker for sink-routing.
+
+`std.shortid` is *capability-flexible* — the caller chooses
+between `Rng` (reproducible IDs from a seed) and `CryptoRng`
+(unguessable IDs). The shortid module itself is pure; the
+randomness comes from the passed-in source.
+
+`std.httpretry` consumes `Clock` for the backoff sleep and can be
+combined with the `taskGroup` cancellation contract — a backoff
+sleep returns `Err(Cancelled)` on cancel, propagating naturally.

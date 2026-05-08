@@ -103,3 +103,50 @@ encodes (base64 for AUTH PLAIN, etc.) but does not validate the
 semantic safety of payloads. Authors handling user-supplied email
 content must sanitize before constructing the `Envelope` if any
 sink-shaped semantics apply.
+
+#### 10.30.3 SMTP testing pattern
+
+Production SMTP code touches `Net` for the TCP connection. Tests
+inject `FakeNet` with canned server replies:
+
+```osty
+#[test]
+fn test_smtp_pipeline() {
+    let net = std.capability.testing.FakeNet.routes({
+        "smtp.example.com:587": std.capability.testing.cannedSmtpReplies([
+            "220 example.com ESMTP",
+            "250-example.com",
+            "250-AUTH PLAIN LOGIN",
+            "250 OK",
+            "235 Authentication successful",
+            "250 OK",
+            "250 OK",
+            "354 End data with <CR><LF>.<CR><LF>",
+            "250 OK queued as 12345",
+            "221 Bye",
+        ]),
+    })
+
+    let env = std.testing.email.envelope("from@x", "to@y", "Test", "Body")
+    sendOnce(net, smtpCfg(), env)?
+    testing.assertEq(net.dialedHosts(), ["smtp.example.com:587"])
+}
+```
+
+The `cannedSmtpReplies` helper returns a fake `TcpConn` that
+replays the given sequence on each `read` call. Ordered replies
+match the expected SMTP protocol flow.
+
+#### 10.30.4 STARTTLS handshake
+
+`std.smtp` represents STARTTLS in the command plan but does not
+itself perform the TLS handshake (TLS upgrade requires runtime
+support). The pattern is:
+
+1. Run the protocol up to and including the `STARTTLS` command.
+2. Caller invokes a TLS adapter on the existing `TcpConn` to
+   negotiate.
+3. Caller resumes the protocol with the upgraded connection.
+
+Phase 5 will add `Net.startTls(conn)` for inline upgrades; v0.6
+baseline keeps the protocol module purely focused on commands.

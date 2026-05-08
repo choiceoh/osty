@@ -47,3 +47,44 @@ Primary surface:
 - `sheet`, `workbook`, `fromRows`, `fromTable`, `toTable`, `rows`
 - `encode`, `decode`, `encodeRows`, `decodeRows`, `encodeTable`
 - `sheetNames`, `isWorkbook`, `kindName`
+
+#### 10.40.1 XLSX and information flow
+
+XLSX files originating from external sources (uploads, email
+attachments) carry untrusted cell values. Decoded cells inherit
+the source's flow tag set:
+
+```osty
+fn ingest(fs: Fs, path: String) -> Result<List<Row>, Error> {
+    let raw: #[taint("fs_input")] Bytes = fs.read(path)?
+    let rows: List<Row> = xlsx.decodeRows(raw, "Sheet1")?
+    // each row's cells: #[taint("fs_input")] String
+    Ok(rows)
+}
+```
+
+Cells flowing into SQL, shell, or HTML sinks must pass the
+appropriate sanitizer first.
+
+#### 10.40.2 XLSX deterministic encoding
+
+`xlsx.encodeRows(name, rows)` produces deterministic output —
+identical inputs yield byte-identical XLSX archives. This is
+necessary for `#[golden]` tests of XLSX-generating code:
+
+```osty
+#[golden("fixtures/report.xlsx", mode = "binary")]
+#[reproducible(scope = "portable")]
+fn testReport() {
+    let bytes = xlsx.encodeRows("Report", [
+        ["name", "score"],
+        ["Ada", "42"],
+    ])?
+    testing.assertGolden(bytes)
+}
+```
+
+The deterministic property covers cell ordering, sheet metadata,
+and the underlying ZIP container's internal byte layout. ZIP
+timestamps are pinned to a fixed epoch (2000-01-01) to avoid
+non-determinism from build-time clocks.

@@ -157,3 +157,34 @@ left-to-right pass that counts grapheme widths via §10.34
 `std.markdown` rules. This determinism is part of the v0.6
 contract; `tableAligned` is suitable for `#[golden]` snapshot
 output.
+
+#### 10.22.1 Format vs interpolation choice
+
+Osty's `"{expr}"` interpolation does not support inline format
+specifiers (§1.6.3). The decision is to keep the interpolation
+grammar trivial; non-default formatting goes through `std.fmt`:
+
+```osty
+"price: {fmt.fixed(price, 2)}"            // 2-decimal place
+"hex:   {fmt.base(n, 16)}"                // hex
+"width: {fmt.padLeft(name, 20)}"          // right-align in 20
+"comma: {fmt.commaInts(amount)}"          // 1,234,567
+```
+
+Each formatter is a regular function — its arguments and behavior
+are visible at the call site, not hidden inside an interpolation
+parser. The pattern is more verbose than format-specifier
+languages but always inspectable.
+
+#### 10.22.2 `compactNumber` and locale
+
+`fmt.compactNumber(n)` produces "1.2K", "3.4M", "5.6B" forms.
+The implementation is *locale-independent* — always English
+abbreviations, always `.` for the decimal separator. Locale-
+sensitive number formatting is not part of v0.6 baseline; a
+future stdlib `std.locale.fmt` is tracked for Phase 5.
+
+This locale-independence is a determinism feature: a
+`#[reproducible]` function calling `fmt.compactNumber` produces
+the same output across all targets. Locale-sensitive output would
+break that contract.

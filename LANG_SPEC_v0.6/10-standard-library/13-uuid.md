@@ -80,3 +80,36 @@ the input data, so flow tracking does not propagate.
 If a UUID is *parsed from* a tainted source string, however, the
 parsed `Uuid` carries the source's tag set — because `Uuid.parse`
 is a structural transformation of the input.
+
+#### 10.13.3 UUID v7 sortability
+
+`uuid.v7(clock, rng)` produces UUIDs that sort correctly by
+*timestamp first*, then random. This makes them useful as
+database row IDs:
+
+```osty
+let mut ids: List<Uuid> = [...]      // collected over time
+ids.sortBy(|a, b| a.cmp(b))          // chronological order
+```
+
+The sort is *byte-wise* over the UUID's 16-byte representation —
+v7's first 6 bytes are a millisecond timestamp big-endian, so
+byte comparison matches timestamp comparison. The remaining 10
+bytes are random; identical-millisecond UUIDs sort by their
+random suffix, which is acceptable for tiebreaking.
+
+#### 10.13.4 v4 vs v7 selection guide
+
+| Use case | Recommended | Why |
+|---|---|---|
+| Database row ID | v7 | Natural index ordering matches insertion |
+| Session ID | v4 | No timing information leak |
+| Cache key | v4 (or hash) | Collision concerns matter; ordering does not |
+| Distributed log entry | v7 | Multi-node logs merge in time order |
+| API token | v4 (or `CryptoRng.bytes`) | Unguessability is the priority |
+| File name in user-facing UI | v4 (full random) | v7's prefix leaks creation time |
+
+The "unguessability" criterion sits with `CryptoRng` — both v4
+and v7 use `CryptoRng` under the v0.6 baseline, so both are
+suitable for security-sensitive identifiers. v7 leaks the
+*creation timestamp* but not the random suffix.

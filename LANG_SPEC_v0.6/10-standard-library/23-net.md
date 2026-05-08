@@ -164,3 +164,72 @@ output `#[taint("net_input")]`.
 For SSRF prevention, parse the resolved address through
 `std.security.checkUrl` or apply the address-block validation
 (§10.34 `std.security`) before opening a connection to it.
+
+#### 10.23.3 Read/write timeout discipline
+
+`TcpConn.setReadTimeout(d)` and `TcpConn.setWriteTimeout(d)` set
+operation deadlines. A timeout-expired call returns
+`Err(TimedOut { ... })` with the original duration in the cause.
+Subsequent calls on the same connection may proceed normally.
+
+Timeouts compose with `taskGroup` cancellation:
+
+```osty
+fn fetchOrCancel(net: Net, url: String) -> Result<Bytes, Error> {
+    taskGroup(|g| {
+        let conn = net.connect(url)?
+        defer conn.close()
+        conn.setReadTimeout(5.s)?       // 5s per-read deadline
+        let body = io.readAll(conn)?
+        // — read returns Err(TimedOut) after 5s, OR
+        // — read returns Err(Cancelled) on group cancel,
+        //   whichever fires first
+        Ok(body)
+    })
+}
+```
+
+The discipline: timeouts bound *individual* operations; the
+surrounding `taskGroup` provides the *whole-task* deadline via
+explicit cancel.
+
+#### 10.23.4 UDP packet boundaries
+
+UDP datagrams are delivered as units — `recv(maxBytes)` returns a
+single datagram up to `maxBytes` (or the full datagram if smaller).
+Truncation can occur if the actual datagram is larger than
+`maxBytes`; the truncation is silent (no error). Authors who need
+to detect truncation should size buffers conservatively.
+
+`recvFrom` additionally returns the sender's address. Both `recv`
+and `recvFrom` are cancellation points.
+
+#### 10.23.5 Concurrent connection patterns
+
+A `TcpListener` may accept multiple connections in parallel via
+`taskGroup`:
+
+```osty
+fn serveAll(net: Net, addr: String) -> Result<(), Error> {
+    let listener = net.listen(addr)?
+    defer listener.close()
+
+    taskGroup(|g| {
+        for {
+            let conn = listener.accept()?
+            g.spawn(|| {
+                defer conn.close()
+                handleConn(conn)
+            })
+        }
+    })
+}
+```
+
+Each spawned handler is independent; the listener's `accept` is
+cancellation-aware. When the surrounding task is cancelled,
+`accept` returns `Err(Cancelled)` and the loop exits.
+
+The non-escaping `Handle<T>` rule (§8.1) prevents leaking a
+spawned handler outside its `taskGroup`; the listener itself can
+outlive a single connection.

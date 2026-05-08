@@ -207,3 +207,49 @@ supabase.requireSuccess(response) -> Result<http.Response, Error>
 
 `ApiError` extracts the common Supabase/PostgREST JSON fields `code`,
 `message`, `details`, and `hint`, while preserving the raw body for logs.
+
+#### 10.43.1 Supabase capability surface
+
+Production Supabase code touches three v0.6 capability points:
+
+1. **`Env` for credential lookup** — `supabase.fromEnv(env)` reads
+   `SUPABASE_URL` and `SUPABASE_ANON_KEY` (or
+   `SUPABASE_SERVICE_ROLE_KEY` for service role).
+2. **`Net` for HTTP transport** — `supabase.send*` consumes a
+   `Net` capability to issue the actual request.
+3. **No `Clock`/`Rng` directly** — Supabase request building is
+   pure; ID generation (e.g. UUIDs for new rows) is delegated to
+   `std.uuid` and routed through whichever `Rng`/`CryptoRng` the
+   caller chooses.
+
+Tests inject `FakeEnv` (with the API URL/key set) and `FakeNet`
+(with canned PostgREST responses). The pure builder layer
+(`supabase.from`, `q.select`, `q.eq`, etc.) is acceptable inside
+`#[reproducible(scope = "target")]`; only the `send*` calls are
+non-reproducible.
+
+#### 10.43.2 Supabase and information flow
+
+PostgREST query results carry `#[taint("net_input")]` on each row
+field, like any other network response. When echoing a row back
+into a sink (HTML, SQL via different DB, shell), apply the
+appropriate sanitizer:
+
+```osty
+fn renderTodo(net: Net, sb: Client, id: Int) -> Result<String, Error> {
+    let q = supabase.from("todos")?.select("title").eq("id", "{id}")?
+    let row = supabase.sendSelectOne::<Todo>(net, sb, q)??
+    Ok(std.html.escape(row.title))             // sanitize for html_safe sink
+}
+```
+
+#### 10.43.3 Service role caveat
+
+A `Client` configured with `serviceRoleFromEnv()` bypasses Row
+Level Security (RLS). Service-role requests must be carefully
+audited; `osty audit --supabase-service-role` enumerates every
+client construction site that uses service role.
+
+For tests, prefer `FakeNet` over real service-role calls — service
+role compromises are common attack vectors when leaked into CI
+logs.

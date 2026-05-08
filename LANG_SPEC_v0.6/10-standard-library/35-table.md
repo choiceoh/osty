@@ -196,3 +196,51 @@ Behavior:
 - `inferTypes` ignores empty cells, promotes `IntColumn` plus
   `FloatColumn` to `FloatColumn`, treats any text cell as `TextColumn`,
   and returns `MixedColumn` for incompatible non-text mixes.
+
+#### 10.35.1 Table operations and v0.6 surfaces
+
+All `std.table` operations are pure transformations over `Table`
+values. They:
+
+- Return new `Table` values; mutations are local to the call.
+- Preserve flow tags element-wise — a tainted CSV input produces
+  tainted cells; transformations (`select`, `sortBy`, `coerce`)
+  preserve the tags.
+- Are acceptable inside `#[reproducible(scope = "portable")]`,
+  provided sort orders are deterministic (text comparison is
+  byte-wise; numeric comparison follows the IEEE-754 totalOrder
+  per §10.5).
+
+#### 10.35.2 Table aggregation determinism
+
+`countBy(column, name)` and `summarizeBy(groupBy, sumColumn)` use
+deterministic ordering — output rows appear in *first-occurrence*
+order from the input, not in hash order. This makes
+table-aggregation pipelines acceptable inside `#[reproducible]`
+without explicit `sortBy` afterward.
+
+```osty
+let counts = sales.countBy("city", "count")?
+// counts.rows order: ["seoul", "busan"] (first-occurrence in sales)
+```
+
+Authors who want a different output order apply explicit `sortBy`
+on the aggregated result. The first-occurrence default is the
+choice that maximizes reproducibility under typical usage.
+
+#### 10.35.3 Schema coercion and information flow
+
+`Table.coerce(schema)` parses each cell from text into the
+column's typed form. The parsed values inherit the source string's
+flow tag set:
+
+```osty
+let sales: Table = table.fromCsv(rawCsv)?    // cells tainted user_input
+let schema = table.schemaFrom(["amount"], [table.FloatColumn])?
+let typed = sales.coerce(schema)?
+// typed.row(0).floatAt("amount"): #[taint("user_input")] Float
+```
+
+Coercion is *not* a sanitizer — it does not validate semantic
+safety beyond type parsing. Sink-routing of typed cells still
+requires explicit sanitization.
