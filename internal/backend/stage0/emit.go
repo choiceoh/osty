@@ -688,6 +688,51 @@ func enumLayoutIsPayloadless(layout *mir.EnumLayout) bool {
 	return true
 }
 
+func fnConstPayloadlessEnumVariantIndex(op mir.Operand, enumType mir.Type, mctx *moduleCtx) (int, bool) {
+	if mctx == nil || mctx.module == nil || mctx.module.Layouts == nil {
+		return 0, false
+	}
+	con, ok := op.(*mir.ConstOp)
+	if !ok {
+		return 0, false
+	}
+	fc, ok := con.Const.(*mir.FnConst)
+	if !ok || fc == nil {
+		return 0, false
+	}
+	named, ok := enumType.(*ir.NamedType)
+	if !ok || named == nil {
+		return 0, false
+	}
+	layout := mctx.module.Layouts.Enums[named.Name]
+	if !enumLayoutIsPayloadless(layout) {
+		return 0, false
+	}
+	for _, variant := range layout.Variants {
+		if fnConstSymbolMatchesEnumVariant(fc.Symbol, named.Name, variant.Name) {
+			return variant.Index, true
+		}
+	}
+	return 0, false
+}
+
+func fnConstSymbolMatchesEnumVariant(symbol, enumName, variantName string) bool {
+	if symbol == "" || variantName == "" {
+		return false
+	}
+	switch symbol {
+	case variantName, enumName + "__" + variantName, enumName + "." + variantName:
+		return true
+	}
+	tail := symbol
+	for _, sep := range []string{"__", ".", "/"} {
+		if idx := strings.LastIndex(tail, sep); idx >= 0 {
+			tail = tail[idx+len(sep):]
+		}
+	}
+	return tail == variantName
+}
+
 // localBinding records, for one MIR LocalID, how to materialise the
 // local in subsequent LLVM operands. Either an inlined immediate
 // expression (constant literal, param register, or another local's
@@ -2571,6 +2616,9 @@ func classifyAssignSrc(fn *mir.Function, src mir.RValue, destType scalarType, bi
 		// to classifyBinary when the operand isn't String so Int ==
 		// Int continues through `icmp eq`.
 		if (bin.Op == mir.BinEq || bin.Op == mir.BinNeq) && destType == scalarBool {
+			if pending, ok := classifyPayloadlessEnumFnConstCompare(fn, bin, bindings, mctx); ok {
+				return pending, "", true
+			}
 			if leftPrelude, left, leftTy, ok := resolveOperandWithPrelude(fn, bin.Left, bindings, mctx); ok && leftTy == scalarString {
 				rightPrelude, right, rightTy, ok := resolveOperandWithPrelude(fn, bin.Right, bindings, mctx)
 				if !ok || rightTy != scalarString {
@@ -2686,6 +2734,47 @@ func classifyAssignSrc(fn *mir.Function, src mir.RValue, destType scalarType, bi
 		return classifyLenRV(fn, lenRV, destType, bindings, mctx)
 	}
 	return pendingInstr{}, "", false
+}
+
+func classifyPayloadlessEnumFnConstCompare(fn *mir.Function, bin *mir.BinaryRV, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (pendingInstr, bool) {
+	if bin == nil || (bin.Op != mir.BinEq && bin.Op != mir.BinNeq) {
+		return pendingInstr{}, false
+	}
+	leftPrelude, left, leftTy, ok := resolveOperandWithPrelude(fn, bin.Left, bindings, mctx)
+	if ok && leftTy == scalarInt {
+		if idx, ok := fnConstPayloadlessEnumVariantIndex(bin.Right, bin.Left.Type(), mctx); ok {
+			op := "icmp eq"
+			if bin.Op == mir.BinNeq {
+				op = "icmp ne"
+			}
+			return pendingInstr{
+				kind:       instrBinary,
+				prelude:    leftPrelude,
+				binOp:      op,
+				binArgType: "i64",
+				leftExpr:   left,
+				rightExpr:  fmt.Sprintf("%d", idx),
+			}, true
+		}
+	}
+	rightPrelude, right, rightTy, ok := resolveOperandWithPrelude(fn, bin.Right, bindings, mctx)
+	if ok && rightTy == scalarInt {
+		if idx, ok := fnConstPayloadlessEnumVariantIndex(bin.Left, bin.Right.Type(), mctx); ok {
+			op := "icmp eq"
+			if bin.Op == mir.BinNeq {
+				op = "icmp ne"
+			}
+			return pendingInstr{
+				kind:       instrBinary,
+				prelude:    rightPrelude,
+				binOp:      op,
+				binArgType: "i64",
+				leftExpr:   fmt.Sprintf("%d", idx),
+				rightExpr:  right,
+			}, true
+		}
+	}
+	return pendingInstr{}, false
 }
 
 func resolveGlobalRefRValue(mctx *moduleCtx, rv *mir.GlobalRefRV) (string, scalarType, bool) {
@@ -3495,6 +3584,8 @@ func resolveOperand(op mir.Operand, bindings map[mir.LocalID]localBinding, mctx 
 				return fmt.Sprintf("%d", c.Value), scalarInt, true
 			case isPrimType(c.Type(), ir.PrimByte):
 				return fmt.Sprintf("%d", byte(c.Value)), scalarByte, true
+			case isErrType(c.Type()):
+				return fmt.Sprintf("%d", c.Value), scalarInt, true
 			}
 			return "", scalarUnknown, false
 		case *mir.BoolConst:
@@ -7851,6 +7942,9 @@ func emitWhileBinaryRValue(ctx *whileLoopEmitCtx, out *strings.Builder, bin *mir
 		return reg, scalarString, true
 	}
 	if (bin.Op == mir.BinEq || bin.Op == mir.BinNeq) && destType == scalarBool {
+		if expr, ok := emitWhilePayloadlessEnumFnConstCompare(ctx, out, bin); ok {
+			return expr, scalarBool, true
+		}
 		if ctx.mctx.scalarFromType(bin.Left.Type(), true) == scalarString {
 			left, leftTy, ok := resolveOperandWithLoad(ctx, out, bin.Left)
 			if !ok || leftTy != scalarString {
@@ -7932,6 +8026,35 @@ func emitWhileBinaryRValue(ctx *whileLoopEmitCtx, out *strings.Builder, bin *mir
 	reg := freshReg(ctx)
 	fmt.Fprintf(out, "  %s = %s %s %s, %s\n", reg, llvmOp, operandType.llvm(), left, right)
 	return reg, resultType, true
+}
+
+func emitWhilePayloadlessEnumFnConstCompare(ctx *whileLoopEmitCtx, out *strings.Builder, bin *mir.BinaryRV) (string, bool) {
+	if ctx == nil || bin == nil || (bin.Op != mir.BinEq && bin.Op != mir.BinNeq) {
+		return "", false
+	}
+	if left, leftTy, ok := resolveOperandWithLoad(ctx, out, bin.Left); ok && leftTy == scalarInt {
+		if idx, ok := fnConstPayloadlessEnumVariantIndex(bin.Right, bin.Left.Type(), ctx.mctx); ok {
+			op := "icmp eq"
+			if bin.Op == mir.BinNeq {
+				op = "icmp ne"
+			}
+			reg := freshReg(ctx)
+			fmt.Fprintf(out, "  %s = %s i64 %s, %d\n", reg, op, left, idx)
+			return reg, true
+		}
+	}
+	if right, rightTy, ok := resolveOperandWithLoad(ctx, out, bin.Right); ok && rightTy == scalarInt {
+		if idx, ok := fnConstPayloadlessEnumVariantIndex(bin.Left, bin.Right.Type(), ctx.mctx); ok {
+			op := "icmp eq"
+			if bin.Op == mir.BinNeq {
+				op = "icmp ne"
+			}
+			reg := freshReg(ctx)
+			fmt.Fprintf(out, "  %s = %s i64 %d, %s\n", reg, op, idx, right)
+			return reg, true
+		}
+	}
+	return "", false
 }
 
 func emitWhileUnaryRValue(ctx *whileLoopEmitCtx, out *strings.Builder, un *mir.UnaryRV, destType scalarType) (string, scalarType, bool) {
@@ -8463,6 +8586,8 @@ func resolveOperandWithLoad(ctx *whileLoopEmitCtx, out *strings.Builder, op mir.
 				return fmt.Sprintf("%d", c.Value), scalarInt, true
 			case isPrimType(c.Type(), ir.PrimByte):
 				return fmt.Sprintf("%d", byte(c.Value)), scalarByte, true
+			case isErrType(c.Type()):
+				return fmt.Sprintf("%d", c.Value), scalarInt, true
 			}
 			return "", scalarUnknown, false
 		case *mir.BoolConst:
@@ -10116,13 +10241,14 @@ func emitListLiteralIndexGet(out *strings.Builder, fn *mir.Function, pat listLit
 // per-shape phi reconstruction for the common toolchain loops.
 
 type genericCFGPattern struct {
-	retType     scalarType
-	returnsVoid bool
-	paramTypes  []scalarType
-	paramNames  []string
-	stackDecls  []stackDecl
-	blockOrder  []mir.BlockID
-	blockBodies map[mir.BlockID]string
+	retType          scalarType
+	returnsVoid      bool
+	paramTypes       []scalarType
+	paramNames       []string
+	stackDecls       []stackDecl
+	blockOrder       []mir.BlockID
+	blockBodies      map[mir.BlockID]string
+	syntheticReturns map[mir.BlockID]mir.LocalID
 }
 
 func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern, bool) {
@@ -10170,6 +10296,9 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 		}
 		ty := mctx.scalarFromType(l.Type, true)
 		if ty == scalarUnknown {
+			if !genericLocalUsedOutsideUnreachableBlocks(fn, l.ID) {
+				continue
+			}
 			return pat, false
 		}
 		decl := stackDecl{id: l.ID, name: sanitizeLLVMName(l.Name, fmt.Sprintf("local%d", l.ID)) + ".slot", ty: ty}
@@ -10201,7 +10330,11 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 
 	blocks := genericBlockOrder(fn)
 	if !pat.returnsVoid && !genericHasReturnTerm(blocks) {
-		return pat, false
+		exitID, localID, ok := genericInferListAccumulatorSyntheticReturn(fn, mctx)
+		if !ok {
+			return pat, false
+		}
+		pat.syntheticReturns = map[mir.BlockID]mir.LocalID{exitID: localID}
 	}
 	pat.blockOrder = make([]mir.BlockID, 0, len(blocks))
 	for _, bb := range blocks {
@@ -10209,18 +10342,249 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 			return pat, false
 		}
 		var body strings.Builder
-		for _, instr := range bb.Instrs {
-			if !emitWhileStep(ctx, &body, instr) {
-				return pat, false
+		if _, unreachable := bb.Term.(*mir.UnreachableTerm); !unreachable {
+			for _, instr := range bb.Instrs {
+				if !emitWhileStep(ctx, &body, instr) {
+					return pat, false
+				}
 			}
 		}
-		if !emitGenericTerm(ctx, &body, bb.Term, pat.retType, pat.returnsVoid) {
-			return pat, false
+		if localID, ok := pat.syntheticReturns[bb.ID]; ok {
+			binding, ok := ctx.bindings[localID]
+			if !ok || !binding.defined || binding.ty != pat.retType {
+				return pat, false
+			}
+			expr := binding.expr
+			if binding.isStack {
+				loaded, ty, ok := loadFromStack(ctx, &body, localID)
+				if !ok || ty != pat.retType {
+					return pat, false
+				}
+				expr = loaded
+			}
+			fmt.Fprintf(&body, "  ret %s %s\n", pat.retType.llvm(), expr)
+		} else {
+			if !emitGenericTerm(ctx, &body, bb.Term, pat.retType, pat.returnsVoid) {
+				return pat, false
+			}
 		}
 		pat.blockOrder = append(pat.blockOrder, bb.ID)
 		pat.blockBodies[bb.ID] = body.String()
 	}
 	return pat, true
+}
+
+func genericInferListAccumulatorSyntheticReturn(fn *mir.Function, mctx *moduleCtx) (mir.BlockID, mir.LocalID, bool) {
+	if fn == nil || mctx == nil || !isNamedListType(fn.ReturnType) {
+		return 0, 0, false
+	}
+	exit, ok := genericStorageOnlyUnreachableExit(fn)
+	if !ok {
+		return 0, 0, false
+	}
+	candidates := map[mir.LocalID]bool{}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		if _, unreachable := bb.Term.(*mir.UnreachableTerm); unreachable {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			ai, ok := instr.(*mir.AssignInstr)
+			if !ok || ai.Dest.HasProjections() {
+				continue
+			}
+			loc := lookupLocal(fn, ai.Dest.Local)
+			if loc == nil || !sameTypeString(loc.Type, fn.ReturnType) {
+				continue
+			}
+			agg, ok := ai.Src.(*mir.AggregateRV)
+			if ok && agg.Kind == mir.AggList {
+				candidates[ai.Dest.Local] = true
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return 0, 0, false
+	}
+	var pushed mir.LocalID
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		if _, unreachable := bb.Term.(*mir.UnreachableTerm); unreachable {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			ii, ok := instr.(*mir.IntrinsicInstr)
+			if !ok || ii.Kind != mir.IntrinsicListPush || len(ii.Args) == 0 {
+				continue
+			}
+			cp, ok := ii.Args[0].(*mir.CopyOp)
+			if !ok || cp.Place.HasProjections() || !candidates[cp.Place.Local] {
+				continue
+			}
+			if pushed != 0 && pushed != cp.Place.Local {
+				return 0, 0, false
+			}
+			pushed = cp.Place.Local
+		}
+	}
+	if pushed == 0 {
+		return 0, 0, false
+	}
+	return exit.ID, pushed, true
+}
+
+func genericStorageOnlyUnreachableExit(fn *mir.Function) (*mir.BasicBlock, bool) {
+	var exit *mir.BasicBlock
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		if _, unreachable := bb.Term.(*mir.UnreachableTerm); !unreachable {
+			continue
+		}
+		if !blockHasOnlyStorageMarkers(bb) {
+			continue
+		}
+		if exit != nil {
+			return nil, false
+		}
+		exit = bb
+	}
+	return exit, exit != nil
+}
+
+func isNamedListType(t mir.Type) bool {
+	named, ok := t.(*ir.NamedType)
+	return ok && named != nil && named.Name == "List"
+}
+
+func sameTypeString(a, b mir.Type) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.String() == b.String()
+}
+
+func genericLocalUsedOutsideUnreachableBlocks(fn *mir.Function, id mir.LocalID) bool {
+	if fn == nil {
+		return false
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		if _, unreachable := bb.Term.(*mir.UnreachableTerm); unreachable {
+			continue
+		}
+		if genericBlockMentionsLocal(bb, id) {
+			return true
+		}
+	}
+	return false
+}
+
+func genericBlockMentionsLocal(bb *mir.BasicBlock, id mir.LocalID) bool {
+	if bb == nil {
+		return false
+	}
+	for _, instr := range bb.Instrs {
+		if instrMentionsLocal(instr, id) {
+			return true
+		}
+	}
+	return termMentionsLocal(bb.Term, id)
+}
+
+func instrMentionsLocal(instr mir.Instr, id mir.LocalID) bool {
+	switch step := instr.(type) {
+	case *mir.AssignInstr:
+		return placeMentionsLocal(step.Dest, id) || rvalueMentionsLocal(step.Src, id)
+	case *mir.CallInstr:
+		if step.Dest != nil && placeMentionsLocal(*step.Dest, id) {
+			return true
+		}
+		for _, arg := range step.Args {
+			if operandMentionsLocal(arg, id) {
+				return true
+			}
+		}
+	case *mir.IntrinsicInstr:
+		if step.Dest != nil && placeMentionsLocal(*step.Dest, id) {
+			return true
+		}
+		for _, arg := range step.Args {
+			if operandMentionsLocal(arg, id) {
+				return true
+			}
+		}
+	case *mir.StorageLiveInstr:
+		return step.Local == id
+	case *mir.StorageDeadInstr:
+		return step.Local == id
+	}
+	return false
+}
+
+func rvalueMentionsLocal(rv mir.RValue, id mir.LocalID) bool {
+	switch r := rv.(type) {
+	case *mir.UseRV:
+		return operandMentionsLocal(r.Op, id)
+	case *mir.UnaryRV:
+		return operandMentionsLocal(r.Arg, id)
+	case *mir.BinaryRV:
+		return operandMentionsLocal(r.Left, id) || operandMentionsLocal(r.Right, id)
+	case *mir.AggregateRV:
+		for _, field := range r.Fields {
+			if operandMentionsLocal(field, id) {
+				return true
+			}
+		}
+	case *mir.DiscriminantRV:
+		return placeMentionsLocal(r.Place, id)
+	case *mir.LenRV:
+		return placeMentionsLocal(r.Place, id)
+	case *mir.CastRV:
+		return operandMentionsLocal(r.Arg, id)
+	case *mir.AddressOfRV:
+		return placeMentionsLocal(r.Place, id)
+	case *mir.RefRV:
+		return placeMentionsLocal(r.Place, id)
+	}
+	return false
+}
+
+func termMentionsLocal(term mir.Terminator, id mir.LocalID) bool {
+	switch t := term.(type) {
+	case *mir.BranchTerm:
+		return operandMentionsLocal(t.Cond, id)
+	case *mir.SwitchIntTerm:
+		return operandMentionsLocal(t.Scrutinee, id)
+	}
+	return false
+}
+
+func operandMentionsLocal(op mir.Operand, id mir.LocalID) bool {
+	cp, ok := op.(*mir.CopyOp)
+	if !ok {
+		return false
+	}
+	return placeMentionsLocal(cp.Place, id)
+}
+
+func placeMentionsLocal(place mir.Place, id mir.LocalID) bool {
+	if place.Local == id {
+		return true
+	}
+	for _, proj := range place.Projections {
+		if idx, ok := proj.(*mir.IndexProj); ok && operandMentionsLocal(idx.Index, id) {
+			return true
+		}
+	}
+	return false
 }
 
 func genericSingleBlockHasExtendedSurface(fn *mir.Function, bb *mir.BasicBlock) bool {
