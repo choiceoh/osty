@@ -43,7 +43,7 @@ to be written in C.
 - Volatile, atomic-fence, or inline-assembly primitives. The first GC
   delivered through this surface is single-threaded stop-the-world.
   The `cas` intrinsic (§19.5) is provided for forward compatibility
-  with later concurrent algorithms; the v0.4 single-threaded GC is not
+  with later concurrent algorithms; the current single-threaded GC is not
   required to exercise it.
 
 **GC × scheduler interaction.** §8 specifies an M:N scheduler; §19
@@ -60,13 +60,13 @@ specifies a single-threaded STW collector. These compose as follows:
 - FFI calls declared through §19 or `use go` are **not** implicit
   safepoints; a worker stuck in a long blocking FFI call delays
   collection for the whole process. A future revision may add a
-  `#[gc_safe]` annotation for FFI hand-off; v0.4 does not.
+  `#[gc_safe]` annotation for FFI hand-off; Osty does not.
 - When all workers are parked at safepoints, the collector runs
   single-threaded over the union of (a) the root array passed by the
   initiating safepoint and (b) the per-task parked-root arrays. It
   then releases the workers.
 
-The v0.4 collector **does not** walk fiber-saved register state or
+The collector **does not** walk fiber-saved register state or
 unregistered stack memory. Programs that allocate a value and hold it
 as a local across a yield point are safe only if the compiler-emitted
 safepoint at the yield point lists that local in the root array. The
@@ -92,7 +92,7 @@ if and only if either:
    manifest is loaded from a registry-fetched dependency, regardless of
    the bit's value in the published manifest.
 
-The `[capabilities]` table is part of the manifest schema; the v0.4
+The `[capabilities]` table is part of the manifest schema; the v0.6
 runtime spec is the first chapter to require it. Manifest loaders that
 do not yet recognize the table treat any unknown key as a parse error
 (per §10/§11/§13 manifest conventions), so older toolchains refuse to
@@ -119,7 +119,7 @@ opaque type RawPtr        // declared in std.runtime
 
 `RawPtr` is an opaque integer-shaped type with the following contract:
 
-- It occupies the target's pointer width. v0.4 supports 64-bit targets
+- It occupies the target's pointer width. Osty supports 64-bit targets
   only, so `RawPtr` is 8 bytes.
 - It is `Pod` (it contains no managed reference).
 - It implements `Equal` and `Hashable`. It does **not** implement
@@ -171,7 +171,7 @@ rules applies:
    S<T1, …, Tn>` requires every type parameter to carry the bound
    `Tk: Pod` at the declaration site. The resulting `Pod` instance is
    unconditional. Per-instantiation `Pod` (membership computed
-   per-use) is **not** supported in v0.4; an unbound generic struct
+   per-use) is **not** supported; an unbound generic struct
    marked `#[pod]` is `E0771`.
 4. **Tuples.** A tuple type `(T1, …, Tn)` is `Pod` if every component
    is `Pod`. Because struct values have reference semantics in the
@@ -292,7 +292,7 @@ raw.write::<Int>(raw.offset(header, 8), 0)
   sizeOf::<T>()`. Other sizes are rejected at the call site with
   `E0772 cas type size invalid` (a checker-side rule, not a link
   error). The intrinsic is provided for forward compatibility with
-  future concurrent collectors; the v0.4 single-threaded STW GC may
+  future concurrent collectors; the single-threaded STW GC may
   leave it unused.
 - `sizeOf::<T>()` and `alignOf::<T>()` are compile-time constants
   computed by the lowering layer. Calls with a non-`Pod` type
@@ -457,7 +457,7 @@ pub fn alloc_zeroed(bytes: Int, align: Int) -> RawPtr {
 body is emitted as an LLVM `private unnamed_addr constant` of type
 `[N x i8]` and referenced by a constant `getelementptr` to its first
 byte. When passed to a `#[c_abi]` function declared with an `i8*`-
-shaped parameter (Osty `RawPtr` or, in v0.4 minor, the future
+shaped parameter (Osty `RawPtr` or, in a future minor, the
 `CStr` opaque), the value crosses the ABI boundary as a pointer to
 this constant. No allocation, no copy.
 

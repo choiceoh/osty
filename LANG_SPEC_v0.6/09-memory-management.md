@@ -38,7 +38,7 @@ rely on observable GC timing for correctness.
 - **No finalizers.** Osty deliberately omits finalizer hooks. All
   cleanup goes through `defer` or closure-scoped stdlib helpers, so
   resource lifetimes are tied to lexical scope — not to GC timing.
-- **No weak references.** v0.4 has no `Weak<T>` type. Use explicit
+- **No weak references.** Osty has no `Weak<T>` type. Use explicit
   data structures (e.g. a `Map` keyed on ID) when decoupling lifetime
   from reachability is required.
 - **Allocation failure (OOM) aborts the process.** OOM is not a

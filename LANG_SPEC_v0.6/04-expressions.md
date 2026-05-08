@@ -160,7 +160,7 @@ and the arm body share the same scope, so `Some(n) if n > 0` works as
 expected. Guards may not introduce new bindings (no `if let` inside a
 guard).
 
-**v0.4 witness policy.** A non-exhaustive match diagnostic reports one
+**Witness policy.** A non-exhaustive match diagnostic reports one
 minimal missing pattern. For tuple and struct shapes, the witness
 concretizes the leftmost missing component and uses `_` for the rest.
 For closed enum, `Option`, and `Result` payloads, the witness recurses
@@ -343,7 +343,7 @@ supply a value the closure can always destructure.
 Annotations (`#[deprecated]`, `#[json]`, …) may not be applied to
 closure expressions; annotations are a declaration-level feature.
 
-> **v0.4 decision.** Patterned closure parameters are part of the
+> **Closure parameter pattern decision.** Patterned closure parameters are part of the
 > front-end baseline. Irrefutable tuple/struct/wildcard/binding patterns
 > bind as if the closure body began with a `let` destructure. Refutable
 > literal, range, variant, or or-pattern parameters are rejected with
@@ -364,7 +364,7 @@ math.sqrt(2.0)
 
 `.` for all member access. `::` only for turbofish.
 
-**v0.4 generic-method decision.** In `obj.method::<T>(args)`, explicit
+**Generic-method decision.** In `obj.method::<T>(args)`, explicit
 type arguments apply only to the method's own generic parameters. Generic
 parameters from the receiver's owner type are already fixed by the
 receiver type. Partial explicit method type arguments are not allowed:
@@ -377,13 +377,13 @@ methods. A generic method must be wrapped explicitly:
 let f = |x: Int| obj.method::<Int>(x)
 ```
 
-The same rule applies to top-level generic functions: Osty v0.4 does
+The same rule applies to top-level generic functions: Osty does
 not have first-class polymorphic function values or partial generic
 application. `let f = identity` is legal only when `identity` is
 non-generic; use `let f = |x: Int| identity::<Int>(x)` to fix a generic
 callable's type arguments.
 
-**v0.4 erased-callable decision.** A direct function or package-member
+**Erased-callable decision.** A direct function or package-member
 call uses declaration metadata, so default arguments and keyword
 arguments are available there. Once the callable is stored as
 `fn(...) -> ...`, that metadata is erased: calls through the function

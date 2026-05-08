@@ -3,6 +3,14 @@
 Low-level TCP and UDP networking. Higher-level HTTP is in `std.http`
 (§10.24). All blocking operations are cancellation-aware (§8.4.2).
 
+> **v0.6 migration**: the v0.5 globals `net.dial(host, port)` /
+> `net.listen(port)` move to `Net` capability methods (§20.9.5). The
+> canonical host adapter is `capability.hostNet`; the bridge factory
+> `net.host` is a transitional alias scheduled for v0.7 removal. For
+> URL-accepting sinks, Phase 5 adds `#[requires("url_safe")]` —
+> sanitize via `std.url.encode` or `Url.parse(...)?` first. See §10.46
+> for the full migration table.
+
 ```osty
 use std.net
 use std.io

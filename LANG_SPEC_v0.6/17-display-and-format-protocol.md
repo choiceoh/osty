@@ -21,7 +21,7 @@ pub interface ToString {
 
 **`{expr}` interpolation.** In a string literal, `{expr}` is rewritten
 to `expr.toString()` and the result spliced in. Format specifiers
-(width, precision, base) are not part of the v0.2 interpolation grammar;
+(width, precision, base) are not part of the interpolation grammar;
 use explicit method calls for non-default formatting (e.g.
 `{n.toFixed(2)}`, `{n.toString(base: 16)}`).
 

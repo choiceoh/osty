@@ -125,8 +125,7 @@ do not depend on a specific tie-break.
 
 ### 8.4 Cancellation
 
-Cancellation in Osty is **structured and automatic**. It is the v0.3
-resolution of gap G12.
+Cancellation in Osty is **structured and automatic**.
 
 #### 8.4.1 Propagation Model
 
@@ -206,7 +205,7 @@ when the buffer is full.
 other concurrent senders and receivers on the same channel. Values are
 delivered whole — never partially observed.
 
-**Close semantics** (v0.3 resolution of gap G8).
+**Close semantics.**
 
 - `ch.close()` signals that no further values will be sent.
 - **Any task may close a channel.** A second `close` on an already-

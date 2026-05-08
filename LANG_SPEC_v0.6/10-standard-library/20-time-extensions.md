@@ -3,6 +3,15 @@
 Beyond basic instants and durations, `std.time` provides formatting,
 parsing, and timezone handling.
 
+> **v0.6 migration**: the v0.5 globals `time.now()` / `time.monotonic()` /
+> `time.sleep(d)` move to `Clock` capability methods (§20.9.1). The
+> production host adapter is `time.systemClock`; for deterministic
+> tests use `std.capability.testing.FakeClock(epoch_ms = N)`. Legacy
+> globals stay under `--legacy-globals` (v0.6.x only); v0.7 removes
+> them. The non-effectful `Time` / `Duration` types and the formatting
+> /parsing helpers below are unchanged. See §10.46 for the full
+> migration table.
+
 ```osty
 use std.time
 
