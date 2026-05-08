@@ -1728,6 +1728,11 @@ fn lirEmitMirGlobals(out: LirModule, mir: MirModule, diags: List<LirDiagnostic>)
 // `lirLowerMirType` requires a `LirMirFunctionLowerer`; for
 // module-level globals we don't have one. Reproduce the relevant
 // portion (primitives + Option/Result/struct/tuple shape).
+//
+// On fall-through (no resolution path matched), the diagnostic enumerates
+// *which checks were attempted* so the root cause of an "unsupported param
+// type"/"unsupported local type" upstream failure can be traced without
+// reading the source. v0.6 GAP-TYP-004 (LLVM_BACKEND_GAP_PLAN.md A1).
 fn lirLowerMirType_module(out: LirModule, mir: MirModule, name: String, path: String, diags: List<LirDiagnostic>) -> LirType {
     let primitive = lirLowerPrimitiveTypeName(name)
     if !(lirTypeIsZero(primitive)) {
@@ -1748,7 +1753,14 @@ fn lirLowerMirType_module(out: LirModule, mir: MirModule, name: String, path: St
             return lirAggregateType(typeName)
         }
     }
-    diags.push(lirDiagnosticError(LirDiagUnsupported, "unsupported module type `" + name + "`", path))
+    // Trace: enumerate every check that ran so root-cause is visible without
+    // reading the source. Each "no match" branch above is a candidate; we
+    // report the cumulative attempt + struct-layout coverage size.
+    let layoutCount = mir.layouts.structs.len()
+    let trace = "primitive miss; ref-builtin miss; option/result miss; "
+        + lirIntToString(layoutCount) + " struct layout(s) checked, no match"
+    diags.push(lirDiagnosticError(LirDiagUnsupported,
+        "unsupported module type `" + name + "` (" + trace + ")", path))
     lirTypeInvalid()
 }
 // `lirBuildInitGlobalsCtor` synthesises the
