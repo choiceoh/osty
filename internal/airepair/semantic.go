@@ -356,6 +356,11 @@ func parseAppendCall(expr string) (string, string, bool) {
 }
 
 func rewriteLengthProperties(src []byte) ([]byte, []repair.Change, bool) {
+	// validLengthFieldOffsets runs the full lex/lower/resolve/check
+	// pipeline; skip it when the source has no `.length` to rewrite.
+	if !bytes.Contains(src, []byte(".length")) {
+		return src, nil, false
+	}
 	toks := lexer.New(src).Lex()
 	protected := validLengthFieldOffsets(src)
 	var edits []semanticEdit
