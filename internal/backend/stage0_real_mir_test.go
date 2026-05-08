@@ -406,8 +406,8 @@ fn main() {}`,
 				"call void @osty_rt_list_push_i64(ptr %0, i64 10)",
 				"call void @osty_rt_list_push_i64(ptr %0, i64 20)",
 				"call void @osty_rt_list_push_i64(ptr %0, i64 30)",
-				"%1 = call i64 @osty_rt_list_get_i64(ptr %0, i64 0)",
-				"ret i64 %1",
+				"= call i64 @osty_rt_list_get_i64(ptr %0, i64 0)",
+				"ret i64 %stage0.list.get",
 			},
 		},
 		{
@@ -418,7 +418,7 @@ fn main() {}`,
 }
 fn main() {}`,
 			wantIR: []string{
-				"%1 = call i64 @osty_rt_list_get_i64(ptr %0, i64 1)",
+				"= call i64 @osty_rt_list_get_i64(ptr %0, i64 1)",
 			},
 		},
 	}

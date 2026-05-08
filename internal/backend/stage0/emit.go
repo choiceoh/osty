@@ -70,17 +70,23 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 	// declare, format strings, string literal globals, …).
 	mctx := newModuleCtx(module)
 
-	// Pre-scan for printf-using intrinsics so the printf declare +
-	// format strings land in extraDecls before any function body.
-	needs := scanPrintlnNeeds(module)
+	// Pre-scan for print-family intrinsics so printf/fprintf declares
+	// and format strings land in extraDecls before any function body.
+	needs := scanPrintNeeds(module, mctx)
 	if needs.int {
+		mctx.extraDecls.WriteString("@.fmt.stage0.print.int = private unnamed_addr constant [5 x i8] c\"%lld\\00\"\n")
 		mctx.extraDecls.WriteString("@.fmt.stage0.println.int = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"\n")
 	}
 	if needs.str {
+		mctx.extraDecls.WriteString("@.fmt.stage0.print.str = private unnamed_addr constant [3 x i8] c\"%s\\00\"\n")
 		mctx.extraDecls.WriteString("@.fmt.stage0.println.str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"\n")
 	}
-	if needs.int || needs.str {
+	if needs.stdout {
 		mctx.extraDecls.WriteString("declare i32 @printf(ptr, ...)\n")
+	}
+	if needs.stderr {
+		mctx.extraDecls.WriteString("@stderr = external global ptr\n")
+		mctx.extraDecls.WriteString("declare i32 @fprintf(ptr, ptr, ...)\n")
 	}
 
 	var fnBodies strings.Builder
@@ -236,6 +242,43 @@ func (m *moduleCtx) emitStructDef(name string, fields []scalarType) {
 	m.extraDecls.WriteString(" }\n")
 }
 
+func (m *moduleCtx) emitOptionBoxDef(payload scalarType) (string, bool) {
+	if m == nil || payload == scalarUnknown {
+		return "", false
+	}
+	name := "stage0.Option." + scalarSlotSuffixFor(payload)
+	key := "__stage0.option_box." + name
+	if m.emittedStructs[key] {
+		return name, true
+	}
+	m.emittedStructs[key] = true
+	fmt.Fprintf(m.extraDecls, "%%%s = type { i64, %s }\n", name, payload.llvm())
+	return name, true
+}
+
+func (m *moduleCtx) emitEnumBoxDef(enumName string, variantIdx int, payload []scalarType) (string, bool) {
+	if m == nil || enumName == "" || variantIdx < 0 {
+		return "", false
+	}
+	for _, ty := range payload {
+		if ty == scalarUnknown {
+			return "", false
+		}
+	}
+	name := fmt.Sprintf("stage0.Enum.%s.%d", sanitizeLLVMName(enumName, "Enum"), variantIdx)
+	key := "__stage0.enum_box." + name
+	if m.emittedStructs[key] {
+		return name, true
+	}
+	m.emittedStructs[key] = true
+	fmt.Fprintf(m.extraDecls, "%%%s = type { i64", name)
+	for _, ty := range payload {
+		fmt.Fprintf(m.extraDecls, ", %s", ty.llvm())
+	}
+	m.extraDecls.WriteString(" }\n")
+	return name, true
+}
+
 func (m *moduleCtx) freshTempName(label string) string {
 	if m == nil {
 		return "%stage0.tmp"
@@ -280,17 +323,18 @@ func escapeForLLVMConst(s string) string {
 	return b.String()
 }
 
-// scanPrintlnNeeds walks every IntrinsicPrintln in the module and
-// reports which scalar argument types are used. The result drives
-// the per-format-string decisions in EmitMIR — Int prints go through
-// the `%lld\n` format, String prints through `%s\n`.
-type printlnNeeds struct {
-	int bool
-	str bool
+// scanPrintNeeds walks every print-family intrinsic in the module and
+// reports which scalar argument types and streams are used. The result
+// drives the per-format-string decisions in EmitMIR.
+type printNeeds struct {
+	int    bool
+	str    bool
+	stdout bool
+	stderr bool
 }
 
-func scanPrintlnNeeds(module *mir.Module) printlnNeeds {
-	needs := printlnNeeds{}
+func scanPrintNeeds(module *mir.Module, mctx *moduleCtx) printNeeds {
+	needs := printNeeds{}
 	for _, fn := range module.Functions {
 		if fn == nil {
 			continue
@@ -301,13 +345,18 @@ func scanPrintlnNeeds(module *mir.Module) printlnNeeds {
 			}
 			for _, instr := range bb.Instrs {
 				intr, ok := instr.(*mir.IntrinsicInstr)
-				if !ok || intr.Kind != mir.IntrinsicPrintln {
+				if !ok || !isPrintIntrinsic(intr.Kind) {
 					continue
 				}
 				if len(intr.Args) != 1 {
 					continue
 				}
-				switch scalarFromType(intr.Args[0].Type()) {
+				if isStderrPrintIntrinsic(intr.Kind) {
+					needs.stderr = true
+				} else {
+					needs.stdout = true
+				}
+				switch mctx.scalarFromType(intr.Args[0].Type(), true) {
 				case scalarInt:
 					needs.int = true
 				case scalarString:
@@ -317,6 +366,18 @@ func scanPrintlnNeeds(module *mir.Module) printlnNeeds {
 		}
 	}
 	return needs
+}
+
+func isPrintIntrinsic(kind mir.IntrinsicKind) bool {
+	switch kind {
+	case mir.IntrinsicPrint, mir.IntrinsicPrintln, mir.IntrinsicEprint, mir.IntrinsicEprintln:
+		return true
+	}
+	return false
+}
+
+func isStderrPrintIntrinsic(kind mir.IntrinsicKind) bool {
+	return kind == mir.IntrinsicEprint || kind == mir.IntrinsicEprintln
 }
 
 func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error {
@@ -382,6 +443,9 @@ func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error
 	}
 	if pat, ok := matchListLiteralIndexGet(fn, mctx); ok {
 		return emitListLiteralIndexGet(out, fn, pat)
+	}
+	if pat, ok := matchGenericScalarCFG(fn, mctx); ok {
+		return emitGenericScalarCFG(out, fn, pat)
 	}
 	return fmt.Errorf("%w: function %q does not match any stage0 pattern", ErrUnsupported, fn.Name)
 }
@@ -544,6 +608,9 @@ func scalarFromTypeInternal(t mir.Type, allowUserNamed bool) scalarType {
 			return scalarOpaquePtr
 		}
 	}
+	if opt, ok := t.(*ir.OptionalType); ok && opt != nil {
+		return scalarOpaquePtr
+	}
 	return scalarUnknown
 }
 
@@ -658,21 +725,18 @@ func classifyIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindings ma
 		return "", false
 	}
 	switch ii.Kind {
-	case mir.IntrinsicPrintln:
+	case mir.IntrinsicPrint, mir.IntrinsicPrintln, mir.IntrinsicEprint, mir.IntrinsicEprintln:
+		return classifyPrintIntrinsicLine(fn, ii, bindings, mctx)
+	case mir.IntrinsicAbort:
 		if len(ii.Args) != 1 {
 			return "", false
 		}
 		prelude, expr, ty, ok := resolveOperandWithPrelude(fn, ii.Args[0], bindings, mctx)
-		if !ok {
+		if !ok || ty != scalarString {
 			return "", false
 		}
-		switch ty {
-		case scalarInt:
-			return prelude + fmt.Sprintf("  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 %s)\n", expr), true
-		case scalarString:
-			return prelude + fmt.Sprintf("  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.str, ptr %s)\n", expr), true
-		}
-		return "", false
+		declareVoidFunctionPrototype(mctx, "osty_rt_panic", []callArg{{ty: "ptr"}})
+		return prelude + fmt.Sprintf("  call void @osty_rt_panic(ptr %s)\n", expr), true
 	case mir.IntrinsicListPush:
 		if len(ii.Args) != 2 {
 			return "", false
@@ -733,6 +797,30 @@ func classifyIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindings ma
 		}
 		declareVoidFunctionPrototype(mctx, "osty_rt_list_reverse", []callArg{{ty: "ptr"}})
 		return prelude + fmt.Sprintf("  call void @osty_rt_list_reverse(ptr %s)\n", expr), true
+	case mir.IntrinsicListPop:
+		if len(ii.Args) != 1 {
+			return "", false
+		}
+		prelude, expr, ty, ok := resolveOperandWithPrelude(fn, ii.Args[0], bindings, mctx)
+		if !ok || ty != scalarOpaquePtr {
+			return "", false
+		}
+		declareVoidFunctionPrototype(mctx, "osty_rt_list_pop_discard", []callArg{{ty: "ptr"}})
+		return prelude + fmt.Sprintf("  call void @osty_rt_list_pop_discard(ptr %s)\n", expr), true
+	case mir.IntrinsicListRemoveAt:
+		if len(ii.Args) != 2 {
+			return "", false
+		}
+		listPrelude, listExpr, ok := resolveListReceiverOperand(fn, ii.Args[0], bindings, mctx)
+		if !ok {
+			return "", false
+		}
+		indexPrelude, indexExpr, indexTy, ok := resolveOperandWithPrelude(fn, ii.Args[1], bindings, mctx)
+		if !ok || indexTy != scalarInt {
+			return "", false
+		}
+		declareVoidFunctionPrototype(mctx, "osty_rt_list_remove_at_discard", []callArg{{ty: "ptr"}, {ty: "i64"}})
+		return listPrelude + indexPrelude + fmt.Sprintf("  call void @osty_rt_list_remove_at_discard(ptr %s, i64 %s)\n", listExpr, indexExpr), true
 	case mir.IntrinsicSetInsert, mir.IntrinsicSetRemove:
 		if len(ii.Args) != 2 {
 			return "", false
@@ -752,6 +840,25 @@ func classifyIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindings ma
 		args := []callArg{{ty: "ptr"}, {ty: elemTy.llvm()}}
 		declareRuntimePrototype(mctx, symbol, scalarBool, args)
 		return fmt.Sprintf("%s%s  call i1 @%s(ptr %s, %s %s)\n", setPrelude, elemPrelude, symbol, setExpr, elemTy.llvm(), elemExpr), true
+	case mir.IntrinsicMapRemove:
+		if len(ii.Args) != 2 {
+			return "", false
+		}
+		mapPrelude, mapExpr, mapTy, ok := resolveOperandWithPrelude(fn, ii.Args[0], bindings, mctx)
+		if !ok || mapTy != scalarOpaquePtr {
+			return "", false
+		}
+		keyPrelude, keyExpr, keyTy, ok := resolveOperandWithPrelude(fn, ii.Args[1], bindings, mctx)
+		if !ok {
+			return "", false
+		}
+		symbol := mapRemoveSymbolFor(keyTy)
+		if symbol == "" {
+			return "", false
+		}
+		args := []callArg{{ty: "ptr"}, {ty: keyTy.llvm()}}
+		declareRuntimePrototype(mctx, symbol, scalarBool, args)
+		return fmt.Sprintf("%s%s  call i1 @%s(ptr %s, %s %s)\n", mapPrelude, keyPrelude, symbol, mapExpr, keyTy.llvm(), keyExpr), true
 	case mir.IntrinsicMapSet:
 		if len(ii.Args) != 3 {
 			return "", false
@@ -801,6 +908,100 @@ func classifyIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindings ma
 		}
 		declareVoidFunctionPrototype(mctx, "osty_rt_check_cancelled", nil)
 		return "  call void @osty_rt_check_cancelled()\n", true
+	case mir.IntrinsicChanSend:
+		if len(ii.Args) != 2 {
+			return "", false
+		}
+		chanPrelude, chanExpr, chanTy, ok := resolveOperandWithPrelude(fn, ii.Args[0], bindings, mctx)
+		if !ok || chanTy != scalarOpaquePtr {
+			return "", false
+		}
+		valuePrelude, valueExpr, valueTy, ok := resolveOperandWithPrelude(fn, ii.Args[1], bindings, mctx)
+		if !ok {
+			return "", false
+		}
+		symbol := chanSendSymbolFor(valueTy)
+		if symbol == "" {
+			return "", false
+		}
+		declareVoidFunctionPrototype(mctx, symbol, []callArg{{ty: "ptr"}, {ty: valueTy.llvm()}})
+		return fmt.Sprintf("%s%s  call void @%s(ptr %s, %s %s)\n", chanPrelude, valuePrelude, symbol, chanExpr, valueTy.llvm(), valueExpr), true
+	case mir.IntrinsicChanClose:
+		if len(ii.Args) != 1 {
+			return "", false
+		}
+		prelude, expr, ty, ok := resolveOperandWithPrelude(fn, ii.Args[0], bindings, mctx)
+		if !ok || ty != scalarOpaquePtr {
+			return "", false
+		}
+		declareVoidFunctionPrototype(mctx, "osty_rt_thread_chan_close", []callArg{{ty: "ptr"}})
+		return prelude + fmt.Sprintf("  call void @osty_rt_thread_chan_close(ptr %s)\n", expr), true
+	case mir.IntrinsicGroupCancel:
+		if len(ii.Args) != 1 {
+			return "", false
+		}
+		prelude, expr, ty, ok := resolveOperandWithPrelude(fn, ii.Args[0], bindings, mctx)
+		if !ok || ty != scalarOpaquePtr {
+			return "", false
+		}
+		declareVoidFunctionPrototype(mctx, "osty_rt_task_group_cancel", []callArg{{ty: "ptr"}})
+		return prelude + fmt.Sprintf("  call void @osty_rt_task_group_cancel(ptr %s)\n", expr), true
+	case mir.IntrinsicSelectRecv:
+		if len(ii.Args) != 3 {
+			return "", false
+		}
+		args, prelude, ok := resolveFixedScalarArgs(fn, ii.Args, bindings, mctx, []scalarType{scalarOpaquePtr, scalarOpaquePtr, scalarOpaquePtr})
+		if !ok {
+			return "", false
+		}
+		declareVoidFunctionPrototype(mctx, "osty_rt_select_recv", []callArg{{ty: "ptr"}, {ty: "ptr"}, {ty: "ptr"}})
+		return prelude + renderVoidCallLine("osty_rt_select_recv", args), true
+	case mir.IntrinsicSelectSend:
+		if len(ii.Args) != 4 {
+			return "", false
+		}
+		selectPrelude, selectExpr, selectTy, ok := resolveOperandWithPrelude(fn, ii.Args[0], bindings, mctx)
+		if !ok || selectTy != scalarOpaquePtr {
+			return "", false
+		}
+		chanPrelude, chanExpr, chanTy, ok := resolveOperandWithPrelude(fn, ii.Args[1], bindings, mctx)
+		if !ok || chanTy != scalarOpaquePtr {
+			return "", false
+		}
+		valuePrelude, valueExpr, valueTy, ok := resolveOperandWithPrelude(fn, ii.Args[2], bindings, mctx)
+		if !ok {
+			return "", false
+		}
+		armPrelude, armExpr, armTy, ok := resolveOperandWithPrelude(fn, ii.Args[3], bindings, mctx)
+		if !ok || armTy != scalarOpaquePtr {
+			return "", false
+		}
+		symbol := selectSendSymbolFor(valueTy)
+		if symbol == "" {
+			return "", false
+		}
+		declareVoidFunctionPrototype(mctx, symbol, []callArg{{ty: "ptr"}, {ty: "ptr"}, {ty: valueTy.llvm()}, {ty: "ptr"}})
+		return fmt.Sprintf("%s%s%s%s  call void @%s(ptr %s, ptr %s, %s %s, ptr %s)\n", selectPrelude, chanPrelude, valuePrelude, armPrelude, symbol, selectExpr, chanExpr, valueTy.llvm(), valueExpr, armExpr), true
+	case mir.IntrinsicSelectTimeout:
+		if len(ii.Args) != 3 {
+			return "", false
+		}
+		args, prelude, ok := resolveFixedScalarArgs(fn, ii.Args, bindings, mctx, []scalarType{scalarOpaquePtr, scalarInt, scalarOpaquePtr})
+		if !ok {
+			return "", false
+		}
+		declareVoidFunctionPrototype(mctx, "osty_rt_select_timeout", []callArg{{ty: "ptr"}, {ty: "i64"}, {ty: "ptr"}})
+		return prelude + renderVoidCallLine("osty_rt_select_timeout", args), true
+	case mir.IntrinsicSelectDefault:
+		if len(ii.Args) != 2 {
+			return "", false
+		}
+		args, prelude, ok := resolveFixedScalarArgs(fn, ii.Args, bindings, mctx, []scalarType{scalarOpaquePtr, scalarOpaquePtr})
+		if !ok {
+			return "", false
+		}
+		declareVoidFunctionPrototype(mctx, "osty_rt_select_default", []callArg{{ty: "ptr"}, {ty: "ptr"}})
+		return prelude + renderVoidCallLine("osty_rt_select_default", args), true
 	case mir.IntrinsicMapClear:
 		if len(ii.Args) != 1 {
 			return "", false
@@ -841,6 +1042,58 @@ func classifyIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindings ma
 		return fmt.Sprintf("%s%s%s  call void @osty_rt_strings_SplitInto(ptr %s, ptr %s, ptr %s)\n", outPrelude, valuePrelude, sepPrelude, outExpr, valueExpr, sepExpr), true
 	}
 	return "", false
+}
+
+func classifyPrintIntrinsicLine(fn *mir.Function, ii *mir.IntrinsicInstr, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (string, bool) {
+	if len(ii.Args) != 1 {
+		return "", false
+	}
+	prelude, expr, ty, ok := resolveOperandWithPrelude(fn, ii.Args[0], bindings, mctx)
+	if !ok {
+		return "", false
+	}
+	fmtGlobal, argTy, ok := printFormatFor(ii.Kind, ty)
+	if !ok {
+		return "", false
+	}
+	if isStderrPrintIntrinsic(ii.Kind) {
+		stderrReg := mctx.freshTempName("stderr")
+		return prelude +
+			fmt.Sprintf("  %s = load ptr, ptr @stderr\n", stderrReg) +
+			fmt.Sprintf("  call i32 (ptr, ptr, ...) @fprintf(ptr %s, ptr %s, %s %s)\n", stderrReg, fmtGlobal, argTy, expr), true
+	}
+	return prelude + fmt.Sprintf("  call i32 (ptr, ...) @printf(ptr %s, %s %s)\n", fmtGlobal, argTy, expr), true
+}
+
+func printFormatFor(kind mir.IntrinsicKind, ty scalarType) (string, string, bool) {
+	prefix := "@.fmt.stage0.print"
+	if kind == mir.IntrinsicPrintln || kind == mir.IntrinsicEprintln {
+		prefix = "@.fmt.stage0.println"
+	}
+	switch ty {
+	case scalarInt:
+		return prefix + ".int", "i64", true
+	case scalarString:
+		return prefix + ".str", "ptr", true
+	}
+	return "", "", false
+}
+
+func resolveFixedScalarArgs(fn *mir.Function, ops []mir.Operand, bindings map[mir.LocalID]localBinding, mctx *moduleCtx, want []scalarType) ([]callArg, string, bool) {
+	if len(ops) != len(want) {
+		return nil, "", false
+	}
+	args := make([]callArg, 0, len(ops))
+	var prelude strings.Builder
+	for i, op := range ops {
+		argPrelude, expr, ty, ok := resolveOperandWithPrelude(fn, op, bindings, mctx)
+		if !ok || ty != want[i] {
+			return nil, "", false
+		}
+		prelude.WriteString(argPrelude)
+		args = append(args, callArg{expr: expr, ty: ty.llvm()})
+	}
+	return args, prelude.String(), true
 }
 
 // sequentialPattern is what `matchSequentialReturn` produces.
@@ -1761,16 +2014,30 @@ func classifyStringConcatIntrinsic(fn *mir.Function, ii *mir.IntrinsicInstr, des
 	}
 	args := make([]callArg, 0, len(ii.Args))
 	var prelude strings.Builder
+	hasInt := false
 	for _, op := range ii.Args {
 		argPrelude, expr, ty, ok := resolveOperandWithPrelude(fn, op, bindings, mctx)
-		if !ok || ty != scalarString {
+		if !ok || (ty != scalarString && ty != scalarInt) {
 			return pendingInstr{}, 0, scalarUnknown, false
 		}
+		if ty == scalarInt {
+			hasInt = true
+		}
 		prelude.WriteString(argPrelude)
-		args = append(args, callArg{expr: expr, ty: "ptr"})
+		args = append(args, callArg{expr: expr, ty: ty.llvm()})
 	}
 	declareStringConcatRuntime(mctx)
-	if len(args) == 2 {
+	if hasInt {
+		declareStringConcatI64Runtime(mctx)
+	}
+	prevTy := args[0].ty
+	for _, next := range args[1:] {
+		if _, ok := stringConcatSymbolForArgs(prevTy, next.ty); !ok {
+			return pendingInstr{}, 0, scalarUnknown, false
+		}
+		prevTy = scalarString.llvm()
+	}
+	if len(args) == 2 && !hasInt {
 		return pendingInstr{
 			kind:       instrCall,
 			prelude:    prelude.String(),
@@ -1897,6 +2164,14 @@ func intrinsicRuntimeCallSpec(kind mir.IntrinsicKind) (intrinsicRuntimeSpec, boo
 		return intrinsicRuntimeSpec{"osty_rt_bytes_from_list", scalarOpaquePtr, []scalarType{scalarOpaquePtr}}, true
 	case mir.IntrinsicBytesFromString:
 		return intrinsicRuntimeSpec{"osty_rt_strings_ToBytes", scalarOpaquePtr, []scalarType{scalarString}}, true
+	case mir.IntrinsicChanMake:
+		return intrinsicRuntimeSpec{"osty_rt_thread_chan_make", scalarOpaquePtr, []scalarType{scalarInt}}, true
+	case mir.IntrinsicChanIsClosed:
+		return intrinsicRuntimeSpec{"osty_rt_thread_chan_is_closed", scalarBool, []scalarType{scalarOpaquePtr}}, true
+	case mir.IntrinsicIsCancelled:
+		return intrinsicRuntimeSpec{"osty_rt_cancel_is_cancelled", scalarBool, nil}, true
+	case mir.IntrinsicGroupIsCancelled:
+		return intrinsicRuntimeSpec{"osty_rt_task_group_is_cancelled", scalarBool, []scalarType{scalarOpaquePtr}}, true
 	}
 	return intrinsicRuntimeSpec{}, false
 }
@@ -1945,35 +2220,53 @@ func classifyAssignSrc(fn *mir.Function, src mir.RValue, destType scalarType, bi
 		// binary instruction.
 		if bin.Op == mir.BinAdd && destType == scalarString {
 			leftPrelude, left, leftTy, ok := resolveOperandWithPrelude(fn, bin.Left, bindings, mctx)
-			if !ok || leftTy != scalarString {
+			if !ok || (leftTy != scalarString && leftTy != scalarInt) {
 				return pendingInstr{}, "", false
 			}
 			rightPrelude, right, rightTy, ok := resolveOperandWithPrelude(fn, bin.Right, bindings, mctx)
-			if !ok || rightTy != scalarString {
+			if !ok || (rightTy != scalarString && rightTy != scalarInt) {
+				return pendingInstr{}, "", false
+			}
+			symbol, ok := stringConcatSymbolForScalars(leftTy, rightTy)
+			if !ok {
 				return pendingInstr{}, "", false
 			}
 			declareStringConcatRuntime(mctx)
+			if leftTy == scalarInt || rightTy == scalarInt {
+				declareStringConcatI64Runtime(mctx)
+			}
 			return pendingInstr{
 				kind:       instrCall,
 				prelude:    leftPrelude + rightPrelude,
-				callSymbol: "osty_rt_strings_Concat",
+				callSymbol: symbol,
 				callArgs: []callArg{
-					{expr: left, ty: "ptr"},
-					{expr: right, ty: "ptr"},
+					{expr: left, ty: leftTy.llvm()},
+					{expr: right, ty: rightTy.llvm()},
 				},
 			}, "", true
 		}
-		// P16 — Special-case String == String: lowers to a runtime
+		// P16 — Special-case String ==/!= String: lowers to a runtime
 		// call (`osty_rt_strings_Equal`) returning i1. Falls through
 		// to classifyBinary when the operand isn't String so Int ==
 		// Int continues through `icmp eq`.
-		if bin.Op == mir.BinEq && destType == scalarBool {
+		if (bin.Op == mir.BinEq || bin.Op == mir.BinNeq) && destType == scalarBool {
 			if leftPrelude, left, leftTy, ok := resolveOperandWithPrelude(fn, bin.Left, bindings, mctx); ok && leftTy == scalarString {
 				rightPrelude, right, rightTy, ok := resolveOperandWithPrelude(fn, bin.Right, bindings, mctx)
 				if !ok || rightTy != scalarString {
 					return pendingInstr{}, "", false
 				}
 				declareStringEqualRuntime(mctx)
+				if bin.Op == mir.BinNeq {
+					eqReg := mctx.freshTempName("string.neq.eq")
+					neqReg := mctx.freshTempName("string.neq")
+					return pendingInstr{
+						kind:       instrIntrinsic,
+						binDestReg: neqReg,
+						intrinsicLine: leftPrelude + rightPrelude +
+							fmt.Sprintf("  %s = call i1 @osty_rt_strings_Equal(ptr %s, ptr %s)\n", eqReg, left, right) +
+							fmt.Sprintf("  %s = xor i1 %s, true\n", neqReg, eqReg),
+					}, "", true
+				}
 				return pendingInstr{
 					kind:       instrCall,
 					prelude:    leftPrelude + rightPrelude,
@@ -1982,6 +2275,24 @@ func classifyAssignSrc(fn *mir.Function, src mir.RValue, destType scalarType, bi
 						{expr: left, ty: "ptr"},
 						{expr: right, ty: "ptr"},
 					},
+				}, "", true
+			}
+			if leftPrelude, left, leftTy, ok := resolveOperandWithPrelude(fn, bin.Left, bindings, mctx); ok && leftTy == scalarBool {
+				rightPrelude, right, rightTy, ok := resolveOperandWithPrelude(fn, bin.Right, bindings, mctx)
+				if !ok || rightTy != scalarBool {
+					return pendingInstr{}, "", false
+				}
+				op := "icmp eq"
+				if bin.Op == mir.BinNeq {
+					op = "icmp ne"
+				}
+				return pendingInstr{
+					kind:       instrBinary,
+					prelude:    leftPrelude + rightPrelude,
+					binOp:      op,
+					binArgType: "i1",
+					leftExpr:   left,
+					rightExpr:  right,
 				}, "", true
 			}
 		}
@@ -2278,6 +2589,22 @@ func mapInsertSymbolFor(keyType scalarType) string {
 	return "osty_rt_map_insert_" + suffix
 }
 
+func mapRemoveSymbolFor(keyType scalarType) string {
+	suffix := runtimeSuffixForScalar(keyType)
+	if suffix == "" {
+		return ""
+	}
+	return "osty_rt_map_remove_" + suffix
+}
+
+func mapGetSymbolFor(keyType scalarType) string {
+	suffix := runtimeSuffixForScalar(keyType)
+	if suffix == "" {
+		return ""
+	}
+	return "osty_rt_map_get_" + suffix
+}
+
 func setContainsSymbolFor(elemType scalarType) string {
 	suffix := runtimeSuffixForScalar(elemType)
 	if suffix == "" {
@@ -2296,13 +2623,37 @@ func setMutationSymbolFor(kind mir.IntrinsicKind, elemType scalarType) string {
 	default:
 		return ""
 	}
+	suffix := runtimeSuffixForScalar(elemType)
+	if suffix == "" {
+		return ""
+	}
+	return prefix + suffix
+}
+
+func chanSendSymbolFor(elemType scalarType) string {
+	suffix := scalarSlotSuffixFor(elemType)
+	if suffix == "" {
+		return ""
+	}
+	return "osty_rt_thread_chan_send_" + suffix
+}
+
+func selectSendSymbolFor(elemType scalarType) string {
+	suffix := scalarSlotSuffixFor(elemType)
+	if suffix == "" {
+		return ""
+	}
+	return "osty_rt_select_send_" + suffix
+}
+
+func scalarSlotSuffixFor(elemType scalarType) string {
 	switch elemType {
 	case scalarInt:
-		return prefix + "i64"
+		return "i64"
 	case scalarBool:
-		return prefix + "i1"
+		return "i1"
 	case scalarString, scalarOpaquePtr:
-		return prefix + "ptr"
+		return "ptr"
 	}
 	return ""
 }
@@ -2369,6 +2720,28 @@ func declareStringConcatRuntime(mctx *moduleCtx) {
 	}
 	mctx.emittedStructs["__stage0.strings_concat"] = true
 	mctx.extraDecls.WriteString("declare ptr @osty_rt_strings_Concat(ptr, ptr)\n")
+}
+
+func declareStringConcatI64Runtime(mctx *moduleCtx) {
+	declareRuntimePrototype(mctx, "osty_rt_strings_ConcatI64Right", scalarString, []callArg{{ty: "ptr"}, {ty: "i64"}})
+	declareRuntimePrototype(mctx, "osty_rt_strings_ConcatI64Left", scalarString, []callArg{{ty: "i64"}, {ty: "ptr"}})
+}
+
+func stringConcatSymbolForArgs(leftTy, rightTy string) (string, bool) {
+	switch {
+	case leftTy == "ptr" && rightTy == "ptr":
+		return "osty_rt_strings_Concat", true
+	case leftTy == "ptr" && rightTy == "i64":
+		return "osty_rt_strings_ConcatI64Right", true
+	case leftTy == "i64" && rightTy == "ptr":
+		return "osty_rt_strings_ConcatI64Left", true
+	default:
+		return "", false
+	}
+}
+
+func stringConcatSymbolForScalars(leftTy, rightTy scalarType) (string, bool) {
+	return stringConcatSymbolForArgs(leftTy.llvm(), rightTy.llvm())
 }
 
 // declareStringEqualRuntime appends the runtime ABI declaration for
@@ -2713,7 +3086,7 @@ func matchIfElseReturn(fn *mir.Function, mctx *moduleCtx) (ifElsePattern, bool) 
 	if pat.retType == scalarUnknown {
 		return pat, false
 	}
-	if len(fn.Params) > 2 {
+	if len(fn.Params) > 8 {
 		return pat, false
 	}
 	if len(fn.Blocks) != 4 {
@@ -2724,7 +3097,7 @@ func matchIfElseReturn(fn *mir.Function, mctx *moduleCtx) (ifElsePattern, bool) 
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b"}
+	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
@@ -3526,8 +3899,16 @@ func emitCallChain(out *strings.Builder, pi pendingInstr) {
 	prev := pi.callArgs[0]
 	for i, next := range pi.callArgs[1:] {
 		reg := pi.chainRegs[i]
+		symbol := pi.callSymbol
+		if pi.resultType == scalarString && pi.callSymbol == "osty_rt_strings_Concat" {
+			var ok bool
+			symbol, ok = stringConcatSymbolForArgs(prev.ty, next.ty)
+			if !ok {
+				return
+			}
+		}
 		fmt.Fprintf(out, "  %s = call %s @%s(%s %s, %s %s)\n",
-			reg, pi.resultType.llvm(), pi.callSymbol,
+			reg, pi.resultType.llvm(), symbol,
 			prev.ty, prev.expr, next.ty, next.expr)
 		prev = callArg{expr: reg, ty: pi.resultType.llvm()}
 	}
@@ -5114,7 +5495,7 @@ type stackDecl struct {
 
 func matchWhileLoopReturn(fn *mir.Function, mctx *moduleCtx) (whileLoopPattern, bool) {
 	pat := whileLoopPattern{}
-	pat.retType = scalarFromType(fn.ReturnType)
+	pat.retType = mctx.scalarFromType(fn.ReturnType, true)
 	if pat.retType == scalarUnknown {
 		return pat, false
 	}
@@ -5135,7 +5516,7 @@ func matchWhileLoopReturn(fn *mir.Function, mctx *moduleCtx) (whileLoopPattern, 
 		if loc == nil || !loc.IsParam {
 			return pat, false
 		}
-		pt := scalarFromType(loc.Type)
+		pt := mctx.scalarFromType(loc.Type, true)
 		if pt == scalarUnknown {
 			return pat, false
 		}
@@ -5189,7 +5570,7 @@ func matchWhileLoopReturn(fn *mir.Function, mctx *moduleCtx) (whileLoopPattern, 
 		if !l.Mut {
 			continue
 		}
-		ty := scalarFromType(l.Type)
+		ty := mctx.scalarFromType(l.Type, true)
 		if ty == scalarUnknown {
 			return pat, false
 		}
@@ -5339,48 +5720,829 @@ func emitWhileStep(ctx *whileLoopEmitCtx, out *strings.Builder, instr mir.Instr)
 	return false
 }
 
-// emitWhileIntrinsic handles the small set of intrinsics stage0
-// understands inside any block (entry / header / body / post / exit).
-// Currently the only supported intrinsic is `IntrinsicPrintln` with a
-// single Int-typed argument; everything else declines.
+// emitWhileIntrinsic mirrors the sequential intrinsic surface for loop
+// blocks while resolving operands through the stack-aware loop bindings.
 func emitWhileIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.IntrinsicInstr) bool {
 	if ii.Dest != nil {
-		// Stage0 only handles intrinsics whose result is unit
-		// (no destination). Println / abort / etc. fit this shape.
-		return false
+		return emitWhileValueIntrinsic(ctx, out, ii)
 	}
 	switch ii.Kind {
-	case mir.IntrinsicPrintln:
+	case mir.IntrinsicPrint, mir.IntrinsicPrintln, mir.IntrinsicEprint, mir.IntrinsicEprintln:
+		return emitWhilePrintIntrinsic(ctx, out, ii)
+	case mir.IntrinsicAbort:
 		if len(ii.Args) != 1 {
 			return false
 		}
 		expr, ty, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+		if !ok || ty != scalarString {
+			return false
+		}
+		declareVoidFunctionPrototype(ctx.mctx, "osty_rt_panic", []callArg{{ty: "ptr"}})
+		fmt.Fprintf(out, "  call void @osty_rt_panic(ptr %s)\n", expr)
+		return true
+	case mir.IntrinsicListPush:
+		if len(ii.Args) != 2 {
+			return false
+		}
+		listExpr, listTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+		if !ok || listTy != scalarOpaquePtr {
+			return false
+		}
+		elemExpr, elemTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[1])
 		if !ok {
 			return false
 		}
-		switch ty {
-		case scalarInt:
-			fmt.Fprintf(out, "  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 %s)\n", expr)
-			return true
-		case scalarString:
-			fmt.Fprintf(out, "  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.str, ptr %s)\n", expr)
-			return true
+		symbol := listPushSymbolFor(elemTy)
+		if symbol == "" {
+			return false
 		}
-		return false
+		declareListRuntime(ctx.mctx)
+		fmt.Fprintf(out, "  call void @%s(ptr %s, %s %s)\n", symbol, listExpr, elemTy.llvm(), elemExpr)
+		return true
+	case mir.IntrinsicListInsert:
+		if len(ii.Args) != 3 {
+			return false
+		}
+		listExpr, listTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+		if !ok || listTy != scalarOpaquePtr {
+			return false
+		}
+		indexExpr, indexTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[1])
+		if !ok || indexTy != scalarInt {
+			return false
+		}
+		elemExpr, elemTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[2])
+		if !ok {
+			return false
+		}
+		symbol := listInsertSymbolFor(elemTy)
+		if symbol == "" {
+			return false
+		}
+		declareVoidFunctionPrototype(ctx.mctx, symbol, []callArg{{ty: "ptr"}, {ty: "i64"}, {ty: elemTy.llvm()}})
+		fmt.Fprintf(out, "  call void @%s(ptr %s, i64 %s, %s %s)\n", symbol, listExpr, indexExpr, elemTy.llvm(), elemExpr)
+		return true
+	case mir.IntrinsicListClear:
+		return emitWhileUnaryVoid(ctx, out, ii, "osty_rt_list_clear")
+	case mir.IntrinsicListReverse:
+		return emitWhileUnaryVoid(ctx, out, ii, "osty_rt_list_reverse")
+	case mir.IntrinsicListPop:
+		return emitWhileUnaryVoid(ctx, out, ii, "osty_rt_list_pop_discard")
+	case mir.IntrinsicListRemoveAt:
+		args, ok := resolveWhileFixedScalarArgs(ctx, out, ii.Args, []scalarType{scalarOpaquePtr, scalarInt})
+		if !ok {
+			return false
+		}
+		declareVoidFunctionPrototype(ctx.mctx, "osty_rt_list_remove_at_discard", []callArg{{ty: "ptr"}, {ty: "i64"}})
+		out.WriteString(renderVoidCallLine("osty_rt_list_remove_at_discard", args))
+		return true
+	case mir.IntrinsicSetInsert, mir.IntrinsicSetRemove:
+		if len(ii.Args) != 2 {
+			return false
+		}
+		setExpr, setTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+		if !ok || setTy != scalarOpaquePtr {
+			return false
+		}
+		elemExpr, elemTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[1])
+		if !ok {
+			return false
+		}
+		symbol := setMutationSymbolFor(ii.Kind, elemTy)
+		if symbol == "" {
+			return false
+		}
+		declareRuntimePrototype(ctx.mctx, symbol, scalarBool, []callArg{{ty: "ptr"}, {ty: elemTy.llvm()}})
+		fmt.Fprintf(out, "  call i1 @%s(ptr %s, %s %s)\n", symbol, setExpr, elemTy.llvm(), elemExpr)
+		return true
+	case mir.IntrinsicMapSet:
+		if len(ii.Args) != 3 {
+			return false
+		}
+		mapExpr, mapTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+		if !ok || mapTy != scalarOpaquePtr {
+			return false
+		}
+		keyExpr, keyTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[1])
+		if !ok {
+			return false
+		}
+		valueExpr, valueTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[2])
+		if !ok {
+			return false
+		}
+		symbol := mapInsertSymbolFor(keyTy)
+		if symbol == "" {
+			return false
+		}
+		valueSlot := ctx.mctx.freshTempName("map.value")
+		declareVoidFunctionPrototype(ctx.mctx, symbol, []callArg{{ty: "ptr"}, {ty: keyTy.llvm()}, {ty: "ptr"}})
+		fmt.Fprintf(out, "  %s = alloca %s\n", valueSlot, valueTy.llvm())
+		fmt.Fprintf(out, "  store %s %s, ptr %s\n", valueTy.llvm(), valueExpr, valueSlot)
+		fmt.Fprintf(out, "  call void @%s(ptr %s, %s %s, ptr %s)\n", symbol, mapExpr, keyTy.llvm(), keyExpr, valueSlot)
+		return true
+	case mir.IntrinsicMapRemove:
+		if len(ii.Args) != 2 {
+			return false
+		}
+		mapExpr, mapTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+		if !ok || mapTy != scalarOpaquePtr {
+			return false
+		}
+		keyExpr, keyTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[1])
+		if !ok {
+			return false
+		}
+		symbol := mapRemoveSymbolFor(keyTy)
+		if symbol == "" {
+			return false
+		}
+		declareRuntimePrototype(ctx.mctx, symbol, scalarBool, []callArg{{ty: "ptr"}, {ty: keyTy.llvm()}})
+		fmt.Fprintf(out, "  call i1 @%s(ptr %s, %s %s)\n", symbol, mapExpr, keyTy.llvm(), keyExpr)
+		return true
+	case mir.IntrinsicMapClear:
+		return emitWhileUnaryVoid(ctx, out, ii, "osty_rt_map_clear")
+	case mir.IntrinsicSetClear:
+		return emitWhileUnaryVoid(ctx, out, ii, "osty_rt_set_clear")
+	case mir.IntrinsicStringSplitInto:
+		args, ok := resolveWhileFixedScalarArgs(ctx, out, ii.Args, []scalarType{scalarOpaquePtr, scalarString, scalarString})
+		if !ok {
+			return false
+		}
+		declareVoidFunctionPrototype(ctx.mctx, "osty_rt_strings_SplitInto", []callArg{{ty: "ptr"}, {ty: "ptr"}, {ty: "ptr"}})
+		out.WriteString(renderVoidCallLine("osty_rt_strings_SplitInto", args))
+		return true
+	case mir.IntrinsicYield:
+		if len(ii.Args) != 0 {
+			return false
+		}
+		declareVoidFunctionPrototype(ctx.mctx, "osty_rt_yield", nil)
+		out.WriteString("  call void @osty_rt_yield()\n")
+		return true
+	case mir.IntrinsicSleep:
+		args, ok := resolveWhileFixedScalarArgs(ctx, out, ii.Args, []scalarType{scalarInt})
+		if !ok {
+			return false
+		}
+		declareVoidFunctionPrototype(ctx.mctx, "osty_rt_sleep", []callArg{{ty: "i64"}})
+		out.WriteString(renderVoidCallLine("osty_rt_sleep", args))
+		return true
+	case mir.IntrinsicCheckCancelled:
+		if len(ii.Args) != 0 {
+			return false
+		}
+		declareVoidFunctionPrototype(ctx.mctx, "osty_rt_check_cancelled", nil)
+		out.WriteString("  call void @osty_rt_check_cancelled()\n")
+		return true
+	case mir.IntrinsicChanSend:
+		if len(ii.Args) != 2 {
+			return false
+		}
+		chanExpr, chanTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+		if !ok || chanTy != scalarOpaquePtr {
+			return false
+		}
+		valueExpr, valueTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[1])
+		if !ok {
+			return false
+		}
+		symbol := chanSendSymbolFor(valueTy)
+		if symbol == "" {
+			return false
+		}
+		declareVoidFunctionPrototype(ctx.mctx, symbol, []callArg{{ty: "ptr"}, {ty: valueTy.llvm()}})
+		fmt.Fprintf(out, "  call void @%s(ptr %s, %s %s)\n", symbol, chanExpr, valueTy.llvm(), valueExpr)
+		return true
+	case mir.IntrinsicChanClose:
+		return emitWhileUnaryVoid(ctx, out, ii, "osty_rt_thread_chan_close")
+	case mir.IntrinsicGroupCancel:
+		return emitWhileUnaryVoid(ctx, out, ii, "osty_rt_task_group_cancel")
+	case mir.IntrinsicSelectRecv:
+		args, ok := resolveWhileFixedScalarArgs(ctx, out, ii.Args, []scalarType{scalarOpaquePtr, scalarOpaquePtr, scalarOpaquePtr})
+		if !ok {
+			return false
+		}
+		declareVoidFunctionPrototype(ctx.mctx, "osty_rt_select_recv", []callArg{{ty: "ptr"}, {ty: "ptr"}, {ty: "ptr"}})
+		out.WriteString(renderVoidCallLine("osty_rt_select_recv", args))
+		return true
+	case mir.IntrinsicSelectSend:
+		if len(ii.Args) != 4 {
+			return false
+		}
+		selectExpr, selectTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+		if !ok || selectTy != scalarOpaquePtr {
+			return false
+		}
+		chanExpr, chanTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[1])
+		if !ok || chanTy != scalarOpaquePtr {
+			return false
+		}
+		valueExpr, valueTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[2])
+		if !ok {
+			return false
+		}
+		armExpr, armTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[3])
+		if !ok || armTy != scalarOpaquePtr {
+			return false
+		}
+		symbol := selectSendSymbolFor(valueTy)
+		if symbol == "" {
+			return false
+		}
+		declareVoidFunctionPrototype(ctx.mctx, symbol, []callArg{{ty: "ptr"}, {ty: "ptr"}, {ty: valueTy.llvm()}, {ty: "ptr"}})
+		fmt.Fprintf(out, "  call void @%s(ptr %s, ptr %s, %s %s, ptr %s)\n", symbol, selectExpr, chanExpr, valueTy.llvm(), valueExpr, armExpr)
+		return true
+	case mir.IntrinsicSelectTimeout:
+		args, ok := resolveWhileFixedScalarArgs(ctx, out, ii.Args, []scalarType{scalarOpaquePtr, scalarInt, scalarOpaquePtr})
+		if !ok {
+			return false
+		}
+		declareVoidFunctionPrototype(ctx.mctx, "osty_rt_select_timeout", []callArg{{ty: "ptr"}, {ty: "i64"}, {ty: "ptr"}})
+		out.WriteString(renderVoidCallLine("osty_rt_select_timeout", args))
+		return true
+	case mir.IntrinsicSelectDefault:
+		args, ok := resolveWhileFixedScalarArgs(ctx, out, ii.Args, []scalarType{scalarOpaquePtr, scalarOpaquePtr})
+		if !ok {
+			return false
+		}
+		declareVoidFunctionPrototype(ctx.mctx, "osty_rt_select_default", []callArg{{ty: "ptr"}, {ty: "ptr"}})
+		out.WriteString(renderVoidCallLine("osty_rt_select_default", args))
+		return true
 	}
 	return false
 }
 
+func emitWhilePrintIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.IntrinsicInstr) bool {
+	if len(ii.Args) != 1 {
+		return false
+	}
+	expr, ty, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+	if !ok {
+		return false
+	}
+	fmtGlobal, argTy, ok := printFormatFor(ii.Kind, ty)
+	if !ok {
+		return false
+	}
+	if isStderrPrintIntrinsic(ii.Kind) {
+		stderrReg := ctx.mctx.freshTempName("stderr")
+		fmt.Fprintf(out, "  %s = load ptr, ptr @stderr\n", stderrReg)
+		fmt.Fprintf(out, "  call i32 (ptr, ptr, ...) @fprintf(ptr %s, ptr %s, %s %s)\n", stderrReg, fmtGlobal, argTy, expr)
+		return true
+	}
+	fmt.Fprintf(out, "  call i32 (ptr, ...) @printf(ptr %s, %s %s)\n", fmtGlobal, argTy, expr)
+	return true
+}
+
+func emitWhileUnaryVoid(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.IntrinsicInstr, symbol string) bool {
+	args, ok := resolveWhileFixedScalarArgs(ctx, out, ii.Args, []scalarType{scalarOpaquePtr})
+	if !ok {
+		return false
+	}
+	declareVoidFunctionPrototype(ctx.mctx, symbol, []callArg{{ty: "ptr"}})
+	out.WriteString(renderVoidCallLine(symbol, args))
+	return true
+}
+
+func resolveWhileFixedScalarArgs(ctx *whileLoopEmitCtx, out *strings.Builder, ops []mir.Operand, want []scalarType) ([]callArg, bool) {
+	if len(ops) != len(want) {
+		return nil, false
+	}
+	args := make([]callArg, 0, len(ops))
+	for i, op := range ops {
+		expr, ty, ok := resolveOperandWithLoad(ctx, out, op)
+		if !ok || ty != want[i] {
+			return nil, false
+		}
+		args = append(args, callArg{expr: expr, ty: ty.llvm()})
+	}
+	return args, true
+}
+
+func emitWhileValueIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.IntrinsicInstr) bool {
+	if ii.Dest == nil || ii.Dest.HasProjections() {
+		return false
+	}
+	destID := ii.Dest.Local
+	destLocal := lookupLocal(ctx.fn, destID)
+	if destLocal == nil {
+		return false
+	}
+	if isUnitType(destLocal.Type) {
+		return true
+	}
+	destType := ctx.mctx.scalarFromType(destLocal.Type, true)
+	if destType == scalarUnknown {
+		return false
+	}
+
+	switch ii.Kind {
+	case mir.IntrinsicStringConcat:
+		return emitWhileStringConcatIntrinsic(ctx, out, ii, destID, destType)
+	case mir.IntrinsicListIsEmpty:
+		if destType != scalarBool {
+			return false
+		}
+		args, ok := resolveWhileFixedScalarArgs(ctx, out, ii.Args, []scalarType{scalarOpaquePtr})
+		if !ok {
+			return false
+		}
+		declareListRuntime(ctx.mctx)
+		lenReg := freshReg(ctx)
+		boolReg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = call i64 @osty_rt_list_len(ptr %s)\n", lenReg, args[0].expr)
+		fmt.Fprintf(out, "  %s = icmp eq i64 %s, 0\n", boolReg, lenReg)
+		return bindWhileResult(ctx, out, destID, scalarBool, boolReg)
+	case mir.IntrinsicStringIsEmpty:
+		if destType != scalarBool {
+			return false
+		}
+		args, ok := resolveWhileFixedScalarArgs(ctx, out, ii.Args, []scalarType{scalarString})
+		if !ok {
+			return false
+		}
+		declareRuntimePrototype(ctx.mctx, "osty_rt_strings_ByteLen", scalarInt, []callArg{{ty: "ptr"}})
+		lenReg := freshReg(ctx)
+		boolReg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = call i64 @osty_rt_strings_ByteLen(ptr %s)\n", lenReg, args[0].expr)
+		fmt.Fprintf(out, "  %s = icmp eq i64 %s, 0\n", boolReg, lenReg)
+		return bindWhileResult(ctx, out, destID, scalarBool, boolReg)
+	case mir.IntrinsicBytesContains:
+		if destType != scalarBool {
+			return false
+		}
+		args, ok := resolveWhileFixedScalarArgs(ctx, out, ii.Args, []scalarType{scalarOpaquePtr, scalarOpaquePtr})
+		if !ok {
+			return false
+		}
+		declareRuntimePrototype(ctx.mctx, "osty_rt_bytes_index_of", scalarInt, []callArg{{ty: "ptr"}, {ty: "ptr"}})
+		indexReg := freshReg(ctx)
+		boolReg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = call i64 @osty_rt_bytes_index_of(ptr %s, ptr %s)\n", indexReg, args[0].expr, args[1].expr)
+		fmt.Fprintf(out, "  %s = icmp ne i64 %s, -1\n", boolReg, indexReg)
+		return bindWhileResult(ctx, out, destID, scalarBool, boolReg)
+	case mir.IntrinsicListGet:
+		if len(ii.Args) != 2 {
+			return false
+		}
+		listExpr, listTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+		if !ok || listTy != scalarOpaquePtr {
+			return false
+		}
+		indexExpr, indexTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[1])
+		if !ok || indexTy != scalarInt {
+			return false
+		}
+		symbol := listGetSymbolFor(destType)
+		if symbol == "" {
+			return false
+		}
+		declareListGetRuntimeFor(ctx.mctx, destType)
+		return emitWhileCallResult(ctx, out, destID, destType, symbol, []callArg{{expr: listExpr, ty: "ptr"}, {expr: indexExpr, ty: "i64"}})
+	case mir.IntrinsicListSorted, mir.IntrinsicListToSet, mir.IntrinsicListToString:
+		return emitWhileTypedListUnaryIntrinsic(ctx, out, ii, destID, destType)
+	case mir.IntrinsicMapContains:
+		return emitWhileMapContainsIntrinsic(ctx, out, ii, destID, destType)
+	case mir.IntrinsicMapGet:
+		return emitWhileMapGetIntrinsic(ctx, out, ii, destID, destType)
+	case mir.IntrinsicMapNew:
+		return emitWhileMapNewIntrinsic(ctx, out, destID, destType)
+	case mir.IntrinsicMapKeysSorted:
+		return emitWhileMapKeysSortedIntrinsic(ctx, out, ii, destID, destType)
+	case mir.IntrinsicMapIncr:
+		return emitWhileMapIncrIntrinsic(ctx, out, ii, destID, destType)
+	case mir.IntrinsicSetContains:
+		return emitWhileSetContainsIntrinsic(ctx, out, ii, destID, destType)
+	case mir.IntrinsicSetNew:
+		return emitWhileSetNewIntrinsic(ctx, out, destID, destType)
+	case mir.IntrinsicOptionIsSome, mir.IntrinsicOptionIsNone:
+		return emitWhileOptionIsIntrinsic(ctx, out, ii, destID, destType)
+	case mir.IntrinsicOptionUnwrap, mir.IntrinsicOptionUnwrapOr:
+		return emitWhileOptionUnwrapIntrinsic(ctx, out, ii, destID, destType)
+	case mir.IntrinsicRawNull:
+		if destType != scalarOpaquePtr || len(ii.Args) != 0 {
+			return false
+		}
+		return bindWhileResult(ctx, out, destID, scalarOpaquePtr, "null")
+	case mir.IntrinsicLikely, mir.IntrinsicUnlikely:
+		if destType != scalarBool {
+			return false
+		}
+		args, ok := resolveWhileFixedScalarArgs(ctx, out, ii.Args, []scalarType{scalarBool})
+		if !ok {
+			return false
+		}
+		expected := "true"
+		if ii.Kind == mir.IntrinsicUnlikely {
+			expected = "false"
+		}
+		declareRuntimePrototype(ctx.mctx, "llvm.expect.i1", scalarBool, []callArg{{ty: "i1"}, {ty: "i1"}})
+		return emitWhileCallResult(ctx, out, destID, scalarBool, "llvm.expect.i1", []callArg{args[0], {expr: expected, ty: "i1"}})
+	}
+
+	spec, ok := intrinsicRuntimeCallSpec(ii.Kind)
+	if !ok || spec.ret != destType || len(spec.args) != len(ii.Args) {
+		return false
+	}
+	args, ok := resolveWhileFixedScalarArgs(ctx, out, ii.Args, spec.args)
+	if !ok {
+		return false
+	}
+	declareRuntimePrototype(ctx.mctx, spec.symbol, spec.ret, args)
+	return emitWhileCallResult(ctx, out, destID, destType, spec.symbol, args)
+}
+
+func emitWhileStringConcatIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.IntrinsicInstr, destID mir.LocalID, destType scalarType) bool {
+	if destType != scalarString || len(ii.Args) < 2 {
+		return false
+	}
+	parts := make([]callArg, 0, len(ii.Args))
+	hasInt := false
+	for _, op := range ii.Args {
+		expr, ty, ok := resolveOperandWithLoad(ctx, out, op)
+		if !ok || (ty != scalarString && ty != scalarInt) {
+			return false
+		}
+		if ty == scalarInt {
+			hasInt = true
+		}
+		parts = append(parts, callArg{expr: expr, ty: ty.llvm()})
+	}
+	declareStringConcatRuntime(ctx.mctx)
+	if hasInt {
+		declareStringConcatI64Runtime(ctx.mctx)
+	}
+	current := parts[0]
+	for _, next := range parts[1:] {
+		symbol, ok := stringConcatSymbolForArgs(current.ty, next.ty)
+		if !ok {
+			return false
+		}
+		reg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = call ptr @%s(%s %s, %s %s)\n", reg, symbol, current.ty, current.expr, next.ty, next.expr)
+		current = callArg{expr: reg, ty: scalarString.llvm()}
+	}
+	return bindWhileResult(ctx, out, destID, scalarString, current.expr)
+}
+
+func emitWhileTypedListUnaryIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.IntrinsicInstr, destID mir.LocalID, destType scalarType) bool {
+	if len(ii.Args) != 1 {
+		return false
+	}
+	expr, ty, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+	if !ok || ty != scalarOpaquePtr {
+		return false
+	}
+	elemType := collectionArgScalar(ii.Args[0], "List", 0, ctx.mctx)
+	if elemType == scalarUnknown {
+		return false
+	}
+	var symbol string
+	switch ii.Kind {
+	case mir.IntrinsicListSorted:
+		if destType != scalarOpaquePtr {
+			return false
+		}
+		symbol = listSortedSymbolFor(elemType)
+	case mir.IntrinsicListToSet:
+		if destType != scalarOpaquePtr {
+			return false
+		}
+		symbol = listToSetSymbolFor(elemType)
+	case mir.IntrinsicListToString:
+		if destType != scalarString {
+			return false
+		}
+		symbol = listToStringSymbolFor(elemType)
+	default:
+		return false
+	}
+	if symbol == "" {
+		return false
+	}
+	declareRuntimePrototype(ctx.mctx, symbol, destType, []callArg{{ty: "ptr"}})
+	return emitWhileCallResult(ctx, out, destID, destType, symbol, []callArg{{expr: expr, ty: "ptr"}})
+}
+
+func emitWhileMapContainsIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.IntrinsicInstr, destID mir.LocalID, destType scalarType) bool {
+	if destType != scalarBool || len(ii.Args) != 2 {
+		return false
+	}
+	mapExpr, mapTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+	if !ok || mapTy != scalarOpaquePtr {
+		return false
+	}
+	keyExpr, keyTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[1])
+	if !ok {
+		return false
+	}
+	symbol := mapContainsSymbolFor(keyTy)
+	if symbol == "" {
+		return false
+	}
+	args := []callArg{{expr: mapExpr, ty: "ptr"}, {expr: keyExpr, ty: keyTy.llvm()}}
+	declareRuntimePrototype(ctx.mctx, symbol, scalarBool, args)
+	return emitWhileCallResult(ctx, out, destID, scalarBool, symbol, args)
+}
+
+func emitWhileMapGetIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.IntrinsicInstr, destID mir.LocalID, destType scalarType) bool {
+	if destType != scalarOpaquePtr || len(ii.Args) != 2 {
+		return false
+	}
+	destLocal := lookupLocal(ctx.fn, destID)
+	if destLocal == nil {
+		return false
+	}
+	payloadTy, ok := optionPayloadScalar(destLocal.Type, ctx.mctx)
+	if !ok {
+		return false
+	}
+	mapExpr, mapTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+	if !ok || mapTy != scalarOpaquePtr {
+		return false
+	}
+	keyExpr, keyTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[1])
+	if !ok || keyTy == scalarUnknown {
+		return false
+	}
+	symbol := mapGetSymbolFor(keyTy)
+	if symbol == "" {
+		return false
+	}
+	typeName, ok := ctx.mctx.emitOptionBoxDef(payloadTy)
+	if !ok {
+		return false
+	}
+	valueSlot := freshReg(ctx)
+	found := freshReg(ctx)
+	sizePtr := freshReg(ctx)
+	size := freshReg(ctx)
+	obj := freshReg(ctx)
+	tag := freshReg(ctx)
+	tagSlot := ctx.mctx.freshTempName("map.get.option.tag.slot")
+	payloadSlot := ctx.mctx.freshTempName("map.get.option.payload.slot")
+	payload := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = alloca %s\n", valueSlot, payloadTy.llvm())
+	declareRuntimePrototype(ctx.mctx, symbol, scalarBool, []callArg{{ty: "ptr"}, {ty: keyTy.llvm()}, {ty: "ptr"}})
+	fmt.Fprintf(out, "  %s = call i1 @%s(ptr %s, %s %s, ptr %s)\n", found, symbol, mapExpr, keyTy.llvm(), keyExpr, valueSlot)
+	fmt.Fprintf(out, "  %s = getelementptr %%%s, ptr null, i32 1\n", sizePtr, typeName)
+	fmt.Fprintf(out, "  %s = ptrtoint ptr %s to i64\n", size, sizePtr)
+	declareRuntimePrototype(ctx.mctx, "osty_rt_stage0_alloc", scalarOpaquePtr, []callArg{{ty: "i64"}})
+	fmt.Fprintf(out, "  %s = call ptr @osty_rt_stage0_alloc(i64 %s)\n", obj, size)
+	fmt.Fprintf(out, "  %s = select i1 %s, i64 0, i64 1\n", tag, found)
+	fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 0\n", tagSlot, typeName, obj)
+	fmt.Fprintf(out, "  store i64 %s, ptr %s\n", tag, tagSlot)
+	fmt.Fprintf(out, "  %s = load %s, ptr %s\n", payload, payloadTy.llvm(), valueSlot)
+	fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 1\n", payloadSlot, typeName, obj)
+	fmt.Fprintf(out, "  store %s %s, ptr %s\n", payloadTy.llvm(), payload, payloadSlot)
+	return bindWhileResult(ctx, out, destID, scalarOpaquePtr, obj)
+}
+
+func emitWhileMapNewIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, destID mir.LocalID, destType scalarType) bool {
+	if destType != scalarOpaquePtr {
+		return false
+	}
+	keyType := localCollectionArgScalar(ctx.fn, destID, "Map", 0, ctx.mctx)
+	valueType := localCollectionArgScalar(ctx.fn, destID, "Map", 1, ctx.mctx)
+	keyKind, ok := runtimeKindForScalar(keyType)
+	if !ok {
+		return false
+	}
+	valueKind, ok := runtimeKindForScalar(valueType)
+	if !ok {
+		return false
+	}
+	valueSize, ok := runtimeSizeForScalar(valueType)
+	if !ok {
+		return false
+	}
+	args := []callArg{
+		{expr: fmt.Sprintf("%d", keyKind), ty: "i64"},
+		{expr: fmt.Sprintf("%d", valueKind), ty: "i64"},
+		{expr: fmt.Sprintf("%d", valueSize), ty: "i64"},
+		{expr: "null", ty: "ptr"},
+	}
+	declareRuntimePrototype(ctx.mctx, "osty_rt_map_new", scalarOpaquePtr, args)
+	return emitWhileCallResult(ctx, out, destID, scalarOpaquePtr, "osty_rt_map_new", args)
+}
+
+func emitWhileMapKeysSortedIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.IntrinsicInstr, destID mir.LocalID, destType scalarType) bool {
+	if destType != scalarOpaquePtr || len(ii.Args) != 1 {
+		return false
+	}
+	expr, ty, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+	if !ok || ty != scalarOpaquePtr {
+		return false
+	}
+	keyType := collectionArgScalar(ii.Args[0], "Map", 0, ctx.mctx)
+	suffix := sortableRuntimeSuffixFor(keyType)
+	if suffix == "" {
+		return false
+	}
+	symbol := "osty_rt_map_keys_sorted_" + suffix
+	declareRuntimePrototype(ctx.mctx, symbol, scalarOpaquePtr, []callArg{{ty: "ptr"}})
+	return emitWhileCallResult(ctx, out, destID, scalarOpaquePtr, symbol, []callArg{{expr: expr, ty: "ptr"}})
+}
+
+func emitWhileMapIncrIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.IntrinsicInstr, destID mir.LocalID, destType scalarType) bool {
+	if destType != scalarInt || len(ii.Args) != 3 {
+		return false
+	}
+	mapExpr, mapTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+	if !ok || mapTy != scalarOpaquePtr {
+		return false
+	}
+	keyExpr, keyTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[1])
+	if !ok {
+		return false
+	}
+	deltaExpr, deltaTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[2])
+	if !ok || deltaTy != scalarInt {
+		return false
+	}
+	suffix := runtimeSuffixForScalar(keyTy)
+	if suffix == "" {
+		return false
+	}
+	symbol := "osty_rt_map_incr_i64_" + suffix
+	args := []callArg{{expr: mapExpr, ty: "ptr"}, {expr: keyExpr, ty: keyTy.llvm()}, {expr: deltaExpr, ty: "i64"}}
+	declareRuntimePrototype(ctx.mctx, symbol, scalarInt, args)
+	return emitWhileCallResult(ctx, out, destID, scalarInt, symbol, args)
+}
+
+func emitWhileSetContainsIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.IntrinsicInstr, destID mir.LocalID, destType scalarType) bool {
+	if destType != scalarBool || len(ii.Args) != 2 {
+		return false
+	}
+	setExpr, setTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+	if !ok || setTy != scalarOpaquePtr {
+		return false
+	}
+	elemExpr, elemTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[1])
+	if !ok {
+		return false
+	}
+	symbol := setContainsSymbolFor(elemTy)
+	if symbol == "" {
+		return false
+	}
+	args := []callArg{{expr: setExpr, ty: "ptr"}, {expr: elemExpr, ty: elemTy.llvm()}}
+	declareRuntimePrototype(ctx.mctx, symbol, scalarBool, args)
+	return emitWhileCallResult(ctx, out, destID, scalarBool, symbol, args)
+}
+
+func emitWhileSetNewIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, destID mir.LocalID, destType scalarType) bool {
+	if destType != scalarOpaquePtr {
+		return false
+	}
+	elemType := localCollectionArgScalar(ctx.fn, destID, "Set", 0, ctx.mctx)
+	elemKind, ok := runtimeKindForScalar(elemType)
+	if !ok {
+		return false
+	}
+	args := []callArg{{expr: fmt.Sprintf("%d", elemKind), ty: "i64"}}
+	declareRuntimePrototype(ctx.mctx, "osty_rt_set_new", scalarOpaquePtr, args)
+	return emitWhileCallResult(ctx, out, destID, scalarOpaquePtr, "osty_rt_set_new", args)
+}
+
+func emitWhileOptionIsIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.IntrinsicInstr, destID mir.LocalID, destType scalarType) bool {
+	if destType != scalarBool || len(ii.Args) != 1 {
+		return false
+	}
+	payloadTy, ok := optionPayloadScalar(ii.Args[0].Type(), ctx.mctx)
+	if !ok {
+		return false
+	}
+	typeName, ok := ctx.mctx.emitOptionBoxDef(payloadTy)
+	if !ok {
+		return false
+	}
+	optExpr, optTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+	if !ok || optTy != scalarOpaquePtr {
+		return false
+	}
+	tagSlot := freshReg(ctx)
+	tag := freshReg(ctx)
+	result := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 0\n", tagSlot, typeName, optExpr)
+	fmt.Fprintf(out, "  %s = load i64, ptr %s\n", tag, tagSlot)
+	pred := "eq"
+	if ii.Kind == mir.IntrinsicOptionIsNone {
+		pred = "ne"
+	}
+	fmt.Fprintf(out, "  %s = icmp %s i64 %s, 0\n", result, pred, tag)
+	return bindWhileResult(ctx, out, destID, scalarBool, result)
+}
+
+func emitWhileOptionUnwrapIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.IntrinsicInstr, destID mir.LocalID, destType scalarType) bool {
+	if len(ii.Args) == 0 || len(ii.Args) > 2 {
+		return false
+	}
+	payloadTy, ok := optionPayloadScalar(ii.Args[0].Type(), ctx.mctx)
+	if !ok || payloadTy != destType {
+		return false
+	}
+	if ii.Kind == mir.IntrinsicOptionUnwrap && len(ii.Args) != 1 {
+		return false
+	}
+	if ii.Kind == mir.IntrinsicOptionUnwrapOr && len(ii.Args) != 2 {
+		return false
+	}
+	typeName, ok := ctx.mctx.emitOptionBoxDef(payloadTy)
+	if !ok {
+		return false
+	}
+	optExpr, optTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[0])
+	if !ok || optTy != scalarOpaquePtr {
+		return false
+	}
+	payloadSlot := freshReg(ctx)
+	payload := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 1\n", payloadSlot, typeName, optExpr)
+	fmt.Fprintf(out, "  %s = load %s, ptr %s\n", payload, payloadTy.llvm(), payloadSlot)
+	if ii.Kind == mir.IntrinsicOptionUnwrap {
+		return bindWhileResult(ctx, out, destID, payloadTy, payload)
+	}
+	tagSlot := freshReg(ctx)
+	tag := freshReg(ctx)
+	isSome := freshReg(ctx)
+	result := freshReg(ctx)
+	fallback, fallbackTy, ok := resolveOperandWithLoad(ctx, out, ii.Args[1])
+	if !ok || fallbackTy != payloadTy {
+		return false
+	}
+	fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 0\n", tagSlot, typeName, optExpr)
+	fmt.Fprintf(out, "  %s = load i64, ptr %s\n", tag, tagSlot)
+	fmt.Fprintf(out, "  %s = icmp eq i64 %s, 0\n", isSome, tag)
+	fmt.Fprintf(out, "  %s = select i1 %s, %s %s, %s %s\n", result, isSome, payloadTy.llvm(), payload, payloadTy.llvm(), fallback)
+	return bindWhileResult(ctx, out, destID, payloadTy, result)
+}
+
+func emitWhileCallResult(ctx *whileLoopEmitCtx, out *strings.Builder, destID mir.LocalID, destType scalarType, symbol string, args []callArg) bool {
+	reg := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = call %s @%s(", reg, destType.llvm(), symbol)
+	for i, a := range args {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fmt.Fprintf(out, "%s %s", a.ty, a.expr)
+	}
+	out.WriteString(")\n")
+	return bindWhileResult(ctx, out, destID, destType, reg)
+}
+
+func bindWhileResult(ctx *whileLoopEmitCtx, out *strings.Builder, destID mir.LocalID, destType scalarType, expr string) bool {
+	if destType == scalarUnknown || expr == "" {
+		return false
+	}
+	if _, isStack := ctx.stack[destID]; isStack {
+		fmt.Fprintf(out, "  store %s %s, ptr %%%s\n", destType.llvm(), expr, ctx.stack[destID].name)
+		return true
+	}
+	if existing, found := ctx.bindings[destID]; found && existing.defined && !existing.isStack {
+		return false
+	}
+	ctx.bindings[destID] = localBinding{expr: expr, ty: destType, defined: true}
+	return true
+}
+
+func emitWhileCallToPlace(ctx *whileLoopEmitCtx, out *strings.Builder, dest mir.Place, destType scalarType, symbol string, args []callArg) bool {
+	if destType == scalarUnknown || symbol == "" {
+		return false
+	}
+	reg := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = call %s @%s(", reg, destType.llvm(), symbol)
+	for i, a := range args {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fmt.Fprintf(out, "%s %s", a.ty, a.expr)
+	}
+	out.WriteString(")\n")
+	if dest.HasProjections() {
+		slot, fieldTy, ok := resolveWhileProjectedFieldSlot(ctx, out, dest, "call.field.store.slot")
+		if !ok || fieldTy != destType {
+			return false
+		}
+		fmt.Fprintf(out, "  store %s %s, ptr %s\n", destType.llvm(), reg, slot)
+		return true
+	}
+	return bindWhileResult(ctx, out, dest.Local, destType, reg)
+}
+
 func emitWhileAssign(ctx *whileLoopEmitCtx, out *strings.Builder, ai *mir.AssignInstr) bool {
 	if ai.Dest.HasProjections() {
-		return false
+		return emitWhileFieldWrite(ctx, out, ai)
 	}
 	destID := ai.Dest.Local
 	destLocal := lookupLocal(ctx.fn, destID)
 	if destLocal == nil {
 		return false
 	}
-	destType := scalarFromType(destLocal.Type)
+	if isUnitType(destLocal.Type) {
+		return true
+	}
+	destType := ctx.mctx.scalarFromType(destLocal.Type, true)
 	if destType == scalarUnknown {
 		return false
 	}
@@ -5405,26 +6567,53 @@ func emitWhileAssign(ctx *whileLoopEmitCtx, out *strings.Builder, ai *mir.Assign
 		rhsExpr = expr
 		rhsTy = ty
 	case *mir.BinaryRV:
-		llvmOp, resultType, operandType := classifyBinary(src.Op)
-		if llvmOp == "" || resultType != destType {
+		expr, ty, ok := emitWhileBinaryRValue(ctx, out, src, destType)
+		if !ok {
 			return false
 		}
-		left, leftTy, ok := resolveOperandWithLoad(ctx, out, src.Left)
-		if !ok || leftTy != operandType {
+		rhsExpr = expr
+		rhsTy = ty
+	case *mir.UnaryRV:
+		expr, ty, ok := emitWhileUnaryRValue(ctx, out, src, destType)
+		if !ok {
 			return false
 		}
-		right, rightTy, ok := resolveOperandWithLoad(ctx, out, src.Right)
-		if !ok || rightTy != operandType {
+		rhsExpr = expr
+		rhsTy = ty
+	case *mir.DiscriminantRV:
+		expr, ty, ok := emitWhileDiscriminantRValue(ctx, out, src, destType)
+		if !ok {
 			return false
 		}
-		reg := freshReg(ctx)
-		fmt.Fprintf(out, "  %s = %s %s %s, %s\n", reg, llvmOp, operandType.llvm(), left, right)
-		rhsExpr = reg
-		rhsTy = resultType
+		rhsExpr = expr
+		rhsTy = ty
+	case *mir.AggregateRV:
+		expr, ty, ok := emitWhileAggregateRValue(ctx, out, src, destType)
+		if !ok {
+			return false
+		}
+		rhsExpr = expr
+		rhsTy = ty
+	case *mir.NullaryRV:
+		expr, ty, ok := emitWhileNullaryRValue(ctx, out, src, destType)
+		if !ok {
+			return false
+		}
+		rhsExpr = expr
+		rhsTy = ty
+	case *mir.LenRV:
+		expr, ty, ok := emitWhileLenRValue(ctx, out, src, destType)
+		if !ok {
+			return false
+		}
+		rhsExpr = expr
+		rhsTy = ty
 	default:
 		return false
 	}
-	_ = rhsTy
+	if rhsTy != destType {
+		return false
+	}
 
 	if isStackDest {
 		fmt.Fprintf(out, "  store %s %s, ptr %%%s\n", destType.llvm(), rhsExpr, ctx.stack[destID].name)
@@ -5442,28 +6631,448 @@ func emitWhileAssign(ctx *whileLoopEmitCtx, out *strings.Builder, ai *mir.Assign
 	return true
 }
 
+func emitWhileFieldWrite(ctx *whileLoopEmitCtx, out *strings.Builder, ai *mir.AssignInstr) bool {
+	if ai == nil || !ai.Dest.HasProjections() {
+		return false
+	}
+	slot, fieldTy, ok := resolveWhileProjectedFieldSlot(ctx, out, ai.Dest, "field.store.slot")
+	if !ok {
+		return false
+	}
+	valueExpr, valueTy, ok := resolveWhileStoreRValue(ctx, out, ai.Src, fieldTy)
+	if !ok || valueTy != fieldTy {
+		return false
+	}
+	fmt.Fprintf(out, "  store %s %s, ptr %s\n", fieldTy.llvm(), valueExpr, slot)
+	return true
+}
+
+func resolveWhileStoreRValue(ctx *whileLoopEmitCtx, out *strings.Builder, src mir.RValue, destType scalarType) (string, scalarType, bool) {
+	if use, ok := src.(*mir.UseRV); ok {
+		return resolveOperandWithLoad(ctx, out, use.Op)
+	}
+	if agg, ok := src.(*mir.AggregateRV); ok && agg.Kind == mir.AggEnumVariant && destType == scalarInt && len(agg.Fields) == 0 {
+		return fmt.Sprintf("%d", agg.VariantIdx), scalarInt, true
+	}
+	if agg, ok := src.(*mir.AggregateRV); ok {
+		return emitWhileAggregateRValue(ctx, out, agg, destType)
+	}
+	if rv, ok := src.(*mir.NullaryRV); ok {
+		return emitWhileNullaryRValue(ctx, out, rv, destType)
+	}
+	return "", scalarUnknown, false
+}
+
+func emitWhileBinaryRValue(ctx *whileLoopEmitCtx, out *strings.Builder, bin *mir.BinaryRV, destType scalarType) (string, scalarType, bool) {
+	if bin == nil {
+		return "", scalarUnknown, false
+	}
+	if bin.Op == mir.BinAdd && destType == scalarString {
+		left, leftTy, ok := resolveOperandWithLoad(ctx, out, bin.Left)
+		if !ok || (leftTy != scalarString && leftTy != scalarInt) {
+			return "", scalarUnknown, false
+		}
+		right, rightTy, ok := resolveOperandWithLoad(ctx, out, bin.Right)
+		if !ok || (rightTy != scalarString && rightTy != scalarInt) {
+			return "", scalarUnknown, false
+		}
+		symbol, ok := stringConcatSymbolForScalars(leftTy, rightTy)
+		if !ok {
+			return "", scalarUnknown, false
+		}
+		declareStringConcatRuntime(ctx.mctx)
+		if leftTy == scalarInt || rightTy == scalarInt {
+			declareStringConcatI64Runtime(ctx.mctx)
+		}
+		reg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = call ptr @%s(%s %s, %s %s)\n", reg, symbol, leftTy.llvm(), left, rightTy.llvm(), right)
+		return reg, scalarString, true
+	}
+	if (bin.Op == mir.BinEq || bin.Op == mir.BinNeq) && destType == scalarBool {
+		if ctx.mctx.scalarFromType(bin.Left.Type(), true) == scalarString {
+			left, leftTy, ok := resolveOperandWithLoad(ctx, out, bin.Left)
+			if !ok || leftTy != scalarString {
+				return "", scalarUnknown, false
+			}
+			right, rightTy, ok := resolveOperandWithLoad(ctx, out, bin.Right)
+			if !ok || rightTy != scalarString {
+				return "", scalarUnknown, false
+			}
+			declareStringEqualRuntime(ctx.mctx)
+			eqReg := freshReg(ctx)
+			fmt.Fprintf(out, "  %s = call i1 @osty_rt_strings_Equal(ptr %s, ptr %s)\n", eqReg, left, right)
+			if bin.Op == mir.BinEq {
+				return eqReg, scalarBool, true
+			}
+			neqReg := freshReg(ctx)
+			fmt.Fprintf(out, "  %s = xor i1 %s, true\n", neqReg, eqReg)
+			return neqReg, scalarBool, true
+		}
+		if ctx.mctx.scalarFromType(bin.Left.Type(), true) == scalarBool {
+			left, leftTy, ok := resolveOperandWithLoad(ctx, out, bin.Left)
+			if !ok || leftTy != scalarBool {
+				return "", scalarUnknown, false
+			}
+			right, rightTy, ok := resolveOperandWithLoad(ctx, out, bin.Right)
+			if !ok || rightTy != scalarBool {
+				return "", scalarUnknown, false
+			}
+			op := "icmp eq"
+			if bin.Op == mir.BinNeq {
+				op = "icmp ne"
+			}
+			reg := freshReg(ctx)
+			fmt.Fprintf(out, "  %s = %s i1 %s, %s\n", reg, op, left, right)
+			return reg, scalarBool, true
+		}
+	}
+	llvmOp, resultType, operandType := classifyBinary(bin.Op)
+	if llvmOp == "" || resultType != destType {
+		return "", scalarUnknown, false
+	}
+	left, leftTy, ok := resolveOperandWithLoad(ctx, out, bin.Left)
+	if !ok || leftTy != operandType {
+		return "", scalarUnknown, false
+	}
+	right, rightTy, ok := resolveOperandWithLoad(ctx, out, bin.Right)
+	if !ok || rightTy != operandType {
+		return "", scalarUnknown, false
+	}
+	reg := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = %s %s %s, %s\n", reg, llvmOp, operandType.llvm(), left, right)
+	return reg, resultType, true
+}
+
+func emitWhileUnaryRValue(ctx *whileLoopEmitCtx, out *strings.Builder, un *mir.UnaryRV, destType scalarType) (string, scalarType, bool) {
+	if un == nil {
+		return "", scalarUnknown, false
+	}
+	expr, ty, ok := resolveOperandWithLoad(ctx, out, un.Arg)
+	if !ok {
+		return "", scalarUnknown, false
+	}
+	switch un.Op {
+	case mir.UnPlus:
+		if destType != scalarInt || ty != scalarInt {
+			return "", scalarUnknown, false
+		}
+		return expr, scalarInt, true
+	case mir.UnNeg:
+		if destType != scalarInt || ty != scalarInt {
+			return "", scalarUnknown, false
+		}
+		reg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = sub i64 0, %s\n", reg, expr)
+		return reg, scalarInt, true
+	case mir.UnNot:
+		if destType != scalarBool || ty != scalarBool {
+			return "", scalarUnknown, false
+		}
+		reg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = xor i1 %s, true\n", reg, expr)
+		return reg, scalarBool, true
+	case mir.UnBitNot:
+		if destType != scalarInt || ty != scalarInt {
+			return "", scalarUnknown, false
+		}
+		reg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = xor i64 %s, -1\n", reg, expr)
+		return reg, scalarInt, true
+	}
+	return "", scalarUnknown, false
+}
+
+func emitWhileDiscriminantRValue(ctx *whileLoopEmitCtx, out *strings.Builder, discr *mir.DiscriminantRV, destType scalarType) (string, scalarType, bool) {
+	if discr == nil || destType != scalarInt {
+		return "", scalarUnknown, false
+	}
+	placeTy := placeResultType(ctx.fn, discr.Place)
+	if placeTy == nil {
+		return "", scalarUnknown, false
+	}
+	expr, ty, ok := resolveOperandWithLoad(ctx, out, &mir.CopyOp{Place: discr.Place, T: placeTy})
+	if !ok {
+		return "", scalarUnknown, false
+	}
+	if ty == scalarInt {
+		return expr, scalarInt, true
+	}
+	return "", scalarUnknown, false
+}
+
+func emitWhileAggregateRValue(ctx *whileLoopEmitCtx, out *strings.Builder, agg *mir.AggregateRV, destType scalarType) (string, scalarType, bool) {
+	if agg != nil && agg.Kind == mir.AggEnumVariant && destType == scalarInt && len(agg.Fields) == 0 {
+		return fmt.Sprintf("%d", agg.VariantIdx), scalarInt, true
+	}
+	if agg != nil && agg.Kind == mir.AggEnumVariant && destType == scalarOpaquePtr {
+		if expr, ty, ok := emitWhileOptionAggregateRValue(ctx, out, agg); ok {
+			return expr, ty, true
+		}
+		return emitWhileEnumAggregateRValue(ctx, out, agg)
+	}
+	if agg != nil && agg.Kind == mir.AggStruct && destType == scalarOpaquePtr {
+		return emitWhileStructAggregateRValue(ctx, out, agg)
+	}
+	if agg == nil || agg.Kind != mir.AggList || destType != scalarOpaquePtr {
+		return "", scalarUnknown, false
+	}
+	values := make([]callArg, 0, len(agg.Fields))
+	elemType := scalarUnknown
+	for _, field := range agg.Fields {
+		expr, ty, ok := resolveOperandWithLoad(ctx, out, field)
+		if !ok || ty == scalarUnknown {
+			return "", scalarUnknown, false
+		}
+		if elemType == scalarUnknown {
+			elemType = ty
+		}
+		if ty != elemType {
+			return "", scalarUnknown, false
+		}
+		values = append(values, callArg{expr: expr, ty: ty.llvm()})
+	}
+	pushSymbol := listPushSymbolFor(elemType)
+	if pushSymbol == "" && len(values) > 0 {
+		return "", scalarUnknown, false
+	}
+	declareListRuntime(ctx.mctx)
+	listReg := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = call ptr @osty_rt_list_new()\n", listReg)
+	for _, value := range values {
+		fmt.Fprintf(out, "  call void @%s(ptr %s, %s %s)\n", pushSymbol, listReg, value.ty, value.expr)
+	}
+	return listReg, scalarOpaquePtr, true
+}
+
+func enumVariantPayloadScalars(t mir.Type, variantIdx int, mctx *moduleCtx) (string, []scalarType, bool) {
+	if mctx == nil || mctx.module == nil || mctx.module.Layouts == nil || variantIdx < 0 {
+		return "", nil, false
+	}
+	named, ok := t.(*ir.NamedType)
+	if !ok || named == nil || named.Name == "" {
+		return "", nil, false
+	}
+	layout := mctx.module.Layouts.Enums[named.Name]
+	if layout == nil || variantIdx >= len(layout.Variants) {
+		return "", nil, false
+	}
+	variant := layout.Variants[variantIdx]
+	payload := make([]scalarType, len(variant.Payload))
+	for i, field := range variant.Payload {
+		st := mctx.scalarFromType(field.Type, true)
+		if st == scalarUnknown {
+			return "", nil, false
+		}
+		payload[i] = st
+	}
+	return named.Name, payload, true
+}
+
+func emitWhileEnumAggregateRValue(ctx *whileLoopEmitCtx, out *strings.Builder, agg *mir.AggregateRV) (string, scalarType, bool) {
+	enumName, payloadTypes, ok := enumVariantPayloadScalars(agg.T, agg.VariantIdx, ctx.mctx)
+	if !ok || len(payloadTypes) != len(agg.Fields) {
+		return "", scalarUnknown, false
+	}
+	typeName, ok := ctx.mctx.emitEnumBoxDef(enumName, agg.VariantIdx, payloadTypes)
+	if !ok {
+		return "", scalarUnknown, false
+	}
+	sizePtr := freshReg(ctx)
+	size := freshReg(ctx)
+	obj := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = getelementptr %%%s, ptr null, i32 1\n", sizePtr, typeName)
+	fmt.Fprintf(out, "  %s = ptrtoint ptr %s to i64\n", size, sizePtr)
+	declareRuntimePrototype(ctx.mctx, "osty_rt_stage0_alloc", scalarOpaquePtr, []callArg{{ty: "i64"}})
+	fmt.Fprintf(out, "  %s = call ptr @osty_rt_stage0_alloc(i64 %s)\n", obj, size)
+	tagSlot := ctx.mctx.freshTempName("enum.tag.slot")
+	fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 0\n", tagSlot, typeName, obj)
+	fmt.Fprintf(out, "  store i64 %d, ptr %s\n", agg.VariantIdx, tagSlot)
+	for i, field := range agg.Fields {
+		expr, ty, ok := resolveOperandWithLoad(ctx, out, field)
+		if !ok || ty != payloadTypes[i] {
+			return "", scalarUnknown, false
+		}
+		slot := ctx.mctx.freshTempName("enum.payload.slot")
+		fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 %d\n", slot, typeName, obj, i+1)
+		fmt.Fprintf(out, "  store %s %s, ptr %s\n", ty.llvm(), expr, slot)
+	}
+	return obj, scalarOpaquePtr, true
+}
+
+func optionPayloadScalar(t mir.Type, mctx *moduleCtx) (scalarType, bool) {
+	switch ty := t.(type) {
+	case *ir.OptionalType:
+		if ty == nil {
+			return scalarUnknown, false
+		}
+		st := mctx.scalarFromType(ty.Inner, true)
+		return st, st != scalarUnknown
+	case *ir.NamedType:
+		if ty == nil || !ty.Builtin || (ty.Name != "Option" && ty.Name != "Maybe") || len(ty.Args) == 0 {
+			return scalarUnknown, false
+		}
+		st := mctx.scalarFromType(ty.Args[0], true)
+		return st, st != scalarUnknown
+	}
+	return scalarUnknown, false
+}
+
+func emitWhileOptionAggregateRValue(ctx *whileLoopEmitCtx, out *strings.Builder, agg *mir.AggregateRV) (string, scalarType, bool) {
+	if ctx == nil || ctx.mctx == nil || agg == nil {
+		return "", scalarUnknown, false
+	}
+	payloadTy, ok := optionPayloadScalar(agg.T, ctx.mctx)
+	if !ok {
+		return "", scalarUnknown, false
+	}
+	typeName, ok := ctx.mctx.emitOptionBoxDef(payloadTy)
+	if !ok {
+		return "", scalarUnknown, false
+	}
+	sizePtr := freshReg(ctx)
+	size := freshReg(ctx)
+	obj := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = getelementptr %%%s, ptr null, i32 1\n", sizePtr, typeName)
+	fmt.Fprintf(out, "  %s = ptrtoint ptr %s to i64\n", size, sizePtr)
+	declareRuntimePrototype(ctx.mctx, "osty_rt_stage0_alloc", scalarOpaquePtr, []callArg{{ty: "i64"}})
+	fmt.Fprintf(out, "  %s = call ptr @osty_rt_stage0_alloc(i64 %s)\n", obj, size)
+	tagSlot := ctx.mctx.freshTempName("option.tag.slot")
+	fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 0\n", tagSlot, typeName, obj)
+	fmt.Fprintf(out, "  store i64 %d, ptr %s\n", agg.VariantIdx, tagSlot)
+	if len(agg.Fields) == 0 {
+		return obj, scalarOpaquePtr, true
+	}
+	if len(agg.Fields) != 1 {
+		return "", scalarUnknown, false
+	}
+	expr, ty, ok := resolveOperandWithLoad(ctx, out, agg.Fields[0])
+	if !ok || ty != payloadTy {
+		return "", scalarUnknown, false
+	}
+	payloadSlot := ctx.mctx.freshTempName("option.payload.slot")
+	fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 1\n", payloadSlot, typeName, obj)
+	fmt.Fprintf(out, "  store %s %s, ptr %s\n", payloadTy.llvm(), expr, payloadSlot)
+	return obj, scalarOpaquePtr, true
+}
+
+func emitWhileNullaryRValue(ctx *whileLoopEmitCtx, out *strings.Builder, rv *mir.NullaryRV, destType scalarType) (string, scalarType, bool) {
+	if rv == nil || rv.Kind != mir.NullaryNone || destType != scalarOpaquePtr {
+		return "", scalarUnknown, false
+	}
+	payloadTy, ok := optionPayloadScalar(rv.T, ctx.mctx)
+	if !ok {
+		return "", scalarUnknown, false
+	}
+	typeName, ok := ctx.mctx.emitOptionBoxDef(payloadTy)
+	if !ok {
+		return "", scalarUnknown, false
+	}
+	sizePtr := freshReg(ctx)
+	size := freshReg(ctx)
+	obj := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = getelementptr %%%s, ptr null, i32 1\n", sizePtr, typeName)
+	fmt.Fprintf(out, "  %s = ptrtoint ptr %s to i64\n", size, sizePtr)
+	declareRuntimePrototype(ctx.mctx, "osty_rt_stage0_alloc", scalarOpaquePtr, []callArg{{ty: "i64"}})
+	fmt.Fprintf(out, "  %s = call ptr @osty_rt_stage0_alloc(i64 %s)\n", obj, size)
+	tagSlot := ctx.mctx.freshTempName("option.tag.slot")
+	fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 0\n", tagSlot, typeName, obj)
+	fmt.Fprintf(out, "  store i64 1, ptr %s\n", tagSlot)
+	return obj, scalarOpaquePtr, true
+}
+
+func emitWhileStructAggregateRValue(ctx *whileLoopEmitCtx, out *strings.Builder, agg *mir.AggregateRV) (string, scalarType, bool) {
+	if ctx == nil || ctx.mctx == nil || agg == nil {
+		return "", scalarUnknown, false
+	}
+	named, ok := agg.T.(*ir.NamedType)
+	if !ok || named == nil || named.Name == "" {
+		return "", scalarUnknown, false
+	}
+	fieldTypes, ok := ctx.mctx.lookupStructFields(named.Name)
+	if !ok || len(fieldTypes) != len(agg.Fields) {
+		return "", scalarUnknown, false
+	}
+	ctx.mctx.emitStructDef(named.Name, fieldTypes)
+	sizePtr := freshReg(ctx)
+	size := freshReg(ctx)
+	obj := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = getelementptr %%%s, ptr null, i32 1\n", sizePtr, named.Name)
+	fmt.Fprintf(out, "  %s = ptrtoint ptr %s to i64\n", size, sizePtr)
+	declareRuntimePrototype(ctx.mctx, "osty_rt_stage0_alloc", scalarOpaquePtr, []callArg{{ty: "i64"}})
+	fmt.Fprintf(out, "  %s = call ptr @osty_rt_stage0_alloc(i64 %s)\n", obj, size)
+	for i, field := range agg.Fields {
+		expr, ty, ok := resolveOperandWithLoad(ctx, out, field)
+		if !ok || ty != fieldTypes[i] {
+			return "", scalarUnknown, false
+		}
+		slot := ctx.mctx.freshTempName("agg.field.slot")
+		fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 %d\n", slot, named.Name, obj, i)
+		fmt.Fprintf(out, "  store %s %s, ptr %s\n", ty.llvm(), expr, slot)
+	}
+	return obj, scalarOpaquePtr, true
+}
+
+func emitWhileLenRValue(ctx *whileLoopEmitCtx, out *strings.Builder, lenRV *mir.LenRV, destType scalarType) (string, scalarType, bool) {
+	if lenRV == nil || destType != scalarInt {
+		return "", scalarUnknown, false
+	}
+	placeTy := placeResultType(ctx.fn, lenRV.Place)
+	if placeTy == nil {
+		return "", scalarUnknown, false
+	}
+	expr, ty, ok := resolveOperandWithLoad(ctx, out, &mir.CopyOp{Place: lenRV.Place, T: placeTy})
+	if !ok {
+		return "", scalarUnknown, false
+	}
+	switch ty {
+	case scalarOpaquePtr:
+		declareListRuntime(ctx.mctx)
+		reg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = call i64 @osty_rt_list_len(ptr %s)\n", reg, expr)
+		return reg, scalarInt, true
+	case scalarString:
+		declareRuntimePrototype(ctx.mctx, "osty_rt_strings_ByteLen", scalarInt, []callArg{{ty: "ptr"}})
+		reg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = call i64 @osty_rt_strings_ByteLen(ptr %s)\n", reg, expr)
+		return reg, scalarInt, true
+	}
+	return "", scalarUnknown, false
+}
+
 func emitWhileCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInstr) bool {
-	if ci.Dest == nil || ci.Dest.HasProjections() {
+	if ci.Dest == nil {
+		return emitWhileVoidCall(ctx, out, ci)
+	}
+	destIRType := placeResultType(ctx.fn, *ci.Dest)
+	if destIRType == nil {
 		return false
 	}
-	destID := ci.Dest.Local
-	destLocal := lookupLocal(ctx.fn, destID)
-	if destLocal == nil {
-		return false
-	}
-	destType := scalarFromType(destLocal.Type)
+	destType := ctx.mctx.scalarFromType(destIRType, true)
 	if destType == scalarUnknown {
 		return false
 	}
 	ref, ok := ci.Callee.(*mir.FnRef)
-	if !ok || ref.Symbol == "" || !ctx.mctx.knownSymbols[ref.Symbol] {
+	if !ok || ref.Symbol == "" {
 		return false
 	}
+	allowOpaqueUserNamed := !ctx.mctx.knownSymbols[ref.Symbol]
 	fnTy, ok := ref.Type.(*ir.FnType)
 	if !ok || fnTy == nil {
-		return false
+		if !allowOpaqueUserNamed || !isErrType(ref.Type) {
+			return false
+		}
+		args := make([]callArg, 0, len(ci.Args))
+		for _, op := range ci.Args {
+			expr, argTy, ok := resolveOperandWithLoad(ctx, out, op)
+			if !ok || argTy == scalarUnknown {
+				return false
+			}
+			args = append(args, callArg{expr: expr, ty: argTy.llvm()})
+		}
+		declareFunctionPrototype(ctx.mctx, ref.Symbol, destType, args)
+		return emitWhileCallToPlace(ctx, out, *ci.Dest, destType, ref.Symbol, args)
 	}
-	if scalarFromType(fnTy.Return) != destType {
+	if ctx.mctx.scalarFromType(fnTy.Return, allowOpaqueUserNamed) != destType {
 		return false
 	}
 	if len(fnTy.Params) != len(ci.Args) {
@@ -5475,29 +7084,55 @@ func emitWhileCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInst
 		if !okOp {
 			return false
 		}
-		paramTy := scalarFromType(fnTy.Params[i])
+		paramTy := ctx.mctx.scalarFromType(fnTy.Params[i], allowOpaqueUserNamed)
 		if paramTy == scalarUnknown || paramTy != ty {
 			return false
 		}
 		args = append(args, callArg{expr: expr, ty: ty.llvm()})
 	}
-	reg := freshReg(ctx)
-	fmt.Fprintf(out, "  %s = call %s @%s(", reg, destType.llvm(), ref.Symbol)
-	for i, a := range args {
-		if i > 0 {
-			out.WriteString(", ")
-		}
-		fmt.Fprintf(out, "%s %s", a.ty, a.expr)
+	if !ctx.mctx.knownSymbols[ref.Symbol] {
+		declareFunctionPrototype(ctx.mctx, ref.Symbol, destType, args)
 	}
-	out.WriteString(")\n")
-	if _, isStack := ctx.stack[destID]; isStack {
-		fmt.Fprintf(out, "  store %s %s, ptr %%%s\n", destType.llvm(), reg, ctx.stack[destID].name)
-		return true
-	}
-	if existing, found := ctx.bindings[destID]; found && existing.defined && !existing.isStack {
+	return emitWhileCallToPlace(ctx, out, *ci.Dest, destType, ref.Symbol, args)
+}
+
+func emitWhileVoidCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInstr) bool {
+	ref, ok := ci.Callee.(*mir.FnRef)
+	if !ok || ref.Symbol == "" {
 		return false
 	}
-	ctx.bindings[destID] = localBinding{expr: reg, ty: destType, defined: true}
+	args := make([]callArg, 0, len(ci.Args))
+	if fnTy, ok := ref.Type.(*ir.FnType); ok && fnTy != nil {
+		if !isUnitType(fnTy.Return) || len(fnTy.Params) != len(ci.Args) {
+			return false
+		}
+		for i, op := range ci.Args {
+			expr, argTy, ok := resolveOperandWithLoad(ctx, out, op)
+			if !ok {
+				return false
+			}
+			paramTy := ctx.mctx.scalarFromType(fnTy.Params[i], true)
+			if paramTy == scalarUnknown || paramTy != argTy {
+				return false
+			}
+			args = append(args, callArg{expr: expr, ty: argTy.llvm()})
+		}
+	} else {
+		if !isErrType(ref.Type) {
+			return false
+		}
+		for _, op := range ci.Args {
+			expr, argTy, ok := resolveOperandWithLoad(ctx, out, op)
+			if !ok || argTy == scalarUnknown {
+				return false
+			}
+			args = append(args, callArg{expr: expr, ty: argTy.llvm()})
+		}
+	}
+	if !ctx.mctx.knownSymbols[ref.Symbol] {
+		declareVoidFunctionPrototype(ctx.mctx, ref.Symbol, args)
+	}
+	out.WriteString(renderVoidCallLine(ref.Symbol, args))
 	return true
 }
 
@@ -5525,7 +7160,10 @@ func resolveOperandWithLoad(ctx *whileLoopEmitCtx, out *strings.Builder, op mir.
 	}
 	if cp, ok := op.(*mir.CopyOp); ok {
 		if cp.Place.HasProjections() {
-			return "", scalarUnknown, false
+			if _, ok := cp.Place.Projections[len(cp.Place.Projections)-1].(*mir.IndexProj); ok {
+				return resolveWhileIndexedOperand(ctx, out, cp.Place)
+			}
+			return resolveWhileProjectedFieldOperand(ctx, out, cp.Place)
 		}
 		b, found := ctx.bindings[cp.Place.Local]
 		if !found || !b.defined {
@@ -5535,6 +7173,103 @@ func resolveOperandWithLoad(ctx *whileLoopEmitCtx, out *strings.Builder, op mir.
 			return loadFromStack(ctx, out, cp.Place.Local)
 		}
 		return b.expr, b.ty, true
+	}
+	return "", scalarUnknown, false
+}
+
+func resolveWhileIndexedOperand(ctx *whileLoopEmitCtx, out *strings.Builder, place mir.Place) (string, scalarType, bool) {
+	if ctx == nil || ctx.mctx == nil || len(place.Projections) == 0 {
+		return "", scalarUnknown, false
+	}
+	idxProj, ok := place.Projections[len(place.Projections)-1].(*mir.IndexProj)
+	if !ok {
+		return "", scalarUnknown, false
+	}
+	elemTy := ctx.mctx.scalarFromType(idxProj.ElemType, true)
+	if elemTy == scalarUnknown {
+		return "", scalarUnknown, false
+	}
+	listPlace := mir.Place{
+		Local:       place.Local,
+		Projections: append([]mir.Projection(nil), place.Projections[:len(place.Projections)-1]...),
+	}
+	listTy := placeResultType(ctx.fn, listPlace)
+	if listTy == nil {
+		return "", scalarUnknown, false
+	}
+	listExpr, listScalarTy, ok := resolveOperandWithLoad(ctx, out, &mir.CopyOp{Place: listPlace, T: listTy})
+	if !ok || listScalarTy != scalarOpaquePtr {
+		return "", scalarUnknown, false
+	}
+	indexExpr, indexTy, ok := resolveOperandWithLoad(ctx, out, idxProj.Index)
+	if !ok || indexTy != scalarInt {
+		return "", scalarUnknown, false
+	}
+	symbol := listGetSymbolFor(elemTy)
+	if symbol == "" {
+		return "", scalarUnknown, false
+	}
+	declareListGetRuntimeFor(ctx.mctx, elemTy)
+	value := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = call %s @%s(ptr %s, i64 %s)\n", value, elemTy.llvm(), symbol, listExpr, indexExpr)
+	return value, elemTy, true
+}
+
+func resolveWhileProjectedFieldOperand(ctx *whileLoopEmitCtx, out *strings.Builder, place mir.Place) (string, scalarType, bool) {
+	slot, fieldTy, ok := resolveWhileProjectedFieldSlot(ctx, out, place, "field.slot")
+	if !ok {
+		return "", scalarUnknown, false
+	}
+	value := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = load %s, ptr %s\n", value, fieldTy.llvm(), slot)
+	return value, fieldTy, true
+}
+
+func resolveWhileProjectedFieldSlot(ctx *whileLoopEmitCtx, out *strings.Builder, place mir.Place, label string) (string, scalarType, bool) {
+	if ctx == nil || ctx.mctx == nil || len(place.Projections) == 0 {
+		return "", scalarUnknown, false
+	}
+	baseLocal := lookupLocal(ctx.fn, place.Local)
+	if baseLocal == nil {
+		return "", scalarUnknown, false
+	}
+	named, ok := baseLocal.Type.(*ir.NamedType)
+	if !ok || named == nil || named.Name == "" {
+		return "", scalarUnknown, false
+	}
+	baseExpr, baseTy, ok := resolveOperandWithLoad(ctx, out, &mir.CopyOp{Place: mir.Place{Local: place.Local}, T: baseLocal.Type})
+	if !ok || baseTy != scalarOpaquePtr {
+		return "", scalarUnknown, false
+	}
+	currentStruct := named.Name
+	currentPtr := baseExpr
+	for i, proj := range place.Projections {
+		fp, ok := proj.(*mir.FieldProj)
+		if !ok {
+			return "", scalarUnknown, false
+		}
+		fieldTypes, ok := ctx.mctx.lookupStructFields(currentStruct)
+		if !ok || fp.Index < 0 || fp.Index >= len(fieldTypes) {
+			return "", scalarUnknown, false
+		}
+		fieldTy := fieldTypes[fp.Index]
+		ctx.mctx.emitStructDef(currentStruct, fieldTypes)
+		slot := ctx.mctx.freshTempName(label)
+		fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 %d\n", slot, currentStruct, currentPtr, fp.Index)
+		if i == len(place.Projections)-1 {
+			return slot, fieldTy, true
+		}
+		if fieldTy != scalarOpaquePtr {
+			return "", scalarUnknown, false
+		}
+		nextNamed, ok := fp.Type.(*ir.NamedType)
+		if !ok || nextNamed == nil || nextNamed.Name == "" {
+			return "", scalarUnknown, false
+		}
+		nextPtr := ctx.mctx.freshTempName("field.base")
+		fmt.Fprintf(out, "  %s = load ptr, ptr %s\n", nextPtr, slot)
+		currentStruct = nextNamed.Name
+		currentPtr = nextPtr
 	}
 	return "", scalarUnknown, false
 }
@@ -5634,11 +7369,11 @@ type forInRangePattern struct {
 
 func matchForInRangeReturn(fn *mir.Function, mctx *moduleCtx) (forInRangePattern, bool) {
 	pat := forInRangePattern{}
-	pat.retType = scalarFromType(fn.ReturnType)
+	pat.retType = mctx.scalarFromType(fn.ReturnType, true)
 	if pat.retType == scalarUnknown {
 		return pat, false
 	}
-	if len(fn.Params) > 2 {
+	if len(fn.Params) > 8 {
 		return pat, false
 	}
 	if len(fn.Blocks) != 5 {
@@ -5649,13 +7384,13 @@ func matchForInRangeReturn(fn *mir.Function, mctx *moduleCtx) (forInRangePattern
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b"}
+	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
 			return pat, false
 		}
-		pt := scalarFromType(loc.Type)
+		pt := mctx.scalarFromType(loc.Type, true)
 		if pt == scalarUnknown {
 			return pat, false
 		}
@@ -5711,7 +7446,7 @@ func matchForInRangeReturn(fn *mir.Function, mctx *moduleCtx) (forInRangePattern
 		if l == nil || l.IsParam || l.IsReturn || !l.Mut {
 			continue
 		}
-		ty := scalarFromType(l.Type)
+		ty := mctx.scalarFromType(l.Type, true)
 		if ty == scalarUnknown {
 			return pat, false
 		}
@@ -6744,4 +8479,230 @@ func emitListLiteralIndexGet(out *strings.Builder, fn *mir.Function, pat listLit
 	out.WriteString("  ret i64 %1\n")
 	out.WriteString("}\n\n")
 	return nil
+}
+
+// ---- P29: generic scalar/opaque CFG fallback ----
+//
+// This is deliberately late in the matcher order. It handles the
+// already-supported instruction surface across arbitrary Goto/Branch/
+// Return CFGs by stack-allocating non-param locals, which avoids
+// per-shape phi reconstruction for the common toolchain loops.
+
+type genericCFGPattern struct {
+	retType     scalarType
+	returnsVoid bool
+	paramTypes  []scalarType
+	paramNames  []string
+	stackDecls  []stackDecl
+	blockOrder  []mir.BlockID
+	blockBodies map[mir.BlockID]string
+}
+
+func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern, bool) {
+	pat := genericCFGPattern{blockBodies: map[mir.BlockID]string{}}
+	if fn == nil || len(fn.Blocks) == 0 {
+		return pat, false
+	}
+	pat.returnsVoid = isUnitType(fn.ReturnType)
+	if !pat.returnsVoid {
+		pat.retType = mctx.scalarFromType(fn.ReturnType, true)
+		if pat.retType == scalarUnknown {
+			return pat, false
+		}
+	}
+	if len(fn.Blocks) == 1 && (pat.returnsVoid || (pat.retType != scalarOpaquePtr && pat.retType != scalarString)) {
+		return pat, false
+	}
+	if len(fn.Params) > 16 {
+		return pat, false
+	}
+
+	pat.paramTypes = make([]scalarType, len(fn.Params))
+	pat.paramNames = make([]string, len(fn.Params))
+	for i, pid := range fn.Params {
+		loc := lookupLocal(fn, pid)
+		if loc == nil || !loc.IsParam {
+			return pat, false
+		}
+		pt := mctx.scalarFromType(loc.Type, true)
+		if pt == scalarUnknown {
+			return pat, false
+		}
+		pat.paramTypes[i] = pt
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fmt.Sprintf("p%d", i))
+	}
+	disambiguateParamNames(pat.paramNames)
+
+	stack := map[mir.LocalID]stackDecl{}
+	for _, l := range fn.Locals {
+		if l == nil || l.IsParam {
+			continue
+		}
+		if isUnitType(l.Type) {
+			continue
+		}
+		ty := mctx.scalarFromType(l.Type, true)
+		if ty == scalarUnknown {
+			return pat, false
+		}
+		decl := stackDecl{id: l.ID, name: sanitizeLLVMName(l.Name, fmt.Sprintf("local%d", l.ID)) + ".slot", ty: ty}
+		stack[l.ID] = decl
+		pat.stackDecls = append(pat.stackDecls, decl)
+	}
+	if !pat.returnsVoid {
+		if _, ok := stack[fn.ReturnLocal]; !ok {
+			return pat, false
+		}
+	}
+
+	bindings := map[mir.LocalID]localBinding{}
+	for i, pid := range fn.Params {
+		bindings[pid] = localBinding{expr: "%" + pat.paramNames[i], ty: pat.paramTypes[i], defined: true}
+	}
+	for _, sd := range pat.stackDecls {
+		bindings[sd.id] = localBinding{expr: "%" + sd.name, ty: sd.ty, defined: true, isStack: true}
+	}
+
+	nextSSA := 0
+	ctx := &whileLoopEmitCtx{
+		fn:       fn,
+		bindings: bindings,
+		stack:    stack,
+		mctx:     mctx,
+		nextSSA:  &nextSSA,
+	}
+
+	blocks := genericBlockOrder(fn)
+	if !pat.returnsVoid && !genericHasReturnTerm(blocks) {
+		return pat, false
+	}
+	pat.blockOrder = make([]mir.BlockID, 0, len(blocks))
+	for _, bb := range blocks {
+		if bb == nil {
+			return pat, false
+		}
+		var body strings.Builder
+		for _, instr := range bb.Instrs {
+			if !emitWhileStep(ctx, &body, instr) {
+				return pat, false
+			}
+		}
+		if !emitGenericTerm(ctx, &body, bb.Term, pat.retType, pat.returnsVoid) {
+			return pat, false
+		}
+		pat.blockOrder = append(pat.blockOrder, bb.ID)
+		pat.blockBodies[bb.ID] = body.String()
+	}
+	return pat, true
+}
+
+func genericHasReturnTerm(blocks []*mir.BasicBlock) bool {
+	for _, bb := range blocks {
+		if bb == nil {
+			continue
+		}
+		if _, ok := bb.Term.(*mir.ReturnTerm); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func genericBlockOrder(fn *mir.Function) []*mir.BasicBlock {
+	ordered := make([]*mir.BasicBlock, 0, len(fn.Blocks))
+	seen := map[mir.BlockID]bool{}
+	if entry := blockByID(fn, fn.Entry); entry != nil {
+		ordered = append(ordered, entry)
+		seen[entry.ID] = true
+	}
+	for _, bb := range fn.Blocks {
+		if bb == nil || seen[bb.ID] {
+			continue
+		}
+		ordered = append(ordered, bb)
+		seen[bb.ID] = true
+	}
+	return ordered
+}
+
+func emitGenericTerm(ctx *whileLoopEmitCtx, out *strings.Builder, term mir.Terminator, retType scalarType, returnsVoid bool) bool {
+	switch t := term.(type) {
+	case *mir.ReturnTerm:
+		if returnsVoid {
+			out.WriteString("  ret void\n")
+			return true
+		}
+		binding, ok := ctx.bindings[ctx.fn.ReturnLocal]
+		if !ok || !binding.defined || binding.ty != retType {
+			return false
+		}
+		expr := binding.expr
+		if binding.isStack {
+			loaded, ty, ok := loadFromStack(ctx, out, ctx.fn.ReturnLocal)
+			if !ok || ty != retType {
+				return false
+			}
+			expr = loaded
+		}
+		fmt.Fprintf(out, "  ret %s %s\n", retType.llvm(), expr)
+		return true
+	case *mir.GotoTerm:
+		fmt.Fprintf(out, "  br label %%%s\n", genericBlockLabel(ctx.fn, t.Target))
+		return true
+	case *mir.BranchTerm:
+		cond, ty, ok := resolveOperandWithLoad(ctx, out, t.Cond)
+		if !ok || ty != scalarBool {
+			return false
+		}
+		fmt.Fprintf(out, "  br i1 %s, label %%%s, label %%%s\n", cond, genericBlockLabel(ctx.fn, t.Then), genericBlockLabel(ctx.fn, t.Else))
+		return true
+	case *mir.SwitchIntTerm:
+		scrutinee, ty, ok := resolveOperandWithLoad(ctx, out, t.Scrutinee)
+		if !ok || ty != scalarInt {
+			return false
+		}
+		fmt.Fprintf(out, "  switch i64 %s, label %%%s [\n", scrutinee, genericBlockLabel(ctx.fn, t.Default))
+		for _, c := range t.Cases {
+			fmt.Fprintf(out, "    i64 %d, label %%%s\n", c.Value, genericBlockLabel(ctx.fn, c.Target))
+		}
+		out.WriteString("  ]\n")
+		return true
+	}
+	return false
+}
+
+func emitGenericScalarCFG(out *strings.Builder, fn *mir.Function, pat genericCFGPattern) error {
+	retLLVM := "void"
+	if !pat.returnsVoid {
+		retLLVM = pat.retType.llvm()
+	}
+	fmt.Fprintf(out, "define %s @%s(", retLLVM, fn.Name)
+	for i, name := range pat.paramNames {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
+	}
+	out.WriteString(") {\n")
+	for i, id := range pat.blockOrder {
+		if i > 0 {
+			out.WriteString("\n")
+		}
+		fmt.Fprintf(out, "%s:\n", genericBlockLabel(fn, id))
+		if id == fn.Entry {
+			for _, sd := range pat.stackDecls {
+				fmt.Fprintf(out, "  %%%s = alloca %s\n", sd.name, sd.ty.llvm())
+			}
+		}
+		out.WriteString(pat.blockBodies[id])
+	}
+	out.WriteString("}\n\n")
+	return nil
+}
+
+func genericBlockLabel(fn *mir.Function, id mir.BlockID) string {
+	if fn != nil && id == fn.Entry {
+		return "entry"
+	}
+	return blockLabelName(id, "bb")
 }

@@ -70,8 +70,12 @@ func TestStage0ToolchainAudit(t *testing.T) {
 	totalFns := 0
 	covered := 0
 	skipped := 0
+	filterFn := os.Getenv("OSTY_STAGE0_AUDIT_FN")
 	for _, fn := range entry.MIR.Functions {
 		if fn == nil || fn.IsExternal || fn.IsIntrinsic {
+			continue
+		}
+		if filterFn != "" && fn.Name != filterFn {
 			continue
 		}
 		// Skip functions whose front-end MIR lowering failed (every
@@ -139,9 +143,13 @@ func TestStage0ToolchainAudit(t *testing.T) {
 			if fn == nil || fn.IsExternal || fn.IsIntrinsic {
 				continue
 			}
+			if filterFn != "" && fn.Name != filterFn {
+				continue
+			}
 			oneFn := *entry.MIR
 			oneFn.Functions = []*mir.Function{fn, syntheticEmptyMain()}
-			if _, err := stage0.EmitMIR(&oneFn, llvmabi.Options{PackageName: "audit"}); err == nil {
+			_, err := stage0.EmitMIR(&oneFn, llvmabi.Options{PackageName: "audit"})
+			if err == nil {
 				continue
 			}
 			fp := fingerprintFn(fn)
@@ -150,6 +158,7 @@ func TestStage0ToolchainAudit(t *testing.T) {
 			}
 			seen[fp] = true
 			t.Logf("---- sample %q [%s] ----", fn.Name, fp)
+			t.Logf("  decline=%v", err)
 			t.Logf("  ReturnLocal=%d Params=%v", fn.ReturnLocal, fn.Params)
 			for _, l := range fn.Locals {
 				if l == nil {
@@ -173,7 +182,7 @@ func TestStage0ToolchainAudit(t *testing.T) {
 func describeAuditInstr(instr mir.Instr) string {
 	switch x := instr.(type) {
 	case *mir.AssignInstr:
-		return fmt.Sprintf("%T dest=%s src=%T", instr, describeAuditPlace(x.Dest), x.Src)
+		return fmt.Sprintf("%T dest=%s src=%s", instr, describeAuditPlace(x.Dest), describeAuditRValue(x.Src))
 	case *mir.CallInstr:
 		callee := fmt.Sprintf("%T", x.Callee)
 		if ref, ok := x.Callee.(*mir.FnRef); ok {
@@ -192,6 +201,27 @@ func describeAuditInstr(instr mir.Instr) string {
 		return fmt.Sprintf("%T dest=%s kind=%s args=%s", instr, dest, x.Kind.String(), describeAuditOperands(x.Args))
 	default:
 		return fmt.Sprintf("%T", instr)
+	}
+}
+
+func describeAuditRValue(rv mir.RValue) string {
+	switch x := rv.(type) {
+	case *mir.UseRV:
+		return fmt.Sprintf("Use(%s)", describeAuditOperand(x.Op))
+	case *mir.BinaryRV:
+		return fmt.Sprintf("Binary(%s, %s, %s)", x.Op.String(), describeAuditOperand(x.Left), describeAuditOperand(x.Right))
+	case *mir.UnaryRV:
+		return fmt.Sprintf("Unary(%s, %s)", x.Op.String(), describeAuditOperand(x.Arg))
+	case *mir.AggregateRV:
+		return fmt.Sprintf("Aggregate(%s variant=%d fields=%s type=%s)", x.Kind.String(), x.VariantIdx, describeAuditOperands(x.Fields), classifyType(x.T))
+	case *mir.LenRV:
+		return fmt.Sprintf("Len(%s)", describeAuditPlace(x.Place))
+	case *mir.DiscriminantRV:
+		return fmt.Sprintf("Discriminant(%s)", describeAuditPlace(x.Place))
+	case *mir.NullaryRV:
+		return fmt.Sprintf("Nullary(%s type=%s)", x.Kind.String(), classifyType(x.T))
+	default:
+		return fmt.Sprintf("%T", rv)
 	}
 }
 

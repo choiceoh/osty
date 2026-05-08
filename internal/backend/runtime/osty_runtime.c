@@ -4810,6 +4810,12 @@ static void *osty_gc_allocate_managed(size_t byte_size, int64_t object_kind,
                                               trace, destroy);
 }
 
+void *osty_rt_stage0_alloc(int64_t byte_size) {
+    size_t size = byte_size > 0 ? (size_t)byte_size : 1;
+    return osty_gc_allocate_managed(size, OSTY_GC_KIND_GENERIC,
+                                   "stage0.alloc", NULL, NULL);
+}
+
 static void *osty_gc_allocate_pinned_managed(size_t byte_size,
                                              int64_t object_kind,
                                              const char *site,
@@ -23148,6 +23154,31 @@ void osty_rt_thread_sleep(int64_t nanos) {
         return;
     }
     osty_rt_sleep_ns((uint64_t)nanos);
+}
+
+void osty_rt_yield(void) {
+    osty_rt_thread_yield();
+}
+
+void osty_rt_sleep(int64_t nanos) {
+    osty_rt_thread_sleep(nanos);
+}
+
+bool osty_rt_is_cancelled(void *group) {
+    if (group != NULL) {
+        return osty_rt_task_group_is_cancelled(group);
+    }
+    return osty_rt_cancel_is_cancelled();
+}
+
+bool osty_rt_group_is_cancelled(void *group) {
+    return osty_rt_task_group_is_cancelled(group);
+}
+
+void osty_rt_check_cancelled(void) {
+    if (osty_rt_cancel_is_cancelled()) {
+        osty_rt_panic("task cancelled");
+    }
 }
 
 /* ---- Channels: bounded ring buffer, mutex + two condition variables.

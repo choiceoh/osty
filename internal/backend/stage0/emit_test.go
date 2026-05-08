@@ -2349,6 +2349,181 @@ func TestStage0P27CollectionVoidMutators(t *testing.T) {
 	}
 }
 
+func TestStage0P27RemainingCollectionVoidMutators(t *testing.T) {
+	t.Parallel()
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	mapStringInt := &ir.NamedType{Name: "Map", Args: []ir.Type{ir.TString, ir.TInt}, Builtin: true}
+	setString := &ir.NamedType{Name: "Set", Args: []ir.Type{ir.TString}, Builtin: true}
+	fn := makeMultiInstrFn(
+		"drainCollections",
+		ir.TUnit,
+		[]paramSpec{
+			{name: "items", ty: listInt},
+			{name: "table", ty: mapStringInt},
+			{name: "seen", ty: setString},
+			{name: "key", ty: ir.TString},
+			{name: "idx", ty: ir.TInt},
+		},
+		nil,
+		[]mir.Instr{
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicListPop, Args: []mir.Operand{paramCopy(1, listInt)}},
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicListRemoveAt, Args: []mir.Operand{paramCopy(1, listInt), paramCopy(5, ir.TInt)}},
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicMapRemove, Args: []mir.Operand{paramCopy(2, mapStringInt), paramCopy(4, ir.TString)}},
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicSetRemove, Args: []mir.Operand{paramCopy(3, setString), paramCopy(4, ir.TString)}},
+			assign(0, useRV(&mir.ConstOp{Const: &mir.UnitConst{}, T: ir.TUnit})),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"declare void @osty_rt_list_pop_discard(ptr)",
+		"declare void @osty_rt_list_remove_at_discard(ptr, i64)",
+		"declare i1 @osty_rt_map_remove_string(ptr, ptr)",
+		"declare i1 @osty_rt_set_remove_string(ptr, ptr)",
+		"call void @osty_rt_list_pop_discard(ptr %items)",
+		"call void @osty_rt_list_remove_at_discard(ptr %items, i64 %idx)",
+		"call i1 @osty_rt_map_remove_string(ptr %table, ptr %key)",
+		"call i1 @osty_rt_set_remove_string(ptr %seen, ptr %key)",
+		"ret void",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P27PrintFamilyAndAbortIntrinsics(t *testing.T) {
+	t.Parallel()
+	fn := makeMultiInstrFn(
+		"writeDiagnostics",
+		ir.TUnit,
+		[]paramSpec{{name: "n", ty: ir.TInt}, {name: "msg", ty: ir.TString}},
+		nil,
+		[]mir.Instr{
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicPrint, Args: []mir.Operand{paramCopy(1, ir.TInt)}},
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicPrintln, Args: []mir.Operand{paramCopy(2, ir.TString)}},
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicEprint, Args: []mir.Operand{paramCopy(2, ir.TString)}},
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicEprintln, Args: []mir.Operand{paramCopy(1, ir.TInt)}},
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicAbort, Args: []mir.Operand{stringConst("stop")}},
+			assign(0, useRV(&mir.ConstOp{Const: &mir.UnitConst{}, T: ir.TUnit})),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"@.fmt.stage0.print.int = private unnamed_addr constant [5 x i8] c\"%lld\\00\"",
+		"@.fmt.stage0.print.str = private unnamed_addr constant [3 x i8] c\"%s\\00\"",
+		"@.fmt.stage0.println.int = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"",
+		"@.fmt.stage0.println.str = private unnamed_addr constant [4 x i8] c\"%s\\0A\\00\"",
+		"@stderr = external global ptr",
+		"declare i32 @fprintf(ptr, ptr, ...)",
+		"declare void @osty_rt_panic(ptr)",
+		"call i32 (ptr, ...) @printf(ptr @.fmt.stage0.print.int, i64 %n)",
+		"call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.str, ptr %msg)",
+		"load ptr, ptr @stderr",
+		"call i32 (ptr, ptr, ...) @fprintf",
+		"call void @osty_rt_panic(ptr @.str.0)",
+		"ret void",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P27ConcurrencyValueIntrinsics(t *testing.T) {
+	t.Parallel()
+	chanInt := &ir.NamedType{Name: "Channel", Args: []ir.Type{ir.TInt}, Builtin: true}
+	group := &ir.NamedType{Name: "TaskGroup", Builtin: true}
+	makeFn := makeMultiInstrFn(
+		"makeChannelAndProbeCancel",
+		ir.TBool,
+		nil,
+		[]paramSpec{{name: "ch", ty: chanInt}, {name: "closed", ty: ir.TBool}, {name: "cancelled", ty: ir.TBool}},
+		[]mir.Instr{
+			&mir.IntrinsicInstr{Dest: &mir.Place{Local: 1}, Kind: mir.IntrinsicChanMake, Args: []mir.Operand{intConst(2)}},
+			&mir.IntrinsicInstr{Dest: &mir.Place{Local: 2}, Kind: mir.IntrinsicChanIsClosed, Args: []mir.Operand{paramCopy(1, chanInt)}},
+			&mir.IntrinsicInstr{Dest: &mir.Place{Local: 3}, Kind: mir.IntrinsicIsCancelled},
+			assign(0, useRV(paramCopy(2, ir.TBool))),
+		},
+	)
+	groupFn := makeMultiInstrFn(
+		"groupCancelled",
+		ir.TBool,
+		[]paramSpec{{name: "group", ty: group}},
+		nil,
+		[]mir.Instr{
+			&mir.IntrinsicInstr{Dest: &mir.Place{Local: 0}, Kind: mir.IntrinsicGroupIsCancelled, Args: []mir.Operand{paramCopy(1, group)}},
+		},
+	)
+	got := emit(t, trivialMainFn(), makeFn, groupFn)
+	for _, want := range []string{
+		"declare ptr @osty_rt_thread_chan_make(i64)",
+		"declare i1 @osty_rt_thread_chan_is_closed(ptr)",
+		"declare i1 @osty_rt_cancel_is_cancelled()",
+		"declare i1 @osty_rt_task_group_is_cancelled(ptr)",
+		"%0 = call ptr @osty_rt_thread_chan_make(i64 2)",
+		"%1 = call i1 @osty_rt_thread_chan_is_closed(ptr %0)",
+		"%2 = call i1 @osty_rt_cancel_is_cancelled()",
+		"ret i1 %1",
+		"%0 = call i1 @osty_rt_task_group_is_cancelled(ptr %group)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P27ConcurrencyVoidIntrinsics(t *testing.T) {
+	t.Parallel()
+	chanInt := &ir.NamedType{Name: "Channel", Args: []ir.Type{ir.TInt}, Builtin: true}
+	group := &ir.NamedType{Name: "TaskGroup", Builtin: true}
+	selectBuilder := &ir.NamedType{Name: "SelectBuilder"}
+	arm := &ir.NamedType{Name: "SelectArm"}
+	fn := makeMultiInstrFn(
+		"wireConcurrency",
+		ir.TUnit,
+		[]paramSpec{
+			{name: "ch", ty: chanInt},
+			{name: "value", ty: ir.TInt},
+			{name: "group", ty: group},
+			{name: "sel", ty: selectBuilder},
+			{name: "arm", ty: arm},
+		},
+		nil,
+		[]mir.Instr{
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicChanSend, Args: []mir.Operand{paramCopy(1, chanInt), paramCopy(2, ir.TInt)}},
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicChanClose, Args: []mir.Operand{paramCopy(1, chanInt)}},
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicGroupCancel, Args: []mir.Operand{paramCopy(3, group)}},
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicSelectRecv, Args: []mir.Operand{paramCopy(4, selectBuilder), paramCopy(1, chanInt), paramCopy(5, arm)}},
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicSelectSend, Args: []mir.Operand{paramCopy(4, selectBuilder), paramCopy(1, chanInt), paramCopy(2, ir.TInt), paramCopy(5, arm)}},
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicSelectTimeout, Args: []mir.Operand{paramCopy(4, selectBuilder), intConst(5), paramCopy(5, arm)}},
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicSelectDefault, Args: []mir.Operand{paramCopy(4, selectBuilder), paramCopy(5, arm)}},
+			assign(0, useRV(&mir.ConstOp{Const: &mir.UnitConst{}, T: ir.TUnit})),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"declare void @osty_rt_thread_chan_send_i64(ptr, i64)",
+		"declare void @osty_rt_thread_chan_close(ptr)",
+		"declare void @osty_rt_task_group_cancel(ptr)",
+		"declare void @osty_rt_select_recv(ptr, ptr, ptr)",
+		"declare void @osty_rt_select_send_i64(ptr, ptr, i64, ptr)",
+		"declare void @osty_rt_select_timeout(ptr, i64, ptr)",
+		"declare void @osty_rt_select_default(ptr, ptr)",
+		"call void @osty_rt_thread_chan_send_i64(ptr %ch, i64 %value)",
+		"call void @osty_rt_thread_chan_close(ptr %ch)",
+		"call void @osty_rt_task_group_cancel(ptr %group)",
+		"call void @osty_rt_select_recv(ptr %sel, ptr %ch, ptr %arm)",
+		"call void @osty_rt_select_send_i64(ptr %sel, ptr %ch, i64 %value, ptr %arm)",
+		"call void @osty_rt_select_timeout(ptr %sel, i64 5, ptr %arm)",
+		"call void @osty_rt_select_default(ptr %sel, ptr %arm)",
+		"ret void",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 // ---- P3b rejection paths ----
 
 func TestStage0RejectsCallWithoutFunctionType(t *testing.T) {
@@ -3022,11 +3197,10 @@ func TestStage0EmitsIfElseWhereThenElseTargetsDiffer(t *testing.T) {
 	}
 }
 
-func TestStage0RejectsIfElseWithMergeInstructions(t *testing.T) {
+func TestStage0GenericCFGEmitsIfElseWithMergeInstructions(t *testing.T) {
 	t.Parallel()
-	// Merge block has instructions — stage0 expects empty merge.
 	fn := makeIfElseFn(
-		"bad",
+		"mergeValue",
 		ir.TInt,
 		[]paramSpec{{name: "b", ty: ir.TBool}},
 		nil,
@@ -3037,7 +3211,19 @@ func TestStage0RejectsIfElseWithMergeInstructions(t *testing.T) {
 	)
 	// Inject an instruction into the merge block (id 3).
 	fn.Blocks[3].Instrs = []mir.Instr{assign(0, useRV(intConst(99)))}
-	mustReject(t, trivialMainFn(), fn)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"define i64 @mergeValue(i1 %b)",
+		"%ret.slot = alloca i64",
+		"br i1 %b, label %bb.1, label %bb.2",
+		"bb.3:",
+		"store i64 99, ptr %ret.slot",
+		"ret i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
 }
 
 func TestStage0RejectsCallParamTypeMismatch(t *testing.T) {
@@ -3156,11 +3342,231 @@ func TestStage0EmitsCountToWhileLoop(t *testing.T) {
 	}
 }
 
-func TestStage0RejectsWhileLoopWithoutBackEdge(t *testing.T) {
+func TestStage0P27WhileVoidIntrinsics(t *testing.T) {
 	t.Parallel()
-	// Body's GotoTerm targets exit instead of header — not a loop.
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
 	fn := makeWhileLoopFn(
-		"bad",
+		"pushWhileCounting",
+		ir.TInt,
+		[]paramSpec{{name: "items", ty: listInt}, {name: "n", ty: ir.TInt}},
+		[]localSpec{
+			{name: "i", ty: ir.TInt, mut: true},
+			{name: "cond", ty: ir.TBool},
+		},
+		[]mir.Instr{
+			assign(3, useRV(intConst(0))),
+		},
+		[]mir.Instr{
+			assign(4, binaryRV(mir.BinLt, paramCopy(3, ir.TInt), paramCopy(2, ir.TInt), ir.TBool)),
+		},
+		paramCopy(4, ir.TBool),
+		[]mir.Instr{
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicListPush, Args: []mir.Operand{paramCopy(1, listInt), paramCopy(3, ir.TInt)}},
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicPrintln, Args: []mir.Operand{paramCopy(3, ir.TInt)}},
+			assign(3, binaryRV(mir.BinAdd, paramCopy(3, ir.TInt), intConst(1), ir.TInt)),
+		},
+		[]mir.Instr{
+			assign(0, useRV(paramCopy(3, ir.TInt))),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"declare void @osty_rt_list_push_i64(ptr, i64)",
+		"@.fmt.stage0.println.int = private unnamed_addr constant [6 x i8] c\"%lld\\0A\\00\"",
+		"define i64 @pushWhileCounting(ptr %items, i64 %n)",
+		"body.2:",
+		"call void @osty_rt_list_push_i64(ptr %items, i64",
+		"call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64",
+		"ret i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P27WhileValueIntrinsics(t *testing.T) {
+	t.Parallel()
+	listInt := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TInt}, Builtin: true}
+	fn := makeWhileLoopFn(
+		"measureWhile",
+		ir.TInt,
+		[]paramSpec{{name: "items", ty: listInt}, {name: "keepGoing", ty: ir.TBool}},
+		[]localSpec{
+			{name: "acc", ty: ir.TInt, mut: true},
+			{name: "len", ty: ir.TInt},
+		},
+		[]mir.Instr{
+			assign(3, useRV(intConst(0))),
+		},
+		nil,
+		paramCopy(2, ir.TBool),
+		[]mir.Instr{
+			&mir.IntrinsicInstr{Dest: &mir.Place{Local: 4}, Kind: mir.IntrinsicListLen, Args: []mir.Operand{paramCopy(1, listInt)}},
+			assign(3, useRV(paramCopy(4, ir.TInt))),
+		},
+		[]mir.Instr{
+			assign(0, useRV(paramCopy(3, ir.TInt))),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"declare i64 @osty_rt_list_len(ptr)",
+		"define i64 @measureWhile(ptr %items, i1 %keepGoing)",
+		"br i1 %keepGoing, label %body.2, label %exit.3",
+		"body.2:",
+		"= call i64 @osty_rt_list_len(ptr %items)",
+		"store i64",
+		"ret i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P28WhileListIterationLoweringPieces(t *testing.T) {
+	t.Parallel()
+	listString := &ir.NamedType{Name: "List", Args: []ir.Type{ir.TString}, Builtin: true}
+	fn := makeWhileLoopFn(
+		"cloneStringListWhile",
+		listString,
+		[]paramSpec{{name: "src", ty: listString}},
+		[]localSpec{
+			{name: "out", ty: listString, mut: true},
+			{name: "len", ty: ir.TInt},
+			{name: "idx", ty: ir.TInt, mut: true},
+			{name: "cond", ty: ir.TBool},
+			{name: "elem", ty: ir.TString},
+		},
+		[]mir.Instr{
+			assign(2, &mir.AggregateRV{Kind: mir.AggList, T: listString}),
+			assign(3, &mir.LenRV{Place: mir.Place{Local: 1}, T: ir.TInt}),
+			assign(4, useRV(intConst(0))),
+		},
+		[]mir.Instr{
+			assign(5, binaryRV(mir.BinLt, paramCopy(4, ir.TInt), paramCopy(3, ir.TInt), ir.TBool)),
+		},
+		paramCopy(5, ir.TBool),
+		[]mir.Instr{
+			assign(6, useRV(&mir.CopyOp{
+				Place: mir.Place{
+					Local: 1,
+					Projections: []mir.Projection{
+						&mir.IndexProj{Index: paramCopy(4, ir.TInt), ElemType: ir.TString},
+					},
+				},
+				T: ir.TString,
+			})),
+			&mir.IntrinsicInstr{Kind: mir.IntrinsicListPush, Args: []mir.Operand{paramCopy(2, listString), paramCopy(6, ir.TString)}},
+			assign(4, binaryRV(mir.BinAdd, paramCopy(4, ir.TInt), intConst(1), ir.TInt)),
+		},
+		[]mir.Instr{
+			assign(0, useRV(paramCopy(2, listString))),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"declare ptr @osty_rt_list_new()",
+		"declare i64 @osty_rt_list_len(ptr)",
+		"declare ptr @osty_rt_list_get_string(ptr, i64)",
+		"define ptr @cloneStringListWhile(ptr %src)",
+		"= call ptr @osty_rt_list_new()",
+		"= call i64 @osty_rt_list_len(ptr %src)",
+		"= call ptr @osty_rt_list_get_string(ptr %src, i64",
+		"call void @osty_rt_list_push_string(ptr",
+		"ret ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P28WhileErrTypedHelperCall(t *testing.T) {
+	t.Parallel()
+	resultTy := &ir.NamedType{Name: "SelfResolveResult"}
+	fn := makeWhileLoopFn(
+		"resolveBeforeLoop",
+		resultTy,
+		[]paramSpec{{name: "source", ty: ir.TString}, {name: "keepGoing", ty: ir.TBool}},
+		[]localSpec{
+			{name: "result", ty: resultTy},
+		},
+		[]mir.Instr{
+			&mir.CallInstr{
+				Dest:   &mir.Place{Local: 3},
+				Callee: &mir.FnRef{Symbol: "selfResolveSource", Type: ir.ErrTypeVal},
+				Args:   []mir.Operand{paramCopy(1, ir.TString)},
+			},
+		},
+		nil,
+		paramCopy(2, ir.TBool),
+		nil,
+		[]mir.Instr{
+			assign(0, useRV(paramCopy(3, resultTy))),
+		},
+	)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"declare ptr @selfResolveSource(ptr)",
+		"define ptr @resolveBeforeLoop(ptr %source, i1 %keepGoing)",
+		"%0 = call ptr @selfResolveSource(ptr %source)",
+		"br i1 %keepGoing, label %body.2, label %exit.3",
+		"ret ptr %0",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P29GenericCFGSwitchInt(t *testing.T) {
+	t.Parallel()
+	fn := &mir.Function{
+		Name:        "tagCode",
+		Params:      []mir.LocalID{1},
+		ReturnType:  ir.TInt,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "ret", Type: ir.TInt, IsReturn: true},
+			{ID: 1, Name: "tag", Type: ir.TInt, IsParam: true},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{ID: 0, Term: &mir.SwitchIntTerm{
+				Scrutinee: paramCopy(1, ir.TInt),
+				Cases: []mir.SwitchCase{
+					{Value: 1, Target: 1},
+					{Value: 2, Target: 2},
+				},
+				Default: 3,
+			}},
+			{ID: 1, Instrs: []mir.Instr{assign(0, useRV(intConst(10)))}, Term: &mir.ReturnTerm{}},
+			{ID: 2, Instrs: []mir.Instr{assign(0, useRV(intConst(20)))}, Term: &mir.ReturnTerm{}},
+			{ID: 3, Instrs: []mir.Instr{assign(0, useRV(intConst(-1)))}, Term: &mir.ReturnTerm{}},
+		},
+	}
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"define i64 @tagCode(i64 %tag)",
+		"switch i64 %tag, label %bb.3 [",
+		"i64 1, label %bb.1",
+		"i64 2, label %bb.2",
+		"store i64 10, ptr %ret.slot",
+		"store i64 20, ptr %ret.slot",
+		"store i64 -1, ptr %ret.slot",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0GenericCFGEmitsLoopLikeCFGWithoutBackEdge(t *testing.T) {
+	t.Parallel()
+	fn := makeWhileLoopFn(
+		"countOnce",
 		ir.TInt,
 		[]paramSpec{{name: "n", ty: ir.TInt}},
 		[]localSpec{
@@ -3173,9 +3579,21 @@ func TestStage0RejectsWhileLoopWithoutBackEdge(t *testing.T) {
 		[]mir.Instr{assign(2, binaryRV(mir.BinAdd, paramCopy(2, ir.TInt), intConst(1), ir.TInt))},
 		[]mir.Instr{assign(0, useRV(paramCopy(2, ir.TInt)))},
 	)
-	// Repoint body's terminator to exit (id 3), breaking the loop.
+	// Repoint body's terminator to exit (id 3), so this is no longer
+	// the narrow while matcher but is still a valid scalar CFG.
 	fn.Blocks[2].Term = &mir.GotoTerm{Target: 3}
-	mustReject(t, trivialMainFn(), fn)
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"define i64 @countOnce(i64 %n)",
+		"%ret.slot = alloca i64",
+		"br label %bb.3",
+		"bb.3:",
+		"ret i64",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
 }
 
 func TestStage0RejectsWhileLoopWithIntCondition(t *testing.T) {
