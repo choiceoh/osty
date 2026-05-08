@@ -1,5 +1,7 @@
 ## 16. I/O Protocol
 
+- **Scope**: Osty language spec — 16. I/O Protocol
+- **Type**: Language specification
 The `Reader` and `Writer` interfaces define the streaming I/O contract
 shared across `std.io`, stream-oriented standard-library modules, and
 FFI byte-stream bridges. `std.fs` currently exposes whole-file and

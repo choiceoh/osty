@@ -1,5 +1,7 @@
 ### 10.26 Text UI (`std.tui`)
 
+- **Scope**: Osty stdlib spec — 10.26 Text UI (`std.tui`)
+- **Type**: Standard library specification
 `std.tui` provides retained frame buffers for terminal UI code. A `Frame`
 contains fixed-size `Cell` values, each with text and style. Rendering can
 emit a whole frame or only the cells that changed compared with a previous

@@ -1,5 +1,7 @@
 # Osty 스펙·Grammar 갭 트래킹
 
+- **Scope**: Resolved spec gaps — v0.4 edge-case decisions, archived by language version
+- **Type**: Decision log
 `LANG_SPEC_v0.5/` + `OSTY_GRAMMAR_v0.5.md` 기준.
 
 **v0.5 시점 open gap: 없음.** v0.4 사용 코퍼스에서 관찰된 15 개

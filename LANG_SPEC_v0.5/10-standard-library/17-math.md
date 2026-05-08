@@ -1,5 +1,7 @@
 ### 10.17 Math (`std.math`)
 
+- **Scope**: Osty stdlib spec — 10.17 Math (`std.math`)
+- **Type**: Standard library specification
 Mathematical functions and constants.
 
 ```osty

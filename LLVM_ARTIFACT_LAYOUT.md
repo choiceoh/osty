@@ -1,5 +1,7 @@
 # LLVM Artifact Layout
 
+- **Scope**: Backend-aware output/cache layout — .osty/ directory structure, fingerprinting
+- **Type**: Spec
 이 문서는 LLVM 이주 25-step Phase 4의 산출물이다. 목적은 Go backend와 LLVM
 backend가 같은 project/profile/target에서 동시에 동작해도 생성물이 서로
 덮어쓰지 않도록 artifact layout을 확정하는 것이다.

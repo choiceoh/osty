@@ -1,5 +1,7 @@
 ## 2a. Type Inference Algorithm
 
+- **Scope**: Osty language spec — 2a. Type Inference Algorithm
+- **Type**: Language specification
 This section specifies the algorithm that assigns a type to every
 expression, binding, and declaration. It complements §2 (type system)
 and §3 (declarations): §2 tells you *what* types exist, §3 tells you

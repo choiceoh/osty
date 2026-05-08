@@ -1,5 +1,7 @@
 # STDLIB_MATRIX.md
 
+- **Scope**: Standard library coverage matrix — module/function/status per Osty version
+- **Type**: Coverage matrix
 Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭스.
 
 > **Scope**:

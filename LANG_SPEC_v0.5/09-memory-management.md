@@ -1,5 +1,7 @@
 ## 9. Memory Management
 
+- **Scope**: Osty language spec — 9. Memory Management
+- **Type**: Language specification
 Osty is garbage collected. There are no explicit memory primitives:
 no `new`, no `delete`, no destructors.
 

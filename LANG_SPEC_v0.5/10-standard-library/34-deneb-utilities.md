@@ -1,5 +1,7 @@
 ### 10.34 Deneb-Derived Utilities
 
+- **Scope**: Osty stdlib spec — 10.34 Deneb-Derived Utilities
+- **Type**: Standard library specification
 These modules port Deneb subsystems that were intentionally implemented
 without external dependencies. The goal is not a thin wrapper around Deneb
 names; each module preserves the behavior that made the original useful.

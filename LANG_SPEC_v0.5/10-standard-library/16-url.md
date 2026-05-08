@@ -1,5 +1,7 @@
 ### 10.16 URL (`std.url`)
 
+- **Scope**: Osty stdlib spec — 10.16 URL (`std.url`)
+- **Type**: Standard library specification
 URL parsing and building.
 
 ```osty

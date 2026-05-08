@@ -1,5 +1,7 @@
 # GC Delta — Model vs Live Runtime
 
+- **Scope**: GC design deltas — changes from baseline, new decisions, regression tracking
+- **Type**: Delta log
 This document tabulates the feature gap between the GC simulation model
 (`examples/gc/`) and the live LLVM runtime (`internal/backend/runtime/osty_runtime.c`
 + `internal/llvmgen/generator.go`).

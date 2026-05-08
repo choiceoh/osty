@@ -1,5 +1,7 @@
 # String Interpolation Resolver Gap — Multi-Day Plan
 
+- **Scope**: String interpolation resolve gap analysis — phase tracking and resolution plan
+- **Type**: Gap analysis
 **Status (2026-05-05):** User-facing path closed via #1361 (MIR-layer
 recovery). Canonical-side parser + resolver + applyTwice regression
 shipped via #1360 (Day 1 lexer ranges), #1364 (Day 2 parser

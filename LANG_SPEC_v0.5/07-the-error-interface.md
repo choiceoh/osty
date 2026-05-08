@@ -1,5 +1,7 @@
 ## 7. The Error Interface
 
+- **Scope**: Osty language spec — 7. The Error Interface
+- **Type**: Language specification
 ### 7.1 Definition
 
 `Error` is an interface defined in `std.error` and re-exported by the

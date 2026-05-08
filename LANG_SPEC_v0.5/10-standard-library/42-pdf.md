@@ -1,5 +1,7 @@
 ### 10.42 PDF (`std.pdf`)
 
+- **Scope**: Osty stdlib spec — 10.42 PDF (`std.pdf`)
+- **Type**: Standard library specification
 `std.pdf` provides dependency-free PDF inspection helpers. It does not render
 pages or decode compressed streams; those require host/runtime-backed PDF
 engines. The stdlib surface focuses on portable checks that are useful in CLI

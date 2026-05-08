@@ -1,5 +1,7 @@
 # MIR emitter selfhost port
 
+- **Scope**: LLVM IR emitter porting status — Go→Osty self-host tracking
+- **Type**: Porting matrix
 > **Phase 1 (LLVM-text builder library): COMPLETE (2026-04-27).**
 >
 > The §1–§17 builder library at `toolchain/mir_generator.osty`

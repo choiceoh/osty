@@ -1,5 +1,7 @@
 ### 10.23 Network (`std.net`)
 
+- **Scope**: Osty stdlib spec — 10.23 Network (`std.net`)
+- **Type**: Standard library specification
 Low-level TCP and UDP networking. Higher-level HTTP is in `std.http`
 (§10.24). All blocking operations are cancellation-aware (§8.4.2).
 

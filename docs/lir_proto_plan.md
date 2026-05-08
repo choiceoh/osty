@@ -1,5 +1,7 @@
 # LIR Proto plan
 
+- **Scope**: LIR prototype plan — isolated prototype for low-level IR
+- **Type**: Plan
 Status: isolated prototype in progress. No production wiring yet.
 Authoring direction: new LIR Proto shape is Osty-first in
 `toolchain/lir_proto.osty`; the earlier Go prototype has been ported out and

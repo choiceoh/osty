@@ -1,5 +1,7 @@
 ### 10.37 Scanner Automation (`std.scan`)
 
+- **Scope**: Osty stdlib spec — 10.37 Scanner Automation (`std.scan`)
+- **Type**: Standard library specification
 `std.scan` provides a typed automation layer for document scanners. Scanner
 drivers remain host-specific, so the module plans and runs host commands rather
 than embedding a driver stack. The built-in backend targets SANE `scanimage`;

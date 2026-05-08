@@ -1,5 +1,7 @@
 ## 10. Standard Library
 
+- **Scope**: Osty stdlib spec — 10. Standard Library
+- **Type**: Standard library specification
 This chapter is split into one file per subsection for easier navigation. The introduction below states the structuring principles; each `std.*` package then lives in its own file.
 
 ## 10. Standard Library

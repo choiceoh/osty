@@ -1,5 +1,7 @@
 ### 10.1 Tier 1 (Core)
 
+- **Scope**: Osty stdlib spec — 10.1 Tier 1 (Core)
+- **Type**: Standard library specification
 - `std.io` — `print`, `println`, `eprint`, `eprintln`, `readLine`, the
   `Reader`/`Writer` protocol, in-memory `BytesReader`/`Buffer`, and core
   stream helpers such as `readAll`, `readExact`, `copy`, `writeString`

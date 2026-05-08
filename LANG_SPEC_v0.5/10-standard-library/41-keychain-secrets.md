@@ -1,5 +1,7 @@
 ### 10.41 Keychain / Secrets (`std.keychain`, `std.secrets`)
 
+- **Scope**: Osty stdlib spec — 10.41 Keychain / Secrets (`std.keychain`, `std.secrets`)
+- **Type**: Standard library specification
 `std.keychain` is the portable credential-store facade for API keys, tokens,
 and other small application secrets. It stores secrets by `(service, account)`
 in the OS credential store instead of in project files.

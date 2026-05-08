@@ -1,5 +1,7 @@
 ### 10.6 Collection Methods
 
+- **Scope**: Osty stdlib spec — 10.6 Collection Methods
+- **Type**: Standard library specification
 All standard collections satisfy `Iterable<T>` (§15) and may be used
 directly with `for x in xs`.
 

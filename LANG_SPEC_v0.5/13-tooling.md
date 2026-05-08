@@ -1,5 +1,7 @@
 ## 13. Tooling
 
+- **Scope**: Osty language spec — 13. Tooling
+- **Type**: Language specification
 ### 13.1 CLI
 
 ```

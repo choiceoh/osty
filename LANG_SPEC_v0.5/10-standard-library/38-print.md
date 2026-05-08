@@ -1,5 +1,7 @@
 ### 10.38 Print (`std.print`)
 
+- **Scope**: Osty stdlib spec — 10.38 Print (`std.print`)
+- **Type**: Standard library specification
 `std.print` sends existing PDF and image files to the host print spooler. It
 does not implement page rendering in the language runtime; applications should
 produce a PDF or image first, then ask the host printer stack to print it.

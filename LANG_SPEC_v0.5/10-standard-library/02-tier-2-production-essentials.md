@@ -1,5 +1,7 @@
 ### 10.2 Tier 2 (Production essentials)
 
+- **Scope**: Osty stdlib spec — 10.2 Tier 2 (Production essentials)
+- **Type**: Standard library specification
 - `std.json` — JSON encode/decode (reflection-based)
 - `std.http` — HTTP client and server
 - `std.time` — instants, durations, formatting, parsing, timezones

@@ -1,5 +1,7 @@
 ## 12. Foreign Function Interface
 
+- **Scope**: Osty language spec — 12. Foreign Function Interface
+- **Type**: Language specification
 ### 12.1 Importing Go Packages
 
 ```osty

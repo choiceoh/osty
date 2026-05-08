@@ -1,5 +1,7 @@
 ### 10.14 Random (`std.random`)
 
+- **Scope**: Osty stdlib spec — 10.14 Random (`std.random`)
+- **Type**: Standard library specification
 Non-cryptographic pseudorandom numbers.
 
 ```osty

@@ -1,5 +1,7 @@
 ## 19. Runtime Primitives
 
+- **Scope**: Osty language spec — 19. Runtime Primitives
+- **Type**: Language specification
 This chapter specifies the **runtime sublanguage** — a small, package-gated
 surface that lets the Osty toolchain implement the GC, allocator, and other
 runtime services in Osty itself. None of this surface is reachable from

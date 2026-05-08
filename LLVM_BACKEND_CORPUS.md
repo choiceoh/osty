@@ -1,5 +1,7 @@
 # LLVM Backend Corpus
 
+- **Scope**: Backend parity fixture classes and smoke test set
+- **Type**: Reference
 이 문서는 LLVM 이주 Phase 2의 산출물이다. 목적은 backend parity에 사용할
 fixture를 명시적으로 분류해서, Go backend의 현재 동작과 LLVM backend의 목표
 범위를 섞지 않도록 하는 것이다.

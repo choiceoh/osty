@@ -1,5 +1,7 @@
 ## 15. Iteration Protocol
 
+- **Scope**: Osty language spec — 15. Iteration Protocol
+- **Type**: Language specification
 `for x in xs { ... }` is defined in terms of two interfaces:
 
 ```osty

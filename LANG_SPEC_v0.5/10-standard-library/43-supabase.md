@@ -1,5 +1,7 @@
 ### 10.43 Supabase (`std.supabase`)
 
+- **Scope**: Osty stdlib spec — 10.43 Supabase (`std.supabase`)
+- **Type**: Standard library specification
 `std.supabase` is a lightweight Supabase API layer on top of `std.http`. It
 does not embed a database driver or storage client runtime. Instead, it builds
 ready-to-send HTTP requests for Supabase's stable gateway paths:

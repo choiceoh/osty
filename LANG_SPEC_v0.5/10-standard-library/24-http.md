@@ -1,5 +1,7 @@
 ### 10.24 HTTP (`std.http`)
 
+- **Scope**: Osty stdlib spec — 10.24 HTTP (`std.http`)
+- **Type**: Standard library specification
 HTTP client/server ergonomics built on top of three runtime-owned
 transport primitives:
 

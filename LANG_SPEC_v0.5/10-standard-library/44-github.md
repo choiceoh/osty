@@ -1,5 +1,7 @@
 ### 10.44 GitHub (`std.github`)
 
+- **Scope**: Osty stdlib spec — 10.44 GitHub (`std.github`)
+- **Type**: Standard library specification
 `std.github` is a GitHub automation layer over `std.http`, `std.json`, and
 `std.crypto`. It builds ready-to-send REST requests for day-to-day developer
 automation and verifies GitHub webhook signatures without taking ownership of

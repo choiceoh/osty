@@ -1,5 +1,7 @@
 ### 10.40 XLSX (`std.xlsx`)
 
+- **Scope**: Osty stdlib spec — 10.40 XLSX (`std.xlsx`)
+- **Type**: Standard library specification
 `std.xlsx` builds simple Excel-compatible `.xlsx` workbooks on top of
 stored ZIP packaging and `std.table` row adapters.
 

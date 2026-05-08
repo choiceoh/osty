@@ -1,5 +1,7 @@
 ### 10.18 CSV (`std.csv`)
 
+- **Scope**: Osty stdlib spec — 10.18 CSV (`std.csv`)
+- **Type**: Standard library specification
 RFC 4180-compliant CSV.
 
 ```osty

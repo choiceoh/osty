@@ -1,5 +1,7 @@
 # Osty Language Specification v0.5
 
+- **Scope**: Osty language spec v0.5 — table of contents and overview
+- **Type**: Language specification
 Osty is a general-purpose, statically-typed, garbage-collected programming language.
 This directory holds the specification, split into per-section files for easier navigation and editing.
 

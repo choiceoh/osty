@@ -1,5 +1,7 @@
 ### 10.39 Clipboard (`std.clipboard`)
 
+- **Scope**: Osty stdlib spec — 10.39 Clipboard (`std.clipboard`)
+- **Type**: Standard library specification
 `std.clipboard` provides small-tool clipboard text I/O. It is intentionally
 text-only; binary clipboard formats, MIME negotiation, and platform-native
 pasteboard metadata remain host/runtime concerns.

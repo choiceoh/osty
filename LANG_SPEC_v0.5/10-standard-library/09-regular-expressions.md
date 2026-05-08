@@ -1,5 +1,7 @@
 ### 10.9 Regular Expressions (`std.regex`)
 
+- **Scope**: Osty stdlib spec — 10.9 Regular Expressions (`std.regex`)
+- **Type**: Standard library specification
 RE2-based regular expressions. Linear-time matching; no catastrophic
 backtracking, no ReDoS. Does not support backreferences or lookaround
 (RE2 limitations).
