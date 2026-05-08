@@ -1329,10 +1329,27 @@ pub struct MirTupleLayout {
     pub fields: List<MirFieldLayout>,
 }
 
+pub struct MirInterfaceMethod {
+    pub name: String,
+    pub slot: Int,
+}
+
+pub struct MirInterfaceImpl {
+    pub implName: String,
+    pub vtableSym: String,
+}
+
+pub struct MirInterfaceLayout {
+    pub name: String,
+    pub methods: List<MirInterfaceMethod>,
+    pub impls: List<MirInterfaceImpl>,
+}
+
 pub struct MirLayoutTable {
     pub structs: List<MirStructLayout>,
     pub enums: List<MirEnumLayout>,
     pub tuples: List<MirTupleLayout>,
+    pub interfaces: List<MirInterfaceLayout>,
 }
 
 pub fn mirLayoutTable() -> MirLayoutTable {
@@ -1340,6 +1357,7 @@ pub fn mirLayoutTable() -> MirLayoutTable {
         structs: [],
         enums: [],
         tuples: [],
+        interfaces: [],
     }
 }
 

@@ -154,8 +154,9 @@ fn mirLowerUseAliasFieldPathInvalid() -> MirLowerUseAliasFieldPath {
 
 /// MirLowerer is the per-module lowering context. Pass 1 fills the
 /// lookup tables (`fnSigs` / `methodSigs` / `structs` / `enums` /
-/// `globals` / `useAliases`); pass 2 iterates `src.fns` / `src.structs`
-/// / `src.enums` / `src.lets` again and emits MIR into `out`.
+/// `interfaces` / `globals` / `useAliases`); pass 2 iterates
+/// `src.fns` / `src.structs` / `src.enums` / `src.lets` again and
+/// emits MIR into `out`.
 ///
     /// `issues` is an append-only diagnostic list for incomplete MIR
     /// coverage (e.g. "generic decl reached MIR"). The final MirModule
@@ -177,6 +178,8 @@ pub struct MirLowerer {
 
     pub enums: List<HirEnumDecl>,
     pub enumNames: List<String>,
+
+    pub interfaces: List<HirInterfaceDecl>,
 
     pub globals: List<HirLetDecl>,
     pub globalNames: List<String>,
@@ -208,6 +211,7 @@ pub fn mirLowerer(src: HirModule) -> MirLowerer {
         structNames: [],
         enums: [],
         enumNames: [],
+        interfaces: [],
         globals: [],
         globalNames: [],
         useAliases: [],
@@ -386,6 +390,13 @@ pub fn mirLowerCollectSignatures(l: MirLowerer) {
         }
     }
 
+    // Interfaces
+    for iface in l.src.interfaces {
+        if iface.generics.len() == 0 {
+            l.interfaces.push(iface)
+        }
+    }
+
     // Globals
     for g in l.src.lets {
         l.globals.push(g)
@@ -432,6 +443,7 @@ pub fn mirLowerBuildLayouts(l: MirLowerer) {
         let el = mirLowerBuildEnumLayout(e)
         l.out.layouts.enums.push(el)
     }
+    mirLowerBuildInterfaceLayouts(l)
 }
 
 fn mirLowerBuildStructLayout(s: HirStructDecl) -> MirStructLayout {
@@ -481,6 +493,89 @@ fn mirLowerBuildEnumLayout(e: HirEnumDecl) -> MirEnumLayout {
         discriminant: "Int",
         variants,
     }
+}
+
+fn mirLowerBuildInterfaceLayouts(l: MirLowerer) {
+    for iface in l.interfaces {
+        let mut methods: List<MirInterfaceMethod> = []
+        let mut slot = 0
+        for m in iface.methods {
+            if m.name != "" {
+                methods.push(MirInterfaceMethod {name: m.name, slot})
+            }
+            slot = slot + 1
+        }
+        let mut impls: List<MirInterfaceImpl> = []
+        for s in l.structs {
+            if mirLowerInterfaceSatisfiedByStruct(iface, s) {
+                impls.push(MirInterfaceImpl {
+                    implName: s.name,
+                    vtableSym: mirLowerInterfaceVtableSymbol(s.name, iface.name),
+                })
+            }
+        }
+        for e in l.enums {
+            if mirLowerInterfaceSatisfiedByEnum(iface, e) {
+                impls.push(MirInterfaceImpl {
+                    implName: e.name,
+                    vtableSym: mirLowerInterfaceVtableSymbol(e.name, iface.name),
+                })
+            }
+        }
+        l.out.layouts.interfaces.push(MirInterfaceLayout {
+            name: iface.name,
+            methods,
+            impls,
+        })
+    }
+}
+
+fn mirLowerInterfaceSatisfiedByStruct(iface: HirInterfaceDecl, s: HirStructDecl) -> Bool {
+    let mut methodNames: List<String> = []
+    for m in s.methods {
+        if m.name != "" {
+            methodNames.push(m.name)
+        }
+    }
+    mirLowerInterfaceMethodsCovered(iface, methodNames)
+}
+
+fn mirLowerInterfaceSatisfiedByEnum(iface: HirInterfaceDecl, e: HirEnumDecl) -> Bool {
+    let mut methodNames: List<String> = []
+    for m in e.methods {
+        if m.name != "" {
+            methodNames.push(m.name)
+        }
+    }
+    mirLowerInterfaceMethodsCovered(iface, methodNames)
+}
+
+fn mirLowerInterfaceMethodsCovered(iface: HirInterfaceDecl, methodNames: List<String>) -> Bool {
+    if iface.methods.len() == 0 {
+        return false
+    }
+    for m in iface.methods {
+        if m.name == "" {
+            continue
+        }
+        if !(mirLowerStringListContains(methodNames, m.name)) {
+            return false
+        }
+    }
+    true
+}
+
+fn mirLowerStringListContains(values: List<String>, needle: String) -> Bool {
+    for value in values {
+        if value == needle {
+            return true
+        }
+    }
+    false
+}
+
+fn mirLowerInterfaceVtableSymbol(implName: String, ifaceName: String) -> String {
+    "@osty.vtable." + implName + "__" + ifaceName
 }
 
 /// mirLowerSyntheticFieldName returns the positional field name the

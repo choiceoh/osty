@@ -9,6 +9,33 @@ fn testMirEmptyModule() {
     testing.assertEq(m.globals.len(), 0)
     testing.assertEq(m.uses.len(), 0)
     testing.assertEq(m.layouts.structs.len(), 0)
+    testing.assertEq(m.layouts.interfaces.len(), 0)
+}
+
+fn testMirLowerInterfaceLayoutsOstyOwned() {
+    let mut module = hirModule("main")
+    let mut sized = hirInterfaceDecl("Sized", hirNoSpan())
+    let mut size = hirFnDecl("size", hirTypePrim(HirPrimInt), hirNoSpan())
+    size.params.push(hirParam("self", hirTypeNamed("Vec", []), hirNoSpan()))
+    sized.methods.push(size)
+
+    let mut vec = hirStructDecl("Vec", hirNoSpan())
+    vec.methods.push(size)
+    module.interfaces.push(sized)
+    module.structs.push(vec)
+
+    let l = mirLowerer(module)
+    mirLowerCollectSignatures(l)
+    mirLowerBuildLayouts(l)
+
+    testing.assertEq(l.out.layouts.interfaces.len(), 1)
+    testing.assertEq(l.out.layouts.interfaces[0].name, "Sized")
+    testing.assertEq(l.out.layouts.interfaces[0].methods.len(), 1)
+    testing.assertEq(l.out.layouts.interfaces[0].methods[0].name, "size")
+    testing.assertEq(l.out.layouts.interfaces[0].methods[0].slot, 0)
+    testing.assertEq(l.out.layouts.interfaces[0].impls.len(), 1)
+    testing.assertEq(l.out.layouts.interfaces[0].impls[0].implName, "Vec")
+    testing.assertEq(l.out.layouts.interfaces[0].impls[0].vtableSym, "@osty.vtable.Vec__Sized")
 }
 
 fn testMirFunctionAllocatesLocalsAndBlocks() {
