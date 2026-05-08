@@ -363,6 +363,13 @@ fn badPureCapability(hash: PureHashCap, value: String) -> String {
 }
 // === END
 
+// === CASE: E0790 === spec annotation references a missing section
+#[spec("§99.99")]
+fn missingSpecLink() -> Int {
+    0
+}
+// === END
+
 // === CASE: E0004 === unterminated block comment (MUST remain last — the
 // unclosed /* is intentional and swallows every byte to EOF).
 /* never closes

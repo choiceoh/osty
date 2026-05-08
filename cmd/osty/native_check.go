@@ -16,6 +16,7 @@ import (
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/selfhost/api"
+	"github.com/osty/osty/internal/specvalidate"
 	"github.com/osty/osty/internal/stdlib"
 )
 
@@ -210,6 +211,7 @@ func runTypecheckPackageNative(dir string, flags cliFlags) int {
 	}
 	diags := packageParseDiags(pkg)
 	diags = append(diags, nativePackageCheckDiags(checked.Diagnostics, input.Files)...)
+	diags = append(diags, nativePackageSpecDiags(input.Files)...)
 	printPackageDiags(pkg, diags, flags)
 	printNativePackageTypes(checked, input.Files)
 	if flags.inspect {
@@ -287,6 +289,7 @@ func runCheckPackageNative(dir string, flags cliFlags) int {
 	}
 	diags := packageParseDiags(pkg)
 	diags = append(diags, nativePackageCheckDiags(checked.Diagnostics, input.Files)...)
+	diags = append(diags, nativePackageSpecDiags(input.Files)...)
 	printPackageDiags(pkg, diags, flags)
 	if flags.inspect {
 		runInspectPackageInput(input, "", flags)
@@ -323,6 +326,7 @@ func runNativeWorkspaceCheck(dir, mode string, flags cliFlags, emitTypes bool) i
 		}
 		diags := packageParseDiags(pkg)
 		diags = append(diags, nativePackageCheckDiags(checked.Diagnostics, input.Files)...)
+		diags = append(diags, nativePackageSpecDiags(input.Files)...)
 		printPackageDiags(pkg, diags, flags)
 		if emitTypes {
 			printNativePackageTypes(checked, input.Files)
@@ -473,6 +477,15 @@ func nativePackageCheckDiags(records []api.CheckDiagnosticRecord, files []api.Pa
 	}
 	return out
 }
+
+func nativePackageSpecDiags(files []api.PackageCheckFile) []*diag.Diagnostic {
+	var out []*diag.Diagnostic
+	for _, f := range files {
+		out = append(out, specvalidate.Diagnostics(f.Source, f.Path)...)
+	}
+	return out
+}
+
 func findOwningFile(files []api.PackageCheckFile, offset int) int {
 	for i, f := range files {
 		end := f.Base + len(f.Source)
@@ -502,6 +515,7 @@ func runTypecheckFileNative(path string, src []byte, formatter *diag.Formatter, 
 	}
 	all := append([]*diag.Diagnostic{}, parseDiags...)
 	all = append(all, checkDiags...)
+	all = append(all, specvalidate.Diagnostics(src, path)...)
 	printDiags(formatter, all, flags)
 	printNativeTypes(src, checked)
 	if flags.inspect {
@@ -595,6 +609,7 @@ func runCheckFileNative(path string, src []byte, formatter *diag.Formatter, flag
 	}
 	all := append([]*diag.Diagnostic{}, parseDiags...)
 	all = append(all, checkDiags...)
+	all = append(all, specvalidate.Diagnostics(src, path)...)
 	printDiags(formatter, all, flags)
 	if flags.inspect {
 		runInspectSource(path, src, flags)
