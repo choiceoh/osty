@@ -34,3 +34,55 @@ clipboard.clear() -> Result<(), Error>
 Implementations may delegate to host clipboard commands such as `pbpaste`,
 `pbcopy`, Wayland/X11 clipboard tools, AppleScript, or PowerShell. Failure to
 find or run a supported host command returns `Err`.
+
+#### 10.39.1 Clipboard input flow tag
+
+`clipboard.readText()` returns `#[taint("user_input")] String` —
+clipboard contents are user-controlled, often from arbitrary
+external sources (web pages, other applications). Treat it as
+adversarial input by default:
+
+```osty
+fn pasteAndQuery(db: Db) -> Result<List<Row>, Error> {
+    let raw = clipboard.readText()?              // tainted
+    let safe = std.sql.escape(raw)               // sanitize → sql_safe
+    db.query("SELECT * FROM logs WHERE msg = '{safe}'")
+}
+```
+
+Clipboard data flowing into `Process.execShell`, `db.query`, or
+`http.respondHtml` without sanitization is a §21 sink violation.
+
+#### 10.39.2 Clipboard testing
+
+There is no `FakeClipboard` in v0.6 baseline — tests that use
+clipboard typically mock the underlying `Process` capability that
+spawns `pbcopy` / `pbpaste` and assert the spawned commands and
+inputs. A future `std.capability.testing.FakeClipboard` is
+planned for Phase 5.
+
+For tests that need clipboard behavior today, the recommended
+pattern is a thin `Clipboard` interface in user code:
+
+```osty
+pub interface Clipboard {
+    fn readText(self) -> Result<String, Error>
+    fn writeText(self, s: String) -> Result<(), Error>
+}
+
+// Production
+struct HostClipboard {}
+impl HostClipboard {
+    fn readText(self) -> Result<String, Error> { clipboard.readText() }
+    fn writeText(self, s: String) -> Result<(), Error> { clipboard.writeText(s) }
+}
+
+// Test
+struct FakeClipboard { content: String }
+impl FakeClipboard {
+    fn readText(self) -> Result<String, Error> { Ok(self.content) }
+    fn writeText(self, s: String) -> Result<(), Error> { ... }
+}
+```
+
+Library code takes the interface; tests inject the fake.

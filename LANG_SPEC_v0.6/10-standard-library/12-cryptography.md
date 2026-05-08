@@ -57,3 +57,21 @@ Use `CryptoRng.randomBytes` for tokens, keys, IVs, and any other
 security-sensitive randomness. Use `Rng` (§10.14) for simulation,
 games, and non-security uses — `Rng` is seedable and reproducible,
 which is exactly the wrong property for cryptographic purposes.
+
+#### 10.12.1 Hash determinism
+
+The hash functions (`sha256`, `sha512`, `sha1`, `md5`, `hmac.*`)
+are deterministic — same input always produces same output bytes.
+This makes them safe inside `#[reproducible(scope = "portable")]`
+contexts. Specifically:
+
+```osty
+#[reproducible(scope = "portable")]
+fn cacheKey(payload: Bytes) -> Bytes {
+    crypto.sha256(payload)
+}
+```
+
+`cacheKey` produces byte-identical hashes on every supported
+target. The hash output is ordinary `Bytes`; flow tags ride
+through (a tainted input produces a tainted hash output).

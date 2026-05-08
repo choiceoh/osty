@@ -72,3 +72,35 @@ the builder rejects malformed inputs at `.build()` time.
 External literal construction is `E0420`. Authors who need to
 *assemble* a URL from validated parts must go through the builder,
 which is the only sealed-aware path.
+
+#### 10.16.1 URL parse rules
+
+`url.parse(text)` rejects:
+
+- Empty input.
+- Inputs without a scheme (`example.com/foo` — must be
+  `https://example.com/foo`).
+- Schemes containing non-ASCII characters.
+- Hostnames with embedded `\0` or whitespace.
+- Ports outside `[0, 65535]`.
+- Path components containing `\0`.
+
+The parser does *not* reject:
+
+- IDN hostnames (kept as-is; `Url.host` returns the raw IDN form
+  without Punycode conversion).
+- Query strings with empty values (`?key=` is valid).
+- Fragments containing UTF-8 (the fragment is opaque to the
+  parser).
+
+Authors needing IDN normalization apply `std.url.idn.normalize`
+explicitly. The parser keeps IDN handling out of the default path
+because normalization choices vary by use case.
+
+#### 10.16.2 URL building and SemVer
+
+The `Url.builder()` chain produces a `Url` value at `.build()`
+time. The build step is fallible — invalid combinations (e.g. a
+relative path without a scheme + host) return `Err`. Adding new
+required fields to the builder is a major SemVer event because
+existing builder chains will fail at compile time.

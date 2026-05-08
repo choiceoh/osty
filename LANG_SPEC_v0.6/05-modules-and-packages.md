@@ -59,6 +59,57 @@ use go "net/http" {
 re-export cycles are `E0552`. `use go "<path>" { ... }` imports a Go
 package via FFI (see §12).
 
+#### 5.2.1 Import resolution order
+
+When the compiler resolves `use <path>`, it searches in this
+order:
+
+1. **Workspace local** — sibling packages declared in
+   `[workspace] members`.
+2. **Path dependencies** — `[dependencies]` entries with `path =
+   "..."`.
+3. **Git dependencies** — entries with `git = "..."`.
+4. **Registry dependencies** — entries pointing to a registry
+   (default or named). Resolution uses `osty.lock` for the exact
+   version.
+5. **Standard library** — `std.*` paths resolved from the toolchain.
+
+Ambiguity is `E0550` — two paths resolve the same name. The fix
+is to use `as` to rename one or to remove the duplicate.
+
+#### 5.2.2 `pub use` re-export and SemVer
+
+A `pub use` re-export is part of the package's public API surface.
+Adding or removing a `pub use` is a SemVer event:
+
+| Change | Stability |
+|---|---|
+| Add `pub use ...` | minor bump (additive — new exported name) |
+| Remove `pub use ...` | major bump (caller's import breaks) |
+| Change re-export target (`pub use a.X` → `pub use b.X`) | major bump (semantics may differ) |
+
+The third row is the trap — even if `a.X` and `b.X` look
+identical, callers' transitive imports may differ. SemVer treats
+the change as breaking by default.
+
+#### 5.2.3 Capability re-exports
+
+A package may re-export the canonical capability interfaces:
+
+```osty
+pub use std.capability.Clock
+pub use std.capability.Net
+```
+
+Downstream consumers can `use mypkg.Clock` instead of
+`use std.capability.Clock`. The re-export does not change
+identity — `mypkg.Clock` and `std.capability.Clock` are the same
+interface; structural typing means a value satisfying one
+satisfies the other.
+
+The pattern is uncommon (most packages don't need to re-export
+stdlib capabilities) but supported for facade modules.
+
 ### 5.3 Visibility
 
 Declarations are package-private by default. `pub` exports:
@@ -95,6 +146,49 @@ exports the name `A`, not any additional methods on `X`. The alias's
 `pub`-ness belongs to the alias declaration itself, independent of
 whether `X` is `pub`.
 
+#### 5.3.1 Visibility and v0.6 surfaces
+
+Visibility composes with each v0.6 annotation surface:
+
+**`pub` + `#[stability]`** — every `pub` declaration participates
+in the public API surface (§3.14.3). The default `[stability]
+default = "stable"` requires every `pub` symbol to either carry
+explicit `#[stability(...)]` or be considered stable by virtue of
+the manifest default.
+
+**`pub` + sealed construct** — a `pub struct
+#[sealed_construct(parse)]` exports the name and the constructor;
+external literal construction is rejected even on `pub` fields
+(§3.4.5). The pattern of "exported type with private state" is
+the canonical sealed-construct shape.
+
+**`pub` + `#[error_contract]`** — a `pub fn` returning
+`Result<T, E>` may carry `#[error_contract]`, which is part of the
+public API. The contract variants are visible to callers; adding
+or removing variants is SemVer-relevant.
+
+**`pub` + capability parameters** — a `pub fn` taking `Net` etc.
+exports its capability requirements as part of the public
+contract. Adding or removing a capability parameter is breaking
+(§5.6.3).
+
+#### 5.3.2 Internal-use only declarations
+
+Declarations marked `#[stability("internal")]` are part of the
+package's compile-time surface but excluded from the SemVer
+contract. They are intended for sibling-package use within a
+workspace; downstream packages should not import them.
+
+```osty
+#[stability("internal")]
+pub fn _internalHelper(x: T) -> U { ... }
+```
+
+`osty publish` reports `internal` symbols in the manifest but does
+not include them in the API-surface diff. `osty audit
+--internal-deps` warns when external code imports an `internal`
+symbol — a soft signal rather than a hard error.
+
 ### 5.4 Circular Imports
 
 Forbidden. The compiler enforces a strict DAG. Diamond imports through
@@ -106,6 +200,43 @@ bringing in different versions of the same package) are resolved by
 the package manager per `osty.lock` rules; semantics are implementation-
 defined beyond "one version of a given package is visible in a single
 build" — see §13.2.
+
+#### 5.4.1 Cycle detection algorithm
+
+The compiler builds the import graph during the resolve pass
+(§13). Cycles are detected via depth-first traversal:
+
+1. Start from every package root in the workspace.
+2. Walk transitive `use` edges, marking visited packages.
+3. A back-edge (visiting a package already on the current
+   recursion stack) is a cycle — report `E0551` with the cycle
+   path.
+
+Cycles within a single package (file A imports from file B in the
+same package) are *not* import cycles — the package is one
+namespace. Only inter-package cycles are reported.
+
+Re-export cycles (`pub use a.X` where `a` re-exports back) are
+detected by the same algorithm but reported with `E0552` to
+distinguish from regular import cycles.
+
+#### 5.4.2 Diamond dependency consistency
+
+When `A → B → D` and `A → C → D` resolve `D` to the same version,
+the build sees one copy of D shared between B and C. When they
+resolve to different versions, the package manager:
+
+1. Picks the *highest compatible version* per SemVer rules.
+2. If both versions satisfy each constraint, uses the higher.
+3. If neither satisfies, fails with a constraint conflict.
+
+The result is recorded in `osty.lock`. Subsequent builds use
+exactly that resolution unless `osty update` is invoked.
+
+The "highest-compatible" policy means a package depending on `D
+^1.0` and another on `D ^1.5` resolves to whichever 1.x is
+highest available (e.g. `1.7.3`). Both packages see the same
+`D` instance.
 
 ### 5.5 One Package Per Directory
 

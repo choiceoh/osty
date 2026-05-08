@@ -582,6 +582,29 @@ Declaration-order or alphabetical execution is not provided. Tests
 that accidentally share state are surfaced by the randomization; fix
 the dependency rather than pinning the order.
 
+#### 11.7.1 Seed determinism
+
+The seed is a 32-bit unsigned integer. The same seed reproduces
+exactly the same:
+
+- Test execution order (per-mode permutation).
+- `FakeRng(seed = N)` initial state (when authors use the test
+  seed for fake construction).
+- `osty test --shuffle-cases` order for table-driven tests.
+
+Failed tests print the seed at the top of the failure block;
+copy-paste-rerun is the canonical reproduction workflow.
+
+#### 11.7.2 Cross-platform seed reproducibility
+
+The seed-driven order is *deterministic across platforms* — the
+same seed produces the same sequence on macOS, Linux, and Windows.
+This is a v0.6 contract: `osty test --seed N` from one developer's
+machine reproduces exactly on CI.
+
+The implementation uses xorshift64 with a fixed mixing constant;
+floating-point and platform-specific time sources are not consulted.
+
 ### 11.8 Setup / Teardown
 
 Osty does not expose `beforeEach`/`afterEach` hooks. Shared setup

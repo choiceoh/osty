@@ -649,3 +649,54 @@ intrinsic level. Specifically:
   which lowers to `raw.alloc`. The mapping is one-to-one for
   scalar types and one-to-N for composite types (the compiler
   reports the lowered count via `osty audit --allocs`).
+
+### 19.12 Privileged toolchain access
+
+Runtime intrinsics are gated by package privilege — `E0770`
+rejects user code that imports `runtime.*` or names `RawPtr`. The
+privilege is recorded in `osty.toml`:
+
+```toml
+[package]
+privileged = true                # default: false
+```
+
+`privileged = true` is allowed only for packages signed by the
+toolchain or distributed through `std.*`. User packages cannot
+self-elevate; the privilege is a registry policy, not a manifest
+choice.
+
+The privilege does *not* grant capability access — `Clock` etc.
+are still ordinary user-surface capabilities. It grants:
+
+- Access to `runtime.*` intrinsic surface.
+- `RawPtr` type usage.
+- `#[intrinsic]` annotation on function declarations.
+- `#[c_abi]` annotation on FFI declarations.
+- `#[no_alloc]` annotation on functions.
+
+Privilege is package-level; it does not propagate to consuming
+packages. A privileged package's `pub fn` may use intrinsics
+internally; the consumer still sees only the public Osty surface.
+
+### 19.13 Backend cross-compatibility
+
+The runtime intrinsic surface is largely backend-independent:
+
+| Intrinsic | Go backend | LLVM backend |
+|---|---|---|
+| `raw.null()` | Go `unsafe.Pointer(nil)` | LLVM `null ptr` |
+| `raw.alloc(b, a)` | Go runtime allocator | LLVM `osty_rt_alloc(b, a)` |
+| `raw.free(p)` | (no-op — GC handles) | (no-op — GC handles) |
+| `raw.bits(p)` | `uintptr(p)` | `ptrtoint p to i64` |
+| `raw.fromBits(n)` | `unsafe.Pointer(n)` | `inttoptr n to ptr` |
+| `raw.copy(dst, src, n)` | `memcpy` Go style | LLVM `memcpy` intrinsic |
+
+The backends agree on observable behavior. A program that uses
+intrinsics correctly compiles to either backend identically; the
+difference is internal codegen detail.
+
+Cross-backend testing is part of the toolchain's CI; intrinsic
+behavior divergence would be a soundness bug.
+
+---

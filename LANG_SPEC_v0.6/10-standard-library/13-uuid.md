@@ -51,3 +51,32 @@ Legacy `uuid.v4()` / `uuid.v7()` (no capability args) desugar to
 (v0.6.x only). Outside that mode the bare-arg form is `E0780` and
 external `Uuid { ... }` literal is `E0420` (sealed construct
 violation).
+
+#### 10.13.1 UUID v4 vs v7
+
+`uuid.v4(rng)` produces a fully random UUID — 122 bits of
+randomness. Use for pure entropy: API keys, session IDs that
+should not leak ordering information.
+
+`uuid.v7(clock, rng)` produces a time-ordered UUID — first 48 bits
+are a millisecond timestamp; remaining bits are random. Use for
+database row IDs, log entries, sequence-correlated identifiers
+where chronological ordering matters.
+
+The v0.6 stdlib registers v4 with `CryptoRng` (security-relevant
+randomness) and v7 with both `Clock` and `CryptoRng`. Tests use
+`FakeClock` + `FakeCryptoRng` for deterministic UUID generation
+across runs.
+
+#### 10.13.2 UUID and information flow
+
+A `Uuid` value does not carry source data — it is a synthesized
+identifier. Therefore `Uuid.toString()` returns an *untagged*
+`String` regardless of how the UUID was constructed. This is one
+of the few cases where a value derived from a tagged input
+produces an untagged output: the synthesis is not a function of
+the input data, so flow tracking does not propagate.
+
+If a UUID is *parsed from* a tainted source string, however, the
+parsed `Uuid` carries the source's tag set — because `Uuid.parse`
+is a structural transformation of the input.

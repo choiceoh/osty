@@ -189,4 +189,84 @@ example, were proposed during the v0.6 batch and withdrawn because
 they would have fork-extended the type-kind set without buying a
 proportional safety / clarity gain.
 
+### 14.6 v0.6-specific exclusions
+
+The v0.6 baseline reaffirms certain v0.5 exclusions and clarifies
+their interaction with the new annotation surface:
+
+#### 14.6.1 No effect handlers
+
+Unlike Koka, OCaml 5, or Eff, Osty does not provide effect
+handlers. The v0.6 `#[ambient]` mechanism is *not* a handler — it
+is a fixed name binding that injects from the prelude default
+table. Authors who want "intercept all `Net` calls and route them
+through a logger" use a wrapping capability:
+
+```osty
+pub struct LoggingNet {
+    inner: Net,
+    logger: Logger,
+}
+
+impl LoggingNet {
+    pub fn fetch(self, url: String) -> Result<Bytes, Error> {
+        self.logger.info("net.fetch: {url}")
+        self.inner.fetch(url)
+    }
+    // ... satisfy the rest of Net interface ...
+}
+```
+
+The wrapping struct satisfies `Net` structurally; downstream code
+takes `Net` and is unaware. This is more verbose than effect
+handlers but stays within the type system without introducing a
+new control-flow construct.
+
+#### 14.6.2 No row polymorphism in error contracts
+
+`#[error_contract]` requires a *concrete enum* error type
+(§7.5.1). Open / row-polymorphic error unions of the form `{
+EmailError | DbError | ... }` are not provided. The closed-form
+`EmailError | DbError` (the typed union) suffices for v0.6 use
+cases.
+
+Row polymorphism would let a function "add" errors to its contract
+without changing existing match sites. Osty rejects this for
+predictability — every error a function may emit must be
+enumerable at compile time. Adding a contract variant is therefore
+*always* a SemVer event.
+
+#### 14.6.3 No type-level capability quantification
+
+The closest thing to "this function uses the `Clock` effect" in
+v0.6 is the type-level annotation `clock: Clock` in the
+parameter list. There is no dedicated `effect Clock` syntax or
+quantifier like `fn f<E: Clock>()`.
+
+The capability is a value — passed, stored, returned — and the
+absence of a type-level quantifier is what keeps the annotation
+surface uniform with the rest of the type system. Quantifiers
+would require new inference rules; capability values reuse the
+existing structural-interface inference.
+
+#### 14.6.4 No implicit prelude expansion
+
+The prelude (§10.4) is a fixed set. Authors *cannot* extend it
+per-package — there is no `pub use ... as prelude` mechanism. The
+fixed prelude prevents version skew where a downstream consumer
+sees different default symbols than the package author.
+
+A package with a desired "common imports" surface declares them
+explicitly:
+
+```osty
+// myapp/prelude.osty
+pub use std.fs
+pub use std.time
+pub use std.log
+```
+
+Consumers `use myapp.prelude.*` to opt in. There is no implicit
+auto-import.
+
 ---
