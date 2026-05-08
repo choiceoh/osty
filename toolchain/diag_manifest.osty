@@ -191,6 +191,7 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
     // G44 — API evolution (§3.14)
     if code == "E0450" { return FamilyAnnotation }
     if code == "E0451" { return FamilyAnnotation }
+    if code == "E0452" { return FamilyAnnotation }
     // Manifest — TOML syntax (E2000–E2004)
     if code == "E2000" { return FamilyManifest }
     if code == "E2001" { return FamilyManifest }

@@ -83,7 +83,7 @@ in v0.6" for per-gap rationale.
 
 | Item | Status | Notes |
 |---|---|---|
-| `#[since("X.Y")]` | **planned** (G44, Phase 4) | metadata only |
+| `#[since("X.Y")]` | **partial** (G44, Phase 4) | format gate landed: SemVer-shape regex enforced (`E0452`); arg must be exactly one non-interpolated string literal. `osty publish` API surface gate is still pending. |
 | `#[stability("level", until/since/remove)]` | **planned** (G44, Phase 4) | osty publish 게이트 |
 | `#[match_compat("X.Y", fallback=)]` | **planned** (G44, Phase 4) | non-silent fallback 강제 |
 | `osty publish` API surface diff | **planned** (G44, Phase 4) | major bump 강제 |

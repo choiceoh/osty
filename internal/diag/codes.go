@@ -1391,6 +1391,17 @@ const (
 	// Fix: use a known version, or update the compiler.
 	CodeMatchCompatUnknownVersion = "E0451"
 
+	// CodeSinceBadFormat: `#[since(...)]` did not receive exactly one
+	// SemVer-shaped string literal. Accepted shapes are `"X.Y"`,
+	// `"X.Y.Z"`, and `"X.Y.Z-pre"` where each `X` / `Y` / `Z` is an ASCII
+	// digit run and the optional pre-release tail is `[A-Za-z0-9.-]+`.
+	// Interpolated strings, integer literals, identifiers, prefixes such
+	// as `"v0.6"`, and wildcard tails such as `"0.6.x"` are rejected.
+	//
+	// Spec: v0.6 §3.14.1
+	// Fix: pass exactly one string literal whose contents match `^[0-9]+\.[0-9]+(\.[0-9]+)?(-[A-Za-z0-9.-]+)?$` (e.g. `"0.6"`, `"1.0.0"`, `"2.0.0-rc.1"`).
+	CodeSinceBadFormat = "E0452"
+
 	// Manifest — TOML syntax.
 
 	// Fallback TOML syntax error in `osty.toml`.

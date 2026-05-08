@@ -363,6 +363,46 @@ fn badPureCapability(hash: PureHashCap, value: String) -> String {
 }
 // === END
 
+// === CASE: E0452 === since with v-prefix (not SemVer)
+#[since("v0.6")]
+fn badSinceVPrefix() {}
+// === END
+
+// === CASE: E0452 === since with wildcard tail
+#[since("0.6.x")]
+fn badSinceWildcard() {}
+// === END
+
+// === CASE: E0452 === since with empty string
+#[since("")]
+fn badSinceEmpty() {}
+// === END
+
+// === CASE: E0452 === since with abc literal
+#[since("abc")]
+fn badSinceAbc() {}
+// === END
+
+// === CASE: E0452 === since with integer arg
+#[since(42)]
+fn badSinceInt() {}
+// === END
+
+// === CASE: E0452 === since with no arguments
+#[since]
+fn badSinceBareFlag() {}
+// === END
+
+// === CASE: E0452 === since with two arguments
+#[since("0.6", "0.7")]
+fn badSinceTwoArgs() {}
+// === END
+
+// === CASE: E0452 === since with keyword argument
+#[since(version = "0.6")]
+fn badSinceKwarg() {}
+// === END
+
 // === CASE: E0004 === unterminated block comment (MUST remain last — the
 // unclosed /* is intentional and swallows every byte to EOF).
 /* never closes

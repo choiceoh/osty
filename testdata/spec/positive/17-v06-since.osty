@@ -1,0 +1,49 @@
+// v0.6 Phase 4 entry — `#[since("X.Y")]` format gate (G44, §3.14.1).
+//
+// All declaration sites accept SemVer-shape strings:
+//   `"X.Y"`, `"X.Y.Z"`, `"X.Y.Z-pre"`, `"X.Y-pre"`.
+// Pre-release tail allows `[A-Za-z0-9.-]+`.
+
+#[since("0.6")]
+fn introducedAtMinorOnly() -> Int {
+    0
+}
+
+#[since("1.0.0")]
+fn introducedAtPatch() -> Int {
+    0
+}
+
+#[since("2.0.0-rc.1")]
+fn introducedWithPreRelease() -> Int {
+    0
+}
+
+#[since("3.0.0-alpha")]
+fn preReleaseHyphenOnly() -> Int {
+    0
+}
+
+#[since("0.7.1-beta.2")]
+fn preReleaseDottedTail() -> Int {
+    0
+}
+
+#[since("0.7")]
+struct VersionedStruct {
+    #[since("0.7.1")]
+    pub field: Int,
+}
+
+#[since("0.8")]
+enum VersionedEnum {
+    Original,
+
+    #[since("0.8.0")]
+    Added,
+}
+
+interface VersionedInterface {
+    #[since("1.0")]
+    fn method(self) -> Int
+}
