@@ -2844,13 +2844,21 @@ fn errorContractCheckErased(cx: ElabCx, arena: AstArena, contracts: List<ErrorCo
 }
 
 // ---------------------------------------------------------------------
-// E0430–E0433 — structured intent gate (G42, v0.6 §3.12).
+// E0430–E0436 — structured intent gate (G42, v0.6 §3.12).
 //
-// Validates `#[example]` and `#[fixture]` annotations:
+// Validates `#[purpose]` / `#[example]` / `#[fixture]` annotations:
 //   E0430 — example output mismatch (requires runtime; placeholder)
 //   E0431 — example input arity mismatch
 //   E0432 — fixture with non-zero arity
 //   E0433 — example references unknown fixture
+//   E0434 — `#[purpose]` argument is not a plain string literal
+//   E0435 — `#[example]` uses an unknown key (must be input/output/uses)
+//   E0436 — `#[fixture]` applied to a non-function declaration
+//
+// `#[purpose]` is allowed on any declaration site (fn / method / struct /
+// enum / interface / interface method / pub field). Parameter / local
+// positions are already rejected by the parser, so the gate does not
+// re-check them.
 // ---------------------------------------------------------------------
 
 fn runStructuredIntentGate(cx: ElabCx) {
@@ -2860,9 +2868,29 @@ fn runStructuredIntentGate(cx: ElabCx) {
         let node = astArenaNodeAt(arena, declIdx)
         match node.kind {
             AstNFnDecl -> structuredIntentCheckFn(cx, arena, node, fixtureNames),
-            AstNStructDecl -> structuredIntentCheckMethods(cx, arena, node, fixtureNames),
-            AstNEnumDecl -> structuredIntentCheckMethods(cx, arena, node, fixtureNames),
-            AstNInterfaceDecl -> structuredIntentCheckMethods(cx, arena, node, fixtureNames),
+            AstNStructDecl -> {
+                structuredIntentCheckPurposeAt(cx, arena, node.text, "struct", node.extra, node.start, node.end)
+                structuredIntentCheckFixtureNonFn(cx, arena, node.text, "struct", node.extra, node.start, node.end)
+                structuredIntentCheckStructMembers(cx, arena, node, fixtureNames)
+            },
+            AstNEnumDecl -> {
+                structuredIntentCheckPurposeAt(cx, arena, node.text, "enum", node.extra, node.start, node.end)
+                structuredIntentCheckFixtureNonFn(cx, arena, node.text, "enum", node.extra, node.start, node.end)
+                structuredIntentCheckEnumMembers(cx, arena, node, fixtureNames)
+            },
+            AstNInterfaceDecl -> {
+                structuredIntentCheckPurposeAt(cx, arena, node.text, "interface", node.extra, node.start, node.end)
+                structuredIntentCheckFixtureNonFn(cx, arena, node.text, "interface", node.extra, node.start, node.end)
+                structuredIntentCheckMethods(cx, arena, node, fixtureNames)
+            },
+            AstNTypeAlias -> {
+                structuredIntentCheckPurposeAt(cx, arena, node.text, "type alias", node.extra, node.start, node.end)
+                structuredIntentCheckFixtureNonFn(cx, arena, node.text, "type alias", node.extra, node.start, node.end)
+            },
+            AstNLetDecl -> {
+                structuredIntentCheckPurposeAt(cx, arena, node.text, "let", node.extra, node.start, node.end)
+                structuredIntentCheckFixtureNonFn(cx, arena, node.text, "let", node.extra, node.start, node.end)
+            },
             _ -> {},
         }
     }
@@ -2873,6 +2901,31 @@ fn structuredIntentCheckMethods(cx: ElabCx, arena: AstArena, parent: AstNode, fi
         let member = astArenaNodeAt(arena, memberIdx)
         if member.kind == AstNFnDecl {
             structuredIntentCheckFn(cx, arena, member, fixtureNames)
+        }
+    }
+}
+
+fn structuredIntentCheckStructMembers(cx: ElabCx, arena: AstArena, parent: AstNode, fixtureNames: List<String>) {
+    for memberIdx in parent.children {
+        let member = astArenaNodeAt(arena, memberIdx)
+        if member.kind == AstNFnDecl {
+            structuredIntentCheckFn(cx, arena, member, fixtureNames)
+        } else if member.kind == AstNField_ {
+            // `#[purpose]` is permitted on struct fields. `#[fixture]` is not.
+            structuredIntentCheckPurposeAt(cx, arena, member.text, "field", member.extra, member.start, member.end)
+            structuredIntentCheckFixtureNonFn(cx, arena, member.text, "field", member.extra, member.start, member.end)
+        }
+    }
+}
+
+fn structuredIntentCheckEnumMembers(cx: ElabCx, arena: AstArena, parent: AstNode, fixtureNames: List<String>) {
+    for memberIdx in parent.children {
+        let member = astArenaNodeAt(arena, memberIdx)
+        if member.kind == AstNFnDecl {
+            structuredIntentCheckFn(cx, arena, member, fixtureNames)
+        } else if member.kind == AstNVariant {
+            structuredIntentCheckPurposeAt(cx, arena, member.text, "enum variant", member.extra, member.start, member.end)
+            structuredIntentCheckFixtureNonFn(cx, arena, member.text, "enum variant", member.extra, member.start, member.end)
         }
     }
 }
@@ -2889,13 +2942,6 @@ fn collectFixtureNames(arena: AstArena) -> List<String> {
         }
         let fixtureAnnots = collectAnnotationByName(arena, node.extra, "fixture")
         for annot in fixtureAnnots {
-            // E0432: fixture functions must be zero-arity.
-            let paramCount = fnParamCountExcludingSelf(arena, node)
-            if paramCount > 0 {
-                // Note: this is emitted during collection so it fires
-                // regardless of whether the fixture is referenced.
-                // We skip emitting here and do it in structuredIntentCheckFn.
-            }
             // Extract fixture name from annotation args.
             let name = fixtureAnnotName(arena, annot)
             if name != "" {
@@ -2912,23 +2958,8 @@ fn collectFixtureNames(arena: AstArena) -> List<String> {
 fn fixtureAnnotName(arena: AstArena, annot: AstNode) -> String {
     for argIdx in annot.children {
         let arg = astArenaNodeAt(arena, argIdx)
-        let text = arg.text
-        // Look for `name = "..."` pattern.
-        if strings.hasPrefix(text, "name") {
-            let parts = strings.split(text, "=")
-            if parts.len() >= 2 {
-                let v: String = strings.trimSpace(parts[parts.len() - 1])
-                if v != "" {
-                    return v
-                }
-            }
-            // Check children for the value.
-            for valIdx in arg.children {
-                let val = astArenaNodeAt(arena, valIdx)
-                if val.text != "" {
-                    return val.text
-                }
-            }
+        if arg.kind == AstNField_ && arg.text == "name" {
+            return annotationStringLiteralValue(arena, arg.left)
         }
     }
     ""
@@ -2938,6 +2969,8 @@ fn structuredIntentCheckFn(cx: ElabCx, arena: AstArena, fnNode: AstNode, fixture
     if fnNode.extra < 0 {
         return
     }
+    // E0434: `#[purpose]` argument must be a plain string literal.
+    structuredIntentCheckPurposeAt(cx, arena, fnNode.text, "function", fnNode.extra, fnNode.start, fnNode.end)
     // E0432: check fixture arity.
     let fixtureAnnots = collectAnnotationByName(arena, fnNode.extra, "fixture")
     for _ in fixtureAnnots {
@@ -2948,44 +2981,118 @@ fn structuredIntentCheckFn(cx: ElabCx, arena: AstArena, fnNode: AstNode, fixture
             )
         }
     }
-    // E0431: check example arity.
-    // E0433: check example fixture references.
+    // E0431/E0433/E0435: check example arity, fixture references, unknown keys.
     let exampleAnnots = collectAnnotationByName(arena, fnNode.extra, "example")
     for annot in exampleAnnots {
         structuredIntentCheckExample(cx, arena, annot, fnNode, fixtureNames)
     }
 }
 
+fn structuredIntentCheckPurposeAt(cx: ElabCx, arena: AstArena, declName: String, _kind: String, annotIdx: Int, _start: Int, _end: Int) {
+    if annotIdx < 0 {
+        return
+    }
+    let purposeAnnots = collectAnnotationByName(arena, annotIdx, "purpose")
+    for annot in purposeAnnots {
+        structuredIntentValidatePurposeArgs(cx, arena, annot)
+    }
+}
+
+fn structuredIntentValidatePurposeArgs(cx: ElabCx, arena: AstArena, annot: AstNode) {
+    let argCount = annot.children.len()
+    if argCount == 0 {
+        cx.env.local.diagnostics.push(
+            diagPurposeNotStringLiteral("missing argument", annot.start, annot.end),
+        )
+        return
+    }
+    if argCount > 1 {
+        cx.env.local.diagnostics.push(
+            diagPurposeNotStringLiteral("expected exactly one argument, got {argCount}", annot.start, annot.end),
+        )
+        // Continue to validate the first argument too so users see both
+        // shape complaints if applicable.
+    }
+    let firstIdx = annot.children[0]
+    let arg = astArenaNodeAt(arena, firstIdx)
+    let issue = classifyPurposeArg(arg)
+    if issue != "" {
+        cx.env.local.diagnostics.push(
+            diagPurposeNotStringLiteral(issue, arg.start, arg.end),
+        )
+    }
+}
+
+/// classifyPurposeArg returns "" when `arg` is a plain non-interpolated
+/// string literal, or a short detail string describing why it is not.
+fn classifyPurposeArg(arg: AstNode) -> String {
+    if arg.kind == AstNField_ {
+        return "argument has `key = value` form; use a plain string literal"
+    }
+    if arg.kind != AstNStringLit {
+        return "argument is not a string literal"
+    }
+    // Parser preserves the surface verbatim — distinguish raw / triple-quoted /
+    // interpolated forms and reject them.
+    if strings.hasPrefix(arg.text, "r\"") {
+        return "raw string literals are not accepted"
+    }
+    if strings.hasPrefix(arg.text, "\"\"\"") {
+        return "triple-quoted strings are not accepted"
+    }
+    if arg.children.len() > 0 {
+        return "interpolated strings are not accepted"
+    }
+    if containsInterpolation(arg.text) {
+        return "interpolated strings are not accepted"
+    }
+    ""
+}
+
+fn structuredIntentCheckFixtureNonFn(cx: ElabCx, arena: AstArena, declName: String, kind: String, annotIdx: Int, start: Int, end: Int) {
+    if annotIdx < 0 {
+        return
+    }
+    let fixtureAnnots = collectAnnotationByName(arena, annotIdx, "fixture")
+    for annot in fixtureAnnots {
+        cx.env.local.diagnostics.push(
+            diagFixtureNonFunction(declName, kind, annot.start, annot.end),
+        )
+    }
+}
+
 fn structuredIntentCheckExample(cx: ElabCx, arena: AstArena, annot: AstNode, fnNode: AstNode, fixtureNames: List<String>) {
     let fnParamCount = fnParamCountExcludingSelf(arena, fnNode)
     let mut inputCount = 0
+    let mut sawInput = false
     let mut usesFixture = ""
     for argIdx in annot.children {
         let arg = astArenaNodeAt(arena, argIdx)
-        let text = arg.text
-        if strings.hasPrefix(text, "input") {
-            // Count input values. The parser stores list items as children.
-            inputCount = arg.children.len()
-            if inputCount == 0 {
-                // Single value case.
-                inputCount = 1
-            }
+        if arg.kind != AstNField_ {
+            // Bare ident or expression — skip; not part of the keyword
+            // catalog. Future revisions may reject these positionally.
+            continue
         }
-        if strings.hasPrefix(text, "uses") {
-            let parts = strings.split(text, "=")
-            if parts.len() >= 2 {
-                usesFixture = strings.trimSpace(parts[parts.len() - 1])
+        let key = arg.text
+        if key == "input" {
+            sawInput = true
+            inputCount = exampleInputArity(arena, arg.left)
+        } else if key == "output" {
+            // No structural validation here yet — runtime example execution
+            // is follow-up. Presence of the key is enough.
+        } else if key == "uses" {
+            let name = annotationStringLiteralValue(arena, arg.left)
+            if name != "" {
+                usesFixture = name
             }
-            for valIdx in arg.children {
-                let val = astArenaNodeAt(arena, valIdx)
-                if val.text != "" {
-                    usesFixture = val.text
-                }
-            }
+        } else {
+            cx.env.local.diagnostics.push(
+                diagExampleUnknownKey(fnNode.text, key, arg.start, arg.end),
+            )
         }
     }
-    // E0431: arity mismatch.
-    if inputCount > 0 && fnParamCount > 0 && inputCount != fnParamCount {
+    // E0431: arity mismatch (only fires when an `input` key was provided).
+    if sawInput && fnParamCount >= 0 && inputCount != fnParamCount {
         cx.env.local.diagnostics.push(
             diagExampleArityMismatch(fnNode.text, fnParamCount, inputCount, annot.start, annot.end),
         )
@@ -2996,6 +3103,52 @@ fn structuredIntentCheckExample(cx: ElabCx, arena: AstArena, annot: AstNode, fnN
             diagExampleUnknownFixture(fnNode.text, usesFixture, annot.start, annot.end),
         )
     }
+}
+
+/// exampleInputArity counts the positional arguments in an `#[example]`
+/// `input` value. A list literal contributes its element count; any other
+/// expression (single value short-form) contributes one.
+fn exampleInputArity(arena: AstArena, valueIdx: Int) -> Int {
+    if valueIdx < 0 {
+        return 0
+    }
+    let v = astArenaNodeAt(arena, valueIdx)
+    if v.kind == AstNList {
+        return v.children.len()
+    }
+    1
+}
+
+/// annotationStringLiteralValue returns the unquoted string for a plain
+/// string literal expression, or "" when the expression is not a plain
+/// string. Interpolated / raw / triple-quoted forms return "" so callers
+/// can fall back to error reporting.
+fn annotationStringLiteralValue(arena: AstArena, valueIdx: Int) -> String {
+    if valueIdx < 0 {
+        return ""
+    }
+    let v = astArenaNodeAt(arena, valueIdx)
+    if v.kind != AstNStringLit {
+        return ""
+    }
+    if v.children.len() > 0 {
+        return ""
+    }
+    let raw = v.text
+    if strings.hasPrefix(raw, "r\"") {
+        return ""
+    }
+    if strings.hasPrefix(raw, "\"\"\"") {
+        return ""
+    }
+    let n = raw.len()
+    if n < 2 {
+        return raw
+    }
+    if strings.hasPrefix(raw, "\"") && strings.hasSuffix(raw, "\"") {
+        return strings.slice(raw, 1, n - 1)
+    }
+    raw
 }
 
 fn fnParamCountExcludingSelf(arena: AstArena, fnNode: AstNode) -> Int {

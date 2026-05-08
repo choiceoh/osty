@@ -1447,6 +1447,34 @@ Spec: v0.6 §3.12.3
 
 **Fix**: declare the fixture, or correct the name.
 
+### E0434 — `CodePurposeNotStringLiteral`
+
+CodePurposeNotStringLiteral: `#[purpose("...")]` accepts exactly one string-literal argument. Interpolated, raw, or triple-quoted strings, concatenations, identifiers, and any other expression form are rejected so tooling can extract the purpose verbatim.
+
+Spec: v0.6 §3.12.1
+
+**Fix**: replace the argument with a single plain string literal.
+
+### E0435 — `CodeExampleUnknownKey`
+
+CodeExampleUnknownKey: `#[example(...)]` was passed a keyword argument whose name is not in the {`input`, `output`, `uses`} catalog defined by §3.12.2.
+
+drop the unrecognised argument.
+
+Spec: v0.6 §3.12.2
+
+**Fix**: rename the key to one of `input` / `output` / `uses`, or
+
+### E0436 — `CodeFixtureNonFunction`
+
+CodeFixtureNonFunction: `#[fixture(name = "...")]` was applied to a declaration that is not a function (e.g. struct, enum, interface, or top-level `let`). Fixtures are runnable factories; only `fn` declarations qualify.
+
+that returns the value, and reference it via the fixture's registered name.
+
+Spec: v0.6 §3.12.3
+
+**Fix**: move the annotation to a fresh zero-arity factory function
+
 ---
 
 ## G45 — Golden tests (§11.5)

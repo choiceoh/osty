@@ -95,6 +95,9 @@ pub fn checkCodeExampleMismatch() -> String { "E0430" }
 pub fn checkCodeExampleArityMismatch() -> String { "E0431" }
 pub fn checkCodeFixtureNonZeroArity() -> String { "E0432" }
 pub fn checkCodeExampleUnknownFixture() -> String { "E0433" }
+pub fn checkCodePurposeNotStringLiteral() -> String { "E0434" }
+pub fn checkCodeExampleUnknownKey() -> String { "E0435" }
+pub fn checkCodeFixtureNonFunction() -> String { "E0436" }
 
 // v0.6 G43 — Executable spec block (LANG_SPEC_v0.6 §3.13).
 pub fn checkCodeSpecBlockMisplaced() -> String { "E0440" }
@@ -1275,6 +1278,53 @@ pub fn diagExampleUnknownFixture(fnName: String, fixtureName: String, start: Int
         [
             "LANG_SPEC §3.12.3: fixture names must resolve to a `#[fixture]` declaration",
             "hint: declare the fixture, or correct the name",
+        ],
+    )
+}
+
+/// diagPurposeNotStringLiteral reports a `#[purpose(...)]` whose argument
+/// is not a single plain string literal. Tooling extracts the purpose
+/// verbatim, so interpolated/raw/triple-quoted/expression forms are
+/// rejected.
+pub fn diagPurposeNotStringLiteral(detail: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodePurposeNotStringLiteral(),
+        "`#[purpose]` argument must be a plain string literal ({detail})",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.12.1: `#[purpose]` accepts exactly one plain `\"...\"` literal",
+            "hint: replace the argument with a single non-interpolated string literal",
+        ],
+    )
+}
+
+/// diagExampleUnknownKey reports an `#[example(...)]` keyword argument
+/// whose name is not in the {`input`, `output`, `uses`} catalog.
+pub fn diagExampleUnknownKey(fnName: String, key: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeExampleUnknownKey(),
+        "`#[example]` on `{fnName}` uses unknown key `{key}`",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.12.2: `#[example]` keys are `input`, `output`, `uses`",
+            "hint: rename the key to one of the catalog entries, or drop it",
+        ],
+    )
+}
+
+/// diagFixtureNonFunction reports a `#[fixture]` annotation applied to a
+/// declaration that is not a function (struct, enum, interface, etc.).
+pub fn diagFixtureNonFunction(declName: String, kind: String, start: Int, end: Int) -> CheckDiagnostic {
+    checkDiagWithNotes(
+        checkCodeFixtureNonFunction(),
+        "`#[fixture]` cannot be applied to {kind} `{declName}`; only functions are eligible",
+        start,
+        end,
+        [
+            "LANG_SPEC §3.12.3: `#[fixture]` registers a zero-arity factory function",
+            "hint: move `#[fixture]` to a `fn` that returns the value",
         ],
     )
 }

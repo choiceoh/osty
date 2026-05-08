@@ -432,6 +432,9 @@ JSON 스키마는 `LANG_SPEC_v0.6/13-tooling.md §13.9` 에서 정의.
 | `E0431` | `#[example]` 의 input arity 가 함수 arity 와 불일치 |
 | `E0432` | `#[fixture]` 함수가 인자를 받음 (must be zero-arity) |
 | `E0433` | `#[example(uses = "X")]` 의 X 가 fixture 가 아님 |
+| `E0434` | `#[purpose]` 인자가 plain string literal 이 아님 |
+| `E0435` | `#[example]` 가 `input` / `output` / `uses` 외 키 사용 |
+| `E0436` | `#[fixture]` 가 fn 외 위치 (struct / enum / field / variant ...) 에 부착 |
 
 ---
 
@@ -969,7 +972,7 @@ Phase 2 에서 *category-prefix 옵션* 도입 검토:
 
 | Range | 영역 | 신규 |
 |---|---|---|
-| `E0410–E0429` | Annotation/intent (G41, G42) | E0410, E0411, E0412, E0414, E0420, E0421, E0422, E0423, E0424, E0430, E0431, E0432, E0433 |
+| `E0410–E0436` | Annotation/intent (G41, G42) | E0410, E0411, E0412, E0414, E0420, E0421, E0422, E0423, E0424, E0430, E0431, E0432, E0433, E0434, E0435, E0436 |
 | `E0440–E0449` | Golden / evolution (G44, G45) | E0444, E0445, E0450, E0451 |
 | `E0780–E0799` | Capability / Reproducible (G36, G39) | E0780-E0789 |
 | `E0900–E0949` | Information flow (G37) | E0900, E0901, E0902, E0903 |

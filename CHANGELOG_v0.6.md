@@ -64,9 +64,9 @@ in v0.6" for per-gap rationale.
 
 | Item | Status | Notes |
 |---|---|---|
-| `#[purpose("...")]` | **planned** (G42, Phase 2) | doc / context only |
-| `#[example(input=, output=, uses=)]` | **planned** (G42, Phase 2) | auto-test |
-| `#[fixture(name=)]` | **planned** (G42, Phase 2) | 공유 canonical instance |
+| `#[purpose("...")]` | **partial** (G42, Phase 2) | active checker gate now rejects non-string-literal arguments (`E0434`). Interpolated, raw, triple-quoted, and `key = value` forms are caught with a structured detail message. |
+| `#[example(input=, output=, uses=)]` | **partial** (G42, Phase 2) | active checker gate enforces the `input` / `output` / `uses` key catalog (`E0435`); preserves the `input` arity (`E0431`) and `uses` fixture (`E0433`) gates. Runtime `osty test --example` execution and output mismatch (`E0430`) remain follow-up. |
+| `#[fixture(name=)]` | **partial** (G42, Phase 2) | active checker gate restricts `#[fixture]` to function declarations (`E0436`) and keeps the zero-arity rule (`E0432`). Gate runs at struct / enum / interface / type alias / let / variant / field positions. |
 | `osty context <symbol>` | **planned** (G47, Phase 2) | JSON output |
 
 ### Determinism / Construction / Errors

@@ -1744,8 +1744,9 @@ fn aliceUser() -> Email { Email.parse("alice@example.com")? }
 declaration exists. Unlike a doc comment (`///`), the purpose:
 
 - Has a fixed syntactic shape — easy for tooling to extract.
-- Is required to be a single string literal, not a concatenation
-  or expression. `E0431`.
+- Is required to be a single plain string literal, not a concatenation,
+  interpolated string, raw / triple-quoted form, or any other
+  expression. `E0434`.
 - Is rendered as the *primary one-liner* in `osty doc`, separate
   from longer explanatory prose in `///` comments.
 
@@ -1795,6 +1796,8 @@ pub fn signup(email: String, db: Db) -> Result<UserId, SignupError> { ... }
   order; capability placeholders in `input` are resolved against
   the fixture set.
 
+Keys outside `{ input, output, uses }` are rejected as `E0435`.
+
 **Verification.** `osty test --example` runs each `#[example]` as
 an independent test. Output mismatch is a test failure. Missing
 fixture (named in `uses` but no matching `#[fixture]`) is `E0433`.
@@ -1820,11 +1823,14 @@ fn fakeDb() -> Db {
 
 **Composition rules.**
 
-1. Zero arity is mandatory (`E0432`). A fixture takes no parameters.
-2. Fixtures may call other fixtures by name. Cycles are `E0433`.
-3. Each call to a fixture function returns a *fresh instance* —
+1. `#[fixture]` is restricted to function declarations. Applying it
+   to a struct, enum, interface, type alias, field, variant, or
+   top-level `let` is `E0436`.
+2. Zero arity is mandatory (`E0432`). A fixture takes no parameters.
+3. Fixtures may call other fixtures by name. Cycles are `E0433`.
+4. Each call to a fixture function returns a *fresh instance* —
    tests never share fixture state.
-4. Fixtures are package-local by default; `pub fn` annotated with
+5. Fixtures are package-local by default; `pub fn` annotated with
    `#[fixture]` is exported for downstream packages but is rare in
    practice (most fixtures are test-local).
 
