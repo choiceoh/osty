@@ -2963,6 +2963,12 @@ fn lirCutBlockCondBr(l: LirMirFunctionLowerer, cond: String, thenLabel: String, 
 // the caller is responsible for zext / ptrtoint / bitcast as
 // appropriate. Returns the temporary holding the constructed aggregate.
 fn lirEmitOptionNone(l: LirMirFunctionLowerer, optType: LirType) -> String {
+    if lirAggregateHasWidenedPayload(l.out, optType) {
+        lirLowerError(l, LirDiagUnsupported,
+            "Option<Struct> None construction not implemented for widened payload `" + optType.llvm + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)",
+            "option.none.widened")
+        return "undef"
+    }
     let step = lirFresh(l)
     l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "0"), [0]))
     let value = lirFresh(l)
@@ -2970,6 +2976,12 @@ fn lirEmitOptionNone(l: LirMirFunctionLowerer, optType: LirType) -> String {
     value
 }
 fn lirEmitOptionSome(l: LirMirFunctionLowerer, optType: LirType, payloadI64: String) -> String {
+    if lirAggregateHasWidenedPayload(l.out, optType) {
+        lirLowerError(l, LirDiagUnsupported,
+            "Option<Struct> Some construction not implemented for widened payload `" + optType.llvm + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)",
+            "option.some.widened")
+        return "undef"
+    }
     let step = lirFresh(l)
     l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "1"), [0]))
     let value = lirFresh(l)
@@ -2977,6 +2989,12 @@ fn lirEmitOptionSome(l: LirMirFunctionLowerer, optType: LirType, payloadI64: Str
     value
 }
 fn lirEmitResultOk(l: LirMirFunctionLowerer, resultType: LirType, payloadI64: String) -> String {
+    if lirAggregateHasWidenedPayload(l.out, resultType) {
+        lirLowerError(l, LirDiagUnsupported,
+            "Result<Struct, _> Ok construction not implemented for widened payload `" + resultType.llvm + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)",
+            "result.ok.widened")
+        return "undef"
+    }
     let step = lirFresh(l)
     l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), "1"), [0]))
     let value = lirFresh(l)
@@ -2984,11 +3002,73 @@ fn lirEmitResultOk(l: LirMirFunctionLowerer, resultType: LirType, payloadI64: St
     value
 }
 fn lirEmitResultErr(l: LirMirFunctionLowerer, resultType: LirType, payloadI64: String) -> String {
+    if lirAggregateHasWidenedPayload(l.out, resultType) {
+        lirLowerError(l, LirDiagUnsupported,
+            "Result<_, Struct> Err construction not implemented for widened payload `" + resultType.llvm + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)",
+            "result.err.widened")
+        return "undef"
+    }
     let step = lirFresh(l)
     l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), "0"), [0]))
     let value = lirFresh(l)
     l.instrs.push(lirInsertValue(value, resultType, step, lirOperand(lirIntType(64), payloadI64), [1]))
     value
+}
+
+// `lirAggregateHasWidenedPayload` returns true when the typedef body for an
+// aggregate type ref (e.g. "%Option.MyStruct") references a struct in the
+// payload slot — `{ i64, %Mangled }` rather than the default `{ i64, i64 }`
+// emitted by `lirAlgebraicAggregateBody_module` (C1, GAP-TYP-004 part 2).
+//
+// When true, the i64-payload emit path (lirEmitOptionSome / Ok / etc.) is
+// no longer correct because the second insertvalue slot would be typed
+// `%Mangled`, not `i64`. Callers must either:
+//   a) use a struct-payload-aware emit helper (TBD — C2 follow-up), or
+//   b) emit a structured `LirDiagUnsupported` and return a placeholder so
+//      downstream IR remains parseable.
+//
+// Returns false when the typedef is missing (preserves existing behavior),
+// when the type ref does not start with '%' (raw type like 'i64'), or when
+// the body is the default `{ i64, i64 }` shape.
+fn lirAggregateHasWidenedPayload(out: LirModule, aggType: LirType) -> Bool {
+    if !(strings.startsWith(aggType.llvm, "%")) {
+        return false
+    }
+    let body = lirAggregateBodyForRef(out, aggType.llvm)
+    if body == "" {
+        return false
+    }
+    // Default shape — both slots are i64.
+    if strings.contains(body, "i64, i64") {
+        return false
+    }
+    // Widened shape — the payload slot references another typedef.
+    // We look for ", %" before the closing brace which indicates the
+    // second field is a struct ref. The aggregate body emitted by
+    // `lirAlgebraicAggregateBody_module` is exactly `{ i64, %X }`.
+    strings.contains(body, ", %")
+}
+
+// `lirAggregateBodyForRef` looks up an aggregate's typedef body string
+// from the module's typedef table. The reference is the LLVM type ref
+// including the `%` prefix (e.g. "%Option.MyStruct"). Returns "" when
+// not found — caller treats absence as "default shape, no widening".
+fn lirAggregateBodyForRef(out: LirModule, ref: String) -> String {
+    if !(strings.startsWith(ref, "%")) {
+        return ""
+    }
+    let name = strings.slice(ref, 1, ref.len())
+    for td in out.typeDefs {
+        let tdName = if strings.startsWith(td.name, "%") {
+            strings.slice(td.name, 1, td.name.len())
+        } else {
+            td.name
+        }
+        if tdName == name {
+            return td.body
+        }
+    }
+    ""
 }
 // `lirWrapOptionFromI64Sentinel` lowers the IndexOf-family
 // `i64 → Option<Int>` shape: test the i64 against -1 (sge), branch to
@@ -4731,6 +4811,16 @@ fn lirLowerMirAlgebraicUnwrap(l: LirMirFunctionLowerer, instr: MirInstr, abortSy
         lirLowerError(l, LirDiagUnsupported, label + " operand type `" + instr.args[0].typ + "` is not implemented", label)
         return
     }
+    if lirAggregateHasWidenedPayload(l.out, aggType) {
+        // Widened struct payload — extractvalue would yield a struct, not
+        // i64. The current i64-shaped payload propagation downstream would
+        // hit a type mismatch. C2 needs a struct-payload-aware unwrap that
+        // either copies the struct via alloca or handles the value type.
+        lirLowerError(l, LirDiagUnsupported,
+            label + " not implemented for widened payload `" + instr.args[0].typ + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)",
+            label + ".widened")
+        return
+    }
     let aggValue = lirLowerMirOperand(l, instr.args[0], instr.args[0].typ, aggType)
     if aggValue.value == "" {
         return
@@ -4783,6 +4873,14 @@ fn lirLowerMirAlgebraicUnwrapOr(l: LirMirFunctionLowerer, instr: MirInstr, label
     let aggType = lirLowerMirType(l, instr.args[0].typ)
     if lirTypeIsZero(aggType) {
         lirLowerError(l, LirDiagUnsupported, label + " operand type `" + instr.args[0].typ + "` is not implemented", label)
+        return
+    }
+    if lirAggregateHasWidenedPayload(l.out, aggType) {
+        // Same diagnostic-only guard as lirLowerMirAlgebraicUnwrap (above).
+        // Struct-payload-aware unwrapOr depends on C2 implementation.
+        lirLowerError(l, LirDiagUnsupported,
+            label + " not implemented for widened payload `" + instr.args[0].typ + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)",
+            label + ".widened")
         return
     }
     let aggValue = lirLowerMirOperand(l, instr.args[0], instr.args[0].typ, aggType)
