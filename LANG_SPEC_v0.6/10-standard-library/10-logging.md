@@ -83,3 +83,73 @@ explicitly.
 `Fields {"k": v}` outside a `log.{debug,info,warn,error,...}` call is
 just an ordinary `Map<String, LogValue>` literal — the implicit
 conversion is what makes the heterogeneous value notation valid.
+
+#### v0.6 logging and information flow
+
+`LogValue` carries the flow tag set of the value it was constructed
+from. When a tainted `String` becomes a `LogValue.String`, the tag
+set rides through. Log handlers are sinks for two reasons:
+
+1. **Stdout / stderr write** — handlers ultimately write to a
+   stream owned by the ambient `Console` capability (§20.9.7). Log
+   output is therefore visible to whoever can read those streams.
+2. **External persistence** — handlers may forward records to log
+   aggregators (Loki, Datadog, etc.) over the network. Personally
+   identifiable information that flows into a log line may end up
+   in places the original consent did not anticipate.
+
+The v0.6 stdlib provides `std.redact` (§10.34) for redacting
+sensitive values *before* they reach a log handler. Authors who
+want stronger guarantees can register `log.warn` etc. as
+`#[requires("log_safe")]` sinks via a custom `Handler`
+implementation; the `log_safe` tag is then produced by `std.redact`
+or the application's own sanitizer.
+
+#### Log handler as capability
+
+The default `Handler` is process-global. For deterministic tests
+and for code that must declare its log dependencies explicitly, the
+v0.6 path is to receive a `Logger` parameter (a thin wrapper over
+`Handler`) instead of using the global `log.*` functions:
+
+```osty
+fn handleRequest(logger: Logger, req: Request) -> Response {
+    logger.info("incoming", Fields { "path": req.path() })
+    ...
+}
+
+#[ambient(console)]
+fn main() {
+    let logger = log.handler(console)
+    handleRequest(logger, ...)
+}
+```
+
+This pattern is *opt-in* — process-global handlers remain the easy
+path for scripts and tools where capability discipline is not the
+priority.
+
+#### Performance budget for log calls
+
+A `log.info(...)` call counts as one `io_calls` budget unit when
+the active level is at or below `Info`. Levels suppressed by
+`setLevel` count zero — the call is short-circuited before any
+work.
+
+```osty
+#[budget(io_calls = 1)]
+fn handleRead() {
+    log.info("read complete")        // counts 1
+    log.debug("...")                  // counts 0 if level >= Info
+}
+```
+
+The `instructions` budget includes the format-string interpolation
+work even at suppressed levels (the args are evaluated). Use the
+pre-check pattern when interpolation is expensive:
+
+```osty
+if log.isEnabled(log.Debug) {
+    log.debug("expensive: {expensiveComputation()}")
+}
+```

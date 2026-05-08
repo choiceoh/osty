@@ -206,6 +206,33 @@ did not compile. Such changes must ship under a normal minor version
 bump; no FORBID row silently flips to ALLOW inside a v0.6.x patch
 release.
 
+##### `const fn` and v0.6 surfaces
+
+The v0.6 annotation surface composes with `const fn` as follows:
+
+- **`#[reproducible]`** — every `const fn` is implicitly
+  reproducible at every scope (the body is compile-time evaluable;
+  the result is a constant). An explicit
+  `#[reproducible(scope = "portable")]` is permitted but redundant.
+- **`#[pure]`** — every `const fn` is implicitly pure (the body
+  cannot consult any capability — capabilities are runtime
+  values). Explicit `#[pure]` is permitted but redundant.
+- **`#[budget]`** — `const fn` calls in default-argument position
+  count for *zero* `allocs` / `io_calls` because the result is a
+  compile-time constant. They count for `instructions` only at the
+  runtime call site (when the `const fn` is called with non-const
+  arguments).
+- **`#[taint]`** — a `const fn` cannot receive a tainted input
+  because tainted values are runtime constructs. The annotation is
+  meaningless on a `const fn` parameter (`W0903`).
+- **`#[stability]`** — applies normally; a `const fn` declaration
+  is part of the public surface like any other function.
+
+The discipline: `const fn` is a *compile-time* construct, while
+v0.6's annotation surface is mostly about *runtime* contracts.
+Most annotations are vacuously true on `const fn` and the formatter
+omits redundant ones from rendered docs.
+
 ### 3.2 Variables
 
 ```osty
@@ -410,6 +437,45 @@ AuthToken.builder()   // ERROR: no builder generated
 
 **Override.** If the user defines `default`, `builder`, or `toBuilder`
 on the type, the user's definition replaces the auto-generated one.
+
+#### 3.4.4 Struct method receivers
+
+Struct method declarations take their receiver in the first
+parameter slot, with one of three shapes:
+
+```osty
+pub struct User {
+    name: String,
+    email: Email,
+
+    // Borrowing — the most common shape. Body cannot mutate `self`.
+    pub fn greet(self) -> String {
+        "hi, {self.name}"
+    }
+
+    // Mutating — body may write through `self.field` and call
+    // `mut self` methods. The receiver is the struct itself; there
+    // is no separate "this".
+    pub fn rename(mut self, newName: String) {
+        self.name = newName
+    }
+
+    // Static (no receiver) — the method is namespaced under the
+    // struct name but has no implicit `self`. Used for constructors
+    // and free helpers tightly tied to the type.
+    pub fn fromDsn(dsn: String) -> Result<User, Error> {
+        ...
+    }
+}
+```
+
+`self` and `mut self` are *contextual keywords* (§1.3) — they are
+identifiers in any other position. Type annotations are not
+permitted on the receiver: `fn greet(self: User)` is `E0716`.
+
+A method declared `mut self` may be called only through a `mut`
+binding or a `mut` field. Calling a `mut self` method on an
+immutable receiver is `E0717`.
 
 ### 3.4.5 `#[sealed_construct]` — Parse-don't-validate primitive (G40)
 
@@ -1351,6 +1417,67 @@ Any argument is rejected with `E0739`.
 - In partial struct/enum declarations (§3.4), each declaration's
   annotations apply only to members named in that declaration; the
   compiler does not merge annotations across declarations.
+
+#### 3.8.13 Annotation interaction matrix
+
+The annotation set is intentionally small (31 entries in v0.6, §1.10.3),
+which keeps the *interactions* between annotations bounded. The table
+below catalogues the meaningful pairings — empty cells mean the
+annotations are orthogonal (no special rule applies).
+
+| Caller annotation | `#[reproducible]` | `#[pure]` | `#[error_contract]` | `#[budget]` | `#[golden]` |
+|---|---|---|---|---|---|
+| `#[ambient]` | rejected (only in entry-point) | rejected | OK | OK | OK |
+| `#[reproducible]` | scope ≤ caller | implied stronger | OK | OK | implicit `#[reproducible]` |
+| `#[pure]` | implies all scopes | (self) | OK | OK | OK |
+| `#[error_contract]` | OK | OK | (only for `Result<_, E>`) | OK | OK |
+| `#[budget(static)]` | OK | OK | OK | (self) | OK |
+| `#[budget(runtime)]` | warned (perf measurement is non-deterministic) | warned | OK | (self) | warned |
+| `#[golden]` | implicit `#[reproducible(scope = "target")]` | OK | OK | OK | (self) |
+
+Reading examples:
+
+- `#[ambient(clock)]` + `#[reproducible]`: rejected. `#[ambient]` is
+  permitted only on entry-point functions, which are not
+  reproducible. `E0782`.
+- `#[golden]` + `#[budget(time_ms = 5)]`: warned. The golden
+  comparison runs in the test harness; mixing it with runtime
+  budget measurement makes the budget signal noisy. The recommended
+  pattern is to keep `#[budget(runtime)]` on the production
+  function and `#[golden]` on the test fixture that drives it.
+- `#[error_contract]` + `#[pure]`: OK. A pure function may return
+  `Result<_, E>` and carry an error contract.
+- `#[reproducible(scope = "portable")]` + transitively-called
+  `#[reproducible(scope = "target")]`: rejected with `E0786`. A
+  `portable` caller cannot delegate to a `target` callee — the
+  scope contract propagates downward (§3.11.1).
+
+#### 3.8.14 Recommended ordering convention
+
+Multiple annotations on the same declaration are independent — order
+does not affect semantics. The conventional ordering, used by the
+formatter and `osty doc` rendering, places annotations in this
+sequence (top to bottom):
+
+1. **Visibility** — `pub` (not technically an annotation, but
+   appears in the slot)
+2. **Intent** — `#[purpose]`
+3. **Examples** — `#[example]` (one or more)
+4. **Spec link** — `#[spec]`
+5. **Error contract** — `#[error_contract]`
+6. **Reproducibility / purity** — `#[reproducible]` / `#[pure]`
+7. **Budget** — `#[budget]`
+8. **Stability / since** — `#[stability]`, `#[since]`, `#[deprecated]`
+9. **Performance hints** — `#[inline]`, `#[hot]` / `#[cold]`,
+   `#[target_feature]`, `#[noalias]`, `#[parallel]`,
+   `#[vectorize]`, `#[unroll]`, `#[no_vectorize]`
+10. **Compatibility** — `#[match_compat]`
+11. **Information flow** — `#[taint]` / `#[sanitizes]` / `#[trusted_declassify]` (function-level)
+12. **Capability marker** — `#[reproducible_capability]` (interfaces)
+
+The formatter normalizes to this ordering on save. Authors who
+prefer a different sequence should set `formatter.annotation_order =
+"as-written"` in `osty.toml`.
 
 ### 3.10 `#[spec("§X.Y")]` — Spec link (G38)
 

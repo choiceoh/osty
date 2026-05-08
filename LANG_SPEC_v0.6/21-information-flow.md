@@ -27,6 +27,69 @@ pub fn sqlIdent(s: String) -> SqlIdent? { ... }
 pub fn query(table: #[requires("sql_safe")] SqlIdent) -> Rows { ... }
 ```
 
+#### 21.2.1 Annotation argument grammar
+
+세 annotation 모두 *string literal* 만 인자로 받는다. 표현식이나
+식별자 인자는 거부 (`E0904`). 이 제약은 두 가지를 보장한다:
+
+1. **Type-checker가 컴파일 시점에 tag 식별** — runtime evaluation
+   이나 reflection 없이 결정.
+2. **Audit 도구가 grep 가능** — `osty audit` 가 어떤 source / sink
+   인지 알기 위해 type checker 호출 필요 없음.
+
+```osty
+// ✅ String literal — 합법.
+#[taint("user_input")]
+
+// ❌ Identifier — 거부 (E0904).
+const tag = "user_input"
+#[taint(tag)]
+
+// ❌ String concatenation — 거부.
+#[taint("user_" + "input")]
+```
+
+#### 21.2.2 Annotation 위치 규칙
+
+- `#[taint(t)]` — 함수 반환 위치 (선언 앞). 함수 결과 전체에 tag 부여.
+- `#[sanitizes(t, into = u)]` — 함수 반환 위치 (선언 앞). 입력의
+  tag `t` 가 출력의 tag `u` 로 변환.
+- `#[requires(u)]` — *parameter* 위치 (Pattern 앞 또는 Type 앞).
+  parameter 별로 다른 trust 요구 가능.
+- `#[taint(t)]` — parameter 위치 (Pattern 앞 또는 Type 앞)도 가능.
+  *입력*에 tag 부여 — 데이터가 함수 안에 들어올 때 이미 tagged
+  임을 callee 측에서 attest.
+
+함수 *body* 내부에는 어떠한 flow annotation 도 attach 불가 — 이는
+declaration-level annotation 의 일관된 규칙 (§3.8 positioning rules).
+
+#### 21.2.3 Multiple tags
+
+한 declaration 에 같은 종류의 annotation 을 여러 번 적용 가능 —
+tag set 의 합집합으로 해석:
+
+```osty
+// 두 source tag 모두 부여 — 결과에 {user_input, web_input} 둘 다
+#[taint("user_input")]
+#[taint("web_input")]
+pub fn readBody(req: HttpRequest) -> String { ... }
+
+// 두 trust tag 모두 요구 — 입력에 {sql_safe, web_safe} 모두 있어야
+pub fn unsafeStore(value: #[requires("sql_safe")] #[requires("web_safe")] String) { ... }
+```
+
+`#[sanitizes]` 는 다른 의미: 첫 인자의 tag 를 제거, 두 번째의
+tag 를 추가. 여러 sanitizer annotation 은 *순차* 적용:
+
+```osty
+#[sanitizes("user_input", into = "url_safe")]
+#[sanitizes("user_input", into = "html_safe")]   // 두 번째 호출 — 같은 source 다른 trust
+pub fn doubleSanitize(s: String) -> String { ... }
+```
+
+이 형태는 흔하지 않으며, 일반적으로는 하나의 `#[sanitizes]` 가
+충분하다.
+
 ### 21.3 의미론
 
 타입에 *flow tag set* 이 첨부된다 (concrete syntax 노출 없음 — annotation 으로만

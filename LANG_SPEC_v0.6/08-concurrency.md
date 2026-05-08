@@ -318,6 +318,61 @@ delivered whole — never partially observed.
   early when the surrounding task is cancelled (the caller distinguishes
   cancel from drain by checking `thread.isCancelled()`).
 
+#### 8.5.1 Channels and information flow
+
+A `Channel<T>` carrying tainted values preserves the flow tag set
+through send and receive. There is no implicit declassification at
+the channel boundary:
+
+```osty
+let ch = thread.chan::<#[taint("user_input")] String>(64)
+
+// Producer
+ch <- userInput
+
+// Consumer
+for msg in ch {
+    // `msg` is #[taint("user_input")] String — sanitize before sink
+    db.exec(sql.eq("col", sql.string(msg))?)
+}
+```
+
+A consumer task at a different point in the program receives the
+same flow tags as the producer attached. Channels do not flatten
+trust — they are a synchronous-with-respect-to-tags transport.
+
+#### 8.5.2 Channels and capability lifetime
+
+Sending a capability instance through a channel is *legal* but
+discouraged. The capability remains live for as long as a receiver
+holds it, which may extend its effective lifetime past the
+construction context. Idiomatic patterns:
+
+- **Send work, not capabilities.** A producer sends *requests*;
+  the consumer holds its own capability and applies it to each
+  request. Capabilities stay scoped to construction.
+- **Send results, not handles.** A producer that does its own I/O
+  sends `Result<T, Error>` payloads; the consumer never needs the
+  upstream `Net` / `Fs` instance.
+
+The non-escaping rule for `Handle<T>` and `TaskGroup` (§8.1, G13)
+applies *only* to those two types — capability instances are not
+included, but the discipline of avoiding cross-scope capability
+sharing is recommended.
+
+#### 8.5.3 Channels and `#[budget]`
+
+A `thread.chan::<T>(capacity)` allocation counts as one allocation
+site for `#[budget(allocs)]` purposes. Each `ch <- value` and
+`ch.recv()` counts as one channel operation; a function that
+loops `ch.recv()` to drain a channel of `n` items counts `n`
+channel operations.
+
+The runtime's per-channel state (FIFO buffer, sender/receiver
+queues) is one allocation per channel; growing the buffer past its
+declared capacity is not supported (the channel rejects further
+sends until the receiver makes progress).
+
 ### 8.6 Select
 
 ```osty

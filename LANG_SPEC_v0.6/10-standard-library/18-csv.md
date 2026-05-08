@@ -55,6 +55,14 @@ Behavior:
   permits quoted fields to be surrounded by ASCII space or tab, and
   `encodeWith(..., trimSpace = true)` quotes fields whose leading or
   trailing space/tab would otherwise be lost on decode.
+#### v0.6 reproducibility and flow
+
+`std.csv` is *pure* — every function transforms strings/lists
+without consulting any capability. The whole module is acceptable
+inside `#[reproducible(scope = "portable")]`. Decoded `String`
+cells inherit the source `String`'s flow tags; sanitize before
+reaching SQL / shell / HTML sinks.
+
 - `decodeHeaders` treats the first row as column names. Header names must
   be non-empty and unique, and every data row must have exactly the same
   field count as the header row.

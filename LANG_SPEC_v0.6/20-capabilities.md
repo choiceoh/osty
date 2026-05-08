@@ -303,6 +303,61 @@ capability 수신을 허용한다.
 | `Console` | side-effect (deterministic 출력) | scope = `"run"` 만 가능 |
 | `Hash` | deterministic (사용자 정의) | ✅ |
 
+#### 20.6.1 Capability class — formal definition
+
+A *deterministic capability* is one whose every method satisfies:
+
+1. The output is fully determined by the inputs (no hidden state).
+2. The implementation does not consult the system clock, random
+   sources, environment, filesystem, network, or any process state.
+3. The implementation is annotated `#[reproducible(scope = X)]` on
+   each method, with X consistent across the interface.
+
+A deterministic capability is permitted as a parameter of a
+`#[reproducible(scope ≤ X)]` function. Non-deterministic capabilities
+are forbidden in any reproducible context.
+
+The compiler cannot in general prove a capability is deterministic
+— it relies on the `#[reproducible_capability]` attestation
+(§3.6.4). The attestation is checked structurally: every method on
+a `#[reproducible_capability]` interface must carry
+`#[reproducible(scope = X)]`. Implementing the interface with a
+non-reproducible body is a programmer error caught at the
+interface-implementation site (`E0786`).
+
+#### 20.6.2 Console at scope `"run"`
+
+`Console` is unique: it has *side effects* (writes to stdout/stderr)
+but the *output* itself is deterministic given the inputs (the same
+arguments produce the same byte sequence). A function that only
+reads from `Console` is rare; most functions write, which is the
+side effect that bars stronger reproducibility scopes.
+
+A `#[reproducible(scope = "run")]` function may take `Console` —
+the function is reproducible *within a single process run* (the
+output is the same on re-run), and the side effect is acceptable
+under `run` scope.
+
+#### 20.6.3 Adding deterministic capabilities
+
+Future stdlib additions (e.g. `Hash`-shaped interfaces for SHA-3,
+BLAKE3, etc.) follow the same pattern:
+
+```osty
+#[reproducible_capability]
+pub interface Sha3 {
+    #[reproducible(scope = "portable")]
+    fn sha3_256(self, data: Bytes) -> Bytes32
+
+    #[reproducible(scope = "portable")]
+    fn sha3_512(self, data: Bytes) -> Bytes64
+}
+```
+
+The interface is registered in §10.46.4 (Runtime adapter factories)
+with a host adapter; the deterministic class is auto-derived from
+the `#[reproducible_capability]` annotation.
+
 ### 20.7 Capability 와 G15 arity erasure
 
 함수값 으로 저장 시 capability 파라미터는 **그대로 시그니처에 유지**된다 (G15 의

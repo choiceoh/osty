@@ -192,6 +192,56 @@ In bench mode:
   flag uses Go-style durations (`500ms`, `2s`, `1m`) and requires
   `--bench`.
 
+#### 11.4.1 `#[budget]` integration
+
+A bench function may target a specific function carrying
+`#[budget(time_ms = X, p99_ms = Y)]` (§3.15). When `osty bench
+--budget` is run, the bench harness records the measured `time_ms`
+/ `p99_ms` and compares against the declared budget:
+
+```osty
+#[budget(time_ms = 5, p99_ms = 20)]
+pub fn createUser(email: String, db: Db) -> Result<UserId, Error> { ... }
+
+fn benchCreateUser() {
+    let db = std.capability.testing.FakeDb()
+    testing.benchmark(1000, || {
+        let _ = createUser("alice@example.com", db)?
+        Ok(())
+    })
+}
+```
+
+`osty bench --budget` output:
+
+```
+bench benchCreateUser: avg=2.1ms p99=4.7ms
+budget OK (within 5ms / 20ms).
+```
+
+Regression beyond the manifest's `regression-threshold` (§13.2.1)
+promotes the warning to error and blocks `osty publish`.
+
+#### 11.4.2 Capability fakes inside benchmarks
+
+A benchmark of capability-typed code uses fake instances
+(§11.18.1-7). Fakes are intentionally low-overhead: `FakeClock` /
+`FakeRng` operations cost a single instruction each, so benchmark
+results reflect the production code's overhead, not fake harness
+overhead. Specifically:
+
+- `FakeClock.now()` returns a precomputed `Instant` constant.
+- `FakeRng.next()` advances an internal `xorshift64` state.
+- `FakeFs.read(path)` returns a precomputed `Bytes` slice from the
+  layout map.
+- `FakeNet.connect(...)` returns a precomputed `TcpConn` that
+  serves canned bytes.
+
+Production benchmarks that need realistic fake overhead (e.g.
+network latency simulation) use `FakeNet.withDelay(d)` etc.; the
+`with*` modifiers add measurable overhead so the benchmark reflects
+the wall-clock pattern of real I/O.
+
 ### 11.5 Snapshots / Golden Tests
 
 Two surface forms are provided: a *runtime form* via

@@ -191,3 +191,50 @@ src/main.osty:8:5    println("ready") → console.println("ready") (auto via #[a
 When the report is empty, the package is fully migrated. Removing
 `[legacy] globals = true` from `osty.toml` then unblocks `[stability]
 default = "stable"`.
+
+### §10.46.7 Migration order — recommended sequence
+
+Migrating a non-trivial package is best done in the following order:
+
+1. **Add capability parameters to leaf functions.** A leaf function
+   is one that other code calls but that itself only calls stdlib —
+   no internal callers depend on its signature change. Adding a
+   `clock: Clock` parameter at the leaf is the smallest unit of
+   change.
+
+2. **Update the leaf's tests.** Replace `time.now()` usage with
+   `FakeClock` injection. The tests are now deterministic; the
+   transition mode (`--legacy-globals`) need not be active for
+   leaf tests once they pass.
+
+3. **Add capability parameters to one caller layer at a time.** Each
+   caller of a migrated leaf takes the leaf's capability parameters
+   and forwards them. Repeat until you reach `fn main`.
+
+4. **Promote `fn main` to `#[ambient]`.** Replace the legacy
+   global usages in `main` with `#[ambient(clock, rng, env, fs,
+   net, console)]` (or a narrower set), and forward each
+   capability into top-level callees explicitly.
+
+5. **Remove `[legacy] globals = true` from `osty.toml`.** The package
+   is now `--legacy-globals`-clean. `osty audit --legacy-globals`
+   should report zero sites.
+
+6. **Promote `[stability] default = "stable"`** if appropriate. The
+   capability surface is now part of the public API contract.
+
+A Phase 5 run of `osty fix --capability-migrate` (planned for v0.7)
+will mechanize steps 1-4 by inserting capability parameters and
+forwarding them, but the v0.6 baseline does the migration manually
+— the leaf-first order keeps each commit small and reviewable.
+
+### §10.46.8 Common pitfalls during migration
+
+| Pitfall | Diagnostic | Fix |
+|---|---|---|
+| Library function annotated `#[ambient]` | `E0780` (entry-point only) | Remove `#[ambient]`; accept the capability as a parameter |
+| Forwarding `clock` into a callee that takes `Clock` but with name `wallClock` | (no error — names don't have to match) | OK; the parameter name on the callee side is independent |
+| Capability instance returned from a function | (no error) but breaks reproducibility | Returning `Net` is allowed (it's an interface value); but receivers can no longer reason about *who* created the instance — prefer to keep capabilities scoped to their construction context |
+| Double `#[ambient]` (in `main` and a helper) | `E0780` on the helper | Keep `#[ambient]` only at the entry point; helpers receive parameters |
+| `--legacy-globals` enabled but `[stability] default = "stable"` | `E2103` (incompatible mode) | Either migrate first, or downgrade stability to `experimental` |
+| `time.now()` reaches a `#[reproducible]` function via `--legacy-globals` desugar | `E0784` | Migrate the leaf to a `Clock` parameter; reproducible functions cannot receive non-deterministic capabilities |
