@@ -264,8 +264,7 @@ but serve as syntactic punctuation or context-specific markers:
 | `#`   | Annotation prefix (`#[...]`) or shebang at byte 0 |
 
 **`=>` is not a token.** Match arms use `->`. Any occurrence of `=>` in
-source is a lex error. (This was open issue O7 in the v0.1 grammar; see
-§18.)
+source is a lex error.
 
 Assignment operators (`=`, `+=`, …) are statement-only — assignment is
 not an expression, so `let x = (y = 1)` is a compile error. `<-`
@@ -307,8 +306,6 @@ let y = items.                // ERROR — trailing dot terminates the
     filter(|x| x > 0)         // statement; the next line is a new stmt
 ```
 
-This was open issue O3 in the v0.1 grammar.
-
 **Suppression — following token.** The newline is also discarded when
 the next non-whitespace token is any of:
 
@@ -320,7 +317,7 @@ the next non-whitespace token is any of:
 
 Notably, **`else` is not in this set.** A `}` followed by a newline and
 then `else` is a syntax error — `} else {` (and `} else if`) must appear
-on a single physical line. This was open issue O2.
+on a single physical line.
 
 ```osty
 if cond {

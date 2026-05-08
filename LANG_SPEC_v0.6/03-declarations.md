@@ -331,8 +331,7 @@ on `Builder<T>`. These parameters are deliberately **not exposed** in
 the language surface: users see only `Builder<T>` in error messages and
 cannot construct, name, or destructure them manually. A `Builder<T>` is
 therefore usable only via the generated API — chained `.fieldName(...)`
-calls terminated by `.build()`. This design is the v0.3 resolution of
-gap G9.
+calls terminated by `.build()`.
 
 ```osty
 pub struct HttpConfig {

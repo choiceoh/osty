@@ -325,8 +325,7 @@ Map<K,V>:   K: Hashable + V: Hashable ⇒ Map<K,V>: Hashable
 `Ordered` is **not** auto-derived for collections.
 
 User code cannot override the built-in `Equal`/`Hashable` instances of
-collection types; they are structural by definition. (Resolves G1 from
-the v0.1 gap list.)
+collection types; they are structural by definition.
 
 **Runtime-only marker.** `Pod` is a built-in marker interface
 (no methods) used by the runtime sublanguage to constrain raw
@@ -372,14 +371,14 @@ error:
 expected '<' after '::', got 'Foo'. Did you mean '.'?
 ```
 
-This was open issue O6 — `::` is exclusively the turbofish prefix, never
-a path separator (path separator is `.`).
+In Osty v0.6, `::` is exclusively the turbofish prefix, never a path
+separator (path separator is `.`).
 
 In **type position** (e.g. `let xs: List<List<Int>>`), the `<...>` form
 is unambiguous and `::` is not required. The lexer emits `>>`, `>=`,
 `>>=` as single tokens via maximal munch; the type parser splits them
-back into `>` + `>` (or `>` + `=`) when a `>` is expected. This
-"splittable `>`" rule (open issue O4) lets nested generics like
+back into `>` + `>` (or `>` + `=`) when a `>` is expected. The
+"splittable `>`" rule lets nested generics like
 `List<List<Map<String, Int>>>` parse without explicit space between the
 closing `>`s.
 

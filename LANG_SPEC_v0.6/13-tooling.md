@@ -74,7 +74,7 @@ best-effort automatic adaptation.
 A project is described by `osty.toml` at its root. `osty.lock` records
 exact resolved versions and content hashes.
 
-**Schema (v0.4).** The following TOML shape is accepted by the v0.4
+**Schema.** The following TOML shape is accepted by the v0.6
 toolchain. Stable configuration tables such as dependencies, lint,
 profiles, and targets reject unknown keys (`E2012`) so typos surface
 early; unknown top-level tables and extra `[package]` metadata are
