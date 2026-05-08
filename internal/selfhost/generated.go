@@ -55111,6 +55111,66 @@ func srAnnotAllowedTargets(name string) int {
 		// Osty: /tmp/selfhost_merged.osty:28207:28
 		return srAnnotTargetTopLevel() | srAnnotTargetMethod()
 	}
+	if name == "ambient" {
+		return srAnnotTargetTopLevel()
+	}
+	if name == "reproducible_capability" {
+		return srAnnotTargetTopLevel()
+	}
+	if name == "taint" {
+		return srAnnotTargetTopLevel() | srAnnotTargetMethod() | srAnnotTargetField()
+	}
+	if name == "sanitizes" {
+		return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+	}
+	if name == "trusted_declassify" {
+		return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+	}
+	if name == "taint_field" {
+		return srAnnotTargetField()
+	}
+	if name == "spec" {
+		return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+	}
+	if name == "reproducible" {
+		return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+	}
+	if name == "sealed_construct" {
+		return srAnnotTargetTopLevel()
+	}
+	if name == "trusted_construct" {
+		return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+	}
+	if name == "test_construct" {
+		return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+	}
+	if name == "error_contract" {
+		return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+	}
+	if name == "purpose" {
+		return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+	}
+	if name == "example" {
+		return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+	}
+	if name == "fixture" {
+		return srAnnotTargetTopLevel()
+	}
+	if name == "since" {
+		return srAnnotTargetTopLevel() | srAnnotTargetMethod() | srAnnotTargetField() | srAnnotTargetVariant()
+	}
+	if name == "stability" {
+		return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+	}
+	if name == "match_compat" {
+		return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+	}
+	if name == "golden" {
+		return srAnnotTargetTopLevel()
+	}
+	if name == "budget" {
+		return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+	}
 	return 0
 }
 
@@ -56387,7 +56447,7 @@ func srCharToDigit(ch rune) int {
 
 // Osty: /tmp/selfhost_merged.osty:29239:1
 func srAnnotationNameList() []string {
-	return []string{"json", "deprecated", "allow", "intrinsic_methods", "requires", "no_alloc", "intrinsic", "c_abi", "export", "pod", "repr", "cfg", "op", "test", "vectorize", "no_vectorize", "parallel", "unroll", "inline", "hot", "cold", "pure", "target_feature", "noalias"}
+	return []string{"json", "deprecated", "allow", "intrinsic_methods", "requires", "no_alloc", "intrinsic", "c_abi", "export", "pod", "repr", "cfg", "op", "test", "vectorize", "no_vectorize", "parallel", "unroll", "inline", "hot", "cold", "pure", "target_feature", "noalias", "ambient", "reproducible_capability", "taint", "sanitizes", "trusted_declassify", "taint_field", "spec", "reproducible", "sealed_construct", "trusted_construct", "test_construct", "error_contract", "purpose", "example", "fixture", "since", "stability", "match_compat", "golden", "budget"}
 }
 
 // Osty: /tmp/selfhost_merged.osty:29269:1

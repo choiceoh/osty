@@ -926,6 +926,68 @@ func TestV06AnnotationsRecognized(t *testing.T) {
 	}
 }
 
+// G36-G46 declaration annotations are intentionally fixed-vocabulary.
+// This pins the selfhost resolver mirror to the Go-side annotation table:
+// these names may still be semantically "planned", but they must not fail
+// as unknown annotations while later phase gates are implemented.
+func TestV06SemanticAnnotationsRecognized(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+	}{
+		{"ambient", "#[ambient(clock)]\nfn main() {}\n"},
+		{"reproducible_capability", "#[reproducible_capability]\ninterface HashCap {\n    #[reproducible]\n    fn hash(self, value: String) -> String\n}\n"},
+		{"taint", "#[taint(\"user_input\")]\nfn source() -> String { \"\" }\n"},
+		{"taint_field", "pub struct Form {\n    #[taint_field(\"user_input\")]\n    pub name: String,\n}\n"},
+		{"sanitizes", "#[sanitizes(\"user_input\", into = \"trusted\")]\nfn clean(value: String) -> String { value }\n"},
+		{"trusted_declassify", "#[trusted_declassify(\"audit\")]\nfn escape(value: String) -> String { value }\n"},
+		{"spec", "#[spec(\"3.10\")]\nfn linked() -> Int { 0 }\n"},
+		{"reproducible", "#[reproducible(scope = \"target\")]\nfn stable() -> Int { 0 }\n"},
+		{"sealed_construct", "#[sealed_construct(\"Email\")]\npub struct Email { pub value: String }\n"},
+		{"trusted_construct", "#[trusted_construct(\"stdlib parser\")]\nfn makeEmail(value: String) -> String { value }\n"},
+		{"test_construct", "#[test_construct]\nfn makeTestEmail(value: String) -> String { value }\n"},
+		{"error_contract", "#[error_contract(\"invalid input\")]\nfn parse() -> Result<Int, Error> { Ok(0) }\n"},
+		{"purpose", "#[purpose(\"demo\")]\nfn documented() -> Int { 0 }\n"},
+		{"example", "#[example(input = \"1\", output = \"2\")]\nfn doubled() -> Int { 2 }\n"},
+		{"fixture", "#[fixture(name = \"basic\")]\npub struct FixtureThing { pub value: Int }\n"},
+		{"since", "#[since(\"0.6\")]\nfn introduced() -> Int { 0 }\n"},
+		{"stability", "#[stability(\"experimental\")]\nfn unstable() -> Int { 0 }\n"},
+		{"match_compat", "#[match_compat(\"0.6\", fallback = \"Unknown\")]\npub enum Compat { Known, Unknown }\n"},
+		{"golden", "#[golden(\"fixtures/demo.snap\")]\nfn goldenText() -> String { \"\" }\n"},
+		{"budget", "#[budget(allocs = 0, io_calls = 0)]\nfn bounded() -> Int { 0 }\n"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := selfhost.ResolveSourceStructured([]byte(c.src))
+			for _, d := range r.Diagnostics {
+				if d.Code == "E0400" || d.Code == "E0607" || d.Code == "E0739" {
+					t.Errorf("unexpected %s on %s: %q", d.Code, c.name, d.Message)
+				}
+			}
+		})
+	}
+}
+
+func TestV06SemanticAnnotationTargetMismatchIsNotUnknown(t *testing.T) {
+	r := selfhost.ResolveSourceStructured([]byte(`pub struct Bad {
+    #[ambient(clock)]
+    value: Int,
+}
+`))
+	var sawTarget bool
+	for _, d := range r.Diagnostics {
+		if d.Code == "E0400" {
+			t.Fatalf("ambient should be recognized before target checking, got unknown annotation: %#v", r.Diagnostics)
+		}
+		if d.Code == "E0607" {
+			sawTarget = true
+		}
+	}
+	if !sawTarget {
+		t.Fatalf("expected E0607 target diagnostic, got %#v", r.Diagnostics)
+	}
+}
+
 func TestV06BareFlagRejectsArgs(t *testing.T) {
 	cases := []string{
 		"#[hot(foo)]\nfn f() -> Int { 0 }\n",
