@@ -1128,6 +1128,87 @@ may use it for self-documentation. Osty has no `impl` blocks (§14) —
 methods live in struct / enum bodies, where `#[spec]` applies
 directly.
 
+#### 3.10.1 Anchor resolution
+
+The `§X.Y` form is resolved against the spec markdown corpus (the
+files in `LANG_SPEC_v0.6/`) at compile time. Resolution rules:
+
+1. The argument must be a *string literal* matching the regex
+   `§\d+(\.\d+)*(\.\w+)*` (Unicode `§` is required — `&sect;` /
+   `§` are not accepted).
+2. The trailing path beyond `§X.Y` (e.g. `§10.30.user.create`)
+   names a markdown anchor *under* §10.30 — the resolver looks for
+   `<a id="user-create">` or a heading whose slugified form matches
+   `user-create`.
+3. Missing anchor → `E0790` with the suggested anchor list (the
+   resolver fuzzy-matches and offers up to 3 alternatives).
+4. Moved anchor (the file no longer contains the named heading but
+   the corpus still has the anchor elsewhere) → `W0790` — the
+   diagnostic suggests the new path. Tooling can auto-rewrite via
+   `osty fix --spec-links`.
+
+```osty
+#[spec("§10.30.user.create")]   // resolves to LANG_SPEC_v0.6/10-standard-library/30-...
+                                //   under heading "user.create"
+pub fn createUser(...) -> ... { ... }
+```
+
+#### 3.10.2 Spec link inheritance
+
+A `#[spec]` annotation on a `struct` or `enum` is *not* inherited by
+its methods — each method declares its own link. This is intentional:
+the struct's spec link describes the *type*, while a method's spec
+link points at the specific method's contract. Tools resolve both
+when generating documentation.
+
+```osty
+#[spec("§10.30.user")]
+pub struct User {
+    pub email: Email,
+    ...
+
+    #[spec("§10.30.user.toString")]
+    pub fn toString(self) -> String { ... }
+
+    // No #[spec] — `osty doc` falls back to "see User type spec".
+    pub fn isVerified(self) -> Bool { self.verified }
+}
+```
+
+#### 3.10.3 Spec link in `osty context` JSON
+
+`osty context <symbol> --format=json` emits the resolved spec link
+as a structured object containing the anchor, the file path, the
+heading text, and the lead paragraph (first non-empty paragraph
+after the heading). This lets agents read the spec body without
+fetching and parsing markdown themselves.
+
+```json
+{
+  "spec": {
+    "anchor": "§10.30.user.create",
+    "file": "LANG_SPEC_v0.6/10-standard-library/30-user.md",
+    "heading": "user.create",
+    "lead": "Create a user, validating email format..."
+  }
+}
+```
+
+#### 3.10.4 `#[spec]` and capability surface
+
+A function with `#[spec("§X.Y")]` is *not* implicitly required to
+match the capability surface declared in the spec target. The
+checker verifies the anchor's *existence*, not its semantic
+agreement with the function. Authors who want the stronger
+guarantee can use `#[reproducible]` / `#[error_contract]` /
+`#[budget]` together — those *do* enforce a contract — and use
+`#[spec]` only as a documentation breadcrumb.
+
+A future revision may add `osty validate-spec --strict` (§13.6)
+that runs LLM-driven semantic comparison between the spec text and
+the implementation — that gate is opt-in and not part of the v0.6
+baseline.
+
 ### 3.11 `#[reproducible(scope=...)]` — Determinism contract (G39)
 
 A function may declare `#[reproducible]` to assert that its output is

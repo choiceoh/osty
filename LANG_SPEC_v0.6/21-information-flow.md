@@ -832,3 +832,157 @@ stdlib 의 sink 카탈로그 에 추가는 breaking — `#[stability("stable")]`
 public API 가 sink 를 추가하면 major version bump (`E2100`).
 v0.6.0 의 baseline sink 5 종 (db / process / fs.path / http.redirect
 / template) 외 sink 추가는 v0.7 이후로 일정 표시.
+
+### 21.18 Tag taxonomy reference
+
+This section catalogues every flow tag defined in the v0.6 baseline
+stdlib, the source / sanitizer / sink relationships, and where each
+tag enters and exits the type system. Authors of new sinks or
+sanitizers should pick from this taxonomy before introducing a new
+tag string — an unrecognized tag is a compile warning (`W0902`).
+
+#### 21.18.1 Source tags
+
+| Tag | Sources (annotated `#[taint("σ")]`) | Origin |
+|---|---|---|
+| `user_input` | `http.Request.queryParam`, `http.Request.body`, `http.Request.path`, `http.Request.cookie`, form decoders | HTTP request surface |
+| `env_input` | `Env.get`, `Env.require`, `Env.args` | Process environment |
+| `fs_input` | `Fs.read`, `Fs.readToString`, `Fs.lines`, the `Reader` returned by `Fs.open` | Filesystem reads |
+| `net_input` | `Net.connect.read`, `Net.recv`, `HttpClient.request.body` | Inbound network |
+| `cli_input` | `Process.exec.stdout`, `Process.execShell.stdout` | Subprocess output |
+| `db_input` | `Db.query.row.cell`, `Db.queryOne.field` | Database read result |
+
+A value can carry *multiple* source tags — a `String` returned by
+`http.respondHtml.body` after being concatenated from a query
+parameter and a database row carries `{user_input, db_input}`.
+
+#### 21.18.2 Trust tags (sanitizer output)
+
+| Tag | Sanitizer (annotated `#[sanitizes(σ, into = τ)]`) | Required by |
+|---|---|---|
+| `sql_safe` | `std.sql.escape`, `std.sql.quoteIdent`, `std.sql.quotePath`, every `sql.*` builder, `Email.toString` (composition) | `Db.query`, `Db.exec` |
+| `shell_safe` | `std.shell.quote` | `Process.execShell` |
+| `path_safe` | `std.path.normalize`, `std.path.join`, `Path.parse` | `Fs.open`, `Fs.read`, `Fs.write`, `Fs.remove`, `scan.Options.outputDir`, `print.Document.path` |
+| `url_safe` | `std.url.encode`, `std.url.parse`, `Url.builder().build()`, `std.security.checkUrl` | `http.redirect`, `http.movedPermanently`, `http.found`, `http.seeOther` |
+| `html_safe` | `std.html.escape`, `std.markdown.htmlToMarkdown`, auto-escape templates | `http.respondHtml`, `template.render` |
+| `json_safe` | `std.json.encode`, `std.json.stringify` | (planned for `http.respondJson` strict mode — Phase 5) |
+
+A value may carry both source and trust tags simultaneously — the
+relationship is set-intersection. A `db.exec(sql.eq("col",
+sql.string(parsed.toString())))` call where `parsed: Email` produces
+`#[taint({user_input, sql_safe})]` on the rendered SQL; the sink
+checks `sql_safe ⊆ requires` and accepts.
+
+#### 21.18.3 Sink registry
+
+A *sink* is a stdlib function whose parameter carries
+`#[requires("τ")]`. The v0.6 baseline registry:
+
+| Sink | Required tag | Module |
+|---|---|---|
+| `Db.query(self, q)` | `sql_safe` on `q.sql` | §10.29 |
+| `Db.exec(self, q)` | `sql_safe` on `q.sql` | §10.29 |
+| `Process.execShell(self, cmdline)` | `shell_safe` | §10.15 |
+| `Fs.open(self, path)` | `path_safe` | §10.15 |
+| `Fs.read(self, path)` | `path_safe` | §10.15 |
+| `Fs.write(self, path, _)` | `path_safe` | §10.15 |
+| `Fs.remove(self, path)` | `path_safe` | §10.15 |
+| `http.redirect(self, target)` | `url_safe` | §10.24 |
+| `http.respondHtml(self, body)` | `html_safe` | §10.24 |
+| `template.render(t, body)` | `html_safe` | (template stdlib) |
+
+Adding a sink to a `#[stability("stable")]` API is a major-version
+breaking change (§3.14.3) — callers gain a new sanitization
+obligation, which is by definition a breaking surface change.
+
+### 21.19 Worked sanitizer composition
+
+Real applications often compose multiple sanitizers in a single data
+path. This section catalogues the common chains.
+
+#### 21.19.1 Form input → SQL
+
+```osty
+fn searchUsers(req: HttpRequest, db: Db) -> Result<List<User>, Error> {
+    // Source: query string → user_input
+    let raw: #[taint("user_input")] String = req.queryParam("q") ?? ""
+
+    // Sanitizer: parse into Email if relevant; otherwise sql.string
+    // safely binds raw text as a parameter.
+    let q = sql.selectWhere("users", ["id", "email"],
+        sql.like("email", sql.string(raw))?)?
+
+    // Sink: db.query requires sql_safe — the sql.string + parameter
+    // path produces sql_safe automatically.
+    let rs = db.query(q)?
+    Ok(rs.rows.map(|r| User.fromRow(r)))
+}
+```
+
+Note `sql.string` does *not* concatenate — it produces a parameter
+binding. The `sql_safe` tag on the resulting `Query.sql` reflects
+the safe-by-construction property of parameterization.
+
+#### 21.19.2 URL input → HTML output
+
+```osty
+fn renderProfile(req: HttpRequest, net: Net) -> Result<HttpResponse, Error> {
+    // Source: query parameter → user_input
+    let raw: #[taint("user_input")] String = req.queryParam("homepage") ?? ""
+
+    // First sanitizer: url.parse → url_safe
+    let homepage = url.parse(raw)?
+
+    // Second sanitizer: html.escape on the canonical URL string → html_safe
+    let safeText = std.html.escape(homepage.toString())
+
+    // Sink: respondHtml requires html_safe
+    Ok(http.respondHtml("<a href=\"{safeText}\">homepage</a>"))
+}
+```
+
+Two sanitizers compose because each registered with a different
+output tag. The final value carries `#[trust({url_safe, html_safe})]`
+which is acceptable to both sink shapes.
+
+#### 21.19.3 Filesystem path input → process exec
+
+```osty
+fn runScanner(env: Env, proc: Process) -> Result<Output, Error> {
+    // Source: env variable → env_input
+    let raw: #[taint("env_input")] String = env.require("TOOL_PATH")?
+
+    // Sanitizer: path.normalize → path_safe (rejects ".." traversal,
+    // null bytes, etc.)
+    let safePath = std.path.normalize(raw)?
+
+    // Sink: process.exec receives the path as args[0]; argv-style
+    // exec does NOT require shell_safe (the kernel does not interpret
+    // args as shell metacharacters). path_safe is acceptable.
+    proc.exec(safePath, ["--version"])
+}
+```
+
+`Process.exec(cmd, args)` (argv-style) does not require
+`shell_safe` because the OS does not interpret args as a shell
+command — the binary is invoked directly with the literal argument
+list. `Process.execShell(cmdline)` *does* invoke a shell and
+therefore requires `shell_safe`.
+
+#### 21.19.4 Multi-source aggregation
+
+When a value is built from multiple sources, the tag set unions:
+
+```osty
+fn buildLog(req: HttpRequest, env: Env) -> String {
+    let user: #[taint({user_input})] String = req.queryParam("u") ?? ""
+    let host: #[taint({env_input})] String = env.get("HOST") ?? ""
+    // Concatenation unions the tag sets:
+    //   #[taint({user_input, env_input})] String
+    "{user} from {host}"
+}
+```
+
+A sink that requires *either* `user_input` *or* `env_input` to be
+sanitized must clear both. Conservative defaults: sanitize at the
+narrowest boundary (per source) before composing.

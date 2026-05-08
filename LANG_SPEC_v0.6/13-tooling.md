@@ -791,3 +791,183 @@ v0.5 source compile under v0.6.x. Tooling behavior under the flag:
 migrate by then. The migration path is documented in
 `MIGRATING_v0.5_to_v0.6.md` and §10.46 (Capability Migration
 Catalog).
+
+### 13.18 End-to-end v0.6 publishing workflow
+
+This section walks through the canonical release flow for a v0.6
+package — from local edit to published version — showing how each
+v0.6 surface (capability, stability, error contract, spec link,
+budget, golden) participates in the `osty` toolchain.
+
+The example package is `myapp.users` exposing one `pub fn`:
+
+```osty
+#[purpose("Create a user, validating email and respecting DB unique constraints")]
+#[example(input = "(\"alice@example.com\", fakeDb())", output = "Ok(42)")]
+#[example(input = "(\"alice@example.com\", seededFakeDb())", output = "Err(UserCreateError.DbConflict(1))")]
+#[spec("§10.30.user.create")]
+#[stability("stable")]
+#[since("0.6")]
+#[error_contract(
+    UserCreateError.EmailFormat   when "Email.parse failed",
+    UserCreateError.DomainBlocked when "domain is in deny-list",
+    UserCreateError.DbConflict    when "email unique constraint violated",
+)]
+#[budget(allocs = 4, io_calls = 1, time_ms = 5)]
+pub fn createUser(email: String, db: Db) -> Result<UserId, UserCreateError> {
+    spec {
+        example: createUser("alice@example.com", fakeDb()) == Ok(UserId(42))
+    }
+
+    let parsed = Email.parse(email).orError(UserCreateError.EmailFormat)?
+    if isBlocked(parsed.domain()) {
+        return Err(UserCreateError.DomainBlocked(parsed.domain()))
+    }
+    db.exec(sql.insertReturningId("users", [
+        ("email", sql.string(parsed.toString())),
+    ]))
+        .mapErr(|e| UserCreateError.DbConflict(e.code()))
+        .map(|id| UserId(id.toInt()))
+}
+```
+
+Step 1 — local check (`osty check`):
+
+```sh
+$ osty check
+0 errors, 0 warnings.
+```
+
+Step 2 — examples + spec block (`osty test --example --spec`):
+
+```sh
+$ osty test --example --spec --report=summary
+spec[createUser#example:1] PASS
+example[createUser#1] PASS
+example[createUser#2] PASS
+3/3 spec/example checks passed.
+```
+
+Step 3 — golden / structural tests (`osty test`):
+
+```sh
+$ osty test --report=summary
+12/12 tests passed.
+```
+
+Step 4 — performance budget (`osty bench --budget`):
+
+```sh
+$ osty bench --budget --report=summary
+bench createUser: avg=2.1ms p99=4.7ms allocs=3 io_calls=1
+budget OK (within 5ms / 5 allocs / 1 io_call).
+```
+
+Step 5 — capability + flow audit (`osty audit`):
+
+```sh
+$ osty audit --capabilities
+pkg myapp.users
+  pub fn createUser(email: String, db: Db)             [Db]
+  fn isBlocked(domain: String)                          (pure)
+
+$ osty audit --legacy-globals
+0 sites — package is fully migrated to v0.6 capability surface.
+```
+
+Step 6 — surface diff (`osty publish --check`):
+
+```sh
+$ osty publish --check
+api-surface unchanged from v0.6.0.
+proposed: v0.6.1 (patch — internal helper added).
+```
+
+Step 7 — actual publish:
+
+```sh
+$ osty publish
+publishing myapp.users v0.6.1
+  + new symbol: fn isAcceptableEmail (private)
+  api-surface diff: stable, additive only.
+released.
+```
+
+The `osty context` JSON for `createUser` (Step 4 / §13.9 schema)
+now contains the full intent payload — purpose, examples,
+fixtures referenced, spec link, error contract, stability, budget,
+capability set, sanitizer interactions — and is what an LLM agent
+or downstream tooling consumes to reason about the function.
+
+### 13.19 Release engineering with intent annotations
+
+`#[purpose]`, `#[example]`, `#[fixture]`, `#[spec]` (§3.12, G42) are
+the *machine-readable* layer underneath `osty doc` and
+`osty context`. Their interactions during release engineering:
+
+#### 13.19.1 `osty doc` rendering
+
+Annotations land in the rendered doc page in this order:
+
+1. Function signature + `#[since]` / `#[stability]` chip.
+2. `#[purpose]` text — primary one-liner.
+3. `#[spec]` anchor link — e.g. "§10.30.user.create" → resolved
+   markdown anchor in the rendered chapter.
+4. `#[error_contract]` — rendered as a "Failure modes" table.
+5. `#[example]` — rendered as runnable example panels, with the
+   referenced `#[fixture]` body inlined for context.
+6. `spec { example: }` clauses — rendered as `// example` comments
+   inside the function body in the page.
+7. `#[budget]` — rendered as a "Performance budget" callout.
+
+Authors who want a docstring on top of these annotations can keep
+using `///`; doc comments and intent annotations compose
+additively.
+
+#### 13.19.2 `osty context <symbol>`
+
+The CLI emits a single JSON object containing every intent
+annotation plus the resolved spec link, the contract variants, the
+fixture bodies, the example expressions, and the dependency
+capability set. The schema is §13.9.
+
+LLM-facing usage: a code-generation agent that wants to call
+`createUser` retrieves the JSON, reads the contract / examples /
+budget / spec, and constructs a semantically valid call site
+without needing to read the implementation.
+
+#### 13.19.3 `osty changelog` autogeneration
+
+`osty publish` writes a changelog entry per release based on the
+API-surface diff (§3.14.3) and the per-symbol intent payload:
+
+```
+v0.6.1 — 2026-05-08
+
+Added
+- `pub fn isAcceptableEmail` (private — no surface impact)
+
+No public API changes.
+```
+
+For a release with public-surface changes, the entry includes the
+`#[purpose]` text of each new / changed `pub` symbol so the
+changelog reads like a feature list rather than a raw diff.
+
+#### 13.19.4 `osty doc-test`
+
+A specialized mode of `osty test` that runs every `#[example]` and
+`spec { example: }` clause under a deterministic capability fake
+set. Failure here means *the published example claims do not match
+the implementation*, which would mislead documentation readers.
+This is the strictest gate before `osty publish`.
+
+```sh
+$ osty doc-test
+2 #[example] checks passed.
+1 spec { example: } check passed.
+```
+
+The doc-test mode shares the same fake registry as `osty test
+--example --spec` but omits regular `#[test]` functions. Useful as
+a fast pre-commit or pre-publish gate.
