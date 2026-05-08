@@ -175,8 +175,8 @@ In bench mode:
 ### 11.5 Snapshots / Golden Tests
 
 Two surface forms are provided: a *runtime form* via
-`std.testing.snapshot()` (v0.5, §11.5.1) and a *declarative form*
-via the `#[golden]` annotation (v0.6 G45, §11.5.2). Both share the
+`std.testing.snapshot()` (§11.5.1, baseline) and a *declarative form*
+via the `#[golden]` annotation (§11.5.2, v0.6 G45). Both share the
 same on-disk format — a snapshot file written by one form can be
 consumed by the other.
 

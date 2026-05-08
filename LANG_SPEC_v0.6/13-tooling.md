@@ -314,7 +314,7 @@ audit. Each escape is enumerable:
 | `osty audit --trusted-declassify` | FFI / Go-side data drop | `#[trusted_declassify(reason)]` (§21.7) |
 | `osty audit --trusted-construct` | sealed-struct bypass | `#[trusted_construct(reason)]` (§3.4.5.6) |
 | `osty audit --match-compat` | enum-shape pin | `#[match_compat(... unsafe_silent = true)]` (§3.14.4) |
-| `osty audit --legacy-globals` | v0.5 global effect calls | `--legacy-globals` flag (§7.1.1) |
+| `osty audit --legacy-globals` | pre-v0.6 global effect calls (e.g., `time.now()`, `random.next()`) | `--legacy-globals` flag (§7.1.1, v0.6.x only) |
 | `osty audit --all` | all of the above |  |
 
 Each subcommand prints `<file>:<line>:<col> <reason>` for every site,
@@ -330,6 +330,6 @@ suitable for security review and migration tracking.
 | `osty test --example` | `#[example(input=, output=, uses=)]` (§3.12) | input → output match |
 | `osty test --golden` | `#[golden(path, mode)]` (§11.5.2) | snapshot compare |
 | `osty test --update-golden` | (same) | overwrites snapshot |
-| `osty test --doc` | `///` doc-test blocks (v0.5) | runs as test |
+| `osty test --doc` | `///` doc-test blocks (baseline since v0.5) | runs as test |
 
 `osty bench --budget` (§3.15.2) gates runtime budget regressions.

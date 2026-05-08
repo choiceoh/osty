@@ -1,6 +1,6 @@
 ## 14. Excluded Features
 
-The items below are excluded from v0.5. Items are grouped by reason so
+The items below are excluded from v0.6. Items are grouped by reason so
 readers can see the argument without consulting the change history.
 Re-opening any of them requires a design proposal, a new minor or major
 version, and a migration story for existing code.
@@ -47,10 +47,13 @@ version, and a migration story for existing code.
 - Macros (declarative or procedural) — the compiler does not take
   user-defined syntax extensions.
 - User-defined annotations / attributes — the annotation set is fixed
-  by the compiler (§1.9, §3.8). As of v0.5 this set is
-  `#[json(...)]`, `#[deprecated(...)]`, `#[op(...)]`, `#[cfg(...)]`,
-  `#[test]`, `#[intrinsic]`, `#[pod]`, `#[repr(...)]`,
-  `#[export(...)]`, `#[c_abi]`, `#[no_alloc]`.
+  by the compiler (§1.9, §3.8). As of v0.6 this set is the v0.5
+  baseline (`#[json(...)]`, `#[deprecated(...)]`, `#[op(...)]`,
+  `#[cfg(...)]`, `#[test]`, `#[intrinsic]`, `#[pod]`, `#[repr(...)]`,
+  `#[export(...)]`, `#[c_abi]`, `#[no_alloc]`) plus the v0.6 G36–G46
+  additions (§20 capabilities, §21 information flow, §3.10–§3.15
+  intent / spec / reproducible / sealed / evolution / golden / budget).
+  See `00-revision.md §5` for the full surface table.
 - Function overloading — distinct names for distinct operations.
 - C-style `for` loops — use `for x in xs` / `for cond { }` /
   `while cond { }` / `loop { break v }`.
@@ -98,11 +101,42 @@ version, and a migration story for existing code.
   not a binding form; its body is constrained by the capability matrix
   in §3.1.1.
 
-### 14.2 Accepted in v0.5 (previously excluded)
+### 14.2 Newly accepted syntax (v0.6)
 
-Two v0.4 exclusions were replaced with scoped forms in v0.5 because
-the total ban blocked numerical code readability in realistic
-programs:
+The following surface forms were added in v0.6. Each is *additive* —
+v0.5 programs continue to compile (with the v0.5/v0.6 transition
+caveats in `BREAKING_v0.6.md` and `MIGRATING_v0.5_to_v0.6.md`).
+
+- **`while` keyword** (G49) — `while cond { body }` is a synonym for
+  `for cond { body }`; both lower to the same IR. v0.5 reused `for`
+  for keyword economy; v0.6 acknowledges that `while` matches a more
+  common mental model (§4.4).
+- **Capability parameters** (G36) — `Clock`, `Rng`, `Env`, `Fs`,
+  `Net`, `Process`, `Console` interfaces become canonical for
+  effectful surface (§20). `#[ambient(name1, ...)]` injects defaults
+  at entry-point functions only.
+- **Information flow annotations** (G37) — `#[taint("source")]`,
+  `#[sanitizes("source", into = "trust")]`, parameter-position
+  `#[requires("trust")]` form a 1-bit + N-tag flow tracking surface
+  (§21).
+- **Spec / intent / determinism / construction / error contract
+  annotations** (G38–G46) — see §3.10–§3.15, §7.5, §11.5 for
+  individual forms. All optional; missing forms compile unchanged.
+
+### 14.3 Carried-forward exclusions from v0.5
+
+The v0.5 reversal of "implicit numeric conversions" (→ lossless widening
+only, §2.2) and "operator overloading" (→ six-operator opt-in
+`#[op(...)]`, §3.8) carries forward into v0.6 with no further
+narrowing. Anonymous structural records remain excluded — proposed as
+G50 during the v0.6 batch but withdrawn to preserve the
+"named types are nominal" discipline (see `SPEC_GAPS.md` for archived
+discussion).
+
+### 14.4 Historical reversals (v0.4 → v0.5, carried into v0.6)
+
+Two v0.4 exclusions were replaced with scoped forms in v0.5; both
+remain in v0.6 unchanged:
 
 - **Implicit numeric conversions** — replaced by **lossless widening
   only** (§2.2): `Int8 → Int16 → Int32 → Int → Float64`, `Int →
@@ -113,26 +147,12 @@ programs:
   `E0765`.
 - **Operator overloading** — replaced by **six-operator opt-in** via
   `#[op(+)]` / `#[op(-)]` / `#[op(*)]` / `#[op(/)]` / `#[op(%)]`
-  (binary) and `#[op(-)]` (unary) on structural methods (§3.8 / §14.2). All
-  other operators remain primitive-only (see §14.1 above).
+  (binary) and `#[op(-)]` (unary) on structural methods. All other
+  operators remain primitive-only.
 
-### 14.3 Newly accepted syntax (v0.5)
-
-These forms were listed as excluded in v0.4 and were accepted in v0.5
-as scoped additions:
-
-- **`loop` keyword** — excluded in v0.4 as "subsumed by `for`". v0.5
-  distinguishes `for cond { }` (Unit-returning while-style, unchanged
-  since v0.3) from `loop { break value }` (value-returning unbounded
-  loop, §4.4). The distinction is intentional.
-- **Labeled `break` / `continue`** — `'label: for/loop ... break
-  'label` (§4.4). Nested loops no longer require sentinel flags.
-- **`const`** — `const fn` only. Compile-time evaluable function
-  (§3.1.1), not a run-time binding form. `let` remains the sole
-  binding form. The evaluable body is defined by the capability
-  matrix in §3.1.1; constructs outside the matrix are `E0766`.
-- **`#[cfg(...)]` annotation and `pub use` re-exports** — §5. Neither
-  keyword is new; the surface is annotation-based and `use`-based
-  respectively.
+The v0.4 → v0.5 newly accepted syntax (`loop`, labeled `break` /
+`continue`, `const fn`, `#[cfg(...)]`, `pub use`) is documented in
+[`18-change-history.md §18.1`](./18-change-history.md). All forms
+remain in v0.6 unchanged.
 
 ---

@@ -1,9 +1,8 @@
 # Osty v0.6 Agent Quick Spec
 
 AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위한 규칙 카드.
-예제는 싣지 않는다. 충돌 시 `LANG_SPEC_v0.6/00-revision.md`,
-`LANG_SPEC_v0.5/`, `OSTY_GRAMMAR_v0.6.md`, `OSTY_GRAMMAR_v0.5.md` 가
-우선한다.
+예제는 싣지 않는다. 충돌 시 `LANG_SPEC_v0.6/` 의 정식 챕터와
+`OSTY_GRAMMAR_v0.6.md` 가 우선한다.
 
 > **v0.6 Design north star**: *Hidden dependency is forbidden* — 시간,
 > 난수, 환경, 보안 흐름, 진화 규칙, 성능 계약, 의도, 명세 어느 것도
@@ -359,7 +358,7 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 
 - No semicolons, no trailing-dot chains, no newline before `else`.
 - Use `T?`, not `Option<T>`, in formatted output.
-- v0.5: Use `for cond` / v0.6: `while cond` 도 OK. C-style for 는 금지.
+- Use `for cond` 또는 `while cond` (v0.6 동의어, §4.4). C-style for 는 금지.
 - Use `match`/`if let` for enum destructuring, not plain `let`.
 - Parenthesize struct literals in control-flow heads.
 - Use `::<T>` only on calls and never with an empty type-argument list.

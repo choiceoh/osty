@@ -1,0 +1,57 @@
+// v0.6 capability annotation surface — `#[ambient]` 의 *positive*
+// fixtures. v0.6 G36 / LANG_SPEC_v0.6/20-capabilities.md §20.3.
+//
+// 이 파일은 spec corpus 의 parse + resolve + check (E0780/E0781 gate
+// 포함) 가 통과해야 하는 *positive* 케이스. 모든 fn 이 entry-point
+// 위치 (`main`, `test_*`, `bench_*`) 또는 `#[test]`/`#[bench]` 부착.
+
+// ---- #[ambient(name)] on `fn main` — 단일 capability ----
+
+#[ambient(clock)]
+fn main() {
+}
+
+// ---- #[ambient(...)] on `fn main` — 다중 capability ----
+
+#[ambient(clock, rng)]
+fn mainTwo() {
+}
+
+// ---- #[ambient(...)] — 7 canonical 모두 ----
+
+#[ambient(clock, rng, env, fs, net, process, console)]
+fn mainAll() {
+}
+
+// ---- #[ambient(...)] on test_* prefixed function ----
+
+#[ambient(rng)]
+fn test_buildId() {
+}
+
+// ---- #[ambient(...)] on bench_* prefixed function ----
+
+#[ambient(fs)]
+fn bench_throughput() {
+}
+
+// ---- #[ambient(...)] on `#[test]` annotated function (non-prefixed) ----
+
+#[test]
+#[ambient(clock)]
+fn deterministicTest() {
+}
+
+// ---- #[ambient] without args — bare flag form ----
+
+#[ambient]
+fn mainBare() {
+}
+
+// ---- #[ambient(...)] with full annotation surface combination ----
+
+#[ambient(clock, rng, env)]
+#[reproducible_capability]
+interface MyCap {
+    fn now(self) -> Int
+}
