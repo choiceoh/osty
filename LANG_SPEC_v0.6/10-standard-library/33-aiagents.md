@@ -10,6 +10,20 @@ client, RPC server, or filesystem workflow. Those belong in host runtimes or
 application packages. The stdlib surface gives those packages a stable common
 vocabulary.
 
+> **v0.6 capability layering**: `std.aiagents` is *entirely pure* —
+> the chapter never touches `Net`, `Fs`, `Process`, or `Clock`. The
+> agent run surface (`runRequestWithOptions`, `RunResult` shapes,
+> `toolPolicy`) returns / consumes already-captured values. Hosts
+> drive the actual model call through `std.ai` (§10.36, `Net`
+> required), persist sessions through their own `Fs` capability,
+> and source timestamps through `Clock`. The `TrustLevel` enum
+> (`Trusted` / `UserProvided` / `Extracted` / `ToolOutput` /
+> `CompactionSummary`) is the agent-side analog of the §21 flow
+> tag set — `UserProvided` content carries the same suspicion as
+> `#[taint("user_input")]` and must pass through a sanitizer (or
+> a stricter `SafetyPolicy` check) before being routed into a
+> sensitive tool call.
+
 ```osty
 use std.aiagents
 

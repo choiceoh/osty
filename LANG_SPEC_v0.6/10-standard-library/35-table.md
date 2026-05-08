@@ -4,6 +4,16 @@
 cleanup jobs. It keeps cells as strings for lossless CSV/TSV round-trips,
 then layers typed access and column inference on top.
 
+`std.table` is *pure* — every function operates on already-captured
+`String` / `Bytes` values. Reading a CSV from disk happens at the
+caller's `Fs` boundary; the resulting `String` is then passed to
+`table.fromCsv`. The pure surface is acceptable inside
+`#[reproducible(scope = "target")]`. Cell values inherit the flow
+tag set of the source `String` — a CSV constructed from user-uploaded
+bytes carries `#[taint("user_input")]` into every cell extracted via
+`table.row(i).cell("name")`, so authors handling untrusted CSV must
+sanitize before reaching SQL / shell / HTML sinks.
+
 ```osty
 use std.table
 

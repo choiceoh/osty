@@ -4,6 +4,35 @@
 `std.email.Envelope` for message data, but does not claim TLS/socket execution
 until the runtime grows that transport layer.
 
+Like `std.db` (§10.29), every function in `std.smtp` is *pure* — protocol
+command rendering, reply parsing, capability-list extraction, and credential
+encoding all operate on values. Actual transport (TCP connect, STARTTLS
+handshake, command write/read) flows through the `Net` capability
+(§20.9.5). A wrapper layer drives the protocol command list against a
+`TcpConn`:
+
+```osty
+fn sendOnce(net: Net, cfg: ClientConfig, env: Envelope) -> Result<(), Error> {
+    let tx = smtp.transaction(cfg, env)
+    let cmds = smtp.commands(tx)?
+
+    let conn = net.connect("{cfg.host}:{cfg.port}")?
+    defer conn.close()
+
+    for cmd in cmds {
+        io.writeString(conn, cmd + "\r\n")?
+        let line = io.readLine(conn)?
+        let reply = smtp.parseReply(line)?
+        if reply.isError() { return Err(reply.toError()) }
+    }
+    Ok(())
+}
+```
+
+The protocol module never grows a transport surface of its own — the
+`std.smtp` ↔ `Net` split is the canonical layering for v0.6 protocol
+modules that target wire formats.
+
 ```osty
 use std.smtp
 

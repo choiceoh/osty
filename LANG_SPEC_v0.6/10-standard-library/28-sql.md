@@ -4,6 +4,24 @@
 open database connections or execute queries; drivers such as SQLite or
 Postgres should accept the `Query` value produced by this module.
 
+`SqlIdent` (the type produced by `sql.quoteIdent` / `sql.quotePath`) is
+a v0.6 sealed-construct type (§3.4.5, G40) — external literal
+construction is rejected. Identifiers reach a `Db.query` sink only
+through this validated path:
+
+| Path | Yields | Sealed? |
+|---|---|---|
+| `sql.quoteIdent("users")?` | `SqlIdent` | yes — sole construction route |
+| `SqlIdent { value: "..." }` | — | rejected (`E0420`) |
+| Raw `String` concatenation into SQL text | — | flagged at the sink (`E0901` if input is tainted) |
+
+The `Query` struct itself is *not* sealed — it is constructed by every
+builder in this module — but its `sql: String` field is registered as
+`#[trust("sql_safe")]` because the builder guarantees parameterized
+form. Direct mutation of `Query.sql` via field write would invalidate
+that promise, so the field is `pub` *getter only* in v0.6 (consistent
+with §3.4.4).
+
 ```osty
 use std.sql
 

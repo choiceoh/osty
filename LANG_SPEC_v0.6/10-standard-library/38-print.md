@@ -4,6 +4,15 @@
 does not implement page rendering in the language runtime; applications should
 produce a PDF or image first, then ask the host printer stack to print it.
 
+> **v0.6 capability**: planning (`print.plan`, `print.options`,
+> `print.pageRange`) is pure. Effectful operations (`print.print`,
+> `print.printers`, `print.defaultPrinterName`) require the
+> `Process` capability (§20.9.6) — they spawn `lp` / `lpr` /
+> `WindowsShell` and read the spooler's reply. The `path` arguments
+> are path-shaped sinks; tainted input must pass `std.path.normalize`
+> first (§21.8). The legacy zero-arg form desugars under
+> `--legacy-globals` (v0.6.x).
+
 Core types:
 
 ```osty

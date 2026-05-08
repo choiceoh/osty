@@ -39,6 +39,21 @@ the original session-key, HTML escaping, dangerous-scheme, localhost/private
 network, cloud metadata, IPv4-mapped IPv6, numeric IPv4, IPv6 zone, file URL,
 UNC path, Markdown-link stripping, dedupe, and balanced URL-tail cases.
 
+**v0.6 sanitizer registry.** Two helpers participate in the v0.6
+information-flow surface (§21.6):
+
+- `sanitizeHtml(s)` carries
+  `#[sanitizes("user_input", into = "html_safe")]` — output is
+  acceptable to `http.respondHtml` and `template.render` sinks.
+- `checkUrl(u)?` carries
+  `#[sanitizes("user_input", into = "url_safe")]` — output is
+  acceptable to `http.redirect` and similar URL-shaped sinks.
+
+`extractSafeLinks` is *not* a sanitizer in the flow-tag sense — it
+reduces a list of URLs by domain policy but does not retag the
+`String` element type. Apply `checkUrl` to each result if a sink
+requires `url_safe`.
+
 #### `std.search`
 
 Pure in-memory text search for small-to-medium local document sets. It performs
