@@ -447,6 +447,85 @@ when applied to a sealed struct from outside the named constructor:
 to `std.*` and toolchain-internal packages (`E0422` from user code). All
 sites are enumerated by `osty audit --trusted-construct`.
 
+#### 3.4.5.1 Constructor signature requirements
+
+The named constructor — `parse` in the example above — must satisfy
+three rules at definition time:
+
+1. **It returns the sealed type** (or `Result<Self, _>` / `Self?`).
+   Returning a wrapper or a generic `Self?` not parameterized on the
+   sealed type is `E0423`.
+2. **It is package-public** if the struct itself is `pub`. A `pub
+   struct` with a non-`pub` constructor is `E0424` — external code
+   needs *some* path to construct values, otherwise the type would be
+   uninhabitable to importers.
+3. **It accepts only ordinary parameters** — no `Self` / `mut self` /
+   sealed-aware special args. The constructor reaches the body via
+   normal call resolution and is not allowed to short-circuit
+   sealed-construction checks via reflection.
+
+A struct may declare *multiple* `#[sealed_construct(name)]` annotations
+to register more than one validating constructor. Each name must
+satisfy the three rules independently:
+
+```osty
+#[sealed_construct(parse)]
+#[sealed_construct(fromBytes)]
+pub struct Sha256Digest {
+    bytes: Bytes,
+}
+
+impl Sha256Digest {
+    pub fn parse(hex: String) -> Sha256Digest? { ... }
+    pub fn fromBytes(b: Bytes) -> Sha256Digest? { ... }
+}
+```
+
+#### 3.4.5.2 Round-trip with `ToString`
+
+Stdlib v0.6 sealed types (`Email`, `Url`, `Path`, `SqlIdent`,
+`Duration`, `Uuid`) maintain the contract `parse(value.toString())?
+== Some(value)` for every value the constructor produces. User code
+that defines a sealed type **should** uphold the same round-trip;
+formalizing it via a `spec { law: ... }` clause (§3.13) gives the
+checker a target:
+
+```osty
+#[sealed_construct(parse)]
+pub struct Slug {
+    text: String,
+
+    pub fn parse(s: String) -> Slug? {
+        spec {
+            law: result.map(|sl| Slug.parse(sl.toString())) == Some(Some(result))
+        }
+        ...
+    }
+
+    pub fn toString(self) -> String { self.text }
+}
+```
+
+The law is documentation in v0.6 baseline (§3.13.2 — Phase 3 v0
+runs `example:` only). Phase 5 turns it into a property test.
+
+#### 3.4.5.3 Information flow integration
+
+A `#[sealed_construct(parse)]` constructor that performs full
+validation should also register as a sanitizer through
+`#[sanitizes("source", into = "trust")]`:
+
+```osty
+#[sanitizes("user_input", into = "url_safe")]
+pub fn parse(s: String) -> Url? { ... }
+```
+
+Outputs of the parser then carry the `url_safe` trust tag, which is
+what `#[requires("url_safe")]` sinks (§21.8) expect. Sealed
+construction and sanitization compose orthogonally — sealed enforces
+*who* can construct a value, sanitization records *which trust set*
+the value carries.
+
 ### 3.5 Enums
 
 ```osty

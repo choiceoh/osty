@@ -766,3 +766,190 @@ osty test --spec --example --golden --doc
 
 `#[stability("stable")]` API 가 테스트 surface (e.g., custom Fake
 impl) 를 노출하면 `osty publish` 의 SemVer 룰 적용.
+
+### 11.18 Capability test recipes
+
+This section catalogues canonical recipes for testing capability-typed
+code. Each recipe states the production shape, the deterministic test
+fake, and what the recipe specifically guards against.
+
+#### 11.18.1 Pure recipe — no capability needed
+
+If a function takes no capability parameter, no fake is required.
+This is the cheapest test path; the recipe is to *keep functions
+this way* whenever possible.
+
+```osty
+#[reproducible(scope = "target")]
+pub fn classify(text: String) -> Category { ... }
+
+#[test]
+fn test_classify_short_text() {
+    testing.assertEq(classify("hello"), Category.Greeting)
+}
+```
+
+Production code that performs an effect should accept a capability
+parameter rather than calling a global; the recipes below assume that
+discipline.
+
+#### 11.18.2 Single capability — direct fake
+
+```osty
+fn buildId(clock: Clock, rng: Rng) -> String {
+    "{clock.now().toEpochMillis()}-{rng.next()}"
+}
+
+#[test]
+fn test_buildId_is_deterministic() {
+    let clock = std.capability.testing.FakeClock(epoch_ms = 1_000_000)
+    let rng = std.capability.testing.FakeRng(seed = 42)
+    let id = buildId(clock, rng)
+    testing.assertEq(id, "1000000-1608637542")
+}
+```
+
+Guards against: hidden time / randomness dependencies. The result is
+byte-equal across runs because both fakes are deterministic.
+
+#### 11.18.3 Filesystem recipe — `FakeFs` layout
+
+```osty
+fn loadConfig(fs: Fs, path: String) -> Result<Config, Error> {
+    let text = fs.readToString(path)?
+    json.parse(text)
+}
+
+#[test]
+fn test_loadConfig_reads_layout() {
+    let fs = std.capability.testing.FakeFs.fromLayout({
+        "/etc/app.toml": "{ \"port\": 8080 }",
+    })
+    let cfg = loadConfig(fs, "/etc/app.toml")?
+    testing.assertEq(cfg.port, 8080)
+}
+
+#[test]
+fn test_loadConfig_missing_file_errors() {
+    let fs = std.capability.testing.FakeFs.empty()
+    let result = loadConfig(fs, "/nope")
+    testing.expectError(result)
+}
+```
+
+Guards against: tests reaching the real filesystem (and thus
+race-conditioning with other tests, leaking artifacts, or depending
+on the test runner's working directory).
+
+#### 11.18.4 Network recipe — `FakeNet` route table
+
+```osty
+fn fetchHealth(net: Net, host: String) -> Result<HealthStatus, Error> {
+    let conn = net.connect("{host}:80")?
+    defer conn.close()
+    io.writeString(conn, "GET /health HTTP/1.0\r\n\r\n")?
+    let body = io.readAll(conn)?
+    HealthStatus.parse(body.toString()?)
+}
+
+#[test]
+fn test_fetchHealth_parses_response() {
+    let net = std.capability.testing.FakeNet.routes({
+        "example.com:80": std.capability.testing.cannedResponse(
+            "HTTP/1.0 200 OK\r\n\r\n{\"status\":\"ok\"}",
+        ),
+    })
+    let result = fetchHealth(net, "example.com")?
+    testing.assertEq(result.status, "ok")
+}
+```
+
+Guards against: tests requiring live network endpoints, port
+collisions, network policy issues in CI.
+
+#### 11.18.5 Cancellation recipe — `taskGroup` + `g.cancel`
+
+```osty
+fn longRunning(clock: Clock) -> Result<(), Error> {
+    clock.sleep(60.s)?
+    Ok(())
+}
+
+#[test]
+fn test_longRunning_honors_cancel() {
+    let clock = std.capability.testing.FakeClock(epoch_ms = 0)
+    taskGroup(|g| {
+        let h = g.spawn(|| longRunning(clock))
+        g.cancel(Cancelled.New("test"))
+        match h.join() {
+            Err(e) -> testing.assert(e.downcast::<Cancelled>().isSome()),
+            Ok(_) -> testing.fail("expected Cancelled"),
+        }
+        Ok(())
+    })
+}
+```
+
+Guards against: blocking calls that fail to honor `taskGroup`
+cancellation. `FakeClock.sleep` returns immediately by default, but
+honors the cancel signal of the surrounding `taskGroup` exactly as
+the production `Clock.sleep` does.
+
+#### 11.18.6 Information-flow recipe — taint preserved through fakes
+
+```osty
+fn safeRender(net: Net, console: Console, conn: TcpConn) -> Result<(), Error> {
+    let raw: Bytes = io.readAll(conn)?
+    let text: String = raw.toString()?
+    let html = std.html.escape(text)         // sanitizes user_input → html_safe
+    console.println(html)
+    Ok(())
+}
+
+#[test]
+fn test_safeRender_writes_escaped_output() {
+    let f = std.testing.capabilityFakes()
+    let conn = std.capability.testing.fakeTcp("<script>alert(1)</script>")
+    safeRender(f.fakeNet, f.fakeConsole, conn)?
+    let out = f.fakeConsole.stdoutCaptured()
+    testing.assertEq(out, "&lt;script&gt;alert(1)&lt;/script&gt;\n")
+}
+```
+
+Guards against: regression in sanitization. The fake `Console`'s
+captured output is byte-equal to what the production `Console` would
+emit, so flow-tag bugs surface as observable failures.
+
+#### 11.18.7 Spec block + capability recipe
+
+`spec { example: ... }` clauses (§3.13) inside a capability-typed
+function run under the `--spec` mode. Capability instances that the
+function takes must be provided either by `#[example(uses = "name")]`
+referencing a fixture, or by explicit closure construction inside the
+example expression:
+
+```osty
+#[fixture(name = "frozenClock")]
+fn frozenClock() -> Clock {
+    std.capability.testing.FakeClock(epoch_ms = 0)
+}
+
+#[fixture(name = "seededRng")]
+fn seededRng() -> Rng {
+    std.capability.testing.FakeRng(seed = 42)
+}
+
+#[example(input = "()", uses = "frozenClock", uses = "seededRng",
+          output = "\"0-1608637542\"")]
+fn buildId(clock: Clock, rng: Rng) -> String {
+    spec {
+        example: buildId(frozenClock(), seededRng()) == "0-1608637542"
+    }
+    "{clock.now().toEpochMillis()}-{rng.next()}"
+}
+```
+
+The `uses = "name"` form composes; multiple `uses =` repeats inject
+each named fixture in order. v0.6 baseline runs the inline
+`example:` clause; the `#[example]` annotation form runs under
+`osty test --example`.
