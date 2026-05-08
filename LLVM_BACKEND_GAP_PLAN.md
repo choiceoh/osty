@@ -5,6 +5,8 @@
 > **상태**: 2026-05-07 audit. 현재 실패 테스트 9건 + 빌드 실패 6건 (Security framework link). `LLVM_MIGRATION_PLAN.md`의 Tier A 항목 (Map.update / optional aggregate / generic turbofish / interface dispatch / nested binding pattern) 이 모두 같은 root에 매달려 있음을 발견.
 >
 > **Phase A 진행**: module-context type lowering 폴스루는 명시적 `unsupported module type` 진단으로 바뀌었고, MIR `uses/imports`는 resolved trace-only metadata로 낮아져 더 이상 LIR Proto 모듈 전체를 decline시키지 않는다.
+>
+> **Phase B 진행**: B1의 첫 조각으로 `MirIntrinsicMapNew`가 destination `Map<K, V>` 타입에서 key/value ABI kind와 `value_size`를 계산해 `osty_rt_map_new(i64, i64, i64, ptr)`를 호출하도록 복구했다. 로컬 실행 회귀는 `osty-self` 캐시 부재로 아직 end-to-end binary까지는 닫지 못했고, LIR Proto 패리티 fixture가 ABI shape를 고정한다.
 
 ## 1. 새 architecture 요약
 
@@ -138,6 +140,7 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 
 **B1 — `Map<String, Int>` 기본 insert/len/containsKey 회귀 회복** (GAP-RECV-001..004)
 - 가설: receiver type string parsing이 정확히 어디서 실패하는지 진단 후 fix.
+- 진행: `map_new`은 receiver arg가 없는 MIR shape이므로 receiver parser가 아니라 destination `Map<String, Int>` 타입에서 ABI tuple `(key=string, value=i64, size=8, trace=null)`을 합성해야 했다. LIR Proto가 4-arg runtime constructor를 내도록 고정.
 - 회귀 대상: `TestLLVMBackendBinaryRunsMapLiteralInMain` (4초 test).
 - 의존성: A1 권장 (진단 가시화).
 

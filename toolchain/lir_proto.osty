@@ -2486,7 +2486,7 @@ fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
         MirIntrinsicCheckCancelled -> lirLowerMirCheckCancelled(l, instr),
         MirIntrinsicListSorted -> lirLowerMirListSorted(l, instr),
         MirIntrinsicListInsert -> lirLowerMirListInsert(l, instr),
-        MirIntrinsicMapNew -> lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeNewSymbol(), lirPtrType(), [], "map.new"),
+        MirIntrinsicMapNew -> lirLowerMirMapNew(l, instr),
         MirIntrinsicMapLen -> lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeLenSymbol(), lirIntType(64), [lirPtrType()], "map.len"),
         MirIntrinsicMapKeys -> lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeKeysSymbol(), lirPtrType(), [lirPtrType()], "map.keys"),
         MirIntrinsicMapValues -> lirLowerMirStringRuntimeCall(l, instr, llvmMapRuntimeValuesSymbol(), lirPtrType(), [lirPtrType()], "map.values"),
@@ -3484,6 +3484,64 @@ fn lirLowerMirListIsEmpty(l: LirMirFunctionLowerer, instr: MirInstr) {
     }
 }
 // ----- Map intrinsic lowerings (typed key lane) -----
+fn lirLowerMirMapNew(l: LirMirFunctionLowerer, instr: MirInstr) {
+    if instr.args.len() != 0 {
+        lirLowerError(l, LirDiagInvalidInput, "map.new expects no arguments", "map.new")
+        return
+    }
+    if !(instr.hasDest) {
+        lirLowerError(l, LirDiagInvalidInput, "map.new requires a destination", "map.new")
+        return
+    }
+    if mirPlaceHasProjections(instr.dest) {
+        lirLowerError(l, LirDiagUnsupported, "map.new requires a non-projected destination", "map.new")
+        return
+    }
+    let loc = mirFunctionLocal(l.fn_, instr.dest.local)
+    if loc.id < 0 {
+        lirLowerError(l, LirDiagInvalidInput, "map.new destination local out of range", "map.new")
+        return
+    }
+    let keyName = lirMapKeyTypeName(loc.typ)
+    let valueName = lirMapValueTypeName(loc.typ)
+    if keyName == "" || valueName == "" {
+        lirLowerError(l, LirDiagUnsupported, "map.new destination type `" + loc.typ + "` is not Map<K, V>", "map.new")
+        return
+    }
+    let keyLir = lirContainerElemLaneType(keyName)
+    if lirTypeIsZero(keyLir) || lirTypeIsVoid(keyLir) {
+        lirLowerError(l, LirDiagUnsupported, "map.new key type `" + keyName + "` has no runtime ABI lane", "map.new")
+        return
+    }
+    let keyKind = llvmContainerAbiKind(keyLir.llvm, lirContainerElemIsString(keyName))
+    if keyKind == 6 {
+        lirLowerError(l, LirDiagUnsupported, "map.new key type `" + keyName + "` is not a supported runtime key", "map.new")
+        return
+    }
+    let valueLir = lirContainerElemLaneType(valueName)
+    let mut valueKind = 6
+    let mut valueSize = ""
+    if !(lirTypeIsZero(valueLir)) && !(lirTypeIsVoid(valueLir)) {
+        valueKind = llvmContainerAbiKind(valueLir.llvm, lirContainerElemIsString(valueName))
+        let fixedSize = mirMapValueSizeBytes(valueLir.llvm)
+        if fixedSize > 0 {
+            valueSize = lirIntToString(fixedSize)
+        }
+    }
+    if valueSize == "" {
+        let loweredValue = lirLowerMirType(l, valueName)
+        if lirTypeIsZero(loweredValue) || lirTypeIsVoid(loweredValue) {
+            lirLowerError(l, LirDiagUnsupported, "map.new value type `" + valueName + "` has no MIR layout", "map.new")
+            return
+        }
+        valueSize = lirEmitSizeOf(l, loweredValue)
+    }
+    let symbol = llvmMapRuntimeNewSymbol()
+    lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(symbol, lirPtrType(), [lirIntType(64), lirIntType(64), lirIntType(64), lirPtrType()], false))
+    let dest = lirFresh(l)
+    l.instrs.push(lirCall(dest, lirPtrType(), "@" + symbol, [lirOperand(lirIntType(64), lirIntToString(keyKind)), lirOperand(lirIntType(64), lirIntToString(valueKind)), lirOperand(lirIntType(64), valueSize), lirOperand(lirPtrType(), "null")]))
+    lirStoreMirResult(l, instr.dest, lirOperand(lirPtrType(), dest), loc.typ, "map.new result")
+}
 // Map.set always passes the value by spilled-slot pointer regardless
 // of value type. Production declares
 // `osty_rt_map_insert_<keysuf>(ptr, <keyLLVM>, ptr) -> void` so the

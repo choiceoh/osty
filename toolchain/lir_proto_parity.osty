@@ -1245,7 +1245,7 @@ pub fn lirParityManualListClearFixture() -> LirParityFixture {
     lirParityFixture("list_clear", LirParityManualMIR, "/tmp/lir_proto_parity_list_clear.osty", "", "phase4b-list", ["list", "runtime"], [lirParityNeedle("declare void @osty_rt_list_clear(ptr)", "clear runtime"), lirParityNeedle("call void @osty_rt_list_clear(", "clear call site")])
 }
 pub fn lirParityManualMapNewFixture() -> LirParityFixture {
-    lirParityFixture("map_new", LirParityManualMIR, "/tmp/lir_proto_parity_map_new.osty", "", "phase4b-map", ["map", "runtime"], [lirParityNeedle("declare ptr @osty_rt_map_new()", "map new runtime"), lirParityNeedle("call ptr @osty_rt_map_new()", "map new call")])
+    lirParityFixture("map_new", LirParityManualMIR, "/tmp/lir_proto_parity_map_new.osty", "", "phase4b-map", ["map", "runtime"], [lirParityNeedle("declare ptr @osty_rt_map_new(i64, i64, i64, ptr)", "map new runtime"), lirParityNeedle("call ptr @osty_rt_map_new(i64 5, i64 1, i64 8, ptr null)", "map new call")])
 }
 pub fn lirParityManualMapInsertStringIntFixture() -> LirParityFixture {
     lirParityFixture("map_insert_string_int", LirParityManualMIR, "/tmp/lir_proto_parity_map_insert_string_int.osty", "", "phase4b-map", ["map", "runtime", "key-string"], [lirParityNeedle("declare void @osty_rt_map_insert_string(ptr, ptr, ptr)", "string-key insert runtime (value-by-spilled-slot)"), lirParityNeedle("alloca i64", "value spill slot"), lirParityNeedle("call void @osty_rt_map_insert_string(", "insert call site")])
