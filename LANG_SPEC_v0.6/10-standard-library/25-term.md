@@ -3,21 +3,30 @@
 `std.term` is the low-level terminal boundary used by text UIs and simple
 terminal games.
 
-Host-backed primitives:
+> **v0.6 capability**: terminal I/O is a host effect — reading a
+> keystroke, querying terminal size, switching to raw mode, and
+> writing escape sequences all consult `stdin`/`stdout`. The v0.6
+> surface routes these through a `Terminal` capability obtained from
+> `Console.terminal()` (§20.9.7); the legacy module-level functions
+> remain under `--legacy-globals` (v0.6.x only).
+
+Host-backed primitives — methods on a `Terminal` capability:
 
 ```osty
-term.open() -> Result<Terminal, Error>
-term.isTerminal() -> Bool
-term.size() -> Result<Size, Error>
-term.setRawMode(enabled: Bool) -> Result<(), Error>
-term.readKey() -> Result<Key, Error>
-term.pollKey(timeoutMillis: Int) -> Result<Key?, Error>
-term.readEvent() -> Result<Event, Error>
-term.write(text: String) -> Result<(), Error>
-term.flush() -> Result<(), Error>
+Console.terminal(self) -> Result<Terminal, Error>     // §20.9.7
+
+Terminal.isOpen(self) -> Bool
+Terminal.size(self) -> Result<Size, Error>
+Terminal.setRawMode(self, enabled: Bool) -> Result<(), Error>
+Terminal.readKey(self) -> Result<Key, Error>
+Terminal.pollKey(self, timeoutMillis: Int) -> Result<Key?, Error>
+Terminal.readEvent(self) -> Result<Event, Error>
+Terminal.write(self, text: String) -> Result<(), Error>
+Terminal.flush(self) -> Result<(), Error>
+Terminal.restore(self) -> Result<(), Error>
 ```
 
-Pure ANSI helpers:
+Pure ANSI helpers — capability-free:
 
 ```osty
 term.clearScreenSeq() -> String
@@ -31,6 +40,29 @@ term.styleSeq(style: Style) -> String
 term.styled(text: String, style: Style) -> String
 ```
 
+Worked pattern — entering raw mode with a `defer` for guaranteed
+cleanup on every exit path (including cancel, §4.12 / §8.4.3):
+
+```osty
+fn runTui(console: Console) -> Result<(), Error> {
+    let term = console.terminal()?
+    term.setRawMode(true)?
+    defer term.restore()             // restores raw mode + cursor + alt screen
+
+    term.write(term.enterAltScreenSeq())?
+    term.flush()?
+
+    for {
+        match term.pollKey(100)? {
+            Some(Key.Char('q')) -> { break },
+            Some(_) | None -> {},
+        }
+        thread.checkCancelled()?     // §8.4.2 cooperative cancel
+    }
+    Ok(())
+}
+```
+
 Coordinates are zero-based in the Osty API. `moveToSeq` converts to the
 one-based row/column convention used by ANSI terminals.
 
@@ -40,3 +72,8 @@ raw mode, hide the cursor, or switch to the alternate screen.
 Current LLVM backend coverage includes `isTerminal`, `size`, `write`, `flush`,
 `setRawMode`, `readKey`, and `pollKey`. Resize event decoding is part of the
 next host-backed terminal increment.
+
+Legacy `term.open()` / `term.readKey()` / etc. (no capability args)
+desugar to `std.term.host.open()` / `std.term.host.readKey()` under
+`--legacy-globals` (v0.6.x only). Outside that mode, bare-arg form
+is `E0780`.
