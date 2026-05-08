@@ -63,6 +63,7 @@ pub fn runCheckGates(cx: ElabCx) {
     runPrivilegeGate(cx)
     runNoAllocGate(cx)
     runPureGate(cx)
+    runAmbientGate(cx)
 }
 
 // ---------------------------------------------------------------------
@@ -1438,4 +1439,124 @@ fn pureCollectPatternBindings(arena: AstArena, patIdx: Int, out: List<String>) {
     for childIdx in pat.children {
         pureCollectPatternBindings(arena, childIdx, out)
     }
+}
+
+// ---------------------------------------------------------------------
+// E0780 / E0781 — `#[ambient(...)]` entry-point gate (G36, v0.6 §20.3).
+//
+// `#[ambient]` is restricted to entry-point fns:
+//   - `fn main`
+//   - functions carrying `#[test]` or `#[bench]`
+//   - functions whose name starts with `test_` or `bench_` / `bench` / `test`
+//
+// Library code must receive capabilities as explicit parameters; an
+// ambient binding outside the entry-point set is `E0780`. Each ambient
+// arg ident must be in the canonical set (`clock`/`rng`/`env`/`fs`/
+// `net`/`process`/`console`); foreign idents are `E0781`.
+// ---------------------------------------------------------------------
+
+fn runAmbientGate(cx: ElabCx) {
+    let arena = cx.ast.arena
+    for declIdx in arena.decls {
+        let node = astArenaNodeAt(arena, declIdx)
+        match node.kind {
+            AstNFnDecl -> checkAmbientFn(cx, arena, node),
+            AstNStructDecl -> checkAmbientMethods(cx, arena, node),
+            AstNEnumDecl -> checkAmbientMethods(cx, arena, node),
+            _ -> {},
+        }
+    }
+}
+
+fn checkAmbientMethods(cx: ElabCx, arena: AstArena, parent: AstNode) {
+    for memberIdx in parent.children {
+        let m = astArenaNodeAt(arena, memberIdx)
+        if m.kind == AstNFnDecl {
+            checkAmbientFn(cx, arena, m)
+        }
+    }
+}
+
+fn checkAmbientFn(cx: ElabCx, arena: AstArena, fn_: AstNode) {
+    if fn_.extra < 0 {
+        return
+    }
+    if !checkGateAnnotationContains(arena, fn_.extra, "ambient") {
+        return
+    }
+    let name = fn_.text
+    if !isAmbientEntryPoint(arena, fn_.extra, name) {
+        cx.env.local.diagnostics.push(diagAmbientWrongSite(name, fn_.start, fn_.end))
+    }
+    // Validate each ambient arg ident regardless of site — even on a
+    // legal entry point, an unknown capability name is `E0781`.
+    checkAmbientArgs(cx, arena, fn_.extra)
+}
+
+fn isAmbientEntryPoint(arena: AstArena, annotIdx: Int, fnName: String) -> Bool {
+    if fnName == "main" {
+        return true
+    }
+    if strings.startsWith(fnName, "test_") || strings.startsWith(fnName, "bench_") {
+        return true
+    }
+    if fnName == "test" || fnName == "bench" {
+        return true
+    }
+    if checkGateAnnotationContains(arena, annotIdx, "test") {
+        return true
+    }
+    if checkGateAnnotationContains(arena, annotIdx, "bench") {
+        return true
+    }
+    false
+}
+
+fn checkAmbientArgs(cx: ElabCx, arena: AstArena, annotIdx: Int) {
+    if annotIdx < 0 {
+        return
+    }
+    let node = astArenaNodeAt(arena, annotIdx)
+    if node.kind != AstNAnnotation {
+        return
+    }
+    if node.text == "ambient" {
+        validateAmbientArgs(cx, arena, node)
+        return
+    }
+    if node.text == "__group" {
+        for childIdx in node.children {
+            let child = astArenaNodeAt(arena, childIdx)
+            if child.kind == AstNAnnotation && child.text == "ambient" {
+                validateAmbientArgs(cx, arena, child)
+            }
+        }
+    }
+}
+
+fn validateAmbientArgs(cx: ElabCx, arena: AstArena, ambient: AstNode) {
+    for argIdx in ambient.children {
+        let arg = astArenaNodeAt(arena, argIdx)
+        // Annotation args are stored as `AstNAnnotation` children with
+        // their identifier text in `.text`. Whether stored as ident-only
+        // (bare flag) or `key = value`, the canonical capability name
+        // sits at `.text` for bare flag form (`#[ambient(clock, rng)]`).
+        let argName = arg.text
+        if argName == "" {
+            continue
+        }
+        if !isCanonicalAmbientName(argName) {
+            cx.env.local.diagnostics.push(diagAmbientUnknownCapability(argName, arg.start, arg.end))
+        }
+    }
+}
+
+fn isCanonicalAmbientName(name: String) -> Bool {
+    name == "clock"
+        || name == "rng"
+        || name == "env"
+        || name == "fs"
+        || name == "net"
+        || name == "process"
+        || name == "console"
 }
