@@ -211,6 +211,11 @@ pub struct CheckEnv {
     pub tys: TyArena,
     pub global: CheckGlobalEnv,
     pub local: CheckLocalEnv,
+
+    // Spec sections harvested from LANG_SPEC_v0.6/ at workspace open time.
+    // Used by the E0790/W0790 spec link gate. Empty when spec files are
+    // not available (gate is a no-op).
+    pub specSections: List<String>,
 }
 
 pub fn emptyCheckEnv(tys: TyArena) -> CheckEnv {
@@ -253,6 +258,7 @@ pub fn emptyCheckEnv(tys: TyArena) -> CheckEnv {
             symbolRecords: [],
             instantiations: [],
         },
+        specSections: [],
     }
 }
 
