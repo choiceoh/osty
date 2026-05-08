@@ -1,5 +1,24 @@
 ## 3. Declarations
 
+This chapter defines Osty v0.6 declaration forms — functions (§3.1),
+variables (§3.2), multiple assignment (§3.3), structs (§3.4) including
+the v0.6 sealed-construct rule (§3.4.5, G40), enums (§3.5), interfaces
+(§3.6), type aliases (§3.7), and annotations (§3.8). Sections §3.10
+through §3.15 specify the v0.6 *hidden-dependency-surface*
+annotations (G36–G46) — `#[spec]` for spec-link traceability,
+`#[reproducible]` for environment-independence, `#[purpose]` /
+`#[example]` / `#[fixture]` for structured intent, `spec { ... }`
+blocks for executable specification, `#[since]` / `#[stability]` /
+`#[match_compat]` for API evolution, and `#[budget]` for performance
+contracts.
+
+The v0.6 design north star (*hidden dependency is forbidden*) is
+realized in this chapter through the new annotation surface: every
+external dependency, intent, contract, or evolution rule that affects
+a declaration is now expressible at the declaration site. v0.5
+declarations carry forward unchanged; the v0.6 additions are *opt-in*
+metadata — declarations without v0.6 annotations have v0.5 semantics.
+
 ### 3.1 Functions
 
 ```osty

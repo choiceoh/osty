@@ -1,5 +1,17 @@
 ## 15. Iteration Protocol
 
+Osty v0.6 defines iteration through two structural interfaces:
+`Iterator<T>` and `Iterable<T>`. Any type implementing `Iterable<T>`
+participates in `for x in xs { ... }` loops. The protocol is
+unchanged from v0.5 in semantics; the v0.6 backend layer optimizes
+for `List<T>` / range / `Map<K, V>` shapes (cf. SPEC_GAPS
+`vectorize-hint`), but every conforming type works under the protocol
+regardless of backend optimization.
+
+Lazy iterator combinators (filter, map, take, …) live in `std.iter`
+(§10.7). User types implement `Iterable<T>` directly; the compiler
+does not auto-derive iteration support.
+
 `for x in xs { ... }` is defined in terms of two interfaces:
 
 ```osty

@@ -1,7 +1,18 @@
 ## 9. Memory Management
 
-Osty is garbage collected. There are no explicit memory primitives:
-no `new`, no `delete`, no destructors.
+Osty v0.6 is a garbage-collected language. The runtime owns object
+lifetime; user code never explicitly allocates or frees. There are no
+`new`, `delete`, destructors, finalizers, or weak references — the
+contract is *all reachable objects survive, all unreachable objects
+are eventually reclaimed*. Resource cleanup outside memory (file
+handles, sockets, mutex guards) is bound to lexical scope through
+`defer` (§4.12) or closure-based stdlib helpers, never to GC timing.
+
+The v0.6 specification adds no new memory-management surface. The
+v0.6 capability surface (§20) and information flow (§21) compose with
+GC ownership but do not change it: a tainted `String` is reclaimed
+identically to an untainted one, and a `Clock` capability instance
+has the same lifetime rules as any reference value.
 
 Resource cleanup is done through `defer` (§4.12) or closure-based
 stdlib APIs (`fs.withFile`, `net.withConn`, etc.).

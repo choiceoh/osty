@@ -1,5 +1,17 @@
 ## 7. The Error Interface
 
+Osty v0.6 represents errors as values, never as exceptions. The
+`Error` interface (§7.1) carries a nominal tag for runtime downcast
+(`as?` per §4 and §7.4), `BasicError` (§7.2) provides the standard
+constructor, custom error enums (§7.3) integrate via the structural
+interface rules of §2.6, and propagation uses the `?` operator
+(§7.4). The v0.6 addition is `#[error_contract]` (§7.5, G41) — a
+declaration-level annotation that catalogues which error variants
+flow out under which conditions, enabling caller-side exhaustiveness
+pruning, machine-readable failure-mode export via `osty context`
+(§13.4), and the publish-time SemVer rule that adding a contracted
+variant is a breaking change (§3.14.3).
+
 ### 7.1 Definition
 
 `Error` is an interface defined in `std.error` and re-exported by the

@@ -1,5 +1,19 @@
 ## 12. Foreign Function Interface
 
+Osty v0.6 interoperates with Go via `use go "..." { ... }` declaration
+blocks. The bridge maps Osty's `Result<T, Error>` to Go's
+`(T, error)`, optional types `T?` to nullable pointers `*T`, and
+preserves panic-as-process-abort semantics. Go closures, generics,
+empty interfaces, and channel types are not exposed across the
+boundary.
+
+The v0.6 information flow surface (§21) treats data crossing an FFI
+boundary as untagged by default. When data has been validated outside
+Osty's flow tracking, the `#[trusted_declassify(reason)]` annotation
+on the FFI wrapper drops flow tags with audit-marked attestation —
+all such sites are enumerable via `osty audit --trusted-declassify`
+(§13.7).
+
 ### 12.1 Importing Go Packages
 
 ```osty

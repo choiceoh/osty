@@ -1,5 +1,18 @@
 ## 16. I/O Protocol
 
+Osty v0.6 defines stream I/O through three structural interfaces:
+`Reader`, `Writer`, and `Closer`. The `EOF` sentinel is `Ok(0)` —
+there is no distinguished error type for end-of-stream. The contract
+is shared across `std.io`, stream-oriented standard-library modules,
+and FFI byte-stream bridges.
+
+The v0.6 capability surface (§20) layers on top of the I/O protocol:
+filesystem and network access flow through `Fs` and `Net` capability
+parameters rather than global functions. The protocol interfaces
+themselves are unchanged from v0.5; capability-typed handles
+(returned by `fs.open(path)`, `net.dial(...)`) implement the same
+`Reader`/`Writer`/`Closer` interfaces as their v0.5 predecessors.
+
 The `Reader` and `Writer` interfaces define the streaming I/O contract
 shared across `std.io`, stream-oriented standard-library modules, and
 FFI byte-stream bridges. `std.fs` currently exposes whole-file and
