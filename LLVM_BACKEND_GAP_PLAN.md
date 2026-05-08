@@ -205,12 +205,16 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 **E2 — Vtable + per-method shim emission** (GAP-IFACE-004, 005)
 - (impl, iface) discovery (HIR resolved Symbol + structural method match).
 - 각 쌍마다 `@osty.vtable.<impl>__<iface>` 글로벌 + `@osty.shim.<impl>__<iface>__<method>` ABI 변환.
-- 회귀: 1 IR snapshot fixture (vtable layout).
+- 진행: PR #1534에서 LIR Proto가 MIR interface impl layout을 읽어 vtable constant와
+  per-method shim 함수를 self-host 경로에서 emit하도록 잠갔다.
+- 회귀: vtable/shim IR fixture.
 - 의존성: E1.
 
 **E3 — Boxing at let / return / call-arg / assign sites** (GAP-IFACE-002 확장)
 - 4개 site 모두에서 concrete → `%osty.iface` 변환 (`insertvalue ×2`).
-- 회귀: 4 IR snapshot fixtures (각 site 1개씩).
+- 진행: concrete 값이 interface target으로 저장/전달될 때 `osty.gc.alloc_v1` box +
+  `%osty.iface { data, vtable }` 값을 만드는 LIR Proto coercion path를 추가.
+- 회귀: assign/return + call-arg IR fixtures.
 - 의존성: E1, E2.
 
 **E4 — Interface method-call indirect dispatch** (GAP-IFACE-003)
