@@ -184,8 +184,11 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 
 **D1 — Generic method turbofish symbol resolution**
 - MIR receiver의 `obj.method::<T>(...)` 호출에서 monomorphized mangled name 선택.
-- 현재: monomorphization은 IR 단계에서 작동 (`internal/ir.Monomorphize`) — MIR 단계에서 그 결과 심볼을 callee로 raw text 보내는 plumbing이 빠져 있을 가능성.
-- 회귀: 1 fixture (generic struct + generic method 호출).
+- 진행: IR `internal/ir.Monomorphize`가 generic owner의 method-local specialization을
+  `_ZTS...__method_Z...` call target으로 남기고, MIR lowering이 signature table을 통해
+  owner-qualified callee symbol을 유지하는 경로를 잠금.
+- 회귀: `TestLowerGenericOwnerMethodTurbofishUsesMonomorphizedSymbol`,
+  `TestLLVMBackendBinaryRunsGenericOwnerMethodTurbofish` (osty-self artifact 필요).
 - 의존성: 없음 (independent).
 
 ### Phase E — Interface dispatch (Tier A `(c2)`–`(c4)`)
