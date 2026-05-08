@@ -74,6 +74,7 @@ lowering remains implementation backlog.
 - [§10.43 Supabase (`std.supabase`)](./43-supabase.md)
 - [§10.44 GitHub (`std.github`)](./44-github.md)
 - [§10.45 Webhooks (`std.webhook`)](./45-webhook.md)
+- [**§10.46 Capability Migration Catalog**](./46-capability-migration.md) — v0.5 → v0.6 stdlib effect mapping
 
 Capability protocols (`std.capability`) are specified in
 [§20 Capabilities](../20-capabilities.md) because they govern effect
