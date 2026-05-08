@@ -9,6 +9,8 @@
 > **Phase B 진행**: B1의 첫 조각으로 `MirIntrinsicMapNew`가 destination `Map<K, V>` 타입에서 key/value ABI kind와 `value_size`를 계산해 `osty_rt_map_new(i64, i64, i64, ptr)`를 호출하도록 복구했다. 로컬 실행 회귀는 `osty-self` 캐시 부재로 아직 end-to-end binary까지는 닫지 못했고, LIR Proto 패리티 fixture가 ABI shape를 고정한다.
 >
 > **Phase B 추가 진행**: B2/B3의 넓은 조각으로 canonical `Map.update(k, |n| (n ?? 0) + delta)`를 Go MIR lowerer와 Osty self-host MIR lowerer 양쪽에서 `MirIntrinsicMapIncr`로 직접 낮추도록 고정했다. 또 LIR Proto receiver 분석이 `List<Pair>` element와 `Map<String, Pair>` value의 MIR layout을 composite lane으로 보존하게 바꿔, `map.set`/`map.getOr` bytes-v1 fixture가 receiver 단계에서 끊기지 않도록 했다.
+>
+> **Phase C 진행**: C1의 widened `Option<Struct>` / `Result<Struct, _>` typedef 위에 C2 첫 조각을 얹어, LIR Proto가 `Option<Struct>` None/Some, `Some(struct)` aggregate, `Option<Struct>.unwrap()` / `unwrapOr()`, `map.get` / `list.first` / `list.last` / `list.pop`의 composite Some payload를 i64 boxing 없이 직접 `%Struct` payload slot으로 emit한다. 이 과정에서 self-host MIR/LIR Proto의 Option/Result 태그도 source/Go convention(`Some`/`Ok`=0, `None`/`Err`=1)으로 맞췄다.
 
 ## 1. 새 architecture 요약
 
@@ -163,15 +165,18 @@ Go MIR emitter 미러는 PR #1405에서 제거됐다 (`internal/llvmgen` 112K LO
 
 **C1 — Optional struct payload type lowering** (GAP-TYP-004)
 - `Foo?` (Foo가 struct)의 MIR layout + LIR aggregate → `{i64 tag, %Foo payload}`.
+- 진행: C1 typedef는 merged. C2 첫 조각에서 widened payload construction/unwrap도 같은 layout을 실제 값 경로에 연결.
 - 회귀: 새 single-shape smoke (1 fixture).
 
 **C2 — `?.field` chain lowering** (GAP-INSTR-005, 006)
 - `x?.field` projection이 None branch → null phi, Some branch → extractvalue.
+- 진행: LIR Proto widened Option helpers가 `%Option.Foo = { i64, %Foo }`의 payload type을 읽어 None/Some/unwrap/unwrapOr 및 composite-returning map/list option intrinsics를 direct `%Foo` payload로 낮춘다. 또 self-host `mir_lower`의 coalesce/optional-field/`?` rebuild 태그 상수를 Go MIR lowerer와 맞춰 `Some`/`Ok`=0, `None`/`Err`=1로 통일했다. `source_some_struct`, `source_optional_field_chain`, `map_get_struct_bytes_v1`, `nullary_none_option_struct`, `agg_enum_variant_some_struct`, `option_unwrap_struct`, `option_unwrap_or_struct`, `list_first_struct_bytes_v1`, `list_last_struct_bytes_v1`, `list_pop_struct_bytes_v1` fixture needles를 widened-direct shape와 source tag convention으로 갱신/추가.
 - 회귀: `TestNativeOwnedModuleEntryOptionalFieldBatch` 류 (이전 internal/llvmgen 테스트 재구축).
 - 의존성: C1.
 
 **C3 — Nested struct binding pattern** (GAP-INSTR-006) — Tier A (d)
 - `match user { User { addr: Address { city } } -> ... }` recursive `extractvalue` + `name @ pattern` alias.
+- 진행: `source_nested_struct_binding` source parity fixture가 `let whole @ User { addr: Address { city, zip }, score } = u`를 통해 whole-scrutinee alias + nested field extraction을 고정한다.
 - 회귀: `TestRunCoversNestedStructBindingPattern` (cmd/osty-native-llvmgen).
 - 의존성: A1 진단 가시화 권장.
 

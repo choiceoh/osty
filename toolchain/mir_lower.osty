@@ -3728,12 +3728,11 @@ pub fn mirLowerBlockExprInto(
 
 /// mirLowerCoalesceExprInto lowers `lhs ?? rhs` (Option fallback).
 /// Reads the discriminant of lhs, branches:
-///   - Some tag (1) → extract payload, Assign to dest
-///   - None tag (0) / default → lower rhs into dest
+///   - Some tag (0) → extract payload, Assign to dest
+///   - None tag (1) / default → lower rhs into dest
 ///
 /// Matches Go's `lowerCoalesceInto`. Some/None tag ordering follows
-/// Option's variant order (None=0, Some=1) — same constants the
-/// rebuildErrorIntoReturn / discriminant emitter use elsewhere.
+/// source declaration order: Option<T> { Some(T), None }.
 pub fn mirLowerCoalesceExprInto(
     bs: MirLowerBodyState,
     e: HirExpr,
@@ -3765,17 +3764,17 @@ pub fn mirLowerCoalesceExprInto(
     let noneBB = mirLowerNewBlock(bs, span)
     let merge = mirLowerNewBlock(bs, span)
 
-    // Branch on disc — Some = 1 routes to someBB, everything else to
-    // noneBB. Matches mirSwitchIntTerm's case+default shape.
+    // Branch on disc — Some routes to someBB, everything else to noneBB.
+    // Matches mirSwitchIntTerm's case+default shape.
     let discOp = mirOperandCopy(mirPlace(disc), "Int")
     let mut cases: List<MirSwitchCase> = []
-    cases.push(mirSwitchCase(1, someBB, "Some"))
+    cases.push(mirSwitchCase(mirLowerSomeTagOf(leftT), someBB, "Some"))
     mirLowerTerminate(bs, mirSwitchIntTerm(discOp, cases, noneBB, span))
 
     // Some path: extract the payload, Assign to dest.
     bs.cur = someBB
     let destTypeText = hirTypeString(destT)
-    let payloadProj = mirVariantProj(1, "Some", 0, destTypeText)
+    let payloadProj = mirVariantProj(mirLowerSomeTagOf(leftT), "Some", 0, destTypeText)
     let payloadPlace = mirPlaceProject(mirPlace(leftLocal), payloadProj)
     let payloadOp = mirOperandCopy(payloadPlace, destTypeText)
     mirLowerEmitInstr(bs, mirAssignInstr(dest, mirRVUse(payloadOp), span))
@@ -3794,9 +3793,9 @@ pub fn mirLowerCoalesceExprInto(
 
 /// mirLowerOptionalFieldInto lowers `recv?.field` directly into
 /// `dest`. Reads the discriminant of recv, branches:
-///   - Some tag (1) → project the inner payload's field, wrap back in
+///   - Some tag (0) → project the inner payload's field, wrap back in
 ///     Some via an EnumVariant aggregate
-///   - None tag (0) / default → emit a None nullary into dest
+///   - None tag (1) / default → emit a None nullary into dest
 ///
 /// Matches Go's `lowerOptionalFieldInto` (internal/mir/lower.go).
 fn mirLowerOptionalFieldInto(
@@ -3832,7 +3831,7 @@ fn mirLowerOptionalFieldInto(
 
     let discOp = mirOperandCopy(mirPlace(disc), "Int")
     let mut cases: List<MirSwitchCase> = []
-    cases.push(mirSwitchCase(1, someBB, "Some"))
+    cases.push(mirSwitchCase(mirLowerSomeTagOf(recvT), someBB, "Some"))
     mirLowerTerminate(bs, mirSwitchIntTerm(discOp, cases, noneBB, span))
 
     // Some path: project payload → field, wrap as Some(field).
@@ -3843,7 +3842,7 @@ fn mirLowerOptionalFieldInto(
         hirTypeInvalid()
     }
     let innerTypeText = hirTypeString(innerT)
-    let payloadProj = mirVariantProj(1, "Some", 0, innerTypeText)
+    let payloadProj = mirVariantProj(mirLowerSomeTagOf(recvT), "Some", 0, innerTypeText)
     let payloadPlace = mirPlaceProject(mirPlace(recvLocal), payloadProj)
     let structName = hirTypeNameOf(innerT)
     let fieldIdx = mirLowerStructFieldIndex(bs.l, structName, e.fieldName)
@@ -3854,7 +3853,7 @@ fn mirLowerOptionalFieldInto(
     let fieldOp = mirOperandCopy(fieldPlace, fieldTypeText)
     let mut someFields: List<MirOperand> = []
     someFields.push(fieldOp)
-    let someRV = mirRVVariant(1, "Some", someFields, hirTypeString(destT))
+    let someRV = mirRVVariant(mirLowerSomeTagOf(destT), "Some", someFields, hirTypeString(destT))
     mirLowerEmitInstr(bs, mirAssignInstr(dest, someRV, span))
     mirLowerTerminate(bs, mirGotoTerm(merge, span))
 
@@ -5040,10 +5039,10 @@ pub fn mirLowerOptionInnerType(t: HirType) -> HirType {
 }
 
 /// mirLowerOkTagOf returns the discriminant of the "happy" arm for a
-/// `?`-able enum. Current LLVM layout uses 1 for both Some and Ok.
+/// `?`-able enum. Source declaration order puts Some/Ok at tag 0.
 pub fn mirLowerOkTagOf(t: HirType) -> Int {
     let _ = t
-    1
+    0
 }
 
 /// mirLowerSomeTagOf is an alias of mirLowerOkTagOf for readability
@@ -5053,10 +5052,10 @@ pub fn mirLowerSomeTagOf(t: HirType) -> Int {
 }
 
 /// mirLowerErrTagOf returns the discriminant of the error arm
-/// (None / Err). Both are 0 in the current layout.
+/// (None / Err). Source declaration order puts both at tag 1.
 pub fn mirLowerErrTagOf(t: HirType) -> Int {
     let _ = t
-    0
+    1
 }
 
 /// mirLowerOkVariantName returns the source-level name of the happy
@@ -7671,10 +7670,10 @@ pub fn mirLowerStructFieldType(l: MirLowerer, structName: String, fieldName: Str
 /// constant values; other enums consult the pass-1b layout table.
 /// Matches Go's `variantIndexByName`.
 pub fn mirLowerVariantIndexByName(l: MirLowerer, t: HirType, variantName: String) -> Int {
-    if variantName == "None" { return 0 }
-    if variantName == "Some" { return 1 }
-    if variantName == "Err" { return 0 }
-    if variantName == "Ok" { return 1 }
+    if variantName == "None" { return 1 }
+    if variantName == "Some" { return 0 }
+    if variantName == "Err" { return 1 }
+    if variantName == "Ok" { return 0 }
     let typeName = hirTypeNameOf(t)
     if typeName == "" {
         return 0

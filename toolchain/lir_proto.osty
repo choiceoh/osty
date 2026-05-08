@@ -2648,10 +2648,10 @@ fn lirLowerMirIntrinsic(l: LirMirFunctionLowerer, instr: MirInstr) {
         MirIntrinsicBytesLastIndexOf -> lirLowerMirIndexOf(l, instr, mirRtBytesSymbol("last_index_of"), [lirPtrType(), lirPtrType()], "bytes.lastIndexOf"),
         MirIntrinsicStringToInt -> lirLowerMirStringParse(l, instr, mirRtStringIsValidIntSymbol(), mirRtStringToIntSymbol(), lirIntType(64), "string.toInt"),
         MirIntrinsicStringToFloat -> lirLowerMirStringParse(l, instr, mirRtStringIsValidFloatSymbol(), mirRtStringToFloatSymbol(), lirFloatType("double"), "string.toFloat"),
-        MirIntrinsicOptionIsSome -> lirLowerMirAlgebraicTagCheck(l, instr, "ne", "option.isSome"),
-        MirIntrinsicOptionIsNone -> lirLowerMirAlgebraicTagCheck(l, instr, "eq", "option.isNone"),
-        MirIntrinsicResultIsOk -> lirLowerMirAlgebraicTagCheck(l, instr, "ne", "result.isOk"),
-        MirIntrinsicResultIsErr -> lirLowerMirAlgebraicTagCheck(l, instr, "eq", "result.isErr"),
+        MirIntrinsicOptionIsSome -> lirLowerMirAlgebraicTagCheck(l, instr, "eq", "option.isSome"),
+        MirIntrinsicOptionIsNone -> lirLowerMirAlgebraicTagCheck(l, instr, "ne", "option.isNone"),
+        MirIntrinsicResultIsOk -> lirLowerMirAlgebraicTagCheck(l, instr, "eq", "result.isOk"),
+        MirIntrinsicResultIsErr -> lirLowerMirAlgebraicTagCheck(l, instr, "ne", "result.isErr"),
         MirIntrinsicRawNull -> lirLowerMirRawNull(l, instr),
         MirIntrinsicListSlice -> lirLowerMirStringRuntimeCall(l, instr, mirRtListSymbol("slice"), lirPtrType(), [lirPtrType(), lirIntType(64), lirIntType(64)], "list.slice"),
         MirIntrinsicListToSet -> lirLowerMirListToSet(l, instr),
@@ -2954,9 +2954,10 @@ fn lirCutBlockCondBr(l: LirMirFunctionLowerer, cond: String, thenLabel: String, 
     l.instrs = []
     l.currentBlockLabel = nextLabel
 }
-// `lirEmitOptionNone` / `lirEmitOptionSome` build the canonical 2-i64
-// `{i64 disc, i64 payload}` aggregate production uses for every
-// Option<T> at the LLVM boundary
+// `lirEmitOptionNone` / `lirEmitOptionSome` build Option<T> aggregates
+// at the LLVM boundary. The default shape is the canonical
+// `{i64 disc, i64 payload}`; widened Option<Struct> uses
+// `{i64 disc, %Struct}` and must insert a typed payload directly.
 // (mir_generator_snapshot.go::mirNoneAggregateLines /
 // mirSomeAggregateLines / mirOkAggregateLines / mirErrAggregateLines).
 // `payloadI64` must already be the i64-encoded form of the payload —
@@ -2964,13 +2965,19 @@ fn lirCutBlockCondBr(l: LirMirFunctionLowerer, cond: String, thenLabel: String, 
 // appropriate. Returns the temporary holding the constructed aggregate.
 fn lirEmitOptionNone(l: LirMirFunctionLowerer, optType: LirType) -> String {
     if lirAggregateHasWidenedPayload(l.out, optType) {
-        lirLowerError(l, LirDiagUnsupported,
-            "Option<Struct> None construction not implemented for widened payload `" + optType.llvm + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)",
-            "option.none.widened")
-        return "undef"
+        let payloadType = lirAggregatePayloadType(l.out, optType)
+        if lirTypeIsZero(payloadType) {
+            lirLowerError(l, LirDiagUnsupported, "Option<Struct> None payload type missing for `" + optType.llvm + "`", "option.none.widened")
+            return "undef"
+        }
+        let step = lirFresh(l)
+        l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "1"), [0]))
+        let value = lirFresh(l)
+        l.instrs.push(lirInsertValue(value, optType, step, lirOperand(payloadType, "undef"), [1]))
+        return value
     }
     let step = lirFresh(l)
-    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "0"), [0]))
+    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "1"), [0]))
     let value = lirFresh(l)
     l.instrs.push(lirInsertValue(value, optType, step, lirOperand(lirIntType(64), "0"), [1]))
     value
@@ -2978,15 +2985,37 @@ fn lirEmitOptionNone(l: LirMirFunctionLowerer, optType: LirType) -> String {
 fn lirEmitOptionSome(l: LirMirFunctionLowerer, optType: LirType, payloadI64: String) -> String {
     if lirAggregateHasWidenedPayload(l.out, optType) {
         lirLowerError(l, LirDiagUnsupported,
-            "Option<Struct> Some construction not implemented for widened payload `" + optType.llvm + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)",
+            "Option<Struct> Some construction needs a typed payload for `" + optType.llvm + "`",
             "option.some.widened")
         return "undef"
     }
     let step = lirFresh(l)
-    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "1"), [0]))
+    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "0"), [0]))
     let value = lirFresh(l)
     l.instrs.push(lirInsertValue(value, optType, step, lirOperand(lirIntType(64), payloadI64), [1]))
     value
+}
+fn lirEmitOptionSomeOperand(l: LirMirFunctionLowerer, optType: LirType, payload: LirOperand) -> String {
+    let payloadType = lirAggregatePayloadType(l.out, optType)
+    if lirTypeIsZero(payloadType) {
+        lirLowerError(l, LirDiagUnsupported, "Option payload type missing for `" + optType.llvm + "`", "option.some")
+        return "undef"
+    }
+    if payload.typ.llvm != payloadType.llvm {
+        lirLowerError(l, LirDiagUnsupported, "Option payload type `" + payload.typ.llvm + "` does not match `" + payloadType.llvm + "`", "option.some")
+        return "undef"
+    }
+    let step = lirFresh(l)
+    l.instrs.push(lirInsertValue(step, optType, "undef", lirOperand(lirIntType(64), "0"), [0]))
+    let value = lirFresh(l)
+    l.instrs.push(lirInsertValue(value, optType, step, payload, [1]))
+    value
+}
+fn lirEmitOptionSomeValue(l: LirMirFunctionLowerer, optType: LirType, valueReg: String, valueType: LirType) -> String {
+    if lirAggregateHasWidenedPayload(l.out, optType) {
+        return lirEmitOptionSomeOperand(l, optType, lirOperand(valueType, valueReg))
+    }
+    lirEmitOptionSome(l, optType, lirParseResultPayloadAsI64(l, valueReg, valueType))
 }
 fn lirEmitResultOk(l: LirMirFunctionLowerer, resultType: LirType, payloadI64: String) -> String {
     if lirAggregateHasWidenedPayload(l.out, resultType) {
@@ -2996,7 +3025,7 @@ fn lirEmitResultOk(l: LirMirFunctionLowerer, resultType: LirType, payloadI64: St
         return "undef"
     }
     let step = lirFresh(l)
-    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), "1"), [0]))
+    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), "0"), [0]))
     let value = lirFresh(l)
     l.instrs.push(lirInsertValue(value, resultType, step, lirOperand(lirIntType(64), payloadI64), [1]))
     value
@@ -3009,7 +3038,7 @@ fn lirEmitResultErr(l: LirMirFunctionLowerer, resultType: LirType, payloadI64: S
         return "undef"
     }
     let step = lirFresh(l)
-    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), "0"), [0]))
+    l.instrs.push(lirInsertValue(step, resultType, "undef", lirOperand(lirIntType(64), "1"), [0]))
     let value = lirFresh(l)
     l.instrs.push(lirInsertValue(value, resultType, step, lirOperand(lirIntType(64), payloadI64), [1]))
     value
@@ -3047,6 +3076,25 @@ fn lirAggregateHasWidenedPayload(out: LirModule, aggType: LirType) -> Bool {
     // second field is a struct ref. The aggregate body emitted by
     // `lirAlgebraicAggregateBody_module` is exactly `{ i64, %X }`.
     strings.contains(body, ", %")
+}
+
+fn lirAggregatePayloadType(out: LirModule, aggType: LirType) -> LirType {
+    let body = lirAggregateBodyForRef(out, aggType.llvm)
+    if body == "" {
+        return lirIntType(64)
+    }
+    let parts = strings.split(body, ",")
+    if parts.len() < 2 {
+        return lirTypeInvalid()
+    }
+    let raw = strings.trimSpace(strings.trimSuffix(parts[1], "}"))
+    if raw == "i64" {
+        return lirIntType(64)
+    }
+    if strings.startsWith(raw, "%") {
+        return lirAggregateType(raw)
+    }
+    lirTypeInvalid()
 }
 
 // `lirAggregateBodyForRef` looks up an aggregate's typedef body string
@@ -3885,8 +3933,7 @@ fn lirLowerMirMapGet(l: LirMirFunctionLowerer, instr: MirInstr) {
     lirCutBlockCondBr(l, presentReg, someLabel, noneLabel, someLabel)
     let loaded = lirFresh(l)
     l.instrs.push(lirLoad(loaded, valueType, outSlot, 0))
-    let payloadI64 = lirParseResultPayloadAsI64(l, loaded, valueType)
-    let someValue = lirEmitOptionSome(l, optType, payloadI64)
+    let someValue = lirEmitOptionSomeValue(l, optType, loaded, valueType)
     l.instrs.push(lirStore(lirOperand(optType, someValue), mergeSlot, 0))
     lirCutBlockBr(l, endLabel)
     l.currentBlockLabel = noneLabel
@@ -3991,8 +4038,7 @@ fn lirLowerMirListFirstOrLast(l: LirMirFunctionLowerer, instr: MirInstr, isLast:
         l.instrs.push(lirLoad(dest, elemType, slot, 0))
         dest
     }
-    let payloadI64 = lirParseResultPayloadAsI64(l, elemReg, elemType)
-    let someValue = lirEmitOptionSome(l, optType, payloadI64)
+    let someValue = lirEmitOptionSomeValue(l, optType, elemReg, elemType)
     l.instrs.push(lirStore(lirOperand(optType, someValue), mergeSlot, 0))
     lirCutBlockBr(l, endLabel)
     let merged = lirFresh(l)
@@ -4089,8 +4135,7 @@ fn lirLowerMirListPop(l: LirMirFunctionLowerer, instr: MirInstr) {
         dest
     }
     l.instrs.push(lirCall("", lirVoidType(), "@" + discardSym, [lirOperand(lirPtrType(), recv.receiverReg)]))
-    let payloadI64 = lirParseResultPayloadAsI64(l, elemReg, elemType)
-    let someValue = lirEmitOptionSome(l, optType, payloadI64)
+    let someValue = lirEmitOptionSomeValue(l, optType, elemReg, elemType)
     l.instrs.push(lirStore(lirOperand(optType, someValue), mergeSlot, 0))
     lirCutBlockBr(l, endLabel)
     let merged = lirFresh(l)
@@ -4696,9 +4741,9 @@ fn lirLowerMirStringParse(l: LirMirFunctionLowerer, instr: MirInstr, validateSym
 // inspection (`is_some` / `is_none` / `is_ok` / `is_err`). The four
 // intrinsics share the same shape: extract the i64 disc field at index
 // 0 of the `%Option.<T>` / `%Result.<T>_<E>` aggregate and icmp it
-// against `0`. `cmp` is `"ne"` for the present-tag intrinsics
-// (IsSome / IsOk; disc==1 → true) and `"eq"` for the absent-tag
-// intrinsics (IsNone / IsErr; disc==0 → true). Mirrors production
+// against `0`. `cmp` is `"eq"` for the present-tag intrinsics
+// (IsSome / IsOk; disc==0 → true) and `"ne"` for the absent-tag
+// intrinsics (IsNone / IsErr; disc!=0 → true). Mirrors production
 // `emitOptionIntrinsic` / `emitResultIntrinsic`
 // (mir_generator.go:5283-5294 / similar Result block).
 fn lirLowerMirAlgebraicTagCheck(l: LirMirFunctionLowerer, instr: MirInstr, cmp: String, label: String) {
@@ -4812,7 +4857,7 @@ fn lirCutBlockUnreachable(l: LirMirFunctionLowerer, nextLabel: String) {
 }
 // `lirLowerMirAlgebraicUnwrap` lowers Option.unwrap() / Result.unwrap()
 // — the panic-on-absent variants. Shape: `extractvalue` the disc field,
-// `icmp eq` against 0 to detect the absent tag, branch to a panic arm
+// `icmp eq` against 1 to detect the absent tag, branch to a panic arm
 // that calls the noreturn runtime helper (`osty_rt_option_unwrap_none`
 // or `osty_rt_result_unwrap_err`) and terminates with `unreachable`,
 // then in the present arm extract the i64 payload and narrow back to
@@ -4833,16 +4878,6 @@ fn lirLowerMirAlgebraicUnwrap(l: LirMirFunctionLowerer, instr: MirInstr, abortSy
         lirLowerError(l, LirDiagUnsupported, label + " operand type `" + instr.args[0].typ + "` is not implemented", label)
         return
     }
-    if lirAggregateHasWidenedPayload(l.out, aggType) {
-        // Widened struct payload — extractvalue would yield a struct, not
-        // i64. The current i64-shaped payload propagation downstream would
-        // hit a type mismatch. C2 needs a struct-payload-aware unwrap that
-        // either copies the struct via alloca or handles the value type.
-        lirLowerError(l, LirDiagUnsupported,
-            label + " not implemented for widened payload `" + instr.args[0].typ + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)",
-            label + ".widened")
-        return
-    }
     let aggValue = lirLowerMirOperand(l, instr.args[0], instr.args[0].typ, aggType)
     if aggValue.value == "" {
         return
@@ -4860,21 +4895,30 @@ fn lirLowerMirAlgebraicUnwrap(l: LirMirFunctionLowerer, instr: MirInstr, abortSy
     let discReg = lirFresh(l)
     l.instrs.push(lirExtractValue(discReg, aggType, aggValue.value, [0]))
     let isAbsentReg = lirFresh(l)
-    l.instrs.push(lirBinary(isAbsentReg, "icmp eq", lirIntType(64), discReg, "0"))
+    l.instrs.push(lirBinary(isAbsentReg, "icmp eq", lirIntType(64), discReg, "1"))
     let absentLabel = lirFreshAuxLabel(l, label + ".absent")
     let presentLabel = lirFreshAuxLabel(l, label + ".present")
     lirCutBlockCondBr(l, isAbsentReg, absentLabel, presentLabel, absentLabel)
     lirRuntimeDeclsDeclare(l.out.runtimeDecls, lirRuntimeDecl(abortSym, lirVoidType(), [], false))
     l.instrs.push(lirCall("", lirVoidType(), "@" + abortSym, []))
     lirCutBlockUnreachable(l, presentLabel)
-    let payloadI64 = lirFresh(l)
-    l.instrs.push(lirExtractValue(payloadI64, aggType, aggValue.value, [1]))
-    let narrowed = lirNarrowI64ToType(l, payloadI64, destType)
-    if narrowed == "" {
-        lirLowerError(l, LirDiagUnsupported, label + " payload narrow to `" + loc.typ + "` is not implemented", label)
+    let payloadType = lirAggregatePayloadType(l.out, aggType)
+    if lirTypeIsZero(payloadType) {
+        lirLowerError(l, LirDiagUnsupported, label + " payload type for `" + instr.args[0].typ + "` is not implemented", label)
         return
     }
-    lirStoreMirResult(l, instr.dest, lirOperand(destType, narrowed), loc.typ, label + " result")
+    let payload = lirFresh(l)
+    l.instrs.push(lirExtractValue(payload, aggType, aggValue.value, [1]))
+    let mut outValue = payload
+    if payloadType.llvm != destType.llvm {
+        let narrowed = lirNarrowI64ToType(l, payload, destType)
+        if narrowed == "" {
+            lirLowerError(l, LirDiagUnsupported, label + " payload narrow to `" + loc.typ + "` is not implemented", label)
+            return
+        }
+        outValue = narrowed
+    }
+    lirStoreMirResult(l, instr.dest, lirOperand(destType, outValue), loc.typ, label + " result")
 }
 // `lirLowerMirAlgebraicUnwrapOr` lowers Option.unwrapOr(default) and
 // Result.unwrapOr(default) — the fallback variants. Same disc-field
@@ -4897,14 +4941,6 @@ fn lirLowerMirAlgebraicUnwrapOr(l: LirMirFunctionLowerer, instr: MirInstr, label
         lirLowerError(l, LirDiagUnsupported, label + " operand type `" + instr.args[0].typ + "` is not implemented", label)
         return
     }
-    if lirAggregateHasWidenedPayload(l.out, aggType) {
-        // Same diagnostic-only guard as lirLowerMirAlgebraicUnwrap (above).
-        // Struct-payload-aware unwrapOr depends on C2 implementation.
-        lirLowerError(l, LirDiagUnsupported,
-            label + " not implemented for widened payload `" + instr.args[0].typ + "` (C2 pending — see LLVM_BACKEND_GAP_PLAN.md)",
-            label + ".widened")
-        return
-    }
     let aggValue = lirLowerMirOperand(l, instr.args[0], instr.args[0].typ, aggType)
     if aggValue.value == "" {
         return
@@ -4922,7 +4958,7 @@ fn lirLowerMirAlgebraicUnwrapOr(l: LirMirFunctionLowerer, instr: MirInstr, label
     let discReg = lirFresh(l)
     l.instrs.push(lirExtractValue(discReg, aggType, aggValue.value, [0]))
     let isAbsentReg = lirFresh(l)
-    l.instrs.push(lirBinary(isAbsentReg, "icmp eq", lirIntType(64), discReg, "0"))
+    l.instrs.push(lirBinary(isAbsentReg, "icmp eq", lirIntType(64), discReg, "1"))
     let mergeSlot = lirFresh(l)
     l.instrs.push(lirAlloca(mergeSlot, destType, 0))
     let absentLabel = lirFreshAuxLabel(l, label + ".absent")
@@ -4936,14 +4972,23 @@ fn lirLowerMirAlgebraicUnwrapOr(l: LirMirFunctionLowerer, instr: MirInstr, label
     l.instrs.push(lirStore(lirOperand(destType, fallback.value), mergeSlot, 0))
     lirCutBlockBr(l, endLabel)
     l.currentBlockLabel = presentLabel
-    let payloadI64 = lirFresh(l)
-    l.instrs.push(lirExtractValue(payloadI64, aggType, aggValue.value, [1]))
-    let narrowed = lirNarrowI64ToType(l, payloadI64, destType)
-    if narrowed == "" {
-        lirLowerError(l, LirDiagUnsupported, label + " payload narrow to `" + loc.typ + "` is not implemented", label)
+    let payloadType = lirAggregatePayloadType(l.out, aggType)
+    if lirTypeIsZero(payloadType) {
+        lirLowerError(l, LirDiagUnsupported, label + " payload type for `" + instr.args[0].typ + "` is not implemented", label)
         return
     }
-    l.instrs.push(lirStore(lirOperand(destType, narrowed), mergeSlot, 0))
+    let payload = lirFresh(l)
+    l.instrs.push(lirExtractValue(payload, aggType, aggValue.value, [1]))
+    let mut outValue = payload
+    if payloadType.llvm != destType.llvm {
+        let narrowed = lirNarrowI64ToType(l, payload, destType)
+        if narrowed == "" {
+            lirLowerError(l, LirDiagUnsupported, label + " payload narrow to `" + loc.typ + "` is not implemented", label)
+            return
+        }
+        outValue = narrowed
+    }
+    l.instrs.push(lirStore(lirOperand(destType, outValue), mergeSlot, 0))
     lirCutBlockBr(l, endLabel)
     let merged = lirFresh(l)
     l.instrs.push(lirLoad(merged, destType, mergeSlot, 0))
@@ -5887,13 +5932,11 @@ fn lirLowerMirListAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: S
     }
     lirOperand(lirPtrType(), listReg)
 }
-// `lirLowerMirEnumVariantAggregate` builds the canonical
-// `{ i64 disc, i64 payload }` aggregate for an enum variant. Disc is
-// the variant index (e.g. 0 for None / Err, 1 for Some / Ok). Payload
-// is i64-encoded via `lirParseResultPayloadAsI64` (the boxing helper
-// already used by IndexOf and List.first/last). Bare 0-arity variants
-// fill the slot with literal 0. Mirrors production `emitEnumVariant`
-// (mir_generator.go:9148).
+// `lirLowerMirEnumVariantAggregate` builds the algebraic aggregate for
+// an enum variant. The common shape remains `{ i64 disc, i64 payload }`;
+// widened Option/Result payloads use `{ i64 disc, %Struct }` and insert
+// the typed payload directly instead of boxing it back through i64.
+// Mirrors production `emitEnumVariant` (mir_generator.go:9148).
 fn lirLowerMirEnumVariantAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
     let typeName = lirAggTypeNameFromRV(rv, hintName)
     let aggType = if typeName != "" {
@@ -5908,8 +5951,13 @@ fn lirLowerMirEnumVariantAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hint
     let discText = lirIntToString(rv.aggVariantIdx)
     let step1 = lirFresh(l)
     l.instrs.push(lirInsertValue(step1, aggType, "undef", lirOperand(lirIntType(64), discText), [0]))
-    let payloadI64 = if rv.aggFields.len() == 0 {
-        "0"
+    let payload = if rv.aggFields.len() == 0 {
+        let payloadType = lirAggregatePayloadType(l.out, aggType)
+        if lirTypeIsZero(payloadType) {
+            lirOperand(lirIntType(64), "0")
+        } else {
+            lirOperand(payloadType, if payloadType.llvm == "i64" { "0" } else { "undef" })
+        }
     } else if rv.aggFields.len() == 1 {
         let arg = rv.aggFields[0]
         let argHint = lirLowerMirType(l, arg.typ)
@@ -5917,13 +5965,22 @@ fn lirLowerMirEnumVariantAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hint
         if value.value == "" {
             return lirOperandInvalid()
         }
-        lirParseResultPayloadAsI64(l, value.value, value.typ)
+        if lirAggregateHasWidenedPayload(l.out, aggType) {
+            value
+        } else {
+            lirOperand(lirIntType(64), lirParseResultPayloadAsI64(l, value.value, value.typ))
+        }
     } else {
         lirLowerError(l, LirDiagUnsupported, "enum variant with " + lirIntToString(rv.aggFields.len()) + " payload fields (only scalar / 0-arity supported)", "aggregate.enum")
         return lirOperandInvalid()
     }
+    let payloadType = lirAggregatePayloadType(l.out, aggType)
+    if !(lirTypeIsZero(payloadType)) && payload.typ.llvm != payloadType.llvm {
+        lirLowerError(l, LirDiagUnsupported, "enum variant payload type `" + payload.typ.llvm + "` does not match aggregate payload `" + payloadType.llvm + "`", "aggregate.enum")
+        return lirOperandInvalid()
+    }
     let value = lirFresh(l)
-    l.instrs.push(lirInsertValue(value, aggType, step1, lirOperand(lirIntType(64), payloadI64), [1]))
+    l.instrs.push(lirInsertValue(value, aggType, step1, payload, [1]))
     lirOperand(aggType, value)
 }
 fn lirLowerMirTupleAggregate(l: LirMirFunctionLowerer, rv: MirRValue, hintName: String, hint: LirType) -> LirOperand {
