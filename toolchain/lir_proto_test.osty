@@ -294,6 +294,12 @@ fn lirTestStructLayout(name: String, fields: List<MirFieldLayout>) -> MirStructL
 fn lirTestTupleLayout(key: String, fields: List<MirFieldLayout>) -> MirTupleLayout {
     MirTupleLayout {key, mangled: key, fields}
 }
+fn lirTestInterfaceLayout(name: String, methods: List<MirInterfaceMethod>) -> MirInterfaceLayout {
+    MirInterfaceLayout {name, methods, impls: []}
+}
+fn lirTestInterfaceMethod(name: String, slot: Int) -> MirInterfaceMethod {
+    MirInterfaceMethod {name, slot}
+}
 fn testLirProtoLowerMirConstReturnOstyOwned() {
     let mut fn_ = lirTestFunction("answer", "Int")
     let entry = lirTestEntryBlock(fn_)
@@ -440,6 +446,17 @@ fn testLirProtoLowerMirStructLiteralAndFieldReadOstyOwned() {
     let mut m = lirTestModule([fn_])
     m.layouts.structs.push(lirTestStructLayout("Point", [lirTestField(0, "x", "Int"), lirTestField(1, "y", "Int")]))
     assertLirLoweredContains(m, ["%Point = type \{ i64, i64 \}", "insertvalue %Point undef, i64 1, 0", "insertvalue %Point", "extractvalue %Point", "add i64"])
+}
+fn testLirProtoLowerMirInterfaceParamLayoutOstyOwned() {
+    let mut fn_ = lirTestFunction("touch", "Unit")
+    let sized = lirTestAddParam(fn_, "s", "Sized")
+    let copy = lirTestAddLocal(fn_, "copy", "Sized")
+    let entry = lirTestEntryBlock(fn_)
+    mirFunctionAppend(fn_, entry, mirAssignInstr(mirPlace(copy), mirRVUse(mirOperandCopy(mirPlace(sized), "Sized")), mirNoSpan()))
+    mirFunctionTerminate(fn_, entry, mirReturnTerm(mirNoSpan()))
+    let mut m = lirTestModule([fn_])
+    m.layouts.interfaces.push(lirTestInterfaceLayout("Sized", [lirTestInterfaceMethod("size", 0)]))
+    assertLirLoweredContains(m, ["%osty.iface = type \{ ptr, ptr \}", "define void @touch(%osty.iface", "store %osty.iface", "ret void"])
 }
 fn testLirProtoLowerMirNestedProjectedAssignOstyOwned() {
     let mut fn_ = lirTestFunction("update", "Int")

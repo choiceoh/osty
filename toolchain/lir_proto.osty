@@ -1764,6 +1764,10 @@ fn lirLowerMirType_module(out: LirModule, mir: MirModule, name: String, path: St
     if lirIsRefBuiltinTypeName(name) {
         return lirPtrType()
     }
+    if lirMirModuleHasInterfaceLayout(mir, name) {
+        lirDeclareIfaceType(out)
+        return lirAggregateType(lirIfaceTypeName())
+    }
     if lirIsOptionTypeName(name) || lirIsResultTypeName(name) {
         let typeName = "%" + lirMangleAlgebraicTypeName(name)
         let bodyText = lirAlgebraicAggregateBody_module(out, mir, name)
@@ -1781,11 +1785,30 @@ fn lirLowerMirType_module(out: LirModule, mir: MirModule, name: String, path: St
     // reading the source. Each "no match" branch above is a candidate; we
     // report the cumulative attempt + struct-layout coverage size.
     let layoutCount = mir.layouts.structs.len()
+    let interfaceCount = mir.layouts.interfaces.len()
     let trace = "primitive miss; ref-builtin miss; option/result miss; "
+        + lirIntToString(interfaceCount) + " interface layout(s) checked, no match; "
         + lirIntToString(layoutCount) + " struct layout(s) checked, no match"
     diags.push(lirDiagnosticError(LirDiagUnsupported,
         "unsupported module type `" + name + "` (" + trace + ")", path))
     lirTypeInvalid()
+}
+
+fn lirIfaceTypeName() -> String {
+    "%osty.iface"
+}
+
+fn lirDeclareIfaceType(out: LirModule) {
+    lirModuleDeclareTypeDef(out, lirTypeDef(lirIfaceTypeName(), "\{ ptr, ptr \}"))
+}
+
+fn lirMirModuleHasInterfaceLayout(mir: MirModule, name: String) -> Bool {
+    for layout in mir.layouts.interfaces {
+        if lirMirInterfaceLayoutMatches(layout, name) {
+            return true
+        }
+    }
+    false
 }
 
 // `lirAlgebraicAggregateBody_module` builds the LLVM type body string for an
@@ -6107,6 +6130,12 @@ fn lirLowerMirType(l: LirMirFunctionLowerer, name: String) -> LirType {
     if lirIsRefBuiltinTypeName(name) {
         return lirPtrType()
     }
+    for layout in l.mirModule.layouts.interfaces {
+        if lirMirInterfaceLayoutMatches(layout, name) {
+            lirDeclareIfaceType(l.out)
+            return lirAggregateType(lirIfaceTypeName())
+        }
+    }
     if lirIsOptionTypeName(name) || lirIsResultTypeName(name) {
         let typeName = "%" + lirMangleAlgebraicTypeName(name)
         lirModuleDeclareTypeDef(l.out, lirTypeDef(typeName, "\{ i64, i64 \}"))
@@ -6201,6 +6230,15 @@ fn lirMirTupleLayoutMatches(layout: MirTupleLayout, name: String) -> Bool {
         return true
     }
     if layout.mangled != "" && "%" + layout.mangled == name {
+        return true
+    }
+    false
+}
+fn lirMirInterfaceLayoutMatches(layout: MirInterfaceLayout, name: String) -> Bool {
+    if layout.name == name {
+        return true
+    }
+    if layout.name != "" && "%" + layout.name == name {
         return true
     }
     false
