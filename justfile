@@ -189,7 +189,7 @@ diag test=".":
     go test {{test_flags}} ./internal/diag -run '{{test}}' -v
 
 repair-check: build
-    git ls-files '*.osty' | grep -vE '^(testdata/spec/negative/|internal/airepair/testdata/corpus/[^/]+\.input\.osty$)' | xargs -n 1 -P "${REPAIR_CHECK_PARALLEL:-4}" -I {} bash -c '{{bin}} repair --check "$1" || true' _ {}
+    bash scripts/repair-check.sh {{bin}}
 
 # Capture residual airepair cases into tmp/airepair-cases/ and rewrite
 # todo-airepair.md with the ranked learning backlog. Non-blocking.
