@@ -9,10 +9,7 @@
 
 | Status | Key ID (first 16 hex) | Full hex (64 chars) | Activated | Notes |
 |---|---|---|---|---|
-| _none_ | _no signing key configured yet_ | — | — | warn-only mode (A6 default) |
-
-The first row will be replaced once a maintainer runs the bootstrap
-key generation flow (see [`signing-rotation.md`](signing-rotation.md)).
+| **active** | `47a2fccb88dee314` | `47a2fccb88dee314ec7b32d16b223f20c0108de7812427065c2f29c7d65fa2e3` | 2026-05-08 | Initial production key. Generated alongside the first-publish playbook run. |
 
 ## 2. Verification — what fresh clones do
 
