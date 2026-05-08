@@ -9,43 +9,68 @@
 // `walk` returns sorted descendants; directory paths end in `/`.
 // `glob` supports `*`, `?`, and `**` over slash-normalized paths.
 // `watch` is a polling snapshot: each row is `kind<TAB>size<TAB>mtime<TAB>path`.
-
+pub struct HostFs {
+    pub root: String,
+    pub fn read(self, path: String) -> Result<Bytes, Error> {
+        read(path)
+    }
+    pub fn readToString(self, path: String) -> Result<String, Error> {
+        readToString(path)
+    }
+    pub fn write(self, path: String, contents: Bytes) -> Result<(), Error> {
+        write(path, contents)
+    }
+    pub fn writeString(self, path: String, contents: String) -> Result<(), Error> {
+        writeString(path, contents)
+    }
+    pub fn exists(self, path: String) -> Bool {
+        exists(path)
+    }
+    pub fn walk(self, root: String) -> Result<List<String>, Error> {
+        walk(root)
+    }
+    pub fn glob(self, pattern: String) -> Result<List<String>, Error> {
+        glob(pattern)
+    }
+    pub fn create(self, path: String) -> Result<(), Error> {
+        create(path)
+    }
+    pub fn remove(self, path: String) -> Result<(), Error> {
+        remove(path)
+    }
+    pub fn rename(self, from: String, to: String) -> Result<(), Error> {
+        rename(from, to)
+    }
+    pub fn copy(self, from: String, to: String) -> Result<(), Error> {
+        copy(from, to)
+    }
+    pub fn mkdir(self, path: String) -> Result<(), Error> {
+        mkdir(path)
+    }
+    pub fn mkdirAll(self, path: String) -> Result<(), Error> {
+        mkdirAll(path)
+    }
+}
+pub fn host() -> HostFs {
+    HostFs {root: ""}
+}
 pub fn read(path: String) -> Result<Bytes, Error>
-
 pub fn readToString(path: String) -> Result<String, Error>
-
 pub fn write(path: String, contents: Bytes) -> Result<(), Error>
-
 pub fn writeString(path: String, contents: String) -> Result<(), Error>
-
 pub fn exists(path: String) -> Bool
-
 pub fn walk(root: String) -> Result<List<String>, Error>
-
 pub fn glob(pattern: String) -> Result<List<String>, Error>
-
 pub fn watch(root: String) -> Result<List<String>, Error>
-
 pub fn create(path: String) -> Result<(), Error>
-
 pub fn remove(path: String) -> Result<(), Error>
-
 pub fn rename(from: String, to: String) -> Result<(), Error>
-
 pub fn copy(from: String, to: String) -> Result<(), Error>
-
 pub fn copyDir(from: String, to: String) -> Result<(), Error>
-
 pub fn mkdir(path: String) -> Result<(), Error>
-
 pub fn mkdirAll(path: String) -> Result<(), Error>
-
 pub fn atomicWrite(path: String, contents: Bytes) -> Result<(), Error>
-
 pub fn atomicWriteString(path: String, contents: String) -> Result<(), Error>
-
 pub fn lockFile(path: String) -> Result<(), Error>
-
 pub fn hashFile(path: String) -> Result<String, Error>
-
 pub fn diffFiles(left: String, right: String) -> Result<String, Error>

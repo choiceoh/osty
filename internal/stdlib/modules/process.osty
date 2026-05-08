@@ -10,37 +10,56 @@
 // can receive stdin text, capture stdout/stderr, and compose shell
 // pipelines where each stage's stdout streams into the next stage's
 // stdin.
-
 use std.error
 use std.os
-
+pub struct HostProcess {
+    pub profile: String,
+    pub fn pid(self) -> Int {
+        os.pid()
+    }
+    pub fn hostname(self) -> Result<String, Error> {
+        os.hostname()
+    }
+    pub fn command(self, program: String) -> ProcessCommand {
+        command(program)
+    }
+    pub fn commandArgs(self, program: String, args: List<String>) -> ProcessCommand {
+        commandArgs(program, args)
+    }
+    pub fn shell(self, line: String) -> ProcessCommand {
+        shell(line)
+    }
+    pub fn run(self, command: ProcessCommand) -> Result<ProcessOutput, Error> {
+        command.run()
+    }
+    pub fn exec(self, command: String, args: List<String>) -> Result<os.Output, Error> {
+        os.exec(command, args)
+    }
+}
+pub fn host() -> HostProcess {
+    HostProcess {profile: "host"}
+}
 pub fn abort(msg: String) -> Never
-
 pub fn unreachable() -> Never
-
 pub fn todo(msg: String) -> Never
-
 pub fn ignoreError<T, E>(result: Result<T, E>) {
     let _ = result
 }
-
 pub fn logError<T>(result: Result<T, Error>, msg: String) {
     match result {
-        Ok(_) -> {},
+        Ok(_) -> {
+        },
         Err(err) -> eprintln("{msg}: {err.message()}"),
     }
 }
-
 pub struct ProcessOutput {
     pub exitCode: Int,
     pub stdout: String,
     pub stderr: String,
     pub timedOut: Bool,
-
     pub fn ok(self) -> Bool {
         self.exitCode == 0 && !self.timedOut
     }
-
     pub fn check(self) -> Result<ProcessOutput, Error> {
         if self.ok() {
             Ok(self)
@@ -51,7 +70,6 @@ pub struct ProcessOutput {
         }
     }
 }
-
 pub struct ProcessCommand {
     pub program: String,
     pub args: List<String>,
@@ -61,47 +79,38 @@ pub struct ProcessCommand {
     pub useShell: Bool,
     pub stdin: String,
     pub hasStdin: Bool,
-
     pub fn arg(mut self, value: String) -> ProcessCommand {
         self.args.push(value)
         self
     }
-
     pub fn withArgs(mut self, values: List<String>) -> ProcessCommand {
         self.args = values
         self
     }
-
     pub fn withCwd(mut self, path: String) -> ProcessCommand {
         self.cwd = path
         self
     }
-
     pub fn withEnv(mut self, name: String, value: String) -> ProcessCommand {
         self.env.insert(name, value)
         self
     }
-
     pub fn withEnvMap(mut self, values: Map<String, String>) -> ProcessCommand {
         self.env = values
         self
     }
-
     pub fn withTimeoutMillis(mut self, millis: Int) -> ProcessCommand {
         self.timeoutMillis = millis
         self
     }
-
     pub fn withStdin(mut self, text: String) -> ProcessCommand {
         self.stdin = text
         self.hasStdin = true
         self
     }
-
     pub fn pipe(self, next: ProcessCommand) -> ProcessPipeline {
         pipe(self, next)
     }
-
     pub fn run(self) -> Result<ProcessOutput, Error> {
         if self.hasStdin && self.useShell {
             return fromOs(os.execShellInputWith(self.program, self.stdin, self.cwd, self.env, self.timeoutMillis))
@@ -115,7 +124,6 @@ pub struct ProcessCommand {
             fromOs(os.execWith(self.program, self.args, self.cwd, self.env, self.timeoutMillis))
         }
     }
-
     pub fn shellLine(self) -> String {
         if self.useShell {
             return self.program
@@ -123,7 +131,6 @@ pub struct ProcessCommand {
         joinEscaped(self.program, self.args)
     }
 }
-
 pub struct ProcessPipeline {
     pub stages: List<ProcessCommand>,
     pub cwd: String,
@@ -131,42 +138,34 @@ pub struct ProcessPipeline {
     pub timeoutMillis: Int,
     pub stdin: String,
     pub hasStdin: Bool,
-
     pub fn stage(mut self, next: ProcessCommand) -> ProcessPipeline {
         self.stages.push(next)
         self
     }
-
     pub fn withCwd(mut self, path: String) -> ProcessPipeline {
         self.cwd = path
         self
     }
-
     pub fn withEnv(mut self, name: String, value: String) -> ProcessPipeline {
         self.env.insert(name, value)
         self
     }
-
     pub fn withEnvMap(mut self, values: Map<String, String>) -> ProcessPipeline {
         self.env = values
         self
     }
-
     pub fn withTimeoutMillis(mut self, millis: Int) -> ProcessPipeline {
         self.timeoutMillis = millis
         self
     }
-
     pub fn withStdin(mut self, text: String) -> ProcessPipeline {
         self.stdin = text
         self.hasStdin = true
         self
     }
-
     pub fn shellLine(self) -> Result<String, Error> {
         renderPipeline(self.stages)
     }
-
     pub fn run(self) -> Result<ProcessOutput, Error> {
         let line = renderPipeline(self.stages)?
         if self.hasStdin {
@@ -176,60 +175,27 @@ pub struct ProcessPipeline {
         }
     }
 }
-
 pub fn command(program: String) -> ProcessCommand {
-    ProcessCommand {
-        program: program,
-        args: [],
-        cwd: "",
-        env: {:},
-        timeoutMillis: 0,
-        useShell: false,
-        stdin: "",
-        hasStdin: false,
-    }
+    ProcessCommand {program: program, args: [], cwd: "", env: {:}, timeoutMillis: 0, useShell: false, stdin: "", hasStdin: false}
 }
-
 pub fn commandArgs(program: String, args: List<String>) -> ProcessCommand {
     command(program).withArgs(args)
 }
-
 pub fn shell(line: String) -> ProcessCommand {
-    ProcessCommand {
-        program: line,
-        args: [],
-        cwd: "",
-        env: {:},
-        timeoutMillis: 0,
-        useShell: true,
-        stdin: "",
-        hasStdin: false,
-    }
+    ProcessCommand {program: line, args: [], cwd: "", env: {:}, timeoutMillis: 0, useShell: true, stdin: "", hasStdin: false}
 }
-
 pub fn pipeline(stages: List<ProcessCommand>) -> ProcessPipeline {
-    ProcessPipeline {
-        stages: stages,
-        cwd: "",
-        env: {:},
-        timeoutMillis: 0,
-        stdin: "",
-        hasStdin: false,
-    }
+    ProcessPipeline {stages: stages, cwd: "", env: {:}, timeoutMillis: 0, stdin: "", hasStdin: false}
 }
-
 pub fn pipe(left: ProcessCommand, right: ProcessCommand) -> ProcessPipeline {
     pipeline([left, right])
 }
-
 pub fn run(program: String, args: List<String> = []) -> Result<ProcessOutput, Error> {
     commandArgs(program, args).run()
 }
-
 pub fn runShell(line: String) -> Result<ProcessOutput, Error> {
     shell(line).run()
 }
-
 pub fn shellEscape(arg: String) -> String {
     if arg.isEmpty() {
         return "''"
@@ -244,7 +210,6 @@ pub fn shellEscape(arg: String) -> String {
     }
     "{out}'"
 }
-
 pub fn joinEscaped(program: String, args: List<String>) -> String {
     let mut parts = [shellEscape(program)]
     for arg in args {
@@ -252,7 +217,6 @@ pub fn joinEscaped(program: String, args: List<String>) -> String {
     }
     " ".join(parts)
 }
-
 fn renderPipeline(stages: List<ProcessCommand>) -> Result<String, Error> {
     if stages.len() == 0 {
         return Err(error.new("process: pipeline requires at least one stage"))
@@ -263,15 +227,9 @@ fn renderPipeline(stages: List<ProcessCommand>) -> Result<String, Error> {
     }
     Ok(" | ".join(parts))
 }
-
 fn fromOs(result: Result<os.ExecOutput, Error>) -> Result<ProcessOutput, Error> {
     match result {
-        Ok(out) -> Ok(ProcessOutput {
-            exitCode: out.exitCode,
-            stdout: out.stdout,
-            stderr: out.stderr,
-            timedOut: out.timedOut,
-        }),
+        Ok(out) -> Ok(ProcessOutput {exitCode: out.exitCode, stdout: out.stdout, stderr: out.stderr, timedOut: out.timedOut}),
         Err(err) -> Err(err),
     }
 }

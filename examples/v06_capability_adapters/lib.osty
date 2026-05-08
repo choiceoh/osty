@@ -1,0 +1,48 @@
+use std.capability as cap
+use std.env as hostenv
+use std.fs as hostfs
+use std.io
+use std.random
+use std.time
+pub struct RuntimeCapabilities {
+    pub clock: time.HostClock,
+    pub rng: random.Rng,
+    pub env: hostenv.HostEnv,
+    pub fs: hostfs.HostFs,
+    pub net: cap.HostNet,
+    pub process: cap.HostProcess,
+    pub console: io.HostConsole,
+}
+pub fn hostRuntime() -> RuntimeCapabilities {
+    RuntimeCapabilities {clock: time.systemClock(), rng: random.host(), env: hostenv.host(), fs: hostfs.host(), net: cap.hostNet(), process: cap.hostProcess(), console: io.console()}
+}
+pub fn capabilitySummary() -> String {
+    let protocols = cap.canonicalNames()
+    let factories = cap.hostFactoryNames()
+    let rewrites = cap.legacyGlobalRewriteRules()
+    "{protocols.len()} protocols; {factories.len()} host factories; {rewrites.len()} rewrite rules"
+}
+pub fn describeRuntime(clock: cap.Clock, rng: cap.Rng, env: cap.Env, fs: cap.Fs, net: cap.Net, process: cap.Process, console: cap.Console) -> String {
+    let _ = clock
+    let _ = rng
+    let _ = env
+    let _ = fs
+    let _ = net
+    let _ = process
+    let _ = console
+    capabilitySummary()
+}
+pub fn hostRuntimeSummary() -> String {
+    let runtime = hostRuntime()
+    describeRuntime(runtime.clock, runtime.rng, runtime.env, runtime.fs, runtime.net, runtime.process, runtime.console)
+}
+pub fn legacyRewriteReport() -> List<String> {
+    let mut out: List<String> = []
+    for rule in cap.legacyGlobalRewriteRules() {
+        out.push("{rule.legacy} -> {rule.replacement} [{rule.capability}]")
+    }
+    out
+}
+pub fn ambientBoundaryFactories() -> List<String> {
+    ["clock = time.systemClock()", "rng = random.host()", "env = env.host()", "fs = fs.host()", "net = capability.hostNet()", "process = capability.hostProcess()", "console = io.console()"]
+}

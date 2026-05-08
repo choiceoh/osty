@@ -46,10 +46,11 @@ rationale.
 | Item | Status | Notes |
 |---|---|---|
 | `Clock` / `Rng` / `Env` / `Fs` / `Net` / `Process` / `Console` interface | **partial** | `std.capability` 에 7 canonical protocol surface 추가. `std.random.Rng.next/nextBytes` alias와 `examples/v06_capabilities` front-end proof 포함. |
+| Host capability adapter factories | **partial** | `time.systemClock`, `random.host`, `env.host`, `fs.host`, `capability.hostNet`, `capability.hostProcess`, `io.console` 를 추가하고 `examples/v06_capability_adapters` 로 front-end/type-check proof 추가. `net.host` / `process.host` bridge factory 는 cross-module migration helper 로 제공. |
 | `#[ambient(...)]` annotation | **planned** | script / main / test entry 에서만 |
 | `#[reproducible_capability]` annotation | **planned** | 사용자 정의 deterministic capability |
 | `--legacy-globals` 호환 모드 | **planned** | v0.6.x 에서만, v0.7 제거 |
-| stdlib `time.*` → `clock.*` migration | **planned** | 100 PR 분량의 stdlib 순회 |
+| stdlib `time.*` → `clock.*` migration | **partial** | migration catalog (`capability.legacyGlobalRewriteRules`) 와 host-boundary factories가 landing. 전역 호출 warning/desugar 는 compiler phase 후속. |
 
 ### Information flow (G37 — Phase 5)
 
