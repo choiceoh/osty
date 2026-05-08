@@ -3,33 +3,31 @@
 This chapter defines Osty v0.6 declaration forms — functions (§3.1),
 variables (§3.2), multiple assignment (§3.3), structs (§3.4) including
 the v0.6 sealed-construct rule (§3.4.5, G40), enums (§3.5), interfaces
-(§3.6), type aliases (§3.7), and annotations (§3.8). Sections §3.10
-through §3.15 specify the v0.6 *hidden-dependency-surface*
-annotations (G36–G46) — `#[spec]` for spec-link traceability,
-`#[reproducible]` for environment-independence, `#[purpose]` /
-`#[example]` / `#[fixture]` for structured intent, `spec { ... }`
-blocks for executable specification, `#[since]` / `#[stability]` /
-`#[match_compat]` for API evolution, and `#[budget]` for performance
-contracts.
+(§3.6), type aliases (§3.7), and annotations (§3.8). Sections §3.11,
+§3.12, and §3.14 specify the v0.6 *hidden-dependency-surface*
+annotations (G36, G39, G42, G44) — `#[reproducible]` for
+environment-independence, `#[purpose]` / `#[example]` / `#[fixture]`
+for structured intent, and `#[since]` / `#[stability]` /
+`#[match_compat]` for API evolution.
 
 The v0.6 design north star (*hidden dependency is forbidden*) is
 realized in this chapter: every external dependency, intent,
 contract, or evolution rule that affects a declaration is expressible
-at the declaration site. The annotation surface in §3.10 – §3.15
-makes that visibility *machine-readable* so that diagnostics
-(§3.10.4 spec link, §7.5 error contract), enforcement (§3.11
-reproducibility, §3.4.5 sealed construct), and tooling (§13.4 `osty
-context`, §13.5 `osty publish`) all share one source of truth.
+at the declaration site. The annotation surface in §3.11, §3.12,
+§3.14 makes that visibility *machine-readable* so that diagnostics
+(§7.5 error contract), enforcement (§3.11 reproducibility, §3.4.5
+sealed construct), and tooling (§13.4 `osty context`, §13.5 `osty
+publish`) all share one source of truth.
 
-The annotation set is finite — 31 compiler-recognized annotations as
+The annotation set is finite — 27 compiler-recognized annotations as
 of v0.6 (§3.8). Three sub-categories sit on top of the underlying
 declaration grammar:
 
 | Category | Annotations | Purpose |
 |---|---|---|
 | **Effect & flow** | `#[ambient]`, `#[reproducible]`, `#[reproducible_capability]`, `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]` | Make capability use, reproducibility scope, and information-flow tags explicit at the declaration boundary. |
-| **Intent & contract** | `#[purpose]`, `#[example]`, `#[fixture]`, `#[spec]`, `spec { }` block, `#[error_contract]`, `#[golden]` | Author-visible, machine-readable record of *what a declaration is for* and *what it must produce*. |
-| **Evolution & budget** | `#[since]`, `#[stability]`, `#[match_compat]`, `#[deprecated]`, `#[budget]` | Promises about API surface stability and performance regression bounds, enforced by `osty publish` and `osty bench --budget`. |
+| **Intent & contract** | `#[purpose]`, `#[example]`, `#[fixture]`, `#[error_contract]`, `#[golden]` | Author-visible, machine-readable record of *what a declaration is for* and *what it must produce*. |
+| **Evolution** | `#[since]`, `#[stability]`, `#[match_compat]`, `#[deprecated]` | Promises about API surface stability, enforced by `osty publish`. |
 
 Declarations without these annotations behave per the underlying
 grammar — the annotations are *opt-in attestations*, not new syntactic
@@ -644,22 +642,24 @@ Stdlib v0.6 sealed types (`Email`, `Url`, `Path`, `SqlIdent`,
 `Duration`, `Uuid`) maintain the contract `parse(value.toString())?
 == Some(value)` for every value the constructor produces. User code
 that defines a sealed type **should** uphold the same round-trip;
-formalizing it via a `spec { law: ... }` clause (§3.13) gives the
-checker a target:
+documenting the law in a doc comment and asserting it in tests
+covers the contract:
 
 ```osty
 #[sealed_construct(parse)]
 pub struct Slug {
     text: String,
 
-    pub fn parse(s: String) -> Slug? {
-        spec {
-            law: result.map(|sl| Slug.parse(sl.toString())) == Some(Some(result))
-        }
-        ...
-    }
+    /// Round-trip: `parse(slug.toString())? == Some(slug)`.
+    pub fn parse(s: String) -> Slug? { ... }
 
     pub fn toString(self) -> String { self.text }
+}
+
+#[test]
+fn test_slug_roundtrip() {
+    let s = Slug.parse("hello-world").unwrap()
+    testing.assertEq(Slug.parse(s.toString()), Some(s))
 }
 ```
 
@@ -1572,26 +1572,19 @@ which keeps the *interactions* between annotations bounded. The table
 below catalogues the meaningful pairings — empty cells mean the
 annotations are orthogonal (no special rule applies).
 
-| Caller annotation | `#[reproducible]` | `#[pure]` | `#[error_contract]` | `#[budget]` | `#[golden]` |
-|---|---|---|---|---|---|
-| `#[ambient]` | rejected (only in entry-point) | rejected | OK | OK | OK |
-| `#[reproducible]` | scope ≤ caller | implied stronger | OK | OK | implicit `#[reproducible]` |
-| `#[pure]` | implies all scopes | (self) | OK | OK | OK |
-| `#[error_contract]` | OK | OK | (only for `Result<_, E>`) | OK | OK |
-| `#[budget(static)]` | OK | OK | OK | (self) | OK |
-| `#[budget(runtime)]` | warned (perf measurement is non-deterministic) | warned | OK | (self) | warned |
-| `#[golden]` | implicit `#[reproducible(scope = "target")]` | OK | OK | OK | (self) |
+| Caller annotation | `#[reproducible]` | `#[pure]` | `#[error_contract]` | `#[golden]` |
+|---|---|---|---|---|
+| `#[ambient]` | rejected (only in entry-point) | rejected | OK | OK |
+| `#[reproducible]` | scope ≤ caller | implied stronger | OK | implicit `#[reproducible]` |
+| `#[pure]` | implies all scopes | (self) | OK | OK |
+| `#[error_contract]` | OK | OK | (only for `Result<_, E>`) | OK |
+| `#[golden]` | implicit `#[reproducible(scope = "target")]` | OK | OK | (self) |
 
 Reading examples:
 
 - `#[ambient(clock)]` + `#[reproducible]`: rejected. `#[ambient]` is
   permitted only on entry-point functions, which are not
   reproducible. `E0782`.
-- `#[golden]` + `#[budget(time_ms = 5)]`: warned. The golden
-  comparison runs in the test harness; mixing it with runtime
-  budget measurement makes the budget signal noisy. The recommended
-  pattern is to keep `#[budget(runtime)]` on the production
-  function and `#[golden]` on the test fixture that drives it.
 - `#[error_contract]` + `#[pure]`: OK. A pure function may return
   `Result<_, E>` and carry an error contract.
 - `#[reproducible(scope = "portable")]` + transitively-called
@@ -1610,125 +1603,19 @@ sequence (top to bottom):
    appears in the slot)
 2. **Intent** — `#[purpose]`
 3. **Examples** — `#[example]` (one or more)
-4. **Spec link** — `#[spec]`
-5. **Error contract** — `#[error_contract]`
-6. **Reproducibility / purity** — `#[reproducible]` / `#[pure]`
-7. **Budget** — `#[budget]`
-8. **Stability / since** — `#[stability]`, `#[since]`, `#[deprecated]`
-9. **Performance hints** — `#[inline]`, `#[hot]` / `#[cold]`,
+4. **Error contract** — `#[error_contract]`
+5. **Reproducibility / purity** — `#[reproducible]` / `#[pure]`
+6. **Stability / since** — `#[stability]`, `#[since]`, `#[deprecated]`
+7. **Performance hints** — `#[inline]`, `#[hot]` / `#[cold]`,
    `#[target_feature]`, `#[noalias]`, `#[parallel]`,
    `#[vectorize]`, `#[unroll]`, `#[no_vectorize]`
-10. **Compatibility** — `#[match_compat]`
-11. **Information flow** — `#[taint]` / `#[sanitizes]` / `#[trusted_declassify]` (function-level)
-12. **Capability marker** — `#[reproducible_capability]` (interfaces)
+8. **Compatibility** — `#[match_compat]`
+9. **Information flow** — `#[taint]` / `#[sanitizes]` / `#[trusted_declassify]` (function-level)
+10. **Capability marker** — `#[reproducible_capability]` (interfaces)
 
 The formatter normalizes to this ordering on save. Authors who
 prefer a different sequence should set `formatter.annotation_order =
 "as-written"` in `osty.toml`.
-
-### 3.10 `#[spec("§X.Y")]` — Spec link (G38)
-
-A declaration may carry `#[spec("§X.Y")]` to register a checked link
-into the language specification. The compiler verifies the target
-markdown anchor exists; missing anchors produce `E0790`. The compiler
-includes the section's lead paragraph in `osty doc` output and LSP
-hover.
-
-```osty
-#[spec("§2.2")]
-fn checkNumericWidening(from: Type, to: Type) -> CheckResult { ... }
-
-#[spec("§10.30.user")]
-pub fn createUser(email: String, db: Db) -> Result<UserId, Error> { ... }
-```
-
-`#[spec]` may be applied to functions, methods, structs, enums, and
-interfaces. Use is encouraged for compiler-internal code
-(`internal/check`, `toolchain/*.osty`) and stdlib modules; user code
-may use it for self-documentation. Osty has no `impl` blocks (§14) —
-methods live in struct / enum bodies, where `#[spec]` applies
-directly.
-
-#### 3.10.1 Anchor resolution
-
-The `§X.Y` form is resolved against the spec markdown corpus (the
-files in `LANG_SPEC_v0.6/`) at compile time. Resolution rules:
-
-1. The argument must be a *string literal* matching the regex
-   `§\d+(\.\d+)*(\.\w+)*` (Unicode `§` is required — `&sect;` /
-   `§` are not accepted).
-2. The trailing path beyond `§X.Y` (e.g. `§10.30.user.create`)
-   names a markdown anchor *under* §10.30 — the resolver looks for
-   `<a id="user-create">` or a heading whose slugified form matches
-   `user-create`.
-3. Missing anchor → `E0790` with the suggested anchor list (the
-   resolver fuzzy-matches and offers up to 3 alternatives).
-4. Moved anchor (the file no longer contains the named heading but
-   the corpus still has the anchor elsewhere) → `W0790` — the
-   diagnostic suggests the new path. Tooling can auto-rewrite via
-   `osty fix --spec-links`.
-
-```osty
-#[spec("§10.30.user.create")]   // resolves to LANG_SPEC_v0.6/10-standard-library/30-...
-                                //   under heading "user.create"
-pub fn createUser(...) -> ... { ... }
-```
-
-#### 3.10.2 Spec link inheritance
-
-A `#[spec]` annotation on a `struct` or `enum` is *not* inherited by
-its methods — each method declares its own link. This is intentional:
-the struct's spec link describes the *type*, while a method's spec
-link points at the specific method's contract. Tools resolve both
-when generating documentation.
-
-```osty
-#[spec("§10.30.user")]
-pub struct User {
-    pub email: Email,
-    ...
-
-    #[spec("§10.30.user.toString")]
-    pub fn toString(self) -> String { ... }
-
-    // No #[spec] — `osty doc` falls back to "see User type spec".
-    pub fn isVerified(self) -> Bool { self.verified }
-}
-```
-
-#### 3.10.3 Spec link in `osty context` JSON
-
-`osty context <symbol> --format=json` emits the resolved spec link
-as a structured object containing the anchor, the file path, the
-heading text, and the lead paragraph (first non-empty paragraph
-after the heading). This lets agents read the spec body without
-fetching and parsing markdown themselves.
-
-```json
-{
-  "spec": {
-    "anchor": "§10.30.user.create",
-    "file": "LANG_SPEC_v0.6/10-standard-library/30-user.md",
-    "heading": "user.create",
-    "lead": "Create a user, validating email format..."
-  }
-}
-```
-
-#### 3.10.4 `#[spec]` and capability surface
-
-A function with `#[spec("§X.Y")]` is *not* implicitly required to
-match the capability surface declared in the spec target. The
-checker verifies the anchor's *existence*, not its semantic
-agreement with the function. Authors who want the stronger
-guarantee can use `#[reproducible]` / `#[error_contract]` /
-`#[budget]` together — those *do* enforce a contract — and use
-`#[spec]` only as a documentation breadcrumb.
-
-A future revision may add `osty validate-spec --strict` (§13.6)
-that runs LLM-driven semantic comparison between the spec text and
-the implementation — that gate is opt-in and not part of the v0.6
-baseline.
 
 ### 3.11 `#[reproducible(scope=...)]` — Determinism contract (G39)
 
@@ -2017,134 +1904,6 @@ declaration: every external dependency, every failure mode, every
 test fixture, every API stability promise — all surfaced explicitly
 at the function's signature.
 
-### 3.13 `spec { ... }` — Executable Spec Block (G43)
-
-A top-level function or method body may begin with a `spec { ... }`
-block stating executable specifications colocated with the implementation. The
-block has no runtime cost — `example:` clauses run as tests under
-`osty test --spec`, while `law:` and `invariant:` clauses are surfaced
-in `osty doc` and LSP hover.
-
-```osty
-fn normalizeEmail(s: String) -> String {
-    spec {
-        example: normalizeEmail(" Alice@EXAMPLE.COM ") == "alice@example.com"
-        example: normalizeEmail("") == ""
-        law: result == result.trim()
-        law: result == result.toLowerCase()
-        invariant: result.indexOf(" ") == -1
-    }
-    s.trim().toLowerCase()
-}
-```
-
-**Clauses.**
-
-| Clause | v0.6 (Phase 3) | v1 (Phase 5) |
-|---|---|---|
-| `example: expr` | Run as test under `osty test --spec`; expected `Bool` (`E0441`) | (same) |
-| `law: expr`, `invariant: expr` | Doc / LSP only; `result` is virtual binding for return value (`E0442`) | (same) |
-| `forall x, y in gen: expr` | Reserved (parser allows; runtime defers) | Auto property test |
-
-The `spec` block must be the top-level function or method body's
-*first* statement (`E0440`). It is not an expression; it produces no
-value. Closure bodies, `if` arms, `match` arms, and nested blocks cannot
-host a `spec` block even when `spec` appears first inside that block.
-
-#### 3.13.1 `result` virtual binding
-
-Inside `law:` and `invariant:` clauses, the identifier `result`
-refers to the function's return value as if it had already been
-computed. The binding is *virtual* — it does not exist at runtime,
-and the clauses themselves are not executed in v0.6 baseline (Phase
-3 runs `example:` only). The checker uses `result` to type-check
-the clause body so authors can reference it without `let result =
-...` boilerplate.
-
-```osty
-fn parseInt(s: String) -> Result<Int, Error> {
-    spec {
-        example: parseInt("42") == Ok(42)
-        example: parseInt("foo").isErr()
-        law: result.isOk() == s.bytes().all(|b| b >= '0' && b <= '9') || s == ""
-        invariant: !result.isOk() || result.unwrap() >= 0 || s.startsWith("-")
-    }
-    ...
-}
-```
-
-`result` is in scope only inside `law:` / `invariant:` clauses.
-Inside `example:` clauses, the function is called explicitly with
-the example's input — there is no implicit `result` because the
-runner needs to know which arguments to pass.
-
-#### 3.13.2 Determinism rules for `example:` clauses
-
-An `example:` clause is run as a test under `osty test --spec`.
-The test harness applies these rules:
-
-1. The clause body must evaluate to `Bool`. Anything else is `E0441`.
-2. The clause is run with the surrounding function's `#[fixture]` set
-   inlined as `let` bindings — every `name` in `#[example(uses =
-   "name")]` is bound to the fixture body's return value.
-3. The clause cannot consult non-deterministic capabilities directly.
-   To exercise `Clock` / `Rng` / `Net` / `Fs`, route through
-   `std.capability.testing.Fake*` via a `#[fixture]`.
-4. Multiple `example:` clauses run independently — each gets a fresh
-   fixture instance, so state mutations don't leak between examples.
-
-```osty
-#[fixture(name = "fakeClock")]
-fn fakeClock() -> Clock {
-    std.capability.testing.FakeClock(epoch_ms = 1_000_000)
-}
-
-fn timestampLine(clock: Clock, msg: String) -> String {
-    spec {
-        example: timestampLine(fakeClock(), "ready") == "1000000:ready"
-    }
-    "{clock.now().toEpochMillis()}:{msg}"
-}
-```
-
-#### 3.13.3 Composing with `#[example]`
-
-`spec { example: }` and `#[example]` are *additive* surfaces, not
-substitutes:
-
-| Surface | Best for |
-|---|---|
-| `spec { example: ... }` (inside body) | Examples that read naturally as code; "the parser accepts these inputs" |
-| `#[example(input = ..., output = ..., uses = ...)]` (annotation) | Machine-readable input/output pairs; consumed by `osty doc` and `osty context` JSON |
-
-A function may carry both. `osty test --spec` runs the spec-block
-clauses; `osty test --example` runs the annotation entries; `osty
-test --spec --example` runs both. They share the same `#[fixture]`
-registry.
-
-#### 3.13.4 Spec block and reproducibility
-
-A spec block does not by itself make its enclosing function
-`#[reproducible]` — that's a separate annotation (§3.11). However,
-spec blocks compose well with reproducibility:
-
-```osty
-#[reproducible(scope = "target")]
-fn merkleRoot(leaves: List<Bytes32>) -> Bytes32 {
-    spec {
-        example: merkleRoot([]) == Bytes32.zero()
-        example: merkleRoot([Bytes32.zero()]).isHashOf(Bytes32.zero())
-        law: result == merkleRoot(leaves)   // determinism
-    }
-    ...
-}
-```
-
-The `law: result == merkleRoot(leaves)` clause is documentation in
-v0.6 baseline; Phase 5 turns it into an enforced property test
-(`forall leaves in gen.list(gen.bytes32(), 16): result ==
-merkleRoot(leaves)`).
-
 ### 3.14 API Evolution — `#[since]`, `#[stability]`, `#[match_compat]` (G44)
 
 Three annotations cooperate to make API versioning a first-class
@@ -2286,139 +2045,10 @@ Authors who follow this pattern get *zero silent fallthroughs* across
 the upgrade — the compiler-enforced fallback in v0.6 anchors the
 behavior, and the explicit handler in v0.7 replaces it.
 
-### 3.15 `#[budget]` — Performance Contract (G46)
-
-A function may declare static and runtime performance budgets.
-
-```osty
-#[budget(allocs = 0, io_calls = 0, stack_depth = 100)]
-fn pureCompute(data: Bytes) -> Bytes32 { ... }
-
-#[budget(time_ms = 5, p99_ms = 20)]
-fn routeRequest(req: Request) -> Response { ... }
-```
-
-**Static keys** (compiler-proven; violation `E0795`):
-
-| Key | Meaning |
-|---|---|
-| `allocs = N` | Maximum GC allocation sites in transitive call graph |
-| `io_calls = N` | Maximum capability-method calls |
-| `stack_depth = N` | Maximum recursive depth |
-| `instructions = N` | LLVM-cost-model estimate |
-
-**Runtime keys** (measured by `osty bench --budget`; violation `W0795`):
-
-| Key | Meaning |
-|---|---|
-| `time_ms = X` | Mean wall-clock time |
-| `p99_ms = X` | p99 wall-clock time |
-
-Static and runtime keys may coexist on the same annotation —
-the compiler partitions them by category.
-
-#### 3.15.1 Static-key proof rules
-
-`allocs = N` is proved by counting allocation sites in the
-function's transitive call graph. The checker walks every callee
-reachable from the function body and sums the worst-case
-allocations per call site. A function calling `List<Int>.append(x)`
-in a loop with bound `n` counts `n` allocations (one per `append`),
-so `#[budget(allocs = 0)]` on such a function is `E0795`.
-
-`io_calls = N` counts capability-method calls. A function that takes
-`Net` and calls `net.connect(...)` once carries `io_calls = 1`. A
-helper that *transitively* calls `net.connect` through 3 wrapper
-functions still counts the single underlying call.
-
-`stack_depth = N` is proved by the maximum simple-cycle path in the
-call graph. Recursive functions can carry `stack_depth = N` only
-when the recursion has a structural bound (e.g. tree height); the
-checker conservatively rejects unbounded recursion under any finite
-budget.
-
-`instructions = N` uses the LLVM IR cost model; the budget is
-matched against the function's lowered IR instruction count. Tight
-loops with `#[unroll]` raise the count; the budget should be set
-based on observed values from `osty bench --instructions`.
-
-#### 3.15.2 Runtime-key measurement
-
-`time_ms` and `p99_ms` are sampled by `osty bench --budget` over a
-large iteration count (default 1000, configurable via
-`--benchtime`). The sampling rules:
-
-- The benchmark warm-up phase (`max(N/10, 100)` iterations) is
-  excluded from the budget check.
-- Wall-clock time uses the monotonic clock; clock skew during the
-  run does not affect the budget.
-- Cancellation paths (`Err(Cancelled { ... })` returned mid-run) are
-  counted as failed iterations; budget violations apply to
-  successful iterations only.
-- A regression of more than 20% over the previous published version
-  promotes `W0795` (warning) to `E0795` (error) on `osty publish`,
-  blocking release until fixed or the budget is intentionally
-  loosened (which itself is a SemVer-relevant change — see §3.14).
-
-#### 3.15.3 Worked budget patterns
-
-**Hot pure helper** — zero alloc, zero IO, bounded depth:
-
-```osty
-#[budget(allocs = 0, io_calls = 0, stack_depth = 1)]
-#[reproducible(scope = "portable")]
-fn xorBytes(a: Bytes, b: Bytes) -> Bytes {
-    let mut out = Bytes.zeros(a.len())
-    for i in 0..a.len() {
-        out[i] = a[i] ^ b[i]
-    }
-    out
-}
-```
-
-The single output buffer is the lone allocation; `Bytes.zeros` is a
-single allocation site. Adjusting to `allocs = 1` reflects the
-honest cost.
-
-**HTTP handler** — bounded time, bounded p99:
-
-```osty
-#[budget(time_ms = 5, p99_ms = 20)]
-fn routeUserLookup(req: HttpRequest, db: Db) -> Result<HttpResponse, Error> {
-    let id = req.queryParam("id") ?? ""
-    match db.queryOne::<User>("SELECT * FROM users WHERE id = ?", [id])? {
-        Some(u) -> Ok(http.okJson(u)),
-        None -> Ok(http.notFound("")),
-    }
-}
-```
-
-`time_ms = 5` says the *mean* response is under 5ms; `p99_ms = 20`
-says even the slowest 1% stays under 20ms. The benchmark drives
-the function with synthetic input under `osty bench --budget`; CI
-fails on regression.
-
-**Combined static + runtime**:
-
-```osty
-#[budget(
-    allocs = 4,
-    io_calls = 1,
-    time_ms = 5,
-    p99_ms = 20,
-)]
-pub fn createUser(email: String, db: Db) -> Result<UserId, UserCreateError> { ... }
-```
-
-The compiler proves `allocs ≤ 4` and `io_calls ≤ 1` at compile
-time; `osty bench --budget` measures `time_ms` and `p99_ms`. Both
-gates run independently — a static violation blocks at `osty
-check`, a runtime violation blocks at `osty publish`.
-
 ### 3.16 Combined v0.6 declaration patterns
 
-이 섹션은 §3.10–§3.15 의 v0.6 어노테이션을 *함께* 사용하는 patterns
-의 carry-forward 사례. 정식 의미는 각 sub-section.
+이 섹션은 §3.11 / §3.12 / §3.14 의 v0.6 어노테이션을 *함께* 사용하는
+patterns 의 carry-forward 사례. 정식 의미는 각 sub-section.
 
 #### 3.16.1 Library function — full v0.6 surface
 

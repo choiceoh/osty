@@ -30,21 +30,17 @@ A shebang is recognized **only at byte offset 0** of the source file and
 **only once**. Any `#` appearing elsewhere is the start of an annotation
 (§1.9) or, in any other context, a lex error.
 
-### 1.2 Keywords (18)
+### 1.2 Keywords (17)
 
 ```
 fn  struct  enum  interface  type
 let  mut  pub
 if  else  match
-for  while  break  continue  return
+for  break  continue  return
 use  defer
 ```
 
 These are reserved and may not be used as identifiers.
-
-`while` (G49) is reserved. `while cond { body }` is equivalent in
-lowering and meaning to `for cond { body }` — provided as ergonomics
-for callers who expect a distinct conditional-loop keyword.
 
 ### 1.3 Contextual Identifiers
 
@@ -59,12 +55,6 @@ The following have special meaning in context but are not reserved words:
 - `loop` — `loop { ... }` expression head (§4.4.1)
 - `const` — `const fn` declaration prefix (§3.1.1)
 - `by` — range step marker in range expressions (§4.4)
-- `spec` — spec block opener at function-body first-statement position
-  (§3.13). G43.
-- `example`, `law`, `invariant` — clause keywords inside `spec { ... }`
-  (§3.13). G43.
-- `forall` — *(reserved for v1, Phase 5)* property-test clause keyword
-  inside `spec { ... }` (§3.13.3).
 
 ### 1.4 Identifiers
 
@@ -534,30 +524,17 @@ position, or with arguments of the wrong type, is a compile error.
 
 #### 1.10.1 Reserved keyword 변경
 
-v0.5 → v0.6 에서 reserved keyword 가 17 → 18 로 +1 — `while` (G49).
-`while cond { body }` 와 `for cond { body }` 는 *동의어* — 두 form
-모두 같은 IR 로 lower (§4.4).
-
-| v0.5 | v0.6 | 변경 |
-|---|---|---|
-| 17 reserved | 18 reserved | +`while` |
+v0.5 → v0.6 에서 reserved keyword 가 17 → 17 로 *변경 없음*.
 
 #### 1.10.2 Contextual keyword 변경
 
 v0.5 의 contextual identifier set (`self`, `Self`, `true`, `false`,
-`Some`, `None`, `Ok`, `Err`, `loop`, `const`, `by`) 위에 v0.6 은
-4 추가 — `spec`, `example`, `law`, `invariant` (G43, §3.13).
-
-`spec` 은 top-level `fn` / method body 의 첫 statement 위치에서만
-keyword. `example`, `law`, `invariant` 는 *spec block 내부* 에서만
-keyword. 그 외 위치 (변수 이름, struct field 이름) 에서는 식별자.
-
-`forall` 은 v1 (Phase 5) 단계에서 추가 예정 — v0.6.0 baseline 에는
-없음.
+`Some`, `None`, `Ok`, `Err`, `loop`, `const`, `by`) 가 v0.6 에서도
+변경 없음.
 
 #### 1.10.3 Annotation set 변경
 
-v0.5 의 11 fixed annotation 위에 v0.6 은 20 신규 annotation 추가.
+v0.5 의 11 fixed annotation 위에 v0.6 은 16 신규 annotation 추가.
 모든 v0.6 annotation 의 합법 위치 표는 `00-revision.md §7.6` 가
 권위.
 
@@ -565,14 +542,12 @@ v0.5 의 11 fixed annotation 위에 v0.6 은 20 신규 annotation 추가.
 |---|---|
 | Capabilities (G36) | `#[ambient]`, `#[reproducible_capability]` |
 | Information flow (G37) | `#[taint]`, `#[sanitizes]`, `#[trusted_declassify]`, `#[taint_field]` (parameter `#[requires]` 는 v0.5 reuse) |
-| Spec link (G38) | `#[spec]` |
 | Reproducibility (G39) | `#[reproducible]` |
 | Sealed construct (G40) | `#[sealed_construct]`, `#[trusted_construct]`, `#[test_construct]` |
 | Error contract (G41) | `#[error_contract]` |
 | Structured intent (G42) | `#[purpose]`, `#[example]`, `#[fixture]` |
 | API evolution (G44) | `#[since]`, `#[stability]`, `#[match_compat]` |
 | Golden tests (G45) | `#[golden]` |
-| Performance (G46) | `#[budget]` |
 
 annotation 인자는 v0.5 와 동일 — *literal 만* (string / int / bool /
 ident / `key = literal`). expression 인자 불가.
@@ -580,26 +555,19 @@ ident / `key = literal`). expression 인자 불가.
 #### 1.10.4 Lexer token 변경
 
 v0.5 에서 v0.6 으로 *새 token kind 0 추가*. 모든 v0.6 신규 syntax
-(spec block / parameter-position annotation / capability parameter)
-는 기존 token 으로 표현 가능.
+(parameter-position annotation / capability parameter) 는 기존
+token 으로 표현 가능.
 
 #### 1.10.5 ASI 영향
 
-`while` keyword 추가는 `for` / `loop` 와 동일한 ASI suppression
-패턴. `while cond { body }` 는 `if cond { body }` 와 같은 token
-flow 로 처리.
-
-`spec { }` block 은 top-level `fn` / method body 의 *첫 statement
-위치* 에서 lex — `fn foo() {` 다음 `spec` 식별자 발견 시 spec block
-시작 token 으로 승격. closure body, `if` arm, `match` arm, nested block
-안에서는 일반 식별자.
+v0.6 추가 surface 는 ASI 규칙에 영향 없음.
 
 #### 1.10.6 Diagnostic 영향
 
 v0.6 lexical 영역에 *신규 진단 코드 0* — 모든 신규 surface 가 기존
 band 의 코드 재사용 또는 §3.8 / §20 / §21 의 의미론 진단으로 처리.
 
-`E0400` (CodeUnknownAnnotation) 는 v0.6 의 20 추가 annotation 모두
+`E0400` (CodeUnknownAnnotation) 는 v0.6 의 16 추가 annotation 모두
 recognize — `internal/ast/ast.go::annotationRules` 와
 `toolchain/resolve.osty::srAnnotAllowedTargets`, checked-in selfhost
 generated mirror 가 sync.

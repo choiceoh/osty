@@ -5,10 +5,8 @@ in `_test.osty` files or as `#[test]`-annotated functions in
 production sources; the runner is `osty test`, with assertions
 provided by `std.testing`. The v0.6 surface adds: declarative golden
 tests via `#[golden]` (§11.5.2, G45) which reuse the v0.5 snapshot
-on-disk format, executable specification clauses through `spec { }`
-blocks (§3.13, G43) which run as tests under `osty test --spec`, and
-the `#[example]` annotation (§3.12, G42) which auto-checks
-`input → output` declarations under `osty test --example`.
+on-disk format, and the `#[example]` annotation (§3.12, G42) which
+auto-checks `input → output` declarations under `osty test --example`.
 
 Test files use the `_test.osty` suffix and live alongside code in the
 same package. Functions whose names begin with lowercase `test` and
@@ -266,37 +264,6 @@ In bench mode:
   flag uses Go-style durations (`500ms`, `2s`, `1m`) and requires
   `--bench`.
 
-#### 11.4.1 `#[budget]` integration
-
-A bench function may target a specific function carrying
-`#[budget(time_ms = X, p99_ms = Y)]` (§3.15). When `osty bench
---budget` is run, the bench harness records the measured `time_ms`
-/ `p99_ms` and compares against the declared budget:
-
-```osty
-#[budget(time_ms = 5, p99_ms = 20)]
-pub fn createUser(email: String, db: Db) -> Result<UserId, Error> { ... }
-
-fn benchCreateUser() {
-    let db = std.capability.testing.FakeDb()
-    testing.benchmark(1000, || {
-        let _ = createUser("alice@example.com", db)?
-        Ok(())
-    })
-}
-```
-
-`osty bench --budget` output:
-
-```
-bench benchCreateUser: avg=2.1ms p99=4.7ms
-budget OK (within 5ms / 20ms).
-```
-
-Regression beyond the manifest's `regression-threshold` (§13.2.1)
-promotes the warning to error and blocks `osty publish`.
-
-#### 11.4.2 Capability fakes inside benchmarks
 
 A benchmark of capability-typed code uses fake instances
 (§11.18.1-7). Fakes are intentionally low-overhead: `FakeClock` /
@@ -806,69 +773,6 @@ fn test_cancel_propagates_through_sleep() {
 
 `FakeClock.sleep()` 은 즉시 반환하지만 `taskGroup` cancel 이 도달
 하면 `Err(Cancelled)` 로 응답.
-
-### 11.10 `spec { }` block as tests
-
-`spec { example: ... }` 절은 `osty test --spec` 모드에서 *자동 등록
-테스트* 가 된다 (G43, §3.13). spec block 의 example 은 `assertEq`
-호출 없이 boolean expression 으로 작성되며, runner 가 결과를 평가.
-
-#### 11.10.1 Example clauses
-
-```osty
-fn normalizeEmail(s: String) -> String {
-    spec {
-        example: normalizeEmail(" Alice@EXAMPLE.COM ") == "alice@example.com"
-        example: normalizeEmail("") == ""
-    }
-    s.trim().toLowerCase()
-}
-```
-
-`osty test --spec` 호출 시 두 example 이 자동 테스트로 등록 — 출력은
-`spec[normalizeEmail#example:1] PASS` 형식.
-
-#### 11.10.2 Law / invariant clauses
-
-```osty
-fn normalizeEmail(s: String) -> String {
-    spec {
-        example: normalizeEmail(" Hi ") == "hi"
-        law: result == result.trim()
-        law: result == result.toLowerCase()
-        invariant: result.indexOf(" ") == -1
-    }
-    s.trim().toLowerCase()
-}
-```
-
-`law:` / `invariant:` 는 v0 (Phase 3) 에선 *문서화 + LSP hover* 만 —
-실행되지 않는다. v1 (Phase 5) 에서 `forall` property test 자동
-생성과 함께 enforcement.
-
-`result` 는 함수 반환값을 가리키는 *virtual binding* — `law:` /
-`invariant:` 안에서만 의미를 가진다.
-
-#### 11.10.3 Spec block 와 일반 test 의 공존
-
-```osty
-fn normalize(s: String) -> String {
-    spec {
-        example: normalize("HI") == "hi"
-        law: result.length() <= s.length()
-    }
-    s.toLowerCase().trim()
-}
-
-// 같은 함수에 일반 test
-#[test]
-fn test_normalize_preserves_alpha() {
-    testing.assertEq(normalize("hello"), "hello")
-}
-```
-
-두 형식 모두 등록 — `spec { example: }` 는 `osty test --spec` 시,
-`#[test]` 는 `osty test` 시 (`--spec` 도 spec example 포함).
 
 ### 11.11 `#[example]` annotation as tests
 
