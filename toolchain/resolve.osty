@@ -2929,6 +2929,8 @@ fn srCheckAnnotationArgs(
     if ann.text == "vectorize" { return srCheckVectorizeArgs(file, ann, result) }
     if ann.text == "target_feature" { return srCheckTargetFeatureArgs(file, ann, result) }
     if ann.text == "noalias" { return srCheckNoaliasArgs(file, ann, result) }
+    // v0.6 G44 — `#[since("X.Y")]` format gate (§3.14.1).
+    if ann.text == "since" { return srCheckSinceArgs(file, ann, result) }
     result
 }
 
@@ -3798,6 +3800,164 @@ fn srPushBadArgHint(
     let mut out = result
     out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0739", message, "", start, end, -1, hint))
     out
+}
+
+fn srPushSinceBadFormat(
+    result: SelfResolveResult,
+    message: String,
+    start: Int,
+    end: Int,
+    hint: String,
+) -> SelfResolveResult {
+    let mut out = result
+    out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0452", message, "", start, end, -1, hint))
+    out
+}
+
+/// srCheckSinceArgs validates `#[since("X.Y")]` (v0.6 G44, §3.14.1).
+/// Accepts exactly one argument: a non-interpolated string literal whose
+/// inner content matches the SemVer-shape regex
+/// `^[0-9]+\.[0-9]+(\.[0-9]+)?(-[A-Za-z0-9.-]+)?$`. Anything else
+/// (interpolated string, integer, identifier, prefix like `"v0.6"`,
+/// wildcard tail like `"0.6.x"`, empty string) yields E0452. Spec
+/// authority: LANG_SPEC_v0.6/00-revision.md §3.14.1.
+fn srCheckSinceArgs(
+    file: AstFile,
+    ann: AstNode,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let argCount = ann.children.len()
+    if argCount == 0 {
+        return srPushSinceBadFormat(
+            result,
+            "`#[since(...)]` requires one SemVer-shaped string literal",
+            ann.start,
+            ann.end,
+            "example: `#[since(\"0.6\")]`, `#[since(\"1.0.0\")]`, or `#[since(\"2.0.0-rc.1\")]`",
+        )
+    }
+    if argCount > 1 {
+        let extra = srAnnotArgView(file, ann.children[1])
+        return srPushSinceBadFormat(
+            result,
+            "`#[since(...)]` accepts exactly one argument",
+            extra.start,
+            extra.end,
+            "remove the extra arguments; only one SemVer string is allowed",
+        )
+    }
+    let view = srAnnotArgView(file, ann.children[0])
+    if view.isFlag || view.key != "" {
+        return srPushSinceBadFormat(
+            result,
+            "`#[since(...)]` takes a positional string literal, not a key/flag",
+            view.start,
+            view.end,
+            "example: `#[since(\"0.6\")]`",
+        )
+    }
+    if view.valueIdx < 0 {
+        return srPushSinceBadFormat(
+            result,
+            "`#[since(...)]` requires a SemVer-shaped string literal",
+            view.start,
+            view.end,
+            "example: `#[since(\"0.6\")]`",
+        )
+    }
+    let valueNode = srAstNode(file, view.valueIdx)
+    if valueNode.kind != AstNStringLit {
+        return srPushSinceBadFormat(
+            result,
+            "`#[since(...)]` argument must be a string literal",
+            view.start,
+            view.end,
+            "example: `#[since(\"0.6\")]`",
+        )
+    }
+    if valueNode.children.len() != 0 {
+        return srPushSinceBadFormat(
+            result,
+            "`#[since(...)]` argument must be a non-interpolated string literal",
+            view.start,
+            view.end,
+            "use a plain literal like `\"0.6\"` — interpolation is not allowed",
+        )
+    }
+    let raw = srStringLitContent(valueNode.text)
+    if !srIsSemVerShape(raw) {
+        return srPushSinceBadFormat(
+            result,
+            "`#[since(\"" + raw + "\")]` is not a SemVer-shape version",
+            view.start,
+            view.end,
+            "accepted shapes: `\"X.Y\"`, `\"X.Y.Z\"`, or `\"X.Y.Z-pre\"` with digit components and an optional `[A-Za-z0-9.-]+` pre-release tail",
+        )
+    }
+    result
+}
+
+/// srIsSemVerShape mirrors the regex
+/// `^[0-9]+\.[0-9]+(\.[0-9]+)?(-[A-Za-z0-9.-]+)?$` used by
+/// `#[since(...)]` (v0.6 §3.14.1). Implemented as a hand-rolled parser
+/// rather than depending on a regex engine — the shape is small and
+/// has fixed positions: digit run, dot, digit run, optional dot+digits,
+/// optional dash+pre-release tail. The pre-release tail must contain
+/// at least one character; allowed tail chars are ASCII letters,
+/// digits, dot, and dash.
+fn srIsSemVerShape(s: String) -> Bool {
+    let chars = s.chars()
+    let n = chars.len()
+    if n == 0 { return false }
+    let mut i = 0
+    // Major: [0-9]+
+    let majorEnd = srSemVerDigitRunEnd(chars, i)
+    if majorEnd == i { return false }
+    i = majorEnd
+    if i >= n { return false }
+    if chars[i] != '.' { return false }
+    i = i + 1
+    // Minor: [0-9]+
+    let minorEnd = srSemVerDigitRunEnd(chars, i)
+    if minorEnd == i { return false }
+    i = minorEnd
+    // Optional patch: \.[0-9]+
+    if i < n && chars[i] == '.' {
+        i = i + 1
+        let patchEnd = srSemVerDigitRunEnd(chars, i)
+        if patchEnd == i { return false }
+        i = patchEnd
+    }
+    // Optional pre-release: -[A-Za-z0-9.-]+
+    if i < n && chars[i] == '-' {
+        i = i + 1
+        if i >= n { return false }
+        for j in i..n {
+            if !srSemVerPreReleaseChar(chars[j]) { return false }
+        }
+        i = n
+    }
+    i == n
+}
+
+fn srSemVerDigitRunEnd(chars: List<Char>, start: Int) -> Int {
+    let n = chars.len()
+    let mut j = start
+    for k in start..n {
+        let c = chars[k]
+        if c < '0' || c > '9' { return j }
+        j = k + 1
+    }
+    j
+}
+
+fn srSemVerPreReleaseChar(c: Char) -> Bool {
+    if c >= '0' && c <= '9' { return true }
+    if c >= 'a' && c <= 'z' { return true }
+    if c >= 'A' && c <= 'Z' { return true }
+    if c == '.' { return true }
+    if c == '-' { return true }
+    false
 }
 
 /// srAnnotIntValue extracts a non-negative integer literal from an

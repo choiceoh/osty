@@ -55656,6 +55656,10 @@ func srCheckAnnotationArgs(file *AstFile, ann *AstNode, target int, result *Self
 		// Osty: /tmp/selfhost_merged.osty:28452:32
 		return srCheckNoaliasArgs(file, ann, result)
 	}
+	// v0.6 G44 — `#[since("X.Y")]` format gate (§3.14.1).
+	if ann.text == "since" {
+		return srCheckSinceArgs(file, ann, result)
+	}
 	return result
 }
 
@@ -56454,6 +56458,169 @@ func srPushBadArgHint(result *SelfResolveResult, message string, start int, end 
 		return struct{}{}
 	}()
 	return out
+}
+
+// srPushSinceBadFormat — v0.6 G44, mirrors toolchain/resolve.osty.
+func srPushSinceBadFormat(result *SelfResolveResult, message string, start int, end int, hint string) *SelfResolveResult {
+	out := result
+	_ = out
+	out.diagnostics = append(out.diagnostics, selfResolveDiagnosticHintAtNode("E0452", message, "", start, end, -1, hint))
+	return out
+}
+
+// srCheckSinceArgs — v0.6 G44 #[since("X.Y")] format gate (§3.14.1).
+// Mirrors toolchain/resolve.osty::srCheckSinceArgs.
+func srCheckSinceArgs(file *AstFile, ann *AstNode, result *SelfResolveResult) *SelfResolveResult {
+	argCount := len(ann.children)
+	if argCount == 0 {
+		return srPushSinceBadFormat(
+			result,
+			"`#[since(...)]` requires one SemVer-shaped string literal",
+			ann.start,
+			ann.end,
+			"example: `#[since(\"0.6\")]`, `#[since(\"1.0.0\")]`, or `#[since(\"2.0.0-rc.1\")]`",
+		)
+	}
+	if argCount > 1 {
+		extra := srAnnotArgView(file, ann.children[1])
+		return srPushSinceBadFormat(
+			result,
+			"`#[since(...)]` accepts exactly one argument",
+			extra.start,
+			extra.end,
+			"remove the extra arguments; only one SemVer string is allowed",
+		)
+	}
+	view := srAnnotArgView(file, ann.children[0])
+	if view.isFlag || view.key != "" {
+		return srPushSinceBadFormat(
+			result,
+			"`#[since(...)]` takes a positional string literal, not a key/flag",
+			view.start,
+			view.end,
+			"example: `#[since(\"0.6\")]`",
+		)
+	}
+	if view.valueIdx < 0 {
+		return srPushSinceBadFormat(
+			result,
+			"`#[since(...)]` requires a SemVer-shaped string literal",
+			view.start,
+			view.end,
+			"example: `#[since(\"0.6\")]`",
+		)
+	}
+	valueNode := srAstNode(file, view.valueIdx)
+	if !ostyEqual(valueNode.kind, AstNodeKind(&AstNodeKind_AstNStringLit{})) {
+		return srPushSinceBadFormat(
+			result,
+			"`#[since(...)]` argument must be a string literal",
+			view.start,
+			view.end,
+			"example: `#[since(\"0.6\")]`",
+		)
+	}
+	if len(valueNode.children) != 0 {
+		return srPushSinceBadFormat(
+			result,
+			"`#[since(...)]` argument must be a non-interpolated string literal",
+			view.start,
+			view.end,
+			"use a plain literal like `\"0.6\"` — interpolation is not allowed",
+		)
+	}
+	raw := srStringLitContent(valueNode.text)
+	if !srIsSemVerShape(raw) {
+		return srPushSinceBadFormat(
+			result,
+			"`#[since(\""+raw+"\")]` is not a SemVer-shape version",
+			view.start,
+			view.end,
+			"accepted shapes: `\"X.Y\"`, `\"X.Y.Z\"`, or `\"X.Y.Z-pre\"` with digit components and an optional `[A-Za-z0-9.-]+` pre-release tail",
+		)
+	}
+	return result
+}
+
+// srIsSemVerShape mirrors toolchain/resolve.osty's hand-rolled
+// implementation of `^[0-9]+\.[0-9]+(\.[0-9]+)?(-[A-Za-z0-9.-]+)?$`.
+func srIsSemVerShape(s string) bool {
+	chars := []rune(s)
+	n := len(chars)
+	if n == 0 {
+		return false
+	}
+	i := 0
+	majorEnd := srSemVerDigitRunEnd(chars, i)
+	if majorEnd == i {
+		return false
+	}
+	i = majorEnd
+	if i >= n {
+		return false
+	}
+	if chars[i] != '.' {
+		return false
+	}
+	i = i + 1
+	minorEnd := srSemVerDigitRunEnd(chars, i)
+	if minorEnd == i {
+		return false
+	}
+	i = minorEnd
+	if i < n && chars[i] == '.' {
+		i = i + 1
+		patchEnd := srSemVerDigitRunEnd(chars, i)
+		if patchEnd == i {
+			return false
+		}
+		i = patchEnd
+	}
+	if i < n && chars[i] == '-' {
+		i = i + 1
+		if i >= n {
+			return false
+		}
+		for j := i; j < n; j++ {
+			if !srSemVerPreReleaseChar(chars[j]) {
+				return false
+			}
+		}
+		i = n
+	}
+	return i == n
+}
+
+func srSemVerDigitRunEnd(chars []rune, start int) int {
+	n := len(chars)
+	j := start
+	for k := start; k < n; k++ {
+		c := chars[k]
+		if c < '0' || c > '9' {
+			return j
+		}
+		j = k + 1
+	}
+	return j
+}
+
+func srSemVerPreReleaseChar(c rune) bool {
+	if c >= '0' && c <= '9' {
+		return true
+	}
+	if c >= 'a' && c <= 'z' {
+		return true
+	}
+	if c >= 'A' && c <= 'Z' {
+		return true
+	}
+	if c == '.' {
+		return true
+	}
+	if c == '-' {
+		return true
+	}
+	return false
 }
 
 // Osty: /tmp/selfhost_merged.osty:29191:1
