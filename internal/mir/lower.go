@@ -3693,11 +3693,17 @@ func (bs *bodyState) lowerExprToRValue(e ir.Expr, hint Type) RValue {
 		return bs.lowerVariantLit(x, hint)
 	case *ir.RangeLit:
 		// Range values — unsupported in value position for MIR stage 1.
-		// Surface the source span so toolchain authors can find the
-		// blocking site quickly; see docs/osty_self_b2_1_audit.md for
-		// the in-progress range-value lowering plan.
+		// Surface the source span + enclosing function so toolchain
+		// authors can find the blocking site quickly; see
+		// docs/osty_self_b2_1_audit.md for the in-progress range-value
+		// lowering plan.
 		span := x.At()
-		bs.l.noteIssue("range literal in value position not lowered to MIR (span %d-%d)", span.Start.Offset, span.End.Offset)
+		fnName := ""
+		if bs.fn != nil {
+			fnName = bs.fn.Name
+		}
+		bs.l.noteIssue("range literal in value position not lowered to MIR (fn %q, span line %d:%d-%d:%d, offset %d-%d)",
+			fnName, span.Start.Line, span.Start.Column, span.End.Line, span.End.Column, span.Start.Offset, span.End.Offset)
 		return &UseRV{Op: &ConstOp{Const: &UnitConst{}, T: TUnit}}
 	case *ir.Closure:
 		return bs.lowerClosure(x, hint)
