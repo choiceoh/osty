@@ -254,6 +254,10 @@ var annotationRules = map[string]AnnotationTarget{
 	// tracking surface. Targets are widened across function declaration,
 	// parameter, struct field (per `#[taint]`), and method positions to
 	// match the rule table in 00-revision.md §7.6.
+	//
+	// `#[taint]` on a struct field type covers field-level narrow tracking;
+	// the previously separate `#[taint_field]` annotation was removed in a
+	// pre-release amendment (SPEC_GAPS.md "Pre-release amendments" cut B).
 	"taint":     TargetTopLevelDecl | TargetMethod | TargetStructField,
 	"sanitizes": TargetTopLevelDecl | TargetMethod,
 	// `#[requires("tag")]` on parameters (G37 sink) reuses the v0.5
@@ -264,7 +268,6 @@ var annotationRules = map[string]AnnotationTarget{
 	// the stdlib trait-bound use; parameter annotations bypass that
 	// table since they live at a different syntactic position.
 	"trusted_declassify": TargetTopLevelDecl | TargetMethod,
-	"taint_field":        TargetStructField,
 
 	// v0.6 G38 — Spec link (LANG_SPEC_v0.6/03-declarations.md §3.10).
 	// `#[spec("§X.Y")]` registers a checked link into the spec corpus.

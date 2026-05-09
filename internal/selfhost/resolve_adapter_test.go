@@ -1017,7 +1017,7 @@ func TestV06SemanticAnnotationsRecognized(t *testing.T) {
 		{"ambient", "#[ambient(clock)]\nfn main() {}\n"},
 		{"reproducible_capability", "#[reproducible_capability]\ninterface HashCap {\n    #[reproducible]\n    fn hash(self, value: String) -> String\n}\n"},
 		{"taint", "#[taint(\"user_input\")]\nfn source() -> String { \"\" }\n"},
-		{"taint_field", "pub struct Form {\n    #[taint_field(\"user_input\")]\n    pub name: String,\n}\n"},
+		{"taint_on_field", "pub struct Form {\n    #[taint(\"user_input\")]\n    pub name: String,\n}\n"},
 		{"sanitizes", "#[sanitizes(\"user_input\", into = \"trusted\")]\nfn clean(value: String) -> String { value }\n"},
 		{"trusted_declassify", "#[trusted_declassify(\"audit\")]\nfn escape(value: String) -> String { value }\n"},
 		{"spec", "#[spec(\"3.10\")]\nfn linked() -> Int { 0 }\n"},

@@ -35,7 +35,7 @@ in v0.6" for per-gap rationale.
 
 | Form | Status | Notes |
 |---|---|---|
-| Parameter annotation `fn f(#[taint("...")] x: T)` | **planned** (G37) | parameter 위치 annotation 신규 허용 |
+| Parameter / field-type annotation `fn f(#[taint("...")] x: T)` 및 `pub field: #[taint("...")] T` | **planned** (G37) | parameter 위치 + struct field 타입 위치 annotation 신규 허용. 별도 `#[taint_field]` annotation 은 두지 않는다 (pre-release amendment). |
 | v0.6 declaration annotation vocabulary | **partial** (G36, G37, G39-G42, G44, G45, G47) | Go parser/resolver and selfhost resolver both recognize the declaration/field/method/variant annotation names. Per-feature semantic gates and parameter-position annotations still land by phase. |
 
 ### Capabilities (G36 — Phase 1, blocking everything else)

@@ -55251,9 +55251,6 @@ func srAnnotAllowedTargets(name string) int {
 	if name == "trusted_declassify" {
 		return srAnnotTargetTopLevel() | srAnnotTargetMethod()
 	}
-	if name == "taint_field" {
-		return srAnnotTargetField()
-	}
 	if name == "spec" {
 		return srAnnotTargetTopLevel() | srAnnotTargetMethod()
 	}
@@ -56786,7 +56783,7 @@ func srCharToDigit(ch rune) int {
 
 // Osty: /tmp/selfhost_merged.osty:29239:1
 func srAnnotationNameList() []string {
-	return []string{"json", "deprecated", "allow", "intrinsic_methods", "requires", "no_alloc", "intrinsic", "c_abi", "export", "pod", "repr", "cfg", "op", "test", "vectorize", "no_vectorize", "parallel", "unroll", "inline", "hot", "cold", "pure", "target_feature", "noalias", "ambient", "reproducible_capability", "taint", "sanitizes", "trusted_declassify", "taint_field", "spec", "reproducible", "sealed_construct", "trusted_construct", "test_construct", "error_contract", "purpose", "example", "fixture", "since", "stability", "match_compat", "golden", "budget"}
+	return []string{"json", "deprecated", "allow", "intrinsic_methods", "requires", "no_alloc", "intrinsic", "c_abi", "export", "pod", "repr", "cfg", "op", "test", "vectorize", "no_vectorize", "parallel", "unroll", "inline", "hot", "cold", "pure", "target_feature", "noalias", "ambient", "reproducible_capability", "taint", "sanitizes", "trusted_declassify", "spec", "reproducible", "sealed_construct", "trusted_construct", "test_construct", "error_contract", "purpose", "example", "fixture", "since", "stability", "match_compat", "golden", "budget"}
 }
 
 // Osty: /tmp/selfhost_merged.osty:29269:1

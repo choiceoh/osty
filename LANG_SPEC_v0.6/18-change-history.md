@@ -22,7 +22,7 @@ Four annotation families implement the principle:
 | Family | New surface |
 |---|---|
 | **Effectful** (env / IO) | Capability parameters (§20), `#[ambient]`, `#[reproducible]`, `#[reproducible_capability]` |
-| **Security** (sources → sinks) | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]`, `#[taint_field]` (§21) |
+| **Security** (sources → sinks) | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]` (§21) |
 | **Temporal** (versioning) | `#[since]`, `#[stability]`, `#[match_compat]`, `osty publish` (§3.14) |
 | **Intent + Determinism** | `#[purpose]`, `#[example]`, `#[fixture]`, `#[error_contract]`, `#[sealed_construct]`, `#[golden]`, `osty context` (§3.12, §3.4.5, §7.5, §11.5, §13.4) |
 
@@ -76,7 +76,9 @@ discipline 유지를 위해 ad-hoc labeled data 는 nominal `struct`
 - `#[sanitizes("source", into = "trust")]` — sanitizer.
 - `#[requires("trust")]` — sink 요구.
 - `#[trusted_declassify]` — FFI 경계 audit escape.
-- `#[taint_field]` — struct field-level narrow tracking.
+- struct field-level narrow tracking 은 별도 annotation 없이 type-position
+  `#[taint("σ")]` 를 필드 타입에 부착 (`#[taint_field]` annotation 은
+  pre-release amendment 로 제거 — `SPEC_GAPS.md` *Pre-release amendments*).
 - v0.6 baseline sink: `db.query` (sql_safe), `process.exec`
   (shell_safe), `fs.path*` (path_safe), `http.redirect` (url_safe),
   `template.render` / `http.respondHtml` (html_safe).

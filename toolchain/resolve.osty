@@ -2656,10 +2656,12 @@ fn srAnnotAllowedTargets(name: String) -> Int {
     // Note: `#[requires]` on parameters (sink trust tag) reuses the v0.5
     // annotation name — see the existing entry above. Phase 5 will add
     // parameter-position parsing (G37 R29).
+    // `#[taint]` covers struct field narrow via type-position application
+    // on the field type; the previously separate `#[taint_field]` annotation
+    // was removed in a pre-release amendment (SPEC_GAPS.md cut B).
     if name == "taint" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() | srAnnotTargetField() }
     if name == "sanitizes" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
     if name == "trusted_declassify" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    if name == "taint_field" { return srAnnotTargetField() }
     // v0.6 G38 — Spec link (§3.10).
     if name == "spec" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
     // v0.6 G39 — Reproducibility (§3.11).
@@ -4044,10 +4046,11 @@ fn srAnnotationNameList() -> List<String> {
         "ambient",
         "reproducible_capability",
         // v0.6 G37 — Information flow.
+        // `#[taint_field]` was removed in a pre-release amendment
+        // (SPEC_GAPS.md cut B); `#[taint]` covers struct field narrow.
         "taint",
         "sanitizes",
         "trusted_declassify",
-        "taint_field",
         // v0.6 G38 / G39 — Spec link / Reproducibility.
         "spec",
         "reproducible",

@@ -89,7 +89,9 @@ TaintAnno     ::= '#[taint' '(' StringLit ')' ']'
 SanitizeAnno  ::= '#[sanitizes' '(' StringLit ',' 'into' '=' StringLit ')' ']'
 RequiresAnno  ::= '#[requires' '(' StringLit ')' ']'
 DeclassifyAnno::= '#[trusted_declassify' '(' 'reason' '=' StringLit ')' ']'
-TaintFieldAnno::= '#[taint_field' '(' StringLit ')' ']'
+(* `TaintAnno` 는 declaration / parameter / struct field 의 *type 위치* 에서
+   동일 grammar 로 작동한다. 별도 `TaintFieldAnno` 는 두지 않는다 —
+   pre-release amendment, `SPEC_GAPS.md` Pre-release amendments 참조. *)
 ```
 
 ### G39 — reproducibility

@@ -235,7 +235,9 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - annotation 위치: function 반환 (선언 앞), parameter (Pattern 앞 또는 Type 앞).
 - tag 는 generic 함수 / closure / struct field / collection element / Result/Option
   unwrap 통해 자동 propagate.
-- struct 단위 fold 가 default. 필드별 narrow 는 `#[taint_field]`.
+- struct 단위 fold 가 default. 필드별 narrow 는 type-position
+  `#[taint("...")]` 를 필드 타입에 부착 (별도 `#[taint_field]` annotation
+  surface 없음 — pre-release amendment).
 - implicit flow (control-flow 의존) 는 *추적 안 함* — explicit flow only (Jif 와 동일).
 - FFI 경계 데이터는 untagged 시작. opaque sanitizer 가 필요하면
   `#[sanitizes(...)]` + `#[trusted_declassify(reason)]` — audit log
@@ -288,7 +290,7 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 |---|---|---|
 | **Existing (v0.5)** | `#[json]`, `#[deprecated]`, `#[op]`, `#[cfg]`, `#[test]`, `#[intrinsic]`, `#[pod]`, `#[repr]`, `#[export]`, `#[c_abi]`, `#[no_alloc]` | 기존 |
 | **Capability (G36)** | `#[ambient]`, `#[reproducible_capability]` | §9 |
-| **Information flow (G37)** | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]`, `#[taint_field]` | §10 |
+| **Information flow (G37)** | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]` | §10 |
 | **Intent (G42)** | `#[purpose]`, `#[example]`, `#[fixture]` | §12 |
 | **Construction (G40)** | `#[sealed_construct]`, `#[trusted_construct]`, `#[test_construct]` | §13 |
 | **Error (G41)** | `#[error_contract]` | §8 |

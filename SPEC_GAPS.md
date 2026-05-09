@@ -277,6 +277,15 @@ migration, breaking in v0.7), G37 (taint sink rollout, breaking for unsanitized
 code), G40 (stdlib sealed types) — 은 `--legacy-globals` 또는 `--legacy-construct`
 호환 모드 v0.6.x 한정 제공.
 
+#### Pre-release amendments
+
+v0.6 baseline 동결 후 release 전 *사용자 0* 시점에서 적용한 surface 단순화.
+모두 추가 결정이 아니라 기존 결정의 redundant surface 제거 — semantic 동일.
+
+| Cut | 영역 | Amendment |
+|---|---|---|
+| **B** | G37 (§21) | `#[taint_field]` annotation 제거. 동일 narrow 의미는 type-position `#[taint("σ")]` 를 struct field 의 *타입 위치* 에 부착해 얻는다. parameter-position annotation 과 같은 G37 grammar (`Annotation* Type`) 가 cover — 신규 surface 불필요. Fixed annotation set 27 → 26, 신규 어노테이션 20 → 19. |
+
 ---
 
 ## Resolved in v0.5

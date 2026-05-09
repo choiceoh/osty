@@ -232,22 +232,26 @@ fn use(f: Form) {
 ```
 
 **필드 별 tag 분리 (선택적)**: struct 단위 fold 가 false-positive 가 잦다면
-필드별 어노테이션으로 narrow 가능 (Phase 5 옵션):
+필드 타입에 type-position `#[taint]` annotation 을 붙여 narrow 가능
+(Phase 5 옵션):
 
 ```osty
 struct Form {
-    #[taint_field("user_input")]
-    email: String,
+    email: #[taint("user_input")] String,
     name: String,                    // tag 없음
 }
 
 // 이 모드에선 f.email 만 tagged, f.name 은 untagged
 ```
 
-**기본은 struct 단위 fold (sound default)**, `#[taint_field]` 는 명시적 narrow.
-`#[taint_field]` 는 struct field 에만 허용되며 parameter, local binding,
-enum variant, or function return position 에 붙이면 annotation-site error
-(`E0405`) 이다.
+**기본은 struct 단위 fold (sound default)**, 필드 타입의 `#[taint]` 는
+명시적 narrow. 필드 narrow 는 struct field 의 *타입 위치* 에만 의미가
+있으며, parameter / local binding / enum variant / function return
+position 에서는 동일 annotation 이 그 위치의 G37 source role 로 해석된다
+(§5 / `OSTY_GRAMMAR_v0.6.md` G37). 별개 `#[taint_field]` annotation
+surface 는 두지 않는다 — type-position `#[taint]` 가 같은 mechanism 으로
+field-narrow 를 cover (pre-release simplification, `SPEC_GAPS.md`
+Pre-release amendments 참조).
 
 ### 21.5.1 Container / collection
 
@@ -342,14 +346,14 @@ propagation 의 권위:
 
 
    Γ ⊢ s : Struct { f1: T1@A1, ..., fn: Tn@An }              (T-Struct)
-   #[taint_field] 어노테이션 없음
+   필드 타입에 #[taint(...)] 어노테이션 없음
 ─────────────────────────────────────────────────────
    tag(s) = A1 ∪ A2 ∪ ... ∪ An       (struct 단위 fold)
    ∀i.  Γ ⊢ s.fi : Ti@(A1 ∪ ... ∪ An)
 
 
    Γ ⊢ s : Struct { f1: T1@A1, ..., fn: Tn@An }              (T-Struct-Field)
-   필드 fi 만 #[taint_field("σ")] 어노테이션
+   필드 fi 의 타입에만 #[taint("σ")] 어노테이션
 ─────────────────────────────────────────────────────
    Γ ⊢ s.fi : Ti@({σ} ∪ Ai)          (해당 필드만 narrow)
    ∀j ≠ i. Γ ⊢ s.fj : Tj@Aj
@@ -450,7 +454,7 @@ Struct 단위 tag fold (§21.5 본문) 와 field-narrow tag 의 trade-off:
 | 모드 | 정확성 | False positive | False negative |
 |---|---|---|---|
 | Struct fold (default) | 보수적 | 잦음 (모든 field 가 tag 유지) | 없음 |
-| `#[taint_field]` narrow | 정밀 | 적음 | 가능 — annotation 누락 시 sink 통과 |
+| 필드 타입 `#[taint(...)]` narrow | 정밀 | 적음 | 가능 — annotation 누락 시 sink 통과 |
 
 v0.6 baseline 은 **default = struct fold**. narrow 는 phase 5 의
 opt-in surface (annotation 추가 시점에 narrow 적용). 이 정책은
@@ -958,8 +962,8 @@ caller 의 Err 로 propagate (caller's Err type 이 tagged 면).
 
 #### 21.13.5 Struct field
 
-§21.5 의 default rule: struct 단위 fold. `#[taint_field]` 로 필드별
-narrow 가능.
+§21.5 의 default rule: struct 단위 fold. 필드 타입에 type-position
+`#[taint(...)]` annotation 을 붙여 필드별 narrow 가능.
 
 ```osty
 struct Form {
@@ -978,10 +982,9 @@ fn use(f: Form, db: Db) {
 ```
 
 ```osty
-// narrow with #[taint_field]
+// narrow with type-position #[taint] on the field type
 struct Form {
-    #[taint_field("user_input")]
-    email: String,
+    email: #[taint("user_input")] String,
     name: String,
 }
 

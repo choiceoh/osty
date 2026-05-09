@@ -925,10 +925,13 @@ JSON 직접 query (`osty context --format=json` 또는 LSP custom request
 ## 5. Grammar Changes (v0.5 → v0.6)
 
 ```ebnf
-(* §21 G37 — annotation on parameter (new position) *)
+(* §21 G37 — annotation on parameter and field type (new positions) *)
 ParamDecl      ::= Annotation* Pattern ':' Annotation* Type ('=' DefaultExpr)?
                    (* Annotation* before Pattern is new in v0.6 *)
                    (* Annotation* before Type allows #[taint("...")] String form *)
+                   (* Same `Annotation* Type` shape applies inside `StructFieldDecl`,
+                      enabling `#[taint("...")] String` field-narrow without a
+                      separate `#[taint_field]` surface. See §21.5 / §21.13.5. *)
 
 (* §20 / §3.4.5 / §3.11-3.14 / §7.5 — fixed annotation set extension *)
 (* Existing Annotation rule unchanged: #[name(args)] form *)
@@ -938,20 +941,26 @@ ParamDecl      ::= Annotation* Pattern ':' Annotation* Type ('=' DefaultExpr)?
 |---|---:|---:|---:|
 | Reserved keywords | 17 | 17 | 0 |
 | Contextual keywords | 10 | 10 | 0 |
-| Fixed annotation set | 11 | 27 | +16 |
+| Fixed annotation set | 11 | 26 | +15 |
 | EBNF productions | 191 | 192 | +1 |
 | Lexer token classes | 36 | 36 | 0 |
 
-신규 어노테이션 20:
+신규 어노테이션 19:
 
 | Capability (§20) | `#[ambient]`, `#[reproducible_capability]` |
-| Information flow (§21) | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]`, `#[taint_field]` |
+| Information flow (§21) | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]` |
 | Spec / intent | `#[spec]`, `#[purpose]`, `#[example]`, `#[fixture]` |
 | Construction | `#[sealed_construct]`, `#[trusted_construct]`, `#[test_construct]` |
 | Error | `#[error_contract]` |
 | Determinism | `#[reproducible]` |
 | Evolution | `#[since]`, `#[stability]`, `#[match_compat]` |
 | Testing | `#[golden]`, `#[budget]` |
+
+> **Pre-release amendment**: 이전 draft 의 `#[taint_field]` 는 별도
+> annotation surface 였으나 v0.6 release 전에 제거. 동일 의미는 type-position
+> `#[taint("σ")]` 를 struct field 타입에 적용해 얻으며, parameter annotation
+> 과 동일한 G37 grammar 가 cover. SPEC_GAPS.md 의 *Pre-release amendments*
+> 섹션 참조.
 
 ## 5.1 Annotation namespace (proposal — Phase 2)
 
@@ -1285,7 +1294,6 @@ bodies"). interface 는 별도 declaration. 아래 표는 그 기준.
 | `#[sanitizes]` | ✓ | | | | | | ✓ | |
 | `#[requires]` | | | | | | ✓ | | |
 | `#[trusted_declassify]` | ✓ | | | | | | ✓ | |
-| `#[taint_field]` | | | | | ✓ | | | |
 | `#[reproducible]` | ✓ | | | | | | ✓ | |
 | `#[reproducible_capability]` | | | | | | | | ✓ |
 | `#[spec]` | ✓ | ✓ | ✓ | | | | ✓ | ✓ |

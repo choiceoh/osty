@@ -541,7 +541,7 @@ v0.5 의 11 fixed annotation 위에 v0.6 은 16 신규 annotation 추가.
 | 카테고리 | v0.6 신규 annotation |
 |---|---|
 | Capabilities (G36) | `#[ambient]`, `#[reproducible_capability]` |
-| Information flow (G37) | `#[taint]`, `#[sanitizes]`, `#[trusted_declassify]`, `#[taint_field]` (parameter `#[requires]` 는 v0.5 reuse) |
+| Information flow (G37) | `#[taint]`, `#[sanitizes]`, `#[trusted_declassify]` (parameter `#[requires]` 는 v0.5 reuse; `#[taint]` 는 declaration / parameter / struct field 타입 위치에서 동일 mechanism) |
 | Reproducibility (G39) | `#[reproducible]` |
 | Sealed construct (G40) | `#[sealed_construct]`, `#[trusted_construct]`, `#[test_construct]` |
 | Error contract (G41) | `#[error_contract]` |

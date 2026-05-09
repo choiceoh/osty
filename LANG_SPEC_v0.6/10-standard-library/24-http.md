@@ -368,7 +368,8 @@ fn handler(req: Request) -> Result<Response, Error> {
 
 The struct's fields all carry `user_input` because the parser
 preserves the input's tag set on each output field. Authors who
-need *per-field* tag narrowing use `#[taint_field]` (§21.5.8).
+need *per-field* tag narrowing apply type-position `#[taint("...")]`
+to the relevant field type (§21.5.8 / §21.13.5).
 
 #### 10.24.4 Router pattern matching
 
