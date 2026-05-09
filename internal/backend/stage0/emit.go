@@ -4377,7 +4377,13 @@ func matchScalarReturnChain(fn *mir.Function, mctx *moduleCtx) (scalarReturnChai
 	if pat.retType == scalarUnknown {
 		return pat, false
 	}
-	if len(fn.Params) > 8 || len(fn.Blocks) < 3 {
+	// Param ceiling raised from 8 → 32 to admit `mir_generator.osty` enum-mapping
+	// helpers (e.g. `mirLegacyAssignOpCode` with 23 Int params), which otherwise
+	// match this matcher's CFG shape exactly. The body emit path (`emitScalarReturnChain`)
+	// has no hidden 8-param assumptions; the cap was a `fallbackNames`-array
+	// artifact, addressed below by switching to a generated `pN` fallback when
+	// the loc's own name is empty.
+	if len(fn.Params) > 32 || len(fn.Blocks) < 3 {
 		return pat, false
 	}
 
@@ -4385,7 +4391,6 @@ func matchScalarReturnChain(fn *mir.Function, mctx *moduleCtx) (scalarReturnChai
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
@@ -4396,7 +4401,10 @@ func matchScalarReturnChain(fn *mir.Function, mctx *moduleCtx) (scalarReturnChai
 			return pat, false
 		}
 		pat.paramTypes[i] = pt
-		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+		// Synthesise a unique fallback (`p0`, `p1`, …) for params whose loc
+		// has no name. The previous 8-element literal array tied the cap to
+		// `len(fallbackNames)`; this generator scales with `len(fn.Params)`.
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fmt.Sprintf("p%d", i))
 	}
 	disambiguateParamNames(pat.paramNames)
 	for i, pid := range fn.Params {
