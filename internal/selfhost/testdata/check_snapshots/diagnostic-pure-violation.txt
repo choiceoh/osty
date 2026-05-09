@@ -17,8 +17,8 @@ symbols
 instantiations
 diagnostics
   code=E0775 severity=error span=64:67 line=4:14-4:17 message=`#[pure]` function `bad` cannot allocate a list literal
-    note=LANG_SPEC v0.6 A13: `#[pure]` lowers to LLVM `readnone`, so the body must not write non-local state, perform I/O, allocate, or call impure functions
+    note=LANG_SPEC v0.5 A13: `#[pure]` lowers to LLVM `readnone`, so the body must not write non-local state, perform I/O, allocate, or call impure functions
     note=hint: remove `#[pure]`, pass in precomputed data, or rewrite without managed allocation
   code=E0775 severity=error span=78:80 line=5:11-5:13 message=`#[pure]` function `bad` cannot call a function that is not `#[pure]`
-    note=LANG_SPEC v0.6 A13: `#[pure]` lowers to LLVM `readnone`, so the body must not write non-local state, perform I/O, allocate, or call impure functions
+    note=LANG_SPEC v0.5 A13: `#[pure]` lowers to LLVM `readnone`, so the body must not write non-local state, perform I/O, allocate, or call impure functions
     note=hint: mark the callee `#[pure]` only if it is side-effect free, or remove `#[pure]` from this function

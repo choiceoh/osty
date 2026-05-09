@@ -424,7 +424,7 @@ pub fn hirLowerHasNamedAnnotation(annots: List<HirAnnotation>, name: String) -> 
     false
 }
 
-/// hirLowerExtractInlineMode resolves the v0.6 A8 `#[inline]`
+/// hirLowerExtractInlineMode resolves the A8 `#[inline]`
 /// family:
 ///   - no annotation            → HirInlineNone
 ///   - `#[inline]`              → HirInlineSoft
@@ -876,7 +876,7 @@ pub fn hirLowerAssembleFnDecl(
     decl.isIntrinsic = hirLowerHasNamedAnnotation(annotations, "intrinsic")
     decl.noAlloc = hirLowerHasNamedAnnotation(annotations, "no_alloc")
 
-    // v0.6 A5.2: vectorize is default-on; `#[no_vectorize]` opts out.
+    // A5.2: vectorize is default-on; `#[no_vectorize]` opts out.
     decl.vectorize = !noVec
     decl.noVectorize = noVec
     decl.vectorizeWidth = vecInfo.width

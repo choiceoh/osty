@@ -414,7 +414,7 @@ pub fn mirAccessGroupLine(ref: String) -> String {
     ref + " = distinct !\{\}"
 }
 
-/// mirLoopHintsActive reports whether any v0.6 loop annotation is
+/// mirLoopHintsActive reports whether any loop annotation is
 /// set for the current function — i.e. whether the loop-metadata
 /// emitter should attach an `!llvm.loop !N` reference to this
 /// function's back-edge terminators. Mirrors the Go predicate of
@@ -481,13 +481,13 @@ pub fn mirLoopMDParallelAccesses(accessGroupRef: String) -> String {
     "!\{!\"llvm.loop.parallel_accesses\", " + accessGroupRef + "\}"
 }
 
-/// mirFormatFnAttrs renders the v0.6 A8/A9/A10/A13 function-level
+/// mirFormatFnAttrs renders the A8/A9/A10/A13 function-level
 /// LLVM attribute string spliced between the parameter list and the
 /// body brace of a `define`/`declare` line. Returns `""` when no
 /// attribute applies so the caller emits the attribute-free form.
 ///
 /// Inputs mirror the `mir.Function` shape the Go source reads:
-/// `inlineMode` uses the v0.6 A8 discriminant (0 none / 1 soft /
+/// `inlineMode` uses the A8 discriminant (0 none / 1 soft /
 /// 2 always / 3 never — see `ir.FnDecl.InlineMode`), `hot` / `cold`
 /// / `pureFn` toggle the corresponding LLVM fn-attrs, and
 /// `targetFeatures` lists the A10 feature names that get
@@ -516,14 +516,14 @@ pub fn mirFormatFnAttrs(
     if cold {
         parts.push(mirFnAttrCold())
     }
-    // v0.6 A13 `#[pure]` → LLVM `readnone`: function reads no
+    // A13 `#[pure]` → LLVM `readnone`: function reads no
     // memory and has no side effects. Enables caller-side CSE.
     if pureFn {
         parts.push(mirFnAttrPure())
     }
     if !targetFeatures.isEmpty() {
         // LLVM's target-features string expects each feature prefixed
-        // with `+` for enable. v0.6 surface only supports enable, so
+        // with `+` for enable. surface only supports enable, so
         // we always prepend `+` after stripping any user-typed `+`.
         let mut joined = ""
         let mut first = true
@@ -1615,7 +1615,7 @@ pub fn mirThunkName(symbol: String) -> String {
 /// mirIsMemoryAccessLine recognises the two textual shapes the MIR
 /// emitter produces for loads and stores — the lines that
 /// `tagParallelAccesses` tags with `!llvm.access.group <ref>` for the
-/// v0.6 `#[parallel]` annotation. Mirrors `isMemoryAccessLine` in
+/// `#[parallel]` annotation. Mirrors `isMemoryAccessLine` in
 /// `internal/llvmgen/mir_generator.go`. Pure: leading-space-strip +
 /// `store ` prefix probe + ` = load ` substring probe; everything else
 /// (branches, `icmp`, `select`, `call`, `br`, `alloca`, GEP, `phi`,
@@ -2831,7 +2831,7 @@ pub struct MirVtableRefs {
 
 /// mirCConvKeyword returns the LLVM calling-convention keyword
 /// to splice between `define`/`declare` and the return type.
-/// `cabi=true` (the v0.6 `#[c_abi]` annotation) renders the
+/// `cabi=true` (the `#[c_abi]` annotation) renders the
 /// platform C calling convention as `"ccc "`. `cabi=false` (the
 /// default) returns the empty string — LLVM treats absent cconv
 /// as `ccc` anyway, so emitting the keyword is currently a
@@ -6324,7 +6324,7 @@ pub fn mirCallAttrNoTail() -> String {
 /// §6 LLVM ParamAttr tokens.
 
 /// mirParamAttrNoAlias returns the `noalias` param attribute used
-/// by `#[noalias]` (v0.6 A11).
+/// by `#[noalias]` (A11).
 pub fn mirParamAttrNoAlias() -> String {
     "noalias"
 }
@@ -9336,7 +9336,7 @@ pub fn mirLoadPtrWithNoAliasLine(reg: String, slot: String, ref: String) -> Stri
 }
 
 /// §7 LLVM `!llvm.access.group` — composite metadata for parallel
-/// loops (per v0.6 A6 `#[parallel]`).
+/// loops (per A6 `#[parallel]`).
 
 /// mirLLVMAccessGroupRef renders the canonical `!access_group <ref>`
 /// metadata attachment.

@@ -21,7 +21,7 @@ type InspectRecord struct {
 	End token.Pos
 	// NodeKind is the syntactic category, e.g. "IntLit", "CallExpr", "If".
 	NodeKind string
-	// Rule is the label from LANG_SPEC_v0.6/02a-type-inference.md.
+	// Rule is the label from LANG_SPEC_v0.5/02a-type-inference.md.
 	Rule string
 	// Type is retained for compatibility with callers that already consume
 	// types.Type values. New formatting code prefers TypeName so it never has

@@ -8,7 +8,7 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 > - `internal/stdlib/modules/*.osty` (Phase B / surface)
 > - `internal/stdlib/primitives/*.osty` (intrinsic methods)
 > - `internal/backend/runtime/osty_runtime.c` (23,895 LOC / 638 `osty_rt_*` 함수 / Phase A / C runtime)
-> - `LANG_SPEC_v0.6/10-standard-library/*.md` (스펙 권위)
+> - `LANG_SPEC_v0.5/10-standard-library/*.md` (스펙 권위)
 >
 > **기준일**: 2026-05-05 (HEAD `b640a833` 대조).
 > **이전 매트릭스 (94% Production 주장) 전면 재평가됨** —
@@ -55,12 +55,12 @@ Osty 표준 라이브러리 모듈별 실행 가능성 / 스펙 정합 매트릭
 | encoding | §10.11 | 329 | 8+ | 0% | pure Osty | base64 / hex / url 구현 |
 | crypto | §10.12 | 23 | 8 | 100% | crypto 19 runtime + shim | sha256/512/HMAC/randomBytes/constantTimeEq 백엔드 충족 |
 | math | §10.17 | 42 | 25 | 100% | float 40 runtime | libm 매핑 다 있음 |
-| fs | §10.1 / §20 | 76 | 20 + HostFs | 100% | fs 52 runtime + shim 685 | read/write/exists/remove/mkdir 등 충족. v0.6 `HostFs` adapter 추가 |
-| env | §10.1 / §20 | 42 | 8 + HostEnv | 100% | env 15 runtime + shim 624 | args/get/set/vars 충족. v0.6 `HostEnv` adapter 추가 |
+| fs | §10.1 | 76 | 20 | 100% | fs 52 runtime + shim 685 | read/write/exists/remove/mkdir 등 충족 |
+| env | §10.1 | 42 | 8 | 100% | env 15 runtime + shim 624 | args/get/set/vars 충족 |
 | os | §10.15 | 48 | 8 | 100% | os 37 runtime + shim | exec/exit/pid/hostname 충족 |
-| random | §10.14 / §20 | 46 | 11 | 77% | random 17 runtime + shim 524 | Rng default + seeded 충족. `host` / `seededCapability` adapter factory 추가 |
+| random | §10.14 | 46 | 11 | 77% | random 17 runtime + shim 524 | Rng default + seeded 충족. `host` / `seededCapability` adapter factory 추가 |
 | compress | §10.19 | 11 | 2 | 100% | compress 4 runtime + shim 199 | gzip만 (spec 명시) |
-| io | §16/§10.1 / §20 | 517 | 50 + HostConsole | 0% | io 2 runtime + shim 171 | Reader/Writer 인터페이스 + BytesReader/Buffer 본문. v0.6 `HostConsole` / `ConsoleWriter` adapter 추가 |
+| io | §16/§10.1 / §20 | 517 | 50 | 0% | io 2 runtime + shim 171 | Reader/Writer 인터페이스 + BytesReader/Buffer 본문 |
 | collections (List/Map/Set 메서드) | §10.6 | (above) | (above) | mixed | runtime intrinsics | spec method 정확히 일치 |
 | primitives/int | §10.5 | 84 | 43 | 100% | int runtime ops | checkedAdd/wrappingAdd/saturating/pow/abs 다 있음 |
 | primitives/float | §10.5 | 69 | 40 | 100% | float 40 runtime | sqrt/pow/round/isNaN/isInfinite 충족 |
@@ -107,10 +107,10 @@ partial 모듈 3개 (crypto / option / result) 는 **호출 패턴 한정 동작
 
 | 모듈 | spec | LOC | 표면 | bodyless | backend | 갭 |
 |---|---|---|---|---|---|---|
-| net | §10.23 / §20 | 972 | 94 + HostNet | 11% | net 40 runtime | TCP/UDP는 백엔드 풍부, IPv6 zone parsing 등 일부 미검증. v0.6 bridge `HostNet` adapter 추가 |
+| net | §10.23 | 972 | 94 | 11% | net 40 runtime | TCP/UDP는 백엔드 풍부, IPv6 zone parsing 등 일부 미검증 |
 | thread | §8 | 76 | 16 | 50% | thread 16 + chan 10 + select 22 + task 19 | ~~`thread.Duration{}` 빈 struct~~ → commit `23f4568c`에서 제거. 현재는 `use std.time` + `time.Duration` 단일 사용 |
 | sync | §10.2 | 96 | 17 | 17% | mu 5 + rmu 5 + cond 6 + once 3 | spec tier-2 = "Mutex, RwLock, atomics". Once는 spec 외인데 백엔드는 갖춤 |
-| time | §10.20 / §20 | 94 | 25 + HostClock | 64% | monotonic + sleep + format 일부 | `systemClock` adapter 추가. ~~`Int.s/ms/h/min/days/ns/us/weeks` 부재~~ → 2026-05-02 재확인 결과 8개 모두 ([primitives/int.osty:76-83](internal/stdlib/primitives/int.osty)) + Float 8개 ([primitives/float.osty:61-68](internal/stdlib/primitives/float.osty)) 선언됨. 체커 등록은 [`primitive_arith_register.go:131`](internal/selfhost/primitive_arith_register.go) (8개 loop), LLVM 백엔드는 [`duration_constructors_test.go`](internal/llvmgen/duration_constructors_test.go) 8개 테스트 통과. spec 이름 `minutes` (≠ `min`, `Int.min(self, other)`와 충돌 회피, [spec §10.20](LANG_SPEC_v0.6/10-standard-library/20-time-extensions.md) line 111-112) |
+| time | §10.20 | 94 | 25 | 64% | monotonic + sleep + format 일부 | ~~`Int.s/ms/h/min/days/ns/us/weeks` 부재~~ → 2026-05-02 재확인 결과 8개 모두 ([primitives/int.osty:76-83](internal/stdlib/primitives/int.osty)) + Float 8개 ([primitives/float.osty:61-68](internal/stdlib/primitives/float.osty)) 선언됨. 체커 등록은 [`primitive_arith_register.go:131`](internal/selfhost/primitive_arith_register.go) (8개 loop), LLVM 백엔드는 [`duration_constructors_test.go`](internal/llvmgen/duration_constructors_test.go) 8개 테스트 통과. spec 이름 `minutes` (≠ `min`, `Int.min(self, other)`와 충돌 회피, [spec §10.20](LANG_SPEC_v0.5/10-standard-library/20-time-extensions.md) line 111-112) |
 | testing | §11 | 88 | 14 | 100% | bench 7 + test 6 + snapshot 7 + parallel 6 | assertion/benchmark/snapshot 백엔드 인터셉트로 동작. property는 스펙 §11 G33 |
 | testing_gen | §11 | 168 | 18 | 0% | pure Osty | int/intRange/bool/float/string/list 등 generator |
 | term | §10.25 | 320 | 39 | 17% | term 14 runtime + shim | isTerminal/size/write/flush/setRawMode 백엔드. **readKey/pollKey/readEvent는 미구현** (모듈 헤더 자백) |
@@ -118,7 +118,7 @@ partial 모듈 3개 (crypto / option / result) 는 **호출 패턴 한정 동작
 | secrets | §10.41 | 20 | 8 | 100% | keychain 위임 | keychain 백엔드 따라감 |
 | cli | §10.1 | 260 | 11 | 0% | env 위임 | flag/option spec/parse 본문 |
 | cmd | unspec | 214 | 24 | 0% | os shim + cmd runtime 8 | command builder + POSIX shell escape |
-| process | §10.1 + unspec / §20 | 235 | 32 + HostProcess | 74% | os shim + process runtime 9 | `ProcessCommand` / `ProcessPipeline` facade, stdin text, captured stdout/stderr, shell pipeline composition. v0.6 bridge `HostProcess` adapter 추가. abort/todo/unreachable는 backend-owned primitive 유지 |
+| process | §10.1 + unspec / §20 | 235 | 32 | 74% | os shim + process runtime 9 | `ProcessCommand` / `ProcessPipeline` facade, stdin text, captured stdout/stderr, shell pipeline composition. abort/todo/unreachable는 backend-owned primitive 유지 |
 | path | §10.15 | 191 | 9 | 22% | runtime path 2 | join/split/extension 본문, absolute/canonical은 백엔드 |
 | log | §10.10 | 441 | 33 | 0% | `eprintln` 폰백 (C runtime `osty_rt_log_*` 부재, LLVM shim 부재) | Osty 본문은 spec 동급 (`TextHandler`, `JsonHandler`, `Logger` 체인). 체커/인터프리터 E2E 통과 ([`examples/log_e2e/`](examples/log_e2e/)). **현재 HEAD에는 `internal/llvmgen/` 디렉토리가 없어 LLVM shim 미구현**. |
 | uuid | §10.13 | 22 | 0 | 100% | C runtime 7개 (`osty_rt_uuid_v4/v7/nil/to_string/to_bytes/parse/parse_error`) | declaration-only 모듈. C runtime 백엔드는 충족. 체커/인터프리터 E2E 통과 ([`examples/uuid_e2e/`](examples/uuid_e2e/)). **현재 HEAD에는 LLVM bridge shim 없음**. |
@@ -221,8 +221,6 @@ partial 모듈 3개 (crypto / option / result) 는 **호출 패턴 한정 동작
 
 | 모듈 | spec | LOC | 비고 |
 |---|---|---|---|
-| capability | §20 | 177 | v0.6 canonical `Clock` / `Rng` / `Env` / `Fs` / `Net` / `Process` / `Console` interface surface, migration rules, exact `HostNet` / `HostProcess` adapters. `examples/v06_capabilities` + `examples/v06_capability_adapters` front-end/type-check proof. Ambient/legacy-global compiler semantics remain Phase 1 follow-up. |
-| capability.testing | §20 | 445 | deterministic `FakeClock` / `FakeRng` / `FakeEnv` / `FakeFs` / `FakeNet` / `FakeProcess` / `FakeConsole` helpers for capability-injected tests. `examples/v06_capability_fakes` front-end/type-check proof. |
 | cmp | §10.1 | 27 | Equal / Ordered / Hashable interface 정의. 컴파일러 인지 |
 | error | §10.1 / §7 | 96 | Error interface + BasicError + WrappedError + wrap/chain/rootCause |
 | ref | §10.1 | 9 | `same<T>(a, b)` 단일 함수, declaration-only — 컴파일러 intrinsic 가정 |
@@ -291,9 +289,9 @@ partial 모듈 3개 (crypto / option / result) 는 **호출 패턴 한정 동작
 
 | # | 항목 | 작업 |
 |---|---|---|
-| 14 | unspec 모듈 (62개) | LANG_SPEC_v0.6/10-standard-library/에 챕터 추가하거나 community-package 라벨 |
+| 14 | unspec 모듈 (62개) | LANG_SPEC_v0.5/10-standard-library/에 챕터 추가하거나 community-package 라벨 |
 | 15 | OSTY_STDLIB_BODY_LOWER | default-on flip + 게이트 제거 (memory `project_stdlib_injection_hang`) |
-| 16 | `Set` 빈약 / `Deque`/`PriorityQueue` 부재 | spec §10.6 확장 제안 (v0.6 minor) |
+| 16 | `Set` 빈약 / `Deque`/`PriorityQueue` 부재 | spec §10.6 확장 제안  |
 
 ## 5. 평가 함정 카탈로그 (재정리)
 

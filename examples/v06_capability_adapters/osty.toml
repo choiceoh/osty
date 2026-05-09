@@ -1,7 +1,0 @@
-[package]
-name = "v06_capability_adapters"
-version = "0.1.0"
-edition = "0.5"
-description = "v0.6 host capability adapter bridge example."
-
-[dependencies]

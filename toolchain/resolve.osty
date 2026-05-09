@@ -2638,7 +2638,7 @@ fn srAnnotAllowedTargets(name: String) -> Int {
     }
     if name == "op" { return srAnnotTargetMethod() }
     if name == "test" { return srAnnotTargetTopLevel() }
-    // v0.6 performance annotations (A5–A11, A13). All target fn / method.
+    // performance annotations (A5–A11, A13). All target fn / method.
     if name == "vectorize" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
     if name == "no_vectorize" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
     if name == "parallel" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
@@ -2649,41 +2649,6 @@ fn srAnnotAllowedTargets(name: String) -> Int {
     if name == "pure" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
     if name == "target_feature" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
     if name == "noalias" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    // v0.6 G36 — Capabilities (LANG_SPEC_v0.6/20-capabilities.md).
-    if name == "ambient" { return srAnnotTargetTopLevel() }
-    if name == "reproducible_capability" { return srAnnotTargetTopLevel() }
-    // v0.6 G37 — Information flow (LANG_SPEC_v0.6/21-information-flow.md).
-    // Note: `#[requires]` on parameters (sink trust tag) reuses the v0.5
-    // annotation name — see the existing entry above. Phase 5 will add
-    // parameter-position parsing (G37 R29).
-    if name == "taint" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() | srAnnotTargetField() }
-    if name == "sanitizes" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    if name == "trusted_declassify" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    if name == "taint_field" { return srAnnotTargetField() }
-    // v0.6 G38 — Spec link (§3.10).
-    if name == "spec" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    // v0.6 G39 — Reproducibility (§3.11).
-    if name == "reproducible" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    // v0.6 G40 — Sealed construction (§3.4.5).
-    if name == "sealed_construct" { return srAnnotTargetTopLevel() }
-    if name == "trusted_construct" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    if name == "test_construct" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    // v0.6 G41 — Error contract (§7.5).
-    if name == "error_contract" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    // v0.6 G42 — Structured intent (§3.12).
-    if name == "purpose" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    if name == "example" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    if name == "fixture" { return srAnnotTargetTopLevel() }
-    // v0.6 G44 — API evolution (§3.14).
-    if name == "since" {
-        return srAnnotTargetTopLevel() | srAnnotTargetMethod() | srAnnotTargetField() | srAnnotTargetVariant()
-    }
-    if name == "stability" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    if name == "match_compat" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    // v0.6 G45 — Golden tests (§11.5.2). Test functions only.
-    if name == "golden" { return srAnnotTargetTopLevel() }
-    // v0.6 G46 — Performance contract (§3.15).
-    if name == "budget" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
     0
 }
 
@@ -2919,7 +2884,7 @@ fn srCheckAnnotationArgs(
     if ann.text == "intrinsic" || ann.text == "pod" || ann.text == "c_abi" || ann.text == "no_alloc" {
         return srCheckNoArgsRuntime(file, ann, result)
     }
-    // v0.6 bare-flag annotations (A5.2 / A6 / A9 / A13): reject any args.
+    // bare-flag annotations (A5.2 / A6 / A9 / A13): reject any args.
     if ann.text == "hot" || ann.text == "cold" || ann.text == "pure" ||
        ann.text == "no_vectorize" || ann.text == "parallel" {
         return srCheckBareFlagAnnotation(file, ann, result)
@@ -2929,8 +2894,6 @@ fn srCheckAnnotationArgs(
     if ann.text == "vectorize" { return srCheckVectorizeArgs(file, ann, result) }
     if ann.text == "target_feature" { return srCheckTargetFeatureArgs(file, ann, result) }
     if ann.text == "noalias" { return srCheckNoaliasArgs(file, ann, result) }
-    // v0.6 G44 — `#[since("X.Y")]` format gate (§3.14.1).
-    if ann.text == "since" { return srCheckSinceArgs(file, ann, result) }
     result
 }
 
@@ -3453,7 +3416,7 @@ fn srCheckNoArgsRuntime(
     )
 }
 
-/// srCheckBareFlagAnnotation validates the v0.6 bare-flag annotations
+/// srCheckBareFlagAnnotation validates the bare-flag annotations
 /// (`#[hot]`, `#[cold]`, `#[pure]`, `#[no_vectorize]`, `#[parallel]`):
 /// any argument is an E0739 error. Mirrors internal/resolve/resolve.go
 /// ::checkBareFlag / ::checkNoVectorizeArgs / ::checkParallelArgs.
@@ -3475,7 +3438,7 @@ fn srCheckBareFlagAnnotation(
 }
 
 /// srCheckInlineArgs validates `#[inline]` / `#[inline(always)]` /
-/// `#[inline(never)]` (v0.6 A8). Bare form is a soft hint; the
+/// `#[inline(never)]` (A8). Bare form is a soft hint; the
 /// `always` / `never` sub-flags pick the hard `alwaysinline` /
 /// `noinline` LLVM attributes. Mirrors
 /// internal/resolve/resolve.go::checkInlineArgs.
@@ -3519,7 +3482,7 @@ fn srCheckInlineArgs(
 }
 
 /// srCheckUnrollArgs validates `#[unroll]` / `#[unroll(count = N)]`
-/// (v0.6 A7). Bare form lets LLVM choose the factor; the `count = N`
+/// (A7). Bare form lets LLVM choose the factor; the `count = N`
 /// form pins it to 1..1024. Mirrors
 /// internal/resolve/resolve.go::checkUnrollArgs.
 fn srCheckUnrollArgs(
@@ -3577,7 +3540,7 @@ fn srCheckUnrollCountValue(
     result
 }
 
-/// srCheckVectorizeArgs validates `#[vectorize]` (v0.6 A5 / A5.1).
+/// srCheckVectorizeArgs validates `#[vectorize]` (A5 / A5.1).
 /// Accepts the bare form (default treatment; redundant hint) plus
 /// named tuning args: `scalable` flag, `predicate` flag, and
 /// `width = N` with N in 1..1024. Duplicates and unknown keys fire
@@ -3687,7 +3650,7 @@ fn srCheckVectorizeArgs(
     out
 }
 
-/// srCheckTargetFeatureArgs validates `#[target_feature(...)]` (v0.6
+/// srCheckTargetFeatureArgs validates `#[target_feature(...)]` (
 /// A10): at least one bare-identifier feature name, no duplicates,
 /// no `key = value` shapes. Mirrors
 /// internal/resolve/resolve.go::checkTargetFeatureArgs.
@@ -3742,7 +3705,7 @@ fn srCheckTargetFeatureArgs(
 }
 
 /// srCheckNoaliasArgs validates `#[noalias]` / `#[noalias(p1, p2)]`
-/// (v0.6 A11). Bare form marks every pointer param; the arg-list form
+/// (A11). Bare form marks every pointer param; the arg-list form
 /// names specific parameter identifiers. Each arg must be a bare
 /// identifier; duplicates are rejected. Mirrors
 /// internal/resolve/resolve.go::checkNoaliasArgs.
@@ -3800,164 +3763,6 @@ fn srPushBadArgHint(
     let mut out = result
     out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0739", message, "", start, end, -1, hint))
     out
-}
-
-fn srPushSinceBadFormat(
-    result: SelfResolveResult,
-    message: String,
-    start: Int,
-    end: Int,
-    hint: String,
-) -> SelfResolveResult {
-    let mut out = result
-    out.diagnostics.push(selfResolveDiagnosticHintAtNode("E0452", message, "", start, end, -1, hint))
-    out
-}
-
-/// srCheckSinceArgs validates `#[since("X.Y")]` (v0.6 G44, §3.14.1).
-/// Accepts exactly one argument: a non-interpolated string literal whose
-/// inner content matches the SemVer-shape regex
-/// `^[0-9]+\.[0-9]+(\.[0-9]+)?(-[A-Za-z0-9.-]+)?$`. Anything else
-/// (interpolated string, integer, identifier, prefix like `"v0.6"`,
-/// wildcard tail like `"0.6.x"`, empty string) yields E0452. Spec
-/// authority: LANG_SPEC_v0.6/00-revision.md §3.14.1.
-fn srCheckSinceArgs(
-    file: AstFile,
-    ann: AstNode,
-    result: SelfResolveResult,
-) -> SelfResolveResult {
-    let argCount = ann.children.len()
-    if argCount == 0 {
-        return srPushSinceBadFormat(
-            result,
-            "`#[since(...)]` requires one SemVer-shaped string literal",
-            ann.start,
-            ann.end,
-            "example: `#[since(\"0.6\")]`, `#[since(\"1.0.0\")]`, or `#[since(\"2.0.0-rc.1\")]`",
-        )
-    }
-    if argCount > 1 {
-        let extra = srAnnotArgView(file, ann.children[1])
-        return srPushSinceBadFormat(
-            result,
-            "`#[since(...)]` accepts exactly one argument",
-            extra.start,
-            extra.end,
-            "remove the extra arguments; only one SemVer string is allowed",
-        )
-    }
-    let view = srAnnotArgView(file, ann.children[0])
-    if view.isFlag || view.key != "" {
-        return srPushSinceBadFormat(
-            result,
-            "`#[since(...)]` takes a positional string literal, not a key/flag",
-            view.start,
-            view.end,
-            "example: `#[since(\"0.6\")]`",
-        )
-    }
-    if view.valueIdx < 0 {
-        return srPushSinceBadFormat(
-            result,
-            "`#[since(...)]` requires a SemVer-shaped string literal",
-            view.start,
-            view.end,
-            "example: `#[since(\"0.6\")]`",
-        )
-    }
-    let valueNode = srAstNode(file, view.valueIdx)
-    if valueNode.kind != AstNStringLit {
-        return srPushSinceBadFormat(
-            result,
-            "`#[since(...)]` argument must be a string literal",
-            view.start,
-            view.end,
-            "example: `#[since(\"0.6\")]`",
-        )
-    }
-    if valueNode.children.len() != 0 {
-        return srPushSinceBadFormat(
-            result,
-            "`#[since(...)]` argument must be a non-interpolated string literal",
-            view.start,
-            view.end,
-            "use a plain literal like `\"0.6\"` — interpolation is not allowed",
-        )
-    }
-    let raw = srStringLitContent(valueNode.text)
-    if !srIsSemVerShape(raw) {
-        return srPushSinceBadFormat(
-            result,
-            "`#[since(\"" + raw + "\")]` is not a SemVer-shape version",
-            view.start,
-            view.end,
-            "accepted shapes: `\"X.Y\"`, `\"X.Y.Z\"`, or `\"X.Y.Z-pre\"` with digit components and an optional `[A-Za-z0-9.-]+` pre-release tail",
-        )
-    }
-    result
-}
-
-/// srIsSemVerShape mirrors the regex
-/// `^[0-9]+\.[0-9]+(\.[0-9]+)?(-[A-Za-z0-9.-]+)?$` used by
-/// `#[since(...)]` (v0.6 §3.14.1). Implemented as a hand-rolled parser
-/// rather than depending on a regex engine — the shape is small and
-/// has fixed positions: digit run, dot, digit run, optional dot+digits,
-/// optional dash+pre-release tail. The pre-release tail must contain
-/// at least one character; allowed tail chars are ASCII letters,
-/// digits, dot, and dash.
-fn srIsSemVerShape(s: String) -> Bool {
-    let chars = s.chars()
-    let n = chars.len()
-    if n == 0 { return false }
-    let mut i = 0
-    // Major: [0-9]+
-    let majorEnd = srSemVerDigitRunEnd(chars, i)
-    if majorEnd == i { return false }
-    i = majorEnd
-    if i >= n { return false }
-    if chars[i] != '.' { return false }
-    i = i + 1
-    // Minor: [0-9]+
-    let minorEnd = srSemVerDigitRunEnd(chars, i)
-    if minorEnd == i { return false }
-    i = minorEnd
-    // Optional patch: \.[0-9]+
-    if i < n && chars[i] == '.' {
-        i = i + 1
-        let patchEnd = srSemVerDigitRunEnd(chars, i)
-        if patchEnd == i { return false }
-        i = patchEnd
-    }
-    // Optional pre-release: -[A-Za-z0-9.-]+
-    if i < n && chars[i] == '-' {
-        i = i + 1
-        if i >= n { return false }
-        for j in i..n {
-            if !srSemVerPreReleaseChar(chars[j]) { return false }
-        }
-        i = n
-    }
-    i == n
-}
-
-fn srSemVerDigitRunEnd(chars: List<Char>, start: Int) -> Int {
-    let n = chars.len()
-    let mut j = start
-    for k in start..n {
-        let c = chars[k]
-        if c < '0' || c > '9' { return j }
-        j = k + 1
-    }
-    j
-}
-
-fn srSemVerPreReleaseChar(c: Char) -> Bool {
-    if c >= '0' && c <= '9' { return true }
-    if c >= 'a' && c <= 'z' { return true }
-    if c >= 'A' && c <= 'Z' { return true }
-    if c == '.' { return true }
-    if c == '-' { return true }
-    false
 }
 
 /// srAnnotIntValue extracts a non-negative integer literal from an
@@ -4029,7 +3834,7 @@ fn srAnnotationNameList() -> List<String> {
         "cfg",
         "op",
         "test",
-        // v0.6 performance hints.
+        // performance hints (A5–A11, A13).
         "vectorize",
         "no_vectorize",
         "parallel",
@@ -4040,34 +3845,6 @@ fn srAnnotationNameList() -> List<String> {
         "pure",
         "target_feature",
         "noalias",
-        // v0.6 G36 — Capabilities.
-        "ambient",
-        "reproducible_capability",
-        // v0.6 G37 — Information flow.
-        "taint",
-        "sanitizes",
-        "trusted_declassify",
-        "taint_field",
-        // v0.6 G38 / G39 — Spec link / Reproducibility.
-        "spec",
-        "reproducible",
-        // v0.6 G40 — Sealed construction.
-        "sealed_construct",
-        "trusted_construct",
-        "test_construct",
-        // v0.6 G41 — Error contract.
-        "error_contract",
-        // v0.6 G42 — Structured intent.
-        "purpose",
-        "example",
-        "fixture",
-        // v0.6 G44 — API evolution.
-        "since",
-        "stability",
-        "match_compat",
-        // v0.6 G45 / G46 — Golden / Budget.
-        "golden",
-        "budget",
     ]
 }
 

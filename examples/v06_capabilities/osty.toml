@@ -1,9 +1,0 @@
-[package]
-name = "v06-capabilities"
-version = "0.1.0"
-edition = "0.5"
-description = "v0.6 explicit capability migration example."
-license = "MIT"
-keywords = ["v0.6", "capabilities", "stdlib"]
-
-[dependencies]

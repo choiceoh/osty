@@ -3,9 +3,7 @@
 ## 프로젝트
 
 **Osty**: 정적 타입, GC 기반, 범용 프로그래밍 언어의 **셀프호스팅 컴파일러/툴체인**.
-언어 스펙은 **v0.6 (현행 baseline, 결정 동결, 구현 phase 진행 중)**, 네이티브 백엔드는 LLVM.
-
-> **v0.5 → v0.6 transition (2026-05-07~ 진행 중)**: v0.6 spec 결정은 PR #1469 / #1471 ~ #1476 으로 baseline 동결. 구현은 Phase 0–5 단계로 진행. v0.5 baseline 호환은 `--legacy-globals` / `--legacy-construct` 플래그 (v0.6.x 한정 — v0.7 제거). 자세한 transition 정책: §"v0.6 baseline 규칙" 아래.
+언어 스펙은 **v0.5 (현행 baseline)**, 네이티브 백엔드는 LLVM.
 
 - **셀프호스팅**: 컴파일러 본체(렉서/파서/리졸버/체커/린트/포매터/LLVM 코드젠/LSP 정책)는 전부 **Osty로 작성** (`toolchain/*.osty`)
 - Go는 **호스트 경계와 부트스트랩 역할만**: I/O, JSON-RPC, CLI 진입점, Osty→Go 셀프호스트 시드(`internal/selfhost/generated.go`), 얇은 어댑터(`internal/lexer`·`internal/parser` 등은 수십 줄짜리 파사드)
@@ -32,23 +30,19 @@
 코드 작성 전 반드시 읽을 것:
 - `README.md` — 현재 구현 상태 표, CLI 레퍼런스
 - `ARCHITECTURE.md` — 파이프라인, 패키지별 책임, 에러 복구 전략
-- **`LANG_SPEC_v0.6/`** — 언어 시맨틱 (현행 baseline, v0.6 결정 동결)
-  - `LANG_SPEC_v0.6/README.md` — 진입점 + ToC + design north star
-  - `LANG_SPEC_v0.6/ABRIDGED.md` — agent quick spec
-  - `LANG_SPEC_v0.6/00-revision.md` — v0.5 → v0.6 결정 overview
-  - `LANG_SPEC_v0.6/18-change-history.md §18.0` — v0.5 → v0.6 변경 이력
-  - `LANG_SPEC_v0.6/20-capabilities.md`, `21-information-flow.md` — v0.6 신규 챕터
-- **`OSTY_GRAMMAR_v0.6.md`** — EBNF 문법 + R1–R27 decision log. 스펙과 구현이 충돌하면 **스펙이 기준**
-- `SPEC_GAPS.md` — 해결된 갭 아카이브 (v0.6 시점 10 결정: G36, G37, G39-G42, G44, G45, G47, G48; G38/G43/G46/G49 withdrawn; open gap 0)
-- `CHANGELOG_v0.6.md` — v0.6 implementation 진행도 (spec 와 분리)
-- `BREAKING_v0.6.md` — v0.5 → v0.6 breaking change 카탈로그
-- `MIGRATING_v0.5_to_v0.6.md` — 사용자 마이그레이션 가이드
+- **`LANG_SPEC_v0.5/`** — 언어 시맨틱 (현행 baseline)
+  - `LANG_SPEC_v0.5/README.md` — 진입점 + ToC
+  - `LANG_SPEC_v0.5/ABRIDGED.md` — agent quick spec
+  - `LANG_SPEC_v0.5/18-change-history.md` — 변경 이력
+- **`OSTY_GRAMMAR_v0.5.md`** — EBNF 문법 + R1–R27 decision log. 스펙과 구현이 충돌하면 **스펙이 기준**
+- `SPEC_GAPS.md` — 해결된 갭 아카이브
+- `CHANGELOG_v0.5.md` — implementation 진행도
 - `ERROR_CODES.md` — 진단 카탈로그 (생성물, `internal/diag/codes.go`에서 자동 생성)
 - `RUNTIME_GC.md` — 런타임/GC 구현 경로
 
 ## graphify 지식 그래프
 
-`graphify-out/`에 AST + 시맨틱 병합 그래프 존재 (13.6k 노드 / 44.9k 엣지 / 159 커뮤니티). 스코프: `internal/` + `LANG_SPEC_v0.6/` + `toolchain/`. `cmd/`·`benchmarks/`·`examples/`는 미인덱스.
+`graphify-out/`에 AST + 시맨틱 병합 그래프 존재 (13.6k 노드 / 44.9k 엣지 / 159 커뮤니티). 스코프: `internal/` + `LANG_SPEC_v0.5/` + `toolchain/`. `cmd/`·`benchmarks/`·`examples/`는 미인덱스.
 
 ### 언제 쓸지
 - 아키텍처/파이프라인 질문 → **먼저 `graphify-out/GRAPH_REPORT.md`** 읽고 god 노드 + 커뮤니티 구조 파악
@@ -183,48 +177,21 @@ winget install --id LLVM.LLVM                              # clang/lld/llc (머�
 - 코드베이스 규모 파악은 `tokei`, LSP가 약한 영역의 심볼 탐색은 Homebrew `universal-ctags`의 `ctags`를 사용.
 - 추가 힌트는 `.claude/rules/ai-tooling.md`를 따른다.
 
-## v0.6 baseline 규칙
+## v0.5 baseline 규칙
 
-**현행 권위**: `LANG_SPEC_v0.6/` + `OSTY_GRAMMAR_v0.6.md`. 스펙과 구현 충돌 시 스펙이 기준.
-
-**Design north star**: *Hidden dependency is forbidden* — 시간, 난수, 환경, 보안 흐름, API 진화, 성능 계약, 의도, 명세 어느 것도 암묵으로 두지 않는다.
+**현행 권위**: `LANG_SPEC_v0.5/` + `OSTY_GRAMMAR_v0.5.md`. 스펙과 구현 충돌 시 스펙이 기준.
 
 **규칙**:
-- 새 구문/키워드/어노테이션 추가는 `LANG_SPEC_v0.6/` 개정 없이는 **금지**. 정식 버전 업(minor/major)과 함께만 surface 변경.
-- v0.6 결정 (10 개: G36, G37, G39-G42, G44, G45, G47, G48) 은 baseline 동결. G38/G43/G46/G49 는 pre-release withdrawn (low utility). 새 결정은 `SPEC_GAPS.md` Open Gaps 섹션에 G50+ 으로 등재 후 다음 minor/major 에 일괄 수용.
+- 새 구문/키워드/어노테이션 추가는 `LANG_SPEC_v0.5/` 개정 없이는 **금지**. 정식 버전 업(minor/major)과 함께만 surface 변경.
 - 문법 모호성 발견 → 컴파일러가 아니라 `SPEC_GAPS.md` 에 먼저 기록.
 - 공개 백엔드는 `--backend llvm` 만. 새 백엔드 플래그 추가 금지.
 
-### v0.5 → v0.6 transition 정책
+### 이 프로젝트에서 spec 작업 시
 
-**Spec 단계 (완료)**: 10 결정 (G36, G37, G39-G42, G44, G45, G47, G48) baseline 동결. 22 main chapter + 46 stdlib subchapter, OSTY_GRAMMAR_v0.6, BREAKING / MIGRATING 가이드, CLAUDE.md 부록 C 모두 land.
-
-**Implementation phase 진행**: `CHANGELOG_v0.6.md` 가 phase 진행도의 권위.
-
-| Phase | 영역 | Gap |
-|---|---|---|
-| 0 | Self-host 자력 사이클 (Tier A 갭) | (v0.5 follow-up) |
-| 1 | Capability + ambient + stdlib migration | G36 |
-| 2 | Structured intent + osty context | G42, G47 |
-| 3 | Reproducible + golden | G39, G45 |
-| 4 | Sealed + ErrorContract + Evolution | G40, G41, G44 |
-| 5 | Taint / sanitize | G37 |
-
-**호환성**:
-- `--legacy-globals` (v0.6.x 한정 — v0.7 제거): v0.5 의 전역 effect 함수 (`time.now()` / `random.next()` / `env.get(k)` / `fs.read(p)` / `os.exec(...)` / `net.dial(...)`) 가 자동 desugar 됨. 사용 시 manifest stability 가 자동 `experimental` 로 강제.
-- `--legacy-construct` (v0.6.x 한정 — v0.7 제거): stdlib sealed types (`Email` / `Url` / `Path` / `SqlIdent` / `Duration` / `Uuid`) 외부 literal 검사 비활성.
-
-**v0.5 ↔ v0.6 차이 한 줄**:
-- v0.5 코드는 v0.6 컴파일러에서 `--legacy-globals --legacy-construct` 와 함께 컴파일 가능 (W0750 deprecation warning 다수)
-- 신규 코드는 v0.6 패턴 (capability parameter, sealed type 의 `Type.parse()` 경유) 사용 권장 — `CLAUDE.md` 부록 C 참조
-
-### 이 프로젝트에서 v0.6 작업 시
-
-1. spec 변경이 필요하면 — `LANG_SPEC_v0.6/` + `OSTY_GRAMMAR_v0.6.md` + `SPEC_GAPS.md` 갱신 + `CHANGELOG_v0.6.md` "shipped" 표 동기
-2. v0.6 패턴 코드 예시는 `CLAUDE.md` 부록 C 참조
-3. 진단 코드 신규 추가는 `internal/diag/codes.go` → `go generate ./internal/diag/...` (catalog 자동 갱신)
-4. `osty check` 통과까지 verify
-5. 신규 Osty 진단 helper (`toolchain/check_diag.osty`) 와 gate (`toolchain/check_gates.osty`) 추가 시 `runCheckGates` 에 등록
+1. spec 변경이 필요하면 — `LANG_SPEC_v0.5/` + `OSTY_GRAMMAR_v0.5.md` + `SPEC_GAPS.md` 갱신 + `CHANGELOG_v0.5.md` "shipped" 표 동기
+2. 진단 코드 신규 추가는 `internal/diag/codes.go` → `go generate ./internal/diag/...` (catalog 자동 갱신)
+3. `osty check` 통과까지 verify
+4. 신규 Osty 진단 helper (`toolchain/check_diag.osty`) 와 gate (`toolchain/check_gates.osty`) 추가 시 `runCheckGates` 에 등록
 
 ## 백엔드 작업 규칙
 
@@ -266,7 +233,7 @@ prefix는 `feat` / `fix` / `chore` / `docs` / `refactor` / `test` / `perf` 중 �
 
 # 부록 A. 언어 핵심 문법·의미론 + canonical 예시 (v0.4)
 
-> **이 부록은 에이전트가 실제로 Osty 코드를 작성할 때 참조하는 작업 레퍼런스다.** 모든 권위는 `LANG_SPEC_v0.6/`와 `OSTY_GRAMMAR_v0.6.md`에 있으나, 아래 예시들은 Osty다운 스타일의 baseline — 그대로 따라 쓸 수 있는 기준이다. 예시 코드는 스펙 내에서 확실한 구문만 사용한다.
+> **이 부록은 에이전트가 실제로 Osty 코드를 작성할 때 참조하는 작업 레퍼런스다.** 모든 권위는 `LANG_SPEC_v0.5/`와 `OSTY_GRAMMAR_v0.5.md`에 있으나, 아래 예시들은 Osty다운 스타일의 baseline — 그대로 따라 쓸 수 있는 기준이다. 예시 코드는 스펙 내에서 확실한 구문만 사용한다.
 
 ## A.1 프로그램 구조 / 렉시컬
 
@@ -568,7 +535,7 @@ fn normalizeUrl(u: String) -> String { ... }
 
 - `#[json(...)]` — struct field / enum variant
 - `#[deprecated(...)]` — 모든 선언, W0750 경고
-- **Vectorize 는 기본 ON** (v0.6 A5.2). 어노테이션 없이 모든 함수의 루프에
+- **Vectorize 는 기본 ON** (A5.2). 어노테이션 없이 모든 함수의 루프에
   `!llvm.loop.vectorize.enable` + per-iteration safepoint 스킵이 적용됨.
   `#[vectorize(scalable, predicate, width = N)]` — default 유지하고 tuning
   args 만 지정. `#[no_vectorize]` — 기본 동작 opt-out (GC 협력 필요한
@@ -576,36 +543,36 @@ fn normalizeUrl(u: String) -> String { ... }
 - `#[parallel]` — top-level fn / method, bare flag. 바디 내 모든 load/store
   에 `!llvm.access.group` 을 붙이고 각 루프 metadata 에
   `llvm.loop.parallel_accesses` 를 참조시켜 vectorizer 가 alias analysis
-  를 우회하게 한다 (v0.6 A6). **Soundness 는 프로그래머 책임** —
+  를 우회하게 한다 (A6). **Soundness 는 프로그래머 책임** —
   loop-carried memory dependency 가 실제로 없을 때만 사용.
 - `#[unroll]` / `#[unroll(count = N)]` — top-level fn / method. 루프를
   unroll 하게 한다. Bare form 은 compiler 가 factor 선택, count form 은
-  정확한 factor 강제 (1..1024). v0.6 A7.
-- **v0.6 A5.2 flip**: 모든 함수가 기본적으로 per-iteration GC loop
+  정확한 factor 강제 (1..1024). A7.
+- **A5.2 flip**: 모든 함수가 기본적으로 per-iteration GC loop
   safepoint poll 을 **스킵**한다 (§3.8.6). entry safepoint + caller-return
   safepoint 로 bracketing 되지만 루프 중간에 STW 에 응답하지 않음 — 의도된
   trade-off. mid-loop GC 협력이 필요하면 `#[no_vectorize]`.
 - `#[inline]` / `#[inline(always)]` / `#[inline(never)]` — top-level fn /
   method. LLVM `inlinehint` / `alwaysinline` / `noinline` fn attr. Tiny
   helper 는 `#[inline(always)]` 로 완전 인라인 — `tiny(n) * 2` 같은 호출이
-  `leaq 2(,%rdi,2), %rax` 한 명령으로 fold 됨 (v0.6 A8).
+  `leaq 2(,%rdi,2), %rax` 한 명령으로 fold 됨 (A8).
 - `#[hot]` / `#[cold]` — top-level fn / method. LLVM `hot` / `cold` fn attr
   + `.text.hot` / `.text.unlikely` 섹션 배치. hot path 는 aggressive
-  optimize, error path 는 size-optimize. 서로 mutually exclusive (v0.6 A9).
+  optimize, error path 는 size-optimize. 서로 mutually exclusive (A9).
 - `#[target_feature(avx512f, avx512bw, ...)]` — top-level fn / method.
   해당 함수 하나만 지정된 CPU feature 로 컴파일. baseline x86-64 프로그램
   에서 특정 함수만 AVX-512 ZMM 을 쓸 수 있음. **Safety**: 실행 CPU 가 그
   feature 를 지원하는지 호출자가 보장해야 함 (`cpuid`/`HWCAP` dispatch).
-  v0.6 A10.
+  A10.
 - `#[noalias]` / `#[noalias(p1, p2)]` — top-level fn / method. pointer
   param 들이 서로 aliasing 하지 않음을 약속 (LLVM `noalias` param attr).
   alias analyzer 가 SROA / LICM / 벡터화 를 해금. **Soundness 는
   프로그래머 책임** — 거짓말하면 UB. `#[parallel]` 보다 surgical
-  (파라미터 단위). v0.6 A11.
+  (파라미터 단위). A11.
 - `#[pure]` — top-level fn / method, bare flag. 관찰 가능한 부작용 없음
   을 assert (LLVM `readnone` fn attr). 반복 호출 CSE, hoist, dead-call
-  elim. **v0.6 lenient**: 체커가 검증 안 함, 프로그래머 책임. Checker
-  enforcement 는 SPEC_GAPS `pure-enforce` 로 추적. v0.6 A13.
+  elim. **lenient**: 체커가 검증 안 함, 프로그래머 책임. Checker
+  enforcement 는 SPEC_GAPS `pure-enforce` 로 추적. A13.
 - 값은 **리터럴만** (key=literal 또는 bare flag), 표현식 불가
 
 ```osty
@@ -908,14 +875,14 @@ fn parseTokens(tokens: List<Token>) -> Result<Config, Error> { ... }
 | 61 | `#[json(...)]` | struct field / variant |
 | 62 | `#[deprecated(...)]` | W0750 |
 | 63 | 값 = 리터럴 전용 | 검증 용이 |
-| 63.1 | **기본 ON** + `#[vectorize(scalable, predicate, width = N)]` + `#[no_vectorize]` | v0.6 A5/A5.1/A5.2. 기본은 모든 함수에서 `vectorize.enable` + safepoint 스킵. tuning args 로 strategy 지정; opt-out 은 `#[no_vectorize]`. 스칼라 `List<T>` (i64/i1/double) subscript 는 param 이든 local 이든 MIR lazy snapshot 으로 fast path 진입 — CFG forward reachability 로 뮤테이션 도달 가능하면 slow call 로 fallback (`mir_generator.go:snapshotVectorListLocal` / `mirLocalMutationReachableFrom`). `osty_rt_list_data_* / len / get_*` 는 `memory(read)` 로 선언되어 LLVM LICM 이 hoist 가능. |
-| 63.2 | `#[parallel]` | v0.6 A6. `!llvm.access.group` + `loop.parallel_accesses` 로 alias analysis 우회. soundness는 프로그래머 책임. |
-| 63.3 | `#[unroll]` / `#[unroll(count = N)]` | v0.6 A7. `loop.unroll.enable` 또는 `loop.unroll.count`. vectorize와 독립적. |
-| 63.4 | `#[inline]` / `#[inline(always)]` / `#[inline(never)]` | v0.6 A8. LLVM `inlinehint` / `alwaysinline` / `noinline` fn attr. |
-| 63.5 | `#[hot]` / `#[cold]` | v0.6 A9. LLVM `hot` / `cold` fn attr + `.text.hot` / `.text.unlikely` 섹션. |
-| 63.6 | `#[target_feature(f1, f2, ...)]` | v0.6 A10. Per-function CPU feature override. `"target-features"="+f1,+f2"`. |
-| 63.7 | `#[noalias]` / `#[noalias(p1, p2)]` | v0.6 A11. `ptr noalias` param attr. Alias-analyzer unlock. |
-| 63.8 | `#[pure]` | v0.6 A13. `readnone` fn attr. CSE / hoist / dead-call elim. Lenient (체커 없음). |
+| 63.1 | **기본 ON** + `#[vectorize(scalable, predicate, width = N)]` + `#[no_vectorize]` | A5/A5.1/A5.2. 기본은 모든 함수에서 `vectorize.enable` + safepoint 스킵. tuning args 로 strategy 지정; opt-out 은 `#[no_vectorize]`. 스칼라 `List<T>` (i64/i1/double) subscript 는 param 이든 local 이든 MIR lazy snapshot 으로 fast path 진입 — CFG forward reachability 로 뮤테이션 도달 가능하면 slow call 로 fallback (`mir_generator.go:snapshotVectorListLocal` / `mirLocalMutationReachableFrom`). `osty_rt_list_data_* / len / get_*` 는 `memory(read)` 로 선언되어 LLVM LICM 이 hoist 가능. |
+| 63.2 | `#[parallel]` | A6. `!llvm.access.group` + `loop.parallel_accesses` 로 alias analysis 우회. soundness는 프로그래머 책임. |
+| 63.3 | `#[unroll]` / `#[unroll(count = N)]` | A7. `loop.unroll.enable` 또는 `loop.unroll.count`. vectorize와 독립적. |
+| 63.4 | `#[inline]` / `#[inline(always)]` / `#[inline(never)]` | A8. LLVM `inlinehint` / `alwaysinline` / `noinline` fn attr. |
+| 63.5 | `#[hot]` / `#[cold]` | A9. LLVM `hot` / `cold` fn attr + `.text.hot` / `.text.unlikely` 섹션. |
+| 63.6 | `#[target_feature(f1, f2, ...)]` | A10. Per-function CPU feature override. `"target-features"="+f1,+f2"`. |
+| 63.7 | `#[noalias]` / `#[noalias(p1, p2)]` | A11. `ptr noalias` param attr. Alias-analyzer unlock. |
+| 63.8 | `#[pure]` | A13. `readnone` fn attr. CSE / hoist / dead-call elim. Lenient (체커 없음). |
 
 **전형 패턴** — 직렬화 키 매핑 + 내부 필드 숨김:
 
@@ -930,7 +897,7 @@ pub struct ApiUser {
 }
 ```
 
-**전형 패턴** — **어노테이션 없이** 기본 vectorize (v0.6 A5.2):
+**전형 패턴** — **어노테이션 없이** 기본 vectorize (A5.2):
 
 ```osty
 // 자동으로 vectorize — 타이핑 필요 없음.
@@ -951,7 +918,7 @@ pub fn drainForever(q: Queue) {
 }
 ```
 
-**고급 패턴** — SIMD 최대 활용 (v0.6 A5.1/A6/A7 조합). SVE/RVV + AVX-512
+**고급 패턴** — SIMD 최대 활용 (A5.1/A6/A7 조합). SVE/RVV + AVX-512
 타겟에서 최대 throughput:
 
 ```osty
@@ -1069,287 +1036,10 @@ fn benchParseConfig() {
 
 ---
 
-# 부록 C. v0.6 신규 패턴 (G36, G37, G39-G42, G44, G45, G47, G48)
-
-> **v0.6 design north star**: *Hidden dependency is forbidden* — 시간, 난수, 환경, 보안 흐름, API 진화, 성능 계약, 의도, 명세 어느 것도 암묵으로 두지 않는다.
->
-> 본 부록의 권위는 `LANG_SPEC_v0.6/`. 부록 A 의 v0.4 예시들은 여전히 유효한 Osty — v0.6 는 *추가 surface* 만. 라이브러리 / public API / 보안-민감 코드는 v0.6 패턴을 우선 사용하고, 단순 스크립트는 부록 A 스타일로도 충분.
-
-## C.1 Capability parameter (G36, §20)
-
-**규칙**: 라이브러리 코드는 환경 effect 를 *capability parameter* 로 받는다. 7 canonical: `Clock`, `Rng`, `Env`, `Fs`, `Net`, `Process`, `Console`.
-
-```osty
-// 라이브러리 함수 — capability 명시
-pub fn buildId(clock: Clock, rng: Rng) -> String {
-    "{clock.now().toEpochMillis()}-{rng.next()}"
-}
-
-pub fn loadConfig(env: Env, fs: Fs) -> Result<Config, Error> {
-    let path = env.get("CONFIG_PATH") ?? "/etc/app.toml"
-    let text = fs.readToString(path)?
-    json.parse(text)
-}
-```
-
-**`#[ambient]` — entry point 만**:
-
-```osty
-// fn main / scripts / #[test] / #[bench] 만 허용
-#[ambient(clock, rng, env, fs, console)]
-fn main() {
-    let id = buildId(clock, rng)              // 자동 forward
-    let cfg = loadConfig(env, fs)?            // 자동 forward
-    console.println("id={id}")
-}
-```
-
-**금지**:
-- 라이브러리 함수에 `#[ambient]` (`E0780`)
-- `time.now()` / `random.next()` / `env.get(k)` 류 *전역 함수* — `--legacy-globals` 호환 모드 v0.6.x 한정, v0.7 제거
-
-**테스트 측 fake injection**:
-
-```osty
-fn test_buildId_format() {
-    let fakeClock = std.time.fakeClock(epoch_ms = 1_000_000)
-    let fakeRng = std.random.seededRng(seed = 42)
-    let id = buildId(fakeClock, fakeRng)
-    testing.assertEq(id, "1000000-1608637542")    // deterministic
-}
-```
-
-## C.2 Information flow tagging (G37, §21)
-
-**규칙**: 사용자 입력 / 외부 데이터는 `#[taint(source)]` 로 marker, sanitizer 는 `#[sanitizes(source, into = trust)]`, sink 는 `#[requires(trust)]`.
-
-```osty
-// Source — HTTP form 파라미터
-#[taint("user_input")]
-pub fn readForm(req: HttpRequest, name: String) -> String? {
-    req.queryParam(name)
-}
-
-// Sanitizer — SQL identifier 검증
-#[sanitizes("user_input", into = "sql_safe")]
-pub fn sqlIdent(s: String) -> SqlIdent? { ... }
-
-// Sink — DB query 는 sql_safe 요구
-pub fn query(table: #[requires("sql_safe")] SqlIdent) -> Rows { ... }
-```
-
-**전형 패턴** — vulnerable → fixed:
-
-```osty
-// ❌ E0900 — tainted value reaches sql sink
-fn handler_bad(req: HttpRequest, db: Db) -> Response {
-    let userId = req.queryParam("id") ?? ""
-    let rows = db.query("SELECT * FROM users WHERE id = {userId}")
-    // ...
-}
-
-// ✅ parameterized query (sink 가 tag 무시)
-fn handler_param(req: HttpRequest, db: Db) -> Response {
-    let userId = req.queryParam("id") ?? ""
-    let rows = db.exec(
-        "SELECT * FROM users WHERE id = ?",
-        [userId],                            // tag 와 무관
-    )
-    // ...
-}
-
-// ✅ sanitize 후 sink
-fn handler_sanitize(req: HttpRequest, db: Db) -> Response {
-    let userId = req.queryParam("id") ?? ""
-    let safe = std.sql.escape(userId)        // tag → sql_safe 변환
-    let rows = db.query("SELECT * FROM users WHERE id = {safe}")
-    // ...
-}
-```
-
-**v0.6 baseline sinks**: `db.query` (sql_safe) · `process.exec` (shell_safe) · `fs.path*` (path_safe) · `http.redirect` (url_safe) · `template.render` / `http.respondHtml` (html_safe).
-
-**FFI 경계**: `#[trusted_declassify(reason)]` 로 명시적 audit. `osty audit --trusted-declassify` 로 enumerate.
-
-## C.3 Sealed construct (G40, §3.4.5)
-
-**규칙**: parse-don't-validate 패턴은 `#[sealed_construct(constructor)]` 로 강제. 외부 literal 차단 = "이 type 의 값이 존재한다 ⇒ 검증 통과" 자동 보장.
-
-```osty
-#[sealed_construct(parse)]
-#[json(constructor = parse, field = "email")]
-pub struct Email {
-    local: String,
-    domain: String,
-}
-
-impl Email {
-    pub fn parse(s: String) -> Email? {
-        let parts = s.split("@")
-        if parts.len() != 2 { return None }
-        Some(Email { local: parts[0], domain: parts[1] })   // OK — authorized
-    }
-    pub fn local(self) -> String { self.local }
-    pub fn domain(self) -> String { self.domain }
-}
-```
-
-**금지** (모두 `E0420`):
-- 외부 struct literal: `Email { local: "a", domain: "b" }`
-- Spread: `Email { ..existing, domain: "x" }`
-- 직접 mutation
-- generic deserialize 우회 (`#[json(constructor)]` 없으면)
-- test 환경 우회 (production 빌드 — `E0421`)
-
-**Stdlib v0.6 baseline sealed**: `Email`, `Url`, `Path`, `SqlIdent`, `Duration`, `Uuid`. 사용자 코드는 항상 `Type.parse(...)` 경유.
-
-## C.4 Error contract (G41, §7.5)
-
-**규칙**: public API 의 concrete enum error 는 `#[error_contract]` 로 failure mode catalog 명시.
-
-```osty
-pub enum UserCreateError {
-    EmailFormat,
-    DomainBlocked(String),
-    DbConflict(Int),
-}
-
-#[error_contract(
-    UserCreateError.EmailFormat   when "Email.parse 실패",
-    UserCreateError.DomainBlocked when "도메인이 deny-list 등재",
-    UserCreateError.DbConflict    when "이메일 unique 제약 위반",
-)]
-pub fn createUser(email: String, db: Db) -> Result<UserId, UserCreateError> { ... }
-```
-
-**효과**:
-- `Err(...)` return path 가 contract variant 만 사용 (정적 검증, `E0410`)
-- 호출자 측 match exhaustiveness 가 contract variant 기반
-- `osty doc` Failure modes 표 자동 생성
-- `osty context <fn>` JSON 에 포함
-
-**Erased `Error` interface 에는 `#[error_contract(any)]`** (검증 없음, 문서용).
-
-## C.5 Structured intent (G42)
-
-**규칙**: public API / 컴파일러 internal 함수에 `#[purpose]` + `#[example]`
-로 machine-readable intent 노출.
-
-```osty
-#[purpose("이메일 검증 후 DB에 사용자 저장")]
-#[example(input = "alice@example.com", uses = "sampleDb", output = "Ok(42)")]
-#[example(input = "invalid",            uses = "sampleDb", output = "Err(UserCreateError.EmailFormat)")]
-pub fn createUser(email: String, db: Db) -> Result<UserId, UserCreateError> { ... }
-
-#[fixture(name = "sampleDb")]
-fn fakeDb() -> Db { std.testing.db.inMemory() }
-```
-
-**소비**: `osty doc` (문서 생성), `osty test --example` (자동 검증),
-`osty context` (LLM agent payload), LSP hover.
-
-## C.7 Reproducibility (G39, §3.11)
-
-**규칙**: 캐시 키 / 빌드 해시 / migration ID / content addressing 함수에 `#[reproducible(scope=...)]`.
-
-```osty
-#[reproducible(scope = "target")]
-fn computeKey(data: Bytes) -> Bytes32 {
-    sha256(data)
-}
-
-#[reproducible(scope = "portable")]
-fn migrationId(name: String, sequence: Int) -> Int64 {
-    bytes.toBigEndian(name.toBytes() + sequence.toBytes()).toInt64()
-}
-```
-
-**Scope**:
-- `"run"` — 같은 프로세스 실행 (Console capability OK)
-- `"target"` *(default)* — 같은 Osty 버전 + target triple
-- `"portable"` — 플랫폼 간 byte-equal
-
-**금지**: non-deterministic capability 수신 (`E0784`), unordered iter (`E0786`), pointer-id 비교, 더 약한 scope callee 호출 (`E0787`).
-
-## C.9 API evolution (G44)
-
-**규칙**: public API 는 `#[stability]` + `#[since]` 로 진화 규칙 명시. enum match 는 `#[match_compat]` 로 future-proof.
-
-```osty
-#[stability("stable")]
-#[since("0.6")]
-pub fn parseEmail(s: String) -> Email? { ... }
-
-#[stability("experimental", until = "0.7")]
-#[since("0.6")]
-pub fn parseEmailLoose(s: String) -> Email? { ... }
-
-pub enum HttpEvent {
-    Get,
-    Post,
-
-    #[since("0.7")]
-    Patch,
-}
-
-#[match_compat("0.6", fallback = handlePatchAsPut, reason = "Patch 는 v0.7+ 정식")]
-fn dispatch(e: HttpEvent) -> Response {
-    match e {
-        HttpEvent.Get -> handleGet(),
-        HttpEvent.Post -> handlePost(),
-    }
-    // HttpEvent.Patch 도달 시 fallback 호출
-}
-```
-
-**`osty publish` 게이트**: `stable` API breaking change → major bump 강제 (`E2100`). `experimental` 변경 OK (`W2100`).
-
-**Silent fallback 금지**: `#[match_compat]` 는 `fallback = name` 또는 `unsafe_silent = true` 명시 필수 (`E0450`).
-
-## C.10 Golden tests (G45, §11.5.2)
-
-**규칙**: 컴파일러 / formatter / docgen / 진단 출력 테스트는 `#[golden]` annotation 형식.
-
-```osty
-#[golden("fixtures/format_expr.snap")]
-fn testFormatBinaryOp() {
-    let result = formatExpr(parseExpr("1 + 2 * 3"))
-    testing.assertGolden(result)
-}
-
-#[golden("fixtures/diag_E0765.snap", mode = "ast")]
-fn testNumericNarrowingDiag() {
-    let diag = checkSnippet("let x: Int8 = bigInt")
-    testing.assertGolden(diag.toString())
-}
-```
-
-**Mode**: `"text"` (default, byte-exact) / `"ast"` (reparse + AST 비교, whitespace 무시) / `"json"` (structural) / `"diag"` (Span-tolerant).
-
-**`#[golden]` 함수는 자동 `#[reproducible(scope="target")]`** — non-deterministic 호출 시 `E0444`.
-
-**Update**: `osty test --update-golden` 로 일괄 갱신.
-
-## C.11 부록 C 빠른 참조 표
-
-| 영역 | Annotation | 주 사용처 |
-|---|---|---|
-| **Capability** (C.1) | `Clock`/`Rng`/`Env`/`Fs`/`Net`/`Process`/`Console` parameter, `#[ambient]` | 모든 라이브러리 함수 / entry point |
-| **Information flow** (C.2) | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]` | HTTP / DB / shell / path / URL 경계 |
-| **Sealed construct** (C.3) | `#[sealed_construct(parse)]` | parse-don't-validate 타입 (Email/Url/Path/Uuid/...) |
-| **Error contract** (C.4) | `#[error_contract(... when ...)]` | public API의 concrete enum error |
-| **Intent** (C.5) | `#[purpose]`, `#[example]`, `#[fixture]` | public API / compiler internal |
-| **Reproducibility** (C.7) | `#[reproducible(scope=...)]` | 캐시 키 / 해시 / migration ID |
-| **Evolution** (C.9) | `#[stability]`, `#[since]`, `#[match_compat]` | public API surface |
-| **Golden** (C.10) | `#[golden(path, mode=)]` | 컴파일러 / formatter / docgen 자가 테스트 |
-
----
-
 ## 이 부록들의 사용 규칙
 
 - 새 Osty 코드·예시·진단 메시지 작성 **전에** 부록 A 의 해당 소섹션을 확인하고 예시 스타일을 따른다.
-- v0.6 신규 surface 가 필요한 경우 부록 C 를 우선 참조 — 라이브러리 / public API / 보안-민감 코드는 v0.6 패턴 (capability / taint / sealed / error_contract) 을 *기본*으로.
 - 새 기능·린트 추가 전에 부록 B 에 이미 있는 기법과 중복되는지 검사.
-- `LANG_SPEC_v0.6/` 가 확장되면 같은 커밋에서 부록 A/B/C 도 갱신.
+- `LANG_SPEC_v0.5/` 가 확장되면 같은 커밋에서 부록 A/B 도 갱신.
 - 부록 예시는 반드시 스펙 내 확실한 문법만. 불확실하면 서술로 대체하거나 생략.
-- 부록 A/C 에 없는 구문을 예시·코드에 쓰려 한다면 먼저 스펙을 확인하고, 있다면 해당 부록에 추가.
+- 부록 A 에 없는 구문을 예시·코드에 쓰려 한다면 먼저 스펙을 확인하고, 있다면 해당 부록에 추가.

@@ -2,6 +2,7 @@ package stage0
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -4308,6 +4309,113 @@ func TestStage0EmitsScalarReturnChainWithGotoArms(t *testing.T) {
 		"ret i1 true",
 		"return.5:",
 		"ret i1 false",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+// TestStage0EmitsScalarReturnChainHighParamCount exercises the param cap
+// raised from 8 → 32 in matchScalarReturnChain. Models a 12-param
+// `mirLegacyAssignOpCode`-shaped enum-mapping helper:
+// `if op == kEq { return tEq } else if op == kAdd { return tAdd } ...`.
+// Without the cap raise, the function declines on `len(fn.Params) > 8`
+// before the body walk even runs.
+func TestStage0EmitsScalarReturnChainHighParamCount(t *testing.T) {
+	t.Parallel()
+	// 12 params: op + 5 enum kinds + 5 enum tokens + default. Each `if op == kN`
+	// returns the matching token; final block returns the default.
+	const armCount = 5
+	locals := []*mir.Local{
+		{ID: 0, Name: "ret", Type: ir.TInt, IsReturn: true},
+		{ID: 1, Name: "op", Type: ir.TInt, IsParam: true},
+	}
+	params := []mir.LocalID{1}
+	// 5 kinds (k1..k5)
+	for i := 0; i < armCount; i++ {
+		id := mir.LocalID(2 + i)
+		locals = append(locals, &mir.Local{ID: id, Name: fmt.Sprintf("k%d", i+1), Type: ir.TInt, IsParam: true})
+		params = append(params, id)
+	}
+	// 5 tokens (t1..t5)
+	for i := 0; i < armCount; i++ {
+		id := mir.LocalID(2 + armCount + i)
+		locals = append(locals, &mir.Local{ID: id, Name: fmt.Sprintf("t%d", i+1), Type: ir.TInt, IsParam: true})
+		params = append(params, id)
+	}
+	// default (token0)
+	defaultID := mir.LocalID(2 + 2*armCount)
+	locals = append(locals, &mir.Local{ID: defaultID, Name: "tDefault", Type: ir.TInt, IsParam: true})
+	params = append(params, defaultID)
+	// Cond locals — one per arm.
+	for i := 0; i < armCount; i++ {
+		locals = append(locals, &mir.Local{ID: mir.LocalID(20 + i), Name: fmt.Sprintf("cond%d", i+1), Type: ir.TBool})
+	}
+
+	// Build the CFG: entry → branch(cond1) → return.1 | chain.2 → branch(cond2) → return.3 | chain.4 → ... → final
+	// Each arm: 3 blocks (cond block, then-return, else-goto-next).
+	blocks := []*mir.BasicBlock{}
+	for i := 0; i < armCount; i++ {
+		condBlockID := mir.BlockID(3 * i)
+		thenBlockID := mir.BlockID(3*i + 1)
+		elseBlockID := mir.BlockID(3*i + 2)
+		nextChainID := mir.BlockID(3 * (i + 1))
+		condLocalID := mir.LocalID(20 + i)
+		kindParamID := mir.LocalID(2 + i)
+		tokenParamID := mir.LocalID(2 + armCount + i)
+		// Cond block: assign condN = (op == kN), branch.
+		blocks = append(blocks, &mir.BasicBlock{
+			ID: condBlockID,
+			Instrs: []mir.Instr{
+				assign(condLocalID, binaryRV(mir.BinEq, paramCopy(1, ir.TInt), paramCopy(kindParamID, ir.TInt), ir.TBool)),
+			},
+			Term: &mir.BranchTerm{Cond: paramCopy(condLocalID, ir.TBool), Then: thenBlockID, Else: elseBlockID},
+		})
+		// Then: return tN.
+		blocks = append(blocks, &mir.BasicBlock{
+			ID:     thenBlockID,
+			Instrs: []mir.Instr{assign(0, useRV(paramCopy(tokenParamID, ir.TInt)))},
+			Term:   &mir.ReturnTerm{},
+		})
+		// Else: goto next chain.
+		blocks = append(blocks, &mir.BasicBlock{
+			ID:   elseBlockID,
+			Term: &mir.GotoTerm{Target: nextChainID},
+		})
+	}
+	// Final block: return default.
+	finalID := mir.BlockID(3 * armCount)
+	blocks = append(blocks, &mir.BasicBlock{
+		ID:     finalID,
+		Instrs: []mir.Instr{assign(0, useRV(paramCopy(defaultID, ir.TInt)))},
+		Term:   &mir.ReturnTerm{},
+	})
+
+	fn := &mir.Function{
+		Name:        "enumOpcode",
+		Params:      params,
+		ReturnType:  ir.TInt,
+		ReturnLocal: 0,
+		Locals:      locals,
+		Entry:       0,
+		Blocks:      blocks,
+	}
+	got := emit(t, trivialMainFn(), fn)
+
+	// Stage0 routes the function to *some* matcher (scalar-return-chain or
+	// the generic-CFG fallback). Either is fine for this regression — what
+	// matters is that the >8-param ceiling no longer rejects out-of-hand.
+	// Verify (a) the 12-param signature renders with the source names (no
+	// fallback `p0`/`p1` since every param has a real `loc.Name`), and
+	// (b) every arm + default token reaches the IR.
+	for _, want := range []string{
+		"define i64 @enumOpcode(i64 %op, i64 %k1, i64 %k2, i64 %k3, i64 %k4, i64 %k5, i64 %t1, i64 %t2, i64 %t3, i64 %t4, i64 %t5, i64 %tDefault)",
+		"icmp eq i64 %op, %k1",
+		"icmp eq i64 %op, %k5",
+		"%t1",
+		"%t5",
+		"%tDefault",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("emitted IR missing %q:\n%s", want, got)

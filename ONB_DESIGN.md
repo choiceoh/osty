@@ -1705,7 +1705,7 @@ OS별 자연 분기. emitter glue에서 ~50줄로 처리:
 **동일 placement**:
 - Entry: 함수 진입 1회
 - Call: function call site
-- Loop: back-edge (단 v0.6 A5.2 기본 ON 정책상 스킵, `#[no_vectorize]`만
+- Loop: back-edge (단 A5.2 기본 ON 정책상 스킵, `#[no_vectorize]`만
   유지)
 - Alloc: heap 할당 직후
 - Yield: 명시 yield 지점
@@ -1922,4 +1922,4 @@ toolchain/
 - DWARF emit 세부 (Osty 타입 시스템 → DW_TAG 매핑 표)
 - cross-validation harness 설계 (diff 정책, golden snapshot 운영)
 - Phase 1.0 implementation plan (작업 분할, 의존성 DAG, 테스트 게이트)
-- v0.6 spec 부록에 ONB hint 정책 명시 (`#[vectorize]` 백엔드별 정책 등)
+- spec 부록에 ONB hint 정책 명시 (`#[vectorize]` 백엔드별 정책 등)

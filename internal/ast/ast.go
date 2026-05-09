@@ -166,7 +166,7 @@ var annotationRules = map[string]AnnotationTarget{
 	// `_test.osty` files; production builds exclude them. No
 	// arguments.
 	"test": TargetTopLevelDecl,
-	// v0.6 A5 / A5.1 (SIMD track). As of v0.6 the vectorize hint is ON
+	// A5 / A5.1 (SIMD track). The vectorize hint is ON
 	// by default — every function's loops get `!llvm.loop.vectorize.enable`
 	// metadata and opt out of the per-iteration GC safepoint poll
 	// without the user writing anything. `#[vectorize(...)]` with args
@@ -179,13 +179,13 @@ var annotationRules = map[string]AnnotationTarget{
 	// redundant with default). Use `#[no_vectorize]` to opt out.
 	// §3.8.3, SPEC_GAPS `vectorize-hint`.
 	"vectorize": TargetTopLevelDecl | TargetMethod,
-	// v0.6 A5.2. Opt-out of the default vectorize treatment. Bare
+	// A5.2. Opt-out of the default vectorize treatment. Bare
 	// flag. The annotated function's loops keep per-iteration safepoint
 	// polls and receive no `!llvm.loop.vectorize.enable` metadata —
 	// useful for long-running worker loops that must yield to GC
 	// mid-loop. §3.8.3.
 	"no_vectorize": TargetTopLevelDecl | TargetMethod,
-	// v0.6 A6. Declares that memory accesses inside the annotated
+	// A6. Declares that memory accesses inside the annotated
 	// function's loops are parallel (no loop-carried memory
 	// dependencies). The LLVM backend emits a `!llvm.access.group`
 	// metadata node and tags every load/store + loop-backedge with
@@ -193,26 +193,26 @@ var annotationRules = map[string]AnnotationTarget{
 	// its default aliasing analysis. Soundness is the programmer's
 	// responsibility. §3.8.5. No arguments.
 	"parallel": TargetTopLevelDecl | TargetMethod,
-	// v0.6 A7. Requests LLVM loop unrolling for every loop lowered in
+	// A7. Requests LLVM loop unrolling for every loop lowered in
 	// the body. Bare form (`#[unroll]`) emits
 	// `llvm.loop.unroll.enable`; `#[unroll(N)]` emits
 	// `llvm.loop.unroll.count, i32 N` for a fixed unroll factor.
 	// Composes with `#[vectorize]` (unroll × width ≈ effective
 	// throughput). §3.8.6.
 	"unroll": TargetTopLevelDecl | TargetMethod,
-	// v0.6 A8. Inlining hint family. Bare `#[inline]` emits LLVM's
+	// A8. Inlining hint family. Bare `#[inline]` emits LLVM's
 	// `inlinehint` fn attribute, a soft suggestion. `#[inline(always)]`
 	// / `#[inline(never)]` emit the hard `alwaysinline` / `noinline`
 	// attributes which the inliner honors mechanically. §3.8.7.
 	"inline": TargetTopLevelDecl | TargetMethod,
-	// v0.6 A9. Function frequency hints. `#[hot]` emits the LLVM
+	// A9. Function frequency hints. `#[hot]` emits the LLVM
 	// `hot` fn attribute (aggressive optimization, `.text.hot`
 	// section); `#[cold]` emits `cold` (size-optimize, move to
 	// `.text.cold`, bias branch prediction away from calls). Bare
 	// flags. §3.8.8.
 	"hot":  TargetTopLevelDecl | TargetMethod,
 	"cold": TargetTopLevelDecl | TargetMethod,
-	// v0.6 A10. Per-function target feature override. Each bare-ident
+	// A10. Per-function target feature override. Each bare-ident
 	// argument names a CPU feature the backend should enable while
 	// compiling this function; the LLVM emitter materialises them as
 	// a single `target-features="+f1,+f2"` fn attribute. Lets a
@@ -220,7 +220,7 @@ var annotationRules = map[string]AnnotationTarget{
 	// SVE without forcing the whole program onto that baseline.
 	// §3.8.9.
 	"target_feature": TargetTopLevelDecl | TargetMethod,
-	// v0.6 A11. Promise that pointer-typed parameters do not alias.
+	// A11. Promise that pointer-typed parameters do not alias.
 	// Bare `#[noalias]` marks every pointer param; `#[noalias(p1, p2)]`
 	// marks only the listed params. The LLVM emitter inserts the
 	// `noalias` parameter attribute on matching params so the LLVM
@@ -228,79 +228,14 @@ var annotationRules = map[string]AnnotationTarget{
 	// memory — unlocks SROA, loop vectorization, and LICM that would
 	// otherwise bail on potential aliasing. §3.8.11.
 	"noalias": TargetTopLevelDecl | TargetMethod,
-	// v0.6 A13. Asserts the function has no observable side effects
+	// A13. Asserts the function has no observable side effects
 	// (no writes to memory the caller can see, no I/O, no calls to
 	// impure functions). The LLVM emitter sets the `readnone` fn
 	// attribute so callers can CSE / hoist repeated calls to the same
-	// arguments. Lenient in v0.6 — the compiler trusts the
+	// arguments. Lenient by default — the compiler trusts the
 	// annotation; a checker-level enforcement pass is tracked under
 	// SPEC_GAPS `pure-enforce`. §3.8.12.
 	"pure": TargetTopLevelDecl | TargetMethod,
-
-	// v0.6 G36 — Capabilities (LANG_SPEC_v0.6/20-capabilities.md).
-	// `#[ambient(name1, ...)]` injects prelude default capability
-	// instances at the function body's first statement position.
-	// Restricted to entry-point functions (script `main`, `#[test]`,
-	// `#[bench]` etc.). Library functions must receive capabilities
-	// as explicit parameters — `E0780` when applied elsewhere.
-	"ambient": TargetTopLevelDecl,
-	// `#[reproducible_capability]` marks an interface as carrying only
-	// `#[reproducible]` methods, so user-defined deterministic
-	// capabilities can pass `#[reproducible]` checks. v0.6 §20.5.
-	"reproducible_capability": TargetTopLevelDecl,
-
-	// v0.6 G37 — Information flow (LANG_SPEC_v0.6/21-information-flow.md).
-	// Source / sanitizer / sink annotations form a 1-bit + N-tag flow
-	// tracking surface. Targets are widened across function declaration,
-	// parameter, struct field (per `#[taint]`), and method positions to
-	// match the rule table in 00-revision.md §7.6.
-	"taint":     TargetTopLevelDecl | TargetMethod | TargetStructField,
-	"sanitizes": TargetTopLevelDecl | TargetMethod,
-	// `#[requires("tag")]` on parameters (G37 sink) reuses the v0.5
-	// `requires` annotation name; the parameter-position grammar is a
-	// separate G37 R29 surface added in v0.6 and tracked by the parser
-	// rather than the annotation target table. The existing v0.5
-	// `"requires": TargetMethod` entry above (around line 116) covers
-	// the stdlib trait-bound use; parameter annotations bypass that
-	// table since they live at a different syntactic position.
-	"trusted_declassify": TargetTopLevelDecl | TargetMethod,
-	"taint_field":        TargetStructField,
-
-	// v0.6 G38 — Spec link (LANG_SPEC_v0.6/03-declarations.md §3.10).
-	// `#[spec("§X.Y")]` registers a checked link into the spec corpus.
-	"spec": TargetTopLevelDecl | TargetMethod,
-
-	// v0.6 G39 — Reproducibility (§3.11). `#[reproducible(scope=...)]`
-	// asserts environment-independence; checker enforces in Phase 3.
-	"reproducible": TargetTopLevelDecl | TargetMethod,
-
-	// v0.6 G40 — Sealed construction (§3.4.5).
-	"sealed_construct":  TargetTopLevelDecl,
-	"trusted_construct": TargetTopLevelDecl | TargetMethod,
-	"test_construct":    TargetTopLevelDecl | TargetMethod,
-
-	// v0.6 G41 — Error contract (§7.5). Catalogues failure modes.
-	"error_contract": TargetTopLevelDecl | TargetMethod,
-
-	// v0.6 G42 — Structured intent (§3.12). Machine-readable purpose,
-	// example (auto-checked), fixture (canonical instance).
-	"purpose": TargetTopLevelDecl | TargetMethod,
-	"example": TargetTopLevelDecl | TargetMethod,
-	"fixture": TargetTopLevelDecl,
-
-	// v0.6 G44 — API evolution (§3.14).
-	"since":        TargetTopLevelDecl | TargetMethod | TargetStructField | TargetVariant,
-	"stability":    TargetTopLevelDecl | TargetMethod,
-	"match_compat": TargetTopLevelDecl | TargetMethod,
-
-	// v0.6 G45 — Golden tests (§11.5.2). AST/text/json/diag-aware
-	// snapshot. Implicitly requires `#[reproducible(scope="target")]`.
-	"golden": TargetTopLevelDecl,
-
-	// v0.6 G46 — Performance contract (§3.15). Static keys (allocs,
-	// io_calls, stack_depth, instructions) and runtime keys (time_ms,
-	// p99_ms) coexist on one annotation.
-	"budget": TargetTopLevelDecl | TargetMethod,
 }
 
 // IsAllowedAnnotation reports whether an annotation name is part of the

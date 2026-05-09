@@ -212,7 +212,7 @@ pub struct LirInstr {
     pub text: String,
     // Per-instruction LLVM metadata trailers — currently `, !llvm.access.group !N`
     // attached to load/store inside `#[parallel]` functions
-    // (LANG_SPEC v0.6 A6). Each entry is the full trailer text after
+    // (LANG_SPEC A6). Each entry is the full trailer text after
     // the comma, e.g. `!llvm.access.group !3`. Empty list = no trailer.
     pub metadata: List<String>,
 }
@@ -354,7 +354,7 @@ pub struct LirTerm {
 // applies. Populated by the lowerer when a MIR back-edge
 // terminator coincides with an active `#[vectorize]` /
 // `#[unroll]` / `#[parallel]` annotation on the enclosing
-// function (LANG_SPEC v0.6 A5/A6/A7).
+// function (LANG_SPEC A5/A6/A7).
 pub fn lirTermInvalid() -> LirTerm {
     LirTerm {kind: LirTermInvalid, retType: lirTypeInvalid(), retValue: "", target: "", cond: "", thenLabel: "", elseLabel: "", switchType: lirTypeInvalid(), switchScrutinee: "", switchDefault: "", cases: [], loopMDRef: ""}
 }
@@ -1756,7 +1756,7 @@ fn lirEmitMirGlobals(out: LirModule, mir: MirModule, diags: List<LirDiagnostic>)
 // On fall-through (no resolution path matched), the diagnostic enumerates
 // *which checks were attempted* so the root cause of an "unsupported param
 // type"/"unsupported local type" upstream failure can be traced without
-// reading the source. v0.6 GAP-TYP-004 (LLVM_BACKEND_GAP_PLAN.md A1).
+// reading the source. GAP-TYP-004 (LLVM_BACKEND_GAP_PLAN.md A1).
 //
 // Option/Result with struct payload (C1, GAP-TYP-004 part 2): when the
 // payload is a registered struct in `mir.layouts.structs`, the aggregate
@@ -1828,7 +1828,7 @@ fn lirMirModuleHasInterfaceLayout(mir: MirModule, name: String) -> Bool {
 // `Result<T, E>` widens for whichever side is a struct — the tag layout
 // keeps both Ok and Err slots in the *same* aggregate so we widen to the
 // max size of {Ok struct, Err struct} when either is a struct. For the
-// initial v0.6 baseline we widen the *Ok side only* (Err is typically the
+// initial baseline we widen the *Ok side only* (Err is typically the
 // `Error` interface = ptr-sized or an enum-typed sum), but Err side is
 // covered by the same fallback when `lirOptionResultStructPayload` finds a
 // match.
@@ -2938,7 +2938,7 @@ fn lirEmitGcSafepointCall(l: LirMirFunctionLowerer) {
 }
 // Derive LLVM function-attribute strings from the MIR function's
 // annotation flags. Mirrors production's per-flag mapping
-// (LANG_SPEC v0.6 A8 inline / A9 hot+cold / A10 target-features /
+// (LANG_SPEC A8 inline / A9 hot+cold / A10 target-features /
 // A13 pure). `noaliasAll` is handled separately on parameters since
 // `noalias` is a parameter attribute.
 fn lirFnAttrsFromMir(fn_: MirFunction) -> List<String> {
@@ -2969,7 +2969,7 @@ fn lirFnAttrsFromMir(fn_: MirFunction) -> List<String> {
     }
     attrs
 }
-// Param attrs derive from `noaliasAll` (LANG_SPEC v0.6 A11) — every
+// Param attrs derive from `noaliasAll` (LANG_SPEC A11) — every
 // pointer-typed parameter gets `noalias`. The parameter-level form of
 // the annotation (`#[noalias(p1, p2)]` selecting only specific params)
 // is deliberately deferred because it needs MIR to keep param-name
@@ -2984,7 +2984,7 @@ fn lirParamAttrsFromMir(fn_: MirFunction, paramType: LirType) -> List<String> {
     ["noalias"]
 }
 // `lirFnHasLoopHints` reports whether the MIR function carries any of
-// the v0.6 loop optimisation annotations
+// the loop optimisation annotations
 // (`#[vectorize(...)]` / `#[parallel]` / `#[unroll(...)]`). When true,
 // each MIR back-edge terminator gets a fresh `!llvm.loop` metadata
 // node attached so LLVM picks up the hint at exactly the back-edge.

@@ -71,21 +71,6 @@ pub struct ZonedTime {
         self.instant.format(layout)
     }
 }
-pub struct HostClock {
-    pub startedAt: Instant,
-    pub fn now(self) -> Instant {
-        now()
-    }
-    pub fn monotonic(self) -> Duration {
-        now().sub(self.startedAt).abs()
-    }
-    pub fn sleep(self, duration: Duration) -> Result<(), Error> {
-        sleep(duration)
-    }
-}
-pub fn systemClock() -> HostClock {
-    HostClock {startedAt: now()}
-}
 pub fn now() -> Instant
 pub fn parse(text: String, layout: String) -> Result<Instant, Error>
 pub fn sleep(duration: Duration) -> Result<(), Error>

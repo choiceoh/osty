@@ -1110,7 +1110,7 @@ pub struct MirFunction {
     pub cAbi: Bool,
     pub span: MirSpan,
 
-    // v0.6 A5–A13 annotation-sourced metadata. Mirrors HirFnDecl so
+    // A5–A13 annotation-sourced metadata. Mirrors HirFnDecl so
     // the MIR → LLVM pass can emit fn attrs / loop metadata without
     // re-walking HIR. Defaults leave every flag off; hirLowerFnDecl
     // populates the values, mirLowerCopyFnAnnotations threads them
@@ -1177,7 +1177,7 @@ pub fn mirFunction(name: String, returnType: String, span: MirSpan) -> MirFuncti
         exportSymbol: "",
         cAbi: false,
         span,
-        // v0.6 A5–A13 annotation defaults match HirFnDecl's bare
+        // A5–A13 annotation defaults match HirFnDecl's bare
         // constructor: every flag off, empty targetFeatures list,
         // inlineMode defaults to None. mirLowerCopyFnAnnotations
         // overwrites these from the HIR source of truth.
