@@ -223,8 +223,8 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - ambient 는 함수 boundary 에서 멈춤 — callee 가 capability 를 받지 않으면
   자동 주입 없음.
 - closure 는 ambient 를 *값으로 capture* — 다른 함수로 넘겨도 동작.
-- 사용자 정의 capability 도 가능. `#[reproducible_capability]` 로 deterministic
-  capability 등록 — interface 의 모든 메서드가 `#[reproducible]` 보장.
+- 사용자 정의 capability 도 가능 — ordinary `interface` 선언. (G39
+  `#[reproducible_capability]` 는 v0.6 baseline 에서 withdrawn.)
 
 ## 10. Information Flow Tracking (G37)
 
@@ -246,16 +246,15 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - v0.6 baseline sanitizer: `std.sql.escape`, `std.shell.quote`,
   `std.path.normalize`, `std.url.encode`, `std.html.escape`.
 
-## 11. Reproducibility (G39)
+## 11. Determinism (G39 withdrawn) + Golden (G45)
 
-- `#[reproducible(scope=...)]` — 환경독립 강제. scope 는 `"run"` / `"target"`
-  (default) / `"portable"`.
-- 검사: non-deterministic capability 수신 금지, unordered iter 금지, pointer-id
-  비교 금지, transitive callee 도 같거나 강한 scope 필수.
-- `#[pure]` 는 더 강함 — capability 수신 자체 금지.
-- `#[golden(path, mode=...)]` — snapshot 비교. mode `"text"` / `"ast"` / `"json"` /
-  `"diag"`. text mode 는 BOM 제거 + LF 정규화 후 비교. `#[golden]` 은 암묵
-  `#[reproducible(scope="target")]` — 위반 `E0444`.
+- G39 `#[reproducible(scope=...)]` annotation 은 v0.6 baseline 에서
+  withdrawn. 환경독립 attestation 은 `#[pure]` (LLVM `readnone`,
+  capability 수신 자체 금지 — `E0785`) 로 표현한다.
+- `#[golden(path, mode=...)]` — snapshot 비교. mode `"text"` / `"ast"` /
+  `"json"` / `"diag"`. text mode 는 BOM 제거 + LF 정규화 후 비교.
+  Snapshot determinism 보장은 호출자 책임 — fixture 또는 fake capability
+  주입.
 
 ## 12. Intent (G42)
 
@@ -287,12 +286,11 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 | 카테고리 | Annotation | 영역 |
 |---|---|---|
 | **Existing (v0.5)** | `#[json]`, `#[deprecated]`, `#[op]`, `#[cfg]`, `#[test]`, `#[intrinsic]`, `#[pod]`, `#[repr]`, `#[export]`, `#[c_abi]`, `#[no_alloc]` | 기존 |
-| **Capability (G36)** | `#[ambient]`, `#[reproducible_capability]` | §9 |
+| **Capability (G36)** | `#[ambient]` | §9 |
 | **Information flow (G37)** | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]`, `#[taint_field]` | §10 |
 | **Intent (G42)** | `#[purpose]`, `#[example]`, `#[fixture]` | §12 |
 | **Construction (G40)** | `#[sealed_construct]`, `#[trusted_construct]`, `#[test_construct]` | §13 |
 | **Error (G41)** | `#[error_contract]` | §8 |
-| **Determinism (G39)** | `#[reproducible]` | §11 |
 | **Evolution (G44)** | `#[since]`, `#[stability]`, `#[match_compat]` | §13 |
 | **Testing (G45)** | `#[golden]` | §11 |
 

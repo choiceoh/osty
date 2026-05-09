@@ -1015,13 +1015,11 @@ func TestV06SemanticAnnotationsRecognized(t *testing.T) {
 		src  string
 	}{
 		{"ambient", "#[ambient(clock)]\nfn main() {}\n"},
-		{"reproducible_capability", "#[reproducible_capability]\ninterface HashCap {\n    #[reproducible]\n    fn hash(self, value: String) -> String\n}\n"},
 		{"taint", "#[taint(\"user_input\")]\nfn source() -> String { \"\" }\n"},
 		{"taint_field", "pub struct Form {\n    #[taint_field(\"user_input\")]\n    pub name: String,\n}\n"},
 		{"sanitizes", "#[sanitizes(\"user_input\", into = \"trusted\")]\nfn clean(value: String) -> String { value }\n"},
 		{"trusted_declassify", "#[trusted_declassify(\"audit\")]\nfn escape(value: String) -> String { value }\n"},
 		{"spec", "#[spec(\"3.10\")]\nfn linked() -> Int { 0 }\n"},
-		{"reproducible", "#[reproducible(scope = \"target\")]\nfn stable() -> Int { 0 }\n"},
 		{"sealed_construct", "#[sealed_construct(\"Email\")]\npub struct Email { pub value: String }\n"},
 		{"trusted_construct", "#[trusted_construct(\"stdlib parser\")]\nfn makeEmail(value: String) -> String { value }\n"},
 		{"test_construct", "#[test_construct]\nfn makeTestEmail(value: String) -> String { value }\n"},

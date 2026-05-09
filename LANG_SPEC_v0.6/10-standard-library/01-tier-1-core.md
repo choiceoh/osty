@@ -60,7 +60,7 @@ capabilities (§20.9). The split:
 
 A function that uses only the *pure* part of Tier 1 — `std.strings`,
 `std.collections`, `std.option`, `std.result`, `std.cmp` — is
-acceptable inside `#[reproducible(scope = "portable")]` without
+acceptable inside `#[pure]` without
 modification. `std.io` / `std.fs` callers must accept a capability
 parameter.
 

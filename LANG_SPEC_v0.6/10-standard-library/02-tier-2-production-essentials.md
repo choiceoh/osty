@@ -63,7 +63,7 @@
 
 The Tier 2 chapter listing is dense; the *capability shape* of each
 module is summarized below. Use this when deciding which Tier 2
-import is acceptable in a `#[reproducible]` / `#[pure]` /
+import is acceptable in a `#[pure]` / `#[pure]` /
 capability-typed context.
 
 | Module | Effectful methods (capability) | Pure helpers |

@@ -243,7 +243,7 @@ let id = "req-{rng.next()}"          // rng called once
 let log = "{clock.now()}: ready"     // clock.now() called once
 ```
 
-`#[reproducible]` functions cannot have interpolation expressions
+`#[pure]` functions cannot have interpolation expressions
 that consult non-deterministic capabilities — the resulting string
 would not be reproducible. The checker walks each interpolation
 sub-expression like any other expression.
@@ -540,9 +540,9 @@ v0.5 의 11 fixed annotation 위에 v0.6 은 16 신규 annotation 추가.
 
 | 카테고리 | v0.6 신규 annotation |
 |---|---|
-| Capabilities (G36) | `#[ambient]`, `#[reproducible_capability]` |
+| Capabilities (G36) | `#[ambient]`, *deterministic interface* |
 | Information flow (G37) | `#[taint]`, `#[sanitizes]`, `#[trusted_declassify]`, `#[taint_field]` (parameter `#[requires]` 는 v0.5 reuse) |
-| Reproducibility (G39) | `#[reproducible]` |
+| Reproducibility (G39) | `#[pure]` |
 | Sealed construct (G40) | `#[sealed_construct]`, `#[trusted_construct]`, `#[test_construct]` |
 | Error contract (G41) | `#[error_contract]` |
 | Structured intent (G42) | `#[purpose]`, `#[example]`, `#[fixture]` |

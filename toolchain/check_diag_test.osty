@@ -129,48 +129,9 @@ fn testDiagAmbientForwardFailedStampsE0782() {
     }
 }
 
-// ---------------------------------------------------------------------
-// v0.6 G39 — Reproducible scope diagnostics.
-// ---------------------------------------------------------------------
-
-fn testDiagReproducibleUnorderedIterStampsE0786() {
-    let d = diagReproducibleUnorderedIter("computeKey", "Map", 5, 15)
-    testing.assertEq(d.code, "E0786")
-    testing.assert(stringsContains(d.message, "computeKey"))
-    testing.assert(stringsContains(d.message, "Map"))
-    testing.assert(stringsContains(d.message, "unordered"))
-    match d.severity {
-        SeverityError -> testing.assert(true),
-        _ -> testing.assert(false),
-    }
-}
-
-fn testDiagReproducibleScopeHierarchyStampsE0787() {
-    let d = diagReproducibleScopeHierarchy("computeKey", "portable", "helper", "target", 10, 20)
-    testing.assertEq(d.code, "E0787")
-    testing.assert(stringsContains(d.message, "portable"))
-    testing.assert(stringsContains(d.message, "target"))
-    testing.assert(stringsContains(d.message, "helper"))
-    match d.severity {
-        SeverityError -> testing.assert(true),
-        _ -> testing.assert(false),
-    }
-}
-
-fn testDiagReproduciblePortableConstraintStampsE0788() {
-    let d = diagReproduciblePortableConstraint("hashBytes", "endianness-dependent serialisation", "use bytes.toBigEndian", 0, 10)
-    testing.assertEq(d.code, "E0788")
-    testing.assert(stringsContains(d.message, "portable"))
-    testing.assert(stringsContains(d.message, "endianness"))
-    // Notes should include the fix hint.
-    testing.assert(d.notes.len() >= 2)
-}
-
-fn testDiagReproduciblePortableConstraintOmitsEmptyHint() {
-    let d = diagReproduciblePortableConstraint("hashBytes", "test violation", "", 0, 10)
-    // Only the base note, no hint.
-    testing.assertEq(d.notes.len(), 1)
-}
+// G39 reproducible scope diagnostic tests removed alongside the
+// `#[reproducible]` annotation. The pure-capability gate (E0785) is
+// covered by the capability tests above.
 
 // ---------------------------------------------------------------------
 // v0.6 G38 — Spec link diagnostics.
@@ -438,12 +399,9 @@ fn testDiagFixtureNonFunctionStampsE0436() {
 // v0.6 G45 — Golden test diagnostics.
 // ---------------------------------------------------------------------
 
-fn testDiagGoldenNotReproducibleStampsE0444() {
-    let d = diagGoldenNotReproducible("testOutput", 0, 10)
-    testing.assertEq(d.code, "E0444")
-    testing.assert(stringsContains(d.message, "testOutput"))
-    testing.assert(stringsContains(d.message, "reproducible"))
-}
+// testDiagGoldenNotReproducibleStampsE0444 was removed alongside the
+// G39 retract — golden snapshot determinism is now the author's
+// responsibility.
 
 fn testDiagGoldenSnapshotMissingStampsE0445() {
     let d = diagGoldenSnapshotMissing("testOutput", "fixtures/output.snap", 0, 10)

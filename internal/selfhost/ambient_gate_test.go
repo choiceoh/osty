@@ -76,9 +76,7 @@ fn main() {}
 }
 
 func TestAmbientGateRejectsUserDefinedCapability(t *testing.T) {
-	src := []byte(`#[reproducible_capability]
-interface LocalEntropy {
-    #[reproducible]
+	src := []byte(`interface LocalEntropy {
     fn next(self) -> Int
 }
 

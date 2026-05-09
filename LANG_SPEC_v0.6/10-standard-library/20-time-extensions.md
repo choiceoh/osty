@@ -139,24 +139,24 @@ These are compile-time recognized so they do not require an explicit
 that the type checker sees normally. The float forms (`1.5.s`) are
 analogous methods on `Float`.
 
-#### 10.20.1 Clock determinism and reproducibility
+#### 10.20.1 Clock determinism and purity
 
 `Clock.now()` is non-deterministic — the system time advances
-between calls. A `#[reproducible]` function therefore cannot
-receive `Clock` as a parameter (`E0784`).
+between calls. A `#[pure]` function therefore cannot
+receive `Clock` as a parameter (`E0785`).
 
-The pattern for "I need a timestamp inside reproducible code":
+The pattern for "I need a timestamp inside pure code":
 
 ```osty
-// Outer (non-reproducible) captures the clock value.
+// Outer (impure) captures the clock value.
 fn writeSnapshot(clock: Clock, fs: Fs, payload: Bytes) -> Result<(), Error> {
     let timestamp = clock.now().toEpochMillis()
     let key = computeKey(timestamp, payload)
     fs.write("snap/{key.toHex()}.bin", payload)
 }
 
-// Inner (reproducible) takes the captured timestamp.
-#[reproducible(scope = "target")]
+// Inner (pure) takes the captured timestamp.
+#[pure]
 fn computeKey(timestamp: Int64, payload: Bytes) -> Bytes32 {
     sha256(payload + timestamp.toBytes())
 }

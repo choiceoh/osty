@@ -142,7 +142,7 @@ fmt.tableAligned(headers: List<String>, rows: List<List<String>>, alignments: Li
 
 `std.fmt` is *pure* — every function transforms values to `String`
 without consulting any capability. The module is acceptable inside
-`#[reproducible(scope = "portable")]` and `#[pure]` contexts.
+`#[pure]` contexts.
 
 Flow tags ride through formatting — `fmt.padLeft(taintedStr, 10)`
 produces a `String` carrying the same source tag set as
@@ -185,6 +185,6 @@ sensitive number formatting is not part of v0.6 baseline; a
 future stdlib `std.locale.fmt` is tracked for Phase 5.
 
 This locale-independence is a determinism feature: a
-`#[reproducible]` function calling `fmt.compactNumber` produces
+`#[pure]` function calling `fmt.compactNumber` produces
 the same output across all targets. Locale-sensitive output would
 break that contract.

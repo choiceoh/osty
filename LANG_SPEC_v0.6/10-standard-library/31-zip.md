@@ -39,7 +39,7 @@ Behavior:
 
 `std.zip` is *pure* — every function transforms `Bytes` /
 `String` / `Entry` values without consulting any capability. The
-module is acceptable inside `#[reproducible(scope = "portable")]`.
+module is acceptable inside `#[pure]`.
 
 Flow tags ride through ZIP encoding/decoding. A `zip.encode` of
 tainted entries produces tainted archive bytes; decoding tainted

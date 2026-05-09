@@ -270,9 +270,10 @@ var annotationRules = map[string]AnnotationTarget{
 	// `#[spec("§X.Y")]` registers a checked link into the spec corpus.
 	"spec": TargetTopLevelDecl | TargetMethod,
 
-	// v0.6 G39 — Reproducibility (§3.11). `#[reproducible(scope=...)]`
-	// asserts environment-independence; checker enforces in Phase 3.
-	"reproducible": TargetTopLevelDecl | TargetMethod,
+	// G39 `#[reproducible]` was withdrawn from the v0.6 baseline pre-release.
+	// Authors use `#[pure]` (LLVM `readnone`, capability-flow gate) for the
+	// same effect-free attestation. The annotation name is *no longer
+	// recognized*; using it is `E0405` (unknown annotation).
 
 	// v0.6 G40 — Sealed construction (§3.4.5).
 	"sealed_construct":  TargetTopLevelDecl,

@@ -237,4 +237,4 @@ forwarding them, but the v0.6 baseline does the migration manually
 | Capability instance returned from a function | (no error) but breaks reproducibility | Returning `Net` is allowed (it's an interface value); but receivers can no longer reason about *who* created the instance — prefer to keep capabilities scoped to their construction context |
 | Double `#[ambient]` (in `main` and a helper) | `E0780` on the helper | Keep `#[ambient]` only at the entry point; helpers receive parameters |
 | `--legacy-globals` enabled but `[stability] default = "stable"` | `E2103` (incompatible mode) | Either migrate first, or downgrade stability to `experimental` |
-| `time.now()` reaches a `#[reproducible]` function via `--legacy-globals` desugar | `E0784` | Migrate the leaf to a `Clock` parameter; reproducible functions cannot receive non-deterministic capabilities |
+| `time.now()` reaches a `#[pure]` function via `--legacy-globals` desugar | `E0785` | Migrate the leaf to a `Clock` parameter; pure functions cannot receive any capability |

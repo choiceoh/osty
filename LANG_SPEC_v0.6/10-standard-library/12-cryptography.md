@@ -62,11 +62,11 @@ which is exactly the wrong property for cryptographic purposes.
 
 The hash functions (`sha256`, `sha512`, `sha1`, `md5`, `hmac.*`)
 are deterministic — same input always produces same output bytes.
-This makes them safe inside `#[reproducible(scope = "portable")]`
+This makes them safe inside `#[pure]`
 contexts. Specifically:
 
 ```osty
-#[reproducible(scope = "portable")]
+#[pure]
 fn cacheKey(payload: Bytes) -> Bytes {
     crypto.sha256(payload)
 }

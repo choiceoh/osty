@@ -363,13 +363,15 @@ fn testNumericNarrowingDiag() {
 | `"json"` | Parse as JSON, compare structurally (key order ignored). |
 | `"diag"` | Osty diagnostic format — same code/message comparable across `Span` deltas. |
 
-**Reproducibility.** A `#[golden]` function is implicitly
-`#[reproducible(scope = "target")]` (§3.11). Calling non-deterministic
-capabilities or unordered iteration is `E0444`. AST mode applied to
-output that is not valid Osty source is `E0446`. Missing snapshot on
-first run is `E0445` (run `osty test --update-golden`). A snapshot's
-embedded `source-hash` header that disagrees with the function's
-current definition is `W0444`.
+**Determinism.** `#[golden]` snapshots are only meaningful when the
+function's output is deterministic. v0.6 baseline does not enforce
+this at compile time (G39 `#[reproducible]` was withdrawn). Authors
+inject deterministic capability fakes (`std.capability.testing.*`) or
+keep the body capability-free. AST mode applied to output that is not
+valid Osty source is `E0446`. Missing snapshot on first run is `E0445`
+(run `osty test --update-golden`). A snapshot's embedded `source-hash`
+header that disagrees with the function's current definition is
+`W0444`.
 
 **Snapshot file format.**
 
@@ -847,16 +849,17 @@ fn testNumericNarrowingDiag() {
 | `"json"` | structural JSON 비교 (key 순서 무시) |
 | `"diag"` | Osty diagnostic format — Span 차이 무시, code/message 비교 |
 
-#### 11.12.3 Reproducibility 요구
+#### 11.12.3 Determinism 책임
 
-`#[golden]` 함수는 *암묵적으로* `#[reproducible(scope = "target")]` —
-non-deterministic capability 수신 시 `E0444`. 시간/난수/환경에
-의존하는 출력을 snapshot 화하면 `osty test --golden` 이 매 실행마다
-실패하므로 의도적 거부.
+`#[golden]` 함수의 출력 deterministic 보장은 v0.6 baseline 에서 호출자
+책임이다 (G39 `#[reproducible]` annotation 이 withdrawn 됐다). 시간/난수
+/환경에 의존하는 출력을 snapshot 화하면 `osty test --golden` 이 매 실행
+마다 mismatch 한다. 일반적 패턴은 deterministic capability fake 주입:
 
 ```osty
 #[golden("fixtures/timestamp.snap")]
-fn testTimestamp(clock: Clock) {  // ERROR E0444
+fn testTimestamp() {
+    let clock = std.capability.testing.FakeClock(epoch_ms = 1_000_000)
     testing.assertGolden(clock.now().toString())
 }
 ```
@@ -1031,7 +1034,7 @@ This is the cheapest test path; the recipe is to *keep functions
 this way* whenever possible.
 
 ```osty
-#[reproducible(scope = "target")]
+#[pure]
 pub fn classify(text: String) -> Category { ... }
 
 #[test]

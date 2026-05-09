@@ -30,18 +30,17 @@ and all neighbor helpers filter out points outside the grid.
 level packages can build A*, field of view, dungeon generation, and turn
 scheduling on top of this stable geometry layer.
 
-#### v0.6 reproducibility
+#### v0.6 purity
 
 `std.grid` is *pure* — every type is value-semantic and every
 operation transforms grid values without consulting any capability.
-The whole module is acceptable inside `#[reproducible(scope =
-"portable")]` and `#[pure]` contexts.
+The whole module is acceptable inside `#[pure]` contexts.
 
 The neighbor-iteration helpers (`Grid.neighbors(p)`,
 `Grid.neighbors8(p)`) iterate in *deterministic* order — clockwise
 from `Up` for the 4-direction set, and clockwise from `UpLeft` for
 the 8-direction set. This deterministic order makes
-`#[reproducible]` consumers stable across runs.
+`#[pure]` consumers stable across runs.
 
 #### Information flow
 
@@ -75,11 +74,10 @@ through `Terminal` (capability).
 inputs. Iteration helpers like `Grid.points()` traverse cells in
 a fixed (row-major) order — first row top-to-bottom, then column
 left-to-right within each row. This makes grid-based algorithms
-(BFS, A*, flood fill) acceptable inside `#[reproducible(scope =
-"portable")]` contexts.
+(BFS, A*, flood fill) acceptable inside `#[pure]` contexts.
 
 ```osty
-#[reproducible(scope = "portable")]
+#[pure]
 fn floodFill<T>(grid: Grid<T>, start: Point, target: T) -> Set<Point> {
     let mut visited: Set<Point> = Set.empty()
     let mut queue: List<Point> = [start]

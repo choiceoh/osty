@@ -1077,62 +1077,21 @@ const (
 	//      the names match.
 	CodeAmbientForwardFailed = "E0782"
 
-	// CodeReproducibleCapabilityNonRepro: an interface marked
-	// `#[reproducible_capability]` declares a method that is not itself
-	// `#[reproducible]`. The capability cannot be sealed if its surface
-	// allows non-deterministic operations.
-	//
-	// Spec: v0.6 §20.5
-	// Fix: add `#[reproducible(scope = "target")]` (or stronger) to
-	//      every method, or remove `#[reproducible_capability]`.
-	CodeReproducibleCapabilityNonRepro = "E0783"
-
-	// CodeReproducibleViaCapability: a function carrying
-	// `#[reproducible]` receives a non-deterministic capability
-	// parameter (`Clock`, `Rng`, `Env`, `Fs`, `Net`, `Process`).
-	//
-	// Spec: v0.6 §20.4
-	// Fix: drop the non-det capability parameter, narrow `#[reproducible(
-	//      scope = "run")]` if `Console` is the only side-effect, or
-	//      remove `#[reproducible]`.
-	CodeReproducibleViaCapability = "E0784"
+	// E0783, E0784, E0786, E0787, E0788 were assigned to G39
+	// `#[reproducible]` / `#[reproducible_capability]` checks. G39 was
+	// withdrawn from the v0.6 baseline pre-release; the codes are
+	// reserved for any successor gap. Determinism attestation is now
+	// expressed through `#[pure]` (LLVM `readnone`, `E0785`) plus
+	// `#[golden]` (snapshot tooling).
 
 	// CodePureViaCapability: a function carrying `#[pure]` receives any
 	// capability parameter. `#[pure]` is the strongest effect annotation
 	// and forbids capability flow entirely.
 	//
 	// Spec: v0.6 §20.4
-	// Fix: drop the capability parameter, or use `#[reproducible]` (which
-	//      allows deterministic capabilities like `Hash`).
+	// Fix: drop the capability parameter, or pass a precomputed scalar
+	//      (e.g., `timestamp: Int64` instead of `clock: Clock`).
 	CodePureViaCapability = "E0785"
-
-	// CodeReproducibleUnorderedIter: a `#[reproducible]` function
-	// iterates an unordered collection (`Map.iter`, `Set.iter`) whose
-	// element order is implementation-defined.
-	//
-	// Spec: v0.6 §3.11.3
-	// Fix: use `Map.entriesSorted()` / `Set.toListSorted()` for
-	//      deterministic ordering.
-	CodeReproducibleUnorderedIter = "E0786"
-
-	// CodeReproducibleScopeHierarchy: a `#[reproducible(scope = A)]`
-	// function calls a callee with weaker scope. Scope strength:
-	// `portable` > `target` > `run`.
-	//
-	// Spec: v0.6 §3.11.3
-	// Fix: strengthen the callee's scope, or weaken the caller's.
-	CodeReproducibleScopeHierarchy = "E0787"
-
-	// CodeReproduciblePortableConstraint: a `#[reproducible(scope =
-	// "portable")]` function violates one of the cross-platform
-	// constraints — endianness-dependent serialisation, `NaN` bit
-	// pattern comparison, platform-specific integer width assumption.
-	//
-	// Spec: v0.6 §3.11.3
-	// Fix: use explicit endianness (`bytes.toBigEndian`), avoid raw
-	//      NaN comparisons (`isNaN()` is OK), or drop to scope =
-	//      "target".
-	CodeReproduciblePortableConstraint = "E0788"
 
 	// CodeAmbientUserCapability: `#[ambient(name)]` references a
 	// user-defined capability. Ambient binding only supports the
@@ -1365,14 +1324,11 @@ const (
 
 	// G45 — Golden tests (§11.5)
 
-	// CodeGoldenNotReproducible: a function carrying `#[golden]` does
-	// not satisfy `#[reproducible(scope = "target")]`. Non-deterministic
-	// snapshots have no diagnostic value.
-	//
-	// Spec: v0.6 §11.5.4
-	// Fix: ensure the function (and its callees) are reproducible —
-	//      pass capabilities explicitly and avoid time/random/env access.
-	CodeGoldenNotReproducible = "E0444"
+	// E0444 was assigned to the G39 `#[golden]` reproducibility gate.
+	// G39 was withdrawn from the v0.6 baseline pre-release; the code
+	// is reserved for any successor gap. Snapshot determinism is now
+	// the author's responsibility (use deterministic capability fakes
+	// or keep `#[golden]` bodies capability-free).
 
 	// CodeGoldenSnapshotMissing: a `#[golden(path)]` declaration's
 	// snapshot file does not exist on disk. On first run, `osty test

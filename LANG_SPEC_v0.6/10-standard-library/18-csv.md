@@ -59,7 +59,7 @@ Behavior:
 
 `std.csv` is *pure* — every function transforms strings/lists
 without consulting any capability. The whole module is acceptable
-inside `#[reproducible(scope = "portable")]`. Decoded `String`
+inside `#[pure]`. Decoded `String`
 cells inherit the source `String`'s flow tags; sanitize before
 reaching SQL / shell / HTML sinks.
 

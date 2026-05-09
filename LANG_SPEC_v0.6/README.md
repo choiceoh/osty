@@ -3,14 +3,16 @@
 Osty is a general-purpose, statically-typed, garbage-collected programming language.
 This directory holds the specification, split into per-section files for easier navigation and editing.
 
-**Status.** v0.6 — current spec baseline. Supersedes v0.5. Closes 10 gaps
-(G36, G37, G39, G40, G41, G42, G44, G45, G47, G48) accumulated during
+**Status.** v0.6 — current spec baseline. Supersedes v0.5. Closes 9 gaps
+(G36, G37, G40, G41, G42, G44, G45, G47, G48) accumulated during
 the v0.5 use corpus and the 100-PR self-host sprint: capability
-parameters, information flow tracking, reproducibility, sealed
-construction, error contract, structured intent, API evolution rules,
-golden tests, machine-readable context export. Four originally-proposed
-gaps (G38, G43, G46, G49) were withdrawn pre-release as low-utility —
-see SPEC_GAPS.md "Withdrawn" for sub-rationale.
+parameters, information flow tracking, sealed construction, error
+contract, structured intent, API evolution rules, golden tests,
+machine-readable context export. Five originally-proposed gaps
+(G38, G39, G43, G46, G49) were withdrawn pre-release as low-utility —
+see SPEC_GAPS.md "Withdrawn" for sub-rationale. G39 `#[reproducible]`
+was withdrawn because `#[pure]` (LLVM `readnone`) plus `#[golden]`
+(snapshot tooling) cover the same use-case.
 
 The v0.6 design north star is *Hidden dependency is forbidden* —
 time, randomness, environment, security flow, evolution rules,
@@ -114,7 +116,7 @@ Four annotation families implement this principle:
 
 | Family | Surface | Chapters |
 |---|---|---|
-| **Effectful** (env / IO) | Capability parameters, `#[ambient]`, `#[reproducible]`, `#[pure]` | §20, §3.11 |
+| **Effectful** (env / IO) | Capability parameters, `#[ambient]`, `#[pure]` | §20, §3.8.11 |
 | **Security** (sources → sinks) | `#[taint]`, `#[sanitizes]`, `#[requires]` | §21 |
 | **Temporal** (versioning) | `#[since]`, `#[stability]`, `#[match_compat]`, `osty publish` | §3.14 |
 | **Intent + Determinism** | `#[purpose]`, `#[example]`, `#[fixture]`, `#[error_contract]`, `#[sealed_construct]`, `#[golden]`, `osty context` | §3.12, §3.4.5, §7.5, §11.5, §13.4 |

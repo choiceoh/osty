@@ -78,7 +78,7 @@ fn deriveScores(seed: Int64, n: Int) -> List<Int> {
 ```
 
 `deriveScores(42, 10)` always returns the same list. This is
-acceptable inside `#[reproducible(scope = "portable")]` — the
+acceptable inside `#[pure]` — the
 seeded `Rng`'s output is determined by its input.
 
 The seeded `Rng` is *not* received as a capability parameter —

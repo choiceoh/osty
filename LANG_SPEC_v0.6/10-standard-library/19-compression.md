@@ -29,7 +29,7 @@ compress.gzip.writer(dest: Writer) -> Writer
 `std.compress` is *pure* — every function transforms `Bytes` to
 `Bytes` (or wraps a `Reader`/`Writer` pipeline) without consulting
 any capability. Compression / decompression are acceptable inside
-`#[reproducible(scope = "portable")]`.
+`#[pure]`.
 
 Flow tags ride through compression — `compress.gzip.encode` of a
 tainted `Bytes` produces a tainted `Bytes` with the same source

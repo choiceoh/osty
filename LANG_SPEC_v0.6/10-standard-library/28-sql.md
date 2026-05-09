@@ -117,7 +117,7 @@ Every builder in `std.sql` produces deterministic output —
 identical inputs yield byte-identical `Query` values. This is
 critical for:
 
-- **`#[reproducible]` cache keys**: a function that derives a SQL
+- **`#[pure]` cache keys**: a function that derives a SQL
   fingerprint hashes the rendered query text and expects bit-
   identical output across runs.
 - **Migration verification**: the same schema definition must

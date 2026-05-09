@@ -1,20 +1,22 @@
 # Osty v0.6 — Revision Document
 
-> **Status**: baseline (frozen). 10 개 결정 (G36, G37, G39, G40, G41, G42,
+> **Status**: baseline (frozen). 9 개 결정 (G36, G37, G40, G41, G42,
 > G44, G45, G47, G48) 을 v0.5 baseline 위에 추가하는 spec 개정.
 > v0.5 의 모든 결정은 v0.6 에서도 유효 — 변경 없는 챕터는 본 디렉토리
 > [`./`](./) 의 같은-번호 파일이 계속 권위. 본 문서는 *delta* 만 기술한다.
 >
 > **Withdrawn from v0.6 baseline** (low-utility, removed pre-release):
-> G38 (`#[spec]` link), G43 (spec block), G46 (`#[budget]`), G49 (`while`
-> keyword). 자세한 사유는 SPEC_GAPS.md 의 "Withdrawn" 섹션.
+> G38 (`#[spec]` link), G39 (`#[reproducible]`), G43 (spec block),
+> G46 (`#[budget]`), G49 (`while` keyword). 자세한 사유는 SPEC_GAPS.md
+> 의 "Withdrawn" 섹션. G39 의 결정 surface 는 `#[pure]` (LLVM `readnone`)
+> + `#[golden]` 의 implied determinism 으로 흡수됐다.
 >
 > **Companion**: [`SPEC_GAPS.md`](../SPEC_GAPS.md) §"Resolved in v0.6", [`OSTY_GRAMMAR_v0.6.md`](../OSTY_GRAMMAR_v0.6.md), [`CHANGELOG_v0.6.md`](../CHANGELOG_v0.6.md).
 
 ## 0. Overview
 
 v0.5 의 외부 사용 corpus 와 셀프호스트 운영 (100 PR / 4 일 sprint) 에서 도출된
-*hidden-dependency-surface* 결정 10 개를 v0.6 에 batch 로 수용한다. 사용자 0 인
+*hidden-dependency-surface* 결정 9 개를 v0.6 에 batch 로 수용한다. 사용자 0 인
 단계의 마지막 큰 surface revision — 이후 v0.7 부터는 stable API rule (G44) 이
 적용된다.
 
@@ -25,7 +27,6 @@ labeled data 는 nominal `struct` 또는 tuple 로 표현한다.
 |---|---|---|
 | G36 | Capabilities (§20) | 환경 effect 를 capability 값으로 명시 |
 | G37 | Information flow (§21) | `#[taint]` / `#[sanitizes]` 정적 IFC |
-| G39 | Reproducibility (§3.11) | `#[reproducible(scope=...)]` 환경독립 강제 |
 | G40 | Construction discipline (§3.4.5) | `#[sealed_construct]` parse-don't-validate |
 | G41 | Error contract (§7.5) | `#[error_contract(... when ...)]` failure mode 명세 |
 | G42 | Structured intent (§3.12) | `#[purpose]` / `#[example]` / `#[fixture]` |
@@ -42,17 +43,19 @@ discipline 세 축이었다면, v0.6 은 네 번째 축을 추가한다:
 > **모든 hidden dependency 는 surface 로 끌어올린다 — 시간, 난수, 환경, 보안 흐름,
 > 진화 규칙, 의도 — 어느 것도 "암묵"으로 두지 않는다.**
 
-이 원칙으로 v0.6 의 10 결정이 4 카테고리로 묶인다:
+이 원칙으로 v0.6 의 9 결정이 4 카테고리로 묶인다:
 
 | 카테고리 | 명시 대상 | 결정 |
 |---|---|---|
-| **Effectful** | 런타임 환경 의존 (시간/난수/IO) | G36 (Capability), G39 (Reproducible) |
+| **Effectful** | 런타임 환경 의존 (시간/난수/IO) | G36 (Capability) |
 | **Security** | 정보 흐름 (sources → sinks) | G37 (Taint/Sanitize) |
 | **Temporal** | API 진화 / 호환성 | G44 (Since/Stability/MatchCompat) |
 | **Intent + Determinism** | 의도, 명세, 실패 양태 | G40 (SealedConstruct), G41 (ErrorContract), G42 (Intent), G45 (Golden), G47 (Context) |
 
-**Capability (G36) 은 base layer.** G39 / G37 의 검사가 capability 시그니처 위에서
-*allow-list 기반*으로 sound 해진다. 따라서 구현 순서는 G36 → G39 → G37 순.
+**Capability (G36) 은 base layer.** G37 의 taint 검사가 capability 시그니처 위에서
+*allow-list 기반*으로 sound 해진다. Determinism 약속은 v0.5 의 `#[pure]` (LLVM
+`readnone`) + v0.6 의 `#[golden]` (implicit deterministic) 으로 충분하므로
+별도 `#[reproducible]` annotation 은 두지 않는다 (G39 withdrawn).
 
 ## 2. Implementation Phases
 
@@ -64,8 +67,7 @@ Phase 1   G36 Capability + #[ambient] + stdlib capability migration
           (가장 큰 리팩터, base layer 이므로 선행 필수)
 Phase 2   G42 #[fixture] / #[purpose] / #[example]
           + G47 osty context (작고 dogfood 가치 ↑)
-Phase 3   G39 #[reproducible(scope=...)] (capability 위에 sound)
-          + G45 #[golden] AST-aware
+Phase 3   G45 #[golden] AST-aware (text/ast/json/diag mode)
 Phase 4   G40 #[sealed_construct] + G41 #[error_contract]
           + G44 #[since] / #[stability] / #[match_compat]
 Phase 5   G37 #[taint] / #[sanitizes] (가장 무거움, 시그니처급 임팩트)
@@ -85,53 +87,6 @@ Phase 5   G37 #[taint] / #[sanitizes] (가장 무거움, 시그니처급 임팩�
 본 문서의 다른 섹션에서 §21 참조는 그 챕터 파일을 가리킨다.
 
 ## 4. Extended Chapters
-
-### §3.11 `#[reproducible(scope=...)]` (G39)
-
-#### §3.11.1 의미
-
-함수가 *환경독립*임을 컴파일러에 약속. `#[pure]` 보다 강하며, 캐시 키 / 빌드 해시 /
-migration ID / content addressing 용도에 적합.
-
-```osty
-#[reproducible(scope = "target")]
-fn computeKey(data: Bytes) -> Bytes32 { sha256(data) }
-```
-
-#### §3.11.2 Scope
-
-| Scope | 의미 |
-|---|---|
-| `"run"` | 같은 프로세스 실행 안에서 동일. `Console` capability 허용 |
-| `"target"` | 같은 Osty 버전 + target triple 에서 동일. *기본값*. |
-| `"portable"` | 플랫폼 간 동일 (cross-compilation 결과 byte-equal) |
-
-#### §3.11.3 검사
-
-- §20.4 capability deny rule 적용 (deterministic capability 만 허용)
-- `time.now()` / `random.*` / `env.*` 등 전역 호출 금지 (deny-list, capability
-  migration 전 transition 기간 동안 적용)
-- Unordered iteration 금지 (`Map.iter`, `Set.iter` — `Map.entriesSorted` /
-  `Set.toListSorted` 사용)
-- Pointer identity 비교 금지
-- Transitive callee 도 같은 scope 이상 만족해야 함
-
-`scope = "portable"` 추가 제약:
-- `Int` 가 아닌 platform-dependent 크기 사용 금지 (Osty 는 `Int` 가 64-bit 고정이므로
-  자동)
-- `endianness` 의존 직렬화 금지 (별도 표시 — `bytes.toBigEndian` 명시)
-- Float NaN bit pattern 비교 금지
-
-#### §3.11.4 진단 코드
-
-| 코드 | 의미 |
-|---|---|
-| `E0784` | `#[reproducible]` 함수가 non-deterministic capability 수신 |
-| `E0786` | `#[reproducible]` 함수가 unordered iter 사용 |
-| `E0787` | `#[reproducible(scope=A)]` 가 더 약한 scope 함수 호출 |
-| `E0788` | `#[reproducible(scope="portable")]` 의 추가 제약 위반 |
-
----
 
 ### §3.4.5 `#[sealed_construct]` (G40)
 
@@ -489,7 +444,7 @@ manifest 를 비교해 SemVer 호환성 검증.
 |---|---|
 | 함수 | `pub fn` 또는 `pub interface` 의 method. `pub` 없으면 surface 아님 |
 | 함수 시그니처 | name, generic param list, param 의 (name, type), return type, where bounds |
-| 함수 attributes | `#[stability]`, `#[error_contract]`, `#[since]`, `#[reproducible]`, `#[pure]`, `#[budget]`, parameter taint annotations |
+| 함수 attributes | `#[stability]`, `#[error_contract]`, `#[since]`, `#[pure]`, parameter taint annotations |
 | 함수 body | **포함 안 함** (구현 변경은 surface 아님) |
 | Struct | name, generic params, `pub` 필드 (name, type, default), method 시그니처 |
 | Struct attributes | `#[sealed_construct]`, `#[json]`, `#[stability]`, `#[since]` |
@@ -534,13 +489,11 @@ manifest 를 비교해 SemVer 호환성 검증.
   Add defaulted param NOT at end            → BREAKING (G20 named-call shift)
   Remove defaulted param                    → BREAKING
   Default value change                      → BREAKING for stable (omitted-arg behavior changes; experimental = W2100)
-  Add #[reproducible]                       → COMPAT-ADD (callee 추가 보장)
-  Remove #[reproducible]                    → BREAKING (callee 보장 약화)
+  Add #[pure]                               → COMPAT-ADD (callee 추가 보장 — readnone)
+  Remove #[pure]                            → BREAKING (callee 보장 약화)
   Add #[error_contract] variant             → BREAKING (캐치 의무 추가)
   Remove #[error_contract] variant          → COMPAT-ADD (caller 가 처리하던 분기 dead)
   Add parameter #[taint] / #[requires]      → BREAKING (caller 측 sanitize 의무)
-  Add #[budget] strengthening               → BREAKING (이전 호출이 새 budget 위반 가능)
-  Relax #[budget]                           → COMPAT-ADD
 
 Struct:
   Add pub field with default                → COMPAT-ADD
@@ -783,16 +736,18 @@ fn add(x: Int, y: Int) -> Int { x + y }
 헤더 (`#` 으로 시작) 는 메타데이터. 본문은 빈 줄 이후. `source-hash` 는 함수
 정의의 hash — 함수가 변하면 stale snapshot 알림.
 
-#### §11.5.4 `#[reproducible]` 와의 결합
+#### §11.5.4 Determinism 보장
 
-`#[golden]` 함수는 *암묵적으로 `#[reproducible(scope = "target")]`*. non-deterministic
-함수의 golden 은 의미 없으므로 컴파일 거부 (`E0444`).
+`#[golden]` 함수는 *호출자 책임으로* deterministic 해야 한다 — non-deterministic
+함수의 snapshot 은 매 run 마다 mismatch 한다. v0.6 baseline 에서 별도 컴파일러
+검증은 하지 않는다 (G39 `#[reproducible]` annotation 이 withdrawn 됨). 일반적
+패턴은 capability fake (`std.capability.testing.FakeClock` 등) 을 fixture 로
+주입하거나, deterministic stdlib helper (예: `sha256`) 만 사용하는 것이다.
 
 #### §11.5.5 진단 코드
 
 | 코드 | 의미 |
 |---|---|
-| `E0444` | `#[golden]` 함수가 reproducible 검증 실패 |
 | `E0445` | `#[golden]` 의 snapshot 파일이 없음 (첫 실행 시 안내) |
 | `W0444` | `#[golden]` 의 snapshot 이 stale (수동 update 필요 안내) |
 
@@ -853,7 +808,6 @@ osty context --all-stdlib --format=jsonl       # bulk export (one JSON per line)
   ],
   "effects": {
     "capabilities_required": ["Db"],
-    "reproducible": null,
     "pure": false,
     "taint_sources": [],
     "taint_sanitizes": [],
@@ -908,7 +862,7 @@ fn createUser(email: String, db: Db) -> Result<UserId, Error>
     DbError.Conflict        — duplicate user
 
   Capabilities: Db
-  Effects: not reproducible (calls db sink)
+  Effects: not pure (calls db sink)
 ```
 
 **Bulk export** (`--all-stdlib --format=jsonl`): stdlib 전체를 jsonl 로 export.
@@ -938,18 +892,17 @@ ParamDecl      ::= Annotation* Pattern ':' Annotation* Type ('=' DefaultExpr)?
 |---|---:|---:|---:|
 | Reserved keywords | 17 | 17 | 0 |
 | Contextual keywords | 10 | 10 | 0 |
-| Fixed annotation set | 11 | 27 | +16 |
+| Fixed annotation set | 11 | 25 | +14 |
 | EBNF productions | 191 | 192 | +1 |
 | Lexer token classes | 36 | 36 | 0 |
 
-신규 어노테이션 20:
+신규 어노테이션 18:
 
-| Capability (§20) | `#[ambient]`, `#[reproducible_capability]` |
+| Capability (§20) | `#[ambient]` |
 | Information flow (§21) | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]`, `#[taint_field]` |
 | Spec / intent | `#[spec]`, `#[purpose]`, `#[example]`, `#[fixture]` |
 | Construction | `#[sealed_construct]`, `#[trusted_construct]`, `#[test_construct]` |
 | Error | `#[error_contract]` |
-| Determinism | `#[reproducible]` |
 | Evolution | `#[since]`, `#[stability]`, `#[match_compat]` |
 | Testing | `#[golden]`, `#[budget]` |
 
@@ -973,13 +926,18 @@ Phase 2 에서 *category-prefix 옵션* 도입 검토:
 | Range | 영역 | 신규 |
 |---|---|---|
 | `E0410–E0436` | Annotation/intent (G41, G42) | E0410, E0411, E0412, E0414, E0420, E0421, E0422, E0423, E0424, E0430, E0431, E0432, E0433, E0434, E0435, E0436 |
-| `E0440–E0449` | Golden / evolution (G44, G45) | E0444, E0445, E0450, E0451 |
-| `E0780–E0799` | Capability / Reproducible (G36, G39) | E0780-E0789 |
+| `E0440–E0449` | Golden / evolution (G44, G45) | E0445, E0450, E0451 |
+| `E0780–E0799` | Capability (G36) | E0780, E0781, E0782, E0785, E0789 |
 | `E0900–E0949` | Information flow (G37) | E0900, E0901, E0902, E0903 |
 | `E2100–E2149` | Publishing (G44) | E2100, E2101 |
 | `W0750–W0799` | Stability warnings | — |
 | `W0900–W0949` | Flow / declassify warnings | W0901, W0902 |
 | `W2100–W2149` | Publish warnings | W2100 |
+
+`E0783`, `E0784`, `E0786`, `E0787`, `E0788`, `E0444` 는 G39 와 함께 withdrawn —
+`#[reproducible]` 와 `#[reproducible_capability]` 가 v0.6 baseline 에서 제거됐다.
+Determinism 약속은 v0.5 의 `#[pure]` (LLVM `readnone` — `E0775` / `E0785`) 와
+v0.6 의 `#[golden]` (snapshot tooling) 로 충분.
 
 ## 7. Migration Notes
 
@@ -1037,11 +995,11 @@ Phase 2 에서 *category-prefix 옵션* 도입 검토:
             See: MIGRATING_v0.5_to_v0.6.md
    ```
 
-4. **`#[reproducible]` / `#[pure]` 검사는 legacy 호출도 차단**:
-   `--legacy-globals` 가 활성이어도, `#[reproducible]` 함수 본문에서
-   `time.now()` 호출 시 desugar 결과가 `time.systemClock.now()` (capability method)
-   이고, `time.systemClock: Clock` 의 deterministic 등급이 non-deterministic
-   이므로 `E0784` 발화. *legacy 모드도 effect 검사를 우회하지 못함*.
+4. **`#[pure]` 검사는 legacy 호출도 차단**:
+   `--legacy-globals` 가 활성이어도, `#[pure]` 함수 본문에서 `time.now()` 호출
+   시 desugar 결과가 `time.systemClock.now()` (capability method) 이고,
+   `time.systemClock: Clock` 가 capability parameter 로 들어오면 `E0785` 발화.
+   *legacy 모드도 effect 검사를 우회하지 못함*.
 
 5. **`--legacy-globals` 자체가 manifest `stability` 영향**:
    manifest 에 `legacy.globals = true` 표시된 패키지는 자동으로
@@ -1244,29 +1202,28 @@ Phase 5 에서 stdlib sink 4 개 (`db.query`, `process.exec`, `fs.path*`,
 
 ## 7.5 Cross-feature interaction matrix
 
-10 개 결정 (G36/G37/G39-G42, G44, G45, G47, G48) 의 *상호작용*. 같은 함수에
-다중 어노테이션 적용 시 의미는 다음 표가 권위. 8 개 *의미론적 상호작용* feature
+9 개 결정 (G36/G37/G40-G42, G44, G45, G47, G48) 의 *상호작용*. 같은 함수에
+다중 어노테이션 적용 시 의미는 다음 표가 권위. 7 개 *의미론적 상호작용* feature
 만 행/열에 등장 — G47 (osty context, 운영 도구), G48 (annotation surface,
 meta) 은 다른 결정과 의미 충돌이 없으므로 별도 행 없음.
 
 표는 *upper-triangular* 형식 — `Row × Column` 위치에 두 feature 의 상호작용을
 명시. 대칭 위치 (Column × Row) 는 `—` 로 표기 (위쪽 entry 가 권위).
 
-| | Capability (G36) | Taint (G37) | Reproducible (G39) | Sealed (G40) | ErrContract (G41) | Intent (G42) | Evolution (G44) | Golden (G45) |
-|---|---|---|---|---|---|---|---|---|
-| **Capability (G36)** | self | tag propagates through capability method 시그니처 | non-det cap 수신은 `E0784` | 무관 | 무관 | 무관 | capability 시그니처 변경 = breaking | golden 함수는 deterministic capability 만 (`E0444`) |
-| **Taint (G37)** | — | self | 직교 — taint 는 provenance, reproducibility 는 determinism. 둘 다 적용 가능 | sealed type 도 tag 운반 (struct 단위 fold per §21.5) | Err variant 도 tag 운반 (Result/Option per §21.5.2) | example 의 input 에 source tag 표시 가능 | taint annotation 변경 = breaking (caller 측 sanitize 의무) | golden 입력은 *untainted* 권장 (snapshot 의 reproducibility 위해) |
-| **Reproducible (G39)** | — | — | self (scope 강도: portable > target > run) | sealed constructor 도 reproducible 가능 | 무관 | 무관 | scope 강화 = breaking, 약화 = compat-add | golden ⇒ implied `#[reproducible(scope="target")]` |
-| **Sealed (G40)** | — | — | — | self | sealed type 도 ErrContract 가능 | example 이 sealed constructor 호출 가능 | sealed → non-sealed = breaking | 무관 |
-| **ErrContract (G41)** | — | — | — | — | self | example 이 contract variant 검증 가능 | contract 변형 = breaking (variant 추가/제거) | 무관 |
-| **Intent (G42)** | — | — | — | — | — | self | example 변경 = compat-add (no SemVer effect) | fixture 가 golden 입력으로 사용 가능 |
-| **Evolution (G44)** | — | — | — | — | — | — | self | golden snapshot 변경 = audit (W0444) |
-| **Golden (G45)** | — | — | — | — | — | — | — | self |
+| | Capability (G36) | Taint (G37) | Sealed (G40) | ErrContract (G41) | Intent (G42) | Evolution (G44) | Golden (G45) |
+|---|---|---|---|---|---|---|---|
+| **Capability (G36)** | self | tag propagates through capability method 시그니처 | 무관 | 무관 | 무관 | capability 시그니처 변경 = breaking | golden 함수가 capability 받으면 snapshot 의 deterministic 보장은 fixture/fake 책임 |
+| **Taint (G37)** | — | self | sealed type 도 tag 운반 (struct 단위 fold per §21.5) | Err variant 도 tag 운반 (Result/Option per §21.5.2) | example 의 input 에 source tag 표시 가능 | taint annotation 변경 = breaking (caller 측 sanitize 의무) | golden 입력은 *untainted* 권장 (snapshot 의 reproducibility 위해) |
+| **Sealed (G40)** | — | — | self | sealed type 도 ErrContract 가능 | example 이 sealed constructor 호출 가능 | sealed → non-sealed = breaking | 무관 |
+| **ErrContract (G41)** | — | — | — | self | example 이 contract variant 검증 가능 | contract 변형 = breaking (variant 추가/제거) | 무관 |
+| **Intent (G42)** | — | — | — | — | self | example 변경 = compat-add (no SemVer effect) | fixture 가 golden 입력으로 사용 가능 |
+| **Evolution (G44)** | — | — | — | — | — | self | golden snapshot 변경 = audit (W0444) |
+| **Golden (G45)** | — | — | — | — | — | — | self |
 
 **핵심 invariants** (위 표가 함의):
-1. `#[reproducible]` ∩ `#[ambient]` 또는 `Clock`/`Rng`/`Env`/`Fs`/`Net`/`Process`
-   capability 수신 = `E0784` (compile error)
-2. `#[golden]` ⇒ implied `#[reproducible(scope="target")]`
+1. `#[pure]` 가 어떤 capability 수신 시 = `E0785` (compile error). v0.5 `#[pure]` 가
+   유일한 effect-free attestation — G39 `#[reproducible]` 는 withdrawn.
+2. `#[golden]` 함수의 deterministic 보장은 호출자 책임 (snapshot 형 testing).
 3. `#[taint]` 가 `#[requires]` sink 에 도달 + sanitize 없음 = `E0900`
 4. `#[sealed_construct]` struct 의 외부 literal = `E0420` (test 환경 escape 별도)
 5. `#[error_contract]` 의 contract 외 variant 발화 = `E0410`
@@ -1286,8 +1243,6 @@ bodies"). interface 는 별도 declaration. 아래 표는 그 기준.
 | `#[requires]` | | | | | | ✓ | | |
 | `#[trusted_declassify]` | ✓ | | | | | | ✓ | |
 | `#[taint_field]` | | | | | ✓ | | | |
-| `#[reproducible]` | ✓ | | | | | | ✓ | |
-| `#[reproducible_capability]` | | | | | | | | ✓ |
 | `#[spec]` | ✓ | ✓ | ✓ | | | | ✓ | ✓ |
 | `#[sealed_construct]` | | ✓ | | | | | | |
 | `#[trusted_construct]` | ✓ | | | | | | ✓ | |
@@ -1335,7 +1290,7 @@ _본 문서는 v0.6 의 *결정 동결 baseline*. 구현 진행도는 `CHANGELOG
 
 각 예시는 5–8 개의 v0.6 어노테이션을 함께 사용하며, 사용자 멘탈 모델 형성용.
 
-### 9.1 사용자 생성 함수 (capability + sealed + error_contract + intent + spec + reproducible)
+### 9.1 사용자 생성 함수 (capability + sealed + error_contract + intent + spec)
 
 ```osty
 // std.user.osty
@@ -1354,7 +1309,6 @@ impl Email {
     #[example(input = "alice@example.com", output = "Some(...)")]
     #[example(input = "invalid", output = "None")]
     #[spec("§10.30.user.email")]
-    #[reproducible(scope = "portable")]
     pub fn parse(s: String) -> Email? {
         spec {
             example: Email.parse("a@b").isSome()
@@ -1412,7 +1366,6 @@ fn aliceUser() -> Email { Email.parse("alice@example.com")? }
 **무엇이 보장되는가**:
 - `Email` 은 *반드시* `parse` 통과 — 외부 literal `Email { ... }` 불가 (G40)
 - `createUser` 호출자는 *세 실패 모드만* 처리하면 exhaustive (G41)
-- `Email.parse` 는 plat 무관 동일 동작 (G39 `portable`)
 - `osty doc` / `osty context` 가 purpose / examples / error_contract
   inline 표시 (G42)
 - `db: Db` capability — 테스트 시 `fakeDb` 주입, production 시 real Db (G36)
@@ -1502,9 +1455,6 @@ v0.6 의 결정들이 참조한 학술/산업 선행 사례:
 | | Flow Caml (Pottier, Simonet 2003) | OCaml IFC. type system 통합 사례 |
 | | Perl taint mode (Wall 1990s) | Dynamic / runtime IFC. Osty 는 static. 정신은 동일 |
 | | Haskell `Tagged<T, Trust>` newtype 패턴 | 라이브러리-수준 IFC. Osty 는 언어-수준 |
-| **G39 Reproducibility** | Bazel hermetic build | 빌드 시스템 측 reproducibility. Osty 는 *함수* 수준 |
-| | Nix purity model | 환경독립 강제 정신 동일 |
-| | Rust `#[no_std]` | 환경 의존 제한 패턴 (다른 차원) |
 | **G40 Sealed construct** | Haskell smart constructor + module export 관례 | 관례를 *언어 primitive* 로 |
 | | F# `private` constructor + smart factory | 동일 |
 | | Java sealed class (JEP 409, Java 17) | 다른 의미 — Osty 의 sealed_construct 는 *생성 경로* 제한 |
@@ -1545,7 +1495,7 @@ v0.6 baseline 동결 → public 1.0 alpha 출시 까지의 게이트:
 
 ### 9.1 Spec readiness (이 문서가 cover)
 
-- [x] G36-G48 의 baseline 10 결정 (G36, G37, G39-G42, G44, G45, G47, G48) 본 문서에 명시
+- [x] G36-G48 의 baseline 9 결정 (G36, G37, G40-G42, G44, G45, G47, G48) 본 문서에 명시
 - [x] SPEC_GAPS.md §"Resolved in v0.6" 에 entries 등재
 - [x] OSTY_GRAMMAR_v0.6.md grammar delta + R27–R29
 - [x] CHANGELOG_v0.6.md skeleton
@@ -1563,7 +1513,7 @@ v0.6 baseline 동결 → public 1.0 alpha 출시 까지의 게이트:
 - [ ] Phase 0 (Tier A 5 개 LLVM 갭) — *진행 중*
 - [ ] Phase 1 capability migration — stdlib 100 PR 분량 순회
 - [ ] Phase 2 spec / intent / context — 작은 분량
-- [ ] Phase 3 reproducible / golden
+- [ ] Phase 3 golden
 - [ ] Phase 4 sealed / errcontract / evolution
 - [ ] Phase 5 taint
 
@@ -1579,9 +1529,9 @@ v0.6 baseline 동결 → public 1.0 alpha 출시 까지의 게이트:
 
 ### 9.4 Spec corpus readiness
 
-- [ ] `testdata/spec/positive/` 에 baseline 10 결정 별 통과 케이스 추가
-- [ ] `testdata/spec/negative/reject.osty` 에 신규 진단 코드 (E0405-E0446,
-  E0780-E0789, E0900-E0903, E2100-E2101) 케이스
+- [ ] `testdata/spec/positive/` 에 baseline 9 결정 별 통과 케이스 추가
+- [ ] `testdata/spec/negative/reject.osty` 에 신규 진단 코드 (E0405-E0445,
+  E0780-E0782, E0785, E0789, E0900-E0903, E2100-E2101) 케이스
 - [ ] `STDLIB_MATRIX.md` 가 capability migration 후 모듈별 capability requirement
   컬럼 추가
 - [ ] `ERROR_CODES.md` regenerate (`go generate ./internal/diag/...`)

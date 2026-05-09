@@ -50,10 +50,11 @@ version, and a migration story for existing code.
   by the compiler (§1.9, §3.8). As of v0.6 this set is the v0.5
   baseline (`#[json(...)]`, `#[deprecated(...)]`, `#[op(...)]`,
   `#[cfg(...)]`, `#[test]`, `#[intrinsic]`, `#[pod]`, `#[repr(...)]`,
-  `#[export(...)]`, `#[c_abi]`, `#[no_alloc]`) plus the v0.6 G36–G46
+  `#[export(...)]`, `#[c_abi]`, `#[no_alloc]`) plus the v0.6 G36–G47
   additions (§20 capabilities, §21 information flow, §3.10–§3.15
-  intent / spec / reproducible / sealed / evolution / golden / budget).
-  See `00-revision.md §5` for the full surface table.
+  intent / spec / sealed / evolution / golden / budget). G39
+  (`#[reproducible]`) was withdrawn pre-release; `#[pure]` covers the
+  same use-case. See `00-revision.md §5` for the full surface table.
 - Function overloading — distinct names for distinct operations.
 - C-style `for` loops — use `for x in xs` / `for cond { }` /
   `while cond { }` / `loop { break v }`.
@@ -174,7 +175,7 @@ must compose with that grammar without breaking it. Every G36–G49
 decision was vetted against three questions:
 
 1. **Does it expand the type kind set?** If yes, the proposal is
-   demoted to *attestation only* (e.g. `#[reproducible]` does not
+   demoted to *attestation only* (e.g. `#[pure]` does not
    create a new function type — it is a checker-side promise).
 2. **Does it introduce a new control-flow construct?** If yes, the
    proposal is rejected. `Cancelled` flows through `?`, capabilities

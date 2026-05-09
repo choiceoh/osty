@@ -3,29 +3,27 @@
 This chapter defines Osty v0.6 declaration forms — functions (§3.1),
 variables (§3.2), multiple assignment (§3.3), structs (§3.4) including
 the v0.6 sealed-construct rule (§3.4.5, G40), enums (§3.5), interfaces
-(§3.6), type aliases (§3.7), and annotations (§3.8). Sections §3.11,
-§3.12, and §3.14 specify the v0.6 *hidden-dependency-surface*
-annotations (G36, G39, G42, G44) — `#[reproducible]` for
-environment-independence, `#[purpose]` / `#[example]` / `#[fixture]`
-for structured intent, and `#[since]` / `#[stability]` /
-`#[match_compat]` for API evolution.
+(§3.6), type aliases (§3.7), and annotations (§3.8). Sections §3.12 and
+§3.14 specify the v0.6 *hidden-dependency-surface* annotations (G42,
+G44) — `#[purpose]` / `#[example]` / `#[fixture]` for structured
+intent, and `#[since]` / `#[stability]` / `#[match_compat]` for API
+evolution.
 
 The v0.6 design north star (*hidden dependency is forbidden*) is
 realized in this chapter: every external dependency, intent,
 contract, or evolution rule that affects a declaration is expressible
-at the declaration site. The annotation surface in §3.11, §3.12,
-§3.14 makes that visibility *machine-readable* so that diagnostics
-(§7.5 error contract), enforcement (§3.11 reproducibility, §3.4.5
-sealed construct), and tooling (§13.4 `osty context`, §13.5 `osty
-publish`) all share one source of truth.
+at the declaration site. The annotation surface in §3.12, §3.14 makes
+that visibility *machine-readable* so that diagnostics (§7.5 error
+contract), enforcement (§3.4.5 sealed construct), and tooling (§13.4
+`osty context`, §13.5 `osty publish`) all share one source of truth.
 
-The annotation set is finite — 27 compiler-recognized annotations as
+The annotation set is finite — 25 compiler-recognized annotations as
 of v0.6 (§3.8). Three sub-categories sit on top of the underlying
 declaration grammar:
 
 | Category | Annotations | Purpose |
 |---|---|---|
-| **Effect & flow** | `#[ambient]`, `#[reproducible]`, `#[reproducible_capability]`, `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]` | Make capability use, reproducibility scope, and information-flow tags explicit at the declaration boundary. |
+| **Effect & flow** | `#[ambient]`, `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]` | Make capability use and information-flow tags explicit at the declaration boundary. |
 | **Intent & contract** | `#[purpose]`, `#[example]`, `#[fixture]`, `#[error_contract]`, `#[golden]` | Author-visible, machine-readable record of *what a declaration is for* and *what it must produce*. |
 | **Evolution** | `#[since]`, `#[stability]`, `#[match_compat]`, `#[deprecated]` | Promises about API surface stability, enforced by `osty publish`. |
 
@@ -208,10 +206,6 @@ release.
 
 The v0.6 annotation surface composes with `const fn` as follows:
 
-- **`#[reproducible]`** — every `const fn` is implicitly
-  reproducible at every scope (the body is compile-time evaluable;
-  the result is a constant). An explicit
-  `#[reproducible(scope = "portable")]` is permitted but redundant.
 - **`#[pure]`** — every `const fn` is implicitly pure (the body
   cannot consult any capability — capabilities are runtime
   values). Explicit `#[pure]` is permitted but redundant.
@@ -346,9 +340,6 @@ assignment rules. Specifically:
 - **Flow tags** — each assignment slot inherits the corresponding
   RHS element's tag set. Tagged values flow through tuple
   destructuring without declassification.
-- **Reproducibility** — multiple assignment inside a
-  `#[reproducible]` function follows the same scope rules as
-  single assignment; no special exemption.
 
 ### 3.4 Structs
 
@@ -822,11 +813,7 @@ pub interface Writer {
     fn flush(self) -> Result<(), Error>
 }
 
-// 사용자 정의 capability — `#[reproducible_capability]` 가 모든 메서드의
-// `#[reproducible]` 부착을 강제 (§20.5).
-#[reproducible_capability]
 pub interface Hash {
-    #[reproducible(scope = "portable")]
     fn hash(self, data: Bytes) -> Bytes32
 }
 ```
@@ -932,45 +919,7 @@ The mix is permitted on the same parameter list: a function may
 take a generic `T: Reader` and an interface-value `Writer` in the
 same signature.
 
-#### 3.6.4 `#[reproducible_capability]` — deterministic interface
-
-`#[reproducible_capability]` (§20.5) on an interface declaration
-asserts that *every* method on the interface is `#[reproducible]`
-at some scope. The compiler enforces this at the interface
-definition: a method body that omits `#[reproducible(...)]` is
-`E0783`.
-
-```osty
-#[reproducible_capability]
-pub interface Hash {
-    #[reproducible(scope = "portable")]
-    fn hash(self, data: Bytes) -> Bytes32
-
-    // ❌ E0783 — interface annotated #[reproducible_capability]
-    //    but this method has no #[reproducible].
-    fn salt(self) -> Bytes
-}
-```
-
-A `Hash` value can therefore be received inside a `#[reproducible]`
-function — the type checker knows every call goes to a deterministic
-method, so the function's reproducibility contract holds.
-
-Stdlib v0.6 baseline `#[reproducible_capability]` interfaces:
-
-| Interface | Methods | Scope |
-|---|---|---|
-| `Hash` | `hash(self, data)` → `Bytes32` | `portable` |
-| `Encoder<T>` | `encode(self, value)` → `Bytes` | `portable` |
-| `Decoder<T>` | `decode(self, bytes)` → `Result<T, Error>` | `portable` |
-
-Implementers must annotate every method with the same scope or
-stronger. A weaker-scope method on a `#[reproducible_capability]`
-interface is `E0783`; a method body that violates its declared
-reproducibility scope is checked by the ordinary reproducibility
-diagnostics (`E0786`–`E0788`).
-
-#### 3.6.5 Interface 진화 rules
+#### 3.6.4 Interface 진화 rules
 
 `#[stability("stable")]` interfaces follow standard SemVer rules
 (§3.14.3) plus an interface-specific clause:
@@ -982,7 +931,6 @@ diagnostics (`E0786`–`E0788`).
 | Remove a method | major bump | minor bump |
 | Change a method signature | major bump | minor bump |
 | Change a default body | patch bump (semantic-only change) | patch bump |
-| Promote `#[reproducible_capability]` | major bump (existing impls may need new annotations) | minor bump |
 
 The "add method *with* default body" rule is the canonical *minor
 bump* path for interface evolution — it lets stdlib add helper
@@ -1562,30 +1510,25 @@ Any argument is rejected with `E0739`.
 
 #### 3.8.13 Annotation interaction matrix
 
-The annotation set is intentionally small (31 entries in v0.6, §1.10.3),
+The annotation set is intentionally small (29 entries in v0.6, §1.10.3),
 which keeps the *interactions* between annotations bounded. The table
 below catalogues the meaningful pairings — empty cells mean the
 annotations are orthogonal (no special rule applies).
 
-| Caller annotation | `#[reproducible]` | `#[pure]` | `#[error_contract]` | `#[golden]` |
-|---|---|---|---|---|
-| `#[ambient]` | rejected (only in entry-point) | rejected | OK | OK |
-| `#[reproducible]` | scope ≤ caller | implied stronger | OK | implicit `#[reproducible]` |
-| `#[pure]` | implies all scopes | (self) | OK | OK |
-| `#[error_contract]` | OK | OK | (only for `Result<_, E>`) | OK |
-| `#[golden]` | implicit `#[reproducible(scope = "target")]` | OK | OK | (self) |
+| Caller annotation | `#[pure]` | `#[error_contract]` | `#[golden]` |
+|---|---|---|---|
+| `#[ambient]` | rejected (capability flow forbidden) | OK | OK |
+| `#[pure]` | (self) | OK | OK |
+| `#[error_contract]` | OK | (only for `Result<_, E>`) | OK |
+| `#[golden]` | OK | OK | (self) |
 
 Reading examples:
 
-- `#[ambient(clock)]` + `#[reproducible]`: rejected. `#[ambient]` is
-  permitted only on entry-point functions, which are not
-  reproducible. `E0782`.
+- `#[ambient(clock)]` + `#[pure]`: rejected. Ambient bindings inject
+  capability values; `#[pure]` forbids capability receipt entirely
+  (`E0785`).
 - `#[error_contract]` + `#[pure]`: OK. A pure function may return
   `Result<_, E>` and carry an error contract.
-- `#[reproducible(scope = "portable")]` + transitively-called
-  `#[reproducible(scope = "target")]`: rejected with `E0787`. A
-  `portable` caller cannot delegate to a `target` callee — the
-  scope contract propagates downward (§3.11.1).
 
 #### 3.8.14 Recommended ordering convention
 
@@ -1599,120 +1542,31 @@ sequence (top to bottom):
 2. **Intent** — `#[purpose]`
 3. **Examples** — `#[example]` (one or more)
 4. **Error contract** — `#[error_contract]`
-5. **Reproducibility / purity** — `#[reproducible]` / `#[pure]`
+5. **Purity** — `#[pure]`
 6. **Stability / since** — `#[stability]`, `#[since]`, `#[deprecated]`
 7. **Performance hints** — `#[inline]`, `#[hot]` / `#[cold]`,
    `#[target_feature]`, `#[noalias]`, `#[parallel]`,
    `#[vectorize]`, `#[unroll]`, `#[no_vectorize]`
 8. **Compatibility** — `#[match_compat]`
 9. **Information flow** — `#[taint]` / `#[sanitizes]` / `#[trusted_declassify]` (function-level)
-10. **Capability marker** — `#[reproducible_capability]` (interfaces)
 
 The formatter normalizes to this ordering on save. Authors who
 prefer a different sequence should set `formatter.annotation_order =
 "as-written"` in `osty.toml`.
 
-### 3.11 `#[reproducible(scope=...)]` — Determinism contract (G39)
+### 3.11 (Withdrawn) — `#[reproducible]` (G39)
 
-A function may declare `#[reproducible]` to assert that its output is
-fully determined by its input — suitable for cache keys, build hashes,
-migration IDs, content addressing.
+G39 was withdrawn from the v0.6 baseline pre-release. The 3-tier scope
+model (`run` / `target` / `portable`) over-engineered a contract whose
+practical use sites — cache keys, build hashes, migration IDs — are
+already covered by `#[pure]` (LLVM `readnone`, §3.8.11) plus `#[golden]`
+(snapshot tooling, §11.5). Authors who need an effect-free attestation
+use `#[pure]`; authors who want their function's output pinned to a
+golden file use `#[golden]`.
 
-```osty
-#[reproducible(scope = "target")]
-fn computeKey(data: Bytes) -> Bytes32 {
-    sha256(data)
-}
-```
-
-**Scope levels.**
-
-| Scope | Meaning |
-|---|---|
-| `"run"` | Same output across one process execution. `Console` capability allowed. |
-| `"target"` *(default)* | Same output across the same Osty version + target triple. |
-| `"portable"` | Byte-equal across platforms (cross-compilation). Endianness-explicit, NaN-bit-pattern-stable. |
-
-**Compiler checks.** The function (and its transitive callees):
-
-- Must not receive non-deterministic capabilities (`Clock`, `Rng`,
-  `Env`, `Fs`, `Net`, `Process`) — see §20.4. `E0784`.
-- Must not iterate unordered collections (`Map.iter`, `Set.iter` —
-  use `Map.entriesSorted` / `Set.toListSorted`). `E0786`.
-- Must not depend on pointer identity comparisons.
-- Must call only callees with at least the same scope strength.
-  `E0787`.
-
-`scope = "portable"` adds endianness and NaN-bit constraints (`E0788`).
-
-`#[pure]` (carried from v0.5 §3.8) is strictly stronger than
-`#[reproducible]` — it forbids capability receipt entirely, even for
-deterministic capabilities like `Hash`. `E0785`.
-
-#### 3.11.1 Scope inference rules
-
-When a `#[reproducible(scope = X)]` function calls another
-function `f`, the checker requires that `f` is also reproducible
-with scope ≥ `X`. The strength order:
-
-```
-portable > target > run
-```
-
-A `portable` caller may freely call `target` or `run` callees? **No**
-— stronger callers require *equally or more* strict callees. The
-arrow runs the other way: a `portable` function cannot call a
-`target` function, because `target`'s output may depend on
-endianness or NaN-bit patterns that `portable` excludes.
-
-| Caller scope | May call (callee scope) |
-|---|---|
-| `run` | `run`, `target`, `portable` |
-| `target` | `target`, `portable` |
-| `portable` | `portable` only |
-
-Practical consequence: helper functions used inside `portable`
-contexts must themselves be `portable`. The `#[reproducible(scope =
-"portable")]` annotation propagates downward.
-
-#### 3.11.2 Allowed capability shapes
-
-Some capabilities are *deterministic by construction* — the same
-input always produces the same output, regardless of process
-identity. These remain receivable inside `#[reproducible]`:
-
-| Capability | Deterministic? | Notes |
-|---|---|---|
-| `Hash` | Yes (when annotated `#[reproducible_capability]`) | Hashing is by definition deterministic |
-| `Clock` | No | `now()` depends on wall time |
-| `Rng` | No | Even seeded; the seed is process-local state |
-| `CryptoRng` | No | Pulls from OS entropy pool |
-| `Env` | No | Process environment is not stable input |
-| `Fs` | No | Filesystem state is non-deterministic |
-| `Net` | No | Network responses depend on remote state |
-| `Process` | No | Subprocess output is non-deterministic |
-| `Console` | No (effect), but allowed at `run` scope | Stdout writes are observable |
-
-Deterministic capabilities (e.g. a `Hash` interface where every
-method is annotated `#[reproducible(scope = "portable")]`) are
-receivable in `portable` functions provided the *interface itself*
-is annotated `#[reproducible_capability]` (§20.5).
-
-#### 3.11.3 Reproducibility audit
-
-`osty audit --reproducible` enumerates every `#[reproducible]`
-declaration and shows its scope:
-
-```sh
-$ osty audit --reproducible
-pkg myapp.users
-  fn computeUserKey(...)         scope=target  callees=2 (sha256:portable, json.encode:target)
-  fn migrationId(...)            scope=portable callees=1 (sha256:portable)
-```
-
-The output is suitable for security review: a `target`-scoped key
-function called from a context that needs `portable` immediately
-shows up as a scope mismatch.
+The associated diagnostics `E0783`, `E0784`, `E0786`, `E0787`, `E0788`,
+and `E0444` are likewise withdrawn. `E0785` (the `#[pure]` capability
+gate) remains in force.
 
 ### 3.12 Structured Intent — `#[purpose]`, `#[example]`, `#[fixture]` (G42)
 
@@ -2090,20 +1944,21 @@ fn fakeDb() -> Db { std.testing.db.inMemory() }
 `osty context std.user.createUser --format=json` 호출 시 위 정보
 모두 single JSON 으로 노출 (§13.9).
 
-#### 3.16.2 Reproducible utility — capability-free
+#### 3.16.2 Pure utility — capability-free
 
 ```osty
 #[purpose("Content-addressed hash of input bytes")]
 #[example(input = "<empty bytes>", output = "Bytes32.fromHex(\"e3b0c44...\")")]
-#[reproducible(scope = "portable")]
+#[pure]
 pub fn computeKey(data: Bytes) -> Bytes32 {
     sha256(data)
 }
 ```
 
-`#[reproducible(scope = "portable")]` 는 *플랫폼 간 byte-equal* 약속.
-`scope = "portable"` 는 가장 강한 scope — endianness / NaN bit /
-unordered iter 모두 거부 (§3.11.3).
+`#[pure]` (§3.8.11) 는 LLVM `readnone` fn attribute 로 lower 되며 capability
+파라미터 수신을 모두 거부 (`E0785`). 환경 의존이 없는 *content-addressing*
+함수의 canonical attestation. (G39 `#[reproducible(scope=...)]` 는 v0.6
+baseline 에서 withdrawn — 같은 use-case 가 `#[pure]` 로 cover 된다.)
 
 #### 3.16.3 Sealed type with structured intent
 
@@ -2315,21 +2170,23 @@ fn handler(req: HttpRequest, db: Db) -> Response {
 The fix is parameterized query (`db.exec("SELECT ... WHERE id = ?",
 [id])`) or explicit sanitization (`std.sql.escape(id)`).
 
-#### 3.17.6 `#[reproducible]` with non-deterministic capability
+#### 3.17.6 `#[pure]` with capability parameter
 
 ```osty
-// ❌ E0784 — reproducible function receives Clock (non-deterministic).
-#[reproducible(scope = "target")]
+// ❌ E0785 — pure function receives Clock (capability flow forbidden).
+#[pure]
 fn cacheKey(clock: Clock, payload: Bytes) -> Bytes32 {
     sha256(payload + clock.now().toBytes())
 }
 
 // ✅ Receive a precomputed timestamp instead.
-#[reproducible(scope = "target")]
+#[pure]
 fn cacheKey(timestamp: Int64, payload: Bytes) -> Bytes32 {
     sha256(payload + timestamp.toBytes())
 }
 ```
 
 The caller is then responsible for capturing `clock.now()` at a
-non-reproducible boundary and passing the captured value down.
+non-pure boundary and passing the captured value down. (G39
+`#[reproducible]` was the prior surface for this gate; it was
+withdrawn in favour of `#[pure]`.)

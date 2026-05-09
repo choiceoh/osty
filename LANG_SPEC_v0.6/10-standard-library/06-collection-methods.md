@@ -115,7 +115,7 @@ iteration order:
 | `Set.toListSorted()` / `Set.toListSortedBy(f)` | Yes |
 | `List.iter()` / `for x in list` | Yes (insertion order) |
 
-A function annotated `#[reproducible(scope = "target")]` (§3.11)
+A function annotated `#[pure]` (§3.11)
 that iterates a `Map` or `Set` must use the `*Sorted` variant —
 calling `Map.iter()` from a reproducible context is `E0786`.
 

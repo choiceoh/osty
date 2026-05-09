@@ -79,13 +79,12 @@ Char.fromInt(n: Int) -> Char?        // None on invalid scalar or surrogate
 `Int.toChar()` aborts on invalid input (out of range or surrogate);
 `Char.fromInt` is the safe form that returns `None`.
 
-#### v0.6 reproducibility note
+#### v0.6 purity note
 
 Every method in this chapter is *pure* — no capability is consulted,
 no allocation occurs (numeric methods return scalar values), and
 the output is fully determined by the input. This makes the entire
-numeric surface acceptable inside `#[reproducible(scope =
-"portable")]` and `#[pure]` contexts.
+numeric surface acceptable inside `#[pure]` contexts.
 
 Float methods (`Float.sqrt`, `Float.pow`, `Float.sin`, etc.) inherit
 the platform's IEEE-754 implementation. The v0.6 contract guarantees:
@@ -94,9 +93,9 @@ the platform's IEEE-754 implementation. The v0.6 contract guarantees:
    produces the same bit pattern on repeated runs on the same
    `<arch>-<os>` triple.
 2. **NaN bit-pattern stability** — operations preserve NaN bit
-   patterns across compatible operations, so a `#[reproducible(scope
-   = "portable")]` function that does `f.sqrt().sqrt()` produces a
-   bit-equal NaN regardless of platform when the input was NaN.
+   patterns across compatible operations, so a `#[pure]` function
+   that does `f.sqrt().sqrt()` produces a bit-equal NaN regardless of
+   platform when the input was NaN.
 3. **No subnormal-flushing surprises** — Osty's float ops do not
    silently flush subnormals. A program that depends on subnormals
    produces the same answer on every supported target.

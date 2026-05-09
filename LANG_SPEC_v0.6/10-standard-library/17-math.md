@@ -46,7 +46,7 @@ Integer math lives on the integer methods (§10.5).
 Every function in `std.math` is *pure* — no capability is consulted,
 no allocation occurs, and the output is fully determined by the
 input. The whole module is acceptable inside
-`#[reproducible(scope = "portable")]` and `#[pure]` contexts.
+`#[pure]` contexts.
 
 The float-determinism guarantees from §10.5 apply: `math.sin(0.5)`
 produces the same bit pattern on every run on a given target

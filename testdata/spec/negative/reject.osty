@@ -328,33 +328,15 @@ fn main() {}
 // === END
 
 // === CASE: E0789 === user-defined capability cannot be ambient
-#[reproducible_capability]
 interface UserAmbientHash {
-    #[reproducible]
     fn hash(self, value: String) -> String
 }
 #[ambient(userambienthash)]
 fn main() {}
 // === END
 
-// === CASE: E0783 === reproducible capability method missing reproducible annotation
-#[reproducible_capability]
-interface BadReproducibleCapability {
-    fn hash(self, value: String) -> String
-}
-// === END
-
-// === CASE: E0784 === reproducible function receives non-deterministic capability
-#[reproducible]
-fn badReproducibleClock(clock: Clock) -> Int {
-    0
-}
-// === END
-
 // === CASE: E0785 === pure function receives a capability parameter
-#[reproducible_capability]
 interface PureHashCap {
-    #[reproducible]
     fn hash(self, value: String) -> String
 }
 #[pure]

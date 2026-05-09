@@ -101,10 +101,10 @@ check the flag at yield points and propagate `Err(Cancelled
 { ... })`. Worker migration during a blocking operation does not
 lose the cancel state — the flag rides with the task.
 
-**`#[reproducible]` is not affected by worker scheduling.**
+**`#[pure]` is not affected by worker scheduling.**
 Reproducibility is a property of the *function's logical
 behavior* (same input → same output). Worker assignment is
-implementation-detail; a `#[reproducible]` function produces the
+implementation-detail; a `#[pure]` function produces the
 same result regardless of which worker happens to execute it.
 
 ### 8.1 Structured Concurrency
@@ -328,7 +328,7 @@ adapter authors:
 Adapters that do *not* honor cancellation are not added to the
 canonical capability surface. A bespoke capability that wraps such
 an adapter must document the limitation and is *not* automatically
-acceptable to `#[reproducible_capability]` enforcement.
+acceptable to *deterministic interface* enforcement.
 
 ### 8.5 Channels
 

@@ -166,14 +166,7 @@ result). Use `Float.pow` for fractional/negative exponents.
 Overflow behavior in v0.6 is the same as v0.5 (§2.3): default
 arithmetic on `Int` / `Int8…Int64` / `UInt8…UInt64` aborts on
 overflow, with explicit `wrapping*` / `checked*` / `saturating*`
-methods for non-aborting alternatives. The v0.6 annotation surface
-adds two interactions:
-
-- **`#[reproducible]`** — arithmetic that aborts is *deterministic*
-  in the sense that the same input always produces the same abort.
-  This is acceptable inside `#[reproducible]` because the function
-  contract concerns *successful* return values; aborts are a
-  separate failure path that doesn't break determinism.
+methods for non-aborting alternatives.
 
 The integer overflow contract holds across both backends (Go and
 LLVM); a v0.6 program that aborts on `Int.MAX + 1` does so with the
@@ -532,23 +525,19 @@ let v = id(raw)
 The signature `fn id<T>(x: T) -> T` does not name flow tags
 explicitly; the propagation is structural at each call site.
 
-**`#[reproducible]` on generic functions.** A generic function may
-be `#[reproducible]`. The constraint applies *per monomorphization*
-— each `T` instantiation must satisfy the reproducibility contract
-(no non-deterministic capability transitively reachable through
-`T`'s methods).
+**`#[pure]` on generic functions.** A generic function may be
+`#[pure]`. The constraint applies *per monomorphization* — each `T`
+instantiation must keep the body free of capability flow and side
+effects.
 
 ```osty
-#[reproducible(scope = "portable")]
+#[pure]
 fn merge<T: Equal>(a: List<T>, b: List<T>) -> List<T> {
-    // Reproducible because List<T>.append etc. are pure
+    // Pure because List<T>.append etc. are pure
     // and Equal is pure (auto-derived for primitives).
     a + b
 }
 ```
-
-If `T` is later instantiated with a type whose `Equal` impl is
-non-reproducible, that monomorphization fails (`E0786`).
 
 **`#[error_contract]` on generic Result return.** A function
 returning `Result<T, E>` may carry `#[error_contract]` only when
@@ -743,9 +732,9 @@ fn buildId(clock: Clock, rng: Rng) -> String { ... }
 //          Clock, Rng 는 평범한 interface 타입.
 ```
 
-검사기 (toolchain/check_gates.osty::runReproducibleCapabilityGate)
-가 `#[reproducible]` 함수의 capability parameter 검사 — type system
-위 *추가 enforcement layer* 만 추가됐다 (§20.4 / §3.11).
+검사기 (toolchain/check_gates.osty::runCapabilitySignatureGate)
+가 `#[pure]` 함수의 capability parameter 검사 — type system
+위 *추가 enforcement layer* 만 추가됐다 (§20.4 / §3.8.11).
 
 #### 2.12.2 Flow tags — type-orthogonal annotation
 
@@ -836,7 +825,7 @@ Bidirectional type inference (§2a) 는 v0.6 annotation 위에서 그대로
 
 - `#[taint]`, `#[requires]` 는 type-level 검사 *후* 의 추가 layer —
   inference 자체에 영향 없음
-- `#[reproducible]` 은 capability parameter 의 *수신 여부* 만 확인 —
+- `#[pure]` 는 capability parameter 의 *수신 여부* 만 확인 —
   inference 가 결정한 parameter type 위 검사
 - `#[sealed_construct]` 의 literal 차단은 *parse / resolve 단계* 검사
   — type checker 는 sealed type 의 일반 사용을 inference 통해 처리
@@ -866,7 +855,6 @@ behavior?"* is uniformly **no** for all v0.6 surfaces:
 |---|---|
 | `#[sealed_construct]` | 영향 없음 — sealed 는 construct 만 제한 |
 | `#[taint]` | 영향 없음 — flow tag 는 value-level |
-| `#[reproducible]` | 영향 없음 — function-level annotation |
+| `#[pure]` | 영향 없음 — function-level annotation |
 | `#[purpose]` / `#[example]` / `#[fixture]` | 영향 없음 — metadata |
 | `#[stability]` | 영향 없음 — metadata |
-| `#[budget]` | 영향 없음 — metadata + perf check |

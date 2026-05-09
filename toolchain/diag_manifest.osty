@@ -153,12 +153,7 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
     if code == "E0780" { return FamilyTypeChecking }
     if code == "E0781" { return FamilyTypeChecking }
     if code == "E0782" { return FamilyTypeChecking }
-    if code == "E0783" { return FamilyTypeChecking }
-    if code == "E0784" { return FamilyTypeChecking }
     if code == "E0785" { return FamilyTypeChecking }
-    if code == "E0786" { return FamilyTypeChecking }
-    if code == "E0787" { return FamilyTypeChecking }
-    if code == "E0788" { return FamilyTypeChecking }
     if code == "E0789" { return FamilyTypeChecking }
     // G37 — Information flow (§21)
     if code == "E0900" { return FamilyTypeChecking }
@@ -187,7 +182,6 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
     if code == "E0435" { return FamilyAnnotation }
     if code == "E0436" { return FamilyAnnotation }
     // G45 — Golden tests (§11.5)
-    if code == "E0444" { return FamilyAnnotation }
     if code == "E0445" { return FamilyAnnotation }
     if code == "E0446" { return FamilyAnnotation }
     if code == "W0444" { return FamilyAnnotation }

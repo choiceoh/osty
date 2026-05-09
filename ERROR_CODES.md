@@ -1181,63 +1181,15 @@ Spec: v0.6 §20.3.1
 
 **Fix**: pass the capability explicitly, or rename either side so
 
-### E0783 — `CodeReproducibleCapabilityNonRepro`
-
-CodeReproducibleCapabilityNonRepro: an interface marked `#[reproducible_capability]` declares a method that is not itself `#[reproducible]`. The capability cannot be sealed if its surface allows non-deterministic operations.
-
-every method, or remove `#[reproducible_capability]`.
-
-Spec: v0.6 §20.5
-
-**Fix**: add `#[reproducible(scope = "target")]` (or stronger) to
-
-### E0784 — `CodeReproducibleViaCapability`
-
-CodeReproducibleViaCapability: a function carrying `#[reproducible]` receives a non-deterministic capability parameter (`Clock`, `Rng`, `Env`, `Fs`, `Net`, `Process`).
-
-scope = "run")]` if `Console` is the only side-effect, or remove `#[reproducible]`.
-
-Spec: v0.6 §20.4
-
-**Fix**: drop the non-det capability parameter, narrow `#[reproducible(
-
 ### E0785 — `CodePureViaCapability`
 
 CodePureViaCapability: a function carrying `#[pure]` receives any capability parameter. `#[pure]` is the strongest effect annotation and forbids capability flow entirely.
 
-allows deterministic capabilities like `Hash`).
+(e.g., `timestamp: Int64` instead of `clock: Clock`).
 
 Spec: v0.6 §20.4
 
-**Fix**: drop the capability parameter, or use `#[reproducible]` (which
-
-### E0786 — `CodeReproducibleUnorderedIter`
-
-CodeReproducibleUnorderedIter: a `#[reproducible]` function iterates an unordered collection (`Map.iter`, `Set.iter`) whose element order is implementation-defined.
-
-deterministic ordering.
-
-Spec: v0.6 §3.11.3
-
-**Fix**: use `Map.entriesSorted()` / `Set.toListSorted()` for
-
-### E0787 — `CodeReproducibleScopeHierarchy`
-
-CodeReproducibleScopeHierarchy: a `#[reproducible(scope = A)]` function calls a callee with weaker scope. Scope strength: `portable` > `target` > `run`.
-
-Spec: v0.6 §3.11.3
-
-**Fix**: strengthen the callee's scope, or weaken the caller's.
-
-### E0788 — `CodeReproduciblePortableConstraint`
-
-CodeReproduciblePortableConstraint: a `#[reproducible(scope = "portable")]` function violates one of the cross-platform constraints — endianness-dependent serialisation, `NaN` bit pattern comparison, platform-specific integer width assumption.
-
-NaN comparisons (`isNaN()` is OK), or drop to scope = "target".
-
-Spec: v0.6 §3.11.3
-
-**Fix**: use explicit endianness (`bytes.toBigEndian`), avoid raw
+**Fix**: drop the capability parameter, or pass a precomputed scalar
 
 ### E0789 — `CodeAmbientUserCapability`
 
@@ -1478,16 +1430,6 @@ Spec: v0.6 §3.12.3
 ---
 
 ## G45 — Golden tests (§11.5)
-
-### E0444 — `CodeGoldenNotReproducible`
-
-CodeGoldenNotReproducible: a function carrying `#[golden]` does not satisfy `#[reproducible(scope = "target")]`. Non-deterministic snapshots have no diagnostic value.
-
-pass capabilities explicitly and avoid time/random/env access.
-
-Spec: v0.6 §11.5.4
-
-**Fix**: ensure the function (and its callees) are reproducible —
 
 ### E0445 — `CodeGoldenSnapshotMissing`
 

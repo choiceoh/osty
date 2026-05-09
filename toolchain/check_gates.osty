@@ -57,14 +57,10 @@ use std.strings as strings
 //     `#[ambient(...)]` is only allowed at entry-point functions and
 //     only accepts the canonical stdlib capability names.
 //
-//   runReproducibleCapabilityGate — E0783 (v0.6 G36/G39)
-//     `#[reproducible_capability]` interfaces must expose only methods
-//     explicitly marked `#[reproducible]`.
-//
-//   runCapabilitySignatureGate — E0784 / E0785 (v0.6 G36/G39)
-//     `#[reproducible]` functions reject non-deterministic capability
-//     parameters, and `#[pure]` functions reject capability parameters
-//     entirely.
+//   runCapabilitySignatureGate — E0785 (v0.6 G36)
+//     `#[pure]` functions reject all capability parameters. (G39
+//     `#[reproducible]` was withdrawn pre-release; the prior E0783 /
+//     E0784 / E0786-E0788 gates went with it.)
 
 // ---------------------------------------------------------------------
 // Entry point — called from check.osty:elabFile after elaborateDecls.
@@ -77,10 +73,8 @@ pub fn runCheckGates(cx: ElabCx) {
     runNoAllocGate(cx)
     runPureGate(cx)
     runAmbientGate(cx)
-    runReproducibleCapabilityGate(cx)
     runCapabilitySignatureGate(cx)
     runSpecLinkGate(cx)
-    runReproducibleScopeGate(cx)
     runBudgetStaticGate(cx)
     runSealedConstructGate(cx)
     runErrorContractGate(cx)
@@ -1483,7 +1477,7 @@ fn pureCollectPatternBindings(arena: AstArena, patIdx: Int, out: List<String>) {
 
 fn runAmbientGate(cx: ElabCx) {
     let arena = cx.ast.arena
-    let userCapabilities = collectReproducibleCapabilityNames(arena)
+    let userCapabilities = collectUserCapabilityNames(arena)
     for declIdx in arena.decls {
         let node = astArenaNodeAt(arena, declIdx)
         match node.kind {
@@ -1630,95 +1624,66 @@ fn isUserAmbientCapabilityName(name: String, userCapabilities: List<String>) -> 
 }
 
 // ---------------------------------------------------------------------
-// E0783 — `#[reproducible_capability]` promise gate (G36/G39, v0.6 §20.5).
+// E0785 — `#[pure]` capability parameter gate (G36, v0.6 §20.4).
 //
-// A deterministic user capability is only sound when every method on the
-// interface carries an explicit reproducibility promise. This gate keeps the
-// v0.6 surface honest while the deeper transitive reproducibility checks land
-// in later G39 phases.
-// ---------------------------------------------------------------------
-
-fn runReproducibleCapabilityGate(cx: ElabCx) {
-    let arena = cx.ast.arena
-    for declIdx in arena.decls {
-        let node = astArenaNodeAt(arena, declIdx)
-        if node.kind == AstNInterfaceDecl {
-            checkReproducibleCapabilityInterface(cx, arena, node)
-        }
-    }
-}
-
-fn checkReproducibleCapabilityInterface(cx: ElabCx, arena: AstArena, iface: AstNode) {
-    if iface.extra < 0 {
-        return
-    }
-    if !checkGateAnnotationContains(arena, iface.extra, "reproducible_capability") {
-        return
-    }
-    for memberIdx in iface.children {
-        let member = astArenaNodeAt(arena, memberIdx)
-        if member.kind == AstNFnDecl && !checkGateAnnotationContains(arena, member.extra, "reproducible") {
-            cx.env.local.diagnostics.push(
-                diagReproducibleCapabilityNonRepro(iface.text, member.text, member.start, member.end),
-            )
-        }
-    }
-}
-
-// ---------------------------------------------------------------------
-// E0784 / E0785 — capability parameters on effect-annotated functions.
-//
-// This is a signature-local phase of G39: it does not attempt transitive
-// call-graph reproducibility yet, but it prevents the direct unsound cases
-// listed in §20.4.
+// `#[pure]` (LLVM `readnone`) requires the function's output to be fully
+// determined by its argument values with no observable side effects.
+// Capability values are runtime mutable interface references; they
+// cannot appear in a `#[pure]` signature regardless of their declared
+// determinism class. (G39 `#[reproducible]` once provided a finer-grained
+// gate that allowed deterministic capabilities; it was withdrawn pre-
+// release. `#[pure]` is now the sole effect-free attestation surface.)
 // ---------------------------------------------------------------------
 
 fn runCapabilitySignatureGate(cx: ElabCx) {
     let arena = cx.ast.arena
-    let reproducibleCapabilities = collectReproducibleCapabilityNames(arena)
+    let userCapabilities = collectUserCapabilityNames(arena)
     for declIdx in arena.decls {
         let node = astArenaNodeAt(arena, declIdx)
-        checkCapabilitySignatureDecl(cx, arena, node, reproducibleCapabilities)
+        checkCapabilitySignatureDecl(cx, arena, node, userCapabilities)
     }
 }
 
-fn collectReproducibleCapabilityNames(arena: AstArena) -> List<String> {
+/// collectUserCapabilityNames returns the names of file-local interface
+/// declarations. Used by `#[ambient]` to flag user-defined capability
+/// names (`E0789`) and by `#[pure]` to flag user-interface parameters
+/// (`E0785`).
+fn collectUserCapabilityNames(arena: AstArena) -> List<String> {
     let mut out: List<String> = []
     for declIdx in arena.decls {
         let node = astArenaNodeAt(arena, declIdx)
-        if node.kind == AstNInterfaceDecl && checkGateAnnotationContains(arena, node.extra, "reproducible_capability") {
+        if node.kind == AstNInterfaceDecl {
             out.push(node.text)
         }
     }
     out
 }
 
-fn checkCapabilitySignatureDecl(cx: ElabCx, arena: AstArena, node: AstNode, reproducibleCapabilities: List<String>) {
+fn checkCapabilitySignatureDecl(cx: ElabCx, arena: AstArena, node: AstNode, userCapabilities: List<String>) {
     match node.kind {
-        AstNFnDecl -> checkCapabilitySignatureFn(cx, arena, node, reproducibleCapabilities),
-        AstNStructDecl -> checkCapabilitySignatureMethods(cx, arena, node, reproducibleCapabilities),
-        AstNEnumDecl -> checkCapabilitySignatureMethods(cx, arena, node, reproducibleCapabilities),
-        AstNInterfaceDecl -> checkCapabilitySignatureMethods(cx, arena, node, reproducibleCapabilities),
+        AstNFnDecl -> checkCapabilitySignatureFn(cx, arena, node, userCapabilities),
+        AstNStructDecl -> checkCapabilitySignatureMethods(cx, arena, node, userCapabilities),
+        AstNEnumDecl -> checkCapabilitySignatureMethods(cx, arena, node, userCapabilities),
+        AstNInterfaceDecl -> checkCapabilitySignatureMethods(cx, arena, node, userCapabilities),
         _ -> {},
     }
 }
 
-fn checkCapabilitySignatureMethods(cx: ElabCx, arena: AstArena, parent: AstNode, reproducibleCapabilities: List<String>) {
+fn checkCapabilitySignatureMethods(cx: ElabCx, arena: AstArena, parent: AstNode, userCapabilities: List<String>) {
     for memberIdx in parent.children {
         let member = astArenaNodeAt(arena, memberIdx)
         if member.kind == AstNFnDecl {
-            checkCapabilitySignatureFn(cx, arena, member, reproducibleCapabilities)
+            checkCapabilitySignatureFn(cx, arena, member, userCapabilities)
         }
     }
 }
 
-fn checkCapabilitySignatureFn(cx: ElabCx, arena: AstArena, fn_: AstNode, reproducibleCapabilities: List<String>) {
+fn checkCapabilitySignatureFn(cx: ElabCx, arena: AstArena, fn_: AstNode, userCapabilities: List<String>) {
     if fn_.extra < 0 {
         return
     }
-    let isReproducible = checkGateAnnotationContains(arena, fn_.extra, "reproducible")
     let isPure = checkGateAnnotationContains(arena, fn_.extra, "pure")
-    if !isReproducible && !isPure {
+    if !isPure {
         return
     }
     for paramIdx in fn_.children {
@@ -1727,26 +1692,16 @@ fn checkCapabilitySignatureFn(cx: ElabCx, arena: AstArena, fn_: AstNode, reprodu
             continue
         }
         let typeName = formatTypeForDiag(arena, param.right)
-        if isReproducible {
-            let nonDet = capabilityHeadInType(arena, param.right, false, reproducibleCapabilities)
-            if isNonDeterministicCapabilityName(nonDet) {
-                cx.env.local.diagnostics.push(
-                    diagReproducibleViaCapability(fn_.text, param.text, typeName, nonDet, param.start, param.end),
-                )
-            }
-        }
-        if isPure {
-            let capability = capabilityHeadInType(arena, param.right, true, reproducibleCapabilities)
-            if capability != "" {
-                cx.env.local.diagnostics.push(
-                    diagPureViaCapability(fn_.text, param.text, typeName, capability, param.start, param.end),
-                )
-            }
+        let capability = capabilityHeadInType(arena, param.right, true, userCapabilities)
+        if capability != "" {
+            cx.env.local.diagnostics.push(
+                diagPureViaCapability(fn_.text, param.text, typeName, capability, param.start, param.end),
+            )
         }
     }
 }
 
-fn capabilityHeadInType(arena: AstArena, typeIdx: Int, includeDeterministic: Bool, reproducibleCapabilities: List<String>) -> String {
+fn capabilityHeadInType(arena: AstArena, typeIdx: Int, includeDeterministic: Bool, userCapabilities: List<String>) -> String {
     if typeIdx < 0 {
         return ""
     }
@@ -1755,17 +1710,17 @@ fn capabilityHeadInType(arena: AstArena, typeIdx: Int, includeDeterministic: Boo
         return ""
     }
     if node.text == "optional" {
-        return capabilityHeadInType(arena, node.left, includeDeterministic, reproducibleCapabilities)
+        return capabilityHeadInType(arena, node.left, includeDeterministic, userCapabilities)
     }
     if node.text == "tuple" || node.text == "fn" {
         for childIdx in node.children {
-            let childHead = capabilityHeadInType(arena, childIdx, includeDeterministic, reproducibleCapabilities)
+            let childHead = capabilityHeadInType(arena, childIdx, includeDeterministic, userCapabilities)
             if childHead != "" {
                 return childHead
             }
         }
         if node.right >= 0 {
-            return capabilityHeadInType(arena, node.right, includeDeterministic, reproducibleCapabilities)
+            return capabilityHeadInType(arena, node.right, includeDeterministic, userCapabilities)
         }
         return ""
     }
@@ -1773,11 +1728,11 @@ fn capabilityHeadInType(arena: AstArena, typeIdx: Int, includeDeterministic: Boo
     if isNonDeterministicCapabilityName(head) {
         return head
     }
-    if includeDeterministic && (head == "Console" || listContainsString(reproducibleCapabilities, head)) {
+    if includeDeterministic && (head == "Console" || listContainsString(userCapabilities, head)) {
         return head
     }
     for argIdx in node.children {
-        let argHead = capabilityHeadInType(arena, argIdx, includeDeterministic, reproducibleCapabilities)
+        let argHead = capabilityHeadInType(arena, argIdx, includeDeterministic, userCapabilities)
         if argHead != "" {
             return argHead
         }
@@ -1902,351 +1857,6 @@ fn collectAnnotationByNameWalk(arena: AstArena, idx: Int, name: String, out: Lis
             collectAnnotationByNameWalk(arena, childIdx, name, out)
         }
     }
-}
-
-// ---------------------------------------------------------------------
-// E0786 / E0787 / E0788 — `#[reproducible]` scope discipline gate
-// (G39, v0.6 §3.11).
-//
-// This gate performs three checks on `#[reproducible(scope = ...)]`
-// function bodies:
-//
-//   E0786 — unordered collection iteration (`Map` / `Set` via `for x in m`
-//           where `m` is not a sorted view)
-//   E0787 — scope hierarchy violation (caller has stronger scope than callee)
-//   E0788 — portable constraint violation (cross-platform safety)
-//
-// The gate is file-local for scope checks: it only considers callees
-// whose `#[reproducible]` annotation and scope are visible in this file.
-//
-// Scope strength ordering: `portable` > `target` > `run`.
-// ---------------------------------------------------------------------
-
-fn runReproducibleScopeGate(cx: ElabCx) {
-    let arena = cx.ast.arena
-    let reproFns = collectReproducibleFnInfo(arena)
-    if reproFns.len() == 0 {
-        return
-    }
-    for declIdx in arena.decls {
-        let node = astArenaNodeAt(arena, declIdx)
-        match node.kind {
-            AstNFnDecl -> reproScopeCheckFn(cx, arena, node, reproFns),
-            AstNStructDecl -> reproScopeCheckMethods(cx, arena, node, reproFns),
-            AstNEnumDecl -> reproScopeCheckMethods(cx, arena, node, reproFns),
-            _ -> {},
-        }
-    }
-}
-
-/// ReproFnInfo tracks a `#[reproducible]` function's name and its scope
-/// string ("run", "target", or "portable"). Default scope is "target".
-struct ReproFnInfo {
-    name: String,
-    scope: String,
-}
-
-fn collectReproducibleFnInfo(arena: AstArena) -> List<ReproFnInfo> {
-    let mut out: List<ReproFnInfo> = []
-    for declIdx in arena.decls {
-        let node = astArenaNodeAt(arena, declIdx)
-        if node.kind == AstNFnDecl {
-            if fnHasReproducibleAnnotationAndBody(arena, node) {
-                out.push(ReproFnInfo { name: node.text, scope: reproducibleScopeOf(arena, node.extra) })
-            }
-        } else if node.kind == AstNStructDecl || node.kind == AstNEnumDecl {
-            for memberIdx in node.children {
-                let member = astArenaNodeAt(arena, memberIdx)
-                if member.kind == AstNFnDecl && fnHasReproducibleAnnotationAndBody(arena, member) {
-                    out.push(ReproFnInfo { name: member.text, scope: reproducibleScopeOf(arena, member.extra) })
-                }
-            }
-        }
-    }
-    out
-}
-
-fn fnHasReproducibleAnnotationAndBody(arena: AstArena, fn_: AstNode) -> Bool {
-    if fn_.right < 0 {
-        return false
-    }
-    checkGateAnnotationContains(arena, fn_.extra, "reproducible")
-}
-
-/// reproducibleScopeOf extracts the `scope = "..."` argument from the
-/// `#[reproducible]` annotation. Returns "target" when no explicit scope
-/// is set (the default per §3.11).
-fn reproducibleScopeOf(arena: AstArena, annotIdx: Int) -> String {
-    let annots = collectAnnotationByName(arena, annotIdx, "reproducible")
-    for annot in annots {
-        for argIdx in annot.children {
-            let arg = astArenaNodeAt(arena, argIdx)
-            // Look for the pattern: `scope` key followed by a string value.
-            // The parser stores key=value pairs as children; for `scope = "target"`
-            // the child text is "scope" and its own child has the value.
-            // Simpler approach: scan for a child whose text starts with "scope".
-            let argText = arg.text
-            if strings.hasPrefix(argText, "scope") {
-                // Try to extract the value from the argument's children.
-                for valIdx in arg.children {
-                    let val = astArenaNodeAt(arena, valIdx)
-                    if val.text != "" {
-                        return val.text
-                    }
-                }
-                // If the value is embedded in the argument text itself
-                // (e.g. "scope = target" stored as a single string),
-                // try to parse it.
-                let parts = strings.split(argText, "=")
-                if parts.len() >= 2 {
-                    let v: String = strings.trimSpace(parts[parts.len() - 1])
-                    if v != "" {
-                        return v
-                    }
-                }
-            }
-        }
-    }
-    "target"
-}
-
-fn reproScopeCheckFn(cx: ElabCx, arena: AstArena, fn_: AstNode, reproFns: List<ReproFnInfo>) {
-    if !fnHasReproducibleAnnotationAndBody(arena, fn_) {
-        return
-    }
-    let fnName = fn_.text
-    let callerScope = reproducibleScopeOf(arena, fn_.extra)
-    reproScopeWalkBlock(cx, arena, fn_.right, fnName, callerScope, reproFns)
-}
-
-fn reproScopeCheckMethods(cx: ElabCx, arena: AstArena, parent: AstNode, reproFns: List<ReproFnInfo>) {
-    for memberIdx in parent.children {
-        let member = astArenaNodeAt(arena, memberIdx)
-        if member.kind == AstNFnDecl {
-            reproScopeCheckFn(cx, arena, member, reproFns)
-        }
-    }
-}
-
-fn reproScopeWalkBlock(cx: ElabCx, arena: AstArena, blockIdx: Int, fnName: String, callerScope: String, reproFns: List<ReproFnInfo>) {
-    if blockIdx < 0 {
-        return
-    }
-    let node = astArenaNodeAt(arena, blockIdx)
-    if node.kind != AstNBlock {
-        reproScopeWalkExpr(cx, arena, blockIdx, fnName, callerScope, reproFns)
-        return
-    }
-    for stmtIdx in node.children {
-        reproScopeWalkExpr(cx, arena, stmtIdx, fnName, callerScope, reproFns)
-    }
-}
-
-fn reproScopeWalkExpr(cx: ElabCx, arena: AstArena, idx: Int, fnName: String, callerScope: String, reproFns: List<ReproFnInfo>) {
-    if idx < 0 {
-        return
-    }
-    let node = astArenaNodeAt(arena, idx)
-    match node.kind {
-        // E0786 — detect `for x in <map_or_set>` patterns.
-        AstNFor -> {
-            // Check if the iterable is a Map or Set type.
-            // At the AST level we look for identifiers/field accesses
-            // whose name suggests an unordered collection.
-            reproCheckForUnordered(cx, arena, node, fnName)
-            // Recurse into condition and body.
-            reproScopeWalkExpr(cx, arena, node.left, fnName, callerScope, reproFns)
-            if node.children.len() >= 2 {
-                reproScopeWalkExpr(cx, arena, node.children[1], fnName, callerScope, reproFns)
-            }
-            reproScopeWalkBlock(cx, arena, node.right, fnName, callerScope, reproFns)
-        },
-        // E0787 — scope hierarchy check on calls.
-        AstNCall -> {
-            reproCheckCallScope(cx, arena, node, fnName, callerScope, reproFns)
-            reproScopeWalkExpr(cx, arena, node.left, fnName, callerScope, reproFns)
-            for argIdx in node.children {
-                reproScopeWalkExpr(cx, arena, argIdx, fnName, callerScope, reproFns)
-            }
-        },
-        AstNBlock -> {
-            for stmtIdx in node.children {
-                reproScopeWalkExpr(cx, arena, stmtIdx, fnName, callerScope, reproFns)
-            }
-        },
-        AstNLet -> reproScopeWalkExpr(cx, arena, node.right, fnName, callerScope, reproFns),
-        AstNExprStmt -> reproScopeWalkExpr(cx, arena, node.left, fnName, callerScope, reproFns),
-        AstNAssign -> {
-            reproScopeWalkExpr(cx, arena, node.left, fnName, callerScope, reproFns)
-            reproScopeWalkExpr(cx, arena, node.right, fnName, callerScope, reproFns)
-        },
-        AstNReturn -> reproScopeWalkExpr(cx, arena, node.left, fnName, callerScope, reproFns),
-        AstNIf -> {
-            reproScopeWalkExpr(cx, arena, node.left, fnName, callerScope, reproFns)
-            reproScopeWalkExpr(cx, arena, node.right, fnName, callerScope, reproFns)
-            if node.children.len() > 0 {
-                reproScopeWalkExpr(cx, arena, node.children[0], fnName, callerScope, reproFns)
-            }
-        },
-        AstNMatch -> {
-            reproScopeWalkExpr(cx, arena, node.left, fnName, callerScope, reproFns)
-            for armIdx in node.children {
-                let arm = astArenaNodeAt(arena, armIdx)
-                if arm.kind == AstNMatchArm {
-                    reproScopeWalkExpr(cx, arena, arm.right, fnName, callerScope, reproFns)
-                }
-            }
-        },
-        AstNUnary -> reproScopeWalkExpr(cx, arena, node.left, fnName, callerScope, reproFns),
-        AstNBinary -> {
-            reproScopeWalkExpr(cx, arena, node.left, fnName, callerScope, reproFns)
-            reproScopeWalkExpr(cx, arena, node.right, fnName, callerScope, reproFns)
-        },
-        AstNQuestion -> reproScopeWalkExpr(cx, arena, node.left, fnName, callerScope, reproFns),
-        AstNField -> reproScopeWalkExpr(cx, arena, node.left, fnName, callerScope, reproFns),
-        AstNIndex -> {
-            reproScopeWalkExpr(cx, arena, node.left, fnName, callerScope, reproFns)
-            reproScopeWalkExpr(cx, arena, node.right, fnName, callerScope, reproFns)
-        },
-        AstNTurbofish -> reproScopeWalkExpr(cx, arena, node.left, fnName, callerScope, reproFns),
-        AstNParen -> reproScopeWalkExpr(cx, arena, node.left, fnName, callerScope, reproFns),
-        AstNTuple -> {
-            for elIdx in node.children {
-                reproScopeWalkExpr(cx, arena, elIdx, fnName, callerScope, reproFns)
-            }
-        },
-        AstNDefer -> reproScopeWalkExpr(cx, arena, node.left, fnName, callerScope, reproFns),
-        _ -> {},
-    }
-}
-
-/// reproCheckForUnordered emits E0786 when a `for x in <expr>` loop
-/// iterates over a Map or Set value. Detection is heuristic at the AST
-/// level: we look for identifiers whose name contains `Map` or `Set`, or
-/// field accesses like `m.entries()`, `m.keys()`. Sorted variants
-/// (`entriesSorted`, `toListSorted`) are explicitly excluded.
-fn reproCheckForUnordered(cx: ElabCx, arena: AstArena, forNode: AstNode, fnName: String) {
-    // The iterable expression is stored at forNode.left for
-    // `for x in expr { ... }`.
-    // We don't walk the pattern (first child) here.
-    let iterExpr = forNode.left
-    if iterExpr < 0 {
-        return
-    }
-    let iterNode = astArenaNodeAt(arena, iterExpr)
-    // Check if this is a call to a sorted variant — those are OK.
-    if iterNode.kind == AstNCall {
-        let callee = astArenaNodeAt(arena, iterNode.left)
-        if callee.kind == AstNField {
-            let methodName = callee.text
-            if methodName == "entriesSorted" || methodName == "toListSorted" || methodName == "sorted" {
-                return
-            }
-        }
-    }
-    // Heuristic: check the expression text for Map/Set patterns.
-    // At the AST level, a bare identifier or field access that names
-    // a Map or Set triggers the gate.
-    let name = reproIterName(arena, iterExpr)
-    if name == "Map" || strings.hasSuffix(name, "Map") {
-        cx.env.local.diagnostics.push(
-            diagReproducibleUnorderedIter(fnName, name, forNode.start, forNode.end),
-        )
-    }
-}
-
-fn reproIterName(arena: AstArena, idx: Int) -> String {
-    if idx < 0 {
-        return ""
-    }
-    let node = astArenaNodeAt(arena, idx)
-    if node.kind == AstNIdent {
-        return node.text
-    }
-    if node.kind == AstNField {
-        return reproIterName(arena, node.left)
-    }
-    if node.kind == AstNCall {
-        return reproIterName(arena, node.left)
-    }
-    if node.kind == AstNTurbofish {
-        return reproIterName(arena, node.left)
-    }
-    ""
-}
-
-/// reproCheckCallScope emits E0787 when a `#[reproducible]` function
-/// with a stronger scope calls a file-local `#[reproducible]` function
-/// with a weaker scope.
-fn reproCheckCallScope(cx: ElabCx, arena: AstArena, callNode: AstNode, fnName: String, callerScope: String, reproFns: List<ReproFnInfo>) {
-    if callerScope == "run" {
-        // `run` is the weakest scope — no hierarchy violation possible.
-        return
-    }
-    let calleeName = reproCalleeName(arena, callNode.left)
-    if calleeName == "" {
-        return
-    }
-    // Look up the callee in the local reproducible function table.
-    let calleeInfo = reproFnInfoByName(reproFns, calleeName)
-    if calleeInfo == "" {
-        return
-    }
-    let calleeScope = calleeInfo
-    if scopeIsWeaker(callerScope, calleeScope) {
-        cx.env.local.diagnostics.push(
-            diagReproducibleScopeHierarchy(fnName, callerScope, calleeName, calleeScope, callNode.start, callNode.end),
-        )
-    }
-}
-
-/// reproCalleeName extracts the function name from a call expression's
-/// callee position.
-fn reproCalleeName(arena: AstArena, calleeIdx: Int) -> String {
-    if calleeIdx < 0 {
-        return ""
-    }
-    let callee = astArenaNodeAt(arena, calleeIdx)
-    if callee.kind == AstNIdent {
-        return callee.text
-    }
-    if callee.kind == AstNField {
-        return callee.text
-    }
-    if callee.kind == AstNTurbofish {
-        return reproCalleeName(arena, callee.left)
-    }
-    ""
-}
-
-/// reproFnInfoByName returns the scope string for a named reproducible
-/// function, or `""` if not found.
-fn reproFnInfoByName(reproFns: List<ReproFnInfo>, name: String) -> String {
-    for info in reproFns {
-        if info.name == name {
-            return info.scope
-        }
-    }
-    ""
-}
-
-/// scopeIsWeaker returns true when `callee` scope is strictly weaker
-/// than `caller` scope. Order: `portable` > `target` > `run`.
-fn scopeIsWeaker(caller: String, callee: String) -> Bool {
-    if caller == callee {
-        return false
-    }
-    let callerStrength = scopeStrength(caller)
-    let calleeStrength = scopeStrength(callee)
-    callerStrength > calleeStrength
-}
-
-fn scopeStrength(scope: String) -> Int {
-    if scope == "run" { return 0 }
-    if scope == "target" { return 1 }
-    if scope == "portable" { return 2 }
-    // Unknown scope — treat as weakest.
-    0
 }
 
 // ---------------------------------------------------------------------
@@ -3185,54 +2795,21 @@ fn runSpecBlockGate(cx: ElabCx) {
 }
 
 // ---------------------------------------------------------------------
-// E0444–E0446, W0444 — golden test gate (G45, v0.6 §11.5).
+// E0445, E0446, W0444 — golden test gate (G45, v0.6 §11.5).
 //
 // Validates `#[golden]` annotations:
-//   E0444 — golden function is not #[reproducible]
 //   E0445 — snapshot file missing (placeholder — requires host I/O)
 //   E0446 — AST mode reparse failure (placeholder — requires host runtime)
 //   W0444  — snapshot source-hash stale (placeholder — requires host I/O)
 //
-// File-local checks: reproducible requirement.
+// (E0444 — golden reproducibility gate — was withdrawn alongside G39.
+// Snapshot determinism is now the author's responsibility: inject
+// deterministic capability fakes or keep the body capability-free.)
 // ---------------------------------------------------------------------
 
 fn runGoldenGate(cx: ElabCx) {
-    let arena = cx.ast.arena
-    for declIdx in arena.decls {
-        let node = astArenaNodeAt(arena, declIdx)
-        match node.kind {
-            AstNFnDecl -> goldenCheckFn(cx, arena, node),
-            AstNStructDecl -> goldenCheckMethods(cx, arena, node),
-            AstNEnumDecl -> goldenCheckMethods(cx, arena, node),
-            AstNInterfaceDecl -> goldenCheckMethods(cx, arena, node),
-            _ -> {},
-        }
-    }
-}
-
-fn goldenCheckMethods(cx: ElabCx, arena: AstArena, parent: AstNode) {
-    for memberIdx in parent.children {
-        let member = astArenaNodeAt(arena, memberIdx)
-        if member.kind == AstNFnDecl {
-            goldenCheckFn(cx, arena, member)
-        }
-    }
-}
-
-fn goldenCheckFn(cx: ElabCx, arena: AstArena, fnNode: AstNode) {
-    if fnNode.extra < 0 {
-        return
-    }
-    let goldenAnnots = collectAnnotationByName(arena, fnNode.extra, "golden")
-    if goldenAnnots.len() == 0 {
-        return
-    }
-    // E0444: golden function must be reproducible.
-    if !checkGateAnnotationContains(arena, fnNode.extra, "reproducible") {
-        cx.env.local.diagnostics.push(
-            diagGoldenNotReproducible(fnNode.text, fnNode.start, fnNode.end),
-        )
-    }
+    // Placeholder for E0445 / E0446 / W0444 host-side checks.
+    let _ = cx
 }
 
 // ---------------------------------------------------------------------

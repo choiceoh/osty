@@ -8,7 +8,7 @@ The spec is the authority on what v0.6 *will* be; this file is the
 authority on what v0.6 *is* right now.
 
 See [`LANG_SPEC_v0.6/00-revision.md`](./LANG_SPEC_v0.6/00-revision.md)
-for the v0.5 → v0.6 decision log (10 resolved gaps after G38/G43/
+for the v0.5 → v0.6 decision log (9 resolved gaps after G38/G39/G43/
 G46/G49 withdrawal) and [`SPEC_GAPS.md`](./SPEC_GAPS.md) §"Resolved
 in v0.6" for per-gap rationale.
 
@@ -22,7 +22,7 @@ in v0.6" for per-gap rationale.
 | Phase 0 | Self-host 자력 사이클 (Tier A 5 개) | (v0.5 follow-up) |
 | Phase 1 | Capability + ambient + stdlib migration | G36 |
 | Phase 2 | Structured intent + osty context | G42, G47 |
-| Phase 3 | Reproducible + golden | G39, G45 |
+| Phase 3 | Golden | G45 |
 | Phase 4 | Sealed + ErrorContract + Evolution | G40, G41, G44 |
 | Phase 5 | Taint / sanitize | G37 |
 
@@ -36,7 +36,7 @@ in v0.6" for per-gap rationale.
 | Form | Status | Notes |
 |---|---|---|
 | Parameter annotation `fn f(#[taint("...")] x: T)` | **planned** (G37) | parameter 위치 annotation 신규 허용 |
-| v0.6 declaration annotation vocabulary | **partial** (G36, G37, G39-G42, G44, G45, G47) | Go parser/resolver and selfhost resolver both recognize the declaration/field/method/variant annotation names. Per-feature semantic gates and parameter-position annotations still land by phase. |
+| v0.6 declaration annotation vocabulary | **partial** (G36, G37, G40-G42, G44, G45, G47) | Go parser/resolver and selfhost resolver both recognize the declaration/field/method/variant annotation names. Per-feature semantic gates and parameter-position annotations still land by phase. |
 
 ### Capabilities (G36 — Phase 1, blocking everything else)
 
@@ -46,7 +46,6 @@ in v0.6" for per-gap rationale.
 | Host capability adapter factories | **partial** | `time.systemClock`, `random.host`, `env.host`, `fs.host`, `capability.hostNet`, `capability.hostProcess`, `io.console` 를 추가하고 `examples/v06_capability_adapters` 로 front-end/type-check proof 추가. `net.host` / `process.host` bridge factory 는 cross-module migration helper 로 제공. |
 | Deterministic capability test fakes | **partial** | `std.capability.testing` 에 `FakeClock` / `FakeRng` / `FakeEnv` / `FakeFs` / `FakeNet` / `FakeProcess` / `FakeConsole` 추가. `examples/v06_capability_fakes` 로 fake injection proof 추가. |
 | `#[ambient(...)]` annotation | **partial** | active checker gate now rejects non-entry usage (`E0780`), unknown canonical names (`E0781`), and user-defined ambient capabilities (`E0789`). Positive/negative spec corpus plus `examples/v06_ambient_boundaries` pin the boundary; auto-forward/desugar remains follow-up. |
-| `#[reproducible_capability]` annotation | **partial** | active checker gate now rejects non-`#[reproducible]` methods in reproducible capability interfaces (`E0783`). Deeper transitive reproducibility analysis remains follow-up. |
 | `--legacy-globals` 호환 모드 | **partial** | CLI flag (`cli.CliFlags.LegacyGlobals`) + W0750 deprecation pass land — `osty check/typecheck/resolve/lint --legacy-globals` 가 v0.5 글로벌 호출 (`time.now()`, `random.next()`, `env.get(...)`, `fs.read(...)`, `os.exec(...)`, `net.dial(...)` 등) 마다 W0750 발화. Auto-desugar to capability host adapters + manifest stability=experimental 강제 는 follow-up. v0.6.x 에서만, v0.7 제거. |
 | stdlib `time.*` → `clock.*` migration | **partial** | migration catalog (`capability.legacyGlobalRewriteRules`) 와 host-boundary factories가 landing. 전역 호출 warning/desugar 는 compiler phase 후속. |
 
@@ -73,7 +72,7 @@ in v0.6" for per-gap rationale.
 
 | Item | Status | Notes |
 |---|---|---|
-| `#[reproducible(scope = "run"|"target"|"portable")]` | **partial** (G39, Phase 3) | active signature gate now rejects direct non-deterministic capability parameters on `#[reproducible]` (`E0784`) and all capability parameters on `#[pure]` (`E0785`). Scope hierarchy / transitive callee checks remain planned. |
+| `#[pure]` capability parameter rejection | **partial** (carried from v0.5 §3.8 + v0.6 capability gate) | active signature gate rejects all capability parameters on `#[pure]` (`E0785`). G39 `#[reproducible]` was withdrawn pre-release; the gate alone is the v0.6 effect-free attestation. |
 | `#[sealed_construct(name)]` | **planned** (G40, Phase 4) | parse-don't-validate primitive |
 | `#[trusted_construct(reason)]` | **planned** (G40, Phase 4) | stdlib escape |
 | `#[test_construct]` | **planned** (G40, Phase 4) | test profile escape |
@@ -87,7 +86,7 @@ in v0.6" for per-gap rationale.
 | `#[stability("level", until/since/remove)]` | **planned** (G44, Phase 4) | osty publish 게이트 |
 | `#[match_compat("X.Y", fallback=)]` | **planned** (G44, Phase 4) | non-silent fallback 강제 |
 | `osty publish` API surface diff | **planned** (G44, Phase 4) | major bump 강제 |
-| `#[golden("path", mode="text"|"ast")]` | **planned** (G45, Phase 3) | reproducible 결합 |
+| `#[golden("path", mode="text"|"ast")]` | **planned** (G45, Phase 3) | snapshot determinism is caller responsibility (G39 `#[reproducible]` withdrawn) |
 | `osty test --golden` / `--update-golden` | **planned** (G45, Phase 3) | |
 
 ## Migration path from v0.5
@@ -110,7 +109,7 @@ in v0.6" for per-gap rationale.
 - `#[since]` / `#[stability]` / `#[match_compat]` — 옵션 어노테이션, 미사용
   코드 영향 없음
 - `#[purpose]` / `#[example]` / `#[fixture]` — 메타데이터, 옵션
-- `#[reproducible]` / `#[golden]` — 옵션, 미사용 영향 없음
+- `#[golden]` — 옵션, 미사용 영향 없음
 
 ## Spec corpus 확장
 
@@ -119,9 +118,9 @@ in v0.6" for per-gap rationale.
 
 | Phase | Positive 케이스 추가 | Negative 케이스 추가 |
 |---|---|---|
-| 1 | capability typed signature | E0780-E0789 (capability misuse) |
+| 1 | capability typed signature | E0780-E0782, E0785, E0789 (capability misuse) |
 | 2 | `osty context` 출력 | (intent annotations metadata only) |
-| 3 | `#[reproducible]` 통과, golden snapshot | E0784-E0788, E0444-E0445 |
+| 3 | golden snapshot | E0445, W0444 |
 | 4 | sealed/ErrorContract/Evolution | E0410-E0451, E2100-E2101 |
 | 5 | taint flow | E0900-E0903 |
 

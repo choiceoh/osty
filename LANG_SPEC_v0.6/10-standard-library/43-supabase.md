@@ -225,7 +225,7 @@ Production Supabase code touches three v0.6 capability points:
 Tests inject `FakeEnv` (with the API URL/key set) and `FakeNet`
 (with canned PostgREST responses). The pure builder layer
 (`supabase.from`, `q.select`, `q.eq`, etc.) is acceptable inside
-`#[reproducible(scope = "target")]`; only the `send*` calls are
+`#[pure]`; only the `send*` calls are
 non-reproducible.
 
 #### 10.43.2 Supabase and information flow

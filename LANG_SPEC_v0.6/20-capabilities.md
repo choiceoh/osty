@@ -19,7 +19,6 @@ let buf = fs.readToString("/etc/passwd")?
 이 형태는 다음 분석을 *deny-list 기반*으로 만든다:
 
 - `#[pure]` — 본문 walk 후 `time.*`, `random.*`, `env.*`, `fs.*`, … 호출 검출
-- `#[reproducible]` — 동일 + unordered iter / pointer-id 등 추가
 - `#[taint]` (G37) — 마찬가지
 
 Deny-list 는 *exhaustive 보장 불가능*. 새 effectful API 가 stdlib 에 추가될 때마다
@@ -75,13 +74,10 @@ uses the normal structural interface rule from §3.6: any value whose
 method set satisfies `Clock` may be passed to a parameter declared
 `clock: Clock`. Capability *classification* is nominal: the
 determinism/effect table in §20.6 is keyed by the resolved interface
-identity named in the parameter type (or by an interface explicitly
-annotated `#[reproducible_capability]`). Therefore a user
+identity named in the parameter type. Therefore a user
 `struct FakeClock { fn now(...) }` can satisfy a `Clock` parameter, but
 a function that declares `clock: Clock` still receives the canonical
-non-deterministic `Clock` effect for `#[reproducible]` checking. To
-create a deterministic user capability, declare a distinct interface
-and mark it `#[reproducible_capability]`.
+non-deterministic `Clock` effect for `#[pure]` checking.
 
 **Implementation note.** 현재 stdlib 는 이 canonical protocol set 을
 `std.capability` 에 compile-checked interface surface 로 노출한다. 기존
@@ -94,10 +90,9 @@ factory 는 현재 `time.systemClock()`, `random.host()`, `env.host()`, `fs.host
 `FakeRng`, `FakeEnv`, `FakeFs`, `FakeNet`, `FakeProcess`, `FakeConsole` 로 제공한다.
 Ambient desugar / `--legacy-globals` warning 은 별도 compiler phase 에서 닫는다.
 현재 구현은 `#[ambient]` 의 entry-point 위치 제한, canonical name 검증, user-defined
-capability ambient 금지를 active checker gate 로 고정한다 (`E0780` / `E0781` / `E0789`). `#[reproducible]` /
-`#[pure]` 의 direct capability parameter 제한도 signature gate 로 고정한다
-(`E0784` / `E0785`). 실제 ambient auto-forward/desugar 와 transitive
-reproducibility analysis 는 후속 단계이다.
+capability ambient 금지를 active checker gate 로 고정한다 (`E0780` / `E0781` /
+`E0789`). `#[pure]` 의 direct capability parameter 제한도 signature gate 로
+고정한다 (`E0785`). 실제 ambient auto-forward/desugar 는 후속 단계이다.
 
 함수는 capability 를 **명시적 파라미터**로 받는다:
 
@@ -296,15 +291,15 @@ fn main() {
 이 visibility 는 *함수 boundary 에서 멈춘다* — 다른 함수를 호출해도
 ambient binding 은 callee 측에 자동 주입되지 않는다 (§20.3.2).
 
-#### 20.3.1.3 Ambient and `#[reproducible]` 충돌
+#### 20.3.1.3 Ambient and `#[pure]` 충돌
 
-`#[ambient]` 와 `#[reproducible]` 은 함수에 같이 부착할 수 없다 —
-ambient 는 entry-point 만 (그리고 entry-point 는 reproducible 이
-아님). 같이 적용하면 `E0782` (incompatible annotations).
+`#[ambient]` 와 `#[pure]` 는 함수에 같이 부착할 수 없다 —
+ambient 는 entry-point 에서 capability 값을 inject 하는데, `#[pure]`
+는 capability parameter 수신을 금지 (`E0785`).
 
-이 충돌은 의도적이다: reproducible 함수는 *순수* 한 데이터
-변환이며, 환경 capability 는 정의상 받을 수 없다. ambient 는
-*그 환경* 을 주입하는 mechanism 이라 둘은 양립 불가.
+이 충돌은 의도적이다: pure 함수는 *순수* 한 데이터 변환이며,
+환경 capability 는 정의상 받을 수 없다. ambient 는 *그 환경* 을
+주입하는 mechanism 이라 둘은 양립 불가.
 
 ### 20.3.2 Ambient binding scope 규칙
 
@@ -380,46 +375,37 @@ ambient 는 entry-point 만 (그리고 entry-point 는 reproducible 이
 
 ```osty
 #[ambient(clock, rng)]
-#[reproducible]                  // ERROR: E0784 — ambient 가 non-det capability 주입
+#[pure]                          // ERROR: E0785 — ambient 가 capability 주입
 fn main() { ... }
 ```
 
-`#[reproducible]` 와 ambient (Clock / Rng / Env / Fs / Net / Process 중 하나
-포함) 동시 적용 = 컴파일 에러. ambient 는 *boundary 의 ergonomics 도구*이므로,
-*그 함수가 reproducible 하다* 와는 양립 불가.
-
-`#[ambient(console)]` 단독은 — `Console` 이 deterministic 출력 capability 이므로
-`#[reproducible(scope = "run")]` 와 양립 (그 외 scope 는 `Console` 도 거부).
+`#[pure]` 와 ambient (어떤 capability 든 포함) 동시 적용 = 컴파일 에러. ambient
+는 *boundary 의 ergonomics 도구*이므로, *그 함수가 pure 하다* 와는 양립 불가.
 
 ### 20.4 Capability 와 effect annotation 의 상호작용
 
-Capability parameter 의 *진짜 가치*는 G39 / G37 / G46 의 sound 한 검사:
+Capability parameter 의 *진짜 가치*는 G37 (taint) 와 G45 (golden snapshot)
+의 sound 한 검사:
 
 ```osty
-// G39 — Reproducibility
-#[reproducible(scope = "target")]
+// 환경독립 attestation 은 #[pure]
+#[pure]
 fn computeKey(data: Bytes) -> Bytes32 {
     sha256(data)             // OK — capability 미수신
 }
 
-#[reproducible]
-fn buildId(clock: Clock, rng: Rng) -> String {  // E0784
-    // 컴파일러: clock / rng 받으면 reproducible 불가
+#[pure]
+fn buildId(clock: Clock, rng: Rng) -> String {  // E0785
+    // 컴파일러: clock / rng 받으면 pure 불가
 }
 ```
 
 검사 규칙:
-- `#[reproducible]` 함수는 `Clock`, `Rng`, `Env`, `Net`, `Process`, `Fs` capability
-  파라미터 를 받을 수 없다 (`E0784`). 현재 구현은 direct signature parameter 를
-  active checker gate 로 검증한다.
-- 호출하는 함수 도 같은 제약을 만족해야 한다 (transitive).
-- `Console`, `Hash`, `Os` 같은 *side-effect-free 또는 deterministic* capability 는
-  허용 — capability set 마다 *deterministic 등급* 을 §20.6 표에서 정의.
-
-`#[pure]` 도 동일한 모델로 단순화:
 - `#[pure]` 함수는 *어떤* capability 도 받을 수 없다 (`E0785`). 현재 구현은
-  canonical capability 와 `#[reproducible_capability]` 로 선언된 local
-  deterministic capability 를 direct signature 에서 검증한다.
+  canonical capability 의 direct signature parameter 를 active checker gate 로
+  검증한다. `Console` / 사용자 정의 deterministic interface 도 동일하게 거부.
+- (G39 `#[reproducible(scope=...)]` 와 transitive callee 검사는 v0.6
+  baseline 에서 withdrawn — 환경독립 약속의 단일 surface 는 `#[pure]`.)
 
 ### 20.5 사용자 정의 capability
 
@@ -428,88 +414,49 @@ pub interface MyDb {
     fn query(self, sql: SqlIdent) -> Result<Rows, DbError>
 }
 
-#[reproducible_capability]
 pub interface Hash {
-    #[reproducible]
     fn hash(self, data: Bytes) -> Bytes32
 }
 ```
 
-`#[reproducible_capability]` 어노테이션은 해당 capability 가
-"deterministic 함수만 노출함"을 컴파일러에 약속. `#[reproducible]` 검사는 이런
-capability 수신을 허용한다.
+사용자 정의 capability 는 ordinary `interface` 선언이며 별도의 attestation
+annotation 이 없다. `#[pure]` 함수의 signature gate 는 *모든* capability
+parameter (canonical 7 + 사용자 정의) 를 거부한다 (`E0785`) — capability 가
+실제 deterministic 한지 여부는 attestation 으로 표시할 수 없으므로, pure 한
+계산은 capability 를 받지 않는 *raw value* 시그니처로 표현한다.
 
-**약속 검증**: 현재 구현은 `#[reproducible_capability]` interface 가
-`#[reproducible]` 함수만 포함하도록 active checker gate 로 검증한다 (`E0783`).
-즉 capability 자체가 sealed.
+(G39 `#[reproducible_capability]` attestation 과 `#[reproducible(scope=...)]`
+검사 surface 는 v0.6 baseline 에서 withdrawn — over-design 으로 평가됐다. 같은
+use-case 가 `#[pure]` (capability 미수신) + `#[golden]` (snapshot fixture) 으로
+cover 된다.)
 
 ### 20.6 Capability deterministic 등급
 
-| Capability | 등급 | `#[reproducible]` 가능 |
+| Capability | 등급 | `#[pure]` 파라미터 가능 |
 |---|---|---|
-| `Clock` | non-deterministic | ❌ |
-| `Rng` | non-deterministic | ❌ |
-| `Env` | non-deterministic | ❌ |
-| `Fs` | non-deterministic | ❌ |
-| `Net` | non-deterministic | ❌ |
-| `Process` | non-deterministic | ❌ |
-| `Console` | side-effect (deterministic 출력) | scope = `"run"` 만 가능 |
-| `Hash` | deterministic (사용자 정의) | ✅ |
+| `Clock` | non-deterministic | ❌ (`E0785`) |
+| `Rng` | non-deterministic | ❌ (`E0785`) |
+| `Env` | non-deterministic | ❌ (`E0785`) |
+| `Fs` | non-deterministic | ❌ (`E0785`) |
+| `Net` | non-deterministic | ❌ (`E0785`) |
+| `Process` | non-deterministic | ❌ (`E0785`) |
+| `Console` | side-effect (deterministic 출력) | ❌ (`E0785`) |
+| 사용자 정의 capability | (attestation surface 없음) | ❌ (`E0785`) |
 
-#### 20.6.1 Capability class — formal definition
+#### 20.6.1 Pure 가 capability 를 거부하는 이유
 
-A *deterministic capability* is one whose every method satisfies:
+`#[pure]` 는 LLVM `readnone` fn attribute 로 lower 되며 호출자가 같은 인자로
+반복 호출 시 결과를 cache / hoist / dead-call elim 할 수 있다. capability 는
+런타임 mutable interface value 이므로 `readnone` 약속을 깨므로 — 그
+capability 가 deterministic 인지 여부와 관계 없이 — pure 함수의 시그니처에는
+들어올 수 없다. pure 한 데이터 변환은 *raw value* 인자 (`Bytes`, `Int`,
+`String`) 만 받는다.
 
-1. The output is fully determined by the inputs (no hidden state).
-2. The implementation does not consult the system clock, random
-   sources, environment, filesystem, network, or any process state.
-3. The implementation is annotated `#[reproducible(scope = X)]` on
-   each method, with X consistent across the interface.
+#### 20.6.2 Console 사용
 
-A deterministic capability is permitted as a parameter of a
-`#[reproducible(scope ≤ X)]` function. Non-deterministic capabilities
-are forbidden in any reproducible context.
-
-The compiler cannot in general prove a capability is deterministic
-— it relies on the `#[reproducible_capability]` attestation
-(§3.6.4). The attestation is checked structurally: every method on
-a `#[reproducible_capability]` interface must carry
-`#[reproducible(scope = X)]`; missing or weaker annotations are
-`E0783`. Implementing method bodies are then checked by the ordinary
-reproducibility diagnostics for their declared scope (`E0786`–`E0788`).
-
-#### 20.6.2 Console at scope `"run"`
-
-`Console` is unique: it has *side effects* (writes to stdout/stderr)
-but the *output* itself is deterministic given the inputs (the same
-arguments produce the same byte sequence). A function that only
-reads from `Console` is rare; most functions write, which is the
-side effect that bars stronger reproducibility scopes.
-
-A `#[reproducible(scope = "run")]` function may take `Console` —
-the function is reproducible *within a single process run* (the
-output is the same on re-run), and the side effect is acceptable
-under `run` scope.
-
-#### 20.6.3 Adding deterministic capabilities
-
-Future stdlib additions (e.g. `Hash`-shaped interfaces for SHA-3,
-BLAKE3, etc.) follow the same pattern:
-
-```osty
-#[reproducible_capability]
-pub interface Sha3 {
-    #[reproducible(scope = "portable")]
-    fn sha3_256(self, data: Bytes) -> Bytes32
-
-    #[reproducible(scope = "portable")]
-    fn sha3_512(self, data: Bytes) -> Bytes64
-}
-```
-
-The interface is registered in §10.46.4 (Runtime adapter factories)
-with a host adapter; the deterministic class is auto-derived from
-the `#[reproducible_capability]` annotation.
+`Console` 은 *side effect* (writes to stdout/stderr) 가 있으므로 일반
+capability 와 동일하게 `#[pure]` 함수에 받을 수 없다. Pure 함수는 출력하지
+않는다 — 출력 routing 은 caller 의 책임.
 
 ### 20.7 Capability 와 G15 arity erasure
 
@@ -530,10 +477,11 @@ f(systemClock, defaultRng)         // OK
 | `E0780` | `#[ambient]` 가 허용되지 않는 위치에 사용 |
 | `E0781` | `#[ambient]` 인자가 알려지지 않은 capability |
 | `E0782` | Capability 자동 forward 실패 (이름 일치 안 함) |
-| `E0783` | `#[reproducible_capability]` interface 에 비-reproducible 메서드 |
-| `E0784` | `#[reproducible]` 함수가 non-deterministic capability 수신 |
 | `E0785` | `#[pure]` 함수가 capability 수신 |
 | `E0789` | `#[ambient]` 로 사용자 정의 capability 를 바인딩하려 함 |
+
+`E0783`, `E0784`, `E0786`, `E0787`, `E0788` 은 G39 와 함께 withdrawn —
+`#[reproducible]` / `#[reproducible_capability]` 가 v0.6 baseline 에서 제거됐다.
 
 ---
 
@@ -570,9 +518,8 @@ platform's wall clock + `CLOCK_MONOTONIC`.
 returns the configured epoch on every `now()`; `monotonic()` advances
 by 1ms per call; `sleep()` is instantaneous and never blocks.
 
-**Determinism grade**: non-deterministic. `#[reproducible]` functions
-cannot receive `Clock` (`E0784`); `#[pure]` rejects all capabilities
-including `Clock` (`E0785`).
+**Determinism grade**: non-deterministic. `#[pure]` rejects all
+capabilities including `Clock` (`E0785`).
 
 #### 20.9.2 `Rng` — random number generation
 
@@ -638,7 +585,7 @@ args = [...])` — in-memory variable map and argument list, isolated
 per test.
 
 **Determinism grade**: non-deterministic. Environment varies across
-runs and platforms; `#[reproducible]` excludes.
+runs and platforms; `#[pure]` rejects (`E0785`).
 
 #### 20.9.4 `Fs` — filesystem read + write
 
@@ -776,9 +723,9 @@ stdout and stderr into in-memory buffers accessible via
 `fakeConsole.stdoutCaptured()` / `stderrCaptured()`.
 
 **Determinism grade**: deterministic output (writes don't depend on
-external state). `#[reproducible(scope = "run")]` allows `Console`;
-`scope = "target"` and `scope = "portable"` reject it because byte
-ordering of interleaved stdout/stderr is run-dependent.
+external state) but writes are observable side effects, so `#[pure]`
+still rejects `Console` (`E0785`). Output routing belongs at the
+caller boundary.
 
 ### 20.10 Host adapter factories — full registry
 
@@ -954,20 +901,24 @@ The canonical set is `clock`, `rng`, `env`, `fs`, `net`, `process`,
 `console`. User-defined capabilities cannot be ambient (`E0789`); pass
 them explicitly.
 
-#### `#[reproducible]` with non-deterministic capability — `E0784`
+#### `#[pure]` with capability parameter — `E0785`
 
 ```osty
-#[reproducible]                         // ERROR E0784
+#[pure]                                 // ERROR E0785
 fn buildId(clock: Clock) -> String {
     clock.now().toIso8601()
 }
 ```
 
-Reproducibility requires the function's output to be fully determined
-by its input. A `Clock` parameter (non-deterministic adapter)
-violates this. The `#[pure]` annotation rejects all capability
-parameters (`E0785`); `#[reproducible]` rejects only non-deterministic
-ones.
+`#[pure]` (LLVM `readnone`) requires the function's output to be fully
+determined by its argument values with no observable side effects. A
+`Clock` parameter (or any other capability) violates this. The fix is
+to receive a precomputed scalar (`timestamp: Int64`) and let the caller
+own the clock.
+
+(G39 `#[reproducible]` once provided a finer-grained gate that allowed
+deterministic capabilities. It was withdrawn pre-release; `#[pure]` is
+now the only effect-free attestation.)
 
 #### Implicit forwarding does not exist
 
@@ -1097,32 +1048,31 @@ dispatch layer itself receives the full `AppCaps`. This makes
 per-handler capability sets explicit and shows up as such in
 `osty audit --capabilities`.
 
-#### 20.17.3 Reproducible derivation
+#### 20.17.3 Pure derivation
 
-A function annotated `#[reproducible(scope = "target")]` cannot
-receive non-deterministic capabilities (`Clock`, `Rng`, `Env`, `Fs`,
-`Net`, `Process`). The composition pattern is to *capture* the
-non-deterministic value at a non-reproducible boundary and pass the
-captured value into the reproducible function:
+A function annotated `#[pure]` cannot receive any capability parameter
+(`E0785`). The composition pattern is to *capture* the non-deterministic
+value at the impure boundary and pass the captured scalar into the pure
+function:
 
 ```osty
-// Non-reproducible boundary — owns the Clock.
+// Impure boundary — owns the Clock.
 fn writeBuildSnapshot(clock: Clock, fs: Fs, payload: Bytes) -> Result<(), Error> {
     let timestamp = clock.now().toEpochMillis()
-    let key = computeKey(timestamp, payload)        // reproducible call
+    let key = computeKey(timestamp, payload)        // pure call
     fs.write("snapshots/{key.toHex()}.bin", payload)
 }
 
-// Reproducible inner — receives the captured timestamp value.
-#[reproducible(scope = "target")]
+// Pure inner — receives the captured timestamp value.
+#[pure]
 fn computeKey(timestamp: Int64, payload: Bytes) -> Bytes32 {
     sha256(payload + timestamp.toBytes())
 }
 ```
 
-The reproducible inner is *fully* deterministic on its inputs — the
-same `timestamp` + `payload` always produces the same key. The
-non-reproducible outer admits the timestamp into the system once.
+The pure inner is *fully* deterministic on its inputs — the same
+`timestamp` + `payload` always produces the same key. The impure outer
+admits the timestamp into the system once.
 
 #### 20.17.4 Capability-typed factory
 
@@ -1188,8 +1138,8 @@ modules name the capability needed at each call site.
 
 A glance at this matrix tells the reader two things at once: which
 imports trigger capability requirements, and which can be used inside
-`#[reproducible]` / `#[pure]` contexts. Maintaining the matrix is part
-of any new stdlib module's PR.
+`#[pure]` contexts. Maintaining the matrix is part of any new stdlib
+module's PR.
 
 Removing a method or changing a method signature is a breaking
 change requiring a major version bump (per §3.14.3). The non-canonical

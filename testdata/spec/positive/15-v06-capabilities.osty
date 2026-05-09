@@ -37,9 +37,7 @@ fn test_mainBareAmbient() {
 #[ambient(clock, rng, env)]
 fn test_mainManyAmbient() {
 }
-// ---- #[reproducible_capability] remains a separate interface annotation ----
-#[reproducible_capability]
+// ---- ordinary user-defined interface (G39 attestation withdrawn) ----
 interface MyCap {
-    #[reproducible]
     fn now(self) -> Int
 }

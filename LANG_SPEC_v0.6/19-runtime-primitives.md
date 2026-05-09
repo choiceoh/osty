@@ -634,13 +634,13 @@ while the export symbol is link-reachable.
 ### 19.11 v0.6 surface relevance
 
 The runtime sublanguage (this chapter) is *below* the v0.6
-annotation surfaces — capabilities / flow / reproducible / etc.
+annotation surfaces — capabilities / flow / pure / etc.
 operate on user-level types and have no analog at the runtime
 intrinsic level. Specifically:
 
 - Runtime intrinsics never appear in `osty audit` capability or
   flow reports (they're toolchain-internal, not user surface).
-- A `#[reproducible]` user function may transitively call
+- A `#[pure]` user function may transitively call
   `raw.alloc` etc. — the runtime's allocation is a deterministic
   function of size + alignment from the user's perspective. The
   resulting `RawPtr` is *not* used directly by user code (it would

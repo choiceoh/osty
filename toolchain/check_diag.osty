@@ -108,7 +108,8 @@ pub fn checkCodeFixtureNonFunction() -> String { "E0436" }
 // pub fn checkCodeSpecBlockForallBadGenerator() -> String { "E0443" }
 
 // v0.6 G45 — Golden tests (LANG_SPEC_v0.6 §11.5).
-pub fn checkCodeGoldenNotReproducible() -> String { "E0444" }
+// E0444 (golden function reproducibility check) was withdrawn alongside
+// G39; snapshot determinism is now the author's responsibility.
 pub fn checkCodeGoldenSnapshotMissing() -> String { "E0445" }
 pub fn checkCodeGoldenAstParseError() -> String { "E0446" }
 pub fn checkCodeGoldenSnapshotStale() -> String { "W0444" }
@@ -130,15 +131,12 @@ pub fn checkCodeTrustedDeclassifyAudit() -> String { "W0901" }
 pub fn checkCodeUnsafeSilentMatchCompat() -> String { "W0902" }
 
 // v0.6 G36 — Capabilities (LANG_SPEC_v0.6/20-capabilities.md §20.8).
+// E0783, E0784, E0786, E0787, E0788 (G39 reproducibility codes) were
+// withdrawn alongside `#[reproducible]`; reserved for any successor gap.
 pub fn checkCodeAmbientWrongSite() -> String { "E0780" }
 pub fn checkCodeAmbientUnknownCapability() -> String { "E0781" }
 pub fn checkCodeAmbientForwardFailed() -> String { "E0782" }
-pub fn checkCodeReproducibleCapabilityNonRepro() -> String { "E0783" }
-pub fn checkCodeReproducibleViaCapability() -> String { "E0784" }
 pub fn checkCodePureViaCapability() -> String { "E0785" }
-pub fn checkCodeReproducibleUnorderedIter() -> String { "E0786" }
-pub fn checkCodeReproducibleScopeHierarchy() -> String { "E0787" }
-pub fn checkCodeReproduciblePortableConstraint() -> String { "E0788" }
 pub fn checkCodeAmbientUserCapability() -> String { "E0789" }
 
 // v0.6 G38 — Spec link (LANG_SPEC_v0.6 §3.10).
@@ -859,36 +857,12 @@ pub fn diagAmbientUserCapability(name: String, start: Int, end: Int) -> CheckDia
     )
 }
 
-/// diagReproducibleCapabilityNonRepro reports a method inside a
-/// `#[reproducible_capability]` interface that is not itself marked
-/// `#[reproducible]`.
-pub fn diagReproducibleCapabilityNonRepro(interfaceName: String, methodName: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiagWithNotes(
-        checkCodeReproducibleCapabilityNonRepro(),
-        "`#[reproducible_capability]` interface `{interfaceName}` method `{methodName}` must be `#[reproducible]`",
-        start,
-        end,
-        [
-            "LANG_SPEC §20.5: reproducible capability interfaces may expose only reproducible methods",
-            "hint: add `#[reproducible]` to the method, or remove `#[reproducible_capability]` from the interface",
-        ],
-    )
-}
-
-/// diagReproducibleViaCapability reports `#[reproducible]` functions
-/// that receive a non-deterministic capability parameter.
-pub fn diagReproducibleViaCapability(fnName: String, paramName: String, typeName: String, capabilityName: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiagWithNotes(
-        checkCodeReproducibleViaCapability(),
-        "`#[reproducible]` function `{fnName}` parameter `{paramName}: {typeName}` receives non-deterministic capability `{capabilityName}`",
-        start,
-        end,
-        [
-            "LANG_SPEC §20.4: reproducible functions may not receive `Clock`, `Rng`, `Env`, `Fs`, `Net`, or `Process` capabilities",
-            "hint: pass deterministic data instead, or remove `#[reproducible]` from the function",
-        ],
-    )
-}
+// G39 reproducibility diagnostic helpers (`diagReproducibleCapabilityNonRepro`,
+// `diagReproducibleViaCapability`, `diagReproducibleUnorderedIter`,
+// `diagReproducibleScopeHierarchy`, `diagReproduciblePortableConstraint`)
+// were withdrawn alongside the `#[reproducible]` annotation. The remaining
+// pure-capability gate (`diagPureViaCapability`, E0785) is the canonical
+// effect-free attestation in v0.6.
 
 /// diagPureViaCapability reports `#[pure]` functions that receive any
 /// capability parameter.
@@ -899,14 +873,14 @@ pub fn diagPureViaCapability(fnName: String, paramName: String, typeName: String
         start,
         end,
         [
-            "LANG_SPEC §20.4: `#[pure]` is stronger than `#[reproducible]` and forbids capability flow entirely",
-            "hint: drop the capability parameter, or weaken the function to `#[reproducible]` if deterministic capabilities are intended",
+            "LANG_SPEC §20.4: `#[pure]` forbids capability parameters entirely",
+            "hint: drop the capability parameter, or pass a precomputed scalar (`Int64` timestamp instead of `Clock`)",
         ],
     )
 }
 
 // ---------------------------------------------------------------------
-// v0.6 G36 — Ambient forward / reproducible scope diagnostics.
+// v0.6 G36 — Ambient forward diagnostic.
 // ---------------------------------------------------------------------
 
 /// diagAmbientForwardFailed reports a call site inside an `#[ambient]`
@@ -923,58 +897,6 @@ pub fn diagAmbientForwardFailed(fnName: String, calleeName: String, capabilityNa
             "LANG_SPEC §20.3.1: auto-forward requires the capability parameter name to match the ambient binding exactly",
             "hint: pass the capability explicitly, or rename the parameter so the names match",
         ],
-    )
-}
-
-/// diagReproducibleUnorderedIter reports a `#[reproducible]` function
-/// that iterates an unordered collection (`Map` / `Set`) whose element
-/// order is implementation-defined (§3.11.3).
-pub fn diagReproducibleUnorderedIter(fnName: String, collectionType: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiagWithNotes(
-        checkCodeReproducibleUnorderedIter(),
-        "`#[reproducible]` function `{fnName}` iterates unordered collection `{collectionType}`",
-        start,
-        end,
-        [
-            "LANG_SPEC §3.11.3: unordered collection iteration has implementation-defined element order",
-            "hint: use `entriesSorted()` / `toListSorted()` for deterministic ordering, or remove `#[reproducible]`",
-        ],
-    )
-}
-
-/// diagReproducibleScopeHierarchy reports a `#[reproducible(scope = A)]`
-/// function that calls a callee with a weaker scope. Scope strength:
-/// `portable` > `target` > `run` (§3.11.3).
-pub fn diagReproducibleScopeHierarchy(fnName: String, callerScope: String, calleeName: String, calleeScope: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiagWithNotes(
-        checkCodeReproducibleScopeHierarchy(),
-        "`#[reproducible(scope = \"{callerScope}\")]` function `{fnName}` calls `{calleeName}` which has weaker scope `{calleeScope}`",
-        start,
-        end,
-        [
-            "LANG_SPEC §3.11.3: reproducible scope strength is `portable` > `target` > `run`; callers may not reach weaker-scoped callees",
-            "hint: strengthen the callee's scope, or weaken the caller's",
-        ],
-    )
-}
-
-/// diagReproduciblePortableConstraint reports a `#[reproducible(scope =
-/// "portable")]` function that violates a cross-platform constraint:
-/// endianness-dependent serialisation, NaN bit pattern comparison, or
-/// platform-specific integer width assumption (§3.11.3).
-pub fn diagReproduciblePortableConstraint(fnName: String, what: String, fixHint: String, start: Int, end: Int) -> CheckDiagnostic {
-    let mut notes: List<String> = [
-        "LANG_SPEC §3.11.3: `#[reproducible(scope = \"portable\")]` must be byte-equal across platforms",
-    ]
-    if fixHint != "" {
-        notes.push("hint: {fixHint}")
-    }
-    checkDiagWithNotes(
-        checkCodeReproduciblePortableConstraint(),
-        "`#[reproducible(scope = \"portable\")]` function `{fnName}` violates a portable constraint: {what}",
-        start,
-        end,
-        notes,
     )
 }
 
@@ -1346,20 +1268,9 @@ pub fn diagFixtureNonFunction(declName: String, kind: String, start: Int, end: I
 // G45 — Golden tests (§11.5)
 // ---------------------------------------------------------------------
 
-/// diagGoldenNotReproducible reports a `#[golden]` function that is not
-/// `#[reproducible]`.
-pub fn diagGoldenNotReproducible(fnName: String, start: Int, end: Int) -> CheckDiagnostic {
-    checkDiagWithNotes(
-        checkCodeGoldenNotReproducible(),
-        "`#[golden]` function `{fnName}` is not `#[reproducible]`",
-        start,
-        end,
-        [
-            "LANG_SPEC §11.5.4: golden functions must be deterministic for snapshots to be meaningful",
-            "hint: add `#[reproducible]` and ensure the function avoids non-deterministic capabilities",
-        ],
-    )
-}
+// `diagGoldenNotReproducible` (E0444) was withdrawn alongside G39
+// `#[reproducible]`. Snapshot determinism is now the author's
+// responsibility.
 
 /// diagGoldenSnapshotMissing reports a `#[golden(path)]` whose snapshot
 /// file does not exist on disk.

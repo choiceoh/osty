@@ -34,9 +34,8 @@ x
 }
 
 func TestSourcePreservesInterfaceMethodAnnotations(t *testing.T) {
-	src := []byte(`#[reproducible_capability]
-interface HashCap {
-    #[reproducible]
+	src := []byte(`interface HashCap {
+    #[pure]
     fn hash(self, value: String) -> String
 }
 `)
@@ -50,7 +49,7 @@ interface HashCap {
 			t.Fatalf("Source diagnostics contained error: %#v", d)
 		}
 	}
-	if !strings.Contains(string(out), "    #[reproducible]\n    fn hash(self, value: String) -> String") {
+	if !strings.Contains(string(out), "    #[pure]\n    fn hash(self, value: String) -> String") {
 		t.Fatalf("formatted output dropped interface method annotation:\n%s", out)
 	}
 }

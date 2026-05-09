@@ -419,7 +419,7 @@ and includes:
 | `examples` | `#[example]` (auto-checked) |
 | `error_contract` | `#[error_contract]` |
 | `effects.capabilities_required` | capability parameters in signature |
-| `effects.reproducible` | `#[reproducible(scope=...)]` |
+| `effects.pure` | `#[pure]` annotation present |
 | `effects.taint_sources / sanitizes / sinks` | `#[taint]` / `#[sanitizes]` / `#[requires]` |
 | `stability` / `since` | `#[stability]` / `#[since]` |
 | `fixtures_referenced` | `#[example(uses = "name")]` |
@@ -506,8 +506,8 @@ published manifest. It is the gate that enforces `#[stability]`
 **Surface definition.** API surface includes: function signatures,
 struct fields and methods, enum variants and their payloads, interface
 methods, type alias RHS, public constants, and the following
-annotations: `#[stability]`, `#[error_contract]`, `#[since]`,
-`#[reproducible]`, `#[pure]`, parameter taint annotations.
+annotations: `#[stability]`, `#[error_contract]`, `#[since]`, `#[pure]`,
+parameter taint annotations.
 *Excluded* from surface: function bodies, `#[purpose]` / `#[example]` /
 `#[fixture]`, `#[golden]`, line numbers, comments.
 
@@ -672,7 +672,6 @@ suitable for security review and migration tracking.
 | `examples` | array | `#[example(input=, output=, uses=)]` 모두 |
 | `error_contract` | array | `#[error_contract]` entries |
 | `effects.capabilities_required` | array of capability type names | 함수 시그니처에서 capability 파라미터 추출 |
-| `effects.reproducible` | object \| null | `#[reproducible(scope=...)]` 데이터 |
 | `effects.pure` | `Bool` | `#[pure]` 부착 여부 |
 | `effects.taint_sources` | array | `#[taint("...")]` source tag list |
 | `effects.taint_sanitizes` | array | `#[sanitizes]` source/trust 매핑 |
@@ -777,8 +776,8 @@ fn computeDiff(prev: Manifest, curr: Manifest) -> DiffReport {
 | 신규 default arg non-trailing | BREAKING (G20 named call shift) |
 | stable 함수의 public parameter rename | BREAKING (keyword call surface changes) |
 | default value expression 변경 | BREAKING for `stable`; `experimental` emits `W2100` |
-| `#[reproducible]` 추가 | COMPAT-ADD (callee 보장 강화) |
-| `#[reproducible]` 제거 | BREAKING (callee 보장 약화) |
+| `#[pure]` 추가 | COMPAT-ADD (readnone 보장 강화) |
+| `#[pure]` 제거 | BREAKING (readnone 보장 약화) |
 | `#[error_contract]` variant 추가 | BREAKING (caller match exhaustiveness) |
 | body / `#[purpose]` 등 metadata | PATCH |
 

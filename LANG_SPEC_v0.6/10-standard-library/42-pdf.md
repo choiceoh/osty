@@ -8,7 +8,7 @@ tools, document search, ingestion pipelines, and diagnostics.
 `std.pdf` is *pure* — every function operates on already-captured
 `Bytes`. Filesystem reads happen at the caller's boundary through
 `Fs` (§20.9.4), and the resulting `Bytes` are passed in. The pure
-surface is acceptable inside `#[reproducible(scope = "target")]` —
+surface is acceptable inside `#[pure]` —
 the same input always produces the same parse tree.
 
 Tainted PDF input (e.g. a user-uploaded file) carries the source's

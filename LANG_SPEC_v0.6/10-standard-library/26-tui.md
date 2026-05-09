@@ -33,7 +33,7 @@ capture output, or compare snapshots.
 
 Frame composition (`tui.frame`, `Frame.put`, `Frame.drawText`,
 `Frame.diffAnsi`) is *pure* — every method here is capability-free
-and acceptable inside `#[reproducible(scope = "target")]` (§3.11).
+and acceptable inside `#[pure]` (§3.11).
 
 Output (`Screen.present`) is the only effectful method; it consumes
 a `Terminal` capability obtained from `Console.terminal()`
@@ -43,7 +43,7 @@ compare its `renderAnsi()` output against a `#[golden]` snapshot
 
 ```osty
 #[golden("fixtures/tui_login_screen.snap", mode = "text")]
-#[reproducible(scope = "target")]
+#[pure]
 fn testLoginScreen() {
     let frame = tui.sized(40, 12)
     frame.drawText(grid.point(2, 1), "login", styles.heading)
@@ -58,11 +58,11 @@ The pure-rendering / capability-presenting split lets TUI tests
 follow this layered shape:
 
 1. **Pure layer** — functions that take *application state* and
-   return a `Frame`. No capability, no I/O. `#[reproducible]`-
+   return a `Frame`. No capability, no I/O. `#[pure]`-
    eligible.
 
    ```osty
-   #[reproducible(scope = "target")]
+   #[pure]
    fn renderState(state: AppState) -> Frame {
        let frame = tui.frame(state.size)
        frame.drawText(state.cursorPos, ">", styles.cursor)

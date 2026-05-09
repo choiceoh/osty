@@ -2662,8 +2662,9 @@ fn srAnnotAllowedTargets(name: String) -> Int {
     if name == "taint_field" { return srAnnotTargetField() }
     // v0.6 G38 — Spec link (§3.10).
     if name == "spec" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    // v0.6 G39 — Reproducibility (§3.11).
-    if name == "reproducible" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
+    // G39 `#[reproducible]` was withdrawn from the v0.6 baseline pre-release.
+    // Authors use `#[pure]` (LLVM `readnone`) for the same effect-free
+    // attestation; using `#[reproducible]` here yields `E0405`.
     // v0.6 G40 — Sealed construction (§3.4.5).
     if name == "sealed_construct" { return srAnnotTargetTopLevel() }
     if name == "trusted_construct" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
@@ -4042,15 +4043,13 @@ fn srAnnotationNameList() -> List<String> {
         "noalias",
         // v0.6 G36 — Capabilities.
         "ambient",
-        "reproducible_capability",
         // v0.6 G37 — Information flow.
         "taint",
         "sanitizes",
         "trusted_declassify",
         "taint_field",
-        // v0.6 G38 / G39 — Spec link / Reproducibility.
+        // v0.6 G38 — Spec link.
         "spec",
-        "reproducible",
         // v0.6 G40 — Sealed construction.
         "sealed_construct",
         "trusted_construct",

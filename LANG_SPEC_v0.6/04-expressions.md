@@ -146,7 +146,7 @@ fn handle(net: Net, fs: Fs, mode: Mode) -> Result<(), Error> {
 }
 ```
 
-A `#[reproducible]` function may use `if` freely — the scope
+A `#[pure]` function may use `if` freely — the scope
 constraint applies to the whole function body, not per branch.
 
 ### 4.3 Match Expressions
@@ -275,13 +275,13 @@ fn dispatch(net: Net, evt: Event) -> Result<(), Error> {
 There is no per-arm capability re-binding; the closure-style
 capture rules (§4.7.1) apply uniformly.
 
-**`#[reproducible]` and match.** A `#[reproducible]` function may
-contain `match` expressions; the determinism contract requires
-that every arm body satisfies the same reproducibility scope, and
-the scrutinee is a deterministic value. Matching against a
-`Map.iter()` element inside a `#[reproducible]` is `E0786` (the
-underlying iteration order is non-deterministic, so the match
-arm chosen could vary).
+**`#[pure]` and match.** A `#[pure]` function may contain `match`
+expressions; every arm body must itself be capability-free. The
+scrutinee likewise has to be a value the function can compute without
+consulting capabilities (since `#[pure]` rejects capability parameters,
+this is automatic). v0.6 baseline does not gate against unordered
+iteration of `Map.iter()` inside `#[pure]` — that responsibility moved
+to the author after G39 was withdrawn.
 
 ### 4.4 Loops
 
@@ -773,16 +773,16 @@ let head = userInput[0..3]            // head: #[taint("user_input")] List<Strin
 The aborts-on-out-of-range semantics do not declassify — a panic
 exits the process; recovery is not part of the language.
 
-#### 4.10.2 Indexing and `#[reproducible]`
+#### 4.10.2 Indexing and `#[pure]`
 
-A `#[reproducible]` function may index `List<T>` and `String`
+A `#[pure]` function may index `List<T>` and `String`
 freely — the indexing operation is deterministic given the
 collection and the index. `Map<K, V>` indexing (`m[k]`) is also
 deterministic — the value at a given key is determined by the
 map's contents.
 
 The non-deterministic operation is *iteration order*, not
-indexing. A `#[reproducible]` function may use `m["specific_key"]`
+indexing. A `#[pure]` function may use `m["specific_key"]`
 without issue; only `m.iter()` / `m.keys()` / `m.values()` are
 flagged.
 

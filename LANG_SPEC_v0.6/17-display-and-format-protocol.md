@@ -240,7 +240,7 @@ overrides should preserve determinism:
 - Don't depend on `std.ref.same(a, b)` — pointer identity may vary
   across runs.
 
-A `#[reproducible(scope = "portable")]` function may freely call
+A `#[pure]` function may freely call
 `x.toString()` — the result is determined by `x`'s value.
 
 ---

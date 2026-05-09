@@ -197,7 +197,7 @@ Production GitHub code routes through:
 
 Pure builder functions (`github.repo`, `github.issueQuery`,
 `github.pullRequestDraft`, etc.) build request values and are
-acceptable inside `#[reproducible(scope = "target")]`. Only the
+acceptable inside `#[pure]`. Only the
 actual `send*` call is non-reproducible.
 
 #### 10.44.2 Webhook verification flow

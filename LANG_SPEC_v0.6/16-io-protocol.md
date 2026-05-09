@@ -270,7 +270,7 @@ signal.
 **Reproducibility.** `io.copy` and `io.readAll` are *not*
 deterministic — the exact byte sequence depends on the underlying
 stream's behavior (timing, partial reads). They cannot be used
-inside `#[reproducible]` functions when the stream is from a
+inside `#[pure]` functions when the stream is from a
 non-deterministic capability (`Net`, `Fs`, `Process`).
 
 When the stream is an in-memory adapter (`io.bytesReader`,

@@ -21,40 +21,40 @@ Four annotation families implement the principle:
 
 | Family | New surface |
 |---|---|
-| **Effectful** (env / IO) | Capability parameters (§20), `#[ambient]`, `#[reproducible]`, `#[reproducible_capability]` |
+| **Effectful** (env / IO) | Capability parameters (§20), `#[ambient]` |
 | **Security** (sources → sinks) | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]`, `#[taint_field]` (§21) |
 | **Temporal** (versioning) | `#[since]`, `#[stability]`, `#[match_compat]`, `osty publish` (§3.14) |
 | **Intent + Determinism** | `#[purpose]`, `#[example]`, `#[fixture]`, `#[error_contract]`, `#[sealed_construct]`, `#[golden]`, `osty context` (§3.12, §3.4.5, §7.5, §11.5, §13.4) |
 
-**Resolved gaps (10).**
+**Resolved gaps (9).**
 
 | ID | 영역 | 한 줄 |
 |---|---|---|
 | G36 | Capabilities (§20) | 환경 effect 를 capability 값으로 명시 |
 | G37 | Information flow (§21) | `#[taint]` / `#[sanitizes]` 정적 IFC |
-| G39 | Reproducibility (§3.11) | `#[reproducible(scope=...)]` 환경독립 강제 |
 | G40 | Sealed construct (§3.4.5) | `#[sealed_construct]` parse-don't-validate |
 | G41 | Error contract (§7.5) | `#[error_contract(... when ...)]` failure mode 명세 |
 | G42 | Structured intent (§3.12) | `#[purpose]` / `#[example]` / `#[fixture]` |
 | G44 | API evolution (§3.14) | `#[since]` / `#[stability]` / `#[match_compat]` |
 | G45 | Golden tests (§11.5) | `#[golden]` AST-aware 스냅샷 |
 | G47 | Machine-readable context (§13.4) | `osty context <symbol>` 구조화 추출 |
-| G48 | Annotation surface | 위 신규 어노테이션의 grammar 통합 (+16 fixed annotations) |
+| G48 | Annotation surface | 위 신규 어노테이션의 grammar 통합 (+14 fixed annotations) |
 
-**Withdrawn from v0.6 baseline (4).**
+**Withdrawn from v0.6 baseline (5).**
 
-G38 `#[spec]` link / G43 `spec { }` block / G46 `#[budget]` /
-G49 `while` keyword — pre-release withdrawal. SPEC_GAPS.md 의
-Withdrawn 섹션 참조. `G50` (anonymous structural record) 도 본
-batch 검토 중 빠졌다 — v0.5 §14 의 "named types are nominal"
-discipline 유지를 위해 ad-hoc labeled data 는 nominal `struct`
-또는 tuple 로 표현한다.
+G38 `#[spec]` link / G39 `#[reproducible]` / G43 `spec { }` block /
+G46 `#[budget]` / G49 `while` keyword — pre-release withdrawal.
+SPEC_GAPS.md 의 Withdrawn 섹션 참조. G39 의 use-case 는 `#[pure]`
+(LLVM `readnone`) 와 `#[golden]` (snapshot tooling) 으로 흡수됐다.
+`G50` (anonymous structural record) 도 본 batch 검토 중 빠졌다 —
+v0.5 §14 의 "named types are nominal" discipline 유지를 위해 ad-hoc
+labeled data 는 nominal `struct` 또는 tuple 로 표현한다.
 
 **Additions — grammar (G48).**
 
 - *Reserved keyword*: 변경 없음 (17 → 17).
 - *Contextual keyword*: 변경 없음.
-- *Fixed annotation set*: 11 → 27 (+16 신규).
+- *Fixed annotation set*: 11 → 25 (+14 신규).
 - *EBNF productions*: 변경 없음. 새 grammar surface 는 parameter 위치
   annotation (§21) 한 곳.
 
@@ -65,8 +65,6 @@ discipline 유지를 위해 ad-hoc labeled data 는 nominal `struct`
   (§20.6) 을 가진다.
 - `#[ambient(name1, ...)]` — script / `fn main` / `#[test]` /
   `#[bench]` 진입점에서만 허용. 그 외 함수: E0780.
-- `#[reproducible_capability]` — 사용자 정의 deterministic
-  capability 등록.
 - 호환 모드 `--legacy-globals` v0.6.x 한정 — v0.5 의 전역 함수
   (`time.now()` / `random.next()` 등) 자동 desugar. v0.7 제거.
 
@@ -86,19 +84,19 @@ discipline 유지를 위해 ad-hoc labeled data 는 nominal `struct`
 **Additions — declarations / annotations.**
 
 §3.4.5, §3.10–§3.15 신규 — `#[sealed_construct]`,
-`#[spec("§X.Y")]`, `#[reproducible(scope=...)]`, `#[purpose]` /
-`#[example]` / `#[fixture]`, `spec { example: / law: / invariant: }`
-블록, `#[since]` / `#[stability]` / `#[match_compat]`,
-`#[budget(allocs / io_calls / stack_depth / instructions / time_ms /
-p99_ms)]`. 각 신규 surface 는 §3 의 *v0.6 Annotation Extensions* 섹션
-참조.
+`#[spec("§X.Y")]`, `#[purpose]` / `#[example]` / `#[fixture]`,
+`spec { example: / law: / invariant: }` 블록, `#[since]` /
+`#[stability]` / `#[match_compat]`, `#[budget(allocs / io_calls /
+stack_depth / instructions / time_ms / p99_ms)]`. 각 신규 surface 는
+§3 의 *v0.6 Annotation Extensions* 섹션 참조.
 
 **Additions — error / testing / tooling.**
 
 - §7.5 — `#[error_contract(Variant when "...")]` concrete enum
   failure-mode catalog.
 - §11.5 — `#[golden(path, mode="text"|"ast"|"json"|"diag")]` AST-aware
-  snapshot. 함수는 암묵 `#[reproducible(scope="target")]`.
+  snapshot. Determinism 은 호출자 책임 (G39 `#[reproducible]` 가
+  withdrawn 되어 컴파일러 검사 없음).
 - §13.4 / §13.9 — `osty context <symbol>` command and JSON output
   (LSP / AI agent 통합).
 - `osty publish` — manifest API surface diff. stable API breaking
@@ -119,10 +117,11 @@ p99_ms)]`. 각 신규 surface 는 §3 의 *v0.6 Annotation Extensions* 섹션
   에 `#[requires(...)]` 추가. 미-sanitize 코드는 컴파일 에러 (의도된
   보안 회귀 노출).
 
-**Diagnostic codes.** 신규 — E0410-E0446 (annotation/intent/golden),
-E0780-E0789 (capability), E0900-E0903 (information flow), E2100-E2102
-(publish). Catalog: `ERROR_CODES.md` (auto-generated from
-`internal/diag/codes.go`).
+**Diagnostic codes.** 신규 — E0410-E0445 (annotation/intent/golden),
+E0780-E0782, E0785, E0789 (capability), E0900-E0903 (information flow),
+E2100-E2102 (publish). Catalog: `ERROR_CODES.md` (auto-generated from
+`internal/diag/codes.go`). G39 의 E0783, E0784, E0786, E0787, E0788 은
+withdrawn.
 
 **Implementation phases.** 결정은 v0.6 baseline 으로 동결, 구현은
 5 phase (Phase 1 capability + ambient + stdlib migration → Phase 5

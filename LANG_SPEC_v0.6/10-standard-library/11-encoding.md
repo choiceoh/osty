@@ -26,7 +26,7 @@ Submodules:
 
 Every encoding function is *pure* — `Bytes` ↔ `String` round-trips
 preserve bit patterns and consult no capability. The whole module
-is acceptable inside `#[reproducible(scope = "portable")]` and
+is acceptable inside `#[pure]` and
 `#[pure]` contexts.
 
 Flow tags ride through encoding identically — `base64.encode` of a

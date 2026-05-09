@@ -18,7 +18,7 @@ fn loadAndAnnotate(fs: Fs, path: String) -> Result<Bytes, Error> {
 ```
 
 The encode/decode pair is acceptable inside
-`#[reproducible(scope = "target")]` since it does not consult any
+`#[pure]` since it does not consult any
 capability.
 
 The first supported format is intentionally conservative: workbooks are ZIP
@@ -74,7 +74,7 @@ necessary for `#[golden]` tests of XLSX-generating code:
 
 ```osty
 #[golden("fixtures/report.xlsx", mode = "binary")]
-#[reproducible(scope = "portable")]
+#[pure]
 fn testReport() {
     let bytes = xlsx.encodeRows("Report", [
         ["name", "score"],

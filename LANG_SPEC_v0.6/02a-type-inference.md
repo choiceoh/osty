@@ -295,14 +295,9 @@ inferred. Three integration points:
    already-typed AST: each value's tag set is the union of its
    inputs' tags, modulo sanitizer effects. The inference is total
    (every value has a determinate tag set) and deterministic.
-3. **`#[reproducible]` checks.** Reproducibility is a *whole-call-
-   graph* check applied after types and tags are settled. The
-   checker walks the function's call graph and verifies that every
-   reachable callee carries `#[reproducible]` at compatible scope
-   (§3.11.1).
 
 These analyses run as separate passes after type checking so that
-type errors short-circuit the more expensive flow / reproducibility
+type errors short-circuit the more expensive flow / capability
 passes. Diagnostic ordering: `E0700`-class first, then `E0900`/
 `E0780` flow / capability errors.
 
@@ -316,7 +311,7 @@ The complete v0.6 inference / check pipeline:
 | 2. Parse | Tokens → AST | `E0100`-`E0299` |
 | 3. Resolve | Names → declarations (2-pass: declare + body) | `E0500`-`E0599` |
 | 4. Type-check | Bidirectional inference | `E0300`-`E0399`, `E0700`-`E0799` |
-| 5. Capability check | `#[ambient]` / `#[reproducible]` / capability params | `E0780`-`E0789` |
+| 5. Capability check | `#[ambient]` / `#[pure]` / capability params | `E0780`-`E0789` |
 | 6. Flow check | `#[taint]` / `#[sanitizes]` / `#[requires]` propagation | `E0900`-`E0903` |
 | 7. Sealed construct check | External literal validation | `E0420`-`E0424` |
 | 8. Error contract check | Variant set against `#[error_contract]` | `E0410`-`E0414` |

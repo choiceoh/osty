@@ -2,7 +2,7 @@
 
 > **v0.6 capability note**: `std.regex` is *pure* — every function
 > transforms strings without consulting any capability. The module
-> is acceptable inside `#[reproducible(scope = "portable")]` and
+> is acceptable inside `#[pure]` and
 > `#[pure]` contexts. Match results inherit the input string's flow
 > tag set — `regex.findAll(taintedHaystack, "...")` produces a
 > `List<String>` where each match carries `taintedHaystack`'s tags.

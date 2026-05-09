@@ -162,7 +162,7 @@ with explicit value threading instead of lock-backed package globals.
 The Deneb-derived utilities are *all pure*. None receives a
 capability parameter; each transforms input values into output
 values (or builds explicit state structs threaded by the caller).
-Acceptable inside `#[reproducible(scope = "portable")]` provided
+Acceptable inside `#[pure]` provided
 the caller's input is itself reproducible.
 
 | Module | Sanitizer registry | Capability needed |

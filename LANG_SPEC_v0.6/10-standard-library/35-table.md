@@ -8,7 +8,7 @@ then layers typed access and column inference on top.
 `String` / `Bytes` values. Reading a CSV from disk happens at the
 caller's `Fs` boundary; the resulting `String` is then passed to
 `table.fromCsv`. The pure surface is acceptable inside
-`#[reproducible(scope = "target")]`. Cell values inherit the flow
+`#[pure]`. Cell values inherit the flow
 tag set of the source `String` — a CSV constructed from user-uploaded
 bytes carries `#[taint("user_input")]` into every cell extracted via
 `table.row(i).cell("name")`, so authors handling untrusted CSV must
@@ -206,7 +206,7 @@ values. They:
 - Preserve flow tags element-wise — a tainted CSV input produces
   tainted cells; transformations (`select`, `sortBy`, `coerce`)
   preserve the tags.
-- Are acceptable inside `#[reproducible(scope = "portable")]`,
+- Are acceptable inside `#[pure]`,
   provided sort orders are deterministic (text comparison is
   byte-wise; numeric comparison follows the IEEE-754 totalOrder
   per §10.5).
@@ -216,7 +216,7 @@ values. They:
 `countBy(column, name)` and `summarizeBy(groupBy, sumColumn)` use
 deterministic ordering — output rows appear in *first-occurrence*
 order from the input, not in hash order. This makes
-table-aggregation pipelines acceptable inside `#[reproducible]`
+table-aggregation pipelines acceptable inside `#[pure]`
 without explicit `sortBy` afterward.
 
 ```osty

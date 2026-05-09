@@ -73,7 +73,7 @@ bytes.fromHex(s: String) -> Result<Bytes, Error>
 
 `std.bytes` is *pure* — every operation transforms `Bytes` to
 `Bytes` (or `String`) without consulting any capability. The whole
-module is acceptable inside `#[reproducible(scope = "portable")]`.
+module is acceptable inside `#[pure]`.
 
 Flow tags propagate identically — `bytes.toUpper` of a tainted
 `Bytes` produces a tainted `Bytes` with the same source tag set.

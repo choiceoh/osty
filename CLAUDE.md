@@ -39,7 +39,7 @@
   - `LANG_SPEC_v0.6/18-change-history.md §18.0` — v0.5 → v0.6 변경 이력
   - `LANG_SPEC_v0.6/20-capabilities.md`, `21-information-flow.md` — v0.6 신규 챕터
 - **`OSTY_GRAMMAR_v0.6.md`** — EBNF 문법 + R1–R27 decision log. 스펙과 구현이 충돌하면 **스펙이 기준**
-- `SPEC_GAPS.md` — 해결된 갭 아카이브 (v0.6 시점 10 결정: G36, G37, G39-G42, G44, G45, G47, G48; G38/G43/G46/G49 withdrawn; open gap 0)
+- `SPEC_GAPS.md` — 해결된 갭 아카이브 (v0.6 시점 9 결정: G36, G37, G40-G42, G44, G45, G47, G48; G38/G39/G43/G46/G49 withdrawn; open gap 0)
 - `CHANGELOG_v0.6.md` — v0.6 implementation 진행도 (spec 와 분리)
 - `BREAKING_v0.6.md` — v0.5 → v0.6 breaking change 카탈로그
 - `MIGRATING_v0.5_to_v0.6.md` — 사용자 마이그레이션 가이드
@@ -191,13 +191,13 @@ winget install --id LLVM.LLVM                              # clang/lld/llc (머�
 
 **규칙**:
 - 새 구문/키워드/어노테이션 추가는 `LANG_SPEC_v0.6/` 개정 없이는 **금지**. 정식 버전 업(minor/major)과 함께만 surface 변경.
-- v0.6 결정 (10 개: G36, G37, G39-G42, G44, G45, G47, G48) 은 baseline 동결. G38/G43/G46/G49 는 pre-release withdrawn (low utility). 새 결정은 `SPEC_GAPS.md` Open Gaps 섹션에 G50+ 으로 등재 후 다음 minor/major 에 일괄 수용.
+- v0.6 결정 (9 개: G36, G37, G40-G42, G44, G45, G47, G48) 은 baseline 동결. G38/G39/G43/G46/G49 는 pre-release withdrawn (low utility). 새 결정은 `SPEC_GAPS.md` Open Gaps 섹션에 G50+ 으로 등재 후 다음 minor/major 에 일괄 수용.
 - 문법 모호성 발견 → 컴파일러가 아니라 `SPEC_GAPS.md` 에 먼저 기록.
 - 공개 백엔드는 `--backend llvm` 만. 새 백엔드 플래그 추가 금지.
 
 ### v0.5 → v0.6 transition 정책
 
-**Spec 단계 (완료)**: 10 결정 (G36, G37, G39-G42, G44, G45, G47, G48) baseline 동결. 22 main chapter + 46 stdlib subchapter, OSTY_GRAMMAR_v0.6, BREAKING / MIGRATING 가이드, CLAUDE.md 부록 C 모두 land.
+**Spec 단계 (완료)**: 9 결정 (G36, G37, G40-G42, G44, G45, G47, G48) baseline 동결. 22 main chapter + 46 stdlib subchapter, OSTY_GRAMMAR_v0.6, BREAKING / MIGRATING 가이드, CLAUDE.md 부록 C 모두 land.
 
 **Implementation phase 진행**: `CHANGELOG_v0.6.md` 가 phase 진행도의 권위.
 
@@ -206,7 +206,7 @@ winget install --id LLVM.LLVM                              # clang/lld/llc (머�
 | 0 | Self-host 자력 사이클 (Tier A 갭) | (v0.5 follow-up) |
 | 1 | Capability + ambient + stdlib migration | G36 |
 | 2 | Structured intent + osty context | G42, G47 |
-| 3 | Reproducible + golden | G39, G45 |
+| 3 | Golden | G45 |
 | 4 | Sealed + ErrorContract + Evolution | G40, G41, G44 |
 | 5 | Taint / sanitize | G37 |
 
@@ -1069,7 +1069,7 @@ fn benchParseConfig() {
 
 ---
 
-# 부록 C. v0.6 신규 패턴 (G36, G37, G39-G42, G44, G45, G47, G48)
+# 부록 C. v0.6 신규 패턴 (G36, G37, G40-G42, G44, G45, G47, G48)
 
 > **v0.6 design north star**: *Hidden dependency is forbidden* — 시간, 난수, 환경, 보안 흐름, API 진화, 성능 계약, 의도, 명세 어느 것도 암묵으로 두지 않는다.
 >
@@ -1248,28 +1248,27 @@ fn fakeDb() -> Db { std.testing.db.inMemory() }
 **소비**: `osty doc` (문서 생성), `osty test --example` (자동 검증),
 `osty context` (LLM agent payload), LSP hover.
 
-## C.7 Reproducibility (G39, §3.11)
+## C.7 (Withdrawn) Reproducibility (G39)
 
-**규칙**: 캐시 키 / 빌드 해시 / migration ID / content addressing 함수에 `#[reproducible(scope=...)]`.
+G39 `#[reproducible(scope=...)]` 는 v0.6 baseline 에서 withdrawn. 캐시
+키 / 빌드 해시 / migration ID / content-addressing 함수는 `#[pure]`
+(LLVM `readnone`, capability 수신 차단 = `E0785`) 로 attest 한다 — `#[pure]`
+는 capability 미수신을 강제하므로 사실상 environment-independent. 추가로
+`#[golden]` 함수의 snapshot determinism 보장은 호출자 책임 (deterministic
+fake capability 주입 또는 capability-free 본문).
 
 ```osty
-#[reproducible(scope = "target")]
+// 환경독립 attestation — #[pure] 로 충분
+#[pure]
 fn computeKey(data: Bytes) -> Bytes32 {
     sha256(data)
 }
 
-#[reproducible(scope = "portable")]
+#[pure]
 fn migrationId(name: String, sequence: Int) -> Int64 {
     bytes.toBigEndian(name.toBytes() + sequence.toBytes()).toInt64()
 }
 ```
-
-**Scope**:
-- `"run"` — 같은 프로세스 실행 (Console capability OK)
-- `"target"` *(default)* — 같은 Osty 버전 + target triple
-- `"portable"` — 플랫폼 간 byte-equal
-
-**금지**: non-deterministic capability 수신 (`E0784`), unordered iter (`E0786`), pointer-id 비교, 더 약한 scope callee 호출 (`E0787`).
 
 ## C.9 API evolution (G44)
 
@@ -1326,7 +1325,7 @@ fn testNumericNarrowingDiag() {
 
 **Mode**: `"text"` (default, byte-exact) / `"ast"` (reparse + AST 비교, whitespace 무시) / `"json"` (structural) / `"diag"` (Span-tolerant).
 
-**`#[golden]` 함수는 자동 `#[reproducible(scope="target")]`** — non-deterministic 호출 시 `E0444`.
+**Determinism**: `#[golden]` 함수의 출력 deterministic 보장은 호출자 책임 (G39 `#[reproducible]` 가 withdrawn). 일반적 패턴: `std.capability.testing.FakeClock` 등 fake injection 또는 capability-free 본문.
 
 **Update**: `osty test --update-golden` 로 일괄 갱신.
 
@@ -1339,7 +1338,7 @@ fn testNumericNarrowingDiag() {
 | **Sealed construct** (C.3) | `#[sealed_construct(parse)]` | parse-don't-validate 타입 (Email/Url/Path/Uuid/...) |
 | **Error contract** (C.4) | `#[error_contract(... when ...)]` | public API의 concrete enum error |
 | **Intent** (C.5) | `#[purpose]`, `#[example]`, `#[fixture]` | public API / compiler internal |
-| **Reproducibility** (C.7) | `#[reproducible(scope=...)]` | 캐시 키 / 해시 / migration ID |
+| **Purity** (v0.5 §3.8 + v0.6 capability gate) | `#[pure]` (E0785) | 캐시 키 / 해시 / migration ID — G39 `#[reproducible]` 가 withdrawn 되어 effect-free attestation 단일 surface |
 | **Evolution** (C.9) | `#[stability]`, `#[since]`, `#[match_compat]` | public API surface |
 | **Golden** (C.10) | `#[golden(path, mode=)]` | 컴파일러 / formatter / docgen 자가 테스트 |
 

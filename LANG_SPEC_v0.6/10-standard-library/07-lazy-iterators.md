@@ -21,7 +21,7 @@ always available alongside the chained terminators below.
 
 The chain itself is *capability-free* — `map` / `filter` /
 `take` / `toList` perform no I/O and are safe to compose inside a
-`#[reproducible(scope = "target")]` function (§3.11), provided the
+`#[pure]` function (§3.11), provided the
 closure arguments are themselves capability-free.
 
 API:

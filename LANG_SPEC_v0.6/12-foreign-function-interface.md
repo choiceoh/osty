@@ -269,34 +269,34 @@ imported symbol's signature triggers a SemVer-relevant change
   `use go "github.com/foo/http"`) — major bump (link contract
   changes).
 
-#### 12.9.2 `#[reproducible]` and FFI
+#### 12.9.2 `#[pure]` and FFI
 
-A function annotated `#[reproducible(scope = X)]` *cannot* call an
-FFI symbol unless that symbol is itself annotated `#[reproducible]`
-inside the FFI block. Foreign symbols are deterministic-by-default
-*not assumed* — the author must attest:
+A function annotated `#[pure]` *should* only call FFI symbols that are
+themselves annotated `#[pure]` inside the FFI block. Foreign symbols
+are *not assumed* deterministic — the author attests:
 
 ```osty
 use c "myproject" {
-    #[reproducible(scope = "portable")]
+    #[pure]
     fn fast_hash_v2(data: Bytes) -> Bytes32
 
     fn random_bytes(n: Int) -> Bytes        // no annotation — non-deterministic
 }
 
-#[reproducible(scope = "portable")]
+#[pure]
 fn computeKey(data: Bytes) -> Bytes32 {
-    fast_hash_v2(data)        // OK — callee carries #[reproducible]
+    fast_hash_v2(data)        // OK — callee carries #[pure]
 }
 
-#[reproducible(scope = "portable")]
+#[pure]
 fn buildToken(n: Int) -> Bytes {
-    random_bytes(n)           // E0786 — non-reproducible callee
+    random_bytes(n)           // attestation lie — author responsibility
 }
 ```
 
-The annotation is *attestation* — the compiler trusts it. A
-mistakenly-annotated foreign symbol breaks reproducibility silently.
+The annotation is *attestation* — the compiler trusts it (v0.6 baseline
+does not enforce transitive purity through FFI). A mistakenly-annotated
+foreign symbol breaks the LLVM `readnone` promise silently.
 
 #### 12.9.3 Information flow at FFI boundary
 

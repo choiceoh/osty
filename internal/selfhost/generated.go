@@ -49958,7 +49958,7 @@ func runCheckGates(cx *ElabCx) {
 	runNoAllocGate(cx)
 	runPureGate(cx)
 	runAmbientGate(cx)
-	runReproducibleCapabilityGate(cx)
+	// runReproducibleCapabilityGate (G39) withdrawn pre-release.
 	runCapabilitySignatureGate(cx)
 	runStructuredIntentGate(cx)
 }
@@ -55239,9 +55239,7 @@ func srAnnotAllowedTargets(name string) int {
 	if name == "ambient" {
 		return srAnnotTargetTopLevel()
 	}
-	if name == "reproducible_capability" {
-		return srAnnotTargetTopLevel()
-	}
+	// `reproducible_capability` (G39) withdrawn pre-release.
 	if name == "taint" {
 		return srAnnotTargetTopLevel() | srAnnotTargetMethod() | srAnnotTargetField()
 	}
@@ -55257,9 +55255,7 @@ func srAnnotAllowedTargets(name string) int {
 	if name == "spec" {
 		return srAnnotTargetTopLevel() | srAnnotTargetMethod()
 	}
-	if name == "reproducible" {
-		return srAnnotTargetTopLevel() | srAnnotTargetMethod()
-	}
+	// `reproducible` (G39) withdrawn pre-release.
 	if name == "sealed_construct" {
 		return srAnnotTargetTopLevel()
 	}
@@ -56786,7 +56782,7 @@ func srCharToDigit(ch rune) int {
 
 // Osty: /tmp/selfhost_merged.osty:29239:1
 func srAnnotationNameList() []string {
-	return []string{"json", "deprecated", "allow", "intrinsic_methods", "requires", "no_alloc", "intrinsic", "c_abi", "export", "pod", "repr", "cfg", "op", "test", "vectorize", "no_vectorize", "parallel", "unroll", "inline", "hot", "cold", "pure", "target_feature", "noalias", "ambient", "reproducible_capability", "taint", "sanitizes", "trusted_declassify", "taint_field", "spec", "reproducible", "sealed_construct", "trusted_construct", "test_construct", "error_contract", "purpose", "example", "fixture", "since", "stability", "match_compat", "golden", "budget"}
+	return []string{"json", "deprecated", "allow", "intrinsic_methods", "requires", "no_alloc", "intrinsic", "c_abi", "export", "pod", "repr", "cfg", "op", "test", "vectorize", "no_vectorize", "parallel", "unroll", "inline", "hot", "cold", "pure", "target_feature", "noalias", "ambient", "taint", "sanitizes", "trusted_declassify", "taint_field", "spec", "sealed_construct", "trusted_construct", "test_construct", "error_contract", "purpose", "example", "fixture", "since", "stability", "match_compat", "golden", "budget"}
 }
 
 // Osty: /tmp/selfhost_merged.osty:29269:1
@@ -70773,38 +70769,17 @@ func isUserAmbientCapabilityName(name string, userCapabilities []string) bool {
 	return false
 }
 
+// runReproducibleCapabilityGate (G39) was withdrawn pre-release; the
+// helper below is kept as a no-op so any stale call sites remain
+// link-clean. Future releases may delete the symbol entirely.
 func runReproducibleCapabilityGate(cx *ElabCx) {
-	if cx == nil || cx.ast == nil || cx.ast.arena == nil {
-		return
-	}
-	arena := cx.ast.arena
-	for _, declIdx := range arena.decls {
-		node := astArenaNodeAt(arena, declIdx)
-		if node == nil {
-			continue
-		}
-		if _, ok := node.kind.(*AstNodeKind_AstNInterfaceDecl); ok {
-			checkReproducibleCapabilityInterface(cx, arena, node)
-		}
-	}
+	_ = cx
 }
 
 func checkReproducibleCapabilityInterface(cx *ElabCx, arena *AstArena, iface *AstNode) {
-	if iface == nil || iface.extra < 0 {
-		return
-	}
-	if !checkGateAnnotationContains(arena, iface.extra, "reproducible_capability") {
-		return
-	}
-	for _, memberIdx := range iface.children {
-		member := astArenaNodeAt(arena, memberIdx)
-		if member == nil {
-			continue
-		}
-		if _, ok := member.kind.(*AstNodeKind_AstNFnDecl); ok && !checkGateAnnotationContains(arena, member.extra, "reproducible") {
-			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagReproducibleCapabilityNonRepro(iface.text, member.text, member.start, member.end))
-		}
-	}
+	_ = cx
+	_ = arena
+	_ = iface
 }
 
 func runCapabilitySignatureGate(cx *ElabCx) {
@@ -70812,17 +70787,21 @@ func runCapabilitySignatureGate(cx *ElabCx) {
 		return
 	}
 	arena := cx.ast.arena
-	reproducibleCapabilities := collectReproducibleCapabilityNames(arena)
+	userCapabilities := collectUserCapabilityNames(arena)
 	for _, declIdx := range arena.decls {
 		node := astArenaNodeAt(arena, declIdx)
 		if node == nil {
 			continue
 		}
-		checkCapabilitySignatureDecl(cx, arena, node, reproducibleCapabilities)
+		checkCapabilitySignatureDecl(cx, arena, node, userCapabilities)
 	}
 }
 
-func collectReproducibleCapabilityNames(arena *AstArena) []string {
+// collectUserCapabilityNames returns the names of file-local interface
+// declarations. Used to flag user-defined ambient names (E0789) and
+// `#[pure]` parameters carrying user-defined interface types (E0785).
+// (Replaces the former G39 `collectReproducibleCapabilityNames`.)
+func collectUserCapabilityNames(arena *AstArena) []string {
 	out := make([]string, 0, 1)
 	if arena == nil {
 		return out
@@ -70832,26 +70811,33 @@ func collectReproducibleCapabilityNames(arena *AstArena) []string {
 		if node == nil {
 			continue
 		}
-		if _, ok := node.kind.(*AstNodeKind_AstNInterfaceDecl); ok && checkGateAnnotationContains(arena, node.extra, "reproducible_capability") {
+		if _, ok := node.kind.(*AstNodeKind_AstNInterfaceDecl); ok {
 			out = append(out, node.text)
 		}
 	}
 	return out
 }
 
-func checkCapabilitySignatureDecl(cx *ElabCx, arena *AstArena, node *AstNode, reproducibleCapabilities []string) {
+// collectReproducibleCapabilityNames retained as a thin alias so any
+// linkage from the frozen seed surface remains valid; G39 was withdrawn
+// pre-release.
+func collectReproducibleCapabilityNames(arena *AstArena) []string {
+	return collectUserCapabilityNames(arena)
+}
+
+func checkCapabilitySignatureDecl(cx *ElabCx, arena *AstArena, node *AstNode, userCapabilities []string) {
 	if node == nil {
 		return
 	}
 	switch node.kind.(type) {
 	case *AstNodeKind_AstNFnDecl:
-		checkCapabilitySignatureFn(cx, arena, node, reproducibleCapabilities)
+		checkCapabilitySignatureFn(cx, arena, node, userCapabilities)
 	case *AstNodeKind_AstNStructDecl, *AstNodeKind_AstNEnumDecl, *AstNodeKind_AstNInterfaceDecl:
-		checkCapabilitySignatureMethods(cx, arena, node, reproducibleCapabilities)
+		checkCapabilitySignatureMethods(cx, arena, node, userCapabilities)
 	}
 }
 
-func checkCapabilitySignatureMethods(cx *ElabCx, arena *AstArena, parent *AstNode, reproducibleCapabilities []string) {
+func checkCapabilitySignatureMethods(cx *ElabCx, arena *AstArena, parent *AstNode, userCapabilities []string) {
 	if parent == nil {
 		return
 	}
@@ -70861,18 +70847,19 @@ func checkCapabilitySignatureMethods(cx *ElabCx, arena *AstArena, parent *AstNod
 			continue
 		}
 		if _, ok := member.kind.(*AstNodeKind_AstNFnDecl); ok {
-			checkCapabilitySignatureFn(cx, arena, member, reproducibleCapabilities)
+			checkCapabilitySignatureFn(cx, arena, member, userCapabilities)
 		}
 	}
 }
 
-func checkCapabilitySignatureFn(cx *ElabCx, arena *AstArena, fn *AstNode, reproducibleCapabilities []string) {
+func checkCapabilitySignatureFn(cx *ElabCx, arena *AstArena, fn *AstNode, userCapabilities []string) {
 	if fn == nil || fn.extra < 0 {
 		return
 	}
-	isReproducible := checkGateAnnotationContains(arena, fn.extra, "reproducible")
+	// G39 `#[reproducible]` gate was withdrawn pre-release; only `#[pure]`
+	// (LLVM `readnone`, all-capability rejection) remains.
 	isPure := checkGateAnnotationContains(arena, fn.extra, "pure")
-	if !isReproducible && !isPure {
+	if !isPure {
 		return
 	}
 	for _, paramIdx := range fn.children {
@@ -70884,17 +70871,9 @@ func checkCapabilitySignatureFn(cx *ElabCx, arena *AstArena, fn *AstNode, reprod
 			continue
 		}
 		typeName := formatTypeForDiag(arena, param.right)
-		if isReproducible {
-			nonDet := capabilityHeadInType(arena, param.right, false, reproducibleCapabilities)
-			if isNonDeterministicCapabilityName(nonDet) {
-				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagReproducibleViaCapability(fn.text, param.text, typeName, nonDet, param.start, param.end))
-			}
-		}
-		if isPure {
-			capability := capabilityHeadInType(arena, param.right, true, reproducibleCapabilities)
-			if capability != "" {
-				cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagPureViaCapability(fn.text, param.text, typeName, capability, param.start, param.end))
-			}
+		capability := capabilityHeadInType(arena, param.right, true, userCapabilities)
+		if capability != "" {
+			cx.env.local.diagnostics = append(cx.env.local.diagnostics, diagPureViaCapability(fn.text, param.text, typeName, capability, param.start, param.end))
 		}
 	}
 }

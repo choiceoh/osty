@@ -123,7 +123,7 @@ take an `Iterable<T>` of already-collected lines and process them
 without needing `Fs`:
 
 ```osty
-#[reproducible(scope = "target")]
+#[pure]
 fn classify(lines: Iterable<String>) -> Map<String, Int> {
     let mut counts: Map<String, Int> = {:}
     for line in lines {
@@ -186,23 +186,25 @@ flow tag never reaches a string-shaped sink and no sanitizer is
 required. Direct concatenation into the SQL string would be flagged
 by the §21 checker.
 
-### 15.4 Iteration and `#[reproducible]`
+### 15.4 Iteration determinism guidance
 
-A `for x in xs` loop inside a `#[reproducible(scope = X)]` function
-must iterate a *deterministically-ordered* iterable:
+When determinism matters (e.g., authoring a `#[golden]` snapshot or a
+`#[pure]` function whose output flows into a content-addressed key),
+iterate a *deterministically-ordered* iterable:
 
 - `List<T>` — insertion-order, deterministic. ✓
 - `Range` — increasing or `by`-stepped, deterministic. ✓
 - `Map.entriesSorted()` — explicit sort, deterministic. ✓
 - `Map.iter()` / `Map.keys()` / `Map.values()` — hash-based, NOT
-  deterministic. ✗ (E0786)
+  deterministic. ✗ (audit by inspection — v0.6 baseline does not
+  ship a static gate for this; G39 `#[reproducible]` was withdrawn)
 - `Set.toListSorted()` — explicit sort, deterministic. ✓
-- `Set.iter()` — hash-based, NOT deterministic. ✗ (E0786)
+- `Set.iter()` — hash-based, NOT deterministic. ✗
 - `Channel<T>` — runtime-dependent ordering, NOT deterministic. ✗
 
 The checker walks every `for ... in` and ensures the iterable side
 satisfies the determinism constraint. Mixing a `Map.iter()` with a
-`#[reproducible]` annotation is therefore a compile error caught
+`#[pure]` annotation is therefore a compile error caught
 before the body is even type-checked.
 
 ### 15.5 User-defined iterables and capability boundaries
