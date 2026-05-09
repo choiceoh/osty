@@ -1355,12 +1355,15 @@ const (
 	CodeGoldenSnapshotMissing = "E0445"
 
 	// CodeGoldenAstParseError: `#[golden(mode = "ast")]` is applied
-	// to a function whose output is not valid Osty source — reparse
-	// failed.
+	// to a function whose output is not valid Osty source nor valid
+	// JSON — reparse failed.
 	//
-	// Spec: v0.6 §11.5.3
-	// Fix: use `mode = "text"` (byte-exact) or `mode = "json"` if the
-	//      output is structured but not Osty source.
+	// Spec: v0.6 §11.5.3 (cut F: 4 modes → 2 modes + flag,
+	//        pre-release amendment)
+	// Fix: use the default `mode = "text"` (byte-exact); `"ast"` is
+	//      only valid when the output is parsable Osty or JSON. For
+	//      diagnostic Span tolerance, combine `"text"` with
+	//      `normalize_diag = true`.
 	CodeGoldenAstParseError = "E0446"
 
 	// CodeGoldenSnapshotStale: `#[golden]` snapshot's `source-hash`

@@ -595,7 +595,7 @@ suitable for security review and migration tracking.
 | Mode | Reads | Discovers |
 |---|---|---|
 | `osty test --example` | `#[example(input=, output=, uses=)]` (§3.12) | input → output match |
-| `osty test --golden` | `#[golden(path, mode)]` (§11.5.2) | snapshot compare |
+| `osty test --golden` | `#[golden(path, mode, normalize_diag)]` (§11.5.2) | snapshot compare (2 modes + flag, cut F) |
 | `osty test --update-golden` | (same) | overwrites snapshot |
 | `osty test --doc` | `///` doc-test blocks (baseline since v0.5) | runs as test |
 
@@ -882,7 +882,7 @@ legacy-globals util.timestamp
 |---|---|---|
 | `osty test` | `#[test]` / `test_*` / `bench_*` (with `--bench`) | pass/fail summary |
 | `osty test --example` | `#[example(input=, output=, uses=)]` | per-example pass/fail |
-| `osty test --golden` | `#[golden(path, mode)]` | snapshot 비교 결과 |
+| `osty test --golden` | `#[golden(path, mode, normalize_diag)]` | snapshot 비교 결과 (2 modes + flag, cut F) |
 | `osty test --update-golden` | (same) | snapshot 갱신 + report |
 | `osty test --doc` | `///` doctest blocks | doc 안 example 실행 |
 | `osty test --bench` | `bench*` + `#[bench]` | benchmark 결과 |

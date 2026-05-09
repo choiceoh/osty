@@ -1378,7 +1378,7 @@ pub fn diagGoldenSnapshotMissing(fnName: String, path: String, start: Int, end: 
 }
 
 /// diagGoldenAstParseError reports a `#[golden(mode = \"ast\")]`
-/// function whose output is not valid Osty source.
+/// function whose output is not valid Osty source nor valid JSON.
 pub fn diagGoldenAstParseError(fnName: String, parseError: String, start: Int, end: Int) -> CheckDiagnostic {
     checkDiagWithNotes(
         checkCodeGoldenAstParseError(),
@@ -1386,8 +1386,8 @@ pub fn diagGoldenAstParseError(fnName: String, parseError: String, start: Int, e
         start,
         end,
         [
-            "LANG_SPEC §11.5.3: AST mode requires valid Osty source as output",
-            "hint: use `mode = \"text\"` (byte-exact) or `mode = \"json\"` if the output is not Osty source",
+            "LANG_SPEC §11.5.3 (cut F): AST mode requires valid Osty source or JSON as output",
+            "hint: use the default `mode = \"text\"` (byte-exact); for diagnostic Span tolerance combine `\"text\"` with `normalize_diag = true`",
         ],
     )
 }

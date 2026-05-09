@@ -1473,13 +1473,15 @@ Spec: v0.6 §11.5.2
 
 ### E0446 — `CodeGoldenAstParseError`
 
-CodeGoldenAstParseError: `#[golden(mode = "ast")]` is applied to a function whose output is not valid Osty source — reparse failed.
+CodeGoldenAstParseError: `#[golden(mode = "ast")]` is applied to a function whose output is not valid Osty source nor valid JSON — reparse failed.
 
-output is structured but not Osty source.
+pre-release amendment)
 
-Spec: v0.6 §11.5.3
+only valid when the output is parsable Osty or JSON. For diagnostic Span tolerance, combine `"text"` with `normalize_diag = true`.
 
-**Fix**: use `mode = "text"` (byte-exact) or `mode = "json"` if the
+Spec: v0.6 §11.5.3 (cut F: 4 modes → 2 modes + flag,
+
+**Fix**: use the default `mode = "text"` (byte-exact); `"ast"` is
 
 ### W0444 — `CodeGoldenSnapshotStale`
 
