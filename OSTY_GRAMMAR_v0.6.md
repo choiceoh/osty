@@ -162,8 +162,11 @@ MatchCompatArg ::= 'fallback' '=' IDENT          (* fallback 함수 이름 *)
 GoldenAnno   ::= '#[golden' '(' StringLit (',' GoldenArg)* ','? ')' ']'
 
 GoldenArg    ::= 'mode' '=' GoldenMode
-GoldenMode   ::= '"text"' | '"ast"' | '"json"' | '"diag"'
+              | 'normalize_diag' '=' BoolLit
+GoldenMode   ::= '"text"' | '"ast"'
                  (* 미지정 시 default = "text" *)
+                 (* "json" / "diag" 는 cut F (pre-release amendment) 로 제거 —
+                    JSON 비교는 "ast" 로 흡수, diag 정규화는 normalize_diag flag 사용 *)
 ```
 
 ### Annotation 위치 enforcement

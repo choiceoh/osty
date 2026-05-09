@@ -253,9 +253,11 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - 검사: non-deterministic capability 수신 금지, unordered iter 금지, pointer-id
   비교 금지, transitive callee 도 같거나 강한 scope 필수.
 - `#[pure]` 는 더 강함 — capability 수신 자체 금지.
-- `#[golden(path, mode=...)]` — snapshot 비교. mode `"text"` / `"ast"` / `"json"` /
-  `"diag"`. text mode 는 BOM 제거 + LF 정규화 후 비교. `#[golden]` 은 암묵
-  `#[reproducible(scope="target")]` — 위반 `E0444`.
+- `#[golden(path, mode=..., normalize_diag=...)]` — snapshot 비교. mode `"text"`
+  (default) / `"ast"` (cut F: 4→2 modes). text mode 는 BOM 제거 + LF 정규화 후 비교.
+  ast mode 는 Osty source 또는 JSON 으로 reparse — JSON 은 key 순서 무시. flag
+  `normalize_diag = true` 는 text mode 에 Span 차이 무시 정규화 추가. `#[golden]`
+  은 암묵 `#[reproducible(scope="target")]` — 위반 `E0444`.
 
 ## 12. Intent (G42)
 

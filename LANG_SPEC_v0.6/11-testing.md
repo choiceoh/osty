@@ -4,7 +4,7 @@ Osty v0.6 ships a built-in testing surface. Tests live alongside code
 in `_test.osty` files or as `#[test]`-annotated functions in
 production sources; the runner is `osty test`, with assertions
 provided by `std.testing`. The v0.6 surface adds: declarative golden
-tests via `#[golden]` (§11.5.2, G45) which reuse the v0.5 snapshot
+tests via `#[golden]` (§11.5.2, G45 — 2-mode form post cut F) which reuse the v0.5 snapshot
 on-disk format, and the `#[example]` annotation (§3.12, G42) which
 auto-checks `input → output` declarations under `osty test --example`.
 
@@ -347,29 +347,33 @@ fn testFormatBinaryOp() {
     testing.assertGolden(result)
 }
 
-#[golden("fixtures/diag_E0765.snap", mode = "ast")]
+#[golden("fixtures/diag_E0765.snap", normalize_diag = true)]
 fn testNumericNarrowingDiag() {
     let diag = checkSnippet("let x: Int8 = bigInt")
     testing.assertGolden(diag.toString())
 }
 ```
 
-**Modes.**
+**Modes.** Two modes only (cut F, pre-release amendment — formerly four).
 
 | Mode | Comparison |
 |---|---|
 | `"text"` *(default)* | Canonical text bytes: UTF-8 BOM removed, CRLF/CR normalized to LF, all other bytes including trailing newline preserved. |
-| `"ast"` | Reparse both sides as Osty source, compare normalised AST. Whitespace / comments / formatter idiosyncrasies are ignored. |
-| `"json"` | Parse as JSON, compare structurally (key order ignored). |
-| `"diag"` | Osty diagnostic format — same code/message comparable across `Span` deltas. |
+| `"ast"` | Reparse both sides as Osty source *or* JSON, compare normalised AST. Whitespace / comments / formatter idiosyncrasies are ignored. JSON inputs (output starting with `{` or `[`) take the structural-JSON path — key ordering is ignored. |
+
+**Flags.** Modifiers that apply on top of `mode`.
+
+| Flag | Effect |
+|---|---|
+| `normalize_diag = true` | Apply Osty diagnostic normalization to both sides before comparing. `Span` line/column shifts are ignored; code, message, and suggested-fix are preserved. Combinable with `mode = "text"` (default). Combination with `mode = "ast"` is `E0405` (annotation arg invalid). |
 
 **Reproducibility.** A `#[golden]` function is implicitly
 `#[reproducible(scope = "target")]` (§3.11). Calling non-deterministic
 capabilities or unordered iteration is `E0444`. AST mode applied to
-output that is not valid Osty source is `E0446`. Missing snapshot on
-first run is `E0445` (run `osty test --update-golden`). A snapshot's
-embedded `source-hash` header that disagrees with the function's
-current definition is `W0444`.
+output that is not valid Osty source *or* valid JSON is `E0446`.
+Missing snapshot on first run is `E0445` (run `osty test
+--update-golden`). A snapshot's embedded `source-hash` header that
+disagrees with the function's current definition is `W0444`.
 
 **Snapshot file format.**
 
@@ -395,19 +399,20 @@ bytes remain significant. `--update-golden` writes LF and no BOM.
 
 #### 11.5.3 Mode selection guide
 
-The four golden modes target different output shapes. Choose the
-strictest mode that the output actually demands:
+The two golden modes plus the `normalize_diag` flag cover the four
+canonical output shapes. Choose the strictest combination that the
+output actually demands:
 
-| Output shape | Recommended mode | Why |
+| Output shape | Recommended | Why |
 |---|---|---|
-| Free-form text (logs, error messages without span info) | `"text"` | Canonical text compare catches meaningful byte-level regressions |
-| Generated Osty source (formatter, codegen output) | `"ast"` | Whitespace / comment-only diffs ignored, semantic regressions caught |
-| Structured data exports (`osty context`, `osty doc --format=json`) | `"json"` | Key ordering / pretty-print noise ignored |
-| Diagnostic output (`osty check` with positions) | `"diag"` | Span column shifts ignored, code + message + suggested-fix preserved |
+| Free-form text (logs, error messages without span info) | `mode = "text"` | Canonical text compare catches meaningful byte-level regressions |
+| Generated Osty source (formatter, codegen output) | `mode = "ast"` | Whitespace / comment-only diffs ignored, semantic regressions caught |
+| Structured data exports (`osty context`, `osty doc --format=json`) | `mode = "ast"` | JSON input is auto-detected; structural compare ignores key ordering / pretty-print noise |
+| Diagnostic output (`osty check` with positions) | `mode = "text", normalize_diag = true` | Span column shifts ignored, code + message + suggested-fix preserved |
 
 Fallback rule: if uncertain, start with `"text"`. Loosen to `"ast"`
-or `"diag"` only when the strict mode produces noisy diffs that
-don't reflect real regressions.
+or add `normalize_diag = true` only when the strict mode produces
+noisy diffs that don't reflect real regressions.
 
 #### 11.5.4 Workflow for accepted golden updates
 
@@ -831,7 +836,7 @@ fn testFormatBinaryOp() {
     testing.assertGolden(result)
 }
 
-#[golden("fixtures/diag_E0765.snap", mode = "ast")]
+#[golden("fixtures/diag_E0765.snap", normalize_diag = true)]
 fn testNumericNarrowingDiag() {
     let diag = checkSnippet("let x: Int8 = bigInt")
     testing.assertGolden(diag.toString())
@@ -840,12 +845,18 @@ fn testNumericNarrowingDiag() {
 
 #### 11.12.2 Mode 별 비교 의미
 
+2 modes (cut F, pre-release amendment 로 4 → 2 단순화):
+
 | Mode | 비교 |
 |---|---|
 | `"text"` (default) | UTF-8 BOM 제거 + CRLF/CR→LF 정규화 후 byte 비교; trailing newline 은 보존 |
-| `"ast"` | reparse 후 AST 비교 (whitespace / 주석 무시) |
-| `"json"` | structural JSON 비교 (key 순서 무시) |
-| `"diag"` | Osty diagnostic format — Span 차이 무시, code/message 비교 |
+| `"ast"` | reparse 후 AST 비교 (whitespace / 주석 무시). 출력이 `{` / `[` 로 시작하면 JSON AST 로 파싱 — key 순서 무시. |
+
+추가 flag:
+
+| Flag | 효과 |
+|---|---|
+| `normalize_diag = true` | `"text"` mode 에 진단 정규화 적용. Span 컬럼/라인 차이 무시, code / message / suggested-fix 보존. `"ast"` 와 결합 시 `E0405`. |
 
 #### 11.12.3 Reproducibility 요구
 

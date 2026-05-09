@@ -1317,14 +1317,14 @@ fn testFormatBinaryOp() {
     testing.assertGolden(result)
 }
 
-#[golden("fixtures/diag_E0765.snap", mode = "ast")]
+#[golden("fixtures/diag_E0765.snap", normalize_diag = true)]
 fn testNumericNarrowingDiag() {
     let diag = checkSnippet("let x: Int8 = bigInt")
     testing.assertGolden(diag.toString())
 }
 ```
 
-**Mode**: `"text"` (default, byte-exact) / `"ast"` (reparse + AST 비교, whitespace 무시) / `"json"` (structural) / `"diag"` (Span-tolerant).
+**Mode** (cut F: 4 → 2 modes + flag, pre-release amendment): `"text"` (default, BOM 제거 + LF 정규화 후 byte 비교) / `"ast"` (reparse 후 AST 비교 — Osty source 또는 JSON 자동 감지, whitespace / key 순서 무시). 추가 flag `normalize_diag = true` 는 `"text"` mode 와 결합해 진단 Span 차이 무시.
 
 **`#[golden]` 함수는 자동 `#[reproducible(scope="target")]`** — non-deterministic 호출 시 `E0444`.
 
@@ -1341,7 +1341,7 @@ fn testNumericNarrowingDiag() {
 | **Intent** (C.5) | `#[purpose]`, `#[example]`, `#[fixture]` | public API / compiler internal |
 | **Reproducibility** (C.7) | `#[reproducible(scope=...)]` | 캐시 키 / 해시 / migration ID |
 | **Evolution** (C.9) | `#[stability]`, `#[since]`, `#[match_compat]` | public API surface |
-| **Golden** (C.10) | `#[golden(path, mode=)]` | 컴파일러 / formatter / docgen 자가 테스트 |
+| **Golden** (C.10) | `#[golden(path, mode=, normalize_diag=)]` | 컴파일러 / formatter / docgen 자가 테스트 |
 
 ---
 

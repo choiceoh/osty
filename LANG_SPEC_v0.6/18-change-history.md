@@ -97,8 +97,10 @@ p99_ms)]`. 각 신규 surface 는 §3 의 *v0.6 Annotation Extensions* 섹션
 
 - §7.5 — `#[error_contract(Variant when "...")]` concrete enum
   failure-mode catalog.
-- §11.5 — `#[golden(path, mode="text"|"ast"|"json"|"diag")]` AST-aware
-  snapshot. 함수는 암묵 `#[reproducible(scope="target")]`.
+- §11.5 — `#[golden(path, mode="text"|"ast", normalize_diag=…)]` AST-aware
+  snapshot (cut F: 4→2 modes + flag, pre-release amendment). ast mode 는
+  Osty source 또는 JSON 둘 다 받음. `normalize_diag` flag 가 진단 비교를 흡수.
+  함수는 암묵 `#[reproducible(scope="target")]`.
 - §13.4 / §13.9 — `osty context <symbol>` command and JSON output
   (LSP / AI agent 통합).
 - `osty publish` — manifest API surface diff. stable API breaking

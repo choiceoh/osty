@@ -87,7 +87,7 @@ in v0.6" for per-gap rationale.
 | `#[stability("level", until/since/remove)]` | **planned** (G44, Phase 4) | osty publish 게이트 |
 | `#[match_compat("X.Y", fallback=)]` | **planned** (G44, Phase 4) | non-silent fallback 강제 |
 | `osty publish` API surface diff | **planned** (G44, Phase 4) | major bump 강제 |
-| `#[golden("path", mode="text"|"ast")]` | **planned** (G45, Phase 3) | reproducible 결합 |
+| `#[golden("path", mode="text"|"ast", normalize_diag=…)]` | **planned** (G45, Phase 3) | reproducible 결합. cut F (pre-release amendment): 4 modes → 2 modes + `normalize_diag` flag. ast mode 는 Osty 또는 JSON 둘 다 흡수. |
 | `osty test --golden` / `--update-golden` | **planned** (G45, Phase 3) | |
 
 ## Migration path from v0.5

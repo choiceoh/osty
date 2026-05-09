@@ -716,7 +716,7 @@ fn testFormatBinaryOp() {
     testing.assertGolden(result)
 }
 
-#[golden("fixtures/diag_E0765.snap", mode = "ast")]
+#[golden("fixtures/diag_E0765.snap", normalize_diag = true)]
 fn testNumericNarrowingDiag() {
     let diag = checkSnippet("let x: Int8 = bigInt")
     testing.assertGolden(diag.toString())
@@ -731,12 +731,17 @@ fn testNumericNarrowingDiag() {
 
 #### §11.5.3 AST-aware diff
 
-`mode` 옵션:
+`mode` 옵션 — **2 modes only** (cut F, pre-release amendment 로 4 → 2 단순화):
 - `"text"` (default) — UTF-8 BOM 제거 + CRLF/CR→LF 정규화 후 byte 비교.
   trailing newline 은 보존
-- `"ast"` — reparse 후 AST 비교. **출력이 valid Osty source 일 때만** 사용 가능
-- `"json"` — JSON 으로 parse 후 structural 비교. key 순서 무시
-- `"diag"` — Osty diagnostic 출력 형식. `Span` 이 다른 두 진단이 같은 코드/메시지면 same
+- `"ast"` — reparse 후 AST 비교. **출력이 valid Osty source 또는 valid JSON
+  일 때만** 사용 가능. JSON 입력은 JSON AST 로 파싱되어 동일 비교 알고리즘
+  적용 — key 순서 차이는 무시.
+
+추가 flag:
+- `normalize_diag = true` — `"text"` mode 와 함께 사용. Osty diagnostic 출력
+  format 의 `Span` 컬럼/라인 차이를 무시 — 같은 code / message / suggested-fix
+  보존. mode 가 `"ast"` 와 함께 지정되면 `E0405` (annotation arg invalid).
 
 **AST mode 의 정확한 의미**:
 1. snapshot 의 텍스트와 함수 출력 텍스트를 각각 reparse
@@ -761,8 +766,9 @@ fn testNumericNarrowingDiag() {
 + BinaryOp(Sub, Var("x"), Var("y"))
 ```
 
-**`#[golden]` 함수의 출력이 valid Osty 가 아닐 때** `mode="ast"` 사용 시
-`E0446` (parse failure 시점에 fail).
+**`#[golden]` 함수의 출력이 valid Osty 또는 valid JSON 이 아닐 때**
+`mode="ast"` 사용 시 `E0446` (parse failure 시점에 fail). JSON 입력은 자동
+감지 (`{` / `[` 로 시작) — JSON AST 비교 경로로 진입.
 
 #### §11.5.4 Snapshot 파일 형식
 
@@ -791,6 +797,7 @@ fn add(x: Int, y: Int) -> Int { x + y }
 |---|---|
 | `E0444` | `#[golden]` 함수가 reproducible 검증 실패 |
 | `E0445` | `#[golden]` 의 snapshot 파일이 없음 (첫 실행 시 안내) |
+| `E0446` | `mode="ast"` 인 `#[golden]` 함수 출력이 valid Osty / JSON 으로 reparse 불가 |
 | `W0444` | `#[golden]` 의 snapshot 이 stale (수동 update 필요 안내) |
 
 ---
@@ -970,7 +977,7 @@ Phase 2 에서 *category-prefix 옵션* 도입 검토:
 | Range | 영역 | 신규 |
 |---|---|---|
 | `E0410–E0429` | Annotation/intent (G41, G42) | E0410, E0411, E0412, E0414, E0420, E0421, E0422, E0423, E0424, E0430, E0431, E0432, E0433 |
-| `E0440–E0449` | Golden / evolution (G44, G45) | E0444, E0445, E0450, E0451 |
+| `E0440–E0449` | Golden / evolution (G44, G45) | E0444, E0445, E0446, E0450, E0451 |
 | `E0780–E0799` | Capability / Reproducible (G36, G39) | E0780-E0789 |
 | `E0900–E0949` | Information flow (G37) | E0900, E0901, E0902, E0903 |
 | `E2100–E2149` | Publishing (G44) | E2100, E2101 |
