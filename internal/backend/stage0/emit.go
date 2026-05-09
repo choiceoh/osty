@@ -13615,6 +13615,109 @@ func genericStorageOnlyUnreachableExit(fn *mir.Function) (*mir.BasicBlock, bool)
 	return exit, exit != nil
 }
 
+type PayloadType struct {
+	LocalID    mir.LocalID
+	CallInstr  *mir.CallInstr
+	Instr      *mir.IntrinsicInstr
+	Kind       payloadKind
+}
+
+type payloadKind int
+
+const (
+	payloadNone payloadKind = iota
+	payloadLocal
+	payloadCall
+	payloadIntrinsic
+)
+
+func isRecoverableReturnShape(fn *mir.Function) bool {
+	if fn == nil {
+		return false
+	}
+	if fn.ReturnType == nil {
+		return false
+	}
+	switch fn.ReturnType.(type) {
+	case *ir.NamedType:
+		return true
+	default:
+		return false
+	}
+}
+
+func genericInferXSyntheticReturn(fn *mir.Function, mctx *moduleCtx, retType scalarType) (mir.BlockID, PayloadType, bool) {
+	if fn == nil || mctx == nil {
+		return 0, PayloadType{}, false
+	}
+	if !isRecoverableReturnShape(fn) {
+		return 0, PayloadType{}, false
+	}
+	exit, ok := genericStorageOnlyUnreachableExit(fn)
+	if !ok {
+		return 0, PayloadType{}, false
+	}
+	candidates := map[mir.LocalID]bool{}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		if _, unreachable := bb.Term.(*mir.UnreachableTerm); unreachable {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			ai, ok := instr.(*mir.AssignInstr)
+			if !ok || ai.Dest.HasProjections() {
+				continue
+			}
+			loc := lookupLocal(fn, ai.Dest.Local)
+			if loc == nil || !sameTypeString(loc.Type, fn.ReturnType) {
+				continue
+			}
+			if ai.Src != nil {
+				candidates[ai.Dest.Local] = true
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return 0, PayloadType{}, false
+	}
+	var selected mir.LocalID
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		if _, unreachable := bb.Term.(*mir.UnreachableTerm); unreachable {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			switch step := instr.(type) {
+			case *mir.AssignInstr:
+				if step.Dest.HasProjections() {
+					continue
+				}
+				if candidates[step.Dest.Local] {
+					if selected != 0 && selected != step.Dest.Local {
+						return 0, PayloadType{}, false
+					}
+					selected = step.Dest.Local
+				}
+			case *mir.CallInstr:
+				if step.Dest != nil && !step.Dest.HasProjections() && candidates[step.Dest.Local] {
+					if selected != 0 && selected != step.Dest.Local {
+						return 0, PayloadType{}, false
+					}
+					selected = step.Dest.Local
+				}
+			}
+		}
+	}
+	if selected == 0 {
+		return 0, PayloadType{}, false
+	}
+	return exit.ID, PayloadType{LocalID: selected, Kind: payloadLocal}, true
+}
+
 func isNamedListType(t mir.Type) bool {
 	named, ok := t.(*ir.NamedType)
 	return ok && named != nil && named.Name == "List"
