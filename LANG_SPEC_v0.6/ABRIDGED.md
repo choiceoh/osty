@@ -280,8 +280,9 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
   새 variant 추가 시 자동 fallback. silent fallthrough 금지 (`E0450`) — `fallback`
   또는 `unsafe_silent = true` 명시 필수 (후자는 `W0902`).
 - `#[sealed_construct(name)]` — struct 의 외부 literal 생성 차단. `name` 이 가리키는
-  constructor (또는 `#[trusted_construct]` stdlib helper) 만 생성 가능.
-  `#[test_construct]` 는 test profile 에서만 우회.
+  constructor 만 생성 가능. Escape 는 같은 어노테이션의 `escape=` 옵션:
+  `#[sealed_construct(escape=trusted, reason="...")]` (stdlib/internal),
+  `#[sealed_construct(escape=test)]` (test profile only).
 - v0.6 stdlib sealed types: `Email`, `Url`, `Path`, `SqlIdent`, `Duration`,
   `Uuid`. `--legacy-construct` 호환 모드 v0.6.x 한정.
 
@@ -293,7 +294,7 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 | **Capability (G36)** | `#[ambient]`, `#[reproducible_capability]` | §9 |
 | **Information flow (G37)** | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]`, `#[taint_field]` | §10 |
 | **Spec / intent (G38, G42)** | `#[spec]`, `#[purpose]`, `#[example]`, `#[fixture]` | §12 |
-| **Construction (G40)** | `#[sealed_construct]`, `#[trusted_construct]`, `#[test_construct]` | §13 |
+| **Construction (G40)** | `#[sealed_construct]` (escape=trusted/test 옵션 통합) | §13 |
 | **Error (G41)** | `#[error_contract]` | §8 |
 | **Determinism (G39)** | `#[reproducible]` | §11 |
 | **Evolution (G44)** | `#[since]`, `#[stability]`, `#[match_compat]` | §13 |
@@ -347,8 +348,8 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - `where` clause; put constraints directly on type parameters.
 - expression annotation or `use` annotation.
 - v0.6: 라이브러리 함수에 `#[ambient]` 금지. capability parameter 명시.
-- v0.6: 사용자 코드에 `#[trusted_construct]` / `#[trusted_declassify]` 금지
-  (stdlib 또는 audit-marked 코드만).
+- v0.6: 사용자 코드에 `#[sealed_construct(escape=trusted, ...)]` /
+  `#[trusted_declassify]` 금지 (stdlib 또는 audit-marked 코드만).
 - v0.6: stdlib sealed types (`Email` / `Url` / `Path` / `SqlIdent` / `Duration` /
   `Uuid`) 의 외부 struct literal 금지 — `Type.parse(...)` 사용.
 - v0.6: 전역 effect 함수 (`time.now()` / `random.next()` 등) 미사용 권장.

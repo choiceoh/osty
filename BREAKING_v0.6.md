@@ -167,7 +167,7 @@ fn handler(req: HttpRequest, db: Db) -> Response {
 #[ambient]            #[reproducible_capability]
 #[taint]              #[sanitizes]              #[requires]              #[trusted_declassify]              #[taint_field]
 #[spec]               #[purpose]                #[example]               #[fixture]
-#[sealed_construct]   #[trusted_construct]      #[test_construct]
+#[sealed_construct]   (escape=trusted/test 옵션 통합 — pre-release amendment, cut H)
 #[error_contract]
 #[reproducible]
 #[since]              #[stability]              #[match_compat]

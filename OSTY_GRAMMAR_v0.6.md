@@ -150,10 +150,15 @@ ReproScope    ::= '"run"' | '"target"' | '"portable"'
 ### G40 — sealed construct
 
 ```ebnf
-SealedAnno    ::= '#[sealed_construct' '(' IDENT ')' ']'
-                  (* IDENT 는 같은 type 의 method 이름 *)
-TrustedConstAnno ::= '#[trusted_construct' '(' 'reason' '=' StringLit ')' ']'
-TestConstAnno    ::= '#[test_construct' ']'
+SealedAnno     ::= '#[sealed_construct' '(' SealedArg ')' ']'
+SealedArg      ::= IDENT                     (* constructor name on host struct *)
+                 | 'escape' '=' EscapeMode (',' 'reason' '=' StringLit)?
+EscapeMode     ::= 'trusted' | 'test'
+                  (* `escape=trusted` requires `reason="..."` literal;
+                     `escape=test` takes no further argument.
+                     Pre-release amendment (cut H): the prior separate
+                     TrustedConstAnno / TestConstAnno productions are folded
+                     into SealedAnno via the `escape=` keyword. *)
 ```
 
 ### G41 — error contract

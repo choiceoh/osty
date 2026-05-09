@@ -79,9 +79,7 @@ rationale.
 | Item | Status | Notes |
 |---|---|---|
 | `#[reproducible(scope = "run"|"target"|"portable")]` | **partial** (G39, Phase 3) | active signature gate now rejects direct non-deterministic capability parameters on `#[reproducible]` (`E0784`) and all capability parameters on `#[pure]` (`E0785`). Scope hierarchy / transitive callee checks remain planned. |
-| `#[sealed_construct(name)]` | **planned** (G40, Phase 4) | parse-don't-validate primitive |
-| `#[trusted_construct(reason)]` | **planned** (G40, Phase 4) | stdlib escape |
-| `#[test_construct]` | **planned** (G40, Phase 4) | test profile escape |
+| `#[sealed_construct(name)]` + `escape=trusted/test` opt | **planned** (G40, Phase 4) | parse-don't-validate primitive; pre-release amendment (cut H) collapsed `#[trusted_construct]` / `#[test_construct]` into the same annotation's `escape=` keyword |
 | `#[error_contract(Variant when "...")]` | **planned** (G41, Phase 4) | failure mode catalog |
 
 ### Evolution / Testing / Performance

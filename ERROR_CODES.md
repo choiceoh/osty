@@ -1153,7 +1153,7 @@ Spec: v0.6 A13
 
 ### E0780 — `CodeAmbientWrongSite`
 
-CodeAmbientWrongSite: `#[ambient(...)]` is applied to a function that is not at a permitted boundary. Permitted: scripts, `fn main`, `#[test]` / `#[bench]` / `bench*` / `test_*` functions. Library functions must receive capabilities as explicit parameters.
+CodeAmbientWrongSite: `#[ambient(...)]` is applied to a function that is not at a permitted boundary. Permitted: scripts, `fn main`, `#[test]` / `#[bench]` / `bench*` / `test*` functions. Library functions must receive capabilities as explicit parameters.
 
 the function to a permitted boundary.
 
@@ -1435,9 +1435,9 @@ Spec: v0.6 §3.4.5.2
 
 ### E0421 — `CodeTestConstructInProduction`
 
-CodeTestConstructInProduction: a function carrying `#[test_construct]` is reachable from a non-test build. The annotation only relaxes sealed-construct rules in the test profile.
+CodeTestConstructInProduction: a function carrying `#[sealed_construct(escape=test)]` is reachable from a non-test build. The escape only relaxes sealed-construct rules in the test profile.
 
-`#[cfg(test)]` paths, or drop `#[test_construct]`.
+`#[cfg(test)]` paths, or drop the `escape=test` option.
 
 Spec: v0.6 §3.4.5.5
 
@@ -1445,11 +1445,11 @@ Spec: v0.6 §3.4.5.5
 
 ### E0422 — `CodeTrustedConstructInUserPackage`
 
-CodeTrustedConstructInUserPackage: `#[trusted_construct(...)]` is applied in a user package. The annotation is reserved for stdlib / internal packages where sealed constructors cannot cover every necessary path (e.g., binary deserialisers).
+CodeTrustedConstructInUserPackage: `#[sealed_construct(escape=trusted, ...)]` is applied in a user package. The escape is reserved for stdlib / internal packages where sealed constructors cannot cover every necessary path (e.g., binary deserialisers).
 
 code into `std.*` if it genuinely needs the bypass.
 
-Spec: v0.6 §3.4.5.6
+Spec: v0.6 §3.4.5.5
 
 **Fix**: route through the public sealed constructor, or move the
 
@@ -1460,6 +1460,14 @@ CodeSealedConstructorNotMethod: `#[sealed_construct(name)]` names an identifier 
 Spec: v0.6 §3.4.5
 
 **Fix**: name an existing constructor method, or define one.
+
+### E0424 — `CodeSealedConstructEscapeMissingReason`
+
+CodeSealedConstructEscapeMissingReason: `#[sealed_construct(escape=trusted, ...)]` is missing the required `reason="..."` literal. The reason is captured in `osty audit --sealed-construct-escape` output.
+
+Spec: v0.6 §3.4.5.5
+
+**Fix**: add `reason = "<short rationale>"` to the annotation.
 
 ---
 

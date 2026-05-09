@@ -1204,6 +1204,28 @@ impl Email {
 - generic deserialize 우회 (`#[json(constructor)]` 없으면)
 - test 환경 우회 (production 빌드 — `E0421`)
 
+**Escape — 같은 어노테이션의 `escape=` 옵션** (pre-release amendment, cut H):
+
+```osty
+// Stdlib/internal escape — reason 필수, 사용자 패키지에서 E0422
+#[sealed_construct(escape=trusted, reason="legacy migration")]
+fn rawEmailFromLegacyDb(s: String) -> Email {
+    Email { local: "...", domain: "..." }
+}
+
+// Test profile only — production 빌드 reachable 시 E0421
+#[sealed_construct(escape=test)]
+fn buildFakeEmail(local: String, domain: String) -> Email {
+    Email { local, domain }
+}
+```
+
+`escape` 값은 정확히 두 가지 (`trusted` / `test`). 이전 `#[trusted_construct]` /
+`#[test_construct]` 별개 어노테이션은 `escape=` 키워드로 통합됨 — audit 검색은
+`grep -r "sealed_construct(escape="` 으로 동일 효과. `osty audit
+--sealed-construct-escape` (alias `--trusted-construct`) 가 모든 escape 사이트
+enumerate.
+
 **Stdlib v0.6 baseline sealed**: `Email`, `Url`, `Path`, `SqlIdent`, `Duration`, `Uuid`. 사용자 코드는 항상 `Type.parse(...)` 경유.
 
 ## C.4 Error contract (G41, §7.5)

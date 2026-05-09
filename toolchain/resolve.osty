@@ -2664,10 +2664,10 @@ fn srAnnotAllowedTargets(name: String) -> Int {
     if name == "spec" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
     // v0.6 G39 — Reproducibility (§3.11).
     if name == "reproducible" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    // v0.6 G40 — Sealed construction (§3.4.5).
-    if name == "sealed_construct" { return srAnnotTargetTopLevel() }
-    if name == "trusted_construct" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
-    if name == "test_construct" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
+    // v0.6 G40 — Sealed construction (§3.4.5). Pre-release amendment
+    // (cut H) folded `#[trusted_construct]` / `#[test_construct]` into
+    // `#[sealed_construct(escape=trusted/test)]`.
+    if name == "sealed_construct" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
     // v0.6 G41 — Error contract (§7.5).
     if name == "error_contract" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
     // v0.6 G42 — Structured intent (§3.12).
@@ -3836,10 +3836,9 @@ fn srAnnotationNameList() -> List<String> {
         // v0.6 G38 / G39 — Spec link / Reproducibility.
         "spec",
         "reproducible",
-        // v0.6 G40 — Sealed construction.
+        // v0.6 G40 — Sealed construction. (escape=trusted/test fold —
+        // pre-release amendment cut H.)
         "sealed_construct",
-        "trusted_construct",
-        "test_construct",
         // v0.6 G41 — Error contract.
         "error_contract",
         // v0.6 G42 — Structured intent.

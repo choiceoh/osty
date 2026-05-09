@@ -326,7 +326,7 @@ audit. Each escape is enumerable:
 | Subcommand | Sites | Annotation / spec |
 |---|---|---|
 | `osty audit --trusted-declassify` | FFI / Go-side data drop | `#[trusted_declassify(reason)]` (§21.7) |
-| `osty audit --trusted-construct` | sealed-struct bypass | `#[trusted_construct(reason)]` (§3.4.5.6) |
+| `osty audit --sealed-construct-escape` | sealed-struct bypass (alias `--trusted-construct`) | `#[sealed_construct(escape=trusted, reason="...")]` (§3.4.5.5) |
 | `osty audit --match-compat` | enum-shape pin | `#[match_compat(... unsafe_silent = true)]` (§3.14.4) |
 | `osty audit --legacy-globals` | pre-v0.6 global effect calls (e.g., `time.now()`, `random.next()`) | `--legacy-globals` flag (§7.1.1, v0.6.x only) |
 | `osty audit --all` | all of the above |  |
@@ -722,8 +722,7 @@ seed 로 reproducer 생성 가능.
 | `#[ambient]` | | ✓ enforce | | | | |
 | `#[taint]` / `#[sanitizes]` | | ✓ enforce (Phase 5) | | ✓ JSON | ✓ surface diff | |
 | `#[trusted_declassify]` | | | | | | ✓ enumerate |
-| `#[trusted_construct]` | | | | | | ✓ enumerate |
-| `#[sealed_construct]` | | ✓ enforce | | | ✓ surface diff | |
+| `#[sealed_construct]` | | ✓ enforce | | | ✓ surface diff | ✓ enumerate (escape=trusted/test sites) |
 
 ### 13.15 Forward compatibility
 

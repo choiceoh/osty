@@ -422,12 +422,33 @@ when applied to a sealed struct from outside the named constructor:
 3. Direct field mutation (when the struct has `mut` fields)
 4. Generic deserialise / FFI default construction (must route through
    the constructor — `#[json(constructor = parse)]` registers the path)
-5. Test helpers in production builds (use `#[test_construct]` to opt
-   into a test-only escape — production reachability is `E0421`)
+5. Test helpers in production builds (use
+   `#[sealed_construct(escape=test)]` to opt into a test-only escape —
+   production reachability is `E0421`)
 
-**Stdlib escape: `#[trusted_construct(reason = "...")]`.** Restricted
-to `std.*` and toolchain-internal packages (`E0422` from user code). All
-sites are enumerated by `osty audit --trusted-construct`.
+**Escapes via `escape=` keyword.** The same annotation carries two
+explicit escapes — no separate annotation introduced.
+
+```osty
+// Test profile only — production-reachable use is E0421
+#[sealed_construct(escape=test)]
+fn buildTestEmail(local: String, domain: String) -> Email {
+    Email { local, domain }
+}
+
+// Stdlib / toolchain-internal only — `reason="..."` literal required;
+// user-package use is E0422
+#[sealed_construct(escape=trusted, reason = "byte-level json deserializer")]
+fn jsonDecodeEmail(bytes: Bytes) -> Email? {
+    Email { local: "...", domain: "..." }
+}
+```
+
+`escape` accepts exactly two values: `test` and `trusted`. Both opt the
+host function out of constraints (1)–(4) above; the environment gate
+(test profile / stdlib visibility) still applies. All `escape=trusted`
+sites are enumerated by `osty audit --sealed-construct-escape` (legacy
+alias `--trusted-construct` retained).
 
 ### 3.5 Enums
 

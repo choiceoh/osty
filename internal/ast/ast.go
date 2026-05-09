@@ -272,10 +272,12 @@ var annotationRules = map[string]AnnotationTarget{
 	// asserts environment-independence; checker enforces in Phase 3.
 	"reproducible": TargetTopLevelDecl | TargetMethod,
 
-	// v0.6 G40 — Sealed construction (§3.4.5).
-	"sealed_construct":  TargetTopLevelDecl,
-	"trusted_construct": TargetTopLevelDecl | TargetMethod,
-	"test_construct":    TargetTopLevelDecl | TargetMethod,
+	// v0.6 G40 — Sealed construction (§3.4.5). Pre-release amendment
+	// (cut H) folded `#[trusted_construct]` / `#[test_construct]` into
+	// `#[sealed_construct(escape=trusted/test)]`. The annotation is
+	// legal on top-level structs (the `name` form) and on top-level
+	// fns / methods (the `escape=` form).
+	"sealed_construct": TargetTopLevelDecl | TargetMethod,
 
 	// v0.6 G41 — Error contract (§7.5). Catalogues failure modes.
 	"error_contract": TargetTopLevelDecl | TargetMethod,

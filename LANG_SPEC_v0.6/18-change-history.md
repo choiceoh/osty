@@ -54,7 +54,9 @@ nominal `struct` 또는 tuple 로 표현한다.
   단계의 acceptable break).
 - *Contextual keyword + 4*: `spec`, `example`, `law`, `invariant`
   (G43 — spec block 컨텍스트만). `forall` 은 v1 (Phase 5) 단계.
-- *Fixed annotation set*: 11 → 31 (+20 신규).
+- *Fixed annotation set*: 11 → 29 (+18 신규; pre-release amendment cut H
+  collapsed `#[trusted_construct]` / `#[test_construct]` into
+  `#[sealed_construct(escape=trusted/test)]`).
 - *EBNF productions*: 191 → 199 (+8). 새 grammar surface 는 §3.13
   spec block 과 parameter 위치 annotation 두 곳.
 

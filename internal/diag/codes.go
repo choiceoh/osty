@@ -1319,21 +1319,22 @@ const (
 	CodeSealedExternalLiteral = "E0420"
 
 	// CodeTestConstructInProduction: a function carrying
-	// `#[test_construct]` is reachable from a non-test build.
-	// The annotation only relaxes sealed-construct rules in the test
-	// profile.
+	// `#[sealed_construct(escape=test)]` is reachable from a non-test
+	// build. The escape only relaxes sealed-construct rules in the
+	// test profile.
 	//
 	// Spec: v0.6 §3.4.5.5
 	// Fix: ensure the function is only called from `#[test]` or
-	//      `#[cfg(test)]` paths, or drop `#[test_construct]`.
+	//      `#[cfg(test)]` paths, or drop the `escape=test` option.
 	CodeTestConstructInProduction = "E0421"
 
-	// CodeTrustedConstructInUserPackage: `#[trusted_construct(...)]`
-	// is applied in a user package. The annotation is reserved for
-	// stdlib / internal packages where sealed constructors cannot
-	// cover every necessary path (e.g., binary deserialisers).
+	// CodeTrustedConstructInUserPackage:
+	// `#[sealed_construct(escape=trusted, ...)]` is applied in a user
+	// package. The escape is reserved for stdlib / internal packages
+	// where sealed constructors cannot cover every necessary path
+	// (e.g., binary deserialisers).
 	//
-	// Spec: v0.6 §3.4.5.6
+	// Spec: v0.6 §3.4.5.5
 	// Fix: route through the public sealed constructor, or move the
 	//      code into `std.*` if it genuinely needs the bypass.
 	CodeTrustedConstructInUserPackage = "E0422"
@@ -1345,6 +1346,15 @@ const (
 	// Spec: v0.6 §3.4.5
 	// Fix: name an existing constructor method, or define one.
 	CodeSealedConstructorNotMethod = "E0423"
+
+	// CodeSealedConstructEscapeMissingReason:
+	// `#[sealed_construct(escape=trusted, ...)]` is missing the
+	// required `reason="..."` literal. The reason is captured in
+	// `osty audit --sealed-construct-escape` output.
+	//
+	// Spec: v0.6 §3.4.5.5
+	// Fix: add `reason = "<short rationale>"` to the annotation.
+	CodeSealedConstructEscapeMissingReason = "E0424"
 
 	// G42 — Structured intent (§3.12)
 

@@ -231,7 +231,7 @@ impl Email {
 4. **Generic deserialize / FFI / default 생성** — `json.parse::<Email>(...)` 는
    `parse` constructor 를 *경유*해야 함 (§3.4.5.4 참조)
 5. **Test helper 우회** — `#[test]` 함수 안에서도 동일 규칙 (예외는
-   `#[test_construct]`, §3.4.5.5)
+   `#[sealed_construct(escape=test)]`, §3.4.5.5)
 
 #### §3.4.5.3 허용되는 경로
 
@@ -242,7 +242,8 @@ impl Email {
 - `..self` 가 아닌 *내부 spread* (같은 method 안에서 `Self { ..s, x: 1 }` 형태) —
   단 `s` 가 같은 sealed struct 의 instance여야 하고, *해당 method 가 sealed
   constructor 로 등록*돼야 함
-- `#[trusted_construct]` 어노테이션이 붙은 stdlib/internal 함수 (§3.4.5.6)
+- `#[sealed_construct(escape=trusted, reason="...")]` 어노테이션이 붙은
+  stdlib/internal 함수 (§3.4.5.6)
 
 #### §3.4.5.4 Generic 경로 (json / FFI 등)
 
@@ -258,36 +259,50 @@ impl Email {
 pub struct Email { local: String, domain: String }
 ```
 
-#### §3.4.5.5 Test 환경
+#### §3.4.5.5 Escape — 같은 어노테이션의 `escape=` 옵션
+
+`#[sealed_construct]` 는 두 종류의 *명시적 escape* 를 같은 어노테이션의
+`escape=` 키워드로 받는다 — 별개 어노테이션 추가 없이 surface 를 유지.
 
 ```osty
-#[test_construct]    // test profile 에서만 sealed 우회 가능
+#[sealed_construct(parse)]
+pub struct Email { local: String, domain: String }
+
+// (a) Test profile 전용 — production 빌드에서 컴파일 거부
+#[sealed_construct(escape=test)]
 fn buildTestEmail(local: String, domain: String) -> Email {
     Email { local, domain }
 }
+
+// (b) Stdlib/internal 전용 — reason 필수, 사용자 패키지에서 거부
+#[sealed_construct(escape=trusted, reason="byte-level json deserializer")]
+fn jsonDecodeEmail(bytes: Bytes) -> Email? {
+    Email { local: "...", domain: "..." }
+}
 ```
 
-`#[test_construct]` 함수는 production 빌드에서 컴파일 거부 (`E0421`).
-Test 환경 (`osty test`, `#[cfg(test)]` 활성) 에서만 sealed 제약 우회.
+`escape` 값은 정확히 두 가지: `test` / `trusted`.
 
-#### §3.4.5.6 Stdlib trusted constructor
+- `escape=test` — `osty test`, `#[cfg(test)]` 활성 환경에서만 sealed 우회.
+  Production 빌드에서 reachable 시 `E0421`.
+- `escape=trusted` — `std.*` 와 toolchain-internal 패키지에서만 허용 (사용자
+  패키지 사용 시 `E0422`). `reason="..."` literal 필수. `osty audit
+  --sealed-construct-escape` 로 모든 사이트 enumerate (구 `--trusted-construct`
+  alias 유지).
 
-```osty
-#[trusted_construct(reason = "byte-level json deserializer")]
-fn jsonDecodeEmail(bytes: Bytes) -> Email? { ... }
-```
+`escape=trusted` / `escape=test` 가 붙은 함수 본문 내부 `Email { ... }` literal /
+`Email { ..existing, ... }` spread 는 §3.4.5.2 의 1–4 차단을 우회한다 — 단, escape
+유형의 환경 게이트는 그대로 적용 (test profile / stdlib visibility).
 
-`#[trusted_construct]` 는 stdlib/internal 패키지에서만 허용 (사용자 코드 사용 시
-`E0422`). `osty audit --trusted-construct` 로 enumerate.
-
-#### §3.4.5.7 진단 코드
+#### §3.4.5.6 진단 코드
 
 | 코드 | 의미 |
 |---|---|
 | `E0420` | `#[sealed_construct]` struct 의 외부 literal 생성 |
-| `E0421` | `#[test_construct]` 가 production 빌드에서 사용 |
-| `E0422` | `#[trusted_construct]` 가 사용자 패키지에서 사용 |
+| `E0421` | `#[sealed_construct(escape=test)]` 가 production 빌드에서 사용 |
+| `E0422` | `#[sealed_construct(escape=trusted)]` 가 사용자 패키지에서 사용 |
 | `E0423` | `#[sealed_construct(name)]` 의 name 이 method 가 아님 |
+| `E0424` | `#[sealed_construct(escape=trusted)]` 가 `reason="..."` 누락 |
 
 ---
 
@@ -1180,16 +1195,16 @@ ParamDecl      ::= Annotation* Pattern ':' Annotation* Type ('=' DefaultExpr)?
 |---|---:|---:|---:|
 | Reserved keywords | 18 | 19 | +1 (`while` — G49) |
 | Contextual keywords | 10 | 14 | +4 (`spec`, `example`, `law`, `invariant`; `forall` 은 v1 단계) |
-| Fixed annotation set | 11 | 31 | +20 |
+| Fixed annotation set | 11 | 29 | +18 |
 | EBNF productions | 191 | 199 | +8 |
 | Lexer token classes | 36 | 36 | 0 |
 
-신규 어노테이션 20:
+신규 어노테이션 18:
 
 | Capability (§20) | `#[ambient]`, `#[reproducible_capability]` |
 | Information flow (§21) | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]`, `#[taint_field]` |
 | Spec / intent | `#[spec]`, `#[purpose]`, `#[example]`, `#[fixture]` |
-| Construction | `#[sealed_construct]`, `#[trusted_construct]`, `#[test_construct]` |
+| Construction | `#[sealed_construct]` (escape=trusted/test 옵션 통합 — pre-release amendment, cut H) |
 | Error | `#[error_contract]` |
 | Determinism | `#[reproducible]` |
 | Evolution | `#[since]`, `#[stability]`, `#[match_compat]` |
@@ -1197,7 +1212,7 @@ ParamDecl      ::= Annotation* Pattern ':' Annotation* Type ('=' DefaultExpr)?
 
 ## 5.1 Annotation namespace (proposal — Phase 2)
 
-20 개 신규 + 기존 11 개 = 31 개 어노테이션은 namespace 없는 flat catalog.
+18 개 신규 + 기존 11 개 = 29 개 어노테이션은 namespace 없는 flat catalog.
 Phase 2 에서 *category-prefix 옵션* 도입 검토:
 
 ```osty
@@ -1533,9 +1548,7 @@ bodies"). interface 는 별도 declaration. 아래 표는 그 기준.
 | `#[reproducible]` | ✓ | | | | | | ✓ | |
 | `#[reproducible_capability]` | | | | | | | | ✓ |
 | `#[spec]` | ✓ | ✓ | ✓ | | | | ✓ | ✓ |
-| `#[sealed_construct]` | | ✓ | | | | | | |
-| `#[trusted_construct]` | ✓ | | | | | | ✓ | |
-| `#[test_construct]` | ✓ | | | | | | ✓ | |
+| `#[sealed_construct]` | ✓ (escape=trusted/test) | ✓ (sealed) | | | | | ✓ (escape=trusted/test) | |
 | `#[error_contract]` | ✓ | | | | | | ✓ | |
 | `#[purpose]` | ✓ | ✓ | ✓ | | | | ✓ | ✓ |
 | `#[example]` | ✓ | | | | | | ✓ | |

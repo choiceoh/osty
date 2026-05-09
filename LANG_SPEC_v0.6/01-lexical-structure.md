@@ -424,7 +424,7 @@ v0.5 의 10 contextual keyword (`self`, `Self`, `true`, `false`,
 
 #### 1.10.3 Annotation set 변경
 
-v0.5 의 11 fixed annotation 위에 v0.6 은 20 신규 annotation 추가.
+v0.5 의 11 fixed annotation 위에 v0.6 은 18 신규 annotation 추가.
 모든 v0.6 annotation 의 합법 위치 표는 `00-revision.md §7.6` 가
 권위.
 
@@ -434,7 +434,7 @@ v0.5 의 11 fixed annotation 위에 v0.6 은 20 신규 annotation 추가.
 | Information flow (G37) | `#[taint]`, `#[sanitizes]`, `#[trusted_declassify]`, `#[taint_field]` (parameter `#[requires]` 는 v0.5 reuse) |
 | Spec link (G38) | `#[spec]` |
 | Reproducibility (G39) | `#[reproducible]` |
-| Sealed construct (G40) | `#[sealed_construct]`, `#[trusted_construct]`, `#[test_construct]` |
+| Sealed construct (G40) | `#[sealed_construct]` (escape=trusted/test 옵션 통합 — pre-release amendment, cut H) |
 | Error contract (G41) | `#[error_contract]` |
 | Structured intent (G42) | `#[purpose]`, `#[example]`, `#[fixture]` |
 | API evolution (G44) | `#[since]`, `#[stability]`, `#[match_compat]` |

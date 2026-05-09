@@ -185,6 +185,7 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
     if code == "E0421" { return FamilyDeclaration }
     if code == "E0422" { return FamilyDeclaration }
     if code == "E0423" { return FamilyDeclaration }
+    if code == "E0424" { return FamilyDeclaration }
     // G42 — Structured intent (§3.12)
     if code == "E0430" { return FamilyAnnotation }
     if code == "E0431" { return FamilyAnnotation }
