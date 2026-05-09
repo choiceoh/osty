@@ -49,6 +49,12 @@ var ErrUnsupported = errors.New("stage0: MIR shape outside bootstrap subset")
 // types / local reassignment / forward references) declines so the
 // next stage0 phase can pick the case up. Surface drift is held back
 // by the stage0 coverage gate planned for P3.
+//
+//   - P21 — single-block thin-wrapper direct call → aggregate return:
+//     `fn wrap(a: T1, ...) -> Struct { innerFn(a, ...) }`. Exactly one
+//     CallInstr writing the return local; return type must be a struct or
+//     tuple (classifyAggregateReturnType). All params scalar. The callee
+//     prototype is declared if it is not a locally-defined symbol.
 func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 	if module == nil {
 		return nil, fmt.Errorf("stage0: nil MIR module")
@@ -367,6 +373,9 @@ func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error
 	}
 	if pat, ok := matchOrChainAggregate(fn, mctx); ok {
 		return emitOrChainAggregate(out, fn, pat, mctx)
+	}
+	if pat, ok := matchDirectAggregateCall(fn, mctx); ok {
+		return emitDirectAggregateCall(out, fn, pat, mctx)
 	}
 	if pat, ok := matchWhileLoopReturn(fn, mctx); ok {
 		return emitWhileLoopReturn(out, fn, pat)
@@ -4835,6 +4844,187 @@ func emitOrChainAggregate(out *strings.Builder, fn *mir.Function, pat orChainPat
 	}
 	out.WriteString("\n")
 	fmt.Fprintf(out, "  ret %%%s %%retval\n", pat.typeName)
+	out.WriteString("}\n\n")
+	return nil
+}
+
+// ---- P21: blocks=1 multi-param direct call → aggregate return ----
+//
+// stage0 P21 covers single-block thin-wrapper functions whose body is
+// exactly one direct call that returns a struct or tuple value:
+//
+//	fn wrap(a: T1, b: T2, ...) -> Struct { innerFn(a, b, ...) }
+//
+// Constraints:
+//   - exactly 1 block, terminated with ReturnTerm
+//   - return type is struct or tuple (classifyAggregateReturnType)
+//   - all params are scalar (Int / Bool / String / opaque-ptr)
+//   - exactly 1 non-storage instruction: CallInstr dest=ReturnLocal
+//   - callee is a direct FnRef (not indirect / intrinsic)
+//   - every call arg resolves to a scalar operand
+
+type directAggregateCallPattern struct {
+	typeName   string
+	fieldTypes []scalarType
+	paramNames []string
+	paramTypes []scalarType
+	callSymbol string
+	callArgs   []callArg
+	callPrelude string // multi-line LLVM prelude (e.g. field-read extracts)
+}
+
+func matchDirectAggregateCall(fn *mir.Function, mctx *moduleCtx) (directAggregateCallPattern, bool) {
+	pat := directAggregateCallPattern{}
+
+	// Return type must be aggregate (struct or tuple).
+	typeName, fieldTypes, ok := classifyAggregateReturnType(fn.ReturnType, mctx)
+	if !ok {
+		return pat, false
+	}
+	pat.typeName = typeName
+	pat.fieldTypes = fieldTypes
+
+	// Single block with ReturnTerm.
+	bb, ok := singleBlockReturning(fn)
+	if !ok {
+		return pat, false
+	}
+
+	// Params: all scalar, up to 8.
+	if len(fn.Params) > 8 {
+		return pat, false
+	}
+	pat.paramNames = make([]string, len(fn.Params))
+	pat.paramTypes = make([]scalarType, len(fn.Params))
+	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	bindings := make(map[mir.LocalID]localBinding, len(fn.Params))
+	for i, pid := range fn.Params {
+		loc := lookupLocal(fn, pid)
+		if loc == nil || !loc.IsParam {
+			return pat, false
+		}
+		pt := mctx.scalarFromType(loc.Type, true)
+		if pt == scalarUnknown {
+			return pat, false
+		}
+		pat.paramTypes[i] = pt
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+	}
+	disambiguateParamNames(pat.paramNames)
+	for i, pid := range fn.Params {
+		bindings[pid] = localBinding{expr: "%" + pat.paramNames[i], ty: pat.paramTypes[i], defined: true}
+	}
+
+	// Exactly one non-storage instruction: CallInstr.
+	var callInstr *mir.CallInstr
+	for _, instr := range bb.Instrs {
+		switch step := instr.(type) {
+		case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
+			// Skip storage-liveness markers; they carry no LLVM semantics.
+			continue
+		case *mir.CallInstr:
+			if callInstr != nil {
+				return pat, false // more than one call
+			}
+			callInstr = step
+		default:
+			return pat, false
+		}
+	}
+	if callInstr == nil {
+		return pat, false
+	}
+
+	// Dest must be the return local (no projections).
+	if callInstr.Dest == nil || callInstr.Dest.Local != fn.ReturnLocal || callInstr.Dest.HasProjections() {
+		return pat, false
+	}
+
+	// Callee must be a direct FnRef.
+	ref, ok := callInstr.Callee.(*mir.FnRef)
+	if !ok || ref.Symbol == "" {
+		return pat, false
+	}
+
+	// If the callee has a declared FnType, param count must match.
+	if fnTy, ok := ref.Type.(*ir.FnType); ok && fnTy != nil {
+		if len(fnTy.Params) != len(callInstr.Args) {
+			return pat, false
+		}
+	}
+
+	// Resolve each argument to a scalar operand.
+	var prelude strings.Builder
+	args := make([]callArg, 0, len(callInstr.Args))
+	for _, op := range callInstr.Args {
+		argPrelude, argExpr, argTy, okOp := resolveOperandWithPrelude(fn, op, bindings, mctx)
+		if !okOp || argTy == scalarUnknown {
+			return pat, false
+		}
+		prelude.WriteString(argPrelude)
+		args = append(args, callArg{expr: argExpr, ty: argTy.llvm()})
+	}
+
+	// Declare the callee prototype if it is not a symbol defined in this module.
+	if !mctx.knownSymbols[ref.Symbol] {
+		declareAggregateFunctionPrototype(mctx, ref.Symbol, typeName, args)
+	}
+
+	pat.callSymbol = ref.Symbol
+	pat.callArgs = args
+	pat.callPrelude = prelude.String()
+	return pat, true
+}
+
+// declareAggregateFunctionPrototype emits a `declare %TypeName @symbol(...)`
+// line into extraDecls for callee functions whose return type is an aggregate
+// (struct or tuple) rather than a scalar.
+func declareAggregateFunctionPrototype(mctx *moduleCtx, symbol, typeName string, args []callArg) {
+	if mctx == nil || symbol == "" || typeName == "" {
+		return
+	}
+	key := "__stage0.fn_decl." + symbol
+	if mctx.emittedStructs == nil {
+		mctx.emittedStructs = map[string]bool{}
+	}
+	if mctx.emittedStructs[key] {
+		return
+	}
+	mctx.emittedStructs[key] = true
+	fmt.Fprintf(mctx.extraDecls, "declare %%%s @%s(", typeName, symbol)
+	for i, a := range args {
+		if i > 0 {
+			mctx.extraDecls.WriteString(", ")
+		}
+		mctx.extraDecls.WriteString(a.ty)
+	}
+	mctx.extraDecls.WriteString(")\n")
+}
+
+func emitDirectAggregateCall(out *strings.Builder, fn *mir.Function, pat directAggregateCallPattern, mctx *moduleCtx) error {
+	mctx.emitStructDef(pat.typeName, pat.fieldTypes)
+	fmt.Fprintf(out, "define %%%s @%s(", pat.typeName, fn.Name)
+	for i, name := range pat.paramNames {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
+	}
+	out.WriteString(") {\n")
+	out.WriteString("entry:\n")
+
+	out.WriteString(pat.callPrelude)
+	out.WriteString("  %0 = call %")
+	out.WriteString(pat.typeName)
+	fmt.Fprintf(out, " @%s(", pat.callSymbol)
+	for i, a := range pat.callArgs {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fmt.Fprintf(out, "%s %s", a.ty, a.expr)
+	}
+	out.WriteString(")\n")
+	fmt.Fprintf(out, "  ret %%%s %%0\n", pat.typeName)
 	out.WriteString("}\n\n")
 	return nil
 }
