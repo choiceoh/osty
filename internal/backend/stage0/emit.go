@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/osty/osty/internal/ir"
@@ -674,6 +675,7 @@ const (
 	scalarOpaquePtr
 	scalarByte
 	scalarChar
+	scalarFloat
 )
 
 func (s scalarType) llvm() string {
@@ -692,6 +694,8 @@ func (s scalarType) llvm() string {
 		return "i8"
 	case scalarChar:
 		return "i32"
+	case scalarFloat:
+		return "double"
 	}
 	return ""
 }
@@ -704,6 +708,8 @@ func (s scalarType) zeroValue() (string, bool) {
 		return "false", true
 	case scalarString, scalarOpaquePtr:
 		return "null", true
+	case scalarFloat:
+		return "0.0", true
 	}
 	return "", false
 }
@@ -732,6 +738,8 @@ func scalarFromTypeInternal(t mir.Type, allowUserNamed bool) scalarType {
 			return scalarChar
 		case ir.PrimBytes, ir.PrimRawPtr:
 			return scalarOpaquePtr
+		case ir.PrimFloat, ir.PrimFloat32, ir.PrimFloat64:
+			return scalarFloat
 		}
 		return scalarUnknown
 	}
@@ -1382,7 +1390,7 @@ func matchSequentialReturn(fn *mir.Function, mctx *moduleCtx) (sequentialPattern
 	// 4–8 param scalar/String fns dominate the "no matching pattern"
 	// bucket; the limit here was a P3a artifact (only `a`/`b` fallback
 	// names existed) and not load-bearing for the rest of the matcher.
-	if len(fn.Params) > 8 {
+	if len(fn.Params) > 48 {
 		return pat, false
 	}
 
@@ -1392,7 +1400,6 @@ func matchSequentialReturn(fn *mir.Function, mctx *moduleCtx) (sequentialPattern
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
@@ -1403,7 +1410,7 @@ func matchSequentialReturn(fn *mir.Function, mctx *moduleCtx) (sequentialPattern
 			return pat, false
 		}
 		pat.paramTypes[i] = pt
-		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, paramFallbackName(i))
 	}
 	disambiguateParamNames(pat.paramNames)
 	for i, pid := range fn.Params {
@@ -1546,7 +1553,7 @@ func matchSequentialVoid(fn *mir.Function, mctx *moduleCtx) (voidPattern, bool) 
 	if !isUnitType(fn.ReturnType) {
 		return pat, false
 	}
-	if len(fn.Params) > 8 {
+	if len(fn.Params) > 48 {
 		return pat, false
 	}
 
@@ -1554,7 +1561,6 @@ func matchSequentialVoid(fn *mir.Function, mctx *moduleCtx) (voidPattern, bool) 
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
@@ -1565,7 +1571,7 @@ func matchSequentialVoid(fn *mir.Function, mctx *moduleCtx) (voidPattern, bool) 
 			return pat, false
 		}
 		pat.paramTypes[i] = pt
-		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, paramFallbackName(i))
 	}
 	disambiguateParamNames(pat.paramNames)
 	for i, pid := range fn.Params {
@@ -1965,6 +1971,12 @@ func classifyVoidCallLine(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.
 		}
 		args = resolved.args
 		if !isErrType(ref.Type) {
+			if isUnitType(ref.Type) {
+				if !mctx.knownSymbols[ref.Symbol] {
+					declareVoidFunctionPrototype(mctx, ref.Symbol, args)
+				}
+				return resolved.prelude + renderVoidCallLine(ref.Symbol, args), true
+			}
 			retType := mctx.scalarFromType(ref.Type, allowOpaqueUserNamed)
 			if retType == scalarUnknown {
 				return "", false
@@ -1984,6 +1996,14 @@ func classifyVoidCallLine(fn *mir.Function, ci *mir.CallInstr, bindings map[mir.
 func isErrType(t mir.Type) bool {
 	_, ok := t.(*ir.ErrType)
 	return ok
+}
+
+func formatFloatConst(v float64) string {
+	s := strconv.FormatFloat(v, 'e', -1, 64)
+	if !strings.ContainsAny(s, ".eE") {
+		s += ".0"
+	}
+	return s
 }
 
 func resolveCallArgsWithoutFnType(fn *mir.Function, argsIn []mir.Operand, bindings map[mir.LocalID]localBinding, mctx *moduleCtx) (resolvedCallArgs, bool) {
@@ -2829,11 +2849,33 @@ func classifyAssignSrc(fn *mir.Function, src mir.RValue, destType scalarType, bi
 			}, "", true
 		}
 		llvmOp, resultType, operandType := classifyBinary(bin.Op)
+		if llvmOp != "" && resultType != destType && destType == scalarFloat {
+			llvmOp2, resultType2, operandType2 := classifyBinaryForType(bin.Op, scalarFloat)
+			if llvmOp2 != "" && resultType2 == destType {
+				llvmOp, resultType, operandType = llvmOp2, resultType2, operandType2
+			}
+		}
 		if llvmOp == "" || resultType != destType {
 			return pendingInstr{}, "", false
 		}
 		leftPrelude, left, leftTy, ok := resolveOperandWithPrelude(fn, bin.Left, bindings, mctx)
 		if !ok || leftTy != operandType {
+			if ok && leftTy == scalarFloat && operandType == scalarInt {
+				llvmOp2, resultType2, operandType2 := classifyBinaryForType(bin.Op, scalarFloat)
+				if llvmOp2 == "" || resultType2 != destType {
+					return pendingInstr{}, "", false
+				}
+				if rightPrelude2, right2, rightTy2, ok2 := resolveOperandWithPrelude(fn, bin.Right, bindings, mctx); ok2 && rightTy2 == operandType2 {
+					return pendingInstr{
+						kind:       instrBinary,
+						prelude:    leftPrelude + rightPrelude2,
+						binOp:      llvmOp2,
+						binArgType: operandType2.llvm(),
+						leftExpr:   left,
+						rightExpr:  right2,
+					}, "", true
+				}
+			}
 			return pendingInstr{}, "", false
 		}
 		rightPrelude, right, rightTy, ok := resolveOperandWithPrelude(fn, bin.Right, bindings, mctx)
@@ -2953,8 +2995,14 @@ func resolveGlobalRefRValue(mctx *moduleCtx, rv *mir.GlobalRefRV) (string, scala
 			return "", scalarUnknown, false
 		}
 		return fmt.Sprintf("%d", c.Value), scalarChar, true
+	case *mir.FloatConst:
+		if expected != scalarFloat {
+			return "", scalarUnknown, false
+		}
+		return formatFloatConst(c.Value), scalarFloat, true
+	default:
+		return "", scalarUnknown, false
 	}
-	return "", scalarUnknown, false
 }
 
 func globalInitConst(fn *mir.Function) (*mir.ConstOp, bool) {
@@ -3727,6 +3775,8 @@ func resolveOperand(op mir.Operand, bindings map[mir.LocalID]localBinding, mctx 
 			return fmt.Sprintf("%d", c.Value), scalarByte, true
 		case *mir.CharConst:
 			return fmt.Sprintf("%d", c.Value), scalarChar, true
+		case *mir.FloatConst:
+			return formatFloatConst(c.Value), scalarFloat, true
 		}
 		return "", scalarUnknown, false
 	}
@@ -4143,28 +4193,68 @@ func emitPendingInstr(out *strings.Builder, pi pendingInstr) {
 // binary operator the stage0 sequential pattern supports. Returns
 // ("", scalarUnknown, scalarUnknown) for unsupported ops.
 func classifyBinary(op mir.BinaryOp) (string, scalarType, scalarType) {
+	return classifyBinaryForType(op, scalarInt)
+}
+
+func classifyBinaryForType(op mir.BinaryOp, hint scalarType) (string, scalarType, scalarType) {
+	isFloat := hint == scalarFloat
+	if hint == scalarString || hint == scalarOpaquePtr || hint == scalarUnknown {
+		// Fall back to Int-based classification; string concatenation
+		// is handled separately by the caller.
+		isFloat = false
+	}
 	switch op {
 	case mir.BinAdd:
+		if isFloat {
+			return "fadd", scalarFloat, scalarFloat
+		}
 		return "add", scalarInt, scalarInt
 	case mir.BinSub:
+		if isFloat {
+			return "fsub", scalarFloat, scalarFloat
+		}
 		return "sub", scalarInt, scalarInt
 	case mir.BinMul:
+		if isFloat {
+			return "fmul", scalarFloat, scalarFloat
+		}
 		return "mul", scalarInt, scalarInt
 	case mir.BinDiv:
+		if isFloat {
+			return "fdiv", scalarFloat, scalarFloat
+		}
 		return "sdiv", scalarInt, scalarInt
 	case mir.BinMod:
 		return "srem", scalarInt, scalarInt
 	case mir.BinEq:
+		if isFloat {
+			return "fcmp oeq", scalarBool, scalarFloat
+		}
 		return "icmp eq", scalarBool, scalarInt
 	case mir.BinNeq:
+		if isFloat {
+			return "fcmp une", scalarBool, scalarFloat
+		}
 		return "icmp ne", scalarBool, scalarInt
 	case mir.BinLt:
+		if isFloat {
+			return "fcmp olt", scalarBool, scalarFloat
+		}
 		return "icmp slt", scalarBool, scalarInt
 	case mir.BinLeq:
+		if isFloat {
+			return "fcmp ole", scalarBool, scalarFloat
+		}
 		return "icmp sle", scalarBool, scalarInt
 	case mir.BinGt:
+		if isFloat {
+			return "fcmp ogt", scalarBool, scalarFloat
+		}
 		return "icmp sgt", scalarBool, scalarInt
 	case mir.BinGeq:
+		if isFloat {
+			return "fcmp oge", scalarBool, scalarFloat
+		}
 		return "icmp sge", scalarBool, scalarInt
 	case mir.BinBitAnd:
 		return "and", scalarInt, scalarInt
@@ -4186,6 +4276,13 @@ func classifyBinary(op mir.BinaryOp) (string, scalarType, scalarType) {
 
 // disambiguateParamNames mutates `names` in place so that no two
 // entries are identical, by suffixing collisions with `.<index>`.
+func paramFallbackName(i int) string {
+	if i < 26 {
+		return string(rune('a' + i))
+	}
+	return fmt.Sprintf("p%d", i)
+}
+
 func disambiguateParamNames(names []string) {
 	for i := 1; i < len(names); i++ {
 		for j := 0; j < i; j++ {
@@ -4253,7 +4350,6 @@ func matchIfElseReturn(fn *mir.Function, mctx *moduleCtx) (ifElsePattern, bool) 
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
@@ -4264,7 +4360,7 @@ func matchIfElseReturn(fn *mir.Function, mctx *moduleCtx) (ifElsePattern, bool) 
 			return pat, false
 		}
 		pat.paramTypes[i] = pt
-		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, paramFallbackName(i))
 	}
 	disambiguateParamNames(pat.paramNames)
 
@@ -4429,13 +4525,7 @@ func matchScalarReturnChain(fn *mir.Function, mctx *moduleCtx) (scalarReturnChai
 	if pat.retType == scalarUnknown {
 		return pat, false
 	}
-	// Param ceiling raised from 8 → 32 to admit `mir_generator.osty` enum-mapping
-	// helpers (e.g. `mirLegacyAssignOpCode` with 23 Int params), which otherwise
-	// match this matcher's CFG shape exactly. The body emit path (`emitScalarReturnChain`)
-	// has no hidden 8-param assumptions; the cap was a `fallbackNames`-array
-	// artifact, addressed below by switching to a generated `pN` fallback when
-	// the loc's own name is empty.
-	if len(fn.Params) > 32 || len(fn.Blocks) < 3 {
+	if len(fn.Params) > 48 || len(fn.Blocks) < 3 {
 		return pat, false
 	}
 
@@ -4453,10 +4543,7 @@ func matchScalarReturnChain(fn *mir.Function, mctx *moduleCtx) (scalarReturnChai
 			return pat, false
 		}
 		pat.paramTypes[i] = pt
-		// Synthesise a unique fallback (`p0`, `p1`, …) for params whose loc
-		// has no name. The previous 8-element literal array tied the cap to
-		// `len(fallbackNames)`; this generator scales with `len(fn.Params)`.
-		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fmt.Sprintf("p%d", i))
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, paramFallbackName(i))
 	}
 	disambiguateParamNames(pat.paramNames)
 	for i, pid := range fn.Params {
@@ -4688,7 +4775,6 @@ func matchShortCircuitGuardReturn(fn *mir.Function, mctx *moduleCtx) (shortCircu
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
@@ -4699,7 +4785,7 @@ func matchShortCircuitGuardReturn(fn *mir.Function, mctx *moduleCtx) (shortCircu
 			return pat, false
 		}
 		pat.paramTypes[i] = pt
-		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, paramFallbackName(i))
 	}
 	disambiguateParamNames(pat.paramNames)
 	for i, pid := range fn.Params {
@@ -4915,7 +5001,6 @@ func matchShortCircuitBoolReturn(fn *mir.Function, mctx *moduleCtx) (shortCircui
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
@@ -4926,7 +5011,7 @@ func matchShortCircuitBoolReturn(fn *mir.Function, mctx *moduleCtx) (shortCircui
 			return pat, false
 		}
 		pat.paramTypes[i] = pt
-		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, paramFallbackName(i))
 	}
 	disambiguateParamNames(pat.paramNames)
 	for i, pid := range fn.Params {
@@ -5087,7 +5172,6 @@ func matchShortCircuitCallFallbackBoolReturn(fn *mir.Function, mctx *moduleCtx) 
 	bindings := map[mir.LocalID]localBinding{}
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
@@ -5098,7 +5182,7 @@ func matchShortCircuitCallFallbackBoolReturn(fn *mir.Function, mctx *moduleCtx) 
 			return pat, false
 		}
 		pat.paramTypes[i] = pt
-		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, paramFallbackName(i))
 	}
 	disambiguateParamNames(pat.paramNames)
 	for i, pid := range fn.Params {
@@ -5449,7 +5533,6 @@ func matchIfElseAggregateReturn(fn *mir.Function, mctx *moduleCtx) (ifElseAggreg
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b"}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
@@ -5460,7 +5543,7 @@ func matchIfElseAggregateReturn(fn *mir.Function, mctx *moduleCtx) (ifElseAggreg
 			return pat, false
 		}
 		pat.paramTypes[i] = pt
-		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, paramFallbackName(i))
 	}
 	disambiguateParamNames(pat.paramNames)
 
@@ -5722,7 +5805,6 @@ func matchOrShortCircuitIfElseAggregate(fn *mir.Function, mctx *moduleCtx) (orSh
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b"}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
@@ -5733,7 +5815,7 @@ func matchOrShortCircuitIfElseAggregate(fn *mir.Function, mctx *moduleCtx) (orSh
 			return pat, false
 		}
 		pat.paramTypes[i] = pt
-		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, paramFallbackName(i))
 	}
 	disambiguateParamNames(pat.paramNames)
 
@@ -6028,7 +6110,6 @@ func matchElseIfChainAggregate(fn *mir.Function, mctx *moduleCtx) (elseIfChainPa
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b"}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
@@ -6039,7 +6120,7 @@ func matchElseIfChainAggregate(fn *mir.Function, mctx *moduleCtx) (elseIfChainPa
 			return pat, false
 		}
 		pat.paramTypes[i] = pt
-		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, paramFallbackName(i))
 	}
 	disambiguateParamNames(pat.paramNames)
 
@@ -6349,7 +6430,6 @@ func matchOrChainAggregate(fn *mir.Function, mctx *moduleCtx) (orChainPattern, b
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b"}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
@@ -6360,7 +6440,7 @@ func matchOrChainAggregate(fn *mir.Function, mctx *moduleCtx) (orChainPattern, b
 			return pat, false
 		}
 		pat.paramTypes[i] = pt
-		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, paramFallbackName(i))
 	}
 	disambiguateParamNames(pat.paramNames)
 
@@ -6706,7 +6786,6 @@ func matchDirectAggregateCall(fn *mir.Function, mctx *moduleCtx) (directAggregat
 	}
 	pat.paramNames = make([]string, len(fn.Params))
 	pat.paramTypes = make([]scalarType, len(fn.Params))
-	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
 	bindings := make(map[mir.LocalID]localBinding, len(fn.Params))
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
@@ -6718,7 +6797,7 @@ func matchDirectAggregateCall(fn *mir.Function, mctx *moduleCtx) (directAggregat
 			return pat, false
 		}
 		pat.paramTypes[i] = pt
-		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, paramFallbackName(i))
 	}
 	disambiguateParamNames(pat.paramNames)
 	for i, pid := range fn.Params {
@@ -7145,7 +7224,6 @@ func matchWhileLoopReturn(fn *mir.Function, mctx *moduleCtx) (whileLoopPattern, 
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b"}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
@@ -7156,7 +7234,7 @@ func matchWhileLoopReturn(fn *mir.Function, mctx *moduleCtx) (whileLoopPattern, 
 			return pat, false
 		}
 		pat.paramTypes[i] = pt
-		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, paramFallbackName(i))
 	}
 	disambiguateParamNames(pat.paramNames)
 
@@ -8666,11 +8744,30 @@ func emitWhileBinaryRValue(ctx *whileLoopEmitCtx, out *strings.Builder, bin *mir
 		return reg, scalarBool, true
 	}
 	llvmOp, resultType, operandType := classifyBinary(bin.Op)
+	if llvmOp != "" && resultType != destType && destType == scalarFloat {
+		llvmOp2, resultType2, operandType2 := classifyBinaryForType(bin.Op, scalarFloat)
+		if llvmOp2 != "" && resultType2 == destType {
+			llvmOp, resultType, operandType = llvmOp2, resultType2, operandType2
+		}
+	}
 	if llvmOp == "" || resultType != destType {
 		return "", scalarUnknown, false
 	}
 	left, leftTy, ok := resolveOperandWithLoad(ctx, out, bin.Left)
 	if !ok || leftTy != operandType {
+		if ok && leftTy == scalarFloat && operandType == scalarInt {
+			llvmOp2, resultType2, operandType2 := classifyBinaryForType(bin.Op, scalarFloat)
+			if llvmOp2 == "" || resultType2 != destType {
+				return "", scalarUnknown, false
+			}
+			right, rightTy, ok := resolveOperandWithLoad(ctx, out, bin.Right)
+			if !ok || rightTy != operandType2 {
+				return "", scalarUnknown, false
+			}
+			reg := freshReg(ctx)
+			fmt.Fprintf(out, "  %s = %s %s %s, %s\n", reg, llvmOp2, operandType2.llvm(), left, right)
+			return reg, resultType2, true
+		}
 		return "", scalarUnknown, false
 	}
 	right, rightTy, ok := resolveOperandWithLoad(ctx, out, bin.Right)
@@ -9355,6 +9452,8 @@ func resolveOperandWithLoad(ctx *whileLoopEmitCtx, out *strings.Builder, op mir.
 			return fmt.Sprintf("%d", c.Value), scalarByte, true
 		case *mir.CharConst:
 			return fmt.Sprintf("%d", c.Value), scalarChar, true
+		case *mir.FloatConst:
+			return formatFloatConst(c.Value), scalarFloat, true
 		}
 		return "", scalarUnknown, false
 	}
@@ -9835,7 +9934,6 @@ func matchForInRangeReturn(fn *mir.Function, mctx *moduleCtx) (forInRangePattern
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
@@ -9846,7 +9944,7 @@ func matchForInRangeReturn(fn *mir.Function, mctx *moduleCtx) (forInRangePattern
 			return pat, false
 		}
 		pat.paramTypes[i] = pt
-		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, paramFallbackName(i))
 	}
 	disambiguateParamNames(pat.paramNames)
 
@@ -10105,7 +10203,6 @@ func matchForInListReturn(fn *mir.Function, mctx *moduleCtx) (forInListPattern, 
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
@@ -10116,7 +10213,7 @@ func matchForInListReturn(fn *mir.Function, mctx *moduleCtx) (forInListPattern, 
 			return pat, false
 		}
 		pat.paramTypes[i] = pt
-		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, paramFallbackName(i))
 	}
 	disambiguateParamNames(pat.paramNames)
 
@@ -10401,6 +10498,12 @@ func forInListAssign(ctx *whileLoopEmitCtx, out *strings.Builder, ai *mir.Assign
 			}
 		}
 		llvmOp, resultType, operandType := classifyBinary(src.Op)
+		if llvmOp != "" && resultType != destType && destType == scalarFloat {
+			llvmOp2, resultType2, operandType2 := classifyBinaryForType(src.Op, scalarFloat)
+			if llvmOp2 != "" && resultType2 == destType {
+				llvmOp, resultType, operandType = llvmOp2, resultType2, operandType2
+			}
+		}
 		if llvmOp == "" || resultType != destType {
 			return false
 		}
@@ -10811,7 +10914,6 @@ func matchForInListEarlyExit(fn *mir.Function, mctx *moduleCtx) (forInListEarlyE
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
 		if loc == nil || !loc.IsParam {
@@ -10822,7 +10924,7 @@ func matchForInListEarlyExit(fn *mir.Function, mctx *moduleCtx) (forInListEarlyE
 			return pat, false
 		}
 		pat.paramTypes[i] = pt
-		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, paramFallbackName(i))
 	}
 	disambiguateParamNames(pat.paramNames)
 
@@ -11262,6 +11364,12 @@ func matchStructFieldBinaryOp(fn *mir.Function, mctx *moduleCtx) (structFieldBin
 		return pat, false
 	}
 	llvmOp, resultType, operandType := classifyBinary(bin.Op)
+	if llvmOp != "" && resultType != pat.resultType && pat.resultType == scalarFloat {
+		llvmOp2, resultType2, operandType2 := classifyBinaryForType(bin.Op, scalarFloat)
+		if llvmOp2 != "" && resultType2 == pat.resultType {
+			llvmOp, resultType, operandType = llvmOp2, resultType2, operandType2
+		}
+	}
 	if llvmOp == "" || resultType != pat.resultType {
 		return pat, false
 	}
@@ -11650,7 +11758,6 @@ func matchAggregateConstructor(fn *mir.Function, mctx *moduleCtx) (aggregateCons
 	pat.paramIDs = fn.Params
 	pat.paramTypes = make([]scalarType, len(fn.Params))
 	pat.paramNames = make([]string, len(fn.Params))
-	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
 	bindings := map[mir.LocalID]localBinding{}
 	for i, pid := range fn.Params {
 		loc := lookupLocal(fn, pid)
@@ -11662,7 +11769,7 @@ func matchAggregateConstructor(fn *mir.Function, mctx *moduleCtx) (aggregateCons
 			return pat, false
 		}
 		pat.paramTypes[i] = st
-		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, paramFallbackName(i))
 		bindings[pid] = localBinding{expr: "%" + pat.paramNames[i], ty: st, defined: true}
 	}
 	disambiguateParamNames(pat.paramNames)
@@ -12329,7 +12436,7 @@ func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern
 	if len(fn.Blocks) == 1 && !genericSingleBlockHasExtendedSurface(fn, fn.Blocks[0]) {
 		return pat, false
 	}
-	if len(fn.Params) > 16 {
+	if len(fn.Params) > 48 {
 		return pat, false
 	}
 

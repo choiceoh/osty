@@ -16719,6 +16719,11 @@ pub fn mirInterfaceShimRetValueText(retTy: String) -> String {
     "  ret " + retTy + " %ret.val"
 }
 
+pub fn mirConstFloatDiv(left: Float, right: Float) -> Float {
+    if right == 0.0 { return 0.0 }
+    left / right
+}
+
 /// mirConstFloatBinary applies a binary operator to two double operands
 /// at compile time. The operator is identified by its `token.Kind` int
 /// code; the same code values flow from `mirConstFloatBinaryStatus`
@@ -16738,10 +16743,7 @@ pub fn mirConstFloatBinary(
     if op == plus { return left + right }
     if op == minus { return left - right }
     if op == star { return left * right }
-    if op == slash {
-        if right == 0.0 { return 0.0 }
-        return left / right
-    }
+    if op == slash { return mirConstFloatDiv(left, right) }
     0.0
 }
 
