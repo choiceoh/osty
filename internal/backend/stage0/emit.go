@@ -12256,6 +12256,7 @@ type genericCFGPattern struct {
 	syntheticStringCoalesces  map[mir.BlockID]mir.LocalID
 	syntheticIntrinsicReturns map[mir.BlockID]*mir.IntrinsicInstr
 	syntheticCallReturns      map[mir.BlockID]*mir.CallInstr
+	syntheticXReturns        map[mir.BlockID]scalarType
 }
 
 func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern, bool) {
