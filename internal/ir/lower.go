@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
@@ -947,33 +949,85 @@ func (l *lowerer) lowerBlock(b *ast.Block) *Block {
 // — its syntactic shape unambiguously evaluates to a value.
 func (l *lowerer) expressionYieldsValue(e ast.Expr) bool {
 	if l.chk == nil {
-		// No checker; be conservative: don't promote.
 		return false
 	}
 	if t := l.exprType(e); usableRecoveredType(t) {
-		return expressionTypeYieldsValue(t)
+		if expressionTypeYieldsValue(t) {
+			return true
+		}
 	}
 	if t := l.bindingTypeFromAST(e); expressionTypeYieldsValue(t) {
 		return true
 	}
-	// Syntactic fallback: the embedded selfhost checker doesn't
-	// always populate `Types[e]` for expressions in tail-of-block
-	// position (notably `StructLit` interior surfaces). For shapes
-	// that always evaluate to a value of definite non-unit type,
-	// promote them to `Block.Result` even when the checker entry is
-	// missing or error-typed — otherwise `mir.Lower` treats the body
-	// as returning Unit and emits `unreachable` in place of the
-	// value return, producing IR that fails LLVM verification for
-	// any non-Unit return type. Restricted to shapes that always
-	// evaluate to a value (no Block / IfExpr / MatchExpr — those
-	// have their own promotion paths).
 	switch e.(type) {
 	case *ast.StructLit, *ast.IntLit, *ast.FloatLit, *ast.StringLit,
 		*ast.CharLit, *ast.BoolLit, *ast.ListExpr, *ast.MapExpr,
 		*ast.TupleExpr, *ast.RangeExpr:
 		return true
+	case *ast.IfExpr:
+		return astIfLooksLikeValueExpr(e)
+	case *ast.Ident:
+		return astIdentLooksLikeValueConstructor(e)
+	case *ast.CallExpr:
+		return astCallLooksLikeValueConstructor(e)
 	}
 	return false
+}
+
+func astIdentLooksLikeValueConstructor(e ast.Expr) bool {
+	id, ok := e.(*ast.Ident)
+	if !ok || id == nil || id.Name == "" {
+		return false
+	}
+	r, _ := utf8.DecodeRuneInString(id.Name)
+	return unicode.IsUpper(r)
+}
+
+func astCallLooksLikeValueConstructor(e ast.Expr) bool {
+	call, ok := e.(*ast.CallExpr)
+	if !ok || call == nil {
+		return false
+	}
+	return astIdentLooksLikeValueConstructor(call.Fn)
+}
+
+func astIfLooksLikeValueExpr(e ast.Expr) bool {
+	ife, ok := e.(*ast.IfExpr)
+	if !ok || ife == nil || ife.IsIfLet {
+		return false
+	}
+	if ife.Then == nil || len(ife.Then.Stmts) == 0 {
+		return false
+	}
+	if !astBlockTailLooksLikeValueConstructor(ife.Then) {
+		return false
+	}
+	return astElseLooksLikeValueConstructor(ife.Else)
+}
+
+func astElseLooksLikeValueConstructor(e ast.Expr) bool {
+	switch x := e.(type) {
+	case nil:
+		return false
+	case *ast.Block:
+		return astBlockTailLooksLikeValueConstructor(x)
+	case *ast.IfExpr:
+		return astIfLooksLikeValueExpr(x)
+	default:
+		// `else <expr>` forms; accept value constructors.
+		return astIdentLooksLikeValueConstructor(x) || astCallLooksLikeValueConstructor(x)
+	}
+}
+
+func astBlockTailLooksLikeValueConstructor(b *ast.Block) bool {
+	if b == nil || len(b.Stmts) == 0 {
+		return false
+	}
+	last, ok := b.Stmts[len(b.Stmts)-1].(*ast.ExprStmt)
+	if !ok || last == nil {
+		return false
+	}
+	return astIdentLooksLikeValueConstructor(last.X) || astCallLooksLikeValueConstructor(last.X)
 }
 
 func expressionTypeYieldsValue(t Type) bool {
