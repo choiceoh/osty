@@ -6420,6 +6420,61 @@ func TestStage0GenericCFGResultAggregateDiscriminantAndProjection(t *testing.T) 
 	}
 }
 
+func TestStage0DiscriminantPayloadfulEnumUsesTagSlot(t *testing.T) {
+	t.Parallel()
+	payloadfulKind := &ir.NamedType{Name: "PayloadfulKind"}
+	fn := &mir.Function{
+		Name:        "payloadfulDiscriminant",
+		ReturnType:  ir.TInt,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "ret", Type: ir.TInt, IsReturn: true},
+			{ID: 1, Name: "kind", Type: payloadfulKind},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{{
+			ID: 0,
+			Instrs: []mir.Instr{
+				assign(1, &mir.AggregateRV{
+					Kind:       mir.AggEnumVariant,
+					VariantIdx: 1,
+					Fields:     []mir.Operand{stringConst("payload")},
+					T:          payloadfulKind,
+				}),
+				assign(0, &mir.DiscriminantRV{
+					Place: mir.Place{Local: 1},
+					T:     ir.TInt,
+				}),
+			},
+			Term: &mir.ReturnTerm{},
+		}},
+	}
+	module := moduleWith(trivialMainFn(), fn)
+	module.Layouts.Enums["PayloadfulKind"] = &mir.EnumLayout{
+		Name: "PayloadfulKind",
+		Variants: []mir.VariantLayout{
+			{Index: 0, Name: "Plain", Payload: []mir.FieldLayout{{Index: 0, Name: "v", Type: ir.TInt}}},
+			{Index: 1, Name: "Tagged", Payload: []mir.FieldLayout{{Index: 0, Name: "v", Type: ir.TString}}},
+		},
+	}
+	gotBytes, err := EmitMIR(module, llvmabi.Options{PackageName: "main"})
+	if err != nil {
+		t.Fatalf("EmitMIR: %v", err)
+	}
+	got := string(gotBytes)
+	for _, want := range []string{
+		"%stage0.Enum.PayloadfulKind.1 = type { i64, ptr }",
+		"store i64 1, ptr",
+		"getelementptr i64, ptr %",
+		"load i64, ptr",
+		"ret i64 %",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestStage0GenericCFGCallStoresIntoListIndex(t *testing.T) {
 	t.Parallel()
 	listString := &ir.NamedType{Name: "List", Builtin: true, Args: []ir.Type{ir.TString}}
