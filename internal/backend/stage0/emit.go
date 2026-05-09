@@ -8743,6 +8743,25 @@ func emitWhileDiscriminantRValue(ctx *whileLoopEmitCtx, out *strings.Builder, di
 	if placeTy == nil {
 		return "", scalarUnknown, false
 	}
+	if named, ok := placeTy.(*ir.NamedType); ok && named != nil {
+		if layout := ctx.mctx.module.Layouts.Enums[named.Name]; layout != nil && !enumLayoutIsPayloadless(layout) && len(layout.Variants) > 0 {
+			expr, ty, ok := resolveOperandWithLoad(ctx, out, &mir.CopyOp{Place: discr.Place, T: placeTy})
+			if !ok {
+				return "", scalarUnknown, false
+			}
+			if ty == scalarOpaquePtr {
+				tagSlot := freshReg(ctx)
+				tag := freshReg(ctx)
+				fmt.Fprintf(out, "  %s = getelementptr i64, ptr %s, i64 0\n", tagSlot, expr)
+				fmt.Fprintf(out, "  %s = load i64, ptr %s\n", tag, tagSlot)
+				return tag, scalarInt, true
+			}
+			if ty == scalarInt {
+				return expr, scalarInt, true
+			}
+			return "", scalarUnknown, false
+		}
+	}
 	if payloadTy, ok := optionPayloadScalar(placeTy, ctx.mctx); ok {
 		typeName, ok := ctx.mctx.emitOptionBoxDef(payloadTy)
 		if !ok {
@@ -8918,6 +8937,12 @@ func resultPayloadScalars(t mir.Type, mctx *moduleCtx) (scalarType, scalarType, 
 	}
 	okTy := mctx.scalarFromType(named.Args[0], true)
 	errTy := mctx.scalarFromType(named.Args[1], true)
+	if okTy == scalarUnknown && isUnitType(named.Args[0]) {
+		okTy = scalarInt
+	}
+	if errTy == scalarUnknown && isUnitType(named.Args[1]) {
+		errTy = scalarInt
+	}
 	if okTy == scalarUnknown || errTy == scalarUnknown {
 		return scalarUnknown, scalarUnknown, false
 	}
@@ -8978,7 +9003,7 @@ func emitWhileOptionAggregateRValue(ctx *whileLoopEmitCtx, out *strings.Builder,
 }
 
 func emitWhileResultAggregateRValue(ctx *whileLoopEmitCtx, out *strings.Builder, agg *mir.AggregateRV) (string, scalarType, bool) {
-	if ctx == nil || ctx.mctx == nil || agg == nil || agg.Kind != mir.AggEnumVariant {
+	if ctx == nil || ctx.mctx == nil || agg == nil {
 		return "", scalarUnknown, false
 	}
 	payloadTy, okTy, errTy, payloadIndex, ok := resultVariantPayloadScalar(agg.T, agg.VariantIdx, ctx.mctx)
@@ -8986,6 +9011,13 @@ func emitWhileResultAggregateRValue(ctx *whileLoopEmitCtx, out *strings.Builder,
 		return "", scalarUnknown, false
 	}
 	if len(agg.Fields) != 1 {
+		return "", scalarUnknown, false
+	}
+	isUnitPayload := len(agg.Fields) == 1 && isUnitOperand(agg.Fields[0])
+	if payloadTy == scalarUnknown && isUnitPayload {
+		payloadTy = scalarInt
+	}
+	if payloadTy == scalarUnknown {
 		return "", scalarUnknown, false
 	}
 	typeName, ok := ctx.mctx.emitResultBoxDef(okTy, errTy)
@@ -9002,12 +9034,20 @@ func emitWhileResultAggregateRValue(ctx *whileLoopEmitCtx, out *strings.Builder,
 	tagSlot := ctx.mctx.freshTempName("result.tag.slot")
 	fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 0\n", tagSlot, typeName, obj)
 	fmt.Fprintf(out, "  store i64 %d, ptr %s\n", agg.VariantIdx, tagSlot)
+	payloadSlot := ctx.mctx.freshTempName("result.payload.slot")
+	fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 %d\n", payloadSlot, typeName, obj, payloadIndex)
+	if isUnitPayload {
+		zero, ok := payloadTy.zeroValue()
+		if !ok {
+			return "", scalarUnknown, false
+		}
+		fmt.Fprintf(out, "  store %s %s, ptr %s\n", payloadTy.llvm(), zero, payloadSlot)
+		return obj, scalarOpaquePtr, true
+	}
 	expr, ty, ok := resolveOperandWithLoad(ctx, out, agg.Fields[0])
 	if !ok || ty != payloadTy {
 		return "", scalarUnknown, false
 	}
-	payloadSlot := ctx.mctx.freshTempName("result.payload.slot")
-	fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 %d\n", payloadSlot, typeName, obj, payloadIndex)
 	fmt.Fprintf(out, "  store %s %s, ptr %s\n", payloadTy.llvm(), expr, payloadSlot)
 	return obj, scalarOpaquePtr, true
 }
