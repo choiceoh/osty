@@ -13263,6 +13263,86 @@ func emitSyntheticStringCoalesceReturn(ctx *whileLoopEmitCtx, out *strings.Build
 	return true
 }
 
+func emitSyntheticXReturn(
+	ctx *whileLoopEmitCtx, out *strings.Builder, payload mir.LocalID, retType scalarType,
+) bool {
+	if ctx == nil || out == nil || ctx.fn == nil || ctx.mctx == nil {
+		return false
+	}
+	if retType == scalarUnknown {
+		return false
+	}
+	loc := lookupLocal(ctx.fn, payload)
+	if loc == nil {
+		return false
+	}
+	payloadTy, ok := optionPayloadScalar(loc.Type, ctx.mctx)
+	if !ok || payloadTy != retType {
+		return false
+	}
+	typeName, ok := ctx.mctx.emitOptionBoxDef(payloadTy)
+	if !ok {
+		return false
+	}
+	binding, ok := ctx.bindings[payload]
+	if !ok || !binding.defined || binding.ty != scalarOpaquePtr {
+		return false
+	}
+	optExpr := binding.expr
+	if binding.isStack {
+		loaded, ty, ok := loadFromStack(ctx, out, payload)
+		if !ok || ty != scalarOpaquePtr {
+			return false
+		}
+		optExpr = loaded
+	}
+	payloadSlot := freshReg(ctx)
+	payloadReg := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 1\n", payloadSlot, typeName, optExpr)
+	fmt.Fprintf(out, "  %s = load %s, ptr %s\n", payloadReg, payloadTy.llvm(), payloadSlot)
+	fmt.Fprintf(out, "  ret %s %s\n", payloadTy.llvm(), payloadReg)
+	return true
+}
+
+func emitXAsReturn(ctx *whileLoopEmitCtx, out *strings.Builder, payload mir.LocalID, retType scalarType) bool {
+	if ctx == nil || out == nil {
+		return false
+	}
+	if retType == scalarUnknown {
+		return false
+	}
+	loc := lookupLocal(ctx.fn, payload)
+	if loc == nil {
+		return false
+	}
+	payloadTy, ok := optionPayloadScalar(loc.Type, ctx.mctx)
+	if !ok || payloadTy != retType {
+		return false
+	}
+	typeName, ok := ctx.mctx.emitOptionBoxDef(payloadTy)
+	if !ok {
+		return false
+	}
+	binding, ok := ctx.bindings[payload]
+	if !ok || !binding.defined || binding.ty != scalarOpaquePtr {
+		return false
+	}
+	optExpr := binding.expr
+	if binding.isStack {
+		loaded, ty, ok := loadFromStack(ctx, out, payload)
+		if !ok || ty != scalarOpaquePtr {
+			return false
+		}
+		optExpr = loaded
+	}
+	payloadSlot := freshReg(ctx)
+	payloadReg := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 1\n", payloadSlot, typeName, optExpr)
+	fmt.Fprintf(out, "  %s = load %s, ptr %s\n", payloadReg, payloadTy.llvm(), payloadSlot)
+	fmt.Fprintf(out, "  ret %s %s\n", payloadTy.llvm(), payloadReg)
+	return true
+}
+
 func isStorageInstr(instr mir.Instr) bool {
 	switch instr.(type) {
 	case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
@@ -13685,6 +13765,109 @@ func genericStorageOnlyUnreachableExit(fn *mir.Function) (*mir.BasicBlock, bool)
 		exit = bb
 	}
 	return exit, exit != nil
+}
+
+type PayloadType struct {
+	LocalID    mir.LocalID
+	CallInstr  *mir.CallInstr
+	Instr      *mir.IntrinsicInstr
+	Kind       payloadKind
+}
+
+type payloadKind int
+
+const (
+	payloadNone payloadKind = iota
+	payloadLocal
+	payloadCall
+	payloadIntrinsic
+)
+
+func isRecoverableReturnShape(fn *mir.Function) bool {
+	if fn == nil {
+		return false
+	}
+	if fn.ReturnType == nil {
+		return false
+	}
+	switch fn.ReturnType.(type) {
+	case *ir.NamedType:
+		return true
+	default:
+		return false
+	}
+}
+
+func genericInferXSyntheticReturn(fn *mir.Function, mctx *moduleCtx, retType scalarType) (mir.BlockID, PayloadType, bool) {
+	if fn == nil || mctx == nil {
+		return 0, PayloadType{}, false
+	}
+	if !isRecoverableReturnShape(fn) {
+		return 0, PayloadType{}, false
+	}
+	exit, ok := genericStorageOnlyUnreachableExit(fn)
+	if !ok {
+		return 0, PayloadType{}, false
+	}
+	candidates := map[mir.LocalID]bool{}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		if _, unreachable := bb.Term.(*mir.UnreachableTerm); unreachable {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			ai, ok := instr.(*mir.AssignInstr)
+			if !ok || ai.Dest.HasProjections() {
+				continue
+			}
+			loc := lookupLocal(fn, ai.Dest.Local)
+			if loc == nil || !sameTypeString(loc.Type, fn.ReturnType) {
+				continue
+			}
+			if ai.Src != nil {
+				candidates[ai.Dest.Local] = true
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return 0, PayloadType{}, false
+	}
+	var selected mir.LocalID
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		if _, unreachable := bb.Term.(*mir.UnreachableTerm); unreachable {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			switch step := instr.(type) {
+			case *mir.AssignInstr:
+				if step.Dest.HasProjections() {
+					continue
+				}
+				if candidates[step.Dest.Local] {
+					if selected != 0 && selected != step.Dest.Local {
+						return 0, PayloadType{}, false
+					}
+					selected = step.Dest.Local
+				}
+			case *mir.CallInstr:
+				if step.Dest != nil && !step.Dest.HasProjections() && candidates[step.Dest.Local] {
+					if selected != 0 && selected != step.Dest.Local {
+						return 0, PayloadType{}, false
+					}
+					selected = step.Dest.Local
+				}
+			}
+		}
+	}
+	if selected == 0 {
+		return 0, PayloadType{}, false
+	}
+	return exit.ID, PayloadType{LocalID: selected, Kind: payloadLocal}, true
 }
 
 func isNamedListType(t mir.Type) bool {
