@@ -523,20 +523,22 @@ fn testSelfResolverAcceptsValidAnnotations() {
 }
 
 fn testSelfResolverAcceptsValidSinceAnnotations() {
-    // v0.6 G44 — `#[since("X.Y")]` format gate (§3.14.1). Each shape
-    // accepted by the SemVer-shape regex must produce no E0452.
+    // v0.6 G44 — `#[stability(since = "X.Y")]` format gate (§3.14.1).
+    // Pre-release cut C: standalone `#[since]` was unified into the
+    // `since` keyword on `#[stability(...)]`. Each accepted SemVer
+    // shape must produce no E0452.
     let result = selfResolveSource(
         r"""
-            #[since("0.6")]
+            #[stability(level = "stable", since = "0.6")]
             fn introducedAtMinorOnly() -> Int { 0 }
 
-            #[since("1.0.0")]
+            #[stability(level = "stable", since = "1.0.0")]
             fn introducedAtPatch() -> Int { 0 }
 
-            #[since("2.0.0-rc.1")]
+            #[stability(level = "experimental", since = "2.0.0-rc.1")]
             fn introducedWithPreRelease() -> Int { 0 }
 
-            #[since("3.0.0-alpha")]
+            #[stability(level = "experimental", since = "3.0.0-alpha")]
             fn preReleaseHyphenOnly() -> Int { 0 }
             """,
     )
@@ -546,19 +548,19 @@ fn testSelfResolverAcceptsValidSinceAnnotations() {
 
 fn testSelfResolverRejectsMalformedSinceVersion() {
     // Malformed SemVer strings — `v0.6` (prefix), `0.6.x` (wildcard),
-    // empty string, plain text — each must fire one E0452.
+    // empty string, plain text — each `since` keyword fires one E0452.
     let result = selfResolveSource(
         r"""
-            #[since("v0.6")]
+            #[stability(level = "stable", since = "v0.6")]
             fn badPrefix() {}
 
-            #[since("0.6.x")]
+            #[stability(level = "stable", since = "0.6.x")]
             fn badWildcard() {}
 
-            #[since("")]
+            #[stability(level = "stable", since = "")]
             fn badEmpty() {}
 
-            #[since("abc")]
+            #[stability(level = "stable", since = "abc")]
             fn badText() {}
             """,
     )
@@ -567,21 +569,21 @@ fn testSelfResolverRejectsMalformedSinceVersion() {
 }
 
 fn testSelfResolverRejectsSinceWithWrongArgShape() {
-    // `#[since]` (no args), `#[since(42)]` (integer), `#[since("0.6", "0.7")]`
-    // (two args), `#[since(version = "0.6")]` (kwarg) — each fires E0452.
+    // Cut C: integer literal, interpolated string, and bad `until` /
+    // `remove` keyword values each trigger one E0452.
     let result = selfResolveSource(
         r"""
-            #[since]
-            fn badBare() {}
-
-            #[since(42)]
+            #[stability(level = "stable", since = 42)]
             fn badInt() {}
 
-            #[since("0.6", "0.7")]
-            fn badTwoArgs() {}
+            #[stability(level = "stable", since = "0.6", until = "0.7.x")]
+            fn badUntil() {}
 
-            #[since(version = "0.6")]
-            fn badKwarg() {}
+            #[stability(level = "deprecated", since = "0.6", remove = "v0.8")]
+            fn badRemove() {}
+
+            #[stability(level = "stable", since = "0.6.x")]
+            fn badWildcardAgain() {}
             """,
     )
 

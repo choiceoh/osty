@@ -65,13 +65,13 @@ two imports or an import plus a local declaration is `E0554`. `use go
 
 A `pub use` creates an alias in the current package's public surface;
 it does not create a new declaration. By default the alias inherits the
-source symbol's `#[since]`, `#[stability]`, `#[error_contract]`,
-capability parameters, and information-flow annotations. `osty doc`
-may render the alias path, but `osty publish` hashes the resolved
-source symbol plus the alias name.
+source symbol's `#[stability]`, `#[error_contract]`, capability
+parameters, and information-flow annotations. `osty doc` may render
+the alias path, but `osty publish` hashes the resolved source symbol
+plus the alias name.
 
-An alias may restate `#[since]` or `#[stability]` only to make the
-current package's promise stricter:
+An alias may restate `#[stability]` only to make the current
+package's promise stricter:
 
 - `experimental` source re-exported as `stable` is allowed, but the
   current package now owns the stable promise and future upstream drift

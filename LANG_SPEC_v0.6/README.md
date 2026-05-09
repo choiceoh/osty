@@ -116,5 +116,5 @@ Four annotation families implement this principle:
 |---|---|---|
 | **Effectful** (env / IO) | Capability parameters, `#[ambient]`, `#[reproducible]`, `#[pure]` | §20, §3.11 |
 | **Security** (sources → sinks) | `#[taint]`, `#[sanitizes]`, `#[requires]` | §21 |
-| **Temporal** (versioning) | `#[since]`, `#[stability]`, `#[match_compat]`, `osty publish` | §3.14 |
+| **Temporal** (versioning) | `#[stability(level, since?, until?, remove?)]`, `#[match_compat]`, `osty publish` | §3.14 |
 | **Intent + Determinism** | `#[purpose]`, `#[example]`, `#[fixture]`, `#[error_contract]`, `#[sealed_construct]`, `#[golden]`, `osty context` | §3.12, §3.4.5, §7.5, §11.5, §13.4 |

@@ -83,8 +83,7 @@ in v0.6" for per-gap rationale.
 
 | Item | Status | Notes |
 |---|---|---|
-| `#[since("X.Y")]` | **partial** (G44, Phase 4) | format gate landed: SemVer-shape regex enforced (`E0452`); arg must be exactly one non-interpolated string literal. `osty publish` API surface gate is still pending. |
-| `#[stability("level", until/since/remove)]` | **planned** (G44, Phase 4) | osty publish 게이트 |
+| `#[stability(level, since?, until?, remove?)]` | **partial** (G44, Phase 4) | `since` keyword format gate landed: SemVer-shape regex enforced (`E0452`); `since` must be exactly one non-interpolated string literal at the keyword position. `osty publish` API surface gate is still pending. |
 | `#[match_compat("X.Y", fallback=)]` | **planned** (G44, Phase 4) | non-silent fallback 강제 |
 | `osty publish` API surface diff | **planned** (G44, Phase 4) | major bump 강제 |
 | `#[golden("path", mode="text"|"ast")]` | **planned** (G45, Phase 3) | reproducible 결합 |
@@ -107,8 +106,8 @@ in v0.6" for per-gap rationale.
 
 ### Additive changes (호환)
 
-- `#[since]` / `#[stability]` / `#[match_compat]` — 옵션 어노테이션, 미사용
-  코드 영향 없음
+- `#[stability]` / `#[match_compat]` — 옵션 어노테이션, 미사용
+  코드 영향 없음 (v0.6 baseline 에서 standalone `#[since]` 는 제거 — `#[stability(since=)]` 로 흡수)
 - `#[purpose]` / `#[example]` / `#[fixture]` — 메타데이터, 옵션
 - `#[reproducible]` / `#[golden]` — 옵션, 미사용 영향 없음
 

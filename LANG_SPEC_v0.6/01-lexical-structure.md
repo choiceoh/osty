@@ -546,7 +546,7 @@ v0.5 의 11 fixed annotation 위에 v0.6 은 16 신규 annotation 추가.
 | Sealed construct (G40) | `#[sealed_construct]`, `#[trusted_construct]`, `#[test_construct]` |
 | Error contract (G41) | `#[error_contract]` |
 | Structured intent (G42) | `#[purpose]`, `#[example]`, `#[fixture]` |
-| API evolution (G44) | `#[since]`, `#[stability]`, `#[match_compat]` |
+| API evolution (G44) | `#[stability]`, `#[match_compat]` |
 | Golden tests (G45) | `#[golden]` |
 
 annotation 인자는 v0.5 와 동일 — *literal 만* (string / int / bool /

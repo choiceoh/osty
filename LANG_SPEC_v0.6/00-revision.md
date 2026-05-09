@@ -29,7 +29,7 @@ labeled data 는 nominal `struct` 또는 tuple 로 표현한다.
 | G40 | Construction discipline (§3.4.5) | `#[sealed_construct]` parse-don't-validate |
 | G41 | Error contract (§7.5) | `#[error_contract(... when ...)]` failure mode 명세 |
 | G42 | Structured intent (§3.12) | `#[purpose]` / `#[example]` / `#[fixture]` |
-| G44 | API evolution (§3.14) | `#[since]` / `#[stability]` / `#[match_compat]` |
+| G44 | API evolution (§3.14) | `#[stability(level, since?, until?, remove?)]` / `#[match_compat]` |
 | G45 | Golden tests (§11.5) | `#[golden]` AST-aware 스냅샷 |
 | G47 | Machine-readable context (§13.4) | `osty context <symbol>` 구조화 추출 |
 | G48 | Annotation surface | 위 신규 어노테이션의 grammar 통합 |
@@ -67,7 +67,7 @@ Phase 2   G42 #[fixture] / #[purpose] / #[example]
 Phase 3   G39 #[reproducible(scope=...)] (capability 위에 sound)
           + G45 #[golden] AST-aware
 Phase 4   G40 #[sealed_construct] + G41 #[error_contract]
-          + G44 #[since] / #[stability] / #[match_compat]
+          + G44 #[stability] / #[match_compat]
 Phase 5   G37 #[taint] / #[sanitizes] (가장 무거움, 시그니처급 임팩트)
 ```
 
@@ -438,43 +438,49 @@ JSON 스키마는 `LANG_SPEC_v0.6/13-tooling.md §13.9` 에서 정의.
 
 ---
 
-### §3.14 API Evolution — `#[since]`, `#[stability]`, `#[match_compat]` (G44)
+### §3.14 API Evolution — `#[stability]`, `#[match_compat]` (G44)
 
-#### §3.14.1 `#[since("X.Y")]`
+#### §3.14.1 `#[stability(level, since?, until?, remove?)]`
 
-선언 (fn / struct / enum variant / interface method / field) 이 도입된 버전 표시.
+선언 (fn / struct / enum / enum variant / interface method / field) 의 진화
+계약을 한 어노테이션으로 표현. `level` positional 1 개 + `since` / `until` /
+`remove` keyword.
 
 ```osty
+#[stability(level = "stable", since = "0.6")]
+pub fn parseEmail(s: String) -> Email? { ... }
+
+#[stability(level = "experimental", since = "0.6", until = "0.7")]
+pub fn parseEmailLoose(s: String) -> Email? { ... }
+
+#[stability(level = "deprecated", since = "0.6", remove = "0.8")]
+pub fn oldApi() -> Int { ... }
+
 pub enum Event {
     Click,
     Key(String),
 
-    #[since("0.6")]
+    #[stability(level = "stable", since = "0.6")]
     Drag(Int, Int),
 }
 ```
 
-`#[since]` 는 검증 없음 — 단순 메타데이터. `osty doc` / `osty context` 가 사용.
-
-#### §3.14.2 `#[stability(level, until?)]`
-
-```osty
-#[stability("stable")]
-pub fn parseEmail(s: String) -> Email? { ... }
-
-#[stability("experimental", until = "0.7")]
-pub fn parseEmailLoose(s: String) -> Email? { ... }
-
-#[stability("deprecated", since = "0.6", remove = "0.8")]
-pub fn oldApi() -> Int { ... }
-```
-
-Levels:
+Levels (`level` 인자, positional 도 OK — `#[stability("stable")]`):
 - `"stable"` — public API 약속. breaking change 시 major version bump 필요.
 - `"experimental"` — minor version 안에서도 변경 가능. `until` 까지 안정화 안 되면
   removal 검토.
 - `"deprecated"` — `since` 부터 deprecated. `remove` 버전에 제거 예정. 사용 시 `W0750`.
 - `"internal"` — 같은 패키지 외부 사용 시 `W0902`.
+
+Keyword 인자:
+- `since = "X.Y"` *(opt)* — 도입된 SemVer-shape 버전. 형식 위반 시 `E0452`
+  (accepted shapes: `"X.Y"`, `"X.Y.Z"`, `"X.Y.Z-pre"` 등 SemVer-shape 정규식;
+  `"v0.6"` / `"0.6.x"` / 빈 문자열 / 보간 / 정수 등 거부).
+- `until = "X.Y"` *(opt, experimental 전용)* — 안정화 deadline.
+- `remove = "X.Y"` *(opt, deprecated 전용)* — 제거 예정 버전.
+
+`since` 자체는 의미 검증 없음 (단순 메타데이터로 `osty doc` / `osty context` /
+`osty publish` 가 surface diff 에 활용); 검증은 *문법 형식* 만.
 
 #### §3.14.3 `osty publish` API surface diff algorithm
 
@@ -489,12 +495,12 @@ manifest 를 비교해 SemVer 호환성 검증.
 |---|---|
 | 함수 | `pub fn` 또는 `pub interface` 의 method. `pub` 없으면 surface 아님 |
 | 함수 시그니처 | name, generic param list, param 의 (name, type), return type, where bounds |
-| 함수 attributes | `#[stability]`, `#[error_contract]`, `#[since]`, `#[reproducible]`, `#[pure]`, `#[budget]`, parameter taint annotations |
+| 함수 attributes | `#[stability]`, `#[error_contract]`, `#[reproducible]`, `#[pure]`, `#[budget]`, parameter taint annotations |
 | 함수 body | **포함 안 함** (구현 변경은 surface 아님) |
 | Struct | name, generic params, `pub` 필드 (name, type, default), method 시그니처 |
-| Struct attributes | `#[sealed_construct]`, `#[json]`, `#[stability]`, `#[since]` |
+| Struct attributes | `#[sealed_construct]`, `#[json]`, `#[stability]` |
 | Enum | name, generic params, variant list (name, payload types), method 시그니처 |
-| Enum attributes | `#[stability]`, `#[since]` per variant |
+| Enum attributes | `#[stability]` per variant |
 | Interface | name, generic params, method 시그니처, default body 존재 여부 (body 내용 아님) |
 | Type alias | name, generic params, RHS type |
 | Constants | `pub const` 의 (name, type) — value 는 surface 아님 |
@@ -530,7 +536,7 @@ manifest 를 비교해 SemVer 호환성 검증.
   Δ(generic-bound) — strengthen             → BREAKING
   Δ(generic-bound) — weaken                 → COMPAT-ADD
   Add required param                        → BREAKING
-  Add defaulted param at end                → COMPAT-ADD (positional caller OK)
+  Add defaulted param at end                → COMPAT-ADD (positional caller OK; new param SHOULD declare #[stability(since=)])
   Add defaulted param NOT at end            → BREAKING (G20 named-call shift)
   Remove defaulted param                    → BREAKING
   Default value change                      → BREAKING for stable (omitted-arg behavior changes; experimental = W2100)
@@ -553,8 +559,8 @@ Struct:
   Remove #[sealed_construct]                → COMPAT-ADD
 
 Enum:
-  Add variant (with #[since])               → COMPAT-ADD * (note: G44 match_compat 권장)
-  Add variant (without #[since])            → BREAKING (#[since] 누락 = exhaustiveness 강제)
+  Add variant (with #[stability(since=)])   → COMPAT-ADD * (note: G44 match_compat 권장)
+  Add variant (without #[stability(since=)])→ BREAKING (since 누락 = exhaustiveness 강제)
   Remove variant                            → BREAKING
   Δ(variant-payload)                        → BREAKING
   Reorder variants                          → BREAKING (discriminant 영향, G31)
@@ -640,8 +646,7 @@ fn validatePublish(prev: Version, curr: Version, report: DiffReport) -> Result<(
     {
       "kind": "function",
       "name": "std.user.createUser",
-      "stability": "stable",
-      "since": "0.6",
+      "stability": {"level": "stable", "since": "0.6"},
       "signature": { /* §13.9 와 동일 schema */ }
     },
     /* ... */
@@ -938,11 +943,11 @@ ParamDecl      ::= Annotation* Pattern ':' Annotation* Type ('=' DefaultExpr)?
 |---|---:|---:|---:|
 | Reserved keywords | 17 | 17 | 0 |
 | Contextual keywords | 10 | 10 | 0 |
-| Fixed annotation set | 11 | 27 | +16 |
+| Fixed annotation set | 11 | 26 | +15 |
 | EBNF productions | 191 | 192 | +1 |
 | Lexer token classes | 36 | 36 | 0 |
 
-신규 어노테이션 20:
+신규 어노테이션 19:
 
 | Capability (§20) | `#[ambient]`, `#[reproducible_capability]` |
 | Information flow (§21) | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]`, `#[taint_field]` |
@@ -950,12 +955,12 @@ ParamDecl      ::= Annotation* Pattern ':' Annotation* Type ('=' DefaultExpr)?
 | Construction | `#[sealed_construct]`, `#[trusted_construct]`, `#[test_construct]` |
 | Error | `#[error_contract]` |
 | Determinism | `#[reproducible]` |
-| Evolution | `#[since]`, `#[stability]`, `#[match_compat]` |
+| Evolution | `#[stability]`, `#[match_compat]` |
 | Testing | `#[golden]`, `#[budget]` |
 
 ## 5.1 Annotation namespace (proposal — Phase 2)
 
-20 개 신규 + 기존 11 개 = 31 개 어노테이션은 namespace 없는 flat catalog.
+19 개 신규 + 기존 11 개 = 30 개 어노테이션은 namespace 없는 flat catalog.
 Phase 2 에서 *category-prefix 옵션* 도입 검토:
 
 ```osty
@@ -1296,8 +1301,7 @@ bodies"). interface 는 별도 declaration. 아래 표는 그 기준.
 | `#[purpose]` | ✓ | ✓ | ✓ | | | | ✓ | ✓ |
 | `#[example]` | ✓ | | | | | | ✓ | |
 | `#[fixture]` | ✓ | | | | | | | |
-| `#[since]` | ✓ | ✓ | ✓ | ✓ | ✓ | | ✓ | ✓ |
-| `#[stability]` | ✓ | ✓ | ✓ | | | | ✓ | ✓ |
+| `#[stability]` | ✓ | ✓ | ✓ | ✓ | ✓ | | ✓ | ✓ |
 | `#[match_compat]` | ✓ | | | | | | ✓ | |
 | `#[golden]` | ✓ (test) | | | | | | | |
 | `#[budget]` | ✓ | | | | | | ✓ | |
@@ -1342,8 +1346,7 @@ _본 문서는 v0.6 의 *결정 동결 baseline*. 구현 진행도는 `CHANGELOG
 
 #[sealed_construct(parse)]
 #[json(constructor = parse, field = "email")]
-#[since("0.6")]
-#[stability("stable")]
+#[stability(level = "stable", since = "0.6")]
 pub struct Email {
     local: String,
     domain: String,
@@ -1382,8 +1385,7 @@ pub enum UserCreateError {
 #[example(input = "alice@example.com", uses = "sampleDb", output = "Ok(42)")]
 #[example(input = "invalid", uses = "sampleDb", output = "Err(UserCreateError.EmailFormat)")]
 #[spec("§10.30.user.create")]
-#[since("0.6")]
-#[stability("stable")]
+#[stability(level = "stable", since = "0.6")]
 #[error_contract(
     UserCreateError.EmailFormat    when "Email.parse 실패",
     UserCreateError.DomainBlocked  when "도메인이 deny-list 에 등재",
@@ -1428,15 +1430,14 @@ pub enum HttpEvent {
     Put,
     Delete,
 
-    #[since("0.6")]
+    #[stability(level = "stable", since = "0.6")]
     Patch,                           // v0.6 신규 — 기존 #[match_compat] 가 처리
 }
 
 #[purpose("사용자 ID 검색 — SQL injection 방어")]
 #[example(input = "alice@example.com", output = "Ok(...)")]
 #[spec("§10.24.http.handlers")]
-#[since("0.6")]
-#[stability("stable")]
+#[stability(level = "stable", since = "0.6")]
 #[error_contract(
     HandlerError.NotFound when "users 테이블에 없는 ID",
     HandlerError.DbDown   when "DB 연결 실패",

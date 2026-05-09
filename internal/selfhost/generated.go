@@ -55281,11 +55281,11 @@ func srAnnotAllowedTargets(name string) int {
 	if name == "fixture" {
 		return srAnnotTargetTopLevel()
 	}
-	if name == "since" {
-		return srAnnotTargetTopLevel() | srAnnotTargetMethod() | srAnnotTargetField() | srAnnotTargetVariant()
-	}
+	// Pre-release v0.6 cut C: standalone `#[since]` was unified into
+	// `#[stability(since=)]`, so `stability` now covers struct field /
+	// enum variant positions previously held by `#[since]`.
 	if name == "stability" {
-		return srAnnotTargetTopLevel() | srAnnotTargetMethod()
+		return srAnnotTargetTopLevel() | srAnnotTargetMethod() | srAnnotTargetField() | srAnnotTargetVariant()
 	}
 	if name == "match_compat" {
 		return srAnnotTargetTopLevel() | srAnnotTargetMethod()
@@ -55657,9 +55657,12 @@ func srCheckAnnotationArgs(file *AstFile, ann *AstNode, target int, result *Self
 		// Osty: /tmp/selfhost_merged.osty:28452:32
 		return srCheckNoaliasArgs(file, ann, result)
 	}
-	// v0.6 G44 — `#[since("X.Y")]` format gate (§3.14.1).
-	if ann.text == "since" {
-		return srCheckSinceArgs(file, ann, result)
+	// v0.6 G44 — `#[stability(level, since?, until?, remove?)]` format
+	// gate (§3.14.1). After pre-release cut C the standalone `#[since]`
+	// annotation no longer exists; SemVer-shape validation runs on the
+	// `since` / `until` / `remove` keywords inside `#[stability(...)]`.
+	if ann.text == "stability" {
+		return srCheckStabilityArgs(file, ann, result)
 	}
 	return result
 }
@@ -56469,62 +56472,51 @@ func srPushSinceBadFormat(result *SelfResolveResult, message string, start int, 
 	return out
 }
 
-// srCheckSinceArgs — v0.6 G44 #[since("X.Y")] format gate (§3.14.1).
-// Mirrors toolchain/resolve.osty::srCheckSinceArgs.
-func srCheckSinceArgs(file *AstFile, ann *AstNode, result *SelfResolveResult) *SelfResolveResult {
-	argCount := len(ann.children)
-	if argCount == 0 {
-		return srPushSinceBadFormat(
-			result,
-			"`#[since(...)]` requires one SemVer-shaped string literal",
-			ann.start,
-			ann.end,
-			"example: `#[since(\"0.6\")]`, `#[since(\"1.0.0\")]`, or `#[since(\"2.0.0-rc.1\")]`",
-		)
+// srCheckStabilityArgs — v0.6 G44 #[stability(level, since?, until?,
+// remove?)] format gate (§3.14.1). After pre-release cut C the
+// standalone #[since] annotation no longer exists; SemVer-shape
+// validation runs on the `since` / `until` / `remove` keywords inside
+// `#[stability(...)]`. Mirrors toolchain/resolve.osty::srCheckStabilityArgs.
+func srCheckStabilityArgs(file *AstFile, ann *AstNode, result *SelfResolveResult) *SelfResolveResult {
+	out := result
+	for _, ai := range ann.children {
+		view := srAnnotArgView(file, ai)
+		if view.key != "since" && view.key != "until" && view.key != "remove" {
+			continue
+		}
+		out = srCheckStabilityVersionArg(file, view, view.key, out)
 	}
-	if argCount > 1 {
-		extra := srAnnotArgView(file, ann.children[1])
-		return srPushSinceBadFormat(
-			result,
-			"`#[since(...)]` accepts exactly one argument",
-			extra.start,
-			extra.end,
-			"remove the extra arguments; only one SemVer string is allowed",
-		)
-	}
-	view := srAnnotArgView(file, ann.children[0])
-	if view.isFlag || view.key != "" {
-		return srPushSinceBadFormat(
-			result,
-			"`#[since(...)]` takes a positional string literal, not a key/flag",
-			view.start,
-			view.end,
-			"example: `#[since(\"0.6\")]`",
-		)
-	}
+	return out
+}
+
+// srCheckStabilityVersionArg validates one SemVer-shape keyword
+// (`since` / `until` / `remove`) on `#[stability(...)]`. Mirrors
+// toolchain/resolve.osty::srCheckStabilityVersionArg.
+func srCheckStabilityVersionArg(file *AstFile, view *SrAnnotArgView, key string, result *SelfResolveResult) *SelfResolveResult {
+	example := "example: `#[stability(level = \"stable\", " + key + " = \"0.6\")]`"
 	if view.valueIdx < 0 {
 		return srPushSinceBadFormat(
 			result,
-			"`#[since(...)]` requires a SemVer-shaped string literal",
+			"`#[stability("+key+" = ...)]` requires a SemVer-shaped string literal",
 			view.start,
 			view.end,
-			"example: `#[since(\"0.6\")]`",
+			example,
 		)
 	}
 	valueNode := srAstNode(file, view.valueIdx)
 	if !ostyEqual(valueNode.kind, AstNodeKind(&AstNodeKind_AstNStringLit{})) {
 		return srPushSinceBadFormat(
 			result,
-			"`#[since(...)]` argument must be a string literal",
+			"`#[stability("+key+" = ...)]` argument must be a string literal",
 			view.start,
 			view.end,
-			"example: `#[since(\"0.6\")]`",
+			example,
 		)
 	}
 	if len(valueNode.children) != 0 {
 		return srPushSinceBadFormat(
 			result,
-			"`#[since(...)]` argument must be a non-interpolated string literal",
+			"`#[stability("+key+" = ...)]` argument must be a non-interpolated string literal",
 			view.start,
 			view.end,
 			"use a plain literal like `\"0.6\"` — interpolation is not allowed",
@@ -56534,7 +56526,7 @@ func srCheckSinceArgs(file *AstFile, ann *AstNode, result *SelfResolveResult) *S
 	if !srIsSemVerShape(raw) {
 		return srPushSinceBadFormat(
 			result,
-			"`#[since(\""+raw+"\")]` is not a SemVer-shape version",
+			"`#[stability("+key+" = \""+raw+"\")]` is not a SemVer-shape version",
 			view.start,
 			view.end,
 			"accepted shapes: `\"X.Y\"`, `\"X.Y.Z\"`, or `\"X.Y.Z-pre\"` with digit components and an optional `[A-Za-z0-9.-]+` pre-release tail",
@@ -56786,7 +56778,7 @@ func srCharToDigit(ch rune) int {
 
 // Osty: /tmp/selfhost_merged.osty:29239:1
 func srAnnotationNameList() []string {
-	return []string{"json", "deprecated", "allow", "intrinsic_methods", "requires", "no_alloc", "intrinsic", "c_abi", "export", "pod", "repr", "cfg", "op", "test", "vectorize", "no_vectorize", "parallel", "unroll", "inline", "hot", "cold", "pure", "target_feature", "noalias", "ambient", "reproducible_capability", "taint", "sanitizes", "trusted_declassify", "taint_field", "spec", "reproducible", "sealed_construct", "trusted_construct", "test_construct", "error_contract", "purpose", "example", "fixture", "since", "stability", "match_compat", "golden", "budget"}
+	return []string{"json", "deprecated", "allow", "intrinsic_methods", "requires", "no_alloc", "intrinsic", "c_abi", "export", "pod", "repr", "cfg", "op", "test", "vectorize", "no_vectorize", "parallel", "unroll", "inline", "hot", "cold", "pure", "target_feature", "noalias", "ambient", "reproducible_capability", "taint", "sanitizes", "trusted_declassify", "taint_field", "spec", "reproducible", "sealed_construct", "trusted_construct", "test_construct", "error_contract", "purpose", "example", "fixture", "stability", "match_compat", "golden", "budget"}
 }
 
 // Osty: /tmp/selfhost_merged.osty:29269:1

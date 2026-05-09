@@ -1273,22 +1273,20 @@ fn migrationId(name: String, sequence: Int) -> Int64 {
 
 ## C.9 API evolution (G44)
 
-**규칙**: public API 는 `#[stability]` + `#[since]` 로 진화 규칙 명시. enum match 는 `#[match_compat]` 로 future-proof.
+**규칙**: public API 는 `#[stability(level, since=, until=, remove=)]` 단일 어노테이션으로 진화 규칙 명시. enum match 는 `#[match_compat]` 로 future-proof.
 
 ```osty
-#[stability("stable")]
-#[since("0.6")]
+#[stability(level = "stable", since = "0.6")]
 pub fn parseEmail(s: String) -> Email? { ... }
 
-#[stability("experimental", until = "0.7")]
-#[since("0.6")]
+#[stability(level = "experimental", since = "0.6", until = "0.7")]
 pub fn parseEmailLoose(s: String) -> Email? { ... }
 
 pub enum HttpEvent {
     Get,
     Post,
 
-    #[since("0.7")]
+    #[stability(level = "experimental", since = "0.7")]
     Patch,
 }
 
@@ -1305,6 +1303,10 @@ fn dispatch(e: HttpEvent) -> Response {
 **`osty publish` 게이트**: `stable` API breaking change → major bump 강제 (`E2100`). `experimental` 변경 OK (`W2100`).
 
 **Silent fallback 금지**: `#[match_compat]` 는 `fallback = name` 또는 `unsafe_silent = true` 명시 필수 (`E0450`).
+
+**`since` / `until` / `remove` format gate**: 각 키워드 인자는 SemVer-shape 문자열 (`"X.Y"` / `"X.Y.Z"` / `"X.Y.Z-pre"`) 만 — 위반 시 `E0452`. 보간/정수/`"v0.6"`/`"0.6.x"` 등 거부.
+
+> v0.6 pre-release amendment (cut C): standalone `#[since]` annotation 은 제거. 도입 버전은 항상 `#[stability(since=)]` 의 keyword 위치로.
 
 ## C.10 Golden tests (G45, §11.5.2)
 
@@ -1340,7 +1342,7 @@ fn testNumericNarrowingDiag() {
 | **Error contract** (C.4) | `#[error_contract(... when ...)]` | public API의 concrete enum error |
 | **Intent** (C.5) | `#[purpose]`, `#[example]`, `#[fixture]` | public API / compiler internal |
 | **Reproducibility** (C.7) | `#[reproducible(scope=...)]` | 캐시 키 / 해시 / migration ID |
-| **Evolution** (C.9) | `#[stability]`, `#[since]`, `#[match_compat]` | public API surface |
+| **Evolution** (C.9) | `#[stability(level, since?, until?, remove?)]`, `#[match_compat]` | public API surface |
 | **Golden** (C.10) | `#[golden(path, mode=)]` | 컴파일러 / formatter / docgen 자가 테스트 |
 
 ---

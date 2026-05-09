@@ -267,9 +267,10 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 
 ## 13. API Evolution (G44) and Sealed Construction (G40)
 
-- `#[since("X.Y")]` — 도입 버전 (메타데이터, 검증 없음).
 - `#[stability(level, since=, until=, remove=, reason=)]` — level 은 `"stable"`
-  / `"experimental"` / `"deprecated"` / `"internal"`.
+  / `"experimental"` / `"deprecated"` / `"internal"`. `since` / `until` / `remove`
+  은 SemVer-shape 문자열 (위반 시 `E0452`); 의미 검증 없이 `osty publish` /
+  `osty doc` / `osty context` 가 메타데이터로 소비.
 - `osty publish` 가 manifest API surface diff 계산. `stable` API breaking
   change + minor/patch bump 시 `E2100`. compat-add + patch only `E2102`.
   `experimental` 변경은 warning `W2100`.
@@ -282,7 +283,7 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 - v0.6 stdlib sealed types: `Email`, `Url`, `Path`, `SqlIdent`, `Duration`,
   `Uuid`. `--legacy-construct` 호환 모드 v0.6.x 한정.
 
-## 14. Annotations Catalog (v0.6, +20 from v0.5)
+## 14. Annotations Catalog (v0.6, +19 from v0.5)
 
 | 카테고리 | Annotation | 영역 |
 |---|---|---|
@@ -293,7 +294,7 @@ AI 에이전트가 짧게 읽고 바로 Osty 코드를 생성·수정하기 위�
 | **Construction (G40)** | `#[sealed_construct]`, `#[trusted_construct]`, `#[test_construct]` | §13 |
 | **Error (G41)** | `#[error_contract]` | §8 |
 | **Determinism (G39)** | `#[reproducible]` | §11 |
-| **Evolution (G44)** | `#[since]`, `#[stability]`, `#[match_compat]` | §13 |
+| **Evolution (G44)** | `#[stability]`, `#[match_compat]` | §13 |
 | **Testing (G45)** | `#[golden]` | §11 |
 
 각 annotation 의 합법 위치는 `LANG_SPEC_v0.6/00-revision.md §7.6` 의 표가

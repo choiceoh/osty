@@ -160,7 +160,7 @@ fn handler(req: HttpRequest, db: Db) -> Response {
 
 ## 6. 🔵 Annotation namespace conflicts
 
-신규 v0.6 annotation 20 개. 기존 사용자 코드가 같은 이름 식별자 / 사용자 정의 annotation (불허지만 형식상) 사용 시 충돌.
+신규 v0.6 annotation 19 개. 기존 사용자 코드가 같은 이름 식별자 / 사용자 정의 annotation (불허지만 형식상) 사용 시 충돌.
 
 **v0.6 신규 annotation 이름**:
 ```
@@ -170,7 +170,7 @@ fn handler(req: HttpRequest, db: Db) -> Response {
 #[sealed_construct]   #[trusted_construct]      #[test_construct]
 #[error_contract]
 #[reproducible]
-#[since]              #[stability]              #[match_compat]
+#[stability]          #[match_compat]
 #[golden]
 #[budget]
 ```

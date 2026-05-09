@@ -445,11 +445,10 @@ fn normalize(s: String) -> String {
 
 §3.13, [`CLAUDE.md` 부록 C.6](./CLAUDE.md).
 
-### 6.5 `#[stability]` / `#[since]` for public API
+### 6.5 `#[stability]` for public API
 
 ```osty
-#[stability("stable")]
-#[since("0.6")]
+#[stability(level = "stable", since = "0.6")]
 pub fn parseEmail(s: String) -> Email? { ... }
 ```
 

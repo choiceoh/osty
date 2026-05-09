@@ -394,7 +394,7 @@ readers. To enumerate which hints actually affected codegen, use
 `osty context <symbol>` extracts a *machine-readable intent dossier*
 for a function, method, struct, enum, interface, or module. The
 output combines `#[purpose]` (§3.12), `#[example]` (§3.12),
-`#[error_contract]` (§7.5), `#[stability]` / `#[since]` (§3.14),
+`#[error_contract]` (§7.5), `#[stability]` (§3.14),
 and capability requirements (§20) into a single document. It is the
 canonical surface for AI agents, IDE hover, code-search tools, and
 external static analysis.
@@ -421,7 +421,7 @@ and includes:
 | `effects.capabilities_required` | capability parameters in signature |
 | `effects.reproducible` | `#[reproducible(scope=...)]` |
 | `effects.taint_sources / sanitizes / sinks` | `#[taint]` / `#[sanitizes]` / `#[requires]` |
-| `stability` / `since` | `#[stability]` / `#[since]` |
+| `stability` (`level` / `since` / `until` / `remove`) | `#[stability]` |
 | `fixtures_referenced` | `#[example(uses = "name")]` |
 | `callees` | `--recursive` only |
 
@@ -506,8 +506,8 @@ published manifest. It is the gate that enforces `#[stability]`
 **Surface definition.** API surface includes: function signatures,
 struct fields and methods, enum variants and their payloads, interface
 methods, type alias RHS, public constants, and the following
-annotations: `#[stability]`, `#[error_contract]`, `#[since]`,
-`#[reproducible]`, `#[pure]`, parameter taint annotations.
+annotations: `#[stability]`, `#[error_contract]`, `#[reproducible]`,
+`#[pure]`, parameter taint annotations.
 *Excluded* from surface: function bodies, `#[purpose]` / `#[example]` /
 `#[fixture]`, `#[golden]`, line numbers, comments.
 
@@ -771,8 +771,8 @@ fn computeDiff(prev: Manifest, curr: Manifest) -> DiffReport {
 |---|---|
 | 함수 제거 | BREAKING |
 | 함수 시그니처 변경 (param/return) | BREAKING |
-| 신규 enum variant + `#[since]` | COMPAT-ADD |
-| 신규 enum variant 없음 (`#[since]`) | BREAKING |
+| 신규 enum variant + `#[stability(since=)]` | COMPAT-ADD |
+| 신규 enum variant 없음 (`since` 없음) | BREAKING |
 | 신규 default arg trailing | COMPAT-ADD |
 | 신규 default arg non-trailing | BREAKING (G20 named call shift) |
 | stable 함수의 public parameter rename | BREAKING (keyword call surface changes) |
@@ -794,8 +794,7 @@ fn computeDiff(prev: Manifest, curr: Manifest) -> DiffReport {
     {
       "kind": "function",
       "name": "std.user.createUser",
-      "stability": "stable",
-      "since": "0.6",
+      "stability": {"level": "stable", "since": "0.6"},
       "signature": {/* §13.9.1 와 동일 */}
     }
   ],
@@ -914,8 +913,7 @@ seed 로 reproducer 생성 가능.
 | `#[purpose]` | | | ✓ render | ✓ JSON | | |
 | `#[error_contract]` | | ✓ enforce | ✓ table | ✓ JSON | ✓ surface diff | |
 | `#[reproducible]` | | ✓ enforce | | ✓ JSON | ✓ surface diff | |
-| `#[stability]` | | | ✓ banner | ✓ JSON | ✓ enforce | |
-| `#[since]` | | | ✓ render | ✓ JSON | ✓ surface diff | |
+| `#[stability]` (`level`/`since`/`until`/`remove`) | | ✓ format gate (E0452 on `since`) | ✓ banner | ✓ JSON | ✓ enforce + surface diff | |
 | `#[match_compat]` | | ✓ enforce | | | | ✓ enumerate |
 | `#[ambient]` | | ✓ enforce | | | | |
 | `#[taint]` / `#[sanitizes]` | | ✓ enforce (Phase 5) | | ✓ JSON | ✓ surface diff | |

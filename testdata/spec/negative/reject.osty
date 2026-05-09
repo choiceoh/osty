@@ -363,44 +363,46 @@ fn badPureCapability(hash: PureHashCap, value: String) -> String {
 }
 // === END
 
-// === CASE: E0452 === since with v-prefix (not SemVer)
-#[since("v0.6")]
+// === CASE: E0452 === stability since keyword with v-prefix (not SemVer)
+#[stability(level = "stable", since = "v0.6")]
 fn badSinceVPrefix() {}
 // === END
 
-// === CASE: E0452 === since with wildcard tail
-#[since("0.6.x")]
+// === CASE: E0452 === stability since keyword with wildcard tail
+#[stability(level = "stable", since = "0.6.x")]
 fn badSinceWildcard() {}
 // === END
 
-// === CASE: E0452 === since with empty string
-#[since("")]
+// === CASE: E0452 === stability since keyword with empty string
+#[stability(level = "stable", since = "")]
 fn badSinceEmpty() {}
 // === END
 
-// === CASE: E0452 === since with abc literal
-#[since("abc")]
+// === CASE: E0452 === stability since keyword with abc literal
+#[stability(level = "stable", since = "abc")]
 fn badSinceAbc() {}
 // === END
 
-// === CASE: E0452 === since with integer arg
-#[since(42)]
+// === CASE: E0452 === stability since keyword with integer value
+#[stability(level = "stable", since = 42)]
 fn badSinceInt() {}
 // === END
 
-// === CASE: E0452 === since with no arguments
-#[since]
-fn badSinceBareFlag() {}
+// === CASE: E0452 === stability until keyword with malformed SemVer
+#[stability(level = "experimental", since = "0.6", until = "0.7.x")]
+fn badUntilWildcard() {}
 // === END
 
-// === CASE: E0452 === since with two arguments
-#[since("0.6", "0.7")]
-fn badSinceTwoArgs() {}
+// === CASE: E0452 === stability remove keyword with v-prefix
+#[stability(level = "deprecated", since = "0.6", remove = "v0.8")]
+fn badRemovePrefix() {}
 // === END
 
-// === CASE: E0452 === since with keyword argument
-#[since(version = "0.6")]
-fn badSinceKwarg() {}
+// === CASE: E0452 === stability since keyword with abc on a struct
+#[stability(level = "stable", since = "abc")]
+struct BadStabilityStruct {
+    pub value: Int,
+}
 // === END
 
 // === CASE: E0434 === purpose argument is interpolated string

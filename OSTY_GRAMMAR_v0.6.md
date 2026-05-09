@@ -137,12 +137,13 @@ FixtureAnno  ::= '#[fixture' '(' 'name' '=' StringLit ')' ']'
 ### G44 — API evolution
 
 ```ebnf
-SinceAnno    ::= '#[since' '(' StringLit ')' ']'
-                 (* StringLit 는 SemVer "X.Y" 또는 "X.Y.Z" *)
-
 StabilityAnno::= '#[stability' '(' StabilityLevel (',' StabilityArg)* ','? ')' ']'
+              (* `since` / `until` / `remove` 의 StringLit 는 SemVer-shape
+                 ("X.Y", "X.Y.Z", "X.Y.Z-pre" 등). 형식 위반 시 E0452. *)
 
 StabilityLevel    ::= '"stable"' | '"experimental"' | '"deprecated"' | '"internal"'
+                    | 'level' '=' '"stable"' | 'level' '=' '"experimental"'
+                    | 'level' '=' '"deprecated"' | 'level' '=' '"internal"'
 
 StabilityArg ::= 'until' '=' StringLit
                | 'since' '=' StringLit

@@ -288,9 +288,11 @@ var annotationRules = map[string]AnnotationTarget{
 	"example": TargetTopLevelDecl | TargetMethod,
 	"fixture": TargetTopLevelDecl,
 
-	// v0.6 G44 — API evolution (§3.14).
-	"since":        TargetTopLevelDecl | TargetMethod | TargetStructField | TargetVariant,
-	"stability":    TargetTopLevelDecl | TargetMethod,
+	// v0.6 G44 — API evolution (§3.14). Pre-release cut C unifies the
+	// standalone `#[since]` annotation into `#[stability(since=)]`, so
+	// `stability` now covers struct field / enum variant positions
+	// previously held by `#[since]`.
+	"stability":    TargetTopLevelDecl | TargetMethod | TargetStructField | TargetVariant,
 	"match_compat": TargetTopLevelDecl | TargetMethod,
 
 	// v0.6 G45 — Golden tests (§11.5.2). AST/text/json/diag-aware

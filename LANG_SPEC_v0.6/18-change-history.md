@@ -23,7 +23,7 @@ Four annotation families implement the principle:
 |---|---|
 | **Effectful** (env / IO) | Capability parameters (§20), `#[ambient]`, `#[reproducible]`, `#[reproducible_capability]` |
 | **Security** (sources → sinks) | `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]`, `#[taint_field]` (§21) |
-| **Temporal** (versioning) | `#[since]`, `#[stability]`, `#[match_compat]`, `osty publish` (§3.14) |
+| **Temporal** (versioning) | `#[stability(level, since?, until?, remove?)]`, `#[match_compat]`, `osty publish` (§3.14) |
 | **Intent + Determinism** | `#[purpose]`, `#[example]`, `#[fixture]`, `#[error_contract]`, `#[sealed_construct]`, `#[golden]`, `osty context` (§3.12, §3.4.5, §7.5, §11.5, §13.4) |
 
 **Resolved gaps (10).**
@@ -36,7 +36,7 @@ Four annotation families implement the principle:
 | G40 | Sealed construct (§3.4.5) | `#[sealed_construct]` parse-don't-validate |
 | G41 | Error contract (§7.5) | `#[error_contract(... when ...)]` failure mode 명세 |
 | G42 | Structured intent (§3.12) | `#[purpose]` / `#[example]` / `#[fixture]` |
-| G44 | API evolution (§3.14) | `#[since]` / `#[stability]` / `#[match_compat]` |
+| G44 | API evolution (§3.14) | `#[stability(level, since?, until?, remove?)]` / `#[match_compat]` |
 | G45 | Golden tests (§11.5) | `#[golden]` AST-aware 스냅샷 |
 | G47 | Machine-readable context (§13.4) | `osty context <symbol>` 구조화 추출 |
 | G48 | Annotation surface | 위 신규 어노테이션의 grammar 통합 (+16 fixed annotations) |
@@ -54,7 +54,7 @@ discipline 유지를 위해 ad-hoc labeled data 는 nominal `struct`
 
 - *Reserved keyword*: 변경 없음 (17 → 17).
 - *Contextual keyword*: 변경 없음.
-- *Fixed annotation set*: 11 → 27 (+16 신규).
+- *Fixed annotation set*: 11 → 26 (+15 신규).
 - *EBNF productions*: 변경 없음. 새 grammar surface 는 parameter 위치
   annotation (§21) 한 곳.
 
@@ -88,7 +88,7 @@ discipline 유지를 위해 ad-hoc labeled data 는 nominal `struct`
 §3.4.5, §3.10–§3.15 신규 — `#[sealed_construct]`,
 `#[spec("§X.Y")]`, `#[reproducible(scope=...)]`, `#[purpose]` /
 `#[example]` / `#[fixture]`, `spec { example: / law: / invariant: }`
-블록, `#[since]` / `#[stability]` / `#[match_compat]`,
+블록, `#[stability(level, since?, until?, remove?)]` / `#[match_compat]`,
 `#[budget(allocs / io_calls / stack_depth / instructions / time_ms /
 p99_ms)]`. 각 신규 surface 는 §3 의 *v0.6 Annotation Extensions* 섹션
 참조.

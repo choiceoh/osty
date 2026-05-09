@@ -2674,11 +2674,12 @@ fn srAnnotAllowedTargets(name: String) -> Int {
     if name == "purpose" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
     if name == "example" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
     if name == "fixture" { return srAnnotTargetTopLevel() }
-    // v0.6 G44 — API evolution (§3.14).
-    if name == "since" {
+    // v0.6 G44 — API evolution (§3.14). Pre-release cut C unifies the
+    // standalone `#[since]` annotation into `#[stability(since=)]`, so
+    // `stability` is the sole site for the level + version-anchor pair.
+    if name == "stability" {
         return srAnnotTargetTopLevel() | srAnnotTargetMethod() | srAnnotTargetField() | srAnnotTargetVariant()
     }
-    if name == "stability" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
     if name == "match_compat" { return srAnnotTargetTopLevel() | srAnnotTargetMethod() }
     // v0.6 G45 — Golden tests (§11.5.2). Test functions only.
     if name == "golden" { return srAnnotTargetTopLevel() }
@@ -2929,8 +2930,11 @@ fn srCheckAnnotationArgs(
     if ann.text == "vectorize" { return srCheckVectorizeArgs(file, ann, result) }
     if ann.text == "target_feature" { return srCheckTargetFeatureArgs(file, ann, result) }
     if ann.text == "noalias" { return srCheckNoaliasArgs(file, ann, result) }
-    // v0.6 G44 — `#[since("X.Y")]` format gate (§3.14.1).
-    if ann.text == "since" { return srCheckSinceArgs(file, ann, result) }
+    // v0.6 G44 — `#[stability(level, since?, until?, remove?)]` format gate
+    // (§3.14.1). After pre-release cut C the standalone `#[since]`
+    // annotation no longer exists; the SemVer-shape gate runs on the
+    // `since` keyword inside `#[stability(...)]`.
+    if ann.text == "stability" { return srCheckStabilityArgs(file, ann, result) }
     result
 }
 
@@ -3814,71 +3818,76 @@ fn srPushSinceBadFormat(
     out
 }
 
-/// srCheckSinceArgs validates `#[since("X.Y")]` (v0.6 G44, §3.14.1).
-/// Accepts exactly one argument: a non-interpolated string literal whose
-/// inner content matches the SemVer-shape regex
-/// `^[0-9]+\.[0-9]+(\.[0-9]+)?(-[A-Za-z0-9.-]+)?$`. Anything else
-/// (interpolated string, integer, identifier, prefix like `"v0.6"`,
-/// wildcard tail like `"0.6.x"`, empty string) yields E0452. Spec
-/// authority: LANG_SPEC_v0.6/00-revision.md §3.14.1.
-fn srCheckSinceArgs(
+/// srCheckStabilityArgs validates the SemVer-shape format of the
+/// `since` / `until` / `remove` keyword arguments on
+/// `#[stability(level, since?, until?, remove?)]` (v0.6 G44, §3.14.1).
+///
+/// Pre-release cut C unified the standalone `#[since]` annotation into
+/// the `since` keyword on `#[stability(...)]`, so this gate replaces the
+/// former `srCheckSinceArgs`. Each version-anchor keyword must take a
+/// non-interpolated string literal whose inner content matches the
+/// SemVer-shape regex `^[0-9]+\.[0-9]+(\.[0-9]+)?(-[A-Za-z0-9.-]+)?$`.
+/// Anything else (interpolated string, integer, identifier, prefix like
+/// `"v0.6"`, wildcard tail like `"0.6.x"`, empty string) yields E0452.
+///
+/// `level` and any other keys are not validated here — they are left for
+/// the (planned) full stability semantic gate.
+///
+/// Spec authority: LANG_SPEC_v0.6/00-revision.md §3.14.1.
+fn srCheckStabilityArgs(
     file: AstFile,
     ann: AstNode,
     result: SelfResolveResult,
 ) -> SelfResolveResult {
+    let mut out = result
     let argCount = ann.children.len()
-    if argCount == 0 {
-        return srPushSinceBadFormat(
-            result,
-            "`#[since(...)]` requires one SemVer-shaped string literal",
-            ann.start,
-            ann.end,
-            "example: `#[since(\"0.6\")]`, `#[since(\"1.0.0\")]`, or `#[since(\"2.0.0-rc.1\")]`",
-        )
+    let mut i = 0
+    for ai in 0..argCount {
+        let view = srAnnotArgView(file, ann.children[ai])
+        if view.key != "since" && view.key != "until" && view.key != "remove" {
+            i = i + 1
+            continue
+        }
+        out = srCheckStabilityVersionArg(file, view, view.key, out)
+        i = i + 1
     }
-    if argCount > 1 {
-        let extra = srAnnotArgView(file, ann.children[1])
-        return srPushSinceBadFormat(
-            result,
-            "`#[since(...)]` accepts exactly one argument",
-            extra.start,
-            extra.end,
-            "remove the extra arguments; only one SemVer string is allowed",
-        )
-    }
-    let view = srAnnotArgView(file, ann.children[0])
-    if view.isFlag || view.key != "" {
-        return srPushSinceBadFormat(
-            result,
-            "`#[since(...)]` takes a positional string literal, not a key/flag",
-            view.start,
-            view.end,
-            "example: `#[since(\"0.6\")]`",
-        )
-    }
+    out
+}
+
+/// srCheckStabilityVersionArg validates one SemVer-shape keyword
+/// (`since` / `until` / `remove`) on `#[stability(...)]`. Shared logic
+/// pulled out of srCheckStabilityArgs so each keyword path produces a
+/// targeted hint string.
+fn srCheckStabilityVersionArg(
+    file: AstFile,
+    view: SrAnnotArgView,
+    key: String,
+    result: SelfResolveResult,
+) -> SelfResolveResult {
+    let example = "example: `#[stability(level = \"stable\", " + key + " = \"0.6\")]`"
     if view.valueIdx < 0 {
         return srPushSinceBadFormat(
             result,
-            "`#[since(...)]` requires a SemVer-shaped string literal",
+            "`#[stability(" + key + " = ...)]` requires a SemVer-shaped string literal",
             view.start,
             view.end,
-            "example: `#[since(\"0.6\")]`",
+            example,
         )
     }
     let valueNode = srAstNode(file, view.valueIdx)
     if valueNode.kind != AstNStringLit {
         return srPushSinceBadFormat(
             result,
-            "`#[since(...)]` argument must be a string literal",
+            "`#[stability(" + key + " = ...)]` argument must be a string literal",
             view.start,
             view.end,
-            "example: `#[since(\"0.6\")]`",
+            example,
         )
     }
     if valueNode.children.len() != 0 {
         return srPushSinceBadFormat(
             result,
-            "`#[since(...)]` argument must be a non-interpolated string literal",
+            "`#[stability(" + key + " = ...)]` argument must be a non-interpolated string literal",
             view.start,
             view.end,
             "use a plain literal like `\"0.6\"` — interpolation is not allowed",
@@ -3888,7 +3897,7 @@ fn srCheckSinceArgs(
     if !srIsSemVerShape(raw) {
         return srPushSinceBadFormat(
             result,
-            "`#[since(\"" + raw + "\")]` is not a SemVer-shape version",
+            "`#[stability(" + key + " = \"" + raw + "\")]` is not a SemVer-shape version",
             view.start,
             view.end,
             "accepted shapes: `\"X.Y\"`, `\"X.Y.Z\"`, or `\"X.Y.Z-pre\"` with digit components and an optional `[A-Za-z0-9.-]+` pre-release tail",
@@ -4061,8 +4070,9 @@ fn srAnnotationNameList() -> List<String> {
         "purpose",
         "example",
         "fixture",
-        // v0.6 G44 — API evolution.
-        "since",
+        // v0.6 G44 — API evolution. Pre-release cut C unifies `#[since]`
+        // into `#[stability(since=)]`, so `since` is no longer a
+        // top-level annotation name.
         "stability",
         "match_compat",
         // v0.6 G45 / G46 — Golden / Budget.

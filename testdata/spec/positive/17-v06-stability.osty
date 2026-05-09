@@ -1,0 +1,62 @@
+// v0.6 Phase 4 entry — `#[stability(level, since?, until?, remove?)]`
+// format gate (G44, §3.14.1).
+//
+// Pre-release cut C unified the standalone `#[since]` annotation into
+// the `since` keyword on `#[stability(...)]`. Each version-anchor
+// keyword (`since`, `until`, `remove`) accepts SemVer-shape strings:
+//   `"X.Y"`, `"X.Y.Z"`, `"X.Y.Z-pre"`, `"X.Y-pre"`.
+// Pre-release tail allows `[A-Za-z0-9.-]+`.
+
+#[stability(level = "stable", since = "0.6")]
+fn introducedAtMinorOnly() -> Int {
+    0
+}
+
+#[stability(level = "stable", since = "1.0.0")]
+fn introducedAtPatch() -> Int {
+    0
+}
+
+#[stability(level = "experimental", since = "2.0.0-rc.1")]
+fn introducedWithPreRelease() -> Int {
+    0
+}
+
+#[stability(level = "experimental", since = "3.0.0-alpha")]
+fn preReleaseHyphenOnly() -> Int {
+    0
+}
+
+#[stability(level = "experimental", since = "0.7.1-beta.2")]
+fn preReleaseDottedTail() -> Int {
+    0
+}
+
+#[stability(level = "experimental", since = "0.6", until = "0.7")]
+fn experimentalWithUntil() -> Int {
+    0
+}
+
+#[stability(level = "deprecated", since = "0.6", remove = "0.8")]
+fn deprecatedWithRemove() -> Int {
+    0
+}
+
+#[stability(level = "stable", since = "0.7")]
+struct VersionedStruct {
+    #[stability(level = "stable", since = "0.7.1")]
+    pub field: Int,
+}
+
+#[stability(level = "stable", since = "0.8")]
+enum VersionedEnum {
+    Original,
+
+    #[stability(level = "stable", since = "0.8.0")]
+    Added,
+}
+
+interface VersionedInterface {
+    #[stability(level = "stable", since = "1.0")]
+    fn method(self) -> Int
+}

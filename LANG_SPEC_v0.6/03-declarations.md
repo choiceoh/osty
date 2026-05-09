@@ -7,8 +7,8 @@ the v0.6 sealed-construct rule (§3.4.5, G40), enums (§3.5), interfaces
 §3.12, and §3.14 specify the v0.6 *hidden-dependency-surface*
 annotations (G36, G39, G42, G44) — `#[reproducible]` for
 environment-independence, `#[purpose]` / `#[example]` / `#[fixture]`
-for structured intent, and `#[since]` / `#[stability]` /
-`#[match_compat]` for API evolution.
+for structured intent, and `#[stability]` / `#[match_compat]` for
+API evolution.
 
 The v0.6 design north star (*hidden dependency is forbidden*) is
 realized in this chapter: every external dependency, intent,
@@ -19,7 +19,7 @@ at the declaration site. The annotation surface in §3.11, §3.12,
 sealed construct), and tooling (§13.4 `osty context`, §13.5 `osty
 publish`) all share one source of truth.
 
-The annotation set is finite — 27 compiler-recognized annotations as
+The annotation set is finite — 26 compiler-recognized annotations as
 of v0.6 (§3.8). Three sub-categories sit on top of the underlying
 declaration grammar:
 
@@ -27,7 +27,7 @@ declaration grammar:
 |---|---|---|
 | **Effect & flow** | `#[ambient]`, `#[reproducible]`, `#[reproducible_capability]`, `#[taint]`, `#[sanitizes]`, `#[requires]`, `#[trusted_declassify]` | Make capability use, reproducibility scope, and information-flow tags explicit at the declaration boundary. |
 | **Intent & contract** | `#[purpose]`, `#[example]`, `#[fixture]`, `#[error_contract]`, `#[golden]` | Author-visible, machine-readable record of *what a declaration is for* and *what it must produce*. |
-| **Evolution** | `#[since]`, `#[stability]`, `#[match_compat]`, `#[deprecated]` | Promises about API surface stability, enforced by `osty publish`. |
+| **Evolution** | `#[stability]`, `#[match_compat]`, `#[deprecated]` | Promises about API surface stability, enforced by `osty publish`. |
 
 Declarations without these annotations behave per the underlying
 grammar — the annotations are *opt-in attestations*, not new syntactic
@@ -719,20 +719,21 @@ An enum with an explicit integer representation auto-derives
 `.discriminant() -> Int` and `.fromDiscriminant(n: Int) -> Self?`.
 Payload variants may not assign discriminants (`E0721`).
 
-#### 3.5.1 `#[since]` on variants
+#### 3.5.1 `#[stability(since=)]` on variants
 
-A variant may carry `#[since("X.Y")]` to record when it was added.
-The annotation is consumed by `osty publish` (§3.14.3) — adding a
-`#[since]`-marked variant to a `#[stability("stable")]` enum is a
-**major** SemVer bump because exhaustive `match` expressions on the
-old enum become non-exhaustive.
+A variant may carry `#[stability(level = ..., since = "X.Y")]` to
+record when it was added (and at what stability level). The annotation
+is consumed by `osty publish` (§3.14.3) — adding a `since`-marked
+variant to a `#[stability(level = "stable")]` enum is a **major**
+SemVer bump because exhaustive `match` expressions on the old enum
+become non-exhaustive.
 
 ```osty
 pub enum HttpEvent {
     Get,
     Post,
 
-    #[since("0.7")]
+    #[stability(level = "stable", since = "0.7")]
     Patch,                          // 도착 예정 v0.7
 }
 ```
@@ -1600,7 +1601,7 @@ sequence (top to bottom):
 3. **Examples** — `#[example]` (one or more)
 4. **Error contract** — `#[error_contract]`
 5. **Reproducibility / purity** — `#[reproducible]` / `#[pure]`
-6. **Stability / since** — `#[stability]`, `#[since]`, `#[deprecated]`
+6. **Stability** — `#[stability]`, `#[deprecated]`
 7. **Performance hints** — `#[inline]`, `#[hot]` / `#[cold]`,
    `#[target_feature]`, `#[noalias]`, `#[parallel]`,
    `#[vectorize]`, `#[unroll]`, `#[no_vectorize]`
@@ -1863,8 +1864,7 @@ duplicate public/test helper name (`E0554`).
 #[example(input = ["invalid", "<Db>"],
           uses = "freshDb",
           output = "Err(SignupError.EmailFormat)")]
-#[since("0.6")]
-#[stability("stable")]
+#[stability(level = "stable", since = "0.6")]
 #[error_contract(
     SignupError.EmailFormat   when "Email.parse failed",
     SignupError.DomainBlocked when "domain in deny-list",
@@ -1889,8 +1889,8 @@ This single declaration emits to:
   (each with the fixture body inlined).
 - `osty context signup --format=json` with the full intent payload.
 - `osty test --example --golden` runs all three examples.
-- `osty publish` validates the API surface against `#[stability("stable")]`
-  and the contract.
+- `osty publish` validates the API surface against
+  `#[stability(level = "stable", since = "0.6")]` and the contract.
 - LSP hover shows the purpose + spec lead paragraph.
 
 This is what *hidden dependency forbidden* looks like at a single
@@ -1898,27 +1898,26 @@ declaration: every external dependency, every failure mode, every
 test fixture, every API stability promise — all surfaced explicitly
 at the function's signature.
 
-### 3.14 API Evolution — `#[since]`, `#[stability]`, `#[match_compat]` (G44)
+### 3.14 API Evolution — `#[stability]`, `#[match_compat]` (G44)
 
-Three annotations cooperate to make API versioning a first-class
+Two annotations cooperate to make API versioning a first-class
 concern.
 
 ```osty
 pub enum HttpEvent {
     Get,
     Post,
-    #[since("0.6")]
+    #[stability(level = "stable", since = "0.6")]
     Patch,                       // v0.6 신규 variant
 }
 
-#[stability("stable")]
-#[since("0.6")]
+#[stability(level = "stable", since = "0.6")]
 pub fn parseEmail(s: String) -> Email? { ... }
 
-#[stability("experimental", until = "0.7")]
+#[stability(level = "experimental", since = "0.6", until = "0.7")]
 pub fn parseEmailLoose(s: String) -> Email? { ... }
 
-#[stability("deprecated", since = "0.6", remove = "0.8")]
+#[stability(level = "deprecated", since = "0.6", remove = "0.8")]
 pub fn oldApi() -> Int { ... }
 
 #[match_compat("0.6", fallback = handlePatchAsPut)]
@@ -1932,14 +1931,16 @@ fn dispatch(e: HttpEvent) -> Response {
 ```
 
 `#[stability]` levels: `"stable"`, `"experimental"`, `"deprecated"`,
-`"internal"`. `osty publish` enforces SemVer compatibility — breaking
-changes to `stable` APIs require a major bump (`E2100`); see
-`00-revision.md §3.14.3` for the surface diff algorithm.
+`"internal"`. The `since`/`until`/`remove` keyword arguments anchor
+the relevant version transitions. `osty publish` enforces SemVer
+compatibility — breaking changes to `stable` APIs require a major bump
+(`E2100`); see `00-revision.md §3.14.3` for the surface diff algorithm.
 
 `#[match_compat]` pins a `match` expression to a historical enum
-shape so that adding a variant (with `#[since]`) does not silently
-break existing code. Either `fallback = name` or `unsafe_silent =
-true` is mandatory (`E0450`); the latter always emits `W0902`.
+shape so that adding a variant (with `#[stability(since=)]`) does not
+silently break existing code. Either `fallback = name` or
+`unsafe_silent = true` is mandatory (`E0450`); the latter always
+emits `W0902`.
 
 #### 3.14.1 Stability levels — when to use which
 
@@ -1955,16 +1956,21 @@ practical use). Demotion path: `stable` → `deprecated` (with a
 `remove` target version) → removed. Direct `stable` → removed is a
 SemVer violation regardless of major-bump.
 
-#### 3.14.2 `#[since]` and version anchoring
+#### 3.14.2 `since`/`until`/`remove` and version anchoring
 
-`#[since("X.Y")]` is metadata, not a check. The version string must
-match the manifest's `[package] version` history but is not
-otherwise validated by the compiler — it is consumed by `osty doc`
-and `osty changelog` to render version chips.
+The keyword arguments on `#[stability]` are *metadata*, not semantic
+checks. The compiler validates only their lexical shape — each must
+be a SemVer-shape string literal (`E0452` on violation; accepted
+shapes: `"X.Y"`, `"X.Y.Z"`, `"X.Y.Z-pre"` per the SemVer-shape
+regex). The version strings must match the manifest's `[package]
+version` history but are not otherwise validated — they are consumed
+by `osty doc`, `osty context`, and `osty publish` to render version
+chips, drive surface diff classification, and enforce removal
+schedules.
 
-A `#[since]` value newer than the package's *current* version is
+A `since` value newer than the package's *current* version is
 permitted (it pre-records a planned addition for an upcoming
-release). `osty publish` reconciles `#[since]` against the actual
+release). `osty publish` reconciles `since` against the actual
 release version at publish time.
 
 #### 3.14.3 `#[match_compat]` worked patterns
@@ -2019,7 +2025,7 @@ pub enum HttpEvent {
     Get,
     Post,
 
-    #[since("0.7")]
+    #[stability(level = "experimental", since = "0.7")]
     Patch,                          // declared but not yet present
 }
 
@@ -2029,7 +2035,8 @@ fn dispatch(e: HttpEvent) -> Response { ... }
 fn handlePatchAsPost(e: HttpEvent) -> Response { ... }
 
 // v0.7
-//   - Patch becomes #[since("0.6")]; the variant is materialized.
+//   - Patch flips to #[stability(level = "stable", since = "0.7")];
+//     the variant is materialized.
 //   - dispatch's match adds Patch -> handlePatch().
 //   - #[match_compat] is removed (or changed to "0.7").
 //   - handlePatchAsPost is removed (or kept for older compat).
@@ -2058,8 +2065,7 @@ patterns 의 carry-forward 사례. 정식 의미는 각 sub-section.
     uses = "fakeDb",
     output = "Err(UserCreateError.Format)",
 )]
-#[since("0.6")]
-#[stability("stable")]
+#[stability(level = "stable", since = "0.6")]
 #[error_contract(
     UserCreateError.Format        when "Email.parse 실패",
     UserCreateError.DomainBlocked when "도메인 deny-list 등재",
@@ -2111,8 +2117,7 @@ unordered iter 모두 거부 (§3.11.3).
 #[purpose("RFC 5322 email parser")]
 #[example(input = "alice@example.com", output = "Some(...)")]
 #[example(input = "no-at", output = "None")]
-#[since("0.6")]
-#[stability("stable")]
+#[stability(level = "stable", since = "0.6")]
 #[sealed_construct(parse)]
 pub struct Email {
     local: String,
@@ -2139,8 +2144,7 @@ struct literal `Email { local: ..., domain: ... }` 은 `E0420`. 이로써
 
 ```osty
 #[purpose("Look up user by ID with SQL safety")]
-#[since("0.6")]
-#[stability("stable")]
+#[stability(level = "stable", since = "0.6")]
 #[error_contract(
     HandlerError.NotFound when "users 테이블에 없는 ID",
     HandlerError.DbDown   when "DB 연결 실패",
@@ -2183,7 +2187,7 @@ pub enum HttpEvent {
     Put,
     Delete,
 
-    #[since("0.7")]
+    #[stability(level = "experimental", since = "0.7")]
     Patch,                       // v0.7 신규 — v0.6 코드는 fallback 로 처리
 }
 
@@ -2263,8 +2267,7 @@ explicitly.
 pub fn createUser(email: String, db: Db) -> Result<UserId, Error> { ... }
 
 // ✅
-#[stability("stable")]
-#[since("0.6")]
+#[stability(level = "stable", since = "0.6")]
 pub fn createUser(email: String, db: Db) -> Result<UserId, Error> { ... }
 ```
 
