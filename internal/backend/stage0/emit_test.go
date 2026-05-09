@@ -5138,6 +5138,575 @@ func TestStage0P29GenericCFGSwitchInt(t *testing.T) {
 	}
 }
 
+func TestStage0P29GenericCFGBoolSyntheticReturnAccumulator(t *testing.T) {
+	t.Parallel()
+	fn := &mir.Function{
+		Name:        "isFlag",
+		Params:      []mir.LocalID{1},
+		ReturnType:  ir.TBool,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "_return", Type: ir.TBool, IsReturn: true},
+			{ID: 1, Name: "name", Type: ir.TString, IsParam: true},
+			{ID: 2, Name: "cond", Type: ir.TBool},
+			{ID: 3, Name: "out", Type: ir.TBool},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{
+				ID: 0,
+				Instrs: []mir.Instr{
+					assign(2, binaryRV(mir.BinEq, paramCopy(1, ir.TString), stringConst("A"), ir.TBool)),
+				},
+				Term: &mir.BranchTerm{Cond: localCopy(2, ir.TBool), Then: 1, Else: 2},
+			},
+			{
+				ID:     1,
+				Instrs: []mir.Instr{assign(3, useRV(boolConst(true)))},
+				Term:   &mir.GotoTerm{Target: 3},
+			},
+			{
+				ID: 2,
+				Instrs: []mir.Instr{
+					assign(3, binaryRV(mir.BinEq, paramCopy(1, ir.TString), stringConst("B"), ir.TBool)),
+				},
+				Term: &mir.GotoTerm{Target: 3},
+			},
+			{ID: 3, Term: &mir.UnreachableTerm{}},
+		},
+	}
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"declare i1 @osty_rt_strings_Equal(ptr, ptr)",
+		"define i1 @isFlag(ptr %name)",
+		"ret i1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P29GenericCFGBoolSyntheticReturnCond(t *testing.T) {
+	t.Parallel()
+	fn := &mir.Function{
+		Name:        "isRawPtr",
+		Params:      []mir.LocalID{1},
+		ReturnType:  ir.TBool,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "_return", Type: ir.TBool, IsReturn: true},
+			{ID: 1, Name: "name", Type: ir.TString, IsParam: true},
+			{ID: 2, Name: "cond", Type: ir.TBool},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{
+				ID: 0,
+				Instrs: []mir.Instr{
+					assign(2, binaryRV(mir.BinEq, paramCopy(1, ir.TString), stringConst("RawPtr"), ir.TBool)),
+				},
+				Term: &mir.BranchTerm{Cond: localCopy(2, ir.TBool), Then: 1, Else: 1},
+			},
+			{ID: 1, Term: &mir.UnreachableTerm{}},
+		},
+	}
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"declare i1 @osty_rt_strings_Equal(ptr, ptr)",
+		"define i1 @isRawPtr(ptr %name)",
+		"ret i1",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P29GenericCFGStringOptionCoalesceSyntheticReturn(t *testing.T) {
+	t.Parallel()
+	optString := &ir.OptionalType{Inner: ir.TString}
+	fn := &mir.Function{
+		Name:        "MirRuntimeDecls__signature",
+		Params:      []mir.LocalID{1, 2},
+		ReturnType:  ir.TString,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "_return", Type: ir.TString, IsReturn: true},
+			{ID: 1, Name: "self", Type: &ir.NamedType{Name: "MirRuntimeDecls"}, IsParam: true},
+			{ID: 2, Name: "name", Type: ir.TString, IsParam: true},
+			{ID: 4, Name: "_coalesce", Type: optString},
+			{ID: 5, Name: "", Type: ir.TInt},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{
+				ID: 0,
+				Instrs: []mir.Instr{
+					assign(4, &mir.AggregateRV{Kind: mir.AggEnumVariant, VariantIdx: 1, Fields: nil, T: optString}),
+					assign(5, &mir.DiscriminantRV{Place: mir.Place{Local: 4}}),
+				},
+				Term: &mir.SwitchIntTerm{
+					Scrutinee: localCopy(5, ir.TInt),
+					Cases:     []mir.SwitchCase{{Value: 0, Target: 1}},
+					Default:   1,
+				},
+			},
+			{ID: 1, Term: &mir.UnreachableTerm{}},
+		},
+	}
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"%stage0.Option.ptr = type { i64, ptr }",
+		"select i1",
+		"ret ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P29GenericCFGPreExitDiscardedIntrinsicReturnString(t *testing.T) {
+	t.Parallel()
+	fn := &mir.Function{
+		Name:        "hirLowerStripSign",
+		Params:      []mir.LocalID{1},
+		ReturnType:  ir.TString,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "_return", Type: ir.TString, IsReturn: true},
+			{ID: 1, Name: "text", Type: ir.TString, IsParam: true},
+			{ID: 2, Name: "", Type: ir.TBool},
+			{ID: 3, Name: "", Type: ir.TBool},
+			{ID: 5, Name: "", Type: ir.TInt},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{
+				ID: 0,
+				Instrs: []mir.Instr{
+					&mir.IntrinsicInstr{
+						Dest: &mir.Place{Local: 3},
+						Kind: mir.IntrinsicStringStartsWith,
+						Args: []mir.Operand{localCopy(1, ir.TString), stringConst("+")},
+					},
+				},
+				Term: &mir.BranchTerm{Cond: localCopy(3, ir.TBool), Then: 1, Else: 2},
+			},
+			{
+				ID:     1,
+				Instrs: []mir.Instr{assign(2, useRV(boolConst(true)))},
+				Term:   &mir.GotoTerm{Target: 3},
+			},
+			{
+				ID: 2,
+				Instrs: []mir.Instr{
+					&mir.IntrinsicInstr{
+						Dest: &mir.Place{Local: 2},
+						Kind: mir.IntrinsicStringStartsWith,
+						Args: []mir.Operand{localCopy(1, ir.TString), stringConst("-")},
+					},
+				},
+				Term: &mir.GotoTerm{Target: 3},
+			},
+			{ID: 3, Term: &mir.BranchTerm{Cond: localCopy(2, ir.TBool), Then: 4, Else: 6}},
+			{
+				ID: 4,
+				Instrs: []mir.Instr{
+					&mir.IntrinsicInstr{Dest: &mir.Place{Local: 5}, Kind: mir.IntrinsicStringLen, Args: []mir.Operand{localCopy(1, ir.TString)}},
+					&mir.IntrinsicInstr{Dest: nil, Kind: mir.IntrinsicStringSubstring, Args: []mir.Operand{localCopy(1, ir.TString), intConst(1), localCopy(5, ir.TInt)}},
+				},
+				Term: &mir.GotoTerm{Target: 6},
+			},
+			{ID: 5, Term: &mir.GotoTerm{Target: 6}},
+			{ID: 6, Term: &mir.UnreachableTerm{}},
+		},
+	}
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"declare ptr @osty_rt_strings_Slice(ptr, i64, i64)",
+		"call ptr @osty_rt_strings_Slice(",
+		"ret ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P29GenericCFGMapNewRecoversArgsFromStructLayout(t *testing.T) {
+	t.Parallel()
+	tomlValue := &ir.NamedType{Name: "TomlValue"}
+	tomlTable := &ir.NamedType{Name: "TomlTable"}
+	listString := &ir.NamedType{Name: "List", Builtin: true, Args: []ir.Type{ir.TString}}
+	mapStringTomlValue := &ir.NamedType{Name: "Map", Builtin: true, Args: []ir.Type{ir.TString, tomlValue}}
+	mapPoison := &ir.NamedType{Name: "Map", Builtin: true, Args: []ir.Type{ir.ErrTypeVal, ir.ErrTypeVal}}
+	listPoison := &ir.NamedType{Name: "List", Builtin: true, Args: []ir.Type{ir.ErrTypeVal}}
+	fn := &mir.Function{
+		Name:        "newTomlTable",
+		ReturnType:  tomlTable,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "_return", Type: tomlTable, IsReturn: true},
+			{ID: 1, Name: "", Type: listPoison},
+			{ID: 2, Name: "", Type: mapPoison},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{
+				ID: 0,
+				Instrs: []mir.Instr{
+					assign(1, &mir.AggregateRV{Kind: mir.AggList, Fields: nil, T: listPoison}),
+					&mir.IntrinsicInstr{Dest: &mir.Place{Local: 2}, Kind: mir.IntrinsicMapNew, Args: nil},
+					assign(0, &mir.AggregateRV{
+						Kind:   mir.AggStruct,
+						Fields: []mir.Operand{localCopy(1, listPoison), localCopy(2, mapPoison), boolConst(false), intConst(0)},
+						T:      tomlTable,
+					}),
+				},
+				Term: &mir.ReturnTerm{},
+			},
+		},
+	}
+	mod := moduleWith(trivialMainFn(), fn)
+	mod.Layouts.Structs["TomlTable"] = &mir.StructLayout{
+		Name: "TomlTable",
+		Fields: []mir.FieldLayout{
+			{Index: 0, Name: "keys", Type: listString},
+			{Index: 1, Name: "items", Type: mapStringTomlValue},
+			{Index: 2, Name: "inline", Type: ir.TBool},
+			{Index: 3, Name: "line", Type: ir.TInt},
+		},
+	}
+	got, err := EmitMIR(mod, llvmabi.Options{PackageName: "main"})
+	if err != nil {
+		t.Fatalf("EmitMIR: %v", err)
+	}
+	for _, want := range []string{
+		"declare ptr @osty_rt_map_new(i64, i64, i64, ptr)",
+		"call ptr @osty_rt_map_new(i64 5, i64 4, i64 8, ptr null)",
+		"define ptr @newTomlTable()",
+		"ret ptr",
+	} {
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, string(got))
+		}
+	}
+}
+
+func TestStage0P29GenericCFGBoolTerminalCondThroughGotoChain(t *testing.T) {
+	t.Parallel()
+	hirTypeKind := &ir.NamedType{Name: "HirTypeKind"}
+	hirType := &ir.NamedType{Name: "HirType"}
+	fn := &mir.Function{
+		Name:        "hirTypeIsList",
+		Params:      []mir.LocalID{1},
+		ReturnType:  ir.TBool,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "_return", Type: ir.TBool, IsReturn: true},
+			{ID: 1, Name: "t", Type: hirType, IsParam: true},
+			{ID: 2, Name: "_scrut", Type: hirTypeKind},
+			{ID: 3, Name: "", Type: ir.TInt},
+			{ID: 5, Name: "", Type: ir.TBool},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{
+				ID: 0,
+				Instrs: []mir.Instr{
+					&mir.StorageLiveInstr{},
+					assign(2, useRV(&mir.CopyOp{
+						Place: mir.Place{Local: 1, Projections: []mir.Projection{&mir.FieldProj{Index: 0, Name: "kind", Type: hirTypeKind}}},
+						T:     hirTypeKind,
+					})),
+					assign(3, &mir.DiscriminantRV{Place: mir.Place{Local: 2}}),
+				},
+				Term: &mir.SwitchIntTerm{
+					Scrutinee: localCopy(3, ir.TInt),
+					Cases:     []mir.SwitchCase{{Value: 2, Target: 2}},
+					Default:   1,
+				},
+			},
+			{
+				ID: 1,
+				Instrs: []mir.Instr{
+					&mir.StorageDeadInstr{},
+				},
+				Term: &mir.UnreachableTerm{},
+			},
+			{
+				ID: 2,
+				Instrs: []mir.Instr{
+					assign(5, binaryRV(mir.BinEq,
+						&mir.CopyOp{Place: mir.Place{Local: 1, Projections: []mir.Projection{&mir.FieldProj{Index: 1, Name: "name", Type: ir.TString}}}, T: ir.TString},
+						stringConst("List"),
+						ir.TBool,
+					)),
+				},
+				Term: &mir.BranchTerm{Cond: localCopy(5, ir.TBool), Then: 8, Else: 8},
+			},
+			{
+				ID:     8,
+				Instrs: []mir.Instr{&mir.StorageDeadInstr{}},
+				Term:   &mir.GotoTerm{Target: 1},
+			},
+		},
+	}
+	mod := moduleWith(trivialMainFn(), fn)
+	mod.Layouts.Enums["HirTypeKind"] = &mir.EnumLayout{
+		Name:         "HirTypeKind",
+		Discriminant: ir.TInt,
+		Variants: []mir.VariantLayout{
+			{Index: 0, Name: "A"},
+			{Index: 1, Name: "B"},
+			{Index: 2, Name: "List"},
+		},
+	}
+	mod.Layouts.Structs["HirType"] = &mir.StructLayout{
+		Name: "HirType",
+		Fields: []mir.FieldLayout{
+			{Index: 0, Name: "kind", Type: hirTypeKind},
+			{Index: 1, Name: "name", Type: ir.TString},
+		},
+	}
+	got, err := EmitMIR(mod, llvmabi.Options{PackageName: "main"})
+	if err != nil {
+		t.Fatalf("EmitMIR: %v", err)
+	}
+	for _, want := range []string{
+		"define i1 @hirTypeIsList(ptr %t)",
+		"ret i1",
+	} {
+		if !strings.Contains(string(got), want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, string(got))
+		}
+	}
+}
+
+func TestStage0P29GenericCFGStringNamedLocalSyntheticReturn(t *testing.T) {
+	t.Parallel()
+	fn := &mir.Function{
+		Name:        "ostyAstParam",
+		Params:      []mir.LocalID{1, 2},
+		ReturnType:  ir.TString,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "_return", Type: ir.TString, IsReturn: true},
+			{ID: 1, Name: "f", Type: &ir.NamedType{Name: "Fmt"}, IsParam: true},
+			{ID: 2, Name: "idx", Type: ir.TInt, IsParam: true},
+			{ID: 3, Name: "node", Type: &ir.NamedType{Name: "Node"}},
+			{ID: 4, Name: "text", Type: ir.TString},
+			{ID: 5, Name: "", Type: ir.TBool},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{
+				ID: 0,
+				Instrs: []mir.Instr{
+					assign(4, useRV(stringConst("a"))),
+					assign(5, useRV(boolConst(true))),
+				},
+				Term: &mir.BranchTerm{Cond: localCopy(5, ir.TBool), Then: 1, Else: 2},
+			},
+			{
+				ID:     1,
+				Instrs: []mir.Instr{assign(4, useRV(stringConst("b")))},
+				Term:   &mir.GotoTerm{Target: 3},
+			},
+			{
+				ID:     2,
+				Instrs: []mir.Instr{assign(4, useRV(stringConst("c")))},
+				Term:   &mir.GotoTerm{Target: 3},
+			},
+			{ID: 3, Term: &mir.UnreachableTerm{}},
+		},
+	}
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"define ptr @ostyAstParam(ptr %f, i64 %idx)",
+		"ret ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P29GenericCFGTupleReturnProjection(t *testing.T) {
+	t.Parallel()
+	boxTy := &ir.NamedType{Name: "Box"}
+	tupleTy := &ir.TupleType{Elems: []ir.Type{ir.TBool, boxTy}}
+	fn := &mir.Function{
+		Name:        "tupleOk",
+		ReturnType:  ir.TBool,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "ret", Type: ir.TBool, IsReturn: true},
+			{ID: 1, Name: "pair", Type: tupleTy},
+			{ID: 2, Name: "ok", Type: ir.TBool},
+			{ID: 3, Name: "box", Type: boxTy},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{
+				ID: 0,
+				Instrs: []mir.Instr{
+					&mir.CallInstr{
+						Dest: &mir.Place{Local: 1},
+						Callee: &mir.FnRef{
+							Symbol: "makePair",
+							Type:   &ir.FnType{Params: []ir.Type{ir.TInt}, Return: tupleTy},
+						},
+						Args: []mir.Operand{intConst(1)},
+					},
+					assign(2, useRV(&mir.CopyOp{
+						Place: mir.Place{
+							Local: 1,
+							Projections: []mir.Projection{
+								&mir.TupleProj{Index: 0, Type: ir.TBool},
+							},
+						},
+						T: ir.TBool,
+					})),
+					assign(3, useRV(&mir.CopyOp{
+						Place: mir.Place{
+							Local: 1,
+							Projections: []mir.Projection{
+								&mir.TupleProj{Index: 1, Type: boxTy},
+							},
+						},
+						T: boxTy,
+					})),
+					assign(0, useRV(paramCopy(2, ir.TBool))),
+				},
+				Term: &mir.ReturnTerm{},
+			},
+		},
+	}
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"%.tuple.0 = type { i1, ptr }",
+		"declare %.tuple.0 @makePair(i64)",
+		"%0 = call %.tuple.0 @makePair(i64 1)",
+		"%1 = extractvalue %.tuple.0 %0, 0",
+		"%2 = extractvalue %.tuple.0 %0, 1",
+		"ret i1 %4",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0OptionalAggregateRecoversPoisonTypeFromDest(t *testing.T) {
+	t.Parallel()
+	optString := &ir.OptionalType{Inner: ir.TString}
+	fn := &mir.Function{
+		Name:        "optFromPoison",
+		ReturnType:  optString,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "_return", Type: optString, IsReturn: true},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{
+				ID: 0,
+				Instrs: []mir.Instr{
+					assign(0, &mir.AggregateRV{
+						Kind:       mir.AggEnumVariant,
+						VariantIdx: 0,
+						Fields:     []mir.Operand{stringConst("hello")},
+						T:          ir.ErrTypeVal,
+					}),
+				},
+				Term: &mir.ReturnTerm{},
+			},
+		},
+	}
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"%stage0.Option.ptr = type { i64, ptr }",
+		"declare ptr @osty_rt_stage0_alloc(i64)",
+		"define ptr @optFromPoison()",
+		"store i64 0, ptr",
+		"store ptr @.str.0, ptr",
+		"ret ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestStage0P29GenericCFGPreExitDiscardedCallReturnNamed(t *testing.T) {
+	t.Parallel()
+	hirBlock := &ir.NamedType{Name: "HirBlock"}
+	hirSpan := &ir.NamedType{Name: "HirSpan"}
+	listHirBlock := &ir.NamedType{Name: "List", Builtin: true, Args: []ir.Type{hirBlock}}
+	fn := &mir.Function{
+		Name:        "hirOptimizeFirstBlock",
+		Params:      []mir.LocalID{1},
+		ReturnType:  hirBlock,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "_return", Type: hirBlock, IsReturn: true},
+			{ID: 1, Name: "xs", Type: listHirBlock, IsParam: true},
+			{ID: 2, Name: "", Type: ir.TBool},
+			{ID: 3, Name: "", Type: ir.TInt},
+			{ID: 5, Name: "", Type: hirSpan},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{
+			{
+				ID: 0,
+				Instrs: []mir.Instr{
+					&mir.IntrinsicInstr{
+						Dest: &mir.Place{Local: 3},
+						Kind: mir.IntrinsicListLen,
+						Args: []mir.Operand{&mir.CopyOp{Place: mir.Place{Local: 1}, T: listHirBlock}},
+					},
+					assign(2, binaryRV(mir.BinGt, localCopy(3, ir.TInt), intConst(0), ir.TBool)),
+				},
+				Term: &mir.BranchTerm{Cond: localCopy(2, ir.TBool), Then: 3, Else: 2},
+			},
+			{ID: 1, Term: &mir.GotoTerm{Target: 3}},
+			{
+				ID: 2,
+				Instrs: []mir.Instr{
+					&mir.CallInstr{
+						Dest:   &mir.Place{Local: 5},
+						Callee: &mir.FnRef{Symbol: "hirNoSpan", Type: ir.ErrTypeVal},
+						Args:   nil,
+					},
+					&mir.CallInstr{
+						Dest:   nil,
+						Callee: &mir.FnRef{Symbol: "hirBlock", Type: ir.ErrTypeVal},
+						Args:   []mir.Operand{&mir.CopyOp{Place: mir.Place{Local: 5}, T: hirSpan}},
+					},
+					&mir.StorageDeadInstr{},
+				},
+				Term: &mir.GotoTerm{Target: 3},
+			},
+			{ID: 3, Term: &mir.UnreachableTerm{}},
+		},
+	}
+	got := emit(t, trivialMainFn(), fn)
+	for _, want := range []string{
+		"define ptr @hirOptimizeFirstBlock(ptr %xs)",
+		"declare ptr @hirNoSpan()",
+		"declare ptr @hirBlock(ptr)",
+		"call ptr @hirBlock(",
+		"ret ptr",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("emitted IR missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestStage0LowersUnitMinusInt(t *testing.T) {
 	t.Parallel()
 	fn := &mir.Function{

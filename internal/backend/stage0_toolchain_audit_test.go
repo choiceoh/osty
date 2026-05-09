@@ -170,7 +170,7 @@ func TestStage0ToolchainAudit(t *testing.T) {
 				if bb == nil {
 					continue
 				}
-				t.Logf("  bb id=%d term=%T instrs=%d", bb.ID, bb.Term, len(bb.Instrs))
+				t.Logf("  bb id=%d term=%T %s instrs=%d", bb.ID, bb.Term, describeAuditTerm(bb.Term), len(bb.Instrs))
 				for _, instr := range bb.Instrs {
 					t.Logf("    %s", describeAuditInstr(instr))
 				}
@@ -201,6 +201,26 @@ func describeAuditInstr(instr mir.Instr) string {
 		return fmt.Sprintf("%T dest=%s kind=%s args=%s", instr, dest, x.Kind.String(), describeAuditOperands(x.Args))
 	default:
 		return fmt.Sprintf("%T", instr)
+	}
+}
+
+func describeAuditTerm(term mir.Terminator) string {
+	switch x := term.(type) {
+	case *mir.GotoTerm:
+		return fmt.Sprintf("target=%d", x.Target)
+	case *mir.BranchTerm:
+		return fmt.Sprintf("then=%d else=%d cond=%s", x.Then, x.Else, describeAuditOperand(x.Cond))
+	case *mir.SwitchIntTerm:
+		var b strings.Builder
+		for i, c := range x.Cases {
+			if i > 0 {
+				b.WriteString(",")
+			}
+			fmt.Fprintf(&b, "%d->%d", c.Value, c.Target)
+		}
+		return fmt.Sprintf("default=%d scrutinee=%s cases=%s", x.Default, describeAuditOperand(x.Scrutinee), b.String())
+	default:
+		return ""
 	}
 }
 
