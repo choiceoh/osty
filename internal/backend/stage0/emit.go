@@ -377,6 +377,9 @@ func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error
 	if pat, ok := matchDirectAggregateCall(fn, mctx); ok {
 		return emitDirectAggregateCall(out, fn, pat, mctx)
 	}
+	if pat, ok := matchForInListReturn(fn, mctx); ok {
+		return emitForInListReturn(out, fn, pat)
+	}
 	if pat, ok := matchWhileLoopReturn(fn, mctx); ok {
 		return emitWhileLoopReturn(out, fn, pat)
 	}
@@ -6015,6 +6018,681 @@ func emitForInRangeReturn(out *strings.Builder, fn *mir.Function, pat forInRange
 	fmt.Fprintf(out, "  ret %s %s\n", retLLVM, pat.finalRetExpr)
 	out.WriteString("}\n\n")
 	return nil
+}
+
+// ---- P22: for-in-list loop with counter/accumulator ----
+//
+// Covers functions whose body is a `for elem in list { ... }` loop that
+// either counts matching elements, clones/transforms a list, or does a
+// simple scan. Canonical toolchain shapes:
+//
+//	fn hirCloneStringList(src: List<String>) -> List<String>
+//	fn checkHasImportAlias(env: CheckEnv, alias: String) -> Bool
+//	fn coreCloneMapLookup(map: CoreCloneMap, oldI: Int) -> Int
+//
+// 5-block CFG (identical to for-in-range but uses LenRV for bound):
+//
+//	bb[init]   (GotoTerm → header):  setup; _iter = <list>; _len = LenRV; _idx = 0
+//	bb[header] (BranchTerm):         _idx < _len
+//	bb[body]   (GotoTerm → post):    _elem = _iter[_idx]; body work
+//	bb[post]   (GotoTerm → header):  _idx = _idx + 1
+//	bb[exit]   (ReturnTerm):         return accumulator
+//
+// Parameters and return type may be scalar OR opaque-ptr (List<T>, named
+// structs — both lower to `ptr`).
+//
+// Body work supported:
+//   - list_push intrinsic (accumulator pattern)
+//   - BinaryRV on scalars (counter/accumulator pattern)
+//   - CallInstr returning scalar or opaque ptr (transform pattern)
+//   - Field reads (UseRV/BinaryRV of _elem+field or param+field)
+//
+// Mutable locals that are re-assigned (e.g. counter, _idx) get alloca
+// slots; single-assignment locals (e.g. the out-list pointer, _iter,
+// _len, _elem) are SSA-bound.
+
+type forInListPattern struct {
+	retType    scalarType
+	paramIDs   []mir.LocalID
+	paramTypes []scalarType
+	paramNames []string
+	stackDecls []stackDecl // multi-assigned scalars (idx counter, etc.)
+
+	entryBody      string
+	headerBody     string
+	headerCondExpr string
+	bodyBody       string
+	postBody       string
+	exitBody       string
+	finalRetExpr   string
+
+	headerLabel string
+	bodyLabel   string
+	postLabel   string
+	exitLabel   string
+}
+
+// multiWrittenLocals returns the set of local IDs that receive more than
+// one AssignInstr across all blocks. These need alloca stack slots.
+func multiWrittenLocals(fn *mir.Function) map[mir.LocalID]bool {
+	counts := map[mir.LocalID]int{}
+	for _, bb := range fn.Blocks {
+		if bb == nil {
+			continue
+		}
+		for _, instr := range bb.Instrs {
+			if ai, ok := instr.(*mir.AssignInstr); ok && !ai.Dest.HasProjections() {
+				counts[ai.Dest.Local]++
+			}
+		}
+	}
+	out := map[mir.LocalID]bool{}
+	for id, n := range counts {
+		if n > 1 {
+			out[id] = true
+		}
+	}
+	return out
+}
+
+func matchForInListReturn(fn *mir.Function, mctx *moduleCtx) (forInListPattern, bool) {
+	pat := forInListPattern{}
+
+	// Return type: scalar or opaque ptr.
+	pat.retType = mctx.scalarFromType(fn.ReturnType, true)
+	if pat.retType == scalarUnknown {
+		return pat, false
+	}
+
+	// Params: scalar or opaque ptr, up to 8.
+	if len(fn.Params) > 8 {
+		return pat, false
+	}
+	pat.paramIDs = fn.Params
+	pat.paramTypes = make([]scalarType, len(fn.Params))
+	pat.paramNames = make([]string, len(fn.Params))
+	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	for i, pid := range fn.Params {
+		loc := lookupLocal(fn, pid)
+		if loc == nil || !loc.IsParam {
+			return pat, false
+		}
+		pt := mctx.scalarFromType(loc.Type, true)
+		if pt == scalarUnknown {
+			return pat, false
+		}
+		pat.paramTypes[i] = pt
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+	}
+	disambiguateParamNames(pat.paramNames)
+
+	// 5-block CFG: init → header → body → post → exit.
+	if len(fn.Blocks) != 5 {
+		return pat, false
+	}
+	entry := blockByID(fn, fn.Entry)
+	if entry == nil {
+		return pat, false
+	}
+	entryGoto, ok := entry.Term.(*mir.GotoTerm)
+	if !ok {
+		return pat, false
+	}
+	header := blockByID(fn, entryGoto.Target)
+	if header == nil || header.ID == entry.ID {
+		return pat, false
+	}
+	branch, ok := header.Term.(*mir.BranchTerm)
+	if !ok {
+		return pat, false
+	}
+	body := blockByID(fn, branch.Then)
+	exit := blockByID(fn, branch.Else)
+	if body == nil || exit == nil {
+		return pat, false
+	}
+	if body.ID == exit.ID || body.ID == entry.ID || body.ID == header.ID {
+		return pat, false
+	}
+	bodyGoto, ok := body.Term.(*mir.GotoTerm)
+	if !ok {
+		return pat, false
+	}
+	post := blockByID(fn, bodyGoto.Target)
+	if post == nil || post.ID == header.ID || post.ID == body.ID || post.ID == exit.ID || post.ID == entry.ID {
+		return pat, false
+	}
+	postGoto, ok := post.Term.(*mir.GotoTerm)
+	if !ok || postGoto.Target != header.ID {
+		return pat, false
+	}
+	if _, ok := exit.Term.(*mir.ReturnTerm); !ok {
+		return pat, false
+	}
+
+	// Entry block must contain at least one LenRV instruction — this
+	// distinguishes for-in-list from for-in-range (range uses BinaryRV
+	// for the upper bound).
+	hasLenRV := false
+	for _, instr := range entry.Instrs {
+		if ai, ok := instr.(*mir.AssignInstr); ok {
+			if _, ok := ai.Src.(*mir.LenRV); ok {
+				hasLenRV = true
+				break
+			}
+		}
+	}
+	if !hasLenRV {
+		return pat, false
+	}
+
+	// Stack-allocate scalar locals that are written more than once (idx
+	// counter, etc.). Opaque-ptr locals are SSA-bound even when Mut.
+	multiWritten := multiWrittenLocals(fn)
+	stack := map[mir.LocalID]stackDecl{}
+	for _, l := range fn.Locals {
+		if l == nil || l.IsParam || l.IsReturn {
+			continue
+		}
+		if !multiWritten[l.ID] {
+			continue
+		}
+		ty := mctx.scalarFromType(l.Type, false) // strict scalar only for stack
+		if ty == scalarUnknown || ty == scalarOpaquePtr {
+			continue
+		}
+		decl := stackDecl{
+			id:   l.ID,
+			name: sanitizeLLVMName(l.Name, fmt.Sprintf("local%d", l.ID)) + ".slot",
+			ty:   ty,
+		}
+		stack[l.ID] = decl
+		pat.stackDecls = append(pat.stackDecls, decl)
+	}
+
+	// Initial bindings: params + stack pseudo-bindings.
+	bindings := make(map[mir.LocalID]localBinding, len(fn.Params)+len(stack))
+	for i, pid := range fn.Params {
+		bindings[pid] = localBinding{expr: "%" + pat.paramNames[i], ty: pat.paramTypes[i], defined: true}
+	}
+	for _, sd := range pat.stackDecls {
+		bindings[sd.id] = localBinding{expr: "%" + sd.name, ty: sd.ty, defined: true, isStack: true}
+	}
+
+	nextSSA := 0
+	ctx := &whileLoopEmitCtx{fn: fn, bindings: bindings, stack: stack, mctx: mctx, nextSSA: &nextSSA}
+
+	// Render each block.
+	entryStr, ok := forInListBlock(ctx, entry)
+	if !ok {
+		return pat, false
+	}
+	pat.entryBody = entryStr
+
+	condExpr, headerStr, ok := forInListHeader(ctx, header, branch.Cond)
+	if !ok {
+		return pat, false
+	}
+	pat.headerBody = headerStr
+	pat.headerCondExpr = condExpr
+
+	bodyStr, ok := forInListBlock(ctx, body)
+	if !ok {
+		return pat, false
+	}
+	pat.bodyBody = bodyStr
+
+	postStr, ok := forInListBlock(ctx, post)
+	if !ok {
+		return pat, false
+	}
+	pat.postBody = postStr
+
+	exitStr, finalExpr, ok := forInListExit(ctx, exit, fn.ReturnLocal, pat.retType)
+	if !ok {
+		return pat, false
+	}
+	pat.exitBody = exitStr
+	pat.finalRetExpr = finalExpr
+
+	pat.headerLabel = blockLabelName(header.ID, "header")
+	pat.bodyLabel = blockLabelName(body.ID, "body")
+	pat.postLabel = blockLabelName(post.ID, "post")
+	pat.exitLabel = blockLabelName(exit.ID, "exit")
+	return pat, true
+}
+
+// forInListBlock renders all instructions in a basic block using the
+// for-in-list extended step handler.
+func forInListBlock(ctx *whileLoopEmitCtx, bb *mir.BasicBlock) (string, bool) {
+	var out strings.Builder
+	for _, instr := range bb.Instrs {
+		if !forInListStep(ctx, &out, instr) {
+			return "", false
+		}
+	}
+	return out.String(), true
+}
+
+// forInListHeader renders the loop header block and resolves the branch
+// condition operand.
+func forInListHeader(ctx *whileLoopEmitCtx, bb *mir.BasicBlock, cond mir.Operand) (string, string, bool) {
+	var out strings.Builder
+	for _, instr := range bb.Instrs {
+		if !forInListStep(ctx, &out, instr) {
+			return "", "", false
+		}
+	}
+	expr, ty, ok := resolveForInListOperand(ctx, &out, cond)
+	if !ok || ty != scalarBool {
+		return "", "", false
+	}
+	return expr, out.String(), true
+}
+
+// forInListExit renders the exit block and resolves the final return value.
+func forInListExit(ctx *whileLoopEmitCtx, bb *mir.BasicBlock, retLocal mir.LocalID, retType scalarType) (string, string, bool) {
+	var out strings.Builder
+	for _, instr := range bb.Instrs {
+		if !forInListStep(ctx, &out, instr) {
+			return "", "", false
+		}
+	}
+	b, ok := ctx.bindings[retLocal]
+	if !ok || !b.defined {
+		return "", "", false
+	}
+	if b.ty != retType {
+		return "", "", false
+	}
+	if b.isStack {
+		expr, _, okLoad := loadFromStack(ctx, &out, retLocal)
+		if !okLoad {
+			return "", "", false
+		}
+		return out.String(), expr, true
+	}
+	return out.String(), b.expr, true
+}
+
+// forInListStep dispatches one MIR instruction in the for-in-list context.
+// It extends emitWhileStep with LenRV, AggregateRV{AggList}, opaque-ptr
+// calls, indexed element access, and list_push intrinsic.
+func forInListStep(ctx *whileLoopEmitCtx, out *strings.Builder, instr mir.Instr) bool {
+	switch step := instr.(type) {
+	case *mir.AssignInstr:
+		return forInListAssign(ctx, out, step)
+	case *mir.CallInstr:
+		return forInListCall(ctx, out, step)
+	case *mir.IntrinsicInstr:
+		return forInListIntrinsic(ctx, out, step)
+	case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
+		return true
+	}
+	return false
+}
+
+// forInListAssign handles one AssignInstr in the for-in-list context.
+// Extends the while-loop version to support:
+//   - LenRV(list) → call i64 @osty_rt_list_len(ptr ...)
+//   - AggregateRV{AggList, []} → call ptr @osty_rt_list_new()
+//   - UseRV with projection operands (CopyOp + IndexProj / FieldProj)
+//   - Opaque-ptr dest types
+func forInListAssign(ctx *whileLoopEmitCtx, out *strings.Builder, ai *mir.AssignInstr) bool {
+	if ai.Dest.HasProjections() {
+		// Field-write through projection — emit as GEP+store if layout known.
+		pi, ok := classifyFieldWriteStep(ctx.fn, ai, ctx.bindings, ctx.mctx)
+		if !ok {
+			return false
+		}
+		out.WriteString(pi.intrinsicLine)
+		return true
+	}
+	destID := ai.Dest.Local
+	destLocal := lookupLocal(ctx.fn, destID)
+	if destLocal == nil {
+		return false
+	}
+	destType := ctx.mctx.scalarFromType(destLocal.Type, true)
+	if destType == scalarUnknown {
+		return false
+	}
+	isStackDest := false
+	if _, ok := ctx.stack[destID]; ok {
+		isStackDest = true
+	}
+
+	switch src := ai.Src.(type) {
+	case *mir.UseRV:
+		expr, ty, ok := resolveForInListOperand(ctx, out, src.Op)
+		if !ok {
+			return false
+		}
+		// Allow type widening: opaque ptr is compatible with any named type.
+		if ty != destType && !(ty == scalarOpaquePtr && destType == scalarOpaquePtr) {
+			if ty != destType {
+				return false
+			}
+		}
+		if isStackDest {
+			fmt.Fprintf(out, "  store %s %s, ptr %%%s\n", destType.llvm(), expr, ctx.stack[destID].name)
+			return true
+		}
+		if existing, found := ctx.bindings[destID]; found && existing.defined && !existing.isStack {
+			return false // SSA reassignment
+		}
+		ctx.bindings[destID] = localBinding{expr: expr, ty: destType, defined: true}
+		return true
+
+	case *mir.BinaryRV:
+		// String == String → osty_rt_strings_Equal.
+		if src.Op == mir.BinEq && destType == scalarBool {
+			lPre, lExpr, lTy, lok := resolveOperandWithPrelude(ctx.fn, src.Left, ctx.bindings, ctx.mctx)
+			rPre, rExpr, rTy, rok := resolveOperandWithPrelude(ctx.fn, src.Right, ctx.bindings, ctx.mctx)
+			if lok && rok && lTy == scalarString && rTy == scalarString {
+				declareStringEqualRuntime(ctx.mctx)
+				out.WriteString(lPre)
+				out.WriteString(rPre)
+				reg := freshReg(ctx)
+				fmt.Fprintf(out, "  %s = call i1 @osty_rt_strings_Equal(ptr %s, ptr %s)\n", reg, lExpr, rExpr)
+				if isStackDest {
+					fmt.Fprintf(out, "  store i1 %s, ptr %%%s\n", reg, ctx.stack[destID].name)
+					return true
+				}
+				if existing, found := ctx.bindings[destID]; found && existing.defined && !existing.isStack {
+					return false
+				}
+				ctx.bindings[destID] = localBinding{expr: reg, ty: scalarBool, defined: true}
+				return true
+			}
+		}
+		llvmOp, resultType, operandType := classifyBinary(src.Op)
+		if llvmOp == "" || resultType != destType {
+			return false
+		}
+		left, leftTy, ok := resolveForInListOperand(ctx, out, src.Left)
+		if !ok || leftTy != operandType {
+			return false
+		}
+		right, rightTy, ok := resolveForInListOperand(ctx, out, src.Right)
+		if !ok || rightTy != operandType {
+			return false
+		}
+		reg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = %s %s %s, %s\n", reg, llvmOp, operandType.llvm(), left, right)
+		if isStackDest {
+			fmt.Fprintf(out, "  store %s %s, ptr %%%s\n", destType.llvm(), reg, ctx.stack[destID].name)
+			return true
+		}
+		if existing, found := ctx.bindings[destID]; found && existing.defined && !existing.isStack {
+			return false
+		}
+		ctx.bindings[destID] = localBinding{expr: reg, ty: resultType, defined: true}
+		return true
+
+	case *mir.LenRV:
+		// _len = LenRV(list) → call i64 @osty_rt_list_len(ptr %list)
+		if destType != scalarInt {
+			return false
+		}
+		placeTy := placeResultType(ctx.fn, src.Place)
+		if placeTy == nil {
+			return false
+		}
+		listPrelude, listExpr, listTy, ok := resolveOperandWithPrelude(ctx.fn, &mir.CopyOp{Place: src.Place, T: placeTy}, ctx.bindings, ctx.mctx)
+		if !ok || listTy != scalarOpaquePtr {
+			return false
+		}
+		declareListRuntime(ctx.mctx)
+		out.WriteString(listPrelude)
+		reg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = call i64 @osty_rt_list_len(ptr %s)\n", reg, listExpr)
+		if isStackDest {
+			fmt.Fprintf(out, "  store i64 %s, ptr %%%s\n", reg, ctx.stack[destID].name)
+			return true
+		}
+		if existing, found := ctx.bindings[destID]; found && existing.defined && !existing.isStack {
+			return false
+		}
+		ctx.bindings[destID] = localBinding{expr: reg, ty: scalarInt, defined: true}
+		return true
+
+	case *mir.AggregateRV:
+		// AggregateRV{AggList, []} → call ptr @osty_rt_list_new()
+		if src.Kind != mir.AggList || len(src.Fields) != 0 || destType != scalarOpaquePtr {
+			return false
+		}
+		declareListRuntime(ctx.mctx)
+		reg := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = call ptr @osty_rt_list_new()\n", reg)
+		if existing, found := ctx.bindings[destID]; found && existing.defined && !existing.isStack {
+			return false
+		}
+		ctx.bindings[destID] = localBinding{expr: reg, ty: scalarOpaquePtr, defined: true}
+		return true
+	}
+	return false
+}
+
+// forInListCall handles a CallInstr in the for-in-list context. Extends
+// emitWhileCall to allow opaque-ptr return types and unknown (external)
+// callees whose return type can be inferred from the dest local.
+func forInListCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.CallInstr) bool {
+	if ci.Dest == nil || ci.Dest.HasProjections() {
+		// Void call or projection dest — decline for now.
+		return false
+	}
+	destID := ci.Dest.Local
+	destLocal := lookupLocal(ctx.fn, destID)
+	if destLocal == nil {
+		return false
+	}
+	destType := ctx.mctx.scalarFromType(destLocal.Type, true)
+	if destType == scalarUnknown {
+		return false
+	}
+	ref, ok := ci.Callee.(*mir.FnRef)
+	if !ok || ref.Symbol == "" {
+		return false
+	}
+	// Resolve args — uses the extended operand resolver.
+	var argExprs []callArg
+	if fnTy, ok := ref.Type.(*ir.FnType); ok && fnTy != nil {
+		if len(fnTy.Params) != len(ci.Args) {
+			return false
+		}
+		argExprs = make([]callArg, 0, len(ci.Args))
+		for i, op := range ci.Args {
+			expr, ty, ok := resolveForInListOperand(ctx, out, op)
+			if !ok {
+				return false
+			}
+			paramTy := ctx.mctx.scalarFromType(fnTy.Params[i], true)
+			if paramTy == scalarUnknown || paramTy != ty {
+				return false
+			}
+			argExprs = append(argExprs, callArg{expr: expr, ty: ty.llvm()})
+		}
+		// Declare prototype for unknown symbols.
+		if !ctx.mctx.knownSymbols[ref.Symbol] {
+			declareFunctionPrototype(ctx.mctx, ref.Symbol, destType, argExprs)
+		}
+	} else {
+		// No FnType (e.g. ErrType callee) — attempt arg resolution.
+		argExprs = make([]callArg, 0, len(ci.Args))
+		for _, op := range ci.Args {
+			expr, ty, ok := resolveForInListOperand(ctx, out, op)
+			if !ok || ty == scalarUnknown {
+				return false
+			}
+			argExprs = append(argExprs, callArg{expr: expr, ty: ty.llvm()})
+		}
+		if !ctx.mctx.knownSymbols[ref.Symbol] {
+			declareFunctionPrototype(ctx.mctx, ref.Symbol, destType, argExprs)
+		}
+	}
+	reg := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = call %s @%s(", reg, destType.llvm(), ref.Symbol)
+	for i, a := range argExprs {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fmt.Fprintf(out, "%s %s", a.ty, a.expr)
+	}
+	out.WriteString(")\n")
+	if isStack := ctx.stack[destID]; isStack.id != 0 {
+		fmt.Fprintf(out, "  store %s %s, ptr %%%s\n", destType.llvm(), reg, isStack.name)
+		return true
+	}
+	if existing, found := ctx.bindings[destID]; found && existing.defined && !existing.isStack {
+		return false
+	}
+	ctx.bindings[destID] = localBinding{expr: reg, ty: destType, defined: true}
+	return true
+}
+
+// forInListIntrinsic handles IntrinsicInstr in the for-in-list context.
+// Supports both void intrinsics (list_push, println) and value-returning
+// intrinsics (string_byte_len, list_len, etc.) by delegating to
+// classifyIntrinsicValueStep for the latter.
+func forInListIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.IntrinsicInstr) bool {
+	// Value-returning intrinsic: delegate to the shared sequential classifier,
+	// then bind the result in the while-loop context.
+	if ii.Dest != nil {
+		pending, destID, destType, ok := classifyIntrinsicValueStep(ctx.fn, ii, ctx.bindings, ctx.mctx)
+		if !ok {
+			return false
+		}
+		reg := freshReg(ctx)
+		pending.binDestReg = reg
+		var buf strings.Builder
+		emitPendingInstr(&buf, pending)
+		out.WriteString(buf.String())
+		if _, isStack := ctx.stack[destID]; isStack {
+			fmt.Fprintf(out, "  store %s %s, ptr %%%s\n", destType.llvm(), reg, ctx.stack[destID].name)
+			return true
+		}
+		if existing, found := ctx.bindings[destID]; found && existing.defined && !existing.isStack {
+			return false
+		}
+		ctx.bindings[destID] = localBinding{expr: reg, ty: destType, defined: true}
+		return true
+	}
+
+	// Void intrinsics.
+	switch ii.Kind {
+	case mir.IntrinsicPrintln:
+		if len(ii.Args) != 1 {
+			return false
+		}
+		expr, ty, ok := resolveForInListOperand(ctx, out, ii.Args[0])
+		if !ok {
+			return false
+		}
+		switch ty {
+		case scalarInt:
+			fmt.Fprintf(out, "  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.int, i64 %s)\n", expr)
+			return true
+		case scalarString:
+			fmt.Fprintf(out, "  call i32 (ptr, ...) @printf(ptr @.fmt.stage0.println.str, ptr %s)\n", expr)
+			return true
+		}
+		return false
+
+	case mir.IntrinsicListPush:
+		// list_push args = [list_local, elem].
+		if len(ii.Args) != 2 {
+			return false
+		}
+		listExpr, listTy, ok := resolveForInListOperand(ctx, out, ii.Args[0])
+		if !ok || listTy != scalarOpaquePtr {
+			return false
+		}
+		elemExpr, elemTy, ok := resolveForInListOperand(ctx, out, ii.Args[1])
+		if !ok || elemTy == scalarUnknown {
+			return false
+		}
+		sym := listPushSymbolFor(elemTy)
+		if sym == "" {
+			return false
+		}
+		declareListRuntime(ctx.mctx)
+		declareListPushRuntimeFor(ctx.mctx, elemTy)
+		fmt.Fprintf(out, "  call void @%s(ptr %s, %s %s)\n", sym, listExpr, elemTy.llvm(), elemExpr)
+		return true
+	}
+	return false
+}
+
+// resolveForInListOperand resolves a MIR operand in the for-in-list
+// context. Extends resolveOperandWithLoad to handle CopyOp with
+// projections (field reads and indexed element access).
+func resolveForInListOperand(ctx *whileLoopEmitCtx, out *strings.Builder, op mir.Operand) (string, scalarType, bool) {
+	if cp, ok := op.(*mir.CopyOp); ok && cp.Place.HasProjections() {
+		prelude, expr, ty, ok := resolveOperandWithPrelude(ctx.fn, op, ctx.bindings, ctx.mctx)
+		if !ok {
+			return "", scalarUnknown, false
+		}
+		out.WriteString(prelude)
+		return expr, ty, true
+	}
+	return resolveOperandWithLoad(ctx, out, op)
+}
+
+func emitForInListReturn(out *strings.Builder, fn *mir.Function, pat forInListPattern) error {
+	retLLVM := pat.retType.llvm()
+	fmt.Fprintf(out, "define %s @%s(", retLLVM, fn.Name)
+	for i, name := range pat.paramNames {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
+	}
+	out.WriteString(") {\n")
+	out.WriteString("entry:\n")
+	for _, sd := range pat.stackDecls {
+		fmt.Fprintf(out, "  %%%s = alloca %s\n", sd.name, sd.ty.llvm())
+	}
+	out.WriteString(pat.entryBody)
+	fmt.Fprintf(out, "  br label %%%s\n", pat.headerLabel)
+
+	out.WriteString("\n")
+	fmt.Fprintf(out, "%s:\n", pat.headerLabel)
+	out.WriteString(pat.headerBody)
+	fmt.Fprintf(out, "  br i1 %s, label %%%s, label %%%s\n", pat.headerCondExpr, pat.bodyLabel, pat.exitLabel)
+
+	out.WriteString("\n")
+	fmt.Fprintf(out, "%s:\n", pat.bodyLabel)
+	out.WriteString(pat.bodyBody)
+	fmt.Fprintf(out, "  br label %%%s\n", pat.postLabel)
+
+	out.WriteString("\n")
+	fmt.Fprintf(out, "%s:\n", pat.postLabel)
+	out.WriteString(pat.postBody)
+	fmt.Fprintf(out, "  br label %%%s\n", pat.headerLabel)
+
+	out.WriteString("\n")
+	fmt.Fprintf(out, "%s:\n", pat.exitLabel)
+	out.WriteString(pat.exitBody)
+	fmt.Fprintf(out, "  ret %s %s\n", retLLVM, pat.finalRetExpr)
+	out.WriteString("}\n\n")
+	return nil
+}
+
+// declareListPushRuntimeFor emits a `declare void @osty_rt_list_push_*(ptr, T)`
+// prototype for the given element type. declareListRuntime must have been
+// called first to emit the list_new / list_len decls.
+func declareListPushRuntimeFor(mctx *moduleCtx, elemTy scalarType) {
+	sym := listPushSymbolFor(elemTy)
+	if sym == "" || mctx == nil {
+		return
+	}
+	key := "__stage0.fn_decl." + sym
+	if mctx.emittedStructs[key] {
+		return
+	}
+	mctx.emittedStructs[key] = true
+	fmt.Fprintf(mctx.extraDecls, "declare void @%s(ptr, %s)\n", sym, elemTy.llvm())
 }
 
 // ---- P10: struct field accessor ----
