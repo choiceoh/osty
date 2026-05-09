@@ -380,6 +380,9 @@ func emitFunction(out *strings.Builder, fn *mir.Function, mctx *moduleCtx) error
 	if pat, ok := matchForInListReturn(fn, mctx); ok {
 		return emitForInListReturn(out, fn, pat)
 	}
+	if pat, ok := matchForInListEarlyExit(fn, mctx); ok {
+		return emitForInListEarlyExit(out, fn, pat)
+	}
 	if pat, ok := matchWhileLoopReturn(fn, mctx); ok {
 		return emitWhileLoopReturn(out, fn, pat)
 	}
@@ -6626,17 +6629,77 @@ func forInListIntrinsic(ctx *whileLoopEmitCtx, out *strings.Builder, ii *mir.Int
 
 // resolveForInListOperand resolves a MIR operand in the for-in-list
 // context. Extends resolveOperandWithLoad to handle CopyOp with
-// projections (field reads and indexed element access).
+// projections (field reads and indexed element access) using the
+// while-loop-aware load machinery so stack-backed locals (e.g. _idx)
+// are emitted as `load` instructions rather than returning the slot ptr.
 func resolveForInListOperand(ctx *whileLoopEmitCtx, out *strings.Builder, op mir.Operand) (string, scalarType, bool) {
-	if cp, ok := op.(*mir.CopyOp); ok && cp.Place.HasProjections() {
-		prelude, expr, ty, ok := resolveOperandWithPrelude(ctx.fn, op, ctx.bindings, ctx.mctx)
+	cp, ok := op.(*mir.CopyOp)
+	if !ok || !cp.Place.HasProjections() {
+		return resolveOperandWithLoad(ctx, out, op)
+	}
+	// Determine projection kind from the last projection.
+	last := cp.Place.Projections[len(cp.Place.Projections)-1]
+	idxProj, isIndex := last.(*mir.IndexProj)
+	if !isIndex {
+		// Field projection: build a temp bindings map with stack locals
+		// materialised so the sequential resolver can see them.
+		tempBindings := forInListMaterialiseStack(ctx, out)
+		prelude, expr, ty, ok := resolveProjectedFieldOperand(ctx.fn, cp.Place, tempBindings, ctx.mctx)
 		if !ok {
 			return "", scalarUnknown, false
 		}
 		out.WriteString(prelude)
 		return expr, ty, true
 	}
-	return resolveOperandWithLoad(ctx, out, op)
+	// Index projection: _iter[_idx].  Resolve both list ptr and index value
+	// using the stack-aware loader so _idx gets a `load` if needed.
+	listPlace := mir.Place{
+		Local:       cp.Place.Local,
+		Projections: append([]mir.Projection(nil), cp.Place.Projections[:len(cp.Place.Projections)-1]...),
+	}
+	listLocalTy := placeResultType(ctx.fn, listPlace)
+	if listLocalTy == nil {
+		return "", scalarUnknown, false
+	}
+	listExpr, listTy, ok := resolveOperandWithLoad(ctx, out, &mir.CopyOp{Place: listPlace, T: listLocalTy})
+	if !ok || listTy != scalarOpaquePtr {
+		return "", scalarUnknown, false
+	}
+	idxExpr, idxTy, ok := resolveForInListOperand(ctx, out, idxProj.Index)
+	if !ok || idxTy != scalarInt {
+		return "", scalarUnknown, false
+	}
+	elemTy := ctx.mctx.scalarFromType(idxProj.ElemType, true)
+	if elemTy == scalarUnknown {
+		return "", scalarUnknown, false
+	}
+	sym := listGetSymbolFor(elemTy)
+	if sym == "" {
+		return "", scalarUnknown, false
+	}
+	declareListGetRuntimeFor(ctx.mctx, elemTy)
+	reg := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = call %s @%s(ptr %s, i64 %s)\n", reg, elemTy.llvm(), sym, listExpr, idxExpr)
+	return reg, elemTy, true
+}
+
+// forInListMaterialiseStack builds a bindings snapshot where every
+// stack-backed local has been loaded into a fresh SSA register, so that
+// the sequential resolvers (resolveProjectedFieldOperand etc.) can see
+// the loaded value rather than the slot pointer.
+func forInListMaterialiseStack(ctx *whileLoopEmitCtx, out *strings.Builder) map[mir.LocalID]localBinding {
+	snap := copyBindings(ctx.bindings)
+	for id, b := range snap {
+		if !b.isStack {
+			continue
+		}
+		expr, ty, ok := loadFromStack(ctx, out, id)
+		if !ok {
+			continue
+		}
+		snap[id] = localBinding{expr: expr, ty: ty, defined: true}
+	}
+	return snap
 }
 
 func emitForInListReturn(out *strings.Builder, fn *mir.Function, pat forInListPattern) error {
@@ -6693,6 +6756,329 @@ func declareListPushRuntimeFor(mctx *moduleCtx, elemTy scalarType) {
 	}
 	mctx.emittedStructs[key] = true
 	fmt.Fprintf(mctx.extraDecls, "declare void @%s(ptr, %s)\n", sym, elemTy.llvm())
+}
+
+// ---- P23: for-in-list with inner branch → early exit (8-block) ----
+//
+// Extends P22 to the "scan with early return" shape — the loop body
+// evaluates a condition on the current element and immediately returns a
+// value when it is true, otherwise advances the index counter.
+//
+// 8-block CFG:
+//
+//	bb[init]        (GotoTerm → header):   setup; _iter; _len = LenRV; _idx = 0
+//	bb[header]      (BranchTerm):           _idx < _len → {body | loop-exit}
+//	bb[body]        (BranchTerm):           _elem = iter[_idx]; inner-cond → {bridge | false-prep}
+//	bb[bridge]      (GotoTerm, ≤2 instrs):  (storage markers only) → early-exit
+//	bb[early-exit]  (ReturnTerm):           return <found-value>
+//	bb[false-prep]  (GotoTerm → post):      optional work (accumulator bump, StorageDead)
+//	bb[post]        (GotoTerm → header):    _idx++
+//	bb[loop-exit]   (ReturnTerm):           return <default-value>
+//
+// Both return values (early-exit and loop-exit) must be scalar or
+// opaque-ptr and of the same type as the function return.
+
+type forInListEarlyExitPattern struct {
+	retType    scalarType
+	paramIDs   []mir.LocalID
+	paramTypes []scalarType
+	paramNames []string
+	stackDecls []stackDecl
+
+	// Pre-rendered LLVM for each block (no label line, no terminator).
+	entryBody      string
+	headerBody     string
+	headerCondExpr string
+	bodyBody       string
+	innerCondExpr  string // i1 expr for the inner branch in body
+	falsePrepBody  string // optional work in false path
+	postBody       string
+	loopExitBody   string
+	earlyRetExpr   string // what `ret retType` in the early-exit arm
+	loopRetExpr    string // what `ret retType` after the loop
+
+	headerLabel    string
+	bodyLabel      string
+	falsePrepLabel string
+	postLabel      string
+	loopExitLabel  string
+	earlyExitLabel string
+}
+
+func matchForInListEarlyExit(fn *mir.Function, mctx *moduleCtx) (forInListEarlyExitPattern, bool) {
+	pat := forInListEarlyExitPattern{}
+
+	pat.retType = mctx.scalarFromType(fn.ReturnType, true)
+	if pat.retType == scalarUnknown {
+		return pat, false
+	}
+	if len(fn.Params) > 8 || len(fn.Blocks) != 8 {
+		return pat, false
+	}
+
+	// Params: scalar or opaque ptr.
+	pat.paramIDs = fn.Params
+	pat.paramTypes = make([]scalarType, len(fn.Params))
+	pat.paramNames = make([]string, len(fn.Params))
+	fallbackNames := []string{"a", "b", "c", "d", "e", "f", "g", "h"}
+	for i, pid := range fn.Params {
+		loc := lookupLocal(fn, pid)
+		if loc == nil || !loc.IsParam {
+			return pat, false
+		}
+		pt := mctx.scalarFromType(loc.Type, true)
+		if pt == scalarUnknown {
+			return pat, false
+		}
+		pat.paramTypes[i] = pt
+		pat.paramNames[i] = sanitizeLLVMName(loc.Name, fallbackNames[i])
+	}
+	disambiguateParamNames(pat.paramNames)
+
+	// ---- CFG topology ----
+	entry := blockByID(fn, fn.Entry)
+	if entry == nil {
+		return pat, false
+	}
+	entryGoto, ok := entry.Term.(*mir.GotoTerm)
+	if !ok {
+		return pat, false
+	}
+	header := blockByID(fn, entryGoto.Target)
+	if header == nil || header.ID == entry.ID {
+		return pat, false
+	}
+	headerBranch, ok := header.Term.(*mir.BranchTerm)
+	if !ok {
+		return pat, false
+	}
+	// header.Then → body, header.Else → loop-exit.
+	body := blockByID(fn, headerBranch.Then)
+	loopExit := blockByID(fn, headerBranch.Else)
+	if body == nil || loopExit == nil {
+		return pat, false
+	}
+	if _, ok := loopExit.Term.(*mir.ReturnTerm); !ok {
+		return pat, false
+	}
+	bodyBranch, ok := body.Term.(*mir.BranchTerm)
+	if !ok {
+		return pat, false
+	}
+	// body.Then → early-exit (ReturnTerm) directly.
+	// body.Else → false-prep (GotoTerm) → post (GotoTerm → header).
+	// There is typically one additional dead/unreachable GotoTerm block
+	// in the 8-block layout; we ignore it after verifying the live CFG.
+	earlyExit := blockByID(fn, bodyBranch.Then)
+	falsePrep := blockByID(fn, bodyBranch.Else)
+	if earlyExit == nil || falsePrep == nil {
+		return pat, false
+	}
+	if _, ok := earlyExit.Term.(*mir.ReturnTerm); !ok {
+		return pat, false
+	}
+	falsePrepGoto, ok := falsePrep.Term.(*mir.GotoTerm)
+	if !ok {
+		return pat, false
+	}
+	post := blockByID(fn, falsePrepGoto.Target)
+	if post == nil {
+		return pat, false
+	}
+	postGoto, ok := post.Term.(*mir.GotoTerm)
+	if !ok || postGoto.Target != header.ID {
+		return pat, false
+	}
+
+	// Entry must contain LenRV (for-in-list marker).
+	hasLenRV := false
+	for _, instr := range entry.Instrs {
+		if ai, ok := instr.(*mir.AssignInstr); ok {
+			if _, ok := ai.Src.(*mir.LenRV); ok {
+				hasLenRV = true
+				break
+			}
+		}
+	}
+	if !hasLenRV {
+		return pat, false
+	}
+
+	// Stack slots for multi-written scalar locals.
+	// The return local (fn.ReturnLocal) is excluded even if written in
+	// multiple blocks (e.g., early-exit AND loop-exit) — it is never a
+	// mutable loop variable, so it must not get an alloca slot.
+	multiWritten := multiWrittenLocals(fn)
+	stack := map[mir.LocalID]stackDecl{}
+	for _, l := range fn.Locals {
+		if l == nil || l.IsParam || l.IsReturn || l.ID == fn.ReturnLocal {
+			continue
+		}
+		if !multiWritten[l.ID] {
+			continue
+		}
+		ty := mctx.scalarFromType(l.Type, false)
+		if ty == scalarUnknown || ty == scalarOpaquePtr {
+			continue
+		}
+		decl := stackDecl{
+			id:   l.ID,
+			name: sanitizeLLVMName(l.Name, fmt.Sprintf("local%d", l.ID)) + ".slot",
+			ty:   ty,
+		}
+		stack[l.ID] = decl
+		pat.stackDecls = append(pat.stackDecls, decl)
+	}
+
+	// Initial bindings.
+	bindings := make(map[mir.LocalID]localBinding, len(fn.Params)+len(stack))
+	for i, pid := range fn.Params {
+		bindings[pid] = localBinding{expr: "%" + pat.paramNames[i], ty: pat.paramTypes[i], defined: true}
+	}
+	for _, sd := range pat.stackDecls {
+		bindings[sd.id] = localBinding{expr: "%" + sd.name, ty: sd.ty, defined: true, isStack: true}
+	}
+
+	nextSSA := 0
+	ctx := &whileLoopEmitCtx{fn: fn, bindings: bindings, stack: stack, mctx: mctx, nextSSA: &nextSSA}
+
+	// Render entry block.
+	entryStr, ok := forInListBlock(ctx, entry)
+	if !ok {
+		return pat, false
+	}
+	pat.entryBody = entryStr
+
+	// Render header (cond block).
+	condExpr, headerStr, ok := forInListHeader(ctx, header, headerBranch.Cond)
+	if !ok {
+		return pat, false
+	}
+	pat.headerBody = headerStr
+	pat.headerCondExpr = condExpr
+
+	// Render body block: element access + inner cond.
+	bodyCtxBindings := copyBindings(ctx.bindings)
+	bodyCtx := &whileLoopEmitCtx{fn: fn, bindings: bodyCtxBindings, stack: stack, mctx: mctx, nextSSA: ctx.nextSSA}
+	var bodyBuf strings.Builder
+	for _, instr := range body.Instrs {
+		if !forInListStep(bodyCtx, &bodyBuf, instr) {
+			return pat, false
+		}
+	}
+	innerExpr, innerTy, ok := resolveForInListOperand(bodyCtx, &bodyBuf, bodyBranch.Cond)
+	if !ok || innerTy != scalarBool {
+		return pat, false
+	}
+	// Propagate body bindings (excluding return local) back to main ctx.
+	for k, v := range bodyCtxBindings {
+		if k != fn.ReturnLocal {
+			ctx.bindings[k] = v
+		}
+	}
+	pat.bodyBody = bodyBuf.String()
+	pat.innerCondExpr = innerExpr
+
+	// Render early-exit block.
+	earlyCtxBindings := copyBindings(ctx.bindings)
+	earlyCtx := &whileLoopEmitCtx{fn: fn, bindings: earlyCtxBindings, stack: stack, mctx: mctx, nextSSA: ctx.nextSSA}
+	var earlyBuf strings.Builder
+	for _, instr := range earlyExit.Instrs {
+		if !forInListStep(earlyCtx, &earlyBuf, instr) {
+			return pat, false
+		}
+	}
+	earlyBinding, ok := earlyCtxBindings[fn.ReturnLocal]
+	if !ok || !earlyBinding.defined || earlyBinding.ty != pat.retType {
+		return pat, false
+	}
+	earlyRetExpr := earlyBinding.expr
+	pat.earlyExitLabel = blockLabelName(earlyExit.ID, "early")
+
+	// Render false-prep block (connects body-false → post).
+	falsePrepCtxBindings := copyBindings(ctx.bindings)
+	falsePrepCtx := &whileLoopEmitCtx{fn: fn, bindings: falsePrepCtxBindings, stack: stack, mctx: mctx, nextSSA: ctx.nextSSA}
+	falsePrepStr, ok := forInListBlock(falsePrepCtx, falsePrep)
+	if !ok {
+		return pat, false
+	}
+	// Propagate false-prep bindings.
+	for k, v := range falsePrepCtxBindings {
+		ctx.bindings[k] = v
+	}
+	pat.falsePrepBody = falsePrepStr
+	pat.falsePrepLabel = blockLabelName(falsePrep.ID, "else")
+
+	// Render post block.
+	postStr, ok := forInListBlock(ctx, post)
+	if !ok {
+		return pat, false
+	}
+	pat.postBody = postStr
+
+	// Render loop-exit block.
+	loopExitStr, loopRetExpr, ok := forInListExit(ctx, loopExit, fn.ReturnLocal, pat.retType)
+	if !ok {
+		return pat, false
+	}
+	pat.loopExitBody = loopExitStr
+	pat.loopRetExpr = loopRetExpr
+	pat.earlyRetExpr = earlyRetExpr
+
+	pat.headerLabel = blockLabelName(header.ID, "header")
+	pat.bodyLabel = blockLabelName(body.ID, "body")
+	pat.postLabel = blockLabelName(post.ID, "post")
+	pat.loopExitLabel = blockLabelName(loopExit.ID, "exit")
+	return pat, true
+}
+
+func emitForInListEarlyExit(out *strings.Builder, fn *mir.Function, pat forInListEarlyExitPattern) error {
+	retLLVM := pat.retType.llvm()
+	fmt.Fprintf(out, "define %s @%s(", retLLVM, fn.Name)
+	for i, name := range pat.paramNames {
+		if i > 0 {
+			out.WriteString(", ")
+		}
+		fmt.Fprintf(out, "%s %%%s", pat.paramTypes[i].llvm(), name)
+	}
+	out.WriteString(") {\n")
+	out.WriteString("entry:\n")
+	for _, sd := range pat.stackDecls {
+		fmt.Fprintf(out, "  %%%s = alloca %s\n", sd.name, sd.ty.llvm())
+	}
+	out.WriteString(pat.entryBody)
+	fmt.Fprintf(out, "  br label %%%s\n", pat.headerLabel)
+
+	out.WriteString("\n")
+	fmt.Fprintf(out, "%s:\n", pat.headerLabel)
+	out.WriteString(pat.headerBody)
+	fmt.Fprintf(out, "  br i1 %s, label %%%s, label %%%s\n", pat.headerCondExpr, pat.bodyLabel, pat.loopExitLabel)
+
+	out.WriteString("\n")
+	fmt.Fprintf(out, "%s:\n", pat.bodyLabel)
+	out.WriteString(pat.bodyBody)
+	fmt.Fprintf(out, "  br i1 %s, label %%%s, label %%%s\n", pat.innerCondExpr, pat.earlyExitLabel, pat.falsePrepLabel)
+
+	out.WriteString("\n")
+	fmt.Fprintf(out, "%s:\n", pat.earlyExitLabel)
+	fmt.Fprintf(out, "  ret %s %s\n", retLLVM, pat.earlyRetExpr)
+
+	out.WriteString("\n")
+	fmt.Fprintf(out, "%s:\n", pat.falsePrepLabel)
+	out.WriteString(pat.falsePrepBody)
+	fmt.Fprintf(out, "  br label %%%s\n", pat.postLabel)
+
+	out.WriteString("\n")
+	fmt.Fprintf(out, "%s:\n", pat.postLabel)
+	out.WriteString(pat.postBody)
+	fmt.Fprintf(out, "  br label %%%s\n", pat.headerLabel)
+
+	out.WriteString("\n")
+	fmt.Fprintf(out, "%s:\n", pat.loopExitLabel)
+	out.WriteString(pat.loopExitBody)
+	fmt.Fprintf(out, "  ret %s %s\n", retLLVM, pat.loopRetExpr)
+	out.WriteString("}\n\n")
+	return nil
 }
 
 // ---- P10: struct field accessor ----
