@@ -10,10 +10,11 @@ package selfhostcache
 // HTTPFetcher join shape (`<base>/<key>.json`) directly.
 //
 // Layout of the rolling release (see docs/operations/self_host_registry_setup.md):
-//   <DefaultRegistryURL>/<sha>-<triple>.json          — manifest, append-only
-//   <DefaultRegistryURL>/<sha>-<triple>.json.sig      — detached ed25519 sig (when signing key is configured)
-//   <DefaultRegistryURL>/<binary-url>                 — binary referenced by manifest.BinaryURL
-//   <DefaultRegistryURL>/osty-self-latest-<triple>.bin — bootstrap seed for the next publish round
+//
+//	<DefaultRegistryURL>/<sha>-<triple>.json          — manifest, append-only
+//	<DefaultRegistryURL>/<sha>-<triple>.json.sig      — detached ed25519 sig (when signing key is configured)
+//	<DefaultRegistryURL>/<binary-url>                 — binary referenced by manifest.BinaryURL
+//	<DefaultRegistryURL>/osty-self-latest-<triple>.bin — bootstrap seed for the next publish round
 //
 // Override on the consumer side: set OSTY_SELF_REGISTRY_URL.
 // Disable network fetch entirely: set OSTY_SELF_REGISTRY_OFFLINE=1.
