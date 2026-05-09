@@ -2653,6 +2653,14 @@ func intrinsicRuntimeCallSpec(kind mir.IntrinsicKind) (intrinsicRuntimeSpec, boo
 		return intrinsicRuntimeSpec{"osty_rt_bytes_from_list", scalarOpaquePtr, []scalarType{scalarOpaquePtr}}, true
 	case mir.IntrinsicBytesFromString:
 		return intrinsicRuntimeSpec{"osty_rt_strings_ToBytes", scalarOpaquePtr, []scalarType{scalarString}}, true
+	case mir.IntrinsicBytesToString:
+		return intrinsicRuntimeSpec{"osty_rt_bytes_to_string", scalarOpaquePtr, []scalarType{scalarOpaquePtr}}, true
+	case mir.IntrinsicResultIsOk:
+		return intrinsicRuntimeSpec{"osty_rt_result_is_ok", scalarBool, []scalarType{scalarOpaquePtr}}, true
+	case mir.IntrinsicResultIsErr:
+		return intrinsicRuntimeSpec{"osty_rt_result_is_err", scalarBool, []scalarType{scalarOpaquePtr}}, true
+	case mir.IntrinsicResultUnwrapOr:
+		return intrinsicRuntimeSpec{"osty_rt_result_unwrap_or_string", scalarString, []scalarType{scalarOpaquePtr, scalarString}}, true
 	case mir.IntrinsicChanMake:
 		return intrinsicRuntimeSpec{"osty_rt_thread_chan_make", scalarOpaquePtr, []scalarType{scalarInt}}, true
 	case mir.IntrinsicChanIsClosed:
@@ -3560,14 +3568,23 @@ func stringFnConstCallSymbol(op mir.Operand, mctx *moduleCtx) (string, bool) {
 			return fc.Symbol, true
 		}
 	}
-	if mctx.module == nil {
-		return "", false
+	// FnConst may have ErrType (MIR lowering lost type info). Try
+	// module lookup first; if the function is not in this module
+	// (e.g. audit tests use a reduced module), trust the string
+	// concat context and declare as fn() -> String.
+	if mctx.module != nil {
+		fn := mctx.module.LookupFunction(fc.Symbol)
+		if fn != nil && len(fn.Params) == 0 && mctx.scalarFromType(fn.ReturnType, true) == scalarString {
+			return fc.Symbol, true
+		}
 	}
-	fn := mctx.module.LookupFunction(fc.Symbol)
-	if fn == nil || len(fn.Params) != 0 || mctx.scalarFromType(fn.ReturnType, true) != scalarString {
-		return "", false
+	if isErrType(fc.Type()) {
+		if !mctx.knownSymbols[fc.Symbol] {
+			declareFunctionPrototype(mctx, fc.Symbol, scalarString, nil)
+		}
+		return fc.Symbol, true
 	}
-	return fc.Symbol, true
+	return "", false
 }
 
 func primitiveConversionSpec(kind mir.IntrinsicKind) (string, scalarType, scalarType, bool) {
@@ -9457,7 +9474,7 @@ func emitWhileVoidCall(ctx *whileLoopEmitCtx, out *strings.Builder, ci *mir.Call
 			}
 			args = append(args, callArg{expr: expr, ty: argTy.llvm()})
 		}
-		if !isErrType(ref.Type) {
+		if !isErrType(ref.Type) && !isUnitType(ref.Type) {
 			retType := ctx.mctx.scalarFromType(ref.Type, true)
 			if retType == scalarUnknown {
 				return false
@@ -9576,7 +9593,21 @@ func resolveWhileIndexedOperand(ctx *whileLoopEmitCtx, out *strings.Builder, pla
 		return "", scalarUnknown, false
 	}
 	listExpr, listScalarTy, ok := resolveOperandWithLoad(ctx, out, &mir.CopyOp{Place: listPlace, T: listTy})
-	if !ok || listScalarTy != scalarOpaquePtr {
+	if !ok {
+		return "", scalarUnknown, false
+	}
+	// String→Char subscript: call runtime to decode i-th code point.
+	if listScalarTy == scalarString && elemTy == scalarChar {
+		indexExpr, indexTy, ok := resolveOperandWithLoad(ctx, out, idxProj.Index)
+		if !ok || indexTy != scalarInt {
+			return "", scalarUnknown, false
+		}
+		declareRuntimePrototype(ctx.mctx, "osty_rt_stage0_string_char_at", scalarChar, []callArg{{ty: "ptr"}, {ty: "i64"}})
+		value := freshReg(ctx)
+		fmt.Fprintf(out, "  %s = call i64 @osty_rt_stage0_string_char_at(ptr %s, i64 %s)\n", value, listExpr, indexExpr)
+		return value, scalarChar, true
+	}
+	if listScalarTy != scalarOpaquePtr {
 		return "", scalarUnknown, false
 	}
 	indexExpr, indexTy, ok := resolveOperandWithLoad(ctx, out, idxProj.Index)
@@ -9626,7 +9657,10 @@ func resolveWhileProjectedFieldSlot(ctx *whileLoopEmitCtx, out *strings.Builder,
 		if slot, ty, ok := resolveWhileProjectedOptionPayloadSlot(ctx, out, place, label); ok {
 			return slot, ty, true
 		}
-		return resolveWhileProjectedResultPayloadSlot(ctx, out, place, label)
+		if slot, ty, ok := resolveWhileProjectedResultPayloadSlot(ctx, out, place, label); ok {
+			return slot, ty, true
+		}
+		return resolveWhileProjectedEnumPayloadSlot(ctx, out, place, label)
 	}
 	currentStruct, currentPtr, start, ok := resolveWhileProjectedStructBase(ctx, out, place)
 	if !ok {
@@ -9830,6 +9864,71 @@ func resolveWhileProjectedResultPayloadSlot(ctx *whileLoopEmitCtx, out *strings.
 		fmt.Fprintf(out, "  %s = load ptr, ptr %s\n", nextPtr, slot)
 		currentStruct = nextNamed.Name
 		currentPtr = nextPtr
+	}
+	return "", scalarUnknown, false
+}
+
+// resolveWhileProjectedEnumPayloadSlot handles VariantProj on user-defined
+// enum types (not Option/Result). The enum box layout is {i64 disc, payload...}
+// so the variant payload field(s) start at index 1.
+func resolveWhileProjectedEnumPayloadSlot(ctx *whileLoopEmitCtx, out *strings.Builder, place mir.Place, label string) (string, scalarType, bool) {
+	if ctx == nil || ctx.mctx == nil || len(place.Projections) == 0 {
+		return "", scalarUnknown, false
+	}
+	baseLocal := lookupLocal(ctx.fn, place.Local)
+	if baseLocal == nil {
+		return "", scalarUnknown, false
+	}
+	named, ok := baseLocal.Type.(*ir.NamedType)
+	if !ok || named == nil || named.Name == "" {
+		return "", scalarUnknown, false
+	}
+	vp, ok := place.Projections[0].(*mir.VariantProj)
+	if !ok {
+		return "", scalarUnknown, false
+	}
+	// Look up the enum layout to find the variant's payload types.
+	if ctx.mctx.module == nil || ctx.mctx.module.Layouts == nil {
+		return "", scalarUnknown, false
+	}
+	layout := ctx.mctx.module.Layouts.Enums[named.Name]
+	if layout == nil || enumLayoutIsPayloadless(layout) {
+		return "", scalarUnknown, false
+	}
+	if vp.Variant < 0 || vp.Variant >= len(layout.Variants) {
+		return "", scalarUnknown, false
+	}
+	variant := layout.Variants[vp.Variant]
+	if len(variant.Payload) == 0 {
+		return "", scalarUnknown, false
+	}
+	// Map payload fields to scalar types.
+	payloadScalars := make([]scalarType, len(variant.Payload))
+	for i, f := range variant.Payload {
+		st := ctx.mctx.scalarFromType(f.Type, true)
+		if st == scalarUnknown {
+			return "", scalarUnknown, false
+		}
+		payloadScalars[i] = st
+	}
+	payloadIndex := vp.Variant
+	typeName, ok := ctx.mctx.emitEnumBoxDef(named.Name, payloadIndex, payloadScalars)
+	if !ok {
+		return "", scalarUnknown, false
+	}
+	baseExpr, baseTy, ok := resolveOperandWithLoad(ctx, out, &mir.CopyOp{Place: mir.Place{Local: place.Local}, T: baseLocal.Type})
+	if !ok || baseTy != scalarOpaquePtr {
+		return "", scalarUnknown, false
+	}
+	if len(place.Projections) == 1 {
+		// Single-variant projection: if the variant has exactly one payload
+		// field, return its slot directly. Otherwise fall through to multi-field.
+		if len(payloadScalars) == 1 {
+			slot := ctx.mctx.freshTempName(label)
+			fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 1\n", slot, typeName, baseExpr)
+			return slot, payloadScalars[0], true
+		}
+		return "", scalarUnknown, false
 	}
 	return "", scalarUnknown, false
 }
@@ -12473,7 +12572,7 @@ type genericCFGPattern struct {
 	syntheticStringCoalesces  map[mir.BlockID]mir.LocalID
 	syntheticIntrinsicReturns map[mir.BlockID]*mir.IntrinsicInstr
 	syntheticCallReturns      map[mir.BlockID]*mir.CallInstr
-	syntheticXReturns        map[mir.BlockID]PayloadType
+	syntheticXReturns         map[mir.BlockID]PayloadType
 }
 
 func matchGenericScalarCFG(fn *mir.Function, mctx *moduleCtx) (genericCFGPattern, bool) {
@@ -13922,10 +14021,10 @@ func genericStorageOnlyUnreachableExit(fn *mir.Function) (*mir.BasicBlock, bool)
 }
 
 type PayloadType struct {
-	LocalID    mir.LocalID
-	CallInstr  *mir.CallInstr
-	Instr      *mir.IntrinsicInstr
-	Kind       payloadKind
+	LocalID   mir.LocalID
+	CallInstr *mir.CallInstr
+	Instr     *mir.IntrinsicInstr
+	Kind      payloadKind
 }
 
 type payloadKind int
