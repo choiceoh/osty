@@ -143,58 +143,13 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
     if code == "E0554" { return FamilyResolution }
     // Annotations — cfg (E0405)
     if code == "E0405" { return FamilyAnnotation }
-    // Runtime sublanguage (E0771–E0789)
+    // Runtime sublanguage (E0771–E0775)
     if code == "E0771" { return FamilyTypeChecking }
     if code == "E0770" { return FamilyTypeChecking }
     if code == "E0772" { return FamilyTypeChecking }
     if code == "E0773" { return FamilyTypeChecking }
     if code == "E0774" { return FamilyTypeChecking }
     if code == "E0775" { return FamilyTypeChecking }
-    if code == "E0780" { return FamilyTypeChecking }
-    if code == "E0781" { return FamilyTypeChecking }
-    if code == "E0782" { return FamilyTypeChecking }
-    if code == "E0783" { return FamilyTypeChecking }
-    if code == "E0784" { return FamilyTypeChecking }
-    if code == "E0785" { return FamilyTypeChecking }
-    if code == "E0786" { return FamilyTypeChecking }
-    if code == "E0787" { return FamilyTypeChecking }
-    if code == "E0788" { return FamilyTypeChecking }
-    if code == "E0789" { return FamilyTypeChecking }
-    // G37 — Information flow (§21)
-    if code == "E0900" { return FamilyTypeChecking }
-    if code == "E0901" { return FamilyTypeChecking }
-    if code == "E0902" { return FamilyTypeChecking }
-    if code == "E0903" { return FamilyTypeChecking }
-    if code == "W0901" { return FamilyTypeChecking }
-    if code == "W0902" { return FamilyTypeChecking }
-    // G41 — Error contract (§7.5)
-    if code == "E0410" { return FamilyAnnotation }
-    if code == "E0411" { return FamilyAnnotation }
-    if code == "W0411" { return FamilyAnnotation }
-    if code == "E0412" { return FamilyAnnotation }
-    if code == "W0413" { return FamilyAnnotation }
-    // G40 — Sealed construct (§3.4.5)
-    if code == "E0420" { return FamilyDeclaration }
-    if code == "E0421" { return FamilyDeclaration }
-    if code == "E0422" { return FamilyDeclaration }
-    if code == "E0423" { return FamilyDeclaration }
-    // G42 — Structured intent (§3.12)
-    if code == "E0430" { return FamilyAnnotation }
-    if code == "E0431" { return FamilyAnnotation }
-    if code == "E0432" { return FamilyAnnotation }
-    if code == "E0433" { return FamilyAnnotation }
-    if code == "E0434" { return FamilyAnnotation }
-    if code == "E0435" { return FamilyAnnotation }
-    if code == "E0436" { return FamilyAnnotation }
-    // G45 — Golden tests (§11.5)
-    if code == "E0444" { return FamilyAnnotation }
-    if code == "E0445" { return FamilyAnnotation }
-    if code == "E0446" { return FamilyAnnotation }
-    if code == "W0444" { return FamilyAnnotation }
-    // G44 — API evolution (§3.14)
-    if code == "E0450" { return FamilyAnnotation }
-    if code == "E0451" { return FamilyAnnotation }
-    if code == "E0452" { return FamilyAnnotation }
     // Manifest — TOML syntax (E2000–E2004)
     if code == "E2000" { return FamilyManifest }
     if code == "E2001" { return FamilyManifest }
@@ -219,11 +174,6 @@ pub fn diagnosticFamilyForCode(code: String) -> DiagnosticFamily {
     if code == "E2050" { return FamilyScaffold }
     if code == "E2051" { return FamilyScaffold }
     if code == "E2052" { return FamilyScaffold }
-    // G44 — Publishing (§3.14.3)
-    if code == "E2100" { return FamilyManifest }
-    if code == "E2101" { return FamilyManifest }
-    if code == "E2102" { return FamilyManifest }
-    if code == "W2100" { return FamilyManifest }
     // Lint — unused declarations (L0001–L0007)
     if code == "L0001" { return FamilyLint }
     if code == "L0002" { return FamilyLint }

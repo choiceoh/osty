@@ -740,7 +740,7 @@ the function's annotations request:
 
 - `#[vectorize]` → `!{!"llvm.loop.vectorize.enable", i1 true}` plus
   optional `vectorize.width`, `vectorize.scalable.enable`,
-  `vectorize.predicate.enable` per the LANG_SPEC v0.6 A5/A5.1
+  `vectorize.predicate.enable` per the LANG_SPEC A5/A5.1
   surface.
 - `#[unroll]` / `#[unroll(count = N)]` → `!{!"llvm.loop.unroll.count",
   i32 N}` (when count > 0) or `!{!"llvm.loop.unroll.enable",
@@ -764,7 +764,7 @@ absence of `!llvm.loop` in the rendered text).
 
 Design decision: per-instruction `!llvm.access.group` metadata for
 `#[parallel]` functions builds on the loop-metadata infrastructure
-above (LANG_SPEC v0.6 A6). The pair lifts the alias-analysis
+above (LANG_SPEC A6). The pair lifts the alias-analysis
 restriction that would otherwise block vectorisation of memory ops
 inside parallel loops.
 
@@ -783,7 +783,7 @@ ref onto `instr.metadata`. The ref is allocated lazily by
 in `LirModule.metadata` on first call. This keeps non-parallel
 functions free of any metadata churn and ensures every load/store
 inside a parallel function picks up the SAME group ref (alias-set
-membership is per-function in the v0.6 design).
+membership is per-function in the design).
 
 The cross-link with loop metadata: when `MirFunction.parallel` is
 true AND a back-edge is being given a `!llvm.loop` node,
@@ -795,7 +795,7 @@ alias analysis cannot prove independence.
 
 The Go-side `internal/llvmgen/generator.go` is intentionally NOT
 touched — production today does not emit access-group metadata
-(LANG_SPEC v0.6 A6 ships with the LIR Proto migration), and the
+(LANG_SPEC A6 ships with the LIR Proto migration), and the
 shadow runner is gated behind Phase 7 so neither the LLVM text
 diff nor the bench backstop sees the new metadata until the flip
 lands.
@@ -816,7 +816,7 @@ Design decision: the loop-metadata tuning properties already wired
 inside `lirNextLoopMD` (`vectorize.width`, `vectorize.scalable.enable`,
 `vectorize.predicate.enable`, `unroll.enable` bare, combined
 vectorize+unroll, parallel-only) get five focused fixtures so the
-LANG_SPEC v0.6 A5/A5.1/A7 surface is pinned individually rather than
+LANG_SPEC A5/A5.1/A7 surface is pinned individually rather than
 implicitly through the original `loop_md_vectorize` /
 `loop_md_unroll_count` pair.
 
@@ -1183,7 +1183,7 @@ Deliverables:
 Coverage target:
 
 - The `Options.EmitGC` surface currently implemented by MIR direct emission.
-- v0.6 function and loop attribute surfaces already represented in MIR.
+- function and loop attribute surfaces already represented in MIR.
 
 Exit criteria:
 

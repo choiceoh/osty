@@ -2204,7 +2204,7 @@ pub fn lirParityBuildGcRootScalarOnlyModule() -> MirModule {
     lirParityModule([fn_])
 }
 // ====================================================================
-// Loop metadata fixtures (LANG_SPEC v0.6 A5/A6/A7)
+// Loop metadata fixtures (LANG_SPEC A5/A6/A7)
 // ====================================================================
 //
 // Three shapes pin the loop-MD attachment: vectorize-on infinite loop
@@ -2249,7 +2249,7 @@ pub fn lirParityBuildLoopMDPlainNoMDModule() -> MirModule {
     lirParityModule([fn_])
 }
 // ====================================================================
-// Per-instruction !llvm.access.group metadata for #[parallel] (LANG_SPEC v0.6 A6)
+// Per-instruction !llvm.access.group metadata for #[parallel] (LANG_SPEC A6)
 // ====================================================================
 //
 // Two fixtures: one pins that EVERY load/store inside a parallel
@@ -2290,7 +2290,7 @@ pub fn lirParityBuildParallelLoopWithAccessGroupModule() -> MirModule {
     lirParityModule([fn_])
 }
 // ====================================================================
-// Loop metadata tuning property fixtures (LANG_SPEC v0.6 A5/A5.1/A7)
+// Loop metadata tuning property fixtures (LANG_SPEC A5/A5.1/A7)
 // ====================================================================
 //
 // Five fixtures pinning the loop-md properties that the existing

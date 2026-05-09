@@ -140,7 +140,7 @@ post_write log가 소유하고, minor GC가 일관되게 소비한다.
 
 | #    | 기능                                                           | 시뮬 | 실  | 델타                                    | P  | 참조                          |
 | ---- | -------------------------------------------------------------- | ---- | --- | --------------------------------------- | -- | ----------------------------- |
-| 10.1 | ~~Safepoint 종류 (call / alloc / loop-backedge / async-yield)~~ | ✅   | ✅ | 모든 emit 사이트 분류 완료 (ENTRY/CALL/LOOP/YIELD). dead `emitGCSafepoint` unclassified helper 제거로 UNSPECIFIED 누출 구조적으로 봉쇄. ALLOC kind은 enum에 예약되어 있으나 per-alloc safepoint가 v0.6 A5.2 no-loop-poll 철학과 충돌하므로 의도적으로 emit 안 함 | ✅ done | `generator.go:emitGCSafepointKind` |
+| 10.1 | ~~Safepoint 종류 (call / alloc / loop-backedge / async-yield)~~ | ✅   | ✅ | 모든 emit 사이트 분류 완료 (ENTRY/CALL/LOOP/YIELD). dead `emitGCSafepoint` unclassified helper 제거로 UNSPECIFIED 누출 구조적으로 봉쇄. ALLOC kind은 enum에 예약되어 있으나 per-alloc safepoint가 A5.2 no-loop-poll 철학과 충돌하므로 의도적으로 emit 안 함 | ✅ done | `generator.go:emitGCSafepointKind` |
 | 10.2 | 스택맵 (라이브 bitmap + overflow)                              | ✅   | 🟡 | LLVM이 매번 slot 포인터 배열 emit       | P2 | `lib.osty:650-667`            |
 | 10.3 | STW 베이스라인                                                 | ✅   | ✅  | —                                       | —  | —                             |
 | 10.4 | 멀티스레드 (thread-local state)                                | ✅   | ❌  | 단일 스레드                             | P3 | `lib.osty:276-286`            |
@@ -630,7 +630,7 @@ swap on cycle complete. arena_is_young_page = 4-compare range check
   `osty_runtime.c:osty_rt_closure_env_trace` 주석에 기록. 향후
   per-capture-kind bitmap으로 구조적 보장으로 승격 가능.
 - 📝 **safepointKindAlloc은 예약 상태 유지** — enum에 정의되어 있으나
-  에미트 사이트 0. wire-up 시 per-alloc safepoint가 되어 v0.6 A5.2의
+  에미트 사이트 0. wire-up 시 per-alloc safepoint가 되어 A5.2의
   "loop 바디에서 per-iteration poll 억제" 철학과 충돌하므로 의도적
   미사용. 타 컴포넌트에서 kind decode 호환을 위해 값 자체는 유지.
 

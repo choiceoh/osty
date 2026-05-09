@@ -300,7 +300,7 @@ pub enum HirIntrinsicKind {
 }
 
 /// HirInlineMode mirrors ir.InlineNone / Soft / Always / Never. Lifted
-/// off the `#[inline(...)]` annotation family (v0.6 A8).
+/// off the `#[inline(...)]` annotation family (A8).
 pub enum HirInlineMode {
     HirInlineNone,
     HirInlineSoft,
@@ -820,7 +820,7 @@ pub fn hirVariant(name: String, span: HirSpan) -> HirVariant {
 /// at the call site.
 ///
 /// The annotation-sourced fields (vectorize, parallel, unroll, inline
-/// mode, hot/cold, target features, noalias, pure) mirror v0.6 A5–A13
+/// mode, hot/cold, target features, noalias, pure) mirror A5–A13
 /// verbatim; see ir.FnDecl for per-field semantics.
 pub struct HirFnDecl {
     pub name: String,
