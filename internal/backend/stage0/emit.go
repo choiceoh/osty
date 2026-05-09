@@ -3,6 +3,7 @@ package stage0
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/osty/osty/internal/ir"
@@ -15,6 +16,49 @@ import (
 // rather than a hard build failure — the dispatcher then surfaces the
 // usual unsupported skeleton diagnostic with route `stage0`.
 var ErrUnsupported = errors.New("stage0: MIR shape outside bootstrap subset")
+
+// ListAllDeclinesEnv opts EmitMIR into surveying all declined functions
+// in one pass instead of stopping at the first.
+//
+// Default behaviour: emit functions in order; on the first decline
+// return the (single) wrapped ErrUnsupported. Each `osty install-self`
+// iteration therefore reveals one blocking site at a time, costing a
+// fresh ~10–15 min toolchain build to learn the next.
+//
+// With `OSTY_STAGE0_LIST_ALL_DECLINES=1`: continue past declines,
+// collect every function name + reason, and return a single
+// ErrUnsupported-wrapping error that lists them all. The full picture
+// arrives in one build; consumers can plan multi-PR unblock waves
+// instead of serializing them.
+//
+// The env var is read once per EmitMIR call. No effect on production
+// builds (stage0 is only consulted under OSTY_STAGE0_FALLBACK=1 in the
+// first place — see internal/backend/bootstrap.go).
+const ListAllDeclinesEnv = "OSTY_STAGE0_LIST_ALL_DECLINES"
+
+func listAllDeclinesEnabled() bool {
+	switch strings.TrimSpace(os.Getenv(ListAllDeclinesEnv)) {
+	case "1", "true", "TRUE", "True", "on", "ON", "On", "yes", "YES", "Yes":
+		return true
+	}
+	return false
+}
+
+// declineReason renders the per-function decline explanation that
+// `emitFunction` produced, stripped of the common ErrUnsupported prefix
+// so the aggregated diagnostic stays readable. Inputs that are not
+// `ErrUnsupported`-shaped fall through to their plain Error() text.
+func declineReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	msg := err.Error()
+	prefix := ErrUnsupported.Error() + ": "
+	if strings.HasPrefix(msg, prefix) {
+		return msg[len(prefix):]
+	}
+	return msg
+}
 
 // EmitMIR lowers `module` to textual LLVM IR for the small MVP subset
 // stage0 currently covers. It is invoked only when
@@ -89,18 +133,35 @@ func EmitMIR(module *mir.Module, opts llvmabi.Options) ([]byte, error) {
 		mctx.extraDecls.WriteString("declare i32 @fprintf(ptr, ptr, ...)\n")
 	}
 
+	listAll := listAllDeclinesEnabled()
+
 	var fnBodies strings.Builder
 	emittedMain := false
+	var declines []string // function names that declined when listAll is on
 	for _, fn := range module.Functions {
 		if fn == nil {
 			continue
 		}
-		if err := emitFunction(&fnBodies, fn, mctx); err != nil {
-			return nil, err
+		// Trial-emit into a scratch buffer so a decline doesn't leave
+		// half-emitted IR in `fnBodies`.
+		var probe strings.Builder
+		err := emitFunction(&probe, fn, mctx)
+		if err != nil {
+			if !listAll {
+				return nil, err
+			}
+			declines = append(declines, fmt.Sprintf("%s: %s", fn.Name, declineReason(err)))
+			continue
 		}
+		fnBodies.WriteString(probe.String())
 		if fn.Name == "main" {
 			emittedMain = true
 		}
+	}
+	if listAll && len(declines) > 0 {
+		// Return a single aggregated error so the dispatcher's warning
+		// chain shows every blocking site in one build round-trip.
+		return nil, fmt.Errorf("%w: %d function(s) declined: %s", ErrUnsupported, len(declines), strings.Join(declines, "; "))
 	}
 	if !emittedMain {
 		return nil, fmt.Errorf("%w: module has no `main` function", ErrUnsupported)

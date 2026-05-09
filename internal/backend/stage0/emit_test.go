@@ -5820,3 +5820,93 @@ func TestStage0RejectsWhileLoopExitNotReturning(t *testing.T) {
 	fn.Blocks[3].Term = &mir.GotoTerm{Target: 0}
 	mustReject(t, trivialMainFn(), fn)
 }
+
+// ---- OSTY_STAGE0_LIST_ALL_DECLINES env var ----
+//
+// Build a module with main + N declined functions. Default mode bails
+// on the first decline (so only one name appears in the error). With
+// the env var set, EmitMIR continues past each decline and the
+// returned error names every blocking function in one pass — letting
+// install-self iterations plan multi-PR unblock waves instead of one
+// fail-and-fix-and-rebuild cycle per function.
+
+// undecidableFn returns a function that no stage0 matcher will accept,
+// because its single block contains an instruction kind nothing
+// classifies. The Name is what the aggregated diagnostic should list.
+func undecidableFn(name string) *mir.Function {
+	return &mir.Function{
+		Name:        name,
+		ReturnType:  ir.TInt,
+		ReturnLocal: 0,
+		Locals: []*mir.Local{
+			{ID: 0, Name: "ret", Type: ir.TInt, IsReturn: true},
+		},
+		Entry: 0,
+		Blocks: []*mir.BasicBlock{{
+			ID: 0,
+			// Self-referential GotoTerm so the block neither returns
+			// nor terminates legally — every matcher's terminator
+			// shape check fails.
+			Instrs: []mir.Instr{},
+			Term:   &mir.GotoTerm{Target: 0},
+		}},
+	}
+}
+
+func TestStage0DefaultStopsAtFirstDecline(t *testing.T) {
+	// Cannot use t.Parallel — we touch the env var.
+	t.Setenv(ListAllDeclinesEnv, "")
+
+	module := moduleWith(trivialMainFn(), undecidableFn("first"), undecidableFn("second"))
+	_, err := EmitMIR(module, llvmabi.Options{PackageName: "main"})
+	if err == nil {
+		t.Fatal("expected error for declined functions")
+	}
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("err = %v, want wrapped ErrUnsupported", err)
+	}
+	// Default mode reports exactly one function — whichever was reached
+	// first. The aggregated multi-name diagnostic must NOT appear.
+	msg := err.Error()
+	if strings.Contains(msg, " function(s) declined:") {
+		t.Fatalf("default mode unexpectedly aggregated declines:\n%s", msg)
+	}
+}
+
+func TestStage0ListAllDeclinesAggregatesAcrossModule(t *testing.T) {
+	// Cannot use t.Parallel — we touch the env var.
+	t.Setenv(ListAllDeclinesEnv, "1")
+
+	module := moduleWith(trivialMainFn(), undecidableFn("alpha"), undecidableFn("beta"), undecidableFn("gamma"))
+	_, err := EmitMIR(module, llvmabi.Options{PackageName: "main"})
+	if err == nil {
+		t.Fatal("expected aggregated error")
+	}
+	if !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("err = %v, want wrapped ErrUnsupported", err)
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"3 function(s) declined:",
+		"alpha:",
+		"beta:",
+		"gamma:",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("aggregated diagnostic missing %q:\n%s", want, msg)
+		}
+	}
+}
+
+func TestStage0ListAllDeclinesSkipsAggregationOnCleanModule(t *testing.T) {
+	// Cannot use t.Parallel — we touch the env var.
+	t.Setenv(ListAllDeclinesEnv, "1")
+
+	got, err := EmitMIR(moduleWith(trivialMainFn()), llvmabi.Options{PackageName: "main"})
+	if err != nil {
+		t.Fatalf("EmitMIR with no declines: %v", err)
+	}
+	if !strings.Contains(string(got), "define i32 @main()") {
+		t.Fatalf("expected normal main emission with env var on:\n%s", got)
+	}
+}
