@@ -13191,6 +13191,86 @@ func emitSyntheticStringCoalesceReturn(ctx *whileLoopEmitCtx, out *strings.Build
 	return true
 }
 
+func emitSyntheticXReturn(
+	ctx *whileLoopEmitCtx, out *strings.Builder, payload mir.LocalID, retType scalarType,
+) bool {
+	if ctx == nil || out == nil || ctx.fn == nil || ctx.mctx == nil {
+		return false
+	}
+	if retType == scalarUnknown {
+		return false
+	}
+	loc := lookupLocal(ctx.fn, payload)
+	if loc == nil {
+		return false
+	}
+	payloadTy, ok := optionPayloadScalar(loc.Type, ctx.mctx)
+	if !ok || payloadTy != retType {
+		return false
+	}
+	typeName, ok := ctx.mctx.emitOptionBoxDef(payloadTy)
+	if !ok {
+		return false
+	}
+	binding, ok := ctx.bindings[payload]
+	if !ok || !binding.defined || binding.ty != scalarOpaquePtr {
+		return false
+	}
+	optExpr := binding.expr
+	if binding.isStack {
+		loaded, ty, ok := loadFromStack(ctx, out, payload)
+		if !ok || ty != scalarOpaquePtr {
+			return false
+		}
+		optExpr = loaded
+	}
+	payloadSlot := freshReg(ctx)
+	payloadReg := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 1\n", payloadSlot, typeName, optExpr)
+	fmt.Fprintf(out, "  %s = load %s, ptr %s\n", payloadReg, payloadTy.llvm(), payloadSlot)
+	fmt.Fprintf(out, "  ret %s %s\n", payloadTy.llvm(), payloadReg)
+	return true
+}
+
+func emitXAsReturn(ctx *whileLoopEmitCtx, out *strings.Builder, payload mir.LocalID, retType scalarType) bool {
+	if ctx == nil || out == nil {
+		return false
+	}
+	if retType == scalarUnknown {
+		return false
+	}
+	loc := lookupLocal(ctx.fn, payload)
+	if loc == nil {
+		return false
+	}
+	payloadTy, ok := optionPayloadScalar(loc.Type, ctx.mctx)
+	if !ok || payloadTy != retType {
+		return false
+	}
+	typeName, ok := ctx.mctx.emitOptionBoxDef(payloadTy)
+	if !ok {
+		return false
+	}
+	binding, ok := ctx.bindings[payload]
+	if !ok || !binding.defined || binding.ty != scalarOpaquePtr {
+		return false
+	}
+	optExpr := binding.expr
+	if binding.isStack {
+		loaded, ty, ok := loadFromStack(ctx, out, payload)
+		if !ok || ty != scalarOpaquePtr {
+			return false
+		}
+		optExpr = loaded
+	}
+	payloadSlot := freshReg(ctx)
+	payloadReg := freshReg(ctx)
+	fmt.Fprintf(out, "  %s = getelementptr inbounds %%%s, ptr %s, i32 0, i32 1\n", payloadSlot, typeName, optExpr)
+	fmt.Fprintf(out, "  %s = load %s, ptr %s\n", payloadReg, payloadTy.llvm(), payloadSlot)
+	fmt.Fprintf(out, "  ret %s %s\n", payloadTy.llvm(), payloadReg)
+	return true
+}
+
 func isStorageInstr(instr mir.Instr) bool {
 	switch instr.(type) {
 	case *mir.StorageLiveInstr, *mir.StorageDeadInstr:
