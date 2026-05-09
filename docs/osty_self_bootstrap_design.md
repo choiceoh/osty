@@ -59,7 +59,7 @@ host osty (Go 부트스트랩)
 `osty-self`가 없을 때만 켜지는, 의도적으로 좁은 stage0 emitter를 Go 측에 둔다. 범위:
 
 - **포함**: `toolchain/*.osty` 자기 자신을 한번 컴파일하기에 충분한 MIR 패턴 — 함수 정의, 분기, 산술, struct/enum 기본 lowering, runtime ABI 호출 (`osty.gc.*`, `osty_rt_*`).
-- **제외**: vectorize 힌트, parallel access groups, target_feature, hot/cold 섹션, advanced unroll. 즉 v0.6 spec의 **컴파일러를 컴파일할 수 있는 핵심만**.
+- **제외**: vectorize 힌트, parallel access groups, target_feature, hot/cold 섹션, advanced unroll. 즉  spec의 **컴파일러를 컴파일할 수 있는 핵심만**.
 
 stage0 emitter는 명시적으로 **deprecated-on-arrival** — fast path가 아니라 부트스트랩용. Production 빌드 (`osty-self` 사용 가능 시)는 LIR Proto 경로 그대로.
 
@@ -84,12 +84,12 @@ func emitLLVMFallback(route llvmDispatchRoute, entry Entry, opts llvmabi.Options
 ```
 
 `stage0EmitMIR` 본체는:
-- **새 패키지 `internal/backend/stage0/`** 에 격리. ~5K 줄을 넘지 않도록 v0.6 spec 핵심 구문만 다룸.
+- **새 패키지 `internal/backend/stage0/`** 에 격리. ~5K 줄을 넘지 않도록 spec 핵심 구문만 다룸.
 - 매 회 `toolchain/*.osty`가 stage0 surface를 벗어나지 않는지 CI에서 검증 (`TestStage0CoversToolchainMIR` 같은 게이트).
 - 출력은 LIR Proto 경로와 byte-equivalent일 필요 **없음**. `verify-self-rebuild`의 stage2/3 parity는 stage1의 결과물 (`osty-self-1`)이 stage1을 사용해서 다시 빌드되는 것이므로, stage0 IR이 stage1 IR과 다른 건 정상.
 
 장점:
-- v0.6 spec ON, 부트스트랩 가능.
+- spec ON, 부트스트랩 가능.
 - stage0이 모든 emit을 처리하지 않으므로 surface 폭주 위험 제어됨.
 - LIR Proto 경로가 default — stage0 retire는 osty-self 광범위 가용 시점에 가능.
 
@@ -147,9 +147,9 @@ func TestStage0CoversToolchainMIR(t *testing.T) {
 
 retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통째로 삭제 + 본 design doc도 archive로 이동.
 
-### 3.5 v0.6 spec 영향
+### 3.5 spec 영향
 
-없음. stage0는 emitter level에서만 작동하며 surface 추가 0건. `LANG_SPEC_v0.6/`, `OSTY_GRAMMAR_v0.6.md`는 변경 안 함.
+없음. stage0는 emitter level에서만 작동하며 surface 추가 0건. `LANG_SPEC_v0.5/`, `OSTY_GRAMMAR_v0.5.md`는 변경 안 함.
 
 ## 4. 구현 단계 (제안)
 
@@ -191,7 +191,7 @@ retirement는 별도 PR에서 진행하고, 그 PR이 stage0 디렉토리를 통
 
 | 항목 | 결정 |
 |---|---|
-| 1. stage0 surface 의 spec 범위 | **v0.5 핵심 — 진행 동결**. P0–P20 가 v0.5 의 단순 함수/제어/타입 cover. P21+ 동결로 더 넓은 v0.5 surface 는 cover 하지 않음. v0.6 surface 는 outright 미진행 (CLAUDE.md "v0.5 baseline" 규칙). |
+| 1. stage0 surface 의 spec 범위 | **v0.5 핵심 — 진행 동결**. P0–P20 가 v0.5 의 단순 함수/제어/타입 cover. P21+ 동결로 더 넓은 v0.5 surface 는 cover 하지 않음. surface 는 outright 미진행 (CLAUDE.md "v0.5 baseline" 규칙). |
 | 2. stage0 위치 | `internal/backend/stage0/` — 결정. emit.go (4253 줄) + emit_test.go (1703 줄) + doc.go. |
 | 3. `OSTY_STAGE0_FALLBACK=1` 기본값 | **OFF** — emergency 발화 시만 사용자가 명시 set. CI matrix 에서도 default off; `bootstrap-smoke-test.yml` 가 fresh-clone 시나리오 (registry path) 만 검증. |
 | 4. stage0 retirement 시점 | **영구 보존** — Q8. `docs/security/bootstrap-recovery.md` §5 의 "DR2 reconstruction" 경로에 명시. retirement PR 미예정 — stage0 가 진단 가치 (`b2_1_audit.md` decline 카탈로그 source) 만으로도 6K LOC 비용 정당화. |

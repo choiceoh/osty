@@ -59,7 +59,7 @@ PR #1406이 그 위에 추가로 12개 backend 테스트를 obsolete 처리 (del
 
 테스트: `#[vectorize]` / `#[vectorize(scalable, ...)]` / `#[no_vectorize]` 어노테이션이 LLVM `loop.vectorize.enable` metadata + safepoint skip + parallel access groups로 lowering.
 
-- v0.6 A5/A5.1/A5.2/A6/A7 — 핵심 spec. 표지석 테스트가 사라졌다는 건 큰 회귀 위험.
+- A5/A5.1/A5.2/A6/A7 — 핵심 spec. 표지석 테스트가 사라졌다는 건 큰 회귀 위험.
 - 현황: `toolchain/lir_proto.osty:` 안에 vectorize lowering 코드는 있지만 테스트는 별도 파일 없음.
 - **Action**: 우선순위 최고. 실제 LLVM IR 출력 단언 테스트를 `toolchain/vectorize_test.osty` 또는 backend Go-side 통합 테스트로 부활.
 
@@ -67,7 +67,7 @@ PR #1406이 그 위에 추가로 12개 backend 테스트를 obsolete 처리 (del
 
 테스트: 자유변수 캡처 → 환경 struct 생성 → indirect call.
 
-- v0.6 spec 핵심 (B.5).
+- spec 핵심 (B.5).
 - 현황: 자기-호스트 컴파일 자체가 closure를 사용하므로 `verify-self-rebuild` 가 indirect로 잡음. 단 specific shape (재귀, mutable capture 등)는 미보장.
 - **Action**: backend 측 통합 테스트 5-10개 정도로 회복. skip-on-no-osty-self.
 
@@ -75,7 +75,7 @@ PR #1406이 그 위에 추가로 12개 backend 테스트를 obsolete 처리 (del
 
 테스트: `Error.downcast::<T>()` lowering, vtable lookup.
 
-- v0.6 spec 핵심 (A.6).
+- spec 핵심 (A.6).
 - 현황: 자기-호스트 컴파일러가 downcast 안 쓰면 `verify-self-rebuild` 로 잡히지 않음.
 - **Action**: 회복 필요. 우선순위 중.
 
@@ -91,7 +91,7 @@ PR #1406이 그 위에 추가로 12개 backend 테스트를 obsolete 처리 (del
 
 테스트: 모든 패턴 종류 (literal / range / or / binding / guard / payload destructure) lowering.
 
-- v0.6 spec A.5.
+- spec A.5.
 - 자기-호스트가 일부 패턴만 사용 → 광범위 indirect coverage 불가.
 - **Action**: spec corpus 와 결합. 우선순위 중-높음.
 
@@ -99,7 +99,7 @@ PR #1406이 그 위에 추가로 12개 backend 테스트를 obsolete 처리 (del
 
 테스트: defer LIFO + `?` propagation 시 실행 + cancel 시 실행 + `panic`/`unreachable`/`todo`/`abort` skip.
 
-- v0.6 spec A.6 (특히 panic 시 skip vs cancel 시 실행 — 미묘함).
+- spec A.6 (특히 panic 시 skip vs cancel 시 실행 — 미묘함).
 - 자기-호스트가 defer를 사용하지만 defer × cancel × panic 조합은 안 씀.
 - **Action**: 회복 필요. 우선순위 중.
 
@@ -146,7 +146,7 @@ PR #1406이 그 위에 추가로 12개 backend 테스트를 obsolete 처리 (del
 | 우선순위 | 카테고리 | 예상 work | 결과물 |
 |---|---|---|---|
 | P0 | 3.10 stdlib body integration | 1주 | backend 측 통합 테스트 ~10개 |
-| P0 | 3.2 vectorize (v0.6 A5/A6/A7 spec) | 1주 | vectorize 어노테이션별 테스트 ~15개 |
+| P0 | 3.2 vectorize (A5/A6/A7 spec) | 1주 | vectorize 어노테이션별 테스트 ~15개 |
 | P1 | 3.12 mir_generator self-tests audit | 2-3주 | spec corpus 강화 + 빈 패턴 식별 |
 | P1 | 3.7 defer + 3.6 match patterns | 1주 | 패턴별 회복 ~20개 |
 | P2 | 3.1 GC, 3.3 closure, 3.4 iface, 3.5 field call | 1-2주 | 카테고리별 5-10개씩 |

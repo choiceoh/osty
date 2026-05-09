@@ -12,37 +12,12 @@ import (
 	"github.com/osty/osty/internal/ast"
 	"github.com/osty/osty/internal/check"
 	"github.com/osty/osty/internal/diag"
-	"github.com/osty/osty/internal/legacyglobals"
 	"github.com/osty/osty/internal/manifest"
 	"github.com/osty/osty/internal/resolve"
 	"github.com/osty/osty/internal/selfhost"
 	"github.com/osty/osty/internal/selfhost/api"
 	"github.com/osty/osty/internal/stdlib"
 )
-
-// legacyGlobalsDiags returns W0750 deprecation diagnostics for every
-// v0.5 legacy global call site in pkg when --legacy-globals is set.
-// Returns nil otherwise (the flag is opt-in; default behaviour stays
-// silent so old code paths keep their current shape until the user
-// opts in to the migration warning surface).
-func legacyGlobalsDiags(pkg *resolve.Package, flags cliFlags) []*diag.Diagnostic {
-	if !flags.legacyGlobals {
-		return nil
-	}
-	return legacyglobals.Detect(pkg)
-}
-
-// legacyGlobalsDiagsFromRun is the single-file sibling of
-// legacyGlobalsDiags. Used by `osty lint FILE` / `osty check FILE`
-// outside a containing package — those paths feed a selfhost
-// FrontendRun directly and never build a resolve.Package.
-func legacyGlobalsDiagsFromRun(run *selfhost.FrontendRun, path string, flags cliFlags) []*diag.Diagnostic {
-	if !flags.legacyGlobals || run == nil {
-		return nil
-	}
-	file := selfhost.LowerPublicFileFromRun(run)
-	return legacyglobals.DetectAST(file, path)
-}
 
 // runCheckPackage runs lex + parse + resolve over dir. Two modes:
 //
@@ -190,9 +165,6 @@ func runResolveFile(path string, src []byte, formatter *diag.Formatter, flags cl
 	all := append([]*diag.Diagnostic{}, parseDiags...)
 	nativeDiags := nativeResolveDiagnosticsFromResolved(resolved, src, path)
 	all = append(all, nativeDiags...)
-	if flags.legacyGlobals {
-		all = append(all, legacyglobals.DetectAST(ensureLoweredFile(), path)...)
-	}
 	printDiags(formatter, all, flags)
 	if rows := nativeResolveRowsFromResolved(resolved, src, path); len(rows) > 0 {
 		printNativeResolutionRows(rows)
@@ -238,7 +210,6 @@ func runTypecheckPackageNative(dir string, flags cliFlags) int {
 	}
 	diags := packageParseDiags(pkg)
 	diags = append(diags, nativePackageCheckDiags(checked.Diagnostics, input.Files)...)
-	diags = append(diags, legacyGlobalsDiags(pkg, flags)...)
 	printPackageDiags(pkg, diags, flags)
 	printNativePackageTypes(checked, input.Files)
 	if flags.inspect {
@@ -316,7 +287,6 @@ func runCheckPackageNative(dir string, flags cliFlags) int {
 	}
 	diags := packageParseDiags(pkg)
 	diags = append(diags, nativePackageCheckDiags(checked.Diagnostics, input.Files)...)
-	diags = append(diags, legacyGlobalsDiags(pkg, flags)...)
 	printPackageDiags(pkg, diags, flags)
 	if flags.inspect {
 		runInspectPackageInput(input, "", flags)
@@ -353,7 +323,6 @@ func runNativeWorkspaceCheck(dir, mode string, flags cliFlags, emitTypes bool) i
 		}
 		diags := packageParseDiags(pkg)
 		diags = append(diags, nativePackageCheckDiags(checked.Diagnostics, input.Files)...)
-		diags = append(diags, legacyGlobalsDiags(pkg, flags)...)
 		printPackageDiags(pkg, diags, flags)
 		if emitTypes {
 			printNativePackageTypes(checked, input.Files)
@@ -534,9 +503,6 @@ func runTypecheckFileNative(path string, src []byte, formatter *diag.Formatter, 
 	}
 	all := append([]*diag.Diagnostic{}, parseDiags...)
 	all = append(all, checkDiags...)
-	if flags.legacyGlobals {
-		all = append(all, legacyGlobalsDiagsFromRun(selfhost.Run(src), path, flags)...)
-	}
 	printDiags(formatter, all, flags)
 	printNativeTypes(src, checked)
 	if flags.inspect {
@@ -630,9 +596,6 @@ func runCheckFileNative(path string, src []byte, formatter *diag.Formatter, flag
 	}
 	all := append([]*diag.Diagnostic{}, parseDiags...)
 	all = append(all, checkDiags...)
-	if flags.legacyGlobals {
-		all = append(all, legacyGlobalsDiagsFromRun(selfhost.Run(src), path, flags)...)
-	}
 	printDiags(formatter, all, flags)
 	if flags.inspect {
 		runInspectSource(path, src, flags)

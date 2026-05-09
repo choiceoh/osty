@@ -212,7 +212,7 @@ pub struct CheckEnv {
     pub global: CheckGlobalEnv,
     pub local: CheckLocalEnv,
 
-    // Spec sections harvested from LANG_SPEC_v0.6/ at workspace open time.
+    // Spec sections harvested from LANG_SPEC_v0.5/ at workspace open time.
     // Used by the E0790/W0790 spec link gate. Empty when spec files are
     // not available (gate is a no-op).
     pub specSections: List<String>,
@@ -2023,7 +2023,7 @@ pub fn checkInstallPrelude(env: CheckEnv) {
     })
     // `likely(cond: Bool) -> Bool` / `unlikely(cond: Bool) -> Bool`
     // — branch-prediction prelude builtins (SPEC_GAPS
-    // `a12-branch-hints`, v0.6 A12). Identity at runtime; LLVM
+    // `a12-branch-hints`, A12). Identity at runtime; LLVM
     // codegen lowers each call to `@llvm.expect.i1` so block layout
     // biases hot/cold paths.
     checkRegisterFn(env, CheckFnSig {

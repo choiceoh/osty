@@ -1543,7 +1543,7 @@ fn opTryParsePostfix(p: OstyParser, lhs: Int) -> Int {
         // After lexer fusion `as?` should arrive as FrontAsQuestion. If
         // we still see IDENT(`as`) + QUESTION it must have whitespace in
         // between, which the grammar rejects with E0202.
-        opErrorFull(p, "`as?` must be written without whitespace between `as` and `?`", "write `as?` as a single token (no space)", "OSTY_GRAMMAR_v0.6 §28", "E0202")
+        opErrorFull(p, "`as?` must be written without whitespace between `as` and `?`", "write `as?` as a single token (no space)", "OSTY_GRAMMAR_v0.5 §28", "E0202")
         let _ = opAdvance(p)
         let _ = opAdvance(p)
         let _ = opParseType(p)

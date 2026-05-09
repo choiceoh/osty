@@ -93,7 +93,7 @@ gh release view osty-self-snapshots --json assets --jq '.assets[].name' \
 #    matrix re-signs manifest assets without re-uploading the
 #    immutable cache binaries (Q5-c first-publish-wins).
 
-# 7. Post a note to CHANGELOG_v0.6.md or similar — short, factual, no
+# 7. Post a note to CHANGELOG_v0.5.md or similar — short, factual, no
 #    secrets.
 ```
 
